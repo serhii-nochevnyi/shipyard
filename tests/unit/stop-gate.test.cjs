@@ -17,6 +17,8 @@ const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
 const { suite, test, done, assert } = require(path.join(__dirname, 'assert-harness.cjs'));
+const scope = require(path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'run-scope.cjs'));
+const { createRunController } = require(path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'run-controller.cjs'));
 
 const SCRIPT = path.join(
   __dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'stop-gate.cjs'
@@ -161,6 +163,37 @@ test('waiting on CI is a reason to WAIT, and that is not the same as stopping', 
   assert.ok(/T-01-01/.test(v.reason), 'and which PR it is waiting on');
 });
 
+test('tracker-only holds block the stop until the missing observation is served', () => {
+  const v = run({
+    generated_at: fresh(), actionable_count: 0, tracker_blocked_count: 1,
+    left_behind_count: 0, actionable: {},
+    waiting: { ci: [], dispatched: [], parent: [], merge_human: [], human: [] },
+  });
+  assert.ok(v && v.decision === 'block', 'a tracker hold is unfinished work');
+  assert.ok(/tracker eligibility/.test(v.reason), 'the refusal names the actual hold');
+  assert.ok(/tracker-record\.cjs override/.test(v.reason), 'the refusal names the exact-ticket remedy');
+  assert.doesNotMatch(v.reason, /ci-wait\.cjs/, 'a tracker hold is not a CI wait');
+});
+
+test('tracker holds do not suppress a dispatched wake-up or a parent wait', () => {
+  const common = {
+    generated_at: fresh(), actionable_count: 0, tracker_blocked_count: 1,
+    left_behind_count: 0, actionable: {},
+  };
+  assert.equal(run({
+    ...common,
+    waiting: { ci: [], dispatched: ['T-01-02'], parent: [], merge_human: [], human: [] },
+  }), null, 'an agent completion is the earlier wake-up');
+  const parentWait = run({
+    ...common,
+    waiting: { ci: [], dispatched: [], parent: ['T-01-03'], merge_human: [], human: [] },
+  });
+  assert.ok(parentWait && parentWait.decision === 'block',
+    'a child held behind a parent still needs the foreground wait');
+  assert.ok(/T-01-03/.test(parentWait.reason), 'the parent-held ticket is named');
+  assert.ok(/ci-wait\.cjs/.test(parentWait.reason), 'the parent wait names its waiter');
+});
+
 test('a ticket with an agent silences the CI branch — that wake-up is free', () => {
   assert.equal(run({
     generated_at: fresh(), actionable_count: 0, left_behind_count: 0, actionable: {},
@@ -284,6 +317,71 @@ function runIn(cwd, payload = {}, env = {}) {
   const out = (r.stdout || '').trim();
   return out ? JSON.parse(out) : null;
 }
+
+function scopedRun(root, worktree, runId = 'stop-gate-run') {
+  const storeDir = path.join(root, 'runs');
+  const controller = createRunController({ storeDir, ownerId: 'stop-gate-owner', now: () => Date.now() });
+  const run = scope.createRunScope({
+    run_id: runId,
+    repository_id: 'shipyard/stop-gate',
+    phase: 37,
+    ticket: 'T-37-06',
+    worktree,
+    runtime: 'claude',
+    owner_id: 'stop-gate-owner',
+    dispatch: { dispatch_id: `dispatch-${runId}`, role: 'executor', model: 'sonnet', effort: 'high' },
+  });
+  controller.begin(run);
+  return { storeDir, run };
+}
+
+suite('stop-gate — scoped controller selection');
+
+test('a scoped run reads only its controller-owned worktree', () => {
+  const { main, phase } = repoWithPhaseWorktree(
+    { generated_at: fresh(), actionable_count: 0, left_behind_count: 0, actionable: {}, fixpoint: true },
+    live({ actionable_count: 1, actionable: { execute: ['T-37-06'] } }),
+  );
+  const root = path.dirname(main);
+  const { storeDir } = scopedRun(root, phase);
+  const v = runIn(main, { run_id: 'stop-gate-run' }, { SHIPYARD_RUN_STORE_DIR: storeDir, SHIPYARD_RUN_CONTROL: 'scoped' });
+  assert.ok(v && v.decision === 'block');
+  assert.match(v.reason, /T-37-06/);
+  assert.ok(v.reason.includes(path.join(phase, '.planning', 'graph')));
+});
+
+test('scoped mode refuses a missing run identity instead of selecting a global front', () => {
+  const v = run(live(), {}, { SHIPYARD_RUN_CONTROL: 'scoped' });
+  assert.ok(v && v.decision === 'block');
+  assert.match(v.reason, /run_id is missing/);
+});
+
+test('scoped mode refuses a graph that does not belong to the run', () => {
+  const { main, phase } = repoWithPhaseWorktree(live(), live());
+  const root = path.dirname(main);
+  const { storeDir } = scopedRun(root, phase, 'stop-gate-mismatch');
+  const v = runIn(main, { run_id: 'stop-gate-mismatch' }, {
+    SHIPYARD_RUN_STORE_DIR: storeDir,
+    SHIPYARD_RUN_CONTROL: 'scoped',
+    SHIPYARD_GRAPH_DIR: path.join(main, '.planning', 'graph'),
+  });
+  assert.ok(v && v.decision === 'block');
+  assert.match(v.reason, /SCOPE_MISMATCH/);
+});
+
+test('a scoped fixpoint allows the owning run to stop', () => {
+  const { main, phase } = repoWithPhaseWorktree(
+    live({ actionable_count: 0, actionable: {}, fixpoint: true }),
+    live({ actionable_count: 0, actionable: {}, fixpoint: true }),
+  );
+  const root = path.dirname(main);
+  const { storeDir } = scopedRun(root, phase, 'stop-gate-fixpoint');
+  const v = runIn(main, { run_id: 'stop-gate-fixpoint' }, {
+    SHIPYARD_RUN_STORE_DIR: storeDir,
+    SHIPYARD_RUN_CONTROL: 'scoped',
+  });
+  assert.equal(v, null);
+});
 
 // The shipped board the session's own checkout was carrying, verbatim in shape.
 const shipped = {
@@ -706,12 +804,35 @@ test('a ten-minute-old dispatch still opens the CI hatch', () => {
 
 test('an hour-old dispatch does not, and the refusal names it', () => {
   const dir = project(ciOnly(['T-01-02']));
-  putDispatches(dir, { 'T-01-02': { role: 'executor', at: minsAgo(60) } });
+  putDispatches(dir, { 'T-01-02': { role: 'executor', at: minsAgo(60), dispatch_id: 'dispatch-stale-1' } });
   const v = runIn(dir, { session_id: 'sess-disp' });
   assert.ok(v && v.decision === 'block', 'a mark this old is not evidence anyone is working');
   assert.ok(/T-01-02/.test(v.reason), 'the refusal names the ticket');
   assert.ok(/dispatch-record\.cjs clear/.test(v.reason), 'and how to return it to the board');
+  assert.ok(v.reason.includes("dispatch-record.cjs clear 'T-01-02' 'dispatch-stale-1'"),
+    'the cleanup command names the dispatch record, not the ticket-array lookup');
   assert.ok(/ci-wait\.cjs/.test(v.reason), 'while still naming the wait, which is the actual next move');
+});
+
+test('a suspect dispatch with no dispatch_id says so instead of printing a fake command', () => {
+  const dir = project(ciOnly(['T-01-02']));
+  putDispatches(dir, { 'T-01-02': { role: 'executor', at: minsAgo(60) } });
+  const v = runIn(dir, { session_id: 'sess-disp-missing-id' });
+  assert.ok(v && v.decision === 'block');
+  assert.ok(/missing `dispatch_id`/.test(v.reason), 'the refusal explains why no exact clear command is shown');
+  assert.ok(!v.reason.includes('<dispatch_id>'), 'placeholder text must not look copy-paste-ready');
+});
+
+test('a cleanup command quotes a graph path containing spaces', () => {
+  const original = project(ciOnly(['T-01-02']));
+  const dir = `${original} with spaces`;
+  fs.renameSync(original, dir);
+  putDispatches(dir, { 'T-01-02': { role: 'executor', at: minsAgo(60), dispatch_id: 'dispatch-spaced-path' } });
+  const v = runIn(dir, { session_id: 'sess-spaced-path' });
+  const graph = fs.realpathSync(path.join(dir, '.planning', 'graph'));
+  assert.ok(v && v.decision === 'block');
+  assert.ok(v.reason.includes(`dispatch-record.cjs clear 'T-01-02' 'dispatch-spaced-path' --graph '${graph}'`),
+    'all dynamic command arguments must remain one shell word');
 });
 
 test('a dispatched ticket with no record keeps the hatch open', () => {

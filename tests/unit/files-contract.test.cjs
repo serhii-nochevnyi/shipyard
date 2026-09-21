@@ -513,4 +513,26 @@ test('the plugin and its capability carry the same version', () => {
   assert.ok(/^\d+\.\d+\.\d+$/.test(plugin.version), `not a plain semver: ${plugin.version}`);
 });
 
+test('delivery docs name the generated Codex variants and no retired recovery targets', () => {
+  const { codexStaticVariants } = require('../../plugins/delivery-pipeline/scripts/gsd-tune.cjs');
+  const source = readRepo(DELIVER_MD) + '\n' + readRepo(SENTINEL_MD);
+  const variants = codexStaticVariants(2);
+  assert.ok(variants.length > 0, 'the generator must expose phase-2 Codex variants');
+  for (const variant of variants) {
+    assert.ok(source.includes(variant.file), `docs omit generator output ${variant.file}`);
+  }
+  assert.ok(source.includes('shipyard-inv-research-critical.toml'), 'research ceiling must use the emitted suffix');
+  assert.ok(!source.includes('shipyard-inv-research-alternatives.toml'), 'Codex research has no generated alternatives variant');
+  const codexGuidanceStart = source.indexOf('### Codex policy and generated files');
+  const workflowGuidanceStart = source.indexOf('### Workflow-native alias policy and native workflow arguments');
+  assert.ok(codexGuidanceStart >= 0, 'Codex guidance heading must exist');
+  assert.ok(workflowGuidanceStart > codexGuidanceStart, 'Workflow guidance heading must follow Codex guidance');
+  const codexGuidance = source.slice(codexGuidanceStart, workflowGuidanceStart);
+  assert.ok(!codexGuidance.includes('`-alternatives`'), 'Codex guidance must not claim an unsupported research alternatives suffix');
+  assert.ok(source.includes('shipyard-integrator-critical.toml'), 'integrator critical must use the emitted suffix');
+  assert.ok(source.includes('shipyard-ci-fix-repeat.toml'), 'repair repeat must use the emitted suffix');
+  assert.ok(!source.includes('pr-sentinel-deep'), 'sentinel has no generated recovery variant');
+  assert.ok(!source.includes('arch-review-deep'), 'architecture review has no generated recovery variant');
+});
+
 done();

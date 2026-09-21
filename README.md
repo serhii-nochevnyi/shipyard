@@ -132,8 +132,6 @@ deliberate workflow transitions because they create or update durable planning
 and delivery artifacts. `bench` follows the full research, plan, implement,
 verify, and review discipline for its size, but it stays in the current
 worktree and does not create tickets, branches, PRs, merges, or commits unless
-the user asks for the commit.
-
 
 The delivery loop cold-starts from the graph and current GitHub state, selects
 available work, records dispatch ownership, and repeats implementation,
@@ -143,36 +141,38 @@ remains. Codex resumes from the same graph on the next turn.
 
 ## Model ladder
 
-The model policy is resolved by `pipeline-config.cjs` and recorded with each
-dispatch. The default policy keeps judgment-heavy roles on the Claude Opus tier
-and uses Sonnet for the mechanical sentinel and drift checks. Effort is selected
-separately from tier. A repeated failure may earn deeper effort; a measured
-context need or contested judgment can reach the configured ceiling.
+The active policy is ADR-014. Claude Code uses Anthropic models only; Codex
+uses OpenAI models only. The two provider grids are independent and a dispatch
+never substitutes a model from the other runtime.
 
-Claude aliases resolve only to Anthropic models. Codex agents receive only the
-OpenAI palette configured for the project. The shipped Codex palette is:
+Claude resolves native aliases at launch:
 
-```json
+- executor work starts on Sonnet and moves to Opus only when critical evidence
+  or an explicit checkpoint requires it;
+- judgment roles use Opus with role-specific effort;
+- Fable is a Claude-only measured ceiling and requires delivery_pipeline.fable:
+  auto after the consent decision.
+
+Codex selects generated agents from the OpenAI ladder. The shipped compatibility
+palette is:
+
 {
   "delivery_pipeline": {
-    "codex_models": "gpt-5.6-terra:high, gpt-6-astra:high@0.153.1"
+    "codex_models": "gpt-5.6-sol:high@0.153.1, gpt-5.6-sol:xhigh@0.153.1"
   }
 }
-```
 
+The routed policy records the logical rung, concrete model, effort, runtime,
+provider, dispatch id and application receipt. A missing or ambiguous runtime,
+unsupported model, stale generated agent or missing receipt blocks the launch.
 Inspect the effective policy from the target project:
 
-```bash
-node plugins/delivery-pipeline/scripts/pipeline-config.cjs resolve
-node plugins/delivery-pipeline/scripts/pipeline-config.cjs model executor --json
-node plugins/delivery-pipeline/scripts/pipeline-config.cjs model ci-fix --json --signature-state repeat
-```
-
-Fable is a Claude-only measured ceiling. It is off by default and must be
-enabled in the target project's `delivery_pipeline.fable` setting after the
-team has decided that the measured context or recovery case justifies it.
+    node plugins/delivery-pipeline/scripts/pipeline-config.cjs resolve
+    node plugins/delivery-pipeline/scripts/pipeline-config.cjs model executor --json
+    node plugins/delivery-pipeline/scripts/pipeline-config.cjs model ci-fix --json --signature-state repeat
 
 ## Usage observability
+
 
 The attribution ledger connects a dispatch to a Claude or Codex transcript. It
 stores routing and identity metadata, never prompts or credentials:

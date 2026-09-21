@@ -20,6 +20,18 @@ The checkable requirement catalog is generated in
 and ADRs remain the human-authored scope and decision sources; generated GSD
 files are projections of those sources and of the delivery graph.
 
+## Core Value
+
+Keep delivery decisions truthful, resumable, and synchronized between the
+Shipyard conveyor and native GSD workflows.
+
+## Requirements
+
+The checkable requirement catalog is generated in
+[`.planning/REQUIREMENTS.md`](./REQUIREMENTS.md) from the roadmap. The roadmap
+and ADRs remain the human-authored scope and decision sources; generated GSD
+files are projections of those sources and of the delivery graph.
+
 ## Why it is now a GSD project
 
 Until v0.38.0 the conveyor was built by hand and validated against a separate

@@ -26,9 +26,13 @@ const CONFIG = path.join(ROOT, '.planning', 'config.json');
 const TICKETS = path.join(GRAPH_DIR, 'tickets.json');
 const DELIVERY_STATE = path.join(GRAPH_DIR, 'delivery-state.json');
 const DELIVERY_FRONT = path.join(GRAPH_DIR, 'delivery-front.json');
+const RUN_STORE = path.join(GRAPH_DIR, 'runs', 'runs.json');
+const USAGE_ATTRIBUTION = path.join(GRAPH_DIR, 'usage-attribution.jsonl');
 
 function pad(n) {
-  const s = String(n);
+  const raw = String(n ?? '').trim();
+  if (!/^\d+$/.test(raw)) return raw;
+  const s = String(Number(raw));
   return s.length >= 2 ? s : `0${s}`;
 }
 
@@ -75,8 +79,11 @@ function readText(file, { required = false } = {}) {
   try {
     return fs.readFileSync(file, 'utf8');
   } catch (error) {
-    if (required) throw new Error(`cannot read ${path.relative(ROOT, file)}: ${error.message}`);
-    return null;
+    // Optional inputs are absent only when the path does not exist. An
+    // unreadable source must fail closed instead of becoming a pending
+    // projection that looks valid to a lifecycle gate.
+    if (error && error.code === 'ENOENT' && !required) return null;
+    throw new Error(`cannot read ${path.relative(ROOT, file)}: ${error.message}`);
   }
 }
 
@@ -90,6 +97,16 @@ function readJson(file, { required = false, fallback = null } = {}) {
   }
 }
 
+function hasDeliveryMarker(raw) {
+  const text = String(raw);
+  const frontmatter = text.match(/^---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/);
+  // A truncated plan has no closing fence, so keep the raw fallback: the
+  // synchronizer must remain applicable and report malformed source instead of
+  // silently becoming an ordinary GSD project. For a complete plan, inspect
+  // only frontmatter so prose mentioning `delivery:` stays inert.
+  return /^\s*delivery\s*:/m.test(frontmatter ? frontmatter[1] : text);
+}
+
 function posixRelative(file) {
   return path.relative(ROOT, file).split(path.sep).join('/');
 }
@@ -100,7 +117,8 @@ function isoDate(value, fallback = new Date().toISOString()) {
 }
 
 function dateOnly(value, fallback = new Date().toISOString()) {
-  return isoDate(value, fallback).slice(0, 10);
+  const date = value ? new Date(value) : null;
+  return date && Number.isFinite(date.getTime()) ? date.toISOString().slice(0, 10) : fallback;
 }
 
 function stripRoadmapProjection(text) {
@@ -118,8 +136,14 @@ function marker(fingerprint) {
   return `<!-- ${FILE_MARKER}; sync-version: ${SYNC_VERSION}; source fingerprint: ${fingerprint} -->`;
 }
 
-function hasMarker(text) {
-  return String(text).includes(FILE_MARKER);
+function hasMarker(text, file = null) {
+  const lines = String(text).split(/\r?\n/);
+  const markerLine = /^\s*(?:#\s+)?(?:<!--\s*)?shipyard:gsd-sync generated;\s*sync-version:\s*\d+;\s*source fingerprint:\s*[0-9a-f]+\s*(?:-->)?\s*$/;
+  // State, summaries, UAT, and verification use a YAML frontmatter marker on
+  // line 2. REQUIREMENTS.md is markdown-only and uses line 3 after its title.
+  if (file && path.basename(file) === 'REQUIREMENTS.md') return markerLine.test(lines[2] || '');
+  if (file) return markerLine.test(lines[1] || '');
+  return markerLine.test(lines[1] || '') || markerLine.test(lines[2] || '');
 }
 
 function normalizeForHash(text) {
@@ -133,6 +157,160 @@ function sourceFileEntries(files) {
     .sort((a, b) => a[0].localeCompare(b[0]));
 }
 
+// delivery-state.json is both a durable observation cache and a heartbeat
+// record. The projection reads only the ticket status, PR number, completion
+// timestamp and the status clock when it is the activity fallback;
+// merge_state, review_decision, checks, head_sha, behind_by and the other live
+// GitHub fields are consumed by the delivery board but never rendered into
+// native GSD artifacts. Hash the exact stable view the projection consumes so
+// a babysit heartbeat does not make every native file stale while still making
+// every visible delivery change invalidate it.
+function deliveryStateProjection(state, plans) {
+  return JSON.stringify(plans
+    .map((plan) => {
+      const entry = state && typeof state === 'object' ? state[plan.ticket] : null;
+      const mergedAt = entry && (entry.mergedAt || entry.merged_at
+        || (entry.status === 'merged' ? entry.since : null));
+      return {
+        ticket: plan.ticket,
+        status: deliveryStatus(entry),
+        pr: entry && entry.pr !== undefined ? entry.pr : null,
+        merged_at: mergedAt || null,
+        // Once an explicit or merged-status completion time exists, `since`
+        // cannot affect the projection's last-activity value and is excluded.
+        since: mergedAt ? null : (entry && entry.since !== undefined ? entry.since : null),
+      };
+    })
+    .sort((a, b) => a.ticket.localeCompare(b.ticket)));
+}
+
+function scalar(value) {
+  return value === undefined || value === null ? null : value;
+}
+
+function receiptProjection(record, observations) {
+  const run = record && record.run && typeof record.run === 'object' ? record.run : {};
+  const direct = [record && record.receipt, record && record.application_receipt, run.receipt, run.application_receipt]
+    .filter((value) => value && typeof value === 'object');
+  const rows = observations.filter((row) => row && row.dispatch_id);
+  const dispatchIds = [...new Set([
+    ...direct.map((receipt) => receipt.dispatch_id).filter(Boolean),
+    ...rows.map((row) => row.dispatch_id),
+  ])].sort();
+  const verified = direct.some((receipt) => receipt.compliance === 'verified')
+    || rows.some((row) => row.receipt_status === 'verified');
+  return {
+    status: verified ? 'verified' : direct.length || rows.length ? 'unverified' : 'missing',
+    dispatch_ids: dispatchIds,
+  };
+}
+
+function stableObservation(row) {
+  const receipt = row && (row.receipt || row.application_receipt);
+  const receiptStatus = receipt && receipt.compliance === 'verified' ? 'verified' : receipt ? 'unverified' : 'missing';
+  const completion = row && row.completion_status ? row.completion_status : null;
+  const usageStatus = row && row.usage_status
+    ? row.usage_status
+    : completion && completion !== 'unknown' ? 'complete' : 'incomplete';
+  return {
+    observation_id: scalar(row && row.observation_id),
+    revision: scalar(row && row.revision),
+    run_id: scalar(row && row.run_id),
+    dispatch_id: scalar(row && row.dispatch_id),
+    runtime: scalar(row && row.runtime),
+    provider: scalar(row && row.provider),
+    receipt_status: receiptStatus,
+    completion_status: completion,
+    usage_status: usageStatus,
+    observed_model: scalar(row && row.observed_model),
+    observed_effort: scalar(row && row.observed_effort),
+  };
+}
+
+function controllerStateProjection(store, usageRows = []) {
+  const rows = objectOrNull(store) && objectOrNull(store.runs) ? Object.values(store.runs) : [];
+  const observations = usageRows.map(stableObservation).filter((row) => row.run_id || row.dispatch_id);
+  const byRun = new Map();
+  for (const row of observations) {
+    if (!row.run_id) continue;
+    if (!byRun.has(row.run_id)) byRun.set(row.run_id, []);
+    byRun.get(row.run_id).push(row);
+  }
+  const runs = rows.map((record) => {
+    const run = record && record.run && typeof record.run === 'object' ? record.run : record || {};
+    const runId = scalar(run.run_id || record.run_id);
+    const runObservations = byRun.get(runId) || [];
+    const retry = record && record.retry && typeof record.retry === 'object' ? record.retry : {};
+    const checkpoint = record && record.checkpoint && typeof record.checkpoint === 'object' ? record.checkpoint : null;
+    const successor = record && record.successor && typeof record.successor === 'object' ? record.successor : null;
+    const runtime = run.runtime && typeof run.runtime === 'object' ? run.runtime : {};
+    const dispatch = run.dispatch && typeof run.dispatch === 'object' ? run.dispatch : {};
+    const repository = run.repository && typeof run.repository === 'object' ? run.repository : {};
+    const phase = run.phase && typeof run.phase === 'object' ? run.phase : {};
+    const ticket = run.ticket && typeof run.ticket === 'object' ? run.ticket : {};
+    const revision = run.state_revision && typeof run.state_revision === 'object'
+      ? run.state_revision.value : scalar(run.state_revision);
+    return {
+      run_id: runId,
+      repository_id: scalar(repository.repository_id || repository.id),
+      phase: scalar(phase.phase || phase.number || run.phase),
+      ticket: scalar(ticket.ticket || ticket.id || run.ticket),
+      state: scalar(run.state),
+      wait_kind: scalar(run.wait_kind),
+      state_revision: revision,
+      runtime: scalar(runtime.runtime || run.runtime),
+      provider: scalar(runtime.provider),
+      dispatch_id: scalar(dispatch.dispatch_id || dispatch.id),
+      model: scalar(dispatch.model),
+      effort: scalar(dispatch.effort),
+      retry: {
+        attempts: scalar(retry.attempts),
+        max_attempts: scalar(retry.max_attempts),
+        state: scalar(retry.state),
+        condition: scalar(retry.condition),
+        exhausted: retry.exhausted === true,
+      },
+      checkpoint: checkpoint ? {
+        checkpoint_id: scalar(checkpoint.checkpoint_id),
+        state_revision: scalar(checkpoint.state_revision),
+        acknowledged: checkpoint.acknowledged === true,
+        successor_id: scalar(checkpoint.successor_id),
+        resumed: Boolean(checkpoint.resumed_at),
+      } : null,
+      successor: successor ? {
+        successor_id: scalar(successor.successor_id),
+        status: scalar(successor.status),
+      } : null,
+      receipt: receiptProjection(record || {}, runObservations),
+      usage: runObservations.map((row) => ({
+        dispatch_id: row.dispatch_id,
+        receipt_status: row.receipt_status,
+        completion_status: row.completion_status,
+        usage_status: row.usage_status,
+        observed_model: row.observed_model,
+        observed_effort: row.observed_effort,
+      })).sort((a, b) => `${a.dispatch_id}`.localeCompare(`${b.dispatch_id}`)),
+    };
+  }).sort((a, b) => `${a.run_id}`.localeCompare(`${b.run_id}`));
+  const knownRunIds = new Set(runs.map((run) => run.run_id));
+  const unbound = observations.filter((row) => !knownRunIds.has(row.run_id)).sort((a, b) => `${a.dispatch_id}`.localeCompare(`${b.dispatch_id}`));
+  return { version: 1, runs, observations: unbound };
+}
+
+function objectOrNull(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function readUsageRows(file) {
+  const raw = readText(file);
+  if (raw == null) return [];
+  return raw.split(/\r?\n/).filter(Boolean).map((line, index) => {
+    try { return JSON.parse(line); } catch (error) {
+      throw new Error(`invalid JSON in ${posixRelative(file)} at line ${index + 1}: ${error.message}`);
+    }
+  });
+}
+
 function sourceFingerprint(entries) {
   const hash = crypto.createHash('sha256');
   hash.update(`gsd-sync:${SYNC_VERSION}\n`);
@@ -141,11 +319,12 @@ function sourceFingerprint(entries) {
 }
 
 function parseArgs(argv) {
-  const args = { check: false, json: false, phase: null, help: false };
+  const args = { check: false, json: false, phase: null, help: false, adoptNative: false };
   for (let i = 0; i < argv.length; i += 1) {
     const token = argv[i];
     if (token === '--check') args.check = true;
     else if (token === '--json') args.json = true;
+    else if (token === '--adopt-native') args.adoptNative = true;
     else if (token === '--help' || token === '-h') args.help = true;
     else if (token === '--phase') {
       const value = argv[++i];
@@ -167,13 +346,33 @@ class CliError extends Error {}
 function parseRoadmap(text) {
   const clean = stripRoadmapProjection(text);
   const requirements = [];
-  const requirementRe = /^\s*-\s+\*\*([A-Z][A-Z0-9]+-\d+)\*\*\s+[—-]\s+(.+)$/gm;
-  let match;
-  while ((match = requirementRe.exec(clean))) {
-    requirements.push({ id: match[1], description: match[2].trim() });
+  let current = null;
+  const flushRequirement = () => {
+    if (!current) return;
+    current.description = current.description.replace(/\s+/g, ' ').trim();
+    requirements.push(current);
+    current = null;
+  };
+  for (const line of clean.split(/\r?\n/)) {
+    const match = line.match(/^\s*-\s+\*\*([A-Z][A-Z0-9]+-\d+)\*\*\s+[—-]\s+(.+)$/);
+    if (match) {
+      flushRequirement();
+      current = { id: match[1], description: match[2].trim() };
+      continue;
+    }
+    if (!current) continue;
+    // A new heading, list item, or requirement metadata line ends the
+    // description. Ordinary wrapped/indented prose remains part of it.
+    if (/^\s*(?:#{1,6}\s|[-*]\s|\*\*Requirements\*\*)/.test(line)) {
+      flushRequirement();
+      continue;
+    }
+    if (line.trim()) current.description += ` ${line.trim()}`;
   }
+  flushRequirement();
 
   const phases = [];
+  let match;
   const phaseRe = /^###\s+Phase\s+(\d+)\s*:\s*(.+)$/gm;
   while ((match = phaseRe.exec(clean))) {
     phases.push({ number: Number(match[1]), title: match[2].trim() });
@@ -192,9 +391,17 @@ function parsePhaseRequirements(cleanRoadmap, phaseNumberValue) {
 }
 
 function parseProjectCore(projectText) {
-  const match = String(projectText || '').match(/^##\s+Core Value\s*\n+([\s\S]*?)(?=^##\s|$)/im);
-  return match ? match[1].trim().replace(/\s+/g, ' ') :
-    'Maintain a truthful, resumable synchronization between Shipyard delivery and GSD.';
+  const lines = String(projectText || '').split(/\r?\n/);
+  const heading = lines.findIndex((line) => /^##\s+Core Value\s*$/i.test(line));
+  if (heading >= 0) {
+    const value = [];
+    for (let i = heading + 1; i < lines.length && !/^##\s/.test(lines[i]); i += 1) {
+      value.push(lines[i]);
+    }
+    const coreValue = value.join(' ').replace(/\s+/g, ' ').trim();
+    if (coreValue) return coreValue;
+  }
+  return 'Maintain a truthful, resumable synchronization between Shipyard delivery and GSD.';
 }
 
 function listPhaseDirs() {
@@ -213,11 +420,19 @@ function phaseDirFor(number, title, existingDirs) {
 function collectPlans(existingDirs) {
   const plans = [];
   const errors = [];
+  let planFileCount = 0;
+  let deliveryPlanFileCount = 0;
   for (const dirName of existingDirs) {
     const dir = path.join(PHASES_DIR, dirName);
-    for (const fileName of fs.readdirSync(dir).filter((name) => /-PLAN\.md$/.test(name)).sort()) {
+    const planFiles = fs.readdirSync(dir).filter((name) => /-PLAN\.md$/.test(name)).sort();
+    planFileCount += planFiles.length;
+    for (const fileName of planFiles) {
       const file = path.join(dir, fileName);
       const raw = readText(file, { required: true });
+      // Keep malformed Shipyard plans applicable so their parse error blocks
+      // publication instead of making the synchronizer silently inert.
+      const declaresDelivery = hasDeliveryMarker(raw);
+      if (declaresDelivery) deliveryPlanFileCount += 1;
       const parsed = parseFrontmatter(raw);
       if (!parsed.data || parsed.errors.length) {
         errors.push(`${posixRelative(file)}: malformed frontmatter`);
@@ -228,6 +443,7 @@ function collectPlans(existingDirs) {
       const base = fileName.replace(/-PLAN\.md$/, '');
       const plan = String(fm.plan ?? base.split('-').slice(-1)[0]).trim();
       const delivery = fm.delivery && typeof fm.delivery === 'object' ? fm.delivery : {};
+      if (Object.keys(delivery).length && !declaresDelivery) deliveryPlanFileCount += 1;
       const ticket = canonicalTicket(delivery.ticket, phase);
       if (phase == null || !ticket) {
         errors.push(`${posixRelative(file)}: missing phase or delivery.ticket`);
@@ -238,7 +454,7 @@ function collectPlans(existingDirs) {
         dirName,
         fileName,
         phase,
-        plan: pad(Number(plan)) || plan,
+        plan: pad(plan),
         title: String(fm.title || base),
         ticket,
         requirements: Array.isArray(fm.requirements) ? fm.requirements.map(String) : [],
@@ -248,30 +464,91 @@ function collectPlans(existingDirs) {
       });
     }
   }
-  return { plans: plans.sort((a, b) => a.phase - b.phase || a.plan.localeCompare(b.plan)), errors };
+  return {
+    plans: plans.sort((a, b) => a.phase - b.phase || a.plan.localeCompare(b.plan)),
+    errors,
+    planFileCount,
+    deliveryPlanFileCount,
+  };
+}
+
+function verificationEvidence(text, integrationStatus = 'pending') {
+  if (!text) return { status: 'pending', reason: 'INTEGRATION.md is missing' };
+  const lower = String(text).toLowerCase();
+  const evidenceText = String(text).split(/\r?\n/)
+    .filter((line) => !/verdict/i.test(line))
+    .join('\n')
+    // The command name `uat-passed` is not a result. Prevent its suffix from
+    // satisfying the positive evidence token by itself.
+    .replace(/\buat-passed\b/gi, 'uat-result');
+  if (integrationStatus === 'needs-fix') {
+    return { status: 'failed', reason: 'integration evidence records a finding or failed verdict' };
+  }
+  const verificationSignal = /\b(?:verification(?:\s+(?:evidence|rerun|commands|result))?|uat|test-fast|test-codex-shipyard|current-head\s+ci|ci)\b/i.test(evidenceText);
+  if (/\b(?:verification|uat|test|ci)\b[^\n]{0,120}\b(?:failed|needs[- ]fix|error|red)\b/i.test(evidenceText)) {
+    return { status: 'failed', reason: 'verification evidence records a failed check' };
+  }
+  const positiveSignal = /\b(?:passed|green|exit\s*0|successful|success|verified|no\s+unresolved)\b/i.test(evidenceText);
+  if (verificationSignal && positiveSignal) {
+    return { status: 'passed', reason: 'integration evidence records repository-local verification facts' };
+  }
+  return {
+    status: 'pending',
+    reason: lower.includes('verification')
+      ? 'integration evidence has no positive repository-local verification result'
+      : 'integration evidence has no verification evidence',
+  };
 }
 
 function integrationStatus(text) {
-  if (!text) return { status: 'pending', reason: 'INTEGRATION.md is missing' };
+  if (!text) {
+    return {
+      status: 'pending',
+      reason: 'INTEGRATION.md is missing',
+      verification: verificationEvidence(text),
+    };
+  }
   const lower = text.toLowerCase();
   // Historical integration reports may mention an earlier needs-fix round in
   // the body of a final passed review. Use the last explicit Verdict line as
   // the authority and only inspect the document preamble when no such line
   // exists; never downgrade a final pass because of retrospective prose.
-  const verdictLines = String(text).split(/\r?\n/).filter((line) => /verdict/i.test(line));
+  const verdictLines = String(text).split(/\r?\n/).filter((line) => /\bverdict\b/i.test(line));
   const explicit = verdictLines.length ? verdictLines[verdictLines.length - 1].toLowerCase() : '';
-  if (/passed/.test(explicit)) return { status: 'passed', reason: 'integration evidence records passed' };
   if (/needs[- ]fix|gaps_found|failed/.test(explicit)) {
-    return { status: 'needs-fix', reason: 'integration evidence records a finding or failed verdict' };
+    return {
+      status: 'needs-fix',
+      reason: 'integration evidence records a finding or failed verdict',
+      verification: verificationEvidence(text, 'needs-fix'),
+    };
+  }
+  if (/\bpassed\b/.test(explicit)) {
+    return {
+      status: 'passed',
+      reason: 'integration evidence records passed',
+      verification: verificationEvidence(text, 'passed'),
+    };
   }
   const preamble = lower.split(/\r?\n/).slice(0, 18).join('\n');
   if (/\bneeds[- ]fix\b|\bgaps_found\b|\bfailed\b/.test(preamble)) {
-    return { status: 'needs-fix', reason: 'integration evidence records a finding or failed verdict' };
+    return {
+      status: 'needs-fix',
+      reason: 'integration evidence records a finding or failed verdict',
+      verification: verificationEvidence(text, 'needs-fix'),
+    };
   }
   if (/\bpassed\b/.test(preamble)) {
-    return { status: 'passed', reason: 'integration evidence records passed' };
+    return {
+      status: 'passed',
+      reason: 'integration evidence records passed',
+      verification: verificationEvidence(text, 'passed'),
+    };
   }
-  return { status: 'pending', reason: 'integration evidence has no explicit passed verdict' };
+  return {
+    status: 'pending',
+    reason: 'integration evidence has no explicit passed verdict',
+    verification: verificationEvidence(text),
+  };
 }
 
 function deliveryStatus(entry) {
@@ -284,22 +561,28 @@ function phaseEvidence(phase, planRecords, integration) {
   const merged = plans.filter((record) => record.delivery_status === 'merged').length;
   const incomplete = plans.filter((record) => record.delivery_status !== 'merged');
   const allMerged = plans.length > 0 && incomplete.length === 0;
+  const verification = integration.verification || { status: 'pending', reason: 'verification evidence is missing' };
   let status = 'pending';
   let reason = 'phase has no complete integration evidence';
-  if (incomplete.length) {
-    reason = `${incomplete.length} plan(s) are not merged`;
-  } else if (integration.status === 'needs-fix') {
+  if (integration.status === 'needs-fix') {
     status = 'gaps_found';
     reason = integration.reason;
-  } else if (allMerged && integration.status === 'passed') {
+  } else if (verification.status === 'failed') {
+    status = 'gaps_found';
+    reason = verification.reason;
+  } else if (incomplete.length) {
+    reason = `${incomplete.length} plan(s) are not merged`;
+  } else if (allMerged && integration.status === 'passed' && verification.status === 'passed') {
     status = 'passed';
-    reason = 'all plans are merged and integration evidence passed';
+    reason = 'all plans are merged and integration and verification evidence passed';
   } else if (!plans.length) {
     reason = 'phase has no PLAN files yet';
+  } else if (integration.status === 'passed' && verification.status !== 'passed') {
+    reason = verification.reason;
   } else {
     reason = integration.reason;
   }
-  return { plans, merged, allMerged, status, reason, integration };
+  return { plans, merged, allMerged, status, reason, integration, verification };
 }
 
 function checkSource({ roadmapText, roadmapInfo, projectText, plans, planErrors, graph, state, front }) {
@@ -315,11 +598,23 @@ function checkSource({ roadmapText, roadmapInfo, projectText, plans, planErrors,
   if (front != null && typeof front !== 'object') blockers.push('delivery-front.json must be an object');
 
   const graphTickets = graph && graph.tickets && typeof graph.tickets === 'object' ? graph.tickets : {};
+  const stateEntries = state && typeof state === 'object' && !Array.isArray(state) ? state : null;
   const seen = new Set();
   for (const plan of plans) {
     if (seen.has(plan.ticket)) blockers.push(`${posixRelative(plan.file)}: duplicate ticket ${plan.ticket}`);
     seen.add(plan.ticket);
     if (!graphTickets[plan.ticket]) blockers.push(`${plan.ticket}: PLAN is absent from tickets.json`);
+    if (stateEntries && !Object.prototype.hasOwnProperty.call(stateEntries, plan.ticket)) {
+      blockers.push(`${plan.ticket}: delivery-state.json has no observation`);
+    } else if (stateEntries) {
+      const observation = stateEntries[plan.ticket];
+      if (!observation || typeof observation !== 'object' || Array.isArray(observation) || typeof observation.status !== 'string') {
+        blockers.push(`${plan.ticket}: delivery-state.json has no valid status observation`);
+      }
+    }
+    if (!roadmapInfo.phases.some((phase) => phase.number === plan.phase)) {
+      blockers.push(`${posixRelative(plan.file)}: phase ${plan.phase} is not declared in ROADMAP.md`);
+    }
   }
   for (const id of Object.keys(graphTickets)) {
     if (!seen.has(id) && /^T-\d{2}-\d{2}/.test(id)) blockers.push(`${id}: graph ticket has no matching PLAN.md`);
@@ -404,19 +699,60 @@ function latestActivity(planRecords) {
   return dates.length ? new Date(Math.max(...dates)).toISOString() : '2000-01-01T00:00:00.000Z';
 }
 
-function renderState({ phases, planRecords, evidenceByPhase, fingerprint, coreValue, blockers, lastActivity }) {
+function projectionBlockers(phases, planRecords, evidenceByPhase) {
+  const derived = [];
+  for (const plan of planRecords) {
+    if (plan.delivery_status !== 'merged') {
+      derived.push(`${plan.ticket}: delivery status is ${plan.delivery_status}`);
+    }
+  }
+  for (const phase of phases) {
+    const evidence = evidenceByPhase.get(phase.number);
+    // Roadmap placeholders without delivery plans are not actionable
+    // blockers. Once a phase has delivery evidence, every non-green state must
+    // remain visible in STATE.md.
+    if (evidence && evidence.plans.length && evidence.status !== 'passed') {
+      derived.push(`Phase ${phase.number}: ${evidence.reason}`);
+    }
+  }
+  return derived;
+}
+
+function renderState({ phases, planRecords, evidenceByPhase, fingerprint, coreValue, blockers, lastActivity, controller }) {
   const completedPlans = planRecords.filter((plan) => plan.delivery_status === 'merged').length;
   const completedPhases = [...evidenceByPhase.values()].filter((e) => e.status === 'passed').length;
   const totalPlans = planRecords.length;
   const percent = totalPlans ? Math.floor((completedPlans / totalPlans) * 100) : 0;
-  const current = phases.find((phase) => evidenceByPhase.get(phase.number).status !== 'passed') || phases[phases.length - 1] || null;
+  const firstIncomplete = phases.findIndex((phase) => evidenceByPhase.get(phase.number).status !== 'passed');
+  const currentIndex = firstIncomplete >= 0 ? firstIncomplete : phases.length - 1;
+  const current = currentIndex >= 0 ? phases[currentIndex] : null;
   const currentEvidence = current ? evidenceByPhase.get(current.number) : null;
   const bar = `${'█'.repeat(Math.floor(percent / 10))}${'░'.repeat(10 - Math.floor(percent / 10))}`;
   const phaseRows = phases.map((phase) => {
     const evidence = evidenceByPhase.get(phase.number);
     return `| ${phase.number} | ${evidence.plans.length} | ${evidence.merged} | ${evidence.status} |`;
   });
-  const blockerLines = blockers.length ? blockers.slice(0, 8).map((item) => `- ${item}`) : ['- None.'];
+  const allBlockers = [...new Set([
+    ...blockers,
+    ...projectionBlockers(phases, planRecords, evidenceByPhase),
+  ])];
+  const blockerLines = allBlockers.length ? allBlockers.slice(0, 8).map((item) => `- ${item}`) : ['- None.'];
+  const controllerRows = controller.runs.length
+    ? controller.runs.map((run) => `| ${run.run_id} | ${run.ticket || '—'} | ${run.runtime || '—'} | ${run.state || '—'} | ${run.wait_kind || '—'} | ${run.receipt.status} | ${run.usage.length ? run.usage.map((row) => row.usage_status).join(', ') : '—'} |`)
+    : ['| — | — | — | no active controller runs observed | — | — | — |'];
+  const controllerBlock = controller.runs.length || controller.observations.length
+    ? [
+      '## Controller Runtime',
+      '',
+      `Controller runs: ${controller.runs.length}`,
+      '',
+      '| Run | Ticket | Runtime | State | Technical wait | Receipt | Usage |',
+      '|---|---|---|---|---|---|---|',
+      ...controllerRows,
+      ...(controller.observations.length ? ['', `Unbound observations: ${controller.observations.length}`] : []),
+      '',
+    ]
+    : [];
   return [
     '---',
     `# ${marker(fingerprint).slice(5, -4)}`,
@@ -441,13 +777,14 @@ function renderState({ phases, planRecords, evidenceByPhase, fingerprint, coreVa
     '',
     '## Current Position',
     '',
-    `Phase: ${current ? `${current.number} of ${phases.length} (${current.title})` : 'None'}`,
+    `Phase: ${current ? `${currentIndex + 1} of ${phases.length} (Phase ${current.number}: ${current.title})` : 'None'}`,
     `Plan: ${currentEvidence ? `${currentEvidence.merged} of ${currentEvidence.plans.length} merged` : 'None'}`,
     `Status: ${currentEvidence ? currentEvidence.status : 'Planning'}`,
     `Last activity: ${dateOnly(lastActivity)} — Shipyard projection synchronized`,
     '',
     `Progress: [${bar}] ${percent}%`,
     '',
+    ...controllerBlock,
     '## Performance Metrics',
     '',
     `- Total plans completed: ${completedPlans}`,
@@ -493,7 +830,7 @@ function renderState({ phases, planRecords, evidenceByPhase, fingerprint, coreVa
 function renderSummary(plan, fingerprint) {
   const complete = plan.delivery_status === 'merged';
   const status = complete ? 'complete' : 'halted';
-  const date = dateOnly(plan.merged_at);
+  const completionDate = complete ? dateOnly(plan.merged_at, null) : null;
   const provides = complete ? `Delivery evidence for ${plan.ticket}` : `Tracked delivery state for ${plan.ticket}`;
   return [
     '---',
@@ -518,7 +855,7 @@ function renderSummary(plan, fingerprint) {
     'key-decisions:',
     '  - "Shipyard delivery state is projected; no native executor claim is invented."',
     'duration: 0min',
-    `completed: ${date}`,
+    ...(completionDate ? [`completed: ${completionDate}`] : []),
     `status: ${status}`,
     'shipyard_sync: delivery-projection',
     `shipyard_source_fingerprint: ${fingerprint}`,
@@ -549,9 +886,14 @@ function renderSummary(plan, fingerprint) {
 
 function renderUat(phase, evidence, fingerprint) {
   const phaseStatus = evidence.status;
-  const planResult = evidence.plans.length > 0 && evidence.allMerged ? 'passed' : 'pending';
-  const integrationResult = phaseStatus === 'passed' ? 'passed' : phaseStatus === 'gaps_found' ? 'failed' : 'pending';
-  const verificationResult = phaseStatus === 'passed' ? 'passed' : phaseStatus === 'gaps_found' ? 'failed' : 'pending';
+  const hasPlans = evidence.plans.length > 0;
+  const planResult = hasPlans && evidence.allMerged ? 'passed' : 'pending';
+  const integrationResult = evidence.integration.status === 'passed'
+    ? 'passed'
+    : evidence.integration.status === 'needs-fix' ? 'failed' : 'pending';
+  const verificationResult = evidence.verification.status === 'passed'
+    ? 'passed'
+    : evidence.verification.status === 'failed' ? 'failed' : 'pending';
   return [
     '---',
     `# ${marker(fingerprint).slice(5, -4)}`,
@@ -568,8 +910,8 @@ function renderUat(phase, evidence, fingerprint) {
     '',
     '### 1. Delivery plans are accounted for',
     `result: ${planResult}`,
-    `expected: all ${evidence.plans.length} phase plan(s) are merged`,
-    `actual: ${evidence.merged} merged`,
+    `expected: ${hasPlans ? `all ${evidence.plans.length} phase plan(s) are merged` : 'at least one delivery PLAN.md is present'}`,
+    `actual: ${hasPlans ? `${evidence.merged} merged` : 'no delivery PLAN.md files; evidence is missing'}`,
     '',
     '### 2. Integration evidence is explicit',
     `result: ${integrationResult}`,
@@ -578,22 +920,27 @@ function renderUat(phase, evidence, fingerprint) {
     '',
     '### 3. Phase verification is evidence-backed',
     `result: ${verificationResult}`,
-    `expected: the phase verification projection is ${phaseStatus === 'passed' ? 'passed' : 'not green without evidence'}`,
-    `actual: ${phaseStatus}`,
+    'expected: positive repository-local verification evidence is present',
+    `actual: ${evidence.verification.status} — ${evidence.verification.reason}`,
     '',
   ].join('\n');
 }
 
-function renderVerification(phase, evidence, fingerprint, lastActivity) {
+function renderVerification(phase, evidence, fingerprint) {
   const status = evidence.status === 'passed' ? 'passed' : evidence.status === 'gaps_found' ? 'gaps_found' : 'human_needed';
   const rows = evidence.plans.length
-    ? evidence.plans.map((plan) => `| ${plan.ticket} | ${plan.delivery_status} | ${plan.delivery_status === 'merged' ? '✓ VERIFIED' : '✗ FAILED'} |`).join('\n')
+    ? evidence.plans.map((plan) => `| ${plan.ticket} | ${plan.delivery_status} | ${plan.delivery_status === 'merged' ? '✓ VERIFIED' : plan.delivery_status === 'unknown' ? '✗ FAILED' : '? UNCERTAIN'} |`).join('\n')
     : '| — | no plans | ? UNCERTAIN |';
+  const planEvidence = evidence.plans.length
+    ? `${evidence.merged}/${evidence.plans.length} delivery records are merged`
+    : 'No PLAN files are present; delivery evidence is missing';
+  const planStatus = evidence.plans.length
+    ? (evidence.allMerged ? '✓ VERIFIED' : evidence.plans.some((plan) => plan.delivery_status === 'unknown') ? '✗ FAILED' : '? UNCERTAIN')
+    : '? UNCERTAIN';
   return [
     '---',
     `# ${marker(fingerprint).slice(5, -4)}`,
     `phase: ${phase.number}`,
-    `verified: ${isoDate(lastActivity)}`,
     `status: ${status}`,
     `shipyard_source_fingerprint: ${fingerprint}`,
     '---',
@@ -606,8 +953,9 @@ function renderVerification(phase, evidence, fingerprint, lastActivity) {
     '',
     '| Truth | Evidence | Status |',
     '|---|---|---|',
-    `| Every phase plan is accounted for | ${evidence.merged}/${evidence.plans.length} delivery records are merged | ${evidence.allMerged ? '✓ VERIFIED' : '✗ FAILED'} |`,
+    `| Every phase plan is accounted for | ${planEvidence} | ${planStatus} |`,
     `| Integration is coherent | ${evidence.integration.reason} | ${evidence.integration.status === 'passed' ? '✓ VERIFIED' : evidence.integration.status === 'needs-fix' ? '✗ FAILED' : '? UNCERTAIN'} |`,
+    `| Verification evidence is present | ${evidence.verification.reason} | ${evidence.verification.status === 'passed' ? '✓ VERIFIED' : evidence.verification.status === 'failed' ? '✗ FAILED' : '? UNCERTAIN'} |`,
     '',
     '## Plan Evidence',
     '',
@@ -618,7 +966,7 @@ function renderVerification(phase, evidence, fingerprint, lastActivity) {
     '## Verification Commands',
     '',
     '- `node plugins/delivery-pipeline/scripts/gsd-sync.cjs --check --json`',
-    '- `node /Users/serhii/.codex/gsd-core/bin/gsd-tools.cjs phase uat-passed ' + phase.number + ' --raw`',
+    '- `gsd-tools phase uat-passed ' + phase.number + ' --raw`',
     '',
     '## Gaps Summary',
     '',
@@ -662,14 +1010,17 @@ function replaceRoadmapBlock(original, block) {
   );
 }
 
-function generatedFileContent(file, expected) {
+function generatedFileContent(file, expected, { adoptNative = false } = {}) {
   const existing = readText(file);
   // ROADMAP is human-authored outside its marked block; all other projection
   // files are wholly owned and must carry our marker before they are replaced.
-  if (existing != null && file !== ROADMAP && !hasMarker(existing)) {
+  // Adoption is an explicit direct-sync action. Lifecycle gates never pass the
+  // flag, so an unmarked native file remains a hard error there.
+  const adopted = existing != null && file !== ROADMAP && !hasMarker(existing, file);
+  if (adopted && !adoptNative) {
     throw new Error(`${posixRelative(file)} exists but is not owned by ${FILE_MARKER}`);
   }
-  return { file, existing, expected };
+  return { file, existing, expected, adopted };
 }
 
 function findObsoleteGeneratedFiles(expected, { prune = true } = {}) {
@@ -687,21 +1038,36 @@ function findObsoleteGeneratedFiles(expected, { prune = true } = {}) {
     }
   }
   for (const file of candidates) {
-    if (!expectedSet.has(path.resolve(file)) && hasMarker(readText(file) || '')) obsolete.push(file);
+    if (!expectedSet.has(path.resolve(file)) && hasMarker(readText(file) || '', file)) obsolete.push(file);
   }
   return obsolete;
 }
 
-function buildSnapshot({ phase: focusPhase = null } = {}) {
+function buildSnapshot({ phase: focusPhase = null, adoptNative = false } = {}) {
   const roadmapText = readText(ROADMAP);
   const projectText = readText(PROJECT);
   const graph = readJson(TICKETS, { fallback: null });
-  const state = readJson(DELIVERY_STATE, { fallback: {} });
+  const state = readJson(DELIVERY_STATE, { fallback: null });
   const front = readJson(DELIVERY_FRONT, { fallback: null });
+  const runStore = readJson(RUN_STORE, { fallback: null });
+  const usageRows = readUsageRows(USAGE_ATTRIBUTION);
+  const controller = controllerStateProjection(runStore, usageRows);
   const roadmapInfo = parseRoadmap(roadmapText || '');
   const existingDirs = listPhaseDirs();
   const phaseList = phaseNameMap(roadmapInfo, existingDirs);
   const collected = collectPlans(existingDirs);
+  if (collected.deliveryPlanFileCount === 0) {
+    return {
+      applicable: false,
+      ok: true,
+      blockers: [],
+      source_fingerprint: null,
+      generated: [],
+      obsolete: [],
+      phases: [],
+      counts: { phases: 0, plans: 0, merged_plans: 0, verified_phases: 0, generated_files: 0, obsolete_files: 0 },
+    };
+  }
   const blockers = checkSource({ roadmapText, roadmapInfo, projectText, plans: collected.plans, planErrors: collected.errors, graph, state, front });
   if (focusPhase != null && !phaseList.some((phase) => phase.number === Number(focusPhase))) {
     blockers.push(`requested phase ${focusPhase} is not declared in ROADMAP.md`);
@@ -712,13 +1078,28 @@ function buildSnapshot({ phase: focusPhase = null } = {}) {
     const integration = integrationStatus(readText(path.join(PHASES_DIR, phase.dirName, 'INTEGRATION.md')));
     evidenceByPhase.set(phase.number, phaseEvidence(phase, planRecords, integration));
   }
-  const sourceFiles = [ROADMAP, PROJECT, CONFIG, TICKETS, DELIVERY_STATE, DELIVERY_FRONT];
+  // delivery-front.json is a live dispatch cache. It carries generated_at,
+  // observed_at, generation, and dispatch timestamps that change on ordinary
+  // state-sync heartbeats, while none of those fields feed this projection.
+  // Hashing it would make an otherwise unchanged native projection fail
+  // --check after every delivery round. The authoritative delivery facts are
+  // already represented by the stable subset of delivery-state.json below, so
+  // keep the volatile front and heartbeat fields out of the source fingerprint
+  // while still validating their shape above.
+  const sourceFiles = [ROADMAP, PROJECT, CONFIG, TICKETS, DELIVERY_STATE];
   for (const plan of planRecords) sourceFiles.push(plan.file);
   for (const phase of phaseList) {
     const integration = path.join(PHASES_DIR, phase.dirName, 'INTEGRATION.md');
     if (fs.existsSync(integration)) sourceFiles.push(integration);
   }
-  const sourceEntries = sourceFileEntries(sourceFiles.filter((file) => file !== ROADMAP));
+  const sourceEntries = sourceFileEntries(sourceFiles.filter((file) => file !== ROADMAP && file !== DELIVERY_STATE));
+  sourceEntries.push([
+    posixRelative(DELIVERY_STATE),
+    deliveryStateProjection(state, planRecords),
+  ]);
+  if (controller.runs.length || controller.observations.length) {
+    sourceEntries.push([posixRelative(RUN_STORE), JSON.stringify(controller)]);
+  }
   // The first publication appends the marked block after the human prose; the
   // block remover must not make the source fingerprint depend on whether that
   // block has already existed (one extra trailing blank line was enough to make
@@ -729,7 +1110,7 @@ function buildSnapshot({ phase: focusPhase = null } = {}) {
   const coreValue = parseProjectCore(projectText);
   const lastActivity = latestActivity(planRecords);
   const expected = new Map();
-  expected.set(path.join(ROOT, '.planning', 'STATE.md'), renderState({ phases: phaseList, planRecords, evidenceByPhase, fingerprint, coreValue, blockers, lastActivity }));
+  expected.set(path.join(ROOT, '.planning', 'STATE.md'), renderState({ phases: phaseList, planRecords, evidenceByPhase, fingerprint, coreValue, blockers, lastActivity, controller }));
   expected.set(path.join(ROOT, '.planning', 'REQUIREMENTS.md'), projectRequirements(roadmapInfo, phaseList, evidenceByPhase, fingerprint, coreValue));
   expected.set(ROADMAP, replaceRoadmapBlock(roadmapText || '', renderRoadmapBlock({ phases: phaseList, evidenceByPhase, planRecords, fingerprint })));
   for (const plan of planRecords.filter((record) => focusPhase == null || record.phase === Number(focusPhase))) {
@@ -740,9 +1121,9 @@ function buildSnapshot({ phase: focusPhase = null } = {}) {
     const evidence = evidenceByPhase.get(phase.number);
     const dir = path.join(PHASES_DIR, phase.dirName);
     expected.set(path.join(dir, `${phase.dirName}-UAT.md`), renderUat(phase, evidence, fingerprint));
-    expected.set(path.join(dir, `${phase.dirName}-VERIFICATION.md`), renderVerification(phase, evidence, fingerprint, lastActivity));
+    expected.set(path.join(dir, `${phase.dirName}-VERIFICATION.md`), renderVerification(phase, evidence, fingerprint));
   }
-  const generated = [...expected.entries()].map(([file, content]) => generatedFileContent(file, content));
+  const generated = [...expected.entries()].map(([file, content]) => generatedFileContent(file, content, { adoptNative }));
   const obsolete = findObsoleteGeneratedFiles([...expected.keys()], { prune: focusPhase == null });
   const counts = {
     phases: phaseList.length,
@@ -767,6 +1148,7 @@ function buildSnapshot({ phase: focusPhase = null } = {}) {
       reason: evidenceByPhase.get(phase.number).reason,
     })),
     counts,
+    controller,
   };
 }
 
@@ -786,13 +1168,16 @@ function checkSnapshot(snapshot) {
 function publishSnapshot(snapshot) {
   if (snapshot.blockers.length) throw new Error(snapshot.blockers.join('; '));
   for (const item of snapshot.generated) {
+    // state-sync now calls this writer after every delivery round. Avoid
+    // replacing identical files so a quiet heartbeat remains a no-op on disk.
+    if (isSame(item.file, item.expected)) continue;
     fs.mkdirSync(path.dirname(item.file), { recursive: true });
     writeAtomic(item.file, item.expected);
   }
   for (const file of snapshot.obsolete) {
     // Only delete files that were positively identified as ours in the snapshot.
     // No glob or recursive deletion is used here.
-    if (hasMarker(readText(file) || '')) fs.unlinkSync(file);
+    if (hasMarker(readText(file) || '', file)) fs.unlinkSync(file);
   }
 }
 
@@ -804,6 +1189,7 @@ function resultFor(snapshot, args, drift = []) {
     phase: args.phase,
     source_fingerprint: snapshot.source_fingerprint,
     generated_files: snapshot.generated.map((item) => posixRelative(item.file)),
+    adopted_files: args.check ? [] : snapshot.generated.filter((item) => item.adopted).map((item) => posixRelative(item.file)),
     obsolete_files: snapshot.obsolete.map(posixRelative),
     phases: snapshot.phases,
     counts: snapshot.counts,
@@ -813,27 +1199,32 @@ function resultFor(snapshot, args, drift = []) {
 
 function help() {
   return [
-    'usage: gsd-sync.cjs [--check] [--json] [--phase <number>]',
+    'usage: gsd-sync.cjs [--check] [--json] [--adopt-native] [--phase <number>]',
     '',
     'Project Shipyard delivery evidence into native GSD artifacts.',
     'The command is local-only and inert only when no Shipyard delivery plans exist.',
+    '--adopt-native is an explicit ownership transfer for existing native GSD projection files; lifecycle gates never pass it.',
     '--phase performs a targeted projection of one phase while keeping global state coherent; run a full sync before ship.',
   ].join('\n');
 }
 
 function run(args) {
   if (args.help) return { help: help(), code: 0 };
-  const snapshot = buildSnapshot({ phase: args.phase });
+  const snapshot = buildSnapshot({ phase: args.phase, adoptNative: args.adoptNative });
   if (!snapshot.applicable) return { result: { ok: true, applicable: false }, code: 0 };
   if (args.check) {
     const drift = checkSnapshot(snapshot);
     return { result: resultFor(snapshot, args, drift), code: snapshot.blockers.length || drift.length ? 1 : 0 };
   }
-  const published = withLock(lockDirFor(ROOT), 'gsd-sync', () => {
+  // Share the state lock with state-sync and dispatch-record's front refresh.
+  // The projection reads delivery-state/front while publishing generated
+  // artifacts; a private lock would let a board update land between those
+  // reads and produce a native projection for a different observation.
+  const published = withLock(lockDirFor(ROOT), 'state', () => {
     // Rebuild inside the lock. A planning/delivery writer may have changed the
     // source while the first read was in progress; publishing an old projection
     // is worse than waiting for the next run.
-    const locked = buildSnapshot({ phase: args.phase });
+    const locked = buildSnapshot({ phase: args.phase, adoptNative: args.adoptNative });
     publishSnapshot(locked);
     return locked;
   }, { label: 'gsd-sync' });
@@ -851,7 +1242,13 @@ function main(argv = process.argv.slice(2)) {
     const output = run(args);
     if (args.json) console.log(JSON.stringify(output.result));
     else if (output.result && output.result.applicable === false) console.log('gsd-sync: not applicable — no Shipyard delivery plans');
-    else if (output.result && output.result.ok) console.log(`gsd-sync: ${args.check ? 'projection is synchronized' : 'projection published'} (${output.result.counts.generated_files} generated files)`);
+    else if (output.result && output.result.ok) {
+      if (args.adoptNative && !args.check) {
+        const adopted = output.result.adopted_files || [];
+        console.log(`gsd-sync: native adoption — ${adopted.length ? adopted.join(', ') : 'none'}`);
+      }
+      console.log(`gsd-sync: ${args.check ? 'projection is synchronized' : 'projection published'} (${output.result.counts.generated_files} generated files)`);
+    }
     else console.error(`gsd-sync: blocked — ${(output.result.blockers || []).join('; ')}`);
     return output.code;
   } catch (error) {
@@ -866,7 +1263,10 @@ module.exports = {
   parseArgs,
   parseRoadmap,
   integrationStatus,
+  verificationEvidence,
   canonicalTicket,
+  deliveryStateProjection,
+  controllerStateProjection,
   sourceFingerprint,
   buildSnapshot,
   checkSnapshot,

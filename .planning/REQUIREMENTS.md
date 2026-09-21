@@ -1,6 +1,6 @@
 # Requirements: shipyard
 
-<!-- shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 74b34d11681c634e2be3a3c70903ade505e38311fde3d28699bea4e39eea4c0b -->
+<!-- shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 36a7ece403327795184d1c5a2e4258c0446cf79fe994f1f6d895309eced438e9 -->
 
 **Defined:** 2026-09-10
 **Core Value:** Keep delivery decisions truthful, resumable, and synchronized between the Shipyard conveyor and native GSD workflows.
@@ -33,7 +33,7 @@
 - [ ] **REQ-23**: The CI waiter distinguishes a stalled pipeline from an unreachable `gh`, clears only the settled ticket's record, and sizes its window from the observed CI.
 - [ ] **REQ-24**: Prose names only what the scripts implement: no instruction sanctions a wait, a bucket or an order of operations the code does not have.
 - [ ] **REQ-25**: Every writer of `delivery-front.json` writes the SAME front: a resync must carry the dispatch overlay, so the board and the stop gate never read work in flight as actionable between one `mark` and the next.
-- [x] **REQ-26**: The host setup and smokes pin the runtimes the conveyor is tested on: Claude Code with Fable 5.1/Opus 5 aliases, and a measured Codex/GSD installation.
+- [x] **REQ-26**: The image and the smokes pin the runtimes the conveyor is tested on: Claude Code with Fable 5.1/Opus 5 aliases, gsd-core 1.13.0.
 - [x] **REQ-27**: A Codex agent carries EFFORT, not a model baked from a catalog that can be stale; a `model =` line appears only when the user's GSD remap names one, resolved through GSD's resolver.
 - [x] **REQ-28**: Prose names the runtimes as they are: the Agent tool's accepted values, `opus` = Opus 5 and its version floor, `fable` = Fable 5.1 and its consent hazard, the conveyor's `gate_status:` PR trailer vs GSD's `gate-status:` commit trailer.
 - [ ] **REQ-29**: One ownership matcher decides Gate 2 overlap, the scope gate and base-merge conflict resolution; ambiguous declarations are rejected and an uncertain owner never authorizes a mechanical resolution.
@@ -76,41 +76,58 @@
 - [x] **REQ-66**: The watermark advances only on evidence: a record that cannot name the transition id it used is refused, and the journal event is owned.
 - [x] **REQ-67**: The projection is outside the tick rate and invisible to the stop gate: a pending one is neither actionable nor a reason to block.
 - [x] **REQ-68**: A mechanism this repository cannot exercise says so: CI proves the planner, the refusal, the wiring and the negative pin, and the witnessed mutation is owed by the proving ground.
-- [ ] **REQ-69**: Only the `execute` transition is gated, so "worked on" means by someone outside this conveyor and a resumed run can always continue its own ticket.
-- [ ] **REQ-70**: An externally prepared ticket is not deliverable: it enters through investigate from a cold start, and the import shortcut that manufactured a plan from a tracker description is gone.
-- [ ] **REQ-71**: "To Do" is a declared knob whose empty default means the gate is off, matched on the tracker's own status name.
-- [ ] **REQ-72**: "Not worked on" is status plus assignee from the default response, never the changelog, which cannot be paged and reports a truncated history as complete.
-- [ ] **REQ-73**: The selection gate fails CLOSED: an unreadable tracker parks the ticket rather than authorising it, and the park carries the tracker's own words.
-- [ ] **REQ-74**: A direct instruction is the ticket NAMED, never a set, and the bypass is journalled so an overridden rule can be told from one that never fired.
-- [ ] **REQ-75**: The read cache is its own store with its own expiry, never merged with the projection watermark that expires by a different rule.
-- [ ] **REQ-76**: A repository is RESOLVED in order: configured, then discovered, then asked for — cloning is the last resort, never the first move.
-- [ ] **REQ-77**: Discovery matches on the remote origin, never on a directory name, over declared roots only, and reports ambiguity instead of picking.
-- [ ] **REQ-78**: A clone happens only when a person answers; an unattended run parks the repo rather than writing into somebody's filesystem.
-- [ ] **REQ-79**: The clone destination obeys the same nesting rule the config validator already enforces, checked against the resolved path.
-- [ ] **REQ-80**: The clone protocol mirrors the PROJECT's origin, not the `gh` CLI's configured preference.
-- [ ] **REQ-81**: The clone is full: no depth, no single-branch, because base resolution needs `refs/remotes/origin/<base>` and falls back silently.
-- [ ] **REQ-82**: Resolution is idempotent and refuses rather than clobbers: a path whose origin does not match is a refusal, never an overwrite.
-- [ ] **REQ-83**: A resolved checkout is written back to config so nobody is asked twice, and any failure parks the ticket without stopping the board.
-- [ ] **REQ-84**: *Cross-cutting, and it belongs to ADR-006's 2026-09-10 amendment rather than to ADR-010:* where a claim can be checked, it is checked and the command is named — carried into every file an agent reads, into the Workflow prompt builders that bypass those files, asserted by a sweep, and refusable by arch-review.
+- [x] **REQ-69**: Only the `execute` transition is gated, so "worked on" means by someone outside this conveyor and a resumed run can always continue its own ticket.
+- [x] **REQ-70**: An externally prepared ticket is not deliverable: it enters through investigate from a cold start, and the import shortcut that manufactured a plan from a tracker description is gone.
+- [x] **REQ-71**: "To Do" is a declared knob whose empty default means the gate is off, matched on the tracker's own status name.
+- [x] **REQ-72**: "Not worked on" is status plus assignee from the default response, never the changelog, which cannot be paged and reports a truncated history as complete.
+- [x] **REQ-73**: The selection gate fails CLOSED: an unreadable tracker parks the ticket rather than authorising it, and the park carries the tracker's own words.
+- [x] **REQ-74**: A direct instruction is the ticket NAMED, never a set, and the bypass is journalled so an overridden rule can be told from one that never fired.
+- [x] **REQ-75**: The read cache is its own store with its own expiry, never merged with the projection watermark that expires by a different rule.
+- [x] **REQ-76**: A repository is RESOLVED in order: configured, then discovered, then asked for — cloning is the last resort, never the first move.
+- [x] **REQ-77**: Discovery matches on the remote origin, never on a directory name, over declared roots only, and reports ambiguity instead of picking.
+- [x] **REQ-78**: A clone happens only when a person answers; an unattended run parks the repo rather than writing into somebody's filesystem.
+- [x] **REQ-79**: The clone destination obeys the same nesting rule the config validator already enforces, checked against the resolved path.
+- [x] **REQ-80**: The clone protocol mirrors the PROJECT's origin, not the `gh` CLI's configured preference.
+- [x] **REQ-81**: The clone is full: no depth, no single-branch, because base resolution needs `refs/remotes/origin/<base>` and falls back silently.
+- [x] **REQ-82**: Resolution is idempotent and refuses rather than clobbers: a path whose origin does not match is a refusal, never an overwrite.
+- [x] **REQ-83**: A resolved checkout is written back to config so nobody is asked twice, and any failure parks the ticket without stopping the board.
+- [x] **REQ-84**: *Cross-cutting, and it belongs to ADR-006's 2026-09-10 amendment rather than to ADR-010:* where a claim can be checked, it is checked and the command is named — carried into every file an agent reads, into the Workflow prompt builders that bypass those files, asserted by a sweep, and refusable by arch-review.
 - [x] **REQ-85**: Usage is deduplicated by provider, attributed with coverage, and separated from observed subscription windows; missing counters are unknown.
 - [x] **REQ-86**: Backlog items are discoverable across local notes and GSD 999.x, with stable identities and evidence-backed lifecycle transitions.
 - [x] **REQ-87**: All eight roles reconcile requested routing with launch and runtime evidence, distinguishing unsupported capability from missing proof.
 - [x] **REQ-88**: Expected reviewers are explicit; disabling one does not disable another or turn unavailable review into completed review.
 - [x] **REQ-89**: Advisor usage and effective policy are visible separately, and a trial cannot silently alter global host settings.
-- [ ] **REQ-90**: Unchanged observations do not require repeated model turns; deterministic waiting remains bounded, recoverable and subordinate to live gates.
-- [ ] **REQ-91**: Role boundaries return bounded summaries and complete referenced evidence; selected backlog and required policy remain available.
-- [ ] **REQ-92**: Context rotation transfers durable state with one acknowledged owner, only at a safe boundary and on a supported runtime.
-- [ ] **REQ-93**: Review progress has evidence and signatures; resource budgets do not replace the retry backstop or fabricate a plan defect.
-- [ ] **REQ-94**: Model-axis escalation requires verified capability and a completed attempt; unknown effort never becomes applied depth, and role floors persist.
-- [ ] **REQ-95**: A manual-merge verdict carry proves ancestry, head tree, base tree and current PR identity; missing proof requires fresh review.
-- [ ] **REQ-96**: Participating projects count distinct nested agents through owned leases, report coverage, and never interpret store failure as unlimited capacity.
-- [ ] **REQ-97**: Each optimization has a versioned baseline, quality and recovery gates, rollback, and a report that feeds evidence into the next backlog decision.
-- [ ] **REQ-98**: Shipyard publishes one deterministic native-GSD projection from the validated plan and delivery graph; no second execution authority is hand-maintained.
-- [ ] **REQ-99**: The projection materializes the canonical STATE, REQUIREMENTS, plan summary, UAT, and verification artifacts with explicit ownership and source fingerprints.
-- [ ] **REQ-100**: A plan or phase is marked complete only from positive delivery, integration, and verification evidence; missing evidence remains visible and non-green.
-- [ ] **REQ-101**: Planning, delivery, verification, and ship boundaries run a blocking synchronization/check gate for Shipyard projects and remain inert for ordinary GSD projects.
-- [ ] **REQ-102**: Synchronization is local-only, atomic, idempotent, and checkable without mutation, with deterministic refusal on conflicting files or ambiguous plan/ticket identity.
-- [ ] **REQ-103**: Claude and Codex consume the same canonical synchronizer through generated/bundled installer surfaces, with smoke coverage for both. *ADR-011 was accepted for implementation on 2026-09-10. T-32-01/02 are the initial isolated tooling slice; subsequent packages remain subject to decomposition and rollout gates. Existing model floors remain unchanged.*
+- [x] **REQ-90**: Unchanged observations do not require repeated model turns; deterministic waiting remains bounded, recoverable and subordinate to live gates.
+- [x] **REQ-91**: Role boundaries return bounded summaries and complete referenced evidence; selected backlog and required policy remain available.
+- [x] **REQ-92**: Context rotation transfers durable state with one acknowledged owner, only at a safe boundary and on a supported runtime.
+- [x] **REQ-93**: Review progress has evidence and signatures; resource budgets do not replace the retry backstop or fabricate a plan defect.
+- [x] **REQ-94**: Model-axis escalation requires verified capability and a completed attempt; unknown effort never becomes applied depth, and role floors persist.
+- [x] **REQ-95**: A manual-merge verdict carry proves ancestry, head tree, base tree and current PR identity; missing proof requires fresh review.
+- [x] **REQ-96**: Participating projects count distinct nested agents through owned leases, report coverage, and never interpret store failure as unlimited capacity.
+- [x] **REQ-97**: Each optimization has a versioned baseline, quality and recovery gates, rollback, and a report that feeds evidence into the next backlog decision.
+- [x] **REQ-98**: Shipyard publishes one deterministic native-GSD projection from the validated plan and delivery graph; no second execution authority is hand-maintained.
+- [x] **REQ-99**: The projection materializes the canonical STATE, REQUIREMENTS, plan summary, UAT, and verification artifacts with explicit ownership and source fingerprints.
+- [x] **REQ-100**: A plan or phase is marked complete only from positive delivery, integration, and verification evidence; missing evidence remains visible and non-green.
+- [x] **REQ-101**: Planning, delivery, verification, and ship boundaries run a blocking synchronization/check gate for Shipyard projects and remain inert for ordinary GSD projects.
+- [x] **REQ-102**: Synchronization is local-only, atomic, idempotent, and checkable without mutation, with deterministic refusal on conflicting files or ambiguous plan/ticket identity.
+- [x] **REQ-103**: Claude and Codex consume the same canonical synchronizer through generated/bundled installer surfaces, with smoke coverage for both.
+- [x] **REQ-104**: Sentinel stack guards accept the observed PR branch recorded for a validated ticket when GitHub's live branch name differs from the canonical graph slug, while preserving same-phase and checkpoint boundaries.
+- [x] **REQ-105**: The delivery policy defines one versioned, role-scoped model ladder with explicit model, effort, and escalation signals for research, decomposition, execution, sentinel, integration, drift, architecture review, CI-fix, and review-fix.
+- [x] **REQ-106**: Codex resolves the approved Terra/Sol/Luna/Astra concrete model IDs and efforts, generates/registers every required static variant, and fails closed on unavailable, stale, missing, or conflicting model configuration.
+- [x] **REQ-107**: Claude Code consumes the canonical role/escalation decision via its existing palette without changing that palette, and both runtime adapters reject unsupported or implicit model/effort application.
+- [x] **REQ-108**: Every routed dispatch, including decomposition and dynamic executor paths, passes through one mandatory resolve → validate → launch boundary; inline fallback, parent-session inheritance, and conflicting GSD or per-role overrides cannot bypass the selected model.
+- [x] **REQ-109**: Repair escalation is evidence-backed (`Luna/max` → `Sol/medium` → `Astra/medium`), judgement escalation retains all fired signals, fixed Luna roles are not globally promoted, and missing prior application evidence prevents escalation.
+- [x] **REQ-110**: Dispatch telemetry records policy fingerprint, logical rung, requested/applied/observed model and effort, runtime, backend, agent or launch identity, signals, and receipt; negative tests prove enforcement on both runtimes and preserve Claude palette files/configuration.
+- [ ] **REQ-111**: Every autonomous run has an immutable scoped identity covering repository, phase, ticket, worktree, runtime, dispatch, lease, and state revision; stop and resume decisions never read a global newest board.
+- [ ] **REQ-112**: A runtime-neutral controller persists leases, wake conditions, retries, checkpoints, idempotency, and technical availability, and resumes a run without duplicate ownership or duplicate delivery effects.
+- [ ] **REQ-113**: Claude and Codex adapters consume the same control contract but remain provider-pure, carrying explicit runtime-native model and effort values with no parent-session inheritance or cross-provider fallback.
+- [ ] **REQ-114**: Claude native Workflow or an explicitly supported Claude Code bridge is connected to a real launch path with positive application evidence; an unavailable or unsupported host refuses before a routed launch is counted.
+- [ ] **REQ-115**: Codex dynamic and generated-agent launches produce positive application evidence for the resolver-selected model and reasoning effort; synthetic fixtures cannot satisfy the live-runtime acceptance gate.
+- [ ] **REQ-116**: A dispatch receipt joins requested, applied, observed, runtime, model, effort, policy, launch identity, and usage status, and distinguishes unsupported from unknown evidence without inferring success.
+- [ ] **REQ-117**: Graph reachability is proven from live origin and parent-epic state before worktree creation or reuse; landed parents refresh child bases and stale or ambiguous ancestry remains retryable pending work.
+- [ ] **REQ-118**: CI, review, quota, lease, and host readiness waits are bounded deterministic states owned by the same run, while technical unavailability is retried automatically and human checkpoints are limited to authorization or policy decisions.
+- [ ] **REQ-119**: Runtime, account, role, model, effort, token, quality, recovery, and outcome facts are joinable per run and provider, with complete attribution required before a cost or ladder treatment is accepted.
+- [ ] **REQ-120**: The rollout has capability probes, live proving-ground smokes, negative enforcement tests, versioned compatibility rollback, and preserves historical receipts and provider-specific model policies. *ADR-011 was accepted for implementation on 2026-09-10. T-32-01/02 are the initial isolated tooling slice; subsequent packages remain subject to decomposition and rollout gates. Existing model floors remain unchanged.*
 
 ## Out of Scope
 
@@ -191,45 +208,62 @@
 | REQ-66 | Phase 29 | Complete |
 | REQ-67 | Phase 29 | Complete |
 | REQ-68 | Phase 29 | Complete |
-| REQ-69 | Phase 31 | In Progress |
-| REQ-70 | Phase 31 | In Progress |
-| REQ-71 | Phase 31 | In Progress |
-| REQ-72 | Phase 31 | In Progress |
-| REQ-73 | Phase 31 | In Progress |
-| REQ-74 | Phase 31 | In Progress |
-| REQ-75 | Phase 31 | In Progress |
-| REQ-76 | Phase 30 | In Progress |
-| REQ-77 | Phase 30 | In Progress |
-| REQ-78 | Phase 30 | In Progress |
-| REQ-79 | Phase 30 | In Progress |
-| REQ-80 | Phase 30 | In Progress |
-| REQ-81 | Phase 30 | In Progress |
-| REQ-82 | Phase 30 | In Progress |
-| REQ-83 | Phase 30 | In Progress |
-| REQ-84 | Phase 30 | In Progress |
+| REQ-69 | Phase 31 | Complete |
+| REQ-70 | Phase 31 | Complete |
+| REQ-71 | Phase 31 | Complete |
+| REQ-72 | Phase 31 | Complete |
+| REQ-73 | Phase 31 | Complete |
+| REQ-74 | Phase 31 | Complete |
+| REQ-75 | Phase 31 | Complete |
+| REQ-76 | Phase 30 | Complete |
+| REQ-77 | Phase 30 | Complete |
+| REQ-78 | Phase 30 | Complete |
+| REQ-79 | Phase 30 | Complete |
+| REQ-80 | Phase 30 | Complete |
+| REQ-81 | Phase 30 | Complete |
+| REQ-82 | Phase 30 | Complete |
+| REQ-83 | Phase 30 | Complete |
+| REQ-84 | Phase 30 | Complete |
 | REQ-85 | Phase 32 | Complete |
 | REQ-86 | Phase 32 | Complete |
 | REQ-87 | Phase 32 | Complete |
 | REQ-88 | Phase 32 | Complete |
 | REQ-89 | Phase 32 | Complete |
-| REQ-90 | Phase 33 | In Progress |
-| REQ-91 | Phase 33 | In Progress |
-| REQ-92 | Phase 33 | In Progress |
-| REQ-93 | Phase 34 | In Progress |
-| REQ-94 | Phase 34 | In Progress |
-| REQ-95 | Phase 34 | In Progress |
-| REQ-96 | Phase 34 | In Progress |
-| REQ-97 | Phase 34 | In Progress |
-| REQ-98 | Phase 35 | In Progress |
-| REQ-99 | Phase 35 | In Progress |
-| REQ-100 | Phase 35 | In Progress |
-| REQ-101 | Phase 35 | In Progress |
-| REQ-102 | Phase 35 | In Progress |
-| REQ-103 | Phase 35 | In Progress |
+| REQ-90 | Phase 33 | Complete |
+| REQ-91 | Phase 33 | Complete |
+| REQ-92 | Phase 33 | Complete |
+| REQ-93 | Phase 34 | Complete |
+| REQ-94 | Phase 34 | Complete |
+| REQ-95 | Phase 34 | Complete |
+| REQ-96 | Phase 34 | Complete |
+| REQ-97 | Phase 34 | Complete |
+| REQ-98 | Phase 35 | Complete |
+| REQ-99 | Phase 35 | Complete |
+| REQ-100 | Phase 35 | Complete |
+| REQ-101 | Phase 35 | Complete |
+| REQ-102 | Phase 35 | Complete |
+| REQ-103 | Phase 35 | Complete |
+| REQ-104 | Phase 30 | Complete |
+| REQ-105 | Phase 36 | Complete |
+| REQ-106 | Phase 36 | Complete |
+| REQ-107 | Phase 36 | Complete |
+| REQ-108 | Phase 36 | Complete |
+| REQ-109 | Phase 36 | Complete |
+| REQ-110 | Phase 36 | Complete |
+| REQ-111 | Phase 37 | In Progress |
+| REQ-112 | Phase 37 | In Progress |
+| REQ-113 | Phase 37 | In Progress |
+| REQ-114 | Phase 37 | In Progress |
+| REQ-115 | Phase 37 | In Progress |
+| REQ-116 | Phase 37 | In Progress |
+| REQ-117 | Phase 37 | In Progress |
+| REQ-118 | Phase 37 | In Progress |
+| REQ-119 | Phase 37 | In Progress |
+| REQ-120 | Phase 37 | In Progress |
 
 **Coverage:**
-- v1 requirements: 103 total
-- Mapped to phases: 101
+- v1 requirements: 120 total
+- Mapped to phases: 118
 - Unmapped: 2 ⚠️
 
 ---

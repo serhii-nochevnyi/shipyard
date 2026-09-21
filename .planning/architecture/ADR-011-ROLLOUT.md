@@ -184,6 +184,32 @@ Exit: assess the combined policy only after individual effects are understood.
 Enable a proven treatment independently; an inconclusive treatment stays opt-in.
 No autonomous online model-policy rewriting from one day's measurements.
 
+## Phase 34 implementation contract
+
+The Phase 34 implementation uses the existing delivery boundary as its control
+plane. `review-signature.cjs` gives findings a stable rule/class, path and line
+identity while retaining thread provenance. Sentinel persists bounded review
+snapshots in `.planning/graph/review-observations.json`; unknown identities stay
+unknown and do not count as progress.
+
+`model-capability.cjs` evaluates the exact runtime/model/effort pair against a
+host capability snapshot. Unknown or unsupported model-axis selections fall
+back to the preceding rung in the same runtime palette. Repair model escalation
+also carries a completed predecessor receipt. This path records capability
+evidence and never edits the canonical policy.
+
+`capacity-lease.cjs` provides account-scoped durable leases for distinct agents.
+Adapters own the coordinator, while front and state-sync consume its snapshot.
+Heartbeat, expiry, release and degraded local fallback remain observable; an
+unknown account scope cannot join unrelated capacity pools.
+
+`pipeline-stats.cjs` emits a metadata-only `optimization_input` containing
+versioned routing, provider/account, treatment-arm, usage-join and quality facts.
+`optimization-report.cjs` evaluates a versioned baseline/treatment report and
+`backlog-index.cjs candidate` persists an idempotent linked candidate with
+`auto_launch: false`. Reports may promote, continue, roll back or remain
+inconclusive, but none can rewrite model policy or launch work.
+
 ## Evaluation protocol
 
 ### Cohort and accounting

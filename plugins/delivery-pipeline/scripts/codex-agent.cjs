@@ -1,359 +1,279 @@
 #!/usr/bin/env node
 'use strict';
 
-// Select the generated Codex agent file for one dispatch.
-//
-// Codex agent configuration is static, so the model ladder needs a small
-// runtime selector at the point where the dispatch is prepared:
-//
-//   node codex-agent.cjs select <role> --json [--project-dir <project>] [signals]
-//
-// The selector returns the concrete file (for static roles), or model (for the
-// main-loop executor), and effort that must be recorded with
-// dispatch-record.cjs. It shares classification and route semantics with
-// pipeline-config.cjs; it never invents a model id.
-
+// Resolve every role through the authoritative configuration bridge. Selection
+// is a preflight result, not proof of launch; callers launch through the dispatch
+// boundary with createCodexDispatchAdapter and a native host implementation.
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { spawnSync } = require('child_process');
+const pc = require('./pipeline-config.cjs');
+const boundary = require('./dispatch-boundary.cjs');
+const policy = require('./model-policy.cjs');
+const { createCodexDispatchAdapter, REPAIR } = require('./codex-dispatch-adapter.cjs');
+const { validateCodexConfiguration } = require('./codex-model-remap.cjs');
+const { createCodexRuntimeHost } = require('./codex-runtime-host.cjs');
 
-const pc = require(path.join(__dirname, 'pipeline-config.cjs'));
+const ROLE_ALIASES = Object.freeze({ 'inv-research': 'research' });
+const CAPABILITIES_CONTRACT = 'provide current host capabilities through options.capabilities/options.host.capabilities or the CLI --capabilities-file <json> (supportedModels and supportedEfforts)';
 
-const ROLE_ALIASES = { 'inv-research': 'research' };
-const AGENT_ROLE = (role) => ROLE_ALIASES[role] || role;
-const DEEP_ROLES = new Set(['ci-fix', 'review-fix', 'pr-sentinel', 'arch-review']);
-const CRITICAL_ROLES = new Set(['inv-research', 'arch-review', 'ci-fix', 'review-fix']);
-const DEEP_SUFFIX = '-deep';
-const CRITICAL_SUFFIX = '-critical';
-const PREFIX = 'shipyard-';
-
-function fail(message, code = 1) {
-  const err = new Error(message);
-  err.exitCode = code;
-  throw err;
+function fail(message, code = 'INVALID_INPUT') {
+  throw policy.policyError(code, message + '. ' + REPAIR);
 }
-
+function isObject(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
 function expandHome(value) {
-  if (!value) return value;
   if (value === '~') return os.homedir();
-  if (value.startsWith('~/')) return path.join(os.homedir(), value.slice(2));
-  return value;
+  return value && value.startsWith('~/') ? path.join(os.homedir(), value.slice(2)) : value;
 }
-
 function parseArgs(argv) {
   const flags = new Map();
   const positionals = [];
-  const booleans = new Set(['contested', 'checkpoint', 'code-change', 'no-code-change', 'previous-failed', 'json']);
+  const booleans = new Set(['contested', 'checkpoint', 'critical', 'json']);
   const values = new Set([
-    'agent-dir', 'project-dir', 'risk', 'type', 'input-tokens', 'files', 'attempt',
-    'signature-state', 'task-level',
+    'agent-dir', 'project-dir', 'capabilities-file', 'risk', 'type', 'complexity',
+    'input-tokens', 'files', 'signature-state', 'dispatch-id',
   ]);
-  for (let i = 0; i < argv.length; i++) {
-    const arg = String(argv[i]);
-    if (!arg.startsWith('--')) {
-      positionals.push(arg);
-      continue;
-    }
+  for (let index = 0; index < argv.length; index++) {
+    const arg = String(argv[index]);
+    if (!arg.startsWith('--')) { positionals.push(arg); continue; }
     const name = arg.slice(2);
-    if (!booleans.has(name) && !values.has(name)) fail(`unknown option --${name}`, 2);
-    if (booleans.has(name)) {
-      if (flags.has(name)) fail(`--${name} given more than once`);
-      flags.set(name, true);
-      continue;
-    }
-    const value = argv[++i];
-    if (value === undefined || String(value).startsWith('--')) fail(`--${name} needs a value`);
-    if (flags.has(name)) fail(`--${name} given more than once`);
+    if (!booleans.has(name) && !values.has(name)) fail('unknown option --' + name);
+    if (flags.has(name)) fail('--' + name + ' given more than once');
+    if (booleans.has(name)) { flags.set(name, true); continue; }
+    const value = argv[++index];
+    if (value === undefined || String(value).startsWith('--') || String(value).trim() === '') fail('--' + name + ' needs a value');
     flags.set(name, String(value));
   }
   return { flags, positionals };
 }
-
-function value(flags, name) {
-  return flags.has(name) ? flags.get(name) : undefined;
-}
-
 function signalsFrom(flags) {
-  let signatureState;
-  const rawSignature = value(flags, 'signature-state');
-  if (rawSignature !== undefined) {
-    if (!pc.SIGNATURE_STATES.includes(rawSignature)) {
-      fail(`"${rawSignature}" is not a signature state (states: ${pc.SIGNATURE_STATES.join(', ')})`, 2);
-    }
-    signatureState = rawSignature;
+  const signals = {};
+  for (const [flag, key] of [
+    ['risk', 'risk'], ['type', 'type'], ['complexity', 'complexity'],
+    ['input-tokens', 'inputTokens'], ['signature-state', 'signatureState'],
+    ['contested', 'contested'], ['checkpoint', 'checkpoint'], ['critical', 'critical'],
+  ]) {
+    if (flags.has(flag)) signals[key] = flags.get(flag);
   }
-  const requested = value(flags, 'task-level');
-  let taskLevel;
-  if (requested !== undefined) {
-    if (!pc.TASK_LEVELS.includes(requested)) {
-      fail(`"${requested}" is not a task level (levels: ${pc.TASK_LEVELS.join(', ')})`, 2);
-    }
-    taskLevel = requested;
-  }
-  const risk = value(flags, 'risk');
-  if (risk !== undefined && !['low', 'medium', 'high'].includes(risk)) {
-    fail(`"${risk}" is not a risk level (levels: low, medium, high)`, 2);
-  }
-  if (flags.has('code-change') && flags.has('no-code-change')) {
-    fail('--code-change and --no-code-change cannot be used together', 2);
-  }
-  return {
-    risk,
-    type: value(flags, 'type'),
-    inputTokens: value(flags, 'input-tokens'),
-    files: value(flags, 'files'),
-    contested: flags.has('contested'),
-    checkpoint: flags.has('checkpoint'),
-    codeChange: flags.has('code-change') ? true : flags.has('no-code-change') ? false : undefined,
-    attempt: value(flags, 'attempt'),
-    previousFailed: flags.has('previous-failed'),
-    signatureState,
-    taskLevel,
-  };
+  // `--files` remains a documented selector input, but ADR-014 no longer has a
+  // files-gated rung. Accept it for older callers and deliberately keep it out
+  // of the canonical signal object so a compatibility value cannot become an
+  // unverified promotion.
+  return policy.normalizeSignals(signals);
 }
-
-function agentDirFrom(flags) {
-  return path.resolve(expandHome(value(flags, 'agent-dir'))
-    || process.env.CODEX_HOME && path.join(process.env.CODEX_HOME, 'agents')
-    || path.join(os.homedir(), '.codex', 'agents'));
-}
-
-// A Codex worktree normally has the generated agent files but not the
-// project's .planning/config.json. Resolve policy from the conveyor project
-// explicitly in that case; otherwise a selector run from the worktree would
-// silently fall back to the conservative defaults and dispatch the wrong lane.
 function projectDirFrom(flags) {
-  const configured = value(flags, 'project-dir');
-  return configured === undefined
-    ? process.cwd()
-    : path.resolve(expandHome(configured));
+  return path.resolve(expandHome(flags.get('project-dir')) || process.cwd());
 }
-
-function tomlField(text, field) {
-  const m = String(text).match(new RegExp(`^${field}\\s*=\\s*"([^"]*)"`, 'm'));
-  return m ? m[1] : null;
+function agentDirFrom(flags, env = process.env) {
+  return path.resolve(expandHome(flags.get('agent-dir'))
+    || path.join(env.CODEX_HOME || path.join(os.homedir(), '.codex'), 'agents'));
 }
-
-function readAgent(file) {
-  let text;
+function readCapabilities(file) {
+  if (!file) fail(CAPABILITIES_CONTRACT, 'UNSUPPORTED_SELECTION');
+  let capabilities;
   try {
-    text = fs.readFileSync(file, 'utf8');
-  } catch (e) {
-    return { model: null, effort: null, error: e.message };
+    capabilities = JSON.parse(fs.readFileSync(path.resolve(expandHome(file)), 'utf8'));
   }
-  return {
-    model: tomlField(text, 'model'),
-    effort: tomlField(text, 'model_reasoning_effort'),
-    error: null,
-  };
+  catch (error) { fail('cannot read host capabilities: ' + error.message, 'UNSUPPORTED_SELECTION'); }
+  if (!isObject(capabilities)) fail('host capabilities file must contain a JSON object', 'UNSUPPORTED_SELECTION');
+  return capabilities;
 }
 
-function detectCodexCliVersion(env = process.env) {
-  const pinned = String((env && env.SHIPYARD_CODEX_CLI_VERSION) || '').trim();
-  if (pinned) return pinned;
-  const result = spawnSync('codex', ['--version'], { encoding: 'utf8', timeout: 5000 });
-  if (result.error || result.status !== 0) return null;
-  const match = String(`${result.stdout || ''} ${result.stderr || ''}`).match(/\d+(?:\.\d+)+/);
-  return match ? match[0] : null;
-}
-
-function compareVersions(a, b) {
-  const left = String(a).split('.').map((part) => parseInt(part, 10));
-  const right = String(b).split('.').map((part) => parseInt(part, 10));
-  for (let i = 0; i < Math.max(left.length, right.length); i++) {
-    const x = Number.isFinite(left[i]) ? left[i] : 0;
-    const y = Number.isFinite(right[i]) ? right[i] : 0;
-    if (x !== y) return x < y ? -1 : 1;
+function capabilitiesFrom(options, flags) {
+  if (Object.prototype.hasOwnProperty.call(options, 'capabilities') && options.capabilities !== undefined) {
+    return options.capabilities;
   }
-  return 0;
-}
-
-function usableCodexPalette(cfg, env = process.env) {
-  const cliVersion = detectCodexCliVersion(env);
-  return {
-    cliVersion,
-    entries: (Array.isArray(cfg.codex_models) ? cfg.codex_models : []).filter((entry) => {
-      if (!entry || !entry.model) return false;
-      if (!entry.min_cli) return true;
-      return Boolean(cliVersion) && compareVersions(cliVersion, entry.min_cli) >= 0;
-    }),
-  };
-}
-
-function lowerEffort(requested, configured) {
-  if (!requested) return configured || null;
-  if (!configured) return requested;
-  const efforts = Array.isArray(pc.EFFORTS) ? pc.EFFORTS : [];
-  const requestedIndex = efforts.indexOf(requested);
-  const configuredIndex = efforts.indexOf(configured);
-  if (requestedIndex === -1 || configuredIndex === -1) return configured;
-  return efforts[Math.min(requestedIndex, configuredIndex)];
-}
-
-// Executors have no static Codex agent file: the main loop creates the
-// worktree and dispatches gsd-executor (or performs the fallback inline). The
-// palette still needs to be resolved at that point so a supported
-// spawn_agent/codex exec path does not inherit the session model by accident.
-function selectDynamicExecutor(cfg, classification, signals, env = process.env) {
-  const { cliVersion, entries } = usableCodexPalette(cfg, env);
-  if (!entries.length) {
-    fail(
-      'the Codex palette has no usable model for executor dispatch' +
-      (cliVersion ? ` on CLI ${cliVersion}` : ' (Codex CLI version is unavailable)'),
-    );
+  if (options.host !== undefined) {
+    if (!isObject(options.host)) fail('host capability source must be an object', 'UNSUPPORTED_SELECTION');
+    if (Object.prototype.hasOwnProperty.call(options.host, 'capabilities')
+        && options.host.capabilities !== undefined) return options.host.capabilities;
   }
-  const ceiling = classification.value === 'recovery'
-    || classification.value === 'critical'
-      && (cfg.model_ladder === 'adaptive' || classification.requested === 'critical');
-  const entry = ceiling ? entries[entries.length - 1] : entries[0];
-  const route = pc.routeOf('executor', signals, cfg);
-  const parsedRoute = pc.parseRoute(route);
-  if (!parsedRoute) fail(`the shared resolver returned an invalid route for executor: ${route}`);
-  const requestedEffort = parsedRoute.effort.effort;
-  return {
-    role: 'executor',
-    ladder_role: 'executor',
-    task_level: classification.value,
-    task_level_rule: classification.rule,
-    ladder_mode: cfg.model_ladder,
-    agent_file: null,
-    agent_path: null,
-    model: entry.model,
-    effort: lowerEffort(requestedEffort, entry.effort),
-    model_tier: parsedRoute.tier.model,
-    requested_effort: requestedEffort,
-    route,
-    model_source: 'codex_models',
-    ...(ceiling ? { palette_lane: 'ceiling' } : { palette_lane: 'floor' }),
-  };
+  const file = options.capabilitiesFile || flags.get('capabilities-file');
+  if (!file) fail(CAPABILITIES_CONTRACT, 'UNSUPPORTED_SELECTION');
+  return readCapabilities(file);
 }
 
-function candidateSuffix(role, level, mode = 'adaptive') {
-  const generatedRole = role;
-  if (level === 'recovery' && DEEP_ROLES.has(generatedRole)) return DEEP_SUFFIX;
-  if (mode === 'adaptive' && level === 'critical' && CRITICAL_ROLES.has(generatedRole)) return CRITICAL_SUFFIX;
-  return '';
+function configForCodexResolution(config) {
+  const original = config.dispatch_context.configuration;
+  const configuration = { ...original };
+  let changed = false;
+  // The canonical resolver must not consume generic Codex/GSD configuration as
+  // launch input. The original loaded configuration is validated afterwards as
+  // a named-palette assertion, so arbitrary IDs fail closed rather than remap.
+  const modelPolicy = configuration.model_policy;
+  if (isObject(modelPolicy) && isObject(modelPolicy.runtime_tiers)) {
+    const runtimeTiers = { ...modelPolicy.runtime_tiers };
+    if (Object.prototype.hasOwnProperty.call(runtimeTiers, 'codex')) {
+      delete runtimeTiers.codex;
+      configuration.model_policy = { ...modelPolicy, runtime_tiers: runtimeTiers };
+      changed = true;
+    }
+  }
+  const profileOverrides = configuration.model_profile_overrides;
+  if (isObject(profileOverrides)
+      && Object.prototype.hasOwnProperty.call(profileOverrides, 'codex')) {
+    configuration.model_profile_overrides = { ...profileOverrides };
+    delete configuration.model_profile_overrides.codex;
+    changed = true;
+  }
+  // `codex_models` is a compatibility palette. Let the selector's strict
+  // validator inspect the original project value, while the canonical routed
+  // bridge resolves against its immutable ADR-014 grid.
+  for (const namespace of ['pipeline', 'delivery_pipeline']) {
+    const values = configuration[namespace];
+    if (isObject(values) && Object.prototype.hasOwnProperty.call(values, 'codex_models')) {
+      configuration[namespace] = { ...values };
+      delete configuration[namespace].codex_models;
+      changed = true;
+    }
+  }
+  // A spread copy of a routed config loses pipeline-config's private loader
+  // binding. Keep the original object whenever no Codex-only namespace needs
+  // projection; callers that do need one reload the projection through the
+  // strict routed loader below.
+  return changed ? configuration : config;
+}
+
+function routedConfigForCodexResolution(config, cwd, env) {
+  const projected = configForCodexResolution(config);
+  if (projected === config) return config;
+
+  // pipeline-config intentionally binds routed provenance by object identity.
+  // The projection therefore has to be loaded as a real routed config; a
+  // hand-built `{ ...config, dispatch_context: ... }` would be rejected by the
+  // parent bridge and must never become a compatibility fallback.
+  const shadowRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'strict-codex-routed-'));
+  try {
+    const planningDir = path.join(shadowRoot, '.planning');
+    fs.mkdirSync(planningDir);
+    fs.writeFileSync(path.join(planningDir, 'config.json'), JSON.stringify(projected));
+    return pc.loadConfig(shadowRoot, { runtime: 'codex', env, routed: true }).config;
+  } finally {
+    fs.rmSync(shadowRoot, { recursive: true, force: true });
+  }
+}
+
+function selectAgentInternal(role, options) {
+  const cwd = path.resolve(options.cwd || process.cwd());
+  const flags = options.flags || new Map();
+  const env = options.env || process.env;
+  if (options.runtime !== undefined && options.runtime !== 'codex') fail('Codex selector cannot launch another runtime');
+  const loaded = pc.loadConfig(cwd, { runtime: 'codex', env, routed: true });
+  const capabilities = capabilitiesFrom(options, flags);
+  const resolutionConfig = routedConfigForCodexResolution(loaded.config, cwd, env);
+  const resolution = pc.resolveDispatch({
+    ...options, config: resolutionConfig, runtime: 'codex',
+    role: ROLE_ALIASES[role] || role, signals: options.signals || {},
+    dispatch_id: options.dispatch_id === undefined ? boundary.newDispatchId() : options.dispatch_id,
+  });
+  validateCodexConfiguration(resolution, loaded.config.dispatch_context.configuration, capabilities);
+  const agentsDir = path.resolve(options.agentDir || agentDirFrom(flags, env));
+  const adapter = createCodexDispatchAdapter({ agentsDir, agentManifest: options.agentManifest, capabilities });
+  boundary.validateDispatch(resolution, { adapters: { codex: adapter } });
+  const evidence = resolution.agent_file ? adapter.validateGeneratedAgent(resolution) : null;
+  const selected = {
+    ...resolution, project_dir: cwd,
+    agent_path: resolution.agent_file ? path.join(agentsDir, resolution.agent_file) : null,
+    ...(evidence ? { agent_file_digest: evidence.agent_file_digest } : {}),
+  };
+  return Object.isFrozen(selected) ? selected : Object.freeze(selected);
 }
 
 function selectAgent(role, options = {}) {
-  const requestedRole = String(role || '');
-  const ladderRole = AGENT_ROLE(requestedRole);
-  const validRoles = new Set([...(pc.ROLES || []), 'inv-research']);
-  if (!validRoles.has(requestedRole)) fail(`unknown role "${requestedRole}" (roles: ${[...validRoles].join(', ')})`, 2);
-  const loaded = pc.loadConfig(options.cwd || process.cwd());
-  if (!loaded.valid) fail(`project model policy is invalid: ${loaded.error.file} — ${loaded.error.message}`);
-  const cfg = {
-    ...loaded.config,
-    gsd: { ...(loaded.config.gsd || {}), runtime: 'codex' },
+  try { return selectAgentInternal(role, options); }
+  catch (error) {
+    if (!error.message.includes(REPAIR)) error.message += '. ' + REPAIR;
+    throw error;
+  }
+}
+
+function launchAgent(role, options = {}) {
+  const flags = options.flags || new Map();
+  const selection = selectAgentInternal(role, { ...options, flags });
+  const capabilities = capabilitiesFrom(options, flags);
+  const agentsDir = path.resolve(options.agentDir || agentDirFrom(flags, options.env || process.env));
+  const host = options.host || createCodexRuntimeHost({
+    scope: options.scope || options.runScope,
+    run_id: options.run_id || options.runId,
+    controller: options.controller,
+    capabilities,
+    capabilitiesFile: options.capabilitiesFile || flags.get('capabilities-file'),
+    executable: options.executable,
+    probe: options.probe,
+    recorder: options.recorder,
+    recorderDir: options.recorderDir,
+    transcriptDir: options.transcriptDir,
+    env: options.env,
+    spawn: options.spawn,
+    ephemeral: options.ephemeral,
+    approveForMe: options.approveForMe,
+  });
+  const adapter = createCodexDispatchAdapter({
+    agentsDir,
+    agentManifest: options.agentManifest,
+    capabilities,
+    host,
+    handoff: options.handoff,
+  });
+  const recorder = options.recorder || host.recorder;
+  if (!recorder) fail('Codex launch requires a host-owned durable receipt recorder', 'MISSING_ADAPTER');
+  const boundaryInstance = boundary.createDispatchBoundary({
+    adapters: { codex: adapter },
+    recorder,
+    handoff: options.handoff,
+    requireGsdRole: options.requireGsdRole === true || options.gsd_role !== undefined || options.gsdRole !== undefined,
+  });
+  const gsdRole = options.gsd_role || options.gsdRole;
+  const input = {
+    runtime: 'codex',
+    role: selection.role,
+    signals: options.signals || {},
+    dispatch_id: selection.dispatch_id,
+    model: selection.model,
+    effort: selection.effort,
+    ...(gsdRole ? { gsd_role: gsdRole } : {}),
   };
-  const signals = options.signals || {};
-  const classification = pc.taskLevelRoute(ladderRole, signals, cfg);
-  if (ladderRole === 'executor') {
-    return {
-      ...selectDynamicExecutor(cfg, classification, signals, options.env || process.env),
-      project_dir: path.resolve(options.cwd || process.cwd()),
-    };
+  return boundaryInstance.dispatch(input, options.context || {});
+}
+
+function plainSelection(result) {
+  const target = result.agent_file || result.model;
+  const effort = result.effort || result.launch_arguments?.reasoning_effort;
+  if (typeof target !== 'string' || !target || typeof effort !== 'string' || !effort) {
+    fail('selector cannot render a plain selection without a concrete model/file and effort');
   }
-  const baseRole = requestedRole === 'research' ? 'inv-research' : requestedRole;
-  const suffix = candidateSuffix(baseRole, classification.value, cfg.model_ladder);
-  const baseName = `${PREFIX}${baseRole}`;
-  const wantedName = `${baseName}${suffix}`;
-  const dir = options.agentDir || agentDirFrom(options.flags || new Map());
-  const wantedPath = path.join(dir, `${wantedName}.toml`);
-  let selectedName = wantedName;
-  let selectedPath = wantedPath;
-  let fallback = null;
-  // The classifier still labels a high-risk/checkpoint dispatch `critical` in
-  // conservative mode so telemetry describes the work. Conservative policy does
-  // not emit first-attempt critical files, however, and silently selecting the
-  // ordinary file would make the label look like an enforced premium lane. Keep
-  // the ordinary file as the safe compatibility fallback, but say why it was
-  // selected. Adaptive mode reaches the same fallback only when the generated
-  // variant is genuinely unavailable.
-  if (classification.value === 'critical'
-      && cfg.model_ladder !== 'adaptive'
-      && CRITICAL_ROLES.has(baseRole)) {
-    fallback = {
-      requested: `${baseName}${CRITICAL_SUFFIX}`,
-      reason: 'the project ladder is conservative, so no first-attempt critical Codex variant is generated',
-    };
-  }
-  if (!fs.existsSync(selectedPath) && suffix) {
-    selectedName = baseName;
-    selectedPath = path.join(dir, `${baseName}.toml`);
-    fallback = {
-      requested: wantedName,
-      reason: `the generated ${wantedName}.toml is unavailable; the configured palette has no distinct ${classification.value} variant`,
-    };
-  }
-  if (!fs.existsSync(selectedPath)) {
-    fail(`Codex agent file not found: ${selectedPath}. Run install-shipyard-codex.sh --phase 2 first`);
-  }
-  const fields = readAgent(selectedPath);
-  if (fields.error) fail(`cannot read Codex agent file ${selectedPath}: ${fields.error}`);
-  const route = pc.routeOf(ladderRole, signals, cfg);
-  const parsedRoute = pc.parseRoute(route);
-  if (!parsedRoute) fail(`the shared resolver returned an invalid route for ${ladderRole}: ${route}`);
-  return {
-    role: requestedRole,
-    ladder_role: ladderRole,
-    task_level: classification.value,
-    task_level_rule: classification.rule,
-    ladder_mode: cfg.model_ladder,
-    agent_file: selectedName,
-    agent_path: selectedPath,
-    model: fields.model,
-    effort: fields.effort,
-    // `model` is the concrete id read from the static Codex file. The recorder's
-    // requested model field is the shared tier alias, so expose it separately
-    // instead of making callers parse the route or passing a concrete id where
-    // dispatch-record expects `opus|sonnet|haiku|fable`.
-    model_tier: parsedRoute.tier.model,
-    requested_effort: parsedRoute.effort.effort,
-    route,
-    project_dir: path.resolve(options.cwd || process.cwd()),
-    ...(fallback ? { fallback } : {}),
-  };
+  // Preserve the historical first token (agent_file for static roles, model
+  // for dynamic roles) and append the required effort as a second token.
+  return `${target} ${effort}`;
 }
 
 function main() {
   const { flags, positionals } = parseArgs(process.argv.slice(2));
-  const [cmd, role] = positionals;
-  if (cmd !== 'select' || !role) {
-    fail('usage: codex-agent.cjs select <role> [--json] [--project-dir <project>] [--agent-dir <dir>] [signals]', 2);
+  if (positionals.length !== 2 || positionals[0] !== 'select') {
+    fail('usage: codex-agent.cjs select <role> --capabilities-file <json> [--json] [--project-dir <project>] [--agent-dir <dir>] [canonical signals]');
   }
-  const result = selectAgent(role, {
-    flags,
-    cwd: projectDirFrom(flags),
-    signals: signalsFrom(flags),
-    agentDir: agentDirFrom(flags),
+  const result = selectAgent(positionals[1], {
+    flags, cwd: projectDirFrom(flags), signals: signalsFrom(flags),
+    agentDir: agentDirFrom(flags), dispatch_id: flags.get('dispatch-id'),
   });
-  process.stdout.write(flags.has('json')
-    ? `${JSON.stringify(result)}\n`
-    : `${result.agent_file || result.model}\n`);
+  process.stdout.write((flags.has('json') ? JSON.stringify(result) : plainSelection(result)) + '\n');
 }
 
-module.exports = {
+module.exports = Object.freeze({
   selectAgent,
+  launchAgent,
   parseArgs,
   signalsFrom,
-  candidateSuffix,
-  detectCodexCliVersion,
-  compareVersions,
-  usableCodexPalette,
-  selectDynamicExecutor,
   projectDirFrom,
+  plainSelection,
   ROLE_ALIASES,
-  DEEP_ROLES,
-  CRITICAL_ROLES,
-};
-
+});
 if (require.main === module) {
-  try {
-    main();
-  } catch (e) {
-    process.stderr.write(`codex-agent: ${e.message}\n`);
-    process.exit(e.exitCode || 1);
+  try { main(); }
+  catch (error) {
+    process.stderr.write('codex-agent: ' + error.message + '\n');
+    process.exitCode = error.exitCode || 1;
   }
 }

@@ -290,6 +290,63 @@ script — not in a prompt.** Every requirement below is an instance of it.
   or ambiguous plan/ticket identity.
 - **REQ-103** — Claude and Codex consume the same canonical synchronizer through
   generated/bundled installer surfaces, with smoke coverage for both.
+- **REQ-104** — Sentinel stack guards accept the observed PR branch recorded for
+  a validated ticket when GitHub's live branch name differs from the canonical
+  graph slug, while preserving same-phase and checkpoint boundaries.
+- **REQ-105** — The delivery policy defines one versioned, role-scoped model
+  ladder with explicit model, effort, and escalation signals for research,
+  decomposition, execution, sentinel, integration, drift, architecture review,
+  CI-fix, and review-fix.
+- **REQ-106** — Codex resolves the approved Terra/Sol/Luna/Astra concrete model
+  IDs and efforts, generates/registers every required static variant, and fails
+  closed on unavailable, stale, missing, or conflicting model configuration.
+- **REQ-107** — Claude Code consumes the canonical role/escalation decision via
+  its existing palette without changing that palette, and both runtime adapters
+  reject unsupported or implicit model/effort application.
+- **REQ-108** — Every routed dispatch, including decomposition and dynamic
+  executor paths, passes through one mandatory resolve → validate → launch
+  boundary; inline fallback, parent-session inheritance, and conflicting GSD or
+  per-role overrides cannot bypass the selected model.
+- **REQ-109** — Repair escalation is evidence-backed (`Luna/max` →
+  `Sol/medium` → `Astra/medium`), judgement escalation retains all fired
+  signals, fixed Luna roles are not globally promoted, and missing prior
+  application evidence prevents escalation.
+- **REQ-110** — Dispatch telemetry records policy fingerprint, logical rung,
+  requested/applied/observed model and effort, runtime, backend, agent or launch
+  identity, signals, and receipt; negative tests prove enforcement on both
+  runtimes and preserve Claude palette files/configuration.
+
+- **REQ-111** — Every autonomous run has an immutable scoped identity covering
+  repository, phase, ticket, worktree, runtime, dispatch, lease, and state
+  revision; stop and resume decisions never read a global newest board.
+- **REQ-112** — A runtime-neutral controller persists leases, wake conditions,
+  retries, checkpoints, idempotency, and technical availability, and resumes a
+  run without duplicate ownership or duplicate delivery effects.
+- **REQ-113** — Claude and Codex adapters consume the same control contract but
+  remain provider-pure, carrying explicit runtime-native model and effort values
+  with no parent-session inheritance or cross-provider fallback.
+- **REQ-114** — Claude native Workflow or an explicitly supported Claude Code
+  bridge is connected to a real launch path with positive application evidence;
+  an unavailable or unsupported host refuses before a routed launch is counted.
+- **REQ-115** — Codex dynamic and generated-agent launches produce positive
+  application evidence for the resolver-selected model and reasoning effort;
+  synthetic fixtures cannot satisfy the live-runtime acceptance gate.
+- **REQ-116** — A dispatch receipt joins requested, applied, observed, runtime,
+  model, effort, policy, launch identity, and usage status, and distinguishes
+  unsupported from unknown evidence without inferring success.
+- **REQ-117** — Graph reachability is proven from live origin and parent-epic
+  state before worktree creation or reuse; landed parents refresh child bases and
+  stale or ambiguous ancestry remains retryable pending work.
+- **REQ-118** — CI, review, quota, lease, and host readiness waits are bounded
+  deterministic states owned by the same run, while technical unavailability is
+  retried automatically and human checkpoints are limited to authorization or
+  policy decisions.
+- **REQ-119** — Runtime, account, role, model, effort, token, quality, recovery,
+  and outcome facts are joinable per run and provider, with complete attribution
+  required before a cost or ladder treatment is accepted.
+- **REQ-120** — The rollout has capability probes, live proving-ground smokes,
+  negative enforcement tests, versioned compatibility rollback, and preserves
+  historical receipts and provider-specific model policies.
 
 *ADR-011 was accepted for implementation on 2026-09-10. T-32-01/02 are the
 initial isolated tooling slice; subsequent packages remain subject to decomposition
@@ -483,7 +540,7 @@ so this repository ships a mechanism it cannot run, and the witnessed mutation
 is owed by the proving ground.
 
 ### Phase 30: A ticket you cannot reach is not deliverable
-**Requirements**: REQ-76, REQ-77, REQ-78, REQ-79, REQ-80, REQ-81, REQ-82, REQ-83, REQ-84
+**Requirements**: REQ-76, REQ-77, REQ-78, REQ-79, REQ-80, REQ-81, REQ-82, REQ-83, REQ-84, REQ-104
 
 Decomposed from ADR-010. Today a ticket whose files live in a sibling
 repository with no configured checkout is a dead end with a good error message:
@@ -517,7 +574,8 @@ criterion: a claim about an existing mechanism with no command named is a
 `violation`. It rides here because it is cross-cutting and blocks nothing, and
 it is delivered by the conveyor rather than hand-edited because a rule about
 verification that arrived unverified would be its own counter-example. Nine
-tickets in all; the phase cannot start until phase 29's epic lands, and it
+ADR-010 tickets plus T-30-10, which repairs the sentinel's observed branch identity;
+the phase cannot start until phase 29's epic lands, and it
 contests less than phase 31 does.
 
 ### Phase 31: Not every ticket is available work
@@ -563,6 +621,18 @@ not with an invented subscription-savings percentage.
 ### Phase 33: Reduce orchestration context and transfer sessions safely
 **Status**: planned (ADR-011)
 **Requirements**: REQ-90, REQ-91, REQ-92
+**Plans:** 9 plans
+
+Plans (serialized T-33-01 through T-33-09):
+- [ ] 33-01-PLAN.md — Durable CI/review transition delivery
+- [ ] 33-02-PLAN.md — Validated bounded executor evidence
+- [ ] 33-03-PLAN.md — Complete repair and drift artifacts
+- [ ] 33-04-PLAN.md — Architecture, sentinel and integration judgments
+- [ ] 33-05-PLAN.md — Research and decomposition handbacks
+- [ ] 33-06-PLAN.md — Targeted policy and backlog context
+- [ ] 33-07-PLAN.md — Independent treatment measurement
+- [ ] 33-08-PLAN.md — Fenced checkpoint and manual resume
+- [ ] 33-09-PLAN.md — Recommendations and unproven-automation refusal
 
 Waves 2–3 of [ADR-011-ROLLOUT](architecture/ADR-011-ROLLOUT.md), after phase 32:
 OPT-06–08 move unchanged observations into deterministic waiting, extend bounded
@@ -572,8 +642,17 @@ Workflow and mandatory quality gates remain. Unsupported automatic transfer
 stays in recommendation mode rather than interrupting a live session.
 
 ### Phase 34: Improve convergence and tune from measured outcomes
-**Status**: planned (ADR-011)
+**Status**: complete (ADR-011)
 **Requirements**: REQ-93, REQ-94, REQ-95, REQ-96, REQ-97
+
+**Plans:** 5 plans
+
+Plans (serialized T-34-01 through T-34-05):
+- [x] 34-01-PLAN.md — Review progress and resource budgets
+- [x] 34-02-PLAN.md — Capability-aware model-axis escalation
+- [x] 34-03-PLAN.md — Proven verdict carry
+- [x] 34-04-PLAN.md — Account-scoped capacity leases
+- [x] 34-05-PLAN.md — Versioned optimization evidence and backlog intake
 
 Waves 4–5 of [ADR-011-ROLLOUT](architecture/ADR-011-ROLLOUT.md), after phase 33:
 OPT-09–13 add review-aware progress, evidenced model-axis escalation, verified
@@ -592,12 +671,35 @@ artifacts, lifecycle gates, cross-runtime packaging, and a reviewed bootstrap of
 this repository's missing GSD state. It must not rewrite historical integration
 findings or turn a merged ticket count into a false phase pass.
 
+### Phase 36: Enforce the runtime model ladder
+**Status**: planned (ADR-014)
+**Requirements**: REQ-105, REQ-106, REQ-107, REQ-108, REQ-109, REQ-110
+
+Implement [ADR-014](architecture/ADR-014-mandatory-runtime-model-ladder.md):
+one canonical role/escalation policy, Codex concrete model palette, Claude
+adapter preservation, mandatory launch enforcement, evidence-backed repair and
+judgement escalation, and complete application telemetry. Deliver in dependency
+order so the resolver exists before generators and callers consume it; the
+existing Claude palette is a read-only compatibility surface.
+
+### Phase 37: Run the autonomous dual-runtime control plane
+**Status**: planned (ADR-015)
+**Requirements**: REQ-111, REQ-112, REQ-113, REQ-114, REQ-115, REQ-116, REQ-117, REQ-118, REQ-119, REQ-120
+
+Prepare and implement the shared run controller, scoped durable state,
+provider-pure Claude and Codex adapters, live proving-ground coverage, graph
+reachability refresh, deterministic continuation, and usage/effectiveness
+observability. The phase is dependency-ordered so the shared contract and
+controller exist before either runtime adapter becomes authoritative. It does
+not change product code, provider palettes, or model-ladder thresholds before
+the new measurements are complete.
+
 <!-- shipyard:gsd-sync:begin -->
 ## Shipyard synchronization (generated)
 
-- Source fingerprint: `74b34d11681c634e2be3a3c70903ade505e38311fde3d28699bea4e39eea4c0b`
-- Plans merged: 85/85
-- Phases verified: 3/16
+- Source fingerprint: `36a7ece403327795184d1c5a2e4258c0446cf79fe994f1f6d895309eced438e9`
+- Plans merged: 130/138
+- Phases verified: 9/18
 - Current phase: 20
 
 | Phase | Plans | Merged | Verification |
@@ -612,11 +714,13 @@ findings or turn a merged ticket count into a false phase pass.
 | 27 — The conveyor measures its own state | 9 | 9 | gaps_found |
 | 28 — A mechanism nobody connected is not a mechanism | 9 | 9 | gaps_found |
 | 29 — The tracker is a projection, and a projection is driven | 8 | 8 | passed |
-| 30 — A ticket you cannot reach is not deliverable | 0 | 0 | pending |
-| 31 — Not every ticket is available work | 0 | 0 | pending |
-| 32 — Measure usage and make the backlog actionable | 5 | 5 | passed |
-| 33 — Reduce orchestration context and transfer sessions safely | 0 | 0 | pending |
-| 34 — Improve convergence and tune from measured outcomes | 0 | 0 | pending |
-| 35 — Close the GSD and Shipyard workflow loop | 3 | 3 | pending |
+| 30 — A ticket you cannot reach is not deliverable | 10 | 10 | passed |
+| 31 — Not every ticket is available work | 7 | 7 | passed |
+| 32 — Measure usage and make the backlog actionable | 7 | 7 | passed |
+| 33 — Reduce orchestration context and transfer sessions safely | 9 | 9 | passed |
+| 34 — Improve convergence and tune from measured outcomes | 5 | 5 | passed |
+| 35 — Close the GSD and Shipyard workflow loop | 3 | 3 | passed |
+| 36 — Enforce the runtime model ladder | 12 | 12 | passed |
+| 37 — Run the autonomous dual-runtime control plane | 8 | 0 | pending |
 
 <!-- shipyard:gsd-sync:end -->

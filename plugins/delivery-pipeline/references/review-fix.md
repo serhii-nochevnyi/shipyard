@@ -13,6 +13,14 @@ reason to wait: reviewers answer in a minute where CI takes tens of them, and a
 fix pushes anyway, restarting the run. Servicing threads first means the run you
 eventually wait for is the one that validates the final code.
 
+## Verification contract
+
+Every checkable claim about the codebase, a test, delivery state, or a completed
+action must name the exact command that checked it and the relevant path,
+output, or exit status. If a claim cannot be checked by a command, label it as
+an assumption or unknown and state the next check. A claim without
+command-backed evidence is not verification.
+
 ## Input (provided by the orchestrator)
 - Ticket contract (plan file) with Scope / Out of scope.
 - Worktree path and branch.
@@ -22,6 +30,9 @@ eventually wait for is the one that validates the final code.
   signature, the hypothesis it acted on, and how it ended. It is rendered from
   the delivery journal by the orchestrator, so it is what previous rounds
   actually did, not a recollection of it.
+- A trusted artifact destination: `${worktree}/.shipyard-repair-evidence.md`.
+  Write the complete review decision and verification record there; the host
+  archives and validates it after the result crosses the dispatch boundary.
 
 ## Procedure — for EACH thread independently
 
@@ -75,12 +86,32 @@ and escalate rather than cycle through one of them again.
    complete outcome, not an open question. The only thread you leave open is one
    you are escalating to a human, and then you say so explicitly.
 
+6. Before returning, write the complete repair record to
+   `${worktree}/.shipyard-repair-evidence.md`: every thread id and disposition,
+   the batch hypothesis, changed paths, exact verification commands with
+   relevant output/exit status, and every unresolved or escalated finding.
+   Keep it complete when no code changed. Do not use a symlink or substitute
+   another path; the trusted host seals it as the dispatch's
+   `shipyard.repair-result.v1` evidence.
+
 ## After all threads
 - One commit for all accepted fixes: `review(T-XX-YY): address review round N`.
-- Push. **If the PR is APPROVED**, the push dismisses that approval — push anyway
-  (an open thread on an approved PR is real work), but leave a PR comment naming
-  what changed and that the approval was dismissed by it, so the reviewer is
-  re-approving knowingly rather than discovering the dismissal. **If the push is rejected because the base moved** (a parent squashed into
+- Before pushing, run the mandatory comment gate against the PR base:
+
+  ```
+  node <plugin-root>/scripts/comment-policy.cjs check <ticket> \
+    --worktree <your worktree> --base <base ref> --json
+  ```
+
+  A non-zero result blocks the push. Preview cleanup with `clean <ticket>`;
+  after reviewing its output, `clean --apply` may remove only listed full-line
+  additions. It leaves inline and multiline comments for manual handling. If
+  cleanup runs, rerun Verification, amend the commit, and run the check again.
+  Push only after the gate passes. **If the PR is APPROVED**, the push dismisses
+  that approval — push anyway (an open thread on an approved PR is real work),
+  but leave a PR comment naming what changed and that the approval was dismissed
+  by it, so the reviewer is re-approving knowingly rather than discovering the
+  dismissal. **If the push is rejected because the base moved** (a parent squashed into
   the epic while you were working), merge the base in — never rebase onto it:
 
   ```
@@ -107,6 +138,7 @@ and escalate rather than cycle through one of them again.
   and burns an attempt from this ticket's budget.
 
 ## Output (final message, structured)
+- `status: fixed | no-op | escalate` and `pushed: true | false`
 - `hypothesis: <one sentence>` — what you believed was wrong and what your
   changes target; when you changed nothing, why the threads did not warrant it.
   This is not a summary of the per-thread lines: the orchestrator records it on
@@ -117,3 +149,8 @@ and escalate rather than cycle through one of them again.
 - `unresolved_after`: the count `reviewers.cjs unresolved` reports at the end,
   and for anything non-zero, which threads and why they stay open
 - verification evidence for accepted changes
+
+Return only the compact repair fields (`id`, `pr`, `status`, `pushed`, `notes`,
+`hypothesis`). Do not return a receipt, application evidence, artifact path,
+digest, or complete evidence text. Missing/malformed evidence is a failed
+result, never `no-op` or a blind redispatch.

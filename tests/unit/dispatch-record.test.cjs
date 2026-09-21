@@ -17,6 +17,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const crypto = require('crypto');
 const { spawnSync, execFileSync } = require('child_process');
 const { suite, test, done, assert } = require(path.join(__dirname, 'assert-harness.cjs'));
 
@@ -27,7 +28,11 @@ const { activeDispatches, dispatchWhy, dispatchFingerprint, DISPATCH_SUBJECT, DI
 // One role vocabulary for the whole conveyor — the same list `mark` validates
 // against. The per-role subject table below is checked against IT, not against a
 // second list written out here.
-const { ROLES } = require(path.join(SCRIPTS, 'pipeline-config.cjs'));
+const {
+  ROLES, routeOf, parseRoute, parseRoute: parseLegacyRoute,
+} = require(path.join(SCRIPTS, 'pipeline-config.cjs'));
+const boundaryModule = require(path.join(SCRIPTS, 'dispatch-boundary.cjs'));
+const gen = require(path.join(__dirname, '..', '..', 'scripts', 'gen-codex-shipyard.cjs'));
 
 // SHIPYARD_GRAPH_DIR is the other explicit channel for "which graph"; a value
 // inherited from the runner would decide these cases instead of the flag.
@@ -35,13 +40,36 @@ const run = (args, cwd, env = {}) => spawnSync('node', [DISPATCH, ...args], {
   cwd, encoding: 'utf8', env: { ...process.env, SHIPYARD_GRAPH_DIR: '', ...env },
 });
 
+const DEFAULT_CODEX_AGENT_FILES = gen.codexStaticVariants()
+  .map(({ file }) => file.replace(/\.toml$/, ''))
+  .sort();
+
+test('requiring dispatch-record does not install a process-wide exit handler', () => {
+  const probe = spawnSync(process.execPath, ['-e', [
+    'const before = process.listenerCount(\'exit\');',
+    `require(${JSON.stringify(DISPATCH)});`,
+    'process.stdout.write(String(process.listenerCount(\'exit\') - before));',
+  ].join('')], { encoding: 'utf8' });
+  assert.equal(probe.status, 0, probe.stderr);
+  assert.equal(probe.stdout, '0', 'the reconciliation cleanup hook is installed only after a claim exists');
+});
+
+function writeCodexAgents(dir, files = DEFAULT_CODEX_AGENT_FILES) {
+  fs.mkdirSync(dir, { recursive: true });
+  for (const name of files) {
+    fs.writeFileSync(path.join(dir, `${name}.toml`), `name = "${name}"\n`);
+  }
+  return dir;
+}
+
 // A project (has a ticket graph) and a worktree beside it (has none) — the two
 // cwds this command can find itself in, because the guard dispatches its fixers
 // from inside worktrees.
-function scratch(state) {
+function scratch(state, { codexFiles = DEFAULT_CODEX_AGENT_FILES } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-dispatch-'));
   const project = path.join(dir, 'project');
   const worktree = path.join(dir, 'worktree');
+  const codexAgentDir = writeCodexAgents(path.join(dir, 'codex-agents'), codexFiles);
   const graph = path.join(project, '.planning', 'graph');
   fs.mkdirSync(graph, { recursive: true });
   fs.mkdirSync(worktree, { recursive: true });
@@ -49,7 +77,7 @@ function scratch(state) {
   for (const id of Object.keys(state)) tickets[id] = { phase: id.split('-')[1] };
   fs.writeFileSync(path.join(graph, 'tickets.json'), JSON.stringify({ tickets }));
   fs.writeFileSync(path.join(graph, 'delivery-state.json'), JSON.stringify(state));
-  return { dir, project, worktree, graph };
+  return { dir, project, worktree, graph, codexAgentDir };
 }
 
 const readState = (graph) => JSON.parse(fs.readFileSync(path.join(graph, 'delivery-state.json'), 'utf8'));
@@ -60,6 +88,318 @@ const store = (graph) => {
 };
 
 const READY = { status: 'pending', ready: true };
+
+function applicationReceipt(resolution) {
+  const launchId = `launch-${resolution.dispatch_id}`;
+  return {
+    receipt_type: 'adr-014.application',
+    runtime: resolution.runtime,
+    role: resolution.role,
+    dispatch_id: resolution.dispatch_id,
+    launch_id: launchId,
+    requested_model: resolution.requested_model,
+    requested_effort: resolution.requested_effort,
+    applied_model: resolution.model,
+    applied_effort: resolution.effort,
+    observed_model: resolution.model,
+    observed_effort: resolution.effort,
+    policy_hash: resolution.policy_hash,
+    compliance: 'verified',
+    compliance_proof: {
+      status: 'verified',
+      boundary: 'adr-014.dispatch-boundary',
+      policy_hash: resolution.policy_hash,
+      dispatch_id: resolution.dispatch_id,
+      launch_id: launchId,
+    },
+  };
+}
+
+function takeoverBeforeWrite(command) {
+  const ticket = 'T-36-08';
+  const { dir, project, graph } = scratch({ [ticket]: { ...READY, pr: 143 } });
+  const boundaryStore = path.join(dir, 'receipts');
+  const recorder = boundaryModule.createDurableRecorder(boundaryStore);
+  const base = boundaryModule.createDispatchBoundary({
+    recorder,
+    adapters: { claude: { launch: applicationReceipt } },
+  }).dispatch({
+    runtime: 'claude',
+    role: 'ci-fix',
+    signals: { signatureState: 'first' },
+    dispatch_id: `${command}-base`,
+  }, { ticket });
+  const preload = path.join(dir, `takeover-${command}.cjs`);
+  fs.writeFileSync(preload, [
+    "'use strict';",
+    "const fs = require('fs');",
+    `const lock = require(${JSON.stringify(path.join(SCRIPTS, 'lock.cjs'))});`,
+    `const boundary = require(${JSON.stringify(path.join(SCRIPTS, 'dispatch-boundary.cjs'))});`,
+    `const storeDir = ${JSON.stringify(boundaryStore)};`,
+    `const ticket = ${JSON.stringify(ticket)};`,
+    `const previousDispatchId = ${JSON.stringify(base.dispatch_id)};`,
+    `const repairDispatchId = ${JSON.stringify(`${command}-repair`)};`,
+    'const originalWithLock = lock.withLock;',
+    'let injected = false;',
+    'lock.withLock = (dir, name, fn, opts) => {',
+    "  if (name === 'dispatch-record' && !injected) {",
+    '    injected = true;',
+    "    const claimName = fs.readdirSync(storeDir).find((name) => name.startsWith('claim-') && name.endsWith('.json'));",
+    '    if (!claimName) throw new Error(\'test could not find the reconciliation claim\');',
+    '    const claimPath = require(\'path\').join(storeDir, claimName);',
+    '    const claim = JSON.parse(fs.readFileSync(claimPath, \'utf8\'));',
+    "    claim.lease_expires_at = new Date(0).toISOString();",
+    "    fs.writeFileSync(claimPath, JSON.stringify(claim) + '\\n');",
+    '    const recorder = boundary.createDurableRecorder(storeDir);',
+    '    const previous = recorder.getReceipt(previousDispatchId);',
+    '    if (!previous || !previous.receipt) throw new Error(\'test could not load the predecessor receipt\');',
+    '    boundary.createDispatchBoundary({',
+    '      recorder,',
+    '      adapters: { claude: { launch: (resolution) => ({',
+    "        receipt_type: 'adr-014.application', runtime: resolution.runtime, role: resolution.role,",
+    '        dispatch_id: resolution.dispatch_id, launch_id: `repair-${resolution.dispatch_id}`,',
+    '        requested_model: resolution.requested_model, requested_effort: resolution.requested_effort,',
+    '        applied_model: resolution.model, applied_effort: resolution.effort,',
+    '        observed_model: resolution.model, observed_effort: resolution.effort,',
+    '        policy_hash: resolution.policy_hash, compliance: \'verified\',',
+    '        compliance_proof: { status: \'verified\', boundary: \'adr-014.dispatch-boundary\',',
+    '          policy_hash: resolution.policy_hash, dispatch_id: resolution.dispatch_id,',
+    '          launch_id: `repair-${resolution.dispatch_id}` },',
+    '      }) } },',
+    '    }).dispatch({',
+    "      runtime: 'claude', role: 'ci-fix',",
+    "      signals: { signatureState: 'repeat', priorApplied: previous.receipt },",
+    '      previous_dispatch_id: previousDispatchId, dispatch_id: repairDispatchId,',
+    '    }, { ticket });',
+    '  }',
+    '  return originalWithLock(dir, name, fn, opts);',
+    '};',
+  ].join('\n'));
+  const args = command === 'mark'
+    ? ['mark', ticket, 'ci-fix', '--boundary-store', boundaryStore, '--dispatch-id', base.dispatch_id]
+    : ['mark-many', '--stdin'];
+  const input = command === 'mark-many'
+    ? JSON.stringify([{ ticket, role: 'ci-fix', boundary_store: boundaryStore, dispatch_id: base.dispatch_id }])
+    : undefined;
+  const result = spawnSync(process.execPath, ['--require', preload, DISPATCH, ...args], {
+    cwd: project,
+    input,
+    encoding: 'utf8',
+    env: { ...process.env, SHIPYARD_GRAPH_DIR: '' },
+  });
+  return { dir, graph, result, recorder, base };
+}
+
+test('boundary receipts reconcile into the existing store and journal without rewriting legacy rows', () => {
+  const { dir, project, graph } = scratch({ 'T-01-01': READY, 'T-01-02': READY });
+  try {
+    assert.equal(run(['mark', 'T-01-02', 'executor'], project).status, 0);
+    const legacy = store(graph)['T-01-02'];
+    const boundaryStore = path.join(dir, 'receipts');
+    fs.writeFileSync(path.join(project, '.planning', 'config.json'), JSON.stringify({
+      pipeline: { effort: { executor: 'low' } },
+    }));
+    const boundary = require(path.join(SCRIPTS, 'dispatch-boundary.cjs'));
+    const result = boundary.createDispatchBoundary({
+      recorder: boundary.createDurableRecorder(boundaryStore),
+      adapters: { codex: { launch: (r) => ({
+        receipt_type: 'adr-014.application', runtime: r.runtime, role: r.role,
+        dispatch_id: r.dispatch_id, launch_id: 'runtime-launch-1', policy_hash: r.policy_hash,
+        requested_model: r.requested_model, requested_effort: r.requested_effort,
+        applied_model: r.model, applied_effort: r.effort,
+        observed_model: r.model, observed_effort: r.effort,
+      }) } },
+    }).dispatch({ runtime: 'codex', role: 'executor' }, { ticket: 'T-01-01' });
+    const args = ['mark', 'T-01-01', 'executor', '--boundary-store', boundaryStore,
+      '--dispatch-id', result.dispatch_id, '--task-level', result.resolution.task_level];
+    const missingId = run(['mark', 'T-01-01', 'executor', '--boundary-store', boundaryStore], project);
+    assert.notEqual(missingId.status, 0);
+    assert.match(missingId.stderr, /requires both --boundary-store and --dispatch-id/);
+    const manualRoute = run([
+      'mark', 'T-01-01', 'executor', '--model', 'opus', '--effort', 'high',
+      '--effort-applied', 'high', '--route', routeOf('executor', {}),
+    ], project);
+    assert.equal(manualRoute.status, 1, 'a routed record cannot bypass the boundary');
+    assert.match(manualRoute.stderr, /authenticated application receipt/);
+    assert.equal(store(graph)['T-01-01'], undefined);
+    const batch = spawnSync('node', [DISPATCH, 'mark-many', '--stdin'], {
+      cwd: project, encoding: 'utf8', env: { ...process.env, SHIPYARD_GRAPH_DIR: '' },
+      input: JSON.stringify([
+        { ticket: 'T-01-01', role: 'executor', boundary_store: boundaryStore, dispatch_id: result.dispatch_id },
+        { ticket: 'T-01-02', role: 'executor', boundary_store: boundaryStore, dispatch_id: 'absent' },
+      ]),
+    });
+    assert.notEqual(batch.status, 0);
+    assert.equal(store(graph)['T-01-01'], undefined);
+    assert.deepStrictEqual(store(graph)['T-01-02'], legacy);
+    for (const extra of [['--effort-applied', 'low'], ['--runtime', 'claude'], ['--agent-id', 'wrong']]) {
+      const refused = run([...args, ...extra], project);
+      assert.notEqual(refused.status, 0);
+      assert.match(refused.stderr, /reconciliation failed/);
+      assert.equal(store(graph)['T-01-01'], undefined);
+    }
+    const marked = run(args, project);
+    assert.equal(marked.status, 0, marked.stderr);
+    const rec = store(graph)['T-01-01'];
+    assert.equal(rec.applied_model, result.receipt.applied_model);
+    assert.equal(rec.applied_effort, result.receipt.applied_effort);
+    assert.equal(rec.task_level, result.resolution.task_level);
+    assert.equal(rec.effort, 'low', 'legacy projection reads the project/runtime configuration');
+    assert.notEqual(rec.model, result.requested_model, 'legacy tier projection is distinct from the concrete receipt model');
+    assert.equal(parseLegacyRoute(rec.reason).tier.model, rec.model);
+    assert.equal(parseLegacyRoute(rec.reason).effort.effort, rec.effort);
+    assert.deepStrictEqual(rec.application_receipt, result.receipt);
+    assert.deepStrictEqual(rec.launch_arguments, result.resolution.launch_arguments);
+    assert.deepStrictEqual(store(graph)['T-01-02'], legacy);
+    const events = fs.readFileSync(path.join(graph, 'delivery-log.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+    assert.deepStrictEqual(events.at(-1).application_receipt, result.receipt);
+    const absent = run(['mark', 'T-01-01', 'executor', '--boundary-store', boundaryStore,
+      '--dispatch-id', 'absent'], project);
+    assert.notEqual(absent.status, 0);
+    assert.deepStrictEqual(store(graph)['T-01-01'], rec);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('boundary-store reconciliation refuses a stale or missing receipt without creating a legacy record', () => {
+  const { dir, project, graph } = scratch({ 'T-01-01': READY });
+  try {
+    const boundary = require(path.join(SCRIPTS, 'dispatch-boundary.cjs'));
+    const boundaryStore = path.join(dir, 'receipts');
+    const recorder = boundary.createDurableRecorder(boundaryStore);
+    const result = boundary.createDispatchBoundary({
+      recorder,
+      adapters: {
+        codex: {
+          launch: (resolution) => ({
+            receipt_type: 'adr-014.application',
+            runtime: resolution.runtime,
+            role: resolution.role,
+            dispatch_id: resolution.dispatch_id,
+            launch_id: 'stale-policy-launch',
+            requested_model: resolution.requested_model,
+            requested_effort: resolution.requested_effort,
+            applied_model: resolution.model,
+            applied_effort: resolution.effort,
+            observed_model: resolution.model,
+            observed_effort: resolution.effort,
+            policy_hash: resolution.policy_hash,
+          }),
+        },
+      },
+    }).dispatch({ runtime: 'codex', role: 'executor', dispatch_id: 'dispatch-record-stale-policy' });
+    const recordPath = path.join(
+      boundaryStore,
+      `record-${require('crypto').createHash('sha256').update(result.dispatch_id).digest('hex')}.json`,
+    );
+    const original = JSON.parse(fs.readFileSync(recordPath, 'utf8'));
+    const stale = JSON.parse(JSON.stringify(original));
+    stale.payload.receipt.policy_hash = 'stale-policy-hash';
+    fs.writeFileSync(recordPath, JSON.stringify(stale));
+    const staleMark = run([
+      'mark', 'T-01-01', 'executor', '--boundary-store', boundaryStore,
+      '--dispatch-id', result.dispatch_id,
+    ], project);
+    assert.notEqual(staleMark.status, 0);
+    assert.match(staleMark.stderr, /boundary receipt reconciliation failed/);
+    assert.equal(store(graph)['T-01-01'], undefined, 'stale boundary evidence cannot hide a ticket');
+
+    fs.writeFileSync(recordPath, JSON.stringify(original));
+    fs.unlinkSync(recordPath);
+    const missingMark = run([
+      'mark', 'T-01-01', 'executor', '--boundary-store', boundaryStore,
+      '--dispatch-id', result.dispatch_id,
+    ], project);
+    assert.notEqual(missingMark.status, 0);
+    assert.match(missingMark.stderr, /boundary receipt reconciliation failed/);
+    assert.equal(store(graph)['T-01-01'], undefined, 'missing boundary evidence cannot hide a ticket');
+
+    const absentStore = run([
+      'mark', 'T-01-01', 'executor', '--boundary-store', path.join(dir, 'does-not-exist'),
+      '--dispatch-id', 'missing-boundary-store',
+    ], project);
+    assert.notEqual(absentStore.status, 0);
+    assert.match(absentStore.stderr, /boundary receipt reconciliation failed/);
+    assert.equal(store(graph)['T-01-01'], undefined, 'a missing boundary store cannot create a legacy record');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('reconciled records hold the receipt lease and normalize static Codex agent files', () => {
+  const { dir, project, graph, codexAgentDir } = scratch({ 'T-01-01': READY, 'T-01-02': READY });
+  try {
+    const boundaryStore = path.join(dir, 'receipts');
+    const boundary = require(path.join(SCRIPTS, 'dispatch-boundary.cjs'));
+    const recorder = boundary.createDurableRecorder(boundaryStore);
+    const staticAgentContent = 'dispatch-record-static-agent';
+    const staticAgentDigest = crypto.createHash('sha256').update(staticAgentContent).digest('hex');
+    const applicationReceipt = (r) => ({
+      receipt_type: 'adr-014.application', runtime: r.runtime, role: r.role,
+      dispatch_id: r.dispatch_id, launch_id: `launch-${r.dispatch_id}`, policy_hash: r.policy_hash,
+      requested_model: r.requested_model, requested_effort: r.requested_effort,
+      applied_model: r.model, applied_effort: r.effort,
+      observed_model: r.model, observed_effort: r.effort,
+      ...(r.agent_file ? { agent_file: r.agent_file, agent_file_digest: staticAgentDigest } : {}),
+    });
+    const writer = boundary.createDispatchBoundary({
+      recorder,
+      adapters: { codex: {
+        launch: applicationReceipt,
+        launchStatic: applicationReceipt,
+        validateGeneratedAgent: (r) => {
+          return {
+            valid: true, exists: true, content_verified: true,
+            policy_hash: r.policy_hash, agent_file: r.agent_file,
+            agent_file_content: staticAgentContent,
+            agent_file_digest: staticAgentDigest,
+          };
+        },
+      } },
+    });
+    const pending = writer.dispatch({ runtime: 'codex', role: 'executor', dispatch_id: 'pending-repair' });
+    const repairClaim = recorder.claim(pending.dispatch_id, 'concurrent-repair');
+    assert.equal(repairClaim.claimed, true);
+    const raced = run(['mark', 'T-01-01', 'executor', '--boundary-store', boundaryStore,
+      '--dispatch-id', pending.dispatch_id], project);
+    assert.notEqual(raced.status, 0, raced.stderr);
+    assert.match(raced.stderr, /currently claimed/);
+    assert.equal(store(graph)['T-01-01'], undefined, 'a receipt claimed by a repair cannot be persisted');
+    assert.deepStrictEqual(recorder.release(pending.dispatch_id, 'concurrent-repair', repairClaim), { released: true });
+
+    const staticResult = writer.dispatch({ runtime: 'codex', role: 'research', dispatch_id: 'static-agent-file' }, { ticket: 'T-01-02' });
+    assert.match(staticResult.resolution.agent_file, /\.toml$/, 'the boundary retains the physical generated file');
+    const publicAgentFile = staticResult.resolution.agent_file.replace(/\.toml$/, '');
+    const marked = run(['mark', 'T-01-02', 'research', '--boundary-store', boundaryStore,
+      '--dispatch-id', staticResult.dispatch_id, '--agent-file', publicAgentFile], project,
+    { SHIPYARD_CODEX_AGENT_DIR: codexAgentDir });
+    assert.equal(marked.status, 0, marked.stderr);
+    assert.equal(store(graph)['T-01-02'].agent_file, publicAgentFile);
+    const event = JSON.parse(fs.readFileSync(path.join(graph, 'delivery-log.jsonl'), 'utf8').trim().split('\n').at(-1));
+    assert.equal(event.agent_file, publicAgentFile);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('dispatch-record refuses ambiguous runtime and models outside the native runtime grids', () => {
+  const { project, graph } = scratch({ 'T-01-01': READY });
+  try {
+    for (const [index, args] of [
+      ['--runtime', 'both', '--model', 'opus', '--effort', 'high'],
+      ['--runtime', 'codex', '--model', 'fable', '--effort', 'medium'],
+      ['--runtime', 'claude', '--model', 'gpt-6-astra', '--effort', 'medium'],
+    ].entries()) {
+      const result = run(['mark', 'T-01-01', 'executor', ...args], project);
+      assert.notEqual(result.status, 0, `runtime grid refusal ${index}`);
+      assert.ok(/runtime|available|supported|tier|alias|model/.test(result.stderr), result.stderr);
+      assert.deepStrictEqual(store(graph), {}, `runtime grid refusal ${index} creates no record`);
+    }
+  } finally {
+    fs.rmSync(path.dirname(project), { recursive: true, force: true });
+  }
+});
 // `head_sha` is what a fixer's push moves. state-sync starts recording it in
 // T-24-04, so every case here must hold with it and without it.
 const OPEN_PR = {
@@ -77,6 +417,14 @@ test('mark records the role and activeDispatches reports it', () => {
   const live = activeDispatches(project);
   assert.deepStrictEqual(Object.keys(live), ['T-01-01']);
   assert.equal(live['T-01-01'].role, 'executor');
+});
+
+test('activeDispatches accepts the full delivery-state envelope', () => {
+  const { project } = scratch({ 'T-01-01': { ...READY } });
+  assert.equal(run(['mark', 'T-01-01', 'executor'], project).status, 0);
+  const fullState = { tickets: { 'T-01-01': { status: 'merged' } }, generated_at: 'now' };
+  assert.deepStrictEqual(activeDispatches(project, fullState), {},
+    'a merged ticket in the state envelope must not consume capacity');
 });
 
 test('the guard\'s buckets are covered too, not just the executor\'s', () => {
@@ -161,7 +509,8 @@ test('garbage in SHIPYARD_DISPATCH_TTL_MS does not disable the backstop', () => 
 test('clear removes it immediately', () => {
   const { project, graph } = scratch({ 'T-01-01': { ...READY } });
   execFileSync('node', [DISPATCH, 'mark', 'T-01-01', 'executor'], { cwd: project });
-  assert.equal(run(['clear', 'T-01-01'], project).status, 0);
+  const dispatchId = store(graph)['T-01-01'].dispatch_id;
+  assert.equal(run(['clear', 'T-01-01', dispatchId], project).status, 0);
   assert.deepStrictEqual(store(graph), {}, 'gone from the store');
   assert.deepStrictEqual(activeDispatches(project), {});
 });
@@ -308,11 +657,15 @@ test('the board\'s sentence names the output that will lift it, and not a check'
   // `clear` that becomes routine clears work that has not returned. The old
   // sentence listed "a check" among the things that return the ticket, which was
   // both wrong and an invitation to distrust the board.
-  const why = dispatchWhy('T-01-01', { role: 'review-fix', at: new Date().toISOString() });
+  const why = dispatchWhy('T-01-01', {
+    role: 'review-fix', at: new Date().toISOString(), dispatch_id: 'dispatch-why',
+  });
   assert.ok(/review-fix/.test(why), why);
   assert.ok(/head/.test(why), `it must name the fixer's own output: ${why}`);
   assert.ok(!/a check/.test(why), `and must not promise a check lifts it: ${why}`);
   assert.ok(/\d+m/.test(why), 'the timeout is still named');
+  assert.ok(/dispatch-record\.cjs clear T-01-01 dispatch-why/.test(why),
+    `the guarded clear command is named: ${why}`);
   assert.ok(/branch/.test(dispatchWhy('T', { role: 'executor', at: new Date().toISOString() })),
     'and each role gets its own output named');
 });
@@ -382,8 +735,9 @@ test('the mark that hides the work also puts it back', () => {
     actionable: { execute: ['T-01-01'], publish: [], fix: [], finalize: [], merge: [] },
   });
   execFileSync('node', [DISPATCH, 'mark', 'T-01-01', 'executor'], { cwd: project });
+  const dispatchId = store(path.join(project, '.planning', 'graph'))['T-01-01'].dispatch_id;
   assert.equal(gate(project).stdout.trim(), '');
-  execFileSync('node', [DISPATCH, 'clear', 'T-01-01'], { cwd: project });
+  execFileSync('node', [DISPATCH, 'clear', 'T-01-01', dispatchId], { cwd: project });
   assert.equal(JSON.parse(gate(project).stdout).decision, 'block', 'the board offers it again');
 });
 
@@ -459,6 +813,22 @@ test('a real --graph works in either position, from a foreign cwd', () => {
   assert.ok(store(last.graph)['T-01-01'], 'recorded in the PROJECT graph');
 });
 
+test('a noncanonical --graph is refused instead of splitting the board from its readers', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-dispatch-custom-'));
+  const graph = path.join(dir, 'custom-graph');
+  fs.mkdirSync(graph, { recursive: true });
+  fs.writeFileSync(path.join(graph, 'tickets.json'), JSON.stringify({ tickets: { 'T-01-01': {} } }));
+  fs.writeFileSync(path.join(graph, 'delivery-state.json'), JSON.stringify({ 'T-01-01': { ...READY } }));
+  try {
+    const r = run(['mark', 'T-01-01', 'executor', '--graph', graph], dir);
+    assert.equal(r.status, 1, `must refuse (${r.stderr})`);
+    assert.match(r.stderr, /must point to a project graph/);
+    assert.ok(!fs.existsSync(path.join(graph, 'dispatches.json')), 'nothing is written to an unreadable store');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 suite('dispatch-record — a whole wave is marked at once');
 
 test('six concurrent marks all survive', async () => {
@@ -491,39 +861,69 @@ test('every dispatch reaches the journal exactly once', () => {
   assert.equal(new Set(log.map((e) => e.ticket)).size, 3, 'no ticket logged twice');
 });
 
-test('mark-many validates and journals one wave under one mutation', () => {
+test('mark-many rejects a manual routed wave before one mutation', () => {
   const state = {};
   for (let i = 1; i <= 3; i++) state[`T-01-0${i}`] = { ...READY };
   const { project, graph } = scratch(state);
   const payload = [
     {
-      ticket: 'T-01-01', role: 'executor', model: 'opus', effort: 'high',
-      route: 'tier=floor(opus) effort=row(high)', task_level: 'routine',
+      ticket: 'T-01-01', role: 'executor', route: 'tier=floor(opus) effort=row(high)', model: 'opus', effort: 'high',
+      task_level: 'routine',
       runtime: 'claude', backend: 'workflow', effort_applied: 'high', agent_id: 'workflow-1',
     },
     {
-      ticket: 'T-01-02', role: 'executor', model: 'opus', effort: 'high',
-      route: 'tier=floor(opus) effort=row(high)', task_level: 'routine',
+      ticket: 'T-01-02', role: 'executor', route: 'tier=floor(opus) effort=row(high)', model: 'opus', effort: 'high',
+      task_level: 'routine',
       runtime: 'claude', backend: 'workflow', effort_applied: 'high', agent_id: 'workflow-2',
     },
     {
-      ticket: 'T-01-03', role: 'executor', model: 'opus', effort: 'high',
-      route: 'tier=floor(opus) effort=row(high)', task_level: 'routine',
+      ticket: 'T-01-03', role: 'executor', route: 'tier=floor(opus) effort=row(high)', model: 'opus', effort: 'high',
+      task_level: 'routine',
       runtime: 'claude', backend: 'workflow', effort_applied: 'high', agent_id: 'workflow-3',
     },
   ];
   const r = spawnSync('node', [DISPATCH, 'mark-many', '--stdin'], {
     cwd: project, input: JSON.stringify(payload), encoding: 'utf8',
   });
-  assert.equal(r.status, 0, `batch must succeed (${r.stderr})`);
-  assert.match(r.stdout, /dispatch recorded for 3 ticket\(s\)/);
-  assert.deepStrictEqual(Object.keys(store(graph)).sort(), ['T-01-01', 'T-01-02', 'T-01-03']);
-  const log = fs.readFileSync(path.join(graph, 'delivery-log.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
-  assert.equal(log.length, 3, 'one journal line per payload item');
-  assert.deepStrictEqual(log.map((e) => e.ticket).sort(), ['T-01-01', 'T-01-02', 'T-01-03']);
-  assert.ok(log.every((e) => e.event === 'dispatch' && e.backend === 'workflow' && e.effort_applied === 'high'));
-  assert.equal(new Set(log.map((e) => e.dispatch_id)).size, 3, 'each ticket gets its own usage join key');
+  assert.equal(r.status, 1, `manual routed batch must fail (${r.stderr})`);
+  assert.match(r.stderr, /authenticated application receipt/);
+  assert.deepStrictEqual(store(graph), {}, 'a rejected routed batch is atomic');
+  assert.ok(!fs.existsSync(path.join(graph, 'delivery-log.jsonl')), 'and writes no journal lines');
 });
+
+test('mark-many rejects a receiptless routed wave before writing', () => {
+  const state = {};
+  for (let i = 1; i <= 3; i++) state[`T-01-0${i}`] = { ...READY };
+  const { project, graph } = scratch(state);
+  const payload = [
+    { ticket: 'T-01-01', role: 'executor', route: 'tier=floor(opus) effort=row(high)', effort_applied: 'high' },
+    { ticket: 'T-01-02', role: 'executor', route: 'tier=floor(opus) effort=row(high)', effort_applied: 'high' },
+    { ticket: 'T-01-03', role: 'executor', route: 'tier=floor(opus) effort=row(high)', effort_applied: 'high' },
+  ];
+  const r = spawnSync('node', [DISPATCH, 'mark-many', '--stdin'], {
+    cwd: project, input: JSON.stringify(payload), encoding: 'utf8',
+  });
+  assert.equal(r.status, 1, 'a routed batch without boundary receipts must refuse');
+  assert.match(r.stderr, /authenticated application receipt/);
+  assert.deepStrictEqual(store(graph), {}, 'a refused routed batch writes no records');
+  assert.ok(!fs.existsSync(path.join(graph, 'delivery-log.jsonl')), 'and no journal lines');
+});
+
+for (const command of ['mark', 'mark-many']) {
+  test(`${command} refuses when a repair takes over before the projection commit`, () => {
+    const { dir, graph, result, recorder, base } = takeoverBeforeWrite(command);
+    try {
+      assert.equal(result.status, 1, `${command} must refuse after the receipt is taken over`);
+      assert.match(result.stderr, /claim was lost before the dispatch record commit/);
+      assert.deepStrictEqual(store(graph), {}, 'the stale projection must not be published');
+      assert.equal(fs.existsSync(path.join(graph, 'delivery-log.jsonl')), false, 'the stale projection must not be journalled');
+      assert.equal(recorder.isConsumed(base.dispatch_id), true, 'the repair owns the consumed predecessor');
+      assert.ok(recorder.getReceipt(`${command}-repair`), 'the repair remains durably recorded');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+}
 
 test('mark-many rejects the whole batch before writing when one item is invalid', () => {
   const { project, graph } = scratch({ 'T-01-01': { ...READY } });
@@ -550,9 +950,12 @@ test('clear-many removes a completed wave with one refresh and is idempotent', (
     execFileSync('node', [...mark, `T-01-0${i}`, 'executor'], { cwd: project });
   }
   const before = fs.readFileSync(path.join(graph, 'delivery-log.jsonl'), 'utf8');
+  const completed = Object.entries(store(graph)).map(([ticket, record]) => ({
+    ticket, dispatch_id: record.dispatch_id,
+  }));
   const r = spawnSync('node', [DISPATCH, 'clear-many', '--stdin'], {
     cwd: project,
-    input: JSON.stringify(['T-01-01', 'T-01-02', 'T-01-03']),
+    input: JSON.stringify(completed),
     encoding: 'utf8',
   });
   assert.equal(r.status, 0, `batch clear must succeed (${r.stderr})`);
@@ -565,7 +968,7 @@ test('clear-many removes a completed wave with one refresh and is idempotent', (
   // the batch remains safe to replay and reports the missing records honestly.
   const again = spawnSync('node', [DISPATCH, 'clear-many', '--stdin'], {
     cwd: project,
-    input: JSON.stringify(['T-01-01', 'T-01-02', 'T-01-03']),
+    input: JSON.stringify(completed),
     encoding: 'utf8',
   });
   assert.equal(again.status, 0, `replaying clear-many must be harmless (${again.stderr})`);
@@ -577,8 +980,9 @@ test('clear-many rejects duplicate or malformed ids before mutating the store', 
   execFileSync('node', [DISPATCH, 'mark', 'T-01-01', 'executor'], { cwd: project });
   const before = store(graph);
   for (const input of [
-    ['T-01-01', 'T-01-01'],
-    ['T-01-01', 7],
+    [{ ticket: 'T-01-01', dispatch_id: 'd' }, { ticket: 'T-01-01', dispatch_id: 'e' }],
+    [{ ticket: 'T-01-01', dispatch_id: 7 }],
+    [{ ticket: 'T-01-01', dispatch_id: 'd', disptach_id: 'typo' }],
     {},
   ]) {
     const r = spawnSync('node', [DISPATCH, 'clear-many', '--stdin'], {
@@ -587,6 +991,45 @@ test('clear-many rejects duplicate or malformed ids before mutating the store', 
     assert.equal(r.status, 1, `invalid clear-many payload must refuse: ${JSON.stringify(input)}`);
     assert.deepStrictEqual(store(graph), before, 'a rejected clear batch leaves existing records intact');
   }
+});
+
+test('clear-many does not erase a newer dispatch when an older completion arrives', () => {
+  const { project, graph } = scratch({ 'T-01-01': { ...READY } });
+  execFileSync('node', [DISPATCH, 'mark', 'T-01-01', 'executor'], { cwd: project });
+  const oldId = store(graph)['T-01-01'].dispatch_id;
+  execFileSync('node', [DISPATCH, 'mark', 'T-01-01', 'executor'], { cwd: project });
+  const currentId = store(graph)['T-01-01'].dispatch_id;
+  assert.notEqual(oldId, currentId);
+  const r = spawnSync('node', [DISPATCH, 'clear-many', '--stdin'], {
+    cwd: project,
+    input: JSON.stringify([{ ticket: 'T-01-01', dispatch_id: oldId }]),
+    encoding: 'utf8',
+  });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /dispatch cleared for 0 of 1 ticket\(s\)/);
+  assert.equal(store(graph)['T-01-01'].dispatch_id, currentId);
+});
+
+test('clear requires dispatch_id and leaves a newer dispatch in place', () => {
+  const { project, graph } = scratch({ 'T-01-01': { ...READY } });
+  execFileSync('node', [DISPATCH, 'mark', 'T-01-01', 'executor'], { cwd: project });
+  const oldId = store(graph)['T-01-01'].dispatch_id;
+  execFileSync('node', [DISPATCH, 'mark', 'T-01-01', 'executor'], { cwd: project });
+  const currentId = store(graph)['T-01-01'].dispatch_id;
+
+  const missing = run(['clear', 'T-01-01'], project);
+  assert.equal(missing.status, 1, 'ticket-only clear must refuse');
+  assert.match(missing.stderr, /usage: dispatch-record\.cjs clear <ticket> <dispatch_id>/);
+
+  const stale = run(['clear', 'T-01-01', oldId], project);
+  assert.equal(stale.status, 0, stale.stderr);
+  assert.match(stale.stdout, new RegExp(`dispatch for T-01-01 is ${currentId}, not ${oldId}`));
+  assert.equal(store(graph)['T-01-01'].dispatch_id, currentId);
+
+  const ok = run(['clear', 'T-01-01', currentId], project);
+  assert.equal(ok.status, 0, ok.stderr);
+  assert.match(ok.stdout, /dispatch cleared for T-01-01/);
+  assert.deepStrictEqual(store(graph), {});
 });
 
 suite('dispatch-record — a dispatch records WHAT it dispatched, or says it does not know');
@@ -614,7 +1057,6 @@ const DECIDED_KEYS = [
 // dispatch, in its own `route` field. Taken from the resolver rather than typed
 // here — a fixture that drifts from the grammar would make every test below
 // assert against a route the resolver cannot produce.
-const { routeOf, parseRoute } = require(path.join(SCRIPTS, 'pipeline-config.cjs'));
 const ROUTE = routeOf('executor', {});
 
 test('every mark creates a dispatch id for the later usage join', () => {
@@ -631,11 +1073,25 @@ test('every mark creates a dispatch id for the later usage join', () => {
 test('an explicit dispatch id is preserved and cannot be active on two tickets', () => {
   const { project, graph } = scratch({ 'T-01-01': { ...READY }, 'T-01-02': { ...READY } });
   assert.equal(run(['mark', 'T-01-01', 'executor', '--dispatch-id', 'dispatch-fixed'], project).status, 0);
+  const reused = run(['mark', 'T-01-01', 'executor', '--dispatch-id', 'dispatch-fixed'], project);
+  assert.equal(reused.status, 1, reused.stderr);
+  assert.match(reused.stderr, /already active/);
   const rejected = run(['mark', 'T-01-02', 'executor', '--dispatch-id', 'dispatch-fixed'], project);
   assert.equal(rejected.status, 1, rejected.stderr);
   assert.match(rejected.stderr, /already active/);
   assert.equal(store(graph)['T-01-01'].dispatch_id, 'dispatch-fixed');
   assert.ok(!store(graph)['T-01-02'], 'the duplicate id does not create a second active join');
+});
+
+test('an explicit dispatch id cannot be reused after the active record is cleared', () => {
+  const { project, graph } = scratch({ 'T-01-01': { ...READY }, 'T-01-02': { ...READY } });
+  assert.equal(run(['mark', 'T-01-01', 'executor', '--dispatch-id', 'dispatch-replayed'], project).status, 0);
+  assert.equal(run(['clear', 'T-01-01', 'dispatch-replayed'], project).status, 0);
+
+  const reused = run(['mark', 'T-01-02', 'executor', '--dispatch-id', 'dispatch-replayed'], project);
+  assert.equal(reused.status, 1, reused.stderr);
+  assert.match(reused.stderr, /already exists in delivery history/);
+  assert.ok(!store(graph)['T-01-02'], 'a historical id does not create a second launch');
 });
 
 test('a mark with no flags writes NO such key at all — not null', () => {
@@ -675,22 +1131,71 @@ test('the two claims are never collapsed into one', () => {
   assert.equal(rec.effort_applied, 'low', 'and the spawn\'s, verbatim — neither borrowed from the other');
 });
 
-test('the full round trip reaches the store AND the journal', () => {
+test('a receiptless routed round trip is refused before the store or journal', () => {
   const { project, graph } = scratch({ 'T-01-01': { ...READY } });
   const r = run([
     'mark', 'T-01-01', 'executor',
     '--model', 'opus', '--effort', 'high', '--effort-applied', 'high', '--route', ROUTE,
   ], project);
-  assert.equal(r.status, 0, `must succeed (${r.stderr})`);
-  // The KEY is still `reason` — two journal rows carry it and deliver.md's ladder
-  // query greps for it — and the VALUE is now the resolver's own route.
-  const expect = { model: 'opus', effort: 'high', effort_applied: 'high', reason: ROUTE };
+  assert.equal(r.status, 1, 'a routed record without a boundary receipt must refuse');
+  assert.match(r.stderr, /authenticated application receipt/);
   const rec = store(graph)['T-01-01'];
-  for (const [k, v] of Object.entries(expect)) assert.equal(rec[k], v, `record.${k}`);
-  const ev = lastDispatch(graph);
-  for (const [k, v] of Object.entries(expect)) assert.equal(ev[k], v, `journal.${k}`);
-  assert.equal(ev.role, 'executor', 'and the fields the event already had are untouched');
-  assert.equal(ev.by, 'dispatch-record');
+  assert.equal(rec, undefined, 'the refused routed record is not written');
+  assert.equal(fs.existsSync(path.join(graph, 'delivery-log.jsonl')), false,
+    'and does not journal a launch');
+});
+
+test('requested, applied and observed routing facts round-trip separately', () => {
+  const { project, graph } = scratch({ 'T-01-01': { ...READY } });
+  const r = run([
+    'mark', 'T-01-01', 'executor', '--model', 'opus', '--effort', 'high',
+    '--effort-applied', 'high', '--task-level', 'complex',
+    '--runtime', 'claude', '--backend', 'workflow', '--observed-model', 'claude-opus-5',
+    '--observed-effort', 'xhigh',
+  ], project);
+  assert.equal(r.status, 0, r.stderr);
+  assert.deepStrictEqual(store(graph)['T-01-01'], {
+    ...store(graph)['T-01-01'],
+    model: 'opus', effort: 'high', effort_applied: 'high', task_level: 'complex',
+    runtime: 'claude', backend: 'workflow', observed_model: 'claude-opus-5', observed_effort: 'xhigh',
+  });
+});
+
+test('a known runtime cannot create an unmeasured model dispatch', () => {
+  const { project, graph } = scratch({ 'T-01-01': { ...READY } });
+  const r = run(['mark', 'T-01-01', 'executor', '--runtime', 'codex'], project);
+  assert.equal(r.status, 1, `must refuse (${r.stderr})`);
+  assert.ok(/must carry.*model.*route/.test(r.stderr), r.stderr);
+  assert.deepStrictEqual(store(graph), {});
+});
+
+test('a known runtime refuses a tier that cannot run there', () => {
+  const { project, graph } = scratch({ 'T-01-01': { ...READY } });
+  const r = run(['mark', 'T-01-01', 'executor', '--runtime', 'codex', '--model', 'fable'], project);
+  assert.equal(r.status, 1, `must refuse (${r.stderr})`);
+  assert.match(r.stderr, /not available on runtime "codex"/);
+  assert.deepStrictEqual(store(graph), {});
+});
+
+test('observed model ids reject whitespace and controls but keep opaque ids flexible', () => {
+  for (const bad of ['claude opus', 'claude\topus', 'claude\nopus']) {
+    const { project, graph } = scratch({ 'T-01-01': { ...READY } });
+    const r = run([
+      'mark', 'T-01-01', 'executor', '--runtime', 'claude', '--model', 'opus', '--effort', 'high',
+      '--observed-model', bad,
+    ], project);
+    assert.equal(r.status, 1, `${JSON.stringify(bad)} must refuse (${r.stderr})`);
+    assert.ok(/whitespace or a control character/.test(r.stderr), r.stderr);
+    assert.deepStrictEqual(store(graph), {});
+  }
+  const { project, graph } = scratch({ 'T-01-01': { ...READY } });
+  const ok = run([
+    'mark', 'T-01-01', 'executor', '--runtime', 'claude', '--model', 'opus', '--effort', 'high',
+    '--effort-applied', 'high', '--observed-model', 'claude-opus-5.1-preview', '--observed-effort', 'unknown',
+  ], project);
+  assert.equal(ok.status, 0, ok.stderr);
+  assert.equal(store(graph)['T-01-01'].observed_model, 'claude-opus-5.1-preview');
+  assert.equal(store(graph)['T-01-01'].observed_effort, 'unknown');
 });
 
 test('requested, applied and observed routing facts round-trip separately', () => {
@@ -797,48 +1302,83 @@ test('an unknown flag, a duplicate and a missing value are all refused', () => {
 });
 
 test('--agent-file records the Codex file that ran, and refuses one nothing produces', () => {
-  // On Codex the model lives IN the file, so the ordinary/-deep choice IS the
+  // On Codex the model lives IN the file, so the canonical rung filename IS the
   // dispatch's decision. A name the generator does not produce is unverifiable,
   // and an unverifiable name is worse than none.
-  const { project, graph } = scratch({ 'T-01-02': { ...OPEN_PR } });
-  const ok = run(['mark', 'T-01-02', 'arch-review', '--agent-file', 'shipyard-arch-review-deep'], project);
+  const { project, graph, codexAgentDir } = scratch({ 'T-01-02': { ...OPEN_PR } });
+  const ok = run(
+    ['mark', 'T-01-02', 'arch-review', '--agent-file', 'shipyard-arch-review-critical'],
+    project,
+    { SHIPYARD_CODEX_AGENT_DIR: codexAgentDir },
+  );
   assert.equal(ok.status, 0, `must succeed (${ok.stderr})`);
-  assert.equal(store(graph)['T-01-02'].agent_file, 'shipyard-arch-review-deep', 'verbatim');
-  assert.equal(lastDispatch(graph).agent_file, 'shipyard-arch-review-deep');
+  assert.equal(store(graph)['T-01-02'].agent_file, 'shipyard-arch-review-critical', 'verbatim');
+  assert.equal(lastDispatch(graph).agent_file, 'shipyard-arch-review-critical');
 
-  for (const bad of ['shipyard-nope', 'arch-review', 'shipyard-integrator-deep']) {
+  const claude = scratch({ 'T-01-02': { ...OPEN_PR } });
+  const impossible = run([
+    'mark', 'T-01-02', 'arch-review', '--runtime', 'claude',
+    '--agent-file', 'shipyard-arch-review', '--route', ROUTE, '--effort-applied', 'high',
+  ], claude.project);
+  assert.equal(impossible.status, 1, impossible.stderr);
+  assert.match(impossible.stderr, /Codex-only/);
+  assert.deepStrictEqual(store(claude.graph), {});
+
+  for (const bad of [
+    'shipyard-nope',
+    'shipyard-arch-review-deep',
+    'shipyard-pr-sentinel-deep',
+    'shipyard-integrator-deep',
+    'shipyard-ci-fix-critical',
+  ]) {
     const s = scratch({ 'T-01-02': { ...OPEN_PR } });
-    const r = run(['mark', 'T-01-02', 'arch-review', '--agent-file', bad], s.project);
+    const r = run(
+      ['mark', 'T-01-02', 'arch-review', '--agent-file', bad],
+      s.project,
+      { SHIPYARD_CODEX_AGENT_DIR: s.codexAgentDir },
+    );
     assert.equal(r.status, 1, `"${bad}" must refuse (${r.stderr})`);
     assert.ok(r.stderr.includes(`"${bad}"`), 'and names it');
     assert.deepStrictEqual(store(s.graph), {}, 'nothing recorded');
   }
 });
 
-test('the accepted agent files ARE the ones the generator emits', () => {
-  // The recorder cannot require the generator — it lives in scripts/ at the repo
-  // root and never ships inside the bundle — so the deep set is a local copy. This
-  // is the test that stops the copy drifting, the same way DISPATCH_SUBJECT is
-  // checked against ROLES rather than against a second list.
-  const gen = require(path.join(__dirname, '..', '..', 'scripts', 'gen-codex-shipyard.cjs'));
+test('the accepted agent files are read from the generated Codex agents directory', () => {
   const {
     codexAgentFiles, CODEX_DEEP_ROLES, CODEX_DEEP_SUFFIX,
     CODEX_CRITICAL_ROLES, CODEX_CRITICAL_SUFFIX,
   } = require(DISPATCH);
   assert.deepStrictEqual([...CODEX_DEEP_ROLES].sort(), [...gen.DEEP_ROLES].sort(),
-    'the deep-eligible roles must be the generator\'s own');
+    'only canonical repair roles may select a deep recovery file');
   assert.equal(CODEX_DEEP_SUFFIX, gen.DEEP_SUFFIX);
   assert.deepStrictEqual([...CODEX_CRITICAL_ROLES].sort(), [...gen.CRITICAL_ROLES].sort(),
-    'the critical-eligible roles must be the generator\'s own');
+    'the critical roles must include every canonical critical rung');
   assert.equal(CODEX_CRITICAL_SUFFIX, gen.CRITICAL_SUFFIX);
+  assert.deepStrictEqual([...CODEX_DEEP_ROLES].sort(), ['ci-fix', 'review-fix']);
+  assert.deepStrictEqual([...CODEX_CRITICAL_ROLES].sort(), ['arch-review', 'integrator', 'inv-research']);
 
-  // And the ordinary names are one per shipped reference — the generator's own
-  // filter — so a reference added there is accepted here without an edit.
+  // Every canonical variant is present, including research alternatives and the
+  // repeat rung that used to be absent from this contract.
   const refs = fs.readdirSync(path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'references'))
     .filter((f) => f.endsWith('.md')).map((f) => f.slice(0, -3));
-  const files = codexAgentFiles();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-dispatch-agents-'));
+  const files = codexAgentFiles(writeCodexAgents(dir));
+  assert.ok(files.has('shipyard-integrator-critical'), 'integrator-critical is a canonical file');
   for (const role of refs) assert.ok(files.has(`shipyard-${role}`), `shipyard-${role} must be accepted`);
-  assert.equal(files.size, refs.length + gen.DEEP_ROLES.size + gen.CRITICAL_ROLES.size, 'and nothing else is');
+  const expected = gen.codexStaticVariants().map(({ file }) => file.replace(/\.toml$/, '')).sort();
+  assert.deepStrictEqual([...files].sort(), expected, 'and nothing else is');
+});
+
+test('a stale critical file is refused when the installed Codex agents directory did not generate it', () => {
+  const s = scratch({ 'T-01-02': { ...OPEN_PR } }, { codexFiles: ['shipyard-arch-review'] });
+  const r = run(
+    ['mark', 'T-01-02', 'arch-review', '--agent-file', 'shipyard-arch-review-critical'],
+    s.project,
+    { SHIPYARD_CODEX_AGENT_DIR: s.codexAgentDir },
+  );
+  assert.equal(r.status, 1, `must refuse (${r.stderr})`);
+  assert.match(r.stderr, /not an agent file the Codex generator produces/);
+  assert.deepStrictEqual(store(s.graph), {});
 });
 
 test('the front does not gain a field — the overlay is byte-identical', () => {
@@ -869,9 +1409,9 @@ test('the front does not gain a field — the overlay is byte-identical', () => 
   // --agent-file half of this test to mean anything.
   assert.equal(run([
     'mark', 'T-01-01', 'ci-fix', '--model', 'opus', '--effort', 'high',
-    '--effort-applied', 'high', '--route', ROUTE, '--agent-file', 'shipyard-ci-fix-deep',
+    '--effort-applied', 'high', '--agent-file', 'shipyard-ci-fix-deep',
     '--agent-id', 'agent_01FIXER',
-  ], rich.project).status, 0);
+  ], rich.project, { SHIPYARD_CODEX_AGENT_DIR: rich.codexAgentDir }).status, 0);
 
   const richRaw = fs.readFileSync(path.join(rich.graph, 'delivery-front.json'), 'utf8');
   assert.deepStrictEqual(
@@ -919,32 +1459,37 @@ test('a hand-composed reason is REFUSED, and the message names where the value c
   }
 });
 
-test('--route records the resolver\'s route VERBATIM, in the store and the journal', () => {
+test('--route requires an authenticated application receipt for new writes', () => {
   const { project, graph } = scratch({ 'T-01-01': { ...READY } });
-  const r = run(['mark', 'T-01-01', 'executor', '--route', ROUTE], project);
-  assert.equal(r.status, 0, `must succeed (${r.stderr})`);
-  assert.equal(store(graph)['T-01-01'].reason, ROUTE, 'verbatim, under the key the query already reads');
-  assert.equal(lastDispatch(graph).reason, ROUTE);
+  const r = run(['mark', 'T-01-01', 'executor', '--route', ROUTE, '--effort-applied', 'high'], project);
+  assert.equal(r.status, 1, `receiptless routed write must refuse (${r.stderr})`);
+  assert.match(r.stderr, /authenticated application receipt/);
+  assert.deepStrictEqual(store(graph), {});
 });
 
-test('--route alone fills model/effort from its own parse, rather than leaving them absent', () => {
-  // Copilot: a `--route`-only mark used to store a `reason` that NAMES a model
-  // and effort while leaving the structured `model`/`effort` fields empty — a
-  // record self-inconsistent in exactly the way the pair/route cross-check
-  // exists to catch, just from the other direction. `route` and `{model,
-  // effort}` are one claim in two encodings (unlike `effort`/`effort_applied`,
-  // which stay deliberately un-cross-filled because they measure different
-  // things), so the parse backfills what the flags did not supply.
+test('a receiptless route cannot be backfilled from caller-supplied route fields', () => {
   const { project, graph } = scratch({ 'T-01-01': { ...READY } });
-  const r = run(['mark', 'T-01-01', 'executor', '--route', ROUTE], project);
-  assert.equal(r.status, 0, `must succeed (${r.stderr})`);
-  const rec = store(graph)['T-01-01'];
-  assert.equal(rec.model, parseRoute(ROUTE).tier.model, 'model is read out of the route, not left absent');
-  assert.equal(rec.effort, parseRoute(ROUTE).effort.effort, 'same for effort');
-  assert.equal(rec.reason, ROUTE);
-  // Disagreement is still refused — backfill only fires when a flag is ABSENT.
-  const bad = run(['mark', 'T-01-01', 'executor', '--model', 'sonnet', '--route', ROUTE], project);
+  const r = run(['mark', 'T-01-01', 'executor', '--route', ROUTE, '--effort-applied', 'high'], project);
+  assert.equal(r.status, 1, `receiptless routed write must refuse (${r.stderr})`);
+  assert.match(r.stderr, /authenticated application receipt/);
+  assert.deepStrictEqual(store(graph), {});
+  // Disagreement is still refused before the reconciliation requirement, so a
+  // malformed/copy-pasted manual route cannot hide the more useful diagnosis.
+  const bad = run(['mark', 'T-01-01', 'executor', '--model', 'sonnet', '--route', ROUTE, '--effort-applied', 'high'], project);
   assert.equal(bad.status, 1, 'an explicit --model that disagrees with the route must still refuse');
+});
+
+test('routed dispatches refuse an absent, unsupported, or unknown applied-effort receipt', () => {
+  for (const receipt of [undefined, 'unsupported', 'unknown']) {
+    const { project, graph } = scratch({ 'T-01-01': { ...READY } });
+    const flags = ['--route', ROUTE];
+    if (receipt !== undefined) flags.push('--effort-applied', receipt);
+    const r = run(['mark', 'T-01-01', 'review-fix', ...flags], project);
+    assert.equal(r.status, 1, `${receipt || 'absent'} receipt must refuse (${r.stderr})`);
+    assert.match(r.stderr, /concrete --effort-applied receipt|authenticated application receipt/, r.stderr);
+    assert.deepStrictEqual(store(graph), {}, 'the refusal must not hide a ticket');
+    assert.ok(!fs.existsSync(path.join(graph, 'delivery-log.jsonl')), 'the refusal must not journal a dispatch');
+  }
 });
 
 test('a sentence posted through the new flag is refused too — the grammar is the check', () => {
@@ -978,7 +1523,7 @@ test('a route from ANOTHER dispatch is refused — the pair and the route must a
   }
 });
 
-test('--effort-applied is NOT cross-checked, because it is the OTHER claim', () => {
+test('a distinct non-routed applied effort remains separate from the requested effort', () => {
   // The two efforts are two facts (T-25-05): what the ladder decided, and what the
   // spawn could carry. On the Agent path the second is legitimately different, so
   // a check here would refuse exactly the honest dispatches those two fields exist
@@ -986,30 +1531,33 @@ test('--effort-applied is NOT cross-checked, because it is the OTHER claim', () 
   const { project, graph } = scratch({ 'T-01-01': { ...READY } });
   const r = run([
     'mark', 'T-01-01', 'executor', '--model', 'opus', '--effort', 'high',
-    '--effort-applied', 'low', '--route', ROUTE,
+    '--effort-applied', 'low',
   ], project);
   assert.equal(r.status, 0, `must succeed (${r.stderr})`);
   assert.equal(store(graph)['T-01-01'].effort_applied, 'low');
-  assert.equal(store(graph)['T-01-01'].reason, ROUTE);
+  assert.equal(Object.prototype.hasOwnProperty.call(store(graph)['T-01-01'], 'reason'), false,
+    'a non-routed record has no route claim');
 });
 
 test('a KNOWN agent file belonging to another role is refused, and names both', () => {
-  // Reproduced before it was a rule: `mark T-01-01 executor --agent-file
-  // shipyard-arch-review-deep` was accepted. On Codex the model lives IN the file,
-  // so a file from another role makes the model recorded beside it fiction —
-  // either the dispatch ran the wrong agent or the record names the wrong file,
-  // and the journal must not quietly hold it under either reading.
+  // On Codex the model lives IN the file, so a file from another role makes the
+  // model recorded beside it fiction — either the dispatch ran the wrong agent
+  // or the record names the wrong file, and the journal must not quietly hold it
+  // under either reading.
   const cases = [
     ['arch-review', 'shipyard-ci-fix'],
     ['arch-review', 'shipyard-ci-fix-deep'],
     ['ci-fix', 'shipyard-review-fix'],
-    // The role's own file at the WRONG depth is fine — the palette's two rungs are
-    // both this role's — so the refusal is about the role, never about `-deep`.
+    ['integrator', 'shipyard-inv-research-critical'],
     ['pr-sentinel', 'shipyard-arch-review'],
   ];
   for (const [role, file] of cases) {
-    const { project, graph } = scratch({ 'T-01-02': { ...OPEN_PR } });
-    const r = run(['mark', 'T-01-02', role, '--agent-file', file], project);
+    const { project, graph, codexAgentDir } = scratch({ 'T-01-02': { ...OPEN_PR } });
+    const r = run(
+      ['mark', 'T-01-02', role, '--agent-file', file],
+      project,
+      { SHIPYARD_CODEX_AGENT_DIR: codexAgentDir },
+    );
     assert.equal(r.status, 1, `${role} × ${file} must refuse (${r.stdout}${r.stderr})`);
     assert.ok(r.stderr.includes(`"${file}"`), `it names the file: ${r.stderr}`);
     assert.ok(r.stderr.includes(role), `and the role it was recorded against: ${r.stderr}`);
@@ -1026,7 +1574,8 @@ test('every role accepts its OWN files, and a role with none says so instead', (
   // `.toml` — so a check built on `shipyard-<role>` refused every legitimate
   // research mark and offered executors a file name that does not exist.
   const { agentFilesFor, codexAgentFiles } = require(DISPATCH);
-  const known = codexAgentFiles();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-dispatch-agentfiles-'));
+  const known = codexAgentFiles(writeCodexAgents(dir));
   let withFiles = 0;
   const claimed = new Set();
   for (const role of ROLES) {
@@ -1034,8 +1583,12 @@ test('every role accepts its OWN files, and a role with none says so instead', (
     if (!files.size) {
       // Any known file, to prove the refusal is about the ROLE having none rather
       // than about the file being unknown.
-      const { project, graph } = scratch({ 'T-01-02': { ...OPEN_PR } });
-      const r = run(['mark', 'T-01-02', role, '--agent-file', 'shipyard-ci-fix'], project);
+      const { project, graph, codexAgentDir } = scratch({ 'T-01-02': { ...OPEN_PR } });
+      const r = run(
+        ['mark', 'T-01-02', role, '--agent-file', 'shipyard-ci-fix'],
+        project,
+        { SHIPYARD_CODEX_AGENT_DIR: codexAgentDir },
+      );
       assert.equal(r.status, 1, `${role} has no agent file, so it must refuse (${r.stdout}${r.stderr})`);
       assert.ok(/no agent file/.test(r.stderr), `and say which fact refused it: ${r.stderr}`);
       assert.deepStrictEqual(store(graph), {}, 'nothing recorded');
@@ -1044,8 +1597,12 @@ test('every role accepts its OWN files, and a role with none says so instead', (
     withFiles += 1;
     for (const file of files) {
       claimed.add(file);
-      const { project, graph } = scratch({ 'T-01-02': { ...OPEN_PR } });
-      const r = run(['mark', 'T-01-02', role, '--agent-file', file], project);
+      const { project, graph, codexAgentDir } = scratch({ 'T-01-02': { ...OPEN_PR } });
+      const r = run(
+        ['mark', 'T-01-02', role, '--agent-file', file],
+        project,
+        { SHIPYARD_CODEX_AGENT_DIR: codexAgentDir },
+      );
       assert.equal(r.status, 0, `${role} × ${file} must be accepted (${r.stderr})`);
       assert.equal(store(graph)['T-01-02'].agent_file, file);
     }
@@ -1138,32 +1695,24 @@ const DOC_MARKS = [
   [path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'references', 'pr-sentinel.md'), 1],
 ];
 
-test('every documented mark invocation passes the resolved pair', () => {
+test('every documented mark invocation reconciles a boundary receipt', () => {
   // Asserted as a COUNT, not as a spot check: a dispatch added later must not be
-  // able to forget the flags, and that is only enforceable if the number of
-  // invocation lines and the number of lines carrying `--model` are compared. The
-  // corollary is a discipline on the prose — the literal token appears on
-  // invocation lines only, and the fields are named without their dashes when a
-  // sentence explains them.
+  // able to bypass the receipt reconciliation path, and that is only enforceable
+  // if every invocation names both halves of the boundary receipt identity.
   for (const [file, expected] of DOC_MARKS) {
     const lines = fs.readFileSync(file, 'utf8').split('\n');
     const marks = lines.filter((l) => /dispatch-record\.cjs mark <T>/.test(l));
     const rel = path.basename(file);
     assert.ok(marks.length >= expected, `${rel}: expected at least ${expected} mark invocations, found ${marks.length}`);
     for (const l of marks) {
-      assert.ok(/--model /.test(l), `${rel}: a mark invocation with no --model: ${l.trim()}`);
-      assert.ok(/--effort /.test(l), `${rel}: a mark invocation with no --effort: ${l.trim()}`);
+      assert.ok(/--boundary-store /.test(l), `${rel}: a mark invocation with no --boundary-store: ${l.trim()}`);
+      assert.ok(/--dispatch-id /.test(l), `${rel}: a mark invocation with no --dispatch-id: ${l.trim()}`);
     }
-    assert.equal(lines.filter((l) => /--model /.test(l)).length, marks.length,
-      `${rel}: --model must appear on the mark invocation lines and nowhere else`);
     // `--reason` is refused by `mark` now (ADR-006 D5) — a MARK INVOCATION that
     // still spells it is not a style nit, it is an instruction the recorder will
     // reject at the moment a guard follows it. Scoped to the invocation lines,
     // not the whole file: prose elsewhere legitimately NAMES the retired flag to
-    // explain the change. This is the exact hole a prior version of this same
-    // test had (it checked --model/--effort only) while
-    // `references/pr-sentinel.md` spelt `--reason "<branch>"` on its own copy of
-    // this invocation and went undetected.
+    // explain the change.
     for (const l of marks) {
       assert.ok(!/--reason\b/.test(l),
         `${rel}: a mark invocation still spells the refused --reason flag: ${l.trim()}`);
@@ -1171,25 +1720,97 @@ test('every documented mark invocation passes the resolved pair', () => {
   }
 });
 
-test('every mark deliver.md documents passes the agent identity too', () => {
-  // Scoped to deliver.md — DOC_MARKS[0] — on purpose. `references/pr-sentinel.md`
-  // carries one mark of its own for a FIXER, whose cardinality is 'ticket' (one
-  // agent per record either way, so the identity changes no count there), and that
-  // file belongs to another ticket in this phase; adding the assertion over it
-  // would fail on a file this change may not touch. Named here rather than left
-  // implicit: a deferral addressed to nobody is how the defect above shipped.
-  //
-  // Presence only, with no "and nowhere else" half: the identity has to be
-  // EXPLAINED in prose beside the invocations, and the prose spells it without
-  // dashes (`agent id`, `agent_id`) precisely so it stays out of this grep.
+test('every mark deliver.md documents the boundary receipt identity too', () => {
+  // Scoped to deliver.md — DOC_MARKS[0] — on purpose. Every routed mark must
+  // name the receipt store and dispatch id; those are the only identities the
+  // fail-closed recorder can reconcile into an overlay.
   const [file] = DOC_MARKS[0];
   const marks = fs.readFileSync(file, 'utf8').split('\n')
     .filter((l) => /dispatch-record\.cjs mark <T>/.test(l));
   assert.ok(marks.length >= 3, `expected the documented invocations, found ${marks.length}`);
   for (const l of marks) {
-    assert.ok(/--agent-id /.test(l),
-      `a documented mark that records no holder: ${l.trim()}`);
+    assert.ok(/--boundary-store /.test(l),
+      `a documented mark that names no receipt store: ${l.trim()}`);
+    assert.ok(/--dispatch-id /.test(l),
+      `a documented mark that names no boundary dispatch: ${l.trim()}`);
   }
+});
+
+test('the PR-sentinel refuses an Agent fallback without a boundary receipt', () => {
+  const deliver = fs.readFileSync(DOC_MARKS[0][0], 'utf8');
+  const sentinel = deliver.slice(
+    deliver.indexOf('## Step 4 — Post the sentinel'),
+    deliver.indexOf('Then **return to Step 3 immediately.**')
+  );
+
+  assert.ok(sentinel.length > 0, 'cannot isolate the PR-sentinel launch contract');
+  assert.match(sentinel, /hard-refuse[\s\S]*before constructing a prompt,\s+spawning, or recording/,
+    'the sentinel must refuse an unsupported launch before either side effect');
+  assert.match(sentinel, /--boundary-store <receipt-store>[\s\S]*--dispatch-id <dispatch-id>/,
+    'a compliant sentinel record must reconcile the boundary receipt');
+  assert.match(sentinel, /concrete application receipt/,
+    'a compliant sentinel record must require application evidence');
+  assert.doesNotMatch(sentinel, /Resolved effort: <effort>/,
+    'prompt-only effort must not be offered as a sentinel fallback');
+  assert.match(sentinel, /Do not substitute[\s\S]*effort_applied=unsupported/,
+    'unsupported effort must be prohibited for a routed sentinel launch');
+});
+
+test('the generic Agent fallback excludes routed fixers before any side effect', () => {
+  const deliver = fs.readFileSync(DOC_MARKS[0][0], 'utf8');
+  const genericFallback = deliver.slice(
+    deliver.indexOf('before starting (e.g. unavailable)'),
+    deliver.indexOf('## Step 0 — Cold start')
+  );
+
+  assert.ok(genericFallback.length > 0, 'cannot isolate the generic Agent fallback block');
+  assert.match(genericFallback, /Routed `ci-fix` and\s+`review-fix` are excluded/,
+    'routed fixers must be excluded when Workflow cannot start');
+  assert.match(genericFallback, /not eligible for that generic Agent fallback/,
+    'path selection must not restore routed fixers through generic Agent');
+  assert.match(genericFallback, /hard-refuse and return `repair blocked` before constructing a\s+prompt, using a\s+session or in-process fallback, spawning, or recording/,
+    'the generic block must refuse repair before prompt, fallback, spawn, or record');
+  assert.match(genericFallback, /`false` — force the Agent fallback only for non-repair\s+roles, and return `repair blocked`/,
+    'forcing the non-Workflow path must still block routed repair');
+  assert.doesNotMatch(genericFallback, /EVERY Agent spawn \(executor, drift-check, ci-fix\/review-fix/,
+    'the generic Agent spawn list must not include routed fixers');
+});
+
+test('complete sentinel and fixer guidance require a concrete receipt, not a fallback', () => {
+  const sentinel = fs.readFileSync(path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'references', 'pr-sentinel.md'), 'utf8');
+  const sentinelLaunch = sentinel.slice(sentinel.indexOf('Hand a ticket back to the board'), sentinel.indexOf('One PR blocked'));
+  assert.match(sentinelLaunch, /--boundary-store <receipt-store>[\s\S]*--dispatch-id <dispatch-id>/,
+    'sentinel fixer marks must reconcile the boundary receipt');
+  assert.match(sentinelLaunch, /application evidence/, 'sentinel fixer marks must require application evidence');
+  assert.match(sentinelLaunch, /hard-refuse before[\s\S]*constructing a prompt, spawning, or recording/, 'sentinel fixer fallback must refuse before side effects');
+  assert.doesNotMatch(sentinelLaunch, /pass `unsupported`|`unknown`\s+when the host|omit the flag/, 'sentinel fixer guidance must not authorize non-receipts');
+
+  // The post-push block is a separate executable path: it previously permitted
+  // unknown applied effort for Agent and in-process fixes even after the launch
+  // contract above had been tightened. Scan the COMPLETE block, not a convenient
+  // prefix, so a fallback appended beside attempt logging cannot escape review.
+  const postPush = sentinel.slice(sentinel.indexOf('## After EVERY push'), sentinel.indexOf('## Hard rules'));
+  assert.ok(postPush.length > 0, 'cannot isolate the complete sentinel post-push contract');
+  assert.match(postPush, /mandatory boundary[\s\S]*concrete applied model-and-effort receipt/, 'post-push guidance requires the boundary receipt');
+  assert.match(postPush, /hard-refuse before prompt, spawn, or record/, 'post-push guidance refuses before side effects');
+  assert.match(postPush, /only\s+`low\|medium\|high\|xhigh\|max`/, 'new routed attempts accept concrete effort only');
+  assert.match(postPush, /Existing historical\s+telemetry may contain `unsupported` or `unknown`, but it is non-compliant history/, 'legacy telemetry is explicitly historical');
+  assert.doesNotMatch(postPush, /Agent tool spawned|fix you made in-process|honest value is then|anything else is WARNED/, 'the complete block has no executable non-receipt fallback');
+
+  const deliver = fs.readFileSync(DOC_MARKS[0][0], 'utf8');
+  for (const [start, end, role] of [
+    ['first | progress | repeat | repeat_exhausted', "'escalate' from the agent", 'ci-fix'],
+    ['there is feedback → review-fix agent', 'the agent either fixes', 'review-fix'],
+  ]) {
+    const section = deliver.slice(deliver.indexOf(start), deliver.indexOf(end, deliver.indexOf(start)));
+    assert.match(section, /explicitly applies the resolved[\s\S]*application receipt/, `${role} requires an application receipt`);
+    assert.match(section, /hard-refuse\s+before constructing a prompt, spawning, or recording/, `${role} refuses before side effects`);
+    assert.doesNotMatch(section, /Resolved effort: <effort>|On the Agent fallback/, `${role} has no executable Agent fallback`);
+  }
+
+  const attempts = deliver.slice(deliver.indexOf('d. after EACH push:'), deliver.indexOf('e. no push:', deliver.indexOf('d. after EACH push:')));
+  assert.match(attempts, /New routed attempts accept only[\s\S]*low\|medium\|high\|xhigh\|max/, 'attempt logging accepts concrete applied effort only');
+  assert.doesNotMatch(attempts, /honest record is `effort_applied=unsupported`|or `unknown` when the host/, 'attempt logging must not authorize receipt sentinels');
 });
 
 test('delivery docs prefer one mark/clear batch per fan-out', () => {
@@ -1198,6 +1819,11 @@ test('delivery docs prefer one mark/clear batch per fan-out', () => {
     'the background guard must use the same batch launch path');
   assert.match(sentinel, /dispatch-record\.cjs clear-many --stdin/,
     'the background guard must use the same batch cleanup path');
+  assert.match(sentinel, /clear <T> <dispatch_id>/,
+    'the background guard must keep the guarded one-ticket clear form');
+  const deliver = fs.readFileSync(path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'commands', 'deliver.md'), 'utf8');
+  assert.match(deliver, /dispatch-record\.cjs clear <T> <dispatch_id>/,
+    'the main loop must clear executors with the guarded one-ticket form');
   const docs = fs.readFileSync(path.join(__dirname, '..', '..', 'docs', 'dispatch-record.md'), 'utf8');
   assert.match(docs, /dispatch-record\.cjs mark-many --stdin/,
     'the operator reference must expose the one-call launch recording path');
@@ -1227,6 +1853,27 @@ test('deliver.md\'s ladder query runs, and UNCONFIRMED is a bucket rather than a
     `the Workflow row is counted: ${r.stdout}`);
   assert.ok(/arch-review opus resolved:xhigh applied:UNCONFIRMED': 1/.test(r.stdout),
     `and the Agent row reads UNCONFIRMED rather than a guess: ${r.stdout}`);
+});
+
+test('dispatch records run scope and telemetry treatment metadata', () => {
+  const { project, graph } = scratch({ 'T-01-01': { ...READY } });
+  const result = run([
+    'mark', 'T-01-01', 'executor',
+    '--model', 'opus', '--effort', 'high', '--runtime', 'claude', '--backend', 'workflow',
+    '--run-id', 'run-dispatch-1', '--account-scope', 'anthropic-max',
+    '--treatment-id', 'phase-37-baseline', '--arm', 'baseline',
+    '--policy-id', 'ADR-014', '--policy-version', 'adr-014.v2', '--policy-hash', 'policy-hash-1',
+  ], project);
+  assert.equal(result.status, 0, result.stderr);
+  const record = store(graph)['T-01-01'];
+  const event = fs.readFileSync(path.join(graph, 'delivery-log.jsonl'), 'utf8').trim().split('\n').map(JSON.parse).find((item) => item.event === 'dispatch');
+  assert.equal(record.run_id, 'run-dispatch-1');
+  assert.equal(record.account_scope, 'anthropic-max');
+  assert.equal(record.telemetry.schema_version, 'shipyard.run-telemetry.v1');
+  assert.equal(record.telemetry.requested_model, 'opus');
+  assert.equal(record.telemetry.treatment_fingerprint !== null, true);
+  assert.equal(event.telemetry.dispatch_id, record.dispatch_id);
+  assert.equal(event.telemetry.provider, 'anthropic');
 });
 
 done();

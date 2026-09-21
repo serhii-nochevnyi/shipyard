@@ -103,9 +103,11 @@
   "delivery_pipeline": {
     "max_concurrent_agents": 4,
     "model_ladder": "adaptive",
+    "gsd_sync": true
+  },
+  "pipeline": {
     "jira": {
       "enabled": false
-    },
-    "gsd_sync": true
+    }
   }
 }

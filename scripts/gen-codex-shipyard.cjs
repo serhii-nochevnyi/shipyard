@@ -17,13 +17,17 @@
 //   skills/shipyard-delivery-rules/…    → ~/.agents/skills/
 //   agents/shipyard-<role>.toml         → $CODEX_HOME/agents/
 //   config.fragment.toml                → merged into $CODEX_HOME/config.toml
-//   bundle/{scripts,references,templates} → $CODEX_HOME/shipyard/ (CLAUDE_PLUGIN_ROOT payload)
+//   bundle/{scripts,references,templates}, bundle/codex-capabilities.json
+//                                      → $CODEX_HOME/shipyard/ (CLAUDE_PLUGIN_ROOT payload)
 //
 // The install script (install-shipyard-codex.sh) places these; this script only
-// stages them and never writes outside --out. `--project-dir` identifies the
-// checkout whose `.planning/config.json` supplies the model policy; it is
-// independent from the output/Codex home paths and is required when generating
-// from a worktree or another caller directory.
+// stages them and leaves no persistent output outside --out. A disposable
+// sibling is used during generation so a failed run preserves the prior stage.
+// `--project-dir` identifies the checkout whose `.planning/config.json` must be readable. ADR-014 owns the
+// selection grid; project compatibility palettes cannot override it. Host
+// availability must be supplied via --capabilities or
+// SHIPYARD_CODEX_CAPABILITIES_FILE (the adapter's supportedModels,
+// supportedEfforts and optional supportedSelections JSON contract).
 
 const fs = require('fs');
 const path = require('path');
@@ -59,7 +63,8 @@ function resolveGsdLib(explicit, codexHome) {
   if (explicit) candidates.push(expandHome(explicit));
   candidates.push(path.join(codexHome, 'gsd-core', 'bin', 'lib', 'runtime-artifact-conversion.cjs'));
   for (const c of candidates) {
-    if (c && fs.existsSync(c)) return c;
+    const resolved = c && path.resolve(c);
+    if (resolved && fs.existsSync(resolved)) return resolved;
   }
   fail(
     'could not locate gsd-core runtime-artifact-conversion.cjs.\n' +
@@ -68,319 +73,32 @@ function resolveGsdLib(explicit, codexHome) {
   );
 }
 
-// ── the model palette, rendered for Codex ────────────────────────────────────
-//
-// On Claude the ladder reaches the agents at CALL time: the Workflow path passes
-// `model` and `effort` into every agent(). Codex has no such hook — an agent is a
-// static .toml — so a role's model and effort are written at generation time.
-//
-// Two layers, and we own only the first. `pipeline-config.cjs` decides the TIER
-// (opus|sonnet|haiku) and the effort — shipyard policy, and the single source.
-// The second layer is which concrete model a tier means, and on this runtime it
-// is the OPERATOR's, not the catalog's: `pipeline.codex_models` is an ordered
-// palette of `{model, effort, min_cli}` (ADR-005 D6/D7). The floor entry goes to
-// every ordinary role; adaptive critical and recovery lanes use the ceiling
-// entry. The integrator stays at the ceiling in both modes: it is the final
-// integration judgement and is intentionally outside the routine treatment. A
-// GSD remap key still wins over the palette, resolved through GSD's own
-// resolver: reading `runtimeTierDefaults` straight out of the catalog, as this
-// did, meant `model_policy.runtime_tiers.codex.*` and
-// `model_profile_overrides.codex.*` changed nothing while the docs said they did.
-//
-// The signals are necessarily BASELINE (risk medium, attempt 1): risk is a
-// per-ticket fact and attempts are a per-run one, and neither exists when a
-// static file is written. The `-critical` and `-deep` files are how dispatch-time
-// escalation survives that.
-//
-// The Codex agent names are not all ladder role names: the investigation
-// researcher ships as `inv-research` (its reference file) while the ladder calls
-// the role `research`. Unmapped, it fell through to the ladder's `default` and
-// would have been billed as a judgment role.
-const LADDER_ROLE = { 'inv-research': 'research' };
+// Static selections come only from ADR-014 metadata. Project palettes/remaps
+// remain compatibility settings for other callers; they cannot tune this bundle.
+const policy = require('../plugins/delivery-pipeline/scripts/model-policy.cjs');
+const {
+  codexSkillNames, codexStaticVariants, validateCodexCapabilities, validateCodexBundle,
+  payloadFiles, payloadDigests, CODEX_CAPABILITIES_BUNDLE_FILE,
+} = require('../plugins/delivery-pipeline/scripts/gsd-tune.cjs');
+const digest = (content) => require('crypto').createHash('sha256').update(content).digest('hex');
 
-// The roles a signal escalates, and therefore the ones that get a second agent
-// FILE at the palette's ceiling (ADR-005 D8): a repair role when its failure
-// signature has repeated with the deeper strategy already spent
-// (`repeat_exhausted`), the judge when the journal already holds a `violation`
-// for this ticket. The integrator gets no variant — one call per phase, already
-// at the ceiling.
-const DEEP_ROLES = new Set(['ci-fix', 'review-fix', 'pr-sentinel', 'arch-review']);
-const DEEP_SUFFIX = '-deep';
-// Critical work is a first-attempt lane. Mechanical roles keep their cheap
-// model because their surrounding gate is the authority; recovery remains the
-// separate repeated-failure lane above.
-const CRITICAL_ROLES = new Set(['inv-research', 'arch-review', 'ci-fix', 'review-fix']);
-const CRITICAL_SUFFIX = '-critical';
-
-// Numeric, part by part: a string compare makes 0.153.4 > 0.153.1 true by luck
-// and 0.153.10 > 0.153.9 false.
-function compareVersions(a, b) {
-  const pa = String(a).split('.').map((n) => parseInt(n, 10));
-  const pb = String(b).split('.').map((n) => parseInt(n, 10));
-  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
-    const x = Number.isFinite(pa[i]) ? pa[i] : 0;
-    const y = Number.isFinite(pb[i]) ? pb[i] : 0;
-    if (x !== y) return x < y ? -1 : 1;
-  }
-  return 0;
-}
-
-// What the HOST's CLI is, because the palette's ceiling may be a model an older
-// CLI cannot be configured with. `SHIPYARD_CODEX_CLI_VERSION` is the override
-// tests and pinned hosts use; otherwise ask the CLI itself. Unknown counts as
-// BELOW any floor: the guard exists to avoid writing an agent the runtime may
-// ignore, and the fallback (the previous palette entry) always works.
-function detectCodexCliVersion(env) {
-  const pinned = String((env && env.SHIPYARD_CODEX_CLI_VERSION) || '').trim();
-  if (pinned) return pinned;
-  // Bounded: a CLI that stalls here would stall the installer with nothing on
-  // screen, and a timeout lands in the same branch as "no version" — unknown,
-  // therefore below any floor.
-  const r = require('child_process').spawnSync('codex', ['--version'], { encoding: 'utf8', timeout: 5000 });
-  if (r.error || r.status !== 0) return null;
-  const m = String(`${r.stdout || ''} ${r.stderr || ''}`).match(/\d+(?:\.\d+)+/);
-  return m ? m[0] : null;
-}
-
-// "Has the user REMAPPED this tier?" — asked through GSD's own resolver, so the
-// precedence its docs promise (model_policy.runtime_tiers, then
-// model_profile_overrides) is the precedence we honour. The builtin catalog value
-// is deliberately NOT a remap: it is what the palette replaces.
-//
-// GSD's loadConfig reads `<cwd>/.planning/config.json` and falls back to
-// `~/.gsd/defaults.json` only when the project has no config of its own — so a
-// global remap is invisible when the generator runs from a checkout that IS a GSD
-// project. Same cwd rule as the palette; not ours to change, but worth knowing
-// when a remap "does not take".
-function gsdCodexRemapper(codexHome, cwd, log) {
-  try {
-    const lib = path.join(codexHome, 'gsd-core', 'bin', 'lib');
-    const { resolveModelPolicy, resolveTierEntry } = require(path.join(lib, 'model-resolver.cjs'));
-    const { loadConfig } = require(path.join(lib, 'config-loader.cjs'));
-    if (typeof resolveTierEntry !== 'function' || typeof loadConfig !== 'function') {
-      throw new Error('gsd-core model-resolver/config-loader lack the expected exports');
-    }
-    // GSD's loader reports on stderr what it does not recognise — shipyard's own
-    // `pipeline` namespace among it — plus every global default a project config
-    // shadows. None of that is actionable for whoever ran the installer, and in
-    // installer output it reads as a failed install, so THIS read is muted. Our
-    // own lines are not.
-    const write = process.stderr.write;
-    let gsd;
-    try {
-      process.stderr.write = () => true;
-      gsd = loadConfig(cwd) || {};
-    } finally {
-      process.stderr.write = write;
-    }
-    return (tier) => {
-      if (!tier) return null;
-      const policy = gsd.model_policy && typeof gsd.model_policy === 'object'
-        ? { ...gsd.model_policy, runtime: 'codex' }
-        : null;
-      const fromPolicy = policy && typeof resolveModelPolicy === 'function'
-        ? resolveModelPolicy(policy, tier)
-        : null;
-      if (typeof fromPolicy === 'string' && fromPolicy) return fromPolicy;
-      const overrides = gsd.model_profile_overrides;
-      if (!overrides || typeof overrides !== 'object') return null;
-      const mapped = resolveTierEntry({ runtime: 'codex', tier, overrides });
-      const builtin = resolveTierEntry({ runtime: 'codex', tier, overrides: undefined });
-      if (mapped && mapped.model && (!builtin || mapped.model !== builtin.model)) return mapped.model;
-      return null;
-    };
-  } catch (e) {
-    log(`gen-codex-shipyard: could not read GSD's model remap (${e.message}) — the palette decides alone\n`);
-    return () => null;
-  }
-}
-
-// One policy per run: the palette is filtered against the CLI once, so the
-// version refusal is ONE line rather than one per role, and GSD's config is read
-// once rather than once per generated agent.
-function codexModelPolicy(pluginDir, codexHome, opts = {}) {
-  const log = opts.log || ((m) => process.stderr.write(m));
-  const cwd = opts.cwd || process.cwd();
-  const env = opts.env || process.env;
-  const inert = {
-    forRole: () => ({ model: null, effort: null }),
-    palette: [],
-    cliVersion: null,
-    config: { model_ladder: 'conservative' },
-  };
-
-  let pc;
-  let cfg;
-  try {
-    // require() treats a bare relative path as a PACKAGE name, so `--plugin
-    // plugins/delivery-pipeline` resolved to nothing and every agent silently
-    // shipped without a model — the failure this function exists to prevent,
-    // wearing its own fallback as a disguise.
-    pc = require(path.resolve(pluginDir, 'scripts', 'pipeline-config.cjs'));
-    const loaded = pc.loadConfig(cwd);
-    // A PROJECT CONFIG THAT DOES NOT PARSE IS NOT READ (ADR-004 D2).
-    //
-    // `loadConfig` returns DEFAULTS in `config` so a reader always has something
-    // to render, and `valid: false` beside it so a WRITER knows not to. This is
-    // a writer: it bakes the tier into each generated `.toml` file, once, at
-    // install time — and every dispatch for the life of that install then reads it back
-    // out of a file. Ignoring `valid` wrote THIS REPO's shipped palette (its
-    // ceiling included) into every agent and presented it as the operator's
-    // decision, with nothing on any face saying the file could not be read.
-    //
-    // The EFFORT is withheld with the model, not kept: it is resolved off the
-    // same `loaded.config`, so writing it would be one default presented as
-    // something the file said in place of two.
-    //
-    // Withheld, not failed. This is INSTALL time rather than a delivery
-    // mutation — the lowest of the three severities — so the refusal degrades to
-    // `inert`, which is the same answer the `catch` below gives and the previous
-    // behaviour of an empty palette: every skill, every agent and the fragment
-    // are still written, and every agent stays on the CLI default. A refusal
-    // that turns a working install into a broken one is a worse outcome than the
-    // defect it fixes.
-    //
-    // An ABSENT config is `valid: true, error: null, warnings: []` and must NOT
-    // refuse: a fresh project has no `.planning/config.json`, and an installer
-    // runs before any project exists.
-    if (!loaded.valid) {
-      const reason = `gen-codex-shipyard: no policy is in effect — ${loaded.error.file} `
-        + `${loaded.error.message}. No model and no effort is written into any agent, so every `
-        + 'agent stays on the CLI default rather than on this repository\'s shipped default '
-        + 'palette; the fix is the file, not a flag.';
-      log(`${reason}\n`);
-      // Returned BEFORE the GSD remapper is built: a remap read while the
-      // project's own policy is unknown would be one more value nobody chose.
-      return { ...inert, configInvalid: reason };
-    }
-    // Force the codex branch of the policy regardless of where we generate from:
-    // the 1M tier is Claude-only and must degrade here, and the effort axis is
-    // flat here and nowhere else.
-    cfg = { ...loaded.config, gsd: { ...(loaded.config.gsd || {}), runtime: 'codex' } };
-    for (const w of loaded.warnings || []) {
-      if (/codex_models/.test(w)) log(`gen-codex-shipyard: ${w}\n`);
-    }
-  } catch (e) {
-    log(`gen-codex-shipyard: could not load the model policy (${e.message}) — every agent stays on the CLI default\n`);
-    return inert;
-  }
-
-  const cliVersion = detectCodexCliVersion(env);
-  const palette = [];
-  // Every floor the palette DECLARES, kept by model id — including the entries
-  // the filter below drops, which is the whole point: a remap names a MODEL, not
-  // a palette entry, so a dropped entry is the only place that model's floor is
-  // still written down. Built here, before the filter, because a lookup over the
-  // survivors alone finds nothing and refuses nothing.
-  const declaredFloor = new Map();
-  for (const entry of Array.isArray(cfg.codex_models) ? cfg.codex_models : []) {
-    if (entry && entry.model && entry.min_cli) declaredFloor.set(entry.model, entry.min_cli);
-    if (entry.min_cli && (!cliVersion || compareVersions(cliVersion, entry.min_cli) < 0)) {
-      log(
-        `gen-codex-shipyard: not writing "${entry.model}" — configuring it needs Codex CLI ${entry.min_cli}, ` +
-        `this host reports ${cliVersion || 'no version'}. Every role gets the previous palette entry instead.\n`
-      );
-      continue;
-    }
-    palette.push(entry);
-  }
-  if (!palette.length) {
-    log('gen-codex-shipyard: no usable model in the palette — every agent stays on the CLI default\n');
-  }
-  const floor = palette[0] || null;
-  const ceiling = palette.length ? palette[palette.length - 1] : null;
-  const remapFor = gsdCodexRemapper(codexHome, cwd, log);
-
-  // The palette entry's effort is the effort to USE for that model, so the role
-  // rule may ask for LESS but never more: the mechanical role keeps its `low`,
-  // and nothing pays above what the operator measured the model to be best at.
-  const EFFORTS = Array.isArray(pc.EFFORTS) ? pc.EFFORTS : [];
-  const lowerEffort = (a, b) => {
-    if (!a) return b || null;
-    if (!b) return a;
-    const ia = EFFORTS.indexOf(a);
-    const ib = EFFORTS.indexOf(b);
-    if (ia === -1 || ib === -1) return a;
-    return ia <= ib ? a : b;
-  };
-
-  // THE FLOOR IS MEASURED AGAINST WHAT IS EFFECTIVE (ADR-007 D4).
-  //
-  // The filter above answers for palette entries. A remap arrives AFTER it and
-  // names a model directly, so the same CLI floor has to be measured once more or
-  // a version refusal is undone by a key the same run reads a few lines later:
-  // measured at CLI 0.147.0, the ceiling entry is correctly dropped and
-  // `model_profile_overrides.codex.sonnet.model` puts that model back at `high`,
-  // with the "not writing" line printed in the same run.
-  //
-  // ONLY a floor the palette itself declares. An operator's own model has none,
-  // and inventing one would make this an allowlist — which ADR-005 D8 rejected
-  // outright, because GSD's catalog does not carry every model an operator has,
-  // so an unknown id cannot be told from a new one. This reports a KNOWN
-  // incompatibility; it does not invent one.
-  //
-  // The remap still outranks the palette — that precedence is deliberate and
-  // untouched. What it does not outrank is the CLI, and refusing here is the same
-  // refusal that entry would have got had the operator not renamed the route to
-  // it.
-  const remapFloorWarned = new Set();
-  const remapBelowFloor = (model, role) => {
-    const need = declaredFloor.get(model);
-    if (!need) return false;
-    if (cliVersion && compareVersions(cliVersion, need) >= 0) return false;
-    // ONE line per refused model rather than one per role: forRole runs once per
-    // generated agent and copies of the same sentence are how an installer's real
-    // output gets scrolled past.
-    if (!remapFloorWarned.has(model)) {
-      remapFloorWarned.add(model);
-      log(
-        `gen-codex-shipyard: not writing the remapped "${model}" (asked for by a GSD model remap, ` +
-        `first seen for ${role}) — configuring it needs Codex CLI ${need}, this host reports ` +
-        `${cliVersion || 'no version'}. Every role gets its palette entry instead.\n`
-      );
-    }
-    return true;
-  };
-
-  const forRole = (role, { deep = false, level = null } = {}) => {
-    try {
-      const ladderRole = LADDER_ROLE[role] || role;
-      const signals = level ? { taskLevel: level } : {};
-      const tier = pc.resolveModel(ladderRole, signals, cfg);
-      const effort = pc.resolveEffort(ladderRole, tier, cfg, signals);
-      const remapped = remapFor(tier);
-      // A remapped tier is one model for every role that resolves to it, so the
-      // palette's floor/ceiling distinction does not apply — and the entry's
-      // declared effort belongs to the entry's model, not to this one. The CLI
-      // floor is the one thing that still applies, so it is measured on the way
-      // out rather than skipped by the early return this used to be.
-      if (remapped && !remapBelowFloor(remapped, role)) return { model: remapped, effort };
-      const entry = deep
-        || (cfg.model_ladder === 'adaptive' && level === 'critical')
-        || level === 'recovery'
-        || role === 'integrator'
-        ? ceiling
-        : floor;
-      if (!entry) return { model: null, effort };
-      return { model: entry.model, effort: lowerEffort(effort, entry.effort) };
-    } catch (e) {
-      log(`gen-codex-shipyard: could not resolve a model for ${role} (${e.message}) — leaving the agent on the CLI default\n`);
-      return { model: null, effort: null };
-    }
-  };
-
-  return { forRole, palette, cliVersion, config: cfg };
-}
-
-// Kept as a function of its own because it is the unit under test: one role in,
-// one `{model, effort}` out. `opts.policy` reuses a policy main() already built.
-function codexModelFor(role, pluginDir, codexHome, opts = {}) {
-  const policy = opts.policy || codexModelPolicy(pluginDir, codexHome, opts);
-  return policy.forRole(role, opts);
-}
+// Compatibility exports use generated reference names (research is inv-research)
+// and describe only canonical static files, without restoring the retired grid.
+const DEEP_SUFFIX = policy.variantSuffix('ci-fix', 'repeat_exhausted');
+const CRITICAL_SUFFIX = policy.variantSuffix('arch-review', 'critical');
+const staticRolesWithSuffix = (suffix) => new Set(codexStaticVariants()
+  .filter(({ file, reference }) => file === `shipyard-${reference}${suffix}.toml`)
+  .map(({ reference }) => reference));
+const DEEP_ROLES = staticRolesWithSuffix(DEEP_SUFFIX);
+const CRITICAL_ROLES = staticRolesWithSuffix(CRITICAL_SUFFIX);
 
 function rmrf(p) {
   fs.rmSync(p, { recursive: true, force: true });
+}
+
+let activeStageDir = null;
+function cleanupStage() {
+  if (activeStageDir) rmrf(activeStageDir);
 }
 
 // Editor leftovers must not become part of a shipped bundle. Three `*.mjs.bak`
@@ -438,25 +156,7 @@ function tomlMultiline(value) {
 }
 
 function tomlBasic(value) {
-  return `"${String(value).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
-}
-
-// A `#` comment runs to end of LINE and TOML forbids control characters other
-// than tab inside one — and `policy.configInvalid` is not our own prose, it
-// carries `loadConfig`'s verbatim `JSON.parse` message, which for a SHORT
-// unparseable file embeds a snippet of the file's own bytes (V8-version-
-// dependent: older Node has no snippet form at all). A hand-typed corrupt
-// config is exactly the shape that reaches this — multi-line, and free to
-// carry any control byte the human's editor wrote. Collapsing to one printable
-// line before it becomes a comment is what keeps every downstream line a
-// `name = value` pair or a comment and nothing else, which is the whole of
-// what these files need to still parse (ADR-004 D6, audit F21).
-function tomlComment(text) {
-  const oneLine = String(text)
-    .replace(/[\x00-\x08\x0A-\x1F\x7F]+/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-  return `# ${oneLine}\n`;
+  return JSON.stringify(String(value));
 }
 
 // First markdown heading or first sentence → a one-line agent description.
@@ -482,27 +182,55 @@ function main() {
   const codexHome = expandHome(args['codex-home']) || process.env.CODEX_HOME || path.join(require('os').homedir(), '.codex');
   // A malformed --phase used to become NaN, which silently compared false in
   // every gate: no deliver skill AND every phase-2 agent emitted anyway.
-  const phase = args.phase === undefined ? 2 : parseInt(args.phase, 10);
-  if (![1, 2].includes(phase)) fail(`--phase must be 1 or 2 (got "${args.phase}")`);
+  const phaseArg = args.phase === undefined ? '2' : String(args.phase);
+  if (!/^[12]$/.test(phaseArg)) fail(`--phase must be 1 or 2 (got "${args.phase}")`);
+  const phase = Number(phaseArg);
   // Where the CLAUDE_PLUGIN_ROOT payload lands on the host (absolute, host-installed).
   const scriptsRoot = expandHome(args['bundle-root']) || path.join(codexHome, 'shipyard');
 
   if (!fs.existsSync(pluginDir)) fail(`plugin dir not found: ${pluginDir}`);
   const gsdLib = resolveGsdLib(args['gsd-lib'], codexHome);
+  // Capture the converter before loading or generating anything. Validation
+  // compares this exact pre-generation snapshot with the live file again, so a
+  // concurrent refresh cannot silently produce a bundle whose manifest names a
+  // converter different from the one that was loaded.
+  const gsdLibDigest = digest(fs.readFileSync(gsdLib));
   const convert = require(gsdLib);
   for (const fn of ['convertClaudeCommandToCodexSkill', 'convertClaudeToCodexMarkdown']) {
     if (typeof convert[fn] !== 'function') fail(`gsd-core lib missing export ${fn} (incompatible version?)`);
   }
 
-  rmrf(outDir);
-  fs.mkdirSync(outDir, { recursive: true });
+  // Refuse unreadable policy input and missing required sources before touching
+  // an existing stage. Generate in a disposable sibling, validate it fully,
+  // then publish it as one directory replacement so a failed conversion or
+  // payload copy cannot erase the previous valid stage.
+  const loaded = require(path.resolve(pluginDir, 'scripts/pipeline-config.cjs')).loadConfig(projectDir);
+  if (!loaded.valid) fail('cannot read project config: ' + loaded.error.message);
+  const variants = codexStaticVariants(phase);
+  for (const { reference } of variants) {
+    const source = path.join(pluginDir, 'references', reference + '.md');
+    if (!fs.existsSync(source)) fail('required reference missing: ' + source);
+  }
+  const capabilitiesFile = args.capabilities || process.env.SHIPYARD_CODEX_CAPABILITIES_FILE;
+  let capabilities;
+  let capabilitiesRaw;
+  try {
+    capabilitiesRaw = fs.readFileSync(capabilitiesFile || '', 'utf8');
+    capabilities = JSON.parse(capabilitiesRaw);
+  }
+  catch (error) { fail('read host capabilities with --capabilities or SHIPYARD_CODEX_CAPABILITIES_FILE: ' + error.message); }
+  validateCodexCapabilities(capabilities, phase);
+
+  fs.mkdirSync(path.dirname(outDir), { recursive: true });
+  const stageDir = fs.mkdtempSync(`${outDir}.stage-`);
+  activeStageDir = stageDir;
+  process.once('exit', cleanupStage);
 
   // ── commands → Codex skills ───────────────────────────────────────────────
   // route (entry router) and bench (off-conveyor) are meta / no ticket graph —
   // always available in both phases
-  const commands = phase >= 2
-    ? ['route', 'investigate', 'decompose', 'deliver', 'bench']
-    : ['route', 'investigate', 'decompose', 'bench'];
+  const commands = codexSkillNames(phase).filter((name) => name !== 'shipyard-delivery-rules')
+    .map((name) => name.slice('shipyard-'.length));
   const emittedSkills = [];
   for (const cmd of commands) {
     const src = path.join(pluginDir, 'commands', `${cmd}.md`);
@@ -510,7 +238,7 @@ function main() {
     const skillName = `shipyard-${cmd}`;
     const raw = fs.readFileSync(src, 'utf8');
     const converted = shipyardRewrites(convert.convertClaudeCommandToCodexSkill(raw, skillName), scriptsRoot);
-    writeFile(path.join(outDir, 'skills', skillName, 'SKILL.md'), converted);
+    writeFile(path.join(stageDir, 'skills', skillName, 'SKILL.md'), converted);
     emittedSkills.push(skillName);
   }
 
@@ -520,106 +248,32 @@ function main() {
     const skillName = 'shipyard-delivery-rules';
     const raw = fs.readFileSync(drSrc, 'utf8');
     const converted = shipyardRewrites(convert.convertClaudeCommandToCodexSkill(raw, skillName), scriptsRoot);
-    writeFile(path.join(outDir, 'skills', skillName, 'SKILL.md'), converted);
+    writeFile(path.join(stageDir, 'skills', skillName, 'SKILL.md'), converted);
     emittedSkills.push(skillName);
   }
 
-  // ── references → Codex subagents ───────────────────────────────────────────
-  // read-only judges vs workspace-write workers; gated by phase.
-  const ROLES = {
-    'inv-research': { sandbox: 'read-only', phase: 1 },
-    'arch-review': { sandbox: 'read-only', phase: 2 },
-    'drift-check': { sandbox: 'read-only', phase: 2 },
-    'review-fix': { sandbox: 'workspace-write', phase: 2 },
-    'ci-fix': { sandbox: 'workspace-write', phase: 2 },
-    'pr-sentinel': { sandbox: 'workspace-write', phase: 2 },
-    'integrator': { sandbox: 'workspace-write', phase: 2 },
-  };
+  // ── all required static role/rung variants ───────────────────────────────
   const emittedAgents = [];
-  const policy = codexModelPolicy(pluginDir, codexHome, { cwd: projectDir });
-  // The reason rides every RESULT, not stderr alone: an installer's log scrolls
-  // past, while the `.toml` is what the next reader opens when an agent turns
-  // out to carry no model. A `#` comment is valid TOML and adds no key, so the
-  // file says why it is silent instead of looking like an oversight.
-  const refusalComment = policy.configInvalid ? tomlComment(policy.configInvalid) : '';
-  const agentToml = (agentName, description, sandbox, model, effort, body) =>
-    refusalComment +
-    `name = ${tomlBasic(agentName)}\n` +
-    `description = ${tomlBasic(description)}\n` +
-    `sandbox_mode = ${tomlBasic(sandbox)}\n` +
-    (model ? `model = ${tomlBasic(model)}\n` : '') +
-    (effort ? `model_reasoning_effort = ${tomlBasic(effort)}\n` : '') +
-    `developer_instructions = ${tomlMultiline(body)}\n`;
-  for (const [role, meta] of Object.entries(ROLES)) {
-    if (meta.phase > phase) continue;
-    const src = path.join(pluginDir, 'references', `${role}.md`);
-    if (!fs.existsSync(src)) continue; // reference optional
-    const agentName = `shipyard-${role}`;
-    const raw = fs.readFileSync(src, 'utf8');
+  const agentDigests = {};
+  for (const variant of variants) {
+    const raw = fs.readFileSync(path.join(pluginDir, 'references', variant.reference + '.md'), 'utf8');
     const body = shipyardRewrites(convert.convertClaudeToCodexMarkdown(raw), scriptsRoot);
-    const description = deriveDescription(raw, role);
-    const base = policy.forRole(role);
-    writeFile(
-      path.join(outDir, 'agents', `${agentName}.toml`),
-      agentToml(agentName, description, meta.sandbox, base.model, base.effort, body),
-    );
+    const agentName = variant.file.replace(/\.toml$/, '');
+    const description = deriveDescription(raw, variant.role) + ' (' + variant.rung + ')';
+    const identity = {
+      id: policy.POLICY.id, version: policy.POLICY_VERSION, hash: policy.POLICY_HASH,
+      runtime: 'codex', role: variant.role, rung: variant.rung,
+    };
+    const content = Object.entries(identity).map(([key, value]) => '# shipyard-policy-' + key + ' = ' + tomlBasic(value) + '\n').join('')
+      + 'name = ' + tomlBasic(agentName) + '\n'
+      + 'description = ' + tomlBasic(description) + '\n'
+      + 'sandbox_mode = ' + tomlBasic(variant.sandbox) + '\n'
+      + 'model = ' + tomlBasic(variant.model) + '\n'
+      + 'model_reasoning_effort = ' + tomlBasic(variant.effort) + '\n'
+      + 'developer_instructions = ' + tomlMultiline(body) + '\n';
+    writeFile(path.join(stageDir, 'agents', variant.file), content);
+    agentDigests[variant.file] = digest(content);
     emittedAgents.push({ agentName, description });
-
-    // The recovery variant. Written only when it would actually DIFFER from
-    // the ordinary agent — a single-entry palette, or a GSD remap that maps the
-    // whole tier to one model, leaves nothing for it to be, and a duplicate file
-    // that reads as an escalation is worse than no file at all.
-    if (DEEP_ROLES.has(role)) {
-      const deep = policy.forRole(role, { deep: true, level: 'recovery' });
-      if (deep.model && (deep.model !== base.model || deep.effort !== base.effort)) {
-        const deepName = `${agentName}${DEEP_SUFFIX}`;
-        const deepBody =
-          '> **Escalation variant (recovery).** The ordinary `' + agentName + '` agent has already been\n' +
-          '> tried on this failure and it came back. Same contract as below, on the\n' +
-          '> ceiling model: change the hypothesis, do not re-run the one that failed.\n\n' +
-          body;
-        writeFile(
-          path.join(outDir, 'agents', `${deepName}.toml`),
-          agentToml(
-            deepName,
-            `${description} — recovery variant, for a failure the ordinary ${agentName} already tried`,
-            meta.sandbox,
-            deep.model,
-            deep.effort,
-            deepBody,
-          ),
-        );
-        emittedAgents.push({ agentName: deepName, description: `${description} (recovery variant)` });
-      }
-    }
-
-    // Critical work gets its own first-attempt file. It is separate from
-    // recovery because a risky/checkpointed task should start on the ceiling,
-    // while a repeated failure reaches the same ceiling only after the ordinary
-    // hypothesis has already failed.
-    if (policy.config.model_ladder === 'adaptive' && CRITICAL_ROLES.has(role)) {
-      const critical = policy.forRole(role, { level: 'critical' });
-      if (critical.model && (critical.model !== base.model || critical.effort !== base.effort)) {
-        const criticalName = `${agentName}${CRITICAL_SUFFIX}`;
-        const criticalBody =
-          '> **Critical task variant.** This dispatch was classified as critical\n' +
-          '> from its risk/checkpoint facts. Use the stronger model for the same\n' +
-          '> contract, and keep the acceptance gates below authoritative.\n\n' +
-          body;
-        writeFile(
-          path.join(outDir, 'agents', `${criticalName}.toml`),
-          agentToml(
-            criticalName,
-            `${description} — critical task variant`,
-            meta.sandbox,
-            critical.model,
-            critical.effort,
-            criticalBody,
-          ),
-        );
-        emittedAgents.push({ agentName: criticalName, description: `${description} (critical task variant)` });
-      }
-    }
   }
 
   // ── config fragment registering our agents (merged non-destructively) ──────
@@ -637,7 +291,7 @@ function main() {
       frag += `config_file = ${tomlBasic(cfgPath)}\n`;
     }
     frag += '\n# shipyard-agents:end\n';
-    writeFile(path.join(outDir, 'config.fragment.toml'), frag);
+    writeFile(path.join(stageDir, 'config.fragment.toml'), frag);
   }
 
   // ── CLAUDE_PLUGIN_ROOT payload (scripts/references/templates/workflows) ────
@@ -646,53 +300,82 @@ function main() {
   // leaving the directory out pointed those paths at files that do not exist.
   for (const sub of ['scripts', 'references', 'templates', 'workflows']) {
     const s = path.join(pluginDir, sub);
-    if (fs.existsSync(s)) copyDir(s, path.join(outDir, 'bundle', sub));
+    if (fs.existsSync(s)) copyDir(s, path.join(stageDir, 'bundle', sub));
   }
+  // gsd-tune uses one project-relative delivery-rules projection for both
+  // runtimes. Keep the canonical, runtime-neutral source beside the Codex
+  // bundle so the installed copy can generate that projection without reading
+  // the checkout it was built from.
+  const neutralRules = path.join(pluginDir, 'skills', 'delivery-rules');
+  if (fs.existsSync(path.join(neutralRules, 'SKILL.md'))) {
+    copyDir(neutralRules, path.join(stageDir, 'bundle', 'skills', 'delivery-rules'));
+  }
+  // Preserve the exact, explicitly supplied host-evidence document beside the
+  // installed selector. A policy-derived copy would claim support that was
+  // never measured; this file is only a durable copy of the caller's input.
+  writeFile(path.join(stageDir, 'bundle', CODEX_CAPABILITIES_BUNDLE_FILE), capabilitiesRaw);
 
-  // ── manifest (for the installer + smoke test) ──────────────────────────────
-  //
-  // Also the OWNERSHIP RECORD the installer reconciles against (ADR-007 D5).
-  // The bundle payload is replaced wholesale, so it cannot go stale by
-  // omission; `$CODEX_HOME/agents/` cannot be treated that way, because the
-  // operator writes into that directory too. So this run states what it wrote,
-  // the installer keeps the copy beside the agents, and the NEXT run takes back
-  // exactly what the previous one claimed and no longer emits.
-  //
-  // The count legitimately varies — `-critical` and `-deep` variants are written
-  // only when they would DIFFER from the ordinary agent, so a one-entry palette
-  // and a tier-wide remap produce only the base agents. That is
-  // precisely why removal cannot be inferred from an expected count, and why the
-  // files and registrations are listed EXPLICITLY here rather than left for the
-  // installer to rebuild from `agents` by string concatenation: ownership is
-  // decided in one place, and a delete driven by a reconstruction is a delete
-  // driven by a guess.
+  // The manifest binds ownership, policy identity, files and registrations.
+  const skillFiles = payloadFiles(path.join(stageDir, 'skills'));
+  const bundleFiles = payloadFiles(path.join(stageDir, 'bundle'));
   const manifest = {
     shipyard_version: readShipyardVersion(pluginDir),
     phase,
+    policy_id: policy.POLICY.id,
+    policy_version: policy.POLICY_VERSION,
+    policy_hash: policy.POLICY_HASH,
+    capabilities_file: CODEX_CAPABILITIES_BUNDLE_FILE,
+    capabilities_digest: digest(capabilitiesRaw),
+    agent_digests: agentDigests,
+    config_digest: digest(fs.readFileSync(path.join(stageDir, 'config.fragment.toml'))),
+    dynamic_roles: policy.DYNAMIC_ROLES,
     codexHome,
     scriptsRoot,
     skills: emittedSkills,
+    skill_digests: Object.fromEntries(emittedSkills.map((name) => [
+      name, digest(fs.readFileSync(path.join(stageDir, 'skills', name, 'SKILL.md'))),
+    ])),
+    skill_files: skillFiles,
+    skill_file_digests: payloadDigests(path.join(stageDir, 'skills'), skillFiles),
+    bundle_files: bundleFiles,
+    bundle_digests: payloadDigests(path.join(stageDir, 'bundle'), bundleFiles),
     agents: emittedAgents.map((a) => a.agentName),
     agent_files: emittedAgents.map((a) => `${a.agentName}.toml`),
     registrations: emittedAgents.map((a) => `agents.${a.agentName}`),
     gsdLib,
-    // Conditional, never a `null` key: a reader should see the field only when
-    // the refusal actually fired, and an always-present field reads as a state
-    // rather than an exception.
-    ...(policy.configInvalid ? { config_invalid: policy.configInvalid } : {}),
+    gsd_lib: gsdLib,
+    gsd_lib_digest: gsdLibDigest,
   };
-  writeFile(path.join(outDir, 'manifest.json'), JSON.stringify(manifest, null, 2) + '\n');
+  writeFile(path.join(stageDir, 'manifest.json'), JSON.stringify(manifest, null, 2) + '\n');
 
+  validateCodexBundle(stageDir, { codexHome, phase, capabilities });
+  let previousDir = null;
+  const outExists = fs.existsSync(outDir) || (() => {
+    try { return fs.lstatSync(outDir) !== undefined; } catch { return false; }
+  })();
+  if (outExists) {
+    previousDir = fs.mkdtempSync(`${outDir}.previous-`);
+    rmrf(previousDir);
+    fs.renameSync(outDir, previousDir);
+  }
+  try {
+    fs.renameSync(stageDir, outDir);
+    activeStageDir = null;
+  } catch (error) {
+    if (previousDir && !fs.existsSync(outDir)) {
+      try { fs.renameSync(previousDir, outDir); previousDir = null; } catch { /* preserve the original error */ }
+    }
+    throw error;
+  }
+  if (previousDir) rmrf(previousDir);
   process.stdout.write(
     `staged ${emittedSkills.length} skills, ${emittedAgents.length} agents → ${outDir} (phase ${phase})\n`,
   );
-  if (policy.configInvalid) process.stdout.write(`${policy.configInvalid}\n`);
 }
 
-module.exports = {
-  codexModelPolicy, codexModelFor, compareVersions, detectCodexCliVersion,
-  DEEP_ROLES, DEEP_SUFFIX, CRITICAL_ROLES, CRITICAL_SUFFIX, LADDER_ROLE,
-};
+module.exports = { codexStaticVariants, validateCodexBundle, DEEP_ROLES, DEEP_SUFFIX, CRITICAL_ROLES, CRITICAL_SUFFIX };
 
 // The installer runs this as a script; the unit test requires it as a module.
-if (require.main === module) main();
+if (require.main === module) {
+  try { main(); } catch (error) { fail(error.message); }
+}

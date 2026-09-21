@@ -19,21 +19,32 @@ export const meta = {
 //                        // instruction in the prompt: every other step measures the
 //                        // branch against a merge base that no longer exists until it
 //                        // is done. Absent/false builds exactly the prompt it always did.
-//       base,            // optional base ref, for the base-merge invocation
+//       base,            // optional bare base ref, for base-merge; the trusted
+//                        // role-artifact consumer resolves its live origin ref
 //       attemptHistory,  // optional PRE-RENDERED record of what already failed on this
 //                        // ticket — the output of `attempt-history.cjs <ticket>`, run by
 //                        // the ORCHESTRATOR (this path builds prompts deterministically
 //                        // and must not shell out). Absent on a first attempt, and an
 //                        // entry without it builds exactly the prompt it always did.
-//       model,           // optional tier alias; default "opus"
-//       effort,          // optional reasoning effort; from `pipeline-config.cjs model … --json`
+//       model,           // caller-resolved native runtime alias; required at the
+//                        // dispatch boundary (never inherited or defaulted here)
+//       effort,          // caller-resolved reasoning effort; required at the
+//                        // dispatch boundary (never inherited or defaulted here)
+//       signals,         // exact ADR-014 signals used to resolve model/effort;
+//                        // never infer a repair rung from the pair alone
+//       signatureState,  // optional alias; must agree with signals.signatureState
+//       risk, critical, checkpoint, // optional canonical signal aliases
+//       priorReceipt,    // preceding boundary-returned receipt, never agent output
+//       previous_dispatch_id, // that receipt's dispatch identity (required for repair)
+//       dispatch_id,     // optional new dispatch identity
 //     } ],
 //     ciFixRefPath,      // abs path to references/ci-fix.md
 //     reviewFixRefPath,  // abs path to references/review-fix.md
 //     reinitScript,      // abs path to scripts/reviewers.cjs
 //     artifactLanguage,  // optional; language for shipped artifacts (default English)
 //   }
-// returns: [ { id, pr, pushed, status: 'fixed'|'no-op'|'escalate', notes, hypothesis } ]
+// returns: [ { id, pr, pushed, status: 'fixed'|'no-op'|'escalate', notes, hypothesis,
+//              artifact_ref, artifact_digest, evidence_index, findings_index, receipt } ]
 //
 // A fresh agent per attempt is right for context hygiene and is exactly why
 // attempt 3 can re-propose attempt 1's failed fix. `attemptHistory` in, and
@@ -78,6 +89,22 @@ const OUT = {
   },
 }
 
+// A receipt is boundary-owned provenance, not an agent result field. Keep a
+// non-conforming/stubbed agent from smuggling a lookalike through the spread;
+// only the receipt returned by createClaudeWorkflowDispatch may cross out.
+const withoutAgentReceipt = (value) => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return value
+  const {
+    receipt: ignoredReceipt,
+    application_receipt: ignoredApplicationReceipt,
+    applicationReceipt: ignoredApplicationReceiptAlias,
+    applicationEvidence: ignoredApplicationEvidence,
+    application_evidence: ignoredApplicationEvidenceAlias,
+    ...safe
+  } = value
+  return safe
+}
+
 // The Workflow runtime may hand `args` over as a JSON STRING rather than an
 // object (observed 2026-07-28). Reading `args.x` then silently yields undefined,
 // so both shapes are accepted — but a string that is not JSON is a MALFORMED
@@ -120,9 +147,23 @@ if (!ciRef || !reviewRef || !reinitScript) {
   throw new Error('fix-round: args.ciFixRefPath, args.reviewFixRefPath and args.reinitScript are required')
 }
 
+// The Workflow DSL has no import surface. Require the host-injected bridge;
+// if it does not exist, refuse the dispatch
+// rather than calling agent() outside createClaudeDispatchAdapter/
+// createDispatchBoundary.
+function loadClaudeWorkflowDispatch() {
+  // This is an explicit host integration point, not a documented DSL binding.
+  // JSON args cannot install callbacks, a recorder, or application evidence.
+  if (typeof __createClaudeWorkflowDispatch === 'function') return __createClaudeWorkflowDispatch
+  throw new Error('fix-round: Claude dispatch boundary bridge is unavailable; the Workflow host must bind createClaudeWorkflowDispatch with capabilities, a durable recorder, and application evidence')
+}
+
+const createClaudeWorkflowDispatch = loadClaudeWorkflowDispatch()
+
 // The base-merge script sits beside the reviewers one the orchestrator passed —
 // same scripts directory, and no module import is available in this runtime.
 const baseMergeScript = String(reinitScript).replace(/[^/]*$/, 'base-merge.cjs')
+const commentPolicyScript = String(reinitScript).replace(/[^/]*$/, 'comment-policy.cjs')
 
 // THE PINNED INVOCATION. `ci-fix.md` and `review-fix.md` state the same command
 // in the same order, and the duty that dispatches it is `base-merge`:
@@ -137,14 +178,38 @@ const baseMergeCommand = (p) =>
   `   node ${baseMergeScript} ${p.id} --worktree ${p.worktreePath} `
   + `--base ${p.base || '<the PR\'s base branch — `gh pr view ' + p.pr + ' --json baseRefName`>'}`
 
+const requireRepairMetadata = (pr) => {
+  if (!pr || typeof pr !== 'object' || Array.isArray(pr)) {
+    throw new Error('fix-round: each PR must be an object before artifact dispatch')
+  }
+  for (const [name, value] of [
+    ['id', pr.id],
+    ['pr', pr.pr],
+    ['branch', pr.branch],
+    ['planPath', pr.planPath],
+    ['worktreePath', pr.worktreePath],
+    ['base', pr.base || pr.prBase],
+  ]) {
+    if ((name === 'pr' && (!Number.isInteger(value) || value < 1))
+        || (name !== 'pr' && (typeof value !== 'string' || value.trim() === ''))) {
+      throw new Error(`fix-round: PR ${name} is required before artifact dispatch`)
+    }
+  }
+  if (!pr.needsCiFix && !pr.needsReviewFix) {
+    throw new Error(`fix-round: PR ${pr.id} has no repair role before artifact dispatch`)
+  }
+}
+
 // The prompt, as a function, so it can be asserted on without launching
 // anything: this file cannot be imported (top-level `return`), so a test
 // evaluates it the way the Workflow runtime does and stubs `agent` to capture
-// what a fixer is actually told.
+// what a fixer is actually told. The dispatch adapter invokes it only after
+// resolve/validate has accepted the explicit launch inputs.
 function buildPrompt(p) {
   const steps = [
     `You are fixing PR #${p.pr} for ticket ${p.id}. Your working directory is the worktree: ${p.worktreePath} (branch "${p.branch}"). cd into it.`,
     `Ticket contract (respect Scope / Out of scope STRICTLY): ${p.planPath}.`,
+    `Complete repair evidence is durable and must not be returned inline. Write the full hypotheses, changed paths, command-backed verification, and any unresolved findings to: ${p.worktreePath}/.shipyard-repair-evidence.md. Keep that file complete for the next repair round; the result envelope is only a bounded synopsis and validated reference.`,
     ``,
   ]
   // FIRST, ahead of the prior-attempt record and both fix branches. Until the
@@ -167,6 +232,7 @@ function buildPrompt(p) {
       p.attemptHistory,
       ``,
       `This record is INPUT, not background. You MUST NOT re-propose a fix a prior attempt already tried: if your best hypothesis matches one that is already in the record, form a DIFFERENT one — re-read the ticket contract, widen the context, raise the hypothesis above the symptom. If every plausible hypothesis is exhausted, return status "escalate" rather than cycling through a failed one again.`,
+      `Any hypothesis recovered from a prior artifact is historical evidence about that earlier producer dispatch. It is not a fresh verdict for this HEAD and must be rechecked before you act.`,
       ``
     )
   }
@@ -185,11 +251,15 @@ function buildPrompt(p) {
   }
   steps.push(
     ``,
+    `Rule zero: every checkable claim about the codebase, a test, delivery state, or a completed action must name the exact command that checked it and the relevant path, output, or exit status. If a claim cannot be checked by a command, label it as an assumption or unknown and state the next check. A claim without command-backed evidence is not verification.`,
+    `Keep added code comments to required directives, licence/generated markers, or one-line @invariant:, @security:, or @contract: markers of at most 120 characters. Do not add explanatory, historical, ticket, or multi-line comments; remove narration that repeats the code.`,
+    ``,
     `Language: every artifact you produce — code, comments, commit messages, review replies — is written in ${artifactLanguage}, regardless of the language used elsewhere in this project.`,
     ``,
-    `If you changed code: run the ticket's Verification commands to green — those, scoped as written, never the project's full suite or its e2e run (CI owns those, and this loop re-runs on every round) — then commit atomically referencing ${p.id}, push once, and re-init reviewers: node ${reinitScript} reinit ${p.pr}. Set pushed=true.`,
+    `If you changed code: run the ticket's Verification commands to green — those, scoped as written, never the project's full suite or its e2e run (CI owns those, and this loop re-runs on every round) — then commit atomically referencing ${p.id}. Before pushing, run: node ${commentPolicyScript} check ${p.id} --worktree ${p.worktreePath} --base ${p.base || p.prBase} --json. A non-zero result blocks the push: preview with node ${commentPolicyScript} clean ${p.id} --worktree ${p.worktreePath} --base ${p.base || p.prBase} --json, review the listed lines, and use node ${commentPolicyScript} clean ${p.id} --worktree ${p.worktreePath} --base ${p.base || p.prBase} --apply --json only for those full-line additions. Rerun Verification, amend the commit, and run the check again. Push once only after it passes, then re-init reviewers: node ${reinitScript} reinit ${p.pr}. Set pushed=true.`,
     `If you only replied to threads without a code change: pushed=false, status "fixed".`,
     `If nothing needed doing: status "no-op".`,
+    `Return only id, pr, pushed, status, notes, and hypothesis. Do not return receipts, application evidence, artifact paths, or complete evidence text; the trusted host seals those from the authenticated dispatch and the evidence file.`,
     `Return the result for PR #${p.pr}.`
   )
   return steps.join('\n')
@@ -199,26 +269,65 @@ phase('Fix')
 
 return await parallel(
   prs.map((p) => () => {
-    // Locally constructed results must satisfy the same shape the consumers read,
-    // `hypothesis` included — and an invented one would be worse than none: it
-    // would enter the record as something that was tried and ruled out. Say what
-    // is actually known instead.
-    const fixFallback = (why, hypothesis) => ({ id: p.id, pr: p.pr, pushed: false, status: 'escalate', notes: why, hypothesis })
-    return agent(buildPrompt(p), {
-      label: `fix:${p.id}#${p.pr}`,
-      phase: 'Fix',
-      // tier aliases only — the Agent tool rejects full model IDs
-      model: p.model || 'opus',
-      ...(p.effort ? { effort: p.effort } : {}),
-      agentType: 'general-purpose',
-      schema: OUT,
-    })
-      .then((r) => (r
-        ? { ...r, id: p.id, pr: p.pr }
-        : fixFallback('fixer agent died — re-dispatch', 'unknown — the fixer died before reporting one')))
-      .catch((e) => fixFallback(
-        `fixer errored (${e && e.message ? e.message : e}) — re-dispatch`,
-        'unknown — the fixer errored before reporting one'
-      ))
+    requireRepairMetadata(p)
+    try {
+      const role = p.needsCiFix ? 'ci-fix' : p.needsReviewFix ? 'review-fix' : null
+      if (!role) throw new Error('fixer dispatch requires needsCiFix or needsReviewFix')
+      return createClaudeWorkflowDispatch({
+        agent,
+        prompt: () => buildPrompt(p),
+        role,
+        model: p.model,
+        effort: p.effort,
+        signals: p.signals,
+        signatureState: p.signatureState,
+        risk: p.risk,
+        critical: p.critical,
+        checkpoint: p.checkpoint,
+        priorApplied: p.priorApplied,
+        priorReceipt: p.priorReceipt,
+        dispatchId: p.dispatch_id || p.dispatchId,
+        previousDispatchId: p.previous_dispatch_id || p.previousDispatchId,
+        requireArtifact: true,
+          artifact: {
+          role,
+          ticket: p.id,
+          pr: p.pr,
+          worktreePath: p.worktreePath,
+          // The artifact consumer canonicalizes a bare board base to the live
+          // origin ref before binding its integration-base identity. Keep the
+          // caller's value here for compatibility with base-merge's contract.
+          base: p.base || p.prBase,
+          ...(p.branch ? { branch: p.branch } : {}),
+          ...(p.planPath ? { planPath: p.planPath } : {}),
+          ...(p.attempt === undefined ? {} : { attempt: p.attempt }),
+        },
+        context: { ticket: p.id },
+        label: `fix:${p.id}#${p.pr}`,
+        agentOptions: {
+          label: `fix:${p.id}#${p.pr}`,
+          phase: 'Fix',
+          agentType: 'general-purpose',
+          schema: OUT,
+        },
+      })
+        .then(({ result: r, receipt, artifact }) => ({
+          ...withoutAgentReceipt(r),
+          id: p.id,
+          pr: p.pr,
+          ...(artifact && artifact.artifact_ref ? {
+            artifact_ref: artifact.artifact_ref,
+            artifact_digest: artifact.artifact_digest,
+            evidence_index: artifact.evidence_index,
+            ...(artifact.findings_index ? { findings_index: artifact.findings_index } : {}),
+          } : {}),
+          ...(receipt ? { receipt } : {}),
+        }))
+        .catch((e) => {
+          throw e
+        })
+    } catch (e) {
+      throw e
+    }
   })
 )

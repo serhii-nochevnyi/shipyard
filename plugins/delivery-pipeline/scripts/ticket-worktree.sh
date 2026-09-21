@@ -39,6 +39,7 @@ ticket="${2:-}"
 repo_root="$(git rev-parse --show-toplevel 2>/dev/null)" || { echo "not inside a git repository" >&2; exit 1; }
 repo_name="$(basename "$repo_root")"
 wt_base="${SHIPYARD_WORKTREE_ROOT:-$(dirname "$repo_root")/.wt-${repo_name}}"
+reachability_script="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/run-reachability.cjs"
 
 # Serialize everything that writes to the SHARED .git. `git worktree add` and
 # branch creation both take index.lock, and since the PR sentinel guards open PRs
@@ -207,16 +208,39 @@ case "$cmd" in
     git -C "$repo_root" fetch origin --prune 1>&2 2>/dev/null || \
       echo "warning: git fetch origin failed — working from the local refs" >&2
 
+    proof_args=(prove --repo "$repo_root" --base "$base" --branch "$branch" --worktree "$wt_dir" --json)
+    graph_dir="$repo_root/.planning/graph"
+    if [[ -f "$graph_dir/tickets.json" ]] && node -e 'const j=JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")); process.exit(j.tickets && j.tickets[process.argv[2]] ? 0 : 1)' "$graph_dir/tickets.json" "$ticket" 2>/dev/null; then
+      proof_args+=(--ticket "$ticket" --graph "$graph_dir")
+    fi
+    if proof_json="$(node "$reachability_script" "${proof_args[@]}" 2>/dev/null)"; then
+      base_name="$(printf '%s' "$proof_json" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>process.stdout.write(JSON.parse(s).origin.ref))')"
+      base_sha="$(printf '%s' "$proof_json" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>process.stdout.write(JSON.parse(s).origin.sha))')"
+      echo "reachability proven for $ticket from $base_name (${base_sha:0:7})" >&2
+    else
+      proof_status=$?
+      proof_code="$(printf '%s' "$proof_json" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{process.stdout.write(JSON.parse(s).reason.code||"")}catch{}})')"
+      reusable=false
+      [[ -e "$wt_dir" ]] && reusable=true
+      git -C "$repo_root" show-ref --verify --quiet "refs/heads/$branch" && reusable=true
+      if [[ "$proof_status" == "10" && "$proof_code" == "BASE_NOT_ANCESTOR" && "$reusable" == true ]]; then
+        if resolved="$(resolve_base "$base")"; then
+          base_name="${resolved%%$'\t'*}"; base_sha="${resolved##*$'\t'}"
+          echo "reachability pending for $ticket: $proof_code — preserving the existing branch and worktree for base-merge" >&2
+        else
+          printf '%s\n' "$proof_json" >&2
+          exit "$proof_status"
+        fi
+      else
+        printf '%s\n' "$proof_json" >&2
+        exit "$proof_status"
+      fi
+    fi
+
     # Measured BEFORE the reuse branches, because both of them report a distance
     # against it — but not fatally here: a resumed run whose base branch has
     # since been reaped must still be able to reuse its own worktree. The create
     # path below is where a base that resolves to nothing is a hard error.
-    base_name=""; base_sha=""
-    if resolved="$(resolve_base "$base")"; then
-      base_name="${resolved%%$'\t'*}"; base_sha="${resolved##*$'\t'}"
-      echo "base $base measured as $base_name (${base_sha:0:7})" >&2
-    fi
-
     # Already there? Reuse it when it holds the right branch; refuse only on a
     # genuine mismatch, which is a state a human has to look at.
     if [[ -e "$wt_dir" ]]; then

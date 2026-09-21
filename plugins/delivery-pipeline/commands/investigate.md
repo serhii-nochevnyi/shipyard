@@ -10,6 +10,7 @@ allowed-tools:
   - Grep
   - Glob
   - Agent
+  - Workflow
   - AskUserQuestion
 ---
 
@@ -49,24 +50,104 @@ Read `.planning/investigations/` (may not exist):
    AskUserQuestion the questions that are missing for PROBLEM.md: for whom / current
    pain / what success will be / what is definitely out of scope. Ask only what you
    cannot derive from the statement. Fill in PROBLEM.md.
-5. **Research fan-out**: launch 4 agents IN PARALLEL (Agent tool, in a single
-   message) with the brief `${CLAUDE_PLUGIN_ROOT}/references/inv-research.md` —
-   lines: system state / alternatives / constraints / risks+unknowns.
-   Models — ask the resolver, do not invent a value:
-   `node ${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-config.cjs model research --type alternatives`
-   (→ `opus` at `xhigh` effort — designing options is the heavy line) and
-   `… model research --type facts` (→ `opus` at `high` effort, for system state /
-   constraints / risks+unknowns). The tier is the same on both lines because the
-   floor is `opus`; what `--type alternatives` buys is DEPTH, not a tier step, so
-   do not substitute a cheaper tier for the fact lines.
-   Override per role via `pipeline.models` in `.planning/config.json`.
-   **Only tier aliases are valid `model` values** — `opus`, `sonnet`, `haiku`,
-   `fable` — and the Agent tool rejects full model IDs and suffixed aliases like
-   `opus[1m]`. Full model ids and `inherit` belong to a subagent DEFINITION's own
-   `model:` frontmatter, a different surface from the tool parameter these spawns
-   pass.
-   Pass each of them the problem statement and the path to the INV directory. Bring their results
-   into RESEARCH.md, OPTIONS.md, RISKS.md, OPEN-QUESTIONS.md.
+5. **Research fan-out**: resolve the runtime and all four line selections through
+   the routed `pipeline-config.cjs` `resolveDispatch` bridge before launching.
+   Never call the compatibility `pipeline-config.cjs model` reader, compose a
+   model or effort in this command, or let a session/default selection leak into
+   the launch. For the Workflow runtime, the base is Opus/medium and only an explicit
+   `complexity: very-complex` signal escalates research to Opus/max; the
+   `alternatives` line does not promote the rung. For Codex, the base is
+   Sol/high and the same explicit very-complex signal escalates to Sol/xhigh.
+   Keep the resolved `{ model, effort, signals }` on every line. For Codex,
+   pass those exact signals to the selector for each line — for example,
+   `--type alternatives` for the alternatives line and
+   `--complexity very-complex` for the explicitly very-complex line — and
+   preserve the selector's returned model/file and effort when calling the
+   boundary. Do not select once for the fan-out and do not re-resolve a line
+   from its model/effort pair.
+
+   For the Workflow runtime, invoke the production entry point
+   `${CLAUDE_PLUGIN_ROOT}/scripts/claude-investigation-host.cjs`, which pins
+   `${CLAUDE_PLUGIN_ROOT}/workflows/investigation-research.mjs` and delegates to
+   the generic host binding. The host call is:
+
+   ```text
+   const workflowHost = registerInvestigationWorkflowHost({
+     agent, parallel, phase, log,
+     capabilities, recorder, applicationEvidence
+   })
+   await workflowHost.run({ invId, invPath, problemStatement, referencePath,
+                            artifactLanguage, contextPacketRequired: true, lines })
+   ```
+
+   Before the fan-out, build one packet for each research line with
+   `${CLAUDE_PLUGIN_ROOT}/scripts/context-packet.cjs`. Use the investigation
+   worktree as `root`, role `research`, subject `${invId}:${line.id}`, the
+   authenticated `sourceRevision`, the ADR-014 policy object and its
+   `policy_hash`, the full problem/contract reference plus every declared
+   source reference, and `roleContext: { problem_statement, source_refs }`.
+   Include the current backlog selection, source hashes and a
+   `whySelected` map. Put the resulting serializable object in
+   `line.contextPacket`; the research workflow passes it as
+   `context.contextPacket` and fences it as DATA in each line prompt. The
+   adapter validates the role, subject, policy hash, root and live source
+   digests before the callback runs. Missing ids, altered sources, symlink
+   escapes and a packet carrying model/capability/callback fields are hard
+   failures. The packet's explicit empty backlog and overflow record remain
+   visible to the researcher; required problem, ADR and gate material is never
+   summarized away.
+
+   `registerInvestigationWorkflowHost` is the production host registration;
+   it pins the research DSL and invokes `runClaudeWorkflow` with the native
+   callbacks, so this is not a unit-test-only constructor. The typed
+   `createClaudeWorkflowDispatch` bridge is injected as the sixth
+   workflow binding; the durable recorder, capabilities, and
+   application-evidence callback stay outside serializable `args`. The workflow
+   dispatches all four lines through that bridge in parallel and refuses if any
+   host dependency is absent. Do not use the native Agent tool, a generic
+   session, an in-process fallback, or a direct `agent()` call. For Codex, use the generated agent selected by
+   `codex-agent.cjs select research --json --capabilities-file
+   ${CLAUDE_PLUGIN_ROOT}/codex-capabilities.json [canonical line signals]` and
+   the same dispatch boundary via `createCodexDispatchAdapter`; do not call
+   `spawn_agent` directly. The selector's `--json` result is preflight
+   evidence, not launch authority by itself: the returned selection must still
+   cross `createDispatchBoundary` and produce a durable application receipt.
+
+   When the caller cannot import CommonJS into the native Workflow host, use
+   the executable fixed-route bridge instead. The JSON file contains only the
+   serializable `args`; the host module owns the native callbacks, capabilities,
+   durable recorder, and application evidence:
+
+   ```bash
+   node ${CLAUDE_PLUGIN_ROOT}/scripts/claude-investigation-host.cjs \
+     --args-file /absolute/path/investigation-args.json \
+     --host-module /absolute/path/claude-workflow-host-adapter.cjs
+   ```
+
+   This executable path invokes the same registered host and fixed research
+   workflow; it is not a direct Agent or an unverified subprocess fallback.
+
+   Accept a research result only after its durable boundary receipt is verified.
+   Pass the workflow `artifactContract: planning.v1`, the absolute worktree and
+   investigation paths, the authenticated `sourceRevision`, repository identity,
+   policy hash, and one contained `artifactPaths.<line-id>` for each of the four
+   lines. The prompt tells each worker to write its complete finding to that
+   exact path. The host-owned trusted consumer validates the file bytes and
+   seals a `shipyard.role-artifact.v1` envelope with
+   `shipyard.research-result.v1`, subject `<INV-ID>:<line-id>`, the exact source
+   revision, repository, policy hash, and an `artifact_index` reference. The
+   shared runtime adapter rejects a stale subject/source/policy identity, a
+   missing or altered index, and a forged application receipt before the
+   bounded result is accepted. The callback may return only the line id,
+   `completed|blocked`, a summary of at most 500 characters, and the validated
+   artifact reference; never return a full draft inline.
+
+   The synthesizer reads the four validated references by targeted ranges or
+   files and copies every source, constraint, uncertainty, and command-backed
+   finding into `RESEARCH.md`, `OPTIONS.md`, `RISKS.md`, and
+   `OPEN-QUESTIONS.md`. Missing or duplicated canonical lines remain hard
+   errors. The Codex command path uses the same validator and boundary receipt;
+   it has no inline or direct researcher fallback.
 6. Show the user a summary: how many options, key risks, the list of
    open questions. Next — Step 2.
 

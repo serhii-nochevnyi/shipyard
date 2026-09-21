@@ -44,7 +44,7 @@ doctor:
 	node scripts/shipyard-doctor.cjs
 
 # Fast, deterministic checks for every local edit and every pull request.
-test-fast: test-unit test-graph test-worktree test-worktree-gates test-sentinel test-docs test-hooks
+test-fast: test-unit test-graph test-worktree test-worktree-gates test-gsd-sync test-sentinel test-docs test-hooks test-model-ladder-runtime
 
 # The complete host-side suite. The Codex smoke additionally exercises the
 # network-backed gsd-core conversion and therefore stays out of test-fast.
@@ -61,6 +61,12 @@ test-worktree:
 
 test-worktree-gates:
 	./tests/smoke/worktree-gates-smoke.sh
+
+test-gsd-sync:
+	node plugins/delivery-pipeline/scripts/gsd-sync.cjs --check --json
+
+test-model-ladder-runtime:
+	./tests/smoke/model-ladder-runtime-smoke.sh
 
 test-sentinel:
 	./tests/smoke/sentinel-smoke.sh

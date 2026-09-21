@@ -878,9 +878,9 @@ const conformTrailerFor = (head, baseTree) => `${PREAMBLE}gate_status: arch-revi
 // The carry runner. `--worktree` is passed explicitly rather than relying on the
 // cwd, because that is how base-merge.cjs calls it (an agent's cwd is its own
 // worktree, which may not be the one being merged).
-function carry(fixture, { body, headRefOid, baseRefName = 'base', args, from, to, cwdLog } = {}) {
+function carry(fixture, { body, headRefOid, baseRefName = 'base', args, from, to, cwdLog, prNumber = 9 } = {}) {
   fs.writeFileSync(PRVIEW, JSON.stringify({
-    number: 9,
+    number: prNumber,
     baseRefName,
     body: body === undefined ? conformTrailerFor(fixture.from, fixture.judgedBaseTree) : body,
     ...(headRefOid === null ? {} : { headRefOid: headRefOid || fixture.from }),
@@ -1072,6 +1072,32 @@ test('a sha the repository does not have refuses rather than assuming', () => {
   assert.strictEqual(r.status, 1, `${r.stdout}\n${r.stderr}`);
   assert.strictEqual(r.edited, null);
   assert.ok(/--to/.test(r.stderr), r.stderr);
+});
+
+test('an identical tree from rewritten or unrelated ancestry refuses carry', () => {
+  const fx = carryRepo();
+  g(fx.repo, ['checkout', '-q', '--orphan', 'unrelated']);
+  g(fx.repo, ['rm', '-q', '-r', '--cached', '.']);
+  fs.rmSync(path.join(fx.repo, 'a.txt'));
+  fs.rmSync(path.join(fx.repo, 'child.txt'));
+  fs.writeFileSync(path.join(fx.repo, 'a.txt'), 'x\ny\n');
+  fs.writeFileSync(path.join(fx.repo, 'child.txt'), 'child\n');
+  g(fx.repo, ['add', '.']);
+  g(fx.repo, ['commit', '-qm', 'unrelated same tree']);
+  const unrelated = g(fx.repo, ['rev-parse', 'HEAD']);
+  assert.equal(g(fx.repo, ['rev-parse', `${unrelated}^{tree}`]), fx.fromTree);
+  const r = carry(fx, { to: unrelated });
+  assert.equal(r.status, 1, `${r.stdout}\n${r.stderr}`);
+  assert.equal(r.edited, null);
+  assert.match(r.stderr, /not a descendant|ancestry/);
+});
+
+test('a live response for another PR number refuses carry', () => {
+  const fx = carryRepo();
+  const r = carry(fx, { prNumber: 10 });
+  assert.equal(r.status, 1, `${r.stdout}\n${r.stderr}`);
+  assert.equal(r.edited, null);
+  assert.match(r.stderr, /another PR|requested for #9/);
 });
 
 test('a usage error is a usage error, and costs no PR read', () => {

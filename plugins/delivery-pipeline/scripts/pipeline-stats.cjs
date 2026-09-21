@@ -24,7 +24,9 @@ const fs = require('fs');
 const path = require('path');
 const { execFileSync } = require('child_process');
 const { matchTicketPr } = require(path.join(__dirname, 'ticket-pr-match.cjs'));
-const { loadConfig, ROLES } = require(path.join(__dirname, 'pipeline-config.cjs'));
+const { loadConfig, ROLES, EFFORTS, parseRoute } = require(path.join(__dirname, 'pipeline-config.cjs'));
+const usageAttribution = require(path.join(__dirname, 'usage-attribution.cjs'));
+const runTelemetry = require(path.join(__dirname, 'run-telemetry.cjs'));
 
 const GRAPH_DIR = path.join(process.cwd(), '.planning', 'graph');
 const TICKETS = path.join(GRAPH_DIR, 'tickets.json');
@@ -68,6 +70,13 @@ const journal = fs.existsSync(JOURNAL)
       try { return [JSON.parse(line)]; } catch { return []; }
     })
   : [];
+
+// Usage attribution is a later join, not a substitute for dispatch telemetry.
+// Read its latest revision for the coverage report, while leaving malformed
+// lines visible as a separate data-quality warning instead of discarding the
+// whole ledger or treating every dispatch as joined.
+const usageLedger = usageAttribution.readLedger(GRAPH_DIR);
+const attributionRecords = usageAttribution.latestRecords(usageLedger.records);
 
 const loadedConfig = loadConfig(process.cwd());
 const { config: cfg } = loadedConfig;
@@ -155,7 +164,12 @@ for (const [id, t] of Object.entries(tickets)) {
     pr: pr ? pr.number : null,
     hours_open_to_merge: pr && pr.mergedAt ? hours(Date.parse(pr.createdAt), Date.parse(pr.mergedAt)) : null,
     hours_open: pr && pr.state === 'OPEN' ? hours(Date.parse(pr.createdAt), now) : null,
-    approved: pr && pr.state === 'OPEN' ? pr.reviewDecision === 'APPROVED' : null,
+    // The open-only review-decision pass is best-effort. Missing data means the
+    // API query failed (or did not return this PR), not that GitHub answered
+    // CHANGES_REQUESTED; preserve that distinction for the report consumer.
+    approved: pr && pr.state === 'OPEN'
+      ? (typeof pr.reviewDecision === 'string' ? pr.reviewDecision === 'APPROVED' : null)
+      : null,
     attempts: attempts.length ? Math.max(...attempts.map((e) => Number(e.n) || 0), attempts.length) : 0,
     fix_fixed: outcome('fixed'),
     fix_noop: outcome('no-op'),
@@ -275,11 +289,17 @@ const unknownRoles = [...new Set(
 // lifetime facts. Missing fields are intentional findings: an old or inline
 // path that omits the resolver result cannot be used to tune the ladder.
 const ladderEvents = journal.filter((e) => e.event === 'dispatch' && withinWindow(e.ts));
-const countField = (field) => Object.fromEntries(
-  [...new Set(ladderEvents.map((e) => e[field]).filter((v) => v !== undefined && v !== null && v !== ''))]
-    .sort()
-    .map((value) => [value, ladderEvents.filter((e) => e[field] === value).length])
-);
+const countField = (field) => {
+  const counts = new Map();
+  for (const event of ladderEvents) {
+    const value = event[field];
+    if (value === undefined || value === null || value === '') continue;
+    counts.set(value, (counts.get(value) || 0) + 1);
+  }
+  return Object.fromEntries(
+    [...counts.entries()].sort(([a], [b]) => String(a).localeCompare(String(b)))
+  );
+};
 // Coverage is three separate claims, not one boolean. A dispatch can carry the
 // resolver's requested policy while the spawn did not expose applied effort,
 // and it can carry both while the runtime still hid the concrete model. Folding
@@ -289,17 +309,49 @@ const countField = (field) => Object.fromEntries(
 // model lives. The dynamic executor is resolved at launch and has no file.
 const present = (event, field) =>
   event[field] !== undefined && event[field] !== null && event[field] !== '';
+const concreteEffort = (value) => Array.isArray(EFFORTS) && EFFORTS.includes(value);
 const staticCodexNeedsFile = (event) =>
   event.runtime === 'codex' && event.role !== 'executor' && !present(event, 'agent_file');
+// A parseable route is not enough: the structured columns are the values that
+// downstream comparisons actually group by. If they disagree with the route
+// sentence, treating the row as comparable would silently compare one policy
+// against another. The dispatch recorder writes these fields from the route,
+// so equality is the integrity check for older or hand-written journal rows.
+const canonicalRouteParts = (route) => {
+  if (typeof route !== 'string') return null;
+  const match = /^role=([^\s]+)\s+rung=([^\s]+)\s+model=([^\s]+)\s+signals=(\S+)$/.exec(route.trim());
+  return match ? { role: match[1], rung: match[2], model_key: match[3] } : null;
+};
+const routeValid = (event) => {
+  // ADR-014 routes use concrete runtime selections and a structured rung. Keep
+  // this check intentionally structural: policy fingerprint and receipt
+  // compliance are reported by the independent reconciliation facts below.
+  // A stale but well-formed historical route is still a route, never rewritten
+  // into today's policy.
+  const canonicalRoute = present(event, 'route') ? event.route : event.reason;
+  if (present(event, 'route') || present(event, 'policy_hash') || present(event, 'rung')) {
+    const parsed = canonicalRouteParts(canonicalRoute);
+    return Boolean(parsed)
+      && (!present(event, 'role') || parsed.role === event.role)
+      && (!present(event, 'rung') || parsed.rung === event.rung)
+      && (!present(event, 'logical_rung') || parsed.rung === event.logical_rung)
+      && (!present(event, 'logical_model') || parsed.model_key === event.logical_model);
+  }
+  if (!present(event, 'reason')) return false;
+  const route = parseRoute(event.reason);
+  return Boolean(route)
+    && route.tier.model === event.model
+    && route.effort.effort === event.effort;
+};
 const requestedMissing = (event) => [
-  'model', 'effort', 'reason', 'task_level', 'runtime', 'backend',
+  'model', 'effort', 'reason', 'task_level', 'runtime', 'backend', 'role',
 ].filter((field) => !present(event, field));
 const requestedComparable = (event) =>
-  requestedMissing(event).length === 0 && !staticCodexNeedsFile(event);
+  requestedMissing(event).length === 0 && routeValid(event) && !staticCodexNeedsFile(event);
 const appliedComparable = (event) =>
-  requestedComparable(event) && present(event, 'effort_applied');
+  requestedComparable(event) && concreteEffort(event.effort_applied);
 const observedComparable = (event) =>
-  requestedComparable(event) && present(event, 'observed_model') && present(event, 'observed_effort');
+  requestedComparable(event) && present(event, 'observed_model') && concreteEffort(event.observed_effort);
 const usageJoinComparable = (event) =>
   observedComparable(event) && present(event, 'dispatch_id');
 const attributionStatus = (event) => {
@@ -308,11 +360,55 @@ const attributionStatus = (event) => {
   if (requestedComparable(event)) return 'requested_complete';
   return 'incomplete';
 };
+
+// The ledger and journal are joined only for this report. No source row is
+// mutated, and a dispatch with no attribution record remains unjoined even if
+// it contains an observed provider model. Multiple current records for one
+// dispatch are kept visible as ambiguous rather than selecting one silently.
+// Build the durable-ledger index once: the journal window is bounded but the
+// append-only attribution ledger is not, so scanning it per dispatch makes the
+// report slower as history grows.
+const attributionsByDispatch = new Map();
+for (const record of attributionRecords) {
+  if (!record || !present(record, 'dispatch_id') || !present(record, 'runtime')
+      || !usageAttribution.hasTranscriptIdentity(record)) continue;
+  const matches = attributionsByDispatch.get(record.dispatch_id) || [];
+  matches.push(record);
+  attributionsByDispatch.set(record.dispatch_id, matches);
+}
+const ladderFacts = ladderEvents.map((event) => {
+  const matches = (attributionsByDispatch.get(event.dispatch_id) || [])
+    .filter((record) => present(event, 'runtime') && record.runtime === event.runtime);
+  return usageAttribution.reconcileTelemetry(event, {
+    usageMatches: matches,
+    usageAmbiguous: matches.length > 1,
+  });
+});
+const reconciliation = usageAttribution.summarizeTelemetry(ladderFacts);
+const attributionReconciliation = usageAttribution.summarizeTelemetry(attributionRecords);
+const telemetryInputs = [
+  ...ladderEvents.map((event) => ({ ...event, event: 'dispatch', phase: 'launch' })),
+  ...attributionRecords.map((record) => ({ ...record, event: 'usage', phase: 'usage' })),
+  ...journal.filter((event) => ['receipt', 'quality', 'recovery', 'outcome'].includes(event.event)),
+];
+const runTelemetryReport = runTelemetry.joinTelemetry(telemetryInputs);
+const runTelemetrySummary = {
+  schema_version: runTelemetryReport.schema_version,
+  coverage: runTelemetryReport.coverage,
+  policy_fingerprints: runTelemetryReport.policy_fingerprints,
+  treatment_fingerprints: runTelemetryReport.treatment_fingerprints,
+  duplicate_observations: runTelemetryReport.duplicate_observations,
+  savings: runTelemetryReport.savings,
+};
+const telemetry = Object.fromEntries(
+  Object.entries(reconciliation).filter(([key]) => key !== 'records')
+);
 const missingAttribution = Object.fromEntries([
-  'model', 'effort', 'reason', 'task_level', 'runtime', 'backend', 'agent_file',
+  'model', 'effort', 'reason', 'task_level', 'runtime', 'backend', 'role', 'agent_file',
   'effort_applied', 'observed_model', 'observed_effort', 'dispatch_id',
 ].map((field) => [field, ladderEvents.filter((e) => {
   if (field === 'agent_file') return staticCodexNeedsFile(e);
+  if (field === 'effort_applied' || field === 'observed_effort') return !concreteEffort(e[field]);
   return !present(e, field);
 }).length]));
 const ladder = {
@@ -323,13 +419,13 @@ const ladder = {
   dispatches: ladderEvents.length,
   missing_model: ladderEvents.filter((e) => !e.model).length,
   missing_effort: ladderEvents.filter((e) => !e.effort).length,
-  missing_effort_applied: ladderEvents.filter((e) => !e.effort_applied).length,
-  missing_route: ladderEvents.filter((e) => !e.reason).length,
+  missing_effort_applied: ladderEvents.filter((e) => !concreteEffort(e.effort_applied)).length,
+  missing_route: ladderEvents.filter((e) => !routeValid(e)).length,
   missing_task_level: ladderEvents.filter((e) => !e.task_level).length,
   missing_runtime: ladderEvents.filter((e) => !e.runtime).length,
   missing_backend: ladderEvents.filter((e) => !e.backend).length,
   missing_observed_model: ladderEvents.filter((e) => !e.observed_model).length,
-  missing_observed_effort: ladderEvents.filter((e) => !e.observed_effort).length,
+  missing_observed_effort: ladderEvents.filter((e) => !concreteEffort(e.observed_effort)).length,
   missing_dispatch_id: ladderEvents.filter((e) => !e.dispatch_id).length,
   missing_agent_file: ladderEvents.filter((e) => e.runtime === 'codex' && e.role !== 'executor' && !e.agent_file).length,
   requested_comparable: ladderEvents.filter(requestedComparable).length,
@@ -348,6 +444,28 @@ const ladder = {
   by_observed_model: countField('observed_model'),
   by_observed_effort: countField('observed_effort'),
   by_dispatch_id: countField('dispatch_id'),
+  // Policy-aware dimensions are additive to the historical aliases above.
+  // They are sourced from the resolved/applied/observed facts, so a requested
+  // tier alias is never relabelled as a concrete provider model.
+  by_rung: reconciliation.by_rung,
+  by_concrete_model: reconciliation.by_concrete_model,
+  by_fired_signal: reconciliation.by_fired_signal,
+  by_requested_model: reconciliation.by_requested_model,
+  by_requested_effort: reconciliation.by_requested_effort,
+  by_applied_effort: reconciliation.by_applied_effort,
+  by_observed_effort_policy: reconciliation.by_observed_effort,
+  findings: reconciliation.findings,
+  by_finding: reconciliation.findings,
+  reconciliation,
+  telemetry,
+  run_telemetry: runTelemetrySummary,
+  policy_resolution: reconciliation.coverage.policy_resolution,
+  runtime_application: reconciliation.coverage.runtime_application,
+  provider_observation: reconciliation.coverage.provider_observation,
+  usage_join: reconciliation.coverage.usage_join,
+  resolution: reconciliation.coverage.policy_resolution,
+  application: reconciliation.coverage.runtime_application,
+  observation: reconciliation.coverage.provider_observation,
 };
 // Keep the status grouping derived from the same predicates above. It is added
 // after the generic field counters so the journal rows themselves are never
@@ -376,6 +494,133 @@ const newestLandedPhase = rows
 const stranded = rows.filter((r) =>
   r.status === 'pending' && !r.pr && !r.attempts && (phaseNum(r.phase) || 0) < newestLandedPhase);
 
+const runtimeProvider = { claude: 'anthropic', codex: 'openai' };
+const configuredAccountScope = process.env.SHIPYARD_CAPACITY_ACCOUNT_SCOPE
+  || process.env.SHIPYARD_ACCOUNT_SCOPE || null;
+const textValue = (value) => typeof value === 'string' && value.trim() ? value.trim() : null;
+const treatmentValue = (value) => {
+  if (!value || typeof value !== 'object') return textValue(value);
+  if (typeof value.treatment_id === 'string') return textValue(value.treatment_id);
+  if (typeof value.treatment === 'string') return textValue(value.treatment);
+  if (value.treatment && typeof value.treatment === 'object') {
+    return textValue(value.treatment.id || value.treatment.name || value.treatment_id);
+  }
+  return null;
+};
+const armValue = (value) => textValue(value && (value.arm || value.cohort_arm));
+const providerValue = (value, runtime) => textValue(value && value.provider) || runtimeProvider[runtime] || null;
+const explicitAccountValue = (value) => textValue(value && (value.account_scope || value.accountScope
+  || value.provider_account_scope));
+const dispatchMatches = new Map();
+for (const record of attributionRecords) {
+  if (record && present(record, 'dispatch_id')) {
+    const list = dispatchMatches.get(record.dispatch_id) || [];
+    list.push(record);
+    dispatchMatches.set(record.dispatch_id, list);
+  }
+}
+const optimizationDispatches = ladderFacts.map((fact, index) => {
+  const event = ladderEvents[index] || {};
+  const usage = dispatchMatches.get(fact.dispatch_id || event.dispatch_id) || [];
+  const usageRecord = usage.length === 1 ? usage[0] : null;
+  const runtime = fact.runtime || event.runtime || (usageRecord && usageRecord.runtime) || null;
+  return {
+    dispatch_id: fact.dispatch_id || textValue(event.dispatch_id),
+    ticket: textValue(event.ticket),
+    runtime,
+    provider: providerValue(event, runtime) || providerValue(usageRecord, runtime),
+    account_scope: explicitAccountValue(event) || explicitAccountValue(usageRecord) || configuredAccountScope,
+    role: fact.role || textValue(event.role),
+    task_level: textValue(event.task_level),
+    treatment_id: treatmentValue(event) || treatmentValue(usageRecord),
+    arm: armValue(event) || armValue(usageRecord),
+    requested: { model: fact.requested_model || null, effort: fact.requested_effort || null },
+    applied: { model: fact.applied_model || null, effort: fact.applied_effort || null },
+    observed: { model: fact.observed_model || null, effort: fact.observed_effort || null },
+    usage: {
+      join_status: fact.usage_join_status || 'unknown',
+      matches: usage.length,
+      comparison_ready: fact.comparison_ready === true,
+    },
+  };
+});
+const optimizationScopes = new Map();
+const addOptimizationScope = (provider, accountScope) => {
+  const p = textValue(provider);
+  const a = textValue(accountScope);
+  if (!p && !a) return;
+  const key = `${p || ''}\u0000${a || ''}`;
+  optimizationScopes.set(key, { provider: p, account_scope: a });
+};
+for (const item of optimizationDispatches) addOptimizationScope(item.provider, item.account_scope);
+for (const record of attributionRecords) addOptimizationScope(record.provider,
+  explicitAccountValue(record) || configuredAccountScope);
+if (configuredAccountScope) {
+  addOptimizationScope(process.env.SHIPYARD_CAPACITY_PROVIDER, configuredAccountScope);
+}
+const optimizationInput = {
+  schema_version: 'shipyard.optimization-input.v1',
+  collector: 'pipeline-stats.cjs',
+  window: {
+    label: windowLabel,
+    from: sinceTs === null ? null : new Date(sinceTs).toISOString(),
+    to: new Date(now).toISOString(),
+  },
+  policy: {
+    model_ladder: cfg.model_ladder,
+    valid: loadedConfig.valid,
+    policy_error: loadedConfig.valid ? null : loadedConfig.error,
+  },
+  provider_scopes: [...optimizationScopes.values()].sort((a, b) =>
+    `${a.provider || ''}\u0000${a.account_scope || ''}`.localeCompare(`${b.provider || ''}\u0000${b.account_scope || ''}`)),
+  tickets: rows.map((row) => ({
+    ticket: row.ticket,
+    phase: row.phase,
+    status: row.status,
+    pr: row.pr,
+    attempts: row.attempts,
+    fix_fixed: row.fix_fixed,
+    fix_noop: row.fix_noop,
+    escalations: row.escalations,
+    quality: {
+      unguarded_merge: row.unguarded_merge ? 1 : 0,
+      checkpoint_unauthorized_merge: row.checkpoint_unauthorized_merge ? 1 : 0,
+    },
+  })),
+  dispatches: optimizationDispatches,
+  usage: {
+    attribution_records: attributionRecords.map((record) => ({
+      observation_id: textValue(record.observation_id),
+      dispatch_id: textValue(record.dispatch_id),
+      session_id: textValue(record.session_id),
+      request_id: textValue(record.request_id),
+      message_id: textValue(record.message_id),
+      runtime: textValue(record.runtime),
+      provider: providerValue(record, record.runtime),
+      account_scope: explicitAccountValue(record) || configuredAccountScope,
+      treatment_id: treatmentValue(record),
+      arm: armValue(record),
+      kind: textValue(record.kind),
+      model: textValue(record.model),
+      effort: textValue(record.effort),
+      observed_model: textValue(record.observed_model),
+      observed_effort: textValue(record.observed_effort),
+      completion_status: textValue(record.completion_status),
+    })),
+    coverage: reconciliation.coverage,
+    warnings: usageLedger.warnings,
+  },
+  run_telemetry: runTelemetrySummary,
+  quality: {
+    unguarded_merges: unguarded.length,
+    checkpoint_unauthorized_merges: rows.filter((row) => row.checkpoint_unauthorized_merge).length,
+    unknown_roles: unknownRoles.length,
+    stranded_tickets: stranded.length,
+    telemetry_findings: reconciliation.findings,
+    run_telemetry_savings: runTelemetryReport.savings,
+  },
+};
+
 if (asJson) {
   console.log(JSON.stringify({
     tickets: rows,
@@ -386,8 +631,21 @@ if (asJson) {
     reuse_scans: reuseScans.length,
     reuse_hits: reuseHits,
     journal_events: journal.length,
+    usage_attribution_records: attributionRecords.length,
+    usage_attribution_warnings: usageLedger.warnings,
+    usage_reconciliation: attributionReconciliation,
     prs_truncated: prsTruncated,
+    // A zero-row result is not the same as a reachable repository with no
+    // matching PRs. Keep the outage visible to JSON consumers too; otherwise
+    // automation can treat incomplete GitHub data as a clean pending board.
+    unreachable_repos: unreachableRepos,
     ladder,
+    optimization_input: optimizationInput,
+    run_telemetry: runTelemetrySummary,
+    // The detailed per-dispatch facts live under ladder.reconciliation. Keep
+    // the top-level alias summary-only so JSON consumers get the same coverage
+    // without serializing every fact twice.
+    reconciliation: telemetry,
   }, null, 2));
   process.exit(0);
 }
@@ -395,7 +653,53 @@ if (prsTruncated) {
   console.log(`⚠ the PR listing hit its limit (${cfg.pr_fetch_limit}) — some tickets may show as pending; raise pipeline.pr_fetch_limit`);
 }
 if (unreachableRepos.length) {
-  console.log(`⚠ could not list PRs for ${unreachableRepos.join(', ')} — every ticket in ${unreachableRepos.length > 1 ? 'those repos' : 'that repo'} reads as pending here regardless of what actually shipped`);
+  const unreachableLabels = unreachableRepos.map((repo) => repo || 'the project repository');
+  console.log(`⚠ could not list PRs for ${unreachableLabels.join(', ')} — every ticket in ${unreachableRepos.length > 1 ? 'those repos' : 'that repo'} reads as pending here regardless of what actually shipped`);
+}
+if (usageLedger.warnings.length) {
+  console.log(`⚠ [${windowLabel}] usage attribution ledger has ${usageLedger.warnings.length} malformed line(s) — those joins remain unknown`);
+}
+if (ladder.dispatches) {
+  console.log(
+    `ladder [${windowLabel}]: ${ladder.mode}, ${ladder.dispatches} dispatches; ` +
+    `${ladder.dispatches - ladder.missing_model}/${ladder.dispatches} with model, ` +
+    `${ladder.dispatches - ladder.missing_task_level}/${ladder.dispatches} with task level, ` +
+    `${ladder.dispatches - ladder.missing_effort_applied}/${ladder.dispatches} with applied effort, ` +
+    `${ladder.dispatches - ladder.missing_observed_model}/${ladder.dispatches} with observed model; ` +
+    `${ladder.requested_comparable}/${ladder.dispatches} routing-comparable, ` +
+    `${ladder.applied_comparable}/${ladder.dispatches} applied-comparable, ` +
+    `${ladder.observed_comparable}/${ladder.dispatches} observed-comparable, ` +
+    `${ladder.usage_join_comparable}/${ladder.dispatches} usage-join-comparable`
+  );
+  const gaps = [];
+  if (ladder.missing_model) gaps.push(`${ladder.missing_model} missing model`);
+  if (ladder.missing_effort) gaps.push(`${ladder.missing_effort} missing requested effort`);
+  if (ladder.missing_effort_applied) gaps.push(`${ladder.missing_effort_applied} missing applied effort`);
+  if (ladder.missing_route) gaps.push(`${ladder.missing_route} missing route`);
+  if (ladder.missing_task_level) gaps.push(`${ladder.missing_task_level} missing task level`);
+  if (ladder.missing_runtime) gaps.push(`${ladder.missing_runtime} missing runtime`);
+  if (ladder.missing_backend) gaps.push(`${ladder.missing_backend} missing backend`);
+  if (ladder.missing_agent_file) gaps.push(`${ladder.missing_agent_file} Codex dispatches missing agent file`);
+  if (ladder.missing_observed_model) gaps.push(`${ladder.missing_observed_model} missing observed model`);
+  if (ladder.missing_observed_effort) gaps.push(`${ladder.missing_observed_effort} missing observed effort`);
+  if (ladder.missing_dispatch_id) gaps.push(`${ladder.missing_dispatch_id} missing dispatch correlation id`);
+  if (gaps.length) {
+    console.log(`⚠ [${windowLabel}] ladder telemetry gaps: ${gaps.join(', ')} — those dispatches cannot be compared for cost or quality`);
+  }
+  const coverage = reconciliation.coverage;
+  console.log(
+    `telemetry [${windowLabel}]: ${coverage.policy_resolution.current}/${ladder.dispatches} policy-resolved, ` +
+    `${coverage.runtime_application.applied}/${ladder.dispatches} runtime-applied, ` +
+    `${coverage.provider_observation.observed}/${ladder.dispatches} provider-observed, ` +
+    `${coverage.usage_join.joined}/${ladder.dispatches} usage-joined; ` +
+    `${reconciliation.compliant} compliant, ${reconciliation.comparison_ready} comparison-ready`
+  );
+  const findings = Object.entries(reconciliation.findings)
+    .filter(([, count]) => count > 0)
+    .map(([name, count]) => `${count} ${name}`);
+  if (findings.length) {
+    console.log(`⚠ [${windowLabel}] policy reconciliation findings: ${findings.join(', ')} — each fact remains independently visible`);
+  }
 }
 if (ladder.dispatches) {
   console.log(

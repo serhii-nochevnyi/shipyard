@@ -2,6 +2,8 @@
 'use strict';
 // Inventory only: source notes and installed GSD are never mutated.
 const fs=require('node:fs'),path=require('node:path'),crypto=require('node:crypto');
+const {withLock,writeAtomic,lockDirFor}=require('./lock.cjs');
+const {candidateFromReport}=require('./optimization-report.cjs');
 const STATES=new Set(['untriaged','verified_open','planned','in_progress','verified_closed','deferred','superseded']);
 const hash=(s)=>crypto.createHash('sha256').update(s).digest('hex');
 function sections(text, fallback) {
@@ -87,8 +89,42 @@ function inventory(root, manifest=null, query='') {
     evidence_validation:'manifest structure only; no live closure or landed-commit verification',
     read_only:true};
 }
+function writeOptimizationCandidate(root, report) {
+  const project=path.resolve(root), file=path.join(project,'.planning','graph','optimization-backlog.json');
+  const candidate=candidateFromReport(report);
+  return withLock(lockDirFor(project),'optimization-backlog',()=>{
+    let manifest;
+    try { manifest=JSON.parse(fs.readFileSync(file,'utf8')); }
+    catch(e) { if(e.code!=='ENOENT') throw new Error(`optimization backlog is invalid: ${e.message}`); }
+    if(!manifest) manifest={schema_version:'shipyard.optimization-backlog.v1',candidates:[]};
+    if(manifest.schema_version!=='shipyard.optimization-backlog.v1'||!Array.isArray(manifest.candidates))
+      throw new Error('optimization backlog has an unknown schema');
+    const existing=manifest.candidates.find((item)=>item&&item.candidate_id===candidate.candidate_id);
+    if(existing) {
+      if(existing.report_digest!==candidate.report_digest) throw new Error('optimization candidate identity conflict');
+      return {written:false,idempotent:true,file,manifest};
+    }
+    const next={...manifest,candidates:[...manifest.candidates,candidate].sort((a,b)=>String(a.candidate_id).localeCompare(String(b.candidate_id)))};
+    fs.mkdirSync(path.dirname(file),{recursive:true});
+    writeAtomic(file,`${JSON.stringify(next,null,2)}\n`);
+    return {written:true,idempotent:false,file,manifest:next,candidate};
+  },{label:'optimization-backlog'});
+}
 function main(args) {
-  if(args.length===1&&args[0]==='--help'){console.log('usage: node backlog-index.cjs --root <project> [--manifest <manifest.json>] [--query <text>] [--limit <positive integer>]\nRead-only JSON; default limit 20. No source or installed GSD writes.');return;}
+  if(args.length===1&&args[0]==='--help'){console.log('usage: node backlog-index.cjs --root <project> [--manifest <manifest.json>] [--query <text>] [--limit <positive integer>]\n       node backlog-index.cjs candidate --root <project> --report <report.json>\nThe default inventory is read-only; candidate writes are atomic and never auto-launch work.');return;}
+  if(args[0]==='candidate') {
+    const opts={};
+    for(let i=1;i<args.length;i+=2) {
+      const key=args[i],v=args[i+1];
+      if(!['--root','--report'].includes(key)||v===undefined||v.startsWith('--')||key in opts)
+        throw new Error('invalid, duplicate or missing candidate argument; see --help');
+      opts[key]=v;
+    }
+    if(!opts['--root']||!opts['--report'])throw new Error('candidate requires --root and --report');
+    const report=JSON.parse(fs.readFileSync(path.resolve(opts['--report']),'utf8'));
+    console.log(JSON.stringify(writeOptimizationCandidate(opts['--root'],report),null,2));
+    return;
+  }
   const opts={};
   for(let i=0;i<args.length;i+=2) {
     const key=args[i],v=args[i+1];
@@ -105,4 +141,4 @@ function main(args) {
   console.log(JSON.stringify(out,null,2));
 }
 if(require.main===module){try{main(process.argv.slice(2));}catch(e){console.error(`backlog-index: ${e.message}`);process.exitCode=2;}}
-module.exports={inventory,sections};
+module.exports={inventory,sections,writeOptimizationCandidate};

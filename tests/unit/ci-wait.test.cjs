@@ -69,6 +69,10 @@ const waits = (dir) => {
   try { return JSON.parse(fs.readFileSync(path.join(dir, '.planning', 'graph', 'ci-waits.json'), 'utf8')); }
   catch { return null; }
 };
+const waitEvents = (dir) => {
+  try { return JSON.parse(fs.readFileSync(path.join(dir, '.planning', 'graph', 'wait-events.json'), 'utf8')); }
+  catch { return null; }
+};
 const escalations = (dir) => {
   try { return JSON.parse(fs.readFileSync(path.join(dir, '.planning', 'graph', 'escalations.json'), 'utf8')); }
   catch { return null; }
@@ -91,6 +95,27 @@ function stubGh(dir, rows, exit = 0) {
     `  "pr checks") cat <<'J'\n${JSON.stringify(rows)}\nJ\n    exit ${exit} ;;\n` +
     '  *) echo "stub gh: unhandled: $*" >&2; exit 1 ;;\n' +
     'esac\n', { mode: 0o755 });
+  return bin;
+}
+
+function stubGhSequence(dir, sequence) {
+  const bin = path.join(dir, 'bin');
+  fs.mkdirSync(bin, { recursive: true });
+  const counter = path.join(dir, 'gh-call-count');
+  fs.writeFileSync(path.join(bin, 'gh'),
+    '#!/bin/sh\n' +
+    `counter=${JSON.stringify(counter)}\n` +
+    'count=0\n' +
+    '[ -f "$counter" ] && count=$(cat "$counter")\n' +
+    'count=$((count + 1))\n' +
+    'printf "%s" "$count" > "$counter"\n' +
+    'if [ "$count" -le 1 ]; then\n' +
+    `  cat <<'JSON'\n${JSON.stringify(sequence[0].rows)}\nJSON\n` +
+    `  exit ${sequence[0].exit}\n` +
+    'else\n' +
+    `  cat <<'JSON'\n${JSON.stringify(sequence[1].rows)}\nJSON\n` +
+    `  exit ${sequence[1].exit}\n` +
+    'fi\n', { mode: 0o755 });
   return bin;
 }
 
@@ -229,7 +254,10 @@ test('it returns the moment a PR settles, green', () => {
   assert.equal(json.waited, true, 'and reports that it waited');
   assert.equal(json.settled, 'T-01-01', 'naming which ticket moved');
   assert.equal(json.pr, 101, 'and its PR');
-  assert.deepEqual(json.checks, { total: 2, pending: 0, failing: 0 }, 'with the tally the caller needs');
+  assert.equal(json.checks.total, 2, 'with the tally the caller needs');
+  assert.equal(json.checks.pending, 0);
+  assert.equal(json.checks.failing, 0);
+  assert.equal(json.checks.rows.length, 2, 'the raw rows remain available for semantic observation');
 });
 
 test('RED counts as settled — a waiter must not hold a run hostage to a failure', () => {
@@ -287,6 +315,28 @@ test('a timeout returns 0 and tells the caller to re-sync anyway', () => {
   assert.equal(r.code, 0, 'a waiter that dies noisily teaches the loop to stop calling it');
   assert.ok(/nothing settled/.test(r.out), 'the human form says what happened');
   assert.ok(/Re-sync anyway/.test(r.out), 'and what to do about it');
+});
+
+test('a pending-to-failed CI transition is durable while legacy stall handling remains intact', () => {
+  const dir = project(ciOnly(), stateWith());
+  const bin = stubGhSequence(dir, [
+    { rows: [{ name: 'Tests', state: 'IN_PROGRESS', bucket: 'pending' }], exit: 8 },
+    { rows: [{ name: 'Tests', state: 'FAILURE', bucket: 'fail' }], exit: 1 },
+  ]);
+  const result = asJson(null, null, ['--timeout', '3', '--interval', '1'], { dir, bin });
+  assert.equal(result.code, 0, 'the waiter returns normally on the live transition');
+  assert.equal(result.json.settled, 'T-01-01', 'the failure is a settled CI answer');
+  const inbox = waitEvents(dir);
+  assert.equal(inbox.schema_version, 1, 'the durable inbox is versioned');
+  const records = Object.values(inbox.records);
+  assert.equal(records.length, 1, 'the real ci-wait producer wrote one run record');
+  assert.ok(result.json.wait_event && result.json.wait_event.action_id,
+    'the semantic transition is returned to the delivery consumer');
+  const updated = records[0];
+  assert.equal(updated.transition_sequence, 1, 'one semantic transition was recorded');
+  assert.equal(updated.pending_action.action_id, result.json.wait_event.action_id,
+    'the event is persisted before the waiter returns');
+  assert.equal(waits(dir).tickets['T-01-01'], undefined, 'settling still clears only the legacy CI stall record');
 });
 
 test('an unreachable gh is survived, not fatal', () => {

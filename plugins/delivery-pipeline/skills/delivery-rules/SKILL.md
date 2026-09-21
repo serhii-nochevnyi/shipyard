@@ -1,6 +1,6 @@
 ---
 name: delivery-rules
-description: Delivery-conveyor rules for GSD planner/executor agents — plan frontmatter contract, delivery block, branch naming, scope discipline. Injected via agent_skills (global:shipyard:delivery-rules); also useful when authoring or editing PLAN.md files by hand.
+description: Delivery-conveyor rules for GSD planner/executor agents — plan frontmatter contract, delivery block, branch naming, scope discipline. Injected via the project-relative .shipyard/generated/gsd-delivery-rules projection; also useful when authoring or editing PLAN.md files by hand.
 ---
 
 # Delivery conveyor rules
@@ -12,6 +12,25 @@ these rules keep them machine-consumable by the conveyor's deterministic layer.
 **Language.** All artifacts — plans, frontmatter, commits, code, PR bodies — are
 written in English. When addressing the user directly, reply in the user's
 language; English is for the artifacts, the user's language is for conversation.
+
+## Rule zero: make claims executable
+
+Every checkable claim about the codebase, a test, delivery state, or a completed
+action must name the exact command that checked it and the relevant path,
+output, or exit status. If a claim cannot be checked by a command, label it as
+an assumption or unknown and state the next check. A claim without
+command-backed evidence is not verification.
+
+## Code comments
+
+Keep new code comments rare and purposeful. The pre-push gate allows only
+required directives, licence/generated markers, and short one-line
+`@invariant:`, `@security:`, or `@contract:` markers up to 120 characters.
+Explanatory, historical, ticket, and multi-line comments block publication.
+Before a PR push, the conveyor runs `scripts/comment-policy.cjs` over added
+code/config lines. Its explicit `clean --apply` action removes only listed
+full-line additions; review the dry-run first, then rerun verification and
+amend the commit.
 
 ## For planners (writing PLAN.md)
 

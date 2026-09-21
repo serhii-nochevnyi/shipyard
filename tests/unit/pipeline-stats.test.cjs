@@ -34,6 +34,7 @@ const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
 const { suite, test, done, assert } = require(path.join(__dirname, 'assert-harness.cjs'));
+const modelPolicy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
 
 const SCRIPT = path.join(
   __dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'pipeline-stats.cjs'
@@ -78,11 +79,16 @@ const guardMerge = (id, pr, preauthorized) => JSON.stringify({
 // open-only review-decision pass. Anything else exits non-zero, which the script
 // already tolerates — `pr view` for merged-by attribution is only reached for
 // UNGUARDED merges, and a checkpoint is never one of those.
-function stubGh(dir, prs) {
+function stubGh(dir, prs, unreachableRepo = null) {
   const bin = path.join(dir, 'bin');
   fs.mkdirSync(bin, { recursive: true });
+  const unreachable = unreachableRepo === '__project__'
+    ? 'case "$*" in *"--repo"*) ;; *) echo "unreachable" >&2; exit 1 ;; esac\n'
+    : unreachableRepo
+      ? `case "$*" in *"--repo ${unreachableRepo}"*) echo "unreachable" >&2; exit 1 ;; esac\n`
+      : '';
   fs.writeFileSync(path.join(bin, 'gh'),
-    '#!/bin/sh\n' +
+    '#!/bin/sh\n' + unreachable +
     'case "$*" in\n' +
     '  *"--state open"*) echo "[]" ;;\n' +
     `  *"--state all"*) cat <<'J'\n${JSON.stringify(prs)}\nJ\n    ;;\n` +
@@ -92,19 +98,25 @@ function stubGh(dir, prs) {
 }
 
 // tickets → journal lines → PR rows, in one temp project.
-function project({ tickets, journal, prs, config, configRaw }) {
+function project({ tickets, journal, prs, config, configRaw, unreachableRepo, attributions }) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-stats-'));
   const g = path.join(dir, '.planning', 'graph');
   fs.mkdirSync(g, { recursive: true });
   fs.writeFileSync(path.join(g, 'tickets.json'), JSON.stringify({ tickets }));
   fs.writeFileSync(path.join(g, 'delivery-log.jsonl'), journal.map((l) => `${l}\n`).join(''));
+  if (Array.isArray(attributions)) {
+    fs.writeFileSync(
+      path.join(g, 'usage-attribution.jsonl'),
+      attributions.map((record) => `${JSON.stringify(record)}\n`).join(''),
+    );
+  }
   if (config !== undefined || configRaw !== undefined) {
     fs.writeFileSync(
       path.join(dir, '.planning', 'config.json'),
       configRaw !== undefined ? configRaw : JSON.stringify(config, null, 2),
     );
   }
-  const bin = stubGh(dir, prs);
+  const bin = stubGh(dir, prs, unreachableRepo);
   return { dir, bin };
 }
 
@@ -120,6 +132,62 @@ const asJson = (fixture) => {
   const r = run(fixture, ['--json']);
   return { code: r.code, json: JSON.parse(r.out) };
 };
+
+function adrReceipt(resolution, over = {}) {
+  const receipt = {
+    receipt_type: 'adr-014.application',
+    runtime: resolution.runtime,
+    role: resolution.role,
+    dispatch_id: resolution.dispatch_id,
+    launch_id: `launch-${resolution.dispatch_id}`,
+    requested_model: resolution.requested_model,
+    requested_effort: resolution.requested_effort,
+    applied_model: resolution.requested_model,
+    applied_effort: resolution.requested_effort,
+    observed_model: resolution.requested_model,
+    observed_effort: resolution.requested_effort,
+    policy_hash: resolution.policy_hash,
+    compliance: 'verified',
+    compliance_proof: {
+      status: 'verified',
+      boundary: 'adr-014.dispatch-boundary',
+      policy_hash: resolution.policy_hash,
+      dispatch_id: resolution.dispatch_id,
+      launch_id: `launch-${resolution.dispatch_id}`,
+    },
+    ...(resolution.agent_file ? {
+      agent_file: resolution.agent_file,
+      agent_file_digest: 'a'.repeat(64),
+    } : {}),
+    ...over,
+  };
+  if (!over.compliance_proof) {
+    receipt.compliance_proof = {
+      status: 'verified',
+      boundary: 'adr-014.dispatch-boundary',
+      policy_hash: receipt.policy_hash,
+      dispatch_id: receipt.dispatch_id,
+      launch_id: receipt.launch_id,
+    };
+  }
+  return receipt;
+}
+
+function adrDispatch({ runtime, role, signals = {}, dispatch_id, receipt = true, receipt_over = {}, ...over }) {
+  const resolution = modelPolicy.resolveDispatch({ runtime, role, signals, dispatch_id });
+  const event = {
+    ts: recently,
+    event: 'dispatch',
+    ticket: `T-36-${dispatch_id}`,
+    task_level: 'complex',
+    reason: resolution.route,
+    ...resolution,
+    launch_id: `launch-${dispatch_id}`,
+    ...(receipt ? { application_receipt: adrReceipt(resolution, receipt_over) } : {}),
+    ...over,
+  };
+  return event;
+}
 
 // The line, not the whole report: an assertion over the full output cannot tell
 // which line named a ticket, and "which line" is the entire subject here.
@@ -243,6 +311,28 @@ test('a hand-written merge event with no `by` is still a human merge', () => {
   assert.strictEqual(lineWith(out, /^⚠.*pre-authoriz/).length, 0, `and it is not the warning case:\n${out}`);
 });
 
+test('an unavailable open-only review decision stays unknown rather than becoming false', () => {
+  const id = 'T-27-11';
+  const { code, json } = asJson({
+    tickets: { ...ticket(id, { human_checkpoint: false }) },
+    journal: [],
+    prs: [{
+      number: 73,
+      state: 'OPEN',
+      isDraft: false,
+      headRefName: `ticket/${id}-x`,
+      baseRefName: 'epic/27-x',
+      createdAt: iso(Date.now() - DAY),
+      mergedAt: null,
+      url: 'https://example.invalid/pull/73',
+      title: `${id}: something`,
+    }],
+  });
+  assert.strictEqual(code, 0);
+  const row = json.tickets.find((entry) => entry.ticket === id);
+  assert.strictEqual(row.approved, null, 'a missing reviewDecision is an unknown API result');
+});
+
 suite('pipeline-stats — ladder coverage is windowed and explicit');
 
 test('dispatch routing fields are grouped without turning missing observations into zeroes', () => {
@@ -303,6 +393,52 @@ test('dispatch routing fields are grouped without turning missing observations i
   assert.strictEqual(json.ladder.missing_attribution.dispatch_id, 1);
 });
 
+test('a parseable route whose structured fields disagree is not comparable', () => {
+  const contradictory = {
+    ts: recently, event: 'dispatch', ticket: 'T-01-04', role: 'executor',
+    model: 'opus', effort: 'high',
+    reason: 'tier=level:routine(sonnet) effort=row(high)', task_level: 'routine',
+    runtime: 'claude', backend: 'workflow',
+  };
+  const { code, json } = asJson({
+    tickets: {}, journal: [JSON.stringify(contradictory)], prs: [],
+    config: { delivery_pipeline: { model_ladder: 'adaptive' } },
+  });
+  assert.strictEqual(code, 0);
+  assert.strictEqual(json.ladder.missing_route, 1);
+  assert.strictEqual(json.ladder.requested_comparable, 0);
+});
+
+test('an ADR-014 route model key must agree with the event logical model', () => {
+  const row = adrDispatch({ runtime: 'codex', role: 'executor', dispatch_id: 'wrong-model-key' });
+  row.logical_model = 'astra';
+  const { code, json } = asJson({ tickets: {}, journal: [JSON.stringify(row)], prs: [] });
+  assert.strictEqual(code, 0);
+  assert.strictEqual(json.ladder.missing_route, 1);
+  assert.strictEqual(json.ladder.requested_comparable, 0);
+});
+
+test('non-concrete effort states do not count as applied or observed coverage', () => {
+  const row = {
+    ts: recently, event: 'dispatch', ticket: 'T-01-01', role: 'executor',
+    model: 'sonnet', effort: 'high', effort_applied: 'unsupported',
+    reason: 'tier=level:routine(sonnet) effort=row(high)', task_level: 'routine',
+    runtime: 'claude', backend: 'agent', observed_model: 'claude-sonnet-5',
+    observed_effort: 'unknown', dispatch_id: 'dispatch-no-effort',
+  };
+  const { code, json } = asJson({
+    tickets: {}, journal: [JSON.stringify(row)], prs: [],
+    config: { delivery_pipeline: { model_ladder: 'adaptive' } },
+  });
+  assert.strictEqual(code, 0);
+  assert.strictEqual(json.ladder.requested_comparable, 1);
+  assert.strictEqual(json.ladder.applied_comparable, 0);
+  assert.strictEqual(json.ladder.observed_comparable, 0);
+  assert.strictEqual(json.ladder.missing_effort_applied, 1);
+  assert.strictEqual(json.ladder.missing_observed_effort, 1);
+  assert.equal(json.ladder.by_attribution_status.requested_complete, 1);
+});
+
 test('an invalid policy is visible in the ladder report', () => {
   const { code, json } = asJson({
     tickets: {}, journal: [JSON.stringify({ ts: recently, event: 'dispatch', ticket: 'T-01-01', role: 'executor' })],
@@ -314,12 +450,59 @@ test('an invalid policy is visible in the ladder report', () => {
   assert.strictEqual(json.ladder.mode, 'conservative', 'invalid policy cannot enable a treatment');
 });
 
+test('json reports repositories that could not be reached', () => {
+  const { code, json } = asJson({
+    tickets: {
+      'T-01-01': {
+        phase: '1', risk: 'low', repo: 'org/unreachable',
+        branch: 'ticket/T-01-01-x', title: 'unreachable repository',
+      },
+    },
+    journal: [], prs: [], unreachableRepo: 'org/unreachable',
+  });
+  assert.strictEqual(code, 0);
+  assert.deepStrictEqual(json.unreachable_repos, ['org/unreachable']);
+  assert.strictEqual(json.tickets[0].status, 'pending', 'the row remains conservative while data is unavailable');
+});
+
+test('human output names the project repository when its PR listing is unreachable', () => {
+  const r = run({
+    tickets: {
+      'T-01-01': { phase: '1', risk: 'low', branch: 'ticket/T-01-01-x', title: 'project repository' },
+    },
+    journal: [], prs: [], unreachableRepo: '__project__',
+  });
+  assert.strictEqual(r.code, 0);
+  assert.match(r.out, /could not list PRs for the project repository/);
+  assert.doesNotMatch(r.out, /could not list PRs for  —/);
+});
+
+test('routing coverage rejects a missing role and a malformed resolver route', () => {
+  const complete = {
+    ts: recently, event: 'dispatch', ticket: 'T-01-01', role: 'executor',
+    model: 'sonnet', effort: 'high', reason: 'tier=floor(sonnet) effort=row(high)',
+    task_level: 'complex', runtime: 'claude', backend: 'workflow', dispatch_id: 'dispatch-valid',
+  };
+  const noRole = { ...complete, ticket: 'T-01-02', dispatch_id: 'dispatch-no-role' };
+  delete noRole.role;
+  const malformed = { ...complete, ticket: 'T-01-03', dispatch_id: 'dispatch-bad-route', reason: 'role baseline' };
+  const { code, json } = asJson({
+    tickets: {},
+    journal: [JSON.stringify(complete), JSON.stringify(noRole), JSON.stringify(malformed)],
+    prs: [],
+  });
+  assert.strictEqual(code, 0);
+  assert.strictEqual(json.ladder.requested_comparable, 1);
+  assert.strictEqual(json.ladder.missing_route, 1);
+  assert.deepStrictEqual(json.ladder.by_attribution_status, { incomplete: 2, requested_complete: 1 });
+});
+
 test('Codex agent-file coverage is required only when the runtime is known', () => {
   const complete = {
     ts: recently, event: 'dispatch', ticket: 'T-01-01', role: 'arch-review',
     model: 'sonnet', effort: 'high', reason: 'tier=floor(sonnet) effort=row(high)',
     task_level: 'complex', runtime: 'codex', backend: 'codex-agent', dispatch_id: 'dispatch-codex',
-    agent_file: 'shipyard-arch-review-critical', observed_model: 'gpt-6-astra',
+    agent_file: 'shipyard-arch-review-critical', observed_model: 'gpt-5.6-sol',
   };
   const partial = {
     ts: recently, event: 'dispatch', ticket: 'T-01-02', role: 'arch-review',
@@ -335,6 +518,158 @@ test('Codex agent-file coverage is required only when the runtime is known', () 
   assert.strictEqual(json.ladder.usage_join_comparable, 0, 'observed model without observed effort is not join-ready');
   assert.strictEqual(json.ladder.missing_dispatch_id, 1);
   assert.deepStrictEqual(json.ladder.by_attribution_status, { incomplete: 1, requested_complete: 1 });
+});
+
+test('ADR-014 reconciliation keeps resolution, application, observation and join facts independent', () => {
+  const good = adrDispatch({ runtime: 'claude', role: 'executor', dispatch_id: 'good' });
+  const codex = adrDispatch({ runtime: 'codex', role: 'executor', signals: { critical: true }, dispatch_id: 'codex' });
+  const stale = adrDispatch({ runtime: 'codex', role: 'executor', dispatch_id: 'stale', receipt: false });
+  stale.policy_version = 'adr-014.v2';
+  stale.policy_hash = 'old-policy-fingerprint';
+  const contradictory = adrDispatch({
+    runtime: 'claude', role: 'executor', dispatch_id: 'contradictory',
+    receipt_over: { applied_model: 'opus', observed_model: 'opus' },
+  });
+  const legacy = {
+    ts: recently, event: 'dispatch', ticket: 'T-36-legacy', role: 'executor',
+    model: 'sonnet', effort: 'high', reason: 'tier=floor(sonnet) effort=row(high)',
+    task_level: 'complex', runtime: 'claude', backend: 'workflow', dispatch_id: 'legacy',
+  };
+  const { code, json } = asJson({
+    tickets: {},
+    journal: [good, codex, stale, contradictory, legacy].map(JSON.stringify),
+    attributions: [{
+      observation_id: 'joined-good', dispatch_id: 'good', runtime: 'claude', provider: 'anthropic',
+      session_id: 'session-good', model: 'sonnet', effort: 'max',
+      observed_model: 'sonnet', observed_effort: 'max',
+    }],
+    prs: [],
+  });
+  assert.strictEqual(code, 0);
+
+  const reconciliation = json.ladder.reconciliation;
+  assert.strictEqual(reconciliation.total, 5);
+  assert.deepStrictEqual(reconciliation.coverage.policy_resolution, {
+    total: 5, resolved: 4, current: 3, stale: 1, missing: 0, contradictory: 0, legacy: 1,
+  });
+  assert.deepStrictEqual(reconciliation.coverage.runtime_application, {
+    total: 5, applied: 2, verified: 2, missing_receipt: 2, unverifiable: 0, contradictory: 1,
+  });
+  assert.deepStrictEqual(reconciliation.coverage.provider_observation, {
+    total: 5, observed: 3, unknown: 2, missing: 2, contradictory: 0,
+  });
+  assert.deepStrictEqual(reconciliation.coverage.usage_join, {
+    total: 5, joined: 1, unjoined: 4, ambiguous: 0, missing_dispatch_id: 0,
+  });
+  assert.deepStrictEqual(reconciliation.findings, {
+    stale_policy: 1,
+    contradictory_application: 1,
+    contradictory_observation: 0,
+    missing_receipt: 2,
+    unknown_observation: 2,
+    legacy: 1,
+  });
+  assert.deepStrictEqual(reconciliation.by_runtime, { claude: 3, codex: 2 });
+  assert.deepStrictEqual(reconciliation.by_rung, { base: 3, critical: 1 });
+  assert.deepStrictEqual(reconciliation.by_concrete_model, {
+    'gpt-5.6-sol': 1, opus: 1, sonnet: 1,
+  });
+  assert.deepStrictEqual(reconciliation.by_fired_signal, { critical: 1 });
+  assert.strictEqual(reconciliation.records.find((r) => r.dispatch_id === 'stale').compliant, false);
+  assert.strictEqual(reconciliation.records.find((r) => r.dispatch_id === 'contradictory').application_status, 'contradictory');
+  assert.strictEqual(reconciliation.records.find((r) => r.dispatch_id === 'legacy').legacy, true);
+  assert.deepStrictEqual(json.reconciliation.findings, reconciliation.findings);
+});
+
+test('usage joins require matching runtime and transcript identity, then merge later observations', () => {
+  const joined = adrDispatch({
+    runtime: 'codex', role: 'executor', dispatch_id: 'joined-usage',
+    receipt_over: { observed_model: 'unknown', observed_effort: 'unknown' },
+  });
+  const crossRuntime = adrDispatch({ runtime: 'codex', role: 'executor', dispatch_id: 'cross-runtime' });
+  const noIdentity = adrDispatch({ runtime: 'codex', role: 'executor', dispatch_id: 'no-identity' });
+  const { code, json } = asJson({
+    tickets: {}, journal: [joined, crossRuntime, noIdentity].map(JSON.stringify),
+    attributions: [
+      {
+        observation_id: 'joined-valid', dispatch_id: 'joined-usage', runtime: 'codex', provider: 'openai',
+        session_id: 'codex-session', observed_model: joined.requested_model,
+        observed_effort: joined.requested_effort,
+      },
+      {
+        observation_id: 'cross-runtime', dispatch_id: 'cross-runtime', runtime: 'claude', provider: 'anthropic',
+        session_id: 'claude-session', observed_model: 'opus', observed_effort: 'max',
+      },
+      {
+        observation_id: 'no-identity', dispatch_id: 'no-identity', runtime: 'codex', provider: 'openai',
+        observed_model: noIdentity.requested_model, observed_effort: noIdentity.requested_effort,
+      },
+    ], prs: [],
+  });
+  assert.equal(code, 0);
+  const facts = json.ladder.reconciliation.records;
+  const merged = facts.find((fact) => fact.dispatch_id === 'joined-usage');
+  assert.equal(merged.usage_join_status, 'joined');
+  assert.equal(merged.observation_status, 'observed');
+  assert.equal(merged.comparison_ready, true);
+  assert.equal(facts.find((fact) => fact.dispatch_id === 'cross-runtime').usage_join_status, 'unjoined');
+  assert.equal(facts.find((fact) => fact.dispatch_id === 'no-identity').usage_join_status, 'unjoined');
+});
+
+test('serialized usage-ledger fact claims are reconciled before pipeline stats counts them', () => {
+  const forged = {
+    observation_id: 'forged-fact',
+    dispatch_id: 'forged-dispatch',
+    runtime: 'claude',
+    provider: 'anthropic',
+    session_id: 'forged-session',
+    role: 'executor',
+    policy_resolution: { status: 'resolved', resolved: true, current: true, complete: true },
+    runtime_application: { status: 'applied', applied: true, verified: true, receipt_present: true },
+    provider_observation: { status: 'observed', observed: true },
+    usage_join: { status: 'joined', joined: true },
+    compliant: true,
+    comparison_ready: true,
+  };
+  const { code, json } = asJson({
+    tickets: {}, journal: [], attributions: [forged], prs: [],
+  });
+  assert.equal(code, 0);
+  assert.equal(json.usage_reconciliation.compliant, 0);
+  assert.equal(json.usage_reconciliation.comparison_ready, 0);
+  assert.equal(json.usage_reconciliation.records[0].application_status, 'missing_receipt');
+  assert.equal(json.usage_reconciliation.findings.missing_receipt, 1);
+});
+
+test('json exposes metadata-only optimization input with provider and account boundaries', () => {
+  const dispatch = adrDispatch({
+    runtime: 'claude', role: 'executor', dispatch_id: 'optimization-input',
+    treatment_id: 'phase-34-fable-medium', arm: 'treatment', account_scope: 'anthropic-max',
+  });
+  const { code, json } = asJson({
+    tickets: {},
+    journal: [JSON.stringify(dispatch)],
+    attributions: [{
+      observation_id: 'optimization-observation',
+      dispatch_id: dispatch.dispatch_id,
+      runtime: 'claude', provider: 'anthropic', account_scope: 'anthropic-max',
+      treatment_id: 'phase-34-fable-medium', arm: 'treatment', session_id: 'session-optimization',
+      observed_model: dispatch.requested_model, observed_effort: dispatch.requested_effort,
+    }],
+    prs: [],
+  });
+  assert.equal(code, 0);
+  assert.equal(json.optimization_input.schema_version, 'shipyard.optimization-input.v1');
+  assert.deepEqual(json.optimization_input.provider_scopes, [{
+    provider: 'anthropic', account_scope: 'anthropic-max',
+  }]);
+  const item = json.optimization_input.dispatches.find((row) => row.dispatch_id === dispatch.dispatch_id);
+  assert.equal(item.treatment_id, 'phase-34-fable-medium');
+  assert.equal(item.arm, 'treatment');
+  assert.equal(item.account_scope, 'anthropic-max');
+  assert.equal(json.optimization_input.usage.attribution_records[0].dispatch_id, dispatch.dispatch_id);
+  assert.equal(json.optimization_input.usage.attribution_records[0].session_id, 'session-optimization');
+  assert.equal(json.optimization_input.usage.attribution_records[0].account_scope, 'anthropic-max');
 });
 
 done();

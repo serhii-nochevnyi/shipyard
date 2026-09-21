@@ -30,11 +30,29 @@ epics:
   '29':
     branch: epic/29-the-tracker-is-a-projection-and-a-projection-is-driven
     repos: [null]
+  '30':
+    branch: epic/30-a-ticket-you-cannot-reach-is-not-deliverable
+    repos: [null]
+  '31':
+    branch: epic/31-not-every-ticket-is-available-work
+    repos: [null]
   '32':
     branch: epic/32-measure-usage-and-make-the-backlog-actionable
     repos: [null]
   '35':
     branch: epic/35-gsd-and-shipyard-workflow-loop
+    repos: [null]
+  '36':
+    branch: epic/36-enforce-the-runtime-model-ladder
+    repos: [null]
+  '37':
+    branch: epic/37-autonomous-dual-runtime-control-plane
+    repos: [null]
+  '33-reduce-orchestration-context-and-transfer-sessions-safely':
+    branch: epic/33-reduce-orchestration-context-and-transfer-sessions-safely
+    repos: [null]
+  '34-improve-convergence-and-tune-from-measured-outcomes':
+    branch: epic/34-improve-convergence-and-tune-from-measured-outcomes
     repos: [null]
 tickets:
   T-20-01:
@@ -1269,6 +1287,278 @@ tickets:
     primary_parent: T-29-07
     pr_base: ticket/T-29-07-wire-it-pin-the-wiring-and-keep-it-out-o
     jira: null
+  T-30-01:
+    title: Make verification claims executable across delivery boundaries
+    plan: '.planning/phases/30-a-ticket-you-cannot-reach-is-not-deliverable/30-01-PLAN.md'
+    phase: '30'
+    repo: null
+    wave: 1
+    depends_on: []
+    files: [plugins/delivery-pipeline/skills/delivery-rules/SKILL.md, plugins/delivery-pipeline/references/arch-review.md, plugins/delivery-pipeline/references/ci-fix.md, plugins/delivery-pipeline/references/drift-check.md, plugins/delivery-pipeline/references/integrator.md, plugins/delivery-pipeline/references/inv-research.md, plugins/delivery-pipeline/references/pr-sentinel.md, plugins/delivery-pipeline/references/review-fix.md, plugins/delivery-pipeline/workflows/executors.mjs, plugins/delivery-pipeline/workflows/drift-gate.mjs, plugins/delivery-pipeline/workflows/fix-round.mjs, tests/unit/source-contract.test.cjs]
+    risk: low
+    human_checkpoint: false
+    preauthorized: false
+    branch: ticket/T-30-01-make-verification-claims-executable-acro
+    epic: epic/30-a-ticket-you-cannot-reach-is-not-deliverable
+    primary_parent: null
+    pr_base: epic/30-a-ticket-you-cannot-reach-is-not-deliverable
+    jira: null
+  T-30-02:
+    title: Resolve configured repositories before fallback discovery
+    plan: '.planning/phases/30-a-ticket-you-cannot-reach-is-not-deliverable/30-02-PLAN.md'
+    phase: '30'
+    repo: null
+    wave: 1
+    depends_on: []
+    files: [plugins/delivery-pipeline/scripts/repo-resolve.cjs, plugins/delivery-pipeline/scripts/state-sync.cjs, plugins/delivery-pipeline/commands/deliver.md, tests/unit/repo-resolve.test.cjs]
+    risk: medium
+    human_checkpoint: false
+    preauthorized: false
+    branch: ticket/T-30-02-resolve-configured-repositories-before-f
+    epic: epic/30-a-ticket-you-cannot-reach-is-not-deliverable
+    primary_parent: null
+    pr_base: epic/30-a-ticket-you-cannot-reach-is-not-deliverable
+    jira: null
+  T-30-03:
+    title: Discover repository checkouts by declared origin
+    plan: '.planning/phases/30-a-ticket-you-cannot-reach-is-not-deliverable/30-03-PLAN.md'
+    phase: '30'
+    repo: null
+    wave: 2
+    depends_on: [T-30-02]
+    files: [plugins/delivery-pipeline/scripts/repo-resolve.cjs, plugins/delivery-pipeline/commands/deliver.md, tests/unit/repo-resolve.test.cjs]
+    risk: medium
+    human_checkpoint: false
+    preauthorized: false
+    branch: ticket/T-30-03-discover-repository-checkouts-by-declare
+    epic: epic/30-a-ticket-you-cannot-reach-is-not-deliverable
+    primary_parent: T-30-02
+    pr_base: ticket/T-30-02-resolve-configured-repositories-before-f
+    jira: null
+  T-30-04:
+    title: Require an explicit operator choice before cloning
+    plan: '.planning/phases/30-a-ticket-you-cannot-reach-is-not-deliverable/30-04-PLAN.md'
+    phase: '30'
+    repo: null
+    wave: 3
+    depends_on: [T-30-03]
+    files: [plugins/delivery-pipeline/scripts/repo-resolve.cjs, plugins/delivery-pipeline/commands/deliver.md, tests/unit/repo-resolve.test.cjs, tests/smoke/repo-resolve-smoke.sh]
+    risk: high
+    human_checkpoint: true
+    preauthorized: false
+    branch: ticket/T-30-04-require-an-explicit-operator-choice-befo
+    epic: epic/30-a-ticket-you-cannot-reach-is-not-deliverable
+    primary_parent: T-30-03
+    pr_base: ticket/T-30-03-discover-repository-checkouts-by-declare
+    jira: null
+  T-30-05:
+    title: Validate repository destinations with the existing nesting rule
+    plan: '.planning/phases/30-a-ticket-you-cannot-reach-is-not-deliverable/30-05-PLAN.md'
+    phase: '30'
+    repo: null
+    wave: 4
+    depends_on: [T-30-04]
+    files: [capabilities/delivery-pipeline/capability.json, plugins/delivery-pipeline/scripts/pipeline-config.cjs, plugins/delivery-pipeline/scripts/repo-resolve.cjs, tests/unit/pipeline-config.test.cjs, tests/unit/repo-resolve.test.cjs]
+    risk: medium
+    human_checkpoint: false
+    preauthorized: false
+    branch: ticket/T-30-05-validate-repository-destinations-with-th
+    epic: epic/30-a-ticket-you-cannot-reach-is-not-deliverable
+    primary_parent: T-30-04
+    pr_base: ticket/T-30-04-require-an-explicit-operator-choice-befo
+    jira: null
+  T-30-06:
+    title: Mirror the project origin protocol for repository clones
+    plan: '.planning/phases/30-a-ticket-you-cannot-reach-is-not-deliverable/30-06-PLAN.md'
+    phase: '30'
+    repo: null
+    wave: 5
+    depends_on: [T-30-05]
+    files: [plugins/delivery-pipeline/scripts/repo-resolve.cjs, plugins/delivery-pipeline/commands/deliver.md, tests/unit/repo-resolve.test.cjs]
+    risk: medium
+    human_checkpoint: false
+    preauthorized: false
+    branch: ticket/T-30-06-mirror-the-project-origin-protocol-for-r
+    epic: epic/30-a-ticket-you-cannot-reach-is-not-deliverable
+    primary_parent: T-30-05
+    pr_base: ticket/T-30-05-validate-repository-destinations-with-th
+    jira: null
+  T-30-07:
+    title: Use a full clone with all refs required for base resolution
+    plan: '.planning/phases/30-a-ticket-you-cannot-reach-is-not-deliverable/30-07-PLAN.md'
+    phase: '30'
+    repo: null
+    wave: 6
+    depends_on: [T-30-06]
+    files: [plugins/delivery-pipeline/scripts/repo-resolve.cjs, plugins/delivery-pipeline/scripts/graph-dir.cjs, tests/unit/repo-resolve.test.cjs, tests/smoke/repo-resolve-smoke.sh]
+    risk: medium
+    human_checkpoint: false
+    preauthorized: false
+    branch: ticket/T-30-07-use-a-full-clone-with-all-refs-required
+    epic: epic/30-a-ticket-you-cannot-reach-is-not-deliverable
+    primary_parent: T-30-06
+    pr_base: ticket/T-30-06-mirror-the-project-origin-protocol-for-r
+    jira: null
+  T-30-08:
+    title: Adopt matching checkouts and refuse to clobber other paths
+    plan: '.planning/phases/30-a-ticket-you-cannot-reach-is-not-deliverable/30-08-PLAN.md'
+    phase: '30'
+    repo: null
+    wave: 7
+    depends_on: [T-30-07]
+    files: [plugins/delivery-pipeline/scripts/repo-resolve.cjs, plugins/delivery-pipeline/scripts/state-sync.cjs, plugins/delivery-pipeline/commands/deliver.md, tests/unit/repo-resolve.test.cjs, tests/unit/record-stores.test.cjs]
+    risk: medium
+    human_checkpoint: false
+    preauthorized: false
+    branch: ticket/T-30-08-adopt-matching-checkouts-and-refuse-to-c
+    epic: epic/30-a-ticket-you-cannot-reach-is-not-deliverable
+    primary_parent: T-30-07
+    pr_base: ticket/T-30-07-use-a-full-clone-with-all-refs-required
+    jira: null
+  T-30-09:
+    title: Persist resolved checkouts and park unreachable work
+    plan: '.planning/phases/30-a-ticket-you-cannot-reach-is-not-deliverable/30-09-PLAN.md'
+    phase: '30'
+    repo: null
+    wave: 8
+    depends_on: [T-30-08]
+    files: [plugins/delivery-pipeline/scripts/repo-resolve.cjs, plugins/delivery-pipeline/scripts/state-sync.cjs, plugins/delivery-pipeline/commands/deliver.md, tests/unit/repo-resolve.test.cjs, tests/unit/pipeline-config.test.cjs, docs/gsd_multilevel_delivery_pipeline.md]
+    risk: medium
+    human_checkpoint: false
+    preauthorized: false
+    branch: ticket/T-30-09-persist-resolved-checkouts-and-park-unre
+    epic: epic/30-a-ticket-you-cannot-reach-is-not-deliverable
+    primary_parent: T-30-08
+    pr_base: ticket/T-30-08-adopt-matching-checkouts-and-refuse-to-c
+    jira: null
+  T-30-10:
+    title: Make the sentinel honor observed ticket branches
+    plan: '.planning/phases/30-a-ticket-you-cannot-reach-is-not-deliverable/30-10-PLAN.md'
+    phase: '30'
+    repo: null
+    wave: 3
+    depends_on: [T-30-03]
+    files: [plugins/delivery-pipeline/scripts/sentinel.cjs, tests/unit/sentinel.test.cjs]
+    risk: medium
+    human_checkpoint: false
+    preauthorized: false
+    branch: ticket/T-30-10-make-the-sentinel-honor-observed-ticket
+    epic: epic/30-a-ticket-you-cannot-reach-is-not-deliverable
+    primary_parent: T-30-03
+    pr_base: ticket/T-30-03-discover-repository-checkouts-by-declare
+    jira: null
+  T-31-01:
+    title: Remove the external ticket import shortcut
+    plan: '.planning/phases/31-not-every-ticket-is-available-work/31-01-PLAN.md'
+    phase: '31'
+    repo: null
+    wave: 9
+    depends_on: [T-30-09]
+    files: [plugins/delivery-pipeline/commands/deliver.md, tests/unit/delivery-cold-start-contract.test.cjs]
+    risk: low
+    human_checkpoint: false
+    preauthorized: false
+    branch: ticket/T-31-01-remove-the-external-ticket-import-shortc
+    epic: epic/31-not-every-ticket-is-available-work
+    primary_parent: null
+    pr_base: epic/31-not-every-ticket-is-available-work
+    jira: null
+  T-31-02:
+    title: Declare opt-in Jira To Do statuses
+    plan: '.planning/phases/31-not-every-ticket-is-available-work/31-02-PLAN.md'
+    phase: '31'
+    repo: null
+    wave: 10
+    depends_on: [T-31-01]
+    files: [plugins/delivery-pipeline/scripts/pipeline-config.cjs, capabilities/delivery-pipeline/capability.json, plugins/delivery-pipeline/commands/deliver.md, README.md, tests/unit/pipeline-config.test.cjs]
+    risk: low
+    human_checkpoint: false
+    preauthorized: false
+    branch: ticket/T-31-02-declare-opt-in-jira-to-do-statuses
+    epic: epic/31-not-every-ticket-is-available-work
+    primary_parent: T-31-01
+    pr_base: ticket/T-31-01-remove-the-external-ticket-import-shortc
+    jira: null
+  T-31-03:
+    title: Define status and assignee eligibility without history
+    plan: '.planning/phases/31-not-every-ticket-is-available-work/31-03-PLAN.md'
+    phase: '31'
+    repo: null
+    wave: 11
+    depends_on: [T-31-02]
+    files: [plugins/delivery-pipeline/scripts/tracker-eligibility.cjs, tests/unit/tracker-eligibility.test.cjs]
+    risk: medium
+    human_checkpoint: false
+    preauthorized: false
+    branch: ticket/T-31-03-define-status-and-assignee-eligibility-w
+    epic: epic/31-not-every-ticket-is-available-work
+    primary_parent: T-31-02
+    pr_base: ticket/T-31-02-declare-opt-in-jira-to-do-statuses
+    jira: null
+  T-31-04:
+    title: Persist tracker verdicts and fail closed on unknown
+    plan: '.planning/phases/31-not-every-ticket-is-available-work/31-04-PLAN.md'
+    phase: '31'
+    repo: null
+    wave: 12
+    depends_on: [T-31-03]
+    files: [plugins/delivery-pipeline/scripts/tracker-record.cjs, tests/unit/tracker-record.test.cjs, tests/unit/record-stores.test.cjs]
+    risk: medium
+    human_checkpoint: false
+    preauthorized: false
+    branch: ticket/T-31-04-persist-tracker-verdicts-and-fail-closed
+    epic: epic/31-not-every-ticket-is-available-work
+    primary_parent: T-31-03
+    pr_base: ticket/T-31-03-define-status-and-assignee-eligibility-w
+    jira: null
+  T-31-05:
+    title: Gate only the execute transition on tracker eligibility
+    plan: '.planning/phases/31-not-every-ticket-is-available-work/31-05-PLAN.md'
+    phase: '31'
+    repo: null
+    wave: 13
+    depends_on: [T-31-04]
+    files: [plugins/delivery-pipeline/scripts/front.cjs, tests/unit/front.test.cjs]
+    risk: medium
+    human_checkpoint: false
+    preauthorized: false
+    branch: ticket/T-31-05-gate-only-the-execute-transition-on-trac
+    epic: epic/31-not-every-ticket-is-available-work
+    primary_parent: T-31-04
+    pr_base: ticket/T-31-04-persist-tracker-verdicts-and-fail-closed
+    jira: null
+  T-31-06:
+    title: Journal direct ticket overrides
+    plan: '.planning/phases/31-not-every-ticket-is-available-work/31-06-PLAN.md'
+    phase: '31'
+    repo: null
+    wave: 14
+    depends_on: [T-31-05]
+    files: [plugins/delivery-pipeline/scripts/tracker-record.cjs, plugins/delivery-pipeline/scripts/log-event.cjs, plugins/delivery-pipeline/commands/deliver.md, tests/unit/tracker-record.test.cjs, tests/unit/log-event.test.cjs, tests/unit/judgment-contract.test.cjs]
+    risk: medium
+    human_checkpoint: false
+    preauthorized: false
+    branch: ticket/T-31-06-journal-direct-ticket-overrides
+    epic: epic/31-not-every-ticket-is-available-work
+    primary_parent: T-31-05
+    pr_base: ticket/T-31-05-gate-only-the-execute-transition-on-trac
+    jira: null
+  T-31-07:
+    title: Read tracker eligibility at cold start and consume the cache
+    plan: '.planning/phases/31-not-every-ticket-is-available-work/31-07-PLAN.md'
+    phase: '31'
+    repo: null
+    wave: 15
+    depends_on: [T-31-06]
+    files: [plugins/delivery-pipeline/scripts/state-sync.cjs, plugins/delivery-pipeline/scripts/front.cjs, plugins/delivery-pipeline/scripts/dispatch-record.cjs, plugins/delivery-pipeline/commands/deliver.md, tests/unit/front.test.cjs, tests/unit/tracker-wiring-contract.test.cjs, tests/smoke/sentinel-smoke.sh]
+    risk: high
+    human_checkpoint: true
+    preauthorized: false
+    branch: ticket/T-31-07-read-tracker-eligibility-at-cold-start-a
+    epic: epic/31-not-every-ticket-is-available-work
+    primary_parent: T-31-06
+    pr_base: ticket/T-31-06-journal-direct-ticket-overrides
+    jira: null
   T-32-01:
     title: Collect deduplicated usage from explicit transcript files
     plan: '.planning/phases/32-measure-usage-and-make-the-backlog-actionable/32-01-PLAN.md'
@@ -1301,46 +1591,62 @@ tickets:
     primary_parent: null
     pr_base: epic/32-measure-usage-and-make-the-backlog-actionable
     jira: null
+  T-32-06:
+    title: Deliver the accepted task-level model ladder canary
+    plan: '.planning/phases/32-measure-usage-and-make-the-backlog-actionable/32-06-PLAN.md'
+    phase: '32'
+    repo: null
+    wave: 8
+    depends_on: [T-29-07, T-29-08]
+    files: ['.planning/architecture/ADR-011-ROLLOUT.md', '.planning/architecture/ADR-012-task-level-model-ladder.md', '.planning/config.json', '.planning/graph/tickets.json', '.planning/graph/tickets.yaml', '.planning/graph/delivery-front.json', '.planning/graph/delivery-log.jsonl', '.planning/graph/delivery-state-meta.json', '.planning/graph/delivery-state.json', '.planning/graph/delivery-state.yaml', '.planning/graph/dispatches.json', '.planning/phases/32-measure-usage-and-make-the-backlog-actionable/32-06-PLAN.md', '.planning/phases/32-measure-usage-and-make-the-backlog-actionable/WAVE-0-PROGRESS.md', CLAUDE.md, README.md, capabilities/delivery-pipeline/capability.json, docs/gsd_multilevel_delivery_pipeline.md, plugins/delivery-pipeline/commands/deliver.md, plugins/delivery-pipeline/references/pr-sentinel.md, plugins/delivery-pipeline/scripts/attempt-history.cjs, plugins/delivery-pipeline/scripts/codex-agent.cjs, plugins/delivery-pipeline/scripts/dispatch-record.cjs, plugins/delivery-pipeline/scripts/failure-signature.cjs, plugins/delivery-pipeline/scripts/log-event.cjs, plugins/delivery-pipeline/scripts/pipeline-config.cjs, plugins/delivery-pipeline/scripts/pipeline-stats.cjs, scripts/gen-codex-shipyard.cjs, scripts/install-shipyard-codex.sh, tests/smoke/codex-shipyard-smoke.sh, tests/unit/attempt-history.test.cjs, tests/unit/codex-agent.test.cjs, tests/unit/dispatch-record.test.cjs, tests/unit/failure-signature.test.cjs, tests/unit/gen-codex-shipyard.test.cjs, tests/unit/log-event.test.cjs, tests/unit/pipeline-config.test.cjs, tests/unit/pipeline-stats.test.cjs]
+    risk: high
+    human_checkpoint: true
+    preauthorized: true
+    branch: ticket/T-32-06-deliver-the-accepted-task-level-model-la
+    epic: epic/32-measure-usage-and-make-the-backlog-actionable
+    primary_parent: null
+    pr_base: epic/32-measure-usage-and-make-the-backlog-actionable
+    jira: null
   T-32-03:
     title: Expose routing attribution eligibility in delivery stats
     plan: '.planning/phases/32-measure-usage-and-make-the-backlog-actionable/32-03-PLAN.md'
     phase: '32'
     repo: null
-    wave: 2
-    depends_on: [T-32-01]
-    files: [plugins/delivery-pipeline/scripts/pipeline-stats.cjs, tests/unit/pipeline-stats.test.cjs, docs/pipeline-stats.md]
+    wave: 9
+    depends_on: [T-32-06, T-32-01]
+    files: ['.planning/graph/tickets.json', '.planning/graph/tickets.yaml', '.planning/phases/32-measure-usage-and-make-the-backlog-actionable/32-03-PLAN.md', plugins/delivery-pipeline/scripts/pipeline-stats.cjs, tests/unit/pipeline-stats.test.cjs, docs/pipeline-stats.md]
     risk: low
     human_checkpoint: false
     preauthorized: false
     branch: ticket/T-32-03-expose-routing-attribution-eligibility-i
     epic: epic/32-measure-usage-and-make-the-backlog-actionable
-    primary_parent: T-32-01
-    pr_base: ticket/T-32-01-collect-deduplicated-usage-from-explicit
+    primary_parent: T-32-06
+    pr_base: ticket/T-32-06-deliver-the-accepted-task-level-model-la
     jira: null
   T-32-04:
     title: Batch dispatch attribution atomically
     plan: '.planning/phases/32-measure-usage-and-make-the-backlog-actionable/32-04-PLAN.md'
     phase: '32'
     repo: null
-    wave: 2
-    depends_on: [T-32-01]
-    files: [plugins/delivery-pipeline/scripts/dispatch-record.cjs, tests/unit/dispatch-record.test.cjs, docs/dispatch-record.md]
+    wave: 10
+    depends_on: [T-32-03]
+    files: ['.planning/graph/tickets.json', '.planning/graph/tickets.yaml', '.planning/phases/32-measure-usage-and-make-the-backlog-actionable/32-04-PLAN.md', plugins/delivery-pipeline/scripts/dispatch-record.cjs, tests/unit/dispatch-record.test.cjs, docs/dispatch-record.md]
     risk: low
     human_checkpoint: false
     preauthorized: false
     branch: ticket/T-32-04-batch-dispatch-attribution-atomically
     epic: epic/32-measure-usage-and-make-the-backlog-actionable
-    primary_parent: T-32-01
-    pr_base: ticket/T-32-01-collect-deduplicated-usage-from-explicit
+    primary_parent: T-32-03
+    pr_base: ticket/T-32-03-expose-routing-attribution-eligibility-i
     jira: null
   T-32-05:
     title: Wire batched dispatch lifecycle into the delivery loop
     plan: '.planning/phases/32-measure-usage-and-make-the-backlog-actionable/32-05-PLAN.md'
     phase: '32'
     repo: null
-    wave: 3
+    wave: 11
     depends_on: [T-32-04]
-    files: [plugins/delivery-pipeline/scripts/dispatch-record.cjs, tests/unit/dispatch-record.test.cjs, docs/dispatch-record.md, plugins/delivery-pipeline/references/pr-sentinel.md]
+    files: ['.planning/graph/tickets.json', '.planning/graph/tickets.yaml', '.planning/phases/32-measure-usage-and-make-the-backlog-actionable/32-05-PLAN.md', plugins/delivery-pipeline/scripts/dispatch-record.cjs, tests/unit/dispatch-record.test.cjs, docs/dispatch-record.md, plugins/delivery-pipeline/references/pr-sentinel.md]
     risk: low
     human_checkpoint: false
     preauthorized: false
@@ -1348,6 +1654,246 @@ tickets:
     epic: epic/32-measure-usage-and-make-the-backlog-actionable
     primary_parent: T-32-04
     pr_base: ticket/T-32-04-batch-dispatch-attribution-atomically
+    jira: null
+  T-32-07:
+    title: Join transcript usage to dispatches without guessing
+    plan: '.planning/phases/32-measure-usage-and-make-the-backlog-actionable/32-07-PLAN.md'
+    phase: '32'
+    repo: null
+    wave: 12
+    depends_on: [T-32-05]
+    files: ['.planning/graph/tickets.json', '.planning/graph/tickets.yaml', '.planning/phases/32-measure-usage-and-make-the-backlog-actionable/32-07-PLAN.md', plugins/delivery-pipeline/scripts/usage-attribution.cjs, plugins/delivery-pipeline/scripts/usage-report.cjs, plugins/delivery-pipeline/scripts/pipeline-stats.cjs, plugins/delivery-pipeline/scripts/dispatch-record.cjs, tests/unit/usage-attribution.test.cjs, tests/unit/pipeline-stats.test.cjs, tests/unit/dispatch-record.test.cjs, docs/usage-report.md, docs/dispatch-record.md, docs/pipeline-stats.md, plugins/delivery-pipeline/commands/deliver.md, plugins/delivery-pipeline/references/pr-sentinel.md, tests/smoke/codex-shipyard-smoke.sh, tests/smoke/overlay-image-smoke.sh]
+    risk: medium
+    human_checkpoint: false
+    preauthorized: false
+    branch: ticket/T-32-07-join-transcript-usage-to-dispatches-with
+    epic: epic/32-measure-usage-and-make-the-backlog-actionable
+    primary_parent: T-32-05
+    pr_base: ticket/T-32-05-wire-batched-dispatch-lifecycle-into-the
+    jira: null
+  T-33-01:
+    title: Deliver durable CI and review transition events
+    plan: '.planning/phases/33-reduce-orchestration-context-and-transfer-sessions-safely/33-01-PLAN.md'
+    phase: '33-reduce-orchestration-context-and-transfer-sessions-safely'
+    repo: null
+    wave: 1
+    depends_on: []
+    files: [plugins/delivery-pipeline/scripts/wait-events.cjs, plugins/delivery-pipeline/scripts/ci-wait.cjs, plugins/delivery-pipeline/commands/deliver.md, plugins/delivery-pipeline/scripts/stop-gate.cjs, tests/unit/wait-events.test.cjs, tests/unit/ci-wait.test.cjs, tests/unit/stop-gate.test.cjs, plugins/delivery-pipeline/scripts/state-sync.cjs]
+    risk: medium
+    human_checkpoint: false
+    preauthorized: false
+    branch: ticket/T-33-01-deliver-durable-ci-and-review-transition
+    epic: epic/33-reduce-orchestration-context-and-transfer-sessions-safely
+    primary_parent: null
+    pr_base: epic/33-reduce-orchestration-context-and-transfer-sessions-safely
+    jira: null
+  T-33-02:
+    title: Validate bounded executor evidence at acceptance
+    plan: '.planning/phases/33-reduce-orchestration-context-and-transfer-sessions-safely/33-02-PLAN.md'
+    phase: '33-reduce-orchestration-context-and-transfer-sessions-safely'
+    repo: null
+    wave: 2
+    depends_on: [T-33-01]
+    files: [plugins/delivery-pipeline/scripts/role-artifact.cjs, plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs, plugins/delivery-pipeline/scripts/claude-workflow-host.cjs, plugins/delivery-pipeline/workflows/executors.mjs, tests/unit/role-artifact.test.cjs, plugins/delivery-pipeline/commands/deliver.md, tests/unit/gen-codex-shipyard.test.cjs, tests/unit/workflows-args.test.cjs, tests/unit/source-contract.test.cjs]
+    risk: medium
+    human_checkpoint: false
+    preauthorized: false
+    branch: ticket/T-33-02-validate-bounded-executor-evidence-at-ac
+    epic: epic/33-reduce-orchestration-context-and-transfer-sessions-safely
+    primary_parent: T-33-01
+    pr_base: ticket/T-33-01-deliver-durable-ci-and-review-transition
+    jira: null
+  T-33-03:
+    title: Bound repair and drift results without losing findings
+    plan: '.planning/phases/33-reduce-orchestration-context-and-transfer-sessions-safely/33-03-PLAN.md'
+    phase: '33-reduce-orchestration-context-and-transfer-sessions-safely'
+    repo: null
+    wave: 3
+    depends_on: [T-33-02]
+    files: [plugins/delivery-pipeline/workflows/fix-round.mjs, plugins/delivery-pipeline/scripts/role-artifact.cjs, plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs, tests/unit/workflows-args.test.cjs, tests/unit/source-contract.test.cjs, tests/unit/sentinel.test.cjs, plugins/delivery-pipeline/commands/deliver.md, plugins/delivery-pipeline/scripts/attempt-history.cjs, tests/unit/repair-artifacts.test.cjs, plugins/delivery-pipeline/workflows/drift-gate.mjs, plugins/delivery-pipeline/references/drift-check.md, plugins/delivery-pipeline/references/ci-fix.md, plugins/delivery-pipeline/references/review-fix.md]
+    risk: medium
+    human_checkpoint: false
+    preauthorized: false
+    branch: ticket/T-33-03-bound-repair-and-drift-results-without-l
+    epic: epic/33-reduce-orchestration-context-and-transfer-sessions-safely
+    primary_parent: T-33-02
+    pr_base: ticket/T-33-02-validate-bounded-executor-evidence-at-ac
+    jira: null
+  T-33-04:
+    title: Preserve complete architecture and integration judgments
+    plan: '.planning/phases/33-reduce-orchestration-context-and-transfer-sessions-safely/33-04-PLAN.md'
+    phase: '33-reduce-orchestration-context-and-transfer-sessions-safely'
+    repo: null
+    wave: 4
+    depends_on: [T-33-03]
+    files: [plugins/delivery-pipeline/scripts/role-artifact.cjs, plugins/delivery-pipeline/references/arch-review.md, plugins/delivery-pipeline/references/pr-sentinel.md, plugins/delivery-pipeline/commands/deliver.md, tests/unit/judgment-artifacts.test.cjs, plugins/delivery-pipeline/references/integrator.md]
+    risk: high
+    human_checkpoint: true
+    preauthorized: false
+    branch: ticket/T-33-04-preserve-complete-architecture-and-integ
+    epic: epic/33-reduce-orchestration-context-and-transfer-sessions-safely
+    primary_parent: T-33-03
+    pr_base: ticket/T-33-03-bound-repair-and-drift-results-without-l
+    jira: null
+  T-33-05:
+    title: Bound research and decomposition handbacks
+    plan: '.planning/phases/33-reduce-orchestration-context-and-transfer-sessions-safely/33-05-PLAN.md'
+    phase: '33-reduce-orchestration-context-and-transfer-sessions-safely'
+    repo: null
+    wave: 5
+    depends_on: [T-33-04]
+    files: [plugins/delivery-pipeline/workflows/investigation-research.mjs, plugins/delivery-pipeline/references/inv-research.md, plugins/delivery-pipeline/commands/investigate.md, tests/unit/investigation-research.test.cjs, tests/unit/planning-artifacts.test.cjs, plugins/delivery-pipeline/commands/decompose.md, plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs, tests/unit/gen-codex-shipyard.test.cjs, tests/unit/source-contract.test.cjs]
+    risk: medium
+    human_checkpoint: false
+    preauthorized: false
+    branch: ticket/T-33-05-bound-research-and-decomposition-handbac
+    epic: epic/33-reduce-orchestration-context-and-transfer-sessions-safely
+    primary_parent: T-33-04
+    pr_base: ticket/T-33-04-preserve-complete-architecture-and-integ
+    jira: null
+  T-33-06:
+    title: Build targeted launch packets with required policy and backlog
+    plan: '.planning/phases/33-reduce-orchestration-context-and-transfer-sessions-safely/33-06-PLAN.md'
+    phase: '33-reduce-orchestration-context-and-transfer-sessions-safely'
+    repo: null
+    wave: 6
+    depends_on: [T-33-05]
+    files: [plugins/delivery-pipeline/scripts/context-packet.cjs, plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs, plugins/delivery-pipeline/scripts/codex-dispatch-adapter.cjs, plugins/delivery-pipeline/workflows/executors.mjs, plugins/delivery-pipeline/workflows/investigation-research.mjs, tests/unit/context-packet.test.cjs, tests/unit/source-contract.test.cjs, plugins/delivery-pipeline/commands/deliver.md, plugins/delivery-pipeline/commands/investigate.md, plugins/delivery-pipeline/commands/decompose.md]
+    risk: medium
+    human_checkpoint: false
+    preauthorized: false
+    branch: ticket/T-33-06-build-targeted-launch-packets-with-requi
+    epic: epic/33-reduce-orchestration-context-and-transfer-sessions-safely
+    primary_parent: T-33-05
+    pr_base: ticket/T-33-05-bound-research-and-decomposition-handbac
+    jira: null
+  T-33-07:
+    title: Measure waiting and context treatments independently
+    plan: '.planning/phases/33-reduce-orchestration-context-and-transfer-sessions-safely/33-07-PLAN.md'
+    phase: '33-reduce-orchestration-context-and-transfer-sessions-safely'
+    repo: null
+    wave: 7
+    depends_on: [T-33-06]
+    files: [plugins/delivery-pipeline/scripts/orchestration-overhead.cjs, plugins/delivery-pipeline/scripts/context-packet.cjs, plugins/delivery-pipeline/scripts/role-artifact.cjs, tests/unit/orchestration-overhead.test.cjs, plugins/delivery-pipeline/scripts/wait-events.cjs, plugins/delivery-pipeline/commands/deliver.md, docs/audits/optimization/phase-33-protocol.md]
+    risk: medium
+    human_checkpoint: false
+    preauthorized: false
+    branch: ticket/T-33-07-measure-waiting-and-context-treatments-i
+    epic: epic/33-reduce-orchestration-context-and-transfer-sessions-safely
+    primary_parent: T-33-06
+    pr_base: ticket/T-33-06-build-targeted-launch-packets-with-requi
+    jira: null
+  T-33-08:
+    title: Resume a checkpoint with one fenced acknowledged owner
+    plan: '.planning/phases/33-reduce-orchestration-context-and-transfer-sessions-safely/33-08-PLAN.md'
+    phase: '33-reduce-orchestration-context-and-transfer-sessions-safely'
+    repo: null
+    wave: 8
+    depends_on: [T-33-07]
+    files: [plugins/delivery-pipeline/scripts/session-handoff.cjs, plugins/delivery-pipeline/scripts/dispatch-boundary.cjs, tests/unit/session-handoff.test.cjs, plugins/delivery-pipeline/commands/deliver.md, plugins/delivery-pipeline/scripts/dispatch-record.cjs, plugins/delivery-pipeline/scripts/claude-workflow-host.cjs, plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs, plugins/delivery-pipeline/scripts/codex-dispatch-adapter.cjs, tests/unit/delivery-cold-start-contract.test.cjs]
+    risk: high
+    human_checkpoint: true
+    preauthorized: false
+    branch: ticket/T-33-08-resume-a-checkpoint-with-one-fenced-ackn
+    epic: epic/33-reduce-orchestration-context-and-transfer-sessions-safely
+    primary_parent: T-33-07
+    pr_base: ticket/T-33-07-measure-waiting-and-context-treatments-i
+    jira: null
+  T-33-09:
+    title: Recommend safe rotation and refuse unproven automation
+    plan: '.planning/phases/33-reduce-orchestration-context-and-transfer-sessions-safely/33-09-PLAN.md'
+    phase: '33-reduce-orchestration-context-and-transfer-sessions-safely'
+    repo: null
+    wave: 9
+    depends_on: [T-33-08]
+    files: [plugins/delivery-pipeline/scripts/session-handoff.cjs, plugins/delivery-pipeline/scripts/orchestration-overhead.cjs, plugins/delivery-pipeline/commands/deliver.md, tests/unit/rotation-recommendation.test.cjs, plugins/delivery-pipeline/scripts/runtime-context.cjs, tests/unit/gen-codex-shipyard.test.cjs, docs/audits/optimization/phase-33-handoff.md, docs/audits/optimization/phase-33-protocol.md]
+    risk: medium
+    human_checkpoint: false
+    preauthorized: false
+    branch: ticket/T-33-09-recommend-safe-rotation-and-refuse-unpro
+    epic: epic/33-reduce-orchestration-context-and-transfer-sessions-safely
+    primary_parent: T-33-08
+    pr_base: ticket/T-33-08-resume-a-checkpoint-with-one-fenced-ackn
+    jira: null
+  T-34-01:
+    title: Make review progress and resource budgets evidence based
+    plan: '.planning/phases/34-improve-convergence-and-tune-from-measured-outcomes/34-01-PLAN.md'
+    phase: '34-improve-convergence-and-tune-from-measured-outcomes'
+    repo: null
+    wave: 1
+    depends_on: []
+    files: [plugins/delivery-pipeline/scripts/review-signature.cjs, plugins/delivery-pipeline/scripts/reviewers.cjs, plugins/delivery-pipeline/scripts/sentinel.cjs, plugins/delivery-pipeline/scripts/failure-signature.cjs, plugins/delivery-pipeline/scripts/attempt-history.cjs, tests/unit/review-signature.test.cjs, tests/unit/failure-signature.test.cjs, tests/unit/attempt-history.test.cjs]
+    risk: medium
+    human_checkpoint: false
+    preauthorized: false
+    branch: ticket/T-34-01-make-review-progress-and-resource-budget
+    epic: epic/34-improve-convergence-and-tune-from-measured-outcomes
+    primary_parent: null
+    pr_base: epic/34-improve-convergence-and-tune-from-measured-outcomes
+    jira: null
+  T-34-02:
+    title: Require runtime capability evidence for model-axis escalation
+    plan: '.planning/phases/34-improve-convergence-and-tune-from-measured-outcomes/34-02-PLAN.md'
+    phase: '34-improve-convergence-and-tune-from-measured-outcomes'
+    repo: null
+    wave: 2
+    depends_on: [T-34-01]
+    files: [plugins/delivery-pipeline/scripts/model-capability.cjs, tests/unit/model-capability.test.cjs]
+    risk: high
+    human_checkpoint: true
+    preauthorized: true
+    branch: ticket/T-34-02-require-runtime-capability-evidence-for
+    epic: epic/34-improve-convergence-and-tune-from-measured-outcomes
+    primary_parent: T-34-01
+    pr_base: ticket/T-34-01-make-review-progress-and-resource-budget
+    jira: null
+  T-34-03:
+    title: Strengthen manual merge verdict carry
+    plan: '.planning/phases/34-improve-convergence-and-tune-from-measured-outcomes/34-03-PLAN.md'
+    phase: '34-improve-convergence-and-tune-from-measured-outcomes'
+    repo: null
+    wave: 1
+    depends_on: []
+    files: [plugins/delivery-pipeline/scripts/gate-trailer.cjs, tests/unit/trailer.test.cjs]
+    risk: high
+    human_checkpoint: true
+    preauthorized: true
+    branch: ticket/T-34-03-strengthen-manual-merge-verdict-carry
+    epic: epic/34-improve-convergence-and-tune-from-measured-outcomes
+    primary_parent: null
+    pr_base: epic/34-improve-convergence-and-tune-from-measured-outcomes
+    jira: null
+  T-34-04:
+    title: Admit distinct agents through shared account-scoped leases
+    plan: '.planning/phases/34-improve-convergence-and-tune-from-measured-outcomes/34-04-PLAN.md'
+    phase: '34-improve-convergence-and-tune-from-measured-outcomes'
+    repo: null
+    wave: 3
+    depends_on: [T-34-02]
+    files: [plugins/delivery-pipeline/scripts/capacity-lease.cjs, plugins/delivery-pipeline/scripts/dispatch-boundary.cjs, plugins/delivery-pipeline/scripts/codex-dispatch-adapter.cjs, plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs, plugins/delivery-pipeline/scripts/claude-workflow-host.cjs, plugins/delivery-pipeline/scripts/front.cjs, plugins/delivery-pipeline/scripts/state-sync.cjs, plugins/delivery-pipeline/scripts/lock.cjs, tests/unit/capacity-lease.test.cjs, tests/unit/dispatch-boundary.test.cjs, tests/unit/front.test.cjs]
+    risk: high
+    human_checkpoint: true
+    preauthorized: true
+    branch: ticket/T-34-04-admit-distinct-agents-through-shared-acc
+    epic: epic/34-improve-convergence-and-tune-from-measured-outcomes
+    primary_parent: T-34-02
+    pr_base: ticket/T-34-02-require-runtime-capability-evidence-for
+    jira: null
+  T-34-05:
+    title: Publish versioned optimization evidence and backlog candidates
+    plan: '.planning/phases/34-improve-convergence-and-tune-from-measured-outcomes/34-05-PLAN.md'
+    phase: '34-improve-convergence-and-tune-from-measured-outcomes'
+    repo: null
+    wave: 4
+    depends_on: [T-34-01, T-34-04]
+    files: [plugins/delivery-pipeline/scripts/optimization-report.cjs, plugins/delivery-pipeline/scripts/pipeline-stats.cjs, plugins/delivery-pipeline/scripts/usage-attribution.cjs, plugins/delivery-pipeline/scripts/backlog-index.cjs, plugins/delivery-pipeline/commands/deliver.md, plugins/delivery-pipeline/commands/decompose.md, '.planning/architecture/ADR-011-ROLLOUT.md', tests/unit/optimization-report.test.cjs, tests/unit/pipeline-stats.test.cjs, tests/unit/backlog-index.test.cjs]
+    risk: medium
+    human_checkpoint: false
+    preauthorized: false
+    branch: ticket/T-34-05-publish-versioned-optimization-evidence
+    epic: epic/34-improve-convergence-and-tune-from-measured-outcomes
+    primary_parent: T-34-04
+    pr_base: ticket/T-34-04-admit-distinct-agents-through-shared-acc
     jira: null
   T-35-01:
     title: Deterministic native-GSD projection
@@ -1359,7 +1905,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/gsd-sync.cjs, tests/unit/gsd-sync.test.cjs]
     risk: high
     human_checkpoint: true
-    preauthorized: false
+    preauthorized: true
     branch: ticket/T-35-01-deterministic-native-gsd-projection
     epic: epic/35-gsd-and-shipyard-workflow-loop
     primary_parent: null
@@ -1372,10 +1918,10 @@ tickets:
     repo: null
     wave: 2
     depends_on: [T-35-01]
-    files: [capabilities/delivery-pipeline/checks/gsd-sync-gate.cjs, capabilities/delivery-pipeline/capability.json, tests/unit/gsd-sync-gate.test.cjs, tests/smoke/codex-shipyard-smoke.sh, plugins/delivery-pipeline/scripts/pipeline-config.cjs, tests/unit/pipeline-config.test.cjs]
+    files: [capabilities/delivery-pipeline/checks/gsd-sync-gate.cjs, capabilities/delivery-pipeline/capability.json, tests/unit/gsd-sync-gate.test.cjs, tests/smoke/codex-shipyard-smoke.sh, README.md, plugins/delivery-pipeline/scripts/pipeline-config.cjs, tests/unit/pipeline-config.test.cjs]
     risk: high
     human_checkpoint: true
-    preauthorized: false
+    preauthorized: true
     branch: ticket/T-35-02-wire-synchronization-into-both-gsd-runti
     epic: epic/35-gsd-and-shipyard-workflow-loop
     primary_parent: T-35-01
@@ -1388,12 +1934,332 @@ tickets:
     repo: null
     wave: 3
     depends_on: [T-35-02]
-    files: ['.planning/PROJECT.md', '.planning/ROADMAP.md', '.planning/config.json', '.planning/REQUIREMENTS.md', '.planning/STATE.md', '.planning/graph/tickets.json', '.planning/graph/tickets.yaml', '.planning/architecture/**', '.planning/investigations/**', '.planning/phases/**', plugins/delivery-pipeline/commands/deliver.md, docs/gsd_multilevel_delivery_pipeline.md, README.md]
+    files: ['.planning/phases/35-gsd-and-shipyard-workflow-loop/35-03-PLAN.md', '.planning/PROJECT.md', '.planning/ROADMAP.md', '.planning/config.json', '.planning/REQUIREMENTS.md', '.planning/STATE.md', '.planning/graph/tickets.json', '.planning/graph/tickets.yaml', '.planning/graph/escalations.json', '.planning/graph/delivery-front.json', '.planning/graph/delivery-log.jsonl', '.planning/graph/delivery-state-meta.json', '.planning/graph/delivery-state.json', '.planning/graph/delivery-state.yaml', '.planning/architecture/**', '.planning/investigations/**', '.planning/phases/**', plugins/delivery-pipeline/scripts/gsd-sync.cjs, tests/unit/gsd-sync.test.cjs, docs/gsd_multilevel_delivery_pipeline.md]
     risk: medium
-    human_checkpoint: false
+    human_checkpoint: true
     preauthorized: false
     branch: ticket/T-35-03-document-normalize-and-bootstrap-the-syn
     epic: epic/35-gsd-and-shipyard-workflow-loop
     primary_parent: T-35-02
     pr_base: ticket/T-35-02-wire-synchronization-into-both-gsd-runti
+    jira: null
+  T-36-01:
+    title: Canonical runtime-specific policy and resolver tracer
+    plan: '.planning/phases/36-enforce-the-runtime-model-ladder/36-01-PLAN.md'
+    phase: '36'
+    repo: null
+    wave: 1
+    depends_on: []
+    files: ['.planning/architecture/ADR-014-mandatory-runtime-model-ladder.md', '.planning/phases/36-enforce-the-runtime-model-ladder/36-01-PLAN.md', '.planning/graph/tickets.json', '.planning/graph/tickets.yaml', plugins/delivery-pipeline/scripts/runtime-adapters.cjs, plugins/delivery-pipeline/scripts/model-policy.cjs, plugins/delivery-pipeline/scripts/model-policy-internal.cjs, plugins/delivery-pipeline/scripts/dispatch-boundary.cjs, tests/unit/model-policy.test.cjs, tests/unit/dispatch-boundary.test.cjs, tests/unit/gen-codex-shipyard.test.cjs, '.planning/STATE.md', '.planning/REQUIREMENTS.md', '.planning/ROADMAP.md', '.planning/phases/20-autonomy-of-the-drive-to-green-loop/20-01-SUMMARY.md', '.planning/phases/20-autonomy-of-the-drive-to-green-loop/20-02-SUMMARY.md', '.planning/phases/20-autonomy-of-the-drive-to-green-loop/20-03-SUMMARY.md', '.planning/phases/20-autonomy-of-the-drive-to-green-loop/20-04-SUMMARY.md', '.planning/phases/20-autonomy-of-the-drive-to-green-loop/20-05-SUMMARY.md', '.planning/phases/20-autonomy-of-the-drive-to-green-loop/20-06-SUMMARY.md', '.planning/phases/21-verdicts-a-human-would-have-made-anyway/21-01-SUMMARY.md', '.planning/phases/21-verdicts-a-human-would-have-made-anyway/21-02-SUMMARY.md', '.planning/phases/21-verdicts-a-human-would-have-made-anyway/21-03-SUMMARY.md', '.planning/phases/21-verdicts-a-human-would-have-made-anyway/21-04-SUMMARY.md', '.planning/phases/21-verdicts-a-human-would-have-made-anyway/21-05-SUMMARY.md', '.planning/phases/22-close-what-phase-20-left-open/22-01-SUMMARY.md', '.planning/phases/22-close-what-phase-20-left-open/22-02-SUMMARY.md', '.planning/phases/22-close-what-phase-20-left-open/22-03-SUMMARY.md', '.planning/phases/22-close-what-phase-20-left-open/22-04-SUMMARY.md', '.planning/phases/22-close-what-phase-20-left-open/22-05-SUMMARY.md', '.planning/phases/23-the-board-tells-the-truth-about-itself/23-01-SUMMARY.md', '.planning/phases/23-the-board-tells-the-truth-about-itself/23-02-SUMMARY.md', '.planning/phases/23-the-board-tells-the-truth-about-itself/23-03-SUMMARY.md', '.planning/phases/24-the-conveyor-stops-interrupting-itself/24-01-SUMMARY.md', '.planning/phases/24-the-conveyor-stops-interrupting-itself/24-02-SUMMARY.md', '.planning/phases/24-the-conveyor-stops-interrupting-itself/24-03-SUMMARY.md', '.planning/phases/24-the-conveyor-stops-interrupting-itself/24-04-SUMMARY.md', '.planning/phases/24-the-conveyor-stops-interrupting-itself/24-05-SUMMARY.md', '.planning/phases/24-the-conveyor-stops-interrupting-itself/24-06-SUMMARY.md', '.planning/phases/24-the-conveyor-stops-interrupting-itself/24-07-SUMMARY.md', '.planning/phases/24-the-conveyor-stops-interrupting-itself/24-08-SUMMARY.md', '.planning/phases/24-the-conveyor-stops-interrupting-itself/24-09-SUMMARY.md', '.planning/phases/24-the-conveyor-stops-interrupting-itself/24-10-SUMMARY.md', '.planning/phases/24-the-conveyor-stops-interrupting-itself/24-11-SUMMARY.md', '.planning/phases/25-the-conveyor-follows-the-models-it-runs-on/25-01-SUMMARY.md', '.planning/phases/25-the-conveyor-follows-the-models-it-runs-on/25-02-SUMMARY.md', '.planning/phases/25-the-conveyor-follows-the-models-it-runs-on/25-03-SUMMARY.md', '.planning/phases/25-the-conveyor-follows-the-models-it-runs-on/25-04-SUMMARY.md', '.planning/phases/25-the-conveyor-follows-the-models-it-runs-on/25-05-SUMMARY.md', '.planning/phases/25-the-conveyor-follows-the-models-it-runs-on/25-06-SUMMARY.md', '.planning/phases/26-positive-evidence-before-a-mutation/26-01-SUMMARY.md', '.planning/phases/26-positive-evidence-before-a-mutation/26-02-SUMMARY.md', '.planning/phases/26-positive-evidence-before-a-mutation/26-03-SUMMARY.md', '.planning/phases/26-positive-evidence-before-a-mutation/26-04-SUMMARY.md', '.planning/phases/26-positive-evidence-before-a-mutation/26-05-SUMMARY.md', '.planning/phases/26-positive-evidence-before-a-mutation/26-06-SUMMARY.md', '.planning/phases/26-positive-evidence-before-a-mutation/26-07-SUMMARY.md', '.planning/phases/26-positive-evidence-before-a-mutation/26-08-SUMMARY.md', '.planning/phases/26-positive-evidence-before-a-mutation/26-09-SUMMARY.md', '.planning/phases/26-positive-evidence-before-a-mutation/26-10-SUMMARY.md', '.planning/phases/26-positive-evidence-before-a-mutation/26-11-SUMMARY.md', '.planning/phases/26-positive-evidence-before-a-mutation/26-12-SUMMARY.md', '.planning/phases/26-positive-evidence-before-a-mutation/26-13-SUMMARY.md', '.planning/phases/26-positive-evidence-before-a-mutation/26-14-SUMMARY.md', '.planning/phases/26-positive-evidence-before-a-mutation/26-15-SUMMARY.md', '.planning/phases/27-the-conveyor-measures-its-own-state/27-01-SUMMARY.md', '.planning/phases/27-the-conveyor-measures-its-own-state/27-02-SUMMARY.md', '.planning/phases/27-the-conveyor-measures-its-own-state/27-03-SUMMARY.md', '.planning/phases/27-the-conveyor-measures-its-own-state/27-04-SUMMARY.md', '.planning/phases/27-the-conveyor-measures-its-own-state/27-05-SUMMARY.md', '.planning/phases/27-the-conveyor-measures-its-own-state/27-06-SUMMARY.md', '.planning/phases/27-the-conveyor-measures-its-own-state/27-07-SUMMARY.md', '.planning/phases/27-the-conveyor-measures-its-own-state/27-08-SUMMARY.md', '.planning/phases/27-the-conveyor-measures-its-own-state/27-09-SUMMARY.md', '.planning/phases/28-a-mechanism-nobody-connected-is-not-a-mechanism/28-01-SUMMARY.md', '.planning/phases/28-a-mechanism-nobody-connected-is-not-a-mechanism/28-02-SUMMARY.md', '.planning/phases/28-a-mechanism-nobody-connected-is-not-a-mechanism/28-03-SUMMARY.md', '.planning/phases/28-a-mechanism-nobody-connected-is-not-a-mechanism/28-04-SUMMARY.md', '.planning/phases/28-a-mechanism-nobody-connected-is-not-a-mechanism/28-05-SUMMARY.md', '.planning/phases/28-a-mechanism-nobody-connected-is-not-a-mechanism/28-06-SUMMARY.md', '.planning/phases/28-a-mechanism-nobody-connected-is-not-a-mechanism/28-07-SUMMARY.md', '.planning/phases/28-a-mechanism-nobody-connected-is-not-a-mechanism/28-08-SUMMARY.md', '.planning/phases/28-a-mechanism-nobody-connected-is-not-a-mechanism/28-09-SUMMARY.md', '.planning/phases/29-the-tracker-is-a-projection-and-a-projection-is-driven/29-01-SUMMARY.md', '.planning/phases/29-the-tracker-is-a-projection-and-a-projection-is-driven/29-02-SUMMARY.md', '.planning/phases/29-the-tracker-is-a-projection-and-a-projection-is-driven/29-03-SUMMARY.md', '.planning/phases/29-the-tracker-is-a-projection-and-a-projection-is-driven/29-04-SUMMARY.md', '.planning/phases/29-the-tracker-is-a-projection-and-a-projection-is-driven/29-05-SUMMARY.md', '.planning/phases/29-the-tracker-is-a-projection-and-a-projection-is-driven/29-06-SUMMARY.md', '.planning/phases/29-the-tracker-is-a-projection-and-a-projection-is-driven/29-07-SUMMARY.md', '.planning/phases/29-the-tracker-is-a-projection-and-a-projection-is-driven/29-08-SUMMARY.md', '.planning/phases/30-a-ticket-you-cannot-reach-is-not-deliverable/30-01-SUMMARY.md', '.planning/phases/30-a-ticket-you-cannot-reach-is-not-deliverable/30-02-SUMMARY.md', '.planning/phases/30-a-ticket-you-cannot-reach-is-not-deliverable/30-03-SUMMARY.md', '.planning/phases/30-a-ticket-you-cannot-reach-is-not-deliverable/30-04-SUMMARY.md', '.planning/phases/30-a-ticket-you-cannot-reach-is-not-deliverable/30-05-SUMMARY.md', '.planning/phases/30-a-ticket-you-cannot-reach-is-not-deliverable/30-06-SUMMARY.md', '.planning/phases/30-a-ticket-you-cannot-reach-is-not-deliverable/30-07-SUMMARY.md', '.planning/phases/30-a-ticket-you-cannot-reach-is-not-deliverable/30-08-SUMMARY.md', '.planning/phases/30-a-ticket-you-cannot-reach-is-not-deliverable/30-09-SUMMARY.md', '.planning/phases/30-a-ticket-you-cannot-reach-is-not-deliverable/30-10-SUMMARY.md', '.planning/phases/31-not-every-ticket-is-available-work/31-01-SUMMARY.md', '.planning/phases/31-not-every-ticket-is-available-work/31-02-SUMMARY.md', '.planning/phases/31-not-every-ticket-is-available-work/31-03-SUMMARY.md', '.planning/phases/31-not-every-ticket-is-available-work/31-04-SUMMARY.md', '.planning/phases/31-not-every-ticket-is-available-work/31-05-SUMMARY.md', '.planning/phases/31-not-every-ticket-is-available-work/31-06-SUMMARY.md', '.planning/phases/31-not-every-ticket-is-available-work/31-07-SUMMARY.md', '.planning/phases/32-measure-usage-and-make-the-backlog-actionable/32-01-SUMMARY.md', '.planning/phases/32-measure-usage-and-make-the-backlog-actionable/32-02-SUMMARY.md', '.planning/phases/32-measure-usage-and-make-the-backlog-actionable/32-03-SUMMARY.md', '.planning/phases/32-measure-usage-and-make-the-backlog-actionable/32-04-SUMMARY.md', '.planning/phases/32-measure-usage-and-make-the-backlog-actionable/32-05-SUMMARY.md', '.planning/phases/32-measure-usage-and-make-the-backlog-actionable/32-06-SUMMARY.md', '.planning/phases/32-measure-usage-and-make-the-backlog-actionable/32-07-SUMMARY.md', '.planning/phases/35-gsd-and-shipyard-workflow-loop/35-01-SUMMARY.md', '.planning/phases/35-gsd-and-shipyard-workflow-loop/35-02-SUMMARY.md', '.planning/phases/35-gsd-and-shipyard-workflow-loop/35-03-SUMMARY.md', '.planning/phases/36-enforce-the-runtime-model-ladder/36-01-SUMMARY.md', '.planning/phases/36-enforce-the-runtime-model-ladder/36-02-SUMMARY.md', '.planning/phases/36-enforce-the-runtime-model-ladder/36-03-SUMMARY.md', '.planning/phases/36-enforce-the-runtime-model-ladder/36-04-SUMMARY.md', '.planning/phases/36-enforce-the-runtime-model-ladder/36-05-SUMMARY.md', '.planning/phases/36-enforce-the-runtime-model-ladder/36-06-SUMMARY.md', '.planning/phases/36-enforce-the-runtime-model-ladder/36-07-SUMMARY.md', '.planning/phases/36-enforce-the-runtime-model-ladder/36-08-SUMMARY.md', '.planning/phases/36-enforce-the-runtime-model-ladder/36-09-SUMMARY.md', '.planning/phases/36-enforce-the-runtime-model-ladder/36-10-SUMMARY.md', '.planning/phases/36-enforce-the-runtime-model-ladder/36-11-SUMMARY.md', '.planning/phases/36-enforce-the-runtime-model-ladder/36-12-SUMMARY.md', '.planning/phases/20-autonomy-of-the-drive-to-green-loop/20-autonomy-of-the-drive-to-green-loop-UAT.md', '.planning/phases/20-autonomy-of-the-drive-to-green-loop/20-autonomy-of-the-drive-to-green-loop-VERIFICATION.md', '.planning/phases/21-verdicts-a-human-would-have-made-anyway/21-verdicts-a-human-would-have-made-anyway-UAT.md', '.planning/phases/21-verdicts-a-human-would-have-made-anyway/21-verdicts-a-human-would-have-made-anyway-VERIFICATION.md', '.planning/phases/22-close-what-phase-20-left-open/22-close-what-phase-20-left-open-UAT.md', '.planning/phases/22-close-what-phase-20-left-open/22-close-what-phase-20-left-open-VERIFICATION.md', '.planning/phases/23-the-board-tells-the-truth-about-itself/23-the-board-tells-the-truth-about-itself-UAT.md', '.planning/phases/23-the-board-tells-the-truth-about-itself/23-the-board-tells-the-truth-about-itself-VERIFICATION.md', '.planning/phases/24-the-conveyor-stops-interrupting-itself/24-the-conveyor-stops-interrupting-itself-UAT.md', '.planning/phases/24-the-conveyor-stops-interrupting-itself/24-the-conveyor-stops-interrupting-itself-VERIFICATION.md', '.planning/phases/25-the-conveyor-follows-the-models-it-runs-on/25-the-conveyor-follows-the-models-it-runs-on-UAT.md', '.planning/phases/25-the-conveyor-follows-the-models-it-runs-on/25-the-conveyor-follows-the-models-it-runs-on-VERIFICATION.md', '.planning/phases/26-positive-evidence-before-a-mutation/26-positive-evidence-before-a-mutation-UAT.md', '.planning/phases/26-positive-evidence-before-a-mutation/26-positive-evidence-before-a-mutation-VERIFICATION.md', '.planning/phases/27-the-conveyor-measures-its-own-state/27-the-conveyor-measures-its-own-state-UAT.md', '.planning/phases/27-the-conveyor-measures-its-own-state/27-the-conveyor-measures-its-own-state-VERIFICATION.md', '.planning/phases/28-a-mechanism-nobody-connected-is-not-a-mechanism/28-a-mechanism-nobody-connected-is-not-a-mechanism-UAT.md', '.planning/phases/28-a-mechanism-nobody-connected-is-not-a-mechanism/28-a-mechanism-nobody-connected-is-not-a-mechanism-VERIFICATION.md', '.planning/phases/29-the-tracker-is-a-projection-and-a-projection-is-driven/29-the-tracker-is-a-projection-and-a-projection-is-driven-UAT.md', '.planning/phases/29-the-tracker-is-a-projection-and-a-projection-is-driven/29-the-tracker-is-a-projection-and-a-projection-is-driven-VERIFICATION.md', '.planning/phases/30-a-ticket-you-cannot-reach-is-not-deliverable/30-a-ticket-you-cannot-reach-is-not-deliverable-UAT.md', '.planning/phases/30-a-ticket-you-cannot-reach-is-not-deliverable/30-a-ticket-you-cannot-reach-is-not-deliverable-VERIFICATION.md', '.planning/phases/31-not-every-ticket-is-available-work/31-not-every-ticket-is-available-work-UAT.md', '.planning/phases/31-not-every-ticket-is-available-work/31-not-every-ticket-is-available-work-VERIFICATION.md', '.planning/phases/32-measure-usage-and-make-the-backlog-actionable/32-measure-usage-and-make-the-backlog-actionable-UAT.md', '.planning/phases/32-measure-usage-and-make-the-backlog-actionable/32-measure-usage-and-make-the-backlog-actionable-VERIFICATION.md', '.planning/phases/33-reduce-orchestration-context-and-transfer-sessions-safely/33-reduce-orchestration-context-and-transfer-sessions-safely-UAT.md', '.planning/phases/33-reduce-orchestration-context-and-transfer-sessions-safely/33-reduce-orchestration-context-and-transfer-sessions-safely-VERIFICATION.md', '.planning/phases/34-improve-convergence-and-tune-from-measured-outcomes/34-improve-convergence-and-tune-from-measured-outcomes-UAT.md', '.planning/phases/34-improve-convergence-and-tune-from-measured-outcomes/34-improve-convergence-and-tune-from-measured-outcomes-VERIFICATION.md', '.planning/phases/35-gsd-and-shipyard-workflow-loop/35-gsd-and-shipyard-workflow-loop-UAT.md', '.planning/phases/35-gsd-and-shipyard-workflow-loop/35-gsd-and-shipyard-workflow-loop-VERIFICATION.md', '.planning/phases/36-enforce-the-runtime-model-ladder/36-enforce-the-runtime-model-ladder-UAT.md', '.planning/phases/36-enforce-the-runtime-model-ladder/36-enforce-the-runtime-model-ladder-VERIFICATION.md']
+    risk: high
+    human_checkpoint: true
+    preauthorized: true
+    branch: ticket/T-36-01-canonical-runtime-neutral-policy-and-res
+    epic: epic/36-enforce-the-runtime-model-ladder
+    primary_parent: null
+    pr_base: epic/36-enforce-the-runtime-model-ladder
+    jira: null
+  T-36-02:
+    title: Authoritative configuration bridge and override refusal
+    plan: '.planning/phases/36-enforce-the-runtime-model-ladder/36-02-PLAN.md'
+    phase: '36'
+    repo: null
+    wave: 11
+    depends_on: [T-36-01, T-30-05, T-31-02]
+    files: [plugins/delivery-pipeline/scripts/pipeline-config.cjs, plugins/delivery-pipeline/scripts/runtime-context.cjs, tests/unit/pipeline-config.test.cjs, tests/unit/runtime-context.test.cjs]
+    risk: high
+    human_checkpoint: true
+    preauthorized: true
+    branch: ticket/T-36-02-authoritative-configuration-bridge-and-o
+    epic: epic/36-enforce-the-runtime-model-ladder
+    primary_parent: T-36-01
+    pr_base: ticket/T-36-01-canonical-runtime-neutral-policy-and-res
+    jira: null
+  T-36-03:
+    title: Strict Codex adapter and named model palette
+    plan: '.planning/phases/36-enforce-the-runtime-model-ladder/36-03-PLAN.md'
+    phase: '36'
+    repo: null
+    wave: 12
+    depends_on: [T-36-02]
+    files: [plugins/delivery-pipeline/scripts/codex-dispatch-adapter.cjs, plugins/delivery-pipeline/scripts/dispatch-boundary.cjs, plugins/delivery-pipeline/scripts/codex-agent.cjs, plugins/delivery-pipeline/scripts/codex-model-remap.cjs, tests/unit/codex-dispatch-adapter.test.cjs, tests/unit/codex-agent.test.cjs]
+    risk: high
+    human_checkpoint: true
+    preauthorized: true
+    branch: ticket/T-36-03-strict-codex-adapter-and-named-model-pal
+    epic: epic/36-enforce-the-runtime-model-ladder
+    primary_parent: T-36-02
+    pr_base: ticket/T-36-02-authoritative-configuration-bridge-and-o
+    jira: null
+  T-36-04:
+    title: Generate and validate the Codex bundle with the amended model ladder
+    plan: '.planning/phases/36-enforce-the-runtime-model-ladder/36-04-PLAN.md'
+    phase: '36'
+    repo: null
+    wave: 13
+    depends_on: [T-36-03]
+    files: [CLAUDE.md, '.planning/architecture/ADR-014-DATA-MODEL.md', '.planning/architecture/ADR-014-mandatory-runtime-model-ladder.md', capabilities/delivery-pipeline/capability.json, docs/gsd_multilevel_delivery_pipeline.md, plugins/delivery-pipeline/scripts/model-policy-internal.cjs, plugins/delivery-pipeline/scripts/runtime-adapters.cjs, plugins/delivery-pipeline/scripts/pipeline-config.cjs, plugins/delivery-pipeline/scripts/codex-model-remap.cjs, scripts/gen-codex-shipyard.cjs, scripts/install-shipyard-codex.sh, plugins/delivery-pipeline/scripts/gsd-tune.cjs, plugins/delivery-pipeline/scripts/dispatch-record.cjs, README.md, plugins/delivery-pipeline/commands/deliver.md, plugins/delivery-pipeline/references/pr-sentinel.md, docs/audits/2026-09-08-models-autonomy-probes.cjs, tests/unit/gsd-tune.test.cjs, tests/unit/gen-codex-shipyard.test.cjs, tests/unit/dispatch-record.test.cjs, tests/unit/codex-agent.test.cjs, tests/unit/codex-dispatch-adapter.test.cjs, tests/unit/dispatch-boundary.test.cjs, tests/unit/model-policy.test.cjs, tests/unit/pipeline-config.test.cjs, tests/smoke/codex-shipyard-smoke.sh, '.planning/phases/36-enforce-the-runtime-model-ladder/36-06-PLAN.md', '.planning/phases/36-enforce-the-runtime-model-ladder/36-07-PLAN.md', '.planning/phases/36-enforce-the-runtime-model-ladder/36-04-PLAN.md', '.planning/graph/tickets.json', '.planning/graph/tickets.yaml', '.planning/STATE.md', '.planning/REQUIREMENTS.md', '.planning/ROADMAP.md', '.planning/phases/20-autonomy-of-the-drive-to-green-loop/20-01-SUMMARY.md', '.planning/phases/20-autonomy-of-the-drive-to-green-loop/20-02-SUMMARY.md', '.planning/phases/20-autonomy-of-the-drive-to-green-loop/20-03-SUMMARY.md', '.planning/phases/20-autonomy-of-the-drive-to-green-loop/20-04-SUMMARY.md', '.planning/phases/20-autonomy-of-the-drive-to-green-loop/20-05-SUMMARY.md', '.planning/phases/20-autonomy-of-the-drive-to-green-loop/20-06-SUMMARY.md', '.planning/phases/21-verdicts-a-human-would-have-made-anyway/21-01-SUMMARY.md', '.planning/phases/21-verdicts-a-human-would-have-made-anyway/21-02-SUMMARY.md', '.planning/phases/21-verdicts-a-human-would-have-made-anyway/21-03-SUMMARY.md', '.planning/phases/21-verdicts-a-human-would-have-made-anyway/21-04-SUMMARY.md', '.planning/phases/21-verdicts-a-human-would-have-made-anyway/21-05-SUMMARY.md', '.planning/phases/22-close-what-phase-20-left-open/22-01-SUMMARY.md', '.planning/phases/22-close-what-phase-20-left-open/22-02-SUMMARY.md', '.planning/phases/22-close-what-phase-20-left-open/22-03-SUMMARY.md', '.planning/phases/22-close-what-phase-20-left-open/22-04-SUMMARY.md', '.planning/phases/22-close-what-phase-20-left-open/22-05-SUMMARY.md', '.planning/phases/23-the-board-tells-the-truth-about-itself/23-01-SUMMARY.md', '.planning/phases/23-the-board-tells-the-truth-about-itself/23-02-SUMMARY.md', '.planning/phases/23-the-board-tells-the-truth-about-itself/23-03-SUMMARY.md', '.planning/phases/24-the-conveyor-stops-interrupting-itself/24-01-SUMMARY.md', '.planning/phases/24-the-conveyor-stops-interrupting-itself/24-02-SUMMARY.md', '.planning/phases/24-the-conveyor-stops-interrupting-itself/24-03-SUMMARY.md', '.planning/phases/24-the-conveyor-stops-interrupting-itself/24-04-SUMMARY.md', '.planning/phases/24-the-conveyor-stops-interrupting-itself/24-05-SUMMARY.md', '.planning/phases/24-the-conveyor-stops-interrupting-itself/24-06-SUMMARY.md', '.planning/phases/24-the-conveyor-stops-interrupting-itself/24-07-SUMMARY.md', '.planning/phases/24-the-conveyor-stops-interrupting-itself/24-08-SUMMARY.md', '.planning/phases/24-the-conveyor-stops-interrupting-itself/24-09-SUMMARY.md', '.planning/phases/24-the-conveyor-stops-interrupting-itself/24-10-SUMMARY.md', '.planning/phases/24-the-conveyor-stops-interrupting-itself/24-11-SUMMARY.md', '.planning/phases/25-the-conveyor-follows-the-models-it-runs-on/25-01-SUMMARY.md', '.planning/phases/25-the-conveyor-follows-the-models-it-runs-on/25-02-SUMMARY.md', '.planning/phases/25-the-conveyor-follows-the-models-it-runs-on/25-03-SUMMARY.md', '.planning/phases/25-the-conveyor-follows-the-models-it-runs-on/25-04-SUMMARY.md', '.planning/phases/25-the-conveyor-follows-the-models-it-runs-on/25-05-SUMMARY.md', '.planning/phases/25-the-conveyor-follows-the-models-it-runs-on/25-06-SUMMARY.md', '.planning/phases/26-positive-evidence-before-a-mutation/26-01-SUMMARY.md', '.planning/phases/26-positive-evidence-before-a-mutation/26-02-SUMMARY.md', '.planning/phases/26-positive-evidence-before-a-mutation/26-03-SUMMARY.md', '.planning/phases/26-positive-evidence-before-a-mutation/26-04-SUMMARY.md', '.planning/phases/26-positive-evidence-before-a-mutation/26-05-SUMMARY.md', '.planning/phases/26-positive-evidence-before-a-mutation/26-06-SUMMARY.md', '.planning/phases/26-positive-evidence-before-a-mutation/26-07-SUMMARY.md', '.planning/phases/26-positive-evidence-before-a-mutation/26-08-SUMMARY.md', '.planning/phases/26-positive-evidence-before-a-mutation/26-09-SUMMARY.md', '.planning/phases/26-positive-evidence-before-a-mutation/26-10-SUMMARY.md', '.planning/phases/26-positive-evidence-before-a-mutation/26-11-SUMMARY.md', '.planning/phases/26-positive-evidence-before-a-mutation/26-12-SUMMARY.md', '.planning/phases/26-positive-evidence-before-a-mutation/26-13-SUMMARY.md', '.planning/phases/26-positive-evidence-before-a-mutation/26-14-SUMMARY.md', '.planning/phases/26-positive-evidence-before-a-mutation/26-15-SUMMARY.md', '.planning/phases/27-the-conveyor-measures-its-own-state/27-01-SUMMARY.md', '.planning/phases/27-the-conveyor-measures-its-own-state/27-02-SUMMARY.md', '.planning/phases/27-the-conveyor-measures-its-own-state/27-03-SUMMARY.md', '.planning/phases/27-the-conveyor-measures-its-own-state/27-04-SUMMARY.md', '.planning/phases/27-the-conveyor-measures-its-own-state/27-05-SUMMARY.md', '.planning/phases/27-the-conveyor-measures-its-own-state/27-06-SUMMARY.md', '.planning/phases/27-the-conveyor-measures-its-own-state/27-07-SUMMARY.md', '.planning/phases/27-the-conveyor-measures-its-own-state/27-08-SUMMARY.md', '.planning/phases/27-the-conveyor-measures-its-own-state/27-09-SUMMARY.md', '.planning/phases/28-a-mechanism-nobody-connected-is-not-a-mechanism/28-01-SUMMARY.md', '.planning/phases/28-a-mechanism-nobody-connected-is-not-a-mechanism/28-02-SUMMARY.md', '.planning/phases/28-a-mechanism-nobody-connected-is-not-a-mechanism/28-03-SUMMARY.md', '.planning/phases/28-a-mechanism-nobody-connected-is-not-a-mechanism/28-04-SUMMARY.md', '.planning/phases/28-a-mechanism-nobody-connected-is-not-a-mechanism/28-05-SUMMARY.md', '.planning/phases/28-a-mechanism-nobody-connected-is-not-a-mechanism/28-06-SUMMARY.md', '.planning/phases/28-a-mechanism-nobody-connected-is-not-a-mechanism/28-07-SUMMARY.md', '.planning/phases/28-a-mechanism-nobody-connected-is-not-a-mechanism/28-08-SUMMARY.md', '.planning/phases/28-a-mechanism-nobody-connected-is-not-a-mechanism/28-09-SUMMARY.md', '.planning/phases/29-the-tracker-is-a-projection-and-a-projection-is-driven/29-01-SUMMARY.md', '.planning/phases/29-the-tracker-is-a-projection-and-a-projection-is-driven/29-02-SUMMARY.md', '.planning/phases/29-the-tracker-is-a-projection-and-a-projection-is-driven/29-03-SUMMARY.md', '.planning/phases/29-the-tracker-is-a-projection-and-a-projection-is-driven/29-04-SUMMARY.md', '.planning/phases/29-the-tracker-is-a-projection-and-a-projection-is-driven/29-05-SUMMARY.md', '.planning/phases/29-the-tracker-is-a-projection-and-a-projection-is-driven/29-06-SUMMARY.md', '.planning/phases/29-the-tracker-is-a-projection-and-a-projection-is-driven/29-07-SUMMARY.md', '.planning/phases/29-the-tracker-is-a-projection-and-a-projection-is-driven/29-08-SUMMARY.md', '.planning/phases/30-a-ticket-you-cannot-reach-is-not-deliverable/30-01-SUMMARY.md', '.planning/phases/30-a-ticket-you-cannot-reach-is-not-deliverable/30-02-SUMMARY.md', '.planning/phases/30-a-ticket-you-cannot-reach-is-not-deliverable/30-03-SUMMARY.md', '.planning/phases/30-a-ticket-you-cannot-reach-is-not-deliverable/30-04-SUMMARY.md', '.planning/phases/30-a-ticket-you-cannot-reach-is-not-deliverable/30-05-SUMMARY.md', '.planning/phases/30-a-ticket-you-cannot-reach-is-not-deliverable/30-06-SUMMARY.md', '.planning/phases/30-a-ticket-you-cannot-reach-is-not-deliverable/30-07-SUMMARY.md', '.planning/phases/30-a-ticket-you-cannot-reach-is-not-deliverable/30-08-SUMMARY.md', '.planning/phases/30-a-ticket-you-cannot-reach-is-not-deliverable/30-09-SUMMARY.md', '.planning/phases/30-a-ticket-you-cannot-reach-is-not-deliverable/30-10-SUMMARY.md', '.planning/phases/31-not-every-ticket-is-available-work/31-01-SUMMARY.md', '.planning/phases/31-not-every-ticket-is-available-work/31-02-SUMMARY.md', '.planning/phases/31-not-every-ticket-is-available-work/31-03-SUMMARY.md', '.planning/phases/31-not-every-ticket-is-available-work/31-04-SUMMARY.md', '.planning/phases/31-not-every-ticket-is-available-work/31-05-SUMMARY.md', '.planning/phases/31-not-every-ticket-is-available-work/31-06-SUMMARY.md', '.planning/phases/31-not-every-ticket-is-available-work/31-07-SUMMARY.md', '.planning/phases/32-measure-usage-and-make-the-backlog-actionable/32-01-SUMMARY.md', '.planning/phases/32-measure-usage-and-make-the-backlog-actionable/32-02-SUMMARY.md', '.planning/phases/32-measure-usage-and-make-the-backlog-actionable/32-03-SUMMARY.md', '.planning/phases/32-measure-usage-and-make-the-backlog-actionable/32-04-SUMMARY.md', '.planning/phases/32-measure-usage-and-make-the-backlog-actionable/32-05-SUMMARY.md', '.planning/phases/32-measure-usage-and-make-the-backlog-actionable/32-06-SUMMARY.md', '.planning/phases/32-measure-usage-and-make-the-backlog-actionable/32-07-SUMMARY.md', '.planning/phases/35-gsd-and-shipyard-workflow-loop/35-01-SUMMARY.md', '.planning/phases/35-gsd-and-shipyard-workflow-loop/35-02-SUMMARY.md', '.planning/phases/35-gsd-and-shipyard-workflow-loop/35-03-SUMMARY.md', '.planning/phases/36-enforce-the-runtime-model-ladder/36-01-SUMMARY.md', '.planning/phases/36-enforce-the-runtime-model-ladder/36-02-SUMMARY.md', '.planning/phases/36-enforce-the-runtime-model-ladder/36-03-SUMMARY.md', '.planning/phases/36-enforce-the-runtime-model-ladder/36-04-SUMMARY.md', '.planning/phases/36-enforce-the-runtime-model-ladder/36-05-SUMMARY.md', '.planning/phases/36-enforce-the-runtime-model-ladder/36-06-SUMMARY.md', '.planning/phases/36-enforce-the-runtime-model-ladder/36-07-SUMMARY.md', '.planning/phases/36-enforce-the-runtime-model-ladder/36-08-SUMMARY.md', '.planning/phases/36-enforce-the-runtime-model-ladder/36-09-SUMMARY.md', '.planning/phases/36-enforce-the-runtime-model-ladder/36-10-SUMMARY.md', '.planning/phases/36-enforce-the-runtime-model-ladder/36-11-SUMMARY.md', '.planning/phases/36-enforce-the-runtime-model-ladder/36-12-SUMMARY.md', '.planning/phases/20-autonomy-of-the-drive-to-green-loop/20-autonomy-of-the-drive-to-green-loop-UAT.md', '.planning/phases/20-autonomy-of-the-drive-to-green-loop/20-autonomy-of-the-drive-to-green-loop-VERIFICATION.md', '.planning/phases/21-verdicts-a-human-would-have-made-anyway/21-verdicts-a-human-would-have-made-anyway-UAT.md', '.planning/phases/21-verdicts-a-human-would-have-made-anyway/21-verdicts-a-human-would-have-made-anyway-VERIFICATION.md', '.planning/phases/22-close-what-phase-20-left-open/22-close-what-phase-20-left-open-UAT.md', '.planning/phases/22-close-what-phase-20-left-open/22-close-what-phase-20-left-open-VERIFICATION.md', '.planning/phases/23-the-board-tells-the-truth-about-itself/23-the-board-tells-the-truth-about-itself-UAT.md', '.planning/phases/23-the-board-tells-the-truth-about-itself/23-the-board-tells-the-truth-about-itself-VERIFICATION.md', '.planning/phases/24-the-conveyor-stops-interrupting-itself/24-the-conveyor-stops-interrupting-itself-UAT.md', '.planning/phases/24-the-conveyor-stops-interrupting-itself/24-the-conveyor-stops-interrupting-itself-VERIFICATION.md', '.planning/phases/25-the-conveyor-follows-the-models-it-runs-on/25-the-conveyor-follows-the-models-it-runs-on-UAT.md', '.planning/phases/25-the-conveyor-follows-the-models-it-runs-on/25-the-conveyor-follows-the-models-it-runs-on-VERIFICATION.md', '.planning/phases/26-positive-evidence-before-a-mutation/26-positive-evidence-before-a-mutation-UAT.md', '.planning/phases/26-positive-evidence-before-a-mutation/26-positive-evidence-before-a-mutation-VERIFICATION.md', '.planning/phases/27-the-conveyor-measures-its-own-state/27-the-conveyor-measures-its-own-state-UAT.md', '.planning/phases/27-the-conveyor-measures-its-own-state/27-the-conveyor-measures-its-own-state-VERIFICATION.md', '.planning/phases/28-a-mechanism-nobody-connected-is-not-a-mechanism/28-a-mechanism-nobody-connected-is-not-a-mechanism-UAT.md', '.planning/phases/28-a-mechanism-nobody-connected-is-not-a-mechanism/28-a-mechanism-nobody-connected-is-not-a-mechanism-VERIFICATION.md', '.planning/phases/29-the-tracker-is-a-projection-and-a-projection-is-driven/29-the-tracker-is-a-projection-and-a-projection-is-driven-UAT.md', '.planning/phases/29-the-tracker-is-a-projection-and-a-projection-is-driven/29-the-tracker-is-a-projection-and-a-projection-is-driven-VERIFICATION.md', '.planning/phases/30-a-ticket-you-cannot-reach-is-not-deliverable/30-a-ticket-you-cannot-reach-is-not-deliverable-UAT.md', '.planning/phases/30-a-ticket-you-cannot-reach-is-not-deliverable/30-a-ticket-you-cannot-reach-is-not-deliverable-VERIFICATION.md', '.planning/phases/31-not-every-ticket-is-available-work/31-not-every-ticket-is-available-work-UAT.md', '.planning/phases/31-not-every-ticket-is-available-work/31-not-every-ticket-is-available-work-VERIFICATION.md', '.planning/phases/32-measure-usage-and-make-the-backlog-actionable/32-measure-usage-and-make-the-backlog-actionable-UAT.md', '.planning/phases/32-measure-usage-and-make-the-backlog-actionable/32-measure-usage-and-make-the-backlog-actionable-VERIFICATION.md', '.planning/phases/33-reduce-orchestration-context-and-transfer-sessions-safely/33-reduce-orchestration-context-and-transfer-sessions-safely-UAT.md', '.planning/phases/33-reduce-orchestration-context-and-transfer-sessions-safely/33-reduce-orchestration-context-and-transfer-sessions-safely-VERIFICATION.md', '.planning/phases/34-improve-convergence-and-tune-from-measured-outcomes/34-improve-convergence-and-tune-from-measured-outcomes-UAT.md', '.planning/phases/34-improve-convergence-and-tune-from-measured-outcomes/34-improve-convergence-and-tune-from-measured-outcomes-VERIFICATION.md', '.planning/phases/35-gsd-and-shipyard-workflow-loop/35-gsd-and-shipyard-workflow-loop-UAT.md', '.planning/phases/35-gsd-and-shipyard-workflow-loop/35-gsd-and-shipyard-workflow-loop-VERIFICATION.md', '.planning/phases/36-enforce-the-runtime-model-ladder/36-enforce-the-runtime-model-ladder-UAT.md', '.planning/phases/36-enforce-the-runtime-model-ladder/36-enforce-the-runtime-model-ladder-VERIFICATION.md']
+    risk: high
+    human_checkpoint: true
+    preauthorized: true
+    branch: ticket/T-36-04-generate-and-validate-the-codex-bundle-w
+    epic: epic/36-enforce-the-runtime-model-ladder
+    primary_parent: T-36-03
+    pr_base: ticket/T-36-03-strict-codex-adapter-and-named-model-pal
+    jira: null
+  T-36-05:
+    title: Claude adapter and explicit workflow launch application
+    plan: '.planning/phases/36-enforce-the-runtime-model-ladder/36-05-PLAN.md'
+    phase: '36'
+    repo: null
+    wave: 14
+    depends_on: [T-36-04]
+    files: [plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs, plugins/delivery-pipeline/workflows/executors.mjs, plugins/delivery-pipeline/workflows/fix-round.mjs, plugins/delivery-pipeline/workflows/drift-gate.mjs, tests/unit/workflows-args.test.cjs, tests/unit/sentinel.test.cjs, tests/unit/source-contract.test.cjs]
+    risk: high
+    human_checkpoint: true
+    preauthorized: true
+    branch: ticket/T-36-05-claude-adapter-and-explicit-workflow-lau
+    epic: epic/36-enforce-the-runtime-model-ladder
+    primary_parent: T-36-04
+    pr_base: ticket/T-36-04-generate-and-validate-the-codex-bundle-w
+    jira: null
+  T-36-06:
+    title: Route GSD decomposition through the mandatory boundary
+    plan: '.planning/phases/36-enforce-the-runtime-model-ladder/36-06-PLAN.md'
+    phase: '36'
+    repo: null
+    wave: 15
+    depends_on: [T-36-05]
+    files: [plugins/delivery-pipeline/commands/decompose.md, plugins/delivery-pipeline/scripts/dispatch-boundary.cjs, plugins/delivery-pipeline/scripts/codex-dispatch-adapter.cjs, plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs, plugins/delivery-pipeline/scripts/pipeline-config.cjs, '.planning/graph/tickets.json', '.planning/graph/tickets.yaml', '.planning/STATE.md', '.planning/REQUIREMENTS.md', '.planning/ROADMAP.md', '.planning/phases/36-enforce-the-runtime-model-ladder/36-01-SUMMARY.md', '.planning/phases/36-enforce-the-runtime-model-ladder/36-02-SUMMARY.md', '.planning/phases/36-enforce-the-runtime-model-ladder/36-03-SUMMARY.md', '.planning/phases/36-enforce-the-runtime-model-ladder/36-04-SUMMARY.md', '.planning/phases/36-enforce-the-runtime-model-ladder/36-05-SUMMARY.md', '.planning/phases/36-enforce-the-runtime-model-ladder/36-06-SUMMARY.md', '.planning/phases/36-enforce-the-runtime-model-ladder/36-07-SUMMARY.md', '.planning/phases/36-enforce-the-runtime-model-ladder/36-08-SUMMARY.md', '.planning/phases/36-enforce-the-runtime-model-ladder/36-09-SUMMARY.md', '.planning/phases/36-enforce-the-runtime-model-ladder/36-10-SUMMARY.md', '.planning/phases/36-enforce-the-runtime-model-ladder/36-11-SUMMARY.md', '.planning/phases/36-enforce-the-runtime-model-ladder/36-12-SUMMARY.md', '.planning/phases/36-enforce-the-runtime-model-ladder/36-enforce-the-runtime-model-ladder-UAT.md', '.planning/phases/36-enforce-the-runtime-model-ladder/36-enforce-the-runtime-model-ladder-VERIFICATION.md', '.planning/phases/20-autonomy-of-the-drive-to-green-loop/20-01-SUMMARY.md', '.planning/phases/20-autonomy-of-the-drive-to-green-loop/20-02-SUMMARY.md', '.planning/phases/20-autonomy-of-the-drive-to-green-loop/20-03-SUMMARY.md', '.planning/phases/20-autonomy-of-the-drive-to-green-loop/20-04-SUMMARY.md', '.planning/phases/20-autonomy-of-the-drive-to-green-loop/20-05-SUMMARY.md', '.planning/phases/20-autonomy-of-the-drive-to-green-loop/20-06-SUMMARY.md', '.planning/phases/20-autonomy-of-the-drive-to-green-loop/20-autonomy-of-the-drive-to-green-loop-UAT.md', '.planning/phases/20-autonomy-of-the-drive-to-green-loop/20-autonomy-of-the-drive-to-green-loop-VERIFICATION.md', '.planning/phases/21-verdicts-a-human-would-have-made-anyway/21-01-SUMMARY.md', '.planning/phases/21-verdicts-a-human-would-have-made-anyway/21-02-SUMMARY.md', '.planning/phases/21-verdicts-a-human-would-have-made-anyway/21-03-SUMMARY.md', '.planning/phases/21-verdicts-a-human-would-have-made-anyway/21-04-SUMMARY.md', '.planning/phases/21-verdicts-a-human-would-have-made-anyway/21-05-SUMMARY.md', '.planning/phases/21-verdicts-a-human-would-have-made-anyway/21-verdicts-a-human-would-have-made-anyway-UAT.md', '.planning/phases/21-verdicts-a-human-would-have-made-anyway/21-verdicts-a-human-would-have-made-anyway-VERIFICATION.md', '.planning/phases/22-close-what-phase-20-left-open/22-01-SUMMARY.md', '.planning/phases/22-close-what-phase-20-left-open/22-02-SUMMARY.md', '.planning/phases/22-close-what-phase-20-left-open/22-03-SUMMARY.md', '.planning/phases/22-close-what-phase-20-left-open/22-04-SUMMARY.md', '.planning/phases/22-close-what-phase-20-left-open/22-05-SUMMARY.md', '.planning/phases/22-close-what-phase-20-left-open/22-close-what-phase-20-left-open-UAT.md', '.planning/phases/22-close-what-phase-20-left-open/22-close-what-phase-20-left-open-VERIFICATION.md', '.planning/phases/23-the-board-tells-the-truth-about-itself/23-01-SUMMARY.md', '.planning/phases/23-the-board-tells-the-truth-about-itself/23-02-SUMMARY.md', '.planning/phases/23-the-board-tells-the-truth-about-itself/23-03-SUMMARY.md', '.planning/phases/23-the-board-tells-the-truth-about-itself/23-the-board-tells-the-truth-about-itself-UAT.md', '.planning/phases/23-the-board-tells-the-truth-about-itself/23-the-board-tells-the-truth-about-itself-VERIFICATION.md', '.planning/phases/24-the-conveyor-stops-interrupting-itself/24-01-SUMMARY.md', '.planning/phases/24-the-conveyor-stops-interrupting-itself/24-02-SUMMARY.md', '.planning/phases/24-the-conveyor-stops-interrupting-itself/24-03-SUMMARY.md', '.planning/phases/24-the-conveyor-stops-interrupting-itself/24-04-SUMMARY.md', '.planning/phases/24-the-conveyor-stops-interrupting-itself/24-05-SUMMARY.md', '.planning/phases/24-the-conveyor-stops-interrupting-itself/24-06-SUMMARY.md', '.planning/phases/24-the-conveyor-stops-interrupting-itself/24-07-SUMMARY.md', '.planning/phases/24-the-conveyor-stops-interrupting-itself/24-08-SUMMARY.md', '.planning/phases/24-the-conveyor-stops-interrupting-itself/24-09-SUMMARY.md', '.planning/phases/24-the-conveyor-stops-interrupting-itself/24-10-SUMMARY.md', '.planning/phases/24-the-conveyor-stops-interrupting-itself/24-11-SUMMARY.md', '.planning/phases/24-the-conveyor-stops-interrupting-itself/24-the-conveyor-stops-interrupting-itself-UAT.md', '.planning/phases/24-the-conveyor-stops-interrupting-itself/24-the-conveyor-stops-interrupting-itself-VERIFICATION.md', '.planning/phases/25-the-conveyor-follows-the-models-it-runs-on/25-01-SUMMARY.md', '.planning/phases/25-the-conveyor-follows-the-models-it-runs-on/25-02-SUMMARY.md', '.planning/phases/25-the-conveyor-follows-the-models-it-runs-on/25-03-SUMMARY.md', '.planning/phases/25-the-conveyor-follows-the-models-it-runs-on/25-04-SUMMARY.md', '.planning/phases/25-the-conveyor-follows-the-models-it-runs-on/25-05-SUMMARY.md', '.planning/phases/25-the-conveyor-follows-the-models-it-runs-on/25-06-SUMMARY.md', '.planning/phases/25-the-conveyor-follows-the-models-it-runs-on/25-the-conveyor-follows-the-models-it-runs-on-UAT.md', '.planning/phases/25-the-conveyor-follows-the-models-it-runs-on/25-the-conveyor-follows-the-models-it-runs-on-VERIFICATION.md', '.planning/phases/26-positive-evidence-before-a-mutation/26-01-SUMMARY.md', '.planning/phases/26-positive-evidence-before-a-mutation/26-02-SUMMARY.md', '.planning/phases/26-positive-evidence-before-a-mutation/26-03-SUMMARY.md', '.planning/phases/26-positive-evidence-before-a-mutation/26-04-SUMMARY.md', '.planning/phases/26-positive-evidence-before-a-mutation/26-05-SUMMARY.md', '.planning/phases/26-positive-evidence-before-a-mutation/26-06-SUMMARY.md', '.planning/phases/26-positive-evidence-before-a-mutation/26-07-SUMMARY.md', '.planning/phases/26-positive-evidence-before-a-mutation/26-08-SUMMARY.md', '.planning/phases/26-positive-evidence-before-a-mutation/26-09-SUMMARY.md', '.planning/phases/26-positive-evidence-before-a-mutation/26-10-SUMMARY.md', '.planning/phases/26-positive-evidence-before-a-mutation/26-11-SUMMARY.md', '.planning/phases/26-positive-evidence-before-a-mutation/26-12-SUMMARY.md', '.planning/phases/26-positive-evidence-before-a-mutation/26-13-SUMMARY.md', '.planning/phases/26-positive-evidence-before-a-mutation/26-14-SUMMARY.md', '.planning/phases/26-positive-evidence-before-a-mutation/26-15-SUMMARY.md', '.planning/phases/26-positive-evidence-before-a-mutation/26-positive-evidence-before-a-mutation-UAT.md', '.planning/phases/26-positive-evidence-before-a-mutation/26-positive-evidence-before-a-mutation-VERIFICATION.md', '.planning/phases/27-the-conveyor-measures-its-own-state/27-01-SUMMARY.md', '.planning/phases/27-the-conveyor-measures-its-own-state/27-02-SUMMARY.md', '.planning/phases/27-the-conveyor-measures-its-own-state/27-03-SUMMARY.md', '.planning/phases/27-the-conveyor-measures-its-own-state/27-04-SUMMARY.md', '.planning/phases/27-the-conveyor-measures-its-own-state/27-05-SUMMARY.md', '.planning/phases/27-the-conveyor-measures-its-own-state/27-06-SUMMARY.md', '.planning/phases/27-the-conveyor-measures-its-own-state/27-07-SUMMARY.md', '.planning/phases/27-the-conveyor-measures-its-own-state/27-08-SUMMARY.md', '.planning/phases/27-the-conveyor-measures-its-own-state/27-09-SUMMARY.md', '.planning/phases/27-the-conveyor-measures-its-own-state/27-the-conveyor-measures-its-own-state-UAT.md', '.planning/phases/27-the-conveyor-measures-its-own-state/27-the-conveyor-measures-its-own-state-VERIFICATION.md', '.planning/phases/28-a-mechanism-nobody-connected-is-not-a-mechanism/28-01-SUMMARY.md', '.planning/phases/28-a-mechanism-nobody-connected-is-not-a-mechanism/28-02-SUMMARY.md', '.planning/phases/28-a-mechanism-nobody-connected-is-not-a-mechanism/28-03-SUMMARY.md', '.planning/phases/28-a-mechanism-nobody-connected-is-not-a-mechanism/28-04-SUMMARY.md', '.planning/phases/28-a-mechanism-nobody-connected-is-not-a-mechanism/28-05-SUMMARY.md', '.planning/phases/28-a-mechanism-nobody-connected-is-not-a-mechanism/28-06-SUMMARY.md', '.planning/phases/28-a-mechanism-nobody-connected-is-not-a-mechanism/28-07-SUMMARY.md', '.planning/phases/28-a-mechanism-nobody-connected-is-not-a-mechanism/28-08-SUMMARY.md', '.planning/phases/28-a-mechanism-nobody-connected-is-not-a-mechanism/28-09-SUMMARY.md', '.planning/phases/28-a-mechanism-nobody-connected-is-not-a-mechanism/28-a-mechanism-nobody-connected-is-not-a-mechanism-UAT.md', '.planning/phases/28-a-mechanism-nobody-connected-is-not-a-mechanism/28-a-mechanism-nobody-connected-is-not-a-mechanism-VERIFICATION.md', '.planning/phases/29-the-tracker-is-a-projection-and-a-projection-is-driven/29-01-SUMMARY.md', '.planning/phases/29-the-tracker-is-a-projection-and-a-projection-is-driven/29-02-SUMMARY.md', '.planning/phases/29-the-tracker-is-a-projection-and-a-projection-is-driven/29-03-SUMMARY.md', '.planning/phases/29-the-tracker-is-a-projection-and-a-projection-is-driven/29-04-SUMMARY.md', '.planning/phases/29-the-tracker-is-a-projection-and-a-projection-is-driven/29-05-SUMMARY.md', '.planning/phases/29-the-tracker-is-a-projection-and-a-projection-is-driven/29-06-SUMMARY.md', '.planning/phases/29-the-tracker-is-a-projection-and-a-projection-is-driven/29-07-SUMMARY.md', '.planning/phases/29-the-tracker-is-a-projection-and-a-projection-is-driven/29-08-SUMMARY.md', '.planning/phases/29-the-tracker-is-a-projection-and-a-projection-is-driven/29-the-tracker-is-a-projection-and-a-projection-is-driven-UAT.md', '.planning/phases/29-the-tracker-is-a-projection-and-a-projection-is-driven/29-the-tracker-is-a-projection-and-a-projection-is-driven-VERIFICATION.md', '.planning/phases/30-a-ticket-you-cannot-reach-is-not-deliverable/30-01-SUMMARY.md', '.planning/phases/30-a-ticket-you-cannot-reach-is-not-deliverable/30-02-SUMMARY.md', '.planning/phases/30-a-ticket-you-cannot-reach-is-not-deliverable/30-03-SUMMARY.md', '.planning/phases/30-a-ticket-you-cannot-reach-is-not-deliverable/30-04-SUMMARY.md', '.planning/phases/30-a-ticket-you-cannot-reach-is-not-deliverable/30-05-SUMMARY.md', '.planning/phases/30-a-ticket-you-cannot-reach-is-not-deliverable/30-06-SUMMARY.md', '.planning/phases/30-a-ticket-you-cannot-reach-is-not-deliverable/30-07-SUMMARY.md', '.planning/phases/30-a-ticket-you-cannot-reach-is-not-deliverable/30-08-SUMMARY.md', '.planning/phases/30-a-ticket-you-cannot-reach-is-not-deliverable/30-09-SUMMARY.md', '.planning/phases/30-a-ticket-you-cannot-reach-is-not-deliverable/30-10-SUMMARY.md', '.planning/phases/30-a-ticket-you-cannot-reach-is-not-deliverable/30-a-ticket-you-cannot-reach-is-not-deliverable-UAT.md', '.planning/phases/30-a-ticket-you-cannot-reach-is-not-deliverable/30-a-ticket-you-cannot-reach-is-not-deliverable-VERIFICATION.md', '.planning/phases/31-not-every-ticket-is-available-work/31-01-SUMMARY.md', '.planning/phases/31-not-every-ticket-is-available-work/31-02-SUMMARY.md', '.planning/phases/31-not-every-ticket-is-available-work/31-03-SUMMARY.md', '.planning/phases/31-not-every-ticket-is-available-work/31-04-SUMMARY.md', '.planning/phases/31-not-every-ticket-is-available-work/31-05-SUMMARY.md', '.planning/phases/31-not-every-ticket-is-available-work/31-06-SUMMARY.md', '.planning/phases/31-not-every-ticket-is-available-work/31-07-SUMMARY.md', '.planning/phases/31-not-every-ticket-is-available-work/31-not-every-ticket-is-available-work-UAT.md', '.planning/phases/31-not-every-ticket-is-available-work/31-not-every-ticket-is-available-work-VERIFICATION.md', '.planning/phases/32-measure-usage-and-make-the-backlog-actionable/32-01-SUMMARY.md', '.planning/phases/32-measure-usage-and-make-the-backlog-actionable/32-02-SUMMARY.md', '.planning/phases/32-measure-usage-and-make-the-backlog-actionable/32-03-SUMMARY.md', '.planning/phases/32-measure-usage-and-make-the-backlog-actionable/32-04-SUMMARY.md', '.planning/phases/32-measure-usage-and-make-the-backlog-actionable/32-05-SUMMARY.md', '.planning/phases/32-measure-usage-and-make-the-backlog-actionable/32-06-SUMMARY.md', '.planning/phases/32-measure-usage-and-make-the-backlog-actionable/32-07-SUMMARY.md', '.planning/phases/32-measure-usage-and-make-the-backlog-actionable/32-measure-usage-and-make-the-backlog-actionable-UAT.md', '.planning/phases/32-measure-usage-and-make-the-backlog-actionable/32-measure-usage-and-make-the-backlog-actionable-VERIFICATION.md', '.planning/phases/33-reduce-orchestration-context-and-transfer-sessions-safely/33-reduce-orchestration-context-and-transfer-sessions-safely-UAT.md', '.planning/phases/33-reduce-orchestration-context-and-transfer-sessions-safely/33-reduce-orchestration-context-and-transfer-sessions-safely-VERIFICATION.md', '.planning/phases/34-improve-convergence-and-tune-from-measured-outcomes/34-improve-convergence-and-tune-from-measured-outcomes-UAT.md', '.planning/phases/34-improve-convergence-and-tune-from-measured-outcomes/34-improve-convergence-and-tune-from-measured-outcomes-VERIFICATION.md', '.planning/phases/35-gsd-and-shipyard-workflow-loop/35-01-SUMMARY.md', '.planning/phases/35-gsd-and-shipyard-workflow-loop/35-02-SUMMARY.md', '.planning/phases/35-gsd-and-shipyard-workflow-loop/35-03-SUMMARY.md', '.planning/phases/35-gsd-and-shipyard-workflow-loop/35-gsd-and-shipyard-workflow-loop-UAT.md', '.planning/phases/35-gsd-and-shipyard-workflow-loop/35-gsd-and-shipyard-workflow-loop-VERIFICATION.md', '.planning/phases/36-enforce-the-runtime-model-ladder/36-06-PLAN.md', tests/unit/source-contract.test.cjs, tests/unit/pipeline-config.test.cjs]
+    risk: high
+    human_checkpoint: true
+    preauthorized: true
+    branch: ticket/T-36-06-route-gsd-decomposition-through-the-mand
+    epic: epic/36-enforce-the-runtime-model-ladder
+    primary_parent: T-36-05
+    pr_base: ticket/T-36-05-claude-adapter-and-explicit-workflow-lau
+    jira: null
+  T-36-07:
+    title: Enforce the boundary across Shipyard delivery launches
+    plan: '.planning/phases/36-enforce-the-runtime-model-ladder/36-07-PLAN.md'
+    phase: '36'
+    repo: null
+    wave: 16
+    depends_on: [T-36-06, T-30-04, T-30-06, T-30-08, T-30-09, T-31-01, T-31-02, T-31-06, T-31-07]
+    files: [plugins/delivery-pipeline/commands/deliver.md, plugins/delivery-pipeline/references/pr-sentinel.md, tests/unit/files-contract.test.cjs, tests/unit/source-contract.test.cjs]
+    risk: high
+    human_checkpoint: true
+    preauthorized: true
+    branch: ticket/T-36-07-enforce-the-boundary-across-shipyard-del
+    epic: epic/36-enforce-the-runtime-model-ladder
+    primary_parent: T-36-06
+    pr_base: ticket/T-36-06-route-gsd-decomposition-through-the-mand
+    jira: null
+  T-36-08:
+    title: Application receipts and dispatch-record reconciliation
+    plan: '.planning/phases/36-enforce-the-runtime-model-ladder/36-08-PLAN.md'
+    phase: '36'
+    repo: null
+    wave: 17
+    depends_on: [T-36-07]
+    files: [plugins/delivery-pipeline/scripts/dispatch-boundary.cjs, plugins/delivery-pipeline/scripts/dispatch-record.cjs, tests/unit/dispatch-boundary.test.cjs, tests/unit/dispatch-record.test.cjs]
+    risk: high
+    human_checkpoint: true
+    preauthorized: true
+    branch: ticket/T-36-08-application-receipts-and-dispatch-record
+    epic: epic/36-enforce-the-runtime-model-ladder
+    primary_parent: T-36-07
+    pr_base: ticket/T-36-07-enforce-the-boundary-across-shipyard-del
+    jira: null
+  T-36-09:
+    title: Policy-aware telemetry and reconciliation reporting
+    plan: '.planning/phases/36-enforce-the-runtime-model-ladder/36-09-PLAN.md'
+    phase: '36'
+    repo: null
+    wave: 18
+    depends_on: [T-36-08]
+    files: [plugins/delivery-pipeline/scripts/pipeline-stats.cjs, plugins/delivery-pipeline/scripts/usage-attribution.cjs, tests/unit/pipeline-stats.test.cjs, tests/unit/usage-attribution.test.cjs]
+    risk: medium
+    human_checkpoint: false
+    preauthorized: false
+    branch: ticket/T-36-09-policy-aware-telemetry-and-reconciliatio
+    epic: epic/36-enforce-the-runtime-model-ladder
+    primary_parent: T-36-08
+    pr_base: ticket/T-36-08-application-receipts-and-dispatch-record
+    jira: null
+  T-36-10:
+    title: Exhaustive signal matrix and negative bypass suite
+    plan: '.planning/phases/36-enforce-the-runtime-model-ladder/36-10-PLAN.md'
+    phase: '36'
+    repo: null
+    wave: 19
+    depends_on: [T-36-09]
+    files: [tests/unit/model-policy.test.cjs, tests/unit/dispatch-boundary.test.cjs, tests/unit/workflows-args.test.cjs, tests/unit/source-contract.test.cjs, tests/unit/dispatch-record.test.cjs]
+    risk: medium
+    human_checkpoint: false
+    preauthorized: false
+    branch: ticket/T-36-10-exhaustive-signal-matrix-and-negative-by
+    epic: epic/36-enforce-the-runtime-model-ladder
+    primary_parent: T-36-09
+    pr_base: ticket/T-36-09-policy-aware-telemetry-and-reconciliatio
+    jira: null
+  T-36-11:
+    title: Cross-runtime generated-install smoke verification
+    plan: '.planning/phases/36-enforce-the-runtime-model-ladder/36-11-PLAN.md'
+    phase: '36'
+    repo: null
+    wave: 20
+    depends_on: [T-36-10]
+    files: [tests/smoke/model-ladder-runtime-smoke.sh, tests/smoke/codex-shipyard-smoke.sh, tests/smoke/runtime-smoke.sh, tests/smoke/overlay-image-smoke.sh]
+    risk: high
+    human_checkpoint: true
+    preauthorized: true
+    branch: ticket/T-36-11-cross-runtime-generated-install-smoke-ve
+    epic: epic/36-enforce-the-runtime-model-ladder
+    primary_parent: T-36-10
+    pr_base: ticket/T-36-10-exhaustive-signal-matrix-and-negative-by
+    jira: null
+  T-36-12:
+    title: Supersede obsolete ladder documentation
+    plan: '.planning/phases/36-enforce-the-runtime-model-ladder/36-12-PLAN.md'
+    phase: '36'
+    repo: null
+    wave: 20
+    depends_on: [T-36-10, T-30-09, T-31-02]
+    files: ['.planning/architecture/ADR-005-the-floor-is-opus-and-fable-is-earned.md', '.planning/architecture/ADR-012-task-level-model-ladder.md', README.md, docs/gsd_multilevel_delivery_pipeline.md]
+    risk: medium
+    human_checkpoint: false
+    preauthorized: false
+    branch: ticket/T-36-12-supersede-obsolete-ladder-documentation
+    epic: epic/36-enforce-the-runtime-model-ladder
+    primary_parent: T-36-10
+    pr_base: ticket/T-36-10-exhaustive-signal-matrix-and-negative-by
+    jira: null
+  T-37-01:
+    title: Define the scoped autonomous run contract
+    plan: '.planning/phases/37-autonomous-dual-runtime-control-plane/37-01-PLAN.md'
+    phase: '37'
+    repo: null
+    wave: 1
+    depends_on: []
+    files: [plugins/delivery-pipeline/scripts/run-contract.cjs, plugins/delivery-pipeline/scripts/run-scope.cjs, tests/unit/run-contract.test.cjs, tests/unit/run-scope.test.cjs]
+    risk: high
+    human_checkpoint: true
+    preauthorized: false
+    branch: ticket/T-37-01-define-the-scoped-autonomous-run-contrac
+    epic: epic/37-autonomous-dual-runtime-control-plane
+    primary_parent: null
+    pr_base: epic/37-autonomous-dual-runtime-control-plane
+    jira: null
+  T-37-02:
+    title: Persist controller leases and autonomous continuation
+    plan: '.planning/phases/37-autonomous-dual-runtime-control-plane/37-02-PLAN.md'
+    phase: '37'
+    repo: null
+    wave: 2
+    depends_on: [T-37-01]
+    files: [plugins/delivery-pipeline/scripts/run-store.cjs, plugins/delivery-pipeline/scripts/run-controller.cjs, tests/unit/run-store.test.cjs, tests/unit/run-controller.test.cjs]
+    risk: high
+    human_checkpoint: true
+    preauthorized: false
+    branch: ticket/T-37-02-persist-controller-leases-and-autonomous
+    epic: epic/37-autonomous-dual-runtime-control-plane
+    primary_parent: T-37-01
+    pr_base: ticket/T-37-01-define-the-scoped-autonomous-run-contrac
+    jira: null
+  T-37-03:
+    title: Connect Claude Code to the scoped runtime controller
+    plan: '.planning/phases/37-autonomous-dual-runtime-control-plane/37-03-PLAN.md'
+    phase: '37'
+    repo: null
+    wave: 3
+    depends_on: [T-37-02]
+    files: [plugins/delivery-pipeline/scripts/claude-runtime-host.cjs, plugins/delivery-pipeline/scripts/claude-workflow-host.cjs, plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs, tests/unit/claude-runtime-host.test.cjs, tests/unit/claude-dispatch-adapter.test.cjs, tests/smoke/claude-runtime-smoke.sh]
+    risk: high
+    human_checkpoint: true
+    preauthorized: false
+    branch: ticket/T-37-03-connect-claude-code-to-the-scoped-runtim
+    epic: epic/37-autonomous-dual-runtime-control-plane
+    primary_parent: T-37-02
+    pr_base: ticket/T-37-02-persist-controller-leases-and-autonomous
+    jira: null
+  T-37-04:
+    title: Connect Codex to the scoped runtime controller
+    plan: '.planning/phases/37-autonomous-dual-runtime-control-plane/37-04-PLAN.md'
+    phase: '37'
+    repo: null
+    wave: 3
+    depends_on: [T-37-02]
+    files: [plugins/delivery-pipeline/scripts/codex-runtime-host.cjs, plugins/delivery-pipeline/scripts/codex-dispatch-adapter.cjs, plugins/delivery-pipeline/scripts/codex-agent.cjs, tests/unit/codex-runtime-host.test.cjs, tests/smoke/codex-runtime-smoke.sh]
+    risk: high
+    human_checkpoint: true
+    preauthorized: false
+    branch: ticket/T-37-04-connect-codex-to-the-scoped-runtime-cont
+    epic: epic/37-autonomous-dual-runtime-control-plane
+    primary_parent: T-37-02
+    pr_base: ticket/T-37-02-persist-controller-leases-and-autonomous
+    jira: null
+  T-37-05:
+    title: Prove graph reachability before autonomous dispatch
+    plan: '.planning/phases/37-autonomous-dual-runtime-control-plane/37-05-PLAN.md'
+    phase: '37'
+    repo: null
+    wave: 3
+    depends_on: [T-37-02]
+    files: [plugins/delivery-pipeline/scripts/run-reachability.cjs, plugins/delivery-pipeline/scripts/epic-branch.sh, plugins/delivery-pipeline/scripts/ticket-worktree.sh, tests/unit/run-reachability.test.cjs, tests/smoke/reachability-smoke.sh]
+    risk: medium
+    human_checkpoint: false
+    preauthorized: false
+    branch: ticket/T-37-05-prove-graph-reachability-before-autonomo
+    epic: epic/37-autonomous-dual-runtime-control-plane
+    primary_parent: T-37-02
+    pr_base: ticket/T-37-02-persist-controller-leases-and-autonomous
+    jira: null
+  T-37-06:
+    title: Make stop and wait decisions run-scoped and deterministic
+    plan: '.planning/phases/37-autonomous-dual-runtime-control-plane/37-06-PLAN.md'
+    phase: '37'
+    repo: null
+    wave: 4
+    depends_on: [T-37-05]
+    files: [plugins/delivery-pipeline/scripts/stop-gate.cjs, plugins/delivery-pipeline/scripts/run-waker.cjs, plugins/delivery-pipeline/scripts/ci-wait.cjs, tests/unit/stop-gate.test.cjs, tests/unit/run-waker.test.cjs]
+    risk: medium
+    human_checkpoint: false
+    preauthorized: false
+    branch: ticket/T-37-06-make-stop-and-wait-decisions-run-scoped
+    epic: epic/37-autonomous-dual-runtime-control-plane
+    primary_parent: T-37-05
+    pr_base: ticket/T-37-05-prove-graph-reachability-before-autonomo
+    jira: null
+  T-37-07:
+    title: Join runtime receipts with usage and outcome evidence
+    plan: '.planning/phases/37-autonomous-dual-runtime-control-plane/37-07-PLAN.md'
+    phase: '37'
+    repo: null
+    wave: 4
+    depends_on: [T-37-03, T-37-04]
+    files: [plugins/delivery-pipeline/scripts/run-telemetry.cjs, plugins/delivery-pipeline/scripts/dispatch-record.cjs, plugins/delivery-pipeline/scripts/usage-attribution.cjs, plugins/delivery-pipeline/scripts/pipeline-stats.cjs, tests/unit/run-telemetry.test.cjs, tests/unit/dispatch-record.test.cjs, tests/unit/usage-attribution.test.cjs]
+    risk: medium
+    human_checkpoint: false
+    preauthorized: false
+    branch: ticket/T-37-07-join-runtime-receipts-with-usage-and-out
+    epic: epic/37-autonomous-dual-runtime-control-plane
+    primary_parent: T-37-03
+    pr_base: ticket/T-37-03-connect-claude-code-to-the-scoped-runtim
+    jira: null
+  T-37-08:
+    title: Roll out and verify the autonomous control plane
+    plan: '.planning/phases/37-autonomous-dual-runtime-control-plane/37-08-PLAN.md'
+    phase: '37'
+    repo: null
+    wave: 5
+    depends_on: [T-37-06, T-37-07]
+    files: [plugins/delivery-pipeline/scripts/run-rollout.cjs, plugins/delivery-pipeline/scripts/gsd-sync.cjs, plugins/delivery-pipeline/commands/deliver.md, docs/gsd_multilevel_delivery_pipeline.md, tests/unit/run-rollout.test.cjs, tests/unit/source-contract.test.cjs, tests/smoke/runtime-control-plane-smoke.sh]
+    risk: high
+    human_checkpoint: true
+    preauthorized: false
+    branch: ticket/T-37-08-roll-out-and-verify-the-autonomous-contr
+    epic: epic/37-autonomous-dual-runtime-control-plane
+    primary_parent: T-37-06
+    pr_base: ticket/T-37-06-make-stop-and-wait-decisions-run-scoped
     jira: null

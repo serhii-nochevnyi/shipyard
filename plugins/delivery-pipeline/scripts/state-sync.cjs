@@ -40,10 +40,11 @@
 
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const { execFileSync, spawnSync } = require('child_process');
 const { matchTicketPr } = require(path.join(__dirname, 'ticket-pr-match.cjs'));
 const { loadConfig } = require(path.join(__dirname, 'pipeline-config.cjs'));
-const { computeFront, formatFront, ciEstimates, epicKey } = require(path.join(__dirname, 'front.cjs'));
+const { computeFront, formatFront, ciEstimates, epicKey, agentsInFlight } = require(path.join(__dirname, 'front.cjs'));
 const { activeDrift } = require(path.join(__dirname, 'drift-record.cjs'));
 // The park RECORDS, never the flat `activeEscalations` view: the board's lifting
 // sentence is chosen from the park's KIND, and the flat map keeps the kind only
@@ -53,11 +54,19 @@ const { activeParks } = require(path.join(__dirname, 'escalation-record.cjs'));
 // "An agent is holding this one" — the third durable fact GitHub cannot know, and
 // the one this writer used to drop. See the comment at DISPATCHED below.
 const { activeDispatches } = require(path.join(__dirname, 'dispatch-record.cjs'));
+// Tracker eligibility is observed by the orchestrating loop, never here. This
+// reader only consumes the generation-bound local cache, so state-sync keeps its
+// GitHub tick free of tracker calls and its state lock free of external I/O.
+const {
+  activeTrackersForPublishLocked, metadataIdentity,
+} = require(path.join(__dirname, 'tracker-record.cjs'));
 const { withLock, writeAtomic, lockDirFor } = require(path.join(__dirname, 'lock.cjs'));
 const { classify, isGreen, unavailableNote, CHECK_FIELDS } = require(path.join(__dirname, 'check-state.cjs'));
+const { resolveAndPersistRepository } = require(path.join(__dirname, 'repo-resolve.cjs'));
 // The trailer's parser lives with its writer (gate-trailer.cjs), because a
 // verdict the board and the guard must agree on cannot be held by three copies.
 const { parseGate } = require(path.join(__dirname, 'gate-trailer.cjs'));
+const { readCapacitySnapshot } = require(path.join(__dirname, 'capacity-lease.cjs'));
 
 const ROOT = process.cwd();
 const GRAPH_DIR = path.join(ROOT, '.planning', 'graph');
@@ -77,6 +86,64 @@ const JOURNAL = path.join(GRAPH_DIR, 'delivery-log.jsonl');
 // compare-and-swap subject has to have. The front gets an advisory copy for
 // readers; THIS is the authority.
 const META = path.join(GRAPH_DIR, 'delivery-state-meta.json');
+const GSD_SYNC = path.join(__dirname, 'gsd-sync.cjs');
+const PUBLISH_SCHEMA_VERSION = 1;
+const FAIL_AFTER_PUBLISH = process.env.SHIPYARD_STATE_SYNC_FAIL_AFTER || null;
+const CAPACITY_STORE = process.env.SHIPYARD_CAPACITY_STORE || null;
+const CAPACITY_PROVIDER = process.env.SHIPYARD_CAPACITY_PROVIDER || null;
+const CAPACITY_ACCOUNT_SCOPE = process.env.SHIPYARD_CAPACITY_ACCOUNT_SCOPE
+  || process.env.SHIPYARD_ACCOUNT_SCOPE || null;
+
+// Test-only crash points for the publication boundary. Throwing from inside the
+// nested locks still releases them, while leaving the already-replaced payload
+// behind exactly where a killed process would; the next full sync must repair it.
+function failAfterPublish(point) {
+  if (FAIL_AFTER_PUBLISH === point) {
+    throw new Error(`injected state-sync publication failure after ${point}`);
+  }
+}
+
+function canonicalValue(value) {
+  if (Array.isArray(value)) return value.map(canonicalValue);
+  if (!value || typeof value !== 'object') return value;
+  return Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonicalValue(value[key])]));
+}
+
+function canonicalJson(value) {
+  return JSON.stringify(canonicalValue(value));
+}
+
+function sha256(value) {
+  return crypto.createHash('sha256').update(value).digest('hex');
+}
+
+// This projection is the observation identity consumed by wait-events.cjs. It
+// intentionally excludes URLs, status clocks, journal timestamps and dispatch
+// overlays: those facts may change without a new CI/review observation.
+function observationProjection(state) {
+  const tickets = {};
+  for (const id of Object.keys(state).sort()) {
+    const s = state[id] || {};
+    tickets[id] = {
+      status: s.status || null,
+      repository: s.repo || null,
+      pr: s.pr === undefined ? null : s.pr,
+      head: s.head_sha || null,
+      draft: s.draft === true,
+      base: s.pr_base || s.base || null,
+      merge_state: s.merge_state || null,
+      review_decision: s.review_decision || null,
+      checks: s.checks ? {
+        total: Number(s.checks.total || 0),
+        pending: Number(s.checks.pending || 0),
+        failing: Number(s.checks.failing || 0),
+        none_reported: s.checks.none_reported === true,
+        unavailable: s.checks.unavailable === true,
+      } : null,
+    };
+  }
+  return { tickets };
+}
 
 // Tickets the RUN parked (an agent returned `escalate`, attempts > max). GitHub
 // cannot know this, and a front that keeps re-offering an escalated PR is an
@@ -251,7 +318,21 @@ function ghChecks(prNumber, repo) {
 // the loop acts on and prints the auto-merge policy the guard enforces, so an
 // unparseable config must not reach either as the DEFAULTS. Absent is a different
 // fact and keeps its old behaviour — the defaults are the right answer there.
-const { config: cfg, warnings: cfgWarnings, valid: CFG_VALID } = loadConfig(ROOT);
+const {
+  config: cfg, warnings: cfgWarnings, valid: CFG_VALID, error: CFG_ERROR,
+} = loadConfig(ROOT);
+
+function sharedCapacityFor(dispatched) {
+  if (!CFG_VALID || !CAPACITY_STORE || !CAPACITY_PROVIDER || !CAPACITY_ACCOUNT_SCOPE) return null;
+  const max = Number(cfg.max_concurrent_agents);
+  if (!Number.isSafeInteger(max) || max < 1) return null;
+  return readCapacitySnapshot(CAPACITY_STORE, {
+    provider: CAPACITY_PROVIDER,
+    accountScope: CAPACITY_ACCOUNT_SCOPE,
+    max,
+    localActive: agentsInFlight(dispatched),
+  });
+}
 
 if (!fs.existsSync(TICKETS)) fail('missing .planning/graph/tickets.json — run validate-graph first');
 let graph;
@@ -293,6 +374,34 @@ const nowIso = new Date().toISOString();
 const OBSERVED_AT = process.env.SHIPYARD_STATE_OBSERVED_AT || nowIso;
 
 const notices = [];
+
+// state-sync is the delivery writer. Once it has published the delivery state
+// and front, publish the native GSD read model from those same facts before the
+// board is shown or the command returns. This closes the manual delivery path:
+// it does not depend on a later GSD lifecycle hook that the conveyor never
+// invokes, and it releases the state lock before gsd-sync takes it.
+function publishGsdProjection() {
+  if (cfg.gsd_sync === false) return { skipped: true };
+  const result = spawnSync(process.execPath, [GSD_SYNC, '--json'], {
+    cwd: ROOT,
+    encoding: 'utf8',
+  });
+  if (result.error) fail(`could not run gsd-sync.cjs: ${result.error.message}`);
+  let payload;
+  try {
+    payload = JSON.parse((result.stdout || '').trim());
+  } catch {
+    fail(`gsd-sync.cjs returned non-JSON output: ${(result.stdout || result.stderr || '').trim()}`);
+  }
+  if (result.status !== 0 || payload.ok !== true) {
+    const blockers = payload.applicable === false
+      ? 'gsd-sync reported that the delivery project is not applicable'
+      : Array.isArray(payload.blockers) ? payload.blockers.join('; ')
+        : (payload.error || result.stderr || 'unknown projection failure');
+    fail(`gsd-sync finalization blocked: ${blockers}`);
+  }
+  return payload;
+}
 
 // The snapshot on disk, as it stands right now. Read INSIDE the lock and nowhere
 // else — a read taken before queueing for the lock is precisely the stale input
@@ -386,6 +495,38 @@ function loadRepo(repo) {
 const repoData = new Map();
 for (const r of REPO_IDS) repoData.set(r, loadRepo(r));
 
+// Resolve each foreign repository once per cold start. The resolver owns the
+// configured→discovered decision and atomically caches a successful discovery;
+// keeping the result here prevents the readiness pass and the summary from
+// making different decisions or asking twice. A failure is data for that repo,
+// not a reason to abort the project's board.
+const localResolutions = new Map();
+for (const repo of REPO_IDS) {
+  if (!repo) continue;
+  try {
+    localResolutions.set(repo, resolveAndPersistRepository({
+      repo,
+      config: cfg,
+      configValid: CFG_VALID,
+      projectRoot: ROOT,
+    }));
+  } catch (error) {
+    localResolutions.set(repo, {
+      ticket: null,
+      repo,
+      resolution: 'resolver-error',
+      executable: false,
+      configured_path: null,
+      repository_root: null,
+      reason: `repository resolver failed for ${repo}: ${error.message}`,
+      discovery_status: 'error',
+      candidates: [],
+      searched_roots: [],
+      park_reason: `repository resolver failed for ${repo}: ${error.message}`,
+    });
+  }
+}
+
 function prsForBranch(repo, branch) {
   // branch-scoped, so a handful of rows: asking for the open-only fields here is
   // cheap and keeps a fallback-matched open PR from looking like it has no review,
@@ -412,7 +553,18 @@ for (const [id, t] of Object.entries(tickets)) {
   const pr = match ? match.pr : null;
   /** @type {Record<string, any>} */
   const entry = { branch: t.branch, pr: pr ? pr.number : null, status: 'pending' };
-  if (repo) entry.repo = repo;
+  if (repo) {
+    entry.repo = repo;
+    const local = localResolutions.get(repo);
+    if (local) {
+      entry.repo_resolution = {
+        resolution: local.resolution,
+        executable: local.executable === true,
+        repository_root: local.repository_root || null,
+        reason: local.reason || null,
+      };
+    }
+  }
   if (match && match.matchedBy === 'marker') {
     entry.matched_by = 'marker';
     entry.pr_branch = pr.headRefName;
@@ -579,6 +731,10 @@ for (const [id, t] of Object.entries(tickets)) {
   const deps = t.depends_on || [];
   const blockers = [];
   const reasons = {};
+  const addBlocker = (key, reason) => {
+    if (!blockers.includes(key)) blockers.push(key);
+    if (!reasons[key]) reasons[key] = reason;
+  };
 
   // Two facts about whether this ticket can be executed AT ALL, and they hold in
   // BOTH integration modes — so they are checked BEFORE the mode split, where
@@ -593,12 +749,23 @@ for (const [id, t] of Object.entries(tickets)) {
   // cannot be executed as written — park it with the reason instead of offering
   // it as `ready`.
   if (t.unreachable_paths) {
-    blockers.push('plan');
-    reasons.plan = 'files_modified points outside the repo — declare delivery.repo and use repo-relative paths (validate-graph warns with the exact entry)';
+    addBlocker('plan', 'files_modified points outside the repo — declare delivery.repo and use repo-relative paths (validate-graph warns with the exact entry)');
   }
-  if (!repoData.get(repoOf(t)).available) {
-    blockers.push('repo');
-    reasons.repo = `repo ${repoOf(t)} is not reachable through gh — status unknown, nothing can be driven there`;
+  const ticketRepo = repoOf(t);
+  const remote = repoData.get(ticketRepo) || { available: false };
+  const local = ticketRepo ? localResolutions.get(ticketRepo) : null;
+  if (ticketRepo && (!local || !local.executable)) {
+    addBlocker(
+      'repo',
+      `repo ${ticketRepo} has no executable local checkout — ${local && local.reason ? local.reason : 'resolution did not return a usable checkout'}`,
+    );
+  }
+  if (!remote.available) {
+    const remoteReason = `repo ${ticketRepo || 'this repo'} is not reachable through gh — status unknown (could be inaccessible or nonexistent)`;
+    const combined = ticketRepo && local && !local.executable
+      ? `${remoteReason}; local resolution: ${local.reason}`
+      : remoteReason;
+    addBlocker('repo', combined);
   }
 
   if (mode === 'epic-stacked') {
@@ -807,6 +974,18 @@ for (const [id, s] of Object.entries(state)) {
 // `auto_merge` in delivery-front.json, `autoMerge` into computeFront, and the
 // line printed below — is `off` whatever the defaults say.
 const AUTO_MERGE = CFG_VALID && cfg.auto_merge === 'epic' && mode === 'epic-stacked';
+// An invalid config must not collapse the tracker policy to the parsed
+// defaults. Use a non-empty sentinel status to keep every ready pending ticket
+// fail-closed, and carry the same human-readable refusal that the standalone
+// front prints. The sentinel is never a real Jira status and no record can
+// satisfy it.
+const TRACKER_STATUSES = CFG_VALID ? cfg.jira_todo_statuses : ['__config_invalid__'];
+const CONFIG_REFUSAL = CFG_VALID
+  ? null
+  : `front: no policy is in effect — ${CFG_ERROR.relative} ${CFG_ERROR.message}. `
+    + 'Every board below is the most restrictive reading, not this project\'s decision: '
+    + 'nothing may be auto-merged and nothing may be dispatched until the file parses '
+    + '(a `waiting.merge_human` entry below is still a human\'s option).';
 // Drift verdicts recorded by earlier runs, minus any whose plan has since been
 // re-planned (drift-record binds each verdict to the plan's content hash, so the
 // park lifts by itself). Without this the front hands a stale plan back to an
@@ -825,7 +1004,13 @@ const DRIFTED = activeDrift(ROOT);
 // rendered; this was the one caller that still did.
 const ESCALATED = activeParks(ROOT, state);
 
-const published = withLock(lockDirFor(ROOT), 'state', () => {
+// Hold the tracker-record lock for the complete snapshot publish. Tracker
+// writers commit their cache under that lock, so this prevents state-sync from
+// reading the tracker snapshot and then publishing a board that races a new
+// observation in between. The tracker lock is outermost because tracker writers
+// also acquire `state` after it; keeping the shared tracker-record -> state order
+// avoids a deadlock.
+const published = withLock(lockDirFor(ROOT), 'tracker-record', () => withLock(lockDirFor(ROOT), 'state', () => {
   // FIRST inside the lock, ahead of the journal append and every write. Nothing
   // this run holds was read under the lock — `prev`, the timestamps and every
   // `gh` observation were gathered minutes ago, because they have to be — so a
@@ -846,10 +1031,27 @@ const published = withLock(lockDirFor(ROOT), 'state', () => {
   // "state, yaml and front were written together" is a fact a reader can check
   // rather than a property of this file it has to trust.
   const generation = (onDisk && Number.isInteger(onDisk.generation) ? onDisk.generation : 0) + 1;
+  // A refused publication must break the predecessor bridge. If the config is
+  // repaired before the next sync, the invalid snapshot is still the current
+  // boundary and must not resurrect an observation from before it.
+  const previousGenerationIdentity = onDisk && CFG_VALID ? metadataIdentity(GRAPH_DIR) : null;
+  const generationIdentity = typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID()
+    : crypto.randomBytes(16).toString('hex');
+  // Tracker observations are written after the previous snapshot and before
+  // this publish. They are bound to the generation current on disk, so the
+  // active reader feeds them into this new snapshot. The following state-sync
+  // sees the next generation and expires the observation, forcing a fresh read
+  // for any pending ticket that was not taken this round.
+  const trackerRecords = CFG_VALID
+    ? activeTrackersForPublishLocked(GRAPH_DIR, TRACKER_STATUSES)
+    : {};
 
   if (transitions.length) {
     fs.appendFileSync(JOURNAL, transitions.map((t) => JSON.stringify(t)).join('\n') + '\n');
   }
+  const dispatchedNow = activeDispatches(ROOT, state);
+  const sharedCapacity = sharedCapacityFor(dispatchedNow);
   // Computed AFTER the append, in the SAME locked section, so THIS run's own
   // newly observed status_change events (a ticket that just reached `merged`,
   // say) feed ciEstimates immediately. Reading the journal before the append
@@ -860,6 +1062,9 @@ const published = withLock(lockDirFor(ROOT), 'state', () => {
   // review of this PR.
   const front = computeFront(tickets, state, {
     parked: RUN_PARKED, autoMerge: AUTO_MERGE, drifted: DRIFTED, escalated: ESCALATED,
+    configInvalid: !CFG_VALID,
+    trackerStatuses: TRACKER_STATUSES,
+    trackerRecords,
     // The dispatches still in force — the tickets an agent is holding RIGHT NOW.
     //
     // Three writers produce delivery-front.json (front.cjs's CLI, dispatch-record's
@@ -883,7 +1088,8 @@ const published = withLock(lockDirFor(ROOT), 'state', () => {
     // ("the READ, the COMPUTE and the WRITE all sit inside the `state` lock"),
     // which exists because reading first and locking only the write is the
     // lost-update this repo has already paid for twice.
-    dispatched: activeDispatches(ROOT, state),
+    dispatched: dispatchedNow,
+    ...(sharedCapacity ? { sharedCapacity } : {}),
     // Expected CI length per ticket, a per-repo median over the LOCAL journal —
     // the front's last ordering key before the id (front.cjs). Note what does
     // NOT feed it: no per-PR `gh` field. Adding one to the bulk window is the
@@ -899,7 +1105,15 @@ const published = withLock(lockDirFor(ROOT), 'state', () => {
     // answer; a caller with no such observation gets no left-behind at all.
     epics: epicInfo,
   });
-  writeAtomic(STATE, JSON.stringify(state, null, 2) + '\n');
+  if (CONFIG_REFUSAL) {
+    front.config_invalid = CONFIG_REFUSAL;
+    front.fixpoint = false;
+  }
+  const statePayload = JSON.stringify(state, null, 2) + '\n';
+  const projectedObservation = observationProjection(state);
+  const observationDigest = sha256(canonicalJson(projectedObservation));
+  writeAtomic(STATE, statePayload);
+  failAfterPublish('state');
   // The generation rides the human mirror as a comment: the yaml is keyed by
   // ticket id exactly like the JSON, so it has no more room for a metadata key
   // than the JSON does — but a person reading it can still see which snapshot
@@ -909,6 +1123,7 @@ const published = withLock(lockDirFor(ROOT), 'state', () => {
     `# snapshot generation ${generation} — observed ${OBSERVED_AT}`,
     ...yaml.slice(1),
   ].join('\n') + '\n');
+  failAfterPublish('yaml');
   // `dispatches_applied_at` is stamped the way `refreshFront` stamps it, and
   // UNCONDITIONALLY — including when no dispatch is live. Its absence is the
   // signature of a writer blind to the overlay, which is exactly the defect this
@@ -922,26 +1137,42 @@ const published = withLock(lockDirFor(ROOT), 'state', () => {
   // them and the board carries no generation until the next sync. That is fine
   // for a reader and would be fatal for the compare-and-swap above, which is why
   // that reads META and never this.
-  writeAtomic(FRONT, JSON.stringify({ generated_at: nowIso, observed_at: OBSERVED_AT, generation, parked_by_run: RUN_PARKED, auto_merge: AUTO_MERGE ? 'epic' : 'off', dispatches_applied_at: nowIso, ...front }, null, 2) + '\n');
+  const frontPayload = JSON.stringify({ generated_at: nowIso, observed_at: OBSERVED_AT, generation, parked_by_run: RUN_PARKED, auto_merge: AUTO_MERGE ? 'epic' : 'off', dispatches_applied_at: nowIso, ...front }, null, 2) + '\n';
+  writeAtomic(FRONT, frontPayload);
+  failAfterPublish('front');
   // Written LAST, and that ordering is the publish itself: the generation on disk
   // only advances once the trio it describes is fully in place, so a sync that
   // dies mid-write leaves the previous generation standing and the next run
   // rewrites everything rather than trusting a half-published board.
+  failAfterPublish('metadata');
   writeAtomic(META, JSON.stringify({
+    schema_version: PUBLISH_SCHEMA_VERSION,
     generation,
+    generation_identity: generationIdentity,
+    previous_generation_identity: previousGenerationIdentity,
     observed_at: OBSERVED_AT,
     generated_at: nowIso,
     by: 'state-sync',
     pid: process.pid,
+    observation_generation: generation,
+    observation_projection: projectedObservation,
+    binding: {
+      schema_version: PUBLISH_SCHEMA_VERSION,
+      state_digest: sha256(statePayload),
+      front_digest: sha256(frontPayload),
+      observation_digest: observationDigest,
+      observation_generation: generation,
+    },
   }, null, 2) + '\n');
   return { front, generation };
-}, { label: 'state-sync' });
+}, { label: 'state-sync' }), { label: 'state-sync tracker snapshot' });
 
 // A refusal is an OUTCOME, not a failure: the board on disk is the better of the
 // two snapshots and the run that has it is the one driving. Exit 0 before any
 // board line — printing a summary built from facts we just declined to publish is
 // how a run acts on a rollback it decided against.
 if (published.stale) {
+  publishGsdProjection();
   const m = published.stale;
   console.log(
     `state-sync: a newer snapshot (generation ${Number.isInteger(m.generation) ? m.generation : '?'}, ` +
@@ -954,6 +1185,7 @@ if (published.stale) {
   process.exit(0);
 }
 const front = published.front;
+publishGsdProjection();
 
 // ── board summary on stdout for the /shipyard:deliver skill ──
 function ageH(sinceIso) { return (Date.parse(nowIso) - Date.parse(sinceIso)) / 3_600_000; }
@@ -1028,14 +1260,12 @@ if (mode === 'epic-stacked') {
 // the local checkout is (worktrees and git are local operations)
 for (const repo of REPO_IDS) {
   if (!repo) continue;
-  const localPath = (cfg.repos || {})[repo];
   const n = Object.values(tickets).filter((t) => repoOf(t) === repo).length;
-  if (!localPath) {
-    console.log(`⚠ repo ${repo} holds ${n} ticket(s) but has no local checkout configured — add pipeline.repos["${repo}"] = "<absolute path>" so worktrees/PRs can be driven there; without it the conveyor can only TRACK them`);
-  } else if (!fs.existsSync(localPath)) {
-    console.log(`⚠ repo ${repo}: pipeline.repos path "${localPath}" does not exist — fix it or the run cannot execute those ${n} ticket(s)`);
+  const resolution = localResolutions.get(repo);
+  if (!resolution.executable) {
+    console.log(`⚠ repo ${repo} holds ${n} ticket(s) but is track-only — ${resolution.reason}; without an executable checkout the conveyor can only TRACK them`);
   } else {
-    console.log(`repo ${repo}: ${n} ticket(s), checkout ${localPath}`);
+    console.log(`repo ${repo}: ${n} ticket(s), checkout ${resolution.repository_root}`);
   }
 }
 

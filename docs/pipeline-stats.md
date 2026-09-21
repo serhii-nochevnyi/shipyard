@@ -5,7 +5,7 @@ project root. The command reads the ticket graph, the append-only delivery
 journal and live pull-request metadata. It is read-only; it does not dispatch,
 change configuration or claim quota savings.
 
-The `ladder` section has four deliberately separate coverage levels:
+The `ladder` section has three deliberately separate coverage levels:
 
 - `requested_comparable` means the resolver's model, effort and route are
   recorded together with task level, runtime and backend. Static Codex roles

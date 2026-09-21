@@ -1,0 +1,10 @@
+{
+  "tickets": {
+    "T-33-03": {
+      "plan": "/Volumes/KINGSTON/.wt-claude-shipyard/phase33-current/.planning/phases/33-reduce-orchestration-context-and-transfer-sessions-safely/33-03-PLAN.md",
+      "plan_hash": "f6d26187beb37300",
+      "reason": "T-33-02 landed an executor-shaped role-artifact validator: it accepts only committed|blocked and requires executor-result.v1 with outcome=committed. T-33-03 requires fixed|no-op|escalate repair and fresh|drifted drift artifacts, so the shared validator and adapter are outside the original plan scope and require a scoped replan.",
+      "at": "2026-09-16T22:11:30.392Z"
+    }
+  }
+}

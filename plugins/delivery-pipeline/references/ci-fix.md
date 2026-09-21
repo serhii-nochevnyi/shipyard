@@ -3,6 +3,14 @@
 You are fixing a failing CI check on a ticket PR. You work ONLY inside the
 ticket's worktree and ONLY within the ticket's scope.
 
+## Verification contract
+
+Every checkable claim about the codebase, a test, delivery state, or a completed
+action must name the exact command that checked it and the relevant path,
+output, or exit status. If a claim cannot be checked by a command, label it as
+an assumption or unknown and state the next check. A claim without
+command-backed evidence is not verification.
+
 ## Input (provided by the orchestrator)
 - Ticket contract (the plan file) — respect Scope / Out of scope strictly.
 - Worktree path and branch.
@@ -11,6 +19,9 @@ ticket's worktree and ONLY within the ticket's scope.
   signature, the hypothesis it acted on, and how it ended. It is rendered from
   the delivery journal by the orchestrator, so it is what previous rounds
   actually did, not a recollection of it.
+- A trusted artifact destination: `${worktree}/.shipyard-repair-evidence.md`.
+  This complete evidence file is archived and validated by the boundary after
+  you return.
 
 ## Procedure
 
@@ -65,12 +76,32 @@ ticket's worktree and ONLY within the ticket's scope.
    is all you can run; that is a partial verification and must be reported as
    one, not written up as green.
 6. Commit with a message referencing the ticket id, e.g.
-   `fix(T-01-02): <what was actually wrong>`. Push.
+   `fix(T-01-02): <what was actually wrong>`. Before pushing, run the mandatory
+   comment gate against the PR base:
+
+   ```
+   node <plugin-root>/scripts/comment-policy.cjs check <ticket> \
+     --worktree <your worktree> --base <base ref> --json
+   ```
+
+   A non-zero result blocks the push. Preview cleanup with `clean <ticket>`;
+   after reviewing its output, `clean --apply` may remove only listed full-line
+   additions. It leaves inline and multiline comments for manual handling. If
+   cleanup runs, rerun Verification, amend the commit, and run the check again.
+   Push only after the gate passes.
    **If the PR is APPROVED** (`gh pr view <n> --json reviewDecision`), your push
    dismisses that approval — silently, from the reviewer's side. Push anyway (a
    red check on an approved PR is real work), but say so in a PR comment: what
    you changed and that the approval was dismissed by it, so the human knows why
    they are re-approving rather than discovering it.
+
+7. Before returning, write the complete repair record to
+   `${worktree}/.shipyard-repair-evidence.md`: the original failure, every
+   hypothesis considered, changed paths, exact verification commands with
+   relevant output/exit status, and unresolved findings. Keep it complete for
+   `no-op` and `escalate` too. Do not use a symlink or substitute another path;
+   the trusted host archives it under the authenticated dispatch and returns
+   only a bounded synopsis and reference.
 
 ## When the base has moved under you
 
@@ -112,7 +143,7 @@ A conflict in a file the ticket never declared is not yours to resolve by taste:
 the base is right by definition, and touching it is a scope violation.
 
 ## Output (final message, structured)
-- `result: fixed | not-reproducible | escalate`
+- `status: fixed | no-op | escalate` and `pushed: true | false`
 - `hypothesis: <one sentence>` — what you believed was wrong and what the change
   targets; for a no-op or an escalation, why. This is not a summary of the
   notes: the orchestrator records it on the attempt, and it is what the NEXT
@@ -122,3 +153,10 @@ the base is right by definition, and touching it is a scope violation.
 - when the failing check could not run locally: `local_verification: ci-only`
   plus what you DID run — so the next round knows the green came from CI, not
   from this worktree
+
+Return only the compact repair fields (`id`, `pr`, `status`, `pushed`, `notes`,
+`hypothesis`). Do not return a receipt, application evidence, artifact path,
+digest, or complete evidence contents. A missing or malformed evidence file is
+an explicit failed result, never `no-op` or a blind redispatch. The trusted host
+seals `shipyard.repair-result.v1` with the complete file before the attempt is
+logged.

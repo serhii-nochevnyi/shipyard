@@ -3,8 +3,14 @@
 ## CLI
 
 ```text
-node plugins/delivery-pipeline/scripts/gsd-sync.cjs [--check] [--json] [--phase <N>]
+node plugins/delivery-pipeline/scripts/gsd-sync.cjs [--check] [--json] [--adopt-native] [--phase <N>]
 ```
+
+`--adopt-native` is an explicit ownership transition for lifecycle gates: after
+Shipyard delivery applicability has been proven, the gate may replace existing
+unmarked native GSD artifacts with the canonical projection. A direct operator
+run remains fail-closed unless this flag is supplied; it never silently takes
+ownership of a human-authored artifact.
 
 Exit codes:
 

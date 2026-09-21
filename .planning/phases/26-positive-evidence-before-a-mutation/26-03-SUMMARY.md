@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 74b34d11681c634e2be3a3c70903ade505e38311fde3d28699bea4e39eea4c0b
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 36a7ece403327795184d1c5a2e4258c0446cf79fe994f1f6d895309eced438e9
 phase: 26-positive-evidence-before-a-mutation
 plan: 03
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-08
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 74b34d11681c634e2be3a3c70903ade505e38311fde3d28699bea4e39eea4c0b
+shipyard_source_fingerprint: 36a7ece403327795184d1c5a2e4258c0446cf79fe994f1f6d895309eced438e9
 ---
 
 # Phase 26: Readiness needs positive evidence — Delivery Projection

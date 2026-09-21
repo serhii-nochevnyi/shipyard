@@ -1,13 +1,13 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 74b34d11681c634e2be3a3c70903ade505e38311fde3d28699bea4e39eea4c0b
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 36a7ece403327795184d1c5a2e4258c0446cf79fe994f1f6d895309eced438e9
 gsd_state_version: '1.0'
 status: planning
 progress:
-  total_phases: 16
-  completed_phases: 3
-  total_plans: 85
-  completed_plans: 85
-  percent: 100
+  total_phases: 18
+  completed_phases: 9
+  total_plans: 138
+  completed_plans: 130
+  percent: 94
 ---
 
 # Project State
@@ -21,16 +21,16 @@ See: .planning/PROJECT.md (updated by Shipyard GSD synchronization)
 
 ## Current Position
 
-Phase: 1 of 16 (Phase 20: Autonomy of the drive-to-green loop)
+Phase: 1 of 18 (Phase 20: Autonomy of the drive-to-green loop)
 Plan: 6 of 6 merged
 Status: pending
-Last activity: 2026-09-14 — Shipyard projection synchronized
+Last activity: 2026-09-19 — Shipyard projection synchronized
 
-Progress: [██████████] 100%
+Progress: [█████████░] 94%
 
 ## Performance Metrics
 
-- Total plans completed: 85
+- Total plans completed: 130
 - Average duration: not measured by the projection
 - Total execution time: not measured by the projection
 
@@ -48,12 +48,14 @@ Progress: [██████████] 100%
 | 27 | 9 | 9 | gaps_found |
 | 28 | 9 | 9 | gaps_found |
 | 29 | 8 | 8 | passed |
-| 30 | 0 | 0 | pending |
-| 31 | 0 | 0 | pending |
-| 32 | 5 | 5 | passed |
-| 33 | 0 | 0 | pending |
-| 34 | 0 | 0 | pending |
-| 35 | 3 | 3 | pending |
+| 30 | 10 | 10 | passed |
+| 31 | 7 | 7 | passed |
+| 32 | 7 | 7 | passed |
+| 33 | 9 | 9 | passed |
+| 34 | 5 | 5 | passed |
+| 35 | 3 | 3 | passed |
+| 36 | 12 | 12 | passed |
+| 37 | 8 | 0 | pending |
 
 ## Accumulated Context
 
@@ -68,14 +70,14 @@ Review and resolve phase integration findings shown in the phase artifacts.
 
 ### Blockers/Concerns
 
-- Phase 20: INTEGRATION.md is missing
-- Phase 21: INTEGRATION.md is missing
-- Phase 22: INTEGRATION.md is missing
-- Phase 23: INTEGRATION.md is missing
-- Phase 24: integration evidence records a finding or failed verdict
-- Phase 26: verification evidence records a failed check
-- Phase 27: integration evidence records a finding or failed verdict
-- Phase 28: integration evidence records a finding or failed verdict
+- T-37-01: delivery status is pending
+- T-37-02: delivery status is pending
+- T-37-03: delivery status is pending
+- T-37-04: delivery status is pending
+- T-37-05: delivery status is pending
+- T-37-06: delivery status is pending
+- T-37-07: delivery status is pending
+- T-37-08: delivery status is pending
 
 ## Deferred Items
 
@@ -85,6 +87,6 @@ Review and resolve phase integration findings shown in the phase artifacts.
 
 ## Session Continuity
 
-Last session: 2026-09-14 21:57
+Last session: 2026-09-19 12:09
 Stopped at: Shipyard GSD projection synchronized from the delivery graph.
 Resume file: None

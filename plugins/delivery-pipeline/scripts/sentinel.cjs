@@ -30,7 +30,8 @@ const fs = require('fs');
 const path = require('path');
 const { execFileSync, spawnSync } = require('child_process');
 const { loadConfig } = require(path.join(__dirname, 'pipeline-config.cjs'));
-const { withLock, lockDirFor } = require(path.join(__dirname, 'lock.cjs'));
+const { withLock, lockDirFor, writeAtomic } = require(path.join(__dirname, 'lock.cjs'));
+const reviewSignatures = require(path.join(__dirname, 'review-signature.cjs'));
 const { classify, unavailableNote, CHECK_FIELDS } = require(path.join(__dirname, 'check-state.cjs'));
 // The checkpoint predicates live in front.cjs and are imported, not copied.
 // A `checkpointParentOf` used to exist here AND there, and the standing rule — the
@@ -68,6 +69,7 @@ const GRAPH_DIR = path.join(ROOT, '.planning', 'graph');
 const TICKETS = path.join(GRAPH_DIR, 'tickets.json');
 const STATE = path.join(GRAPH_DIR, 'delivery-state.json');
 const JOURNAL = path.join(GRAPH_DIR, 'delivery-log.jsonl');
+const REVIEW_HISTORY = path.join(GRAPH_DIR, 'review-observations.json');
 
 function fail(msg, code = 1) {
   console.error(`sentinel: ${msg}`);
@@ -401,21 +403,88 @@ const SCOPE = listFlag('scope');
 // "no threads", "no verdict" and "the base is fine" are three claims, and none of
 // them is what a failed call proves.
 const settlementCache = new Map();
+function reviewHistoryKey(pr, repo) { return `${repo || ''}#${pr}`; }
+function readReviewHistory(pr, repo) {
+  try {
+    const value = JSON.parse(fs.readFileSync(REVIEW_HISTORY, 'utf8'));
+    if (!value || value.schema_version !== 'shipyard.review-observations.v1'
+        || !value.observations || typeof value.observations !== 'object'
+        || Array.isArray(value.observations)) return null;
+    const rows = Array.isArray(value.observations[reviewHistoryKey(pr, repo)])
+      ? value.observations[reviewHistoryKey(pr, repo)] : [];
+    return rows.filter((row) => row && Array.isArray(row.signatures) && row.coverage);
+  } catch (error) {
+    if (error.code === 'ENOENT') return [];
+    return null;
+  }
+}
+function saveReviewObservation(pr, repo, snapshot) {
+  if (!snapshot || !Array.isArray(snapshot.signatures) || !snapshot.coverage) return;
+  withLock(lockDirFor(ROOT), 'review-observations', () => {
+    let store = { schema_version: 'shipyard.review-observations.v1', observations: {} };
+    try {
+      const value = JSON.parse(fs.readFileSync(REVIEW_HISTORY, 'utf8'));
+      if (!value || value.schema_version !== store.schema_version
+          || !value.observations || typeof value.observations !== 'object'
+          || Array.isArray(value.observations)) {
+        throw new Error('review observation history has an unknown schema');
+      }
+      store = value;
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+    }
+    const key = reviewHistoryKey(pr, repo);
+    const rows = Array.isArray(store.observations[key]) ? store.observations[key] : [];
+    const current = {
+      schema_version: reviewSignatures.SCHEMA_VERSION,
+      signatures: [...snapshot.signatures],
+      coverage: { ...snapshot.coverage },
+      digest: snapshot.digest || null,
+      observed_at: new Date().toISOString(),
+    };
+    if (!rows.some((row) => row && row.digest === current.digest
+        && JSON.stringify(row.coverage) === JSON.stringify(current.coverage))) {
+      store.observations[key] = [...rows, current].slice(-12);
+      writeAtomic(REVIEW_HISTORY, `${JSON.stringify(store, null, 2)}\n`);
+    }
+  }, { label: 'review-observations' });
+}
 function settlement(pr, repo) {
   const key = `${repo || ''}#${pr}`;
   if (settlementCache.has(key)) return settlementCache.get(key);
   const out = spawnSync('node', [path.join(__dirname, 'reviewers.cjs'), 'unresolved', String(pr), ...repoArg(repo)], { encoding: 'utf8' });
-  let v = { unresolved: null, review_decision: null, merge_state: null, base: null, head: null };
+  let v = {
+    unresolved: null, review_decision: null, merge_state: null, base: null, head: null,
+    review_signatures: null, review_coverage: null, review_progress: null,
+  };
   if (out.status === 0) {
     try {
       const j = JSON.parse(out.stdout);
+      const currentSnapshot = j.review_snapshot && typeof j.review_snapshot === 'object'
+        ? j.review_snapshot : null;
+      const priorHistory = readReviewHistory(pr, repo);
+      const firstProgress = currentSnapshot ? reviewSignatures.progress([], currentSnapshot) : null;
+      const reviewProgress = currentSnapshot
+        ? (priorHistory === null
+          ? {
+            ...firstProgress,
+            state: reviewSignatures.UNKNOWN,
+            progress: false,
+            evidence: { ...firstProgress.evidence, history_unavailable: true },
+          }
+          : reviewSignatures.progress(priorHistory, currentSnapshot))
+        : (j.review_progress || null);
       v = {
         unresolved: typeof j.unresolved_count === 'number' ? j.unresolved_count : null,
         review_decision: j.review_decision || null,
         merge_state: j.merge_state || null,
         base: j.base || null,
         head: j.head || null,
+        review_signatures: Array.isArray(j.review_signatures) ? j.review_signatures : null,
+        review_coverage: j.review_coverage || null,
+        review_progress: reviewProgress,
       };
+      if (priorHistory !== null) saveReviewObservation(pr, repo, currentSnapshot);
     } catch { /* keep the all-null answer */ }
   }
   settlementCache.set(key, v);
@@ -461,6 +530,18 @@ function stackDepth(id, seen = new Set()) {
   const ps = state[parent] || {};
   if (ps.status === 'merged') return stackDepth(parent, seen); // landed: no longer above us
   return 1 + stackDepth(parent, seen);
+}
+
+// The graph owns a deterministic branch slug; state-sync owns the branch GitHub
+// actually reported. A long ticket title can make those differ, and the latter
+// is the only name a live PR can target. Keep both identities, but only for the
+// same graph ticket — an observed branch is evidence of drift, not a new way to
+// enter another phase's stack.
+function observedBranchesOf(id, ticket) {
+  const observed = state[id] && state[id].pr_branch;
+  return [...new Set([ticket && ticket.branch, observed]
+    .filter((branch) => typeof branch === 'string' && branch.trim())
+    .map((branch) => branch.trim()))];
 }
 
 // The two parent rules, bound to this process's graph. Neither rule is this
@@ -545,7 +626,11 @@ function dutyItems() {
     // review servicing on an API hiccup and walk into the merge gate's refusal
     // later. They fall through to the normal ordering, and the merge gate still
     // refuses to merge blind.
-    const unresolved = settlement(s.pr, s.repo || null).unresolved;
+    const reviewState = settlement(s.pr, s.repo || null);
+    const unresolved = reviewState.unresolved;
+    item.review_signatures = reviewState.review_signatures;
+    item.review_coverage = reviewState.review_coverage;
+    item.review_progress = reviewState.review_progress;
     // …and the base, read from the same call plus one compare. Recorded on the
     // item whatever the answer is, so a reader can tell "the base was checked and
     // is fine" from "nobody could check it" — the two used to look identical, and
@@ -849,7 +934,7 @@ function mergeOne(id) {
   const myPhase = phaseOf(t);
   const samePhaseTicketBranches = Object.entries(tickets)
     .filter(([, o]) => (o.repo || null) === repo && phaseOf(o) === myPhase)
-    .map(([, o]) => o.branch);
+    .flatMap(([id, o]) => observedBranchesOf(id, o));
   const allowed = new Set([s.epic, t.epic, ...samePhaseTicketBranches].filter(Boolean));
   if (pr.baseRefName === integration) {
     return block(`PR targets the integration branch ${integration} — landing a phase there is a human's decision, never the sentinel's`);
@@ -875,7 +960,7 @@ function mergeOne(id) {
   // `parentIsMoving` is untouched on purpose — the checkpoint exception there is
   // right for driving a child to GREEN and wrong only for merging it.
   const baseTicket = Object.entries(tickets).find(
-    ([, o]) => (o.repo || null) === repo && o.branch === pr.baseRefName
+    ([baseId, o]) => (o.repo || null) === repo && observedBranchesOf(baseId, o).includes(pr.baseRefName)
   );
   if (baseTicket) {
     const [baseId, baseObj] = baseTicket;
@@ -898,7 +983,10 @@ function mergeOne(id) {
     // and the reason a cached BOARD read is sound here (`merged` is TERMINAL).
     // Shared with `dutyItems()` AND with `computeFront`, so neither the duty
     // chain nor the board can offer what this refuses.
-    const limbId = limbBaseOf(id, pr.baseRefName);
+    // `limbBaseOf` indexes canonical graph branches. Resolve the observed base
+    // to its ticket first, then ask the shared predicate about that ticket's
+    // canonical identity while keeping the live branch in the remedy.
+    const limbId = limbBaseOf(id, baseObj.branch || pr.baseRefName);
     if (limbId) return block(limbRemedy(id, pr.baseRefName, limbId));
   }
 
@@ -1050,25 +1138,47 @@ function mergeOne(id) {
     // half preserves what the old loop could already see (a child whose
     // `primary_parent` the graph does not record, but whose PR points here).
     const candidates = new Map();
+    const addCandidate = (childId, branches) => {
+      const current = candidates.get(childId) || [];
+      for (const branch of branches) {
+        if (branch && !current.includes(branch)) current.push(branch);
+      }
+      if (current.length) candidates.set(childId, current);
+    };
     for (const [childId, o] of Object.entries(tickets)) {
       if ((o.repo || null) !== repo) continue;
       if (o.primary_parent !== id) continue;
-      if (o.branch) candidates.set(childId, o.branch);
+      addCandidate(childId, observedBranchesOf(childId, o));
     }
     for (const [childId, childState] of Object.entries(state)) {
       if ((childState.repo || null) !== repo) continue;
       if (childState.pr_base !== pr.headRefName) continue;
-      if (childState.branch) candidates.set(childId, childState.branch);
+      addCandidate(childId, observedBranchesOf(childId, tickets[childId] || childState));
     }
-    for (const [childId, branch] of candidates) {
-      const live = gh(['pr', 'list', '--head', branch, ...repoArg(repo), '--state', 'open',
-        '--json', 'number,baseRefName'], { tolerate: true });
+    for (const [childId, branches] of candidates) {
       let rows = null;
-      if (typeof live === 'string') {
+      const queryErrors = [];
+      // Query the canonical name first for compatibility with old state, then
+      // the observed name when the canonical slug has no live PR. Stop at the
+      // first non-empty answer so a PR is never retargeted twice.
+      for (const branch of branches) {
+        const live = gh(['pr', 'list', '--head', branch, ...repoArg(repo), '--state', 'open',
+          '--json', 'number,baseRefName'], { tolerate: true });
+        if (typeof live !== 'string') {
+          queryErrors.push(`${branch}: ${live.error}`);
+          continue;
+        }
         try {
           const parsed = JSON.parse(live);
-          if (Array.isArray(parsed)) rows = parsed.map((r) => ({ ...r, from: 'live' }));
-        } catch { /* fall through to the cached answer below */ }
+          if (!Array.isArray(parsed)) {
+            queryErrors.push(`${branch}: unreadable output`);
+            continue;
+          }
+          rows = parsed.map((r) => ({ ...r, from: 'live' }));
+          if (rows.length) break;
+        } catch {
+          queryErrors.push(`${branch}: unreadable output`);
+        }
       }
       if (rows === null) {
         // gh could not answer. Fall back to the cached board — it is what we had
@@ -1080,7 +1190,7 @@ function mergeOne(id) {
           ? [{ number: cs.pr, baseRefName: cs.pr_base, from: 'cache' }]
           : [];
         (res.retarget_warnings = res.retarget_warnings || []).push(
-          `${childId}: could not list its open PRs (${typeof live === 'string' ? 'unreadable output' : live.error}) — ` +
+          `${childId}: could not list its open PRs (${queryErrors.join('; ') || 'unreadable output'}) — ` +
           `used the cached board instead${rows.length ? '' : ', which knows of no PR on this base'}`
         );
       }

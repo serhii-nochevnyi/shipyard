@@ -202,6 +202,7 @@
 const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
+const runWaker = require('./run-waker.cjs');
 
 // Older than this and the front no longer describes the board as it stands.
 const FRESH_MS = envMs('SHIPYARD_STOP_GATE_FRESH_MS', 45 * 60 * 1000);
@@ -231,6 +232,11 @@ const DISPATCH_SUSPECT_MS = envMs('SHIPYARD_STOP_GATE_DISPATCH_SUSPECT_MS', 45 *
 const LEDGER_NAME = 'stop-gate-ledger.json';
 
 function allow() { process.exit(0); }
+
+function pendingScope(reason) {
+  process.stdout.write(JSON.stringify({ decision: 'block', reason: `shipyard: run scope is pending — ${reason}` }) + '\n');
+  process.exit(0);
+}
 
 // The refusal, gated by the ledger. Every branch below calls this rather than
 // deciding for itself whether a repeat is legitimate — one place asks that
@@ -456,7 +462,12 @@ function dispatchAges(dir, ids) {
     const rec = recs[id];
     const at = Date.parse((rec && rec.at) || '');
     if (!Number.isFinite(at) || now - at < DISPATCH_SUSPECT_MS) { plausible.push(id); continue; }
-    suspect.push({ id, role: (rec && rec.role) || 'an agent', mins: Math.round((now - at) / 60000) });
+    suspect.push({
+      id,
+      role: (rec && rec.role) || 'an agent',
+      mins: Math.round((now - at) / 60000),
+      dispatch_id: rec && typeof rec.dispatch_id === 'string' ? rec.dispatch_id : null,
+    });
   }
   return { plausible, suspect };
 }
@@ -476,14 +487,39 @@ function readFront(file) {
 }
 
 const cwd = process.cwd();
-const candidates = [];
-const seen = new Set();
-for (const dir of [cwd, ...worktreesOf(cwd)]) {
-  const file = frontFileIn(dir);
-  if (seen.has(file)) continue;
-  seen.add(file);
-  const c = readFront(file);
-  if (c) candidates.push(c);
+const requestedRunId = typeof payload.run_id === 'string' && payload.run_id.trim()
+  ? payload.run_id.trim() : (process.env.SHIPYARD_RUN_ID || null);
+const scopedMode = Boolean(requestedRunId || String(process.env.SHIPYARD_RUN_CONTROL || '').toLowerCase() === 'scoped'
+  || process.env.SHIPYARD_RUN_STORE_DIR);
+let candidates = [];
+if (scopedMode) {
+  if (!requestedRunId) pendingScope('run_id is missing from the stop payload');
+  let scoped;
+  try {
+    scoped = runWaker.readRun({
+      run_id: requestedRunId,
+      store_dir: process.env.SHIPYARD_RUN_STORE_DIR,
+      graph_dir: process.env.SHIPYARD_GRAPH_DIR,
+      worktree: payload.worktree || process.env.SHIPYARD_RUN_WORKTREE,
+    });
+  } catch (cause) {
+    pendingScope(`${cause.code || 'scope_error'}: ${cause.message}`);
+  }
+  const scopedFront = readFront(frontFileIn(scoped.worktree));
+  if (!scopedFront) pendingScope(`the scoped front is missing or unreadable at ${frontFileIn(scoped.worktree)}`);
+  if (scopedFront.front.run_id && scopedFront.front.run_id !== requestedRunId) {
+    pendingScope(`front ${scopedFront.file} belongs to ${scopedFront.front.run_id}, not ${requestedRunId}`);
+  }
+  candidates = [scopedFront];
+} else {
+  const seen = new Set();
+  for (const dir of [cwd, ...worktreesOf(cwd)]) {
+    const file = frontFileIn(dir);
+    if (seen.has(file)) continue;
+    seen.add(file);
+    const c = readFront(file);
+    if (c) candidates.push(c);
+  }
 }
 if (!candidates.length) allow();
 
@@ -512,6 +548,7 @@ const whereToSync = wrongCwd
 
 const count = Number(front.actionable_count || 0);
 const leftBehind = Number(front.left_behind_count || 0);
+const trackerBlocked = Number(front.tracker_blocked_count || 0);
 const dispatched = (front.waiting && front.waiting.dispatched) || [];
 
 // The cap, read defensively: a `delivery-front.json` written before capacity
@@ -595,19 +632,32 @@ if (age !== null && age > FRESH_MS) {
 let agesCache = null;
 const agentsOut = () => (agesCache || (agesCache = dispatchAges(graphDir, dispatched)));
 
+// Render a value as one POSIX shell argument when the gate prints a remediation
+// command. Graph paths come from the host and may contain spaces, quotes or
+// shell metacharacters; leaving one unquoted turns a copy/paste instruction into
+// a different command (or lets a path fragment be interpreted by the shell).
+const shellQuote = (value) => `'${String(value).replace(/'/g, `'\\''`)}'`;
+
 // The dispatch marks that did NOT keep this quiet, as a sentence. Shared by the
 // CI branch and the front-is-not-empty verdict below: on a board the cap called
 // FULL, a suspect mark is the whole explanation for why the gate is blocking
 // anyway, so the reader must get the same line either way.
 const goneText = () => {
   const { suspect } = agentsOut();
+  const suspectId = suspect[0] && suspect[0].id;
+  const suspectDispatchId = suspect[0] && suspect[0].dispatch_id;
   return suspect.length
     ? '\nThe dispatch mark(s) on this board did NOT keep this quiet: ' +
       `${suspect.map((d) => `${d.id} → ${d.role}, marked ${d.mins}m ago`).join('; ')}.\n` +
       'A mark that old is not an agent at work — it is what a mark written before a launch that never\n' +
       'happened looks like. If that work really is out it will wake you; if it is gone, return the\n' +
-      'ticket to the board with\n' +
-      `  \`dispatch-record.cjs clear ${suspect[0].id} --graph ${graphDir}\`\n` +
+      (suspectDispatchId
+        ? 'ticket to the board with\n' +
+          `  \`dispatch-record.cjs clear ${shellQuote(suspectId)} ${shellQuote(suspectDispatchId)} --graph ${shellQuote(graphDir)}\`\n`
+        : 'ticket to the board only after checking `.planning/graph/dispatches.json`: this record is\n' +
+          'missing `dispatch_id`, so no exact clear command can be suggested.\n' +
+          `  Once you have the recorded id, re-run \`dispatch-record.cjs clear\` for ticket ${suspectId} with that id and\n` +
+          `  \`--graph ${shellQuote(graphDir)}\`.\n`) +
       'The --graph is not optional: this hook\'s cwd is the SESSION\'s, and a clear run from the wrong\n' +
       'one reports "no dispatch recorded" and changes nothing.'
     : '';
@@ -624,11 +674,25 @@ if (capacityFull && agentsOut().plausible.length) allow();
 // foreground — but it may not stop, because nothing will bring it back.
 if (count <= 0 || leftBehind >= count) {
   const ci = (front.waiting && front.waiting.ci) || [];
-  if (!ci.length) allow();
+  const parent = (front.waiting && front.waiting.parent) || [];
+  if (!ci.length && !dispatched.length && !parent.length && trackerBlocked > 0) {
+    verdict(
+      `shipyard: nothing is actionable, but ${trackerBlocked} pending ticket(s) are held by tracker eligibility — ` +
+      'this is unfinished evidence collection, not a fixpoint. Do not summarise and stop:\n' +
+      '  1. read each pending ticket once from Jira at cold start, or use the exact-ticket `tracker-record.cjs override`;\n' +
+      '  2. re-run `front.cjs`/`state-sync.cjs` and take the ticket only after the tracker verdict is known;\n' +
+      '  3. loop back. Do NOT wait on CI: no CI wait can resolve a missing tracker observation.' + whereToSync
+    );
+  }
+  // A child held behind a parent is still waiting on that parent's pipeline;
+  // allowing a stop when `waiting.ci` is empty abandons the only wake-up that
+  // can release the child.
+  if (!ci.length && !parent.length) allow();
   if (agentsOut().plausible.length) allow();
   const gone = goneText();
+  const waiting = [...ci, ...parent];
   verdict(
-    `shipyard: nothing is actionable, but ${ci.length} PR(s) are still in CI (${ci.join(', ')}) — ` +
+    `shipyard: nothing is actionable, but ${waiting.length} PR(s) are still in CI or held behind a parent (${waiting.join(', ')}) — ` +
     'so this is a WAIT, not a fixpoint, and stopping here ends the run for good.\n' +
     'The babysit loop is woken by agents finishing. No agent is out, so nothing will wake this session:\n' +
     'measured at 5h46m once and 11h43m the next night, the second time with the next PR green, conform\n' +

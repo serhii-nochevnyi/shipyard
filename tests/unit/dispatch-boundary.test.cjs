@@ -1,0 +1,2288 @@
+'use strict';
+
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const crypto = require('crypto');
+const { spawn, spawnSync } = require('child_process');
+const { suite, test, done, assert } = require('./assert-harness.cjs');
+const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
+const boundaryModule = require('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs');
+
+function receiptFor(resolution, extra = {}) {
+  return {
+    receipt_type: 'adr-014.application',
+    runtime: resolution.runtime,
+    role: resolution.role,
+    dispatch_id: resolution.dispatch_id,
+    launch_id: `launch-${resolution.dispatch_id}`,
+    ...(resolution.agent_file ? { agent_file: resolution.agent_file } : {}),
+    requested_model: resolution.requested_model,
+    requested_effort: resolution.requested_effort,
+    applied_model: resolution.model,
+    applied_effort: resolution.effort,
+    observed_model: resolution.model,
+    observed_effort: resolution.effort,
+    policy_hash: resolution.policy_hash,
+    compliance: 'verified',
+    compliance_proof: {
+      status: 'verified',
+      boundary: 'adr-014.dispatch-boundary',
+      policy_hash: resolution.policy_hash,
+      dispatch_id: resolution.dispatch_id,
+      launch_id: `launch-${resolution.dispatch_id}`,
+    },
+    ...(resolution.agent_file ? { agent_file_digest: resolution.agent_file_digest } : {}),
+    ...extra,
+  };
+}
+
+function fakeAdapter({ receipt = receiptFor, extra = {}, onLaunch, validateGeneratedAgent, ...options } = {}) {
+  const launch = (resolution, context, handoff) => {
+    if (onLaunch) onLaunch(resolution, context, handoff);
+    return receipt(resolution, extra);
+  };
+  return {
+    ...options,
+    ...(validateGeneratedAgent ? { validateGeneratedAgent } : {
+      validateGeneratedAgent: (resolution) => {
+        const agentFileContent = `adapter-owned:${resolution.agent_file}`;
+        return {
+          valid: true,
+          exists: true,
+          content_verified: true,
+          policy_hash: resolution.policy_hash,
+          agent_file: resolution.agent_file,
+          agent_file_digest: require('crypto').createHash('sha256').update(agentFileContent).digest('hex'),
+          agent_file_content: agentFileContent,
+        };
+      },
+    }),
+    launch,
+    launchStatic: launch,
+  };
+}
+
+function writeStaticAgent(agentsDir, resolution) {
+  const name = resolution.agent_file.replace(/\.toml$/, '');
+  const text = [
+    `# shipyard-policy-id = "${policy.POLICY.id}"`,
+    `# shipyard-policy-version = "${resolution.policy_version}"`,
+    `# shipyard-policy-hash = "${resolution.policy_hash}"`,
+    '# shipyard-policy-runtime = "codex"',
+    `# shipyard-policy-role = "${resolution.role}"`,
+    `# shipyard-policy-rung = "${resolution.rung}"`,
+    `name = "${name}"`,
+    `model = "${resolution.model}"`,
+    `model_reasoning_effort = "${resolution.effort}"`,
+    "developer_instructions = '''\nagent\n'''",
+    '',
+  ].join('\n');
+  fs.mkdirSync(agentsDir, { recursive: true });
+  fs.writeFileSync(path.join(agentsDir, resolution.agent_file), text);
+  fs.writeFileSync(path.join(agentsDir, '.shipyard-manifest.json'), JSON.stringify({
+    policy_id: policy.POLICY.id,
+    policy_version: resolution.policy_version,
+    policy_hash: resolution.policy_hash,
+    agent_files: [resolution.agent_file],
+    agent_digests: {
+      [resolution.agent_file]: crypto.createHash('sha256').update(text).digest('hex'),
+    },
+  }) + '\n');
+}
+
+suite('mandatory resolve → validate → launch → receipt boundary');
+
+test('dynamic Codex execution receives explicit model and reasoning effort and returns an immutable trace', () => {
+  const calls = [];
+  const recorded = [];
+  const boundary = boundaryModule.createDispatchBoundary({
+    adapters: {
+      codex: fakeAdapter({ onLaunch: (resolution, context) => calls.push({ resolution, context }) }),
+    },
+    recorder: (trace) => {
+      recorded.push(trace);
+      return true;
+    },
+  });
+  const result = boundary.dispatch({ runtime: 'codex', role: 'executor' }, { ticket: 'T-36-01' });
+  assert.equal(calls.length, 1);
+  assert.deepStrictEqual(calls[0].resolution.launch_arguments, {
+    model: 'gpt-5.6-luna',
+    reasoning_effort: 'max',
+  });
+  assert.deepStrictEqual(calls[0].context, { ticket: 'T-36-01' });
+  assert.equal(result.requested_model, 'gpt-5.6-luna');
+  assert.equal(result.resolution.task_level, 'complex');
+  assert.equal(result.applied_model, 'gpt-5.6-luna');
+  assert.equal(result.observed_effort, 'max');
+  assert.deepStrictEqual(result.trace.map((step) => step.stage), ['resolve', 'validate', 'launch', 'record', 'receipt']);
+  assert.equal(result.trace.at(-1).status, 'passed');
+  assert.equal(recorded.length, 1);
+  assert.equal(recorded[0].ticket, 'T-36-01');
+  assert.equal(recorded[0].receipt.compliance, 'verified');
+  assert.equal(recorded[0].launch_id, result.receipt.launch_id);
+  assert.deepStrictEqual(recorded[0].launch_arguments, calls[0].resolution.launch_arguments);
+  assert.deepStrictEqual(recorded[0].signals, calls[0].resolution.signals);
+  assert.deepStrictEqual(recorded[0].receipt, result.receipt);
+  assert.equal(recorded[0].receipt.compliance_proof.boundary, 'adr-014.dispatch-boundary');
+  assert.equal(result.receipt.compliance, 'verified');
+  assert.ok(Object.isFrozen(result));
+  assert.ok(Object.isFrozen(result.resolution));
+  assert.ok(Object.isFrozen(result.receipt));
+  assert.ok(Object.isFrozen(result.trace));
+});
+
+test('capacity admission fences an in-flight launch and releases after its receipt', async () => {
+  let nextLease = 0;
+  const leases = new Set();
+  const capacity = {
+    heartbeat_interval_ms: 5,
+    acquire() {
+      if (leases.size >= 1) return { admitted: false, reason: 'capacity-full', max: 1, in_flight: 1, free: 0 };
+      const lease_id = `capacity-${++nextLease}`;
+      leases.add(lease_id);
+      return { admitted: true, lease_id, coverage: 'shared', max: 1, in_flight: 1, free: 0 };
+    },
+    heartbeat(lease_id) { return { renewed: leases.has(lease_id) }; },
+    release(lease_id) { leases.delete(lease_id); return { released: true, lease_id }; },
+  };
+  let finishLaunch;
+  let launches = 0;
+  const adapter = fakeAdapter({
+    onLaunch: () => { launches++; },
+    receipt: (resolution) => new Promise((resolve) => {
+      finishLaunch = () => resolve(receiptFor(resolution));
+    }),
+  });
+  const boundary = boundaryModule.createDispatchBoundary({
+    adapters: { codex: adapter }, recorder: () => true, capacity,
+  });
+  const inFlight = boundary.dispatch({ runtime: 'codex', role: 'executor' }, { ticket: 'T-cap-a', agent_id: 'agent-a' });
+  assert.equal(launches, 1);
+  assert.equal(leases.size, 1);
+  assert.throws(
+    () => boundary.dispatch({ runtime: 'codex', role: 'executor' }, { ticket: 'T-cap-b', agent_id: 'agent-b' }),
+    (error) => error.code === 'CAPACITY_FULL',
+  );
+  finishLaunch();
+  const result = await inFlight;
+  assert.deepStrictEqual(result.capacity, { coverage: 'shared', degraded: false, max: 1, in_flight: 1, free: 0 });
+  assert.equal(leases.size, 0);
+  const third = boundary.dispatch({ runtime: 'codex', role: 'executor' }, { ticket: 'T-cap-c', agent_id: 'agent-c' });
+  assert.equal(leases.size, 1);
+  finishLaunch();
+  assert.equal((await third).capacity_lease.lease_id, 'capacity-2');
+  assert.equal(leases.size, 0);
+});
+
+test('model-axis capability evidence falls back within the same runtime policy', () => {
+  const boundary = boundaryModule.createDispatchBoundary({
+    adapters: {
+      claude: fakeAdapter({
+        capabilitySnapshot: (resolution) => ({
+          schema_version: 'shipyard.model-capability.v1',
+          runtime: 'claude',
+          launch_id: `host-${resolution.dispatch_id}`,
+          supported_models: ['opus'],
+          supported_efforts: ['medium', 'max'],
+        }),
+      }),
+    },
+    recorder: () => true,
+  });
+  const critical = boundary.dispatch({
+    runtime: 'claude', role: 'arch-review', signals: { critical: true }, dispatch_id: 'arch-critical',
+  }, { ticket: 'T-capability' });
+  const ceiling = boundary.dispatch({
+    runtime: 'claude',
+    role: 'arch-review',
+    signals: { inputTokens: policy.WINDOW_THRESHOLD_TOKENS + 1 },
+    dispatch_id: 'arch-ceiling',
+  }, { ticket: 'T-capability' });
+  assert.equal(ceiling.resolution.rung, 'critical');
+  assert.equal(ceiling.resolution.capability.state, 'unsupported');
+  assert.equal(ceiling.resolution.capability.requested.rung, 'ceiling');
+  assert.equal(ceiling.resolution.capability.fallback.rung, 'critical');
+});
+
+test('reconciliation requires authenticated current receipt evidence across boundary instances', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'boundary-reconcile-'));
+  try {
+    const recorder = boundaryModule.createDurableRecorder(path.join(dir, 'receipts'));
+    const writer = boundaryModule.createDispatchBoundary({ recorder, adapters: { codex: fakeAdapter() } });
+    const result = writer.dispatch({ runtime: 'codex', role: 'executor' }, { ticket: 'T-36-08' });
+    const reader = boundaryModule.createDispatchBoundary({ recorder });
+    const facts = reader.reconcile(result.dispatch_id, { ticket: 'T-36-08' });
+    assert.equal(facts.applied_model, result.receipt.applied_model);
+    assert.equal(facts.ticket, 'T-36-08');
+    assert.equal(facts.task_level, result.resolution.task_level);
+    assert.deepStrictEqual(facts.application_receipt, result.receipt);
+    assert.deepStrictEqual(facts.launch_arguments, result.resolution.launch_arguments);
+    assert.throws(() => reader.reconcile('absent', { ticket: 'T-36-08' }), /compliant applied receipt/);
+    // A recorder claim is the lease used by dispatch-record reconciliation.
+    // A repair cannot consume the receipt while the record writer still owns
+    // that lease between its trusted read and durable record write.
+    const recordClaim = recorder.claim(result.dispatch_id, 'dispatch-record-mark');
+    assert.equal(recordClaim.claimed, true);
+    const competingRepair = recorder.claim(result.dispatch_id, 'repair-dispatch');
+    assert.equal(competingRepair.claimed, false);
+    assert.deepStrictEqual(recorder.release(result.dispatch_id, 'dispatch-record-mark', recordClaim), { released: true });
+    const file = path.join(dir, 'receipts', `record-${crypto.createHash('sha256').update(result.dispatch_id).digest('hex')}.json`);
+    const original = JSON.parse(fs.readFileSync(file, 'utf8'));
+    for (const mutate of [
+      (record) => { delete record.receipt; },
+      (record) => { record.receipt.applied_model = 'invented'; },
+      (record) => { record.receipt.policy_hash = 'stale'; },
+    ]) {
+      const envelope = JSON.parse(JSON.stringify(original));
+      mutate(envelope.payload);
+      fs.writeFileSync(file, JSON.stringify(envelope));
+      assert.throws(() => reader.reconcile(result.dispatch_id, { ticket: 'T-36-08' }), /compliant applied receipt/);
+    }
+    fs.writeFileSync(file, JSON.stringify(original.payload));
+    assert.throws(() => reader.reconcile(result.dispatch_id, { ticket: 'T-36-08' }), /compliant applied receipt/);
+    fs.writeFileSync(file, JSON.stringify(original));
+    const claim = recorder.claim(result.dispatch_id, 'repair-dispatch');
+    assert.equal(claim.claimed, true);
+    assert.deepStrictEqual(recorder.consume(result.dispatch_id, 'repair-dispatch', claim), { consumed: true });
+    assert.ok(recorder.getReceipt(result.dispatch_id), 'consumed receipt remains durable history');
+    assert.throws(() => reader.reconcile(result.dispatch_id, { ticket: 'T-36-08' }), /already consumed/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('reconciliation refuses without an explicitly configured recorder', () => {
+  const reader = boundaryModule.createDispatchBoundary();
+  assert.throws(
+    () => reader.reconcile('dispatch-without-recorder'),
+    (error) => error.code === 'RECORD_UNAVAILABLE'
+      && /explicitly configured durable dispatch recorder/.test(error.message),
+  );
+});
+
+test('receipts and repair predecessors remain bound to their launch ticket', () => {
+  const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'boundary-ticket-binding-'));
+  try {
+    const recorder = boundaryModule.createDurableRecorder(storeDir);
+    const boundary = boundaryModule.createDispatchBoundary({
+      adapters: { codex: fakeAdapter() },
+      recorder,
+    });
+    const base = boundary.dispatch({
+      runtime: 'codex', role: 'ci-fix', signals: { signatureState: 'first' },
+    }, { ticket: 'T-36-A' });
+    assert.throws(
+      () => boundary.reconcile(base.dispatch_id, { ticket: 'T-36-B' }),
+      (error) => error.code === 'NONCOMPLIANT_RECEIPT' && /ticket/.test(error.message),
+    );
+    assert.throws(
+      () => boundary.dispatch({
+        runtime: 'codex', role: 'ci-fix',
+        signals: { signatureState: 'repeat', priorApplied: base.receipt },
+        previous_dispatch_id: base.dispatch_id,
+      }, { ticket: 'T-36-B' }),
+      (error) => error.code === 'NONCOMPLIANT_RECEIPT' && /ticket/.test(error.message),
+    );
+    const sameTicketRepair = boundary.dispatch({
+      runtime: 'codex', role: 'ci-fix',
+      signals: { signatureState: 'repeat', priorApplied: base.receipt },
+      previous_dispatch_id: base.dispatch_id,
+    }, { ticket: 'T-36-A' });
+    assert.equal(sameTicketRepair.ticket, 'T-36-A');
+  } finally {
+    fs.rmSync(storeDir, { recursive: true, force: true });
+  }
+});
+
+test('an unticketed repair cannot consume an unticketed predecessor', () => {
+  const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'boundary-missing-ticket-'));
+  try {
+    const boundary = boundaryModule.createDispatchBoundary({
+      adapters: { codex: fakeAdapter() },
+      recorder: boundaryModule.createDurableRecorder(storeDir),
+    });
+    const base = boundary.dispatch({
+      runtime: 'codex', role: 'ci-fix', signals: { signatureState: 'first' },
+    });
+    const repair = {
+      runtime: 'codex',
+      role: 'ci-fix',
+      signals: { signatureState: 'repeat', priorApplied: base.receipt },
+      previous_dispatch_id: base.dispatch_id,
+    };
+    assert.throws(
+      () => boundary.dispatch(repair),
+      (error) => error.code === 'INVALID_INPUT' && /ticket.*launch context/.test(error.message),
+    );
+    assert.throws(
+      () => boundary.dispatch(repair, { ticket: 'T-36-MISSING' }),
+      (error) => error.code === 'NONCOMPLIANT_RECEIPT' && /not bound to a ticket/.test(error.message),
+    );
+  } finally {
+    fs.rmSync(storeDir, { recursive: true, force: true });
+  }
+});
+
+test('executor critical dispatch uses the Sol/high escalation rung', () => {
+  let launched;
+  const boundary = boundaryModule.createDispatchBoundary({
+    adapters: {
+      codex: fakeAdapter({ onLaunch: (resolution) => { launched = resolution; } }),
+    },
+    recorder: () => true,
+  });
+  const result = boundary.dispatch({
+    runtime: 'codex',
+    role: 'executor',
+    signals: { critical: true },
+  });
+  assert.deepStrictEqual(launched.launch_arguments, {
+    model: 'gpt-5.6-sol',
+    reasoning_effort: 'high',
+  });
+  assert.equal(result.applied_model, 'gpt-5.6-sol');
+  assert.equal(result.applied_effort, 'high');
+});
+
+test('static Codex roles pass the resolver-selected generated file to the adapter', () => {
+  let launched;
+  const boundary = boundaryModule.createDispatchBoundary({
+    adapters: {
+      codex: fakeAdapter({ onLaunch: (resolution) => { launched = resolution; } }),
+    },
+    recorder: () => true,
+  });
+  const result = boundary.dispatch({
+    runtime: 'codex',
+    role: 'research',
+    signals: { complexity: 'very-complex' },
+  });
+  assert.equal(launched.agent_file, 'shipyard-inv-research-critical.toml');
+  assert.equal(result.receipt.agent_file, launched.agent_file);
+  assert.equal(launched.launch_arguments, undefined);
+});
+
+test('Claude launches use the independent native grid with an explicit effort', () => {
+  let launched;
+  const boundary = boundaryModule.createDispatchBoundary({
+    adapters: {
+      claude: fakeAdapter({ onLaunch: (resolution) => { launched = resolution; } }),
+    },
+    recorder: () => true,
+  });
+  const result = boundary.dispatch({
+    runtime: 'claude',
+    role: 'integrator',
+    signals: { contested: true },
+  });
+  assert.deepStrictEqual(launched.launch_arguments, { model: 'opus', effort: 'high' });
+  assert.equal(result.applied_model, 'opus');
+  assert.equal(result.receipt.policy_hash, policy.POLICY_HASH);
+});
+
+test('Claude applies the amended research, decomposition, and executor ladder at the boundary', () => {
+  const cases = [
+    ['research', {}, 'opus', 'medium'],
+    ['research', { type: 'alternatives' }, 'opus', 'medium'],
+    ['research', { complexity: 'very-complex' }, 'opus', 'max'],
+    ['decomposition', {}, 'opus', 'medium'],
+    ['decomposition', { critical: true }, 'opus', 'max'],
+    ['decomposition', { checkpoint: true }, 'opus', 'max'],
+    ['executor', {}, 'sonnet', 'max'],
+    ['executor', { critical: true }, 'opus', 'low'],
+    ['executor', { checkpoint: true }, 'opus', 'low'],
+  ];
+  for (const [role, signals, model, effort] of cases) {
+    let launched;
+    const boundary = boundaryModule.createDispatchBoundary({
+      adapters: {
+        claude: fakeAdapter({ onLaunch: (resolution) => { launched = resolution; } }),
+      },
+      recorder: () => true,
+    });
+    const result = boundary.dispatch({ runtime: 'claude', role, signals });
+    assert.deepStrictEqual(launched.launch_arguments, { model, effort }, `${role}/${JSON.stringify(signals)}`);
+    assert.equal(result.applied_model, model, `${role} model`);
+    assert.equal(result.applied_effort, effort, `${role} effort`);
+  }
+});
+
+test('Claude repair receipts authorize only the Claude-native predecessor rung', () => {
+  const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-boundary-claude-chain-'));
+  const ticket = 'T-36-CLAUDE';
+  const boundary = boundaryModule.createDispatchBoundary({
+    adapters: { claude: fakeAdapter() },
+    recorder: boundaryModule.createDurableRecorder(storeDir),
+  });
+  const base = boundary.dispatch({
+    runtime: 'claude',
+    role: 'ci-fix',
+    signals: { signatureState: 'first' },
+  }, { ticket });
+  assert.equal(base.applied_model, 'opus');
+  assert.equal(base.applied_effort, 'medium');
+  const repeat = boundary.dispatch({
+    runtime: 'claude',
+    role: 'ci-fix',
+    signals: { signatureState: 'repeat', priorApplied: base.receipt },
+    previous_dispatch_id: base.dispatch_id,
+  }, { ticket });
+  assert.equal(repeat.applied_model, 'opus');
+  assert.equal(repeat.applied_effort, 'max');
+  const exhausted = boundary.dispatch({
+    runtime: 'claude',
+    role: 'ci-fix',
+    signals: { signatureState: 'repeat_exhausted', priorApplied: repeat.receipt },
+    previous_dispatch_id: repeat.dispatch_id,
+  }, { ticket });
+  assert.equal(exhausted.applied_model, 'opus');
+  assert.equal(exhausted.applied_effort, 'max');
+});
+
+test('validation hooks can reject an unsupported selection before launch', () => {
+  let launched = false;
+  const boundary = boundaryModule.createDispatchBoundary({
+    adapters: {
+      codex: fakeAdapter({
+        supports: () => ({ valid: false, reason: 'model unavailable on this host' }),
+        onLaunch: () => { launched = true; },
+      }),
+    },
+    recorder: () => true,
+  });
+  assert.throws(
+    () => boundary.dispatch({ runtime: 'codex', role: 'executor' }),
+    (error) => error.code === 'UNSUPPORTED_SELECTION' && /unavailable/.test(error.message),
+  );
+  assert.equal(launched, false);
+});
+
+test('missing adapters fail closed before any launch', () => {
+  let launched = false;
+  const boundary = boundaryModule.createDispatchBoundary({
+    adapters: { codex: { launch: () => { launched = true; } } },
+  });
+  assert.throws(
+    () => boundary.dispatch({ runtime: 'claude', role: 'executor' }),
+    (error) => error.code === 'MISSING_ADAPTER' && /inherited session|CLI default/.test(error.message),
+  );
+  assert.equal(launched, false);
+});
+
+test('missing receipt fails closed and does not record a phantom dispatch', () => {
+  let records = 0;
+  const boundary = boundaryModule.createDispatchBoundary({
+    adapters: { codex: { launch: () => undefined } },
+    recorder: () => { records++; },
+  });
+  assert.throws(
+    () => boundary.dispatch({ runtime: 'codex', role: 'executor' }),
+    (error) => error.code === 'MISSING_RECEIPT' && /application receipt/.test(error.message),
+  );
+  assert.equal(records, 0);
+});
+
+test('durable recording requires affirmative acknowledgement before repair provenance exists', () => {
+  let launchedReceipt;
+  const boundary = boundaryModule.createDispatchBoundary({
+    adapters: {
+      codex: fakeAdapter({
+        receipt: (resolution) => {
+          launchedReceipt = receiptFor(resolution);
+          return launchedReceipt;
+        },
+      }),
+    },
+    recorder: () => undefined,
+  });
+  assert.throws(
+    () => boundary.dispatch({ runtime: 'codex', role: 'ci-fix', signals: { signatureState: 'first' } }),
+    (error) => error.code === 'RECORD_FAILED' && /affirmative/.test(error.message),
+  );
+  assert.throws(
+    () => boundary.dispatch({
+      runtime: 'codex',
+      role: 'ci-fix',
+      signals: { signatureState: 'repeat', priorApplied: launchedReceipt },
+      previous_dispatch_id: launchedReceipt.dispatch_id,
+    }),
+    (error) => error.code === 'UNVERIFIED_RECEIPT',
+  );
+});
+
+test('a caller cannot replay a reserved dispatch id', () => {
+  let launches = 0;
+  let records = 0;
+  const boundary = boundaryModule.createDispatchBoundary({
+    adapters: {
+      codex: fakeAdapter({ onLaunch: () => { launches++; } }),
+    },
+    recorder: () => {
+      records++;
+      return true;
+    },
+  });
+  const input = { runtime: 'codex', role: 'executor', dispatch_id: 'dispatch-replay' };
+  const first = boundary.dispatch(input);
+  assert.equal(first.dispatch_id, 'dispatch-replay');
+  assert.throws(
+    () => boundary.dispatch(input),
+    (error) => error.code === 'DUPLICATE_DISPATCH_ID' && /replay/.test(error.message),
+  );
+  assert.equal(launches, 1);
+  assert.equal(records, 1);
+});
+
+test('repair escalations require the boundary receipt chain and consume each predecessor once', () => {
+  const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-boundary-chain-'));
+  const ticket = 'T-36-CHAIN';
+  const boundary = boundaryModule.createDispatchBoundary({
+    adapters: { codex: fakeAdapter() },
+    recorder: boundaryModule.createDurableRecorder(storeDir),
+  });
+  assert.throws(
+    () => boundary.dispatch({
+      runtime: 'codex',
+      role: ' ci-fix ',
+      signals: { signatureState: 'repeat' },
+    }),
+    (error) => error.code === 'MISSING_RECEIPT',
+  );
+  const base = boundary.dispatch({
+    runtime: 'codex',
+    role: 'ci-fix',
+    signals: { signatureState: 'first' },
+  }, { ticket });
+  const repeat = boundary.dispatch({
+    runtime: 'codex',
+    role: 'ci-fix',
+    signals: { signatureState: 'repeat', priorApplied: base.receipt },
+    previous_dispatch_id: base.dispatch_id,
+  }, { ticket });
+  assert.equal(base.applied_model, 'gpt-5.6-luna');
+  assert.equal(repeat.applied_model, 'gpt-5.6-sol');
+  assert.equal(repeat.applied_effort, 'high');
+  assert.throws(
+    () => boundary.dispatch({
+      runtime: 'codex',
+      role: 'ci-fix',
+      signals: { signatureState: 'repeat', priorApplied: base.receipt },
+      previous_dispatch_id: base.dispatch_id,
+    }, { ticket }),
+    (error) => error.code === 'UNVERIFIED_RECEIPT',
+  );
+  const exhausted = boundary.dispatch({
+    runtime: 'codex',
+    role: 'ci-fix',
+    signals: { signatureState: 'repeat_exhausted', priorApplied: repeat.receipt },
+    previous_dispatch_id: repeat.dispatch_id,
+  }, { ticket });
+  assert.equal(exhausted.applied_model, 'gpt-5.6-sol');
+  assert.equal(exhausted.applied_effort, 'xhigh');
+});
+
+test('same-boundary function recorders can authorize their own in-memory repair chain', () => {
+  const recorder = () => true;
+  const ticket = 'T-36-FUNCTION';
+  const boundary = boundaryModule.createDispatchBoundary({
+    adapters: { codex: fakeAdapter() },
+    recorder,
+  });
+  const base = boundary.dispatch({
+    runtime: 'codex',
+    role: 'ci-fix',
+    signals: { signatureState: 'first' },
+    dispatch_id: 'function-recorder-base',
+  }, { ticket });
+  const repeat = boundary.dispatch({
+    runtime: 'codex',
+    role: 'ci-fix',
+    signals: { signatureState: 'repeat', priorApplied: base.receipt },
+    previous_dispatch_id: base.dispatch_id,
+    dispatch_id: 'function-recorder-repeat',
+  }, { ticket });
+  assert.equal(repeat.applied_model, 'gpt-5.6-sol');
+  assert.equal(repeat.applied_effort, 'high');
+  assert.equal(repeat.resolution.prior_applied.dispatch_id, base.dispatch_id);
+});
+
+test('production dispatch refuses to launch without durable recording', () => {
+  let launched = false;
+  const boundary = boundaryModule.createDispatchBoundary({
+    adapters: { codex: fakeAdapter({ onLaunch: () => { launched = true; } }) },
+  });
+  assert.throws(
+    () => boundary.dispatch({ runtime: 'codex', role: 'executor' }),
+    (error) => error.code === 'RECORD_UNAVAILABLE',
+  );
+  assert.equal(launched, false);
+});
+
+test('custom policies and raw launch paths are unavailable', () => {
+  assert.throws(
+    () => boundaryModule.createDispatchBoundary({ policy: { ...policy } }),
+    (error) => error.code === 'NONCANONICAL_POLICY',
+  );
+  const boundary = boundaryModule.createDispatchBoundary({
+    adapters: { codex: fakeAdapter() },
+    recorder: () => true,
+  });
+  const resolution = boundary.resolve({ runtime: 'codex', role: 'executor' });
+  assert.equal(boundary.launch, undefined);
+  assert.equal(boundaryModule.launchDispatch, undefined);
+  assert.ok(resolution);
+});
+
+test('the boundary keeps using the canonical policy if an exported method is replaced', () => {
+  const originalResolve = policy.resolveDispatch;
+  const originalValidate = policy.validateResolution;
+  const boundary = boundaryModule.createDispatchBoundary({
+    adapters: { codex: fakeAdapter() },
+    recorder: () => true,
+  });
+  let replacementCalled = false;
+  try {
+    policy.resolveDispatch = () => {
+      replacementCalled = true;
+      return { runtime: 'codex', role: 'executor', model: 'caller-model' };
+    };
+    policy.validateResolution = () => true;
+  } catch (error) {
+    // The canonical export is frozen; this is the expected protection.
+  }
+  const result = boundary.dispatch({ runtime: 'codex', role: 'executor' });
+  assert.equal(replacementCalled, false);
+  assert.equal(result.applied_model, 'gpt-5.6-luna');
+  assert.equal(policy.resolveDispatch, originalResolve);
+  assert.equal(policy.validateResolution, originalValidate);
+});
+
+test('static Codex dispatch requires generated-agent evidence and a digest', () => {
+  const missing = boundaryModule.createDispatchBoundary({
+    adapters: { codex: { launch: () => receiptFor(policy.resolveDispatch({ runtime: 'codex', role: 'research' })) } },
+    recorder: () => true,
+  });
+  assert.throws(
+    () => missing.dispatch({ runtime: 'codex', role: 'research' }),
+    (error) => error.code === 'STALE_GENERATED_AGENT',
+  );
+  const stale = boundaryModule.createDispatchBoundary({
+    adapters: {
+      codex: fakeAdapter({
+        validateGeneratedAgent: (resolution) => ({
+          valid: true,
+          exists: true,
+          content_verified: false,
+          policy_hash: resolution.policy_hash,
+          agent_file: resolution.agent_file,
+          agent_file_digest: 'b'.repeat(64),
+        }),
+      }),
+    },
+    recorder: () => true,
+  });
+  assert.throws(
+    () => stale.dispatch({ runtime: 'codex', role: 'research' }),
+    (error) => error.code === 'STALE_GENERATED_AGENT',
+  );
+});
+
+test('legacy Codex manifests delegate policy binding to the adapter contract', () => {
+  const agentsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-boundary-legacy-agent-'));
+  const base = policy.resolveDispatch({ runtime: 'codex', role: 'research', dispatch_id: 'legacy-agent-file' });
+  const text = [
+    `name = "${base.agent_file.replace(/\.toml$/, '')}"`,
+    `model = "${base.model}"`,
+    `model_reasoning_effort = "${base.effort}"`,
+    "developer_instructions = '''\nlegacy installer artifact\n'''",
+    '',
+  ].join('\n');
+  fs.writeFileSync(path.join(agentsDir, base.agent_file), text);
+  fs.writeFileSync(path.join(agentsDir, '.shipyard-manifest.json'), JSON.stringify({
+    agent_files: [base.agent_file],
+    registrations: [`agents.${base.agent_file.replace(/\.toml$/, '')}`],
+  }) + '\n');
+  let validatorCalled = false;
+  const digest = crypto.createHash('sha256').update(text).digest('hex');
+  const boundary = boundaryModule.createDispatchBoundary({
+    adapters: {
+      codex: fakeAdapter({
+        agentsDir,
+        validateGeneratedAgent: (resolution) => {
+          validatorCalled = true;
+          return {
+            valid: true,
+            exists: true,
+            content_verified: true,
+            policy_hash: resolution.policy_hash,
+            agent_file: resolution.agent_file,
+            agent_file_digest: digest,
+            agent_file_content: text,
+          };
+        },
+      }),
+    },
+    recorder: () => true,
+  });
+  const result = boundary.dispatch({
+    runtime: 'codex',
+    role: 'research',
+    dispatch_id: base.dispatch_id,
+  });
+  assert.equal(validatorCalled, true);
+  assert.equal(result.receipt.agent_file_digest, digest);
+});
+
+test('an adapter telemetry record hook cannot become repair authority', () => {
+  let launched = false;
+  let recorded = false;
+  const adapter = fakeAdapter({
+    onLaunch: () => { launched = true; },
+    record: () => { recorded = true; return { recorded: true }; },
+  });
+  const boundary = boundaryModule.createDispatchBoundary({ adapters: { codex: adapter } });
+  assert.throws(
+    () => boundary.dispatch({ runtime: 'codex', role: 'executor' }),
+    (error) => error.code === 'RECORD_UNAVAILABLE',
+  );
+  assert.equal(launched, false);
+  assert.equal(recorded, false);
+});
+
+test('requested values copied without adapter-applied evidence are not a receipt', () => {
+  const boundary = boundaryModule.createDispatchBoundary({
+    adapters: {
+      codex: {
+        launch: (resolution) => ({
+          receipt_type: 'adr-014.application',
+          runtime: resolution.runtime,
+          role: resolution.role,
+          dispatch_id: resolution.dispatch_id,
+          launch_id: 'copy-only',
+          requested_model: resolution.model,
+          requested_effort: resolution.effort,
+          observed_model: resolution.model,
+          observed_effort: resolution.effort,
+          policy_hash: resolution.policy_hash,
+          compliance: 'verified',
+          compliance_proof: {
+            status: 'verified',
+            boundary: 'adr-014.dispatch-boundary',
+            policy_hash: resolution.policy_hash,
+            dispatch_id: resolution.dispatch_id,
+            launch_id: 'copy-only',
+          },
+        }),
+      },
+    },
+    recorder: () => true,
+  });
+  assert.throws(
+    () => boundary.dispatch({ runtime: 'codex', role: 'executor' }),
+    (error) => error.code === 'MISSING_RECEIPT' && /applied_model/.test(error.message),
+  );
+});
+
+test('receipt contradictions, stale policy, and wrong agent file are rejected', () => {
+  const cases = [
+    [{ launch_arguments: { model: 'invented' } }, 'NONCOMPLIANT_RECEIPT'],
+    [{ logical_rung: 'invented' }, 'NONCOMPLIANT_RECEIPT'],
+    [{ signals: { critical: true } }, 'NONCOMPLIANT_RECEIPT'],
+    [
+      { applied_model: 'gpt-6-astra' },
+      'NONCOMPLIANT_RECEIPT',
+    ],
+    [
+      { policy_hash: 'stale-policy' },
+      'STALE_POLICY',
+    ],
+    [
+      { agent_file: 'shipyard-other.toml' },
+      'NONCOMPLIANT_RECEIPT',
+    ],
+    [
+      { observed_effort: 'medium' },
+      'NONCOMPLIANT_RECEIPT',
+    ],
+  ];
+  for (const [extra, code] of cases) {
+    const boundary = boundaryModule.createDispatchBoundary({
+      adapters: {
+        codex: fakeAdapter({
+          extra,
+        }),
+      },
+      recorder: () => true,
+    });
+    assert.throws(
+      () => boundary.dispatch({ runtime: 'codex', role: 'research' }),
+      (error) => error.code === code,
+      JSON.stringify(extra),
+    );
+  }
+});
+
+test('a runtime that cannot expose observations may say so, but applied values remain mandatory', () => {
+  const boundary = boundaryModule.createDispatchBoundary({
+    adapters: {
+      codex: fakeAdapter({
+        observationUnavailable: true,
+        receipt: (resolution) => ({
+          receipt_type: 'adr-014.application',
+          runtime: resolution.runtime,
+          role: resolution.role,
+          dispatch_id: resolution.dispatch_id,
+          launch_id: 'unobserved',
+          requested_model: resolution.model,
+          requested_effort: resolution.effort,
+          applied_model: resolution.model,
+          applied_effort: resolution.effort,
+          policy_hash: resolution.policy_hash,
+          compliance: 'verified',
+          compliance_proof: {
+            status: 'verified',
+            boundary: 'adr-014.dispatch-boundary',
+            policy_hash: resolution.policy_hash,
+            dispatch_id: resolution.dispatch_id,
+            launch_id: 'unobserved',
+          },
+        }),
+      }),
+    },
+    recorder: () => true,
+  });
+  const result = boundary.dispatch({ runtime: 'codex', role: 'executor' });
+  assert.equal(result.observed_model, 'unknown');
+  assert.equal(result.observed_effort, 'unknown');
+});
+
+test('observation capability is enforced independently for model and effort', () => {
+  const partiallyUnavailable = boundaryModule.createDispatchBoundary({
+    adapters: {
+      codex: fakeAdapter({
+        capabilities: { observedModel: false, observedEffort: true },
+        extra: { observed_model: 'unknown', observed_effort: 'unknown' },
+      }),
+    },
+    recorder: () => true,
+  });
+  assert.throws(
+    () => partiallyUnavailable.dispatch({ runtime: 'codex', role: 'executor' }),
+    (error) => error.code === 'NONCOMPLIANT_RECEIPT' && /observed_effort/.test(error.message),
+  );
+
+  const valid = boundaryModule.createDispatchBoundary({
+    adapters: {
+      codex: fakeAdapter({
+        capabilities: { observedModel: false, observedEffort: true },
+        extra: { observed_model: 'unknown' },
+      }),
+    },
+    recorder: () => true,
+  });
+  const result = valid.dispatch({ runtime: 'codex', role: 'executor' });
+  assert.equal(result.observed_model, 'unknown');
+  assert.equal(result.observed_effort, 'max');
+});
+
+test('an async launch cannot change observation capability after dispatch begins', async () => {
+  let release;
+  const pending = new Promise((resolve) => { release = resolve; });
+  const adapter = {
+    observationUnavailable: false,
+    launch(resolution) {
+      return pending.then(() => {
+        this.observationUnavailable = true;
+        return receiptFor(resolution, { observed_model: 'unknown', observed_effort: 'unknown' });
+      });
+    },
+  };
+  const boundary = boundaryModule.createDispatchBoundary({
+    adapters: { codex: adapter },
+    recorder: () => true,
+  });
+  const result = boundary.dispatch({ runtime: 'codex', role: 'executor' });
+  adapter.observationUnavailable = true;
+  release();
+  await assert.rejects(
+    result,
+    (error) => error.code === 'NONCOMPLIANT_RECEIPT' && /observed_model/.test(error.message),
+  );
+});
+
+test('a receipt cannot self-authorize unavailable observations', () => {
+  const boundary = boundaryModule.createDispatchBoundary({
+    adapters: {
+      codex: fakeAdapter({
+        receipt: (resolution) => ({
+          receipt_type: 'adr-014.application',
+          runtime: resolution.runtime,
+          role: resolution.role,
+          dispatch_id: resolution.dispatch_id,
+          launch_id: 'caller-claimed-unobserved',
+          requested_model: resolution.model,
+          requested_effort: resolution.effort,
+          applied_model: resolution.model,
+          applied_effort: resolution.effort,
+          policy_hash: resolution.policy_hash,
+          compliance: 'verified',
+          compliance_proof: {
+            status: 'verified',
+            boundary: 'adr-014.dispatch-boundary',
+            policy_hash: resolution.policy_hash,
+            dispatch_id: resolution.dispatch_id,
+            launch_id: 'caller-claimed-unobserved',
+          },
+          observation_unavailable: true,
+        }),
+      }),
+    },
+    recorder: () => true,
+  });
+  assert.throws(
+    () => boundary.dispatch({ runtime: 'codex', role: 'executor' }),
+    (error) => error.code === 'MISSING_RECEIPT',
+  );
+});
+
+test('inline, inherited, stale, and malformed resolutions cannot bypass validation', () => {
+  const boundary = boundaryModule.createDispatchBoundary({
+    adapters: { codex: fakeAdapter() },
+  });
+  assert.throws(
+    () => boundary.dispatch({ runtime: 'codex', role: 'executor', override: { inline: true } }),
+    (error) => error.code === 'UNSUPPORTED_SELECTION',
+  );
+  assert.throws(
+    () => boundary.dispatch({ runtime: 'codex', role: 'executor', override: { inherit: true } }),
+    (error) => error.code === 'UNSUPPORTED_SELECTION',
+  );
+  const stale = { ...policy.resolveDispatch({ runtime: 'codex', role: 'executor', dispatch_id: 'stale' }), policy_hash: 'stale' };
+  assert.throws(
+    () => boundary.validate(stale),
+    (error) => error.code === 'STALE_POLICY',
+  );
+  const critical = policy.resolveDispatch({
+    runtime: 'codex', role: 'arch-review', signals: { critical: true }, dispatch_id: 'forged-critical',
+  });
+  const forged = {
+    ...critical,
+    signals: {},
+    signals_fired: [],
+    signal_reasons: [],
+    selected_signals: [],
+    route: 'role=arch-review rung=base model=sol signals=base',
+  };
+  assert.throws(
+    () => boundary.validate(forged),
+    (error) => error.code === 'INVALID_RESOLUTION',
+  );
+});
+
+test('receipt parsing cannot mint boundary trust, while validation remains available', () => {
+  const resolution = policy.resolveDispatch({ runtime: 'codex', role: 'executor', dispatch_id: 'dispatch-primitive' });
+  const receipt = receiptFor(resolution);
+  assert.equal(boundaryModule.verifyApplicationReceipt, undefined);
+  const boundary = boundaryModule.createDispatchBoundary({
+    adapters: { codex: fakeAdapter() },
+  });
+  const evidence = boundary.receipt(resolution, receipt);
+  assert.equal(evidence.applied_model, 'gpt-5.6-luna');
+  assert.equal(evidence.compliance, undefined);
+  assert.equal(evidence.compliance_proof, undefined);
+  assert.ok(Object.isFrozen(evidence));
+  assert.throws(
+    () => boundary.receipt(resolution, { ...receipt, observed_model: 'other' }),
+    (error) => error.code === 'NONCOMPLIANT_RECEIPT',
+  );
+  assert.throws(
+    () => boundary.receipt(
+      resolution,
+      { ...receipt, observed_model: 'unknown', observed_effort: 'unknown' },
+    ),
+    (error) => error.code === 'NONCOMPLIANT_RECEIPT',
+  );
+  assert.equal(boundary.validate(resolution), true);
+});
+
+test('the boundary validates the actual generated Codex file before launch', () => {
+  const agentsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-boundary-agents-'));
+  let validatorCalled = false;
+  const base = policy.resolveDispatch({ runtime: 'codex', role: 'research', dispatch_id: 'actual-agent-file' });
+  writeStaticAgent(agentsDir, base);
+  const boundary = boundaryModule.createDispatchBoundary({
+    adapters: {
+      codex: fakeAdapter({
+        agentsDir,
+        validateGeneratedAgent: () => {
+          validatorCalled = true;
+          throw new Error('the injected validator must not replace file inspection');
+        },
+      }),
+    },
+    recorder: () => true,
+  });
+  const result = boundary.dispatch({ runtime: 'codex', role: 'research', dispatch_id: 'actual-agent-file' });
+  assert.equal(result.receipt.agent_file, 'shipyard-inv-research.toml');
+  assert.match(result.receipt.agent_file_digest, /^[a-f0-9]{64}$/);
+  assert.equal(validatorCalled, false);
+  fs.appendFileSync(path.join(agentsDir, base.agent_file), '# tampered after generation\n');
+  assert.throws(
+    () => boundary.dispatch({ runtime: 'codex', role: 'research', dispatch_id: 'tampered-agent-file' }),
+    (error) => error.code === 'STALE_GENERATED_AGENT' && /manifest digest/.test(error.message),
+  );
+});
+
+test('static Codex evidence is rechecked after validation hooks and before launch', () => {
+  const agentsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-boundary-agent-race-'));
+  const base = policy.resolveDispatch({ runtime: 'codex', role: 'research', dispatch_id: 'agent-race' });
+  writeStaticAgent(agentsDir, base);
+  let launched = false;
+  const boundary = boundaryModule.createDispatchBoundary({
+    adapters: {
+      codex: fakeAdapter({
+        agentsDir,
+        validate: () => fs.appendFileSync(path.join(agentsDir, base.agent_file), '# changed during validation\n'),
+        onLaunch: () => { launched = true; },
+      }),
+    },
+    recorder: () => true,
+  });
+  assert.throws(
+    () => boundary.dispatch({ runtime: 'codex', role: 'research', dispatch_id: 'agent-race' }),
+    (error) => error.code === 'STALE_GENERATED_AGENT' && /after validation/.test(error.message),
+  );
+  assert.equal(launched, false);
+});
+
+test('adapter-owned static evidence is revalidated before launch without an agents root', () => {
+  const base = policy.resolveDispatch({ runtime: 'codex', role: 'research', dispatch_id: 'adapter-agent-race' });
+  let validationCalls = 0;
+  let launched = false;
+  const boundary = boundaryModule.createDispatchBoundary({
+    adapters: {
+      codex: fakeAdapter({
+        validateGeneratedAgent: (resolution) => {
+          validationCalls += 1;
+          const agentFileContent = validationCalls === 1 ? 'adapter-agent-first' : 'adapter-agent-second';
+          return {
+            valid: true,
+            exists: true,
+            content_verified: true,
+            policy_hash: resolution.policy_hash,
+            agent_file: resolution.agent_file,
+            agent_file_digest: crypto.createHash('sha256').update(agentFileContent).digest('hex'),
+            agent_file_content: agentFileContent,
+          };
+        },
+        onLaunch: () => { launched = true; },
+      }),
+    },
+    recorder: () => true,
+  });
+  assert.throws(
+    () => boundary.dispatch({ runtime: 'codex', role: 'research', dispatch_id: 'adapter-agent-race' }),
+    (error) => error.code === 'STALE_GENERATED_AGENT' && /after validation/.test(error.message),
+  );
+  assert.equal(validationCalls, 2);
+  assert.equal(launched, false);
+});
+
+test('static Codex launch receives an immutable verified artifact handoff', () => {
+  const agentsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-boundary-agent-handoff-'));
+  const base = policy.resolveDispatch({ runtime: 'codex', role: 'research', dispatch_id: 'agent-handoff' });
+  writeStaticAgent(agentsDir, base);
+  const originalContent = fs.readFileSync(path.join(agentsDir, base.agent_file), 'utf8');
+  let handoff;
+  const boundary = boundaryModule.createDispatchBoundary({
+    adapters: {
+      codex: fakeAdapter({
+        agentsDir,
+        onLaunch: (resolution, context, receivedHandoff) => {
+          handoff = receivedHandoff;
+          // A generator may replace the path after the boundary has opened its
+          // verified snapshot. The adapter must use the handoff, not reopen it.
+          fs.appendFileSync(path.join(agentsDir, resolution.agent_file), '# replaced after handoff\n');
+        },
+      }),
+    },
+    recorder: () => true,
+  });
+  const result = boundary.dispatch({ runtime: 'codex', role: 'research', dispatch_id: base.dispatch_id });
+  assert.equal(handoff.agent_file, base.agent_file);
+  assert.equal(handoff.agent_file_content, originalContent);
+  assert.equal(handoff.agent_file_digest, crypto.createHash('sha256').update(originalContent).digest('hex'));
+  assert.ok(Object.isFrozen(handoff));
+  assert.equal(result.receipt.agent_file_digest, handoff.agent_file_digest);
+  assert.notEqual(fs.readFileSync(path.join(agentsDir, base.agent_file), 'utf8'), originalContent);
+});
+
+test('durable repair authorization re-reads the authenticated record after local caching', () => {
+  const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-boundary-durable-cache-'));
+  const recorder = boundaryModule.createDurableRecorder(storeDir);
+  const boundary = boundaryModule.createDispatchBoundary({
+    adapters: { codex: fakeAdapter() },
+    recorder,
+  });
+  const base = boundary.dispatch({
+    runtime: 'codex',
+    role: 'ci-fix',
+    signals: { signatureState: 'first' },
+    dispatch_id: 'durable-cache-base',
+  });
+  const recordPath = path.join(
+    storeDir,
+    `record-${crypto.createHash('sha256').update(base.dispatch_id).digest('hex')}.json`,
+  );
+  fs.unlinkSync(recordPath);
+  assert.throws(
+    () => boundary.dispatch({
+      runtime: 'codex',
+      role: 'ci-fix',
+      signals: { signatureState: 'repeat', priorApplied: base.receipt },
+      previous_dispatch_id: base.dispatch_id,
+      dispatch_id: 'durable-cache-repeat',
+    }),
+    (error) => error.code === 'UNVERIFIED_RECEIPT',
+  );
+});
+
+test('separate boundary instances share durable reservation and finalized receipt state', () => {
+  const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-boundary-store-'));
+  const recorderA = boundaryModule.createDurableRecorder(storeDir);
+  const recorderB = boundaryModule.createDurableRecorder(storeDir);
+  let launches = 0;
+  const makeBoundary = (recorder) => boundaryModule.createDispatchBoundary({
+    adapters: { codex: fakeAdapter({ onLaunch: () => { launches++; } }) },
+    recorder,
+  });
+  const first = makeBoundary(recorderA).dispatch({
+    runtime: 'codex', role: 'executor', dispatch_id: 'cross-boundary-id',
+  });
+  const stored = recorderB.getReceipt('cross-boundary-id');
+  assert.equal(stored.receipt.compliance, 'verified');
+  assert.deepStrictEqual(stored.receipt, first.receipt);
+  assert.deepStrictEqual(stored.trace, first.trace);
+  assert.deepStrictEqual(stored, first);
+  const modulePath = path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'dispatch-boundary.cjs');
+  const restarted = spawnSync(process.execPath, [
+    '-e',
+    'const b=require(process.argv[1]);process.stdout.write(JSON.stringify(b.createDurableRecorder(process.argv[2]).getReceipt(process.argv[3])));',
+    modulePath,
+    storeDir,
+    first.dispatch_id,
+  ], { encoding: 'utf8' });
+  assert.equal(restarted.status, 0, restarted.stderr);
+  assert.deepStrictEqual(JSON.parse(restarted.stdout), first);
+  assert.throws(
+    () => makeBoundary(recorderB).dispatch({
+      runtime: 'codex', role: 'executor', dispatch_id: 'cross-boundary-id',
+    }),
+    (error) => error.code === 'DUPLICATE_DISPATCH_ID',
+  );
+  assert.equal(launches, 1);
+});
+
+test('durable receipt repair survives a fresh boundary instance and consumes once', () => {
+  const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-boundary-repair-'));
+  const ticket = 'T-36-DURABLE';
+  const firstBoundary = boundaryModule.createDispatchBoundary({
+    adapters: { codex: fakeAdapter() },
+    recorder: boundaryModule.createDurableRecorder(storeDir),
+  });
+  const base = firstBoundary.dispatch({
+    runtime: 'codex',
+    role: 'ci-fix',
+    signals: { signatureState: 'first' },
+    dispatch_id: 'durable-repair-base',
+  }, { ticket });
+  const makeFreshBoundary = () => boundaryModule.createDispatchBoundary({
+    adapters: { codex: fakeAdapter() },
+    recorder: boundaryModule.createDurableRecorder(storeDir),
+  });
+  const repeat = makeFreshBoundary().dispatch({
+    runtime: 'codex',
+    role: 'ci-fix',
+    signals: { signatureState: 'repeat', priorApplied: base.receipt },
+    previous_dispatch_id: base.dispatch_id,
+    dispatch_id: 'durable-repair-repeat',
+  }, { ticket });
+  assert.equal(repeat.applied_model, 'gpt-5.6-sol');
+  assert.equal(repeat.applied_effort, 'high');
+  assert.equal(repeat.resolution.prior_applied.dispatch_id, base.dispatch_id);
+  assert.throws(
+    () => makeFreshBoundary().dispatch({
+      runtime: 'codex',
+      role: 'ci-fix',
+      signals: { signatureState: 'repeat', priorApplied: base.receipt },
+      previous_dispatch_id: base.dispatch_id,
+      dispatch_id: 'durable-repair-repeat-again',
+    }, { ticket }),
+    (error) => error.code === 'UNVERIFIED_RECEIPT',
+  );
+});
+
+test('an unsigned legacy repair commit cannot recover a successor or block replay', () => {
+  const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-boundary-repair-crash-'));
+  const ticket = 'T-36-CRASH';
+  const base = boundaryModule.createDispatchBoundary({
+    adapters: { codex: fakeAdapter() },
+    recorder: boundaryModule.createDurableRecorder(storeDir),
+  }).dispatch({
+    runtime: 'codex',
+    role: 'ci-fix',
+    signals: { signatureState: 'first' },
+    dispatch_id: 'crash-commit-base',
+  }, { ticket });
+  const successorId = 'crash-commit-successor';
+  const recordInput = {
+    dispatch_id: successorId,
+    predecessor_dispatch_id: base.dispatch_id,
+    predecessor_consumer_id: successorId,
+    receipt: {
+      dispatch_id: successorId,
+      runtime: 'codex',
+      role: 'ci-fix',
+      compliance: 'verified',
+    },
+  };
+  const commitPath = path.join(storeDir, `repair-commit-${crypto.createHash('sha256').update(base.dispatch_id).digest('hex')}.json`);
+  // This is the durable state left by a process dying after the commit marker
+  // reaches disk but before it writes the successor record.
+  fs.writeFileSync(commitPath, JSON.stringify({
+    predecessor_dispatch_id: base.dispatch_id,
+    successor_dispatch_id: successorId,
+    consumer_id: successorId,
+    record_input: recordInput,
+  }) + '\n');
+
+  const recoveredRecorder = boundaryModule.createDurableRecorder(storeDir);
+  const claim = recoveredRecorder.claim(base.dispatch_id, 'replay-contender');
+  assert.equal(claim.claimed, true);
+  assert.equal(recoveredRecorder.getReceipt(successorId), null);
+  assert.deepStrictEqual(recoveredRecorder.release(base.dispatch_id, 'replay-contender', claim), { released: true });
+
+  const repaired = boundaryModule.createDispatchBoundary({
+    adapters: { codex: fakeAdapter() },
+    recorder: boundaryModule.createDurableRecorder(storeDir),
+  }).dispatch({
+    runtime: 'codex',
+    role: 'ci-fix',
+    signals: { signatureState: 'repeat', priorApplied: base.receipt },
+    previous_dispatch_id: base.dispatch_id,
+    dispatch_id: 'legacy-repair-replacement',
+  }, { ticket });
+  assert.equal(repaired.dispatch_id, 'legacy-repair-replacement');
+});
+
+test('an authenticated repair commit makes its predecessor non-replayable before physical consumption', () => {
+  const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-boundary-recorded-crash-'));
+  const ticket = 'T-36-RECORDED';
+  const base = boundaryModule.createDispatchBoundary({
+    adapters: { codex: fakeAdapter() },
+    recorder: boundaryModule.createDurableRecorder(storeDir),
+  }).dispatch({
+    runtime: 'codex',
+    role: 'ci-fix',
+    signals: { signatureState: 'first' },
+    dispatch_id: 'recorded-crash-base',
+  }, { ticket });
+  const successorId = 'recorded-crash-successor';
+  const modulePath = path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'dispatch-boundary.cjs');
+  const child = spawnSync(process.execPath, ['-e', `
+    const fs = require('fs');
+    const b = require(process.argv[1]);
+    const recorder = b.createDurableRecorder(process.argv[2]);
+    const prior = JSON.parse(process.argv[3]);
+    const originalLink = fs.linkSync;
+    fs.linkSync = (source, destination) => {
+      originalLink(source, destination);
+      if (String(destination).includes('repair-commit-')) process.exit(73);
+    };
+    const receiptFor = ${receiptFor.toString()};
+    const boundary = b.createDispatchBoundary({
+      recorder,
+      adapters: { codex: {
+        validateGeneratedAgent: (resolution) => ({
+          valid: true,
+          exists: true,
+          content_verified: true,
+          policy_hash: resolution.policy_hash,
+          agent_file: resolution.agent_file,
+          agent_file_digest: require('crypto').createHash('sha256').update('recorded-crash-agent').digest('hex'),
+          agent_file_content: 'recorded-crash-agent',
+        }),
+        launchStatic: (resolution) => receiptFor(resolution),
+      } },
+    });
+    boundary.dispatch({
+      runtime: 'codex',
+      role: 'ci-fix',
+      signals: { signatureState: 'repeat', priorApplied: prior },
+      previous_dispatch_id: process.argv[4],
+      dispatch_id: ${JSON.stringify(successorId)},
+    }, { ticket: ${JSON.stringify(ticket)} });
+  `, modulePath, storeDir, JSON.stringify(base.receipt), base.dispatch_id], { encoding: 'utf8' });
+  assert.equal(child.status, 73, child.stderr);
+
+  const digest = (value) => crypto.createHash('sha256').update(value).digest('hex');
+  const restarted = boundaryModule.createDurableRecorder(storeDir);
+  assert.deepStrictEqual(restarted.claim(base.dispatch_id, 'recorded-replay-contender'), { claimed: false });
+  assert.equal(fs.existsSync(path.join(storeDir, `consumed-${digest(base.dispatch_id)}.json`)), false);
+  assert.equal(restarted.getReceipt(successorId).dispatch_id, successorId);
+  assert.throws(
+    () => boundaryModule.createDispatchBoundary({
+      adapters: { codex: fakeAdapter() },
+      recorder: boundaryModule.createDurableRecorder(storeDir),
+    }).dispatch({
+      runtime: 'codex',
+      role: 'ci-fix',
+      signals: { signatureState: 'repeat', priorApplied: base.receipt },
+      previous_dispatch_id: base.dispatch_id,
+      dispatch_id: 'recorded-crash-replay',
+    }, { ticket }),
+    (error) => error.code === 'UNVERIFIED_RECEIPT',
+  );
+});
+
+test('a stored record whose identities disagree cannot authorize a repair', () => {
+  const base = policy.resolveDispatch({
+    runtime: 'codex',
+    role: 'ci-fix',
+    signals: { signatureState: 'first' },
+    dispatch_id: 'identity-base',
+  });
+  const prior = receiptFor(base);
+  const recorder = {
+    reserve: () => ({ reserved: true }),
+    getReceipt: () => ({
+      dispatch_id: 'different-record',
+      receipt: prior,
+      resolution: base,
+    }),
+    claim: () => ({ claimed: true }),
+    release: () => ({ released: true }),
+    consume: () => ({ consumed: true }),
+    record: () => ({ recorded: true }),
+  };
+  const boundary = boundaryModule.createDispatchBoundary({
+    adapters: { codex: fakeAdapter() },
+    recorder,
+  });
+  assert.throws(
+    () => boundary.dispatch({
+      runtime: 'codex',
+      role: 'ci-fix',
+      signals: { signatureState: 'repeat', priorApplied: prior },
+      previous_dispatch_id: base.dispatch_id,
+      dispatch_id: 'identity-repeat',
+    }),
+    (error) => error.code === 'UNVERIFIED_RECEIPT',
+  );
+});
+
+test('a self-consistent forged Claude predecessor from a custom recorder cannot authorize repair', () => {
+  const forgedResolution = policy.resolveDispatch({
+    runtime: 'claude',
+    role: 'ci-fix',
+    signals: { signatureState: 'first' },
+    dispatch_id: 'forged-claude-base',
+  });
+  const forgedReceipt = receiptFor(forgedResolution);
+  const forgedRecord = {
+    dispatch_id: forgedResolution.dispatch_id,
+    resolution: forgedResolution,
+    receipt: forgedReceipt,
+    trace: [
+      { stage: 'resolve', status: 'passed' },
+      { stage: 'validate', status: 'passed' },
+      { stage: 'launch', status: 'passed', launch_id: forgedReceipt.launch_id },
+      { stage: 'record', status: 'passed' },
+      { stage: 'receipt', status: 'passed', launch_id: forgedReceipt.launch_id },
+    ],
+  };
+  let launched = false;
+  const recorder = {
+    reserve: () => ({ reserved: true }),
+    record: () => ({ recorded: true }),
+    getReceipt: () => forgedRecord,
+    claim: () => ({ claimed: true }),
+    renewClaim: () => ({ renewed: true }),
+    release: () => ({ released: true }),
+    consume: () => ({ consumed: true }),
+  };
+  const boundary = boundaryModule.createDispatchBoundary({
+    adapters: { claude: fakeAdapter({ onLaunch: () => { launched = true; } }) },
+    recorder,
+  });
+  assert.throws(
+    () => boundary.dispatch({
+      runtime: 'claude',
+      role: 'ci-fix',
+      signals: { signatureState: 'repeat', priorApplied: forgedReceipt },
+      previous_dispatch_id: forgedResolution.dispatch_id,
+      dispatch_id: 'forged-claude-repeat',
+    }),
+    (error) => error.code === 'UNVERIFIED_RECEIPT',
+  );
+  assert.equal(launched, false);
+});
+
+test('independent repair chains do not share a global latest receipt lane', () => {
+  const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-boundary-parallel-repair-'));
+  const ticketA = 'T-36-PARALLEL-A';
+  const ticketB = 'T-36-PARALLEL-B';
+  const makeBoundary = () => boundaryModule.createDispatchBoundary({
+    adapters: { codex: fakeAdapter() },
+    recorder: boundaryModule.createDurableRecorder(storeDir),
+  });
+  const baseA = makeBoundary().dispatch({
+    runtime: 'codex',
+    role: 'ci-fix',
+    signals: { signatureState: 'first' },
+    dispatch_id: 'parallel-base-a',
+  }, { ticket: ticketA });
+  const baseB = makeBoundary().dispatch({
+    runtime: 'codex',
+    role: 'ci-fix',
+    signals: { signatureState: 'first' },
+    dispatch_id: 'parallel-base-b',
+  }, { ticket: ticketB });
+  const repeatA = makeBoundary().dispatch({
+    runtime: 'codex',
+    role: 'ci-fix',
+    signals: { signatureState: 'repeat', priorApplied: baseA.receipt },
+    previous_dispatch_id: baseA.dispatch_id,
+    dispatch_id: 'parallel-repeat-a',
+  }, { ticket: ticketA });
+  const repeatB = makeBoundary().dispatch({
+    runtime: 'codex',
+    role: 'ci-fix',
+    signals: { signatureState: 'repeat', priorApplied: baseB.receipt },
+    previous_dispatch_id: baseB.dispatch_id,
+    dispatch_id: 'parallel-repeat-b',
+  }, { ticket: ticketB });
+  assert.equal(repeatA.resolution.prior_applied.dispatch_id, baseA.dispatch_id);
+  assert.equal(repeatB.resolution.prior_applied.dispatch_id, baseB.dispatch_id);
+});
+
+test('top-level dispatch continues a repair chain with the same durable recorder', () => {
+  const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-boundary-convenience-'));
+  const ticket = 'T-36-CONVENIENCE';
+  const recorder = boundaryModule.createDurableRecorder(storeDir);
+  const options = {
+    adapters: { codex: fakeAdapter() },
+    recorder,
+    context: { ticket },
+  };
+  const base = boundaryModule.dispatch({
+    runtime: 'codex',
+    role: 'ci-fix',
+    signals: { signatureState: 'first' },
+    dispatch_id: 'convenience-base',
+  }, options);
+  const repeat = boundaryModule.dispatch({
+    runtime: 'codex',
+    role: 'ci-fix',
+    signals: { signatureState: 'repeat', priorApplied: base.receipt },
+    previous_dispatch_id: base.dispatch_id,
+    dispatch_id: 'convenience-repeat',
+  }, options);
+  assert.equal(repeat.applied_model, 'gpt-5.6-sol');
+  assert.equal(repeat.applied_effort, 'high');
+  assert.equal(repeat.resolution.prior_applied.dispatch_id, base.dispatch_id);
+});
+
+test('a failed repair launch releases its predecessor claim for a later attempt', () => {
+  const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-boundary-retry-'));
+  const ticket = 'T-36-RETRY';
+  const recorder = boundaryModule.createDurableRecorder(storeDir);
+  const baseBoundary = boundaryModule.createDispatchBoundary({
+    adapters: { codex: fakeAdapter() },
+    recorder,
+  });
+  const base = baseBoundary.dispatch({
+    runtime: 'codex',
+    role: 'ci-fix',
+    signals: { signatureState: 'first' },
+    dispatch_id: 'retry-base',
+  }, { ticket });
+  const failing = boundaryModule.createDispatchBoundary({
+    adapters: {
+      codex: fakeAdapter({ onLaunch: () => { throw new Error('launch failed'); } }),
+    },
+    recorder: boundaryModule.createDurableRecorder(storeDir),
+  });
+  assert.throws(
+    () => failing.dispatch({
+      runtime: 'codex',
+      role: 'ci-fix',
+      signals: { signatureState: 'repeat', priorApplied: base.receipt },
+      previous_dispatch_id: base.dispatch_id,
+      dispatch_id: 'retry-failed',
+    }, { ticket }),
+    /launch failed/,
+  );
+  const retry = boundaryModule.createDispatchBoundary({
+    adapters: { codex: fakeAdapter() },
+    recorder: boundaryModule.createDurableRecorder(storeDir),
+  }).dispatch({
+    runtime: 'codex',
+    role: 'ci-fix',
+    signals: { signatureState: 'repeat', priorApplied: base.receipt },
+    previous_dispatch_id: base.dispatch_id,
+    dispatch_id: 'retry-success',
+  }, { ticket });
+  assert.equal(retry.applied_model, 'gpt-5.6-sol');
+  assert.equal(retry.applied_effort, 'high');
+});
+
+test('durable recorder writes require boundary authority', () => {
+  const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-boundary-authority-'));
+  const recorder = boundaryModule.createDurableRecorder(storeDir);
+  recorder.reserve('caller-reserved');
+  assert.deepStrictEqual(
+    recorder.record({
+      dispatch_id: 'caller-reserved',
+      receipt: { dispatch_id: 'caller-reserved', compliance: 'verified' },
+    }),
+    { recorded: false },
+  );
+  assert.equal(recorder.getReceipt('caller-reserved'), null);
+});
+
+test('stale durable claims recover, while consumed predecessors cannot be reclaimed', () => {
+  const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-boundary-claims-'));
+  const recorder = boundaryModule.createDurableRecorder(storeDir);
+  const active = recorder.claim('claim-id', 'active-owner');
+  assert.equal(active.claimed, true);
+  assert.equal(active.generation, 1);
+  assert.equal(typeof active.claim_token, 'string');
+  assert.deepStrictEqual(recorder.claim('claim-id', 'other-owner'), { claimed: false });
+
+  const claimName = fs.readdirSync(storeDir).find((name) => name.startsWith('claim-') && name.endsWith('.json'));
+  const claimPath = path.join(storeDir, claimName);
+  const claim = JSON.parse(fs.readFileSync(claimPath, 'utf8'));
+  claim.claimed_at = new Date(Date.now() - (2 * 60 * 60 * 1000)).toISOString();
+  claim.lease_expires_at = new Date(Date.now() - (60 * 60 * 1000)).toISOString();
+  delete claim.owner_pid;
+  fs.writeFileSync(claimPath, JSON.stringify(claim) + '\n');
+
+  const recovered = recorder.claim('claim-id', 'recovered-owner');
+  assert.equal(recovered.claimed, true);
+  assert.equal(recovered.generation, active.generation + 1);
+  assert.notEqual(recovered.claim_token, active.claim_token);
+  assert.deepStrictEqual(recorder.consume('claim-id', 'recovered-owner', recovered), { consumed: true });
+  assert.deepStrictEqual(recorder.claim('claim-id', 'late-owner'), { claimed: false });
+});
+
+test('an active owner renews its lease, but expiry permits takeover despite a live PID', () => {
+  const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-boundary-live-claim-'));
+  const recorder = boundaryModule.createDurableRecorder(storeDir);
+  const active = recorder.claim('live-claim-id', 'live-owner');
+  assert.equal(active.claimed, true);
+  assert.deepStrictEqual(recorder.renewClaim('live-claim-id', 'live-owner', active), { renewed: true });
+  const claimName = fs.readdirSync(storeDir).find((name) => name.startsWith('claim-') && name.endsWith('.json'));
+  const claimPath = path.join(storeDir, claimName);
+  const claim = JSON.parse(fs.readFileSync(claimPath, 'utf8'));
+  claim.claimed_at = new Date(Date.now() - (2 * 60 * 60 * 1000)).toISOString();
+  claim.lease_expires_at = new Date(Date.now() - (60 * 60 * 1000)).toISOString();
+  fs.writeFileSync(claimPath, JSON.stringify(claim) + '\n');
+  const takeover = recorder.claim('live-claim-id', 'other-owner');
+  assert.equal(takeover.claimed, true);
+  assert.equal(takeover.generation, active.generation + 1);
+  assert.notEqual(takeover.claim_token, active.claim_token);
+  assert.deepStrictEqual(recorder.renewClaim('live-claim-id', 'live-owner', active), { renewed: false });
+  assert.deepStrictEqual(recorder.release('live-claim-id', 'live-owner', active), { released: false });
+  assert.deepStrictEqual(recorder.consume('live-claim-id', 'live-owner', active), { consumed: false });
+  assert.deepStrictEqual(recorder.renewClaim('live-claim-id', 'other-owner', takeover), { renewed: true });
+});
+
+test('a projection fence survives lock expiry while its process is still committing', () => {
+  const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-boundary-live-projection-'));
+  const recorder = boundaryModule.createDurableRecorder(storeDir);
+  const claim = recorder.claim('live-projection-id', 'dispatch-record');
+  assert.equal(claim.claimed, true);
+  const claimName = fs.readdirSync(storeDir).find((name) => name.startsWith('claim-') && name.endsWith('.json'));
+  const lockName = fs.readdirSync(storeDir).find((name) => name.startsWith('claim-recovery-') && name.endsWith('.json'));
+  assert.ok(claimName);
+  assert.equal(lockName, undefined, 'the projection lock is created only while the fence callback runs');
+
+  const result = recorder.withClaim('live-projection-id', 'dispatch-record', claim, () => {
+    const claimPath = path.join(storeDir, claimName);
+    const currentClaim = JSON.parse(fs.readFileSync(claimPath, 'utf8'));
+    currentClaim.lease_expires_at = new Date(Date.now() - 1000).toISOString();
+    fs.writeFileSync(claimPath, JSON.stringify(currentClaim) + '\n');
+
+    const activeLockName = fs.readdirSync(storeDir)
+      .find((name) => name.startsWith('claim-recovery-') && name.endsWith('.json'));
+    assert.ok(activeLockName);
+    const lockPath = path.join(storeDir, activeLockName);
+    const activeLock = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
+    assert.equal(activeLock.fenced_until_release, true);
+    activeLock.lease_expires_at = new Date(Date.now() - 1000).toISOString();
+    fs.writeFileSync(lockPath, JSON.stringify(activeLock) + '\n');
+
+    const contender = boundaryModule.createDurableRecorder(storeDir);
+    assert.deepStrictEqual(contender.claim('live-projection-id', 'repair'), { claimed: false });
+  });
+
+  assert.equal(result.committed, true);
+  assert.deepStrictEqual(recorder.release('live-projection-id', 'dispatch-record', claim), { released: true });
+});
+
+test('a superseded claim owner cannot commit after an expired-lease takeover', async () => {
+  const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-boundary-fenced-claim-'));
+  const ticket = 'T-36-FENCED';
+  const base = boundaryModule.createDispatchBoundary({
+    adapters: { codex: fakeAdapter() },
+    recorder: boundaryModule.createDurableRecorder(storeDir),
+  }).dispatch({
+    runtime: 'codex',
+    role: 'ci-fix',
+    signals: { signatureState: 'first' },
+    dispatch_id: 'fenced-base',
+  }, { ticket });
+  let finishLaunch;
+  const pendingLaunch = new Promise((resolve) => { finishLaunch = resolve; });
+  const oldOwner = boundaryModule.createDispatchBoundary({
+    adapters: {
+      codex: fakeAdapter({
+        receipt: (resolution) => pendingLaunch.then(() => receiptFor(resolution)),
+      }),
+    },
+    recorder: boundaryModule.createDurableRecorder(storeDir),
+  });
+  const pendingDispatch = oldOwner.dispatch({
+    runtime: 'codex',
+    role: 'ci-fix',
+    signals: { signatureState: 'repeat', priorApplied: base.receipt },
+    previous_dispatch_id: base.dispatch_id,
+    dispatch_id: 'fenced-old-successor',
+  }, { ticket });
+
+  const claimName = fs.readdirSync(storeDir).find((name) => name.startsWith('claim-') && name.endsWith('.json'));
+  const claimPath = path.join(storeDir, claimName);
+  const stale = JSON.parse(fs.readFileSync(claimPath, 'utf8'));
+  stale.lease_expires_at = new Date(Date.now() - 1000).toISOString();
+  fs.writeFileSync(claimPath, JSON.stringify(stale) + '\n');
+  const takeoverRecorder = boundaryModule.createDurableRecorder(storeDir);
+  const takeover = takeoverRecorder.claim(base.dispatch_id, 'fenced-new-successor');
+  assert.equal(takeover.claimed, true);
+  assert.equal(takeover.generation, stale.generation + 1);
+
+  finishLaunch();
+  await assert.rejects(
+    pendingDispatch,
+    (error) => error.code === 'RECORD_FAILED',
+  );
+  assert.equal(takeoverRecorder.getReceipt('fenced-old-successor'), null);
+  assert.deepStrictEqual(
+    takeoverRecorder.consume(base.dispatch_id, 'fenced-new-successor', takeover),
+    { consumed: true },
+  );
+});
+
+test('failed temporary writes and fsync never publish a reservation', () => {
+  for (const operation of ['writeFileSync', 'fsyncSync', 'linkSync']) {
+    const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-boundary-create-failure-'));
+    const recorder = boundaryModule.createDurableRecorder(storeDir);
+    const original = fs[operation];
+    fs[operation] = (...args) => {
+      if (operation === 'writeFileSync') original(args[0], '{');
+      throw new Error(`injected ${operation} failure`);
+    };
+    try {
+      assert.throws(() => recorder.reserve('retry-id'), /injected/);
+      assert.deepStrictEqual(fs.readdirSync(storeDir), []);
+    } finally {
+      fs[operation] = original;
+    }
+    assert.deepStrictEqual(recorder.reserve('retry-id'), { reserved: true });
+    const final = fs.readdirSync(storeDir);
+    assert.equal(final.length, 1);
+    assert.equal(JSON.parse(fs.readFileSync(path.join(storeDir, final[0]), 'utf8')).dispatch_id, 'retry-id');
+  }
+});
+
+test('a process crash during a temporary write leaves the final reservation available', () => {
+  const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-boundary-temp-crash-'));
+  const modulePath = require.resolve('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs');
+  const child = spawnSync(process.execPath, ['-e', `
+    const fs = require('fs');
+    const b = require(process.argv[1]);
+    const recorder = b.createDurableRecorder(process.argv[2]);
+    const write = fs.writeFileSync;
+    fs.writeFileSync = (fd) => { write(fd, '{'); process.exit(73); };
+    recorder.reserve('crash-id');
+  `, modulePath, storeDir], { encoding: 'utf8' });
+  assert.equal(child.status, 73, child.stderr);
+  const orphan = fs.readdirSync(storeDir);
+  assert.equal(orphan.length, 1);
+  assert.equal(orphan[0].endsWith('.tmp'), true);
+  assert.deepStrictEqual(boundaryModule.createDurableRecorder(storeDir).reserve('crash-id'), { reserved: true });
+  const final = fs.readdirSync(storeDir).filter((name) => name.endsWith('.json'));
+  assert.equal(final.length, 1);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(storeDir, final[0]), 'utf8')).dispatch_id, 'crash-id');
+});
+
+test('directory fsync failure preserves a complete exclusive reservation', () => {
+  const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-boundary-directory-failure-'));
+  const recorder = boundaryModule.createDurableRecorder(storeDir);
+  const original = fs.fsyncSync;
+  fs.fsyncSync = (fd) => {
+    if (fs.fstatSync(fd).isDirectory()) throw new Error('injected directory fsync failure');
+    return original(fd);
+  };
+  try {
+    assert.throws(() => recorder.reserve('directory-id'), /injected directory/);
+  } finally {
+    fs.fsyncSync = original;
+  }
+  const files = fs.readdirSync(storeDir);
+  assert.equal(files.length, 1);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(storeDir, files[0]), 'utf8')).dispatch_id, 'directory-id');
+  assert.deepStrictEqual(recorder.reserve('directory-id'), { reserved: false });
+});
+
+test('durable observation capabilities survive process restart independently', () => {
+  for (const unavailable of [{ model: true, effort: true }, { model: true, effort: false }, { model: false, effort: true }]) {
+    const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-boundary-observation-restart-'));
+    const ticket = 'T-36-OBSERVATION';
+    const base = boundaryModule.createDispatchBoundary({
+      adapters: { codex: fakeAdapter({
+        capabilities: { observedModel: !unavailable.model, observedEffort: !unavailable.effort },
+        extra: {
+          ...(unavailable.model ? { observed_model: 'unknown' } : {}),
+          ...(unavailable.effort ? { observed_effort: 'unknown' } : {}),
+        },
+      }) },
+      recorder: boundaryModule.createDurableRecorder(storeDir),
+    }).dispatch({ runtime: 'codex', role: 'ci-fix', signals: { signatureState: 'first' }, dispatch_id: 'base' }, { ticket });
+    assert.deepStrictEqual(base.observation_unavailable, unavailable);
+    const child = spawnSync(process.execPath, ['-e', `
+      const b = require(process.argv[1]);
+      const recorder = b.createDurableRecorder(process.argv[2]);
+      const base = recorder.getReceipt('base');
+      const receiptFor = ${receiptFor.toString()};
+      const fakeAdapter = ${fakeAdapter.toString()};
+      const boundary = b.createDispatchBoundary({ recorder, adapters: { codex: fakeAdapter() } });
+      const result = boundary.dispatch({ runtime: 'codex', role: 'ci-fix',
+        signals: { signatureState: 'repeat', priorApplied: base.receipt },
+        previous_dispatch_id: 'base', dispatch_id: 'repeat' }, { ticket: ${JSON.stringify('T-36-OBSERVATION')} });
+      process.stdout.write(JSON.stringify(result.resolution));
+    `, require.resolve('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs'), storeDir], { encoding: 'utf8' });
+    assert.equal(child.status, 0, child.stderr);
+    assert.equal(JSON.parse(child.stdout).prior_applied.dispatch_id, 'base');
+
+    // Model and effort permissions must come from the stored boundary record.
+    // Removing either required permission (or legacy absence of both) fails
+    // closed even when the caller presents the otherwise matching receipt.
+    const recordPath = path.join(storeDir, `record-${crypto.createHash('sha256').update('base').digest('hex')}.json`);
+    for (const field of [...Object.keys(unavailable).filter((key) => unavailable[key]), 'legacy']) {
+      const stored = JSON.parse(fs.readFileSync(recordPath, 'utf8'));
+      stored.payload.observation_unavailable = { ...unavailable, [field]: false };
+      if (field === 'legacy') delete stored.payload.observation_unavailable;
+      fs.writeFileSync(recordPath, JSON.stringify(stored));
+      const freshRecorder = boundaryModule.createDurableRecorder(storeDir);
+      assert.throws(() => boundaryModule.createDispatchBoundary({ recorder: freshRecorder }).resolve({
+        runtime: 'codex', role: 'ci-fix', signals: { signatureState: 'repeat', priorApplied: base.receipt },
+        previous_dispatch_id: 'base', dispatch_id: `missing-${field}`,
+      }, freshRecorder, ticket), (error) => error.code === 'UNVERIFIED_RECEIPT');
+    }
+  }
+});
+
+test('caller capability claims cannot relax stored observation requirements', () => {
+  const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-boundary-observation-forged-'));
+  const ticket = 'T-36-FORGED-OBSERVATION';
+  const recorder = boundaryModule.createDurableRecorder(storeDir);
+  const base = boundaryModule.createDispatchBoundary({ adapters: { codex: fakeAdapter() }, recorder })
+    .dispatch({ runtime: 'codex', role: 'ci-fix', signals: { signatureState: 'first' }, dispatch_id: 'base' }, { ticket });
+  const forged = { ...base.receipt, observed_model: 'unknown', observed_effort: 'unknown',
+    observation_unavailable: { model: true, effort: true } };
+  const freshRecorder = boundaryModule.createDurableRecorder(storeDir);
+  const fresh = boundaryModule.createDispatchBoundary({ recorder: freshRecorder });
+  assert.throws(() => fresh.resolve({ runtime: 'codex', role: 'ci-fix',
+    observation_unavailable: { model: true, effort: true },
+    signals: { signatureState: 'repeat', priorApplied: forged },
+    previous_dispatch_id: base.dispatch_id, dispatch_id: 'forged' }, freshRecorder, ticket),
+  (error) => error.code === 'UNVERIFIED_RECEIPT');
+});
+
+test('file-backed reservation is atomic across concurrent Node processes', async () => {
+  const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-boundary-race-'));
+  const modulePath = path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'dispatch-boundary.cjs');
+  const script = [
+    'const b = require(process.argv[1]);',
+    'const r = b.createDurableRecorder(process.argv[2]);',
+    'process.send("ready");',
+    'process.once("message", () => { process.stdout.write(JSON.stringify(r.reserve(process.argv[3]))); process.disconnect(); });',
+  ].join('\n');
+  const children = Array.from({ length: 8 }, () => {
+    const child = spawn(process.execPath, ['-e', script, modulePath, storeDir, 'atomic-id'], {
+      stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
+    });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (chunk) => { stdout += chunk; });
+    child.stderr.on('data', (chunk) => { stderr += chunk; });
+    const ready = new Promise((resolve, reject) => {
+      child.once('message', resolve);
+      child.once('error', reject);
+      child.once('exit', () => reject(new Error('child exited before ready')));
+    });
+    const result = new Promise((resolve, reject) => {
+      child.once('error', reject);
+      child.once('exit', (code) => {
+        if (code !== 0) return reject(new Error(stderr || `child exited ${code}`));
+        try { resolve(JSON.parse(stdout)); } catch (error) { reject(error); }
+      });
+    });
+    return { child, ready, result };
+  });
+  await Promise.all(children.map(({ ready }) => ready));
+  children.forEach(({ child }) => child.send('reserve'));
+  const results = await Promise.all(children.map(({ result }) => result));
+  assert.equal(results.filter((result) => result.reserved).length, 1);
+  assert.equal(results.filter((result) => !result.reserved).length, 7);
+  const files = fs.readdirSync(storeDir);
+  assert.equal(files.length, 1);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(storeDir, files[0]), 'utf8')).dispatch_id, 'atomic-id');
+});
+
+test('the boundary launches every native base and escalation tuple for both runtimes', () => {
+  const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-boundary-runtime-matrix-'));
+  try {
+    const base = {
+      codex: {
+        research: ['gpt-5.6-sol', 'high'],
+        decomposition: ['gpt-5.6-sol', 'high'],
+        executor: ['gpt-5.6-luna', 'max'],
+        'pr-sentinel': ['gpt-5.6-luna', 'medium'],
+        integrator: ['gpt-5.6-sol', 'high'],
+        'drift-check': ['gpt-5.6-luna', 'max'],
+        'arch-review': ['gpt-5.6-sol', 'high'],
+        'ci-fix': ['gpt-5.6-luna', 'max'],
+        'review-fix': ['gpt-5.6-luna', 'max'],
+      },
+      claude: {
+        research: ['opus', 'medium'],
+        decomposition: ['opus', 'medium'],
+        executor: ['sonnet', 'max'],
+        'pr-sentinel': ['sonnet', 'high'],
+        integrator: ['opus', 'medium'],
+        'drift-check': ['opus', 'max'],
+        'arch-review': ['opus', 'medium'],
+        'ci-fix': ['opus', 'medium'],
+        'review-fix': ['opus', 'medium'],
+      },
+    };
+    const escalations = [
+      ['codex', 'research', { complexity: 'very-complex' }, 'very-complex', 'gpt-5.6-sol', 'xhigh'],
+      ['codex', 'decomposition', { critical: true }, 'critical', 'gpt-5.6-sol', 'xhigh'],
+      ['codex', 'decomposition', { checkpoint: true }, 'critical', 'gpt-5.6-sol', 'xhigh'],
+      ['codex', 'executor', { critical: true }, 'critical', 'gpt-5.6-sol', 'high'],
+      ['codex', 'integrator', { contested: true }, 'critical', 'gpt-5.6-sol', 'xhigh'],
+      ['codex', 'integrator', { inputTokens: policy.WINDOW_THRESHOLD_TOKENS + 1 }, 'critical', 'gpt-5.6-sol', 'xhigh'],
+      ['codex', 'arch-review', { inputTokens: policy.WINDOW_THRESHOLD_TOKENS + 1 }, 'critical', 'gpt-5.6-sol', 'xhigh'],
+      ['claude', 'research', { type: 'alternatives' }, 'base', 'opus', 'medium'],
+      ['claude', 'research', { complexity: 'very-complex' }, 'very-complex', 'opus', 'max'],
+      ['claude', 'decomposition', { checkpoint: true }, 'critical', 'opus', 'max'],
+      ['claude', 'executor', { critical: true }, 'critical', 'opus', 'low'],
+      ['claude', 'integrator', { contested: true }, 'critical', 'opus', 'high'],
+      ['claude', 'arch-review', { inputTokens: policy.WINDOW_THRESHOLD_TOKENS + 1 }, 'ceiling', 'fable', 'medium'],
+    ];
+    const recorder = boundaryModule.createDurableRecorder(storeDir);
+    const launched = [];
+    const boundary = boundaryModule.createDispatchBoundary({
+      adapters: {
+        codex: fakeAdapter({ onLaunch: (resolution) => launched.push(resolution) }),
+        claude: fakeAdapter({ onLaunch: (resolution) => launched.push(resolution) }),
+      },
+      recorder,
+    });
+    const bases = new Map();
+    const dispatchAndAssert = (runtime, role, signals, expected, dispatchId, extra = {}) => {
+      const result = boundary.dispatch(
+        { runtime, role, signals, dispatch_id: dispatchId, ...extra },
+        { ticket: `T-36-MATRIX-${runtime}-${role}` },
+      );
+      assert.deepStrictEqual(
+        [result.resolution.logical_rung, result.applied_model, result.applied_effort],
+        expected,
+        `${runtime}/${role}/${JSON.stringify(signals)}`,
+      );
+      assert.equal(result.receipt.requested_model, result.resolution.requested_model);
+      assert.equal(result.receipt.requested_effort, result.resolution.requested_effort);
+      assert.equal(result.receipt.applied_model, result.resolution.model);
+      assert.equal(result.receipt.applied_effort, result.resolution.effort);
+      assert.equal(result.receipt.observed_model, result.receipt.applied_model);
+      assert.equal(result.receipt.observed_effort, result.receipt.applied_effort);
+      const stored = recorder.getVerifiedRecord(dispatchId);
+      assert.ok(stored, `${dispatchId} must be durably recorded`);
+      assert.deepStrictEqual(stored.resolution.signals, result.resolution.signals);
+      assert.deepStrictEqual(stored.receipt, result.receipt);
+      for (const source of Object.keys(signals)) {
+        assert.ok(result.resolution.signal_reasons.some((reason) => reason.source === `signals.${source}`), `${dispatchId} retains ${source}`);
+      }
+      return result;
+    };
+
+    for (const runtime of policy.SUPPORTED_RUNTIMES) {
+      for (const role of policy.ROLES) {
+        const [model, effort] = base[runtime][role];
+        bases.set(`${runtime}:${role}`, dispatchAndAssert(
+          runtime,
+          role,
+          {},
+          ['base', model, effort],
+          `matrix-${runtime}-${role}-base`,
+        ));
+      }
+    }
+    for (const [runtime, role, signals, rung, model, effort] of escalations) {
+      dispatchAndAssert(
+        runtime,
+        role,
+        signals,
+        [rung, model, effort],
+        `matrix-${runtime}-${role}-${rung}-${Object.keys(signals).join('-')}`,
+      );
+    }
+
+    for (const runtime of policy.SUPPORTED_RUNTIMES) {
+      for (const role of ['ci-fix', 'review-fix']) {
+        const baseResult = bases.get(`${runtime}:${role}`);
+        const repeat = dispatchAndAssert(
+          runtime,
+          role,
+          { signatureState: 'repeat', priorApplied: baseResult.receipt },
+          ['repeat', runtime === 'codex' ? 'gpt-5.6-sol' : 'opus', runtime === 'codex' ? 'high' : 'max'],
+          `matrix-${runtime}-${role}-repeat`,
+          { previous_dispatch_id: baseResult.dispatch_id },
+        );
+        dispatchAndAssert(
+          runtime,
+          role,
+          { signatureState: 'repeat_exhausted', priorApplied: repeat.receipt },
+          ['repeat_exhausted', runtime === 'codex' ? 'gpt-5.6-sol' : 'opus', runtime === 'codex' ? 'xhigh' : 'max'],
+          `matrix-${runtime}-${role}-repeat-exhausted`,
+          { previous_dispatch_id: repeat.dispatch_id },
+        );
+      }
+    }
+
+    for (const [runtime, role, signals, rung] of [
+      ['codex', 'integrator', {
+        risk: 'high', critical: true, checkpoint: true, contested: true,
+        inputTokens: policy.WINDOW_THRESHOLD_TOKENS + 1,
+      }, 'critical'],
+      ['claude', 'arch-review', {
+        risk: 'high', critical: true, checkpoint: true, contested: true,
+        inputTokens: policy.WINDOW_THRESHOLD_TOKENS + 1,
+      }, 'ceiling'],
+    ]) {
+      const id = `matrix-${runtime}-${role}-combined`;
+      const result = dispatchAndAssert(runtime, role, signals, [
+        rung,
+        runtime === 'codex' ? 'gpt-5.6-sol' : 'fable',
+        runtime === 'codex' ? 'xhigh' : 'medium',
+      ], id);
+      assert.equal(new Set(result.resolution.signals_fired).size, Object.keys(signals).length);
+      assert.equal(result.resolution.signal_reasons.length, Object.keys(signals).length);
+      assert.equal(result.resolution.signal_reasons.find((reason) => reason.signal === 'risk').applies, false);
+    }
+    assert.ok(launched.length >= policy.SUPPORTED_RUNTIMES.length * policy.ROLES.length, 'every matrix case reached its explicit adapter');
+  } finally {
+    fs.rmSync(storeDir, { recursive: true, force: true });
+  }
+});
+
+test('invalid runtime, overrides, host selections, and generated files fail before reservation or launch', () => {
+  const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-boundary-negative-matrix-'));
+  try {
+    let launches = 0;
+    const recorder = boundaryModule.createDurableRecorder(storeDir);
+    const adapters = {
+      codex: fakeAdapter({ onLaunch: () => { launches += 1; } }),
+      claude: fakeAdapter({ onLaunch: () => { launches += 1; } }),
+      undefined: fakeAdapter({ onLaunch: () => { launches += 1; } }),
+      both: fakeAdapter({ onLaunch: () => { launches += 1; } }),
+    };
+    const boundary = boundaryModule.createDispatchBoundary({ adapters, recorder });
+    const expectCode = (input, code, label) => {
+      const dispatchId = input.dispatch_id;
+      assert.throws(() => boundary.dispatch(input), (error) => error.code === code, label);
+      assert.equal(recorder.getVerifiedRecord(dispatchId), null, `${label} has no phantom record`);
+    };
+
+    for (const [index, runtime] of [undefined, 'both'].entries()) {
+      expectCode({ runtime, role: 'executor', dispatch_id: `negative-runtime-${index}` }, 'UNKNOWN_RUNTIME', `ambiguous runtime ${runtime}`);
+    }
+    for (const [index, input] of [
+      { runtime: 'codex', role: 'executor', model: 'gpt-6-astra' },
+      { runtime: 'claude', role: 'executor', effort: 'unsupported-effort' },
+      { runtime: 'codex', role: 'executor', selection: { inline: true } },
+      { runtime: 'claude', role: 'executor', selection: { inherit: true } },
+      { runtime: 'codex', role: 'executor', config: { models: { executor: 'unsupported-model' } } },
+    ].entries()) {
+      const code = input.selection ? 'UNSUPPORTED_SELECTION' : 'CONFLICTING_OVERRIDE';
+      expectCode({ ...input, dispatch_id: `negative-selection-${index}` }, code, `selection refusal ${index}`);
+    }
+    assert.equal(launches, 0, 'policy and implicit-selection refusals never launch');
+
+    for (const [index, [runtime, options, code]] of [
+      ['codex', { supportedModels: ['not-a-codex-model'] }, 'UNSUPPORTED_SELECTION'],
+      ['codex', { supportedModels: ['gpt-5.6-luna'], supportedEfforts: ['not-an-effort'] }, 'UNSUPPORTED_SELECTION'],
+      ['claude', { supportedModels: ['not-a-claude-alias'] }, 'UNSUPPORTED_SELECTION'],
+      ['claude', { supportedModels: ['sonnet'], supportedEfforts: ['not-an-effort'] }, 'UNSUPPORTED_SELECTION'],
+    ].entries()) {
+      const hostBoundary = boundaryModule.createDispatchBoundary({
+        adapters: { [runtime]: fakeAdapter({ ...options, onLaunch: () => { launches += 1; } }) },
+        recorder,
+      });
+      const dispatchId = `negative-host-${index}`;
+      assert.throws(
+        () => hostBoundary.dispatch({ runtime, role: 'executor', dispatch_id: dispatchId }),
+        (error) => error.code === code,
+        `${runtime} unsupported host selection`,
+      );
+      assert.equal(recorder.getVerifiedRecord(dispatchId), null, `${runtime} unsupported host selection has no record`);
+    }
+
+    const emptyAgents = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-boundary-missing-agents-'));
+    try {
+      const staticBoundary = boundaryModule.createDispatchBoundary({
+        adapters: { codex: fakeAdapter({ agentsDir: emptyAgents, onLaunch: () => { launches += 1; } }) },
+        recorder,
+      });
+      const dispatchId = 'negative-missing-generated-agent';
+      assert.throws(
+        () => staticBoundary.dispatch({ runtime: 'codex', role: 'research', dispatch_id: dispatchId }),
+        (error) => error.code === 'STALE_GENERATED_AGENT',
+      );
+      assert.equal(recorder.getVerifiedRecord(dispatchId), null, 'missing generated file has no phantom record');
+    } finally {
+      fs.rmSync(emptyAgents, { recursive: true, force: true });
+    }
+    assert.equal(launches, 0, 'unsupported selections and missing files fail before launch');
+  } finally {
+    fs.rmSync(storeDir, { recursive: true, force: true });
+  }
+});
+
+test('both runtimes reject copied requested values, missing receipts, and stale receipt policy hashes', () => {
+  const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-boundary-receipt-negative-matrix-'));
+  try {
+    let copiedLaunches = 0;
+    const copiedRecorder = boundaryModule.createDurableRecorder(path.join(storeDir, 'copied'));
+    const copiedBoundary = boundaryModule.createDispatchBoundary({
+      adapters: {
+        codex: {
+          launch: (resolution) => {
+            copiedLaunches += 1;
+            const receipt = receiptFor(resolution);
+            delete receipt.applied_model;
+            delete receipt.applied_effort;
+            return receipt;
+          },
+        },
+        claude: {
+          launch: (resolution) => {
+            copiedLaunches += 1;
+            const receipt = receiptFor(resolution);
+            delete receipt.applied_model;
+            delete receipt.applied_effort;
+            return receipt;
+          },
+        },
+      },
+      recorder: copiedRecorder,
+    });
+    for (const runtime of policy.SUPPORTED_RUNTIMES) {
+      const dispatchId = `negative-copied-${runtime}`;
+      assert.throws(
+        () => copiedBoundary.dispatch({ runtime, role: 'executor', dispatch_id: dispatchId }),
+        (error) => error.code === 'MISSING_RECEIPT' && /applied_model/.test(error.message),
+        `${runtime} copied requested values are not applied evidence`,
+      );
+      assert.equal(copiedRecorder.getVerifiedRecord(dispatchId), null, `${runtime} copied values create no record`);
+    }
+    assert.equal(copiedLaunches, 2);
+
+    let missingLaunches = 0;
+    const missingRecorder = boundaryModule.createDurableRecorder(path.join(storeDir, 'missing'));
+    const missingBoundary = boundaryModule.createDispatchBoundary({
+      adapters: {
+        codex: { launch: () => { missingLaunches += 1; return undefined; } },
+        claude: { launch: () => { missingLaunches += 1; return undefined; } },
+      },
+      recorder: missingRecorder,
+    });
+    for (const runtime of policy.SUPPORTED_RUNTIMES) {
+      const dispatchId = `negative-missing-receipt-${runtime}`;
+      assert.throws(
+        () => missingBoundary.dispatch({ runtime, role: 'executor', dispatch_id: dispatchId }),
+        (error) => error.code === 'MISSING_RECEIPT',
+        `${runtime} missing application receipt`,
+      );
+      assert.equal(missingRecorder.getVerifiedRecord(dispatchId), null, `${runtime} missing receipt creates no record`);
+    }
+    assert.equal(missingLaunches, 2, 'missing receipts are refused after the unsubstantiated host call');
+
+    let staleLaunches = 0;
+    const staleRecorder = boundaryModule.createDurableRecorder(path.join(storeDir, 'stale'));
+    const staleBoundary = boundaryModule.createDispatchBoundary({
+      adapters: {
+        codex: fakeAdapter({ extra: { policy_hash: 'stale-policy' }, onLaunch: () => { staleLaunches += 1; } }),
+        claude: fakeAdapter({ extra: { policy_hash: 'stale-policy' }, onLaunch: () => { staleLaunches += 1; } }),
+      },
+      recorder: staleRecorder,
+    });
+    for (const runtime of policy.SUPPORTED_RUNTIMES) {
+      const dispatchId = `negative-stale-policy-${runtime}`;
+      assert.throws(
+        () => staleBoundary.dispatch({ runtime, role: 'executor', dispatch_id: dispatchId }),
+        (error) => error.code === 'STALE_POLICY',
+        `${runtime} stale receipt policy hash`,
+      );
+      assert.equal(staleRecorder.getVerifiedRecord(dispatchId), null, `${runtime} stale receipt creates no record`);
+    }
+    assert.equal(staleLaunches, 2);
+  } finally {
+    fs.rmSync(storeDir, { recursive: true, force: true });
+  }
+});
+
+test('repair promotion requires the immediately preceding boundary receipt on the same runtime and rung', () => {
+  const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-boundary-prior-receipt-matrix-'));
+  try {
+    let launches = 0;
+    const recorder = boundaryModule.createDurableRecorder(storeDir);
+    const boundary = boundaryModule.createDispatchBoundary({
+      adapters: {
+        codex: fakeAdapter({ onLaunch: () => { launches += 1; } }),
+        claude: fakeAdapter({ onLaunch: () => { launches += 1; } }),
+      },
+      recorder,
+    });
+    const codexTicket = 'T-36-PRIOR-CODEX';
+    const claudeTicket = 'T-36-PRIOR-CLAUDE';
+    const codexBase = boundary.dispatch(
+      { runtime: 'codex', role: 'ci-fix', dispatch_id: 'prior-codex-base' },
+      { ticket: codexTicket },
+    );
+    const claudeBase = boundary.dispatch(
+      { runtime: 'claude', role: 'ci-fix', dispatch_id: 'prior-claude-base' },
+      { ticket: claudeTicket },
+    );
+    const launchCountAfterBases = launches;
+    for (const [index, input] of [
+      {
+        runtime: 'codex',
+        role: 'ci-fix',
+        signals: { signatureState: 'repeat' },
+        dispatch_id: 'prior-missing-receipt',
+      },
+      {
+        runtime: 'codex',
+        role: 'ci-fix',
+        signals: { signatureState: 'repeat', priorApplied: codexBase.receipt },
+        previous_dispatch_id: 'prior-not-found',
+        dispatch_id: 'prior-missing-record',
+      },
+      {
+        runtime: 'codex',
+        role: 'ci-fix',
+        signals: { signatureState: 'repeat', priorApplied: { ...codexBase.receipt, applied_model: 'gpt-6-astra' } },
+        previous_dispatch_id: codexBase.dispatch_id,
+        dispatch_id: 'prior-copied-receipt',
+      },
+      {
+        runtime: 'codex',
+        role: 'ci-fix',
+        signals: { signatureState: 'repeat_exhausted', priorApplied: codexBase.receipt },
+        previous_dispatch_id: codexBase.dispatch_id,
+        dispatch_id: 'prior-exhausted-from-base',
+      },
+      {
+        runtime: 'codex',
+        role: 'ci-fix',
+        signals: { signatureState: 'repeat', priorApplied: claudeBase.receipt },
+        previous_dispatch_id: claudeBase.dispatch_id,
+        dispatch_id: 'prior-wrong-runtime',
+      },
+      {
+        runtime: 'claude',
+        role: 'ci-fix',
+        signals: { signatureState: 'repeat' },
+        dispatch_id: 'prior-claude-missing-receipt',
+      },
+      {
+        runtime: 'claude',
+        role: 'ci-fix',
+        signals: { signatureState: 'repeat', priorApplied: { ...claudeBase.receipt, applied_effort: 'high' } },
+        previous_dispatch_id: claudeBase.dispatch_id,
+        dispatch_id: 'prior-claude-copied-receipt',
+      },
+      {
+        runtime: 'claude',
+        role: 'ci-fix',
+        signals: { signatureState: 'repeat_exhausted', priorApplied: claudeBase.receipt },
+        previous_dispatch_id: claudeBase.dispatch_id,
+        dispatch_id: 'prior-claude-exhausted-from-base',
+      },
+    ].entries()) {
+      const expected = [0, 5].includes(index) ? 'MISSING_RECEIPT'
+        : [3, 4, 7].includes(index) ? 'NONCOMPLIANT_RECEIPT' : 'UNVERIFIED_RECEIPT';
+      assert.throws(
+        () => boundary.dispatch(input, { ticket: input.runtime === 'codex' ? codexTicket : claudeTicket }),
+        (error) => error.code === expected,
+        `repair prerequisite ${index}`,
+      );
+      assert.equal(recorder.getVerifiedRecord(input.dispatch_id), null, `repair refusal ${index} has no phantom record`);
+    }
+    assert.equal(launches, launchCountAfterBases, 'all invalid repair prerequisites fail before a successor launch');
+
+    const repeat = boundary.dispatch({
+      runtime: 'codex',
+      role: 'ci-fix',
+      signals: { signatureState: 'repeat', priorApplied: codexBase.receipt },
+      previous_dispatch_id: codexBase.dispatch_id,
+      dispatch_id: 'prior-valid-repeat',
+    }, { ticket: codexTicket });
+    const exhausted = boundary.dispatch({
+      runtime: 'codex',
+      role: 'ci-fix',
+      signals: { signatureState: 'repeat_exhausted', priorApplied: repeat.receipt },
+      previous_dispatch_id: repeat.dispatch_id,
+      dispatch_id: 'prior-valid-exhausted',
+    }, { ticket: codexTicket });
+    assert.deepStrictEqual([repeat.applied_model, repeat.applied_effort], ['gpt-5.6-sol', 'high']);
+    assert.deepStrictEqual([exhausted.applied_model, exhausted.applied_effort], ['gpt-5.6-sol', 'xhigh']);
+
+    const claudeRepeat = boundary.dispatch({
+      runtime: 'claude',
+      role: 'ci-fix',
+      signals: { signatureState: 'repeat', priorApplied: claudeBase.receipt },
+      previous_dispatch_id: claudeBase.dispatch_id,
+      dispatch_id: 'prior-claude-valid-repeat',
+    }, { ticket: claudeTicket });
+    const claudeExhausted = boundary.dispatch({
+      runtime: 'claude',
+      role: 'ci-fix',
+      signals: { signatureState: 'repeat_exhausted', priorApplied: claudeRepeat.receipt },
+      previous_dispatch_id: claudeRepeat.dispatch_id,
+      dispatch_id: 'prior-claude-valid-exhausted',
+    }, { ticket: claudeTicket });
+    assert.deepStrictEqual([claudeRepeat.applied_model, claudeRepeat.applied_effort], ['opus', 'max']);
+    assert.deepStrictEqual([claudeExhausted.applied_model, claudeExhausted.applied_effort], ['opus', 'max']);
+  } finally {
+    fs.rmSync(storeDir, { recursive: true, force: true });
+  }
+});
+
+done();

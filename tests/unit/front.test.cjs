@@ -58,6 +58,174 @@ test('a ready pending ticket is executable work', () => {
   assert.strictEqual(f.fixpoint, false);
 });
 
+suite('front — tracker eligibility gates only the pending → execute transition');
+
+const trackerTicket = (jira = 'MYD-1') => (jira ? { jira } : {});
+const eligibleTracker = (jira = 'MYD-1') => ({
+  jira_key: jira,
+  verdict: 'eligible',
+  reason: `tracker status "To Do" is configured and the ticket is unassigned`,
+});
+
+test('an eligible current record allows a ready pending ticket to execute', () => {
+  const f = computeFront(
+    { T: trackerTicket() },
+    { T: { status: 'pending', ready: true } },
+    { jira_todo_statuses: ['To Do'], trackerRecords: { T: eligibleTracker() } }
+  );
+  assert.deepStrictEqual(f.actionable.execute, ['T']);
+  assert.deepStrictEqual(f.parked.blocked, []);
+});
+
+test('a current-generation exact-ticket override with a known verdict may execute', () => {
+  const f = computeFront(
+    { T: trackerTicket() },
+    { T: { status: 'pending', ready: true } },
+    {
+      jira_todo_statuses: ['To Do'],
+      trackerRecords: {
+        T: { ...eligibleTracker(), verdict: 'ineligible', eligible: false, override: true },
+      },
+    }
+  );
+  assert.deepStrictEqual(f.actionable.execute, ['T']);
+  assert.match(f.why.T, /explicit tracker override/);
+});
+
+test('an unknown exact-ticket override remains blocked without a complete observation', () => {
+  const f = computeFront(
+    { T: trackerTicket() },
+    { T: { status: 'pending', ready: true } },
+    {
+      jira_todo_statuses: ['To Do'],
+      trackerRecords: {
+        T: { ...eligibleTracker(), verdict: 'unknown', eligible: null, assignee_observed: false, override: true },
+      },
+    }
+  );
+  assert.deepStrictEqual(f.actionable.execute, []);
+  assert.deepStrictEqual(f.parked.blocked, ['T']);
+  assert.match(f.why.T, /name this exact ticket/);
+});
+
+test('ineligible, unknown, and missing records are blocked with the direct-ticket remedy', () => {
+  const cases = [
+    ['ineligible', { jira_key: 'MYD-1', verdict: 'ineligible', reason: 'assigned to user-5' }, /assigned to user-5/],
+    ['unknown', { jira_key: 'MYD-1', verdict: 'unknown', reason: 'Jira API timed out' }, /Jira API timed out/],
+    ['missing', undefined, /no current-generation observation/],
+  ];
+  for (const [label, record, expected] of cases) {
+    const f = computeFront(
+      { T: trackerTicket() },
+      { T: { status: 'pending', ready: true } },
+      { jira_todo_statuses: ['To Do'], trackerRecords: record ? { T: record } : {} }
+    );
+    assert.deepStrictEqual(f.actionable.execute, [], label);
+    assert.deepStrictEqual(f.parked.blocked, ['T'], label);
+    assert.match(f.why.T, expected, label);
+    assert.match(f.why.T, /name this exact ticket/, label);
+  }
+});
+
+test('a tracker hold keeps a board with no other work out of fixpoint', () => {
+  const f = computeFront(
+    { T: trackerTicket() },
+    { T: { status: 'pending', ready: true } },
+    { jira_todo_statuses: ['To Do'], trackerRecords: {} }
+  );
+  assert.deepStrictEqual(f.actionable.execute, []);
+  assert.deepStrictEqual(f.parked.blocked, ['T']);
+  assert.strictEqual(f.tracker_blocked_count, 1);
+  assert.strictEqual(f.fixpoint, false, 'the pending ticket still needs a tracker read or exact-ticket decision');
+});
+
+test('a left-behind pending ticket is not held by the tracker gate', () => {
+  const f = computeFront(
+    { T: { phase: '20', jira: 'MYD-1' } },
+    { T: { status: 'pending', ready: true } },
+    {
+      jira_todo_statuses: ['To Do'],
+      trackerRecords: {},
+      epics: epicsOf(landedEpic(20)),
+    }
+  );
+  assert.deepStrictEqual(f.actionable.execute, ['T'],
+    'the existing left-behind completion hatch must remain visible to ordering');
+  assert.deepStrictEqual(f.parked.blocked, []);
+  assert.strictEqual(f.tracker_blocked_count, 0);
+  assert.strictEqual(f.left_behind_count, 1);
+});
+
+test('formatFront names a tracker-only hold instead of sending it to ci-wait', () => {
+  const f = computeFront(
+    { T: trackerTicket() },
+    { T: { status: 'pending', ready: true } },
+    { jira_todo_statuses: ['To Do'], trackerRecords: {} }
+  );
+  const line = formatFront(f).find((entry) => /^fixpoint:/.test(entry));
+  assert.match(line, /held by tracker eligibility/);
+  assert.match(line, /Read each ticket once from Jira at cold start/);
+  assert.match(line, /exact ticket/);
+  assert.doesNotMatch(line, /run ci-wait/);
+});
+
+test('formatFront preserves a real CI or parent wait beside a tracker hold', () => {
+  const f = computeFront(
+    { T: trackerTicket(), P: {} },
+    {
+      T: { status: 'pending', ready: true },
+      P: { status: 'pr-open', pr: 9, checks: checks(0, 1) },
+    },
+    { jira_todo_statuses: ['To Do'], trackerRecords: {} }
+  );
+  assert.strictEqual(f.tracker_blocked_count, 1);
+  assert.deepStrictEqual(f.waiting.ci, ['P']);
+  const out = formatFront(f).join('\n');
+  assert.ok(/1 PR\(s\) still running CI/.test(out), out);
+  assert.ok(/ci-wait\.cjs/.test(out), out);
+  assert.doesNotMatch(out, /This is not a CI wait/);
+});
+
+test('missing Jira key and a key-mismatched record fail closed', () => {
+  const missing = computeFront(
+    { T: trackerTicket(null) },
+    { T: { status: 'pending', ready: true } },
+    { jira_todo_statuses: ['To Do'], trackerRecords: { T: eligibleTracker() } }
+  );
+  assert.deepStrictEqual(missing.actionable.execute, []);
+  assert.match(missing.why.T, /no Jira key/);
+
+  const mismatched = computeFront(
+    { T: trackerTicket('MYD-2') },
+    { T: { status: 'pending', ready: true } },
+    { jira_todo_statuses: ['To Do'], trackerRecords: { T: eligibleTracker('MYD-1') } }
+  );
+  assert.deepStrictEqual(mismatched.actionable.execute, []);
+  assert.match(mismatched.why.T, /bound to MYD-1, not MYD-2/);
+});
+
+test('an empty policy preserves the pre-gate result without inspecting tracker data', () => {
+  const f = computeFront(
+    { T: trackerTicket() },
+    { T: { status: 'pending', ready: true } },
+    { jira_todo_statuses: [], trackerRecords: null }
+  );
+  assert.deepStrictEqual(f.actionable.execute, ['T']);
+});
+
+test('branched and PR-open work remains deliverable regardless of tracker state', () => {
+  const f = computeFront(
+    { B: trackerTicket(), P: trackerTicket() },
+    {
+      B: { status: 'branched', ready: true },
+      P: { status: 'pr-open', pr: 7, draft: true, checks: checks() },
+    },
+    { jira_todo_statuses: ['To Do'], trackerRecords: {} }
+  );
+  assert.deepStrictEqual(f.actionable.publish, ['B']);
+  assert.deepStrictEqual(f.actionable.finalize, ['P']);
+});
+
 test('a branched ticket with no PR is publish work, not a curiosity', () => {
   const f = computeFront({ 'T-01-02': {} }, { 'T-01-02': { status: 'branched', ready: true, needs_pr: true } });
   assert.deepStrictEqual(f.actionable.publish, ['T-01-02']);
@@ -944,6 +1112,37 @@ test("a ticket its own phase's epic landed without IS left behind", () => {
   assert.deepStrictEqual(f.actionable.finalize, ['T-20-02'], 'still listed — the fixpoint must not lie');
   assert.strictEqual(f.left_behind_count, 1, 'the phase integrated without it');
   assert.ok(f.parked.done.includes('T-20-01'), 'and the merged one is the evidence, not a casualty');
+});
+
+test('an invalid policy blocks left-behind pending work instead of bypassing the tracker gate', () => {
+  const tickets = { 'T-20-02': { phase: '20', jira: 'MYD-2' } };
+  const state = { 'T-20-02': { status: 'pending', ready: true } };
+  const f = computeFront(tickets, state, {
+    configInvalid: true,
+    trackerStatuses: ['__config_invalid__'],
+    trackerRecords: {},
+    epics: epicsOf(landedEpic(20)),
+  });
+  assert.deepStrictEqual(f.actionable.execute, []);
+  assert.deepStrictEqual(f.parked.blocked, ['T-20-02']);
+  assert.match(f.why['T-20-02'], /policy is invalid/);
+  assert.strictEqual(f.fixpoint, false, 'an unreadable policy must not look like a finished phase');
+});
+
+test('an invalid policy suppresses every dispatch-producing bucket', () => {
+  const f = computeFront(
+    { P: {}, R: {} },
+    {
+      P: { status: 'branched', ready: true },
+      R: { status: 'pr-open', pr: 7, draft: true, checks: checks() },
+    },
+    { configInvalid: true },
+  );
+  for (const bucket of Object.values(f.actionable)) assert.deepStrictEqual(bucket, []);
+  assert.deepStrictEqual(f.parked.blocked.sort(), ['P', 'R']);
+  assert.strictEqual(f.fixpoint, false);
+  assert.match(f.why.P, /policy is invalid/);
+  assert.match(f.why.R, /policy is invalid/);
 });
 
 test('an epic freshly cut from its base has landed nothing at all', () => {
@@ -2614,6 +2813,26 @@ const frontJson = (dir) => {
   assert.strictEqual(r.status, 0, `front --json must exit 0 (${r.stderr})`);
   return JSON.parse(r.stdout);
 };
+const pendingTrackerBoard = (configText) => {
+  const dir = demoBoard(JSON.stringify({ pipeline: { jira_todo_statuses: 'To Do' } }));
+  const graph = path.join(dir, '.planning', 'graph');
+  dfs.writeFileSync(path.join(graph, 'tickets.json'), JSON.stringify({
+    tickets: { 'T-01-01': { jira: 'MYD-1' } },
+  }));
+  dfs.writeFileSync(path.join(graph, 'delivery-state.json'), JSON.stringify({
+    'T-01-01': { status: 'pending', ready: true },
+  }));
+  dfs.writeFileSync(path.join(graph, 'delivery-state-meta.json'), JSON.stringify({ generation: 7 }));
+  const recorded = dspawn(process.execPath, [
+    path.join(D_SCRIPTS, 'tracker-record.cjs'), 'mark', 'T-01-01', 'MYD-1',
+    '--status', 'To Do', '--assignee', 'none', '--graph', graph,
+  ], { cwd: dir, encoding: 'utf8' });
+  assert.strictEqual(recorded.status, 0, `tracker fixture must be recordable (${recorded.stderr})`);
+  if (configText !== undefined) {
+    dfs.writeFileSync(path.join(dir, '.planning', 'config.json'), configText);
+  }
+  return dir;
+};
 // The comparable half: everything the run acts on, with `capacity` left out —
 // that block already differed on base, and it is not what decides a dispatch.
 const boardShape = (f) => ({ actionable: f.actionable, waiting: f.waiting, parked: f.parked, sentinel: f.sentinel });
@@ -2639,6 +2858,16 @@ test('a corrupt config offers NO finalize, and the reason rides both faces', () 
   assert.strictEqual(human.stdout.split('\n')[0], j.config_invalid,
     `the refusal leads the human face: ${JSON.stringify(human.stdout.split('\n').slice(0, 3))}`);
   assert.ok(!/finalize/.test(human.stdout.split('\n')[1] || ''), human.stdout);
+});
+
+test('a corrupt config cannot leak an eligible tracker cache into execute', () => {
+  const j = frontJson(pendingTrackerBoard(CORRUPT));
+  assert.deepStrictEqual(j.actionable.execute, [],
+    'an unreadable policy must not let the standalone CLI dispatch from a cached eligible record');
+  assert.ok(j.parked.blocked.includes('T-01-01'), JSON.stringify(j));
+  assert.strictEqual(j.actionable_count, 0);
+  assert.ok(typeof j.config_invalid === 'string' && j.config_invalid, JSON.stringify(j));
+  assert.strictEqual(j.fixpoint, false, 'a refused tracker-gated board is not a finished phase');
 });
 
 test('the corrupt answer equals the answer a file that SAYS off gives, never the default epic', () => {

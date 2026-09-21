@@ -17,6 +17,7 @@ set -euo pipefail
 cmd="${1:-}"
 
 repo_root="$(git rev-parse --show-toplevel 2>/dev/null)" || { echo "not inside a git repository" >&2; exit 1; }
+reachability_script="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/run-reachability.cjs"
 
 default_branch() {
   # GSD's git.base_branch is the project's integration branch (it is what
@@ -228,6 +229,13 @@ case "$cmd" in
       echo "reusing existing local branch $epic" >&2
     else
       git -C "$repo_root" branch --no-track "$epic" "origin/$base" 1>&2
+    fi
+    if proof_json="$(node "$reachability_script" prove --repo "$repo_root" --base "$base" --branch "$epic" --json 2>/dev/null)"; then
+      echo "reachability proven for $epic from origin/$base" >&2
+    else
+      proof_status=$?
+      printf '%s\n' "$proof_json" >&2
+      exit "$proof_status"
     fi
     git -C "$repo_root" push -u origin "$epic" 1>&2
     echo "$epic"
