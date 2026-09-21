@@ -12,6 +12,7 @@ const boundary = require('./dispatch-boundary.cjs');
 const policy = require('./model-policy.cjs');
 const { createCodexDispatchAdapter, REPAIR } = require('./codex-dispatch-adapter.cjs');
 const { validateCodexConfiguration } = require('./codex-model-remap.cjs');
+const { createCodexRuntimeHost } = require('./codex-runtime-host.cjs');
 
 const ROLE_ALIASES = Object.freeze({ 'inv-research': 'research' });
 const CAPABILITIES_CONTRACT = 'provide current host capabilities through options.capabilities/options.host.capabilities or the CLI --capabilities-file <json> (supportedModels and supportedEfforts)';
@@ -188,6 +189,55 @@ function selectAgent(role, options = {}) {
   }
 }
 
+function launchAgent(role, options = {}) {
+  const flags = options.flags || new Map();
+  const selection = selectAgentInternal(role, { ...options, flags });
+  const capabilities = capabilitiesFrom(options, flags);
+  const agentsDir = path.resolve(options.agentDir || agentDirFrom(flags, options.env || process.env));
+  const host = options.host || createCodexRuntimeHost({
+    scope: options.scope || options.runScope,
+    run_id: options.run_id || options.runId,
+    controller: options.controller,
+    capabilities,
+    capabilitiesFile: options.capabilitiesFile || flags.get('capabilities-file'),
+    executable: options.executable,
+    probe: options.probe,
+    recorder: options.recorder,
+    recorderDir: options.recorderDir,
+    transcriptDir: options.transcriptDir,
+    env: options.env,
+    spawn: options.spawn,
+    ephemeral: options.ephemeral,
+    approveForMe: options.approveForMe,
+  });
+  const adapter = createCodexDispatchAdapter({
+    agentsDir,
+    agentManifest: options.agentManifest,
+    capabilities,
+    host,
+    handoff: options.handoff,
+  });
+  const recorder = options.recorder || host.recorder;
+  if (!recorder) fail('Codex launch requires a host-owned durable receipt recorder', 'MISSING_ADAPTER');
+  const boundaryInstance = boundary.createDispatchBoundary({
+    adapters: { codex: adapter },
+    recorder,
+    handoff: options.handoff,
+    requireGsdRole: options.requireGsdRole === true || options.gsd_role !== undefined || options.gsdRole !== undefined,
+  });
+  const gsdRole = options.gsd_role || options.gsdRole;
+  const input = {
+    runtime: 'codex',
+    role: selection.role,
+    signals: options.signals || {},
+    dispatch_id: selection.dispatch_id,
+    model: selection.model,
+    effort: selection.effort,
+    ...(gsdRole ? { gsd_role: gsdRole } : {}),
+  };
+  return boundaryInstance.dispatch(input, options.context || {});
+}
+
 function plainSelection(result) {
   const target = result.agent_file || result.model;
   const effort = result.effort || result.launch_arguments?.reasoning_effort;
@@ -211,7 +261,15 @@ function main() {
   process.stdout.write((flags.has('json') ? JSON.stringify(result) : plainSelection(result)) + '\n');
 }
 
-module.exports = Object.freeze({ selectAgent, parseArgs, signalsFrom, projectDirFrom, plainSelection, ROLE_ALIASES });
+module.exports = Object.freeze({
+  selectAgent,
+  launchAgent,
+  parseArgs,
+  signalsFrom,
+  projectDirFrom,
+  plainSelection,
+  ROLE_ALIASES,
+});
 if (require.main === module) {
   try { main(); }
   catch (error) {
