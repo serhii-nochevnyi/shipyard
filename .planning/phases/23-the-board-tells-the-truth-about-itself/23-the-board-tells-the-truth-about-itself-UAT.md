@@ -1,10 +1,10 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 36a7ece403327795184d1c5a2e4258c0446cf79fe994f1f6d895309eced438e9
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 715375e2701de77752ebccaaa30df3b13d4ba9d1b506881c613bfaf7ed312dd9
 phase: 23
 status: pending
 result: pending
 shipyard_sync: evidence-projection
-shipyard_source_fingerprint: 36a7ece403327795184d1c5a2e4258c0446cf79fe994f1f6d895309eced438e9
+shipyard_source_fingerprint: 715375e2701de77752ebccaaa30df3b13d4ba9d1b506881c613bfaf7ed312dd9
 ---
 
 # Phase 23: The board tells the truth about itself — UAT Projection

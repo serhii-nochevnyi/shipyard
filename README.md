@@ -165,6 +165,10 @@ palette is:
 The routed policy records the logical rung, concrete model, effort, runtime,
 provider, dispatch id and application receipt. A missing or ambiguous runtime,
 unsupported model, stale generated agent or missing receipt blocks the launch.
+
+The codex_models value above is compatibility input, not canonical Codex bundle
+policy. Routed Codex projects should omit that legacy palette and use the ADR-014
+native model grid instead.
 Inspect the effective policy from the target project:
 
     node plugins/delivery-pipeline/scripts/pipeline-config.cjs resolve

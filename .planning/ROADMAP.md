@@ -697,7 +697,7 @@ the new measurements are complete.
 <!-- shipyard:gsd-sync:begin -->
 ## Shipyard synchronization (generated)
 
-- Source fingerprint: `36a7ece403327795184d1c5a2e4258c0446cf79fe994f1f6d895309eced438e9`
+- Source fingerprint: `715375e2701de77752ebccaaa30df3b13d4ba9d1b506881c613bfaf7ed312dd9`
 - Plans merged: 130/138
 - Phases verified: 9/18
 - Current phase: 20

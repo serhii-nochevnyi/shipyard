@@ -9,7 +9,8 @@ PLUGIN="$WORK/plugin"
 CLAUDE_HOME="$HOME_DIR/.claude"
 mkdir -p "$CLAUDE_HOME" "$PLUGIN/scripts"
 mkdir -p "$PLUGIN/.claude-plugin"
-printf '%s\n' '{"version":"0.50.0"}' > "$PLUGIN/.claude-plugin/plugin.json"
+PLUGIN_VERSION="$(ROOT="$ROOT" node -e "const fs = require('node:fs'); const path = require('node:path'); const root = process.env.ROOT; process.stdout.write(JSON.parse(fs.readFileSync(path.join(root, 'plugins/delivery-pipeline/.claude-plugin/plugin.json'), 'utf8')).version);")"
+printf '{"version":"%s"}\n' "$PLUGIN_VERSION" > "$PLUGIN/.claude-plugin/plugin.json"
 
 cat > "$PLUGIN/scripts/stop-gate.cjs" <<'EOF'
 const wake = require('./run-waker.cjs');

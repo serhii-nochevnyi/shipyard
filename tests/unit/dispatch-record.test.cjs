@@ -1198,57 +1198,6 @@ test('observed model ids reject whitespace and controls but keep opaque ids flex
   assert.equal(store(graph)['T-01-01'].observed_effort, 'unknown');
 });
 
-test('requested, applied and observed routing facts round-trip separately', () => {
-  const { project, graph } = scratch({ 'T-01-01': { ...READY } });
-  const r = run([
-    'mark', 'T-01-01', 'executor', '--model', 'opus', '--effort', 'high',
-    '--effort-applied', 'high', '--route', ROUTE, '--task-level', 'complex',
-    '--runtime', 'claude', '--backend', 'workflow', '--observed-model', 'claude-opus-5',
-    '--observed-effort', 'xhigh',
-  ], project);
-  assert.equal(r.status, 0, `must succeed (${r.stderr})`);
-  const rec = store(graph)['T-01-01'];
-  assert.equal(rec.task_level, 'complex');
-  assert.equal(rec.runtime, 'claude');
-  assert.equal(rec.backend, 'workflow');
-  assert.equal(rec.effort, 'high', 'requested resolver effort');
-  assert.equal(rec.effort_applied, 'high', 'spawn effort');
-  assert.equal(rec.observed_model, 'claude-opus-5');
-  assert.equal(rec.observed_effort, 'xhigh', 'runtime observation is allowed to differ');
-  const ev = lastDispatch(graph);
-  for (const key of ['task_level', 'runtime', 'backend', 'effort', 'effort_applied', 'observed_model', 'observed_effort']) {
-    assert.equal(ev[key], rec[key], `journal carries ${key}`);
-  }
-});
-
-test('a known runtime cannot create an unmeasured model dispatch', () => {
-  const { project, graph } = scratch({ 'T-01-01': { ...READY } });
-  const r = run(['mark', 'T-01-01', 'executor', '--runtime', 'codex'], project);
-  assert.equal(r.status, 1, `must refuse (${r.stderr})`);
-  assert.ok(/must carry.*model.*route/.test(r.stderr), r.stderr);
-  assert.deepStrictEqual(store(graph), {});
-});
-
-test('observed model ids reject whitespace and controls but keep opaque ids flexible', () => {
-  for (const bad of ['claude opus', 'claude\topus', 'claude\nopus']) {
-    const { project, graph } = scratch({ 'T-01-01': { ...READY } });
-    const r = run([
-      'mark', 'T-01-01', 'executor', '--runtime', 'claude', '--observed-model', bad,
-    ], project);
-    assert.equal(r.status, 1, `${JSON.stringify(bad)} must refuse (${r.stderr})`);
-    assert.ok(/whitespace or a control character/.test(r.stderr), r.stderr);
-    assert.deepStrictEqual(store(graph), {});
-  }
-  const { project, graph } = scratch({ 'T-01-01': { ...READY } });
-  const ok = run([
-    'mark', 'T-01-01', 'executor', '--runtime', 'claude', '--route', ROUTE,
-    '--observed-model', 'claude-opus-5.1-preview', '--observed-effort', 'unknown',
-  ], project);
-  assert.equal(ok.status, 0, ok.stderr);
-  assert.equal(store(graph)['T-01-01'].observed_model, 'claude-opus-5.1-preview');
-  assert.equal(store(graph)['T-01-01'].observed_effort, 'unknown');
-});
-
 test('the flags survive --graph in any position, from a foreign cwd', () => {
   // The guard marks its fixers from inside a ticket worktree, so the two parsers
   // have to coexist: one --graph spelling, stripped anywhere, and the strip must

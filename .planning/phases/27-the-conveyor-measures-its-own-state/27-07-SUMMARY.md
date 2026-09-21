@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 36a7ece403327795184d1c5a2e4258c0446cf79fe994f1f6d895309eced438e9
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 715375e2701de77752ebccaaa30df3b13d4ba9d1b506881c613bfaf7ed312dd9
 phase: 27-the-conveyor-measures-its-own-state
 plan: 07
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-08
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 36a7ece403327795184d1c5a2e4258c0446cf79fe994f1f6d895309eced438e9
+shipyard_source_fingerprint: 715375e2701de77752ebccaaa30df3b13d4ba9d1b506881c613bfaf7ed312dd9
 ---
 
 # Phase 27: A guard asserts a sweep, not a list of known homes — Delivery Projection

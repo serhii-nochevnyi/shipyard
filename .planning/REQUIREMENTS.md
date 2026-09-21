@@ -1,6 +1,6 @@
 # Requirements: shipyard
 
-<!-- shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 36a7ece403327795184d1c5a2e4258c0446cf79fe994f1f6d895309eced438e9 -->
+<!-- shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 715375e2701de77752ebccaaa30df3b13d4ba9d1b506881c613bfaf7ed312dd9 -->
 
 **Defined:** 2026-09-10
 **Core Value:** Keep delivery decisions truthful, resumable, and synchronized between the Shipyard conveyor and native GSD workflows.
@@ -33,7 +33,7 @@
 - [ ] **REQ-23**: The CI waiter distinguishes a stalled pipeline from an unreachable `gh`, clears only the settled ticket's record, and sizes its window from the observed CI.
 - [ ] **REQ-24**: Prose names only what the scripts implement: no instruction sanctions a wait, a bucket or an order of operations the code does not have.
 - [ ] **REQ-25**: Every writer of `delivery-front.json` writes the SAME front: a resync must carry the dispatch overlay, so the board and the stop gate never read work in flight as actionable between one `mark` and the next.
-- [x] **REQ-26**: The image and the smokes pin the runtimes the conveyor is tested on: Claude Code with Fable 5.1/Opus 5 aliases, gsd-core 1.13.0.
+- [x] **REQ-26**: The host setup and smokes pin the runtimes the conveyor is tested on: Claude Code with Fable 5.1/Opus 5 aliases, and a measured Codex/GSD installation.
 - [x] **REQ-27**: A Codex agent carries EFFORT, not a model baked from a catalog that can be stale; a `model =` line appears only when the user's GSD remap names one, resolved through GSD's resolver.
 - [x] **REQ-28**: Prose names the runtimes as they are: the Agent tool's accepted values, `opus` = Opus 5 and its version floor, `fable` = Fable 5.1 and its consent hazard, the conveyor's `gate_status:` PR trailer vs GSD's `gate-status:` commit trailer.
 - [ ] **REQ-29**: One ownership matcher decides Gate 2 overlap, the scope gate and base-merge conflict resolution; ambiguous declarations are rejected and an uncertain owner never authorizes a mechanical resolution.
