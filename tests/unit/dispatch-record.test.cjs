@@ -1804,4 +1804,25 @@ test('deliver.md\'s ladder query runs, and UNCONFIRMED is a bucket rather than a
     `and the Agent row reads UNCONFIRMED rather than a guess: ${r.stdout}`);
 });
 
+test('dispatch records run scope and telemetry treatment metadata', () => {
+  const { project, graph } = scratch({ 'T-01-01': { ...READY } });
+  const result = run([
+    'mark', 'T-01-01', 'executor',
+    '--model', 'opus', '--effort', 'high', '--runtime', 'claude', '--backend', 'workflow',
+    '--run-id', 'run-dispatch-1', '--account-scope', 'anthropic-max',
+    '--treatment-id', 'phase-37-baseline', '--arm', 'baseline',
+    '--policy-id', 'ADR-014', '--policy-version', 'adr-014.v2', '--policy-hash', 'policy-hash-1',
+  ], project);
+  assert.equal(result.status, 0, result.stderr);
+  const record = store(graph)['T-01-01'];
+  const event = fs.readFileSync(path.join(graph, 'delivery-log.jsonl'), 'utf8').trim().split('\n').map(JSON.parse).find((item) => item.event === 'dispatch');
+  assert.equal(record.run_id, 'run-dispatch-1');
+  assert.equal(record.account_scope, 'anthropic-max');
+  assert.equal(record.telemetry.schema_version, 'shipyard.run-telemetry.v1');
+  assert.equal(record.telemetry.requested_model, 'opus');
+  assert.equal(record.telemetry.treatment_fingerprint !== null, true);
+  assert.equal(event.telemetry.dispatch_id, record.dispatch_id);
+  assert.equal(event.telemetry.provider, 'anthropic');
+});
+
 done();

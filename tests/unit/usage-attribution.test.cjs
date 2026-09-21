@@ -125,6 +125,28 @@ test('usage attribution preserves treatment and declared account scope metadata'
   );
 });
 
+test('usage attribution carries run-scoped token, quality and recovery facts', () => {
+  const record = normalizeRecord(base({
+    run_id: 'run-usage-1',
+    input_tokens: 120,
+    output_tokens: 30,
+    tool_turns: 4,
+    quality: { status: 'passed', verified: true },
+    recovery: { status: 'complete', verified: true },
+    outcome: { status: 'completed', verified: true },
+    policy_id: 'ADR-014',
+    policy_version: 'adr-014.v2',
+    policy_hash: 'policy-hash-1',
+  }));
+  assert.equal(record.run_id, 'run-usage-1');
+  assert.equal(record.input_tokens, 120);
+  assert.equal(record.output_tokens, 30);
+  assert.equal(record.tool_turns, 4);
+  assert.equal(record.quality.status, 'passed');
+  assert.equal(record.recovery.status, 'complete');
+  assert.equal(record.outcome.status, 'completed');
+});
+
 test('transcript sources are canonicalized before the durable ledger is written', () => {
   const transcript = path.join(os.tmpdir(), 'shipyard-source-root', 'logs', 'session.jsonl');
   const relative = path.relative(process.cwd(), transcript);
