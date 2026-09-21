@@ -76,6 +76,7 @@ const { suite, test, done, assert } = require(path.join(__dirname, 'assert-harne
 const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
 const { codexStaticVariants } = require('../../plugins/delivery-pipeline/scripts/gsd-tune.cjs');
 const pipelineConfig = require('../../plugins/delivery-pipeline/scripts/pipeline-config.cjs');
+const rollout = require('../../plugins/delivery-pipeline/scripts/run-rollout.cjs');
 const boundaryModule = require('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs');
 const { createDurableRecorder } = boundaryModule;
 const { createCodexDispatchAdapter } = require('../../plugins/delivery-pipeline/scripts/codex-dispatch-adapter.cjs');
@@ -1997,6 +1998,59 @@ test('investigate emits flat machine-readable decision lists', () => {
   const investigate = readRepo('plugins/delivery-pipeline/commands/investigate.md');
   assert.ok(investigate.includes('each locked decision is one bullet under `## Decision`'));
   assert.ok(investigate.includes('scope fences use\n     `## Out of scope`'));
+});
+
+test('autonomous rollout source keeps the gate versioned, provider-pure, and fail-closed', () => {
+  const source = readRepo('plugins/delivery-pipeline/scripts/run-rollout.cjs');
+  assert.ok(source.includes("SCHEMA = 'shipyard.autonomous-rollout.v1'"));
+  assert.ok(source.includes("ROLLOUT_VERSION = 'v1'"));
+  assert.ok(source.includes("source !== 'live'"));
+  assert.ok(source.includes("status === 'enabled'"));
+  assert.ok(source.includes("providerFor(runtime)"));
+  assert.ok(source.includes("--capability-only"));
+  for (const file of ['run-contract.cjs', 'run-store.cjs', 'run-controller.cjs', 'run-waker.cjs', 'run-telemetry.cjs', 'usage-attribution.cjs', 'pipeline-stats.cjs']) {
+    assert.ok(source.includes(file), `rollout gate must name ${file}`);
+  }
+  assert.deepStrictEqual(rollout.RUNTIMES, ['claude', 'codex']);
+  assert.deepStrictEqual(rollout.PROVIDERS, { claude: 'anthropic', codex: 'openai' });
+});
+
+test('delivery documents rollout status, technical waits, rollback, and human-only gates', () => {
+  const deliver = readRepo('plugins/delivery-pipeline/commands/deliver.md');
+  const docs = readRepo('docs/gsd_multilevel_delivery_pipeline.md');
+  for (const source of [deliver, docs]) {
+    assert.ok(source.includes('run-rollout.cjs'));
+    assert.ok(source.includes('unavailable'));
+    assert.ok(source.includes('refused'));
+    assert.ok(source.includes('technical waits') && ['ci', 'review', 'quota', 'lease', 'host'].every((kind) => source.includes(kind)));
+    assert.ok(source.includes('historical records'));
+    assert.ok(source.includes('inherited model') || source.includes('inherited models'));
+  }
+  assert.ok(deliver.includes('Workflow runtime uses Anthropic and Codex uses\nOpenAI'));
+  assert.ok(deliver.includes('protected default-branch merge'));
+});
+
+test('GSD sync projects controller state without volatile owner or store fields', () => {
+  const source = readRepo('plugins/delivery-pipeline/scripts/gsd-sync.cjs');
+  const start = source.indexOf('function controllerStateProjection');
+  const end = source.indexOf('function objectOrNull', start);
+  assert.ok(start >= 0 && end > start, 'gsd-sync must expose a controller projection function');
+  const projection = source.slice(start, end);
+  assert.doesNotMatch(projection, /heartbeat_at|expires_at|acquired_at|updated_at|generation/);
+  assert.ok(source.includes("const RUN_STORE = path.join(GRAPH_DIR, 'runs', 'runs.json')"));
+  assert.ok(source.includes('wait_kind'));
+  assert.ok(source.includes('receipt_status'));
+  assert.ok(source.includes('usage_status'));
+});
+
+test('runtime smoke uses live capability-only probing and has no synthetic enable path', () => {
+  const smoke = readRepo('tests/smoke/runtime-control-plane-smoke.sh');
+  assert.ok(smoke.includes('--capability-only'));
+  assert.ok(smoke.includes('run-rollout.cjs'));
+  assert.ok(smoke.includes('status'));
+  assert.ok(smoke.includes('unavailable'));
+  assert.ok(smoke.includes('refused'));
+  assert.doesNotMatch(smoke, /synthetic|fixture|fake|mock/i);
 });
 
 done();

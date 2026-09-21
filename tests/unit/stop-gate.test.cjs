@@ -17,6 +17,8 @@ const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
 const { suite, test, done, assert } = require(path.join(__dirname, 'assert-harness.cjs'));
+const scope = require(path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'run-scope.cjs'));
+const { createRunController } = require(path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'run-controller.cjs'));
 
 const SCRIPT = path.join(
   __dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'stop-gate.cjs'
@@ -315,6 +317,71 @@ function runIn(cwd, payload = {}, env = {}) {
   const out = (r.stdout || '').trim();
   return out ? JSON.parse(out) : null;
 }
+
+function scopedRun(root, worktree, runId = 'stop-gate-run') {
+  const storeDir = path.join(root, 'runs');
+  const controller = createRunController({ storeDir, ownerId: 'stop-gate-owner', now: () => Date.now() });
+  const run = scope.createRunScope({
+    run_id: runId,
+    repository_id: 'shipyard/stop-gate',
+    phase: 37,
+    ticket: 'T-37-06',
+    worktree,
+    runtime: 'claude',
+    owner_id: 'stop-gate-owner',
+    dispatch: { dispatch_id: `dispatch-${runId}`, role: 'executor', model: 'sonnet', effort: 'high' },
+  });
+  controller.begin(run);
+  return { storeDir, run };
+}
+
+suite('stop-gate — scoped controller selection');
+
+test('a scoped run reads only its controller-owned worktree', () => {
+  const { main, phase } = repoWithPhaseWorktree(
+    { generated_at: fresh(), actionable_count: 0, left_behind_count: 0, actionable: {}, fixpoint: true },
+    live({ actionable_count: 1, actionable: { execute: ['T-37-06'] } }),
+  );
+  const root = path.dirname(main);
+  const { storeDir } = scopedRun(root, phase);
+  const v = runIn(main, { run_id: 'stop-gate-run' }, { SHIPYARD_RUN_STORE_DIR: storeDir, SHIPYARD_RUN_CONTROL: 'scoped' });
+  assert.ok(v && v.decision === 'block');
+  assert.match(v.reason, /T-37-06/);
+  assert.ok(v.reason.includes(path.join(phase, '.planning', 'graph')));
+});
+
+test('scoped mode refuses a missing run identity instead of selecting a global front', () => {
+  const v = run(live(), {}, { SHIPYARD_RUN_CONTROL: 'scoped' });
+  assert.ok(v && v.decision === 'block');
+  assert.match(v.reason, /run_id is missing/);
+});
+
+test('scoped mode refuses a graph that does not belong to the run', () => {
+  const { main, phase } = repoWithPhaseWorktree(live(), live());
+  const root = path.dirname(main);
+  const { storeDir } = scopedRun(root, phase, 'stop-gate-mismatch');
+  const v = runIn(main, { run_id: 'stop-gate-mismatch' }, {
+    SHIPYARD_RUN_STORE_DIR: storeDir,
+    SHIPYARD_RUN_CONTROL: 'scoped',
+    SHIPYARD_GRAPH_DIR: path.join(main, '.planning', 'graph'),
+  });
+  assert.ok(v && v.decision === 'block');
+  assert.match(v.reason, /SCOPE_MISMATCH/);
+});
+
+test('a scoped fixpoint allows the owning run to stop', () => {
+  const { main, phase } = repoWithPhaseWorktree(
+    live({ actionable_count: 0, actionable: {}, fixpoint: true }),
+    live({ actionable_count: 0, actionable: {}, fixpoint: true }),
+  );
+  const root = path.dirname(main);
+  const { storeDir } = scopedRun(root, phase, 'stop-gate-fixpoint');
+  const v = runIn(main, { run_id: 'stop-gate-fixpoint' }, {
+    SHIPYARD_RUN_STORE_DIR: storeDir,
+    SHIPYARD_RUN_CONTROL: 'scoped',
+  });
+  assert.equal(v, null);
+});
 
 // The shipped board the session's own checkout was carrying, verbatim in shape.
 const shipped = {

@@ -26,6 +26,8 @@ const CONFIG = path.join(ROOT, '.planning', 'config.json');
 const TICKETS = path.join(GRAPH_DIR, 'tickets.json');
 const DELIVERY_STATE = path.join(GRAPH_DIR, 'delivery-state.json');
 const DELIVERY_FRONT = path.join(GRAPH_DIR, 'delivery-front.json');
+const RUN_STORE = path.join(GRAPH_DIR, 'runs', 'runs.json');
+const USAGE_ATTRIBUTION = path.join(GRAPH_DIR, 'usage-attribution.jsonl');
 
 function pad(n) {
   const raw = String(n ?? '').trim();
@@ -180,6 +182,133 @@ function deliveryStateProjection(state, plans) {
       };
     })
     .sort((a, b) => a.ticket.localeCompare(b.ticket)));
+}
+
+function scalar(value) {
+  return value === undefined || value === null ? null : value;
+}
+
+function receiptProjection(record, observations) {
+  const run = record && record.run && typeof record.run === 'object' ? record.run : {};
+  const direct = [record && record.receipt, record && record.application_receipt, run.receipt, run.application_receipt]
+    .filter((value) => value && typeof value === 'object');
+  const rows = observations.filter((row) => row && row.dispatch_id);
+  const dispatchIds = [...new Set([
+    ...direct.map((receipt) => receipt.dispatch_id).filter(Boolean),
+    ...rows.map((row) => row.dispatch_id),
+  ])].sort();
+  const verified = direct.some((receipt) => receipt.compliance === 'verified')
+    || rows.some((row) => row.receipt_status === 'verified');
+  return {
+    status: verified ? 'verified' : direct.length || rows.length ? 'unverified' : 'missing',
+    dispatch_ids: dispatchIds,
+  };
+}
+
+function stableObservation(row) {
+  const receipt = row && (row.receipt || row.application_receipt);
+  const receiptStatus = receipt && receipt.compliance === 'verified' ? 'verified' : receipt ? 'unverified' : 'missing';
+  const completion = row && row.completion_status ? row.completion_status : null;
+  const usageStatus = row && row.usage_status
+    ? row.usage_status
+    : completion && completion !== 'unknown' ? 'complete' : 'incomplete';
+  return {
+    observation_id: scalar(row && row.observation_id),
+    revision: scalar(row && row.revision),
+    run_id: scalar(row && row.run_id),
+    dispatch_id: scalar(row && row.dispatch_id),
+    runtime: scalar(row && row.runtime),
+    provider: scalar(row && row.provider),
+    receipt_status: receiptStatus,
+    completion_status: completion,
+    usage_status: usageStatus,
+    observed_model: scalar(row && row.observed_model),
+    observed_effort: scalar(row && row.observed_effort),
+  };
+}
+
+function controllerStateProjection(store, usageRows = []) {
+  const rows = objectOrNull(store) && objectOrNull(store.runs) ? Object.values(store.runs) : [];
+  const observations = usageRows.map(stableObservation).filter((row) => row.run_id || row.dispatch_id);
+  const byRun = new Map();
+  for (const row of observations) {
+    if (!row.run_id) continue;
+    if (!byRun.has(row.run_id)) byRun.set(row.run_id, []);
+    byRun.get(row.run_id).push(row);
+  }
+  const runs = rows.map((record) => {
+    const run = record && record.run && typeof record.run === 'object' ? record.run : record || {};
+    const runId = scalar(run.run_id || record.run_id);
+    const runObservations = byRun.get(runId) || [];
+    const retry = record && record.retry && typeof record.retry === 'object' ? record.retry : {};
+    const checkpoint = record && record.checkpoint && typeof record.checkpoint === 'object' ? record.checkpoint : null;
+    const successor = record && record.successor && typeof record.successor === 'object' ? record.successor : null;
+    const runtime = run.runtime && typeof run.runtime === 'object' ? run.runtime : {};
+    const dispatch = run.dispatch && typeof run.dispatch === 'object' ? run.dispatch : {};
+    const repository = run.repository && typeof run.repository === 'object' ? run.repository : {};
+    const phase = run.phase && typeof run.phase === 'object' ? run.phase : {};
+    const ticket = run.ticket && typeof run.ticket === 'object' ? run.ticket : {};
+    const revision = run.state_revision && typeof run.state_revision === 'object'
+      ? run.state_revision.value : scalar(run.state_revision);
+    return {
+      run_id: runId,
+      repository_id: scalar(repository.repository_id || repository.id),
+      phase: scalar(phase.phase || phase.number || run.phase),
+      ticket: scalar(ticket.ticket || ticket.id || run.ticket),
+      state: scalar(run.state),
+      wait_kind: scalar(run.wait_kind),
+      state_revision: revision,
+      runtime: scalar(runtime.runtime || run.runtime),
+      provider: scalar(runtime.provider),
+      dispatch_id: scalar(dispatch.dispatch_id || dispatch.id),
+      model: scalar(dispatch.model),
+      effort: scalar(dispatch.effort),
+      retry: {
+        attempts: scalar(retry.attempts),
+        max_attempts: scalar(retry.max_attempts),
+        state: scalar(retry.state),
+        condition: scalar(retry.condition),
+        exhausted: retry.exhausted === true,
+      },
+      checkpoint: checkpoint ? {
+        checkpoint_id: scalar(checkpoint.checkpoint_id),
+        state_revision: scalar(checkpoint.state_revision),
+        acknowledged: checkpoint.acknowledged === true,
+        successor_id: scalar(checkpoint.successor_id),
+        resumed: Boolean(checkpoint.resumed_at),
+      } : null,
+      successor: successor ? {
+        successor_id: scalar(successor.successor_id),
+        status: scalar(successor.status),
+      } : null,
+      receipt: receiptProjection(record || {}, runObservations),
+      usage: runObservations.map((row) => ({
+        dispatch_id: row.dispatch_id,
+        receipt_status: row.receipt_status,
+        completion_status: row.completion_status,
+        usage_status: row.usage_status,
+        observed_model: row.observed_model,
+        observed_effort: row.observed_effort,
+      })).sort((a, b) => `${a.dispatch_id}`.localeCompare(`${b.dispatch_id}`)),
+    };
+  }).sort((a, b) => `${a.run_id}`.localeCompare(`${b.run_id}`));
+  const knownRunIds = new Set(runs.map((run) => run.run_id));
+  const unbound = observations.filter((row) => !knownRunIds.has(row.run_id)).sort((a, b) => `${a.dispatch_id}`.localeCompare(`${b.dispatch_id}`));
+  return { version: 1, runs, observations: unbound };
+}
+
+function objectOrNull(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function readUsageRows(file) {
+  const raw = readText(file);
+  if (raw == null) return [];
+  return raw.split(/\r?\n/).filter(Boolean).map((line, index) => {
+    try { return JSON.parse(line); } catch (error) {
+      throw new Error(`invalid JSON in ${posixRelative(file)} at line ${index + 1}: ${error.message}`);
+    }
+  });
 }
 
 function sourceFingerprint(entries) {
@@ -589,7 +718,7 @@ function projectionBlockers(phases, planRecords, evidenceByPhase) {
   return derived;
 }
 
-function renderState({ phases, planRecords, evidenceByPhase, fingerprint, coreValue, blockers, lastActivity }) {
+function renderState({ phases, planRecords, evidenceByPhase, fingerprint, coreValue, blockers, lastActivity, controller }) {
   const completedPlans = planRecords.filter((plan) => plan.delivery_status === 'merged').length;
   const completedPhases = [...evidenceByPhase.values()].filter((e) => e.status === 'passed').length;
   const totalPlans = planRecords.length;
@@ -608,6 +737,22 @@ function renderState({ phases, planRecords, evidenceByPhase, fingerprint, coreVa
     ...projectionBlockers(phases, planRecords, evidenceByPhase),
   ])];
   const blockerLines = allBlockers.length ? allBlockers.slice(0, 8).map((item) => `- ${item}`) : ['- None.'];
+  const controllerRows = controller.runs.length
+    ? controller.runs.map((run) => `| ${run.run_id} | ${run.ticket || '—'} | ${run.runtime || '—'} | ${run.state || '—'} | ${run.wait_kind || '—'} | ${run.receipt.status} | ${run.usage.length ? run.usage.map((row) => row.usage_status).join(', ') : '—'} |`)
+    : ['| — | — | — | no active controller runs observed | — | — | — |'];
+  const controllerBlock = controller.runs.length || controller.observations.length
+    ? [
+      '## Controller Runtime',
+      '',
+      `Controller runs: ${controller.runs.length}`,
+      '',
+      '| Run | Ticket | Runtime | State | Technical wait | Receipt | Usage |',
+      '|---|---|---|---|---|---|---|',
+      ...controllerRows,
+      ...(controller.observations.length ? ['', `Unbound observations: ${controller.observations.length}`] : []),
+      '',
+    ]
+    : [];
   return [
     '---',
     `# ${marker(fingerprint).slice(5, -4)}`,
@@ -639,6 +784,7 @@ function renderState({ phases, planRecords, evidenceByPhase, fingerprint, coreVa
     '',
     `Progress: [${bar}] ${percent}%`,
     '',
+    ...controllerBlock,
     '## Performance Metrics',
     '',
     `- Total plans completed: ${completedPlans}`,
@@ -903,6 +1049,9 @@ function buildSnapshot({ phase: focusPhase = null, adoptNative = false } = {}) {
   const graph = readJson(TICKETS, { fallback: null });
   const state = readJson(DELIVERY_STATE, { fallback: null });
   const front = readJson(DELIVERY_FRONT, { fallback: null });
+  const runStore = readJson(RUN_STORE, { fallback: null });
+  const usageRows = readUsageRows(USAGE_ATTRIBUTION);
+  const controller = controllerStateProjection(runStore, usageRows);
   const roadmapInfo = parseRoadmap(roadmapText || '');
   const existingDirs = listPhaseDirs();
   const phaseList = phaseNameMap(roadmapInfo, existingDirs);
@@ -948,6 +1097,9 @@ function buildSnapshot({ phase: focusPhase = null, adoptNative = false } = {}) {
     posixRelative(DELIVERY_STATE),
     deliveryStateProjection(state, planRecords),
   ]);
+  if (controller.runs.length || controller.observations.length) {
+    sourceEntries.push([posixRelative(RUN_STORE), JSON.stringify(controller)]);
+  }
   // The first publication appends the marked block after the human prose; the
   // block remover must not make the source fingerprint depend on whether that
   // block has already existed (one extra trailing blank line was enough to make
@@ -958,7 +1110,7 @@ function buildSnapshot({ phase: focusPhase = null, adoptNative = false } = {}) {
   const coreValue = parseProjectCore(projectText);
   const lastActivity = latestActivity(planRecords);
   const expected = new Map();
-  expected.set(path.join(ROOT, '.planning', 'STATE.md'), renderState({ phases: phaseList, planRecords, evidenceByPhase, fingerprint, coreValue, blockers, lastActivity }));
+  expected.set(path.join(ROOT, '.planning', 'STATE.md'), renderState({ phases: phaseList, planRecords, evidenceByPhase, fingerprint, coreValue, blockers, lastActivity, controller }));
   expected.set(path.join(ROOT, '.planning', 'REQUIREMENTS.md'), projectRequirements(roadmapInfo, phaseList, evidenceByPhase, fingerprint, coreValue));
   expected.set(ROADMAP, replaceRoadmapBlock(roadmapText || '', renderRoadmapBlock({ phases: phaseList, evidenceByPhase, planRecords, fingerprint })));
   for (const plan of planRecords.filter((record) => focusPhase == null || record.phase === Number(focusPhase))) {
@@ -996,6 +1148,7 @@ function buildSnapshot({ phase: focusPhase = null, adoptNative = false } = {}) {
       reason: evidenceByPhase.get(phase.number).reason,
     })),
     counts,
+    controller,
   };
 }
 
@@ -1113,6 +1266,7 @@ module.exports = {
   verificationEvidence,
   canonicalTicket,
   deliveryStateProjection,
+  controllerStateProjection,
   sourceFingerprint,
   buildSnapshot,
   checkSnapshot,

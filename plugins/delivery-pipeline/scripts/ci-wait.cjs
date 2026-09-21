@@ -90,6 +90,7 @@ const { fingerprint } = require(path.join(__dirname, 'escalation-record.cjs'));
 const { classify, CHECK_FIELDS } = require(path.join(__dirname, 'check-state.cjs'));
 const { loadConfig } = require(path.join(__dirname, 'pipeline-config.cjs'));
 const waitEvents = require(path.join(__dirname, 'wait-events.cjs'));
+const runWaker = require(path.join(__dirname, 'run-waker.cjs'));
 
 const argv = process.argv.slice(2);
 const JSON_OUT = argv.includes('--json');
@@ -143,8 +144,8 @@ function resolveGraphDir() {
   return path.join(process.cwd(), '.planning', 'graph');
 }
 
-const GRAPH = resolveGraphDir();
-const RUN_ID = (() => {
+let GRAPH = resolveGraphDir();
+const RUN_ID_FLAG = (() => {
   const at = argv.indexOf('--run-id');
   if (at !== -1) {
     const value = argv[at + 1];
@@ -154,8 +155,22 @@ const RUN_ID = (() => {
     }
     return value;
   }
-  return process.env.SHIPYARD_RUN_ID || `ci-wait:${GRAPH}`;
+  return null;
 })();
+const RUN_ID = RUN_ID_FLAG || process.env.SHIPYARD_RUN_ID || `ci-wait:${GRAPH}`;
+let STORE_DIR = (() => {
+  const at = argv.indexOf('--controller-store');
+  if (at !== -1) {
+    const value = argv[at + 1];
+    if (!value || value.startsWith('--')) {
+      process.stderr.write(`ci-wait: --controller-store needs a directory value (got ${value || 'nothing'})\n`);
+      process.exit(2);
+    }
+    return path.resolve(value);
+  }
+  return process.env.SHIPYARD_RUN_STORE_DIR || null;
+})();
+const SCOPED_RUN = Boolean(STORE_DIR || String(process.env.SHIPYARD_RUN_CONTROL || '').toLowerCase() === 'scoped');
 
 function readJson(file) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; }
@@ -174,6 +189,20 @@ function finish(payload, human) {
   if (JSON_OUT) process.stdout.write(JSON.stringify({ waited: true, ...payload }, null, 2) + '\n');
   else process.stdout.write(human + '\n');
   process.exit(0);
+}
+
+if (SCOPED_RUN) {
+  if (!RUN_ID_FLAG && !process.env.SHIPYARD_RUN_ID) {
+    refuse('run_id is required for scoped waiting', 'Pass --run-id <run> or SHIPYARD_RUN_ID from the owning controller.');
+  }
+  try {
+    const scope = runWaker.readRun({ run_id: RUN_ID, store_dir: STORE_DIR || undefined, graph_dir: GRAPH });
+    GRAPH = scope.graph_dir;
+    STORE_DIR = scope.store_dir;
+  } catch (cause) {
+    refuse(`run scope is unavailable (${cause.code || 'scope_error'}: ${cause.message})`,
+      'Use the controller-owned graph and run store; do not wait on another run\'s front.');
+  }
 }
 
 // A park is the one outcome the caller must not miss, so it is said in both forms.
@@ -664,6 +693,21 @@ function observeWait(w, checks) {
   return result;
 }
 
+function recordWake(w, kind, reason) {
+  if (!SCOPED_RUN || !STORE_DIR) return null;
+  try {
+    return runWaker.recordWakeEvent({
+      store_dir: STORE_DIR,
+      run_id: RUN_ID,
+      kind,
+      event_id: `ci-wait:${RUN_ID}:${WAIT_WINDOW_ID}:${w.id}:${kind}`,
+      reason,
+    });
+  } catch (cause) {
+    return { recorded: false, error: cause.message };
+  }
+}
+
 function frontInterruptsWait() {
   const current = readJson(path.join(GRAPH, 'delivery-front.json'));
   if (!current) return { interrupted: true, reason: 'delivery-front.json is unreadable; re-sync before waiting' };
@@ -724,9 +768,11 @@ for (;;) {
       // ticket keeps its count: one pipeline finishing is no evidence about any
       // other, and wiping the board here is the defect this call was fixed for.
       const parked = recordOutcome(w.id, watch, goodEver);
+      const wakeRecord = recordWake(w, 'ci', 'checks settled');
       finish(
         { settled: w.id, pr: w.pr, checks: c, rounds, waited_s: Math.round((Date.now() - startedAt) / 1000),
           watched: seen, escalated: parked, wait_event: lastWaitEvent,
+          wake_record: wakeRecord,
           window_s: Math.round(TIMEOUT_S), window_source: windowSource,
           ...CONFIG_FIELDS },
         `ci-wait: ${w.id} (PR #${w.pr}) settled after ${Math.round((Date.now() - startedAt) / 1000)}s — ` +
@@ -738,10 +784,11 @@ for (;;) {
     // waiting for a later CI settlement would suppress the model-work request
     // until the next unrelated event.
     if (eventAction) {
+      const wakeRecord = recordWake(w, 'review', 'semantic observation transition');
       finish(
         { settled: null, transitioned: true, reason: 'semantic observation transition', rounds,
           waited_s: Math.round((Date.now() - startedAt) / 1000), watched: seen, escalated: [],
-          wait_event: eventAction, window_s: Math.round(TIMEOUT_S), window_source: windowSource,
+          wait_event: eventAction, wake_record: wakeRecord, window_s: Math.round(TIMEOUT_S), window_source: windowSource,
           ...CONFIG_FIELDS },
         `ci-wait: semantic observation transition for ${w.id} (PR #${w.pr}) — ` +
         'the delivery consumer may serve the durable event. Re-sync and take the round.');
