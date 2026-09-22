@@ -96,6 +96,12 @@ function ghJson(args, fallback) {
   try { return JSON.parse(out); } catch { return fallback; }
 }
 
+function ghJsonResult(args) {
+  const out = gh(args, { tolerate: true });
+  if (typeof out !== 'string') return { ok: false, value: null };
+  try { return { ok: true, value: JSON.parse(out) }; } catch { return { ok: false, value: null }; }
+}
+
 const CODERABBIT = 'coderabbitai';
 const COPILOT_BOT = 'copilot-pull-request-reviewer[bot]';
 const REVIEW_MARKER = '@coderabbitai full review';
@@ -138,6 +144,38 @@ const verdictRow = (r) => ({
   submitted_at: r.submitted_at,
   url: r.html_url,
 });
+
+function normalizedReviews(rows) {
+  return (Array.isArray(rows) ? rows : [])
+    .filter((r) => r && r.state && r.state !== 'PENDING')
+    .map((r) => ({ ...r, author: (r.author || (r.user && r.user.login) || 'unknown') }));
+}
+
+function reviewFreshness(view, reviews, readable = true) {
+  if (!view || view.reviewDecision !== 'APPROVED') {
+    return { review_fresh: true, review_freshness_required: false, review_freshness_reason: null };
+  }
+  const headSha = view.headRefOid || null;
+  const headDates = (Array.isArray(view.commits) ? view.commits : [])
+    .map((commit) => at(commit.committedDate || commit.authoredDate))
+    .filter((value) => value > 0);
+  const headAt = headDates.length ? Math.max(...headDates) : 0;
+  const current = currentVerdicts(normalizedReviews(reviews));
+  const approvals = current.filter((row) => row.state === 'APPROVED');
+  const fresh = readable && Boolean(headSha) && approvals.some((row) => row.commit_id === headSha);
+  return {
+    review_fresh: fresh,
+    review_freshness_required: true,
+    review_freshness_reason: fresh ? null : 'the APPROVED review is not bound to the current head commit',
+    head_sha: headSha,
+    head_committed_at: headAt ? new Date(headAt).toISOString() : null,
+    approved_reviews: approvals.map((row) => ({
+      author: row.author,
+      commit_id: row.commit_id || null,
+      submitted_at: row.submitted_at || null,
+    })),
+  };
+}
 
 function prActivity() {
   const comments = ghJson(['api', `repos/${OWNER_REPO}/issues/${pr}/comments`, '--paginate'], []);
@@ -368,7 +406,9 @@ if (cmd === 'unresolved') {
   // and `mergeStateStatus` costs nothing extra on a single-PR view. A second
   // query per PR per tick would be paid on every tick of the conveyor.
   const view = ghJson(['pr', 'view', String(pr), ...REPO_ARG, '--json',
-    'reviewDecision,mergeStateStatus,baseRefName,headRefName'], null);
+    'reviewDecision,mergeStateStatus,baseRefName,headRefName,headRefOid,commits'], null);
+  const reviewResult = ghJsonResult(['api', `repos/${OWNER_REPO}/pulls/${pr}/reviews`, '--paginate']);
+  const freshness = reviewFreshness(view, reviewResult.value, reviewResult.ok);
   console.log(JSON.stringify({
     ...threadReport,
     // GitHub's own verdict on whether this branch can land as it stands: CLEAN,
@@ -382,6 +422,7 @@ if (cmd === 'unresolved') {
     // null is honest for "the query failed" AND for "nobody has reviewed yet";
     // neither is a clean bill of health, and `clean` below says which is which.
     review_decision: (view && view.reviewDecision) || null,
+    ...freshness,
     // The one-line answer to "may this PR be treated as settled". Threads alone
     // never were — and neither is a query that did not come back: `view === null`
     // means we do not KNOW the decision, which is not the same as knowing it is

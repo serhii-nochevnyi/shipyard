@@ -6,7 +6,7 @@ GSD_CORE_VERSION ?= latest
         install-shipyard-capability ensure-gsd-core-claude ensure-gsd-core-codex \
         gsd-tune gsd-tune-apply doctor \
         test test-fast test-unit test-graph test-worktree test-worktree-gates \
-        test-sentinel test-docs test-hooks test-codex-shipyard test-releases
+        test-sentinel test-docs test-hooks test-comment-policy test-codex-shipyard test-releases
 
 # Install or refresh the conveyor on a host OpenAI Codex CLI setup.
 # Set SHIPYARD_CODEX_PHASE=1 for investigate/decompose only.
@@ -44,7 +44,7 @@ doctor:
 	node scripts/shipyard-doctor.cjs
 
 # Fast, deterministic checks for every local edit and every pull request.
-test-fast: test-unit test-graph test-worktree test-worktree-gates test-gsd-sync test-sentinel test-docs test-hooks test-model-ladder-runtime
+test-fast: test-unit test-graph test-worktree test-worktree-gates test-gsd-sync test-sentinel test-docs test-hooks test-comment-policy test-model-ladder-runtime
 
 # The complete host-side suite. The Codex smoke additionally exercises the
 # network-backed gsd-core conversion and therefore stays out of test-fast.
@@ -76,6 +76,9 @@ test-docs:
 
 test-hooks:
 	./tests/smoke/claude-hook-smoke.sh
+
+test-comment-policy:
+	node plugins/delivery-pipeline/scripts/publish-gate.cjs --base "$(or $(COMMENT_POLICY_BASE),origin/main)" --working-tree --json
 
 test-codex-shipyard:
 	./tests/smoke/codex-shipyard-smoke.sh

@@ -98,7 +98,7 @@ function stubGh(dir, prs, unreachableRepo = null) {
 }
 
 // tickets → journal lines → PR rows, in one temp project.
-function project({ tickets, journal, prs, config, configRaw, unreachableRepo, attributions }) {
+function project({ tickets, journal, prs, config, configRaw, unreachableRepo, attributions, sessionObservations }) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-stats-'));
   const g = path.join(dir, '.planning', 'graph');
   fs.mkdirSync(g, { recursive: true });
@@ -108,6 +108,12 @@ function project({ tickets, journal, prs, config, configRaw, unreachableRepo, at
     fs.writeFileSync(
       path.join(g, 'usage-attribution.jsonl'),
       attributions.map((record) => `${JSON.stringify(record)}\n`).join(''),
+    );
+  }
+  if (Array.isArray(sessionObservations)) {
+    fs.writeFileSync(
+      path.join(g, 'session-observations.jsonl'),
+      sessionObservations.map((record) => `${JSON.stringify(record)}\n`).join(''),
     );
   }
   if (config !== undefined || configRaw !== undefined) {
@@ -334,6 +340,32 @@ test('an unavailable open-only review decision stays unknown rather than becomin
 });
 
 suite('pipeline-stats — ladder coverage is windowed and explicit');
+
+test('manual session observations expose unbound model and token usage', () => {
+  const { code, json } = asJson({
+    tickets: {}, journal: [], prs: [],
+    sessionObservations: [{
+      schema_version: 'shipyard.session-observation.v1',
+      observation_id: 'manual-1',
+      revision: 1,
+      observed_at: recently,
+      binding_status: 'unbound',
+      runtime: 'claude',
+      provider: 'anthropic',
+      session_id: 'session-1',
+      observed_model: 'claude-opus-5',
+      observed_effort: 'high',
+      input_tokens: 100,
+      output_tokens: 20,
+    }],
+  });
+  assert.strictEqual(code, 0);
+  assert.strictEqual(json.session_observations.observations, 1);
+  assert.strictEqual(json.session_observations.unbound_observations, 1);
+  assert.deepStrictEqual(json.session_observations.by_model, { 'claude-opus-5': 1 });
+  assert.strictEqual(json.session_observations.usage_by_model[0].totals.input_tokens, 100);
+  assert.strictEqual(json.optimization_input.usage.session_observations.observations, 1);
+});
 
 test('dispatch routing fields are grouped without turning missing observations into zeroes', () => {
   const recentComplete = {

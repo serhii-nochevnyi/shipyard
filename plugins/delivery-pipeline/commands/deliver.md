@@ -516,6 +516,7 @@ bash ${CLAUDE_PLUGIN_ROOT}/scripts/ticket-worktree.sh <create|remove|path|root|l
 bash ${CLAUDE_PLUGIN_ROOT}/scripts/epic-branch.sh <ensure|refresh|pr|status|retarget> ...
 node ${CLAUDE_PLUGIN_ROOT}/scripts/scope-gate.cjs <T> --worktree <p> --base <ref> [--json]
 node ${CLAUDE_PLUGIN_ROOT}/scripts/comment-policy.cjs <check|clean> <T> --worktree <p> --base <ref> [--json] [--apply]
+node ${CLAUDE_PLUGIN_ROOT}/scripts/publish-gate.cjs --worktree <p> --base <ref> [--json]
 node ${CLAUDE_PLUGIN_ROOT}/scripts/base-merge.cjs <T> --worktree <p> --base <ref> [--json]
 node ${CLAUDE_PLUGIN_ROOT}/scripts/log-event.cjs <event> [key=value ...] [--graph <dir>]
 node ${CLAUDE_PLUGIN_ROOT}/scripts/drift-record.cjs <mark|clear|list> …
@@ -1975,6 +1976,10 @@ may be dispatched at all: fix the file.
    the did-work, scope and comment gates. Because the worktree and HEAD changed,
    repeat the trusted artifact validation and read steps below. A remaining
    manual finding is a refusal: do not push or open the PR.
+
+   The same policy is enforced by `publish-gate.cjs` in CI and by the installed
+   host `PreToolUse` hook for every `git push`, so a path that skips this command
+   still stops before publication.
 
 5d. **Validate executor evidence (MANDATORY, TRUSTED CONSUMER).** After the
    did-work, scope and comment gates pass, seal a direct Codex result as

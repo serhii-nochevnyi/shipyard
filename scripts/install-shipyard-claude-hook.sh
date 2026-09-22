@@ -29,11 +29,15 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SETTINGS="$CLAUDE_HOME/settings.json"
 
 ROUTE_HOOK="$CLAUDE_HOME/hooks/shipyard-auto-route.sh"
+PRE_PUSH_HOOK="$CLAUDE_HOME/hooks/shipyard-pre-push-gate.sh"
 STOP_DIR="$CLAUDE_HOME/hooks/shipyard-stop-gate"
 STOP_HOOK="$STOP_DIR/stop-gate.cjs"
+SESSION_HOOK="$STOP_DIR/session-observer.cjs"
 OLD_STOP_HOOK="$CLAUDE_HOME/hooks/shipyard-stop-gate.cjs"
 ROUTE_CMD="bash \"$ROUTE_HOOK\""
+PRE_PUSH_CMD="bash \"$PRE_PUSH_HOOK\""
 STOP_CMD="node \"$STOP_HOOK\""
+SESSION_CMD="node \"$SESSION_HOOK\" hook"
 OLD_STOP_CMD="node \"$OLD_STOP_HOOK\""
 
 REMOVE=0
@@ -78,10 +82,12 @@ NODE
 
 if [[ "$REMOVE" == 1 ]]; then
   drop_hook UserPromptSubmit "$ROUTE_CMD"
+  drop_hook PreToolUse "$PRE_PUSH_CMD"
   drop_hook Stop "$STOP_CMD"
+  drop_hook Stop "$SESSION_CMD"
   drop_hook Stop "$OLD_STOP_CMD"
   drop_hook Stop "node \"$STOP_DIR/stop-gate.cjs\""
-  rm -f "$ROUTE_HOOK" "$STOP_HOOK"
+  rm -f "$ROUTE_HOOK" "$PRE_PUSH_HOOK" "$STOP_HOOK"
   rm -rf "$STOP_DIR" "$OLD_STOP_HOOK"
   echo "✓ removed shipyard auto-route and stop-gate hooks from Claude"
   exit 0
@@ -114,6 +120,11 @@ shipyard rather than ad hoc — do not wait to be told to run a command:
   an existing ticket, or "no ticket" → /shipyard:bench; a one-liner → inline.
 - Research first (proportionate) and apply GSD at full across stages
   (research → plan → implement → verify → review), driving GSD/shipyard yourself.
+- Keep the native model ladder: bounded routine work uses Sonnet, critical or
+  repeated recovery uses Opus, and Fable is reserved for measured long-context
+  routes. The selected model and effort must remain visible in the dispatch.
+- Do not replace deterministic gates with a model response, and do not mix
+  Anthropic work with Codex models.
 - The user should not have to invoke GSD or shipyard manually.
 Skip this entirely for pure questions, discussion, or non-code chatter.
 POLICY
@@ -186,6 +197,18 @@ cleanup_stop_tmp() {
 trap cleanup_stop_tmp EXIT
 STOP_TMP="$(mktemp -d "$CLAUDE_HOME/hooks/.shipyard-stop-gate.XXXXXX")"
 COPIED="$(copy_stop_bundle "$STOP_SRC" "$STOP_TMP")"
+PUBLISH_SRC="$(dirname "$STOP_SRC")/publish-gate.cjs"
+if [[ ! -f "$PUBLISH_SRC" ]]; then
+  PUBLISH_SRC="$ROOT/plugins/delivery-pipeline/scripts/publish-gate.cjs"
+fi
+[[ -f "$PUBLISH_SRC" ]] || { echo "error: publish-gate.cjs not found under $ROOT/plugins/delivery-pipeline" >&2; exit 1; }
+COPIED_PUBLISH="$(copy_stop_bundle "$PUBLISH_SRC" "$STOP_TMP")"
+SESSION_SRC="$(dirname "$STOP_SRC")/session-observer.cjs"
+if [[ ! -f "$SESSION_SRC" ]]; then
+  SESSION_SRC="$ROOT/plugins/delivery-pipeline/scripts/session-observer.cjs"
+fi
+[[ -f "$SESSION_SRC" ]] || { echo "error: session-observer.cjs not found under $ROOT/plugins/delivery-pipeline" >&2; exit 1; }
+COPIED_SESSION="$(copy_stop_bundle "$SESSION_SRC" "$STOP_TMP")"
 STOP_META="$(cd "$(dirname "$STOP_SRC")/.." && pwd)/.claude-plugin/plugin.json"
 if [[ -f "$STOP_META" ]]; then
   STOP_VERSION_JSON="$(META="$STOP_META" node - <<'NODE'
@@ -210,11 +233,19 @@ STOP_TMP=""
 chmod +x "$STOP_HOOK"
 rm -f "$OLD_STOP_HOOK"
 echo "→ wrote $STOP_HOOK ($COPIED files)"
+PRE_PUSH_SRC="$ROOT/scripts/shipyard-pre-push-gate.sh"
+[[ -f "$PRE_PUSH_SRC" ]] || { echo "error: shipyard-pre-push-gate.sh not found under $ROOT/scripts" >&2; exit 1; }
+cp "$PRE_PUSH_SRC" "$PRE_PUSH_HOOK"
+chmod +x "$PRE_PUSH_HOOK"
+echo "→ wrote $PRE_PUSH_HOOK ($COPIED_PUBLISH publish-gate modules)"
+echo "→ bundled session observer ($COPIED_SESSION modules)"
 
 add_hook UserPromptSubmit "$ROUTE_CMD"
 drop_hook Stop "$OLD_STOP_CMD"
 drop_hook Stop "node \"$CLAUDE_HOME/hooks/shipyard-stop-gate/stop-gate.cjs\""
 add_hook Stop "$STOP_CMD"
+add_hook Stop "$SESSION_CMD"
+add_hook PreToolUse "$PRE_PUSH_CMD"
 
 # ── GSD's global defaults for this runtime ───────────────────────────────────
 # ~/.gsd/defaults.json is what a directory with no `.planning/` inherits — a new

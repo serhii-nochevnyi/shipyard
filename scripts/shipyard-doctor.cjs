@@ -124,6 +124,9 @@ function main(argv) {
   const settingsFile = path.join(claudeHome, 'settings.json');
   const bundle = path.join(claudeHome, 'hooks', 'shipyard-stop-gate');
   const stopHook = path.join(bundle, 'stop-gate.cjs');
+  const publishHook = path.join(bundle, 'publish-gate.cjs');
+  const sessionHook = path.join(bundle, 'session-observer.cjs');
+  const prePushHook = path.join(claudeHome, 'hooks', 'shipyard-pre-push-gate.sh');
   const oldHook = path.join(claudeHome, 'hooks', 'shipyard-stop-gate.cjs');
   if (!fs.existsSync(settingsFile) && !fs.existsSync(bundle)) {
     check(results, 'claude', 'skip', claudeHome + ' has no Shipyard hook installation');
@@ -132,10 +135,20 @@ function main(argv) {
     const commands = settings && settings.hooks && Array.isArray(settings.hooks.Stop)
       ? settings.hooks.Stop.flatMap((group) => (group.hooks || []).map((hook) => hook.command))
       : [];
+    const prePushCommands = settings && settings.hooks && Array.isArray(settings.hooks.PreToolUse)
+      ? settings.hooks.PreToolUse.flatMap((group) => (group.hooks || []).map((hook) => hook.command))
+      : [];
     const expected = 'node "' + stopHook + '"';
     if (!commands.includes(expected)) check(results, 'claude-settings', 'error', 'Stop does not point to ' + stopHook);
     else if (commands.includes('node "' + oldHook + '"')) check(results, 'claude-settings', 'error', 'legacy single-file stop hook is still registered');
     else check(results, 'claude-settings', 'ok', 'Stop points to the stable Shipyard bundle');
+    const expectedObserver = 'node "' + sessionHook + '" hook';
+    if (!commands.includes(expectedObserver)) check(results, 'claude-session-observer', 'error', 'Stop does not record transcript usage');
+    else check(results, 'claude-session-observer', 'ok', 'Stop records transcript usage');
+    const expectedPrePush = 'bash "' + prePushHook + '"';
+    if (!prePushCommands.includes(expectedPrePush)) {
+      check(results, 'claude-publish-hook', 'error', 'PreToolUse does not point to ' + prePushHook);
+    } else check(results, 'claude-publish-hook', 'ok', 'PreToolUse guards git push');
 
     if (!fs.existsSync(stopHook)) {
       check(results, 'claude-bundle', 'error', 'missing ' + stopHook);
@@ -156,6 +169,24 @@ function main(argv) {
         check(results, 'claude-bundle', 'error', error.message);
       }
     }
+    if (!fs.existsSync(prePushHook)) {
+      check(results, 'claude-publish-hook', 'error', 'missing ' + prePushHook);
+    }
+    if (!fs.existsSync(publishHook)) {
+      check(results, 'claude-publish-bundle', 'error', 'missing ' + publishHook);
+    } else {
+      try {
+        const count = relativeDependencies(publishHook);
+        for (const file of count) {
+          const result = runBounded(process.execPath, ['--check', file], { timeoutMs: 5000 });
+          if (result.status !== 0) throw new Error(path.basename(file) + ' is not valid JavaScript: ' + diagnostic(result));
+        }
+        check(results, 'claude-publish-bundle', 'ok', count.length + ' module(s) resolve and pass syntax checks');
+      } catch (error) {
+        check(results, 'claude-publish-bundle', 'error', error.message);
+      }
+    }
+    if (!fs.existsSync(sessionHook)) check(results, 'claude-session-observer', 'error', 'missing ' + sessionHook);
   }
 
   const codexBundle = path.join(codexHome, 'shipyard');
@@ -176,6 +207,30 @@ function main(argv) {
     } else {
       check(results, 'codex-version', 'ok', 'bundle ' + installedVersion);
       check(results, 'codex-bundle', 'ok', 'bundle manifest and scripts directory are present');
+    }
+    const codexNotify = path.join(codexBundle, 'scripts', 'codex-notify.cjs');
+    const notifyDelegate = path.join(codexHome, 'shipyard-notify-delegate.json');
+    const codexConfig = path.join(codexHome, 'config.toml');
+    if (!fs.existsSync(codexNotify)) {
+      check(results, 'codex-session-observer', 'error', 'missing ' + codexNotify);
+    } else {
+      try {
+        const files = relativeDependencies(codexNotify);
+        for (const file of files) {
+          const result = runBounded(process.execPath, ['--check', file], { timeoutMs: 5000 });
+          if (result.status !== 0) throw new Error(path.basename(file) + ' is not valid JavaScript: ' + diagnostic(result));
+        }
+        check(results, 'codex-session-observer', 'ok', files.length + ' module(s) resolve and pass syntax checks');
+      } catch (error) {
+        check(results, 'codex-session-observer', 'error', error.message);
+      }
+    }
+    if (!fs.existsSync(notifyDelegate)) {
+      check(results, 'codex-notify-delegate', 'error', 'missing ' + notifyDelegate);
+    } else if (!fs.existsSync(codexConfig) || !fs.readFileSync(codexConfig, 'utf8').includes(codexNotify)) {
+      check(results, 'codex-notify-delegate', 'error', 'config.toml notify does not point to ' + codexNotify);
+    } else {
+      check(results, 'codex-notify-delegate', 'ok', 'turn-ended notify records Codex model and effort facts');
     }
   }
 
