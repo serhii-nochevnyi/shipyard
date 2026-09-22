@@ -126,7 +126,8 @@ test('honors the declared opt-out without touching artifacts', () => {
 
 test('selects complete bundles and preserves synchronizer exit codes', () => {
   const source = fs.readFileSync(GATE, 'utf8');
-  assert.match(source, /requiredSiblings = \['frontmatter\.cjs', 'lock\.cjs'\]/);
+  assert.match(source, /requiredSiblings = \['frontmatter\.cjs', 'lock\.cjs', 'command-runner\.cjs'\]/);
+  assert.match(source, /runBounded\(process\.execPath/);
   assert.doesNotMatch(source, /const args = \[script, '--json', '--adopt-native'\]/);
   assert.match(source, /fail\(`\$\{mode\} blocked: \$\{blockers\}`, childExit\)/);
 });

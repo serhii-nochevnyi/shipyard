@@ -7,7 +7,6 @@
 
 const fs = require('fs');
 const path = require('path');
-const { spawnSync } = require('child_process');
 
 const ROOT = process.cwd();
 const mode = (process.argv[2] || 'write').trim();
@@ -84,31 +83,29 @@ if (fs.existsSync(pluginCache)) {
     }
   }
 }
-const requiredSiblings = ['frontmatter.cjs', 'lock.cjs'];
+const requiredSiblings = ['frontmatter.cjs', 'lock.cjs', 'command-runner.cjs'];
 const script = candidates.find((file) => fs.existsSync(file) && requiredSiblings.every((sibling) =>
   fs.existsSync(path.join(path.dirname(file), sibling))
 ));
 if (!script) fail('gsd-sync.cjs is missing beside the installed gate and in the source plugin; reinstall Shipyard');
 
-// Lifecycle gates must preserve the synchronizer's ownership refusal. Native
-// GSD files that are already present without our marker are human-owned until
-// an operator explicitly runs `gsd-sync.cjs --adopt-native`; a gate is not that
-// operator and must never turn a hard error into an overwrite.
+const { diagnostic, runBounded, timeoutFromEnv } = require(path.join(path.dirname(script), 'command-runner.cjs'));
+const timeoutMs = timeoutFromEnv('SHIPYARD_GSD_SYNC_TIMEOUT_MS', 120_000, 10 * 60_000);
 const args = [script, '--json'];
 if (mode === 'check') args.push('--check');
-const result = spawnSync(process.execPath, args, { cwd: ROOT, encoding: 'utf8' });
-if (result.error) fail(`could not run ${script}: ${result.error.message}`);
+const result = runBounded(process.execPath, args, { cwd: ROOT, timeoutMs });
+if (result.error || result.status !== 0 && !result.stdout) fail(`could not run ${script}: ${diagnostic(result)}`);
 const childExit = Number.isInteger(result.status) && result.status >= 0 ? result.status : 1;
 let payload;
 try {
   payload = JSON.parse((result.stdout || '').trim());
 } catch {
-  fail(`gsd-sync returned non-JSON output: ${(result.stdout || result.stderr || '').trim()}`, childExit);
+  fail(`gsd-sync returned non-JSON output: ${diagnostic(result)}`, childExit);
 }
 if (result.status !== 0) {
   const blockers = payload.applicable === false
     ? 'gsd-sync reported that the delivery project is not applicable'
-    : Array.isArray(payload.blockers) ? payload.blockers.join('; ') : (payload.error || result.stderr || 'unknown projection failure');
+    : Array.isArray(payload.blockers) ? payload.blockers.join('; ') : (payload.error || result.stderr || diagnostic(result));
   fail(`${mode} blocked: ${blockers}`, childExit);
 }
 if (payload.ok !== true || payload.applicable !== true) {

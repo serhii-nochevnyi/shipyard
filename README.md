@@ -244,6 +244,16 @@ make test-sentinel
 make test-hooks
 ```
 
+The delivery loop bounds host commands so a stalled GitHub, reviewer, GSD, or
+projection call cannot hold a session forever. GitHub reads default to 60
+seconds, GSD projection and reviewer subprocesses to 120 seconds, and a
+timeout remains unavailable evidence rather than green. Operators can tune the
+limits with `SHIPYARD_GH_TIMEOUT_MS`, `SHIPYARD_GSD_SYNC_TIMEOUT_MS`,
+`SHIPYARD_REVIEWER_TIMEOUT_MS`, `SHIPYARD_GRAPH_GATE_TIMEOUT_MS`, and
+`SHIPYARD_UAT_GATE_TIMEOUT_MS`; `SHIPYARD_INTERNAL_COMMAND_TIMEOUT_MS` also
+limits synchronous helper calls from `ci-wait.cjs`. Each value is capped by
+the runtime.
+
 The full suite keeps network-backed Codex generation outside `test-fast`. The
 documentation smoke test checks the supported host commands, plugin command
 surface, runtime separation, generated model palette, and removal of retired

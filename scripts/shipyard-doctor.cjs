@@ -4,9 +4,9 @@
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { spawnSync } = require('node:child_process');
 
 const ROOT = path.resolve(__dirname, '..');
+const { diagnostic, runBounded } = require(path.join(ROOT, 'plugins', 'delivery-pipeline', 'scripts', 'command-runner.cjs'));
 const sourcePlugin = path.join(ROOT, 'plugins', 'delivery-pipeline', '.claude-plugin', 'plugin.json');
 const sourceCapability = path.join(ROOT, 'capabilities', 'delivery-pipeline', 'capability.json');
 
@@ -86,19 +86,18 @@ function relativeDependencies(entry) {
 function validateHookBundle(entry) {
   const files = relativeDependencies(entry);
   for (const file of files) {
-    const result = spawnSync(process.execPath, ['--check', file], { encoding: 'utf8' });
-    if (result.status !== 0) throw new Error(path.basename(file) + ' is not valid JavaScript: ' + String(result.stderr || '').trim());
+    const result = runBounded(process.execPath, ['--check', file], { timeoutMs: 5000 });
+    if (result.status !== 0) throw new Error(path.basename(file) + ' is not valid JavaScript: ' + diagnostic(result));
   }
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-doctor-'));
   try {
-    const result = spawnSync(process.execPath, [entry], {
+    const result = runBounded(process.execPath, [entry], {
       cwd,
       input: '{}\n',
-      encoding: 'utf8',
-      timeout: 5000,
+      timeoutMs: 5000,
     });
-    if (result.error) throw new Error('stop-gate self-check failed: ' + result.error.message);
-    if (result.status !== 0) throw new Error('stop-gate self-check failed: ' + String(result.stderr || '').trim());
+    if (result.error) throw new Error('stop-gate self-check failed: ' + diagnostic(result));
+    if (result.status !== 0) throw new Error('stop-gate self-check failed: ' + diagnostic(result));
   } finally {
     fs.rmSync(cwd, { recursive: true, force: true });
   }

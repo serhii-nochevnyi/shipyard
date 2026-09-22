@@ -41,7 +41,9 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { execFileSync, spawnSync } = require('child_process');
+const {
+  diagnostic, runBounded, timeoutFromEnv,
+} = require(path.join(__dirname, 'command-runner.cjs'));
 const { matchTicketPr } = require(path.join(__dirname, 'ticket-pr-match.cjs'));
 const { loadConfig } = require(path.join(__dirname, 'pipeline-config.cjs'));
 const { computeFront, formatFront, ciEstimates, epicKey, agentsInFlight } = require(path.join(__dirname, 'front.cjs'));
@@ -69,6 +71,8 @@ const { parseGate } = require(path.join(__dirname, 'gate-trailer.cjs'));
 const { readCapacitySnapshot } = require(path.join(__dirname, 'capacity-lease.cjs'));
 
 const ROOT = process.cwd();
+const GH_TIMEOUT_MS = timeoutFromEnv('SHIPYARD_GH_TIMEOUT_MS', 60_000, 5 * 60_000);
+const PROJECTION_TIMEOUT_MS = timeoutFromEnv('SHIPYARD_GSD_SYNC_TIMEOUT_MS', 120_000, 10 * 60_000);
 const GRAPH_DIR = path.join(ROOT, '.planning', 'graph');
 const TICKETS = path.join(GRAPH_DIR, 'tickets.json');
 const STATE = path.join(GRAPH_DIR, 'delivery-state.json');
@@ -220,15 +224,14 @@ function gh(args, { tolerate = false } = {}) {
   const done = () => {
     if (TIME) process.stderr.write(`  ${Number(process.hrtime.bigint() - t0) / 1e9}s  gh ${args.slice(0, 4).join(' ')}\n`);
   };
-  try {
-    const out = execFileSync('gh', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  const result = runBounded('gh', args, { timeoutMs: GH_TIMEOUT_MS });
+  if (!result.error && result.status === 0) {
     done();
-    return out;
-  } catch (e) {
-    done();
-    if (tolerate) return null;
-    fail(`gh ${args.join(' ')} failed: ${e.stderr ? String(e.stderr).trim() : e.message}`);
+    return result.stdout;
   }
+  done();
+  if (tolerate) return null;
+  fail(`gh ${args.slice(0, 4).join(' ')} failed: ${diagnostic(result)}`);
 }
 
 // The tolerant helper above answers `null` and DROPS gh's own message, which is
@@ -236,15 +239,14 @@ function gh(args, { tolerate = false } = {}) {
 // enough for a call whose failure has to reach the board wearing a reason a
 // person can act on — the epic comparison below is the one such call, and
 // "integration state unknown" with no cause named is a dead end. So it goes
-// through spawnSync like `ghChecks` and keeps stdout, the exit status and the
+// through the bounded runner like `ghChecks` and keeps stdout, the exit status and the
 // first line of stderr apart. One call per epic per sync (not per PR), so the
 // conveyor's tick rate is untouched.
 function ghTry(args) {
   const t0 = TIME ? process.hrtime.bigint() : null;
-  const r = spawnSync('gh', args, { encoding: 'utf8' });
+  const r = runBounded('gh', args, { timeoutMs: GH_TIMEOUT_MS });
   if (TIME) process.stderr.write(`  ${Number(process.hrtime.bigint() - t0) / 1e9}s  gh ${args.slice(0, 4).join(' ')}\n`);
-  const why = (r.stderr || '').trim().split('\n').filter(Boolean)[0]
-    || (r.error ? r.error.message : '');
+  const why = (r.error || r.status !== 0) ? diagnostic(r) : '';
   return { status: r.error ? null : r.status, stdout: (r.stdout || '').trim(), stderr: why };
 }
 
@@ -295,7 +297,7 @@ function ghTry(args) {
 function ghChecks(prNumber, repo) {
   const args = ['pr', 'checks', String(prNumber), '--json', CHECK_FIELDS];
   if (repo) args.push('--repo', repo);
-  const r = spawnSync('gh', args, { encoding: 'utf8' });
+  const r = runBounded('gh', args, { timeoutMs: GH_TIMEOUT_MS });
   const stdout = (r.stdout || '').trim();
   let rows = null;
   if (stdout) {
@@ -382,16 +384,16 @@ const notices = [];
 // invokes, and it releases the state lock before gsd-sync takes it.
 function publishGsdProjection() {
   if (cfg.gsd_sync === false) return { skipped: true };
-  const result = spawnSync(process.execPath, [GSD_SYNC, '--json'], {
+  const result = runBounded(process.execPath, [GSD_SYNC, '--json'], {
     cwd: ROOT,
-    encoding: 'utf8',
+    timeoutMs: PROJECTION_TIMEOUT_MS,
   });
-  if (result.error) fail(`could not run gsd-sync.cjs: ${result.error.message}`);
+  if (result.error) fail(`could not run gsd-sync.cjs: ${diagnostic(result)}`);
   let payload;
   try {
     payload = JSON.parse((result.stdout || '').trim());
   } catch {
-    fail(`gsd-sync.cjs returned non-JSON output: ${(result.stdout || result.stderr || '').trim()}`);
+    fail(`gsd-sync.cjs returned non-JSON output: ${diagnostic(result)}`);
   }
   if (result.status !== 0 || payload.ok !== true) {
     const blockers = payload.applicable === false

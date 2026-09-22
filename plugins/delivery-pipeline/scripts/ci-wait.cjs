@@ -82,6 +82,7 @@
 const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
+const { diagnostic, runBounded, timeoutFromEnv } = require(path.join(__dirname, 'command-runner.cjs'));
 const { withLock, lockDirFor, writeAtomic } = require(path.join(__dirname, 'lock.cjs'));
 // The state-moved rule, taken from the store that already owns it. Never
 // reimplemented: two stores that expire against the same subject must not come to
@@ -91,6 +92,9 @@ const { classify, CHECK_FIELDS } = require(path.join(__dirname, 'check-state.cjs
 const { loadConfig } = require(path.join(__dirname, 'pipeline-config.cjs'));
 const waitEvents = require(path.join(__dirname, 'wait-events.cjs'));
 const runWaker = require(path.join(__dirname, 'run-waker.cjs'));
+
+const GH_TIMEOUT_MS = timeoutFromEnv('SHIPYARD_GH_TIMEOUT_MS', 60_000, 5 * 60_000);
+const INTERNAL_COMMAND_TIMEOUT_MS = timeoutFromEnv('SHIPYARD_INTERNAL_COMMAND_TIMEOUT_MS', 30_000, 5 * 60_000);
 
 const argv = process.argv.slice(2);
 const JSON_OUT = argv.includes('--json');
@@ -373,7 +377,7 @@ if (!watch.length) {
 function checksOf({ pr, repo }) {
   const args = ['pr', 'checks', String(pr), '--json', CHECK_FIELDS];
   if (repo) args.push('--repo', repo);
-  const r = spawnSync('gh', args, { encoding: 'utf8', timeout: 60000 });
+  const r = runBounded('gh', args, { timeoutMs: GH_TIMEOUT_MS });
   const stdout = (r.stdout || '').trim();
   let rows;
   if (stdout) {
@@ -526,11 +530,11 @@ function recordOutcomeInner(settledId, watched, goodEver) {
       'self-hosted runner that is down are the usual three), then `escalation-record.cjs clear ' +
       `${e.id}` + '` — or simply answer the PR, since this park lifts by itself once the delivery ' +
       'facts change.';
-    const r = spawnSync(process.execPath,
+    const r = runBounded(process.execPath,
       [path.join(__dirname, 'escalation-record.cjs'), 'mark', e.id, reason, '--graph', GRAPH],
-      { encoding: 'utf8', timeout: 30000 });
+      { timeoutMs: INTERNAL_COMMAND_TIMEOUT_MS });
     parked.push({ id: e.id, pr: e.pr, empty_windows: e.empties, ok: r.status === 0,
-      error: r.status === 0 ? null : ((r.stderr || '').trim() || `exit ${r.status}`) });
+      error: r.status === 0 ? null : diagnostic(r) });
   }
   return parked;
 }
@@ -630,14 +634,13 @@ function refreshPublishedState() {
   const parked = Array.isArray(current.parked_by_run) ? current.parked_by_run : [];
   const args = parked.length ? [STATE_SYNC, '--parked', parked.join(',')] : [STATE_SYNC];
   const remainingMs = Math.max(1, deadline - Date.now());
-  const sync = spawnSync(process.execPath, args, {
+  const sync = runBounded(process.execPath, args, {
     cwd: LOCK_ROOT,
-    encoding: 'utf8',
-    timeout: Math.max(1, Math.min(60000, Math.ceil(remainingMs))),
+    timeoutMs: Math.max(1, Math.min(60000, Math.ceil(remainingMs))),
   });
   if (sync.error || sync.status !== 0) {
     publisherHealthy = false;
-    return { enabled: true, ok: false, reason: `state-sync did not publish (${sync.error ? sync.error.message : `exit ${sync.status}`})` };
+    return { enabled: true, ok: false, reason: `state-sync did not publish (${diagnostic(sync)})` };
   }
   const published = waitEvents.readPublished({ graphDir: GRAPH });
   if (!published || !published.ok) {
