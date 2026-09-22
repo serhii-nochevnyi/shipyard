@@ -24,7 +24,7 @@ function evidence(runtime, overrides = {}) {
     observed: true,
     credentials: 'available',
     agent_status: 'fresh',
-    model: { applied: runtime === 'claude' ? 'sonnet' : 'gpt-5.6-luna', inherited: false },
+    model: { applied: runtime === 'claude' ? 'sonnet' : 'gpt-6-luna', inherited: false },
     scope: {
       repository_id: 'shipyard/test',
       phase: 37,

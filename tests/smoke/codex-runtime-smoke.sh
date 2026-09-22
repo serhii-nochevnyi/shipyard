@@ -47,7 +47,7 @@ try {
     probe: {
       status: 'available',
       runtime_version: 'fixture',
-      capabilities: { supportedModels: ['gpt-5.6-luna'], supportedEfforts: ['max'] },
+      capabilities: { supportedModels: ['gpt-6-luna'], supportedEfforts: ['max'] },
     },
     recorder: () => true,
   });

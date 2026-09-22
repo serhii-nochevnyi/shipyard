@@ -74,7 +74,7 @@ parsing, graph validation, ticket and PR matching, state synchronization,
 worktree lifecycle, dispatch records, model resolution, convergence and stop
 conditions. When adding a rule, add a focused unit or fixture test with it.
 
-**Active routed dispatch policy (ADR-014, accepted):** ADR-014 supersedes ADR-005 and ADR-012 for model and effort selection. The one boundary contract has two independent native grids: Codex uses Luna/Sol (`gpt-5.6-luna`/`gpt-5.6-sol`); Claude uses Sonnet/Opus/Fable (`sonnet`/`opus`/`fable`). Do not alias either grid through the other, and do not use a compatibility palette, generic GSD tier default, or per-role override as launch authority.
+**Active routed dispatch policy (ADR-014, accepted):** ADR-014 supersedes ADR-005 and ADR-012 for model and effort selection. The one boundary contract has two independent native grids: Codex uses Luna/Sol (`gpt-6-luna`/`gpt-6-sol`); Claude uses Sonnet/Opus/Fable (`sonnet`/`claude-opus-5-5`/`fable`). Do not alias either grid through the other, and do not use a compatibility palette, generic GSD tier default, or per-role override as launch authority.
 
 **Codex grid:** research Sol/high → Sol/xhigh only for explicit very-complex; decomposition Sol/high → Sol/xhigh only for explicit critical/checkpoint; executor Luna/max → Sol/high only for explicit `critical`/`checkpoint`; pr-sentinel Luna/medium; integrator Sol/high → Sol/xhigh only for contested, explicit `critical`/`checkpoint`, or a measured window; drift-check Luna/max; arch-review Sol/high → Sol/xhigh only for contested, explicit `critical`/`checkpoint`, or a measured window; ci-fix and review-fix Luna/max → Sol/high for verified `repeat` → Sol/xhigh for verified `repeat_exhausted`.
 
@@ -83,9 +83,10 @@ conditions. When adding a rule, add a focused unit or fixture test with it.
 **Mandatory boundary:** every routed launch must resolve → validate → launch → receipt. The selected runtime-native model and effort must be explicit at launch; validate the policy fingerprint and selected generated Codex agent or dynamic launch arguments before side effects; then record requested and applied model/effort with an application receipt. Unknown or ambiguous runtimes, unsupported selections, stale or missing generated variants, conflicting overrides, inline or session-inherited selection, and missing receipts hard-refuse. A successful process exit is not evidence that the runtime applied the selection. Historical ADR reasoning stays in ADR-005 and ADR-012; it is not operating guidance.
 
 `pipeline-config.cjs` is the single policy reader. It resolves the tier alias,
-effort and earned escalation for Claude dispatches. Claude uses the runtime
-alias at call time; Codex writes a concrete model and effort into generated
-agent files because its agents are static. Codex model ids are resolved from the runtime-native ADR-014 grid; legacy palette input is compatibility-only and cannot authorize a routed dispatch.
+effort and earned escalation for Claude dispatches. Claude launches use the runtime-native model ID, including `claude-opus-5-5`; Codex writes a concrete
+model and effort into generated agent files because its agents are static.
+Codex model ids are resolved from the runtime-native ADR-014 grid; legacy
+palette input is compatibility-only and cannot authorize a routed dispatch.
 
 Fable is a Claude-only ceiling and is reached only by an explicit measured
 route with `pipeline.fable: auto`. The default remains conservative. A Codex

@@ -270,8 +270,8 @@ function taskLevelRoute(role, signals = {}, cfg = {}) {
 // Codex palette. Routed Codex dispatch reads ADR-014 directly; this palette
 // remains a compatibility input for callers that do not request a routed decision.
 const DEFAULT_CODEX_MODELS = [
-  { model: 'gpt-5.6-sol', effort: 'high', min_cli: '0.153.1' },
-  { model: 'gpt-5.6-sol', effort: 'xhigh', min_cli: '0.153.1' },
+  { model: 'gpt-6-sol', effort: 'high', min_cli: '0.155.1' },
+  { model: 'gpt-6-sol', effort: 'xhigh', min_cli: '0.155.1' },
 ];
 const CODEX_MODEL_KEYS = new Set(['model', 'effort', 'min_cli']);
 
@@ -1448,12 +1448,19 @@ function configurationSelections(raw, role, runtime, modelKey) {
   return selections;
 }
 
+function canonicalizeRuntimeAlias(request, selection) {
+  if (request.runtime !== 'claude' || typeof selection.model !== 'string') return selection;
+  const model = modelPolicy.CLAUDE_MODEL_ALIASES[selection.model];
+  return model ? { ...selection, model } : selection;
+}
+
 function validateSelection(request, source, selection) {
   try {
     if (typeof selection === 'string') selection = { model: selection };
     if (!selection || typeof selection !== 'object' || Array.isArray(selection)) {
       throw modelPolicy.policyError('CONFLICTING_OVERRIDE', 'selection must be an object or model string');
     }
+    selection = canonicalizeRuntimeAlias(request, selection);
     for (const field of ['inline', 'inherit', 'session_inherited']) {
       if (selection[field] !== undefined && typeof selection[field] !== 'boolean') {
         throw modelPolicy.policyError('UNSUPPORTED_SELECTION', `${field} must be a boolean`);
@@ -1465,7 +1472,10 @@ function validateSelection(request, source, selection) {
     for (const field of ['requested_model', 'applied_model', 'reasoning_effort', 'requested_effort', 'applied_effort']) {
       if (selection[field] !== undefined) {
         const key = field.endsWith('model') ? 'model' : 'effort';
-        modelPolicy.resolveDispatch({ ...request, override: { [key]: selection[field] } });
+        const value = key === 'model'
+          ? canonicalizeRuntimeAlias(request, { model: selection[field] }).model
+          : selection[field];
+        modelPolicy.resolveDispatch({ ...request, override: { [key]: value } });
       }
     }
   } catch (error) {

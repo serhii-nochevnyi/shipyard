@@ -21,10 +21,10 @@ const capabilities = Object.freeze({
 });
 
 const lines = [
-  { id: 'system-state', label: 'system state', model: 'opus', effort: 'medium', signals: { type: 'facts' } },
-  { id: 'alternatives', label: 'alternatives', model: 'opus', effort: 'medium', signals: { type: 'alternatives' } },
-  { id: 'constraints', label: 'constraints', model: 'opus', effort: 'medium', signals: { type: 'facts' } },
-  { id: 'risks', label: 'risks and unknowns', model: 'opus', effort: 'medium', signals: { type: 'facts' } },
+  { id: 'system-state', label: 'system state', model: 'claude-opus-5-5', effort: 'medium', signals: { type: 'facts' } },
+  { id: 'alternatives', label: 'alternatives', model: 'claude-opus-5-5', effort: 'medium', signals: { type: 'alternatives' } },
+  { id: 'constraints', label: 'constraints', model: 'claude-opus-5-5', effort: 'medium', signals: { type: 'facts' } },
+  { id: 'risks', label: 'risks and unknowns', model: 'claude-opus-5-5', effort: 'medium', signals: { type: 'facts' } },
 ];
 
 suite('investigation-research.mjs — routed Claude research fan-out');
@@ -85,7 +85,7 @@ test('dispatches all four lines through the typed boundary and returns verified 
       assert.ok(result, `missing result for ${line.id}`);
       assert.equal(result.status, 'completed');
       assert.equal(result.receipt.compliance, 'verified');
-      assert.equal(result.receipt.applied_model, 'opus');
+      assert.equal(result.receipt.applied_model, 'claude-opus-5-5');
       assert.equal(result.receipt.applied_effort, 'medium');
       assert.ok(recorder.getVerifiedRecord(result.receipt.dispatch_id));
       const call = calls.find((item) => item.options.label.endsWith(`:${line.id}`));

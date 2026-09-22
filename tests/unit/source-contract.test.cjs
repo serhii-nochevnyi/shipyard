@@ -584,11 +584,11 @@ const workflowArgs = {
     tickets: [{ id: 'T-30-01', planPath: '/p/30-01-PLAN.md', branch: 'ticket/T-30-01', prBase: 'epic/30', worktreePath: '/w/T-30-01', model: 'sonnet', effort: 'max' }],
   },
   'drift-gate': {
-    tickets: [{ id: 'T-30-01', planPath: '/p/30-01-PLAN.md', baseRef: 'origin/epic/30', worktreePath: '/w/T-30-01', model: 'opus', effort: 'max' }],
+    tickets: [{ id: 'T-30-01', planPath: '/p/30-01-PLAN.md', baseRef: 'origin/epic/30', worktreePath: '/w/T-30-01', model: 'claude-opus-5-5', effort: 'max' }],
     driftRefPath: '/p/drift-check.md',
   },
   'fix-round': {
-    prs: [{ id: 'T-30-01', pr: 109, branch: 'ticket/T-30-01', base: 'epic/30', worktreePath: '/w/T-30-01', planPath: '/p/30-01-PLAN.md', needsCiFix: true, needsReviewFix: false, model: 'opus', effort: 'medium' }],
+    prs: [{ id: 'T-30-01', pr: 109, branch: 'ticket/T-30-01', base: 'epic/30', worktreePath: '/w/T-30-01', planPath: '/p/30-01-PLAN.md', needsCiFix: true, needsReviewFix: false, model: 'claude-opus-5-5', effort: 'medium' }],
     ciFixRefPath: '/p/ci-fix.md',
     reviewFixRefPath: '/p/review-fix.md',
     reinitScript: '/p/reviewers.cjs',
@@ -620,8 +620,8 @@ async function renderedPrompt(name) {
   assert.strictEqual(calls.length, 1, `${name} must dispatch one prompt in the rendered-contract fixture`);
   const expectedSelection = {
     executors: { model: 'sonnet', effort: 'max' },
-    'drift-gate': { model: 'opus', effort: 'max' },
-    'fix-round': { model: 'opus', effort: 'medium' },
+    'drift-gate': { model: 'claude-opus-5-5', effort: 'max' },
+    'fix-round': { model: 'claude-opus-5-5', effort: 'medium' },
   }[name];
   assert.deepStrictEqual(
     { model: calls[0].opts.model, effort: calls[0].opts.effort },
@@ -1395,7 +1395,7 @@ test('Claude workflow coordinator selects the typed callback and refuses its abs
     recorder: sourceDispatchRecorder,
     prompt: 'typed GSD coordinator prompt',
     role: 'decomposition',
-    model: 'opus',
+    model: 'claude-opus-5-5',
     effort: 'medium',
     gsdRole: 'gsd-planner',
     dispatchId: 'claude-gsd-workflow-coordinator',
@@ -1412,7 +1412,7 @@ test('Claude workflow coordinator selects the typed callback and refuses its abs
       recorder: sourceDispatchRecorder,
       prompt: 'missing typed callback',
       role: 'decomposition',
-      model: 'opus',
+      model: 'claude-opus-5-5',
       effort: 'medium',
       gsdRole: 'gsd-planner',
       dispatchId: 'claude-gsd-workflow-missing-typed',
@@ -1450,7 +1450,7 @@ test('Claude workflow coordinator accepts an explicit typed-only host and prefli
       host,
       prompt: 'typed-only host prompt',
       role: 'decomposition',
-      model: 'opus',
+      model: 'claude-opus-5-5',
       effort: 'medium',
       gsdRole: 'gsd-planner',
       dispatchId: 'claude-host-typed-only',
@@ -1464,7 +1464,7 @@ test('Claude workflow coordinator accepts an explicit typed-only host and prefli
         host,
         prompt: 'typed-only host without role',
         role: 'decomposition',
-        model: 'opus',
+        model: 'claude-opus-5-5',
         effort: 'medium',
         dispatchId: 'claude-host-typed-only-missing-role',
       }),
@@ -1971,7 +1971,7 @@ test('the routed-launch source sweep rejects native launches in shipped Markdown
 });
 
 const RUNTIME_OWNED_FILE_DIGESTS = Object.freeze({
-  'plugins/delivery-pipeline/scripts/runtime-adapters.cjs': '11126e9bbf4dac883b495f48e55504990ec358f739c8f314a4d147789c3ad346',
+  'plugins/delivery-pipeline/scripts/runtime-adapters.cjs': 'ac0225b322353dbedca3ef8a99d30e1ab5a4f54a69f077006b7d657cfdf83b65',
   'plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs': 'b783ebc1cbf2f4af33cf697a98cf980a0696f3afefd8aad4f0056b52d17c276d',
 });
 
@@ -1980,7 +1980,7 @@ test('Claude palette and provider adapter sources match their checked-in baselin
     const actualDigest = crypto.createHash('sha256').update(fs.readFileSync(path.join(REPO, rel))).digest('hex');
     assert.equal(actualDigest, expectedDigest, `${rel} is a runtime-owned palette/provider file and must match its checked-in baseline`);
   }
-  assert.deepStrictEqual(CLAUDE_MODEL_ALIASES, { sonnet: 'sonnet', opus: 'opus', fable: 'fable' });
+  assert.deepStrictEqual(CLAUDE_MODEL_ALIASES, { sonnet: 'sonnet', opus: 'claude-opus-5-5', fable: 'fable' });
   assert.equal(readRepo('plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs').includes('runtime: \'claude\''), true);
   assert.equal(readRepo('plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs').includes('gpt-5.6-luna'), false);
   assert.equal(readRepo('plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs').includes('gpt-6-astra'), false);

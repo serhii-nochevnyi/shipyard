@@ -7,14 +7,14 @@
 // older explicit configurations, but is not selected by the current grid.
 
 const CODEX_MODEL_IDS = Object.freeze({
-  luna: 'gpt-5.6-luna',
+  luna: 'gpt-6-luna',
   astra: 'gpt-6-astra',
-  sol: 'gpt-5.6-sol',
+  sol: 'gpt-6-sol',
 });
 
 const CLAUDE_MODEL_ALIASES = Object.freeze({
   sonnet: 'sonnet',
-  opus: 'opus',
+  opus: 'claude-opus-5-5',
   fable: 'fable',
 });
 
