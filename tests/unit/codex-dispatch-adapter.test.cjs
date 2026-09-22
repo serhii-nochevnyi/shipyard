@@ -30,6 +30,7 @@ function fixture() {
         'name = "' + file.replace(/\.toml$/, '') + '"',
         'model = "' + CODEX_MODEL_IDS[rung.model_key] + '"',
         'model_reasoning_effort = "' + rung.effort + '"',
+        'sandbox_mode = "' + (['research', 'arch-review', 'drift-check'].includes(role) ? 'read-only' : 'workspace-write') + '"',
         "developer_instructions = '''\nRun the exact role.\n'''\n",
       ].join('\n');
       fs.writeFileSync(path.join(root, file), content);
@@ -64,6 +65,37 @@ function setup(extra = {}) {
 function clean(f) { fs.rmSync(f.root, { recursive: true, force: true }); }
 function rejected(fn, code) {
   assert.throws(fn, (error) => error.code === code && /install-shipyard-codex/.test(error.message));
+}
+function runtimeEvidence(selection, context, overrides = {}) {
+  const sessionId = '11111111-1111-4111-8111-111111111111';
+  const args = [
+    'exec', '--json', '--model', selection.model,
+    '--config', 'model_reasoning_effort="' + selection.reasoning_effort + '"',
+    '--config', 'model_provider="openai"',
+    '--config', 'forced_login_method="chatgpt"',
+    '--cd', '/tmp/worktree', '--ignore-user-config',
+    '--sandbox', selection.sandbox_mode || 'workspace-write', '-',
+  ];
+  const native = {
+    schema: 'shipyard.codex-native-session-evidence.v1', version: 1,
+    session_id: sessionId, provider: 'openai',
+    models: [selection.model], efforts: [selection.reasoning_effort],
+    selections: [{ model: selection.model, effort: selection.reasoning_effort }],
+    turn_contexts: 1, records: 2, bytes: 256, sha256: 'a'.repeat(64),
+    file: 'rollout-2026-09-23-' + sessionId + '.jsonl',
+  };
+  return {
+    schema: 'shipyard.codex-runtime-evidence.v1', version: 1,
+    runtime: 'codex', provider: 'openai', run_id: 'run-codex-test',
+    ticket: 'T-38-04', phase: 38, worktree: '/tmp/worktree',
+    dispatch_id: context.dispatch_id, session_id: sessionId, process_id: 123,
+    command_digest: 'b'.repeat(64), command: { executable: 'codex', args },
+    selection_source: 'codex-native-session-transcript',
+    applied_model: selection.model, applied_effort: selection.reasoning_effort,
+    observed_model: selection.model, observed_effort: selection.reasoning_effort,
+    native_session_evidence: { ...native, ...overrides.native_session_evidence },
+    stream_evidence: { format: 'jsonl', records: 3, turns: 1, usage_records: 1 },
+  };
 }
 
 suite('strict Codex adapter — canonical launches and application evidence');
@@ -203,6 +235,58 @@ test('a dynamic launch and receipt use the resolver canonical concrete model', (
     assert.equal(result.requested_effort, resolution.requested_effort);
     assert.equal(result.applied_model, resolution.model);
     assert.equal(result.applied_effort, 'high');
+  } finally { clean(f); }
+});
+
+test('runtime receipt requires matching model and effort from the bound native transcript', () => {
+  for (const mismatch of [null, 'gpt-6-sol', 'high']) {
+    const f = setup({
+      host: {
+        requireRuntimeEvidence: true,
+        launch: (selection, context) => ({
+          ...applied(selection),
+          observed_model: selection.model,
+          observed_effort: selection.reasoning_effort,
+          runtime_evidence: runtimeEvidence(selection, context, mismatch === null ? {} : mismatch === 'gpt-6-sol' ? {
+            native_session_evidence: { selections: [{ model: mismatch, effort: selection.reasoning_effort }] },
+          } : {
+            native_session_evidence: { selections: [{ model: selection.model, effort: mismatch }] },
+          }),
+        }),
+      },
+    });
+    try {
+      if (mismatch === null) {
+        const result = f.boundary.dispatch({ runtime: 'codex', role: 'executor' });
+        assert.equal(result.receipt.runtime_evidence.selection_source, 'codex-native-session-transcript');
+      } else {
+        assert.throws(() => f.boundary.dispatch({ runtime: 'codex', role: 'executor' }),
+          (error) => error.code === 'MISSING_RECEIPT');
+      }
+    } finally { clean(f); }
+  }
+});
+
+test('native Codex transcript evidence accepts its exact session-id filename', () => {
+  const f = setup({
+    host: {
+      requireRuntimeEvidence: true,
+      launch: (selection, context) => {
+        const evidence = runtimeEvidence(selection, context);
+        evidence.native_session_evidence.file = evidence.session_id + '.jsonl';
+        return {
+          ...applied(selection),
+          observed_model: selection.model,
+          observed_effort: selection.reasoning_effort,
+          runtime_evidence: evidence,
+        };
+      },
+    },
+  });
+  try {
+    const result = f.boundary.dispatch({ runtime: 'codex', role: 'executor' });
+    assert.equal(result.receipt.runtime_evidence.native_session_evidence.file,
+      result.receipt.runtime_evidence.session_id + '.jsonl');
   } finally { clean(f); }
 });
 

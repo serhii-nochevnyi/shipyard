@@ -39,6 +39,7 @@ function fixture(raw = {}) {
       'name = "' + r.agent_file.replace(/\.toml$/, '') + '"',
       'model = "' + r.model + '"',
       'model_reasoning_effort = "' + r.effort + '"',
+      'sandbox_mode = "' + (['research', 'arch-review', 'drift-check'].includes(role) ? 'read-only' : 'workspace-write') + '"',
       "developer_instructions = '''\nRole body\n'''\n",
     ].join('\n');
     fs.writeFileSync(path.join(agentDir, r.agent_file), text);

@@ -2,6 +2,7 @@
 
 const crypto = require('node:crypto');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const { spawn, spawnSync } = require('node:child_process');
 const { CODEX_MODEL_IDS } = require('./runtime-adapters.cjs');
@@ -11,7 +12,9 @@ const SCHEMA = 'shipyard.codex-runtime-host.v1';
 const VERSION = 1;
 const STREAM_FORMAT = 'jsonl';
 const EFFORTS = Object.freeze(['low', 'medium', 'high', 'xhigh', 'max']);
-const REQUIRED_HELP_MARKERS = Object.freeze(['--json', '--model', '--config', '--cd']);
+const REQUIRED_HELP_MARKERS = Object.freeze(['--json', '--model', '--config', '--cd', '--sandbox']);
+const NATIVE_SESSION_MAX_BYTES = 128 * 1024 * 1024;
+const NATIVE_SESSION_WAIT_MS = 5000;
 const UNAVAILABLE_CODES = new Set([
   'RUNTIME_UNAVAILABLE',
   'RUNTIME_EVIDENCE_MISSING',
@@ -223,23 +226,10 @@ function probeCodexRuntime(options = {}) {
   });
 }
 
-function nestedValues(record, names, output = []) {
-  if (!object(record)) return output;
-  for (const name of names) {
-    if (typeof record[name] === 'string' && record[name].trim()) output.push(record[name].trim());
-  }
-  for (const key of ['item', 'usage', 'error', 'metadata']) {
-    if (object(record[key])) nestedValues(record[key], names, output);
-  }
-  return output;
-}
-
 function parseCodexStream(raw) {
   if (typeof raw !== 'string') fail('RUNTIME_EVIDENCE_INVALID', 'Codex JSONL output must be text');
   const records = [];
   const sessions = new Set();
-  const models = new Set();
-  const efforts = new Set();
   let turnCount = 0;
   let usageCount = 0;
   let failure = null;
@@ -251,9 +241,9 @@ function parseCodexStream(raw) {
     if (!object(record)) fail('RUNTIME_EVIDENCE_INVALID', 'Codex JSONL records must be objects');
     if (records.length >= 10000) fail('RUNTIME_EVIDENCE_INVALID', 'Codex JSONL output exceeds 10000 records');
     records.push(record);
-    for (const value of nestedValues(record, ['thread_id', 'threadId', 'session_id', 'sessionId'])) sessions.add(value);
-    for (const value of nestedValues(record, ['model', 'model_id', 'modelId', 'applied_model'])) models.add(value);
-    for (const value of nestedValues(record, ['effort', 'reasoning_effort', 'reasoningEffort', 'applied_effort'])) efforts.add(value);
+    if (record.type === 'thread.started' && typeof record.thread_id === 'string' && record.thread_id.trim()) {
+      sessions.add(record.thread_id.trim());
+    }
     if (record.type === 'turn.completed') {
       turnCount++;
       if (object(record.usage)) usageCount++;
@@ -270,36 +260,175 @@ function parseCodexStream(raw) {
   return freeze({
     records: freeze(records),
     session_id: [...sessions][0],
-    models: [...models],
-    efforts: [...efforts],
     turns: turnCount,
     usage_records: usageCount,
   });
 }
 
-function observedSelection(parsed, expectedModel, expectedEffort, invocation = {}) {
-  const models = [...new Set(parsed.models)];
-  const efforts = [...new Set(parsed.efforts)];
-  if (models.some((value) => value !== expectedModel)) {
-    fail('RUNTIME_EVIDENCE_MISMATCH', 'Codex output reported a different model', {
-      expected: expectedModel, observed: models,
-    });
+function parseNativeCodexTranscript(raw, expectedSessionId) {
+  if (typeof raw !== 'string' || Buffer.byteLength(raw, 'utf8') > NATIVE_SESSION_MAX_BYTES) {
+    fail('RUNTIME_EVIDENCE_INVALID', 'Codex native session transcript is missing or exceeds the size limit');
   }
-  if (efforts.some((value) => value !== expectedEffort)) {
-    fail('RUNTIME_EVIDENCE_MISMATCH', 'Codex output reported a different reasoning effort', {
-      expected: expectedEffort, observed: efforts,
-    });
+  const pairs = new Set();
+  const models = new Set();
+  const efforts = new Set();
+  let provider = null;
+  let sessionMetaId = null;
+  let turnContexts = 0;
+  let recordCount = 0;
+  for (const line of raw.split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    if (++recordCount > 200000) fail('RUNTIME_EVIDENCE_INVALID', 'Codex native transcript exceeds the record limit');
+    let record;
+    try { record = JSON.parse(line); }
+    catch (error) { fail('RUNTIME_EVIDENCE_INVALID', 'Codex native transcript contains invalid JSON: ' + error.message); }
+    if (!object(record)) fail('RUNTIME_EVIDENCE_INVALID', 'Codex native transcript records must be objects');
+    if (record.type === 'session_meta') {
+      const payload = record.payload;
+      if (!object(payload)) fail('RUNTIME_EVIDENCE_INVALID', 'Codex session metadata has no payload');
+      const candidateId = typeof payload.id === 'string' ? payload.id : payload.session_id;
+      if (typeof candidateId !== 'string' || candidateId !== expectedSessionId) {
+        fail('RUNTIME_EVIDENCE_MISMATCH', 'Codex native transcript belongs to a different session', {
+          expected: expectedSessionId, observed: candidateId,
+        });
+      }
+      if (sessionMetaId && sessionMetaId !== candidateId) {
+        fail('RUNTIME_EVIDENCE_INVALID', 'Codex native transcript contains conflicting session identities');
+      }
+      sessionMetaId = candidateId;
+      const candidateProvider = payload.model_provider || payload.modelProvider;
+      if (typeof candidateProvider === 'string' && candidateProvider.trim()) {
+        if (provider && provider !== candidateProvider) fail('RUNTIME_EVIDENCE_INVALID', 'Codex native transcript contains conflicting providers');
+        provider = candidateProvider;
+      }
+    }
+    if (record.type === 'turn_context' && object(record.payload)) {
+      const model = record.payload.model;
+      const effort = record.payload.effort || record.payload.reasoning_effort;
+      if (model === undefined && effort === undefined) continue;
+      if (typeof model !== 'string' || !model.trim() || typeof effort !== 'string' || !effort.trim()) {
+        fail('RUNTIME_EVIDENCE_MISSING', 'Codex turn context does not identify both model and reasoning effort');
+      }
+      models.add(model.trim());
+      efforts.add(effort.trim());
+      pairs.add(JSON.stringify({ model: model.trim(), effort: effort.trim() }));
+      turnContexts++;
+    }
   }
+  if (!sessionMetaId) fail('RUNTIME_EVIDENCE_MISSING', 'Codex native transcript has no session metadata');
+  if (provider !== 'openai') fail('RUNTIME_EVIDENCE_MISMATCH', 'Codex native transcript did not attest the OpenAI provider', { observed: provider });
+  if (!turnContexts) fail('RUNTIME_EVIDENCE_MISSING', 'Codex native transcript has no model/effort turn context');
+  return freeze({
+    session_id: sessionMetaId,
+    provider,
+    models: [...models],
+    efforts: [...efforts],
+    selections: [...pairs].map((pair) => JSON.parse(pair)),
+    turn_contexts: turnContexts,
+    records: recordCount,
+    sha256: crypto.createHash('sha256').update(raw, 'utf8').digest('hex'),
+  });
+}
+
+function observedSelection(parsed, expectedModel, expectedEffort, invocation = {}, nativeEvidence = {}) {
   if (invocation.model !== expectedModel || invocation.effort !== expectedEffort) {
     fail('RUNTIME_EVIDENCE_MISMATCH', 'Codex invocation did not carry the resolved model and reasoning effort', {
       expected: { model: expectedModel, effort: expectedEffort },
       actual: invocation,
     });
   }
+  if (!object(nativeEvidence)
+      || nativeEvidence.session_id !== parsed.session_id
+      || nativeEvidence.provider !== 'openai'
+      || !Array.isArray(nativeEvidence.selections)
+      || !nativeEvidence.selections.length) {
+    fail('RUNTIME_EVIDENCE_MISSING', 'Codex native session evidence is not bound to the completed CLI session');
+  }
+  const mismatches = nativeEvidence.selections.filter((selection) => !object(selection)
+    || selection.model !== expectedModel || selection.effort !== expectedEffort);
+  if (mismatches.length) {
+    fail('RUNTIME_EVIDENCE_MISMATCH', 'Codex native transcript reported a different model or reasoning effort', {
+      expected: { model: expectedModel, effort: expectedEffort }, observed: mismatches,
+    });
+  }
   return Object.freeze({
     model: expectedModel,
     effort: expectedEffort,
-    source: 'codex-exec-explicit-selection',
+    source: 'codex-native-session-transcript',
+  });
+}
+
+function sessionDirectory(root, date) {
+  return path.join(root, String(date.getFullYear()), String(date.getMonth() + 1).padStart(2, '0'), String(date.getDate()).padStart(2, '0'));
+}
+
+function nativeSessionCandidates(root, sessionId, now = new Date()) {
+  if (typeof sessionId !== 'string' || !/^[A-Za-z0-9_-]{16,128}$/.test(sessionId)) {
+    fail('RUNTIME_EVIDENCE_INVALID', 'Codex thread identity is not a safe session identifier');
+  }
+  const directories = [];
+  for (const offset of [-1, 0, 1]) {
+    const date = new Date(now);
+    date.setDate(date.getDate() + offset);
+    directories.push(sessionDirectory(root, date));
+  }
+  const files = [];
+  for (const directory of new Set(directories)) {
+    let names;
+    try { names = fs.readdirSync(directory); }
+    catch (error) {
+      if (error.code === 'ENOENT') continue;
+      fail('RUNTIME_EVIDENCE_INVALID', 'cannot inspect Codex session directory: ' + error.message);
+    }
+    for (const name of names) {
+      if (name === sessionId + '.jsonl' || name.endsWith('-' + sessionId + '.jsonl')) files.push(path.join(directory, name));
+    }
+  }
+  return files;
+}
+
+async function readNativeCodexSession(sessionId, options = {}) {
+  const env = options.env && object(options.env) ? options.env : {};
+  const codexHome = env.CODEX_HOME || process.env.CODEX_HOME || path.join(os.homedir(), '.codex');
+  const sessionsRoot = path.join(path.resolve(codexHome), 'sessions');
+  const deadline = Date.now() + (options.waitMs === undefined ? NATIVE_SESSION_WAIT_MS : options.waitMs);
+  let file = null;
+  while (Date.now() <= deadline) {
+    const candidates = nativeSessionCandidates(sessionsRoot, sessionId, options.now || new Date());
+    if (candidates.length > 1) fail('RUNTIME_EVIDENCE_INVALID', 'Codex session identity matched multiple native transcripts');
+    if (candidates.length === 1) { file = candidates[0]; break; }
+    await new Promise((resolve) => setTimeout(resolve, Math.min(100, Math.max(1, deadline - Date.now()))));
+  }
+  if (!file) fail('RUNTIME_EVIDENCE_MISSING', 'Codex native transcript was not found for the launched session');
+  let before;
+  try { before = fs.statSync(file); }
+  catch (error) { fail('RUNTIME_EVIDENCE_MISSING', 'Codex native transcript cannot be read: ' + error.message); }
+  if (!before.isFile() || before.size > NATIVE_SESSION_MAX_BYTES) {
+    fail('RUNTIME_EVIDENCE_INVALID', 'Codex native transcript is not a bounded regular file');
+  }
+  let raw;
+  try { raw = fs.readFileSync(file, 'utf8'); }
+  catch (error) { fail('RUNTIME_EVIDENCE_MISSING', 'Codex native transcript cannot be read: ' + error.message); }
+  let after;
+  try { after = fs.statSync(file); }
+  catch (error) { fail('RUNTIME_EVIDENCE_MISSING', 'Codex native transcript disappeared: ' + error.message); }
+  if (before.size !== after.size || before.mtimeMs !== after.mtimeMs || before.size !== Buffer.byteLength(raw, 'utf8')) {
+    fail('RUNTIME_EVIDENCE_INVALID', 'Codex native transcript changed while being verified');
+  }
+  const parsed = parseNativeCodexTranscript(raw, sessionId);
+  return freeze({
+    schema: 'shipyard.codex-native-session-evidence.v1',
+    version: 1,
+    session_id: parsed.session_id,
+    provider: parsed.provider,
+    models: parsed.models,
+    efforts: parsed.efforts,
+    selections: parsed.selections,
+    turn_contexts: parsed.turn_contexts,
+    records: parsed.records,
+    bytes: after.size,
+    sha256: parsed.sha256,
+    file: path.basename(file),
   });
 }
 
@@ -344,7 +473,12 @@ function generatedInstructions(content) {
 }
 
 function launchPrompt(prompt, content) {
-  const base = text(prompt, 'prompt', 1024 * 1024);
+  if (typeof prompt !== 'string' || !prompt.trim()
+      || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(prompt)) {
+    fail('INVALID_INPUT', 'prompt must be non-empty text without unsupported control characters');
+  }
+  const base = prompt.trim();
+  if (base.length > 1024 * 1024) fail('INVALID_INPUT', 'prompt exceeds 1048576 characters');
   if (!content) return base;
   return generatedInstructions(content) + '\n\n' + base;
 }
@@ -379,21 +513,29 @@ function createCodexCliLauncher(options = {}) {
       }
     }
     const sandbox = launchOptions.sandbox_mode || launchOptions.sandbox;
-    if (sandbox !== undefined && !['read-only', 'workspace-write', 'danger-full-access'].includes(sandbox)) {
-      fail('INVALID_INPUT', 'Codex sandbox mode is unsupported');
+    if (!['read-only', 'workspace-write'].includes(sandbox)) {
+      fail('INVALID_INPUT', 'Codex launch requires an explicit read-only or workspace-write sandbox');
     }
     const args = [
       'exec', '--json', '--model', model,
       '--config', 'model_reasoning_effort="' + effort + '"',
+      '--config', 'model_provider="openai"',
+      '--config', 'forced_login_method="chatgpt"',
       '--cd', scope.worktree, '--ignore-user-config',
     ];
-    if (sandbox) args.push('--sandbox', sandbox);
+    args.push('--sandbox', sandbox);
     if (options.ephemeral === true) args.push('--ephemeral');
     if (options.approveForMe === true || launchOptions.approve_for_me === true) args.push('--approve-for-me');
     args.push('-');
     const env = { ...process.env, ...environment };
-    for (const key of ['CODEX_MODEL', 'CODEX_MODEL_REASONING_EFFORT', 'CODEX_THREAD_ID', 'CODEX_SESSION_ID']) {
+    for (const key of [
+      'CODEX_MODEL', 'CODEX_MODEL_REASONING_EFFORT', 'CODEX_THREAD_ID', 'CODEX_SESSION_ID',
+      'OPENAI_API_KEY', 'CODEX_API_KEY',
+    ]) {
       delete env[key];
+    }
+    for (const key of Object.keys(env)) {
+      if (key.startsWith('ANTHROPIC_') || key === 'CLAUDE_CODE_OAUTH_TOKEN') delete env[key];
     }
     let child;
     try {
@@ -441,7 +583,11 @@ function createCodexCliLauncher(options = {}) {
     let parsed;
     try {
       parsed = parseCodexStream(rawStdout);
-      const selection = observedSelection(parsed, model, effort, { model, effort });
+      const nativeEvidence = await readNativeCodexSession(parsed.session_id, { env });
+      const selection = observedSelection(parsed, model, effort, {
+        model: args[args.indexOf('--model') + 1],
+        effort: (args.find((value) => value.startsWith('model_reasoning_effort=')) || '').match(/^model_reasoning_effort="([^"]+)"$/)?.[1],
+      }, nativeEvidence);
       const transcript = writeTranscript(transcriptDir, scope, parsed.session_id, rawStdout);
       const commandDigest = crypto.createHash('sha256').update(JSON.stringify(args)).digest('hex');
       const runtimeEvidence = {
@@ -463,13 +609,12 @@ function createCodexCliLauncher(options = {}) {
         applied_effort: selection.effort,
         observed_model: selection.model,
         observed_effort: selection.effort,
+        native_session_evidence: nativeEvidence,
         stream_evidence: {
           format: STREAM_FORMAT,
           records: parsed.records.length,
           turns: parsed.turns,
           usage_records: parsed.usage_records,
-          models: parsed.models,
-          efforts: parsed.efforts,
         },
         ...(transcript ? { transcript } : {}),
       };
@@ -648,6 +793,9 @@ module.exports = Object.freeze({
   normalizeScope,
   probeCodexRuntime,
   parseCodexStream,
+  parseNativeCodexTranscript,
+  nativeSessionCandidates,
+  readNativeCodexSession,
   observedSelection,
   writeTranscript,
   createCodexCliLauncher,

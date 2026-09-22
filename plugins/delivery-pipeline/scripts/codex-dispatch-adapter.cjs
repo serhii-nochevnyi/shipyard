@@ -79,12 +79,47 @@ function validateRuntimeEvidence(evidence, selection, resolution) {
       || typeof evidence.command_digest !== 'string'
       || !/^[a-f0-9]{64}$/.test(evidence.command_digest)
       || typeof evidence.selection_source !== 'string'
-      || evidence.selection_source !== 'codex-exec-explicit-selection'
+      || evidence.selection_source !== 'codex-native-session-transcript'
       || !object(evidence.command)
       || !Array.isArray(evidence.command.args)
       || typeof evidence.dispatch_id !== 'string'
       || evidence.dispatch_id !== resolution.dispatch_id) {
     refuse('MISSING_RECEIPT', 'live Codex host did not return bound process and session evidence');
+  }
+  const modelIndex = evidence.command.args.indexOf('--model');
+  const sandboxIndex = evidence.command.args.indexOf('--sandbox');
+  const effortFlags = evidence.command.args.filter((value) => typeof value === 'string'
+    && value.startsWith('model_reasoning_effort='));
+  const providerFlags = evidence.command.args.filter((value) => typeof value === 'string'
+    && value.startsWith('model_provider='));
+  const loginFlags = evidence.command.args.filter((value) => typeof value === 'string'
+    && value.startsWith('forced_login_method='));
+  const native = evidence.native_session_evidence;
+  const expectedSandbox = selection.sandbox_mode || 'workspace-write';
+  if (evidence.command.args.filter((value) => value === '--model').length !== 1
+      || modelIndex < 0 || evidence.command.args[modelIndex + 1] !== selection.model
+      || evidence.command.args.filter((value) => value === '--sandbox').length !== 1
+      || sandboxIndex < 0 || evidence.command.args[sandboxIndex + 1] !== expectedSandbox
+      || effortFlags.length !== 1 || effortFlags[0] !== 'model_reasoning_effort="' + selection.reasoning_effort + '"'
+      || providerFlags.length !== 1 || providerFlags[0] !== 'model_provider="openai"'
+      || loginFlags.length !== 1 || loginFlags[0] !== 'forced_login_method="chatgpt"'
+      || evidence.command.args.filter((value) => value === '--ignore-user-config').length !== 1
+      || !object(native)
+      || native.schema !== 'shipyard.codex-native-session-evidence.v1'
+      || native.version !== 1
+      || native.session_id !== evidence.session_id
+      || native.provider !== 'openai'
+      || !Array.isArray(native.selections) || !native.selections.length
+      || native.selections.some((entry) => !object(entry)
+        || entry.model !== selection.model || entry.effort !== selection.reasoning_effort)
+      || native.turn_contexts < 1
+      || native.records < native.turn_contexts + 1
+      || !Number.isInteger(native.bytes) || native.bytes < 1
+      || typeof native.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(native.sha256)
+      || typeof native.file !== 'string'
+      || !(native.file === evidence.session_id + '.jsonl'
+        || native.file.endsWith('-' + evidence.session_id + '.jsonl'))) {
+    refuse('MISSING_RECEIPT', 'live Codex receipt lacks matching native session evidence for the requested selection');
   }
   if (evidence.applied_model !== selection.model
       || evidence.applied_effort !== selection.reasoning_effort
@@ -242,6 +277,9 @@ function createCodexDispatchAdapter(options = {}) {
     for (const [key, value] of Object.entries(expectedComments)) {
       if (parsed.comments[key] !== value) refuse('STALE_GENERATED_AGENT', 'generated policy ' + key + ' is missing or stale');
     }
+    if (!['read-only', 'workspace-write'].includes(parsed.fields.sandbox_mode)) {
+      refuse('STALE_GENERATED_AGENT', 'generated agent lacks an approved sandbox mode');
+    }
     if (parsed.fields.name !== canonical.agent_file.replace(/\.toml$/, '')
         || parsed.fields.model !== canonical.model || parsed.fields.model_reasoning_effort !== canonical.effort
         || digest(content) !== manifest.agent_digests[canonical.agent_file]) {
@@ -335,6 +373,7 @@ function createCodexDispatchAdapter(options = {}) {
         ['model', effectiveModel], ['requested_model', effectiveModel], ['applied_model', effectiveModel],
         ['effort', canonical.effort], ['reasoning_effort', canonical.effort],
         ['model_reasoning_effort', canonical.effort], ['agent_file', canonical.agent_file],
+        ['dispatch_id', canonical.dispatch_id],
         ['gsd_role', gsdRole],
         ['gsd_launch_mechanism', gsdRole === undefined ? undefined : GSD_LAUNCH_MECHANISM],
       ]) {
@@ -375,13 +414,14 @@ function createCodexDispatchAdapter(options = {}) {
     }
     Object.freeze(selection);
     validatedRepairs.delete(canonical.dispatch_id);
-    const launchContext = gsdRole === undefined
-      ? context
-      : Object.freeze({
-        ...context,
+    const launchContext = Object.freeze({
+      ...context,
+      dispatch_id: canonical.dispatch_id,
+      ...(gsdRole !== undefined ? {
         gsd_role: gsdRole,
         gsd_launch_mechanism: GSD_LAUNCH_MECHANISM,
-      });
+      } : {}),
+    });
     const result = method.call(host, selection, launchContext, handoff);
     return result && typeof result.then === 'function'
       ? result.then((applied) => applicationReceipt(canonical, applied, selection))
