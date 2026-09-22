@@ -717,7 +717,7 @@ Codex baseline, effort tiers, promotion signals, and historical receipts.
 <!-- shipyard:gsd-sync:begin -->
 ## Shipyard synchronization (generated)
 
-- Source fingerprint: `0f4bafc1e78bd1fb690acea954cd91451ba722903dae247d501648336cc6624b`
+- Source fingerprint: `32a13deceef97c9ce2b861b64283c3fbf040efdebc5523ee34cae2de983e52c6`
 - Plans merged: 138/143
 - Phases verified: 9/19
 - Current phase: 20
