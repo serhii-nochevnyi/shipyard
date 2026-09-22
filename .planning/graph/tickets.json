@@ -4818,6 +4818,7 @@
         "plugins/delivery-pipeline/scripts/pipeline-config.cjs",
         "capabilities/delivery-pipeline/capability.json",
         "scripts/gen-codex-shipyard.cjs",
+        "tests/smoke/model-ladder-runtime-smoke.sh",
         "tests/unit/model-policy.test.cjs",
         "tests/unit/pipeline-config.test.cjs",
         "tests/unit/model-capability.test.cjs",
