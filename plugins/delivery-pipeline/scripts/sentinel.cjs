@@ -28,7 +28,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { execFileSync, spawnSync } = require('child_process');
+const { diagnostic, runBounded, timeoutFromEnv } = require(path.join(__dirname, 'command-runner.cjs'));
 const { loadConfig } = require(path.join(__dirname, 'pipeline-config.cjs'));
 const { withLock, lockDirFor, writeAtomic } = require(path.join(__dirname, 'lock.cjs'));
 const reviewSignatures = require(path.join(__dirname, 'review-signature.cjs'));
@@ -65,6 +65,8 @@ const {
 } = require(path.join(__dirname, 'parent-moving.cjs'));
 
 const ROOT = process.cwd();
+const GH_TIMEOUT_MS = timeoutFromEnv('SHIPYARD_GH_TIMEOUT_MS', 60_000, 5 * 60_000);
+const REVIEWER_TIMEOUT_MS = timeoutFromEnv('SHIPYARD_REVIEWER_TIMEOUT_MS', 120_000, 10 * 60_000);
 const GRAPH_DIR = path.join(ROOT, '.planning', 'graph');
 const TICKETS = path.join(GRAPH_DIR, 'tickets.json');
 const STATE = path.join(GRAPH_DIR, 'delivery-state.json');
@@ -137,13 +139,11 @@ const AUTO_MERGE_WHY = !CFG_VALID
 
 // ── gh plumbing ─────────────────────────────────────────────────────────────
 function gh(args, { tolerate = false } = {}) {
-  try {
-    return execFileSync('gh', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
-  } catch (e) {
-    const detail = e.stderr ? String(e.stderr).trim().split('\n')[0] : e.message;
-    if (tolerate) return { error: detail };
-    fail(`gh ${args.slice(0, 4).join(' ')} failed: ${detail}`);
-  }
+  const result = runBounded('gh', args, { timeoutMs: GH_TIMEOUT_MS });
+  if (!result.error && result.status === 0) return result.stdout;
+  const detail = diagnostic(result);
+  if (tolerate) return { error: detail };
+  fail(`gh ${args.slice(0, 4).join(' ')} failed: ${detail}`);
 }
 const repoArg = (repo) => (repo ? ['--repo', repo] : []);
 // The repo-qualified REST prefix, in state-sync.cjs's spelling rather than a
@@ -305,7 +305,9 @@ function epicReceived({ t, pr, repo, epic }) {
 // carries `unavailable` and the `note` now. state-sync's `ghChecks` returns rows
 // instead — same distinction, different side of `classify`.
 function ghChecks(pr, repo) {
-  const r = spawnSync('gh', ['pr', 'checks', String(pr), ...repoArg(repo), '--json', CHECK_FIELDS], { encoding: 'utf8' });
+  const r = runBounded('gh', ['pr', 'checks', String(pr), ...repoArg(repo), '--json', CHECK_FIELDS], {
+    timeoutMs: GH_TIMEOUT_MS,
+  });
   const stdout = (r.stdout || '').trim();
   let rows = null;
   if (stdout) {
@@ -452,7 +454,9 @@ function saveReviewObservation(pr, repo, snapshot) {
 function settlement(pr, repo) {
   const key = `${repo || ''}#${pr}`;
   if (settlementCache.has(key)) return settlementCache.get(key);
-  const out = spawnSync('node', [path.join(__dirname, 'reviewers.cjs'), 'unresolved', String(pr), ...repoArg(repo)], { encoding: 'utf8' });
+  const out = runBounded('node', [path.join(__dirname, 'reviewers.cjs'), 'unresolved', String(pr), ...repoArg(repo)], {
+    timeoutMs: REVIEWER_TIMEOUT_MS,
+  });
   let v = {
     unresolved: null, review_decision: null, merge_state: null, base: null, head: null,
     review_signatures: null, review_coverage: null, review_progress: null,
@@ -1032,9 +1036,11 @@ function mergeOne(id) {
       + '(allowed by delivery_pipeline.merge_without_ci)';
   }
 
-  const threads = spawnSync('node', [path.join(__dirname, 'reviewers.cjs'), 'unresolved', String(s.pr), ...repoArg(repo)], { encoding: 'utf8' });
+  const threads = runBounded('node', [path.join(__dirname, 'reviewers.cjs'), 'unresolved', String(s.pr), ...repoArg(repo)], {
+    timeoutMs: REVIEWER_TIMEOUT_MS,
+  });
   if (threads.status !== 0) {
-    return block(`could not read the review threads (reviewers.cjs unresolved exited ${threads.status}) — refusing to merge blind`);
+    return block(`could not read the review threads (${diagnostic(threads)}) — refusing to merge blind`);
   }
   let unresolved = null;
   try { unresolved = JSON.parse(threads.stdout).unresolved_count; } catch { unresolved = null; }

@@ -8,7 +8,6 @@
 
 const path = require('path');
 const fs = require('fs');
-const { spawnSync } = require('child_process');
 
 const phase = (process.argv[2] || '').trim();
 if (!phase) {
@@ -16,17 +15,28 @@ if (!phase) {
   process.exit(0);
 }
 
+const runnerCandidates = [
+  path.join(__dirname, 'command-runner.cjs'),
+  path.join(__dirname, '..', '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'command-runner.cjs'),
+];
+const runnerFile = runnerCandidates.find((file) => fs.existsSync(file));
+if (!runnerFile) {
+  console.error('uat-gate: command-runner.cjs is missing; reinstall Shipyard');
+  process.exit(1);
+}
+const { diagnostic, runBounded, timeoutFromEnv } = require(runnerFile);
+
 const gsdTools = path.join(process.env.HOME || '', '.claude', 'gsd-core', 'bin', 'gsd-tools.cjs');
 if (!fs.existsSync(gsdTools)) {
   console.error(`uat-gate: gsd-tools not found at ${gsdTools}`);
   process.exit(1); // fail closed: cannot verify => do not ship
 }
 
-const r = spawnSync(process.execPath, [gsdTools, 'phase', 'uat-passed', phase, '--raw'], {
-  encoding: 'utf8',
+const r = runBounded(process.execPath, [gsdTools, 'phase', 'uat-passed', phase, '--raw'], {
+  timeoutMs: timeoutFromEnv('SHIPYARD_UAT_GATE_TIMEOUT_MS', 120_000, 10 * 60_000),
 });
 if (r.status !== 0) {
-  console.error(`uat-gate: uat-passed exited ${r.status}: ${(r.stderr || '').trim()}`);
+  console.error(`uat-gate: uat-passed failed: ${diagnostic(r)}`);
   process.exit(1);
 }
 let verdict;

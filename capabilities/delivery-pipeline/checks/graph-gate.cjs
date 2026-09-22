@@ -23,7 +23,6 @@
 
 const fs = require('fs');
 const path = require('path');
-const { spawnSync } = require('child_process');
 
 const ROOT = process.cwd();
 
@@ -115,5 +114,15 @@ if (!fs.existsSync(sibling)) {
   console.error(`graph-gate: ${target} is installed without its frontmatter.cjs sibling — reinstall the capability`);
   process.exit(1);
 }
-const r = spawnSync(process.execPath, [target], { stdio: 'inherit' });
+const runnerFile = path.join(path.dirname(target), 'command-runner.cjs');
+if (!fs.existsSync(runnerFile)) {
+  console.error(`graph-gate: ${target} is installed without command-runner.cjs — reinstall the capability`);
+  process.exit(1);
+}
+const { diagnostic, runBounded, timeoutFromEnv } = require(runnerFile);
+const r = runBounded(process.execPath, [target], {
+  stdio: 'inherit',
+  timeoutMs: timeoutFromEnv('SHIPYARD_GRAPH_GATE_TIMEOUT_MS', 120_000, 10 * 60_000),
+});
+if (r.error) console.error(`graph-gate: validator failed: ${diagnostic(r)}`);
 process.exit(r.status === null ? 1 : r.status);

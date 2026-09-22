@@ -14,6 +14,7 @@ const CAPABILITY_VERSION = 1;
 const RUNTIMES = Object.freeze(['claude', 'codex']);
 const PROVIDERS = Object.freeze({ claude: 'anthropic', codex: 'openai' });
 const SHARED_FILES = Object.freeze([
+  'plugins/delivery-pipeline/scripts/command-runner.cjs',
   'plugins/delivery-pipeline/scripts/run-contract.cjs',
   'plugins/delivery-pipeline/scripts/run-store.cjs',
   'plugins/delivery-pipeline/scripts/run-controller.cjs',
