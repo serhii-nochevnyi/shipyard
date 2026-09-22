@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 715375e2701de77752ebccaaa30df3b13d4ba9d1b506881c613bfaf7ed312dd9
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 22c64008204ef52f380127607566569902e76f3310465f58c6b116da58b24ba9
 phase: 31-not-every-ticket-is-available-work
 plan: 05
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-14
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 715375e2701de77752ebccaaa30df3b13d4ba9d1b506881c613bfaf7ed312dd9
+shipyard_source_fingerprint: 22c64008204ef52f380127607566569902e76f3310465f58c6b116da58b24ba9
 ---
 
 # Phase 31: Gate only the execute transition on tracker eligibility — Delivery Projection

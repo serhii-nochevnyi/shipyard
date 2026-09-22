@@ -1,7 +1,7 @@
 # ADR-014 — mandatory runtime model ladder
 
 - **Status:** accepted
-- **Date:** 2026-09-12; amended 2026-09-16
+- **Date:** 2026-09-12; amended 2026-09-16 and 2026-09-22
 - **Decision owner:** repository operator
 - **Scope:** Shipyard roles dispatched through Claude Code and Codex
 - **Supersedes:** ADR-005 and ADR-012 where they define model/effort selection
@@ -19,9 +19,9 @@ The result is that `delivery_pipeline.model_ladder: adaptive` can be present in
 configuration while the real launch uses another model. A post-launch journal
 record cannot prove that the runtime applied the requested model or effort.
 
-The operator requires a role-specific Codex ladder and mandatory application in
-both runtimes. Claude Code already has a runtime-native palette; changing its
-model IDs or provider configuration is explicitly out of scope.
+The operator requires a role-specific ladder and mandatory application in both
+runtimes. Runtime model identifiers are versioned policy data and must match
+the identifiers exposed by each native host.
 
 ## Decision
 
@@ -37,18 +37,18 @@ Codex model IDs used by the current ladder are:
 
 | Logical model | Concrete Codex model |
 |---|---|
-| Luna | `gpt-5.6-luna` |
-| Sol | `gpt-5.6-sol` |
+| Luna | `gpt-6-luna` |
+| Sol | `gpt-6-sol` |
 
 The adapter keeps `gpt-6-astra` registered for older explicit configurations,
 but no current routed rung selects it.
 
-Claude's existing native palette is:
+Claude's active Opus target and remaining native aliases are:
 
 | Claude model key | Claude Code alias |
 |---|---|
 | Sonnet | `sonnet` |
-| Opus | `opus` |
+| Opus | `claude-opus-5-5` |
 | Fable | `fable` |
 
 ### 2. Approved Codex role ladder
@@ -76,8 +76,8 @@ not an automatic model promotion.
 
 ### 3. Approved Claude Code role ladder
 
-The Claude grid is independent of the Codex table and uses Claude's native
-aliases as its model keys:
+The Claude grid is independent of the Codex table and uses Claude's
+runtime-native model identifiers:
 
 | Role | Base selection | Escalation 1 | Escalation 2 | Escalation signals |
 |---|---|---|---|---|
@@ -133,8 +133,9 @@ evidence of compliance.
 Codex static roles must use the resolver-selected generated agent file. Dynamic
 roles such as executor and decomposition must receive explicit `model` and
 `reasoning_effort` launch arguments. Claude launches must receive the selected
-native palette alias and supported effort/application evidence. If the host
-cannot carry the required override, the dispatch is refused.
+runtime model ID and supported effort/application evidence. Opus launches use
+`claude-opus-5-5`; Sonnet and Fable retain their current aliases. If the host
+cannot carry the required selection, the dispatch is refused.
 
 ### 5. Configuration and override precedence
 

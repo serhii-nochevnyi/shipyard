@@ -43,11 +43,11 @@ or a protected integration merge when repository policy requires it.
    `runtime_unavailable` state is technical and retryable; it is not converted
    into a human checkpoint or a request to switch runtimes.
 
-3. Keep Claude and Codex behind separate adapters. The Claude adapter must
-   connect a supported native Workflow host or an explicitly supported Claude
-   Code CLI bridge and prove the selected native model and effort from launch
-   and runtime evidence. The Codex adapter must launch the resolver-selected
-   generated agent or dynamic model/effort pair and prove the applied values.
+3. Keep Claude and Codex behind separate adapters. The Claude adapter uses a
+   supported Claude Code CLI host and proves the selected model and effort from
+   the assistant records in that exact session transcript. The Codex adapter
+   launches the resolver-selected generated agent or dynamic model/effort pair
+   and proves the applied values from its runtime evidence.
    Neither adapter may inherit a parent session model, pass policy through an
    untyped serializable argument, or fall back to the other provider.
 
@@ -76,10 +76,11 @@ or a protected integration merge when repository policy requires it.
    this ADR does not authorize online policy rewriting.
 
 8. Roll out in this order: shared contract and scoped state; controller
-   leases/wake/resume; Claude adapter and real smoke; Codex adapter and real
-   smoke; graph/reachability integration; observability and measured ladder
-   evaluation. Each slice has a fail-closed capability probe, a negative test,
-   and a rollback flag that preserves historical records.
+   leases/wake/resume; versioned provider-specific model mappings; Claude and
+   Codex adapters with independent capability probes; graph/reachability;
+   observability and measured ladder evaluation. Enabling one runtime requires
+   only that runtime's live evidence. Each slice has a fail-closed probe, a
+   negative test, and rollback that preserves historical records.
 
 ## Consequences
 
@@ -106,8 +107,11 @@ or a protected integration merge when repository policy requires it.
 
 ## Scope fences
 
-- Claude's existing Anthropic palette, provider, and credentials are not
-  changed by this ADR.
+- Claude and Codex activation, model mappings, and credentials are evaluated
+  independently; readiness of one provider cannot enable or block the other.
+- Claude continues to use Anthropic OAuth or Anthropic credentials; Codex
+  continues to use OpenAI/Codex credentials. Credential evidence never crosses
+  provider boundaries.
 - Codex's OpenAI model palette is not replaced with Claude aliases, and Claude
   never consumes Codex model ids.
 - Product repositories are not modified by the control-plane implementation.

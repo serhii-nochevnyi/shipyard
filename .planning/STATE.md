@@ -1,13 +1,13 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 715375e2701de77752ebccaaa30df3b13d4ba9d1b506881c613bfaf7ed312dd9
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 22c64008204ef52f380127607566569902e76f3310465f58c6b116da58b24ba9
 gsd_state_version: '1.0'
 status: planning
 progress:
-  total_phases: 18
+  total_phases: 19
   completed_phases: 9
-  total_plans: 138
-  completed_plans: 130
-  percent: 94
+  total_plans: 143
+  completed_plans: 138
+  percent: 96
 ---
 
 # Project State
@@ -21,16 +21,16 @@ See: .planning/PROJECT.md (updated by Shipyard GSD synchronization)
 
 ## Current Position
 
-Phase: 1 of 18 (Phase 20: Autonomy of the drive-to-green loop)
+Phase: 1 of 19 (Phase 20: Autonomy of the drive-to-green loop)
 Plan: 6 of 6 merged
 Status: pending
-Last activity: 2026-09-19 — Shipyard projection synchronized
+Last activity: 2026-09-22 — Shipyard projection synchronized
 
-Progress: [█████████░] 94%
+Progress: [█████████░] 96%
 
 ## Performance Metrics
 
-- Total plans completed: 130
+- Total plans completed: 138
 - Average duration: not measured by the projection
 - Total execution time: not measured by the projection
 
@@ -55,7 +55,8 @@ Progress: [█████████░] 94%
 | 34 | 5 | 5 | passed |
 | 35 | 3 | 3 | passed |
 | 36 | 12 | 12 | passed |
-| 37 | 8 | 0 | pending |
+| 37 | 8 | 8 | pending |
+| 38 | 5 | 0 | pending |
 
 ## Accumulated Context
 
@@ -70,14 +71,14 @@ Review and resolve phase integration findings shown in the phase artifacts.
 
 ### Blockers/Concerns
 
-- T-37-01: delivery status is pending
-- T-37-02: delivery status is pending
-- T-37-03: delivery status is pending
-- T-37-04: delivery status is pending
-- T-37-05: delivery status is pending
-- T-37-06: delivery status is pending
-- T-37-07: delivery status is pending
-- T-37-08: delivery status is pending
+- T-38-01: delivery status is pending
+- T-38-02: delivery status is pending
+- T-38-03: delivery status is pending
+- T-38-04: delivery status is pending
+- T-38-05: delivery status is pending
+- Phase 20: INTEGRATION.md is missing
+- Phase 21: INTEGRATION.md is missing
+- Phase 22: INTEGRATION.md is missing
 
 ## Deferred Items
 
@@ -87,6 +88,6 @@ Review and resolve phase integration findings shown in the phase artifacts.
 
 ## Session Continuity
 
-Last session: 2026-09-19 12:09
+Last session: 2026-09-22 19:53
 Stopped at: Shipyard GSD projection synchronized from the delivery graph.
 Resume file: None

@@ -48,6 +48,9 @@ epics:
   '37':
     branch: epic/37-autonomous-dual-runtime-control-plane
     repos: [null]
+  '38':
+    branch: epic/38-runtime-model-ladder-recovery
+    repos: [null]
   '33-reduce-orchestration-context-and-transfer-sessions-safely':
     branch: epic/33-reduce-orchestration-context-and-transfer-sessions-safely
     repos: [null]
@@ -2262,4 +2265,84 @@ tickets:
     epic: epic/37-autonomous-dual-runtime-control-plane
     primary_parent: T-37-06
     pr_base: ticket/T-37-06-make-stop-and-wait-decisions-run-scoped
+    jira: null
+  T-38-01:
+    title: Pin the current runtime model identifiers
+    plan: '.planning/phases/38-runtime-model-ladder-recovery/38-01-PLAN.md'
+    phase: '38'
+    repo: null
+    wave: 1
+    depends_on: []
+    files: ['.planning/architecture/ADR-014-mandatory-runtime-model-ladder.md', '.planning/architecture/ADR-014-ROLLOUT.md', README.md, plugins/delivery-pipeline/scripts/runtime-adapters.cjs, plugins/delivery-pipeline/scripts/model-policy-internal.cjs, plugins/delivery-pipeline/scripts/pipeline-config.cjs, capabilities/delivery-pipeline/capability.json, scripts/gen-codex-shipyard.cjs, tests/unit/model-policy.test.cjs, tests/unit/pipeline-config.test.cjs, tests/unit/model-capability.test.cjs, tests/unit/gen-codex-shipyard.test.cjs]
+    risk: high
+    human_checkpoint: true
+    preauthorized: false
+    branch: ticket/T-38-01-pin-the-current-runtime-model-identifier
+    epic: epic/38-runtime-model-ladder-recovery
+    primary_parent: null
+    pr_base: epic/38-runtime-model-ladder-recovery
+    jira: null
+  T-38-02:
+    title: Prove Claude model and effort from the launched session
+    plan: '.planning/phases/38-runtime-model-ladder-recovery/38-02-PLAN.md'
+    phase: '38'
+    repo: null
+    wave: 2
+    depends_on: [T-38-01]
+    files: [plugins/delivery-pipeline/scripts/claude-runtime-host.cjs, plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs, tests/unit/claude-runtime-host.test.cjs, tests/unit/claude-dispatch-adapter.test.cjs, tests/smoke/claude-runtime-smoke.sh, tests/fixtures/claude-assistant-session.jsonl]
+    risk: high
+    human_checkpoint: true
+    preauthorized: false
+    branch: ticket/T-38-02-prove-claude-model-and-effort-from-the-l
+    epic: epic/38-runtime-model-ladder-recovery
+    primary_parent: T-38-01
+    pr_base: ticket/T-38-01-pin-the-current-runtime-model-identifier
+    jira: null
+  T-38-03:
+    title: Connect the Claude runtime host to delivery
+    plan: '.planning/phases/38-runtime-model-ladder-recovery/38-03-PLAN.md'
+    phase: '38'
+    repo: null
+    wave: 3
+    depends_on: [T-38-02]
+    files: [plugins/delivery-pipeline/scripts/claude-delivery-host.cjs, plugins/delivery-pipeline/scripts/claude-workflow-host.cjs, tests/unit/claude-delivery-host.test.cjs, tests/unit/claude-workflow-host.test.cjs]
+    risk: high
+    human_checkpoint: true
+    preauthorized: false
+    branch: ticket/T-38-03-connect-the-claude-runtime-host-to-deliv
+    epic: epic/38-runtime-model-ladder-recovery
+    primary_parent: T-38-02
+    pr_base: ticket/T-38-02-prove-claude-model-and-effort-from-the-l
+    jira: null
+  T-38-04:
+    title: Connect Codex launches to delivery
+    plan: '.planning/phases/38-runtime-model-ladder-recovery/38-04-PLAN.md'
+    phase: '38'
+    repo: null
+    wave: 2
+    depends_on: [T-38-01]
+    files: [plugins/delivery-pipeline/scripts/codex-delivery-host.cjs, plugins/delivery-pipeline/scripts/codex-agent.cjs, tests/unit/codex-delivery-host.test.cjs, tests/unit/codex-agent.test.cjs, tests/smoke/codex-runtime-smoke.sh]
+    risk: high
+    human_checkpoint: true
+    preauthorized: false
+    branch: ticket/T-38-04-connect-codex-launches-to-delivery
+    epic: epic/38-runtime-model-ladder-recovery
+    primary_parent: T-38-01
+    pr_base: ticket/T-38-01-pin-the-current-runtime-model-identifier
+    jira: null
+  T-38-05:
+    title: Route delivery through independent runtime rollouts
+    plan: '.planning/phases/38-runtime-model-ladder-recovery/38-05-PLAN.md'
+    phase: '38'
+    repo: null
+    wave: 4
+    depends_on: [T-38-03, T-38-04]
+    files: [plugins/delivery-pipeline/scripts/run-rollout.cjs, plugins/delivery-pipeline/commands/deliver.md, plugins/delivery-pipeline/commands/investigate.md, plugins/delivery-pipeline/commands/decompose.md, docs/gsd_multilevel_delivery_pipeline.md, tests/unit/run-rollout.test.cjs, tests/smoke/runtime-control-plane-smoke.sh]
+    risk: high
+    human_checkpoint: true
+    preauthorized: false
+    branch: ticket/T-38-05-route-delivery-through-independent-runti
+    epic: epic/38-runtime-model-ladder-recovery
+    primary_parent: T-38-03
+    pr_base: ticket/T-38-03-connect-the-claude-runtime-host-to-deliv
     jira: null
