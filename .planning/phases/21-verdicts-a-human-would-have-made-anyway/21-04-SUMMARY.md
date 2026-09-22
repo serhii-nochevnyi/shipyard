@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 32a13deceef97c9ce2b861b64283c3fbf040efdebc5523ee34cae2de983e52c6
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 80525c3ac97c0316821a9a852a21b2d559e2157e8194186637da09caa5f631a5
 phase: 21-verdicts-a-human-would-have-made-anyway
 plan: 04
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-08-26
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 32a13deceef97c9ce2b861b64283c3fbf040efdebc5523ee34cae2de983e52c6
+shipyard_source_fingerprint: 80525c3ac97c0316821a9a852a21b2d559e2157e8194186637da09caa5f631a5
 ---
 
 # Phase 21: Degenerate green is detected on the diff — Delivery Projection
