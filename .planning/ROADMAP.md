@@ -718,7 +718,7 @@ promotion signals, and historical receipts.
 <!-- shipyard:gsd-sync:begin -->
 ## Shipyard synchronization (generated)
 
-- Source fingerprint: `e0a62521de73e9c56ba1cfd7766f32b8c48967e36fc228be28196667ba5269b9`
+- Source fingerprint: `3a46ec95c07469c08263b8acad4172d55c381136d2d361a8a11fa2f5261a7010`
 - Plans merged: 139/144
 - Phases verified: 9/19
 - Current phase: 20

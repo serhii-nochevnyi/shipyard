@@ -53,6 +53,13 @@ https://github.com/openai/codex/blob/rust-v0.155.1/codex-rs/protocol/src/protoco
 The current T-38-04 path accepts `gsd_role`, then records
 `gsd_launch_mechanism: typed-gsd-callback`; `codex-runtime-host.cjs` does not
 apply that role to a child. Its receipt is therefore not proof of a GSD agent.
+
+Two live Codex 0.155.1 typed spawns showed that the child `session_meta.agent_path`
+is the native task path, such as `/root/plan_checker_ready`, not the role TOML
+path. The child transcript's developer-role response item contains the exact
+installed `developer_instructions`. T-38-04 must correlate parent spawn task,
+child `agent_path`, role, and parent thread, then use that developer record to
+prove the invocation-pinned role definition actually loaded.
 T-38-04 must request a native child with the exact configured role, bind child
 session evidence to its parent, and verify role, model, and effort. Recent
 native 0.155.1 session records provide the parent ID, typed role, and
