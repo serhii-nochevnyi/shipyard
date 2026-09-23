@@ -62,6 +62,7 @@ fs.cpSync(args[2], path.join(process.env.GSD_CAPABILITIES_DIR, 'delivery-pipelin
     capabilities[runtime] = {
       supportedModels: [...new Set(pairs.map((pair) => pair.model))],
       supportedEfforts: [...new Set(pairs.map((pair) => pair.effort))], supportedSelections: pairs,
+      ...(runtime === 'claude' ? { observedModel: true, observedEffort: true } : {}),
     };
   }
   const capabilitiesFile = path.join(work, 'capabilities.json');
@@ -145,8 +146,24 @@ fs.cpSync(args[2], path.join(process.env.GSD_CAPABILITIES_DIR, 'delivery-pipelin
       assert.notEqual(effort, 'inherit');
       calls.push({ runtime, model: selection.model, effort });
       if (missingEvidence) return undefined;
-      return { launch_id: 'smoke-' + launches, applied_model: selection.model, applied_effort: effort,
-        observed_model: selection.model, observed_effort: effort,
+      const sessionId = 'smoke-' + launches;
+      const observedModel = runtime === 'claude'
+        ? selection.model === 'sonnet' ? 'claude-sonnet-5'
+          : selection.model === 'fable' ? 'claude-fable-5-1' : selection.model
+        : selection.model;
+      return { launch_id: sessionId, applied_model: selection.model, applied_effort: effort,
+        observed_model: observedModel, observed_effort: effort,
+        ...(runtime === 'claude' ? {
+          session_id: sessionId,
+          selection_evidence: {
+            source: 'claude-session-assistant-transcript',
+            session_id: sessionId,
+            assistant_records: 1,
+            model: observedModel,
+            effort,
+            transcript: { path: '/recorded-sessions/' + sessionId + '.jsonl', bytes: 1, sha256: 'a'.repeat(64) },
+          },
+        } : {}),
         ...(selection.agent_file_digest ? { agent_file_digest: selection.agent_file_digest } : {}) };
     },
     launchStatic(selection) {

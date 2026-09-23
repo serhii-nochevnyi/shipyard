@@ -73,6 +73,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { execFileSync } = require('child_process');
 const { suite, test, done, assert } = require(path.join(__dirname, 'assert-harness.cjs'));
+const { transcriptEvidence: testTranscriptEvidence } = require('./claude-test-evidence.cjs');
 const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
 const { codexStaticVariants } = require('../../plugins/delivery-pipeline/scripts/gsd-tune.cjs');
 const pipelineConfig = require('../../plugins/delivery-pipeline/scripts/pipeline-config.cjs');
@@ -492,15 +493,15 @@ const sourceDispatchRecorder = createDurableRecorder(sourceDispatchStore);
 const sourceDispatchCapabilities = Object.freeze({
   supportedModels: Object.values(CLAUDE_MODEL_ALIASES),
   supportedEfforts: ['high', 'medium', 'max'],
-  observedModel: false,
-  observedEffort: false,
+  observedModel: true,
+  observedEffort: true,
 });
 const sourceHostEvidence = new WeakMap();
 let sourceLaunch = 0;
 const sourceApplicationEvidence = ({ result }) => {
   const evidence = sourceHostEvidence.get(result);
   if (!evidence) throw new Error('test Claude host returned no application evidence');
-  return evidence;
+  return testTranscriptEvidence(evidence);
 };
 const sourceArtifactConsumer = ({ artifact, result, record }) => {
   const role = artifact && artifact.role;
@@ -610,6 +611,8 @@ async function renderedPrompt(name) {
       launch_id: `test-source-launch-${++sourceLaunch}`,
       applied_model: opts.model,
       applied_effort: opts.effort,
+      observed_model: opts.model,
+      observed_effort: opts.effort,
     });
     return result;
   };
@@ -692,6 +695,8 @@ const capabilitiesFor = (resolutions) => ({
     model: resolution.model,
     effort: resolution.effort,
   })),
+  observedModel: true,
+  observedEffort: true,
 });
 
 const expectCode = (fn, code) => {
@@ -702,14 +707,17 @@ const expectCode = (fn, code) => {
   );
 };
 
-const applicationEvidence = (selection, launchId, effort = selection.effort, extra = {}) => ({
-  launch_id: launchId,
-  applied_model: selection.model,
-  applied_effort: effort,
-  observed_model: selection.model,
-  observed_effort: effort,
-  ...extra,
-});
+const applicationEvidence = (selection, launchId, effort = selection.effort, extra = {}) => {
+  const value = {
+    launch_id: launchId,
+    applied_model: selection.model,
+    applied_effort: effort,
+    observed_model: selection.model,
+    observed_effort: effort,
+    ...extra,
+  };
+  return /^gpt-/.test(selection.model) ? value : testTranscriptEvidence(value);
+};
 
 const codexApplicationEvidence = (selection, launchId, extra = {}) => applicationEvidence(
   { model: selection.model, effort: selection.reasoning_effort },
@@ -1390,7 +1398,7 @@ test('Claude workflow coordinator selects the typed callback and refuses its abs
       });
       return value;
     },
-    applicationEvidence: ({ result: value }) => evidence.get(value),
+    applicationEvidence: ({ result: value }) => testTranscriptEvidence(evidence.get(value)),
     capabilities: sourceDispatchCapabilities,
     recorder: sourceDispatchRecorder,
     prompt: 'typed GSD coordinator prompt',
@@ -1437,12 +1445,14 @@ test('Claude workflow coordinator accepts an explicit typed-only host and prefli
         launch_id: 'claude-host-typed-only',
         applied_model: launchOptions.model,
         applied_effort: launchOptions.effort,
+        observed_model: launchOptions.model,
+        observed_effort: launchOptions.effort,
         gsd_role: gsdRole,
         gsd_launch_mechanism: launchOptions.gsd_launch_mechanism,
       });
       return value;
     },
-    applicationEvidence: ({ result }) => evidence.get(result),
+    applicationEvidence: ({ result }) => testTranscriptEvidence(evidence.get(result)),
   };
 
   try {
@@ -1971,8 +1981,8 @@ test('the routed-launch source sweep rejects native launches in shipped Markdown
 });
 
 const RUNTIME_OWNED_FILE_DIGESTS = Object.freeze({
-  'plugins/delivery-pipeline/scripts/runtime-adapters.cjs': 'ac0225b322353dbedca3ef8a99d30e1ab5a4f54a69f077006b7d657cfdf83b65',
-  'plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs': 'b783ebc1cbf2f4af33cf697a98cf980a0696f3afefd8aad4f0056b52d17c276d',
+  'plugins/delivery-pipeline/scripts/runtime-adapters.cjs': '949748da1bccd51704f9a7382cce5a93b1c58f7acfea21f2ffffe315831a05e5',
+  'plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs': '3b313a01ea16883386dceaa710e55fdd03931a404627c28cce1f5adcac6174fd',
 });
 
 test('Claude palette and provider adapter sources match their checked-in baselines and remain native', () => {

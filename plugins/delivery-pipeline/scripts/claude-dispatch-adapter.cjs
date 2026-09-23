@@ -6,7 +6,7 @@
 // this evidence into a compliant, durably recorded receipt.
 const policy = require('./model-policy.cjs');
 const { isDeepStrictEqual } = require('node:util');
-const { CLAUDE_MODEL_ALIASES } = require('./runtime-adapters.cjs');
+const { CLAUDE_MODEL_ALIASES, matchesModelObservation } = require('./runtime-adapters.cjs');
 const {
   createDispatchBoundary,
   GSD_LAUNCH_MECHANISM,
@@ -384,6 +384,9 @@ function validateAvailability(resolution, capabilities) {
   if (!object(capabilities)) {
     refuse('UNSUPPORTED_SELECTION', 'missing Claude host capabilities');
   }
+  if (capabilities.observedModel !== true || capabilities.observedEffort !== true) {
+    refuse('UNSUPPORTED_SELECTION', 'Claude dispatch requires exact-session model and effort observations');
+  }
   for (const [key, value] of [
     ['supportedModels', resolution.model],
     ['supportedEfforts', resolution.effort],
@@ -461,6 +464,21 @@ function validateLaunchArguments(resolution) {
   }
 }
 
+function transcriptReference(value, label) {
+  if (!object(value)
+      || typeof value.path !== 'string' || value.path.trim() === ''
+      || /[\u0000-\u001f\u007f]/.test(value.path)
+      || !Number.isSafeInteger(value.bytes) || value.bytes < 0
+      || typeof value.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(value.sha256)) {
+    refuse('MISSING_RECEIPT', `${label} transcript reference is invalid`);
+  }
+  return Object.freeze({ path: value.path, bytes: value.bytes, sha256: value.sha256 });
+}
+
+function observedModelMatchesSelection(observed, expected) {
+  return matchesModelObservation('claude', observed, expected);
+}
+
 function applicationEvidenceFields(applied) {
   const output = {};
   for (const field of ['session_id', 'runtime_version']) {
@@ -478,17 +496,25 @@ function applicationEvidenceFields(applied) {
     output.process_id = applied.process_id;
   }
   if (applied.transcript !== undefined) {
-    const transcript = applied.transcript;
-    if (!object(transcript)
-        || typeof transcript.path !== 'string' || transcript.path.trim() === ''
-        || !Number.isSafeInteger(transcript.bytes) || transcript.bytes < 0
-        || typeof transcript.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(transcript.sha256)) {
-      refuse('MISSING_RECEIPT', 'host application evidence transcript reference is invalid');
+    output.transcript = transcriptReference(applied.transcript, 'host application evidence');
+  }
+  if (applied.selection_evidence !== undefined) {
+    const source = applied.selection_evidence;
+    if (!object(source)
+        || source.source !== 'claude-session-assistant-transcript'
+        || typeof source.session_id !== 'string' || source.session_id !== applied.session_id
+        || !Number.isSafeInteger(source.assistant_records) || source.assistant_records < 1
+        || source.model !== applied.observed_model
+        || source.effort !== applied.observed_effort) {
+      refuse('MISSING_RECEIPT', 'host assistant-transcript evidence does not bind the observed selection to its session');
     }
-    output.transcript = Object.freeze({
-      path: transcript.path,
-      bytes: transcript.bytes,
-      sha256: transcript.sha256,
+    output.selection_evidence = Object.freeze({
+      source: source.source,
+      session_id: source.session_id,
+      assistant_records: source.assistant_records,
+      model: source.model,
+      effort: source.effort,
+      transcript: transcriptReference(source.transcript, 'host assistant-transcript evidence'),
     });
   }
   if (applied.stream_evidence !== undefined) {
@@ -505,6 +531,28 @@ function applicationEvidenceFields(applied) {
         ? { assistant_messages: applied.stream_evidence.assistant_messages } : {}),
       ...(Number.isSafeInteger(applied.stream_evidence.usage_records)
         ? { usage_records: applied.stream_evidence.usage_records } : {}),
+    });
+  }
+  if (applied.gsd_agent_evidence !== undefined) {
+    const source = applied.gsd_agent_evidence;
+    if (!object(source)
+        || source.schema !== 'shipyard.gsd-agent-application.v1'
+        || source.runtime !== 'claude'
+        || typeof source.role !== 'string' || source.role.trim() === ''
+        || source.session_id !== applied.session_id
+        || source.session_start_agent_type !== source.role
+        || source.transcript_agent_setting !== source.role
+        || !Number.isSafeInteger(source.agent_setting_records) || source.agent_setting_records < 1) {
+      refuse('MISSING_RECEIPT', 'Claude typed-agent application evidence is incomplete or contradictory');
+    }
+    output.gsd_agent_evidence = Object.freeze({
+      schema: source.schema,
+      runtime: source.runtime,
+      role: source.role,
+      session_id: source.session_id,
+      session_start_agent_type: source.session_start_agent_type,
+      transcript_agent_setting: source.transcript_agent_setting,
+      agent_setting_records: source.agent_setting_records,
     });
   }
   return output;
@@ -541,24 +589,34 @@ function createClaudeDispatchAdapter(options = {}) {
     if (applied.applied_model !== selection.model || applied.applied_effort !== selection.effort) {
       refuse('NONCOMPLIANT_RECEIPT', 'host applied a different Claude model or effort');
     }
+    if (!applied.selection_evidence) {
+      refuse('MISSING_RECEIPT', 'host has no exact-session assistant transcript evidence');
+    }
     const observations = {};
-    for (const [field, supported, expected] of [
-      ['observed_model', 'observedModel', applied.applied_model],
-      ['observed_effort', 'observedEffort', applied.applied_effort],
+    for (const [field, expected] of [
+      ['observed_model', applied.applied_model],
+      ['observed_effort', applied.applied_effort],
     ]) {
-      const observed = applied[field] === undefined && capabilities[supported] === false
-        ? 'unknown' : applied[field];
-      if (observed !== expected && !(observed === 'unknown' && capabilities[supported] === false)) {
+      const observed = applied[field];
+      const matched = field === 'observed_model'
+        ? observedModelMatchesSelection(observed, expected) : observed === expected;
+      if (!matched) {
         refuse('NONCOMPLIANT_RECEIPT', 'host is missing or contradicts ' + field);
       }
       observations[field] = observed;
     }
     const gsdRole = validateGsdRole(resolution);
     if (gsdRole !== undefined
-        && (applied.gsd_role !== gsdRole || applied.gsd_launch_mechanism !== GSD_LAUNCH_MECHANISM)) {
+        && (applied.gsd_role !== gsdRole || applied.gsd_launch_mechanism !== GSD_LAUNCH_MECHANISM
+          || !object(applied.gsd_agent_evidence) || applied.gsd_agent_evidence.role !== gsdRole
+          || applied.gsd_agent_evidence.session_id !== applied.session_id)) {
       refuse('NONCOMPLIANT_RECEIPT', 'Claude host did not attest the exact typed GSD callback role and launch mechanism', {
         expected: { gsd_role: gsdRole, gsd_launch_mechanism: GSD_LAUNCH_MECHANISM },
-        actual: { gsd_role: applied.gsd_role, gsd_launch_mechanism: applied.gsd_launch_mechanism },
+        actual: {
+          gsd_role: applied.gsd_role,
+          gsd_launch_mechanism: applied.gsd_launch_mechanism,
+          gsd_agent_evidence: applied.gsd_agent_evidence,
+        },
       });
     }
     return Object.freeze({
@@ -606,10 +664,12 @@ function createClaudeDispatchAdapter(options = {}) {
   const adapter = {
     runtime: 'claude', models: CLAUDE_MODEL_ALIASES,
     capabilities: Object.freeze({
-      observedModel: capabilities.observedModel !== false,
-      observedEffort: capabilities.observedEffort !== false,
+      observedModel: capabilities.observedModel === true,
+      observedEffort: capabilities.observedEffort === true,
     }),
     capabilitySnapshot: (resolution, context) => snapshotFor(capabilities, resolution, context),
+    matchesObservation: (field, observed, applied) => field === 'observed_model'
+      && observedModelMatchesSelection(observed, applied),
     ...(capacity !== undefined ? { capacity } : {}),
     supports: (resolution) => validateAvailability(resolution, capabilities),
     validate,

@@ -6,6 +6,7 @@ const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const { spawnSync } = require('node:child_process');
 const { suite, test, done, assert } = require('./assert-harness.cjs');
+const { transcriptEvidence: testTranscriptEvidence } = require('./claude-test-evidence.cjs');
 const {
   CLAUDE_MODEL_ALIASES,
   createClaudeWorkflowDispatch,
@@ -19,6 +20,10 @@ const ROLE_ARTIFACT = path.join(
   '../../plugins/delivery-pipeline/scripts/role-artifact.cjs',
 );
 const roleArtifact = require(ROLE_ARTIFACT);
+
+function transcriptEvidence(value) {
+  return testTranscriptEvidence(value);
+}
 
 function git(root, args) {
   return execFileSync('git', ['-C', root, ...args], { encoding: 'utf8' }).trim();
@@ -53,13 +58,13 @@ function repairFixture() {
         notes: 'bounded repair synopsis',
         hypothesis: 'the fixer must preserve the original failure cause',
       };
-      evidence.set(result, {
+      evidence.set(result, transcriptEvidence({
         launch_id: 'repair-artifact-launch',
         applied_model: launchOptions.model,
         applied_effort: launchOptions.effort,
         observed_model: launchOptions.model,
         observed_effort: launchOptions.effort,
-      });
+      }));
       return result;
     },
     parallel: async (thunks) => Promise.all(thunks.map((thunk) => thunk())),
@@ -99,13 +104,13 @@ function roleWorkflowFixture({ role, ticket, pr, result, evidenceText }) {
         `${role} dispatch must rotate the previous fixed producer evidence before launch`);
       fs.writeFileSync(evidencePath, evidenceText);
       const value = JSON.parse(JSON.stringify(result));
-      evidence.set(value, {
+      evidence.set(value, transcriptEvidence({
         launch_id: `${role}-launch-${++launch}`,
         applied_model: launchOptions.model,
         applied_effort: launchOptions.effort,
         observed_model: launchOptions.model,
         observed_effort: launchOptions.effort,
-      });
+      }));
       return value;
     },
     parallel: async (thunks) => Promise.all(thunks.map((thunk) => thunk())),
@@ -345,7 +350,7 @@ test('the direct trusted consumer seals and rereads drift evidence with the same
         observedEffort: true,
       },
       recorder: fixture.recorder,
-      applicationEvidence: ({ result: applied }) => ({
+      applicationEvidence: ({ result: applied }) => transcriptEvidence({
         launch_id: 'direct-drift-launch',
         applied_model: 'claude-opus-5-5',
         applied_effort: 'max',
