@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 3edaadc7c2b8404494a7624647c84bf47909f04a0d85a3c1b3f215a80689c381
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 41f98754209d54fd46b0e846496ad911a07f95c64275e6d599942e20e1f1b95a
 phase: 35-gsd-and-shipyard-workflow-loop
 plan: 01
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-11
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 3edaadc7c2b8404494a7624647c84bf47909f04a0d85a3c1b3f215a80689c381
+shipyard_source_fingerprint: 41f98754209d54fd46b0e846496ad911a07f95c64275e6d599942e20e1f1b95a
 ---
 
 # Phase 35: Deterministic native-GSD projection — Delivery Projection
