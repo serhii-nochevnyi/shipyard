@@ -18,6 +18,7 @@ const REQUIRED_HELP_MARKERS = Object.freeze([
   '--model', '--effort', '--output-format', 'stream-json', '--session-id',
   '--permission-mode', '--permission-prompts', '--allowedTools', '--tools',
   '--restricted', '--strict-mcp-config', '--settings', '--agent',
+  '--agents',
 ]);
 const UNAVAILABLE_CODES = new Set([
   'RUNTIME_UNAVAILABLE',
@@ -297,14 +298,20 @@ function observedSelection(records, sessionId, expectedModel, expectedEffort, ex
   if (!Array.isArray(records)) fail('RUNTIME_EVIDENCE_MISSING', 'Claude assistant transcript records are missing');
   const matching = records.filter((record) => object(record)
     && record.type === 'assistant' && record.sessionId === sessionId);
+  const agentRecords = expectedGsdRole === undefined ? []
+    : records.filter((record) => object(record)
+      && record.type === 'agent-setting' && record.sessionId === sessionId);
   const wrongAgentRecord = expectedGsdRole === undefined ? undefined
-    : matching.find((record) => record.agentSetting !== undefined && record.agentSetting !== expectedGsdRole);
+    : [...matching, ...agentRecords].find((record) => record.agentSetting !== undefined && record.agentSetting !== expectedGsdRole);
   if (wrongAgentRecord) {
     const observed = wrongAgentRecord.agentSetting;
     fail('RUNTIME_EVIDENCE_MISMATCH',
       'Claude assistant transcript does not prove the requested GSD agent on every assistant record', {
         expected: expectedGsdRole, observed,
       });
+  }
+  if (expectedGsdRole !== undefined && !agentRecords.some((record) => record.agentSetting === expectedGsdRole)) {
+    fail('RUNTIME_EVIDENCE_MISSING', 'Claude transcript has no exact-session GSD agent-setting record');
   }
   const complete = matching.filter((record) => {
     const model = object(record.message) ? record.message.model : undefined;
@@ -328,12 +335,6 @@ function observedSelection(records, sessionId, expectedModel, expectedEffort, ex
         expected: expectedEffort, observed: appliedEffort,
       });
     }
-    if (expectedGsdRole !== undefined && record.agentSetting !== expectedGsdRole) {
-      fail(record.agentSetting === undefined ? 'RUNTIME_EVIDENCE_MISSING' : 'RUNTIME_EVIDENCE_MISMATCH',
-        'Claude assistant transcript does not prove the requested GSD agent', {
-          expected: expectedGsdRole, observed: record.agentSetting,
-        });
-    }
     pairs.add(`${appliedModel}\0${appliedEffort}`);
   }
   if (pairs.size !== 1) fail('RUNTIME_EVIDENCE_INVALID', 'Claude assistant transcript contains contradictory model or effort evidence');
@@ -345,7 +346,7 @@ function observedSelection(records, sessionId, expectedModel, expectedEffort, ex
     assistant_records: complete.length,
     ...(expectedGsdRole !== undefined ? {
       agent_role: expectedGsdRole,
-      agent_setting_records: complete.length,
+      agent_setting_records: agentRecords.length,
     } : {}),
   });
 }
@@ -359,6 +360,45 @@ function projectsDirectory(options, environment) {
     || path.join(home, '.claude');
   const resolved = config.startsWith('~/') ? path.join(home, config.slice(2)) : config;
   return path.join(path.resolve(resolved), 'projects');
+}
+
+function gsdAgentDefinition(role, environment, configuredRoot) {
+  const home = environment.HOME || os.homedir();
+  const config = environment.CLAUDE_CONFIG_DIR || process.env.CLAUDE_CONFIG_DIR || path.join(home, '.claude');
+  const expanded = config.startsWith('~/') ? path.join(home, config.slice(2)) : config;
+  const directory = path.resolve(configuredRoot || path.join(expanded, 'agents'));
+  const file = path.join(directory, `${role}.md`);
+  let parent;
+  let stat;
+  try {
+    parent = fs.lstatSync(directory);
+    stat = fs.lstatSync(file);
+  } catch (error) {
+    fail('RUNTIME_CAPABILITY_MISSING', `GSD agent definition is unavailable: ${error.message}`);
+  }
+  if (!parent.isDirectory() || parent.isSymbolicLink() || !stat.isFile() || stat.isSymbolicLink()
+      || stat.size > 256 * 1024
+      || fs.realpathSync(file) !== path.join(fs.realpathSync(directory), `${role}.md`)) {
+    fail('RUNTIME_CAPABILITY_MISSING', 'GSD agent definition is not a bounded regular file');
+  }
+  const raw = fs.readFileSync(file, 'utf8');
+  const parts = /^---\r?\n([\s\S]*?)\r?\n---\r?\n([\s\S]+)$/.exec(raw);
+  if (!parts) fail('RUNTIME_CAPABILITY_MISSING', 'GSD agent definition lacks frontmatter and prompt');
+  const field = (name) => parts[1].split(/\r?\n/).find((line) => line.startsWith(`${name}: `))?.slice(name.length + 2).trim();
+  if (field('name') !== role || !field('description') || !field('tools')) {
+    fail('RUNTIME_CAPABILITY_MISSING', 'GSD agent definition has invalid identity or tools');
+  }
+  const available = field('tools').split(',').map((item) => item.trim());
+  const disallowed = (field('disallowedTools') || '').split(',').map((item) => item.trim());
+  const allowed = ALLOWED_TOOLS.split(',').filter((tool) => available.includes(tool) && !disallowed.includes(tool));
+  if (!allowed.includes('Bash') || !allowed.includes('Read') || !allowed.includes('Glob') || !allowed.includes('Grep')) {
+    fail('RUNTIME_CAPABILITY_MISSING', 'GSD agent definition lacks required scoped tools');
+  }
+  return Object.freeze({
+    role,
+    tools: allowed.join(','),
+    agents: JSON.stringify({ [role]: { description: field('description'), prompt: parts[2], tools: allowed } }),
+  });
 }
 
 function transcriptPathForEvidence(root, transcriptPath, sessionId) {
@@ -583,6 +623,7 @@ function createClaudeCliLauncher(options = {}) {
     if (gsdRole !== undefined && !GSD_ROLES.includes(gsdRole)) {
       fail('INVALID_INPUT', 'gsd_role is not an approved typed GSD agent');
     }
+    const agentDefinition = gsdRole ? gsdAgentDefinition(gsdRole, childEnvironment, options.gsdAgentRoot) : null;
     const evidenceDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-claude-session-start-'));
     const evidenceFile = path.join(evidenceDirectory, 'session-start.json');
     try {
@@ -617,12 +658,14 @@ function createClaudeCliLauncher(options = {}) {
           }],
         },
       });
+      const tools = agentDefinition ? agentDefinition.tools : ALLOWED_TOOLS;
       const args = [
       '--print', '--input-format', STREAM_FORMAT, '--output-format', STREAM_FORMAT,
       '--verbose', '--model', model, '--effort', effort, '--session-id', sessionId,
-      ...(gsdRole ? ['--agent', gsdRole] : ['--restricted']),
-      '--strict-mcp-config', '--tools', ALLOWED_TOOLS,
-      '--allowedTools', ALLOWED_TOOLS, '--permission-mode', 'dontAsk',
+      '--restricted',
+      ...(gsdRole ? ['--agents', agentDefinition.agents, '--agent', gsdRole] : []),
+      '--strict-mcp-config', '--tools', tools,
+      '--allowedTools', tools, '--permission-mode', 'dontAsk',
       '--permission-prompts', 'none', '--settings', settings,
       ];
       let child;
@@ -771,6 +814,7 @@ function createClaudeRuntimeHost(options = {}) {
       ? path.join(scope.worktree, '.planning', 'graph', 'transcripts', 'claude')
       : options.transcriptDir,
     sessionTranscriptRoot: options.sessionTranscriptRoot,
+    gsdAgentRoot: options.gsdAgentRoot,
     transcriptTimeoutMs: options.transcriptTimeoutMs,
     transcriptPollMs: options.transcriptPollMs,
     now: options.now,

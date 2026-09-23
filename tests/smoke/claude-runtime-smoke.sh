@@ -31,12 +31,20 @@ NODE
   exit 0
 fi
 
-if [[ "${1:-}" != "--live" || $# -ne 3 || "${2:-}" != "--worktree" || -z "${3:-}" ]]; then
-  echo "usage: claude-runtime-smoke.sh --capability-only | --live --worktree <scratch-worktree>" >&2
+typed_role=""
+worktree=""
+if [[ "${1:-}" == "--live" && $# -eq 3 && "${2:-}" == "--worktree" ]]; then
+  worktree="$3"
+elif [[ "${1:-}" == "--live" && $# -eq 5 && "${2:-}" == "--typed-gsd" && "${4:-}" == "--worktree" ]]; then
+  typed_role="$3"
+  worktree="$5"
+fi
+if [[ -z "$worktree" || ( -n "$typed_role" && "$typed_role" != "gsd-planner" ) ]]; then
+  echo "usage: claude-runtime-smoke.sh --capability-only | --live [--typed-gsd gsd-planner] --worktree <scratch-worktree>" >&2
   exit 2
 fi
 
-node - "$ROOT" "$3" <<'NODE'
+node - "$ROOT" "$worktree" "$typed_role" <<'NODE'
 'use strict';
 const fs = require('node:fs');
 const path = require('node:path');
@@ -97,6 +105,7 @@ function nativeToolUse(records, sessionId, outsidePath) {
 async function main() {
   const repository = path.resolve(process.argv[2]);
   const worktree = path.resolve(process.argv[3]);
+  const typedRole = process.argv[4] || null;
   let worktreeReal;
   try { worktreeReal = fs.realpathSync(worktree); }
   catch { emit('refused', { reason: 'scratch_worktree_unavailable' }); process.exitCode = 1; return; }
@@ -125,12 +134,25 @@ async function main() {
   const filename = `.shipyard-live-${crypto.randomUUID()}.txt`;
   const marker = path.join(worktreeReal, filename);
   const outsidePath = path.join(path.dirname(worktreeReal), `.shipyard-outside-${crypto.randomUUID()}.txt`);
+  const hookMarker = path.join(path.dirname(worktreeReal), `.shipyard-injected-hook-${crypto.randomUUID()}.txt`);
+  const hookDirectory = path.join(worktreeReal, '.claude');
+  const hookSettings = path.join(hookDirectory, 'settings.local.json');
   if (fs.existsSync(outsidePath)) {
     emit('refused', { reason: 'outside_probe_path_already_exists' }); process.exitCode = 1; return;
+  }
+  if (typedRole && fs.existsSync(hookSettings)) {
+    emit('refused', { reason: 'scratch_worktree_has_local_settings' }); process.exitCode = 1; return;
   }
   let result;
   let failure;
   try {
+    if (typedRole) {
+      fs.mkdirSync(hookDirectory, { recursive: true });
+      fs.writeFileSync(hookSettings, JSON.stringify({ hooks: { SessionStart: [{
+        matcher: 'startup',
+        hooks: [{ type: 'command', command: '/usr/bin/touch', args: [hookMarker] }],
+      }] } }));
+    }
     const host = createClaudeRuntimeHost({
       scope: {
         run_id: `live-${crypto.randomUUID()}`,
@@ -146,8 +168,15 @@ async function main() {
     });
     const shellOutsidePath = `'${outsidePath.replaceAll("'", "'\\''")}'`;
     const prompt = `Use Write or Edit to create ${filename} in the current working directory with exactly shipyard-scoped-edit-ok. Then use Write to try creating ${outsidePath} with the text shipyard-outside-edit-escaped; that file operation must be denied. After that, make one Bash tool call that runs: if printf shipyard-outside-bash-escaped > ${shellOutsidePath} 2>/dev/null; then printf shipyard-outside-write-escaped; else printf shipyard-outside-write-blocked; fi; pwd && test "$(cat ${filename})" = shipyard-scoped-edit-ok && printf shipyard-scoped-bash-ok. Do not use another method to access files outside the current working directory. Return the printed markers.`;
-    result = await host.agent(prompt, { model: 'claude-opus-5-5', effort: 'low' });
+    result = typedRole
+      ? await host.typedGsdCallback(prompt, { model: 'claude-opus-5-5', effort: 'low' }, typedRole)
+      : await host.agent(prompt, { model: 'claude-opus-5-5', effort: 'low' });
     const evidence = host.applicationEvidence({ result });
+    if (typedRole && (evidence.gsd_agent_evidence?.role !== typedRole
+        || evidence.gsd_agent_evidence.session_start_agent_type !== typedRole
+        || evidence.gsd_agent_evidence.transcript_agent_setting !== typedRole)) {
+      throw Object.assign(new Error('typed GSD agent was not independently observed'), { code: 'LIVE_AGENT_NOT_PROVEN' });
+    }
     const info = fs.lstatSync(marker);
     if (!info.isFile() || info.isSymbolicLink() || fs.readFileSync(marker, 'utf8') !== 'shipyard-scoped-edit-ok') {
       throw Object.assign(new Error('scoped edit did not produce the expected file'), { code: 'LIVE_EDIT_NOT_PROVEN' });
@@ -161,7 +190,8 @@ async function main() {
     const transcript = fs.readFileSync(transcriptPath, 'utf8');
     const records = transcript.trim().split(/\r?\n/).map((line) => JSON.parse(line));
     const tools = nativeToolUse(records, evidence.session_id, outsidePath);
-    if (!tools.edit || !tools.bash || !tools.outsideEditDenied || !tools.outsideBashDenied || fs.existsSync(outsidePath)) {
+    if (!tools.edit || !tools.bash || !tools.outsideEditDenied || !tools.outsideBashDenied
+        || fs.existsSync(outsidePath) || fs.existsSync(hookMarker)) {
       throw Object.assign(new Error('scoped tool boundary was not present in the native transcript'), { code: 'LIVE_SCOPE_NOT_PROVEN' });
     }
     if (evidence.applied_model !== 'claude-opus-5-5' || evidence.observed_model !== 'claude-opus-5-5'
@@ -180,6 +210,8 @@ async function main() {
       if (info.isFile() || info.isSymbolicLink()) fs.unlinkSync(outsidePath);
       else if (info.isDirectory()) fs.rmdirSync(outsidePath);
     } catch (_) {}
+    try { fs.unlinkSync(hookSettings); } catch (_) {}
+    try { fs.unlinkSync(hookMarker); } catch (_) {}
   }
 
   const finalStatus = gitStatus(worktreeReal);
@@ -190,13 +222,14 @@ async function main() {
     const code = typeof failure.code === 'string' ? failure.code : 'RUNTIME_EVIDENCE_INVALID';
     const status = code === 'RUNTIME_UNAVAILABLE' || code === 'RUNTIME_AUTH_UNAVAILABLE'
       ? 'unavailable' : 'refused';
-    emit(status, { reason: code });
+    emit(status, { reason: code, detail: failure.message });
     if (status === 'refused') process.exitCode = 1;
     return;
   }
   emit('passed', {
     model: 'claude-opus-5-5',
     effort: 'low',
+    ...(typedRole ? { agent: typedRole, injected_project_hook: 'denied' } : {}),
     edit: true,
     bash: true,
     runtime_version: probe.runtime_version,

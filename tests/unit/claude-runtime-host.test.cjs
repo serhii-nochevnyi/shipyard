@@ -53,9 +53,14 @@ function fixtureRecords() {
 }
 
 function typedFixtureRecords(role) {
-  return fixtureRecords().map((record) => record.agentSetting !== undefined
-    ? { ...record, agentSetting: role }
-    : record);
+  return [
+    ...fixtureRecords().map((record) => {
+      if (record.type !== 'assistant') return record;
+      const { agentSetting, ...rest } = record;
+      return rest;
+    }),
+    { type: 'agent-setting', sessionId: SESSION, agentSetting: role },
+  ];
 }
 
 function writeSession(root, records, session = SESSION, project = 'project-a') {
@@ -323,9 +328,12 @@ test('contradictory assistant transcript selection refuses a successful process 
   }
 });
 
-test('typed GSD launch applies --agent and proves it in SessionStart and assistant records', async () => {
+test('typed GSD launch applies --agent and proves it in SessionStart and agent-setting records', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-claude-gsd-agent-'));
   const projects = path.join(root, 'claude', 'projects');
+  const agents = path.join(root, 'claude', 'agents');
+  fs.mkdirSync(agents, { recursive: true });
+  fs.writeFileSync(path.join(agents, 'gsd-plan-checker.md'), '---\nname: gsd-plan-checker\ndescription: Check phase plans\ntools: Read, Bash, Glob, Grep\ndisallowedTools: Write, Edit\n---\nCheck the plan.\n');
   const transcript = writeSession(projects, typedFixtureRecords('gsd-plan-checker'));
   let capturedArgs;
   try {
@@ -345,10 +353,13 @@ test('typed GSD launch applies --agent and proves it in SessionStart and assista
       model: 'claude-opus-5-5', effort: 'low', gsd_role: 'gsd-plan-checker',
     });
     assert.equal(capturedArgs[capturedArgs.indexOf('--agent') + 1], 'gsd-plan-checker');
-    assert.equal(capturedArgs.includes('--restricted'), false);
+    assert.equal(capturedArgs.includes('--restricted'), true);
+    const agent = JSON.parse(capturedArgs[capturedArgs.indexOf('--agents') + 1]);
+    assert.deepEqual(agent['gsd-plan-checker'].tools, ['Bash', 'Read', 'Glob', 'Grep']);
+    assert.equal(agent['gsd-plan-checker'].prompt, 'Check the plan.\n');
     assert.ok(capturedArgs.includes('--strict-mcp-config'));
-    assert.equal(capturedArgs[capturedArgs.indexOf('--tools') + 1], 'Bash,Read,Edit,Write,Glob,Grep');
-    assert.equal(capturedArgs[capturedArgs.indexOf('--allowedTools') + 1], 'Bash,Read,Edit,Write,Glob,Grep');
+    assert.equal(capturedArgs[capturedArgs.indexOf('--tools') + 1], 'Bash,Read,Glob,Grep');
+    assert.equal(capturedArgs[capturedArgs.indexOf('--allowedTools') + 1], 'Bash,Read,Glob,Grep');
     assert.deepEqual(result.applicationEvidence.gsd_agent_evidence, {
       schema: 'shipyard.gsd-agent-application.v1',
       runtime: 'claude',
@@ -356,7 +367,7 @@ test('typed GSD launch applies --agent and proves it in SessionStart and assista
       session_id: SESSION,
       session_start_agent_type: 'gsd-plan-checker',
       transcript_agent_setting: 'gsd-plan-checker',
-      agent_setting_records: 2,
+      agent_setting_records: 1,
     });
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
@@ -366,6 +377,9 @@ test('typed GSD launch applies --agent and proves it in SessionStart and assista
 test('typed GSD launch refuses when the transcript does not name the requested agent', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-claude-gsd-agent-mismatch-'));
   const projects = path.join(root, 'claude', 'projects');
+  const agents = path.join(root, 'claude', 'agents');
+  fs.mkdirSync(agents, { recursive: true });
+  fs.writeFileSync(path.join(agents, 'gsd-plan-checker.md'), '---\nname: gsd-plan-checker\ndescription: Check phase plans\ntools: Read, Bash, Glob, Grep\n---\nCheck the plan.\n');
   const transcript = writeSession(projects, typedFixtureRecords('gsd-planner'));
   try {
     const launch = createClaudeCliLauncher({
@@ -387,6 +401,43 @@ test('typed GSD launch refuses when the transcript does not name the requested a
   }
 });
 
+test('typed GSD evidence requires an exact-session agent-setting record', () => {
+  const records = typedFixtureRecords('gsd-plan-checker');
+  const args = [SESSION, 'claude-opus-5-5', 'low', 'gsd-plan-checker'];
+  assert.throws(() => observedSelection(records.filter((record) => record.type !== 'agent-setting'), ...args),
+    (error) => error.code === 'RUNTIME_EVIDENCE_MISSING');
+  const foreign = records.map((record) => record.type === 'agent-setting'
+    ? { ...record, sessionId: '22222222-2222-4222-8222-222222222222' } : record);
+  assert.throws(() => observedSelection(foreign, ...args),
+    (error) => error.code === 'RUNTIME_EVIDENCE_MISSING');
+  const contradictory = [...records, { type: 'agent-setting', sessionId: SESSION, agentSetting: 'gsd-planner' }];
+  assert.throws(() => observedSelection(contradictory, ...args),
+    (error) => error.code === 'RUNTIME_EVIDENCE_MISMATCH');
+});
+
+test('typed GSD launch refuses a symlinked agent definition before spawning', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-claude-gsd-symlink-'));
+  const agents = path.join(root, 'claude', 'agents');
+  fs.mkdirSync(agents, { recursive: true });
+  const source = path.join(root, 'agent.md');
+  fs.writeFileSync(source, '---\nname: gsd-plan-checker\ndescription: Check\ntools: Read, Bash, Glob, Grep\n---\nCheck.\n');
+  fs.symlinkSync(source, path.join(agents, 'gsd-plan-checker.md'));
+  let spawned = false;
+  try {
+    const launch = createClaudeCliLauncher({
+      scope: { ...SCOPE, worktree: root },
+      env: { CLAUDE_CONFIG_DIR: path.join(root, 'claude') },
+      spawn: () => { spawned = true; throw new Error('unexpected spawn'); },
+    });
+    await assert.rejects(() => launch('check', {
+      model: 'claude-opus-5-5', effort: 'low', gsd_role: 'gsd-plan-checker',
+    }), (error) => error.code === 'RUNTIME_CAPABILITY_MISSING');
+    assert.equal(spawned, false);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('probe requires the scoped permission and sandbox CLI surface', () => {
   const calls = [];
   const result = probeClaudeRuntime({
@@ -401,7 +452,7 @@ test('probe requires the scoped permission and sandbox CLI surface', () => {
       if (args[0] === '--version') return { status: 0, stdout: '2.1.280\n', stderr: '' };
       if (args[0] === '--help') return {
         status: 0,
-        stdout: '--model --effort --output-format stream-json --session-id --permission-mode --permission-prompts --allowedTools --tools --restricted --strict-mcp-config --settings --agent',
+        stdout: '--model --effort --output-format stream-json --session-id --permission-mode --permission-prompts --allowedTools --tools --restricted --strict-mcp-config --settings --agent --agents',
         stderr: '',
       };
       return { status: 0, stdout: JSON.stringify({ loggedIn: true, authMethod: 'claude.ai' }), stderr: '' };
