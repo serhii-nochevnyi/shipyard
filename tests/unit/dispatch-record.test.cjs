@@ -571,6 +571,10 @@ test('one authenticated sentinel receipt records one round and projects its shar
     });
     assert.equal(replay.idempotent, true);
     assert.equal(fs.readFileSync(path.join(fixture.graph, 'delivery-log.jsonl'), 'utf8').trim().split('\n').length, 1);
+    const stored = JSON.parse(fs.readFileSync(path.join(fixture.graph, 'dispatches.json'), 'utf8'));
+    stored.rounds[launch.dispatchId].members[0].branch = 'ticket/forged-member';
+    fs.writeFileSync(path.join(fixture.graph, 'dispatches.json'), JSON.stringify(stored));
+    assert.deepStrictEqual(activeDispatches(fixture.project), {}, 'the round digest binds every stored PR member');
   } finally {
     fs.rmSync(fixture.dir, { recursive: true, force: true });
   }

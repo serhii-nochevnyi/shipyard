@@ -1034,6 +1034,24 @@ function canonicalRoundTicketSet(value) {
   return entries;
 }
 
+function roundMembersMatchDigest(round) {
+  try {
+    const ticketSet = canonicalRoundTicketSet(round.members.map((member) => ({
+      id: member.ticket,
+      pr: member.pr,
+      head: member.head_sha,
+      base: `${member.base_ref}#${member.base_oid}`,
+      branch: member.branch,
+    })));
+    const digest = crypto.createHash('sha256').update(JSON.stringify(ticketSet)).digest('hex');
+    return digest === round.ticket_set_digest && round.members.every((member) =>
+      member.fingerprint === roundMemberFingerprint({ status: 'pr-open', pr: member.pr,
+        head_sha: member.head_sha, pr_base: member.base_ref }));
+  } catch {
+    return false;
+  }
+}
+
 function strictRoundSnapshot(cwd) {
   const dir = graphDir(cwd);
   let ticketData;
@@ -1416,6 +1434,7 @@ function activeDispatches(cwd = process.cwd(), state = null) {
         || round.dispatch_id !== roundId || !/^[a-f0-9]{64}$/.test(round.ticket_set_digest || '')
         || round.subject !== `round:${round.ticket_set_digest}` || !Array.isArray(round.members)
         || !round.members.length) continue;
+    if (!roundMembersMatchDigest(round)) continue;
     const at = Date.parse(round.at || '');
     if (!Number.isFinite(at) || now - at >= DISPATCH_TTL_MS) continue;
     const seen = new Set();
