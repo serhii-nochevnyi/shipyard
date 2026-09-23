@@ -905,7 +905,10 @@ async function runClaudeDeliveryCli(argv = process.argv.slice(2), output = proce
   const request = readRequest(requestFile);
   if (!object(hostOptions)) reject('CLI host options must be an object');
   let hostScope = request.scope;
-  if (workflow === 'investigation-research' && request.scope.ticket === request.args.invId) {
+  if (workflow === 'investigation-research') {
+    if (request.scope.ticket !== request.args.invId) {
+      reject('investigation scope ticket must match the investigation id');
+    }
     const phase = Number(request.scope.phase);
     if (!Number.isSafeInteger(phase) || phase < 1 || phase > 99) {
       reject('investigation run phase cannot form a scoped controller ticket');

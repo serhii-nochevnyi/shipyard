@@ -801,6 +801,15 @@ test('production investigation CLI owns a T-scoped run while sealing INV researc
         problemStatement: 'Inspect the owned runtime path', referencePath: REFERENCE_PATHS['inv-research'],
         lines: Object.entries(labels).map(([id, label]) => ({ id, label,
           model: 'claude-opus-5-5', effort: 'medium', signals: { type: 'facts' } })) } }));
+    const validRequest = fs.readFileSync(requestFile, 'utf8');
+    const mismatchedRequest = JSON.parse(validRequest);
+    mismatchedRequest.scope.ticket = 'T-38-03';
+    fs.writeFileSync(requestFile, JSON.stringify(mismatchedRequest));
+    await assert.rejects(() => runClaudeDeliveryCli(
+      ['--workflow', 'investigation-research', '--request-file', requestFile],
+      { write() {} }, { graphDir, storageRoot: path.join(root, 'host-state') },
+    ), /investigation scope ticket must match/);
+    fs.writeFileSync(requestFile, validRequest);
     let scopedTicket;
     let output = '';
     const result = await runClaudeDeliveryCli(
