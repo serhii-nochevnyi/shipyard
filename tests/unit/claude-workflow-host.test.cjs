@@ -3,7 +3,7 @@
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { execFileSync } = require('node:child_process');
+const { spawnSync } = require('node:child_process');
 const { suite, test, done, assert } = require('./assert-harness.cjs');
 const { transcriptEvidence: testTranscriptEvidence } = require('./claude-test-evidence.cjs');
 const {
@@ -163,94 +163,11 @@ test('production investigation entry point refuses a caller-supplied script', as
   );
 });
 
-test('executable investigation bridge invokes the registered host with args kept in a file', () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-claude-investigation-cli-'));
-  const argsPath = path.join(root, 'args.json');
-  const hostPath = path.join(root, 'host.cjs');
-  const receiptsPath = path.join(root, 'receipts');
-  const boundaryPath = path.resolve(__dirname, '../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs');
-  const lines = [
-    { id: 'system-state', label: 'system state', model: 'claude-opus-5-5', effort: 'medium', signals: { type: 'facts' } },
-    { id: 'alternatives', label: 'alternatives', model: 'claude-opus-5-5', effort: 'medium', signals: { type: 'alternatives' } },
-    { id: 'constraints', label: 'constraints', model: 'claude-opus-5-5', effort: 'medium', signals: { type: 'facts' } },
-    { id: 'risks', label: 'risks and unknowns', model: 'claude-opus-5-5', effort: 'medium', signals: { type: 'facts' } },
-  ];
-  fs.writeFileSync(argsPath, JSON.stringify({
-    invId: 'INV-CLI',
-    invPath: '/repo/.planning/investigations/INV-CLI',
-    problemStatement: 'Test the executable investigation bridge',
-    referencePath: '/plugin/references/inv-research.md',
-    artifactLanguage: 'English',
-    lines,
-  }));
-  fs.writeFileSync(hostPath, `
-const { createDurableRecorder } = require(${JSON.stringify(boundaryPath)});
-const evidence = new WeakMap();
-let launch = 0;
-function transcriptEvidence(value) {
-  const sessionId = value.launch_id;
-  const model = value.observed_model === 'sonnet' ? 'claude-sonnet-5' : value.observed_model;
-  return {
-    ...value,
-    session_id: sessionId,
-    observed_model: model,
-    selection_evidence: {
-      source: 'claude-session-assistant-transcript',
-      session_id: sessionId,
-      assistant_records: 1,
-      model,
-      effort: value.observed_effort,
-      transcript: { path: '/recorded-sessions/' + sessionId + '.jsonl', bytes: 1, sha256: 'a'.repeat(64) },
-    },
-  };
-}
-module.exports = {
-  capabilities: Object.freeze({
-    supportedModels: ['claude-opus-5-5'], supportedEfforts: ['medium'],
-    observedModel: true, observedEffort: true,
-  }),
-  recorder: createDurableRecorder(${JSON.stringify(receiptsPath)}),
-  parallel: async (thunks) => Promise.all(thunks.map((thunk) => thunk())),
-  agent: async (_prompt, options) => {
-    const result = {
-      id: options.label.split(':').pop(),
-      status: 'completed',
-      summary: 'executable bridge result',
-      draft: 'executable bridge draft',
-    };
-    const launchId = 'cli-launch-' + (++launch);
-    evidence.set(result, transcriptEvidence({
-      launch_id: launchId,
-      applied_model: options.model,
-      applied_effort: options.effort,
-      observed_model: options.model,
-      observed_effort: options.effort,
-    }));
-    return result;
-  },
-  applicationEvidence: ({ result }) => evidence.get(result),
-};
-`);
-  try {
-    const scriptPath = path.resolve(
-      __dirname,
-      '../../plugins/delivery-pipeline/scripts/claude-investigation-host.cjs',
-    );
-    const output = execFileSync(process.execPath, [
-      scriptPath,
-      '--args-file', argsPath,
-      '--host-module', hostPath,
-    ], { encoding: 'utf8' });
-    const value = JSON.parse(output);
-    assert.equal(value.length, 4);
-    assert.deepEqual(
-      value.map((item) => item.id).sort(),
-      ['alternatives', 'constraints', 'risks', 'system-state'],
-    );
-    for (const item of value) assert.equal(item.receipt.compliance, 'verified');
-  } finally {
-    fs.rmSync(root, { recursive: true, force: true });
-  }
+test('investigation CLI refuses caller-supplied host modules', () => {
+  const scriptPath = path.resolve(__dirname, '../../plugins/delivery-pipeline/scripts/claude-investigation-host.cjs');
+  const result = spawnSync(process.execPath, [scriptPath, '--args-file', '/tmp/args.json', '--host-module', '/tmp/host.cjs'], { encoding: 'utf8' });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /--request-file <json> is required/);
 });
 
 test('refuses before evaluating a workflow when the host bridge is incomplete', async () => {
