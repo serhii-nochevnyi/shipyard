@@ -754,6 +754,12 @@ test('investigation inlines its approved contract without exposing the plugin pa
       assert.equal(line.artifact_digest,
         crypto.createHash('sha256').update(fs.readFileSync(line.artifact_ref)).digest('hex'));
     }
+    const original = path.join(artifactRoot, 'system-state.md');
+    fs.writeFileSync(original, '# changed after seal\n');
+    const sealed = result.find((line) => line.id === 'system-state');
+    assert.notEqual(sealed.artifact_index.path, original);
+    assert.equal(sealed.artifact_index.sha256,
+      crypto.createHash('sha256').update(fs.readFileSync(sealed.artifact_index.path)).digest('hex'));
     for (const prompt of prompts) {
       assert.match(prompt, /Research contract:/);
       assert.ok(!prompt.includes(REFERENCE_PATHS['inv-research']));

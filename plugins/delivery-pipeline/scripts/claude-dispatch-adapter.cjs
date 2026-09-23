@@ -340,12 +340,6 @@ function validatePlanningArtifact(metadata, envelope, result) {
     refuse('MISSING_ARTIFACT', 'planning artifact must retain a complete artifact index reference');
   }
   artifactReference(index, 'planning artifact index');
-  if (metadata.artifactPath !== undefined && index.path !== metadata.artifactPath) {
-    refuse('ARTIFACT_IDENTITY_MISMATCH', 'planning artifact index is not the host-assigned artifact path', {
-      expected: metadata.artifactPath,
-      actual: index.path,
-    });
-  }
   if (envelope.evidence_index !== undefined
       && !isDeepStrictEqual(envelope.evidence_index, index)) {
     refuse('ARTIFACT_DIGEST_MISMATCH', 'planning artifact evidence index disagrees with its artifact index');
@@ -364,9 +358,13 @@ function validatePlanningArtifact(metadata, envelope, result) {
     const producerReference = result.artifact || result.artifact_index;
     if (producerReference !== undefined) {
       const normalized = artifactReference(producerReference, 'complete planning artifact reference');
-      if (!isDeepStrictEqual(normalized, index)) {
+      if ((metadata.artifactPath !== undefined && normalized.path !== metadata.artifactPath)
+          || normalized.bytes !== index.bytes || normalized.sha256 !== index.sha256
+          || (metadata.artifactPath === undefined && !isDeepStrictEqual(normalized, index))) {
         refuse('ARTIFACT_DIGEST_MISMATCH', 'planning artifact index does not match the producer reference');
       }
+    } else if (metadata.artifactPath !== undefined) {
+      refuse('MISSING_ARTIFACT', 'planning artifact lacks the assigned producer file reference');
     }
   }
   return true;

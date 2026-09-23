@@ -519,6 +519,9 @@ function sealPlanningResearch(input, options, scope) {
   if (artifact.sourceRevision !== git(worktree, ['rev-parse', '--verify', 'HEAD^{commit}'])) {
     reject('planning research revision differs from the authenticated run');
   }
+  if (artifact.policyHash !== record.receipt.policy_hash) {
+    reject('planning research policy differs from the authenticated dispatch');
+  }
   const investigation = path.join(artifact.worktreePath, '.planning', 'investigations', match[1]);
   const canonicalInvestigation = path.join(worktree, '.planning', 'investigations', match[1]);
   if (fs.realpathSync(investigation) !== canonicalInvestigation) {
@@ -542,20 +545,23 @@ function sealPlanningResearch(input, options, scope) {
     reject('planning research artifact changed during validation');
   }
   const sha256 = crypto.createHash('sha256').update(bytes).digest('hex');
-  const index = Object.freeze({ path: file, bytes: bytes.length, content_bytes: bytes.length,
+  const producer = Object.freeze({ path: file, bytes: bytes.length, content_bytes: bytes.length,
     sha256, digest: sha256 });
-  if (!object(result.artifact) || Object.keys(index).some((key) => result.artifact[key] !== index[key])) {
+  if (!object(result.artifact) || Object.keys(producer).some((key) => result.artifact[key] !== producer[key])) {
     reject('planning research producer reference differs from the artifact bytes');
   }
+  const directory = path.join(storageDirectory({ ...options, scope }), 'planning-artifacts');
+  fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+  const manifestName = crypto.createHash('sha256').update(record.receipt.dispatch_id).digest('hex');
+  const archivePath = path.join(directory, `${manifestName}.md`);
+  fs.writeFileSync(archivePath, bytes, { flag: 'wx', mode: 0o600 });
+  const index = Object.freeze({ ...producer, path: archivePath });
   const envelope = Object.freeze({ schema: 'shipyard.research-result.v1', version: 1,
     role: 'research', subject: artifact.subject, source_revision: artifact.sourceRevision,
     repository: artifact.repository, policy_hash: artifact.policyHash, status: result.status,
     summary: result.summary, artifact_index: index, evidence_index: index });
   const manifest = Buffer.from(JSON.stringify({ schema: 'shipyard.role-artifact.v1',
     dispatch_id: record.receipt.dispatch_id, envelope }) + '\n');
-  const directory = path.join(storageDirectory({ ...options, scope }), 'planning-artifacts');
-  fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
-  const manifestName = crypto.createHash('sha256').update(record.receipt.dispatch_id).digest('hex');
   const manifestPath = path.join(directory, `${manifestName}.json`);
   fs.writeFileSync(manifestPath, manifest, { flag: 'wx', mode: 0o600 });
   return Object.freeze({ schema: 'shipyard.role-artifact.v1', artifact_ref: manifestPath,
