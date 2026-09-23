@@ -31,6 +31,12 @@ limits. Claude Code 2.1.280 emits the loaded role in a separate
 than in every assistant record. Every typed result must match that record and
 the hook's `agent_type`.
 
+Installed GSD role files declare independent `effort` values. The restricted
+`--agents` launch supplies only their prompt and scoped tools, so those source
+values are inert. T-38-06 removes `model` and `effort` from the temporary role
+definition and verifies the CLI-applied values in native assistant records;
+it never rewrites installed GSD files.
+
 Claude's sandbox applies to Bash but not command hooks or Read/Write/Edit tools.
 Keep SessionStart evidence outside the model's Bash writable paths and deny
 Claude filesystem-tool access to its absolute temporary path. Reference:

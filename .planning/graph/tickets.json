@@ -1203,7 +1203,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
-      "missing_paths": true,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/scripts/path-owner.cjs",
         "plugins/delivery-pipeline/scripts/validate-graph.cjs",
@@ -4868,7 +4868,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
-      "missing_paths": true,
+      "missing_paths": false,
       "files": [
         ".planning/phases/38-runtime-model-ladder-recovery/38-02-PLAN.md",
         "plugins/delivery-pipeline/scripts/claude-agent-start-hook.cjs",
