@@ -1,10 +1,10 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 6ea3ad2a26cb13161da874891c632037e856958711fe4dd5ec79885c288f3caf
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: f8f784bc246a51817cdab2267d8cf7d2acfe2e515b8ebd00b8babc315dc16108
 phase: 38
 status: pending
 result: pending
 shipyard_sync: evidence-projection
-shipyard_source_fingerprint: 6ea3ad2a26cb13161da874891c632037e856958711fe4dd5ec79885c288f3caf
+shipyard_source_fingerprint: f8f784bc246a51817cdab2267d8cf7d2acfe2e515b8ebd00b8babc315dc16108
 ---
 
 # Phase 38: Restore the native model ladder in delivery — UAT Projection

@@ -55,9 +55,10 @@ created by T-38-07/08.
 - T-38-06 supplies Claude's typed GSD decomposition entrypoint.
 - T-38-07 supplies Claude's `arch-review` and `integrator` entrypoints through
   the mandatory dispatch boundary.
-- T-38-08 supplies Claude's `pr-sentinel` round host and authenticated
-  round-to-ticket projection. T-33-08 supplies session fencing only; its name
-  is not evidence of round-membership support.
+- T-38-08 supplies Claude's `pr-sentinel` host, a boundary receipt bound to the
+  complete round digest, and one atomic round record projected to its active
+  members. T-33-08 supplies session fencing only; its name is not evidence of
+  round-membership support.
 - T-38-05 waits for T-38-04, T-38-06, T-38-07, and T-38-08, then routes every
   model-bearing delivery role, investigation, and decomposition through a
   provider-specific executable host.

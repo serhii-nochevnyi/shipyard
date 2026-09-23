@@ -2369,7 +2369,7 @@ tickets:
     repo: null
     wave: 6
     depends_on: [T-38-07]
-    files: [plugins/delivery-pipeline/scripts/claude-role-host.cjs, plugins/delivery-pipeline/scripts/dispatch-record.cjs, plugins/delivery-pipeline/scripts/front.cjs, plugins/delivery-pipeline/commands/deliver.md, plugins/delivery-pipeline/references/pr-sentinel.md, docs/dispatch-record.md, tests/unit/claude-role-host.test.cjs, tests/unit/dispatch-record.test.cjs, tests/unit/front.test.cjs, tests/smoke/claude-delivery-roles-smoke.sh]
+    files: [plugins/delivery-pipeline/scripts/claude-role-host.cjs, plugins/delivery-pipeline/scripts/dispatch-boundary.cjs, plugins/delivery-pipeline/scripts/dispatch-record.cjs, plugins/delivery-pipeline/scripts/front.cjs, plugins/delivery-pipeline/commands/deliver.md, plugins/delivery-pipeline/references/pr-sentinel.md, docs/dispatch-record.md, tests/unit/dispatch-boundary.test.cjs, tests/unit/claude-role-host.test.cjs, tests/unit/dispatch-record.test.cjs, tests/unit/front.test.cjs, tests/smoke/claude-delivery-roles-smoke.sh]
     risk: high
     human_checkpoint: true
     preauthorized: false

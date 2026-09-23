@@ -109,9 +109,10 @@ judgement roles. The sentinel also needs a round-to-ticket membership bridge:
 the current dispatch overlay is ticket-bound, while its evidence and launch
 identity cover a round. The command and reference docs attribute that bridge to
 T-33-08, but T-33-08 implements fenced session ownership; it does not implement
-membership projection. T-38-08 adds the sentinel host path and authenticated,
-atomic round projection. T-38-05 waits for both tickets before documenting a
-complete route.
+membership projection. T-38-08 adds the sentinel host path, a boundary receipt
+bound to the complete round digest, and an atomic round record projected to its
+active members. T-38-05 waits for both tickets before documenting a complete
+route.
 
 ## Ticket boundaries and order
 
