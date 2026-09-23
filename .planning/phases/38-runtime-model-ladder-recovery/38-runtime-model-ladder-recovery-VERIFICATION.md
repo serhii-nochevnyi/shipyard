@@ -1,8 +1,8 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 3381b76b878705cefdb3412e1b5a87542cee38518a05c78607bb63d52eb404c0
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 3edaadc7c2b8404494a7624647c84bf47909f04a0d85a3c1b3f215a80689c381
 phase: 38
 status: human_needed
-shipyard_source_fingerprint: 3381b76b878705cefdb3412e1b5a87542cee38518a05c78607bb63d52eb404c0
+shipyard_source_fingerprint: 3edaadc7c2b8404494a7624647c84bf47909f04a0d85a3c1b3f215a80689c381
 ---
 
 # Phase 38: Restore the native model ladder in delivery — Verification Projection
