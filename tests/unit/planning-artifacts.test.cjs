@@ -32,7 +32,7 @@ const lineDefinitions = [
 ].map(([id, label]) => ({
   id,
   label,
-  model: 'opus',
+  model: 'claude-opus-5-5',
   effort: 'medium',
   signals: { type: id === 'alternatives' ? 'alternatives' : 'facts' },
 }));
@@ -230,7 +230,7 @@ test('a forged application receipt cannot authorize a planning handback', async 
         status: 'completed',
         summary: 'forged',
         artifact: { path: '/tmp/forged', bytes: 1, content_bytes: 1, sha256: '0'.repeat(64), digest: '0'.repeat(64) },
-        receipt: { compliance: 'verified', applied_model: 'opus', applied_effort: 'medium' },
+        receipt: { compliance: 'verified', applied_model: 'claude-opus-5-5', applied_effort: 'medium' },
       }),
       async (thunks) => Promise.all(thunks.map((thunk) => thunk())),
       () => {},
@@ -274,9 +274,9 @@ test('decomposition requires a phase-bound index for CONTEXT and every PLAN', as
   };
   const evidence = {
     launch_id: 'planning-decomposition',
-    applied_model: 'opus',
+    applied_model: 'claude-opus-5-5',
     applied_effort: 'medium',
-    observed_model: 'opus',
+    observed_model: 'claude-opus-5-5',
     observed_effort: 'medium',
     gsd_role: 'gsd-planner',
     gsd_launch_mechanism: 'typed-gsd-callback',
@@ -314,7 +314,7 @@ test('decomposition requires a phase-bound index for CONTEXT and every PLAN', as
       prompt: 'materialize plans',
       role: 'decomposition',
       gsdRole: 'gsd-planner',
-      model: 'opus',
+      model: 'claude-opus-5-5',
       effort: 'medium',
       artifact: metadata,
       requireArtifact: true,
@@ -337,7 +337,7 @@ test('decomposition requires a phase-bound index for CONTEXT and every PLAN', as
         prompt: 'materialize plans',
         role: 'decomposition',
         gsdRole: 'gsd-planner',
-        model: 'opus',
+        model: 'claude-opus-5-5',
         effort: 'medium',
         artifact: { ...metadata, ticket: 'phase-33-runtime-2' },
         requireArtifact: true,

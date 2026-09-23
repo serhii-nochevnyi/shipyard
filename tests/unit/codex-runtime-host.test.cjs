@@ -27,7 +27,7 @@ const SCOPE = {
 };
 
 const capabilities = {
-  supportedModels: ['gpt-5.6-luna', 'gpt-5.6-sol', 'gpt-6-astra'],
+  supportedModels: ['gpt-6-luna', 'gpt-6-sol', 'gpt-6-astra'],
   supportedEfforts: EFFORTS,
   observedModel: true,
   observedEffort: true,
@@ -69,7 +69,7 @@ function probe() {
   };
 }
 
-function staticContent(resolution = { model: 'gpt-5.6-sol', effort: 'high' }) {
+function staticContent(resolution = { model: 'gpt-6-sol', effort: 'high' }) {
   return [
     '# shipyard-policy-id = "' + policy.POLICY.id + '"',
     '# shipyard-policy-version = "' + policy.POLICY_VERSION + '"',
@@ -93,10 +93,10 @@ suite('codex-runtime-host — native launch and independent evidence');
 test('parses thread and completed-turn evidence', () => {
   const parsed = parseCodexStream(stream());
   assert.equal(parsed.session_id, '11111111-1111-4111-8111-111111111111');
-  assert.deepEqual(observedSelection(parsed, 'gpt-5.6-luna', 'max', {
-    model: 'gpt-5.6-luna', effort: 'max',
+  assert.deepEqual(observedSelection(parsed, 'gpt-6-luna', 'max', {
+    model: 'gpt-6-luna', effort: 'max',
   }), {
-    model: 'gpt-5.6-luna',
+    model: 'gpt-6-luna',
     effort: 'max',
     source: 'codex-exec-explicit-selection',
   });
@@ -119,7 +119,7 @@ test('Codex launcher passes explicit model and reasoning effort to exec', async 
       },
     });
     const result = await launch('run the scoped task', {
-      model: 'gpt-5.6-luna',
+      model: 'gpt-6-luna',
       effort: 'max',
       dispatch_id: 'dispatch-codex-1',
     });
@@ -127,7 +127,7 @@ test('Codex launcher passes explicit model and reasoning effort to exec', async 
     assert.equal(calls[0].executable, 'codex');
     assert.deepEqual(calls[0].args.slice(0, 2), ['exec', '--json']);
     assert.ok(calls[0].args.includes('--model'));
-    assert.ok(calls[0].args.includes('gpt-5.6-luna'));
+    assert.ok(calls[0].args.includes('gpt-6-luna'));
     assert.ok(calls[0].args.includes('--config'));
     assert.ok(calls[0].args.includes('model_reasoning_effort="max"'));
     assert.ok(calls[0].args.includes('--cd'));
@@ -159,7 +159,7 @@ test('static launcher consumes the immutable generated instructions', async () =
     const content = staticContent();
     const digest = crypto.createHash('sha256').update(content).digest('hex');
     await launch('ticket contract', {
-      model: 'gpt-5.6-sol',
+      model: 'gpt-6-sol',
       effort: 'high',
       agent_file: 'shipyard-inv-research.toml',
       agent_file_digest: digest,
@@ -169,7 +169,7 @@ test('static launcher consumes the immutable generated instructions', async () =
     assert.ok(input.join('').startsWith('Follow the scoped research contract.'));
     await assert.rejects(
       () => launch('ticket contract', {
-        model: 'gpt-5.6-sol',
+        model: 'gpt-6-sol',
         effort: 'high',
         agent_file: 'shipyard-inv-research.toml',
         agent_file_digest: '0'.repeat(64),
@@ -197,13 +197,13 @@ test('controller-owned host binds run identity and returns process evidence', as
     transcriptDir: null,
   });
   const result = await host.launch(
-    { model: 'gpt-5.6-luna', reasoning_effort: 'max' },
+    { model: 'gpt-6-luna', reasoning_effort: 'max' },
     { run_id: SCOPE.run_id, dispatch_id: 'dispatch-host-1', prompt: 'scoped prompt' },
   );
   assert.equal(host.scope.run_id, SCOPE.run_id);
   assert.equal(result.runtime_evidence.run_id, SCOPE.run_id);
   assert.equal(result.runtime_evidence.provider, 'openai');
-  assert.equal(result.observed_model, 'gpt-5.6-luna');
+  assert.equal(result.observed_model, 'gpt-6-luna');
   assert.equal(result.observed_effort, 'max');
   assert.deepEqual(ownerCalls, [SCOPE.run_id, SCOPE.run_id, SCOPE.run_id]);
 });
@@ -270,7 +270,7 @@ test('launchAgent sends dynamic selection through the adapter boundary', () => {
       context: { prompt: 'execute the scoped ticket' },
     });
     assert.equal(result.receipt.compliance, 'verified');
-    assert.equal(result.receipt.applied_model, 'gpt-5.6-luna');
+    assert.equal(result.receipt.applied_model, 'gpt-6-luna');
     assert.equal(result.receipt.applied_effort, 'max');
     assert.equal(result.receipt.launch_id, 'host-launch-1');
   } finally {

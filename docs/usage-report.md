@@ -23,11 +23,11 @@ cat <<'JSON' | node plugins/delivery-pipeline/scripts/usage-attribution.cjs reco
   "role": "executor",
   "task_level": "routine",
   "backend": "codex-agent",
-  "model": "sonnet",
-  "effort": "high",
-  "effort_applied": "high",
-  "observed_model": "gpt-5.6-luna",
-  "observed_effort": "high"
+  "model": "luna",
+  "effort": "max",
+  "effort_applied": "max",
+  "observed_model": "gpt-6-luna",
+  "observed_effort": "max"
 }
 JSON
 ```

@@ -25,16 +25,47 @@
 // sibling is used during generation so a failed run preserves the prior stage.
 // `--project-dir` identifies the checkout whose `.planning/config.json` must be readable. ADR-014 owns the
 // selection grid; project compatibility palettes cannot override it. Host
-// availability must be supplied via --capabilities or
-// SHIPYARD_CODEX_CAPABILITIES_FILE (the adapter's supportedModels,
-// supportedEfforts and optional supportedSelections JSON contract).
+// availability comes from an explicit snapshot or the Codex CLI model catalog.
 
 const fs = require('fs');
 const path = require('path');
+const { spawnSync } = require('child_process');
 
 function fail(msg) {
   process.stderr.write(`gen-codex-shipyard: ${msg}\n`);
   process.exit(1);
+}
+
+function readCodexCliCapabilities() {
+  const result = spawnSync('codex', ['debug', 'models'], {
+    encoding: 'utf8',
+    maxBuffer: 10 * 1024 * 1024,
+    timeout: 20_000,
+  });
+  if (result.error || result.status !== 0) {
+    const detail = result.error ? result.error.message : `exit ${result.status}`;
+    fail(`read Codex CLI model catalog with codex debug models: ${detail}`);
+  }
+
+  let catalog;
+  try { catalog = JSON.parse(result.stdout); }
+  catch (error) { fail(`parse Codex CLI model catalog: ${error.message}`); }
+  if (!catalog || !Array.isArray(catalog.models)) fail('Codex CLI model catalog is missing models');
+
+  const models = catalog.models.filter((model) => model && typeof model.slug === 'string'
+    && model.slug && model.visibility === 'list' && model.supported_in_api === true);
+  const supportedSelections = models.flatMap((model) => (Array.isArray(model.supported_reasoning_levels)
+    ? model.supported_reasoning_levels : [])
+    .filter((level) => level && typeof level.effort === 'string' && level.effort)
+    .map((level) => ({ model: model.slug, effort: level.effort })))
+    .sort((left, right) => left.model.localeCompare(right.model) || left.effort.localeCompare(right.effort));
+  return {
+    supportedModels: [...new Set(models.map((model) => model.slug))].sort(),
+    supportedEfforts: [...new Set(supportedSelections.map((selection) => selection.effort))].sort(),
+    supportedSelections: [...new Map(supportedSelections.map((selection) => [
+      `${selection.model}\0${selection.effort}`, selection,
+    ])).values()],
+  };
 }
 
 function parseArgs(argv) {
@@ -214,11 +245,16 @@ function main() {
   const capabilitiesFile = args.capabilities || process.env.SHIPYARD_CODEX_CAPABILITIES_FILE;
   let capabilities;
   let capabilitiesRaw;
-  try {
-    capabilitiesRaw = fs.readFileSync(capabilitiesFile || '', 'utf8');
-    capabilities = JSON.parse(capabilitiesRaw);
+  if (capabilitiesFile) {
+    try {
+      capabilitiesRaw = fs.readFileSync(capabilitiesFile, 'utf8');
+      capabilities = JSON.parse(capabilitiesRaw);
+    }
+    catch (error) { fail('read host capabilities with --capabilities or SHIPYARD_CODEX_CAPABILITIES_FILE: ' + error.message); }
+  } else {
+    capabilities = readCodexCliCapabilities();
+    capabilitiesRaw = JSON.stringify(capabilities, null, 2) + '\n';
   }
-  catch (error) { fail('read host capabilities with --capabilities or SHIPYARD_CODEX_CAPABILITIES_FILE: ' + error.message); }
   validateCodexCapabilities(capabilities, phase);
 
   fs.mkdirSync(path.dirname(outDir), { recursive: true });

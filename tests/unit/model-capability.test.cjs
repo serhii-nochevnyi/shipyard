@@ -18,7 +18,7 @@ test('model-axis escalation is runtime-local and recognizes Claude Fable ceiling
 test('supported capability evidence proves the exact model and effort pair', () => {
   const resolution = policy.resolveDispatch({ runtime: 'claude', role: 'arch-review', signals: { inputTokens: policy.WINDOW_THRESHOLD_TOKENS + 1 }, dispatch_id: 'launch-1' });
   const snapshot = capability.snapshotFor({
-    supportedModels: ['opus', 'fable'],
+    supportedModels: ['claude-opus-5-5', 'fable'],
     supportedEfforts: ['medium', 'max'],
     supportedSelections: [{ model: 'fable', effort: 'medium' }],
     launch_id: 'host-launch-1',
@@ -35,12 +35,12 @@ test('unknown or unsupported capability falls back to the preceding policy rung'
     schema_version: capability.SCHEMA_VERSION,
     runtime: 'claude',
     launch_id: 'host-launch-2',
-    supported_models: ['opus'],
+    supported_models: ['claude-opus-5-5'],
     supported_efforts: ['max'],
   }, resolution).state, 'unsupported');
   const fallback = policy.resolveDispatch(capability.fallbackInput({ runtime: 'claude', role: 'arch-review' }, resolution));
   assert.equal(fallback.rung, 'critical');
-  assert.equal(fallback.model, 'opus');
+  assert.equal(fallback.model, 'claude-opus-5-5');
   assert.equal(fallback.effort, 'max');
 });
 
@@ -54,7 +54,7 @@ test('repair model escalation needs a completed predecessor identity', () => {
     schema_version: capability.SCHEMA_VERSION,
     runtime: 'codex',
     launch_id: 'host-repair-1',
-    supported_models: ['gpt-5.6-luna', 'gpt-5.6-sol'],
+    supported_models: ['gpt-6-luna', 'gpt-6-sol'],
     supported_efforts: ['high', 'max'],
     completed_attempt: true,
     completed_attempt_id: 'prior-1',

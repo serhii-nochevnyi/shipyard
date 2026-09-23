@@ -53,7 +53,7 @@ fs.cpSync(args[2], path.join(process.env.GSD_CAPABILITIES_DIR, 'delivery-pipelin
   write(path.join(claudeDir, 'settings.json'), '{\n  "model": "sonnet",\n  "env": {"ANTHROPIC_BASE_URL": "https://provider.invalid", "ANTHROPIC_DEFAULT_OPUS_MODEL": "native-opus"}\n}\n');
   const claudeBefore = snapshot(claudeDir);
   const paletteBefore = fs.readFileSync(path.join(source, 'scripts/runtime-adapters.cjs'));
-  assert.deepEqual(policy.CLAUDE_MODEL_ALIASES, { sonnet: 'sonnet', opus: 'opus', fable: 'fable' });
+  assert.deepEqual(policy.CLAUDE_MODEL_ALIASES, { sonnet: 'sonnet', opus: 'claude-opus-5-5', fable: 'fable' });
   const capabilities = {};
   for (const runtime of policy.SUPPORTED_RUNTIMES) {
     const models = runtime === 'codex' ? policy.CODEX_MODEL_IDS : policy.CLAUDE_MODEL_ALIASES;

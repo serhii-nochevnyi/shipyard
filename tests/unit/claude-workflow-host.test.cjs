@@ -101,7 +101,7 @@ test('production investigation entry point pins the research workflow and runs a
       constraints: 'constraints',
       risks: 'risks and unknowns',
     }[id],
-    model: 'opus',
+    model: 'claude-opus-5-5',
     effort: 'medium',
     signals: id === 'alternatives' ? { type: 'alternatives' } : { type: 'facts' },
   }));
@@ -142,7 +142,7 @@ test('production investigation entry point pins the research workflow and runs a
     assert.equal(calls.length, 4);
     for (const item of value) {
       assert.equal(item.receipt.compliance, 'verified');
-      assert.equal(item.receipt.applied_model, 'opus');
+      assert.equal(item.receipt.applied_model, 'claude-opus-5-5');
       assert.equal(item.receipt.applied_effort, 'medium');
       assert.ok(recorder.getVerifiedRecord(item.receipt.dispatch_id));
     }
@@ -165,10 +165,10 @@ test('executable investigation bridge invokes the registered host with args kept
   const receiptsPath = path.join(root, 'receipts');
   const boundaryPath = path.resolve(__dirname, '../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs');
   const lines = [
-    { id: 'system-state', label: 'system state', model: 'opus', effort: 'medium', signals: { type: 'facts' } },
-    { id: 'alternatives', label: 'alternatives', model: 'opus', effort: 'medium', signals: { type: 'alternatives' } },
-    { id: 'constraints', label: 'constraints', model: 'opus', effort: 'medium', signals: { type: 'facts' } },
-    { id: 'risks', label: 'risks and unknowns', model: 'opus', effort: 'medium', signals: { type: 'facts' } },
+    { id: 'system-state', label: 'system state', model: 'claude-opus-5-5', effort: 'medium', signals: { type: 'facts' } },
+    { id: 'alternatives', label: 'alternatives', model: 'claude-opus-5-5', effort: 'medium', signals: { type: 'alternatives' } },
+    { id: 'constraints', label: 'constraints', model: 'claude-opus-5-5', effort: 'medium', signals: { type: 'facts' } },
+    { id: 'risks', label: 'risks and unknowns', model: 'claude-opus-5-5', effort: 'medium', signals: { type: 'facts' } },
   ];
   fs.writeFileSync(argsPath, JSON.stringify({
     invId: 'INV-CLI',
@@ -184,7 +184,7 @@ const evidence = new WeakMap();
 let launch = 0;
 module.exports = {
   capabilities: Object.freeze({
-    supportedModels: ['opus'], supportedEfforts: ['medium'],
+    supportedModels: ['claude-opus-5-5'], supportedEfforts: ['medium'],
     observedModel: true, observedEffort: true,
   }),
   recorder: createDurableRecorder(${JSON.stringify(receiptsPath)}),
@@ -261,7 +261,7 @@ return await __createClaudeWorkflowDispatch({
   agent,
   prompt: 'typed GSD prompt',
   role: 'decomposition',
-  model: 'opus',
+  model: 'claude-opus-5-5',
   effort: 'medium',
   gsdRole: 'gsd-planner',
   context: { ticket: 'T-36-typed-host-test' },
@@ -298,7 +298,7 @@ return await __createClaudeWorkflowDispatch({
     assert.equal(genericCalls, 0);
     assert.equal(value.receipt.gsd_role, 'gsd-planner');
     assert.equal(value.receipt.gsd_launch_mechanism, 'typed-gsd-callback');
-    assert.equal(value.receipt.applied_model, 'opus');
+    assert.equal(value.receipt.applied_model, 'claude-opus-5-5');
     assert.equal(value.receipt.applied_effort, 'medium');
     assert.ok(recorder.getVerifiedRecord(value.receipt.dispatch_id));
   } finally {
@@ -316,7 +316,7 @@ return await __createClaudeWorkflowDispatch({
   agent,
   prompt: 'typed GSD prompt',
   role: 'decomposition',
-  model: 'opus',
+  model: 'claude-opus-5-5',
   effort: 'medium',
   gsdRole: 'gsd-planner',
   context: { ticket: 'T-36-typed-evidence-test' },

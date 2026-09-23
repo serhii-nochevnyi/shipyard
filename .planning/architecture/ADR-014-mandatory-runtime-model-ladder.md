@@ -79,6 +79,11 @@ not an automatic model promotion.
 The Claude grid is independent of the Codex table and uses Claude's
 runtime-native model identifiers:
 
+Opus is pinned to `claude-opus-5-5` because this explicitly selected release
+must not drift through a provider alias. Sonnet and Fable intentionally retain
+Claude-native aliases so provider-managed updates remain available; runtime
+application evidence records the resolved model and fails closed on mismatch.
+
 | Role | Base selection | Escalation 1 | Escalation 2 | Escalation signals |
 |---|---|---|---|---|
 | research | Opus/medium | Opus/max | — | explicit `very-complex` |

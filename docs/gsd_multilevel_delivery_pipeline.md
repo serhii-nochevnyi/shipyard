@@ -755,15 +755,15 @@ fixed routed `pr-sentinel` role for either signal.
 ### 7.5.1. Runtime-native model grids
 
 The logical Codex keys resolve to concrete IDs only in the Codex adapter. Claude
-uses its existing native aliases directly; its grid never translates Luna or
-Sol into a Claude selection.
+keeps the Sonnet and Fable aliases and pins Opus to its concrete runtime ID; its
+grid never translates Luna or Sol into a Claude selection.
 
 | Logical key | Codex concrete model | Claude Code selection |
 |---|---|---|
-| Luna | `gpt-5.6-luna` | — |
-| Sol | `gpt-5.6-sol` | — |
+| Luna | `gpt-6-luna` | — |
+| Sol | `gpt-6-sol` | — |
 | Sonnet | — | `sonnet` |
-| Opus | — | `opus` |
+| Opus | — | `claude-opus-5-5` |
 | Fable | — | `fable` |
 
 The canonical role/rung/signal ladder is:
