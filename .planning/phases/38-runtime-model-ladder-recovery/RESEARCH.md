@@ -1,194 +1,140 @@
 # Phase 38 Research: runtime model ladder recovery
 
-## Research scope
+## Scope
 
-This follow-up is separate from Phase 37 because its integration PR #186 is already merged. It closes the model-ID, production-host, runtime-evidence, and per-provider rollout gaps found in the post-merge review.
+Phase 38 reconnects the native Claude and Codex model ladders to production
+Shipyard delivery, investigation, and decomposition. The phase stays intact;
+there is no Phase 39. Ticket plans remain the implementation contract, and Jira
+is not used.
 
-This research covers the implementation seams named by ADR-015: shared scoped
-run state and continuation, provider-pure Claude and Codex adapters, graph
-reachability, deterministic waiting, and usage/effectiveness attribution. It
-uses `origin/main` at `1c3ec884` and the installed Shipyard scripts that the
-active Claude Code integration executes.
+## Current evidence
 
-## Current mechanisms and gaps
+### Claude Code 2.1.280
 
-### 1. Dispatch policy and receipts already provide the right seam
+A real CLI launch confirmed that the `SessionStart` payload contains the exact
+`session_id` and `transcript_path`, and identifies a custom GSD agent through
+`agent_type`. The native transcript records the loaded custom agent as
+`agentSetting`. The host should capture the hook payload and read the returned
+transcript path; scanning `projects/*` is unnecessary and can select an
+ambiguous file. Anthropic's current hook reference documents the common
+`session_id`/`transcript_path` fields and optional SessionStart `agent_type`:
+https://code.claude.com/docs/en/hooks.
 
-- `plugins/delivery-pipeline/scripts/dispatch-boundary.cjs:1672` owns the
-  resolve, validate, reserve, launch, receipt, and durable-record sequence.
-- `plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs:464-571`
-  requires explicit Claude model/effort launch arguments and rejects a
-  contradictory application receipt.
-- `plugins/delivery-pipeline/scripts/codex-dispatch-adapter.cjs:128-369`
-  validates generated-agent identity or explicit dynamic selection and emits
-  applied model/effort evidence.
-- `plugins/delivery-pipeline/scripts/session-handoff.cjs:751-760` exposes
-  ownership and checkpoint primitives, but `requestAutomaticTransfer()` still
-  returns `unsupported` and performs no successor launch.
+The same live CLI check found that `--restricted --agent gsd-plan-checker`
+refuses because `--restricted` hides custom agents. The user verified that the
+custom role loads without `--restricted` when `--strict-mcp-config` and an
+explicit `--tools` list are retained. T-38-02 therefore needs two modes:
+ordinary launches keep `--restricted`; typed GSD launches pass the validated
+`--agent` and omit only `--restricted`, while retaining `--strict-mcp-config`,
+`--tools`, `--allowedTools`, `dontAsk`, disabled permission prompts, and the
+fail-closed worktree sandbox. Every typed result must match both the hook's
+`agent_type` and transcript `agentSetting` for the same session.
 
-The new controller should compose these mechanisms rather than create a second
-model resolver. It must pass a scoped run context into the boundary and persist
-the returned receipt under that run.
+Claude's sandbox applies to Bash but not command hooks or Read/Write/Edit tools.
+Keep SessionStart evidence outside the model's Bash writable paths and deny
+Claude filesystem-tool access to its absolute temporary path. Reference:
+https://github.com/anthropics/claude-code/blob/main/examples/settings/README.md
 
-### 2. Claude has a host harness, but no proven native production bridge
+### Codex CLI 0.155.1
 
-- `plugins/delivery-pipeline/scripts/claude-workflow-host.cjs:14-20` defines
-  the six Workflow bindings, including the host-owned typed dispatch factory.
-- `plugins/delivery-pipeline/scripts/claude-workflow-host.cjs:68-109` registers
-  the host and refuses missing capabilities, recorder, or typed callback.
-- `plugins/delivery-pipeline/scripts/claude-workflow-host.cjs:171-185` exposes
-  a command-line workflow runner, but the repository has no connected
-  production caller that registers this host with Claude Code's native
-  `Workflow` runtime.
-- `plugins/delivery-pipeline/workflows/executors.mjs:214-224` hard-refuses when
-  the typed dispatch binding is absent. This refusal is correct and must stay.
-- `tests/unit/claude-workflow-host.test.cjs` constructs an AsyncFunction with
-  fake `agent`/`parallel` callbacks. It proves binding and refusal behavior,
-  not that Claude Code applied the requested native model/effort.
+`codex exec --help` exposes no top-level `--agent` option. The native
+multi-agent feature is enabled with `--enable multi_agent`; registered agents
+are spawned as child threads. OpenAI's Codex CLI protocol documents
+`ThreadSpawn` parent-thread and agent-role metadata and custom role definitions:
+https://github.com/openai/codex/blob/rust-v0.155.1/codex-rs/protocol/src/protocol.rs.
 
-The Claude slice therefore needs a host capability probe, one supported launch
-path, stream/transcript evidence for applied model and effort, and a live smoke
-that is skipped as unavailable rather than replaced by a synthetic green.
+The current T-38-04 path accepts `gsd_role`, then records
+`gsd_launch_mechanism: typed-gsd-callback`; `codex-runtime-host.cjs` does not
+apply that role to a child. Its receipt is therefore not proof of a GSD agent.
+T-38-04 must request a native child with the exact configured role, bind child
+session evidence to its parent, and verify role, model, and effort. Recent
+native 0.155.1 session records provide the parent ID, typed role, and
+`source.subagent.thread_spawn` fields. Their optional `agent_path` can be null,
+so the host must validate the exact installed role file and digest before
+launch, then compare any native path when the CLI supplies one. A missing child
+or a role/config override must fail closed. GSD-owned agent files are read-only
+inputs and must not be rewritten by Shipyard. Native spawn requests accept an
+explicit model and reasoning effort; require those values to equal the
+resolver's selection and verify them again from the child session's own turn
+metadata. The parent session's model is not evidence for the child.
 
-### 3. Codex has enforcement, but the live launcher is not proven
+### Sandboxed Git commits
 
-The Codex adapter has the stronger static-agent contract: generated manifest,
-agent-file digest, policy identity, explicit model/reasoning effort, and a
-typed GSD launch method. The current smoke coverage uses fake launch hosts and
-does not prove a real Codex process, applied selection, or restart/recovery.
+The configured host has global `commit.gpgsign=true` and a local GPG agent; the
+Codex `workspace-write` sandbox treats Git metadata as read-only on macOS. The
+pipeline nevertheless asks model workers to commit and has no signed-commit
+verification gate. Environment scrubbing by itself cannot make the worker a
+trusted signer. T-38-03 will add the shared host-side finalizer; workers return
+ready/blocked without committing or pushing. The host validates the worktree,
+ticket scope, branch and base, creates a signed commit with the configured
+signer, verifies its signature, and only then accepts the artifact or performs
+a required repair push. Missing signing capability or an out-of-scope delta
+blocks publication. The child must not receive the GPG agent socket or signing
+credentials; the live proving-ground check must verify that boundary.
 
-The Codex slice should add a real capability probe and a proving-ground launch
-that records the process/session identity and the observed model/effort. The
-test must also demonstrate refusal when the generated file is stale or when a
-parent-session/inherited selection is supplied.
+### Plugin references under the child sandbox
 
-### 4. The stop gate is scoped incorrectly
+Workflow prompts currently pass absolute `${CLAUDE_PLUGIN_ROOT}` paths such as
+`inv-research.md`, `drift-check.md`, `ci-fix.md`, and `review-fix.md`. Claude's
+child runs with outside-worktree reads blocked, so it cannot read those
+references. T-38-03 will resolve only exact workflow-to-file mappings from a
+host allowlist, embed the reference contents in the prompt, and reject arbitrary
+paths, traversal, and symlink escapes. Executable files such as the PR
+reinitialization helper are not reference documents: the trusted host reads
+review state and performs publish/reinitialization actions itself.
 
-- `plugins/delivery-pipeline/scripts/stop-gate.cjs:483-498` scans all worktrees
-  and selects the front with the newest `generated_at`.
-- The same file documents the failure mode at `:83-91`: two sessions can let a
-  busier board answer for a quieter one.
-- `plugins/delivery-pipeline/scripts/stop-gate.cjs:641-677` tells a model to
-  run foreground `ci-wait`; there is no external waker that owns the same run
-  and resumes it.
+## Existing implementation seams
 
-The controller must make the run identity explicit to the stop hook and must
-emit a durable wake condition. A missing or stale scope is a refusal/pending
-state, never permission to use the newest unrelated board.
+- `plugins/delivery-pipeline/scripts/dispatch-boundary.cjs` owns
+  resolve → validate → launch → receipt and remains the common authorization
+  boundary.
+- `plugins/delivery-pipeline/scripts/claude-runtime-host.cjs` and
+  `codex-runtime-host.cjs` own native CLI launches and session evidence.
+- `claude-workflow-host.cjs` registers typed Workflow bindings; its scripts
+  fail when the binding is absent, which is the correct fail-closed behavior.
+- `codex-delivery-host.cjs` is a production entrypoint for static and dynamic
+  roles, but its typed GSD callback currently labels rather than launches the
+  named role.
+- `context-packet.cjs` intentionally admits project-root sources only. It is
+  not the plugin-reference loader; T-38-03 adds a separate fixed allowlist.
+- `role-artifact.cjs` validates worktree and commit identity but does not verify
+  GPG signatures. T-38-03's signed finalizer must run before artifact
+  acceptance.
 
-### 5. Durable handoff exists as a manual protocol
+## Ticket boundaries and order
 
-`session-handoff.cjs` already has owner capability, acknowledgement, checkpoint,
-and successor-candidate state. The implementation gap is the runtime-specific
-successor launcher and recovery state machine: crash before acknowledgement,
-duplicate resume, failed successor launch, changed head, dirty owned work, and
-active child work all need idempotent transitions. The first implementation
-should ship manual checkpoint/resume plus a controller-owned retry path; any
-unsupported runtime remains `runtime_unavailable`.
+1. T-38-01 pins the runtime model identifiers and is merged into the epic.
+2. T-38-02 proves Claude model/effort from exact hook/transcript evidence and
+   adds the typed-agent launch mode needed by the Claude decomposition host.
+3. T-38-03 connects Claude delivery and investigation, safely supplies
+   references, and creates the shared host-side signed-commit finalizer.
+4. T-38-04 depends on T-38-03, connects Codex delivery and native typed GSD
+   children, adds the Codex decomposition entrypoint, and uses the shared
+   finalizer.
+5. T-38-06 depends on T-38-02 and connects Claude typed GSD decomposition. It
+   can run alongside T-38-03/T-38-04 because its production entrypoint and tests
+   are separate.
+6. T-38-05 waits for T-38-04 and T-38-06, then routes deliver, investigate,
+   and decompose through only connected provider hosts and completes independent
+   provider rollout.
 
-### 6. Graph and worktree code needs a controller-owned refresh boundary
-
-`epic-branch.sh` and `ticket-worktree.sh` already encode branch/worktree
-creation and cleanup rules, but the autonomous loop needs an explicit refresh
-before cutting work. A landed parent must update the child epic/base refs and
-prove `HEAD..origin/<base>` is empty before dispatch. A checkout whose origin
-does not match the declared repository must remain a reachability failure.
-
-This is a separate ticket boundary from runtime launch because it can be tested
-with temporary git repositories and does not require Claude or Codex credentials.
-
-### 7. Projection is already split from volatile delivery state
-
-`plugins/delivery-pipeline/scripts/gsd-sync.cjs:158-182` has a stable semantic
-projection path that excludes volatile delivery fields from the fingerprint.
-This should remain the read model. The new controller must add run-scoped
-runtime receipts and wake state without putting heartbeat/lease churn into the
-semantic projection fingerprint.
-
-## Proposed ticket boundaries
-
-1. Shared run contract and scoped state schema.
-2. Controller leases, wake conditions, retry/idempotency, and
-   `runtime_unavailable` transitions.
-3. Claude host capability bridge and live proving-ground smoke.
-4. Codex live launcher and proving-ground smoke.
-5. Graph/base refresh and reachability gate before worktree dispatch.
-6. Stop-gate and deterministic wait integration for the controller-owned run.
-7. Unified receipt/usage join and effectiveness report inputs.
-8. Rollout flag, migration, negative matrix, and cross-runtime integration gate.
-9. Canonical runtime model-ID migration, generated Codex selections, capability
-   metadata, policy fingerprint, and historical-receipt compatibility.
-10. Claude exact-session transcript evidence, bounded edit/Bash permissions, and
-    an opt-in proving-ground smoke.
-11. A production Claude delivery entrypoint that registers and calls the typed
-    workflow host.
-12. A production Codex delivery entrypoint for static and dynamic dispatch.
-13. Native CLI auth probes, independent provider rollout flags, and command
-    routing through the shipped hosts.
-
-The first two tickets are roots. The ID migration precedes both runtime hosts.
-Claude transcript proof precedes its production caller; the Codex host can be
-developed in parallel after the ID migration. The rollout and command-routing
-ticket joins those provider-pure host paths and remains last.
+This keeps investigation in the already-planned T-38-03 and adds one
+Claude-decomposition ticket. Signed commit finalization is shared by the two
+runtime host tickets rather than becoming another phase or ticket.
 
 ## Verification constraints
 
-- Unit tests must use injected host capabilities and prove fail-closed behavior.
-- Live Claude and Codex smokes must run the installed runtime and record the
-  applied selection; they may report `unavailable` when the runtime or
-  credentials are absent, but cannot turn that state into a green fake receipt.
-- Recovery tests must use temporary stores/repositories and exercise duplicate
-  acknowledgement, crash/restart, stale head, and ownership fencing.
-- Verification commands should be scoped to each ticket's files. Full CI or
-  external-service checks belong in CI-only test strategy, not every executor
-  retry.
-- Jira is deliberately out of scope for this preparation. PLAN files and the
-  generated local graph are the only ticket projection.
-
-## Implementation order
-
-The original controller and graph/wait tickets are merged. Close the remaining
-model-ID and runtime-host gaps, prove each host independently, and only then
-wire command routing and per-provider rollout. Keep the existing effort tiers,
-promotion signals, and Luna/max executor base unchanged.
-
-## Follow-up investigation — 2026-09-22
-
-The latest remote state sync finds the eight original Phase 37 tickets merged; this follow-up is planned as Phase 38 because their epic PR #186 has already landed.
-PR #180 (Claude), #182 (Codex), and #186 (phase integration) report green
-`test-fast` checks; GitHub exposes no review records for those three PRs. Their
-merged status does not close the implementation gaps below: the current source
-still lacks production delivery callers and its rollout path refuses valid
-subscription authentication. No completion or live-runtime evidence is inferred
-from those merges.
-
-The implementation plans are amended around the remaining runtime blockers:
-
-- Claude stdout does not prove effort. Read only assistant transcript records
-  whose `sessionId` matches the host-created launch ID; ignore attachments and
-  all other sessions.
-- The capability-only Claude smoke does not execute a model. Keep it
-  allowance-free and add a separately opted-in proving-ground smoke for one
-  real edit and Bash operation.
-- The delivery command selects native Workflow even though it cannot provide
-  the required host binding. Ship a Claude delivery host and route the command
-  through it. The Codex host also needs a production caller; selector-only
-  behavior does not launch work.
-- The Claude runtime probe supports `claude auth status --json`, but
-  `run-rollout.cjs` still requires environment keys and cannot consume that
-  OAuth result. The Codex CLI likewise reports ChatGPT authentication through
-  `codex login status`; neither provider requires an API-key environment
-  variable for the authenticated subscription path.
-- Runtime readiness must be provider-scoped. The current rollout refuses a
-  flag unless both Claude and Codex are enabled and both capabilities pass.
-- Prove child-process edit and Bash permissions inside a temporary worktree;
-  do not use a blanket permission bypass.
-- Pin the requested IDs in the canonical resolver before either provider host
-  consumes the policy. Codex uses `gpt-6-luna` and `gpt-6-sol`; Claude Opus
-  uses `claude-opus-5-5`. Preserve role/effort thresholds and old receipts.
-
-T-38-01 through T-38-05 close the model-ID, transcript evidence, delivery
-caller, permission, OAuth, and rollout gaps. Codex targets `gpt-6-luna` and
-`gpt-6-sol`; Claude Opus targets `claude-opus-5-5`. The Codex executor remains
-Luna/max, role thresholds remain unchanged, and old usage or receipts are not
-relabeled.
+- Unit fixtures may validate native event parsing, but only the opt-in live
+  smoke can report a live pass.
+- Keep capability probes allowance-free. Use one real Claude smoke and one
+  real Codex smoke in disposable worktrees; each must prove model, effort,
+  named-agent application where relevant, scoped edit/Bash access, and commit
+  signature behavior.
+- A missing, changed, ambiguous, or cross-session native evidence field is a
+  refusal, not an inferred success.
+- Provider credentials and model selection remain separate. Codex uses OpenAI
+  models only; Claude uses Anthropic models only. Codex executor baseline stays
+  Luna/max, Sol requires existing promotion signals, and Claude Opus remains
+  `claude-opus-5-5`.
+- Every merge still requires green checks and review; a merged PR or a capability
+  probe does not prove live agent application.

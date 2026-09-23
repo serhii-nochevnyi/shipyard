@@ -2,6 +2,7 @@
 
 - **Status:** accepted for implementation preparation
 - **Date:** 2026-09-19
+- **Amended:** 2026-09-23
 - **Decision owner:** repository operator
 - **Scope:** Shipyard delivery runs executed through Claude Code or Codex
 - **Supersedes:** none
@@ -48,6 +49,15 @@ or a protected integration merge when repository policy requires it.
    the assistant records in that exact session transcript. The Codex adapter
    launches the resolver-selected generated agent or dynamic model/effort pair
    and proves the applied values from its runtime evidence.
+   A host-owned `SessionStart` hook supplies the Claude `session_id`, exact
+   `transcript_path`, and any typed `agent_type`. Read only that path under the
+   active Claude configuration root; require a regular, non-symlink
+   `<project>/<session_id>.jsonl` file, a stable flush, and complete assistant
+   records with the exact `sessionId`, `message.model`, and same-record `effort`.
+   Typed GSD launches also require matching `agent_type` and assistant
+   `agentSetting`. The hook evidence file stays outside the model's writable
+   paths and is denied to filesystem tools. Missing or malformed evidence
+   fails closed; stdout and sibling-directory scans never replace the hook.
    Neither adapter may inherit a parent session model, pass policy through an
    untyped serializable argument, or fall back to the other provider.
 

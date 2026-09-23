@@ -704,20 +704,21 @@ review found that the model IDs and production delivery hosts still need to be
 connected; those corrections remain open and are tracked separately in Phase 38.
 
 ### Phase 38: Restore the native model ladder in delivery
-**Status**: planned (ADR-014, ADR-015)
-**Requirements**: REQ-106, REQ-107, REQ-113, REQ-114, REQ-115, REQ-116, REQ-120, REQ-121, REQ-122, REQ-123
+**Status**: in progress (ADR-014, ADR-015)
+**Requirements**: REQ-106, REQ-107, REQ-113, REQ-114, REQ-115, REQ-116, REQ-120, REQ-121, REQ-122, REQ-123, REQ-124
 
 Correct the runtime model identifiers and connect both providers' production
-delivery hosts. Prove Claude model and effort from the launched session's
-assistant transcript, add scoped runtime smokes, and route commands through
-provider-pure hosts. Detect subscription authentication through the native
-CLIs, keep rollout independent per provider, and preserve the existing Luna/max
-Codex baseline, effort tiers, promotion signals, and historical receipts.
+delivery hosts. Prove model, effort, and typed GSD agent application from
+session-bound native evidence; keep worker commits and plugin-reference reads
+inside trusted host boundaries. Route commands through provider-pure hosts,
+detect subscription authentication through the native CLIs, and keep rollout
+independent per provider. Preserve the Luna/max Codex baseline, effort tiers,
+promotion signals, and historical receipts.
 
 <!-- shipyard:gsd-sync:begin -->
 ## Shipyard synchronization (generated)
 
-- Source fingerprint: `80525c3ac97c0316821a9a852a21b2d559e2157e8194186637da09caa5f631a5`
+- Source fingerprint: `47a7bffd04ecd25d4f37cfcbfa881dd48aa215bb4d102ab9813c468e17b8110d`
 - Plans merged: 138/143
 - Phases verified: 9/19
 - Current phase: 20
