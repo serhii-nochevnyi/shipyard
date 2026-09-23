@@ -1,13 +1,13 @@
 {
   "schema_version": 1,
-  "generation": 346,
-  "generation_identity": "30b42e69-51c8-46ad-815f-b721b64eeba3",
-  "previous_generation_identity": "16777244:12912895138:1789818005295281000:1c607fa66ff2b89175a780a2664c045a01a729db6de05f837cc39c0ba6a46038",
-  "observed_at": "2026-09-19T12:09:01.729Z",
-  "generated_at": "2026-09-19T12:09:01.729Z",
+  "generation": 347,
+  "generation_identity": "180f9ba2-8d0f-4c2d-94a2-39b2568d2524",
+  "previous_generation_identity": "16777244:12914233212:1790165419713140000:4f04f31844a0a9ebe1b44fe750078e569e14496222c9068b0894decd5251afbf",
+  "observed_at": "2026-09-23T12:10:57.124Z",
+  "generated_at": "2026-09-23T12:10:57.124Z",
   "by": "state-sync",
-  "pid": 7083,
-  "observation_generation": 346,
+  "pid": 66907,
+  "observation_generation": 347,
   "observation_projection": {
     "tickets": {
       "T-20-01": {
@@ -1441,9 +1441,9 @@
         "checks": null
       },
       "T-37-01": {
-        "status": "pending",
+        "status": "merged",
         "repository": null,
-        "pr": null,
+        "pr": 178,
         "head": null,
         "draft": false,
         "base": "epic/37-autonomous-dual-runtime-control-plane",
@@ -1452,9 +1452,9 @@
         "checks": null
       },
       "T-37-02": {
-        "status": "pending",
+        "status": "merged",
         "repository": null,
-        "pr": null,
+        "pr": 179,
         "head": null,
         "draft": false,
         "base": "epic/37-autonomous-dual-runtime-control-plane",
@@ -1463,9 +1463,9 @@
         "checks": null
       },
       "T-37-03": {
-        "status": "pending",
+        "status": "merged",
         "repository": null,
-        "pr": null,
+        "pr": 180,
         "head": null,
         "draft": false,
         "base": "epic/37-autonomous-dual-runtime-control-plane",
@@ -1474,9 +1474,9 @@
         "checks": null
       },
       "T-37-04": {
-        "status": "pending",
+        "status": "merged",
         "repository": null,
-        "pr": null,
+        "pr": 182,
         "head": null,
         "draft": false,
         "base": "epic/37-autonomous-dual-runtime-control-plane",
@@ -1485,9 +1485,9 @@
         "checks": null
       },
       "T-37-05": {
-        "status": "pending",
+        "status": "merged",
         "repository": null,
-        "pr": null,
+        "pr": 181,
         "head": null,
         "draft": false,
         "base": "epic/37-autonomous-dual-runtime-control-plane",
@@ -1496,9 +1496,9 @@
         "checks": null
       },
       "T-37-06": {
-        "status": "pending",
+        "status": "merged",
         "repository": null,
-        "pr": null,
+        "pr": 183,
         "head": null,
         "draft": false,
         "base": "epic/37-autonomous-dual-runtime-control-plane",
@@ -1507,9 +1507,9 @@
         "checks": null
       },
       "T-37-07": {
-        "status": "pending",
+        "status": "merged",
         "repository": null,
-        "pr": null,
+        "pr": 184,
         "head": null,
         "draft": false,
         "base": "epic/37-autonomous-dual-runtime-control-plane",
@@ -1518,12 +1518,84 @@
         "checks": null
       },
       "T-37-08": {
+        "status": "merged",
+        "repository": null,
+        "pr": 185,
+        "head": null,
+        "draft": false,
+        "base": "epic/37-autonomous-dual-runtime-control-plane",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-38-01": {
+        "status": "merged",
+        "repository": null,
+        "pr": 190,
+        "head": null,
+        "draft": false,
+        "base": "epic/38-runtime-model-ladder-recovery",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-38-02": {
+        "status": "pr-open",
+        "repository": null,
+        "pr": 191,
+        "head": "17d5d6386bf7c714e6b9d252b6de5b2fcd7597f9",
+        "draft": false,
+        "base": "epic/38-runtime-model-ladder-recovery",
+        "merge_state": "CLEAN",
+        "review_decision": null,
+        "checks": {
+          "total": 1,
+          "pending": 0,
+          "failing": 0,
+          "none_reported": false,
+          "unavailable": false
+        }
+      },
+      "T-38-03": {
         "status": "pending",
         "repository": null,
         "pr": null,
         "head": null,
         "draft": false,
-        "base": "epic/37-autonomous-dual-runtime-control-plane",
+        "base": "ticket/T-38-02-prove-claude-model-and-effort-from-the-l",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-38-04": {
+        "status": "pending",
+        "repository": null,
+        "pr": null,
+        "head": null,
+        "draft": false,
+        "base": "epic/38-runtime-model-ladder-recovery",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-38-05": {
+        "status": "pending",
+        "repository": null,
+        "pr": null,
+        "head": null,
+        "draft": false,
+        "base": "epic/38-runtime-model-ladder-recovery",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-38-06": {
+        "status": "pending",
+        "repository": null,
+        "pr": null,
+        "head": null,
+        "draft": false,
+        "base": "ticket/T-38-02-prove-claude-model-and-effort-from-the-l",
         "merge_state": null,
         "review_decision": null,
         "checks": null
@@ -1532,9 +1604,9 @@
   },
   "binding": {
     "schema_version": 1,
-    "state_digest": "b5a3ce0cfbddb8d37fb5087355d8dca8b277821bf8d617cedf3b78f33abfd001",
-    "front_digest": "78357a4b4092659caa95872cb69a5993687f74957e8f125cf0adbdc5eda0d8a3",
-    "observation_digest": "0c52a1dfcd2aa88a64c51763bc9dbba9d023ca36002de9f7a5de9fa3a16b54e6",
-    "observation_generation": 346
+    "state_digest": "48cc70f864484cbbe27c3404e4fdad305f393340804b62e3b4dac1c72498bd47",
+    "front_digest": "6a2f8561e166a56ac347d74cefa728774982da15dada9c116cea2a627f8fda8b",
+    "observation_digest": "1222d3e0074a94eb418f61755fb86026228e4e3742f22065724d0d7ac57bcbca",
+    "observation_generation": 347
   }
 }

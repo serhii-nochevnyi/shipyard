@@ -1557,81 +1557,95 @@
   },
   "T-38-01": {
     "branch": "ticket/T-38-01-pin-the-current-runtime-model-identifier",
-    "pr": null,
-    "status": "pending",
+    "pr": 190,
+    "status": "merged",
+    "url": "https://github.com/serhii-nochevnyi/shipyard/pull/190",
     "base": "epic/38-runtime-model-ladder-recovery",
     "base_reason": "no primary parent — a root ticket PRs into epic/38-runtime-model-ladder-recovery",
+    "epic": "epic/38-runtime-model-ladder-recovery",
+    "reapable": true,
+    "since": "2026-09-23T12:10:57.124Z"
+  },
+  "T-38-02": {
+    "branch": "ticket/T-38-02-prove-claude-model-and-effort-from-the-l",
+    "pr": 191,
+    "status": "pr-open",
+    "draft": false,
+    "review_decision": null,
+    "url": "https://github.com/serhii-nochevnyi/shipyard/pull/191",
+    "pr_base": "epic/38-runtime-model-ladder-recovery",
+    "pr_created_at": "2026-09-22T22:22:30Z",
+    "head_sha": "17d5d6386bf7c714e6b9d252b6de5b2fcd7597f9",
+    "merge_state": "CLEAN",
+    "behind_by": 0,
+    "checks": {
+      "total": 1,
+      "failing": 0,
+      "pending": 0,
+      "none_reported": false,
+      "unavailable": false
+    },
+    "base": "epic/38-runtime-model-ladder-recovery",
+    "base_reason": "T-38-01 is MERGED, so its branch is no longer where work lands — the base is epic/38-runtime-model-ladder-recovery (base-merge it in first to keep the review diff one slice)",
+    "epic": "epic/38-runtime-model-ladder-recovery",
+    "merge_scope": "stacked",
+    "reapable": false,
+    "since": "2026-09-23T12:10:57.124Z"
+  },
+  "T-38-03": {
+    "branch": "ticket/T-38-03-connect-claude-delivery-and-investigatio",
+    "pr": null,
+    "status": "pending",
+    "base": "ticket/T-38-02-prove-claude-model-and-effort-from-the-l",
+    "base_reason": "T-38-02 is pr-open — cascade off ticket/T-38-02-prove-claude-model-and-effort-from-the-l; the sentinel retargets this PR onto epic/38-runtime-model-ladder-recovery when T-38-02 lands",
     "epic": "epic/38-runtime-model-ladder-recovery",
     "ready": true,
     "reapable": false,
     "since": "2026-09-22T19:53:48.339Z"
   },
-  "T-38-02": {
-    "branch": "ticket/T-38-02-prove-claude-model-and-effort-from-the-l",
-    "pr": null,
-    "status": "pending",
-    "base": "epic/38-runtime-model-ladder-recovery",
-    "base_reason": "T-38-01 has no branch on the remote yet (status pending) — ticket/T-38-01-pin-the-current-runtime-model-identifier is not a base that exists, so the base is epic/38-runtime-model-ladder-recovery",
-    "epic": "epic/38-runtime-model-ladder-recovery",
-    "ready": false,
-    "blocked_by": [
-      "T-38-01"
-    ],
-    "blocked_reasons": {
-      "T-38-01": "parent has no branch yet (nothing to cascade from)"
-    },
-    "reapable": false,
-    "since": "2026-09-22T19:53:48.339Z"
-  },
-  "T-38-03": {
-    "branch": "ticket/T-38-03-connect-the-claude-runtime-host-to-deliv",
-    "pr": null,
-    "status": "pending",
-    "base": "epic/38-runtime-model-ladder-recovery",
-    "base_reason": "T-38-02 has no branch on the remote yet (status pending) — ticket/T-38-02-prove-claude-model-and-effort-from-the-l is not a base that exists, so the base is epic/38-runtime-model-ladder-recovery",
-    "epic": "epic/38-runtime-model-ladder-recovery",
-    "ready": false,
-    "blocked_by": [
-      "T-38-02"
-    ],
-    "blocked_reasons": {
-      "T-38-02": "parent has no branch yet (nothing to cascade from)"
-    },
-    "reapable": false,
-    "since": "2026-09-22T19:53:48.339Z"
-  },
   "T-38-04": {
-    "branch": "ticket/T-38-04-connect-codex-launches-to-delivery",
+    "branch": "ticket/T-38-04-connect-codex-delivery-and-typed-gsd-dec",
     "pr": null,
     "status": "pending",
     "base": "epic/38-runtime-model-ladder-recovery",
-    "base_reason": "T-38-01 has no branch on the remote yet (status pending) — ticket/T-38-01-pin-the-current-runtime-model-identifier is not a base that exists, so the base is epic/38-runtime-model-ladder-recovery",
+    "base_reason": "T-38-03 has no branch on the remote yet (status pending) — ticket/T-38-03-connect-claude-delivery-and-investigatio is not a base that exists, so the base is epic/38-runtime-model-ladder-recovery",
     "epic": "epic/38-runtime-model-ladder-recovery",
     "ready": false,
     "blocked_by": [
-      "T-38-01"
+      "T-38-03"
     ],
     "blocked_reasons": {
-      "T-38-01": "parent has no branch yet (nothing to cascade from)"
+      "T-38-03": "parent has no branch yet (nothing to cascade from)"
     },
     "reapable": false,
     "since": "2026-09-22T19:53:48.339Z"
+  },
+  "T-38-06": {
+    "branch": "ticket/T-38-06-apply-typed-claude-gsd-agents-to-decompo",
+    "pr": null,
+    "status": "pending",
+    "base": "ticket/T-38-02-prove-claude-model-and-effort-from-the-l",
+    "base_reason": "T-38-02 is pr-open — cascade off ticket/T-38-02-prove-claude-model-and-effort-from-the-l; the sentinel retargets this PR onto epic/38-runtime-model-ladder-recovery when T-38-02 lands",
+    "epic": "epic/38-runtime-model-ladder-recovery",
+    "ready": true,
+    "reapable": false,
+    "since": "2026-09-23T12:10:57.124Z"
   },
   "T-38-05": {
     "branch": "ticket/T-38-05-route-delivery-through-independent-runti",
     "pr": null,
     "status": "pending",
     "base": "epic/38-runtime-model-ladder-recovery",
-    "base_reason": "T-38-03 has no branch on the remote yet (status pending) — ticket/T-38-03-connect-the-claude-runtime-host-to-deliv is not a base that exists, so the base is epic/38-runtime-model-ladder-recovery",
+    "base_reason": "T-38-04 has no branch on the remote yet (status pending) — ticket/T-38-04-connect-codex-delivery-and-typed-gsd-dec is not a base that exists, so the base is epic/38-runtime-model-ladder-recovery",
     "epic": "epic/38-runtime-model-ladder-recovery",
     "ready": false,
     "blocked_by": [
-      "T-38-03",
-      "T-38-04"
+      "T-38-04",
+      "T-38-06"
     ],
     "blocked_reasons": {
-      "T-38-03": "parent has no branch yet (nothing to cascade from)",
-      "T-38-04": "parent has no branch yet (nothing to cascade from)"
+      "T-38-04": "parent has no branch yet (nothing to cascade from)",
+      "T-38-06": "parent has no branch yet (nothing to cascade from)"
     },
     "reapable": false,
     "since": "2026-09-22T19:53:48.339Z"

@@ -1,8 +1,8 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 80525c3ac97c0316821a9a852a21b2d559e2157e8194186637da09caa5f631a5
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 362abb71cd5f0aa3cd327ea8f0d13879488fd0f6fdf121fc6df9c67913b5bbfe
 phase: 38
 status: human_needed
-shipyard_source_fingerprint: 80525c3ac97c0316821a9a852a21b2d559e2157e8194186637da09caa5f631a5
+shipyard_source_fingerprint: 362abb71cd5f0aa3cd327ea8f0d13879488fd0f6fdf121fc6df9c67913b5bbfe
 ---
 
 # Phase 38: Restore the native model ladder in delivery — Verification Projection
@@ -13,7 +13,7 @@ shipyard_source_fingerprint: 80525c3ac97c0316821a9a852a21b2d559e2157e8194186637d
 
 | Truth | Evidence | Status |
 |---|---|---|
-| Every phase plan is accounted for | 0/5 delivery records are merged | ? UNCERTAIN |
+| Every phase plan is accounted for | 1/6 delivery records are merged | ? UNCERTAIN |
 | Integration is coherent | INTEGRATION.md is missing | ? UNCERTAIN |
 | Verification evidence is present | INTEGRATION.md is missing | ? UNCERTAIN |
 
@@ -21,11 +21,12 @@ shipyard_source_fingerprint: 80525c3ac97c0316821a9a852a21b2d559e2157e8194186637d
 
 | Ticket | Delivery | Plan status |
 |---|---|---|
-| T-38-01 | pending | ? UNCERTAIN |
-| T-38-02 | pending | ? UNCERTAIN |
+| T-38-01 | merged | ✓ VERIFIED |
+| T-38-02 | pr-open | ? UNCERTAIN |
 | T-38-03 | pending | ? UNCERTAIN |
 | T-38-04 | pending | ? UNCERTAIN |
 | T-38-05 | pending | ? UNCERTAIN |
+| T-38-06 | pending | ? UNCERTAIN |
 
 ## Verification Commands
 

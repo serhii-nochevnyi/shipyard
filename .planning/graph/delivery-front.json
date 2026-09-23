@@ -1,13 +1,14 @@
 {
-  "generated_at": "2026-09-19T12:09:01.729Z",
-  "observed_at": "2026-09-19T12:09:01.729Z",
-  "generation": 346,
+  "generated_at": "2026-09-23T12:10:57.124Z",
+  "observed_at": "2026-09-23T12:10:57.124Z",
+  "generation": 347,
   "parked_by_run": [],
   "auto_merge": "epic",
-  "dispatches_applied_at": "2026-09-19T12:09:01.729Z",
+  "dispatches_applied_at": "2026-09-23T12:10:57.124Z",
   "actionable": {
     "execute": [
-      "T-37-01"
+      "T-38-03",
+      "T-38-06"
     ],
     "publish": [],
     "fix": [],
@@ -19,17 +20,14 @@
     "dispatched": [],
     "parent": [],
     "merge_human": [],
-    "human": []
+    "human": [
+      "T-38-02"
+    ]
   },
   "parked": {
     "blocked": [
-      "T-37-02",
-      "T-37-03",
-      "T-37-04",
-      "T-37-05",
-      "T-37-06",
-      "T-37-07",
-      "T-37-08"
+      "T-38-04",
+      "T-38-05"
     ],
     "done": [
       "T-20-01",
@@ -161,21 +159,27 @@
       "T-36-09",
       "T-36-10",
       "T-36-11",
-      "T-36-12"
+      "T-36-12",
+      "T-37-01",
+      "T-37-02",
+      "T-37-03",
+      "T-37-04",
+      "T-37-05",
+      "T-37-06",
+      "T-37-07",
+      "T-37-08",
+      "T-38-01"
     ]
   },
   "why": {
-    "T-37-01": "ready — worktree + executor",
-    "T-37-02": "T-37-01 (parent has no branch yet (nothing to cascade from))",
-    "T-37-03": "T-37-02 (parent has no branch yet (nothing to cascade from))",
-    "T-37-04": "T-37-02 (parent has no branch yet (nothing to cascade from))",
-    "T-37-05": "T-37-02 (parent has no branch yet (nothing to cascade from))",
-    "T-37-06": "T-37-05 (parent has no branch yet (nothing to cascade from))",
-    "T-37-07": "T-37-03 (parent has no branch yet (nothing to cascade from)); T-37-04 (parent has no branch yet (nothing to cascade from))",
-    "T-37-08": "T-37-06 (parent has no branch yet (nothing to cascade from)); T-37-07 (parent has no branch yet (nothing to cascade from))"
+    "T-38-02": "PR #191: human_checkpoint — awaiting approval/merge",
+    "T-38-03": "ready — worktree + executor",
+    "T-38-04": "T-38-03 (parent has no branch yet (nothing to cascade from))",
+    "T-38-06": "ready — worktree + executor",
+    "T-38-05": "T-38-04 (parent has no branch yet (nothing to cascade from)); T-38-06 (parent has no branch yet (nothing to cascade from))"
   },
   "counts": {
-    "execute": 1,
+    "execute": 2,
     "publish": 0,
     "fix": 0,
     "finalize": 0,
@@ -184,15 +188,15 @@
     "dispatched": 0,
     "parent": 0,
     "merge_human": 0,
-    "human": 0,
-    "blocked": 7,
-    "done": 130
+    "human": 1,
+    "blocked": 2,
+    "done": 139
   },
   "parent_of": {},
-  "actionable_count": 1,
+  "actionable_count": 2,
   "tracker_blocked_count": 0,
   "left_behind_count": 0,
-  "fixpoint": true,
+  "fixpoint": false,
   "capacity": {
     "max": 4,
     "in_flight": 0,

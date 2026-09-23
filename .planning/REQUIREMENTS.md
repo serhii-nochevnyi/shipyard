@@ -1,6 +1,6 @@
 # Requirements: shipyard
 
-<!-- shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 47a7bffd04ecd25d4f37cfcbfa881dd48aa215bb4d102ab9813c468e17b8110d -->
+<!-- shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 362abb71cd5f0aa3cd327ea8f0d13879488fd0f6fdf121fc6df9c67913b5bbfe -->
 
 **Defined:** 2026-09-10
 **Core Value:** Keep delivery decisions truthful, resumable, and synchronized between the Shipyard conveyor and native GSD workflows.
@@ -131,7 +131,6 @@
 - [ ] **REQ-121**: Codex routing uses native `gpt-6-luna` and `gpt-6-sol` IDs throughout policy, generated agents, capability metadata, and receipts; the executor base remains Luna/max and only approved signals promote it to Sol.
 - [ ] **REQ-122**: Claude Opus routing requests `claude-opus-5-5` with the existing Claude effort policy; credentials stay Anthropic-only and applied model/effort evidence is scoped to the launched assistant session.
 - [ ] **REQ-123**: Claude OAuth and Codex ChatGPT login are detected through each native CLI's status command; subscription auth is sufficient, API-key environment variables are not required, and credentials never cross providers. *ADR-011 was accepted for implementation on 2026-09-10. T-32-01/02 are the initial isolated tooling slice; subsequent packages remain subject to decomposition and rollout gates. Existing model floors remain unchanged.*
-- [ ] **REQ-124**: Typed GSD callbacks apply the requested native agent for Claude and Codex decomposition, and a compliant receipt requires session-bound evidence for the exact role, parent launch, model, and effort; caller labels alone are insufficient.
 
 ## Out of Scope
 
@@ -267,11 +266,10 @@
 | REQ-121 | Phase 38 | In Progress |
 | REQ-122 | Phase 38 | In Progress |
 | REQ-123 | Phase 38 | In Progress |
-| REQ-124 | Phase 38 | In Progress |
 
 **Coverage:**
-- v1 requirements: 124 total
-- Mapped to phases: 122
+- v1 requirements: 123 total
+- Mapped to phases: 121
 - Unmapped: 2 ⚠️
 
 ---
