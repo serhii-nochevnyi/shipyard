@@ -1,13 +1,13 @@
 {
   "schema_version": 1,
-  "generation": 347,
-  "generation_identity": "180f9ba2-8d0f-4c2d-94a2-39b2568d2524",
-  "previous_generation_identity": "16777244:12914233212:1790165419713140000:4f04f31844a0a9ebe1b44fe750078e569e14496222c9068b0894decd5251afbf",
-  "observed_at": "2026-09-23T12:10:57.124Z",
-  "generated_at": "2026-09-23T12:10:57.124Z",
+  "generation": 349,
+  "generation_identity": "d7c80608-cd8f-4b5f-a4dd-e071210870b6",
+  "previous_generation_identity": "16777244:12914254266:1790186101173586400:de04b1cb1e659c64cf4e3b5fb7e82619abbb09ccff298c5f7083604c593395a3",
+  "observed_at": "2026-09-23T17:59:55.078Z",
+  "generated_at": "2026-09-23T17:59:55.078Z",
   "by": "state-sync",
-  "pid": 66907,
-  "observation_generation": 347,
+  "pid": 7572,
+  "observation_generation": 349,
   "observation_projection": {
     "tickets": {
       "T-20-01": {
@@ -1540,37 +1540,31 @@
         "checks": null
       },
       "T-38-02": {
-        "status": "pr-open",
+        "status": "merged",
         "repository": null,
         "pr": 191,
-        "head": "17d5d6386bf7c714e6b9d252b6de5b2fcd7597f9",
-        "draft": false,
-        "base": "epic/38-runtime-model-ladder-recovery",
-        "merge_state": "CLEAN",
-        "review_decision": null,
-        "checks": {
-          "total": 1,
-          "pending": 0,
-          "failing": 0,
-          "none_reported": false,
-          "unavailable": false
-        }
-      },
-      "T-38-03": {
-        "status": "pending",
-        "repository": null,
-        "pr": null,
         "head": null,
         "draft": false,
-        "base": "ticket/T-38-02-prove-claude-model-and-effort-from-the-l",
+        "base": "epic/38-runtime-model-ladder-recovery",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-38-03": {
+        "status": "merged",
+        "repository": null,
+        "pr": 195,
+        "head": null,
+        "draft": false,
+        "base": "epic/38-runtime-model-ladder-recovery",
         "merge_state": null,
         "review_decision": null,
         "checks": null
       },
       "T-38-04": {
-        "status": "pending",
+        "status": "merged",
         "repository": null,
-        "pr": null,
+        "pr": 192,
         "head": null,
         "draft": false,
         "base": "epic/38-runtime-model-ladder-recovery",
@@ -1590,12 +1584,34 @@
         "checks": null
       },
       "T-38-06": {
+        "status": "merged",
+        "repository": null,
+        "pr": 194,
+        "head": null,
+        "draft": false,
+        "base": "epic/38-runtime-model-ladder-recovery",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-38-07": {
         "status": "pending",
         "repository": null,
         "pr": null,
         "head": null,
         "draft": false,
-        "base": "ticket/T-38-02-prove-claude-model-and-effort-from-the-l",
+        "base": "epic/38-runtime-model-ladder-recovery",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-38-08": {
+        "status": "pending",
+        "repository": null,
+        "pr": null,
+        "head": null,
+        "draft": false,
+        "base": "epic/38-runtime-model-ladder-recovery",
         "merge_state": null,
         "review_decision": null,
         "checks": null
@@ -1604,9 +1620,9 @@
   },
   "binding": {
     "schema_version": 1,
-    "state_digest": "48cc70f864484cbbe27c3404e4fdad305f393340804b62e3b4dac1c72498bd47",
-    "front_digest": "6a2f8561e166a56ac347d74cefa728774982da15dada9c116cea2a627f8fda8b",
-    "observation_digest": "1222d3e0074a94eb418f61755fb86026228e4e3742f22065724d0d7ac57bcbca",
-    "observation_generation": 347
+    "state_digest": "2b07c054c5305c06ea066196b9c96aaac6a6f097cb05e671c5052994b2771d28",
+    "front_digest": "78a9c1961640ed3d29a7773ca3b6ff05501ab4ef223accb5e79b948f3d67c02d",
+    "observation_digest": "795baae7023d30f3b6b0bcc60098f13a57195f051884b098d6f7ce109acef4d2",
+    "observation_generation": 349
   }
 }
