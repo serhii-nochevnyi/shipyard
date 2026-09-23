@@ -68,13 +68,19 @@ function rejected(fn, code) {
 }
 function runtimeEvidence(selection, context, overrides = {}) {
   const sessionId = '11111111-1111-4111-8111-111111111111';
+  const protectedPaths = ['/Users/tester/.gnupg', '/Users/tester/.ssh'];
+  const sandbox = selection.sandbox_mode || 'workspace-write';
+  const baseProfile = sandbox === 'read-only' ? ':read-only' : ':workspace';
+  const filesystem = '{' + protectedPaths.map((entry) => JSON.stringify(entry) + '=\"deny\"').join(',') + '}';
   const args = [
     'exec', '--json', '--model', selection.model,
     '--config', 'model_reasoning_effort="' + selection.reasoning_effort + '"',
     '--config', 'model_provider="openai"',
     '--config', 'forced_login_method="chatgpt"',
     '--cd', '/tmp/worktree', '--ignore-user-config',
-    '--sandbox', selection.sandbox_mode || 'workspace-write', '-',
+    '--config', 'default_permissions="shipyard-runtime"',
+    '--config', 'permissions.shipyard-runtime.extends=' + JSON.stringify(baseProfile),
+    '--config', 'permissions.shipyard-runtime.filesystem=' + filesystem, '-',
   ];
   const native = {
     schema: 'shipyard.codex-native-session-evidence.v1', version: 1,
@@ -90,6 +96,7 @@ function runtimeEvidence(selection, context, overrides = {}) {
     ticket: 'T-38-04', phase: 38, worktree: '/tmp/worktree',
     dispatch_id: context.dispatch_id, session_id: sessionId, process_id: 123,
     command_digest: 'b'.repeat(64), command: { executable: 'codex', args },
+    sandbox_evidence: { profile: 'shipyard-runtime', base_profile: baseProfile, protected_paths: protectedPaths },
     selection_source: 'codex-native-session-transcript',
     applied_model: selection.model, applied_effort: selection.reasoning_effort,
     observed_model: selection.model, observed_effort: selection.reasoning_effort,
@@ -263,6 +270,37 @@ test('runtime receipt requires matching model and effort from the bound native t
         assert.throws(() => f.boundary.dispatch({ runtime: 'codex', role: 'executor' }),
           (error) => error.code === 'MISSING_RECEIPT');
       }
+    } finally { clean(f); }
+  }
+});
+
+test('runtime receipt refuses when the signer-deny profile is absent or altered', () => {
+  for (const tamper of [
+    (evidence) => { evidence.sandbox_evidence.protected_paths.pop(); },
+    (evidence) => {
+      const index = evidence.command.args.findIndex((value) => value.startsWith('permissions.shipyard-runtime.filesystem='));
+      evidence.command.args[index] = 'permissions.shipyard-runtime.filesystem={"/tmp/unrelated"=\"deny\"}';
+    },
+    (evidence) => { evidence.command.args.push('--sandbox', 'workspace-write'); },
+  ]) {
+    const f = setup({
+      host: {
+        requireRuntimeEvidence: true,
+        launch: (selection, context) => {
+          const evidence = runtimeEvidence(selection, context);
+          tamper(evidence);
+          return {
+            ...applied(selection),
+            observed_model: selection.model,
+            observed_effort: selection.reasoning_effort,
+            runtime_evidence: evidence,
+          };
+        },
+      },
+    });
+    try {
+      assert.throws(() => f.boundary.dispatch({ runtime: 'codex', role: 'executor' }),
+        (error) => error.code === 'MISSING_RECEIPT');
     } finally { clean(f); }
   }
 });

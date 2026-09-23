@@ -87,7 +87,6 @@ function validateRuntimeEvidence(evidence, selection, resolution) {
     refuse('MISSING_RECEIPT', 'live Codex host did not return bound process and session evidence');
   }
   const modelIndex = evidence.command.args.indexOf('--model');
-  const sandboxIndex = evidence.command.args.indexOf('--sandbox');
   const effortFlags = evidence.command.args.filter((value) => typeof value === 'string'
     && value.startsWith('model_reasoning_effort='));
   const providerFlags = evidence.command.args.filter((value) => typeof value === 'string'
@@ -95,11 +94,35 @@ function validateRuntimeEvidence(evidence, selection, resolution) {
   const loginFlags = evidence.command.args.filter((value) => typeof value === 'string'
     && value.startsWith('forced_login_method='));
   const native = evidence.native_session_evidence;
-  const expectedSandbox = selection.sandbox_mode || 'workspace-write';
+  const gsdRole = validateGsdRole(resolution);
+  const expectedSandbox = selection.sandbox_mode
+    || (gsdRole === 'gsd-phase-researcher' || gsdRole === 'gsd-plan-checker' ? 'read-only' : 'workspace-write');
+  const sandboxEvidence = evidence.sandbox_evidence;
+  const expectedProfileParent = expectedSandbox === 'read-only' ? ':read-only' : ':workspace';
+  const protectedPaths = sandboxEvidence && sandboxEvidence.protected_paths;
+  const expectedFilesystem = Array.isArray(protectedPaths) && protectedPaths.length
+    ? '{' + protectedPaths.map((entry) => JSON.stringify(entry) + '=\"deny\"').join(',') + '}' : null;
+  const configArgs = evidence.command.args.filter((value) => typeof value === 'string'
+    && value.startsWith('default_permissions='));
+  const profileParents = evidence.command.args.filter((value) => typeof value === 'string'
+    && value.startsWith('permissions.shipyard-runtime.extends='));
+  const profileFilesystems = evidence.command.args.filter((value) => typeof value === 'string'
+    && value.startsWith('permissions.shipyard-runtime.filesystem='));
   if (evidence.command.args.filter((value) => value === '--model').length !== 1
       || modelIndex < 0 || evidence.command.args[modelIndex + 1] !== selection.model
-      || evidence.command.args.filter((value) => value === '--sandbox').length !== 1
-      || sandboxIndex < 0 || evidence.command.args[sandboxIndex + 1] !== expectedSandbox
+      || evidence.command.args.includes('--sandbox')
+      || evidence.command.args.includes('--dangerously-bypass-approvals-and-sandbox')
+      || !object(sandboxEvidence)
+      || sandboxEvidence.profile !== 'shipyard-runtime'
+      || sandboxEvidence.base_profile !== expectedProfileParent
+      || !Array.isArray(protectedPaths) || !protectedPaths.length
+      || protectedPaths.some((entry) => typeof entry !== 'string' || !path.isAbsolute(entry))
+      || new Set(protectedPaths).size !== protectedPaths.length
+      || configArgs.length !== 1 || configArgs[0] !== 'default_permissions=\"shipyard-runtime\"'
+      || profileParents.length !== 1
+      || profileParents[0] !== 'permissions.shipyard-runtime.extends=' + JSON.stringify(expectedProfileParent)
+      || profileFilesystems.length !== 1
+      || profileFilesystems[0] !== 'permissions.shipyard-runtime.filesystem=' + expectedFilesystem
       || effortFlags.length !== 1 || effortFlags[0] !== 'model_reasoning_effort="' + selection.reasoning_effort + '"'
       || providerFlags.length !== 1 || providerFlags[0] !== 'model_provider="openai"'
       || loginFlags.length !== 1 || loginFlags[0] !== 'forced_login_method="chatgpt"'

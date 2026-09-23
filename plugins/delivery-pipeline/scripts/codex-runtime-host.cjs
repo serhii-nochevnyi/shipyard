@@ -12,9 +12,12 @@ const SCHEMA = 'shipyard.codex-runtime-host.v1';
 const VERSION = 1;
 const STREAM_FORMAT = 'jsonl';
 const EFFORTS = Object.freeze(['low', 'medium', 'high', 'xhigh', 'max']);
-const REQUIRED_HELP_MARKERS = Object.freeze(['--json', '--model', '--config', '--cd', '--sandbox']);
+const REQUIRED_HELP_MARKERS = Object.freeze(['--json', '--model', '--config', '--cd', '--ignore-user-config']);
 const NATIVE_SESSION_MAX_BYTES = 128 * 1024 * 1024;
 const NATIVE_SESSION_WAIT_MS = 5000;
+const GSD_ROLES = new Set(['gsd-phase-researcher', 'gsd-planner', 'gsd-plan-checker']);
+const GSD_AGENT_MAX_BYTES = 256 * 1024;
+const PERMISSION_PROFILE = 'shipyard-runtime';
 const UNAVAILABLE_CODES = new Set([
   'RUNTIME_UNAVAILABLE',
   'RUNTIME_EVIDENCE_MISSING',
@@ -432,6 +435,63 @@ async function readNativeCodexSession(sessionId, options = {}) {
   });
 }
 
+async function readNativeCodexChild(parentId, role, model, effort, agent, spawnEvidence, options = {}) {
+  const env = options.env && object(options.env) ? options.env : {};
+  const home = path.resolve(env.CODEX_HOME || process.env.CODEX_HOME || path.join(os.homedir(), '.codex'));
+  const root = path.join(home, 'sessions');
+  const deadline = Date.now() + (options.waitMs === undefined ? NATIVE_SESSION_WAIT_MS : options.waitMs);
+  while (Date.now() <= deadline) {
+    const matches = [];
+    const now = options.now || new Date();
+    for (const offset of [-1, 0, 1]) {
+      const date = new Date(now);
+      date.setDate(date.getDate() + offset);
+      const directory = sessionDirectory(root, date);
+      let files;
+      try { files = fs.readdirSync(directory); }
+      catch (error) {
+        if (error.code === 'ENOENT') continue;
+        fail('RUNTIME_EVIDENCE_INVALID', 'cannot inspect Codex child session directory');
+      }
+      for (const name of files) {
+        if (!name.endsWith('.jsonl')) continue;
+        const file = path.join(directory, name);
+        let stat;
+        try { stat = fs.lstatSync(file); }
+        catch (_) { continue; }
+        if (!stat.isFile() || stat.isSymbolicLink() || stat.size > NATIVE_SESSION_MAX_BYTES
+            || stat.mtimeMs < (options.startedAt || 0) - 5000) continue;
+        const descriptor = fs.openSync(file, 'r');
+        let prefix;
+        try {
+          const buffer = Buffer.alloc(Math.min(stat.size, 4 * 1024 * 1024));
+          prefix = buffer.subarray(0, fs.readSync(descriptor, buffer, 0, buffer.length, 0)).toString('utf8');
+        } finally { fs.closeSync(descriptor); }
+        const first = prefix.slice(0, prefix.indexOf('\n') < 0 ? prefix.length : prefix.indexOf('\n'));
+        let record;
+        try { record = JSON.parse(first); }
+        catch (_) { continue; }
+        if (record.type === 'session_meta' && record.payload && record.payload.parent_thread_id === parentId) {
+          matches.push({ file, stat, id: record.payload.id });
+        }
+      }
+    }
+    if (matches.length > 1) fail('RUNTIME_EVIDENCE_INVALID', 'native parent has duplicate child sessions');
+    if (matches.length === 1) {
+      const child = matches[0];
+      const raw = fs.readFileSync(child.file, 'utf8');
+      const after = fs.lstatSync(child.file);
+      if (after.size !== child.stat.size || after.mtimeMs !== child.stat.mtimeMs
+          || Buffer.byteLength(raw, 'utf8') !== after.size) {
+        fail('RUNTIME_EVIDENCE_INVALID', 'native child transcript changed during verification');
+      }
+      return parseNativeChildTranscript(raw, child.id, parentId, role, model, effort, agent, spawnEvidence);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  fail('RUNTIME_EVIDENCE_MISSING', 'native typed GSD child transcript was not found');
+}
+
 function writeTranscript(directory, scope, sessionId, stdout) {
   if (directory === undefined || directory === null) return null;
   const root = path.resolve(text(directory, 'transcriptDir', 4096));
@@ -472,6 +532,215 @@ function generatedInstructions(content) {
   return body;
 }
 
+function installedGsdAgent(role, env = {}) {
+  if (!GSD_ROLES.has(role)) fail('INVALID_INPUT', 'unsupported typed GSD role');
+  const home = path.resolve(env.CODEX_HOME || process.env.CODEX_HOME || path.join(os.homedir(), '.codex'));
+  const file = path.join(home, 'agents', role + '.toml');
+  let stat;
+  let content;
+  try {
+    stat = fs.lstatSync(file);
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.size > GSD_AGENT_MAX_BYTES) {
+      fail('STALE_GSD_AGENT', 'installed GSD role must be a bounded regular file');
+    }
+    if (fs.realpathSync(file) !== path.join(fs.realpathSync(path.dirname(file)), path.basename(file))) {
+      fail('STALE_GSD_AGENT', 'installed GSD role must not resolve through a different file');
+    }
+    content = fs.readFileSync(file, 'utf8');
+    if (Buffer.byteLength(content, 'utf8') !== stat.size) fail('STALE_GSD_AGENT', 'installed GSD role changed during validation');
+  } catch (error) {
+    if (error && error.name === 'CodexRuntimeHostError') throw error;
+    fail('STALE_GSD_AGENT', 'cannot read the installed GSD role: ' + error.message);
+  }
+  const fields = new Map();
+  let multiline = null;
+  let instructionLines = [];
+  let instructions = null;
+  for (const source of content.split(/\r?\n/)) {
+    const line = source.trim();
+    if (multiline) {
+      if (line === multiline) {
+        instructions = instructionLines.join('\n') + '\n';
+        multiline = null;
+      } else instructionLines.push(source);
+      continue;
+    }
+    if (!line || line.startsWith('#')) continue;
+    const match = line.match(/^([A-Za-z_][A-Za-z_0-9]*)\s*=\s*(.*)$/);
+    if (!match) fail('STALE_GSD_AGENT', 'installed GSD role has unsupported TOML outside its instructions');
+    if (fields.has(match[1])) fail('STALE_GSD_AGENT', 'installed GSD role has duplicate configuration');
+    fields.set(match[1], match[2]);
+    if (match[1] === 'developer_instructions') {
+      if (match[2] !== "'''") {
+        fail('STALE_GSD_AGENT', 'installed GSD instructions must use literal multiline TOML');
+      }
+      multiline = match[2];
+      instructionLines = [];
+    }
+  }
+  if (multiline) fail('STALE_GSD_AGENT', 'installed GSD instructions are unterminated');
+  for (const key of ['model', 'model_reasoning_effort', 'model_provider', 'forced_login_method', 'config_file']) {
+    if (fields.has(key)) fail('CONFLICTING_OVERRIDE', 'installed GSD role overrides ' + key);
+  }
+  let name;
+  let description;
+  let sandbox;
+  try {
+    name = JSON.parse(fields.get('name'));
+    description = JSON.parse(fields.get('description'));
+    sandbox = JSON.parse(fields.get('sandbox_mode'));
+  } catch (_) {
+    fail('STALE_GSD_AGENT', 'installed GSD role has invalid identity or sandbox');
+  }
+  if (name !== role || typeof description !== 'string' || !description.trim()
+      || !['read-only', 'workspace-write'].includes(sandbox)
+      || typeof instructions !== 'string' || !instructions.trim()) {
+    fail('STALE_GSD_AGENT', 'installed GSD role identity or instructions do not match');
+  }
+  if (role === 'gsd-plan-checker' && sandbox !== 'read-only') {
+    fail('STALE_GSD_AGENT', 'installed plan checker is not read-only');
+  }
+  return freeze({
+    role, file, description, sandbox, instructions,
+    sha256: crypto.createHash('sha256').update(content).digest('hex'),
+    instructions_sha256: crypto.createHash('sha256').update(instructions).digest('hex'),
+  });
+}
+
+function parseNativeParentSpawn(raw, parentId, role, model, effort) {
+  parseNativeCodexTranscript(raw, parentId);
+  const calls = [];
+  const waits = [];
+  const outputs = new Map();
+  let metadataCount = 0;
+  for (const line of raw.split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    let record;
+    try { record = JSON.parse(line); }
+    catch (error) { fail('RUNTIME_EVIDENCE_INVALID', 'parent transcript contains invalid JSON: ' + error.message); }
+    if (record.type === 'session_meta') metadataCount++;
+    if (record.type !== 'response_item' || !object(record.payload)) continue;
+    const item = record.payload;
+    if (item.type === 'function_call' && item.name === 'spawn_agent') calls.push(item);
+    if (item.type === 'function_call' && item.name === 'wait_agent') waits.push(item);
+    if (item.type === 'function_call_output' && typeof item.call_id === 'string') {
+      if (outputs.has(item.call_id)) fail('RUNTIME_EVIDENCE_INVALID', 'duplicate parent tool output');
+      outputs.set(item.call_id, item.output);
+    }
+  }
+  if (metadataCount !== 1 || calls.length !== 1) {
+    fail('RUNTIME_EVIDENCE_MISSING', 'parent did not provide one session and one native spawn_agent call');
+  }
+  const call = calls[0];
+  let args;
+  try { args = JSON.parse(call.arguments); }
+  catch (_) { fail('RUNTIME_EVIDENCE_INVALID', 'parent spawn arguments are invalid'); }
+  if (!object(args) || args.agent_type !== role || args.model !== model
+      || args.reasoning_effort !== effort || args.fork_turns !== 'none'
+      || typeof args.task_name !== 'string'
+      || !/^[A-Za-z0-9_-]{1,80}$/.test(args.task_name)) {
+    fail('RUNTIME_EVIDENCE_MISMATCH', 'native spawn request did not select the exact role, model, effort and task');
+  }
+  if (typeof call.call_id !== 'string' || !outputs.has(call.call_id)) {
+    fail('RUNTIME_EVIDENCE_MISSING', 'native spawn request has no matching output');
+  }
+  let output;
+  try { output = JSON.parse(outputs.get(call.call_id)); }
+  catch (_) { fail('RUNTIME_EVIDENCE_INVALID', 'native spawn output is invalid'); }
+  if (!object(output) || typeof output.task_name !== 'string'
+      || !path.isAbsolute(output.task_name)
+      || path.normalize(output.task_name) !== output.task_name
+      || path.basename(output.task_name) !== args.task_name) {
+    fail('RUNTIME_EVIDENCE_MISMATCH', 'native spawn output does not identify the requested task');
+  }
+  if (!waits.length) fail('RUNTIME_EVIDENCE_MISSING', 'native parent did not wait for its child');
+  const waitResults = waits.map((wait) => {
+    if (typeof wait.call_id !== 'string' || !outputs.has(wait.call_id)) {
+      fail('RUNTIME_EVIDENCE_MISSING', 'native parent has an unfinished child wait');
+    }
+    try { return JSON.parse(outputs.get(wait.call_id)); }
+    catch (_) { fail('RUNTIME_EVIDENCE_INVALID', 'native wait output is invalid'); }
+  });
+  if (!waitResults.some((waited) => object(waited)
+      && waited.timed_out === false && waited.message === 'Wait completed.')) {
+    fail('RUNTIME_EVIDENCE_MISMATCH', 'native parent wait did not complete');
+  }
+  return freeze({
+    parent_thread_id: parentId, call_id: call.call_id,
+    task_name: args.task_name, task_path: output.task_name,
+  });
+}
+
+function readNativeParentRaw(sessionId, evidence, env) {
+  const home = path.resolve(env.CODEX_HOME || process.env.CODEX_HOME || path.join(os.homedir(), '.codex'));
+  const files = nativeSessionCandidates(path.join(home, 'sessions'), sessionId);
+  if (files.length !== 1 || path.basename(files[0]) !== evidence.file) {
+    fail('RUNTIME_EVIDENCE_MISSING', 'native parent transcript cannot be rebound to session evidence');
+  }
+  const raw = fs.readFileSync(files[0], 'utf8');
+  if (crypto.createHash('sha256').update(raw).digest('hex') !== evidence.sha256) {
+    fail('RUNTIME_EVIDENCE_INVALID', 'native parent transcript changed after selection verification');
+  }
+  return raw;
+}
+
+function parseNativeChildTranscript(raw, childId, parentId, role, model, effort, agent, spawnEvidence) {
+  const native = parseNativeCodexTranscript(raw, childId);
+  if (native.selections.some((value) => value.model !== model || value.effort !== effort)) {
+    fail('RUNTIME_EVIDENCE_MISMATCH', 'native child used a different model or reasoning effort');
+  }
+  const metadata = [];
+  const developer = [];
+  let completed = 0;
+  for (const line of raw.split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    const record = JSON.parse(line);
+    if (record.type === 'session_meta') metadata.push(record.payload);
+    if (record.type === 'event_msg' && record.payload && record.payload.type === 'task_complete') completed++;
+    if (record.type === 'response_item' && record.payload
+        && record.payload.type === 'message' && record.payload.role === 'developer') {
+      developer.push(record.payload);
+    }
+  }
+  if (metadata.length !== 1 || !object(metadata[0]) || completed !== 1) {
+    fail('RUNTIME_EVIDENCE_INVALID', 'native child has incomplete or duplicate execution evidence');
+  }
+  const meta = metadata[0];
+  const spawned = meta.source && meta.source.subagent && meta.source.subagent.thread_spawn;
+  if (meta.parent_thread_id !== parentId || meta.agent_role !== role
+      || !object(spawned) || spawned.parent_thread_id !== parentId
+      || spawned.agent_role !== role) {
+    fail('RUNTIME_EVIDENCE_MISMATCH', 'native child is not bound to the exact parent and GSD role');
+  }
+  if (!object(spawnEvidence) || spawnEvidence.parent_thread_id !== parentId
+      || typeof spawnEvidence.task_path !== 'string'
+      || !path.isAbsolute(spawnEvidence.task_path)
+      || path.basename(spawnEvidence.task_path) !== spawnEvidence.task_name) {
+    fail('RUNTIME_EVIDENCE_MISSING', 'native child lacks validated parent spawn task evidence');
+  }
+  for (const observedPath of [meta.agent_path, spawned.agent_path]) {
+    if (observedPath !== spawnEvidence.task_path) {
+      fail('RUNTIME_EVIDENCE_MISMATCH', 'native child agent_path does not match the spawned task path');
+    }
+  }
+  const matchingInstructions = developer.flatMap((message) => Array.isArray(message.content)
+    ? message.content.filter((entry) => object(entry)
+      && entry.type === 'input_text' && entry.text === agent.instructions)
+    : []);
+  if (typeof agent.instructions !== 'string' || matchingInstructions.length !== 1) {
+    fail('RUNTIME_EVIDENCE_MISMATCH', 'native child did not load the exact installed GSD developer instructions');
+  }
+  return freeze({
+    schema: 'shipyard.codex-native-child-evidence.v1', version: 1,
+    session_id: childId, parent_thread_id: parentId, agent_role: role,
+    agent_file: agent.file, agent_file_digest: agent.sha256,
+    agent_instructions_digest: agent.instructions_sha256,
+    task_path: spawnEvidence.task_path,
+    provider: native.provider, models: native.models, efforts: native.efforts,
+    selections: native.selections, sha256: native.sha256,
+  });
+}
+
 function launchPrompt(prompt, content) {
   if (typeof prompt !== 'string' || !prompt.trim()
       || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(prompt)) {
@@ -481,6 +750,40 @@ function launchPrompt(prompt, content) {
   if (base.length > 1024 * 1024) fail('INVALID_INPUT', 'prompt exceeds 1048576 characters');
   if (!content) return base;
   return generatedInstructions(content) + '\n\n' + base;
+}
+
+function signerProtectionPaths(env, worktree) {
+  const paths = [env.GNUPGHOME, process.env.GNUPGHOME, path.join(os.homedir(), '.gnupg'),
+    path.join(os.homedir(), '.ssh')].filter(Boolean);
+  const socket = env.SSH_AUTH_SOCK || process.env.SSH_AUTH_SOCK;
+  if (socket) paths.push(socket);
+  let key;
+  try { key = execFileSync('git', ['-C', worktree, 'config', '--get', 'user.signingkey'], { encoding: 'utf8' }).trim(); }
+  catch (_) { key = ''; }
+  if (key && (path.isAbsolute(key) || key.startsWith('~/'))) {
+    const file = path.resolve(key.startsWith('~/') ? path.join(os.homedir(), key.slice(2)) : key);
+    paths.push(file);
+  }
+  return [...new Set(paths.map((entry) => {
+    let resolved = path.resolve(entry);
+    try { resolved = fs.realpathSync(resolved); } catch (_) {}
+    return resolved;
+  }))];
+}
+
+function signerPermissionProfileArgs(protectedPaths, sandbox) {
+  if (!['read-only', 'workspace-write'].includes(sandbox)) {
+    fail('INVALID_INPUT', 'Codex launch requires an explicit read-only or workspace-write permission profile');
+  }
+  const paths = [...new Set(protectedPaths.map((entry) => path.resolve(entry)))];
+  if (!paths.length) fail('SIGNER_ISOLATION_UNAVAILABLE', 'Codex signer paths could not be determined');
+  const filesystem = '{' + paths.map((entry) => JSON.stringify(entry) + '="deny"').join(',') + '}';
+  const parent = sandbox === 'read-only' ? ':read-only' : ':workspace';
+  return [
+    '--config', 'default_permissions=' + JSON.stringify(PERMISSION_PROFILE),
+    '--config', 'permissions.' + PERMISSION_PROFILE + '.extends=' + JSON.stringify(parent),
+    '--config', 'permissions.' + PERMISSION_PROFILE + '.filesystem=' + filesystem,
+  ];
 }
 
 function createCodexCliLauncher(options = {}) {
@@ -506,6 +809,11 @@ function createCodexCliLauncher(options = {}) {
       fail('RUNTIME_CAPABILITY_MISSING', 'Codex host does not support reasoning effort ' + effort);
     }
     const content = launchOptions.agent_file_content;
+    const typedRole = launchOptions.gsd_role;
+    if (typedRole && (content !== undefined || launchOptions.agent_file || options.ephemeral === true)) {
+      fail('INVALID_INPUT', 'typed GSD launch cannot use a static handoff or ephemeral transcript');
+    }
+    const agent = typedRole ? installedGsdAgent(typedRole, environment) : null;
     if (content !== undefined) {
       const actualDigest = crypto.createHash('sha256').update(content).digest('hex');
       if (actualDigest !== launchOptions.agent_file_digest) {
@@ -516,18 +824,8 @@ function createCodexCliLauncher(options = {}) {
     if (!['read-only', 'workspace-write'].includes(sandbox)) {
       fail('INVALID_INPUT', 'Codex launch requires an explicit read-only or workspace-write sandbox');
     }
-    const args = [
-      'exec', '--json', '--model', model,
-      '--config', 'model_reasoning_effort="' + effort + '"',
-      '--config', 'model_provider="openai"',
-      '--config', 'forced_login_method="chatgpt"',
-      '--cd', scope.worktree, '--ignore-user-config',
-    ];
-    args.push('--sandbox', sandbox);
-    if (options.ephemeral === true) args.push('--ephemeral');
-    if (options.approveForMe === true || launchOptions.approve_for_me === true) args.push('--approve-for-me');
-    args.push('-');
     const env = { ...process.env, ...environment };
+    const protectedPaths = signerProtectionPaths(env, scope.worktree);
     for (const key of [
       'CODEX_MODEL', 'CODEX_MODEL_REASONING_EFFORT', 'CODEX_THREAD_ID', 'CODEX_SESSION_ID',
       'OPENAI_API_KEY', 'CODEX_API_KEY',
@@ -535,8 +833,28 @@ function createCodexCliLauncher(options = {}) {
       delete env[key];
     }
     for (const key of Object.keys(env)) {
-      if (key.startsWith('ANTHROPIC_') || key === 'CLAUDE_CODE_OAUTH_TOKEN') delete env[key];
+      if (key.startsWith('ANTHROPIC_') || key === 'CLAUDE_CODE_OAUTH_TOKEN'
+          || key === 'GNUPGHOME' || key === 'GPG_AGENT_INFO' || key === 'GPG_TTY'
+          || key === 'SSH_AUTH_SOCK' || key === 'SSH_AGENT_PID') delete env[key];
     }
+    const args = [
+      'exec', '--json', '--model', model,
+      '--config', 'model_reasoning_effort="' + effort + '"',
+      '--config', 'model_provider="openai"',
+      '--config', 'forced_login_method="chatgpt"',
+      '--cd', scope.worktree, '--ignore-user-config',
+    ];
+    args.push(...signerPermissionProfileArgs(protectedPaths, sandbox));
+    if (agent) {
+      args.push('--config', 'features.multi_agent=true');
+      args.push('--config', 'features.multi_agent_v2=false');
+      args.push('--config', 'agents.' + agent.role + '.description=' + JSON.stringify(agent.description));
+      args.push('--config', 'agents.' + agent.role + '.config_file=' + JSON.stringify(agent.file));
+    }
+    if (options.ephemeral === true) args.push('--ephemeral');
+    if (options.approveForMe === true || launchOptions.approve_for_me === true) args.push('--approve-for-me');
+    args.push('-');
+    const startedAt = Date.now();
     let child;
     try {
       child = spawnImpl(executable, args, {
@@ -555,7 +873,13 @@ function createCodexCliLauncher(options = {}) {
     child.stdout.on('data', (chunk) => stdout.push(Buffer.from(chunk)));
     child.stderr.on('data', (chunk) => stderr.push(Buffer.from(chunk)));
     try {
-      child.stdin.write(launchPrompt(prompt, content));
+      const input = agent
+        ? 'Call spawn_agent exactly once with agent_type ' + agent.role
+          + ', model ' + model + ', reasoning_effort ' + effort
+          + ', fork_turns none, and task_name gsd_task. Give that child this exact task:\n'
+          + launchPrompt(prompt) + '\nWait for that child to finish. Do not perform the task yourself.'
+        : launchPrompt(prompt, content);
+      child.stdin.write(input);
       child.stdin.end();
     } catch (error) {
       try { child.kill(); } catch (_) {}
@@ -588,6 +912,17 @@ function createCodexCliLauncher(options = {}) {
         model: args[args.indexOf('--model') + 1],
         effort: (args.find((value) => value.startsWith('model_reasoning_effort=')) || '').match(/^model_reasoning_effort="([^"]+)"$/)?.[1],
       }, nativeEvidence);
+      let typedEvidence = null;
+      if (agent) {
+        const parentRaw = readNativeParentRaw(parsed.session_id, nativeEvidence, env);
+        const spawnEvidence = parseNativeParentSpawn(parentRaw, parsed.session_id, agent.role, model, effort);
+        typedEvidence = await readNativeCodexChild(parsed.session_id, agent.role, model, effort, agent,
+          spawnEvidence, { env, startedAt });
+        const current = installedGsdAgent(agent.role, environment);
+        if (current.file !== agent.file || current.sha256 !== agent.sha256) {
+          fail('STALE_GSD_AGENT', 'installed GSD role changed during native launch');
+        }
+      }
       const transcript = writeTranscript(transcriptDir, scope, parsed.session_id, rawStdout);
       const commandDigest = crypto.createHash('sha256').update(JSON.stringify(args)).digest('hex');
       const runtimeEvidence = {
@@ -604,12 +939,18 @@ function createCodexCliLauncher(options = {}) {
         process_id: Number.isInteger(child.pid) ? child.pid : undefined,
         command_digest: commandDigest,
         command: { executable, args: [...args] },
+        sandbox_evidence: {
+          profile: PERMISSION_PROFILE,
+          base_profile: sandbox === 'read-only' ? ':read-only' : ':workspace',
+          protected_paths: protectedPaths,
+        },
         selection_source: selection.source,
         applied_model: selection.model,
         applied_effort: selection.effort,
         observed_model: selection.model,
         observed_effort: selection.effort,
         native_session_evidence: nativeEvidence,
+        ...(typedEvidence ? { native_child_evidence: typedEvidence } : {}),
         stream_evidence: {
           format: STREAM_FORMAT,
           records: parsed.records.length,
@@ -634,6 +975,8 @@ function createCodexCliLauncher(options = {}) {
         ...(launchOptions.gsd_role ? {
           gsd_role: launchOptions.gsd_role,
           gsd_launch_mechanism: 'typed-gsd-callback',
+          agent_file: agent.file,
+          agent_file_digest: agent.sha256,
         } : {}),
       };
       return freeze(evidence);
@@ -794,6 +1137,11 @@ module.exports = Object.freeze({
   probeCodexRuntime,
   parseCodexStream,
   parseNativeCodexTranscript,
+  parseNativeParentSpawn,
+  parseNativeChildTranscript,
+  installedGsdAgent,
+  signerProtectionPaths,
+  signerPermissionProfileArgs,
   nativeSessionCandidates,
   readNativeCodexSession,
   observedSelection,

@@ -13,6 +13,11 @@ const {
   createCodexRuntimeHost,
   observedSelection,
   parseNativeCodexTranscript,
+  parseNativeParentSpawn,
+  parseNativeChildTranscript,
+  installedGsdAgent,
+  signerProtectionPaths,
+  signerPermissionProfileArgs,
   parseCodexStream,
   probeCodexRuntime,
 } = require('../../plugins/delivery-pipeline/scripts/codex-runtime-host.cjs');
@@ -107,7 +112,43 @@ function staticContent(resolution = { model: 'gpt-6-sol', effort: 'high' }) {
   ].join('\n');
 }
 
+function recordedTypedSession() {
+  const parentRaw = fs.readFileSync(path.join(__dirname, '../fixtures/codex-agent-parent-0.155.1.jsonl'), 'utf8');
+  const childRaw = fs.readFileSync(path.join(__dirname, '../fixtures/codex-agent-child-0.155.1.jsonl'), 'utf8');
+  const parent = '01a0ce68-961a-72d1-b55e-d293ab9d19f4';
+  const child = '01a0ce68-afef-7bc2-baa6-b1ae8d6ce121';
+  const instructions = childRaw.split('\n').filter(Boolean).map((line) => JSON.parse(line))
+    .find((record) => record.type === 'response_item' && record.payload.role === 'developer')
+    .payload.content[0].text;
+  return { parentRaw, childRaw, parent, child, instructions };
+}
+
+function transformJsonl(raw, transform) {
+  return raw.split('\n').filter(Boolean).map((line) => JSON.stringify(transform(JSON.parse(line)))).join('\n') + '\n';
+}
+
 suite('codex-runtime-host — native launch and independent evidence');
+
+test('signer permission profile denies host signing paths and preserves the selected baseline', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-signer-sandbox-'));
+  try {
+    const customGpg = path.join(root, 'custom gpg home');
+    const socket = path.join(root, 'ssh agent.sock');
+    const protectedPaths = signerProtectionPaths({ GNUPGHOME: customGpg, SSH_AUTH_SOCK: socket }, root);
+    assert.ok(protectedPaths.includes(path.resolve(customGpg)));
+    assert.ok(protectedPaths.includes(path.resolve(path.join(os.homedir(), '.gnupg'))));
+    assert.ok(protectedPaths.includes(path.resolve(path.join(os.homedir(), '.ssh'))));
+    assert.ok(protectedPaths.includes(path.resolve(socket)));
+    const writable = signerPermissionProfileArgs(protectedPaths, 'workspace-write');
+    assert.ok(writable.includes('default_permissions="shipyard-runtime"'));
+    assert.ok(writable.includes('permissions.shipyard-runtime.extends=":workspace"'));
+    assert.ok(writable.includes('permissions.shipyard-runtime.filesystem={'
+      + protectedPaths.map((entry) => JSON.stringify(entry) + '=\"deny\"').join(',') + '}'));
+    const readonly = signerPermissionProfileArgs(protectedPaths, 'read-only');
+    assert.ok(readonly.includes('permissions.shipyard-runtime.extends=":read-only"'));
+    assert.throws(() => signerPermissionProfileArgs([], 'workspace-write'), (error) => error.code === 'SIGNER_ISOLATION_UNAVAILABLE');
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
 
 test('parses thread and completed-turn evidence', () => {
   const parsed = parseCodexStream(stream());
@@ -180,7 +221,10 @@ test('Codex launcher passes explicit model and reasoning effort to exec', async 
     assert.ok(calls[0].args.includes('model_reasoning_effort="max"'));
     assert.ok(calls[0].args.includes('model_provider="openai"'));
     assert.ok(calls[0].args.includes('forced_login_method="chatgpt"'));
-    assert.deepEqual(calls[0].args.slice(calls[0].args.indexOf('--sandbox'), calls[0].args.indexOf('--sandbox') + 2), ['--sandbox', 'workspace-write']);
+    assert.ok(!calls[0].args.includes('--sandbox'));
+    assert.ok(calls[0].args.includes('default_permissions="shipyard-runtime"'));
+    assert.ok(calls[0].args.includes('permissions.shipyard-runtime.extends=":workspace"'));
+    assert.ok(result.runtime_evidence.sandbox_evidence.protected_paths.length >= 2);
     assert.equal(calls[0].options.env.OPENAI_API_KEY, undefined);
     assert.equal(calls[0].options.env.CODEX_API_KEY, undefined);
     assert.equal(calls[0].options.env.ANTHROPIC_API_KEY, undefined);
@@ -304,7 +348,7 @@ test('probe requires the real CLI surface and explicit host capability evidence'
     spawnSync: (command, args) => {
       calls.push([command, args]);
       if (args[0] === '--version') return { status: 0, stdout: 'codex-cli 0.155.1\n', stderr: '' };
-      return { status: 0, stdout: '--json --model --config --cd --sandbox', stderr: '' };
+      return { status: 0, stdout: '--json --model --config --cd --ignore-user-config', stderr: '' };
     },
   });
   assert.equal(result.status, 'available');
@@ -347,6 +391,139 @@ test('launchAgent sends dynamic selection through the adapter boundary', () => {
     assert.equal(result.receipt.applied_model, 'gpt-6-luna');
     assert.equal(result.receipt.applied_effort, 'max');
     assert.equal(result.receipt.launch_id, 'host-launch-1');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('recorded CLI 0.155.1 parent proves an explicit native typed spawn', () => {
+  const raw = fs.readFileSync(path.join(__dirname, '../fixtures/codex-agent-parent-0.155.1.jsonl'), 'utf8');
+  const parent = '01a0ce68-961a-72d1-b55e-d293ab9d19f4';
+  const value = parseNativeParentSpawn(raw, parent, 'gsd-plan-checker', 'gpt-6-luna', 'max');
+  assert.equal(value.parent_thread_id, parent);
+  assert.equal(value.task_name, 'plan_checker_ready');
+  const records = raw.split('\n').filter(Boolean).map((line) => JSON.parse(line));
+  const waitCall = records.find((record) => record.type === 'response_item'
+    && record.payload.type === 'function_call' && record.payload.name === 'wait_agent');
+  const waitOutput = records.find((record) => record.type === 'response_item'
+    && record.payload.type === 'function_call_output' && record.payload.call_id === waitCall.payload.call_id);
+  const secondWait = structuredClone(waitCall);
+  secondWait.payload.id = 'wait-call-recheck';
+  secondWait.payload.call_id = 'wait-recheck';
+  const secondOutput = structuredClone(waitOutput);
+  secondOutput.payload.id = 'wait-output-recheck';
+  secondOutput.payload.call_id = 'wait-recheck';
+  assert.equal(parseNativeParentSpawn([...records, secondWait, secondOutput].map((record) => JSON.stringify(record)).join('\n'),
+    parent, 'gsd-plan-checker', 'gpt-6-luna', 'max').task_name, 'plan_checker_ready');
+  assert.throws(() => parseNativeParentSpawn(raw, parent, 'gsd-planner', 'gpt-6-luna', 'max'),
+    (error) => error.code === 'RUNTIME_EVIDENCE_MISMATCH');
+  assert.throws(() => parseNativeParentSpawn(raw, parent, 'gsd-plan-checker', 'gpt-6-sol', 'max'),
+    (error) => error.code === 'RUNTIME_EVIDENCE_MISMATCH');
+  assert.throws(() => parseNativeParentSpawn(raw + raw.split('\n').filter((line) => line.includes('"spawn_agent"'))[0] + '\n',
+    parent, 'gsd-plan-checker', 'gpt-6-luna', 'max'),
+  (error) => error.code === 'RUNTIME_EVIDENCE_MISSING');
+  assert.throws(() => parseNativeParentSpawn(raw.split('\n').filter((line) => !line.includes('"wait_agent"')).join('\n'),
+    parent, 'gsd-plan-checker', 'gpt-6-luna', 'max'),
+  (error) => error.code === 'RUNTIME_EVIDENCE_MISSING');
+  assert.throws(() => parseNativeParentSpawn(transformJsonl(raw, (record) => {
+    if (record.type === 'response_item' && record.payload.name === 'spawn_agent') {
+      const args = JSON.parse(record.payload.arguments);
+      args.fork_turns = 'all';
+      record.payload.arguments = JSON.stringify(args);
+    }
+    return record;
+  }), parent, 'gsd-plan-checker', 'gpt-6-luna', 'max'),
+  (error) => error.code === 'RUNTIME_EVIDENCE_MISMATCH');
+});
+
+test('recorded CLI child proves task identity and exact developer instructions', () => {
+  const { parentRaw, childRaw, parent, child, instructions } = recordedTypedSession();
+  const spawnEvidence = parseNativeParentSpawn(parentRaw, parent, 'gsd-plan-checker', 'gpt-6-luna', 'max');
+  const agent = {
+    file: '/tmp/codex-home/agents/gsd-plan-checker.toml', sha256: 'a'.repeat(64),
+    instructions, instructions_sha256: crypto.createHash('sha256').update(instructions).digest('hex'),
+  };
+  const observed = parseNativeChildTranscript(childRaw, child, parent, 'gsd-plan-checker',
+    'gpt-6-luna', 'max', agent, spawnEvidence);
+  assert.equal(observed.task_path, '/root/plan_checker_ready');
+  assert.equal(observed.agent_instructions_digest, agent.instructions_sha256);
+  const reject = (raw, expectedParent = parent, expectedRole = 'gsd-plan-checker', expectedEffort = 'max', evidence = spawnEvidence) =>
+    assert.throws(() => parseNativeChildTranscript(raw, child, expectedParent, expectedRole,
+      'gpt-6-luna', expectedEffort, agent, evidence),
+    (error) => ['RUNTIME_EVIDENCE_MISMATCH', 'RUNTIME_EVIDENCE_INVALID', 'RUNTIME_EVIDENCE_MISSING'].includes(error.code));
+  reject(childRaw, 'other-parent');
+  reject(childRaw, parent, 'gsd-planner');
+  reject(childRaw, parent, 'gsd-plan-checker', 'high');
+  reject(childRaw + childRaw.split('\n')[0] + '\n');
+  reject(childRaw.split('\n').filter((line) => !line.includes('"task_complete"')).join('\n'));
+  reject(childRaw, parent, 'gsd-plan-checker', 'max', { ...spawnEvidence, task_path: '/root/foreign' });
+  reject(transformJsonl(childRaw, (record) => {
+    if (record.type === 'response_item' && record.payload.role === 'developer'
+        && record.payload.content[0]?.text === instructions) {
+      record.payload.content[0].text += 'tampered';
+    }
+    return record;
+  }));
+  reject(transformJsonl(childRaw, (record) => {
+    if (record.type === 'response_item' && record.payload.role === 'developer'
+        && record.payload.content[0]?.text === instructions) record.payload.role = 'assistant';
+    return record;
+  }));
+  reject(transformJsonl(childRaw, (record) => {
+    if (record.type === 'response_item' && record.payload.role === 'developer'
+        && record.payload.content[0]?.text === instructions) {
+      record.payload.content.push({ type: 'input_text', text: instructions });
+    }
+    return record;
+  }));
+});
+
+test('typed launch pins a prevalidated GSD file and accepts matching native child evidence', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-codex-typed-'));
+  const codeHome = path.join(root, 'codex-home');
+  const agents = path.join(codeHome, 'agents');
+  const roleFile = path.join(agents, 'gsd-plan-checker.toml');
+  const { parent, child, parentRaw, childRaw, instructions } = recordedTypedSession();
+  const calls = [];
+  try {
+    fs.mkdirSync(agents, { recursive: true });
+    fs.writeFileSync(roleFile, 'name = "gsd-plan-checker"\ndescription = "Plan checker"\nsandbox_mode = "read-only"\ndeveloper_instructions = \'\'\'\n' + instructions + "'''\n");
+    const agent = installedGsdAgent('gsd-plan-checker', { CODEX_HOME: codeHome });
+    assert.equal(agent.file, roleFile);
+    const launch = createCodexCliLauncher({
+      scope: { ...SCOPE, worktree: root }, capabilities, env: {
+        CODEX_HOME: codeHome, GNUPGHOME: '/tmp/secret-gpg', GPG_TTY: '/tmp/tty',
+        SSH_AUTH_SOCK: '/tmp/ssh.sock', ANTHROPIC_API_KEY: 'test-secret', OPENAI_API_KEY: 'test-secret',
+      },
+      spawn: (_executable, args, options) => {
+        calls.push({ args, options });
+        const directory = path.join(codeHome, 'sessions', String(new Date().getFullYear()),
+          String(new Date().getMonth() + 1).padStart(2, '0'), String(new Date().getDate()).padStart(2, '0'));
+        fs.mkdirSync(directory, { recursive: true });
+        fs.writeFileSync(path.join(directory, 'rollout-' + parent + '.jsonl'), parentRaw);
+        fs.writeFileSync(path.join(directory, 'rollout-' + child + '.jsonl'), childRaw);
+        return childFor(stream(parent), 0, 24050);
+      },
+    });
+    const result = await launch('Check the scoped plan', {
+      model: 'gpt-6-luna', effort: 'max', sandbox_mode: 'read-only', gsd_role: 'gsd-plan-checker',
+    });
+    assert.equal(result.gsd_role, 'gsd-plan-checker');
+    assert.equal(result.runtime_evidence.native_child_evidence.session_id, child);
+    assert.equal(result.runtime_evidence.native_child_evidence.task_path, '/root/plan_checker_ready');
+    assert.equal(result.runtime_evidence.native_child_evidence.agent_file_digest, agent.sha256);
+    assert.equal(calls.length, 1);
+    assert.ok(calls[0].args.includes('agents.gsd-plan-checker.config_file=' + JSON.stringify(roleFile)));
+    assert.ok(calls[0].args.includes('features.multi_agent=true'));
+    assert.ok(calls[0].args.includes('features.multi_agent_v2=false'));
+    assert.equal(calls[0].options.env.GNUPGHOME, undefined);
+    assert.equal(calls[0].options.env.GPG_TTY, undefined);
+    assert.equal(calls[0].options.env.SSH_AUTH_SOCK, undefined);
+    assert.equal(calls[0].options.env.OPENAI_API_KEY, undefined);
+    assert.equal(calls[0].options.env.ANTHROPIC_API_KEY, undefined);
+    fs.appendFileSync(roleFile, 'model = "gpt-6-sol"\n');
+    assert.throws(() => installedGsdAgent('gsd-plan-checker', { CODEX_HOME: codeHome }),
+      (error) => error.code === 'CONFLICTING_OVERRIDE');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
