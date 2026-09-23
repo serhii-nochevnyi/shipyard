@@ -50,9 +50,13 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 const crypto = require('node:crypto');
+const { isDeepStrictEqual } = require('node:util');
 const { spawnSync } = require('node:child_process');
 const { createClaudeRuntimeHost, probeClaudeRuntime } = require(path.join(
   process.argv[2], 'plugins/delivery-pipeline/scripts/claude-runtime-host.cjs',
+));
+const { createClaudeWorkflowDispatch } = require(path.join(
+  process.argv[2], 'plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs',
 ));
 
 function emit(status, fields = {}) {
@@ -144,6 +148,8 @@ async function main() {
     emit('refused', { reason: 'scratch_worktree_has_local_settings' }); process.exitCode = 1; return;
   }
   let result;
+  let receipt;
+  let receiptFile;
   let failure;
   try {
     if (typedRole) {
@@ -153,24 +159,53 @@ async function main() {
         hooks: [{ type: 'command', command: '/usr/bin/touch', args: [hookMarker] }],
       }] } }));
     }
-    const host = createClaudeRuntimeHost({
-      scope: {
-        run_id: `live-${crypto.randomUUID()}`,
+    const runId = `live-${crypto.randomUUID()}`;
+    const receiptDir = path.join(os.homedir(), '.local', 'state', 'shipyard', 'claude-smoke', runId);
+    const scope = {
+        run_id: runId,
         ticket: 'T-38-02-live-smoke',
         phase: 38,
         worktree: worktreeReal,
         runtime: 'claude',
         provider: 'anthropic',
-      },
+    };
+    const host = createClaudeRuntimeHost({
+      scope,
       probe,
-      recorder: { record() {} },
+      recorderDir: receiptDir,
       transcriptDir: null,
     });
     const shellOutsidePath = `'${outsidePath.replaceAll("'", "'\\''")}'`;
     const prompt = `Use Write or Edit to create ${filename} in the current working directory with exactly shipyard-scoped-edit-ok. Then use Write to try creating ${outsidePath} with the text shipyard-outside-edit-escaped; that file operation must be denied. After that, make one Bash tool call that runs: if printf shipyard-outside-bash-escaped > ${shellOutsidePath} 2>/dev/null; then printf shipyard-outside-write-escaped; else printf shipyard-outside-write-blocked; fi; pwd && test "$(cat ${filename})" = shipyard-scoped-edit-ok && printf shipyard-scoped-bash-ok. Do not use another method to access files outside the current working directory. Return the printed markers.`;
-    result = typedRole
-      ? await host.typedGsdCallback(prompt, { model: 'claude-opus-5-5', effort: 'low' }, typedRole)
-      : await host.agent(prompt, { model: 'claude-opus-5-5', effort: 'low' });
+    const effort = typedRole ? 'medium' : 'low';
+    const dispatched = await createClaudeWorkflowDispatch({
+      host,
+      agent: host.agent,
+      prompt,
+      role: typedRole ? 'decomposition' : 'executor',
+      model: 'claude-opus-5-5',
+      effort,
+      ...(typedRole ? { gsdRole: typedRole } : { signals: { critical: true } }),
+      dispatchId: `smoke-${crypto.randomUUID()}`,
+      context: { ticket: scope.ticket, run_id: runId, worktreePath: worktreeReal,
+        runtime: 'claude', provider: 'anthropic' },
+    });
+    result = dispatched.result;
+    receipt = dispatched.receipt;
+    if (!receipt || receipt.compliance !== 'verified'
+        || receipt.applied_model !== 'claude-opus-5-5' || receipt.applied_effort !== effort
+        || (typedRole && receipt.gsd_role !== typedRole)) {
+      throw Object.assign(new Error('ADR-014 dispatch did not return the verified selection'), { code: 'LIVE_RECEIPT_NOT_PROVEN' });
+    }
+    const stored = host.recorder.getVerifiedRecord(receipt.dispatch_id);
+    if (!stored || !isDeepStrictEqual(stored.receipt, receipt)) {
+      throw Object.assign(new Error('verified application receipt was not durably recorded'), { code: 'LIVE_RECEIPT_NOT_DURABLE' });
+    }
+    const receiptKey = crypto.createHash('sha256').update(receipt.dispatch_id).digest('hex');
+    receiptFile = path.join(receiptDir, `record-${receiptKey}.json`);
+    if (!fs.existsSync(receiptFile)) {
+      throw Object.assign(new Error('verified application receipt file is missing'), { code: 'LIVE_RECEIPT_NOT_DURABLE' });
+    }
     const evidence = host.applicationEvidence({ result });
     if (typedRole && (evidence.gsd_agent_evidence?.role !== typedRole
         || evidence.gsd_agent_evidence.session_start_agent_type !== typedRole
@@ -195,7 +230,7 @@ async function main() {
       throw Object.assign(new Error('scoped tool boundary was not present in the native transcript'), { code: 'LIVE_SCOPE_NOT_PROVEN' });
     }
     if (evidence.applied_model !== 'claude-opus-5-5' || evidence.observed_model !== 'claude-opus-5-5'
-        || evidence.applied_effort !== 'low' || evidence.observed_effort !== 'low') {
+        || evidence.applied_effort !== effort || evidence.observed_effort !== effort) {
       throw Object.assign(new Error('live runtime selection differs from the requested Opus selection'), { code: 'LIVE_SELECTION_MISMATCH' });
     }
   } catch (error) {
@@ -227,8 +262,10 @@ async function main() {
     return;
   }
   emit('passed', {
-    model: 'claude-opus-5-5',
-    effort: 'low',
+    receipt,
+    receipt_file: receiptFile,
+    model: receipt.applied_model,
+    effort: receipt.applied_effort,
     ...(typedRole ? { agent: typedRole, injected_project_hook: 'denied' } : {}),
     edit: true,
     bash: true,
