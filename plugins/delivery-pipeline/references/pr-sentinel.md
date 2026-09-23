@@ -311,7 +311,9 @@ The result passed to the host has this shape:
 ```json
 {
   "outcome": "clear | blocked | awaiting-human",
-  "ticket_set": [{"id": "T-…", "pr": 123, "head": "<40-char sha>", "base": "<base-ref>"}],
+  "ticket_set": [{"id": "T-…", "pr": 123, "head": "<40-char sha>", "base": "<base-ref>#<40-char base sha>", "branch": "<ticket branch>"}],
+  "head": "<40-char worktree sha>",
+  "head_tree": "<40-char worktree tree sha>",
   "ticket_set_digest": "<sha256 of the complete ticket set>",
   "performed": [{"ticket": "T-…", "duty": "wait-ci", "status": "complete"}],
   "refused": [{"ticket": "T-…", "duty": "merge", "status": "refused", "reason": "…"}],
@@ -341,10 +343,11 @@ boundary launch context for this shared sentinel dispatch; it is not an
 individual ticket id. The ticket-set file used by both commands is the same
 complete set that produced that round subject.
 
-This contract requires a boundary that authenticates the round subject and its
-complete ticket-set membership. The existing per-ticket `dispatch-record.cjs`
-receipt cannot be reused as that round subject; T-33-08 owns the membership
-bridge between the round artifact and the per-ticket overlay.
+The Workflow runtime role host derives the set from the canonical graph and live PRs,
+authenticates the `round:<digest>` subject through ADR-014, and reconciles the
+receipt to one round row. T-33-08 implements fenced session ownership;
+T-38-08 implements round-to-ticket membership. Never copy the shared sentinel
+receipt into per-ticket `mark` or `mark-many` rows.
 
 The envelope contains bounded counts and references; the complete ticket set
 and duties remain in the authenticated findings artifact. Its round subject is
@@ -599,13 +602,16 @@ reinit is not optional.
   in the worktrees you were handed. (Both sides take the same lock, so a
   legitimate git operation may wait a moment; that is expected.)
 - **Hand a ticket back to the board the moment you stop holding it.** The
-  orchestrator recorded a dispatch for every PR it gave you
-  (`dispatch-record.cjs`), which is what stops the run being told those tickets
-  are un-taken while you work. When one guard or fixer owns several PRs, use one
-  JSON array with `dispatch-record.cjs mark-many --stdin --graph
-  <project>/.planning/graph` after the launch returns; repeat the guard's one
-  launch id for every PR and keep each resolver pair/route. Use the single
-  `mark` form only for one PR. Run
+  orchestrator records dispatch ownership so the front does not offer the same
+work twice. The Workflow runtime's phase-wide `pr-sentinel` uses one authenticated round
+  reservation and one `rounds` row; the front projects that shared identity to
+  each live member and counts it once. Do not call `mark` or `mark-many` for this
+  receipt. Clear it with
+  `dispatch-record.cjs clear-round <round_dispatch_id> --graph
+  <project>/.planning/graph` when the report returns. For independent ticket
+  dispatches, use `dispatch-record.cjs mark-many --stdin --graph
+  <project>/.planning/graph` after launch; keep the actual launch id and each
+  resolver pair/route. Use the single `mark` form only for one ticket. Run
   `dispatch-record.cjs clear-many --stdin --graph <project>/.planning/graph` as
   soon as a group of PRs is merged, parked, or handed to a person; stdin must
   carry the returned `{ticket, dispatch_id}` pair for each completion so a

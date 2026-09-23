@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: f8f784bc246a51817cdab2267d8cf7d2acfe2e515b8ebd00b8babc315dc16108
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 19861478722acf82285dfa0b792a4b79a9091a4af466bdd58f5e32167e0418ed
 phase: 38-runtime-model-ladder-recovery
 plan: 08
 subsystem: shipyard delivery
@@ -22,7 +22,7 @@ key-decisions:
 duration: 0min
 status: halted
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: f8f784bc246a51817cdab2267d8cf7d2acfe2e515b8ebd00b8babc315dc16108
+shipyard_source_fingerprint: 19861478722acf82285dfa0b792a4b79a9091a4af466bdd58f5e32167e0418ed
 ---
 
 # Phase 38: Connect Claude sentinel through authenticated round dispatch — Delivery Projection

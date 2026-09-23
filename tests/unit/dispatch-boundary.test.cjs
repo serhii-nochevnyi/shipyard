@@ -262,6 +262,49 @@ test('reconciliation refuses without an explicitly configured recorder', () => {
   );
 });
 
+test('a sentinel round subject is authenticated through launch, receipt and reconciliation', () => {
+  const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'boundary-round-subject-'));
+  try {
+    const recorder = boundaryModule.createDurableRecorder(storeDir);
+    const boundary = boundaryModule.createDispatchBoundary({
+      adapters: { claude: fakeAdapter() },
+      recorder,
+    });
+    const subject = `round:${'a'.repeat(64)}`;
+    const result = boundary.dispatch({
+      runtime: 'claude', role: 'pr-sentinel', dispatch_id: 'sentinel-round-dispatch',
+    }, { ticket: subject, subject_kind: 'round' });
+    const stored = recorder.getVerifiedRecord(result.dispatch_id);
+    assert.equal(stored.ticket, subject);
+    assert.equal(stored.subject_kind, 'round');
+    const facts = boundary.reconcile(result.dispatch_id, { ticket: subject, subject_kind: 'round' });
+    assert.equal(facts.subject_kind, 'round');
+    assert.equal(facts.role, 'pr-sentinel');
+    assert.equal(facts.launch_id, result.receipt.launch_id);
+    assert.throws(
+      () => boundary.reconcile(result.dispatch_id, { ticket: subject }),
+      (error) => error.code === 'INVALID_INPUT',
+    );
+    assert.throws(
+      () => boundary.dispatch({ runtime: 'claude', role: 'pr-sentinel' }, { ticket: subject }),
+      (error) => error.code === 'INVALID_INPUT',
+    );
+    assert.throws(
+      () => boundary.dispatch({ runtime: 'claude', role: 'arch-review' }, { ticket: subject, subject_kind: 'round' }),
+      (error) => error.code === 'INVALID_INPUT',
+    );
+    const ticketBound = boundary.dispatch({
+      runtime: 'claude', role: 'pr-sentinel', dispatch_id: 'sentinel-ticket-dispatch',
+    }, { ticket: 'T-38-08' });
+    assert.throws(
+      () => boundary.reconcile(ticketBound.dispatch_id, { ticket: subject, subject_kind: 'round' }),
+      (error) => error.code === 'NONCOMPLIANT_RECEIPT',
+    );
+  } finally {
+    fs.rmSync(storeDir, { recursive: true, force: true });
+  }
+});
+
 test('receipts and repair predecessors remain bound to their launch ticket', () => {
   const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'boundary-ticket-binding-'));
   try {

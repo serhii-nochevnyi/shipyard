@@ -30,6 +30,7 @@ const TRANSCRIPT_TIMEOUT_MS = 5000;
 const TRANSCRIPT_POLL_MS = 100;
 const TRANSCRIPT_MAX_BYTES = 50 * 1024 * 1024;
 const ALLOWED_TOOLS = 'Bash,Read,Edit,Write,Glob,Grep';
+const READ_ONLY_TOOLS = 'Read,Write,Glob,Grep';
 const ANTHROPIC_CREDENTIAL_ENV = Object.freeze([
   'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_BASE_URL',
   'ANTHROPIC_CUSTOM_HEADERS', 'ANTHROPIC_AWS_API_KEY', 'ANTHROPIC_AWS_BASE_URL',
@@ -623,6 +624,12 @@ function createClaudeCliLauncher(options = {}) {
     if (gsdRole !== undefined && !GSD_ROLES.includes(gsdRole)) {
       fail('INVALID_INPUT', 'gsd_role is not an approved typed GSD agent');
     }
+    if (launchOptions.readOnly !== undefined && typeof launchOptions.readOnly !== 'boolean') {
+      fail('INVALID_INPUT', 'readOnly must be boolean');
+    }
+    if (launchOptions.readOnly === true && gsdRole) {
+      fail('INVALID_INPUT', 'read-only smoke mode cannot launch a typed GSD agent');
+    }
     const agentDefinition = gsdRole ? gsdAgentDefinition(gsdRole, childEnvironment, options.gsdAgentRoot) : null;
     const evidenceDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-claude-session-start-'));
     const evidenceFile = path.join(evidenceDirectory, 'session-start.json');
@@ -658,7 +665,8 @@ function createClaudeCliLauncher(options = {}) {
           }],
         },
       });
-      const tools = agentDefinition ? agentDefinition.tools : ALLOWED_TOOLS;
+      const tools = launchOptions.readOnly === true ? READ_ONLY_TOOLS
+        : agentDefinition ? agentDefinition.tools : ALLOWED_TOOLS;
       const args = [
       '--print', '--input-format', STREAM_FORMAT, '--output-format', STREAM_FORMAT,
       '--verbose', '--model', model, '--effort', effort, '--session-id', sessionId,
