@@ -79,12 +79,70 @@ function validateRuntimeEvidence(evidence, selection, resolution) {
       || typeof evidence.command_digest !== 'string'
       || !/^[a-f0-9]{64}$/.test(evidence.command_digest)
       || typeof evidence.selection_source !== 'string'
-      || evidence.selection_source !== 'codex-exec-explicit-selection'
+      || evidence.selection_source !== 'codex-native-session-transcript'
       || !object(evidence.command)
       || !Array.isArray(evidence.command.args)
       || typeof evidence.dispatch_id !== 'string'
       || evidence.dispatch_id !== resolution.dispatch_id) {
     refuse('MISSING_RECEIPT', 'live Codex host did not return bound process and session evidence');
+  }
+  const modelIndex = evidence.command.args.indexOf('--model');
+  const effortFlags = evidence.command.args.filter((value) => typeof value === 'string'
+    && value.startsWith('model_reasoning_effort='));
+  const providerFlags = evidence.command.args.filter((value) => typeof value === 'string'
+    && value.startsWith('model_provider='));
+  const loginFlags = evidence.command.args.filter((value) => typeof value === 'string'
+    && value.startsWith('forced_login_method='));
+  const native = evidence.native_session_evidence;
+  const gsdRole = validateGsdRole(resolution);
+  const expectedSandbox = selection.sandbox_mode
+    || (gsdRole === 'gsd-phase-researcher' || gsdRole === 'gsd-plan-checker' ? 'read-only' : 'workspace-write');
+  const sandboxEvidence = evidence.sandbox_evidence;
+  const expectedProfileParent = expectedSandbox === 'read-only' ? ':read-only' : ':workspace';
+  const protectedPaths = sandboxEvidence && sandboxEvidence.protected_paths;
+  const expectedFilesystem = Array.isArray(protectedPaths) && protectedPaths.length
+    ? '{' + protectedPaths.map((entry) => JSON.stringify(entry) + '=\"deny\"').join(',') + '}' : null;
+  const configArgs = evidence.command.args.filter((value) => typeof value === 'string'
+    && value.startsWith('default_permissions='));
+  const profileParents = evidence.command.args.filter((value) => typeof value === 'string'
+    && value.startsWith('permissions.shipyard-runtime.extends='));
+  const profileFilesystems = evidence.command.args.filter((value) => typeof value === 'string'
+    && value.startsWith('permissions.shipyard-runtime.filesystem='));
+  if (evidence.command.args.filter((value) => value === '--model').length !== 1
+      || modelIndex < 0 || evidence.command.args[modelIndex + 1] !== selection.model
+      || evidence.command.args.includes('--sandbox')
+      || evidence.command.args.includes('--dangerously-bypass-approvals-and-sandbox')
+      || !object(sandboxEvidence)
+      || sandboxEvidence.profile !== 'shipyard-runtime'
+      || sandboxEvidence.base_profile !== expectedProfileParent
+      || !Array.isArray(protectedPaths) || !protectedPaths.length
+      || protectedPaths.some((entry) => typeof entry !== 'string' || !path.isAbsolute(entry))
+      || new Set(protectedPaths).size !== protectedPaths.length
+      || configArgs.length !== 1 || configArgs[0] !== 'default_permissions=\"shipyard-runtime\"'
+      || profileParents.length !== 1
+      || profileParents[0] !== 'permissions.shipyard-runtime.extends=' + JSON.stringify(expectedProfileParent)
+      || profileFilesystems.length !== 1
+      || profileFilesystems[0] !== 'permissions.shipyard-runtime.filesystem=' + expectedFilesystem
+      || effortFlags.length !== 1 || effortFlags[0] !== 'model_reasoning_effort="' + selection.reasoning_effort + '"'
+      || providerFlags.length !== 1 || providerFlags[0] !== 'model_provider="openai"'
+      || loginFlags.length !== 1 || loginFlags[0] !== 'forced_login_method="chatgpt"'
+      || evidence.command.args.filter((value) => value === '--ignore-user-config').length !== 1
+      || !object(native)
+      || native.schema !== 'shipyard.codex-native-session-evidence.v1'
+      || native.version !== 1
+      || native.session_id !== evidence.session_id
+      || native.provider !== 'openai'
+      || !Array.isArray(native.selections) || !native.selections.length
+      || native.selections.some((entry) => !object(entry)
+        || entry.model !== selection.model || entry.effort !== selection.reasoning_effort)
+      || native.turn_contexts < 1
+      || native.records < native.turn_contexts + 1
+      || !Number.isInteger(native.bytes) || native.bytes < 1
+      || typeof native.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(native.sha256)
+      || typeof native.file !== 'string'
+      || !(native.file === evidence.session_id + '.jsonl'
+        || native.file.endsWith('-' + evidence.session_id + '.jsonl'))) {
+    refuse('MISSING_RECEIPT', 'live Codex receipt lacks matching native session evidence for the requested selection');
   }
   if (evidence.applied_model !== selection.model
       || evidence.applied_effort !== selection.reasoning_effort
@@ -242,6 +300,9 @@ function createCodexDispatchAdapter(options = {}) {
     for (const [key, value] of Object.entries(expectedComments)) {
       if (parsed.comments[key] !== value) refuse('STALE_GENERATED_AGENT', 'generated policy ' + key + ' is missing or stale');
     }
+    if (!['read-only', 'workspace-write'].includes(parsed.fields.sandbox_mode)) {
+      refuse('STALE_GENERATED_AGENT', 'generated agent lacks an approved sandbox mode');
+    }
     if (parsed.fields.name !== canonical.agent_file.replace(/\.toml$/, '')
         || parsed.fields.model !== canonical.model || parsed.fields.model_reasoning_effort !== canonical.effort
         || digest(content) !== manifest.agent_digests[canonical.agent_file]) {
@@ -335,6 +396,7 @@ function createCodexDispatchAdapter(options = {}) {
         ['model', effectiveModel], ['requested_model', effectiveModel], ['applied_model', effectiveModel],
         ['effort', canonical.effort], ['reasoning_effort', canonical.effort],
         ['model_reasoning_effort', canonical.effort], ['agent_file', canonical.agent_file],
+        ['dispatch_id', canonical.dispatch_id],
         ['gsd_role', gsdRole],
         ['gsd_launch_mechanism', gsdRole === undefined ? undefined : GSD_LAUNCH_MECHANISM],
       ]) {
@@ -375,13 +437,14 @@ function createCodexDispatchAdapter(options = {}) {
     }
     Object.freeze(selection);
     validatedRepairs.delete(canonical.dispatch_id);
-    const launchContext = gsdRole === undefined
-      ? context
-      : Object.freeze({
-        ...context,
+    const launchContext = Object.freeze({
+      ...context,
+      dispatch_id: canonical.dispatch_id,
+      ...(gsdRole !== undefined ? {
         gsd_role: gsdRole,
         gsd_launch_mechanism: GSD_LAUNCH_MECHANISM,
-      });
+      } : {}),
+    });
     const result = method.call(host, selection, launchContext, handoff);
     return result && typeof result.then === 'function'
       ? result.then((applied) => applicationReceipt(canonical, applied, selection))

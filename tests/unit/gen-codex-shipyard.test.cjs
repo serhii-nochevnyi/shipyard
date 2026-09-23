@@ -360,6 +360,9 @@ test('the generated bundle covers all nine canonical roles and planning referenc
   withFixture({}, (f) => {
     const manifest = generated(f);
     const bundle = path.join(f.out, 'bundle');
+    assert.ok(manifest.bundle_files.includes('scripts/codex-decompose-host.cjs'));
+    assert.strictEqual(read(path.join(bundle, 'scripts/codex-decompose-host.cjs')),
+      read(path.join(PLUGIN, 'scripts/codex-decompose-host.cjs')));
     const staticReferences = new Set(policy.CODEX_STATIC_ROLES.map((role) =>
       role === 'research' ? 'inv-research' : role));
     for (const reference of staticReferences) {

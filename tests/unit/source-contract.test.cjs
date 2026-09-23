@@ -71,7 +71,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
-const { execFileSync } = require('child_process');
+const { execFileSync, spawnSync } = require('child_process');
 const { suite, test, done, assert } = require(path.join(__dirname, 'assert-harness.cjs'));
 const { transcriptEvidence: testTranscriptEvidence } = require('./claude-test-evidence.cjs');
 const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
@@ -737,6 +737,7 @@ function writeGeneratedResearchAgent(agentsDir, resolution) {
     `name = "${resolution.agent_file.replace(/\.toml$/, '')}"`,
     `model = "${resolution.model}"`,
     `model_reasoning_effort = "${resolution.effort}"`,
+    'sandbox_mode = "read-only"',
     "developer_instructions = '''\nagent\n'''",
     '',
   ].join('\n');
@@ -2062,6 +2063,14 @@ test('runtime smoke uses live capability-only probing and has no synthetic enabl
   assert.ok(smoke.includes('unavailable'));
   assert.ok(smoke.includes('refused'));
   assert.doesNotMatch(smoke, /synthetic|fixture|fake|mock/i);
+});
+
+test('Codex live smoke refuses the source checkout before probing or launching a model', () => {
+  const result = spawnSync('bash', [
+    path.join(REPO, 'tests/smoke/codex-runtime-smoke.sh'), '--live', '--worktree', REPO,
+  ], { cwd: REPO, encoding: 'utf8' });
+  assert.equal(result.status, 1, result.stderr);
+  assert.equal(JSON.parse(result.stdout).reason, 'source_worktree_not_allowed');
 });
 
 done();
