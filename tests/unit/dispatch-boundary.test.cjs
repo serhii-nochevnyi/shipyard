@@ -1007,6 +1007,19 @@ test('receipt parsing cannot mint boundary trust, while validation remains avail
   assert.equal(boundary.validate(resolution), true);
 });
 
+test('runtime-specific observed model matching cannot relax Codex identity checks', () => {
+  const resolution = policy.resolveDispatch({ runtime: 'codex', role: 'executor', dispatch_id: 'provider-model-match' });
+  const adapter = fakeAdapter({
+    runtime: 'codex',
+    matchesObservation: () => true,
+  });
+  const boundary = boundaryModule.createDispatchBoundary({ adapters: { codex: adapter } });
+  assert.throws(
+    () => boundary.receipt(resolution, receiptFor(resolution, { observed_model: 'gpt-6-sol' })),
+    (error) => error.code === 'NONCOMPLIANT_RECEIPT',
+  );
+});
+
 test('the boundary validates the actual generated Codex file before launch', () => {
   const agentsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-boundary-agents-'));
   let validatorCalled = false;

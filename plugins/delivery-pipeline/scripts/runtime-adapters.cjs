@@ -23,6 +23,13 @@ function modelFor(runtime, modelKey) {
   return map && Object.prototype.hasOwnProperty.call(map, modelKey) ? map[modelKey] : undefined;
 }
 
+function matchesModelObservation(runtime, observed, applied) {
+  if (typeof observed !== 'string' || typeof applied !== 'string') return false;
+  if (runtime === 'claude' && applied === 'sonnet') return /^claude-sonnet-\d+(?:-[A-Za-z0-9.]+)*$/.test(observed);
+  if (runtime === 'claude' && applied === 'fable') return /^claude-fable-[A-Za-z0-9]+(?:[-.][A-Za-z0-9]+)*$/.test(observed);
+  return observed === applied;
+}
+
 const RUNTIME_ADAPTERS = Object.freeze({
   codex: Object.freeze({
     runtime: 'codex',
@@ -50,5 +57,6 @@ module.exports = Object.freeze({
   CLAUDE_MODEL_ALIASES,
   RUNTIME_ADAPTERS,
   adapterForRuntime,
+  matchesModelObservation,
   modelFor,
 });

@@ -5,6 +5,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const { suite, test, done, assert } = require('./assert-harness.cjs');
+const { transcriptEvidence: testTranscriptEvidence } = require('./claude-test-evidence.cjs');
 const {
   createDurableRecorder,
 } = require('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs');
@@ -33,6 +34,10 @@ const OPUS_CAPABILITIES = Object.freeze({
   observedModel: true,
   observedEffort: true,
 });
+
+function transcriptEvidence(value) {
+  return testTranscriptEvidence(value);
+}
 
 suite('claude-workflow-host — production sixth binding');
 
@@ -64,13 +69,13 @@ return await parallel([async () => {
       agent: async (prompt, options) => {
         calls++;
         const result = {};
-        evidence.set(result, {
+        evidence.set(result, transcriptEvidence({
           launch_id: 'claude-workflow-host-test',
           applied_model: options.model,
           applied_effort: options.effort,
           observed_model: options.model,
           observed_effort: options.effort,
-        });
+        }));
         return result;
       },
       parallel: async (thunks) => Promise.all(thunks.map((thunk) => thunk())),
@@ -123,13 +128,13 @@ test('production investigation entry point pins the research workflow and runs a
           summary: `completed ${options.label}`,
           draft: `draft ${options.label}`,
         };
-        evidence.set(result, {
+        evidence.set(result, transcriptEvidence({
           launch_id: `investigation-host-${calls.length}`,
           applied_model: options.model,
           applied_effort: options.effort,
           observed_model: options.model,
           observed_effort: options.effort,
-        });
+        }));
         return result;
       },
       parallel: async (thunks) => Promise.all(thunks.map((thunk) => thunk())),
@@ -182,6 +187,23 @@ test('executable investigation bridge invokes the registered host with args kept
 const { createDurableRecorder } = require(${JSON.stringify(boundaryPath)});
 const evidence = new WeakMap();
 let launch = 0;
+function transcriptEvidence(value) {
+  const sessionId = value.launch_id;
+  const model = value.observed_model === 'sonnet' ? 'claude-sonnet-5' : value.observed_model;
+  return {
+    ...value,
+    session_id: sessionId,
+    observed_model: model,
+    selection_evidence: {
+      source: 'claude-session-assistant-transcript',
+      session_id: sessionId,
+      assistant_records: 1,
+      model,
+      effort: value.observed_effort,
+      transcript: { path: '/recorded-sessions/' + sessionId + '.jsonl', bytes: 1, sha256: 'a'.repeat(64) },
+    },
+  };
+}
 module.exports = {
   capabilities: Object.freeze({
     supportedModels: ['claude-opus-5-5'], supportedEfforts: ['medium'],
@@ -196,13 +218,14 @@ module.exports = {
       summary: 'executable bridge result',
       draft: 'executable bridge draft',
     };
-    evidence.set(result, {
-      launch_id: 'cli-launch-' + (++launch),
+    const launchId = 'cli-launch-' + (++launch);
+    evidence.set(result, transcriptEvidence({
+      launch_id: launchId,
       applied_model: options.model,
       applied_effort: options.effort,
       observed_model: options.model,
       observed_effort: options.effort,
-    });
+    }));
     return result;
   },
   applicationEvidence: ({ result }) => evidence.get(result),
@@ -278,7 +301,7 @@ return await __createClaudeWorkflowDispatch({
       },
       typedGsdCallback: async (prompt, options, gsdRole) => {
         typedCalls++;
-        return {
+        return transcriptEvidence({
           prompt,
           launch_id: 'typed-host-launch',
           applied_model: options.model,
@@ -287,7 +310,7 @@ return await __createClaudeWorkflowDispatch({
           observed_effort: options.effort,
           gsd_role: gsdRole,
           gsd_launch_mechanism: options.gsd_launch_mechanism,
-        };
+        });
       },
       parallel: async (thunks) => Promise.all(thunks.map((thunk) => thunk())),
       capabilities: OPUS_CAPABILITIES,
@@ -330,17 +353,18 @@ return await __createClaudeWorkflowDispatch({
         agent: async () => { throw new Error('generic callback must not run'); },
         typedGsdCallback: async (prompt, options, gsdRole) => {
           typedCalls++;
-          return {
+          const evidence = transcriptEvidence({
             prompt,
             launch_id: 'typed-evidence-launch',
             applied_model: options.model,
             applied_effort: options.effort,
             observed_model: options.model,
             observed_effort: options.effort,
-            // Deliberately omit gsd_role and gsd_launch_mechanism. A generic
-            // application-evidence callback must not be able to self-attest
-            // these claims for a typed GSD launch.
-          };
+            gsd_role: gsdRole,
+            gsd_launch_mechanism: options.gsd_launch_mechanism,
+          });
+          delete evidence.gsd_agent_evidence;
+          return evidence;
         },
         parallel: async (thunks) => Promise.all(thunks.map((thunk) => thunk())),
         capabilities: OPUS_CAPABILITIES,

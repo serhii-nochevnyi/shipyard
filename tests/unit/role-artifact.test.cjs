@@ -5,6 +5,7 @@ const path = require('node:path');
 const os = require('node:os');
 const { execFileSync, spawnSync } = require('node:child_process');
 const { suite, test, done, assert } = require('./assert-harness.cjs');
+const { transcriptEvidence: testTranscriptEvidence } = require('./claude-test-evidence.cjs');
 const {
   CLAUDE_MODEL_ALIASES,
 } = require('../../plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs');
@@ -27,6 +28,10 @@ const CAPABILITIES = Object.freeze({
   observedModel: true,
   observedEffort: true,
 });
+
+function transcriptEvidence(value) {
+  return testTranscriptEvidence(value);
+}
 
 function git(root, args) {
   return execFileSync('git', ['-C', root, ...args], { encoding: 'utf8' }).trim();
@@ -63,13 +68,13 @@ function fixture(options = {}) {
         blocking_count: options.blockingCount === undefined ? 0 : options.blockingCount,
         ...(options.forgedReceipt ? { receipt: { dispatch_id: 'agent-forged' } } : {}),
       };
-      evidence.set(agentResult, {
+      evidence.set(agentResult, transcriptEvidence({
         launch_id: `role-artifact-${ticket}`,
         applied_model: launchOptions.model,
         applied_effort: launchOptions.effort,
         observed_model: launchOptions.model,
         observed_effort: launchOptions.effort,
-      });
+      }));
       return agentResult;
     },
     parallel: async (thunks) => Promise.all(thunks.map((thunk) => thunk())),

@@ -28,6 +28,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { suite, test, done, assert } = require(path.join(__dirname, 'assert-harness.cjs'));
+const { nativeModel, transcriptEvidence: testTranscriptEvidence } = require('./claude-test-evidence.cjs');
 const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
 const {
   createDispatchBoundary,
@@ -48,8 +49,8 @@ const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
 const WORKFLOW_CAPABILITIES = Object.freeze({
   supportedModels: Object.values(CLAUDE_MODEL_ALIASES),
   supportedEfforts: ['low', 'high', 'medium', 'max'],
-  observedModel: false,
-  observedEffort: false,
+  observedModel: true,
+  observedEffort: true,
 });
 const workflowStores = [fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-workflow-dispatch-'))];
 const WORKFLOW_RECORDER = createDurableRecorder(workflowStores[0]);
@@ -58,7 +59,7 @@ let workflowLaunch = 0;
 const workflowApplicationEvidence = ({ result }) => {
   const evidence = hostEvidence.get(result);
   if (!evidence) throw new Error('test Claude host returned no application evidence');
-  return evidence;
+  return testTranscriptEvidence(evidence);
 };
 const workflowArtifactConsumer = ({ artifact, result, record }) => {
   const ref = `${artifact && artifact.worktreePath ? artifact.worktreePath : '/test-worktree'}/.shipyard-role-artifact.json`;
@@ -183,6 +184,8 @@ function harness({ agent, results = (all) => all } = {}) {
           launch_id: `test-workflow-launch-${++workflowLaunch}`,
           applied_model: opts.model,
           applied_effort: opts.effort,
+          observed_model: nativeModel(opts.model),
+          observed_effort: opts.effort,
         });
       }
       return value;
@@ -955,6 +958,8 @@ test('explicit Claude host owns workflow capabilities and receipt services', asy
         launch_id: 'host-owned-launch',
         applied_model: options.model,
         applied_effort: options.effort,
+        observed_model: nativeModel(options.model),
+        observed_effort: options.effort,
       });
       return value;
     },
@@ -980,8 +985,8 @@ suite('strict Claude adapter — native aliases and explicit application evidenc
 const CLAUDE_CAPABILITIES = {
   supportedModels: Object.values(CLAUDE_MODEL_ALIASES),
   supportedEfforts: ['high', 'medium', 'max'],
-  observedModel: false,
-  observedEffort: false,
+  observedModel: true,
+  observedEffort: true,
 };
 
 function claudeFixture(extra = {}) {
@@ -990,11 +995,13 @@ function claudeFixture(extra = {}) {
     capabilities: CLAUDE_CAPABILITIES,
     launch: (selection) => {
       calls.push(selection);
-      return {
+      return testTranscriptEvidence({
         launch_id: `claude-launch-${calls.length}`,
         applied_model: selection.model,
         applied_effort: selection.effort,
-      };
+        observed_model: nativeModel(selection.model),
+        observed_effort: selection.effort,
+      });
     },
     ...(extra.host || {}),
   };
@@ -1004,7 +1011,7 @@ function claudeFixture(extra = {}) {
   return { calls, adapter, boundary, recorder };
 }
 
-test('Claude receives the canonical native alias and effort for every base role', () => {
+test('Claude base roles carry exact-session native model and effort evidence', () => {
   const f = claudeFixture();
   for (const role of policy.ROLES) {
     const result = f.boundary.dispatch({ runtime: 'claude', role });
@@ -1013,8 +1020,9 @@ test('Claude receives the canonical native alias and effort for every base role'
     assert.ok(!/^gpt-/.test(launch.model), `${role} must not receive a Codex model id`);
     assert.strictEqual(result.applied_model, launch.model);
     assert.strictEqual(result.applied_effort, launch.effort);
-    assert.strictEqual(result.observed_model, 'unknown');
-    assert.strictEqual(result.observed_effort, 'unknown');
+    assert.strictEqual(result.observed_model, nativeModel(launch.model));
+    assert.strictEqual(result.observed_effort, launch.effort);
+    assert.equal(result.receipt.selection_evidence.source, 'claude-session-assistant-transcript');
     assert.strictEqual(result.receipt.compliance, 'verified');
   }
 });

@@ -16,6 +16,7 @@ const canonicalValidateResolution = canonicalPolicy.validateResolution;
 const canonicalStableStringify = canonicalPolicy.stableStringify;
 const { resolveTaskLevel } = require('./pipeline-config.cjs');
 const modelCapability = require('./model-capability.cjs');
+const { matchesModelObservation } = require('./runtime-adapters.cjs');
 const {
   capabilityForBoundary,
   createSessionHandoff,
@@ -1290,7 +1291,7 @@ function unwrapReceipt(value) {
   return value;
 }
 
-function observedValue(receipt, field, applied, allowUnknown) {
+function observedValue(receipt, field, applied, allowUnknown, runtime) {
   if (!Object.prototype.hasOwnProperty.call(receipt, field)) {
     if (allowUnknown) return OBSERVATION_UNKNOWN;
     refuse('MISSING_RECEIPT', `application receipt is missing ${field}`, { field });
@@ -1303,7 +1304,8 @@ function observedValue(receipt, field, applied, allowUnknown) {
   if (typeof value !== 'string' || value.trim() === '' || /[\s\u0000-\u001f\u007f]/.test(value)) {
     refuse('INVALID_RECEIPT', `${field} must be a concrete whitespace-free value or unknown`, { field });
   }
-  if (value !== applied) {
+  const runtimeMatch = field === 'observed_model' && matchesModelObservation(runtime, value, applied);
+  if (value !== applied && !runtimeMatch) {
     refuse('NONCOMPLIANT_RECEIPT', `${field} ${JSON.stringify(value)} contradicts applied value ${JSON.stringify(applied)}`, { field, applied, observed: value });
   }
   return value;
@@ -1364,7 +1366,20 @@ function verifyApplicationReceiptInternal(resolution, rawReceipt, options = {}) 
         actual: { gsd_role: receipt.gsd_role, gsd_launch_mechanism: receipt.gsd_launch_mechanism },
       });
     }
-  } else if (receipt.gsd_role !== undefined || receipt.gsd_launch_mechanism !== undefined) {
+    if (receipt.runtime === 'claude') {
+      const evidence = receipt.gsd_agent_evidence;
+      if (!isObject(evidence)
+          || evidence.schema !== 'shipyard.gsd-agent-application.v1'
+          || evidence.runtime !== 'claude' || evidence.role !== gsdRole
+          || typeof evidence.session_id !== 'string' || evidence.session_id !== receipt.session_id
+          || evidence.session_start_agent_type !== gsdRole
+          || evidence.transcript_agent_setting !== gsdRole
+          || !Number.isSafeInteger(evidence.agent_setting_records) || evidence.agent_setting_records < 1) {
+        refuse('MISSING_RECEIPT', 'Claude GSD application receipt lacks matching SessionStart and assistant transcript agent evidence');
+      }
+    }
+  } else if (receipt.gsd_role !== undefined || receipt.gsd_launch_mechanism !== undefined
+      || receipt.gsd_agent_evidence !== undefined) {
     refuse('NONCOMPLIANT_RECEIPT', 'a non-GSD launch cannot claim typed GSD callback attestation');
   }
   if (receipt.requested_model !== canonical.requested_model || receipt.requested_effort !== canonical.requested_effort) {
@@ -1425,8 +1440,8 @@ function verifyApplicationReceiptInternal(resolution, rawReceipt, options = {}) 
     : typeof options.allowUnknown === 'boolean'
       ? { model: options.allowUnknown, effort: options.allowUnknown }
       : adapterObservationCapabilities(adapter);
-  const observedModel = observedValue(receipt, 'observed_model', receipt.applied_model, observationCapabilities.model);
-  const observedEffort = observedValue(receipt, 'observed_effort', receipt.applied_effort, observationCapabilities.effort);
+  const observedModel = observedValue(receipt, 'observed_model', receipt.applied_model, observationCapabilities.model, resolution.runtime);
+  const observedEffort = observedValue(receipt, 'observed_effort', receipt.applied_effort, observationCapabilities.effort, resolution.runtime);
   const normalized = {
     ...snapshot(receipt),
     observed_model: observedModel,

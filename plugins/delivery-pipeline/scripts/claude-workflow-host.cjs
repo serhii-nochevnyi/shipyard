@@ -265,7 +265,16 @@ function createClaudeWorkflowDispatchBridge(options = {}) {
     if (context && context.gsd_role !== undefined
         && (!object(evidence)
           || evidence.gsd_role !== context.gsd_role
-          || evidence.gsd_launch_mechanism !== GSD_LAUNCH_MECHANISM)) {
+          || evidence.gsd_launch_mechanism !== GSD_LAUNCH_MECHANISM
+          || !object(evidence.gsd_agent_evidence)
+          || evidence.gsd_agent_evidence.schema !== 'shipyard.gsd-agent-application.v1'
+          || evidence.gsd_agent_evidence.runtime !== 'claude'
+          || evidence.gsd_agent_evidence.role !== context.gsd_role
+          || evidence.gsd_agent_evidence.session_id !== evidence.session_id
+          || evidence.gsd_agent_evidence.session_start_agent_type !== context.gsd_role
+          || evidence.gsd_agent_evidence.transcript_agent_setting !== context.gsd_role
+          || !Number.isSafeInteger(evidence.gsd_agent_evidence.agent_setting_records)
+          || evidence.gsd_agent_evidence.agent_setting_records < 1)) {
       reject(`host application evidence must attest ${context.gsd_role} through ${GSD_LAUNCH_MECHANISM}`);
     }
     return evidence;

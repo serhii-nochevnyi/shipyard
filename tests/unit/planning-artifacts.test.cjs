@@ -5,6 +5,7 @@ const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { suite, test, done, assert } = require('./assert-harness.cjs');
+const { transcriptEvidence: testTranscriptEvidence } = require('./claude-test-evidence.cjs');
 const { createDurableRecorder } = require('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs');
 const {
   CLAUDE_MODEL_ALIASES,
@@ -38,6 +39,10 @@ const lineDefinitions = [
 }));
 
 const digest = (value) => crypto.createHash('sha256').update(value).digest('hex');
+function transcriptEvidence(value) {
+  return testTranscriptEvidence(value);
+}
+
 const reference = (file) => {
   const content = fs.readFileSync(file);
   const sha256 = digest(content);
@@ -110,13 +115,13 @@ function researchHarness({ resultForLine, consumer } = {}) {
           summary: `completed ${id}`,
           artifact: reference(file),
         };
-    evidence.set(result, {
+    evidence.set(result, transcriptEvidence({
       launch_id: `planning-research-${id}`,
       applied_model: options.model,
       applied_effort: options.effort,
       observed_model: options.model,
       observed_effort: options.effort,
-    });
+    }));
     return result;
   };
   const artifactConsumer = consumer || (({ artifact, result, record }) => {
@@ -321,7 +326,7 @@ test('decomposition requires a phase-bound index for CONTEXT and every PLAN', as
       context: { gsd_role: 'gsd-planner' },
       capabilities: CAPABILITIES,
       recorder: receipts,
-      applicationEvidence: () => evidence,
+        applicationEvidence: () => transcriptEvidence(evidence),
       artifactConsumer,
     });
     assert.equal(accepted.result.status, 'completed');
@@ -344,7 +349,7 @@ test('decomposition requires a phase-bound index for CONTEXT and every PLAN', as
         context: { gsd_role: 'gsd-planner' },
         capabilities: CAPABILITIES,
         recorder: receipts,
-        applicationEvidence: () => ({ ...evidence, launch_id: 'planning-decomposition-2' }),
+        applicationEvidence: () => transcriptEvidence({ ...evidence, launch_id: 'planning-decomposition-2' }),
         artifactConsumer,
       }),
       /digest|altered|stale|artifact/i,
