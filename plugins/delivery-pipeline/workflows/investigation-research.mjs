@@ -93,6 +93,9 @@ if (!Array.isArray(argv.lines) || argv.lines.length !== REQUIRED_LINES.length) {
 if (argv.contextPacketRequired === true && argv.lines.some((line) => !isObject(line) || line.contextPacket === undefined)) {
   throw new Error('investigation-research: every research line requires a targeted context packet')
 }
+if (argv.runTicket !== undefined && (typeof argv.runTicket !== 'string' || !/^T-\d{2}-\d{2}$/.test(argv.runTicket))) {
+  throw new Error('investigation-research: args.runTicket must be a host ticket ID')
+}
 
 const lines = argv.lines.map((line, index) => {
   if (!isObject(line)) throw new Error(`investigation-research: line ${index + 1} must be an object`)
@@ -254,7 +257,7 @@ const results = await parallel(lines.map((line) => async () => {
         },
       } : {}),
       context: {
-        ticket: argv.invId,
+        ticket: argv.runTicket || argv.invId,
         ...(line.contextPacket === undefined ? {} : {
           subject: `${argv.invId}:${line.id}`,
           ...(argv.worktreePath ? { worktreePath: argv.worktreePath } : {}),

@@ -561,6 +561,8 @@ test('runs a shipped empty delivery workflow with host-owned resources', async (
       controller,
       runtimeHost: {
         scope: { run_id: 'run-38-03', ticket: 'T-38-03', worktree: root },
+        runScope: { run_id: 'run-38-03', ticket: 'T-38-03', worktree: root,
+          runtime: 'claude', provider: 'anthropic', phase: 38 },
         agent() { throw new Error('empty workflow must not launch a model'); },
         applicationEvidence() { throw new Error('empty workflow has no evidence'); },
         capabilities: Object.freeze({ supportedModels: ['claude-opus-5-5'], supportedEfforts: ['low'], observedModel: true, observedEffort: true }),
@@ -764,6 +766,74 @@ test('investigation inlines its approved contract without exposing the plugin pa
       assert.match(prompt, /Research contract:/);
       assert.ok(!prompt.includes(REFERENCE_PATHS['inv-research']));
     }
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('production investigation CLI owns a T-scoped run while sealing INV research', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-claude-investigation-cli-'));
+  const worktree = fs.realpathSync(root);
+  const evidence = new WeakMap();
+  try {
+    git(worktree, 'init', '-q', '-b', 'main');
+    git(worktree, 'config', 'user.name', 'Investigation CLI Test');
+    git(worktree, 'config', 'user.email', 'investigation-cli@example.test');
+    fs.writeFileSync(path.join(worktree, 'base.txt'), 'base\n');
+    git(worktree, 'add', 'base.txt');
+    git(worktree, '-c', 'commit.gpgsign=false', 'commit', '-qm', 'base');
+    const graphDir = path.join(worktree, '.planning', 'graph');
+    const invPath = path.join(worktree, '.planning', 'investigations', 'INV-TEST');
+    const artifactRoot = path.join(invPath, 'research');
+    fs.mkdirSync(graphDir, { recursive: true });
+    fs.mkdirSync(artifactRoot, { recursive: true });
+    fs.writeFileSync(path.join(graphDir, 'tickets.json'), '{"tickets":{}}');
+    const labels = { 'system-state': 'system state', alternatives: 'alternatives',
+      constraints: 'constraints', risks: 'risks and unknowns' };
+    const requestFile = path.join(root, 'request.json');
+    fs.writeFileSync(requestFile, JSON.stringify({ schema: REQUEST_SCHEMA,
+      scope: { run_id: 'cli-inv-38', ticket: 'INV-TEST', phase: 38, worktree },
+      args: { invId: 'INV-TEST', invPath, worktreePath: worktree,
+        artifactContract: 'planning.v1', artifactRoot,
+        artifactPaths: Object.fromEntries(Object.keys(labels).map((id) => [id, path.join(artifactRoot, `${id}.md`)])),
+        sourceRevision: git(worktree, 'rev-parse', 'HEAD'), repository: 'shipyard/test',
+        policyHash: policy.resolveDispatch({ runtime: 'claude', role: 'research', signals: { type: 'facts' } }).policy_hash,
+        problemStatement: 'Inspect the owned runtime path', referencePath: REFERENCE_PATHS['inv-research'],
+        lines: Object.entries(labels).map(([id, label]) => ({ id, label,
+          model: 'claude-opus-5-5', effort: 'medium', signals: { type: 'facts' } })) } }));
+    let scopedTicket;
+    let output = '';
+    const result = await runClaudeDeliveryCli(
+      ['--workflow', 'investigation-research', '--request-file', requestFile],
+      { write(value) { output += value; } },
+      { graphDir, storageRoot: path.join(root, 'host-state'), probe: { status: 'available' },
+        createRuntimeHost(options) {
+          scopedTicket = options.scope.ticket;
+          return { scope: options.scope, runScope: options.scope,
+            capabilities: Object.freeze({ supportedModels: ['claude-opus-5-5'], supportedEfforts: ['medium'],
+              observedModel: true, observedEffort: true }),
+            recorder: createDurableRecorder(options.recorderDir),
+            agent(_prompt, launch) {
+              const id = launch.label.split(':').pop();
+              const file = path.join(artifactRoot, `${id}.md`);
+              const content = `# ${id}\n`;
+              fs.writeFileSync(file, content);
+              const sha256 = crypto.createHash('sha256').update(content).digest('hex');
+              const answer = { id, status: 'completed', summary: id,
+                artifact: { path: file, bytes: Buffer.byteLength(content), content_bytes: Buffer.byteLength(content),
+                  sha256, digest: sha256 } };
+              evidence.set(answer, transcriptEvidence({ launch_id: `cli-investigation-${id}`,
+                applied_model: launch.model, applied_effort: launch.effort,
+                observed_model: launch.model, observed_effort: launch.effort }));
+              return answer;
+            },
+            applicationEvidence: ({ result: answer }) => evidence.get(answer) };
+        } },
+    );
+    assert.equal(scopedTicket, 'T-38-00');
+    assert.equal(result.length, 4);
+    assert.ok(result.every((line) => line.status === 'completed' && line.artifact_index));
+    assert.deepEqual(JSON.parse(output), result);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

@@ -38,7 +38,7 @@ function parallel(jobs) {
   return Promise.all(jobs.map((job) => job()));
 }
 
-function prepareArgs(name, args, reviewFeedback) {
+function prepareArgs(name, args, reviewFeedback, scope) {
   if (name === 'executors') {
     return {
       ...args,
@@ -49,7 +49,9 @@ function prepareArgs(name, args, reviewFeedback) {
   if (name === 'investigation-research') {
     const { referencePath, ...rest } = args;
     if (referencePath === undefined) reject('investigation reference is required');
-    return { ...rest, referenceContent: loadClaudeReferenceContent(referencePath) };
+    if (Object.hasOwn(rest, 'runTicket')) reject('investigation run ticket is host-owned');
+    return { ...rest, runTicket: scope.ticket,
+      referenceContent: loadClaudeReferenceContent(referencePath) };
   }
   if (name === 'drift-gate') {
     const { driftRefPath, recordCmd, ...rest } = args;
@@ -817,7 +819,7 @@ function createClaudeDeliveryHost(options = {}) {
         repairs.set(repair.ticket, repair);
         reviewFeedbacks.set(repair.ticket, feedback);
       }
-      const workflowArgs = prepareArgs(name, args, feedback);
+      const workflowArgs = prepareArgs(name, args, feedback, scope);
       const run = () => registered.run(name, { args: workflowArgs });
       if (!repair) return run();
       repairActive = true;
@@ -902,24 +904,32 @@ async function runClaudeDeliveryCli(argv = process.argv.slice(2), output = proce
   const { workflow, requestFile } = parseCli(argv);
   const request = readRequest(requestFile);
   if (!object(hostOptions)) reject('CLI host options must be an object');
-  assertScopedWork(workflow, request.args, request.scope);
-  const worktree = fs.realpathSync(request.scope.worktree);
-  if (worktree !== request.scope.worktree || git(worktree, ['rev-parse', '--show-toplevel']) !== worktree) {
+  let hostScope = request.scope;
+  if (workflow === 'investigation-research' && request.scope.ticket === request.args.invId) {
+    const phase = Number(request.scope.phase);
+    if (!Number.isSafeInteger(phase) || phase < 1 || phase > 99) {
+      reject('investigation run phase cannot form a scoped controller ticket');
+    }
+    hostScope = { ...request.scope, ticket: `T-${String(phase).padStart(2, '0')}-00` };
+  }
+  assertScopedWork(workflow, request.args, hostScope);
+  const worktree = fs.realpathSync(hostScope.worktree);
+  if (worktree !== hostScope.worktree || git(worktree, ['rev-parse', '--show-toplevel']) !== worktree) {
     reject('CLI run scope must name the canonical repository root');
   }
   const ownerId = `claude-cli-${crypto.randomUUID()}`;
   const scope = createRunScope({
-    run_id: request.scope.run_id,
+    run_id: hostScope.run_id,
     repository_id: worktree,
-    phase: request.scope.phase,
-    ticket: request.scope.ticket,
+    phase: hostScope.phase,
+    ticket: hostScope.ticket,
     worktree,
     runtime: 'claude',
     owner_id: ownerId,
     dispatch: cliDispatch(workflow, request.args),
   });
   const controller = createRunController({
-    storeDir: path.join(storageDirectory({ ...hostOptions, scope: request.scope }), 'controller'),
+    storeDir: path.join(storageDirectory({ ...hostOptions, scope: hostScope }), 'controller'),
     ownerId,
   });
   controller.begin(scope);
@@ -930,7 +940,7 @@ async function runClaudeDeliveryCli(argv = process.argv.slice(2), output = proce
   heartbeat.unref();
   try {
     const result = await createClaudeDeliveryHost({
-      ...hostOptions, scope: request.scope, controller,
+      ...hostOptions, scope: hostScope, controller,
     }).run(workflow, request.args);
     if (heartbeatError) throw heartbeatError;
     controller.complete(scope.run_id);
