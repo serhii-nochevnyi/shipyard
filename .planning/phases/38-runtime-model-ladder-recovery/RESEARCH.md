@@ -4,8 +4,7 @@
 
 Phase 38 reconnects the native Claude and Codex model ladders to production
 Shipyard delivery, investigation, and decomposition. The phase stays intact;
-there is no Phase 39. Ticket plans remain the implementation contract, and Jira
-is not used.
+ticket plans remain the implementation contract, and Jira is not used.
 
 ## Current evidence
 
@@ -50,52 +49,40 @@ are spawned as child threads. OpenAI's Codex CLI protocol documents
 `ThreadSpawn` parent-thread and agent-role metadata and custom role definitions:
 https://github.com/openai/codex/blob/rust-v0.155.1/codex-rs/protocol/src/protocol.rs.
 
-The current T-38-04 path accepts `gsd_role`, then records
-`gsd_launch_mechanism: typed-gsd-callback`; `codex-runtime-host.cjs` does not
-apply that role to a child. Its receipt is therefore not proof of a GSD agent.
+T-38-04 resolved the earlier label-only callback gap. Its Codex host launches
+the exact typed child role, supplies the resolver's model and effort, and binds
+the child transcript to the parent thread. The host verifies the installed
+agent definition and its developer instructions before accepting the receipt.
 
 Two live Codex 0.155.1 typed spawns showed that the child `session_meta.agent_path`
 is the native task path, such as `/root/plan_checker_ready`, not the role TOML
 path. The child transcript's developer-role response item contains the exact
-installed `developer_instructions`. T-38-04 must correlate parent spawn task,
-child `agent_path`, role, and parent thread, then use that developer record to
-prove the invocation-pinned role definition actually loaded.
-T-38-04 must request a native child with the exact configured role, bind child
-session evidence to its parent, and verify role, model, and effort. Recent
-native 0.155.1 session records provide the parent ID, typed role, and
-`source.subagent.thread_spawn` fields. Their optional `agent_path` can be null,
-so the host must validate the exact installed role file and digest before
-launch, then compare any native path when the CLI supplies one. A missing child
-or a role/config override must fail closed. GSD-owned agent files are read-only
-inputs and must not be rewritten by Shipyard. Native spawn requests accept an
-explicit model and reasoning effort; require those values to equal the
-resolver's selection and verify them again from the child session's own turn
-metadata. The parent session's model is not evidence for the child.
+installed `developer_instructions`. T-38-04 now correlates the parent spawn
+task, child `agent_path`, role, and parent thread, and uses that developer record
+to prove the invocation-pinned role definition actually loaded. It validates
+the installed role file and digest before launch, compares any native path the
+CLI supplies, and verifies the child's own model and effort metadata. Missing
+children and role/config overrides fail closed; installed GSD files remain
+read-only.
 
 ### Sandboxed Git commits
 
 The configured host has global `commit.gpgsign=true` and a local GPG agent; the
-Codex `workspace-write` sandbox treats Git metadata as read-only on macOS. The
-pipeline nevertheless asks model workers to commit and has no signed-commit
-verification gate. Environment scrubbing by itself cannot make the worker a
-trusted signer. T-38-03 will add the shared host-side finalizer; workers return
-ready/blocked without committing or pushing. The host validates the worktree,
-ticket scope, branch and base, creates a signed commit with the configured
-signer, verifies its signature, and only then accepts the artifact or performs
-a required repair push. Missing signing capability or an out-of-scope delta
-blocks publication. The child must not receive the GPG agent socket or signing
-credentials; the live proving-ground check must verify that boundary.
+Codex `workspace-write` sandbox treats Git metadata as read-only on macOS.
+T-38-03 added the shared host-side finalizer: model workers return
+ready/blocked without committing or pushing, and the trusted host validates
+scope, branch, base, and declared file delta before creating and verifying the
+signed commit. T-38-04 reuses the finalizer. Missing signing capability or an
+out-of-scope delta blocks publication. The live proving-ground check must
+verify that children cannot access the GPG agent or signing credentials.
 
 ### Plugin references under the child sandbox
 
-Workflow prompts currently pass absolute `${CLAUDE_PLUGIN_ROOT}` paths such as
-`inv-research.md`, `drift-check.md`, `ci-fix.md`, and `review-fix.md`. Claude's
-child runs with outside-worktree reads blocked, so it cannot read those
-references. T-38-03 will resolve only exact workflow-to-file mappings from a
-host allowlist, embed the reference contents in the prompt, and reject arbitrary
-paths, traversal, and symlink escapes. Executable files such as the PR
-reinitialization helper are not reference documents: the trusted host reads
-review state and performs publish/reinitialization actions itself.
+Claude children cannot read plugin reference files outside their worktree.
+T-38-03 now resolves fixed workflow references from a host allowlist, embeds
+their contents in prompts, and rejects arbitrary paths, traversal, and symlink
+escapes. Executable helpers remain host-owned; the trusted host reads review
+state and performs publish/reinitialization actions itself.
 
 ## Existing implementation seams
 
@@ -104,46 +91,59 @@ review state and performs publish/reinitialization actions itself.
   boundary.
 - `plugins/delivery-pipeline/scripts/claude-runtime-host.cjs` and
   `codex-runtime-host.cjs` own native CLI launches and session evidence.
-- `claude-workflow-host.cjs` registers typed Workflow bindings; its scripts
-  fail when the binding is absent, which is the correct fail-closed behavior.
-- `codex-delivery-host.cjs` is a production entrypoint for static and dynamic
-  roles, but its typed GSD callback currently labels rather than launches the
-  named role.
+- `claude-workflow-host.cjs` supplies the binding through the shipped Claude
+  delivery host for executor, repair, drift, and investigation workflows.
+- `claude-decompose-host.cjs` supplies the typed GSD decomposition entrypoint.
+- `codex-delivery-host.cjs` and `codex-decompose-host.cjs` are production
+  entrypoints for delivery and typed GSD roles.
 - `context-packet.cjs` intentionally admits project-root sources only. It is
-  not the plugin-reference loader; T-38-03 adds a separate fixed allowlist.
-- `role-artifact.cjs` validates worktree and commit identity but does not verify
-  GPG signatures. T-38-03's signed finalizer must run before artifact
-  acceptance.
+  not the plugin-reference loader; T-38-03 added a separate fixed allowlist.
+- `role-artifact.cjs` validates role artifacts; the shared T-38-03 finalizer
+  verifies host-created commit signatures before publication.
+
+## Remaining delivery host gap
+
+`/shipyard:deliver` dispatches `pr-sentinel`, `arch-review`, and `integrator`
+through the mandatory boundary. T-38-07 adds the Claude host for the two
+judgement roles. The sentinel also needs a round-to-ticket membership bridge:
+the current dispatch overlay is ticket-bound, while its evidence and launch
+identity cover a round. The command and reference docs attribute that bridge to
+T-33-08, but T-33-08 implements fenced session ownership; it does not implement
+membership projection. T-38-08 adds the sentinel host path, a boundary receipt
+bound to the complete round digest, and an atomic round record projected to its
+active members. T-38-05 waits for both tickets before documenting a complete
+route.
 
 ## Ticket boundaries and order
 
-1. T-38-01 pins the runtime model identifiers and is merged into the epic.
-2. T-38-02 proves Claude model/effort from exact hook/transcript evidence and
-   adds the typed-agent launch mode needed by the Claude decomposition host.
-3. T-38-03 connects Claude delivery and investigation, safely supplies
-   references, and creates the shared host-side signed-commit finalizer.
-4. T-38-04 depends on T-38-03, connects Codex delivery and native typed GSD
-   children, adds the Codex decomposition entrypoint, and uses the shared
-   finalizer.
-5. T-38-06 depends on T-38-02 and connects Claude typed GSD decomposition. It
-   can run alongside T-38-03/T-38-04 because its production entrypoint and tests
-   are separate.
-6. T-38-05 waits for T-38-04 and T-38-06, then routes deliver, investigate,
-   and decompose through only connected provider hosts and completes independent
-   provider rollout.
+1. T-38-01 pins current runtime model identifiers.
+2. T-38-02 proves Claude model/effort from exact hook and transcript evidence.
+3. T-38-03 connects Claude delivery and investigation, resolves approved
+   references, and supplies the shared signed-commit finalizer.
+4. T-38-04 connects Codex delivery and typed GSD children through native
+   subagent evidence.
+5. T-38-06 connects Claude typed GSD decomposition.
+6. T-38-07 adds Claude architecture-review and integration host entrypoints.
+7. T-38-08 adds the Claude sentinel host and authenticated round-membership
+   projection.
+8. T-38-05 waits for T-38-04, T-38-06, T-38-07, and T-38-08, then routes all
+   delivery roles, investigation, and decomposition through provider-specific
+   hosts and completes independent rollout.
 
-This keeps investigation in the already-planned T-38-03 and adds one
-Claude-decomposition ticket. Signed commit finalization is shared by the two
-runtime host tickets rather than becoming another phase or ticket.
+T-38-01 through T-38-04 and T-38-06 have merged into the epic (PRs #190–195,
+including the live-smoke receipt follow-up). T-38-05 remains in progress;
+T-38-07 and T-38-08 close the remaining Claude host and round-ownership gaps.
+The generated verification and UAT projections were refreshed after those two
+ticket plans were added.
 
 ## Verification constraints
 
 - Unit fixtures may validate native event parsing, but only the opt-in live
   smoke can report a live pass.
-- Keep capability probes allowance-free. Use one real Claude smoke and one
-  real Codex smoke in disposable worktrees; each must prove model, effort,
-  named-agent application where relevant, scoped edit/Bash access, and commit
-  signature behavior.
+- Keep capability probes allowance-free. Run the runtime, typed-GSD, and
+  remaining-role live smokes in disposable worktrees only by explicit opt-in;
+  each must prove model, effort, role where relevant, scoped edit/Bash access,
+  and host-created commit signatures where the role publishes code.
 - A missing, changed, ambiguous, or cross-session native evidence field is a
   refusal, not an inferred success.
 - Provider credentials and model selection remain separate. Codex uses OpenAI

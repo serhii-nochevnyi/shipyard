@@ -718,8 +718,8 @@ promotion signals, and historical receipts.
 <!-- shipyard:gsd-sync:begin -->
 ## Shipyard synchronization (generated)
 
-- Source fingerprint: `41f98754209d54fd46b0e846496ad911a07f95c64275e6d599942e20e1f1b95a`
-- Plans merged: 139/144
+- Source fingerprint: `f8f784bc246a51817cdab2267d8cf7d2acfe2e515b8ebd00b8babc315dc16108`
+- Plans merged: 143/146
 - Phases verified: 9/19
 - Current phase: 20
 
@@ -743,6 +743,6 @@ promotion signals, and historical receipts.
 | 35 — Close the GSD and Shipyard workflow loop | 3 | 3 | passed |
 | 36 — Enforce the runtime model ladder | 12 | 12 | passed |
 | 37 — Run the autonomous dual-runtime control plane | 8 | 8 | pending |
-| 38 — Restore the native model ladder in delivery | 6 | 1 | pending |
+| 38 — Restore the native model ladder in delivery | 8 | 5 | pending |
 
 <!-- shipyard:gsd-sync:end -->

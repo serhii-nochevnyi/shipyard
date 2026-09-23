@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 41f98754209d54fd46b0e846496ad911a07f95c64275e6d599942e20e1f1b95a
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: f8f784bc246a51817cdab2267d8cf7d2acfe2e515b8ebd00b8babc315dc16108
 phase: 21-verdicts-a-human-would-have-made-anyway
 plan: 01
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-08-26
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 41f98754209d54fd46b0e846496ad911a07f95c64275e6d599942e20e1f1b95a
+shipyard_source_fingerprint: f8f784bc246a51817cdab2267d8cf7d2acfe2e515b8ebd00b8babc315dc16108
 ---
 
 # Phase 21: Pre-authorization is recorded in the plan, not decided at 3am — Delivery Projection

@@ -1,13 +1,13 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 41f98754209d54fd46b0e846496ad911a07f95c64275e6d599942e20e1f1b95a
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: f8f784bc246a51817cdab2267d8cf7d2acfe2e515b8ebd00b8babc315dc16108
 gsd_state_version: '1.0'
 status: planning
 progress:
   total_phases: 19
   completed_phases: 9
-  total_plans: 144
-  completed_plans: 139
-  percent: 96
+  total_plans: 146
+  completed_plans: 143
+  percent: 97
 ---
 
 # Project State
@@ -26,11 +26,11 @@ Plan: 6 of 6 merged
 Status: pending
 Last activity: 2026-09-23 — Shipyard projection synchronized
 
-Progress: [█████████░] 96%
+Progress: [█████████░] 97%
 
 ## Performance Metrics
 
-- Total plans completed: 139
+- Total plans completed: 143
 - Average duration: not measured by the projection
 - Total execution time: not measured by the projection
 
@@ -56,7 +56,7 @@ Progress: [█████████░] 96%
 | 35 | 3 | 3 | passed |
 | 36 | 12 | 12 | passed |
 | 37 | 8 | 8 | pending |
-| 38 | 6 | 1 | pending |
+| 38 | 8 | 5 | pending |
 
 ## Accumulated Context
 
@@ -71,14 +71,14 @@ Review and resolve phase integration findings shown in the phase artifacts.
 
 ### Blockers/Concerns
 
-- T-38-02: delivery status is pr-open
-- T-38-03: delivery status is pending
-- T-38-04: delivery status is pending
 - T-38-05: delivery status is pending
-- T-38-06: delivery status is pending
+- T-38-07: delivery status is pending
+- T-38-08: delivery status is pending
 - Phase 20: INTEGRATION.md is missing
 - Phase 21: INTEGRATION.md is missing
 - Phase 22: INTEGRATION.md is missing
+- Phase 23: INTEGRATION.md is missing
+- Phase 24: integration evidence records a finding or failed verdict
 
 ## Deferred Items
 
@@ -88,6 +88,6 @@ Review and resolve phase integration findings shown in the phase artifacts.
 
 ## Session Continuity
 
-Last session: 2026-09-23 12:10
+Last session: 2026-09-23 17:54
 Stopped at: Shipyard GSD projection synchronized from the delivery graph.
 Resume file: None
