@@ -768,7 +768,7 @@ test('decompose documents the three explicit boundary dispatches and refusal rul
     'requireGsdRole',
     'boundary.dispatch',
     'pipelineConfig.resolveDispatch',
-    'Before every researcher, planner, or checker callback',
+    'Before every researcher, planner, or checker launch',
     'configuration-free fallback',
     'gsd-phase-researcher',
     'gsd-planner',
@@ -794,7 +794,7 @@ test('decompose documents the three explicit boundary dispatches and refusal rul
   assert.ok(/direct\s+inline/.test(boundarySection), 'decompose.md must refuse direct inline launches');
   for (const phrase of [
     '**Codex runtime — logical model ladder**',
-    '**Workflow-native alias runtime — native alias ladder**',
+    '**Claude runtime — Anthropic alias ladder**',
     'opus/medium',
     'opus/max',
   ]) {
@@ -885,7 +885,7 @@ test('the documented GSD boundary call selects typed callbacks and refuses a mis
   }
 });
 
-test('decompose selects runtime before tuning and establishes context before one callback set', () => {
+test('decompose selects runtime before tuning and establishes context before three host calls', () => {
   const source = readRepo('plugins/delivery-pipeline/commands/decompose.md');
   const boundarySection = source.slice(
     source.indexOf('## Step 0.5 — Mandatory GSD runtime dispatch'),
@@ -893,11 +893,11 @@ test('decompose selects runtime before tuning and establishes context before one
   );
   const runtimeAt = boundarySection.indexOf('1. Identify the active host runtime');
   const tuneAt = boundarySection.indexOf('gsd-tune.cjs --check');
-  const configAt = boundarySection.indexOf('Before every researcher, planner, or checker callback');
-  const boundaryAt = boundarySection.indexOf('5. Use the canonical boundary call for each role');
+  const configAt = boundarySection.indexOf('Before every researcher, planner, or checker launch');
+  const boundaryAt = boundarySection.indexOf('5. The host uses the canonical boundary call for each role');
   assert.ok(
     runtimeAt >= 0 && tuneAt > runtimeAt && configAt > tuneAt && boundaryAt > configAt,
-    'the active runtime, tuning, and routed configuration must precede every boundary callback'
+    'the active runtime, tuning, and routed configuration must precede each host launch'
   );
   assert.match(
     boundarySection,
@@ -924,9 +924,9 @@ test('decompose selects runtime before tuning and establishes context before one
       && researcherAt < plannerAt && plannerAt < checkerAt,
     'phase/ADR context must precede the researcher, planner, and checker callbacks'
   );
-  assert.ok(normalized(chain).includes(normalized('exactly one set of three typed, boundary-owned callbacks')));
+  assert.ok(normalized(chain).includes(normalized('invoke the selected host exactly three times')));
   assert.ok(normalized(chain).includes(normalized('same explicit context')));
-  assert.ok(normalized(chain).includes(normalized('exactly three verified durable receipts')));
+  assert.ok(normalized(chain).includes(normalized('exactly three host dispatches and three verified receipts')));
   assert.ok(normalized(chain).includes(normalized('same checker receipt')));
   assert.ok(normalized(chain).includes(normalized('must not dispatch or record a second `gsd-plan-checker`')));
   assert.equal(
@@ -976,10 +976,12 @@ test('delivery launch docs route every role through the boundary and the generat
     assert.ok(source.includes(pair), `delivery docs must preserve the native ladder pair ${pair}`);
   }
   const investigate = readRepo('plugins/delivery-pipeline/commands/investigate.md');
-  for (const [name, doc] of [['deliver', deliver], ['pr-sentinel', sentinel], ['investigate', investigate]]) {
-    assert.ok(doc.includes('Workflow runtime'), `${name} must name the Workflow runtime by mechanism`);
-    assert.ok(!/\bClaude\b/.test(doc), `${name} must not use converter-rewritten Claude prose`);
-  }
+  assert.ok(deliver.includes('config.gsd.runtime')
+    && deliver.includes('claude-delivery-host.cjs')
+    && deliver.includes('codex-delivery-host.cjs'), 'deliver must select one provider host');
+  assert.ok(investigate.includes('claude-investigation-host.cjs')
+    && investigate.includes('codex-delivery-host.cjs'), 'investigate must select one provider host');
+  assert.ok(sentinel.includes('Workflow runtime'), 'the sentinel reference must name its Workflow runtime mechanism');
 
   for (const variant of codexStaticVariants(2)) {
     assert.ok(source.includes(variant.file), `delivery docs must name generated Codex variant ${variant.file}`);
@@ -1011,7 +1013,7 @@ test('delivery docs project selector, recorder, and workflow contracts without i
     '`repeat`/`repeat_exhausted` → `rethink`',
     'tickets: [{ id, planPath, baseRef, model, effort, signals }]',
     'priorReceipt, previous_dispatch_id, dispatch_id',
-    '`false` disables the Workflow path',
+    'The `pipeline.use_workflow` setting cannot select an',
     '**Cardinality is per work item.**',
     'round-scoped `pr-sentinel`',
     'pipeline.fable: auto',
@@ -2014,10 +2016,13 @@ test('investigate emits flat machine-readable decision lists', () => {
 
 test('autonomous rollout source keeps the gate versioned, provider-pure, and fail-closed', () => {
   const source = readRepo('plugins/delivery-pipeline/scripts/run-rollout.cjs');
-  assert.ok(source.includes("SCHEMA = 'shipyard.autonomous-rollout.v1'"));
-  assert.ok(source.includes("ROLLOUT_VERSION = 'v1'"));
+  assert.ok(source.includes("SCHEMA = 'shipyard.autonomous-rollout.v2'"));
+  assert.ok(source.includes("ROLLOUT_VERSION = 'v2'"));
+  assert.ok(source.includes("LEGACY_SCHEMA = 'shipyard.autonomous-rollout.v1'"));
+  assert.ok(source.includes("LEGACY_ROLLOUT_VERSION = 'v1'"));
   assert.ok(source.includes("source !== 'live'"));
-  assert.ok(source.includes("status === 'enabled'"));
+  assert.ok(source.includes('launches_enabled'));
+  assert.ok(source.includes('readCredentialStatus'));
   assert.ok(source.includes("providerFor(runtime)"));
   assert.ok(source.includes("--capability-only"));
   for (const file of ['run-contract.cjs', 'run-store.cjs', 'run-controller.cjs', 'run-waker.cjs', 'run-telemetry.cjs', 'usage-attribution.cjs', 'pipeline-stats.cjs']) {
@@ -2034,12 +2039,36 @@ test('delivery documents rollout status, technical waits, rollback, and human-on
     assert.ok(source.includes('run-rollout.cjs'));
     assert.ok(source.includes('unavailable'));
     assert.ok(source.includes('refused'));
-    assert.ok(source.includes('technical waits') && ['ci', 'review', 'quota', 'lease', 'host'].every((kind) => source.includes(kind)));
-    assert.ok(source.includes('historical records'));
-    assert.ok(source.includes('inherited model') || source.includes('inherited models'));
+    const lower = source.toLowerCase();
+    assert.ok(lower.includes('technical waits') && ['ci', 'review', 'quota', 'lease', 'host'].every((kind) => lower.includes(kind)));
+    assert.ok(lower.includes('historical records') || lower.includes('historical receipts'));
+    assert.ok(lower.includes('inherited model'));
   }
-  assert.ok(deliver.includes('Workflow runtime uses Anthropic and Codex uses\nOpenAI'));
+  assert.ok(deliver.includes('Claude uses Anthropic and\nCodex uses OpenAI'));
+  assert.ok(docs.includes('do not disable explicit user-issued command runs'));
   assert.ok(deliver.includes('protected default-branch merge'));
+});
+
+test('delivery routes model-bearing roles through one provider-specific shipped host', () => {
+  const deliver = readRepo('plugins/delivery-pipeline/commands/deliver.md');
+  const investigate = readRepo('plugins/delivery-pipeline/commands/investigate.md');
+  const decompose = readRepo('plugins/delivery-pipeline/commands/decompose.md');
+  const routing = deliver.slice(deliver.indexOf('**Runtime path selection.**'), deliver.indexOf('**Typed host adapter:'));
+  for (const entrypoint of [
+    'claude-delivery-host.cjs', 'codex-delivery-host.cjs',
+    'claude-investigation-host.cjs', 'claude-decompose-host.cjs',
+    'codex-decompose-host.cjs', 'claude-role-host.cjs',
+  ]) {
+    assert.ok(routing.includes(entrypoint), `delivery runtime routing must name ${entrypoint}`);
+  }
+  assert.match(routing, /Architecture review and integration[\s\S]*claude-role-host\.cjs[\s\S]*codex-delivery-host\.cjs/);
+  assert.match(routing, /PR sentinel[\s\S]*claude-role-host\.cjs[\s\S]*codex-delivery-host\.cjs[\s\S]*per ticket/);
+  assert.ok(investigate.includes('claude-investigation-host.cjs')
+    && investigate.includes('codex-delivery-host.cjs'));
+  assert.ok(decompose.includes('claude-decompose-host.cjs')
+    && decompose.includes('codex-decompose-host.cjs'));
+  assert.match(deliver, /The command must not invoke a native Workflow\s+or Agent directly/);
+  assert.doesNotMatch(deliver, /Codex has no Workflow tool[\s\S]{0,100}built-in Agent path/);
 });
 
 test('GSD sync projects controller state without volatile owner or store fields', () => {

@@ -51,48 +51,177 @@ const expectedScope = {
   base_sha: 'a'.repeat(40),
 };
 
+function credential(runtime, status = 'available') {
+  return {
+    runtime,
+    provider: rollout.PROVIDERS[runtime],
+    status,
+    source: runtime === 'claude' ? 'claude-auth-status' : 'codex-login-status',
+    ...(status === 'available' && runtime === 'claude' ? { method: 'oauth' } : {}),
+    ...(status === 'unavailable' ? { reason: { code: 'CREDENTIALS_UNAVAILABLE', message: 'not authenticated' } } : {}),
+  };
+}
+
+function runtimeRoot() {
+  const root = tempDir();
+  for (const file of [...rollout.SHARED_FILES, ...rollout.RUNTIME_FILES.claude, ...rollout.RUNTIME_FILES.codex]) {
+    const target = path.join(root, file);
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, '');
+  }
+  return root;
+}
+
+function credentials(claude = 'available', codex = 'available') {
+  return { claude: credential('claude', claude), codex: credential('codex', codex) };
+}
+
 test('rollout defaults to disabled and preserves legacy behavior', () => {
   const flag = rollout.normalizeFlag(undefined);
   assert.equal(flag.status, 'disabled');
-  const result = rollout.evaluate({ root: tempDir() });
+  const result = rollout.evaluate({ root: tempDir(), credentialStatuses: credentials('unavailable', 'unavailable') });
   assert.equal(result.status, 'disabled');
   assert.equal(result.launches_enabled, false);
+  assert.deepEqual(result.runtime_launches_enabled, { claude: false, codex: false });
   assert.equal(result.legacy_behavior, 'unchanged');
 });
 
-test('rollout requires the exact version and both runtime flags', () => {
+test('rollout migrates v1 flags and accepts independent v2 opt-ins', () => {
   assert.equal(rollout.normalizeFlag({ version: 'v0', enabled: true }).status, 'refused');
   assert.equal(rollout.normalizeFlag({ version: 'v1', enabled: true, runtimes: { claude: true } }).reason.code, 'RUNTIME_FLAG_INCOMPLETE');
-  assert.equal(rollout.evaluate({ flag: {
-    schema: rollout.SCHEMA,
-    status: 'pending',
-    rollout_version: 'v1',
-    enabled: true,
-    runtimes: { claude: true, codex: false },
-  }, root: tempDir() }).status, 'refused');
+  assert.equal(rollout.normalizeFlag({ version: 'v1', schema: rollout.SCHEMA, enabled: false }).reason.code, 'INVALID_SCHEMA');
+  assert.equal(rollout.normalizeFlag({ version: 'v1', enabled: false, runtimes: { codex: 'yes' } }).reason.code, 'INVALID_FLAG');
+  assert.equal(rollout.normalizeFlag({ version: 'v1', enabled: false, runtimes: { claude: false, codex: false, other: true } }).reason.code, 'UNKNOWN_RUNTIME');
+  const legacy = rollout.normalizeFlag({ version: 'v1', enabled: true, runtimes: { claude: true, codex: true } });
+  assert.equal(legacy.schema, rollout.SCHEMA);
+  assert.equal(legacy.rollout_version, 'v2');
+  assert.equal(legacy.migrated_from, 'v1');
+  assert.deepEqual(legacy.runtimes, { claude: true, codex: true });
+  const independent = rollout.normalizeFlag({ version: 'v2', runtimes: { claude: true } });
+  assert.equal(independent.status, 'pending');
+  assert.deepEqual(independent.runtimes, { claude: true, codex: false });
+  assert.equal(rollout.normalizeFlag({ version: 'v2', enabled: false, runtimes: { claude: true } }).status, 'refused');
+  assert.equal(rollout.normalizeFlag({ version: 'v2', schema: rollout.LEGACY_SCHEMA, runtimes: { claude: true } }).reason.code, 'INVALID_SCHEMA');
+  assert.equal(rollout.normalizeFlag({ version: 'v2', runtimes: { claude: true, other: true } }).reason.code, 'UNKNOWN_RUNTIME');
 });
 
-test('both runtimes enable only with separate live evidence and the shared contract', () => {
-  const flag = rollout.normalizeFlag({ version: 'v1', enabled: true, runtimes: { claude: true, codex: true } });
+test('evaluation preserves an invalid rollout flag as refused', () => {
   const result = rollout.evaluate({
-    root: tempDir(),
+    root: runtimeRoot(),
+    flag: rollout.normalizeFlag({ version: 'v0', enabled: true }),
+    credentialStatuses: credentials(),
+  });
+  assert.equal(result.status, 'refused');
+  assert.equal(result.launches_enabled, false);
+  assert.equal(result.reason.code, 'UNSUPPORTED_ROLLOUT_VERSION');
+});
+
+test('Claude can enable with its own live evidence while Codex is unavailable', () => {
+  const flag = rollout.normalizeFlag({ version: 'v2', runtimes: { claude: true, codex: false } });
+  const result = rollout.evaluate({
+    root: runtimeRoot(),
     flag,
     expectedScope,
-    capabilities: { claude: evidence('claude'), codex: evidence('codex') },
+    capabilities: { claude: evidence('claude') },
+    credentialStatuses: credentials('available', 'unavailable'),
   });
   assert.equal(result.status, 'enabled');
   assert.equal(result.launches_enabled, true);
+  assert.deepEqual(result.runtime_launches_enabled, { claude: true, codex: false });
+  assert.equal(result.runtimes.claude.status, 'enabled');
+  assert.equal(result.runtimes.codex.status, 'disabled');
   assert.equal(result.capabilities.claude.provider, 'anthropic');
   assert.equal(result.capabilities.codex.provider, 'openai');
-  assert.doesNotMatch(JSON.stringify(result), /(?:api[_-]?key|secret|token_value|credential_value)/i);
+  assert.doesNotMatch(JSON.stringify(result), /(?:secret|token_value|credential_value|raw_output|stdout|stderr)/i);
+});
+
+test('Codex can enable while Claude is unavailable and both runtimes can be partially ready', () => {
+  const root = runtimeRoot();
+  const codexOnly = rollout.evaluate({
+    root,
+    flag: rollout.normalizeFlag({ version: 'v2', runtimes: { codex: true } }),
+    expectedScope,
+    capabilities: { codex: evidence('codex') },
+    credentialStatuses: credentials('unavailable', 'available'),
+  });
+  assert.equal(codexOnly.status, 'enabled');
+  assert.deepEqual(codexOnly.runtime_launches_enabled, { claude: false, codex: true });
+
+  const partial = rollout.evaluate({
+    root,
+    flag: rollout.normalizeFlag({ version: 'v2', runtimes: { claude: true, codex: true } }),
+    expectedScope,
+    capabilities: { claude: evidence('claude'), codex: null },
+    credentialStatuses: credentials('available', 'available'),
+  });
+  assert.equal(partial.status, 'partial');
+  assert.deepEqual(partial.runtime_launches_enabled, { claude: true, codex: false });
+  assert.equal(partial.runtimes.codex.capability.reason.code, 'LIVE_PROBE_REQUIRED');
 });
 
 test('missing runtime files and credentials are unavailable, never synthetic green', () => {
   const root = tempDir();
-  const result = rollout.probeRuntime({ root, runtime: 'claude', env: {} });
+  const result = rollout.probeRuntime({ root, runtime: 'claude', credentialEvidence: credential('claude', 'available') });
   assert.equal(result.status, 'unavailable');
   assert.equal(result.reason.code, 'MISSING_RUNTIME_CAPABILITY');
+  assert.equal(result.credential_status.status, 'available');
   assert.notEqual(result.status, 'available');
+  const completeRoot = runtimeRoot();
+  const roleHost = rollout.RUNTIME_FILES.claude.find((file) => file.endsWith('/claude-role-host.cjs'));
+  fs.unlinkSync(path.join(completeRoot, roleHost));
+  const missingRoleHost = rollout.probeRuntime({ root: completeRoot, runtime: 'claude',
+    credentialEvidence: credential('claude', 'available') });
+  assert.equal(missingRoleHost.status, 'unavailable');
+  assert.ok(missingRoleHost.missing_files.includes(roleHost));
+});
+
+test('Claude auth status reads OAuth fields without exposing raw output', () => {
+  const calls = [];
+  const result = rollout.readCredentialStatus('claude', {
+    env: {},
+    commandRunner(command, args, options) {
+      calls.push({ command, args, env: options.env });
+      return { status: 0, stdout: JSON.stringify({ loggedIn: true, authMethod: 'claude.ai', apiProvider: 'firstParty', email: 'private@example.test' }), stderr: 'secret output' };
+    },
+  });
+  assert.deepEqual(calls, [{ command: 'claude', args: ['auth', 'status', '--json'], env: {} }]);
+  assert.equal(result.status, 'available');
+  assert.equal(result.method, 'oauth');
+  assert.doesNotMatch(JSON.stringify(result), /private@example|secret output|stdout|stderr/i);
+});
+
+test('Claude auth status refuses malformed and non-Anthropic credential evidence', () => {
+  const malformed = rollout.readCredentialStatus('claude', {
+    commandRunner: () => ({ status: 0, stdout: '{bad json}' }),
+  });
+  assert.equal(malformed.status, 'refused');
+  assert.equal(malformed.reason.code, 'AUTH_STATUS_INVALID');
+  const wrongProvider = rollout.readCredentialStatus('claude', {
+    commandRunner: () => ({ status: 0, stdout: JSON.stringify({ loggedIn: true, authMethod: 'claude.ai', apiProvider: 'bedrock' }) }),
+  });
+  assert.equal(wrongProvider.status, 'refused');
+  assert.equal(wrongProvider.reason.code, 'WRONG_PROVIDER');
+});
+
+test('Codex login status accepts subscription auth without environment API keys', () => {
+  const calls = [];
+  const result = rollout.readCredentialStatus('codex', {
+    env: {},
+    commandRunner(command, args, options) {
+      calls.push({ command, args, env: options.env });
+      return { status: 0, stdout: '', stderr: 'Logged in using ChatGPT' };
+    },
+  });
+  assert.deepEqual(calls, [{ command: 'codex', args: ['login', 'status'], env: {} }]);
+  assert.equal(result.status, 'available');
+  assert.doesNotMatch(JSON.stringify(result), /ChatGPT|stdout|stderr/i);
+  const absent = rollout.readCredentialStatus('codex', {
+    env: {},
+    commandRunner: () => ({ status: 1, stdout: '', stderr: 'Not logged in' }),
+  });
+  assert.equal(absent.status, 'unavailable');
+  assert.equal(absent.reason.code, 'CREDENTIALS_UNAVAILABLE');
+  assert.doesNotMatch(JSON.stringify(absent), /Not logged in/);
 });
 
 test('wrong runtime/provider, synthetic evidence, inherited model, scope and base are refused', () => {
@@ -131,8 +260,9 @@ test('incomplete usage is refused and missing receipts or telemetry stay unavail
   assert.equal(telemetryMissing.reason.code, 'TELEMETRY_UNAVAILABLE');
 });
 
-test('rollback disables launches while preserving historical state', () => {
-  const result = rollout.rollback({ status: 'enabled' });
+test('runtime rollback disables launches while preserving historical state', () => {
+  const result = rollout.rollback({ runtime: 'claude', status: 'enabled' });
+  assert.equal(result.runtime, 'claude');
   assert.equal(result.launches_enabled, false);
   assert.equal(result.records_deleted, false);
   assert.equal(result.historical_preserved, true);
@@ -141,33 +271,46 @@ test('rollback disables launches while preserving historical state', () => {
   assert.equal(result.usage_preserved, true);
 });
 
-test('rollback atomically disables the project flag and keeps unrelated config', () => {
+test('rollback migrates legacy state and disables only the selected runtime', () => {
   const root = tempDir();
   const file = path.join(root, '.planning', 'config.json');
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, JSON.stringify({
     model_profile: 'balanced',
     delivery_pipeline: {
-      autonomous_control_plane: { version: 'v1', enabled: true, runtimes: { claude: true, codex: true }, owner: 'operator' },
+      autonomous_control_plane: { schema: rollout.LEGACY_SCHEMA, version: 'v1', enabled: true, runtimes: { claude: true, codex: true }, owner: 'operator' },
       gsd_sync: true,
     },
     pipeline: {
       autonomous_control_plane: { version: 'v1', enabled: true, runtimes: { claude: true, codex: true } },
     },
   }, null, 2));
-  const result = rollout.applyRollback(root);
-  assert.equal(result.status, 'disabled');
+  const result = rollout.applyRollback(root, 'claude');
+  assert.equal(result.status, 'partial');
   assert.equal(result.changed, true);
   const config = JSON.parse(fs.readFileSync(file, 'utf8'));
   assert.deepEqual(config.delivery_pipeline.autonomous_control_plane, {
-    version: 'v1', enabled: false, runtimes: { claude: false, codex: false }, owner: 'operator',
+    schema: rollout.SCHEMA, version: 'v2', runtimes: { claude: false, codex: true }, owner: 'operator',
   });
   assert.deepEqual(config.pipeline.autonomous_control_plane, {
-    version: 'v1', enabled: false, runtimes: { claude: false, codex: false },
+    schema: rollout.SCHEMA, version: 'v2', runtimes: { claude: false, codex: true },
   });
   assert.equal(config.delivery_pipeline.gsd_sync, true);
   assert.equal(config.model_profile, 'balanced');
-  assert.equal(rollout.execute({ command: 'rollback', root, capabilityFile: path.join(root, 'missing.json') }).code, 0);
+  assert.equal(rollout.execute({ command: 'rollback', root, runtime: 'codex' }).code, 0);
+  const disabled = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.deepEqual(disabled.delivery_pipeline.autonomous_control_plane.runtimes, { claude: false, codex: false });
+  assert.equal(rollout.execute({ command: 'rollback', root }).code, 11);
+});
+
+test('rollback CLI requires exactly one provider and status never exposes CLI output', () => {
+  assert.throws(() => rollout.parseArgs(['rollback']), /requires --runtime/);
+  assert.throws(() => rollout.parseArgs(['rollback', '--runtime', 'claude', '--runtime', 'codex']), /specified only once/);
+  assert.throws(() => rollout.parseArgs(['status', '--runtime', 'claude']), /only by rollback/);
+  const result = rollout.execute({ command: 'status', root: runtimeRoot(), capabilityOnly: true,
+    credentialStatuses: credentials('available', 'available') });
+  assert.equal(result.result.rollout_version, 'v2');
+  assert.doesNotMatch(JSON.stringify(result.result), /api-key|private@example|Logged in using|secret output/i);
 });
 
 test('GSD controller projection excludes heartbeat and lease volatility', () => {

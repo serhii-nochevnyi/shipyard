@@ -26,6 +26,28 @@ no dependency on session memory. There may be gaps of weeks between sessions.
 > closure proposals — reply in the user's language (match the language they write
 > to you). English is for the pipeline; the user's language is for the conversation.
 
+## Runtime and host selection
+
+Run `node ${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-config.cjs resolve --json` and
+take the active runtime from `config.gsd.runtime`; it must be exactly `claude`
+or `codex`. Keep that runtime fixed for the investigation. Claude routes through
+`${CLAUDE_PLUGIN_ROOT}/scripts/claude-investigation-host.cjs --request-file
+<json>`. Codex routes each research line through
+`${CLAUDE_PLUGIN_ROOT}/scripts/codex-delivery-host.cjs --args-file <json>` with
+`role: research`. Claude's request carries the four canonical line selections;
+Codex requests carry one line's signals and scoped context, and its host
+resolves that line's selection. Each host builds `createDispatchBoundary`,
+calls `boundary.dispatch`, and returns the durable application receipt; accept
+research output only after that receipt is verified.
+
+Use `run-rollout.cjs status --json` to read the selected provider's controller
+status at `runtimes.<runtime>.launches_enabled`. This flag gates autonomous
+controller launches; it does not disable a command-issued research run.
+Controller rollout is provider-specific and does not change host selection.
+An unavailable or refused host cannot switch to the peer. Never invoke the
+native Workflow or Agent surface outside its shipped host; if the selected host
+is unavailable, stop that research line and report the runtime status.
+
 ## Step 0 — Determine the mode
 
 Read `.planning/investigations/` (may not exist):
@@ -50,34 +72,28 @@ Read `.planning/investigations/` (may not exist):
    AskUserQuestion the questions that are missing for PROBLEM.md: for whom / current
    pain / what success will be / what is definitely out of scope. Ask only what you
    cannot derive from the statement. Fill in PROBLEM.md.
-5. **Research fan-out**: resolve the runtime and all four line selections through
-   the routed `pipeline-config.cjs` `resolveDispatch` bridge before launching.
-   Never call the compatibility `pipeline-config.cjs model` reader, compose a
-   model or effort in this command, or let a session/default selection leak into
-   the launch. For the Workflow runtime, the base is Opus/medium and only an explicit
+5. **Research fan-out**: prepare the four declared line selections for the fixed
+   runtime and route them through its shipped host. Never call the compatibility
+   `pipeline-config.cjs model` reader, compose a model or effort in this command,
+   or let a session/default selection leak into the launch. For Claude, resolve
+   each selection through the routed `pipeline-config.cjs resolveDispatch`
+   bridge before launch. The host boundary verifies application of that exact
+   selection. The base is Opus/medium and only an explicit
    `complexity: very-complex` signal escalates research to Opus/max; the
    `alternatives` line does not promote the rung. For Codex, the base is
    Sol/high and the same explicit very-complex signal escalates to Sol/xhigh.
-   Keep the resolved `{ model, effort, signals }` on every line. For Codex,
-   pass those exact signals to the selector for each line — for example,
-   `--type alternatives` for the alternatives line and
-   `--complexity very-complex` for the explicitly very-complex line — and
-   preserve the selector's returned model/file and effort when calling the
-   boundary. Do not select once for the fan-out and do not re-resolve a line
-   from its model/effort pair.
+   Keep each line's declared signals and context attached to that line. For
+   Codex, send each line's signals to its host request — for example,
+   `type: alternatives` or `complexity: very-complex`. The host resolves and
+   applies the selection; the command does not pass model, agent-file, or
+   effort overrides. Do not reuse one line's selection for another.
 
-   For the Workflow runtime, invoke the production entry point
-   `${CLAUDE_PLUGIN_ROOT}/scripts/claude-investigation-host.cjs`, which pins
-   `${CLAUDE_PLUGIN_ROOT}/workflows/investigation-research.mjs` and delegates to
-   the generic host binding. The host call is:
+   For Claude, invoke the fixed investigation entry point once with the bounded
+   request file containing the four line selections:
 
    ```text
-   const workflowHost = registerInvestigationWorkflowHost({
-     agent, parallel, phase, log,
-     capabilities, recorder, applicationEvidence
-   })
-   await workflowHost.run({ invId, invPath, problemStatement, referencePath,
-                            artifactLanguage, contextPacketRequired: true, lines })
+   node ${CLAUDE_PLUGIN_ROOT}/scripts/claude-investigation-host.cjs \
+     --request-file /absolute/path/investigation-request.json
    ```
 
    Before the fan-out, build one packet for each research line with
@@ -97,35 +113,21 @@ Read `.planning/investigations/` (may not exist):
    visible to the researcher; required problem, ADR and gate material is never
    summarized away.
 
-   `registerInvestigationWorkflowHost` is the production host registration;
-   it pins the research DSL and invokes `runClaudeWorkflow` with the native
-   callbacks, so this is not a unit-test-only constructor. The typed
-   `createClaudeWorkflowDispatch` bridge is injected as the sixth
-   workflow binding; the durable recorder, capabilities, and
-   application-evidence callback stay outside serializable `args`. The workflow
-   dispatches all four lines through that bridge in parallel and refuses if any
-   host dependency is absent. Do not use the native Agent tool, a generic
-   session, an in-process fallback, or a direct `agent()` call. For Codex, use the generated agent selected by
-   `codex-agent.cjs select research --json --capabilities-file
-   ${CLAUDE_PLUGIN_ROOT}/codex-capabilities.json [canonical line signals]` and
-   the same dispatch boundary via `createCodexDispatchAdapter`; do not call
-   `spawn_agent` directly. The selector's `--json` result is preflight
-   evidence, not launch authority by itself: the returned selection must still
-   cross `createDispatchBoundary` and produce a durable application receipt.
-
-   When the caller cannot import CommonJS into the native Workflow host, use
-   the executable fixed-route bridge instead. The JSON file contains only the
-   serializable `args`; the host module owns the native callbacks, capabilities,
-   durable recorder, and application evidence:
+   For Codex, call the fixed delivery host once per research line. Each request
+   uses `role: research`, that line's signals and context packet. The host
+   resolves the runtime-specific selection, crosses `createDispatchBoundary`,
+   and records an application receipt. The request file contains only bounded
+   serializable inputs; the host owns callbacks, capabilities, recording, and
+   application evidence.
 
    ```bash
-   node ${CLAUDE_PLUGIN_ROOT}/scripts/claude-investigation-host.cjs \
-     --args-file /absolute/path/investigation-args.json \
-     --host-module /absolute/path/claude-workflow-host-adapter.cjs
+   node ${CLAUDE_PLUGIN_ROOT}/scripts/codex-delivery-host.cjs \
+     --args-file /absolute/path/research-line-request.json
    ```
 
-   This executable path invokes the same registered host and fixed research
-   workflow; it is not a direct Agent or an unverified subprocess fallback.
+   Never call `spawn_agent`, the native Agent tool, a generic session, or a
+   direct `agent()` function for a research line. There is no unverified
+   subprocess or cross-provider fallback.
 
    Accept a research result only after its durable boundary receipt is verified.
    Pass the workflow `artifactContract: planning.v1`, the absolute worktree and

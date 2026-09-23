@@ -1906,38 +1906,38 @@ test('the Claude PR-sentinel uses a host-owned round receipt and no per-ticket m
     deliver.indexOf('## Step 4 — Post the sentinel'),
     deliver.indexOf('Then **return to Step 3 immediately.**')
   );
+  const codex = sentinel.slice(sentinel.indexOf('Codex uses `codex-delivery-host.cjs`'));
+  const claude = sentinel.slice(0, sentinel.indexOf('Codex uses `codex-delivery-host.cjs`'));
 
   assert.ok(sentinel.length > 0, 'cannot isolate the PR-sentinel launch contract');
-  assert.match(sentinel, /claude-role-host\.cjs[\s\S]*round:<digest>/,
+  assert.match(claude, /claude-role-host\.cjs[\s\S]*round:<digest>/,
     'the Claude sentinel must use the host-derived round subject');
-  assert.match(sentinel, /clear-round <round_dispatch_id>/,
+  assert.match(claude, /clear-round <round_dispatch_id>/,
     'the shared receipt must be cleared by its exact round identity');
-  assert.doesNotMatch(sentinel, /dispatch-record\.cjs mark <T> pr-sentinel/,
+  assert.doesNotMatch(claude, /dispatch-record\.cjs mark <T> pr-sentinel/,
     'a shared Claude receipt must not be written as a ticket mark');
   assert.match(sentinel, /concrete application receipt/,
     'a compliant sentinel record must require application evidence');
+  assert.match(codex, /codex-delivery-host\.cjs[\s\S]*role: "pr-sentinel"[\s\S]*ticket-mark/,
+    'Codex sentinel requests must use the host and ticket-scoped receipt path');
   assert.match(sentinel, /Do not substitute[\s\S]*unsupported/,
     'unsupported effort must be prohibited for a routed sentinel launch');
 });
 
-test('the generic Agent fallback excludes routed fixers before any side effect', () => {
+test('delivery refuses a generic Agent fallback before any side effect', () => {
   const deliver = fs.readFileSync(DOC_MARKS[0][0], 'utf8');
-  const genericFallback = deliver.slice(
-    deliver.indexOf('before starting (e.g. unavailable)'),
+  const runtimeHost = deliver.slice(
+    deliver.indexOf('## Parallel work through the selected runtime host'),
     deliver.indexOf('## Step 0 — Cold start')
   );
 
-  assert.ok(genericFallback.length > 0, 'cannot isolate the generic Agent fallback block');
-  assert.match(genericFallback, /Routed `ci-fix` and\s+`review-fix` are excluded/,
-    'routed fixers must be excluded when Workflow cannot start');
-  assert.match(genericFallback, /not eligible for that generic Agent fallback/,
-    'path selection must not restore routed fixers through generic Agent');
-  assert.match(genericFallback, /hard-refuse and return `repair blocked` before constructing a\s+prompt, using a\s+session or in-process fallback, spawning, or recording/,
-    'the generic block must refuse repair before prompt, fallback, spawn, or record');
-  assert.match(genericFallback, /`false` — force the Agent fallback only for non-repair\s+roles, and return `repair blocked`/,
-    'forcing the non-Workflow path must still block routed repair');
-  assert.doesNotMatch(genericFallback, /EVERY Agent spawn \(executor, drift-check, ci-fix\/review-fix/,
-    'the generic Agent spawn list must not include routed fixers');
+  assert.ok(runtimeHost.length > 0, 'cannot isolate the selected runtime-host contract');
+  assert.match(runtimeHost, /The command must not invoke a native Workflow\s+or Agent directly/,
+    'delivery roles must not bypass the runtime host');
+  assert.match(runtimeHost, /A nonzero exit, missing host, or invalid receipt is a refusal; do not switch\s+providers or use a session, inline, or generic-Agent fallback/,
+    'a failed host must not restore a generic Agent or session fallback');
+  assert.match(runtimeHost, /A failed\s+`ci-fix` or `review-fix` returns `repair blocked`/,
+    'failed repair launches must remain blocked before state is updated');
 });
 
 test('complete sentinel and fixer guidance require a concrete receipt, not a fallback', () => {
@@ -1964,7 +1964,7 @@ test('complete sentinel and fixer guidance require a concrete receipt, not a fal
   const deliver = fs.readFileSync(DOC_MARKS[0][0], 'utf8');
   for (const [start, end, role] of [
     ['first | progress | repeat | repeat_exhausted', "'escalate' from the agent", 'ci-fix'],
-    ['there is feedback → review-fix agent', 'the agent either fixes', 'review-fix'],
+    ['there is feedback → submit `review-fix`', 'the agent either fixes', 'review-fix'],
   ]) {
     const section = deliver.slice(deliver.indexOf(start), deliver.indexOf(end, deliver.indexOf(start)));
     assert.match(section, /explicitly applies the resolved[\s\S]*application receipt/, `${role} requires an application receipt`);
