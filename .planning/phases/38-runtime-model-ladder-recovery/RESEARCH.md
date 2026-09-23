@@ -20,15 +20,16 @@ ambiguous file. Anthropic's current hook reference documents the common
 `session_id`/`transcript_path` fields and optional SessionStart `agent_type`:
 https://code.claude.com/docs/en/hooks.
 
-The same live CLI check found that `--restricted --agent gsd-plan-checker`
-refuses because `--restricted` hides custom agents. The user verified that the
-custom role loads without `--restricted` when `--strict-mcp-config` and an
-explicit `--tools` list are retained. T-38-02 therefore needs two modes:
-ordinary launches keep `--restricted`; typed GSD launches pass the validated
-`--agent` and omit only `--restricted`, while retaining `--strict-mcp-config`,
-`--tools`, `--allowedTools`, `dontAsk`, disabled permission prompts, and the
-fail-closed worktree sandbox. Every typed result must match both the hook's
-`agent_type` and transcript `agentSetting` for the same session.
+`--restricted --agent gsd-plan-checker` alone refuses because restricted mode
+hides ambient custom agents. A later live check showed that supplying the
+installed agent definition through `--agents` permits `--agent gsd-planner`
+under `--restricted`. The scoped edit and Bash operations succeeded, outside
+writes were denied, and a project SessionStart hook was ignored. Typed launches
+therefore retain `--restricted` and the explicit tool, prompt, and sandbox
+limits. Claude Code 2.1.280 emits the loaded role in a separate
+`type: "agent-setting"` transcript record with the same `sessionId`, rather
+than in every assistant record. Every typed result must match that record and
+the hook's `agent_type`.
 
 Claude's sandbox applies to Bash but not command hooks or Read/Write/Edit tools.
 Keep SessionStart evidence outside the model's Bash writable paths and deny

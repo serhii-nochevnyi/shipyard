@@ -54,8 +54,12 @@ or a protected integration merge when repository policy requires it.
    active Claude configuration root; require a regular, non-symlink
    `<project>/<session_id>.jsonl` file, a stable flush, and complete assistant
    records with the exact `sessionId`, `message.model`, and same-record `effort`.
-   Typed GSD launches also require matching `agent_type` and assistant
-   `agentSetting`. The hook evidence file stays outside the model's writable
+   Typed GSD launches also require matching `agent_type` and a separate
+   exact-session `agent-setting.agentSetting` transcript record. The host
+   loads an allowlisted installed agent definition and passes it through
+   `--agents` with `--agent` while retaining
+   `--restricted`; ambient agent discovery under `--restricted` is unavailable.
+   The hook evidence file stays outside the model's writable
    paths and is denied to filesystem tools. Missing or malformed evidence
    fails closed; stdout and sibling-directory scans never replace the hook.
    Neither adapter may inherit a parent session model, pass policy through an

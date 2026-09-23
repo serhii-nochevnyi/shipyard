@@ -1,8 +1,8 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 362abb71cd5f0aa3cd327ea8f0d13879488fd0f6fdf121fc6df9c67913b5bbfe
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 82ada15ebba4f8d7caa0e83d7ee6db3defc11cc91a3a1430ff639af869eb126e
 phase: 20
 status: human_needed
-shipyard_source_fingerprint: 362abb71cd5f0aa3cd327ea8f0d13879488fd0f6fdf121fc6df9c67913b5bbfe
+shipyard_source_fingerprint: 82ada15ebba4f8d7caa0e83d7ee6db3defc11cc91a3a1430ff639af869eb126e
 ---
 
 # Phase 20: Autonomy of the drive-to-green loop — Verification Projection
