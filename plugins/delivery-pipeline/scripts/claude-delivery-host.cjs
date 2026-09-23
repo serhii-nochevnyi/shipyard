@@ -485,6 +485,7 @@ function applyReviewActionsWithReviewers(options, { repair, dispositions, feedba
 function executorCommitInput(options, entry) {
   const worktree = fs.realpathSync(entry.worktreePath);
   const row = graphTicket(options, entry.id, worktree);
+  canonicalPlan(options, row, entry);
   if (entry.branch !== row.branch || entry.prBase !== row.pr_base) {
     reject('executor branch or base contradicts the canonical ticket graph');
   }
@@ -498,6 +499,68 @@ function executorCommitInput(options, entry) {
     expectedSigner: signingFingerprint(worktree),
     files_modified: row.files,
   });
+}
+
+function sealPlanningResearch(input, options, scope) {
+  const { artifact, result, record } = input;
+  const match = /^((?:INV-[A-Za-z0-9-]+)):(system-state|alternatives|constraints|risks)$/.exec(artifact.subject || '');
+  if (!match || artifact.role !== 'research' || artifact.ticket !== artifact.subject
+      || !object(result) || result.id !== match[2]
+      || !['completed', 'blocked'].includes(result.status)
+      || typeof result.summary !== 'string' || Array.from(result.summary).length > 500
+      || !object(record.receipt) || record.receipt.compliance !== 'verified'
+      || typeof record.receipt.dispatch_id !== 'string' || !record.receipt.dispatch_id) {
+    reject('planning research has invalid scope or result');
+  }
+  const worktree = fs.realpathSync(scope.worktree);
+  if (fs.realpathSync(artifact.worktreePath) !== worktree) {
+    reject('planning research worktree differs from the authenticated run');
+  }
+  if (artifact.sourceRevision !== git(worktree, ['rev-parse', '--verify', 'HEAD^{commit}'])) {
+    reject('planning research revision differs from the authenticated run');
+  }
+  const investigation = path.join(artifact.worktreePath, '.planning', 'investigations', match[1]);
+  const canonicalInvestigation = path.join(worktree, '.planning', 'investigations', match[1]);
+  if (fs.realpathSync(investigation) !== canonicalInvestigation) {
+    reject('planning research directory is not canonical');
+  }
+  const file = artifact.artifactPath;
+  if (typeof file !== 'string' || !path.isAbsolute(file)
+      || path.relative(investigation, file).startsWith('..' + path.sep)
+      || path.relative(investigation, file) === '..'
+      || path.relative(investigation, file) === ''
+      || fs.realpathSync(file) !== path.join(worktree, path.relative(artifact.worktreePath, file))) {
+    reject('planning research artifact is outside its investigation');
+  }
+  const stat = fs.lstatSync(file);
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 1024 * 1024) {
+    reject('planning research artifact must be a bounded regular file');
+  }
+  const bytes = fs.readFileSync(file);
+  const after = fs.lstatSync(file);
+  if (bytes.length !== stat.size || after.size !== stat.size || after.mtimeMs !== stat.mtimeMs) {
+    reject('planning research artifact changed during validation');
+  }
+  const sha256 = crypto.createHash('sha256').update(bytes).digest('hex');
+  const index = Object.freeze({ path: file, bytes: bytes.length, content_bytes: bytes.length,
+    sha256, digest: sha256 });
+  if (!object(result.artifact) || Object.keys(index).some((key) => result.artifact[key] !== index[key])) {
+    reject('planning research producer reference differs from the artifact bytes');
+  }
+  const envelope = Object.freeze({ schema: 'shipyard.research-result.v1', version: 1,
+    role: 'research', subject: artifact.subject, source_revision: artifact.sourceRevision,
+    repository: artifact.repository, policy_hash: artifact.policyHash, status: result.status,
+    summary: result.summary, artifact_index: index, evidence_index: index });
+  const manifest = Buffer.from(JSON.stringify({ schema: 'shipyard.role-artifact.v1',
+    dispatch_id: record.receipt.dispatch_id, envelope }) + '\n');
+  const directory = path.join(storageDirectory({ ...options, scope }), 'planning-artifacts');
+  fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+  const manifestName = crypto.createHash('sha256').update(record.receipt.dispatch_id).digest('hex');
+  const manifestPath = path.join(directory, `${manifestName}.json`);
+  fs.writeFileSync(manifestPath, manifest, { flag: 'wx', mode: 0o600 });
+  return Object.freeze({ schema: 'shipyard.role-artifact.v1', artifact_ref: manifestPath,
+    artifact_digest: crypto.createHash('sha256').update(manifest).digest('hex'),
+    envelope, evidence_index: index, artifact_index: index });
 }
 
 function repairResult(input, repair, feedback) {
@@ -678,6 +741,7 @@ function createClaudeDeliveryHost(options = {}) {
   const artifactConsumer = (input) => {
     if (!object(input) || !object(input.artifact) || !object(input.record)
         || !object(input.record.receipt)) reject('artifact consumer requires a finalized dispatch record');
+    if (input.artifact.role === 'research') return sealPlanningResearch(input, options, scope);
     if (input.artifact.role === 'executor' && input.result && input.result.status === 'committed') {
       const commit = prepared.get(input.artifact.ticket);
       if (!commit) reject('executor has no trusted commit preflight');

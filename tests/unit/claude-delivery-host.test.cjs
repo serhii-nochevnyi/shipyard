@@ -1,6 +1,7 @@
 'use strict';
 
 const fs = require('node:fs');
+const crypto = require('node:crypto');
 const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
@@ -11,6 +12,7 @@ const { REFERENCE_PATHS } = require('../../plugins/delivery-pipeline/scripts/cla
 const { createRunScope } = require('../../plugins/delivery-pipeline/scripts/run-scope.cjs');
 const { createRunController } = require('../../plugins/delivery-pipeline/scripts/run-controller.cjs');
 const { transcriptEvidence } = require('./claude-test-evidence.cjs');
+const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
 
 suite('claude-delivery-host — registered runtime workflows');
 
@@ -658,6 +660,22 @@ test('refuses a ticket whose live branch contradicts the canonical graph before 
   }
 });
 
+test('executor refuses a substituted plan before dispatch', () => {
+  const fixture = repairFixture();
+  try {
+    const other = path.join(fixture.root, 'other-plan.md');
+    fs.writeFileSync(other, '# Wrong plan\n');
+    assert.throws(() => fixture.host.run('executors', { tickets: [{
+      id: 'T-38-03', branch: 'ticket/T-38-03', prBase: 'main',
+      worktreePath: fixture.worktree, planPath: other,
+      model: 'claude-opus-5-5', effort: 'medium',
+    }] }), /workflow plan differs from the canonical graph/);
+    assert.equal(fixture.launches(), 0);
+  } finally {
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
 test('investigation inlines its approved contract without exposing the plugin path', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-claude-investigation-runtime-'));
   const evidence = new WeakMap();
@@ -677,19 +695,28 @@ test('investigation inlines its approved contract without exposing the plugin pa
     git(root, '-c', 'commit.gpgsign=false', 'commit', '-qm', 'base');
     const graphDir = path.join(root, '.planning', 'graph');
     const invPath = path.join(root, '.planning', 'investigations', 'INV-TEST');
+    const artifactRoot = path.join(invPath, 'research');
     fs.mkdirSync(graphDir, { recursive: true });
-    fs.mkdirSync(invPath, { recursive: true });
+    fs.mkdirSync(artifactRoot, { recursive: true });
     fs.writeFileSync(path.join(graphDir, 'tickets.json'), '{"tickets":{}}');
+    const sourceRevision = git(root, 'rev-parse', 'HEAD');
+    const policyHash = policy.resolveDispatch({ runtime: 'claude', role: 'research', signals: { type: 'facts' } }).policy_hash;
     const controller = owner(root, root);
     const host = createClaudeDeliveryHost({
       graphDir,
+      storageRoot: path.join(root, 'host-state'),
       controller,
       runtimeHost: {
         scope: { run_id: 'run-38-03', ticket: 'T-38-03', worktree: root },
         agent(prompt, options) {
           prompts.push(prompt);
           const id = options.label.split(':').pop();
-          const result = { id, status: 'completed', summary: id, draft: `research ${id}` };
+          const file = path.join(artifactRoot, `${id}.md`);
+          const content = `# Research ${id}\n`;
+          fs.writeFileSync(file, content);
+          const sha256 = crypto.createHash('sha256').update(content).digest('hex');
+          const result = { id, status: 'completed', summary: id,
+            artifact: { path: file, bytes: Buffer.byteLength(content), content_bytes: Buffer.byteLength(content), sha256, digest: sha256 } };
           evidence.set(result, transcriptEvidence({
             launch_id: `claude-investigation-${id}`,
             applied_model: options.model,
@@ -708,12 +735,25 @@ test('investigation inlines its approved contract without exposing the plugin pa
       invId: 'INV-TEST',
       invPath,
       worktreePath: root,
+      artifactContract: 'planning.v1',
+      artifactRoot,
+      artifactPaths: Object.fromEntries(Object.keys(labels).map((id) => [id, path.join(artifactRoot, `${id}.md`)])),
+      sourceRevision,
+      repository: 'shipyard/test',
+      policyHash,
       problemStatement: 'Inspect the runtime boundary',
       referencePath: REFERENCE_PATHS['inv-research'],
       lines: Object.entries(labels).map(([id, label]) => ({ id, label, model: 'claude-opus-5-5', effort: 'medium', signals: { type: 'facts' } })),
     });
     assert.equal(result.length, 4);
     assert.equal(prompts.length, 4);
+    assert.ok(result.every((line) => line.status === 'completed' && line.artifact_index && line.artifact_digest));
+    for (const line of result) {
+      assert.equal(line.artifact_index.sha256,
+        crypto.createHash('sha256').update(fs.readFileSync(line.artifact_index.path)).digest('hex'));
+      assert.equal(line.artifact_digest,
+        crypto.createHash('sha256').update(fs.readFileSync(line.artifact_ref)).digest('hex'));
+    }
     for (const prompt of prompts) {
       assert.match(prompt, /Research contract:/);
       assert.ok(!prompt.includes(REFERENCE_PATHS['inv-research']));
