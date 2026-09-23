@@ -8,6 +8,7 @@ host="$repo_root/plugins/delivery-pipeline/scripts/claude-role-host.cjs"
 mode=""
 role=""
 scratch_arg=""
+phase_arg=""
 while (($#)); do
   case "$1" in
     --capability-only)
@@ -30,20 +31,33 @@ while (($#)); do
       scratch_arg="$2"
       shift 2
       ;;
+    --phase)
+      (($# >= 2)) || { echo "--phase requires a value" >&2; exit 2; }
+      phase_arg="$2"
+      shift 2
+      ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
 
 if [[ "$mode" == capability ]]; then
-  [[ -z "$role" && -z "$scratch_arg" ]] || { echo "capability-only accepts no role or worktree" >&2; exit 2; }
+  [[ -z "$role" && -z "$scratch_arg" && -z "$phase_arg" ]] || { echo "capability-only accepts no role, phase, or worktree" >&2; exit 2; }
   node "$host" --capability-only
   exit $?
 fi
 
-[[ "$mode" == live && "$role" == arch-review && -n "$scratch_arg" ]] || {
-  echo "usage: claude-delivery-roles-smoke.sh --capability-only | --live --role arch-review --worktree <new-temp-path>" >&2
+[[ "$mode" == live && -n "$scratch_arg" ]] || {
+  echo "usage: claude-delivery-roles-smoke.sh --capability-only | --live --role arch-review --worktree <new-temp-path> | --live --role pr-sentinel --phase <phase-dir-or-number> --worktree <new-temp-path>" >&2
   exit 2
 }
+if [[ "$role" == arch-review ]]; then
+  [[ -z "$phase_arg" ]] || { echo "arch-review does not accept --phase" >&2; exit 2; }
+elif [[ "$role" == pr-sentinel ]]; then
+  [[ -n "$phase_arg" ]] || { echo "pr-sentinel requires --phase" >&2; exit 2; }
+else
+  echo "live smoke role must be arch-review or pr-sentinel" >&2
+  exit 2
+fi
 
 source_root="$repo_root"
 source_branch="$(git -C "$source_root" symbolic-ref --quiet --short HEAD)"
@@ -96,10 +110,17 @@ fi
 
 smoke_tmp="$(mktemp -d "$tmp_root/shipyard-role-smoke.XXXXXX")"
 args_file="$smoke_tmp/request.json"
-node -e 'const fs=require("node:fs"); fs.writeFileSync(process.argv[1], JSON.stringify({schema:"shipyard.claude-role-request.v1",role:"arch-review",worktree:process.argv[2]}), {mode:0o600})' "$args_file" "$scratch_root"
+node -e 'const fs=require("node:fs"); const request={schema:"shipyard.claude-role-request.v1",role:process.argv[3],worktree:process.argv[2]}; if(request.role==="pr-sentinel") request.phase=process.argv[4]; fs.writeFileSync(process.argv[1], JSON.stringify(request), {mode:0o600})' "$args_file" "$scratch_root" "$role" "$phase_arg"
 result_file="$smoke_tmp/result.json"
-if node "$host" --args-file "$args_file" >"$result_file" 2>"$smoke_tmp/error"; then
-  node -e 'const fs=require("node:fs"); const r=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); process.stdout.write(JSON.stringify({status:"passed",role:r.role,pr:r.pr,model:r.dispatch.receipt.applied_model,effort:r.dispatch.receipt.applied_effort,session_id:r.dispatch.receipt.session_id,dispatch_id:r.dispatch.receipt.dispatch_id,artifact:r.artifact})+"\n")' "$result_file"
+run_host() {
+  if [[ "$role" == pr-sentinel ]]; then
+    SHIPYARD_CLAUDE_ROLE_SMOKE=read-only node "$host" --args-file "$args_file"
+  else
+    node "$host" --args-file "$args_file"
+  fi
+}
+if run_host >"$result_file" 2>"$smoke_tmp/error"; then
+  node -e 'const fs=require("node:fs"); const r=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); process.stdout.write(JSON.stringify({status:"passed",role:r.role,pr:r.pr||null,phase:r.phase||null,round:r.round||null,ticket_set_digest:r.ticket_set_digest||null,model:{applied:r.dispatch.receipt.applied_model,observed:r.dispatch.receipt.observed_model},effort:{applied:r.dispatch.receipt.applied_effort,observed:r.dispatch.receipt.observed_effort},session_id:r.dispatch.receipt.session_id,dispatch_id:r.dispatch.receipt.dispatch_id,artifact:r.artifact})+"\n")' "$result_file"
 else
   error="$(head -c 1200 "$smoke_tmp/error" | tr '\n' ' ')"
   if [[ "$error" == *RUNTIME_UNAVAILABLE* || "$error" == *CREDENTIALS_UNAVAILABLE* || "$error" == *runtime\ unavailable* ]]; then

@@ -290,31 +290,29 @@ SENTINEL    ci-fix / base-merge / review-fix / arch-review / undraft / merge
 
 **Post the guard, then keep moving. Never wait for it.**
 
-- **Background sentinel (where the typed host explicitly applies both resolved
-  values).** After Step 3 publishes PRs, dispatch ONE guard through the mandatory
-  boundary with an application receipt, with the prompt
-  `${CLAUDE_PLUGIN_ROOT}/references/pr-sentinel.md` plus the guarded ticket list
-  (id, PR, branch, worktree path, repo, base, plan path), the absolute plugin
-  scripts path, the project's `.planning/graph` path and `maxAttempts`:
+- **Background sentinel.** After Step 3 publishes PRs, run one host for the
+  selected phase. The Workflow runtime uses the authenticated role host; it derives the full
+  live PR set from the canonical graph and GitHub, resolves Sonnet/high through
+  ADR-014, and reserves one guard identity before starting the model. Do not
+  construct a caller-owned ticket list or call native Workflow for this shared
+  role:
 
-  ```text
-  boundary.dispatch(
-    { runtime, role: "pr-sentinel",
-      signals: { risk, type, checkpoint, critical, signatureState, priorApplied },
-      dispatch_id },
-    { promptPath, guardedTickets, scriptsPath, graphPath, maxAttempts,
-      planDefectSignatures }
-  )
+  ```json
+  {"schema":"shipyard.claude-role-request.v1","role":"pr-sentinel","worktree":"<absolute project worktree>","phase":"<phase directory>"}
   ```
 
-  The resolver fixes the sentinel at Luna/medium on Codex and Sonnet/high on the
-  Workflow runtime; guard risk, checkpoint, signature, and prior-applied facts are retained
-  in the receipt but cannot promote this fixed role. Codex validates the generated
-  `shipyard-pr-sentinel.toml`; the Workflow runtime passes its native alias and explicit effort.
-  A missing typed host, effort, or verified receipt is a refusal, not permission to
-  inherit the current guard or session. Re-post a guard for PRs opened after it
-  started through the same boundary (or add them to the existing typed guard
-  context); do not leave a PR unguarded.
+  Write that request to a mode-0600 args file and run
+  `node ${CLAUDE_PLUGIN_ROOT}/scripts/claude-role-host.cjs --args-file <args-file>`
+  in the background. The boundary receipt and complete transcript are validated
+  before the reservation becomes one durable round row. The front projects that
+  one guard to each unchanged member and counts it once. Clear the exact returned
+  `round.dispatch_id` with `dispatch-record.cjs clear-round` when the report
+  returns. A changed or merged member expires independently; a new PR belongs to
+  a fresh round.
+
+  Codex keeps its native Luna/medium dispatch and its validated ticket mark path.
+  A missing typed host, explicit effort, or verified receipt is a refusal, not
+  permission to inherit the current guard or session.
 - **Fallback: a duty pass every round (when no typed background host exists).** The
   mandate does not change: at the TOP of each round, before taking new work, run
   `sentinel.cjs duty` and serve every actionable item — ci-fix, base-merge,
@@ -2057,43 +2055,48 @@ File conflicts between parallel tickets are ruled out by Gate 2.
 
 ## Step 4 — Post the sentinel; the babysit loop is ITS contract
 
-As soon as Phase C has opened PRs, hand them to the guard and go back to Step 3
-for the cascade (see "The PR sentinel" above). Use the one boundary; the guard
-is not a separate model-resolution path:
+As soon as Phase C has opened PRs, launch the guard and return to Step 3 for
+the cascade (see "The PR sentinel" above). The Workflow runtime's `pr-sentinel` request is
+host-owned: `claude-role-host.cjs` derives the phase's exact open PR set, creates
+the `round:<digest>` subject, resolves the fixed Sonnet/high selection, and
+crosses resolve → validate → launch → receipt. It reserves one shared identity
+before launch so `front` and the stop gate see the guard while it runs. On
+successful completion the host replaces that reservation with one authenticated
+round row and one journal event; `activeDispatches` projects it only to unchanged
+members, and the front counts it once. A merge, head change, or base move expires
+that member without releasing the others.
 
-```text
-boundary.dispatch(
-  { runtime, role: "pr-sentinel",
-    signals: { risk, type, checkpoint, critical, signatureState, priorApplied },
-    dispatch_id },
-  { promptPath: "${CLAUDE_PLUGIN_ROOT}/references/pr-sentinel.md",
-    ticket: roundSubject,
-    guardedTickets: [{ ticket, pr, branch, worktreePath, repo, base, planPath }],
-    scriptsPath, graphPath, maxAttempts, planDefectSignatures }
-)
+Run the Workflow runtime host from a clean phase worktree using a mode-0600 request file:
+
+```json
+{"schema":"shipyard.claude-role-request.v1","role":"pr-sentinel","worktree":"<absolute project worktree>","phase":"<phase directory>"}
 ```
 
-The boundary resolves the fixed Codex Luna/medium or Workflow runtime Sonnet/high
-selection, validates the generated `shipyard-pr-sentinel.toml` or the native
-Workflow-runtime alias plus explicit effort, launches the typed guard, and returns a
-verified receipt. This round launch is the staged T-33-08 interface: the
-`round:<digest>` subject is required for the trusted consumer, but the current
-`dispatch-record.cjs` overlay remains ticket-bound. Do not run a shared round
-launch through the current per-ticket reconciliation path until T-33-08 supplies
-the authenticated membership bridge. After that bridge exists, only after the
-receipt does `dispatch-record.cjs mark <T> pr-sentinel --boundary-store <receipt-store> --dispatch-id <dispatch-id> --task-level <task-level> --graph <project>/.planning/graph` apply to a corresponding ticket. Never pass a round receipt to a per-ticket mark or create a mark for a refused or phantom launch. Clear each
-record when the guard's report comes back; a `pr-sentinel` record also lifts when
-the PR merges or its base moves. New PRs get the same boundary call or the
-existing typed guard context, never an inherited guard/session.
+```bash
+node ${CLAUDE_PLUGIN_ROOT}/scripts/claude-role-host.cjs --args-file <args-file>
+```
 
-The mandatory boundary must support explicit model and effort application and return a concrete application receipt. Otherwise hard-refuse before constructing a prompt, spawning, or recording. Do not substitute `effort_applied=unsupported`, `unknown`, or absent evidence; Agent, prompt, session, or in-process fallback cannot authorize a routed launch.
+Do not pass a caller-owned member list, invoke native Workflow, or call
+`dispatch-record.cjs mark`/`mark-many` for this shared Workflow runtime receipt. When the
+guard reports, clear only its returned id with
+`dispatch-record.cjs clear-round <round_dispatch_id> --graph
+<project>/.planning/graph`. A stale clear leaves newer ownership intact. A PR
+opened after launch belongs to a fresh round; the host refuses a result if the
+round's membership changed before it was reconciled.
+
+Codex continues to use its resolved Luna/medium dispatch and validated ticket
+mark path. Every model-backed route must apply explicit model and effort and
+return a concrete application receipt; otherwise refuse before accepting an
+actionable result. Do not substitute `unsupported`, `unknown`, or absent effort
+evidence, or use an inherited Agent, prompt, or session as a routed launch.
 When no compliant background surface exists, use the documented inline sentinel
-duty pass. Each ticket added to a running guard gets a mark with that guard's
-same launch id; a newly launched guard has its own id.
+duty pass. A round's membership is immutable: after its report returns,
+clear its exact round id before launching a new round for newly opened PRs.
+Codex continues to use its own validated dispatch and ticket-record path.
 
 Then **return to Step 3 immediately.** Do not wait for the guard, do not watch
 CI, do not re-read the PR yourself. New PRs opened later either go to a fresh
-guard or to the running one via `SendMessage`.
+guard or remain on the main loop's next duty pass until the current guard clears.
 
 The loop below IS the sentinel's contract (`references/pr-sentinel.md` states the
 same rules for the agent). You run it YOURSELF only on the fallback path — no

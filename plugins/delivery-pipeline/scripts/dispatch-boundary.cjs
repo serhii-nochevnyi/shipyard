@@ -928,6 +928,23 @@ function ticketFromContext(context) {
   return ticket;
 }
 
+function subjectKindFromContext(context, role, ticket) {
+  const kind = isObject(context) && context.subject_kind !== undefined
+    ? context.subject_kind
+    : 'ticket';
+  if (kind === 'ticket') {
+    if (typeof ticket === 'string' && ticket.startsWith('round:')) {
+      refuse('INVALID_INPUT', 'round subjects require subject_kind round');
+    }
+    return kind;
+  }
+  if (kind !== 'round' || role !== 'pr-sentinel'
+      || typeof ticket !== 'string' || !/^round:[a-f0-9]{64}$/.test(ticket)) {
+    refuse('INVALID_INPUT', 'round subjects require pr-sentinel and a canonical round digest');
+  }
+  return kind;
+}
+
 function newDispatchId() {
   const suffix = typeof crypto.randomUUID === 'function'
     ? crypto.randomUUID()
@@ -1732,7 +1749,8 @@ function createDispatchBoundary(options = {}) {
     }
     unboundHandoff.guardUnbound({
       ...(context && context.phase !== undefined ? { phase: context.phase } : {}),
-      ...(ticket !== undefined ? { tickets: [ticket] } : {}),
+      ...(ticket !== undefined && !(isObject(context) && context.subject_kind === 'round')
+        ? { tickets: [ticket] } : {}),
     });
   }
   const trustedReceipts = new Map();
@@ -2148,6 +2166,15 @@ function createDispatchBoundary(options = {}) {
     }
     const trusted = trustedRecordFor(options.recorder, dispatchId);
     if (!trusted) refuse('UNVERIFIED_RECEIPT', 'dispatch has no current compliant applied receipt', { dispatch_id: dispatchId });
+    const subjectKind = subjectKindFromContext(context, trusted.record && trusted.record.role, ticket);
+    const recordedSubjectKind = trusted.record && trusted.record.subject_kind || 'ticket';
+    if (recordedSubjectKind !== subjectKind) {
+      refuse('NONCOMPLIANT_RECEIPT', 'dispatch receipt subject kind does not match the reconciliation subject', {
+        expected_subject_kind: subjectKind,
+        actual_subject_kind: recordedSubjectKind,
+        dispatch_id: dispatchId,
+      });
+    }
     if (!trusted.record || trusted.record.ticket !== ticket) {
       refuse(
         'NONCOMPLIANT_RECEIPT',
@@ -2159,6 +2186,7 @@ function createDispatchBoundary(options = {}) {
     return deepFreeze(snapshot({
       dispatch_id: dispatchId,
       ticket,
+      subject_kind: subjectKind,
       policy_version: resolution.policy_version,
       policy_hash: resolution.policy_hash,
       role: resolution.role,
@@ -2199,6 +2227,7 @@ function createDispatchBoundary(options = {}) {
       }
     }
     const ticket = ticketFromContext(context);
+    const subjectKind = subjectKindFromContext(context, input.role, ticket);
     guardUnboundDispatch(context, ticket);
     const runtime = typeof input.runtime === 'string' ? input.runtime.trim() : input.runtime;
     const adapter = adapterFor(adapters, runtime);
@@ -2299,6 +2328,7 @@ function createDispatchBoundary(options = {}) {
       const baseTrace = {
         dispatch_id: validatedResolution.dispatch_id,
         ...(ticket !== undefined ? { ticket } : {}),
+        ...(subjectKind === 'round' ? { subject_kind: subjectKind } : {}),
         policy_version: validatedResolution.policy_version,
         policy_hash: validatedResolution.policy_hash,
         runtime: validatedResolution.runtime,

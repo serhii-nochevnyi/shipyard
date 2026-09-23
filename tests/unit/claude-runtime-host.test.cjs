@@ -253,6 +253,37 @@ test('native launcher ignores conflicting stdout model and effort and records tr
   }
 });
 
+test('read-only smoke removes shell and edit tools from the Claude launch', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-claude-readonly-smoke-'));
+  const projects = path.join(root, 'claude', 'projects');
+  const transcript = writeSession(projects, fixtureRecords());
+  let capturedArgs;
+  try {
+    const launch = createClaudeCliLauncher({
+      scope: { ...SCOPE, worktree: root },
+      transcriptDir: null,
+      transcriptPollMs: 5,
+      uuid: () => SESSION,
+      env: { CLAUDE_CONFIG_DIR: path.join(root, 'claude') },
+      spawn: (_executable, args) => {
+        capturedArgs = args;
+        captureConfiguredSessionStart(args, transcript);
+        return childFor(stream());
+      },
+    });
+    await launch('run the read-only sentinel smoke', {
+      model: 'claude-opus-5-5', effort: 'low', readOnly: true,
+    });
+    const tools = capturedArgs[capturedArgs.indexOf('--tools') + 1];
+    assert.equal(tools, 'Read,Write,Glob,Grep');
+    assert.equal(capturedArgs[capturedArgs.indexOf('--allowedTools') + 1], tools);
+    assert.equal(tools.includes('Bash'), false);
+    assert.equal(tools.includes('Edit'), false);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('waits for a flushed transcript and ignores stdout-only model and effort', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-claude-flush-'));
   const projects = path.join(root, 'projects');

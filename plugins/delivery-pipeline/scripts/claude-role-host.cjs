@@ -22,8 +22,9 @@ const DIFF_MAX_BYTES = 1024 * 1024;
 const PROMPT_MAX_BYTES = 1500000;
 const RESULT_MAX_BYTES = 128 * 1024;
 const PACKET_MAX_TOKENS = 360000;
-const ROLES = Object.freeze(['arch-review', 'integrator']);
+const ROLES = Object.freeze(['arch-review', 'integrator', 'pr-sentinel']);
 const ARCH_EVIDENCE = '.shipyard-arch-review-evidence.md';
+const SENTINEL_EVIDENCE = '.shipyard-sentinel-evidence.md';
 
 function object(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -61,7 +62,7 @@ function parseRequest(value) {
     : new Set(['schema', 'role', 'worktree', 'phase', 'signals']);
   for (const key of Object.keys(value)) if (!allowed.has(key)) reject(`request field ${key} is not permitted`);
   if (role === 'arch-review' && value.phase !== undefined) reject('architecture review cannot specify a phase');
-  if (role === 'integrator' && (value.ticket !== undefined || value.pr !== undefined)) reject('integration subject is derived from the canonical phase ticket set');
+  if (role !== 'arch-review' && (value.ticket !== undefined || value.pr !== undefined)) reject(`${role} subject is derived from the canonical phase ticket set`);
   const worktree = safeText(value.worktree, 'worktree', 2048);
   if (!path.isAbsolute(worktree)) reject('worktree must be an absolute path');
   let realWorktree;
@@ -141,7 +142,8 @@ function graphDirectory(options, projectRoot) {
 function graphData(options, root) {
   const directory = graphDirectory(options, root);
   const tickets = readJsonFile(path.join(directory, 'tickets.json'), 'ticket graph', 8 * 1024 * 1024);
-  const state = readJsonFile(path.join(directory, 'delivery-state.json'), 'delivery state', 16 * 1024 * 1024);
+  const stateData = readJsonFile(path.join(directory, 'delivery-state.json'), 'delivery state', 16 * 1024 * 1024);
+  const state = object(stateData) && object(stateData.tickets) ? stateData.tickets : stateData;
   if (!object(tickets) || !object(tickets.tickets) || !object(state)) reject('canonical graph data has an invalid shape');
   return Object.freeze({ directory, tickets: tickets.tickets, state });
 }
@@ -464,6 +466,119 @@ function prepareIntegrator(options, request, canonical, graph) {
     evidencePath: `.planning/phases/${phase}/INTEGRATION.md` });
 }
 
+function prepareSentinel(options, request, canonical, graph) {
+  const selection = phaseSelection(graph, request.phase);
+  const readOnlySmoke = options.readOnlySmoke === true;
+  const defaultBranch = baseDefaultBranch(options, canonical.worktree, canonical.projectRoot);
+  const artifactBase = branchOid(options, canonical.worktree, defaultBranch);
+  const snapshots = [];
+  const repoPrs = new Set();
+  for (const item of selection.rows) {
+    const row = rowFor(graph, item.id);
+    const state = graph.state[item.id];
+    const listed = listPullRequests(options, canonical.worktree, row.branch, row.repo || null, 'open');
+    if (!Array.isArray(listed)) reject(`GitHub returned an invalid PR list for ${item.id}`);
+    const candidates = listed.filter((pr) => object(pr) && pr.headRefName === row.branch && pr.state === 'OPEN');
+    if (!state || state.status !== 'pr-open') {
+      if (candidates.length) reject(`${item.id} has an open PR but delivery state does not mark it pr-open`, 'STALE_CONTEXT');
+      continue;
+    }
+    if (!Number.isSafeInteger(state.pr) || !/^[a-f0-9]{40}$/i.test(state.head_sha || '')
+        || typeof state.pr_base !== 'string') {
+      reject(`${item.id} delivery state lacks its PR, head, or base identity`, 'STALE_CONTEXT');
+    }
+    if (candidates.length !== 1 || candidates[0].number !== state.pr) {
+      reject(`${item.id} does not have exactly one live PR matching delivery state`, 'STALE_CONTEXT');
+    }
+    const live = getPullRequest(options, canonical.worktree, state.pr, row.repo || null);
+    if (!object(live) || live.number !== state.pr || live.state !== 'OPEN'
+        || live.headRefName !== row.branch || live.headRefOid !== state.head_sha
+        || live.baseRefName !== state.pr_base || !/^[a-f0-9]{40}$/i.test(live.baseRefOid || '')) {
+      reject(`${item.id} live PR identity differs from delivery state`, 'STALE_CONTEXT');
+    }
+    const baseRef = safeBranch(live.baseRefName, `${item.id} PR base`);
+    branchOid(options, canonical.worktree, baseRef, live.baseRefOid);
+    const repoKey = `${row.repo || ''}#${live.number}`;
+    if (repoPrs.has(repoKey)) reject(`PR #${live.number} is assigned to more than one round ticket`);
+    repoPrs.add(repoKey);
+    snapshots.push({ id: item.id, row, live, baseRef, baseOid: live.baseRefOid.toLowerCase() });
+  }
+  snapshots.sort((a, b) => a.id.localeCompare(b.id));
+  if (!snapshots.length) reject(`phase ${selection.phase} has no live open PRs for a sentinel round`);
+  const ticketSet = snapshots.map(({ id, row, live, baseRef, baseOid }) => ({
+    id,
+    pr: live.number,
+    head: live.headRefOid.toLowerCase(),
+    base: `${baseRef}#${baseOid}`,
+    branch: row.branch,
+  }));
+  const ticketSetDigest = sha(JSON.stringify(ticketSet));
+  const subject = `round:${ticketSetDigest}`;
+  const rows = snapshots.map(({ id, row }) => ({ id, row }));
+  const sources = sourceReferences(canonical.worktree, graph, rows);
+  const reference = loadClaudeReferenceContent('pr-sentinel');
+  const phaseContracts = sources.plans.map((plan) => ({ ticket: plan.id, path: plan.path,
+    acceptance: plan.acceptance, verification: plan.verification, sha256: sha(plan.content) }));
+  const guardedTickets = snapshots.map(({ id, row, live, baseRef, baseOid }) => ({
+    ticket: id,
+    pr: live.number,
+    branch: row.branch,
+    repo: row.repo || null,
+    base: baseRef,
+    base_oid: baseOid,
+    head: live.headRefOid.toLowerCase(),
+    plan_path: row.plan,
+  }));
+  const prState = snapshots.map(({ id, row, live, baseRef, baseOid }) => ({
+    ticket: id,
+    pr: live.number,
+    state: live.state,
+    draft: live.isDraft === true,
+    branch: row.branch,
+    head: live.headRefOid.toLowerCase(),
+    base: baseRef,
+    base_oid: baseOid,
+  }));
+  const ciReviewObservations = snapshots.map(({ id, live }) => ({
+    ticket: id,
+    pr: live.number,
+    review_decision: live.reviewDecision || null,
+    checks: graph.state[id].checks || null,
+  }));
+  const roleContext = {
+    phase: selection.phase,
+    phase_number: selection.phaseNumber,
+    integration_base: { ref: artifactBase.ref, commit: artifactBase.oid },
+    phase_contracts: phaseContracts,
+    ticket_set: ticketSet,
+    ticket_set_digest: ticketSetDigest,
+    guarded_tickets: guardedTickets,
+    pr_state: prState,
+    ci_review_observations: ciReviewObservations,
+    project_root: canonical.projectRoot,
+    graph_path: graph.directory,
+    scripts_path: path.resolve(__dirname),
+    max_attempts: 5,
+    plan_defect_signatures: 3,
+    reference_content: reference,
+    ...(readOnlySmoke ? { execution_mode: 'read-only-smoke' } : {}),
+  };
+  const plan = { id: subject, path: sources.plans[0].path,
+    content: sources.plans.map((item) => item.content).join('\n'),
+    acceptance: phaseContracts.flatMap((item) => item.acceptance),
+    verification: phaseContracts.flatMap((item) => item.verification) };
+  const packet = buildPacket(canonical, 'pr-sentinel', subject, sources, plan, roleContext);
+  const pullRequests = snapshots.map(({ live }) => live);
+  const signals = observedSignals(request, rows, pullRequests,
+    estimatePromptTokens('pr-sentinel', packet, plan, null, readOnlySmoke));
+  const prompt = makePrompt('pr-sentinel', subject, packet, readOnlySmoke);
+  return Object.freeze({ role: 'pr-sentinel', ticket: subject, phase: selection.phase,
+    phaseNumber: selection.phaseNumber, phaseTicketIds: selection.rows.map(({ id }) => id),
+    ticketSet, ticketSetDigest, base: artifactBase.ref, baseCommit: artifactBase.oid,
+    livePullRequests: pullRequests, canonical, graph, rows, sources, packet, prompt, signals, readOnlySmoke,
+    evidencePath: SENTINEL_EVIDENCE });
+}
+
 function buildPacket(canonical, role, subject, sources, plan, roleContext) {
   const packet = buildContextPacket({
     root: canonical.worktree,
@@ -484,10 +599,14 @@ function buildPacket(canonical, role, subject, sources, plan, roleContext) {
   return packet;
 }
 
-function makePrompt(role, subject, packet) {
+function makePrompt(role, subject, packet, readOnlySmoke = false) {
   const instruction = role === 'arch-review'
     ? 'Return one JSON object matching the arch-review reference schema. Review only the authenticated PR and use the exact reviewed head and merge-base tree.'
-    : 'Return one JSON object matching the integrator reference schema. Judge the complete authenticated phase ticket set and combined diff.';
+    : role === 'integrator'
+      ? 'Return one JSON object matching the integrator reference schema. Judge the complete authenticated phase ticket set and combined diff.'
+    : readOnlySmoke
+      ? 'Return one JSON object matching the pr-sentinel reference schema. This is a read-only runtime smoke: do not perform any PR duty or attempt a mutation; return awaiting-human, an empty performed list, and one refused read-only-smoke duty for every guarded ticket.'
+      : 'Return one JSON object matching the pr-sentinel reference schema. Perform the documented duties for every authenticated open PR and report the complete ticket set.';
   const prompt = [
     'You are running as a fixed Shipyard judgement role.',
     packet.role_context.reference_content,
@@ -503,9 +622,9 @@ function makePrompt(role, subject, packet) {
   return prompt;
 }
 
-function estimatePromptTokens(role, packet, plan, pr) {
+function estimatePromptTokens(role, packet, plan, pr, readOnlySmoke = false) {
   const subject = role === 'arch-review' ? `ticket=${plan.id};pr=${pr.number}` : plan.id;
-  return Math.ceil(Buffer.byteLength(makePrompt(role, subject, packet), 'utf8') / 4);
+  return Math.ceil(Buffer.byteLength(makePrompt(role, subject, packet, readOnlySmoke), 'utf8') / 4);
 }
 
 function prepareInvocation(options, request) {
@@ -514,7 +633,9 @@ function prepareInvocation(options, request) {
   const rows = requestRows(request, graph, canonical);
   return request.role === 'arch-review'
     ? prepareArch(options, request, canonical, graph, rows)
-    : prepareIntegrator(options, request, canonical, graph);
+    : request.role === 'integrator'
+      ? prepareIntegrator(options, request, canonical, graph)
+      : prepareSentinel(options, request, canonical, graph);
 }
 
 function resultFrom(output) {
@@ -534,7 +655,7 @@ function validateResult(prepared, result) {
   if (prepared.role === 'arch-review') {
     if (result.id !== prepared.ticket || result.pr !== prepared.pr || result.head !== prepared.canonical.head
         || result.base_tree !== prepared.mergeBaseTree) reject('architecture result identity differs from the authenticated PR snapshot', 'ARTIFACT_IDENTITY_MISMATCH');
-  } else {
+  } else if (prepared.role === 'integrator') {
     if (result.phase !== prepared.phase || result.head !== prepared.canonical.head
         || result.head_tree !== prepared.canonical.headTree || result.base !== prepared.base
         || result.base_tree !== prepared.defaultBaseTree
@@ -542,6 +663,17 @@ function validateResult(prepared, result) {
         || result.ticket_set_digest !== prepared.ticketSetDigest) {
       reject('integrator result identity differs from the authenticated phase snapshot', 'ARTIFACT_IDENTITY_MISMATCH');
     }
+  } else if (result.outcome !== 'clear' && result.outcome !== 'blocked' && result.outcome !== 'awaiting-human') {
+    reject('sentinel result has an unsupported outcome', 'INVALID_RESULT');
+  } else if (canonicalJson(result.ticket_set) !== canonicalJson(prepared.ticketSet)
+      || result.ticket_set_digest !== prepared.ticketSetDigest
+      || result.head !== prepared.canonical.head
+      || result.head_tree !== prepared.canonical.headTree) {
+    reject('sentinel result identity differs from the authenticated round snapshot', 'ARTIFACT_IDENTITY_MISMATCH');
+  }
+  if (prepared.readOnlySmoke && (result.outcome !== 'awaiting-human'
+      || !Array.isArray(result.performed) || result.performed.length !== 0)) {
+    reject('read-only sentinel smoke must report awaiting-human without performing duties', 'INVALID_RESULT');
   }
   return result;
 }
@@ -570,12 +702,14 @@ function storageDirectory(options, runId, worktree) {
 
 function runtimeFor(options, scope, controller, storage) {
   if (typeof options.createRuntimeHost === 'function') return options.createRuntimeHost({ scope, controller,
+    readOnlySmoke: options.readOnlySmoke === true,
     recorderDir: path.join(storage, 'receipts'), transcriptDir: path.join(storage, 'transcripts') });
   return createClaudeRuntimeHost({ scope, controller,
-    recorderDir: path.join(storage, 'receipts'), transcriptDir: path.join(storage, 'transcripts') });
+    recorderDir: path.join(storage, 'receipts'), transcriptDir: path.join(storage, 'transcripts'),
+    readOnlySmoke: options.readOnlySmoke === true });
 }
 
-function buildBoundary(prepared, runtime, dispatchId) {
+function buildBoundary(prepared, runtime, dispatchId, ownerId) {
   if (!object(runtime) || typeof runtime.agent !== 'function' || typeof runtime.applicationEvidence !== 'function'
       || !object(runtime.capabilities) || !isDurableRecorder(runtime.recorder)) {
     reject('runtime host lacks agent, exact application evidence, capabilities, or durable recorder', 'RUNTIME_UNAVAILABLE');
@@ -583,31 +717,70 @@ function buildBoundary(prepared, runtime, dispatchId) {
   if (!runtime.scope || path.resolve(runtime.scope.worktree || '') !== prepared.canonical.worktree) reject('runtime scope differs from the authenticated worktree');
   let launched = null;
   let launchCount = 0;
+  let hostOwnedFiles = new Map();
   const adapter = createClaudeDispatchAdapter({
     capabilities: runtime.capabilities,
     host: {
       async launch(selection, context) {
         launchCount += 1;
         if (launchCount !== 1 || context.ticket !== prepared.ticket || context.role !== prepared.role
+            || (prepared.role === 'pr-sentinel' && context.subject_kind !== 'round')
             || context.contextPacket !== prepared.packet || context.sourceRevision !== prepared.canonical.head) {
           reject('boundary launch context differs from the authenticated role request', 'CONFLICTING_OVERRIDE');
         }
-        const child = await runtime.agent(prepared.prompt, { model: selection.model, effort: selection.effort });
+        if (prepared.role === 'pr-sentinel') {
+          require('./dispatch-record.cjs').reserveRound(
+            path.resolve(prepared.graph.directory, '..', '..'),
+            { dispatchId, phase: prepared.phase, phaseNumber: prepared.phaseNumber,
+              ticketSet: prepared.ticketSet, ticketSetDigest: prepared.ticketSetDigest, agentId: ownerId },
+          );
+          hostOwnedFiles = roundOwnedFileDigests(prepared);
+        }
+        const child = await runtime.agent(prepared.prompt, {
+          model: selection.model,
+          effort: selection.effort,
+          ...(prepared.readOnlySmoke ? { readOnly: true } : {}),
+        });
         launched = child;
         return runtime.applicationEvidence({ result: child });
       },
     },
   });
   return { boundary: createDispatchBoundary({ adapters: { claude: adapter }, recorder: runtime.recorder, cwd: prepared.canonical.worktree }),
-    getLaunched: () => launched, getLaunchCount: () => launchCount };
+    getLaunched: () => launched, getLaunchCount: () => launchCount,
+    getHostOwnedFiles: () => hostOwnedFiles };
 }
 
-function assertEvidenceOnlyChanges(options, prepared) {
+function roundOwnedFileDigests(prepared) {
+  const graphRoot = path.resolve(prepared.graph.directory);
+  const digests = new Map();
+  for (const relative of ['dispatches.json', 'delivery-front.json']) {
+    const file = path.join(graphRoot, relative);
+    let stat;
+    try { stat = fs.lstatSync(file); } catch { continue; }
+    if (!stat.isFile() || stat.isSymbolicLink()) reject(`host-owned graph file is not regular: ${relative}`);
+    digests.set(`.planning/graph/${relative}`, sha(fs.readFileSync(file)));
+  }
+  return digests;
+}
+
+function assertEvidenceOnlyChanges(options, prepared, hostOwnedFiles = new Map()) {
   const changed = git(options, prepared.canonical.worktree, ['diff', '--name-only', '-z', 'HEAD'], 256 * 1024, true)
     .split('\0').filter(Boolean);
   const untracked = git(options, prepared.canonical.worktree, ['ls-files', '--others', '--exclude-standard', '-z'], 256 * 1024, true)
     .split('\0').filter(Boolean);
-  const unexpected = [...new Set([...changed, ...untracked])].filter((file) => file !== prepared.evidencePath);
+  const unexpected = [...new Set([...changed, ...untracked])].filter((file) => {
+    if (file === prepared.evidencePath) return false;
+    const digest = hostOwnedFiles.get(file);
+    if (digest === undefined) return true;
+    const absolute = path.join(prepared.canonical.worktree, file);
+    try {
+      const stat = fs.lstatSync(absolute);
+      return !stat.isFile() || stat.isSymbolicLink() || sha(fs.readFileSync(absolute)) !== digest;
+    } catch {
+      return true;
+    }
+  });
   if (unexpected.length) reject(`role changed paths outside its evidence file: ${unexpected.slice(0, 8).join(', ')}`, 'WORKTREE_MUTATED');
   if (git(options, prepared.canonical.worktree, ['rev-parse', '--verify', 'HEAD^{commit}']) !== prepared.canonical.head
       || git(options, prepared.canonical.worktree, ['symbolic-ref', '--quiet', '--short', 'HEAD']) !== prepared.canonical.branch) {
@@ -628,6 +801,66 @@ function revalidateLiveInputs(options, prepared) {
     }
     branchOid(options, worktree, live.baseRefName, live.baseRefOid);
     return;
+  }
+  if (prepared.role === 'pr-sentinel') {
+    const currentGraph = graphData(options, prepared.canonical.projectRoot);
+    const currentSelection = phaseSelection(currentGraph, prepared.phase);
+    const currentTicketIds = currentSelection.rows.map(({ id }) => id);
+    if (canonicalJson(currentTicketIds) !== canonicalJson(prepared.phaseTicketIds)) {
+      reject('phase ticket membership changed while sentinel was running', 'STALE_CONTEXT');
+    }
+    const openIds = currentSelection.rows
+      .filter(({ id }) => (currentGraph.state[id] || {}).status === 'pr-open')
+      .map(({ id }) => id);
+    const expectedIds = new Set(prepared.ticketSet.map(({ id }) => id));
+    const added = openIds.filter((id) => !expectedIds.has(id));
+    if (added.length) {
+      reject(`new PRs opened outside the authenticated sentinel round: ${added.join(', ')}`, 'STALE_CONTEXT');
+    }
+    const currentBase = branchOid(options, worktree, prepared.base, prepared.baseCommit);
+    if (currentBase.ref !== prepared.base || currentBase.oid !== prepared.baseCommit) {
+      reject('sentinel artifact base changed while sentinel was running', 'STALE_CONTEXT');
+    }
+    const expiredTickets = [];
+    for (let index = 0; index < prepared.rows.length; index++) {
+      const { id, row } = prepared.rows[index];
+      const before = prepared.livePullRequests[index];
+      const ticket = prepared.ticketSet[index];
+      const live = getPullRequest(options, worktree, before.number, row.repo || null);
+      if (!object(live) || live.number !== before.number) {
+        reject(`live PR ${before.number} identity became unavailable while sentinel was running`, 'STALE_CONTEXT');
+      }
+      const open = listPullRequests(options, worktree, row.branch, row.repo || null, 'open');
+      if (!Array.isArray(open)) reject(`GitHub returned an invalid PR list for ${id}`);
+      const currentOpen = open.filter((pr) => object(pr) && pr.state === 'OPEN' && pr.headRefName === row.branch);
+      if (currentOpen.some((pr) => pr.number !== before.number)) {
+        reject(`${id} has a newly opened PR outside the authenticated sentinel round`, 'STALE_CONTEXT');
+      }
+      const baseRef = ticket.base.slice(0, ticket.base.lastIndexOf('#'));
+      const baseOid = ticket.base.slice(ticket.base.lastIndexOf('#') + 1);
+      const currentState = currentGraph.state[id] || {};
+      const unchanged = live.state === 'OPEN' && live.isDraft !== true
+        && live.headRefName === row.branch && live.headRefOid === ticket.head
+        && live.baseRefName === baseRef && live.baseRefOid === baseOid
+        && currentState.status === 'pr-open' && currentState.pr === live.number
+        && currentState.head_sha === live.headRefOid && currentState.pr_base === live.baseRefName;
+      if (!unchanged) {
+        if (live.state !== 'OPEN' && live.state !== 'MERGED' && live.state !== 'CLOSED') {
+          reject(`live PR ${before.number} has an unknown state`, 'STALE_CONTEXT');
+        }
+        expiredTickets.push(id);
+        continue;
+      }
+      branchOid(options, worktree, live.baseRefName, live.baseRefOid);
+    }
+    for (const { id, row } of currentSelection.rows) {
+      if (expectedIds.has(id)) continue;
+      const open = listPullRequests(options, worktree, row.branch, row.repo || null, 'open');
+      if (!Array.isArray(open) || open.some((pr) => object(pr) && pr.state === 'OPEN' && pr.headRefName === row.branch)) {
+        reject(`${id} has a newly open PR outside the authenticated sentinel round`, 'STALE_CONTEXT');
+      }
+    }
+    return expiredTickets;
   }
   const defaultBranch = baseDefaultBranch(options, worktree, prepared.canonical.projectRoot);
   const currentBase = branchOid(options, worktree, defaultBranch);
@@ -686,12 +919,13 @@ function createClaudeRoleHost(options = {}) {
         const runtime = options.runtimeHost || runtimeFor(options, scope, controller, storage);
         if (controller && runtime.controller !== controller) reject('runtime host is not bound to the active run controller');
         roleArtifact.prepareRoleArtifact({ worktreePath: prepared.canonical.worktree, role: prepared.role,
-          ...(prepared.role === 'integrator' ? { phase: prepared.phase } : {}), evidencePath: prepared.evidencePath });
-        const { boundary, getLaunched, getLaunchCount } = buildBoundary(prepared, runtime, dispatchId);
+          ...(prepared.role !== 'arch-review' ? { phase: prepared.phase } : {}), evidencePath: prepared.evidencePath });
+        const { boundary, getLaunched, getLaunchCount, getHostOwnedFiles } = buildBoundary(prepared, runtime, dispatchId, ownerId);
         const subject = prepared.role === 'arch-review' ? prepared.ticket : prepared.ticket;
         const record = await boundary.dispatch({ runtime: 'claude', role: prepared.role,
           signals: prepared.signals, dispatch_id: dispatchId }, {
           ticket: subject,
+          ...(prepared.role === 'pr-sentinel' ? { subject_kind: 'round' } : {}),
           role: prepared.role,
           phase: prepared.phase,
           pr: prepared.pr,
@@ -701,10 +935,19 @@ function createClaudeRoleHost(options = {}) {
         });
         if (getLaunchCount() !== 1 || !getLaunched()) reject('boundary did not perform exactly one authenticated model launch', 'MISSING_RECEIPT');
         if (heartbeatError) throw heartbeatError;
-        assertEvidenceOnlyChanges(options, prepared);
-        revalidateLiveInputs(options, prepared);
+        assertEvidenceOnlyChanges(options, prepared, getHostOwnedFiles());
+        const expiredTickets = revalidateLiveInputs(options, prepared) || [];
         const result = validateResult(prepared, resultFrom(getLaunched().output));
         const { artifact, validated } = sealResult(prepared, result, runtime.recorder, record.receipt.dispatch_id);
+        const round = prepared.role === 'pr-sentinel'
+          ? require('./dispatch-record.cjs').recordRound(
+            path.resolve(prepared.graph.directory, '..', '..'),
+            { recorder: runtime.recorder, dispatchId: record.receipt.dispatch_id,
+              phase: prepared.phase, phaseNumber: prepared.phaseNumber,
+              ticketSet: prepared.ticketSet, ticketSetDigest: prepared.ticketSetDigest,
+              expiredTickets },
+          )
+          : null;
         if (controller) controller.complete(scope.run_id);
         return Object.freeze({
           schema: 'shipyard.claude-role-result.v1',
@@ -713,6 +956,9 @@ function createClaudeRoleHost(options = {}) {
           ...(prepared.role === 'arch-review' ? { pr: prepared.pr } : { phase: prepared.phase, ticket_set_digest: prepared.ticketSetDigest }),
           result,
           dispatch: record,
+          ...(round ? { round: { dispatch_id: record.receipt.dispatch_id,
+            subject: prepared.ticket, ticket_set_digest: prepared.ticketSetDigest,
+            tickets: prepared.ticketSet.map((member) => member.id), agent_id: record.receipt.launch_id } } : {}),
           artifact: { ref: validated.artifact_ref, digest: validated.artifact_digest,
             outcome: validated.envelope.outcome || validated.envelope.verdict },
           context: { source_revision: prepared.canonical.head,
@@ -721,6 +967,9 @@ function createClaudeRoleHost(options = {}) {
             dispatched_input_tokens: prepared.signals.inputTokens },
         });
       } catch (error) {
+        if (prepared.role === 'pr-sentinel') {
+          try { require('./dispatch-record.cjs').clearRound(path.resolve(prepared.graph.directory, '..', '..'), dispatchId); } catch {}
+        }
         if (controller) {
           try { controller.fail(scope.run_id, { reason: String(error.message || error).slice(0, 500) }); } catch {}
         }
@@ -776,7 +1025,9 @@ module.exports = Object.freeze({
 });
 
 if (require.main === module) {
-  Promise.resolve(runClaudeRoleCli()).catch((error) => {
+  const hostOptions = process.env.SHIPYARD_CLAUDE_ROLE_SMOKE === 'read-only'
+    ? { readOnlySmoke: true } : {};
+  Promise.resolve(runClaudeRoleCli(process.argv.slice(2), process.stdout, hostOptions)).catch((error) => {
     process.stderr.write(`${error && error.message ? error.message : error}\n`);
     process.exitCode = 1;
   });
