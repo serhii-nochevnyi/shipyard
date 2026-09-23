@@ -1,8 +1,8 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 3a46ec95c07469c08263b8acad4172d55c381136d2d361a8a11fa2f5261a7010
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 3381b76b878705cefdb3412e1b5a87542cee38518a05c78607bb63d52eb404c0
 phase: 30
 status: passed
-shipyard_source_fingerprint: 3a46ec95c07469c08263b8acad4172d55c381136d2d361a8a11fa2f5261a7010
+shipyard_source_fingerprint: 3381b76b878705cefdb3412e1b5a87542cee38518a05c78607bb63d52eb404c0
 ---
 
 # Phase 30: A ticket you cannot reach is not deliverable — Verification Projection

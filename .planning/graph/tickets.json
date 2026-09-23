@@ -4924,6 +4924,7 @@
         "plugins/delivery-pipeline/scripts/claude-delivery-host.cjs",
         "plugins/delivery-pipeline/scripts/claude-investigation-host.cjs",
         "plugins/delivery-pipeline/scripts/claude-workflow-host.cjs",
+        "plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs",
         "plugins/delivery-pipeline/scripts/claude-reference-content.cjs",
         "plugins/delivery-pipeline/scripts/delivery-commit-finalizer.cjs",
         "plugins/delivery-pipeline/workflows/executors.mjs",

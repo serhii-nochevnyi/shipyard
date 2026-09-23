@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 3a46ec95c07469c08263b8acad4172d55c381136d2d361a8a11fa2f5261a7010
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 3381b76b878705cefdb3412e1b5a87542cee38518a05c78607bb63d52eb404c0
 phase: 28-a-mechanism-nobody-connected-is-not-a-mechanism
 plan: 07
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-09
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 3a46ec95c07469c08263b8acad4172d55c381136d2d361a8a11fa2f5261a7010
+shipyard_source_fingerprint: 3381b76b878705cefdb3412e1b5a87542cee38518a05c78607bb63d52eb404c0
 ---
 
 # Phase 28: Dirty means tracked, and a declared path that cannot exist is warned about — Delivery Projection
