@@ -10,6 +10,7 @@ workspace/
 # already refused. `.planning/graph/` is otherwise tracked, and a session id
 # belongs in no commit.
 .planning/graph/stop-gate-ledger.json
+.planning/graph/stop-gate-armed/
 .planning/graph/session-observations.jsonl
 /.planning/.adr-ingest/
 .copilot-mcp-oauth/

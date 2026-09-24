@@ -203,6 +203,7 @@ const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
 const runWaker = require('./run-waker.cjs');
+const { isArmed } = require('./stop-gate-arm.cjs');
 
 // Older than this and the front no longer describes the board as it stands.
 const FRESH_MS = envMs('SHIPYARD_STOP_GATE_FRESH_MS', 45 * 60 * 1000);
@@ -512,6 +513,7 @@ if (scopedMode) {
   }
   candidates = [scopedFront];
 } else {
+  if (!sessionId || !isArmed(cwd, sessionId)) allow();
   const seen = new Set();
   for (const dir of [cwd, ...worktreesOf(cwd)]) {
     const file = frontFileIn(dir);

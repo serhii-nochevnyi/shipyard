@@ -1225,6 +1225,12 @@ itself a STOP signal, not a reason to improvise.
 
 ## Step 0 — Cold start (MANDATORY on EVERY run)
 
+- **Arm the stop gate (Claude only).** Run
+  `node ${CLAUDE_PLUGIN_ROOT}/scripts/stop-gate-arm.cjs arm --session-id "${CLAUDE_SESSION_ID}"`.
+  The stop hook enforces the front only in a session armed this way; every other
+  session stops freely. A non-zero exit means the gate is NOT armed — report that
+  to the user, do not continue silently. Codex has no stop hook, so it skips this.
+  A session resumed with `--fork-session` has a new id and must re-arm.
 0. `gsd-tune.cjs` — the GSD settings this project needs on THIS runtime. Report
    only; it exits 1 when something drifts and writes nothing without `--apply`.
    This runs here rather than at install time for a plain reason: installation is
@@ -2654,7 +2660,7 @@ work. Where it does not, nothing catches you and the rule is yours alone to keep
 so assume you are on that side. Either way, two consequences:
 - **Do not treat a summary as an ending.** Post it if it helps the human follow
   along, then keep going. You can also run `stop-gate.cjs` yourself — pipe it
-  `{}` — to check whether stopping here is legitimate.
+  `{"session_id":"<this session id>"}` — to check whether stopping here is legitimate.
 - **If work must NOT be taken, park it — do not leave it listed.**
   `escalation-record.cjs mark` when a human must decide, `drift-record.cjs mark`
   when the plan predates what shipped. A parked item leaves the front; an ignored
