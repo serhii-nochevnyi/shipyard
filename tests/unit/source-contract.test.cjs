@@ -585,7 +585,7 @@ const workflowArgs = {
     tickets: [{ id: 'T-30-01', planPath: '/p/30-01-PLAN.md', branch: 'ticket/T-30-01', prBase: 'epic/30', worktreePath: '/w/T-30-01', model: 'sonnet', effort: 'max' }],
   },
   'drift-gate': {
-    tickets: [{ id: 'T-30-01', planPath: '/p/30-01-PLAN.md', baseRef: 'origin/epic/30', worktreePath: '/w/T-30-01', model: 'claude-opus-5-5', effort: 'max' }],
+    tickets: [{ id: 'T-30-01', planPath: '/p/30-01-PLAN.md', baseRef: 'origin/epic/30', worktreePath: '/w/T-30-01', model: 'claude-opus-5-5', effort: 'high' }],
     driftRefPath: '/p/drift-check.md',
   },
   'fix-round': {
@@ -623,7 +623,7 @@ async function renderedPrompt(name) {
   assert.strictEqual(calls.length, 1, `${name} must dispatch one prompt in the rendered-contract fixture`);
   const expectedSelection = {
     executors: { model: 'sonnet', effort: 'max' },
-    'drift-gate': { model: 'claude-opus-5-5', effort: 'max' },
+    'drift-gate': { model: 'claude-opus-5-5', effort: 'high' },
     'fix-round': { model: 'claude-opus-5-5', effort: 'medium' },
   }[name];
   assert.deepStrictEqual(
@@ -796,7 +796,7 @@ test('decompose documents the three explicit boundary dispatches and refusal rul
     '**Codex runtime — logical model ladder**',
     '**Claude runtime — Anthropic alias ladder**',
     'opus/medium',
-    'opus/max',
+    'opus/high',
   ]) {
     assert.ok(source.includes(phrase), `decompose.md must state the runtime-specific ladder: ${phrase}`);
   }
@@ -970,7 +970,7 @@ test('delivery launch docs route every role through the boundary and the generat
 
   for (const pair of [
     'Luna/max', 'Luna/medium', 'Sol/high', 'Sol/xhigh',
-    'Sonnet/max', 'Sonnet/high', 'Opus/medium', 'Opus/high', 'Opus/max',
+    'Sonnet/max', 'Sonnet/high', 'Opus/medium', 'Opus/high',
     'Fable/medium',
   ]) {
     assert.ok(source.includes(pair), `delivery docs must preserve the native ladder pair ${pair}`);
@@ -1185,7 +1185,7 @@ test('research and decomposition use the canonical runtime ladders and only decl
   );
 });
 
-test('Claude decomposition escalation stays on Opus max regardless of Fable consent', () => {
+test('Claude decomposition escalation stays on Opus high regardless of Fable consent', () => {
   const roots = [];
   const loadRouted = (raw) => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-gsd-fable-contract-'));
@@ -1206,7 +1206,7 @@ test('Claude decomposition escalation stays on Opus max regardless of Fable cons
         signals: { checkpoint: true },
       });
       assert.equal(resolution.model, CLAUDE_MODEL_ALIASES.opus);
-      assert.equal(resolution.effort, 'max');
+      assert.equal(resolution.effort, 'high');
     }
   } finally {
     for (const root of roots) fs.rmSync(root, { recursive: true, force: true });
@@ -1311,8 +1311,8 @@ test('Claude GSD researcher, planner, and checker use explicit native selections
   });
   assert.deepStrictEqual(
     [offResolution.model, offResolution.effort],
-    [CLAUDE_MODEL_ALIASES.opus, 'max'],
-    'decomposition must use the canonical Opus/max escalation even with Fable consent off'
+    [CLAUDE_MODEL_ALIASES.opus, 'high'],
+    'decomposition must use the canonical Opus/high escalation even with Fable consent off'
   );
   const resolutions = cases.map(({ role, signals, id }) => pipelineConfig.resolveDispatch({
     config: consented,

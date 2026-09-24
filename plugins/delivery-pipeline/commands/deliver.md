@@ -450,14 +450,14 @@ for that exact pair:
 
 | Role | Base | Evidence-based escalation |
 | --- | --- | --- |
-| `research` | Opus/medium | `very-complex` → Opus/max; `alternatives` is inert |
-| `decomposition` | Opus/medium | `critical` or `checkpoint` → Opus/max |
+| `research` | Opus/medium | `very-complex` → Opus/high; `alternatives` is inert |
+| `decomposition` | Opus/medium | `critical` or `checkpoint` → Opus/high |
 | `executor` | Sonnet/max | `critical` or `checkpoint` → Opus/low |
 | `pr-sentinel` | Sonnet/high | none |
-| `drift-check` | Opus/max | none |
+| `drift-check` | Opus/high | none |
 | `integrator` | Opus/medium | measured window, `contested`, `critical`, or `checkpoint` → Opus/high |
-| `arch-review` | Opus/medium | critical/contested/checkpoint → Opus/max; measured window → Fable/medium |
-| `ci-fix` / `review-fix` | Opus/medium | verified `repeat` or `repeat_exhausted` → Opus/max |
+| `arch-review` | Opus/medium | critical/contested/checkpoint → Opus/high; measured window → Fable/medium |
+| `ci-fix` / `review-fix` | Opus/medium | verified `repeat` or `repeat_exhausted` → Opus/high |
 
 Only the selected runtime host may launch a model. Claude's host applies its
 resolved Anthropic alias and effort; Codex's host applies the generated static
@@ -1552,7 +1552,7 @@ host-owned. Codex uses `codex-delivery-host.cjs --args-file` with role
 `drift-check`; its adapter selects and validates the generated
 `shipyard-drift-check.toml` through the same boundary.
 
-`drift-check` is fixed at Codex Luna/max and Claude Opus/max; risk, checkpoint,
+`drift-check` is fixed at Codex Luna/max and Claude Opus/high; risk, checkpoint,
 window size, and other global context are retained as evidence but cannot
 promote it. The returned receipt must be `verified` before the drift result is
 accepted. On Codex the boundary validates the generated
@@ -2173,7 +2173,7 @@ loop:
          boundary result. The boundary validates the ordered receipt chain. Codex uses the generated
          `shipyard-ci-fix.toml` → `shipyard-ci-fix-repeat.toml` →
          `shipyard-ci-fix-deep.toml` files for base → verified `repeat` →
-         verified `repeat_exhausted`; Claude uses Opus/medium → Opus/max with
+         verified `repeat_exhausted`; Claude uses Opus/medium → Opus/high with
          explicit native effort. A repeat is refused without the prior receipt,
          and another failure after the ceiling is a human escalation, not an
          undocumented third launch. The host must carry the resolved selection;
@@ -2224,7 +2224,7 @@ loop:
 
        Codex uses `shipyard-review-fix.toml` →
        `shipyard-review-fix-repeat.toml` → `shipyard-review-fix-deep.toml`
-       for the verified repair chain; Claude uses Opus/medium → Opus/max with
+       for the verified repair chain; Claude uses Opus/medium → Opus/high with
        explicit native effort. The boundary receipt is required before the
        fixer may push or the attempt may be recorded. An inline, inherited,
        literal-model, or omitted-effort fallback is refused. Require a typed
@@ -2267,7 +2267,7 @@ loop:
      Codex's host resolves Sol/high or, only for measured/contested/critical/
      checkpoint evidence, Sol/xhigh and validates the generated
      `shipyard-arch-review.toml` or `shipyard-arch-review-critical.toml`.
-     Claude's host independently resolves Opus/medium, Opus/max for critical evidence,
+     Claude's host independently resolves Opus/medium, Opus/high for critical evidence,
      or Fable/medium for the measured ceiling, always with explicit effort.
      Record the verdict only after the boundary receipt is verified; a missing
      measurement, typed host, or documented escalation is a

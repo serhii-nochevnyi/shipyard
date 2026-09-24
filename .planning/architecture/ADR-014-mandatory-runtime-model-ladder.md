@@ -86,27 +86,27 @@ application evidence records the resolved model and fails closed on mismatch.
 
 | Role | Base selection | Escalation 1 | Escalation 2 | Escalation signals |
 |---|---|---|---|---|
-| research | Opus/medium | Opus/max | — | explicit `very-complex` |
-| decomposition | Opus/medium | Opus/max | — | explicit `critical` or `checkpoint` |
+| research | Opus/medium | Opus/high | — | explicit `very-complex` |
+| decomposition | Opus/medium | Opus/high | — | explicit `critical` or `checkpoint` |
 | executor | Sonnet/max | Opus/low | — | explicit `critical` or `checkpoint` |
 | pr-sentinel | Sonnet/high | — | — | gate strategy only |
 | integrator | Opus/medium | Opus/high | — | `contested`, explicit `critical`/`checkpoint`, measured window |
-| drift-check | Opus/max | — | — | evidence/gate strategy only |
-| arch-review | Opus/medium | Opus/max | Fable/medium | `critical`/`checkpoint`/`contested`; measured window |
-| ci-fix | Opus/medium | Opus/max | — | verified `repeat`; `repeat_exhausted` |
-| review-fix | Opus/medium | Opus/max | — | verified `repeat`; `repeat_exhausted` |
+| drift-check | Opus/high | — | — | evidence/gate strategy only |
+| arch-review | Opus/medium | Opus/high | Fable/medium | `critical`/`checkpoint`/`contested`; measured window |
+| ci-fix | Opus/medium | Opus/high | — | verified `repeat`; `repeat_exhausted` |
+| review-fix | Opus/medium | Opus/high | — | verified `repeat`; `repeat_exhausted` |
 
 For Claude architecture review, explicit critical/checkpoint/contested evidence
-selects Opus/max. Measured input above the policy window threshold selects the
+selects Opus/high. Measured input above the policy window threshold selects the
 Fable/medium ceiling; when both classes of evidence fire, the ceiling wins.
 Research's `alternatives` classification is retained as evidence but does not
 promote the base Opus/medium rung; only an explicit `very-complex` classification
-selects Opus/max. Decomposition's explicit critical/checkpoint escalation also
-stays within the Opus palette at max effort, and executor's critical/checkpoint
+selects Opus/high. Decomposition's explicit critical/checkpoint escalation also
+stays within the Opus palette at high effort, and executor's critical/checkpoint
 escalation uses Opus/low as its second rung.
 Claude repair roles require a boundary-verified receipt from the immediately
 preceding Claude rung. `repeat_exhausted` records a distinct receipt-chain
-state but remains at the requested Opus/max ceiling; it does not add a Fable
+state but remains at the requested Opus/high ceiling; it does not add a Fable
 promotion.
 
 Signals are role-scoped. Global context-window pressure cannot promote fixed
