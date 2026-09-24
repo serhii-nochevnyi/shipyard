@@ -11,6 +11,7 @@ const os = require('os');
 const path = require('path');
 const { execFileSync, spawnSync } = require('child_process');
 const { suite, test, done, assert } = require(path.join(__dirname, 'assert-harness.cjs'));
+const { nativeModel, transcriptEvidence: testTranscriptEvidence } = require('./claude-test-evidence.cjs');
 const {
   createDurableRecorder,
 } = require('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs');
@@ -1569,15 +1570,15 @@ process.on('exit', () => {
 const FIX_DISPATCH_CAPABILITIES = Object.freeze({
   supportedModels: Object.values(CLAUDE_MODEL_ALIASES),
   supportedEfforts: ['high', 'medium', 'max'],
-  observedModel: false,
-  observedEffort: false,
+  observedModel: true,
+  observedEffort: true,
 });
 const fixHostEvidence = new WeakMap();
 let fixLaunch = 0;
 const fixApplicationEvidence = ({ result }) => {
   const evidence = fixHostEvidence.get(result);
   if (!evidence) throw new Error('test Claude host returned no application evidence');
-  return evidence;
+  return testTranscriptEvidence(evidence);
 };
 const fixArtifactConsumer = ({ artifact, result, record }) => {
   const evidenceIndex = {
@@ -1646,6 +1647,8 @@ function runFixRound(args) {
       launch_id: `test-fix-launch-${++fixLaunch}`,
       applied_model: opts.model,
       applied_effort: opts.effort,
+      observed_model: nativeModel(opts.model),
+      observed_effort: opts.effort,
     });
     return Promise.resolve(result);
   };
@@ -1660,7 +1663,7 @@ const FIX_ARGS = (over = {}) => ({
   prs: [{
     id: 'T-24-06', pr: 42, branch: 'ticket/T-24-06', worktreePath: '/wt/T-24-06',
     planPath: '/proj/.planning/phases/24/24-06-PLAN.md', needsCiFix: true,
-    base: 'epic/24-x', model: 'opus', effort: 'medium', ...over,
+    base: 'epic/24-x', model: 'claude-opus-5-5', effort: 'medium', ...over,
   }],
   ciFixRefPath: '/refs/ci-fix.md',
   reviewFixRefPath: '/refs/review-fix.md',

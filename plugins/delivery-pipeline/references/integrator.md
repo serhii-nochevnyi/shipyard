@@ -81,9 +81,11 @@ complete merged ticket set:
 ```
 
 Every finding has a unique `id`, a `type`, an explicit `blocking` boolean, a
-summary, and enough evidence to act. A `fix-ticket` also carries its ticket,
-scope, and non-empty file list. A `human-question` carries the exact question
-and its evidence location. A `passed` result must have `blocking_count: 0` and
+summary, and enough evidence to act. Use only `fix-ticket`, `human-question`,
+`violation`, `adr-outdated`, `note`, or `informational`; use `informational` for
+non-blocking observations. A `fix-ticket` also carries its ticket, scope, and
+non-empty file list. A `human-question` carries the exact question and its
+evidence location. A `passed` result must have `blocking_count: 0` and
 an empty blocking finding index. `needs-fix` and
 `human-review-required` retain all blocking findings; they cannot be reduced to
 `passed` by truncating the synopsis.

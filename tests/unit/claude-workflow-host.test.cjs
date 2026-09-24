@@ -3,8 +3,9 @@
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { execFileSync } = require('node:child_process');
+const { spawnSync } = require('node:child_process');
 const { suite, test, done, assert } = require('./assert-harness.cjs');
+const { transcriptEvidence: testTranscriptEvidence } = require('./claude-test-evidence.cjs');
 const {
   createDurableRecorder,
 } = require('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs');
@@ -33,6 +34,10 @@ const OPUS_CAPABILITIES = Object.freeze({
   observedModel: true,
   observedEffort: true,
 });
+
+function transcriptEvidence(value) {
+  return testTranscriptEvidence(value);
+}
 
 suite('claude-workflow-host — production sixth binding');
 
@@ -64,13 +69,13 @@ return await parallel([async () => {
       agent: async (prompt, options) => {
         calls++;
         const result = {};
-        evidence.set(result, {
+        evidence.set(result, transcriptEvidence({
           launch_id: 'claude-workflow-host-test',
           applied_model: options.model,
           applied_effort: options.effort,
           observed_model: options.model,
           observed_effort: options.effort,
-        });
+        }));
         return result;
       },
       parallel: async (thunks) => Promise.all(thunks.map((thunk) => thunk())),
@@ -101,7 +106,7 @@ test('production investigation entry point pins the research workflow and runs a
       constraints: 'constraints',
       risks: 'risks and unknowns',
     }[id],
-    model: 'opus',
+    model: 'claude-opus-5-5',
     effort: 'medium',
     signals: id === 'alternatives' ? { type: 'alternatives' } : { type: 'facts' },
   }));
@@ -123,13 +128,13 @@ test('production investigation entry point pins the research workflow and runs a
           summary: `completed ${options.label}`,
           draft: `draft ${options.label}`,
         };
-        evidence.set(result, {
+        evidence.set(result, transcriptEvidence({
           launch_id: `investigation-host-${calls.length}`,
           applied_model: options.model,
           applied_effort: options.effort,
           observed_model: options.model,
           observed_effort: options.effort,
-        });
+        }));
         return result;
       },
       parallel: async (thunks) => Promise.all(thunks.map((thunk) => thunk())),
@@ -142,7 +147,7 @@ test('production investigation entry point pins the research workflow and runs a
     assert.equal(calls.length, 4);
     for (const item of value) {
       assert.equal(item.receipt.compliance, 'verified');
-      assert.equal(item.receipt.applied_model, 'opus');
+      assert.equal(item.receipt.applied_model, 'claude-opus-5-5');
       assert.equal(item.receipt.applied_effort, 'medium');
       assert.ok(recorder.getVerifiedRecord(item.receipt.dispatch_id));
     }
@@ -158,76 +163,11 @@ test('production investigation entry point refuses a caller-supplied script', as
   );
 });
 
-test('executable investigation bridge invokes the registered host with args kept in a file', () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-claude-investigation-cli-'));
-  const argsPath = path.join(root, 'args.json');
-  const hostPath = path.join(root, 'host.cjs');
-  const receiptsPath = path.join(root, 'receipts');
-  const boundaryPath = path.resolve(__dirname, '../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs');
-  const lines = [
-    { id: 'system-state', label: 'system state', model: 'opus', effort: 'medium', signals: { type: 'facts' } },
-    { id: 'alternatives', label: 'alternatives', model: 'opus', effort: 'medium', signals: { type: 'alternatives' } },
-    { id: 'constraints', label: 'constraints', model: 'opus', effort: 'medium', signals: { type: 'facts' } },
-    { id: 'risks', label: 'risks and unknowns', model: 'opus', effort: 'medium', signals: { type: 'facts' } },
-  ];
-  fs.writeFileSync(argsPath, JSON.stringify({
-    invId: 'INV-CLI',
-    invPath: '/repo/.planning/investigations/INV-CLI',
-    problemStatement: 'Test the executable investigation bridge',
-    referencePath: '/plugin/references/inv-research.md',
-    artifactLanguage: 'English',
-    lines,
-  }));
-  fs.writeFileSync(hostPath, `
-const { createDurableRecorder } = require(${JSON.stringify(boundaryPath)});
-const evidence = new WeakMap();
-let launch = 0;
-module.exports = {
-  capabilities: Object.freeze({
-    supportedModels: ['opus'], supportedEfforts: ['medium'],
-    observedModel: true, observedEffort: true,
-  }),
-  recorder: createDurableRecorder(${JSON.stringify(receiptsPath)}),
-  parallel: async (thunks) => Promise.all(thunks.map((thunk) => thunk())),
-  agent: async (_prompt, options) => {
-    const result = {
-      id: options.label.split(':').pop(),
-      status: 'completed',
-      summary: 'executable bridge result',
-      draft: 'executable bridge draft',
-    };
-    evidence.set(result, {
-      launch_id: 'cli-launch-' + (++launch),
-      applied_model: options.model,
-      applied_effort: options.effort,
-      observed_model: options.model,
-      observed_effort: options.effort,
-    });
-    return result;
-  },
-  applicationEvidence: ({ result }) => evidence.get(result),
-};
-`);
-  try {
-    const scriptPath = path.resolve(
-      __dirname,
-      '../../plugins/delivery-pipeline/scripts/claude-investigation-host.cjs',
-    );
-    const output = execFileSync(process.execPath, [
-      scriptPath,
-      '--args-file', argsPath,
-      '--host-module', hostPath,
-    ], { encoding: 'utf8' });
-    const value = JSON.parse(output);
-    assert.equal(value.length, 4);
-    assert.deepEqual(
-      value.map((item) => item.id).sort(),
-      ['alternatives', 'constraints', 'risks', 'system-state'],
-    );
-    for (const item of value) assert.equal(item.receipt.compliance, 'verified');
-  } finally {
-    fs.rmSync(root, { recursive: true, force: true });
-  }
+test('investigation CLI refuses caller-supplied host modules', () => {
+  const scriptPath = path.resolve(__dirname, '../../plugins/delivery-pipeline/scripts/claude-investigation-host.cjs');
+  const result = spawnSync(process.execPath, [scriptPath, '--args-file', '/tmp/args.json', '--host-module', '/tmp/host.cjs'], { encoding: 'utf8' });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /--request-file <json> is required/);
 });
 
 test('refuses before evaluating a workflow when the host bridge is incomplete', async () => {
@@ -261,7 +201,7 @@ return await __createClaudeWorkflowDispatch({
   agent,
   prompt: 'typed GSD prompt',
   role: 'decomposition',
-  model: 'opus',
+  model: 'claude-opus-5-5',
   effort: 'medium',
   gsdRole: 'gsd-planner',
   context: { ticket: 'T-36-typed-host-test' },
@@ -278,7 +218,7 @@ return await __createClaudeWorkflowDispatch({
       },
       typedGsdCallback: async (prompt, options, gsdRole) => {
         typedCalls++;
-        return {
+        return transcriptEvidence({
           prompt,
           launch_id: 'typed-host-launch',
           applied_model: options.model,
@@ -287,7 +227,7 @@ return await __createClaudeWorkflowDispatch({
           observed_effort: options.effort,
           gsd_role: gsdRole,
           gsd_launch_mechanism: options.gsd_launch_mechanism,
-        };
+        });
       },
       parallel: async (thunks) => Promise.all(thunks.map((thunk) => thunk())),
       capabilities: OPUS_CAPABILITIES,
@@ -298,7 +238,7 @@ return await __createClaudeWorkflowDispatch({
     assert.equal(genericCalls, 0);
     assert.equal(value.receipt.gsd_role, 'gsd-planner');
     assert.equal(value.receipt.gsd_launch_mechanism, 'typed-gsd-callback');
-    assert.equal(value.receipt.applied_model, 'opus');
+    assert.equal(value.receipt.applied_model, 'claude-opus-5-5');
     assert.equal(value.receipt.applied_effort, 'medium');
     assert.ok(recorder.getVerifiedRecord(value.receipt.dispatch_id));
   } finally {
@@ -316,7 +256,7 @@ return await __createClaudeWorkflowDispatch({
   agent,
   prompt: 'typed GSD prompt',
   role: 'decomposition',
-  model: 'opus',
+  model: 'claude-opus-5-5',
   effort: 'medium',
   gsdRole: 'gsd-planner',
   context: { ticket: 'T-36-typed-evidence-test' },
@@ -330,17 +270,18 @@ return await __createClaudeWorkflowDispatch({
         agent: async () => { throw new Error('generic callback must not run'); },
         typedGsdCallback: async (prompt, options, gsdRole) => {
           typedCalls++;
-          return {
+          const evidence = transcriptEvidence({
             prompt,
             launch_id: 'typed-evidence-launch',
             applied_model: options.model,
             applied_effort: options.effort,
             observed_model: options.model,
             observed_effort: options.effort,
-            // Deliberately omit gsd_role and gsd_launch_mechanism. A generic
-            // application-evidence callback must not be able to self-attest
-            // these claims for a typed GSD launch.
-          };
+            gsd_role: gsdRole,
+            gsd_launch_mechanism: options.gsd_launch_mechanism,
+          });
+          delete evidence.gsd_agent_evidence;
+          return evidence;
         },
         parallel: async (thunks) => Promise.all(thunks.map((thunk) => thunk())),
         capabilities: OPUS_CAPABILITIES,

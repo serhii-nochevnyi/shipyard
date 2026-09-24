@@ -755,15 +755,15 @@ fixed routed `pr-sentinel` role for either signal.
 ### 7.5.1. Runtime-native model grids
 
 The logical Codex keys resolve to concrete IDs only in the Codex adapter. Claude
-uses its existing native aliases directly; its grid never translates Luna or
-Sol into a Claude selection.
+keeps the Sonnet and Fable aliases and pins Opus to its concrete runtime ID; its
+grid never translates Luna or Sol into a Claude selection.
 
 | Logical key | Codex concrete model | Claude Code selection |
 |---|---|---|
-| Luna | `gpt-5.6-luna` | — |
-| Sol | `gpt-5.6-sol` | — |
+| Luna | `gpt-6-luna` | — |
+| Sol | `gpt-6-sol` | — |
 | Sonnet | — | `sonnet` |
-| Opus | — | `opus` |
+| Opus | — | `claude-opus-5-5` |
 | Fable | — | `fable` |
 
 The canonical role/rung/signal ladder is:
@@ -884,20 +884,46 @@ launch authority.
 
 ## Autonomous controller rollout
 
-The `run-rollout.cjs` autonomous controller is disabled by default. A project may declare only
-the versioned `v1` rollout flag, and it becomes enabled only when both Claude
-and Codex pass live capability checks against the shared run contract. Claude
-remains Anthropic-backed and Codex remains OpenAI-backed; model ids,
-credentials, receipts, and usage evidence stay runtime-specific. Technical
-waits are `ci`, `review`, `quota`, `lease`, and `host`.
+The `run-rollout.cjs` autonomous controller is disabled by default. Version `v2`
+opts each provider in independently:
 
-The gate classifies missing hosts or credentials as `unavailable` and stale
-agents, wrong runtime/provider, inherited models, wrong scope, stale bases, or
-incomplete usage as `refused`. Synthetic evidence and successful process exit
-cannot enable it. Run state, receipts, usage facts, and technical waits are
-projected into GSD; heartbeat, lease expiry, store generation, event timestamps,
-and wake due times are excluded from semantic fingerprints. Rollback stops new
-controller launches while preserving historical records and labels.
+```json
+{
+  "delivery_pipeline": {
+    "autonomous_control_plane": {
+      "version": "v2",
+      "runtimes": { "claude": true, "codex": false }
+    }
+  }
+}
+```
+
+An opted-in runtime launches only after its own live capability evidence passes
+the shared run contract. These flags gate autonomous controller launches only;
+they do not disable explicit user-issued command runs or change runtime
+selection. `run-rollout.cjs status --json` reports each runtime's
+opt-in, credential status, capability status, and launch decision separately;
+an unavailable peer does not block a healthy provider. Claude credentials are
+read from `claude auth status --json`, and Codex credentials from `codex login
+status`. The status reader retains only sanitized status fields and never logs
+the CLI's raw output. API-key environment variables are not required for
+authenticated subscription sessions. Claude remains Anthropic-backed and
+Codex remains OpenAI-backed; models, credentials, receipts, and usage evidence
+stay runtime-specific. Technical waits are `ci`, `review`, `quota`, `lease`,
+and `host`.
+
+Legacy `v1` configuration is read as a two-provider opt-in when its old global
+flag and both runtime flags are true; it is otherwise read as disabled. Reading
+does not rewrite project configuration. `run-rollout.cjs rollback --runtime
+claude|codex` migrates the selected flag to `v2` and disables only that runtime,
+preserving the peer's setting and all historical receipts and usage. Missing
+hosts or credentials are `unavailable`; stale agents, wrong runtime/provider,
+inherited models, wrong scope, stale bases, or incomplete usage are `refused`.
+Synthetic evidence and a successful process exit cannot enable a runtime.
+Capability-only probes check installed hosts and native authentication status
+without making model calls. Run state, receipts, usage facts, and technical
+waits are projected into GSD; heartbeat, lease expiry, store generation, event
+timestamps, and wake due times are excluded from semantic fingerprints.
 
 ## 8. Gates (summary table)
 
@@ -1082,9 +1108,16 @@ so the two runtimes do not diverge (zero drift).
 - **Gates.** The capability is already runtime-agnostic (`runtimeCompat: ["*"]`,
   `command-exit-zero` + `agentVerdict`) — the same Gate 2 and UAT gate
   are installed via `gsd-tools capability install`.
-- **`deliver` — a hybrid.** Codex has no Workflow tool, so `deliver` goes its own
-  built-in Agent path: determinism — Node scripts under
-  `$CODEX_HOME/shipyard/scripts/`, agentic work — via `spawn_agent`.
+- **Runtime-host routing.** Codex and Claude resolve the project runtime once
+  and send each model-bearing role through its provider-specific shipped host.
+  Codex delivery, repair, research, sentinel, architecture review, and
+  integration roles use `codex-delivery-host.cjs`; typed GSD roles use
+  `codex-decompose-host.cjs`. Claude delivery and investigation roles use their
+  workflow hosts, typed GSD roles use `claude-decompose-host.cjs`, and shared
+  architecture, integration, and sentinel roles use `claude-role-host.cjs`.
+  Each host owns model selection, explicit effort, runtime launch, and the
+  durable receipt. Native Agent or Workflow calls outside those hosts are not a
+  delivery path.
 
 Installation: `make install-shipyard-codex` (requires gsd-core for Codex:
 `npx --yes @opengsd/gsd-core@latest --codex --global`). `SHIPYARD_CODEX_PHASE=1` —

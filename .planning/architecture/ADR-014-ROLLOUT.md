@@ -2,10 +2,10 @@
 
 1. Add the canonical policy and exhaustive pure resolver matrix, including the
    decomposition role and all fixed/repair/judgement lanes.
-2. Add Codex named palette entries and generated static variants; validate CLI
+2. Add Codex GPT-6 Luna/Sol entries and generated static variants; validate CLI
    capability and fail closed on stale/missing output.
-3. Add Claude adapter enforcement without changing existing palette files or
-   provider configuration.
+3. Pin the Claude Opus route to `claude-opus-5-5` while retaining the existing
+   Sonnet/Fable aliases and Anthropic provider configuration.
 4. Put the launch gate in front of GSD decomposition, Shipyard executor/fix,
    sentinel, drift, review, and integrator paths. Remove inline/session model
    fallback for routed work.

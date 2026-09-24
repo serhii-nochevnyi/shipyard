@@ -4,12 +4,15 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const { spawnSync } = require('node:child_process');
 const { withLock, writeAtomic, lockDirFor } = require('./lock.cjs');
 
-const SCHEMA = 'shipyard.autonomous-rollout.v1';
+const SCHEMA = 'shipyard.autonomous-rollout.v2';
+const LEGACY_SCHEMA = 'shipyard.autonomous-rollout.v1';
 const CAPABILITY_SCHEMA = 'shipyard.runtime-capability.v1';
-const VERSION = 1;
-const ROLLOUT_VERSION = 'v1';
+const VERSION = 2;
+const ROLLOUT_VERSION = 'v2';
+const LEGACY_ROLLOUT_VERSION = 'v1';
 const CAPABILITY_VERSION = 1;
 const RUNTIMES = Object.freeze(['claude', 'codex']);
 const PROVIDERS = Object.freeze({ claude: 'anthropic', codex: 'openai' });
@@ -31,22 +34,22 @@ const RUNTIME_FILES = Object.freeze({
     'plugins/delivery-pipeline/scripts/claude-runtime-host.cjs',
     'plugins/delivery-pipeline/scripts/claude-workflow-host.cjs',
     'plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs',
+    'plugins/delivery-pipeline/scripts/claude-role-host.cjs',
+    'plugins/delivery-pipeline/scripts/claude-delivery-host.cjs',
+    'plugins/delivery-pipeline/scripts/claude-investigation-host.cjs',
+    'plugins/delivery-pipeline/scripts/claude-decompose-host.cjs',
   ]),
   codex: Object.freeze([
     'plugins/delivery-pipeline/scripts/codex-runtime-host.cjs',
     'plugins/delivery-pipeline/scripts/codex-dispatch-adapter.cjs',
     'plugins/delivery-pipeline/scripts/codex-agent.cjs',
+    'plugins/delivery-pipeline/scripts/codex-delivery-host.cjs',
+    'plugins/delivery-pipeline/scripts/codex-decompose-host.cjs',
   ]),
 });
-const CREDENTIAL_KEYS = Object.freeze({
-  claude: Object.freeze(['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN']),
-  codex: Object.freeze(['OPENAI_API_KEY', 'CODEX_API_KEY']),
-});
 const DEFAULTS = Object.freeze({
-  enabled: false,
-  version: null,
-  source: 'default',
   runtimes: Object.freeze({ claude: false, codex: false }),
+  source: 'default',
 });
 
 function object(value) {
@@ -96,7 +99,6 @@ function defaultFlag() {
     version: VERSION,
     rollout_version: ROLLOUT_VERSION,
     status: 'disabled',
-    enabled: DEFAULTS.enabled,
     source: DEFAULTS.source,
     runtimes: clone(DEFAULTS.runtimes),
     fingerprint: digest(DEFAULTS),
@@ -109,40 +111,79 @@ function refusedFlag(reason) {
     version: VERSION,
     rollout_version: ROLLOUT_VERSION,
     status: 'refused',
-    enabled: false,
     source: 'config',
     runtimes: clone(DEFAULTS.runtimes),
     reason,
   };
 }
 
+function normalizedFlag(runtimes, extra = {}) {
+  const enabled = RUNTIMES.some((runtime) => runtimes[runtime]);
+  const result = {
+    schema: SCHEMA,
+    version: VERSION,
+    rollout_version: ROLLOUT_VERSION,
+    status: enabled ? 'pending' : 'disabled',
+    source: 'config',
+    runtimes,
+    ...extra,
+  };
+  result.fingerprint = digest({ version: ROLLOUT_VERSION, runtimes });
+  return result;
+}
+
 function normalizeFlag(raw) {
   if (raw === undefined || raw === null) return defaultFlag();
   if (!object(raw)) return refusedFlag(failure('INVALID_FLAG', 'autonomous_control_plane must be an object'));
+  if (raw.version === LEGACY_ROLLOUT_VERSION) {
+    if (raw.schema !== undefined && raw.schema !== LEGACY_SCHEMA) {
+      return refusedFlag(failure('INVALID_SCHEMA', 'legacy rollout schema does not match its version'));
+    }
+    if (typeof raw.enabled !== 'boolean') {
+      return refusedFlag(failure('INVALID_FLAG', 'legacy rollout flag enabled must be boolean'));
+    }
+    if (raw.runtimes !== undefined && !object(raw.runtimes)) {
+      return refusedFlag(failure('INVALID_FLAG', 'legacy rollout runtimes must be an object'));
+    }
+    const legacyRuntimes = object(raw.runtimes) ? raw.runtimes : {};
+    if (Object.keys(legacyRuntimes).some((runtime) => !RUNTIMES.includes(runtime))) {
+      return refusedFlag(failure('UNKNOWN_RUNTIME', 'legacy rollout flag contains an unsupported runtime'));
+    }
+    if (Object.values(legacyRuntimes).some((enabled) => typeof enabled !== 'boolean')) {
+      return refusedFlag(failure('INVALID_FLAG', 'legacy rollout runtime flags must be boolean'));
+    }
+    if (raw.enabled && RUNTIMES.some((runtime) => legacyRuntimes[runtime] !== true)) {
+      return refusedFlag(failure('RUNTIME_FLAG_INCOMPLETE', 'legacy rollout requires both runtimes to be enabled'));
+    }
+    return normalizedFlag(
+      Object.fromEntries(RUNTIMES.map((runtime) => [runtime, raw.enabled])),
+      { migrated_from: LEGACY_ROLLOUT_VERSION },
+    );
+  }
   if (raw.version !== ROLLOUT_VERSION) {
     return refusedFlag(failure('UNSUPPORTED_ROLLOUT_VERSION', `rollout flag version must be ${ROLLOUT_VERSION}`));
   }
-  if (typeof raw.enabled !== 'boolean') {
-    return refusedFlag(failure('INVALID_FLAG', 'rollout flag enabled must be boolean'));
+  if (raw.schema !== undefined && raw.schema !== SCHEMA) {
+    return refusedFlag(failure('INVALID_SCHEMA', 'rollout schema does not match its version'));
   }
   if (raw.runtimes !== undefined && !object(raw.runtimes)) {
     return refusedFlag(failure('INVALID_FLAG', 'rollout flag runtimes must be an object'));
   }
-  const runtimes = Object.fromEntries(RUNTIMES.map((runtime) => [runtime, raw.runtimes?.[runtime] === true]));
-  if (raw.enabled && RUNTIMES.some((runtime) => !runtimes[runtime])) {
-    return refusedFlag(failure('RUNTIME_FLAG_INCOMPLETE', 'both Claude and Codex must be enabled by the rollout flag'));
+  const inputRuntimes = raw.runtimes || {};
+  if (Object.keys(inputRuntimes).some((runtime) => !RUNTIMES.includes(runtime))) {
+    return refusedFlag(failure('UNKNOWN_RUNTIME', 'rollout flag contains an unsupported runtime'));
   }
-  const normalized = {
-    schema: SCHEMA,
-    version: VERSION,
-    rollout_version: raw.version,
-    status: raw.enabled ? 'pending' : 'disabled',
-    enabled: raw.enabled,
-    source: 'config',
-    runtimes,
-  };
-  normalized.fingerprint = digest(normalized);
-  return normalized;
+  for (const runtime of RUNTIMES) {
+    if (inputRuntimes[runtime] !== undefined && typeof inputRuntimes[runtime] !== 'boolean') {
+      return refusedFlag(failure('INVALID_FLAG', `rollout flag ${runtime} must be boolean`));
+    }
+  }
+  const runtimes = Object.fromEntries(RUNTIMES.map((runtime) => [runtime, inputRuntimes[runtime] === true]));
+  const enabled = RUNTIMES.some((runtime) => runtimes[runtime]);
+  if (raw.enabled !== undefined && (typeof raw.enabled !== 'boolean' || raw.enabled !== enabled)) {
+    return refusedFlag(failure('FLAG_CONFLICT', 'rollout flag enabled must match its runtime opt-ins'));
+  }
+  return normalizedFlag(runtimes);
 }
 
 function configPath(root) {
@@ -262,38 +303,105 @@ function existingFiles(root, files) {
   return files.filter((file) => !fs.existsSync(path.join(root, file)));
 }
 
-function credentialNames(env, runtime) {
-  return CREDENTIAL_KEYS[runtime].filter((key) => typeof env[key] === 'string' && env[key].trim());
+function credentialResult(runtime, status, reason, extra = {}) {
+  return {
+    runtime,
+    provider: providerFor(runtime),
+    status,
+    source: runtime === 'claude' ? 'claude-auth-status' : 'codex-login-status',
+    ...(reason ? { reason } : {}),
+    ...extra,
+  };
 }
 
-function probeRuntime({ root, runtime, env = process.env, evidence = null, expectedScope = null } = {}) {
+function readCredentialStatus(runtime, { env = process.env, commandRunner = spawnSync } = {}) {
+  if (!RUNTIMES.includes(runtime)) {
+    return credentialResult(runtime, 'refused', failure('WRONG_RUNTIME', 'unsupported runtime'));
+  }
+  const command = runtime === 'claude' ? 'claude' : 'codex';
+  const args = runtime === 'claude' ? ['auth', 'status', '--json'] : ['login', 'status'];
+  let result;
+  try {
+    result = commandRunner(command, args, {
+      encoding: 'utf8',
+      env,
+      timeout: 10_000,
+      maxBuffer: 64 * 1024,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+  } catch (_) {
+    return credentialResult(runtime, 'unavailable', failure('RUNTIME_UNAVAILABLE', 'runtime CLI could not be started'));
+  }
+  if (result?.error) {
+    const code = result.error.code === 'ETIMEDOUT' ? 'AUTH_STATUS_TIMEOUT'
+      : result.error.code === 'ENOENT' ? 'RUNTIME_UNAVAILABLE' : 'AUTH_STATUS_FAILED';
+    const message = code === 'RUNTIME_UNAVAILABLE' ? 'runtime CLI is not installed'
+      : code === 'AUTH_STATUS_TIMEOUT' ? 'runtime authentication status timed out'
+        : 'runtime authentication status could not be read';
+    return credentialResult(runtime, 'unavailable', failure(code, message));
+  }
+  if (result?.status !== 0) {
+    return credentialResult(runtime, 'unavailable', failure('CREDENTIALS_UNAVAILABLE', 'runtime authentication is not available'));
+  }
+  if (runtime === 'codex') return credentialResult(runtime, 'available', null);
+  let status;
+  try { status = JSON.parse(String(result.stdout || '')); }
+  catch (_) {
+    return credentialResult(runtime, 'refused', failure('AUTH_STATUS_INVALID', 'Claude authentication status is not valid JSON'));
+  }
+  if (!object(status) || typeof status.loggedIn !== 'boolean') {
+    return credentialResult(runtime, 'refused', failure('AUTH_STATUS_INVALID', 'Claude authentication status has an unsupported shape'));
+  }
+  if (!status.loggedIn) {
+    return credentialResult(runtime, 'unavailable', failure('CREDENTIALS_UNAVAILABLE', 'Claude is not authenticated'));
+  }
+  if (status.apiProvider !== 'firstParty') {
+    return credentialResult(runtime, 'refused', failure('WRONG_PROVIDER', 'Claude authentication is not Anthropic first-party'));
+  }
+  const methods = { 'claude.ai': 'oauth', oauth: 'oauth', apikey: 'api-credential', 'api-key': 'api-credential' };
+  const method = methods[String(status.authMethod || '').toLowerCase()];
+  if (!method) {
+    return credentialResult(runtime, 'refused', failure('AUTH_STATUS_INVALID', 'Claude authentication method is unsupported'));
+  }
+  return credentialResult(runtime, 'available', null, { method });
+}
+
+function probeRuntime({ root, runtime, evidence = null, expectedScope = null,
+  credentialEvidence = null, commandRunner = spawnSync, env = process.env } = {}) {
   if (!RUNTIMES.includes(runtime)) return capabilityResult(runtime, 'refused', failure('WRONG_RUNTIME', 'unsupported runtime'));
-  if (evidence !== null && evidence !== undefined) return validateCapabilityEvidence(evidence, { runtime, expectedScope });
+  const credentials = credentialEvidence || readCredentialStatus(runtime, { env, commandRunner });
+  const credentialExtra = { credential_status: credentials };
+  if (credentials.status === 'refused') {
+    return capabilityResult(runtime, 'refused', credentials.reason || failure('AUTH_STATUS_INVALID', 'runtime authentication was refused'), credentialExtra);
+  }
   const sharedMissing = existingFiles(root, SHARED_FILES);
   const runtimeMissing = existingFiles(root, RUNTIME_FILES[runtime]);
   if (sharedMissing.length || runtimeMissing.length) {
     return capabilityResult(runtime, 'unavailable', failure('MISSING_RUNTIME_CAPABILITY', 'runtime capability files are missing', {
       shared: sharedMissing,
       runtime: runtimeMissing,
-    }), { missing_files: [...sharedMissing, ...runtimeMissing] });
+    }), { ...credentialExtra, missing_files: [...sharedMissing, ...runtimeMissing] });
   }
-  const credentials = credentialNames(env, runtime);
-  if (!credentials.length) {
-    return capabilityResult(runtime, 'unavailable', failure('CREDENTIALS_UNAVAILABLE', 'runtime credentials are not present'), {
-      credential_names: CREDENTIAL_KEYS[runtime],
-    });
+  if (credentials.status !== 'available') {
+    return capabilityResult(runtime, 'unavailable', credentials.reason || failure('CREDENTIALS_UNAVAILABLE', 'runtime authentication is not available'), credentialExtra);
+  }
+  if (evidence !== null && evidence !== undefined) {
+    return { ...validateCapabilityEvidence(evidence, { runtime, expectedScope }), ...credentialExtra };
   }
   return capabilityResult(runtime, 'unavailable', failure('LIVE_PROBE_REQUIRED', 'files and credentials do not prove a live runtime'), {
-    credential_names: credentials,
+    ...credentialExtra,
   });
 }
 
-function capabilityMatrix({ root = process.cwd(), env = process.env, capabilities = null, expectedScope = null } = {}) {
+function capabilityMatrix({ root = process.cwd(), env = process.env, capabilities = null,
+  credentialStatuses = null, commandRunner = spawnSync, expectedScope = null } = {}) {
   return Object.fromEntries(RUNTIMES.map((runtime) => [runtime, probeRuntime({
     root,
     runtime,
     env,
     evidence: capabilities?.[runtime] || null,
+    credentialEvidence: credentialStatuses?.[runtime] || null,
+    commandRunner,
     expectedScope,
   })]));
 }
@@ -303,45 +411,66 @@ function normalizedEvaluationFlag(flag) {
   if (flag.status === 'refused') return refusedFlag(flag.reason || failure('INVALID_FLAG', 'rollout flag was refused'));
   return normalizeFlag({
     version: flag.rollout_version,
-    enabled: flag.enabled,
     runtimes: flag.runtimes,
   });
 }
 
-function evaluate({ root = process.cwd(), flag = readFlag(root), env = process.env, capabilities = null, expectedScope = null } = {}) {
+function evaluate({ root = process.cwd(), flag = readFlag(root), env = process.env, capabilities = null,
+  credentialStatuses = null, commandRunner = spawnSync, expectedScope = null } = {}) {
   const normalized = normalizedEvaluationFlag(flag);
-  const capabilitiesByRuntime = capabilityMatrix({ root, env, capabilities, expectedScope });
-  let status = normalized.status;
-  let reason = normalized.reason || null;
-  if (status === 'pending') {
-    const results = Object.values(capabilitiesByRuntime);
-    if (results.some((result) => result.status === 'refused')) {
-      status = 'refused';
-      reason = results.find((result) => result.status === 'refused').reason;
-    } else if (results.every((result) => result.status === 'available')) {
-      status = 'enabled';
-    } else {
-      status = 'unavailable';
-      reason = results.find((result) => result.status !== 'available').reason;
-    }
-  }
+  const capabilitiesByRuntime = capabilityMatrix({ root, env, capabilities, credentialStatuses, commandRunner, expectedScope });
+  const runtimeRollouts = Object.fromEntries(RUNTIMES.map((runtime) => {
+    const optedIn = normalized.runtimes[runtime] === true;
+    const capability = capabilitiesByRuntime[runtime];
+    const launchesEnabled = optedIn && capability.status === 'available';
+    const status = !optedIn ? 'disabled' : launchesEnabled ? 'enabled' : capability.status;
+    return [runtime, {
+      runtime,
+      provider: providerFor(runtime),
+      opted_in: optedIn,
+      status,
+      launches_enabled: launchesEnabled,
+      credential_status: capability.credential_status,
+      capability,
+      rollback: rollback({ runtime, status }),
+    }];
+  }));
+  const selected = Object.values(runtimeRollouts).filter((item) => item.opted_in);
+  const launchesEnabled = normalized.status !== 'refused' && selected.some((item) => item.launches_enabled);
+  let status = normalized.status === 'refused' ? 'refused'
+    : selected.length === 0 ? 'disabled'
+    : selected.every((item) => item.launches_enabled) ? 'enabled'
+      : launchesEnabled ? 'partial'
+        : selected.some((item) => item.status === 'refused') ? 'refused' : 'unavailable';
+  const reason = normalized.reason || selected.find((item) => !item.launches_enabled)?.capability.reason || null;
   return {
     schema: SCHEMA,
     version: VERSION,
     rollout_version: ROLLOUT_VERSION,
     status,
-    launches_enabled: status === 'enabled',
-    legacy_behavior: status === 'enabled' ? 'controller_enabled' : 'unchanged',
+    launches_enabled: launchesEnabled,
+    runtime_launches_enabled: Object.fromEntries(RUNTIMES.map((runtime) => [runtime, runtimeRollouts[runtime].launches_enabled])),
+    legacy_behavior: launchesEnabled ? 'controller_enabled_for_available_runtimes' : 'unchanged',
     flag: normalized,
     capabilities: capabilitiesByRuntime,
+    runtimes: runtimeRollouts,
     ...(reason ? { reason } : {}),
-    rollback: rollback({ status }),
+    rollback: {
+      action: 'rollback',
+      runtimes: Object.fromEntries(RUNTIMES.map((runtime) => [runtime, runtimeRollouts[runtime].rollback])),
+      records_deleted: false,
+      historical_preserved: true,
+      historical_relabelled: false,
+      receipts_preserved: true,
+      usage_preserved: true,
+    },
   };
 }
 
-function rollback({ status = 'disabled' } = {}) {
+function rollback({ runtime, status = 'disabled' } = {}) {
   return {
     action: 'rollback',
+    ...(runtime ? { runtime } : {}),
     from_status: status,
     launches_enabled: false,
     records_deleted: false,
@@ -369,36 +498,43 @@ function setAt(value, keys, replacement) {
   return { ...value, [key]: setAt(value[key], rest, replacement) };
 }
 
-function applyRollback(root) {
+function applyRollback(root, runtime) {
+  if (!RUNTIMES.includes(runtime)) {
+    return { ...rollback({ status: 'refused' }), status: 'refused', changed: false,
+      reason: failure('INVALID_RUNTIME', 'rollback requires --runtime claude or codex') };
+  }
   const { config, error } = readConfig(root);
   if (error) return { ...rollback({ status: 'refused' }), status: 'refused', changed: false, reason: error };
   if (!object(config)) return { ...rollback({ status: 'refused' }), status: 'refused', changed: false, reason: failure('INVALID_CONFIG', 'project config must be an object') };
   const locations = flagLocations(config);
-  if (!locations.length) return { ...rollback({ status: 'disabled' }), status: 'disabled', changed: false };
+  if (!locations.length) return { ...rollback({ runtime, status: 'disabled' }), status: 'disabled', changed: false };
   const entries = locations.map((location) => ({
     location,
     raw: location.reduce((value, key) => value && value[key], config),
     current: normalizeFlag(location.reduce((value, key) => value && value[key], config)),
   }));
   const invalid = entries.find(({ current }) => current.status === 'refused');
-  if (invalid) return { ...rollback({ status: 'refused' }), status: 'refused', changed: false, reason: invalid.current.reason };
-  const changed = entries.some(({ raw }) => raw.enabled !== false || raw.runtimes?.claude === true || raw.runtimes?.codex === true);
-  if (!changed) return { ...rollback({ status: 'disabled' }), status: 'disabled', changed: false };
-  const nextConfig = entries.reduce((value, { location, raw, current }) => setAt(value, location, {
-    ...clone(raw),
-    version: current.rollout_version,
-    enabled: false,
-    runtimes: { claude: false, codex: false },
-  }), config);
+  if (invalid) return { ...rollback({ runtime, status: 'refused' }), status: 'refused', changed: false, reason: invalid.current.reason };
+  const changed = entries.some(({ current }) => current.runtimes[runtime]);
+  if (!changed) return { ...rollback({ runtime, status: 'disabled' }), status: 'disabled', changed: false };
+  const nextConfig = entries.reduce((value, { location, raw, current }) => {
+    const nextFlag = { ...clone(raw), schema: SCHEMA, version: ROLLOUT_VERSION,
+      runtimes: { ...current.runtimes, [runtime]: false } };
+    delete nextFlag.enabled;
+    return setAt(value, location, nextFlag);
+  }, config);
   const file = configPath(root);
   withLock(lockDirFor(root), 'rollout', () => {
     writeAtomic(file, `${JSON.stringify(nextConfig, null, 2)}\n`);
   }, { label: 'run-rollout' });
+  const remainingEnabled = entries.some(({ current }) => RUNTIMES.some((name) => name !== runtime && current.runtimes[name]));
+  const status = remainingEnabled ? 'partial' : 'disabled';
   return {
-    ...rollback({ status: 'enabled' }),
-    status: 'disabled',
+    ...rollback({ runtime, status: 'enabled' }),
+    status,
     changed: true,
     config_path: path.relative(root, file),
+    remaining_runtimes: Object.fromEntries(RUNTIMES.map((name) => [name, name !== runtime && entries.some(({ current }) => current.runtimes[name])])),
   };
 }
 
@@ -410,25 +546,34 @@ function capabilityFile(file) {
 }
 
 function parseArgs(argv) {
-  const args = { command: argv[0] || 'status', root: process.cwd(), json: false, capabilityOnly: false, capabilityFile: null };
+  const args = { command: argv[0] || 'status', root: process.cwd(), json: false, capabilityOnly: false, capabilityFile: null, runtime: null };
   for (let i = 1; i < argv.length; i += 1) {
     const token = argv[i];
     if (token === '--json') args.json = true;
     else if (token === '--capability-only') args.capabilityOnly = true;
     else if (token === '--root') args.root = path.resolve(safe(argv[++i], '--root'));
     else if (token === '--capabilities') args.capabilityFile = path.resolve(safe(argv[++i], '--capabilities'));
+    else if (token === '--runtime') {
+      if (args.runtime !== null) throw new Error('--runtime may be specified only once');
+      args.runtime = safe(argv[++i], '--runtime');
+    }
     else if (token === '--help' || token === '-h') args.help = true;
     else throw new Error(`unknown argument: ${token}`);
   }
   if (!['status', 'probe', 'rollback'].includes(args.command)) throw new Error(`unknown command: ${args.command}`);
+  if (args.command === 'rollback' && !RUNTIMES.includes(args.runtime)) {
+    throw new Error('rollback requires --runtime claude or codex');
+  }
+  if (args.runtime && args.command !== 'rollback') throw new Error('--runtime is supported only by rollback');
   return args;
 }
 
 function help() {
   return [
-    'usage: run-rollout.cjs <status|probe|rollback> [--json] [--capability-only] [--root <project>] [--capabilities <file>]',
+    'usage: run-rollout.cjs <status|probe> [--json] [--capability-only] [--root <project>] [--capabilities <file>]',
+    '       run-rollout.cjs rollback --runtime <claude|codex> [--json] [--root <project>]',
     '',
-    'Evaluate the versioned autonomous controller rollout gate.',
+    'Evaluate provider-specific autonomous controller rollout gates.',
   ].join('\n');
 }
 
@@ -436,11 +581,11 @@ function execute(args) {
   if (args.help) return { result: { help: help() }, code: 0 };
   const root = path.resolve(args.root);
   if (args.command === 'rollback') {
-    const result = applyRollback(root);
+    const result = applyRollback(root, args.runtime);
     return { result: { schema: SCHEMA, version: VERSION, rollout_version: ROLLOUT_VERSION, ...result }, code: result.status === 'refused' ? 11 : 0 };
   }
   const capabilities = capabilityFile(args.capabilityFile);
-  const result = evaluate({ root, capabilities });
+  const result = evaluate({ root, capabilities, credentialStatuses: args.credentialStatuses, commandRunner: args.commandRunner, env: args.env });
   result.command = args.command;
   result.capability_only = args.capabilityOnly;
   const code = result.status === 'refused' ? 11 : result.status === 'unavailable' ? 10 : 0;
@@ -465,12 +610,15 @@ module.exports = Object.freeze({
   CAPABILITY_SCHEMA,
   VERSION,
   ROLLOUT_VERSION,
+  LEGACY_SCHEMA,
+  LEGACY_ROLLOUT_VERSION,
   RUNTIMES,
   PROVIDERS,
   SHARED_FILES,
   RUNTIME_FILES,
   normalizeFlag,
   readFlag,
+  readCredentialStatus,
   validateCapabilityEvidence,
   probeRuntime,
   capabilityMatrix,

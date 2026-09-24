@@ -32,6 +32,9 @@ code/config lines. Its explicit `clean --apply` action removes only listed
 full-line additions; review the dry-run first, then rerun verification and
 amend the commit.
 
+`scripts/publish-gate.cjs` is the shared CI and host hook entrypoint. The
+installed Claude `PreToolUse` hook invokes it for every `git push`.
+
 ## For planners (writing PLAN.md)
 
 1. **Full frontmatter, always**: `phase`, `plan`, `title`, `type`, `wave`,

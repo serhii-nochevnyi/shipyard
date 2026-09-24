@@ -31,6 +31,7 @@ const runTelemetry = require(path.join(__dirname, 'run-telemetry.cjs'));
 const GRAPH_DIR = path.join(process.cwd(), '.planning', 'graph');
 const TICKETS = path.join(GRAPH_DIR, 'tickets.json');
 const JOURNAL = path.join(GRAPH_DIR, 'delivery-log.jsonl');
+const SESSION_OBSERVATIONS = path.join(GRAPH_DIR, 'session-observations.jsonl');
 const asJson = process.argv.includes('--json');
 
 // The WARNINGS need a window; the totals do not. The journal is append-only and
@@ -70,6 +71,19 @@ const journal = fs.existsSync(JOURNAL)
       try { return [JSON.parse(line)]; } catch { return []; }
     })
   : [];
+
+const sessionRows = fs.existsSync(SESSION_OBSERVATIONS)
+  ? fs.readFileSync(SESSION_OBSERVATIONS, 'utf8').split('\n').filter(Boolean).flatMap((line) => {
+      try { return [JSON.parse(line)]; } catch { return []; }
+    })
+  : [];
+const sessionLatest = new Map();
+for (const row of sessionRows) {
+  if (!row || typeof row.observation_id !== 'string') continue;
+  const previous = sessionLatest.get(row.observation_id);
+  if (!previous || Number(row.revision || 1) >= Number(previous.revision || 1)) sessionLatest.set(row.observation_id, row);
+}
+const sessionObservations = [...sessionLatest.values()].filter((row) => withinWindow(row.observed_at));
 
 // Usage attribution is a later join, not a substitute for dispatch telemetry.
 // Read its latest revision for the coverage report, while leaving malformed
@@ -476,6 +490,68 @@ ladder.by_attribution_status = Object.fromEntries(
     .map((value) => [value, ladderEvents.filter((e) => attributionStatus(e) === value).length])
 );
 
+const countSessionField = (field, fallback = null) => {
+  const counts = new Map();
+  for (const row of sessionObservations) {
+    const value = row[field] || fallback;
+    if (value === undefined || value === null || value === '') continue;
+    counts.set(value, (counts.get(value) || 0) + 1);
+  }
+  return Object.fromEntries([...counts.entries()].sort(([a], [b]) => String(a).localeCompare(String(b))));
+};
+const sessionTokenFields = [
+  'input_tokens', 'uncached_input_tokens', 'cache_read_input_tokens',
+  'cache_creation_input_tokens', 'output_tokens', 'reasoning_output_tokens', 'total_tokens',
+];
+const sessionUsageGroups = new Map();
+for (const row of sessionObservations) {
+  const key = JSON.stringify([row.provider || null, row.observed_model || row.model || null, row.observed_effort || null]);
+  const group = sessionUsageGroups.get(key) || {
+    provider: row.provider || null,
+    model: row.observed_model || row.model || null,
+    effort: row.observed_effort || null,
+    observations: 0,
+    sessions: new Set(),
+    missing: Object.fromEntries(sessionTokenFields.map((field) => [field, 0])),
+    totals: Object.fromEntries(sessionTokenFields.map((field) => [field, 0])),
+  };
+  group.observations++;
+  if (row.session_id) group.sessions.add(row.session_id);
+  for (const field of sessionTokenFields) {
+    if (Number.isSafeInteger(row[field]) && row[field] >= 0) group.totals[field] += row[field];
+    else group.missing[field]++;
+  }
+  sessionUsageGroups.set(key, group);
+}
+const sessionObservationSummary = {
+  schema_version: 'shipyard.session-observation-summary.v1',
+  source: fs.existsSync(SESSION_OBSERVATIONS) ? SESSION_OBSERVATIONS : null,
+  window: windowLabel,
+  observations: sessionObservations.length,
+  sessions: new Set(sessionObservations.map((row) => row.session_id).filter(Boolean)).size,
+  unbound_observations: sessionObservations.filter((row) => row.binding_status === 'unbound').length,
+  by_runtime: countSessionField('runtime'),
+  by_provider: countSessionField('provider'),
+  by_model: countSessionField('observed_model', 'unknown'),
+  by_effort: countSessionField('observed_effort', 'unknown'),
+  usage_by_model: [...sessionUsageGroups.values()]
+    .sort((a, b) => (String(a.provider || '') + ':' + String(a.model || '') + ':' + String(a.effort || ''))
+      .localeCompare(String(b.provider || '') + ':' + String(b.model || '') + ':' + String(b.effort || '')))
+    .map((group) => ({
+      provider: group.provider,
+      model: group.model,
+      effort: group.effort,
+      observations: group.observations,
+      sessions: group.sessions.size,
+      totals: group.totals,
+      missing: group.missing,
+    })),
+  limitations: [
+    'Session observations are visible usage facts without ticket or dispatch binding.',
+    'Unbound sessions are excluded from model-efficiency comparisons until a dispatch identity is joined.',
+  ],
+};
+
 // Tickets the board keeps offering that no run ever takes. A run scopes itself
 // to the phase it is working, so a ticket from an older phase can sit under
 // `execute` indefinitely: never selected, therefore never drift-gated, therefore
@@ -609,6 +685,7 @@ const optimizationInput = {
     })),
     coverage: reconciliation.coverage,
     warnings: usageLedger.warnings,
+    session_observations: sessionObservationSummary,
   },
   run_telemetry: runTelemetrySummary,
   quality: {
@@ -633,6 +710,7 @@ if (asJson) {
     journal_events: journal.length,
     usage_attribution_records: attributionRecords.length,
     usage_attribution_warnings: usageLedger.warnings,
+    session_observations: sessionObservationSummary,
     usage_reconciliation: attributionReconciliation,
     prs_truncated: prsTruncated,
     // A zero-row result is not the same as a reachable repository with no
@@ -728,6 +806,14 @@ if (ladder.dispatches) {
   if (gaps.length) {
     console.log(`⚠ [${windowLabel}] ladder telemetry gaps: ${gaps.join(', ')} — those dispatches cannot be compared for cost or quality`);
   }
+}
+if (sessionObservationSummary.observations) {
+  const usageModels = sessionObservationSummary.usage_by_model.length;
+  console.log(
+    `session usage [${windowLabel}]: ${sessionObservationSummary.observations} observations from ` +
+    `${sessionObservationSummary.sessions} session(s), ${usageModels} model/effort group(s); ` +
+    `${sessionObservationSummary.unbound_observations} unbound — join dispatch IDs before comparing efficiency`
+  );
 }
 
 const pad = (v, w) => String(v ?? '—').padEnd(w);

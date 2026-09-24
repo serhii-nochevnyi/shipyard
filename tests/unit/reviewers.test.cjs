@@ -85,8 +85,9 @@ const prView = (over = {}) => JSON.stringify({
 const comment = (login, at, body) => ({
   user: { login }, created_at: at, html_url: `https://example/c/${at}`, body,
 });
-const review = (login, state, at) => ({
+const review = (login, state, at, commit_id) => ({
   user: { login }, state, submitted_at: at, html_url: `https://example/r/${at}`, body: '',
+  ...(commit_id ? { commit_id } : {}),
 });
 
 function logFile(tag) {
@@ -136,6 +137,31 @@ test('an explicit --repo is still pinned onto every call that takes one', () => 
   assert.strictEqual(out.clean, true);
   const view = callsIn(log).find((c) => c.startsWith('pr view '));
   assert.ok(view && /--repo acme\/other/.test(view), `${view}`);
+});
+
+test('an approved review must name the current head', () => {
+  const out = json(run(['unresolved', '27'], {
+    STUB_PR_VIEW: prView({ reviewDecision: 'APPROVED' }),
+    STUB_REVIEWS: JSON.stringify([review('coderabbitai[bot]', 'APPROVED', AFTER, '1111111111111111111111111111111111111111')]),
+  }));
+  assert.strictEqual(out.review_fresh, false, JSON.stringify(out));
+  assert.match(out.review_freshness_reason, /current head/);
+});
+
+test('an approved review on the current head is fresh', () => {
+  const out = json(run(['unresolved', '27'], {
+    STUB_PR_VIEW: prView({ reviewDecision: 'APPROVED' }),
+    STUB_REVIEWS: JSON.stringify([review('coderabbitai[bot]', 'APPROVED', AFTER, HEAD_OID)]),
+  }));
+  assert.strictEqual(out.review_fresh, true, JSON.stringify(out));
+});
+
+test('an approved decision without readable review evidence is stale', () => {
+  const out = json(run(['unresolved', '27'], {
+    STUB_PR_VIEW: prView({ reviewDecision: 'APPROVED' }),
+    STUB_REVIEWS: 'not json',
+  }));
+  assert.strictEqual(out.review_fresh, false, JSON.stringify(out));
 });
 
 test('the guard reads the merge state off the same call, so it costs no extra query', () => {

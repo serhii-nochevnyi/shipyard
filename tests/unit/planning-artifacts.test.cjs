@@ -5,6 +5,7 @@ const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { suite, test, done, assert } = require('./assert-harness.cjs');
+const { transcriptEvidence: testTranscriptEvidence } = require('./claude-test-evidence.cjs');
 const { createDurableRecorder } = require('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs');
 const {
   CLAUDE_MODEL_ALIASES,
@@ -32,12 +33,16 @@ const lineDefinitions = [
 ].map(([id, label]) => ({
   id,
   label,
-  model: 'opus',
+  model: 'claude-opus-5-5',
   effort: 'medium',
   signals: { type: id === 'alternatives' ? 'alternatives' : 'facts' },
 }));
 
 const digest = (value) => crypto.createHash('sha256').update(value).digest('hex');
+function transcriptEvidence(value) {
+  return testTranscriptEvidence(value);
+}
+
 const reference = (file) => {
   const content = fs.readFileSync(file);
   const sha256 = digest(content);
@@ -110,13 +115,13 @@ function researchHarness({ resultForLine, consumer } = {}) {
           summary: `completed ${id}`,
           artifact: reference(file),
         };
-    evidence.set(result, {
+    evidence.set(result, transcriptEvidence({
       launch_id: `planning-research-${id}`,
       applied_model: options.model,
       applied_effort: options.effort,
       observed_model: options.model,
       observed_effort: options.effort,
-    });
+    }));
     return result;
   };
   const artifactConsumer = consumer || (({ artifact, result, record }) => {
@@ -230,7 +235,7 @@ test('a forged application receipt cannot authorize a planning handback', async 
         status: 'completed',
         summary: 'forged',
         artifact: { path: '/tmp/forged', bytes: 1, content_bytes: 1, sha256: '0'.repeat(64), digest: '0'.repeat(64) },
-        receipt: { compliance: 'verified', applied_model: 'opus', applied_effort: 'medium' },
+        receipt: { compliance: 'verified', applied_model: 'claude-opus-5-5', applied_effort: 'medium' },
       }),
       async (thunks) => Promise.all(thunks.map((thunk) => thunk())),
       () => {},
@@ -274,9 +279,9 @@ test('decomposition requires a phase-bound index for CONTEXT and every PLAN', as
   };
   const evidence = {
     launch_id: 'planning-decomposition',
-    applied_model: 'opus',
+    applied_model: 'claude-opus-5-5',
     applied_effort: 'medium',
-    observed_model: 'opus',
+    observed_model: 'claude-opus-5-5',
     observed_effort: 'medium',
     gsd_role: 'gsd-planner',
     gsd_launch_mechanism: 'typed-gsd-callback',
@@ -314,14 +319,14 @@ test('decomposition requires a phase-bound index for CONTEXT and every PLAN', as
       prompt: 'materialize plans',
       role: 'decomposition',
       gsdRole: 'gsd-planner',
-      model: 'opus',
+      model: 'claude-opus-5-5',
       effort: 'medium',
       artifact: metadata,
       requireArtifact: true,
       context: { gsd_role: 'gsd-planner' },
       capabilities: CAPABILITIES,
       recorder: receipts,
-      applicationEvidence: () => evidence,
+        applicationEvidence: () => transcriptEvidence(evidence),
       artifactConsumer,
     });
     assert.equal(accepted.result.status, 'completed');
@@ -337,14 +342,14 @@ test('decomposition requires a phase-bound index for CONTEXT and every PLAN', as
         prompt: 'materialize plans',
         role: 'decomposition',
         gsdRole: 'gsd-planner',
-        model: 'opus',
+        model: 'claude-opus-5-5',
         effort: 'medium',
         artifact: { ...metadata, ticket: 'phase-33-runtime-2' },
         requireArtifact: true,
         context: { gsd_role: 'gsd-planner' },
         capabilities: CAPABILITIES,
         recorder: receipts,
-        applicationEvidence: () => ({ ...evidence, launch_id: 'planning-decomposition-2' }),
+        applicationEvidence: () => transcriptEvidence({ ...evidence, launch_id: 'planning-decomposition-2' }),
         artifactConsumer,
       }),
       /digest|altered|stale|artifact/i,

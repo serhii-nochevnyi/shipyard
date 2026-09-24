@@ -40,17 +40,20 @@ NODE
 HOME="$HOME_DIR" CLAUDE_HOME="$CLAUDE_HOME" SHIPYARD_PLUGIN_DIR="$PLUGIN" \
   SHIPYARD_GSD_AUTO_INSTALL=0 bash "$ROOT/scripts/install-shipyard-claude-hook.sh" >/dev/null
 
-node - "$CLAUDE_HOME/settings.json" "$CLAUDE_HOME/hooks/shipyard-stop-gate" <<'NODE'
+node - "$CLAUDE_HOME/settings.json" "$CLAUDE_HOME/hooks/shipyard-stop-gate" "$CLAUDE_HOME/hooks/shipyard-pre-push-gate.sh" <<'NODE'
 const fs = require('node:fs');
-const [settingsFile, bundle] = process.argv.slice(2);
+const [settingsFile, bundle, prePush] = process.argv.slice(2);
 const settings = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
 const commands = (settings.hooks.Stop || []).flatMap((group) => (group.hooks || []).map((hook) => hook.command));
+const prePushCommands = (settings.hooks.PreToolUse || []).flatMap((group) => (group.hooks || []).map((hook) => hook.command));
 if (!commands.includes(`node "${bundle}/stop-gate.cjs"`)) throw new Error('new stop hook is missing');
+if (!commands.includes(`node "${bundle}/session-observer.cjs" hook`)) throw new Error('session observer hook is missing');
+if (!prePushCommands.includes(`bash "${prePush}"`)) throw new Error('pre-push hook is missing');
 if (commands.some((command) => command.endsWith('/shipyard-stop-gate.cjs"'))) throw new Error('old stop hook remains');
 if (!(settings.hooks.Notification || []).some((group) => (group.hooks || []).some((hook) => hook.command === 'echo keep-me'))) {
   throw new Error('unrelated hook was changed');
 }
-for (const file of ['stop-gate.cjs', 'run-waker.cjs', 'run-store.cjs']) {
+for (const file of ['stop-gate.cjs', 'run-waker.cjs', 'run-store.cjs', 'publish-gate.cjs', 'comment-policy.cjs', 'session-observer.cjs', 'usage-report.cjs']) {
   if (!fs.existsSync(require('node:path').join(bundle, file))) throw new Error(`missing bundled dependency: ${file}`);
 }
 NODE

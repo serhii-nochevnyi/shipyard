@@ -24,7 +24,8 @@ const { suite, test, done, assert } = require(path.join(__dirname, 'assert-harne
 const SCRIPTS = path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts');
 const DISPATCH = path.join(SCRIPTS, 'dispatch-record.cjs');
 const STOP_GATE = path.join(SCRIPTS, 'stop-gate.cjs');
-const { activeDispatches, dispatchWhy, dispatchFingerprint, DISPATCH_SUBJECT, DISPATCH_TTL_MS } = require(DISPATCH);
+const { activeDispatches, dispatchWhy, dispatchFingerprint, reserveRound, recordRound, clearRound,
+  DISPATCH_SUBJECT, DISPATCH_TTL_MS } = require(DISPATCH);
 // One role vocabulary for the whole conveyor — the same list `mark` validates
 // against. The per-role subject table below is checked against IT, not against a
 // second list written out here.
@@ -32,6 +33,7 @@ const {
   ROLES, routeOf, parseRoute, parseRoute: parseLegacyRoute,
 } = require(path.join(SCRIPTS, 'pipeline-config.cjs'));
 const boundaryModule = require(path.join(SCRIPTS, 'dispatch-boundary.cjs'));
+const { agentsInFlight } = require(path.join(SCRIPTS, 'front.cjs'));
 const gen = require(path.join(__dirname, '..', '..', 'scripts', 'gen-codex-shipyard.cjs'));
 
 // SHIPYARD_GRAPH_DIR is the other explicit channel for "which graph"; a value
@@ -86,8 +88,63 @@ const store = (graph) => {
   try { return JSON.parse(fs.readFileSync(path.join(graph, 'dispatches.json'), 'utf8')).tickets || {}; }
   catch { return {}; }
 };
+const roundStore = (graph) => {
+  try { return JSON.parse(fs.readFileSync(path.join(graph, 'dispatches.json'), 'utf8')).rounds || {}; }
+  catch { return {}; }
+};
+const reservationStore = (graph) => {
+  try { return JSON.parse(fs.readFileSync(path.join(graph, 'dispatches.json'), 'utf8')).reservations || {}; }
+  catch { return {}; }
+};
 
 const READY = { status: 'pending', ready: true };
+
+const ROUND_PHASE = '38-round-test';
+const ROUND_IDS = ['T-38-01', 'T-38-02'];
+const ROUND_BASE = 'b'.repeat(40);
+
+function roundProject() {
+  const state = Object.fromEntries(ROUND_IDS.map((id, index) => [id, {
+    status: 'pr-open',
+    pr: 801 + index,
+    branch: `ticket/${id.toLowerCase()}-sentinel`,
+    pr_base: 'main',
+    head_sha: String(index + 1).repeat(40),
+    checks: { total: 1, failing: 0, pending: 0 },
+  }]));
+  const fixture = scratch(state);
+  const tickets = Object.fromEntries(ROUND_IDS.map((id) => [id, {
+    phase: '38',
+    plan: `.planning/phases/${ROUND_PHASE}/${id.slice(-2)}-PLAN.md`,
+    branch: state[id].branch,
+    risk: 'high',
+    human_checkpoint: true,
+  }]));
+  fs.writeFileSync(path.join(fixture.graph, 'tickets.json'), JSON.stringify({ tickets }));
+  fs.writeFileSync(path.join(fixture.graph, 'delivery-state.json'), JSON.stringify(state));
+  const ticketSet = ROUND_IDS.map((id) => ({
+    id,
+    pr: state[id].pr,
+    head: state[id].head_sha,
+    base: `main#${ROUND_BASE}`,
+    branch: state[id].branch,
+  }));
+  const ticketSetDigest = crypto.createHash('sha256').update(JSON.stringify(ticketSet)).digest('hex');
+  const recorder = boundaryModule.createDurableRecorder(path.join(fixture.dir, 'round-receipts'));
+  const boundary = boundaryModule.createDispatchBoundary({
+    adapters: { claude: { launch: applicationReceipt } },
+    recorder,
+  });
+  return { ...fixture, state, tickets, ticketSet, ticketSetDigest, recorder, boundary };
+}
+
+function launchRound(fixture, dispatchId = `round-${crypto.randomUUID()}`, ticketSet = fixture.ticketSet) {
+  const digest = crypto.createHash('sha256').update(JSON.stringify(ticketSet)).digest('hex');
+  const result = fixture.boundary.dispatch({
+    runtime: 'claude', role: 'pr-sentinel', dispatch_id: dispatchId,
+  }, { ticket: `round:${digest}`, subject_kind: 'round' });
+  return { dispatchId, digest, result };
+}
 
 function applicationReceipt(resolution) {
   const launchId = `launch-${resolution.dispatch_id}`;
@@ -417,6 +474,164 @@ test('mark records the role and activeDispatches reports it', () => {
   const live = activeDispatches(project);
   assert.deepStrictEqual(Object.keys(live), ['T-01-01']);
   assert.equal(live['T-01-01'].role, 'executor');
+});
+
+test('a round reservation projects one in-flight guard and expires changed members independently', () => {
+  const fixture = roundProject();
+  const dispatchId = `round-reservation-${crypto.randomUUID()}`;
+  try {
+    const result = reserveRound(fixture.project, {
+      dispatchId,
+      phase: ROUND_PHASE,
+      phaseNumber: 38,
+      ticketSet: fixture.ticketSet,
+      ticketSetDigest: fixture.ticketSetDigest,
+      agentId: 'claude-role-owner-1',
+    });
+    assert.equal(result.reserved, true);
+    assert.deepStrictEqual(Object.keys(reservationStore(fixture.graph)), [dispatchId]);
+    let active = activeDispatches(fixture.project);
+    assert.deepStrictEqual(Object.keys(active).sort(), ROUND_IDS);
+    assert.equal(active[ROUND_IDS[0]].agent_id, 'claude-role-owner-1');
+    assert.equal(agentsInFlight(active), 1);
+    assert.equal(run(['mark', ROUND_IDS[0], 'executor'], fixture.project).status, 1);
+
+    const current = readState(fixture.graph);
+    current[ROUND_IDS[0]].pr_base = 'release';
+    writeState(fixture.graph, current);
+    active = activeDispatches(fixture.project);
+    assert.deepStrictEqual(Object.keys(active), [ROUND_IDS[1]]);
+    assert.equal(run(['clear-round', `stale-${dispatchId}`], fixture.project).status, 0);
+    assert.ok(reservationStore(fixture.graph)[dispatchId]);
+    assert.equal(run(['clear-round', dispatchId], fixture.project).status, 0);
+    assert.deepStrictEqual(reservationStore(fixture.graph), {});
+  } finally {
+    fs.rmSync(fixture.dir, { recursive: true, force: true });
+  }
+});
+
+test('round mutations refuse malformed round stores without overwriting them', () => {
+  for (const [field, value] of [['rounds', []], ['reservations', null]]) {
+    const fixture = roundProject();
+    const file = path.join(fixture.graph, 'dispatches.json');
+    const original = JSON.stringify({ tickets: {}, rounds: {}, reservations: {}, [field]: value });
+    fs.writeFileSync(file, original);
+    try {
+      assert.throws(() => reserveRound(fixture.project, {
+        dispatchId: `invalid-store-${crypto.randomUUID()}`,
+        phase: ROUND_PHASE,
+        phaseNumber: 38,
+        ticketSet: fixture.ticketSet,
+        ticketSetDigest: fixture.ticketSetDigest,
+        agentId: 'claude-role-owner-1',
+      }), /dispatch store cannot be safely updated/);
+      assert.equal(fs.readFileSync(file, 'utf8'), original);
+      assert.throws(() => clearRound(fixture.project, 'invalid-store-round'), /dispatch store cannot be safely updated/);
+      assert.equal(fs.readFileSync(file, 'utf8'), original);
+    } finally {
+      fs.rmSync(fixture.dir, { recursive: true, force: true });
+    }
+  }
+});
+
+test('one authenticated sentinel receipt records one round and projects its shared identity to every live member', () => {
+  const fixture = roundProject();
+  try {
+    const launch = launchRound(fixture);
+    const result = recordRound(fixture.project, {
+      recorder: fixture.recorder,
+      dispatchId: launch.dispatchId,
+      phase: ROUND_PHASE,
+      phaseNumber: 38,
+      ticketSet: fixture.ticketSet,
+      ticketSetDigest: fixture.ticketSetDigest,
+    });
+    assert.equal(result.recorded, true);
+    assert.equal(result.round.subject_kind, 'round');
+    assert.equal(result.round.agent_id, launch.result.receipt.launch_id);
+    assert.equal(Object.keys(store(fixture.graph)).length, 0, 'the shared dispatch is not duplicated into ticket rows');
+    assert.deepStrictEqual(Object.keys(roundStore(fixture.graph)), [launch.dispatchId]);
+    const active = activeDispatches(fixture.project);
+    assert.deepStrictEqual(Object.keys(active).sort(), ROUND_IDS);
+    assert.equal(active[ROUND_IDS[0]].agent_id, active[ROUND_IDS[1]].agent_id);
+    assert.equal(active[ROUND_IDS[0]].round_id, launch.dispatchId);
+    assert.equal(agentsInFlight(active), 1);
+    const events = fs.readFileSync(path.join(fixture.graph, 'delivery-log.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+    assert.equal(events.length, 1);
+    assert.equal(events[0].subject_kind, 'round');
+    assert.equal(events[0].dispatch_id, launch.dispatchId);
+    assert.deepStrictEqual(events[0].tickets, ROUND_IDS);
+    const replay = recordRound(fixture.project, {
+      recorder: fixture.recorder,
+      dispatchId: launch.dispatchId,
+      phase: ROUND_PHASE,
+      phaseNumber: 38,
+      ticketSet: fixture.ticketSet,
+      ticketSetDigest: fixture.ticketSetDigest,
+    });
+    assert.equal(replay.idempotent, true);
+    assert.equal(fs.readFileSync(path.join(fixture.graph, 'delivery-log.jsonl'), 'utf8').trim().split('\n').length, 1);
+    const stored = JSON.parse(fs.readFileSync(path.join(fixture.graph, 'dispatches.json'), 'utf8'));
+    stored.rounds[launch.dispatchId].members[0].branch = 'ticket/forged-member';
+    fs.writeFileSync(path.join(fixture.graph, 'dispatches.json'), JSON.stringify(stored));
+    assert.deepStrictEqual(activeDispatches(fixture.project), {}, 'the round digest binds every stored PR member');
+  } finally {
+    fs.rmSync(fixture.dir, { recursive: true, force: true });
+  }
+});
+
+test('round recording rejects incomplete membership and existing per-ticket ownership without partial writes', () => {
+  for (const conflict of [false, true]) {
+    const fixture = roundProject();
+    try {
+      if (conflict) assert.equal(run(['mark', ROUND_IDS[0], 'pr-sentinel'], fixture.project).status, 0);
+      const ticketSet = conflict ? fixture.ticketSet : fixture.ticketSet.slice(0, 1);
+      const launch = launchRound(fixture, `round-negative-${crypto.randomUUID()}`, ticketSet);
+      assert.throws(() => recordRound(fixture.project, {
+        recorder: fixture.recorder,
+        dispatchId: launch.dispatchId,
+        phase: ROUND_PHASE,
+        phaseNumber: 38,
+        ticketSet,
+        ticketSetDigest: launch.digest,
+      }), conflict ? /already has active dispatch ownership/ : /omits a currently open PR ticket/);
+      assert.deepStrictEqual(roundStore(fixture.graph), {});
+      const journal = fs.existsSync(path.join(fixture.graph, 'delivery-log.jsonl'))
+        ? fs.readFileSync(path.join(fixture.graph, 'delivery-log.jsonl'), 'utf8').trim().split('\n').filter(Boolean).length
+        : 0;
+      assert.equal(journal, conflict ? 1 : 0);
+    } finally {
+      fs.rmSync(fixture.dir, { recursive: true, force: true });
+    }
+  }
+});
+
+test('round expiry is per member and exact round clearing preserves a newer ticket dispatch', () => {
+  const fixture = roundProject();
+  try {
+    const launch = launchRound(fixture);
+    recordRound(fixture.project, {
+      recorder: fixture.recorder,
+      dispatchId: launch.dispatchId,
+      phase: ROUND_PHASE,
+      phaseNumber: 38,
+      ticketSet: fixture.ticketSet,
+      ticketSetDigest: fixture.ticketSetDigest,
+    });
+    const current = readState(fixture.graph);
+    current[ROUND_IDS[0]].pr_base = 'release';
+    writeState(fixture.graph, current);
+    assert.deepStrictEqual(Object.keys(activeDispatches(fixture.project)), [ROUND_IDS[1]]);
+    assert.equal(run(['mark', ROUND_IDS[0], 'executor'], fixture.project).status, 0);
+    assert.equal(run(['clear-round', `stale-${launch.dispatchId}`], fixture.project).status, 0);
+    assert.ok(roundStore(fixture.graph)[launch.dispatchId]);
+    assert.equal(run(['clear-round', launch.dispatchId], fixture.project).status, 0);
+    assert.deepStrictEqual(Object.keys(activeDispatches(fixture.project)), [ROUND_IDS[0]]);
+    assert.equal(store(fixture.graph)[ROUND_IDS[0]].role, 'executor');
+    assert.deepStrictEqual(roundStore(fixture.graph), {});
+  } finally {
+    fs.rmSync(fixture.dir, { recursive: true, force: true });
+  }
 });
 
 test('activeDispatches accepts the full delivery-state envelope', () => {
@@ -1640,7 +1855,7 @@ test('two guards recorded through the real CLI come out as TWO agents, end to en
 suite('dispatch-record — the docs pass what the record needs, and the query reads it back');
 
 const DOC_MARKS = [
-  [path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'commands', 'deliver.md'), 3],
+  [path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'commands', 'deliver.md'), 2],
   [path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'references', 'pr-sentinel.md'), 1],
 ];
 
@@ -1676,7 +1891,7 @@ test('every mark deliver.md documents the boundary receipt identity too', () => 
   const [file] = DOC_MARKS[0];
   const marks = fs.readFileSync(file, 'utf8').split('\n')
     .filter((l) => /dispatch-record\.cjs mark <T>/.test(l));
-  assert.ok(marks.length >= 3, `expected the documented invocations, found ${marks.length}`);
+  assert.ok(marks.length >= 2, `expected the documented invocations, found ${marks.length}`);
   for (const l of marks) {
     assert.ok(/--boundary-store /.test(l),
       `a documented mark that names no receipt store: ${l.trim()}`);
@@ -1685,44 +1900,44 @@ test('every mark deliver.md documents the boundary receipt identity too', () => 
   }
 });
 
-test('the PR-sentinel refuses an Agent fallback without a boundary receipt', () => {
+test('the Claude PR-sentinel uses a host-owned round receipt and no per-ticket mark', () => {
   const deliver = fs.readFileSync(DOC_MARKS[0][0], 'utf8');
   const sentinel = deliver.slice(
     deliver.indexOf('## Step 4 — Post the sentinel'),
     deliver.indexOf('Then **return to Step 3 immediately.**')
   );
+  const codex = sentinel.slice(sentinel.indexOf('Codex uses `codex-delivery-host.cjs`'));
+  const claude = sentinel.slice(0, sentinel.indexOf('Codex uses `codex-delivery-host.cjs`'));
 
   assert.ok(sentinel.length > 0, 'cannot isolate the PR-sentinel launch contract');
-  assert.match(sentinel, /hard-refuse[\s\S]*before constructing a prompt,\s+spawning, or recording/,
-    'the sentinel must refuse an unsupported launch before either side effect');
-  assert.match(sentinel, /--boundary-store <receipt-store>[\s\S]*--dispatch-id <dispatch-id>/,
-    'a compliant sentinel record must reconcile the boundary receipt');
+  assert.match(claude, /claude-role-host\.cjs[\s\S]*round:<digest>/,
+    'the Claude sentinel must use the host-derived round subject');
+  assert.match(claude, /clear-round <round_dispatch_id>/,
+    'the shared receipt must be cleared by its exact round identity');
+  assert.doesNotMatch(claude, /dispatch-record\.cjs mark <T> pr-sentinel/,
+    'a shared Claude receipt must not be written as a ticket mark');
   assert.match(sentinel, /concrete application receipt/,
     'a compliant sentinel record must require application evidence');
-  assert.doesNotMatch(sentinel, /Resolved effort: <effort>/,
-    'prompt-only effort must not be offered as a sentinel fallback');
-  assert.match(sentinel, /Do not substitute[\s\S]*effort_applied=unsupported/,
+  assert.match(codex, /codex-delivery-host\.cjs[\s\S]*role: "pr-sentinel"[\s\S]*ticket-mark/,
+    'Codex sentinel requests must use the host and ticket-scoped receipt path');
+  assert.match(sentinel, /Do not substitute[\s\S]*unsupported/,
     'unsupported effort must be prohibited for a routed sentinel launch');
 });
 
-test('the generic Agent fallback excludes routed fixers before any side effect', () => {
+test('delivery refuses a generic Agent fallback before any side effect', () => {
   const deliver = fs.readFileSync(DOC_MARKS[0][0], 'utf8');
-  const genericFallback = deliver.slice(
-    deliver.indexOf('before starting (e.g. unavailable)'),
+  const runtimeHost = deliver.slice(
+    deliver.indexOf('## Parallel work through the selected runtime host'),
     deliver.indexOf('## Step 0 — Cold start')
   );
 
-  assert.ok(genericFallback.length > 0, 'cannot isolate the generic Agent fallback block');
-  assert.match(genericFallback, /Routed `ci-fix` and\s+`review-fix` are excluded/,
-    'routed fixers must be excluded when Workflow cannot start');
-  assert.match(genericFallback, /not eligible for that generic Agent fallback/,
-    'path selection must not restore routed fixers through generic Agent');
-  assert.match(genericFallback, /hard-refuse and return `repair blocked` before constructing a\s+prompt, using a\s+session or in-process fallback, spawning, or recording/,
-    'the generic block must refuse repair before prompt, fallback, spawn, or record');
-  assert.match(genericFallback, /`false` — force the Agent fallback only for non-repair\s+roles, and return `repair blocked`/,
-    'forcing the non-Workflow path must still block routed repair');
-  assert.doesNotMatch(genericFallback, /EVERY Agent spawn \(executor, drift-check, ci-fix\/review-fix/,
-    'the generic Agent spawn list must not include routed fixers');
+  assert.ok(runtimeHost.length > 0, 'cannot isolate the selected runtime-host contract');
+  assert.match(runtimeHost, /The command must not invoke a native Workflow\s+or Agent directly/,
+    'delivery roles must not bypass the runtime host');
+  assert.match(runtimeHost, /A nonzero exit, missing host, or invalid receipt is a refusal; do not switch\s+providers or use a session, inline, or generic-Agent fallback/,
+    'a failed host must not restore a generic Agent or session fallback');
+  assert.match(runtimeHost, /A failed\s+`ci-fix` or `review-fix` returns `repair blocked`/,
+    'failed repair launches must remain blocked before state is updated');
 });
 
 test('complete sentinel and fixer guidance require a concrete receipt, not a fallback', () => {
@@ -1749,7 +1964,7 @@ test('complete sentinel and fixer guidance require a concrete receipt, not a fal
   const deliver = fs.readFileSync(DOC_MARKS[0][0], 'utf8');
   for (const [start, end, role] of [
     ['first | progress | repeat | repeat_exhausted', "'escalate' from the agent", 'ci-fix'],
-    ['there is feedback → review-fix agent', 'the agent either fixes', 'review-fix'],
+    ['there is feedback → submit `review-fix`', 'the agent either fixes', 'review-fix'],
   ]) {
     const section = deliver.slice(deliver.indexOf(start), deliver.indexOf(end, deliver.indexOf(start)));
     assert.match(section, /explicitly applies the resolved[\s\S]*application receipt/, `${role} requires an application receipt`);
@@ -1764,8 +1979,12 @@ test('complete sentinel and fixer guidance require a concrete receipt, not a fal
 
 test('delivery docs prefer one mark/clear batch per fan-out', () => {
   const sentinel = fs.readFileSync(path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'references', 'pr-sentinel.md'), 'utf8');
+  assert.match(sentinel, /one authenticated round[\s\S]*reservation/,
+    'the Claude background guard must use one shared round record');
+  assert.match(sentinel, /Do not call `mark` or `mark-many` for this\s+receipt/,
+    'the shared guard receipt must not be duplicated per ticket');
   assert.match(sentinel, /dispatch-record\.cjs mark-many --stdin/,
-    'the background guard must use the same batch launch path');
+    'independent ticket dispatches retain the batch launch path');
   assert.match(sentinel, /dispatch-record\.cjs clear-many --stdin/,
     'the background guard must use the same batch cleanup path');
   assert.match(sentinel, /clear <T> <dispatch_id>/,

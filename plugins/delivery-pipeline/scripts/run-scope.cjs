@@ -20,8 +20,8 @@ function createPhaseIdentity(input) {
   return contract.normalizePhaseIdentity(input);
 }
 
-function createTicketIdentity(input) {
-  return contract.normalizeTicketIdentity(input);
+function createTicketIdentity(input, options) {
+  return contract.normalizeTicketIdentity(input, options);
 }
 
 function createWorktreeIdentity(input) {
@@ -69,7 +69,6 @@ function createRunScope(input = {}) {
     worktree: required(input.worktree, 'worktree'),
   });
   const phase = createPhaseIdentity(required(input.phase, 'phase'));
-  const ticket = createTicketIdentity(required(input.ticket, 'ticket'));
   const worktree = createWorktreeIdentity(required(input.worktree || repository.worktree, 'worktree'));
   const runtime = createRuntimeIdentity(required(input.runtime, 'runtime'), input.provider);
   const state_revision = createStateRevision(input.state_revision === undefined ? 0 : input.state_revision);
@@ -79,6 +78,7 @@ function createRunScope(input = {}) {
     runtime: runtime.runtime,
     provider: runtime.provider,
   });
+  const ticket = createTicketIdentity(required(input.ticket, 'ticket'), { role: dispatch.role, phase: phase.phase });
   const lease = createLeaseIdentity(input.lease || {
     lease_id: contract.id('lease'),
     owner_id: required(input.owner_id || input.ownerId, 'owner_id'),

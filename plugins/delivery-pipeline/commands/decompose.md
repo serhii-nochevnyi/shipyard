@@ -34,6 +34,29 @@ exist: /shipyard:deliver reads only those. Declaring Gate 2 passed on the
 basis of any other artifacts is FORBIDDEN — Gate 2 is exclusively
 exit 0 from validate-graph.cjs.
 
+## Runtime and host selection
+
+Run `node ${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-config.cjs resolve --json` and
+take the active runtime from `config.gsd.runtime`; it must be exactly `claude`
+or `codex`. Keep it fixed for the complete GSD chain. Claude uses
+`${CLAUDE_PLUGIN_ROOT}/scripts/claude-decompose-host.cjs --request-file
+<json>`. Codex uses
+`${CLAUDE_PLUGIN_ROOT}/scripts/codex-decompose-host.cjs --args-file <json>`.
+Each host request carries one exact typed role (`gsd-phase-researcher`,
+`gsd-planner`, or `gsd-plan-checker`), declared signals, and scoped prompt
+data. Host request fields differ by runtime. The host resolves model and effort,
+generates or validates the dispatch id, builds `createDispatchBoundary`, calls
+`boundary.dispatch`, and proves the exact GSD agent in its durable receipt. Do
+not pass caller-selected model/effort fields or invoke GSD callbacks outside
+that host.
+
+Use `run-rollout.cjs status --json` to read the selected provider's controller
+status at `runtimes.<runtime>.launches_enabled`. This flag gates autonomous
+controller launches; it does not disable a command-issued decomposition.
+Controller opt-in does not change host selection. An unavailable or refused
+host cannot switch to the other provider; stop its launch before planning
+output is accepted.
+
 ## Step 0 — Find the input
 
 1. Read `.planning/architecture/` — the list of `ADR-*.md`.
@@ -45,14 +68,15 @@ exit 0 from validate-graph.cjs.
 ## Step 0.5 — Mandatory GSD runtime dispatch
 
 Every GSD launch made by this command crosses the ADR-014 dispatch boundary.
-The boundary, not `.planning/config.json`, a model profile, or an inherited
-session, is the authority for runtime, model, effort, escalation, and receipt.
-Initialize it before starting the GSD chain:
+The selected executable host, not `.planning/config.json`, a model profile, or
+an inherited session, is the authority for runtime, model, effort, escalation,
+and receipt. The command invokes that host for each named role; the following
+boundary contract describes what the host enforces.
 
 1. Identify the active host runtime. It MUST be exactly `codex` or `claude` and
-   MUST be saved as `runtime` and passed explicitly to every later preflight and
-   `boundary.dispatch` input. A project preference, an installed integration,
-   or an ambiguous host is not runtime selection.
+   MUST be saved as `runtime` and passed explicitly to every later preflight
+   and host selection. A project preference, an installed integration, or an
+   ambiguous host is not runtime selection.
 2. With `runtime` fixed, preflight the project-relative delivery contract. Run
    `node ${CLAUDE_PLUGIN_ROOT}/scripts/gsd-tune.cjs --check --runtime "$runtime"`
    and inspect the report by category. Tuning drift is harmless and MUST NOT
@@ -68,24 +92,22 @@ Initialize it before starting the GSD chain:
    explicit `--runtime "$runtime"` keeps a dual-runtime host from checking the
    wrong install or reporting ambiguity; this preflight does not replace a
    dispatch receipt.
-3. Use `createDispatchBoundary` from `dispatch-boundary.cjs` with
+3. The selected host uses `createDispatchBoundary` from `dispatch-boundary.cjs` with
    `requireGsdRole: true`, the matching `createCodexDispatchAdapter` or
    `createClaudeDispatchAdapter`, and a `createDurableRecorder`. The adapter
    must advertise the selected model and effort pair. If the adapter,
    capabilities, recorder, or typed GSD launch hook is unavailable, refuse
    before launching.
-4. Before every researcher, planner, or checker callback, load the authoritative
-   routed configuration and resolve that callback through
-   `pipelineConfig.resolveDispatch({ root, runtime, role, signals, dispatch_id })`
-   (or the equivalent `pipeline-config.cjs model <role> --routed --runtime
-   "$runtime" --dispatch-id "$dispatch_id"` command). This is mandatory even
-   when the project has no overrides. Keep the complete resolution and pass its
-   selected `model` and `effort` together with the same `dispatch_id` to the
+4. Before every researcher, planner, or checker launch, the host loads the
+   authoritative routed configuration and resolves that role through
+   `pipelineConfig.resolveDispatch({ root, runtime, role, signals, dispatch_id })`.
+   This is mandatory even when the project has no overrides. The host keeps the
+   complete resolution and passes its selected `model` and `effort` to the
    boundary. Any malformed, stale, ambiguous, or conflicting project/GSD
-   override is a refusal before the adapter or host is called; do not inspect
-   only compatibility settings or continue with the canonical default.
-5. Use the canonical boundary call for each role, including its exact typed GSD
-   role:
+   override is refused before launch; do not inspect compatibility settings or
+   continue with the canonical default.
+5. The host uses the canonical boundary call for each role, including its exact
+   typed GSD role:
    `boundary.dispatch({ runtime, role, gsd_role, signals, dispatch_id,
    model: resolution.model, effort: resolution.effort }, context)`.
    Use `gsd-phase-researcher` for `research`, `gsd-planner` for the planner,
@@ -107,7 +129,7 @@ ladder into the other.
 | `gsd-planner` | `decomposition` | Sol/high | Sol/xhigh | `critical: true` or `checkpoint: true` |
 | `gsd-plan-checker` | `decomposition` | Sol/high | Sol/xhigh | `critical: true` or `checkpoint: true` |
 
-**Workflow-native alias runtime — native alias ladder**
+**Claude runtime — Anthropic alias ladder**
 
 | GSD launch | Boundary role | Base selection | Escalation selections | Declared escalation signals |
 | --- | --- | --- | --- | --- |
@@ -118,7 +140,7 @@ ladder into the other.
 On the Codex ladder, research and decomposition start at Sol/high. Research
 may escalate to Sol/xhigh only for `complexity: very-complex`; `type:
 alternatives` is inert. Decomposition may escalate to Sol/xhigh only for
-the declared critical or checkpoint signal. On the native alias ladder,
+the declared critical or checkpoint signal. On the Claude alias ladder,
 research starts at opus/medium and escalates to opus/max only for the declared
 `complexity: very-complex` signal; `type: alternatives` is inert. Decomposition
 starts at opus/medium and escalates to opus/max under the declared critical or
@@ -127,7 +149,7 @@ policy choose the highest applicable rung and retain the signal evidence.
 Pass signals as policy inputs; never compose a model, effort, alias, or literal
 fallback in this command.
 
-For the native alias ladder, `opus/max` is the ADR-014 policy result for these
+For the Claude alias ladder, `opus/max` is the ADR-014 policy result for these
 research and decomposition escalations. Fable is not a valid rung for either
 role. The routed `pipeline-config.cjs` `resolveDispatch` bridge must validate the
 explicit runtime, the canonical role, and the declared signals before launch.
@@ -173,19 +195,10 @@ does not fall back to a generic launch. `context.gsd_role`, `agentType`,
 are not attestation; source-contract fixtures exercise the missing and
 mismatched cases as well as the successful typed path.
 
-**Cross-ticket integration dependency (T-36-03/T-36-05):** This command
-declares the callback contract; the production Workflow host binding is
-`${CLAUDE_PLUGIN_ROOT}/scripts/claude-workflow-host.cjs`. It injects the typed
-`__createClaudeWorkflowDispatch` callback as the sixth workflow binding and
-keeps capabilities, the durable recorder, application evidence, and the
-optional host-owned `typedGsdCallback` outside serializable `args`. The host
-must provide and enforce the named-role and launch-mechanism attestations,
-then invoke `boundary.dispatch` for the three callbacks. When the
-`typedGsdCallback` resource is absent, the host must refuse the named callback
-before launch; a generic `agent` binding is not a substitute. `context.gsd_role`,
-`agentType`, `agent_type`, bare Agent/Task markers, and self-asserted
-application evidence are not attestation; this command and its source-contract
-fixtures must not simulate them.
+The production entrypoints are `claude-decompose-host.cjs` and
+`codex-decompose-host.cjs`. They provide the typed runtime callback and refuse
+before accepting a plan without a verified boundary receipt. Do not call an
+ordinary `agent()` function or invoke an unbound native Workflow.
 
 Treat a dispatch as successful only when the returned record contains a
 boundary-verified receipt (`receipt.compliance` is `verified`) and the durable
@@ -284,8 +297,8 @@ context first, then one callback set, then materialization verification.
    refuses the callback before reservation. The packet keeps the full ADR,
    requirements and mandatory GSD policy even when the estimated UTF-8/4 size
    exceeds 12,000 tokens, recording overflow and indexed optional references.
-4. With that context fixed, the Skill makes exactly one set of three typed,
-   boundary-owned callbacks, in this order:
+4. With that context fixed, invoke the selected host exactly three times, once
+   for each typed GSD role, in this order:
    - `gsd-phase-researcher` → `role: research`, with only the declared research
      signals.
    - `gsd-planner` → `role: decomposition`, with only the declared
@@ -293,14 +306,13 @@ context first, then one callback set, then materialization verification.
    - `gsd-plan-checker` → `role: decomposition`, with only the declared
      critical/checkpoint signals.
 
-   Each callback receives the same explicit context plus the selected runtime,
-   resolved launch selection, a unique `dispatch_id`, and the planning artifact
-   contract above. Each boundary call must return one acknowledged, verified
-   durable receipt and one bounded, receipt-bound artifact reference. The set
-   is exactly three callback dispatches and exactly three verified durable
-   receipts, one per typed role. Never collapse these roles into one inline
-   prompt or launch a generic agent when a callback cannot apply the
-   resolution.
+   Each host request receives the same explicit context, its typed role, the
+   declared signals, and the planning artifact contract above. The host resolves
+   the model and effort and binds them to its dispatch id. Each call must return
+   one acknowledged, verified durable receipt and one bounded, receipt-bound
+   artifact reference. The set is exactly three host dispatches and three
+   verified receipts, one per typed role. Never collapse these roles into one
+   inline prompt or launch a generic agent when a host refuses.
 5. **Verify materialization**: inspect the trusted artifact index, then run
    `ls .planning/phases/<N>-*/*-PLAN.md` and verify the listed `CONTEXT.md` plus
    every `PLAN.md` still matches its sealed digest. The files MUST exist, and

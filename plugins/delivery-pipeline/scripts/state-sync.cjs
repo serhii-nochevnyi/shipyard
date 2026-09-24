@@ -239,7 +239,6 @@ function gh(args, { tolerate = false } = {}) {
 // enough for a call whose failure has to reach the board wearing a reason a
 // person can act on — the epic comparison below is the one such call, and
 // "integration state unknown" with no cause named is a dead end. So it goes
-// through the bounded runner like `ghChecks` and keeps stdout, the exit status and the
 // first line of stderr apart. One call per epic per sync (not per PR), so the
 // conveyor's tick rate is untouched.
 function ghTry(args) {

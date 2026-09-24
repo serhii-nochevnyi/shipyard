@@ -5,6 +5,7 @@ const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { suite, test, done, assert } = require('./assert-harness.cjs');
+const { transcriptEvidence: testTranscriptEvidence } = require('./claude-test-evidence.cjs');
 
 const overhead = require('../../plugins/delivery-pipeline/scripts/orchestration-overhead.cjs');
 const waitEvents = require('../../plugins/delivery-pipeline/scripts/wait-events.cjs');
@@ -18,6 +19,10 @@ const {
 } = require('../../plugins/delivery-pipeline/scripts/context-packet.cjs');
 
 const sha256 = (value) => crypto.createHash('sha256').update(value).digest('hex');
+
+function transcriptEvidence(value) {
+  return testTranscriptEvidence(value);
+}
 
 function fixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-overhead-'));
@@ -221,11 +226,11 @@ test('targeted role-artifact consumption records selected bytes separately from 
       git(root, ['add', 'implemented.txt']);
       git(root, ['commit', '--quiet', '-m', `feat(${ticket}): implementation`]);
       const result = { id: ticket, status: 'committed', summary: 'done', blocking_count: 0 };
-      resultByValue.set(result, {
+      resultByValue.set(result, transcriptEvidence({
         launch_id: 'overhead-artifact-launch', applied_model: launchOptions.model,
         applied_effort: launchOptions.effort, observed_model: launchOptions.model,
         observed_effort: launchOptions.effort,
-      });
+      }));
       return result;
     },
     parallel: async (thunks) => Promise.all(thunks.map((thunk) => thunk())),

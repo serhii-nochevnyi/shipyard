@@ -16,6 +16,7 @@ const canonicalValidateResolution = canonicalPolicy.validateResolution;
 const canonicalStableStringify = canonicalPolicy.stableStringify;
 const { resolveTaskLevel } = require('./pipeline-config.cjs');
 const modelCapability = require('./model-capability.cjs');
+const { matchesModelObservation } = require('./runtime-adapters.cjs');
 const {
   capabilityForBoundary,
   createSessionHandoff,
@@ -927,6 +928,23 @@ function ticketFromContext(context) {
   return ticket;
 }
 
+function subjectKindFromContext(context, role, ticket) {
+  const kind = isObject(context) && context.subject_kind !== undefined
+    ? context.subject_kind
+    : 'ticket';
+  if (kind === 'ticket') {
+    if (typeof ticket === 'string' && ticket.startsWith('round:')) {
+      refuse('INVALID_INPUT', 'round subjects require subject_kind round');
+    }
+    return kind;
+  }
+  if (kind !== 'round' || role !== 'pr-sentinel'
+      || typeof ticket !== 'string' || !/^round:[a-f0-9]{64}$/.test(ticket)) {
+    refuse('INVALID_INPUT', 'round subjects require pr-sentinel and a canonical round digest');
+  }
+  return kind;
+}
+
 function newDispatchId() {
   const suffix = typeof crypto.randomUUID === 'function'
     ? crypto.randomUUID()
@@ -1290,7 +1308,7 @@ function unwrapReceipt(value) {
   return value;
 }
 
-function observedValue(receipt, field, applied, allowUnknown) {
+function observedValue(receipt, field, applied, allowUnknown, runtime) {
   if (!Object.prototype.hasOwnProperty.call(receipt, field)) {
     if (allowUnknown) return OBSERVATION_UNKNOWN;
     refuse('MISSING_RECEIPT', `application receipt is missing ${field}`, { field });
@@ -1303,7 +1321,8 @@ function observedValue(receipt, field, applied, allowUnknown) {
   if (typeof value !== 'string' || value.trim() === '' || /[\s\u0000-\u001f\u007f]/.test(value)) {
     refuse('INVALID_RECEIPT', `${field} must be a concrete whitespace-free value or unknown`, { field });
   }
-  if (value !== applied) {
+  const runtimeMatch = field === 'observed_model' && matchesModelObservation(runtime, value, applied);
+  if (value !== applied && !runtimeMatch) {
     refuse('NONCOMPLIANT_RECEIPT', `${field} ${JSON.stringify(value)} contradicts applied value ${JSON.stringify(applied)}`, { field, applied, observed: value });
   }
   return value;
@@ -1364,7 +1383,20 @@ function verifyApplicationReceiptInternal(resolution, rawReceipt, options = {}) 
         actual: { gsd_role: receipt.gsd_role, gsd_launch_mechanism: receipt.gsd_launch_mechanism },
       });
     }
-  } else if (receipt.gsd_role !== undefined || receipt.gsd_launch_mechanism !== undefined) {
+    if (receipt.runtime === 'claude') {
+      const evidence = receipt.gsd_agent_evidence;
+      if (!isObject(evidence)
+          || evidence.schema !== 'shipyard.gsd-agent-application.v1'
+          || evidence.runtime !== 'claude' || evidence.role !== gsdRole
+          || typeof evidence.session_id !== 'string' || evidence.session_id !== receipt.session_id
+          || evidence.session_start_agent_type !== gsdRole
+          || evidence.transcript_agent_setting !== gsdRole
+          || !Number.isSafeInteger(evidence.agent_setting_records) || evidence.agent_setting_records < 1) {
+        refuse('MISSING_RECEIPT', 'Claude GSD application receipt lacks matching SessionStart and assistant transcript agent evidence');
+      }
+    }
+  } else if (receipt.gsd_role !== undefined || receipt.gsd_launch_mechanism !== undefined
+      || receipt.gsd_agent_evidence !== undefined) {
     refuse('NONCOMPLIANT_RECEIPT', 'a non-GSD launch cannot claim typed GSD callback attestation');
   }
   if (receipt.requested_model !== canonical.requested_model || receipt.requested_effort !== canonical.requested_effort) {
@@ -1425,8 +1457,8 @@ function verifyApplicationReceiptInternal(resolution, rawReceipt, options = {}) 
     : typeof options.allowUnknown === 'boolean'
       ? { model: options.allowUnknown, effort: options.allowUnknown }
       : adapterObservationCapabilities(adapter);
-  const observedModel = observedValue(receipt, 'observed_model', receipt.applied_model, observationCapabilities.model);
-  const observedEffort = observedValue(receipt, 'observed_effort', receipt.applied_effort, observationCapabilities.effort);
+  const observedModel = observedValue(receipt, 'observed_model', receipt.applied_model, observationCapabilities.model, resolution.runtime);
+  const observedEffort = observedValue(receipt, 'observed_effort', receipt.applied_effort, observationCapabilities.effort, resolution.runtime);
   const normalized = {
     ...snapshot(receipt),
     observed_model: observedModel,
@@ -1717,7 +1749,8 @@ function createDispatchBoundary(options = {}) {
     }
     unboundHandoff.guardUnbound({
       ...(context && context.phase !== undefined ? { phase: context.phase } : {}),
-      ...(ticket !== undefined ? { tickets: [ticket] } : {}),
+      ...(ticket !== undefined && !(isObject(context) && context.subject_kind === 'round')
+        ? { tickets: [ticket] } : {}),
     });
   }
   const trustedReceipts = new Map();
@@ -2133,6 +2166,15 @@ function createDispatchBoundary(options = {}) {
     }
     const trusted = trustedRecordFor(options.recorder, dispatchId);
     if (!trusted) refuse('UNVERIFIED_RECEIPT', 'dispatch has no current compliant applied receipt', { dispatch_id: dispatchId });
+    const subjectKind = subjectKindFromContext(context, trusted.record && trusted.record.role, ticket);
+    const recordedSubjectKind = trusted.record && trusted.record.subject_kind || 'ticket';
+    if (recordedSubjectKind !== subjectKind) {
+      refuse('NONCOMPLIANT_RECEIPT', 'dispatch receipt subject kind does not match the reconciliation subject', {
+        expected_subject_kind: subjectKind,
+        actual_subject_kind: recordedSubjectKind,
+        dispatch_id: dispatchId,
+      });
+    }
     if (!trusted.record || trusted.record.ticket !== ticket) {
       refuse(
         'NONCOMPLIANT_RECEIPT',
@@ -2144,6 +2186,7 @@ function createDispatchBoundary(options = {}) {
     return deepFreeze(snapshot({
       dispatch_id: dispatchId,
       ticket,
+      subject_kind: subjectKind,
       policy_version: resolution.policy_version,
       policy_hash: resolution.policy_hash,
       role: resolution.role,
@@ -2184,6 +2227,7 @@ function createDispatchBoundary(options = {}) {
       }
     }
     const ticket = ticketFromContext(context);
+    const subjectKind = subjectKindFromContext(context, input.role, ticket);
     guardUnboundDispatch(context, ticket);
     const runtime = typeof input.runtime === 'string' ? input.runtime.trim() : input.runtime;
     const adapter = adapterFor(adapters, runtime);
@@ -2284,6 +2328,7 @@ function createDispatchBoundary(options = {}) {
       const baseTrace = {
         dispatch_id: validatedResolution.dispatch_id,
         ...(ticket !== undefined ? { ticket } : {}),
+        ...(subjectKind === 'round' ? { subject_kind: subjectKind } : {}),
         policy_version: validatedResolution.policy_version,
         policy_hash: validatedResolution.policy_hash,
         runtime: validatedResolution.runtime,

@@ -989,6 +989,138 @@ function dispatchFingerprint(role, s = {}) {
     .digest('hex').slice(0, 16);
 }
 
+function roundMemberFingerprint(s = {}) {
+  return crypto.createHash('sha256')
+    .update(JSON.stringify(['pr-sentinel', s.status ?? null, s.pr ?? null, s.head_sha ?? null, s.pr_base ?? null]))
+    .digest('hex');
+}
+
+function roundObject(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function roundBaseIdentity(value) {
+  if (typeof value !== 'string') throw new Error('round member base identity must be text');
+  const match = /^(.*)#([a-f0-9]{40})$/i.exec(value);
+  if (!match || !/^[A-Za-z0-9._/-]+$/.test(match[1]) || match[1].startsWith('-')
+      || match[1].includes('..') || match[1].endsWith('/')) {
+    throw new Error('round member base identity must bind a safe ref and 40-character commit');
+  }
+  return { ref: match[1], oid: match[2].toLowerCase() };
+}
+
+function canonicalRoundTicketSet(value) {
+  if (!Array.isArray(value) || value.length === 0) throw new Error('round ticket set must be a non-empty array');
+  const seen = new Set();
+  const entries = value.map((item, index) => {
+    if (!roundObject(item) || Object.keys(item).sort().join(',') !== 'base,branch,head,id,pr') {
+      throw new Error(`round ticket set member ${index + 1} has an invalid shape`);
+    }
+    const { id, pr, head, base, branch } = item;
+    if (typeof id !== 'string' || !/^T-[A-Z0-9][A-Z0-9._-]*$/i.test(id) || seen.has(id)) {
+      throw new Error(`round ticket set has an invalid or duplicate ticket ${String(id)}`);
+    }
+    if (!Number.isSafeInteger(pr) || pr < 1 || typeof head !== 'string' || !/^[a-f0-9]{40}$/i.test(head)) {
+      throw new Error(`round ticket set member ${id} has an invalid PR or head`);
+    }
+    if (typeof branch !== 'string' || !/^[A-Za-z0-9._/-]+$/.test(branch)
+        || branch.startsWith('-') || branch.includes('..') || branch.endsWith('/')) {
+      throw new Error(`round ticket set member ${id} has an invalid branch`);
+    }
+    roundBaseIdentity(base);
+    seen.add(id);
+    return { id, pr, head: head.toLowerCase(), base, branch };
+  }).sort((a, b) => a.id.localeCompare(b.id));
+  return entries;
+}
+
+function roundMembersMatchDigest(round) {
+  try {
+    const ticketSet = canonicalRoundTicketSet(round.members.map((member) => ({
+      id: member.ticket,
+      pr: member.pr,
+      head: member.head_sha,
+      base: `${member.base_ref}#${member.base_oid}`,
+      branch: member.branch,
+    })));
+    const digest = crypto.createHash('sha256').update(JSON.stringify(ticketSet)).digest('hex');
+    return digest === round.ticket_set_digest && round.members.every((member) =>
+      member.fingerprint === roundMemberFingerprint({ status: 'pr-open', pr: member.pr,
+        head_sha: member.head_sha, pr_base: member.base_ref }));
+  } catch {
+    return false;
+  }
+}
+
+function strictRoundSnapshot(cwd) {
+  const dir = graphDir(cwd);
+  let ticketData;
+  let stateData;
+  try {
+    ticketData = JSON.parse(fs.readFileSync(path.join(dir, 'tickets.json'), 'utf8'));
+    stateData = JSON.parse(fs.readFileSync(path.join(dir, 'delivery-state.json'), 'utf8'));
+  } catch (error) {
+    throw new Error(`round snapshot is unavailable or invalid: ${error.message}`);
+  }
+  const tickets = ticketData && ticketData.tickets;
+  const state = stateData && stateData.tickets && typeof stateData.tickets === 'object'
+    ? stateData.tickets : stateData;
+  if (!roundObject(tickets) || !roundObject(state)) throw new Error('round snapshot has an invalid ticket graph or delivery state');
+  return { tickets, state };
+}
+
+function roundMembersForSnapshot(tickets, state, phase, phaseNumber, ticketSet, options = {}) {
+  const phaseRows = Object.entries(tickets).filter(([, row]) => roundObject(row)
+    && String(row.phase) === String(phaseNumber)
+    && typeof row.plan === 'string'
+    && path.basename(path.dirname(row.plan)) === phase);
+  if (!phaseRows.length) throw new Error(`round phase ${phase} has no canonical tickets`);
+  const open = phaseRows.filter(([id]) => (state[id] || {}).status === 'pr-open');
+  const suppliedIds = ticketSet.map((member) => member.id);
+  const supplied = new Set(suppliedIds);
+  if (open.some(([id]) => !supplied.has(id))) {
+    throw new Error('round ticket set omits a currently open PR ticket');
+  }
+  const expired = new Set(options.expiredTickets || []);
+  if ([...expired].some((id) => !supplied.has(id))) throw new Error('round expiry names a ticket outside the authenticated set');
+  if (!options.allowChanges && (open.length !== suppliedIds.length || suppliedIds.some((id) => !open.some(([openId]) => openId === id)))) {
+    throw new Error('round ticket set does not contain all and only current open PR tickets');
+  }
+  return ticketSet.map((member) => {
+    const id = member.id;
+    const row = tickets[id];
+    const current = state[id];
+    const base = roundBaseIdentity(member.base);
+    const unchanged = roundObject(current) && current.status === 'pr-open'
+      && current.pr === member.pr && current.head_sha === member.head && current.pr_base === base.ref;
+    if (!roundObject(row) || row.branch !== member.branch
+        || (!options.allowChanges && !unchanged)
+        || (options.allowChanges && !expired.has(id) && !unchanged)) {
+      throw new Error(`round ticket ${id} no longer matches its live PR snapshot`);
+    }
+    return {
+      ticket: id,
+      pr: member.pr,
+      head_sha: member.head,
+      base_ref: base.ref,
+      base_oid: base.oid,
+      branch: member.branch,
+      fingerprint: roundMemberFingerprint({ status: 'pr-open', pr: member.pr,
+        head_sha: member.head, pr_base: base.ref }),
+    };
+  });
+}
+
+function roundIdentity(record) {
+  const fields = [
+    'role', 'subject_kind', 'subject', 'phase', 'phase_number', 'ticket_set_digest',
+    'dispatch_id', 'agent_id', 'runtime', 'backend', 'requested_model', 'requested_effort',
+    'applied_model', 'applied_effort', 'observed_model', 'observed_effort', 'task_level',
+    'route', 'policy_version', 'policy_hash', 'members', 'expired_tickets',
+  ];
+  return JSON.stringify(fields.map((field) => record[field] ?? null));
+}
+
 // Same resolution and the same flag spelling as drift-record.cjs/log-event.cjs —
 // one convention for "which graph does this belong to", stripped from ANY
 // position, because a flag only tolerated at the end is a trap for the caller who
@@ -1049,12 +1181,24 @@ function readState(cwd) {
 const hasStateTicket = (state, id) =>
   Object.prototype.hasOwnProperty.call(state || {}, id);
 
-function load(cwd = process.cwd()) {
+function load(cwd = process.cwd(), strict = false) {
   try {
     const raw = JSON.parse(fs.readFileSync(path.join(graphDir(cwd), STORE_NAME), 'utf8'));
-    return raw && typeof raw === 'object' && raw.tickets ? raw : { tickets: {} };
-  } catch {
-    return { tickets: {} };
+    if (!roundObject(raw) || !roundObject(raw.tickets)) {
+      if (strict) throw new Error('dispatch store has an invalid shape');
+      return { tickets: {}, rounds: {}, reservations: {} };
+    }
+    if (strict && ((raw.rounds !== undefined && !roundObject(raw.rounds))
+        || (raw.reservations !== undefined && !roundObject(raw.reservations)))) {
+      throw new Error('dispatch store has an invalid round shape');
+    }
+    return { ...raw, rounds: roundObject(raw.rounds) ? raw.rounds : {},
+      reservations: roundObject(raw.reservations) ? raw.reservations : {} };
+  } catch (error) {
+    if (strict && (!error || error.code !== 'ENOENT')) {
+      throw new Error(`dispatch store cannot be safely updated: ${error && error.message ? error.message : error}`);
+    }
+    return { tickets: {}, rounds: {}, reservations: {} };
   }
 }
 
@@ -1070,9 +1214,9 @@ function newDispatchId() {
 }
 
 function dispatchIdInUse(store, id) {
-  return Object.values(store.tickets || {}).some((record) =>
-    record && record.dispatch_id === id
-  );
+  return Object.values(store.tickets || {}).some((record) => record && record.dispatch_id === id)
+    || Object.values(store.rounds || {}).some((record) => record && record.dispatch_id === id)
+    || Object.values(store.reservations || {}).some((record) => record && record.dispatch_id === id);
 }
 
 // Dispatch ids are also the durable join key for usage attribution. Clearing
@@ -1145,10 +1289,10 @@ function telemetryFor(recorded, ticket, role) {
 // reliably produced five). The lock sits beside the STORE, never at cwd: a mark
 // run from a ticket worktree would otherwise take a lock nobody else contends
 // for and serialize nothing.
-function mutate(cwd, fn, fence = (commit) => commit()) {
+function mutate(cwd, fn, fence = (commit) => commit(), strictLoad = false) {
   fs.mkdirSync(graphDir(cwd), { recursive: true });
   return withLock(lockDirFor(cwd), 'dispatch-record', () => {
-    const store = load(cwd);
+    const store = load(cwd, strictLoad);
     const commit = () => {
       const extra = fn(store);
       writeAtomic(path.join(graphDir(cwd), STORE_NAME), JSON.stringify(store, null, 2) + '\n');
@@ -1214,13 +1358,16 @@ function dispatchWhy(id, rec) {
   const mins = ageMinutes(rec);
   const age = mins === null ? '' : ` ${mins}m ago`;
   const role = roleOf(rec);
+  const clearCommand = role === 'pr-sentinel' && rec && rec.round_id
+    ? `dispatch-record.cjs clear-round ${rec.round_id}`
+    : `dispatch-record.cjs clear ${id} ${rec && rec.dispatch_id ? rec.dispatch_id : '<dispatch_id>'}`;
   // The fact is quoted from the same table the expiry rule reads, so the board
   // cannot name one trigger while the code waits for another. The old sentence
   // listed "a check" among them, which was exactly the wrong claim.
   return `dispatched to ${role}${age} — an agent holds it, so it is nobody else's to start. ` +
     `It returns to the board by itself when the delivery state moves in the way this role's own output moves it ` +
     `(${subjectOf(role).lifts}) or after ${Math.round(DISPATCH_TTL_MS / 60000)}m; ` +
-    `\`dispatch-record.cjs clear ${id} ${rec && rec.dispatch_id ? rec.dispatch_id : '<dispatch_id>'}\` returns it now.`;
+    `\`${clearCommand}\` returns it now.`;
 }
 
 /**
@@ -1249,7 +1396,8 @@ function activeDispatches(cwd = process.cwd(), state = null) {
     && typeof live.tickets === 'object' ? live.tickets : live || {};
   const now = Date.now();
   const out = {};
-  for (const [id, rec] of Object.entries(load(cwd).tickets || {})) {
+  const stored = load(cwd);
+  for (const [id, rec] of Object.entries(stored.tickets || {})) {
     if (!rec) continue;
     const s = ticketState[id] || {};
     // A merged ticket is never suppressed, whoever was working on it: it landed.
@@ -1277,7 +1425,248 @@ function activeDispatches(cwd = process.cwd(), state = null) {
       ? { role: roleOf(rec), at: rec.at }
       : { role: roleOf(rec), at: rec.at, agent_id: agent };
   }
+  const roundRows = [
+    ...Object.entries(stored.rounds || {}),
+    ...Object.entries(stored.reservations || {}),
+  ];
+  for (const [roundId, round] of roundRows) {
+    if (!roundObject(round) || round.role !== 'pr-sentinel' || round.subject_kind !== 'round'
+        || round.dispatch_id !== roundId || !/^[a-f0-9]{64}$/.test(round.ticket_set_digest || '')
+        || round.subject !== `round:${round.ticket_set_digest}` || !Array.isArray(round.members)
+        || !round.members.length) continue;
+    if (!roundMembersMatchDigest(round)) continue;
+    const at = Date.parse(round.at || '');
+    if (!Number.isFinite(at) || now - at >= DISPATCH_TTL_MS) continue;
+    const seen = new Set();
+    const validMembers = round.members.every((member) => roundObject(member)
+      && typeof member.ticket === 'string'
+      && /^T-[A-Z0-9][A-Z0-9._-]*$/i.test(member.ticket)
+      && !seen.has(member.ticket)
+      && typeof member.fingerprint === 'string'
+      && /^[a-f0-9]{64}$/.test(member.fingerprint)
+      && seen.add(member.ticket));
+    if (!validMembers) continue;
+    const expired = new Set(Array.isArray(round.expired_tickets) ? round.expired_tickets : []);
+    const agent = agentIdOf(round);
+    for (const member of round.members) {
+      if (out[member.ticket] || expired.has(member.ticket)) continue;
+      const current = ticketState[member.ticket] || {};
+      if (current.status !== 'pr-open' || roundMemberFingerprint(current) !== member.fingerprint) continue;
+      out[member.ticket] = agent === null
+        ? { role: 'pr-sentinel', at: round.at, round_id: roundId, dispatch_id: roundId }
+        : { role: 'pr-sentinel', at: round.at, agent_id: agent, round_id: roundId, dispatch_id: roundId };
+    }
+  }
   return out;
+}
+
+function reserveRound(cwd, input) {
+  if (!roundObject(input)) throw new Error('round reservation input must be an object');
+  const phase = input.phase;
+  const phaseNumber = input.phaseNumber;
+  if (typeof phase !== 'string' || !/^[A-Za-z0-9._-]+$/.test(phase)
+      || !Number.isSafeInteger(phaseNumber) || phaseNumber < 1) {
+    throw new Error('round reservation phase identity is invalid');
+  }
+  const ticketSet = canonicalRoundTicketSet(input.ticketSet);
+  const ticketSetDigest = crypto.createHash('sha256').update(JSON.stringify(ticketSet)).digest('hex');
+  const subject = `round:${ticketSetDigest}`;
+  if (input.ticketSetDigest !== ticketSetDigest) throw new Error('round reservation digest does not match the complete ticket set');
+  const dispatchId = input.dispatchId;
+  const dispatchIdIssue = opaqueDispatchValueIssue(dispatchId);
+  if (dispatchIdIssue) throw new Error(`round reservation dispatch id is invalid: ${dispatchIdIssue}`);
+  if (typeof input.agentId !== 'string' || !/^[A-Za-z0-9._:-]{1,200}$/.test(input.agentId)) {
+    throw new Error('round reservation agent identity is invalid');
+  }
+  let outcome;
+  mutate(cwd, (store) => {
+    store.rounds = roundObject(store.rounds) ? store.rounds : {};
+    store.reservations = roundObject(store.reservations) ? store.reservations : {};
+    const existing = store.reservations[dispatchId];
+    if (existing) {
+      const same = existing.subject === subject && existing.ticket_set_digest === ticketSetDigest
+        && existing.phase === phase && existing.phase_number === phaseNumber;
+      if (!same) throw new Error(`round reservation ${dispatchId} already names another round`);
+      outcome = { reserved: false, idempotent: true, reservation: existing };
+      return null;
+    }
+    if (store.rounds[dispatchId] || dispatchIdInUse(store, dispatchId) || dispatchIdInHistory(cwd, dispatchId)) {
+      throw new Error(`round reservation dispatch id ${dispatchId} is already in use`);
+    }
+    const snapshot = strictRoundSnapshot(cwd);
+    const members = roundMembersForSnapshot(snapshot.tickets, snapshot.state, phase, phaseNumber, ticketSet);
+    const active = activeDispatches(cwd, snapshot.state);
+    const conflict = members.find((member) => active[member.ticket]);
+    if (conflict) throw new Error(`round ticket ${conflict.ticket} already has active dispatch ownership`);
+    const at = new Date().toISOString();
+    const reservation = {
+      role: 'pr-sentinel', subject_kind: 'round', subject, phase, phase_number: phaseNumber,
+      ticket_set_digest: ticketSetDigest, dispatch_id: dispatchId, agent_id: input.agentId,
+      members, at,
+    };
+    store.reservations[dispatchId] = reservation;
+    outcome = { reserved: true, idempotent: false, reservation };
+    return null;
+  }, undefined, true);
+  if (outcome.reserved) refreshFront(cwd);
+  return Object.freeze(outcome);
+}
+
+function recordRound(cwd, input) {
+  if (!roundObject(input)) throw new Error('round input must be an object');
+  const phase = input.phase;
+  const phaseNumber = input.phaseNumber;
+  if (typeof phase !== 'string' || !/^[A-Za-z0-9._-]+$/.test(phase)
+      || !Number.isSafeInteger(phaseNumber) || phaseNumber < 1) {
+    throw new Error('round phase identity is invalid');
+  }
+  const ticketSet = canonicalRoundTicketSet(input.ticketSet);
+  const expiredTickets = Array.isArray(input.expiredTickets) ? [...new Set(input.expiredTickets)].sort() : [];
+  const ticketSetDigest = crypto.createHash('sha256').update(JSON.stringify(ticketSet)).digest('hex');
+  const subject = `round:${ticketSetDigest}`;
+  if (input.ticketSetDigest !== ticketSetDigest) throw new Error('round digest does not match the complete ticket set');
+  const dispatchId = input.dispatchId;
+  const dispatchIdIssue = opaqueDispatchValueIssue(dispatchId);
+  if (dispatchIdIssue) throw new Error(`round dispatch id is invalid: ${dispatchIdIssue}`);
+  const recorder = input.recorder;
+  const { createDispatchBoundary, isDurableRecorder } = require('./dispatch-boundary.cjs');
+  if (!isDurableRecorder(recorder) || typeof recorder.claim !== 'function'
+      || typeof recorder.withClaim !== 'function' || typeof recorder.release !== 'function') {
+    throw new Error('round reconciliation requires the boundary durable recorder');
+  }
+  const consumerId = newReconciliationConsumerId();
+  const claim = recorder.claim(dispatchId, consumerId);
+  if (!claim || claim.claimed !== true) throw new Error('boundary receipt is currently claimed by another consumer');
+  const lease = { recorder, dispatchId, consumerId, claim, released: false };
+  const decided = {};
+  Object.defineProperty(decided, RECONCILIATION_CLAIM, { value: lease });
+  try {
+    const facts = createDispatchBoundary({ recorder }).reconcile(dispatchId, {
+      ticket: subject,
+      subject_kind: 'round',
+    });
+    if (facts.dispatch_id !== dispatchId || facts.ticket !== subject || facts.subject_kind !== 'round'
+        || facts.role !== 'pr-sentinel' || facts.runtime !== 'claude') {
+      throw new Error('boundary receipt does not authenticate this Claude sentinel round');
+    }
+    if (opaqueDispatchValueIssue(facts.launch_id)) throw new Error('boundary receipt has no valid launch identity');
+    for (const field of ['requested_model', 'requested_effort', 'applied_model', 'applied_effort', 'observed_model', 'observed_effort']) {
+      if (opaqueDispatchValueIssue(facts[field])) throw new Error(`boundary receipt is missing ${field}`);
+    }
+    if (facts.observed_effort !== facts.applied_effort) throw new Error('boundary receipt observed effort differs from the applied effort');
+    const snapshot = strictRoundSnapshot(cwd);
+    const members = roundMembersForSnapshot(snapshot.tickets, snapshot.state, phase, phaseNumber, ticketSet,
+      { allowChanges: true, expiredTickets });
+    const at = new Date().toISOString();
+    const recorded = {
+      role: 'pr-sentinel',
+      subject_kind: 'round',
+      subject,
+      phase,
+      phase_number: phaseNumber,
+      ticket_set_digest: ticketSetDigest,
+      dispatch_id: dispatchId,
+      agent_id: facts.launch_id,
+      runtime: facts.runtime,
+      backend: facts.backend,
+      model: facts.requested_model,
+      effort: facts.requested_effort,
+      requested_model: facts.requested_model,
+      requested_effort: facts.requested_effort,
+      applied_model: facts.applied_model,
+      applied_effort: facts.applied_effort,
+      effort_applied: facts.applied_effort,
+      observed_model: facts.observed_model,
+      observed_effort: facts.observed_effort,
+      task_level: facts.task_level,
+      route: facts.route,
+      reason: facts.route,
+      policy_id: 'ADR-014',
+      policy_version: facts.policy_version,
+      policy_hash: facts.policy_hash,
+      rung: facts.rung,
+      logical_rung: facts.logical_rung,
+      signals: facts.signals,
+      signals_fired: facts.signals_fired,
+      application_receipt: facts.application_receipt,
+      boundary_store: recorder.storeDir,
+      members,
+      expired_tickets: expiredTickets,
+      at,
+    };
+    recorded.telemetry = telemetryFor(recorded, subject, 'pr-sentinel');
+    let outcome;
+    withReconciliationClaims([decided], () => mutate(cwd, (store) => {
+      store.rounds = roundObject(store.rounds) ? store.rounds : {};
+      const current = store.rounds[dispatchId];
+      if (current) {
+        if (roundIdentity(current) !== roundIdentity(recorded)) {
+          throw new Error(`round dispatch id ${dispatchId} already names a different round`);
+        }
+        outcome = { recorded: false, idempotent: true, round: current };
+        return null;
+      }
+      const reservation = store.reservations && store.reservations[dispatchId];
+      if (reservation && (reservation.subject !== subject || reservation.ticket_set_digest !== ticketSetDigest
+          || reservation.phase !== phase || reservation.phase_number !== phaseNumber)) {
+        throw new Error(`round reservation ${dispatchId} does not match its authenticated receipt`);
+      }
+      if ((!reservation && dispatchIdInUse(store, dispatchId)) || dispatchIdInHistory(cwd, dispatchId)) {
+        throw new Error(`round dispatch id ${dispatchId} is already in use`);
+      }
+      const currentSnapshot = strictRoundSnapshot(cwd);
+      const currentMembers = roundMembersForSnapshot(
+        currentSnapshot.tickets, currentSnapshot.state, phase, phaseNumber, ticketSet,
+        { allowChanges: true, expiredTickets },
+      );
+      if (JSON.stringify(currentMembers) !== JSON.stringify(members)) {
+        throw new Error('round members changed before the ownership record was committed');
+      }
+      const active = activeDispatches(cwd, currentSnapshot.state);
+      const conflict = members.find((member) => active[member.ticket]
+        && active[member.ticket].dispatch_id !== dispatchId);
+      if (conflict) throw new Error(`round ticket ${conflict.ticket} already has active dispatch ownership`);
+      delete store.reservations[dispatchId];
+      store.rounds[dispatchId] = recorded;
+      outcome = { recorded: true, idempotent: false, round: recorded };
+      return {
+        ts: at,
+        event: 'dispatch',
+        ticket: subject,
+        subject_kind: 'round',
+        subject,
+        round_id: dispatchId,
+        ticket_set_digest: ticketSetDigest,
+        tickets: members.map((member) => member.ticket),
+        members,
+        ...recorded,
+        by: 'dispatch-record',
+      };
+    }, undefined, true));
+    if (outcome.recorded) refreshFront(cwd);
+    return Object.freeze(outcome);
+  } finally {
+    try { releaseReconciliationClaim(decided); } catch (error) {
+      if (!lease.released) warnReconciliationReleaseFailure(`round ${dispatchId}`, error);
+    }
+  }
+}
+
+function clearRound(cwd, dispatchId) {
+  const issue = opaqueDispatchValueIssue(dispatchId);
+  if (issue) throw new Error(`round dispatch id is invalid: ${issue}`);
+  let cleared = false;
+  mutate(cwd, (store) => {
+    store.rounds = roundObject(store.rounds) ? store.rounds : {};
+    store.reservations = roundObject(store.reservations) ? store.reservations : {};
+    if (!store.rounds[dispatchId] && !store.reservations[dispatchId]) return null;
+    delete store.rounds[dispatchId];
+    delete store.reservations[dispatchId];
+    cleared = true;
+    return null;
+  }, undefined, true);
+  if (cleared) refreshFront(cwd);
+  return cleared;
 }
 
 // Recompute `delivery-front.json` from the stores as they now stand.
@@ -1380,7 +1769,8 @@ function refreshFront(cwd) {
 }
 
 module.exports = {
-  activeDispatches, dispatchWhy, dispatchFingerprint, agentIdOf, DISPATCH_SUBJECT, DISPATCH_TTL_MS,
+  activeDispatches, dispatchWhy, dispatchFingerprint, agentIdOf, reserveRound, recordRound, clearRound,
+  DISPATCH_SUBJECT, DISPATCH_TTL_MS,
   MARK_FLAGS, MARK_FIELD, REFUSED_FLAGS, codexAgentFiles, agentFilesFor, agentRoleName,
   CODEX_DEEP_ROLES, CODEX_DEEP_SUFFIX, CODEX_CRITICAL_ROLES, CODEX_CRITICAL_SUFFIX,
   CODEX_AGENT_PREFIX, DISPATCH_RUNTIMES, DISPATCH_BACKENDS, newDispatchId,
@@ -1441,6 +1831,8 @@ if (require.main === module) {
         // look expired on the next front evaluation.
         const state = readState(cwd);
         if (!hasStateTicket(state, ticket)) throw new Error(`no ${ticket} in delivery-state.json — run state-sync.cjs first, or check the id`);
+        const active = activeDispatches(cwd, state);
+        if (active[ticket] && active[ticket].round_id) throw new Error(`round dispatch already owns ${ticket}`);
         const s = state[ticket];
         // A re-dispatch restarts the clock: the previous agent is not the one
         // holding it now.
@@ -1529,6 +1921,9 @@ if (require.main === module) {
           const current = readState(cwd);
           const absent = entries.find((entry) => !hasStateTicket(current, entry.ticket));
           if (absent) throw new Error(`no ${absent.ticket} in delivery-state.json — run state-sync.cjs first, or check the id`);
+          const active = activeDispatches(cwd, current);
+          const roundConflict = entries.find((entry) => active[entry.ticket] && active[entry.ticket].round_id);
+          if (roundConflict) throw new Error(`round dispatch already owns ${roundConflict.ticket}`);
           const events = [];
           for (const entry of entries) {
             const s = current[entry.ticket];
@@ -1605,8 +2000,20 @@ if (require.main === module) {
         ? `dispatch cleared for ${ticket} — it is the board's again`
         : (currentDispatchId
           ? `dispatch for ${ticket} is ${currentDispatchId}, not ${dispatchId} — leaving the newer record in place`
-          : `no dispatch recorded for ${ticket}`)
+        : `no dispatch recorded for ${ticket}`)
     );
+  } else if (cmd === 'clear-round') {
+    const [dispatchId] = rest;
+    if (rest.length !== 1 || !dispatchId) fail('usage: dispatch-record.cjs clear-round <round_dispatch_id> [--graph <dir>]');
+    let cleared;
+    try {
+      cleared = clearRound(cwd, dispatchId);
+    } catch (e) {
+      fail(e && e.message ? e.message : e);
+    }
+    console.log(cleared
+      ? `sentinel round ${dispatchId} cleared — the board can offer its remaining PRs again`
+      : `no matching sentinel round ${dispatchId} — no newer dispatch was changed`);
   } else if (cmd === 'clear-many') {
     if (rest.length !== 1 || rest[0] !== '--stdin') {
       fail(
@@ -1659,6 +2066,6 @@ if (require.main === module) {
       }
     }
   } else {
-    fail('usage: dispatch-record.cjs <mark|mark-many|clear|clear-many|list> …');
+    fail('usage: dispatch-record.cjs <mark|mark-many|clear|clear-round|clear-many|list> …');
   }
 }

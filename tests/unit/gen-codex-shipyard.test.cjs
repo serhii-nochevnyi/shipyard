@@ -56,16 +56,18 @@ function withFixture(opts, check) {
     const proj = path.join(dir, 'proj');
     const out = path.join(dir, 'out');
     const bin = path.join(dir, 'bin');
+    const catalogFile = path.join(dir, 'models.json');
+    const codexFile = path.join(bin, 'codex');
     const converter = path.join(codexHome, 'gsd-core/bin/lib/runtime-artifact-conversion.cjs');
     const capabilitiesFile = path.join(dir, 'capabilities.json');
     fs.mkdirSync(proj, { recursive: true });
     fs.mkdirSync(bin);
     fs.symlinkSync(process.execPath, path.join(bin, 'node'));
     // No ambient CLI or package manager is allowed to influence these tests.
-    for (const name of ['codex', 'npx']) {
-      write(path.join(bin, name), '#!/bin/sh\necho "unexpected CLI probe" >&2\nexit 99\n');
-      fs.chmodSync(path.join(bin, name), 0o755);
-    }
+    write(codexFile, '#!/bin/sh\necho "unexpected CLI probe" >&2\nexit 99\n');
+    fs.chmodSync(codexFile, 0o755);
+    write(path.join(bin, 'npx'), '#!/bin/sh\necho "unexpected CLI probe" >&2\nexit 99\n');
+    fs.chmodSync(path.join(bin, 'npx'), 0o755);
     write(converter, STUB_CONVERTER);
     writeJson(capabilitiesFile, CAPABILITIES);
     if (opts.projectRaw !== undefined) write(path.join(proj, '.planning/config.json'), opts.projectRaw);
@@ -88,7 +90,7 @@ function withFixture(opts, check) {
         cwd: dir, encoding: 'utf8', env: { ...env, ...overrides },
       });
     const options = { codexHome, phase, capabilities: CAPABILITIES };
-    check({ dir, home, codexHome, proj, out, converter, capabilitiesFile, env, run, options });
+    check({ dir, home, codexHome, proj, out, converter, capabilitiesFile, catalogFile, codexFile, env, run, options });
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -147,6 +149,10 @@ test('the capability declares the same palette the reader defaults to', () => {
   const declared = cap.config['delivery_pipeline.codex_models'];
   assert.ok(declared, 'capability.json must declare delivery_pipeline.codex_models');
   assert.strictEqual(declared.type, 'string', 'GSD accepts no array-typed config slice');
+  assert.deepStrictEqual(pc.DEFAULT_CODEX_MODELS, [
+    { model: 'gpt-6-sol', effort: 'high', min_cli: '0.155.1' },
+    { model: 'gpt-6-sol', effort: 'xhigh', min_cli: '0.155.1' },
+  ]);
   const warnings = [];
   assert.deepStrictEqual(
     pc.normalizeCodexModels(declared.default, warnings),
@@ -354,6 +360,9 @@ test('the generated bundle covers all nine canonical roles and planning referenc
   withFixture({}, (f) => {
     const manifest = generated(f);
     const bundle = path.join(f.out, 'bundle');
+    assert.ok(manifest.bundle_files.includes('scripts/codex-decompose-host.cjs'));
+    assert.strictEqual(read(path.join(bundle, 'scripts/codex-decompose-host.cjs')),
+      read(path.join(PLUGIN, 'scripts/codex-decompose-host.cjs')));
     const staticReferences = new Set(policy.CODEX_STATIC_ROLES.map((role) =>
       role === 'research' ? 'inv-research' : role));
     for (const reference of staticReferences) {
@@ -423,7 +432,7 @@ test('global GSD remaps cannot override the static policy either', () => {
   } }, (f) => { generated(f); assertCanonical(f); });
 });
 
-test('CLI version hints do not substitute for explicit host capability evidence', () => {
+test('CLI version hints do not substitute for explicit or CLI catalog evidence', () => {
   withFixture({}, (f) => {
     for (const version of ['0.0.1', '999.0.0', 'invalid-local']) {
       const result = f.run(['--capabilities', f.capabilitiesFile], { SHIPYARD_CODEX_CLI_VERSION: version });
@@ -433,7 +442,7 @@ test('CLI version hints do not substitute for explicit host capability evidence'
     const before = snapshot(f.out);
     const refused = f.run([], { SHIPYARD_CODEX_CLI_VERSION: '999.0.0' });
     assert.strictEqual(refused.status, 1, refused.stderr);
-    assert.match(refused.stderr, /read host capabilities/);
+    assert.match(refused.stderr, /Codex CLI model catalog/);
     assert.deepStrictEqual(snapshot(f.out), before);
   });
 });
@@ -518,6 +527,60 @@ test('capabilities can be supplied by the installer environment', () => {
     const result = f.run([], { SHIPYARD_CODEX_CAPABILITIES_FILE: f.capabilitiesFile });
     assert.strictEqual(result.status, 0, result.stderr);
     assertCanonical(f);
+  });
+});
+
+test('the local CLI catalog supplies listed API models and declared efforts', () => {
+  withFixture({}, (f) => {
+    const selectionsByModel = CAPABILITIES.supportedSelections.reduce((grouped, selection) => {
+      const levels = grouped.get(selection.model) || [];
+      levels.push(selection);
+      grouped.set(selection.model, levels);
+      return grouped;
+    }, new Map());
+    const entries = [...selectionsByModel]
+      .map(([slug, levels]) => ({
+        slug, visibility: 'list', supported_in_api: true,
+        supported_reasoning_levels: levels.map(({ effort }) => ({ effort })),
+      }));
+    entries.push(
+      { slug: 'private-model', visibility: 'list', supported_in_api: false,
+        supported_reasoning_levels: [{ effort: 'max' }] },
+      { slug: 'hidden-model', visibility: 'hide', supported_in_api: true,
+        supported_reasoning_levels: [{ effort: 'max' }] },
+    );
+    writeJson(f.catalogFile, { models: entries });
+    write(f.codexFile, `#!/bin/sh\n[ "$*" = "debug models" ] || exit 98\ncat "${f.catalogFile}"\n`);
+    fs.chmodSync(f.codexFile, 0o755);
+    const result = f.run([]);
+    assert.strictEqual(result.status, 0, result.stderr);
+    const emitted = json(path.join(f.out, 'bundle', CODEX_CAPABILITIES_BUNDLE_FILE));
+    assert.deepStrictEqual(emitted.supportedModels, [...CAPABILITIES.supportedModels].sort());
+    assert.deepStrictEqual(emitted.supportedEfforts, [...CAPABILITIES.supportedEfforts].sort());
+    assert.deepStrictEqual(new Set(emitted.supportedSelections.map((selection) => JSON.stringify(selection))),
+      new Set(CAPABILITIES.supportedSelections.map((selection) => JSON.stringify(selection))));
+    assert.ok(!emitted.supportedModels.includes('private-model'));
+    assert.ok(!emitted.supportedModels.includes('hidden-model'));
+    gen.validateCodexBundle(f.out, { ...f.options, capabilities: emitted });
+  });
+});
+
+test('an unavailable or malformed local CLI catalog refuses without replacing a valid stage', () => {
+  withFixture({}, (f) => {
+    generated(f);
+    const before = snapshot(f.out);
+    write(f.codexFile, '#!/bin/sh\nexit 3\n');
+    fs.chmodSync(f.codexFile, 0o755);
+    const unavailable = f.run([]);
+    assert.strictEqual(unavailable.status, 1, unavailable.stderr);
+    assert.match(unavailable.stderr, /read Codex CLI model catalog.*exit 3/);
+    assert.deepStrictEqual(snapshot(f.out), before);
+    write(f.codexFile, '#!/bin/sh\nprintf "not-json"\n');
+    fs.chmodSync(f.codexFile, 0o755);
+    const result = f.run([]);
+    assert.strictEqual(result.status, 1, result.stderr);
+    assert.match(result.stderr, /parse Codex CLI model catalog/);
+    assert.deepStrictEqual(snapshot(f.out), before);
   });
 });
 

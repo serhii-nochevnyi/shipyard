@@ -145,7 +145,7 @@ The active policy is ADR-014. Claude Code uses Anthropic models only; Codex
 uses OpenAI models only. The two provider grids are independent and a dispatch
 never substitutes a model from the other runtime.
 
-Claude resolves native aliases at launch:
+Claude keeps Sonnet and Fable aliases, and pins Opus launches to claude-opus-5-5:
 
 - executor work starts on Sonnet and moves to Opus only when critical evidence
   or an explicit checkpoint requires it;
@@ -158,7 +158,7 @@ palette is:
 
 {
   "delivery_pipeline": {
-    "codex_models": "gpt-5.6-sol:high@0.153.1, gpt-5.6-sol:xhigh@0.153.1"
+    "codex_models": "gpt-6-sol:high@0.155.1, gpt-6-sol:xhigh@0.155.1"
   }
 }
 
@@ -193,11 +193,11 @@ cat <<'JSON' | node plugins/delivery-pipeline/scripts/usage-attribution.cjs reco
   "role": "executor",
   "task_level": "routine",
   "backend": "codex-agent",
-  "model": "opus",
-  "effort": "high",
-  "effort_applied": "high",
-  "observed_model": "gpt-5.6-luna",
-  "observed_effort": "high"
+  "model": "luna",
+  "effort": "max",
+  "effort_applied": "max",
+  "observed_model": "gpt-6-luna",
+  "observed_effort": "max"
 }
 JSON
 ```

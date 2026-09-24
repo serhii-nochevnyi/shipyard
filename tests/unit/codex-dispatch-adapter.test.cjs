@@ -30,6 +30,7 @@ function fixture() {
         'name = "' + file.replace(/\.toml$/, '') + '"',
         'model = "' + CODEX_MODEL_IDS[rung.model_key] + '"',
         'model_reasoning_effort = "' + rung.effort + '"',
+        'sandbox_mode = "' + (['research', 'arch-review', 'drift-check'].includes(role) ? 'read-only' : 'workspace-write') + '"',
         "developer_instructions = '''\nRun the exact role.\n'''\n",
       ].join('\n');
       fs.writeFileSync(path.join(root, file), content);
@@ -65,17 +66,55 @@ function clean(f) { fs.rmSync(f.root, { recursive: true, force: true }); }
 function rejected(fn, code) {
   assert.throws(fn, (error) => error.code === code && /install-shipyard-codex/.test(error.message));
 }
+function runtimeEvidence(selection, context, overrides = {}) {
+  const sessionId = '11111111-1111-4111-8111-111111111111';
+  const protectedPaths = ['/Users/tester/.gnupg', '/Users/tester/.ssh'];
+  const sandbox = selection.sandbox_mode || 'workspace-write';
+  const baseProfile = sandbox === 'read-only' ? ':read-only' : ':workspace';
+  const filesystem = '{' + protectedPaths.map((entry) => JSON.stringify(entry) + '=\"deny\"').join(',') + '}';
+  const args = [
+    'exec', '--json', '--model', selection.model,
+    '--config', 'model_reasoning_effort="' + selection.reasoning_effort + '"',
+    '--config', 'model_provider="openai"',
+    '--config', 'forced_login_method="chatgpt"',
+    '--cd', '/tmp/worktree', '--ignore-user-config',
+    '--config', 'default_permissions="shipyard-runtime"',
+    '--config', 'permissions.shipyard-runtime.extends=' + JSON.stringify(baseProfile),
+    '--config', 'permissions.shipyard-runtime.filesystem=' + filesystem, '-',
+  ];
+  const native = {
+    schema: 'shipyard.codex-native-session-evidence.v1', version: 1,
+    session_id: sessionId, provider: 'openai',
+    models: [selection.model], efforts: [selection.reasoning_effort],
+    selections: [{ model: selection.model, effort: selection.reasoning_effort }],
+    turn_contexts: 1, records: 2, bytes: 256, sha256: 'a'.repeat(64),
+    file: 'rollout-2026-09-23-' + sessionId + '.jsonl',
+  };
+  return {
+    schema: 'shipyard.codex-runtime-evidence.v1', version: 1,
+    runtime: 'codex', provider: 'openai', run_id: 'run-codex-test',
+    ticket: 'T-38-04', phase: 38, worktree: '/tmp/worktree',
+    dispatch_id: context.dispatch_id, session_id: sessionId, process_id: 123,
+    command_digest: 'b'.repeat(64), command: { executable: 'codex', args },
+    sandbox_evidence: { profile: 'shipyard-runtime', base_profile: baseProfile, protected_paths: protectedPaths },
+    selection_source: 'codex-native-session-transcript',
+    applied_model: selection.model, applied_effort: selection.reasoning_effort,
+    observed_model: selection.model, observed_effort: selection.reasoning_effort,
+    native_session_evidence: { ...native, ...overrides.native_session_evidence },
+    stream_evidence: { format: 'jsonl', records: 3, turns: 1, usage_records: 1 },
+  };
+}
 
 suite('strict Codex adapter — canonical launches and application evidence');
 
 test('all base roles receive explicit ADR-014 selections', () => {
   const f = setup();
   const expected = {
-    research: ['gpt-5.6-sol', 'high'], decomposition: ['gpt-5.6-sol', 'high'],
-    executor: ['gpt-5.6-luna', 'max'], 'pr-sentinel': ['gpt-5.6-luna', 'medium'],
-    integrator: ['gpt-5.6-sol', 'high'], 'drift-check': ['gpt-5.6-luna', 'max'],
-    'arch-review': ['gpt-5.6-sol', 'high'], 'ci-fix': ['gpt-5.6-luna', 'max'],
-    'review-fix': ['gpt-5.6-luna', 'max'],
+    research: ['gpt-6-sol', 'high'], decomposition: ['gpt-6-sol', 'high'],
+    executor: ['gpt-6-luna', 'max'], 'pr-sentinel': ['gpt-6-luna', 'medium'],
+    integrator: ['gpt-6-sol', 'high'], 'drift-check': ['gpt-6-luna', 'max'],
+    'arch-review': ['gpt-6-sol', 'high'], 'ci-fix': ['gpt-6-luna', 'max'],
+    'review-fix': ['gpt-6-luna', 'max'],
   };
   try {
     for (const [role, [model, effort]] of Object.entries(expected)) {
@@ -102,12 +141,12 @@ test('research, dynamic and judgement escalation use exact canonical files/argum
   const f = setup();
   try {
     for (const [role, signals, model, effort, suffix] of [
-      ['research', { type: 'alternatives' }, 'gpt-5.6-sol', 'high', '.toml'],
-      ['research', { complexity: 'very-complex' }, 'gpt-5.6-sol', 'xhigh', '-critical.toml'],
-      ['executor', { critical: true }, 'gpt-5.6-sol', 'high', null],
-      ['decomposition', { checkpoint: true }, 'gpt-5.6-sol', 'xhigh', null],
-      ['integrator', { contested: true }, 'gpt-5.6-sol', 'xhigh', '-critical.toml'],
-      ['arch-review', { inputTokens: 250001 }, 'gpt-5.6-sol', 'xhigh', '-critical.toml'],
+      ['research', { type: 'alternatives' }, 'gpt-6-sol', 'high', '.toml'],
+      ['research', { complexity: 'very-complex' }, 'gpt-6-sol', 'xhigh', '-critical.toml'],
+      ['executor', { critical: true }, 'gpt-6-sol', 'high', null],
+      ['decomposition', { checkpoint: true }, 'gpt-6-sol', 'xhigh', null],
+      ['integrator', { contested: true }, 'gpt-6-sol', 'xhigh', '-critical.toml'],
+      ['arch-review', { inputTokens: 250001 }, 'gpt-6-sol', 'xhigh', '-critical.toml'],
     ]) {
       const result = f.boundary.dispatch({ runtime: 'codex', role, signals });
       assert.equal(result.applied_model, model);
@@ -124,9 +163,9 @@ test('repair escalation consumes boundary-verified predecessor receipts through 
       const base = f.boundary.dispatch({ runtime: 'codex', role });
       const repeat = f.boundary.dispatch({ runtime: 'codex', role, previous_dispatch_id: base.dispatch_id, signals: { signatureState: 'repeat', priorApplied: base.receipt } });
       const deep = f.boundary.dispatch({ runtime: 'codex', role, previous_dispatch_id: repeat.dispatch_id, signals: { signatureState: 'repeat_exhausted', priorApplied: repeat.receipt } });
-      assert.equal(repeat.applied_model, 'gpt-5.6-sol');
+      assert.equal(repeat.applied_model, 'gpt-6-sol');
       assert.equal(repeat.applied_effort, 'high');
-      assert.equal(deep.applied_model, 'gpt-5.6-sol');
+      assert.equal(deep.applied_model, 'gpt-6-sol');
       assert.equal(deep.applied_effort, 'xhigh');
     }
   } finally { clean(f); }
@@ -157,12 +196,12 @@ for (const [name, mutate] of [
 }
 
 for (const [name, change] of [
-  ['duplicate model', (text) => text.replace('developer_instructions', 'model = "gpt-5.6-luna"\ndeveloper_instructions')],
+  ['duplicate model', (text) => text.replace('developer_instructions', 'model = "gpt-6-luna"\ndeveloper_instructions')],
   ['nested model table', (text) => text.replace('model = ', '[other]\nmodel = ')],
-  ['model only inside instructions', (text) => text.replace('model = "gpt-5.6-sol"\n', '').replace('Run the exact role.', 'model = "gpt-5.6-luna"')],
+  ['model only inside instructions', (text) => text.replace('model = "gpt-6-sol"\n', '').replace('Run the exact role.', 'model = "gpt-6-luna"')],
   ['policy only inside instructions', (text) => text.replace('# shipyard-policy-role = "arch-review"\n', '').replace('Run the exact role.', '# shipyard-policy-role = "arch-review"')],
   ['duplicate policy comment', (text) => '# shipyard-policy-role = "arch-review"\n' + text],
-  ['configuration after instructions', (text) => text + 'model = "gpt-5.6-luna"\n'],
+  ['configuration after instructions', (text) => text + 'model = "gpt-6-luna"\n'],
 ]) {
   test(name + ' cannot spoof static identity even with an updated digest', () => {
     const f = setup();
@@ -182,7 +221,7 @@ test('unavailable model, effort or pair never selects a lower tuple', () => {
   for (const advertised of [
     {}, { ...capabilities, supportedModels: ['gpt-6-astra'] },
     { ...capabilities, supportedEfforts: ['high'] },
-    { ...capabilities, supportedSelections: [{ model: 'gpt-5.6-luna', effort: 'medium' }] },
+    { ...capabilities, supportedSelections: [{ model: 'gpt-6-luna', effort: 'medium' }] },
   ]) {
     const f = setup({ capabilities: advertised });
     try {
@@ -203,6 +242,89 @@ test('a dynamic launch and receipt use the resolver canonical concrete model', (
     assert.equal(result.requested_effort, resolution.requested_effort);
     assert.equal(result.applied_model, resolution.model);
     assert.equal(result.applied_effort, 'high');
+  } finally { clean(f); }
+});
+
+test('runtime receipt requires matching model and effort from the bound native transcript', () => {
+  for (const mismatch of [null, 'gpt-6-sol', 'high']) {
+    const f = setup({
+      host: {
+        requireRuntimeEvidence: true,
+        launch: (selection, context) => ({
+          ...applied(selection),
+          observed_model: selection.model,
+          observed_effort: selection.reasoning_effort,
+          runtime_evidence: runtimeEvidence(selection, context, mismatch === null ? {} : mismatch === 'gpt-6-sol' ? {
+            native_session_evidence: { selections: [{ model: mismatch, effort: selection.reasoning_effort }] },
+          } : {
+            native_session_evidence: { selections: [{ model: selection.model, effort: mismatch }] },
+          }),
+        }),
+      },
+    });
+    try {
+      if (mismatch === null) {
+        const result = f.boundary.dispatch({ runtime: 'codex', role: 'executor' });
+        assert.equal(result.receipt.runtime_evidence.selection_source, 'codex-native-session-transcript');
+      } else {
+        assert.throws(() => f.boundary.dispatch({ runtime: 'codex', role: 'executor' }),
+          (error) => error.code === 'MISSING_RECEIPT');
+      }
+    } finally { clean(f); }
+  }
+});
+
+test('runtime receipt refuses when the signer-deny profile is absent or altered', () => {
+  for (const tamper of [
+    (evidence) => { evidence.sandbox_evidence.protected_paths.pop(); },
+    (evidence) => {
+      const index = evidence.command.args.findIndex((value) => value.startsWith('permissions.shipyard-runtime.filesystem='));
+      evidence.command.args[index] = 'permissions.shipyard-runtime.filesystem={"/tmp/unrelated"=\"deny\"}';
+    },
+    (evidence) => { evidence.command.args.push('--sandbox', 'workspace-write'); },
+  ]) {
+    const f = setup({
+      host: {
+        requireRuntimeEvidence: true,
+        launch: (selection, context) => {
+          const evidence = runtimeEvidence(selection, context);
+          tamper(evidence);
+          return {
+            ...applied(selection),
+            observed_model: selection.model,
+            observed_effort: selection.reasoning_effort,
+            runtime_evidence: evidence,
+          };
+        },
+      },
+    });
+    try {
+      assert.throws(() => f.boundary.dispatch({ runtime: 'codex', role: 'executor' }),
+        (error) => error.code === 'MISSING_RECEIPT');
+    } finally { clean(f); }
+  }
+});
+
+test('native Codex transcript evidence accepts its exact session-id filename', () => {
+  const f = setup({
+    host: {
+      requireRuntimeEvidence: true,
+      launch: (selection, context) => {
+        const evidence = runtimeEvidence(selection, context);
+        evidence.native_session_evidence.file = evidence.session_id + '.jsonl';
+        return {
+          ...applied(selection),
+          observed_model: selection.model,
+          observed_effort: selection.reasoning_effort,
+          runtime_evidence: evidence,
+        };
+      },
+    },
+  });
+  try {
+    const result = f.boundary.dispatch({ runtime: 'codex', role: 'executor' });
+    assert.equal(result.receipt.runtime_evidence.native_session_evidence.file,
+      result.receipt.runtime_evidence.session_id + '.jsonl');
   } finally { clean(f); }
 });
 
@@ -323,14 +445,14 @@ test('forged or stale resolutions are rejected before the host is called', () =>
     const r = f.boundary.resolve({ runtime: 'codex', role: 'executor' });
     for (const change of [
       { policy_hash: 'old' }, { model: 'gpt-6-astra' },
-      { launch_arguments: { model: 'gpt-5.6-luna' } },
+      { launch_arguments: { model: 'gpt-6-luna' } },
     ]) assert.throws(() => f.adapter.launch({ ...r, ...change }));
     assert.equal(f.calls.length, 0);
   } finally { clean(f); }
 });
 
 test('a successful exit or requested values alone cannot produce application evidence', () => {
-  for (const response of [{ status: 0 }, { launch_id: 'ok', requested_model: 'gpt-5.6-luna', requested_effort: 'max' }]) {
+  for (const response of [{ status: 0 }, { launch_id: 'ok', requested_model: 'gpt-6-luna', requested_effort: 'max' }]) {
     const f = setup({ host: { launch: () => response } });
     try {
       rejected(() => f.boundary.dispatch({ runtime: 'codex', role: 'executor' }), 'MISSING_RECEIPT');

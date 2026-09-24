@@ -297,12 +297,12 @@ script — not in a prompt.** Every requirement below is an instance of it.
   ladder with explicit model, effort, and escalation signals for research,
   decomposition, execution, sentinel, integration, drift, architecture review,
   CI-fix, and review-fix.
-- **REQ-106** — Codex resolves the approved Terra/Sol/Luna/Astra concrete model
-  IDs and efforts, generates/registers every required static variant, and fails
+- **REQ-106** — Codex resolves the versioned ladder's approved native model IDs
+  and efforts, generates/registers every required static variant, and fails
   closed on unavailable, stale, missing, or conflicting model configuration.
 - **REQ-107** — Claude Code consumes the canonical role/escalation decision via
-  its existing palette without changing that palette, and both runtime adapters
-  reject unsupported or implicit model/effort application.
+  its native palette, and both runtime adapters reject unsupported or implicit
+  model/effort application.
 - **REQ-108** — Every routed dispatch, including decomposition and dynamic
   executor paths, passes through one mandatory resolve → validate → launch
   boundary; inline fallback, parent-session inheritance, and conflicting GSD or
@@ -325,12 +325,12 @@ script — not in a prompt.** Every requirement below is an instance of it.
 - **REQ-113** — Claude and Codex adapters consume the same control contract but
   remain provider-pure, carrying explicit runtime-native model and effort values
   with no parent-session inheritance or cross-provider fallback.
-- **REQ-114** — Claude native Workflow or an explicitly supported Claude Code
-  bridge is connected to a real launch path with positive application evidence;
-  an unavailable or unsupported host refuses before a routed launch is counted.
-- **REQ-115** — Codex dynamic and generated-agent launches produce positive
-  application evidence for the resolver-selected model and reasoning effort;
-  synthetic fixtures cannot satisfy the live-runtime acceptance gate.
+- **REQ-114** — A shipped Claude Code delivery entrypoint applies the resolved
+  model and effort with bounded edit/Bash permissions and positive application
+  evidence; unavailable or unsupported hosts refuse before dispatch is counted.
+- **REQ-115** — Shipped Codex dynamic and generated-agent delivery paths apply
+  the resolver-selected model and reasoning effort and produce positive runtime
+  evidence; synthetic fixtures cannot satisfy the live-runtime acceptance gate.
 - **REQ-116** — A dispatch receipt joins requested, applied, observed, runtime,
   model, effort, policy, launch identity, and usage status, and distinguishes
   unsupported from unknown evidence without inferring success.
@@ -344,9 +344,19 @@ script — not in a prompt.** Every requirement below is an instance of it.
 - **REQ-119** — Runtime, account, role, model, effort, token, quality, recovery,
   and outcome facts are joinable per run and provider, with complete attribution
   required before a cost or ladder treatment is accepted.
-- **REQ-120** — The rollout has capability probes, live proving-ground smokes,
-  negative enforcement tests, versioned compatibility rollback, and preserves
-  historical receipts and provider-specific model policies.
+- **REQ-120** — Each runtime has capability probes, an explicitly enabled live
+  proving-ground smoke, negative enforcement tests, versioned compatibility
+  rollback, and preserved receipts; one runtime's evidence cannot mark the
+  other green or block its independent rollout.
+- **REQ-121** — Codex routing uses native `gpt-6-luna` and `gpt-6-sol` IDs
+  throughout policy, generated agents, capability metadata, and receipts; the
+  executor base remains Luna/max and only approved signals promote it to Sol.
+- **REQ-122** — Claude Opus routing requests `claude-opus-5-5` with the existing
+  Claude effort policy; credentials stay Anthropic-only and applied
+  model/effort evidence is scoped to the launched assistant session.
+- **REQ-123** — Claude OAuth and Codex ChatGPT login are detected through each
+  native CLI's status command; subscription auth is sufficient, API-key
+  environment variables are not required, and credentials never cross providers.
 
 *ADR-011 was accepted for implementation on 2026-09-10. T-32-01/02 are the
 initial isolated tooling slice; subsequent packages remain subject to decomposition
@@ -683,23 +693,34 @@ order so the resolver exists before generators and callers consume it; the
 existing Claude palette is a read-only compatibility surface.
 
 ### Phase 37: Run the autonomous dual-runtime control plane
-**Status**: planned (ADR-015)
+**Status**: implementation merged; runtime delivery follow-up planned (ADR-015)
 **Requirements**: REQ-111, REQ-112, REQ-113, REQ-114, REQ-115, REQ-116, REQ-117, REQ-118, REQ-119, REQ-120
 
 Prepare and implement the shared run controller, scoped durable state,
 provider-pure Claude and Codex adapters, live proving-ground coverage, graph
 reachability refresh, deterministic continuation, and usage/effectiveness
-observability. The phase is dependency-ordered so the shared contract and
-controller exist before either runtime adapter becomes authoritative. It does
-not change product code, provider palettes, or model-ladder thresholds before
-the new measurements are complete.
+observability. The original implementation landed in PR #186. A subsequent
+review found that the model IDs and production delivery hosts still need to be
+connected; those corrections remain open and are tracked separately in Phase 38.
+
+### Phase 38: Restore the native model ladder in delivery
+**Status**: in progress (ADR-014, ADR-015)
+**Requirements**: REQ-106, REQ-107, REQ-113, REQ-114, REQ-115, REQ-116, REQ-120, REQ-121, REQ-122, REQ-123, REQ-124
+
+Correct the runtime model identifiers and connect both providers' production
+delivery hosts. Prove model, effort, and typed GSD agent application from
+session-bound native evidence; keep worker commits and plugin-reference reads
+inside trusted host boundaries. Route commands through provider-pure hosts,
+detect subscription authentication through the native CLIs, and keep rollout
+independent per provider. Preserve the Luna/max Codex baseline, effort tiers,
+promotion signals, and historical receipts.
 
 <!-- shipyard:gsd-sync:begin -->
 ## Shipyard synchronization (generated)
 
-- Source fingerprint: `715375e2701de77752ebccaaa30df3b13d4ba9d1b506881c613bfaf7ed312dd9`
-- Plans merged: 130/138
-- Phases verified: 9/18
+- Source fingerprint: `719b0b2f0955de7d0984efd19ec9d99108eb92c7a04e135054ae79dd82d854b8`
+- Plans merged: 146/146
+- Phases verified: 10/19
 - Current phase: 20
 
 | Phase | Plans | Merged | Verification |
@@ -721,6 +742,7 @@ the new measurements are complete.
 | 34 — Improve convergence and tune from measured outcomes | 5 | 5 | passed |
 | 35 — Close the GSD and Shipyard workflow loop | 3 | 3 | passed |
 | 36 — Enforce the runtime model ladder | 12 | 12 | passed |
-| 37 — Run the autonomous dual-runtime control plane | 8 | 0 | pending |
+| 37 — Run the autonomous dual-runtime control plane | 8 | 8 | pending |
+| 38 — Restore the native model ladder in delivery | 8 | 8 | passed |
 
 <!-- shipyard:gsd-sync:end -->

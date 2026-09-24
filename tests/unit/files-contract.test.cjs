@@ -524,7 +524,7 @@ test('delivery docs name the generated Codex variants and no retired recovery ta
   assert.ok(source.includes('shipyard-inv-research-critical.toml'), 'research ceiling must use the emitted suffix');
   assert.ok(!source.includes('shipyard-inv-research-alternatives.toml'), 'Codex research has no generated alternatives variant');
   const codexGuidanceStart = source.indexOf('### Codex policy and generated files');
-  const workflowGuidanceStart = source.indexOf('### Workflow-native alias policy and native workflow arguments');
+  const workflowGuidanceStart = source.indexOf('### Claude host-owned workflow aliases and launch arguments');
   assert.ok(codexGuidanceStart >= 0, 'Codex guidance heading must exist');
   assert.ok(workflowGuidanceStart > codexGuidanceStart, 'Workflow guidance heading must follow Codex guidance');
   const codexGuidance = source.slice(codexGuidanceStart, workflowGuidanceStart);

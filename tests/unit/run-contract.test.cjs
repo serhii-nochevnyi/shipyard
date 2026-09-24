@@ -24,12 +24,37 @@ test('creates a frozen scoped contract with provider-pure model evidence', () =>
   assert.equal(run.schema, 'shipyard.run.v1');
   assert.equal(run.runtime.runtime, 'codex');
   assert.equal(run.runtime.provider, 'openai');
-  assert.equal(run.dispatch.model, 'gpt-5.6-luna');
+  assert.equal(run.dispatch.model, 'gpt-6-luna');
   assert.equal(run.dispatch.model_key, 'luna');
   assert.ok(Object.isFrozen(run));
   assert.ok(Object.isFrozen(run.repository));
   assert.ok(Object.isFrozen(run.dispatch));
   assert.ok(Object.isFrozen(run.state_revision));
+});
+
+test('integrator accepts only the canonical phase subject as its run ticket', () => {
+  const subject = 'phase=38-runtime-model-ladder-recovery;repository=/tmp/shipyard/.git;tickets=' + 'a'.repeat(64);
+  const run = makeScope({
+    phase: 38,
+    ticket: subject,
+    dispatch: { dispatch_id: 'dispatch-integrator', role: 'integrator', model: 'gpt-6-sol', effort: 'high' },
+  });
+  assert.equal(run.ticket.ticket, subject);
+  assert.equal(contract.normalizeRunContract(run).ticket.ticket, subject);
+  assert.throws(() => makeScope({ ticket: subject }), (error) => error.code === 'INVALID_INPUT');
+  assert.throws(() => scope.createTicketIdentity(subject), (error) => error.code === 'INVALID_INPUT');
+  assert.throws(() => scope.createTicketIdentity(subject, { role: 'integrator', phase: 37 }),
+    (error) => error.code === 'INVALID_INPUT');
+  assert.throws(() => makeScope({
+    phase: 37,
+    ticket: subject,
+    dispatch: { dispatch_id: 'dispatch-integrator', role: 'integrator', model: 'gpt-6-sol', effort: 'high' },
+  }), (error) => error.code === 'INVALID_INPUT');
+  assert.throws(() => makeScope({
+    phase: 38,
+    ticket: 'phase=38-runtime-model-ladder-recovery;repository=/tmp/shipyard/.git;tickets=bad',
+    dispatch: { dispatch_id: 'dispatch-integrator', role: 'integrator', model: 'gpt-6-sol', effort: 'high' },
+  }), (error) => error.code === 'INVALID_INPUT');
 });
 
 test('requires the complete scope before constructing a run', () => {
@@ -53,7 +78,7 @@ test('rejects a provider or model from the other runtime', () => {
     (error) => error.code === 'RUNTIME_PROVIDER_MISMATCH',
   );
   assert.throws(
-    () => scope.createDispatchIdentity({ dispatch_id: 'd', role: 'executor', runtime: 'claude', provider: 'anthropic', model: 'gpt-5.6-luna' }),
+    () => scope.createDispatchIdentity({ dispatch_id: 'd', role: 'executor', runtime: 'claude', provider: 'anthropic', model: 'gpt-6-luna' }),
     (error) => error.code === 'RUNTIME_MODEL_MISMATCH',
   );
   assert.throws(
