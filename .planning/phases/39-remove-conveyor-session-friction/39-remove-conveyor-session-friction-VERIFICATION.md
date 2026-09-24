@@ -1,8 +1,8 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 0d8a7dc376111419990d095c3df599a615a2c1b20ba323bf01d3f4999a80d8d9
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: b3404d53c196df3b5968618d97dabc3cf768a213acf7a7a6f30a823cc38be67a
 phase: 39
 status: human_needed
-shipyard_source_fingerprint: 0d8a7dc376111419990d095c3df599a615a2c1b20ba323bf01d3f4999a80d8d9
+shipyard_source_fingerprint: b3404d53c196df3b5968618d97dabc3cf768a213acf7a7a6f30a823cc38be67a
 ---
 
 # Phase 39: Remove conveyor session friction — Verification Projection
@@ -13,7 +13,7 @@ shipyard_source_fingerprint: 0d8a7dc376111419990d095c3df599a615a2c1b20ba323bf01d
 
 | Truth | Evidence | Status |
 |---|---|---|
-| Every phase plan is accounted for | 0/12 delivery records are merged | ? UNCERTAIN |
+| Every phase plan is accounted for | 11/12 delivery records are merged | ? UNCERTAIN |
 | Integration is coherent | INTEGRATION.md is missing | ? UNCERTAIN |
 | Verification evidence is present | INTEGRATION.md is missing | ? UNCERTAIN |
 
@@ -21,18 +21,18 @@ shipyard_source_fingerprint: 0d8a7dc376111419990d095c3df599a615a2c1b20ba323bf01d
 
 | Ticket | Delivery | Plan status |
 |---|---|---|
-| T-39-01 | pending | ? UNCERTAIN |
-| T-39-02 | pending | ? UNCERTAIN |
-| T-39-03 | pending | ? UNCERTAIN |
-| T-39-04 | pending | ? UNCERTAIN |
-| T-39-05 | pending | ? UNCERTAIN |
-| T-39-06 | pending | ? UNCERTAIN |
-| T-39-07 | pending | ? UNCERTAIN |
-| T-39-08 | pending | ? UNCERTAIN |
-| T-39-09 | pending | ? UNCERTAIN |
-| T-39-10 | pending | ? UNCERTAIN |
-| T-39-11 | pending | ? UNCERTAIN |
-| T-39-12 | pr-open | ? UNCERTAIN |
+| T-39-01 | merged | ✓ VERIFIED |
+| T-39-02 | merged | ✓ VERIFIED |
+| T-39-03 | pr-open | ? UNCERTAIN |
+| T-39-04 | merged | ✓ VERIFIED |
+| T-39-05 | merged | ✓ VERIFIED |
+| T-39-06 | merged | ✓ VERIFIED |
+| T-39-07 | merged | ✓ VERIFIED |
+| T-39-08 | merged | ✓ VERIFIED |
+| T-39-09 | merged | ✓ VERIFIED |
+| T-39-10 | merged | ✓ VERIFIED |
+| T-39-11 | merged | ✓ VERIFIED |
+| T-39-12 | merged | ✓ VERIFIED |
 
 ## Verification Commands
 
@@ -41,4 +41,4 @@ shipyard_source_fingerprint: 0d8a7dc376111419990d095c3df599a615a2c1b20ba323bf01d
 
 ## Gaps Summary
 
-**Not green:** 12 plan(s) are not merged.
+**Not green:** 1 plan(s) are not merged.

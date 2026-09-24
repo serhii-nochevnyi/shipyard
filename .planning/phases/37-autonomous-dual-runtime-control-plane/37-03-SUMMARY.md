@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 0d8a7dc376111419990d095c3df599a615a2c1b20ba323bf01d3f4999a80d8d9
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: b3404d53c196df3b5968618d97dabc3cf768a213acf7a7a6f30a823cc38be67a
 phase: 37-autonomous-dual-runtime-control-plane
 plan: 03
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-22
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 0d8a7dc376111419990d095c3df599a615a2c1b20ba323bf01d3f4999a80d8d9
+shipyard_source_fingerprint: b3404d53c196df3b5968618d97dabc3cf768a213acf7a7a6f30a823cc38be67a
 ---
 
 # Phase 37: Connect Claude Code to the scoped runtime controller — Delivery Projection
