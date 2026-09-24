@@ -740,7 +740,7 @@ gsd-tune, and bound research handbacks at launch.
 <!-- shipyard:gsd-sync:begin -->
 ## Shipyard synchronization (generated)
 
-- Source fingerprint: `f05ad2ba56fc3f5e52e0f12b2de204394965768cf5eaa532b5ab61b61b8c0339`
+- Source fingerprint: `1ce6514a69451ebc224dd245bc6a43d91eececa4cd990647753e983705e8819c`
 - Plans merged: 146/158
 - Phases verified: 10/20
 - Current phase: 20

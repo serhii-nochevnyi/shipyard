@@ -1,10 +1,10 @@
 {
-  "generated_at": "2026-09-24T14:44:29.651Z",
-  "observed_at": "2026-09-24T14:44:29.651Z",
-  "generation": 353,
+  "generated_at": "2026-09-24T14:54:33.505Z",
+  "observed_at": "2026-09-24T14:54:33.505Z",
+  "generation": 354,
   "parked_by_run": [],
   "auto_merge": "epic",
-  "dispatches_applied_at": "2026-09-24T14:44:29.651Z",
+  "dispatches_applied_at": "2026-09-24T14:54:33.505Z",
   "actionable": {
     "execute": [
       "T-39-02",
@@ -20,13 +20,13 @@
     ],
     "publish": [],
     "fix": [],
-    "finalize": [],
+    "finalize": [
+      "T-39-12"
+    ],
     "merge": []
   },
   "waiting": {
-    "ci": [
-      "T-39-12"
-    ],
+    "ci": [],
     "dispatched": [],
     "parent": [],
     "merge_human": [],
@@ -197,15 +197,15 @@
     "T-39-09": "T-39-02 (parent has no branch yet (nothing to cascade from))",
     "T-39-10": "ready — worktree + executor",
     "T-39-11": "ready — worktree + executor",
-    "T-39-12": "PR #204: 1 check(s) still running"
+    "T-39-12": "PR #204: green and still a draft — threads, arch-review, conform gate"
   },
   "counts": {
     "execute": 10,
     "publish": 0,
     "fix": 0,
-    "finalize": 0,
+    "finalize": 1,
     "merge": 0,
-    "ci": 1,
+    "ci": 0,
     "dispatched": 0,
     "parent": 0,
     "merge_human": 0,
@@ -214,7 +214,7 @@
     "done": 146
   },
   "parent_of": {},
-  "actionable_count": 10,
+  "actionable_count": 11,
   "tracker_blocked_count": 0,
   "left_behind_count": 0,
   "fixpoint": false,
@@ -224,10 +224,10 @@
     "free": 4
   },
   "sentinel": {
-    "duty": [],
-    "waiting_ci": [
+    "duty": [
       "T-39-12"
     ],
+    "waiting_ci": [],
     "waiting_parent": [],
     "dispatched": [],
     "clear": false

@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: f05ad2ba56fc3f5e52e0f12b2de204394965768cf5eaa532b5ab61b61b8c0339
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 1ce6514a69451ebc224dd245bc6a43d91eececa4cd990647753e983705e8819c
 phase: 28-a-mechanism-nobody-connected-is-not-a-mechanism
 plan: 08
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-09
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: f05ad2ba56fc3f5e52e0f12b2de204394965768cf5eaa532b5ab61b61b8c0339
+shipyard_source_fingerprint: 1ce6514a69451ebc224dd245bc6a43d91eececa4cd990647753e983705e8819c
 ---
 
 # Phase 28: A clean exit is not evidence of a coherent result — Delivery Projection

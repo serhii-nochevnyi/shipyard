@@ -1,13 +1,13 @@
 {
   "schema_version": 1,
-  "generation": 353,
-  "generation_identity": "99caa87c-613f-4f2a-87cd-6b786999f3e5",
-  "previous_generation_identity": "16777244:12914678962:1790261057610431700:2bf241693da0021dbd956231ac0cf3914cb6becabeee591da2866a172c2a25d2",
-  "observed_at": "2026-09-24T14:44:29.651Z",
-  "generated_at": "2026-09-24T14:44:29.651Z",
+  "generation": 354,
+  "generation_identity": "a56feda2-0418-4647-8eec-e9e6993e5cb4",
+  "previous_generation_identity": "16777244:12914682238:1790261111632062000:de7fb56f8e02aa408827f087b31a60df53311e70c2e06cf90b3a2e7e79cde5fd",
+  "observed_at": "2026-09-24T14:54:33.505Z",
+  "generated_at": "2026-09-24T14:54:33.505Z",
   "by": "state-sync",
-  "pid": 70611,
-  "observation_generation": 353,
+  "pid": 84977,
+  "observation_generation": 354,
   "observation_projection": {
     "tickets": {
       "T-20-01": {
@@ -1744,11 +1744,11 @@
         "head": "69b5136ef8cb6f26687d0b657dc1fe153137ab35",
         "draft": true,
         "base": "epic/39-remove-conveyor-session-friction",
-        "merge_state": "UNSTABLE",
+        "merge_state": "CLEAN",
         "review_decision": null,
         "checks": {
           "total": 1,
-          "pending": 1,
+          "pending": 0,
           "failing": 0,
           "none_reported": false,
           "unavailable": false
@@ -1758,9 +1758,9 @@
   },
   "binding": {
     "schema_version": 1,
-    "state_digest": "9b7aca3fddc133b0b8c2ec3f8dff2bff081fe17e6ba815c79d3d6d4cdd8ad378",
-    "front_digest": "5b75e0b09a7aa4b773e0fa6d9893e49c6e035b0f94d9f72d3ef664481fca1ff9",
-    "observation_digest": "8e0b613c211592b1b5cbace9b0dce42113605e4b00fe702ee36c35d1d5f99940",
-    "observation_generation": 353
+    "state_digest": "ab99b1bc9acfe0837749521add9e0c8e61de9da824e10a007ed3e2d03b7a5830",
+    "front_digest": "a0e6f49c1c0a9cfb5af558121b12d948fbf1232004f9d98f4aabc96eb2b381a4",
+    "observation_digest": "7a280adc525e21a3b41c02eaa69b556f3421cacc0612a01b3501706c9c024092",
+    "observation_generation": 354
   }
 }
