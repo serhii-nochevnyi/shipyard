@@ -222,6 +222,7 @@ const linePrompt = (line) => [
     `Write the complete research finding for line ${line.id} to exactly: ${argv.artifactPaths[line.id]}`,
     `The file must contain every source, constraint, uncertainty, and command-backed finding for this line. Do not put the full finding in the callback result.`,
     `Return only id, status, summary, and a bounded artifact reference for that exact file.`,
+    `\`summary\` is plain text of at most 500 characters; put everything else in the artifact file; return the JSON object only, with no prose after it.`,
   ] : [`Return a concise result for line ${line.id} with command-backed evidence for every checkable claim.`]),
   `Write artifacts in ${argv.artifactLanguage || 'English'}.`,
 ].join('\n')
