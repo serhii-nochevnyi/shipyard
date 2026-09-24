@@ -1,13 +1,13 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 719b0b2f0955de7d0984efd19ec9d99108eb92c7a04e135054ae79dd82d854b8
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: c579363766d54eb23d56c8d362495404f4aea8e4845403e768ef9fe47724dabf
 gsd_state_version: '1.0'
 status: planning
 progress:
-  total_phases: 19
+  total_phases: 20
   completed_phases: 10
-  total_plans: 146
+  total_plans: 157
   completed_plans: 146
-  percent: 100
+  percent: 92
 ---
 
 # Project State
@@ -21,12 +21,12 @@ See: .planning/PROJECT.md (updated by Shipyard GSD synchronization)
 
 ## Current Position
 
-Phase: 1 of 19 (Phase 20: Autonomy of the drive-to-green loop)
+Phase: 1 of 20 (Phase 20: Autonomy of the drive-to-green loop)
 Plan: 6 of 6 merged
 Status: pending
 Last activity: 2026-09-24 — Shipyard projection synchronized
 
-Progress: [██████████] 100%
+Progress: [█████████░] 92%
 
 ## Performance Metrics
 
@@ -57,6 +57,7 @@ Progress: [██████████] 100%
 | 36 | 12 | 12 | passed |
 | 37 | 8 | 8 | pending |
 | 38 | 8 | 8 | passed |
+| 39 | 11 | 0 | pending |
 
 ## Accumulated Context
 
@@ -71,14 +72,14 @@ Review and resolve phase integration findings shown in the phase artifacts.
 
 ### Blockers/Concerns
 
-- Phase 20: INTEGRATION.md is missing
-- Phase 21: INTEGRATION.md is missing
-- Phase 22: INTEGRATION.md is missing
-- Phase 23: INTEGRATION.md is missing
-- Phase 24: integration evidence records a finding or failed verdict
-- Phase 26: verification evidence records a failed check
-- Phase 27: integration evidence records a finding or failed verdict
-- Phase 28: integration evidence records a finding or failed verdict
+- T-39-01: delivery status is pending
+- T-39-02: delivery status is pending
+- T-39-03: delivery status is pending
+- T-39-04: delivery status is pending
+- T-39-05: delivery status is pending
+- T-39-06: delivery status is pending
+- T-39-07: delivery status is pending
+- T-39-08: delivery status is pending
 
 ## Deferred Items
 
@@ -88,6 +89,6 @@ Review and resolve phase integration findings shown in the phase artifacts.
 
 ## Session Continuity
 
-Last session: 2026-09-24 07:16
+Last session: 2026-09-24 13:52
 Stopped at: Shipyard GSD projection synchronized from the delivery graph.
 Resume file: None
