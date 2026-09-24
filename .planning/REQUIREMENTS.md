@@ -157,6 +157,15 @@
 - [ ] **REQ-148**: The Codex GSD researcher writes only its contained artifact path, and Codex child tasks are passed by file path plus a digest the host verifies.
 - [ ] **REQ-149**: Point fixes: header-free deterministic state YAML; pre-push resolves the worktree through git; the Codex config refusal names the config fix; gsd-tune for Codex writes no Claude-only keys; investigate and decompose prose explain the out-of-repo host state directory; doctor reads the Codex agents manifest.
 - [ ] **REQ-150**: Unit fixtures that create git repositories are hermetic against global commit signing and fixed /tmp paths. *ADR-011 was accepted for implementation on 2026-09-10. T-32-01/02 are the initial isolated tooling slice; subsequent packages remain subject to decomposition and rollout gates. Existing model floors remain unchanged.*
+- [ ] **REQ-151**: A conform verdict carries across a sibling merge only when git tree objects prove the ticket's own change is identical and the base move touched no path the ticket declares or changes; built on the commit-status carrier.
+- [ ] **REQ-152**: One worktree-conditions module defines scratch and host-owned files and launch preconditions (clean tracked tree, role evidence path absent, plan and graph inside the worktree, fresh base ref, usable signing where a host commits); every role, delivery and decompose host checks it before launch with a copyable remedy.
+- [ ] **REQ-153**: ticket-worktree.sh writes .git/info/exclude entries for registry scratch files and offers a verify subcommand backed by the conditions module.
+- [ ] **REQ-154**: A role's out-of-scope worktree mutation is restored by the host and reported, never left for the next launch.
+- [ ] **REQ-155**: Executor artifacts are validated in a historical mode against their recorded base commit and tree at publication; the PR opens against the live base.
+- [ ] **REQ-156**: The integrator judges the full code diff excluding .planning/ and .shipyard-role-artifacts/ plus a name-status and blob-digest summary of .planning, refusing with a named remedy when a bound is still exceeded.
+- [ ] **REQ-157**: Arch-review accepts a draft PR; the sentinel and merge gate keep refusing drafts.
+- [ ] **REQ-158**: A sentinel round excludes PRs opened after its snapshot and never acts on or reports them; changed members still expire.
+- [ ] **REQ-159**: The planning flow writes a deterministic pending delivery observation for new tickets so gsd-sync --check stays offline and fail-closed.
 
 ## Out of Scope
 
@@ -318,9 +327,18 @@
 | REQ-148 | Phase 40 | In Progress |
 | REQ-149 | Phase 40 | In Progress |
 | REQ-150 | Phase 40 | In Progress |
+| REQ-151 | Phase 40 | Pending |
+| REQ-152 | Phase 40 | Pending |
+| REQ-153 | Phase 40 | Pending |
+| REQ-154 | Phase 40 | Pending |
+| REQ-155 | Phase 40 | Pending |
+| REQ-156 | Phase 40 | Pending |
+| REQ-157 | Phase 40 | Pending |
+| REQ-158 | Phase 40 | Pending |
+| REQ-159 | Phase 40 | Pending |
 
 **Coverage:**
-- v1 requirements: 149 total
+- v1 requirements: 158 total
 - Mapped to phases: 147
 - Unmapped: 2 ⚠️
 
