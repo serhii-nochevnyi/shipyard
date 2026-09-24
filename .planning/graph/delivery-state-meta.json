@@ -1,13 +1,13 @@
 {
   "schema_version": 1,
-  "generation": 354,
-  "generation_identity": "a56feda2-0418-4647-8eec-e9e6993e5cb4",
-  "previous_generation_identity": "16777244:12914682238:1790261111632062000:de7fb56f8e02aa408827f087b31a60df53311e70c2e06cf90b3a2e7e79cde5fd",
-  "observed_at": "2026-09-24T14:54:33.505Z",
-  "generated_at": "2026-09-24T14:54:33.505Z",
+  "generation": 356,
+  "generation_identity": "ca17a787-ad9a-4a43-8211-112d21a885e9",
+  "previous_generation_identity": "16777244:12915441570:1790278857144894000:99942705427ae04838cadafa9b84d0cac0d3cd88512e0847f80957c658f9db37",
+  "observed_at": "2026-09-24T19:41:36.498Z",
+  "generated_at": "2026-09-24T19:41:36.498Z",
   "by": "state-sync",
-  "pid": 84977,
-  "observation_generation": 354,
+  "pid": 94670,
+  "observation_generation": 356,
   "observation_projection": {
     "tickets": {
       "T-20-01": {
@@ -1617,9 +1617,9 @@
         "checks": null
       },
       "T-39-01": {
-        "status": "pending",
+        "status": "merged",
         "repository": null,
-        "pr": null,
+        "pr": 206,
         "head": null,
         "draft": false,
         "base": "epic/39-remove-conveyor-session-friction",
@@ -1628,9 +1628,9 @@
         "checks": null
       },
       "T-39-02": {
-        "status": "pending",
+        "status": "merged",
         "repository": null,
-        "pr": null,
+        "pr": 205,
         "head": null,
         "draft": false,
         "base": "epic/39-remove-conveyor-session-friction",
@@ -1639,110 +1639,11 @@
         "checks": null
       },
       "T-39-03": {
-        "status": "pending",
-        "repository": null,
-        "pr": null,
-        "head": null,
-        "draft": false,
-        "base": "epic/39-remove-conveyor-session-friction",
-        "merge_state": null,
-        "review_decision": null,
-        "checks": null
-      },
-      "T-39-04": {
-        "status": "pending",
-        "repository": null,
-        "pr": null,
-        "head": null,
-        "draft": false,
-        "base": "epic/39-remove-conveyor-session-friction",
-        "merge_state": null,
-        "review_decision": null,
-        "checks": null
-      },
-      "T-39-05": {
-        "status": "pending",
-        "repository": null,
-        "pr": null,
-        "head": null,
-        "draft": false,
-        "base": "epic/39-remove-conveyor-session-friction",
-        "merge_state": null,
-        "review_decision": null,
-        "checks": null
-      },
-      "T-39-06": {
-        "status": "pending",
-        "repository": null,
-        "pr": null,
-        "head": null,
-        "draft": false,
-        "base": "epic/39-remove-conveyor-session-friction",
-        "merge_state": null,
-        "review_decision": null,
-        "checks": null
-      },
-      "T-39-07": {
-        "status": "pending",
-        "repository": null,
-        "pr": null,
-        "head": null,
-        "draft": false,
-        "base": "epic/39-remove-conveyor-session-friction",
-        "merge_state": null,
-        "review_decision": null,
-        "checks": null
-      },
-      "T-39-08": {
-        "status": "pending",
-        "repository": null,
-        "pr": null,
-        "head": null,
-        "draft": false,
-        "base": "epic/39-remove-conveyor-session-friction",
-        "merge_state": null,
-        "review_decision": null,
-        "checks": null
-      },
-      "T-39-09": {
-        "status": "pending",
-        "repository": null,
-        "pr": null,
-        "head": null,
-        "draft": false,
-        "base": "epic/39-remove-conveyor-session-friction",
-        "merge_state": null,
-        "review_decision": null,
-        "checks": null
-      },
-      "T-39-10": {
-        "status": "pending",
-        "repository": null,
-        "pr": null,
-        "head": null,
-        "draft": false,
-        "base": "epic/39-remove-conveyor-session-friction",
-        "merge_state": null,
-        "review_decision": null,
-        "checks": null
-      },
-      "T-39-11": {
-        "status": "pending",
-        "repository": null,
-        "pr": null,
-        "head": null,
-        "draft": false,
-        "base": "epic/39-remove-conveyor-session-friction",
-        "merge_state": null,
-        "review_decision": null,
-        "checks": null
-      },
-      "T-39-12": {
         "status": "pr-open",
         "repository": null,
-        "pr": 204,
-        "head": "69b5136ef8cb6f26687d0b657dc1fe153137ab35",
-        "draft": true,
+        "pr": 207,
+        "head": "4f00df2d1646c9d58438e9f12b520c4b2d25713c",
+        "draft": false,
         "base": "epic/39-remove-conveyor-session-friction",
         "merge_state": "CLEAN",
         "review_decision": null,
@@ -1753,14 +1654,410 @@
           "none_reported": false,
           "unavailable": false
         }
+      },
+      "T-39-04": {
+        "status": "merged",
+        "repository": null,
+        "pr": 208,
+        "head": null,
+        "draft": false,
+        "base": "epic/39-remove-conveyor-session-friction",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-39-05": {
+        "status": "merged",
+        "repository": null,
+        "pr": 210,
+        "head": null,
+        "draft": false,
+        "base": "epic/39-remove-conveyor-session-friction",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-39-06": {
+        "status": "merged",
+        "repository": null,
+        "pr": 211,
+        "head": null,
+        "draft": false,
+        "base": "epic/39-remove-conveyor-session-friction",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-39-07": {
+        "status": "merged",
+        "repository": null,
+        "pr": 209,
+        "head": null,
+        "draft": false,
+        "base": "epic/39-remove-conveyor-session-friction",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-39-08": {
+        "status": "merged",
+        "repository": null,
+        "pr": 217,
+        "head": null,
+        "draft": false,
+        "base": "epic/39-remove-conveyor-session-friction",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-39-09": {
+        "status": "merged",
+        "repository": null,
+        "pr": 212,
+        "head": null,
+        "draft": false,
+        "base": "epic/39-remove-conveyor-session-friction",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-39-10": {
+        "status": "merged",
+        "repository": null,
+        "pr": 213,
+        "head": null,
+        "draft": false,
+        "base": "epic/39-remove-conveyor-session-friction",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-39-11": {
+        "status": "merged",
+        "repository": null,
+        "pr": 216,
+        "head": null,
+        "draft": false,
+        "base": "epic/39-remove-conveyor-session-friction",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-39-12": {
+        "status": "merged",
+        "repository": null,
+        "pr": 204,
+        "head": null,
+        "draft": false,
+        "base": "epic/39-remove-conveyor-session-friction",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-40-01": {
+        "status": "pending",
+        "repository": null,
+        "pr": null,
+        "head": null,
+        "draft": false,
+        "base": "epic/40-build-delivery-seams-and-clean-target-project-prs",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-40-02": {
+        "status": "pending",
+        "repository": null,
+        "pr": null,
+        "head": null,
+        "draft": false,
+        "base": "epic/40-build-delivery-seams-and-clean-target-project-prs",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-40-03": {
+        "status": "pending",
+        "repository": null,
+        "pr": null,
+        "head": null,
+        "draft": false,
+        "base": "epic/40-build-delivery-seams-and-clean-target-project-prs",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-40-04": {
+        "status": "pending",
+        "repository": null,
+        "pr": null,
+        "head": null,
+        "draft": false,
+        "base": "epic/40-build-delivery-seams-and-clean-target-project-prs",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-40-05": {
+        "status": "pending",
+        "repository": null,
+        "pr": null,
+        "head": null,
+        "draft": false,
+        "base": "epic/40-build-delivery-seams-and-clean-target-project-prs",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-40-06": {
+        "status": "pending",
+        "repository": null,
+        "pr": null,
+        "head": null,
+        "draft": false,
+        "base": "epic/40-build-delivery-seams-and-clean-target-project-prs",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-40-07": {
+        "status": "pending",
+        "repository": null,
+        "pr": null,
+        "head": null,
+        "draft": false,
+        "base": "epic/40-build-delivery-seams-and-clean-target-project-prs",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-40-08": {
+        "status": "pending",
+        "repository": null,
+        "pr": null,
+        "head": null,
+        "draft": false,
+        "base": "epic/40-build-delivery-seams-and-clean-target-project-prs",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-40-09": {
+        "status": "pending",
+        "repository": null,
+        "pr": null,
+        "head": null,
+        "draft": false,
+        "base": "epic/40-build-delivery-seams-and-clean-target-project-prs",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-40-10": {
+        "status": "pending",
+        "repository": null,
+        "pr": null,
+        "head": null,
+        "draft": false,
+        "base": "epic/40-build-delivery-seams-and-clean-target-project-prs",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-40-11": {
+        "status": "pending",
+        "repository": null,
+        "pr": null,
+        "head": null,
+        "draft": false,
+        "base": "epic/40-build-delivery-seams-and-clean-target-project-prs",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-40-12": {
+        "status": "pending",
+        "repository": null,
+        "pr": null,
+        "head": null,
+        "draft": false,
+        "base": "epic/40-build-delivery-seams-and-clean-target-project-prs",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-40-13": {
+        "status": "pending",
+        "repository": null,
+        "pr": null,
+        "head": null,
+        "draft": false,
+        "base": "epic/40-build-delivery-seams-and-clean-target-project-prs",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-40-14": {
+        "status": "pending",
+        "repository": null,
+        "pr": null,
+        "head": null,
+        "draft": false,
+        "base": "epic/40-build-delivery-seams-and-clean-target-project-prs",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-40-15": {
+        "status": "pending",
+        "repository": null,
+        "pr": null,
+        "head": null,
+        "draft": false,
+        "base": "epic/40-build-delivery-seams-and-clean-target-project-prs",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-40-16": {
+        "status": "pending",
+        "repository": null,
+        "pr": null,
+        "head": null,
+        "draft": false,
+        "base": "epic/40-build-delivery-seams-and-clean-target-project-prs",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-40-17": {
+        "status": "pending",
+        "repository": null,
+        "pr": null,
+        "head": null,
+        "draft": false,
+        "base": "epic/40-build-delivery-seams-and-clean-target-project-prs",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-40-18": {
+        "status": "pending",
+        "repository": null,
+        "pr": null,
+        "head": null,
+        "draft": false,
+        "base": "epic/40-build-delivery-seams-and-clean-target-project-prs",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-40-19": {
+        "status": "pending",
+        "repository": null,
+        "pr": null,
+        "head": null,
+        "draft": false,
+        "base": "epic/40-build-delivery-seams-and-clean-target-project-prs",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-40-20": {
+        "status": "pending",
+        "repository": null,
+        "pr": null,
+        "head": null,
+        "draft": false,
+        "base": "epic/40-build-delivery-seams-and-clean-target-project-prs",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-40-21": {
+        "status": "pending",
+        "repository": null,
+        "pr": null,
+        "head": null,
+        "draft": false,
+        "base": "epic/40-build-delivery-seams-and-clean-target-project-prs",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-40-22": {
+        "status": "pending",
+        "repository": null,
+        "pr": null,
+        "head": null,
+        "draft": false,
+        "base": "epic/40-build-delivery-seams-and-clean-target-project-prs",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-40-23": {
+        "status": "pending",
+        "repository": null,
+        "pr": null,
+        "head": null,
+        "draft": false,
+        "base": "epic/40-build-delivery-seams-and-clean-target-project-prs",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-40-24": {
+        "status": "pending",
+        "repository": null,
+        "pr": null,
+        "head": null,
+        "draft": false,
+        "base": "epic/40-build-delivery-seams-and-clean-target-project-prs",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-40-25": {
+        "status": "pending",
+        "repository": null,
+        "pr": null,
+        "head": null,
+        "draft": false,
+        "base": "epic/40-build-delivery-seams-and-clean-target-project-prs",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-40-26": {
+        "status": "pending",
+        "repository": null,
+        "pr": null,
+        "head": null,
+        "draft": false,
+        "base": "epic/40-build-delivery-seams-and-clean-target-project-prs",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-40-27": {
+        "status": "pending",
+        "repository": null,
+        "pr": null,
+        "head": null,
+        "draft": false,
+        "base": "epic/40-build-delivery-seams-and-clean-target-project-prs",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
       }
     }
   },
   "binding": {
     "schema_version": 1,
-    "state_digest": "ab99b1bc9acfe0837749521add9e0c8e61de9da824e10a007ed3e2d03b7a5830",
-    "front_digest": "a0e6f49c1c0a9cfb5af558121b12d948fbf1232004f9d98f4aabc96eb2b381a4",
-    "observation_digest": "7a280adc525e21a3b41c02eaa69b556f3421cacc0612a01b3501706c9c024092",
-    "observation_generation": 354
+    "state_digest": "c609c55392497f7de1f968e8c70efb529e12c3456ab3cf60ea0e51a0aaccdada",
+    "front_digest": "05105e2a8d7124b900ed74306948b6bb2d117f79d3c9d569191b72dee1fb92d4",
+    "observation_digest": "3b306fdddec80fd9a90a76722849266b64f88c3a0425c8da45c6655d66fb8836",
+    "observation_generation": 356
   }
 }

@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 0d8a7dc376111419990d095c3df599a615a2c1b20ba323bf01d3f4999a80d8d9
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: b3404d53c196df3b5968618d97dabc3cf768a213acf7a7a6f30a823cc38be67a
 phase: 39-remove-conveyor-session-friction
 plan: 03
 subsystem: shipyard delivery
@@ -22,7 +22,7 @@ key-decisions:
 duration: 0min
 status: halted
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 0d8a7dc376111419990d095c3df599a615a2c1b20ba323bf01d3f4999a80d8d9
+shipyard_source_fingerprint: b3404d53c196df3b5968618d97dabc3cf768a213acf7a7a6f30a823cc38be67a
 ---
 
 # Phase 39: Enforce the stop gate only in deliver-armed sessions — Delivery Projection
@@ -32,8 +32,8 @@ shipyard_source_fingerprint: 0d8a7dc376111419990d095c3df599a615a2c1b20ba323bf01d
 ## Delivery Evidence
 
 - Ticket: T-39-03
-- Delivery status: pending
-- PR: not observed
+- Delivery status: pr-open
+- PR: #207
 - Source plan: .planning/phases/39-remove-conveyor-session-friction/39-03-PLAN.md
 - This summary is halted until the delivery state observes `merged`.
 
