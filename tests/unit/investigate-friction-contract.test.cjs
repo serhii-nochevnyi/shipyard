@@ -50,7 +50,6 @@ test('Gate 1 builds the ADR from the shipped template and gates the close on adr
   const closeAt = gate1.indexOf('status: closed');
   assert.ok(checkAt >= 0 && closeAt > checkAt, 'the adr-ingest.cjs --check step must precede the close step');
 
-  // Pinned literals (tests/unit/source-contract.test.cjs) stay byte-identical.
   assert.ok(source.includes('each locked decision is one bullet under `## Decision`'));
   assert.ok(source.includes('scope fences use\n     `## Out of scope`'));
 });
