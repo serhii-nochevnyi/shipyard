@@ -755,6 +755,7 @@ function buildBoundary(prepared, runtime, dispatchId, ownerId) {
         const child = await runtime.agent(prepared.prompt, {
           model: selection.model,
           effort: selection.effort,
+          schema: { type: 'object' },
           ...(prepared.readOnlySmoke ? { readOnly: true } : {}),
         });
         launched = child;
