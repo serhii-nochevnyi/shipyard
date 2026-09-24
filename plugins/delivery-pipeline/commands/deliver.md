@@ -440,7 +440,7 @@ rung and `-deep` only for `ci-fix`/`review-fix` `repeat_exhausted`. No sentinel
 recovery variant or additional architecture-review `repeat_exhausted` variant is
 generated; neither role accepts an invented target.
 
-### Workflow-native alias policy and native workflow arguments
+### Claude host-owned workflow aliases and launch arguments
 
 The Claude host-owned Workflow has an independent model grid; never translate
 Codex logical names into its launch arguments. Its registered Workflow adapter
@@ -2519,12 +2519,13 @@ The round order:
 4. Then — step **c** of the cycle (arch-review, resolved with a measured
    `--input-tokens`), the conform gate
    and the `sentinel.cjs merge` for each PR in the main loop, as above. This is
-   judgment, finalization and a merge — do NOT hand any of it to Workflow.
+   judgment, finalization and a merge — do NOT hand any of it to an executor.
 
-**Fallback** (no Workflow): service them one at a time in rounds (a→d for each PR).
-The INPUTS are identical on this path and you assemble them yourself: the
-failure-verdict `strategy` and the prior-attempt record (`attempt-history.cjs <T>`) go into the
-fixer's prompt, and its reported `hypothesis` comes back onto the attempt event.
+**Serial rounds:** service PRs one at a time (a→d for each PR) through the same
+scoped host route. The INPUTS are identical on this path and you assemble them
+yourself: the failure-verdict `strategy` and the prior-attempt record
+(`attempt-history.cjs <T>`) go into the fixer's prompt, and its reported
+`hypothesis` comes back onto the attempt event.
 The `references/` files are the shared channel — they already tell a fixer to
 treat a recorded hypothesis as excluded and to report a new one — but the
 ARGUMENTS are this file's job on either path, so a fixer you dispatch without them
