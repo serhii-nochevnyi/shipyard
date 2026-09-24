@@ -1,10 +1,10 @@
 {
-  "generated_at": "2026-09-24T13:52:13.210Z",
-  "observed_at": "2026-09-24T13:52:13.210Z",
-  "generation": 352,
+  "generated_at": "2026-09-24T14:44:29.651Z",
+  "observed_at": "2026-09-24T14:44:29.651Z",
+  "generation": 353,
   "parked_by_run": [],
   "auto_merge": "epic",
-  "dispatches_applied_at": "2026-09-24T13:52:13.210Z",
+  "dispatches_applied_at": "2026-09-24T14:44:29.651Z",
   "actionable": {
     "execute": [
       "T-39-02",
@@ -24,7 +24,9 @@
     "merge": []
   },
   "waiting": {
-    "ci": [],
+    "ci": [
+      "T-39-12"
+    ],
     "dispatched": [],
     "parent": [],
     "merge_human": [],
@@ -194,7 +196,8 @@
     "T-39-08": "ready — worktree + executor",
     "T-39-09": "T-39-02 (parent has no branch yet (nothing to cascade from))",
     "T-39-10": "ready — worktree + executor",
-    "T-39-11": "ready — worktree + executor"
+    "T-39-11": "ready — worktree + executor",
+    "T-39-12": "PR #204: 1 check(s) still running"
   },
   "counts": {
     "execute": 10,
@@ -202,7 +205,7 @@
     "fix": 0,
     "finalize": 0,
     "merge": 0,
-    "ci": 0,
+    "ci": 1,
     "dispatched": 0,
     "parent": 0,
     "merge_human": 0,
@@ -222,10 +225,12 @@
   },
   "sentinel": {
     "duty": [],
-    "waiting_ci": [],
+    "waiting_ci": [
+      "T-39-12"
+    ],
     "waiting_parent": [],
     "dispatched": [],
-    "clear": true
+    "clear": false
   },
   "roles": {
     "execute": [

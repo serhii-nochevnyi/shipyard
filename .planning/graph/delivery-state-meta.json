@@ -1,13 +1,13 @@
 {
   "schema_version": 1,
-  "generation": 352,
-  "generation_identity": "68a63cc3-0d58-491d-84c0-6c82e466919d",
-  "previous_generation_identity": "16777244:12914301176:1790249754946217000:e1ac45d42bfa3d7f874004ccb0db174678b00ac3ccc133cae88e3bac953c8c85",
-  "observed_at": "2026-09-24T13:52:13.210Z",
-  "generated_at": "2026-09-24T13:52:13.210Z",
+  "generation": 353,
+  "generation_identity": "99caa87c-613f-4f2a-87cd-6b786999f3e5",
+  "previous_generation_identity": "16777244:12914678962:1790261057610431700:2bf241693da0021dbd956231ac0cf3914cb6becabeee591da2866a172c2a25d2",
+  "observed_at": "2026-09-24T14:44:29.651Z",
+  "generated_at": "2026-09-24T14:44:29.651Z",
   "by": "state-sync",
-  "pid": 1242,
-  "observation_generation": 352,
+  "pid": 70611,
+  "observation_generation": 353,
   "observation_projection": {
     "tickets": {
       "T-20-01": {
@@ -1736,14 +1736,31 @@
         "merge_state": null,
         "review_decision": null,
         "checks": null
+      },
+      "T-39-12": {
+        "status": "pr-open",
+        "repository": null,
+        "pr": 204,
+        "head": "69b5136ef8cb6f26687d0b657dc1fe153137ab35",
+        "draft": true,
+        "base": "epic/39-remove-conveyor-session-friction",
+        "merge_state": "UNSTABLE",
+        "review_decision": null,
+        "checks": {
+          "total": 1,
+          "pending": 1,
+          "failing": 0,
+          "none_reported": false,
+          "unavailable": false
+        }
       }
     }
   },
   "binding": {
     "schema_version": 1,
-    "state_digest": "03913ce0b7e9890f91ca6d13446ab2af7598ede91ba2ac2fd83e179f9f546d23",
-    "front_digest": "8d579ac18bd5a933c6c451c8350d02aebb3e14084dec98e76a056ec1d75c734c",
-    "observation_digest": "2199fe3c959dc86c52f0dd317b8283a846ab48626b10d16d4adf83e65af216b4",
-    "observation_generation": 352
+    "state_digest": "9b7aca3fddc133b0b8c2ec3f8dff2bff081fe17e6ba815c79d3d6d4cdd8ad378",
+    "front_digest": "5b75e0b09a7aa4b773e0fa6d9893e49c6e035b0f94d9f72d3ef664481fca1ff9",
+    "observation_digest": "8e0b613c211592b1b5cbace9b0dce42113605e4b00fe702ee36c35d1d5f99940",
+    "observation_generation": 353
   }
 }
