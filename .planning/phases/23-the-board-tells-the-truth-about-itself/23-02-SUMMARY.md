@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 19861478722acf82285dfa0b792a4b79a9091a4af466bdd58f5e32167e0418ed
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 66a2e6a8242aca2e496a6e2f16f4c6c3c0617cc6bf31fd9cf625bb9ecd5b9a41
 phase: 23-the-board-tells-the-truth-about-itself
 plan: 02
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-08-26
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 19861478722acf82285dfa0b792a4b79a9091a4af466bdd58f5e32167e0418ed
+shipyard_source_fingerprint: 66a2e6a8242aca2e496a6e2f16f4c6c3c0617cc6bf31fd9cf625bb9ecd5b9a41
 ---
 
 # Phase 23: The backlog states what is true now — Delivery Projection

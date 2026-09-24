@@ -1,10 +1,10 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 19861478722acf82285dfa0b792a4b79a9091a4af466bdd58f5e32167e0418ed
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 66a2e6a8242aca2e496a6e2f16f4c6c3c0617cc6bf31fd9cf625bb9ecd5b9a41
 phase: 38
 status: pending
 result: pending
 shipyard_sync: evidence-projection
-shipyard_source_fingerprint: 19861478722acf82285dfa0b792a4b79a9091a4af466bdd58f5e32167e0418ed
+shipyard_source_fingerprint: 66a2e6a8242aca2e496a6e2f16f4c6c3c0617cc6bf31fd9cf625bb9ecd5b9a41
 ---
 
 # Phase 38: Restore the native model ladder in delivery — UAT Projection
@@ -12,9 +12,9 @@ shipyard_source_fingerprint: 19861478722acf82285dfa0b792a4b79a9091a4af466bdd58f5
 This file is generated from the delivery graph and phase integration evidence.
 
 ### 1. Delivery plans are accounted for
-result: pending
+result: passed
 expected: all 8 phase plan(s) are merged
-actual: 5 merged
+actual: 8 merged
 
 ### 2. Integration evidence is explicit
 result: pending

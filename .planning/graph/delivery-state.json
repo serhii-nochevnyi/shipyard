@@ -1616,49 +1616,37 @@
   },
   "T-38-07": {
     "branch": "ticket/T-38-07-connect-claude-judgement-roles-through-t",
-    "pr": null,
-    "status": "pending",
+    "pr": 197,
+    "status": "merged",
+    "url": "https://github.com/serhii-nochevnyi/shipyard/pull/197",
     "base": "epic/38-runtime-model-ladder-recovery",
     "base_reason": "T-38-04 is MERGED, so its branch is no longer where work lands — the base is epic/38-runtime-model-ladder-recovery (base-merge it in first to keep the review diff one slice)",
     "epic": "epic/38-runtime-model-ladder-recovery",
-    "ready": true,
-    "reapable": false,
-    "since": "2026-09-23T17:54:56.642Z"
+    "reapable": true,
+    "since": "2026-09-24T07:16:23.997Z"
   },
   "T-38-08": {
     "branch": "ticket/T-38-08-connect-claude-sentinel-through-authenti",
-    "pr": null,
-    "status": "pending",
+    "pr": 198,
+    "status": "merged",
+    "url": "https://github.com/serhii-nochevnyi/shipyard/pull/198",
     "base": "epic/38-runtime-model-ladder-recovery",
-    "base_reason": "T-38-07 has no branch on the remote yet (status pending) — ticket/T-38-07-connect-claude-judgement-roles-through-t is not a base that exists, so the base is epic/38-runtime-model-ladder-recovery",
+    "base_reason": "T-38-07 is MERGED, so its branch is no longer where work lands — the base is epic/38-runtime-model-ladder-recovery (base-merge it in first to keep the review diff one slice)",
     "epic": "epic/38-runtime-model-ladder-recovery",
-    "ready": false,
-    "blocked_by": [
-      "T-38-07"
-    ],
-    "blocked_reasons": {
-      "T-38-07": "parent has no branch yet (nothing to cascade from)"
-    },
-    "reapable": false,
-    "since": "2026-09-23T17:54:56.642Z"
+    "reapable": true,
+    "since": "2026-09-24T07:16:23.997Z"
   },
   "T-38-05": {
     "branch": "ticket/T-38-05-route-delivery-through-independent-runti",
-    "pr": null,
-    "status": "pending",
+    "pr": 199,
+    "status": "merged",
+    "matched_by": "marker",
+    "pr_branch": "ticket/T-38-05-route-independent-runtime-rollouts",
+    "url": "https://github.com/serhii-nochevnyi/shipyard/pull/199",
     "base": "epic/38-runtime-model-ladder-recovery",
-    "base_reason": "T-38-08 has no branch on the remote yet (status pending) — ticket/T-38-08-connect-claude-sentinel-through-authenti is not a base that exists, so the base is epic/38-runtime-model-ladder-recovery",
+    "base_reason": "T-38-08 is MERGED, so its branch is no longer where work lands — the base is epic/38-runtime-model-ladder-recovery (base-merge it in first to keep the review diff one slice)",
     "epic": "epic/38-runtime-model-ladder-recovery",
-    "ready": false,
-    "blocked_by": [
-      "T-38-07",
-      "T-38-08"
-    ],
-    "blocked_reasons": {
-      "T-38-07": "parent has no branch yet (nothing to cascade from)",
-      "T-38-08": "parent has no branch yet (nothing to cascade from)"
-    },
-    "reapable": false,
-    "since": "2026-09-22T19:53:48.339Z"
+    "reapable": true,
+    "since": "2026-09-24T07:16:23.997Z"
   }
 }
