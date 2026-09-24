@@ -740,8 +740,8 @@ gsd-tune, and bound research handbacks at launch.
 <!-- shipyard:gsd-sync:begin -->
 ## Shipyard synchronization (generated)
 
-- Source fingerprint: `c579363766d54eb23d56c8d362495404f4aea8e4845403e768ef9fe47724dabf`
-- Plans merged: 146/157
+- Source fingerprint: `0d8a7dc376111419990d095c3df599a615a2c1b20ba323bf01d3f4999a80d8d9`
+- Plans merged: 146/158
 - Phases verified: 10/20
 - Current phase: 20
 
@@ -766,6 +766,6 @@ gsd-tune, and bound research handbacks at launch.
 | 36 — Enforce the runtime model ladder | 12 | 12 | passed |
 | 37 — Run the autonomous dual-runtime control plane | 8 | 8 | pending |
 | 38 — Restore the native model ladder in delivery | 8 | 8 | passed |
-| 39 — Remove conveyor session friction | 11 | 0 | pending |
+| 39 — Remove conveyor session friction | 12 | 0 | pending |
 
 <!-- shipyard:gsd-sync:end -->
