@@ -132,6 +132,20 @@
 - [x] **REQ-122**: Claude Opus routing requests `claude-opus-5-5` with the existing Claude effort policy; credentials stay Anthropic-only and applied model/effort evidence is scoped to the launched assistant session.
 - [x] **REQ-123**: Claude OAuth and Codex ChatGPT login are detected through each native CLI's status command; subscription auth is sufficient, API-key environment variables are not required, and credentials never cross providers. *ADR-011 was accepted for implementation on 2026-09-10. T-32-01/02 are the initial isolated tooling slice; subsequent packages remain subject to decomposition and rollout gates. Existing model floors remain unchanged.*
 
+### Conveyor session friction (ADR-016)
+
+- [ ] **REQ-125**: Host refusals keep their codes, exit status and fail-closed behaviour and add a plain-language hint with a remedy from one code-to-hint map shared by the Claude and Codex hosts; investigate and decompose relay it in the user's language.
+- [ ] **REQ-126**: Decompose bootstraps a minimal GSD project from the accepted ADR when config.json, ROADMAP.md or REQUIREMENTS.md is missing: one phase per ADR, one requirement per ADR decision, missing files only, plain-language refusal for an ADR without decisions; investigate needs only .planning/investigations/.
+- [ ] **REQ-127**: The stop gate enforces a front only in a session that deliver armed with a per-session marker keyed by session_id; a missing, unreadable or foreign marker allows the stop, and cross-worktree discovery stays for armed sessions.
+- [ ] **REQ-128**: The auto-route hook routes research-needing work to /shipyard:investigate through /shipyard:route, stays silent for task-notification turns and expanded slash commands, injects on unparseable input, and the Codex AGENTS.md block and make doctor follow it.
+- [ ] **REQ-129**: Shipyard ships templates/adr/ADR.md, adr-ingest.cjs has a no-write --check mode, and Gate 1 fails when the new ADR does not pass it.
+- [ ] **REQ-130**: A script builds a deterministic Jira export plan from tickets.json (content, repo-namespaced labels, explicit is-blocked-by direction) that the agent executes through MCP; keys are recorded by script and no network code or credential enters the conveyor.
+- [ ] **REQ-131**: Ordering without a code dependency is not depends_on: decompose and delivery-rules prose adopt the validator condition, and validate-graph warns when a same-phase dependency shares no files_modified with its parent.
+- [ ] **REQ-132**: Decompose passes --skip-ui to /gsd-plan-phase only when the ADR declares "UI design: none".
+- [ ] **REQ-133**: Decompose warns once, without blocking, when .planning/ is not tracked by git, naming the consequence for delivery worktrees and the remedy.
+- [ ] **REQ-134**: gsd-tune names the missing configuration file and the command that creates it, keeping exit code 2 and its prefix.
+- [ ] **REQ-135**: Research handbacks receive their 500-character summary bound at launch and are bounded or refused deterministically with a message naming the line and length before the trusted consumer seals them.
+
 ## Out of Scope
 
 | Feature | Reason |
@@ -266,9 +280,20 @@
 | REQ-121 | Phase 38 | Complete |
 | REQ-122 | Phase 38 | Complete |
 | REQ-123 | Phase 38 | Complete |
+| REQ-125 | Phase 39 | Pending |
+| REQ-126 | Phase 39 | Pending |
+| REQ-127 | Phase 39 | Pending |
+| REQ-128 | Phase 39 | Pending |
+| REQ-129 | Phase 39 | Pending |
+| REQ-130 | Phase 39 | Pending |
+| REQ-131 | Phase 39 | Pending |
+| REQ-132 | Phase 39 | Pending |
+| REQ-133 | Phase 39 | Pending |
+| REQ-134 | Phase 39 | Pending |
+| REQ-135 | Phase 39 | Pending |
 
 **Coverage:**
-- v1 requirements: 123 total
+- v1 requirements: 134 total
 - Mapped to phases: 121
 - Unmapped: 2 ⚠️
 

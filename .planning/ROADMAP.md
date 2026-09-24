@@ -357,6 +357,17 @@ script — not in a prompt.** Every requirement below is an instance of it.
 - **REQ-123** — Claude OAuth and Codex ChatGPT login are detected through each
   native CLI's status command; subscription auth is sufficient, API-key
   environment variables are not required, and credentials never cross providers.
+- **REQ-125** — Host refusals keep their codes, exit status and fail-closed behaviour and add a plain-language hint with a remedy from one code-to-hint map shared by the Claude and Codex hosts; investigate and decompose relay it in the user's language.
+- **REQ-126** — Decompose bootstraps a minimal GSD project from the accepted ADR when config.json, ROADMAP.md or REQUIREMENTS.md is missing: one phase per ADR, one requirement per ADR decision, missing files only, plain-language refusal for an ADR without decisions; investigate needs only .planning/investigations/.
+- **REQ-127** — The stop gate enforces a front only in a session that deliver armed with a per-session marker keyed by session_id; a missing, unreadable or foreign marker allows the stop, and cross-worktree discovery stays for armed sessions.
+- **REQ-128** — The auto-route hook routes research-needing work to /shipyard:investigate through /shipyard:route, stays silent for task-notification turns and expanded slash commands, injects on unparseable input, and the Codex AGENTS.md block and make doctor follow it.
+- **REQ-129** — Shipyard ships templates/adr/ADR.md, adr-ingest.cjs has a no-write --check mode, and Gate 1 fails when the new ADR does not pass it.
+- **REQ-130** — A script builds a deterministic Jira export plan from tickets.json (content, repo-namespaced labels, explicit is-blocked-by direction) that the agent executes through MCP; keys are recorded by script and no network code or credential enters the conveyor.
+- **REQ-131** — Ordering without a code dependency is not depends_on: decompose and delivery-rules prose adopt the validator condition, and validate-graph warns when a same-phase dependency shares no files_modified with its parent.
+- **REQ-132** — Decompose passes --skip-ui to /gsd-plan-phase only when the ADR declares "UI design: none".
+- **REQ-133** — Decompose warns once, without blocking, when .planning/ is not tracked by git, naming the consequence for delivery worktrees and the remedy.
+- **REQ-134** — gsd-tune names the missing configuration file and the command that creates it, keeping exit code 2 and its prefix.
+- **REQ-135** — Research handbacks receive their 500-character summary bound at launch and are bounded or refused deterministically with a message naming the line and length before the trusted consumer seals them.
 
 *ADR-011 was accepted for implementation on 2026-09-10. T-32-01/02 are the
 initial isolated tooling slice; subsequent packages remain subject to decomposition
@@ -714,6 +725,17 @@ inside trusted host boundaries. Route commands through provider-pure hosts,
 detect subscription authentication through the native CLIs, and keep rollout
 independent per provider. Preserve the Luna/max Codex baseline, effort tiers,
 promotion signals, and historical receipts.
+
+### Phase 39: Remove conveyor session friction
+**Status**: planned (ADR-016)
+**Requirements**: REQ-125, REQ-126, REQ-127, REQ-128, REQ-129, REQ-130, REQ-131, REQ-132, REQ-133, REQ-134, REQ-135
+
+Implement [ADR-016](architecture/ADR-016-conveyor-session-friction.md): make host
+refusals explainable, bootstrap a minimal GSD project from an ADR, arm the stop
+gate only from deliver, route research through investigate, validate ADRs at
+Gate 1, plan Jira export deterministically, keep ordering out of depends_on,
+skip the UI gate on an explicit ADR marker, warn on untracked planning, clarify
+gsd-tune, and bound research handbacks at launch.
 
 <!-- shipyard:gsd-sync:begin -->
 ## Shipyard synchronization (generated)
