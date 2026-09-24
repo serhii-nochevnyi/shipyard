@@ -630,6 +630,10 @@ function createClaudeCliLauncher(options = {}) {
     if (launchOptions.readOnly === true && gsdRole) {
       fail('INVALID_INPUT', 'read-only smoke mode cannot launch a typed GSD agent');
     }
+    const schema = launchOptions.schema;
+    if (schema !== undefined && (schema === null || typeof schema !== 'object' || Array.isArray(schema))) {
+      fail('INVALID_INPUT', 'schema must be a JSON Schema object');
+    }
     const agentDefinition = gsdRole ? gsdAgentDefinition(gsdRole, childEnvironment, options.gsdAgentRoot) : null;
     const evidenceDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-claude-session-start-'));
     const evidenceFile = path.join(evidenceDirectory, 'session-start.json');
@@ -675,6 +679,7 @@ function createClaudeCliLauncher(options = {}) {
       '--strict-mcp-config', '--tools', tools,
       '--allowedTools', tools, '--permission-mode', 'dontAsk',
       '--permission-prompts', 'none', '--settings', settings,
+      ...(schema === undefined ? [] : ['--json-schema', JSON.stringify(schema)]),
       ];
       let child;
       try {
