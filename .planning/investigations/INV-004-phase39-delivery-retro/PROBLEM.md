@@ -1,7 +1,7 @@
 ---
-status: open          # open | closed — Gate 1 sets `closed`
-closed:               # YYYY-MM-DD, filled in at Gate 1
-adr:                  # path to .planning/architecture/ADR-NNN-*.md, filled in at Gate 1
+status: closed        # open | closed — Gate 1 sets `closed`
+closed: 2026-09-24
+adr: .planning/architecture/ADR-017-delivery-seams-and-pr-hygiene.md
 ---
 
 # Problem
@@ -99,8 +99,9 @@ stop-gate interruptions during in-flight work, and push rituals.
 - Removing fail-closed receipt verification.
 - Work already ticketed as T-39-01..T-39-12 (refusal hints, session-scoped stop
   gate, auto-route hook, research summary cap, gsd-tune message, schema/output/
-  run-scope fixes) and the backlog entries for the decompose artifact index and
-  the Codex plan-checker lease flake.
+  run-scope fixes) and the backlog entry for
+  the Codex plan-checker lease flake (the decompose artifact index entry is
+  absorbed by the shared sealer decision).
 - Exporting this phase's tickets to Jira.
 - Phase ordering: tickets that touch files changed by phase 39 take a
   cross-phase dependency; the rest start from main (user decision 2026-09-24).
