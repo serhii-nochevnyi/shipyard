@@ -469,7 +469,6 @@ test('a palette model below its declared min_cli is the mirror blocker, read fro
   assert.equal(b[0].need, CEILING.min_cli);
   // At a release above the floor it is silent…
   assert.deepEqual(blockersOf(dir, [], { ...env, PATH: stubCli({ codex: 'codex-cli 0.155.4' }) }), []);
-  // The Sol workhorse is also a configured model and therefore has the same
   // host floor; a low-version host cannot silently accept it.
   fs.writeFileSync(path.join(codexHome, 'config.toml'),
     `[agents.shipyard-executor]\nmodel = "${pc.DEFAULT_CODEX_MODELS[0].model}"\n`);

@@ -25,7 +25,6 @@
 // sibling is used during generation so a failed run preserves the prior stage.
 // `--project-dir` identifies the checkout whose `.planning/config.json` must be readable. ADR-014 owns the
 // selection grid; project compatibility palettes cannot override it. Host
-// availability comes from an explicit snapshot or the Codex CLI model catalog.
 
 const fs = require('fs');
 const path = require('path');
