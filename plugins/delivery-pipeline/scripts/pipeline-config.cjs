@@ -1152,7 +1152,7 @@ function loadConfig(root, options = {}) {
   if (!['auto', 'off'].includes(cfg.fable)) {
     warnings.push(
       `pipeline.fable "${cfg.fable}" is unknown — falling back to off (values: auto | off), ` +
-      'so the ceiling routes degrade to opus at max effort'
+      'so the ceiling routes degrade to opus at high effort'
     );
     cfg.fable = 'off';
   }
@@ -1943,10 +1943,10 @@ function fableRoute(role, signals = {}, cfg = DEFAULTS) {
     model: 'opus',
     degraded: true,
     reason: !consented
-      ? `pipeline.fable is "${cfg.fable}", so the ceiling stays closed — opus at max effort instead ` +
+      ? `pipeline.fable is "${cfg.fable}", so the ceiling stays closed — opus at high effort instead ` +
         '(set it to "auto" once a person has answered Fable\'s consent prompt interactively)'
       : `the "${(cfg.gsd && cfg.gsd.runtime) || 'unset'}" runtime has no 1M-context tier, so the ` +
-        'ceiling is opus at max effort (on Codex the escalation is a `-deep` agent file — ADR-005 D8)',
+        'ceiling is opus at high effort (on Codex the escalation is a `-deep` agent file — ADR-005 D8)',
   };
 }
 
@@ -2049,8 +2049,10 @@ function effortRoute(role, model, cfg = DEFAULTS, signals = null) {
   };
   // `+clamp` is appended wherever the clamp actually MOVED the value, so a route
   // never reports a depth the resolver declined to return.
+  // @contract: Opus is capped at high; Sonnet, Fable and explicit overrides keep their rungs.
+  const opusCap = (level) => (/opus/.test(String(model)) && (level === 'xhigh' || level === 'max') ? 'high' : level);
   const routed = (level, rule) => {
-    const value = clamp(level);
+    const value = rule === 'override' ? clamp(level) : opusCap(clamp(level));
     return { value, rule: value === level ? rule : `${rule}+clamp` };
   };
   const override = cfg.effort && cfg.effort[role];

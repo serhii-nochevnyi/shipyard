@@ -79,7 +79,7 @@ Read `.planning/investigations/` (may not exist):
    each selection through the routed `pipeline-config.cjs resolveDispatch`
    bridge before launch. The host boundary verifies application of that exact
    selection. The base is Opus/medium and only an explicit
-   `complexity: very-complex` signal escalates research to Opus/max; the
+   `complexity: very-complex` signal escalates research to Opus/high; the
    `alternatives` line does not promote the rung. For Codex, the base is
    Sol/high and the same explicit very-complex signal escalates to Sol/xhigh.
    Keep each line's declared signals and context attached to that line. For

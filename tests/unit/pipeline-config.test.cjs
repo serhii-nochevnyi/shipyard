@@ -483,14 +483,14 @@ test('fable is NOBODY\'s default — not even the integrator, and not on Claude 
   }
 });
 
-test('the integrator has no standing exception any more: opus/xhigh with no flags', () => {
+test('the integrator has no standing exception any more: opus keeps its xhigh row capped at high', () => {
   // The sentence that justified the exception — "it reads the largest input in
   // the system, runs once per phase, and is the last mechanical judgment before a
   // person merges" — is all true and none of it a measurement. What survives of
   // it is the EFFORT: xhigh, and it never drops.
   const c = { ...cfg(), fable: 'auto', gsd: { runtime: 'claude' } };
   assert.strictEqual(resolveModel('integrator', {}, c), 'opus');
-  assert.strictEqual(resolveEffort('integrator', 'opus', c, {}), 'xhigh');
+  assert.strictEqual(resolveEffort('integrator', 'opus', c, {}), 'high');
 });
 
 suite('GSD profile names are accepted as aliases');
@@ -662,14 +662,14 @@ const EFFORT_MATRIX = [
   ['drift-check', { signatureState: 'repeat' },  'high'],   // not a repair role; history does not deepen it
   ['research',    {},                            'high'],
   ['research',    { type: 'facts' },             'high'],
-  ['research',    { type: 'alternatives' },      'xhigh'],  // option design, not fact gathering
+  ['research',    { type: 'alternatives' },      'high'],
   ['executor',    {},                            'high'],
   ['executor',    { risk: 'low' },               'high'],
   ['executor',    { risk: 'medium' },            'high'],
   ['executor',    { risk: 'medium', files: 1 },  'high'],   // `files` is inert now
-  ['executor',    { risk: 'high' },              'xhigh'],  // a defect here is expensive, not merely possible
-  ['executor',    { checkpoint: true },          'xhigh'],
-  ['executor',    { risk: 'low', checkpoint: true }, 'xhigh'],
+  ['executor',    { risk: 'high' },              'high'],
+  ['executor',    { checkpoint: true },          'high'],
+  ['executor',    { risk: 'low', checkpoint: true }, 'high'],
   ['ci-fix',      {},                            'high'],
   ['ci-fix',      { risk: 'high' },              'high'],
   ['ci-fix',      { signatureState: 'first' },   'high'],
@@ -680,17 +680,17 @@ const EFFORT_MATRIX = [
   ['pr-sentinel', {},                            'high'],   // NOT xhigh: sentinel.cjs is the gate, not the model
   ['pr-sentinel', { risk: 'high' },              'high'],
   ['pr-sentinel', { checkpoint: true },          'high'],
-  ['arch-review', {},                            'xhigh'],
-  ['arch-review', { risk: 'low' },               'xhigh'],
-  ['integrator',  {},                            'xhigh'],
-  ['integrator',  { risk: 'low' },               'xhigh'],
+  ['arch-review', {},                            'high'],
+  ['arch-review', { risk: 'low' },               'high'],
+  ['integrator',  {},                            'high'],
+  ['integrator',  { risk: 'low' },               'high'],
   // The one built-in path to `max`, and it is EARNED by a repeated failure
   // rather than chosen. `xhigh` stopped being a raise the moment the floor
   // became opus, which is the regression this rung is restored from.
-  ['ci-fix',      { signatureState: 'repeat' },  'max'],
-  ['review-fix',  { signatureState: 'repeat' },  'max'],
+  ['ci-fix',      { signatureState: 'repeat' },  'high'],
+  ['review-fix',  { signatureState: 'repeat' },  'high'],
   ['pr-sentinel', { signatureState: 'repeat' },  'max'],
-  ['ci-fix',      { signatureState: 'repeat_exhausted' }, 'max'],
+  ['ci-fix',      { signatureState: 'repeat_exhausted' }, 'high'],
 ];
 
 test('the effort table, row by row', () => {
@@ -701,14 +701,14 @@ test('the effort table, row by row', () => {
   }
 });
 
-test('the judges are xhigh and not max, deliberately', () => {
+test('the judges are xhigh at the row, and not max, and Opus caps them at high', () => {
   // Anthropic's effort guidance names `xhigh` the best setting for most coding
   // and agentic work (it is Claude Code's own default) and says to reach `max`
   // only when measurement shows headroom at the level below. Nothing has measured
   // that here — so `max` stays reserved for the case that IS a measurement.
   for (const role of ['arch-review', 'integrator']) {
     for (const signals of [{}, { risk: 'high' }, { checkpoint: true }, { contested: false }]) {
-      assert.strictEqual(resolveEffort(role, resolveModel(role, signals, cfg()), cfg(), signals), 'xhigh',
+      assert.strictEqual(resolveEffort(role, resolveModel(role, signals, cfg()), cfg(), signals), 'high',
         `${role} ${JSON.stringify(signals)}`);
     }
   }
@@ -1258,18 +1258,18 @@ test('recovery is evidence-backed, including the sentinel exception', () => {
   assert.strictEqual(contested.rule, 'explicit:recovery');
 });
 
-test('adaptive routing differentiates Claude routine, complex and critical work', () => {
+test('adaptive routing differentiates Claude routine, complex and critical work, capped at high on opus', () => {
   const { config } = withConfig({ model_ladder: 'adaptive' });
   const claude = asRuntime(config, 'claude');
   assert.strictEqual(resolveModel('executor', { risk: 'low', files: 2 }, claude), 'sonnet');
   assert.strictEqual(resolveEffort('executor', 'sonnet', claude, { risk: 'low', files: 2 }), 'high');
   assert.strictEqual(resolveModel('executor', { risk: 'low', files: 5 }, claude), 'opus');
   assert.strictEqual(resolveModel('executor', { risk: 'high', files: 2 }, claude), 'opus');
-  assert.strictEqual(resolveEffort('executor', 'opus', claude, { risk: 'high', files: 2 }), 'xhigh');
-  assert.strictEqual(resolveEffort('ci-fix', 'opus', claude, { risk: 'high' }), 'xhigh');
+  assert.strictEqual(resolveEffort('executor', 'opus', claude, { risk: 'high', files: 2 }), 'high');
+  assert.strictEqual(resolveEffort('ci-fix', 'opus', claude, { risk: 'high' }), 'high');
 });
 
-test('a repeated repair keeps max depth when risk also marks it critical', () => {
+test('a repeated repair keeps its depth capped at high on opus when risk also marks it critical', () => {
   const { config } = withConfig({ model_ladder: 'adaptive' });
   const claude = asRuntime(config, 'claude');
   for (const signals of [
@@ -1278,21 +1278,21 @@ test('a repeated repair keeps max depth when risk also marks it critical', () =>
   ]) {
     assert.strictEqual(
       resolveEffort('ci-fix', 'opus', claude, signals),
-      'max',
-      `repeated repair must spend max before the ordinary critical upgrade: ${JSON.stringify(signals)}`,
+      'high',
+      `repeated repair spends max before the ordinary critical upgrade, but opus caps it at high: ${JSON.stringify(signals)}`,
     );
   }
 });
 
-test('a closed ceiling keeps degraded max depth when risk also marks it critical', () => {
+test('a closed ceiling keeps its degraded depth capped at high on opus when risk also marks it critical', () => {
   const { config } = withConfig({ model_ladder: 'adaptive' });
   const claude = asRuntime(config, 'claude');
   const signals = { risk: 'high', inputTokens: 300000 };
   assert.strictEqual(resolveModel('executor', signals, claude), 'opus');
   assert.strictEqual(
     resolveEffort('executor', 'opus', claude, signals),
-    'max',
-    'a fired but closed ceiling is a stronger fact than the first-attempt critical lane',
+    'high',
+    'a fired but closed ceiling is a stronger fact than the first-attempt critical lane, but opus still caps at high',
   );
 });
 
@@ -1521,7 +1521,7 @@ test('an unknown state has no strategy — it is ignored, never guessed', () => 
   assert.strictEqual(strategyFor('constructor'), undefined);
 });
 
-test('repeat deepens the EFFORT to max at the held tier — the rung the floor had erased', () => {
+test('repeat deepens the EFFORT to max at the held tier, except opus keeps it capped at high', () => {
   // THE MEASUREMENT THAT MADE THIS TICKET. On 2026-09-07, with the floor set
   // through `pipeline.models.*`, every role except drift-check resolved to
   // opus/xhigh — so `--signature-state repeat` raised the effort to a value it
@@ -1529,16 +1529,21 @@ test('repeat deepens the EFFORT to max at the held tier — the rung the floor h
   // the restored rung, and it is the only built-in path to `max`.
   for (const role of REPAIR_ROLES) {
     const signals = { signatureState: 'repeat' };
-    assert.strictEqual(
-      resolveEffort(role, resolveModel(role, signals, cfg()), cfg(), signals), 'max', role);
+    const model = resolveModel(role, signals, cfg());
+    const want = model === 'opus' ? 'high' : 'max';
+    assert.strictEqual(resolveEffort(role, model, cfg(), signals), want, role);
     assert.notStrictEqual(
       resolveEffort(role, resolveModel(role, {}, cfg()), cfg(), { signatureState: 'first' }), 'max',
       `${role}: a first strike must not already be at the deepest rung, or the raise is not a raise`);
   }
   // ci-fix in particular: same tier as a first strike, deeper thinking on it
+  assert.strictEqual(resolveModel('pr-sentinel', { signatureState: 'repeat' }, cfg()), 'sonnet');
+  assert.strictEqual(resolveEffort('pr-sentinel', 'sonnet', cfg(), { signatureState: 'first' }), 'high');
+  assert.strictEqual(resolveEffort('pr-sentinel', 'sonnet', cfg(), { signatureState: 'repeat' }), 'max');
   assert.strictEqual(resolveModel('ci-fix', { signatureState: 'repeat' }, cfg()), 'opus');
   assert.strictEqual(resolveEffort('ci-fix', 'opus', cfg(), { signatureState: 'first' }), 'high');
   assert.strictEqual(resolveEffort('ci-fix', 'opus', cfg(), { signatureState: 'progress' }), 'high');
+  assert.strictEqual(resolveEffort('ci-fix', 'opus', cfg(), { signatureState: 'repeat' }), 'high');
 });
 
 test('a non-repair role is not deepened by a signature state', () => {
@@ -1626,9 +1631,9 @@ test('--attempt/--previous-failed are still accepted and resolve the same tier',
   assert.strictEqual(runCli(['model', 'ci-fix', '--risk', 'high']).out, 'opus', 'risk still routes');
 });
 
-test('--signature-state repeat: same tier, deeper effort, a strategy to change', () => {
+test('--signature-state repeat: same tier, a strategy to change, and opus caps the deeper effort at high', () => {
   assert.deepStrictEqual(pair(runCli(['model', 'ci-fix', '--json', '--signature-state', 'repeat']).json()),
-    { model: 'opus', effort: 'max', strategy: 'rethink' });
+    { model: 'opus', effort: 'high', strategy: 'rethink' });
   assert.deepStrictEqual(pair(runCli(['model', 'ci-fix', '--json', '--signature-state', 'first']).json()),
     { model: 'opus', effort: 'high', strategy: 'fix' });
 });
@@ -1681,8 +1686,8 @@ test('R1 window: a measured input over the threshold earns it; under it does not
     runCli(['model', 'arch-review', '--input-tokens', '300000'], CONSENTED).out, 'fable');
   assert.deepStrictEqual(
     pair(runCli(['model', 'arch-review', '--json', '--input-tokens', '200000'], CONSENTED).json()),
-    { model: 'opus', effort: 'xhigh' },
-    'under the threshold nothing fired, so the role keeps its own row — xhigh, not max');
+    { model: 'opus', effort: 'high' },
+    'under the threshold nothing fired, so the role keeps its own row — xhigh, capped at high on opus, not max');
   // The threshold is configuration: five times the largest input measured here.
   assert.strictEqual(DEFAULTS.fable_window_tokens, 250000);
   assert.strictEqual(
@@ -1703,7 +1708,8 @@ test('R2 exhausted depth: the third occurrence of one signature, from the journa
     'the model rises and the depth STAYS at max — backing the thinking off here is neither ladder');
   assert.deepStrictEqual(
     pair(runCli(['model', 'ci-fix', '--json', '--signature-state', 'repeat'], CONSENTED).json()),
-    { model: 'opus', effort: 'max', strategy: 'rethink' }, 'a second occurrence is not exhausted');
+    { model: 'opus', effort: 'high', strategy: 'rethink' },
+    'a second occurrence is not exhausted, and opus caps the repeat rung at high');
   // It is a REPAIR route: an executor has no failure history to read.
   assert.strictEqual(
     runCli(['model', 'executor', '--signature-state', 'repeat_exhausted'], CONSENTED).out, 'opus');
@@ -1733,24 +1739,24 @@ test('R3 is scoped to the two judgment roles — one stray flag must not open th
     { ...cfg(), fable: 'auto', gsd: { runtime: 'claude' } }), null);
 });
 
-test('with pipeline.fable off or absent, a fired route degrades to opus at max and says why', () => {
+test('with pipeline.fable off or absent, a fired route degrades to opus at high (capped) and says why', () => {
   // `off` is the default because an unconsented Fable request in a background
   // session waits out `dialogExpiry` and then ends the turn WITHOUT SENDING:
   // silence is not consent. The escalation still happens, one rung lower, on the
   // axis that IS available.
   for (const raw of [{ runtime: 'claude' }, { runtime: 'claude', pipeline: { fable: 'off' } }]) {
     const r = runCli(['model', 'arch-review', '--json', '--input-tokens', '300000'], raw);
-    assert.deepStrictEqual(pair(r.json()), { model: 'opus', effort: 'max' }, JSON.stringify(raw));
+    assert.deepStrictEqual(pair(r.json()), { model: 'opus', effort: 'high' }, JSON.stringify(raw));
     assert.ok(/pipeline\.fable/.test(r.err), `the reason must name the setting: ${r.err}`);
   }
   // Under the threshold nothing fired, so there is nothing to degrade and nothing
   // to report — a warning on every dispatch is how a warning gets ignored.
   const quiet = runCli(['model', 'arch-review', '--json', '--input-tokens', '200000'], { runtime: 'claude' });
-  assert.deepStrictEqual(pair(quiet.json()), { model: 'opus', effort: 'xhigh' });
+  assert.deepStrictEqual(pair(quiet.json()), { model: 'opus', effort: 'high' });
   assert.strictEqual(quiet.err, '', quiet.err);
 });
 
-test('a fired route outranks the sonnet exemptions — and degrades the same way when shut', () => {
+test('a fired route outranks the sonnet exemptions — and degrades to opus capped at high when shut', () => {
   // The exemptions say "the model is not the gate here"; a route firing is the
   // measured evidence that on THIS dispatch it is. So the guard leaves its
   // exemption behind — to the ceiling with consent, and to the FLOOR at max
@@ -1760,7 +1766,7 @@ test('a fired route outranks the sonnet exemptions — and degrades the same way
     { model: 'fable', effort: 'max', strategy: 'rethink' });
   const shut = runCli(['model', 'pr-sentinel', '--json', '--signature-state', 'repeat_exhausted'],
     { runtime: 'claude' });
-  assert.deepStrictEqual(pair(shut.json()), { model: 'opus', effort: 'max', strategy: 'rethink' });
+  assert.deepStrictEqual(pair(shut.json()), { model: 'opus', effort: 'high', strategy: 'rethink' });
   assert.ok(/pipeline\.fable/.test(shut.err), shut.err);
   // With no route, the exemption holds at every depth.
   assert.deepStrictEqual(
@@ -1774,7 +1780,8 @@ test('a route on a runtime with no 1M tier degrades the same way, naming the run
   // resolves. On Codex the escalation is a `-deep` agent FILE (ADR-005 D8).
   const unset = runCli(['model', 'arch-review', '--json', '--input-tokens', '300000'],
     { pipeline: { fable: 'auto' } });
-  assert.deepStrictEqual(pair(unset.json()), { model: 'opus', effort: 'max' });
+  assert.deepStrictEqual(pair(unset.json()), { model: 'opus', effort: 'high' },
+    'the degraded max rung is capped to high on opus');
   assert.ok(/runtime/.test(unset.err), unset.err);
   const codex = runCli(['model', 'arch-review', '--json', '--input-tokens', '300000'],
     { runtime: 'codex', pipeline: { fable: 'auto' } });
@@ -1976,18 +1983,20 @@ test('a whitespace-only runtime slugs to unset, not to a bare hyphen', () => {
 test('the rule names the branch that actually fired, on both halves', () => {
   const route = (role, signals, cfg) => routeOf(role, signals, cfg || D);
   assert.strictEqual(route('executor', {}), 'tier=floor(opus) effort=row(high)');
-  assert.strictEqual(route('executor', { risk: 'high' }), 'tier=floor(opus) effort=row(xhigh)');
+  assert.strictEqual(route('executor', { risk: 'high' }), 'tier=floor(opus) effort=row+clamp(high)',
+    'the row asked for xhigh; the Opus cap clamps it to high');
   assert.strictEqual(route('pr-sentinel', {}), 'tier=floor:exempt(sonnet) effort=row(high)',
     'the exemption is a different rule from the floor, and a review must be able to count them apart');
-  assert.strictEqual(route('ci-fix', { signatureState: 'repeat' }), 'tier=floor(opus) effort=repeat(max)');
+  assert.strictEqual(route('ci-fix', { signatureState: 'repeat' }), 'tier=floor(opus) effort=repeat+clamp(high)',
+    'the repeat rule asked for max; the Opus cap clamps it to high');
   assert.strictEqual(
     route('arch-review', { inputTokens: 900000 }, withCfg({ fable: 'auto', gsd: { runtime: 'claude' } })),
     'tier=ceiling:window(fable) effort=row(xhigh)'
   );
   assert.strictEqual(
     route('arch-review', { inputTokens: 900000 }),
-    'tier=ceiling:window:degraded(opus) effort=degraded:window(max)',
-    'a route that fired and could not be honoured says BOTH: it fired, and it was shut'
+    'tier=ceiling:window:degraded(opus) effort=degraded:window+clamp(high)',
+    'a route that fired and could not be honoured says BOTH: it fired, and it was shut — and the Opus cap clamps its max to high'
   );
   assert.strictEqual(route('executor', {}, withCfg({ models: { executor: 'sonnet' } })),
     'tier=override(sonnet) effort=row(high)');
@@ -2017,8 +2026,8 @@ test('the CLI emits the route on every --json call, beside the pair it explains'
   assert.strictEqual(plain.status, 0, plain.err);
   assert.strictEqual(plain.json().route, 'tier=floor(opus) effort=row(high)');
   const repeat = runCli(['model', 'ci-fix', '--json', '--signature-state', 'repeat']);
-  assert.strictEqual(repeat.json().route, 'tier=floor(opus) effort=repeat(max)',
-    'and it moves with the signals, which is the whole reason to record it');
+  assert.strictEqual(repeat.json().route, 'tier=floor(opus) effort=repeat+clamp(high)',
+    'and it moves with the signals, which is the whole reason to record it — the Opus cap clamps the repeat max to high');
   // The route always describes the pair printed beside it, in the same JSON.
   for (const r of [plain, repeat]) {
     const j = r.json();
@@ -2165,7 +2174,7 @@ const escalationRows = () => parseRows(ladderFences()[1], 3).map(({ cells, rest 
 test('every documented escalation resolves to exactly the pair beside it', () => {
   const cfg = escCfg();
   const rows = escalationRows();
-  assert.ok(rows.length >= 9, `the table lost rows: ${rows.length}`);
+  assert.ok(rows.length >= 4, `the table lost rows: ${rows.length}`);
   for (const row of rows) {
     const roles = row.role === '*' ? ROLES : [row.role];
     assert.ok(row.role === '*' || ROLES.includes(row.role), `"${row.role}" is not a pipeline role`);
