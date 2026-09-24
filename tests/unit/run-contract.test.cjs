@@ -32,6 +32,31 @@ test('creates a frozen scoped contract with provider-pure model evidence', () =>
   assert.ok(Object.isFrozen(run.state_revision));
 });
 
+test('integrator accepts only the canonical phase subject as its run ticket', () => {
+  const subject = 'phase=38-runtime-model-ladder-recovery;repository=/tmp/shipyard/.git;tickets=' + 'a'.repeat(64);
+  const run = makeScope({
+    phase: 38,
+    ticket: subject,
+    dispatch: { dispatch_id: 'dispatch-integrator', role: 'integrator', model: 'gpt-6-sol', effort: 'high' },
+  });
+  assert.equal(run.ticket.ticket, subject);
+  assert.equal(contract.normalizeRunContract(run).ticket.ticket, subject);
+  assert.throws(() => makeScope({ ticket: subject }), (error) => error.code === 'INVALID_INPUT');
+  assert.throws(() => scope.createTicketIdentity(subject), (error) => error.code === 'INVALID_INPUT');
+  assert.throws(() => scope.createTicketIdentity(subject, { role: 'integrator', phase: 37 }),
+    (error) => error.code === 'INVALID_INPUT');
+  assert.throws(() => makeScope({
+    phase: 37,
+    ticket: subject,
+    dispatch: { dispatch_id: 'dispatch-integrator', role: 'integrator', model: 'gpt-6-sol', effort: 'high' },
+  }), (error) => error.code === 'INVALID_INPUT');
+  assert.throws(() => makeScope({
+    phase: 38,
+    ticket: 'phase=38-runtime-model-ladder-recovery;repository=/tmp/shipyard/.git;tickets=bad',
+    dispatch: { dispatch_id: 'dispatch-integrator', role: 'integrator', model: 'gpt-6-sol', effort: 'high' },
+  }), (error) => error.code === 'INVALID_INPUT');
+});
+
 test('requires the complete scope before constructing a run', () => {
   assert.throws(
     () => scope.createRunScope({ phase: 37, ticket: 'T-37-01', runtime: 'codex' }),

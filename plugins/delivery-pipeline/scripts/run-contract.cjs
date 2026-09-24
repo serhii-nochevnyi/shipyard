@@ -205,10 +205,13 @@ function normalizePhaseIdentity(input) {
   return deepFreeze({ schema: ID_SCHEMAS.phase, version: VERSION, phase: positiveInteger(phase, 'phase') });
 }
 
-function normalizeTicketIdentity(input) {
+function normalizeTicketIdentity(input, { role, phase } = {}) {
   const ticket = object(input) ? input.ticket : input;
   const value = safeId(ticket, 'ticket');
-  if (!/^T-[A-Z0-9][A-Z0-9._-]*$/i.test(value)) {
+  const ticketId = /^T-[A-Z0-9][A-Z0-9._-]*$/i.test(value);
+  const subject = value.match(/^phase=(\d+)-[A-Z0-9][A-Z0-9._-]*;repository=[^;\s]+;tickets=[a-f0-9]{64}$/i);
+  const phaseSubject = role === 'integrator' && subject && Number(subject[1]) === Number(phase);
+  if (!ticketId && !phaseSubject) {
     refuse('INVALID_INPUT', `ticket ${value} must use the T-... identifier form`, { ticket: value });
   }
   return deepFreeze({ schema: ID_SCHEMAS.ticket, version: VERSION, ticket: value });
@@ -389,11 +392,11 @@ function normalizeRunContract(input, { requireRunId = true } = {}) {
     worktree: input.worktree && (input.worktree.path || input.worktree),
   });
   const phase = normalizePhaseIdentity(input.phase);
-  const ticket = normalizeTicketIdentity(input.ticket);
-  const worktree = normalizeWorktreeIdentity(input.worktree || repository.worktree);
-  if (worktree.path !== repository.worktree) refuse('SCOPE_MISMATCH', 'repository and worktree identities disagree');
   const runtime = normalizeRuntimeIdentity(input.runtime);
   const dispatch = normalizeDispatchIdentity({ ...(input.dispatch || {}), runtime: runtime.runtime, provider: runtime.provider });
+  const ticket = normalizeTicketIdentity(input.ticket, { role: dispatch.role, phase: phase.phase });
+  const worktree = normalizeWorktreeIdentity(input.worktree || repository.worktree);
+  if (worktree.path !== repository.worktree) refuse('SCOPE_MISMATCH', 'repository and worktree identities disagree');
   const state_revision = normalizeRevisionIdentity(input.state_revision === undefined ? 0 : input.state_revision);
   const lease = normalizeLeaseIdentity(input.lease, run_id, state_revision.value);
   const state = safeId(input.state || 'created', 'state');
