@@ -5,6 +5,7 @@ const {
   WORKFLOW_SCRIPTS,
 } = require('./claude-workflow-host.cjs');
 const { createClaudeDeliveryHost, runClaudeDeliveryCli } = require('./claude-delivery-host.cjs');
+const { formatHint } = require('./refusal-hints.cjs');
 
 const INVESTIGATION_RESEARCH_SCRIPT = WORKFLOW_SCRIPTS['investigation-research'];
 
@@ -66,8 +67,9 @@ module.exports = Object.freeze({
 });
 
 if (require.main === module) {
-  runInvestigationResearchCli().catch((error) => {
+  Promise.resolve().then(runInvestigationResearchCli).catch((error) => {
     process.stderr.write(`${error && error.message ? error.message : error}\n`);
+    process.stderr.write(`${formatHint(error && error.code)}\n`);
     process.exitCode = 1;
   });
 }
