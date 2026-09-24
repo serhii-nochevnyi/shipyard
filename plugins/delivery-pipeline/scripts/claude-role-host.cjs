@@ -199,7 +199,7 @@ function getPullRequest(options, worktree, pr, repo) {
   if (typeof options.getPullRequest === 'function') return options.getPullRequest({ worktree, pr, repo });
   return JSON.parse(command(options, 'gh', [
     ...(repo ? ['--repo', repo] : []), 'pr', 'view', String(pr), '--json',
-    'number,state,isDraft,headRefName,headRefOid,baseRefName,baseRefOid,mergedAt,mergeCommit,reviewDecision',
+    'number,state,isDraft,title,body,headRefName,headRefOid,baseRefName,baseRefOid,mergedAt,mergeCommit,reviewDecision',
   ], worktree, 65536));
 }
 
@@ -407,25 +407,41 @@ function prepareIntegrator(options, request, canonical, graph) {
   const livePullRequests = [];
   for (const item of selection.rows) {
     const row = rowFor(graph, item.id);
-    const list = listPullRequests(options, canonical.worktree, row.branch, row.repo || null, 'closed');
-    if (!Array.isArray(list)) reject(`GitHub returned an invalid PR list for ${item.id}`);
-    const merged = list.filter((pr) => object(pr) && pr.headRefName === row.branch && pr.mergedAt);
     const stateRow = graph.state[item.id];
-    if (stateRow && Number.isSafeInteger(stateRow.pr)) {
-      const match = merged.find((pr) => pr.number === stateRow.pr);
-      if (match) merged.splice(0, merged.length, match);
+    if (stateRow && stateRow.branch !== undefined && stateRow.branch !== row.branch) {
+      reject(`${item.id} delivery state differs from its canonical ticket branch`);
     }
+    const movedHead = stateRow && stateRow.pr_branch !== undefined
+      && stateRow.pr_branch !== row.branch;
+    if (movedHead && (stateRow.status !== 'merged' || !Number.isSafeInteger(stateRow.pr)
+        || stateRow.matched_by !== 'marker')) {
+      reject(`${item.id} has no authenticated merged-PR branch mapping`);
+    }
+    const prBranch = movedHead ? safeBranch(stateRow.pr_branch, `${item.id} merged PR branch`) : row.branch;
+    const list = listPullRequests(options, canonical.worktree, prBranch, row.repo || null, 'closed');
+    if (!Array.isArray(list)) reject(`GitHub returned an invalid PR list for ${item.id}`);
+    const merged = list.filter((pr) => object(pr) && pr.headRefName === prBranch && pr.mergedAt
+      && (!stateRow || !Number.isSafeInteger(stateRow.pr) || pr.number === stateRow.pr));
     if (merged.length !== 1) reject(`${item.id} must have exactly one authenticated merged PR`);
     const live = getPullRequest(options, canonical.worktree, merged[0].number, row.repo || null);
     const mergeCommit = live && live.mergeCommit && live.mergeCommit.oid;
-    if (!object(live) || live.state !== 'MERGED' || !live.mergedAt || live.headRefName !== row.branch
+    if (!object(live) || live.number !== merged[0].number || live.state !== 'MERGED' || !live.mergedAt
+        || live.headRefName !== prBranch
         || !/^[a-f0-9]{40}$/i.test(live.headRefOid || '') || !/^[a-f0-9]{40}$/i.test(mergeCommit || '')) {
       reject(`live merged PR identity is incomplete for ${item.id}`);
+    }
+    if (movedHead) {
+      const marker = /^T-(\d+)-(\d+)(?:-|$)/i.exec(item.id);
+      const text = `${live.title || ''}\n${live.body || ''}`;
+      const escaped = item.id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const exactMatch = new RegExp(`(^|[^A-Za-z0-9-])${escaped}($|[^A-Za-z0-9-])`, 'i').test(text);
+      const shortMatch = marker && new RegExp(`(^|[^0-9])${marker[1]}-${marker[2]}($|[^0-9])`).test(text);
+      if (!exactMatch && !shortMatch) reject(`merged PR ${live.number} does not identify ${item.id}`);
     }
     try { git(options, canonical.worktree, ['merge-base', '--is-ancestor', mergeCommit, canonical.head]); }
     catch { reject(`merged PR ${live.number} is not included in the integrator worktree`); }
     const baseName = safeBranch(live.baseRefName, `${item.id} PR base`);
-    ticketSet.push({ id: item.id, pr: live.number, head: live.headRefOid, base: baseName, branch: row.branch });
+    ticketSet.push({ id: item.id, pr: live.number, head: live.headRefOid, base: baseName, branch: prBranch });
     livePullRequests.push(live);
   }
   ticketSet.sort((a, b) => a.id.localeCompare(b.id));

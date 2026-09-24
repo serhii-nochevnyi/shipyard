@@ -55,7 +55,8 @@ function setupRepository(kind) {
   write(root, '.planning/config.json', JSON.stringify({ git: { base_branch: 'main' } }));
   write(root, '.planning/graph/tickets.json', JSON.stringify({ tickets: { [TICKET]: row } }));
   write(root, '.planning/graph/delivery-state.json', JSON.stringify({
-    [TICKET]: { status: kind === 'integrator' ? 'merged' : 'pr-open', pr: 101, branch, base: kind === 'integrator' ? branch : 'main' },
+    [TICKET]: { status: kind === 'integrator' ? 'merged' : 'pr-open', pr: 101,
+      branch: kind === 'integrator' ? ticketBranch : branch, base: kind === 'integrator' ? branch : 'main' },
   }));
   write(root, 'src/role.txt', 'base\n');
   git(root, ['add', '.']);
@@ -78,7 +79,7 @@ function setupRepository(kind) {
   if (kind === 'integrator') git(root, ['update-ref', `refs/remotes/origin/${branch}`, head]);
   const mergeBase = kind === 'arch-review' ? base : git(root, ['merge-base', 'main', head]);
   const mergeBaseTree = git(root, ['rev-parse', `${mergeBase}^{tree}`]);
-  return { root, storageRoot, branch, base, baseTree, head, headTree, mergeBase, mergeBaseTree, planPath, kind };
+  return { root, storageRoot, branch, ticketBranch, prBranch: ticketBranch, base, baseTree, head, headTree, mergeBase, mergeBaseTree, planPath, kind };
 }
 
 function livePr(fixture) {
@@ -86,7 +87,9 @@ function livePr(fixture) {
     number: 101,
     state: fixture.kind === 'integrator' ? 'MERGED' : 'OPEN',
     isDraft: false,
-    headRefName: fixture.kind === 'integrator' ? `ticket/${TICKET}` : fixture.branch,
+    title: `feat(${TICKET}): change role source`,
+    body: `Implements ${TICKET}.`,
+    headRefName: fixture.kind === 'integrator' ? fixture.prBranch : fixture.branch,
     headRefOid: fixture.head,
     baseRefName: fixture.kind === 'integrator' ? fixture.branch : 'main',
     baseRefOid: fixture.kind === 'integrator' ? fixture.head : fixture.base,
@@ -170,13 +173,14 @@ function fakeRuntimeFactory(fixture, options = {}) {
         } else {
           const ticketSet = context.ticket_set;
           const defaultTree = context.integration_base.tree;
-          result = { outcome: 'passed', phase: context.phase, head: fixture.head, head_tree: fixture.headTree,
+          result = { outcome: 'passed', phase: context.phase, head: context.combined_diff.head,
+            head_tree: context.combined_diff.head_tree,
             base: context.integration_base.ref, base_tree: defaultTree,
             ticket_set: ticketSet, ticket_set_digest: context.ticket_set_digest,
             blocking_count: 0, summary: 'Phase is coherent.', findings: [] };
           evidencePath = path.join(fixture.root, `.planning/phases/${context.phase}/INTEGRATION.md`);
           fs.mkdirSync(path.dirname(evidencePath), { recursive: true });
-          fs.writeFileSync(evidencePath, `Integration check at ${fixture.head}.\n`);
+          fs.writeFileSync(evidencePath, `Integration check at ${context.combined_diff.head}.\n`);
         }
         const applicationEvidence = options.badEvidence ? fakeEvidence(selection.model, 'low') : fakeEvidence(selection.model, selection.effort);
         return { output: result, applicationEvidence };
@@ -198,7 +202,7 @@ function hostOptions(fixture, extra = {}) {
         return state === 'open' ? fixture.sentinelPrs.filter((item) => item.headRefName === branch) : [];
       }
       if (fixture.kind === 'arch-review') return state === 'open' && branch === fixture.branch ? [pr] : [];
-      return state === 'closed' && branch === `ticket/${TICKET}` ? [pr] : [];
+      return state === 'closed' && branch === fixture.prBranch ? [pr] : [];
     },
     getPullRequest(input = {}) {
       const number = input.pr;
@@ -398,6 +402,49 @@ test('integrator authenticates the merged ticket set and seals phase evidence', 
     assert.equal(result.artifact.outcome, 'passed');
     assert.equal(result.ticket_set_digest, packet.role_context.ticket_set_digest);
     assert.equal(fs.existsSync(path.join(fixture.root, `.planning/phases/${PHASE}/INTEGRATION.md`)), true);
+  } finally {
+    cleanupFixture(fixture);
+  }
+});
+
+test('integrator resolves a marker-matched merged PR on its recorded head branch', async () => {
+  const fixture = setupRepository('integrator');
+  let launched;
+  try {
+    const statePath = path.join(fixture.root, '.planning/graph/delivery-state.json');
+    const state = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+    fixture.prBranch = 'prep/T-38-03-impl';
+    state[TICKET].pr_branch = fixture.prBranch;
+    state[TICKET].matched_by = 'marker';
+    fs.writeFileSync(statePath, JSON.stringify(state));
+    git(fixture.root, ['add', '.planning/graph/delivery-state.json']);
+    git(fixture.root, ['commit', '-m', 'test: record moved merged PR branch']);
+    const result = await createClaudeRoleHost(hostOptions(fixture, {
+      onLaunch(prompt) { launched = prompt; },
+    })).run(request(fixture));
+    const packet = packetFromPrompt(launched);
+    assert.equal(result.artifact.outcome, 'passed');
+    assert.equal(packet.role_context.ticket_set[0].branch, fixture.prBranch);
+  } finally {
+    cleanupFixture(fixture);
+  }
+});
+
+test('integrator rejects a moved merged PR whose title and body omit its ticket', async () => {
+  const fixture = setupRepository('integrator');
+  try {
+    const statePath = path.join(fixture.root, '.planning/graph/delivery-state.json');
+    const state = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+    fixture.prBranch = 'prep/T-38-03-impl';
+    state[TICKET].pr_branch = fixture.prBranch;
+    state[TICKET].matched_by = 'marker';
+    fs.writeFileSync(statePath, JSON.stringify(state));
+    git(fixture.root, ['add', '.planning/graph/delivery-state.json']);
+    git(fixture.root, ['commit', '-m', 'test: record moved merged PR branch']);
+    const options = hostOptions(fixture);
+    const original = options.getPullRequest;
+    options.getPullRequest = (input) => ({ ...original(input), title: 'feat: unrelated change', body: 'No ticket reference.' });
+    await assert.rejects(createClaudeRoleHost(options).run(request(fixture)), /does not identify/);
   } finally {
     cleanupFixture(fixture);
   }
