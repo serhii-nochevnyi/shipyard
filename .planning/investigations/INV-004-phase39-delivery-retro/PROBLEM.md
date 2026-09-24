@@ -46,6 +46,20 @@ and the existing backlog do not already cover:
     entry exists; severity is higher than recorded.
 11. The pre-push hook derives the worktree from the command text/cwd and fails
     on `cd X; …` and unexpanded `$W`.
+12. Codex CLI (FlowPDF session, `research/codex-flowpdf-evidence.md`) could not
+    run loop 1 or loop 2 at all — Phase 9 never got plans:
+    - C1 `model_profile: inherit` refusal carries a reinstall remedy instead of
+      the config fix;
+    - C2 `gsd-tune --apply --runtime codex` writes Claude-only `models.*` keys;
+    - C3 no Codex research consumer exists although `investigate.md` documents
+      one; the agent improvised a host from internal APIs;
+    - C4 `codex-decompose-host.cjs:18` forces the GSD researcher read-only while
+      the contract requires it to write its artifact (a test pins the defect);
+    - C5 the parent relays a shortened task to `spawn_agent` and the host checks
+      no digest of the message;
+    - C6 neither decompose host seals `decomposition-result.v1` (shared);
+    - C7 the out-of-repo host state directory is not explained to the agent;
+    - C8 `make doctor` looks for the wrong Codex manifest and always skips.
 
 ## For whom
 
@@ -63,6 +77,9 @@ stop-gate interruptions during in-flight work, and push rituals.
 - Every item has a deterministic fix with a focused unit or fixture test;
   boundary fixtures for items 0/4 are captured from real launches.
   `make test-fast` and `make test` stay green; Codex outputs are regenerated.
+- A Codex run on FlowPDF (or an equivalent fixture project) completes
+  investigate research and decompose through the shipped Codex hosts with no
+  improvised host and no inline research.
 - A live wave of phase 40 is dispatched through the new entry point with no
   hand-built request and no patched cache, and its PR sentinel passes on the
   first round.
