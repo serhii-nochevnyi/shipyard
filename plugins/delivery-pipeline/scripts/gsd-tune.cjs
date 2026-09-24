@@ -609,7 +609,7 @@ const TUNING_ALL = [
   ['models.verification', 'sonnet', 'mechanical reconciliation against the plan'],
   ['effort.routing_tier_defaults.light', 'low', 'mirrors the conveyor\'s own effort tiers'],
   ['effort.routing_tier_defaults.standard', 'high', 'mirrors the conveyor\'s own effort tiers'],
-  ['effort.routing_tier_defaults.heavy', 'xhigh', 'mirrors the conveyor\'s own effort tiers'],
+  ['effort.routing_tier_defaults.heavy', 'high', 'mirrors the conveyor\'s own effort tiers: Opus is capped at high'],
   // BOTH agents, and the planner is the one that matters most: it writes the
   // `delivery:` frontmatter block the whole graph is built from, so a planner
   // without delivery-rules produces tickets Gate 2 then rejects. Only the

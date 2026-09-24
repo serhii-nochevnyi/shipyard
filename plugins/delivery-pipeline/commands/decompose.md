@@ -133,23 +133,23 @@ ladder into the other.
 
 | GSD launch | Boundary role | Base selection | Escalation selections | Declared escalation signals |
 | --- | --- | --- | --- | --- |
-| `gsd-phase-researcher` | `research` | opus/medium | opus/max | `complexity: very-complex` |
-| `gsd-planner` | `decomposition` | opus/medium | opus/max | `critical: true` or `checkpoint: true` |
-| `gsd-plan-checker` | `decomposition` | opus/medium | opus/max | `critical: true` or `checkpoint: true` |
+| `gsd-phase-researcher` | `research` | opus/medium | opus/high | `complexity: very-complex` |
+| `gsd-planner` | `decomposition` | opus/medium | opus/high | `critical: true` or `checkpoint: true` |
+| `gsd-plan-checker` | `decomposition` | opus/medium | opus/high | `critical: true` or `checkpoint: true` |
 
 On the Codex ladder, research and decomposition start at Sol/high. Research
 may escalate to Sol/xhigh only for `complexity: very-complex`; `type:
 alternatives` is inert. Decomposition may escalate to Sol/xhigh only for
 the declared critical or checkpoint signal. On the Claude alias ladder,
-research starts at opus/medium and escalates to opus/max only for the declared
+research starts at opus/medium and escalates to opus/high only for the declared
 `complexity: very-complex` signal; `type: alternatives` is inert. Decomposition
-starts at opus/medium and escalates to opus/max under the declared critical or
+starts at opus/medium and escalates to opus/high under the declared critical or
 checkpoint signal. If both declared signals are present, let the canonical
 policy choose the highest applicable rung and retain the signal evidence.
 Pass signals as policy inputs; never compose a model, effort, alias, or literal
 fallback in this command.
 
-For the Claude alias ladder, `opus/max` is the ADR-014 policy result for these
+For the Claude alias ladder, `opus/high` is the ADR-014 policy result for these
 research and decomposition escalations. Fable is not a valid rung for either
 role. The routed `pipeline-config.cjs` `resolveDispatch` bridge must validate the
 explicit runtime, the canonical role, and the declared signals before launch.

@@ -185,7 +185,7 @@ test('model-axis capability evidence falls back within the same runtime policy',
           runtime: 'claude',
           launch_id: `host-${resolution.dispatch_id}`,
           supported_models: ['claude-opus-5-5'],
-          supported_efforts: ['medium', 'max'],
+          supported_efforts: ['medium', 'high'],
         }),
       }),
     },
@@ -429,10 +429,10 @@ test('Claude applies the amended research, decomposition, and executor ladder at
   const cases = [
     ['research', {}, 'claude-opus-5-5', 'medium'],
     ['research', { type: 'alternatives' }, 'claude-opus-5-5', 'medium'],
-    ['research', { complexity: 'very-complex' }, 'claude-opus-5-5', 'max'],
+    ['research', { complexity: 'very-complex' }, 'claude-opus-5-5', 'high'],
     ['decomposition', {}, 'claude-opus-5-5', 'medium'],
-    ['decomposition', { critical: true }, 'claude-opus-5-5', 'max'],
-    ['decomposition', { checkpoint: true }, 'claude-opus-5-5', 'max'],
+    ['decomposition', { critical: true }, 'claude-opus-5-5', 'high'],
+    ['decomposition', { checkpoint: true }, 'claude-opus-5-5', 'high'],
     ['executor', {}, 'sonnet', 'max'],
     ['executor', { critical: true }, 'claude-opus-5-5', 'low'],
     ['executor', { checkpoint: true }, 'claude-opus-5-5', 'low'],
@@ -473,7 +473,7 @@ test('Claude repair receipts authorize only the Claude-native predecessor rung',
     previous_dispatch_id: base.dispatch_id,
   }, { ticket });
   assert.equal(repeat.applied_model, 'claude-opus-5-5');
-  assert.equal(repeat.applied_effort, 'max');
+  assert.equal(repeat.applied_effort, 'high');
   const exhausted = boundary.dispatch({
     runtime: 'claude',
     role: 'ci-fix',
@@ -481,7 +481,7 @@ test('Claude repair receipts authorize only the Claude-native predecessor rung',
     previous_dispatch_id: repeat.dispatch_id,
   }, { ticket });
   assert.equal(exhausted.applied_model, 'claude-opus-5-5');
-  assert.equal(exhausted.applied_effort, 'max');
+  assert.equal(exhausted.applied_effort, 'high');
 });
 
 test('validation hooks can reject an unsupported selection before launch', () => {
@@ -1930,7 +1930,7 @@ test('the boundary launches every native base and escalation tuple for both runt
         executor: ['sonnet', 'max'],
         'pr-sentinel': ['sonnet', 'high'],
         integrator: ['claude-opus-5-5', 'medium'],
-        'drift-check': ['claude-opus-5-5', 'max'],
+        'drift-check': ['claude-opus-5-5', 'high'],
         'arch-review': ['claude-opus-5-5', 'medium'],
         'ci-fix': ['claude-opus-5-5', 'medium'],
         'review-fix': ['claude-opus-5-5', 'medium'],
@@ -1945,8 +1945,8 @@ test('the boundary launches every native base and escalation tuple for both runt
       ['codex', 'integrator', { inputTokens: policy.WINDOW_THRESHOLD_TOKENS + 1 }, 'critical', 'gpt-6-sol', 'xhigh'],
       ['codex', 'arch-review', { inputTokens: policy.WINDOW_THRESHOLD_TOKENS + 1 }, 'critical', 'gpt-6-sol', 'xhigh'],
       ['claude', 'research', { type: 'alternatives' }, 'base', 'claude-opus-5-5', 'medium'],
-      ['claude', 'research', { complexity: 'very-complex' }, 'very-complex', 'claude-opus-5-5', 'max'],
-      ['claude', 'decomposition', { checkpoint: true }, 'critical', 'claude-opus-5-5', 'max'],
+      ['claude', 'research', { complexity: 'very-complex' }, 'very-complex', 'claude-opus-5-5', 'high'],
+      ['claude', 'decomposition', { checkpoint: true }, 'critical', 'claude-opus-5-5', 'high'],
       ['claude', 'executor', { critical: true }, 'critical', 'claude-opus-5-5', 'low'],
       ['claude', 'integrator', { contested: true }, 'critical', 'claude-opus-5-5', 'high'],
       ['claude', 'arch-review', { inputTokens: policy.WINDOW_THRESHOLD_TOKENS + 1 }, 'ceiling', 'fable', 'medium'],
@@ -2016,7 +2016,7 @@ test('the boundary launches every native base and escalation tuple for both runt
           runtime,
           role,
           { signatureState: 'repeat', priorApplied: baseResult.receipt },
-          ['repeat', runtime === 'codex' ? 'gpt-6-sol' : 'claude-opus-5-5', runtime === 'codex' ? 'high' : 'max'],
+          ['repeat', runtime === 'codex' ? 'gpt-6-sol' : 'claude-opus-5-5', 'high'],
           `matrix-${runtime}-${role}-repeat`,
           { previous_dispatch_id: baseResult.dispatch_id },
         );
@@ -2024,7 +2024,7 @@ test('the boundary launches every native base and escalation tuple for both runt
           runtime,
           role,
           { signatureState: 'repeat_exhausted', priorApplied: repeat.receipt },
-          ['repeat_exhausted', runtime === 'codex' ? 'gpt-6-sol' : 'claude-opus-5-5', runtime === 'codex' ? 'xhigh' : 'max'],
+          ['repeat_exhausted', runtime === 'codex' ? 'gpt-6-sol' : 'claude-opus-5-5', runtime === 'codex' ? 'xhigh' : 'high'],
           `matrix-${runtime}-${role}-repeat-exhausted`,
           { previous_dispatch_id: repeat.dispatch_id },
         );
@@ -2334,8 +2334,8 @@ test('repair promotion requires the immediately preceding boundary receipt on th
       previous_dispatch_id: claudeRepeat.dispatch_id,
       dispatch_id: 'prior-claude-valid-exhausted',
     }, { ticket: claudeTicket });
-    assert.deepStrictEqual([claudeRepeat.applied_model, claudeRepeat.applied_effort], ['claude-opus-5-5', 'max']);
-    assert.deepStrictEqual([claudeExhausted.applied_model, claudeExhausted.applied_effort], ['claude-opus-5-5', 'max']);
+    assert.deepStrictEqual([claudeRepeat.applied_model, claudeRepeat.applied_effort], ['claude-opus-5-5', 'high']);
+    assert.deepStrictEqual([claudeExhausted.applied_model, claudeExhausted.applied_effort], ['claude-opus-5-5', 'high']);
   } finally {
     fs.rmSync(storeDir, { recursive: true, force: true });
   }
