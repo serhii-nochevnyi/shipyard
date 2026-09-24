@@ -7,6 +7,7 @@ const path = require('node:path');
 
 const ROOT = path.resolve(__dirname, '..');
 const { diagnostic, runBounded } = require(path.join(ROOT, 'plugins', 'delivery-pipeline', 'scripts', 'command-runner.cjs'));
+const { codexBlock } = require(path.join(ROOT, 'plugins', 'delivery-pipeline', 'scripts', 'auto-route.cjs'));
 const sourcePlugin = path.join(ROOT, 'plugins', 'delivery-pipeline', '.claude-plugin', 'plugin.json');
 const sourceCapability = path.join(ROOT, 'capabilities', 'delivery-pipeline', 'capability.json');
 
@@ -128,6 +129,9 @@ function main(argv) {
   const sessionHook = path.join(bundle, 'session-observer.cjs');
   const prePushHook = path.join(claudeHome, 'hooks', 'shipyard-pre-push-gate.sh');
   const oldHook = path.join(claudeHome, 'hooks', 'shipyard-stop-gate.cjs');
+  const routeHook = path.join(claudeHome, 'hooks', 'shipyard-auto-route.sh');
+  const routeModule = path.join(claudeHome, 'hooks', 'shipyard-auto-route.cjs');
+  const routeSource = path.join(ROOT, 'plugins', 'delivery-pipeline', 'scripts', 'auto-route.cjs');
   if (!fs.existsSync(settingsFile) && !fs.existsSync(bundle)) {
     check(results, 'claude', 'skip', claudeHome + ' has no Shipyard hook installation');
   } else {
@@ -149,6 +153,20 @@ function main(argv) {
     if (!prePushCommands.includes(expectedPrePush)) {
       check(results, 'claude-publish-hook', 'error', 'PreToolUse does not point to ' + prePushHook);
     } else check(results, 'claude-publish-hook', 'ok', 'PreToolUse guards git push');
+
+    const routeCommands = settings && settings.hooks && Array.isArray(settings.hooks.UserPromptSubmit)
+      ? settings.hooks.UserPromptSubmit.flatMap((group) => (group.hooks || []).map((hook) => hook.command))
+      : [];
+    const expectedRoute = 'bash "' + routeHook + '"';
+    let routeInstalledMatches = false;
+    try {
+      routeInstalledMatches = fs.readFileSync(routeModule).equals(fs.readFileSync(routeSource));
+    } catch {
+      routeInstalledMatches = false;
+    }
+    if (!routeCommands.includes(expectedRoute) || !routeInstalledMatches) {
+      check(results, 'claude-route-hook', 'warn', 'route hook is stale or missing; run make install-shipyard-claude-hook');
+    } else check(results, 'claude-route-hook', 'ok', 'route hook matches the source and is registered');
 
     if (!fs.existsSync(stopHook)) {
       check(results, 'claude-bundle', 'error', 'missing ' + stopHook);
@@ -207,6 +225,18 @@ function main(argv) {
     } else {
       check(results, 'codex-version', 'ok', 'bundle ' + installedVersion);
       check(results, 'codex-bundle', 'ok', 'bundle manifest and scripts directory are present');
+    }
+    const agentsMdPath = path.join(codexHome, 'AGENTS.md');
+    let agentsMdText = '';
+    try {
+      agentsMdText = fs.readFileSync(agentsMdPath, 'utf8');
+    } catch {
+      agentsMdText = '';
+    }
+    if (agentsMdText.includes(codexBlock(1)) || agentsMdText.includes(codexBlock(2))) {
+      check(results, 'codex-route-block', 'ok', 'AGENTS.md route block matches the source');
+    } else {
+      check(results, 'codex-route-block', 'warn', 'AGENTS.md route block is stale or missing; run make install-shipyard-codex');
     }
     const codexNotify = path.join(codexBundle, 'scripts', 'codex-notify.cjs');
     const notifyDelegate = path.join(codexHome, 'shipyard-notify-delegate.json');
