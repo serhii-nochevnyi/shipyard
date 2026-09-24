@@ -368,6 +368,21 @@ script — not in a prompt.** Every requirement below is an instance of it.
 - **REQ-133** — Decompose warns once, without blocking, when .planning/ is not tracked by git, naming the consequence for delivery worktrees and the remedy.
 - **REQ-134** — gsd-tune names the missing configuration file and the command that creates it, keeping exit code 2 and its prefix.
 - **REQ-135** — Research handbacks receive their 500-character summary bound at launch and are bounded or refused deterministically with a message naming the line and length before the trusted consumer seals them.
+- **REQ-136** — Phase 40 builds the delivery seams (captured fixtures, dispatch entry point, sentinel preflight) before the point fixes and gates every release on a live round.
+- **REQ-137** — Registered producer-consumer boundaries are tested against fixtures captured from real producers by a manual scrubbed make target that records the CLI version; a contract test refuses inline shapes for those boundaries.
+- **REQ-138** — One deterministic front-to-dispatch entry point for Claude and Codex builds host requests from the graph (branch from the graph, plan path from the ticket worktree, ticket type never forwarded as signals.type), launches detached and offers status and wait through a dispatch wait kind.
+- **REQ-139** — The host writes an in-flight record with pid and TTL at launch that the stop gate honours and that fails closed on process exit or expiry, while the durable dispatch mark still follows the verified receipt.
+- **REQ-140** — A sentinel preflight fetches and fast-forwards the base ref and runs and commits state-sync, or refuses naming the exact command; a failed fetch is a refusal.
+- **REQ-141** — make test-live runs one real research, decompose, executor and sentinel round per runtime on an in-repo fixture project with the cheapest allowed model, and the release script refuses without a fresh passing live receipt.
+- **REQ-142** — Target-project PRs carry no conveyor or GSD internals: neutral branches stored in the graph, conventional-commit titles, bodies without ticket, phase, ADR or plan identifiers, untracked .planning/, and a publish-time PR hygiene gate; the Shipyard repository is exempt.
+- **REQ-143** — Ticket-to-PR matching uses the exact head branch plus the PR number recorded in delivery state at creation; the title and ticket-prefix fallback remains only for legacy PRs.
+- **REQ-144** — A supported dogfood mode runs hosts from a worktree through a separate install root, stamps receipts with host source sha and dirty flag, is refused for merges into a target default branch, and doctor reports an installed cache matching no release.
+- **REQ-145** — The runtime-file digest pin is refreshed only by a make target and a commit trailer that CI verifies.
+- **REQ-146** — Research keeps valid lines sealed, names the failed line and its real cause, and re-dispatches only that line; the fan-out stays failed until all four lines are sealed.
+- **REQ-147** — One shared sealer produces research-result and decomposition-result envelopes with an artifact index for Claude and Codex research and decompose hosts.
+- **REQ-148** — The Codex GSD researcher writes only its contained artifact path, and Codex child tasks are passed by file path plus a digest the host verifies.
+- **REQ-149** — Point fixes: header-free deterministic state YAML; pre-push resolves the worktree through git; the Codex config refusal names the config fix; gsd-tune for Codex writes no Claude-only keys; investigate and decompose prose explain the out-of-repo host state directory; doctor reads the Codex agents manifest.
+- **REQ-150** — Unit fixtures that create git repositories are hermetic against global commit signing and fixed /tmp paths.
 
 *ADR-011 was accepted for implementation on 2026-09-10. T-32-01/02 are the
 initial isolated tooling slice; subsequent packages remain subject to decomposition
@@ -736,6 +751,17 @@ gate only from deliver, route research through investigate, validate ADRs at
 Gate 1, plan Jira export deterministically, keep ordering out of depends_on,
 skip the UI gate on an explicit ADR marker, warn on untracked planning, clarify
 gsd-tune, and bound research handbacks at launch.
+
+### Phase 40: Build delivery seams and clean target-project PRs
+**Status**: planned (ADR-017)
+**Requirements**: REQ-136, REQ-137, REQ-138, REQ-139, REQ-140, REQ-141, REQ-142, REQ-143, REQ-144, REQ-145, REQ-146, REQ-147, REQ-148, REQ-149, REQ-150
+
+Implement [ADR-017](architecture/ADR-017-delivery-seams-and-pr-hygiene.md): capture
+boundary fixtures from real producers, give deliver one deterministic dispatch
+entry point with an in-flight record and wait, establish sentinel preconditions,
+gate releases on a live round, repair the Codex investigate and decompose loops,
+support a provenance-stamped dogfood mode, and keep conveyor internals out of
+target-project PRs.
 
 <!-- shipyard:gsd-sync:begin -->
 ## Shipyard synchronization (generated)

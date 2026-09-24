@@ -143,6 +143,24 @@
 - [ ] **REQ-134**: gsd-tune names the missing configuration file and the command that creates it, keeping exit code 2 and its prefix.
 - [ ] **REQ-135**: Research handbacks receive their 500-character summary bound at launch and are bounded or refused deterministically with a message naming the line and length before the trusted consumer seals them. *ADR-011 was accepted for implementation on 2026-09-10. T-32-01/02 are the initial isolated tooling slice; subsequent packages remain subject to decomposition and rollout gates. Existing model floors remain unchanged.*
 
+### Delivery seams, Codex loop repair and PR hygiene (ADR-017)
+
+- [ ] **REQ-136**: Phase 40 builds the delivery seams (captured fixtures, dispatch entry point, sentinel preflight) before the point fixes and gates every release on a live round.
+- [ ] **REQ-137**: Registered producer-consumer boundaries are tested against fixtures captured from real producers by a manual scrubbed make target that records the CLI version; a contract test refuses inline shapes for those boundaries.
+- [ ] **REQ-138**: One deterministic front-to-dispatch entry point for Claude and Codex builds host requests from the graph (branch from the graph, plan path from the ticket worktree, ticket type never forwarded as signals.type), launches detached and offers status and wait through a dispatch wait kind.
+- [ ] **REQ-139**: The host writes an in-flight record with pid and TTL at launch that the stop gate honours and that fails closed on process exit or expiry, while the durable dispatch mark still follows the verified receipt.
+- [ ] **REQ-140**: A sentinel preflight fetches and fast-forwards the base ref and runs and commits state-sync, or refuses naming the exact command; a failed fetch is a refusal.
+- [ ] **REQ-141**: make test-live runs one real research, decompose, executor and sentinel round per runtime on an in-repo fixture project with the cheapest allowed model, and the release script refuses without a fresh passing live receipt.
+- [ ] **REQ-142**: Target-project PRs carry no conveyor or GSD internals: neutral branches stored in the graph, conventional-commit titles, bodies without ticket, phase, ADR or plan identifiers, untracked .planning/, and a publish-time PR hygiene gate; the Shipyard repository is exempt.
+- [ ] **REQ-143**: Ticket-to-PR matching uses the exact head branch plus the PR number recorded in delivery state at creation; the title and ticket-prefix fallback remains only for legacy PRs.
+- [ ] **REQ-144**: A supported dogfood mode runs hosts from a worktree through a separate install root, stamps receipts with host source sha and dirty flag, is refused for merges into a target default branch, and doctor reports an installed cache matching no release.
+- [ ] **REQ-145**: The runtime-file digest pin is refreshed only by a make target and a commit trailer that CI verifies.
+- [ ] **REQ-146**: Research keeps valid lines sealed, names the failed line and its real cause, and re-dispatches only that line; the fan-out stays failed until all four lines are sealed.
+- [ ] **REQ-147**: One shared sealer produces research-result and decomposition-result envelopes with an artifact index for Claude and Codex research and decompose hosts.
+- [ ] **REQ-148**: The Codex GSD researcher writes only its contained artifact path, and Codex child tasks are passed by file path plus a digest the host verifies.
+- [ ] **REQ-149**: Point fixes: header-free deterministic state YAML; pre-push resolves the worktree through git; the Codex config refusal names the config fix; gsd-tune for Codex writes no Claude-only keys; investigate and decompose prose explain the out-of-repo host state directory; doctor reads the Codex agents manifest.
+- [ ] **REQ-150**: Unit fixtures that create git repositories are hermetic against global commit signing and fixed /tmp paths.
+
 ## Out of Scope
 
 | Feature | Reason |
@@ -288,9 +306,24 @@
 | REQ-133 | Phase 39 | In Progress |
 | REQ-134 | Phase 39 | In Progress |
 | REQ-135 | Phase 39 | In Progress |
+| REQ-136 | Phase 40 | Pending |
+| REQ-137 | Phase 40 | Pending |
+| REQ-138 | Phase 40 | Pending |
+| REQ-139 | Phase 40 | Pending |
+| REQ-140 | Phase 40 | Pending |
+| REQ-141 | Phase 40 | Pending |
+| REQ-142 | Phase 40 | Pending |
+| REQ-143 | Phase 40 | Pending |
+| REQ-144 | Phase 40 | Pending |
+| REQ-145 | Phase 40 | Pending |
+| REQ-146 | Phase 40 | Pending |
+| REQ-147 | Phase 40 | Pending |
+| REQ-148 | Phase 40 | Pending |
+| REQ-149 | Phase 40 | Pending |
+| REQ-150 | Phase 40 | Pending |
 
 **Coverage:**
-- v1 requirements: 134 total
+- v1 requirements: 149 total
 - Mapped to phases: 132
 - Unmapped: 2 ⚠️
 
