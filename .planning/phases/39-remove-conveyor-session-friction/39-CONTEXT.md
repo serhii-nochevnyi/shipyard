@@ -86,6 +86,12 @@ code or external tools.
 
 T-39-09 → T-39-02 shares no `files_modified`; it is a real import dependency, so
 the new REQ-131 warning on it is expected and correct.
+
+Single-owner files that carry other tickets' text (plan check, 2026-09-24):
+`README.md` is owned only by T-39-04 and also states the REQ-126 intake/bootstrap
+and REQ-127 deliver-armed stop-gate behaviour (text only, no code dependency);
+`tests/unit/dispatch-record.test.cjs` is owned by T-39-03 because it drives the
+real stop gate with an unarmed `{}` payload.
 </ticket_map>
 
 <deferred>

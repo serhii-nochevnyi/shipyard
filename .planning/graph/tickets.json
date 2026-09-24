@@ -5159,7 +5159,8 @@
         "tests/unit/refusal-hints.test.cjs",
         "tests/unit/claude-decompose-host.test.cjs",
         "tests/unit/claude-investigation-host.test.cjs",
-        "tests/unit/codex-decompose-host.test.cjs"
+        "tests/unit/codex-decompose-host.test.cjs",
+        "tests/unit/codex-delivery-host.test.cjs"
       ],
       "risk": "medium",
       "type": "implementation",
@@ -5214,6 +5215,7 @@
         "plugins/delivery-pipeline/commands/deliver.md",
         "tests/unit/stop-gate.test.cjs",
         "tests/unit/stop-gate-arm.test.cjs",
+        "tests/unit/dispatch-record.test.cjs",
         ".gitignore"
       ],
       "risk": "high",

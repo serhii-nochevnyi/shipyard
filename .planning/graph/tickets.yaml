@@ -2404,7 +2404,7 @@ tickets:
     repo: null
     wave: 1
     depends_on: []
-    files: [plugins/delivery-pipeline/scripts/refusal-hints.cjs, plugins/delivery-pipeline/scripts/claude-decompose-host.cjs, plugins/delivery-pipeline/scripts/claude-investigation-host.cjs, plugins/delivery-pipeline/scripts/codex-decompose-host.cjs, plugins/delivery-pipeline/scripts/codex-delivery-host.cjs, tests/unit/refusal-hints.test.cjs, tests/unit/claude-decompose-host.test.cjs, tests/unit/claude-investigation-host.test.cjs, tests/unit/codex-decompose-host.test.cjs]
+    files: [plugins/delivery-pipeline/scripts/refusal-hints.cjs, plugins/delivery-pipeline/scripts/claude-decompose-host.cjs, plugins/delivery-pipeline/scripts/claude-investigation-host.cjs, plugins/delivery-pipeline/scripts/codex-decompose-host.cjs, plugins/delivery-pipeline/scripts/codex-delivery-host.cjs, tests/unit/refusal-hints.test.cjs, tests/unit/claude-decompose-host.test.cjs, tests/unit/claude-investigation-host.test.cjs, tests/unit/codex-decompose-host.test.cjs, tests/unit/codex-delivery-host.test.cjs]
     risk: medium
     human_checkpoint: false
     preauthorized: false
@@ -2436,7 +2436,7 @@ tickets:
     repo: null
     wave: 1
     depends_on: []
-    files: [plugins/delivery-pipeline/scripts/stop-gate.cjs, plugins/delivery-pipeline/scripts/stop-gate-arm.cjs, plugins/delivery-pipeline/commands/deliver.md, tests/unit/stop-gate.test.cjs, tests/unit/stop-gate-arm.test.cjs, '.gitignore']
+    files: [plugins/delivery-pipeline/scripts/stop-gate.cjs, plugins/delivery-pipeline/scripts/stop-gate-arm.cjs, plugins/delivery-pipeline/commands/deliver.md, tests/unit/stop-gate.test.cjs, tests/unit/stop-gate-arm.test.cjs, tests/unit/dispatch-record.test.cjs, '.gitignore']
     risk: high
     human_checkpoint: true
     preauthorized: false

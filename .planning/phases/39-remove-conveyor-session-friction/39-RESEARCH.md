@@ -498,16 +498,16 @@ function shouldInject(raw) {
 | A7 | git-common-dir is writable from the deliver session's sandbox | REQ-127 | Arm fails; the fallback to `.planning/graph/` is needed |
 | A8 | Codex research summaries are capped by `role-artifact.cjs` `capSummary` rather than refused | REQ-135 | Codex has the same loss; needs the same fix in the Codex seal path |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
-1. **How does deliver learn its `session_id`?**
+1. **How does deliver learn its `session_id`?** — RESOLVED: `${CLAUDE_SESSION_ID}` in `deliver.md` Step 0, gated by the T-39-03 human checkpoint (host probe); if not substituted, T-39-03 stops and escalates for an alternative arming path.
    - Known: the hook payload carries `session_id` (`stop-gate.cjs:265-267`). No command in the repo uses `${CLAUDE_SESSION_ID}` today (grep: no match in commands/skills).
    - Recommendation: add a `checkpoint:human-verify` probe task in ticket C: a scratch command that echoes `${CLAUDE_SESSION_ID}`, compared with the `session_id` in `~/.claude/hooks` observer output. Fallback design: arm from a hook that sees the deliver prompt (couples to D's hook; avoid unless needed).
-2. **REQ-135: bound or refuse?** The ADR allows both. Recommendation: bound plus a notice, because refusing kills all four lines (the parallel fan-out throws). If the user prefers refusal, the thrown error must bypass the adapter `REPAIR` suffix (`claude-dispatch-adapter.cjs:983-989` rethrows only `DispatchBoundaryError`/`DispatchPolicyError` unwrapped).
-3. **Bootstrap with a partial project** (ROADMAP present, REQUIREMENTS missing, or a ROADMAP without the ADR phase): create the missing file only and report, or refuse? Recommendation: create only the missing files and report `skipped_existing`. Never edit an existing ROADMAP.
-4. **Should decompose run `gsd-tune --apply` right after a fresh bootstrap** (to create the delivery-rules projection that Step 0.5 requires)? Step 0.5 says "Do not apply tuning automatically." Recommendation: allow `--apply` only for a config the bootstrap created in the same run, and state it in prose (ticket P-D).
-5. **Hint wording and the set of mapped codes.** Recommendation: map the ~15 codes a decompose/investigate session can hit, plus a default.
-6. **Version bump and release entry.** A new version needs a release entry (`release-notes-smoke.sh`, network). Is it a phase ticket or a post-phase release step? Recommendation: keep it out of the phase tickets (it touches `plugin.json`, `capability.json` and release notes, shared by nothing else).
+2. **REQ-135: bound or refuse?** — RESOLVED: bound plus notice (`39-CONTEXT.md` discretion; T-39-08). The ADR allows both. Recommendation: bound plus a notice, because refusing kills all four lines (the parallel fan-out throws). If the user prefers refusal, the thrown error must bypass the adapter `REPAIR` suffix (`claude-dispatch-adapter.cjs:983-989` rethrows only `DispatchBoundaryError`/`DispatchPolicyError` unwrapped).
+3. **Bootstrap with a partial project** — RESOLVED: create only missing files, report `skipped_existing`, never edit existing files (`39-CONTEXT.md`; T-39-09). (ROADMAP present, REQUIREMENTS missing, or a ROADMAP without the ADR phase): create the missing file only and report, or refuse? Recommendation: create only the missing files and report `skipped_existing`. Never edit an existing ROADMAP.
+4. **Should decompose run `gsd-tune --apply` right after a fresh bootstrap** — RESOLVED: only for a `config.json` the bootstrap created in the same run (`39-CONTEXT.md`; T-39-10). (to create the delivery-rules projection that Step 0.5 requires)? Step 0.5 says "Do not apply tuning automatically." Recommendation: allow `--apply` only for a config the bootstrap created in the same run, and state it in prose (ticket P-D).
+5. **Hint wording and the set of mapped codes.** — RESOLVED: the ~14 codes listed in T-39-01 plus a default entry; wire format `hint[<CODE>]: … — remedy: …`. Recommendation: map the ~15 codes a decompose/investigate session can hit, plus a default.
+6. **Version bump and release entry.** — RESOLVED: out of the phase tickets (`39-CONTEXT.md` deferred). A new version needs a release entry (`release-notes-smoke.sh`, network). Is it a phase ticket or a post-phase release step? Recommendation: keep it out of the phase tickets (it touches `plugin.json`, `capability.json` and release notes, shared by nothing else).
 
 ## Environment Availability
 
