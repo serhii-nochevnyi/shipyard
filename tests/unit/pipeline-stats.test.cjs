@@ -534,7 +534,7 @@ test('Codex agent-file coverage is required only when the runtime is known', () 
     ts: recently, event: 'dispatch', ticket: 'T-01-01', role: 'arch-review',
     model: 'sonnet', effort: 'high', reason: 'tier=floor(sonnet) effort=row(high)',
     task_level: 'complex', runtime: 'codex', backend: 'codex-agent', dispatch_id: 'dispatch-codex',
-    agent_file: 'shipyard-arch-review-critical', observed_model: 'gpt-5.6-sol',
+    agent_file: 'shipyard-arch-review-critical', observed_model: 'gpt-6-sol',
   };
   const partial = {
     ts: recently, event: 'dispatch', ticket: 'T-01-02', role: 'arch-review',
@@ -604,7 +604,7 @@ test('ADR-014 reconciliation keeps resolution, application, observation and join
   assert.deepStrictEqual(reconciliation.by_runtime, { claude: 3, codex: 2 });
   assert.deepStrictEqual(reconciliation.by_rung, { base: 3, critical: 1 });
   assert.deepStrictEqual(reconciliation.by_concrete_model, {
-    'gpt-5.6-sol': 1, opus: 1, sonnet: 1,
+    'gpt-6-sol': 1, opus: 1, sonnet: 1,
   });
   assert.deepStrictEqual(reconciliation.by_fired_signal, { critical: 1 });
   assert.strictEqual(reconciliation.records.find((r) => r.dispatch_id === 'stale').compliant, false);

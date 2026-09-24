@@ -1,0 +1,6 @@
+{"type":"session_meta","payload":{"id":"01a0ce68-961a-72d1-b55e-d293ab9d19f4","model_provider":"openai","source":"exec","cli_version":"0.155.1"}}
+{"type":"turn_context","payload":{"model":"gpt-6-luna","effort":"max"}}
+{"type":"response_item","payload":{"type":"function_call","name":"spawn_agent","arguments":"{\"task_name\":\"plan_checker_ready\",\"agent_type\":\"gsd-plan-checker\",\"model\":\"gpt-6-luna\",\"reasoning_effort\":\"max\",\"fork_turns\":\"none\",\"message\":\"gAAAAABqs9ES9_DBpqNOJPIE5CeoZRChvAzpEHE9T_Xn4en-rUqnPjfhOxdhoPLpNMc4B82YJH-vUYYcp5B4OjkJ7n7H7VacJTmLSbEVm6X-ZplHHZNo2S10dEZEFMymoe9hYrZSEzi1Th9R8ZiiSNIiG-Pban-0O7eD9Z_UpDCTdm0rp5xL55Q=\"}","call_id":"call_b2cQmz2Z9jnMLMq4vhmg4UR1"}}
+{"type":"response_item","payload":{"type":"function_call_output","call_id":"call_b2cQmz2Z9jnMLMq4vhmg4UR1","output":"{\"task_name\":\"/root/plan_checker_ready\"}"}}
+{"type":"response_item","payload":{"type":"function_call","name":"wait_agent","arguments":"{\"timeout_ms\":3600000}","call_id":"call_5OL0AFgrafWtc4yrjZGflbYO"}}
+{"type":"response_item","payload":{"type":"function_call_output","call_id":"call_5OL0AFgrafWtc4yrjZGflbYO","output":"{\"message\":\"Wait completed.\",\"timed_out\":false}"}}

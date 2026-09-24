@@ -87,7 +87,7 @@ function fixture(role, boundaryTicket) {
   const ticket = typeof boundaryTicket === 'function' ? boundaryTicket(root) : boundaryTicket;
   const dispatch = boundary.dispatch(
     { runtime: 'claude', role, signals: {} },
-    { ticket },
+    { ticket, ...(role === 'pr-sentinel' ? { subject_kind: 'round' } : {}) },
   );
   return { root, recorder, dispatch, boundaryTicket: ticket, branchName };
 }
@@ -397,7 +397,7 @@ test('a sentinel round authenticates its ticket-set digest and allows separate d
 
 test('a sentinel receipt for another round cannot seal this ticket set', () => {
   const tickets = [{ id: 'T-33-A', pr: 505, head: 'e'.repeat(40), base: 'epic/33' }];
-  const value = fixture('pr-sentinel', 'round:wrong-ticket-set');
+  const value = fixture('pr-sentinel', `round:${'0'.repeat(64)}`);
   try {
     const result = {
       outcome: 'clear',

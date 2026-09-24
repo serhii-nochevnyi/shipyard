@@ -1,8 +1,8 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 715375e2701de77752ebccaaa30df3b13d4ba9d1b506881c613bfaf7ed312dd9
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 19861478722acf82285dfa0b792a4b79a9091a4af466bdd58f5e32167e0418ed
 phase: 37
 status: human_needed
-shipyard_source_fingerprint: 715375e2701de77752ebccaaa30df3b13d4ba9d1b506881c613bfaf7ed312dd9
+shipyard_source_fingerprint: 19861478722acf82285dfa0b792a4b79a9091a4af466bdd58f5e32167e0418ed
 ---
 
 # Phase 37: Run the autonomous dual-runtime control plane — Verification Projection
@@ -13,7 +13,7 @@ shipyard_source_fingerprint: 715375e2701de77752ebccaaa30df3b13d4ba9d1b506881c613
 
 | Truth | Evidence | Status |
 |---|---|---|
-| Every phase plan is accounted for | 0/8 delivery records are merged | ? UNCERTAIN |
+| Every phase plan is accounted for | 8/8 delivery records are merged | ✓ VERIFIED |
 | Integration is coherent | INTEGRATION.md is missing | ? UNCERTAIN |
 | Verification evidence is present | INTEGRATION.md is missing | ? UNCERTAIN |
 
@@ -21,14 +21,14 @@ shipyard_source_fingerprint: 715375e2701de77752ebccaaa30df3b13d4ba9d1b506881c613
 
 | Ticket | Delivery | Plan status |
 |---|---|---|
-| T-37-01 | pending | ? UNCERTAIN |
-| T-37-02 | pending | ? UNCERTAIN |
-| T-37-03 | pending | ? UNCERTAIN |
-| T-37-04 | pending | ? UNCERTAIN |
-| T-37-05 | pending | ? UNCERTAIN |
-| T-37-06 | pending | ? UNCERTAIN |
-| T-37-07 | pending | ? UNCERTAIN |
-| T-37-08 | pending | ? UNCERTAIN |
+| T-37-01 | merged | ✓ VERIFIED |
+| T-37-02 | merged | ✓ VERIFIED |
+| T-37-03 | merged | ✓ VERIFIED |
+| T-37-04 | merged | ✓ VERIFIED |
+| T-37-05 | merged | ✓ VERIFIED |
+| T-37-06 | merged | ✓ VERIFIED |
+| T-37-07 | merged | ✓ VERIFIED |
+| T-37-08 | merged | ✓ VERIFIED |
 
 ## Verification Commands
 
@@ -37,4 +37,4 @@ shipyard_source_fingerprint: 715375e2701de77752ebccaaa30df3b13d4ba9d1b506881c613
 
 ## Gaps Summary
 
-**Not green:** 8 plan(s) are not merged.
+**Not green:** INTEGRATION.md is missing.

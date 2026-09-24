@@ -4,6 +4,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { suite, test, done, assert } = require('./assert-harness.cjs');
+const { transcriptEvidence: testTranscriptEvidence } = require('./claude-test-evidence.cjs');
 const { createDurableRecorder } = require('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs');
 const { createClaudeWorkflowDispatch, CLAUDE_MODEL_ALIASES } = require('../../plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs');
 
@@ -20,11 +21,15 @@ const capabilities = Object.freeze({
   observedEffort: true,
 });
 
+function transcriptEvidence(value) {
+  return testTranscriptEvidence(value);
+}
+
 const lines = [
-  { id: 'system-state', label: 'system state', model: 'opus', effort: 'medium', signals: { type: 'facts' } },
-  { id: 'alternatives', label: 'alternatives', model: 'opus', effort: 'medium', signals: { type: 'alternatives' } },
-  { id: 'constraints', label: 'constraints', model: 'opus', effort: 'medium', signals: { type: 'facts' } },
-  { id: 'risks', label: 'risks and unknowns', model: 'opus', effort: 'medium', signals: { type: 'facts' } },
+  { id: 'system-state', label: 'system state', model: 'claude-opus-5-5', effort: 'medium', signals: { type: 'facts' } },
+  { id: 'alternatives', label: 'alternatives', model: 'claude-opus-5-5', effort: 'medium', signals: { type: 'alternatives' } },
+  { id: 'constraints', label: 'constraints', model: 'claude-opus-5-5', effort: 'medium', signals: { type: 'facts' } },
+  { id: 'risks', label: 'risks and unknowns', model: 'claude-opus-5-5', effort: 'medium', signals: { type: 'facts' } },
 ];
 
 suite('investigation-research.mjs — routed Claude research fan-out');
@@ -43,13 +48,13 @@ test('dispatches all four lines through the typed boundary and returns verified 
       summary: `${options.label} completed`,
       draft: `draft for ${options.label}`,
     };
-    evidence.set(result, {
+    evidence.set(result, transcriptEvidence({
       launch_id: `investigation-research-${++launch}`,
       applied_model: options.model,
       applied_effort: options.effort,
       observed_model: options.model,
       observed_effort: options.effort,
-    });
+    }));
     return result;
   };
   const dispatch = (options) => createClaudeWorkflowDispatch({
@@ -85,7 +90,7 @@ test('dispatches all four lines through the typed boundary and returns verified 
       assert.ok(result, `missing result for ${line.id}`);
       assert.equal(result.status, 'completed');
       assert.equal(result.receipt.compliance, 'verified');
-      assert.equal(result.receipt.applied_model, 'opus');
+      assert.equal(result.receipt.applied_model, 'claude-opus-5-5');
       assert.equal(result.receipt.applied_effort, 'medium');
       assert.ok(recorder.getVerifiedRecord(result.receipt.dispatch_id));
       const call = calls.find((item) => item.options.label.endsWith(`:${line.id}`));
@@ -106,13 +111,13 @@ test('rejects a malformed research response instead of normalizing it to complet
   const evidence = new WeakMap();
   const agent = async (_prompt, options) => {
     const result = { id: options.label.split(':').pop(), status: 'succeeded', summary: 'not a contract status' };
-    evidence.set(result, {
+    evidence.set(result, transcriptEvidence({
       launch_id: `investigation-research-invalid-${options.label}`,
       applied_model: options.model,
       applied_effort: options.effort,
       observed_model: options.model,
       observed_effort: options.effort,
-    });
+    }));
     return result;
   };
   const dispatch = (options) => createClaudeWorkflowDispatch({
@@ -158,13 +163,13 @@ test('requires a non-empty draft for completed research responses', async () => 
       summary: 'summary without a substantive draft',
       draft: '   ',
     };
-    evidence.set(result, {
+    evidence.set(result, transcriptEvidence({
       launch_id: `investigation-research-draft-${options.label}`,
       applied_model: options.model,
       applied_effort: options.effort,
       observed_model: options.model,
       observed_effort: options.effort,
-    });
+    }));
     return result;
   };
   const dispatch = (options) => createClaudeWorkflowDispatch({
@@ -239,13 +244,13 @@ test('rejects a fan-out that drops or duplicates a research line', async () => {
       summary: `completed ${options.label}`,
       draft: `draft ${options.label}`,
     };
-    evidence.set(result, {
+    evidence.set(result, transcriptEvidence({
       launch_id: `investigation-research-cardinality-${++launch}`,
       applied_model: options.model,
       applied_effort: options.effort,
       observed_model: options.model,
       observed_effort: options.effort,
-    });
+    }));
     return result;
   };
   const dispatch = (options) => createClaudeWorkflowDispatch({

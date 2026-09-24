@@ -5,6 +5,7 @@ const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { suite, test, done, assert } = require('./assert-harness.cjs');
+const { transcriptEvidence: testTranscriptEvidence } = require('./claude-test-evidence.cjs');
 const {
   CONTEXT_PACKET_SCHEMA,
   CONTEXT_PACKET_VERSION,
@@ -19,6 +20,10 @@ const { createClaudeDispatchAdapter, createClaudeWorkflowDispatch, CLAUDE_MODEL_
 const { createCodexDispatchAdapter, CODEX_MODEL_IDS } = require('../../plugins/delivery-pipeline/scripts/codex-dispatch-adapter.cjs');
 
 const sha256 = (value) => crypto.createHash('sha256').update(value).digest('hex');
+
+function transcriptEvidence(value) {
+  return testTranscriptEvidence(value);
+}
 
 function fixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-context-packet-'));
@@ -232,13 +237,19 @@ test('both runtime adapters validate the same packet before the host launch', ()
     capabilities: {
       supportedModels: Object.values(CLAUDE_MODEL_ALIASES),
       supportedEfforts: ['high', 'medium', 'max'],
-      observedModel: false,
-      observedEffort: false,
+      observedModel: true,
+      observedEffort: true,
     },
     host: {
       launch: (selection) => {
         claudeCalls.push(selection);
-        return { launch_id: 'claude-packet', applied_model: selection.model, applied_effort: selection.effort };
+        return transcriptEvidence({
+          launch_id: 'claude-packet',
+          applied_model: selection.model,
+          applied_effort: selection.effort,
+          observed_model: selection.model,
+          observed_effort: selection.effort,
+        });
       },
     },
   });
@@ -308,13 +319,13 @@ test('the real executor prompt carries the packet and no unrelated transcript', 
       async (prompt, launchOptions) => {
         calls.push({ prompt, launchOptions });
         const value = { id: 'T-33-06', status: 'blocked', summary: 'tracer only' };
-        evidence.set(value, {
+        evidence.set(value, transcriptEvidence({
           launch_id: 'executor-packet',
           applied_model: launchOptions.model,
           applied_effort: launchOptions.effort,
           observed_model: launchOptions.model,
           observed_effort: launchOptions.effort,
-        });
+        }));
         return value;
       },
       async (thunks) => Promise.all(thunks.map((thunk) => thunk())),

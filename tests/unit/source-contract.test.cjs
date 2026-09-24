@@ -71,8 +71,9 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
-const { execFileSync } = require('child_process');
+const { execFileSync, spawnSync } = require('child_process');
 const { suite, test, done, assert } = require(path.join(__dirname, 'assert-harness.cjs'));
+const { transcriptEvidence: testTranscriptEvidence } = require('./claude-test-evidence.cjs');
 const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
 const { codexStaticVariants } = require('../../plugins/delivery-pipeline/scripts/gsd-tune.cjs');
 const pipelineConfig = require('../../plugins/delivery-pipeline/scripts/pipeline-config.cjs');
@@ -492,15 +493,15 @@ const sourceDispatchRecorder = createDurableRecorder(sourceDispatchStore);
 const sourceDispatchCapabilities = Object.freeze({
   supportedModels: Object.values(CLAUDE_MODEL_ALIASES),
   supportedEfforts: ['high', 'medium', 'max'],
-  observedModel: false,
-  observedEffort: false,
+  observedModel: true,
+  observedEffort: true,
 });
 const sourceHostEvidence = new WeakMap();
 let sourceLaunch = 0;
 const sourceApplicationEvidence = ({ result }) => {
   const evidence = sourceHostEvidence.get(result);
   if (!evidence) throw new Error('test Claude host returned no application evidence');
-  return evidence;
+  return testTranscriptEvidence(evidence);
 };
 const sourceArtifactConsumer = ({ artifact, result, record }) => {
   const role = artifact && artifact.role;
@@ -584,11 +585,11 @@ const workflowArgs = {
     tickets: [{ id: 'T-30-01', planPath: '/p/30-01-PLAN.md', branch: 'ticket/T-30-01', prBase: 'epic/30', worktreePath: '/w/T-30-01', model: 'sonnet', effort: 'max' }],
   },
   'drift-gate': {
-    tickets: [{ id: 'T-30-01', planPath: '/p/30-01-PLAN.md', baseRef: 'origin/epic/30', worktreePath: '/w/T-30-01', model: 'opus', effort: 'max' }],
+    tickets: [{ id: 'T-30-01', planPath: '/p/30-01-PLAN.md', baseRef: 'origin/epic/30', worktreePath: '/w/T-30-01', model: 'claude-opus-5-5', effort: 'max' }],
     driftRefPath: '/p/drift-check.md',
   },
   'fix-round': {
-    prs: [{ id: 'T-30-01', pr: 109, branch: 'ticket/T-30-01', base: 'epic/30', worktreePath: '/w/T-30-01', planPath: '/p/30-01-PLAN.md', needsCiFix: true, needsReviewFix: false, model: 'opus', effort: 'medium' }],
+    prs: [{ id: 'T-30-01', pr: 109, branch: 'ticket/T-30-01', base: 'epic/30', worktreePath: '/w/T-30-01', planPath: '/p/30-01-PLAN.md', needsCiFix: true, needsReviewFix: false, model: 'claude-opus-5-5', effort: 'medium' }],
     ciFixRefPath: '/p/ci-fix.md',
     reviewFixRefPath: '/p/review-fix.md',
     reinitScript: '/p/reviewers.cjs',
@@ -610,6 +611,8 @@ async function renderedPrompt(name) {
       launch_id: `test-source-launch-${++sourceLaunch}`,
       applied_model: opts.model,
       applied_effort: opts.effort,
+      observed_model: opts.model,
+      observed_effort: opts.effort,
     });
     return result;
   };
@@ -620,8 +623,8 @@ async function renderedPrompt(name) {
   assert.strictEqual(calls.length, 1, `${name} must dispatch one prompt in the rendered-contract fixture`);
   const expectedSelection = {
     executors: { model: 'sonnet', effort: 'max' },
-    'drift-gate': { model: 'opus', effort: 'max' },
-    'fix-round': { model: 'opus', effort: 'medium' },
+    'drift-gate': { model: 'claude-opus-5-5', effort: 'max' },
+    'fix-round': { model: 'claude-opus-5-5', effort: 'medium' },
   }[name];
   assert.deepStrictEqual(
     { model: calls[0].opts.model, effort: calls[0].opts.effort },
@@ -692,6 +695,8 @@ const capabilitiesFor = (resolutions) => ({
     model: resolution.model,
     effort: resolution.effort,
   })),
+  observedModel: true,
+  observedEffort: true,
 });
 
 const expectCode = (fn, code) => {
@@ -702,14 +707,17 @@ const expectCode = (fn, code) => {
   );
 };
 
-const applicationEvidence = (selection, launchId, effort = selection.effort, extra = {}) => ({
-  launch_id: launchId,
-  applied_model: selection.model,
-  applied_effort: effort,
-  observed_model: selection.model,
-  observed_effort: effort,
-  ...extra,
-});
+const applicationEvidence = (selection, launchId, effort = selection.effort, extra = {}) => {
+  const value = {
+    launch_id: launchId,
+    applied_model: selection.model,
+    applied_effort: effort,
+    observed_model: selection.model,
+    observed_effort: effort,
+    ...extra,
+  };
+  return /^gpt-/.test(selection.model) ? value : testTranscriptEvidence(value);
+};
 
 const codexApplicationEvidence = (selection, launchId, extra = {}) => applicationEvidence(
   { model: selection.model, effort: selection.reasoning_effort },
@@ -729,6 +737,7 @@ function writeGeneratedResearchAgent(agentsDir, resolution) {
     `name = "${resolution.agent_file.replace(/\.toml$/, '')}"`,
     `model = "${resolution.model}"`,
     `model_reasoning_effort = "${resolution.effort}"`,
+    'sandbox_mode = "read-only"',
     "developer_instructions = '''\nagent\n'''",
     '',
   ].join('\n');
@@ -759,7 +768,7 @@ test('decompose documents the three explicit boundary dispatches and refusal rul
     'requireGsdRole',
     'boundary.dispatch',
     'pipelineConfig.resolveDispatch',
-    'Before every researcher, planner, or checker callback',
+    'Before every researcher, planner, or checker launch',
     'configuration-free fallback',
     'gsd-phase-researcher',
     'gsd-planner',
@@ -785,7 +794,7 @@ test('decompose documents the three explicit boundary dispatches and refusal rul
   assert.ok(/direct\s+inline/.test(boundarySection), 'decompose.md must refuse direct inline launches');
   for (const phrase of [
     '**Codex runtime — logical model ladder**',
-    '**Workflow-native alias runtime — native alias ladder**',
+    '**Claude runtime — Anthropic alias ladder**',
     'opus/medium',
     'opus/max',
   ]) {
@@ -876,7 +885,7 @@ test('the documented GSD boundary call selects typed callbacks and refuses a mis
   }
 });
 
-test('decompose selects runtime before tuning and establishes context before one callback set', () => {
+test('decompose selects runtime before tuning and establishes context before three host calls', () => {
   const source = readRepo('plugins/delivery-pipeline/commands/decompose.md');
   const boundarySection = source.slice(
     source.indexOf('## Step 0.5 — Mandatory GSD runtime dispatch'),
@@ -884,11 +893,11 @@ test('decompose selects runtime before tuning and establishes context before one
   );
   const runtimeAt = boundarySection.indexOf('1. Identify the active host runtime');
   const tuneAt = boundarySection.indexOf('gsd-tune.cjs --check');
-  const configAt = boundarySection.indexOf('Before every researcher, planner, or checker callback');
-  const boundaryAt = boundarySection.indexOf('5. Use the canonical boundary call for each role');
+  const configAt = boundarySection.indexOf('Before every researcher, planner, or checker launch');
+  const boundaryAt = boundarySection.indexOf('5. The host uses the canonical boundary call for each role');
   assert.ok(
     runtimeAt >= 0 && tuneAt > runtimeAt && configAt > tuneAt && boundaryAt > configAt,
-    'the active runtime, tuning, and routed configuration must precede every boundary callback'
+    'the active runtime, tuning, and routed configuration must precede each host launch'
   );
   assert.match(
     boundarySection,
@@ -915,9 +924,9 @@ test('decompose selects runtime before tuning and establishes context before one
       && researcherAt < plannerAt && plannerAt < checkerAt,
     'phase/ADR context must precede the researcher, planner, and checker callbacks'
   );
-  assert.ok(normalized(chain).includes(normalized('exactly one set of three typed, boundary-owned callbacks')));
+  assert.ok(normalized(chain).includes(normalized('invoke the selected host exactly three times')));
   assert.ok(normalized(chain).includes(normalized('same explicit context')));
-  assert.ok(normalized(chain).includes(normalized('exactly three verified durable receipts')));
+  assert.ok(normalized(chain).includes(normalized('exactly three host dispatches and three verified receipts')));
   assert.ok(normalized(chain).includes(normalized('same checker receipt')));
   assert.ok(normalized(chain).includes(normalized('must not dispatch or record a second `gsd-plan-checker`')));
   assert.equal(
@@ -967,10 +976,12 @@ test('delivery launch docs route every role through the boundary and the generat
     assert.ok(source.includes(pair), `delivery docs must preserve the native ladder pair ${pair}`);
   }
   const investigate = readRepo('plugins/delivery-pipeline/commands/investigate.md');
-  for (const [name, doc] of [['deliver', deliver], ['pr-sentinel', sentinel], ['investigate', investigate]]) {
-    assert.ok(doc.includes('Workflow runtime'), `${name} must name the Workflow runtime by mechanism`);
-    assert.ok(!/\bClaude\b/.test(doc), `${name} must not use converter-rewritten Claude prose`);
-  }
+  assert.ok(deliver.includes('config.gsd.runtime')
+    && deliver.includes('claude-delivery-host.cjs')
+    && deliver.includes('codex-delivery-host.cjs'), 'deliver must select one provider host');
+  assert.ok(investigate.includes('claude-investigation-host.cjs')
+    && investigate.includes('codex-delivery-host.cjs'), 'investigate must select one provider host');
+  assert.ok(sentinel.includes('Workflow runtime'), 'the sentinel reference must name its Workflow runtime mechanism');
 
   for (const variant of codexStaticVariants(2)) {
     assert.ok(source.includes(variant.file), `delivery docs must name generated Codex variant ${variant.file}`);
@@ -1002,7 +1013,7 @@ test('delivery docs project selector, recorder, and workflow contracts without i
     '`repeat`/`repeat_exhausted` → `rethink`',
     'tickets: [{ id, planPath, baseRef, model, effort, signals }]',
     'priorReceipt, previous_dispatch_id, dispatch_id',
-    '`false` disables the Workflow path',
+    'The `pipeline.use_workflow` setting cannot select an',
     '**Cardinality is per work item.**',
     'round-scoped `pr-sentinel`',
     'pipeline.fable: auto',
@@ -1390,12 +1401,12 @@ test('Claude workflow coordinator selects the typed callback and refuses its abs
       });
       return value;
     },
-    applicationEvidence: ({ result: value }) => evidence.get(value),
+    applicationEvidence: ({ result: value }) => testTranscriptEvidence(evidence.get(value)),
     capabilities: sourceDispatchCapabilities,
     recorder: sourceDispatchRecorder,
     prompt: 'typed GSD coordinator prompt',
     role: 'decomposition',
-    model: 'opus',
+    model: 'claude-opus-5-5',
     effort: 'medium',
     gsdRole: 'gsd-planner',
     dispatchId: 'claude-gsd-workflow-coordinator',
@@ -1412,7 +1423,7 @@ test('Claude workflow coordinator selects the typed callback and refuses its abs
       recorder: sourceDispatchRecorder,
       prompt: 'missing typed callback',
       role: 'decomposition',
-      model: 'opus',
+      model: 'claude-opus-5-5',
       effort: 'medium',
       gsdRole: 'gsd-planner',
       dispatchId: 'claude-gsd-workflow-missing-typed',
@@ -1437,12 +1448,14 @@ test('Claude workflow coordinator accepts an explicit typed-only host and prefli
         launch_id: 'claude-host-typed-only',
         applied_model: launchOptions.model,
         applied_effort: launchOptions.effort,
+        observed_model: launchOptions.model,
+        observed_effort: launchOptions.effort,
         gsd_role: gsdRole,
         gsd_launch_mechanism: launchOptions.gsd_launch_mechanism,
       });
       return value;
     },
-    applicationEvidence: ({ result }) => evidence.get(result),
+    applicationEvidence: ({ result }) => testTranscriptEvidence(evidence.get(result)),
   };
 
   try {
@@ -1450,7 +1463,7 @@ test('Claude workflow coordinator accepts an explicit typed-only host and prefli
       host,
       prompt: 'typed-only host prompt',
       role: 'decomposition',
-      model: 'opus',
+      model: 'claude-opus-5-5',
       effort: 'medium',
       gsdRole: 'gsd-planner',
       dispatchId: 'claude-host-typed-only',
@@ -1464,7 +1477,7 @@ test('Claude workflow coordinator accepts an explicit typed-only host and prefli
         host,
         prompt: 'typed-only host without role',
         role: 'decomposition',
-        model: 'opus',
+        model: 'claude-opus-5-5',
         effort: 'medium',
         dispatchId: 'claude-host-typed-only-missing-role',
       }),
@@ -1971,8 +1984,8 @@ test('the routed-launch source sweep rejects native launches in shipped Markdown
 });
 
 const RUNTIME_OWNED_FILE_DIGESTS = Object.freeze({
-  'plugins/delivery-pipeline/scripts/runtime-adapters.cjs': '11126e9bbf4dac883b495f48e55504990ec358f739c8f314a4d147789c3ad346',
-  'plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs': 'b783ebc1cbf2f4af33cf697a98cf980a0696f3afefd8aad4f0056b52d17c276d',
+  'plugins/delivery-pipeline/scripts/runtime-adapters.cjs': '949748da1bccd51704f9a7382cce5a93b1c58f7acfea21f2ffffe315831a05e5',
+  'plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs': '95dde3dde56c8348274497901c2300f380a6ca0c9d2c3677a0c05224c02411f4',
 });
 
 test('Claude palette and provider adapter sources match their checked-in baselines and remain native', () => {
@@ -1980,7 +1993,7 @@ test('Claude palette and provider adapter sources match their checked-in baselin
     const actualDigest = crypto.createHash('sha256').update(fs.readFileSync(path.join(REPO, rel))).digest('hex');
     assert.equal(actualDigest, expectedDigest, `${rel} is a runtime-owned palette/provider file and must match its checked-in baseline`);
   }
-  assert.deepStrictEqual(CLAUDE_MODEL_ALIASES, { sonnet: 'sonnet', opus: 'opus', fable: 'fable' });
+  assert.deepStrictEqual(CLAUDE_MODEL_ALIASES, { sonnet: 'sonnet', opus: 'claude-opus-5-5', fable: 'fable' });
   assert.equal(readRepo('plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs').includes('runtime: \'claude\''), true);
   assert.equal(readRepo('plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs').includes('gpt-5.6-luna'), false);
   assert.equal(readRepo('plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs').includes('gpt-6-astra'), false);
@@ -2003,10 +2016,13 @@ test('investigate emits flat machine-readable decision lists', () => {
 
 test('autonomous rollout source keeps the gate versioned, provider-pure, and fail-closed', () => {
   const source = readRepo('plugins/delivery-pipeline/scripts/run-rollout.cjs');
-  assert.ok(source.includes("SCHEMA = 'shipyard.autonomous-rollout.v1'"));
-  assert.ok(source.includes("ROLLOUT_VERSION = 'v1'"));
+  assert.ok(source.includes("SCHEMA = 'shipyard.autonomous-rollout.v2'"));
+  assert.ok(source.includes("ROLLOUT_VERSION = 'v2'"));
+  assert.ok(source.includes("LEGACY_SCHEMA = 'shipyard.autonomous-rollout.v1'"));
+  assert.ok(source.includes("LEGACY_ROLLOUT_VERSION = 'v1'"));
   assert.ok(source.includes("source !== 'live'"));
-  assert.ok(source.includes("status === 'enabled'"));
+  assert.ok(source.includes('launches_enabled'));
+  assert.ok(source.includes('readCredentialStatus'));
   assert.ok(source.includes("providerFor(runtime)"));
   assert.ok(source.includes("--capability-only"));
   for (const file of ['run-contract.cjs', 'run-store.cjs', 'run-controller.cjs', 'run-waker.cjs', 'run-telemetry.cjs', 'usage-attribution.cjs', 'pipeline-stats.cjs']) {
@@ -2023,12 +2039,36 @@ test('delivery documents rollout status, technical waits, rollback, and human-on
     assert.ok(source.includes('run-rollout.cjs'));
     assert.ok(source.includes('unavailable'));
     assert.ok(source.includes('refused'));
-    assert.ok(source.includes('technical waits') && ['ci', 'review', 'quota', 'lease', 'host'].every((kind) => source.includes(kind)));
-    assert.ok(source.includes('historical records'));
-    assert.ok(source.includes('inherited model') || source.includes('inherited models'));
+    const lower = source.toLowerCase();
+    assert.ok(lower.includes('technical waits') && ['ci', 'review', 'quota', 'lease', 'host'].every((kind) => lower.includes(kind)));
+    assert.ok(lower.includes('historical records') || lower.includes('historical receipts'));
+    assert.ok(lower.includes('inherited model'));
   }
-  assert.ok(deliver.includes('Workflow runtime uses Anthropic and Codex uses\nOpenAI'));
+  assert.ok(deliver.includes('Claude uses Anthropic and\nCodex uses OpenAI'));
+  assert.ok(docs.includes('do not disable explicit user-issued command runs'));
   assert.ok(deliver.includes('protected default-branch merge'));
+});
+
+test('delivery routes model-bearing roles through one provider-specific shipped host', () => {
+  const deliver = readRepo('plugins/delivery-pipeline/commands/deliver.md');
+  const investigate = readRepo('plugins/delivery-pipeline/commands/investigate.md');
+  const decompose = readRepo('plugins/delivery-pipeline/commands/decompose.md');
+  const routing = deliver.slice(deliver.indexOf('**Runtime path selection.**'), deliver.indexOf('**Typed host adapter:'));
+  for (const entrypoint of [
+    'claude-delivery-host.cjs', 'codex-delivery-host.cjs',
+    'claude-investigation-host.cjs', 'claude-decompose-host.cjs',
+    'codex-decompose-host.cjs', 'claude-role-host.cjs',
+  ]) {
+    assert.ok(routing.includes(entrypoint), `delivery runtime routing must name ${entrypoint}`);
+  }
+  assert.match(routing, /Architecture review and integration[\s\S]*claude-role-host\.cjs[\s\S]*codex-delivery-host\.cjs/);
+  assert.match(routing, /PR sentinel[\s\S]*claude-role-host\.cjs[\s\S]*codex-delivery-host\.cjs[\s\S]*per ticket/);
+  assert.ok(investigate.includes('claude-investigation-host.cjs')
+    && investigate.includes('codex-delivery-host.cjs'));
+  assert.ok(decompose.includes('claude-decompose-host.cjs')
+    && decompose.includes('codex-decompose-host.cjs'));
+  assert.match(deliver, /The command must not invoke a native Workflow\s+or Agent directly/);
+  assert.doesNotMatch(deliver, /Codex has no Workflow tool[\s\S]{0,100}built-in Agent path/);
 });
 
 test('GSD sync projects controller state without volatile owner or store fields', () => {
@@ -2052,6 +2092,14 @@ test('runtime smoke uses live capability-only probing and has no synthetic enabl
   assert.ok(smoke.includes('unavailable'));
   assert.ok(smoke.includes('refused'));
   assert.doesNotMatch(smoke, /synthetic|fixture|fake|mock/i);
+});
+
+test('Codex live smoke refuses the source checkout before probing or launching a model', () => {
+  const result = spawnSync('bash', [
+    path.join(REPO, 'tests/smoke/codex-runtime-smoke.sh'), '--live', '--worktree', REPO,
+  ], { cwd: REPO, encoding: 'utf8' });
+  assert.equal(result.status, 1, result.stderr);
+  assert.equal(JSON.parse(result.stdout).reason, 'source_worktree_not_allowed');
 });
 
 done();

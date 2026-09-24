@@ -6,6 +6,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { execFileSync, spawn } = require('node:child_process');
 const { suite, test, done, assert } = require('./assert-harness.cjs');
+const { transcriptEvidence: testTranscriptEvidence } = require('./claude-test-evidence.cjs');
 const {
   createSessionHandoff,
   resolveRepositoryIdentity,
@@ -26,6 +27,10 @@ const {
   registerClaudeWorkflowHost,
   runClaudeWorkflow,
 } = require('../../plugins/delivery-pipeline/scripts/claude-workflow-host.cjs');
+
+function transcriptEvidence(value) {
+  return testTranscriptEvidence(value);
+}
 
 function git(cwd, ...args) {
   return execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8' }).trim();
@@ -334,7 +339,7 @@ test('the Claude workflow host and Codex adapter both enforce the host-held owne
       agent: async (prompt, options) => {
         claudeCalls++;
         const result = { prompt };
-        evidence.set(result, { launch_id: 'claude-owner-launch', applied_model: options.model, applied_effort: options.effort, observed_model: options.model, observed_effort: options.effort });
+        evidence.set(result, transcriptEvidence({ launch_id: 'claude-owner-launch', applied_model: options.model, applied_effort: options.effort, observed_model: options.model, observed_effort: options.effort }));
         return result;
       },
       parallel: async (thunks) => Promise.all(thunks.map((thunk) => thunk())),

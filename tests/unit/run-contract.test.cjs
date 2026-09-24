@@ -24,7 +24,7 @@ test('creates a frozen scoped contract with provider-pure model evidence', () =>
   assert.equal(run.schema, 'shipyard.run.v1');
   assert.equal(run.runtime.runtime, 'codex');
   assert.equal(run.runtime.provider, 'openai');
-  assert.equal(run.dispatch.model, 'gpt-5.6-luna');
+  assert.equal(run.dispatch.model, 'gpt-6-luna');
   assert.equal(run.dispatch.model_key, 'luna');
   assert.ok(Object.isFrozen(run));
   assert.ok(Object.isFrozen(run.repository));
@@ -53,7 +53,7 @@ test('rejects a provider or model from the other runtime', () => {
     (error) => error.code === 'RUNTIME_PROVIDER_MISMATCH',
   );
   assert.throws(
-    () => scope.createDispatchIdentity({ dispatch_id: 'd', role: 'executor', runtime: 'claude', provider: 'anthropic', model: 'gpt-5.6-luna' }),
+    () => scope.createDispatchIdentity({ dispatch_id: 'd', role: 'executor', runtime: 'claude', provider: 'anthropic', model: 'gpt-6-luna' }),
     (error) => error.code === 'RUNTIME_MODEL_MISMATCH',
   );
   assert.throws(

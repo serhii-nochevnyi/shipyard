@@ -28,6 +28,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { suite, test, done, assert } = require(path.join(__dirname, 'assert-harness.cjs'));
+const { nativeModel, transcriptEvidence: testTranscriptEvidence } = require('./claude-test-evidence.cjs');
 const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
 const {
   createDispatchBoundary,
@@ -48,8 +49,8 @@ const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
 const WORKFLOW_CAPABILITIES = Object.freeze({
   supportedModels: Object.values(CLAUDE_MODEL_ALIASES),
   supportedEfforts: ['low', 'high', 'medium', 'max'],
-  observedModel: false,
-  observedEffort: false,
+  observedModel: true,
+  observedEffort: true,
 });
 const workflowStores = [fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-workflow-dispatch-'))];
 const WORKFLOW_RECORDER = createDurableRecorder(workflowStores[0]);
@@ -58,7 +59,7 @@ let workflowLaunch = 0;
 const workflowApplicationEvidence = ({ result }) => {
   const evidence = hostEvidence.get(result);
   if (!evidence) throw new Error('test Claude host returned no application evidence');
-  return evidence;
+  return testTranscriptEvidence(evidence);
 };
 const workflowArtifactConsumer = ({ artifact, result, record }) => {
   const ref = `${artifact && artifact.worktreePath ? artifact.worktreePath : '/test-worktree'}/.shipyard-role-artifact.json`;
@@ -183,6 +184,8 @@ function harness({ agent, results = (all) => all } = {}) {
           launch_id: `test-workflow-launch-${++workflowLaunch}`,
           applied_model: opts.model,
           applied_effort: opts.effort,
+          observed_model: nativeModel(opts.model),
+          observed_effort: opts.effort,
         });
       }
       return value;
@@ -238,7 +241,7 @@ const TICKETS = [
 
 const driftTickets = (tickets) => tickets.map((ticket) => ({
   ...ticket,
-  model: 'opus',
+  model: 'claude-opus-5-5',
   effort: 'max',
 }));
 
@@ -497,7 +500,7 @@ const PR = {
   id: 'T-99-01', pr: 7, branch: 'ticket/T-99-01', worktreePath: '/w/T-99-01',
   base: 'epic/99',
   planPath: '/p/99-01-PLAN.md', needsCiFix: true, needsReviewFix: true,
-  model: 'opus', effort: 'medium',
+  model: 'claude-opus-5-5', effort: 'medium',
 };
 const DISPATCH = [
   {
@@ -508,19 +511,19 @@ const DISPATCH = [
   {
     name: 'fix-round',
     args: (over = {}) => ({
-      prs: [{ ...PR, model: 'opus', effort: 'medium', ...over }],
+      prs: [{ ...PR, model: 'claude-opus-5-5', effort: 'medium', ...over }],
       ciFixRefPath: '/x/ci-fix.md', reviewFixRefPath: '/x/review-fix.md',
       reinitScript: '/x/scripts/reviewers.cjs',
     }),
-    resolved: { model: 'opus', effort: 'medium' },
+    resolved: { model: 'claude-opus-5-5', effort: 'medium' },
   },
   {
     name: 'drift-gate',
     args: (over = {}) => ({
-      tickets: [{ ...TICKETS[0], model: 'opus', effort: 'max', ...over }],
+      tickets: [{ ...TICKETS[0], model: 'claude-opus-5-5', effort: 'max', ...over }],
       driftRefPath: '/x/drift-check.md', baseRef: 'origin/main',
     }),
-    resolved: { model: 'opus', effort: 'max' },
+    resolved: { model: 'claude-opus-5-5', effort: 'max' },
   },
 ];
 
@@ -579,10 +582,10 @@ test('fix-round prompt requires the comment gate before a repair push', async ()
 
 test('executor critical selection is resolved by signals and preserves Claude Sonnet/max → Opus/low', async () => {
   const { calls } = await run('executors', {
-    tickets: [{ ...TICKETS[0], model: 'opus', effort: 'low', signals: { critical: true } }],
+    tickets: [{ ...TICKETS[0], model: 'claude-opus-5-5', effort: 'low', signals: { critical: true } }],
   });
   assert.strictEqual(calls.length, 1);
-  assert.strictEqual(calls[0].opts.model, 'opus');
+  assert.strictEqual(calls[0].opts.model, 'claude-opus-5-5');
   assert.strictEqual(calls[0].opts.effort, 'low');
 });
 
@@ -597,7 +600,7 @@ test('workflow fan-outs retain combined signal evidence and never infer an omitt
   const executor = await run('executors', {
     tickets: [{
       ...TICKETS[0],
-      model: 'opus',
+      model: 'claude-opus-5-5',
       effort: 'low',
       signals: combinedSignals,
     }],
@@ -605,7 +608,7 @@ test('workflow fan-outs retain combined signal evidence and never infer an omitt
   assert.strictEqual(executor.calls.length, 1);
   assert.deepStrictEqual(
     [executor.calls[0].opts.model, executor.calls[0].opts.effort],
-    ['opus', 'low'],
+    ['claude-opus-5-5', 'low'],
   );
   const executorRecord = WORKFLOW_RECORDER.getVerifiedRecord(executor.value[0].receipt.dispatch_id);
   assert.equal(executorRecord.resolution.logical_rung, 'critical');
@@ -646,7 +649,7 @@ test('workflow fan-outs retain combined signal evidence and never infer an omitt
   assert.strictEqual(fixed.calls.length, 1);
   assert.deepStrictEqual(
     [fixed.calls[0].opts.model, fixed.calls[0].opts.effort],
-    ['opus', 'max'],
+    ['claude-opus-5-5', 'max'],
     'fixed drift-check remains on its native base tuple',
   );
   const fixedRecord = WORKFLOW_RECORDER.getVerifiedRecord(fixed.value[0].receipt.dispatch_id);
@@ -676,7 +679,7 @@ test('executor preserves canonical risk/checkpoint facts and rejects contradicto
     { signals: { risk: 'high', checkpoint: true }, risk: 'high', checkpoint: true },
   ]) {
     const { calls, value } = await run('executors', DISPATCH[0].args({
-      ...facts, model: 'opus', effort: 'low',
+      ...facts, model: 'claude-opus-5-5', effort: 'low',
     }));
     assert.strictEqual(calls.length, 1);
     const record = WORKFLOW_RECORDER.getVerifiedRecord(value[0].receipt.dispatch_id);
@@ -686,7 +689,7 @@ test('executor preserves canonical risk/checkpoint facts and rejects contradicto
   const inert = await run('executors', DISPATCH[0].args({ risk: 'high' }));
   assert.strictEqual(inert.calls.length, 1, 'high risk alone must retain the canonical base tuple');
   for (const facts of [
-    { risk: 'high', model: 'opus', effort: 'high' },
+    { risk: 'high', model: 'claude-opus-5-5', effort: 'high' },
     { checkpoint: true, signals: { checkpoint: false } },
     { risk: 'high', signals: { risk: 'low' } },
     { signals: [] },
@@ -710,7 +713,7 @@ for (const role of ['ci-fix', 'review-fix']) {
       const args = DISPATCH[1].args({
         needsCiFix: role === 'ci-fix', needsReviewFix: role === 'review-fix',
         signatureState: state, signals: { signatureState: state },
-        model: 'opus', effort: state === 'first' ? 'medium' : 'max',
+        model: 'claude-opus-5-5', effort: state === 'first' ? 'medium' : 'max',
         ...(prior ? {
           priorReceipt: JSON.parse(JSON.stringify(prior)),
           previous_dispatch_id: prior.dispatch_id,
@@ -737,7 +740,7 @@ test('repair refuses absent, invented or contradictory predecessor inputs before
     { signatureState: 'repeat', priorReceipt: {}, priorApplied: { dispatch_id: 'different' } },
   ]) {
     const error = await rejects('fix-round', DISPATCH[1].args({
-      model: 'opus', effort: 'max', ...over,
+      model: 'claude-opus-5-5', effort: 'max', ...over,
     }));
     assert.ok(['DispatchPolicyError', 'DispatchBoundaryError'].includes(error.name));
   }
@@ -747,7 +750,7 @@ test('workflow agent options and context cannot bypass selection checks or reser
   for (const invalid of [
     { inherit: true }, { inline: true }, { session_inherited: true }, { session: { inherit: true } },
     { requested_effort: 'high' }, { applied_effort: 'high' },
-    { model: 'opus' }, { effort: 'high' }, [],
+    { model: 'claude-opus-5-5' }, { effort: 'high' }, [],
   ]) {
     for (const field of ['agentOptions', 'context']) {
       const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-workflow-options-'));
@@ -926,7 +929,7 @@ test('workflow dispatch has no implicit host resources and rejects self-attested
       recorder,
       applicationEvidence: () => ({
         launch_id: 'host-launch',
-        applied_model: 'opus',
+        applied_model: 'claude-opus-5-5',
         applied_effort: 'medium',
       }),
     }),
@@ -955,6 +958,8 @@ test('explicit Claude host owns workflow capabilities and receipt services', asy
         launch_id: 'host-owned-launch',
         applied_model: options.model,
         applied_effort: options.effort,
+        observed_model: nativeModel(options.model),
+        observed_effort: options.effort,
       });
       return value;
     },
@@ -980,8 +985,8 @@ suite('strict Claude adapter — native aliases and explicit application evidenc
 const CLAUDE_CAPABILITIES = {
   supportedModels: Object.values(CLAUDE_MODEL_ALIASES),
   supportedEfforts: ['high', 'medium', 'max'],
-  observedModel: false,
-  observedEffort: false,
+  observedModel: true,
+  observedEffort: true,
 };
 
 function claudeFixture(extra = {}) {
@@ -990,11 +995,13 @@ function claudeFixture(extra = {}) {
     capabilities: CLAUDE_CAPABILITIES,
     launch: (selection) => {
       calls.push(selection);
-      return {
+      return testTranscriptEvidence({
         launch_id: `claude-launch-${calls.length}`,
         applied_model: selection.model,
         applied_effort: selection.effort,
-      };
+        observed_model: nativeModel(selection.model),
+        observed_effort: selection.effort,
+      });
     },
     ...(extra.host || {}),
   };
@@ -1004,7 +1011,7 @@ function claudeFixture(extra = {}) {
   return { calls, adapter, boundary, recorder };
 }
 
-test('Claude receives the canonical native alias and effort for every base role', () => {
+test('Claude base roles carry exact-session native model and effort evidence', () => {
   const f = claudeFixture();
   for (const role of policy.ROLES) {
     const result = f.boundary.dispatch({ runtime: 'claude', role });
@@ -1013,8 +1020,9 @@ test('Claude receives the canonical native alias and effort for every base role'
     assert.ok(!/^gpt-/.test(launch.model), `${role} must not receive a Codex model id`);
     assert.strictEqual(result.applied_model, launch.model);
     assert.strictEqual(result.applied_effort, launch.effort);
-    assert.strictEqual(result.observed_model, 'unknown');
-    assert.strictEqual(result.observed_effort, 'unknown');
+    assert.strictEqual(result.observed_model, nativeModel(launch.model));
+    assert.strictEqual(result.observed_effort, launch.effort);
+    assert.equal(result.receipt.selection_evidence.source, 'claude-session-assistant-transcript');
     assert.strictEqual(result.receipt.compliance, 'verified');
   }
 });
@@ -1029,11 +1037,11 @@ test('Claude repair launches consume the preceding boundary receipt and preserve
     signals: { signatureState: 'repeat', priorApplied: base.receipt },
   });
   assert.deepStrictEqual(f.calls.map((selection) => [selection.model, selection.effort]), [
-    ['opus', 'medium'],
-    ['opus', 'max'],
+    ['claude-opus-5-5', 'medium'],
+    ['claude-opus-5-5', 'max'],
   ]);
   assert.strictEqual(repeat.receipt.compliance, 'verified');
-  assert.strictEqual(repeat.receipt.applied_model, 'opus');
+  assert.strictEqual(repeat.receipt.applied_model, 'claude-opus-5-5');
   assert.strictEqual(repeat.receipt.applied_effort, 'max');
 });
 
@@ -1082,7 +1090,7 @@ test('missing capabilities, launch methods, and application evidence fail closed
 test('Claude rejects contradictory, inherited, and stale launch selections', () => {
   const f = claudeFixture();
   for (const context of [
-    { model: 'opus' },
+    { model: 'claude-opus-5-5' },
     { effort: 'medium' },
     { launch_arguments: { model: 'fable' } },
     { session: { inherit: true } },

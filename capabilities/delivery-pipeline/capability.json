@@ -60,7 +60,7 @@
     },
     "delivery_pipeline.codex_models": {
       "type": "string",
-      "default": "gpt-5.6-sol:high@0.153.1, gpt-5.6-sol:xhigh@0.153.1",
+      "default": "gpt-6-sol:high@0.155.1, gpt-6-sol:xhigh@0.155.1",
       "description": "The Codex model palette, in preference order: 'model[:effort][@min_cli]' per entry, comma separated. The effort is the one to USE for that model, never the deepest it accepts; min_cli is the Codex CLI version that can first configure it, below which the generator writes the previous entry instead. First entry is the workhorse floor every agent gets; last is the ceiling, taken statically by the integrator and reachable elsewhere through adaptive '-critical' or recovery '-deep' escalation agents. An empty value writes no model at all, leaving every agent on the CLI default. Routed selection is always taken from ADR-014's role ladder."
     },
     "delivery_pipeline.model_ladder": {

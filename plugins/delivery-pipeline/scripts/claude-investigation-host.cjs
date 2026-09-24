@@ -1,13 +1,10 @@
 'use strict';
 
-// Production entry point for /shipyard:investigate. Keep the workflow path
-// owned by the command adapter so callers cannot silently substitute a
-// different DSL script while still claiming to run the research contract.
 const {
   registerClaudeWorkflowHost,
-  runClaudeWorkflowCli,
   WORKFLOW_SCRIPTS,
 } = require('./claude-workflow-host.cjs');
+const { createClaudeDeliveryHost, runClaudeDeliveryCli } = require('./claude-delivery-host.cjs');
 
 const INVESTIGATION_RESEARCH_SCRIPT = WORKFLOW_SCRIPTS['investigation-research'];
 
@@ -45,11 +42,12 @@ function runInvestigationResearch(options = {}) {
 }
 
 function runInvestigationResearchCli(argv = process.argv.slice(2), stdout = process.stdout) {
-  return runClaudeWorkflowCli(
-    ['--workflow', 'investigation-research', ...argv],
-    stdout,
-    (host, args) => runInvestigationResearch({ ...host, args }),
-  );
+  if (!Array.isArray(argv) || argv[0] !== '--request-file' || argv.length !== 2) {
+    const error = new Error('claude-investigation-host: --request-file <json> is required');
+    error.code = 'INVALID_HOST';
+    throw error;
+  }
+  return runClaudeDeliveryCli(['--workflow', 'investigation-research', ...argv], stdout);
 }
 
 module.exports = Object.freeze({
@@ -57,6 +55,14 @@ module.exports = Object.freeze({
   registerInvestigationWorkflowHost,
   runInvestigationResearchCli,
   runInvestigationResearch,
+  runInvestigationRuntime(options = {}) {
+    if (!isObject(options) || !isObject(options.args)) {
+      const error = new Error('claude-investigation-host: runtime args must be an object');
+      error.code = 'INVALID_HOST';
+      throw error;
+    }
+    return createClaudeDeliveryHost(options).run('investigation-research', options.args);
+  },
 });
 
 if (require.main === module) {
