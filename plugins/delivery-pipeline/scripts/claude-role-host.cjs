@@ -667,6 +667,18 @@ function resultFrom(output) {
   return result;
 }
 
+function roleOutputSchema(role) {
+  const properties = { blocking_count: { type: 'integer', minimum: 0 } };
+  if (role === 'arch-review') {
+    Object.assign(properties, {
+      id: { type: 'string' }, pr: { type: 'integer', minimum: 1 }, verdict: { type: 'string' },
+      head: { type: 'string' }, base_tree: { type: 'string' }, summary: { type: 'string' },
+      findings: { type: 'array' },
+    });
+  }
+  return { type: 'object', properties };
+}
+
 function validateResult(prepared, result) {
   if (prepared.role === 'arch-review') {
     if (result.id !== prepared.ticket || result.pr !== prepared.pr || result.head !== prepared.canonical.head
@@ -755,6 +767,7 @@ function buildBoundary(prepared, runtime, dispatchId, ownerId) {
         const child = await runtime.agent(prepared.prompt, {
           model: selection.model,
           effort: selection.effort,
+          schema: roleOutputSchema(prepared.role),
           ...(prepared.readOnlySmoke ? { readOnly: true } : {}),
         });
         launched = child;

@@ -20,6 +20,7 @@ const REQUEST_SCHEMA = 'shipyard.claude-delivery-request.v1';
 const REQUEST_MAX_BYTES = 1024 * 1024;
 const REVIEW_FEEDBACK_MAX_BYTES = 32768;
 const REVIEW_DISPOSITIONS_MAX_BYTES = 65536;
+const SUMMARY_MAX_CHARS = roleArtifact.SUMMARY_MAX_CHARS;
 
 function object(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -29,6 +30,11 @@ function reject(message) {
   const error = new Error(`claude-delivery-host: ${message}`);
   error.code = 'INVALID_HOST';
   throw error;
+}
+
+function capSummary(value) {
+  const chars = Array.from(value);
+  return chars.length <= SUMMARY_MAX_CHARS ? value : `${chars.slice(0, SUMMARY_MAX_CHARS - 3).join('')}...`;
 }
 
 function parallel(jobs) {
@@ -509,10 +515,15 @@ function sealPlanningResearch(input, options, scope) {
   if (!match || artifact.role !== 'research' || artifact.ticket !== artifact.subject
       || !object(result) || result.id !== match[2]
       || !['completed', 'blocked'].includes(result.status)
-      || typeof result.summary !== 'string' || Array.from(result.summary).length > 500
+      || typeof result.summary !== 'string'
       || !object(record.receipt) || record.receipt.compliance !== 'verified'
       || typeof record.receipt.dispatch_id !== 'string' || !record.receipt.dispatch_id) {
     reject('planning research has invalid scope or result');
+  }
+  const summaryLength = Array.from(result.summary).length;
+  if (summaryLength > SUMMARY_MAX_CHARS) {
+    result.summary = capSummary(result.summary);
+    process.stderr.write(`claude-delivery-host: research line ${result.id} summary was ${summaryLength} characters; bounded to 500 (full finding at ${artifact.artifactPath})\n`);
   }
   const worktree = fs.realpathSync(scope.worktree);
   if (fs.realpathSync(artifact.worktreePath) !== worktree) {

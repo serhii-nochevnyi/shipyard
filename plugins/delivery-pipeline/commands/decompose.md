@@ -64,6 +64,22 @@ output is accepted.
    `phases/*/`*-PLAN.md for mentions of ADRs. If ambiguous — ask.
 3. No ADR at all → say to run `/shipyard:investigate` first, and stop.
 4. Multiple candidates → AskUserQuestion: which ADR (or several into one phase).
+5. Bootstrap a missing GSD project from the accepted ADR: when
+   `.planning/config.json`, `.planning/ROADMAP.md` or
+   `.planning/REQUIREMENTS.md` is missing, run `node
+   ${CLAUDE_PLUGIN_ROOT}/scripts/adr-bootstrap.cjs --adr <accepted ADR>
+   [--phase <N>] --json` from the project root; it creates only missing
+   files. Exit 1 means the ADR has no decisions — relay the message to the
+   user and stop. Requirements come from the bootstrap report, never
+   invented. `gsd-tune --apply` (Step 0.5) is allowed only for a
+   `config.json` this run's bootstrap created; otherwise Step 0.5 stays "do
+   not apply tuning automatically".
+6. Warn once on untracked planning, and never block: run `git ls-files
+   --error-unmatch .planning >/dev/null 2>&1`; if `.planning/` is not
+   tracked, tell the user once — delivery worktrees are created from git, so
+   they will not contain the PLAN files or graph, and the conveyor falls
+   back to `graph-dir.cjs` resolution. Remedy: commit `.planning/`, or keep
+   it untracked deliberately and pass the graph dir explicitly.
 
 ## Step 0.5 — Mandatory GSD runtime dispatch
 
@@ -116,6 +132,10 @@ boundary contract describes what the host enforces.
    The boundary resolves and validates the canonical policy, invokes the
    runtime adapter, verifies application evidence, and records the receipt.
    Do not resolve a model and then launch it through another path.
+6. On a non-zero exit from any of these three host launches, read its
+   `hint[<CODE>]` stderr line and explain the hint and its remedy to the
+   user in the user's language; never propose bypassing the host or
+   switching runtime because of it.
 
 The GSD role mapping is fixed, explicit, and runtime-specific. Each runtime
 keeps its own native model ladder; never pass a logical model name from one
@@ -275,8 +295,11 @@ context first, then one callback set, then materialization verification.
    non-zero when an ADR has no decisions. Stop on that error; do not pass the raw ADR
    to GSD.
 3. Gather/invoke the GSD context by running
-   `/gsd-plan-phase <N> --ingest .planning/.adr-ingest/*.ingest.md [--tdd|--mvp]` only through the
-   Skill. The Skill must first establish one explicit context carrying phase
+   `/gsd-plan-phase <N> --ingest .planning/.adr-ingest/*.ingest.md [--skip-ui] [--tdd|--mvp]` only through the
+   Skill. Add `--skip-ui` only when every selected ADR's header carries the
+   line `- **UI design:** none` (case-insensitive on `none`); when any
+   selected ADR lacks that line, invoke exactly as before, with no
+   `--skip-ui`. The Skill must first establish one explicit context carrying phase
    `<N>`, the ADR path(s), mode, granularity, and relevant reads; no callback is
    eligible before that context is fixed. If GSD, the Skill, callback wiring,
    or the durable recorder is unavailable, refuse before launching or making
@@ -431,6 +454,14 @@ a missing one gives the executor an incomplete base. `validate-graph` will itsel
 (`epic/<phase-dir>`), the primary parent, and `pr_base`; multiple dependencies of the same
 phase (diamond) it will flag as a warning — linearize the chain where possible.
 
+**Ordering without a code dependency is not a `depends_on`.** Linearize only
+if the child needs every parent's code at once — a sequencing preference
+alone is not a reason to add the edge. `validate-graph.cjs` warns when a
+same-phase dependency "shares no files_modified" with its parent; read that
+warning as a prompt to re-check the edge, not as a Gate 2 error, since a real
+import dependency (the child's code importing something the parent
+introduces) legitimately shares no files and may still trigger it correctly.
+
 ## Step 4 — Gate 2
 
 Gate 2 is a MECHANICAL check, not a judgment. It passes if and only if
@@ -543,72 +574,29 @@ every repository, so two repositories exporting to the same Jira project must
 never find-and-update each other's issue. Derive `<owner>` and `<repo>` once
 per run from `gh repo view --json nameWithOwner --jq .nameWithOwner` (a raw
 `owner/repo` string, not the JSON object `--json` alone would return); split
-it on `/`, lowercase each half, sanitize to label-safe characters. Use these
-two values
-directly everywhere below — they are not collapsed into one slug, because the
-"Source of truth" pointer line needs `<owner>/<repo>` as a separate, checkable
-field (see the lookup order below), not a pre-joined string.
+it on `/`, lowercase each half, sanitize to label-safe characters, and pass
+them as `--repo <owner>/<repo>` below.
 
-**Idempotency by marker label (survives re-runs and frontmatter edits).** Each
-issue carries a stable, repo-namespaced label:
-`shipyard-<owner>-<repo>-T-<phase>-<plan>` (e.g. `shipyard-acme-myproj-T-01-02`),
-the epic carries `shipyard-epic-<owner>-<repo>-<phase>`. Lookup order:
-1. `searchJiraIssuesUsingJql` for the new, namespaced label (e.g.
-   `project = <KEY> AND labels = "shipyard-<owner>-<repo>-T-<phase>-<plan>"`)
-   — found → update summary/description if changed; done.
-2. Not found → fall back to the legacy bare label
-   (`shipyard-<ticket-id>` / `shipyard-epic-<phase>`) ONLY as a candidate.
-   A plan path alone (e.g. `.planning/phases/01-x/01-01-PLAN.md`) does NOT
-   prove the issue is this repo's: every GSD project uses the same
-   phase/plan numbering, so two unrelated repositories routinely have
-   byte-identical plan paths. The "Source of truth" line is the disambiguator,
-   and it is checked in two cases:
-   - it already carries an `<owner>/<repo>` prefix (a repo claimed this issue
-     on a prior run) → treat as a match ONLY if that prefix equals the one
-     just derived; a match naming a DIFFERENT `<owner>/<repo>` is never
-     touched — leave it alone and fall through to create.
-   - it carries no prefix yet (a pre-migration issue, written before this rule
-     existed) → the plan path is the only signal available for it, so a path
-     match is treated as this repo's and claimed now. This is a one-time,
-     best-effort migration for the common case of one repository per Jira
-     project; the claim is what makes the ambiguity resolvable for every run
-     after it (below).
-   On a legacy match: add the new namespaced label, update summary/description
-   if changed, REWRITE the "Source of truth" line to add this repo's
-   `<owner>/<repo>` prefix (so a different repository's later run sees the
-   prefix and correctly falls through to create instead of re-claiming this
-   issue), and add a comment "label migrated".
-3. Neither found → create, with the new namespaced label from the start.
-Never create a duplicate, and never update an issue whose source-of-truth line
-names another repository.
+**Procedure — run the deterministic plan, then execute it verbatim.** The
+export content, the repo-namespaced labels, and the `is blocked by` link
+direction are computed once by a script instead of being worked out ad hoc
+per run:
 
-**Procedure** (read `tickets.json` for the validated graph; process in dependency
-order so parents exist before links):
-
-1. Resolve the project (and cloudId) via the MCP; verify it is visible.
-   Resolve `<owner>` and `<repo>` (see above) once for the run.
-2. Per phase (if `epic_issue_type` set): find-or-create the phase Epic.
-   Summary `[<phase>] <phase title>`, label
-   `shipyard-epic-<owner>-<repo>-<phase>`, description: what the phase
-   delivers + its epic branch (`epic/<phase-dir>`).
-3. Per ticket, find-or-create the issue:
-   - summary: `<ticket-id>: <title>` (English);
-   - label: `shipyard-<owner>-<repo>-T-<phase>-<plan>` (+ optional `shipyard`
-     label);
-   - description (English, concise projection — NOT the whole plan): Goal, Scope,
-     Acceptance criteria (from the PLAN body), risk, branch (`ticket/...`),
-     `pr_base`, and a pointer line written as ONE line, with no break inside
-     it: `Source of truth: <owner>/<repo>:<plan path> (this issue is a generated projection)`.
-     The `<owner>/<repo>` prefix is what the legacy-label lookup above matches
-     on, so it is written on every issue from this ticket onward, not only
-     during a migration;
-   - parent/epic link to the phase Epic (when epics are enabled);
-   - for each `depends_on`, a "is blocked by" issue link to that dependency's
-     issue (`createIssueLink`; pick the link type via `getIssueLinkTypes`).
-4. Write the resulting key back into the plan frontmatter under
-   `delivery.jira: <KEY>` (best-effort traceability), then re-run
-   `validate-graph.cjs` so `tickets.json` carries the `jira` field. The label is
-   the primary idempotency key; the frontmatter key is a convenience mirror.
+1. Run `node ${CLAUDE_PLUGIN_ROOT}/scripts/jira-export.cjs plan --repo
+   <owner>/<repo> --project <KEY> [--issue-type <t>] [--epic-issue-type
+   <t|none>] --json` (it reads `tickets.json` for the validated graph and
+   returns the ordered steps — parents before their links — with content,
+   labels and link direction already resolved).
+2. Execute each step of that plan verbatim through the connected Jira MCP
+   (see Tooling above): search, create or update an issue exactly as the
+   step instructs, resolving the link type whose inward description reads
+   `is blocked by` (`getIssueLinkTypes`) before calling `createIssueLink`.
+   Do not reinterpret, reorder, skip or add a step the plan did not emit.
+3. For each issue the plan created or found, run `node
+   ${CLAUDE_PLUGIN_ROOT}/scripts/jira-export.cjs record <T-NN-MM> <KEY>` —
+   this writes `delivery.jira: <KEY>` back into that ticket's plan
+   frontmatter.
+4. Re-run `validate-graph.cjs` so `tickets.json` carries the `jira` field.
 5. Report a compact map to the user (ticket-id → Jira key, epic key) in the
    user's language.
 

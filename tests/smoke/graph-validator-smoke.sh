@@ -100,6 +100,54 @@ else
   bad "a diamond with an ordered overlapping pair passes" "$out"
 fi
 
+mkproj orderonly
+mkdir -p "$WORK/orderonly/.planning/phases/01-x"
+plan orderonly '01-x/01-PLAN.md' T-01-01 ''        'src/a.ts' REQ-1
+plan orderonly '01-x/02-PLAN.md' T-01-02 'T-01-01' 'src/b.ts' REQ-2
+if out="$(run_validator orderonly)"; then
+  grep -q "T-01-02: depends_on T-01-01 shares no files_modified with it" <<<"$out" \
+    && ok "a same-phase dependency sharing no files_modified is warned about" \
+    || bad "a same-phase dependency sharing no files_modified is warned about" "$out"
+else
+  bad "a same-phase order-only dependency still validates (warn, not fail)" "$out"
+fi
+
+mkproj orderoverlap
+mkdir -p "$WORK/orderoverlap/.planning/phases/01-x"
+plan orderoverlap '01-x/01-PLAN.md' T-01-01 ''        'src/a.ts' REQ-1
+plan orderoverlap '01-x/02-PLAN.md' T-01-02 'T-01-01' 'src/a.ts' REQ-2
+if out="$(run_validator orderoverlap)"; then
+  grep -q 'shares no files_modified' <<<"$out" \
+    && bad "a same-phase dependency sharing a file is not warned about" "$out" \
+    || ok "a same-phase dependency sharing a file is not warned about"
+else
+  bad "a same-phase overlapping dependency validates" "$out"
+fi
+
+mkproj orderonlycross
+mkdir -p "$WORK/orderonlycross/.planning/phases/01-a" "$WORK/orderonlycross/.planning/phases/02-b"
+plan orderonlycross '01-a/01-PLAN.md' T-01-01 ''        'src/a.ts' REQ-1
+plan orderonlycross '02-b/01-PLAN.md' T-02-01 'T-01-01' 'src/b.ts' REQ-2
+if out="$(run_validator orderonlycross)"; then
+  grep -q 'shares no files_modified' <<<"$out" \
+    && bad "a cross-phase dependency does not get the order-only warning" "$out" \
+    || ok "a cross-phase dependency does not get the order-only warning"
+else
+  bad "a cross-phase order-only dependency validates" "$out"
+fi
+
+mkproj orderonlycrossrepo
+mkdir -p "$WORK/orderonlycrossrepo/.planning/phases/01-a"
+plan orderonlycrossrepo '01-a/01-PLAN.md' T-01-01 ''        'src/a.ts' REQ-1 low false '' 'repo: acme/webapp'
+plan orderonlycrossrepo '01-a/02-PLAN.md' T-01-02 'T-01-01' 'src/b.ts' REQ-2
+if out="$(run_validator orderonlycrossrepo)"; then
+  grep -q 'shares no files_modified' <<<"$out" \
+    && bad "a cross-repo dependency does not get the order-only warning" "$out" \
+    || ok "a cross-repo dependency does not get the order-only warning"
+else
+  bad "a cross-repo order-only dependency validates" "$out"
+fi
+
 # ── 2. a genuinely unordered overlap must still be caught ───────────────────
 mkproj overlap
 mkdir -p "$WORK/overlap/.planning/phases/01-x"
