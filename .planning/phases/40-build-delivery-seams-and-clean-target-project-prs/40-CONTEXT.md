@@ -61,6 +61,10 @@ Resolution of `40-RESEARCH.md` "Open Questions" (all RESOLVED): Q1 untracking an
 - **D-40** The live round enforces D-21: it passes no promotion signal, refuses a decomposed ticket that would promote the executor rung, and fails a stage whose ADR-014 application receipt shows a rung other than the role's base rung. It publishes through the deliver publication path, including `pr-ledger.cjs record`. Its human-action run happens after the other phase-40 code tickets have merged into the epic and the epic is merged into its branch.
 - **D-41** The Codex research consumer (T-40-12) supports the single-line re-dispatch with `verifySealedLine`, as the Claude path does (REQ-146 on both runtimes).
 
+## Amendment after user review (2026-09-24)
+
+- **D-42 (T-40-27, REQ-138, REQ-136)** The graph carries real dependencies instead of the D-36 linearization, so a ticket may have several same-phase parents. A diamond child's primary parent still only needs to be `branched`, but every non-primary same-phase parent must have landed in the phase epic before the child is ready (`state-sync.cjs`, with the reason on the board). `ticket-worktree.sh create` merges the epic into the fresh child branch so its tree holds every parent, and the scope gates measure the child against the merge of its base and the epic. This supersedes D-36's single-parent rule and the "Deliberately NOT the fix" paragraph of `.planning/backlog/diamond-child-base-is-materially-incomplete.md`. Phase-40 diamond children are dispatched only once T-40-27 runs in the delivering conveyor (40-PLAN-CHECK "Amendment after user review").
+
 </decisions>
 
 ## Scope fences (verbatim intent from INV-004 DECISIONS)
@@ -93,32 +97,33 @@ Tickets whose `files_modified` meets a phase-39 plan's `files_modified` declare 
 
 | Ticket | Requirements | Wave | Same-phase depends_on | Cross-phase |
 |---|---|---|---|---|
-| T-40-01 hermetic git unit fixtures | REQ-150 | 6 | 17 | T-39-01 |
-| T-40-02 header-free state YAML + pre-push via git | REQ-149 | 2 | 07 | — |
-| T-40-03 PR ledger and head-branch matching | REQ-143 | 3 | 02 | — |
-| T-40-04 Codex config refusal remedy | REQ-149 | 13 | 05 | T-39-01 |
-| T-40-05 Codex tune keys + doctor manifest | REQ-149 | 12 | 14 | T-39-07, T-39-04 |
+| T-40-01 hermetic git unit fixtures | REQ-150 | 2 | — | T-39-01 |
+| T-40-02 header-free state YAML + pre-push via git | REQ-149 | 1 | — | — |
+| T-40-03 PR ledger and head-branch matching | REQ-143 | 2 | 02 | — |
+| T-40-04 Codex config refusal remedy | REQ-149 | 3 | 05 | T-39-01 |
+| T-40-05 Codex tune keys + doctor manifest | REQ-149 | 2 | — | T-39-07, T-39-04 |
 | T-40-06 digest pin refresh + CI trailer | REQ-145 | 2 | — | T-39-12 |
 | T-40-07 boundary capture harness + contract test | REQ-137, REQ-136 | 1 | — | — |
 | T-40-08 captured Claude stream fixtures | REQ-137 | 2 | 07 | T-39-12 |
-| T-40-09 Codex task by file + digest, Codex consumer migration | REQ-148, REQ-137 | 15 | 11 | T-39-01 |
-| T-40-10 shared planning-result sealer (Claude) | REQ-147 | 8 | 16 | T-39-01, T-39-08 |
-| T-40-11 Codex decompose sealing + researcher scope | REQ-148, REQ-147 | 14 | 04 | T-39-01, T-39-07 |
-| T-40-12 Codex research consumer + single-line re-dispatch | REQ-147, REQ-148 | 10 | 13 | T-39-01 |
-| T-40-13 per-line research recovery | REQ-146 | 9 | 10 | T-39-08 |
-| T-40-14 in-flight record + host request validators | REQ-139, REQ-138 | 11 | 12 | T-39-03, T-39-08, T-39-01 |
-| T-40-15 deliver-dispatch entry point | REQ-138, REQ-136 | 12 | 14 | — |
-| T-40-16 sentinel preflight | REQ-140, REQ-136 | 7 | 01 | T-39-12 |
-| T-40-17 PR hygiene gate + `.planning/` untrack migration | REQ-142 | 5 | 19 | — |
-| T-40-18 clean executor PR artifacts | REQ-142 | 6 | 17 | — |
-| T-40-19 gate verdict as commit status | REQ-142 | 4 | 03 | — |
-| T-40-20 neutral ticket and epic branches | REQ-142 | 6 | 17 | T-39-06 |
-| T-40-21 dogfood install root + doctor cache check | REQ-144 | 13 | 05 | T-39-04 |
-| T-40-22 provenance sidecar + dogfood merge refusal | REQ-144, REQ-139 | 14 | 21 | T-39-03, T-39-12 |
-| T-40-23 live round + release gate | REQ-141, REQ-136 | 13 | 15 | — |
-| T-40-24 deliver prose on the seams | REQ-138, REQ-139, REQ-140, REQ-142, REQ-143, REQ-136 | 13 | 15 | T-39-03 |
-| T-40-25 investigate/decompose prose | REQ-149, REQ-146, REQ-147, REQ-148, REQ-142 | 11 | 12 | T-39-10, T-39-11 |
-| T-40-26 command surface (Makefile, README, CLAUDE.md) | REQ-137, REQ-141, REQ-144, REQ-145, REQ-136 | 14 | 23 | T-39-04 |
+| T-40-09 Codex task by file + digest, Codex consumer migration | REQ-148, REQ-137 | 8 | 11 (primary), 07, 14 | T-39-01 |
+| T-40-10 shared planning-result sealer (Claude) | REQ-147 | 3 | 01 | T-39-01, T-39-08 |
+| T-40-11 Codex decompose sealing + researcher scope | REQ-148, REQ-147 | 7 | 14 (primary), 04 | T-39-01, T-39-07 |
+| T-40-12 Codex research consumer + single-line re-dispatch | REQ-147, REQ-148 | 5 | 13 | T-39-01 |
+| T-40-13 per-line research recovery | REQ-146 | 4 | 10 | T-39-08 |
+| T-40-14 in-flight record + host request validators | REQ-139, REQ-138 | 6 | 12 | T-39-03, T-39-08, T-39-01 |
+| T-40-15 deliver-dispatch entry point | REQ-138, REQ-136 | 7 | 14 (primary), 17, 16 | — |
+| T-40-16 sentinel preflight | REQ-140, REQ-136 | 3 | 01 | T-39-12 |
+| T-40-17 PR hygiene gate + `.planning/` untrack migration | REQ-142 | 4 | 19 | — |
+| T-40-18 clean executor PR artifacts | REQ-142 | 5 | 17 | — |
+| T-40-19 gate verdict as commit status | REQ-142 | 3 | 03 | — |
+| T-40-20 neutral ticket and epic branches | REQ-142 | 5 | 17 | T-39-06 |
+| T-40-21 dogfood install root + doctor cache check | REQ-144 | 3 | 05 | T-39-04 |
+| T-40-22 provenance sidecar + dogfood merge refusal | REQ-144, REQ-139 | 7 | 14 (primary), 21, 16, 19 | T-39-03, T-39-12 |
+| T-40-23 live round + release gate | REQ-141, REQ-136 | 8 | 15 (primary), 17 | — |
+| T-40-24 deliver prose on the seams | REQ-138, REQ-139, REQ-140, REQ-142, REQ-143, REQ-136 | 8 | 15 (primary), 17, 16 | T-39-03 |
+| T-40-25 investigate/decompose prose | REQ-149, REQ-146, REQ-147, REQ-148, REQ-142 | 6 | 12 (primary), 17 | T-39-10, T-39-11 |
+| T-40-26 command surface (Makefile, README, CLAUDE.md) | REQ-137, REQ-141, REQ-144, REQ-145, REQ-136 | 9 | 23 (primary), 07 | T-39-04 |
+| T-40-27 diamond child readiness + epic base-merge | REQ-138, REQ-136 | 6 | 18 | — |
 
 ## Source audit
 
@@ -127,7 +132,7 @@ Tickets whose `files_modified` meets a phase-39 plan's `files_modified` declare 
 | GOAL | — | Seams, live-gated releases, Codex loops repaired, dogfood provenance, clean target PRs | all | COVERED |
 | REQ | REQ-136 | Seams before point fixes; releases gated on a live round | graph + T-40-07, 15, 16, 23, 24, 26 | COVERED |
 | REQ | REQ-137 | Captured fixtures, make target, contract test (all Codex consumers migrated, D-37) | T-40-07, 08, 09, 26 | COVERED |
-| REQ | REQ-138 | Entry point, detached launch, status/wait | T-40-14, 15, 24 | COVERED |
+| REQ | REQ-138 | Entry point, detached launch, status/wait; diamond children dispatched only into a complete tree (D-42) | T-40-14, 15, 24, 27 | COVERED |
 | REQ | REQ-139 | In-flight record | T-40-14, 22, 24 | COVERED |
 | REQ | REQ-140 | Sentinel preflight | T-40-16, 24 | COVERED |
 | REQ | REQ-141 | `make test-live`, release gate | T-40-23, 26 | COVERED |
@@ -142,4 +147,5 @@ Tickets whose `files_modified` meets a phase-39 plan's `files_modified` declare 
 | REQ | REQ-150 | Hermetic git fixtures | T-40-01 | COVERED |
 | CONTEXT | D-16..D-24 | Planning refinements | T-40-17/25 (16,17), 20 (18), 15/17/18 (19), 19 (20), 23 (21,22), 22 (23), 05 (24) | COVERED |
 | CONTEXT | D-36..D-41 | Plan-check revisions | graph (36), 07/08/09 (37), 15/17 (38), 17 (39), 23 (40), 12 (41) | COVERED |
+| CONTEXT | D-42 | Real graph + diamond-child readiness and epic base-merge | graph, T-40-27 | COVERED |
 | RESEARCH | Pitfalls 1-13 | Addressed in the owning tickets' Scope | T-40-15 (1,2,3), 06 (4), 16 (5), 18 (6), 25 (7), 20 (8), 19 (9), 22 (10), 01 (11), 02 (12), 05 (13) | COVERED |

@@ -92,3 +92,72 @@
 
 - `40-01`..`40-26-PLAN.md`: `wave` and `depends_on` in every plan. "Graph position" notes in 01, 02, 04, 05, 09, 10, 15, 16, 17, 22, 24, 25 and 26. Scope, acceptance and verification edits in 06, 07, 08, 09, 11, 12, 13, 14, 15, 17 and 23.
 - `40-CONTEXT.md`: D-35 revised; D-36..D-41 added; open-question resolution map; cross-phase gating paragraph; ticket map regenerated from the plans; source audit rows for REQ-137, REQ-146 and D-36..D-41.
+
+## Amendment after user review
+
+**Date:** 2026-09-24. **Decision (user):** Chaining the phase linearly to fix bases made it 15 waves deep. Replace that chain with the real dependency graph, and fix the conveyor so a diamond child is delivered correctly (CONTEXT D-42). This supersedes the single-parent rule in blocker 1 and in D-36, and advisory 2.
+
+### Graph changes
+
+1. **Four linearization edges removed.** The plan-check itself said none of them carries a code need: T-40-02←07, T-40-01←17, T-40-10←16, T-40-05←14. The "Graph position" bullets in 01, 02, 05 and 10 have been rewritten.
+2. **Children get their needed parents directly.** These are the parents they used to reach only through those four edges:
+   - T-40-09 and T-40-26 ← T-40-07.
+   - T-40-15, 23, 24 and 25 ← T-40-17.
+   - T-40-15, 22 and 24 ← T-40-16.
+   - T-40-22, 11 and 09 ← T-40-14.
+
+   The bullets in 04, 09, 11, 15, 17, 22, 23, 24, 25 and 26 now name the primary parent and the parents that reach each child through the epic.
+3. **Two orderings the removed chain used to give, kept as real file edges.** Without them, Gate 2 would see dependency-unordered overlaps:
+   - T-40-10 ← T-40-01. T-40-10's verification runs `claude-delivery-host.test.cjs` and needs T-40-01's hermetic harness, a need the plan-check had already stated. This edge also orders T-40-01 before 13, 12, 14 and 09, which edit the same two host test files as T-40-01.
+   - T-40-22 ← T-40-19. Both edit `sentinel.cjs`.
+4. **Unchanged.** Every other plan-check change is kept: the edges with stated reasons (17←19, 04←05, 16←01, 12←13) and every cross-phase T-39 dependency.
+5. **Waves.** Every frontmatter `wave` is recomputed as 1 + the maximum wave of the ticket's same-phase and cross-phase parents. Phase-39 tickets count at their own waves: all are 1 except T-39-09 at 2. The resulting waves:
+   - 01:2, 02:1, 03:2, 04:3, 05:2, 06:2, 07:1, 08:2, 09:8
+   - 10:3, 11:7, 12:5, 13:4, 14:6, 15:7, 16:3, 17:4, 18:5, 19:3
+   - 20:5, 21:3, 22:7, 23:8, 24:8, 25:6, 26:9, 27:6
+
+   The phase is now **9 waves deep instead of 15**.
+
+   I measured this on a temporary copy of the phase-39 and phase-40 plans: `validate-graph: OK — 39 ticket(s), 9 wave(s)`, with no wave mismatch and no contested path. A script over every plan's `files_modified` also found no dependency-unordered overlap. `.planning/graph/tickets.json` must still be regenerated (Gate 2) before delivery.
+
+### Diamond children (primary parent → parents that must land in the epic first)
+
+| Child | Primary parent | Must land in the epic first |
+|---|---|---|
+| T-40-09 | T-40-11 | T-40-07, T-40-14 |
+| T-40-11 | T-40-14 | T-40-04 |
+| T-40-15 | T-40-14 | T-40-17, T-40-16 |
+| T-40-22 | T-40-14 | T-40-21, T-40-16, T-40-19 |
+| T-40-23 | T-40-15 | T-40-17 |
+| T-40-24 | T-40-15 | T-40-17, T-40-16 |
+| T-40-25 | T-40-12 (tie on depth with T-40-17, lowest id) | T-40-17 |
+| T-40-26 | T-40-23 | T-40-07 |
+
+### T-40-27 (new): conveyor fix for diamond children
+
+**Why this ticket exists.** A ticket worktree is cut from its primary parent's branch only. Without a fix, a diamond child would be offered as ready while its other parents are only branched, and it would run in a tree that lacks their code. The backlog entry `diamond-child-base-is-materially-incomplete.md` measured this on T-20-06.
+
+**What T-40-27 does.**
+
+- `state-sync.cjs` keeps branched-is-enough for the primary parent. It blocks on every non-primary same-phase parent until that parent has landed in the epic, either merged into it or merged into a stacked branch that itself landed. The board line gives the reason.
+- `ticket-worktree.sh create` merges `origin/<epic>` into a fresh diamond branch. On a conflict or a missing epic it refuses and leaves nothing behind.
+- `scope-gate.cjs` and `delivery-commit-finalizer.cjs` measure a diamond child's own work against the merge of its base and the epic. Without that, both would reject the merged epic content as out of scope, because the hosts pass the primary branch tip as `expectedBase`.
+- The shared computation lives in the new `diamond-parents.cjs`.
+- The fixtures are a two-parent diamond. The child is not ready while the non-primary parent is only branched. After that parent merges, the child is ready, its tree holds both parents, and its own PR reads merged.
+- The ticket closes the backlog entry. The waiting rule replaces that entry's "Deliberately NOT the fix" paragraph.
+
+**Graph position.** T-40-27 depends on T-40-18, the last earlier writer of `delivery-commit-finalizer.cjs`. Its primary chain holds every earlier `state-sync.cjs` writer (T-40-02, 03, 19). None of its files is in a phase-39 plan, so it has no cross-phase dependency. It is at wave 6. It is risk high with a human-verify step over the scope cases, because it changes a readiness rule and two scope gates.
+
+**No diamond child depends on T-40-27.** None of them imports, edits or verifies against its files, so the edge would add nothing to any child's tree. What the children need is the behaviour in the conveyor that delivers them, and a `depends_on` cannot provide that. This is recorded as an operating precondition in 40-27-PLAN.md instead: dispatch no phase-40 diamond child until T-40-27 is merged into the epic and the delivering conveyor runs a build that contains it (T-40-21's dogfood install root, or a release). Until then, apply the backlog entry's manual workaround.
+
+### Advisories (amendment)
+
+1. **[dependency_correctness]** Once T-39-06 lands, its "shares no files_modified" warning will fire on the import-only dependencies (for example 15←17, 15←16, 24←16, 26←07, 09←07). This is expected. The four linearization edges that advisory 1 above named no longer exist.
+2. **[review diff]** While a diamond child's primary parent is still open, the child's PR targets the primary branch, so the GitHub diff also shows the merged epic content. It narrows once the primary parent lands and the sentinel retargets the child onto the epic (existing rule). The scope gates are exact throughout (T-40-27). Human reviewers of such a PR should be told this.
+3. **[scope_sanity]** Advisory 2 above (15 waves) is superseded. Before phase 39 is on `main`, only T-40-07, 02, 03, 19, 17, 18 and 27 can run. Everything else is still gated by its T-39 dependencies.
+
+### Files changed by this amendment
+
+- `40-01`..`40-26-PLAN.md`: `wave` in the plans whose depth changed, `depends_on` in 01, 02, 05, 09, 10, 11, 15, 22, 23, 24, 25 and 26, and the "Graph position" bullets listed above.
+- `40-27-PLAN.md`: new.
+- `40-CONTEXT.md`: D-42, the ticket map regenerated from the plans, and the D-42 source-audit coverage.
