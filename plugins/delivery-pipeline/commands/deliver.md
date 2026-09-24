@@ -1226,7 +1226,9 @@ itself a STOP signal, not a reason to improvise.
 ## Step 0 — Cold start (MANDATORY on EVERY run)
 
 - **Arm the stop gate (Claude only).** Run
-  `node ${CLAUDE_PLUGIN_ROOT}/scripts/stop-gate-arm.cjs arm --session-id "${CLAUDE_SESSION_ID}"`.
+  `node ${CLAUDE_PLUGIN_ROOT}/scripts/stop-gate-arm.cjs arm`.
+  It reads the session id from `CLAUDE_CODE_SESSION_ID`, which Claude Code sets
+  in the Bash environment to the same id the Stop hook receives as `session_id`.
   The stop hook enforces the front only in a session armed this way; every other
   session stops freely. A non-zero exit means the gate is NOT armed — report that
   to the user, do not continue silently. Codex has no stop hook, so it skips this.

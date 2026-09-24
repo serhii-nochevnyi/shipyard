@@ -16,7 +16,10 @@ const git = (cwd, ...args) => {
   if (r.status !== 0) throw new Error(`git ${args.join(' ')}: ${r.stderr}`);
   return r.stdout.trim();
 };
-const cli = (cwd, ...args) => spawnSync('node', [ARM, ...args], { cwd, encoding: 'utf8' });
+const baseEnv = () => { const env = { ...process.env }; delete env.CLAUDE_CODE_SESSION_ID; return env; };
+const cli = (cwd, ...args) => spawnSync('node', [ARM, ...args], { cwd, encoding: 'utf8', env: baseEnv() });
+const cliWithSession = (cwd, sessionId, ...args) => spawnSync('node', [ARM, ...args],
+  { cwd, encoding: 'utf8', env: { ...baseEnv(), CLAUDE_CODE_SESSION_ID: sessionId } });
 const listAll = (dir) => {
   const out = [];
   const walk = (d) => {
@@ -54,6 +57,30 @@ test('missing or short ids are refused', () => {
   assert.equal(cli(dir, 'arm', '--session-id', 'x'.repeat(129)).status, 1);
   assert.throws(() => armer.markerPath(dir, '../escape-attempt'));
   assert.equal(armer.isArmed(dir, '../escape-attempt'), false);
+});
+
+test('without --session-id the session id comes from CLAUDE_CODE_SESSION_ID', () => {
+  const dir = tmp('env-session');
+  const id = '7bcbbf57-9cd4-4d9b-b17a-6064eae1b7c1';
+  const r = cliWithSession(dir, id, 'arm');
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(armer.isArmed(dir, id), true);
+});
+
+test('an explicit --session-id wins over CLAUDE_CODE_SESSION_ID', () => {
+  const dir = tmp('explicit-session');
+  const r = cliWithSession(dir, 'env-session-00000001', 'arm', '--session-id', 'flag-session-0000001');
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(armer.isArmed(dir, 'flag-session-0000001'), true);
+  assert.equal(armer.isArmed(dir, 'env-session-00000001'), false);
+});
+
+test('an invalid CLAUDE_CODE_SESSION_ID is refused without writing', () => {
+  const dir = tmp('env-invalid');
+  const r = cliWithSession(dir, '../escape', 'arm');
+  assert.equal(r.status, 1);
+  assert.ok(/NOT armed/.test(r.stderr));
+  assert.deepStrictEqual(listAll(dir), []);
 });
 
 suite('stop-gate-arm — marker location and body');

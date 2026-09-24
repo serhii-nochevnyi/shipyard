@@ -50,9 +50,9 @@ module.exports = { markerPath, arm, isArmed, validSessionId };
 if (require.main === module) {
   const argv = process.argv.slice(2);
   const at = argv.indexOf('--session-id');
-  const sessionId = at === -1 ? undefined : argv[at + 1];
-  if (argv[0] !== 'arm' || at === -1) {
-    process.stderr.write('usage: stop-gate-arm.cjs arm --session-id <id>\n');
+  const sessionId = at === -1 ? process.env.CLAUDE_CODE_SESSION_ID : argv[at + 1];
+  if (argv[0] !== 'arm') {
+    process.stderr.write('usage: stop-gate-arm.cjs arm [--session-id <id>]\n');
     process.exit(1);
   }
   if (!validSessionId(sessionId)) {
