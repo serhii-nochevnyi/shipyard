@@ -5441,6 +5441,34 @@
       "primary_parent": null,
       "pr_base": "epic/39-remove-conveyor-session-friction",
       "jira": null
+    },
+    "T-39-12": {
+      "title": "Forward the declared output schema to every Claude host launch",
+      "plan": ".planning/phases/39-remove-conveyor-session-friction/39-12-PLAN.md",
+      "phase": "39",
+      "repo": null,
+      "wave": 1,
+      "depends_on": [],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": false,
+      "files": [
+        "plugins/delivery-pipeline/scripts/claude-runtime-host.cjs",
+        "tests/unit/claude-runtime-host.test.cjs",
+        "plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs",
+        "tests/unit/claude-workflow-host.test.cjs",
+        "tests/unit/source-contract.test.cjs"
+      ],
+      "risk": "medium",
+      "type": "implementation",
+      "human_checkpoint": false,
+      "preauthorized": false,
+      "branch": "ticket/T-39-12-forward-the-declared-output-schema-to-ev",
+      "epic": "epic/39-remove-conveyor-session-friction",
+      "primary_parent": null,
+      "pr_base": "epic/39-remove-conveyor-session-friction",
+      "jira": null
     }
   }
 }

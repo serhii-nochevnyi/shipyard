@@ -1316,3 +1316,4 @@
 {"ts":"2026-09-24T13:52:13.210Z","event":"status_change","ticket":"T-39-09","from":null,"to":"pending","pr":null}
 {"ts":"2026-09-24T13:52:13.210Z","event":"status_change","ticket":"T-39-10","from":null,"to":"pending","pr":null}
 {"ts":"2026-09-24T13:52:13.210Z","event":"status_change","ticket":"T-39-11","from":null,"to":"pending","pr":null}
+{"ts":"2026-09-24T14:44:29.651Z","event":"status_change","ticket":"T-39-12","from":null,"to":"pr-open","pr":204}
