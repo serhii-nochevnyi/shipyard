@@ -1230,7 +1230,7 @@ itself a STOP signal, not a reason to improvise.
   It reads the session id from `CLAUDE_CODE_SESSION_ID`, which Claude Code sets
   in the Bash environment to the same id the Stop hook receives as `session_id`.
   The stop hook enforces the front only in a session armed this way; every other
-  session stops freely. A non-zero exit means the gate is NOT armed — report that
+  unscoped session stops freely (scoped controller runs are enforced without a marker). A non-zero exit means the gate is NOT armed — report that
   to the user, do not continue silently. Codex has no stop hook, so it skips this.
   A session resumed with `--fork-session` has a new id and must re-arm.
 0. `gsd-tune.cjs` — the GSD settings this project needs on THIS runtime. Report

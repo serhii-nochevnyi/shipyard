@@ -148,4 +148,22 @@ test('stop-gate-arm.cjs requires only built-ins and relative modules', () => {
   }
 });
 
+
+suite('stop-gate-arm — the deliver command arms the gate');
+
+test('deliver.md Step 0 runs stop-gate-arm.cjs arm and the self-check pipes a session_id', () => {
+  const md = fs.readFileSync(path.join(SCRIPTS, '..', 'commands', 'deliver.md'), 'utf8');
+  const start = md.indexOf('## Step 0 — Cold start');
+  const end = md.indexOf('## Step 1', start);
+  assert.ok(start !== -1 && end !== -1, 'both Step 0 anchors are present');
+  const step0 = md.slice(start, end);
+  assert.ok(/stop-gate-arm\.cjs arm\b/.test(step0), 'Step 0 arms the stop gate');
+  const bulletStart = md.indexOf('**Do not treat a summary as an ending.**');
+  assert.ok(bulletStart !== -1, 'the self-check bullet is present');
+  const bullet = md.slice(bulletStart, md.indexOf('\n- **', bulletStart + 1));
+  assert.ok(/stop-gate\.cjs/.test(bullet), 'the bullet names the gate');
+  assert.ok(/"session_id"/.test(bullet), 'the self-check pipes a session_id payload');
+  assert.equal(/pipe it\s+`\{\}`/.test(bullet), false, 'the self-check does not pipe an empty payload');
+});
+
 done();
