@@ -121,14 +121,16 @@ function normalizeScope(input = {}) {
   if (!object(input)) fail('INVALID_INPUT', 'run scope must be an object');
   authorityFree(input);
   const runId = text(scopeValue(input, ['run_id', 'runId']), 'run_id', 512);
-  const ticket = text(scopeValue(input, ['ticket', 'ticket_id']), 'ticket', 512);
+  const ticketValue = scopeValue(input, ['ticket', 'ticket_id']);
+  const ticket = text(object(ticketValue) ? scopeValue(ticketValue, ['ticket', 'id']) : ticketValue, 'ticket', 512);
   const worktreeValue = scopeValue(input, ['worktree', 'worktreePath', 'worktree_path']);
   const worktree = text(object(worktreeValue) ? scopeValue(worktreeValue, ['path', 'worktree']) : worktreeValue, 'worktree', 4096);
   const phaseValue = scopeValue(input, ['phase', 'phase_id']);
   const phase = object(phaseValue) ? scopeValue(phaseValue, ['phase', 'id', 'number']) : phaseValue;
   if (!Number.isInteger(Number(phase)) || Number(phase) < 1) fail('INVALID_INPUT', 'phase must be a positive integer');
-  const runtimeValue = scopeValue(input, ['runtime']);
-  const providerValue = scopeValue(input, ['provider']);
+  const runtimeScope = scopeValue(input, ['runtime']);
+  const runtimeValue = object(runtimeScope) ? scopeValue(runtimeScope, ['runtime']) : runtimeScope;
+  const providerValue = scopeValue(input, ['provider']) ?? (object(runtimeScope) ? scopeValue(runtimeScope, ['provider']) : undefined);
   const runtime = runtimeValue === undefined ? 'claude' : text(runtimeValue, 'runtime', 64);
   const provider = providerValue === undefined ? 'anthropic' : text(providerValue, 'provider', 64);
   if (runtime !== 'claude' || provider !== 'anthropic') {
@@ -630,6 +632,15 @@ function createClaudeCliLauncher(options = {}) {
     if (launchOptions.readOnly === true && gsdRole) {
       fail('INVALID_INPUT', 'read-only smoke mode cannot launch a typed GSD agent');
     }
+    const schema = launchOptions.schema;
+    if (schema !== undefined && (schema === null || typeof schema !== 'object' || Array.isArray(schema))) {
+      fail('INVALID_INPUT', 'schema must be a plain JSON object');
+    }
+    let schemaJson;
+    if (schema !== undefined) {
+      try { schemaJson = JSON.stringify(schema); } catch { schemaJson = undefined; }
+      if (typeof schemaJson !== 'string') fail('INVALID_INPUT', 'schema must be serializable JSON');
+    }
     const agentDefinition = gsdRole ? gsdAgentDefinition(gsdRole, childEnvironment, options.gsdAgentRoot) : null;
     const evidenceDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-claude-session-start-'));
     const evidenceFile = path.join(evidenceDirectory, 'session-start.json');
@@ -675,6 +686,7 @@ function createClaudeCliLauncher(options = {}) {
       '--strict-mcp-config', '--tools', tools,
       '--allowedTools', tools, '--permission-mode', 'dontAsk',
       '--permission-prompts', 'none', '--settings', settings,
+      ...(schema === undefined ? [] : ['--json-schema', schemaJson]),
       ];
       let child;
       try {

@@ -883,7 +883,7 @@ function createClaudeWorkflowDispatch(options = {}) {
         throw error;
       }
       const capture = (value) => {
-        agentResult = value;
+        agentResult = object(value) && object(value.output) ? value.output : value;
         // This callback is host-owned. It must report what the host actually
         // applied; the requested selection is intentionally not passed in, so
         // this adapter cannot turn its own input into application evidence.
