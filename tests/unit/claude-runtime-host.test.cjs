@@ -340,8 +340,24 @@ test('a schema that is not a plain object is refused before launch', async () =>
     }
     assert.ok(refused, `schema ${JSON.stringify(schema)} must be refused`);
     assert.equal(refused.code, 'INVALID_INPUT');
+    assert.match(refused.message, /schema must be a plain JSON object/);
     assert.equal(refused.spawned, false);
   }
+});
+
+test('a schema that cannot be serialized is refused before launch', async () => {
+  const schema = { type: 'object' };
+  schema.self = schema;
+  let refused;
+  try {
+    await launchArgs({ schema });
+  } catch (error) {
+    refused = error;
+  }
+  assert.ok(refused);
+  assert.equal(refused.code, 'INVALID_INPUT');
+  assert.match(refused.message, /schema must be serializable JSON/);
+  assert.equal(refused.spawned, false);
 });
 
 test('a versioned run scope launches with its ticket, phase and provider', async () => {

@@ -290,7 +290,9 @@ test('arch-review launches through ADR-014 and seals only the matching PR judgme
     const packet = packetFromPrompt(launched.prompt);
     assert.equal(launched.selection.model, 'claude-opus-5-5');
     assert.equal(launched.selection.effort, 'max');
-    assert.deepEqual(launched.selection.schema, { type: 'object' });
+    assert.equal(launched.selection.schema.type, 'object');
+    assert.deepEqual(launched.selection.schema.properties.pr, { type: 'integer', minimum: 1 });
+    assert.deepEqual(launched.selection.schema.properties.blocking_count, { type: 'integer', minimum: 0 });
     assert.equal(packet.role_context.exact_diff.head, fixture.head);
     assert.equal(packet.role_context.exact_diff.base_tree, fixture.mergeBaseTree);
     assert.ok(packet.required_refs.some((ref) => ref.path === '.planning/architecture/ADR-014-test.md' && ref.content === POLICY_MD));

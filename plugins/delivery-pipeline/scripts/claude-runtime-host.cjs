@@ -634,7 +634,12 @@ function createClaudeCliLauncher(options = {}) {
     }
     const schema = launchOptions.schema;
     if (schema !== undefined && (schema === null || typeof schema !== 'object' || Array.isArray(schema))) {
-      fail('INVALID_INPUT', 'schema must be a JSON Schema object');
+      fail('INVALID_INPUT', 'schema must be a plain JSON object');
+    }
+    let schemaJson;
+    if (schema !== undefined) {
+      try { schemaJson = JSON.stringify(schema); } catch { schemaJson = undefined; }
+      if (typeof schemaJson !== 'string') fail('INVALID_INPUT', 'schema must be serializable JSON');
     }
     const agentDefinition = gsdRole ? gsdAgentDefinition(gsdRole, childEnvironment, options.gsdAgentRoot) : null;
     const evidenceDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-claude-session-start-'));
@@ -681,7 +686,7 @@ function createClaudeCliLauncher(options = {}) {
       '--strict-mcp-config', '--tools', tools,
       '--allowedTools', tools, '--permission-mode', 'dontAsk',
       '--permission-prompts', 'none', '--settings', settings,
-      ...(schema === undefined ? [] : ['--json-schema', JSON.stringify(schema)]),
+      ...(schema === undefined ? [] : ['--json-schema', schemaJson]),
       ];
       let child;
       try {
