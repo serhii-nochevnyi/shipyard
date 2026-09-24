@@ -766,7 +766,7 @@ target-project PRs.
 <!-- shipyard:gsd-sync:begin -->
 ## Shipyard synchronization (generated)
 
-- Source fingerprint: `5829dfd8fbe101109ab1b68a150671559d45d120c670bb605305cb29af9a2394`
+- Source fingerprint: `b3404d53c196df3b5968618d97dabc3cf768a213acf7a7a6f30a823cc38be67a`
 - Plans merged: 157/185
 - Phases verified: 10/21
 - Current phase: 20

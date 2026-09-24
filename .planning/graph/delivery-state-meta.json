@@ -1,13 +1,13 @@
 {
   "schema_version": 1,
-  "generation": 355,
-  "generation_identity": "3acb316c-bac2-4cc1-817a-a223b2e51060",
-  "previous_generation_identity": "16777244:12914807972:1790263970606210600:9ecf38025b455cf65eb9bf2f81c3e28be4ca312d6af72d2dee7e674c2ec8ab54",
-  "observed_at": "2026-09-24T19:40:45.987Z",
-  "generated_at": "2026-09-24T19:40:45.987Z",
+  "generation": 356,
+  "generation_identity": "ca17a787-ad9a-4a43-8211-112d21a885e9",
+  "previous_generation_identity": "16777244:12915441570:1790278857144894000:99942705427ae04838cadafa9b84d0cac0d3cd88512e0847f80957c658f9db37",
+  "observed_at": "2026-09-24T19:41:36.498Z",
+  "generated_at": "2026-09-24T19:41:36.498Z",
   "by": "state-sync",
-  "pid": 83426,
-  "observation_generation": 355,
+  "pid": 94670,
+  "observation_generation": 356,
   "observation_projection": {
     "tickets": {
       "T-20-01": {
@@ -2056,8 +2056,8 @@
   "binding": {
     "schema_version": 1,
     "state_digest": "c609c55392497f7de1f968e8c70efb529e12c3456ab3cf60ea0e51a0aaccdada",
-    "front_digest": "189ed3e3fc13f42f049d8b5a5129b24a4b1e118f0f7d1bfe37f46c4ffe3ab26d",
+    "front_digest": "05105e2a8d7124b900ed74306948b6bb2d117f79d3c9d569191b72dee1fb92d4",
     "observation_digest": "3b306fdddec80fd9a90a76722849266b64f88c3a0425c8da45c6655d66fb8836",
-    "observation_generation": 355
+    "observation_generation": 356
   }
 }

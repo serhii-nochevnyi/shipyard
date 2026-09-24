@@ -5276,7 +5276,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
-      "missing_paths": true,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/scripts/jira-export.cjs",
         "tests/unit/jira-export.test.cjs"
@@ -5383,7 +5383,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
-      "missing_paths": true,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/scripts/adr-bootstrap.cjs",
         "tests/unit/adr-bootstrap.test.cjs"
@@ -5408,7 +5408,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
-      "missing_paths": true,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/commands/decompose.md",
         "tests/unit/decompose-friction-contract.test.cjs"
@@ -5433,7 +5433,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
-      "missing_paths": true,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/commands/investigate.md",
         "docs/gsd_multilevel_delivery_pipeline.md",
