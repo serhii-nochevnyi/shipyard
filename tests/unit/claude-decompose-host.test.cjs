@@ -30,6 +30,28 @@ function request(worktree, role) {
   return { phase: 38, worktree, role, prompt: 'Create the phase plan.' };
 }
 
+const HELP_MARKERS = [
+  '--model', '--effort', '--output-format', 'stream-json', '--session-id',
+  '--permission-mode', '--permission-prompts', '--allowedTools', '--tools',
+  '--restricted', '--strict-mcp-config', '--settings', '--agent', '--agents',
+];
+
+function fakeAvailableClaudeBin(root) {
+  const bin = path.join(root, 'bin');
+  fs.mkdirSync(bin);
+  const script = path.join(bin, 'claude');
+  fs.writeFileSync(script, `#!/usr/bin/env node
+'use strict';
+const args = process.argv.slice(2);
+if (args[0] === '--version') { process.stdout.write('claude 1.0.0 (fake)\\n'); process.exit(0); }
+if (args[0] === '--help') { process.stdout.write(${JSON.stringify(HELP_MARKERS.join(' '))} + '\\n'); process.exit(0); }
+if (args[0] === 'auth' && args[1] === 'status') { process.stdout.write(JSON.stringify({ loggedIn: true, authMethod: 'claude.ai' }) + '\\n'); process.exit(0); }
+process.exit(1);
+`);
+  fs.chmodSync(script, 0o755);
+  return bin;
+}
+
 test('accepts exactly three canonical typed roles and rejects injected request authority', () => {
   const f = fixture();
   try {
@@ -135,6 +157,31 @@ test('executable entrypoint rejects unsupported role before invoking Claude', ()
     assert.equal(result.status, 1);
     assert.match(result.stderr, /UNSUPPORTED_ROLE/);
     assert.equal(result.stdout, '');
+    const lines = result.stderr.split('\n');
+    assert.match(lines[0], /UNSUPPORTED_ROLE/);
+    assert.match(lines[1], /^hint\[UNSUPPORTED_ROLE\]: /);
+  } finally { f.clean(); }
+});
+
+test('capability-only failure JSON keeps every existing key and adds a hint', () => {
+  const f = fixture();
+  try {
+    fs.rmSync(path.join(f.config, 'agents', 'gsd-phase-researcher.md'));
+    fs.symlinkSync('/etc/hosts', path.join(f.config, 'agents', 'gsd-phase-researcher.md'));
+    const bin = fakeAvailableClaudeBin(f.root);
+    const result = require('node:child_process').spawnSync(process.execPath,
+      ['plugins/delivery-pipeline/scripts/claude-decompose-host.cjs', '--capability-only'],
+      {
+        cwd: path.resolve(__dirname, '../..'), encoding: 'utf8', timeout: 10000,
+        env: { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH}`, CLAUDE_CONFIG_DIR: f.config },
+      });
+    assert.equal(result.status, 0);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.status, 'unavailable');
+    assert.equal(payload.reason, 'REFERENCE_UNAVAILABLE');
+    assert.equal(typeof payload.detail, 'string');
+    assert.equal(payload.live_execution, 'not_run');
+    assert.match(payload.hint, /^hint\[REFERENCE_UNAVAILABLE\]: .+ — remedy: .+$/);
   } finally { f.clean(); }
 });
 

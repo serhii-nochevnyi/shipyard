@@ -140,25 +140,34 @@ function countDecisionEntries(sections) {
     .reduce((total, section) => total + directEntries(section.body, section.children).length + section.children.length, 0);
 }
 
+function decisionEntries(markdown) {
+  const sections = sectionNodes(normalizeAdr(markdown).content.split('\n'));
+  return sections
+    .filter((section) => canonical(section.title) === 'decision')
+    .flatMap((section) => [...directEntries(section.body, section.children), ...section.children.map(childEntry)]);
+}
+
 function validateAdr(result, input) {
   if (result.decisions > 0) return;
   throw new Error(`${input}: no decisions were found under an ADR Decision section`);
 }
 
 function parseArgs(argv) {
-  const args = { inputs: [], output: null, outputDir: null, json: false };
+  const args = { inputs: [], output: null, outputDir: null, json: false, check: false };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === '--input') args.inputs.push(argv[++index] || '');
     else if (arg === '--output') args.output = argv[++index] || '';
     else if (arg === '--output-dir') args.outputDir = argv[++index] || '';
     else if (arg === '--json') args.json = true;
+    else if (arg === '--check') args.check = true;
     else throw new Error(`Unknown argument: ${arg}`);
   }
   if (args.inputs.length === 0) throw new Error('Missing required --input <path>');
+  if (args.check && (args.output || args.outputDir)) throw new Error('--check writes nothing; drop --output/--output-dir');
   if (args.output && args.inputs.length !== 1) throw new Error('--output requires exactly one --input');
   if (args.output && args.outputDir) throw new Error('Use either --output or --output-dir, not both');
-  if (!args.output && !args.outputDir) throw new Error('Missing --output <path> or --output-dir <path>');
+  if (!args.check && !args.output && !args.outputDir) throw new Error('Missing --output <path> or --output-dir <path>');
   return args;
 }
 
@@ -166,6 +175,13 @@ function outputPath(input, args) {
   if (args.output) return args.output;
   const name = path.basename(input).replace(/\.md$/i, '.ingest.md');
   return path.join(args.outputDir, name);
+}
+
+function checkInput(input) {
+  const source = fs.readFileSync(input, 'utf8');
+  const result = normalizeAdr(source);
+  validateAdr(result, input);
+  return { input, decisions: result.decisions };
 }
 
 function processInput(input, args) {
@@ -190,6 +206,11 @@ function prepareOutputDir(args) {
 
 function main(argv) {
   const args = parseArgs(argv);
+  if (args.check) {
+    const results = args.inputs.map((input) => checkInput(input));
+    process.stdout.write(args.json ? `${JSON.stringify(results)}\n` : results.map((item) => `${item.input}: OK (${item.decisions} decisions)`).join('\n') + '\n');
+    return;
+  }
   prepareOutputDir(args);
   const results = args.inputs.map((input) => processInput(input, args));
   process.stdout.write(args.json ? `${JSON.stringify(results)}\n` : results.map((item) => `${item.input} -> ${item.output} (${item.decisions} decisions)`).join('\n') + '\n');
@@ -206,6 +227,8 @@ if (require.main === module) {
 
 module.exports = {
   canonical,
+  checkInput,
+  decisionEntries,
   normalizeAdr,
   sectionNodes,
   validateAdr,
