@@ -344,6 +344,36 @@ test('a schema that is not a plain object is refused before launch', async () =>
   }
 });
 
+test('a versioned run scope launches with its ticket, phase and provider', async () => {
+  const { createRunScope } = require('../../plugins/delivery-pipeline/scripts/run-scope.cjs');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-claude-run-scope-'));
+  const transcript = writeSession(path.join(root, 'claude', 'projects'), fixtureRecords());
+  try {
+    const scope = createRunScope({
+      run_id: 'run-39-12', repository_id: root, phase: 39, ticket: 'T-39-12', worktree: root,
+      runtime: 'claude', owner_id: 'owner-39-12',
+      dispatch: { runtime: 'claude', role: 'pr-sentinel', dispatch_id: 'dispatch-39-12' },
+    });
+    let spawned = false;
+    const launch = createClaudeCliLauncher({
+      scope,
+      transcriptDir: null,
+      transcriptPollMs: 5,
+      uuid: () => SESSION,
+      env: { CLAUDE_CONFIG_DIR: path.join(root, 'claude') },
+      spawn: (_executable, args) => {
+        spawned = true;
+        captureConfiguredSessionStart(args, transcript);
+        return childFor(stream());
+      },
+    });
+    await launch('guard the round', { model: 'claude-opus-5-5', effort: 'low' });
+    assert.equal(spawned, true);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('waits for a flushed transcript and ignores stdout-only model and effort', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-claude-flush-'));
   const projects = path.join(root, 'projects');
