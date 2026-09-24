@@ -7,6 +7,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
 
+unset CLAUDE_PLUGIN_ROOT CLAUDE_CODE_ENTRYPOINT CODEX_SANDBOX CODEX_SANDBOX_NETWORK_DISABLED
+
 command -v node >/dev/null 2>&1 || { echo "node not found on PATH"; exit 1; }
 
 # Every .cjs in the deterministic layer must at least parse.
