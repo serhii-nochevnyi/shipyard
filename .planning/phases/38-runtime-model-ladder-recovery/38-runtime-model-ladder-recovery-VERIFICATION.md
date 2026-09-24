@@ -1,21 +1,21 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 66a2e6a8242aca2e496a6e2f16f4c6c3c0617cc6bf31fd9cf625bb9ecd5b9a41
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 719b0b2f0955de7d0984efd19ec9d99108eb92c7a04e135054ae79dd82d854b8
 phase: 38
-status: human_needed
-shipyard_source_fingerprint: 66a2e6a8242aca2e496a6e2f16f4c6c3c0617cc6bf31fd9cf625bb9ecd5b9a41
+status: passed
+shipyard_source_fingerprint: 719b0b2f0955de7d0984efd19ec9d99108eb92c7a04e135054ae79dd82d854b8
 ---
 
 # Phase 38: Restore the native model ladder in delivery — Verification Projection
 
-**Status:** human_needed
+**Status:** passed
 
 ## Observable Truths
 
 | Truth | Evidence | Status |
 |---|---|---|
 | Every phase plan is accounted for | 8/8 delivery records are merged | ✓ VERIFIED |
-| Integration is coherent | INTEGRATION.md is missing | ? UNCERTAIN |
-| Verification evidence is present | INTEGRATION.md is missing | ? UNCERTAIN |
+| Integration is coherent | integration evidence records passed | ✓ VERIFIED |
+| Verification evidence is present | integration evidence records repository-local verification facts | ✓ VERIFIED |
 
 ## Plan Evidence
 
@@ -37,4 +37,4 @@ shipyard_source_fingerprint: 66a2e6a8242aca2e496a6e2f16f4c6c3c0617cc6bf31fd9cf62
 
 ## Gaps Summary
 
-**Not green:** INTEGRATION.md is missing.
+**No gaps found in the available repository evidence.**

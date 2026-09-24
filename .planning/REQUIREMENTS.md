@@ -1,6 +1,6 @@
 # Requirements: shipyard
 
-<!-- shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 66a2e6a8242aca2e496a6e2f16f4c6c3c0617cc6bf31fd9cf625bb9ecd5b9a41 -->
+<!-- shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 719b0b2f0955de7d0984efd19ec9d99108eb92c7a04e135054ae79dd82d854b8 -->
 
 **Defined:** 2026-09-10
 **Core Value:** Keep delivery decisions truthful, resumable, and synchronized between the Shipyard conveyor and native GSD workflows.
@@ -113,24 +113,24 @@
 - [x] **REQ-103**: Claude and Codex consume the same canonical synchronizer through generated/bundled installer surfaces, with smoke coverage for both.
 - [x] **REQ-104**: Sentinel stack guards accept the observed PR branch recorded for a validated ticket when GitHub's live branch name differs from the canonical graph slug, while preserving same-phase and checkpoint boundaries.
 - [x] **REQ-105**: The delivery policy defines one versioned, role-scoped model ladder with explicit model, effort, and escalation signals for research, decomposition, execution, sentinel, integration, drift, architecture review, CI-fix, and review-fix.
-- [ ] **REQ-106**: Codex resolves the versioned ladder's approved native model IDs and efforts, generates/registers every required static variant, and fails closed on unavailable, stale, missing, or conflicting model configuration.
-- [ ] **REQ-107**: Claude Code consumes the canonical role/escalation decision via its native palette, and both runtime adapters reject unsupported or implicit model/effort application.
+- [x] **REQ-106**: Codex resolves the versioned ladder's approved native model IDs and efforts, generates/registers every required static variant, and fails closed on unavailable, stale, missing, or conflicting model configuration.
+- [x] **REQ-107**: Claude Code consumes the canonical role/escalation decision via its native palette, and both runtime adapters reject unsupported or implicit model/effort application.
 - [x] **REQ-108**: Every routed dispatch, including decomposition and dynamic executor paths, passes through one mandatory resolve → validate → launch boundary; inline fallback, parent-session inheritance, and conflicting GSD or per-role overrides cannot bypass the selected model.
 - [x] **REQ-109**: Repair escalation is evidence-backed (`Luna/max` → `Sol/medium` → `Astra/medium`), judgement escalation retains all fired signals, fixed Luna roles are not globally promoted, and missing prior application evidence prevents escalation.
 - [x] **REQ-110**: Dispatch telemetry records policy fingerprint, logical rung, requested/applied/observed model and effort, runtime, backend, agent or launch identity, signals, and receipt; negative tests prove enforcement on both runtimes and preserve Claude palette files/configuration.
 - [ ] **REQ-111**: Every autonomous run has an immutable scoped identity covering repository, phase, ticket, worktree, runtime, dispatch, lease, and state revision; stop and resume decisions never read a global newest board.
 - [ ] **REQ-112**: A runtime-neutral controller persists leases, wake conditions, retries, checkpoints, idempotency, and technical availability, and resumes a run without duplicate ownership or duplicate delivery effects.
-- [ ] **REQ-113**: Claude and Codex adapters consume the same control contract but remain provider-pure, carrying explicit runtime-native model and effort values with no parent-session inheritance or cross-provider fallback.
-- [ ] **REQ-114**: A shipped Claude Code delivery entrypoint applies the resolved model and effort with bounded edit/Bash permissions and positive application evidence; unavailable or unsupported hosts refuse before dispatch is counted.
-- [ ] **REQ-115**: Shipped Codex dynamic and generated-agent delivery paths apply the resolver-selected model and reasoning effort and produce positive runtime evidence; synthetic fixtures cannot satisfy the live-runtime acceptance gate.
-- [ ] **REQ-116**: A dispatch receipt joins requested, applied, observed, runtime, model, effort, policy, launch identity, and usage status, and distinguishes unsupported from unknown evidence without inferring success.
+- [x] **REQ-113**: Claude and Codex adapters consume the same control contract but remain provider-pure, carrying explicit runtime-native model and effort values with no parent-session inheritance or cross-provider fallback.
+- [x] **REQ-114**: A shipped Claude Code delivery entrypoint applies the resolved model and effort with bounded edit/Bash permissions and positive application evidence; unavailable or unsupported hosts refuse before dispatch is counted.
+- [x] **REQ-115**: Shipped Codex dynamic and generated-agent delivery paths apply the resolver-selected model and reasoning effort and produce positive runtime evidence; synthetic fixtures cannot satisfy the live-runtime acceptance gate.
+- [x] **REQ-116**: A dispatch receipt joins requested, applied, observed, runtime, model, effort, policy, launch identity, and usage status, and distinguishes unsupported from unknown evidence without inferring success.
 - [ ] **REQ-117**: Graph reachability is proven from live origin and parent-epic state before worktree creation or reuse; landed parents refresh child bases and stale or ambiguous ancestry remains retryable pending work.
 - [ ] **REQ-118**: CI, review, quota, lease, and host readiness waits are bounded deterministic states owned by the same run, while technical unavailability is retried automatically and human checkpoints are limited to authorization or policy decisions.
 - [ ] **REQ-119**: Runtime, account, role, model, effort, token, quality, recovery, and outcome facts are joinable per run and provider, with complete attribution required before a cost or ladder treatment is accepted.
-- [ ] **REQ-120**: Each runtime has capability probes, an explicitly enabled live proving-ground smoke, negative enforcement tests, versioned compatibility rollback, and preserved receipts; one runtime's evidence cannot mark the other green or block its independent rollout.
-- [ ] **REQ-121**: Codex routing uses native `gpt-6-luna` and `gpt-6-sol` IDs throughout policy, generated agents, capability metadata, and receipts; the executor base remains Luna/max and only approved signals promote it to Sol.
-- [ ] **REQ-122**: Claude Opus routing requests `claude-opus-5-5` with the existing Claude effort policy; credentials stay Anthropic-only and applied model/effort evidence is scoped to the launched assistant session.
-- [ ] **REQ-123**: Claude OAuth and Codex ChatGPT login are detected through each native CLI's status command; subscription auth is sufficient, API-key environment variables are not required, and credentials never cross providers. *ADR-011 was accepted for implementation on 2026-09-10. T-32-01/02 are the initial isolated tooling slice; subsequent packages remain subject to decomposition and rollout gates. Existing model floors remain unchanged.*
+- [x] **REQ-120**: Each runtime has capability probes, an explicitly enabled live proving-ground smoke, negative enforcement tests, versioned compatibility rollback, and preserved receipts; one runtime's evidence cannot mark the other green or block its independent rollout.
+- [x] **REQ-121**: Codex routing uses native `gpt-6-luna` and `gpt-6-sol` IDs throughout policy, generated agents, capability metadata, and receipts; the executor base remains Luna/max and only approved signals promote it to Sol.
+- [x] **REQ-122**: Claude Opus routing requests `claude-opus-5-5` with the existing Claude effort policy; credentials stay Anthropic-only and applied model/effort evidence is scoped to the launched assistant session.
+- [x] **REQ-123**: Claude OAuth and Codex ChatGPT login are detected through each native CLI's status command; subscription auth is sufficient, API-key environment variables are not required, and credentials never cross providers. *ADR-011 was accepted for implementation on 2026-09-10. T-32-01/02 are the initial isolated tooling slice; subsequent packages remain subject to decomposition and rollout gates. Existing model floors remain unchanged.*
 
 ## Out of Scope
 
@@ -248,24 +248,24 @@
 | REQ-103 | Phase 35 | Complete |
 | REQ-104 | Phase 30 | Complete |
 | REQ-105 | Phase 36 | Complete |
-| REQ-106 | Phase 38 | In Progress |
-| REQ-107 | Phase 38 | In Progress |
+| REQ-106 | Phase 38 | Complete |
+| REQ-107 | Phase 38 | Complete |
 | REQ-108 | Phase 36 | Complete |
 | REQ-109 | Phase 36 | Complete |
 | REQ-110 | Phase 36 | Complete |
 | REQ-111 | Phase 37 | In Progress |
 | REQ-112 | Phase 37 | In Progress |
-| REQ-113 | Phase 38 | In Progress |
-| REQ-114 | Phase 38 | In Progress |
-| REQ-115 | Phase 38 | In Progress |
-| REQ-116 | Phase 38 | In Progress |
+| REQ-113 | Phase 38 | Complete |
+| REQ-114 | Phase 38 | Complete |
+| REQ-115 | Phase 38 | Complete |
+| REQ-116 | Phase 38 | Complete |
 | REQ-117 | Phase 37 | In Progress |
 | REQ-118 | Phase 37 | In Progress |
 | REQ-119 | Phase 37 | In Progress |
-| REQ-120 | Phase 38 | In Progress |
-| REQ-121 | Phase 38 | In Progress |
-| REQ-122 | Phase 38 | In Progress |
-| REQ-123 | Phase 38 | In Progress |
+| REQ-120 | Phase 38 | Complete |
+| REQ-121 | Phase 38 | Complete |
+| REQ-122 | Phase 38 | Complete |
+| REQ-123 | Phase 38 | Complete |
 
 **Coverage:**
 - v1 requirements: 123 total
