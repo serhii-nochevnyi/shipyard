@@ -78,7 +78,7 @@ function run(graph, args) {
     encoding: 'utf8', cwd: os.tmpdir(), timeout: 20000,
   });
   let json = null;
-  if (args.includes('--json')) { try { json = JSON.parse(r.stdout); } catch { /* left null */ } }
+  if (args.includes('--json')) { try { json = JSON.parse(r.stdout); } catch {} }
   return { status: r.status, stdout: r.stdout, stderr: r.stderr, json };
 }
 
@@ -92,7 +92,6 @@ const diamondAndChain = () => project({
   'T-02-03': { phase: 2, title: 'Chain end', depends_on: ['T-02-02'] },
 });
 
-// ── plan: determinism, ordering, links ──────────────────────────────────────
 
 suite('plan — determinism and step ordering');
 
@@ -149,7 +148,6 @@ test('every depends_on yields exactly one link, dependent on the outward (blocke
   }
 });
 
-// ── labels and the source-of-truth pointer ──────────────────────────────────
 
 suite('plan — labels and the source-of-truth pointer');
 
@@ -200,7 +198,6 @@ test('the idempotency lookup carries the primary jql and the legacy-label fallba
   assert.equal(issue.lookup.legacy_jql, 'project = MYD AND labels = "shipyard-T-01-01"');
 });
 
-// ── --epic-issue-type none ──────────────────────────────────────────────────
 
 suite('plan — --epic-issue-type none');
 
@@ -230,7 +227,6 @@ test('CLI: --epic-issue-type none produces zero epic steps end to end', () => {
   assert.deepEqual(out.json.steps.filter((s) => s.step === 'epic'), []);
 });
 
-// ── record ───────────────────────────────────────────────────────────────
 
 suite('record — a targeted line edit inside the delivery: block');
 
@@ -302,7 +298,6 @@ test('a malformed Jira key is refused with exit 1', () => {
   assert.equal(r.status, 1);
 });
 
-// ── negative pin: no network code anywhere in this script ──────────────────
 
 suite('jira-export touches no network — asserted as a SOURCE TOKEN sweep');
 
