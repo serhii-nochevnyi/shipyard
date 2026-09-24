@@ -37,11 +37,19 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-node@v4
         with:
           # Keep CI on the supported Node major used by the host-side scripts.
           node-version: '24.15.0'
+
+      - name: publish gate
+        run: |
+          BASE=origin/main
+          if [ -n "$GITHUB_BASE_REF" ]; then BASE=origin/$GITHUB_BASE_REF; fi
+          node plugins/delivery-pipeline/scripts/publish-gate.cjs --base "$BASE" --working-tree --json
 
       - name: make test-fast
         run: make test-fast

@@ -34,6 +34,7 @@ PROJECT_DIR="${SHIPYARD_PROJECT_DIR:-$REPO_ROOT}"
 CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
 AGENTS_SKILLS="${AGENTS_SKILLS_DIR:-$HOME/.agents/skills}"
 BUNDLE_ROOT="$CODEX_HOME/shipyard"
+NOTIFY_DELEGATE="$CODEX_HOME/shipyard-notify-delegate.json"
 GSD_TOOLS="$CODEX_HOME/gsd-core/bin/gsd-tools.cjs"
 CAPABILITIES_FILE="${SHIPYARD_CODEX_CAPABILITIES_FILE:-}"
 AGENTS_MD="${CODEX_AGENTS_MD:-$CODEX_HOME/AGENTS.md}"
@@ -136,6 +137,7 @@ restore_runtime_paths() {
     if [[ -z "$target" ]]; then
       case "$kind" in
         bundle) target="$BUNDLE_ROOT" ;;
+        notify-delegate) target="$NOTIFY_DELEGATE" ;;
         skill) target="$AGENTS_SKILLS/$name" ;;
         capability) target="${CAPABILITY_TARGET:-${GSD_CAPABILITIES_ROOT:-$HOME/.gsd/capabilities}/$name}" ;;
         agents-md) target="${AGENTS_MD:-$CODEX_HOME/AGENTS.md}" ;;
@@ -304,6 +306,7 @@ if compgen -G "$OUT/agents/*.toml" >/dev/null; then
     cp -p "$CONFIG_TARGET" "$CONFIG_BACKUP"
     CONFIG_PREEXISTED=1
   fi
+  snapshot_runtime_path notify-delegate delegate "$NOTIFY_DELEGATE"
   if [[ -e "$AGENT_MANIFEST_TARGET" || -L "$AGENT_MANIFEST_TARGET" ]]; then
     cp -a "$AGENT_MANIFEST_TARGET" "$AGENT_MANIFEST_BACKUP"
     AGENT_MANIFEST_PREEXISTED=1
@@ -602,6 +605,9 @@ ${largeRoute}
 - Research first (proportionate) and apply GSD at full across stages
   (research -> plan -> implement -> verify -> review), driving GSD/shipyard
   yourself.
+- Keep the native Codex ladder: Luna at max is the executor baseline; promote
+  to Sol only for explicit critical or measured recovery signals. Do not use
+  Anthropic models in a Codex dispatch.
 - The user should not have to invoke GSD or shipyard manually.
 Skip this entirely for pure questions, discussion, or non-code chatter.
 ${END}`;
@@ -723,6 +729,12 @@ replace_dir "$OUT/bundle" "$BUNDLE_ROOT" "bundle payload" || {
   echo "error: could not install bundle payload" >&2
   exit "$status"
 }
+
+echo "→ installing Codex turn observer → $CODEX_HOME/config.toml"
+node "$REPO_ROOT/scripts/configure-codex-notify.cjs" \
+  --config "$CODEX_HOME/config.toml" \
+  --wrapper "$BUNDLE_ROOT/scripts/codex-notify.cjs" \
+  --delegate-file "$NOTIFY_DELEGATE"
 
 # Nothing installer-owned remains to roll back after this point. Keeping the
 # rollback active through the skill reconciliation is what makes a failed

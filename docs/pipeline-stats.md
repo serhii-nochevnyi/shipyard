@@ -40,6 +40,24 @@ verified completion. The report marks each efficiency row `eligible` only when
 the dispatch is attributed unambiguously, has a concrete observed model and
 effort, and has complete input counters.
 
+The `session_observations` section reports Claude sessions captured by the
+installed Stop hook and Codex turns captured by the installed `turn-ended`
+notify wrapper. It includes runtime, concrete model, effort, status and token
+counters. Codex reads `logs_2.sqlite` and `thread_history_1.sqlite` read-only;
+`total_tokens` is the per-turn delta from the cumulative Codex counter and the
+first observed turn is marked `cumulative_baseline`. Input/output components
+remain unknown when the host log does not expose them.
+
+Both runtimes keep these facts `unbound` until a dispatch identity is known.
+Those rows show what was used but are not efficiency comparisons; use the
+dispatch correlation ledger to connect usage to work and outcomes. Observers
+write only inside an existing Shipyard graph and ignore telemetry errors so
+they cannot block delivery. Existing Codex notify commands are preserved as a
+delegate and receive the original payload.
+
+To backfill existing Codex turns for one project, run:
+`node plugins/delivery-pipeline/scripts/session-observer.cjs observe-codex --db "$CODEX_HOME/logs_2.sqlite" --graph .planning/graph --json`.
+
 Use `--since 14d` (the default), `--since all`, or an ISO timestamp to limit the
 windowed ladder warnings and coverage counts. Ticket and phase outcome rows
 remain lifetime facts.

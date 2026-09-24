@@ -12,13 +12,14 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
 
 # ── static ───────────────────────────────────────────────────────────────────
-for f in scripts/gen-codex-shipyard.cjs scripts/merge-codex-config.cjs scripts/install-shipyard-codex.sh \
+for f in scripts/gen-codex-shipyard.cjs scripts/merge-codex-config.cjs scripts/configure-codex-notify.cjs scripts/install-shipyard-codex.sh \
          plugins/delivery-pipeline/scripts/runtime-context.cjs \
          plugins/delivery-pipeline/scripts/gsd-sync.cjs capabilities/delivery-pipeline/checks/gsd-sync-gate.cjs; do
   [[ -f "$f" ]] || { echo "missing $f"; exit 1; }
 done
 node --check scripts/gen-codex-shipyard.cjs
 node --check scripts/merge-codex-config.cjs
+node --check scripts/configure-codex-notify.cjs
 node --check plugins/delivery-pipeline/scripts/gsd-tune.cjs
 node --check plugins/delivery-pipeline/scripts/dispatch-record.cjs
 node --check plugins/delivery-pipeline/scripts/gsd-sync.cjs
@@ -101,6 +102,13 @@ NODE
 
 # ── install shipyard (full, phase 2) ─────────────────────────────────────────
 bash scripts/install-shipyard-codex.sh --phase 2 >/dev/null
+
+NOTIFY_WRAPPER="$CODEX_HOME/shipyard/scripts/codex-notify.cjs"
+grep -q "${NOTIFY_WRAPPER}" "$CODEX_HOME/config.toml" \
+  || { echo "Codex notify observer was not registered"; exit 1; }
+[[ -f "$CODEX_HOME/shipyard-notify-delegate.json" ]] \
+  || { echo "Codex notify delegate record is missing"; exit 1; }
+node --check "$NOTIFY_WRAPPER"
 
 GSD_AFTER="$(gsd_owned_state)"
 [[ "$GSD_BEFORE" == "$GSD_AFTER" ]] \

@@ -1042,9 +1042,16 @@ function mergeOne(id) {
   if (threads.status !== 0) {
     return block(`could not read the review threads (${diagnostic(threads)}) — refusing to merge blind`);
   }
+  let reviewState = null;
   let unresolved = null;
-  try { unresolved = JSON.parse(threads.stdout).unresolved_count; } catch { unresolved = null; }
+  try {
+    reviewState = JSON.parse(threads.stdout);
+    unresolved = reviewState.unresolved_count;
+  } catch { unresolved = null; }
   if (typeof unresolved !== 'number') return block('review threads unreadable — refusing to merge blind');
+  if (reviewState.review_fresh === false) {
+    return block(`${reviewState.review_freshness_reason || 'the approved review is stale'} — review approval must cover the current head`);
+  }
   if (unresolved > 0) return block(`${unresolved} unresolved review thread(s)`);
   res.unresolved = 0;
 

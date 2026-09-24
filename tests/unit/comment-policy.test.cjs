@@ -8,6 +8,7 @@ const { suite, test, done, assert } = require('./assert-harness.cjs');
 
 const ROOT = path.join(__dirname, '..', '..');
 const SCRIPT = path.join(ROOT, 'plugins', 'delivery-pipeline', 'scripts', 'comment-policy.cjs');
+const PUBLISH_SCRIPT = path.join(ROOT, 'plugins', 'delivery-pipeline', 'scripts', 'publish-gate.cjs');
 
 function git(cwd, args) {
   const result = spawnSync('git', ['-C', cwd, ...args], { encoding: 'utf8' });
@@ -41,6 +42,10 @@ function fixture(base, change) {
 
 function run(repo, args) {
   return spawnSync(process.execPath, [SCRIPT, ...args], { cwd: repo, encoding: 'utf8' });
+}
+
+function runPublish(repo, args) {
+  return spawnSync(process.execPath, [PUBLISH_SCRIPT, ...args], { cwd: repo, encoding: 'utf8' });
 }
 
 function args(command, repo, extra = []) {
@@ -78,6 +83,19 @@ test('blocks one added explanatory comment even when code outnumbers it', () => 
   assert.deepStrictEqual(report.violations, ['src/app.js']);
   assert.strictEqual(report.files[0].comment_lines, 1);
   assert.strictEqual(report.files[0].code_lines, 1);
+});
+
+test('publish gate includes uncommitted worktree additions', () => {
+  const repo = fixture(
+    { 'src/app.js': 'const value = 1;\n' },
+    { 'src/app.js': 'const value = 1;\nconst next = value + 1;\n' },
+  );
+  fs.appendFileSync(path.join(repo, 'src/app.js'), '// explain the implementation\n');
+  const result = runPublish(repo, ['--base', 'main', '--working-tree', '--json']);
+  assert.strictEqual(result.status, 1, result.stdout + result.stderr);
+  const report = JSON.parse(result.stdout);
+  assert.strictEqual(report.ok, false);
+  assert.deepStrictEqual(report.violations, ['src/app.js']);
 });
 
 test('allows only short invariant, security and contract markers', () => {
