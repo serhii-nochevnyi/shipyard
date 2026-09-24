@@ -4,7 +4,7 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { execFileSync } = require('node:child_process');
+const { execFileSync, spawnSync } = require('node:child_process');
 const { EventEmitter } = require('node:events');
 const { suite, test, done, assert } = require('./assert-harness.cjs');
 const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
@@ -442,6 +442,16 @@ test('CLI request parsing accepts only a bounded args file and explicit scope', 
     assert.throws(() => requestValue({ role: 'executor', model: 'gpt-6-luna' }),
       (error) => error.code === 'INVALID_INPUT');
   } finally { clean(f); }
+});
+
+test('spawning with bad argv exits 1, keeps the first stderr line, and appends a hint line', () => {
+  const scriptPath = path.resolve(__dirname, '../../plugins/delivery-pipeline/scripts/codex-delivery-host.cjs');
+  const result = spawnSync(process.execPath, [scriptPath], { encoding: 'utf8', timeout: 10000 });
+  assert.equal(result.status, 1);
+  assert.equal(result.stdout, '');
+  const lines = result.stderr.split('\n');
+  assert.equal(lines[0], 'codex-delivery-host: codex-delivery-host: usage: codex-delivery-host.cjs --args-file <json>');
+  assert.match(lines[1], /^hint\[INVALID_INPUT\]: /);
 });
 
 done();
