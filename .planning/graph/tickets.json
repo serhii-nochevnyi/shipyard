@@ -5221,7 +5221,7 @@
       "risk": "high",
       "type": "implementation",
       "human_checkpoint": true,
-      "preauthorized": false,
+      "preauthorized": true,
       "branch": "ticket/T-39-03-enforce-the-stop-gate-only-in-deliver-ar",
       "epic": "epic/39-remove-conveyor-session-friction",
       "primary_parent": null,

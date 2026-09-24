@@ -2439,7 +2439,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/stop-gate.cjs, plugins/delivery-pipeline/scripts/stop-gate-arm.cjs, plugins/delivery-pipeline/commands/deliver.md, tests/unit/stop-gate.test.cjs, tests/unit/stop-gate-arm.test.cjs, tests/unit/dispatch-record.test.cjs, '.gitignore']
     risk: high
     human_checkpoint: true
-    preauthorized: false
+    preauthorized: true
     branch: ticket/T-39-03-enforce-the-stop-gate-only-in-deliver-ar
     epic: epic/39-remove-conveyor-session-friction
     primary_parent: null
