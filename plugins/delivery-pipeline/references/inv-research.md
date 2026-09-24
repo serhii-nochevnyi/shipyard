@@ -27,6 +27,9 @@ contained path per canonical line under `artifactPaths`:
 }
 ```
 
+`summary` is plain text of at most 500 characters; put everything else in the
+artifact file; return the JSON object only, with no prose after it.
+
 `artifact` is input to the host-owned trusted consumer. After the boundary
 receipt is verified, the consumer checks that the file is inside the
 investigation worktree, is immutable for the dispatch, and matches its digest.

@@ -111,7 +111,15 @@ installed Claude `PreToolUse` hook invokes it for every `git push`.
    Declare dependencies precisely: a spurious dep serializes the flow, a
    missing one hands the executor an incomplete base. The validator derives
    the epic (`epic/<phase-dir>`), the primary parent, and `pr_base`; multiple
-   same-phase parents (a diamond) get a warning — linearize when practical.
+   same-phase parents (a diamond) get a warning — linearize only when the
+   child needs every parent's code at once, not merely to fix an execution
+   order. **Ordering alone is not a `depends_on`.** When a same-phase
+   dependency shares no `files_modified` with its parent, the validator warns
+   so the edge gets checked; drop it if the child does not actually need the
+   parent's code, since a spurious dependency only serializes waves and
+   `pr_base`. A real import dependency can still trigger this warning (e.g.
+   the parent's code lives outside its declared `files_modified`), so treat
+   it as a prompt to verify, not an automatic instruction to delete the edge.
    **Keep dependencies inside one phase.** A cross-phase dependency cannot
    cascade — there is no shared branch to stack on — so the dependent ticket
    stays blocked until the parent's whole phase has landed on the default
