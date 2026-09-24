@@ -6,6 +6,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { EventEmitter } = require('node:events');
+const { spawnSync } = require('node:child_process');
 const test = require('node:test');
 const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
 const { createDurableRecorder } = require('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs');
@@ -213,6 +214,16 @@ test('CLI accepts only a bounded scope and typed request file', () => {
       prompt: 'Plan.', runStoreDir: path.join(f.root, 'runs') }));
     assert.throws(() => readRequestFile(file), (error) => error.code === 'INVALID_INPUT');
   } finally { f.clean(); }
+});
+
+test('spawning with bad argv exits 1, keeps the first stderr line, and appends a hint line', () => {
+  const scriptPath = path.resolve(__dirname, '../../plugins/delivery-pipeline/scripts/codex-decompose-host.cjs');
+  const result = spawnSync(process.execPath, [scriptPath], { encoding: 'utf8', timeout: 10000 });
+  assert.equal(result.status, 1);
+  assert.equal(result.stdout, '');
+  const lines = result.stderr.split('\n');
+  assert.equal(lines[0], 'codex-decompose-host: codex-decompose-host: usage: codex-decompose-host.cjs --args-file <json>');
+  assert.match(lines[1], /^hint\[INVALID_INPUT\]: /);
 });
 
 test('default run controller state is outside the model worktree and keyed to it', () => {

@@ -12,6 +12,7 @@ const policy = require('./model-policy.cjs');
 const { newDispatchId } = require('./dispatch-boundary.cjs');
 const { createRunScope } = require('./run-scope.cjs');
 const { createRunController, DEFAULT_LEASE_TTL_MS } = require('./run-controller.cjs');
+const { formatHint } = require('./refusal-hints.cjs');
 
 const SCHEMA = 'shipyard.codex-delivery-host.v1';
 const MAX_ARGS_BYTES = 4 * 1024 * 1024;
@@ -469,6 +470,7 @@ module.exports = Object.freeze({
 if (require.main === module) {
   runCli().catch((error) => {
     process.stderr.write('codex-delivery-host: ' + (error && error.message ? error.message : error) + '\n');
+    process.stderr.write(formatHint(error && error.code) + '\n');
     process.exitCode = 1;
   });
 }
