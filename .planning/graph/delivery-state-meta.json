@@ -1,13 +1,13 @@
 {
   "schema_version": 1,
-  "generation": 351,
-  "generation_identity": "ad126889-aaa7-485b-a3d2-efff98fd592f",
-  "previous_generation_identity": "16777229:162236340:1790234152634573600:3af4adca0ad532d677e65cbc2e6cd32ae53833e5d8009620117d3bdb3e16a6da",
-  "observed_at": "2026-09-24T07:16:23.997Z",
-  "generated_at": "2026-09-24T07:16:23.997Z",
+  "generation": 352,
+  "generation_identity": "68a63cc3-0d58-491d-84c0-6c82e466919d",
+  "previous_generation_identity": "16777244:12914301176:1790249754946217000:e1ac45d42bfa3d7f874004ccb0db174678b00ac3ccc133cae88e3bac953c8c85",
+  "observed_at": "2026-09-24T13:52:13.210Z",
+  "generated_at": "2026-09-24T13:52:13.210Z",
   "by": "state-sync",
-  "pid": 6422,
-  "observation_generation": 351,
+  "pid": 1242,
+  "observation_generation": 352,
   "observation_projection": {
     "tickets": {
       "T-20-01": {
@@ -1615,14 +1615,135 @@
         "merge_state": null,
         "review_decision": null,
         "checks": null
+      },
+      "T-39-01": {
+        "status": "pending",
+        "repository": null,
+        "pr": null,
+        "head": null,
+        "draft": false,
+        "base": "epic/39-remove-conveyor-session-friction",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-39-02": {
+        "status": "pending",
+        "repository": null,
+        "pr": null,
+        "head": null,
+        "draft": false,
+        "base": "epic/39-remove-conveyor-session-friction",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-39-03": {
+        "status": "pending",
+        "repository": null,
+        "pr": null,
+        "head": null,
+        "draft": false,
+        "base": "epic/39-remove-conveyor-session-friction",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-39-04": {
+        "status": "pending",
+        "repository": null,
+        "pr": null,
+        "head": null,
+        "draft": false,
+        "base": "epic/39-remove-conveyor-session-friction",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-39-05": {
+        "status": "pending",
+        "repository": null,
+        "pr": null,
+        "head": null,
+        "draft": false,
+        "base": "epic/39-remove-conveyor-session-friction",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-39-06": {
+        "status": "pending",
+        "repository": null,
+        "pr": null,
+        "head": null,
+        "draft": false,
+        "base": "epic/39-remove-conveyor-session-friction",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-39-07": {
+        "status": "pending",
+        "repository": null,
+        "pr": null,
+        "head": null,
+        "draft": false,
+        "base": "epic/39-remove-conveyor-session-friction",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-39-08": {
+        "status": "pending",
+        "repository": null,
+        "pr": null,
+        "head": null,
+        "draft": false,
+        "base": "epic/39-remove-conveyor-session-friction",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-39-09": {
+        "status": "pending",
+        "repository": null,
+        "pr": null,
+        "head": null,
+        "draft": false,
+        "base": "epic/39-remove-conveyor-session-friction",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-39-10": {
+        "status": "pending",
+        "repository": null,
+        "pr": null,
+        "head": null,
+        "draft": false,
+        "base": "epic/39-remove-conveyor-session-friction",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-39-11": {
+        "status": "pending",
+        "repository": null,
+        "pr": null,
+        "head": null,
+        "draft": false,
+        "base": "epic/39-remove-conveyor-session-friction",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
       }
     }
   },
   "binding": {
     "schema_version": 1,
-    "state_digest": "e48cccf13f872b89b306f5ea32828b12daed5a57db620a10343295f0ee5eb3a0",
-    "front_digest": "8aff32cdaf0b1f936721a13e51f48c88ecea8fd7e1d1d306fcffcac3d65cb5e8",
-    "observation_digest": "d03a89a84af0ccb459293962b4d42de9941b6b255d1d8969983482522f90f5de",
-    "observation_generation": 351
+    "state_digest": "03913ce0b7e9890f91ca6d13446ab2af7598ede91ba2ac2fd83e179f9f546d23",
+    "front_digest": "8d579ac18bd5a933c6c451c8350d02aebb3e14084dec98e76a056ec1d75c734c",
+    "observation_digest": "2199fe3c959dc86c52f0dd317b8283a846ab48626b10d16d4adf83e65af216b4",
+    "observation_generation": 352
   }
 }
