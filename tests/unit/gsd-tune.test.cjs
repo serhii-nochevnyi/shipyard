@@ -355,8 +355,12 @@ test('a config that is not valid JSON is refused, not rewritten', () => {
 
 test('a project with no GSD config at all is refused', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-nogsd-'));
-  const r = run(dir, ['--runtime', 'claude', '--apply']);
-  assert.notEqual(r.status, 0);
+  const r = run(dir, ['--check', '--runtime', 'claude']);
+  assert.equal(r.status, 2);
+  assert.ok(/^gsd-tune: /.test(r.stderr), r.stderr);
+  assert.ok(r.stderr.includes(path.join(dir, '.planning', 'config.json')), r.stderr);
+  assert.ok(r.stderr.includes('/shipyard:decompose'), r.stderr);
+  assert.ok(r.stderr.includes('$shipyard-decompose'), r.stderr);
   assert.ok(!fs.existsSync(path.join(dir, '.planning', 'config.json')), 'no config is conjured');
 });
 
