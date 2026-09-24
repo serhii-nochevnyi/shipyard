@@ -93,6 +93,60 @@ return await parallel([async () => {
   }
 });
 
+async function workflowResultFor(hostResult) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-claude-workflow-output-'));
+  const scriptPath = path.join(root, 'workflow.mjs');
+  const recorder = createDurableRecorder(path.join(root, 'receipts'));
+  const evidence = new WeakMap();
+  fs.writeFileSync(scriptPath, `
+export const meta = { name: 'output-test' }
+const dispatched = await __createClaudeWorkflowDispatch({
+  agent,
+  prompt: 'host-bound prompt',
+  role: 'executor',
+  model: 'sonnet',
+  effort: 'max',
+  context: { ticket: 'T-39-12' },
+})
+return dispatched.result
+`);
+  try {
+    return await runClaudeWorkflow({
+      scriptPath,
+      args: {},
+      agent: async (_prompt, options) => {
+        const result = hostResult();
+        evidence.set(result, transcriptEvidence({
+          launch_id: 'claude-workflow-output-test',
+          applied_model: options.model,
+          applied_effort: options.effort,
+          observed_model: options.model,
+          observed_effort: options.effort,
+        }));
+        return result;
+      },
+      parallel: async (thunks) => Promise.all(thunks.map((thunk) => thunk())),
+      capabilities: CAPABILITIES,
+      recorder,
+      applicationEvidence: ({ result }) => evidence.get(result),
+    });
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+test('a structured host output reaches the workflow as the agent result', async () => {
+  const output = { id: 'T-39-12', status: 'blocked', summary: 'structured handback' };
+  const result = await workflowResultFor(() => ({ status: 'completed', summary: 'prose', output }));
+  assert.deepEqual(result, output);
+});
+
+test('a text host output keeps the host result unchanged', async () => {
+  const result = await workflowResultFor(() => ({ status: 'completed', summary: 'prose', output: 'plain text' }));
+  assert.equal(result.status, 'completed');
+  assert.equal(result.output, 'plain text');
+});
+
 test('production investigation entry point pins the research workflow and runs all four lines', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-claude-investigation-host-'));
   const recorder = createDurableRecorder(path.join(root, 'receipts'));
