@@ -29,6 +29,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SETTINGS="$CLAUDE_HOME/settings.json"
 
 ROUTE_HOOK="$CLAUDE_HOME/hooks/shipyard-auto-route.sh"
+ROUTE_CJS="$CLAUDE_HOME/hooks/shipyard-auto-route.cjs"
 PRE_PUSH_HOOK="$CLAUDE_HOME/hooks/shipyard-pre-push-gate.sh"
 STOP_DIR="$CLAUDE_HOME/hooks/shipyard-stop-gate"
 STOP_HOOK="$STOP_DIR/stop-gate.cjs"
@@ -87,7 +88,7 @@ if [[ "$REMOVE" == 1 ]]; then
   drop_hook Stop "$SESSION_CMD"
   drop_hook Stop "$OLD_STOP_CMD"
   drop_hook Stop "node \"$STOP_DIR/stop-gate.cjs\""
-  rm -f "$ROUTE_HOOK" "$PRE_PUSH_HOOK" "$STOP_HOOK"
+  rm -f "$ROUTE_HOOK" "$ROUTE_CJS" "$PRE_PUSH_HOOK" "$STOP_HOOK"
   rm -rf "$STOP_DIR" "$OLD_STOP_HOOK"
   echo "✓ removed shipyard auto-route and stop-gate hooks from Claude"
   exit 0
@@ -106,28 +107,23 @@ fi
 
 mkdir -p "$CLAUDE_HOME/hooks"
 
-cat > "$ROUTE_HOOK" <<'EOF'
+ROUTE_SRC=""
+for candidate in \
+  "${SHIPYARD_PLUGIN_DIR:-}/scripts/auto-route.cjs" \
+  "$ROOT/plugins/delivery-pipeline/scripts/auto-route.cjs"
+do
+  [[ -f "$candidate" ]] && { ROUTE_SRC="$candidate"; break; }
+done
+[[ -n "$ROUTE_SRC" ]] || { echo "error: auto-route.cjs not found under $ROOT/plugins/delivery-pipeline" >&2; exit 1; }
+cp "$ROUTE_SRC" "$ROUTE_CJS"
+chmod +x "$ROUTE_CJS"
+echo "→ wrote $ROUTE_CJS"
+
+cat > "$ROUTE_HOOK" <<EOF
 #!/usr/bin/env bash
-# Managed by shipyard: inject the auto-route policy on every user prompt so the
-# pipeline is applied without the user manually invoking GSD or shipyard.
+# Managed by shipyard: do not edit.
 set -euo pipefail
-cat <<'POLICY'
-[shipyard auto-route] If this message defines a scope of work or asks to
-implement / build / change / fix something in a codebase, handle it through
-shipyard rather than ad hoc — do not wait to be told to run a command:
-- Use the shipyard router (/shipyard:route) to size and dispatch the work:
-  large / multi-ticket → /shipyard:decompose → /shipyard:deliver; a small change,
-  an existing ticket, or "no ticket" → /shipyard:bench; a one-liner → inline.
-- Research first (proportionate) and apply GSD at full across stages
-  (research → plan → implement → verify → review), driving GSD/shipyard yourself.
-- Keep the native model ladder: bounded routine work uses Sonnet, critical or
-  repeated recovery uses Opus, and Fable is reserved for measured long-context
-  routes. The selected model and effort must remain visible in the dispatch.
-- Do not replace deterministic gates with a model response, and do not mix
-  Anthropic work with Codex models.
-- The user should not have to invoke GSD or shipyard manually.
-Skip this entirely for pure questions, discussion, or non-code chatter.
-POLICY
+node "$ROUTE_CJS" || true
 EOF
 chmod +x "$ROUTE_HOOK"
 echo "→ wrote $ROUTE_HOOK"

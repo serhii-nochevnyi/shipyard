@@ -5458,7 +5458,9 @@
         "tests/unit/claude-runtime-host.test.cjs",
         "plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs",
         "tests/unit/claude-workflow-host.test.cjs",
-        "tests/unit/source-contract.test.cjs"
+        "tests/unit/source-contract.test.cjs",
+        "plugins/delivery-pipeline/scripts/claude-role-host.cjs",
+        "tests/unit/claude-role-host.test.cjs"
       ],
       "risk": "medium",
       "type": "implementation",
