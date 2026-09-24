@@ -323,7 +323,7 @@ function fail(msg, code = 2) { process.stderr.write(`gsd-tune: ${msg}\n`); proce
 
 let raw;
 if (!fs.existsSync(CONFIG)) {
-  if (!GLOBAL) fail(`no ${CONFIG} — run this from a GSD project (the conveyor's own project root)`);
+  if (!GLOBAL) fail(`no ${CONFIG} — this directory is not a GSD project yet. Create it with /shipyard:decompose (Codex: $shipyard-decompose), which bootstraps .planning/config.json from an accepted ADR, or /gsd-new-project, then re-run gsd-tune from that project root`);
   raw = {}; // the global defaults file is ours to create; a project's config is not
 } else {
   try { raw = JSON.parse(fs.readFileSync(CONFIG, 'utf8')); }

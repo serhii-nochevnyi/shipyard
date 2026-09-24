@@ -547,6 +547,15 @@ for (const id of order) {
       `${id}: ${same.length} same-phase parents (${same.join(', ')}) — the cascade bases on ${t.primary_parent} only; the others land through the epic. Linearize the chain if ${id} needs every parent's code at once.`
     );
   }
+  for (const d of same) {
+    const tFiles = t.files.filter(ownable);
+    const dFiles = tickets[d].files.filter(ownable);
+    if (!tFiles.some((fa) => dFiles.some((fb) => mayIntersect(fa, fb)))) {
+      warnings.push(
+        `${id}: depends_on ${d} shares no files_modified with it — if ${id} does not need ${d}'s code, drop the dependency (ordering alone is not a depends_on; it serializes waves and pr_base)`
+      );
+    }
+  }
   if (t.cross_phase_deps.length) {
     warnings.push(
       `${id}: cross-phase dependency on ${t.cross_phase_deps.join(', ')} — it cannot cascade through an epic, so ${id} stays blocked until phase ${t.cross_phase_deps.map((d) => tickets[d].phase).join('/')} has landed on the default branch. Prefer same-phase slicing.`

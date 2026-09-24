@@ -46,10 +46,13 @@ make doctor
 ```
 
 The hook installer writes the auto-route hook and a complete stop-gate module
-bundle under `~/.claude/hooks/`. It updates only the Shipyard entries in
-`~/.claude/settings.json`, removes the old single-file stop-gate entry, and
-leaves other hooks untouched. Re-run it after updating Shipyard, then start a
-new Claude session or reload hooks with `/hooks`.
+bundle under `~/.claude/hooks/`. The route hook reads the submitted prompt from
+stdin, stays silent for `<task-notification>` turns and expanded slash
+commands, and otherwise injects the auto-route policy, which routes unclear or
+research-needing work to `/shipyard:investigate`. It updates only the Shipyard
+entries in `~/.claude/settings.json`, removes the old single-file stop-gate
+entry, and leaves other hooks untouched. Re-run it after updating Shipyard,
+then start a new Claude session or reload hooks with `/hooks`.
 
 Use a different Claude home when testing or when several installations must be
 kept separate:
@@ -82,9 +85,12 @@ Claude Code: /shipyard:route "describe the change"
 Codex CLI:   $shipyard-route "describe the change"
 ```
 
-The target repository needs an initialized `.planning/` directory. If it is not
-initialized, Shipyard runs the required GSD setup before continuing. To inspect
-runtime settings for a target project, run the tuner from that project's root:
+`/shipyard:investigate` needs only a `.planning/investigations/` directory and
+runs before any other GSD state exists. `/shipyard:decompose` bootstraps a
+missing GSD project — `config.json`, `ROADMAP.md`, `REQUIREMENTS.md` — from the
+accepted ADR the first time it runs against an uninitialized `.planning/`. To
+inspect runtime settings for a target project, run the tuner from that
+project's root:
 
 ```bash
 node /path/to/shipyard/plugins/delivery-pipeline/scripts/gsd-tune.cjs --runtime claude
@@ -136,8 +142,9 @@ worktree and does not create tickets, branches, PRs, merges, or commits unless
 The delivery loop cold-starts from the graph and current GitHub state, selects
 available work, records dispatch ownership, and repeats implementation,
 verification, review, and CI repair until the front reaches a fixpoint. A stop
-gate keeps a Claude session alive while actionable work or a required CI wait
-remains. Codex resumes from the same graph on the next turn.
+gate keeps a Claude session alive only when `/shipyard:deliver` armed that
+session; other sessions, including forked sessions, are not held open. Codex
+resumes from the same graph on the next turn.
 
 ## Model ladder
 
@@ -267,9 +274,11 @@ node scripts/shipyard-doctor.cjs --json
 ```
 
 It checks the source metadata, Claude hook command, complete stop-gate
-dependency closure, Codex bundle manifest, and version markers. A warning means
-the installed runtime is older than this checkout; an error means the runtime
-cannot enforce the expected hook or bundle contract.
+dependency closure, Codex bundle manifest, version markers, the installed
+Claude route hook, and the Codex AGENTS.md route block. A warning means the
+installed runtime is older than this checkout or a managed hook has drifted;
+an error means the runtime cannot enforce the expected hook or bundle
+contract.
 
 Before a delivery ship check, verify the native projection is current:
 
