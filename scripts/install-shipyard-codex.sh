@@ -583,34 +583,13 @@ GSD_RUNTIME=codex SHIPYARD_RUNTIME=codex node "$GSD_TOOLS" capability install "$
 snapshot_runtime_path agents-md main "$AGENTS_MD"
 echo "→ ensuring shipyard auto-route block in $AGENTS_MD"
 mkdir -p "$(dirname "$AGENTS_MD")"
-SHIPYARD_INSTALL_PHASE="$PHASE" CODEX_AGENTS_MD="$AGENTS_MD" node - <<'NODE'
+SHIPYARD_INSTALL_PHASE="$PHASE" CODEX_AGENTS_MD="$AGENTS_MD" \
+SHIPYARD_AUTO_ROUTE_MODULE="$PLUGIN_DIR/scripts/auto-route.cjs" node - <<'NODE'
 const fs = require('fs');
 const p = process.env.CODEX_AGENTS_MD;
 const phase = Number(process.env.SHIPYARD_INSTALL_PHASE || 2);
-const BEGIN = '<!-- shipyard-auto-route:begin -->';
-const END = '<!-- shipyard-auto-route:end -->';
-const largeRoute = phase >= 2
-  ? '  large / multi-ticket -> `$shipyard-decompose` -> `$shipyard-deliver`; a small'
-  : '  large / multi-ticket -> `$shipyard-decompose`; install phase 2 before delivery; a small';
-const block = `${BEGIN}
-## shipyard auto-route (managed by shipyard install — do not edit between markers)
-
-When a message defines a scope of work or asks to implement / build / change /
-fix something in a codebase, handle it through shipyard rather than ad hoc — do
-not wait to be told to run a command:
-- Use the shipyard router \`$shipyard-route\` to size and dispatch the work:
-${largeRoute}
-  change, an existing ticket, or "no ticket" -> \`$shipyard-bench\`; a one-liner ->
-  inline.
-- Research first (proportionate) and apply GSD at full across stages
-  (research -> plan -> implement -> verify -> review), driving GSD/shipyard
-  yourself.
-- Keep the native Codex ladder: Luna at max is the executor baseline; promote
-  to Sol only for explicit critical or measured recovery signals. Do not use
-  Anthropic models in a Codex dispatch.
-- The user should not have to invoke GSD or shipyard manually.
-Skip this entirely for pure questions, discussion, or non-code chatter.
-${END}`;
+const { AUTO_ROUTE_BEGIN: BEGIN, AUTO_ROUTE_END: END, codexBlock } = require(process.env.SHIPYARD_AUTO_ROUTE_MODULE);
+const block = codexBlock(phase);
 let text = fs.existsSync(p) ? fs.readFileSync(p, 'utf8') : '';
 const re = new RegExp(BEGIN.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '[\\s\\S]*?' + END.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
 if (text.includes(BEGIN) && text.includes(END)) text = text.replace(re, block);
