@@ -60,6 +60,12 @@ and the existing backlog do not already cover:
     - C6 neither decompose host seals `decomposition-result.v1` (shared);
     - C7 the out-of-repo host state directory is not explained to the agent;
     - C8 `make doctor` looks for the wrong Codex manifest and always skips.
+13. Pipeline internals leak into target-project PRs
+    (`research/pr-hygiene-evidence.md`): titles `T-NN-NN:` / `epic: …
+    integration`, body lines `Ticket: T-…`, `Phase N (ADR-NNN)`, `cascades off
+    ticket/…`, `ticket/T-…` branch names, and epic → main diffs that carry
+    `.planning/` files. The user requires target-project PRs to contain no
+    conveyor/GSD technical detail. The `Ticket:` line is a matching key today.
 
 ## For whom
 
@@ -80,6 +86,9 @@ stop-gate interruptions during in-flight work, and push rituals.
 - A Codex run on FlowPDF (or an equivalent fixture project) completes
   investigate research and decompose through the shipped Codex hosts with no
   improvised host and no inline research.
+- A target-project PR opened by the conveyor (ticket and epic) contains no
+  `.planning/`/`.shipyard/` paths and no ticket/phase/ADR/plan identifiers in
+  its title, body or branch name, while ticket ↔ PR matching still works.
 - A live wave of phase 40 is dispatched through the new entry point with no
   hand-built request and no patched cache, and its PR sentinel passes on the
   first round.
