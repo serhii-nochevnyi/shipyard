@@ -1,7 +1,7 @@
 ---
-status: open          # open | closed — Gate 1 sets `closed`
-closed:               # YYYY-MM-DD, filled in at Gate 1
-adr:                  # path to .planning/architecture/ADR-NNN-*.md, filled in at Gate 1
+status: closed        # open | closed — Gate 1 sets `closed`
+closed: 2026-09-24
+adr: .planning/architecture/ADR-018-worktree-conditions-and-residual-seams.md
 ---
 
 # Problem
