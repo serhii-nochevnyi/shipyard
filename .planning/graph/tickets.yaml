@@ -2580,7 +2580,7 @@ tickets:
     repo: null
     wave: 1
     depends_on: []
-    files: [plugins/delivery-pipeline/scripts/claude-runtime-host.cjs, tests/unit/claude-runtime-host.test.cjs]
+    files: [plugins/delivery-pipeline/scripts/claude-runtime-host.cjs, tests/unit/claude-runtime-host.test.cjs, plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs, tests/unit/claude-workflow-host.test.cjs, tests/unit/source-contract.test.cjs]
     risk: medium
     human_checkpoint: false
     preauthorized: false
