@@ -1,6 +1,6 @@
 # Requirements: shipyard
 
-<!-- shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 0d8a7dc376111419990d095c3df599a615a2c1b20ba323bf01d3f4999a80d8d9 -->
+<!-- shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 5829dfd8fbe101109ab1b68a150671559d45d120c670bb605305cb29af9a2394 -->
 
 **Defined:** 2026-09-10
 **Core Value:** Keep delivery decisions truthful, resumable, and synchronized between the Shipyard conveyor and native GSD workflows.
@@ -141,10 +141,7 @@
 - [ ] **REQ-132**: Decompose passes --skip-ui to /gsd-plan-phase only when the ADR declares "UI design: none".
 - [ ] **REQ-133**: Decompose warns once, without blocking, when .planning/ is not tracked by git, naming the consequence for delivery worktrees and the remedy.
 - [ ] **REQ-134**: gsd-tune names the missing configuration file and the command that creates it, keeping exit code 2 and its prefix.
-- [ ] **REQ-135**: Research handbacks receive their 500-character summary bound at launch and are bounded or refused deterministically with a message naming the line and length before the trusted consumer seals them. *ADR-011 was accepted for implementation on 2026-09-10. T-32-01/02 are the initial isolated tooling slice; subsequent packages remain subject to decomposition and rollout gates. Existing model floors remain unchanged.*
-
-### Delivery seams, Codex loop repair and PR hygiene (ADR-017)
-
+- [ ] **REQ-135**: Research handbacks receive their 500-character summary bound at launch and are bounded or refused deterministically with a message naming the line and length before the trusted consumer seals them.
 - [ ] **REQ-136**: Phase 40 builds the delivery seams (captured fixtures, dispatch entry point, sentinel preflight) before the point fixes and gates every release on a live round.
 - [ ] **REQ-137**: Registered producer-consumer boundaries are tested against fixtures captured from real producers by a manual scrubbed make target that records the CLI version; a contract test refuses inline shapes for those boundaries.
 - [ ] **REQ-138**: One deterministic front-to-dispatch entry point for Claude and Codex builds host requests from the graph (branch from the graph, plan path from the ticket worktree, ticket type never forwarded as signals.type), launches detached and offers status and wait through a dispatch wait kind.
@@ -159,7 +156,7 @@
 - [ ] **REQ-147**: One shared sealer produces research-result and decomposition-result envelopes with an artifact index for Claude and Codex research and decompose hosts.
 - [ ] **REQ-148**: The Codex GSD researcher writes only its contained artifact path, and Codex child tasks are passed by file path plus a digest the host verifies.
 - [ ] **REQ-149**: Point fixes: header-free deterministic state YAML; pre-push resolves the worktree through git; the Codex config refusal names the config fix; gsd-tune for Codex writes no Claude-only keys; investigate and decompose prose explain the out-of-repo host state directory; doctor reads the Codex agents manifest.
-- [ ] **REQ-150**: Unit fixtures that create git repositories are hermetic against global commit signing and fixed /tmp paths.
+- [ ] **REQ-150**: Unit fixtures that create git repositories are hermetic against global commit signing and fixed /tmp paths. *ADR-011 was accepted for implementation on 2026-09-10. T-32-01/02 are the initial isolated tooling slice; subsequent packages remain subject to decomposition and rollout gates. Existing model floors remain unchanged.*
 
 ## Out of Scope
 
@@ -306,25 +303,25 @@
 | REQ-133 | Phase 39 | In Progress |
 | REQ-134 | Phase 39 | In Progress |
 | REQ-135 | Phase 39 | In Progress |
-| REQ-136 | Phase 40 | Pending |
-| REQ-137 | Phase 40 | Pending |
-| REQ-138 | Phase 40 | Pending |
-| REQ-139 | Phase 40 | Pending |
-| REQ-140 | Phase 40 | Pending |
-| REQ-141 | Phase 40 | Pending |
-| REQ-142 | Phase 40 | Pending |
-| REQ-143 | Phase 40 | Pending |
-| REQ-144 | Phase 40 | Pending |
-| REQ-145 | Phase 40 | Pending |
-| REQ-146 | Phase 40 | Pending |
-| REQ-147 | Phase 40 | Pending |
-| REQ-148 | Phase 40 | Pending |
-| REQ-149 | Phase 40 | Pending |
-| REQ-150 | Phase 40 | Pending |
+| REQ-136 | Phase 40 | In Progress |
+| REQ-137 | Phase 40 | In Progress |
+| REQ-138 | Phase 40 | In Progress |
+| REQ-139 | Phase 40 | In Progress |
+| REQ-140 | Phase 40 | In Progress |
+| REQ-141 | Phase 40 | In Progress |
+| REQ-142 | Phase 40 | In Progress |
+| REQ-143 | Phase 40 | In Progress |
+| REQ-144 | Phase 40 | In Progress |
+| REQ-145 | Phase 40 | In Progress |
+| REQ-146 | Phase 40 | In Progress |
+| REQ-147 | Phase 40 | In Progress |
+| REQ-148 | Phase 40 | In Progress |
+| REQ-149 | Phase 40 | In Progress |
+| REQ-150 | Phase 40 | In Progress |
 
 **Coverage:**
 - v1 requirements: 149 total
-- Mapped to phases: 132
+- Mapped to phases: 147
 - Unmapped: 2 ⚠️
 
 ---

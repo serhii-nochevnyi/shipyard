@@ -2714,7 +2714,7 @@ tickets:
     files: [tests/fixtures/captured/boundaries/claude-stream.json, tests/fixtures/captured/claude-stream-executor.jsonl, tests/fixtures/captured/claude-stream-research.jsonl, tests/fixtures/claude-assistant-session.jsonl, tests/unit/claude-runtime-host.test.cjs, tests/unit/claude-workflow-host.test.cjs]
     risk: high
     human_checkpoint: true
-    preauthorized: false
+    preauthorized: true
     branch: ticket/T-40-08-capture-the-real-claude-stream-and-make
     epic: epic/40-build-delivery-seams-and-clean-target-project-prs
     primary_parent: T-40-07
@@ -2778,7 +2778,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/dispatch-record.cjs, tests/unit/dispatch-record.test.cjs, tests/unit/stop-gate.test.cjs, plugins/delivery-pipeline/scripts/claude-delivery-host.cjs, plugins/delivery-pipeline/scripts/codex-delivery-host.cjs, tests/unit/claude-delivery-host.test.cjs, tests/unit/codex-delivery-host.test.cjs]
     risk: high
     human_checkpoint: true
-    preauthorized: false
+    preauthorized: true
     branch: ticket/T-40-14-hosts-write-a-pid-ttl-in-flight-record-a
     epic: epic/40-build-delivery-seams-and-clean-target-project-prs
     primary_parent: T-40-12
@@ -2794,7 +2794,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/codex-decompose-host.cjs, plugins/delivery-pipeline/scripts/codex-dispatch-adapter.cjs, plugins/delivery-pipeline/scripts/gsd-tune.cjs, tests/unit/codex-decompose-host.test.cjs, tests/unit/codex-dispatch-adapter.test.cjs, tests/unit/gsd-tune.test.cjs]
     risk: high
     human_checkpoint: true
-    preauthorized: false
+    preauthorized: true
     branch: ticket/T-40-11-let-the-codex-gsd-researcher-write-only
     epic: epic/40-build-delivery-seams-and-clean-target-project-prs
     primary_parent: T-40-14
@@ -2810,7 +2810,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/codex-runtime-host.cjs, tests/unit/codex-runtime-host.test.cjs, tests/fixtures/captured/codex-agent-stream-parent.jsonl, tests/fixtures/captured/codex-agent-stream-child.jsonl, tests/fixtures/captured/boundaries/codex-agent-stream.json, tests/fixtures/captured/codex-agent-stream-exec.jsonl, tests/unit/codex-decompose-host.test.cjs, tests/unit/codex-delivery-host.test.cjs]
     risk: high
     human_checkpoint: true
-    preauthorized: false
+    preauthorized: true
     branch: ticket/T-40-09-pass-codex-child-tasks-by-host-owned-fil
     epic: epic/40-build-delivery-seams-and-clean-target-project-prs
     primary_parent: T-40-11
@@ -2842,7 +2842,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/gate-trailer.cjs, tests/unit/trailer.test.cjs, plugins/delivery-pipeline/scripts/state-sync.cjs, plugins/delivery-pipeline/scripts/sentinel.cjs, tests/smoke/sentinel-smoke.sh]
     risk: high
     human_checkpoint: true
-    preauthorized: false
+    preauthorized: true
     branch: ticket/T-40-19-record-gate-verdicts-as-a-commit-status
     epic: epic/40-build-delivery-seams-and-clean-target-project-prs
     primary_parent: T-40-03
@@ -2922,7 +2922,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/host-provenance.cjs, tests/unit/host-provenance.test.cjs, scripts/install-shipyard-claude-hook.sh, scripts/install-shipyard-codex.sh, scripts/shipyard-doctor.cjs, tests/smoke/claude-hook-smoke.sh]
     risk: high
     human_checkpoint: true
-    preauthorized: false
+    preauthorized: true
     branch: ticket/T-40-21-support-a-dogfood-install-root-with-reco
     epic: epic/40-build-delivery-seams-and-clean-target-project-prs
     primary_parent: T-40-05
@@ -2938,7 +2938,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/dispatch-record.cjs, tests/unit/dispatch-record.test.cjs, plugins/delivery-pipeline/scripts/claude-role-host.cjs, tests/unit/claude-role-host.test.cjs, plugins/delivery-pipeline/scripts/sentinel.cjs, tests/unit/sentinel.test.cjs]
     risk: high
     human_checkpoint: true
-    preauthorized: false
+    preauthorized: true
     branch: ticket/T-40-22-stamp-every-dispatch-with-a-provenance-s
     epic: epic/40-build-delivery-seams-and-clean-target-project-prs
     primary_parent: T-40-14
@@ -2954,7 +2954,7 @@ tickets:
     files: [tests/fixtures/live-project/README.md, tests/fixtures/live-project/Makefile, tests/fixtures/live-project/src/greeting.cjs, tests/fixtures/live-project/tests/greeting.test.cjs, tests/fixtures/live-project/planning/architecture/ADR-001-greeting-formats.md, tests/live/live-round.sh, plugins/delivery-pipeline/scripts/live-receipt.cjs, tests/unit/release-gate.test.cjs, scripts/release.sh]
     risk: high
     human_checkpoint: true
-    preauthorized: false
+    preauthorized: true
     branch: ticket/T-40-23-run-one-live-round-per-runtime-on-an-in
     epic: epic/40-build-delivery-seams-and-clean-target-project-prs
     primary_parent: T-40-15
@@ -3018,7 +3018,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/diamond-parents.cjs, plugins/delivery-pipeline/scripts/state-sync.cjs, plugins/delivery-pipeline/scripts/ticket-worktree.sh, plugins/delivery-pipeline/scripts/scope-gate.cjs, plugins/delivery-pipeline/scripts/delivery-commit-finalizer.cjs, tests/unit/diamond-readiness.test.cjs, tests/unit/diamond-worktree.test.cjs, '.planning/backlog/diamond-child-base-is-materially-incomplete.md']
     risk: high
     human_checkpoint: true
-    preauthorized: false
+    preauthorized: true
     branch: ticket/T-40-27-a-diamond-child-is-ready-only-when-its-n
     epic: epic/40-build-delivery-seams-and-clean-target-project-prs
     primary_parent: T-40-18
