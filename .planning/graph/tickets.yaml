@@ -2794,7 +2794,7 @@ tickets:
     repo: null
     wave: 1
     depends_on: []
-    files: [plugins/delivery-pipeline/scripts/session-handoff.cjs, tests/unit/session-handoff.test.cjs]
+    files: [plugins/delivery-pipeline/scripts/session-handoff.cjs, tests/unit/session-handoff.test.cjs, tests/unit/rotation-recommendation.test.cjs]
     risk: medium
     human_checkpoint: false
     preauthorized: false
