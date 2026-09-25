@@ -503,8 +503,11 @@ test('checkpoint requires an explicit phase boundary or durable long wait, and p
     assert.equal(handoff.status('phase=41;tickets=T-41-02-explicit-wait').scopes[0].checkpoint.boundary.type, 'durable_long_wait');
 
     const omittedWaitOwner = handoff.begin({ runId: 'run-omitted-wait', sessionId: 'session-omitted-wait', phase: '41', tickets: ['T-41-02-omitted-wait'] });
-    handoff.checkpoint(omittedWaitOwner, checkpointPayload(root, { boundary: undefined }));
-    assert.equal(handoff.status('phase=41;tickets=T-41-02-omitted-wait').scopes[0].checkpoint.boundary.type, 'durable_long_wait');
+    assert.throws(
+      () => handoff.checkpoint(omittedWaitOwner, checkpointPayload(root, { boundary: undefined })),
+      (error) => error.code === 'INVALID_BOUNDARY' && typeof error.remedy === 'string' && error.remedy.length > 0,
+    );
+    assert.doesNotThrow(() => handoff.assertOwner(omittedWaitOwner));
 
     const invalidOwner = handoff.begin({ runId: 'run-invalid-boundary', sessionId: 'session-invalid-boundary', phase: '41', tickets: ['T-41-02-invalid-boundary'] });
     assert.throws(
@@ -521,6 +524,14 @@ test('checkpoint requires an explicit phase boundary or durable long wait, and p
       () => handoff.checkpoint(activeChildOwner, checkpointPayload(root, { children_unknown: true })),
       (error) => error.code === 'ACTIVE_CHILD_UNKNOWN' && typeof error.remedy === 'string' && error.remedy.length > 0,
     );
+    for (const omitted of ['children', 'children_unknown']) {
+      const payload = checkpointPayload(root);
+      delete payload[omitted];
+      assert.throws(
+        () => handoff.checkpoint(activeChildOwner, payload),
+        (error) => error.code === 'ACTIVE_CHILD_UNKNOWN' && typeof error.remedy === 'string' && error.remedy.length > 0,
+      );
+    }
     assert.doesNotThrow(() => handoff.assertOwner(activeChildOwner));
     handoff.checkpoint(activeChildOwner, checkpointPayload(root));
   } finally {

@@ -553,9 +553,16 @@ function makeCheckpoint(identity, owner, scope, payload, timestamp) {
   if (body.unresolved_findings === undefined) body.unresolved_findings = [];
   if (body.attempt_history === undefined) body.attempt_history = [];
   if (body.pending_gate_ids === undefined) body.pending_gate_ids = [];
-  if (body.children === undefined) body.children = [];
-  if (body.children_unknown === undefined) body.children_unknown = false;
-  if (body.boundary === undefined) body.boundary = { type: 'durable_long_wait' };
+  if (body.boundary === undefined) {
+    refuse('INVALID_BOUNDARY', 'checkpoint must declare an explicit boundary', {
+      remedy: 'set boundary.type to phase_boundary or durable_long_wait before checkpointing',
+    });
+  }
+  if (body.children === undefined || body.children_unknown === undefined) {
+    refuse('ACTIVE_CHILD_UNKNOWN', 'checkpoint carries no child enumeration evidence', {
+      remedy: 'enumerate children and record children and children_unknown in the checkpoint before checkpointing',
+    });
+  }
   const required = ['plan_digests', 'adr_digests', 'policy_digests', 'head', 'base', 'worktrees',
     'current_snapshot', 'pending_wait_ids', 'pending_action_ids', 'dispatch_reservations',
     'dispatch_receipts', 'artifact_refs', 'treatment', 'budgets', 'next_action',
