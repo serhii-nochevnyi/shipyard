@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 7dd74dbe435e58556cc1df9554fd32dab10388518728ee8825fd502d90fe1076
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 810c871f2846e3c6d43871aab70599444c98c0111b9ab01cf9eb438353006c04
 phase: 24-the-conveyor-stops-interrupting-itself
 plan: 06
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-07
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 7dd74dbe435e58556cc1df9554fd32dab10388518728ee8825fd502d90fe1076
+shipyard_source_fingerprint: 810c871f2846e3c6d43871aab70599444c98c0111b9ab01cf9eb438353006c04
 ---
 
 # Phase 24: The guard names a remedy that exists — Delivery Projection
