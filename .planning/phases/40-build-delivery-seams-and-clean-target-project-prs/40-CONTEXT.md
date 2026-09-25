@@ -149,3 +149,34 @@ Tickets whose `files_modified` meets a phase-39 plan's `files_modified` declare 
 | CONTEXT | D-36..D-41 | Plan-check revisions | graph (36), 07/08/09 (37), 15/17 (38), 17 (39), 23 (40), 12 (41) | COVERED |
 | CONTEXT | D-42 | Real graph + diamond-child readiness and epic base-merge | graph, T-40-27 | COVERED |
 | RESEARCH | Pitfalls 1-13 | Addressed in the owning tickets' Scope | T-40-15 (1,2,3), 06 (4), 16 (5), 18 (6), 25 (7), 20 (8), 19 (9), 22 (10), 01 (11), 02 (12), 05 (13) | COVERED |
+
+## ADR-018 additions (2026-09-25)
+
+Source: `.planning/architecture/ADR-018-worktree-conditions-and-residual-seams.md`, INV-005, `40-RESEARCH-ADR018.md`. These decisions extend ADR-017's; they do not re-decide them.
+
+- **D-43** ADR-018 work lands as tickets T-40-28..T-40-38. Each one is ordered after every phase 40 ticket that modifies the same files, directly or through its ancestors (Gate 2 checks transitive order). The owners are: `claude-role-host.cjs` T-40-16 → T-40-22 → T-40-30 → T-40-31 → T-40-32; `role-artifact.cjs` T-40-18 → T-40-36; `gate-trailer.cjs` T-40-19 → T-40-35; `ticket-worktree.sh` and the finalizer T-40-27 → T-40-34; the four hosts T-40-11 → T-40-33; `deliver.md` T-40-24 → T-40-37; `decompose.md` T-40-25 → T-40-38. No new ticket edits `state-sync.cjs`, `sentinel.cjs` or `deliver-dispatch.cjs`.
+- **D-44** A single module, `worktree-conditions.cjs` (T-40-28), holds the scratch and host-owned registry (built from the `role-artifact.cjs` exports), the per-profile launch preconditions (the RESEARCH Pattern 1 matrix) and the copyable remedies. The hosts are the check sites: role host T-40-32, delivery and decompose hosts T-40-33, worktree scripts T-40-34. There is no additional check at the dispatch entry point.
+- **D-45** The host-owned set includes T-40-22's `<graphDir>/provenance/` and T-40-03's `pr-ledger.json`, added in T-40-29 after T-40-22. `ticket-worktree.sh` writes repo-global `info/exclude` entries, including `.shipyard-role-artifacts/`. New phase evidence committed there in the Shipyard repository therefore needs `git add -f`.
+- **D-46** Hosts detect mutations with an lstat and digest snapshot that ignores `info/exclude`. An out-of-scope mutation is restored by the host (tracked restore, deletion of new untracked files, atomic rewrite of changed bytes, compare-and-swap HEAD restore on an unchanged branch) and reported as `WORKTREE_MUTATED` with the affected paths in `details`. This also runs on the failure path. Restore never runs `git clean` and never follows a symlink.
+- **D-47** Target projects keep `.planning/` untracked, so `ticket-worktree.sh create` copies only the ticket's plan into the worktree. The hosts then accept that copy when its sha256 matches the source plan. Executors read the graph host-side. This is the answer to RESEARCH Open Question 1, and the operator confirms it at T-40-33's checkpoint.
+- **D-48** The integrator reviews the code diff with `.planning/` and `.shipyard-role-artifacts/` excluded, plus a summary of `.planning` changes as name-status with full blob ids. Both come from `integrator-diff.cjs` (T-40-31), which the Claude host imports and which `references/integrator.md` names for Codex. When a bound is still exceeded, the refusal names the command that measures the size and the remedy.
+- **D-49** Arch-review accepts draft PRs. The sentinel and the merge gate keep refusing drafts, and `tests/unit/sentinel-draft-merge.test.cjs` pins that (T-40-30).
+- **D-50** A sentinel round leaves out, without reporting them, any non-member PRs opened after its snapshot. A member that gains a second PR expires. A gh failure still refuses (T-40-30).
+- **D-51** A verdict carries across a sibling merge only on a tree-object delta-identity proof (`diff-tree --no-renames`) with a base move disjoint from the ticket's changed and declared paths (`carry-proof.cjs`, T-40-35). This extends D-32: the `merge-gate` description carries a full 40-hex `base_tree` within 140 characters, and a carried status records the new merge-base tree.
+- **D-52** Executor artifacts are validated in historical mode only when the caller passes `--historical`, at publication. That mode binds the recorded base commit and tree, the base's ancestry to HEAD, and the live head (T-40-36). `deliver.md` passes the flag, opens the PR against the live base and names base-merge as the follow-up (T-40-37).
+- **D-53** `seed-delivery-state.cjs` (T-40-38) writes `pending` rows offline for ticket ids that are absent from the state; decompose runs it after Gate 2. `gsd-sync --check` still refuses a ticket with no observation, and its refusal now names the seeder. Seeding shows as `RESYNC_REQUIRED` until the next state-sync. D-35 is extended: `references/integrator.md` is owned by T-40-31.
+- Operational note: until T-40-38 ships, the planning PR that adds T-40-28..T-40-38 must write `pending` rows for those ids into `.planning/graph/delivery-state.json`, and then regenerate the gsd-sync projections.
+
+| Ticket | Requirements | Wave | Same-phase depends_on | Risk |
+|---|---|---|---|---|
+| T-40-28 worktree-conditions module | REQ-152, REQ-154 | 3 | 01 | medium |
+| T-40-29 provenance and PR ledger host-owned | REQ-152, REQ-154 | 8 | 28, 22 | medium |
+| T-40-30 draft arch-review, late-PR round exclusion | REQ-157, REQ-158 | 8 | 22 | medium |
+| T-40-31 scoped integrator diff | REQ-156 | 9 | 30 | medium |
+| T-40-32 role-host conditions and restore | REQ-152, REQ-154 | 10 | 31, 29 | high |
+| T-40-33 delivery and decompose host conditions | REQ-152, REQ-154 | 9 | 11, 29 | high |
+| T-40-34 worktree excludes, plan copy, verify | REQ-153, REQ-152 | 7 | 27, 28 | medium |
+| T-40-35 tree-object verdict carry | REQ-151 | 4 | 19 | high |
+| T-40-36 historical executor validation | REQ-155 | 6 | 18 | high |
+| T-40-37 deliver prose | REQ-155, REQ-152, REQ-153, REQ-157 | 9 | 24, 34, 36 | low |
+| T-40-38 offline pending seeder | REQ-159 | 7 | 25 | low |

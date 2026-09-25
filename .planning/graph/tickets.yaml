@@ -3024,3 +3024,179 @@ tickets:
     primary_parent: T-40-18
     pr_base: ticket/T-40-18-produce-clean-executor-pr-bodies-and-con
     jira: null
+  T-40-28:
+    title: Add the worktree-conditions registry and launch preconditions with copyable remedies
+    plan: '.planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-28-PLAN.md'
+    phase: '40'
+    repo: null
+    wave: 3
+    depends_on: [T-40-01]
+    files: [plugins/delivery-pipeline/scripts/worktree-conditions.cjs, tests/unit/worktree-conditions.test.cjs]
+    risk: medium
+    human_checkpoint: false
+    preauthorized: false
+    branch: ticket/T-40-28-add-the-worktree-conditions-registry-and
+    epic: epic/40-build-delivery-seams-and-clean-target-project-prs
+    primary_parent: T-40-01
+    pr_base: ticket/T-40-01-make-git-creating-unit-fixtures-hermetic
+    jira: null
+  T-40-29:
+    title: Register the dispatch provenance sidecar and the PR ledger as host-owned worktree files
+    plan: '.planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-29-PLAN.md'
+    phase: '40'
+    repo: null
+    wave: 8
+    depends_on: [T-40-28, T-40-22]
+    files: [plugins/delivery-pipeline/scripts/worktree-conditions.cjs, tests/unit/worktree-conditions-provenance.test.cjs]
+    risk: medium
+    human_checkpoint: false
+    preauthorized: false
+    branch: ticket/T-40-29-register-the-dispatch-provenance-sidecar
+    epic: epic/40-build-delivery-seams-and-clean-target-project-prs
+    primary_parent: T-40-22
+    pr_base: ticket/T-40-22-stamp-every-dispatch-with-a-provenance-s
+    jira: null
+  T-40-30:
+    title: Accept draft PRs for arch-review and exclude late PRs from a sentinel round
+    plan: '.planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-30-PLAN.md'
+    phase: '40'
+    repo: null
+    wave: 8
+    depends_on: [T-40-22]
+    files: [plugins/delivery-pipeline/scripts/claude-role-host.cjs, tests/unit/claude-role-host.test.cjs, tests/unit/sentinel-draft-merge.test.cjs]
+    risk: medium
+    human_checkpoint: false
+    preauthorized: false
+    branch: ticket/T-40-30-accept-draft-prs-for-arch-review-and-exc
+    epic: epic/40-build-delivery-seams-and-clean-target-project-prs
+    primary_parent: T-40-22
+    pr_base: ticket/T-40-22-stamp-every-dispatch-with-a-provenance-s
+    jira: null
+  T-40-31:
+    title: Judge the integrator on the code diff plus a planning digest summary
+    plan: '.planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-31-PLAN.md'
+    phase: '40'
+    repo: null
+    wave: 9
+    depends_on: [T-40-30]
+    files: [plugins/delivery-pipeline/scripts/integrator-diff.cjs, tests/unit/integrator-diff.test.cjs, plugins/delivery-pipeline/scripts/claude-role-host.cjs, tests/unit/claude-role-host.test.cjs, plugins/delivery-pipeline/references/integrator.md]
+    risk: medium
+    human_checkpoint: false
+    preauthorized: false
+    branch: ticket/T-40-31-judge-the-integrator-on-the-code-diff-pl
+    epic: epic/40-build-delivery-seams-and-clean-target-project-prs
+    primary_parent: T-40-30
+    pr_base: ticket/T-40-30-accept-draft-prs-for-arch-review-and-exc
+    jira: null
+  T-40-32:
+    title: Check worktree conditions in the role host and restore out-of-scope role mutations
+    plan: '.planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-32-PLAN.md'
+    phase: '40'
+    repo: null
+    wave: 10
+    depends_on: [T-40-31, T-40-29]
+    files: [plugins/delivery-pipeline/scripts/claude-role-host.cjs, tests/unit/claude-role-host.test.cjs]
+    risk: high
+    human_checkpoint: true
+    preauthorized: false
+    branch: ticket/T-40-32-check-worktree-conditions-in-the-role-ho
+    epic: epic/40-build-delivery-seams-and-clean-target-project-prs
+    primary_parent: T-40-31
+    pr_base: ticket/T-40-31-judge-the-integrator-on-the-code-diff-pl
+    jira: null
+  T-40-33:
+    title: Check worktree conditions in the delivery and decompose hosts on Claude and Codex
+    plan: '.planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-33-PLAN.md'
+    phase: '40'
+    repo: null
+    wave: 9
+    depends_on: [T-40-11, T-40-29]
+    files: [plugins/delivery-pipeline/scripts/claude-delivery-host.cjs, plugins/delivery-pipeline/scripts/codex-delivery-host.cjs, plugins/delivery-pipeline/scripts/claude-decompose-host.cjs, plugins/delivery-pipeline/scripts/codex-decompose-host.cjs, tests/unit/worktree-conditions-hosts.test.cjs]
+    risk: high
+    human_checkpoint: true
+    preauthorized: false
+    branch: ticket/T-40-33-check-worktree-conditions-in-the-deliver
+    epic: epic/40-build-delivery-seams-and-clean-target-project-prs
+    primary_parent: T-40-29
+    pr_base: ticket/T-40-29-register-the-dispatch-provenance-sidecar
+    jira: null
+  T-40-34:
+    title: 'Prepare ticket worktrees with scratch excludes, the ticket plan and a verify subcommand'
+    plan: '.planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-34-PLAN.md'
+    phase: '40'
+    repo: null
+    wave: 7
+    depends_on: [T-40-27, T-40-28]
+    files: [plugins/delivery-pipeline/scripts/ticket-worktree.sh, plugins/delivery-pipeline/scripts/delivery-commit-finalizer.cjs, plugins/delivery-pipeline/scripts/base-merge.cjs, tests/unit/ticket-worktree-conditions.test.cjs]
+    risk: medium
+    human_checkpoint: false
+    preauthorized: false
+    branch: ticket/T-40-34-prepare-ticket-worktrees-with-scratch-ex
+    epic: epic/40-build-delivery-seams-and-clean-target-project-prs
+    primary_parent: T-40-27
+    pr_base: ticket/T-40-27-a-diamond-child-is-ready-only-when-its-n
+    jira: null
+  T-40-35:
+    title: Carry a conform verdict across a disjoint sibling merge on a tree-object proof
+    plan: '.planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-35-PLAN.md'
+    phase: '40'
+    repo: null
+    wave: 4
+    depends_on: [T-40-19]
+    files: [plugins/delivery-pipeline/scripts/carry-proof.cjs, tests/unit/carry-proof.test.cjs, plugins/delivery-pipeline/scripts/gate-trailer.cjs, tests/unit/trailer.test.cjs]
+    risk: high
+    human_checkpoint: true
+    preauthorized: false
+    branch: ticket/T-40-35-carry-a-conform-verdict-across-a-disjoin
+    epic: epic/40-build-delivery-seams-and-clean-target-project-prs
+    primary_parent: T-40-19
+    pr_base: ticket/T-40-19-record-gate-verdicts-as-a-commit-status
+    jira: null
+  T-40-36:
+    title: Validate executor artifacts against their recorded base in historical mode
+    plan: '.planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-36-PLAN.md'
+    phase: '40'
+    repo: null
+    wave: 6
+    depends_on: [T-40-18]
+    files: [plugins/delivery-pipeline/scripts/role-artifact.cjs, tests/unit/role-artifact.test.cjs]
+    risk: high
+    human_checkpoint: true
+    preauthorized: false
+    branch: ticket/T-40-36-validate-executor-artifacts-against-thei
+    epic: epic/40-build-delivery-seams-and-clean-target-project-prs
+    primary_parent: T-40-18
+    pr_base: ticket/T-40-18-produce-clean-executor-pr-bodies-and-con
+    jira: null
+  T-40-37:
+    title: 'Document worktree conditions, historical publication and draft arch-review in deliver'
+    plan: '.planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-37-PLAN.md'
+    phase: '40'
+    repo: null
+    wave: 9
+    depends_on: [T-40-24, T-40-34, T-40-36]
+    files: [plugins/delivery-pipeline/commands/deliver.md, tests/unit/deliver-worktree-conditions-contract.test.cjs]
+    risk: low
+    human_checkpoint: false
+    preauthorized: false
+    branch: ticket/T-40-37-document-worktree-conditions-historical
+    epic: epic/40-build-delivery-seams-and-clean-target-project-prs
+    primary_parent: T-40-24
+    pr_base: ticket/T-40-24-rewrite-deliver-md-around-the-dispatch-e
+    jira: null
+  T-40-38:
+    title: Write pending delivery observations for new tickets during planning
+    plan: '.planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-38-PLAN.md'
+    phase: '40'
+    repo: null
+    wave: 7
+    depends_on: [T-40-25]
+    files: [plugins/delivery-pipeline/scripts/seed-delivery-state.cjs, tests/unit/seed-delivery-state.test.cjs, plugins/delivery-pipeline/commands/decompose.md, plugins/delivery-pipeline/scripts/gsd-sync.cjs]
+    risk: low
+    human_checkpoint: false
+    preauthorized: false
+    branch: ticket/T-40-38-write-pending-delivery-observations-for
+    epic: epic/40-build-delivery-seams-and-clean-target-project-prs
+    primary_parent: T-40-25
+    pr_base: ticket/T-40-25-update-investigate-and-decompose-prose-f
+    jira: null
