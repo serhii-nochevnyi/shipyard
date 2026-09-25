@@ -10,6 +10,7 @@ const { createClaudeRuntimeHost, probeClaudeRuntime } = require('./claude-runtim
 const { createClaudeDispatchAdapter } = require('./claude-dispatch-adapter.cjs');
 const { createDispatchBoundary, createDurableRecorder, newDispatchId, isDurableRecorder } = require('./dispatch-boundary.cjs');
 const { buildContextPacket, validateContextPacket } = require('./context-packet.cjs');
+const { inventory: readBacklogInventory } = require('./backlog-index.cjs');
 const { loadClaudeReferenceContent } = require('./claude-reference-content.cjs');
 const { createRunController } = require('./run-controller.cjs');
 const { createRunScope } = require('./run-scope.cjs');
@@ -21,8 +22,15 @@ const SOURCE_MAX_BYTES = 768 * 1024;
 const DIFF_MAX_BYTES = 1024 * 1024;
 const PROMPT_MAX_BYTES = 1500000;
 const RESULT_MAX_BYTES = 128 * 1024;
-const PACKET_MAX_TOKENS = 360000;
+const ARCH_REVIEW_PACKET_TOKENS = 60000;
+const PR_SENTINEL_PACKET_TOKENS = 40000;
+const INTEGRATOR_CONTEXT_TOKENS = 60000;
+const INTEGRATOR_MAX_PACKET_TOKENS = 320000;
 const ROLES = Object.freeze(['arch-review', 'integrator', 'pr-sentinel']);
+const BACKLOG_EXCLUDED_STATUSES = new Set(['verified_closed', 'deferred', 'superseded']);
+const ADR_ID_RE = /\bADR-(\d{3})\b/g;
+const ADR_COMPANION_SUFFIX_RE = /^[A-Z][A-Z0-9-]*\.md$/;
+const ADR_SUPERSEDED_STATUS_RE = /^\s*(?:[-*]\s+)?(?:\*\*)?Status(?:\*\*)?\s*:(?:\*\*)?\s*superseded\b/im;
 const ARCH_EVIDENCE = '.shipyard-arch-review-evidence.md';
 const SENTINEL_EVIDENCE = '.shipyard-sentinel-evidence.md';
 
@@ -249,19 +257,59 @@ function parsePlan(plan) {
   return { acceptance: section('Acceptance criteria'), verification: section('Verification commands') };
 }
 
-function architectureRefs(worktree) {
+function architectureFileId(name) {
+  const match = /^ADR-(\d{3})-/.exec(name);
+  return match ? `ADR-${match[1]}` : null;
+}
+
+function architectureRefs(worktree, plans) {
   const directory = path.join(worktree, '.planning', 'architecture');
   let names;
   try { names = fs.readdirSync(directory).filter((name) => name.endsWith('.md')).sort(); } catch { reject('architecture corpus is unavailable'); }
   if (!names.length) reject('architecture corpus has no Markdown records');
+
+  const referencedIds = new Set();
+  const namedFiles = new Set();
+  for (const plan of plans) {
+    for (const match of plan.content.matchAll(ADR_ID_RE)) referencedIds.add(`ADR-${match[1]}`);
+    for (const name of names) if (plan.content.includes(`.planning/architecture/${name}`)) namedFiles.add(name);
+  }
+
+  const decisionRecordFor = new Map();
+  for (const name of names) {
+    const match = /^ADR-(\d{3})-(.+)\.md$/.exec(name);
+    if (!match || ADR_COMPANION_SUFFIX_RE.test(`${match[2]}.md`)) continue;
+    const id = `ADR-${match[1]}`;
+    if (!decisionRecordFor.has(id)) decisionRecordFor.set(id, name);
+  }
+
+  const unresolved = [];
+  const candidates = new Map();
+  for (const id of [...referencedIds].sort()) {
+    const name = decisionRecordFor.get(id);
+    if (!name) { unresolved.push(id); continue; }
+    if (!candidates.has(name)) candidates.set(name, id);
+  }
+  for (const name of [...namedFiles].sort()) {
+    if (!candidates.has(name)) candidates.set(name, architectureFileId(name));
+  }
+
   let total = 0;
-  const refs = names.map((name) => {
+  const excluded = [];
+  const refs = [];
+  for (const [name, id] of candidates) {
     const relative = `.planning/architecture/${name}`;
     const content = fileText(worktree, relative);
+    if (ADR_SUPERSEDED_STATUS_RE.test(content)) {
+      if (id) excluded.push({ id, path: relative, reason: 'superseded' });
+      continue;
+    }
     total += Buffer.byteLength(content, 'utf8');
-    return { path: relative, sha256: sha(content), bytes: Buffer.byteLength(content, 'utf8') };
-  });
+    refs.push({ id: id || null, path: relative, sha256: sha(content), bytes: Buffer.byteLength(content, 'utf8') });
+  }
   if (total > SOURCE_MAX_BYTES) reject('architecture corpus exceeds the bounded role context');
+  excluded.sort((a, b) => a.id.localeCompare(b.id));
+
   const decisions = new Set();
   for (const ref of refs) {
     const content = fileText(worktree, ref.path);
@@ -274,9 +322,22 @@ function architectureRefs(worktree) {
     const content = fileText(worktree, decision, 64 * 1024);
     total += Buffer.byteLength(content, 'utf8');
     if (total > SOURCE_MAX_BYTES) reject('architecture corpus and decision references exceed the bounded role context');
-    refs.push({ path: decision, sha256: sha(content), bytes: Buffer.byteLength(content, 'utf8') });
+    refs.push({ id: null, path: decision, sha256: sha(content), bytes: Buffer.byteLength(content, 'utf8') });
   }
-  return refs;
+
+  refs.sort((a, b) => a.path.localeCompare(b.path));
+  return { refs, excluded, unresolved };
+}
+
+function selectedBacklogIds(worktree, plans) {
+  const index = readBacklogInventory(worktree, null, '');
+  const ids = [];
+  for (const item of index.items) {
+    if (BACKLOG_EXCLUDED_STATUSES.has(item.status)) continue;
+    const sourcePath = item.source.slice(item.source.indexOf(':') + 1);
+    if (plans.some((plan) => plan.content.includes(item.id) || plan.content.includes(sourcePath))) ids.push(item.id);
+  }
+  return ids.sort();
 }
 
 function sourceReferences(worktree, graph, rows) {
@@ -287,11 +348,12 @@ function sourceReferences(worktree, graph, rows) {
     if (!parsed.acceptance.length) reject(`ticket plan ${relative} has no acceptance criteria`);
     return { id, path: relative, content, ...parsed };
   });
+  const architecture = architectureRefs(worktree, plans);
   const refs = new Map();
   for (const plan of plans) refs.set(plan.path, plan.path);
-  for (const item of architectureRefs(worktree)) refs.set(item.path, item.path);
+  for (const item of architecture.refs) refs.set(item.path, item.path);
   const files = [...new Set(rows.flatMap(({ row }) => row.files))].sort();
-  return { plans, requiredRefs: [...refs.values()], files };
+  return { plans, requiredRefs: [...refs.values()], files, architecture };
 }
 
 function observedSignals(request, rows, pullRequests, inputTokens) {
@@ -377,7 +439,9 @@ function prepareArch(options, request, canonical, graph, rows) {
       base: baseName, base_commit: live.baseRefOid, review_decision: live.reviewDecision || null },
     exact_diff: { base: mergeBase, base_tree: mergeBaseTree, head: canonical.head, content: diff },
     integration_base: { ref: baseName, commit: live.baseRefOid, tree: git(options, canonical.worktree, ['rev-parse', '--verify', `${live.baseRefOid}^{tree}`]) },
-    adr_refs: architectureRefs(canonical.worktree),
+    adr_refs: sources.architecture.refs,
+    adr_excluded: sources.architecture.excluded,
+    adr_unresolved: sources.architecture.unresolved,
     reference_content: reference,
   };
   const packet = buildPacket(canonical, 'arch-review', id, sources, plan, roleContext);
@@ -464,14 +528,16 @@ function prepareIntegrator(options, request, canonical, graph) {
     integration_base: { ref: defaultBase, commit: defaultOid, tree: defaultBaseTree },
     ticket_set: ticketSet,
     ticket_set_digest: ticketSetDigest,
-    adr_refs: architectureRefs(canonical.worktree),
+    adr_refs: sources.architecture.refs,
+    adr_excluded: sources.architecture.excluded,
+    adr_unresolved: sources.architecture.unresolved,
     reference_content: reference,
   };
   const synthetic = { plans: sources.plans, requiredRefs: sources.requiredRefs, files: sources.files };
   const plan = { id: subject, path: sources.plans[0].path,
     content: sources.plans.map((item) => item.content).join('\n'),
-    acceptance: phaseContracts.flatMap((item) => item.acceptance),
-    verification: phaseContracts.flatMap((item) => item.verification) };
+    acceptance: [],
+    verification: [] };
   const packet = buildPacket(canonical, 'integrator', subject, synthetic, plan, roleContext);
   const signals = observedSignals(request, selection.rows, livePullRequests,
     estimatePromptTokens('integrator', packet, plan, null));
@@ -581,8 +647,8 @@ function prepareSentinel(options, request, canonical, graph) {
   };
   const plan = { id: subject, path: sources.plans[0].path,
     content: sources.plans.map((item) => item.content).join('\n'),
-    acceptance: phaseContracts.flatMap((item) => item.acceptance),
-    verification: phaseContracts.flatMap((item) => item.verification) };
+    acceptance: [],
+    verification: [] };
   const packet = buildPacket(canonical, 'pr-sentinel', subject, sources, plan, roleContext);
   const pullRequests = snapshots.map(({ live }) => live);
   const signals = observedSignals(request, rows, pullRequests,
@@ -593,6 +659,19 @@ function prepareSentinel(options, request, canonical, graph) {
     ticketSet, ticketSetDigest, base: artifactBase.ref, baseCommit: artifactBase.oid,
     livePullRequests: pullRequests, canonical, graph, rows, sources, packet, prompt, signals, readOnlySmoke,
     evidencePath: SENTINEL_EVIDENCE });
+}
+
+function packetBound(role, roleContext) {
+  if (role === 'arch-review') return ARCH_REVIEW_PACKET_TOKENS;
+  if (role === 'pr-sentinel') return PR_SENTINEL_PACKET_TOKENS;
+  const diffBytes = Buffer.byteLength(roleContext.combined_diff.content, 'utf8');
+  return Math.min(INTEGRATOR_MAX_PACKET_TOKENS, INTEGRATOR_CONTEXT_TOKENS + Math.ceil(diffBytes / 4));
+}
+
+function packetRemedy(role) {
+  if (role === 'arch-review') return 'split the ticket so its PR diff and referenced ADRs fit, or drop ADR and backlog references its plan does not rely on';
+  if (role === 'integrator') return 'split the phase into smaller ticket sets, or drop ADR and backlog references its plans do not rely on';
+  return 'drop ADR and backlog references the phase plans do not rely on';
 }
 
 function buildPacket(canonical, role, subject, sources, plan, roleContext) {
@@ -608,10 +687,16 @@ function buildPacket(canonical, role, subject, sources, plan, roleContext) {
     verification: plan.verification,
     requiredRefs: [...new Set([...sources.requiredRefs, ...sources.plans.map((item) => item.path)])],
     roleContext,
-    tokenCeiling: PACKET_MAX_TOKENS,
+    selectedBacklogIds: selectedBacklogIds(canonical.worktree, sources.plans),
+    backlogInventory: 'selected',
+    tokenCeiling: packetBound(role, roleContext),
   });
   validateContextPacket(packet, { root: canonical.worktree, role, subject,
     sourceRevision: canonical.head, policyHash: policy.POLICY_HASH });
+  if (packet.accounting.overflow === true) {
+    reject(`${role} context packet is ${packet.accounting.estimated_tokens} tokens, over its bound of `
+      + `${packet.accounting.soft_ceiling}; remedy: ${packetRemedy(role)}`, 'CONTEXT_PACKET_OVER_BOUND');
+  }
   return packet;
 }
 
