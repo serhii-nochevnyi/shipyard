@@ -27,7 +27,7 @@ const STAGES = new Set([
 const HANDOFF_COST_STAGES = new Set(['checkpoint_collection', 'successor_startup', 'cache_warmup']);
 const PASS_KINDS = new Set(['ordinary', 'advisor']);
 const EVIDENCE = new Set(['usage', 'transcript', 'wait-event', 'controller', 'none']);
-const COUNT_KEYS = Object.freeze(['polls', 'model_turns', 'tool_calls']);
+const COUNT_KEYS = Object.freeze(['polls', 'model_turns', 'tool_calls', 'retries']);
 const QUALITY_KEYS = Object.freeze([
   'false_green', 'invalid_carry', 'skipped_gate', 'recovery_loss',
   'duplicate_dispatch', 'orphaned_work', 'lost_constraints', 'escaped_defects',
@@ -200,6 +200,10 @@ function normalizeObservation(raw, now = new Date().toISOString()) {
     role: text(raw.role, 'role'),
     runtime: text(raw.runtime, 'runtime'),
     backend: raw.backend === undefined || raw.backend === null ? 'unknown' : text(raw.backend, 'backend'),
+    model: raw.model === undefined || raw.model === null ? null : text(raw.model, 'model'),
+    effort: raw.effort === undefined || raw.effort === null ? null : text(raw.effort, 'effort'),
+    account_scope: raw.account_scope === undefined || raw.account_scope === null
+      ? null : text(raw.account_scope, 'account_scope'),
     policy_id: policyId,
     policy_version: policyVersion,
     policy_hash: policyHash,
@@ -398,7 +402,73 @@ function metricSet(rows) {
     successor_startup_estimated_tokens: sumStage('successor_startup', 'estimated_tokens'),
     cache_warmup_bytes: sumStage('cache_warmup', 'bytes'),
     cache_warmup_estimated_tokens: sumStage('cache_warmup', 'estimated_tokens'),
-    wait_polls: count('polls'), model_turns: modelTurns, tool_calls: toolCalls, provider_tokens: providerTokens,
+    wait_polls: count('polls'), model_turns: modelTurns, tool_calls: toolCalls, retries: count('retries'),
+    provider_tokens: providerTokens,
+  };
+}
+
+function cohortOf(row) {
+  return { runtime: row.runtime, model: row.model || null, effort: row.effort || null,
+    role: row.role, account_scope: row.account_scope || null };
+}
+
+// @contract: matched=true requires 2+ treatment ids within one fixed runtime/model/effort/role/account cohort.
+function matchedCohorts(rows) {
+  const groups = new Map();
+  for (const row of rows) {
+    const cohort = cohortOf(row);
+    const key = stable(cohort);
+    if (!groups.has(key)) groups.set(key, { cohort, rows: [] });
+    groups.get(key).rows.push(row);
+  }
+  return [...groups.values()].map(({ cohort, rows: cohortRows }) => {
+    const byTreatment = [...new Map(cohortRows.map((row) => [row.treatment_id, row.treatment])).entries()]
+      .map(([id, treatment]) => ({ id, treatment, metrics: metricSet(cohortRows.filter((row) => row.treatment_id === id)) }));
+    return { ...cohort, rows: cohortRows.length, by_treatment: byTreatment, matched: byTreatment.length >= 2 };
+  });
+}
+
+function matchCompletionRows(rows, completion) {
+  const dispatchIds = new Set(Array.isArray(completion.dispatch_ids) ? completion.dispatch_ids
+    : completion.dispatch_id ? [completion.dispatch_id] : []);
+  if (dispatchIds.size) return rows.filter((row) => row.dispatch_id && dispatchIds.has(row.dispatch_id));
+  if (completion.run_id) return rows.filter((row) => row.run_id === completion.run_id);
+  return [];
+}
+
+function sumField(rows, getter) {
+  if (!rows.length) return null;
+  return rows.every((row) => Number.isSafeInteger(getter(row)))
+    ? rows.reduce((total, row) => total + getter(row), 0) : null;
+}
+
+// @contract: aggregates per verified completion (work item/run), never across raw per-dispatch rows.
+function completionMetrics(rows, completions) {
+  const list = Array.isArray(completions) ? completions : [];
+  if (!list.length) return null;
+  const supported = rows.filter(supportedEvidence);
+  const perCompletion = list.map((completion) => {
+    const matched = matchCompletionRows(rows, completion);
+    const matchedSupported = matchCompletionRows(supported, completion);
+    return {
+      ticket: completion.ticket || null, run_id: completion.run_id || null, rows: matched.length,
+      bytes: sumField(matched, (row) => row.bytes),
+      estimated_tokens: sumField(matched, (row) => row.estimated_tokens),
+      wait_polls: sumField(matched, (row) => row.counts && row.counts.polls),
+      model_turns: sumField(matchedSupported, (row) => row.counts && row.counts.model_turns),
+      tool_calls: sumField(matchedSupported, (row) => row.counts && row.counts.tool_calls),
+      retries: sumField(matched, (row) => row.counts && row.counts.retries),
+    };
+  });
+  return {
+    completions: perCompletion.length,
+    bytes: metricStats(perCompletion.map((c) => c.bytes)),
+    estimated_tokens: metricStats(perCompletion.map((c) => c.estimated_tokens)),
+    wait_polls: metricStats(perCompletion.map((c) => c.wait_polls)),
+    model_turns: metricStats(perCompletion.map((c) => c.model_turns)),
+    tool_calls: metricStats(perCompletion.map((c) => c.tool_calls)),
+    retries: metricStats(perCompletion.map((c) => c.retries)),
+    rows: perCompletion,
   };
 }
 
@@ -424,18 +494,23 @@ function report(input = {}, options = {}) {
   if (attributionCoverage === null || attributionCoverage < DEFAULT_ATTRIBUTION_TARGET) missing.push('dispatch attribution coverage >= 95%');
   if (opts.finalized_output_coverage !== 'observed') missing.push('finalized output coverage');
   if (opts.experiment_boundary !== true) missing.push('declared experiment boundary');
-  const treatmentIds = new Set(rows.map((row) => row.treatment_id));
-  if (treatmentIds.size < 2) missing.push('comparable baseline and treatment arms');
-  const completed = Number.isSafeInteger(opts.completed_tickets) ? opts.completed_tickets : quality.completed;
+  const cohorts = matchedCohorts(rows);
+  const hasMatchedCohort = cohorts.some((cohort) => cohort.matched);
+  if (!hasMatchedCohort) missing.push('comparable baseline and treatment arms matched by runtime/model/effort/role/account');
+  const perCompletion = completionMetrics(rows, opts.verified_completions || opts.completions);
+  const completed = Number.isSafeInteger(opts.completed_tickets) ? opts.completed_tickets
+    : perCompletion ? perCompletion.completions : quality.completed;
   const minCompleted = Number.isSafeInteger(opts.min_completed) ? opts.min_completed : DEFAULT_MIN_COMPLETED;
   if (completed < minCompleted) missing.push(`completed-ticket cohort (${completed}/${minCompleted})`);
   if (opts.defect_window_days === undefined || opts.defect_window_days < 7) missing.push('seven-day defect window');
   if (quality.false_green || quality.invalid_carry || quality.skipped_gate || quality.recovery_loss
-      || quality.duplicate_dispatch || quality.orphaned_work || quality.lost_constraints) {
+      || quality.duplicate_dispatch || quality.orphaned_work || quality.lost_constraints
+      || quality.reopens || quality.escaped_defects) {
     const failed = ['false_green', 'invalid_carry', 'skipped_gate', 'recovery_loss',
-      'duplicate_dispatch', 'orphaned_work', 'lost_constraints'].filter((key) => quality[key]);
+      'duplicate_dispatch', 'orphaned_work', 'lost_constraints', 'reopens', 'escaped_defects'].filter((key) => quality[key]);
     reasons.push(`quality/recovery failure (${failed.join(', ')}) requires rollback`);
   }
+  const qualityClean = reasons.length === 0;
   let verdict = reasons.length ? 'rollback' : 'inconclusive';
   if (!reasons.length && !missing.length) verdict = opts.verdict === 'continue_trial' ? 'continue_trial' : 'promote';
   if (verdict === 'inconclusive') reasons.push('evidence is incomplete; no savings or quota claim is permitted');
@@ -444,13 +519,21 @@ function report(input = {}, options = {}) {
     .map(([id, treatment]) => ({ id, treatment, metrics: metricSet(rows.filter((row) => row.treatment_id === id)) }));
   const byCategory = [...new Set(rows.map((row) => row.cost_category || 'orchestration'))]
     .sort().map((category) => ({ category, metrics: metricSet(rows.filter((row) => (row.cost_category || 'orchestration') === category)) }));
+  // @invariant: behaviorally_verified is independent of the savings verdict (efficiency_measured).
+  const status = {
+    implemented: true,
+    installed: rows.length > 0,
+    behaviorally_verified: qualityClean && opts.finalized_output_coverage === 'observed',
+    efficiency_measured: verdict === 'promote' || verdict === 'continue_trial',
+  };
   return {
     schema: REPORT_SCHEMA, version: SCHEMA_VERSION, experiment_id: opts.experiment_id || null,
     rows: rows.length, treatments, by_treatment: byTreatment, by_category: byCategory, metrics,
+    matched_cohorts: cohorts, metrics_per_completion: perCompletion,
     coverage: { provider_tokens: providerCoverage, attribution: attributionCoverage,
       attributed_rows: attributed, dispatch_rows: attributionRows.length,
       finalized_output: opts.finalized_output_coverage === undefined ? 'unknown' : opts.finalized_output_coverage },
-    quality, missing_coverage: missing, verdict, verdict_reasons: reasons,
+    quality, missing_coverage: missing, verdict, verdict_reasons: reasons, status,
   };
 }
 

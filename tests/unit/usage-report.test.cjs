@@ -399,3 +399,122 @@ test('message-scoped attributions do not fall back to other responses in the sam
    ['m2', null, 'unattributed'],
  ]);
 });
+
+test('a verified delivery outcome rolls up parent continuation and child dispatch usage into one completion', () => {
+ const parent = {type:'assistant', requestId:'r-parent', sessionId:'s-parent',
+   message:{id:'m-parent', model:'example-model',
+     usage:{input_tokens:10,cache_read_input_tokens:0,cache_creation_input_tokens:0,output_tokens:1}, stop_reason:'end_turn'}};
+ const child = {type:'assistant', requestId:'r-child', sessionId:'s-child',
+   message:{id:'m-child', model:'example-model',
+     usage:{input_tokens:15,cache_read_input_tokens:0,cache_creation_input_tokens:0,output_tokens:2}, stop_reason:'end_turn'}};
+ const r = report(files(parent, child), {
+   attributions: [
+     {dispatch_id:'dispatch-parent', runtime:'claude', provider:'anthropic', kind:'ordinary',
+       source:'fixture', session_id:'s-parent', request_id:'r-parent', message_id:'m-parent',
+       run_id:'run-1', ticket:'T-41-01', role:'executor', task_level:'routine', backend:'workflow',
+       model:'opus', effort:'high', observed_model:'example-model', observed_effort:'high'},
+     {dispatch_id:'dispatch-child', runtime:'claude', provider:'anthropic', kind:'ordinary',
+       source:'fixture', session_id:'s-child', request_id:'r-child', message_id:'m-child',
+       run_id:'run-1', ticket:'T-41-01', role:'ci-fix', task_level:'routine', backend:'workflow',
+       model:'opus', effort:'high', observed_model:'example-model', observed_effort:'high'},
+   ],
+   outcomes: [{run_id:'run-1', ticket:'T-41-01', status:'completed'}],
+ });
+ assert.deepEqual(r.observations.map((o) => o.verified_completion_status), ['completed', 'completed']);
+ assert.equal(r.efficiency.verified_completion_count, 1);
+ assert.equal(r.efficiency.verified_completions.length, 1);
+ const completion = r.efficiency.verified_completions[0];
+ assert.equal(completion.dispatch_count, 2);
+ assert.equal(completion.input_tokens, 25);
+ assert.equal(completion.complete, true);
+ assert.deepEqual(r.efficiency.input_per_verified_completion, {count:1, total:25, median:25, p90:25});
+});
+
+test('ambiguous verified outcomes keep the completion join unknown', () => {
+ const row = {type:'assistant', requestId:'r-amb', sessionId:'s-amb',
+   message:{id:'m-amb', model:'example-model',
+     usage:{input_tokens:8,cache_read_input_tokens:0,cache_creation_input_tokens:0,output_tokens:1}, stop_reason:'end_turn'}};
+ const r = report(files(row), {
+   attributions: [{dispatch_id:'dispatch-amb', runtime:'claude', provider:'anthropic', kind:'ordinary',
+     source:'fixture', session_id:'s-amb', request_id:'r-amb', message_id:'m-amb',
+     run_id:'run-2', ticket:'T-41-02', role:'executor', task_level:'routine', backend:'workflow',
+     model:'opus', effort:'high', observed_model:'example-model', observed_effort:'high'}],
+   outcomes: [
+     {run_id:'run-2', ticket:'T-41-02', status:'completed'},
+     {run_id:'run-2', ticket:'T-41-02', status:'failed'},
+   ],
+ });
+ assert.equal(r.observations[0].verified_completion_status, 'ambiguous');
+ assert.ok(r.warnings.some((w) => w.includes('ambiguous verified outcome')));
+ assert.equal(r.efficiency.verified_completions.length, 0);
+});
+
+test('missing effort does not block a verified completion join, only efficiency eligibility', () => {
+ const row = {type:'assistant', requestId:'r-noeffort', sessionId:'s-noeffort',
+   message:{id:'m-noeffort', model:'example-model',
+     usage:{input_tokens:20,cache_read_input_tokens:0,cache_creation_input_tokens:0,output_tokens:3}, stop_reason:'end_turn'}};
+ const r = report(files(row), {
+   attributions: [{dispatch_id:'dispatch-noeffort', runtime:'claude', provider:'anthropic', kind:'ordinary',
+     source:'fixture', session_id:'s-noeffort', request_id:'r-noeffort', message_id:'m-noeffort',
+     run_id:'run-3', ticket:'T-41-03', role:'executor', task_level:'routine', backend:'workflow',
+     model:'opus', observed_model:'example-model'}],
+   outcomes: [{run_id:'run-3', ticket:'T-41-03', status:'completed'}],
+ });
+ assert.equal(r.observations[0].verified_completion_status, 'completed');
+ assert.equal(r.efficiency.rows[0].eligible, false);
+ assert.ok(r.efficiency.rows[0].exclusion_reasons.includes('missing_or_nonconcrete_effort'));
+ assert.equal(r.efficiency.verified_completions.length, 1);
+ assert.equal(r.efficiency.verified_completions[0].input_tokens, 20);
+ assert.equal(r.efficiency.verified_completions[0].complete, true);
+});
+
+test('a failed run stays in cohort totals while only the completed recovery run becomes a verified completion', () => {
+ const failed = {type:'assistant', requestId:'r-fail', sessionId:'s-fail',
+   message:{id:'m-fail', model:'example-model',
+     usage:{input_tokens:5,cache_read_input_tokens:0,cache_creation_input_tokens:0,output_tokens:1}, stop_reason:'end_turn'}};
+ const recovered = {type:'assistant', requestId:'r-recover', sessionId:'s-recover',
+   message:{id:'m-recover', model:'example-model',
+     usage:{input_tokens:12,cache_read_input_tokens:0,cache_creation_input_tokens:0,output_tokens:2}, stop_reason:'end_turn'}};
+ const r = report(files(failed, recovered), {
+   attributions: [
+     {dispatch_id:'dispatch-fail', runtime:'claude', provider:'anthropic', kind:'ordinary',
+       source:'fixture', session_id:'s-fail', request_id:'r-fail', message_id:'m-fail',
+       run_id:'run-4a', ticket:'T-41-04', role:'executor', task_level:'routine', backend:'workflow',
+       model:'opus', effort:'high', observed_model:'example-model', observed_effort:'high'},
+     {dispatch_id:'dispatch-recover', runtime:'claude', provider:'anthropic', kind:'ordinary',
+       source:'fixture', session_id:'s-recover', request_id:'r-recover', message_id:'m-recover',
+       run_id:'run-4b', ticket:'T-41-04', role:'ci-fix', task_level:'routine', backend:'workflow',
+       model:'opus', effort:'high', observed_model:'example-model', observed_effort:'high'},
+   ],
+   outcomes: [
+     {run_id:'run-4a', ticket:'T-41-04', status:'failed'},
+     {run_id:'run-4b', ticket:'T-41-04', status:'completed'},
+   ],
+ });
+ assert.deepEqual(r.observations.map((o) => o.verified_completion_status).sort(), ['completed', 'failed']);
+ const total = r.groups.reduce((sum, g) => sum + (g.input_tokens || 0), 0);
+ assert.equal(total, 17, 'total cohort consumption keeps the failed run visible');
+ assert.equal(r.efficiency.verified_completions.length, 1);
+ assert.equal(r.efficiency.verified_completions[0].run_id, 'run-4b');
+ assert.equal(r.efficiency.verified_completions[0].input_tokens, 12);
+});
+
+test('CLI accepts an --outcomes ledger and diagnoses an unreadable path', () => {
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'usage-outcomes-cli-'));
+ try {
+  const p=path.join(dir,'a.jsonl');
+  fs.writeFileSync(p,JSON.stringify({type:'assistant', requestId:'r-cli', sessionId:'s-cli',
+    message:{id:'m-cli', model:'example-model',
+      usage:{input_tokens:1,cache_read_input_tokens:0,cache_creation_input_tokens:0,output_tokens:1}, stop_reason:'end_turn'}})+'\n');
+  const outcomes=path.join(dir,'outcomes.jsonl');
+  fs.writeFileSync(outcomes, JSON.stringify({run_id:'run-cli', ticket:'T-41-05', status:'completed'})+'\n');
+  const cli=path.resolve(__dirname,'../../plugins/delivery-pipeline/scripts/usage-report.cjs');
+  let r=spawnSync(process.execPath,[cli,p,'--outcomes',outcomes],{encoding:'utf8'});
+  assert.equal(r.status,0,r.stderr);
+  assert.equal(JSON.parse(r.stdout).groups[0].input_tokens,1);
+  r=spawnSync(process.execPath,[cli,p,'--outcomes',path.join(dir,'missing-outcomes.jsonl')],{encoding:'utf8'});
+  assert.equal(r.status,1,r.stderr);
+  const out=JSON.parse(r.stdout);
+  assert.ok(out.warnings.some((w)=>w.includes('unreadable outcome path')));
+ } finally { fs.rmSync(dir,{recursive:true,force:true}); }
+});

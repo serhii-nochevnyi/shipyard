@@ -19,6 +19,8 @@ const concreteEffort = (value) => Array.isArray(pipeline.EFFORTS) && pipeline.EF
 const validModel = (value) => typeof value === 'string' && value.trim().length > 0;
 const isCurrentCodexUsage = (row) => row?.type === 'token_usage_record'
   && Boolean(row.payload?.thread_token_usage || row.payload?.total_token_usage);
+// @contract: outcome status is supplied evidence (delivery-state/receipt); a transcript stop is never completion.
+const OUTCOME_STATUSES = new Set(['completed', 'failed', 'interrupted', 'parked']);
 
 function valuesOf(context, key) {
   const plural = `${key}s`;
@@ -225,10 +227,95 @@ function metadataFor(context, rawModel, rawEffort, match, warn) {
   };
 }
 
+function outcomeShape(record, index) {
+  if (!record || typeof record !== 'object' || Array.isArray(record)) {
+    return { error: `outcome ${index} is not an object` };
+  }
+  for (const [field, whitespace] of [['run_id', false], ['ticket', false], ['project_id', false], ['dispatch_id', true]]) {
+    if (record[field] === undefined || record[field] === null) continue;
+    const issue = attributionRules.textIssue(record[field], field, { whitespace });
+    if (issue) return { error: `outcome ${index} ${issue}` };
+  }
+  if (!record.run_id) return { error: `outcome ${index} has no run_id` };
+  if (!record.ticket) return { error: `outcome ${index} has no ticket` };
+  if (!OUTCOME_STATUSES.has(record.status)) return { error: `outcome ${index} has an unknown status` };
+  return {
+    run_id: record.run_id, ticket: record.ticket,
+    project_id: record.project_id || null, dispatch_id: record.dispatch_id || null,
+    status: record.status,
+  };
+}
+
+function outcomeIndex(records, warn) {
+  const valid = [];
+  for (const [index, raw] of (Array.isArray(records) ? records : []).entries()) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) { warn(`outcome ${index + 1} is not an object`); continue; }
+    const value = outcomeShape(raw, index + 1);
+    if (value.error) { warn(value.error); continue; }
+    valid.push(value);
+  }
+  return valid;
+}
+
+// @contract: joins by project/run/work-item identity; conflicting status for one identity is ambiguous.
+function findOutcome(context, outcomes, warn) {
+  if (!outcomes.length || !context.ticket || !context.run_id) return null;
+  const sameTicketRun = outcomes.filter((o) => o.run_id === context.run_id && o.ticket === context.ticket
+    && (o.project_id === null || context.project_id === null || o.project_id === context.project_id));
+  if (!sameTicketRun.length) return null;
+  const scoped = context.dispatch_id ? sameTicketRun.filter((o) => o.dispatch_id === context.dispatch_id) : [];
+  const candidates = scoped.length ? scoped : sameTicketRun.filter((o) => !o.dispatch_id);
+  if (!candidates.length) return null;
+  const statuses = new Set(candidates.map((o) => o.status));
+  if (statuses.size > 1) {
+    warn(`ambiguous verified outcome for ticket ${context.ticket} (run ${context.run_id})`);
+    return { status: 'ambiguous' };
+  }
+  return { status: candidates[0].status };
+}
+
+function percentileStats(values) {
+  const usable = values.filter((value) => Number.isSafeInteger(value) && value >= 0).sort((a, b) => a - b);
+  if (!usable.length) return { count: 0, total: null, median: null, p90: null };
+  const percentile = (fraction) => usable[Math.min(usable.length - 1, Math.ceil(usable.length * fraction) - 1)];
+  return { count: usable.length, total: usable.reduce((a, b) => a + b, 0), median: percentile(0.5), p90: percentile(0.9) };
+}
+
+// @invariant: a missing counter makes the summed field unknown, never a silently truncated total.
+function rollupVerifiedCompletions(rows, counters, coreFields) {
+  const groups = new Map();
+  for (const row of rows) {
+    if (row.verified_completion_status !== 'completed' || !row.ticket || !row.run_id) continue;
+    const key = JSON.stringify([row.project_id || null, row.run_id, row.ticket]);
+    let g = groups.get(key);
+    if (!g) {
+      g = {
+        ticket: row.ticket, run_id: row.run_id, project_id: row.project_id || null,
+        dispatch_ids: new Set(), observations: 0, ...Object.fromEntries(counters.map((f) => [f, 0])),
+      };
+      groups.set(key, g);
+    }
+    g.dispatch_ids.add(row.dispatch_id);
+    g.observations += row.observations;
+    for (const field of counters) {
+      if (row[field] === null) g[field] = null;
+      else if (g[field] !== null) g[field] += row[field];
+    }
+  }
+  return [...groups.values()].map((g) => {
+    const dispatchIds = [...g.dispatch_ids].sort();
+    return {
+      ...g, dispatch_ids: dispatchIds, dispatch_count: dispatchIds.length,
+      complete: coreFields.every((field) => g[field] !== null),
+    };
+  });
+}
+
 function report(sources, options = {}) {
   const warnings = [], requests = new Map(), sessions = new Map(), codexTurnMetadata = new Map(), observations = [];
   const attributionRecords = attributionIndex(options.attributions || [], (message) => warnings.push(message));
   const attributionEnabled = options.attributions !== undefined;
+  const outcomeRecords = outcomeIndex(options.outcomes || [], (message) => warnings.push(message));
   let usageRows = 0;
   const warn = (s) => warnings.push(s);
   // A resumed Codex session may be split across transcript files. Decide which
@@ -417,6 +504,11 @@ function report(sources, options = {}) {
   function addObservation(context, usage, rawModel, rawEffort, unit, finalized, fallbackCompletion, totals = null) {
     const match = findAttribution(context, attributionRecords, warn);
     const metadata = metadataFor(context, rawModel, rawEffort, match, warn);
+    // @contract: requires exact/session attribution plus dispatch/work-item/run identity before an outcome join.
+    const outcomeMatch = (metadata.attribution_status === 'exact' || metadata.attribution_status === 'session')
+      && metadata.dispatch_id && metadata.ticket && metadata.run_id
+      ? findOutcome(metadata, outcomeRecords, warn)
+      : null;
     observations.push({
       provider: RUNTIME_PROVIDER[context.runtime],
       kind: context.kind,
@@ -424,6 +516,7 @@ function report(sources, options = {}) {
       finalized,
       ...metadata,
       completion_status: metadata.completion_status || fallbackCompletion || 'unknown',
+      verified_completion_status: outcomeMatch ? outcomeMatch.status : 'unknown',
       input_tokens: totals?.input_tokens ?? sum(FIELDS.slice(0, 3).map(f => usage[f])),
       uncached_input_tokens: totals?.uncached_input_tokens ?? usage.input_tokens ?? null,
       cache_read_input_tokens: totals?.cache_read_input_tokens ?? usage.cache_read_input_tokens ?? null,
@@ -622,16 +715,18 @@ function report(sources, options = {}) {
   );
   const efficiencyRows = [...new Map(observations
     .filter((o) => o.ticket && o.dispatch_id)
-    .map((o) => [JSON.stringify([o.ticket, o.dispatch_id, o.provider, o.runtime, o.kind, o.model, o.observed_effort,
-      o.role, o.task_level, o.backend, o.unit]), o])
+    .map((o) => [JSON.stringify([o.ticket, o.dispatch_id, o.run_id, o.project_id, o.provider, o.runtime, o.kind,
+      o.model, o.observed_effort, o.role, o.task_level, o.backend, o.unit]), o])
   ).values()].map((seed) => {
     const same = observations.filter((o) => o.ticket === seed.ticket && o.dispatch_id === seed.dispatch_id
+      && o.run_id === seed.run_id && o.project_id === seed.project_id
       && o.provider === seed.provider && o.runtime === seed.runtime
       && o.kind === seed.kind && o.model === seed.model && o.observed_effort === seed.observed_effort
       && o.role === seed.role && o.task_level === seed.task_level
       && o.backend === seed.backend && o.unit === seed.unit);
     const row = {
-      ticket: seed.ticket, dispatch_id: seed.dispatch_id, provider: seed.provider,
+      ticket: seed.ticket, dispatch_id: seed.dispatch_id, run_id: seed.run_id, project_id: seed.project_id,
+      provider: seed.provider,
       runtime: seed.runtime, kind: seed.kind, model: seed.model,
       observed_effort: seed.observed_effort, role: seed.role, task_level: seed.task_level, backend: seed.backend,
       observations: same.length,
@@ -641,11 +736,15 @@ function report(sources, options = {}) {
         [...new Set(same.map((o) => o.attribution_status))].sort()
           .map((status) => [status, same.filter((o) => o.attribution_status === status).length])
       ),
+      verified_completion_status: [...new Set(same.map((o) => o.verified_completion_status))].length === 1
+        ? same[0].verified_completion_status : 'unknown',
     };
     for (const field of counters) row[field] = same.every((o) => o[field] !== null)
       ? same.reduce((total, o) => total + o[field], 0) : null;
     return row;
   });
+  const verifiedCompletions = rollupVerifiedCompletions(efficiencyRows, counters, FIELDS);
+  const completeCompletions = verifiedCompletions.filter((c) => c.complete);
 
   if (!usageRows || !observations.length) warn('No attributable supported usage observations');
   if ([...groups.values()].some(g => g.input_tokens === null)) warn('Input coverage is incomplete; totals are not comparable');
@@ -666,9 +765,13 @@ function report(sources, options = {}) {
       eligible_ticket_observations: ticketReady,
       eligible_rows: efficiencyRows.filter((row) => row.eligible).length,
       ineligible_rows: efficiencyRows.filter((row) => !row.eligible).length,
-      input_per_verified_completion: null,
+      input_per_verified_completion: percentileStats(completeCompletions.map((c) => c.input_tokens)),
+      per_verified_completion: Object.fromEntries(counters.map((field) =>
+        [field, percentileStats(completeCompletions.map((c) => c[field]))])),
+      verified_completions: verifiedCompletions,
+      verified_completion_count: completeCompletions.length,
       rows: efficiencyRows,
-      limitation: 'verified completion must be joined from delivery outcomes; no completion is inferred from a transcript stop marker',
+      limitation: 'a verified completion requires an authenticated outcome supplied via --outcomes/options.outcomes; no completion is inferred from a transcript stop marker',
     },
     coverage: {
       claude_responses: requests.size,
@@ -699,18 +802,22 @@ function report(sources, options = {}) {
 }
 
 function parseCli(args) {
-  const transcripts = [], attribution = [];
+  const transcripts = [], attribution = [], outcomes = [];
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     if (arg === '--attribution') {
       const value = args[++i];
       if (!value || value.startsWith('--')) throw new Error('--attribution needs a JSONL ledger path');
       attribution.push(value);
+    } else if (arg === '--outcomes') {
+      const value = args[++i];
+      if (!value || value.startsWith('--')) throw new Error('--outcomes needs a JSONL ledger path');
+      outcomes.push(value);
     } else if (arg.startsWith('--')) {
       throw new Error(`unsupported option ${arg}; see --help`);
     } else transcripts.push(arg);
   }
-  return { transcripts, attribution };
+  return { transcripts, attribution, outcomes };
 }
 
 function readJsonl(file, malformed, label) {
@@ -749,8 +856,8 @@ function loadJsonlInputs(files, malformed, label, warnings, asSource) {
 
 function main(args) {
   if (args.length === 1 && args[0] === '--help') {
-    console.log('usage: node usage-report.cjs <transcript.jsonl> [more.jsonl ...] [--attribution ledger.jsonl]');
-    console.log('Read-only; explicit transcript and attribution files only. JSON to stdout; no prompts or quota estimates.');
+    console.log('usage: node usage-report.cjs <transcript.jsonl> [more.jsonl ...] [--attribution ledger.jsonl] [--outcomes outcomes.jsonl]');
+    console.log('Read-only; explicit transcript, attribution and outcome files only. JSON to stdout; no prompts or quota estimates.');
     return;
   }
   const parsed = parseCli(args);
@@ -761,7 +868,13 @@ function main(args) {
   const attributions = parsed.attribution.length
     ? loadJsonlInputs(parsed.attribution, malformed, 'attribution', pathWarnings, false).flat()
     : undefined;
-  const result = report(sources, { ...(attributions === undefined ? {} : { attributions }) });
+  const outcomes = parsed.outcomes.length
+    ? loadJsonlInputs(parsed.outcomes, malformed, 'outcome', pathWarnings, false).flat()
+    : undefined;
+  const result = report(sources, {
+    ...(attributions === undefined ? {} : { attributions }),
+    ...(outcomes === undefined ? {} : { outcomes }),
+  });
   result.warnings.push(...pathWarnings);
   result.warnings.push(...malformed);
   result.warnings = [...new Set(result.warnings)];
@@ -775,4 +888,4 @@ if (require.main === module) {
   catch (e) { console.error(`usage-report: ${e.message}`); process.exitCode = 2; }
 }
 
-module.exports = { report, findAttribution, attributionIndex };
+module.exports = { report, findAttribution, attributionIndex, findOutcome, outcomeIndex };
