@@ -5857,7 +5857,8 @@
       "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/scripts/session-handoff.cjs",
-        "tests/unit/session-handoff.test.cjs"
+        "tests/unit/session-handoff.test.cjs",
+        "tests/unit/rotation-recommendation.test.cjs"
       ],
       "risk": "medium",
       "type": "implementation",
