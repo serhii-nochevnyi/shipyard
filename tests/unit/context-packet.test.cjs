@@ -367,5 +367,55 @@ test('the real executor prompt carries the packet and no unrelated transcript', 
   }
 });
 
+test('a selected-scope backlog inventory lists only the selected items', () => {
+  const f = fixture();
+  try {
+    const all = buildContextPacket(options(f));
+    const item = all.backlog.inventory.items[0];
+    assert.ok(item, 'fixture must expose a backlog item');
+    const packet = buildContextPacket(options(f, { selectedBacklogIds: [item.id], backlogInventory: 'selected' }));
+    assert.deepEqual(packet.backlog.inventory.items.map((entry) => entry.id), [item.id]);
+    assert.equal(packet.backlog.inventory.total_items, all.backlog.inventory.total_items);
+    assert.equal(packet.backlog.inventory.matched_items, 1);
+    assert.equal(packet.backlog.inventory.scope, 'selected');
+    validateContextPacket(packet, { root: f.root, role: 'executor', subject: 'T-33-06' });
+  } finally {
+    fs.rmSync(f.root, { recursive: true, force: true });
+  }
+});
+
+test('a selected-scope inventory with an extra item is refused', () => {
+  const f = fixture();
+  try {
+    fs.writeFileSync(path.join(f.root, '.planning', 'backlog', 'second.md'),
+      '# Second item\n\nAnother complete backlog section for this fixture.\n');
+    const all = buildContextPacket(options(f));
+    const [first, second] = all.backlog.inventory.items;
+    assert.ok(first && second, 'fixture must expose two backlog items');
+    const packet = buildContextPacket(options(f, { selectedBacklogIds: [first.id], backlogInventory: 'selected' }));
+    const mutated = JSON.parse(JSON.stringify(packet));
+    mutated.backlog.inventory.items.push(second);
+    assert.throws(
+      () => validateContextPacket(mutated, { root: f.root, role: 'executor', subject: 'T-33-06' }),
+      (error) => error.code === 'INVALID_CONTEXT_PACKET'
+        && error.message === 'packet backlog inventory scope does not match its selection',
+    );
+  } finally {
+    fs.rmSync(f.root, { recursive: true, force: true });
+  }
+});
+
+test('an unknown backlogInventory value is refused', () => {
+  const f = fixture();
+  try {
+    assert.throws(
+      () => buildContextPacket(options(f, { backlogInventory: 'some' })),
+      (error) => error.code === 'INVALID_BACKLOG_SELECTION',
+    );
+  } finally {
+    fs.rmSync(f.root, { recursive: true, force: true });
+  }
+});
+
 assert.ok(DEFAULT_TOKEN_CEILING >= 12000);
 done();
