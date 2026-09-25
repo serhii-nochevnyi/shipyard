@@ -667,6 +667,21 @@ function resultFrom(output) {
   return result;
 }
 
+const TICKET_SET_KEYS = Object.freeze(['id', 'pr', 'head', 'base', 'branch']);
+
+const TICKET_SET_SCHEMA = Object.freeze({
+  type: 'array',
+  items: {
+    type: 'object',
+    additionalProperties: false,
+    required: [...TICKET_SET_KEYS],
+    properties: {
+      id: { type: 'string' }, pr: { type: 'integer', minimum: 1 }, head: { type: 'string' },
+      base: { type: 'string' }, branch: { type: 'string' },
+    },
+  },
+});
+
 function roleOutputSchema(role) {
   const properties = { blocking_count: { type: 'integer', minimum: 0 } };
   if (role === 'arch-review') {
@@ -675,8 +690,47 @@ function roleOutputSchema(role) {
       head: { type: 'string' }, base_tree: { type: 'string' }, summary: { type: 'string' },
       findings: { type: 'array' },
     });
+    return { type: 'object', properties };
   }
-  return { type: 'object', properties };
+  if (role === 'integrator') {
+    Object.assign(properties, {
+      outcome: { type: 'string', enum: ['passed', 'needs-fix', 'human-review-required'] },
+      phase: { type: 'string' }, head: { type: 'string' }, head_tree: { type: 'string' },
+      base: { type: 'string' }, base_tree: { type: 'string' }, ticket_set_digest: { type: 'string' },
+      summary: { type: 'string' }, ticket_set: TICKET_SET_SCHEMA, findings: { type: 'array' },
+    });
+    return { type: 'object', properties, required: ['outcome', 'phase', 'head', 'head_tree', 'base',
+      'base_tree', 'ticket_set', 'ticket_set_digest', 'blocking_count', 'summary', 'findings'] };
+  }
+  Object.assign(properties, {
+    outcome: { type: 'string', enum: ['clear', 'blocked', 'awaiting-human'] },
+    ticket_set: TICKET_SET_SCHEMA, ticket_set_digest: { type: 'string' },
+    head: { type: 'string' }, head_tree: { type: 'string' },
+    performed: { type: 'array' }, refused: { type: 'array' }, summary: { type: 'string' },
+  });
+  return { type: 'object', properties,
+    required: ['outcome', 'ticket_set', 'ticket_set_digest', 'head', 'head_tree', 'blocking_count'] };
+}
+
+function ticketSetShapeProblem(value) {
+  if (typeof value === 'string') return 'a string';
+  if (!Array.isArray(value)) return 'not an array';
+  for (const item of value) {
+    if (!object(item)) return 'an array of non-objects';
+    const keys = Object.keys(item);
+    if (keys.length !== TICKET_SET_KEYS.length || TICKET_SET_KEYS.some((key) => !keys.includes(key))) {
+      return 'an array of objects with the wrong keys';
+    }
+  }
+  return null;
+}
+
+function checkTicketSetShape(role, ticketSet) {
+  const problem = ticketSetShapeProblem(ticketSet);
+  if (problem) {
+    reject(`${role} result ticket_set is ${problem}; remedy: copy role_context.ticket_set verbatim, `
+      + 'the exact array of {id, pr, head, base, branch} objects in host order, not a string or a list of ids', 'INVALID_RESULT');
+  }
 }
 
 function validateResult(prepared, result) {
@@ -684,6 +738,7 @@ function validateResult(prepared, result) {
     if (result.id !== prepared.ticket || result.pr !== prepared.pr || result.head !== prepared.canonical.head
         || result.base_tree !== prepared.mergeBaseTree) reject('architecture result identity differs from the authenticated PR snapshot', 'ARTIFACT_IDENTITY_MISMATCH');
   } else if (prepared.role === 'integrator') {
+    checkTicketSetShape('integrator', result.ticket_set);
     if (result.phase !== prepared.phase || result.head !== prepared.canonical.head
         || result.head_tree !== prepared.canonical.headTree || result.base !== prepared.base
         || result.base_tree !== prepared.defaultBaseTree
@@ -691,13 +746,17 @@ function validateResult(prepared, result) {
         || result.ticket_set_digest !== prepared.ticketSetDigest) {
       reject('integrator result identity differs from the authenticated phase snapshot', 'ARTIFACT_IDENTITY_MISMATCH');
     }
-  } else if (result.outcome !== 'clear' && result.outcome !== 'blocked' && result.outcome !== 'awaiting-human') {
-    reject('sentinel result has an unsupported outcome', 'INVALID_RESULT');
-  } else if (canonicalJson(result.ticket_set) !== canonicalJson(prepared.ticketSet)
-      || result.ticket_set_digest !== prepared.ticketSetDigest
-      || result.head !== prepared.canonical.head
-      || result.head_tree !== prepared.canonical.headTree) {
-    reject('sentinel result identity differs from the authenticated round snapshot', 'ARTIFACT_IDENTITY_MISMATCH');
+  } else {
+    if (result.outcome !== 'clear' && result.outcome !== 'blocked' && result.outcome !== 'awaiting-human') {
+      reject('sentinel result has an unsupported outcome', 'INVALID_RESULT');
+    }
+    checkTicketSetShape('sentinel', result.ticket_set);
+    if (canonicalJson(result.ticket_set) !== canonicalJson(prepared.ticketSet)
+        || result.ticket_set_digest !== prepared.ticketSetDigest
+        || result.head !== prepared.canonical.head
+        || result.head_tree !== prepared.canonical.headTree) {
+      reject('sentinel result identity differs from the authenticated round snapshot', 'ARTIFACT_IDENTITY_MISMATCH');
+    }
   }
   if (prepared.readOnlySmoke && (result.outcome !== 'awaiting-human'
       || !Array.isArray(result.performed) || result.performed.length !== 0)) {

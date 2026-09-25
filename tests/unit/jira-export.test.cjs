@@ -190,12 +190,123 @@ test('description carries the Goal, Scope and Acceptance criteria sections read 
   assert.ok(issue.description.includes('Widget exists.'));
 });
 
-test('the idempotency lookup carries the primary jql and the legacy-label fallback', () => {
+test('the issue lookup is ordered primary, ADR-004 spelling, then bare legacy', () => {
   const p = diamondAndChain();
   const out = mod.planExport(p.graph, { repo: 'acme/demo', project: 'MYD' });
   const issue = out.steps.find((s) => s.step === 'issue' && s.ticket === 'T-01-01');
-  assert.equal(issue.lookup.jql, 'project = MYD AND labels = "shipyard-acme-demo-t-01-01"');
-  assert.equal(issue.lookup.legacy_jql, 'project = MYD AND labels = "shipyard-T-01-01"');
+  const planPath = JSON.parse(fs.readFileSync(path.join(p.graph, 'tickets.json'), 'utf8')).tickets['T-01-01'].plan;
+  const pointer = `Source of truth: acme/demo:${planPath} (this issue is a generated projection)`;
+
+  assert.equal(issue.lookup.length, 3);
+  assert.deepEqual(issue.lookup.map((e) => e.order), [1, 2, 3]);
+  assert.deepEqual(issue.lookup.map((e) => e.kind), ['primary', 'adr-004', 'legacy']);
+  assert.deepEqual(issue.lookup.map((e) => e.label), [
+    'shipyard-acme-demo-t-01-01', 'shipyard-acme-demo-T-01-01', 'shipyard-T-01-01',
+  ]);
+  assert.deepEqual(issue.lookup.map((e) => e.jql), [
+    'project = MYD AND labels = "shipyard-acme-demo-t-01-01"',
+    'project = MYD AND labels = "shipyard-acme-demo-T-01-01"',
+    'project = MYD AND labels = "shipyard-T-01-01"',
+  ]);
+  assert.deepEqual(issue.lookup[0].on_match, { action: 'update' });
+  for (const entry of issue.lookup.slice(1)) {
+    assert.equal(entry.requires_source_of_truth, `acme/demo:${planPath}`);
+    assert.equal(entry.accepts_unprefixed, planPath);
+    assert.equal(entry.on_foreign, 'skip');
+    assert.equal(entry.on_match.action, 'migrate');
+    assert.equal(entry.on_match.add_label, 'shipyard-acme-demo-t-01-01');
+    assert.equal(entry.on_match.pointer, pointer);
+    assert.equal(entry.on_match.comment, 'label migrated');
+  }
+  assert.equal(issue.on_no_match, 'create');
+});
+
+
+test('the epic lookup has a legacy entry and the epic description carries one pointer line', () => {
+  const p = project({ 'T-01-01': { phase: '01', title: 'Root', depends_on: [] } });
+  const out = mod.planExport(p.graph, { repo: 'acme/demo', project: 'MYD' });
+  const epic = out.steps.find((s) => s.step === 'epic');
+  const sourcePath = '.planning/phases/01-a-phase-title';
+  const pointer = `Source of truth: acme/demo:${sourcePath} (this issue is a generated projection)`;
+
+  assert.equal(epic.lookup.length, 2);
+  assert.equal(epic.lookup[0].kind, 'primary');
+  assert.equal(epic.lookup[0].label, 'shipyard-epic-acme-demo-01');
+  assert.deepEqual(epic.lookup[0].on_match, { action: 'update' });
+  assert.equal(epic.lookup[1].order, 2);
+  assert.equal(epic.lookup[1].kind, 'legacy');
+  assert.equal(epic.lookup[1].label, 'shipyard-epic-01');
+  assert.equal(epic.lookup[1].requires_source_of_truth, `acme/demo:${sourcePath}`);
+  assert.equal(epic.lookup[1].accepts_unprefixed, sourcePath);
+  assert.equal(epic.lookup[1].on_foreign, 'skip');
+  assert.equal(epic.lookup[1].on_match.action, 'migrate');
+  assert.equal(epic.lookup[1].on_match.add_label, 'shipyard-epic-acme-demo-01');
+  assert.equal(epic.lookup[1].on_match.pointer, pointer);
+  assert.equal(epic.lookup[1].on_match.comment, 'label migrated');
+  assert.equal(epic.on_no_match, 'create');
+
+  const pointerLines = epic.description.split('\n').filter((l) => l.startsWith('Source of truth:'));
+  assert.equal(pointerLines.length, 1);
+  assert.equal(pointerLines[0], pointer);
+});
+
+
+suite('resolveLookup — ADR-004 D8 migration and foreign-repo refusal');
+
+function issueStepFor(id) {
+  const p = diamondAndChain();
+  const out = mod.planExport(p.graph, { repo: 'acme/demo', project: 'MYD' });
+  return out.steps.find((s) => s.step === 'issue' && s.ticket === id);
+}
+
+test('resolveLookup refuses a foreign-repo legacy issue and falls through to create', () => {
+  const issue = issueStepFor('T-01-01');
+  const legacyOrder = issue.lookup.find((e) => e.kind === 'legacy').order;
+  const hits = { [legacyOrder]: [{ key: 'MYD-999', description: 'Source of truth: other/repo:some/plan.md (this issue is a generated projection)' }] };
+  assert.deepEqual(mod.resolveLookup(issue, hits), { action: 'create' });
+});
+
+test('resolveLookup migrates an unprefixed legacy issue with the label migrated note', () => {
+  const issue = issueStepFor('T-01-01');
+  const legacy = issue.lookup.find((e) => e.kind === 'legacy');
+  const hits = { [legacy.order]: [{ key: 'MYD-7', description: `Source of truth: ${legacy.accepts_unprefixed} (this issue is a generated projection)` }] };
+  assert.deepEqual(mod.resolveLookup(issue, hits), {
+    action: 'migrate',
+    key: 'MYD-7',
+    add_label: legacy.on_match.add_label,
+    pointer: legacy.on_match.pointer,
+    comment: 'label migrated',
+  });
+});
+
+test('resolveLookup migrates an ADR-004-spelled hit naming this repo', () => {
+  const issue = issueStepFor('T-01-01');
+  const adr004 = issue.lookup.find((e) => e.kind === 'adr-004');
+  const hits = { [adr004.order]: [{ key: 'MYD-5', description: `Source of truth: acme/demo:${adr004.accepts_unprefixed} (this issue is a generated projection)` }] };
+  assert.equal(mod.resolveLookup(issue, hits).action, 'migrate');
+  assert.equal(mod.resolveLookup(issue, hits).key, 'MYD-5');
+});
+
+test('resolveLookup updates a namespaced hit', () => {
+  const issue = issueStepFor('T-01-01');
+  const primary = issue.lookup.find((e) => e.kind === 'primary');
+  const legacy = issue.lookup.find((e) => e.kind === 'legacy');
+  const hits = {
+    [primary.order]: [{ key: 'MYD-3', description: 'anything' }],
+    [legacy.order]: [{ key: 'MYD-4', description: `Source of truth: ${legacy.accepts_unprefixed} (this issue is a generated projection)` }],
+  };
+  assert.deepEqual(mod.resolveLookup(issue, hits), { action: 'update', key: 'MYD-3' });
+});
+
+test('resolveLookup reports two hits on one entry as ambiguous and never claims an issue without a pointer', () => {
+  const issue = issueStepFor('T-01-01');
+  const primary = issue.lookup.find((e) => e.kind === 'primary');
+  const legacy = issue.lookup.find((e) => e.kind === 'legacy');
+  const ambiguous = mod.resolveLookup(issue, { [primary.order]: [{ key: 'A', description: '' }, { key: 'B', description: '' }] });
+  assert.deepEqual(ambiguous, { action: 'ambiguous', order: primary.order, keys: ['A', 'B'] });
+
+  const noPointer = mod.resolveLookup(issue, { [legacy.order]: [{ key: 'MYD-8', description: 'no pointer line at all' }] });
+  assert.deepEqual(noPointer, { action: 'create' });
 });
 
 

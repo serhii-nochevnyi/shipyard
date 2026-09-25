@@ -775,8 +775,8 @@ target-project PRs.
 <!-- shipyard:gsd-sync:begin -->
 ## Shipyard synchronization (generated)
 
-- Source fingerprint: `b3404d53c196df3b5968618d97dabc3cf768a213acf7a7a6f30a823cc38be67a`
-- Plans merged: 157/185
+- Source fingerprint: `7dd74dbe435e58556cc1df9554fd32dab10388518728ee8825fd502d90fe1076`
+- Plans merged: 160/189
 - Phases verified: 10/21
 - Current phase: 20
 
@@ -801,7 +801,7 @@ target-project PRs.
 | 36 — Enforce the runtime model ladder | 12 | 12 | passed |
 | 37 — Run the autonomous dual-runtime control plane | 8 | 8 | pending |
 | 38 — Restore the native model ladder in delivery | 8 | 8 | passed |
-| 39 — Remove conveyor session friction | 12 | 11 | pending |
+| 39 — Remove conveyor session friction | 16 | 14 | gaps_found |
 | 40 — Build delivery seams and clean target-project PRs | 27 | 0 | pending |
 
 <!-- shipyard:gsd-sync:end -->
