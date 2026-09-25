@@ -786,7 +786,7 @@ tickets; do not repeat its provenance/schema work or phase 39 packet fixes.
 <!-- shipyard:gsd-sync:begin -->
 ## Shipyard synchronization (generated)
 
-- Source fingerprint: `4688919b4ee9277f165f6754de1c8212b5c48fabc0250a34d9295af51520e4c2`
+- Source fingerprint: `bc89e6ef5154d566f0ebe822e3d7785faa7eee7a3db45cd94348cda74e72c0ca`
 - Plans merged: 163/197
 - Phases verified: 10/22
 - Current phase: 20
