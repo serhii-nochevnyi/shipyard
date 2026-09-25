@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: b3404d53c196df3b5968618d97dabc3cf768a213acf7a7a6f30a823cc38be67a
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: ea4a57b41e37523faa829148f0f48380e40c03aa111d13dd73a78cc3c685b1c4
 phase: 24-the-conveyor-stops-interrupting-itself
 plan: 11
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-07
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: b3404d53c196df3b5968618d97dabc3cf768a213acf7a7a6f30a823cc38be67a
+shipyard_source_fingerprint: ea4a57b41e37523faa829148f0f48380e40c03aa111d13dd73a78cc3c685b1c4
 ---
 
 # Phase 24: A resync writes the front it means — Delivery Projection

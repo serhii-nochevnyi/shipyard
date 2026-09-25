@@ -1,6 +1,6 @@
 # Requirements: shipyard
 
-<!-- shipyard:gsd-sync generated; sync-version: 1; source fingerprint: b3404d53c196df3b5968618d97dabc3cf768a213acf7a7a6f30a823cc38be67a -->
+<!-- shipyard:gsd-sync generated; sync-version: 1; source fingerprint: ea4a57b41e37523faa829148f0f48380e40c03aa111d13dd73a78cc3c685b1c4 -->
 
 **Defined:** 2026-09-10
 **Core Value:** Keep delivery decisions truthful, resumable, and synchronized between the Shipyard conveyor and native GSD workflows.
@@ -292,17 +292,17 @@
 | REQ-121 | Phase 38 | Complete |
 | REQ-122 | Phase 38 | Complete |
 | REQ-123 | Phase 38 | Complete |
-| REQ-125 | Phase 39 | In Progress |
-| REQ-126 | Phase 39 | In Progress |
-| REQ-127 | Phase 39 | In Progress |
-| REQ-128 | Phase 39 | In Progress |
-| REQ-129 | Phase 39 | In Progress |
-| REQ-130 | Phase 39 | In Progress |
-| REQ-131 | Phase 39 | In Progress |
-| REQ-132 | Phase 39 | In Progress |
-| REQ-133 | Phase 39 | In Progress |
-| REQ-134 | Phase 39 | In Progress |
-| REQ-135 | Phase 39 | In Progress |
+| REQ-125 | Phase 39 | Blocked |
+| REQ-126 | Phase 39 | Blocked |
+| REQ-127 | Phase 39 | Blocked |
+| REQ-128 | Phase 39 | Blocked |
+| REQ-129 | Phase 39 | Blocked |
+| REQ-130 | Phase 39 | Blocked |
+| REQ-131 | Phase 39 | Blocked |
+| REQ-132 | Phase 39 | Blocked |
+| REQ-133 | Phase 39 | Blocked |
+| REQ-134 | Phase 39 | Blocked |
+| REQ-135 | Phase 39 | Blocked |
 | REQ-136 | Phase 40 | In Progress |
 | REQ-137 | Phase 40 | In Progress |
 | REQ-138 | Phase 40 | In Progress |

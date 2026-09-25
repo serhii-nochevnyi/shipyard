@@ -1,11 +1,11 @@
 ---
 # shipyard:gsd-sync generated; sync-version: 1; source fingerprint: ea4a57b41e37523faa829148f0f48380e40c03aa111d13dd73a78cc3c685b1c4
-phase: 40-build-delivery-seams-and-clean-target-project-prs
-plan: 26
+phase: 39-remove-conveyor-session-friction
+plan: 13
 subsystem: shipyard delivery
 tags: [shipyard, gsd, delivery-projection]
 provides:
-  - Tracked delivery state for T-40-26
+  - Tracked delivery state for T-39-13
 affects: [GSD progress, Shipyard delivery]
 actuals:
   tokens: 0
@@ -25,16 +25,16 @@ shipyard_sync: delivery-projection
 shipyard_source_fingerprint: ea4a57b41e37523faa829148f0f48380e40c03aa111d13dd73a78cc3c685b1c4
 ---
 
-# Phase 40: Expose capture, live, release, digest-refresh and dogfood commands through make and document them — Delivery Projection
+# Phase 39: Carry the ADR-004 D8 legacy lookup and foreign-repo refusal into the Jira export plan — Delivery Projection
 
 **Plan delivery is not complete; the projection preserves the current state.**
 
 ## Delivery Evidence
 
-- Ticket: T-40-26
+- Ticket: T-39-13
 - Delivery status: pending
 - PR: not observed
-- Source plan: .planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-26-PLAN.md
+- Source plan: .planning/phases/39-remove-conveyor-session-friction/39-13-PLAN.md
 - This summary is halted until the delivery state observes `merged`.
 
 ## Decisions & Deviations

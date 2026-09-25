@@ -1,12 +1,12 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: b3404d53c196df3b5968618d97dabc3cf768a213acf7a7a6f30a823cc38be67a
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: ea4a57b41e37523faa829148f0f48380e40c03aa111d13dd73a78cc3c685b1c4
 gsd_state_version: '1.0'
 status: planning
 progress:
   total_phases: 21
   completed_phases: 10
-  total_plans: 185
-  completed_plans: 157
+  total_plans: 187
+  completed_plans: 158
   percent: 84
 ---
 
@@ -24,13 +24,13 @@ See: .planning/PROJECT.md (updated by Shipyard GSD synchronization)
 Phase: 1 of 21 (Phase 20: Autonomy of the drive-to-green loop)
 Plan: 6 of 6 merged
 Status: pending
-Last activity: 2026-09-24 — Shipyard projection synchronized
+Last activity: 2026-09-25 — Shipyard projection synchronized
 
 Progress: [████████░░] 84%
 
 ## Performance Metrics
 
-- Total plans completed: 157
+- Total plans completed: 158
 - Average duration: not measured by the projection
 - Total execution time: not measured by the projection
 
@@ -57,7 +57,7 @@ Progress: [████████░░] 84%
 | 36 | 12 | 12 | passed |
 | 37 | 8 | 8 | pending |
 | 38 | 8 | 8 | passed |
-| 39 | 12 | 11 | pending |
+| 39 | 14 | 12 | gaps_found |
 | 40 | 27 | 0 | pending |
 
 ## Accumulated Context
@@ -73,14 +73,14 @@ Review and resolve phase integration findings shown in the phase artifacts.
 
 ### Blockers/Concerns
 
-- T-39-03: delivery status is pr-open
+- T-39-13: delivery status is pending
+- T-39-14: delivery status is pending
 - T-40-01: delivery status is pending
 - T-40-02: delivery status is pending
 - T-40-03: delivery status is pending
 - T-40-04: delivery status is pending
 - T-40-05: delivery status is pending
 - T-40-06: delivery status is pending
-- T-40-07: delivery status is pending
 
 ## Deferred Items
 
@@ -90,6 +90,6 @@ Review and resolve phase integration findings shown in the phase artifacts.
 
 ## Session Continuity
 
-Last session: 2026-09-24 19:40
+Last session: 2026-09-25 07:52
 Stopped at: Shipyard GSD projection synchronized from the delivery graph.
 Resume file: None
