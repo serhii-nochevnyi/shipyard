@@ -6454,7 +6454,7 @@
       "jira": null
     },
     "T-40-31": {
-      "title": "Judge the integrator on the code diff plus a planning digest summary",
+      "title": "Complete the integrator diff scope with a planning digest summary and a named-remedy refusal",
       "plan": ".planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-31-PLAN.md",
       "phase": "40",
       "repo": null,
@@ -6477,7 +6477,7 @@
       "type": "implementation",
       "human_checkpoint": false,
       "preauthorized": false,
-      "branch": "ticket/T-40-31-judge-the-integrator-on-the-code-diff-pl",
+      "branch": "ticket/T-40-31-complete-the-integrator-diff-scope-with",
       "epic": "epic/40-build-delivery-seams-and-clean-target-project-prs",
       "primary_parent": "T-40-30",
       "pr_base": "ticket/T-40-30-accept-draft-prs-for-arch-review-and-exc",
@@ -6508,7 +6508,7 @@
       "branch": "ticket/T-40-32-check-worktree-conditions-in-the-role-ho",
       "epic": "epic/40-build-delivery-seams-and-clean-target-project-prs",
       "primary_parent": "T-40-31",
-      "pr_base": "ticket/T-40-31-judge-the-integrator-on-the-code-diff-pl",
+      "pr_base": "ticket/T-40-31-complete-the-integrator-diff-scope-with",
       "jira": null
     },
     "T-40-33": {
@@ -6518,6 +6518,7 @@
       "repo": null,
       "wave": 9,
       "depends_on": [
+        "T-40-09",
         "T-40-11",
         "T-40-29"
       ],
@@ -6530,7 +6531,11 @@
         "plugins/delivery-pipeline/scripts/codex-delivery-host.cjs",
         "plugins/delivery-pipeline/scripts/claude-decompose-host.cjs",
         "plugins/delivery-pipeline/scripts/codex-decompose-host.cjs",
-        "tests/unit/worktree-conditions-hosts.test.cjs"
+        "tests/unit/worktree-conditions-hosts.test.cjs",
+        "tests/unit/claude-delivery-host.test.cjs",
+        "tests/unit/codex-delivery-host.test.cjs",
+        "tests/unit/claude-decompose-host.test.cjs",
+        "tests/unit/codex-decompose-host.test.cjs"
       ],
       "risk": "high",
       "type": "implementation",
@@ -6538,8 +6543,8 @@
       "preauthorized": false,
       "branch": "ticket/T-40-33-check-worktree-conditions-in-the-deliver",
       "epic": "epic/40-build-delivery-seams-and-clean-target-project-prs",
-      "primary_parent": "T-40-29",
-      "pr_base": "ticket/T-40-29-register-the-dispatch-provenance-sidecar",
+      "primary_parent": "T-40-09",
+      "pr_base": "ticket/T-40-09-pass-codex-child-tasks-by-host-owned-fil",
       "jira": null
     },
     "T-40-34": {
@@ -6589,7 +6594,9 @@
         "plugins/delivery-pipeline/scripts/carry-proof.cjs",
         "tests/unit/carry-proof.test.cjs",
         "plugins/delivery-pipeline/scripts/gate-trailer.cjs",
-        "tests/unit/trailer.test.cjs"
+        "tests/unit/trailer.test.cjs",
+        "tests/unit/files-contract.test.cjs",
+        "tests/smoke/sentinel-smoke.sh"
       ],
       "risk": "high",
       "type": "implementation",
