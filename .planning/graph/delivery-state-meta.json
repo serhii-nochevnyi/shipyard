@@ -1,13 +1,13 @@
 {
   "schema_version": 1,
-  "generation": 358,
-  "generation_identity": "80b42655-b6a9-4e3e-abf1-85be07285cb0",
-  "previous_generation_identity": "16777244:12917885452:1790322709291889200:a22254bee38062b05f3b896f62b886590e27dae6ae54bc3408ffcc65f122254b",
-  "observed_at": "2026-09-25T07:52:17.054Z",
-  "generated_at": "2026-09-25T07:52:17.054Z",
+  "generation": 359,
+  "generation_identity": "6f0813a6-1818-423f-8fa2-542ef5c51bb4",
+  "previous_generation_identity": "16777244:12917886562:1790322744554254300:ce95b6fdbbdc7de3279f45c5646105ea6c0c1ef492b0745e1b8b1d648bcec06f",
+  "observed_at": "2026-09-25T08:32:00.095Z",
+  "generated_at": "2026-09-25T08:32:00.095Z",
   "by": "state-sync",
-  "pid": 17910,
-  "observation_generation": 358,
+  "pid": 29768,
+  "observation_generation": 359,
   "observation_projection": {
     "tickets": {
       "T-20-01": {
@@ -1749,6 +1749,28 @@
         "checks": null
       },
       "T-39-13": {
+        "status": "merged",
+        "repository": null,
+        "pr": 224,
+        "head": null,
+        "draft": false,
+        "base": "epic/39-remove-conveyor-session-friction",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-39-14": {
+        "status": "merged",
+        "repository": null,
+        "pr": 225,
+        "head": null,
+        "draft": false,
+        "base": "epic/39-remove-conveyor-session-friction",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-39-15": {
         "status": "pending",
         "repository": null,
         "pr": null,
@@ -1759,7 +1781,7 @@
         "review_decision": null,
         "checks": null
       },
-      "T-39-14": {
+      "T-39-16": {
         "status": "pending",
         "repository": null,
         "pr": null,
@@ -2071,9 +2093,9 @@
   },
   "binding": {
     "schema_version": 1,
-    "state_digest": "a7a4750939b5e6d8907528ccaf581b009f01d8455a50048cf0a3b88483e362a0",
-    "front_digest": "8284d056e86efa49e66dddf1c3111cba808da1294a90d6ae03ef266def3bb838",
-    "observation_digest": "5ecd34f96abab1d33ddc95cb2e747d17fc12c89afdbbf63b5b4a4981717760b2",
-    "observation_generation": 358
+    "state_digest": "afd074234099d2f26ef54666ffdcfff692e5a453b4eb2b3a44c2775126b6c97b",
+    "front_digest": "2a230fd83ff309c5be6cf5f97edacc8a7c230e6a068ef6927b858abd79955559",
+    "observation_digest": "f04337011a8a6ecfb4668e2aee9039ddc768f1440b291b6f3deaea3efa8b9ddb",
+    "observation_generation": 359
   }
 }
