@@ -1,12 +1,12 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: ea4a57b41e37523faa829148f0f48380e40c03aa111d13dd73a78cc3c685b1c4
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 7dd74dbe435e58556cc1df9554fd32dab10388518728ee8825fd502d90fe1076
 gsd_state_version: '1.0'
 status: planning
 progress:
   total_phases: 21
   completed_phases: 10
-  total_plans: 187
-  completed_plans: 158
+  total_plans: 189
+  completed_plans: 160
   percent: 84
 ---
 
@@ -30,7 +30,7 @@ Progress: [████████░░] 84%
 
 ## Performance Metrics
 
-- Total plans completed: 158
+- Total plans completed: 160
 - Average duration: not measured by the projection
 - Total execution time: not measured by the projection
 
@@ -57,7 +57,7 @@ Progress: [████████░░] 84%
 | 36 | 12 | 12 | passed |
 | 37 | 8 | 8 | pending |
 | 38 | 8 | 8 | passed |
-| 39 | 14 | 12 | gaps_found |
+| 39 | 16 | 14 | gaps_found |
 | 40 | 27 | 0 | pending |
 
 ## Accumulated Context
@@ -73,8 +73,8 @@ Review and resolve phase integration findings shown in the phase artifacts.
 
 ### Blockers/Concerns
 
-- T-39-13: delivery status is pending
-- T-39-14: delivery status is pending
+- T-39-15: delivery status is pending
+- T-39-16: delivery status is pending
 - T-40-01: delivery status is pending
 - T-40-02: delivery status is pending
 - T-40-03: delivery status is pending
@@ -90,6 +90,6 @@ Review and resolve phase integration findings shown in the phase artifacts.
 
 ## Session Continuity
 
-Last session: 2026-09-25 07:52
+Last session: 2026-09-25 08:32
 Stopped at: Shipyard GSD projection synchronized from the delivery graph.
 Resume file: None
