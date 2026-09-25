@@ -26,12 +26,18 @@ function write(root, relative, value) {
   fs.writeFileSync(file, value);
 }
 
-function planText() {
+function planText(extra = []) {
   return [
     '---', 'phase: 38', 'plan: 01', `title: ${JSON.stringify('Test role host')}`, '---', '',
+    '## Context', '- Follows ADR-014.', ...extra, '',
     '## Acceptance criteria', '- host authenticates each role result', '',
     '## Verification commands', '- node --test tests/unit/claude-role-host.test.cjs', '',
   ].join('\n');
+}
+
+function writeCorpus(root, { adrs = [], backlogFiles = [] } = {}) {
+  for (const adr of adrs) write(root, `.planning/architecture/${adr.name}`, adr.content);
+  for (const item of backlogFiles) write(root, `.planning/backlog/${item.name}`, item.content);
 }
 
 function setupRepository(kind, options = {}) {
@@ -52,7 +58,7 @@ function setupRepository(kind, options = {}) {
   };
   if (kind === 'integrator') row.branch = ticketBranch;
   write(root, '.planning/architecture/ADR-014-test.md', POLICY_MD);
-  write(root, planPath, planText());
+  write(root, planPath, planText(options.planExtra));
   write(root, '.planning/config.json', JSON.stringify({ git: { base_branch: 'main' } }));
   write(root, '.planning/graph/tickets.json', JSON.stringify({ tickets: { [TICKET]: row } }));
   write(root, '.planning/graph/delivery-state.json', JSON.stringify({
@@ -60,6 +66,7 @@ function setupRepository(kind, options = {}) {
       branch: kind === 'integrator' ? ticketBranch : branch, base: kind === 'integrator' ? branch : 'main' },
   }));
   write(root, 'src/role.txt', 'base\n');
+  if (options.corpus) writeCorpus(root, options.corpus);
   git(root, ['add', '.']);
   git(root, ['commit', '-m', 'chore: seed test repository']);
   const base = git(root, ['rev-parse', 'HEAD']);
@@ -719,5 +726,196 @@ test('arch-review refuses an out-of-scope filename with leading whitespace', asy
     await assert.rejects(createClaudeRoleHost(options).run(request(fixture)), /changed paths outside its evidence file/);
   } finally {
     cleanupFixture(fixture);
+  }
+});
+
+function unreferencedAdrs(count, offset = 101) {
+  const items = [];
+  for (let index = 0; index < count; index++) {
+    const number = offset + index;
+    items.push({
+      name: `ADR-${number}-extra.md`,
+      content: `# ADR-${number} — extra\n\n- **Status:** accepted\n\nUnreferenced decision text for ADR-${number}.\n`,
+    });
+  }
+  return items;
+}
+
+function unreferencedBacklogFiles(count) {
+  const items = [];
+  for (let index = 0; index < count; index++) {
+    items.push({
+      name: `extra-${index}.md`,
+      content: `# Extra backlog item ${index}\n\nUnreferenced backlog note text for item ${index}.\n`,
+    });
+  }
+  return items;
+}
+
+test('an integrator packet carries no unreferenced ADRs or backlog entries', async () => {
+  const fixture = setupRepository('integrator', {
+    corpus: { adrs: unreferencedAdrs(20), backlogFiles: unreferencedBacklogFiles(30) },
+  });
+  let launched;
+  try {
+    await createClaudeRoleHost(hostOptions(fixture, {
+      onLaunch(prompt, selection) { launched = { prompt, selection }; },
+    })).run(request(fixture));
+    const packet = packetFromPrompt(launched.prompt);
+    assert.equal(packet.required_refs.some((ref) => ref.path.startsWith('.planning/architecture/ADR-1')), false);
+    assert.deepEqual(packet.role_context.adr_refs.map((ref) => ref.id), ['ADR-014']);
+    assert.deepEqual(packet.backlog.selected_ids, []);
+    assert.equal(packet.backlog.inventory.items.length, 0);
+    assert.equal(packet.backlog.inventory.scope, 'selected');
+  } finally {
+    cleanupFixture(fixture);
+  }
+});
+
+test('a referenced ADR and each plan appear once in the role prompt', async () => {
+  const marker = 'ADR-101-UNIQUE-MARKER-4f19';
+  const adrContent = `# ADR-101 — sample\n\n- **Status:** accepted\n\nDecision body with ${marker}.\n`;
+  const planMarker = 'PLAN-CONTENT-UNIQUE-MARKER-8b2e';
+  const fixture = setupRepository('integrator', {
+    corpus: { adrs: [{ name: 'ADR-101-sample.md', content: adrContent }] },
+    planExtra: [
+      planMarker,
+      'References ADR-101 twice: ADR-101 governs this change.',
+      'See `.planning/architecture/ADR-101-sample.md` for detail.',
+    ],
+  });
+  let launched;
+  try {
+    await createClaudeRoleHost(hostOptions(fixture, {
+      onLaunch(prompt, selection) { launched = { prompt, selection }; },
+    })).run(request(fixture));
+    const packet = packetFromPrompt(launched.prompt);
+    const matchingRefs = packet.required_refs.filter((ref) => ref.path === '.planning/architecture/ADR-101-sample.md');
+    assert.equal(matchingRefs.length, 1);
+    assert.equal(matchingRefs[0].content, adrContent);
+    const adrRefs = packet.role_context.adr_refs.filter((ref) => ref.id === 'ADR-101');
+    assert.equal(adrRefs.length, 1);
+    assert.equal('content' in adrRefs[0], false);
+    assert.equal(launched.prompt.split(marker).length - 1, 1);
+    assert.equal(launched.prompt.split(planMarker).length - 1, 1);
+    assert.deepEqual(packet.acceptance, []);
+    assert.ok(packet.role_context.phase_contracts[0].acceptance.length > 0);
+  } finally {
+    cleanupFixture(fixture);
+  }
+});
+
+test('a superseded ADR is excluded from arch-review and integrator packets', async () => {
+  const adr105 = '# ADR-105 — old\n\n- **Status**: superseded for runtime model and effort selection\n\nBody text.\n';
+  const adr112 = '# ADR-112 — older\n\n- **Status:** superseded for runtime model and effort selection\n\nBody text.\n';
+  const corpus = { adrs: [{ name: 'ADR-105-old.md', content: adr105 }, { name: 'ADR-112-older.md', content: adr112 }] };
+  const planExtra = ['References ADR-105, ADR-112 and ADR-999 for context.'];
+  for (const kind of ['arch-review', 'integrator']) {
+    const fixture = setupRepository(kind, { corpus, planExtra });
+    let launched;
+    try {
+      await createClaudeRoleHost(hostOptions(fixture, {
+        onLaunch(prompt, selection) { launched = { prompt, selection }; },
+      })).run(request(fixture));
+      const packet = packetFromPrompt(launched.prompt);
+      assert.equal(packet.required_refs.some((ref) => ref.path.includes('ADR-105') || ref.path.includes('ADR-112')), false);
+      assert.deepEqual(packet.role_context.adr_excluded, [
+        { id: 'ADR-105', path: '.planning/architecture/ADR-105-old.md', reason: 'superseded' },
+        { id: 'ADR-112', path: '.planning/architecture/ADR-112-older.md', reason: 'superseded' },
+      ]);
+      assert.deepEqual(packet.role_context.adr_unresolved, ['ADR-999']);
+    } finally {
+      cleanupFixture(fixture);
+    }
+  }
+});
+
+test('a plan-referenced backlog file is the only backlog in the packet', async () => {
+  const refContent = '# Ref item\n\nThis is the referenced backlog content that must appear complete in the packet.\n';
+  const otherContent = '# Other item\n\nThis backlog file is never referenced by any plan.\n';
+  const fixture = setupRepository('integrator', {
+    corpus: { backlogFiles: [{ name: 'ref.md', content: refContent }, { name: 'other.md', content: otherContent }] },
+    planExtra: ['Selects `.planning/backlog/ref.md` for this ticket.'],
+  });
+  let launched;
+  try {
+    await createClaudeRoleHost(hostOptions(fixture, {
+      onLaunch(prompt, selection) { launched = { prompt, selection }; },
+    })).run(request(fixture));
+    const packet = packetFromPrompt(launched.prompt);
+    assert.ok(packet.backlog.selected.length >= 1);
+    assert.ok(packet.backlog.selected.every((item) => item.source === 'local:.planning/backlog/ref.md'));
+    assert.ok(packet.backlog.selected.some((item) => item.content.includes('referenced backlog content')));
+    assert.ok(packet.backlog.inventory.items.length >= 1);
+    assert.equal(packet.backlog.inventory.items.every((item) => item.source === 'local:.planning/backlog/ref.md'), true);
+  } finally {
+    cleanupFixture(fixture);
+  }
+});
+
+test('an over-bound role packet is refused before launch with its remedy', async () => {
+  const bigBody = (label) => `# ${label}\n\n- **Status:** accepted\n\n${'x'.repeat(150 * 1024)}\n`;
+  const corpus = { adrs: [
+    { name: 'ADR-201-big.md', content: bigBody('ADR-201 — big') },
+    { name: 'ADR-202-big.md', content: bigBody('ADR-202 — big') },
+  ] };
+  const planExtra = ['References ADR-201 and ADR-202 for scale.'];
+
+  const archFixture = setupRepository('arch-review', { corpus, planExtra });
+  try {
+    let launched = false;
+    await assert.rejects(
+      createClaudeRoleHost(hostOptions(archFixture, { onLaunch() { launched = true; } })).run(request(archFixture)),
+      (error) => error.code === 'CONTEXT_PACKET_OVER_BOUND'
+        && error.message.includes('arch-review context packet is')
+        && error.message.includes('over its bound of 60000')
+        && error.message.includes('remedy: split the ticket'),
+    );
+    assert.equal(launched, false);
+    assert.equal(fs.existsSync(path.join(archFixture.root, '.shipyard-role-artifacts')), false);
+  } finally {
+    cleanupFixture(archFixture);
+  }
+
+  const integratorFixture = setupRepository('integrator', { corpus, planExtra });
+  try {
+    await assert.rejects(
+      createClaudeRoleHost(hostOptions(integratorFixture)).run(request(integratorFixture)),
+      (error) => error.code === 'CONTEXT_PACKET_OVER_BOUND'
+        && error.message.includes('integrator context packet is')
+        && error.message.includes('remedy: split the phase'),
+    );
+  } finally {
+    cleanupFixture(integratorFixture);
+  }
+});
+
+test('role packets carry their explicit token bounds', async () => {
+  const archFixture = setupRepository('arch-review');
+  const integratorFixture = setupRepository('integrator');
+  const sentinelFixture = setupSentinelRepository();
+  try {
+    let archPacket;
+    await createClaudeRoleHost(hostOptions(archFixture, {
+      onLaunch(prompt) { archPacket = packetFromPrompt(prompt); },
+    })).run(request(archFixture));
+    assert.equal(archPacket.accounting.soft_ceiling, 60000);
+
+    let integratorPacket;
+    await createClaudeRoleHost(hostOptions(integratorFixture, {
+      onLaunch(prompt) { integratorPacket = packetFromPrompt(prompt); },
+    })).run(request(integratorFixture));
+    const diffBytes = Buffer.byteLength(integratorPacket.role_context.combined_diff.content, 'utf8');
+    assert.equal(integratorPacket.accounting.soft_ceiling, 60000 + Math.ceil(diffBytes / 4));
+
+    let sentinelPacket;
+    await createClaudeRoleHost(hostOptions(sentinelFixture, {
+      onLaunch(prompt) { sentinelPacket = packetFromPrompt(prompt); },
+    })).run(request(sentinelFixture));
+    assert.equal(sentinelPacket.accounting.soft_ceiling, 40000);
+  } finally {
+    cleanupFixture(archFixture);
+    cleanupFixture(integratorFixture);
+    cleanupFixture(sentinelFixture);
   }
 });
