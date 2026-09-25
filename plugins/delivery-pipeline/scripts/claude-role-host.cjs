@@ -682,13 +682,26 @@ const TICKET_SET_SCHEMA = Object.freeze({
   },
 });
 
+const FINDING_TICKET_SCHEMA = Object.freeze({ type: ['string', 'null'] });
+
+const FIX_TICKET_SCHEMA = Object.freeze({
+  type: 'object',
+  additionalProperties: false,
+  required: ['title', 'scope', 'files'],
+  properties: {
+    title: { type: 'string' }, scope: { type: 'string' },
+    files: { type: 'array', minItems: 1, items: { type: 'string' } },
+    depends_on: { type: 'array', items: { type: 'string' } },
+  },
+});
+
 function roleOutputSchema(role) {
   const properties = { blocking_count: { type: 'integer', minimum: 0 } };
   if (role === 'arch-review') {
     Object.assign(properties, {
       id: { type: 'string' }, pr: { type: 'integer', minimum: 1 }, verdict: { type: 'string' },
       head: { type: 'string' }, base_tree: { type: 'string' }, summary: { type: 'string' },
-      findings: { type: 'array' },
+      findings: { type: 'array', items: { type: 'object', properties: { ticket: FINDING_TICKET_SCHEMA } } },
     });
     return { type: 'object', properties };
   }
@@ -697,7 +710,16 @@ function roleOutputSchema(role) {
       outcome: { type: 'string', enum: ['passed', 'needs-fix', 'human-review-required'] },
       phase: { type: 'string' }, head: { type: 'string' }, head_tree: { type: 'string' },
       base: { type: 'string' }, base_tree: { type: 'string' }, ticket_set_digest: { type: 'string' },
-      summary: { type: 'string' }, ticket_set: TICKET_SET_SCHEMA, findings: { type: 'array' },
+      summary: { type: 'string' }, ticket_set: TICKET_SET_SCHEMA,
+      findings: { type: 'array', items: { type: 'object',
+        required: ['id', 'type', 'blocking', 'summary'],
+        properties: {
+          id: { type: 'string' },
+          type: { enum: ['fix-ticket', 'human-question', 'violation', 'adr-outdated', 'note', 'informational'] },
+          blocking: { type: 'boolean' }, summary: { type: 'string' },
+          ticket: FINDING_TICKET_SCHEMA, fix_ticket: FIX_TICKET_SCHEMA,
+          question: { type: 'string' }, evidence: { type: 'string' },
+        } } },
     });
     return { type: 'object', properties, required: ['outcome', 'phase', 'head', 'head_tree', 'base',
       'base_tree', 'ticket_set', 'ticket_set_digest', 'blocking_count', 'summary', 'findings'] };
