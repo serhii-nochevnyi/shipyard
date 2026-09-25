@@ -1,8 +1,8 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 810c871f2846e3c6d43871aab70599444c98c0111b9ab01cf9eb438353006c04
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
 phase: 40
 status: human_needed
-shipyard_source_fingerprint: 810c871f2846e3c6d43871aab70599444c98c0111b9ab01cf9eb438353006c04
+shipyard_source_fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
 ---
 
 # Phase 40: Build delivery seams and clean target-project PRs — Verification Projection
@@ -13,7 +13,7 @@ shipyard_source_fingerprint: 810c871f2846e3c6d43871aab70599444c98c0111b9ab01cf9e
 
 | Truth | Evidence | Status |
 |---|---|---|
-| Every phase plan is accounted for | 0/27 delivery records are merged | ? UNCERTAIN |
+| Every phase plan is accounted for | 0/26 delivery records are merged | ? UNCERTAIN |
 | Integration is coherent | INTEGRATION.md is missing | ? UNCERTAIN |
 | Verification evidence is present | INTEGRATION.md is missing | ? UNCERTAIN |
 
@@ -22,7 +22,6 @@ shipyard_source_fingerprint: 810c871f2846e3c6d43871aab70599444c98c0111b9ab01cf9e
 | Ticket | Delivery | Plan status |
 |---|---|---|
 | T-40-01 | pending | ? UNCERTAIN |
-| T-40-02 | pending | ? UNCERTAIN |
 | T-40-03 | pending | ? UNCERTAIN |
 | T-40-04 | pending | ? UNCERTAIN |
 | T-40-05 | pending | ? UNCERTAIN |
@@ -56,4 +55,4 @@ shipyard_source_fingerprint: 810c871f2846e3c6d43871aab70599444c98c0111b9ab01cf9e
 
 ## Gaps Summary
 
-**Not green:** 27 plan(s) are not merged.
+**Not green:** 26 plan(s) are not merged.

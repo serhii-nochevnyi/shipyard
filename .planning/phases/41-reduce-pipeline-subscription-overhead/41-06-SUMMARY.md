@@ -1,11 +1,11 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 810c871f2846e3c6d43871aab70599444c98c0111b9ab01cf9eb438353006c04
-phase: 40-build-delivery-seams-and-clean-target-project-prs
-plan: 02
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+phase: 41-reduce-pipeline-subscription-overhead
+plan: 06
 subsystem: shipyard delivery
 tags: [shipyard, gsd, delivery-projection]
 provides:
-  - Tracked delivery state for T-40-02
+  - Tracked delivery state for T-41-06
 affects: [GSD progress, Shipyard delivery]
 actuals:
   tokens: 0
@@ -22,19 +22,19 @@ key-decisions:
 duration: 0min
 status: halted
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 810c871f2846e3c6d43871aab70599444c98c0111b9ab01cf9eb438353006c04
+shipyard_source_fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
 ---
 
-# Phase 40: Unblock pushes: header-free state YAML and a pre-push gate that resolves the worktree through git — Delivery Projection
+# Phase 41: Join deduplicated usage and recovery cost to verified outcomes — Delivery Projection
 
 **Plan delivery is not complete; the projection preserves the current state.**
 
 ## Delivery Evidence
 
-- Ticket: T-40-02
+- Ticket: T-41-06
 - Delivery status: pending
 - PR: not observed
-- Source plan: .planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-02-PLAN.md
+- Source plan: .planning/phases/41-reduce-pipeline-subscription-overhead/41-06-PLAN.md
 - This summary is halted until the delivery state observes `merged`.
 
 ## Decisions & Deviations

@@ -1,13 +1,13 @@
 {
   "schema_version": 1,
-  "generation": 360,
-  "generation_identity": "6fd10c82-534b-4ad2-a32e-76ef9d4dcf57",
-  "previous_generation_identity": "16777244:12917963009:1790325128218078500:3a0f8f1aea69b60977fdab90bd1b07eb221a82e5818c3fa0955831a0ee241c15",
-  "observed_at": "2026-09-25T09:40:41.182Z",
-  "generated_at": "2026-09-25T09:40:41.182Z",
+  "generation": 363,
+  "generation_identity": "2be6825a-d226-4b46-9ddf-11ce792b4879",
+  "previous_generation_identity": "16777245:12918489155:1790336648441934600:043a79f0a1fbc353125ccc18d5af1efa8ba656ba6308dc337422788f6408f4e8",
+  "observed_at": "2026-09-25T15:33:13.408Z",
+  "generated_at": "2026-09-25T15:33:13.408Z",
   "by": "state-sync",
-  "pid": 90679,
-  "observation_generation": 360,
+  "pid": 23228,
+  "observation_generation": 363,
   "observation_projection": {
     "tickets": {
       "T-20-01": {
@@ -1784,7 +1784,7 @@
       "T-39-16": {
         "status": "merged",
         "repository": null,
-        "pr": 228,
+        "pr": 232,
         "head": null,
         "draft": false,
         "base": "epic/39-remove-conveyor-session-friction",
@@ -1793,9 +1793,9 @@
         "checks": null
       },
       "T-39-17": {
-        "status": "pending",
+        "status": "merged",
         "repository": null,
-        "pr": null,
+        "pr": 231,
         "head": null,
         "draft": false,
         "base": "epic/39-remove-conveyor-session-friction",
@@ -1804,17 +1804,6 @@
         "checks": null
       },
       "T-40-01": {
-        "status": "pending",
-        "repository": null,
-        "pr": null,
-        "head": null,
-        "draft": false,
-        "base": "epic/40-build-delivery-seams-and-clean-target-project-prs",
-        "merge_state": null,
-        "review_decision": null,
-        "checks": null
-      },
-      "T-40-02": {
         "status": "pending",
         "repository": null,
         "pr": null,
@@ -2099,14 +2088,102 @@
         "merge_state": null,
         "review_decision": null,
         "checks": null
+      },
+      "T-41-01": {
+        "status": "pending",
+        "repository": null,
+        "pr": null,
+        "head": null,
+        "draft": false,
+        "base": "epic/41-reduce-pipeline-subscription-overhead",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-41-02": {
+        "status": "pending",
+        "repository": null,
+        "pr": null,
+        "head": null,
+        "draft": false,
+        "base": "epic/41-reduce-pipeline-subscription-overhead",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-41-03": {
+        "status": "pending",
+        "repository": null,
+        "pr": null,
+        "head": null,
+        "draft": false,
+        "base": "epic/41-reduce-pipeline-subscription-overhead",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-41-04": {
+        "status": "pending",
+        "repository": null,
+        "pr": null,
+        "head": null,
+        "draft": false,
+        "base": "epic/41-reduce-pipeline-subscription-overhead",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-41-05": {
+        "status": "pending",
+        "repository": null,
+        "pr": null,
+        "head": null,
+        "draft": false,
+        "base": "epic/41-reduce-pipeline-subscription-overhead",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-41-06": {
+        "status": "pending",
+        "repository": null,
+        "pr": null,
+        "head": null,
+        "draft": false,
+        "base": "epic/41-reduce-pipeline-subscription-overhead",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-41-07": {
+        "status": "pending",
+        "repository": null,
+        "pr": null,
+        "head": null,
+        "draft": false,
+        "base": "epic/41-reduce-pipeline-subscription-overhead",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-41-08": {
+        "status": "pending",
+        "repository": null,
+        "pr": null,
+        "head": null,
+        "draft": false,
+        "base": "epic/41-reduce-pipeline-subscription-overhead",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
       }
     }
   },
   "binding": {
     "schema_version": 1,
-    "state_digest": "148b4265017fe8558072ec38e5b5495883d61323db1b6941b462cd802d413c45",
-    "front_digest": "218d5e4c49399fdb3cb613108a45928432cf576a31f21c5c513b09a661303192",
-    "observation_digest": "a56130e03e7aa1c60352b0481e2a60473a0be2de6d957f5330e1bf5e62682944",
-    "observation_generation": 360
+    "state_digest": "1f11c347056b994bc7891e6ae131fe3b9ab63223dcf23520421c5788ae5c2742",
+    "front_digest": "4e7f465fddbb82f7c4a40ecd5dd28a7ab26c768d36b7f501166293869ef318fe",
+    "observation_digest": "d230aca85789377632ee18a877e44938d7811bf6af0a169148c1bd2ec81fc9f7",
+    "observation_generation": 363
   }
 }

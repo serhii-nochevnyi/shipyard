@@ -1,13 +1,13 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 810c871f2846e3c6d43871aab70599444c98c0111b9ab01cf9eb438353006c04
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
 gsd_state_version: '1.0'
 status: planning
 progress:
-  total_phases: 21
+  total_phases: 22
   completed_phases: 10
-  total_plans: 190
-  completed_plans: 162
-  percent: 85
+  total_plans: 197
+  completed_plans: 163
+  percent: 82
 ---
 
 # Project State
@@ -21,16 +21,16 @@ See: .planning/PROJECT.md (updated by Shipyard GSD synchronization)
 
 ## Current Position
 
-Phase: 1 of 21 (Phase 20: Autonomy of the drive-to-green loop)
+Phase: 1 of 22 (Phase 20: Autonomy of the drive-to-green loop)
 Plan: 6 of 6 merged
 Status: pending
 Last activity: 2026-09-25 — Shipyard projection synchronized
 
-Progress: [████████░░] 85%
+Progress: [████████░░] 82%
 
 ## Performance Metrics
 
-- Total plans completed: 162
+- Total plans completed: 163
 - Average duration: not measured by the projection
 - Total execution time: not measured by the projection
 
@@ -57,8 +57,9 @@ Progress: [████████░░] 85%
 | 36 | 12 | 12 | passed |
 | 37 | 8 | 8 | pending |
 | 38 | 8 | 8 | passed |
-| 39 | 17 | 16 | gaps_found |
-| 40 | 27 | 0 | pending |
+| 39 | 17 | 17 | gaps_found |
+| 40 | 26 | 0 | pending |
+| 41 | 8 | 0 | pending |
 
 ## Accumulated Context
 
@@ -73,14 +74,14 @@ Review and resolve phase integration findings shown in the phase artifacts.
 
 ### Blockers/Concerns
 
-- T-39-17: delivery status is pending
 - T-40-01: delivery status is pending
-- T-40-02: delivery status is pending
 - T-40-03: delivery status is pending
 - T-40-04: delivery status is pending
 - T-40-05: delivery status is pending
 - T-40-06: delivery status is pending
 - T-40-07: delivery status is pending
+- T-40-08: delivery status is pending
+- T-40-09: delivery status is pending
 
 ## Deferred Items
 
@@ -90,6 +91,6 @@ Review and resolve phase integration findings shown in the phase artifacts.
 
 ## Session Continuity
 
-Last session: 2026-09-25 09:40
+Last session: 2026-09-25 15:33
 Stopped at: Shipyard GSD projection synchronized from the delivery graph.
 Resume file: None

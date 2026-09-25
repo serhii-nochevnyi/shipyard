@@ -50,7 +50,7 @@ Resolution of `40-RESEARCH.md` "Open Questions" (all RESOLVED): Q1 untracking an
 - **D-32** The gate commit status uses the context `merge-gate`. Its description carries the existing trailer grammar (`arch-review=…, drift-check=…, tree=<short sha>`), at most 140 characters. A body trailer is read only as a legacy fallback when a PR has no `merge-gate` status.
 - **D-33** The provenance sidecar is written by `dispatch-record.cjs recordInflight` to `<graphDir>/provenance/<dispatch_id>.json`, so every host that records an in-flight dispatch stamps it at one site.
 - **D-34** Unit hermeticity: `tests/unit/run.sh` exports a hermetic `GIT_CONFIG_GLOBAL` plus `GIT_CONFIG_NOSYSTEM=1`, and `tests/unit/assert-harness.cjs` sets the same environment when it is absent, so a direct `node tests/unit/x.test.cjs` run is hermetic too.
-- **D-35** Prose files are edited only in three integration tickets: `deliver.md` (T-40-24), `investigate.md` + `decompose.md` (T-40-25), `Makefile` + `README.md` + `CLAUDE.md` (T-40-26). Each file has exactly one owning ticket, and each prose ticket adds a new contract test instead of editing the phase-39 friction contract tests. A prose ticket depends on the code its contract test resolves; code it only describes lands with it through the epic (plan-check revision, D-36).
+- **D-35 (amended for phase-41 ordering)** Prose files are edited by their listed integration tickets: `deliver.md` has a sequential cross-phase handoff—phase-41 T-41-07 inserts and tests the mandatory merged-parent preflight before phase-40 work, then T-40-24 depends on T-41-07 and rewrites the remaining delivery flow while preserving that gate and proof handoff. `investigate.md` + `decompose.md` remain T-40-25; `Makefile` + `README.md` + `CLAUDE.md` remain T-40-26. No two same-phase tickets edit the same prose file, and each prose ticket adds a new contract test instead of editing phase-39 friction tests. A prose ticket depends on the code its contract test resolves; code it only describes lands with it through the epic (plan-check revision, D-36).
 
 ## Plan-check revisions (2026-09-24, recorded so executors do not re-decide)
 
@@ -98,7 +98,7 @@ Tickets whose `files_modified` meets a phase-39 plan's `files_modified` declare 
 | Ticket | Requirements | Wave | Same-phase depends_on | Cross-phase |
 |---|---|---|---|---|
 | T-40-01 hermetic git unit fixtures | REQ-150 | 2 | — | T-39-01 |
-| T-40-02 header-free state YAML + pre-push via git | REQ-149 | 1 | — | — |
+| ~~T-40-02~~ moved to phase 41 as T-41-08 (REQ-157) on 2026-09-25 | — | — | — | — |
 | T-40-03 PR ledger and head-branch matching | REQ-143 | 2 | 02 | — |
 | T-40-04 Codex config refusal remedy | REQ-149 | 3 | 05 | T-39-01 |
 | T-40-05 Codex tune keys + doctor manifest | REQ-149 | 2 | — | T-39-07, T-39-04 |
@@ -120,7 +120,7 @@ Tickets whose `files_modified` meets a phase-39 plan's `files_modified` declare 
 | T-40-21 dogfood install root + doctor cache check | REQ-144 | 3 | 05 | T-39-04 |
 | T-40-22 provenance sidecar + dogfood merge refusal | REQ-144, REQ-139 | 7 | 14 (primary), 21, 16, 19 | T-39-03, T-39-12 |
 | T-40-23 live round + release gate | REQ-141, REQ-136 | 8 | 15 (primary), 17 | — |
-| T-40-24 deliver prose on the seams | REQ-138, REQ-139, REQ-140, REQ-142, REQ-143, REQ-136 | 8 | 15 (primary), 17, 16 | T-39-03 |
+| T-40-24 deliver prose on the seams | REQ-138, REQ-139, REQ-140, REQ-142, REQ-143, REQ-136 | 8 | 15 (primary), 17, 16 | T-39-03, T-41-07 |
 | T-40-25 investigate/decompose prose | REQ-149, REQ-146, REQ-147, REQ-148, REQ-142 | 6 | 12 (primary), 17 | T-39-10, T-39-11 |
 | T-40-26 command surface (Makefile, README, CLAUDE.md) | REQ-137, REQ-141, REQ-144, REQ-145, REQ-136 | 9 | 23 (primary), 07 | T-39-04 |
 | T-40-27 diamond child readiness + epic base-merge | REQ-138, REQ-136 | 6 | 18 | — |
@@ -143,7 +143,7 @@ Tickets whose `files_modified` meets a phase-39 plan's `files_modified` declare 
 | REQ | REQ-146 | Per-line research recovery (Claude T-40-13, Codex T-40-12) | T-40-12, 13, 25 | COVERED |
 | REQ | REQ-147 | Shared sealer | T-40-10, 11, 12, 25 | COVERED |
 | REQ | REQ-148 | Researcher write scope; task by file + digest | T-40-09, 11, 12, 25 | COVERED |
-| REQ | REQ-149 | Six point fixes a-f | a,b T-40-02; c T-40-04; d,f T-40-05; e T-40-25 | COVERED |
+| REQ | REQ-149 | Six point fixes a-f | a,b moved to T-41-08 (REQ-157); c T-40-04; d,f T-40-05; e T-40-25 | COVERED |
 | REQ | REQ-150 | Hermetic git fixtures | T-40-01 | COVERED |
 | CONTEXT | D-16..D-24 | Planning refinements | T-40-17/25 (16,17), 20 (18), 15/17/18 (19), 19 (20), 23 (21,22), 22 (23), 05 (24) | COVERED |
 | CONTEXT | D-36..D-41 | Plan-check revisions | graph (36), 07/08/09 (37), 15/17 (38), 17 (39), 23 (40), 12 (41) | COVERED |

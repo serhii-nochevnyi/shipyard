@@ -1,10 +1,10 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 810c871f2846e3c6d43871aab70599444c98c0111b9ab01cf9eb438353006c04
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
 phase: 39
 status: failed
 result: failed
 shipyard_sync: evidence-projection
-shipyard_source_fingerprint: 810c871f2846e3c6d43871aab70599444c98c0111b9ab01cf9eb438353006c04
+shipyard_source_fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
 ---
 
 # Phase 39: Remove conveyor session friction — UAT Projection
@@ -12,9 +12,9 @@ shipyard_source_fingerprint: 810c871f2846e3c6d43871aab70599444c98c0111b9ab01cf9e
 This file is generated from the delivery graph and phase integration evidence.
 
 ### 1. Delivery plans are accounted for
-result: pending
+result: passed
 expected: all 17 phase plan(s) are merged
-actual: 16 merged
+actual: 17 merged
 
 ### 2. Integration evidence is explicit
 result: failed

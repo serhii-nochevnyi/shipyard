@@ -57,6 +57,9 @@ epics:
   '40':
     branch: epic/40-build-delivery-seams-and-clean-target-project-prs
     repos: [null]
+  '41':
+    branch: epic/41-reduce-pipeline-subscription-overhead
+    repos: [null]
   '33-reduce-orchestration-context-and-transfer-sessions-safely':
     branch: epic/33-reduce-orchestration-context-and-transfer-sessions-safely
     repos: [null]
@@ -2672,54 +2675,6 @@ tickets:
     primary_parent: T-39-16
     pr_base: ticket/T-39-16-make-the-role-result-finding-contract-un
     jira: null
-  T-40-01:
-    title: Make git-creating unit fixtures hermetic against global signing and fixed /tmp paths
-    plan: '.planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-01-PLAN.md'
-    phase: '40'
-    repo: null
-    wave: 2
-    depends_on: [T-39-01]
-    files: [tests/unit/run.sh, tests/unit/assert-harness.cjs, tests/unit/claude-delivery-host.test.cjs, tests/unit/codex-delivery-host.test.cjs, tests/unit/test-hermeticity.test.cjs]
-    risk: low
-    human_checkpoint: false
-    preauthorized: false
-    branch: ticket/T-40-01-make-git-creating-unit-fixtures-hermetic
-    epic: epic/40-build-delivery-seams-and-clean-target-project-prs
-    primary_parent: null
-    pr_base: epic/40-build-delivery-seams-and-clean-target-project-prs
-    jira: null
-  T-40-02:
-    title: 'Unblock pushes: header-free state YAML and a pre-push gate that resolves the worktree through git'
-    plan: '.planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-02-PLAN.md'
-    phase: '40'
-    repo: null
-    wave: 1
-    depends_on: []
-    files: [plugins/delivery-pipeline/scripts/state-sync.cjs, tests/unit/state-sync-yaml.test.cjs, '.planning/backlog/generated-state-yaml-header-blocks-push-from-the-project.md', scripts/shipyard-pre-push-gate.sh, tests/unit/pre-push-gate.test.cjs]
-    risk: medium
-    human_checkpoint: false
-    preauthorized: false
-    branch: ticket/T-40-02-unblock-pushes-header-free-state-yaml-an
-    epic: epic/40-build-delivery-seams-and-clean-target-project-prs
-    primary_parent: null
-    pr_base: epic/40-build-delivery-seams-and-clean-target-project-prs
-    jira: null
-  T-40-03:
-    title: 'Match tickets to PRs by the PR number recorded at creation, then the exact head branch'
-    plan: '.planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-03-PLAN.md'
-    phase: '40'
-    repo: null
-    wave: 2
-    depends_on: [T-40-02]
-    files: [plugins/delivery-pipeline/scripts/pr-ledger.cjs, tests/unit/pr-ledger.test.cjs, plugins/delivery-pipeline/scripts/ticket-pr-match.cjs, tests/unit/ticket-pr-match.test.cjs, plugins/delivery-pipeline/scripts/state-sync.cjs, plugins/delivery-pipeline/scripts/pipeline-stats.cjs]
-    risk: medium
-    human_checkpoint: false
-    preauthorized: false
-    branch: ticket/T-40-03-match-tickets-to-prs-by-the-pr-number-re
-    epic: epic/40-build-delivery-seams-and-clean-target-project-prs
-    primary_parent: T-40-02
-    pr_base: ticket/T-40-02-unblock-pushes-header-free-state-yaml-an
-    jira: null
   T-40-05:
     title: Codex tuning writes no Claude-only keys and doctor reads the Codex agents manifest
     plan: '.planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-05-PLAN.md'
@@ -2800,6 +2755,102 @@ tickets:
     primary_parent: T-40-07
     pr_base: ticket/T-40-07-add-the-scrubbed-boundary-fixture-captur
     jira: null
+  T-40-21:
+    title: Support a dogfood install root with recorded host provenance and a doctor cache-vs-release check
+    plan: '.planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-21-PLAN.md'
+    phase: '40'
+    repo: null
+    wave: 3
+    depends_on: [T-40-05, T-39-04]
+    files: [plugins/delivery-pipeline/scripts/host-provenance.cjs, tests/unit/host-provenance.test.cjs, scripts/install-shipyard-claude-hook.sh, scripts/install-shipyard-codex.sh, scripts/shipyard-doctor.cjs, tests/smoke/claude-hook-smoke.sh]
+    risk: high
+    human_checkpoint: true
+    preauthorized: true
+    branch: ticket/T-40-21-support-a-dogfood-install-root-with-reco
+    epic: epic/40-build-delivery-seams-and-clean-target-project-prs
+    primary_parent: T-40-05
+    pr_base: ticket/T-40-05-codex-tuning-writes-no-claude-only-keys
+    jira: null
+  T-41-01:
+    title: Measure bounded judgment launches and preserve governing references
+    plan: '.planning/phases/41-reduce-pipeline-subscription-overhead/41-01-PLAN.md'
+    phase: '41'
+    repo: null
+    wave: 1
+    depends_on: []
+    files: [plugins/delivery-pipeline/scripts/claude-role-host.cjs, tests/unit/claude-role-host.test.cjs]
+    risk: medium
+    human_checkpoint: false
+    preauthorized: false
+    branch: ticket/T-41-01-measure-bounded-judgment-launches-and-pr
+    epic: epic/41-reduce-pipeline-subscription-overhead
+    primary_parent: null
+    pr_base: epic/41-reduce-pipeline-subscription-overhead
+    jira: null
+  T-41-02:
+    title: Carry bounded durable handoff evidence at safe boundaries
+    plan: '.planning/phases/41-reduce-pipeline-subscription-overhead/41-02-PLAN.md'
+    phase: '41'
+    repo: null
+    wave: 1
+    depends_on: []
+    files: [plugins/delivery-pipeline/scripts/session-handoff.cjs, tests/unit/session-handoff.test.cjs]
+    risk: medium
+    human_checkpoint: false
+    preauthorized: false
+    branch: ticket/T-41-02-carry-bounded-durable-handoff-evidence-a
+    epic: epic/41-reduce-pipeline-subscription-overhead
+    primary_parent: null
+    pr_base: epic/41-reduce-pipeline-subscription-overhead
+    jira: null
+  T-41-03:
+    title: Prove installed owner-scoped stop and wake behavior
+    plan: '.planning/phases/41-reduce-pipeline-subscription-overhead/41-03-PLAN.md'
+    phase: '41'
+    repo: null
+    wave: 1
+    depends_on: []
+    files: [tests/unit/phase41-stop-wake.test.cjs]
+    risk: low
+    human_checkpoint: false
+    preauthorized: false
+    branch: ticket/T-41-03-prove-installed-owner-scoped-stop-and-wa
+    epic: epic/41-reduce-pipeline-subscription-overhead
+    primary_parent: null
+    pr_base: epic/41-reduce-pipeline-subscription-overhead
+    jira: null
+  T-41-04:
+    title: Resume authenticated completed execution through trusted finalization
+    plan: '.planning/phases/41-reduce-pipeline-subscription-overhead/41-04-PLAN.md'
+    phase: '41'
+    repo: null
+    wave: 1
+    depends_on: []
+    files: [plugins/delivery-pipeline/scripts/codex-runtime-host.cjs, tests/unit/codex-runtime-host.test.cjs, plugins/delivery-pipeline/scripts/codex-delivery-host.cjs, plugins/delivery-pipeline/scripts/delivery-commit-finalizer.cjs, plugins/delivery-pipeline/scripts/command-runner.cjs, tests/unit/codex-delivery-host.test.cjs, tests/unit/delivery-commit-finalizer.test.cjs, tests/unit/command-runner.test.cjs]
+    risk: high
+    human_checkpoint: true
+    preauthorized: false
+    branch: ticket/T-41-04-resume-authenticated-completed-execution
+    epic: epic/41-reduce-pipeline-subscription-overhead
+    primary_parent: null
+    pr_base: epic/41-reduce-pipeline-subscription-overhead
+    jira: null
+  T-40-01:
+    title: Make git-creating unit fixtures hermetic against global signing and fixed /tmp paths
+    plan: '.planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-01-PLAN.md'
+    phase: '40'
+    repo: null
+    wave: 2
+    depends_on: [T-39-01, T-41-04]
+    files: [tests/unit/run.sh, tests/unit/assert-harness.cjs, tests/unit/claude-delivery-host.test.cjs, tests/unit/codex-delivery-host.test.cjs, tests/unit/test-hermeticity.test.cjs]
+    risk: low
+    human_checkpoint: false
+    preauthorized: false
+    branch: ticket/T-40-01-make-git-creating-unit-fixtures-hermetic
+    epic: epic/40-build-delivery-seams-and-clean-target-project-prs
+    primary_parent: null
+    pr_base: epic/40-build-delivery-seams-and-clean-target-project-prs
+    jira: null
   T-40-10:
     title: Extract one shared sealer for research-result and decomposition-result envelopes and use it on Claude
     plan: '.planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-10-PLAN.md'
@@ -2838,7 +2889,7 @@ tickets:
     phase: '40'
     repo: null
     wave: 5
-    depends_on: [T-40-13, T-39-01]
+    depends_on: [T-40-13, T-39-01, T-41-04]
     files: [plugins/delivery-pipeline/scripts/codex-delivery-host.cjs, tests/unit/codex-delivery-host.test.cjs]
     risk: medium
     human_checkpoint: false
@@ -2854,7 +2905,7 @@ tickets:
     phase: '40'
     repo: null
     wave: 6
-    depends_on: [T-40-12, T-39-03, T-39-08, T-39-01]
+    depends_on: [T-40-12, T-39-03, T-39-08, T-39-01, T-41-04]
     files: [plugins/delivery-pipeline/scripts/dispatch-record.cjs, tests/unit/dispatch-record.test.cjs, tests/unit/stop-gate.test.cjs, plugins/delivery-pipeline/scripts/claude-delivery-host.cjs, plugins/delivery-pipeline/scripts/codex-delivery-host.cjs, tests/unit/claude-delivery-host.test.cjs, tests/unit/codex-delivery-host.test.cjs]
     risk: high
     human_checkpoint: true
@@ -2886,7 +2937,7 @@ tickets:
     phase: '40'
     repo: null
     wave: 8
-    depends_on: [T-40-11, T-40-07, T-40-14, T-39-01]
+    depends_on: [T-40-11, T-40-07, T-40-14, T-39-01, T-41-04]
     files: [plugins/delivery-pipeline/scripts/codex-runtime-host.cjs, tests/unit/codex-runtime-host.test.cjs, tests/fixtures/captured/codex-agent-stream-parent.jsonl, tests/fixtures/captured/codex-agent-stream-child.jsonl, tests/fixtures/captured/boundaries/codex-agent-stream.json, tests/fixtures/captured/codex-agent-stream-exec.jsonl, tests/unit/codex-decompose-host.test.cjs, tests/unit/codex-delivery-host.test.cjs]
     risk: high
     human_checkpoint: true
@@ -2902,7 +2953,7 @@ tickets:
     phase: '40'
     repo: null
     wave: 4
-    depends_on: [T-40-01, T-39-12, T-39-14, T-39-16, T-39-17]
+    depends_on: [T-40-01, T-39-12, T-39-14, T-39-16, T-39-17, T-41-01]
     files: [plugins/delivery-pipeline/scripts/sentinel-preflight.cjs, tests/unit/sentinel-preflight.test.cjs, plugins/delivery-pipeline/scripts/claude-role-host.cjs, tests/unit/claude-role-host.test.cjs]
     risk: medium
     human_checkpoint: false
@@ -2911,6 +2962,86 @@ tickets:
     epic: epic/40-build-delivery-seams-and-clean-target-project-prs
     primary_parent: T-40-01
     pr_base: ticket/T-40-01-make-git-creating-unit-fixtures-hermetic
+    jira: null
+  T-41-05:
+    title: Fingerprint each GSD projection from its governing inputs
+    plan: '.planning/phases/41-reduce-pipeline-subscription-overhead/41-05-PLAN.md'
+    phase: '41'
+    repo: null
+    wave: 1
+    depends_on: []
+    files: [plugins/delivery-pipeline/scripts/gsd-sync.cjs, tests/unit/gsd-sync.test.cjs, tests/unit/gsd-sync-gate.test.cjs]
+    risk: medium
+    human_checkpoint: false
+    preauthorized: false
+    branch: ticket/T-41-05-fingerprint-each-gsd-projection-from-its
+    epic: epic/41-reduce-pipeline-subscription-overhead
+    primary_parent: null
+    pr_base: epic/41-reduce-pipeline-subscription-overhead
+    jira: null
+  T-41-06:
+    title: Join deduplicated usage and recovery cost to verified outcomes
+    plan: '.planning/phases/41-reduce-pipeline-subscription-overhead/41-06-PLAN.md'
+    phase: '41'
+    repo: null
+    wave: 1
+    depends_on: []
+    files: [plugins/delivery-pipeline/scripts/usage-report.cjs, plugins/delivery-pipeline/scripts/orchestration-overhead.cjs, tests/unit/usage-report.test.cjs, tests/unit/orchestration-overhead.test.cjs]
+    risk: medium
+    human_checkpoint: false
+    preauthorized: false
+    branch: ticket/T-41-06-join-deduplicated-usage-and-recovery-cos
+    epic: epic/41-reduce-pipeline-subscription-overhead
+    primary_parent: null
+    pr_base: epic/41-reduce-pipeline-subscription-overhead
+    jira: null
+  T-41-07:
+    title: Gate phase integration on the complete merged ticket set
+    plan: '.planning/phases/41-reduce-pipeline-subscription-overhead/41-07-PLAN.md'
+    phase: '41'
+    repo: null
+    wave: 1
+    depends_on: []
+    files: [plugins/delivery-pipeline/scripts/phase-integrator-preflight.cjs, tests/unit/phase-integrator-preflight.test.cjs, plugins/delivery-pipeline/commands/deliver.md, tests/unit/deliver-phase41-preflight-contract.test.cjs]
+    risk: high
+    human_checkpoint: true
+    preauthorized: false
+    branch: ticket/T-41-07-gate-phase-integration-on-the-complete-m
+    epic: epic/41-reduce-pipeline-subscription-overhead
+    primary_parent: null
+    pr_base: epic/41-reduce-pipeline-subscription-overhead
+    jira: null
+  T-41-08:
+    title: 'Unblock pushes: header-free state YAML and a pre-push gate that resolves the worktree through git'
+    plan: '.planning/phases/41-reduce-pipeline-subscription-overhead/41-08-PLAN.md'
+    phase: '41'
+    repo: null
+    wave: 1
+    depends_on: []
+    files: [plugins/delivery-pipeline/scripts/state-sync.cjs, tests/unit/state-sync-yaml.test.cjs, '.planning/backlog/generated-state-yaml-header-blocks-push-from-the-project.md', scripts/shipyard-pre-push-gate.sh, tests/unit/pre-push-gate.test.cjs]
+    risk: medium
+    human_checkpoint: false
+    preauthorized: false
+    branch: ticket/T-41-08-unblock-pushes-header-free-state-yaml-an
+    epic: epic/41-reduce-pipeline-subscription-overhead
+    primary_parent: null
+    pr_base: epic/41-reduce-pipeline-subscription-overhead
+    jira: null
+  T-40-03:
+    title: 'Match tickets to PRs by the PR number recorded at creation, then the exact head branch'
+    plan: '.planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-03-PLAN.md'
+    phase: '40'
+    repo: null
+    wave: 2
+    depends_on: [T-41-08]
+    files: [plugins/delivery-pipeline/scripts/pr-ledger.cjs, tests/unit/pr-ledger.test.cjs, plugins/delivery-pipeline/scripts/ticket-pr-match.cjs, tests/unit/ticket-pr-match.test.cjs, plugins/delivery-pipeline/scripts/state-sync.cjs, plugins/delivery-pipeline/scripts/pipeline-stats.cjs]
+    risk: medium
+    human_checkpoint: false
+    preauthorized: false
+    branch: ticket/T-40-03-match-tickets-to-prs-by-the-pr-number-re
+    epic: epic/40-build-delivery-seams-and-clean-target-project-prs
+    primary_parent: null
+    pr_base: epic/40-build-delivery-seams-and-clean-target-project-prs
     jira: null
   T-40-19:
     title: Record gate verdicts as a commit status instead of a PR-body trailer
@@ -2966,7 +3097,7 @@ tickets:
     phase: '40'
     repo: null
     wave: 5
-    depends_on: [T-40-17, T-39-16]
+    depends_on: [T-40-17, T-39-16, T-41-04]
     files: [plugins/delivery-pipeline/scripts/role-artifact.cjs, tests/unit/role-artifact.test.cjs, plugins/delivery-pipeline/scripts/delivery-commit-finalizer.cjs, tests/unit/delivery-commit-finalizer.test.cjs]
     risk: medium
     human_checkpoint: false
@@ -2992,29 +3123,13 @@ tickets:
     primary_parent: T-40-17
     pr_base: ticket/T-40-17-add-the-publish-time-pr-hygiene-gate-and
     jira: null
-  T-40-21:
-    title: Support a dogfood install root with recorded host provenance and a doctor cache-vs-release check
-    plan: '.planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-21-PLAN.md'
-    phase: '40'
-    repo: null
-    wave: 3
-    depends_on: [T-40-05, T-39-04]
-    files: [plugins/delivery-pipeline/scripts/host-provenance.cjs, tests/unit/host-provenance.test.cjs, scripts/install-shipyard-claude-hook.sh, scripts/install-shipyard-codex.sh, scripts/shipyard-doctor.cjs, tests/smoke/claude-hook-smoke.sh]
-    risk: high
-    human_checkpoint: true
-    preauthorized: true
-    branch: ticket/T-40-21-support-a-dogfood-install-root-with-reco
-    epic: epic/40-build-delivery-seams-and-clean-target-project-prs
-    primary_parent: T-40-05
-    pr_base: ticket/T-40-05-codex-tuning-writes-no-claude-only-keys
-    jira: null
   T-40-22:
     title: Stamp every dispatch with a provenance sidecar and refuse dogfood merges into a default branch
     plan: '.planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-22-PLAN.md'
     phase: '40'
     repo: null
     wave: 7
-    depends_on: [T-40-21, T-40-16, T-40-14, T-40-19, T-39-03, T-39-12, T-39-14, T-39-16, T-39-17]
+    depends_on: [T-40-21, T-40-16, T-40-14, T-40-19, T-39-03, T-39-12, T-39-14, T-39-16, T-39-17, T-41-01]
     files: [plugins/delivery-pipeline/scripts/dispatch-record.cjs, tests/unit/dispatch-record.test.cjs, plugins/delivery-pipeline/scripts/claude-role-host.cjs, tests/unit/claude-role-host.test.cjs, plugins/delivery-pipeline/scripts/sentinel.cjs, tests/unit/sentinel.test.cjs]
     risk: high
     human_checkpoint: true
@@ -3046,7 +3161,7 @@ tickets:
     phase: '40'
     repo: null
     wave: 8
-    depends_on: [T-40-15, T-40-17, T-40-16, T-39-03]
+    depends_on: [T-40-15, T-40-17, T-40-16, T-39-03, T-41-07]
     files: [plugins/delivery-pipeline/commands/deliver.md, tests/unit/deliver-seams-contract.test.cjs]
     risk: medium
     human_checkpoint: false
@@ -3094,7 +3209,7 @@ tickets:
     phase: '40'
     repo: null
     wave: 6
-    depends_on: [T-40-18]
+    depends_on: [T-40-18, T-41-04]
     files: [plugins/delivery-pipeline/scripts/diamond-parents.cjs, plugins/delivery-pipeline/scripts/state-sync.cjs, plugins/delivery-pipeline/scripts/ticket-worktree.sh, plugins/delivery-pipeline/scripts/scope-gate.cjs, plugins/delivery-pipeline/scripts/delivery-commit-finalizer.cjs, tests/unit/diamond-readiness.test.cjs, tests/unit/diamond-worktree.test.cjs, '.planning/backlog/diamond-child-base-is-materially-incomplete.md']
     risk: high
     human_checkpoint: true

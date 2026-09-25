@@ -381,12 +381,16 @@ script — not in a prompt.** Every requirement below is an instance of it.
 - **REQ-146** — Research keeps valid lines sealed, names the failed line and its real cause, and re-dispatches only that line; the fan-out stays failed until all four lines are sealed.
 - **REQ-147** — One shared sealer produces research-result and decomposition-result envelopes with an artifact index for Claude and Codex research and decompose hosts.
 - **REQ-148** — The Codex GSD researcher writes only its contained artifact path, and Codex child tasks are passed by file path plus a digest the host verifies.
-- **REQ-149** — Point fixes: header-free deterministic state YAML; pre-push resolves the worktree through git; the Codex config refusal names the config fix; gsd-tune for Codex writes no Claude-only keys; investigate and decompose prose explain the out-of-repo host state directory; doctor reads the Codex agents manifest.
+- **REQ-149** — Remaining phase-40 point fixes: the Codex config refusal names the config fix; gsd-tune for Codex writes no Claude-only keys; investigate and decompose prose explain the out-of-repo host state directory; doctor reads the Codex agents manifest. Header-free state YAML and pre-push target resolution moved to REQ-157 in phase 41.
 - **REQ-150** — Unit fixtures that create git repositories are hermetic against global commit signing and fixed /tmp paths.
 
-*ADR-011 was accepted for implementation on 2026-09-10. T-32-01/02 are the
-initial isolated tooling slice; subsequent packages remain subject to decomposition
-and rollout gates. Existing model floors remain unchanged.*
+- **REQ-151** — Complete-prompt/first-response measurement and installed T-39-17 verification preserve governing constraints.
+- **REQ-152** — Bounded durable handoff uses existing ownership, artifact and gate contracts without repeated or orphaned work.
+- **REQ-153** — Installed stop-gate/waker behavior suppresses foreign and unchanged model wakeups while preserving owner transitions.
+- **REQ-154** — Authenticated completed-execution candidates resume trusted finalization idempotently without stale verification or automatic executor replay.
+- **REQ-155** — GSD projection fingerprints use governing local inputs and dependency edges while preserving aggregate invalidation and consistency checks.
+- **REQ-156** — Existing usage reporting joins deduplicated parent/child and recovery usage to verified outcomes with honest unknowns, comparable cohorts and quality/readiness gates. ADR-011 was accepted for implementation on 2026-09-10. T-32-01/02 are the initial isolated tooling slice; subsequent packages remain subject to decomposition and rollout gates. Existing model floors remain unchanged.
+- **REQ-157** — Delivery-state YAML is header-free and deterministic, and pre-push gates resolve the actual git target, refusing an unresolvable named worktree with an actionable remedy.
 
 ## Phases
 
@@ -763,12 +767,28 @@ gate releases on a live round, repair the Codex investigate and decompose loops,
 support a provenance-stamped dogfood mode, and keep conveyor internals out of
 target-project PRs.
 
+### Phase 41: Reduce pipeline subscription overhead
+**Status**: eight ticket plans (T-41-01–08) are materialized locally; structural checks, Gate 2, GSD projections and final independent plan checker pass. Final integration uses the standard post-merge epic gate; see [planning result](phases/41-reduce-pipeline-subscription-overhead/PLANNING-RESULT.md).
+**Goal**: reduce avoidable context processing and repeated model work while preserving verified outcomes.
+**Depends on**: Phase 39
+**Requirements**: REQ-151, REQ-152, REQ-153, REQ-154, REQ-155, REQ-156, REQ-157
+**Acceptance**: P41-A–F in [phase context](phases/41-reduce-pipeline-subscription-overhead/CONTEXT.md)
+**Delivery order**: after phase 39 release, before phase 40
+
+Use the 2026-09-25 Claude-session measurements to reduce oversized parent
+context, false stop-hook wakeups and repeat execution after finalization
+failures. Preserve the agreed local GSD projection fingerprints and orchestrator
+compaction work. Verify installed T-39-03/T-39-17 behavior, measure complete
+launch inputs and end-to-end outcomes, and retain independent review and model
+policy. Reconcile shared-file ownership with phase 40 before materializing
+tickets; do not repeat its provenance/schema work or phase 39 packet fixes.
+
 <!-- shipyard:gsd-sync:begin -->
 ## Shipyard synchronization (generated)
 
-- Source fingerprint: `810c871f2846e3c6d43871aab70599444c98c0111b9ab01cf9eb438353006c04`
-- Plans merged: 162/190
-- Phases verified: 10/21
+- Source fingerprint: `ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6`
+- Plans merged: 163/197
+- Phases verified: 10/22
 - Current phase: 20
 
 | Phase | Plans | Merged | Verification |
@@ -792,7 +812,8 @@ target-project PRs.
 | 36 — Enforce the runtime model ladder | 12 | 12 | passed |
 | 37 — Run the autonomous dual-runtime control plane | 8 | 8 | pending |
 | 38 — Restore the native model ladder in delivery | 8 | 8 | passed |
-| 39 — Remove conveyor session friction | 17 | 16 | gaps_found |
-| 40 — Build delivery seams and clean target-project PRs | 27 | 0 | pending |
+| 39 — Remove conveyor session friction | 17 | 17 | gaps_found |
+| 40 — Build delivery seams and clean target-project PRs | 26 | 0 | pending |
+| 41 — Reduce pipeline subscription overhead | 8 | 0 | pending |
 
 <!-- shipyard:gsd-sync:end -->

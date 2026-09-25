@@ -1,0 +1,372 @@
+{
+  "version": 1,
+  "source_revision": "dc4a7a1cc2397c02c146d891ec99c23fe63ae65a",
+  "plan_structure": [
+    {
+      "file": "41-01-PLAN.md",
+      "valid": true,
+      "errors": [],
+      "warnings": [],
+      "task_count": 2,
+      "tasks": [
+        {
+          "name": "Trace one arch-review launch through packet, prompt and first response",
+          "type": "tracer",
+          "hasFiles": true,
+          "hasAction": true,
+          "hasVerify": true,
+          "hasDone": true
+        },
+        {
+          "name": "Expand the proven path to integrator and sentinel, and test governing references",
+          "type": "auto",
+          "hasFiles": true,
+          "hasAction": true,
+          "hasVerify": true,
+          "hasDone": true
+        }
+      ],
+      "frontmatter_fields": [
+        "phase",
+        "plan",
+        "title",
+        "type",
+        "wave",
+        "depends_on",
+        "files_modified",
+        "requirements",
+        "autonomous",
+        "estimate",
+        "delivery",
+        "must_haves"
+      ],
+      "sha256": "c01c1656e645740a292a4f1fbbe4c51e63805c61532370f7c641cba709788612"
+    },
+    {
+      "file": "41-02-PLAN.md",
+      "valid": true,
+      "errors": [],
+      "warnings": [],
+      "task_count": 2,
+      "tasks": [
+        {
+          "name": "Bound the existing checkpoint contract with pinned continuation evidence",
+          "type": "auto",
+          "hasFiles": true,
+          "hasAction": true,
+          "hasVerify": true,
+          "hasDone": true
+        },
+        {
+          "name": "Fence explicit successor takeover and retain attempt history",
+          "type": "auto",
+          "hasFiles": true,
+          "hasAction": true,
+          "hasVerify": true,
+          "hasDone": true
+        }
+      ],
+      "frontmatter_fields": [
+        "phase",
+        "plan",
+        "title",
+        "type",
+        "wave",
+        "depends_on",
+        "files_modified",
+        "requirements",
+        "autonomous",
+        "estimate",
+        "delivery",
+        "must_haves"
+      ],
+      "sha256": "51442cd50a260a7453fc9995d196203e84e4e5f18a4567b3ab189d62a48c7557"
+    },
+    {
+      "file": "41-03-PLAN.md",
+      "valid": true,
+      "errors": [],
+      "warnings": [],
+      "task_count": 2,
+      "tasks": [
+        {
+          "name": "Encode the six false replies as owner-scoped regression cases",
+          "type": "auto",
+          "hasFiles": true,
+          "hasAction": true,
+          "hasVerify": true,
+          "hasDone": true
+        },
+        {
+          "name": "Assert one relevant owner wake and installed identity evidence",
+          "type": "auto",
+          "hasFiles": true,
+          "hasAction": true,
+          "hasVerify": true,
+          "hasDone": true
+        }
+      ],
+      "frontmatter_fields": [
+        "phase",
+        "plan",
+        "title",
+        "type",
+        "wave",
+        "depends_on",
+        "files_modified",
+        "requirements",
+        "autonomous",
+        "estimate",
+        "delivery",
+        "must_haves"
+      ],
+      "sha256": "ebdd23e880d8d6aa0e59d04d6a6f51d4391c91d4b858659fed49952e4f62b3c9"
+    },
+    {
+      "file": "41-04-PLAN.md",
+      "valid": true,
+      "errors": [],
+      "warnings": [],
+      "task_count": 4,
+      "tasks": [
+        {
+          "name": "Accept asynchronous native child completion after parent wait timeouts",
+          "type": "auto",
+          "hasFiles": true,
+          "hasAction": true,
+          "hasVerify": true,
+          "hasDone": true
+        },
+        {
+          "name": "Persist authenticated candidate and exact tree before signed finalization",
+          "type": "auto",
+          "hasFiles": true,
+          "hasAction": true,
+          "hasVerify": true,
+          "hasDone": true
+        },
+        {
+          "name": "Resume unchanged candidate idempotently and refuse changed identity",
+          "type": "auto",
+          "hasFiles": true,
+          "hasAction": true,
+          "hasVerify": true,
+          "hasDone": true
+        },
+        {
+          "name": "Review the trusted candidate before enabling host-only recovery",
+          "type": "checkpoint:human-verify",
+          "hasFiles": true,
+          "hasAction": true,
+          "hasVerify": true,
+          "hasDone": true
+        }
+      ],
+      "frontmatter_fields": [
+        "phase",
+        "plan",
+        "title",
+        "type",
+        "wave",
+        "depends_on",
+        "files_modified",
+        "requirements",
+        "autonomous",
+        "estimate",
+        "delivery",
+        "must_haves"
+      ],
+      "sha256": "0f6708fdb81f1edd68d7f74c81614620a7f676b2fc72c6211ce66bef4ebd07aa"
+    },
+    {
+      "file": "41-05-PLAN.md",
+      "valid": true,
+      "errors": [],
+      "warnings": [],
+      "task_count": 2,
+      "tasks": [
+        {
+          "name": "Derive ticket and phase fingerprints from parsed membership",
+          "type": "auto",
+          "hasFiles": true,
+          "hasAction": true,
+          "hasVerify": true,
+          "hasDone": true
+        },
+        {
+          "name": "Preserve global aggregate invalidation and read-only drift detection",
+          "type": "auto",
+          "hasFiles": true,
+          "hasAction": true,
+          "hasVerify": true,
+          "hasDone": true
+        }
+      ],
+      "frontmatter_fields": [
+        "phase",
+        "plan",
+        "title",
+        "type",
+        "wave",
+        "depends_on",
+        "files_modified",
+        "requirements",
+        "autonomous",
+        "estimate",
+        "delivery",
+        "must_haves"
+      ],
+      "sha256": "39ad2749c59da5fbd6525733823684b602290421f11c6ad2daddf812eae8eeb3"
+    },
+    {
+      "file": "41-06-PLAN.md",
+      "valid": true,
+      "errors": [],
+      "warnings": [],
+      "task_count": 2,
+      "tasks": [
+        {
+          "name": "Join deduplicated usage observations to verified completion identities",
+          "type": "auto",
+          "hasFiles": true,
+          "hasAction": true,
+          "hasVerify": true,
+          "hasDone": true
+        },
+        {
+          "name": "Report matched cohort percentiles and quality-gated verdicts",
+          "type": "auto",
+          "hasFiles": true,
+          "hasAction": true,
+          "hasVerify": true,
+          "hasDone": true
+        }
+      ],
+      "frontmatter_fields": [
+        "phase",
+        "plan",
+        "title",
+        "type",
+        "wave",
+        "depends_on",
+        "files_modified",
+        "requirements",
+        "autonomous",
+        "estimate",
+        "delivery",
+        "must_haves"
+      ],
+      "sha256": "1df4b3980b03747a8a9ac492e5a856f271f39d71579aea19b1900afe249ca26c"
+    },
+    {
+      "file": "41-07-PLAN.md",
+      "valid": true,
+      "errors": [],
+      "warnings": [],
+      "task_count": 3,
+      "tasks": [
+        {
+          "name": "Create the fail-closed pinned-epic preflight and bounded proof",
+          "type": "auto",
+          "hasFiles": true,
+          "hasAction": true,
+          "hasVerify": true,
+          "hasDone": true
+        },
+        {
+          "name": "Require the same proof before either runtime's integrator dispatch",
+          "type": "auto",
+          "hasFiles": true,
+          "hasAction": true,
+          "hasVerify": true,
+          "hasDone": true
+        },
+        {
+          "name": "Approve the prelaunch proof contract before release integration",
+          "type": "checkpoint:human-verify",
+          "hasFiles": true,
+          "hasAction": true,
+          "hasVerify": true,
+          "hasDone": true
+        }
+      ],
+      "frontmatter_fields": [
+        "phase",
+        "plan",
+        "title",
+        "type",
+        "wave",
+        "depends_on",
+        "files_modified",
+        "requirements",
+        "autonomous",
+        "estimate",
+        "delivery",
+        "must_haves"
+      ],
+      "sha256": "7154453d78e83fa6ff4847cc3a203dbd0a2cce52b634772e7bd180000a75c250"
+    },
+    {
+      "file": "41-08-PLAN.md",
+      "valid": true,
+      "errors": [],
+      "warnings": [],
+      "task_count": 2,
+      "tasks": [
+        {
+          "name": "Write header-free deterministic delivery-state YAML",
+          "type": "auto",
+          "hasFiles": true,
+          "hasAction": true,
+          "hasVerify": true,
+          "hasDone": true
+        },
+        {
+          "name": "Resolve the pre-push target through git and refuse unresolvable targets",
+          "type": "auto",
+          "hasFiles": true,
+          "hasAction": true,
+          "hasVerify": true,
+          "hasDone": true
+        }
+      ],
+      "frontmatter_fields": [
+        "phase",
+        "plan",
+        "title",
+        "type",
+        "wave",
+        "depends_on",
+        "files_modified",
+        "requirements",
+        "autonomous",
+        "estimate",
+        "delivery",
+        "must_haves"
+      ],
+      "sha256": "10e84bfeb2e0973e9cf04c19d542ea37611bbfe765791ba08d63d4573c14e83e"
+    }
+  ],
+  "graph": {
+    "command": "node plugins/delivery-pipeline/scripts/validate-graph.cjs",
+    "exit_code": 0,
+    "summary": "validate-graph: OK — 197 ticket(s), 20 wave(s)",
+    "warnings": [
+      "  warning: T-41-03: 1 wildcard-free files_modified entry does not exist in this repo: \"tests/unit/phase41-stop-wake.test.cjs\" — fine if the ticket CREATES them, and the signature of a typo or a moved file if it does not (a wrong path is a contract no edit can fulfil: the executor edits nothing the scope gate expects and the ticket cannot pass). Check the spelling against the tree before dispatching.",
+      "  warning: T-41-07: 3 wildcard-free files_modified entries do not exist in this repo: \"plugins/delivery-pipeline/scripts/phase-integrator-preflight.cjs\", \"tests/unit/phase-integrator-preflight.test.cjs\", \"tests/unit/deliver-phase41-preflight-contract.test.cjs\" — fine if the ticket CREATES them, and the signature of a typo or a moved file if it does not (a wrong path is a contract no edit can fulfil: the executor edits nothing the scope gate expects and the ticket cannot pass). Check the spelling against the tree before dispatching.",
+      "  warning: T-41-08: 2 wildcard-free files_modified entries do not exist in this repo: \"tests/unit/state-sync-yaml.test.cjs\", \"tests/unit/pre-push-gate.test.cjs\" — fine if the ticket CREATES them, and the signature of a typo or a moved file if it does not (a wrong path is a contract no edit can fulfil: the executor edits nothing the scope gate expects and the ticket cannot pass). Check the spelling against the tree before dispatching."
+    ],
+    "log": "/Users/serhii/.local/state/shipyard/phase41-local-host/phase41-graph-check.log"
+  },
+  "implementation_tests": "not run; planning only",
+  "checker": {
+    "status": "completed",
+    "dispatch_id": "dispatch-muh9mnav-6f7f619c-579d-4ed6-b8e8-6a0529868df4",
+    "artifact_ref": "/Users/serhii/.local/state/shipyard/phase41-local-host/runs/local41-1e1f554e-84a0-4257-b774-7b8f628798aa/artifact.json",
+    "artifact_digest": "b48d8a721f2efe650318be26266bcb00cf68a59cd2d14b2bffab65e46b97923d",
+    "artifact_validated": true,
+    "plan_count": 8,
+    "summary": "All eight plans cover REQ-151–157. T-41-07 gates both runtimes on complete live merged-PR and pinned-epic ancestry proof. The standard sealer alone owns INTEGRATION.md. No new blocking gap found."
+  },
+  "user_amendment": "T-41-04 asynchronous native completion after wait timeouts; T-41-07 runtime-independent prelaunch proof"
+}
