@@ -1,8 +1,8 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: bc89e6ef5154d566f0ebe822e3d7785faa7eee7a3db45cd94348cda74e72c0ca
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: ca62240734aaa52663af0cad3c147443c087b4678fc9c2006f4615dafb93cdc9
 phase: 41
 status: human_needed
-shipyard_source_fingerprint: bc89e6ef5154d566f0ebe822e3d7785faa7eee7a3db45cd94348cda74e72c0ca
+shipyard_source_fingerprint: ca62240734aaa52663af0cad3c147443c087b4678fc9c2006f4615dafb93cdc9
 ---
 
 # Phase 41: Reduce pipeline subscription overhead — Verification Projection
@@ -13,7 +13,7 @@ shipyard_source_fingerprint: bc89e6ef5154d566f0ebe822e3d7785faa7eee7a3db45cd9434
 
 | Truth | Evidence | Status |
 |---|---|---|
-| Every phase plan is accounted for | 0/8 delivery records are merged | ? UNCERTAIN |
+| Every phase plan is accounted for | 3/8 delivery records are merged | ? UNCERTAIN |
 | Integration is coherent | INTEGRATION.md is missing | ? UNCERTAIN |
 | Verification evidence is present | INTEGRATION.md is missing | ? UNCERTAIN |
 
@@ -21,14 +21,14 @@ shipyard_source_fingerprint: bc89e6ef5154d566f0ebe822e3d7785faa7eee7a3db45cd9434
 
 | Ticket | Delivery | Plan status |
 |---|---|---|
-| T-41-01 | pending | ? UNCERTAIN |
-| T-41-02 | pending | ? UNCERTAIN |
-| T-41-03 | pending | ? UNCERTAIN |
+| T-41-01 | pr-open | ? UNCERTAIN |
+| T-41-02 | pr-open | ? UNCERTAIN |
+| T-41-03 | merged | ✓ VERIFIED |
 | T-41-04 | pending | ? UNCERTAIN |
-| T-41-05 | pending | ? UNCERTAIN |
-| T-41-06 | pending | ? UNCERTAIN |
-| T-41-07 | pending | ? UNCERTAIN |
-| T-41-08 | pending | ? UNCERTAIN |
+| T-41-05 | pr-open | ? UNCERTAIN |
+| T-41-06 | pr-open | ? UNCERTAIN |
+| T-41-07 | merged | ✓ VERIFIED |
+| T-41-08 | merged | ✓ VERIFIED |
 
 ## Verification Commands
 
@@ -37,4 +37,4 @@ shipyard_source_fingerprint: bc89e6ef5154d566f0ebe822e3d7785faa7eee7a3db45cd9434
 
 ## Gaps Summary
 
-**Not green:** 8 plan(s) are not merged.
+**Not green:** 5 plan(s) are not merged.

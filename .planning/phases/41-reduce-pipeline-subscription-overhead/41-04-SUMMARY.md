@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: bc89e6ef5154d566f0ebe822e3d7785faa7eee7a3db45cd94348cda74e72c0ca
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: ca62240734aaa52663af0cad3c147443c087b4678fc9c2006f4615dafb93cdc9
 phase: 41-reduce-pipeline-subscription-overhead
 plan: 04
 subsystem: shipyard delivery
@@ -22,10 +22,10 @@ key-decisions:
 duration: 0min
 status: halted
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: bc89e6ef5154d566f0ebe822e3d7785faa7eee7a3db45cd94348cda74e72c0ca
+shipyard_source_fingerprint: ca62240734aaa52663af0cad3c147443c087b4678fc9c2006f4615dafb93cdc9
 ---
 
-# Phase 41: Resume authenticated completed execution through trusted finalization — Delivery Projection
+# Phase 41: Accept asynchronous native child completion after parent wait timeouts — Delivery Projection
 
 **Plan delivery is not complete; the projection preserves the current state.**
 

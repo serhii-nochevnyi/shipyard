@@ -1,10 +1,10 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: bc89e6ef5154d566f0ebe822e3d7785faa7eee7a3db45cd94348cda74e72c0ca
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: ca62240734aaa52663af0cad3c147443c087b4678fc9c2006f4615dafb93cdc9
 phase: 41
 status: pending
 result: pending
 shipyard_sync: evidence-projection
-shipyard_source_fingerprint: bc89e6ef5154d566f0ebe822e3d7785faa7eee7a3db45cd94348cda74e72c0ca
+shipyard_source_fingerprint: ca62240734aaa52663af0cad3c147443c087b4678fc9c2006f4615dafb93cdc9
 ---
 
 # Phase 41: Reduce pipeline subscription overhead — UAT Projection
@@ -14,7 +14,7 @@ This file is generated from the delivery graph and phase integration evidence.
 ### 1. Delivery plans are accounted for
 result: pending
 expected: all 8 phase plan(s) are merged
-actual: 0 merged
+actual: 3 merged
 
 ### 2. Integration evidence is explicit
 result: pending

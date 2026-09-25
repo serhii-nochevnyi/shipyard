@@ -783,12 +783,21 @@ launch inputs and end-to-end outcomes, and retain independent review and model
 policy. Reconcile shared-file ownership with phase 40 before materializing
 tickets; do not repeat its provenance/schema work or phase 39 packet fixes.
 
+### Phase 42: Resume trusted finalization without executor replay
+**Status**: one ticket plan (T-42-01), split from T-41-04 on 2026-09-25 by operator decision; plan text inherited from the checker-approved phase-41 plan.
+**Goal**: completed executor work survives finalization failure and resumes through an authenticated candidate without a second executor launch.
+**Depends on**: Phase 41
+**Requirements**: REQ-158
+**Delivery order**: after phase 41, before phase 40
+
+The OS-sandboxed trusted verification runner needs a host where real sandbox denial tests run; a sandboxed executor cannot exercise them.
+
 <!-- shipyard:gsd-sync:begin -->
 ## Shipyard synchronization (generated)
 
-- Source fingerprint: `bc89e6ef5154d566f0ebe822e3d7785faa7eee7a3db45cd94348cda74e72c0ca`
-- Plans merged: 163/197
-- Phases verified: 10/22
+- Source fingerprint: `ca62240734aaa52663af0cad3c147443c087b4678fc9c2006f4615dafb93cdc9`
+- Plans merged: 166/198
+- Phases verified: 10/23
 - Current phase: 20
 
 | Phase | Plans | Merged | Verification |
@@ -814,6 +823,7 @@ tickets; do not repeat its provenance/schema work or phase 39 packet fixes.
 | 38 — Restore the native model ladder in delivery | 8 | 8 | passed |
 | 39 — Remove conveyor session friction | 17 | 17 | gaps_found |
 | 40 — Build delivery seams and clean target-project PRs | 26 | 0 | pending |
-| 41 — Reduce pipeline subscription overhead | 8 | 0 | pending |
+| 41 — Reduce pipeline subscription overhead | 8 | 3 | pending |
+| 42 — Resume trusted finalization without executor replay | 1 | 0 | pending |
 
 <!-- shipyard:gsd-sync:end -->

@@ -30,9 +30,6 @@ Latency is not yet measured; record it during execution rather than inventing it
 | 41-03-1 | 1 | REQ-153 | unit / scoped contract | `node tests/unit/phase41-stop-wake.test.cjs` | pending |
 | 41-03-2 | 1 | REQ-153 | unit / scoped contract | `node tests/unit/phase41-stop-wake.test.cjs` | pending |
 | 41-04-1 | 1 | REQ-154 | unit / scoped contract | `node tests/unit/codex-runtime-host.test.cjs` | pending |
-| 41-04-2 | 1 | REQ-154 | unit / scoped contract | `node tests/unit/codex-delivery-host.test.cjs && node tests/unit/command-runner.test.cjs` | pending |
-| 41-04-3 | 1 | REQ-154 | unit / scoped contract | `node tests/unit/codex-delivery-host.test.cjs && node tests/unit/delivery-commit-finalizer.test.cjs` | pending |
-| 41-04-4 | 1 | REQ-154 | manual checkpoint | `node tests/unit/codex-delivery-host.test.cjs && node tests/unit/delivery-commit-finalizer.test.cjs` | pending |
 | 41-05-1 | 1 | REQ-155 | unit / scoped contract | `node tests/unit/gsd-sync.test.cjs` | pending |
 | 41-05-2 | 1 | REQ-155 | unit / scoped contract | `node tests/unit/gsd-sync.test.cjs && node tests/unit/gsd-sync-gate.test.cjs` | pending |
 | 41-06-1 | 1 | REQ-156 | unit / scoped contract | `node tests/unit/usage-report.test.cjs` | pending |
@@ -55,7 +52,7 @@ The newly required cases remain pending until implementation.
 
 - T-41-01 and T-41-03: installed host/hook hashes, complete-prompt observations and actual model wake counts; source fixtures alone cannot prove installed behavior.
 - T-41-02: owned explicit handoff, including collection/startup/cache-warmup observations.
-- T-41-04: human review of exact candidate, signer/tree/receipt and gates; no stale green or automatic executor replay.
+- T-41-04 finalization recovery moved to T-42-01 (phase 42).
 - T-41-06/07: matched runtime/model/effort/role cohorts with failures/recovery/unknown attribution retained. Existing 20-completion and 95% attribution criteria gate savings claims, not a verified functional fix. Insufficient observations mean inconclusive savings.
 - Phase-level final gate: existing independent integrator on the merged epic and human release gate, after all ticket PRs merge. Before launch, on either runtime: ticket set built from every phase-41 graph ticket, one live merged PR per ticket, and `git merge-base --is-ancestor` of each merge commit against the pinned epic head; otherwise park. The Codex host does not enforce this yet (see CONTEXT.md).
 
