@@ -1,6 +1,6 @@
 # Requirements: shipyard
 
-<!-- shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 94f01e483e36c5d47f0c3088c43041e4601fa609115344ab5b9c4b0a02c65588 -->
+<!-- shipyard:gsd-sync generated; sync-version: 1; source fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6 -->
 
 **Defined:** 2026-09-10
 **Core Value:** Keep delivery decisions truthful, resumable, and synchronized between the Shipyard conveyor and native GSD workflows.
@@ -155,14 +155,15 @@
 - [ ] **REQ-146**: Research keeps valid lines sealed, names the failed line and its real cause, and re-dispatches only that line; the fan-out stays failed until all four lines are sealed.
 - [ ] **REQ-147**: One shared sealer produces research-result and decomposition-result envelopes with an artifact index for Claude and Codex research and decompose hosts.
 - [ ] **REQ-148**: The Codex GSD researcher writes only its contained artifact path, and Codex child tasks are passed by file path plus a digest the host verifies.
-- [ ] **REQ-149**: Point fixes: header-free deterministic state YAML; pre-push resolves the worktree through git; the Codex config refusal names the config fix; gsd-tune for Codex writes no Claude-only keys; investigate and decompose prose explain the out-of-repo host state directory; doctor reads the Codex agents manifest.
+- [ ] **REQ-149**: Remaining phase-40 point fixes: the Codex config refusal names the config fix; gsd-tune for Codex writes no Claude-only keys; investigate and decompose prose explain the out-of-repo host state directory; doctor reads the Codex agents manifest. Header-free state YAML and pre-push target resolution moved to REQ-157 in phase 41.
 - [ ] **REQ-150**: Unit fixtures that create git repositories are hermetic against global commit signing and fixed /tmp paths.
 - [ ] **REQ-151**: Complete-prompt/first-response measurement and installed T-39-17 verification preserve governing constraints.
 - [ ] **REQ-152**: Bounded durable handoff uses existing ownership, artifact and gate contracts without repeated or orphaned work.
 - [ ] **REQ-153**: Installed stop-gate/waker behavior suppresses foreign and unchanged model wakeups while preserving owner transitions.
 - [ ] **REQ-154**: Authenticated completed-execution candidates resume trusted finalization idempotently without stale verification or automatic executor replay.
 - [ ] **REQ-155**: GSD projection fingerprints use governing local inputs and dependency edges while preserving aggregate invalidation and consistency checks.
-- [ ] **REQ-156**: Existing usage reporting joins deduplicated parent/child and recovery usage to verified outcomes with honest unknowns, comparable cohorts and quality/readiness gates. *ADR-011 was accepted for implementation on 2026-09-10. T-32-01/02 are the initial isolated tooling slice; subsequent packages remain subject to decomposition and rollout gates. Existing model floors remain unchanged.*
+- [ ] **REQ-156**: Existing usage reporting joins deduplicated parent/child and recovery usage to verified outcomes with honest unknowns, comparable cohorts and quality/readiness gates. ADR-011 was accepted for implementation on 2026-09-10. T-32-01/02 are the initial isolated tooling slice; subsequent packages remain subject to decomposition and rollout gates. Existing model floors remain unchanged.
+- [ ] **REQ-157**: Delivery-state YAML is header-free and deterministic, and pre-push gates resolve the actual git target, refusing an unresolvable named worktree with an actionable remedy.
 
 ## Out of Scope
 
@@ -330,10 +331,11 @@
 | REQ-154 | Phase 41 | In Progress |
 | REQ-155 | Phase 41 | In Progress |
 | REQ-156 | Phase 41 | In Progress |
+| REQ-157 | Phase 41 | In Progress |
 
 **Coverage:**
-- v1 requirements: 155 total
-- Mapped to phases: 153
+- v1 requirements: 156 total
+- Mapped to phases: 154
 - Unmapped: 2 ⚠️
 
 ---

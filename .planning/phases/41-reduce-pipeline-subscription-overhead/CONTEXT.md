@@ -1,6 +1,6 @@
 # Phase 41 context — Reduce pipeline subscription overhead
 
-Status: ADR-019 records the accepted scope; typed phase research/planner/checker in progress.
+Status: ADR-019 records the accepted scope; phase research has a fresh verified typed receipt; final plan checker pending.
 Planning baseline: main release 0.63.0, d0c2804e517dda9e1924312362749f04f429caff.
 Requirements: REQ-151 through REQ-156 map respectively to P41-A through P41-F.
 Updated: 2026-09-25.
@@ -181,13 +181,36 @@ priority scope.
 
 The original host blocker is superseded by the private local bootstrap and the
 native research recovery recorded on 2026-09-25. Four investigation reports,
-ADR-019 and phase research are complete. The phase researcher finished but its
-original dispatch failed at the literal wait-result check; native parent/child
-completion and unchanged worktree scope were revalidated without replaying it.
-The failed original dispatch has no compliant durable receipt. Recovery is
-recorded separately; do not relabel that failure as a normal successful launch.
-The typed planner completed with an authenticated durable receipt and produced
-seven plans. Independent checker and graph results are recorded separately.
+ADR-019 and phase research are complete. The original phase-research dispatch
+failed its literal wait-result check and has no compliant receipt; it was not
+relabelled. A fresh typed research dispatch later revalidated the scope at the
+current planning revision and produced a verified durable receipt. The typed
+planner completed with an authenticated durable receipt for the initial plan
+set.
+
+The first checker described T-41-07 as self-dependent, but there is no literal
+`depends_on: T-41-07` self-edge: the original plan depended on T-41-01–06 and
+T-41-08. Its actual defect was overlapping ownership and sequencing: it would
+write the same `INTEGRATION.md` owned by the standard phase-level integrator,
+then seal a second time under a different ticket-set identity. That original
+artifact-generation and phase-verdict scope remains retired. The subsequent
+checker exposed a separate gap: the merged-parent proof required before
+integration had no executable plan owner. T-41-07 is restored with the narrow
+prelaunch-check scope below; it does not create or seal `INTEGRATION.md`.
+
+User amendment (merged-parent proof at the final gate, preserved and now
+assigned): the Claude integrator host's `phaseSelection` derives phase tickets
+from the canonical graph, requires exactly one live merged PR per ticket and
+runs `git merge-base --is-ancestor <merge commit> <epic head>` before launch.
+The Codex path accepts an orchestrator `--ticket-set-file` and
+`role-artifact.cjs` checks its internal consistency and digest, but does not
+enforce the complete merged-parent proof. Before any phase-41 integrator launch
+on either runtime, the T-41-07 executable preflight derives every ticket from
+the canonical graph, confirms one matching live merged PR per ticket and
+proves ancestry of each merge commit against the exact pinned epic head/tree
+the integrator will read. An incomplete or changed set parks the phase before
+dispatch. The human release gate records all eight current graph-ticket merge
+proofs and the proof digest next to the standard integrator receipt.
 
 User amendment: include the timeout-only parent wait / asynchronous child
 completion fix in T-41-04. It preserves mandatory native child identity,
@@ -197,19 +220,20 @@ runtime patch remains bootstrap only. No product code is changed by planning.
 
 ## Planning and ownership
 
-Phase 41 is independently deliverable on merged phase-39 release 0.63.0 before phase 40. T-39-17 packet selection/bounds and T-39-03 arming are integrated prerequisites; their installed behavior remains a separate acceptance gate. The local host patch used for research/planning is bootstrap, not delivered source. Cross-phase dependents below wait for merged phase-41 source on main; their PRs do not stack across epics. No phase-40 requirement changes are needed: phase 41 provides prompt observation, recovery and local projection/reporting contracts, while phase 40 retains its listed producer/consumer, request, provenance and formatting work.
+Phase 41 is independently deliverable on merged phase-39 release 0.63.0 before phase 40. T-39-17 packet selection/bounds and T-39-03 arming are integrated prerequisites; their installed behavior remains a separate acceptance gate. The local host patch used for research/planning is bootstrap, not delivered source. Cross-phase dependents below wait for merged phase-41 source on main; their PRs do not stack across epics. Requirement scope is unchanged. Phase 40 retains its listed producer/consumer, request, provenance and formatting work; T-40-24 additionally waits for T-41-07 because it later edits the same `deliver.md` file and must preserve the preflight contract.
 
-Source audit: ROADMAP phase goal maps to T-41-01–07. REQ-151/P41-A maps to T-41-01; REQ-152/P41-B to T-41-02; REQ-153/P41-C to T-41-03; REQ-154/P41-D to T-41-04; REQ-155/P41-E to T-41-05; REQ-157 (moved from REQ-149a/b, formerly T-40-02) maps to T-41-08. REQ-156/P41-F to T-41-06. T-41-07 integrates all six. Research constraints for packet admission, safe handoff, one-shot wake, authenticated candidate, dependency-edge fingerprints, and verified-outcome joins are in those same tickets. Deferred global model downgrades, adaptive investigation fan-out, new sentinel daemon, broad ticket resizing, automatic handoff thresholds and instruction rewrite are excluded. A reproduced stop/wake source residual requires a scoped ticket amendment before changing phase-40-owned files; T-41-03's regression and installed acceptance cannot pass while that defect remains.
+Source audit: implementation tickets are T-41-01–08. The phase goal maps to the standard phase-level integrator after all eight ticket PRs land on the epic; it is not a ticket or PR of its own. REQ-151/P41-A maps to T-41-01; REQ-152/P41-B to T-41-02; REQ-153/P41-C to T-41-03; REQ-154/P41-D to T-41-04; REQ-155/P41-E to T-41-05; REQ-156/P41-F to T-41-06; REQ-157 (moved from REQ-149a/b, formerly T-40-02) to T-41-08. T-41-07 supplies the cross-cutting prelaunch proof and does not replace those requirement owners or the phase integrator. The standard final phase integration gate inspects the complete merged epic and all eight ticket outcomes, maps REQ-151–157 to evidence, records installed/behaviorally verified/efficiency-measured status, retains failed, interrupted, parked and recovery work, and reports savings as inconclusive until the existing 20-completion / 95%-attribution readiness threshold is met. Research constraints for packet admission, safe handoff, one-shot wake, authenticated candidate, dependency-edge fingerprints, and verified-outcome joins are in those same tickets. Deferred global model downgrades, adaptive investigation fan-out, new sentinel daemon, broad ticket resizing, automatic handoff thresholds and instruction rewrite are excluded. A reproduced stop/wake source residual requires a scoped ticket amendment before changing phase-40-owned files; T-41-03's regression and installed acceptance cannot pass while that defect remains.
 
 | Source | Item | Plan | Status |
 | --- | --- | --- | --- |
-| GOAL | Reduce avoidable context processing and repeated model work with verified outcomes | T-41-01–07 | COVERED |
+| GOAL | Reduce avoidable context processing and repeated model work with verified outcomes | T-41-01–08, then phase-level integration gate | COVERED |
 | REQ | REQ-151; REQ-152; REQ-153 | T-41-01; 02; 03 | COVERED |
 | REQ | REQ-154; REQ-155; REQ-156 | T-41-04; 05; 06 | COVERED |
 | RESEARCH | Packet admission and governing references; safe handoff; installed one-shot wake | T-41-01; 02; 03 | COVERED |
 | RESEARCH | Authenticated candidate; projection dependency edges; deduplicated outcome join | T-41-04; 05; 06 | COVERED |
 | CONTEXT | P41-A; P41-B; P41-C | T-41-01; 02; 03 | COVERED |
 | CONTEXT | P41-D; P41-E; P41-F | T-41-04; 05; 06 | COVERED |
+| CONTEXT | Complete merged ticket set and pinned-epic ancestry proof | T-41-07 | COVERED |
 
 ## Phase 40 prerequisite amendments
 
@@ -310,6 +334,16 @@ Source audit: ROADMAP phase goal maps to T-41-01–07. REQ-151/P41-A maps to T-4
         "plugins/delivery-pipeline/scripts/state-sync.cjs"
       ],
       "reason": "T-40-02 moved into phase 41 as T-41-08 at the user's request; T-40-03 remains the next state-sync.cjs writer and waits for merged phase-41 source."
+    },
+    {
+      "ticket": "T-40-24",
+      "add_depends_on": [
+        "T-41-07"
+      ],
+      "shared_files": [
+        "plugins/delivery-pipeline/commands/deliver.md"
+      ],
+      "reason": "Phase 41 inserts the executable merged-parent preflight before phase 40 rewrites deliver.md; T-40-24 must preserve the preflight call and proof handoff."
     }
   ]
 }

@@ -1,25 +1,12 @@
 ## Latest result
 
-See [PLANNING-RESULT.md](PLANNING-RESULT.md). Seven local drafts and Gate 2 are ready. The checker returned two blockers, subsequently addressed in the draft contracts and checked deterministically. Formal receipt-chain / passing checker seal remains incomplete; delivery is not authorized by this draft. Older status notes below are historical.
+See [PLANNING-RESULT.md](PLANNING-RESULT.md). Eight phase-41 plans are materialized; plan structure, Gate 2 and GSD projection checks pass. T-41-07 is restored as the narrow executable merged-parent preflight, while the existing phase sealer remains sole owner of INTEGRATION.md. The final typed checker pass is authenticated and validated against the current eight-plan set; it found no blocking gap. Older admission notes below are historical.
 
 ---
 
 ## Current status — 2026-09-25
 
-The historical host blockers below are superseded for this local decomposition.
-The private runtime now accepts timeout-only parent waits only with validated
-completed native child evidence. The phase research was recovered without model
-replay using matched native parent/child transcripts and worktree containment;
-its original failed dispatch receipt was not fabricated. The planner completed
-with a verified durable receipt and produced seven plans. User-requested native
-wait fix is included in T-41-04. All seven plan structures and Gate 2 pass;
-independent plan checker is pending. No implementation tests were run.
-
-Local evidence root: `/Users/serhii/.local/state/shipyard/phase41-local-host`.
-Original planner files are preserved under `planner-original`; current amended
-plans are hashed in `PLANNING-GATES.json` and are the checker input.
-
----
+The historical host blockers are superseded for this local decomposition. Eight implementation plans are present, including the user-requested T-41-04 timeout-only asynchronous child-completion fix and the runtime-independent T-41-07 prelaunch gate. Gate 2 passes with 197 repository tickets and 20 waves; GSD projections are consistent. The final checker artifact is authenticated and validated against the current plan/context hashes; it found no blocking gap. No implementation tests or plan commits were made.
 
 # Phase 41 planning admission
 

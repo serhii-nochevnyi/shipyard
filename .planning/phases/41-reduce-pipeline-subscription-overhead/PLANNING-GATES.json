@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "source_revision": "b6dff5b84768f2e8d9bb1a7f3b4db2ea12efb92f",
+  "source_revision": "dc4a7a1cc2397c02c146d891ec99c23fe63ae65a",
   "plan_structure": [
     {
       "file": "41-01-PLAN.md",
@@ -176,7 +176,7 @@
         "delivery",
         "must_haves"
       ],
-      "sha256": "77ebd15158e15500236c367464d6b1794a8659b550b6ddadbdacf2a610a3ea2a"
+      "sha256": "0f6708fdb81f1edd68d7f74c81614620a7f676b2fc72c6211ce66bef4ebd07aa"
     },
     {
       "file": "41-05-PLAN.md",
@@ -256,7 +256,7 @@
         "delivery",
         "must_haves"
       ],
-      "sha256": "d9bf1c1860193726bee4b73e6c3bf97b64ef80d2fc22ee315ebfdbe0aaed0fe5"
+      "sha256": "1df4b3980b03747a8a9ac492e5a856f271f39d71579aea19b1900afe249ca26c"
     },
     {
       "file": "41-07-PLAN.md",
@@ -266,15 +266,7 @@
       "task_count": 3,
       "tasks": [
         {
-          "name": "Require all seven merged parents in the actual integrator input",
-          "type": "checkpoint:human-verify",
-          "hasFiles": true,
-          "hasAction": true,
-          "hasVerify": true,
-          "hasDone": true
-        },
-        {
-          "name": "Assemble immutable phase identity and cross-ticket evidence",
+          "name": "Create the fail-closed pinned-epic preflight and bounded proof",
           "type": "auto",
           "hasFiles": true,
           "hasAction": true,
@@ -282,7 +274,15 @@
           "hasDone": true
         },
         {
-          "name": "Seal independent integration verdict and approve final handoff",
+          "name": "Require the same proof before either runtime's integrator dispatch",
+          "type": "auto",
+          "hasFiles": true,
+          "hasAction": true,
+          "hasVerify": true,
+          "hasDone": true
+        },
+        {
+          "name": "Approve the prelaunch proof contract before release integration",
           "type": "checkpoint:human-verify",
           "hasFiles": true,
           "hasAction": true,
@@ -304,7 +304,7 @@
         "delivery",
         "must_haves"
       ],
-      "sha256": "9da5a6854b9c41593f685b500c4fccecedda0ba9bdaf9fe6d2510491012fabca"
+      "sha256": "7154453d78e83fa6ff4847cc3a203dbd0a2cce52b634772e7bd180000a75c250"
     },
     {
       "file": "41-08-PLAN.md",
@@ -353,44 +353,20 @@
     "summary": "validate-graph: OK — 197 ticket(s), 20 wave(s)",
     "warnings": [
       "  warning: T-41-03: 1 wildcard-free files_modified entry does not exist in this repo: \"tests/unit/phase41-stop-wake.test.cjs\" — fine if the ticket CREATES them, and the signature of a typo or a moved file if it does not (a wrong path is a contract no edit can fulfil: the executor edits nothing the scope gate expects and the ticket cannot pass). Check the spelling against the tree before dispatching.",
-      "  warning: T-41-07: 1 wildcard-free files_modified entry does not exist in this repo: \".planning/phases/41-reduce-pipeline-subscription-overhead/INTEGRATION.md\" — fine if the ticket CREATES them, and the signature of a typo or a moved file if it does not (a wrong path is a contract no edit can fulfil: the executor edits nothing the scope gate expects and the ticket cannot pass). Check the spelling against the tree before dispatching.",
-      "  warning: T-41-08: 2 wildcard-free files_modified entries do not exist in this repo: \"tests/unit/state-sync-yaml.test.cjs\", \"tests/unit/pre-push-gate.test.cjs\" — fine if the ticket CREATES them, and the signature of a typo or a moved file if it does not (a wrong path is a contract no edit can fulfil: the executor edits nothing the scope gate expects and the ticket cannot pass). Check the spelling against the tree before dispatching.",
-      "  warning: T-41-06: depends_on T-41-01 shares no files_modified with it — if T-41-06 does not need T-41-01's code, drop the dependency (ordering alone is not a depends_on; it serializes waves and pr_base)",
-      "  warning: T-41-07: 7 same-phase parents (T-41-01, T-41-02, T-41-03, T-41-04, T-41-05, T-41-06, T-41-08) — the cascade bases on T-41-06 only; the others land through the epic. Linearize the chain if T-41-07 needs every parent's code at once.",
-      "  warning: T-41-07: depends_on T-41-01 shares no files_modified with it — if T-41-07 does not need T-41-01's code, drop the dependency (ordering alone is not a depends_on; it serializes waves and pr_base)",
-      "  warning: T-41-07: depends_on T-41-02 shares no files_modified with it — if T-41-07 does not need T-41-02's code, drop the dependency (ordering alone is not a depends_on; it serializes waves and pr_base)",
-      "  warning: T-41-07: depends_on T-41-03 shares no files_modified with it — if T-41-07 does not need T-41-03's code, drop the dependency (ordering alone is not a depends_on; it serializes waves and pr_base)",
-      "  warning: T-41-07: depends_on T-41-04 shares no files_modified with it — if T-41-07 does not need T-41-04's code, drop the dependency (ordering alone is not a depends_on; it serializes waves and pr_base)",
-      "  warning: T-41-07: depends_on T-41-05 shares no files_modified with it — if T-41-07 does not need T-41-05's code, drop the dependency (ordering alone is not a depends_on; it serializes waves and pr_base)",
-      "  warning: T-41-07: depends_on T-41-06 shares no files_modified with it — if T-41-07 does not need T-41-06's code, drop the dependency (ordering alone is not a depends_on; it serializes waves and pr_base)",
-      "  warning: T-41-07: depends_on T-41-08 shares no files_modified with it — if T-41-07 does not need T-41-08's code, drop the dependency (ordering alone is not a depends_on; it serializes waves and pr_base)"
+      "  warning: T-41-07: 3 wildcard-free files_modified entries do not exist in this repo: \"plugins/delivery-pipeline/scripts/phase-integrator-preflight.cjs\", \"tests/unit/phase-integrator-preflight.test.cjs\", \"tests/unit/deliver-phase41-preflight-contract.test.cjs\" — fine if the ticket CREATES them, and the signature of a typo or a moved file if it does not (a wrong path is a contract no edit can fulfil: the executor edits nothing the scope gate expects and the ticket cannot pass). Check the spelling against the tree before dispatching.",
+      "  warning: T-41-08: 2 wildcard-free files_modified entries do not exist in this repo: \"tests/unit/state-sync-yaml.test.cjs\", \"tests/unit/pre-push-gate.test.cjs\" — fine if the ticket CREATES them, and the signature of a typo or a moved file if it does not (a wrong path is a contract no edit can fulfil: the executor edits nothing the scope gate expects and the ticket cannot pass). Check the spelling against the tree before dispatching."
     ],
     "log": "/Users/serhii/.local/state/shipyard/phase41-local-host/phase41-graph-check.log"
   },
   "implementation_tests": "not run; planning only",
-  "checker": "pending",
-  "user_amendment": "T-41-04 asynchronous native completion after wait timeouts",
-  "local_convergence": {
-    "kind": "deterministic plan-contract checks; not model approval or implementation testing",
-    "checks": {
-      "native_timeout_task": true,
-      "explicit_verification_producer": true,
-      "host_observed_command_results": true,
-      "authenticated_verification_records": true,
-      "initial_integration_checkpoint": true,
-      "merged_parent_ancestry": true,
-      "complete_epic_input": true,
-      "phase40_not_assumed": true
-    },
-    "status": "passed"
+  "checker": {
+    "status": "completed",
+    "dispatch_id": "dispatch-muh9mnav-6f7f619c-579d-4ed6-b8e8-6a0529868df4",
+    "artifact_ref": "/Users/serhii/.local/state/shipyard/phase41-local-host/runs/local41-1e1f554e-84a0-4257-b774-7b8f628798aa/artifact.json",
+    "artifact_digest": "b48d8a721f2efe650318be26266bcb00cf68a59cd2d14b2bffab65e46b97923d",
+    "artifact_validated": true,
+    "plan_count": 8,
+    "summary": "All eight plans cover REQ-151–157. T-41-07 gates both runtimes on complete live merged-PR and pinned-epic ancestry proof. The standard sealer alone owns INTEGRATION.md. No new blocking gap found."
   },
-  "formal_receipt_chain": "incomplete: research recovered from native evidence without original durable receipt; checker returned blocked; amended plans have no fresh passing checker seal",
-  "user_amendments_after_checker": [
-    {
-      "date": "2026-09-25",
-      "ticket": "T-41-08",
-      "change": "T-40-02 moved into phase 41 as T-41-08 (REQ-157 split from REQ-149a/b); T-40-03 depends on T-41-08; T-41-07 gains T-41-08 and REQ-157.",
-      "reason": "Both push-path defects blocked the phase-41 planning push in this session."
-    }
-  ]
+  "user_amendment": "T-41-04 asynchronous native completion after wait timeouts; T-41-07 runtime-independent prelaunch proof"
 }

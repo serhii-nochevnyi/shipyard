@@ -381,7 +381,7 @@ script — not in a prompt.** Every requirement below is an instance of it.
 - **REQ-146** — Research keeps valid lines sealed, names the failed line and its real cause, and re-dispatches only that line; the fan-out stays failed until all four lines are sealed.
 - **REQ-147** — One shared sealer produces research-result and decomposition-result envelopes with an artifact index for Claude and Codex research and decompose hosts.
 - **REQ-148** — The Codex GSD researcher writes only its contained artifact path, and Codex child tasks are passed by file path plus a digest the host verifies.
-- **REQ-149** — Point fixes: header-free deterministic state YAML; pre-push resolves the worktree through git; the Codex config refusal names the config fix; gsd-tune for Codex writes no Claude-only keys; investigate and decompose prose explain the out-of-repo host state directory; doctor reads the Codex agents manifest.
+- **REQ-149** — Remaining phase-40 point fixes: the Codex config refusal names the config fix; gsd-tune for Codex writes no Claude-only keys; investigate and decompose prose explain the out-of-repo host state directory; doctor reads the Codex agents manifest. Header-free state YAML and pre-push target resolution moved to REQ-157 in phase 41.
 - **REQ-150** — Unit fixtures that create git repositories are hermetic against global commit signing and fixed /tmp paths.
 
 - **REQ-151** — Complete-prompt/first-response measurement and installed T-39-17 verification preserve governing constraints.
@@ -389,11 +389,8 @@ script — not in a prompt.** Every requirement below is an instance of it.
 - **REQ-153** — Installed stop-gate/waker behavior suppresses foreign and unchanged model wakeups while preserving owner transitions.
 - **REQ-154** — Authenticated completed-execution candidates resume trusted finalization idempotently without stale verification or automatic executor replay.
 - **REQ-155** — GSD projection fingerprints use governing local inputs and dependency edges while preserving aggregate invalidation and consistency checks.
-- **REQ-156** — Existing usage reporting joins deduplicated parent/child and recovery usage to verified outcomes with honest unknowns, comparable cohorts and quality/readiness gates.
-
-*ADR-011 was accepted for implementation on 2026-09-10. T-32-01/02 are the
-initial isolated tooling slice; subsequent packages remain subject to decomposition
-and rollout gates. Existing model floors remain unchanged.*
+- **REQ-156** — Existing usage reporting joins deduplicated parent/child and recovery usage to verified outcomes with honest unknowns, comparable cohorts and quality/readiness gates. ADR-011 was accepted for implementation on 2026-09-10. T-32-01/02 are the initial isolated tooling slice; subsequent packages remain subject to decomposition and rollout gates. Existing model floors remain unchanged.
+- **REQ-157** — Delivery-state YAML is header-free and deterministic, and pre-push gates resolve the actual git target, refusing an unresolvable named worktree with an actionable remedy.
 
 ## Phases
 
@@ -771,7 +768,7 @@ support a provenance-stamped dogfood mode, and keep conveyor internals out of
 target-project PRs.
 
 ### Phase 41: Reduce pipeline subscription overhead
-**Status**: seven local draft plans; structures and Gate 2 pass. Checker findings amended with deterministic checks; formal receipt-chain approval remains blocked. See [planning result](phases/41-reduce-pipeline-subscription-overhead/PLANNING-RESULT.md). No implementation or new plan commits.
+**Status**: eight ticket plans (T-41-01–08) are materialized locally; structural checks, Gate 2, GSD projections and final independent plan checker pass. Final integration uses the standard post-merge epic gate; see [planning result](phases/41-reduce-pipeline-subscription-overhead/PLANNING-RESULT.md).
 **Goal**: reduce avoidable context processing and repeated model work while preserving verified outcomes.
 **Depends on**: Phase 39
 **Requirements**: REQ-151, REQ-152, REQ-153, REQ-154, REQ-155, REQ-156, REQ-157
@@ -789,7 +786,7 @@ tickets; do not repeat its provenance/schema work or phase 39 packet fixes.
 <!-- shipyard:gsd-sync:begin -->
 ## Shipyard synchronization (generated)
 
-- Source fingerprint: `94f01e483e36c5d47f0c3088c43041e4601fa609115344ab5b9c4b0a02c65588`
+- Source fingerprint: `ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6`
 - Plans merged: 163/197
 - Phases verified: 10/22
 - Current phase: 20

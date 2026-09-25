@@ -5909,8 +5909,10 @@
         "tests/unit/codex-runtime-host.test.cjs",
         "plugins/delivery-pipeline/scripts/codex-delivery-host.cjs",
         "plugins/delivery-pipeline/scripts/delivery-commit-finalizer.cjs",
+        "plugins/delivery-pipeline/scripts/command-runner.cjs",
         "tests/unit/codex-delivery-host.test.cjs",
-        "tests/unit/delivery-commit-finalizer.test.cjs"
+        "tests/unit/delivery-commit-finalizer.test.cjs",
+        "tests/unit/command-runner.test.cjs"
       ],
       "risk": "high",
       "type": "implementation",
@@ -6248,10 +6250,8 @@
       "plan": ".planning/phases/41-reduce-pipeline-subscription-overhead/41-06-PLAN.md",
       "phase": "41",
       "repo": null,
-      "wave": 2,
-      "depends_on": [
-        "T-41-01"
-      ],
+      "wave": 1,
+      "depends_on": [],
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
@@ -6268,8 +6268,35 @@
       "preauthorized": false,
       "branch": "ticket/T-41-06-join-deduplicated-usage-and-recovery-cos",
       "epic": "epic/41-reduce-pipeline-subscription-overhead",
-      "primary_parent": "T-41-01",
-      "pr_base": "ticket/T-41-01-measure-bounded-judgment-launches-and-pr",
+      "primary_parent": null,
+      "pr_base": "epic/41-reduce-pipeline-subscription-overhead",
+      "jira": null
+    },
+    "T-41-07": {
+      "title": "Gate phase integration on the complete merged ticket set",
+      "plan": ".planning/phases/41-reduce-pipeline-subscription-overhead/41-07-PLAN.md",
+      "phase": "41",
+      "repo": null,
+      "wave": 1,
+      "depends_on": [],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": true,
+      "files": [
+        "plugins/delivery-pipeline/scripts/phase-integrator-preflight.cjs",
+        "tests/unit/phase-integrator-preflight.test.cjs",
+        "plugins/delivery-pipeline/commands/deliver.md",
+        "tests/unit/deliver-phase41-preflight-contract.test.cjs"
+      ],
+      "risk": "high",
+      "type": "implementation",
+      "human_checkpoint": true,
+      "preauthorized": false,
+      "branch": "ticket/T-41-07-gate-phase-integration-on-the-complete-m",
+      "epic": "epic/41-reduce-pipeline-subscription-overhead",
+      "primary_parent": null,
+      "pr_base": "epic/41-reduce-pipeline-subscription-overhead",
       "jira": null
     },
     "T-41-08": {
@@ -6583,10 +6610,12 @@
         "T-40-15",
         "T-40-17",
         "T-40-16",
-        "T-39-03"
+        "T-39-03",
+        "T-41-07"
       ],
       "cross_phase_deps": [
-        "T-39-03"
+        "T-39-03",
+        "T-41-07"
       ],
       "cross_repo_deps": [],
       "unreachable_paths": false,
@@ -6707,38 +6736,6 @@
       "epic": "epic/40-build-delivery-seams-and-clean-target-project-prs",
       "primary_parent": "T-40-18",
       "pr_base": "ticket/T-40-18-produce-clean-executor-pr-bodies-and-con",
-      "jira": null
-    },
-    "T-41-07": {
-      "title": "Integrate phase 41 with trusted outcome and efficiency evidence",
-      "plan": ".planning/phases/41-reduce-pipeline-subscription-overhead/41-07-PLAN.md",
-      "phase": "41",
-      "repo": null,
-      "wave": 3,
-      "depends_on": [
-        "T-41-01",
-        "T-41-02",
-        "T-41-03",
-        "T-41-04",
-        "T-41-05",
-        "T-41-06",
-        "T-41-08"
-      ],
-      "cross_phase_deps": [],
-      "cross_repo_deps": [],
-      "unreachable_paths": false,
-      "missing_paths": true,
-      "files": [
-        ".planning/phases/41-reduce-pipeline-subscription-overhead/INTEGRATION.md"
-      ],
-      "risk": "high",
-      "type": "integration",
-      "human_checkpoint": true,
-      "preauthorized": false,
-      "branch": "ticket/T-41-07-integrate-phase-41-with-trusted-outcome",
-      "epic": "epic/41-reduce-pipeline-subscription-overhead",
-      "primary_parent": "T-41-06",
-      "pr_base": "ticket/T-41-06-join-deduplicated-usage-and-recovery-cos",
       "jira": null
     }
   }
