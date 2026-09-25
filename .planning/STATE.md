@@ -1,13 +1,13 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: bc89e6ef5154d566f0ebe822e3d7785faa7eee7a3db45cd94348cda74e72c0ca
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: ca62240734aaa52663af0cad3c147443c087b4678fc9c2006f4615dafb93cdc9
 gsd_state_version: '1.0'
 status: planning
 progress:
-  total_phases: 22
+  total_phases: 23
   completed_phases: 10
-  total_plans: 197
-  completed_plans: 163
-  percent: 82
+  total_plans: 198
+  completed_plans: 166
+  percent: 83
 ---
 
 # Project State
@@ -21,16 +21,16 @@ See: .planning/PROJECT.md (updated by Shipyard GSD synchronization)
 
 ## Current Position
 
-Phase: 1 of 22 (Phase 20: Autonomy of the drive-to-green loop)
+Phase: 1 of 23 (Phase 20: Autonomy of the drive-to-green loop)
 Plan: 6 of 6 merged
 Status: pending
 Last activity: 2026-09-25 — Shipyard projection synchronized
 
-Progress: [████████░░] 82%
+Progress: [████████░░] 83%
 
 ## Performance Metrics
 
-- Total plans completed: 163
+- Total plans completed: 166
 - Average duration: not measured by the projection
 - Total execution time: not measured by the projection
 
@@ -59,7 +59,8 @@ Progress: [████████░░] 82%
 | 38 | 8 | 8 | passed |
 | 39 | 17 | 17 | gaps_found |
 | 40 | 26 | 0 | pending |
-| 41 | 8 | 0 | pending |
+| 41 | 8 | 3 | pending |
+| 42 | 1 | 0 | pending |
 
 ## Accumulated Context
 
@@ -91,6 +92,6 @@ Review and resolve phase integration findings shown in the phase artifacts.
 
 ## Session Continuity
 
-Last session: 2026-09-25 15:33
+Last session: 2026-09-25 20:24
 Stopped at: Shipyard GSD projection synchronized from the delivery graph.
 Resume file: None

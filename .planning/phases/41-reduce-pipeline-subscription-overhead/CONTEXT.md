@@ -235,6 +235,10 @@ Source audit: implementation tickets are T-41-01–08. The phase goal maps to th
 | CONTEXT | P41-D; P41-E; P41-F | T-41-04; 05; 06 | COVERED |
 | CONTEXT | Complete merged ticket set and pinned-epic ancestry proof | T-41-07 | COVERED |
 
+## T-41-04 split (2026-09-25)
+
+Operator decision: T-41-04 is narrowed to the native wait completion fix. The authenticated candidate, trusted verification producer, HMAC records and recovery CLI moved to T-42-01 (phase 42, REQ-158). The phase-40 edges T-40-01/12/14/18/27 now point to T-42-01. T-40-09 depends on both T-41-04 (codex-runtime-host.cjs) and T-42-01. The JSON table below records the original amendment set.
+
 ## Phase 40 prerequisite amendments
 
 ```json
