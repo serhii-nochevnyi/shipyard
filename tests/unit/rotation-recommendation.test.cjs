@@ -103,6 +103,7 @@ function checkpointPayload(root) {
     }],
     treatment: { wait: 'baseline', context: 'opt-07' }, budgets: { max_tokens: 1000 },
     next_action: 'resume checkpoint',
+    children: [], children_unknown: false, boundary: { type: 'phase_boundary', id: 'phase-33-boundary' },
   };
 }
 

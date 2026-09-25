@@ -41,6 +41,7 @@ function repoFixture() {
   git(root, 'init', '--quiet');
   git(root, 'config', 'user.email', 'test@example.invalid');
   git(root, 'config', 'user.name', 'Shipyard Test');
+  git(root, 'config', 'commit.gpgsign', 'false');
   fs.writeFileSync(path.join(root, 'README.md'), 'fixture\n');
   git(root, 'add', 'README.md');
   git(root, 'commit', '--quiet', '-m', 'fixture');
@@ -111,6 +112,13 @@ function checkpointPayload(root, overrides = {}) {
     treatment: { wait: 'baseline', context: 'baseline' },
     budgets: { max_tokens: 1000 },
     next_action: 'resume checkpoint',
+    accepted_decisions: [{ id: 'decision-1', summary: 'use bounded checkpoints for safe handoff' }],
+    unresolved_findings: [{ id: 'finding-1', summary: 'artifact digest drift risk' }],
+    attempt_history: [{ id: 'attempt-1', role: 'ci-fix', outcome: 'pushed' }],
+    pending_gate_ids: ['gate-ci', 'gate-review'],
+    children: [],
+    children_unknown: false,
+    boundary: { type: 'durable_long_wait' },
     ...overrides,
   };
 }
@@ -476,6 +484,195 @@ test('a predecessor cannot launch after checkpoint and an unresolved external la
     const candidate = handoff.resume({ runId: 'run-new', sessionId: 'session-new', phase: '33', tickets: ['T-33-08'] });
     handoff.markAmbiguousLaunch(candidate, { dispatchId: 'external-dispatch', reason: 'launch-before-record' });
     assert.throws(() => handoff.acknowledge(candidate), (error) => error.code === 'AMBIGUOUS_LAUNCH');
+  } finally {
+    clean(root);
+  }
+});
+
+test('checkpoint requires an explicit phase boundary or durable long wait, and proven child enumeration', () => {
+  const root = repoFixture();
+  try {
+    const handoff = createSessionHandoff({ cwd: root });
+
+    const phaseOwner = handoff.begin({ runId: 'run-phase-boundary', sessionId: 'session-phase-boundary', phase: '41', tickets: ['T-41-02-phase'] });
+    handoff.checkpoint(phaseOwner, checkpointPayload(root, { boundary: { type: 'phase_boundary', id: 'phase-41' } }));
+    assert.equal(handoff.status('phase=41;tickets=T-41-02-phase').scopes[0].checkpoint.boundary.type, 'phase_boundary');
+
+    const explicitWaitOwner = handoff.begin({ runId: 'run-explicit-wait', sessionId: 'session-explicit-wait', phase: '41', tickets: ['T-41-02-explicit-wait'] });
+    handoff.checkpoint(explicitWaitOwner, checkpointPayload(root, { boundary: { type: 'durable_long_wait', id: 'wait-1' } }));
+    assert.equal(handoff.status('phase=41;tickets=T-41-02-explicit-wait').scopes[0].checkpoint.boundary.type, 'durable_long_wait');
+
+    const omittedWaitOwner = handoff.begin({ runId: 'run-omitted-wait', sessionId: 'session-omitted-wait', phase: '41', tickets: ['T-41-02-omitted-wait'] });
+    assert.throws(
+      () => handoff.checkpoint(omittedWaitOwner, checkpointPayload(root, { boundary: undefined })),
+      (error) => error.code === 'INVALID_BOUNDARY' && typeof error.remedy === 'string' && error.remedy.length > 0,
+    );
+    assert.doesNotThrow(() => handoff.assertOwner(omittedWaitOwner));
+
+    const invalidOwner = handoff.begin({ runId: 'run-invalid-boundary', sessionId: 'session-invalid-boundary', phase: '41', tickets: ['T-41-02-invalid-boundary'] });
+    assert.throws(
+      () => handoff.checkpoint(invalidOwner, checkpointPayload(root, { boundary: { type: 'mid_task' } })),
+      (error) => error.code === 'INVALID_BOUNDARY' && typeof error.remedy === 'string' && error.remedy.length > 0,
+    );
+
+    const activeChildOwner = handoff.begin({ runId: 'run-active-child', sessionId: 'session-active-child', phase: '41', tickets: ['T-41-02-active-child'] });
+    assert.throws(
+      () => handoff.checkpoint(activeChildOwner, checkpointPayload(root, { children: ['child-1'] })),
+      (error) => error.code === 'ACTIVE_CHILDREN' && typeof error.remedy === 'string' && error.remedy.length > 0,
+    );
+    assert.throws(
+      () => handoff.checkpoint(activeChildOwner, checkpointPayload(root, { children_unknown: true })),
+      (error) => error.code === 'ACTIVE_CHILD_UNKNOWN' && typeof error.remedy === 'string' && error.remedy.length > 0,
+    );
+    for (const omitted of ['children', 'children_unknown']) {
+      const payload = checkpointPayload(root);
+      delete payload[omitted];
+      assert.throws(
+        () => handoff.checkpoint(activeChildOwner, payload),
+        (error) => error.code === 'ACTIVE_CHILD_UNKNOWN' && typeof error.remedy === 'string' && error.remedy.length > 0,
+      );
+    }
+    assert.doesNotThrow(() => handoff.assertOwner(activeChildOwner));
+    handoff.checkpoint(activeChildOwner, checkpointPayload(root));
+  } finally {
+    clean(root);
+  }
+});
+
+test('checkpoint enforces the 32 KiB continuation-evidence bound and the 64 KiB whole-checkpoint bound', () => {
+  const root = repoFixture();
+  try {
+    const handoff = createSessionHandoff({ cwd: root });
+
+    const oversizedEvidenceOwner = handoff.begin({ runId: 'run-oversized-evidence', sessionId: 'session-oversized-evidence', phase: '41', tickets: ['T-41-02-oversized-evidence'] });
+    assert.throws(
+      () => handoff.checkpoint(oversizedEvidenceOwner, checkpointPayload(root, {
+        current_snapshot: { blob: 'x'.repeat(40 * 1024) },
+      })),
+      (error) => error.code === 'CHECKPOINT_EVIDENCE_TOO_LARGE' && typeof error.remedy === 'string' && error.bytes > 32 * 1024,
+    );
+
+    const oversizedTotalOwner = handoff.begin({ runId: 'run-oversized-total', sessionId: 'session-oversized-total', phase: '41', tickets: ['T-41-02-oversized-total'] });
+    assert.throws(
+      () => handoff.checkpoint(oversizedTotalOwner, checkpointPayload(root, {
+        budgets: { max_tokens: 1000, note: 'y'.repeat(70 * 1024) },
+      })),
+      (error) => error.code === 'CHECKPOINT_TOO_LARGE' && typeof error.remedy === 'string' && error.bytes > 64 * 1024,
+    );
+
+    const normalOwner = handoff.begin({ runId: 'run-normal-size', sessionId: 'session-normal-size', phase: '41', tickets: ['T-41-02-normal-size'] });
+    handoff.checkpoint(normalOwner, checkpointPayload(root));
+  } finally {
+    clean(root);
+  }
+});
+
+test('a changed artifact digest refuses acknowledgement with a stale-reference remedy', () => {
+  const root = repoFixture();
+  try {
+    const handoff = createSessionHandoff({ cwd: root });
+    const owner = handoff.begin({ runId: 'run-stale-digest', sessionId: 'session-stale-digest', phase: '41', tickets: ['T-41-02-stale-digest'] });
+    handoff.checkpoint(owner, checkpointPayload(root));
+    const candidate = handoff.resume({ runId: 'run-stale-digest-successor', sessionId: 'session-stale-digest-successor', phase: '41', tickets: ['T-41-02-stale-digest'] });
+    fs.writeFileSync(path.join(root, 'README.md'), 'fixture changed\n');
+    assert.throws(
+      () => handoff.acknowledge(candidate, { revalidate: () => ({ valid: true, clean: true, children: [] }) }),
+      (error) => error.code === 'STALE_REFERENCE' && typeof error.remedy === 'string' && error.remedy.length > 0,
+    );
+  } finally {
+    clean(root);
+  }
+});
+
+test('acknowledgement refuses on incomplete reviews, failing checks or a failed gate before transferring ownership', () => {
+  const root = repoFixture();
+  try {
+    const handoff = createSessionHandoff({ cwd: root });
+
+    const reviewsOwner = handoff.begin({ runId: 'run-reviews', sessionId: 'session-reviews', phase: '41', tickets: ['T-41-02-reviews'] });
+    handoff.checkpoint(reviewsOwner, checkpointPayload(root));
+    const reviewsCandidate = handoff.resume({ runId: 'run-reviews-successor', sessionId: 'session-reviews-successor', phase: '41', tickets: ['T-41-02-reviews'] });
+    assert.throws(
+      () => handoff.acknowledge(reviewsCandidate, { revalidate: () => ({ valid: true, clean: true, children: [], reviews_incomplete: true }) }),
+      (error) => error.code === 'REVIEW_INCOMPLETE' && typeof error.remedy === 'string' && error.remedy.length > 0,
+    );
+
+    const checksOwner = handoff.begin({ runId: 'run-checks', sessionId: 'session-checks', phase: '41', tickets: ['T-41-02-checks'] });
+    handoff.checkpoint(checksOwner, checkpointPayload(root));
+    const checksCandidate = handoff.resume({ runId: 'run-checks-successor', sessionId: 'session-checks-successor', phase: '41', tickets: ['T-41-02-checks'] });
+    assert.throws(
+      () => handoff.acknowledge(checksCandidate, { revalidate: () => ({ valid: true, clean: true, children: [], checks_failing: true }) }),
+      (error) => error.code === 'CHECKS_FAILING' && typeof error.remedy === 'string' && error.remedy.length > 0,
+    );
+
+    const gateOwner = handoff.begin({ runId: 'run-gate', sessionId: 'session-gate', phase: '41', tickets: ['T-41-02-gate'] });
+    handoff.checkpoint(gateOwner, checkpointPayload(root, { pending_gate_ids: ['gate-ci'] }));
+    const gateCandidate = handoff.resume({ runId: 'run-gate-successor', sessionId: 'session-gate-successor', phase: '41', tickets: ['T-41-02-gate'] });
+    assert.throws(
+      () => handoff.acknowledge(gateCandidate, { revalidate: () => ({ valid: true, clean: true, children: [], gates: [{ id: 'gate-ci', status: 'failed' }] }) }),
+      (error) => error.code === 'GATE_FAILED' && typeof error.remedy === 'string' && error.gates.includes('gate-ci'),
+    );
+    const acknowledgedGate = handoff.acknowledge(gateCandidate, { revalidate: () => ({ valid: true, clean: true, children: [], gates: [{ id: 'gate-ci', status: 'passed' }] }) });
+    assert.equal(acknowledgedGate.status, 'acknowledged');
+    assert.deepEqual(handoff.status('phase=41;tickets=T-41-02-gate').scopes[0].checkpoint.pending_gate_ids, ['gate-ci']);
+  } finally {
+    clean(root);
+  }
+});
+
+test('decisions, findings, attempts and pending gates carry through resume and acknowledgement, and history preserves the predecessor', () => {
+  const root = repoFixture();
+  try {
+    const handoff = createSessionHandoff({ cwd: root });
+    const owner = handoff.begin({ runId: 'run-continuation', sessionId: 'session-continuation', phase: '41', tickets: ['T-41-02-continuation'] });
+    const payload = checkpointPayload(root, { boundary: { type: 'phase_boundary', id: 'phase-41' } });
+    handoff.checkpoint(owner, payload);
+    const candidate = handoff.resume({ runId: 'run-continuation-successor', sessionId: 'session-continuation-successor', phase: '41', tickets: ['T-41-02-continuation'] });
+    handoff.acknowledge(candidate, { revalidate: () => ({ valid: true, clean: true, children: [] }) });
+    const acknowledged = handoff.status('phase=41;tickets=T-41-02-continuation').scopes[0];
+    assert.deepEqual(acknowledged.checkpoint.accepted_decisions, payload.accepted_decisions);
+    assert.deepEqual(acknowledged.checkpoint.unresolved_findings, payload.unresolved_findings);
+    assert.deepEqual(acknowledged.checkpoint.attempt_history, payload.attempt_history);
+    assert.deepEqual(acknowledged.checkpoint.pending_gate_ids, payload.pending_gate_ids);
+    assert.deepEqual(acknowledged.history.map((event) => event.event), ['begin', 'checkpoint', 'resume', 'acknowledge']);
+    assert.equal(acknowledged.history[0].run_id, 'run-continuation');
+  } finally {
+    clean(root);
+  }
+});
+
+test('a duplicate successor loses acknowledgement with a named recovery action while the winner keeps ownership', () => {
+  const root = repoFixture();
+  try {
+    const handoff = createSessionHandoff({ cwd: root });
+    const owner = handoff.begin({ runId: 'run-duplicate', sessionId: 'session-duplicate', phase: '41', tickets: ['T-41-02-duplicate'] });
+    handoff.checkpoint(owner, checkpointPayload(root, { boundary: { type: 'phase_boundary', id: 'phase-41' } }));
+    const winnerCandidate = handoff.resume({ runId: 'run-duplicate-winner', sessionId: 'session-duplicate-winner', phase: '41', tickets: ['T-41-02-duplicate'] });
+    const loserCandidate = handoff.resume({ runId: 'run-duplicate-loser', sessionId: 'session-duplicate-loser', phase: '41', tickets: ['T-41-02-duplicate'] });
+    const winner = handoff.acknowledge(winnerCandidate, { revalidate: () => ({ valid: true, clean: true, children: [] }) });
+    assert.equal(winner.status, 'acknowledged');
+    assert.throws(
+      () => handoff.acknowledge(loserCandidate, { revalidate: () => ({ valid: true, clean: true, children: [] }) }),
+      (error) => error.code === 'HANDOFF_LOST' && typeof error.remedy === 'string' && error.remedy.length > 0,
+    );
+  } finally {
+    clean(root);
+  }
+});
+
+test('omitting a required checkpoint field refuses before owner transfer and names a remedy', () => {
+  const root = repoFixture();
+  try {
+    const handoff = createSessionHandoff({ cwd: root });
+    const owner = handoff.begin({ runId: 'run-missing-field', sessionId: 'session-missing-field', phase: '41', tickets: ['T-41-02-missing-field'] });
+    const incomplete = checkpointPayload(root);
+    delete incomplete.next_action;
+    assert.throws(
+      () => handoff.checkpoint(owner, incomplete),
+      (error) => error.code === 'INVALID_CHECKPOINT' && /next_action/.test(error.message) && typeof error.remedy === 'string' && error.remedy.length > 0,
+    );
+    assert.doesNotThrow(() => handoff.assertOwner(owner));
+    handoff.checkpoint(owner, checkpointPayload(root));
   } finally {
     clean(root);
   }
