@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 810c871f2846e3c6d43871aab70599444c98c0111b9ab01cf9eb438353006c04
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 3a86833a8acc78f368388d5ed21cdaabff3629329040c5fc8790f20ccd069ef2
 phase: 30-a-ticket-you-cannot-reach-is-not-deliverable
 plan: 01
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-12
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 810c871f2846e3c6d43871aab70599444c98c0111b9ab01cf9eb438353006c04
+shipyard_source_fingerprint: 3a86833a8acc78f368388d5ed21cdaabff3629329040c5fc8790f20ccd069ef2
 ---
 
 # Phase 30: Make verification claims executable across delivery boundaries — Delivery Projection

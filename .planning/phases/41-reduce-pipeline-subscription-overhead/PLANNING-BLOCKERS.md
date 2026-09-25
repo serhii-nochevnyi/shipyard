@@ -1,6 +1,50 @@
+## Latest result
+
+See [PLANNING-RESULT.md](PLANNING-RESULT.md). Seven local drafts and Gate 2 are ready. The checker returned two blockers, subsequently addressed in the draft contracts and checked deterministically. Formal receipt-chain / passing checker seal remains incomplete; delivery is not authorized by this draft. Older status notes below are historical.
+
+---
+
+## Current status — 2026-09-25
+
+The historical host blockers below are superseded for this local decomposition.
+The private runtime now accepts timeout-only parent waits only with validated
+completed native child evidence. The phase research was recovered without model
+replay using matched native parent/child transcripts and worktree containment;
+its original failed dispatch receipt was not fabricated. The planner completed
+with a verified durable receipt and produced seven plans. User-requested native
+wait fix is included in T-41-04. All seven plan structures and Gate 2 pass;
+independent plan checker is pending. No implementation tests were run.
+
+Local evidence root: `/Users/serhii/.local/state/shipyard/phase41-local-host`.
+Original planner files are preserved under `planner-original`; current amended
+plans are hashed in `PLANNING-GATES.json` and are the checker input.
+
+---
+
 # Phase 41 planning admission
 
-Status: BLOCKED before formal research/decomposition callbacks.
+Status: LOCAL RESEARCH UNBLOCKED; typed decomposition not yet exercised.
+
+## Local repair — 2026-09-25
+
+The user explicitly authorized a local fix pending phase 40. A private runtime
+at `/Users/serhii/.local/state/shipyard/phase41-local-host` now provides contained
+research writes, authenticated durable receipts and sealed artifact indexes.
+All four canonical INV-006 lines completed and their manifests revalidated.
+See `../../investigations/INV-006-pipeline-subscription-overhead/RESEARCH-RECEIPTS.json`.
+
+The patch stays outside Git and does not alter the global install or declare
+phase-40 tickets complete. Its researcher sandbox is workspace-write with a
+post-run exact-file allowlist; checker remains read-only. HEAD/index and all
+other worktree files are checked for changes. The local README documents
+invocation and retirement. No unit tests were added/run. Actual investigation
+operations and syntax checks are the current evidence.
+
+The three typed researcher/planner/checker paths have not run yet. Gate 1/2,
+accepted ADR and executable plans are not claimed. Phase 39 merged during this
+research; reconcile the new main before detailed decomposition.
+
+## Original admission evidence (retained as history)
 Checked: 2026-09-25. Runtime: Codex.
 Planning branch: plan/41-subscription-overhead.
 Baseline: aa5def7931d08b7f789586a8d83a4e452ff2a8fa (phase 39 epic).

@@ -1,6 +1,6 @@
 # Requirements: shipyard
 
-<!-- shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 810c871f2846e3c6d43871aab70599444c98c0111b9ab01cf9eb438353006c04 -->
+<!-- shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 3a86833a8acc78f368388d5ed21cdaabff3629329040c5fc8790f20ccd069ef2 -->
 
 **Defined:** 2026-09-10
 **Core Value:** Keep delivery decisions truthful, resumable, and synchronized between the Shipyard conveyor and native GSD workflows.
@@ -156,7 +156,13 @@
 - [ ] **REQ-147**: One shared sealer produces research-result and decomposition-result envelopes with an artifact index for Claude and Codex research and decompose hosts.
 - [ ] **REQ-148**: The Codex GSD researcher writes only its contained artifact path, and Codex child tasks are passed by file path plus a digest the host verifies.
 - [ ] **REQ-149**: Point fixes: header-free deterministic state YAML; pre-push resolves the worktree through git; the Codex config refusal names the config fix; gsd-tune for Codex writes no Claude-only keys; investigate and decompose prose explain the out-of-repo host state directory; doctor reads the Codex agents manifest.
-- [ ] **REQ-150**: Unit fixtures that create git repositories are hermetic against global commit signing and fixed /tmp paths. *ADR-011 was accepted for implementation on 2026-09-10. T-32-01/02 are the initial isolated tooling slice; subsequent packages remain subject to decomposition and rollout gates. Existing model floors remain unchanged.*
+- [ ] **REQ-150**: Unit fixtures that create git repositories are hermetic against global commit signing and fixed /tmp paths.
+- [ ] **REQ-151**: Complete-prompt/first-response measurement and installed T-39-17 verification preserve governing constraints.
+- [ ] **REQ-152**: Bounded durable handoff uses existing ownership, artifact and gate contracts without repeated or orphaned work.
+- [ ] **REQ-153**: Installed stop-gate/waker behavior suppresses foreign and unchanged model wakeups while preserving owner transitions.
+- [ ] **REQ-154**: Authenticated completed-execution candidates resume trusted finalization idempotently without stale verification or automatic executor replay.
+- [ ] **REQ-155**: GSD projection fingerprints use governing local inputs and dependency edges while preserving aggregate invalidation and consistency checks.
+- [ ] **REQ-156**: Existing usage reporting joins deduplicated parent/child and recovery usage to verified outcomes with honest unknowns, comparable cohorts and quality/readiness gates. *ADR-011 was accepted for implementation on 2026-09-10. T-32-01/02 are the initial isolated tooling slice; subsequent packages remain subject to decomposition and rollout gates. Existing model floors remain unchanged.*
 
 ## Out of Scope
 
@@ -318,10 +324,16 @@
 | REQ-148 | Phase 40 | In Progress |
 | REQ-149 | Phase 40 | In Progress |
 | REQ-150 | Phase 40 | In Progress |
+| REQ-151 | Phase 41 | In Progress |
+| REQ-152 | Phase 41 | In Progress |
+| REQ-153 | Phase 41 | In Progress |
+| REQ-154 | Phase 41 | In Progress |
+| REQ-155 | Phase 41 | In Progress |
+| REQ-156 | Phase 41 | In Progress |
 
 **Coverage:**
-- v1 requirements: 149 total
-- Mapped to phases: 147
+- v1 requirements: 155 total
+- Mapped to phases: 153
 - Unmapped: 2 ⚠️
 
 ---

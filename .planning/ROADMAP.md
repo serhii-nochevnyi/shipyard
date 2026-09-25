@@ -384,6 +384,13 @@ script — not in a prompt.** Every requirement below is an instance of it.
 - **REQ-149** — Point fixes: header-free deterministic state YAML; pre-push resolves the worktree through git; the Codex config refusal names the config fix; gsd-tune for Codex writes no Claude-only keys; investigate and decompose prose explain the out-of-repo host state directory; doctor reads the Codex agents manifest.
 - **REQ-150** — Unit fixtures that create git repositories are hermetic against global commit signing and fixed /tmp paths.
 
+- **REQ-151** — Complete-prompt/first-response measurement and installed T-39-17 verification preserve governing constraints.
+- **REQ-152** — Bounded durable handoff uses existing ownership, artifact and gate contracts without repeated or orphaned work.
+- **REQ-153** — Installed stop-gate/waker behavior suppresses foreign and unchanged model wakeups while preserving owner transitions.
+- **REQ-154** — Authenticated completed-execution candidates resume trusted finalization idempotently without stale verification or automatic executor replay.
+- **REQ-155** — GSD projection fingerprints use governing local inputs and dependency edges while preserving aggregate invalidation and consistency checks.
+- **REQ-156** — Existing usage reporting joins deduplicated parent/child and recovery usage to verified outcomes with honest unknowns, comparable cohorts and quality/readiness gates.
+
 *ADR-011 was accepted for implementation on 2026-09-10. T-32-01/02 are the
 initial isolated tooling slice; subsequent packages remain subject to decomposition
 and rollout gates. Existing model floors remain unchanged.*
@@ -764,8 +771,11 @@ support a provenance-stamped dogfood mode, and keep conveyor internals out of
 target-project PRs.
 
 ### Phase 41: Reduce pipeline subscription overhead
-**Status**: preparation captured ([INV-006](investigations/INV-006-pipeline-subscription-overhead/PROBLEM.md)); formal Codex planning [blocked by host prerequisites](phases/41-reduce-pipeline-subscription-overhead/PLANNING-BLOCKERS.md)
-**Requirements**: to be assigned during decomposition; acceptance P41-A–F in [phase context](phases/41-reduce-pipeline-subscription-overhead/CONTEXT.md)
+**Status**: seven local draft plans; structures and Gate 2 pass. Checker findings amended with deterministic checks; formal receipt-chain approval remains blocked. See [planning result](phases/41-reduce-pipeline-subscription-overhead/PLANNING-RESULT.md). No implementation or new plan commits.
+**Goal**: reduce avoidable context processing and repeated model work while preserving verified outcomes.
+**Depends on**: Phase 39
+**Requirements**: REQ-151, REQ-152, REQ-153, REQ-154, REQ-155, REQ-156
+**Acceptance**: P41-A–F in [phase context](phases/41-reduce-pipeline-subscription-overhead/CONTEXT.md)
 **Delivery order**: after phase 39 release, before phase 40
 
 Use the 2026-09-25 Claude-session measurements to reduce oversized parent
@@ -779,9 +789,9 @@ tickets; do not repeat its provenance/schema work or phase 39 packet fixes.
 <!-- shipyard:gsd-sync:begin -->
 ## Shipyard synchronization (generated)
 
-- Source fingerprint: `810c871f2846e3c6d43871aab70599444c98c0111b9ab01cf9eb438353006c04`
-- Plans merged: 162/190
-- Phases verified: 10/21
+- Source fingerprint: `3a86833a8acc78f368388d5ed21cdaabff3629329040c5fc8790f20ccd069ef2`
+- Plans merged: 163/197
+- Phases verified: 10/22
 - Current phase: 20
 
 | Phase | Plans | Merged | Verification |
@@ -805,7 +815,8 @@ tickets; do not repeat its provenance/schema work or phase 39 packet fixes.
 | 36 — Enforce the runtime model ladder | 12 | 12 | passed |
 | 37 — Run the autonomous dual-runtime control plane | 8 | 8 | pending |
 | 38 — Restore the native model ladder in delivery | 8 | 8 | passed |
-| 39 — Remove conveyor session friction | 17 | 16 | gaps_found |
+| 39 — Remove conveyor session friction | 17 | 17 | gaps_found |
 | 40 — Build delivery seams and clean target-project PRs | 27 | 0 | pending |
+| 41 — Reduce pipeline subscription overhead | 7 | 0 | pending |
 
 <!-- shipyard:gsd-sync:end -->

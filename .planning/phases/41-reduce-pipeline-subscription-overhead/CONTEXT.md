@@ -1,6 +1,8 @@
 # Phase 41 context — Reduce pipeline subscription overhead
 
-Status: preparation captured; formal Codex research/decomposition blocked by missing host artifact support.
+Status: ADR-019 records the accepted scope; typed phase research/planner/checker in progress.
+Planning baseline: main release 0.63.0, d0c2804e517dda9e1924312362749f04f429caff.
+Requirements: REQ-151 through REQ-156 map respectively to P41-A through P41-F.
 Updated: 2026-09-25.
 
 ## Goal and authorization
@@ -177,16 +179,139 @@ priority scope.
 
 ## Planning handoff
 
-See [PLANNING-BLOCKERS.md](PLANNING-BLOCKERS.md): CLI capability preflight passes,
-but the research write/sealer contract requires existing phase-40 prerequisites.
-The phase ordering needs reconciliation before formal callbacks can proceed.
+The original host blocker is superseded by the private local bootstrap and the
+native research recovery recorded on 2026-09-25. Four investigation reports,
+ADR-019 and phase research are complete. The phase researcher finished but its
+original dispatch failed at the literal wait-result check; native parent/child
+completion and unchanged worktree scope were revalidated without replaying it.
+The failed original dispatch has no compliant durable receipt. Recovery is
+recorded separately; do not relabel that failure as a normal successful launch.
+The typed planner completed with an authenticated durable receipt and produced
+seven plans. Independent checker and graph results are recorded separately.
 
-Kickoff is recorded in [INV-006](../../investigations/INV-006-pipeline-subscription-overhead/PROBLEM.md).
-Its intake and seed evidence are prepared; six technical research questions
-remain open. Codex capability preflight passed with the explicit installed
-capabilities file. Formal research callbacks have not yet run.
+User amendment: include the timeout-only parent wait / asynchronous child
+completion fix in T-41-04. It preserves mandatory native child identity,
+completion, role/model/effort/instruction, handback and containment checks.
+The permanent source fix and regression coverage belong to phase 41; the local
+runtime patch remains bootstrap only. No product code is changed by planning.
 
-Before materializing tickets, reconcile the latest phase-39 implementation and
-phase-40 file ownership, derive global requirements from the accepted ADR, and
-run the normal GSD planning/checking path. Keep this evidence with the plans.
-No implementation ticket or delivered status is implied by this scope capture.
+## Planning and ownership
+
+Phase 41 is independently deliverable on merged phase-39 release 0.63.0 before phase 40. T-39-17 packet selection/bounds and T-39-03 arming are integrated prerequisites; their installed behavior remains a separate acceptance gate. The local host patch used for research/planning is bootstrap, not delivered source. Cross-phase dependents below wait for merged phase-41 source on main; their PRs do not stack across epics. No phase-40 requirement changes are needed: phase 41 provides prompt observation, recovery and local projection/reporting contracts, while phase 40 retains its listed producer/consumer, request, provenance and formatting work.
+
+Source audit: ROADMAP phase goal maps to T-41-01–07. REQ-151/P41-A maps to T-41-01; REQ-152/P41-B to T-41-02; REQ-153/P41-C to T-41-03; REQ-154/P41-D to T-41-04; REQ-155/P41-E to T-41-05; REQ-156/P41-F to T-41-06. T-41-07 integrates all six. Research constraints for packet admission, safe handoff, one-shot wake, authenticated candidate, dependency-edge fingerprints, and verified-outcome joins are in those same tickets. Deferred global model downgrades, adaptive investigation fan-out, new sentinel daemon, broad ticket resizing, automatic handoff thresholds and instruction rewrite are excluded. A reproduced stop/wake source residual requires a scoped ticket amendment before changing phase-40-owned files; T-41-03's regression and installed acceptance cannot pass while that defect remains.
+
+| Source | Item | Plan | Status |
+| --- | --- | --- | --- |
+| GOAL | Reduce avoidable context processing and repeated model work with verified outcomes | T-41-01–07 | COVERED |
+| REQ | REQ-151; REQ-152; REQ-153 | T-41-01; 02; 03 | COVERED |
+| REQ | REQ-154; REQ-155; REQ-156 | T-41-04; 05; 06 | COVERED |
+| RESEARCH | Packet admission and governing references; safe handoff; installed one-shot wake | T-41-01; 02; 03 | COVERED |
+| RESEARCH | Authenticated candidate; projection dependency edges; deduplicated outcome join | T-41-04; 05; 06 | COVERED |
+| CONTEXT | P41-A; P41-B; P41-C | T-41-01; 02; 03 | COVERED |
+| CONTEXT | P41-D; P41-E; P41-F | T-41-04; 05; 06 | COVERED |
+
+## Phase 40 prerequisite amendments
+
+```json
+{
+  "phase40_dependency_amendments": [
+    {
+      "ticket": "T-40-01",
+      "add_depends_on": [
+        "T-41-04"
+      ],
+      "shared_files": [
+        "tests/unit/codex-delivery-host.test.cjs"
+      ],
+      "reason": "The signing-host fixture must consume phase-41 authenticated candidate and finalization evidence."
+    },
+    {
+      "ticket": "T-40-09",
+      "add_depends_on": [
+        "T-41-04"
+      ],
+      "shared_files": [
+        "tests/unit/codex-delivery-host.test.cjs",
+        "plugins/delivery-pipeline/scripts/codex-runtime-host.cjs",
+        "tests/unit/codex-runtime-host.test.cjs"
+      ],
+      "reason": "The captured-stream consumer fixture must preserve phase-41 candidate and recovery contract assertions. The digest task relay must preserve timeout-independent native child completion verification and its negative cases."
+    },
+    {
+      "ticket": "T-40-12",
+      "add_depends_on": [
+        "T-41-04"
+      ],
+      "shared_files": [
+        "plugins/delivery-pipeline/scripts/codex-delivery-host.cjs",
+        "tests/unit/codex-delivery-host.test.cjs"
+      ],
+      "reason": "The research consumer extends the Codex host after its trusted finalization candidate API exists."
+    },
+    {
+      "ticket": "T-40-14",
+      "add_depends_on": [
+        "T-41-04"
+      ],
+      "shared_files": [
+        "plugins/delivery-pipeline/scripts/codex-delivery-host.cjs",
+        "tests/unit/codex-delivery-host.test.cjs"
+      ],
+      "reason": "The in-flight host input path must retain the phase-41 original-dispatch and candidate recovery fence."
+    },
+    {
+      "ticket": "T-40-16",
+      "add_depends_on": [
+        "T-41-01"
+      ],
+      "shared_files": [
+        "plugins/delivery-pipeline/scripts/claude-role-host.cjs",
+        "tests/unit/claude-role-host.test.cjs"
+      ],
+      "reason": "Sentinel preflight must consume the phase-41 measured, bounded role prompt path."
+    },
+    {
+      "ticket": "T-40-18",
+      "add_depends_on": [
+        "T-41-04"
+      ],
+      "shared_files": [
+        "plugins/delivery-pipeline/scripts/delivery-commit-finalizer.cjs",
+        "tests/unit/delivery-commit-finalizer.test.cjs"
+      ],
+      "reason": "Commit formatting must preserve the phase-41 exact-tree and idempotent finalization contract."
+    },
+    {
+      "ticket": "T-40-22",
+      "add_depends_on": [
+        "T-41-01"
+      ],
+      "shared_files": [
+        "plugins/delivery-pipeline/scripts/claude-role-host.cjs",
+        "tests/unit/claude-role-host.test.cjs"
+      ],
+      "reason": "Dispatch provenance must consume the phase-41 prompt measurement and selected reference identity."
+    },
+    {
+      "ticket": "T-40-27",
+      "add_depends_on": [
+        "T-41-04"
+      ],
+      "shared_files": [
+        "plugins/delivery-pipeline/scripts/delivery-commit-finalizer.cjs"
+      ],
+      "reason": "Diamond readiness must retain the phase-41 expected-tree and repeated-finalization safeguards."
+    }
+  ]
+}
+```
+
+## Planning defaults within the accepted scope
+
+Source: ADR-019; mode standard, granularity standard; TDD descriptions for
+eligible implementation tasks. No code/tests are implemented during planning.
+Safe explicit handoff boundaries first; automatic thresholds remain deferred.
+Changed-base candidate reuse refuses unless a plan preserves complete bounded
+revalidation. Use existing matched-cohort/readiness/quality rules. Assign exact
+contracts, dependency input sets and later phase40 file ownership in plans.

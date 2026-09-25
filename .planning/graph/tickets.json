@@ -134,6 +134,13 @@
         null
       ]
     },
+    "41": {
+      "branch": "epic/41-reduce-pipeline-subscription-overhead",
+      "base": null,
+      "repos": [
+        null
+      ]
+    },
     "33-reduce-orchestration-context-and-transfer-sessions-safely": {
       "branch": "epic/33-reduce-orchestration-context-and-transfer-sessions-safely",
       "base": null,
@@ -5617,38 +5624,6 @@
       "pr_base": "ticket/T-39-16-make-the-role-result-finding-contract-un",
       "jira": null
     },
-    "T-40-01": {
-      "title": "Make git-creating unit fixtures hermetic against global signing and fixed /tmp paths",
-      "plan": ".planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-01-PLAN.md",
-      "phase": "40",
-      "repo": null,
-      "wave": 2,
-      "depends_on": [
-        "T-39-01"
-      ],
-      "cross_phase_deps": [
-        "T-39-01"
-      ],
-      "cross_repo_deps": [],
-      "unreachable_paths": false,
-      "missing_paths": true,
-      "files": [
-        "tests/unit/run.sh",
-        "tests/unit/assert-harness.cjs",
-        "tests/unit/claude-delivery-host.test.cjs",
-        "tests/unit/codex-delivery-host.test.cjs",
-        "tests/unit/test-hermeticity.test.cjs"
-      ],
-      "risk": "low",
-      "type": "implementation",
-      "human_checkpoint": false,
-      "preauthorized": false,
-      "branch": "ticket/T-40-01-make-git-creating-unit-fixtures-hermetic",
-      "epic": "epic/40-build-delivery-seams-and-clean-target-project-prs",
-      "primary_parent": null,
-      "pr_base": "epic/40-build-delivery-seams-and-clean-target-project-prs",
-      "jira": null
-    },
     "T-40-02": {
       "title": "Unblock pushes: header-free state YAML and a pre-push gate that resolves the worktree through git",
       "plan": ".planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-02-PLAN.md",
@@ -5869,6 +5844,270 @@
       "pr_base": "ticket/T-40-07-add-the-scrubbed-boundary-fixture-captur",
       "jira": null
     },
+    "T-40-19": {
+      "title": "Record gate verdicts as a commit status instead of a PR-body trailer",
+      "plan": ".planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-19-PLAN.md",
+      "phase": "40",
+      "repo": null,
+      "wave": 3,
+      "depends_on": [
+        "T-40-03"
+      ],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": false,
+      "files": [
+        "plugins/delivery-pipeline/scripts/gate-trailer.cjs",
+        "tests/unit/trailer.test.cjs",
+        "plugins/delivery-pipeline/scripts/state-sync.cjs",
+        "plugins/delivery-pipeline/scripts/sentinel.cjs",
+        "tests/smoke/sentinel-smoke.sh"
+      ],
+      "risk": "high",
+      "type": "implementation",
+      "human_checkpoint": true,
+      "preauthorized": true,
+      "branch": "ticket/T-40-19-record-gate-verdicts-as-a-commit-status",
+      "epic": "epic/40-build-delivery-seams-and-clean-target-project-prs",
+      "primary_parent": "T-40-03",
+      "pr_base": "ticket/T-40-03-match-tickets-to-prs-by-the-pr-number-re",
+      "jira": null
+    },
+    "T-40-17": {
+      "title": "Add the publish-time PR hygiene gate and the confirmed one-time .planning untrack migration",
+      "plan": ".planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-17-PLAN.md",
+      "phase": "40",
+      "repo": null,
+      "wave": 4,
+      "depends_on": [
+        "T-40-19"
+      ],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": true,
+      "files": [
+        "plugins/delivery-pipeline/scripts/pr-hygiene.cjs",
+        "tests/unit/pr-hygiene.test.cjs",
+        "plugins/delivery-pipeline/scripts/planning-untrack.cjs",
+        "tests/unit/planning-untrack.test.cjs"
+      ],
+      "risk": "medium",
+      "type": "implementation",
+      "human_checkpoint": false,
+      "preauthorized": false,
+      "branch": "ticket/T-40-17-add-the-publish-time-pr-hygiene-gate-and",
+      "epic": "epic/40-build-delivery-seams-and-clean-target-project-prs",
+      "primary_parent": "T-40-19",
+      "pr_base": "ticket/T-40-19-record-gate-verdicts-as-a-commit-status",
+      "jira": null
+    },
+    "T-40-20": {
+      "title": "Generate neutral ticket and epic branch names and a neutral epic PR in target projects",
+      "plan": ".planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-20-PLAN.md",
+      "phase": "40",
+      "repo": null,
+      "wave": 5,
+      "depends_on": [
+        "T-40-17",
+        "T-39-06"
+      ],
+      "cross_phase_deps": [
+        "T-39-06"
+      ],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": false,
+      "files": [
+        "plugins/delivery-pipeline/scripts/validate-graph.cjs",
+        "tests/smoke/graph-validator-smoke.sh",
+        "plugins/delivery-pipeline/skills/delivery-rules/SKILL.md",
+        ".shipyard/generated/gsd-delivery-rules/SKILL.md",
+        "plugins/delivery-pipeline/scripts/epic-branch.sh",
+        "tests/smoke/worktree-smoke.sh"
+      ],
+      "risk": "medium",
+      "type": "implementation",
+      "human_checkpoint": false,
+      "preauthorized": false,
+      "branch": "ticket/T-40-20-generate-neutral-ticket-and-epic-branch",
+      "epic": "epic/40-build-delivery-seams-and-clean-target-project-prs",
+      "primary_parent": "T-40-17",
+      "pr_base": "ticket/T-40-17-add-the-publish-time-pr-hygiene-gate-and",
+      "jira": null
+    },
+    "T-40-21": {
+      "title": "Support a dogfood install root with recorded host provenance and a doctor cache-vs-release check",
+      "plan": ".planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-21-PLAN.md",
+      "phase": "40",
+      "repo": null,
+      "wave": 3,
+      "depends_on": [
+        "T-40-05",
+        "T-39-04"
+      ],
+      "cross_phase_deps": [
+        "T-39-04"
+      ],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": true,
+      "files": [
+        "plugins/delivery-pipeline/scripts/host-provenance.cjs",
+        "tests/unit/host-provenance.test.cjs",
+        "scripts/install-shipyard-claude-hook.sh",
+        "scripts/install-shipyard-codex.sh",
+        "scripts/shipyard-doctor.cjs",
+        "tests/smoke/claude-hook-smoke.sh"
+      ],
+      "risk": "high",
+      "type": "implementation",
+      "human_checkpoint": true,
+      "preauthorized": true,
+      "branch": "ticket/T-40-21-support-a-dogfood-install-root-with-reco",
+      "epic": "epic/40-build-delivery-seams-and-clean-target-project-prs",
+      "primary_parent": "T-40-05",
+      "pr_base": "ticket/T-40-05-codex-tuning-writes-no-claude-only-keys",
+      "jira": null
+    },
+    "T-41-01": {
+      "title": "Measure bounded judgment launches and preserve governing references",
+      "plan": ".planning/phases/41-reduce-pipeline-subscription-overhead/41-01-PLAN.md",
+      "phase": "41",
+      "repo": null,
+      "wave": 1,
+      "depends_on": [],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": false,
+      "files": [
+        "plugins/delivery-pipeline/scripts/claude-role-host.cjs",
+        "tests/unit/claude-role-host.test.cjs"
+      ],
+      "risk": "medium",
+      "type": "implementation",
+      "human_checkpoint": false,
+      "preauthorized": false,
+      "branch": "ticket/T-41-01-measure-bounded-judgment-launches-and-pr",
+      "epic": "epic/41-reduce-pipeline-subscription-overhead",
+      "primary_parent": null,
+      "pr_base": "epic/41-reduce-pipeline-subscription-overhead",
+      "jira": null
+    },
+    "T-41-02": {
+      "title": "Carry bounded durable handoff evidence at safe boundaries",
+      "plan": ".planning/phases/41-reduce-pipeline-subscription-overhead/41-02-PLAN.md",
+      "phase": "41",
+      "repo": null,
+      "wave": 1,
+      "depends_on": [],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": false,
+      "files": [
+        "plugins/delivery-pipeline/scripts/session-handoff.cjs",
+        "tests/unit/session-handoff.test.cjs"
+      ],
+      "risk": "medium",
+      "type": "implementation",
+      "human_checkpoint": false,
+      "preauthorized": false,
+      "branch": "ticket/T-41-02-carry-bounded-durable-handoff-evidence-a",
+      "epic": "epic/41-reduce-pipeline-subscription-overhead",
+      "primary_parent": null,
+      "pr_base": "epic/41-reduce-pipeline-subscription-overhead",
+      "jira": null
+    },
+    "T-41-03": {
+      "title": "Prove installed owner-scoped stop and wake behavior",
+      "plan": ".planning/phases/41-reduce-pipeline-subscription-overhead/41-03-PLAN.md",
+      "phase": "41",
+      "repo": null,
+      "wave": 1,
+      "depends_on": [],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": true,
+      "files": [
+        "tests/unit/phase41-stop-wake.test.cjs"
+      ],
+      "risk": "low",
+      "type": "implementation",
+      "human_checkpoint": false,
+      "preauthorized": false,
+      "branch": "ticket/T-41-03-prove-installed-owner-scoped-stop-and-wa",
+      "epic": "epic/41-reduce-pipeline-subscription-overhead",
+      "primary_parent": null,
+      "pr_base": "epic/41-reduce-pipeline-subscription-overhead",
+      "jira": null
+    },
+    "T-41-04": {
+      "title": "Resume authenticated completed execution through trusted finalization",
+      "plan": ".planning/phases/41-reduce-pipeline-subscription-overhead/41-04-PLAN.md",
+      "phase": "41",
+      "repo": null,
+      "wave": 1,
+      "depends_on": [],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": false,
+      "files": [
+        "plugins/delivery-pipeline/scripts/codex-runtime-host.cjs",
+        "tests/unit/codex-runtime-host.test.cjs",
+        "plugins/delivery-pipeline/scripts/codex-delivery-host.cjs",
+        "plugins/delivery-pipeline/scripts/delivery-commit-finalizer.cjs",
+        "tests/unit/codex-delivery-host.test.cjs",
+        "tests/unit/delivery-commit-finalizer.test.cjs"
+      ],
+      "risk": "high",
+      "type": "implementation",
+      "human_checkpoint": true,
+      "preauthorized": false,
+      "branch": "ticket/T-41-04-resume-authenticated-completed-execution",
+      "epic": "epic/41-reduce-pipeline-subscription-overhead",
+      "primary_parent": null,
+      "pr_base": "epic/41-reduce-pipeline-subscription-overhead",
+      "jira": null
+    },
+    "T-40-01": {
+      "title": "Make git-creating unit fixtures hermetic against global signing and fixed /tmp paths",
+      "plan": ".planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-01-PLAN.md",
+      "phase": "40",
+      "repo": null,
+      "wave": 2,
+      "depends_on": [
+        "T-39-01",
+        "T-41-04"
+      ],
+      "cross_phase_deps": [
+        "T-39-01",
+        "T-41-04"
+      ],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": true,
+      "files": [
+        "tests/unit/run.sh",
+        "tests/unit/assert-harness.cjs",
+        "tests/unit/claude-delivery-host.test.cjs",
+        "tests/unit/codex-delivery-host.test.cjs",
+        "tests/unit/test-hermeticity.test.cjs"
+      ],
+      "risk": "low",
+      "type": "implementation",
+      "human_checkpoint": false,
+      "preauthorized": false,
+      "branch": "ticket/T-40-01-make-git-creating-unit-fixtures-hermetic",
+      "epic": "epic/40-build-delivery-seams-and-clean-target-project-prs",
+      "primary_parent": null,
+      "pr_base": "epic/40-build-delivery-seams-and-clean-target-project-prs",
+      "jira": null
+    },
     "T-40-10": {
       "title": "Extract one shared sealer for research-result and decomposition-result envelopes and use it on Claude",
       "plan": ".planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-10-PLAN.md",
@@ -5948,10 +6187,12 @@
       "wave": 5,
       "depends_on": [
         "T-40-13",
-        "T-39-01"
+        "T-39-01",
+        "T-41-04"
       ],
       "cross_phase_deps": [
-        "T-39-01"
+        "T-39-01",
+        "T-41-04"
       ],
       "cross_repo_deps": [],
       "unreachable_paths": false,
@@ -5980,12 +6221,14 @@
         "T-40-12",
         "T-39-03",
         "T-39-08",
-        "T-39-01"
+        "T-39-01",
+        "T-41-04"
       ],
       "cross_phase_deps": [
         "T-39-03",
         "T-39-08",
-        "T-39-01"
+        "T-39-01",
+        "T-41-04"
       ],
       "cross_repo_deps": [],
       "unreachable_paths": false,
@@ -6056,10 +6299,12 @@
         "T-40-11",
         "T-40-07",
         "T-40-14",
-        "T-39-01"
+        "T-39-01",
+        "T-41-04"
       ],
       "cross_phase_deps": [
-        "T-39-01"
+        "T-39-01",
+        "T-41-04"
       ],
       "cross_repo_deps": [],
       "unreachable_paths": false,
@@ -6095,13 +6340,15 @@
         "T-39-12",
         "T-39-14",
         "T-39-16",
-        "T-39-17"
+        "T-39-17",
+        "T-41-01"
       ],
       "cross_phase_deps": [
         "T-39-12",
         "T-39-14",
         "T-39-16",
-        "T-39-17"
+        "T-39-17",
+        "T-41-01"
       ],
       "cross_repo_deps": [],
       "unreachable_paths": false,
@@ -6120,65 +6367,6 @@
       "epic": "epic/40-build-delivery-seams-and-clean-target-project-prs",
       "primary_parent": "T-40-01",
       "pr_base": "ticket/T-40-01-make-git-creating-unit-fixtures-hermetic",
-      "jira": null
-    },
-    "T-40-19": {
-      "title": "Record gate verdicts as a commit status instead of a PR-body trailer",
-      "plan": ".planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-19-PLAN.md",
-      "phase": "40",
-      "repo": null,
-      "wave": 3,
-      "depends_on": [
-        "T-40-03"
-      ],
-      "cross_phase_deps": [],
-      "cross_repo_deps": [],
-      "unreachable_paths": false,
-      "missing_paths": false,
-      "files": [
-        "plugins/delivery-pipeline/scripts/gate-trailer.cjs",
-        "tests/unit/trailer.test.cjs",
-        "plugins/delivery-pipeline/scripts/state-sync.cjs",
-        "plugins/delivery-pipeline/scripts/sentinel.cjs",
-        "tests/smoke/sentinel-smoke.sh"
-      ],
-      "risk": "high",
-      "type": "implementation",
-      "human_checkpoint": true,
-      "preauthorized": true,
-      "branch": "ticket/T-40-19-record-gate-verdicts-as-a-commit-status",
-      "epic": "epic/40-build-delivery-seams-and-clean-target-project-prs",
-      "primary_parent": "T-40-03",
-      "pr_base": "ticket/T-40-03-match-tickets-to-prs-by-the-pr-number-re",
-      "jira": null
-    },
-    "T-40-17": {
-      "title": "Add the publish-time PR hygiene gate and the confirmed one-time .planning untrack migration",
-      "plan": ".planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-17-PLAN.md",
-      "phase": "40",
-      "repo": null,
-      "wave": 4,
-      "depends_on": [
-        "T-40-19"
-      ],
-      "cross_phase_deps": [],
-      "cross_repo_deps": [],
-      "unreachable_paths": false,
-      "missing_paths": true,
-      "files": [
-        "plugins/delivery-pipeline/scripts/pr-hygiene.cjs",
-        "tests/unit/pr-hygiene.test.cjs",
-        "plugins/delivery-pipeline/scripts/planning-untrack.cjs",
-        "tests/unit/planning-untrack.test.cjs"
-      ],
-      "risk": "medium",
-      "type": "implementation",
-      "human_checkpoint": false,
-      "preauthorized": false,
-      "branch": "ticket/T-40-17-add-the-publish-time-pr-hygiene-gate-and",
-      "epic": "epic/40-build-delivery-seams-and-clean-target-project-prs",
-      "primary_parent": "T-40-19",
-      "pr_base": "ticket/T-40-19-record-gate-verdicts-as-a-commit-status",
       "jira": null
     },
     "T-40-15": {
@@ -6220,10 +6408,12 @@
       "wave": 5,
       "depends_on": [
         "T-40-17",
-        "T-39-16"
+        "T-39-16",
+        "T-41-04"
       ],
       "cross_phase_deps": [
-        "T-39-16"
+        "T-39-16",
+        "T-41-04"
       ],
       "cross_repo_deps": [],
       "unreachable_paths": false,
@@ -6244,74 +6434,6 @@
       "pr_base": "ticket/T-40-17-add-the-publish-time-pr-hygiene-gate-and",
       "jira": null
     },
-    "T-40-20": {
-      "title": "Generate neutral ticket and epic branch names and a neutral epic PR in target projects",
-      "plan": ".planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-20-PLAN.md",
-      "phase": "40",
-      "repo": null,
-      "wave": 5,
-      "depends_on": [
-        "T-40-17",
-        "T-39-06"
-      ],
-      "cross_phase_deps": [
-        "T-39-06"
-      ],
-      "cross_repo_deps": [],
-      "unreachable_paths": false,
-      "missing_paths": false,
-      "files": [
-        "plugins/delivery-pipeline/scripts/validate-graph.cjs",
-        "tests/smoke/graph-validator-smoke.sh",
-        "plugins/delivery-pipeline/skills/delivery-rules/SKILL.md",
-        ".shipyard/generated/gsd-delivery-rules/SKILL.md",
-        "plugins/delivery-pipeline/scripts/epic-branch.sh",
-        "tests/smoke/worktree-smoke.sh"
-      ],
-      "risk": "medium",
-      "type": "implementation",
-      "human_checkpoint": false,
-      "preauthorized": false,
-      "branch": "ticket/T-40-20-generate-neutral-ticket-and-epic-branch",
-      "epic": "epic/40-build-delivery-seams-and-clean-target-project-prs",
-      "primary_parent": "T-40-17",
-      "pr_base": "ticket/T-40-17-add-the-publish-time-pr-hygiene-gate-and",
-      "jira": null
-    },
-    "T-40-21": {
-      "title": "Support a dogfood install root with recorded host provenance and a doctor cache-vs-release check",
-      "plan": ".planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-21-PLAN.md",
-      "phase": "40",
-      "repo": null,
-      "wave": 3,
-      "depends_on": [
-        "T-40-05",
-        "T-39-04"
-      ],
-      "cross_phase_deps": [
-        "T-39-04"
-      ],
-      "cross_repo_deps": [],
-      "unreachable_paths": false,
-      "missing_paths": true,
-      "files": [
-        "plugins/delivery-pipeline/scripts/host-provenance.cjs",
-        "tests/unit/host-provenance.test.cjs",
-        "scripts/install-shipyard-claude-hook.sh",
-        "scripts/install-shipyard-codex.sh",
-        "scripts/shipyard-doctor.cjs",
-        "tests/smoke/claude-hook-smoke.sh"
-      ],
-      "risk": "high",
-      "type": "implementation",
-      "human_checkpoint": true,
-      "preauthorized": true,
-      "branch": "ticket/T-40-21-support-a-dogfood-install-root-with-reco",
-      "epic": "epic/40-build-delivery-seams-and-clean-target-project-prs",
-      "primary_parent": "T-40-05",
-      "pr_base": "ticket/T-40-05-codex-tuning-writes-no-claude-only-keys",
-      "jira": null
-    },
     "T-40-22": {
       "title": "Stamp every dispatch with a provenance sidecar and refuse dogfood merges into a default branch",
       "plan": ".planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-22-PLAN.md",
@@ -6327,14 +6449,16 @@
         "T-39-12",
         "T-39-14",
         "T-39-16",
-        "T-39-17"
+        "T-39-17",
+        "T-41-01"
       ],
       "cross_phase_deps": [
         "T-39-03",
         "T-39-12",
         "T-39-14",
         "T-39-16",
-        "T-39-17"
+        "T-39-17",
+        "T-41-01"
       ],
       "cross_repo_deps": [],
       "unreachable_paths": false,
@@ -6499,9 +6623,12 @@
       "repo": null,
       "wave": 6,
       "depends_on": [
-        "T-40-18"
+        "T-40-18",
+        "T-41-04"
       ],
-      "cross_phase_deps": [],
+      "cross_phase_deps": [
+        "T-41-04"
+      ],
       "cross_repo_deps": [],
       "unreachable_paths": false,
       "missing_paths": true,
@@ -6523,6 +6650,92 @@
       "epic": "epic/40-build-delivery-seams-and-clean-target-project-prs",
       "primary_parent": "T-40-18",
       "pr_base": "ticket/T-40-18-produce-clean-executor-pr-bodies-and-con",
+      "jira": null
+    },
+    "T-41-05": {
+      "title": "Fingerprint each GSD projection from its governing inputs",
+      "plan": ".planning/phases/41-reduce-pipeline-subscription-overhead/41-05-PLAN.md",
+      "phase": "41",
+      "repo": null,
+      "wave": 1,
+      "depends_on": [],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": false,
+      "files": [
+        "plugins/delivery-pipeline/scripts/gsd-sync.cjs",
+        "tests/unit/gsd-sync.test.cjs",
+        "tests/unit/gsd-sync-gate.test.cjs"
+      ],
+      "risk": "medium",
+      "type": "implementation",
+      "human_checkpoint": false,
+      "preauthorized": false,
+      "branch": "ticket/T-41-05-fingerprint-each-gsd-projection-from-its",
+      "epic": "epic/41-reduce-pipeline-subscription-overhead",
+      "primary_parent": null,
+      "pr_base": "epic/41-reduce-pipeline-subscription-overhead",
+      "jira": null
+    },
+    "T-41-06": {
+      "title": "Join deduplicated usage and recovery cost to verified outcomes",
+      "plan": ".planning/phases/41-reduce-pipeline-subscription-overhead/41-06-PLAN.md",
+      "phase": "41",
+      "repo": null,
+      "wave": 2,
+      "depends_on": [
+        "T-41-01"
+      ],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": false,
+      "files": [
+        "plugins/delivery-pipeline/scripts/usage-report.cjs",
+        "plugins/delivery-pipeline/scripts/orchestration-overhead.cjs",
+        "tests/unit/usage-report.test.cjs",
+        "tests/unit/orchestration-overhead.test.cjs"
+      ],
+      "risk": "medium",
+      "type": "implementation",
+      "human_checkpoint": false,
+      "preauthorized": false,
+      "branch": "ticket/T-41-06-join-deduplicated-usage-and-recovery-cos",
+      "epic": "epic/41-reduce-pipeline-subscription-overhead",
+      "primary_parent": "T-41-01",
+      "pr_base": "ticket/T-41-01-measure-bounded-judgment-launches-and-pr",
+      "jira": null
+    },
+    "T-41-07": {
+      "title": "Integrate phase 41 with trusted outcome and efficiency evidence",
+      "plan": ".planning/phases/41-reduce-pipeline-subscription-overhead/41-07-PLAN.md",
+      "phase": "41",
+      "repo": null,
+      "wave": 3,
+      "depends_on": [
+        "T-41-01",
+        "T-41-02",
+        "T-41-03",
+        "T-41-04",
+        "T-41-05",
+        "T-41-06"
+      ],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": true,
+      "files": [
+        ".planning/phases/41-reduce-pipeline-subscription-overhead/INTEGRATION.md"
+      ],
+      "risk": "high",
+      "type": "integration",
+      "human_checkpoint": true,
+      "preauthorized": false,
+      "branch": "ticket/T-41-07-integrate-phase-41-with-trusted-outcome",
+      "epic": "epic/41-reduce-pipeline-subscription-overhead",
+      "primary_parent": "T-41-06",
+      "pr_base": "ticket/T-41-06-join-deduplicated-usage-and-recovery-cos",
       "jira": null
     }
   }

@@ -1,0 +1,48 @@
+{
+  "status": "four research lines completed and authenticated",
+  "validated_at": "2026-09-25T10:54:22.168900+00:00",
+  "source_revision": "68e3a158f9224709caa32665726355d4f4127b1b",
+  "local_host": "/Users/serhii/.local/state/shipyard/phase41-local-host/local-planning-host.cjs",
+  "artifacts": [
+    {
+      "valid": true,
+      "dispatch_id": "dispatch-mugtu3sb-d4b47ec2-9059-4e45-8155-a3db7fa2bb29",
+      "subject": "INV-006-pipeline-subscription-overhead:alternatives",
+      "files": [
+        ".planning/investigations/INV-006-pipeline-subscription-overhead/research/alternatives.md"
+      ],
+      "artifact_digest": "8d166c60089a9d8f00e6965d3449d5093ec3996ff0764ed37add6b9e1266c825",
+      "artifact_ref": "/Users/serhii/.local/state/shipyard/phase41-local-host/runs/local41-9cbc3f8a-a772-4340-b0b6-00b98216ad7c/artifact.json"
+    },
+    {
+      "valid": true,
+      "dispatch_id": "dispatch-mugtpzi1-d0b580d5-4886-45be-b4a0-0e0cc6420830",
+      "subject": "INV-006-pipeline-subscription-overhead:system-state",
+      "files": [
+        ".planning/investigations/INV-006-pipeline-subscription-overhead/research/system-state.md"
+      ],
+      "artifact_digest": "35bba661d73e5a06239d879a54fb8cb06b40535691746fa6e732e95e48a30355",
+      "artifact_ref": "/Users/serhii/.local/state/shipyard/phase41-local-host/runs/local41-a7246245-cc26-45c9-814b-8f08efeacc16/artifact.json"
+    },
+    {
+      "valid": true,
+      "dispatch_id": "dispatch-mugu7080-61d46c2e-d2e7-4c61-892b-fc0eace9757d",
+      "subject": "INV-006-pipeline-subscription-overhead:risks",
+      "files": [
+        ".planning/investigations/INV-006-pipeline-subscription-overhead/research/risks.md"
+      ],
+      "artifact_digest": "afd9776959cb292f90be680344521e7e0273c0dc01b0fdb20f73f7695dde9f35",
+      "artifact_ref": "/Users/serhii/.local/state/shipyard/phase41-local-host/runs/local41-c4116352-96aa-418d-bb53-bdbff6c2bee6/artifact.json"
+    },
+    {
+      "valid": true,
+      "dispatch_id": "dispatch-mugty8ib-ae7e8143-bd64-4766-807c-f16589a0e80e",
+      "subject": "INV-006-pipeline-subscription-overhead:constraints",
+      "files": [
+        ".planning/investigations/INV-006-pipeline-subscription-overhead/research/constraints.md"
+      ],
+      "artifact_digest": "236672e079a5526b2fd2455fbdc230f289f322b7239c81104378c116b083bbf4",
+      "artifact_ref": "/Users/serhii/.local/state/shipyard/phase41-local-host/runs/local41-e1955fd6-0541-4a75-92bd-618323a27bb5/artifact.json"
+    }
+  ]
+}

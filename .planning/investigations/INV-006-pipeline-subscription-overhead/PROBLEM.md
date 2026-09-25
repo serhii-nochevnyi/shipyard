@@ -1,7 +1,7 @@
 ---
-status: open
-closed:
-adr:
+status: closed
+closed: 2026-09-25
+adr: ../../architecture/ADR-019-pipeline-subscription-efficiency.md
 ---
 
 # Problem
