@@ -34,7 +34,7 @@ function planText() {
   ].join('\n');
 }
 
-function setupRepository(kind) {
+function setupRepository(kind, options = {}) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-claude-role-')));
   const storageRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-claude-role-state-'));
   git(root, ['init', '-b', 'main']);
@@ -67,6 +67,10 @@ function setupRepository(kind) {
   git(root, ['checkout', '-b', branch]);
   write(root, 'src/role.txt', 'reviewed change\n');
   git(root, ['add', 'src/role.txt']);
+  if (options.planningBytes) {
+    write(root, `.planning/phases/${PHASE}/PROJECTION.md`, 'p'.repeat(options.planningBytes));
+    git(root, ['add', '.planning']);
+  }
   git(root, ['commit', '-m', 'feat: change role source']);
   const head = git(root, ['rev-parse', 'HEAD']);
   const headTree = git(root, ['rev-parse', 'HEAD^{tree}']);
@@ -405,6 +409,21 @@ test('integrator authenticates the merged ticket set and seals phase evidence', 
     assert.equal(result.artifact.outcome, 'passed');
     assert.equal(result.ticket_set_digest, packet.role_context.ticket_set_digest);
     assert.equal(fs.existsSync(path.join(fixture.root, `.planning/phases/${PHASE}/INTEGRATION.md`)), true);
+  } finally {
+    cleanupFixture(fixture);
+  }
+});
+
+test('integrator judges the code diff without conveyor planning state', async () => {
+  const fixture = setupRepository('integrator', { planningBytes: 1200 * 1024 });
+  let launched;
+  try {
+    await createClaudeRoleHost(hostOptions(fixture, {
+      onLaunch(prompt, selection) { launched = { prompt, selection }; },
+    })).run(request(fixture));
+    const diff = packetFromPrompt(launched.prompt).role_context.combined_diff.content;
+    assert.ok(diff.includes('diff --git a/src/role.txt b/src/role.txt'));
+    assert.equal(diff.includes('.planning/'), false);
   } finally {
     cleanupFixture(fixture);
   }
