@@ -3098,7 +3098,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/claude-role-host.cjs, tests/unit/claude-role-host.test.cjs]
     risk: high
     human_checkpoint: true
-    preauthorized: false
+    preauthorized: true
     branch: ticket/T-40-32-check-worktree-conditions-in-the-role-ho
     epic: epic/40-build-delivery-seams-and-clean-target-project-prs
     primary_parent: T-40-31
@@ -3114,7 +3114,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/claude-delivery-host.cjs, plugins/delivery-pipeline/scripts/codex-delivery-host.cjs, plugins/delivery-pipeline/scripts/claude-decompose-host.cjs, plugins/delivery-pipeline/scripts/codex-decompose-host.cjs, tests/unit/worktree-conditions-hosts.test.cjs, tests/unit/claude-delivery-host.test.cjs, tests/unit/codex-delivery-host.test.cjs, tests/unit/claude-decompose-host.test.cjs, tests/unit/codex-decompose-host.test.cjs]
     risk: high
     human_checkpoint: true
-    preauthorized: false
+    preauthorized: true
     branch: ticket/T-40-33-check-worktree-conditions-in-the-deliver
     epic: epic/40-build-delivery-seams-and-clean-target-project-prs
     primary_parent: T-40-09
@@ -3146,7 +3146,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/carry-proof.cjs, tests/unit/carry-proof.test.cjs, plugins/delivery-pipeline/scripts/gate-trailer.cjs, tests/unit/trailer.test.cjs, tests/unit/files-contract.test.cjs, tests/smoke/sentinel-smoke.sh]
     risk: high
     human_checkpoint: true
-    preauthorized: false
+    preauthorized: true
     branch: ticket/T-40-35-carry-a-conform-verdict-across-a-disjoin
     epic: epic/40-build-delivery-seams-and-clean-target-project-prs
     primary_parent: T-40-19
@@ -3162,7 +3162,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/role-artifact.cjs, tests/unit/role-artifact.test.cjs]
     risk: high
     human_checkpoint: true
-    preauthorized: false
+    preauthorized: true
     branch: ticket/T-40-36-validate-executor-artifacts-against-thei
     epic: epic/40-build-delivery-seams-and-clean-target-project-prs
     primary_parent: T-40-18
