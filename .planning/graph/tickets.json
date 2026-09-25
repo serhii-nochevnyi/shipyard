@@ -5215,7 +5215,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
-      "missing_paths": true,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/scripts/stop-gate.cjs",
         "plugins/delivery-pipeline/scripts/stop-gate-arm.cjs",
@@ -5474,6 +5474,59 @@
       "human_checkpoint": false,
       "preauthorized": false,
       "branch": "ticket/T-39-12-forward-the-declared-output-schema-to-ev",
+      "epic": "epic/39-remove-conveyor-session-friction",
+      "primary_parent": null,
+      "pr_base": "epic/39-remove-conveyor-session-friction",
+      "jira": null
+    },
+    "T-39-13": {
+      "title": "Carry the ADR-004 D8 legacy lookup and foreign-repo refusal into the Jira export plan",
+      "plan": ".planning/phases/39-remove-conveyor-session-friction/39-13-PLAN.md",
+      "phase": "39",
+      "repo": null,
+      "wave": 1,
+      "depends_on": [],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": false,
+      "files": [
+        "plugins/delivery-pipeline/scripts/jira-export.cjs",
+        "tests/unit/jira-export.test.cjs",
+        "plugins/delivery-pipeline/commands/decompose.md",
+        "tests/unit/decompose-friction-contract.test.cjs"
+      ],
+      "risk": "medium",
+      "type": "implementation",
+      "human_checkpoint": false,
+      "preauthorized": false,
+      "branch": "ticket/T-39-13-carry-the-adr-004-d8-legacy-lookup-and-f",
+      "epic": "epic/39-remove-conveyor-session-friction",
+      "primary_parent": null,
+      "pr_base": "epic/39-remove-conveyor-session-friction",
+      "jira": null
+    },
+    "T-39-14": {
+      "title": "Make the integrator and sentinel result identity contract unambiguous",
+      "plan": ".planning/phases/39-remove-conveyor-session-friction/39-14-PLAN.md",
+      "phase": "39",
+      "repo": null,
+      "wave": 1,
+      "depends_on": [],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": false,
+      "files": [
+        "plugins/delivery-pipeline/scripts/claude-role-host.cjs",
+        "tests/unit/claude-role-host.test.cjs",
+        "plugins/delivery-pipeline/references/integrator.md"
+      ],
+      "risk": "medium",
+      "type": "implementation",
+      "human_checkpoint": false,
+      "preauthorized": false,
+      "branch": "ticket/T-39-14-make-the-integrator-and-sentinel-result",
       "epic": "epic/39-remove-conveyor-session-friction",
       "primary_parent": null,
       "pr_base": "epic/39-remove-conveyor-session-friction",
@@ -5954,10 +6007,12 @@
       "wave": 3,
       "depends_on": [
         "T-40-01",
-        "T-39-12"
+        "T-39-12",
+        "T-39-14"
       ],
       "cross_phase_deps": [
-        "T-39-12"
+        "T-39-12",
+        "T-39-14"
       ],
       "cross_repo_deps": [],
       "unreachable_paths": false,
@@ -6177,11 +6232,13 @@
         "T-40-14",
         "T-40-19",
         "T-39-03",
-        "T-39-12"
+        "T-39-12",
+        "T-39-14"
       ],
       "cross_phase_deps": [
         "T-39-03",
-        "T-39-12"
+        "T-39-12",
+        "T-39-14"
       ],
       "cross_repo_deps": [],
       "unreachable_paths": false,
@@ -6281,11 +6338,13 @@
         "T-40-12",
         "T-40-17",
         "T-39-10",
-        "T-39-11"
+        "T-39-11",
+        "T-39-13"
       ],
       "cross_phase_deps": [
         "T-39-10",
-        "T-39-11"
+        "T-39-11",
+        "T-39-13"
       ],
       "cross_repo_deps": [],
       "unreachable_paths": false,
