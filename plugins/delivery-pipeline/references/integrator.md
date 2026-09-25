@@ -74,13 +74,17 @@ complete merged ticket set:
   "head_tree": "<40-char combined head tree sha>",
   "base": "<default-branch ref or commit>",
   "base_tree": "<40-char default-branch tree sha>",
-  "ticket_set": ["T-33-01", "T-33-02"],
+  "ticket_set": [{"id": "T-33-01", "pr": 123, "head": "<40-char PR head sha>", "base": "<PR base branch>", "branch": "<ticket branch>"}],
   "ticket_set_digest": "<sha256 of the complete ticket set>",
   "blocking_count": 0,
   "summary": "bounded synopsis",
   "findings": []
 }
 ```
+
+`ticket_set` is `role_context.ticket_set` copied verbatim, the exact array of
+`{id, pr, head, base, branch}` objects in host order; a string, a list of ids,
+a reordered or re-keyed array is refused.
 
 Every finding has a unique `id`, a `type`, an explicit `blocking` boolean, a
 summary, and enough evidence to act. Use only `fix-ticket`, `human-question`,
