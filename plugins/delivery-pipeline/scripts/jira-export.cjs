@@ -87,6 +87,7 @@ function sectionsOf(body) {
 function issueLabels(owner, repo, ticketId) {
   return {
     primary: `shipyard-${owner}-${repo}-${ticketId.toLowerCase()}`,
+    adr004: `shipyard-${owner}-${repo}-${ticketId}`,
     legacy: `shipyard-${ticketId}`,
   };
 }
@@ -98,11 +99,66 @@ function epicLabels(owner, repo, phase) {
   };
 }
 
-function lookupOf(project, labels) {
-  return {
-    jql: `project = ${project} AND labels = "${labels.primary}"`,
-    legacy_jql: `project = ${project} AND labels = "${labels.legacy}"`,
-  };
+function buildLookup(project, primaryLabel, repoSlug, sourcePath, pointer, fallbacks) {
+  const jqlFor = (label) => `project = ${project} AND labels = "${label}"`;
+  const lookup = [{
+    order: 1,
+    kind: 'primary',
+    label: primaryLabel,
+    jql: jqlFor(primaryLabel),
+    on_match: { action: 'update' },
+  }];
+  fallbacks.forEach((fb, i) => {
+    lookup.push({
+      order: i + 2,
+      kind: fb.kind,
+      label: fb.label,
+      jql: jqlFor(fb.label),
+      requires_source_of_truth: `${repoSlug}:${sourcePath}`,
+      accepts_unprefixed: sourcePath,
+      on_match: { action: 'migrate', add_label: primaryLabel, pointer, comment: 'label migrated' },
+      on_foreign: 'skip',
+    });
+  });
+  return lookup;
+}
+
+const SOURCE_OF_TRUTH_PREFIX_RE = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+:/;
+
+function classifySourceOfTruth(description, repo, planPath) {
+  const line = String(description).split(/\r\n|\r|\n/).find((l) => l.startsWith('Source of truth:'));
+  if (!line) return 'absent';
+  const value = line.slice('Source of truth:'.length).trim();
+  if (value.startsWith(`${repo}:`)) return 'this-repo';
+  if (!SOURCE_OF_TRUTH_PREFIX_RE.test(value) && value.startsWith(planPath)) return 'unprefixed';
+  return 'foreign';
+}
+
+// @contract: fail-closed — only primary or this-repo/unprefixed hits update/migrate; ambiguous/foreign never do.
+function resolveLookup(step, hits) {
+  for (const entry of step.lookup) {
+    const list = (hits && hits[entry.order]) || [];
+    if (list.length > 1) {
+      return { action: 'ambiguous', order: entry.order, keys: list.map((h) => h.key) };
+    }
+    if (list.length !== 1) continue;
+    const hit = list[0];
+    if (entry.kind === 'primary') {
+      return { action: 'update', key: hit.key };
+    }
+    const repo = entry.requires_source_of_truth.slice(0, -(entry.accepts_unprefixed.length + 1));
+    const cls = classifySourceOfTruth(hit.description, repo, entry.accepts_unprefixed);
+    if (cls === 'this-repo' || cls === 'unprefixed') {
+      return {
+        action: 'migrate',
+        key: hit.key,
+        add_label: entry.on_match.add_label,
+        pointer: entry.on_match.pointer,
+        comment: entry.on_match.comment,
+      };
+    }
+  }
+  return { action: 'create' };
 }
 
 function planExport(graphDir, opts = {}) {
@@ -152,14 +208,19 @@ function planExport(graphDir, opts = {}) {
       const info = phases.get(phase);
       const title = titleFromSlug(info.phaseDir);
       const labels = epicLabels(owner, repo, phase);
+      const sourcePath = `.planning/phases/${info.phaseDir}`;
+      const pointer = `Source of truth: ${owner}/${repo}:${sourcePath} (this issue is a generated projection)`;
       steps.push({
         step: 'epic',
         phase,
         issue_type: epicIssueType,
         summary: `[${phase}] ${title}`,
-        description: `Epic for phase ${phase}: ${title}.\nBranch: ${info.branch}`,
+        description: `Epic for phase ${phase}: ${title}.\nBranch: ${info.branch}\n${pointer}`,
         labels: [labels.primary],
-        lookup: lookupOf(project, labels),
+        lookup: buildLookup(project, labels.primary, `${owner}/${repo}`, sourcePath, pointer, [
+          { kind: 'legacy', label: labels.legacy },
+        ]),
+        on_no_match: 'create',
       });
     }
   }
@@ -184,7 +245,11 @@ function planExport(graphDir, opts = {}) {
       description,
       labels: [labels.primary],
       epic: skipEpics ? null : t.phase,
-      lookup: lookupOf(project, labels),
+      lookup: buildLookup(project, labels.primary, `${owner}/${repo}`, t.plan, pointer, [
+        { kind: 'adr-004', label: labels.adr004 },
+        { kind: 'legacy', label: labels.legacy },
+      ]),
+      on_no_match: 'create',
     });
   }
 
@@ -359,7 +424,8 @@ function cli() {
 
 module.exports = {
   planExport, recordKey, upsertJiraKey, topoOrder, sanitizeSlug, titleFromSlug,
-  bodyAfterFrontmatter, sectionsOf, issueLabels, epicLabels, lookupOf,
+  bodyAfterFrontmatter, sectionsOf, issueLabels, epicLabels,
+  classifySourceOfTruth, resolveLookup,
   TICKET_ID_RE, JIRA_KEY_RE, REPO_RE, PROJECT_RE, hasGraph,
 };
 

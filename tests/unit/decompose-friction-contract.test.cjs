@@ -90,6 +90,12 @@ test('Step 5 exports Jira by running and verbatim-executing the script-built pla
   assert.ok(has(step5, 'verbatim'));
   assert.ok(has(step5, 're-run `validate-graph.cjs`'));
   assert.ok(has(step5, 'never blocks or fails decomposition'));
+  assert.ok(has(step5, 'lookup'));
+  assert.ok(has(step5, 'in order'));
+  assert.ok(has(step5, 'requires_source_of_truth'));
+  assert.ok(has(step5, 'label migrated'));
+  assert.ok(has(step5, 'names another repository'));
+  assert.ok(has(step5, 'never update'));
 });
 
 done();

@@ -592,6 +592,16 @@ per run:
    step instructs, resolving the link type whose inward description reads
    `is blocked by` (`getIssueLinkTypes`) before calling `createIssueLink`.
    Do not reinterpret, reorder, skip or add a step the plan did not emit.
+   For each epic or issue step, run its `lookup` entries' `jql` in order.
+   Apply an entry's `on_match` only when the hit's `Source of truth` line
+   names this repository (matching the entry's `requires_source_of_truth`)
+   or carries no prefix (matching `accepts_unprefixed`). On a `migrate`
+   match, add `add_label`, replace the pointer line with `pointer`, and
+   post the comment `label migrated`. Never update an issue whose
+   source-of-truth line names another repository, or has none — skip it
+   and move to the next entry. Create the issue when no entry claims a
+   hit. Stop and report to the user when one entry's `jql` returns more
+   than one issue.
 3. For each issue the plan created or found, run `node
    ${CLAUDE_PLUGIN_ROOT}/scripts/jira-export.cjs record <T-NN-MM> <KEY>` —
    this writes `delivery.jira: <KEY>` back into that ticket's plan
