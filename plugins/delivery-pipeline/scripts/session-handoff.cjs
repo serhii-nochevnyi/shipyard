@@ -507,8 +507,22 @@ function publicState(state, scopeId, options = {}) {
   };
 }
 
+const CONTINUATION_EVIDENCE_BOUND_BYTES = 32 * 1024;
+const CHECKPOINT_TOTAL_BOUND_BYTES = 64 * 1024;
+const BOUNDARY_TYPES = new Set(['phase_boundary', 'durable_long_wait']);
+
 function containsForbiddenKey(key) {
   return /(?:password|secret|credential|api[_-]?key|authorization|cookie|prompt|transcript|messages?|body|raw_content|access_token|refresh_token)/i.test(key);
+}
+
+function checkpointByteLength(value) {
+  return Buffer.byteLength(JSON.stringify(value), 'utf8');
+}
+
+function refuseTooLarge(code, label, bytes, limit) {
+  refuse(code, `${label} is ${bytes} bytes, over the ${limit}-byte bound`, {
+    remedy: `move large evidence into artifact_refs (path + sha256) instead of inline ${label}`, bytes, limit,
+  });
 }
 
 function validateMetadata(value, pathName = 'checkpoint') {
@@ -535,33 +549,70 @@ function makeCheckpoint(identity, owner, scope, payload, timestamp) {
   if (body.pending_action_ids === undefined) body.pending_action_ids = [];
   if (body.dispatch_reservations === undefined) body.dispatch_reservations = [];
   if (body.dispatch_receipts === undefined) body.dispatch_receipts = [];
+  if (body.accepted_decisions === undefined) body.accepted_decisions = [];
+  if (body.unresolved_findings === undefined) body.unresolved_findings = [];
+  if (body.attempt_history === undefined) body.attempt_history = [];
+  if (body.pending_gate_ids === undefined) body.pending_gate_ids = [];
+  if (body.children === undefined) body.children = [];
+  if (body.children_unknown === undefined) body.children_unknown = false;
+  if (body.boundary === undefined) body.boundary = { type: 'durable_long_wait' };
   const required = ['plan_digests', 'adr_digests', 'policy_digests', 'head', 'base', 'worktrees',
     'current_snapshot', 'pending_wait_ids', 'pending_action_ids', 'dispatch_reservations',
-    'dispatch_receipts', 'artifact_refs', 'treatment', 'budgets', 'next_action'];
+    'dispatch_receipts', 'artifact_refs', 'treatment', 'budgets', 'next_action',
+    'accepted_decisions', 'unresolved_findings', 'attempt_history', 'pending_gate_ids',
+    'children', 'children_unknown', 'boundary'];
   for (const field of required) {
-    if (!Object.prototype.hasOwnProperty.call(body, field)) refuse('INVALID_CHECKPOINT', `checkpoint must include ${field}`);
+    if (!Object.prototype.hasOwnProperty.call(body, field)) refuse('INVALID_CHECKPOINT', `checkpoint must include ${field}`, { remedy: `include ${field} in the checkpoint payload` });
   }
-  for (const field of ['plan_digests', 'adr_digests', 'policy_digests', 'current_snapshot', 'treatment', 'budgets']) {
-    if (!object(body[field])) refuse('INVALID_CHECKPOINT', `${field} must be an object of bounded metadata`);
+  for (const field of ['plan_digests', 'adr_digests', 'policy_digests', 'current_snapshot', 'treatment', 'budgets', 'boundary']) {
+    if (!object(body[field])) refuse('INVALID_CHECKPOINT', `${field} must be an object of bounded metadata`, { remedy: `set ${field} to a plain object` });
   }
   for (const field of ['plan_digests', 'adr_digests', 'policy_digests']) {
     for (const [name, value] of Object.entries(body[field])) safeDigest(value, `${field}.${name}`);
   }
-  for (const field of ['pending_wait_ids', 'pending_action_ids', 'dispatch_reservations', 'dispatch_receipts', 'artifact_refs', 'worktrees']) {
-    if (!Array.isArray(body[field])) refuse('INVALID_CHECKPOINT', `${field} must be an array`);
+  for (const field of ['pending_wait_ids', 'pending_action_ids', 'dispatch_reservations', 'dispatch_receipts',
+    'artifact_refs', 'worktrees', 'accepted_decisions', 'unresolved_findings', 'attempt_history',
+    'pending_gate_ids', 'children']) {
+    if (!Array.isArray(body[field])) refuse('INVALID_CHECKPOINT', `${field} must be an array`, { remedy: `set ${field} to an array` });
+  }
+  if (typeof body.children_unknown !== 'boolean') refuse('INVALID_CHECKPOINT', 'children_unknown must be a boolean', { remedy: 'set children_unknown to true or false' });
+  if (!BOUNDARY_TYPES.has(body.boundary.type)) {
+    refuse('INVALID_BOUNDARY', 'checkpoint boundary.type must be phase_boundary or durable_long_wait', {
+      remedy: 'set boundary.type to phase_boundary or durable_long_wait before checkpointing',
+    });
+  }
+  if (body.children_unknown === true) {
+    refuse('ACTIVE_CHILD_UNKNOWN', 'checkpoint child enumeration is unknown', {
+      remedy: 'enumerate children and confirm none are active before checkpointing',
+    });
+  }
+  if (body.children.length) {
+    refuse('ACTIVE_CHILDREN', 'checkpoint found active children', {
+      remedy: 'resolve or await active children before checkpointing; do not orphan them',
+    });
+  }
+  const evidenceBytes = checkpointByteLength({
+    current_snapshot: body.current_snapshot, accepted_decisions: body.accepted_decisions,
+    unresolved_findings: body.unresolved_findings, attempt_history: body.attempt_history,
+    pending_gate_ids: body.pending_gate_ids,
+  });
+  if (evidenceBytes > CONTINUATION_EVIDENCE_BOUND_BYTES) {
+    refuseTooLarge('CHECKPOINT_EVIDENCE_TOO_LARGE', 'current_snapshot/decisions/findings/attempts/gates', evidenceBytes, CONTINUATION_EVIDENCE_BOUND_BYTES);
   }
   const checkpoint = { schema: 'shipyard.session-checkpoint.v1', version: 1, repository_id: identity.repository_id, run_id: owner.run_id, session_id: owner.session_id, expected_epoch: owner.epoch, scope: publicScope(scope), created_at: timestamp, ...body };
   if (checkpoint.schema !== 'shipyard.session-checkpoint.v1' || checkpoint.version !== 1
       || checkpoint.repository_id !== identity.repository_id || checkpoint.run_id !== owner.run_id
       || checkpoint.session_id !== owner.session_id || checkpoint.expected_epoch !== owner.epoch
       || !object(checkpoint.scope) || stable(checkpoint.scope) !== stable(publicScope(scope))) {
-    refuse('INVALID_CHECKPOINT', 'checkpoint identity does not match the acknowledged owner');
+    refuse('INVALID_CHECKPOINT', 'checkpoint identity does not match the acknowledged owner', { remedy: 'checkpoint through the acknowledged owner capability without altering identity fields' });
   }
   for (const field of ['head', 'base', 'source_revision', 'snapshot_digest', 'plan_digest', 'policy_digest']) if (checkpoint[field] !== undefined && checkpoint[field] !== null) safeDigest(checkpoint[field], field);
-  if (checkpoint.worktrees !== undefined && !Array.isArray(checkpoint.worktrees)) refuse('INVALID_CHECKPOINT', 'worktrees must be an array of references');
-  if (checkpoint.dispatch_reservations !== undefined && !Array.isArray(checkpoint.dispatch_reservations)) refuse('INVALID_CHECKPOINT', 'dispatch_reservations must be an array');
-  if (checkpoint.artifact_refs !== undefined && !Array.isArray(checkpoint.artifact_refs)) refuse('INVALID_CHECKPOINT', 'artifact_refs must be an array');
-  if (typeof checkpoint.next_action !== 'string' || !checkpoint.next_action.trim()) refuse('INVALID_CHECKPOINT', 'checkpoint must name its exact next_action');
+  if (checkpoint.worktrees !== undefined && !Array.isArray(checkpoint.worktrees)) refuse('INVALID_CHECKPOINT', 'worktrees must be an array of references', { remedy: 'set worktrees to an array' });
+  if (checkpoint.dispatch_reservations !== undefined && !Array.isArray(checkpoint.dispatch_reservations)) refuse('INVALID_CHECKPOINT', 'dispatch_reservations must be an array', { remedy: 'set dispatch_reservations to an array' });
+  if (checkpoint.artifact_refs !== undefined && !Array.isArray(checkpoint.artifact_refs)) refuse('INVALID_CHECKPOINT', 'artifact_refs must be an array', { remedy: 'set artifact_refs to an array' });
+  if (typeof checkpoint.next_action !== 'string' || !checkpoint.next_action.trim()) refuse('INVALID_CHECKPOINT', 'checkpoint must name its exact next_action', { remedy: 'set next_action to the precise next step' });
+  const totalBytes = checkpointByteLength(checkpoint);
+  if (totalBytes > CHECKPOINT_TOTAL_BOUND_BYTES) refuseTooLarge('CHECKPOINT_TOO_LARGE', 'checkpoint', totalBytes, CHECKPOINT_TOTAL_BOUND_BYTES);
   return checkpoint;
 }
 
@@ -570,47 +621,53 @@ function validatePinnedReferences(checkpoint) {
     .filter((entry) => typeof entry === 'string' && entry.trim())
     .map((entry) => {
       try { return fs.realpathSync(entry); }
-      catch (error) { refuse('MISSING_REFERENCE', `checkpoint worktree is unavailable: ${error.message}`); }
+      catch (error) { refuse('MISSING_REFERENCE', `checkpoint worktree is unavailable: ${error.message}`, { remedy: 'restore the worktree or drop it from the checkpoint before resuming' }); }
     });
   for (const reference of checkpoint.artifact_refs) {
     if (!object(reference) || typeof reference.path !== 'string' || !reference.path.trim()) {
-      refuse('INVALID_CHECKPOINT', 'artifact references need a path');
+      refuse('INVALID_CHECKPOINT', 'artifact references need a path', { remedy: 'set artifact_refs[].path to a relative path inside the owned worktree' });
     }
     const raw = path.resolve(reference.root || roots[0] || process.cwd(), reference.path);
     let real;
     try { real = fs.realpathSync(raw); }
-    catch (error) { refuse('MISSING_REFERENCE', `checkpoint artifact reference is unavailable: ${error.message}`); }
+    catch (error) { refuse('MISSING_REFERENCE', `checkpoint artifact reference is unavailable: ${error.message}`, { remedy: `restore ${reference.path} in the owned worktree or drop it from artifact_refs` }); }
     if (!roots.some((root) => real === root || real.startsWith(`${root}${path.sep}`))) {
-      refuse('PATH_ESCAPE', 'checkpoint artifact reference escapes its owned worktree');
+      refuse('PATH_ESCAPE', 'checkpoint artifact reference escapes its owned worktree', { remedy: 'reference only paths inside the owned worktree' });
     }
     if (reference.digest !== undefined) {
       safeDigest(reference.digest, `artifact_refs.${reference.path}.digest`);
       let actual;
       try { actual = crypto.createHash('sha256').update(fs.readFileSync(real)).digest('hex'); }
-      catch (error) { refuse('MISSING_REFERENCE', `checkpoint artifact reference cannot be read: ${error.message}`); }
-      if (actual !== reference.digest) refuse('STALE_REFERENCE', `checkpoint artifact reference changed: ${reference.path}`);
+      catch (error) { refuse('MISSING_REFERENCE', `checkpoint artifact reference cannot be read: ${error.message}`, { remedy: `restore ${reference.path} in the owned worktree or drop it from artifact_refs` }); }
+      if (actual !== reference.digest) refuse('STALE_REFERENCE', `checkpoint artifact reference changed: ${reference.path}`, { remedy: `re-pin the digest for ${reference.path} after confirming the change, or restore its original content` });
     }
   }
   return true;
 }
 
 function assertRevalidation(result, checkpoint) {
-  if (!object(result) || result.valid !== true) refuse('REVALIDATION_REQUIRED', 'successor revalidation must return explicit valid evidence');
+  if (!object(result) || result.valid !== true) refuse('REVALIDATION_REQUIRED', 'successor revalidation must return explicit valid evidence', { remedy: 'call revalidate() and return { valid: true, ... } after checking live state' });
   if (object(result)) {
-    if (result.clean === false) refuse('DIRTY_WORK', 'successor revalidation found dirty owned work');
-    if (result.children_unknown === true || result.unknown_children === true) refuse('ACTIVE_CHILD_UNKNOWN', 'successor child enumeration is unknown');
-    if (Array.isArray(result.children) && result.children.length) refuse('ACTIVE_CHILDREN', 'successor revalidation found active children');
-    if (result.active_child === true) refuse('ACTIVE_CHILDREN', 'successor revalidation found an active child');
-    if (result.changed_head === true || result.changed_base === true || result.changed_pr_head === true) refuse('LIVE_STATE_STALE', 'successor live state changed after checkpoint');
+    if (result.clean === false) refuse('DIRTY_WORK', 'successor revalidation found dirty owned work', { remedy: 'commit or discard the dirty work before acknowledging takeover' });
+    if (result.children_unknown === true || result.unknown_children === true) refuse('ACTIVE_CHILD_UNKNOWN', 'successor child enumeration is unknown', { remedy: 'enumerate children and confirm none are active before acknowledging takeover' });
+    if (Array.isArray(result.children) && result.children.length) refuse('ACTIVE_CHILDREN', 'successor revalidation found active children', { remedy: 'resolve or await active children before acknowledging takeover' });
+    if (result.active_child === true) refuse('ACTIVE_CHILDREN', 'successor revalidation found an active child', { remedy: 'resolve or await the active child before acknowledging takeover' });
+    if (result.changed_head === true || result.changed_base === true || result.changed_pr_head === true) refuse('LIVE_STATE_STALE', 'successor live state changed after checkpoint', { remedy: 'resume against the current live head/base and re-checkpoint if needed' });
+    if (result.reviews_incomplete === true) refuse('REVIEW_INCOMPLETE', 'successor revalidation found incomplete reviews', { remedy: 'wait for reviews to complete before acknowledging takeover' });
+    if (result.checks_failing === true) refuse('CHECKS_FAILING', 'successor revalidation found failing checks', { remedy: 'wait for checks to pass before acknowledging takeover' });
+    if (Array.isArray(result.gates)) {
+      const failed = result.gates.filter((gate) => object(gate) && gate.status === 'failed').map((gate) => gate.id || 'unknown-gate');
+      if (failed.length) refuse('GATE_FAILED', `successor revalidation found failed gate(s): ${failed.join(', ')}`, { remedy: 'resolve the failed gate before acknowledging takeover', gates: failed });
+    }
     const liveHead = result.head === undefined || result.head === null ? result.pr_head : result.head;
     const liveBase = result.base === undefined || result.base === null ? result.base_ref : result.base;
     if (checkpoint && liveHead !== undefined && liveHead !== null
         && checkpoint.head !== undefined && checkpoint.head !== null && liveHead !== checkpoint.head) {
-      refuse('LIVE_STATE_STALE', 'successor head differs from the checkpoint');
+      refuse('LIVE_STATE_STALE', 'successor head differs from the checkpoint', { remedy: 'resume against the current live head and re-checkpoint if needed' });
     }
     if (checkpoint && liveBase !== undefined && liveBase !== null
         && checkpoint.base !== undefined && checkpoint.base !== null && liveBase !== checkpoint.base) {
-      refuse('LIVE_STATE_STALE', 'successor base differs from the checkpoint');
+      refuse('LIVE_STATE_STALE', 'successor base differs from the checkpoint', { remedy: 'resume against the current live base and re-checkpoint if needed' });
     }
   }
   return clone(result);
@@ -731,7 +788,7 @@ function createSessionHandoff(options = {}) {
     const state = readEnvelope(store, identity);
     const scope = state.scopes[candidate.scope_id];
     const stored = scope && scope.candidates.find((entry) => entry.candidate_id === candidate.candidate_id);
-    if (!stored || stored.token_hash !== digest(candidate.token) || stored.run_id !== candidate.run_id) refuse('HANDOFF_LOST', 'successor candidate is no longer pending acknowledgement');
+    if (!stored || stored.token_hash !== digest(candidate.token) || stored.run_id !== candidate.run_id) refuse('HANDOFF_LOST', 'successor candidate is no longer pending acknowledgement', { remedy: 'call resume again to register a fresh successor candidate; only one successor can win the acknowledgement race' });
     return { state, scope, candidate, stored };
   }
 
@@ -800,10 +857,10 @@ function createSessionHandoff(options = {}) {
     const current = currentOwner(capability);
     const timestamp = nowIso(clock);
     const value = makeCheckpoint(identity, current.owner, current.scope.scope, payload, timestamp);
-    if (current.scope.pending_launch) refuse('AMBIGUOUS_LAUNCH', 'cannot checkpoint while a launch reservation is unresolved');
+    if (current.scope.pending_launch) refuse('AMBIGUOUS_LAUNCH', 'cannot checkpoint while a launch reservation is unresolved', { remedy: 'complete or abort the pending launch reservation before checkpointing' });
     const result = mutate((state) => {
       const scope = state.scopes[current.owner.scope_id];
-      if (!scope || scope.owner.token_hash !== digest(current.owner.token)) refuse('SESSION_FENCED', 'owner changed before checkpoint');
+      if (!scope || scope.owner.token_hash !== digest(current.owner.token)) refuse('SESSION_FENCED', 'owner changed before checkpoint', { remedy: 'resume and acknowledge to re-establish ownership before checkpointing' });
       scope.status = 'checkpointed'; scope.owner.status = 'checkpointed'; scope.checkpoint = value;
       scope.history.push({ event: 'checkpoint', run_id: current.owner.run_id, epoch: current.owner.epoch, at: timestamp });
       return publicScopeState(scope);
@@ -818,8 +875,8 @@ function createSessionHandoff(options = {}) {
 
   controller.resume = function resume(input = {}) {
     const found = findScope(read(), input);
-    if (!found.record || found.record.status !== 'checkpointed' || !found.record.checkpoint) refuse('NO_CHECKPOINT', 'no checkpoint is available for this delivery scope');
-    if (found.record.pending_launch) refuse('AMBIGUOUS_LAUNCH', 'unresolved launch must be reconciled before takeover');
+    if (!found.record || found.record.status !== 'checkpointed' || !found.record.checkpoint) refuse('NO_CHECKPOINT', 'no checkpoint is available for this delivery scope', { remedy: 'checkpoint at a safe boundary before attempting to resume' });
+    if (found.record.pending_launch) refuse('AMBIGUOUS_LAUNCH', 'unresolved launch must be reconciled before takeover', { remedy: 'reconcile the ambiguous launch with reconcileLaunch before resuming' });
     validatePinnedReferences(found.record.checkpoint);
     const runId = safeId(input.runId || input.run_id || randomId('run'), 'run_id');
     const sessionId = safeId(input.sessionId || input.session_id || randomId('session'), 'session_id');
@@ -829,7 +886,7 @@ function createSessionHandoff(options = {}) {
     let candidateId;
     const result = mutate((state) => {
       const scope = state.scopes[found.record.scope.scope_id];
-      if (!scope || scope.status !== 'checkpointed' || scope.pending_launch) refuse(scope && scope.pending_launch ? 'AMBIGUOUS_LAUNCH' : 'HANDOFF_LOST', 'checkpoint changed before successor registration');
+      if (!scope || scope.status !== 'checkpointed' || scope.pending_launch) refuse(scope && scope.pending_launch ? 'AMBIGUOUS_LAUNCH' : 'HANDOFF_LOST', 'checkpoint changed before successor registration', { remedy: 'reconcile any ambiguous launch, then call resume again to register a fresh successor candidate' });
       candidateId = randomId('candidate'); const token = randomId('successor');
       const stored = { candidate_id: candidateId, run_id: runId, session_id: sessionId, epoch: scope.epoch, token_hash: digest(token), runtime, status: 'preparing', created_at: timestamp };
       scope.candidates.push(stored); scope.history.push({ event: 'resume', candidate_id: candidateId, run_id: runId, epoch: scope.epoch, at: timestamp });
@@ -846,20 +903,20 @@ function createSessionHandoff(options = {}) {
 
   controller.acknowledge = function acknowledge(candidateValue, optionsForAck = {}) {
     const candidate = requireCandidate(candidateValue);
-    if (candidate.scope.pending_launch) refuse('AMBIGUOUS_LAUNCH', 'unresolved launch must be reconciled before acknowledgement');
-    if (typeof optionsForAck.revalidate !== 'function') refuse('REVALIDATION_REQUIRED', 'successor must revalidate live head, worktree, reviews, checks and children before acknowledgement');
+    if (candidate.scope.pending_launch) refuse('AMBIGUOUS_LAUNCH', 'unresolved launch must be reconciled before acknowledgement', { remedy: 'reconcile the ambiguous launch with reconcileLaunch before acknowledging' });
+    if (typeof optionsForAck.revalidate !== 'function') refuse('REVALIDATION_REQUIRED', 'successor must revalidate live head, worktree, reviews, checks and children before acknowledgement', { remedy: 'pass a revalidate() function that checks live head/base/worktree, reviews/checks and children' });
     validatePinnedReferences(candidate.scope.checkpoint);
     let evidence;
     try { evidence = assertRevalidation(optionsForAck.revalidate(publicScopeState(candidate.scope)), candidate.scope.checkpoint); }
-    catch (error) { if (error && error.code) throw error; refuse('LIVE_STATE_STALE', `successor revalidation failed: ${error.message}`); }
+    catch (error) { if (error && error.code) throw error; refuse('LIVE_STATE_STALE', `successor revalidation failed: ${error.message}`, { remedy: 're-run revalidate() after confirming live head/base/worktree, reviews/checks and children' }); }
     const timestamp = nowIso(clock);
     let capability;
     const result = mutate((state) => {
       const scope = state.scopes[candidate.scope.scope.scope_id];
       const stored = scope && scope.candidates.find((entry) => entry.candidate_id === candidate.candidate.candidate_id);
       if (!scope || !stored || stored.token_hash !== digest(candidate.candidate.token) || scope.status !== 'checkpointed' || scope.pending_launch) {
-        if (scope && scope.pending_launch) refuse('AMBIGUOUS_LAUNCH', 'unresolved launch appeared before acknowledgement');
-        refuse('HANDOFF_LOST', 'successor lost the compare-and-swap acknowledgement');
+        if (scope && scope.pending_launch) refuse('AMBIGUOUS_LAUNCH', 'unresolved launch appeared before acknowledgement', { remedy: 'reconcile the ambiguous launch with reconcileLaunch before acknowledging' });
+        refuse('HANDOFF_LOST', 'successor lost the compare-and-swap acknowledgement', { remedy: 'call resume again to register a fresh successor candidate; only one successor can win the acknowledgement race' });
       }
       const prior = scope.owner; const epoch = state.next_epoch++; const token = candidate.candidate.token;
       scope.owner = { run_id: candidate.candidate.run_id, session_id: candidate.candidate.session_id, epoch, token_hash: digest(token), runtime: candidate.candidate.runtime, status: 'acknowledged', started_at: candidate.candidate.created_at, acknowledged_at: timestamp, worktree: identity.worktree };
