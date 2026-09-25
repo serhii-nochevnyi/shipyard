@@ -41,7 +41,7 @@ test('unknown or unsupported capability falls back to the preceding policy rung'
   const fallback = policy.resolveDispatch(capability.fallbackInput({ runtime: 'claude', role: 'arch-review' }, resolution));
   assert.equal(fallback.rung, 'critical');
   assert.equal(fallback.model, 'claude-opus-5-5');
-  assert.equal(fallback.effort, 'max');
+  assert.equal(fallback.effort, 'high');
 });
 
 test('repair model escalation needs a completed predecessor identity', () => {

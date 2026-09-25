@@ -289,7 +289,7 @@ test('arch-review launches through ADR-014 and seals only the matching PR judgme
     })).run(request(fixture));
     const packet = packetFromPrompt(launched.prompt);
     assert.equal(launched.selection.model, 'claude-opus-5-5');
-    assert.equal(launched.selection.effort, 'max');
+    assert.equal(launched.selection.effort, 'high');
     assert.equal(launched.selection.schema.type, 'object');
     assert.deepEqual(launched.selection.schema.properties.pr, { type: 'integer', minimum: 1 });
     assert.deepEqual(launched.selection.schema.properties.blocking_count, { type: 'integer', minimum: 0 });

@@ -73,7 +73,7 @@ function repairFixture(resultOverride = {}) {
     parallel: async (thunks) => Promise.all(thunks.map((thunk) => thunk())),
     capabilities: {
       supportedModels: [CLAUDE_MODEL_ALIASES.opus],
-      supportedEfforts: ['medium', 'max'],
+      supportedEfforts: ['medium', 'high'],
       observedModel: true,
       observedEffort: true,
     },
@@ -119,7 +119,7 @@ function roleWorkflowFixture({ role, ticket, pr, result, evidenceText }) {
     parallel: async (thunks) => Promise.all(thunks.map((thunk) => thunk())),
     capabilities: {
       supportedModels: [CLAUDE_MODEL_ALIASES.opus],
-      supportedEfforts: ['medium', 'max'],
+      supportedEfforts: ['medium', 'high'],
       observedModel: true,
       observedEffort: true,
     },
@@ -138,7 +138,7 @@ function roleArgs(fixture, extra = {}) {
         worktreePath: fixture.root,
         baseRef: 'main',
         model: 'claude-opus-5-5',
-        effort: 'max',
+        effort: 'high',
       }],
       driftRefPath: '/plugin/references/drift-check.md',
       ...extra,
@@ -466,11 +466,11 @@ test('the direct trusted consumer seals and rereads drift evidence with the same
       prompt: 'direct drift result',
       role: 'drift-check',
       model: 'claude-opus-5-5',
-      effort: 'max',
+      effort: 'high',
       context: { ticket },
       capabilities: {
         supportedModels: [CLAUDE_MODEL_ALIASES.opus],
-        supportedEfforts: ['max'],
+        supportedEfforts: ['high'],
         observedModel: true,
         observedEffort: true,
       },
@@ -478,9 +478,9 @@ test('the direct trusted consumer seals and rereads drift evidence with the same
       applicationEvidence: ({ result: applied }) => transcriptEvidence({
         launch_id: 'direct-drift-launch',
         applied_model: 'claude-opus-5-5',
-        applied_effort: 'max',
+        applied_effort: 'high',
         observed_model: 'claude-opus-5-5',
-        observed_effort: 'max',
+        observed_effort: 'high',
         result_id: applied.id,
       }),
     });
