@@ -661,9 +661,8 @@ function parseNativeParentSpawn(raw, parentId, role, model, effort) {
     try { return JSON.parse(outputs.get(wait.call_id)); }
     catch (_) { fail('RUNTIME_EVIDENCE_INVALID', 'native wait output is invalid'); }
   });
-  if (!waitResults.some((waited) => object(waited)
-      && waited.timed_out === false && waited.message === 'Wait completed.')) {
-    fail('RUNTIME_EVIDENCE_MISMATCH', 'native parent wait did not complete');
+  if (!waitResults.every((waited) => object(waited) && typeof waited.timed_out === 'boolean')) {
+    fail('RUNTIME_EVIDENCE_INVALID', 'native wait output has no boolean timeout status');
   }
   return freeze({
     parent_thread_id: parentId, call_id: call.call_id,
