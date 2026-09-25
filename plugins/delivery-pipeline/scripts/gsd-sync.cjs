@@ -22,7 +22,6 @@ const GRAPH_DIR = path.join(ROOT, '.planning', 'graph');
 const PHASES_DIR = path.join(ROOT, '.planning', 'phases');
 const ROADMAP = path.join(ROOT, '.planning', 'ROADMAP.md');
 const PROJECT = path.join(ROOT, '.planning', 'PROJECT.md');
-const CONFIG = path.join(ROOT, '.planning', 'config.json');
 const TICKETS = path.join(GRAPH_DIR, 'tickets.json');
 const DELIVERY_STATE = path.join(GRAPH_DIR, 'delivery-state.json');
 const DELIVERY_FRONT = path.join(GRAPH_DIR, 'delivery-front.json');
@@ -150,13 +149,6 @@ function normalizeForHash(text) {
   return String(text).replace(/\r\n/g, '\n').replace(/\r/g, '\n');
 }
 
-function sourceFileEntries(files) {
-  return files
-    .filter((file) => fs.existsSync(file))
-    .map((file) => [posixRelative(file), normalizeForHash(fs.readFileSync(file, 'utf8'))])
-    .sort((a, b) => a[0].localeCompare(b[0]));
-}
-
 // delivery-state.json is both a durable observation cache and a heartbeat
 // record. The projection reads only the ticket status, PR number, completion
 // timestamp and the status clock when it is the activity fallback;
@@ -165,22 +157,21 @@ function sourceFileEntries(files) {
 // native GSD artifacts. Hash the exact stable view the projection consumes so
 // a babysit heartbeat does not make every native file stale while still making
 // every visible delivery change invalidate it.
+function stablePlanFacts(state, plan) {
+  const entry = state && typeof state === 'object' ? state[plan.ticket] : null;
+  const mergedAt = entry && (entry.mergedAt || entry.merged_at
+    || (entry.status === 'merged' ? entry.since : null));
+  return {
+    ticket: plan.ticket,
+    status: deliveryStatus(entry),
+    pr: entry && entry.pr !== undefined ? entry.pr : null,
+    merged_at: mergedAt || null,
+    since: mergedAt ? null : (entry && entry.since !== undefined ? entry.since : null),
+  };
+}
+
 function deliveryStateProjection(state, plans) {
-  return JSON.stringify(plans
-    .map((plan) => {
-      const entry = state && typeof state === 'object' ? state[plan.ticket] : null;
-      const mergedAt = entry && (entry.mergedAt || entry.merged_at
-        || (entry.status === 'merged' ? entry.since : null));
-      return {
-        ticket: plan.ticket,
-        status: deliveryStatus(entry),
-        pr: entry && entry.pr !== undefined ? entry.pr : null,
-        merged_at: mergedAt || null,
-        // Once an explicit or merged-status completion time exists, `since`
-        // cannot affect the projection's last-activity value and is excluded.
-        since: mergedAt ? null : (entry && entry.since !== undefined ? entry.since : null),
-      };
-    })
+  return JSON.stringify(plans.map((plan) => stablePlanFacts(state, plan))
     .sort((a, b) => a.ticket.localeCompare(b.ticket)));
 }
 
@@ -652,11 +643,16 @@ function phaseNameMap(roadmapInfo, existingDirs) {
   }));
 }
 
-function projectRequirements(roadmapInfo, phases, evidenceByPhase, fingerprint, coreValue) {
+function requirementsPhaseMap(roadmapInfo, phases) {
   const phaseForRequirement = new Map();
   for (const phase of phases) {
     for (const req of parsePhaseRequirements(roadmapInfo.clean, phase.number)) phaseForRequirement.set(req, phase.number);
   }
+  return phaseForRequirement;
+}
+
+function projectRequirements(roadmapInfo, phases, evidenceByPhase, fingerprint, coreValue) {
+  const phaseForRequirement = requirementsPhaseMap(roadmapInfo, phases);
   const lines = [
     '# Requirements: shipyard',
     '',
@@ -1043,6 +1039,88 @@ function findObsoleteGeneratedFiles(expected, { prune = true } = {}) {
   return obsolete;
 }
 
+function phaseMembers(phase, planRecords) {
+  return planRecords
+    .filter((plan) => plan.phase === phase.number)
+    .map((plan) => ({ ticket: plan.ticket, status: plan.delivery_status }))
+    .sort((a, b) => a.ticket.localeCompare(b.ticket));
+}
+
+function phaseEvidenceSnapshot(phase, evidence) {
+  return {
+    number: phase.number,
+    title: phase.title,
+    dirName: phase.dirName,
+    status: evidence.status,
+    reason: evidence.reason,
+    merged: evidence.merged,
+    planCount: evidence.plans.length,
+  };
+}
+
+function ticketFingerprint(plan, state) {
+  return sourceFingerprint([
+    [posixRelative(plan.file), normalizeForHash(plan.raw)],
+    ['delivery-facts', JSON.stringify(stablePlanFacts(state, plan))],
+  ]);
+}
+
+function phaseFingerprint(phase, planRecords, evidence) {
+  return sourceFingerprint([
+    ['declaration', JSON.stringify({ number: phase.number, title: phase.title, dirName: phase.dirName })],
+    ['members', JSON.stringify(phaseMembers(phase, planRecords))],
+    ['integration', JSON.stringify({
+      status: evidence.integration.status,
+      reason: evidence.integration.reason,
+      verification_status: evidence.verification.status,
+      verification_reason: evidence.verification.reason,
+    })],
+  ]);
+}
+
+function stateFingerprint({ phases, planRecords, evidenceByPhase, state, coreValue, blockers, lastActivity, controller }) {
+  const phaseViews = phases.map((phase) => phaseEvidenceSnapshot(phase, evidenceByPhase.get(phase.number)));
+  const entries = [
+    ['phases', JSON.stringify(phaseViews)],
+    ['plans', deliveryStateProjection(state, planRecords)],
+    ['core-value', coreValue],
+    ['blockers', JSON.stringify(blockers)],
+    ['activity', lastActivity],
+  ];
+  if (controller.runs.length || controller.observations.length) entries.push(['controller', JSON.stringify(controller)]);
+  return sourceFingerprint(entries);
+}
+
+function requirementsFingerprint({ roadmapInfo, phases, evidenceByPhase, coreValue }) {
+  const phaseForRequirement = requirementsPhaseMap(roadmapInfo, phases);
+  const mapping = [...phaseForRequirement.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+  const statuses = phases
+    .map((phase) => ({ number: phase.number, status: evidenceByPhase.get(phase.number).status }))
+    .sort((a, b) => a.number - b.number);
+  return sourceFingerprint([
+    ['requirements', JSON.stringify(roadmapInfo.requirements)],
+    ['mapping', JSON.stringify(mapping)],
+    ['core-value', coreValue],
+    ['phase-status', JSON.stringify(statuses)],
+  ]);
+}
+
+function roadmapBlockFingerprint({ roadmapInfo, phases, evidenceByPhase, planRecords }) {
+  const phaseViews = phases.map((phase) => {
+    const snapshot = phaseEvidenceSnapshot(phase, evidenceByPhase.get(phase.number));
+    return { number: snapshot.number, title: snapshot.title, merged: snapshot.merged, planCount: snapshot.planCount, status: snapshot.status };
+  });
+  const totals = {
+    merged: planRecords.filter((plan) => plan.delivery_status === 'merged').length,
+    total: planRecords.length,
+  };
+  return sourceFingerprint([
+    ['roadmap', `${normalizeForHash(roadmapInfo.clean).trimEnd()}\n`],
+    ['phases', JSON.stringify(phaseViews)],
+    ['totals', JSON.stringify(totals)],
+  ]);
+}
+
 function buildSnapshot({ phase: focusPhase = null, adoptNative = false } = {}) {
   const roadmapText = readText(ROADMAP);
   const projectText = readText(PROJECT);
@@ -1081,47 +1159,36 @@ function buildSnapshot({ phase: focusPhase = null, adoptNative = false } = {}) {
   // delivery-front.json is a live dispatch cache. It carries generated_at,
   // observed_at, generation, and dispatch timestamps that change on ordinary
   // state-sync heartbeats, while none of those fields feed this projection.
-  // Hashing it would make an otherwise unchanged native projection fail
-  // --check after every delivery round. The authoritative delivery facts are
-  // already represented by the stable subset of delivery-state.json below, so
-  // keep the volatile front and heartbeat fields out of the source fingerprint
-  // while still validating their shape above.
-  const sourceFiles = [ROADMAP, PROJECT, CONFIG, TICKETS, DELIVERY_STATE];
-  for (const plan of planRecords) sourceFiles.push(plan.file);
-  for (const phase of phaseList) {
-    const integration = path.join(PHASES_DIR, phase.dirName, 'INTEGRATION.md');
-    if (fs.existsSync(integration)) sourceFiles.push(integration);
-  }
-  const sourceEntries = sourceFileEntries(sourceFiles.filter((file) => file !== ROADMAP && file !== DELIVERY_STATE));
-  sourceEntries.push([
-    posixRelative(DELIVERY_STATE),
-    deliveryStateProjection(state, planRecords),
-  ]);
-  if (controller.runs.length || controller.observations.length) {
-    sourceEntries.push([posixRelative(RUN_STORE), JSON.stringify(controller)]);
-  }
-  // The first publication appends the marked block after the human prose; the
-  // block remover must not make the source fingerprint depend on whether that
-  // block has already existed (one extra trailing blank line was enough to make
-  // the second run rewrite every generated artifact).
-  sourceEntries.push([posixRelative(ROADMAP), `${normalizeForHash(roadmapInfo.clean).trimEnd()}\n`]);
-  sourceEntries.sort((a, b) => a[0].localeCompare(b[0]));
-  const fingerprint = sourceFingerprint(sourceEntries);
   const coreValue = parseProjectCore(projectText);
   const lastActivity = latestActivity(planRecords);
+  const ticketFingerprints = new Map(planRecords.map((plan) => [plan.ticket, ticketFingerprint(plan, state)]));
+  const phaseFingerprints = new Map(phaseList.map((phase) =>
+    [phase.number, phaseFingerprint(phase, planRecords, evidenceByPhase.get(phase.number))]));
+  const stateFp = stateFingerprint({ phases: phaseList, planRecords, evidenceByPhase, state, coreValue, blockers, lastActivity, controller });
+  const requirementsFp = requirementsFingerprint({ roadmapInfo, phases: phaseList, evidenceByPhase, coreValue });
+  const roadmapBlockFp = roadmapBlockFingerprint({ roadmapInfo, phases: phaseList, evidenceByPhase, planRecords });
+  // @invariant: fingerprint is reported as source_fingerprint; each file above embeds its own fp instead.
+  const fingerprint = sourceFingerprint([
+    ...[...ticketFingerprints.entries()].map(([ticket, fp]) => [`ticket:${ticket}`, fp]),
+    ...[...phaseFingerprints.entries()].map(([number, fp]) => [`phase:${number}`, fp]),
+    ['state', stateFp],
+    ['requirements', requirementsFp],
+    ['roadmap', roadmapBlockFp],
+  ].sort((a, b) => a[0].localeCompare(b[0])));
   const expected = new Map();
-  expected.set(path.join(ROOT, '.planning', 'STATE.md'), renderState({ phases: phaseList, planRecords, evidenceByPhase, fingerprint, coreValue, blockers, lastActivity, controller }));
-  expected.set(path.join(ROOT, '.planning', 'REQUIREMENTS.md'), projectRequirements(roadmapInfo, phaseList, evidenceByPhase, fingerprint, coreValue));
-  expected.set(ROADMAP, replaceRoadmapBlock(roadmapText || '', renderRoadmapBlock({ phases: phaseList, evidenceByPhase, planRecords, fingerprint })));
+  expected.set(path.join(ROOT, '.planning', 'STATE.md'), renderState({ phases: phaseList, planRecords, evidenceByPhase, fingerprint: stateFp, coreValue, blockers, lastActivity, controller }));
+  expected.set(path.join(ROOT, '.planning', 'REQUIREMENTS.md'), projectRequirements(roadmapInfo, phaseList, evidenceByPhase, requirementsFp, coreValue));
+  expected.set(ROADMAP, replaceRoadmapBlock(roadmapText || '', renderRoadmapBlock({ phases: phaseList, evidenceByPhase, planRecords, fingerprint: roadmapBlockFp })));
   for (const plan of planRecords.filter((record) => focusPhase == null || record.phase === Number(focusPhase))) {
-    expected.set(path.join(path.dirname(plan.file), plan.fileName.replace(/-PLAN\.md$/, '-SUMMARY.md')), renderSummary(plan, fingerprint));
+    expected.set(path.join(path.dirname(plan.file), plan.fileName.replace(/-PLAN\.md$/, '-SUMMARY.md')), renderSummary(plan, ticketFingerprints.get(plan.ticket)));
   }
   for (const phase of phaseList) {
     if (focusPhase != null && phase.number !== Number(focusPhase)) continue;
     const evidence = evidenceByPhase.get(phase.number);
     const dir = path.join(PHASES_DIR, phase.dirName);
-    expected.set(path.join(dir, `${phase.dirName}-UAT.md`), renderUat(phase, evidence, fingerprint));
-    expected.set(path.join(dir, `${phase.dirName}-VERIFICATION.md`), renderVerification(phase, evidence, fingerprint));
+    const phaseFp = phaseFingerprints.get(phase.number);
+    expected.set(path.join(dir, `${phase.dirName}-UAT.md`), renderUat(phase, evidence, phaseFp));
+    expected.set(path.join(dir, `${phase.dirName}-VERIFICATION.md`), renderVerification(phase, evidence, phaseFp));
   }
   const generated = [...expected.entries()].map(([file, content]) => generatedFileContent(file, content, { adoptNative }));
   const obsolete = findObsoleteGeneratedFiles([...expected.keys()], { prune: focusPhase == null });
