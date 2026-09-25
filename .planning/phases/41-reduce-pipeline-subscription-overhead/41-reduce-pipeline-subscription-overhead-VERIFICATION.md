@@ -1,8 +1,8 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 85dd82ab7a89132812dc39cc067903e748430c615e2cba9239876cd9d2d291ec
 phase: 41
 status: human_needed
-shipyard_source_fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+shipyard_source_fingerprint: 85dd82ab7a89132812dc39cc067903e748430c615e2cba9239876cd9d2d291ec
 ---
 
 # Phase 41: Reduce pipeline subscription overhead — Verification Projection

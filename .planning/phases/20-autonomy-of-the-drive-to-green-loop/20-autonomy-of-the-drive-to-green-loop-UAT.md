@@ -1,10 +1,10 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 05a58af518ffa07733b10ca2f363ae22a9ca186126e0bdb0f078c43fa8331be3
 phase: 20
 status: pending
 result: pending
 shipyard_sync: evidence-projection
-shipyard_source_fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+shipyard_source_fingerprint: 05a58af518ffa07733b10ca2f363ae22a9ca186126e0bdb0f078c43fa8331be3
 ---
 
 # Phase 20: Autonomy of the drive-to-green loop — UAT Projection

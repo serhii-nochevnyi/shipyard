@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 0dee238c0d6a664a443bc6d7429b89c9e369f9ef5449418eca9ef2d2b8f3bfa6
 phase: 33-reduce-orchestration-context-and-transfer-sessions-safely
 plan: 08
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-17
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+shipyard_source_fingerprint: 0dee238c0d6a664a443bc6d7429b89c9e369f9ef5449418eca9ef2d2b8f3bfa6
 ---
 
 # Phase 33: Resume a checkpoint with one fenced acknowledged owner — Delivery Projection

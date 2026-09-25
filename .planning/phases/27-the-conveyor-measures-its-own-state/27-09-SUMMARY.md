@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 2ba1a632798b779ad9341f318e1d8e45d3186ed3ba156b8386cbd1e473527b88
 phase: 27-the-conveyor-measures-its-own-state
 plan: 09
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-08
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+shipyard_source_fingerprint: 2ba1a632798b779ad9341f318e1d8e45d3186ed3ba156b8386cbd1e473527b88
 ---
 
 # Phase 27: The judge's base tree reaches the trailer, so a carry can fire — Delivery Projection

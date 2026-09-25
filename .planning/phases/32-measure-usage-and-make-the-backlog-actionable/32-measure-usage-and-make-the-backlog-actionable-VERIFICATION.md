@@ -1,8 +1,8 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 7f4129498963fdd5cb146ba1e4e1a04ace6646f99afad7d234ab8b7e154a7bd2
 phase: 32
 status: passed
-shipyard_source_fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+shipyard_source_fingerprint: 7f4129498963fdd5cb146ba1e4e1a04ace6646f99afad7d234ab8b7e154a7bd2
 ---
 
 # Phase 32: Measure usage and make the backlog actionable — Verification Projection

@@ -1,8 +1,8 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: bb4f62211a7c391794b0bdfe3e967b843474b77de0a902c079041ef2fbbf5a8f
 phase: 22
 status: human_needed
-shipyard_source_fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+shipyard_source_fingerprint: bb4f62211a7c391794b0bdfe3e967b843474b77de0a902c079041ef2fbbf5a8f
 ---
 
 # Phase 22: Close what phase 20 left open — Verification Projection

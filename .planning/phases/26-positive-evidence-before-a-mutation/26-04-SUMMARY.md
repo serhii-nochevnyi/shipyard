@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: afedbd8a0cead0e827e9926d47c52c2c997b2d8b5c740dc4c5b6ff09133d2801
 phase: 26-positive-evidence-before-a-mutation
 plan: 04
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-07
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+shipyard_source_fingerprint: afedbd8a0cead0e827e9926d47c52c2c997b2d8b5c740dc4c5b6ff09133d2801
 ---
 
 # Phase 26: gc removes only what is proven landed — Delivery Projection

@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 14ab3e3387400a4933900403ccf7bfefd44e5bcb48a2cae485edb6dc7476ba21
 phase: 36-enforce-the-runtime-model-ladder
 plan: 12
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-16
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+shipyard_source_fingerprint: 14ab3e3387400a4933900403ccf7bfefd44e5bcb48a2cae485edb6dc7476ba21
 ---
 
 # Phase 36: Supersede obsolete ladder documentation — Delivery Projection

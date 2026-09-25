@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 5d31df23bf1fef2fed92217723b2323e6fa50548b076df88a867cfa1db3782d5
 phase: 29-the-tracker-is-a-projection-and-a-projection-is-driven
 plan: 03
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-10
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+shipyard_source_fingerprint: 5d31df23bf1fef2fed92217723b2323e6fa50548b076df88a867cfa1db3782d5
 ---
 
 # Phase 29: The watermark store: exactly once, and only ever forwards — Delivery Projection

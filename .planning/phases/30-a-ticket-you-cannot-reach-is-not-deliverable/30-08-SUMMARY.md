@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: d642137381102c1d96381dab0fc08976631345c677b2d9873485929b155408d0
 phase: 30-a-ticket-you-cannot-reach-is-not-deliverable
 plan: 08
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-12
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+shipyard_source_fingerprint: d642137381102c1d96381dab0fc08976631345c677b2d9873485929b155408d0
 ---
 
 # Phase 30: Adopt matching checkouts and refuse to clobber other paths — Delivery Projection

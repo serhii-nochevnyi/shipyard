@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 0b035b92a924f78c703db79cbcc4cd727805662768c69b861b141d81799b08b7
 phase: 30-a-ticket-you-cannot-reach-is-not-deliverable
 plan: 06
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-12
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+shipyard_source_fingerprint: 0b035b92a924f78c703db79cbcc4cd727805662768c69b861b141d81799b08b7
 ---
 
 # Phase 30: Mirror the project origin protocol for repository clones — Delivery Projection

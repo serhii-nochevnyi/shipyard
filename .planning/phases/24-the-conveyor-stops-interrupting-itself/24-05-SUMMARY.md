@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 4f6dc8951e2fed65f34476688b0fc307672c5d51e991250f513af0df0e419b86
 phase: 24-the-conveyor-stops-interrupting-itself
 plan: 05
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-07
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+shipyard_source_fingerprint: 4f6dc8951e2fed65f34476688b0fc307672c5d51e991250f513af0df0e419b86
 ---
 
 # Phase 24: Merge verifies what the cache cannot know — Delivery Projection

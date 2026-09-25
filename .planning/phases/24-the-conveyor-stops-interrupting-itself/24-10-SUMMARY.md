@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: c5ad70ec916251a91b74f152832fd70b761cb604d1b292e66178c63cc568ee3a
 phase: 24-the-conveyor-stops-interrupting-itself
 plan: 10
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-07
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+shipyard_source_fingerprint: c5ad70ec916251a91b74f152832fd70b761cb604d1b292e66178c63cc568ee3a
 ---
 
 # Phase 24: The CI waiter tells a stall from an outage — Delivery Projection

@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: f75919d27157c50a64c2c1bf71b87195c318d9ffe5456214fef9cb7f79fcc65a
 phase: 28-a-mechanism-nobody-connected-is-not-a-mechanism
 plan: 09
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-09
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+shipyard_source_fingerprint: f75919d27157c50a64c2c1bf71b87195c318d9ffe5456214fef9cb7f79fcc65a
 ---
 
 # Phase 28: The wired-mechanism pin must fail when the caller goes, and the guard's row must carry the depth — Delivery Projection

@@ -1,8 +1,8 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 7988e36bd737f27f07d55c719c171746fa862fdcc770aab3a5c44974eec951b3
 phase: 26
 status: gaps_found
-shipyard_source_fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+shipyard_source_fingerprint: 7988e36bd737f27f07d55c719c171746fa862fdcc770aab3a5c44974eec951b3
 ---
 
 # Phase 26: Positive evidence before a mutation — Verification Projection

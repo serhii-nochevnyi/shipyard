@@ -1,8 +1,8 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: f9899c26fe9002d4f1052e2946ec7e082ca73a3fe353c248a1eff36f928e905d
 phase: 35
 status: passed
-shipyard_source_fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+shipyard_source_fingerprint: f9899c26fe9002d4f1052e2946ec7e082ca73a3fe353c248a1eff36f928e905d
 ---
 
 # Phase 35: Close the GSD and Shipyard workflow loop — Verification Projection

@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: a614cab1aeec55280e84fa3792457ffef4ef4f23c673244b47379444e2f8349b
 phase: 41-reduce-pipeline-subscription-overhead
 plan: 06
 subsystem: shipyard delivery
@@ -22,7 +22,7 @@ key-decisions:
 duration: 0min
 status: halted
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+shipyard_source_fingerprint: a614cab1aeec55280e84fa3792457ffef4ef4f23c673244b47379444e2f8349b
 ---
 
 # Phase 41: Join deduplicated usage and recovery cost to verified outcomes — Delivery Projection

@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: fd5a303743b18de68d65f5a9586356562892e2c24de5ac5fccf3ca99c2b77d8b
 phase: 41-reduce-pipeline-subscription-overhead
 plan: 08
 subsystem: shipyard delivery
@@ -22,7 +22,7 @@ key-decisions:
 duration: 0min
 status: halted
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+shipyard_source_fingerprint: fd5a303743b18de68d65f5a9586356562892e2c24de5ac5fccf3ca99c2b77d8b
 ---
 
 # Phase 41: Unblock pushes: header-free state YAML and a pre-push gate that resolves the worktree through git — Delivery Projection
