@@ -3,6 +3,7 @@
 const fs = require('fs');
 const path = require('path');
 const { decisionEntries } = require('./adr-ingest.cjs');
+const { marker } = require('./gsd-sync.cjs');
 
 function parseArgs(argv) {
   const args = { adr: null, phase: 1, json: false };
@@ -35,12 +36,16 @@ function configContent() {
 
 function roadmapContent(phase, heading, requirements) {
   const ids = requirements.map((entry) => entry.id).join(', ');
+  const decisionLines = requirements.map((entry) =>
+    `- **${entry.id}** — ${entry.decision.replace(/\s+/g, ' ').trim()}`);
   return [
     `### Phase ${phase}: ${heading.title}`,
     `**Status**: planned (${heading.id})`,
     `**Requirements**: ${ids}`,
     '',
     `Implement ${heading.id}: ${heading.title}.`,
+    '',
+    ...decisionLines,
     '',
   ].join('\n');
 }
@@ -51,6 +56,8 @@ function requirementsContent(phase, requirements) {
   return [
     '# Requirements',
     '',
+    // @contract: marker is truthful, gsd-sync regenerates this file wholly from ROADMAP on first publish
+    marker('0'.repeat(64)),
     ...checklist,
     '',
     '## Traceability',
@@ -58,6 +65,16 @@ function requirementsContent(phase, requirements) {
     '| Requirement | Phase | Status |',
     '|---|---|---|',
     ...rows,
+    '',
+  ].join('\n');
+}
+
+function projectContent(heading) {
+  return [
+    `# ${heading.title}`,
+    '',
+    '## Core Value',
+    `Implement ${heading.id}: ${heading.title}.`,
     '',
   ].join('\n');
 }
@@ -88,6 +105,7 @@ function bootstrap(args) {
     { rel: path.join('.planning', 'config.json'), data: configContent() },
     { rel: path.join('.planning', 'ROADMAP.md'), data: roadmapContent(args.phase, heading, requirements) },
     { rel: path.join('.planning', 'REQUIREMENTS.md'), data: requirementsContent(args.phase, requirements) },
+    { rel: path.join('.planning', 'PROJECT.md'), data: projectContent(heading) },
   ];
 
   const created = [];
@@ -129,6 +147,7 @@ module.exports = {
   configContent,
   roadmapContent,
   requirementsContent,
+  projectContent,
   bootstrap,
   main,
 };

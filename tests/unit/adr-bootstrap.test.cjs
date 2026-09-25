@@ -8,6 +8,8 @@ const { suite, test, done, assert } = require(path.join(__dirname, 'assert-harne
 
 const SCRIPT = path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'adr-bootstrap.cjs');
 const GSD_TUNE = path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'gsd-tune.cjs');
+const GSD_SYNC = path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'gsd-sync.cjs');
+const VALIDATE_GRAPH = path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'validate-graph.cjs');
 
 const FLAT_ADR = `# ADR-900 — bootstrap flat decisions
 
@@ -45,6 +47,19 @@ const NO_DECISIONS_ADR = `# ADR-902 — nothing decided
 Accepted
 `;
 
+const THREE_DECISION_ADR = `# ADR-903 — bootstrap gsd projection
+
+## Status
+
+Accepted
+
+## Decision
+
+- **D1 — Keep it deterministic:** the bootstrap creates a project gsd-sync accepts.
+- **D2 — Preserve decision text:** every decision reaches REQUIREMENTS.md.
+- **D3 — Own the marker truthfully:** the marker never claims a fingerprint that matches no source.
+`;
+
 function project() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-adr-bootstrap-'));
 }
@@ -59,6 +74,49 @@ function run(dir, args) {
   return spawnSync(process.execPath, [SCRIPT, ...args], { cwd: dir, encoding: 'utf8' });
 }
 
+function testEnv(root) {
+  const env = { ...process.env, HOME: path.join(root, 'home') };
+  for (const key of Object.keys(env)) {
+    if (/^(?:SHIPYARD_|GSD_|CLAUDE_|CODEX_)/.test(key)
+        || key === 'NODE_OPTIONS' || key === 'NODE_PATH') delete env[key];
+  }
+  fs.mkdirSync(env.HOME, { recursive: true });
+  return env;
+}
+
+function runGsdSync(dir, env, args = []) {
+  return spawnSync(process.execPath, [GSD_SYNC, '--json', ...args], { cwd: dir, encoding: 'utf8', env });
+}
+
+function bootstrapDeliveryProject(adrContent) {
+  const dir = project();
+  const env = testEnv(dir);
+  const adr = writeAdr(dir, 'ADR-903.md', adrContent);
+  const bootstrapResult = run(dir, ['--adr', adr, '--json']);
+  assert.strictEqual(bootstrapResult.status, 0, bootstrapResult.stderr);
+
+  const phaseDir = path.join(dir, '.planning', 'phases', '01-bootstrap-gsd-projection');
+  fs.mkdirSync(phaseDir, { recursive: true });
+  fs.mkdirSync(path.join(dir, 'src'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'src', 'example.js'), 'module.exports = {};\n');
+  fs.writeFileSync(path.join(phaseDir, '01-01-PLAN.md'), [
+    '---', 'phase: 1', 'plan: 1', 'title: "Projection"',
+    'files_modified: [src/example.js]', 'requirements: [REQ-01]',
+    'delivery:', '  ticket: T-01-01', '  risk: low', '---', '',
+    '## Goal', '', 'Wire the bootstrapped project into gsd-sync.',
+  ].join('\n'));
+
+  const graphResult = spawnSync(process.execPath, [VALIDATE_GRAPH], { cwd: dir, encoding: 'utf8', env });
+  assert.strictEqual(graphResult.status, 0, graphResult.stdout + graphResult.stderr);
+
+  fs.writeFileSync(
+    path.join(dir, '.planning', 'graph', 'delivery-state.json'),
+    JSON.stringify({ 'T-01-01': { status: 'pending' } }),
+  );
+
+  return { dir, env, bootstrapReport: JSON.parse(bootstrapResult.stdout) };
+}
+
 suite('adr-bootstrap — an empty project');
 
 test('gets all three files, with REQ ids matching the ADR bullets in order', () => {
@@ -68,6 +126,7 @@ test('gets all three files, with REQ ids matching the ADR bullets in order', () 
   assert.strictEqual(result.status, 0, result.stderr);
   const report = JSON.parse(result.stdout);
   assert.deepStrictEqual([...report.created].sort(), [
+    path.join('.planning', 'PROJECT.md'),
     path.join('.planning', 'REQUIREMENTS.md'),
     path.join('.planning', 'ROADMAP.md'),
     path.join('.planning', 'config.json'),
@@ -123,6 +182,7 @@ test('a pre-existing ROADMAP.md stays byte-identical and is reported under skipp
   const report = JSON.parse(result.stdout);
   assert.deepStrictEqual(report.skipped_existing, [path.join('.planning', 'ROADMAP.md')]);
   assert.deepStrictEqual([...report.created].sort(), [
+    path.join('.planning', 'PROJECT.md'),
     path.join('.planning', 'REQUIREMENTS.md'),
     path.join('.planning', 'config.json'),
   ]);
@@ -183,7 +243,7 @@ test('prints one line per created file, skipped file and requirement', () => {
   const result = run(dir, ['--adr', adr]);
   assert.strictEqual(result.status, 0, result.stderr);
   const lines = result.stdout.trim().split('\n');
-  assert.strictEqual(lines.filter((line) => line.startsWith('created: ')).length, 3);
+  assert.strictEqual(lines.filter((line) => line.startsWith('created: ')).length, 4);
   assert.strictEqual(lines.filter((line) => line.startsWith('requirement: ')).length, 2);
 });
 
@@ -208,6 +268,101 @@ test('gsd-tune --check --runtime claude --json reports no REQUIRED drift for git
   const tuneReport = JSON.parse(tuneRun.stdout);
   const drift = tuneReport.drift.find((entry) => entry.key === 'git.branching_strategy');
   assert.strictEqual(drift, undefined, JSON.stringify(tuneReport.drift));
+});
+
+suite('adr-bootstrap — the bootstrapped project satisfies the gsd-sync projection');
+
+test('a bootstrapped project passes gsd-sync publication and --check', () => {
+  const { dir, env } = bootstrapDeliveryProject(THREE_DECISION_ADR);
+
+  const publish = runGsdSync(dir, env);
+  assert.strictEqual(publish.status, 0, publish.stdout + publish.stderr);
+  const publishResult = JSON.parse(publish.stdout);
+  assert.strictEqual(publishResult.ok, true, publish.stdout);
+
+  const check = runGsdSync(dir, env, ['--check']);
+  assert.strictEqual(check.status, 0, check.stdout + check.stderr);
+  const checkResult = JSON.parse(check.stdout);
+  assert.strictEqual(checkResult.ok, true, check.stdout);
+  assert.deepStrictEqual(checkResult.blockers, []);
+
+  for (const output of [publish.stdout, check.stdout]) {
+    assert.ok(!output.includes('not owned by'), output);
+    assert.ok(!output.includes('PROJECT.md is missing'), output);
+    assert.ok(!output.includes('has no ### Phase'), output);
+  }
+});
+
+test('the published REQUIREMENTS.md keeps every ADR decision text', () => {
+  const { dir, env, bootstrapReport } = bootstrapDeliveryProject(THREE_DECISION_ADR);
+  const publish = runGsdSync(dir, env);
+  assert.strictEqual(publish.status, 0, publish.stdout + publish.stderr);
+
+  const requirements = fs.readFileSync(path.join(dir, '.planning', 'REQUIREMENTS.md'), 'utf8');
+  for (const entry of bootstrapReport.requirements) {
+    const decision = entry.decision.replace(/\s+/g, ' ').trim();
+    assert.ok(requirements.includes(`- [ ] **${entry.id}**: ${decision}`), requirements);
+    assert.ok(requirements.includes(`| ${entry.id} | Phase 1 | `), requirements);
+  }
+});
+
+test('before publication gsd-sync --check reports stale files, not an unowned REQUIREMENTS.md', () => {
+  const { dir, env } = bootstrapDeliveryProject(THREE_DECISION_ADR);
+  const check = runGsdSync(dir, env, ['--check']);
+  assert.strictEqual(check.status, 1, check.stdout + check.stderr);
+  const result = JSON.parse(check.stdout);
+  assert.ok(result.blockers.length > 0, check.stdout);
+  for (const blocker of result.blockers) {
+    assert.ok(/ is missing or stale$/.test(blocker), blocker);
+  }
+});
+
+suite('adr-bootstrap — bootstrap output satisfies the gsd-sync projection contract');
+
+test('creates PROJECT.md with a Core Value section and marks REQUIREMENTS.md as projection-owned', () => {
+  const dir = project();
+  const adr = writeAdr(dir, 'ADR-903.md', THREE_DECISION_ADR);
+  const result = run(dir, ['--adr', adr, '--json']);
+  assert.strictEqual(result.status, 0, result.stderr);
+  const report = JSON.parse(result.stdout);
+  assert.deepStrictEqual(report.created, [
+    path.join('.planning', 'config.json'),
+    path.join('.planning', 'ROADMAP.md'),
+    path.join('.planning', 'REQUIREMENTS.md'),
+    path.join('.planning', 'PROJECT.md'),
+  ]);
+
+  const requirements = fs.readFileSync(path.join(dir, '.planning', 'REQUIREMENTS.md'), 'utf8');
+  const markerLine = /^(?:#\s+)?(?:<!--\s*)?shipyard:gsd-sync generated;\s*sync-version:\s*\d+;\s*source fingerprint:\s*[0-9a-f]+\s*(?:-->)?\s*$/;
+  assert.ok(markerLine.test(requirements.split(/\r?\n/)[2]), requirements);
+
+  const roadmap = fs.readFileSync(path.join(dir, '.planning', 'ROADMAP.md'), 'utf8');
+  for (const entry of report.requirements) {
+    assert.ok(roadmap.includes(`- **${entry.id}** — `), roadmap);
+  }
+
+  const projectMd = fs.readFileSync(path.join(dir, '.planning', 'PROJECT.md'), 'utf8');
+  assert.ok(projectMd.includes('## Core Value'), projectMd);
+  assert.ok(projectMd.includes('Implement ADR-903: bootstrap gsd projection.'), projectMd);
+});
+
+test('a pre-existing PROJECT.md stays byte-identical', () => {
+  const dir = project();
+  const adr = writeAdr(dir, 'ADR-903.md', THREE_DECISION_ADR);
+  fs.mkdirSync(path.join(dir, '.planning'), { recursive: true });
+  const existing = '# Hand-written project\n\n## Core Value\nWritten by a human.\n';
+  fs.writeFileSync(path.join(dir, '.planning', 'PROJECT.md'), existing);
+
+  const result = run(dir, ['--adr', adr, '--json']);
+  assert.strictEqual(result.status, 0, result.stderr);
+  const report = JSON.parse(result.stdout);
+  assert.deepStrictEqual(report.skipped_existing, [path.join('.planning', 'PROJECT.md')]);
+  assert.deepStrictEqual([...report.created].sort(), [
+    path.join('.planning', 'REQUIREMENTS.md'),
+    path.join('.planning', 'ROADMAP.md'),
+    path.join('.planning', 'config.json'),
+  ]);
+  assert.strictEqual(fs.readFileSync(path.join(dir, '.planning', 'PROJECT.md'), 'utf8'), existing);
 });
 
 done();
