@@ -281,34 +281,78 @@ function percentileStats(values) {
   return { count: usable.length, total: usable.reduce((a, b) => a + b, 0), median: percentile(0.5), p90: percentile(0.9) };
 }
 
+const ATTEMPT_STATUSES = new Set(['failed', 'interrupted', 'parked']);
+
+function addCounters(target, row, counters) {
+  for (const field of counters) {
+    if (row[field] === null) target[field] = null;
+    else if (target[field] !== null) target[field] += row[field];
+  }
+}
+
 // @invariant: a missing counter makes the summed field unknown, never a silently truncated total.
 function rollupVerifiedCompletions(rows, counters, coreFields) {
-  const groups = new Map();
-  for (const row of rows) {
-    if (row.verified_completion_status !== 'completed' || !row.ticket || !row.run_id) continue;
-    const key = JSON.stringify([row.project_id || null, row.run_id, row.ticket]);
-    let g = groups.get(key);
-    if (!g) {
-      g = {
-        ticket: row.ticket, run_id: row.run_id, project_id: row.project_id || null,
-        dispatch_ids: new Set(), observations: 0, ...Object.fromEntries(counters.map((f) => [f, 0])),
-      };
-      groups.set(key, g);
-    }
-    g.dispatch_ids.add(row.dispatch_id);
+  const blank = (extra) => ({ ...extra, dispatch_ids: new Set(), observations: 0,
+    ...Object.fromEntries(counters.map((f) => [f, 0])) });
+  const add = (g, row) => {
+    if (row.dispatch_id) g.dispatch_ids.add(row.dispatch_id);
     g.observations += row.observations;
-    for (const field of counters) {
-      if (row[field] === null) g[field] = null;
-      else if (g[field] !== null) g[field] += row[field];
+    addCounters(g, row, counters);
+  };
+  const completed = (row) => row.verified_completion_status === 'completed' && row.ticket && row.run_id;
+  const groups = new Map();
+  for (const row of rows.filter(completed)) {
+    const key = JSON.stringify([row.project_id || null, row.run_id, row.ticket]);
+    if (!groups.has(key)) {
+      groups.set(key, blank({ ticket: row.ticket, run_id: row.run_id, project_id: row.project_id || null,
+        attempt_statuses: {} }));
     }
+    add(groups.get(key), row);
   }
-  return [...groups.values()].map((g) => {
+  const completions = [...groups.values()];
+  const unassigned = new Map();
+  const cohort = blank({});
+  for (const row of rows) {
+    add(cohort, row);
+    if (completed(row)) continue;
+    let reason;
+    if (!row.ticket || !row.dispatch_id) reason = 'missing_ticket_or_dispatch';
+    else if (!ATTEMPT_STATUSES.has(row.verified_completion_status)) reason = `outcome_${row.verified_completion_status}`;
+    else {
+      const targets = completions.filter((c) => c.ticket === row.ticket
+        && (c.project_id === null || !row.project_id || c.project_id === row.project_id));
+      if (targets.length === 1) {
+        add(targets[0], row);
+        const status = row.verified_completion_status;
+        targets[0].attempt_statuses[status] = (targets[0].attempt_statuses[status] || 0) + 1;
+        continue;
+      }
+      reason = targets.length ? 'shared_ambiguous_completion' : 'no_verified_completion';
+    }
+    if (!unassigned.has(reason)) unassigned.set(reason, blank({ reason, rows: 0 }));
+    const bucket = unassigned.get(reason);
+    bucket.rows++;
+    add(bucket, row);
+  }
+  const finish = (g) => {
     const dispatchIds = [...g.dispatch_ids].sort();
-    return {
-      ...g, dispatch_ids: dispatchIds, dispatch_count: dispatchIds.length,
-      complete: coreFields.every((field) => g[field] !== null),
-    };
-  });
+    return { ...g, dispatch_ids: dispatchIds, dispatch_count: dispatchIds.length };
+  };
+  return {
+    completions: completions.map((g) => ({ ...finish(g), complete: coreFields.every((field) => g[field] !== null) })),
+    unassigned: [...unassigned.values()].map(finish).sort((a, b) => a.reason.localeCompare(b.reason)),
+    cohort: finish(cohort),
+  };
+}
+
+// @contract: per_completion divides all cohort consumption (attempts, recovery, unassigned) by verified completions;
+function perCompletionStats(values, cohortTotal, unassignedTotal, completionCount) {
+  const stats = percentileStats(values);
+  return {
+    ...stats, cohort_total: cohortTotal, unassigned_total: unassignedTotal,
+    per_completion: completionCount && cohortTotal !== null
+      ? Math.round((cohortTotal / completionCount) * 100) / 100 : null,
+  };
 }
 
 function report(sources, options = {}) {
@@ -743,8 +787,15 @@ function report(sources, options = {}) {
       ? same.reduce((total, o) => total + o[field], 0) : null;
     return row;
   });
-  const verifiedCompletions = rollupVerifiedCompletions(efficiencyRows, counters, FIELDS);
+  const cohortRows = [...efficiencyRows, ...observations.filter((o) => !o.ticket || !o.dispatch_id)
+    .map((o) => ({ ...o, observations: 1 }))];
+  const rollup = rollupVerifiedCompletions(cohortRows, counters, FIELDS);
+  const verifiedCompletions = rollup.completions;
   const completeCompletions = verifiedCompletions.filter((c) => c.complete);
+  const unassignedTotal = (field) => rollup.unassigned.some((u) => u[field] === null) ? null
+    : rollup.unassigned.reduce((total, u) => total + u[field], 0);
+  const fieldStats = (field) => perCompletionStats(completeCompletions.map((c) => c[field]),
+    rollup.cohort[field], unassignedTotal(field), verifiedCompletions.length);
 
   if (!usageRows || !observations.length) warn('No attributable supported usage observations');
   if ([...groups.values()].some(g => g.input_tokens === null)) warn('Input coverage is incomplete; totals are not comparable');
@@ -765,9 +816,10 @@ function report(sources, options = {}) {
       eligible_ticket_observations: ticketReady,
       eligible_rows: efficiencyRows.filter((row) => row.eligible).length,
       ineligible_rows: efficiencyRows.filter((row) => !row.eligible).length,
-      input_per_verified_completion: percentileStats(completeCompletions.map((c) => c.input_tokens)),
-      per_verified_completion: Object.fromEntries(counters.map((field) =>
-        [field, percentileStats(completeCompletions.map((c) => c[field]))])),
+      input_per_verified_completion: fieldStats('input_tokens'),
+      per_verified_completion: Object.fromEntries(counters.map((field) => [field, fieldStats(field)])),
+      cohort_consumption: rollup.cohort,
+      unassigned_overhead: rollup.unassigned,
       verified_completions: verifiedCompletions,
       verified_completion_count: completeCompletions.length,
       rows: efficiencyRows,

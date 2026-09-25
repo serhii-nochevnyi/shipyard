@@ -407,12 +407,17 @@ function metricSet(rows) {
   };
 }
 
+const COHORT_KEYS = Object.freeze(['runtime', 'model', 'effort', 'role', 'account_scope']);
+
 function cohortOf(row) {
-  return { runtime: row.runtime, model: row.model || null, effort: row.effort || null,
-    role: row.role, account_scope: row.account_scope || null };
+  return Object.fromEntries(COHORT_KEYS.map((key) => [key, row[key] || null]));
 }
 
-// @contract: matched=true requires 2+ treatment ids within one fixed runtime/model/effort/role/account cohort.
+function treatmentDiff(a, b) {
+  return TREATMENT_KEYS.filter((key) => a[key] !== b[key]);
+}
+
+// @contract: matched needs full cohort identity and two arms differing in exactly one treatment key.
 function matchedCohorts(rows) {
   const groups = new Map();
   for (const row of rows) {
@@ -424,16 +429,37 @@ function matchedCohorts(rows) {
   return [...groups.values()].map(({ cohort, rows: cohortRows }) => {
     const byTreatment = [...new Map(cohortRows.map((row) => [row.treatment_id, row.treatment])).entries()]
       .map(([id, treatment]) => ({ id, treatment, metrics: metricSet(cohortRows.filter((row) => row.treatment_id === id)) }));
-    return { ...cohort, rows: cohortRows.length, by_treatment: byTreatment, matched: byTreatment.length >= 2 };
+    const comparisons = [];
+    for (let i = 0; i < byTreatment.length; i++) {
+      for (let j = i + 1; j < byTreatment.length; j++) {
+        const changed = treatmentDiff(byTreatment[i].treatment, byTreatment[j].treatment);
+        if (changed.length === 1) comparisons.push({ arms: [byTreatment[i].id, byTreatment[j].id], treatment_key: changed[0] });
+      }
+    }
+    const missingIdentity = COHORT_KEYS.filter((key) => cohort[key] === null);
+    return { ...cohort, rows: cohortRows.length, by_treatment: byTreatment, comparisons,
+      missing_identity: missingIdentity, matched: missingIdentity.length === 0 && comparisons.length > 0 };
   });
 }
 
-function matchCompletionRows(rows, completion) {
+function cohortCoverageGaps(cohorts) {
+  const gaps = [];
+  for (const cohort of cohorts) {
+    if (cohort.by_treatment.length < 2) continue;
+    const label = `${cohort.runtime}/${cohort.role}`;
+    if (cohort.missing_identity.length) gaps.push(`cohort identity for ${label} (missing ${cohort.missing_identity.join(', ')})`);
+    if (!cohort.comparisons.length) gaps.push(`single-treatment difference between arms for ${label}`);
+  }
+  return gaps;
+}
+
+function completionClaims(row, completion) {
   const dispatchIds = new Set(Array.isArray(completion.dispatch_ids) ? completion.dispatch_ids
     : completion.dispatch_id ? [completion.dispatch_id] : []);
-  if (dispatchIds.size) return rows.filter((row) => row.dispatch_id && dispatchIds.has(row.dispatch_id));
-  if (completion.run_id) return rows.filter((row) => row.run_id === completion.run_id);
-  return [];
+  const runIds = new Set(Array.isArray(completion.run_ids) ? completion.run_ids
+    : completion.run_id ? [completion.run_id] : []);
+  if (dispatchIds.size) return Boolean(row.dispatch_id) && dispatchIds.has(row.dispatch_id);
+  return runIds.has(row.run_id);
 }
 
 function sumField(rows, getter) {
@@ -442,32 +468,45 @@ function sumField(rows, getter) {
     ? rows.reduce((total, row) => total + getter(row), 0) : null;
 }
 
-// @contract: aggregates per verified completion (work item/run), never across raw per-dispatch rows.
+const COMPLETION_FIELDS = Object.freeze({
+  bytes: [(row) => row.bytes, false],
+  estimated_tokens: [(row) => row.estimated_tokens, false],
+  wait_polls: [(row) => row.counts && row.counts.polls, false],
+  model_turns: [(row) => row.counts && row.counts.model_turns, true],
+  tool_calls: [(row) => row.counts && row.counts.tool_calls, true],
+  retries: [(row) => row.counts && row.counts.retries, false],
+});
+
+function fieldTotals(rows) {
+  const supported = rows.filter(supportedEvidence);
+  return Object.fromEntries(Object.entries(COMPLETION_FIELDS)
+    .map(([field, [getter, supportedOnly]]) => [field, sumField(supportedOnly ? supported : rows, getter)]));
+}
+
+// @contract: numerator is all cohort use per verified completion; unclaimed rows are unassigned overhead.
 function completionMetrics(rows, completions) {
   const list = Array.isArray(completions) ? completions : [];
   if (!list.length) return null;
-  const supported = rows.filter(supportedEvidence);
+  const claims = rows.map((row) => list.filter((completion) => completionClaims(row, completion)));
   const perCompletion = list.map((completion) => {
-    const matched = matchCompletionRows(rows, completion);
-    const matchedSupported = matchCompletionRows(supported, completion);
-    return {
-      ticket: completion.ticket || null, run_id: completion.run_id || null, rows: matched.length,
-      bytes: sumField(matched, (row) => row.bytes),
-      estimated_tokens: sumField(matched, (row) => row.estimated_tokens),
-      wait_polls: sumField(matched, (row) => row.counts && row.counts.polls),
-      model_turns: sumField(matchedSupported, (row) => row.counts && row.counts.model_turns),
-      tool_calls: sumField(matchedSupported, (row) => row.counts && row.counts.tool_calls),
-      retries: sumField(matched, (row) => row.counts && row.counts.retries),
-    };
+    const matched = rows.filter((row, index) => claims[index].length === 1 && claims[index][0] === completion);
+    return { ticket: completion.ticket || null, run_id: completion.run_id || null, rows: matched.length,
+      ...fieldTotals(matched) };
+  });
+  const unassigned = rows.filter((row, index) => claims[index].length === 0);
+  const shared = rows.filter((row, index) => claims[index].length > 1);
+  const cohortTotals = fieldTotals(rows);
+  const stats = (field) => ({
+    ...metricStats(perCompletion.map((c) => c[field])),
+    cohort_total: cohortTotals[field],
+    per_completion: cohortTotals[field] === null ? null
+      : Math.round((cohortTotals[field] / perCompletion.length) * 100) / 100,
   });
   return {
     completions: perCompletion.length,
-    bytes: metricStats(perCompletion.map((c) => c.bytes)),
-    estimated_tokens: metricStats(perCompletion.map((c) => c.estimated_tokens)),
-    wait_polls: metricStats(perCompletion.map((c) => c.wait_polls)),
-    model_turns: metricStats(perCompletion.map((c) => c.model_turns)),
-    tool_calls: metricStats(perCompletion.map((c) => c.tool_calls)),
-    retries: metricStats(perCompletion.map((c) => c.retries)),
+    ...Object.fromEntries(Object.keys(COMPLETION_FIELDS).map((field) => [field, stats(field)])),
+    unassigned_overhead: { rows: unassigned.length, ...fieldTotals(unassigned) },
+    shared_overhead: { rows: shared.length, ...fieldTotals(shared) },
     rows: perCompletion,
   };
 }
@@ -497,6 +536,7 @@ function report(input = {}, options = {}) {
   const cohorts = matchedCohorts(rows);
   const hasMatchedCohort = cohorts.some((cohort) => cohort.matched);
   if (!hasMatchedCohort) missing.push('comparable baseline and treatment arms matched by runtime/model/effort/role/account');
+  missing.push(...cohortCoverageGaps(cohorts));
   const perCompletion = completionMetrics(rows, opts.verified_completions || opts.completions);
   const completed = Number.isSafeInteger(opts.completed_tickets) ? opts.completed_tickets
     : perCompletion ? perCompletion.completions : quality.completed;

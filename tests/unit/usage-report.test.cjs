@@ -427,7 +427,8 @@ test('a verified delivery outcome rolls up parent continuation and child dispatc
  assert.equal(completion.dispatch_count, 2);
  assert.equal(completion.input_tokens, 25);
  assert.equal(completion.complete, true);
- assert.deepEqual(r.efficiency.input_per_verified_completion, {count:1, total:25, median:25, p90:25});
+ assert.deepEqual(r.efficiency.input_per_verified_completion,
+   {count:1, total:25, median:25, p90:25, cohort_total:25, unassigned_total:0, per_completion:25});
 });
 
 test('ambiguous verified outcomes keep the completion join unknown', () => {
@@ -496,7 +497,46 @@ test('a failed run stays in cohort totals while only the completed recovery run 
  assert.equal(total, 17, 'total cohort consumption keeps the failed run visible');
  assert.equal(r.efficiency.verified_completions.length, 1);
  assert.equal(r.efficiency.verified_completions[0].run_id, 'run-4b');
- assert.equal(r.efficiency.verified_completions[0].input_tokens, 12);
+ assert.equal(r.efficiency.verified_completions[0].input_tokens, 17, 'the failed attempt joins the completion it led to');
+ assert.deepEqual(r.efficiency.verified_completions[0].attempt_statuses, {failed:1});
+ assert.deepEqual(r.efficiency.verified_completions[0].dispatch_ids, ['dispatch-fail', 'dispatch-recover']);
+ assert.deepEqual(r.efficiency.unassigned_overhead, []);
+ const input = r.efficiency.input_per_verified_completion;
+ assert.deepEqual([input.count, input.total, input.median, input.p90, input.cohort_total, input.per_completion],
+   [1, 17, 17, 17, 17, 17]);
+});
+
+test('unknown-outcome and unticketed usage stays in the cohort numerator as explicit unassigned overhead', () => {
+ const usage = (id, input) => ({type:'assistant', requestId:`r-${id}`, sessionId:`s-${id}`,
+   message:{id:`m-${id}`, model:'example-model',
+     usage:{input_tokens:input,cache_read_input_tokens:0,cache_creation_input_tokens:0,output_tokens:1}, stop_reason:'end_turn'}});
+ const attribution = (id, run, ticket) => ({dispatch_id:`dispatch-${id}`, runtime:'claude', provider:'anthropic',
+   kind:'ordinary', source:'fixture', session_id:`s-${id}`, request_id:`r-${id}`, message_id:`m-${id}`,
+   run_id:run, ticket, role:'executor', task_level:'routine', backend:'workflow',
+   model:'opus', effort:'high', observed_model:'example-model', observed_effort:'high'});
+ const r = report(files(usage('done-a', 10), usage('done-b', 30), usage('parked', 4), usage('unknown', 6), usage('loose', 3)), {
+   attributions: [
+     attribution('done-a', 'run-a', 'T-41-10'), attribution('done-b', 'run-b', 'T-41-11'),
+     attribution('parked', 'run-c', 'T-41-12'), attribution('unknown', 'run-d', 'T-41-10'),
+   ],
+   outcomes: [
+     {run_id:'run-a', ticket:'T-41-10', status:'completed'},
+     {run_id:'run-b', ticket:'T-41-11', status:'completed'},
+     {run_id:'run-c', ticket:'T-41-12', status:'parked'},
+   ],
+ });
+ assert.equal(r.efficiency.verified_completions.length, 2);
+ assert.deepEqual(r.efficiency.verified_completions.map((c) => c.input_tokens).sort((a, b) => a - b), [10, 30],
+   'an unknown-outcome row is not assigned to a completion by ticket alone');
+ assert.deepEqual(r.efficiency.unassigned_overhead.map((u) => [u.reason, u.rows, u.input_tokens]), [
+   ['missing_ticket_or_dispatch', 1, 3],
+   ['no_verified_completion', 1, 4],
+   ['outcome_unknown', 1, 6],
+ ]);
+ assert.equal(r.efficiency.cohort_consumption.input_tokens, 53);
+ const input = r.efficiency.input_per_verified_completion;
+ assert.deepEqual([input.count, input.total, input.median, input.p90, input.cohort_total, input.unassigned_total,
+   input.per_completion], [2, 40, 10, 30, 53, 13, 26.5]);
 });
 
 test('CLI accepts an --outcomes ledger and diagnoses an unreadable path', () => {

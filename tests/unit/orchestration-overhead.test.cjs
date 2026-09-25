@@ -417,6 +417,88 @@ test('every readiness gate satisfied together with a matched cohort and verified
   }
 });
 
+const PROMOTE_OPTIONS = Object.freeze({ min_completed: 1, attribution_coverage: 1, defect_window_days: 7,
+  experiment_boundary: true, finalized_output_coverage: 'observed' });
+
+function promoteRow(overrides = {}) {
+  return { run_id: 'run-gate', role: 'executor', runtime: 'claude', model: 'opus', effort: 'high',
+    account_scope: 'anthropic-max', backend: 'workflow', policy_hash: 'a'.repeat(64), evidence: 'usage',
+    bytes: 0, stage: 'model_turn', estimated_tokens: null,
+    provider_tokens: { input_tokens: 10, output_tokens: 2 }, counts: { model_turns: 1, tool_calls: 0 }, ...overrides };
+}
+
+test('arms that change both treatments at once are not a matched cohort and stay inconclusive', () => {
+  const f = fixture();
+  try {
+    const recorder = overhead.createRecorder(f.graph);
+    recorder.record(promoteRow({ observation_id: 'both-baseline', dispatch_id: 'dispatch-both-baseline',
+      treatment: { wait_events: 'baseline', bounded_context: 'baseline' } }));
+    recorder.record(promoteRow({ observation_id: 'both-treated', dispatch_id: 'dispatch-both-treated',
+      treatment: { wait_events: 'opt-06', bounded_context: 'opt-07' } }));
+    const result = recorder.report({ experiment_id: 'exp-bundled', ...PROMOTE_OPTIONS,
+      verified_completions: [{ ticket: 'T-41-06-both', run_id: 'run-gate', dispatch_ids: ['dispatch-both-baseline'] }] });
+    assert.equal(result.matched_cohorts[0].matched, false);
+    assert.deepEqual(result.matched_cohorts[0].comparisons, []);
+    assert.ok(result.missing_coverage.some((m) => m.includes('single-treatment difference')));
+    assert.equal(result.verdict, 'inconclusive');
+    assert.equal(result.status.efficiency_measured, false);
+  } finally {
+    fs.rmSync(f.root, { recursive: true, force: true });
+  }
+});
+
+test('a cohort with unknown model, effort or account identity is never matched', () => {
+  const f = fixture();
+  try {
+    const recorder = overhead.createRecorder(f.graph);
+    const unknown = { model: null, effort: null, account_scope: null };
+    recorder.record(promoteRow({ ...unknown, observation_id: 'null-baseline', dispatch_id: 'dispatch-null-baseline',
+      treatment: { wait_events: 'baseline', bounded_context: 'baseline' } }));
+    recorder.record(promoteRow({ ...unknown, observation_id: 'null-treated', dispatch_id: 'dispatch-null-treated',
+      treatment: { wait_events: 'opt-06', bounded_context: 'baseline' } }));
+    const result = recorder.report({ experiment_id: 'exp-null', ...PROMOTE_OPTIONS,
+      verified_completions: [{ ticket: 'T-41-06-null', run_id: 'run-gate', dispatch_ids: ['dispatch-null-baseline'] }] });
+    assert.equal(result.matched_cohorts[0].matched, false);
+    assert.deepEqual(result.matched_cohorts[0].missing_identity, ['model', 'effort', 'account_scope']);
+    assert.ok(result.missing_coverage.includes('cohort identity for claude/executor (missing model, effort, account_scope)'));
+    assert.equal(result.verdict, 'inconclusive');
+    assert.equal(result.status.efficiency_measured, false);
+  } finally {
+    fs.rmSync(f.root, { recursive: true, force: true });
+  }
+});
+
+test('per-completion numerator is all cohort consumption, with failed attempts joined and the rest unassigned', () => {
+  const f = fixture();
+  try {
+    const recorder = overhead.createRecorder(f.graph);
+    const arm = { treatment: { wait_events: 'baseline', bounded_context: 'baseline' } };
+    recorder.record(promoteRow({ ...arm, observation_id: 'attempt-failed', run_id: 'run-failed',
+      dispatch_id: 'dispatch-failed', bytes: 5 }));
+    recorder.record(promoteRow({ ...arm, observation_id: 'attempt-recovery', run_id: 'run-recovery',
+      dispatch_id: 'dispatch-recovery', bytes: 12 }));
+    recorder.record(promoteRow({ ...arm, observation_id: 'attempt-other', run_id: 'run-other',
+      dispatch_id: 'dispatch-other', bytes: 20 }));
+    recorder.record(promoteRow({ ...arm, observation_id: 'attempt-orphan', run_id: 'run-orphan',
+      dispatch_id: 'dispatch-orphan', bytes: 3 }));
+    const result = recorder.report({ experiment_id: 'exp-numerator', verified_completions: [
+      { ticket: 'T-41-06-recovered', run_id: 'run-recovery', dispatch_ids: ['dispatch-failed', 'dispatch-recovery'] },
+      { ticket: 'T-41-06-other', run_id: 'run-other', dispatch_ids: ['dispatch-other'] },
+    ] });
+    const per = result.metrics_per_completion;
+    assert.deepEqual(per.rows.map((row) => [row.ticket, row.bytes, row.model_turns]),
+      [['T-41-06-recovered', 17, 2], ['T-41-06-other', 20, 1]]);
+    assert.deepEqual([per.bytes.sum, per.bytes.median, per.bytes.p90, per.bytes.cohort_total, per.bytes.per_completion],
+      [37, 17, 20, 40, 20]);
+    assert.deepEqual([per.model_turns.sum, per.model_turns.cohort_total, per.model_turns.per_completion], [3, 4, 2]);
+    assert.deepEqual(per.unassigned_overhead, { rows: 1, bytes: 3, estimated_tokens: null, wait_polls: null,
+      model_turns: 1, tool_calls: 0, retries: null });
+    assert.equal(per.shared_overhead.rows, 0);
+  } finally {
+    fs.rmSync(f.root, { recursive: true, force: true });
+  }
+});
+
 test('retries are counted as their own metric, separate from wait polls and model turns', () => {
   const f = fixture();
   try {
