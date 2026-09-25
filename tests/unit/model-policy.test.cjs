@@ -101,17 +101,17 @@ test('resolves Claude through its independent native grid without changing Codex
   const cases = [
     ['research', {}, 'base', 'opus', 'claude-opus-5-5', 'medium'],
     ['research', { type: 'alternatives' }, 'base', 'opus', 'claude-opus-5-5', 'medium'],
-    ['research', { complexity: 'very-complex' }, 'very-complex', 'opus', 'claude-opus-5-5', 'max'],
-    ['decomposition', { checkpoint: true }, 'critical', 'opus', 'claude-opus-5-5', 'max'],
-    ['decomposition', { critical: true }, 'critical', 'opus', 'claude-opus-5-5', 'max'],
+    ['research', { complexity: 'very-complex' }, 'very-complex', 'opus', 'claude-opus-5-5', 'high'],
+    ['decomposition', { checkpoint: true }, 'critical', 'opus', 'claude-opus-5-5', 'high'],
+    ['decomposition', { critical: true }, 'critical', 'opus', 'claude-opus-5-5', 'high'],
     ['executor', {}, 'base', 'sonnet', 'sonnet', 'max'],
     ['executor', { critical: true }, 'critical', 'opus', 'claude-opus-5-5', 'low'],
     ['pr-sentinel', {}, 'base', 'sonnet', 'sonnet', 'high'],
     ['integrator', {}, 'base', 'opus', 'claude-opus-5-5', 'medium'],
     ['integrator', { contested: true }, 'critical', 'opus', 'claude-opus-5-5', 'high'],
-    ['drift-check', {}, 'base', 'opus', 'claude-opus-5-5', 'max'],
+    ['drift-check', {}, 'base', 'opus', 'claude-opus-5-5', 'high'],
     ['arch-review', {}, 'base', 'opus', 'claude-opus-5-5', 'medium'],
-    ['arch-review', { contested: true }, 'critical', 'opus', 'claude-opus-5-5', 'max'],
+    ['arch-review', { contested: true }, 'critical', 'opus', 'claude-opus-5-5', 'high'],
     ['arch-review', { inputTokens: policy.WINDOW_THRESHOLD_TOKENS + 1 }, 'ceiling', 'fable', 'fable', 'medium'],
     ['ci-fix', {}, 'base', 'opus', 'claude-opus-5-5', 'medium'],
     ['review-fix', {}, 'base', 'opus', 'claude-opus-5-5', 'medium'],
@@ -145,10 +145,10 @@ test('resolves Claude through its independent native grid without changing Codex
   });
   assert.deepStrictEqual(policy.RUNTIME_ROLE_RUNG_DEFINITIONS.claude.research, [
     { name: 'base', model_key: 'opus', effort: 'medium' },
-    { name: 'very-complex', model_key: 'opus', effort: 'max' },
+    { name: 'very-complex', model_key: 'opus', effort: 'high' },
   ]);
   assert.deepStrictEqual(policy.RUNTIME_ROLE_RUNG_DEFINITIONS.claude.decomposition[1], {
-    name: 'critical', model_key: 'opus', effort: 'max',
+    name: 'critical', model_key: 'opus', effort: 'high',
   });
 });
 
@@ -546,7 +546,7 @@ test('exhaustive runtime matrix covers every native base tuple and scoped escala
       executor: ['sonnet', 'max'],
       'pr-sentinel': ['sonnet', 'high'],
       integrator: ['claude-opus-5-5', 'medium'],
-      'drift-check': ['claude-opus-5-5', 'max'],
+      'drift-check': ['claude-opus-5-5', 'high'],
       'arch-review': ['claude-opus-5-5', 'medium'],
       'ci-fix': ['claude-opus-5-5', 'medium'],
       'review-fix': ['claude-opus-5-5', 'medium'],
@@ -568,18 +568,18 @@ test('exhaustive runtime matrix covers every native base tuple and scoped escala
     ['codex', 'arch-review', { contested: true }, 'critical', 'gpt-6-sol', 'xhigh'],
     ['codex', 'arch-review', { inputTokens: policy.WINDOW_THRESHOLD_TOKENS + 1 }, 'critical', 'gpt-6-sol', 'xhigh'],
     ['claude', 'research', { type: 'alternatives' }, 'base', 'claude-opus-5-5', 'medium'],
-    ['claude', 'research', { complexity: 'very-complex' }, 'very-complex', 'claude-opus-5-5', 'max'],
-    ['claude', 'decomposition', { critical: true }, 'critical', 'claude-opus-5-5', 'max'],
-    ['claude', 'decomposition', { checkpoint: true }, 'critical', 'claude-opus-5-5', 'max'],
+    ['claude', 'research', { complexity: 'very-complex' }, 'very-complex', 'claude-opus-5-5', 'high'],
+    ['claude', 'decomposition', { critical: true }, 'critical', 'claude-opus-5-5', 'high'],
+    ['claude', 'decomposition', { checkpoint: true }, 'critical', 'claude-opus-5-5', 'high'],
     ['claude', 'executor', { critical: true }, 'critical', 'claude-opus-5-5', 'low'],
     ['claude', 'executor', { checkpoint: true }, 'critical', 'claude-opus-5-5', 'low'],
     ['claude', 'integrator', { critical: true }, 'critical', 'claude-opus-5-5', 'high'],
     ['claude', 'integrator', { checkpoint: true }, 'critical', 'claude-opus-5-5', 'high'],
     ['claude', 'integrator', { contested: true }, 'critical', 'claude-opus-5-5', 'high'],
     ['claude', 'integrator', { inputTokens: policy.WINDOW_THRESHOLD_TOKENS + 1 }, 'critical', 'claude-opus-5-5', 'high'],
-    ['claude', 'arch-review', { critical: true }, 'critical', 'claude-opus-5-5', 'max'],
-    ['claude', 'arch-review', { checkpoint: true }, 'critical', 'claude-opus-5-5', 'max'],
-    ['claude', 'arch-review', { contested: true }, 'critical', 'claude-opus-5-5', 'max'],
+    ['claude', 'arch-review', { critical: true }, 'critical', 'claude-opus-5-5', 'high'],
+    ['claude', 'arch-review', { checkpoint: true }, 'critical', 'claude-opus-5-5', 'high'],
+    ['claude', 'arch-review', { contested: true }, 'critical', 'claude-opus-5-5', 'high'],
     ['claude', 'arch-review', { inputTokens: policy.WINDOW_THRESHOLD_TOKENS + 1 }, 'ceiling', 'fable', 'medium'],
   ];
 
@@ -696,7 +696,7 @@ test('global promotion cannot move fixed native roles off their base tuple', () 
   };
   for (const [runtime, expected] of [
     ['codex', { 'pr-sentinel': ['gpt-6-luna', 'medium'], 'drift-check': ['gpt-6-luna', 'max'] }],
-    ['claude', { 'pr-sentinel': ['sonnet', 'high'], 'drift-check': ['claude-opus-5-5', 'max'] }],
+    ['claude', { 'pr-sentinel': ['sonnet', 'high'], 'drift-check': ['claude-opus-5-5', 'high'] }],
   ]) {
     for (const [role, [model, effort]] of Object.entries(expected)) {
       const result = policy.resolveDispatch({ runtime, role, signals });

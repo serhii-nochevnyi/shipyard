@@ -242,7 +242,7 @@ const TICKETS = [
 const driftTickets = (tickets) => tickets.map((ticket) => ({
   ...ticket,
   model: 'claude-opus-5-5',
-  effort: 'max',
+  effort: 'high',
 }));
 
 // Each script's own required args, beside `tickets`. drift-gate refuses
@@ -520,10 +520,10 @@ const DISPATCH = [
   {
     name: 'drift-gate',
     args: (over = {}) => ({
-      tickets: [{ ...TICKETS[0], model: 'claude-opus-5-5', effort: 'max', ...over }],
+      tickets: [{ ...TICKETS[0], model: 'claude-opus-5-5', effort: 'high', ...over }],
       driftRefPath: '/x/drift-check.md', baseRef: 'origin/main',
     }),
-    resolved: { model: 'claude-opus-5-5', effort: 'max' },
+    resolved: { model: 'claude-opus-5-5', effort: 'high' },
   },
 ];
 
@@ -649,7 +649,7 @@ test('workflow fan-outs retain combined signal evidence and never infer an omitt
   assert.strictEqual(fixed.calls.length, 1);
   assert.deepStrictEqual(
     [fixed.calls[0].opts.model, fixed.calls[0].opts.effort],
-    ['claude-opus-5-5', 'max'],
+    ['claude-opus-5-5', 'high'],
     'fixed drift-check remains on its native base tuple',
   );
   const fixedRecord = WORKFLOW_RECORDER.getVerifiedRecord(fixed.value[0].receipt.dispatch_id);
@@ -713,7 +713,7 @@ for (const role of ['ci-fix', 'review-fix']) {
       const args = DISPATCH[1].args({
         needsCiFix: role === 'ci-fix', needsReviewFix: role === 'review-fix',
         signatureState: state, signals: { signatureState: state },
-        model: 'claude-opus-5-5', effort: state === 'first' ? 'medium' : 'max',
+        model: 'claude-opus-5-5', effort: state === 'first' ? 'medium' : 'high',
         ...(prior ? {
           priorReceipt: JSON.parse(JSON.stringify(prior)),
           previous_dispatch_id: prior.dispatch_id,
@@ -725,7 +725,7 @@ for (const role of ['ci-fix', 'review-fix']) {
       const record = recorder.getVerifiedRecord(receipt.dispatch_id);
       assert.strictEqual(record.resolution.signals.signatureState, state);
       assert.strictEqual(record.resolution.role, role);
-      assert.strictEqual(record.receipt.applied_effort, state === 'first' ? 'medium' : 'max');
+      assert.strictEqual(record.receipt.applied_effort, state === 'first' ? 'medium' : 'high');
       if (prior) assert.strictEqual(record.predecessor_dispatch_id, prior.dispatch_id);
       prior = receipt;
     }
@@ -740,7 +740,7 @@ test('repair refuses absent, invented or contradictory predecessor inputs before
     { signatureState: 'repeat', priorReceipt: {}, priorApplied: { dispatch_id: 'different' } },
   ]) {
     const error = await rejects('fix-round', DISPATCH[1].args({
-      model: 'claude-opus-5-5', effort: 'max', ...over,
+      model: 'claude-opus-5-5', effort: 'high', ...over,
     }));
     assert.ok(['DispatchPolicyError', 'DispatchBoundaryError'].includes(error.name));
   }
@@ -1038,11 +1038,11 @@ test('Claude repair launches consume the preceding boundary receipt and preserve
   });
   assert.deepStrictEqual(f.calls.map((selection) => [selection.model, selection.effort]), [
     ['claude-opus-5-5', 'medium'],
-    ['claude-opus-5-5', 'max'],
+    ['claude-opus-5-5', 'high'],
   ]);
   assert.strictEqual(repeat.receipt.compliance, 'verified');
   assert.strictEqual(repeat.receipt.applied_model, 'claude-opus-5-5');
-  assert.strictEqual(repeat.receipt.applied_effort, 'max');
+  assert.strictEqual(repeat.receipt.applied_effort, 'high');
 });
 
 test('missing capabilities, launch methods, and application evidence fail closed before dispatch', () => {

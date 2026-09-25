@@ -19,14 +19,14 @@ test('states the current independent runtime grids and their native ladders', ()
     'Codex grid:',
     'executor Luna/max → Sol/high only for explicit `critical`/`checkpoint`',
     'Claude grid:',
-    'research Opus/medium → Opus/max only for explicit `very-complex`',
-    'decomposition Opus/medium → Opus/max only for explicit `critical`/`checkpoint`',
+    'research Opus/medium → Opus/high only for explicit `very-complex`',
+    'decomposition Opus/medium → Opus/high only for explicit `critical`/`checkpoint`',
     'executor Sonnet/max → Opus/low only for explicit `critical`/`checkpoint`',
     'pr-sentinel Sonnet/high',
     'integrator Opus/medium → Opus/high only for `contested`, explicit `critical`/`checkpoint`, or a measured window',
-    'drift-check Opus/max',
-    'arch-review Opus/medium → Opus/max for `critical`/`checkpoint`/`contested` → Fable/medium for a measured window',
-    'ci-fix and review-fix Opus/medium → Opus/max for verified `repeat` or `repeat_exhausted`',
+    'drift-check Opus/high',
+    'arch-review Opus/medium → Opus/high for `critical`/`checkpoint`/`contested` → Fable/medium for a measured window',
+    'ci-fix and review-fix Opus/medium → Opus/high for verified `repeat` or `repeat_exhausted`',
   ]) {
     assert.ok(instructions.includes(phrase), `CLAUDE.md must state: ${phrase}`);
   }

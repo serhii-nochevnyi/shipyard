@@ -1,7 +1,7 @@
 {
   "id": "delivery-pipeline",
   "role": "feature",
-  "version": "0.61.0",
+  "version": "0.62.1",
   "title": "Delivery pipeline loop gates",
   "description": "Fail-closed gates wiring the ticket-delivery conveyor into the GSD loop: Gate 2 validates the ticket graph and a deterministic local projection keeps native GSD state synchronized through planning, delivery, verification, and ship.",
   "tier": "full",
@@ -86,7 +86,7 @@
     "delivery_pipeline.fable": {
       "type": "string",
       "default": "off",
-      "description": "Consent for the paid 1M-context ceiling (Claude Fable 5.1). 'off' - the conveyor never emits the 'fable' alias: the three escalation routes (a measured input over fable_window_tokens, a repair whose failure signature came back a third time, a contested judgement) degrade to 'opus' at 'max' effort and print the reason. 'auto' - a person has answered Fable's consent prompt interactively, so those routes are honoured. It defaults to off because an unconsented request in a background session waits out dialogExpiry and then ends the turn without sending, and silence is not consent. No role takes it by default, the integrator included."
+      "description": "Consent for the paid 1M-context ceiling (Claude Fable 5.1). 'off' - the conveyor never emits the 'fable' alias: the three escalation routes (a measured input over fable_window_tokens, a repair whose failure signature came back a third time, a contested judgement) degrade to 'opus' at 'high' effort and print the reason. 'auto' - a person has answered Fable's consent prompt interactively, so those routes are honoured. It defaults to off because an unconsented request in a background session waits out dialogExpiry and then ends the turn without sending, and silence is not consent. No role takes it by default, the integrator included."
     },
     "delivery_pipeline.fable_window_tokens": {
       "type": "number",

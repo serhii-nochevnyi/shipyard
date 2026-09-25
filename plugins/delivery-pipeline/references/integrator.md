@@ -18,6 +18,8 @@ command-backed evidence is not verification.
   individual ticket PRs, which were each reviewed in isolation and whose bases
   are other ticket branches. Under `direct-to-main` it is the merge-base of the
   phase start → the default branch.
+  The diff excludes `.planning/`: plans arrive as the ticket contracts below,
+  and generated planning state is not code under integration.
 - `.planning/architecture/` (ADRs and companions).
 - Ticket contracts (plan files) with their acceptance criteria.
 

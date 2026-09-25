@@ -697,10 +697,10 @@ reader so the diagnostic surface cannot drift silently:
 
 ```text
 role          tier     effort   why this row
-integrator    opus     xhigh    the last mechanical judgment before a person merges,
+integrator    opus     high     the last mechanical judgment before a person merges,
                                 so its effort never drops; its measured run is a
                                 dispatch-specific fact, not a standing exception
-arch-review   opus     xhigh    reads a whole diff against every ADR; its effort is
+arch-review   opus     high     reads a whole diff against every ADR; its effort is
                                 fixed by the compatibility reader, not by a runtime
                                 model preference
 executor      opus     high     it implements a contract; falsifying that contract
@@ -724,31 +724,29 @@ reports:
 
 ```text
 role          tier     effort   the dispatch signal that reaches it
-integrator    opus     max      --contested
-integrator    opus     max      --input-tokens over pipeline.fable_window_tokens
-arch-review   opus     max      --contested
-arch-review   opus     max      --input-tokens over pipeline.fable_window_tokens
-executor      opus     xhigh    --risk high
-executor      opus     xhigh    --checkpoint
-executor      opus     max      --input-tokens over pipeline.fable_window_tokens
-ci-fix        opus     max      --signature-state repeat
-ci-fix        opus     max      --signature-state repeat_exhausted
-ci-fix        opus     max      --input-tokens over pipeline.fable_window_tokens
-review-fix    opus     max      --signature-state repeat
-review-fix    opus     max      --signature-state repeat_exhausted
-review-fix    opus     max      --input-tokens over pipeline.fable_window_tokens
-drift-check   opus     max      --input-tokens over pipeline.fable_window_tokens
-research      opus     xhigh    --type alternatives
-research      opus     max      --input-tokens over pipeline.fable_window_tokens
+drift-check   opus     high     --input-tokens over pipeline.fable_window_tokens
 pr-sentinel   sonnet   max      --signature-state repeat
-pr-sentinel   opus     max      --signature-state repeat_exhausted
-pr-sentinel   opus     max      --input-tokens over pipeline.fable_window_tokens
+pr-sentinel   opus     high     --signature-state repeat_exhausted
+pr-sentinel   opus     high     --input-tokens over pipeline.fable_window_tokens
 ```
+
+The compatibility reader caps Opus at `high` (`--signature-state xhigh`/`max`
+are clamped down, never launched): every row that would otherwise have escalated
+an already-Opus role to `xhigh` or `max` — `integrator`/`--contested`,
+`arch-review`/`--contested`, `executor`/`--risk high` or `--checkpoint`,
+`ci-fix` and `review-fix`/`--signature-state repeat` or `repeat_exhausted`,
+`research`/`--type alternatives`, and the measured-window row for each of those
+roles — now resolves to that role's own baseline `opus`/`high` and is not a
+distinct row here any more. What survives is only what still changes the
+resolved *tier*: `drift-check` and `pr-sentinel` are `sonnet` at baseline, so a
+route that reaches them still moves the pair; `pr-sentinel --signature-state
+repeat` also survives because it deepens effort without a cap (the exempt role
+is never routed through `opus`).
 
 For the compatibility reader, `repeat` deepens only the effort route and does
 not enter `fableRoute`; therefore `pr-sentinel --signature-state repeat` retains
 its `sonnet` exemption at `max`. `repeat_exhausted` is the distinct ceiling
-signal, so it is the first repair state that resolves to `opus`/`max` when the
+signal, so it is the first repair state that resolves to `opus`/`high` when the
 legacy Fable consent is closed. These rows describe the current
 `pipeline-config.cjs` compatibility branch only; ADR-014 does not promote the
 fixed routed `pr-sentinel` role for either signal.
@@ -771,15 +769,15 @@ The canonical role/rung/signal ladder is:
 
 | Role | Codex base and evidence-based escalation | Claude Code base and evidence-based escalation |
 |---|---|---|
-| `research` | Sol/high → Sol/xhigh on explicit `complexity: very-complex`; `type: alternatives` alone stays at base | Opus/medium → Opus/max on explicit `complexity: very-complex`; `type: alternatives` stays at base |
-| `decomposition` | Sol/high → Sol/xhigh on `critical` or `checkpoint` | Opus/medium → Opus/max on `critical` or `checkpoint` |
+| `research` | Sol/high → Sol/xhigh on explicit `complexity: very-complex`; `type: alternatives` alone stays at base | Opus/medium → Opus/high on explicit `complexity: very-complex`; `type: alternatives` stays at base |
+| `decomposition` | Sol/high → Sol/xhigh on `critical` or `checkpoint` | Opus/medium → Opus/high on `critical` or `checkpoint` |
 | `executor` | Luna/max → Sol/high on explicit `critical` or `checkpoint` | Sonnet/max → Opus/low on explicit `critical` or `checkpoint` |
 | `pr-sentinel` | Luna/medium, fixed; gate strategy only | Sonnet/high, fixed; gate strategy only |
 | `integrator` | Sol/high → Sol/xhigh on measured window, `contested`, `critical`, or `checkpoint` | Opus/medium → Opus/high on the same evidence |
-| `drift-check` | Luna/max, fixed; gate strategy only | Opus/max, fixed; gate strategy only |
-| `arch-review` | Sol/high → Sol/xhigh on measured window, `contested`, `critical`, or `checkpoint` | Opus/medium → Opus/max on `contested`, `critical`, or `checkpoint` → Fable/medium on measured window |
-| `ci-fix` | Luna/max → Sol/high on verified `signatureState: repeat` → Sol/xhigh on verified `repeat_exhausted` | Opus/medium → Opus/max on verified `repeat` or `repeat_exhausted` |
-| `review-fix` | Luna/max → Sol/high on verified `signatureState: repeat` → Sol/xhigh on verified `repeat_exhausted` | Opus/medium → Opus/max on verified `repeat` or `repeat_exhausted` |
+| `drift-check` | Luna/max, fixed; gate strategy only | Opus/high, fixed; gate strategy only |
+| `arch-review` | Sol/high → Sol/xhigh on measured window, `contested`, `critical`, or `checkpoint` | Opus/medium → Opus/high on `contested`, `critical`, or `checkpoint` → Fable/medium on measured window |
+| `ci-fix` | Luna/max → Sol/high on verified `signatureState: repeat` → Sol/xhigh on verified `repeat_exhausted` | Opus/medium → Opus/high on verified `repeat` or `repeat_exhausted` |
+| `review-fix` | Luna/max → Sol/high on verified `signatureState: repeat` → Sol/xhigh on verified `repeat_exhausted` | Opus/medium → Opus/high on verified `repeat` or `repeat_exhausted` |
 
 **Canonical-table assertion.** This table is a normative transcription of
 `plugins/delivery-pipeline/scripts/model-policy.cjs`, not of the compatibility

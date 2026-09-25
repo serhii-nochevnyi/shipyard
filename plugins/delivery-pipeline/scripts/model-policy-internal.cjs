@@ -110,11 +110,11 @@ const CODEX_ROLE_RUNG_DEFINITIONS = Object.freeze({
 const CLAUDE_ROLE_RUNG_DEFINITIONS = Object.freeze({
   research: Object.freeze([
     Object.freeze({ name: 'base', model_key: 'opus', effort: 'medium' }),
-    Object.freeze({ name: 'very-complex', model_key: 'opus', effort: 'max' }),
+    Object.freeze({ name: 'very-complex', model_key: 'opus', effort: 'high' }),
   ]),
   decomposition: Object.freeze([
     Object.freeze({ name: 'base', model_key: 'opus', effort: 'medium' }),
-    Object.freeze({ name: 'critical', model_key: 'opus', effort: 'max' }),
+    Object.freeze({ name: 'critical', model_key: 'opus', effort: 'high' }),
   ]),
   executor: Object.freeze([
     Object.freeze({ name: 'base', model_key: 'sonnet', effort: 'max' }),
@@ -128,24 +128,22 @@ const CLAUDE_ROLE_RUNG_DEFINITIONS = Object.freeze({
     Object.freeze({ name: 'critical', model_key: 'opus', effort: 'high' }),
   ]),
   'drift-check': Object.freeze([
-    Object.freeze({ name: 'base', model_key: 'opus', effort: 'max' }),
+    Object.freeze({ name: 'base', model_key: 'opus', effort: 'high' }),
   ]),
   'arch-review': Object.freeze([
     Object.freeze({ name: 'base', model_key: 'opus', effort: 'medium' }),
-    Object.freeze({ name: 'critical', model_key: 'opus', effort: 'max' }),
+    Object.freeze({ name: 'critical', model_key: 'opus', effort: 'high' }),
     Object.freeze({ name: 'ceiling', model_key: 'fable', effort: 'medium' }),
   ]),
   'ci-fix': Object.freeze([
     Object.freeze({ name: 'base', model_key: 'opus', effort: 'medium' }),
-    Object.freeze({ name: 'repeat', model_key: 'opus', effort: 'max' }),
-    // Keep the receipt-chain state explicit while holding the requested Opus
-    // max ceiling; Claude repair does not escalate to Fable.
-    Object.freeze({ name: 'repeat_exhausted', model_key: 'opus', effort: 'max' }),
+    Object.freeze({ name: 'repeat', model_key: 'opus', effort: 'high' }),
+    Object.freeze({ name: 'repeat_exhausted', model_key: 'opus', effort: 'high' }),
   ]),
   'review-fix': Object.freeze([
     Object.freeze({ name: 'base', model_key: 'opus', effort: 'medium' }),
-    Object.freeze({ name: 'repeat', model_key: 'opus', effort: 'max' }),
-    Object.freeze({ name: 'repeat_exhausted', model_key: 'opus', effort: 'max' }),
+    Object.freeze({ name: 'repeat', model_key: 'opus', effort: 'high' }),
+    Object.freeze({ name: 'repeat_exhausted', model_key: 'opus', effort: 'high' }),
   ]),
 });
 
@@ -154,10 +152,6 @@ const RUNTIME_ROLE_RUNG_DEFINITIONS = Object.freeze({
   claude: CLAUDE_ROLE_RUNG_DEFINITIONS,
 });
 
-// Escalation semantics are data, not an un-fingerprinted collection of
-// conditionals. Each runtime owns its signal-to-rung grid as well. Claude's
-// architecture review uses the measured-window signal for its third, Fable
-// ceiling; ordinary critical/contested/checkpoint evidence stops at Opus max.
 const CODEX_ROLE_SIGNAL_RULES = Object.freeze({
   research: Object.freeze({
     'very-complex': Object.freeze({ rung: 'very-complex', any: Object.freeze([{ complexity: 'very-complex' }]) }),
