@@ -538,6 +538,73 @@ test('integrator preserves human-review-required findings and rejects duplicate 
   }
 });
 
+test('integrator findings state the ticket and fix_ticket contract with a named remedy', () => {
+  const tickets = ['T-33-01'];
+  const value = fixture('integrator', (root) => phaseSubject(root, tickets));
+  try {
+    const identity = revision(value.root);
+    const integrationPath = evidence(value.root, path.relative(value.root, integrationEvidencePath(value.root)), 'complete integration evidence');
+    const base = {
+      outcome: 'needs-fix',
+      head: identity.head,
+      head_tree: identity.headTree,
+      base: identity.base,
+      base_tree: identity.baseTree,
+      ticket_set: tickets,
+      ticket_set_digest: crypto.createHash('sha256').update(JSON.stringify(tickets)).digest('hex'),
+      blocking_count: 1,
+      summary: 'fix required',
+    };
+    const sealOpts = { role: 'integrator', phase: INTEGRATION_PHASE, ticketSet: tickets, evidencePath: integrationPath };
+
+    assert.throws(
+      () => roleArtifact.seal(sealInput(value, {
+        ...base,
+        findings: [{ id: 'F1', type: 'fix-ticket', blocking: true, summary: 'seam' }],
+      }, sealOpts)),
+      (error) => error && error.code === 'INCOMPLETE_FINDING' && /fix_ticket is required/.test(error.message),
+    );
+
+    assert.throws(
+      () => roleArtifact.seal(sealInput(value, {
+        ...base,
+        findings: [{ id: 'F1', type: 'fix-ticket', blocking: true, summary: 'seam',
+          fix_ticket: { title: 'Fix title', scope: 'scope text', files: [] } }],
+      }, sealOpts)),
+      (error) => error && error.code === 'INCOMPLETE_FINDING' && /fix_ticket\.files/.test(error.message),
+    );
+
+    assert.throws(
+      () => roleArtifact.seal(sealInput(value, {
+        ...base,
+        findings: [{ id: 'F1', type: 'informational', blocking: true, summary: 'seam', ticket: 42 }],
+      }, sealOpts)),
+      (error) => error && error.code === 'INVALID_RESULT' && /\.ticket is a number/.test(error.message) && /remedy:/.test(error.message),
+    );
+
+    assert.throws(
+      () => roleArtifact.seal(sealInput(value, {
+        ...base,
+        findings: [{ id: 'F1', type: 'informational', blocking: true, summary: 'seam', ticket: null,
+          fix_ticket: { title: 'Fix title', scope: 'scope text', files: ['a.cjs'] } }],
+      }, sealOpts)),
+      (error) => error && error.code === 'INVALID_RESULT' && /only valid on a fix-ticket finding/.test(error.message),
+    );
+
+    const sealed = roleArtifact.seal(sealInput(value, {
+      ...base,
+      findings: [
+        { id: 'F1', type: 'fix-ticket', blocking: true, summary: 'seam summary', ticket: null,
+          fix_ticket: { title: 'Fix title', scope: 'scope text', files: ['a.cjs'], depends_on: [] } },
+      ],
+    }, sealOpts));
+    assert.equal(sealed.envelope.outcome, 'needs-fix');
+    assert.equal(sealed.envelope.blocking_count, 1);
+  } finally {
+    fs.rmSync(value.root, { recursive: true, force: true });
+  }
+});
+
 test('integrator refuses missing or empty complete integration evidence', () => {
   const tickets = [];
   const value = fixture('integrator', (root) => phaseSubject(root, tickets));
