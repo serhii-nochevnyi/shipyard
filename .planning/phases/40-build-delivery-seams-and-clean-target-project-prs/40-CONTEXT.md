@@ -98,7 +98,7 @@ Tickets whose `files_modified` meets a phase-39 plan's `files_modified` declare 
 | Ticket | Requirements | Wave | Same-phase depends_on | Cross-phase |
 |---|---|---|---|---|
 | T-40-01 hermetic git unit fixtures | REQ-150 | 2 | — | T-39-01 |
-| T-40-02 header-free state YAML + pre-push via git | REQ-149 | 1 | — | — |
+| ~~T-40-02~~ moved to phase 41 as T-41-08 (REQ-157) on 2026-09-25 | — | — | — | — |
 | T-40-03 PR ledger and head-branch matching | REQ-143 | 2 | 02 | — |
 | T-40-04 Codex config refusal remedy | REQ-149 | 3 | 05 | T-39-01 |
 | T-40-05 Codex tune keys + doctor manifest | REQ-149 | 2 | — | T-39-07, T-39-04 |
@@ -143,7 +143,7 @@ Tickets whose `files_modified` meets a phase-39 plan's `files_modified` declare 
 | REQ | REQ-146 | Per-line research recovery (Claude T-40-13, Codex T-40-12) | T-40-12, 13, 25 | COVERED |
 | REQ | REQ-147 | Shared sealer | T-40-10, 11, 12, 25 | COVERED |
 | REQ | REQ-148 | Researcher write scope; task by file + digest | T-40-09, 11, 12, 25 | COVERED |
-| REQ | REQ-149 | Six point fixes a-f | a,b T-40-02; c T-40-04; d,f T-40-05; e T-40-25 | COVERED |
+| REQ | REQ-149 | Six point fixes a-f | a,b moved to T-41-08 (REQ-157); c T-40-04; d,f T-40-05; e T-40-25 | COVERED |
 | REQ | REQ-150 | Hermetic git fixtures | T-40-01 | COVERED |
 | CONTEXT | D-16..D-24 | Planning refinements | T-40-17/25 (16,17), 20 (18), 15/17/18 (19), 19 (20), 23 (21,22), 22 (23), 05 (24) | COVERED |
 | CONTEXT | D-36..D-41 | Plan-check revisions | graph (36), 07/08/09 (37), 15/17 (38), 17 (39), 23 (40), 12 (41) | COVERED |

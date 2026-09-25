@@ -774,7 +774,7 @@ target-project PRs.
 **Status**: seven local draft plans; structures and Gate 2 pass. Checker findings amended with deterministic checks; formal receipt-chain approval remains blocked. See [planning result](phases/41-reduce-pipeline-subscription-overhead/PLANNING-RESULT.md). No implementation or new plan commits.
 **Goal**: reduce avoidable context processing and repeated model work while preserving verified outcomes.
 **Depends on**: Phase 39
-**Requirements**: REQ-151, REQ-152, REQ-153, REQ-154, REQ-155, REQ-156
+**Requirements**: REQ-151, REQ-152, REQ-153, REQ-154, REQ-155, REQ-156, REQ-157
 **Acceptance**: P41-A–F in [phase context](phases/41-reduce-pipeline-subscription-overhead/CONTEXT.md)
 **Delivery order**: after phase 39 release, before phase 40
 
@@ -789,7 +789,7 @@ tickets; do not repeat its provenance/schema work or phase 39 packet fixes.
 <!-- shipyard:gsd-sync:begin -->
 ## Shipyard synchronization (generated)
 
-- Source fingerprint: `3a86833a8acc78f368388d5ed21cdaabff3629329040c5fc8790f20ccd069ef2`
+- Source fingerprint: `94f01e483e36c5d47f0c3088c43041e4601fa609115344ab5b9c4b0a02c65588`
 - Plans merged: 163/197
 - Phases verified: 10/22
 - Current phase: 20
@@ -816,7 +816,7 @@ tickets; do not repeat its provenance/schema work or phase 39 packet fixes.
 | 37 — Run the autonomous dual-runtime control plane | 8 | 8 | pending |
 | 38 — Restore the native model ladder in delivery | 8 | 8 | passed |
 | 39 — Remove conveyor session friction | 17 | 17 | gaps_found |
-| 40 — Build delivery seams and clean target-project PRs | 27 | 0 | pending |
-| 41 — Reduce pipeline subscription overhead | 7 | 0 | pending |
+| 40 — Build delivery seams and clean target-project PRs | 26 | 0 | pending |
+| 41 — Reduce pipeline subscription overhead | 8 | 0 | pending |
 
 <!-- shipyard:gsd-sync:end -->

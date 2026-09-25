@@ -1,13 +1,13 @@
 {
   "schema_version": 1,
-  "generation": 362,
-  "generation_identity": "59bb321e-5605-4ada-a32f-3c79482153ca",
-  "previous_generation_identity": "16777244:12918487251:1790336618753483500:2579d068b7e0b1ad5ed761db314d8afe3ee122ab8206990577bcfa21abb98c74",
-  "observed_at": "2026-09-25T11:44:03.568Z",
-  "generated_at": "2026-09-25T11:44:03.568Z",
+  "generation": 363,
+  "generation_identity": "2be6825a-d226-4b46-9ddf-11ce792b4879",
+  "previous_generation_identity": "16777245:12918489155:1790336648441934600:043a79f0a1fbc353125ccc18d5af1efa8ba656ba6308dc337422788f6408f4e8",
+  "observed_at": "2026-09-25T15:33:13.408Z",
+  "generated_at": "2026-09-25T15:33:13.408Z",
   "by": "state-sync",
-  "pid": 60075,
-  "observation_generation": 362,
+  "pid": 23228,
+  "observation_generation": 363,
   "observation_projection": {
     "tickets": {
       "T-20-01": {
@@ -1814,17 +1814,6 @@
         "review_decision": null,
         "checks": null
       },
-      "T-40-02": {
-        "status": "pending",
-        "repository": null,
-        "pr": null,
-        "head": null,
-        "draft": false,
-        "base": "epic/40-build-delivery-seams-and-clean-target-project-prs",
-        "merge_state": null,
-        "review_decision": null,
-        "checks": null
-      },
       "T-40-03": {
         "status": "pending",
         "repository": null,
@@ -2176,14 +2165,25 @@
         "merge_state": null,
         "review_decision": null,
         "checks": null
+      },
+      "T-41-08": {
+        "status": "pending",
+        "repository": null,
+        "pr": null,
+        "head": null,
+        "draft": false,
+        "base": "epic/41-reduce-pipeline-subscription-overhead",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
       }
     }
   },
   "binding": {
     "schema_version": 1,
-    "state_digest": "7fc6aae8f9dd27057b9c3fc59a1d38510827b423eb3c69c01f3ea6f3c8279018",
-    "front_digest": "fcf808f4270e592179ab6a2913e18a6b27407c982e6f88441ab48be2e42a671d",
-    "observation_digest": "7877a4644180bdf1ac8bb98fb2cfb8c37a1b05be0d1299aafcde6883f57fae7b",
-    "observation_generation": 362
+    "state_digest": "1f11c347056b994bc7891e6ae131fe3b9ab63223dcf23520421c5788ae5c2742",
+    "front_digest": "4e7f465fddbb82f7c4a40ecd5dd28a7ab26c768d36b7f501166293869ef318fe",
+    "observation_digest": "d230aca85789377632ee18a877e44938d7811bf6af0a169148c1bd2ec81fc9f7",
+    "observation_generation": 363
   }
 }

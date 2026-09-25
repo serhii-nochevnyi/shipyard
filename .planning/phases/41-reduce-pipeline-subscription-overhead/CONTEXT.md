@@ -199,7 +199,7 @@ runtime patch remains bootstrap only. No product code is changed by planning.
 
 Phase 41 is independently deliverable on merged phase-39 release 0.63.0 before phase 40. T-39-17 packet selection/bounds and T-39-03 arming are integrated prerequisites; their installed behavior remains a separate acceptance gate. The local host patch used for research/planning is bootstrap, not delivered source. Cross-phase dependents below wait for merged phase-41 source on main; their PRs do not stack across epics. No phase-40 requirement changes are needed: phase 41 provides prompt observation, recovery and local projection/reporting contracts, while phase 40 retains its listed producer/consumer, request, provenance and formatting work.
 
-Source audit: ROADMAP phase goal maps to T-41-01–07. REQ-151/P41-A maps to T-41-01; REQ-152/P41-B to T-41-02; REQ-153/P41-C to T-41-03; REQ-154/P41-D to T-41-04; REQ-155/P41-E to T-41-05; REQ-156/P41-F to T-41-06. T-41-07 integrates all six. Research constraints for packet admission, safe handoff, one-shot wake, authenticated candidate, dependency-edge fingerprints, and verified-outcome joins are in those same tickets. Deferred global model downgrades, adaptive investigation fan-out, new sentinel daemon, broad ticket resizing, automatic handoff thresholds and instruction rewrite are excluded. A reproduced stop/wake source residual requires a scoped ticket amendment before changing phase-40-owned files; T-41-03's regression and installed acceptance cannot pass while that defect remains.
+Source audit: ROADMAP phase goal maps to T-41-01–07. REQ-151/P41-A maps to T-41-01; REQ-152/P41-B to T-41-02; REQ-153/P41-C to T-41-03; REQ-154/P41-D to T-41-04; REQ-155/P41-E to T-41-05; REQ-157 (moved from REQ-149a/b, formerly T-40-02) maps to T-41-08. REQ-156/P41-F to T-41-06. T-41-07 integrates all six. Research constraints for packet admission, safe handoff, one-shot wake, authenticated candidate, dependency-edge fingerprints, and verified-outcome joins are in those same tickets. Deferred global model downgrades, adaptive investigation fan-out, new sentinel daemon, broad ticket resizing, automatic handoff thresholds and instruction rewrite are excluded. A reproduced stop/wake source residual requires a scoped ticket amendment before changing phase-40-owned files; T-41-03's regression and installed acceptance cannot pass while that defect remains.
 
 | Source | Item | Plan | Status |
 | --- | --- | --- | --- |
@@ -302,6 +302,14 @@ Source audit: ROADMAP phase goal maps to T-41-01–07. REQ-151/P41-A maps to T-4
         "plugins/delivery-pipeline/scripts/delivery-commit-finalizer.cjs"
       ],
       "reason": "Diamond readiness must retain the phase-41 expected-tree and repeated-finalization safeguards."
+    },
+    {
+      "ticket": "T-40-03",
+      "replace_depends_on": {"T-40-02": "T-41-08"},
+      "shared_files": [
+        "plugins/delivery-pipeline/scripts/state-sync.cjs"
+      ],
+      "reason": "T-40-02 moved into phase 41 as T-41-08 at the user's request; T-40-03 remains the next state-sync.cjs writer and waits for merged phase-41 source."
     }
   ]
 }

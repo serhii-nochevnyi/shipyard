@@ -1673,28 +1673,6 @@
   epic: "epic/39-remove-conveyor-session-friction"
   reapable: true
   since: "2026-09-25T11:43:33.425Z"
-"T-40-02":
-  branch: "ticket/T-40-02-unblock-pushes-header-free-state-yaml-an"
-  pr: null
-  status: "pending"
-  base: "epic/40-build-delivery-seams-and-clean-target-project-prs"
-  base_reason: "no primary parent — a root ticket PRs into epic/40-build-delivery-seams-and-clean-target-project-prs"
-  epic: "epic/40-build-delivery-seams-and-clean-target-project-prs"
-  ready: true
-  reapable: false
-  since: "2026-09-24T19:40:45.987Z"
-"T-40-03":
-  branch: "ticket/T-40-03-match-tickets-to-prs-by-the-pr-number-re"
-  pr: null
-  status: "pending"
-  base: "epic/40-build-delivery-seams-and-clean-target-project-prs"
-  base_reason: "T-40-02 has no branch on the remote yet (status pending) — ticket/T-40-02-unblock-pushes-header-free-state-yaml-an is not a base that exists, so the base is epic/40-build-delivery-seams-and-clean-target-project-prs"
-  epic: "epic/40-build-delivery-seams-and-clean-target-project-prs"
-  ready: false
-  blocked_by: ["T-40-02"]
-  blocked_reasons: {"T-40-02":"parent has no branch yet (nothing to cascade from)"}
-  reapable: false
-  since: "2026-09-24T19:40:45.987Z"
 "T-40-05":
   branch: "ticket/T-40-05-codex-tuning-writes-no-claude-only-keys"
   pr: null
@@ -1747,42 +1725,6 @@
   ready: false
   blocked_by: ["T-40-07"]
   blocked_reasons: {"T-40-07":"parent has no branch yet (nothing to cascade from)"}
-  reapable: false
-  since: "2026-09-24T19:40:45.987Z"
-"T-40-19":
-  branch: "ticket/T-40-19-record-gate-verdicts-as-a-commit-status"
-  pr: null
-  status: "pending"
-  base: "epic/40-build-delivery-seams-and-clean-target-project-prs"
-  base_reason: "T-40-03 has no branch on the remote yet (status pending) — ticket/T-40-03-match-tickets-to-prs-by-the-pr-number-re is not a base that exists, so the base is epic/40-build-delivery-seams-and-clean-target-project-prs"
-  epic: "epic/40-build-delivery-seams-and-clean-target-project-prs"
-  ready: false
-  blocked_by: ["T-40-03"]
-  blocked_reasons: {"T-40-03":"parent has no branch yet (nothing to cascade from)"}
-  reapable: false
-  since: "2026-09-24T19:40:45.987Z"
-"T-40-17":
-  branch: "ticket/T-40-17-add-the-publish-time-pr-hygiene-gate-and"
-  pr: null
-  status: "pending"
-  base: "epic/40-build-delivery-seams-and-clean-target-project-prs"
-  base_reason: "T-40-19 has no branch on the remote yet (status pending) — ticket/T-40-19-record-gate-verdicts-as-a-commit-status is not a base that exists, so the base is epic/40-build-delivery-seams-and-clean-target-project-prs"
-  epic: "epic/40-build-delivery-seams-and-clean-target-project-prs"
-  ready: false
-  blocked_by: ["T-40-19"]
-  blocked_reasons: {"T-40-19":"parent has no branch yet (nothing to cascade from)"}
-  reapable: false
-  since: "2026-09-24T19:40:45.987Z"
-"T-40-20":
-  branch: "ticket/T-40-20-generate-neutral-ticket-and-epic-branch"
-  pr: null
-  status: "pending"
-  base: "epic/40-build-delivery-seams-and-clean-target-project-prs"
-  base_reason: "T-40-17 has no branch on the remote yet (status pending) — ticket/T-40-17-add-the-publish-time-pr-hygiene-gate-and is not a base that exists, so the base is epic/40-build-delivery-seams-and-clean-target-project-prs"
-  epic: "epic/40-build-delivery-seams-and-clean-target-project-prs"
-  ready: false
-  blocked_by: ["T-40-17"]
-  blocked_reasons: {"T-40-17":"parent has no branch yet (nothing to cascade from)"}
   reapable: false
   since: "2026-09-24T19:40:45.987Z"
 "T-40-21":
@@ -1933,6 +1875,74 @@
   blocked_reasons: {"T-40-01":"parent has no branch yet (nothing to cascade from)","T-41-01":"cross-phase parent must be MERGED and its phase 41 epic landed on main first (parent is pending)"}
   reapable: false
   since: "2026-09-24T19:40:45.987Z"
+"T-41-05":
+  branch: "ticket/T-41-05-fingerprint-each-gsd-projection-from-its"
+  pr: null
+  status: "pending"
+  base: "epic/41-reduce-pipeline-subscription-overhead"
+  base_reason: "no primary parent — a root ticket PRs into epic/41-reduce-pipeline-subscription-overhead"
+  epic: "epic/41-reduce-pipeline-subscription-overhead"
+  ready: true
+  reapable: false
+  since: "2026-09-25T11:44:03.568Z"
+"T-41-06":
+  branch: "ticket/T-41-06-join-deduplicated-usage-and-recovery-cos"
+  pr: null
+  status: "pending"
+  base: "epic/41-reduce-pipeline-subscription-overhead"
+  base_reason: "T-41-01 has no branch on the remote yet (status pending) — ticket/T-41-01-measure-bounded-judgment-launches-and-pr is not a base that exists, so the base is epic/41-reduce-pipeline-subscription-overhead"
+  epic: "epic/41-reduce-pipeline-subscription-overhead"
+  ready: false
+  blocked_by: ["T-41-01"]
+  blocked_reasons: {"T-41-01":"parent has no branch yet (nothing to cascade from)"}
+  reapable: false
+  since: "2026-09-25T11:44:03.568Z"
+"T-41-08":
+  branch: "ticket/T-41-08-unblock-pushes-header-free-state-yaml-an"
+  pr: null
+  status: "pending"
+  base: "epic/41-reduce-pipeline-subscription-overhead"
+  base_reason: "no primary parent — a root ticket PRs into epic/41-reduce-pipeline-subscription-overhead"
+  epic: "epic/41-reduce-pipeline-subscription-overhead"
+  ready: true
+  reapable: false
+  since: "2026-09-25T15:33:13.408Z"
+"T-40-03":
+  branch: "ticket/T-40-03-match-tickets-to-prs-by-the-pr-number-re"
+  pr: null
+  status: "pending"
+  base: "epic/40-build-delivery-seams-and-clean-target-project-prs"
+  base_reason: "no primary parent — a root ticket PRs into epic/40-build-delivery-seams-and-clean-target-project-prs"
+  epic: "epic/40-build-delivery-seams-and-clean-target-project-prs"
+  ready: false
+  blocked_by: ["T-41-08"]
+  blocked_reasons: {"T-41-08":"cross-phase parent must be MERGED and its phase 41 epic landed on main first (parent is pending)"}
+  reapable: false
+  since: "2026-09-24T19:40:45.987Z"
+"T-40-19":
+  branch: "ticket/T-40-19-record-gate-verdicts-as-a-commit-status"
+  pr: null
+  status: "pending"
+  base: "epic/40-build-delivery-seams-and-clean-target-project-prs"
+  base_reason: "T-40-03 has no branch on the remote yet (status pending) — ticket/T-40-03-match-tickets-to-prs-by-the-pr-number-re is not a base that exists, so the base is epic/40-build-delivery-seams-and-clean-target-project-prs"
+  epic: "epic/40-build-delivery-seams-and-clean-target-project-prs"
+  ready: false
+  blocked_by: ["T-40-03"]
+  blocked_reasons: {"T-40-03":"parent has no branch yet (nothing to cascade from)"}
+  reapable: false
+  since: "2026-09-24T19:40:45.987Z"
+"T-40-17":
+  branch: "ticket/T-40-17-add-the-publish-time-pr-hygiene-gate-and"
+  pr: null
+  status: "pending"
+  base: "epic/40-build-delivery-seams-and-clean-target-project-prs"
+  base_reason: "T-40-19 has no branch on the remote yet (status pending) — ticket/T-40-19-record-gate-verdicts-as-a-commit-status is not a base that exists, so the base is epic/40-build-delivery-seams-and-clean-target-project-prs"
+  epic: "epic/40-build-delivery-seams-and-clean-target-project-prs"
+  ready: false
+  blocked_by: ["T-40-19"]
+  blocked_reasons: {"T-40-19":"parent has no branch yet (nothing to cascade from)"}
+  reapable: false
+  since: "2026-09-24T19:40:45.987Z"
 "T-40-15":
   branch: "ticket/T-40-15-add-deliver-dispatch-build-host-requests"
   pr: null
@@ -1955,6 +1965,18 @@
   ready: false
   blocked_by: ["T-40-17","T-41-04"]
   blocked_reasons: {"T-40-17":"parent has no branch yet (nothing to cascade from)","T-41-04":"cross-phase parent must be MERGED and its phase 41 epic landed on main first (parent is pending)"}
+  reapable: false
+  since: "2026-09-24T19:40:45.987Z"
+"T-40-20":
+  branch: "ticket/T-40-20-generate-neutral-ticket-and-epic-branch"
+  pr: null
+  status: "pending"
+  base: "epic/40-build-delivery-seams-and-clean-target-project-prs"
+  base_reason: "T-40-17 has no branch on the remote yet (status pending) — ticket/T-40-17-add-the-publish-time-pr-hygiene-gate-and is not a base that exists, so the base is epic/40-build-delivery-seams-and-clean-target-project-prs"
+  epic: "epic/40-build-delivery-seams-and-clean-target-project-prs"
+  ready: false
+  blocked_by: ["T-40-17"]
+  blocked_reasons: {"T-40-17":"parent has no branch yet (nothing to cascade from)"}
   reapable: false
   since: "2026-09-24T19:40:45.987Z"
 "T-40-22":
@@ -2029,28 +2051,6 @@
   blocked_reasons: {"T-40-18":"parent has no branch yet (nothing to cascade from)","T-41-04":"cross-phase parent must be MERGED and its phase 41 epic landed on main first (parent is pending)"}
   reapable: false
   since: "2026-09-24T19:40:45.987Z"
-"T-41-05":
-  branch: "ticket/T-41-05-fingerprint-each-gsd-projection-from-its"
-  pr: null
-  status: "pending"
-  base: "epic/41-reduce-pipeline-subscription-overhead"
-  base_reason: "no primary parent — a root ticket PRs into epic/41-reduce-pipeline-subscription-overhead"
-  epic: "epic/41-reduce-pipeline-subscription-overhead"
-  ready: true
-  reapable: false
-  since: "2026-09-25T11:44:03.568Z"
-"T-41-06":
-  branch: "ticket/T-41-06-join-deduplicated-usage-and-recovery-cos"
-  pr: null
-  status: "pending"
-  base: "epic/41-reduce-pipeline-subscription-overhead"
-  base_reason: "T-41-01 has no branch on the remote yet (status pending) — ticket/T-41-01-measure-bounded-judgment-launches-and-pr is not a base that exists, so the base is epic/41-reduce-pipeline-subscription-overhead"
-  epic: "epic/41-reduce-pipeline-subscription-overhead"
-  ready: false
-  blocked_by: ["T-41-01"]
-  blocked_reasons: {"T-41-01":"parent has no branch yet (nothing to cascade from)"}
-  reapable: false
-  since: "2026-09-25T11:44:03.568Z"
 "T-41-07":
   branch: "ticket/T-41-07-integrate-phase-41-with-trusted-outcome"
   pr: null
@@ -2059,7 +2059,7 @@
   base_reason: "T-41-06 has no branch on the remote yet (status pending) — ticket/T-41-06-join-deduplicated-usage-and-recovery-cos is not a base that exists, so the base is epic/41-reduce-pipeline-subscription-overhead"
   epic: "epic/41-reduce-pipeline-subscription-overhead"
   ready: false
-  blocked_by: ["T-41-01","T-41-02","T-41-03","T-41-04","T-41-05","T-41-06"]
-  blocked_reasons: {"T-41-01":"parent has no branch yet (nothing to cascade from)","T-41-02":"parent has no branch yet (nothing to cascade from)","T-41-03":"parent has no branch yet (nothing to cascade from)","T-41-04":"parent has no branch yet (nothing to cascade from)","T-41-05":"parent has no branch yet (nothing to cascade from)","T-41-06":"parent has no branch yet (nothing to cascade from)"}
+  blocked_by: ["T-41-01","T-41-02","T-41-03","T-41-04","T-41-05","T-41-06","T-41-08"]
+  blocked_reasons: {"T-41-01":"parent has no branch yet (nothing to cascade from)","T-41-02":"parent has no branch yet (nothing to cascade from)","T-41-03":"parent has no branch yet (nothing to cascade from)","T-41-04":"parent has no branch yet (nothing to cascade from)","T-41-05":"parent has no branch yet (nothing to cascade from)","T-41-06":"parent has no branch yet (nothing to cascade from)","T-41-08":"parent has no branch yet (nothing to cascade from)"}
   reapable: false
   since: "2026-09-25T11:44:03.568Z"

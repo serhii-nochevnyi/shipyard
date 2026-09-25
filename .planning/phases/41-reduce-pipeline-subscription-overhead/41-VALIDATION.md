@@ -37,9 +37,11 @@ Latency is not yet measured; record it during execution rather than inventing it
 | 41-05-2 | 1 | REQ-155 | unit / scoped contract | `node tests/unit/gsd-sync.test.cjs && node tests/unit/gsd-sync-gate.test.cjs` | pending |
 | 41-06-1 | 2 | REQ-156 | unit / scoped contract | `node tests/unit/usage-report.test.cjs` | pending |
 | 41-06-2 | 2 | REQ-156 | unit / scoped contract | `node tests/unit/orchestration-overhead.test.cjs` | pending |
-| 41-07-1 | 3 | REQ-151, REQ-152, REQ-153, REQ-154, REQ-155, REQ-156 | manual checkpoint | Human evidence review | pending |
-| 41-07-2 | 3 | REQ-151, REQ-152, REQ-153, REQ-154, REQ-155, REQ-156 | unit / scoped contract | `node -e 'const fs=require("node:fs");const p=".planning/phases/41-reduce-pipeline-subscription-overhead/INTEGRATION.md";const s=fs.readFileSync(p,"utf8");for(const x of ["Head","Base","T-41-01","T-41-06","REQ-151","REQ-156","Verdict"])if(!s.includes(x))process.exitCode=1'` | pending |
-| 41-07-3 | 3 | REQ-151, REQ-152, REQ-153, REQ-154, REQ-155, REQ-156 | manual checkpoint | `node -e 'const fs=require("node:fs");const s=fs.readFileSync(".planning/phases/41-reduce-pipeline-subscription-overhead/INTEGRATION.md","utf8");if(!/Verdict\|verdict/.test(s)\|\|!/ticket.set\|ticket_set/i.test(s)\|\|!/finding/i.test(s))process.exit(1)'` | pending |
+| 41-07-1 | 3 | REQ-151, REQ-152, REQ-153, REQ-154, REQ-155, REQ-156, REQ-157 | manual checkpoint | Human evidence review | pending |
+| 41-07-2 | 3 | REQ-151, REQ-152, REQ-153, REQ-154, REQ-155, REQ-156, REQ-157 | unit / scoped contract | `node -e 'const fs=require("node:fs");const p=".planning/phases/41-reduce-pipeline-subscription-overhead/INTEGRATION.md";const s=fs.readFileSync(p,"utf8");for(const x of ["Head","Base","T-41-01","T-41-06","T-41-08","REQ-151","REQ-156","REQ-157","Verdict"])if(!s.includes(x))process.exitCode=1'` | pending |
+| 41-07-3 | 3 | REQ-151, REQ-152, REQ-153, REQ-154, REQ-155, REQ-156, REQ-157 | manual checkpoint | `node -e 'const fs=require("node:fs");const s=fs.readFileSync(".planning/phases/41-reduce-pipeline-subscription-overhead/INTEGRATION.md","utf8");if(!/Verdict\|verdict/.test(s)\|\|!/ticket.set\|ticket_set/i.test(s)\|\|!/finding/i.test(s))process.exit(1)'` | pending |
+| 41-08-1 | 1 | REQ-157 | unit / scoped contract | `node tests/unit/state-sync-yaml.test.cjs` | pending |
+| 41-08-2 | 1 | REQ-157 | unit / scoped contract | `node tests/unit/pre-push-gate.test.cjs` | pending |
 
 ## Wave 0
 
@@ -55,6 +57,7 @@ The newly required cases remain pending until implementation.
 - T-41-02: owned explicit handoff, including collection/startup/cache-warmup observations.
 - T-41-04: human review of exact candidate, signer/tree/receipt and gates; no stale green or automatic executor replay.
 - T-41-06/07: matched runtime/model/effort/role cohorts with failures/recovery/unknown attribution retained. Existing 20-completion and 95% attribution criteria gate savings claims, not a verified functional fix. Insufficient observations mean inconclusive savings.
+- T-41-08: installed pre-push hook digest and one real `cd <worktree>; git push` from a Claude session reaching publish-gate with the worktree toplevel.
 - T-41-07: independent integrator on the combined epic and human release gate.
 
 ## Sign-off
