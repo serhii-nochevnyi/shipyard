@@ -1186,7 +1186,6 @@ function compactIdentity(value, label) {
   return value;
 }
 
-// @contract: finding.ticket is a ticket id or null; a malformed value names its own shape in the refusal.
 function findingTicketProblem(value) {
   if (typeof value === 'string' && value.trim() !== '' && !/[\s\u0000-\u001f\u007f]/.test(value)) return null;
   if (Array.isArray(value)) return 'an array';
