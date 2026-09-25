@@ -1,0 +1,1615 @@
+{
+  "date": "2026-09-25",
+  "timezone": "Europe/Kyiv",
+  "cutoff": "2026-09-25T12:47:44.029191+03:00",
+  "method": "Timestamp-filtered Claude assistant usage; merge each usage field by maximum per message.id; no summation of duplicate streaming chunks or iterations over parent counters. Roles inferred from initial task prefix, not receipt-attributed.",
+  "files": 21,
+  "unique_responses": 861,
+  "by_role": {
+    "integrator": {
+      "requests": 52,
+      "input_tokens": 104,
+      "cache_creation_input_tokens": 1291998,
+      "cache_read_input_tokens": 31240438,
+      "output_tokens": 60519
+    },
+    "orchestrator": {
+      "requests": 224,
+      "input_tokens": 448,
+      "cache_creation_input_tokens": 1847723,
+      "cache_read_input_tokens": 136120438,
+      "output_tokens": 137967
+    },
+    "executor": {
+      "requests": 351,
+      "input_tokens": 702,
+      "cache_creation_input_tokens": 711104,
+      "cache_read_input_tokens": 35297935,
+      "output_tokens": 296028
+    },
+    "arch-review": {
+      "requests": 19,
+      "input_tokens": 38,
+      "cache_creation_input_tokens": 1398497,
+      "cache_read_input_tokens": 5276753,
+      "output_tokens": 13104
+    },
+    "planner": {
+      "requests": 92,
+      "input_tokens": 184,
+      "cache_creation_input_tokens": 551596,
+      "cache_read_input_tokens": 13932488,
+      "output_tokens": 118357
+    },
+    "research": {
+      "requests": 77,
+      "input_tokens": 154,
+      "cache_creation_input_tokens": 374072,
+      "cache_read_input_tokens": 17149232,
+      "output_tokens": 99873
+    },
+    "checker": {
+      "requests": 46,
+      "input_tokens": 92,
+      "cache_creation_input_tokens": 217810,
+      "cache_read_input_tokens": 6649419,
+      "output_tokens": 46863
+    }
+  },
+  "by_model": {
+    "claude-opus-5-5": {
+      "requests": 510,
+      "input_tokens": 1020,
+      "cache_creation_input_tokens": 5681696,
+      "cache_read_input_tokens": 210368768,
+      "output_tokens": 476683
+    },
+    "claude-sonnet-5": {
+      "requests": 351,
+      "input_tokens": 702,
+      "cache_creation_input_tokens": 711104,
+      "cache_read_input_tokens": 35297935,
+      "output_tokens": 296028
+    }
+  },
+  "native_groups": [
+    {
+      "provider": "anthropic",
+      "provider_family": "anthropic",
+      "runtime": "claude",
+      "kind": "ordinary",
+      "model": "claude-opus-5-5",
+      "observed_effort": "high",
+      "requested_model": null,
+      "requested_effort": null,
+      "effort_applied": null,
+      "role": null,
+      "task_level": null,
+      "backend": null,
+      "unit": "model_pass",
+      "observations": 52,
+      "finalized": 52,
+      "attributed": 0,
+      "model_sources": {
+        "transcript": 52
+      },
+      "effort_sources": {
+        "transcript": 52
+      },
+      "attribution_statuses": {
+        "unattributed": 52
+      },
+      "ticket_count": 0,
+      "dispatch_count": 0,
+      "input_tokens": 32532540,
+      "uncached_input_tokens": 104,
+      "cache_read_input_tokens": 31240438,
+      "cache_creation_input_tokens": 1291998,
+      "output_tokens": 60519,
+      "reasoning_output_tokens": null,
+      "missing": {
+        "reasoning_output_tokens": 52
+      }
+    },
+    {
+      "provider": "anthropic",
+      "provider_family": "anthropic",
+      "runtime": "claude",
+      "kind": "ordinary",
+      "model": "claude-opus-5-5",
+      "observed_effort": "medium",
+      "requested_model": null,
+      "requested_effort": null,
+      "effort_applied": null,
+      "role": null,
+      "task_level": null,
+      "backend": null,
+      "unit": "model_pass",
+      "observations": 458,
+      "finalized": 458,
+      "attributed": 0,
+      "model_sources": {
+        "transcript": 458
+      },
+      "effort_sources": {
+        "transcript": 458
+      },
+      "attribution_statuses": {
+        "unattributed": 458
+      },
+      "ticket_count": 0,
+      "dispatch_count": 0,
+      "input_tokens": 183518944,
+      "uncached_input_tokens": 916,
+      "cache_read_input_tokens": 179128330,
+      "cache_creation_input_tokens": 4389698,
+      "output_tokens": 416164,
+      "reasoning_output_tokens": null,
+      "missing": {
+        "reasoning_output_tokens": 458
+      }
+    },
+    {
+      "provider": "anthropic",
+      "provider_family": "anthropic",
+      "runtime": "claude",
+      "kind": "ordinary",
+      "model": "claude-sonnet-5",
+      "observed_effort": "max",
+      "requested_model": null,
+      "requested_effort": null,
+      "effort_applied": null,
+      "role": null,
+      "task_level": null,
+      "backend": null,
+      "unit": "model_pass",
+      "observations": 351,
+      "finalized": 351,
+      "attributed": 0,
+      "model_sources": {
+        "transcript": 351
+      },
+      "effort_sources": {
+        "transcript": 351
+      },
+      "attribution_statuses": {
+        "unattributed": 351
+      },
+      "ticket_count": 0,
+      "dispatch_count": 0,
+      "input_tokens": 36009741,
+      "uncached_input_tokens": 702,
+      "cache_read_input_tokens": 35297935,
+      "cache_creation_input_tokens": 711104,
+      "output_tokens": 296028,
+      "reasoning_output_tokens": null,
+      "missing": {
+        "reasoning_output_tokens": 351
+      }
+    }
+  ],
+  "native_coverage": {
+    "claude_responses": 861,
+    "codex_sessions": 0,
+    "usage_observations": 861,
+    "attribution_records": null,
+    "attribution_status": {
+      "unattributed": 861
+    },
+    "attributed_observations": 0,
+    "unattributed_observations": 861,
+    "ambiguous_observations": 0,
+    "model_observed": 861,
+    "effort_observed": 861,
+    "dispatch_attributed": 0,
+    "ticket_attributed": 0,
+    "finalized_output": 861,
+    "attribution_rate_percent": 0,
+    "model_effort_rate_percent": 0,
+    "ticket_efficiency_rate_percent": 0,
+    "finalized_output_rate_percent": 100
+  },
+  "sessions": {
+    "1c87fe92-4e50-4652-a4bd-6fe745c5a457": {
+      "path": "/Users/serhii/.claude/projects/-Volumes-KINGSTON--wt-claude-shipyard--wt-inv-003-INTEGRATION-39/1c87fe92-4e50-4652-a4bd-6fe745c5a457.jsonl",
+      "role": "integrator",
+      "requests": 34,
+      "usage": {
+        "input_tokens": 68,
+        "cache_creation_input_tokens": 670334,
+        "cache_read_input_tokens": 21065902,
+        "output_tokens": 34790
+      },
+      "context_min": 617209,
+      "context_max": 670336,
+      "first_request": {
+        "input": 617209,
+        "line": 16,
+        "model": "claude-opus-5-5"
+      },
+      "initial_chars": 1430318
+    },
+    "ab44bc73-4060-4d5c-9929-20a92944a8aa": {
+      "path": "/Users/serhii/.claude/projects/-Volumes-KINGSTON--wt-claude-shipyard--wt-inv-003-INTEGRATION-39/ab44bc73-4060-4d5c-9929-20a92944a8aa.jsonl",
+      "role": "integrator",
+      "requests": 18,
+      "usage": {
+        "input_tokens": 36,
+        "cache_creation_input_tokens": 621664,
+        "cache_read_input_tokens": 10174536,
+        "output_tokens": 25729
+      },
+      "context_min": 587880,
+      "context_max": 621666,
+      "first_request": {
+        "input": 587880,
+        "line": 16,
+        "model": "claude-opus-5-5"
+      },
+      "initial_chars": 1363832
+    },
+    "7bcbbf57-9cd4-4d9b-b17a-6064eae1b7c1": {
+      "path": "/Users/serhii/.claude/projects/-Volumes-KINGSTON-claude-shipyard/7bcbbf57-9cd4-4d9b-b17a-6064eae1b7c1.jsonl",
+      "role": "orchestrator",
+      "requests": 67,
+      "usage": {
+        "input_tokens": 134,
+        "cache_creation_input_tokens": 830830,
+        "cache_read_input_tokens": 53878897,
+        "output_tokens": 32997
+      },
+      "context_min": 772804,
+      "context_max": 858932,
+      "first_request": {
+        "input": 772804,
+        "line": 3428,
+        "model": "claude-opus-5-5"
+      },
+      "initial_chars": 6602
+    },
+    "2ed5102b-f7f2-48d7-95f9-238be68ca865": {
+      "path": "/Users/serhii/.claude/projects/-Volumes-KINGSTON-claude-shipyard/2ed5102b-f7f2-48d7-95f9-238be68ca865.jsonl",
+      "role": "orchestrator",
+      "requests": 157,
+      "usage": {
+        "input_tokens": 314,
+        "cache_creation_input_tokens": 1016893,
+        "cache_read_input_tokens": 82241541,
+        "output_tokens": 104970
+      },
+      "context_min": 443362,
+      "context_max": 619354,
+      "first_request": {
+        "input": 443362,
+        "line": 1082,
+        "model": "claude-opus-5-5"
+      },
+      "initial_chars": 187
+    },
+    "0cd4c016-6534-47ad-ba76-4627af564290": {
+      "path": "/Users/serhii/.claude/projects/-Volumes-KINGSTON-claude-shipyard/0cd4c016-6534-47ad-ba76-4627af564290.jsonl",
+      "role": "orchestrator",
+      "context_min": 0,
+      "context_max": 0,
+      "initial_chars": 6602
+    },
+    "3271f154-8c85-435a-a15b-cbe2f838768e": {
+      "path": "/Users/serhii/.claude/projects/-Volumes-KINGSTON-claude-shipyard/3271f154-8c85-435a-a15b-cbe2f838768e.jsonl",
+      "role": "orchestrator",
+      "context_min": 0,
+      "context_max": 0,
+      "initial_chars": 6602
+    },
+    "c6e4acaf-30c7-4acd-a0bf-8ba50b4368b0": {
+      "path": "/Users/serhii/.claude/projects/-Volumes-KINGSTON--wt-claude-shipyard--wt-plan39-fix-T-39-16/c6e4acaf-30c7-4acd-a0bf-8ba50b4368b0.jsonl",
+      "role": "executor",
+      "requests": 109,
+      "usage": {
+        "input_tokens": 218,
+        "cache_creation_input_tokens": 197949,
+        "cache_read_input_tokens": 13972492,
+        "output_tokens": 83682
+      },
+      "context_min": 18481,
+      "context_max": 210844,
+      "first_request": {
+        "input": 18481,
+        "line": 16,
+        "model": "claude-sonnet-5"
+      },
+      "initial_chars": 4117
+    },
+    "e5876f0f-c349-45b5-8303-ef07f3ba374c": {
+      "path": "/Users/serhii/.claude/projects/-Volumes-KINGSTON--wt-claude-shipyard--wt-plan39-fix-T-39-16/e5876f0f-c349-45b5-8303-ef07f3ba374c.jsonl",
+      "role": "arch-review",
+      "requests": 6,
+      "usage": {
+        "input_tokens": 12,
+        "cache_creation_input_tokens": 355956,
+        "cache_read_input_tokens": 1800178,
+        "output_tokens": 3627
+      },
+      "context_min": 357716,
+      "context_max": 361861,
+      "first_request": {
+        "input": 357716,
+        "line": 16,
+        "model": "claude-opus-5-5"
+      },
+      "initial_chars": 844627
+    },
+    "0fde8e7d-52e1-4197-9f30-db794acd7cb9": {
+      "path": "/Users/serhii/.claude/projects/-Volumes-KINGSTON--wt-claude-shipyard--wt-plan39-fix-T-39-16/0fde8e7d-52e1-4197-9f30-db794acd7cb9.jsonl",
+      "role": "executor",
+      "requests": 65,
+      "usage": {
+        "input_tokens": 130,
+        "cache_creation_input_tokens": 109141,
+        "cache_read_input_tokens": 4713685,
+        "output_tokens": 41616
+      },
+      "context_min": 18627,
+      "context_max": 122036,
+      "first_request": {
+        "input": 18627,
+        "line": 16,
+        "model": "claude-sonnet-5"
+      },
+      "initial_chars": 4117
+    },
+    "1444b43f-ce2a-4a76-ba9a-6527c256dbe9": {
+      "path": "/Users/serhii/.claude/projects/-Volumes-KINGSTON--wt-claude-shipyard-plan39-fix/1444b43f-ce2a-4a76-ba9a-6527c256dbe9.jsonl",
+      "role": "planner",
+      "requests": 27,
+      "usage": {
+        "input_tokens": 54,
+        "cache_creation_input_tokens": 91891,
+        "cache_read_input_tokens": 4035493,
+        "output_tokens": 26371
+      },
+      "context_min": 103441,
+      "context_max": 190509,
+      "first_request": {
+        "input": 103441,
+        "line": 18,
+        "model": "claude-opus-5-5"
+      },
+      "initial_chars": 3190
+    },
+    "d9edc567-6d44-4322-8b14-51a129aef470": {
+      "path": "/Users/serhii/.claude/projects/-Volumes-KINGSTON--wt-claude-shipyard-plan39-fix/d9edc567-6d44-4322-8b14-51a129aef470.jsonl",
+      "role": "planner",
+      "requests": 23,
+      "usage": {
+        "input_tokens": 46,
+        "cache_creation_input_tokens": 69020,
+        "cache_read_input_tokens": 3189465,
+        "output_tokens": 20888
+      },
+      "context_min": 103502,
+      "context_max": 167638,
+      "first_request": {
+        "input": 103502,
+        "line": 18,
+        "model": "claude-opus-5-5"
+      },
+      "initial_chars": 3369
+    },
+    "d76f7d62-9654-41a6-bbb4-643e3c652adc": {
+      "path": "/Users/serhii/.claude/projects/-Volumes-KINGSTON--wt-claude-shipyard-plan39-fix/d76f7d62-9654-41a6-bbb4-643e3c652adc.jsonl",
+      "role": "planner",
+      "requests": 17,
+      "usage": {
+        "input_tokens": 34,
+        "cache_creation_input_tokens": 160447,
+        "cache_read_input_tokens": 2208050,
+        "output_tokens": 18931
+      },
+      "context_min": 103487,
+      "context_max": 160449,
+      "first_request": {
+        "input": 103487,
+        "line": 18,
+        "model": "claude-opus-5-5"
+      },
+      "initial_chars": 3274
+    },
+    "3d89dc68-18bb-4eb4-8278-291be3ad0bd8": {
+      "path": "/Users/serhii/.claude/projects/-Volumes-KINGSTON--wt-claude-shipyard--wt-plan39-fix-T-39-13/3d89dc68-18bb-4eb4-8278-291be3ad0bd8.jsonl",
+      "role": "arch-review",
+      "requests": 5,
+      "usage": {
+        "input_tokens": 10,
+        "cache_creation_input_tokens": 349863,
+        "cache_read_input_tokens": 1390089,
+        "output_tokens": 3120
+      },
+      "context_min": 346673,
+      "context_max": 349865,
+      "first_request": {
+        "input": 346673,
+        "line": 16,
+        "model": "claude-opus-5-5"
+      },
+      "initial_chars": 816639
+    },
+    "36cd1d8c-1d1c-41af-8d2e-fd84e0b04bed": {
+      "path": "/Users/serhii/.claude/projects/-Volumes-KINGSTON--wt-claude-shipyard--wt-plan39-fix-T-39-13/36cd1d8c-1d1c-41af-8d2e-fd84e0b04bed.jsonl",
+      "role": "executor",
+      "requests": 35,
+      "usage": {
+        "input_tokens": 70,
+        "cache_creation_input_tokens": 122137,
+        "cache_read_input_tokens": 3219520,
+        "output_tokens": 52434
+      },
+      "context_min": 18448,
+      "context_max": 122139,
+      "first_request": {
+        "input": 18448,
+        "line": 16,
+        "model": "claude-sonnet-5"
+      },
+      "initial_chars": 4103
+    },
+    "fe2f9d15-d20b-487d-8b1f-c59b600d814e": {
+      "path": "/Users/serhii/.claude/projects/-Volumes-KINGSTON--wt-claude-shipyard--wt-plan39-fix-T-39-14/fe2f9d15-d20b-487d-8b1f-c59b600d814e.jsonl",
+      "role": "executor",
+      "requests": 52,
+      "usage": {
+        "input_tokens": 104,
+        "cache_creation_input_tokens": 126542,
+        "cache_read_input_tokens": 4403511,
+        "output_tokens": 49814
+      },
+      "context_min": 18429,
+      "context_max": 126544,
+      "first_request": {
+        "input": 18429,
+        "line": 16,
+        "model": "claude-sonnet-5"
+      },
+      "initial_chars": 4102
+    },
+    "cf6dca95-31b9-4180-9c06-d0d1eef27d4b": {
+      "path": "/Users/serhii/.claude/projects/-Volumes-KINGSTON--wt-claude-shipyard--wt-plan39-fix-T-39-14/cf6dca95-31b9-4180-9c06-d0d1eef27d4b.jsonl",
+      "role": "arch-review",
+      "requests": 5,
+      "usage": {
+        "input_tokens": 10,
+        "cache_creation_input_tokens": 350248,
+        "cache_read_input_tokens": 1389343,
+        "output_tokens": 3015
+      },
+      "context_min": 345893,
+      "context_max": 350250,
+      "first_request": {
+        "input": 345893,
+        "line": 16,
+        "model": "claude-opus-5-5"
+      },
+      "initial_chars": 817609
+    },
+    "ea661a6b-0ed7-4907-8c36-f6c6e2ab7cd8": {
+      "path": "/Users/serhii/.claude/projects/-Volumes-KINGSTON--wt-claude-shipyard--wt-plan39-fix-T-39-15/ea661a6b-0ed7-4907-8c36-f6c6e2ab7cd8.jsonl",
+      "role": "executor",
+      "requests": 90,
+      "usage": {
+        "input_tokens": 180,
+        "cache_creation_input_tokens": 155335,
+        "cache_read_input_tokens": 8988727,
+        "output_tokens": 68482
+      },
+      "context_min": 18481,
+      "context_max": 168230,
+      "first_request": {
+        "input": 18481,
+        "line": 16,
+        "model": "claude-sonnet-5"
+      },
+      "initial_chars": 4103
+    },
+    "4aa1b059-cc95-4376-82ed-858ebb20aed5": {
+      "path": "/Users/serhii/.claude/projects/-Volumes-KINGSTON--wt-claude-shipyard--wt-plan39-fix-T-39-15/4aa1b059-cc95-4376-82ed-858ebb20aed5.jsonl",
+      "role": "arch-review",
+      "requests": 3,
+      "usage": {
+        "input_tokens": 6,
+        "cache_creation_input_tokens": 342430,
+        "cache_read_input_tokens": 697143,
+        "output_tokens": 3342
+      },
+      "context_min": 344662,
+      "context_max": 348335,
+      "first_request": {
+        "input": 344662,
+        "line": 16,
+        "model": "claude-opus-5-5"
+      },
+      "initial_chars": 810808
+    },
+    "93ed8d6c-c7f4-4b21-af64-92c75682953b": {
+      "path": "/Users/serhii/.claude/projects/-Volumes-KINGSTON--wt-claude-shipyard-inv-005/93ed8d6c-c7f4-4b21-af64-92c75682953b.jsonl",
+      "role": "research",
+      "requests": 77,
+      "usage": {
+        "input_tokens": 154,
+        "cache_creation_input_tokens": 374072,
+        "cache_read_input_tokens": 17149232,
+        "output_tokens": 99873
+      },
+      "context_min": 31913,
+      "context_max": 374074,
+      "first_request": {
+        "input": 31913,
+        "line": 18,
+        "model": "claude-opus-5-5"
+      },
+      "initial_chars": 2086
+    },
+    "0b98c356-22f3-46df-b1e1-da317e7afac8": {
+      "path": "/Users/serhii/.claude/projects/-Volumes-KINGSTON--wt-claude-shipyard-inv-005/0b98c356-22f3-46df-b1e1-da317e7afac8.jsonl",
+      "role": "checker",
+      "requests": 46,
+      "usage": {
+        "input_tokens": 92,
+        "cache_creation_input_tokens": 217810,
+        "cache_read_input_tokens": 6649419,
+        "output_tokens": 46863
+      },
+      "context_min": 41430,
+      "context_max": 217812,
+      "first_request": {
+        "input": 41430,
+        "line": 18,
+        "model": "claude-opus-5-5"
+      },
+      "initial_chars": 2082
+    },
+    "18e94ccd-d6f5-4045-b7f6-246894c4af5c": {
+      "path": "/Users/serhii/.claude/projects/-Volumes-KINGSTON--wt-claude-shipyard-inv-005/18e94ccd-d6f5-4045-b7f6-246894c4af5c.jsonl",
+      "role": "planner",
+      "requests": 25,
+      "usage": {
+        "input_tokens": 50,
+        "cache_creation_input_tokens": 230238,
+        "cache_read_input_tokens": 4499480,
+        "output_tokens": 52167
+      },
+      "context_min": 103323,
+      "context_max": 234684,
+      "first_request": {
+        "input": 103323,
+        "line": 18,
+        "model": "claude-opus-5-5"
+      },
+      "initial_chars": 2619
+    }
+  },
+  "judgment_packets": [
+    {
+      "sid": "1c87fe92-4e50-4652-a4bd-6fe745c5a457",
+      "role": "integrator",
+      "accounting": {
+        "backend": "unspecified",
+        "estimated_tokens": 356878,
+        "estimated_bytes": 1427512,
+        "soft_ceiling": 360000,
+        "overflow": false
+      },
+      "fields_bytes": {
+        "schema": 28,
+        "version": 1,
+        "role": 12,
+        "subject": 166,
+        "canonical_root": 66,
+        "source_revision": 42,
+        "policy_hash": 66,
+        "policy": 10632,
+        "immutable_scope": 18796,
+        "acceptance": 11076,
+        "verification": 5104,
+        "required_refs": 335302,
+        "optional_refs": 2,
+        "role_requirements": 35,
+        "role_context": 548158,
+        "role_context_complete": 4,
+        "backlog": 497763,
+        "accounting": 116
+      },
+      "required_refs": [
+        [
+          ".planning/phases/39-remove-conveyor-session-friction/39-01-PLAN.md",
+          6616
+        ],
+        [
+          ".planning/phases/39-remove-conveyor-session-friction/39-02-PLAN.md",
+          4743
+        ],
+        [
+          ".planning/phases/39-remove-conveyor-session-friction/39-03-PLAN.md",
+          7589
+        ],
+        [
+          ".planning/phases/39-remove-conveyor-session-friction/39-04-PLAN.md",
+          7404
+        ],
+        [
+          ".planning/phases/39-remove-conveyor-session-friction/39-05-PLAN.md",
+          4775
+        ],
+        [
+          ".planning/phases/39-remove-conveyor-session-friction/39-06-PLAN.md",
+          4236
+        ],
+        [
+          ".planning/phases/39-remove-conveyor-session-friction/39-07-PLAN.md",
+          2402
+        ],
+        [
+          ".planning/phases/39-remove-conveyor-session-friction/39-08-PLAN.md",
+          4576
+        ],
+        [
+          ".planning/phases/39-remove-conveyor-session-friction/39-09-PLAN.md",
+          4043
+        ],
+        [
+          ".planning/phases/39-remove-conveyor-session-friction/39-10-PLAN.md",
+          5738
+        ],
+        [
+          ".planning/phases/39-remove-conveyor-session-friction/39-11-PLAN.md",
+          3991
+        ],
+        [
+          ".planning/phases/39-remove-conveyor-session-friction/39-12-PLAN.md",
+          8469
+        ],
+        [
+          ".planning/phases/39-remove-conveyor-session-friction/39-13-PLAN.md",
+          10447
+        ],
+        [
+          ".planning/phases/39-remove-conveyor-session-friction/39-14-PLAN.md",
+          9467
+        ],
+        [
+          ".planning/architecture/ADR-001-unattended-drive-to-green.md",
+          8248
+        ],
+        [
+          ".planning/architecture/ADR-002-the-conveyor-stops-interrupting-itself.md",
+          8356
+        ],
+        [
+          ".planning/architecture/ADR-003-the-conveyor-follows-the-models-it-runs-on.md",
+          11141
+        ],
+        [
+          ".planning/architecture/ADR-004-positive-evidence-before-a-mutation.md",
+          7648
+        ],
+        [
+          ".planning/architecture/ADR-005-the-floor-is-opus-and-fable-is-earned.md",
+          24486
+        ],
+        [
+          ".planning/architecture/ADR-006-the-conveyor-measures-its-own-state.md",
+          17021
+        ],
+        [
+          ".planning/architecture/ADR-007-a-mechanism-nobody-connected-is-not-a-mechanism.md",
+          17997
+        ],
+        [
+          ".planning/architecture/ADR-008-the-tracker-is-a-projection-and-a-projection-is-driven.md",
+          16529
+        ],
+        [
+          ".planning/architecture/ADR-009-not-every-ticket-is-available-work.md",
+          14609
+        ],
+        [
+          ".planning/architecture/ADR-010-a-ticket-you-cannot-reach-is-not-deliverable.md",
+          10951
+        ],
+        [
+          ".planning/architecture/ADR-011-BACKLOG.md",
+          11308
+        ],
+        [
+          ".planning/architecture/ADR-011-EVALUATION-TEMPLATE.md",
+          3490
+        ],
+        [
+          ".planning/architecture/ADR-011-ROLLOUT.md",
+          16866
+        ],
+        [
+          ".planning/architecture/ADR-011-measure-the-work-before-optimizing-the-model.md",
+          15411
+        ],
+        [
+          ".planning/architecture/ADR-012-task-level-model-ladder.md",
+          5915
+        ],
+        [
+          ".planning/architecture/ADR-013-gsd-workflow-synchronization.md",
+          5236
+        ],
+        [
+          ".planning/architecture/ADR-014-DATA-MODEL.md",
+          999
+        ],
+        [
+          ".planning/architecture/ADR-014-INTERFACES.md",
+          2495
+        ],
+        [
+          ".planning/architecture/ADR-014-ROLLOUT.md",
+          1012
+        ],
+        [
+          ".planning/architecture/ADR-014-mandatory-runtime-model-ladder.md",
+          10066
+        ],
+        [
+          ".planning/architecture/ADR-015-autonomous-dual-runtime-control-plane.md",
+          7776
+        ],
+        [
+          ".planning/architecture/ADR-016-conveyor-session-friction.md",
+          5624
+        ],
+        [
+          ".planning/architecture/ADR-017-delivery-seams-and-pr-hygiene.md",
+          6517
+        ],
+        [
+          ".planning/architecture/DATA-MODEL-013-gsd-workflow-synchronization.md",
+          1359
+        ],
+        [
+          ".planning/architecture/INTERFACES-013-gsd-workflow-synchronization.md",
+          1777
+        ],
+        [
+          ".planning/architecture/ROLLOUT-013-gsd-workflow-synchronization.md",
+          830
+        ]
+      ],
+      "role_context_bytes": {
+        "phase": 37,
+        "phase_number": 2,
+        "phase_contracts": 19049,
+        "combined_diff": 515112,
+        "integration_base": 123,
+        "ticket_set": 2699,
+        "ticket_set_digest": 66,
+        "adr_refs": 4289,
+        "reference_content": 6631
+      },
+      "backlog_selected": 203,
+      "backlog_inventory": 203
+    },
+    {
+      "sid": "ab44bc73-4060-4d5c-9929-20a92944a8aa",
+      "role": "integrator",
+      "accounting": {
+        "backend": "unspecified",
+        "estimated_tokens": 340318,
+        "estimated_bytes": 1361272,
+        "soft_ceiling": 360000,
+        "overflow": false
+      },
+      "fields_bytes": {
+        "schema": 28,
+        "version": 1,
+        "role": 12,
+        "subject": 166,
+        "canonical_root": 66,
+        "source_revision": 42,
+        "policy_hash": 66,
+        "policy": 10632,
+        "immutable_scope": 15340,
+        "acceptance": 8187,
+        "verification": 4590,
+        "required_refs": 314425,
+        "optional_refs": 2,
+        "role_requirements": 35,
+        "role_context": 509654,
+        "role_context_complete": 4,
+        "backlog": 497763,
+        "accounting": 116
+      },
+      "required_refs": [
+        [
+          ".planning/phases/39-remove-conveyor-session-friction/39-01-PLAN.md",
+          6616
+        ],
+        [
+          ".planning/phases/39-remove-conveyor-session-friction/39-02-PLAN.md",
+          4743
+        ],
+        [
+          ".planning/phases/39-remove-conveyor-session-friction/39-03-PLAN.md",
+          7589
+        ],
+        [
+          ".planning/phases/39-remove-conveyor-session-friction/39-04-PLAN.md",
+          7404
+        ],
+        [
+          ".planning/phases/39-remove-conveyor-session-friction/39-05-PLAN.md",
+          4775
+        ],
+        [
+          ".planning/phases/39-remove-conveyor-session-friction/39-06-PLAN.md",
+          4236
+        ],
+        [
+          ".planning/phases/39-remove-conveyor-session-friction/39-07-PLAN.md",
+          2402
+        ],
+        [
+          ".planning/phases/39-remove-conveyor-session-friction/39-08-PLAN.md",
+          4576
+        ],
+        [
+          ".planning/phases/39-remove-conveyor-session-friction/39-09-PLAN.md",
+          4043
+        ],
+        [
+          ".planning/phases/39-remove-conveyor-session-friction/39-10-PLAN.md",
+          5738
+        ],
+        [
+          ".planning/phases/39-remove-conveyor-session-friction/39-11-PLAN.md",
+          3991
+        ],
+        [
+          ".planning/phases/39-remove-conveyor-session-friction/39-12-PLAN.md",
+          8469
+        ],
+        [
+          ".planning/architecture/ADR-001-unattended-drive-to-green.md",
+          8248
+        ],
+        [
+          ".planning/architecture/ADR-002-the-conveyor-stops-interrupting-itself.md",
+          8356
+        ],
+        [
+          ".planning/architecture/ADR-003-the-conveyor-follows-the-models-it-runs-on.md",
+          11141
+        ],
+        [
+          ".planning/architecture/ADR-004-positive-evidence-before-a-mutation.md",
+          7648
+        ],
+        [
+          ".planning/architecture/ADR-005-the-floor-is-opus-and-fable-is-earned.md",
+          24486
+        ],
+        [
+          ".planning/architecture/ADR-006-the-conveyor-measures-its-own-state.md",
+          17021
+        ],
+        [
+          ".planning/architecture/ADR-007-a-mechanism-nobody-connected-is-not-a-mechanism.md",
+          17997
+        ],
+        [
+          ".planning/architecture/ADR-008-the-tracker-is-a-projection-and-a-projection-is-driven.md",
+          16529
+        ],
+        [
+          ".planning/architecture/ADR-009-not-every-ticket-is-available-work.md",
+          14609
+        ],
+        [
+          ".planning/architecture/ADR-010-a-ticket-you-cannot-reach-is-not-deliverable.md",
+          10951
+        ],
+        [
+          ".planning/architecture/ADR-011-BACKLOG.md",
+          11308
+        ],
+        [
+          ".planning/architecture/ADR-011-EVALUATION-TEMPLATE.md",
+          3490
+        ],
+        [
+          ".planning/architecture/ADR-011-ROLLOUT.md",
+          16866
+        ],
+        [
+          ".planning/architecture/ADR-011-measure-the-work-before-optimizing-the-model.md",
+          15411
+        ],
+        [
+          ".planning/architecture/ADR-012-task-level-model-ladder.md",
+          5915
+        ],
+        [
+          ".planning/architecture/ADR-013-gsd-workflow-synchronization.md",
+          5236
+        ],
+        [
+          ".planning/architecture/ADR-014-DATA-MODEL.md",
+          999
+        ],
+        [
+          ".planning/architecture/ADR-014-INTERFACES.md",
+          2495
+        ],
+        [
+          ".planning/architecture/ADR-014-ROLLOUT.md",
+          1012
+        ],
+        [
+          ".planning/architecture/ADR-014-mandatory-runtime-model-ladder.md",
+          10066
+        ],
+        [
+          ".planning/architecture/ADR-015-autonomous-dual-runtime-control-plane.md",
+          7776
+        ],
+        [
+          ".planning/architecture/ADR-016-conveyor-session-friction.md",
+          5624
+        ],
+        [
+          ".planning/architecture/ADR-017-delivery-seams-and-pr-hygiene.md",
+          6517
+        ],
+        [
+          ".planning/architecture/DATA-MODEL-013-gsd-workflow-synchronization.md",
+          1359
+        ],
+        [
+          ".planning/architecture/INTERFACES-013-gsd-workflow-synchronization.md",
+          1777
+        ],
+        [
+          ".planning/architecture/ROLLOUT-013-gsd-workflow-synchronization.md",
+          830
+        ]
+      ],
+      "role_context_bytes": {
+        "phase": 37,
+        "phase_number": 2,
+        "phase_contracts": 15236,
+        "combined_diff": 481122,
+        "integration_base": 123,
+        "ticket_set": 2314,
+        "ticket_set_digest": 66,
+        "adr_refs": 4289,
+        "reference_content": 6315
+      },
+      "backlog_selected": 203,
+      "backlog_inventory": 203
+    },
+    {
+      "sid": "e5876f0f-c349-45b5-8303-ef07f3ba374c",
+      "role": "arch-review",
+      "accounting": {
+        "backend": "unspecified",
+        "estimated_tokens": 210214,
+        "estimated_bytes": 840853,
+        "soft_ceiling": 360000,
+        "overflow": false
+      },
+      "fields_bytes": {
+        "schema": 28,
+        "version": 1,
+        "role": 13,
+        "subject": 9,
+        "canonical_root": 62,
+        "source_revision": 42,
+        "policy_hash": 66,
+        "policy": 10632,
+        "immutable_scope": 2924,
+        "acceptance": 2180,
+        "verification": 450,
+        "required_refs": 260330,
+        "optional_refs": 2,
+        "role_requirements": 44,
+        "role_context": 66044,
+        "role_context_complete": 4,
+        "backlog": 497763,
+        "accounting": 115
+      },
+      "required_refs": [
+        [
+          ".planning/phases/39-remove-conveyor-session-friction/39-16-PLAN.md",
+          14543
+        ],
+        [
+          ".planning/architecture/ADR-001-unattended-drive-to-green.md",
+          8248
+        ],
+        [
+          ".planning/architecture/ADR-002-the-conveyor-stops-interrupting-itself.md",
+          8356
+        ],
+        [
+          ".planning/architecture/ADR-003-the-conveyor-follows-the-models-it-runs-on.md",
+          11141
+        ],
+        [
+          ".planning/architecture/ADR-004-positive-evidence-before-a-mutation.md",
+          7648
+        ],
+        [
+          ".planning/architecture/ADR-005-the-floor-is-opus-and-fable-is-earned.md",
+          24486
+        ],
+        [
+          ".planning/architecture/ADR-006-the-conveyor-measures-its-own-state.md",
+          17021
+        ],
+        [
+          ".planning/architecture/ADR-007-a-mechanism-nobody-connected-is-not-a-mechanism.md",
+          17997
+        ],
+        [
+          ".planning/architecture/ADR-008-the-tracker-is-a-projection-and-a-projection-is-driven.md",
+          16529
+        ],
+        [
+          ".planning/architecture/ADR-009-not-every-ticket-is-available-work.md",
+          14609
+        ],
+        [
+          ".planning/architecture/ADR-010-a-ticket-you-cannot-reach-is-not-deliverable.md",
+          10951
+        ],
+        [
+          ".planning/architecture/ADR-011-BACKLOG.md",
+          11308
+        ],
+        [
+          ".planning/architecture/ADR-011-EVALUATION-TEMPLATE.md",
+          3490
+        ],
+        [
+          ".planning/architecture/ADR-011-ROLLOUT.md",
+          16866
+        ],
+        [
+          ".planning/architecture/ADR-011-measure-the-work-before-optimizing-the-model.md",
+          15411
+        ],
+        [
+          ".planning/architecture/ADR-012-task-level-model-ladder.md",
+          5915
+        ],
+        [
+          ".planning/architecture/ADR-013-gsd-workflow-synchronization.md",
+          5236
+        ],
+        [
+          ".planning/architecture/ADR-014-DATA-MODEL.md",
+          999
+        ],
+        [
+          ".planning/architecture/ADR-014-INTERFACES.md",
+          2495
+        ],
+        [
+          ".planning/architecture/ADR-014-ROLLOUT.md",
+          1012
+        ],
+        [
+          ".planning/architecture/ADR-014-mandatory-runtime-model-ladder.md",
+          10066
+        ],
+        [
+          ".planning/architecture/ADR-015-autonomous-dual-runtime-control-plane.md",
+          7776
+        ],
+        [
+          ".planning/architecture/ADR-016-conveyor-session-friction.md",
+          5624
+        ],
+        [
+          ".planning/architecture/ADR-017-delivery-seams-and-pr-hygiene.md",
+          6517
+        ],
+        [
+          ".planning/architecture/DATA-MODEL-013-gsd-workflow-synchronization.md",
+          1359
+        ],
+        [
+          ".planning/architecture/INTERFACES-013-gsd-workflow-synchronization.md",
+          1777
+        ],
+        [
+          ".planning/architecture/ROLLOUT-013-gsd-workflow-synchronization.md",
+          830
+        ]
+      ],
+      "role_context_bytes": {
+        "pr": 278,
+        "exact_diff": 55019,
+        "integration_base": 166,
+        "adr_refs": 4289,
+        "reference_content": 6218
+      },
+      "backlog_selected": 203,
+      "backlog_inventory": 203
+    },
+    {
+      "sid": "3d89dc68-18bb-4eb4-8278-291be3ad0bd8",
+      "role": "arch-review",
+      "accounting": {
+        "backend": "unspecified",
+        "estimated_tokens": 203223,
+        "estimated_bytes": 812889,
+        "soft_ceiling": 360000,
+        "overflow": false
+      },
+      "fields_bytes": {
+        "schema": 28,
+        "version": 1,
+        "role": 13,
+        "subject": 9,
+        "canonical_root": 62,
+        "source_revision": 42,
+        "policy_hash": 66,
+        "policy": 10632,
+        "immutable_scope": 2200,
+        "acceptance": 1674,
+        "verification": 290,
+        "required_refs": 256252,
+        "optional_refs": 2,
+        "role_requirements": 44,
+        "role_context": 43548,
+        "role_context_complete": 4,
+        "backlog": 497763,
+        "accounting": 115
+      },
+      "required_refs": [
+        [
+          ".planning/phases/39-remove-conveyor-session-friction/39-13-PLAN.md",
+          10447
+        ],
+        [
+          ".planning/architecture/ADR-001-unattended-drive-to-green.md",
+          8248
+        ],
+        [
+          ".planning/architecture/ADR-002-the-conveyor-stops-interrupting-itself.md",
+          8356
+        ],
+        [
+          ".planning/architecture/ADR-003-the-conveyor-follows-the-models-it-runs-on.md",
+          11141
+        ],
+        [
+          ".planning/architecture/ADR-004-positive-evidence-before-a-mutation.md",
+          7648
+        ],
+        [
+          ".planning/architecture/ADR-005-the-floor-is-opus-and-fable-is-earned.md",
+          24486
+        ],
+        [
+          ".planning/architecture/ADR-006-the-conveyor-measures-its-own-state.md",
+          17021
+        ],
+        [
+          ".planning/architecture/ADR-007-a-mechanism-nobody-connected-is-not-a-mechanism.md",
+          17997
+        ],
+        [
+          ".planning/architecture/ADR-008-the-tracker-is-a-projection-and-a-projection-is-driven.md",
+          16529
+        ],
+        [
+          ".planning/architecture/ADR-009-not-every-ticket-is-available-work.md",
+          14609
+        ],
+        [
+          ".planning/architecture/ADR-010-a-ticket-you-cannot-reach-is-not-deliverable.md",
+          10951
+        ],
+        [
+          ".planning/architecture/ADR-011-BACKLOG.md",
+          11308
+        ],
+        [
+          ".planning/architecture/ADR-011-EVALUATION-TEMPLATE.md",
+          3490
+        ],
+        [
+          ".planning/architecture/ADR-011-ROLLOUT.md",
+          16866
+        ],
+        [
+          ".planning/architecture/ADR-011-measure-the-work-before-optimizing-the-model.md",
+          15411
+        ],
+        [
+          ".planning/architecture/ADR-012-task-level-model-ladder.md",
+          5915
+        ],
+        [
+          ".planning/architecture/ADR-013-gsd-workflow-synchronization.md",
+          5236
+        ],
+        [
+          ".planning/architecture/ADR-014-DATA-MODEL.md",
+          999
+        ],
+        [
+          ".planning/architecture/ADR-014-INTERFACES.md",
+          2495
+        ],
+        [
+          ".planning/architecture/ADR-014-ROLLOUT.md",
+          1012
+        ],
+        [
+          ".planning/architecture/ADR-014-mandatory-runtime-model-ladder.md",
+          10066
+        ],
+        [
+          ".planning/architecture/ADR-015-autonomous-dual-runtime-control-plane.md",
+          7776
+        ],
+        [
+          ".planning/architecture/ADR-016-conveyor-session-friction.md",
+          5624
+        ],
+        [
+          ".planning/architecture/ADR-017-delivery-seams-and-pr-hygiene.md",
+          6517
+        ],
+        [
+          ".planning/architecture/DATA-MODEL-013-gsd-workflow-synchronization.md",
+          1359
+        ],
+        [
+          ".planning/architecture/INTERFACES-013-gsd-workflow-synchronization.md",
+          1777
+        ],
+        [
+          ".planning/architecture/ROLLOUT-013-gsd-workflow-synchronization.md",
+          830
+        ]
+      ],
+      "role_context_bytes": {
+        "pr": 264,
+        "exact_diff": 32551,
+        "integration_base": 152,
+        "adr_refs": 4289,
+        "reference_content": 6218
+      },
+      "backlog_selected": 203,
+      "backlog_inventory": 203
+    },
+    {
+      "sid": "cf6dca95-31b9-4180-9c06-d0d1eef27d4b",
+      "role": "arch-review",
+      "accounting": {
+        "backend": "unspecified",
+        "estimated_tokens": 203453,
+        "estimated_bytes": 813811,
+        "soft_ceiling": 360000,
+        "overflow": false
+      },
+      "fields_bytes": {
+        "schema": 28,
+        "version": 1,
+        "role": 13,
+        "subject": 9,
+        "canonical_root": 62,
+        "source_revision": 42,
+        "policy_hash": 66,
+        "policy": 10632,
+        "immutable_scope": 1642,
+        "acceptance": 1217,
+        "verification": 226,
+        "required_refs": 255213,
+        "optional_refs": 2,
+        "role_requirements": 44,
+        "role_context": 46588,
+        "role_context_complete": 4,
+        "backlog": 497763,
+        "accounting": 115
+      },
+      "required_refs": [
+        [
+          ".planning/phases/39-remove-conveyor-session-friction/39-14-PLAN.md",
+          9467
+        ],
+        [
+          ".planning/architecture/ADR-001-unattended-drive-to-green.md",
+          8248
+        ],
+        [
+          ".planning/architecture/ADR-002-the-conveyor-stops-interrupting-itself.md",
+          8356
+        ],
+        [
+          ".planning/architecture/ADR-003-the-conveyor-follows-the-models-it-runs-on.md",
+          11141
+        ],
+        [
+          ".planning/architecture/ADR-004-positive-evidence-before-a-mutation.md",
+          7648
+        ],
+        [
+          ".planning/architecture/ADR-005-the-floor-is-opus-and-fable-is-earned.md",
+          24486
+        ],
+        [
+          ".planning/architecture/ADR-006-the-conveyor-measures-its-own-state.md",
+          17021
+        ],
+        [
+          ".planning/architecture/ADR-007-a-mechanism-nobody-connected-is-not-a-mechanism.md",
+          17997
+        ],
+        [
+          ".planning/architecture/ADR-008-the-tracker-is-a-projection-and-a-projection-is-driven.md",
+          16529
+        ],
+        [
+          ".planning/architecture/ADR-009-not-every-ticket-is-available-work.md",
+          14609
+        ],
+        [
+          ".planning/architecture/ADR-010-a-ticket-you-cannot-reach-is-not-deliverable.md",
+          10951
+        ],
+        [
+          ".planning/architecture/ADR-011-BACKLOG.md",
+          11308
+        ],
+        [
+          ".planning/architecture/ADR-011-EVALUATION-TEMPLATE.md",
+          3490
+        ],
+        [
+          ".planning/architecture/ADR-011-ROLLOUT.md",
+          16866
+        ],
+        [
+          ".planning/architecture/ADR-011-measure-the-work-before-optimizing-the-model.md",
+          15411
+        ],
+        [
+          ".planning/architecture/ADR-012-task-level-model-ladder.md",
+          5915
+        ],
+        [
+          ".planning/architecture/ADR-013-gsd-workflow-synchronization.md",
+          5236
+        ],
+        [
+          ".planning/architecture/ADR-014-DATA-MODEL.md",
+          999
+        ],
+        [
+          ".planning/architecture/ADR-014-INTERFACES.md",
+          2495
+        ],
+        [
+          ".planning/architecture/ADR-014-ROLLOUT.md",
+          1012
+        ],
+        [
+          ".planning/architecture/ADR-014-mandatory-runtime-model-ladder.md",
+          10066
+        ],
+        [
+          ".planning/architecture/ADR-015-autonomous-dual-runtime-control-plane.md",
+          7776
+        ],
+        [
+          ".planning/architecture/ADR-016-conveyor-session-friction.md",
+          5624
+        ],
+        [
+          ".planning/architecture/ADR-017-delivery-seams-and-pr-hygiene.md",
+          6517
+        ],
+        [
+          ".planning/architecture/DATA-MODEL-013-gsd-workflow-synchronization.md",
+          1359
+        ],
+        [
+          ".planning/architecture/INTERFACES-013-gsd-workflow-synchronization.md",
+          1777
+        ],
+        [
+          ".planning/architecture/ROLLOUT-013-gsd-workflow-synchronization.md",
+          830
+        ]
+      ],
+      "role_context_bytes": {
+        "pr": 264,
+        "exact_diff": 35591,
+        "integration_base": 152,
+        "adr_refs": 4289,
+        "reference_content": 6218
+      },
+      "backlog_selected": 203,
+      "backlog_inventory": 203
+    },
+    {
+      "sid": "4aa1b059-cc95-4376-82ed-858ebb20aed5",
+      "role": "arch-review",
+      "accounting": {
+        "backend": "unspecified",
+        "estimated_tokens": 201767,
+        "estimated_bytes": 807068,
+        "soft_ceiling": 360000,
+        "overflow": false
+      },
+      "fields_bytes": {
+        "schema": 28,
+        "version": 1,
+        "role": 13,
+        "subject": 9,
+        "canonical_root": 62,
+        "source_revision": 42,
+        "policy_hash": 66,
+        "policy": 10632,
+        "immutable_scope": 2821,
+        "acceptance": 2314,
+        "verification": 318,
+        "required_refs": 256685,
+        "optional_refs": 2,
+        "role_requirements": 44,
+        "role_context": 36005,
+        "role_context_complete": 4,
+        "backlog": 497763,
+        "accounting": 115
+      },
+      "required_refs": [
+        [
+          ".planning/phases/39-remove-conveyor-session-friction/39-15-PLAN.md",
+          10937
+        ],
+        [
+          ".planning/architecture/ADR-001-unattended-drive-to-green.md",
+          8248
+        ],
+        [
+          ".planning/architecture/ADR-002-the-conveyor-stops-interrupting-itself.md",
+          8356
+        ],
+        [
+          ".planning/architecture/ADR-003-the-conveyor-follows-the-models-it-runs-on.md",
+          11141
+        ],
+        [
+          ".planning/architecture/ADR-004-positive-evidence-before-a-mutation.md",
+          7648
+        ],
+        [
+          ".planning/architecture/ADR-005-the-floor-is-opus-and-fable-is-earned.md",
+          24486
+        ],
+        [
+          ".planning/architecture/ADR-006-the-conveyor-measures-its-own-state.md",
+          17021
+        ],
+        [
+          ".planning/architecture/ADR-007-a-mechanism-nobody-connected-is-not-a-mechanism.md",
+          17997
+        ],
+        [
+          ".planning/architecture/ADR-008-the-tracker-is-a-projection-and-a-projection-is-driven.md",
+          16529
+        ],
+        [
+          ".planning/architecture/ADR-009-not-every-ticket-is-available-work.md",
+          14609
+        ],
+        [
+          ".planning/architecture/ADR-010-a-ticket-you-cannot-reach-is-not-deliverable.md",
+          10951
+        ],
+        [
+          ".planning/architecture/ADR-011-BACKLOG.md",
+          11308
+        ],
+        [
+          ".planning/architecture/ADR-011-EVALUATION-TEMPLATE.md",
+          3490
+        ],
+        [
+          ".planning/architecture/ADR-011-ROLLOUT.md",
+          16866
+        ],
+        [
+          ".planning/architecture/ADR-011-measure-the-work-before-optimizing-the-model.md",
+          15411
+        ],
+        [
+          ".planning/architecture/ADR-012-task-level-model-ladder.md",
+          5915
+        ],
+        [
+          ".planning/architecture/ADR-013-gsd-workflow-synchronization.md",
+          5236
+        ],
+        [
+          ".planning/architecture/ADR-014-DATA-MODEL.md",
+          999
+        ],
+        [
+          ".planning/architecture/ADR-014-INTERFACES.md",
+          2495
+        ],
+        [
+          ".planning/architecture/ADR-014-ROLLOUT.md",
+          1012
+        ],
+        [
+          ".planning/architecture/ADR-014-mandatory-runtime-model-ladder.md",
+          10066
+        ],
+        [
+          ".planning/architecture/ADR-015-autonomous-dual-runtime-control-plane.md",
+          7776
+        ],
+        [
+          ".planning/architecture/ADR-016-conveyor-session-friction.md",
+          5624
+        ],
+        [
+          ".planning/architecture/ADR-017-delivery-seams-and-pr-hygiene.md",
+          6517
+        ],
+        [
+          ".planning/architecture/DATA-MODEL-013-gsd-workflow-synchronization.md",
+          1359
+        ],
+        [
+          ".planning/architecture/INTERFACES-013-gsd-workflow-synchronization.md",
+          1777
+        ],
+        [
+          ".planning/architecture/ROLLOUT-013-gsd-workflow-synchronization.md",
+          830
+        ]
+      ],
+      "role_context_bytes": {
+        "pr": 264,
+        "exact_diff": 25008,
+        "integration_base": 152,
+        "adr_refs": 4289,
+        "reference_content": 6218
+      },
+      "backlog_selected": 203,
+      "backlog_inventory": 203
+    }
+  ],
+  "false_stop_hook_replies": {
+    "count": 6,
+    "processed_input_tokens": 5097592,
+    "source_session": "7bcbbf57-9cd4-4d9b-b17a-6064eae1b7c1",
+    "source_lines": [
+      3813,
+      3839,
+      3870,
+      3920,
+      3956,
+      3990
+    ]
+  },
+  "limitations": [
+    "Not subscription credits or unique corpus size.",
+    "No dispatch attribution ledger joined.",
+    "Historical sessions retain pre-midnight context but only today response usage is summed.",
+    "Active sessions: snapshot only.",
+    "Discovery covered shipyard-named Claude project directories and worktrees; not claimed to cover remote or unlinked generic temporary sessions."
+  ]
+}

@@ -763,6 +763,19 @@ gate releases on a live round, repair the Codex investigate and decompose loops,
 support a provenance-stamped dogfood mode, and keep conveyor internals out of
 target-project PRs.
 
+### Phase 41: Reduce pipeline subscription overhead
+**Status**: preparation captured ([INV-006](investigations/INV-006-pipeline-subscription-overhead/PROBLEM.md)); formal Codex planning [blocked by host prerequisites](phases/41-reduce-pipeline-subscription-overhead/PLANNING-BLOCKERS.md)
+**Requirements**: to be assigned during decomposition; acceptance P41-A–F in [phase context](phases/41-reduce-pipeline-subscription-overhead/CONTEXT.md)
+**Delivery order**: after phase 39 release, before phase 40
+
+Use the 2026-09-25 Claude-session measurements to reduce oversized parent
+context, false stop-hook wakeups and repeat execution after finalization
+failures. Preserve the agreed local GSD projection fingerprints and orchestrator
+compaction work. Verify installed T-39-03/T-39-17 behavior, measure complete
+launch inputs and end-to-end outcomes, and retain independent review and model
+policy. Reconcile shared-file ownership with phase 40 before materializing
+tickets; do not repeat its provenance/schema work or phase 39 packet fixes.
+
 <!-- shipyard:gsd-sync:begin -->
 ## Shipyard synchronization (generated)
 
