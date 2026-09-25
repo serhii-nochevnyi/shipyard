@@ -11,6 +11,7 @@ const { createDurableRecorder } = require('../../plugins/delivery-pipeline/scrip
 const { createClaudeRoleHost, parseCli, parseRequest, REQUEST_SCHEMA } = require('../../plugins/delivery-pipeline/scripts/claude-role-host.cjs');
 const { activeDispatches } = require('../../plugins/delivery-pipeline/scripts/dispatch-record.cjs');
 const { agentsInFlight } = require('../../plugins/delivery-pipeline/scripts/front.cjs');
+const { loadClaudeReferenceContent } = require('../../plugins/delivery-pipeline/scripts/claude-reference-content.cjs');
 
 const POLICY_MD = '# ADR-014 test\nExplicit model and effort are required.\n';
 const PHASE = '38-role-host-test';
@@ -35,9 +36,10 @@ function planText(extra = []) {
   ].join('\n');
 }
 
-function writeCorpus(root, { adrs = [], backlogFiles = [] } = {}) {
+function writeCorpus(root, { adrs = [], backlogFiles = [], investigations = [] } = {}) {
   for (const adr of adrs) write(root, `.planning/architecture/${adr.name}`, adr.content);
   for (const item of backlogFiles) write(root, `.planning/backlog/${item.name}`, item.content);
+  for (const item of investigations) write(root, item.path, item.content);
 }
 
 function setupRepository(kind, options = {}) {
@@ -120,10 +122,19 @@ function packetFromPrompt(prompt) {
   return JSON.parse(prompt.slice(start + startTag.length, end));
 }
 
-function fakeEvidence(model, effort) {
+function fakeEvidence(model, effort, usage) {
   const sessionId = `session-${crypto.randomUUID()}`;
-  const transcript = { path: path.join(os.tmpdir(), `${sessionId}.jsonl`), bytes: 64, sha256: 'a'.repeat(64) };
   const observedModel = model === 'sonnet' ? 'claude-sonnet-5' : model === 'fable' ? 'claude-fable-5' : model;
+  let transcript;
+  if (usage) {
+    const transcriptPath = path.join(os.tmpdir(), `${sessionId}.jsonl`);
+    const line = JSON.stringify({ type: 'assistant', sessionId, message: { role: 'assistant', model: observedModel, usage } });
+    fs.writeFileSync(transcriptPath, `${line}\n`);
+    const buffer = fs.readFileSync(transcriptPath);
+    transcript = { path: transcriptPath, bytes: buffer.length, sha256: crypto.createHash('sha256').update(buffer).digest('hex') };
+  } else {
+    transcript = { path: path.join(os.tmpdir(), `${sessionId}.jsonl`), bytes: 64, sha256: 'a'.repeat(64) };
+  }
   return {
     launch_id: `claude-${sessionId}`,
     session_id: sessionId,
@@ -195,7 +206,8 @@ function fakeRuntimeFactory(fixture, options = {}) {
           fs.writeFileSync(evidencePath, `Integration check at ${context.combined_diff.head}.\n`);
         }
         options.mutateResult?.(result, packet);
-        const applicationEvidence = options.badEvidence ? fakeEvidence(selection.model, 'low') : fakeEvidence(selection.model, selection.effort);
+        const applicationEvidence = options.badEvidence ? fakeEvidence(selection.model, 'low')
+          : fakeEvidence(selection.model, selection.effort, options.firstResponseUsage);
         return { output: result, applicationEvidence };
       },
       applicationEvidence({ result }) { return result.applicationEvidence; },
@@ -226,7 +238,7 @@ function hostOptions(fixture, extra = {}) {
   };
 }
 
-function setupSentinelRepository() {
+function setupSentinelRepository(options = {}) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-claude-sentinel-')));
   const storageRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-claude-sentinel-state-'));
   const phase = '38-sentinel-role-test';
@@ -238,12 +250,13 @@ function setupSentinelRepository() {
   git(root, ['config', 'commit.gpgsign', 'false']);
   write(root, '.planning/architecture/ADR-014-test.md', POLICY_MD);
   write(root, '.planning/config.json', JSON.stringify({ git: { base_branch: 'main' } }));
+  if (options.corpus) writeCorpus(root, options.corpus);
   const tickets = {};
   const state = {};
   const sentinelPrs = [];
   ids.forEach((id, index) => {
     const plan = `.planning/phases/${phase}/${id.slice(4, 6)}-PLAN.md`;
-    write(root, plan, planText());
+    write(root, plan, planText(options.planExtra));
     write(root, `src/${id}.txt`, `source ${index}\n`);
     const branch = branches[index];
     tickets[id] = { title: id, plan, phase: '38', repo: null, wave: 1, depends_on: [],
@@ -888,6 +901,18 @@ test('an over-bound role packet is refused before launch with its remedy', async
   } finally {
     cleanupFixture(integratorFixture);
   }
+
+  const sentinelFixture = setupSentinelRepository({ corpus, planExtra });
+  try {
+    await assert.rejects(
+      createClaudeRoleHost(hostOptions(sentinelFixture)).run(request(sentinelFixture)),
+      (error) => error.code === 'CONTEXT_PACKET_OVER_BOUND'
+        && error.message.includes('pr-sentinel context packet is')
+        && error.message.includes('remedy: drop ADR and backlog references'),
+    );
+  } finally {
+    cleanupFixture(sentinelFixture);
+  }
 });
 
 test('role packets carry their explicit token bounds', async () => {
@@ -917,5 +942,122 @@ test('role packets carry their explicit token bounds', async () => {
     cleanupFixture(archFixture);
     cleanupFixture(integratorFixture);
     cleanupFixture(sentinelFixture);
+  }
+});
+
+test('the role reference appears once in the prompt and the packet keeps only its digest', async () => {
+  const cases = [
+    ['arch-review', () => setupRepository('arch-review')],
+    ['integrator', () => setupRepository('integrator')],
+    ['pr-sentinel', () => setupSentinelRepository()],
+  ];
+  for (const [role, build] of cases) {
+    const fixture = build();
+    let launched;
+    try {
+      const reference = loadClaudeReferenceContent(role);
+      await createClaudeRoleHost(hostOptions(fixture, {
+        onLaunch(prompt) { launched = prompt; },
+      })).run(request(fixture));
+      const packet = packetFromPrompt(launched);
+      assert.equal(packet.role_context.reference_content, undefined);
+      assert.deepEqual(packet.role_context.reference_digest, {
+        sha256: crypto.createHash('sha256').update(reference).digest('hex'),
+        bytes: Buffer.byteLength(reference, 'utf8'),
+      });
+      assert.equal(launched.split(reference).length - 1, 1);
+    } finally {
+      cleanupFixture(fixture);
+    }
+  }
+});
+
+test('a partially superseded ADR still admits the DECISIONS.md it transitively names', async () => {
+  const decisionsPath = '.planning/investigations/INV-901-test-partial-supersession/DECISIONS.md';
+  const decisionsContent = '# Decisions\n\n## A still-governing constraint\n\n**Why:** it still governs.\n';
+  const adrPath = '.planning/architecture/ADR-105-old.md';
+  const adrContent = `# ADR-105 — old\n\n- **Status**: superseded for runtime model and effort selection\n\n`
+    + `See \`${decisionsPath}\` for the retained decision.\n`;
+  const corpus = {
+    adrs: [{ name: 'ADR-105-old.md', content: adrContent }],
+    investigations: [{ path: decisionsPath, content: decisionsContent }],
+  };
+  const planExtra = ['References ADR-105 for context.'];
+  const cases = [
+    ['arch-review', () => setupRepository('arch-review', { corpus, planExtra })],
+    ['integrator', () => setupRepository('integrator', { corpus, planExtra })],
+    ['pr-sentinel', () => setupSentinelRepository({ corpus, planExtra })],
+  ];
+  for (const [role, build] of cases) {
+    const fixture = build();
+    let launched;
+    try {
+      await createClaudeRoleHost(hostOptions(fixture, {
+        onLaunch(prompt) { launched = prompt; },
+      })).run(request(fixture));
+      const packet = packetFromPrompt(launched);
+      if (role !== 'pr-sentinel') {
+        assert.deepEqual(packet.role_context.adr_excluded, [{ id: 'ADR-105', path: adrPath, reason: 'superseded' }]);
+      }
+      assert.equal(packet.required_refs.some((ref) => ref.path === adrPath), false);
+      const decisionsRef = packet.required_refs.find((ref) => ref.path === decisionsPath);
+      assert.ok(decisionsRef, `${role}: a transitively named DECISIONS.md must remain admitted`);
+      assert.equal(decisionsRef.content, decisionsContent);
+    } finally {
+      cleanupFixture(fixture);
+    }
+  }
+});
+
+test('the launch record separates the packet estimate from the complete prompt and reports unmatched usage as unknown', async () => {
+  const cases = [
+    () => setupRepository('arch-review'),
+    () => setupRepository('integrator'),
+    () => setupSentinelRepository(),
+  ];
+  for (const build of cases) {
+    const fixture = build();
+    let launched;
+    try {
+      const result = await createClaudeRoleHost(hostOptions(fixture, {
+        onLaunch(prompt, selection) { launched = { prompt, selection }; },
+      })).run(request(fixture));
+      const packet = packetFromPrompt(launched.prompt);
+      assert.equal(result.context.packet_bytes, packet.accounting.estimated_bytes);
+      assert.equal(result.context.packet_estimated_tokens, packet.accounting.estimated_tokens);
+      assert.equal(result.context.packet_estimated_tokens, Math.ceil(result.context.packet_bytes / 4));
+      assert.equal(result.context.prompt_bytes, Buffer.byteLength(launched.prompt, 'utf8'));
+      assert.ok(result.context.prompt_bytes > result.context.packet_bytes);
+      assert.equal(result.context.model, result.dispatch.receipt.applied_model);
+      assert.equal(result.context.effort, result.dispatch.receipt.applied_effort);
+      assert.equal(result.context.policy_hash, packet.policy_hash);
+      assert.match(result.context.run_id, /^claude-role-/);
+      assert.deepEqual(result.context.selected_backlog_ids, packet.backlog.selected_ids);
+      assert.ok(result.context.selected_refs.some((ref) => ref.path.endsWith('PLAN.md')));
+      assert.deepEqual(result.context.first_response_usage, { status: 'unknown', reason: 'transcript is unreadable' });
+    } finally {
+      cleanupFixture(fixture);
+    }
+  }
+});
+
+test('a matched first-response transcript records observed provider usage by authenticated dispatch identity', async () => {
+  const fixture = setupRepository('arch-review');
+  const usage = { input_tokens: 1200, cache_read_input_tokens: 30000, cache_creation_input_tokens: 500, output_tokens: 800 };
+  let transcriptPath;
+  try {
+    const result = await createClaudeRoleHost(hostOptions(fixture, {
+      firstResponseUsage: usage,
+      onLaunch() {},
+    })).run(request(fixture));
+    transcriptPath = result.dispatch.application_evidence.transcript.path;
+    assert.deepEqual(result.context.first_response_usage, {
+      status: 'observed',
+      dispatch_identity: { session_id: result.dispatch.receipt.session_id, launch_id: result.dispatch.receipt.launch_id },
+      counters: usage,
+    });
+  } finally {
+    cleanupFixture(fixture);
+    if (transcriptPath) fs.rmSync(transcriptPath, { force: true });
   }
 });
