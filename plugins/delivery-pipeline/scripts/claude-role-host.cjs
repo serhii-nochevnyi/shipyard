@@ -338,8 +338,8 @@ function phaseSelection(graph, requested) {
   return { phase: phaseDir, phaseNumber, rows: rows.map(([id, row]) => ({ id, row })).sort((a, b) => a.id.localeCompare(b.id)) };
 }
 
-function diffText(options, worktree, base, head) {
-  const diff = git(options, worktree, ['diff', '--no-ext-diff', '--unified=50', `${base}...${head}`], DIFF_MAX_BYTES + 1);
+function diffText(options, worktree, base, head, pathspec = []) {
+  const diff = git(options, worktree, ['diff', '--no-ext-diff', '--unified=50', `${base}...${head}`, ...pathspec], DIFF_MAX_BYTES + 1);
   if (Buffer.byteLength(diff, 'utf8') > DIFF_MAX_BYTES) reject('role diff exceeds the bounded context packet');
   return diff;
 }
@@ -450,7 +450,7 @@ function prepareIntegrator(options, request, canonical, graph) {
   const subject = `phase=${phase};repository=${repositoryIdentity};tickets=${ticketSetDigest}`;
   const mergeBase = git(options, canonical.worktree, ['merge-base', defaultBase, canonical.head]);
   const mergeBaseTree = git(options, canonical.worktree, ['rev-parse', '--verify', `${mergeBase}^{tree}`]);
-  const combinedDiff = diffText(options, canonical.worktree, mergeBase, canonical.head);
+  const combinedDiff = diffText(options, canonical.worktree, mergeBase, canonical.head, ['--', '.', ':(exclude).planning']);
   const sources = sourceReferences(canonical.worktree, graph, selection.rows);
   const reference = loadClaudeReferenceContent('integrator');
   const phaseContracts = sources.plans.map((plan) => ({ ticket: plan.id, path: plan.path,
