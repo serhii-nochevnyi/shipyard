@@ -13,6 +13,7 @@ const { createRunController } = require('./run-controller.cjs');
 const { createRunScope } = require('./run-scope.cjs');
 const { matchesModelObservation } = require('./runtime-adapters.cjs');
 const pipelineConfig = require('./pipeline-config.cjs');
+const { formatHint } = require('./refusal-hints.cjs');
 
 const ROLES = Object.freeze({
   'gsd-phase-researcher': 'research',
@@ -233,7 +234,7 @@ async function main(argv = process.argv.slice(2)) {
         roles: Object.keys(ROLES), live_execution: 'not_run' })}\n`);
     } catch (error) {
       process.stdout.write(`${JSON.stringify({ status: 'unavailable', reason: error.code || 'role_unavailable',
-        detail: error.message, live_execution: 'not_run' })}\n`);
+        detail: error.message, live_execution: 'not_run', hint: formatHint(error.code) })}\n`);
     }
     return;
   }
@@ -249,6 +250,7 @@ async function main(argv = process.argv.slice(2)) {
 if (require.main === module) {
   main().catch((error) => {
     process.stderr.write(`${error.code || 'FAILED'}: ${error.message}\n`);
+    process.stderr.write(`${formatHint(error.code)}\n`);
     process.exitCode = 1;
   });
 }

@@ -19,6 +19,14 @@ const { spawnSync } = require('child_process');
 const { suite, test, done, assert } = require(path.join(__dirname, 'assert-harness.cjs'));
 const scope = require(path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'run-scope.cjs'));
 const { createRunController } = require(path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'run-controller.cjs'));
+const armer = require(path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'stop-gate-arm.cjs'));
+
+const SESSION = 'stop-gate-test-session';
+function armedPayload(cwd, payload) {
+  const p = 'session_id' in payload ? payload : { ...payload, session_id: SESSION };
+  if (armer.validSessionId(p.session_id) && !armer.isArmed(cwd, p.session_id)) armer.arm(cwd, p.session_id);
+  return p;
+}
 
 const SCRIPT = path.join(
   __dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'stop-gate.cjs'
@@ -74,8 +82,9 @@ function project(front, journal = null) {
 
 // run(front, payload) → the parsed hook verdict, or null when it stayed silent.
 function run(front, payload = {}, env = {}, journal = null) {
+  const cwd = project(front, journal);
   const r = spawnSync('node', [SCRIPT], {
-    cwd: project(front, journal), input: JSON.stringify(payload), encoding: 'utf8',
+    cwd, input: JSON.stringify(armedPayload(cwd, payload)), encoding: 'utf8',
     env: { ...process.env, ...env },
   });
   assert.equal(r.status, 0, `the hook must always exit 0 (stderr: ${r.stderr})`);
@@ -264,7 +273,7 @@ test('garbage in SHIPYARD_STOP_GATE_FRESH_MS does not disable the staleness hatc
 test('no stdin payload at all is survivable', () => {
   const r = spawnSync('node', [SCRIPT], { cwd: project(live()), input: '', encoding: 'utf8' });
   assert.equal(r.status, 0, 'must not crash without a payload');
-  assert.equal(JSON.parse(r.stdout).decision, 'block', 'and still enforces');
+  assert.equal(r.stdout.trim(), '', 'and with no session to be armed, it allows');
 });
 
 suite('stop-gate — it reads the board the conveyor is driving');
@@ -308,9 +317,9 @@ function repoWithPhaseWorktree(mainFront, phaseFront) {
   return { main, phase };
 }
 
-function runIn(cwd, payload = {}, env = {}) {
+function runIn(cwd, payload = {}, env = {}, doArm = true) {
   const r = spawnSync('node', [SCRIPT], {
-    cwd, input: JSON.stringify(payload), encoding: 'utf8',
+    cwd, input: JSON.stringify(doArm ? armedPayload(cwd, payload) : payload), encoding: 'utf8',
     env: { ...process.env, ...env },
   });
   assert.equal(r.status, 0, `the hook must always exit 0 (stderr: ${r.stderr})`);
@@ -620,7 +629,7 @@ function ledgerOf(dir) {
 // go to STDERR, because a non-JSON line on stdout is not a hook verdict.
 function runFull(cwd, payload = {}, env = {}) {
   const r = spawnSync('node', [SCRIPT], {
-    cwd, input: JSON.stringify(payload), encoding: 'utf8',
+    cwd, input: JSON.stringify(armedPayload(cwd, payload)), encoding: 'utf8',
     env: { ...process.env, ...env },
   });
   assert.equal(r.status, 0, `the hook must always exit 0 (stderr: ${r.stderr})`);
@@ -704,16 +713,46 @@ test('the cap is tunable, and garbage in it falls back to the default', () => {
     .decision === 'block', 'a garbage cap falls back to 12, not to zero');
 });
 
-test('a payload with no session_id keeps the old one-block rule', () => {
-  // The ledger is keyed by the session the hook was called for. Without one
-  // there is nothing to count rounds against, and inventing a key would make
-  // every stop in the repository look like the same run.
+test('a payload with no session_id is not a deliver-armed session, so it allows', () => {
   const dir = project(live({ generated_at: minsAgo(2) }));
-  assert.ok(runIn(dir, {}).decision === 'block', 'a first stop still blocks');
+  assert.equal(runIn(dir, { session_id: undefined }), null, 'no session id, no arming, no block');
   assert.equal(ledgerOf(dir), null, 'and no ledger is written for a payload that cannot own one');
-  putFront(dir, live({ generated_at: fresh() }));
-  assert.equal(runIn(dir, { stop_hook_active: true }), null,
-    'so the anti-loop hatch stays exactly as permissive as it was');
+});
+
+suite('stop-gate — only a deliver-armed session is held');
+
+test('an unarmed session next to a fresh live front is allowed to stop', () => {
+  const dir = project(live());
+  assert.equal(runIn(dir, { session_id: 'unarmed-session' }, {}, false), null);
+});
+
+test('a marker for another session does not arm this one', () => {
+  const dir = project(live());
+  armer.arm(dir, 'someone-else-session');
+  assert.equal(runIn(dir, { session_id: 'this-session-01' }, {}, false), null);
+});
+
+test('an unreadable or malformed marker allows the stop', () => {
+  const dir = project(live());
+  const bad = armer.markerPath(dir, 'malformed-session');
+  fs.mkdirSync(path.dirname(bad), { recursive: true });
+  fs.writeFileSync(bad, '{not json');
+  assert.equal(runIn(dir, { session_id: 'malformed-session' }, {}, false), null, 'malformed');
+  const foreign = armer.markerPath(dir, 'foreign-body-session');
+  fs.writeFileSync(foreign, JSON.stringify({ session_id: 'another-one-entirely' }));
+  assert.equal(runIn(dir, { session_id: 'foreign-body-session' }, {}, false), null, 'mismatched body');
+  const dirMarker = armer.markerPath(dir, 'dir-marker-session');
+  fs.mkdirSync(dirMarker);
+  assert.equal(runIn(dir, { session_id: 'dir-marker-session' }, {}, false), null, 'unreadable');
+});
+
+test('an armed session with a stale main checkout and a live worktree front blocks', () => {
+  const { main } = repoWithPhaseWorktree(shipped, live());
+  const v = runIn(main, { session_id: 'armed-cross-worktree' });
+  assert.ok(v && v.decision === 'block');
+  assert.ok(fs.existsSync(armer.markerPath(main, 'armed-cross-worktree')));
+  assert.ok(!fs.existsSync(path.join(main, '.planning', 'graph', 'stop-gate-armed')),
+    'inside git the marker lives under the common dir');
 });
 
 test('a ledger this session does not own neither silences nor traps it', () => {
@@ -721,10 +760,10 @@ test('a ledger this session does not own neither silences nor traps it', () => {
   fs.writeFileSync(ledgerFile(dir), JSON.stringify({
     session_id: 'someone-else', blocks: 99, last_generated_at: fresh(), last_moved_at: null,
   }));
-  const v = runIn(dir, { session_id: 'mine' });
+  const v = runIn(dir, { session_id: 'mine-session' });
   assert.ok(v && v.decision === 'block', 'another run\'s cap is not this run\'s');
   const led = ledgerOf(dir);
-  assert.equal(led.session_id, 'mine', 'the ledger belongs to the session that is stopping');
+  assert.equal(led.session_id, 'mine-session', 'the ledger belongs to the session that is stopping');
   assert.equal(led.blocks, 1, 'counting starts from this session\'s first block');
 });
 
@@ -734,13 +773,14 @@ test('an unwritable ledger changes nothing but a line on stderr', () => {
   // it. The gate always exits 0 and the verdict stands.
   const dir = project(live());
   fs.mkdirSync(ledgerFile(dir), { recursive: true });
-  const r = runFull(dir, { session_id: 'sess-ro' });
+  const r = runFull(dir, { session_id: 'sess-ro-1' });
   assert.ok(r.verdict && r.verdict.decision === 'block', 'the refusal is unaffected');
   assert.ok(/ledger/.test(r.stderr), 'and one line says the bookkeeping did not happen');
 });
 
 test('a read-only graph directory is survivable', () => {
   const dir = project(live());
+  armer.arm(dir, 'sess-ro-2');
   fs.chmodSync(graphOf(dir), 0o555);
   try {
     const r = runFull(dir, { session_id: 'sess-ro-2' });

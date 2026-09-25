@@ -1,6 +1,6 @@
 # Requirements: shipyard
 
-<!-- shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 719b0b2f0955de7d0984efd19ec9d99108eb92c7a04e135054ae79dd82d854b8 -->
+<!-- shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 810c871f2846e3c6d43871aab70599444c98c0111b9ab01cf9eb438353006c04 -->
 
 **Defined:** 2026-09-10
 **Core Value:** Keep delivery decisions truthful, resumable, and synchronized between the Shipyard conveyor and native GSD workflows.
@@ -130,7 +130,33 @@
 - [x] **REQ-120**: Each runtime has capability probes, an explicitly enabled live proving-ground smoke, negative enforcement tests, versioned compatibility rollback, and preserved receipts; one runtime's evidence cannot mark the other green or block its independent rollout.
 - [x] **REQ-121**: Codex routing uses native `gpt-6-luna` and `gpt-6-sol` IDs throughout policy, generated agents, capability metadata, and receipts; the executor base remains Luna/max and only approved signals promote it to Sol.
 - [x] **REQ-122**: Claude Opus routing requests `claude-opus-5-5` with the existing Claude effort policy; credentials stay Anthropic-only and applied model/effort evidence is scoped to the launched assistant session.
-- [x] **REQ-123**: Claude OAuth and Codex ChatGPT login are detected through each native CLI's status command; subscription auth is sufficient, API-key environment variables are not required, and credentials never cross providers. *ADR-011 was accepted for implementation on 2026-09-10. T-32-01/02 are the initial isolated tooling slice; subsequent packages remain subject to decomposition and rollout gates. Existing model floors remain unchanged.*
+- [x] **REQ-123**: Claude OAuth and Codex ChatGPT login are detected through each native CLI's status command; subscription auth is sufficient, API-key environment variables are not required, and credentials never cross providers.
+- [ ] **REQ-125**: Host refusals keep their codes, exit status and fail-closed behaviour and add a plain-language hint with a remedy from one code-to-hint map shared by the Claude and Codex hosts; investigate and decompose relay it in the user's language.
+- [ ] **REQ-126**: Decompose bootstraps a minimal GSD project from the accepted ADR when config.json, ROADMAP.md or REQUIREMENTS.md is missing: one phase per ADR, one requirement per ADR decision, missing files only, plain-language refusal for an ADR without decisions; investigate needs only .planning/investigations/.
+- [ ] **REQ-127**: The stop gate enforces a front only in a session that deliver armed with a per-session marker keyed by session_id; a missing, unreadable or foreign marker allows the stop, and cross-worktree discovery stays for armed sessions.
+- [ ] **REQ-128**: The auto-route hook routes research-needing work to /shipyard:investigate through /shipyard:route, stays silent for task-notification turns and expanded slash commands, injects on unparseable input, and the Codex AGENTS.md block and make doctor follow it.
+- [ ] **REQ-129**: Shipyard ships templates/adr/ADR.md, adr-ingest.cjs has a no-write --check mode, and Gate 1 fails when the new ADR does not pass it.
+- [ ] **REQ-130**: A script builds a deterministic Jira export plan from tickets.json (content, repo-namespaced labels, explicit is-blocked-by direction) that the agent executes through MCP; keys are recorded by script and no network code or credential enters the conveyor.
+- [ ] **REQ-131**: Ordering without a code dependency is not depends_on: decompose and delivery-rules prose adopt the validator condition, and validate-graph warns when a same-phase dependency shares no files_modified with its parent.
+- [ ] **REQ-132**: Decompose passes --skip-ui to /gsd-plan-phase only when the ADR declares "UI design: none".
+- [ ] **REQ-133**: Decompose warns once, without blocking, when .planning/ is not tracked by git, naming the consequence for delivery worktrees and the remedy.
+- [ ] **REQ-134**: gsd-tune names the missing configuration file and the command that creates it, keeping exit code 2 and its prefix.
+- [ ] **REQ-135**: Research handbacks receive their 500-character summary bound at launch and are bounded or refused deterministically with a message naming the line and length before the trusted consumer seals them.
+- [ ] **REQ-136**: Phase 40 builds the delivery seams (captured fixtures, dispatch entry point, sentinel preflight) before the point fixes and gates every release on a live round.
+- [ ] **REQ-137**: Registered producer-consumer boundaries are tested against fixtures captured from real producers by a manual scrubbed make target that records the CLI version; a contract test refuses inline shapes for those boundaries.
+- [ ] **REQ-138**: One deterministic front-to-dispatch entry point for Claude and Codex builds host requests from the graph (branch from the graph, plan path from the ticket worktree, ticket type never forwarded as signals.type), launches detached and offers status and wait through a dispatch wait kind.
+- [ ] **REQ-139**: The host writes an in-flight record with pid and TTL at launch that the stop gate honours and that fails closed on process exit or expiry, while the durable dispatch mark still follows the verified receipt.
+- [ ] **REQ-140**: A sentinel preflight fetches and fast-forwards the base ref and runs and commits state-sync, or refuses naming the exact command; a failed fetch is a refusal.
+- [ ] **REQ-141**: make test-live runs one real research, decompose, executor and sentinel round per runtime on an in-repo fixture project with each role's base rung of its runtime grid, and the release script refuses without a fresh passing live receipt.
+- [ ] **REQ-142**: Target-project PRs carry no conveyor or GSD internals: neutral branches stored in the graph, conventional-commit titles, bodies without ticket, phase, ADR or plan identifiers, untracked .planning/, and a publish-time PR hygiene gate; the Shipyard repository is exempt.
+- [ ] **REQ-143**: Ticket-to-PR matching uses the exact head branch plus the PR number recorded in delivery state at creation; the title and ticket-prefix fallback remains only for legacy PRs.
+- [ ] **REQ-144**: A supported dogfood mode runs hosts from a worktree through a separate install root, stamps receipts with host source sha and dirty flag, is refused for merges into a target default branch, and doctor reports an installed cache matching no release.
+- [ ] **REQ-145**: The runtime-file digest pin is refreshed only by a make target and a commit trailer that CI verifies.
+- [ ] **REQ-146**: Research keeps valid lines sealed, names the failed line and its real cause, and re-dispatches only that line; the fan-out stays failed until all four lines are sealed.
+- [ ] **REQ-147**: One shared sealer produces research-result and decomposition-result envelopes with an artifact index for Claude and Codex research and decompose hosts.
+- [ ] **REQ-148**: The Codex GSD researcher writes only its contained artifact path, and Codex child tasks are passed by file path plus a digest the host verifies.
+- [ ] **REQ-149**: Point fixes: header-free deterministic state YAML; pre-push resolves the worktree through git; the Codex config refusal names the config fix; gsd-tune for Codex writes no Claude-only keys; investigate and decompose prose explain the out-of-repo host state directory; doctor reads the Codex agents manifest.
+- [ ] **REQ-150**: Unit fixtures that create git repositories are hermetic against global commit signing and fixed /tmp paths. *ADR-011 was accepted for implementation on 2026-09-10. T-32-01/02 are the initial isolated tooling slice; subsequent packages remain subject to decomposition and rollout gates. Existing model floors remain unchanged.*
 
 ## Out of Scope
 
@@ -266,10 +292,36 @@
 | REQ-121 | Phase 38 | Complete |
 | REQ-122 | Phase 38 | Complete |
 | REQ-123 | Phase 38 | Complete |
+| REQ-125 | Phase 39 | Blocked |
+| REQ-126 | Phase 39 | Blocked |
+| REQ-127 | Phase 39 | Blocked |
+| REQ-128 | Phase 39 | Blocked |
+| REQ-129 | Phase 39 | Blocked |
+| REQ-130 | Phase 39 | Blocked |
+| REQ-131 | Phase 39 | Blocked |
+| REQ-132 | Phase 39 | Blocked |
+| REQ-133 | Phase 39 | Blocked |
+| REQ-134 | Phase 39 | Blocked |
+| REQ-135 | Phase 39 | Blocked |
+| REQ-136 | Phase 40 | In Progress |
+| REQ-137 | Phase 40 | In Progress |
+| REQ-138 | Phase 40 | In Progress |
+| REQ-139 | Phase 40 | In Progress |
+| REQ-140 | Phase 40 | In Progress |
+| REQ-141 | Phase 40 | In Progress |
+| REQ-142 | Phase 40 | In Progress |
+| REQ-143 | Phase 40 | In Progress |
+| REQ-144 | Phase 40 | In Progress |
+| REQ-145 | Phase 40 | In Progress |
+| REQ-146 | Phase 40 | In Progress |
+| REQ-147 | Phase 40 | In Progress |
+| REQ-148 | Phase 40 | In Progress |
+| REQ-149 | Phase 40 | In Progress |
+| REQ-150 | Phase 40 | In Progress |
 
 **Coverage:**
-- v1 requirements: 123 total
-- Mapped to phases: 121
+- v1 requirements: 149 total
+- Mapped to phases: 147
 - Unmapped: 2 ⚠️
 
 ---

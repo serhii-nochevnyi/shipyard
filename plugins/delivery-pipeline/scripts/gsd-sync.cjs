@@ -1271,6 +1271,7 @@ module.exports = {
   buildSnapshot,
   checkSnapshot,
   run,
+  marker,
   FILE_MARKER,
   ROADMAP_BEGIN,
   ROADMAP_END,

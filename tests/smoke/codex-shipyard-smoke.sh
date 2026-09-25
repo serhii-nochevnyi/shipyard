@@ -249,6 +249,8 @@ grep -q 'pipeline-config.cjs' "$SKILLS/shipyard-deliver/SKILL.md" || { echo "del
 # auto-route lands in the CODEX_HOME being installed into, not a hardcoded ~/.codex
 grep -q 'shipyard-auto-route:begin' "$CODEX_HOME/AGENTS.md" \
   || { echo "auto-route block missing from \$CODEX_HOME/AGENTS.md"; exit 1; }
+grep -q '\$shipyard-investigate' "$CODEX_HOME/AGENTS.md" \
+  || { echo "auto-route block missing \$shipyard-investigate route"; exit 1; }
 
 # A managed AGENTS.md may not be a symlink: Node writes through symlinks, while
 # rollback restores the directory entry, not the external target's old bytes.
@@ -485,6 +487,8 @@ grep -q 'large / multi-ticket -> `\$shipyard-decompose`; install phase 2 before 
 if grep -q '\$shipyard-decompose` -> `\$shipyard-deliver' "$PHASE1_AGENTS"; then
   echo "phase 1 auto-route still advertises shipyard-deliver"; exit 1
 fi
+grep -q '\$shipyard-investigate' "$PHASE1_AGENTS" \
+  || { echo "phase 1 auto-route missing \$shipyard-investigate route"; exit 1; }
 bash scripts/install-shipyard-codex.sh --phase 2 >/dev/null
 [[ -f "$SKILLS/shipyard-deliver/SKILL.md" ]] \
   || { echo "phase 2 reinstall did not restore the deliver skill"; exit 1; }

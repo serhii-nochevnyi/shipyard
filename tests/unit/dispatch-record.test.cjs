@@ -904,9 +904,14 @@ function board(project, front) {
   );
 }
 
-const gate = (cwd) => spawnSync('node', [STOP_GATE], {
-  cwd, input: '{}', encoding: 'utf8', env: { ...process.env, SHIPYARD_GRAPH_DIR: '' },
-});
+const GATE_SESSION = 'dispatch-record-gate-session';
+const gate = (cwd) => {
+  require(path.join(path.dirname(STOP_GATE), 'stop-gate-arm.cjs')).arm(cwd, GATE_SESSION);
+  return spawnSync('node', [STOP_GATE], {
+    cwd, input: JSON.stringify({ session_id: GATE_SESSION }), encoding: 'utf8',
+    env: { ...process.env, SHIPYARD_GRAPH_DIR: '' },
+  });
+};
 
 test('the gate blocks a fully actionable board (the negative control)', () => {
   const { project } = scratch({ 'T-01-01': { ...READY }, 'T-01-02': { ...OPEN_PR } });

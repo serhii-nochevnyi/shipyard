@@ -1186,6 +1186,15 @@ function compactIdentity(value, label) {
   return value;
 }
 
+function findingTicketProblem(value) {
+  if (typeof value === 'string' && value.trim() !== '' && !/[\s\u0000-\u001f\u007f]/.test(value)) return null;
+  if (Array.isArray(value)) return 'an array';
+  if (object(value)) return 'an object';
+  if (typeof value === 'number') return 'a number';
+  if (typeof value === 'boolean') return 'a boolean';
+  return 'an empty or multi-word string';
+}
+
 function findingText(finding, keys, label) {
   let selected;
   for (const key of keys) {
@@ -1232,6 +1241,19 @@ function completeFinding(finding, index, role) {
   const blocking = finding.blocking === undefined ? true : finding.blocking;
   if (typeof blocking !== 'boolean') fail('INCOMPLETE_FINDING', `${role} finding ${index}.blocking must be boolean`);
 
+  if (finding.ticket !== undefined && finding.ticket !== null) {
+    const problem = findingTicketProblem(finding.ticket);
+    if (problem) {
+      fail('INVALID_RESULT', `${role} finding ${index}.ticket is ${problem}; remedy: set ticket to the affected `
+        + 'ticket id string, or null for a phase-level finding, and put a proposed fix ticket in fix_ticket '
+        + '{title, scope, files, depends_on}');
+    }
+  }
+  if (finding.fix_ticket !== undefined && type !== 'fix-ticket' && type !== 'fix') {
+    fail('INVALID_RESULT', `${role} finding ${index}.fix_ticket is only valid on a fix-ticket finding; `
+      + 'remedy: set type to fix-ticket or drop fix_ticket');
+  }
+
   if (role === 'arch-review') {
     if (type === 'violation') {
       findingText(finding, ['adr', 'adr_id'], `${role} finding ${index}.adr`);
@@ -1255,13 +1277,26 @@ function completeFinding(finding, index, role) {
     }
   } else if (role === 'integrator') {
     if (type === 'fix-ticket' || type === 'fix') {
-      findingText(finding, ['ticket'], `${role} finding ${index}.ticket`);
-      findingText(finding, ['scope', 'reason'], `${role} finding ${index}.scope`);
-      if (!Array.isArray(finding.files) || finding.files.length === 0) {
-        fail('INCOMPLETE_FINDING', `${role} finding ${index}.files must be a non-empty array`);
+      if (!object(finding.fix_ticket)) {
+        fail('INCOMPLETE_FINDING', `${role} finding ${index}.fix_ticket is required; remedy: put the proposed `
+          + 'ticket {title, scope, files, depends_on} in fix_ticket');
       }
-      for (const [fileIndex, file] of finding.files.entries()) {
-        roleText(file, `${role} finding ${index}.files[${fileIndex}]`);
+      const fixTicket = finding.fix_ticket;
+      roleText(fixTicket.title, `${role} finding ${index}.fix_ticket.title`);
+      roleText(fixTicket.scope, `${role} finding ${index}.fix_ticket.scope`);
+      if (!Array.isArray(fixTicket.files) || fixTicket.files.length === 0) {
+        fail('INCOMPLETE_FINDING', `${role} finding ${index}.fix_ticket.files must be a non-empty array`);
+      }
+      for (const [fileIndex, file] of fixTicket.files.entries()) {
+        roleText(file, `${role} finding ${index}.fix_ticket.files[${fileIndex}]`);
+      }
+      if (fixTicket.depends_on !== undefined) {
+        if (!Array.isArray(fixTicket.depends_on)) {
+          fail('INCOMPLETE_FINDING', `${role} finding ${index}.fix_ticket.depends_on must be an array`);
+        }
+        for (const [dependIndex, depend] of fixTicket.depends_on.entries()) {
+          compactIdentity(depend, `${role} finding ${index}.fix_ticket.depends_on[${dependIndex}]`);
+        }
       }
       findingText(finding, ['summary', 'reason'], `${role} finding ${index}.summary`);
     } else if (type === 'human-question' || type === 'human-review') {

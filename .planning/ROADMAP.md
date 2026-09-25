@@ -357,6 +357,32 @@ script — not in a prompt.** Every requirement below is an instance of it.
 - **REQ-123** — Claude OAuth and Codex ChatGPT login are detected through each
   native CLI's status command; subscription auth is sufficient, API-key
   environment variables are not required, and credentials never cross providers.
+- **REQ-125** — Host refusals keep their codes, exit status and fail-closed behaviour and add a plain-language hint with a remedy from one code-to-hint map shared by the Claude and Codex hosts; investigate and decompose relay it in the user's language.
+- **REQ-126** — Decompose bootstraps a minimal GSD project from the accepted ADR when config.json, ROADMAP.md or REQUIREMENTS.md is missing: one phase per ADR, one requirement per ADR decision, missing files only, plain-language refusal for an ADR without decisions; investigate needs only .planning/investigations/.
+- **REQ-127** — The stop gate enforces a front only in a session that deliver armed with a per-session marker keyed by session_id; a missing, unreadable or foreign marker allows the stop, and cross-worktree discovery stays for armed sessions.
+- **REQ-128** — The auto-route hook routes research-needing work to /shipyard:investigate through /shipyard:route, stays silent for task-notification turns and expanded slash commands, injects on unparseable input, and the Codex AGENTS.md block and make doctor follow it.
+- **REQ-129** — Shipyard ships templates/adr/ADR.md, adr-ingest.cjs has a no-write --check mode, and Gate 1 fails when the new ADR does not pass it.
+- **REQ-130** — A script builds a deterministic Jira export plan from tickets.json (content, repo-namespaced labels, explicit is-blocked-by direction) that the agent executes through MCP; keys are recorded by script and no network code or credential enters the conveyor.
+- **REQ-131** — Ordering without a code dependency is not depends_on: decompose and delivery-rules prose adopt the validator condition, and validate-graph warns when a same-phase dependency shares no files_modified with its parent.
+- **REQ-132** — Decompose passes --skip-ui to /gsd-plan-phase only when the ADR declares "UI design: none".
+- **REQ-133** — Decompose warns once, without blocking, when .planning/ is not tracked by git, naming the consequence for delivery worktrees and the remedy.
+- **REQ-134** — gsd-tune names the missing configuration file and the command that creates it, keeping exit code 2 and its prefix.
+- **REQ-135** — Research handbacks receive their 500-character summary bound at launch and are bounded or refused deterministically with a message naming the line and length before the trusted consumer seals them.
+- **REQ-136** — Phase 40 builds the delivery seams (captured fixtures, dispatch entry point, sentinel preflight) before the point fixes and gates every release on a live round.
+- **REQ-137** — Registered producer-consumer boundaries are tested against fixtures captured from real producers by a manual scrubbed make target that records the CLI version; a contract test refuses inline shapes for those boundaries.
+- **REQ-138** — One deterministic front-to-dispatch entry point for Claude and Codex builds host requests from the graph (branch from the graph, plan path from the ticket worktree, ticket type never forwarded as signals.type), launches detached and offers status and wait through a dispatch wait kind.
+- **REQ-139** — The host writes an in-flight record with pid and TTL at launch that the stop gate honours and that fails closed on process exit or expiry, while the durable dispatch mark still follows the verified receipt.
+- **REQ-140** — A sentinel preflight fetches and fast-forwards the base ref and runs and commits state-sync, or refuses naming the exact command; a failed fetch is a refusal.
+- **REQ-141** — make test-live runs one real research, decompose, executor and sentinel round per runtime on an in-repo fixture project with each role's base rung of its runtime grid, and the release script refuses without a fresh passing live receipt.
+- **REQ-142** — Target-project PRs carry no conveyor or GSD internals: neutral branches stored in the graph, conventional-commit titles, bodies without ticket, phase, ADR or plan identifiers, untracked .planning/, and a publish-time PR hygiene gate; the Shipyard repository is exempt.
+- **REQ-143** — Ticket-to-PR matching uses the exact head branch plus the PR number recorded in delivery state at creation; the title and ticket-prefix fallback remains only for legacy PRs.
+- **REQ-144** — A supported dogfood mode runs hosts from a worktree through a separate install root, stamps receipts with host source sha and dirty flag, is refused for merges into a target default branch, and doctor reports an installed cache matching no release.
+- **REQ-145** — The runtime-file digest pin is refreshed only by a make target and a commit trailer that CI verifies.
+- **REQ-146** — Research keeps valid lines sealed, names the failed line and its real cause, and re-dispatches only that line; the fan-out stays failed until all four lines are sealed.
+- **REQ-147** — One shared sealer produces research-result and decomposition-result envelopes with an artifact index for Claude and Codex research and decompose hosts.
+- **REQ-148** — The Codex GSD researcher writes only its contained artifact path, and Codex child tasks are passed by file path plus a digest the host verifies.
+- **REQ-149** — Point fixes: header-free deterministic state YAML; pre-push resolves the worktree through git; the Codex config refusal names the config fix; gsd-tune for Codex writes no Claude-only keys; investigate and decompose prose explain the out-of-repo host state directory; doctor reads the Codex agents manifest.
+- **REQ-150** — Unit fixtures that create git repositories are hermetic against global commit signing and fixed /tmp paths.
 
 *ADR-011 was accepted for implementation on 2026-09-10. T-32-01/02 are the
 initial isolated tooling slice; subsequent packages remain subject to decomposition
@@ -715,12 +741,34 @@ detect subscription authentication through the native CLIs, and keep rollout
 independent per provider. Preserve the Luna/max Codex baseline, effort tiers,
 promotion signals, and historical receipts.
 
+### Phase 39: Remove conveyor session friction
+**Status**: planned (ADR-016)
+**Requirements**: REQ-125, REQ-126, REQ-127, REQ-128, REQ-129, REQ-130, REQ-131, REQ-132, REQ-133, REQ-134, REQ-135
+
+Implement [ADR-016](architecture/ADR-016-conveyor-session-friction.md): make host
+refusals explainable, bootstrap a minimal GSD project from an ADR, arm the stop
+gate only from deliver, route research through investigate, validate ADRs at
+Gate 1, plan Jira export deterministically, keep ordering out of depends_on,
+skip the UI gate on an explicit ADR marker, warn on untracked planning, clarify
+gsd-tune, and bound research handbacks at launch.
+
+### Phase 40: Build delivery seams and clean target-project PRs
+**Status**: planned (ADR-017)
+**Requirements**: REQ-136, REQ-137, REQ-138, REQ-139, REQ-140, REQ-141, REQ-142, REQ-143, REQ-144, REQ-145, REQ-146, REQ-147, REQ-148, REQ-149, REQ-150
+
+Implement [ADR-017](architecture/ADR-017-delivery-seams-and-pr-hygiene.md): capture
+boundary fixtures from real producers, give deliver one deterministic dispatch
+entry point with an in-flight record and wait, establish sentinel preconditions,
+gate releases on a live round, repair the Codex investigate and decompose loops,
+support a provenance-stamped dogfood mode, and keep conveyor internals out of
+target-project PRs.
+
 <!-- shipyard:gsd-sync:begin -->
 ## Shipyard synchronization (generated)
 
-- Source fingerprint: `719b0b2f0955de7d0984efd19ec9d99108eb92c7a04e135054ae79dd82d854b8`
-- Plans merged: 146/146
-- Phases verified: 10/19
+- Source fingerprint: `810c871f2846e3c6d43871aab70599444c98c0111b9ab01cf9eb438353006c04`
+- Plans merged: 162/190
+- Phases verified: 10/21
 - Current phase: 20
 
 | Phase | Plans | Merged | Verification |
@@ -744,5 +792,7 @@ promotion signals, and historical receipts.
 | 36 — Enforce the runtime model ladder | 12 | 12 | passed |
 | 37 — Run the autonomous dual-runtime control plane | 8 | 8 | pending |
 | 38 — Restore the native model ladder in delivery | 8 | 8 | passed |
+| 39 — Remove conveyor session friction | 17 | 16 | gaps_found |
+| 40 — Build delivery seams and clean target-project PRs | 27 | 0 | pending |
 
 <!-- shipyard:gsd-sync:end -->

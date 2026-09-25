@@ -39,9 +39,9 @@ command-backed evidence is not verification.
 
 ## Verdict
 - `passed` — phase is coherent, nothing to do.
-- `needs-fix` — attach a concrete fix-ticket list (title, scope, files,
-  depends_on) ready for validate-graph; these go through the normal delivery
-  loop.
+- `needs-fix` — attach each fix ticket as a `fix-ticket` finding whose
+  `fix_ticket` carries `title`, `scope`, `files`, `depends_on`, ready for
+  validate-graph; these go through the normal delivery loop.
 - `human-review-required` — judgment calls only a human can make; state the
   question precisely.
 
@@ -74,7 +74,7 @@ complete merged ticket set:
   "head_tree": "<40-char combined head tree sha>",
   "base": "<default-branch ref or commit>",
   "base_tree": "<40-char default-branch tree sha>",
-  "ticket_set": ["T-33-01", "T-33-02"],
+  "ticket_set": [{"id": "T-33-01", "pr": 123, "head": "<40-char PR head sha>", "base": "<PR base branch>", "branch": "<ticket branch>"}],
   "ticket_set_digest": "<sha256 of the complete ticket set>",
   "blocking_count": 0,
   "summary": "bounded synopsis",
@@ -82,15 +82,53 @@ complete merged ticket set:
 }
 ```
 
+`ticket_set` is `role_context.ticket_set` copied verbatim, the exact array of
+`{id, pr, head, base, branch}` objects in host order; a string, a list of ids,
+a reordered or re-keyed array is refused.
+
+A `needs-fix` result attaches its fix tickets as findings:
+
+```json
+{
+  "findings": [
+    {
+      "id": "F1",
+      "type": "fix-ticket",
+      "blocking": true,
+      "summary": "bounded synopsis of the seam",
+      "ticket": null,
+      "fix_ticket": {
+        "title": "Make the bootstrap produce a project the projection accepts",
+        "scope": "what the fix ticket must change and why",
+        "files": ["plugins/delivery-pipeline/scripts/adr-bootstrap.cjs"],
+        "depends_on": []
+      }
+    },
+    {
+      "id": "F2",
+      "type": "informational",
+      "blocking": false,
+      "summary": "non-blocking observation",
+      "ticket": "T-33-02",
+      "evidence": "plugins/delivery-pipeline/scripts/example.cjs:44"
+    }
+  ]
+}
+```
+
 Every finding has a unique `id`, a `type`, an explicit `blocking` boolean, a
 summary, and enough evidence to act. Use only `fix-ticket`, `human-question`,
 `violation`, `adr-outdated`, `note`, or `informational`; use `informational` for
-non-blocking observations. A `fix-ticket` also carries its ticket, scope, and
-non-empty file list. A `human-question` carries the exact question and its
-evidence location. A `passed` result must have `blocking_count: 0` and
-an empty blocking finding index. `needs-fix` and
-`human-review-required` retain all blocking findings; they cannot be reduced to
-`passed` by truncating the synopsis.
+non-blocking observations. Every finding may carry `ticket`. When it is present,
+it is a compact ticket id string (for example `"T-39-09"`)
+or null for a phase-level finding. A `fix-ticket` finding carries the proposed
+ticket in `fix_ticket`: `{ "title": text, "scope": text, "files": [non-empty
+text, …] (at least one), "depends_on": [ticket id, …] }`. `depends_on` is
+optional and defaults to absent. A `human-question` carries the exact question
+and its evidence location. A `passed` result must have `blocking_count: 0` and
+an empty blocking finding index. `needs-fix` and `human-review-required` retain
+all blocking findings; they cannot be reduced to `passed` by truncating the
+synopsis.
 
 The host seals and validates `INTEGRATION.md` at the consuming boundary after
 the integrator's authenticated dispatch receipt:

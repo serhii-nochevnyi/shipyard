@@ -174,7 +174,8 @@ ideation) — its output becomes the problem statement.
 **What starting a new INV does:**
 
 ```text
-1. Preconditions: .planning/ is initialized (/gsd-new-project),
+1. Preconditions: .planning/investigations/ is created if missing — no GSD
+   project is required (decompose bootstraps it from the accepted ADR);
    the codebase map exists and is fresh (/gsd-map-codebase) — otherwise it runs them
 2. Creates .planning/investigations/INV-NNN-slug/ with a skeleton of all artifacts
 3. Intake interview: the agent asks the questions missing for PROBLEM.md
@@ -944,7 +945,7 @@ Dependency slice, Test evidence, Rollout/Rollback).
 
 ```bash
 # 0. Init (one-time)
-/gsd-new-project
+/gsd-new-project   # optional — decompose bootstraps a missing project from the accepted ADR
 /gsd-map-codebase
 
 # 1. Deep investigation (loop 1) — a separate entry point

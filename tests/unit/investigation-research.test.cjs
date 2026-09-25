@@ -3,6 +3,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const crypto = require('crypto');
 const { suite, test, done, assert } = require('./assert-harness.cjs');
 const { transcriptEvidence: testTranscriptEvidence } = require('./claude-test-evidence.cjs');
 const { createDurableRecorder } = require('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs');
@@ -341,6 +342,91 @@ test('planning.v1 refuses before launch when its authenticated artifact context 
     /worktreePath|planning\.v1|artifact/i,
   );
   assert.equal(launches, 0);
+});
+
+test('the bounded artifact contract prompt states the summary character bound', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-investigation-research-bound-'));
+  const recorder = createDurableRecorder(path.join(root, 'receipts'));
+  const evidence = new WeakMap();
+  const artifactRoot = path.join(root, 'research');
+  fs.mkdirSync(artifactRoot, { recursive: true });
+  const calls = [];
+  const agent = async (prompt, options) => {
+    calls.push({ prompt, options });
+    const id = options.label.split(':').pop();
+    const file = path.join(artifactRoot, `${id}.md`);
+    const content = `# ${id}\n`;
+    fs.writeFileSync(file, content);
+    const sha256 = crypto.createHash('sha256').update(content).digest('hex');
+    const result = {
+      id, status: 'completed', summary: `completed ${id}`,
+      artifact: { path: file, bytes: Buffer.byteLength(content), content_bytes: Buffer.byteLength(content), sha256, digest: sha256 },
+    };
+    evidence.set(result, transcriptEvidence({
+      launch_id: `investigation-research-bound-${id}`,
+      applied_model: options.model,
+      applied_effort: options.effort,
+      observed_model: options.model,
+      observed_effort: options.effort,
+    }));
+    return result;
+  };
+  const artifactConsumer = ({ artifact, result, record }) => {
+    const index = result.artifact;
+    const envelope = {
+      schema: 'shipyard.research-result.v1', version: 1, role: 'research',
+      subject: artifact.subject, source_revision: artifact.sourceRevision,
+      repository: artifact.repository, policy_hash: artifact.policyHash,
+      status: result.status, summary: result.summary,
+      artifact_index: index, evidence_index: index, evidence_index_ref: index,
+    };
+    return {
+      schema: 'shipyard.role-artifact.v1',
+      artifact_ref: path.join(artifact.worktreePath, '.shipyard-role-artifacts', `${record.receipt.dispatch_id}.json`),
+      artifact_digest: 'c'.repeat(64),
+      envelope, artifact_index: index, evidence_index: index,
+    };
+  };
+  const dispatch = (options) => createClaudeWorkflowDispatch({
+    ...options,
+    capabilities,
+    recorder,
+    applicationEvidence: ({ result }) => evidence.get(result),
+    artifactConsumer,
+  });
+  const args = {
+    invId: 'INV-BOUND',
+    invPath: root,
+    worktreePath: root,
+    artifactContract: 'planning.v1',
+    artifactRoot,
+    artifactPaths: Object.fromEntries(lines.map(({ id }) => [id, path.join(artifactRoot, `${id}.md`)])),
+    problemStatement: 'Confirm the prompt states the summary bound.',
+    referencePath: '/plugin/references/inv-research.md',
+    sourceRevision: 'a'.repeat(40),
+    repository: 'acme/shipyard',
+    policyHash: 'b'.repeat(64),
+    artifactLanguage: 'English',
+    lines,
+  };
+  try {
+    await new AsyncFunction(
+      'agent', 'parallel', 'phase', 'log', 'args', '__createClaudeWorkflowDispatch', source
+    )(
+      agent,
+      async (thunks) => Promise.all(thunks.map((thunk) => thunk())),
+      () => {},
+      () => {},
+      args,
+      dispatch,
+    );
+    assert.equal(calls.length, 4);
+    for (const call of calls) {
+      assert.match(call.prompt, /`summary` is plain text of at most 500 characters/);
+    }
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
 
 done();

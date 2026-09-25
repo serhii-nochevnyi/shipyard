@@ -48,6 +48,10 @@ An unavailable or refused host cannot switch to the peer. Never invoke the
 native Workflow or Agent surface outside its shipped host; if the selected host
 is unavailable, stop that research line and report the runtime status.
 
+On a non-zero exit from a host launch, read its `hint[<CODE>]` stderr line and
+explain the hint and its remedy to the user in the user's language; never
+propose bypassing the host or switching runtime because of it.
+
 ## Step 0 — Determine the mode
 
 Read `.planning/investigations/` (may not exist):
@@ -62,7 +66,8 @@ Read `.planning/investigations/` (may not exist):
 ## Step 1 — Start a new INV
 
 1. Preconditions:
-   - `.planning/` exists (otherwise suggest `/gsd-new-project` and stop);
+   - `.planning/investigations/` is created if missing; no GSD project is
+     required — decompose bootstraps it from the accepted ADR.
    - codebase map: if there is no `.planning/codebase/`, run
      `/gsd-map-codebase` or warn that research will work without a map.
 2. Pick a number: the next free `INV-NNN`, a slug of 2–4 words of the topic.
@@ -173,15 +178,20 @@ When no `- [ ]` remains in OPEN-QUESTIONS.md — propose closing yourself:
 
 1. `node ${CLAUDE_PLUGIN_ROOT}/scripts/validate-inv.cjs <INV-dir>` — must be OK.
 2. Generate the ADR package in `.planning/architecture/`:
-   - `ADR-NNN-<slug>.md` — from DECISIONS.md, in a format that
+   - `ADR-NNN-<slug>.md` — from DECISIONS.md, using
+     `${CLAUDE_PLUGIN_ROOT}/templates/adr/ADR.md` as the template, in a format that
      `/gsd-plan-phase --ingest` parses (Nygard: Status/Context/Decision/Consequences;
      each locked decision is one bullet under `## Decision`, and scope fences use
      `## Out of scope`; do not use nested `###` headings for machine-read sections);
    - if there is material: INTERFACES.md, DATA-MODEL.md, ROLLOUT.md.
-3. Update the PROBLEM.md frontmatter (the template ships it pre-stubbed):
+3. Check the ADR before closing:
+   `node ${CLAUDE_PLUGIN_ROOT}/scripts/adr-ingest.cjs --check --input <ADR path>`
+   must exit 0; on exit 1, fix the ADR and re-run. The INV does not close until
+   this check passes.
+4. Update the PROBLEM.md frontmatter (the template ships it pre-stubbed):
    `status: closed`, `closed: <YYYY-MM-DD>`, `adr: <path to the ADR>`.
    Step 0 reads exactly these keys to tell an open INV from a closed one.
-4. Tell the user the next step: `/shipyard:decompose`.
+5. Tell the user the next step: `/shipyard:decompose`.
 
 ## Rules
 

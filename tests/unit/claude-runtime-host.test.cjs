@@ -284,6 +284,112 @@ test('read-only smoke removes shell and edit tools from the Claude launch', asyn
   }
 });
 
+async function launchArgs(launchOptions) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-claude-schema-'));
+  const transcript = writeSession(path.join(root, 'claude', 'projects'), fixtureRecords());
+  let capturedArgs;
+  let spawned = false;
+  try {
+    const launch = createClaudeCliLauncher({
+      scope: { ...SCOPE, worktree: root },
+      transcriptDir: null,
+      transcriptPollMs: 5,
+      uuid: () => SESSION,
+      env: { CLAUDE_CONFIG_DIR: path.join(root, 'claude') },
+      spawn: (_executable, args) => {
+        spawned = true;
+        capturedArgs = args;
+        captureConfiguredSessionStart(args, transcript);
+        return childFor(stream());
+      },
+    });
+    await launch('return the declared handback', { model: 'claude-opus-5-5', effort: 'low', ...launchOptions });
+    return capturedArgs;
+  } catch (error) {
+    error.spawned = spawned;
+    throw error;
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+test('a declared output schema reaches the Claude CLI as --json-schema', async () => {
+  const schema = {
+    type: 'object',
+    required: ['id', 'status', 'summary'],
+    properties: { id: { type: 'string' }, status: { enum: ['committed', 'blocked'] }, summary: { type: 'string', maxLength: 500 } },
+  };
+  const args = await launchArgs({ schema });
+  assert.ok(args.includes('--json-schema'));
+  assert.deepEqual(JSON.parse(args[args.indexOf('--json-schema') + 1]), schema);
+  assert.ok(args.indexOf('--json-schema') > args.indexOf('--settings'));
+});
+
+test('a launch without a schema keeps the argv free of --json-schema', async () => {
+  const args = await launchArgs({});
+  assert.equal(args.includes('--json-schema'), false);
+});
+
+test('a schema that is not a plain object is refused before launch', async () => {
+  for (const schema of ['{"type":"object"}', ['object'], null, 7]) {
+    let refused;
+    try {
+      await launchArgs({ schema });
+    } catch (error) {
+      refused = error;
+    }
+    assert.ok(refused, `schema ${JSON.stringify(schema)} must be refused`);
+    assert.equal(refused.code, 'INVALID_INPUT');
+    assert.match(refused.message, /schema must be a plain JSON object/);
+    assert.equal(refused.spawned, false);
+  }
+});
+
+test('a schema that cannot be serialized is refused before launch', async () => {
+  const schema = { type: 'object' };
+  schema.self = schema;
+  let refused;
+  try {
+    await launchArgs({ schema });
+  } catch (error) {
+    refused = error;
+  }
+  assert.ok(refused);
+  assert.equal(refused.code, 'INVALID_INPUT');
+  assert.match(refused.message, /schema must be serializable JSON/);
+  assert.equal(refused.spawned, false);
+});
+
+test('a versioned run scope launches with its ticket, phase and provider', async () => {
+  const { createRunScope } = require('../../plugins/delivery-pipeline/scripts/run-scope.cjs');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-claude-run-scope-'));
+  const transcript = writeSession(path.join(root, 'claude', 'projects'), fixtureRecords());
+  try {
+    const scope = createRunScope({
+      run_id: 'run-39-12', repository_id: root, phase: 39, ticket: 'T-39-12', worktree: root,
+      runtime: 'claude', owner_id: 'owner-39-12',
+      dispatch: { runtime: 'claude', role: 'pr-sentinel', dispatch_id: 'dispatch-39-12' },
+    });
+    let spawned = false;
+    const launch = createClaudeCliLauncher({
+      scope,
+      transcriptDir: null,
+      transcriptPollMs: 5,
+      uuid: () => SESSION,
+      env: { CLAUDE_CONFIG_DIR: path.join(root, 'claude') },
+      spawn: (_executable, args) => {
+        spawned = true;
+        captureConfiguredSessionStart(args, transcript);
+        return childFor(stream());
+      },
+    });
+    await launch('guard the round', { model: 'claude-opus-5-5', effort: 'low' });
+    assert.equal(spawned, true);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('waits for a flushed transcript and ignores stdout-only model and effort', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-claude-flush-'));
   const projects = path.join(root, 'projects');

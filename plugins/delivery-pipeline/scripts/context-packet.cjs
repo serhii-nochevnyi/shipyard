@@ -260,7 +260,15 @@ function buildBacklog(root, options) {
     if (!item) fail('MISSING_BACKLOG_ITEM', `selected backlog item is not in the current inventory: ${id}`);
     return { ...sectionContent(root, item), why_selected: whyFor(id) };
   });
-  const compactItems = index.items.map((item) => ({
+  const inventoryScope = options.backlogInventory;
+  if (inventoryScope !== undefined && inventoryScope !== 'all' && inventoryScope !== 'selected') {
+    fail('INVALID_BACKLOG_SELECTION', `backlogInventory must be all or selected: ${inventoryScope}`);
+  }
+  const selectedIdSet = new Set(selectedIds);
+  const inventoryItems = inventoryScope === 'selected'
+    ? index.items.filter((item) => selectedIdSet.has(item.id))
+    : index.items;
+  const compactItems = inventoryItems.map((item) => ({
     id: item.id,
     source: item.source,
     title: item.title,
@@ -275,9 +283,10 @@ function buildBacklog(root, options) {
     inventory: {
       schema_version: index.schema_version,
       total_items: index.total_items,
-      matched_items: index.matched_items,
+      matched_items: inventoryScope === 'selected' ? selectedIds.length : index.matched_items,
       items: compactItems,
       orphaned_manifest_ids: index.orphaned_manifest_ids,
+      ...(inventoryScope === 'selected' ? { scope: inventoryScope } : {}),
     },
     selected_ids: selectedIds,
     selected,
@@ -573,6 +582,12 @@ function validateContextPacket(packet, expected = {}) {
   }
   const selectedIds = new Set(packet.backlog.selected_ids);
   if (packet.backlog.empty !== (packet.backlog.selected.length === 0)) fail('INVALID_CONTEXT_PACKET', 'packet backlog empty marker is incorrect');
+  if (packet.backlog.inventory.scope === 'selected') {
+    const inventoryIds = packet.backlog.inventory.items.map((item) => item && item.id);
+    if (inventoryIds.length !== selectedIds.size || inventoryIds.some((id) => !selectedIds.has(id))) {
+      fail('INVALID_CONTEXT_PACKET', 'packet backlog inventory scope does not match its selection');
+    }
+  }
   for (const item of packet.backlog.selected) {
     if (!object(item) || typeof item.id !== 'string' || typeof item.source !== 'string' || !HASH.test(item.source_hash || '') || typeof item.content !== 'string' || typeof item.why_selected !== 'string' || !item.why_selected.trim()) {
       fail('INVALID_CONTEXT_PACKET', 'selected backlog item is incomplete');
