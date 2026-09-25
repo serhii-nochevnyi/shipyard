@@ -6793,9 +6793,12 @@
       "repo": null,
       "wave": 7,
       "depends_on": [
-        "T-40-25"
+        "T-40-25",
+        "T-39-15"
       ],
-      "cross_phase_deps": [],
+      "cross_phase_deps": [
+        "T-39-15"
+      ],
       "cross_repo_deps": [],
       "unreachable_paths": false,
       "missing_paths": true,

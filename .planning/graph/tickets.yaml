@@ -3254,7 +3254,7 @@ tickets:
     phase: '40'
     repo: null
     wave: 7
-    depends_on: [T-40-25]
+    depends_on: [T-40-25, T-39-15]
     files: [plugins/delivery-pipeline/scripts/seed-delivery-state.cjs, tests/unit/seed-delivery-state.test.cjs, plugins/delivery-pipeline/commands/decompose.md, plugins/delivery-pipeline/scripts/gsd-sync.cjs]
     risk: low
     human_checkpoint: false
