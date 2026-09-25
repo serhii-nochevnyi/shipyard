@@ -2970,7 +2970,7 @@ tickets:
     repo: null
     wave: 1
     depends_on: []
-    files: [plugins/delivery-pipeline/scripts/gsd-sync.cjs, tests/unit/gsd-sync.test.cjs, tests/unit/gsd-sync-gate.test.cjs]
+    files: [plugins/delivery-pipeline/scripts/gsd-sync.cjs, tests/unit/gsd-sync.test.cjs, tests/unit/gsd-sync-gate.test.cjs, '.planning/STATE.md', '.planning/REQUIREMENTS.md', '.planning/ROADMAP.md', '.planning/phases/']
     risk: medium
     human_checkpoint: false
     preauthorized: false
