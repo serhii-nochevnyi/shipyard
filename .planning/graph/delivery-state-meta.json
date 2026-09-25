@@ -1,13 +1,13 @@
 {
   "schema_version": 1,
-  "generation": 359,
-  "generation_identity": "6f0813a6-1818-423f-8fa2-542ef5c51bb4",
-  "previous_generation_identity": "16777244:12917886562:1790322744554254300:ce95b6fdbbdc7de3279f45c5646105ea6c0c1ef492b0745e1b8b1d648bcec06f",
-  "observed_at": "2026-09-25T08:32:00.095Z",
-  "generated_at": "2026-09-25T08:32:00.095Z",
+  "generation": 360,
+  "generation_identity": "6fd10c82-534b-4ad2-a32e-76ef9d4dcf57",
+  "previous_generation_identity": "16777244:12917963009:1790325128218078500:3a0f8f1aea69b60977fdab90bd1b07eb221a82e5818c3fa0955831a0ee241c15",
+  "observed_at": "2026-09-25T09:40:41.182Z",
+  "generated_at": "2026-09-25T09:40:41.182Z",
   "by": "state-sync",
-  "pid": 29768,
-  "observation_generation": 359,
+  "pid": 90679,
+  "observation_generation": 360,
   "observation_projection": {
     "tickets": {
       "T-20-01": {
@@ -1762,7 +1762,7 @@
       "T-39-14": {
         "status": "merged",
         "repository": null,
-        "pr": 225,
+        "pr": 229,
         "head": null,
         "draft": false,
         "base": "epic/39-remove-conveyor-session-friction",
@@ -1771,9 +1771,9 @@
         "checks": null
       },
       "T-39-15": {
-        "status": "pending",
+        "status": "merged",
         "repository": null,
-        "pr": null,
+        "pr": 227,
         "head": null,
         "draft": false,
         "base": "epic/39-remove-conveyor-session-friction",
@@ -1782,6 +1782,17 @@
         "checks": null
       },
       "T-39-16": {
+        "status": "merged",
+        "repository": null,
+        "pr": 228,
+        "head": null,
+        "draft": false,
+        "base": "epic/39-remove-conveyor-session-friction",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-39-17": {
         "status": "pending",
         "repository": null,
         "pr": null,
@@ -2093,9 +2104,9 @@
   },
   "binding": {
     "schema_version": 1,
-    "state_digest": "afd074234099d2f26ef54666ffdcfff692e5a453b4eb2b3a44c2775126b6c97b",
-    "front_digest": "2a230fd83ff309c5be6cf5f97edacc8a7c230e6a068ef6927b858abd79955559",
-    "observation_digest": "f04337011a8a6ecfb4668e2aee9039ddc768f1440b291b6f3deaea3efa8b9ddb",
-    "observation_generation": 359
+    "state_digest": "148b4265017fe8558072ec38e5b5495883d61323db1b6941b462cd802d413c45",
+    "front_digest": "218d5e4c49399fdb3cb613108a45928432cf576a31f21c5c513b09a661303192",
+    "observation_digest": "a56130e03e7aa1c60352b0481e2a60473a0be2de6d957f5330e1bf5e62682944",
+    "observation_generation": 360
   }
 }

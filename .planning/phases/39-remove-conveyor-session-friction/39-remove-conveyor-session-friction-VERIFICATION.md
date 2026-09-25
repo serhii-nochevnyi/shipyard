@@ -1,8 +1,8 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 7dd74dbe435e58556cc1df9554fd32dab10388518728ee8825fd502d90fe1076
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 810c871f2846e3c6d43871aab70599444c98c0111b9ab01cf9eb438353006c04
 phase: 39
 status: gaps_found
-shipyard_source_fingerprint: 7dd74dbe435e58556cc1df9554fd32dab10388518728ee8825fd502d90fe1076
+shipyard_source_fingerprint: 810c871f2846e3c6d43871aab70599444c98c0111b9ab01cf9eb438353006c04
 ---
 
 # Phase 39: Remove conveyor session friction — Verification Projection
@@ -13,7 +13,7 @@ shipyard_source_fingerprint: 7dd74dbe435e58556cc1df9554fd32dab10388518728ee8825f
 
 | Truth | Evidence | Status |
 |---|---|---|
-| Every phase plan is accounted for | 14/16 delivery records are merged | ? UNCERTAIN |
+| Every phase plan is accounted for | 16/17 delivery records are merged | ? UNCERTAIN |
 | Integration is coherent | integration evidence records a finding or failed verdict | ✗ FAILED |
 | Verification evidence is present | integration evidence records a finding or failed verdict | ✗ FAILED |
 
@@ -35,8 +35,9 @@ shipyard_source_fingerprint: 7dd74dbe435e58556cc1df9554fd32dab10388518728ee8825f
 | T-39-12 | merged | ✓ VERIFIED |
 | T-39-13 | merged | ✓ VERIFIED |
 | T-39-14 | merged | ✓ VERIFIED |
-| T-39-15 | pending | ? UNCERTAIN |
-| T-39-16 | pending | ? UNCERTAIN |
+| T-39-15 | merged | ✓ VERIFIED |
+| T-39-16 | merged | ✓ VERIFIED |
+| T-39-17 | pending | ? UNCERTAIN |
 
 ## Verification Commands
 

@@ -1794,9 +1794,9 @@
   },
   "T-39-14": {
     "branch": "ticket/T-39-14-make-the-integrator-and-sentinel-result",
-    "pr": 225,
+    "pr": 229,
     "status": "merged",
-    "url": "https://github.com/serhii-nochevnyi/shipyard/pull/225",
+    "url": "https://github.com/serhii-nochevnyi/shipyard/pull/229",
     "base": "epic/39-remove-conveyor-session-friction",
     "base_reason": "no primary parent — a root ticket PRs into epic/39-remove-conveyor-session-friction",
     "epic": "epic/39-remove-conveyor-session-friction",
@@ -1805,25 +1805,36 @@
   },
   "T-39-15": {
     "branch": "ticket/T-39-15-make-the-adr-bootstrap-produce-a-project",
-    "pr": null,
-    "status": "pending",
+    "pr": 227,
+    "status": "merged",
+    "url": "https://github.com/serhii-nochevnyi/shipyard/pull/227",
     "base": "epic/39-remove-conveyor-session-friction",
     "base_reason": "no primary parent — a root ticket PRs into epic/39-remove-conveyor-session-friction",
     "epic": "epic/39-remove-conveyor-session-friction",
-    "ready": true,
-    "reapable": false,
-    "since": "2026-09-25T08:32:00.095Z"
+    "reapable": true,
+    "since": "2026-09-25T09:40:41.182Z"
   },
   "T-39-16": {
     "branch": "ticket/T-39-16-make-the-role-result-finding-contract-un",
-    "pr": null,
-    "status": "pending",
+    "pr": 228,
+    "status": "merged",
+    "url": "https://github.com/serhii-nochevnyi/shipyard/pull/228",
     "base": "epic/39-remove-conveyor-session-friction",
     "base_reason": "T-39-14 is MERGED, so its branch is no longer where work lands — the base is epic/39-remove-conveyor-session-friction (base-merge it in first to keep the review diff one slice)",
     "epic": "epic/39-remove-conveyor-session-friction",
+    "reapable": true,
+    "since": "2026-09-25T09:40:41.182Z"
+  },
+  "T-39-17": {
+    "branch": "ticket/T-39-17-bound-role-packets-to-the-adrs-and-backl",
+    "pr": null,
+    "status": "pending",
+    "base": "epic/39-remove-conveyor-session-friction",
+    "base_reason": "T-39-16 is MERGED, so its branch is no longer where work lands — the base is epic/39-remove-conveyor-session-friction (base-merge it in first to keep the review diff one slice)",
+    "epic": "epic/39-remove-conveyor-session-friction",
     "ready": true,
     "reapable": false,
-    "since": "2026-09-25T08:32:00.095Z"
+    "since": "2026-09-25T09:40:41.182Z"
   },
   "T-40-01": {
     "branch": "ticket/T-40-01-make-git-creating-unit-fixtures-hermetic",
@@ -2095,13 +2106,15 @@
       "T-40-01",
       "T-39-12",
       "T-39-14",
-      "T-39-16"
+      "T-39-16",
+      "T-39-17"
     ],
     "blocked_reasons": {
       "T-40-01": "parent has no branch yet (nothing to cascade from)",
       "T-39-12": "cross-phase parent must land on main first (phase 39 epic still ahead)",
       "T-39-14": "cross-phase parent must land on main first (phase 39 epic still ahead)",
-      "T-39-16": "cross-phase parent must be MERGED and its phase 39 epic landed on main first (parent is pending)"
+      "T-39-16": "cross-phase parent must land on main first (phase 39 epic still ahead)",
+      "T-39-17": "cross-phase parent must be MERGED and its phase 39 epic landed on main first (parent is pending)"
     },
     "reapable": false,
     "since": "2026-09-24T19:40:45.987Z"
@@ -2175,7 +2188,7 @@
     ],
     "blocked_reasons": {
       "T-40-17": "parent has no branch yet (nothing to cascade from)",
-      "T-39-16": "cross-phase parent must be MERGED and its phase 39 epic landed on main first (parent is pending)"
+      "T-39-16": "cross-phase parent must land on main first (phase 39 epic still ahead)"
     },
     "reapable": false,
     "since": "2026-09-24T19:40:45.987Z"
@@ -2234,7 +2247,8 @@
       "T-39-03",
       "T-39-12",
       "T-39-14",
-      "T-39-16"
+      "T-39-16",
+      "T-39-17"
     ],
     "blocked_reasons": {
       "T-40-21": "parent has no branch yet (nothing to cascade from)",
@@ -2244,7 +2258,8 @@
       "T-39-03": "cross-phase parent must land on main first (phase 39 epic still ahead)",
       "T-39-12": "cross-phase parent must land on main first (phase 39 epic still ahead)",
       "T-39-14": "cross-phase parent must land on main first (phase 39 epic still ahead)",
-      "T-39-16": "cross-phase parent must be MERGED and its phase 39 epic landed on main first (parent is pending)"
+      "T-39-16": "cross-phase parent must land on main first (phase 39 epic still ahead)",
+      "T-39-17": "cross-phase parent must be MERGED and its phase 39 epic landed on main first (parent is pending)"
     },
     "reapable": false,
     "since": "2026-09-24T19:40:45.987Z"

@@ -40,6 +40,7 @@ function setupRepository(kind, options = {}) {
   git(root, ['init', '-b', 'main']);
   git(root, ['config', 'user.name', 'Shipyard Test']);
   git(root, ['config', 'user.email', 'shipyard-test@example.invalid']);
+  git(root, ['config', 'commit.gpgsign', 'false']);
   const planPath = `.planning/phases/${PHASE}/38-01-PLAN.md`;
   const branch = kind === 'arch-review' ? `ticket/${TICKET}` : `epic/${PHASE}`;
   const ticketBranch = `ticket/${TICKET}`;
@@ -227,6 +228,7 @@ function setupSentinelRepository() {
   git(root, ['init', '-b', 'main']);
   git(root, ['config', 'user.name', 'Shipyard Test']);
   git(root, ['config', 'user.email', 'shipyard-test@example.invalid']);
+  git(root, ['config', 'commit.gpgsign', 'false']);
   write(root, '.planning/architecture/ADR-014-test.md', POLICY_MD);
   write(root, '.planning/config.json', JSON.stringify({ git: { base_branch: 'main' } }));
   const tickets = {};
@@ -506,6 +508,113 @@ test('a well-shaped ticket_set with a changed head is still an identity mismatch
       error.code === 'ARTIFACT_IDENTITY_MISMATCH' && error.message.includes('identity differs'));
   } finally {
     cleanupFixture(fixture);
+  }
+});
+
+function needsFixFindings() {
+  return [
+    { id: 'F1', type: 'fix-ticket', blocking: true, summary: 'seam summary',
+      ticket: { title: 'Fix title', files: ['a.cjs'], scope: 'scope text', depends_on: [] } },
+    { id: 'F2', type: 'informational', blocking: false, summary: 'note summary',
+      evidence: 'a.cjs:1', ticket: null },
+  ];
+}
+
+test('the captured integrator result with an object ticket is refused with the fix_ticket remedy', async () => {
+  const fixture = setupRepository('integrator');
+  try {
+    const options = hostOptions(fixture, {
+      mutateResult(result) {
+        result.outcome = 'needs-fix';
+        result.blocking_count = 1;
+        result.findings = needsFixFindings();
+      },
+    });
+    await assert.rejects(createClaudeRoleHost(options).run(request(fixture)), (error) =>
+      error.code === 'INVALID_RESULT'
+      && error.message.includes('finding 0.ticket is an object')
+      && error.message.includes('remedy:')
+      && error.message.includes('fix_ticket')
+      && !error.message.includes('non-empty text value'));
+    assert.equal(fs.existsSync(path.join(fixture.root, '.shipyard-role-artifacts')), false);
+  } finally {
+    cleanupFixture(fixture);
+  }
+});
+
+test('an integrator result with fix_ticket and null ticket is sealed', async () => {
+  const fixture = setupRepository('integrator');
+  try {
+    const result = await createClaudeRoleHost(hostOptions(fixture, {
+      mutateResult(mutated) {
+        mutated.outcome = 'needs-fix';
+        mutated.blocking_count = 1;
+        mutated.findings = [
+          { id: 'F1', type: 'fix-ticket', blocking: true, summary: 'seam summary', ticket: null,
+            fix_ticket: { title: 'Fix title', scope: 'scope text', files: ['a.cjs'], depends_on: [] } },
+          { id: 'F2', type: 'informational', blocking: false, summary: 'note summary',
+            evidence: 'a.cjs:1', ticket: null },
+          { id: 'F3', type: 'informational', blocking: false, summary: 'ticketed note',
+            evidence: 'a.cjs:2', ticket: 'T-01-01' },
+        ];
+      },
+    })).run(request(fixture));
+    assert.equal(result.artifact.outcome, 'needs-fix');
+  } finally {
+    cleanupFixture(fixture);
+  }
+});
+
+test('integrator and arch-review launch schemas declare the finding ticket contract', async () => {
+  const integratorFixture = setupRepository('integrator');
+  const archFixture = setupRepository('arch-review');
+  const sentinelFixture = setupSentinelRepository();
+  let integratorLaunch;
+  let archLaunch;
+  let sentinelLaunch;
+  try {
+    await createClaudeRoleHost(hostOptions(integratorFixture, {
+      onLaunch(prompt, selection) { integratorLaunch = selection; },
+    })).run(request(integratorFixture));
+    const integratorFindings = integratorLaunch.schema.properties.findings.items;
+    assert.deepEqual(integratorFindings.properties.ticket.type, ['string', 'null']);
+    assert.deepEqual(integratorFindings.properties.fix_ticket.required, ['title', 'scope', 'files']);
+    assert.equal(integratorFindings.properties.fix_ticket.properties.files.minItems, 1);
+
+    await createClaudeRoleHost(hostOptions(archFixture, {
+      onLaunch(prompt, selection) { archLaunch = selection; },
+    })).run(request(archFixture));
+    assert.deepEqual(archLaunch.schema.properties.findings.items.properties.ticket.type, ['string', 'null']);
+
+    await createClaudeRoleHost(hostOptions(sentinelFixture, {
+      onLaunch(prompt, selection) { sentinelLaunch = selection; },
+    })).run(request(sentinelFixture));
+    assert.deepEqual(sentinelLaunch.schema, {
+      type: 'object',
+      properties: {
+        blocking_count: { type: 'integer', minimum: 0 },
+        outcome: { type: 'string', enum: ['clear', 'blocked', 'awaiting-human'] },
+        ticket_set: {
+          type: 'array',
+          items: {
+            type: 'object', additionalProperties: false,
+            required: ['id', 'pr', 'head', 'base', 'branch'],
+            properties: {
+              id: { type: 'string' }, pr: { type: 'integer', minimum: 1 }, head: { type: 'string' },
+              base: { type: 'string' }, branch: { type: 'string' },
+            },
+          },
+        },
+        ticket_set_digest: { type: 'string' },
+        head: { type: 'string' }, head_tree: { type: 'string' },
+        performed: { type: 'array' }, refused: { type: 'array' }, summary: { type: 'string' },
+      },
+      required: ['outcome', 'ticket_set', 'ticket_set_digest', 'head', 'head_tree', 'blocking_count'],
+    });
+  } finally {
+    cleanupFixture(integratorFixture);
+    cleanupFixture(archFixture);
+    cleanupFixture(sentinelFixture);
   }
 });
 

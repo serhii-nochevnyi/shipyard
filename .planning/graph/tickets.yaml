@@ -2656,6 +2656,22 @@ tickets:
     primary_parent: T-39-14
     pr_base: ticket/T-39-14-make-the-integrator-and-sentinel-result
     jira: null
+  T-39-17:
+    title: Bound role packets to the ADRs and backlog entries their plans reference
+    plan: '.planning/phases/39-remove-conveyor-session-friction/39-17-PLAN.md'
+    phase: '39'
+    repo: null
+    wave: 3
+    depends_on: [T-39-16]
+    files: [plugins/delivery-pipeline/scripts/claude-role-host.cjs, tests/unit/claude-role-host.test.cjs, plugins/delivery-pipeline/scripts/context-packet.cjs, tests/unit/context-packet.test.cjs]
+    risk: medium
+    human_checkpoint: false
+    preauthorized: false
+    branch: ticket/T-39-17-bound-role-packets-to-the-adrs-and-backl
+    epic: epic/39-remove-conveyor-session-friction
+    primary_parent: T-39-16
+    pr_base: ticket/T-39-16-make-the-role-result-finding-contract-un
+    jira: null
   T-40-01:
     title: Make git-creating unit fixtures hermetic against global signing and fixed /tmp paths
     plan: '.planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-01-PLAN.md'
@@ -2885,8 +2901,8 @@ tickets:
     plan: '.planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-16-PLAN.md'
     phase: '40'
     repo: null
-    wave: 3
-    depends_on: [T-40-01, T-39-12, T-39-14, T-39-16]
+    wave: 4
+    depends_on: [T-40-01, T-39-12, T-39-14, T-39-16, T-39-17]
     files: [plugins/delivery-pipeline/scripts/sentinel-preflight.cjs, tests/unit/sentinel-preflight.test.cjs, plugins/delivery-pipeline/scripts/claude-role-host.cjs, tests/unit/claude-role-host.test.cjs]
     risk: medium
     human_checkpoint: false
@@ -2998,7 +3014,7 @@ tickets:
     phase: '40'
     repo: null
     wave: 7
-    depends_on: [T-40-21, T-40-16, T-40-14, T-40-19, T-39-03, T-39-12, T-39-14, T-39-16]
+    depends_on: [T-40-21, T-40-16, T-40-14, T-40-19, T-39-03, T-39-12, T-39-14, T-39-16, T-39-17]
     files: [plugins/delivery-pipeline/scripts/dispatch-record.cjs, tests/unit/dispatch-record.test.cjs, plugins/delivery-pipeline/scripts/claude-role-host.cjs, tests/unit/claude-role-host.test.cjs, plugins/delivery-pipeline/scripts/sentinel.cjs, tests/unit/sentinel.test.cjs]
     risk: high
     human_checkpoint: true
