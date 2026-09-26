@@ -14,7 +14,7 @@ const { createRunController } = require('./run-controller.cjs');
 const { createRunScope } = require('./run-scope.cjs');
 const roleArtifact = require('./role-artifact.cjs');
 const { resolveBaseRef } = require('./graph-dir.cjs');
-const { sealResearch } = require('./planning-result-sealer.cjs');
+const { sealResearch, verifySealedLine } = require('./planning-result-sealer.cjs');
 
 const WORKFLOWS = Object.freeze(['executors', 'fix-round', 'drift-gate', 'investigation-research']);
 const REQUEST_SCHEMA = 'shipyard.claude-delivery-request.v1';
@@ -335,7 +335,7 @@ function driftPreflight(options, entry, args) {
   canonicalBase(worktree, base, row.pr_base);
 }
 
-function investigationPreflight(options, args) {
+function investigationPreflight(options, args, scope) {
   const project = path.resolve(graphDirectory(options), '..', '..');
   const worktree = fs.realpathSync(args.worktreePath);
   if (git(worktree, ['rev-parse', '--show-toplevel']) !== worktree || worktree !== project) {
@@ -350,6 +350,17 @@ function investigationPreflight(options, args) {
       && args.sourceRevision !== git(worktree, ['rev-parse', '--verify', 'HEAD^{commit}'])) {
     reject('investigation source revision differs from the canonical repository');
   }
+  if (args.sealedLines === undefined) return undefined;
+  if (!Array.isArray(args.lines) || args.lines.length !== 1 || !Array.isArray(args.sealedLines)
+      || args.sealedLines.length !== 3) {
+    reject('sealed sibling lines are accepted only for a single-line investigation re-dispatch with its three siblings');
+  }
+  const root = path.join(storageDirectory({ ...options, scope }), 'planning-artifacts');
+  const verifyScope = {
+    invId: args.invId, sourceRevision: args.sourceRevision,
+    repository: args.repository, policyHash: args.policyHash,
+  };
+  return args.sealedLines.map((line) => verifySealedLine({ root, scope: verifyScope, line }));
 }
 
 function fetchReviewFeedback(options, repair) {
@@ -730,7 +741,8 @@ function createClaudeDeliveryHost(options = {}) {
       if (name === 'drift-gate' && Array.isArray(args.tickets)) {
         for (const entry of args.tickets) driftPreflight(options, entry, args);
       }
-      if (name === 'investigation-research') investigationPreflight(options, args);
+      const verifiedSealedLines = name === 'investigation-research'
+        ? investigationPreflight(options, args, scope) : undefined;
       let feedback = [];
       let repair;
       let baseCommit;
@@ -758,7 +770,9 @@ function createClaudeDeliveryHost(options = {}) {
         reviewFeedbacks.set(repair.ticket, feedback);
       }
       const workflowArgs = prepareArgs(name, args, feedback, scope);
-      const run = () => registered.run(name, { args: workflowArgs });
+      const finalArgs = verifiedSealedLines !== undefined
+        ? { ...workflowArgs, sealedLines: verifiedSealedLines } : workflowArgs;
+      const run = () => registered.run(name, { args: finalArgs });
       if (!repair) return run();
       repairActive = true;
       let launched;
@@ -826,9 +840,13 @@ function readRequest(file) {
 function cliDispatch(workflow, args) {
   const entries = workflow === 'executors' || workflow === 'drift-gate' ? args.tickets
     : workflow === 'fix-round' ? args.prs : args.lines;
-  if (!Array.isArray(entries) || entries.length !== (workflow === 'investigation-research' ? 4 : 1)
-      || !object(entries[0])) {
+  if (!Array.isArray(entries) || !object(entries[0])) {
     reject('CLI request requires one scoped ticket or PR, or four investigation lines');
+  }
+  const singleLineRedispatch = workflow === 'investigation-research' && entries.length === 1
+    && Array.isArray(args.sealedLines) && args.sealedLines.length === 3;
+  if (entries.length !== (workflow === 'investigation-research' ? 4 : 1) && !singleLineRedispatch) {
+    reject('CLI request requires one scoped ticket or PR, four investigation lines, or one investigation line with its three sealed siblings');
   }
   const first = entries[0];
   const role = workflow === 'executors' ? 'executor'

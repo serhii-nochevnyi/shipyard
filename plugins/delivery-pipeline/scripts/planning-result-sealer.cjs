@@ -10,6 +10,7 @@ const RESEARCH_ARTIFACT_MAX_BYTES = 1024 * 1024;
 const DECOMPOSITION_PLAN_MAX_BYTES = 1024 * 1024;
 const DECOMPOSITION_MAX_PLANS = 128;
 const LINE_PATTERN = /^((?:INV-[A-Za-z0-9-]+)):(system-state|alternatives|constraints|risks)$/;
+const RESEARCH_LINE_IDS = Object.freeze(['system-state', 'alternatives', 'constraints', 'risks']);
 
 function refuse(code, message) {
   const error = new Error(`planning-result-sealer: ${message}`);
@@ -127,6 +128,94 @@ function sealResearch({ root, scope, lines, limits } = {}) {
     envelope, evidence_index: index, artifact_index: index });
 }
 
+function verifySealedLine({ root, scope, line } = {}) {
+  if (typeof root !== 'string' || !root.trim()) refuse('RESEARCH_VERIFY_ROOT_INVALID', 'verifySealedLine requires an archive root');
+  if (!object(scope) || typeof scope.invId !== 'string' || !/^INV-[A-Za-z0-9-]+$/.test(scope.invId)
+      || typeof scope.sourceRevision !== 'string' || !/^[a-f0-9]{40}$/i.test(scope.sourceRevision)
+      || typeof scope.repository !== 'string' || !scope.repository.trim()
+      || typeof scope.policyHash !== 'string' || !/^[a-f0-9]{64}$/i.test(scope.policyHash)) {
+    refuse('RESEARCH_VERIFY_SCOPE_INVALID', 'verifySealedLine requires the authenticated investigation id, revision, repository, and policy hash');
+  }
+  if (!object(line) || typeof line.id !== 'string' || !RESEARCH_LINE_IDS.includes(line.id)) {
+    refuse('RESEARCH_VERIFY_LINE_INVALID', `verifySealedLine requires a recognized research line id, not ${JSON.stringify(line && line.id)}`);
+  }
+  if (typeof line.artifact_ref !== 'string' || !line.artifact_ref.trim()
+      || typeof line.artifact_digest !== 'string' || !/^[a-f0-9]{64}$/.test(line.artifact_digest)) {
+    refuse('RESEARCH_VERIFY_REFERENCE_INVALID', `sealed line ${line.id} requires a bounded manifest reference and digest`);
+  }
+  const archiveRoot = fs.realpathSync(root);
+  let stat;
+  try {
+    stat = fs.lstatSync(line.artifact_ref);
+  } catch {
+    refuse('RESEARCH_VERIFY_MANIFEST_MISSING', `sealed line ${line.id} manifest is missing: ${line.artifact_ref}`);
+  }
+  if (stat.isSymbolicLink()) refuse('RESEARCH_VERIFY_MANIFEST_SYMLINK', `sealed line ${line.id} manifest may not be a symlink: ${line.artifact_ref}`);
+  if (!stat.isFile()) refuse('RESEARCH_VERIFY_MANIFEST_NOT_REGULAR', `sealed line ${line.id} manifest must be a regular file: ${line.artifact_ref}`);
+  if (path.dirname(fs.realpathSync(line.artifact_ref)) !== archiveRoot) {
+    refuse('RESEARCH_VERIFY_MANIFEST_PATH_ESCAPE', `sealed line ${line.id} manifest is outside its archive root: ${line.artifact_ref}`);
+  }
+  const manifestBytes = fs.readFileSync(line.artifact_ref);
+  const manifestDigest = crypto.createHash('sha256').update(manifestBytes).digest('hex');
+  if (manifestDigest !== line.artifact_digest) {
+    refuse('RESEARCH_VERIFY_DIGEST_MISMATCH', `sealed line ${line.id} manifest digest does not match its claimed reference`);
+  }
+  let manifest;
+  try {
+    manifest = JSON.parse(manifestBytes.toString('utf8'));
+  } catch {
+    refuse('RESEARCH_VERIFY_MANIFEST_INVALID', `sealed line ${line.id} manifest is not valid JSON`);
+  }
+  if (!object(manifest) || manifest.schema !== 'shipyard.role-artifact.v1'
+      || typeof manifest.dispatch_id !== 'string' || !manifest.dispatch_id
+      || path.basename(line.artifact_ref, '.json') !== crypto.createHash('sha256').update(manifest.dispatch_id).digest('hex')) {
+    refuse('RESEARCH_VERIFY_MANIFEST_INVALID', `sealed line ${line.id} manifest does not match its own dispatch identity`);
+  }
+  const envelope = manifest.envelope;
+  const match = LINE_PATTERN.exec((object(envelope) && envelope.subject) || '');
+  if (!match || match[1] !== scope.invId || match[2] !== line.id) {
+    refuse('RESEARCH_VERIFY_SUBJECT_MISMATCH', `sealed line ${line.id} manifest subject does not name this investigation and line`);
+  }
+  if (envelope.role !== 'research' || envelope.schema !== 'shipyard.research-result.v1' || envelope.version !== 1) {
+    refuse('RESEARCH_VERIFY_ENVELOPE_INVALID', `sealed line ${line.id} manifest envelope is not a research result`);
+  }
+  if (envelope.source_revision !== scope.sourceRevision || envelope.repository !== scope.repository
+      || envelope.policy_hash !== scope.policyHash) {
+    refuse('RESEARCH_VERIFY_IDENTITY_MISMATCH', `sealed line ${line.id} manifest differs from the authenticated run`);
+  }
+  if (!['completed', 'blocked'].includes(envelope.status)) {
+    refuse('RESEARCH_VERIFY_STATUS_INVALID', `sealed line ${line.id} manifest status must be completed or blocked`);
+  }
+  const index = envelope.artifact_index;
+  if (!object(index) || typeof index.path !== 'string' || !index.path.trim()
+      || !/^[a-f0-9]{64}$/.test(index.sha256 || '') || index.sha256 !== index.digest) {
+    refuse('RESEARCH_VERIFY_ARTIFACT_INDEX_INVALID', `sealed line ${line.id} manifest has no complete artifact index`);
+  }
+  let archiveStat;
+  try {
+    archiveStat = fs.lstatSync(index.path);
+  } catch {
+    refuse('RESEARCH_VERIFY_ARCHIVE_MISSING', `sealed line ${line.id} archived finding is missing: ${index.path}`);
+  }
+  if (archiveStat.isSymbolicLink() || !archiveStat.isFile()) {
+    refuse('RESEARCH_VERIFY_ARCHIVE_NOT_REGULAR', `sealed line ${line.id} archived finding must be a regular file: ${index.path}`);
+  }
+  if (path.dirname(fs.realpathSync(index.path)) !== archiveRoot) {
+    refuse('RESEARCH_VERIFY_ARCHIVE_PATH_ESCAPE', `sealed line ${line.id} archived finding is outside its archive root: ${index.path}`);
+  }
+  const archiveBytes = fs.readFileSync(index.path);
+  const archiveDigest = crypto.createHash('sha256').update(archiveBytes).digest('hex');
+  if (archiveDigest !== index.sha256 || archiveBytes.length !== index.bytes) {
+    refuse('RESEARCH_VERIFY_ARCHIVE_MUTATED', `sealed line ${line.id} archived finding no longer matches its sealed index`);
+  }
+  return Object.freeze({
+    id: line.id, status: envelope.status, summary: envelope.summary,
+    artifact_ref: line.artifact_ref, artifact_digest: manifestDigest,
+    artifact_index: index, evidence_index: index,
+  });
+}
+
+// @contract: researchLineFailure requires an adapter-free cause; callers strip the boundary repair suffix.
 function researchLineFailure({ scope, sealed, failed } = {}) {
   if (!object(scope)) refuse('RESEARCH_FAILURE_SCOPE_INVALID', 'researchLineFailure requires a scope object');
   if (!Array.isArray(sealed)) refuse('RESEARCH_FAILURE_SEALED_INVALID', 'researchLineFailure requires the sealed line array');
@@ -291,5 +380,6 @@ module.exports = Object.freeze({
   sealResearch,
   sealDecomposition,
   researchLineFailure,
+  verifySealedLine,
   assertContained,
 });
