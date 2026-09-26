@@ -132,7 +132,8 @@ function fakeEvidence(model, effort, usage) {
   let transcript;
   if (usage) {
     const transcriptPath = path.join(os.tmpdir(), `${sessionId}.jsonl`);
-    const line = JSON.stringify({ type: 'assistant', sessionId, message: { role: 'assistant', model: observedModel, usage } });
+    const line = JSON.stringify({ type: 'assistant', sessionId,
+      message: { role: 'assistant', id: 'm1', model: observedModel, usage, stop_reason: 'end_turn' } });
     fs.writeFileSync(transcriptPath, `${line}\n`);
     const buffer = fs.readFileSync(transcriptPath);
     transcript = { path: transcriptPath, bytes: buffer.length, sha256: crypto.createHash('sha256').update(buffer).digest('hex') };
@@ -151,6 +152,30 @@ function fakeEvidence(model, effort, usage) {
     selection_evidence: { source: 'claude-session-assistant-transcript', session_id: sessionId,
       assistant_records: 1, model: observedModel, effort, transcript },
     stream_evidence: { format: 'stream-json', records: 1, assistant_messages: 1 },
+    transcript,
+  };
+}
+
+function fakeEvidenceLines(model, effort, lines) {
+  const sessionId = `session-${crypto.randomUUID()}`;
+  const observedModel = model === 'sonnet' ? 'claude-sonnet-5' : model === 'fable' ? 'claude-fable-5' : model;
+  const transcriptPath = path.join(os.tmpdir(), `${sessionId}.jsonl`);
+  const text = `${lines.map((line) => JSON.stringify({ sessionId, ...line })).join('\n')}\n`;
+  fs.writeFileSync(transcriptPath, text);
+  const buffer = fs.readFileSync(transcriptPath);
+  const transcript = { path: transcriptPath, bytes: buffer.length, sha256: crypto.createHash('sha256').update(buffer).digest('hex') };
+  return {
+    launch_id: `claude-${sessionId}`,
+    session_id: sessionId,
+    process_id: process.pid,
+    runtime_version: '2.1.280',
+    applied_model: model,
+    applied_effort: effort,
+    observed_model: observedModel,
+    observed_effort: effort,
+    selection_evidence: { source: 'claude-session-assistant-transcript', session_id: sessionId,
+      assistant_records: lines.length, model: observedModel, effort, transcript },
+    stream_evidence: { format: 'stream-json', records: lines.length, assistant_messages: lines.length },
     transcript,
   };
 }
@@ -211,7 +236,9 @@ function fakeRuntimeFactory(fixture, options = {}) {
         }
         options.mutateResult?.(result, packet);
         const applicationEvidence = options.badEvidence ? fakeEvidence(selection.model, 'low')
+          : options.firstResponseLines ? fakeEvidenceLines(selection.model, selection.effort, options.firstResponseLines)
           : fakeEvidence(selection.model, selection.effort, options.firstResponseUsage);
+        if (options.corruptDigest && applicationEvidence.transcript) applicationEvidence.transcript.sha256 = 'b'.repeat(64);
         return { output: result, applicationEvidence };
       },
       applicationEvidence({ result }) { return result.applicationEvidence; },
@@ -1064,6 +1091,159 @@ test('a matched first-response transcript records observed provider usage by aut
       dispatch_identity: { session_id: result.dispatch.receipt.session_id, launch_id: result.dispatch.receipt.launch_id },
       counters: usage,
     });
+  } finally {
+    cleanupFixture(fixture);
+    if (transcriptPath) fs.rmSync(transcriptPath, { force: true });
+  }
+});
+
+test('streamed partial-then-final records of the same message id are max-merged into one observed response', async () => {
+  const fixture = setupRepository('arch-review');
+  let transcriptPath;
+  try {
+    const result = await createClaudeRoleHost(hostOptions(fixture, {
+      firstResponseLines: [
+        { type: 'assistant', message: { role: 'assistant', id: 'msg-1', model: 'claude-opus-5-5',
+          usage: { input_tokens: 100, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 1 } } },
+        { type: 'assistant', message: { role: 'assistant', id: 'msg-1', model: 'claude-opus-5-5',
+          usage: { input_tokens: 100, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 40 },
+          stop_reason: 'end_turn' } },
+      ],
+      onLaunch() {},
+    })).run(request(fixture));
+    transcriptPath = result.dispatch.application_evidence.transcript.path;
+    assert.deepEqual(result.context.first_response_usage, {
+      status: 'observed',
+      dispatch_identity: { session_id: result.dispatch.receipt.session_id, launch_id: result.dispatch.receipt.launch_id },
+      counters: { input_tokens: 100, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 40 },
+    });
+  } finally {
+    cleanupFixture(fixture);
+    if (transcriptPath) fs.rmSync(transcriptPath, { force: true });
+  }
+});
+
+test('a first response with no stop_reason on any of its records is reported unknown as incomplete', async () => {
+  const fixture = setupRepository('arch-review');
+  let transcriptPath;
+  try {
+    const result = await createClaudeRoleHost(hostOptions(fixture, {
+      firstResponseLines: [
+        { type: 'assistant', message: { role: 'assistant', id: 'msg-1', model: 'claude-opus-5-5',
+          usage: { input_tokens: 50, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 3 } } },
+      ],
+      onLaunch() {},
+    })).run(request(fixture));
+    transcriptPath = result.dispatch.application_evidence.transcript.path;
+    assert.deepEqual(result.context.first_response_usage, { status: 'unknown', reason: 'incomplete' });
+  } finally {
+    cleanupFixture(fixture);
+    if (transcriptPath) fs.rmSync(transcriptPath, { force: true });
+  }
+});
+
+test('a synthetic first record is skipped and the following real response is measured', async () => {
+  const fixture = setupRepository('arch-review');
+  let transcriptPath;
+  try {
+    const result = await createClaudeRoleHost(hostOptions(fixture, {
+      firstResponseLines: [
+        { type: 'assistant', message: { role: 'assistant', id: 'msg-synthetic', model: '<synthetic>',
+          usage: { input_tokens: 999, cache_read_input_tokens: 999, cache_creation_input_tokens: 999, output_tokens: 999 },
+          stop_reason: 'end_turn' } },
+        { type: 'assistant', message: { role: 'assistant', id: 'msg-real', model: 'claude-opus-5-5',
+          usage: { input_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 5 },
+          stop_reason: 'end_turn' } },
+      ],
+      onLaunch() {},
+    })).run(request(fixture));
+    transcriptPath = result.dispatch.application_evidence.transcript.path;
+    assert.deepEqual(result.context.first_response_usage, {
+      status: 'observed',
+      dispatch_identity: { session_id: result.dispatch.receipt.session_id, launch_id: result.dispatch.receipt.launch_id },
+      counters: { input_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 5 },
+    });
+  } finally {
+    cleanupFixture(fixture);
+    if (transcriptPath) fs.rmSync(transcriptPath, { force: true });
+  }
+});
+
+test('a session containing only synthetic assistant records reports unknown as synthetic-only', async () => {
+  const fixture = setupRepository('arch-review');
+  let transcriptPath;
+  try {
+    const result = await createClaudeRoleHost(hostOptions(fixture, {
+      firstResponseLines: [
+        { type: 'assistant', message: { role: 'assistant', id: 'msg-synthetic', model: '<synthetic>',
+          usage: { input_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 1 },
+          stop_reason: 'end_turn' } },
+      ],
+      onLaunch() {},
+    })).run(request(fixture));
+    transcriptPath = result.dispatch.application_evidence.transcript.path;
+    assert.deepEqual(result.context.first_response_usage, { status: 'unknown', reason: 'synthetic-only' });
+  } finally {
+    cleanupFixture(fixture);
+    if (transcriptPath) fs.rmSync(transcriptPath, { force: true });
+  }
+});
+
+test('a record without a stable message id or uuid is skipped and reported as no identity', async () => {
+  const fixture = setupRepository('arch-review');
+  let transcriptPath;
+  try {
+    const result = await createClaudeRoleHost(hostOptions(fixture, {
+      firstResponseLines: [
+        { type: 'assistant', message: { role: 'assistant', model: 'claude-opus-5-5',
+          usage: { input_tokens: 20, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 2 },
+          stop_reason: 'end_turn' } },
+      ],
+      onLaunch() {},
+    })).run(request(fixture));
+    transcriptPath = result.dispatch.application_evidence.transcript.path;
+    assert.deepEqual(result.context.first_response_usage, { status: 'unknown', reason: 'no identity' });
+  } finally {
+    cleanupFixture(fixture);
+    if (transcriptPath) fs.rmSync(transcriptPath, { force: true });
+  }
+});
+
+test('two records sharing one message id but declaring different models report unknown as conflicting', async () => {
+  const fixture = setupRepository('arch-review');
+  let transcriptPath;
+  try {
+    const result = await createClaudeRoleHost(hostOptions(fixture, {
+      firstResponseLines: [
+        { type: 'assistant', message: { role: 'assistant', id: 'msg-1', model: 'claude-opus-5-5',
+          usage: { input_tokens: 5, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 1 } } },
+        { type: 'assistant', message: { role: 'assistant', id: 'msg-1', model: 'claude-sonnet-5',
+          usage: { input_tokens: 5, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 2 },
+          stop_reason: 'end_turn' } },
+      ],
+      onLaunch() {},
+    })).run(request(fixture));
+    transcriptPath = result.dispatch.application_evidence.transcript.path;
+    assert.deepEqual(result.context.first_response_usage, { status: 'unknown', reason: 'conflicting model' });
+  } finally {
+    cleanupFixture(fixture);
+    if (transcriptPath) fs.rmSync(transcriptPath, { force: true });
+  }
+});
+
+test('a transcript whose content no longer matches its recorded digest is refused as unknown', async () => {
+  const fixture = setupRepository('arch-review');
+  const usage = { input_tokens: 5, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 1 };
+  let transcriptPath;
+  try {
+    const result = await createClaudeRoleHost(hostOptions(fixture, {
+      firstResponseUsage: usage,
+      corruptDigest: true,
+      onLaunch() {},
+    })).run(request(fixture));
+    transcriptPath = result.dispatch.application_evidence.transcript.path;
+    assert.deepEqual(result.context.first_response_usage,
+      { status: 'unknown', reason: 'transcript content does not match its recorded digest' });
   } finally {
     cleanupFixture(fixture);
     if (transcriptPath) fs.rmSync(transcriptPath, { force: true });
