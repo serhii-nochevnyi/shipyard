@@ -14,10 +14,20 @@ const {
   probeClaudeRuntime,
 } = require('../../plugins/delivery-pipeline/scripts/claude-runtime-host.cjs');
 const { CLAUDE_MODEL_ALIASES } = require('../../plugins/delivery-pipeline/scripts/runtime-adapters.cjs');
+const { claudeSchemaFor } = require('../../scripts/capture-boundary-fixtures.cjs');
 const { capture: captureSessionStart } = require('../../plugins/delivery-pipeline/scripts/claude-agent-start-hook.cjs');
 
 const SESSION = '11111111-1111-4111-8111-111111111111';
-const FIXTURE = path.join(__dirname, '..', 'fixtures', 'claude-assistant-session.jsonl');
+const ROOT = path.resolve(__dirname, '..', '..');
+const EXECUTOR_STREAM = 'tests/fixtures/captured/claude-stream-executor.jsonl';
+const RESEARCH_STREAM = 'tests/fixtures/captured/claude-stream-research.jsonl';
+const TRANSCRIPT = [
+  { type: 'attachment', sessionId: SESSION, model: 'claude-opus-5', effort: 'high' },
+  { type: 'assistant', sessionId: SESSION, entrypoint: 'sdk-ts', message: { role: 'assistant', model: 'claude-haiku-4-5-20251001' } },
+  { type: 'assistant', sessionId: '22222222-2222-4222-8222-222222222222', effort: 'high', message: { role: 'assistant', model: 'claude-opus-5-5' } },
+  { type: 'assistant', sessionId: SESSION, effort: 'low', agentSetting: 'gsd-plan-checker', message: { role: 'assistant', model: 'claude-opus-5-5', content: [{ type: 'text', text: 'redacted' }] } },
+  { type: 'assistant', sessionId: SESSION, effort: 'low', agentSetting: 'gsd-plan-checker', message: { role: 'assistant', model: 'claude-opus-5-5', content: [{ type: 'tool_use', name: 'Bash', input: { command: 'pwd' } }] } },
+];
 const SCOPE = {
   run_id: 'run-38-02',
   ticket: 'T-38-02',
@@ -27,29 +37,46 @@ const SCOPE = {
   provider: 'anthropic',
 };
 
-function stream(session = SESSION) {
-  return [
-    { type: 'system', subtype: 'init', session_id: session, model: 'claude-opus-5', effort: 'high' },
-    { type: 'assistant', session_id: session, message: { role: 'assistant', model: 'claude-opus-5', usage: { input_tokens: 4 } }, effort: 'high' },
-    { type: 'result', session_id: session, model: 'claude-opus-5', effort: 'high', result: 'done' },
-  ].map((record) => JSON.stringify(record)).join('\n') + '\n';
+function capturedLines(rel) {
+  const lines = fs.readFileSync(path.join(ROOT, rel), 'utf8').split('\n').filter((line) => line.trim());
+  assert.ok(JSON.parse(lines[0]).shipyard_fixture, `${rel} must start with a provenance line`);
+  return lines.slice(1);
 }
 
-function childFor(output, code = 0) {
+function capturedSession(rel) {
+  return JSON.parse(capturedLines(rel)[0]).session_id;
+}
+
+function replayLines(rel, session = SESSION, transform = (record) => record) {
+  const placeholder = capturedSession(rel);
+  return capturedLines(rel).map((line) => {
+    const record = transform(JSON.parse(line.split(placeholder).join(session)));
+    return `${JSON.stringify(record)}\n`;
+  });
+}
+
+function childFor(rel = EXECUTOR_STREAM, code = 0, transform = undefined) {
   const child = new EventEmitter();
   child.stdout = new EventEmitter();
   child.stderr = new EventEmitter();
   child.stdin = { write() {}, end() {} };
   child.pid = 24038;
+  const lines = rel ? replayLines(rel, SESSION, transform) : [];
   process.nextTick(() => {
-    if (output) child.stdout.emit('data', Buffer.from(output));
+    for (const line of lines) child.stdout.emit('data', Buffer.from(line));
     child.emit('close', code, null);
   });
   return child;
 }
 
+function withoutStructuredOutput(record) {
+  if (!Object.hasOwn(record, 'structured_output')) return record;
+  const { structured_output: _dropped, ...rest } = record;
+  return rest;
+}
+
 function fixtureRecords() {
-  return fs.readFileSync(FIXTURE, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+  return TRANSCRIPT.map((record) => ({ ...record }));
 }
 
 function typedFixtureRecords(role) {
@@ -113,10 +140,21 @@ function probe() {
 suite('claude-runtime-host — exact-session selection and scoped launch');
 
 test('stream identifies the process session but does not establish model or effort', () => {
-  const parsed = parseClaudeStream(stream());
-  assert.equal(parsed.session_id, SESSION);
-  assert.equal(parsed.assistant_count, 1);
-  assert.equal(parsed.usage_count, 1);
+  const parsed = parseClaudeStream(capturedLines(EXECUTOR_STREAM).join('\n'));
+  assert.equal(parsed.session_id, capturedSession(EXECUTOR_STREAM));
+  assert.match(parsed.session_id, /^<SESSION-\d+>$/);
+  assert.equal(parsed.assistant_count, 2);
+  assert.equal(parsed.usage_count, 3);
+  assert.deepEqual(parsed.efforts, []);
+});
+
+test('the captured result record carries the schema-bound structured_output', () => {
+  for (const rel of [EXECUTOR_STREAM, RESEARCH_STREAM]) {
+    const parsed = parseClaudeStream(capturedLines(rel).join('\n'));
+    assert.equal(parsed.result.type, 'result');
+    assert.equal(typeof parsed.result.structured_output, 'object');
+    assert.deepEqual(JSON.parse(parsed.result.result), parsed.result.structured_output);
+  }
 });
 
 test('only matching assistant transcript records establish Opus 5.5 and effort', () => {
@@ -194,7 +232,7 @@ test('native launcher ignores conflicting stdout model and effort and records tr
       spawn: (executable, args, options) => {
         calls.push({ executable, args, options });
         captureConfiguredSessionStart(args, transcript);
-        return childFor(stream());
+        return childFor();
       },
       runtime_version: '2.1.280',
     });
@@ -268,7 +306,7 @@ test('read-only smoke removes shell and edit tools from the Claude launch', asyn
       spawn: (_executable, args) => {
         capturedArgs = args;
         captureConfiguredSessionStart(args, transcript);
-        return childFor(stream());
+        return childFor();
       },
     });
     await launch('run the read-only sentinel smoke', {
@@ -284,7 +322,7 @@ test('read-only smoke removes shell and edit tools from the Claude launch', asyn
   }
 });
 
-async function launchArgs(launchOptions) {
+async function launchReplay(launchOptions, rel = EXECUTOR_STREAM, transform = undefined) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-claude-schema-'));
   const transcript = writeSession(path.join(root, 'claude', 'projects'), fixtureRecords());
   let capturedArgs;
@@ -300,17 +338,21 @@ async function launchArgs(launchOptions) {
         spawned = true;
         capturedArgs = args;
         captureConfiguredSessionStart(args, transcript);
-        return childFor(stream());
+        return childFor(rel, 0, transform);
       },
     });
-    await launch('return the declared handback', { model: 'claude-opus-5-5', effort: 'low', ...launchOptions });
-    return capturedArgs;
+    const result = await launch('return the declared handback', { model: 'claude-opus-5-5', effort: 'low', ...launchOptions });
+    return { args: capturedArgs, result };
   } catch (error) {
     error.spawned = spawned;
     throw error;
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
+}
+
+async function launchArgs(launchOptions) {
+  return (await launchReplay(launchOptions)).args;
 }
 
 test('a declared output schema reaches the Claude CLI as --json-schema', async () => {
@@ -360,6 +402,36 @@ test('a schema that cannot be serialized is refused before launch', async () => 
   assert.equal(refused.spawned, false);
 });
 
+test('replayed structured_output takes precedence over the result text', async () => {
+  for (const rel of [EXECUTOR_STREAM, RESEARCH_STREAM]) {
+    const { result } = await launchReplay({}, rel);
+    const record = JSON.parse(capturedLines(rel).at(-1));
+    assert.deepEqual(result.output, record.structured_output);
+    assert.equal(result.applicationEvidence.session_id, SESSION);
+  }
+  const { result } = await launchReplay({}, EXECUTOR_STREAM);
+  assert.equal(result.output.status, 'committed');
+});
+
+test('a replayed result without structured_output falls back to the result text', async () => {
+  const { result } = await launchReplay({}, EXECUTOR_STREAM, withoutStructuredOutput);
+  const record = JSON.parse(capturedLines(EXECUTOR_STREAM).at(-1));
+  assert.equal(result.output, record.result);
+  assert.equal(typeof result.output, 'string');
+});
+
+test('each capture variant maps to the schema whose structured_output was replayed', () => {
+  const executor = claudeSchemaFor('executor');
+  assert.deepEqual(executor.required, ['id', 'status', 'summary']);
+  assert.ok(executor.properties.status.enum.includes('committed'));
+  const research = claudeSchemaFor('research');
+  assert.deepEqual(research.required, ['summary']);
+  assert.equal(research.properties.summary.maxLength, 500);
+  for (const variant of [undefined, '', 'parent']) {
+    assert.throws(() => claudeSchemaFor(variant), /--variant executor or --variant research/);
+  }
+});
+
 test('a versioned run scope launches with its ticket, phase and provider', async () => {
   const { createRunScope } = require('../../plugins/delivery-pipeline/scripts/run-scope.cjs');
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-claude-run-scope-'));
@@ -380,7 +452,7 @@ test('a versioned run scope launches with its ticket, phase and provider', async
       spawn: (_executable, args) => {
         spawned = true;
         captureConfiguredSessionStart(args, transcript);
-        return childFor(stream());
+        return childFor();
       },
     });
     await launch('guard the round', { model: 'claude-opus-5-5', effort: 'low' });
@@ -406,7 +478,7 @@ test('waits for a flushed transcript and ignores stdout-only model and effort', 
         fs.mkdirSync(path.dirname(anticipated), { recursive: true });
         captureConfiguredSessionStart(args, anticipated);
         setTimeout(() => writeSession(projects, fixtureRecords()), 15);
-        return childFor(stream());
+        return childFor();
       },
     });
     const result = await launch('wait for transcript flush', { model: 'claude-opus-5-5', effort: 'low' });
@@ -426,7 +498,7 @@ test('missing native transcript refuses even when stdout reports model and effor
       transcriptTimeoutMs: 20,
       transcriptPollMs: 5,
       uuid: () => SESSION,
-      spawn: () => childFor(stream()),
+      spawn: () => childFor(),
     });
     await assert.rejects(
       () => launch('missing proof', { model: 'claude-opus-5-5', effort: 'low' }),
@@ -453,7 +525,7 @@ test('contradictory assistant transcript selection refuses a successful process 
       uuid: () => SESSION,
       spawn: (_executable, args) => {
         captureConfiguredSessionStart(args, path.join(projects, 'project-a', `${SESSION}.jsonl`));
-        return childFor(stream());
+        return childFor();
       },
     });
     await assert.rejects(
@@ -483,7 +555,7 @@ test('typed GSD launch applies --agent and proves it in SessionStart and agent-s
       spawn: (_executable, args) => {
         capturedArgs = args;
         captureConfiguredSessionStart(args, transcript, 'gsd-plan-checker');
-        return childFor(stream());
+        return childFor();
       },
     });
     const result = await launch('check the plan', {
@@ -527,7 +599,7 @@ test('typed GSD launch refuses when the transcript does not name the requested a
       env: { CLAUDE_CONFIG_DIR: path.join(root, 'claude') },
       spawn: (_executable, args) => {
         captureConfiguredSessionStart(args, transcript, 'gsd-plan-checker');
-        return childFor(stream());
+        return childFor();
       },
     });
     await assert.rejects(() => launch('check the plan', {
@@ -632,7 +704,7 @@ test('controller-owned host binds the native assistant transcript evidence', asy
       uuid: () => SESSION,
       spawn: (_executable, args) => {
         captureConfiguredSessionStart(args, path.join(projects, 'project-a', `${SESSION}.jsonl`));
-        return childFor(stream());
+        return childFor();
       },
       transcriptDir: null,
       sessionTranscriptRoot: projects,
