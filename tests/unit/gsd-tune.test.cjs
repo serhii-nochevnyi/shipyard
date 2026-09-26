@@ -182,6 +182,29 @@ test('GSD\'s two context-bound agents take the paid tier on the SAME terms as ou
   }
 });
 
+test('models.* is Claude-only (D-24): Codex proposes none of it, Claude still proposes all four', () => {
+  const claude = keyed(driftOf(project({}), ['--runtime', 'claude']));
+  for (const key of ['models.planning', 'models.execution', 'models.research', 'models.verification']) {
+    assert.ok(claude[key], key);
+  }
+  const codex = keyed(driftOf(project({}), ['--runtime', 'codex']));
+  for (const key of Object.keys(codex)) {
+    assert.ok(!key.startsWith('models.'), `${key}: models.* is Claude-only (D-24)`);
+  }
+});
+
+test('a Codex project already holding models.research is reported as ignored, never rewritten', () => {
+  const dir = project({ models: { research: 'inherit' } });
+  const report = run(dir, ['--runtime', 'codex']);
+  assert.ok(/models\.research/.test(report.stdout), report.stdout);
+  assert.ok(/ignored by Codex/.test(report.stdout), report.stdout);
+  const json = JSON.parse(run(dir, ['--runtime', 'codex', '--json']).stdout);
+  assert.deepEqual(json.codex_ignored_model_keys, ['models.research']);
+  run(dir, ['--runtime', 'codex', '--apply']);
+  assert.equal(readCfg(dir).models.research, 'inherit',
+    'a Claude-only key already in a Codex config survives --apply untouched');
+});
+
 test('only context-bound GSD agents get it — not the executor or the fixer', () => {
   // Same rule the conveyor applies to its own roles: those two work inside one
   // ticket's narrow scope, where a 1M window buys nothing and costs money.
@@ -550,7 +573,7 @@ test('nothing conveyor-shaped is ever written machine-wide', () => {
   for (const key of ['git', 'agent_skills', 'workflow']) {
     assert.equal(cfg[key], undefined, `${key} must not reach the global defaults`);
   }
-  assert.equal(cfg.models.planning, 'opus', 'but TIER settings do — they mean something on both runtimes');
+  assert.equal(cfg.models, undefined, 'models.* is Claude-only (D-24) and must not go machine-wide either');
   // model_overrides carries `fable`, which exists only on Claude, while this file
   // is read by the Codex install too. GSD said so itself during a real install:
   // "Codex agent gsd-code-reviewer model fable is not a valid Codex model …
@@ -606,6 +629,14 @@ test('NEITHER runtime gets model_overrides machine-wide', () => {
     const h = home({});
     runGlobal(h, ['--runtime', rt, '--apply']);
     assert.equal(globalCfg(h).model_overrides, undefined, rt);
+  }
+});
+
+test('NEITHER runtime gets models.* machine-wide either (D-24)', () => {
+  for (const rt of ['claude', 'codex']) {
+    const h = home({});
+    runGlobal(h, ['--runtime', rt, '--apply']);
+    assert.equal(globalCfg(h).models, undefined, rt);
   }
 });
 
