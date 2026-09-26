@@ -17,11 +17,11 @@ make install-shipyard-claude-hook
 make install-shipyard-capability
 ```
 
-Codex requires GSD and then the generated bundle:
+Codex uses its marketplace package and automatically installs the GSD plugin:
 
 ```bash
-npx --yes @opengsd/gsd-core@latest --codex --global
-make install-shipyard-codex
+make package-shipyard-codex
+node scripts/install-shipyard-marketplace.cjs codex --source "$PWD"
 ```
 
 The installers write only to the selected runtime homes. Set `CLAUDE_HOME`,
@@ -67,7 +67,9 @@ The conveyor has three layers:
    GSD's runtime converter and writes Codex-native skills, agents and payload.
 
 Codex artifacts are generated. Edit the Claude command or shared script first,
-then run `make install-shipyard-codex` and inspect the generated result.
+then run `make package-shipyard-codex` and inspect the generated result.
+The marketplace package under `plugins/shipyard` is generated; never edit its
+`host/` copy directly. GSD is a required marketplace dependency on both hosts.
 
 The deterministic scripts own decisions that can be computed: frontmatter
 parsing, graph validation, ticket and PR matching, state synchronization,

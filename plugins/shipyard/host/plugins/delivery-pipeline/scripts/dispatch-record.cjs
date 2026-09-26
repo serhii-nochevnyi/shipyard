@@ -1,0 +1,2071 @@
+#!/usr/bin/env node
+'use strict';
+
+// dispatch-record.cjs — the durable home for "this ticket is with an agent right
+// now".
+//
+//   dispatch-record.cjs mark  <ticket> <role> [--model <alias>] [--effort <level>]
+//                             [--effort-applied <level|unsupported|unknown>]
+//                             [--route <resolver route>]
+//                             [--task-level <level>] [--runtime <runtime>]
+//                             [--backend <backend>] [--observed-model <id>]
+//                             [--observed-effort <level>] [--agent-file <name>]
+//                             [--agent-id <launch id>] [--dispatch-id <id>]
+//                             [--graph <dir>]
+//   dispatch-record.cjs mark-many --stdin [--graph <dir>]
+//                             # JSON array of {ticket, role, ...mark fields}
+//   dispatch-record.cjs clear <ticket> <dispatch_id> [--graph <dir>]
+//   dispatch-record.cjs clear-many --stdin [--graph <dir>]
+//                             # JSON array of {ticket, dispatch_id}
+//   dispatch-record.cjs list  [--json]        [--graph <dir>]
+//
+// Why this exists. The front's vocabulary had no state for DISPATCHED AND
+// RUNNING, so a ticket handed to an agent was indistinguishable from one nobody
+// had touched: nothing is pushed yet, so state-sync — which reads GitHub — still
+// classifies it `execute`, and the stop gate then refuses a turn over work that
+// is already in flight. Measured five times in one session (3, 5, 6, 4 and 5
+// items), across BOTH owners, every one verified in flight before it was
+// reported.
+//
+// It is wrong by construction rather than by accident: deliver.md tells the run
+// to post the guard and NOT wait for it, so `fix`/`finalize`/`merge` are
+// dispatched BY DESIGN. A run that follows the documented protocol therefore
+// mis-reports the guard's buckets on every healthy round. The evidence of a
+// dispatch lived only in the orchestrator's session, which is exactly the kind of
+// fact this conveyor has repeatedly learned not to keep there (`--parked` →
+// escalation-record, the drift verdict → drift.json).
+//
+// EXPIRY IS THE WHOLE DESIGN, and it has TWO independent triggers because either
+// alone leaves a hole. A record that never lifted would hide a ticket the next
+// run must pick up — trading a spurious block for a SILENT STALL, which is the
+// worse of the two outcomes and the one this store must never produce:
+//
+//   1. THE OWNER'S OUTPUT EXISTS. The dispatch is a claim that an agent is
+//      PRODUCING something; the moment that output appears in delivery state — a
+//      branch or a PR for an executor, a new head for a fixer, a gate trailer for
+//      arch-review, a merge or a retarget for the guard — the dispatch has done
+//      its job and the board owns the ticket again.
+//
+//      It used to be bound to escalation-record's shared `fingerprint`, which
+//      hashes the CHECK TALLIES: a guard's dispatch therefore expired the moment
+//      ANY check finished, which is minutes after the fixer was handed the work
+//      and long before it has pushed. The front re-offered the PR, the stop gate
+//      blocked over it, and a second fixer could be dispatched at the same PR
+//      (ADR-002 A1/D1). "The PR moved" is not one fact: three stores needed three
+//      meanings of it, so each owns its own — `dispatchFingerprint` below, keyed
+//      by ROLE, and no role's fields include a tally. The shared hash is still
+//      imported, for records written before the split.
+//   2. A TTL, so a killed session cannot park a ticket forever. See below.
+//
+// Neither needs a second command to remember, which is the property that makes
+// this safe to write from a loop that may not survive to clean up after itself.
+
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const crypto = require('crypto');
+const { withLock, lockDirFor, writeAtomic } = require(path.join(__dirname, 'lock.cjs'));
+// Only for records written before this store had its own per-role rule; see
+// `activeDispatches`. Never reimplemented, so a legacy record is read with exactly
+// the hash it was written with.
+const { fingerprint } = require(path.join(__dirname, 'escalation-record.cjs'));
+// One role vocabulary for the whole conveyor: the same names `pipeline-config.cjs
+// model <role>` resolves a model for. A dispatch filed under a name the ladder
+// does not know is a record whose owner nobody can identify.
+//
+// TIERS and EFFORTS come from the SAME module for the same reason: the recorder
+// validates against the ladder's own vocabulary, never a copy of it, or a tier
+// added there would be refused here by a list nobody remembered to update.
+// `parseRoute` for the same reason again: the route the journal records is the
+// RESOLVER's, so it is validated against the resolver's own grammar rather than a
+// regex copied over here — the drift `CODEX_DEEP_ROLES` already paid for.
+const {
+  ROLES, TIERS, EFFORTS, TASK_LEVELS, parseRoute, resolveModel, resolveEffort,
+  resolveTaskLevel, routeOf, tierAllowedForRuntime, loadConfig,
+} = require(path.join(__dirname, 'pipeline-config.cjs'));
+const {
+  CODEX_STATIC_ROLES, CODEX_ROLE_RUNG_DEFINITIONS, codexAgentFile, variantSuffix,
+} = require(path.join(__dirname, 'model-policy.cjs'));
+const { activeTrackerSnapshotLocked } = require(path.join(__dirname, 'tracker-record.cjs'));
+const runTelemetry = require(path.join(__dirname, 'run-telemetry.cjs'));
+
+// HOW LONG A DISPATCH MAY STAY SILENT — the backstop, not the main rule. It only
+// has to cover the longest stretch of REAL work that legitimately moves no
+// delivery state at all, because anything that moves state expires by trigger 1
+// long before this.
+//
+// Measured from this repo's own delivery journal rather than rounded to a
+// comfortable number. The longest observed dispatch→publish stretch is one
+// executor wave: phase 21 wave 1 opened its PRs at 13:52 and wave 2 (dispatched
+// off that board) opened at 14:29 — 37 minutes with nothing pushed in between.
+// Phase 20 gives 29 minutes for the same span, phase 22 gives 14. The longest
+// PR LIFETIME in the same journal is 135 minutes (T-21-02), but every minute of
+// that moves checks, drafts or review decisions, so trigger 1 has already fired.
+// 90 minutes is ~2.4x the worst silent stretch on record — enough that a slow
+// wave is never dropped mid-flight, short enough that a session killed at
+// midnight is not still hiding its tickets at 02:00.
+const TTL_RAW = Number(process.env.SHIPYARD_DISPATCH_TTL_MS || 90 * 60 * 1000);
+// Garbage in the env var must not disable the backstop: NaN poisons every
+// comparison into "never expired", which is precisely the silent stall.
+const DISPATCH_TTL_MS = Number.isFinite(TTL_RAW) && TTL_RAW > 0 ? TTL_RAW : 90 * 60 * 1000;
+
+// WHAT EACH ROLE'S OUTPUT LOOKS LIKE IN DELIVERY STATE — one table, because the
+// per-role rule and the per-role sentence on the board must not be able to
+// disagree, and because everything the skills are told to "decide" that can be
+// computed belongs in a script.
+//
+// Keyed by the ladder's own role names (`ROLES`, the vocabulary `mark` already
+// validates against), so a role added there cannot silently inherit a list that
+// describes somebody else's output; tests/unit/dispatch-record.test.cjs iterates
+// ROLES and fails if one has no entry. `checks.*` appears in NO entry, by design
+// and by test — a tally is the pipeline moving, never an agent's output.
+//
+// `head_sha` is recorded by state-sync from T-24-04 on. Absent, it hashes as null
+// on both sides, so a fixer dispatched before it exists expires on status/pr and
+// on the TTL exactly as it did — graceful by construction, no special case.
+const DISPATCH_SUBJECT = {
+  // The main loop's own: nothing is pushed when the work is handed over, so the
+  // first branch or PR to appear IS the output.
+  executor: { fields: ['status', 'pr', 'branch'], lifts: 'a branch or a PR appears' },
+  // A fixer's whole product is a new commit on the PR. Before head_sha existed
+  // its push was visible only as status/pr, which is why both are still here.
+  'ci-fix': { fields: ['head_sha', 'status', 'pr'], lifts: "the PR's head moves (a push)" },
+  'review-fix': { fields: ['head_sha', 'status', 'pr'], lifts: "the PR's head moves (a push)" },
+  // A judge writes a verdict into the PR body (`gate_status:`) and may undraft.
+  'arch-review': { fields: ['gate', 'draft', 'status'], lifts: 'the gate trailer or the draft state changes' },
+  // The guard's output is a merge, or the retarget that follows one.
+  'pr-sentinel': { fields: ['status', 'pr_base', 'pr'], lifts: 'the PR merges, or its base moves' },
+  integrator: {
+    fields: ['status', 'pr', 'pr_base', 'gate', 'draft'],
+    lifts: 'the integration PR appears, its gate changes, or it lands',
+  },
+  // Neither leaves a mark in delivery state at all — a drift verdict goes to
+  // drift.json, research to a document — so in practice the TTL is what returns
+  // these. Any motion of the ticket still counts, and no tally does.
+  'drift-check': { fields: ['status', 'pr', 'branch'], lifts: "the ticket's status, PR or branch changes" },
+  research: { fields: ['status', 'pr', 'branch'], lifts: "the ticket's status, PR or branch changes" },
+};
+
+// A role the table does not know keeps the executor's list: motion of the ticket
+// itself, no tallies. It must never be the shared hash again.
+const DEFAULT_SUBJECT = DISPATCH_SUBJECT.executor;
+
+const subjectOf = (role) => DISPATCH_SUBJECT[role] || DEFAULT_SUBJECT;
+
+// ── WHAT THE DISPATCH DECIDED, recorded beside WHO holds the ticket ──────────
+//
+// The record used to carry `role` and nothing about the model, so the journal
+// could say a judge was dispatched 196 times and not once what it ran at. Every
+// row of the ladder was therefore adopted on reasoning, and no revision of it
+// could be better than the reasoning until these fields existed.
+//
+// Every one is OPTIONAL and every one is written ONLY when the caller passes it.
+// There is no default, no inference and no fallback to a session setting: an
+// omitted flag writes NO KEY AT ALL, because absence here means UNMEASURED and a
+// `null` would read as a measured unknown. The same discipline the conveyor
+// applies to `landed`, `checks` and `unresolved` — positive evidence before a
+// mutation, and writing a fact IS the mutation.
+//
+// `effort` and `effort_applied` are TWO CLAIMS and must never be collapsed into
+// one:
+//   * `--effort` is what the RESOLVER decided (`pipeline-config.cjs model … --json`);
+//   * `--effort-applied` is what the SPAWN could actually carry, and only the
+//     Workflow path can: `agent()` takes an effort, the Agent tool has no such
+//     parameter, so an Agent-dispatched judge runs at the SESSION's own effort
+//     whatever the ladder chose. Recording the resolved value as applied would
+//     poison the very evidence these fields exist to collect — a later review
+//     would compare rows that were never in force against rows that were.
+// So the Agent path omits `--effort-applied`, its absence means "nobody measured
+// this", and the recorder must not helpfully fill it in from the other flag.
+const MARK_FLAGS = [
+  'model', 'effort', 'effort-applied', 'route', 'task-level', 'runtime', 'backend',
+  'observed-model', 'observed-effort', 'agent-file', 'agent-id', 'dispatch-id',
+  'boundary-store', 'run-id', 'account-scope', 'treatment-id', 'arm', 'policy-id',
+  'policy-version', 'policy-hash',
+];
+
+// ── `reason` is the RESOLVER's route, never the caller's sentence ────────────
+//
+// The field shipped as `--reason <text>` and deliver.md claimed the text was
+// "the branch the resolver already returned". It was not: the resolver returned
+// `{model, effort}` and named the route only on stderr, as prose — so what landed
+// in the journal was the caller's READING of the ladder, in whatever words that
+// caller chose. One field then held two provenances, and the field exists for
+// exactly one purpose: to make a later review of the ladder cheap by counting
+// rows. Two vocabularies cannot be counted (ADR-006 D5).
+//
+// So the flag is refused rather than merged, with its own branch and its own
+// message — dropping it from MARK_FLAGS alone would report it as an "unexpected
+// argument", which names neither the replacement nor where the value comes from.
+const REFUSED_FLAGS = {
+  reason: 'a hand-composed reason is not the ladder\'s answer, it is the caller\'s reading of it, and one\n' +
+    '  field cannot hold both provenances and still be countable.\n' +
+    '  The route comes from the resolver: `pipeline-config.cjs model <role> --json [flags]` now returns\n' +
+    '  a `route` field beside the pair — pass THAT, verbatim, as `--route "<route>"`.',
+};
+// Flag name → the key written into the record and the journal line. The query in
+// deliver.md reads these names, so they are the field vocabulary, not an
+// implementation detail.
+const MARK_FIELD = {
+  model: 'model',
+  effort: 'effort',
+  'effort-applied': 'effort_applied',
+  // The KEY stays `reason`: two journal rows already carry it and deliver.md's
+  // ladder query reads it by that name. What changed is where the value comes
+  // from, not what a reader greps for.
+  route: 'reason',
+  'task-level': 'task_level',
+  runtime: 'runtime',
+  backend: 'backend',
+  'observed-model': 'observed_model',
+  'observed-effort': 'observed_effort',
+  'agent-file': 'agent_file',
+  'agent-id': 'agent_id',
+  'dispatch-id': 'dispatch_id',
+  'boundary-store': 'boundary_store',
+  'run-id': 'run_id',
+  'account-scope': 'account_scope',
+  'treatment-id': 'treatment_id',
+  arm: 'arm',
+  'policy-id': 'policy_id',
+  'policy-version': 'policy_version',
+  'policy-hash': 'policy_hash',
+};
+
+// Boundary resolutions use the generated file's physical name, while this
+// recorder's public schema names the corresponding Codex agent without its
+// `.toml` extension. Keep that projection at the reconciliation boundary so
+// both caller comparison and legacy storage speak the recorder's vocabulary.
+function recorderAgentFile(agentFile) {
+  return typeof agentFile === 'string' ? agentFile.replace(/\.toml$/, '') : agentFile;
+}
+
+// A reconciled receipt must remain current until the dispatch record itself is
+// atomically written. The boundary recorder's fenced claim is the shared lease
+// with repairs: while this holder owns it, another repair cannot consume the
+// receipt between reconciliation and the dispatch-record mutation.
+const RECONCILIATION_CLAIM = Symbol('reconciliation claim');
+const ACTIVE_RECONCILIATION_LEASES = new Set();
+let reconciliationExitHandlerInstalled = false;
+
+function newReconciliationConsumerId() {
+  const uniqueId = typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID()
+    : crypto.randomBytes(16).toString('hex');
+  return `dispatch-record:${process.pid}:${uniqueId}`;
+}
+
+function errorMessage(error) {
+  return error && typeof error.message === 'string' && error.message
+    ? error.message
+    : String(error);
+}
+
+function warnReconciliationReleaseFailure(subject, error) {
+  process.stderr.write(
+    `dispatch-record: warning — ${subject} was durably recorded and journalled, ` +
+    `but the boundary receipt claim could not be released (${errorMessage(error)}). ` +
+    'Do not retry solely because of this warning; the claim remains fenced until it is released or expires.\n'
+  );
+}
+
+function installReconciliationExitHandler() {
+  if (reconciliationExitHandlerInstalled) return;
+  reconciliationExitHandlerInstalled = true;
+  // `fail()` exits the CLI directly, so a later malformed item in mark-many
+  // would otherwise strand an earlier item's lease until its TTL. Exit handlers
+  // are synchronous; release the same fenced claims before the process leaves.
+  process.on('exit', () => {
+    for (const lease of [...ACTIVE_RECONCILIATION_LEASES]) {
+      try { releaseReconciliationClaim({ [RECONCILIATION_CLAIM]: lease }); } catch (_) { /* lease TTL remains the backstop */ }
+    }
+  });
+}
+
+function releaseReconciliationClaim(decided) {
+  const lease = decided && decided[RECONCILIATION_CLAIM];
+  if (!lease || lease.released) return;
+  const released = lease.recorder.release(lease.dispatchId, lease.consumerId, lease.claim);
+  if (!released || !released.released) {
+    throw new Error('boundary receipt claim could not be released after recording');
+  }
+  lease.released = true;
+  ACTIVE_RECONCILIATION_LEASES.delete(lease);
+}
+
+function releaseReconciliationClaims(decidedRecords) {
+  for (const decided of decidedRecords) releaseReconciliationClaim(decided);
+}
+
+function withReconciliationClaims(decidedRecords, callback) {
+  const leases = decidedRecords
+    .map((decided) => decided && decided[RECONCILIATION_CLAIM])
+    .filter(Boolean);
+  const commit = (index) => {
+    if (index >= leases.length) return callback();
+    const lease = leases[index];
+    if (typeof lease.recorder.withClaim === 'function') {
+      const result = lease.recorder.withClaim(
+        lease.dispatchId,
+        lease.consumerId,
+        lease.claim,
+        () => commit(index + 1),
+      );
+      if (!result || result.committed !== true) {
+        throw new Error('boundary receipt claim was lost before the dispatch record commit');
+      }
+      return result.value;
+    }
+    // In-process compatibility recorders have no cross-process takeover path,
+    // but renew when they expose one so their callers still get a positive
+    // ownership check immediately before the graph mutation.
+    if (typeof lease.recorder.renewClaim === 'function') {
+      const renewed = lease.recorder.renewClaim(lease.dispatchId, lease.consumerId, lease.claim);
+      if (!renewed || renewed.renewed !== true) {
+        throw new Error('boundary receipt claim was lost before the dispatch record commit');
+      }
+    }
+    return commit(index + 1);
+  };
+  return commit(0);
+}
+
+// ── WHO holds it, not just WHAT it is (ADR-007 D1) ───────────────────────────
+//
+// The record named the ROLE and nothing about the agent, and `front.cjs` then
+// collapsed a guard's N records to one agent by adding that role string to a Set.
+// Two guards are legitimate — `deliver.md` tells the run to re-post one for PRs
+// opened after the first started — so two of them counted as one, and the
+// reported board was `max=4, in_flight=3, free=1` with four agents genuinely
+// out: an authorisation to spend past the cap, which is not a cap.
+//
+// So the dispatch carries the identity of the agent holding it: the id the LAUNCH
+// returned (the Workflow tool a task id, the Agent tool an agent id), passed
+// verbatim. That provenance rule is `--route`'s, for the same reason — a value
+// the caller composes and a value the mechanism returned cannot share one field
+// and stay countable. A hand-typed label is the ONE way this field can make the
+// count wrong (two guards under one name read as one agent), and no validation
+// can catch it, so the refusal below says so and deliver.md says so too.
+//
+// It is OPTIONAL like every other decided field, and its absence is not an error:
+// an older store must still read, and `agentsInFlight` counts a record with no
+// identity as its own agent — unknown resolves UPWARD wherever the answer is a
+// budget to spend. That is why the refusal tells a caller with no id to OMIT the
+// flag rather than invent one: an anonymous record over-counts (a stall), an
+// invented one under-counts (a spend), and only the second is unsafe.
+const AGENT_ID_MAX = 200;
+
+// ONE rule for "is this string safe to hold as an agent identity", read by both
+// the write path (mark, below) and the read path (`agentIdOf`, near the bottom).
+// Two copies of this check would be free to disagree about a hand-edited or
+// pre-validation record, and `front.cjs`'s Set key relies on the invariant this
+// enforces — no whitespace or control character in either half of the joined
+// `role\u0000identity` key — holding for every record it ever reads, not only
+// ones this script itself wrote.
+function agentIdSafetyIssue(id) {
+  if (typeof id !== 'string') return 'it is not a string';
+  if (id.trim() === '') return 'it is blank';
+  if (/[\s\u0000-\u001f\u007f]/.test(id)) {
+    return 'it contains whitespace or a control character, so two spellings of one id would count as two agents';
+  }
+  if (id.length > AGENT_ID_MAX) return `it is longer than ${AGENT_ID_MAX} characters, which no launch id is`;
+  return null;
+}
+
+// Requested/applied/observed reconciliation is useful only when the extra
+// fields have stable vocabularies. Model ids are intentionally opaque because
+// Codex can expose a new concrete id before GSD's catalog knows it; the safety
+// check only protects the JSONL line and keeps whitespace from creating two
+// spellings of one value.
+const DISPATCH_RUNTIMES = new Set(['claude', 'codex']);
+const DISPATCH_BACKENDS = new Set(['agent', 'workflow', 'inline', 'codex-agent']);
+function opaqueDispatchValueIssue(value) {
+  if (typeof value !== 'string') return 'it is not a string';
+  if (value.trim() === '') return 'it is blank';
+  if (/[\s\u0000-\u001f\u007f]/.test(value)) return 'it contains whitespace or a control character';
+  if (value.length > AGENT_ID_MAX) return `it is longer than ${AGENT_ID_MAX} characters`;
+  return null;
+}
+
+// ── the Codex half: which FILE was invoked ───────────────────────────────────
+//
+// An agent on Codex is a static `.toml`, so the dispatch's real decision is the
+// exact file generated for the canonical policy rung. Recording the role alone
+// loses the distinction between base, alternatives, repeat and ceiling work.
+//
+// Keep this reader on the policy module that the generator and bundle validator
+// already use. Requiring the repository-level generator from this plugin would
+// fail once the plugin is installed without the repository checkout beside it.
+// The installed agents directory is still checked below: policy names alone do
+// not prove that the selected file exists on this host.
+const CODEX_AGENT_PREFIX = 'shipyard-';
+const CODEX_DEEP_SUFFIX = variantSuffix('ci-fix', 'repeat_exhausted');
+const CODEX_CRITICAL_SUFFIX = variantSuffix('arch-review', 'critical');
+
+const agentRoleName = (role) => codexAgentFile(role, 'base')
+  .replace(new RegExp(`^${CODEX_AGENT_PREFIX}`), '')
+  .replace(/\.toml$/, '');
+
+const rolesWithVariantSuffix = (suffix) => new Set(
+  CODEX_STATIC_ROLES
+    .filter((role) => CODEX_ROLE_RUNG_DEFINITIONS[role]
+      .some((rung) => variantSuffix(role, rung.name) === suffix))
+    .map(agentRoleName)
+);
+
+// Compatibility views retained for callers that group the generated names by
+// suffix. They are derived from the same canonical rung metadata as
+// `agentFilesFor`: only ci-fix/review-fix have a deep recovery file, while the
+// critical set includes research, integrator and arch-review. In particular,
+// the emitted integrator-critical file cannot be omitted or replaced by a
+// retired fixed-role recovery name.
+const CODEX_DEEP_ROLES = rolesWithVariantSuffix(CODEX_DEEP_SUFFIX);
+const CODEX_CRITICAL_ROLES = rolesWithVariantSuffix(CODEX_CRITICAL_SUFFIX);
+
+// The ladder's roles and the generated agent files are NOT one-to-one, and the
+// cross-check below is wrong in both directions if it assumes they are:
+//
+//   * `research`'s reference ships as `inv-research.md` — the investigation loop's
+//     own name — so the file a research dispatch runs is `shipyard-inv-research`;
+//   * `executor` has NO agent file at all. There is no `executor.md` for the
+//     generator to emit one from, because an executor is dispatched by the main
+//     loop rather than by a `.toml`. So `--agent-file` on an executor mark cannot
+//     name a file anybody can look at, whatever the value.
+//
+// `agentFilesFor` enumerates every canonical rung and intersects it with the
+// files that actually exist, so a policy variant added or renamed changes this
+// contract in one place. The unit contract pins that every shipped file is
+// claimed by exactly one static role.
+
+function agentFilesFor(role, known) {
+  if (!CODEX_STATIC_ROLES.includes(role)) return new Set();
+  const candidates = CODEX_ROLE_RUNG_DEFINITIONS[role].map((rung) =>
+    codexAgentFile(role, rung.name).replace(/\.toml$/, '')
+  );
+  return new Set(candidates.filter((f) => known.has(f)));
+}
+
+function codexAgentDir(env = process.env) {
+  return path.resolve(
+    env.SHIPYARD_CODEX_AGENT_DIR
+      || env.CODEX_HOME && path.join(env.CODEX_HOME, 'agents')
+      || path.join(os.homedir(), '.codex', 'agents')
+  );
+}
+
+function codexAgentFiles(dir = codexAgentDir()) {
+  let refs;
+  try { refs = fs.readdirSync(dir); } catch { return null; }
+  const out = new Set();
+  for (const f of refs) {
+    if (!f.endsWith('.toml') || !f.startsWith(CODEX_AGENT_PREFIX)) continue;
+    out.add(f.slice(0, -5));
+  }
+  return out;
+}
+
+/**
+ * The `mark` flags, in ONE left-to-right pass — gate-trailer.cjs's shape, for the
+ * holes it already paid for:
+ *
+ *   * an argument outside the list is REFUSED rather than ignored, because a
+ *     mis-typed `--modle opus` does not fail, it records a dispatch with no model
+ *     at all — the silent omission this whole ticket exists to end;
+ *   * a DUPLICATE is refused: `indexOf` takes the first, so the later value would
+ *     be dropped in silence and the record would name a model the spawn did not
+ *     get;
+ *   * the arity lives in the loop that consumes it, so a flag with no value is
+ *     reported against THAT flag instead of mis-blaming its neighbour's value.
+ *
+ * Values are validated here, before anything is written: a mis-spelled alias
+ * recorded silently is worse than no field, because it would be counted later as
+ * fact.
+ */
+function parseMarkFlags(argv, role, ticket, projectRoot = process.cwd()) {
+  const given = new Map();
+  for (let i = 0; i < argv.length;) {
+    const arg = String(argv[i]);
+    const name = arg.startsWith('--') ? arg.slice(2) : null;
+    if (name !== null && Object.prototype.hasOwnProperty.call(REFUSED_FLAGS, name)) {
+      fail(`--${name} is no longer accepted — ${REFUSED_FLAGS[name]}`);
+    }
+    if (name === null || !MARK_FLAGS.includes(name)) {
+      fail(
+        `unexpected argument "${arg}" — the recorder would drop it in silence, and a dispatch ` +
+        'recorded without its model is the gap this store exists to close.\n' +
+        `  flags: ${MARK_FLAGS.map((f) => `--${f}`).join(', ')}`
+      );
+    }
+    if (given.has(name)) {
+      fail(`--${name} given more than once — the later value would be silently dropped; pass it once`);
+    }
+    const v = argv[i + 1];
+    if (v === undefined || String(v).startsWith('--')) fail(`--${name} needs a value`);
+    given.set(name, String(v));
+    i += 2;
+  }
+
+  // ADR-014 writes reconcile a dispatch id against boundary-owned storage.
+  // A store without its id cannot identify a receipt, so reject it before
+  // opening the store (and before a partial record can be written).
+  if (given.has('boundary-store') && !given.has('dispatch-id')) {
+    fail(
+      'a reconciled dispatch requires both --boundary-store and --dispatch-id; ' +
+      'the dispatch id must name the receipt the boundary recorded after launch.'
+    );
+  }
+  // The legacy flags below remain readable historical telemetry. They cannot
+  // populate applied_* or mint an application_receipt by themselves.
+  if (given.has('boundary-store')) {
+    let lease = null;
+    try {
+      const { createDurableRecorder, createDispatchBoundary } = require('./dispatch-boundary.cjs');
+      const storeDir = given.get('boundary-store');
+      if (!storeDir.trim() || !fs.statSync(storeDir).isDirectory()) throw new Error('boundary store must exist');
+      const recorder = createDurableRecorder(storeDir);
+      const dispatchId = given.get('dispatch-id');
+      const consumerId = newReconciliationConsumerId();
+      const claim = recorder.claim(dispatchId, consumerId);
+      if (!claim || !claim.claimed) {
+        throw new Error('boundary receipt is currently claimed by another repair or recorder');
+      }
+      lease = { recorder, dispatchId, consumerId, claim, released: false };
+      ACTIVE_RECONCILIATION_LEASES.add(lease);
+      installReconciliationExitHandler();
+      const facts = createDispatchBoundary({ recorder })
+        .reconcile(given.get('dispatch-id'), { ticket });
+      if (facts.role !== role) throw new Error('boundary receipt role contradicts the dispatch role');
+      for (const field of ['dispatch_id', 'launch_id']) {
+        const issue = opaqueDispatchValueIssue(facts[field]);
+        if (issue) throw new Error(`boundary receipt ${field} cannot be recorded: ${issue}`);
+      }
+      // ADR-014 resolves concrete provider IDs and a boundary-native route.
+      // The dispatch journal predates that vocabulary: its model/reason fields
+      // are compatibility projections consumed by pipeline-stats. Preserve the
+      // boundary facts in their own fields while deriving those legacy fields
+      // from the same role/signals using the existing legacy resolver and the
+      // project/runtime configuration that owns this graph. Without this load,
+      // a configured effort or model ladder could make the compatibility fields
+      // describe a different policy than the dispatch being reconciled.
+      const loaded = loadConfig(projectRoot, { runtime: facts.runtime });
+      if (!loaded.valid) {
+        throw new Error(
+          `project model configuration is invalid (${loaded.error && loaded.error.relative || loaded.file}); ` +
+          'refusing to write a compatibility projection'
+        );
+      }
+      const legacyConfig = loaded.config;
+      const legacyModel = resolveModel(facts.role, facts.signals, legacyConfig);
+      const legacyEffort = resolveEffort(facts.role, legacyModel, legacyConfig, facts.signals);
+      const legacyRoute = routeOf(facts.role, facts.signals, legacyConfig);
+      const legacyTaskLevel = resolveTaskLevel(facts.role, facts.signals, legacyConfig);
+      if (facts.task_level !== legacyTaskLevel) {
+        throw new Error('boundary task level does not match the resolver projection');
+      }
+      const aliases = {
+        model: legacyModel, effort: legacyEffort,
+        'effort-applied': facts.applied_effort, route: legacyRoute,
+        'task-level': facts.task_level,
+        runtime: facts.runtime, backend: facts.backend,
+        'observed-model': facts.observed_model, 'observed-effort': facts.observed_effort,
+        'agent-file': recorderAgentFile(facts.agent_file), 'agent-id': facts.launch_id,
+        'run-id': facts.session_handoff && facts.session_handoff.run_id,
+        'account-scope': facts.account_scope,
+        'treatment-id': facts.treatment_id,
+        arm: facts.arm,
+        'policy-id': facts.policy_id,
+        'policy-version': facts.policy_version,
+        'policy-hash': facts.policy_hash,
+      };
+      if (facts.session_handoff !== undefined) {
+        const handoff = facts.session_handoff;
+        if (!handoff || typeof handoff !== 'object' || Array.isArray(handoff)
+            || typeof handoff.scope_id !== 'string' || !handoff.scope_id
+            || typeof handoff.run_id !== 'string' || !handoff.run_id
+            || !Number.isInteger(handoff.epoch) || handoff.epoch < 1) {
+          throw new Error('boundary receipt session handoff evidence is malformed');
+        }
+      }
+      for (const [flag, value] of given) {
+        if (['boundary-store', 'dispatch-id'].includes(flag)) continue;
+        if (!Object.prototype.hasOwnProperty.call(aliases, flag) || aliases[flag] !== value) {
+          throw new Error(`--${flag} contradicts or is absent from the boundary receipt`);
+        }
+      }
+      const decided = { ...facts, agent_file: recorderAgentFile(facts.agent_file),
+        model: legacyModel, effort: legacyEffort, effort_applied: facts.applied_effort,
+        reason: legacyRoute, agent_id: facts.launch_id };
+      if (facts.session_handoff && facts.session_handoff.run_id) decided.run_id = facts.session_handoff.run_id;
+      Object.defineProperty(decided, RECONCILIATION_CLAIM, { value: lease });
+      return decided;
+    } catch (error) {
+      if (lease) {
+        try { releaseReconciliationClaim({ [RECONCILIATION_CLAIM]: lease }); } catch (_) { /* preserve the refusal */ }
+      }
+      fail(`boundary receipt reconciliation failed: ${errorMessage(error)}`);
+    }
+  }
+  const decided = {};
+  const model = given.get('model');
+  if (model !== undefined) {
+    if (!TIERS.includes(model)) {
+      fail(
+        `"${model}" is not a tier alias — a model recorded by a name nothing resolves would be read ` +
+        'later as fact.\n' +
+        `  tiers: ${TIERS.join(', ')}`
+      );
+    }
+    decided.model = model;
+  }
+  for (const flag of ['effort', 'effort-applied']) {
+    const level = given.get(flag);
+    if (level === undefined) continue; // absent stays absent — never filled in from its twin
+    const evidenceState = flag === 'effort-applied' && ['unknown', 'unsupported'].includes(level);
+    if (!EFFORTS.includes(level) && !evidenceState) {
+      fail(
+        `"${level}" is not an effort level or applied-effort state — --${flag} would record a depth ` +
+        'nothing ran at.\n' +
+        `  efforts: ${EFFORTS.join(', ')}; applied states: unsupported, unknown`
+      );
+    }
+    decided[MARK_FIELD[flag]] = level;
+  }
+  const taskLevel = given.get('task-level');
+  if (taskLevel !== undefined) {
+    if (!TASK_LEVELS.includes(taskLevel)) {
+      fail(
+        `"${taskLevel}" is not a task level — --task-level would make the dispatch impossible to compare.\n` +
+        `  task levels: ${TASK_LEVELS.join(', ')}`
+      );
+    }
+    decided.task_level = taskLevel;
+  }
+  const runtime = given.get('runtime');
+  if (runtime !== undefined) {
+    if (!DISPATCH_RUNTIMES.has(runtime)) {
+      fail(`"${runtime}" is not a supported dispatch runtime — runtimes: ${[...DISPATCH_RUNTIMES].join(', ')}`);
+    }
+    decided.runtime = runtime;
+  }
+  const backend = given.get('backend');
+  if (backend !== undefined) {
+    if (!DISPATCH_BACKENDS.has(backend)) {
+      fail(`"${backend}" is not a dispatch backend — backends: ${[...DISPATCH_BACKENDS].join(', ')}`);
+    }
+    decided.backend = backend;
+  }
+  for (const flag of ['observed-model']) {
+    const observed = given.get(flag);
+    if (observed === undefined) continue;
+    const why = opaqueDispatchValueIssue(observed);
+    if (why !== null) fail(`--${flag} ${JSON.stringify(observed)} cannot be recorded: ${why}`);
+    decided[MARK_FIELD[flag]] = observed;
+  }
+  const observedEffort = given.get('observed-effort');
+  if (observedEffort !== undefined) {
+    if (!['unknown', 'unsupported'].includes(observedEffort) && !EFFORTS.includes(observedEffort)) {
+      fail(
+        `"${observedEffort}" is not an observed effort level — observed values: unknown, unsupported, ${EFFORTS.join(', ')}`
+      );
+    }
+    decided.observed_effort = observedEffort;
+  }
+  // The agent's identity. Opaque by nature — a launch id has no vocabulary to
+  // check against, and inventing an allowlist for one is the mistake this repo
+  // refused for Codex model ids (an unknown id cannot be told from a new one).
+  // So only what cannot be COMPARED or JOURNALLED is refused: nothing, blank,
+  // whitespace or a control character inside (two spellings of one id would count
+  // as two agents, and a newline would break the journal into two lines), and an
+  // absurd length. Everything else is stored exactly as passed.
+  const agentId = given.get('agent-id');
+  if (agentId !== undefined) {
+    // The SAME predicate `agentIdOf` reads back with, so a value accepted here
+    // can never later fail that check -- and a hand-edited or pre-validation
+    // record that would NOT pass this check is exactly the one `agentIdOf`
+    // must refuse to trust when reading it back.
+    const why = agentIdSafetyIssue(agentId);
+    if (why !== null) {
+      // Echoed via JSON.stringify, never raw interpolation: an id refused
+      // BECAUSE it holds a newline or control character must not then inject
+      // that same newline or control character into this stderr message.
+      fail(
+        `--agent-id ${JSON.stringify(agentId)} cannot identify an agent: ${why}.\n` +
+        '  Pass the id the LAUNCH returned, verbatim — the Workflow tool returns a task id, the Agent tool an\n' +
+        '  agent id — and never a label you compose: two guards recorded under one hand-typed name count as\n' +
+        '  ONE agent, and the cap then authorises a spend past itself.\n' +
+        '  Holding no id at all, OMIT the flag: an unidentified record counts as its own agent, which is the\n' +
+        '  safe direction.'
+      );
+    }
+    decided.agent_id = agentId;
+  }
+  // This id is generated when the record is written, so callers do not have to
+  // invent a correlation key before a launch exists. Accept an explicit value
+  // for orchestrators that already have one, but keep it opaque and safe for the
+  // JSONL journal. The id is separate from agent_id: one agent can own several
+  // ticket dispatches in a wave, while every dispatch needs its own usage join.
+  const dispatchId = given.get('dispatch-id');
+  if (dispatchId !== undefined) {
+    const why = opaqueDispatchValueIssue(dispatchId);
+    if (why !== null) fail(`--dispatch-id ${JSON.stringify(dispatchId)} cannot be recorded: ${why}`);
+    decided.dispatch_id = dispatchId;
+  }
+  for (const flag of ['run-id', 'account-scope', 'treatment-id', 'policy-id', 'policy-version', 'policy-hash']) {
+    const value = given.get(flag);
+    if (value === undefined) continue;
+    const why = opaqueDispatchValueIssue(value);
+    if (why !== null) fail(`--${flag} ${JSON.stringify(value)} cannot be recorded: ${why}`);
+    decided[MARK_FIELD[flag]] = value;
+  }
+  if (given.has('arm')) {
+    const arm = given.get('arm');
+    if (!['baseline', 'treatment'].includes(arm)) fail(`--arm must be baseline or treatment, got ${JSON.stringify(arm)}`);
+    decided.arm = arm;
+  }
+  // The RESOLVER's route, checked against the resolver's own grammar and then
+  // against the pair recorded beside it. The grammar check is what stops a
+  // sentence being posted through the new flag; the pair check is what stops a
+  // route from a DIFFERENT dispatch — a copy-paste from the round before, or from
+  // another role's resolve — describing this one. Both are cheap, and a journal
+  // whose provenance field describes the wrong decision is worse than one with no
+  // provenance field at all.
+  const route = given.get('route');
+  if (route !== undefined) {
+    const parsed = parseRoute(route);
+    if (!parsed) {
+      fail(
+        `--route "${route}" is not a resolver route — it is the \`route\` field of\n` +
+        '  `pipeline-config.cjs model <role> --json [flags]`, passed verbatim, e.g.\n' +
+        '  --route "tier=floor(opus) effort=row(high)". A sentence about the ladder is what this\n' +
+        '  field used to hold, and what it can no longer be counted with.'
+      );
+    }
+    // `--effort-applied` is deliberately NOT cross-checked: it is what the SPAWN
+    // could carry, and on the Agent path that is legitimately a different number
+    // from what the resolver decided. Checking it would refuse exactly the honest
+    // dispatches T-25-05 built the two fields to tell apart.
+    if (decided.model !== undefined && parsed.tier.model !== decided.model) {
+      fail(
+        `--route names tier "${parsed.tier.model}" and --model says "${decided.model}" — one of them is from\n` +
+        '  another dispatch. Re-run the resolver for THIS role and its signals, and pass the model and\n' +
+        '  the route it returned together.'
+      );
+    }
+    if (decided.effort !== undefined && parsed.effort.effort !== decided.effort) {
+      fail(
+        `--route names effort "${parsed.effort.effort}" and --effort says "${decided.effort}" — one of them is\n` +
+        '  from another dispatch. Re-run the resolver for THIS role and its signals, and pass the effort\n' +
+        '  and the route it returned together (--effort-applied is the other claim, and is not checked).'
+      );
+    }
+    // `route` and `{model, effort}` are the SAME claim in two encodings — not
+    // two claims the way `effort`/`effort_applied` are (that pair is left alone
+    // above on purpose: they measure different things). So a caller who passes
+    // `--route` alone is not under-specifying; the pair is read out of the
+    // route's own parse rather than left absent, which is what closes the gap
+    // Copilot found: a `--route`-only mark used to store a `reason` naming a
+    // model and effort while leaving the structured `model`/`effort` fields
+    // empty, and a reader of `model_overrides` or the ladder query would see a
+    // route text and no pair to cross-check it against. Disagreement is still
+    // refused above, before this ever runs.
+    if (decided.model === undefined) decided.model = parsed.tier.model;
+    if (decided.effort === undefined) decided.effort = parsed.effort.effort;
+    // A route makes this a new ladder-routed dispatch, not merely a legacy
+    // ownership mark. It must carry the launch receipt's concrete effort: an
+    // absent value, `unsupported`, or `unknown` proves that the launch surface
+    // did not apply the selected pair and must fail before this record can hide
+    // the ticket from the front. Older rows remain readable as telemetry; this
+    // is a write-time rule only.
+    if (!EFFORTS.includes(decided.effort_applied)) {
+      fail(
+        'a routed dispatch requires a concrete --effort-applied receipt from a launch that explicitly applied ' +
+        'the resolved model and effort; absent, unsupported, and unknown are historical telemetry, not evidence for a new dispatch.\n' +
+        `  efforts: ${EFFORTS.join(', ')}`
+      );
+    }
+    decided.reason = route;
+  }
+  if (runtime !== undefined && decided.model !== undefined
+      && typeof tierAllowedForRuntime === 'function'
+      && !tierAllowedForRuntime(runtime, decided.model)) {
+    fail(
+      `"${decided.model}" is not available on runtime "${runtime}" — the dispatch recorder only accepts ` +
+      'runnable tier aliases for that runtime.'
+    );
+  }
+  if (runtime !== undefined && decided.model === undefined) {
+    fail(
+      `a ${runtime} dispatch must carry the resolver's --model or --route — otherwise its model lane is unknown.\n` +
+      '  Resolve with `pipeline-config.cjs model <role> --json [signals]` and pass the returned pair and route.'
+    );
+  }
+  const agentFile = given.get('agent-file');
+  if (agentFile !== undefined) {
+    if (runtime !== undefined && runtime !== 'codex') {
+      fail('--agent-file is a Codex-only field — omit it for a Claude dispatch');
+    }
+    const known = codexAgentFiles();
+    if (!known) {
+      fail(
+        `--agent-file cannot be verified: no Codex agents directory exists at ${codexAgentDir()}.\n` +
+        '  The point of the field is to record which generated file RAN, so an unverifiable name is worse than none.'
+      );
+    }
+    if (!known.has(agentFile)) {
+      fail(
+        `"${agentFile}" is not an agent file the Codex generator produces — recording it would name a ` +
+        'file nobody can look at.\n' +
+        `  agent files: ${[...known].sort().join(', ')}`
+      );
+    }
+    // A KNOWN file belonging to a DIFFERENT role is the case the flag was blind
+    // to, and it was found by reproduction: a dispatch could name an
+    // arch-review recovery file for an executor. Either the dispatch went to the
+    // wrong agent or the record names the wrong file, and the journal must not
+    // quietly hold it under either reading — the whole point of the field is that
+    // the ordinary/rung choice IS the dispatch's decision on Codex, so a file
+    // from another role makes the model recorded beside it fiction.
+    //
+    // Built from the ROLE rather than parsed out of the file name: five role names
+    // contain a hyphen, and a rung suffix is part of the file name, so splitting
+    // the name is where an off-by-one lives. Never compared against itself — the
+    // mutation test asserts that a known file for another role still refuses.
+    const mine = agentFilesFor(role, known);
+    if (!mine.size) {
+      fail(
+        `${role} has no agent file the Codex generator produces, so "${agentFile}" cannot be the file this\n` +
+        '  dispatch ran: the generator emits one agent per shipped `references/*.md`, and this role has\n' +
+        '  none — it is dispatched by the main loop rather than by a `.toml`. Omit --agent-file.'
+      );
+    }
+    if (!mine.has(agentFile)) {
+      fail(
+        `"${agentFile}" is not ${role}'s agent file — a dispatch recorded as ${role} ran either the wrong\n` +
+        '  agent or is recording the wrong file, and on Codex the FILE is what carries the model.\n' +
+        `  ${role} runs: ${[...mine].sort().join(' or ')}`
+      );
+    }
+    decided.agent_file = agentFile;
+  }
+  if (given.has('route') && !given.has('boundary-store')) {
+    fail(
+      'a new routed dispatch requires an authenticated application receipt — pass ' +
+      '--boundary-store <receipt store> and --dispatch-id <boundary dispatch id>.\n' +
+      '  Existing receiptless rows remain readable as historical telemetry; caller-supplied route or effort fields\n' +
+      '  cannot authorize a new routed record.'
+    );
+  }
+  // Receiptless records without a route remain readable compatibility telemetry
+  // for already-started or pre-boundary work. The routed branch above is
+  // deliberately fail-closed: a new route cannot be written until the boundary
+  // has authenticated the launch and supplied its application receipt.
+  return decided;
+}
+
+// A wave is launched as one action, but the old CLI needed one process, lock and
+// front refresh per ticket. `mark-many` accepts the same facts as `mark` in a
+// JSON array and turns the whole batch into one validated mutation. The payload
+// uses JSON field names rather than shell flags so a route containing spaces is
+// not re-quoted by every caller. It deliberately does not accept `reason` or
+// `pr`: the former is the refused hand-composed route spelling, and the latter
+// is read from the state the record is bound to.
+const BATCH_FIELDS = new Map([
+  ['model', 'model'],
+  ['effort', 'effort'],
+  ['effort_applied', 'effort-applied'],
+  ['route', 'route'],
+  ['task_level', 'task-level'],
+  ['runtime', 'runtime'],
+  ['backend', 'backend'],
+  ['observed_model', 'observed-model'],
+  ['observed_effort', 'observed-effort'],
+  ['agent_file', 'agent-file'],
+  ['agent_id', 'agent-id'],
+  ['dispatch_id', 'dispatch-id'],
+  ['boundary_store', 'boundary-store'],
+  ['run_id', 'run-id'],
+  ['account_scope', 'account-scope'],
+  ['treatment_id', 'treatment-id'],
+  ['arm', 'arm'],
+  ['policy_id', 'policy-id'],
+  ['policy_version', 'policy-version'],
+  ['policy_hash', 'policy-hash'],
+]);
+
+function parseBatchEntries(raw, projectRoot = process.cwd()) {
+  if (!Array.isArray(raw)) {
+    throw new Error('mark-many input must be a JSON array of dispatch objects');
+  }
+  const seen = new Set();
+  return raw.map((item, index) => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) {
+      throw new Error(`mark-many item ${index + 1} must be an object`);
+    }
+    if (typeof item.ticket !== 'string' || !item.ticket) {
+      throw new Error(`mark-many item ${index + 1} needs a non-empty ticket`);
+    }
+    if (typeof item.role !== 'string' || !item.role) {
+      throw new Error(`mark-many item ${index + 1} needs a non-empty role`);
+    }
+    if (!ROLES.includes(item.role)) {
+      throw new Error(`"${item.role}" is not a pipeline role — the board would name a holder nothing can identify.\n  roles: ${ROLES.join(', ')}`);
+    }
+    if (seen.has(item.ticket)) {
+      throw new Error(`mark-many contains duplicate ticket ${item.ticket} — one ticket can have only one active dispatch`);
+    }
+    seen.add(item.ticket);
+
+    const flags = [];
+    for (const [key, value] of Object.entries(item)) {
+      if (key === 'ticket' || key === 'role') continue;
+      const flag = BATCH_FIELDS.get(key);
+      if (!flag) {
+        throw new Error(`mark-many item ${index + 1} has unsupported field "${key}" — use ticket, role and the mark fields`);
+      }
+      if (typeof value !== 'string') {
+        throw new Error(`mark-many item ${index + 1} field "${key}" must be a string; omit it when it is unmeasured`);
+      }
+      flags.push(`--${flag}`, value);
+    }
+    return {
+      ticket: item.ticket,
+      role: item.role,
+      decided: parseMarkFlags(flags, item.role, item.ticket, projectRoot),
+    };
+  });
+}
+
+// A completed fan-out has the same opposite shape as a launch wave: one
+// operation owns several ticket records. Clearing them one process at a time
+// re-takes the lock and refreshes the derived front for every ticket, so a
+// short Workflow round can cost more orchestration turns than the work itself.
+// A completion must carry the dispatch id it is completing. Ticket ids are
+// reusable, so deleting by ticket alone lets a delayed result erase a newer
+// dispatch and its capacity/stop-gate protection. Missing or already-lifted
+// records remain idempotent, but a mismatched id is deliberately left alone.
+function parseClearBatch(raw) {
+  if (!Array.isArray(raw)) {
+    throw new Error('clear-many input must be a JSON array of {ticket, dispatch_id} objects');
+  }
+  const seen = new Set();
+  return raw.map((item, index) => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) {
+      throw new Error(`clear-many item ${index + 1} must be an object with ticket and dispatch_id`);
+    }
+    const { ticket, dispatch_id: dispatchId } = item;
+    const unsupported = Object.keys(item).filter((key) => !['ticket', 'dispatch_id'].includes(key));
+    if (unsupported.length) {
+      throw new Error(
+        `clear-many item ${index + 1} has unsupported field "${unsupported[0]}" — use only ticket and dispatch_id`
+      );
+    }
+    if (typeof ticket !== 'string' || ticket.trim() === '') {
+      throw new Error(`clear-many item ${index + 1} must carry a non-empty ticket id`);
+    }
+    const why = opaqueDispatchValueIssue(dispatchId);
+    if (why !== null) throw new Error(`clear-many item ${index + 1} dispatch_id cannot be recorded: ${why}`);
+    if (seen.has(ticket)) {
+      throw new Error(`clear-many contains duplicate ticket ${ticket} — pass each id once`);
+    }
+    seen.add(ticket);
+    return { ticket, dispatch_id: dispatchId };
+  });
+}
+
+// `draft` is normalized so `undefined` and `false` are one state; everything else
+// is compared as it stands, with an absent field as null.
+function fieldValue(s, field) {
+  if (field === 'draft') return s[field] === true;
+  return s[field] === undefined ? null : s[field];
+}
+
+// The role is part of the payload on purpose: a record whose `role` was edited by
+// hand then matches nothing and reads as expired, and every branch in this store
+// fails TOWARDS offering the work.
+function dispatchFingerprint(role, s = {}) {
+  const fields = subjectOf(role).fields;
+  return crypto.createHash('sha256')
+    .update(JSON.stringify([role, ...fields.map((f) => fieldValue(s, f))]))
+    .digest('hex').slice(0, 16);
+}
+
+function roundMemberFingerprint(s = {}) {
+  return crypto.createHash('sha256')
+    .update(JSON.stringify(['pr-sentinel', s.status ?? null, s.pr ?? null, s.head_sha ?? null, s.pr_base ?? null]))
+    .digest('hex');
+}
+
+function roundObject(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function roundBaseIdentity(value) {
+  if (typeof value !== 'string') throw new Error('round member base identity must be text');
+  const match = /^(.*)#([a-f0-9]{40})$/i.exec(value);
+  if (!match || !/^[A-Za-z0-9._/-]+$/.test(match[1]) || match[1].startsWith('-')
+      || match[1].includes('..') || match[1].endsWith('/')) {
+    throw new Error('round member base identity must bind a safe ref and 40-character commit');
+  }
+  return { ref: match[1], oid: match[2].toLowerCase() };
+}
+
+function canonicalRoundTicketSet(value) {
+  if (!Array.isArray(value) || value.length === 0) throw new Error('round ticket set must be a non-empty array');
+  const seen = new Set();
+  const entries = value.map((item, index) => {
+    if (!roundObject(item) || Object.keys(item).sort().join(',') !== 'base,branch,head,id,pr') {
+      throw new Error(`round ticket set member ${index + 1} has an invalid shape`);
+    }
+    const { id, pr, head, base, branch } = item;
+    if (typeof id !== 'string' || !/^T-[A-Z0-9][A-Z0-9._-]*$/i.test(id) || seen.has(id)) {
+      throw new Error(`round ticket set has an invalid or duplicate ticket ${String(id)}`);
+    }
+    if (!Number.isSafeInteger(pr) || pr < 1 || typeof head !== 'string' || !/^[a-f0-9]{40}$/i.test(head)) {
+      throw new Error(`round ticket set member ${id} has an invalid PR or head`);
+    }
+    if (typeof branch !== 'string' || !/^[A-Za-z0-9._/-]+$/.test(branch)
+        || branch.startsWith('-') || branch.includes('..') || branch.endsWith('/')) {
+      throw new Error(`round ticket set member ${id} has an invalid branch`);
+    }
+    roundBaseIdentity(base);
+    seen.add(id);
+    return { id, pr, head: head.toLowerCase(), base, branch };
+  }).sort((a, b) => a.id.localeCompare(b.id));
+  return entries;
+}
+
+function roundMembersMatchDigest(round) {
+  try {
+    const ticketSet = canonicalRoundTicketSet(round.members.map((member) => ({
+      id: member.ticket,
+      pr: member.pr,
+      head: member.head_sha,
+      base: `${member.base_ref}#${member.base_oid}`,
+      branch: member.branch,
+    })));
+    const digest = crypto.createHash('sha256').update(JSON.stringify(ticketSet)).digest('hex');
+    return digest === round.ticket_set_digest && round.members.every((member) =>
+      member.fingerprint === roundMemberFingerprint({ status: 'pr-open', pr: member.pr,
+        head_sha: member.head_sha, pr_base: member.base_ref }));
+  } catch {
+    return false;
+  }
+}
+
+function strictRoundSnapshot(cwd) {
+  const dir = graphDir(cwd);
+  let ticketData;
+  let stateData;
+  try {
+    ticketData = JSON.parse(fs.readFileSync(path.join(dir, 'tickets.json'), 'utf8'));
+    stateData = JSON.parse(fs.readFileSync(path.join(dir, 'delivery-state.json'), 'utf8'));
+  } catch (error) {
+    throw new Error(`round snapshot is unavailable or invalid: ${error.message}`);
+  }
+  const tickets = ticketData && ticketData.tickets;
+  const state = stateData && stateData.tickets && typeof stateData.tickets === 'object'
+    ? stateData.tickets : stateData;
+  if (!roundObject(tickets) || !roundObject(state)) throw new Error('round snapshot has an invalid ticket graph or delivery state');
+  return { tickets, state };
+}
+
+function roundMembersForSnapshot(tickets, state, phase, phaseNumber, ticketSet, options = {}) {
+  const phaseRows = Object.entries(tickets).filter(([, row]) => roundObject(row)
+    && String(row.phase) === String(phaseNumber)
+    && typeof row.plan === 'string'
+    && path.basename(path.dirname(row.plan)) === phase);
+  if (!phaseRows.length) throw new Error(`round phase ${phase} has no canonical tickets`);
+  const open = phaseRows.filter(([id]) => (state[id] || {}).status === 'pr-open');
+  const suppliedIds = ticketSet.map((member) => member.id);
+  const supplied = new Set(suppliedIds);
+  if (open.some(([id]) => !supplied.has(id))) {
+    throw new Error('round ticket set omits a currently open PR ticket');
+  }
+  const expired = new Set(options.expiredTickets || []);
+  if ([...expired].some((id) => !supplied.has(id))) throw new Error('round expiry names a ticket outside the authenticated set');
+  if (!options.allowChanges && (open.length !== suppliedIds.length || suppliedIds.some((id) => !open.some(([openId]) => openId === id)))) {
+    throw new Error('round ticket set does not contain all and only current open PR tickets');
+  }
+  return ticketSet.map((member) => {
+    const id = member.id;
+    const row = tickets[id];
+    const current = state[id];
+    const base = roundBaseIdentity(member.base);
+    const unchanged = roundObject(current) && current.status === 'pr-open'
+      && current.pr === member.pr && current.head_sha === member.head && current.pr_base === base.ref;
+    if (!roundObject(row) || row.branch !== member.branch
+        || (!options.allowChanges && !unchanged)
+        || (options.allowChanges && !expired.has(id) && !unchanged)) {
+      throw new Error(`round ticket ${id} no longer matches its live PR snapshot`);
+    }
+    return {
+      ticket: id,
+      pr: member.pr,
+      head_sha: member.head,
+      base_ref: base.ref,
+      base_oid: base.oid,
+      branch: member.branch,
+      fingerprint: roundMemberFingerprint({ status: 'pr-open', pr: member.pr,
+        head_sha: member.head, pr_base: base.ref }),
+    };
+  });
+}
+
+function roundIdentity(record) {
+  const fields = [
+    'role', 'subject_kind', 'subject', 'phase', 'phase_number', 'ticket_set_digest',
+    'dispatch_id', 'agent_id', 'runtime', 'backend', 'requested_model', 'requested_effort',
+    'applied_model', 'applied_effort', 'observed_model', 'observed_effort', 'task_level',
+    'route', 'policy_version', 'policy_hash', 'members', 'expired_tickets',
+  ];
+  return JSON.stringify(fields.map((field) => record[field] ?? null));
+}
+
+// Same resolution and the same flag spelling as drift-record.cjs/log-event.cjs —
+// one convention for "which graph does this belong to", stripped from ANY
+// position, because a flag only tolerated at the end is a trap for the caller who
+// puts it first.
+const ARGV_ALL = process.argv.slice(2);
+const GRAPH_FLAG_AT = ARGV_ALL.indexOf('--graph');
+// A flag-shaped token is not a directory. Guarded for the CLI only: front.cjs
+// `require`s this file for activeDispatches/dispatchWhy, and an exit at require
+// time would kill THAT script under this one's name.
+if (require.main === module && GRAPH_FLAG_AT !== -1) {
+  const val = ARGV_ALL[GRAPH_FLAG_AT + 1];
+  if (val === undefined || val.startsWith('--')) {
+    fail(`--graph needs a directory value (got ${val === undefined ? 'nothing' : `the flag "${val}"`})`);
+  }
+}
+const GRAPH_EXPLICIT = GRAPH_FLAG_AT !== -1 || !!process.env.SHIPYARD_GRAPH_DIR;
+const GRAPH_DIR = GRAPH_FLAG_AT !== -1
+  ? path.resolve(ARGV_ALL[GRAPH_FLAG_AT + 1] || '')
+  : (process.env.SHIPYARD_GRAPH_DIR
+    ? path.resolve(process.env.SHIPYARD_GRAPH_DIR)
+    : path.join(process.cwd(), '.planning', 'graph'));
+// Guarded on the -1 case: `i !== GRAPH_FLAG_AT + 1` with no flag present reads as
+// `i !== 0` and eats the SUBCOMMAND.
+const ARGV = GRAPH_FLAG_AT === -1
+  ? ARGV_ALL
+  : ARGV_ALL.filter((_, i) => i !== GRAPH_FLAG_AT && i !== GRAPH_FLAG_AT + 1);
+const STORE_NAME = 'dispatches.json';
+
+function fail(msg) {
+  process.stderr.write(`dispatch-record: ${msg}\n`);
+  process.exit(1);
+}
+
+function graphDir(cwd = process.cwd()) {
+  return path.join(cwd, '.planning', 'graph');
+}
+
+// The front, state-sync and the other durable stores all agree on one graph
+// layout: `<project>/.planning/graph`.  `--graph` is an explicit project graph
+// selector, not a second arbitrary store location.  Accepting a different
+// shape here is unsafe because the CLI derives the project root from this path
+// for the refresh and then the readers silently look in another graph.
+function isCanonicalGraphDir(dir) {
+  const resolved = path.resolve(dir);
+  return path.basename(resolved) === 'graph'
+    && path.basename(path.dirname(resolved)) === '.planning';
+}
+
+function readState(cwd) {
+  try {
+    const raw = JSON.parse(fs.readFileSync(path.join(graphDir(cwd), 'delivery-state.json'), 'utf8'));
+    return raw && raw.tickets ? raw.tickets : raw || {};
+  } catch {
+    return {};
+  }
+}
+
+const hasStateTicket = (state, id) =>
+  Object.prototype.hasOwnProperty.call(state || {}, id);
+
+function load(cwd = process.cwd(), strict = false) {
+  try {
+    const raw = JSON.parse(fs.readFileSync(path.join(graphDir(cwd), STORE_NAME), 'utf8'));
+    if (!roundObject(raw) || !roundObject(raw.tickets)) {
+      if (strict) throw new Error('dispatch store has an invalid shape');
+      return { tickets: {}, rounds: {}, reservations: {} };
+    }
+    if (strict && ((raw.rounds !== undefined && !roundObject(raw.rounds))
+        || (raw.reservations !== undefined && !roundObject(raw.reservations)))) {
+      throw new Error('dispatch store has an invalid round shape');
+    }
+    return { ...raw, rounds: roundObject(raw.rounds) ? raw.rounds : {},
+      reservations: roundObject(raw.reservations) ? raw.reservations : {} };
+  } catch (error) {
+    if (strict && (!error || error.code !== 'ENOENT')) {
+      throw new Error(`dispatch store cannot be safely updated: ${error && error.message ? error.message : error}`);
+    }
+    return { tickets: {}, rounds: {}, reservations: {} };
+  }
+}
+
+// A dispatch id is the join key between the delivery journal and a later
+// provider transcript. It is generated at write time rather than in the prompt
+// builder, because a retry must get a new id and a caller that never reaches the
+// recorder must not leave a phantom correlation key behind.
+function newDispatchId() {
+  const random = typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID()
+    : crypto.randomBytes(16).toString('hex');
+  return `dispatch-${Date.now().toString(36)}-${random}`;
+}
+
+function dispatchIdInUse(store, id) {
+  return Object.values(store.tickets || {}).some((record) => record && record.dispatch_id === id)
+    || Object.values(store.rounds || {}).some((record) => record && record.dispatch_id === id)
+    || Object.values(store.reservations || {}).some((record) => record && record.dispatch_id === id);
+}
+
+// Dispatch ids are also the durable join key for usage attribution. Clearing
+// an active record removes it from `dispatches.json`, but the journal line is
+// intentionally append-only; allowing the same explicit id after a clear would
+// make one id describe two launches and merge their transcript usage. Read the
+// journal while the caller's store lock is held so an explicit id is rejected
+// against both the live store and every durable event already recorded.
+function dispatchIdInHistory(cwd, id) {
+  const file = path.join(graphDir(cwd), 'delivery-log.jsonl');
+  let raw;
+  try {
+    raw = fs.readFileSync(file, 'utf8');
+  } catch (error) {
+    if (error && error.code === 'ENOENT') return false;
+    throw new Error(`cannot inspect dispatch history at ${file}: ${error && error.message ? error.message : error}`);
+  }
+  return raw.split(/\r?\n/).some((line) => {
+    if (!line.trim()) return false;
+    try {
+      const event = JSON.parse(line);
+      return event && event.dispatch_id === id;
+    } catch {
+      // Other conveyor writers may leave a malformed line. It cannot prove
+      // ownership of this id, so keep the existing journal-read tolerance.
+      return false;
+    }
+  });
+}
+
+function dispatchIdKnown(cwd, store, id) {
+  return dispatchIdInUse(store, id) || dispatchIdInHistory(cwd, id);
+}
+
+function withDispatchId(decided, store, cwd) {
+  if (decided.dispatch_id) {
+    if (dispatchIdInUse(store, decided.dispatch_id)) {
+      throw new Error(`dispatch id "${decided.dispatch_id}" is already active`);
+    }
+    if (dispatchIdInHistory(cwd, decided.dispatch_id)) {
+      throw new Error(`dispatch id "${decided.dispatch_id}" already exists in delivery history`);
+    }
+    return { ...decided, dispatch_id: decided.dispatch_id };
+  }
+  let id;
+  do { id = newDispatchId(); } while (dispatchIdKnown(cwd, store, id));
+  return { ...decided, dispatch_id: id };
+}
+
+function telemetryFor(recorded, ticket, role) {
+  return runTelemetry.dispatchProjection({
+    ...recorded,
+    event: 'dispatch',
+    phase: 'launch',
+    ticket,
+    role,
+    requested_model: recorded.requested_model || recorded.model,
+    requested_effort: recorded.requested_effort || recorded.effort,
+    applied_model: recorded.applied_model,
+    applied_effort: recorded.applied_effort || recorded.effort_applied,
+    observed_model: recorded.observed_model,
+    observed_effort: recorded.observed_effort,
+    route: recorded.route || recorded.reason,
+  });
+}
+
+// Read-modify-write plus the journal line, under ONE lock and written atomically —
+// drift-record's rule for the same reason: the main loop dispatches a whole wave
+// at once, and an unsynchronized load→save loses records (six concurrent marks
+// reliably produced five). The lock sits beside the STORE, never at cwd: a mark
+// run from a ticket worktree would otherwise take a lock nobody else contends
+// for and serialize nothing.
+function mutate(cwd, fn, fence = (commit) => commit(), strictLoad = false) {
+  fs.mkdirSync(graphDir(cwd), { recursive: true });
+  return withLock(lockDirFor(cwd), 'dispatch-record', () => {
+    const store = load(cwd, strictLoad);
+    const commit = () => {
+      const extra = fn(store);
+      writeAtomic(path.join(graphDir(cwd), STORE_NAME), JSON.stringify(store, null, 2) + '\n');
+      if (extra) {
+        const events = Array.isArray(extra) ? extra : [extra];
+        if (events.length) {
+          fs.appendFileSync(
+            path.join(graphDir(cwd), 'delivery-log.jsonl'),
+            events.map((event) => JSON.stringify(event)).join('\n') + '\n'
+          );
+        }
+      }
+      return extra;
+    };
+    return fence(commit);
+  }, { label: 'dispatch-record' });
+}
+
+const roleOf = (rec) => (typeof rec === 'string' ? rec : ((rec && rec.role) || 'an agent'));
+
+/**
+ * WHICH agent holds this record, or `null` when nothing identifies one.
+ *
+ * Exported and read by `front.cjs`'s counter rather than re-derived there: "what
+ * counts as an identity" is one rule, and two copies of it would be free to
+ * disagree about a blank string — with the disagreement showing up as a cap that
+ * authorises one more agent than it means to. A bare role string (the flattened
+ * shape) and a record from before the field existed both answer `null`, which
+ * `agentsInFlight` spends a whole agent on.
+ *
+ * Runs the SAME `agentIdSafetyIssue` the write path enforces, not only the
+ * `trim() !== ''` half of it: `front.cjs` joins `role\u0000agent` into a Set
+ * key on the promise that neither half holds whitespace or a control
+ * character, but that promise is only as good as what THIS function lets
+ * through — a hand-edited store, or a record written before the write-side
+ * check existed, is not bound by it. An id this function would refuse to
+ * WRITE is exactly the one it must refuse to trust on READ; both answer
+ * `null`, which is the same safe direction as no identity at all — an extra
+ * agent counted, never one silently discounted through a collision.
+ */
+const agentIdOf = (rec) => {
+  const id = rec && typeof rec === 'object' ? rec.agent_id : undefined;
+  return typeof id === 'string' && agentIdSafetyIssue(id) === null ? id : null;
+};
+
+function ageMinutes(rec) {
+  const at = Date.parse((rec && rec.at) || '');
+  return Number.isFinite(at) ? Math.max(0, Math.round((Date.now() - at) / 60000)) : null;
+}
+
+/**
+ * The board's sentence for a live dispatch, and it lives HERE — beside the branch
+ * in `activeDispatches` that decides when the record actually lifts. That is
+ * escalation-record's rule applied to a second store: a lifting rule composed at
+ * the render site is how a board came to promise one thing while the file that
+ * decides promised another.
+ *
+ * It names both expiry triggers, because a reader who does not know the record
+ * lifts by itself will reach for `clear` — and a `clear` that becomes routine is
+ * how a store starts being cleared before the work returns.
+ */
+function dispatchWhy(id, rec) {
+  const mins = ageMinutes(rec);
+  const age = mins === null ? '' : ` ${mins}m ago`;
+  const role = roleOf(rec);
+  const clearCommand = role === 'pr-sentinel' && rec && rec.round_id
+    ? `dispatch-record.cjs clear-round ${rec.round_id}`
+    : `dispatch-record.cjs clear ${id} ${rec && rec.dispatch_id ? rec.dispatch_id : '<dispatch_id>'}`;
+  // The fact is quoted from the same table the expiry rule reads, so the board
+  // cannot name one trigger while the code waits for another. The old sentence
+  // listed "a check" among them, which was exactly the wrong claim.
+  return `dispatched to ${role}${age} — an agent holds it, so it is nobody else's to start. ` +
+    `It returns to the board by itself when the delivery state moves in the way this role's own output moves it ` +
+    `(${subjectOf(role).lifts}) or after ${Math.round(DISPATCH_TTL_MS / 60000)}m; ` +
+    `\`${clearCommand}\` returns it now.`;
+}
+
+/**
+ * The dispatches still in force: {ticket: {role, at, agent_id?}} — the shape
+ * `computeFront` takes as `opts.dispatched`. Callers get both expiry triggers for
+ * free.
+ *
+ * `agent_id` is present only when the record carries one, because the counter
+ * that reads it treats a missing identity as an agent of its own and a `null`
+ * would have to be special-cased into the same answer twice.
+ *
+ * `state` may be passed in by a caller that already has it, otherwise it is read
+ * from disk.
+ *
+ * Every branch here fails TOWARDS offering the work. A record that cannot be
+ * read, cannot be dated, or was written against a ticket the state no longer
+ * describes is treated as spent, because the failure this store must never
+ * produce is a ticket hidden from the run that owns it.
+ */
+function activeDispatches(cwd = process.cwd(), state = null) {
+  const live = state || readState(cwd);
+  // Callers that already read delivery-state.json pass its full envelope; the
+  // disk reader above returns only `tickets` for the legacy map shape. Normalize
+  // both here so a merged ticket cannot keep consuming capacity until TTL.
+  const ticketState = live && typeof live === 'object' && live.tickets
+    && typeof live.tickets === 'object' ? live.tickets : live || {};
+  const now = Date.now();
+  const out = {};
+  const stored = load(cwd);
+  for (const [id, rec] of Object.entries(stored.tickets || {})) {
+    if (!rec) continue;
+    const s = ticketState[id] || {};
+    // A merged ticket is never suppressed, whoever was working on it: it landed.
+    if (s.status === 'merged') continue;
+    const at = Date.parse(rec.at || '');
+    // An undateable record has an unknown age, and an unknown age is expired.
+    if (!Number.isFinite(at) || now - at >= DISPATCH_TTL_MS) continue;
+    // Trigger 1 — the ROLE's own output appeared, so the dispatch did its job.
+    // WHICH hash comes from the record: one written before this store had a
+    // per-role rule is bound to the shared hash and keeps expiring against that
+    // one, so an upgrade mid-flight neither hides a ticket nor re-reads an old
+    // record under a rule it was not written under. Both lift inside the TTL
+    // either way.
+    if (rec.fingerprint) {
+      // Named `current`, not `now`: `now` in this scope is the clock the TTL above
+      // reads, and shadowing it with a hash is how the two triggers would come to
+      // be confused by the next reader.
+      const current = rec.fingerprint_kind === 'role'
+        ? dispatchFingerprint(roleOf(rec), s)
+        : fingerprint(s);
+      if (current !== rec.fingerprint) continue;
+    }
+    const agent = agentIdOf(rec);
+    out[id] = agent === null
+      ? { role: roleOf(rec), at: rec.at }
+      : { role: roleOf(rec), at: rec.at, agent_id: agent };
+  }
+  const roundRows = [
+    ...Object.entries(stored.rounds || {}),
+    ...Object.entries(stored.reservations || {}),
+  ];
+  for (const [roundId, round] of roundRows) {
+    if (!roundObject(round) || round.role !== 'pr-sentinel' || round.subject_kind !== 'round'
+        || round.dispatch_id !== roundId || !/^[a-f0-9]{64}$/.test(round.ticket_set_digest || '')
+        || round.subject !== `round:${round.ticket_set_digest}` || !Array.isArray(round.members)
+        || !round.members.length) continue;
+    if (!roundMembersMatchDigest(round)) continue;
+    const at = Date.parse(round.at || '');
+    if (!Number.isFinite(at) || now - at >= DISPATCH_TTL_MS) continue;
+    const seen = new Set();
+    const validMembers = round.members.every((member) => roundObject(member)
+      && typeof member.ticket === 'string'
+      && /^T-[A-Z0-9][A-Z0-9._-]*$/i.test(member.ticket)
+      && !seen.has(member.ticket)
+      && typeof member.fingerprint === 'string'
+      && /^[a-f0-9]{64}$/.test(member.fingerprint)
+      && seen.add(member.ticket));
+    if (!validMembers) continue;
+    const expired = new Set(Array.isArray(round.expired_tickets) ? round.expired_tickets : []);
+    const agent = agentIdOf(round);
+    for (const member of round.members) {
+      if (out[member.ticket] || expired.has(member.ticket)) continue;
+      const current = ticketState[member.ticket] || {};
+      if (current.status !== 'pr-open' || roundMemberFingerprint(current) !== member.fingerprint) continue;
+      out[member.ticket] = agent === null
+        ? { role: 'pr-sentinel', at: round.at, round_id: roundId, dispatch_id: roundId }
+        : { role: 'pr-sentinel', at: round.at, agent_id: agent, round_id: roundId, dispatch_id: roundId };
+    }
+  }
+  return out;
+}
+
+function reserveRound(cwd, input) {
+  if (!roundObject(input)) throw new Error('round reservation input must be an object');
+  const phase = input.phase;
+  const phaseNumber = input.phaseNumber;
+  if (typeof phase !== 'string' || !/^[A-Za-z0-9._-]+$/.test(phase)
+      || !Number.isSafeInteger(phaseNumber) || phaseNumber < 1) {
+    throw new Error('round reservation phase identity is invalid');
+  }
+  const ticketSet = canonicalRoundTicketSet(input.ticketSet);
+  const ticketSetDigest = crypto.createHash('sha256').update(JSON.stringify(ticketSet)).digest('hex');
+  const subject = `round:${ticketSetDigest}`;
+  if (input.ticketSetDigest !== ticketSetDigest) throw new Error('round reservation digest does not match the complete ticket set');
+  const dispatchId = input.dispatchId;
+  const dispatchIdIssue = opaqueDispatchValueIssue(dispatchId);
+  if (dispatchIdIssue) throw new Error(`round reservation dispatch id is invalid: ${dispatchIdIssue}`);
+  if (typeof input.agentId !== 'string' || !/^[A-Za-z0-9._:-]{1,200}$/.test(input.agentId)) {
+    throw new Error('round reservation agent identity is invalid');
+  }
+  let outcome;
+  mutate(cwd, (store) => {
+    store.rounds = roundObject(store.rounds) ? store.rounds : {};
+    store.reservations = roundObject(store.reservations) ? store.reservations : {};
+    const existing = store.reservations[dispatchId];
+    if (existing) {
+      const same = existing.subject === subject && existing.ticket_set_digest === ticketSetDigest
+        && existing.phase === phase && existing.phase_number === phaseNumber;
+      if (!same) throw new Error(`round reservation ${dispatchId} already names another round`);
+      outcome = { reserved: false, idempotent: true, reservation: existing };
+      return null;
+    }
+    if (store.rounds[dispatchId] || dispatchIdInUse(store, dispatchId) || dispatchIdInHistory(cwd, dispatchId)) {
+      throw new Error(`round reservation dispatch id ${dispatchId} is already in use`);
+    }
+    const snapshot = strictRoundSnapshot(cwd);
+    const members = roundMembersForSnapshot(snapshot.tickets, snapshot.state, phase, phaseNumber, ticketSet);
+    const active = activeDispatches(cwd, snapshot.state);
+    const conflict = members.find((member) => active[member.ticket]);
+    if (conflict) throw new Error(`round ticket ${conflict.ticket} already has active dispatch ownership`);
+    const at = new Date().toISOString();
+    const reservation = {
+      role: 'pr-sentinel', subject_kind: 'round', subject, phase, phase_number: phaseNumber,
+      ticket_set_digest: ticketSetDigest, dispatch_id: dispatchId, agent_id: input.agentId,
+      members, at,
+    };
+    store.reservations[dispatchId] = reservation;
+    outcome = { reserved: true, idempotent: false, reservation };
+    return null;
+  }, undefined, true);
+  if (outcome.reserved) refreshFront(cwd);
+  return Object.freeze(outcome);
+}
+
+function recordRound(cwd, input) {
+  if (!roundObject(input)) throw new Error('round input must be an object');
+  const phase = input.phase;
+  const phaseNumber = input.phaseNumber;
+  if (typeof phase !== 'string' || !/^[A-Za-z0-9._-]+$/.test(phase)
+      || !Number.isSafeInteger(phaseNumber) || phaseNumber < 1) {
+    throw new Error('round phase identity is invalid');
+  }
+  const ticketSet = canonicalRoundTicketSet(input.ticketSet);
+  const expiredTickets = Array.isArray(input.expiredTickets) ? [...new Set(input.expiredTickets)].sort() : [];
+  const ticketSetDigest = crypto.createHash('sha256').update(JSON.stringify(ticketSet)).digest('hex');
+  const subject = `round:${ticketSetDigest}`;
+  if (input.ticketSetDigest !== ticketSetDigest) throw new Error('round digest does not match the complete ticket set');
+  const dispatchId = input.dispatchId;
+  const dispatchIdIssue = opaqueDispatchValueIssue(dispatchId);
+  if (dispatchIdIssue) throw new Error(`round dispatch id is invalid: ${dispatchIdIssue}`);
+  const recorder = input.recorder;
+  const { createDispatchBoundary, isDurableRecorder } = require('./dispatch-boundary.cjs');
+  if (!isDurableRecorder(recorder) || typeof recorder.claim !== 'function'
+      || typeof recorder.withClaim !== 'function' || typeof recorder.release !== 'function') {
+    throw new Error('round reconciliation requires the boundary durable recorder');
+  }
+  const consumerId = newReconciliationConsumerId();
+  const claim = recorder.claim(dispatchId, consumerId);
+  if (!claim || claim.claimed !== true) throw new Error('boundary receipt is currently claimed by another consumer');
+  const lease = { recorder, dispatchId, consumerId, claim, released: false };
+  const decided = {};
+  Object.defineProperty(decided, RECONCILIATION_CLAIM, { value: lease });
+  try {
+    const facts = createDispatchBoundary({ recorder }).reconcile(dispatchId, {
+      ticket: subject,
+      subject_kind: 'round',
+    });
+    if (facts.dispatch_id !== dispatchId || facts.ticket !== subject || facts.subject_kind !== 'round'
+        || facts.role !== 'pr-sentinel' || facts.runtime !== 'claude') {
+      throw new Error('boundary receipt does not authenticate this Claude sentinel round');
+    }
+    if (opaqueDispatchValueIssue(facts.launch_id)) throw new Error('boundary receipt has no valid launch identity');
+    for (const field of ['requested_model', 'requested_effort', 'applied_model', 'applied_effort', 'observed_model', 'observed_effort']) {
+      if (opaqueDispatchValueIssue(facts[field])) throw new Error(`boundary receipt is missing ${field}`);
+    }
+    if (facts.observed_effort !== facts.applied_effort) throw new Error('boundary receipt observed effort differs from the applied effort');
+    const snapshot = strictRoundSnapshot(cwd);
+    const members = roundMembersForSnapshot(snapshot.tickets, snapshot.state, phase, phaseNumber, ticketSet,
+      { allowChanges: true, expiredTickets });
+    const at = new Date().toISOString();
+    const recorded = {
+      role: 'pr-sentinel',
+      subject_kind: 'round',
+      subject,
+      phase,
+      phase_number: phaseNumber,
+      ticket_set_digest: ticketSetDigest,
+      dispatch_id: dispatchId,
+      agent_id: facts.launch_id,
+      runtime: facts.runtime,
+      backend: facts.backend,
+      model: facts.requested_model,
+      effort: facts.requested_effort,
+      requested_model: facts.requested_model,
+      requested_effort: facts.requested_effort,
+      applied_model: facts.applied_model,
+      applied_effort: facts.applied_effort,
+      effort_applied: facts.applied_effort,
+      observed_model: facts.observed_model,
+      observed_effort: facts.observed_effort,
+      task_level: facts.task_level,
+      route: facts.route,
+      reason: facts.route,
+      policy_id: 'ADR-014',
+      policy_version: facts.policy_version,
+      policy_hash: facts.policy_hash,
+      rung: facts.rung,
+      logical_rung: facts.logical_rung,
+      signals: facts.signals,
+      signals_fired: facts.signals_fired,
+      application_receipt: facts.application_receipt,
+      boundary_store: recorder.storeDir,
+      members,
+      expired_tickets: expiredTickets,
+      at,
+    };
+    recorded.telemetry = telemetryFor(recorded, subject, 'pr-sentinel');
+    let outcome;
+    withReconciliationClaims([decided], () => mutate(cwd, (store) => {
+      store.rounds = roundObject(store.rounds) ? store.rounds : {};
+      const current = store.rounds[dispatchId];
+      if (current) {
+        if (roundIdentity(current) !== roundIdentity(recorded)) {
+          throw new Error(`round dispatch id ${dispatchId} already names a different round`);
+        }
+        outcome = { recorded: false, idempotent: true, round: current };
+        return null;
+      }
+      const reservation = store.reservations && store.reservations[dispatchId];
+      if (reservation && (reservation.subject !== subject || reservation.ticket_set_digest !== ticketSetDigest
+          || reservation.phase !== phase || reservation.phase_number !== phaseNumber)) {
+        throw new Error(`round reservation ${dispatchId} does not match its authenticated receipt`);
+      }
+      if ((!reservation && dispatchIdInUse(store, dispatchId)) || dispatchIdInHistory(cwd, dispatchId)) {
+        throw new Error(`round dispatch id ${dispatchId} is already in use`);
+      }
+      const currentSnapshot = strictRoundSnapshot(cwd);
+      const currentMembers = roundMembersForSnapshot(
+        currentSnapshot.tickets, currentSnapshot.state, phase, phaseNumber, ticketSet,
+        { allowChanges: true, expiredTickets },
+      );
+      if (JSON.stringify(currentMembers) !== JSON.stringify(members)) {
+        throw new Error('round members changed before the ownership record was committed');
+      }
+      const active = activeDispatches(cwd, currentSnapshot.state);
+      const conflict = members.find((member) => active[member.ticket]
+        && active[member.ticket].dispatch_id !== dispatchId);
+      if (conflict) throw new Error(`round ticket ${conflict.ticket} already has active dispatch ownership`);
+      delete store.reservations[dispatchId];
+      store.rounds[dispatchId] = recorded;
+      outcome = { recorded: true, idempotent: false, round: recorded };
+      return {
+        ts: at,
+        event: 'dispatch',
+        ticket: subject,
+        subject_kind: 'round',
+        subject,
+        round_id: dispatchId,
+        ticket_set_digest: ticketSetDigest,
+        tickets: members.map((member) => member.ticket),
+        members,
+        ...recorded,
+        by: 'dispatch-record',
+      };
+    }, undefined, true));
+    if (outcome.recorded) refreshFront(cwd);
+    return Object.freeze(outcome);
+  } finally {
+    try { releaseReconciliationClaim(decided); } catch (error) {
+      if (!lease.released) warnReconciliationReleaseFailure(`round ${dispatchId}`, error);
+    }
+  }
+}
+
+function clearRound(cwd, dispatchId) {
+  const issue = opaqueDispatchValueIssue(dispatchId);
+  if (issue) throw new Error(`round dispatch id is invalid: ${issue}`);
+  let cleared = false;
+  mutate(cwd, (store) => {
+    store.rounds = roundObject(store.rounds) ? store.rounds : {};
+    store.reservations = roundObject(store.reservations) ? store.reservations : {};
+    if (!store.rounds[dispatchId] && !store.reservations[dispatchId]) return null;
+    delete store.rounds[dispatchId];
+    delete store.reservations[dispatchId];
+    cleared = true;
+    return null;
+  }, undefined, true);
+  if (cleared) refreshFront(cwd);
+  return cleared;
+}
+
+// Recompute `delivery-front.json` from the stores as they now stand.
+//
+// This is not decoration: the file the stop gate reads is written by state-sync,
+// and the dispatch happens BETWEEN two syncs — deliver.md runs state-sync once,
+// after the whole publish phase, so at the moment a wave is handed to agents the
+// board on disk still lists every one of them as actionable. A record nothing
+// re-derives from would be a fact with no reader at exactly the moment it is
+// true.
+//
+// Deliberately narrow:
+//   * it REFRESHES an existing front and never creates one. The stop gate is
+//     installed globally, and a front conjured in a directory that has none would
+//     arm it where nothing asked for it;
+//   * it inherits `parked_by_run`, `auto_merge` and `generated_at` from the file
+//     it is updating. Those are the SYNC's facts — session parks and how fresh
+//     the GitHub read is — and re-stamping `generated_at` would make a stale
+//     board read as current, which is the staleness hatch this whole gate relies
+//     on;
+//   * it is BEST EFFORT. The record is the durable fact; the front is derived.
+//     A concurrent state-sync holding the lock is a reason to say so and move on,
+//     never a reason to fail the mark.
+// The READ, the COMPUTE and the WRITE all sit inside the `state` lock — the same
+// one state-sync writes its trio under. Reading first and locking only the write
+// is the lost-update this repo has already paid for twice: the guard runs
+// state-sync at the top of every round, and one landing between our read and our
+// write would see its newer board replaced by one computed from older inputs.
+function refreshFront(cwd) {
+  const dir = graphDir(cwd);
+  const frontFile = path.join(dir, 'delivery-front.json');
+  // Required lazily and ON PURPOSE: front.cjs requires THIS file at load time for
+  // `dispatchWhy`, so a top-level require here would hand it a half-built module.
+  // By the time this function runs, both are fully loaded.
+  const { computeFront, ciEstimates } = require(path.join(__dirname, 'front.cjs'));
+  const { activeDrift } = require(path.join(__dirname, 'drift-record.cjs'));
+  const { activeParks } = require(path.join(__dirname, 'escalation-record.cjs'));
+  const { config, valid, error } = loadConfig(cwd);
+  const trackerStatuses = valid ? config.jira_todo_statuses : ['__config_invalid__'];
+  const configRefusal = valid
+    ? null
+    : `front: no policy is in effect — ${error.relative} ${error.message}. `
+      + 'Every board below is the most restrictive reading, not this project\'s decision: '
+      + 'nothing may be auto-merged and nothing may be dispatched until the file parses '
+      + '(a `waiting.merge_human` entry below is still a human\'s option).';
+  // A tracker read is valid for the current publication and the one
+  // publisher-backed boundary immediately preceding it. Refresh must match the
+  // standalone front reader, so use the same coherent cache snapshot.
+  const trackerRecordsForFront = () => {
+    return valid ? activeTrackerSnapshotLocked(dir, trackerStatuses) : {};
+  };
+  try {
+    // Keep the global lock order tracker-record -> state. State-sync and
+    // tracker-record writers use that same order; taking the locks in the
+    // opposite order here would make a refresh deadlock with a concurrent
+    // snapshot publish.
+    return withLock(lockDirFor(cwd), 'tracker-record', () => withLock(lockDirFor(cwd), 'state', () => {
+      let previous;
+      let tickets;
+      let state;
+      try {
+        previous = JSON.parse(fs.readFileSync(frontFile, 'utf8'));
+        tickets = (JSON.parse(fs.readFileSync(path.join(dir, 'tickets.json'), 'utf8')) || {}).tickets || {};
+        state = JSON.parse(fs.readFileSync(path.join(dir, 'delivery-state.json'), 'utf8'));
+      } catch {
+        return null; // no board here yet — state-sync writes the first one
+      }
+      if (!previous || typeof previous !== 'object' || !state || typeof state !== 'object') return null;
+      const front = computeFront(tickets, state, {
+        parked: previous.parked_by_run || [],
+        autoMerge: valid && previous.auto_merge === 'epic',
+        configInvalid: !valid,
+        drifted: activeDrift(cwd),
+        escalated: activeParks(cwd, state),
+        dispatched: activeDispatches(cwd, state),
+        trackerStatuses,
+        trackerRecords: trackerRecordsForFront(),
+        ci_estimates: ciEstimates(dir, tickets),
+      });
+      if (configRefusal) {
+        front.config_invalid = configRefusal;
+        front.fixpoint = false;
+      }
+      writeAtomic(frontFile, JSON.stringify({
+        generated_at: previous.generated_at,
+        parked_by_run: previous.parked_by_run || [],
+        auto_merge: valid ? (previous.auto_merge || 'off') : 'off',
+        dispatches_applied_at: new Date().toISOString(),
+        ...front,
+      }, null, 2) + '\n');
+      return front;
+    }, { label: 'dispatch-record', waitMs: 20_000 }), { label: 'dispatch tracker snapshot', waitMs: 20_000 });
+  } catch (e) {
+    process.stderr.write(
+      `dispatch-record: the record is stored, but delivery-front.json could not be refreshed (${e.message}).\n` +
+      '  The next state-sync rewrites it anyway; re-run this command if the board still offers the ticket.\n'
+    );
+    return null;
+  }
+}
+
+module.exports = {
+  activeDispatches, dispatchWhy, dispatchFingerprint, agentIdOf, reserveRound, recordRound, clearRound,
+  DISPATCH_SUBJECT, DISPATCH_TTL_MS,
+  MARK_FLAGS, MARK_FIELD, REFUSED_FLAGS, codexAgentFiles, agentFilesFor, agentRoleName,
+  CODEX_DEEP_ROLES, CODEX_DEEP_SUFFIX, CODEX_CRITICAL_ROLES, CODEX_CRITICAL_SUFFIX,
+  CODEX_AGENT_PREFIX, DISPATCH_RUNTIMES, DISPATCH_BACKENDS, newDispatchId,
+};
+
+if (require.main === module) {
+  const [cmd, ...rest] = ARGV;
+  if (GRAPH_EXPLICIT && !isCanonicalGraphDir(GRAPH_DIR)) {
+    fail(
+      `--graph must point to a project graph at <project>/.planning/graph (got ${GRAPH_DIR})` +
+      '\n  An arbitrary directory would be written by this command but read by the front from a different graph.'
+    );
+  }
+  const cwd = path.resolve(GRAPH_DIR, '..', '..');
+
+  // Fail-closed, exactly as drift-record and escalation-record do: this command
+  // is documented to run from ticket worktrees, which have no `.planning/` of
+  // their own, and a store written beside no ticket graph is unreadable rather
+  // than merely misplaced — the front reads the PROJECT's. `list`/`clear` stay
+  // permissive: they read or they remove, they never hide a ticket nowhere.
+  if (['mark', 'mark-many'].includes(cmd) && !fs.existsSync(path.join(GRAPH_DIR, 'tickets.json'))) {
+    fail(
+      `no ticket graph at ${GRAPH_DIR} — refusing to record a dispatch nothing will read` +
+      (GRAPH_EXPLICIT ? ' (the explicitly selected graph is invalid).' : '.\n') +
+      (GRAPH_EXPLICIT ? '\n' : '') +
+      '  The front reads the PROJECT\'s graph; one written in a worktree is invisible to it,\n' +
+      '  so the ticket keeps being offered as work an agent already holds.\n' +
+      '  Run this from the conveyor project, or pass --graph <project>/.planning/graph.'
+    );
+  }
+
+  if (cmd === 'mark') {
+    const [ticket, role] = rest;
+    if (!ticket || !role) {
+      fail(
+        'usage: dispatch-record.cjs mark <ticket> <role> ' +
+        `[${MARK_FLAGS.map((f) => `--${f} <v>`).join('] [')}] [--graph <dir>]\n` +
+        `  roles: ${ROLES.join(', ')}`
+      );
+    }
+    // The role is what tells the morning reader WHO holds the ticket, and it is
+    // the ladder's own vocabulary so that the name on the board is the name the
+    // model resolver answers to.
+    if (!ROLES.includes(role)) {
+      fail(`"${role}" is not a pipeline role — the board would name a holder nothing can identify.\n  roles: ${ROLES.join(', ')}`);
+    }
+    // Parsed and validated BEFORE the state lookup and before anything is
+    // written: a usage error must cost no lock and must never leave half a
+    // record behind.
+    const decided = parseMarkFlags(rest.slice(2), role, ticket, cwd);
+    const at = new Date().toISOString();
+    let dispatchId;
+    try {
+      mutate(cwd, (store) => {
+        // Read the ticket state while the dispatch mutation is locked. A
+        // concurrent state-sync may move the PR between the preflight read and
+        // this callback; using the older fingerprint would make a fresh dispatch
+        // look expired on the next front evaluation.
+        const state = readState(cwd);
+        if (!hasStateTicket(state, ticket)) throw new Error(`no ${ticket} in delivery-state.json — run state-sync.cjs first, or check the id`);
+        const active = activeDispatches(cwd, state);
+        if (active[ticket] && active[ticket].round_id) throw new Error(`round dispatch already owns ${ticket}`);
+        const s = state[ticket];
+        // A re-dispatch restarts the clock: the previous agent is not the one
+        // holding it now.
+        const recorded = withDispatchId(decided, store, cwd);
+        dispatchId = recorded.dispatch_id;
+        const telemetry = telemetryFor(recorded, ticket, role);
+        store.tickets[ticket] = {
+          role,
+          at,
+          // Spread, never enumerated: a flag the caller did not pass contributes no
+          // key, so the record distinguishes "ran at high" from "nobody measured".
+          ...recorded,
+          fingerprint: dispatchFingerprint(role, s),
+          // Which hash the line above is, so a reader upgrading over an existing
+          // store compares each record with the rule it was written under.
+          fingerprint_kind: 'role',
+          pr: s.pr || null,
+          telemetry,
+        };
+        // Journalled because nothing else records WHEN work was handed over, nor
+        // WHAT it was handed to. The TTL above had to be inferred from PR
+        // timestamps for want of this line and the ladder from judgement for want
+        // of the fields; the next one of each can be measured. The ticket's next
+        // `status_change` closes the interval, so a `clear` needs no event of its
+        // own.
+        return { ts: at, event: 'dispatch', ticket, role, pr: s.pr || null, ...recorded, telemetry, by: 'dispatch-record' };
+      }, (commit) => withReconciliationClaims([decided], commit));
+    } catch (e) {
+      try { releaseReconciliationClaim(decided); } catch (_) { /* keep the write failure */ }
+      fail(e && e.message ? e.message : e);
+    }
+    try {
+      releaseReconciliationClaim(decided);
+    } catch (e) {
+      warnReconciliationReleaseFailure(`dispatch for ${ticket}`, e);
+    }
+    // The record is durable the instant `mutate` above returns — that alone is
+    // what `activeDispatches` reads. `refreshFront` only decides whether the
+    // ON-DISK board reflects it RIGHT NOW or on the next sync; its return value
+    // says which, so the message does not claim a refresh that did not happen
+    // (no board yet, or a state-sync held the lock).
+    const refreshed = refreshFront(cwd) !== null;
+    console.log(
+      `dispatch recorded for ${ticket} (${role}), dispatch_id=${dispatchId} — ` +
+      (refreshed
+        ? 'the front reports it as waiting, not as work to start. '
+        : 'no board was refreshed just now (none exists yet, or a sync holds the lock); the record is durable and the next state-sync or refresh will apply it. ') +
+      `It lifts when ${subjectOf(role).lifts}, or after ${Math.round(DISPATCH_TTL_MS / 60000)}m.`
+    );
+  } else if (cmd === 'mark-many') {
+    if (rest.length !== 1 || rest[0] !== '--stdin') {
+      fail(
+        'usage: dispatch-record.cjs mark-many --stdin [--graph <dir>]\n' +
+        '  stdin must contain a JSON array of {ticket, role, ...mark fields}; an empty array is a no-op'
+      );
+    }
+    let raw;
+    try {
+      raw = JSON.parse(fs.readFileSync(0, 'utf8'));
+    } catch (e) {
+      fail(`mark-many stdin is not valid JSON — ${e && e.message ? e.message : e}`);
+    }
+    let entries;
+    try {
+      entries = parseBatchEntries(raw, cwd);
+    } catch (e) {
+      fail(e && e.message ? e.message : e);
+    }
+    if (!entries.length) {
+      console.log('no dispatches recorded — the batch was explicitly empty');
+    } else {
+      // Check every ticket before taking the lock. The callback repeats this
+      // check against the state read while the lock is held, so a concurrent
+      // state-sync cannot turn a valid batch into a record with a stale
+      // fingerprint or leave only the first item filed.
+      const state = readState(cwd);
+      const missing = entries.find((entry) => !hasStateTicket(state, entry.ticket));
+      if (missing) {
+        try { releaseReconciliationClaims(entries.map((entry) => entry.decided)); } catch (_) { /* preserve the refusal */ }
+        fail(`no ${missing.ticket} in delivery-state.json — run state-sync.cjs first, or check the id`);
+      }
+      const at = new Date().toISOString();
+      const dispatchIds = new Map();
+      try {
+        mutate(cwd, (store) => {
+          const current = readState(cwd);
+          const absent = entries.find((entry) => !hasStateTicket(current, entry.ticket));
+          if (absent) throw new Error(`no ${absent.ticket} in delivery-state.json — run state-sync.cjs first, or check the id`);
+          const active = activeDispatches(cwd, current);
+          const roundConflict = entries.find((entry) => active[entry.ticket] && active[entry.ticket].round_id);
+          if (roundConflict) throw new Error(`round dispatch already owns ${roundConflict.ticket}`);
+          const events = [];
+          for (const entry of entries) {
+            const s = current[entry.ticket];
+            const recorded = withDispatchId(entry.decided, store, cwd);
+            const telemetry = telemetryFor(recorded, entry.ticket, entry.role);
+            if ([...dispatchIds.values()].includes(recorded.dispatch_id)) {
+              throw new Error(`mark-many contains duplicate dispatch id "${recorded.dispatch_id}"`);
+            }
+            dispatchIds.set(entry.ticket, recorded.dispatch_id);
+            store.tickets[entry.ticket] = {
+              role: entry.role,
+              at,
+              ...recorded,
+              fingerprint: dispatchFingerprint(entry.role, s),
+              fingerprint_kind: 'role',
+              pr: s.pr || null,
+              telemetry,
+            };
+            events.push({
+              ts: at,
+              event: 'dispatch',
+              ticket: entry.ticket,
+              role: entry.role,
+              pr: s.pr || null,
+              ...recorded,
+              telemetry,
+              by: 'dispatch-record',
+            });
+          }
+          return events;
+        }, (commit) => withReconciliationClaims(
+          entries.map((entry) => entry.decided),
+          commit,
+        ));
+      } catch (e) {
+        try { releaseReconciliationClaims(entries.map((entry) => entry.decided)); } catch (_) { /* keep the write failure */ }
+        fail(e && e.message ? e.message : e);
+      }
+      try {
+        releaseReconciliationClaims(entries.map((entry) => entry.decided));
+      } catch (e) {
+        warnReconciliationReleaseFailure(`dispatch batch for ${entries.length} ticket(s)`, e);
+      }
+      const refreshed = refreshFront(cwd) !== null;
+      console.log(
+        `dispatch recorded for ${entries.length} ticket(s) ` +
+        `(dispatch_ids=${[...dispatchIds.values()].join(',')}) — ` +
+        (refreshed
+          ? 'the front reports them as waiting, not as work to start. '
+          : 'no board was refreshed just now (none exists yet, or a sync holds the lock); the records are durable and the next state-sync or refresh will apply them. ') +
+        `They lift by their role output or after ${Math.round(DISPATCH_TTL_MS / 60000)}m.`
+      );
+    }
+  } else if (cmd === 'clear') {
+    const [ticket, dispatchId] = rest;
+    if (!ticket || !dispatchId) fail('usage: dispatch-record.cjs clear <ticket> <dispatch_id> [--graph <dir>]');
+    const why = opaqueDispatchValueIssue(dispatchId);
+    if (why !== null) fail(`clear dispatch_id cannot be recorded: ${why}`);
+    let cleared = false;
+    let currentDispatchId = null;
+    mutate(cwd, (store) => {
+      const current = store.tickets[ticket];
+      if (!current) return;
+      currentDispatchId = current.dispatch_id || null;
+      if (current.dispatch_id !== dispatchId) return;
+      delete store.tickets[ticket];
+      cleared = true;
+    });
+    if (cleared) {
+      refreshFront(cwd);
+    }
+    console.log(
+      cleared
+        ? `dispatch cleared for ${ticket} — it is the board's again`
+        : (currentDispatchId
+          ? `dispatch for ${ticket} is ${currentDispatchId}, not ${dispatchId} — leaving the newer record in place`
+        : `no dispatch recorded for ${ticket}`)
+    );
+  } else if (cmd === 'clear-round') {
+    const [dispatchId] = rest;
+    if (rest.length !== 1 || !dispatchId) fail('usage: dispatch-record.cjs clear-round <round_dispatch_id> [--graph <dir>]');
+    let cleared;
+    try {
+      cleared = clearRound(cwd, dispatchId);
+    } catch (e) {
+      fail(e && e.message ? e.message : e);
+    }
+    console.log(cleared
+      ? `sentinel round ${dispatchId} cleared — the board can offer its remaining PRs again`
+      : `no matching sentinel round ${dispatchId} — no newer dispatch was changed`);
+  } else if (cmd === 'clear-many') {
+    if (rest.length !== 1 || rest[0] !== '--stdin') {
+      fail(
+        'usage: dispatch-record.cjs clear-many --stdin [--graph <dir>]\n' +
+        '  stdin must contain a JSON array of {ticket, dispatch_id} objects; an empty array is a no-op'
+      );
+    }
+    let raw;
+    try {
+      raw = JSON.parse(fs.readFileSync(0, 'utf8'));
+    } catch (e) {
+      fail(`clear-many stdin is not valid JSON — ${e && e.message ? e.message : e}`);
+    }
+    let ticketsToClear;
+    try {
+      ticketsToClear = parseClearBatch(raw);
+    } catch (e) {
+      fail(e && e.message ? e.message : e);
+    }
+    if (!ticketsToClear.length) {
+      console.log('no dispatches cleared — the batch was explicitly empty');
+    } else {
+      let cleared = 0;
+      mutate(cwd, (store) => {
+        for (const { ticket, dispatch_id: dispatchId } of ticketsToClear) {
+          const current = store.tickets[ticket];
+          if (!current || current.dispatch_id !== dispatchId) continue;
+          delete store.tickets[ticket];
+          cleared++;
+        }
+      });
+      if (cleared) {
+        refreshFront(cwd);
+      }
+      console.log(
+        `dispatch cleared for ${cleared} of ${ticketsToClear.length} ticket(s) — ` +
+        'the board can offer them again'
+      );
+    }
+  } else if (cmd === 'list') {
+    const active = activeDispatches(cwd);
+    if (rest.includes('--json')) {
+      console.log(JSON.stringify(active, null, 2));
+    } else if (!Object.keys(active).length) {
+      console.log('no dispatches in force');
+    } else {
+      for (const [id, rec] of Object.entries(active)) {
+        const mins = ageMinutes(rec);
+        console.log(`${id}: ${rec.role}${mins === null ? '' : `, ${mins}m ago`}`);
+      }
+    }
+  } else {
+    fail('usage: dispatch-record.cjs <mark|mark-many|clear|clear-round|clear-many|list> …');
+  }
+}

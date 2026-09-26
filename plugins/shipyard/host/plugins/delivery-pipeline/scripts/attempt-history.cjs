@@ -1,0 +1,317 @@
+#!/usr/bin/env node
+'use strict';
+
+// Render what has already been tried on ONE ticket, as data for the next fixer.
+//
+//   attempt-history.cjs <ticket> [--json] [--details] [--limit <n>] [--graph <dir>]
+//
+// Why this exists (ADR-001 D5): a fresh subagent per attempt is the right call
+// for context hygiene, and it is precisely why attempt 3 can re-propose the fix
+// attempt 1 already tried and lost. The remedy is not a longer-lived repair
+// agent — it is prior attempts handed over as INPUT. The journal already holds
+// them, so this is a reader, not a new store: filter
+// `.planning/graph/delivery-log.jsonl` to one ticket's repair events and render
+// them compactly enough to paste into the next fixer's prompt.
+//
+//   attempts=2 next_n=3
+//   attempt n=2 role=ci-fix model=opus effort_applied=max signature=ab12cd34 \
+//     outcome=pushed hypothesis="off-by-one in the pagination cursor"
+//
+// The first line is the COUNT, and it is why this reader gained a number at all
+// (ADR-002 D8). The attempt counter lived only in the babysit session, so
+// `attempts > max_attempts` restarted at 1 in every resumed run and a ticket
+// that had already burned four rounds was handed five more. The journal already
+// held every round: `--json` reports `attempts` and `next_n`, and the loop reads
+// the number instead of remembering it.
+//
+// Fields are rendered ONLY when the event carries them. Events written before
+// `signature`/`hypothesis` existed render without them, and a ticket nobody has
+// attempted yet prints one line and exits 0 — an empty or partial history is
+// the normal state of young work, not a failure to report.
+//
+// The orchestrator produces this string and passes it into the fix round
+// (`prs[].attemptHistory`); the Workflow path builds prompts deterministically
+// and must not shell out for itself.
+
+const fs = require('fs');
+const path = require('path');
+const roleArtifact = require('./role-artifact.cjs');
+const { resourceState } = require('./failure-signature.cjs');
+
+const argvAll = process.argv.slice(2);
+
+const USAGE = 'usage: attempt-history.cjs <ticket> [--json] [--details] [--limit <n>] [--graph <dir>]';
+
+function usage(msg) {
+  console.error(`attempt-history: ${msg}\n${USAGE}`);
+  process.exit(2);
+}
+
+// The journal is only meaningful BESIDE its graph, so resolve where to read it
+// exactly as log-event.cjs resolves where to write it — one convention for
+// "which graph does this belong to", so a caller who learns it once is right
+// everywhere:
+//   1. --graph <dir> / SHIPYARD_GRAPH_DIR — the caller knows the project root
+//   2. <cwd>/.planning/graph              — only when the graph is really there
+//   3. refuse, rather than report an empty history that is merely a wrong turn
+// A fixer reads this from a ticket WORKTREE, which has no .planning/ of its own
+// when the project keeps it untracked; silently answering "no prior attempts"
+// there would be the exact defect this record exists to prevent, dressed as a
+// clean slate.
+const graphFlagAt = argvAll.indexOf('--graph');
+// `--graph` immediately followed by another flag (e.g. `--graph --json`) must
+// not be read as an explicit value: the flag-stripping loop below skips
+// exactly one token after `--graph` unconditionally, so `--json` would be
+// silently consumed as the "directory", disabling JSON mode AND resolving
+// GRAPH_DIR to a nonexistent path outside cwd/.planning — which reads back as
+// an empty history from nowhere rather than the refusal it should be. Found
+// by Copilot's review of this PR.
+if (graphFlagAt !== -1) {
+  const val = argvAll[graphFlagAt + 1];
+  if (val === undefined || val.startsWith('--')) {
+    usage(`--graph needs a directory value (got ${val === undefined ? 'nothing' : `the flag "${val}"`})`);
+  }
+}
+const explicitGraph = graphFlagAt !== -1 ? argvAll[graphFlagAt + 1] : process.env.SHIPYARD_GRAPH_DIR;
+const GRAPH_EXPLICIT = !!explicitGraph;
+const GRAPH_DIR = GRAPH_EXPLICIT
+  ? path.resolve(explicitGraph)
+  : path.join(process.cwd(), '.planning', 'graph');
+
+// Both value-taking flags are stripped wherever they sit: a flag only tolerated
+// at the end is a trap for the caller who puts it first, and here it would be
+// read as the ticket id.
+let asJson = false;
+let details = false;
+let limitRaw = null;
+const positional = [];
+for (let i = 0; i < argvAll.length; i++) {
+  const a = argvAll[i];
+  if (a === '--graph') { i++; continue; }
+  if (a === '--limit') { limitRaw = argvAll[++i]; continue; }
+  if (a === '--json') { asJson = true; continue; }
+  if (a === '--details' || a === '--resolve-artifacts') { details = true; continue; }
+  positional.push(a);
+}
+
+const ticket = positional[0];
+if (!ticket) usage('a ticket id is required');
+if (positional.length > 1) usage(`unexpected argument "${positional[1]}"`);
+
+let limit = null;
+if (limitRaw !== null) {
+  if (!/^\d+$/.test(String(limitRaw)) || Number(limitRaw) === 0) {
+    usage(`--limit takes a positive integer, got "${limitRaw === undefined ? '' : limitRaw}"`);
+  }
+  limit = Number(limitRaw);
+}
+
+if (!GRAPH_EXPLICIT && !fs.existsSync(path.join(GRAPH_DIR, 'tickets.json'))) {
+  console.error(
+    `attempt-history: no ticket graph at ${GRAPH_DIR} — refusing to report an empty history from here.\n` +
+    `  "No prior attempts" read out of the wrong directory is indistinguishable from a fresh ticket,\n` +
+    `  which is how a fixer ends up re-proposing a fix that already failed.\n` +
+    `  Run this from the conveyor project, or pass --graph <project>/.planning/graph\n` +
+    `  (or set SHIPYARD_GRAPH_DIR) — which is what a cross-repo or worktree agent must do.`
+  );
+  process.exit(1);
+}
+
+// The repair record: what was tried, how it went, and why it stopped. Anything
+// else in the journal (reuse_scan, status_change, merge) describes the ticket's
+// PROGRESS, not an attempt at a fix, and rendering it here would read as one.
+const REPAIR_EVENTS = new Set([
+  'attempt', 'fix_round', 'escalation', 'plan_defect', 'flake', 'flake_rerun', 'flake_lift',
+]);
+
+const JOURNAL = path.join(GRAPH_DIR, 'delivery-log.jsonl');
+const raw = fs.existsSync(JOURNAL) ? fs.readFileSync(JOURNAL, 'utf8').split('\n') : [];
+
+// A truncated line from a killed writer loses one event, never the record.
+const events = [];
+for (const line of raw) {
+  if (!line.trim()) continue;
+  let rec;
+  try { rec = JSON.parse(line); } catch { continue; }
+  if (!rec || typeof rec !== 'object') continue;
+  if (rec.ticket !== ticket || !REPAIR_EVENTS.has(rec.event)) continue;
+  events.push(rec);
+}
+
+// Chronological, with file order as the tiebreak. The journal is append-only,
+// but two processes write it (the main loop and the guard, from different
+// worktrees), so a late-arriving line is possible; an event with no usable `ts`
+// keeps the position it was appended at rather than floating to an end.
+let carried = 0;
+const ordered = events
+  .map((e, i) => {
+    const t = Date.parse(e.ts || '');
+    if (!Number.isNaN(t)) carried = t;
+    return { e, i, t: Number.isNaN(t) ? carried : t };
+  })
+  .sort((a, b) => (a.t - b.t) || (a.i - b.i))
+  .map((d) => d.e);
+
+// The most RECENT n — trimming the head, and still reading oldest-first: the
+// order is what shows a fixer that a hypothesis was tried and did not hold.
+const shown = limit === null ? ordered : ordered.slice(-limit);
+
+// A journal row carries only references. Resolving one is an explicit request
+// because the next fixer needs the complete hypothesis, while the ordinary
+// history view must remain a small, non-authorizing record. Every detail read
+// crosses the same durable receipt and identity checks as the live consumer;
+// missing store/worktree/base metadata is a refusal, never an empty hypothesis.
+function artifactFailure(message) {
+  console.error(`attempt-history: ${message}\n${USAGE}`);
+  process.exit(1);
+}
+
+function artifactWorktree(reference) {
+  const marker = `${path.sep}${roleArtifact.ARTIFACT_ARCHIVE_DIR}${path.sep}`;
+  const at = reference.lastIndexOf(marker);
+  return at > 0 ? reference.slice(0, at) : null;
+}
+
+function resolveArtifact(event) {
+  if (event.artifact_ref === undefined) return null;
+  if (typeof event.artifact_ref !== 'string' || !event.artifact_ref.trim()) {
+    artifactFailure('attempt references an empty artifact_ref');
+  }
+  if (typeof event.artifact_digest !== 'string' || !event.artifact_digest.trim()) {
+    artifactFailure(`attempt ${event.artifact_ref} has no artifact_digest; refusing unverified history`);
+  }
+  const worktreePath = event.artifact_worktree || artifactWorktree(event.artifact_ref);
+  const boundaryStore = event.boundary_store || event.boundary_store_path;
+  const dispatchId = event.dispatch_id || event.dispatchId;
+  const role = event.artifact_role || event.role;
+  const base = event.artifact_base || event.base || event.baseRef;
+  if (typeof worktreePath !== 'string' || !worktreePath.trim()) {
+    artifactFailure(`attempt ${event.artifact_ref} has no contained artifact worktree`);
+  }
+  if (typeof boundaryStore !== 'string' || !boundaryStore.trim()) {
+    artifactFailure(`attempt ${event.artifact_ref} has no durable boundary store`);
+  }
+  if (typeof dispatchId !== 'string' || !dispatchId.trim()) {
+    artifactFailure(`attempt ${event.artifact_ref} has no authenticated dispatch_id`);
+  }
+  if (typeof role !== 'string' || !role.trim() || typeof base !== 'string' || !base.trim()) {
+    artifactFailure(`attempt ${event.artifact_ref} has incomplete role/base identity`);
+  }
+  const input = {
+    worktreePath,
+    boundaryStore,
+    dispatchId,
+    role,
+    ticket,
+    base,
+    artifactPath: event.artifact_ref,
+    artifactDigest: event.artifact_digest,
+    historical: true,
+  };
+  if (event.pr !== undefined) input.pr = event.pr;
+  try {
+    return roleArtifact.read(input);
+  } catch (error) {
+    artifactFailure(
+      `referenced ${event.artifact_ref} is not a verified historical artifact `
+      + `(${error.code || error.name || 'INVALID_ARTIFACT'}): ${error.message}`,
+    );
+  }
+}
+
+const detailed = details ? shown.map((event) => {
+  const artifact = resolveArtifact(event);
+  if (!artifact) return event;
+  const findings = artifact.findings && typeof artifact.findings === 'object' ? artifact.findings : {};
+  const envelope = artifact.envelope && typeof artifact.envelope === 'object' ? artifact.envelope : {};
+  const count = (name) => envelope[name] === undefined ? findings[name] : envelope[name];
+  return {
+    ...event,
+    artifact_historical: true,
+    ...(findings.hypothesis === undefined ? {} : { artifact_hypothesis: findings.hypothesis }),
+    ...(findings.notes === undefined ? {} : { artifact_notes: findings.notes }),
+    ...(findings.verdict === undefined ? {} : { artifact_verdict: findings.verdict }),
+    ...(count('moved_count') === undefined ? {} : { artifact_moved_count: count('moved_count') }),
+    ...(count('reuse_candidates_count') === undefined
+      ? {} : { artifact_reuse_candidates_count: count('reuse_candidates_count') }),
+    ...(count('evidence_count') === undefined ? {} : { artifact_evidence_count: count('evidence_count') }),
+  };
+}) : shown;
+
+// The attempt NUMBER, derived from the same ordered array rather than a second
+// pass over the journal. Two rules make it the number the loop can act on:
+//
+//   * a quarantined flake is NOT charged — ADR-001 D3, and deliver.md says the
+//     flake round is logged at an UNCHANGED `n`. A raw count of `attempt` events
+//     would charge it and contradict the file that instructs it;
+//   * counted over `ordered`, never over `shown` — `--limit` decides what a
+//     fixer READS, and a display flag must not lower the backstop's input.
+const attempts = ordered.filter((e) => e.event === 'attempt' && e.outcome !== 'flake').length;
+const nextN = attempts + 1;
+
+if (asJson) {
+  // Raw still means raw — `events` is exactly the array this used to print — with
+  // the two derived numbers beside it. `next_n` is the key deliver.md names, so
+  // it is spelled in one place, here. A JSON consumer must never be handed the
+  // prose line below, and an empty history is `events: []` with `next_n: 1`.
+  console.log(JSON.stringify({ ticket, attempts, next_n: nextN, resource: resourceState(ordered), events: detailed }, null, 2));
+  process.exit(0);
+}
+
+// The number the next round logs as `n=`, once, above the record it belongs to —
+// including for a ticket nobody has attempted, where `next_n=1` is the answer and
+// the sentence below is the evidence for it.
+console.log(`attempts=${attempts} next_n=${nextN}`);
+const resources = resourceState(ordered);
+if (resources.state !== 'unknown') console.log(`resource=${resources.state} checkpoint=${resources.checkpoint}`);
+
+if (!shown.length) {
+  console.log(`no prior attempts recorded for ${ticket}`);
+  process.exit(0);
+}
+
+// Read order for a human and for a fixer alike: what round, who ran it, what it
+// believed, how it ended. Unknown keys still render (T-20-01/T-20-06 add to the
+// attempt event, and a field this reader has not heard of is still evidence);
+// `ts`, `event` and `ticket` are the line itself or its subject, and `by` is
+// provenance the fixer cannot act on.
+const HIDDEN = new Set(['ts', 'event', 'ticket', 'by']);
+// `effort`/`effort_applied` sit with `model` because they are one thought with it
+// — WHAT ran and HOW HARD — and because of what reads them: `repeat_exhausted`
+// rests on `effort_applied` (ADR-007 D2), so the next fixer's "how hard was this
+// tried already" is answered off this line. The dispatch attribution fields sit
+// immediately after them: a repair round must carry its task level, runtime,
+// backend and (for Codex) selected file into the next round's prompt, otherwise
+// the fixer can see that a hypothesis failed but not which execution lane
+// produced the evidence. Unknown keys still render at the tail, but these known
+// fields belong before the outcome and hypothesis where they can be acted on.
+// Absence still renders nothing: an unmeasured field stays unmeasured.
+const ORDER = [
+  'n', 'role', 'model', 'effort', 'effort_applied', 'task_level', 'runtime',
+  'backend', 'agent_file', 'observed_model', 'observed_effort', 'pr', 'signature',
+  'head', 'artifact_ref', 'artifact_digest', 'artifact_historical',
+  'artifact_hypothesis', 'artifact_notes', 'artifact_verdict',
+  'artifact_moved_count', 'artifact_reuse_candidates_count', 'artifact_evidence_count',
+  'outcome', 'pushed', 'verdict', 'reason', 'hypothesis',
+];
+
+// A hypothesis is a sentence. Quoted, it stays ONE field instead of shredding
+// the line it lives on into unreadable fragments.
+const value = (v) => {
+  const s = String(v);
+  return s === '' || /[\s"]/.test(s) ? JSON.stringify(s) : s;
+};
+
+for (const e of detailed) {
+  const keys = [
+    ...ORDER.filter((k) => Object.prototype.hasOwnProperty.call(e, k)),
+    ...Object.keys(e).filter((k) => !HIDDEN.has(k) && !ORDER.includes(k)),
+  ];
+  const parts = [];
+  for (const k of keys) {
+    const v = e[k];
+    if (v === null || v === undefined) continue; // e.g. an escalation with no PR yet
+    parts.push(`${k}=${value(v)}`);
+  }
+  console.log([e.event, ...parts].join(' '));
+}

@@ -1,0 +1,22 @@
+{
+  "name": "delivery-pipeline",
+  "id": "delivery-pipeline",
+  "owner": {
+    "name": "Nochevnyi Serhii"
+  },
+  "metadata": {
+    "description": "Multilevel delivery pipeline: /shipyard:route, /shipyard:investigate, /shipyard:decompose, /shipyard:deliver, /shipyard:bench"
+  },
+  "plugins": [
+    {
+      "name": "shipyard",
+      "source": "./",
+      "description": "Deep investigation -> ticket DAG -> per-ticket worktree/PR delivery babysat to green",
+      "author": {
+        "name": "Nochevnyi Serhii"
+      },
+      "keywords": ["delivery", "gsd", "tickets", "worktree", "pr"],
+      "category": "workflow"
+    }
+  ]
+}
