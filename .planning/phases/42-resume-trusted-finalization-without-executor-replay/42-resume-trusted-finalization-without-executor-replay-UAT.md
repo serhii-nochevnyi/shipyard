@@ -1,10 +1,10 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: dc116f16c815547ec339e172fcc80203dd4e6a57dbce180bbbb54b6534ce7a50
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 89bdb0755c2a8db8088a9a95850c95f20ffe0593ab794e0377baeb5dc9bd3348
 phase: 42
 status: pending
 result: pending
 shipyard_sync: evidence-projection
-shipyard_source_fingerprint: dc116f16c815547ec339e172fcc80203dd4e6a57dbce180bbbb54b6534ce7a50
+shipyard_source_fingerprint: 89bdb0755c2a8db8088a9a95850c95f20ffe0593ab794e0377baeb5dc9bd3348
 ---
 
 # Phase 42: Resume trusted finalization without executor replay — UAT Projection

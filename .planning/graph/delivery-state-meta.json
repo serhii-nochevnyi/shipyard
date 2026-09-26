@@ -1,13 +1,13 @@
 {
   "schema_version": 1,
-  "generation": 368,
-  "generation_identity": "d09a7d3a-00cd-4517-aca1-006efa5d1f0f",
-  "previous_generation_identity": "16777245:12923041434:1790412389481866500:a3cc7f4ff4909de8d63cf20a8117df5aae3f8003ae1bdbff353025777588d0ff",
-  "observed_at": "2026-09-26T09:40:04.898Z",
-  "generated_at": "2026-09-26T09:40:04.898Z",
+  "generation": 369,
+  "generation_identity": "5f6952b5-9eab-4dcd-b113-5aedf0f7bdd4",
+  "previous_generation_identity": "16777245:12923510242:1790419239465342000:1061f7ea3fc1a58c189969cad02df7227468d5b2a0d156277f9f1ea71119fe1c",
+  "observed_at": "2026-09-26T10:40:49.348Z",
+  "generated_at": "2026-09-26T10:40:49.348Z",
   "by": "state-sync",
-  "pid": 70179,
-  "observation_generation": 368,
+  "pid": 40376,
+  "observation_generation": 369,
   "observation_projection": {
     "tickets": {
       "T-20-01": {
@@ -2200,23 +2200,29 @@
         "checks": null
       },
       "T-42-01": {
-        "status": "pending",
+        "status": "pr-open",
         "repository": null,
-        "pr": null,
-        "head": null,
+        "pr": 255,
+        "head": "7d79bee1c96e43ac61beb6ead62c25b745e43808",
         "draft": false,
         "base": "epic/42-resume-trusted-finalization-without-executor-replay",
-        "merge_state": null,
+        "merge_state": "CLEAN",
         "review_decision": null,
-        "checks": null
+        "checks": {
+          "total": 1,
+          "pending": 0,
+          "failing": 0,
+          "none_reported": false,
+          "unavailable": false
+        }
       }
     }
   },
   "binding": {
     "schema_version": 1,
-    "state_digest": "fb43b58cd68e19e35a419831bd251a8cdb38650aad2801287b1729cc3a90d06a",
-    "front_digest": "386614438138a77e5dbd338fb0bdae195c56423c145027c59d1b133917d49d45",
-    "observation_digest": "c575a915eb05686224fb68167b40643ea80191ac1a944bc0c4ed7627f03be8ec",
-    "observation_generation": 368
+    "state_digest": "688c582b8355fe96b5ae9bef5c639caf6306991d19e127b267465cc0feb79626",
+    "front_digest": "277b7845f1db04671c6af5200c45dc6257cbfff1abf9a84b591cc319c7e41545",
+    "observation_digest": "6fba5f89b54b41dd7b5b83ec1b28bb899917b3a15f6188ab1592ca9014869fa4",
+    "observation_generation": 369
   }
 }
