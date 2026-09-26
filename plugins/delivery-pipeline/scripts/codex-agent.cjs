@@ -10,15 +10,15 @@ const path = require('path');
 const pc = require('./pipeline-config.cjs');
 const boundary = require('./dispatch-boundary.cjs');
 const policy = require('./model-policy.cjs');
-const { createCodexDispatchAdapter, REPAIR } = require('./codex-dispatch-adapter.cjs');
+const { createCodexDispatchAdapter, repairFor } = require('./codex-dispatch-adapter.cjs');
 const { validateCodexConfiguration } = require('./codex-model-remap.cjs');
 const { createCodexRuntimeHost } = require('./codex-runtime-host.cjs');
 
 const ROLE_ALIASES = Object.freeze({ 'inv-research': 'research' });
 const CAPABILITIES_CONTRACT = 'provide current host capabilities through options.capabilities/options.host.capabilities or the CLI --capabilities-file <json> (supportedModels and supportedEfforts)';
 
-function fail(message, code = 'INVALID_INPUT') {
-  throw policy.policyError(code, message + '. ' + REPAIR);
+function fail(message, code = 'INVALID_INPUT', details = {}) {
+  throw policy.policyError(code, message + '. ' + repairFor(code, details), details);
 }
 function isObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -184,7 +184,8 @@ function selectAgentInternal(role, options) {
 function selectAgent(role, options = {}) {
   try { return selectAgentInternal(role, options); }
   catch (error) {
-    if (!error.message.includes(REPAIR)) error.message += '. ' + REPAIR;
+    const repair = repairFor(error.code, error.details);
+    if (!error.message.includes(repair)) error.message += '. ' + repair;
     throw error;
   }
 }

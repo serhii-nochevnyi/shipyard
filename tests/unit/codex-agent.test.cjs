@@ -101,6 +101,29 @@ test('missing escalation file refuses instead of selecting the existing ordinary
   } finally { clean(f); }
 });
 
+test('a stale or missing generated agent refusal keeps the exact historical reinstall remedy', () => {
+  const f = fixture();
+  try {
+    fs.unlinkSync(path.join(f.agentDir, 'shipyard-arch-review-critical.toml'));
+    assert.throws(() => selectAgent('arch-review', { ...f.options, signals: { critical: true } }), (error) =>
+      error.code === 'STALE_GENERATED_AGENT'
+      && error.message.includes('Install an ADR-014-capable Codex host and regenerate agents with install-shipyard-codex.sh --phase 2; provide current host capabilities and retry the exact selection.')
+      && !error.message.includes('gsd-tune.cjs'));
+  } finally { clean(f); }
+});
+
+test('a project-config-caused refusal names the key, the config file and the gsd-tune command instead of a reinstall', () => {
+  const f = fixture({ model_policy: { runtime_tiers: { codex: { luna: { model: 'gpt-6-luna', effort: 'medium' } } } } });
+  try {
+    assert.throws(() => selectAgent('executor', f.options), (error) =>
+      error.code === 'CONFLICTING_OVERRIDE'
+      && error.message.includes('model_policy.runtime_tiers.codex.luna')
+      && error.message.includes('.planning/config.json')
+      && error.message.includes('gsd-tune.cjs --runtime codex')
+      && !error.message.includes('install-shipyard-codex.sh'));
+  } finally { clean(f); }
+});
+
 test('unverified repair escalation cannot be manufactured by the selector', () => {
   const f = fixture();
   try {

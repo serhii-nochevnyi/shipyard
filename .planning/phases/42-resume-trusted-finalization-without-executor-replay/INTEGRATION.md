@@ -2,89 +2,109 @@
 
 - **Verdict:** `passed`
 - **Blocking findings:** 0
-- **Combined head:** `dfcfdce647a9fae9ea464fe5270cae79a60ba42f` (tree `dae53f5b0f1cd75ddfb96de358809f0663dac05d`), branch `epic/42-resume-trusted-finalization-without-executor-replay`
-- **Base:** `origin/main` = `8c8e923245bb2709849a253219953f5c4b0f072e` (tree `6050f4fdc8eacd55396cc9cd65be6f05da678cdf`); merge-base `39c1a8f150bc8f3583bfc9409642786ba4dafeb6`
-- **Ticket set digest:** `6082868f80e2de868b424ef847ca86c76ed1e070366b2a89caaa14e52a1f3287` (recomputed with `node -e` as `sha256(JSON.stringify(ticket_set))`; it matches the authenticated subject)
+- **Combined head:** `36cd1d3d2e0df492c0e0d9a526b8cc536582f06f` (tree `86f1ceb0678680e11062c40b2b32d9a68bc05feb`), branch `epic/42-resume-trusted-finalization-without-executor-replay`
+- **Base:** `origin/main` = `bb79b90a826cc1b20cbe4476ff1bdd70f45211a3` (tree `3e13d6654ff417217c2d56de22872b902fb10128`); merge-base `0e80b740128e83e772ec9de9805b525d8917975c`
+- **Ticket set:** T-42-01 (#255), T-42-02 (#270), T-42-03 (#274)
+- **Ticket-set digest:** `82e2fea090a4b5870f94c8f706aedef2169c31a5d90c43385a8702cdbf4688da`. I recomputed it with `node -e` as `sha256(JSON.stringify(ticket_set))` and it matches the authenticated subject.
 - **Date:** 2026-09-26
 
-| Ticket | PR | PR head | Merged as |
-|---|---|---|---|
-| T-42-01 | #255 | `d8d2f937a1d0a80ebe1759e94a4acac2b15b852b` | squash `6cb4b51a` |
-| T-42-02 | #270 | `4df51fd54c136e5bfeb9c83f9daa2a7037b998e1` | squash `dfcfdce6` |
+This file replaces the earlier phase-42 integration record (head `dfcfdce6`, two tickets). It is fresh evidence for the three-ticket set. The earlier record is quoted only for context and is never cited as evidence.
 
 ## 0. Revision and delivery-identity checks
 
 | Check | Command | Result |
 |---|---|---|
-| Combined head/tree and base/tree | `git rev-parse HEAD HEAD^{tree} origin/main origin/main^{tree}` | `dfcfdce6…/dae53f5b…`, `8c8e9232…/6050f4fd…` |
-| Squash commits carry exactly the PR heads' code | `git diff 6cb4b51a d8d2f937 --stat -- . ':!.planning'` and `git diff dfcfdce6 4df51fd5 --stat -- . ':!.planning'` | both empty, so the PR head trees equal the merged trees outside `.planning/` |
-| Phase code diff scope | `git diff --stat 39c1a8f1 HEAD -- . ':!.planning'` | 15 files and +2155/−75. Every file is in the declared `files_modified` of T-42-01 ∪ T-42-02 |
-| Epic merges cleanly into current main | `git merge-tree --write-tree origin/main HEAD` | exit 0, tree `0edbde80de351e29644b4d08e187f0d974237ea8` |
-| Main drift since merge-base | `git log --oneline 39c1a8f1..origin/main` | #268 (package freshness only on PRs into main), #269 (untrack archive). Neither touches phase files |
-| Marketplace package fresh on epic head | `node scripts/package-shipyard-codex.cjs $TMPDIR/pkgout42b && diff -r plugins/shipyard $TMPDIR/pkgout42b` | no diff ("epic head package FRESH") |
-| Marketplace package fresh on epic⊕main merge | `git archive 0edbde80 \| tar -x`, then `node scripts/package-shipyard-codex.cjs …` and `diff -r` | no diff. `GITHUB_BASE_REF=main node tests/unit/marketplace-install.test.cjs` exit 0 |
+| Head, tree, base | `git rev-parse HEAD HEAD^{tree} origin/main origin/main^{tree}` | `36cd1d3d…`, `86f1ceb0…`, `bb79b90a…`, `3e13d665…` (matches the packet) |
+| Merge-base | `git merge-base HEAD origin/main` | `0e80b740…` |
+| Epic-only commits | `git log --oneline origin/main..HEAD` | a single commit, `36cd1d3d (T-42-03): finalize scoped changes (#274)` |
+| T-42-01 and T-42-02 already on main | `git log --oneline -12 origin/main` | `5d3b7328 Merge pull request #263` (epic to main) contains `6cb4b51a` (#255) and `dfcfdce6` (#270) |
+| Each squash commit equals its PR head (excluding `.planning`) | `git diff --quiet <squash> <pr-head> -- . ':!.planning'` | `6cb4b51a`=`d8d2f937`: y. `dfcfdce6`=`4df51fd5`: y. `36cd1d3d`=`613ade3e`: y. All three squash commits are ancestors of HEAD (`git merge-base --is-ancestor`). |
+| Main-only changes since the merge-base | `git diff --name-only 0e80b740 origin/main \| grep -vc '^\.planning/'` | `0`: main-only drift is planning-only (33 `.planning` files, phase 43) |
+| Epic merges cleanly into main | `git merge-tree --write-tree origin/main HEAD` | exit 0, tree `24a7a318…` |
+| Combined diff excluding `.planning` | `git diff --stat origin/main...HEAD -- . ':!.planning'` | 5 files, +62/−9: `codex-delivery-host.cjs` and its mirror, `plugin.json`, `package-build.json`, `tests/unit/codex-delivery-host.test.cjs` |
 
-## 1. Verification commands (both tickets)
+Because #263 already carried T-42-01 and T-42-02 onto main, the combined epic-vs-main code diff is exactly T-42-03. The cross-ticket judgement below still covers all three tickets as merged at HEAD.
 
-| Command | Result in this worktree |
-|---|---|
-| `node --check` on `codex-delivery-host.cjs`, `codex-runtime-host.cjs`, `command-runner.cjs`, `delivery-commit-finalizer.cjs` | all ok |
-| `node tests/unit/command-runner.test.cjs` | exit 0. 6 pass and 2 skipped: `sandbox-exec: sandbox_apply: Operation not permitted` because this integrator runs inside a Seatbelt sandbox, and nested sandboxes are refused |
-| `node tests/unit/codex-runtime-host.test.cjs` | 13/14 with the Claude session env set. The one failure is `claude-session-env: runtime claude conflicts with option.runtime (codex)`, an environment leak. With `env -u CLAUDECODE -u CLAUDE_CODE_* …` the result is **14 passed, 0 failed**, including `host-owned additional protected paths deny the finalization state root and cannot be overridden by a launch request` |
-| `node tests/unit/codex-delivery-host.test.cjs` | **not runnable here**: gpg-agent cannot bind its unix socket (`error binding socket to '…/S.gpg-agent': Operation not permitted`). Key generation fails at module load before any test runs |
-| `node tests/unit/delivery-commit-finalizer.test.cjs` | **not runnable here** for the same reason (`gpg: agent_genkey failed: No agent running`) |
+## 1. Verification commands
 
-**Unknown:** the gpg-backed suites and the real `bwrap` denial tests could not be run from this sandbox. GitHub checks for #255/#270 could not be read either: `gh` config read was denied and `api.github.com` egress was denied. The next check is the `test-fast` job on the epic → `main` PR. That job installs bubblewrap and sets `SHIPYARD_REQUIRE_OS_SANDBOX=1` (`.github/workflows/test.yml:57,65`). Under that variable a missing backend is a failure, not a skip (`tests/unit/command-runner.test.cjs:57`). `tests/unit/run.sh` runs every `tests/unit/*.test.cjs`, so both gpg suites run in that job too.
+| Command (from ticket PLANs) | Exit | Notes |
+|---|---|---|
+| `node --check plugins/delivery-pipeline/scripts/codex-delivery-host.cjs` | 0 | T-42-01/02/03 |
+| `node --check plugins/delivery-pipeline/scripts/delivery-commit-finalizer.cjs` | 0 | T-42-01 |
+| `node --check plugins/delivery-pipeline/scripts/codex-runtime-host.cjs` | 0 | T-42-02 (also checked `command-runner.cjs`: 0) |
+| `node tests/unit/command-runner.test.cjs` | 0 | The 2 real-OS-backend denial tests **skipped**. Both skip sites (`command-runner.test.cjs:112,138`) apply only when `SHIPYARD_REQUIRE_OS_SANDBOX` is unset. I could not run nested `sandbox-exec` because the tool approval was refused in this session. |
+| `node tests/unit/codex-runtime-host.test.cjs` | 1, then **0** | The first run failed 1/14 with `claude-session-env: runtime claude conflicts with option.runtime (codex)`. That is environmental: `runtime-context.cjs:214` detects the `CLAUDE_CODE_ENTRYPOINT` of this Claude session. Re-run with `env -u CLAUDE_CODE_ENTRYPOINT -u CLAUDE_PLUGIN_ROOT`: 14 passed, 0 failed. |
+| `node tests/unit/codex-delivery-host.test.cjs` | 1 (**not run to completion**) | The fixture setup fails at `gpg --quick-generate-key` with `can't connect to the agent: IPC connect call failed`. A standalone probe (`GNUPGHOME=$d gpg --batch … --quick-generate-key`, exit 2, and `gpgconf --launch gpg-agent`, error) shows this sandbox refuses the gpg-agent Unix socket. This is environmental and unrelated to the diff. |
+| `node tests/unit/delivery-commit-finalizer.test.cjs` | 1 (**not run to completion**) | Same gpg-agent refusal. |
+
+**CI state: unknown.** `gh pr view` / `gh pr checks` for #255/#270/#274 fail with `open /Users/serhii/.config/gh/config.yml: operation not permitted`. **Next check:** `gh pr checks 274` and the `test` workflow on `epic/42-…` at `36cd1d3d`, both on a host where the GnuPG-backed suites and `SHIPYARD_REQUIRE_OS_SANDBOX=1` run. That CI step is wired at `.github/workflows/test.yml:54-66`: it installs bubblewrap, relaxes the AppArmor userns restriction, smoke-tests `bwrap`, then runs `make test-fast` with `SHIPYARD_REQUIRE_OS_SANDBOX: "1"`.
+
+**Substitute evidence for T-42-03 without GnuPG.** I loaded the merged `PLAN_EXECUTABLE_ALLOWLIST`, `fail`, `resolveVerificationExecutable` and `planVerification` source text from HEAD into a `vm` context (`$TMPDIR/pv.cjs`) and ran fixtures through it:
+
+```
+OK     node --version          -> [[process.execPath, ["--version"]]]
+OK     bash tests/smoke/x.sh   -> [["/bin/bash", ["tests/smoke/x.sh"]]]
+OK     bash -n x.sh            -> [["/bin/bash", ["-n","x.sh"]]]
+OK     make test-docs          -> [["/usr/bin/make", ["test-docs"]]]
+REFUSE sh test.sh              -> VERIFICATION_SPEC_UNSUPPORTED "must start with node, bash, make or an absolute executable"
+REFUSE npm test                -> VERIFICATION_SPEC_UNSUPPORTED (same)
+REFUSE bash -c "true"          -> VERIFICATION_SPEC_UNSUPPORTED "plain argv without shell syntax … split it into separate bullets"
+REFUSE node a.cjs && rm -rf x  -> VERIFICATION_SPEC_UNSUPPORTED (shell syntax)
+OK     /usr/bin/true           -> [["/usr/bin/true", []]]
+```
+
+**Repository-wide sweep.** I ran the same harness over every tracked PLAN (`git ls-files '.planning/phases/*-PLAN.md'`): `{"ok":174,"refuse":30,"none":17}`. All 30 refusals are shell syntax, such as `grep … ;`, `! grep`, `{ echo …; }`, `&&`, and `<scratch-worktree>` placeholders. None of them is a bare-program refusal.
+
+**Open-ticket sweep.** I took the 45 open tickets other than T-42-03 (`.planning/graph/tickets.json` joined with `delivery-state.json`, status not `merged`) and read their PLANs from `origin/main` (`git show origin/main:<plan>`): `{"ok":45,"refuse":0,"none":0}`. The earlier record's finding I1 (19 of 47 open tickets refused) is resolved.
+
+**Package mirror.** `node scripts/package-shipyard-codex.cjs $TMPDIR/pkg/shipyard` followed by `diff -r $TMPDIR/pkg/shipyard plugins/shipyard` exits 0. `package-build.json` is identical. `cmp` shows the canonical and mirrored `codex-delivery-host.cjs`, `codex-runtime-host.cjs`, `command-runner.cjs` and `delivery-commit-finalizer.cjs` are byte-identical.
 
 ## 2. Cross-ticket coherence
 
-**Seam T-42-01 → T-42-02: the finalization state root is denied to the executor. Coherent.**
-- One derivation of the state root serves writer, reader and deny list. `hostStateRoot` (`codex-delivery-host.cjs:153`) is used by preflight (`:584`), recovery (`:641`), the resume CLI (`:904`) and the delivery-host constructor (`:762`). The constructor passes `additionalProtectedPaths: [stateRoot]` to the runtime host (`:777`).
-- The HMAC key (`hostKey`, `:200`), candidates, verification records and finalization records all live under that root, so the executor profile denies all four.
-- The directory is created (`privateDirectory` inside `hostStateRoot`) before the launcher is built. The realpath resolution in `normalizeProtectedPaths` (`codex-runtime-host.cjs:759`) therefore resolves the real path, and the test asserts the realpath form.
-- Launch-time request fields cannot change the set. `hostProtectedPaths` is fixed at launcher construction (`codex-runtime-host.cjs:802-805`) and merged at `:836`. `createCodexRuntimeHost` forwards only the host option (`:1040`).
-- The verification sandbox deny list still contains `prepared.stateRoot` (`codex-delivery-host.cjs:333`), which was unchanged by T-42-02 as its plan requires.
-
-**Seam finalizer ↔ host: exact tree. Coherent.**
-- `finalizeDeliveryCommit` refuses when `expectedTree` differs (`delivery-commit-finalizer.cjs:184-185`) and returns `tree`.
-- `scopedTree` (`:233`) computes the candidate tree with the same private-index method.
-- The host passes `expectedTree: candidate.scoped_tree` and rechecks parent/tree/signer in `verifySignedCommit`.
-
-**No duplicated or contradictory solutions between the two tickets.** T-42-02 did the refactor its plan asked for ("one deny-path normalizer"): `signerProtectionPaths` and `signerPermissionProfileArgs` now share `normalizeProtectedPaths`. Non-blocking duplication that remains is listed as I2 and I3.
+- **T-42-01 → T-42-02 seam (state-root deny).** `createCodexDeliveryHost` computes `stateRoot = hostStateRoot(options, scope)` (`codex-delivery-host.cjs:780`) and passes `additionalProtectedPaths: [stateRoot]` to `createCodexRuntimeHost` (`:795`). The runtime host validates the value as a host-only array (`codex-runtime-host.cjs:802-805`), threads it through (`:1040`), and merges it with the signer paths in a single normalizer before building the profile (`:836`, `:855`; `signerPermissionProfileArgs` at `:778-782`). The same `prepared.stateRoot` is the verification sandbox's first denied path (`codex-delivery-host.cjs:351`). Tests assert it at `tests/unit/codex-delivery-host.test.cjs:308` and `tests/unit/codex-runtime-host.test.cjs:249`; the latter passed in the re-run above. **Connected, no dead seam.**
+- **T-42-01 → T-42-03 seam (PLAN-pinned spec → sandboxed runner).** `planVerification` (`codex-delivery-host.cjs:289-311`) now calls one resolver, `resolveVerificationExecutable` (`:275-287`), backed by the frozen in-code `PLAN_EXECUTABLE_ALLOWLIST` (`:33-36`). The result still flows through `pinnedVerification` (`:313-337`), which requires an absolute executable, and then through `createVerificationRunner` (`command-runner.cjs:195-254`), which checks the absolute executable again (`:179`).
+  - The Linux backend always ro-binds `/usr`, `/bin`, `/sbin`, `/lib`, `/lib64` and `/etc` (`command-runner.cjs:102,158-162`), so `/bin/bash` and `/usr/bin/make` are present inside `bwrap`.
+  - The macOS profile allows `file-read*` apart from the denied paths (`command-runner.cjs:147-148`).
+  - The environment allowlist (`PATH`, `LANG`, `LC_ALL`, plus `HOME`/`TMPDIR` set to the temp directory, `command-runner.cjs:214-217`) keeps out `BASH_ENV` and `MAKEFLAGS`, so neither interpreter picks up host configuration.
+  - **Coherent.** The earlier ticket's refusal/remedy style (`VERIFICATION_SPEC_UNSUPPORTED` plus a named remedy) is kept: the missing-executable message is at `:283-284` and the non-allowlisted message at `:305`.
+- **Duplicated or contradictory helpers.** None new. T-42-03 replaced the single `node` special case rather than adding a second resolver (diff `-const executable = program === 'node' ? … : program;` → `resolveVerificationExecutable(program)`). The earlier record's I2/I3 remain: two deny-list builders, and `realOrResolved` (`command-runner.cjs:115`) alongside `normalizeProtectedPaths` in the runtime host. T-42-03 does not touch them and they are not re-raised as new findings.
+- **Recovery never launches.** `createFinalizationRecoveryHost` (`codex-delivery-host.cjs:762-769`) exposes only `resumeFinalization` (`:653-760`). The only `launchAgent` call is at `:835`, inside `createCodexDeliveryHost`. The CLI routes `--resume-finalization` to `runResumeCli` (`:954`) with strict four-token parsing (`:889-892`).
 
 ## 3. Emergent architecture check (ADRs)
 
-- **ADR-014 (dispatch boundary / policy):** recovery authenticates the original receipt through `getVerifiedRecord` (`authenticatedReceipt`, `codex-delivery-host.cjs:237`). The policy hash check in recovery calls `resolveDispatch` without signals. I confirmed that the hash does not depend on the rung: `node -e` comparing base and `critical` executor resolutions gave `true`, with `gpt-6-luna max` vs `gpt-6-sol high`. Recovery resolves no model and launches nothing: `createFinalizationRecoveryHost` has no runtime host.
-- **ADR-004 (positive evidence before mutation):** a candidate is admitted only after the verified receipt, a non-empty delta, a stable graph and passing sealed verification records (`:590-612`). Changed identity refuses with named invalidated checks and keeps the gates pending.
-- **ADR-007 (connected mechanisms):** the recovery entry is reachable from the production CLI (`runCli` → `runResumeCli`). The refusal on finalization failure names the candidate and `--resume-finalization` (`:619`). The receipt store the recovery path reconstructs (`:661`) matches the CLI's default recorder location (`storageDirectory` with canonical worktree).
-- **ADR-020 (accepted, phase 43):** it requires host verification to match a *project allow-list*. Phase 42 has no allow-list and admits only `node`/absolute executables. The allow-list is explicitly owned by T-43-01 (`43-01-PLAN.md:4`), so this is not a phase-42 violation. See I1 for the interaction.
-- No layering or error-policy contradictions were found. New codes follow the existing `fail(code, message)` pattern and fall back to the default entry in `refusal-hints.cjs`, as many pre-existing codes do (for example `GRAPH_UNAVAILABLE`).
+- **ADR-014 (dispatch boundary).** Recovery still authenticates the original receipt through `getVerifiedRecord` (`authenticatedReceipt`, `codex-delivery-host.cjs:241-259`). T-42-03 changes nothing in receipts or policy.
+- **ADR-004 (positive evidence before mutation).** The finalizer still compares the private-index tree with the candidate's `expectedTree` (`codex-delivery-host.cjs:490` → `delivery-commit-finalizer.cjs:184-185`). T-42-03 widens only which PLAN bullets can produce evidence. It does not widen what counts as passing evidence.
+- **ADR-007 (connected mechanisms).** The new resolver sits on the production path (`planVerification` ← `pinnedVerification` ← delivery prepare), which the T-42-03 test (`tests/unit/codex-delivery-host.test.cjs:753`) and the harness above both exercise.
+- **ADR-020 (project allow-list for host verification, phase 43).** ADR-020 line 28 requires plan-declared commands to match a *project* allow-list. T-42-03's list only maps a program name to an absolute path, and it is not a project authority list. T-43-16 owns the project allow-list and already lists `T-42-03` in its `depends_on` (`git show origin/main:.planning/phases/43-target-project-delivery-at-scale/43-16-PLAN.md`, line 7). **Not a violation, and the ordering is correct.** See N1 for what T-43-16 should close.
 
 ## 4. Acceptance sweep
 
-### T-42-01
-1. *Candidate survives each finalization failure, is authenticated against the original durable dispatch, remains visible with failed/pending gates, and downstream completion is never inferred from the signed commit.*
-   **Satisfied in code.** `finalizedArtifact` admits the candidate before `finalizeCandidate` and wraps any failure in `candidateRefusal` carrying `candidate_id` and gates (`codex-delivery-host.cjs:612-621`). Artifacts always report `downstream: {ci: pending, review: pending}`. Tests `completed executor work persists a private authenticated candidate…` and `changed tree, graph, base, plan, verification or receipt refuses…` cover it. Their execution is **unknown here** (gpg).
-2. *Real OS sandbox backends deny protected read, outside-temp write and network in CI.*
-   **Wired.** The CI step installs bubblewrap, relaxes the AppArmor userns restriction, smoke-tests `bwrap`, and sets `SHIPYARD_REQUIRE_OS_SANDBOX=1` (`.github/workflows/test.yml:55-65`). The hostile fixture test throws, rather than skips, under that variable. Actual CI outcome: **unknown** (GitHub unreachable from this sandbox).
-3. *Human checkpoint reviews candidate/tree/gate binding before recovery is authorized; changed identity refuses explicitly; the T-39-16 scenario separates executor, finalizer and revalidation.*
-   Refusal matrix and executor launch count: satisfied in code and tests (`f.calls.length` stays 1, and 0 new launches via the CLI). **Human approval record: assumption.** The graph marks `human_checkpoint: true, preauthorized: false` for T-42-01 (`.planning/graph/tickets.json`), and the operator merged #255 (`delivery-log.jsonl:1414`). No in-repo approval artifact was found (`Grep T-42-0[12]` over `.planning/`). The next check is the #255 review/approval on GitHub. See I5.
+### T-42-01 (#255, squash `6cb4b51a`, already on main via #263)
 
-### T-42-02
-1. *The Codex executor permission profile denies the host state root that contains the finalization HMAC key.* **Satisfied.** `codex-delivery-host.cjs:777` → `codex-runtime-host.cjs:836`. Test `production runtime host receives the scoped prompt…` asserts `JSON.stringify(stateRoot(f)) + '="deny"'` in the filesystem arg. The runtime-host test passes 14/14 (see §1).
-2. *Executor requests cannot alter the protected path set.* **Satisfied.** The set is fixed at construction. The runtime-host test passes `additionalProtectedPaths`/`protectedPaths` in launch options and asserts the attacker path is absent. It passed.
+1. *The candidate survives finalization failure, is authenticated against the original dispatch, and keeps failed/pending gates visible.* In code: `DOWNSTREAM_GATES` (`codex-delivery-host.cjs:29`), the sealed candidate write (`:449`), the refusal naming `--resume-finalization` (`:637`), and HMAC-verified reads (`readSealed`, `:220-239`). The test suite that asserts this could not run here because of gpg-agent (§1). **Status: satisfied in code; test run unknown here.** Next check: CI on #255/#263.
+2. *Real OS sandbox backends deny the hostile fixture in CI.* The CI step is wired (`.github/workflows/test.yml:54-66`) and the test throws rather than skips under `SHIPYARD_REQUIRE_OS_SANDBOX=1` (`tests/unit/command-runner.test.cjs:57`). **The actual CI result is unknown** (gh unavailable).
+3. *Human checkpoint.* I grepped `.planning/` for `T-42-01.*(approv|checkpoint)` and found no in-repo approval artifact. #255 was merged by the operator and shipped to main through #263. **Assumption**, recorded as I2. Next check: the #255 review/approval on GitHub.
+
+### T-42-02 (#270, squash `dfcfdce6`, already on main via #263)
+
+1. *The executor profile denies the host state root.* `codex-delivery-host.cjs:795`, `codex-runtime-host.cjs:836,855`. The test `codex-runtime-host.test.cjs:249` passed (14/14 re-run), plus the assertion at `codex-delivery-host.test.cjs:308`. **Satisfied.**
+2. *Executor requests cannot alter the protected set.* Paths come only from host options (`codex-runtime-host.cjs:802-805`), and `requestValue` allows only `role`, `signals`, `context`, `dispatch_id` and `gsd_role` (`codex-delivery-host.cjs:55-60`). The same passing test name covers this: "…cannot be overridden by a launch request". **Satisfied.**
+
+### T-42-03 (#274, squash `36cd1d3d`, the epic's only commit beyond main)
+
+1. *`bash …` and `make …` bullets resolve to fixed absolute executables with unchanged argv.* The resolver is at `codex-delivery-host.cjs:33-36,275-287,303`. The harness output in §1 shows `/bin/bash` and `/usr/bin/make` with argv unchanged. The test is at `tests/unit/codex-delivery-host.test.cjs:753-768`, but its run was blocked by gpg here. **Satisfied (harness evidence).**
+2. *Shell syntax and non-allowlisted bare programs still refuse with a named remedy.* `sh`, `npm`, `bash -c "true"` and `&&` all refuse with `VERIFICATION_SPEC_UNSUPPORTED` (harness, §1). The test's fixture list is extended at `tests/unit/codex-delivery-host.test.cjs:741-751`. **Satisfied.** A missing allowlisted binary refuses with the "install … or change the PLAN" remedy (`:283-284`). I did not execute that branch here because both binaries exist on this host.
+3. *Done: open tickets using bash/make verification are no longer refused.* The open-ticket sweep gave 45/45 ok. **Satisfied.**
+4. *Package mirror regenerated.* The regeneration diff is empty (§1). **Satisfied.**
 
 ## 5. Findings (all non-blocking)
 
-- **I1 — PLAN-derived verification refuses 19 of 47 open repository tickets on the Codex path (note, phase-level).**
-  `planVerification` admits only `node` or absolute executables (`codex-delivery-host.cjs:271-287`). Running the same parse over every open graph ticket's PLAN (inline `node -e` simulation) gave: 28 accepted, **19 refused** with `VERIFICATION_SPEC_UNSUPPORTED`, all because of bare `bash …`. The refused set includes T-40-01, T-40-27, T-43-06 and others, several of which depend on T-42-01. This is the contract's intended fail-closed behavior ("Missing/unsupported specifications refuse with a named remedy"), and it happens before launch. The Claude runtime is unaffected. However, those tickets cannot be delivered through the Codex host until their plans use absolute executables or the T-43-01 verification allow-list maps `bash`.
-  **Related unknown:** plan commands that need gpg-agent, such as `node tests/unit/codex-delivery-host.test.cjs`, may fail inside the macOS verification profile, which is `deny default` with no network/unix-socket allowance (`command-runner.cjs:142-147`). If so, pre-commit verification would refuse them. This is untested here.
-- **I2 — Two deny lists for signer material (informational).** The executor profile uses `signerProtectionPaths` (`codex-runtime-host.cjs:763`), which reads `options.env` GNUPGHOME and an absolute `user.signingkey` path. The verification sandbox builds its own list from `process.env` only (`codex-delivery-host.cjs:333`). Signing is GPG-only (`signerFingerprint`), and verification denies network and outside-temp writes, so impact is low. A shared helper would keep the two in step.
-- **I3 — Repeated defaults and normalizers (informational).** The default storage root literal appears three times (`codex-delivery-host.cjs:155,161,506`). `realOrResolved` (`command-runner.cjs:115`) duplicates `resolveProtectedPath`/`normalizeProtectedPaths` (`codex-runtime-host.cjs:759`).
-- **I4 — Recovery trust inputs outside the executor deny set (informational, pre-existing).** The durable dispatch authority key sits at `<storageRoot>/<sha(run,worktree)>/.shipyard-dispatch-authority-*.key` (`dispatch-boundary.cjs:208-209`). Sibling worktrees' `finalization/<sha>` roots are also outside the set. Only this worktree's state root is denied (`codex-delivery-host.cjs:777`). The executor can read these files but cannot write host state under the `:workspace` profile. A forged recovery would also need a candidate sealed with the denied finalization key. Recommended follow-up: deny `<storageRoot>` as a whole in the executor profile.
-- **I5 — Human checkpoint evidence not in repo (informational, T-42-01).** See §4 T-42-01.3.
-- **I6 — Planning projections are stale (informational).** `delivery-state.json` still shows T-42-02 `pending`, and the VERIFICATION/UAT projections say "1/2 merged". The authenticated ticket set and commit `dfcfdce6` show #270 merged. These files are generated and the host refreshes them after this artifact.
+- **N1 — `bash -c <word>` and `make -f <path>` pass the shape check (note, T-42-03).** The harness shows that `bash -c npm` resolves to `["/bin/bash",["-c","npm"]]`, and `make -f /etc/hosts` is also accepted (`$TMPDIR/pv2.cjs`). A PLAN can therefore reach PATH lookup of a non-allowlisted program through the interpreter. T-42-03's threat-model row "A PLAN names an arbitrary program through PATH lookup — mitigate" holds only for the first argv token. This is by design: bash and make are general interpreters, `bash script.sh` already runs arbitrary repository content, PLANs are checker/operator-approved and pinned before launch, and the OS sandbox (`command-runner.cjs:142-174`) is the real boundary: no network, read-only repository, denied state root and keys. Recommendation: when T-43-16 adds the ADR-020 project allow-list, match on the full argv (or at least forbid `-c`/`-f` forms) instead of on the program alone. It needs no phase-42 fix.
+- **N2 — Resolver checks `isFile()` but not the exec bit (informational, T-42-03).** `codex-delivery-host.cjs:279` uses `fs.statSync(candidate).isFile()`. A non-executable `/bin/bash` would be pinned and then fail at spawn as a verification failure instead of the named `VERIFICATION_SPEC_UNSUPPORTED` remedy. `selectSandboxBackend` checks `(stat.mode & 0o111)` for the same kind of lookup (`command-runner.cjs:131`). The impact is cosmetic.
+- **N3 — Runtime fit of bash/make targets under the read-only sandbox is not proven (informational, T-42-03).** Most open-ticket bullets are `bash -n …` / `make -n …` (read-only). Smoke scripts such as `tests/smoke/worktree-smoke.sh` and `make -C tests/fixtures/live-project test` must write only under the sandbox temp directory: the worktree is `--ro-bind` on Linux (`command-runner.cjs:158-162`), and on macOS writes outside `writable` are denied (`:149`). The macOS `/usr/bin/make` is an `xcrun` shim, which may also try to write caches. I could not check this here because nested `sandbox-exec` approval was denied. Next check: run one `bash tests/smoke/*.sh` and one `make -C …` spec through `createVerificationRunner` on a CI or operator host.
+- **I2 — T-42-01 human-checkpoint evidence is not in the repo (informational, T-42-01).** See §4 T-42-01.3.
+- **I3 — Stale planning projection (informational).** `.planning/graph/delivery-state.json` at HEAD still shows `T-42-03` `status: "pending"`, `pr: null`, while the authenticated ticket set and commit `36cd1d3d` show #274 merged. This is a generated projection that the host refreshes after this artifact.
 
 ## Verdict
 
-`passed`. The two tickets meet at their intended seam: the state-root deny. Every acceptance criterion is implemented in merged code, the package mirror is fresh, and the epic merges cleanly into current `main`. Unknowns that remain for the epic → `main` PR's CI: the gpg-backed suites and the real `bwrap` denial run. The human checkpoint record for T-42-01 should be confirmed on #255.
+**`passed`.** All three tickets' acceptance criteria are met in merged code, and the T-42-01 → T-42-02 and T-42-01 → T-42-03 seams connect. No duplicated or contradictory mechanisms were introduced, and nothing in the combination violates an ADR. The earlier finding I1 (bash/make refusals) is resolved (45/45 open PLANs accepted). The remaining unknowns are the GnuPG-backed test suites, real-backend denial tests and CI status, all of which this sandbox blocked. They are named in §1 with their next checks and are not code defects found in the combined diff.

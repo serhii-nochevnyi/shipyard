@@ -32,10 +32,7 @@ const capabilities = {
 };
 const finalizerFile = path.join(__dirname, '../../plugins/delivery-pipeline/scripts/delivery-commit-finalizer.cjs');
 const finalizeCommit = require(fs.existsSync(finalizerFile) ? finalizerFile : process.env.SHIPYARD_T38_FINALIZER_FILE).finalizeDeliveryCommit;
-const temporary = (() => {
-  try { return fs.mkdtempSync('/tmp/scds-'); }
-  catch (error) { if (error.code !== 'EPERM' && error.code !== 'EACCES') throw error; return fs.mkdtempSync(path.join(os.tmpdir(), 'scds-')); }
-})();
+const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'scds-'));
 const previousEnv = {
   GNUPGHOME: process.env.GNUPGHOME,
   GIT_CONFIG_GLOBAL: process.env.GIT_CONFIG_GLOBAL,
@@ -738,8 +735,8 @@ test('recovery-only CLI reuses the PLAN-pinned verification spec without an inje
   } finally { clean(f); }
 });
 
-test('PLAN verification with shell syntax or a bare program refuses before launch', async () => {
-  for (const command of ['node a.cjs && rm -rf x', 'make test']) {
+test('PLAN verification with shell syntax or a non-allowlisted bare program refuses before launch', async () => {
+  for (const command of ['node a.cjs && rm -rf x', 'sh test.sh', 'npm test', 'bash -c "true"']) {
     const f = fixture();
     try {
       approvedPlan(f, [command]);
@@ -748,6 +745,23 @@ test('PLAN verification with shell syntax or a bare program refuses before launc
       assert.equal(f.calls.length, 0);
     } finally { clean(f); }
   }
+});
+
+test('PLAN verification resolves bash and make bullets to fixed absolute executables with unchanged argv', async () => {
+  const f = fixture();
+  const spy = [];
+  try {
+    approvedPlan(f, ['bash tests/smoke/x.sh', 'bash -n x.sh', 'make test-docs']);
+    await assert.rejects(() => delivery(f, { verification: undefined, verificationRunner: hostRunner(spy) }).run({
+      role: 'executor', context: { prompt: 'Implement.' } }), (error) => error.code === 'VERIFICATION_FAILED');
+    const bash = ['/bin/bash', '/usr/bin/bash'].find((candidate) => fs.existsSync(candidate));
+    const make = ['/usr/bin/make', '/bin/make'].find((candidate) => fs.existsSync(candidate));
+    assert.deepEqual(spy.map((spec) => [spec.executable, spec.argv]), [
+      [bash, ['tests/smoke/x.sh']],
+      [bash, ['-n', 'x.sh']],
+      [make, ['test-docs']],
+    ]);
+  } finally { clean(f); }
 });
 
 test('recovery takes over a stale fence left by a dead holder and refuses a live one', async () => {

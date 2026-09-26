@@ -89,3 +89,20 @@ test('all four hosts share this one map by requiring it directly', () => {
     );
   }
 });
+
+test('the Codex config-fix and generated-agent-fix causes are registered and formatted', () => {
+  for (const code of ['CODEX_CONFIG_FIX', 'CODEX_GENERATED_AGENT_FIX']) {
+    assert.ok(Object.hasOwn(HINTS, code), `HINTS is missing ${code}`);
+    assert.ok(Object.isFrozen(HINTS[code]));
+    assert.equal(typeof HINTS[code].hint, 'string');
+    assert.ok(HINTS[code].hint.trim().length > 0);
+    assert.equal(typeof HINTS[code].remedy, 'string');
+    assert.ok(HINTS[code].remedy.trim().length > 0);
+    assert.match(formatHint(code), new RegExp(`^hint\\[${code}\\]: .+ — remedy: .+$`));
+  }
+  assert.match(HINTS.CODEX_CONFIG_FIX.remedy, /\.planning\/config\.json/);
+  assert.match(HINTS.CODEX_CONFIG_FIX.remedy, /gsd-tune\.cjs --runtime codex/);
+  assert.doesNotMatch(HINTS.CODEX_CONFIG_FIX.remedy, /install-shipyard-codex/);
+  assert.match(HINTS.CODEX_GENERATED_AGENT_FIX.remedy, /install-shipyard-codex/);
+  assert.doesNotMatch(HINTS.CODEX_GENERATED_AGENT_FIX.remedy, /gsd-tune\.cjs/);
+});
