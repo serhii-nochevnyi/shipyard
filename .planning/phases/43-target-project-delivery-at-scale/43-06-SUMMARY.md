@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 98ba2a414c5387a5cd9c81ae10dc072969312fa8fdf0e9bbe2d41c80fe26112a
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 70146d7de3266e9bf0b1ad2d86a4bea810769bcb68b83a7f2e545b7f952158c8
 phase: 43-target-project-delivery-at-scale
 plan: 06
 subsystem: shipyard delivery
@@ -22,7 +22,7 @@ key-decisions:
 duration: 0min
 status: halted
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 98ba2a414c5387a5cd9c81ae10dc072969312fa8fdf0e9bbe2d41c80fe26112a
+shipyard_source_fingerprint: 70146d7de3266e9bf0b1ad2d86a4bea810769bcb68b83a7f2e545b7f952158c8
 ---
 
 # Phase 43: One exported conveyor scratch set for the role host, finalizer, Codex host, base-merge and gc — Delivery Projection

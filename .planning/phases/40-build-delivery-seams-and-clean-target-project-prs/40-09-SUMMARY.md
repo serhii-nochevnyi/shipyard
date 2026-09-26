@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 4d37a2b3659d4a285de71bf864167d681047a020597fd1087c68258de1032117
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 5ad210c73c57ca3f4b404fbe53da8799324d26df3c1e795de6f0a894823359b5
 phase: 40-build-delivery-seams-and-clean-target-project-prs
 plan: 09
 subsystem: shipyard delivery
@@ -22,7 +22,7 @@ key-decisions:
 duration: 0min
 status: halted
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 4d37a2b3659d4a285de71bf864167d681047a020597fd1087c68258de1032117
+shipyard_source_fingerprint: 5ad210c73c57ca3f4b404fbe53da8799324d26df3c1e795de6f0a894823359b5
 ---
 
 # Phase 40: Pass Codex child tasks by host-owned file path plus a digest the host verifies — Delivery Projection

@@ -1,11 +1,11 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 94e5250756fd0b88fe6ccf7f4613efa5c8428deb51288ecb365e0d309e7f9246
-phase: 43-target-project-delivery-at-scale
-plan: 17
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 0932b66285318968e68f88eca7f7a757bba508b5e74483894ba5233400a7e6e9
+phase: 42-resume-trusted-finalization-without-executor-replay
+plan: 03
 subsystem: shipyard delivery
 tags: [shipyard, gsd, delivery-projection]
 provides:
-  - Tracked delivery state for T-43-17
+  - Tracked delivery state for T-42-03
 affects: [GSD progress, Shipyard delivery]
 actuals:
   tokens: 0
@@ -22,19 +22,19 @@ key-decisions:
 duration: 0min
 status: halted
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 94e5250756fd0b88fe6ccf7f4613efa5c8428deb51288ecb365e0d309e7f9246
+shipyard_source_fingerprint: 0932b66285318968e68f88eca7f7a757bba508b5e74483894ba5233400a7e6e9
 ---
 
-# Phase 43: Record a sealed coverage entry for every trusted finalization and mechanical base-merge, plus the rollout marker — Delivery Projection
+# Phase 42: Accept bash and make in PLAN-pinned verification commands — Delivery Projection
 
 **Plan delivery is not complete; the projection preserves the current state.**
 
 ## Delivery Evidence
 
-- Ticket: T-43-17
+- Ticket: T-42-03
 - Delivery status: pending
 - PR: not observed
-- Source plan: .planning/phases/43-target-project-delivery-at-scale/43-17-PLAN.md
+- Source plan: .planning/phases/42-resume-trusted-finalization-without-executor-replay/42-03-PLAN.md
 - This summary is halted until the delivery state observes `merged`.
 
 ## Decisions & Deviations

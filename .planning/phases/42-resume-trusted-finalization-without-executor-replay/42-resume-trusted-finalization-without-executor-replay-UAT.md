@@ -1,10 +1,10 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 94892813a01e3dc0a570735a1b72a2301afdb321df68295f608548b635c6580d
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 4b8b2baf23eadd782e362b6284b6eb59e1909e9fa08ab44ffa547e3884480c4c
 phase: 42
 status: failed
 result: failed
 shipyard_sync: evidence-projection
-shipyard_source_fingerprint: 94892813a01e3dc0a570735a1b72a2301afdb321df68295f608548b635c6580d
+shipyard_source_fingerprint: 4b8b2baf23eadd782e362b6284b6eb59e1909e9fa08ab44ffa547e3884480c4c
 ---
 
 # Phase 42: Resume trusted finalization without executor replay — UAT Projection
@@ -12,8 +12,8 @@ shipyard_source_fingerprint: 94892813a01e3dc0a570735a1b72a2301afdb321df68295f608
 This file is generated from the delivery graph and phase integration evidence.
 
 ### 1. Delivery plans are accounted for
-result: passed
-expected: all 2 phase plan(s) are merged
+result: pending
+expected: all 3 phase plan(s) are merged
 actual: 2 merged
 
 ### 2. Integration evidence is explicit
