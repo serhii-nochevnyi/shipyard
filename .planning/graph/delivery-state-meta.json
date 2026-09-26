@@ -1,13 +1,13 @@
 {
   "schema_version": 1,
-  "generation": 364,
-  "generation_identity": "25ae9e19-f42f-47e4-b9cc-fcee648e8c82",
-  "previous_generation_identity": "16777245:12920124121:1790367781934824200:543dfd4a70a7abb00c24ad72d75c8fe5961a30ef1a703371a6b470d45fabcbae",
-  "observed_at": "2026-09-25T20:24:22.890Z",
-  "generated_at": "2026-09-25T20:24:22.890Z",
+  "generation": 365,
+  "generation_identity": "cf2d12cf-1200-420a-8857-a30980ec0e72",
+  "previous_generation_identity": "16777245:12922714835:1790407539307471400:8a6bd756bc240e42a18debc21353d2b5f919402580ec45b8e9c11f84c3d5a619",
+  "observed_at": "2026-09-26T07:25:48.298Z",
+  "generated_at": "2026-09-26T07:25:48.298Z",
   "by": "state-sync",
-  "pid": 73961,
-  "observation_generation": 364,
+  "pid": 78416,
+  "observation_generation": 365,
   "observation_projection": {
     "tickets": {
       "T-20-01": {
@@ -2090,38 +2090,26 @@
         "checks": null
       },
       "T-41-01": {
-        "status": "pr-open",
+        "status": "merged",
         "repository": null,
         "pr": 244,
-        "head": "caba7db32d50d292c60fa85e409d159b7f64b7c3",
-        "draft": true,
-        "base": "epic/41-reduce-pipeline-subscription-overhead",
-        "merge_state": "UNSTABLE",
-        "review_decision": null,
-        "checks": {
-          "total": 1,
-          "pending": 0,
-          "failing": 1,
-          "none_reported": false,
-          "unavailable": false
-        }
-      },
-      "T-41-02": {
-        "status": "pr-open",
-        "repository": null,
-        "pr": 237,
-        "head": "5a5ab28fd2e1adc17e020e4467abb8195cb5456d",
+        "head": null,
         "draft": false,
         "base": "epic/41-reduce-pipeline-subscription-overhead",
-        "merge_state": "CLEAN",
+        "merge_state": null,
         "review_decision": null,
-        "checks": {
-          "total": 1,
-          "pending": 0,
-          "failing": 0,
-          "none_reported": false,
-          "unavailable": false
-        }
+        "checks": null
+      },
+      "T-41-02": {
+        "status": "merged",
+        "repository": null,
+        "pr": 237,
+        "head": null,
+        "draft": false,
+        "base": "epic/41-reduce-pipeline-subscription-overhead",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
       },
       "T-41-03": {
         "status": "merged",
@@ -2135,9 +2123,9 @@
         "checks": null
       },
       "T-41-04": {
-        "status": "pending",
+        "status": "merged",
         "repository": null,
-        "pr": null,
+        "pr": 246,
         "head": null,
         "draft": false,
         "base": "epic/41-reduce-pipeline-subscription-overhead",
@@ -2146,38 +2134,26 @@
         "checks": null
       },
       "T-41-05": {
-        "status": "pr-open",
+        "status": "merged",
         "repository": null,
         "pr": 240,
-        "head": "6cbe202653e76cf1b40db66600d614f8c97aaa6a",
-        "draft": true,
-        "base": "epic/41-reduce-pipeline-subscription-overhead",
-        "merge_state": "UNSTABLE",
-        "review_decision": null,
-        "checks": {
-          "total": 1,
-          "pending": 1,
-          "failing": 0,
-          "none_reported": false,
-          "unavailable": false
-        }
-      },
-      "T-41-06": {
-        "status": "pr-open",
-        "repository": null,
-        "pr": 241,
-        "head": "7ddcfb33af84771efadfee144e3f26a10026c31a",
+        "head": null,
         "draft": false,
         "base": "epic/41-reduce-pipeline-subscription-overhead",
-        "merge_state": "CLEAN",
+        "merge_state": null,
         "review_decision": null,
-        "checks": {
-          "total": 1,
-          "pending": 0,
-          "failing": 0,
-          "none_reported": false,
-          "unavailable": false
-        }
+        "checks": null
+      },
+      "T-41-06": {
+        "status": "merged",
+        "repository": null,
+        "pr": 241,
+        "head": null,
+        "draft": false,
+        "base": "epic/41-reduce-pipeline-subscription-overhead",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
       },
       "T-41-07": {
         "status": "merged",
@@ -2201,6 +2177,17 @@
         "review_decision": null,
         "checks": null
       },
+      "T-41-09": {
+        "status": "pending",
+        "repository": null,
+        "pr": null,
+        "head": null,
+        "draft": false,
+        "base": "epic/41-reduce-pipeline-subscription-overhead",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
       "T-42-01": {
         "status": "pending",
         "repository": null,
@@ -2216,9 +2203,9 @@
   },
   "binding": {
     "schema_version": 1,
-    "state_digest": "05202ec39df33d8606e91c8a453e71a6bcde9a5bea2e3f160e029622863dd86e",
-    "front_digest": "008bac7941a3dff563a9eb7e36f9522cdcf2c98a8c071e1dcb4681cf6187cdd8",
-    "observation_digest": "dec57fbe20f02bb2775163a6f900a53e344a105b91e483b8fbd6c4ef4fd0d692",
-    "observation_generation": 364
+    "state_digest": "154f2c3629fc94b8341392496466b6c9d884c290593b18423b6204df9e93f0bd",
+    "front_digest": "8280ac60e9025c350b60711a336acc575162b6edc1bf6cfc78d311b2f0c1474e",
+    "observation_digest": "8e8cc407f75bc637280f7c565c95b88807f8bfa12a9101574584d1e16d59edee",
+    "observation_generation": 365
   }
 }

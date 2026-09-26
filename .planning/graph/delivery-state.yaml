@@ -1742,41 +1742,23 @@
 "T-41-01":
   branch: "ticket/T-41-01-measure-bounded-judgment-launches-and-pr"
   pr: 244
-  status: "pr-open"
-  draft: true
-  review_decision: null
+  status: "merged"
   url: "https://github.com/serhii-nochevnyi/shipyard/pull/244"
-  pr_base: "epic/41-reduce-pipeline-subscription-overhead"
-  pr_created_at: "2026-09-25T20:20:04Z"
-  head_sha: "caba7db32d50d292c60fa85e409d159b7f64b7c3"
-  merge_state: "UNSTABLE"
-  behind_by: 0
-  checks: {"total":1,"failing":1,"pending":0,"none_reported":false,"unavailable":false}
   base: "epic/41-reduce-pipeline-subscription-overhead"
   base_reason: "no primary parent — a root ticket PRs into epic/41-reduce-pipeline-subscription-overhead"
   epic: "epic/41-reduce-pipeline-subscription-overhead"
-  merge_scope: "stacked"
-  reapable: false
-  since: "2026-09-25T20:24:22.890Z"
+  reapable: true
+  since: "2026-09-26T07:25:48.298Z"
 "T-41-02":
   branch: "ticket/T-41-02-carry-bounded-durable-handoff-evidence-a"
   pr: 237
-  status: "pr-open"
-  draft: false
-  review_decision: null
+  status: "merged"
   url: "https://github.com/serhii-nochevnyi/shipyard/pull/237"
-  pr_base: "epic/41-reduce-pipeline-subscription-overhead"
-  pr_created_at: "2026-09-25T19:11:15Z"
-  head_sha: "5a5ab28fd2e1adc17e020e4467abb8195cb5456d"
-  merge_state: "CLEAN"
-  behind_by: 0
-  checks: {"total":1,"failing":0,"pending":0,"none_reported":false,"unavailable":false}
   base: "epic/41-reduce-pipeline-subscription-overhead"
   base_reason: "no primary parent — a root ticket PRs into epic/41-reduce-pipeline-subscription-overhead"
   epic: "epic/41-reduce-pipeline-subscription-overhead"
-  merge_scope: "stacked"
-  reapable: false
-  since: "2026-09-25T20:24:22.890Z"
+  reapable: true
+  since: "2026-09-26T07:25:48.298Z"
 "T-41-03":
   branch: "ticket/T-41-03-prove-installed-owner-scoped-stop-and-wa"
   pr: 238
@@ -1789,52 +1771,36 @@
   since: "2026-09-25T20:24:22.890Z"
 "T-41-04":
   branch: "ticket/T-41-04-accept-asynchronous-native-child-complet"
-  pr: null
-  status: "pending"
+  pr: 246
+  status: "merged"
+  matched_by: "marker"
+  pr_branch: "ticket/T-41-04-resume-authenticated-completed-execution"
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/246"
   base: "epic/41-reduce-pipeline-subscription-overhead"
   base_reason: "no primary parent — a root ticket PRs into epic/41-reduce-pipeline-subscription-overhead"
   epic: "epic/41-reduce-pipeline-subscription-overhead"
-  ready: true
-  reapable: false
-  since: "2026-09-25T11:44:03.568Z"
+  reapable: true
+  since: "2026-09-26T07:25:48.298Z"
 "T-41-05":
   branch: "ticket/T-41-05-fingerprint-each-gsd-projection-from-its"
   pr: 240
-  status: "pr-open"
-  draft: true
-  review_decision: null
+  status: "merged"
   url: "https://github.com/serhii-nochevnyi/shipyard/pull/240"
-  pr_base: "epic/41-reduce-pipeline-subscription-overhead"
-  pr_created_at: "2026-09-25T19:48:34Z"
-  head_sha: "6cbe202653e76cf1b40db66600d614f8c97aaa6a"
-  merge_state: "UNSTABLE"
-  behind_by: 0
-  checks: {"total":1,"failing":0,"pending":1,"none_reported":false,"unavailable":false}
   base: "epic/41-reduce-pipeline-subscription-overhead"
   base_reason: "no primary parent — a root ticket PRs into epic/41-reduce-pipeline-subscription-overhead"
   epic: "epic/41-reduce-pipeline-subscription-overhead"
-  merge_scope: "stacked"
-  reapable: false
-  since: "2026-09-25T20:24:22.890Z"
+  reapable: true
+  since: "2026-09-26T07:25:48.298Z"
 "T-41-06":
   branch: "ticket/T-41-06-join-deduplicated-usage-and-recovery-cos"
   pr: 241
-  status: "pr-open"
-  draft: false
-  review_decision: null
+  status: "merged"
   url: "https://github.com/serhii-nochevnyi/shipyard/pull/241"
-  pr_base: "epic/41-reduce-pipeline-subscription-overhead"
-  pr_created_at: "2026-09-25T19:49:41Z"
-  head_sha: "7ddcfb33af84771efadfee144e3f26a10026c31a"
-  merge_state: "CLEAN"
-  behind_by: 0
-  checks: {"total":1,"failing":0,"pending":0,"none_reported":false,"unavailable":false}
   base: "epic/41-reduce-pipeline-subscription-overhead"
   base_reason: "no primary parent — a root ticket PRs into epic/41-reduce-pipeline-subscription-overhead"
   epic: "epic/41-reduce-pipeline-subscription-overhead"
-  merge_scope: "stacked"
-  reapable: false
-  since: "2026-09-25T20:24:22.890Z"
+  reapable: true
+  since: "2026-09-26T07:25:48.298Z"
 "T-41-07":
   branch: "ticket/T-41-07-gate-phase-integration-on-the-complete-m"
   pr: 235
@@ -1903,6 +1869,16 @@
   blocked_reasons: {"T-40-17":"parent has no branch yet (nothing to cascade from)"}
   reapable: false
   since: "2026-09-24T19:40:45.987Z"
+"T-41-09":
+  branch: "ticket/T-41-09-align-first-response-usage-with-the-usag"
+  pr: null
+  status: "pending"
+  base: "epic/41-reduce-pipeline-subscription-overhead"
+  base_reason: "T-41-01 is MERGED, so its branch is no longer where work lands — the base is epic/41-reduce-pipeline-subscription-overhead (base-merge it in first to keep the review diff one slice)"
+  epic: "epic/41-reduce-pipeline-subscription-overhead"
+  ready: true
+  reapable: false
+  since: "2026-09-26T07:25:48.298Z"
 "T-42-01":
   branch: "ticket/T-42-01-resume-authenticated-completed-execution"
   pr: null
@@ -1994,7 +1970,7 @@
   epic: "epic/40-build-delivery-seams-and-clean-target-project-prs"
   ready: false
   blocked_by: ["T-40-11","T-40-07","T-40-14","T-41-04","T-42-01"]
-  blocked_reasons: {"T-40-11":"parent has no branch yet (nothing to cascade from)","T-40-07":"parent has no branch yet (nothing to cascade from)","T-40-14":"parent has no branch yet (nothing to cascade from)","T-41-04":"cross-phase parent must be MERGED and its phase 41 epic landed on main first (parent is pending)","T-42-01":"cross-phase parent must be MERGED and its phase 42 epic landed on main first (parent is pending)"}
+  blocked_reasons: {"T-40-11":"parent has no branch yet (nothing to cascade from)","T-40-07":"parent has no branch yet (nothing to cascade from)","T-40-14":"parent has no branch yet (nothing to cascade from)","T-41-04":"cross-phase parent must land on main first (phase 41 epic still ahead)","T-42-01":"cross-phase parent must be MERGED and its phase 42 epic landed on main first (parent is pending)"}
   reapable: false
   since: "2026-09-24T19:40:45.987Z"
 "T-40-16":
@@ -2005,8 +1981,8 @@
   base_reason: "T-40-01 has no branch on the remote yet (status pending) — ticket/T-40-01-make-git-creating-unit-fixtures-hermetic is not a base that exists, so the base is epic/40-build-delivery-seams-and-clean-target-project-prs"
   epic: "epic/40-build-delivery-seams-and-clean-target-project-prs"
   ready: false
-  blocked_by: ["T-40-01","T-41-01"]
-  blocked_reasons: {"T-40-01":"parent has no branch yet (nothing to cascade from)","T-41-01":"cross-phase parent must be MERGED and its phase 41 epic landed on main first (parent is pr-open)"}
+  blocked_by: ["T-40-01","T-41-01","T-41-09"]
+  blocked_reasons: {"T-40-01":"parent has no branch yet (nothing to cascade from)","T-41-01":"cross-phase parent must land on main first (phase 41 epic still ahead)","T-41-09":"cross-phase parent must be MERGED and its phase 41 epic landed on main first (parent is pending)"}
   reapable: false
   since: "2026-09-24T19:40:45.987Z"
 "T-40-15":
@@ -2041,8 +2017,8 @@
   base_reason: "T-40-14 has no branch on the remote yet (status pending) — ticket/T-40-14-hosts-write-a-pid-ttl-in-flight-record-a is not a base that exists, so the base is epic/40-build-delivery-seams-and-clean-target-project-prs"
   epic: "epic/40-build-delivery-seams-and-clean-target-project-prs"
   ready: false
-  blocked_by: ["T-40-21","T-40-16","T-40-14","T-40-19","T-41-01"]
-  blocked_reasons: {"T-40-21":"parent has no branch yet (nothing to cascade from)","T-40-16":"parent has no branch yet (nothing to cascade from)","T-40-14":"parent has no branch yet (nothing to cascade from)","T-40-19":"parent has no branch yet (nothing to cascade from)","T-41-01":"cross-phase parent must be MERGED and its phase 41 epic landed on main first (parent is pr-open)"}
+  blocked_by: ["T-40-21","T-40-16","T-40-14","T-40-19","T-41-01","T-41-09"]
+  blocked_reasons: {"T-40-21":"parent has no branch yet (nothing to cascade from)","T-40-16":"parent has no branch yet (nothing to cascade from)","T-40-14":"parent has no branch yet (nothing to cascade from)","T-40-19":"parent has no branch yet (nothing to cascade from)","T-41-01":"cross-phase parent must land on main first (phase 41 epic still ahead)","T-41-09":"cross-phase parent must be MERGED and its phase 41 epic landed on main first (parent is pending)"}
   reapable: false
   since: "2026-09-24T19:40:45.987Z"
 "T-40-23":
