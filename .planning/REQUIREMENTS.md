@@ -1,6 +1,6 @@
 # Requirements: shipyard
 
-<!-- shipyard:gsd-sync generated; sync-version: 1; source fingerprint: f432ba7a0a226d4f1794c7415790b17d8eb11f1f7f2016f23a272a92d7baab22 -->
+<!-- shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 49aff0b33acc1648f1949099c151f544da787d9222d1184a69d5a1ba70890cdf -->
 
 **Defined:** 2026-09-10
 **Core Value:** Keep delivery decisions truthful, resumable, and synchronized between the Shipyard conveyor and native GSD workflows.
@@ -164,6 +164,23 @@
 - [ ] **REQ-155**: GSD projection fingerprints use governing local inputs and dependency edges while preserving aggregate invalidation and consistency checks.
 - [ ] **REQ-156**: Existing usage reporting joins deduplicated parent/child and recovery usage to verified outcomes with honest unknowns, comparable cohorts and quality/readiness gates. ADR-011 was accepted for implementation on 2026-09-10. T-32-01/02 are the initial isolated tooling slice; subsequent packages remain subject to decomposition and rollout gates. Existing model floors remain unchanged.
 - [ ] **REQ-157**: Delivery-state YAML is header-free and deterministic, and pre-push gates resolve the actual git target, refusing an unresolvable named worktree with an actionable remedy.
+- [ ] **REQ-159**: Executor work is verified host-side: the trusted host runs only plan-declared, allow-listed verification commands outside the agent sandbox, records the result as finalization evidence and finalizes only on pass, on both runtimes, without widening the sandbox or changing the receipt shape.
+- [ ] **REQ-160**: The merge gate refuses a head not covered by the conveyor (executor or fixer receipt with trusted finalization, journalled base-merge, or declared remedy commit) for PRs opened after release, naming the command that brings a commit under the conveyor; earlier PRs are journalled as legacy.
+- [ ] **REQ-161**: A conform verdict carries across a base-merge when the ticket's own patch is identical and every other path equals the new base, posting the merge-gate status; any other difference re-owes arch-review.
+- [ ] **REQ-162**: human_checkpoint distinguishes review (human approval, then the guard merges into the epic) from merge (the human merges); true keeps meaning merge and preauthorized keeps working.
+- [ ] **REQ-163**: Target repositories declare extra allowed comment markers per owner/repo in trusted project configuration, and a changed line whose pre-image was already a comment is not an addition.
+- [ ] **REQ-164**: Pre-existing Jira issues are bound by key: decompose proposes the mapping, Gate 2 approves it, a recorded key is authoritative (never create, refuse unknown), and unlabelled issues are only transitioned and commented.
+- [ ] **REQ-165**: Only operator-declared repository remedy workflows run before a human escalation, bounded and journalled, and their commits are a declared link of the merge gate's chain.
+- [ ] **REQ-166**: One exported definition of the conveyor's scratch files is used by the role host, finalizer, Codex delivery host, base-merge and gc; other untracked files still block the role host, and its status read survives large output.
+- [ ] **REQ-167**: A stale approval from a declared bot does not block a merge when the target branch requires no review or a fresh human approval exists; otherwise the guard re-requests review once and escalates with the command.
+- [ ] **REQ-168**: A cancelled check superseded by a newer run is ignored and a lone cancelled run gets one journalled rerun that is never green; one Claude ci-wait call returns within 540 s with the window budget accumulated across calls.
+- [ ] **REQ-169**: pipeline.gsd_sync is honoured as a deprecated alias with a visible warning, decompose writes ROADMAP in the shape gsd-sync reads, and a phase absent from ROADMAP yields one summarised warning instead of a per-plan block.
+- [ ] **REQ-170**: publish-gate resolves the base from the ticket's recorded base and the repository's origin/HEAD before the origin/main fallback, the pre-push hook passes the ticket, and an unresolved base still refuses.
+- [ ] **REQ-171**: Reachability checks ask bounded questions: run-reachability uses O(1)-output git forms with a large maxBuffer, and sentinel epic reachability compares declared paths through local git with a path-scoped fallback that still refuses truncation.
+- [ ] **REQ-172**: deliver-dispatch builds research, decomposition, arch-review, ci-fix and review-fix requests that round-trip through each host's exported validator, with Codex parity or a named reason.
+- [ ] **REQ-173**: state-sync lists PRs by ticket head and open state instead of a bulk all-state listing and skips tickets whose merge into a landed epic is recorded immutably, with --full re-deriving everything.
+- [ ] **REQ-174**: An arch-review finding of unknown type is kept as an informational note with its original type and never changes the verdict; violations and incomplete blocking findings still fail.
+- [ ] **REQ-175**: Phase 43 ships after phases 40, 41 and 42 are released; every fix carries unit or fixture tests that fail on base, and before/after measurements come from a later operator proving-ground rerun.
 
 ## Out of Scope
 
@@ -332,10 +349,27 @@
 | REQ-155 | Phase 41 | Blocked |
 | REQ-156 | Phase 41 | Blocked |
 | REQ-157 | Phase 41 | Blocked |
+| REQ-159 | Phase 43 | In Progress |
+| REQ-160 | Phase 43 | In Progress |
+| REQ-161 | Phase 43 | In Progress |
+| REQ-162 | Phase 43 | In Progress |
+| REQ-163 | Phase 43 | In Progress |
+| REQ-164 | Phase 43 | In Progress |
+| REQ-165 | Phase 43 | In Progress |
+| REQ-166 | Phase 43 | In Progress |
+| REQ-167 | Phase 43 | In Progress |
+| REQ-168 | Phase 43 | In Progress |
+| REQ-169 | Phase 43 | In Progress |
+| REQ-170 | Phase 43 | In Progress |
+| REQ-171 | Phase 43 | In Progress |
+| REQ-172 | Phase 43 | In Progress |
+| REQ-173 | Phase 43 | In Progress |
+| REQ-174 | Phase 43 | In Progress |
+| REQ-175 | Phase 43 | In Progress |
 
 **Coverage:**
-- v1 requirements: 156 total
-- Mapped to phases: 154
+- v1 requirements: 173 total
+- Mapped to phases: 171
 - Unmapped: 2 ⚠️
 
 ---

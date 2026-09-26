@@ -391,6 +391,23 @@ script — not in a prompt.** Every requirement below is an instance of it.
 - **REQ-155** — GSD projection fingerprints use governing local inputs and dependency edges while preserving aggregate invalidation and consistency checks.
 - **REQ-156** — Existing usage reporting joins deduplicated parent/child and recovery usage to verified outcomes with honest unknowns, comparable cohorts and quality/readiness gates. ADR-011 was accepted for implementation on 2026-09-10. T-32-01/02 are the initial isolated tooling slice; subsequent packages remain subject to decomposition and rollout gates. Existing model floors remain unchanged.
 - **REQ-157** — Delivery-state YAML is header-free and deterministic, and pre-push gates resolve the actual git target, refusing an unresolvable named worktree with an actionable remedy.
+- **REQ-159** — Executor work is verified host-side: the trusted host runs only plan-declared, allow-listed verification commands outside the agent sandbox, records the result as finalization evidence and finalizes only on pass, on both runtimes, without widening the sandbox or changing the receipt shape.
+- **REQ-160** — The merge gate refuses a head not covered by the conveyor (executor or fixer receipt with trusted finalization, journalled base-merge, or declared remedy commit) for PRs opened after release, naming the command that brings a commit under the conveyor; earlier PRs are journalled as legacy.
+- **REQ-161** — A conform verdict carries across a base-merge when the ticket's own patch is identical and every other path equals the new base, posting the merge-gate status; any other difference re-owes arch-review.
+- **REQ-162** — human_checkpoint distinguishes review (human approval, then the guard merges into the epic) from merge (the human merges); true keeps meaning merge and preauthorized keeps working.
+- **REQ-163** — Target repositories declare extra allowed comment markers per owner/repo in trusted project configuration, and a changed line whose pre-image was already a comment is not an addition.
+- **REQ-164** — Pre-existing Jira issues are bound by key: decompose proposes the mapping, Gate 2 approves it, a recorded key is authoritative (never create, refuse unknown), and unlabelled issues are only transitioned and commented.
+- **REQ-165** — Only operator-declared repository remedy workflows run before a human escalation, bounded and journalled, and their commits are a declared link of the merge gate's chain.
+- **REQ-166** — One exported definition of the conveyor's scratch files is used by the role host, finalizer, Codex delivery host, base-merge and gc; other untracked files still block the role host, and its status read survives large output.
+- **REQ-167** — A stale approval from a declared bot does not block a merge when the target branch requires no review or a fresh human approval exists; otherwise the guard re-requests review once and escalates with the command.
+- **REQ-168** — A cancelled check superseded by a newer run is ignored and a lone cancelled run gets one journalled rerun that is never green; one Claude ci-wait call returns within 540 s with the window budget accumulated across calls.
+- **REQ-169** — pipeline.gsd_sync is honoured as a deprecated alias with a visible warning, decompose writes ROADMAP in the shape gsd-sync reads, and a phase absent from ROADMAP yields one summarised warning instead of a per-plan block.
+- **REQ-170** — publish-gate resolves the base from the ticket's recorded base and the repository's origin/HEAD before the origin/main fallback, the pre-push hook passes the ticket, and an unresolved base still refuses.
+- **REQ-171** — Reachability checks ask bounded questions: run-reachability uses O(1)-output git forms with a large maxBuffer, and sentinel epic reachability compares declared paths through local git with a path-scoped fallback that still refuses truncation.
+- **REQ-172** — deliver-dispatch builds research, decomposition, arch-review, ci-fix and review-fix requests that round-trip through each host's exported validator, with Codex parity or a named reason.
+- **REQ-173** — state-sync lists PRs by ticket head and open state instead of a bulk all-state listing and skips tickets whose merge into a landed epic is recorded immutably, with --full re-deriving everything.
+- **REQ-174** — An arch-review finding of unknown type is kept as an informational note with its original type and never changes the verdict; violations and incomplete blocking findings still fail.
+- **REQ-175** — Phase 43 ships after phases 40, 41 and 42 are released; every fix carries unit or fixture tests that fail on base, and before/after measurements come from a later operator proving-ground rerun.
 
 ## Phases
 
@@ -792,12 +809,24 @@ tickets; do not repeat its provenance/schema work or phase 39 packet fixes.
 
 The OS-sandboxed trusted verification runner needs a host where real sandbox denial tests run; a sandboxed executor cannot exercise them.
 
+### Phase 43: Target-project delivery at scale
+**Status**: planned (ADR-020)
+**Requirements**: REQ-159, REQ-160, REQ-161, REQ-162, REQ-163, REQ-164, REQ-165, REQ-166, REQ-167, REQ-168, REQ-169, REQ-170, REQ-171, REQ-172, REQ-173, REQ-174, REQ-175
+**Depends on**: Phases 40, 41 and 42 (released)
+**Delivery order**: one wave after phases 40, 41 and 42 are released
+
+Implement [ADR-020](architecture/ADR-020-target-project-delivery-at-scale.md) from
+[INV-007](investigations/INV-007-target-project-scale/): host-side verification and a
+receipt-gated merge, verdict carry across sibling base-merges, review/merge checkpoints,
+repository-declared comment markers, Jira binding by key, declared remedy workflows, a shared
+scratch set, and the point fixes found on the pdffiller proving ground.
+
 <!-- shipyard:gsd-sync:begin -->
 ## Shipyard synchronization (generated)
 
-- Source fingerprint: `282185c6d6203e3cd57e9de3ba5adf2e6bde58b2d0ed1c0fe4fd5315cbff21e5`
-- Plans merged: 172/200
-- Phases verified: 10/23
+- Source fingerprint: `62c2bffaa83b3e3e18d83b4ae74ea95ff14fb4fd239b3b326fc1b21ca5bac14f`
+- Plans merged: 172/219
+- Phases verified: 10/24
 - Current phase: 20
 
 | Phase | Plans | Merged | Verification |
@@ -825,5 +854,6 @@ The OS-sandboxed trusted verification runner needs a host where real sandbox den
 | 40 — Build delivery seams and clean target-project PRs | 27 | 0 | pending |
 | 41 — Reduce pipeline subscription overhead | 9 | 9 | gaps_found |
 | 42 — Resume trusted finalization without executor replay | 1 | 0 | pending |
+| 43 — Target-project delivery at scale | 19 | 0 | pending |
 
 <!-- shipyard:gsd-sync:end -->
