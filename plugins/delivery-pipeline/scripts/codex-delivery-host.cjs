@@ -30,6 +30,10 @@ const DOWNSTREAM_GATES = Object.freeze(['ci', 'review']);
 const RESUME_SCOPE_FIELDS = Object.freeze(['run_id', 'repository', 'worktree', 'phase', 'ticket']);
 const PLAN_COMMAND_TIMEOUT_MS = 10 * 60 * 1000;
 const PLAN_COMMAND_OUTPUT_BYTES = 1024 * 1024;
+const PLAN_EXECUTABLE_ALLOWLIST = Object.freeze({
+  bash: Object.freeze(['/bin/bash', '/usr/bin/bash']),
+  make: Object.freeze(['/usr/bin/make', '/bin/make']),
+});
 
 function object(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -268,6 +272,20 @@ function planSnapshot(graph, row) {
   return Object.freeze({ path: row.plan, sha256: sha256(content), text: content.toString('utf8') });
 }
 
+function resolveVerificationExecutable(program) {
+  if (program === 'node') return process.execPath;
+  const candidates = PLAN_EXECUTABLE_ALLOWLIST[program];
+  if (!candidates) return program;
+  const found = candidates.find((candidate) => {
+    try { return fs.statSync(candidate).isFile(); } catch (_) { return false; }
+  });
+  if (!found) {
+    fail('VERIFICATION_SPEC_UNSUPPORTED', 'PLAN verification names ' + program + ' but none of '
+      + candidates.join(', ') + ' exist on this host; install ' + program + ' or change the PLAN');
+  }
+  return found;
+}
+
 function planVerification(plan) {
   const lines = plan.text.split(/\r?\n/);
   const start = lines.findIndex((line) => /^##\s+Verification commands\s*$/.test(line));
@@ -282,9 +300,9 @@ function planVerification(plan) {
         + '; split it into separate bullets under "## Verification commands"');
     }
     const [program, ...argv] = match[1].trim().split(/\s+/);
-    const executable = program === 'node' ? process.execPath : program;
+    const executable = resolveVerificationExecutable(program);
     if (!path.isAbsolute(executable)) {
-      fail('VERIFICATION_SPEC_UNSUPPORTED', 'PLAN verification command must start with node or an absolute executable: ' + match[1]);
+      fail('VERIFICATION_SPEC_UNSUPPORTED', 'PLAN verification command must start with node, bash, make or an absolute executable: ' + match[1]);
     }
     commands.push({ id: 'plan-' + (commands.length + 1), executable, argv,
       timeoutMs: PLAN_COMMAND_TIMEOUT_MS, maxOutputBytes: PLAN_COMMAND_OUTPUT_BYTES });
