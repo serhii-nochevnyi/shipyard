@@ -17,9 +17,9 @@ const pr = (over) => ({
 
 suite('matchTicketPr — branch match');
 
-test('an exact branch match wins and is labelled `branch`', () => {
+test('an exact branch match wins and is labelled `head`', () => {
   const m = matchTicketPr('T-01-02', ticket, [pr({ number: 7 })]);
-  assert.strictEqual(m.matchedBy, 'branch');
+  assert.strictEqual(m.matchedBy, 'head');
   assert.strictEqual(m.pr.number, 7);
 });
 
@@ -54,12 +54,53 @@ test('same state → the newest row wins', () => {
   assert.strictEqual(matchTicketPr('T-01-02', ticket, rows).pr.number, 6);
 });
 
-suite('matchTicketPr — marker fallback (renamed branch)');
+suite('matchTicketPr — recorded (pr-ledger)');
+
+test('the recorded number wins over a same-branch PR from another workspace', () => {
+  const recorded = { number: 5, head: ticket.branch };
+  const rows = [
+    pr({ number: 5, state: 'MERGED', createdAt: '2026-01-01T00:00:00Z' }),
+    pr({ number: 9, state: 'OPEN', createdAt: '2026-02-01T00:00:00Z' }),
+  ];
+  const m = matchTicketPr('T-01-02', ticket, rows, recorded);
+  assert.strictEqual(m.matchedBy, 'recorded');
+  assert.strictEqual(m.pr.number, 5);
+});
+
+test('a re-decompose rename: the recorded number still matches on its old head', () => {
+  const renamed = { branch: 'ticket/T-01-02-new-slug', title: 'Add undo endpoint' };
+  const recorded = { number: 7, head: 'ticket/T-01-02-old-slug' };
+  const rows = [pr({ number: 7, headRefName: 'ticket/T-01-02-old-slug' })];
+  const m = matchTicketPr('T-01-02', renamed, rows, recorded);
+  assert.strictEqual(m.matchedBy, 'recorded');
+  assert.strictEqual(m.pr.number, 7);
+});
+
+test('a recorded number whose PR head matches neither recorded.head nor the branch is a mismatch, not a fallback', () => {
+  const recorded = { number: 5, head: 'ticket/T-01-02-old-slug' };
+  const rows = [
+    pr({ number: 5, headRefName: 'some/unrelated-branch' }),
+    pr({ number: 6, headRefName: ticket.branch }),
+  ];
+  assert.strictEqual(matchTicketPr('T-01-02', ticket, rows, recorded), null);
+});
+
+suite('matchTicketPr — neutral branches (D-08)');
+
+test('a neutral `feat/<slug>` PR with no id anywhere still matches by head', () => {
+  const neutral = { branch: 'feat/add-undo-endpoint', title: 'Add undo endpoint' };
+  const rows = [pr({ number: 3, headRefName: neutral.branch, title: 'Add undo endpoint' })];
+  const m = matchTicketPr('T-01-02', neutral, rows);
+  assert.strictEqual(m.matchedBy, 'head');
+  assert.strictEqual(m.pr.number, 3);
+});
+
+suite('matchTicketPr — legacy-marker fallback (renamed branch)');
 
 test('a title marker matches when the branch was renamed', () => {
   const rows = [pr({ number: 42, headRefName: 'ticket/T-01-02-old-slug' })];
   const m = matchTicketPr('T-01-02', ticket, rows);
-  assert.strictEqual(m.matchedBy, 'marker');
+  assert.strictEqual(m.matchedBy, 'legacy-marker');
   assert.strictEqual(m.pr.number, 42);
 });
 
@@ -70,6 +111,11 @@ test('a colliding ticket id from another workspace is rejected by title similari
 
 test('a ticket-id substring does not match a different id', () => {
   const rows = [pr({ number: 50, headRefName: 'x', title: 'T-01-020: Add undo endpoint' })];
+  assert.strictEqual(matchTicketPr('T-01-02', ticket, rows), null);
+});
+
+test('a neutral-branch PR whose title carries the id no longer matches by marker', () => {
+  const rows = [pr({ number: 51, headRefName: 'neutral/some-other-branch', title: 'T-01-02: Add undo endpoint' })];
   assert.strictEqual(matchTicketPr('T-01-02', ticket, rows), null);
 });
 
