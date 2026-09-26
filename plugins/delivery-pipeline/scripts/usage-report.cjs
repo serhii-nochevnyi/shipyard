@@ -291,12 +291,20 @@ function addCounters(target, row, counters) {
 }
 
 // @invariant: a missing counter makes the summed field unknown, never a silently truncated total.
+// @invariant: Claude and Codex units are never summed; a group spanning runtimes has null top-level counters.
 function rollupVerifiedCompletions(rows, counters, coreFields) {
-  const blank = (extra) => ({ ...extra, dispatch_ids: new Set(), observations: 0,
+  const blank = (extra) => ({ ...extra, dispatch_ids: new Set(), observations: 0, runtimes: new Map(),
     ...Object.fromEntries(counters.map((f) => [f, 0])) });
   const add = (g, row) => {
     if (row.dispatch_id) g.dispatch_ids.add(row.dispatch_id);
     g.observations += row.observations;
+    if (!g.runtimes.has(row.runtime)) {
+      g.runtimes.set(row.runtime, { runtime: row.runtime, provider_family: RUNTIME_PROVIDER[row.runtime] || null,
+        observations: 0, ...Object.fromEntries(counters.map((f) => [f, 0])) });
+    }
+    const slice = g.runtimes.get(row.runtime);
+    slice.observations += row.observations;
+    addCounters(slice, row, counters);
     addCounters(g, row, counters);
   };
   const completed = (row) => row.verified_completion_status === 'completed' && row.ticket && row.run_id;
@@ -329,18 +337,30 @@ function rollupVerifiedCompletions(rows, counters, coreFields) {
       }
       reason = targets.length ? 'shared_ambiguous_completion' : 'no_verified_completion';
     }
-    if (!unassigned.has(reason)) unassigned.set(reason, blank({ reason, rows: 0 }));
-    const bucket = unassigned.get(reason);
+    const bucketKey = JSON.stringify([reason, row.runtime]);
+    if (!unassigned.has(bucketKey)) {
+      unassigned.set(bucketKey, blank({ reason, runtime: row.runtime,
+        provider_family: RUNTIME_PROVIDER[row.runtime] || null, rows: 0 }));
+    }
+    const bucket = unassigned.get(bucketKey);
     bucket.rows++;
     add(bucket, row);
   }
   const finish = (g) => {
     const dispatchIds = [...g.dispatch_ids].sort();
-    return { ...g, dispatch_ids: dispatchIds, dispatch_count: dispatchIds.length };
+    const byRuntime = [...g.runtimes.values()].sort((a, b) => a.runtime.localeCompare(b.runtime));
+    const { runtimes, ...rest } = g;
+    const mixed = byRuntime.length > 1;
+    return { ...rest, ...(mixed ? Object.fromEntries(counters.map((f) => [f, null])) : {}),
+      mixed_runtime: mixed, by_runtime: byRuntime, dispatch_ids: dispatchIds, dispatch_count: dispatchIds.length };
   };
   return {
-    completions: completions.map((g) => ({ ...finish(g), complete: coreFields.every((field) => g[field] !== null) })),
-    unassigned: [...unassigned.values()].map(finish).sort((a, b) => a.reason.localeCompare(b.reason)),
+    completions: completions.map((g) => {
+      const done = finish(g);
+      return { ...done, complete: done.by_runtime.every((slice) => coreFields.every((field) => slice[field] !== null)) };
+    }),
+    unassigned: [...unassigned.values()].map(finish)
+      .sort((a, b) => a.reason.localeCompare(b.reason) || a.runtime.localeCompare(b.runtime)),
     cohort: finish(cohort),
   };
 }
@@ -792,10 +812,21 @@ function report(sources, options = {}) {
   const rollup = rollupVerifiedCompletions(cohortRows, counters, FIELDS);
   const verifiedCompletions = rollup.completions;
   const completeCompletions = verifiedCompletions.filter((c) => c.complete);
-  const unassignedTotal = (field) => rollup.unassigned.some((u) => u[field] === null) ? null
-    : rollup.unassigned.reduce((total, u) => total + u[field], 0);
-  const fieldStats = (field) => perCompletionStats(completeCompletions.map((c) => c[field]),
-    rollup.cohort[field], unassignedTotal(field), verifiedCompletions.length);
+  const unassignedTotal = (field, runtime) => {
+    const buckets = rollup.unassigned.filter((u) => runtime === undefined || u.runtime === runtime);
+    return buckets.some((u) => u[field] === null) ? null : buckets.reduce((total, u) => total + u[field], 0);
+  };
+  const fieldStats = (field) => rollup.cohort.mixed_runtime
+    ? perCompletionStats([], null, null, verifiedCompletions.length)
+    : perCompletionStats(completeCompletions.map((c) => c[field]),
+      rollup.cohort[field], unassignedTotal(field), verifiedCompletions.length);
+  const runtimeFieldStats = (slice, field) => perCompletionStats(
+    completeCompletions.flatMap((c) => c.by_runtime.filter((s) => s.runtime === slice.runtime).map((s) => s[field])),
+    slice[field], unassignedTotal(field, slice.runtime), verifiedCompletions.length);
+  const perRuntimeStats = rollup.cohort.by_runtime.map((slice) => ({
+    runtime: slice.runtime, provider_family: slice.provider_family,
+    ...Object.fromEntries(counters.map((field) => [field, runtimeFieldStats(slice, field)])),
+  }));
 
   if (!usageRows || !observations.length) warn('No attributable supported usage observations');
   if ([...groups.values()].some(g => g.input_tokens === null)) warn('Input coverage is incomplete; totals are not comparable');
@@ -818,6 +849,7 @@ function report(sources, options = {}) {
       ineligible_rows: efficiencyRows.filter((row) => !row.eligible).length,
       input_per_verified_completion: fieldStats('input_tokens'),
       per_verified_completion: Object.fromEntries(counters.map((field) => [field, fieldStats(field)])),
+      per_verified_completion_by_runtime: perRuntimeStats,
       cohort_consumption: rollup.cohort,
       unassigned_overhead: rollup.unassigned,
       verified_completions: verifiedCompletions,
@@ -849,6 +881,7 @@ function report(sources, options = {}) {
       'Codex totals are cumulative session observations, not request counts; model/effort come from turn_context when present and otherwise stay unknown until the attribution ledger links a session.',
       'Full-file rescans incorporate earlier partial updates. No billing or account attribution is inferred.',
       'Claude and Codex records are kept in separate runtime/provider groups; a provider mismatch is a coverage error.',
+      'Verified-completion and cohort totals are per runtime; a total spanning Claude and Codex is null, never a sum.',
     ],
   };
 }

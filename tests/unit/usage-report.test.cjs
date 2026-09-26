@@ -338,6 +338,54 @@ test('efficiency rows keep provider, runtime and backend as distinct joins', () 
  ]);
 });
 
+test('a verified completion spanning Claude and Codex keeps per-runtime totals and refuses a mixed sum', () => {
+ const codexRow = { type:'event_msg', timestamp:'2026-09-10T00:01:00Z', payload:{ type:'token_count', info:{ total_token_usage:{
+   input_tokens:100, cached_input_tokens:40, cache_write_input_tokens:0, output_tokens:8, reasoning_output_tokens:3, total_tokens:108,
+ } } } };
+ const shared = { dispatch_id:'dispatch-shared', run_id:'run-mixed', ticket:'T-01-01', role:'executor', task_level:'routine',
+   effort:'high', observed_effort:'high' };
+ const r = report([
+   { source:'claude.jsonl', rows:[claude({input_tokens:10, cache_read_input_tokens:20,
+     cache_creation_input_tokens:0, output_tokens:4}, {stop_reason:'end_turn'})] },
+   { source:'codex.jsonl', rows:[{ type:'session_meta', payload:{ id:'codex-session' } }, codexRow] },
+ ], { attributions: [
+   { ...shared, observation_id:'mixed-claude', runtime:'claude', provider:'anthropic', kind:'ordinary',
+     source:'claude.jsonl', session_id:'s1', request_id:'r1', message_id:'m1', backend:'workflow', model:'opus',
+     observed_model:'example-model' },
+   { ...shared, observation_id:'mixed-codex', runtime:'codex', provider:'openai', kind:'ordinary',
+     source:'codex.jsonl', session_id:'codex-session', backend:'codex-agent', model:'sonnet', observed_model:'gpt-5.6-luna' },
+ ], outcomes: [{run_id:'run-mixed', ticket:'T-01-01', status:'completed'}] });
+ assert.equal(r.efficiency.verified_completions.length, 1);
+ const completion = r.efficiency.verified_completions[0];
+ assert.equal(completion.mixed_runtime, true);
+ assert.equal(completion.input_tokens, null, 'Claude and Codex input is never summed');
+ assert.deepEqual(completion.by_runtime.map((s) => [s.runtime, s.provider_family, s.input_tokens]), [
+   ['claude', 'anthropic', 30], ['codex', 'openai', 100],
+ ]);
+ assert.equal(r.efficiency.cohort_consumption.mixed_runtime, true);
+ assert.equal(r.efficiency.cohort_consumption.input_tokens, null);
+ assert.deepEqual([r.efficiency.input_per_verified_completion.total,
+   r.efficiency.input_per_verified_completion.cohort_total,
+   r.efficiency.input_per_verified_completion.per_completion], [null, null, null]);
+ assert.deepEqual(r.efficiency.per_verified_completion_by_runtime.map((s) => [s.runtime, s.input_tokens.total,
+   s.input_tokens.cohort_total, s.input_tokens.per_completion]), [['claude', 30, 30, 30], ['codex', 100, 100, 100]]);
+});
+
+test('unassigned overhead is bucketed by reason and runtime', () => {
+ const codexRow = { type:'event_msg', timestamp:'2026-09-10T00:01:00Z', payload:{ type:'token_count', info:{ total_token_usage:{
+   input_tokens:100, cached_input_tokens:40, cache_write_input_tokens:0, output_tokens:8, reasoning_output_tokens:3, total_tokens:108,
+ } } } };
+ const r = report([
+   { source:'claude.jsonl', rows:[claude({input_tokens:10, cache_read_input_tokens:20,
+     cache_creation_input_tokens:0, output_tokens:4}, {stop_reason:'end_turn'})] },
+   { source:'codex.jsonl', rows:[{ type:'session_meta', payload:{ id:'codex-session' } }, codexRow] },
+ ]);
+ assert.deepEqual(r.efficiency.unassigned_overhead.map((u) => [u.reason, u.runtime, u.input_tokens]), [
+   ['missing_ticket_or_dispatch', 'claude', 30], ['missing_ticket_or_dispatch', 'codex', 100],
+ ]);
+ assert.equal(r.efficiency.input_per_verified_completion.unassigned_total, null);
+});
+
 test('runtime-incompatible requested tiers are skipped from in-memory attributions', () => {
  const r = report(files(claude({input_tokens:5,cache_read_input_tokens:0,cache_creation_input_tokens:0,output_tokens:2}, {stop_reason:'end_turn'})), {
    attributions: [{
