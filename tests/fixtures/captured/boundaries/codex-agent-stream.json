@@ -1,0 +1,31 @@
+{
+  "boundary": "codex-agent-stream",
+  "producer": "codex exec (parent/child)",
+  "cli": "codex",
+  "cli_version": "0.155.1",
+  "fixtures": [
+    "tests/fixtures/codex-agent-parent-0.155.1.jsonl",
+    "tests/fixtures/codex-agent-child-0.155.1.jsonl"
+  ],
+  "legacy": [
+    "tests/fixtures/codex-agent-parent-0.155.1.jsonl",
+    "tests/fixtures/codex-agent-child-0.155.1.jsonl"
+  ],
+  "consumers": [],
+  "migrating": [
+    "tests/unit/codex-runtime-host.test.cjs",
+    "tests/unit/codex-decompose-host.test.cjs",
+    "tests/unit/codex-delivery-host.test.cjs",
+    "tests/unit/usage-attribution.test.cjs",
+    "tests/unit/usage-report.test.cjs"
+  ],
+  "inline_shapes": [
+    "[\"']?type[\"']?\\s*:\\s*[\"']thread\\.started[\"']",
+    "[\"']?type[\"']?\\s*:\\s*[\"']turn\\.started[\"']",
+    "[\"']?type[\"']?\\s*:\\s*[\"']item\\.completed[\"']",
+    "[\"']?type[\"']?\\s*:\\s*[\"']turn\\.completed[\"']",
+    "[\"']?type[\"']?\\s*:\\s*[\"']session_meta[\"']",
+    "[\"']?type[\"']?\\s*:\\s*[\"']turn_context[\"']",
+    "[\"']?type[\"']?\\s*:\\s*[\"']response_item[\"']"
+  ]
+}
