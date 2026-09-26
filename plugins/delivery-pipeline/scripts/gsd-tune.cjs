@@ -569,12 +569,8 @@ const CLAUDE_1M_AGENTS = ['gsd-planner', 'gsd-code-reviewer'];
 // — twice, about a key we had written. It is dropped safely, but a setting that is
 // wrong half the time it is read belongs where the runtime is unambiguous: the
 // project config, which the project-mode list still sets on Claude.
-//
-// `models.*` and `effort.*` stay because they are TIER aliases, meaningful on both
-// runtimes; `model_overrides` carries a concrete model name and is not.
 const GLOBAL_SAFE = new Set([
-  'model_profile', 'models.planning', 'models.execution', 'models.research',
-  'models.verification', 'effort.routing_tier_defaults.light',
+  'model_profile', 'effort.routing_tier_defaults.light',
   'effort.routing_tier_defaults.standard', 'effort.routing_tier_defaults.heavy',
 ]);
 
@@ -603,10 +599,14 @@ const TUNING_ALL = [
     : []),
   // GSD's own stage agents. Its vocabulary is opus|sonnet|haiku — `fable` is ours
   // and is not valid here.
-  ['models.planning', 'opus', 'planning is judgment; it is never cheapened'],
-  ['models.execution', 'opus', 'the writer agent'],
-  ['models.research', 'sonnet', 'fact gathering, not option design'],
-  ['models.verification', 'sonnet', 'mechanical reconciliation against the plan'],
+  ...(runtime === 'claude'
+    ? [
+      ['models.planning', 'opus', 'planning is judgment; it is never cheapened'],
+      ['models.execution', 'opus', 'the writer agent'],
+      ['models.research', 'sonnet', 'fact gathering, not option design'],
+      ['models.verification', 'sonnet', 'mechanical reconciliation against the plan'],
+    ]
+    : []),
   ['effort.routing_tier_defaults.light', 'low', 'mirrors the conveyor\'s own effort tiers'],
   ['effort.routing_tier_defaults.standard', 'high', 'mirrors the conveyor\'s own effort tiers'],
   ['effort.routing_tier_defaults.heavy', 'high', 'mirrors the conveyor\'s own effort tiers: Opus is capped at high'],
@@ -662,6 +662,11 @@ const staleGlobalOverrides = GLOBAL && raw.model_overrides && typeof raw.model_o
 // whatever is already there, so its "want" is a function of `have` rather than
 // a constant — the only way to add our entry without clobbering the rest.
 const isMergeKey = (key) => key.startsWith('agent_skills.');
+
+const codexIgnoredModelKeys = (!GLOBAL && runtime === 'codex')
+  ? ['models.planning', 'models.execution', 'models.research', 'models.verification']
+    .filter((key) => get(raw, key) !== undefined)
+  : [];
 
 const drift = [];
 for (const [group, list] of [['required', REQUIRED], ['tuning', TUNING]]) {
@@ -946,7 +951,7 @@ if (AS_JSON) {
     // template. A caller reading `drift` cannot otherwise tell a row that was
     // withheld from a row that already agrees.
     ...(CONFIG_REFUSAL ? { config_invalid: CONFIG_REFUSAL } : {}),
-    drift, blockers,
+    drift, blockers, codex_ignored_model_keys: codexIgnoredModelKeys,
   }, null, 2));
 } else {
   console.log(`gsd-tune: runtime "${runtimeDisplay}" (${how}) — ${CONFIG}${GLOBAL ? '  [global defaults]' : ''}`);
@@ -996,7 +1001,14 @@ if (AS_JSON) {
       console.log(`        ${b.why}`);
     }
   }
-  if (!drift.length && !legacyRuntime && !blockers.length && runtime && !projectionNeedsAction) {
+  if (codexIgnoredModelKeys.length) {
+    console.log(
+      `\n  ${codexIgnoredModelKeys.length} key(s) ignored by Codex: ${codexIgnoredModelKeys.join(', ')}\n` +
+      '    models.* is Claude-only; Codex does not read it, and --apply leaves it exactly as it is.'
+    );
+  }
+  if (!drift.length && !legacyRuntime && !blockers.length && !codexIgnoredModelKeys.length && runtime
+    && !projectionNeedsAction) {
     console.log('  nothing to change: this project already agrees with the conveyor');
   }
   for (const g of ['required', 'tuning']) {
