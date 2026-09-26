@@ -246,6 +246,44 @@ test('Codex launcher passes explicit model and reasoning effort to exec', async 
   }
 });
 
+test('host-owned additional protected paths deny the finalization state root and cannot be overridden by a launch request', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-codex-state-deny-'));
+  const calls = [];
+  const codeHome = path.join(root, 'codex-home');
+  const stateRoot = path.join(root, 'host-state', 'finalization');
+  const attackerPath = path.join(root, 'attacker-injected-path');
+  fs.mkdirSync(stateRoot, { recursive: true });
+  try {
+    const launch = createCodexCliLauncher({
+      scope: { ...SCOPE, worktree: root },
+      capabilities,
+      transcriptDir: null,
+      env: { CODEX_HOME: codeHome },
+      additionalProtectedPaths: [stateRoot],
+      spawn: (executable, args, options) => {
+        calls.push({ executable, args, options });
+        writeSession(options.env.CODEX_HOME, '55555555-5555-4555-8555-555555555555');
+        return childFor(stream('55555555-5555-4555-8555-555555555555'), 0, 24041);
+      },
+    });
+    const result = await launch('run the scoped task', {
+      model: 'gpt-6-luna',
+      effort: 'max',
+      sandbox_mode: 'workspace-write',
+      dispatch_id: 'dispatch-codex-state-1',
+      additionalProtectedPaths: [attackerPath],
+      protectedPaths: [],
+    });
+    assert.equal(calls.length, 1);
+    const filesystemArg = calls[0].args.find((value) => value.startsWith('permissions.shipyard-runtime.filesystem='));
+    assert.ok(filesystemArg.includes(JSON.stringify(fs.realpathSync(stateRoot)) + '="deny"'));
+    assert.ok(!filesystemArg.includes('attacker-injected-path'));
+    assert.ok(result.runtime_evidence.sandbox_evidence.protected_paths.includes(fs.realpathSync(stateRoot)));
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('static launcher consumes the immutable generated instructions', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-codex-static-'));
   const input = [];
