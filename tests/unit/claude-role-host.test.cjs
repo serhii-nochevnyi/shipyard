@@ -371,6 +371,31 @@ test('arch-review launches through ADR-014 and seals only the matching PR judgme
   }
 });
 
+test('a role launch records and clears its in-flight row and stamps a provenance sidecar', async () => {
+  const fixture = setupRepository('arch-review');
+  const graph = path.join(fixture.root, '.planning/graph');
+  const inflight = () => JSON.parse(fs.readFileSync(path.join(graph, 'dispatches.json'), 'utf8')).inflight || {};
+  let during;
+  try {
+    const result = await createClaudeRoleHost(hostOptions(fixture, {
+      onLaunch() { during = Object.values(inflight()); },
+    })).run(request(fixture));
+    const dispatchId = result.dispatch.receipt.dispatch_id;
+    assert.equal(during.length, 1);
+    assert.equal(during[0].dispatch_id, dispatchId);
+    assert.equal(during[0].pid, process.pid);
+    assert.equal(during[0].role, 'arch-review');
+    assert.equal(during[0].host, 'claude');
+    assert.deepStrictEqual(inflight(), {}, 'the in-flight row is cleared after the launch');
+    const stamp = require('../../plugins/delivery-pipeline/scripts/dispatch-record.cjs').readProvenance(graph, dispatchId);
+    assert.equal(stamp.dispatch_id, dispatchId);
+    assert.equal(stamp.role, 'arch-review');
+    assert.equal(stamp.schema, 'shipyard.host-provenance.v1');
+  } finally {
+    cleanupFixture(fixture);
+  }
+});
+
 test('pr-sentinel derives and records one authenticated round for all live phase PRs', async () => {
   const fixture = setupSentinelRepository();
   let launched;
