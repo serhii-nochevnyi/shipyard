@@ -40,6 +40,7 @@ repo_root="$(git rev-parse --show-toplevel 2>/dev/null)" || { echo "not inside a
 repo_name="$(basename "$repo_root")"
 wt_base="${SHIPYARD_WORKTREE_ROOT:-$(dirname "$repo_root")/.wt-${repo_name}}"
 reachability_script="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/run-reachability.cjs"
+diamond_script="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/diamond-parents.cjs"
 
 # Serialize everything that writes to the SHARED .git. `git worktree add` and
 # branch creation both take index.lock, and since the PR sentinel guards open PRs
@@ -210,9 +211,21 @@ case "$cmd" in
 
     proof_args=(prove --repo "$repo_root" --base "$base" --branch "$branch" --worktree "$wt_dir" --json)
     graph_dir="$repo_root/.planning/graph"
+    diamond_epic=""
+    diamond_parents=""
     if [[ -f "$graph_dir/tickets.json" ]] && node -e 'const j=JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")); process.exit(j.tickets && j.tickets[process.argv[2]] ? 0 : 1)' "$graph_dir/tickets.json" "$ticket" 2>/dev/null; then
       proof_args+=(--ticket "$ticket" --graph "$graph_dir")
+      diamond_json="$(node "$diamond_script" non-primary "$ticket" --graph "$graph_dir" --json)"
+      diamond_parents="$(printf '%s' "$diamond_json" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>process.stdout.write(JSON.parse(s).non_primary.join(", ")))')"
+      diamond_epic="$(printf '%s' "$diamond_json" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>process.stdout.write(JSON.parse(s).epic||""))')"
     fi
+    diamond_reuse_warning() {
+      local ref="$1"
+      [[ -n "$diamond_parents" && -n "$diamond_epic" ]] || return 0
+      if ! git -C "$repo_root" merge-base --is-ancestor "origin/$diamond_epic" "$ref" 2>/dev/null; then
+        echo "warning: $ticket is a diamond child (non-primary parents $diamond_parents) and origin/$diamond_epic is not in $ref — run base-merge.cjs $ticket --worktree $wt_dir --base $diamond_epic" >&2
+      fi
+    }
     if proof_json="$(node "$reachability_script" "${proof_args[@]}" 2>/dev/null)"; then
       base_name="$(printf '%s' "$proof_json" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>process.stdout.write(JSON.parse(s).origin.ref))')"
       base_sha="$(printf '%s' "$proof_json" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>process.stdout.write(JSON.parse(s).origin.sha))')"
@@ -247,6 +260,7 @@ case "$cmd" in
       current="$(git -C "$wt_dir" rev-parse --abbrev-ref HEAD 2>/dev/null || echo '')"
       if [[ "$current" == "$branch" ]]; then
         echo "reusing existing worktree for $ticket ($wt_dir, branch $branch) — $(reuse_distance "$branch" "$base_name")" >&2
+        diamond_reuse_warning "$branch"
         echo "$wt_dir"
         exit 0
       fi
@@ -274,10 +288,36 @@ case "$cmd" in
       # how far from the base it is instead of reusing it silently.
       echo "reusing existing branch $branch — $(reuse_distance "$branch" "$base_name")" >&2
       git -C "$repo_root" worktree add "$wt_dir" "$branch" 1>&2
+      diamond_reuse_warning "$branch"
     else
       git -C "$repo_root" worktree add -b "$branch" "$wt_dir" "$base_sha" 1>&2
       # track the remote base's branch name so `git push` / `@{u}` behave
       git -C "$wt_dir" branch --set-upstream-to="origin/$branch" "$branch" 1>&2 2>/dev/null || true
+      if [[ -n "$diamond_parents" ]]; then
+        discard_fresh() {
+          git -C "$repo_root" worktree remove --force "$wt_dir" 1>&2 2>/dev/null || rm -rf "$wt_dir"
+          git -C "$repo_root" worktree prune 1>&2 2>/dev/null || true
+          git -C "$repo_root" branch -D "$branch" 1>&2 2>/dev/null || true
+        }
+        if [[ -z "$diamond_epic" ]] || ! epic_sha="$(git -C "$wt_dir" rev-parse --verify -q "refs/remotes/origin/$diamond_epic^{commit}")"; then
+          discard_fresh
+          echo "diamond child $ticket needs origin/${diamond_epic:-<epic>} for non-primary parents $diamond_parents, and it does not resolve — nothing was created" >&2
+          exit 13
+        fi
+        if ! git -C "$wt_dir" merge --no-ff --no-edit -m "Merge $diamond_epic into $branch" "$epic_sha" 1>&2 2>/dev/null; then
+          conflicts="$(git -C "$wt_dir" diff --name-only --diff-filter=U 2>/dev/null | tr '\n' ' ')"
+          git -C "$wt_dir" merge --abort 1>&2 2>/dev/null || true
+          discard_fresh
+          echo "diamond child $ticket: merging origin/$diamond_epic conflicts in ${conflicts:-unknown paths} (non-primary parents $diamond_parents) — nothing was created" >&2
+          exit 13
+        fi
+        if ! git -C "$wt_dir" merge-base --is-ancestor "$epic_sha" HEAD; then
+          discard_fresh
+          echo "diamond child $ticket: origin/$diamond_epic is not an ancestor of HEAD after the merge — nothing was created" >&2
+          exit 13
+        fi
+        echo "base-merged $diamond_epic (${epic_sha:0:7}) — non-primary parents $diamond_parents are in this tree" >&2
+      fi
     fi
     echo "$wt_dir"
     ;;

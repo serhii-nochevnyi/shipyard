@@ -6,6 +6,8 @@ const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const { parse, owns } = require('./path-owner.cjs');
 const prHygiene = require('./pr-hygiene.cjs');
+const { resolveGraphDir } = require('./graph-dir.cjs');
+const { scopeBase } = require('./diamond-parents.cjs');
 const SCRATCH = new Set(['.shipyard-pr-body.md', '.shipyard-evidence.md']);
 
 function fail(message) {
@@ -126,6 +128,26 @@ function indexEntries(worktree, env) {
   return entries;
 }
 
+function diamondTree(root, base, expectedBranch, env) {
+  const { dir, how } = resolveGraphDir([], root);
+  if (how === 'none') return null;
+  let tickets;
+  try {
+    tickets = JSON.parse(fs.readFileSync(path.join(dir, 'tickets.json'), 'utf8')).tickets || {};
+  } catch {
+    return null;
+  }
+  const row = Object.values(tickets).find((candidate) => candidate && candidate.branch === expectedBranch);
+  if (!row) return null;
+  let measured;
+  try {
+    measured = scopeBase({ root, base, row, tickets, env });
+  } catch (error) {
+    fail(error.message);
+  }
+  return measured.kind === 'tree' ? measured.tree : null;
+}
+
 function finalizeDeliveryCommit(options) {
   if (!options || typeof options !== 'object' || Array.isArray(options)) fail('trusted host options are required');
   const { ticket, worktree, expectedBranch, expectedBase, expectedHead, expectedSigner } = options;
@@ -164,7 +186,8 @@ function finalizeDeliveryCommit(options) {
   const subject = finalizedSubject(options, root, base);
 
   const covered = (file) => declared.some((entry) => owns(entry, file));
-  const committed = nulPaths(git(root, ['diff', '--name-only', '-z', '--no-renames', base, head], env, { binary: true }));
+  const from = diamondTree(root, base, expectedBranch, env) || base;
+  const committed = nulPaths(git(root, ['diff', '--name-only', '-z', '--no-renames', from, head], env, { binary: true }));
   const status = scopedStatus(root, env);
   const outside = [...new Set([...committed, ...status].filter((file) => !covered(file)))];
   if (outside.length) fail(`out-of-scope paths: ${outside.join(', ')}`);
