@@ -15,14 +15,14 @@ const {
   GSD_LAUNCH_MECHANISM,
   validateGsdRole,
 } = require('./dispatch-boundary.cjs');
-const { REPAIR } = require('./codex-model-remap.cjs');
+const { REPAIR, repairFor } = require('./codex-model-remap.cjs');
 const { validateContextPacket } = require('./context-packet.cjs');
 const { isOwnerCapability } = require('./session-handoff.cjs');
 const { snapshotFor } = require('./model-capability.cjs');
 
 const digest = (text) => crypto.createHash('sha256').update(text).digest('hex');
-function refuse(code, message) {
-  throw policy.policyError(code, message + '. ' + REPAIR);
+function refuse(code, message, details = {}) {
+  throw policy.policyError(code, message + '. ' + repairFor(code, details), details);
 }
 function object(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -475,4 +475,4 @@ function createCodexDispatchAdapter(options = {}) {
   });
 }
 
-module.exports = Object.freeze({ CODEX_MODEL_IDS, REPAIR, validateAvailability, createCodexDispatchAdapter });
+module.exports = Object.freeze({ CODEX_MODEL_IDS, REPAIR, repairFor, validateAvailability, createCodexDispatchAdapter });
