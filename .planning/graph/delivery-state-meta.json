@@ -1,13 +1,13 @@
 {
   "schema_version": 1,
-  "generation": 377,
-  "generation_identity": "7306bf08-419f-47a3-ac7f-4b47ea7623d7",
-  "previous_generation_identity": "16777245:12924086568:1790426773270054000:caeb0545237a5c3d17b789e8947b4696789b62e4a57ab9747ebef19bba80579d",
-  "observed_at": "2026-09-26T13:34:42.802Z",
-  "generated_at": "2026-09-26T13:34:42.802Z",
+  "generation": 378,
+  "generation_identity": "26750a9b-af76-4afb-be05-c6ce19176fae",
+  "previous_generation_identity": "16777245:12924442034:1790431361793843500:74b26a396d7d7ef1d8ebec3843fb81fdfa4aaca19b784cb6678c07fc02f50e23",
+  "observed_at": "2026-09-26T14:12:04.622Z",
+  "generated_at": "2026-09-26T14:12:04.622Z",
   "by": "state-sync",
-  "pid": 92415,
-  "observation_generation": 377,
+  "pid": 3426,
+  "observation_generation": 378,
   "observation_projection": {
     "tickets": {
       "T-20-01": {
@@ -2222,9 +2222,9 @@
         "checks": null
       },
       "T-42-03": {
-        "status": "pending",
+        "status": "merged",
         "repository": null,
-        "pr": null,
+        "pr": 274,
         "head": null,
         "draft": false,
         "base": "epic/42-resume-trusted-finalization-without-executor-replay",
@@ -2451,9 +2451,9 @@
   },
   "binding": {
     "schema_version": 1,
-    "state_digest": "8caa5756fd4395ac6ee780e58f82b2601d1f636930e82c724ee7564b0e4e06b7",
-    "front_digest": "280e89c1466e67c00fbffcca1a74508b2d6e179df5406e00a4c2a74d4b6bee2c",
-    "observation_digest": "5307335a0b6555ddf811cfd77893c7d63ee374621086b6a84dd9d985d17646af",
-    "observation_generation": 377
+    "state_digest": "770455bf7ed3d34165086fc8f9a20f71a87ac0568befe3d6c50a45b9190038c9",
+    "front_digest": "a0c481a070b01677d614e3996919986e6056e600d41c657b27f346c30498e0a3",
+    "observation_digest": "eccdfdf40efbc06cd6857a94e165dfc71c6de7314df122e13649c81e95be480f",
+    "observation_generation": 378
   }
 }
