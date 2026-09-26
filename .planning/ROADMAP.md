@@ -824,8 +824,8 @@ scratch set, and the point fixes found on the pdffiller proving ground.
 <!-- shipyard:gsd-sync:begin -->
 ## Shipyard synchronization (generated)
 
-- Source fingerprint: `559f0326c42c5dd8ba7c0d7c638101c1339466486b2eaea2aaed464f870982c8`
-- Plans merged: 172/219
+- Source fingerprint: `a976842a17674fb057df48382e39ebe62e1433f1a4f9ffdbb164b4e1f5ff038e`
+- Plans merged: 173/220
 - Phases verified: 10/24
 - Current phase: 20
 
@@ -853,7 +853,7 @@ scratch set, and the point fixes found on the pdffiller proving ground.
 | 39 — Remove conveyor session friction | 17 | 17 | gaps_found |
 | 40 — Build delivery seams and clean target-project PRs | 27 | 0 | pending |
 | 41 — Reduce pipeline subscription overhead | 9 | 9 | gaps_found |
-| 42 — Resume trusted finalization without executor replay | 1 | 0 | pending |
+| 42 — Resume trusted finalization without executor replay | 2 | 1 | pending |
 | 43 — Target-project delivery at scale | 19 | 0 | pending |
 
 <!-- shipyard:gsd-sync:end -->
