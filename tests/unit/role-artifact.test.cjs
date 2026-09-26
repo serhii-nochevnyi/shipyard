@@ -15,6 +15,9 @@ const {
 const {
   registerClaudeWorkflowHost,
 } = require('../../plugins/delivery-pipeline/scripts/claude-workflow-host.cjs');
+const {
+  NEUTRAL_PR_BODY_GUIDE,
+} = require('../../plugins/delivery-pipeline/scripts/pr-hygiene.cjs');
 
 const ROLE_ARTIFACT = path.join(
   __dirname,
@@ -37,6 +40,14 @@ function git(root, args) {
   return execFileSync('git', ['-C', root, ...args], { encoding: 'utf8' }).trim();
 }
 
+const SHIPYARD_MANIFEST_RELATIVE = 'plugins/delivery-pipeline/.claude-plugin/plugin.json';
+
+function writeShipyardManifest(root) {
+  const file = path.join(root, ...SHIPYARD_MANIFEST_RELATIVE.split('/'));
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify({ name: 'shipyard' }));
+}
+
 function fixture(options = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-role-artifact-'));
   const receipts = path.join(root, 'receipts');
@@ -45,17 +56,26 @@ function fixture(options = {}) {
   git(root, ['config', 'user.name', 'Role Artifact Test']);
   git(root, ['config', 'commit.gpgsign', 'false']);
   fs.writeFileSync(path.join(root, 'tracked.txt'), 'base\n');
-  git(root, ['add', 'tracked.txt']);
+  const baseFiles = ['tracked.txt'];
+  if (options.exempt !== false) {
+    writeShipyardManifest(root);
+    baseFiles.push(SHIPYARD_MANIFEST_RELATIVE);
+  }
+  git(root, ['add', ...baseFiles]);
   git(root, ['commit', '--quiet', '-m', 'fixture base']);
 
   const ticket = options.ticket || 'T-33-artifact';
   git(root, ['switch', '--quiet', '-c', `ticket/${ticket}`]);
+  if (options.uncommittedManifest) writeShipyardManifest(root);
   const recorder = createDurableRecorder(receipts);
   const evidence = new WeakMap();
   let agentResult;
   const host = registerClaudeWorkflowHost({
     agent: async (_prompt, launchOptions) => {
-      fs.writeFileSync(path.join(root, '.shipyard-pr-body.md'), `Ticket: ${ticket}\n\nProblem\n\nScope\n`);
+      fs.writeFileSync(
+        path.join(root, '.shipyard-pr-body.md'),
+        options.prBody === undefined ? `Ticket: ${ticket}\n\nProblem\n\nScope\n` : options.prBody,
+      );
       fs.writeFileSync(path.join(root, '.shipyard-evidence.md'), 'node tests/unit/role-artifact.test.cjs\n\ncomplete evidence\n');
       fs.writeFileSync(path.join(root, 'implemented.txt'), 'implemented\n');
       git(root, ['add', 'implemented.txt']);
@@ -378,6 +398,62 @@ test('CLI validate/read use the canonical helper and return the verified byte sn
     assert.equal(read.status, 0, read.stderr);
     assert.equal(fs.readFileSync(bodyOut, 'utf8'), fs.readFileSync(path.join(value.root, '.shipyard-pr-body.md'), 'utf8'));
     assert.ok(!('pr_body' in JSON.parse(read.stdout)), 'CLI read must keep the complete PR body in the explicit output file');
+  } finally {
+    clean(value);
+  }
+});
+
+suite('role-artifact — PR body hygiene by committed base (D-26/REQ-142)');
+
+test('an exempt project still accepts the ticket marker as the first line', async () => {
+  const value = await runFixture({ ticket: 'T-33-exempt' });
+  try {
+    assert.equal(value.result[0].status, 'committed');
+    const validated = roleArtifact.validate({
+      worktreePath: value.root, base: 'main', role: 'executor', ticket: value.ticket,
+      recorder: value.recorder, dispatchId: value.result[0].receipt.dispatch_id,
+      artifactPath: value.result[0].artifact_ref, artifactDigest: value.result[0].artifact_digest,
+    });
+    assert.equal(validated.pr_body, `Ticket: ${value.ticket}\n\nProblem\n\nScope\n`);
+  } finally {
+    clean(value);
+  }
+});
+
+test('a target project rejects a PR body starting with the ticket marker', async () => {
+  const value = fixture({ ticket: 'T-33-target-leak', exempt: false });
+  try {
+    await assert.rejects(
+      value.host.run('executors', { args: value.args }),
+      (error) => error && error.code === 'PR_BODY_LEAK',
+    );
+  } finally {
+    clean(value);
+  }
+});
+
+test('a target project accepts a neutral PR body and validates it', async () => {
+  const value = await runFixture({ ticket: 'T-33-target-clean', exempt: false, prBody: NEUTRAL_PR_BODY_GUIDE });
+  try {
+    assert.equal(value.result[0].status, 'committed');
+    const validated = roleArtifact.validate({
+      worktreePath: value.root, base: 'main', role: 'executor', ticket: value.ticket,
+      recorder: value.recorder, dispatchId: value.result[0].receipt.dispatch_id,
+      artifactPath: value.result[0].artifact_ref, artifactDigest: value.result[0].artifact_digest,
+    });
+    assert.equal(validated.pr_body, NEUTRAL_PR_BODY_GUIDE);
+  } finally {
+    clean(value);
+  }
+});
+
+test('an uncommitted worktree shipyard manifest does not grant the exemption', async () => {
+  const value = fixture({ ticket: 'T-33-target-uncommitted', exempt: false, uncommittedManifest: true });
+  try {
+    await assert.rejects(
+      value.host.run('executors', { args: value.args }),
+      (error) => error && error.code === 'PR_BODY_LEAK',
+    );
   } finally {
     clean(value);
   }
