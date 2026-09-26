@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 5f85144f8a66ca7f515544c517c47ed4b5ad022c9204503c05c4c18ecc676c8e
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 01d2872718a0390df82d5d258ea836b94a7fd7bdaded7ac9fc78817d79fedcc9
 phase: 40-build-delivery-seams-and-clean-target-project-prs
 plan: 06
 subsystem: shipyard delivery
@@ -22,7 +22,7 @@ key-decisions:
 duration: 0min
 status: halted
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 5f85144f8a66ca7f515544c517c47ed4b5ad022c9204503c05c4c18ecc676c8e
+shipyard_source_fingerprint: 01d2872718a0390df82d5d258ea836b94a7fd7bdaded7ac9fc78817d79fedcc9
 ---
 
 # Phase 40: Refresh the runtime-file digest pin only through a script and a CI-verified commit trailer — Delivery Projection

@@ -1,6 +1,7 @@
 {
   "name": "shipyard",
   "id": "shipyard",
+  "allowCrossMarketplaceDependenciesOn": ["gsd-core"],
   "owner": {
     "name": "Nochevnyi Serhii"
   },

@@ -5699,39 +5699,6 @@
       "pr_base": "ticket/T-40-05-codex-tuning-writes-no-claude-only-keys",
       "jira": null
     },
-    "T-40-06": {
-      "title": "Refresh the runtime-file digest pin only through a script and a CI-verified commit trailer",
-      "plan": ".planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-06-PLAN.md",
-      "phase": "40",
-      "repo": null,
-      "wave": 2,
-      "depends_on": [
-        "T-39-12"
-      ],
-      "cross_phase_deps": [
-        "T-39-12"
-      ],
-      "cross_repo_deps": [],
-      "unreachable_paths": false,
-      "missing_paths": true,
-      "files": [
-        "tests/unit/source-contract.test.cjs",
-        "tests/unit/runtime-file-digests.json",
-        "scripts/refresh-runtime-digests.cjs",
-        "scripts/check-runtime-digest-trailer.cjs",
-        "tests/unit/runtime-digests.test.cjs",
-        ".github/workflows/test.yml"
-      ],
-      "risk": "medium",
-      "type": "implementation",
-      "human_checkpoint": false,
-      "preauthorized": false,
-      "branch": "ticket/T-40-06-refresh-the-runtime-file-digest-pin-only",
-      "epic": "epic/40-build-delivery-seams-and-clean-target-project-prs",
-      "primary_parent": null,
-      "pr_base": "epic/40-build-delivery-seams-and-clean-target-project-prs",
-      "jira": null
-    },
     "T-40-07": {
       "title": "Add the scrubbed boundary-fixture capture harness and the contract test that refuses inline shapes",
       "plan": ".planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-07-PLAN.md",
@@ -6210,7 +6177,8 @@
         "plugins/delivery-pipeline/scripts/command-runner.cjs",
         "tests/unit/codex-delivery-host.test.cjs",
         "tests/unit/delivery-commit-finalizer.test.cjs",
-        "tests/unit/command-runner.test.cjs"
+        "tests/unit/command-runner.test.cjs",
+        ".github/workflows/test.yml"
       ],
       "risk": "high",
       "type": "implementation",
@@ -6251,6 +6219,41 @@
       "human_checkpoint": false,
       "preauthorized": false,
       "branch": "ticket/T-40-01-make-git-creating-unit-fixtures-hermetic",
+      "epic": "epic/40-build-delivery-seams-and-clean-target-project-prs",
+      "primary_parent": null,
+      "pr_base": "epic/40-build-delivery-seams-and-clean-target-project-prs",
+      "jira": null
+    },
+    "T-40-06": {
+      "title": "Refresh the runtime-file digest pin only through a script and a CI-verified commit trailer",
+      "plan": ".planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-06-PLAN.md",
+      "phase": "40",
+      "repo": null,
+      "wave": 2,
+      "depends_on": [
+        "T-39-12",
+        "T-42-01"
+      ],
+      "cross_phase_deps": [
+        "T-39-12",
+        "T-42-01"
+      ],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": true,
+      "files": [
+        "tests/unit/source-contract.test.cjs",
+        "tests/unit/runtime-file-digests.json",
+        "scripts/refresh-runtime-digests.cjs",
+        "scripts/check-runtime-digest-trailer.cjs",
+        "tests/unit/runtime-digests.test.cjs",
+        ".github/workflows/test.yml"
+      ],
+      "risk": "medium",
+      "type": "implementation",
+      "human_checkpoint": false,
+      "preauthorized": false,
+      "branch": "ticket/T-40-06-refresh-the-runtime-file-digest-pin-only",
       "epic": "epic/40-build-delivery-seams-and-clean-target-project-prs",
       "primary_parent": null,
       "pr_base": "epic/40-build-delivery-seams-and-clean-target-project-prs",

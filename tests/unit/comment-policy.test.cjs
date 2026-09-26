@@ -156,6 +156,21 @@ test('counts only added lines and skips documentation files', () => {
   assert.deepStrictEqual(report.skipped, [{ path: 'README.md', reason: 'unsupported-file-type' }]);
 });
 
+test('generated marketplace host copies are skipped only when identical to canonical files', () => {
+  const source = 'scripts/fixture.cjs';
+  const copy = 'plugins/shipyard/host/scripts/fixture.cjs';
+  const repo = fixture({ [source]: '// existing comment\nconst answer = 1;\n' },
+    { [copy]: '// existing comment\nconst answer = 1;\n' });
+  const good = runPublish(repo, ['--base', 'main', '--json']);
+  assert.strictEqual(good.status, 0, good.stdout + good.stderr);
+  assert(JSON.parse(good.stdout).skipped.some(item => item.path === copy
+    && item.reason === 'verified-generated-copy'));
+  fs.writeFileSync(path.join(repo, copy), '// altered comment\nconst answer = 1;\n');
+  const bad = runPublish(repo, ['--base', 'main', '--working-tree', '--json']);
+  assert.strictEqual(bad.status, 2);
+  assert.match(bad.stderr, /differs from canonical source/);
+});
+
 test('exempts directives, licenses, generated markers and shebangs', () => {
   const repo = fixture(
     { 'src/run.sh': '#!/usr/bin/env bash\n' },

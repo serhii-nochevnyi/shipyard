@@ -1,0 +1,976 @@
+#!/usr/bin/env node
+'use strict';
+
+// Read-only transcript accounting. All totals are processing units, never quota.
+// The optional usage-attribution ledger adds launch, ticket and model/effort
+// provenance without guessing when a runtime hides it.
+const fs = require('node:fs');
+const path = require('node:path');
+const pipeline = require('./pipeline-config.cjs');
+const attributionRules = require('./usage-attribution.cjs');
+
+const FIELDS = ['input_tokens', 'cache_read_input_tokens', 'cache_creation_input_tokens', 'output_tokens'];
+const CODEX_FIELDS = ['input_tokens', 'cached_input_tokens', 'cache_write_input_tokens',
+  'output_tokens', 'reasoning_output_tokens'];
+const number = (v) => Number.isSafeInteger(v) && v >= 0;
+const sum = (values) => values.every(number) ? values.reduce((a, b) => a + b, 0) : null;
+const RUNTIME_PROVIDER = { claude: 'anthropic', codex: 'openai' };
+const concreteEffort = (value) => Array.isArray(pipeline.EFFORTS) && pipeline.EFFORTS.includes(value);
+const validModel = (value) => typeof value === 'string' && value.trim().length > 0;
+const isCurrentCodexUsage = (row) => row?.type === 'token_usage_record'
+  && Boolean(row.payload?.thread_token_usage || row.payload?.total_token_usage);
+// @contract: outcome status is supplied evidence (delivery-state/receipt); a transcript stop is never completion.
+const OUTCOME_STATUSES = new Set(['completed', 'failed', 'interrupted', 'parked']);
+
+function valuesOf(context, key) {
+  const plural = `${key}s`;
+  const values = [];
+  if (context[key] !== undefined && context[key] !== null) values.push(context[key]);
+  if (Array.isArray(context[plural])) values.push(...context[plural]);
+  return [...new Set(values.filter((value) => value !== undefined && value !== null && value !== ''))];
+}
+
+function runtimeOf(record) {
+  if (record && Object.prototype.hasOwnProperty.call(record, 'runtime')) return record.runtime;
+  if (record && record.provider === 'anthropic') return 'claude';
+  if (record && record.provider === 'openai') return 'codex';
+  // Older local fixtures used the runtime name in `provider`.
+  if (record && (record.provider === 'claude' || record.provider === 'codex')) return record.provider;
+  return null;
+}
+
+function sourceMatches(record, context) {
+  if (!record.source) return true;
+  if (typeof record.source !== 'string') return false;
+  const wanted = valuesOf(context, 'source')
+    .filter((value) => typeof value === 'string')
+    .map((value) => attributionRules.canonicalSource(value));
+  return wanted.includes(attributionRules.canonicalSource(record.source));
+}
+
+function attributionShape(record, index) {
+  if (!record || typeof record !== 'object' || Array.isArray(record)) {
+    return { error: `attribution ${index} is not an object` };
+  }
+  if (record.source !== undefined && typeof record.source !== 'string') {
+    return { error: `attribution ${index} source must be a string` };
+  }
+  const runtime = runtimeOf(record);
+  if (!runtime || !Object.prototype.hasOwnProperty.call(RUNTIME_PROVIDER, runtime)) {
+    return { error: `attribution ${index} has an unknown runtime` };
+  }
+  if (Object.prototype.hasOwnProperty.call(record, 'provider')
+      && record.provider !== RUNTIME_PROVIDER[runtime]
+      && record.provider !== runtime) {
+    return { error: `attribution ${index} provider does not match runtime ${runtime}` };
+  }
+  const kind = Object.prototype.hasOwnProperty.call(record, 'kind') ? record.kind : 'ordinary';
+  if (!attributionRules.KINDS.has(kind)) return { error: `attribution ${index} has an unknown kind` };
+  if (!record.dispatch_id) return { error: `attribution ${index} has no dispatch_id` };
+  if (!record.session_id && !record.request_id && !record.message_id) {
+    return { error: `attribution ${index} has no transcript identity` };
+  }
+  for (const [field, whitespace] of [
+    ['dispatch_id', true], ['project_id', false], ['run_id', false], ['ticket', false],
+    ['role', false], ['source', false], ['session_id', false], ['request_id', false],
+    ['message_id', false], ['pass_id', false], ['model', false], ['observed_model', false],
+  ]) {
+    if (record[field] === undefined) continue;
+    const issue = attributionRules.textIssue(record[field], field, { whitespace });
+    if (issue) return { error: `attribution ${index} ${issue}` };
+  }
+  if (record.backend !== undefined && !attributionRules.BACKENDS.has(record.backend)) {
+    return { error: `attribution ${index} has an unknown backend` };
+  }
+  if (record.role !== undefined && !pipeline.ROLES.includes(record.role)) {
+    return { error: `attribution ${index} has an unknown role` };
+  }
+  if (record.task_level !== undefined && !pipeline.TASK_LEVELS.includes(record.task_level)) {
+    return { error: `attribution ${index} has an unknown task level` };
+  }
+  if (record.model !== undefined && !pipeline.TIERS.includes(record.model)) {
+    return { error: `attribution ${index} has an unknown requested model` };
+  }
+  if (record.model !== undefined && typeof pipeline.tierAllowedForRuntime === 'function'
+      && !pipeline.tierAllowedForRuntime(runtime, record.model)) {
+    return { error: `attribution ${index} requested model "${record.model}" is not available on runtime ${runtime}` };
+  }
+  for (const field of ['effort', 'effort_applied', 'observed_effort']) {
+    if (record[field] !== undefined && !attributionRules.EFFORT_STATES.has(record[field])) {
+      return { error: `attribution ${index} has an invalid ${field}` };
+    }
+  }
+  if (record.completion_status !== undefined
+      && !attributionRules.COMPLETION_STATES.has(record.completion_status)) {
+    return { error: `attribution ${index} has an invalid completion_status` };
+  }
+  return { ...record, runtime, kind };
+}
+
+function attributionSignature(record) {
+  return JSON.stringify([
+    record.dispatch_id || null, record.ticket || null, record.role || null,
+    record.model || null, record.effort || null, record.effort_applied || null,
+    record.observed_model || null, record.observed_effort || null,
+    record.backend || null, record.task_level || null,
+  ]);
+}
+
+function codexTurnKey(sessionId, source, turnId) {
+  return JSON.stringify(sessionId
+    ? ['session', sessionId, turnId]
+    : ['source', source || null, turnId]);
+}
+
+function attributionIndex(records, warn) {
+  const latest = new Map();
+  for (const [index, raw] of (Array.isArray(records) ? records : []).entries()) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+      warn(`attribution ${index + 1} is not an object`);
+      continue;
+    }
+    const value = attributionShape(raw, index + 1);
+    if (value.error) { warn(value.error); continue; }
+    const id = value.observation_id || JSON.stringify([
+      value.dispatch_id || null, value.runtime, value.kind,
+      value.source || null, value.session_id || null, value.request_id || null,
+      value.message_id || null, value.pass_id || null,
+    ]);
+    const previous = latest.get(id);
+    const revision = Number.isSafeInteger(value.revision) ? value.revision : 1;
+    const previousRevision = previous && Number.isSafeInteger(previous.revision) ? previous.revision : 1;
+    if (!previous || revision >= previousRevision) latest.set(id, { ...value, observation_id: id });
+  }
+  return [...latest.values()];
+}
+
+function findAttribution(context, records, warn) {
+  if (!records.length) return null;
+  const candidates = [];
+  for (const record of records) {
+    if (record.runtime !== context.runtime || record.kind !== context.kind) continue;
+    if (!sourceMatches(record, context)) continue;
+    // A pass-specific record cannot be safely applied to a response aggregate
+    // because the transcript adapter does not expose a matching pass id.
+    if (record.pass_id && !valuesOf(context, 'pass_id').includes(record.pass_id)) continue;
+    let score = 0, level = null;
+    if (record.message_id) {
+      if (!valuesOf(context, 'message_id').includes(record.message_id)) continue;
+      score = 3;
+      level = 'message';
+    } else if (record.request_id) {
+      if (!valuesOf(context, 'request_id').includes(record.request_id)) continue;
+      score = 2;
+      level = 'request';
+    } else if (record.session_id) {
+      if (!valuesOf(context, 'session_id').includes(record.session_id)) continue;
+      score = 1;
+      level = 'session';
+    }
+    if (score) candidates.push({ record, score, level });
+  }
+  if (!candidates.length) return null;
+  const bestScore = Math.max(...candidates.map((candidate) => candidate.score));
+  const best = candidates.filter((candidate) => candidate.score === bestScore);
+  const signatures = new Set(best.map((candidate) => attributionSignature(candidate.record)));
+  if (signatures.size > 1) {
+    warn(`ambiguous ${context.runtime} ${context.kind} attribution at ${valuesOf(context, 'session_id').join(',') || 'unknown session'}`);
+    return { status: 'ambiguous', level: best[0].level, record: null };
+  }
+  return { status: best[0].level === 'session' ? 'session' : 'exact', level: best[0].level, record: best[0].record };
+}
+
+function metadataFor(context, rawModel, rawEffort, match, warn) {
+  const record = match && match.record;
+  const attributedModel = record && record.observed_model ? record.observed_model : null;
+  const attributedEffort = record && record.observed_effort ? record.observed_effort : null;
+  if (rawModel && attributedModel && rawModel !== attributedModel) {
+    warn(`${context.runtime} model mismatch for ${valuesOf(context, 'session_id').join(',') || 'unknown session'}: transcript=${rawModel}, attribution=${attributedModel}`);
+  }
+  if (rawEffort && attributedEffort && rawEffort !== attributedEffort) {
+    warn(`${context.runtime} effort mismatch for ${valuesOf(context, 'session_id').join(',') || 'unknown session'}: transcript=${rawEffort}, attribution=${attributedEffort}`);
+  }
+  const model = rawModel || attributedModel || null;
+  const observedEffort = rawEffort || attributedEffort || null;
+  const modelSource = rawModel ? 'transcript' : attributedModel ? 'attribution' : 'unknown';
+  const effortSource = rawEffort ? 'transcript' : attributedEffort ? 'attribution' : 'unknown';
+  const mismatch = (rawModel && attributedModel && rawModel !== attributedModel)
+    || (rawEffort && attributedEffort && rawEffort !== attributedEffort);
+  const status = match ? (match.status === 'exact' || match.status === 'session'
+    ? (mismatch ? 'mismatch' : match.status)
+    : match.status) : 'unattributed';
+  return {
+    source: valuesOf(context, 'source')[0] || null,
+    runtime: context.runtime,
+    provider_family: RUNTIME_PROVIDER[context.runtime],
+    session_id: valuesOf(context, 'session_id')[0] || null,
+    request_id: valuesOf(context, 'request_id')[0] || null,
+    message_id: valuesOf(context, 'message_id')[0] || null,
+    dispatch_id: record?.dispatch_id || null,
+    project_id: record?.project_id || null,
+    run_id: record?.run_id || null,
+    ticket: record?.ticket || null,
+    role: record?.role || null,
+    task_level: record?.task_level || null,
+    backend: record?.backend || null,
+    requested_model: record?.model || null,
+    requested_effort: record?.effort || null,
+    effort_applied: record?.effort_applied || null,
+    observed_effort: observedEffort,
+    effort_source: effortSource,
+    model,
+    observed_model: model,
+    model_source: modelSource,
+    attribution_status: status,
+    attribution_level: match?.level || null,
+    completion_status: record?.completion_status || null,
+  };
+}
+
+function outcomeShape(record, index) {
+  if (!record || typeof record !== 'object' || Array.isArray(record)) {
+    return { error: `outcome ${index} is not an object` };
+  }
+  for (const [field, whitespace] of [['run_id', false], ['ticket', false], ['project_id', false], ['dispatch_id', true]]) {
+    if (record[field] === undefined || record[field] === null) continue;
+    const issue = attributionRules.textIssue(record[field], field, { whitespace });
+    if (issue) return { error: `outcome ${index} ${issue}` };
+  }
+  if (!record.run_id) return { error: `outcome ${index} has no run_id` };
+  if (!record.ticket) return { error: `outcome ${index} has no ticket` };
+  if (!OUTCOME_STATUSES.has(record.status)) return { error: `outcome ${index} has an unknown status` };
+  return {
+    run_id: record.run_id, ticket: record.ticket,
+    project_id: record.project_id || null, dispatch_id: record.dispatch_id || null,
+    status: record.status,
+  };
+}
+
+function outcomeIndex(records, warn) {
+  const valid = [];
+  for (const [index, raw] of (Array.isArray(records) ? records : []).entries()) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) { warn(`outcome ${index + 1} is not an object`); continue; }
+    const value = outcomeShape(raw, index + 1);
+    if (value.error) { warn(value.error); continue; }
+    valid.push(value);
+  }
+  return valid;
+}
+
+// @contract: joins by project/run/work-item identity; conflicting status for one identity is ambiguous.
+function findOutcome(context, outcomes, warn) {
+  if (!outcomes.length || !context.ticket || !context.run_id) return null;
+  const sameTicketRun = outcomes.filter((o) => o.run_id === context.run_id && o.ticket === context.ticket
+    && (o.project_id === null || context.project_id === null || o.project_id === context.project_id));
+  if (!sameTicketRun.length) return null;
+  const scoped = context.dispatch_id ? sameTicketRun.filter((o) => o.dispatch_id === context.dispatch_id) : [];
+  const candidates = scoped.length ? scoped : sameTicketRun.filter((o) => !o.dispatch_id);
+  if (!candidates.length) return null;
+  const statuses = new Set(candidates.map((o) => o.status));
+  if (statuses.size > 1) {
+    warn(`ambiguous verified outcome for ticket ${context.ticket} (run ${context.run_id})`);
+    return { status: 'ambiguous' };
+  }
+  return { status: candidates[0].status };
+}
+
+function percentileStats(values) {
+  const usable = values.filter((value) => Number.isSafeInteger(value) && value >= 0).sort((a, b) => a - b);
+  if (!usable.length) return { count: 0, total: null, median: null, p90: null };
+  const percentile = (fraction) => usable[Math.min(usable.length - 1, Math.ceil(usable.length * fraction) - 1)];
+  return { count: usable.length, total: usable.reduce((a, b) => a + b, 0), median: percentile(0.5), p90: percentile(0.9) };
+}
+
+const ATTEMPT_STATUSES = new Set(['failed', 'interrupted', 'parked']);
+
+function addCounters(target, row, counters) {
+  for (const field of counters) {
+    if (row[field] === null) target[field] = null;
+    else if (target[field] !== null) target[field] += row[field];
+  }
+}
+
+// @invariant: a missing counter makes the summed field unknown, never a silently truncated total.
+// @invariant: Claude and Codex units are never summed; a group spanning runtimes has null top-level counters.
+function rollupVerifiedCompletions(rows, counters, coreFields) {
+  const blank = (extra) => ({ ...extra, dispatch_ids: new Set(), observations: 0, runtimes: new Map(),
+    ...Object.fromEntries(counters.map((f) => [f, 0])) });
+  const add = (g, row) => {
+    if (row.dispatch_id) g.dispatch_ids.add(row.dispatch_id);
+    g.observations += row.observations;
+    if (!g.runtimes.has(row.runtime)) {
+      g.runtimes.set(row.runtime, { runtime: row.runtime, provider_family: RUNTIME_PROVIDER[row.runtime] || null,
+        observations: 0, ...Object.fromEntries(counters.map((f) => [f, 0])) });
+    }
+    const slice = g.runtimes.get(row.runtime);
+    slice.observations += row.observations;
+    addCounters(slice, row, counters);
+    addCounters(g, row, counters);
+  };
+  const completed = (row) => row.verified_completion_status === 'completed' && row.ticket && row.run_id;
+  const groups = new Map();
+  for (const row of rows.filter(completed)) {
+    const key = JSON.stringify([row.project_id || null, row.run_id, row.ticket]);
+    if (!groups.has(key)) {
+      groups.set(key, blank({ ticket: row.ticket, run_id: row.run_id, project_id: row.project_id || null,
+        attempt_statuses: {} }));
+    }
+    add(groups.get(key), row);
+  }
+  const completions = [...groups.values()];
+  const unassigned = new Map();
+  const cohort = blank({});
+  for (const row of rows) {
+    add(cohort, row);
+    if (completed(row)) continue;
+    let reason;
+    if (!row.ticket || !row.dispatch_id) reason = 'missing_ticket_or_dispatch';
+    else if (!ATTEMPT_STATUSES.has(row.verified_completion_status)) reason = `outcome_${row.verified_completion_status}`;
+    else {
+      const targets = completions.filter((c) => c.ticket === row.ticket
+        && (c.project_id === null || !row.project_id || c.project_id === row.project_id));
+      if (targets.length === 1) {
+        add(targets[0], row);
+        const status = row.verified_completion_status;
+        targets[0].attempt_statuses[status] = (targets[0].attempt_statuses[status] || 0) + 1;
+        continue;
+      }
+      reason = targets.length ? 'shared_ambiguous_completion' : 'no_verified_completion';
+    }
+    const bucketKey = JSON.stringify([reason, row.runtime]);
+    if (!unassigned.has(bucketKey)) {
+      unassigned.set(bucketKey, blank({ reason, runtime: row.runtime,
+        provider_family: RUNTIME_PROVIDER[row.runtime] || null, rows: 0 }));
+    }
+    const bucket = unassigned.get(bucketKey);
+    bucket.rows++;
+    add(bucket, row);
+  }
+  const finish = (g) => {
+    const dispatchIds = [...g.dispatch_ids].sort();
+    const byRuntime = [...g.runtimes.values()].sort((a, b) => a.runtime.localeCompare(b.runtime));
+    const { runtimes, ...rest } = g;
+    const mixed = byRuntime.length > 1;
+    return { ...rest, ...(mixed ? Object.fromEntries(counters.map((f) => [f, null])) : {}),
+      mixed_runtime: mixed, by_runtime: byRuntime, dispatch_ids: dispatchIds, dispatch_count: dispatchIds.length };
+  };
+  return {
+    completions: completions.map((g) => {
+      const done = finish(g);
+      return { ...done, complete: done.by_runtime.every((slice) => coreFields.every((field) => slice[field] !== null)) };
+    }),
+    unassigned: [...unassigned.values()].map(finish)
+      .sort((a, b) => a.reason.localeCompare(b.reason) || a.runtime.localeCompare(b.runtime)),
+    cohort: finish(cohort),
+  };
+}
+
+// @contract: per_completion divides all cohort consumption (attempts, recovery, unassigned) by verified completions;
+function perCompletionStats(values, cohortTotal, unassignedTotal, completionCount) {
+  const stats = percentileStats(values);
+  return {
+    ...stats, cohort_total: cohortTotal, unassigned_total: unassignedTotal,
+    per_completion: completionCount && cohortTotal !== null
+      ? Math.round((cohortTotal / completionCount) * 100) / 100 : null,
+  };
+}
+
+function report(sources, options = {}) {
+  const warnings = [], requests = new Map(), sessions = new Map(), codexTurnMetadata = new Map(), observations = [];
+  const attributionRecords = attributionIndex(options.attributions || [], (message) => warnings.push(message));
+  const attributionEnabled = options.attributions !== undefined;
+  const outcomeRecords = outcomeIndex(options.outcomes || [], (message) => warnings.push(message));
+  let usageRows = 0;
+  const warn = (s) => warnings.push(s);
+  // A resumed Codex session may be split across transcript files. Decide which
+  // schema owns that session from the complete input set before processing any
+  // rows, otherwise a legacy event_msg in an older file is admitted before a
+  // current token_usage_record is encountered in another file and both views
+  // contaminate the same cumulative accumulator.
+  const currentCodexSessions = new Set();
+  const codexSourceSessions = new Map();
+  for (const source of sources) {
+    const rows = Array.isArray(source?.rows) ? source.rows : [];
+    const meta = rows.find((row) => row?.type === 'session_meta');
+    const metaSession = meta?.payload?.id
+      || meta?.payload?.session_id
+      || null;
+    // Keep the source's session_meta available before the row that needs it is
+    // visited. Codex files can place a token_usage_record before metadata.
+    codexSourceSessions.set(source, metaSession);
+    for (const row of rows) {
+      if (!isCurrentCodexUsage(row)) continue;
+      const id = row.payload?.session_id || row.sessionId || row.session_id || metaSession;
+      if (id) currentCodexSessions.add(id);
+    }
+  }
+  function mergeUsage(dest, src, fields, label) {
+    for (const f of fields) {
+      if (src[f] === undefined || src[f] === null) continue;
+      if (!number(src[f])) { warn(`${label}: invalid ${f}`); continue; }
+      dest[f] = Math.max(dest[f] ?? 0, src[f]);
+    }
+  }
+  for (const source of sources) {
+    const rows = Array.isArray(source?.rows) ? source.rows : [];
+    let session = codexSourceSessions.get(source) || null;
+    // Recent Codex transcripts contain both the legacy event_msg snapshot and
+    // the newer token_usage_record for the same response. They expose related
+    // but different cumulative views, so combining them makes counters appear
+    // to go backwards. Prefer current cumulative records for that source and
+    // retain the legacy adapter for older files that have no current records.
+    const hasCurrentCodexUsage = rows.some(isCurrentCodexUsage);
+    const sourceName = source.source || null;
+    for (const row of rows) {
+      if (!row || typeof row !== 'object') continue;
+      if (row.type === 'session_meta') session = row.payload?.id || row.payload?.session_id || null;
+      if (row.type === 'turn_context' && row.payload?.turn_id) {
+        const turnId = row.payload.turn_id;
+        const metadata = {
+          model: row.payload.model || null,
+          effort: row.payload.effort || null,
+        };
+        const turnSession = row.payload.session_id || session;
+        if (turnSession) {
+          codexTurnMetadata.set(codexTurnKey(turnSession, sourceName, turnId), metadata);
+          // A resumed session can replay its turn_context in an earlier file
+          // than the token_usage_record. Keep a session-and-turn fallback that
+          // does not depend on the file where the metadata happened to land.
+          codexTurnMetadata.set(codexTurnKey(turnSession, null, turnId), metadata);
+        }
+        if (sourceName) codexTurnMetadata.set(codexTurnKey(null, sourceName, turnId), metadata);
+      }
+      const msg = row.message;
+      if (row.type === 'assistant' && msg?.usage != null && msg.model !== '<synthetic>') {
+        usageRows++;
+        if (typeof msg.usage !== 'object' || Array.isArray(msg.usage)) { warn('Claude usage object is malformed'); continue; }
+        const key = msg.id ? JSON.stringify(['message', msg.id]) : row.uuid ? JSON.stringify(['uuid', row.uuid]) : null;
+        if (!key) { warn('Claude usage without stable identity was skipped'); continue; }
+        let q = requests.get(key);
+        if (!q) {
+          q = {
+            model: msg.model || null, usage: {}, iterations: [], complete: false,
+            efforts: new Set(), sources: new Set(), sessionIds: new Set(), requestIds: new Set(), messageIds: new Set(),
+          };
+          requests.set(key, q);
+        }
+        const rowSession = row.sessionId || row.session_id || session;
+        if (sourceName) q.sources.add(sourceName);
+        if (rowSession) q.sessionIds.add(rowSession);
+        if (row.requestId || row.request_id) q.requestIds.add(row.requestId || row.request_id);
+        if (msg.id) q.messageIds.add(msg.id);
+        if (row.effort) q.efforts.add(row.effort);
+        if (!q.model && msg.model) q.model = msg.model;
+        if (q.model && msg.model && q.model !== msg.model) warn('Claude response changed model identity');
+        mergeUsage(q.usage, msg.usage, FIELDS, 'Claude');
+        q.complete ||= Boolean(msg.stop_reason);
+        const iterations = msg.usage.iterations;
+        if (iterations !== undefined && !Array.isArray(iterations)) warn('Claude iterations is not an array');
+        if (Array.isArray(iterations)) iterations.forEach((it, i) => {
+          if (!it || !['message', 'advisor_message'].includes(it.type)) {
+            warn('Unknown Claude iteration type'); return;
+          }
+          const dest = q.iterations[i] ||= { type: it.type, model: it.model || null, usage: {} };
+          if (dest.type !== it.type) warn('Claude iteration changed type');
+          if (!dest.model && it.model) dest.model = it.model;
+          mergeUsage(dest.usage, it, FIELDS, 'Claude iteration');
+        });
+      } else if (
+        (row.type === 'event_msg' && row.payload?.type === 'token_count')
+        || row.type === 'token_usage_record'
+      ) {
+        const rowSession = row.payload?.session_id || row.sessionId || row.session_id || session;
+        if (rowSession) session = rowSession;
+        if (row.type === 'event_msg' && (hasCurrentCodexUsage || currentCodexSessions.has(rowSession))) continue;
+        // The current record carries per-response `usage`, per-turn totals and
+        // a thread-level cumulative total. Only the thread-level total is safe
+        // for a session aggregate; the per-response value is retained below for
+        // model/effort attribution and is never treated as a lifetime counter.
+        const payload = row.payload || {};
+        const u = row.type === 'token_usage_record'
+          ? (payload.thread_token_usage || payload.total_token_usage)
+          : payload.info?.total_token_usage;
+        if (!u) continue;
+        usageRows++;
+        if (row.type === 'token_usage_record' && !payload.thread_token_usage && !payload.total_token_usage) {
+          warn('Codex token usage record has no cumulative thread usage; skipped'); continue;
+        }
+        if (typeof u !== 'object' || Array.isArray(u)) { warn('Codex usage object is malformed'); continue; }
+        if (!session) { warn('Codex cumulative usage without session identity was skipped'); continue; }
+        if (!row.timestamp || !Number.isFinite(Date.parse(row.timestamp))) {
+          warn('Codex cumulative usage without valid timestamp was skipped'); continue;
+        }
+        const values = {};
+        mergeUsage(values, u, CODEX_FIELDS, 'Codex');
+        const current = sessions.get(session) || {
+          entries: [], sources: new Set(), format: 'legacy', responses: new Map(), responseUsageComplete: true,
+        };
+        if (sourceName) current.sources.add(sourceName);
+        if (isCurrentCodexUsage(row)) {
+          current.format = 'current';
+          // `total_token_usage` is a supported cumulative-only shape. It has no
+          // per-response evidence to reconcile, so do not turn its absence into
+          // a malformed-response warning. The richer thread shape still gets
+          // split by response when its evidence is present.
+          if (payload.thread_token_usage) {
+            const responseId = payload.response_id;
+            const responseUsage = payload.usage;
+            if (!responseId || typeof responseUsage !== 'object' || Array.isArray(responseUsage)) {
+              current.responseUsageComplete = false;
+              if (!responseId) warn('Codex current usage record has no response identity');
+              if (responseUsage !== undefined && (typeof responseUsage !== 'object' || Array.isArray(responseUsage))) {
+                warn('Codex response usage object is malformed');
+              }
+            } else {
+              const response = current.responses.get(responseId) || {
+                at: row.timestamp, response_id: responseId, turn_id: payload.turn_id || null,
+                source: sourceName, values: {},
+              };
+              response.at = response.at && Date.parse(response.at) >= Date.parse(row.timestamp) ? response.at : row.timestamp;
+              response.turn_id ||= payload.turn_id || null;
+              response.source ||= sourceName;
+              mergeUsage(response.values, responseUsage, CODEX_FIELDS, 'Codex response');
+              current.responses.set(responseId, response);
+            }
+          }
+        }
+        current.entries.push({ at: row.timestamp, values });
+        sessions.set(session, current);
+      }
+    }
+  }
+
+  function claudeContext(q, kind) {
+    return {
+      runtime: 'claude', kind,
+      sources: [...q.sources], session_ids: [...q.sessionIds],
+      request_ids: [...q.requestIds], message_ids: [...q.messageIds],
+    };
+  }
+
+  const one = (values) => values.size === 1 ? [...values][0] : null;
+
+  const codexTotals = (usage) => {
+    const input = usage.input_tokens;
+    const read = usage.cached_input_tokens;
+    const write = usage.cache_write_input_tokens;
+    return {
+      input_tokens: number(input) ? input : null,
+      uncached_input_tokens: number(input) && number(read) && write === 0 && read <= input
+        ? input - read : null,
+      cache_read_input_tokens: number(read) ? read : null,
+      cache_creation_input_tokens: number(write) ? write : null,
+      output_tokens: number(usage.output_tokens) ? usage.output_tokens : null,
+      reasoning_output_tokens: number(usage.reasoning_output_tokens) ? usage.reasoning_output_tokens : null,
+    };
+  };
+
+  function addObservation(context, usage, rawModel, rawEffort, unit, finalized, fallbackCompletion, totals = null) {
+    const match = findAttribution(context, attributionRecords, warn);
+    const metadata = metadataFor(context, rawModel, rawEffort, match, warn);
+    // @contract: requires exact/session attribution plus dispatch/work-item/run identity before an outcome join.
+    const outcomeMatch = (metadata.attribution_status === 'exact' || metadata.attribution_status === 'session')
+      && metadata.dispatch_id && metadata.ticket && metadata.run_id
+      ? findOutcome(metadata, outcomeRecords, warn)
+      : null;
+    observations.push({
+      provider: RUNTIME_PROVIDER[context.runtime],
+      kind: context.kind,
+      unit,
+      finalized,
+      ...metadata,
+      completion_status: metadata.completion_status || fallbackCompletion || 'unknown',
+      verified_completion_status: outcomeMatch ? outcomeMatch.status : 'unknown',
+      input_tokens: totals?.input_tokens ?? sum(FIELDS.slice(0, 3).map(f => usage[f])),
+      uncached_input_tokens: totals?.uncached_input_tokens ?? usage.input_tokens ?? null,
+      cache_read_input_tokens: totals?.cache_read_input_tokens ?? usage.cache_read_input_tokens ?? null,
+      cache_creation_input_tokens: totals?.cache_creation_input_tokens ?? usage.cache_creation_input_tokens ?? null,
+      output_tokens: totals?.output_tokens ?? usage.output_tokens ?? null,
+      reasoning_output_tokens: totals?.reasoning_output_tokens ?? null,
+    });
+  }
+
+  function codexCumulative(current) {
+    // A resumed file can replay a partial update at the same timestamp. Merge
+    // those snapshots before checking monotonicity or taking the final total.
+    const byTime = new Map();
+    for (const { at, values } of current.entries) {
+      const key = Date.parse(at), merged = byTime.get(key) || {};
+      for (const [f, v] of Object.entries(values)) merged[f] = Math.max(merged[f] ?? 0, v);
+      byTime.set(key, merged);
+    }
+    let prior = {}, invalid = false;
+    for (const [, values] of [...byTime].sort((a, b) => a[0] - b[0])) {
+      for (const [f, v] of Object.entries(values)) {
+        if (number(prior[f]) && v < prior[f]) invalid = true;
+        prior[f] = v;
+      }
+    }
+    const ordered = [...byTime].sort((a, b) => a[0] - b[0]);
+    return { latest: ordered.at(-1)?.[1] || {}, invalid };
+  }
+
+  for (const q of requests.values()) {
+    if (q.iterations.length) {
+      const iterations = q.iterations.filter(Boolean);
+      const ordinary = iterations.filter(it => it.type === 'message');
+      const reconciled = ordinary.length > 0 && FIELDS.every(f =>
+        !number(q.usage[f]) || sum(ordinary.map(it => it.usage[f])) === q.usage[f]);
+      if (!reconciled) {
+        warn('Claude ordinary iterations do not reconcile; retaining response aggregate with unknown pass attribution');
+        addObservation({ ...claudeContext(q, 'ordinary') }, q.usage, q.model, one(q.efforts), 'response_aggregate', q.complete,
+          q.complete ? 'completed' : 'unknown');
+      }
+      for (const it of iterations) {
+        if (it.type === 'advisor_message') {
+          addObservation(claudeContext(q, 'advisor'), it.usage, it.model, one(q.efforts), 'model_pass', q.complete,
+            q.complete ? 'completed' : 'unknown');
+        } else if (reconciled) {
+          addObservation(claudeContext(q, 'ordinary'), it.usage, it.model || q.model, one(q.efforts), 'model_pass', q.complete,
+            q.complete ? 'completed' : 'unknown');
+        }
+      }
+    } else {
+      addObservation(claudeContext(q, 'ordinary'), q.usage, q.model, one(q.efforts), 'response_aggregate', q.complete,
+        q.complete ? 'completed' : 'unknown');
+    }
+  }
+
+  for (const [sessionId, current] of sessions.entries()) {
+    const cumulative = codexCumulative(current);
+    // The current Codex schema gives each response its own usage and the
+    // turn_context row names the concrete model and effort. Summing those
+    // response usages is safe only after it matches the final thread snapshot.
+    // This keeps a session that moved from a reserve model to Luna split by the
+    // model that actually consumed the tokens without hiding a partial log.
+    const responseTotals = {};
+    const normalizedResponses = new Map();
+    let responseFieldsComplete = true;
+    for (const response of current.responses.values()) {
+      const values = { ...response.values };
+      // Codex may omit a zero-valued component from a response while the
+      // cumulative thread record makes that zero explicit. It is safe to fill
+      // only that shape: nonnegative response components cannot sum to zero
+      // unless every omitted component is zero.
+      for (const field of CODEX_FIELDS) {
+        if (values[field] === undefined && cumulative.latest[field] === 0) values[field] = 0;
+      }
+      normalizedResponses.set(response.response_id, values);
+      for (const field of CODEX_FIELDS) {
+        if (!number(values[field])) responseFieldsComplete = false;
+        else responseTotals[field] = (responseTotals[field] || 0) + values[field];
+      }
+    }
+    const responsesReconcile = CODEX_FIELDS.every((field) =>
+      number(cumulative.latest[field]) && responseTotals[field] === cumulative.latest[field]);
+    if (current.format === 'current' && current.responses.size && current.responseUsageComplete
+        && responseFieldsComplete && !cumulative.invalid && responsesReconcile) {
+      for (const response of [...current.responses.values()].sort((a, b) => Date.parse(a.at) - Date.parse(b.at))) {
+        const turn = response.turn_id
+          ? codexTurnMetadata.get(codexTurnKey(sessionId, response.source, response.turn_id))
+            || codexTurnMetadata.get(codexTurnKey(null, response.source, response.turn_id))
+            || codexTurnMetadata.get(codexTurnKey(sessionId, null, response.turn_id))
+          : null;
+        addObservation({
+          runtime: 'codex', kind: 'ordinary',
+          // A response belongs to one transcript file. Keeping the whole
+          // resumed session here makes two source-qualified ledger records
+          // compete for every response and turns valid joins into ambiguity.
+          sources: response.source ? [response.source] : [...current.sources],
+          session_id: sessionId,
+          request_ids: response.turn_id ? [response.turn_id] : [],
+          message_ids: [response.response_id],
+        }, normalizedResponses.get(response.response_id) || response.values,
+        turn?.model || null, turn?.effort || null, 'model_pass', false, 'unknown',
+        codexTotals(normalizedResponses.get(response.response_id) || response.values));
+      }
+      continue;
+    }
+
+    if (current.format === 'current'
+        && (current.responses.size || !current.responseUsageComplete || cumulative.invalid)) {
+      const reason = !current.responseUsageComplete || !responseFieldsComplete
+        ? 'incomplete response usage'
+        : cumulative.invalid
+          ? 'decreased cumulative counters'
+          : 'response usage did not reconcile with cumulative usage';
+      warn(`Codex current ${reason}; using the cumulative session total`);
+    }
+    const prior = cumulative.latest;
+    let invalid = cumulative.invalid;
+    if (invalid) warn('Codex cumulative counters decreased; session totals are unknown');
+    const read = prior.cached_input_tokens, write = prior.cache_write_input_tokens;
+    const input = prior.input_tokens;
+    if (number(input) && number(read) && read > input) { invalid = true; warn('Codex cached input exceeds input'); }
+    // Preserve cache writes without assuming they partition this schema's input.
+    // The observed zero-write shape permits an uncached-input derivation.
+    const uncached = number(input) && number(read) && write === 0 && read <= input
+      ? input - read : null;
+    addObservation({
+      runtime: 'codex', kind: 'ordinary', sources: [...current.sources], session_id: sessionId,
+    }, {
+      input_tokens: null,
+      cache_read_input_tokens: null,
+      cache_creation_input_tokens: null,
+      output_tokens: null,
+    }, null, null, 'session_cumulative', false, 'unknown', {
+      input_tokens: invalid ? null : input ?? null,
+      uncached_input_tokens: invalid ? null : uncached,
+      cache_read_input_tokens: invalid ? null : read ?? null,
+      cache_creation_input_tokens: invalid ? null : write ?? null,
+      output_tokens: invalid ? null : prior.output_tokens ?? null,
+      reasoning_output_tokens: invalid ? null : prior.reasoning_output_tokens ?? null,
+    });
+  }
+
+  const counters = ['input_tokens', 'uncached_input_tokens', 'cache_read_input_tokens',
+    'cache_creation_input_tokens', 'output_tokens', 'reasoning_output_tokens'];
+  const dimensions = ['provider', 'provider_family', 'runtime', 'kind', 'model', 'observed_effort',
+    'requested_model', 'requested_effort', 'effort_applied', 'role', 'task_level', 'backend', 'unit'];
+  const groups = new Map();
+  for (const o of observations) {
+    const key = JSON.stringify(dimensions.map((field) => o[field] ?? null));
+    let g = groups.get(key);
+    if (!g) {
+      g = Object.fromEntries(dimensions.map((field) => [field, o[field] ?? null]));
+      Object.assign(g, {
+        observations: 0, finalized: 0, attributed: 0, model_sources: {}, effort_sources: {},
+        attribution_statuses: {}, ticket_count: 0, dispatch_count: 0,
+        ...Object.fromEntries(counters.map(f => [f, 0])), missing: {},
+      });
+      groups.set(key, g);
+    }
+    g.observations++;
+    if (o.finalized) g.finalized++;
+    if (o.attribution_status === 'exact' || o.attribution_status === 'session') g.attributed++;
+    g.model_sources[o.model_source] = (g.model_sources[o.model_source] || 0) + 1;
+    g.effort_sources[o.effort_source] = (g.effort_sources[o.effort_source] || 0) + 1;
+    g.attribution_statuses[o.attribution_status] = (g.attribution_statuses[o.attribution_status] || 0) + 1;
+    if (o.ticket) g.ticket_count++;
+    if (o.dispatch_id) g.dispatch_count++;
+    for (const f of counters) {
+      if (o[f] === null) { g[f] = null; g.missing[f] = (g.missing[f] || 0) + 1; }
+      else if (g[f] !== null) g[f] += o[f];
+    }
+  }
+
+  const count = (predicate) => observations.filter(predicate).length;
+  const ratio = (n) => observations.length ? Math.round((n / observations.length) * 10000) / 100 : null;
+  const attributed = count((o) => o.attribution_status === 'exact' || o.attribution_status === 'session');
+  const modelEffort = count((o) => (o.attribution_status === 'exact' || o.attribution_status === 'session')
+    && validModel(o.model) && concreteEffort(o.observed_effort) && o.dispatch_id);
+  const ticketReady = count((o) => (o.attribution_status === 'exact' || o.attribution_status === 'session')
+    && validModel(o.model) && concreteEffort(o.observed_effort) && o.dispatch_id && o.ticket && o.input_tokens !== null);
+  const efficiencyEligible = (o) => (o.attribution_status === 'exact' || o.attribution_status === 'session')
+    && validModel(o.model) && concreteEffort(o.observed_effort) && o.dispatch_id && o.ticket && o.input_tokens !== null;
+  const efficiencyExclusionReasons = (o) => [
+    ...(o.attribution_status !== 'exact' && o.attribution_status !== 'session'
+      ? [`attribution_${o.attribution_status}`] : []),
+    ...(!validModel(o.model) ? ['missing_model'] : []),
+    ...(!concreteEffort(o.observed_effort) ? ['missing_or_nonconcrete_effort'] : []),
+    ...(!o.dispatch_id ? ['missing_dispatch_id'] : []),
+    ...(!o.ticket ? ['missing_ticket'] : []),
+    ...(o.input_tokens === null ? ['missing_input_tokens'] : []),
+  ];
+  const finalizedOutput = count((o) => o.finalized && o.output_tokens !== null);
+  const statusCounts = Object.fromEntries(
+    [...new Set(observations.map((o) => o.attribution_status))].sort()
+      .map((status) => [status, count((o) => o.attribution_status === status)])
+  );
+  const efficiencyRows = [...new Map(observations
+    .filter((o) => o.ticket && o.dispatch_id)
+    .map((o) => [JSON.stringify([o.ticket, o.dispatch_id, o.run_id, o.project_id, o.provider, o.runtime, o.kind,
+      o.model, o.observed_effort, o.role, o.task_level, o.backend, o.unit]), o])
+  ).values()].map((seed) => {
+    const same = observations.filter((o) => o.ticket === seed.ticket && o.dispatch_id === seed.dispatch_id
+      && o.run_id === seed.run_id && o.project_id === seed.project_id
+      && o.provider === seed.provider && o.runtime === seed.runtime
+      && o.kind === seed.kind && o.model === seed.model && o.observed_effort === seed.observed_effort
+      && o.role === seed.role && o.task_level === seed.task_level
+      && o.backend === seed.backend && o.unit === seed.unit);
+    const row = {
+      ticket: seed.ticket, dispatch_id: seed.dispatch_id, run_id: seed.run_id, project_id: seed.project_id,
+      provider: seed.provider,
+      runtime: seed.runtime, kind: seed.kind, model: seed.model,
+      observed_effort: seed.observed_effort, role: seed.role, task_level: seed.task_level, backend: seed.backend,
+      observations: same.length,
+      eligible: same.every(efficiencyEligible),
+      exclusion_reasons: [...new Set(same.flatMap(efficiencyExclusionReasons))].sort(),
+      attribution_statuses: Object.fromEntries(
+        [...new Set(same.map((o) => o.attribution_status))].sort()
+          .map((status) => [status, same.filter((o) => o.attribution_status === status).length])
+      ),
+      verified_completion_status: [...new Set(same.map((o) => o.verified_completion_status))].length === 1
+        ? same[0].verified_completion_status : 'unknown',
+    };
+    for (const field of counters) row[field] = same.every((o) => o[field] !== null)
+      ? same.reduce((total, o) => total + o[field], 0) : null;
+    return row;
+  });
+  const cohortRows = [...efficiencyRows, ...observations.filter((o) => !o.ticket || !o.dispatch_id)
+    .map((o) => ({ ...o, observations: 1 }))];
+  const rollup = rollupVerifiedCompletions(cohortRows, counters, FIELDS);
+  const verifiedCompletions = rollup.completions;
+  const completeCompletions = verifiedCompletions.filter((c) => c.complete);
+  const unassignedTotal = (field, runtime) => {
+    const buckets = rollup.unassigned.filter((u) => runtime === undefined || u.runtime === runtime);
+    return buckets.some((u) => u[field] === null) ? null : buckets.reduce((total, u) => total + u[field], 0);
+  };
+  const fieldStats = (field) => rollup.cohort.mixed_runtime
+    ? perCompletionStats([], null, null, verifiedCompletions.length)
+    : perCompletionStats(completeCompletions.map((c) => c[field]),
+      rollup.cohort[field], unassignedTotal(field), verifiedCompletions.length);
+  const runtimeFieldStats = (slice, field) => perCompletionStats(
+    completeCompletions.flatMap((c) => c.by_runtime.filter((s) => s.runtime === slice.runtime).map((s) => s[field])),
+    slice[field], unassignedTotal(field, slice.runtime), verifiedCompletions.length);
+  const perRuntimeStats = rollup.cohort.by_runtime.map((slice) => ({
+    runtime: slice.runtime, provider_family: slice.provider_family,
+    ...Object.fromEntries(counters.map((field) => [field, runtimeFieldStats(slice, field)])),
+  }));
+
+  if (!usageRows || !observations.length) warn('No attributable supported usage observations');
+  if ([...groups.values()].some(g => g.input_tokens === null)) warn('Input coverage is incomplete; totals are not comparable');
+  const uniqueWarnings = [...new Set(warnings)];
+  return {
+    schema_version: 2,
+    units: 'tokens processed; not subscription quota',
+    subscription_usage: null,
+    usage_rows: usageRows,
+    comparison_scope: 'provider-normalized processing units; model/effort comparison only for attributed observations; not subscription billing',
+    comparable: uniqueWarnings.length === 0,
+    warnings: uniqueWarnings,
+    groups: [...groups.values()],
+    observations,
+    efficiency: {
+      comparison_ready: observations.length > 0 && modelEffort === observations.length,
+      eligible_model_effort_observations: modelEffort,
+      eligible_ticket_observations: ticketReady,
+      eligible_rows: efficiencyRows.filter((row) => row.eligible).length,
+      ineligible_rows: efficiencyRows.filter((row) => !row.eligible).length,
+      input_per_verified_completion: fieldStats('input_tokens'),
+      per_verified_completion: Object.fromEntries(counters.map((field) => [field, fieldStats(field)])),
+      per_verified_completion_by_runtime: perRuntimeStats,
+      cohort_consumption: rollup.cohort,
+      unassigned_overhead: rollup.unassigned,
+      verified_completions: verifiedCompletions,
+      verified_completion_count: completeCompletions.length,
+      rows: efficiencyRows,
+      limitation: 'a verified completion requires an authenticated outcome supplied via --outcomes/options.outcomes; no completion is inferred from a transcript stop marker',
+    },
+    coverage: {
+      claude_responses: requests.size,
+      codex_sessions: sessions.size,
+      usage_observations: observations.length,
+      attribution_records: attributionEnabled ? attributionRecords.length : null,
+      attribution_status: statusCounts,
+      attributed_observations: attributed,
+      unattributed_observations: count((o) => o.attribution_status === 'unattributed'),
+      ambiguous_observations: count((o) => o.attribution_status === 'ambiguous'),
+      model_observed: count((o) => validModel(o.model)),
+      effort_observed: count((o) => concreteEffort(o.observed_effort)),
+      dispatch_attributed: count((o) => Boolean(o.dispatch_id)),
+      ticket_attributed: count((o) => Boolean(o.ticket)),
+      finalized_output: finalizedOutput,
+      attribution_rate_percent: ratio(attributed),
+      model_effort_rate_percent: ratio(modelEffort),
+      ticket_efficiency_rate_percent: ratio(ticketReady),
+      finalized_output_rate_percent: ratio(finalizedOutput),
+    },
+    limitations: [
+      'Missing counters are unknown; finalized Claude output requires a stop marker.',
+      'Codex totals are cumulative session observations, not request counts; model/effort come from turn_context when present and otherwise stay unknown until the attribution ledger links a session.',
+      'Full-file rescans incorporate earlier partial updates. No billing or account attribution is inferred.',
+      'Claude and Codex records are kept in separate runtime/provider groups; a provider mismatch is a coverage error.',
+      'Verified-completion and cohort totals are per runtime; a total spanning Claude and Codex is null, never a sum.',
+    ],
+  };
+}
+
+function parseCli(args) {
+  const transcripts = [], attribution = [], outcomes = [];
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === '--attribution') {
+      const value = args[++i];
+      if (!value || value.startsWith('--')) throw new Error('--attribution needs a JSONL ledger path');
+      attribution.push(value);
+    } else if (arg === '--outcomes') {
+      const value = args[++i];
+      if (!value || value.startsWith('--')) throw new Error('--outcomes needs a JSONL ledger path');
+      outcomes.push(value);
+    } else if (arg.startsWith('--')) {
+      throw new Error(`unsupported option ${arg}; see --help`);
+    } else transcripts.push(arg);
+  }
+  return { transcripts, attribution, outcomes };
+}
+
+function readJsonl(file, malformed, label) {
+  const lines = fs.readFileSync(file, 'utf8').split('\n');
+  return lines.flatMap((line, index) => {
+    if (!line.trim()) return [];
+    try { return [JSON.parse(line)]; }
+    catch (error) {
+      malformed.push(`${path.basename(file)}:${index + 1}: malformed ${label} JSON (${error.message})`);
+      return [];
+    }
+  });
+}
+
+function loadJsonlInputs(files, malformed, label, warnings, asSource) {
+  const loaded = [];
+  const seen = new Set();
+  for (const file of files) {
+    let resolved = null;
+    try { resolved = fs.realpathSync(file); }
+    catch (error) {
+      warnings.push(`${file}: unreadable ${label} path (${error.message})`);
+      continue;
+    }
+    if (seen.has(resolved)) continue;
+    seen.add(resolved);
+    try {
+      const rows = readJsonl(resolved, malformed, label);
+      loaded.push(asSource ? { source: resolved, rows } : rows);
+    } catch (error) {
+      warnings.push(`${resolved}: unreadable ${label} path (${error.message})`);
+    }
+  }
+  return loaded;
+}
+
+function main(args) {
+  if (args.length === 1 && args[0] === '--help') {
+    console.log('usage: node usage-report.cjs <transcript.jsonl> [more.jsonl ...] [--attribution ledger.jsonl] [--outcomes outcomes.jsonl]');
+    console.log('Read-only; explicit transcript, attribution and outcome files only. JSON to stdout; no prompts or quota estimates.');
+    return;
+  }
+  const parsed = parseCli(args);
+  if (!parsed.transcripts.length) throw new Error('Expected at least one explicit transcript JSONL path; see --help');
+  const malformed = [];
+  const pathWarnings = [];
+  const sources = loadJsonlInputs(parsed.transcripts, malformed, 'transcript', pathWarnings, true);
+  const attributions = parsed.attribution.length
+    ? loadJsonlInputs(parsed.attribution, malformed, 'attribution', pathWarnings, false).flat()
+    : undefined;
+  const outcomes = parsed.outcomes.length
+    ? loadJsonlInputs(parsed.outcomes, malformed, 'outcome', pathWarnings, false).flat()
+    : undefined;
+  const result = report(sources, {
+    ...(attributions === undefined ? {} : { attributions }),
+    ...(outcomes === undefined ? {} : { outcomes }),
+  });
+  result.warnings.push(...pathWarnings);
+  result.warnings.push(...malformed);
+  result.warnings = [...new Set(result.warnings)];
+  if (pathWarnings.length || malformed.length) result.comparable = false;
+  console.log(JSON.stringify(result, null, 2));
+  if (!result.comparable) process.exitCode = 1;
+}
+
+if (require.main === module) {
+  try { main(process.argv.slice(2)); }
+  catch (e) { console.error(`usage-report: ${e.message}`); process.exitCode = 2; }
+}
+
+module.exports = { report, findAttribution, attributionIndex, findOutcome, outcomeIndex };

@@ -32,9 +32,16 @@ ticket, and outcome so later model tuning is based on measured work.
 For the published plugin:
 
 ```bash
+claude plugin marketplace add open-gsd/gsd-core
 claude plugin marketplace add serhii-nochevnyi/shipyard
 claude plugin install shipyard@shipyard
 ```
+
+For a complete install or upgrade from this checkout, including GSD, use
+`make install-shipyard-marketplace-claude`. It refreshes an unpinned marketplace;
+if an older Shipyard marketplace is pinned to a tag, it switches that
+registration to the current release source and restores the old registration
+if installation fails. Start a new Claude session after upgrading.
 
 For the host hooks and the shared GSD capability, run the installers from this
 checkout:
@@ -64,16 +71,71 @@ CLAUDE_HOME=/path/to/claude-home make remove-shipyard-claude-hook
 
 ### OpenAI Codex CLI
 
+Shipyard is a native marketplace plugin with six discoverable skills. Install
+Shipyard, its **GSD marketplace plugin dependency**, native agents, routing,
+observer and GSD gates together from this checkout:
+
 ```bash
-npx --yes @opengsd/gsd-core@latest --codex --global
-make install-shipyard-codex
+make package-shipyard-codex
+node scripts/install-shipyard-marketplace.cjs codex --source "$PWD"
 ```
 
-The installer replaces Shipyard's generated bundle at `~/.codex/shipyard`,
-refreshes only Shipyard-owned skills and agents, and preserves unrelated Codex
-configuration. Set `SHIPYARD_CODEX_PHASE=1` when only investigation and
-decomposition skills should be installed. Set `CODEX_HOME` or
-`AGENTS_SKILLS_DIR` to use non-default locations.
+For a published release, use the same installer without `--source` to register
+`serhii-nochevnyi/shipyard`. It switches an existing local Shipyard marketplace
+registration to that Git source and restores the prior registration if the new
+marketplace or plugin cannot be installed. The repository contains separate Claude and Codex
+marketplace catalogs; both identify Shipyard as `shipyard@shipyard`.
+
+Codex has no documented declarative plugin dependency installer. Its Install
+button installs the package; a trusted `SessionStart` hook or the first Shipyard
+skill then runs the same idempotent host bootstrap, which installs/enables
+`gsd-core@gsd-core`. Review and trust bundled hooks in Codex to enable startup
+setup. The one-command installer above completes setup immediately without
+requiring hook trust. It does not bypass that trust decision. Start a new session
+after setup so Codex loads newly registered native agents.
+
+The package owns the visible skills. Fully converted workflows live privately
+in `~/.codex/shipyard-native-skills`, agents in `~/.codex/agents`, and the shared
+runtime payload in `~/.codex/shipyard`. These are supporting host components,
+not another installed plugin. Migration backs up only unchanged skills owned by
+the previous installer; modified or unowned collisions stop setup with their
+paths. Backups are outside skill discovery in `~/.codex/shipyard-plugin`.
+
+The bootstrap reads available models from `codex debug models`, validates the
+native ADR-014 grid, and installs the GSD runtime payload at the dependency
+plugin's version. It uses the existing Codex subscription login and does not
+call a model or require an API key. `CODEX_HOME` and `AGENTS_SKILLS_DIR` remain
+supported; `SHIPYARD_CODEX_CAPABILITIES_FILE` can supply explicit host evidence.
+
+For a published Git marketplace, upgrade and reinstall, then start a new
+session:
+
+```bash
+codex plugin marketplace upgrade shipyard
+codex plugin add shipyard@shipyard
+```
+
+For local development, regenerate the package and run the one-command installer
+again. The generated version suffix changes when package contents change, so
+Codex does not reuse stale cached files. The package fingerprint also causes
+the bootstrap to refresh host components. Do not run the
+legacy direct bundle installer alongside marketplace installation.
+
+### GSD dependency on both runtimes
+
+Claude declares `gsd-core@gsd-core` in the plugin manifest and allows that
+cross-marketplace dependency in its catalog. Add the GSD marketplace once as
+shown above; Claude then installs missing dependencies natively. For complete
+Claude plugin and host setup from a matching release checkout:
+
+```bash
+make install-shipyard-marketplace-claude
+```
+
+Both full installers verify that the GSD plugin is installed and enabled. The
+npm GSD runtime payload is also needed by host tools; it is not a substitute for
+the marketplace plugin. Dependency installation errors are propagated instead
+of reporting a partially working Shipyard installation as successful.
 
 ## First run
 
@@ -82,7 +144,7 @@ appropriate entry point. You can also invoke it directly:
 
 ```text
 Claude Code: /shipyard:route "describe the change"
-Codex CLI:   $shipyard-route "describe the change"
+Codex CLI:   $shipyard:shipyard-route "describe the change"
 ```
 
 `/shipyard:investigate` needs only a `.planning/investigations/` directory and
@@ -103,7 +165,7 @@ checkout against this checkout's own `.planning/config.json`.
 ## Workflow
 
 The same four entry points exist on both runtimes. Claude uses slash commands;
-Codex uses the corresponding `$shipyard-*` skill names.
+Codex uses the corresponding `$shipyard:shipyard-*` skill names.
 
 | Entry | Use it when | Result |
 | --- | --- | --- |
@@ -126,11 +188,11 @@ Typical Claude commands:
 Typical Codex commands:
 
 ```text
-$shipyard-route "add the requested behavior"
-$shipyard-investigate "understand the failure and options"
-$shipyard-decompose
-$shipyard-deliver
-$shipyard-bench "apply this small change in the current worktree"
+$shipyard:shipyard-route "add the requested behavior"
+$shipyard:shipyard-investigate "understand the failure and options"
+$shipyard:shipyard-decompose
+$shipyard:shipyard-deliver
+$shipyard:shipyard-bench "apply this small change in the current worktree"
 ```
 
 `route` is advisory. `investigate`, `decompose`, and `deliver` are

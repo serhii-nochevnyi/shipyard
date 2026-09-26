@@ -1,0 +1,12 @@
+{
+  "version": "0.65.1+codex.d02c7981018ced79",
+  "digest": "497387f295c19f066340e8e1262a8742bcbd8e2d7c5f11747e1e79adbba54293",
+  "skills": [
+    "shipyard-route",
+    "shipyard-investigate",
+    "shipyard-decompose",
+    "shipyard-deliver",
+    "shipyard-bench",
+    "shipyard-delivery-rules"
+  ]
+}

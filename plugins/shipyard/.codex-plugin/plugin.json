@@ -1,0 +1,24 @@
+{
+  "name": "shipyard",
+  "version": "0.65.1+codex.d02c7981018ced79",
+  "description": "Artifact-driven delivery pipeline on top of GSD: deep investigation, ticket decomposition with a dependency graph, and per-ticket worktree->PR delivery babysat to green (CI + CodeRabbit/Copilot re-review). See docs/gsd_multilevel_delivery_pipeline.md.",
+  "author": {
+    "name": "Nochevnyi Serhii"
+  },
+  "repository": "https://github.com/serhii-nochevnyi/shipyard",
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Shipyard",
+    "shortDescription": "Research, plan and deliver with GSD.",
+    "longDescription": "Native Codex delivery workflows with GSD plugin dependency setup, validated agents and host gates.",
+    "developerName": "Nochevnyi Serhii",
+    "category": "Productivity",
+    "capabilities": [
+      "Read",
+      "Write"
+    ],
+    "defaultPrompt": [
+      "Use Shipyard to route this task."
+    ]
+  }
+}

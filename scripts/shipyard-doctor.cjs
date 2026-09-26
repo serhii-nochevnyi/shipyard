@@ -233,7 +233,8 @@ function main(argv) {
     } catch {
       agentsMdText = '';
     }
-    if (agentsMdText.includes(codexBlock(1)) || agentsMdText.includes(codexBlock(2))) {
+    if ([1, 2].some(phase => [false, true].some(marketplace =>
+      agentsMdText.includes(codexBlock(phase, marketplace))))) {
       check(results, 'codex-route-block', 'ok', 'AGENTS.md route block matches the source');
     } else {
       check(results, 'codex-route-block', 'warn', 'AGENTS.md route block is stale or missing; run make install-shipyard-codex');

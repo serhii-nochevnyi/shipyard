@@ -1,0 +1,493 @@
+#!/usr/bin/env node
+'use strict';
+
+// escalation-record.cjs — the durable home for an escalation, and the one place
+// that writes the journal's `escalation` event.
+//
+//   escalation-record.cjs mark  <ticket> <reason...> [--graph <dir>]
+//   escalation-record.cjs mark-plan-defect <ticket> <plan-path> <reason...>
+//                               [--signature <sig>]... [--graph <dir>]
+//   escalation-record.cjs clear <ticket>
+//   escalation-record.cjs list  [--json]
+//
+// Why this exists. An escalation ("the agent gave up", "attempts > max") reached
+// the front through ONE channel: a `--parked T-xx` flag the caller had to re-pass
+// on every state-sync, in every session. Nothing on disk recorded it. So the next
+// session opened blind — the front offered the ticket back under `finalize`, and
+// the run re-dispatched review-fix and arch-review agents against a PR a human had
+// already been asked to resolve. Not a deadlock (the stop hook lets a second stop
+// through), but real attempts and real money spent re-deciding something that was
+// already decided, with the REASON — the only part a human would have wanted —
+// gone.
+//
+// The proving ground had this exactly: six escalations in the journal with careful
+// reasons, and a seventh (T-16-05) parked with none at all, because parking and
+// journalling were two separate acts and only one of them got done. Hence one
+// command that does both — the same lesson as `sentinel.cjs merge` owning its own
+// merge record.
+//
+// EXPIRY, and why it is not optional. drift-record binds its verdict to the plan's
+// content hash so re-planning lifts the park by itself; a verdict that never
+// expired would be worse than none. The same rule applies here, over a different
+// subject: an escalation is a verdict about the PR AS IT STOOD, addressed to a
+// PERSON. So it is bound to a fingerprint of the delivery-state facts THAT PERSON
+// would change — status, draft, review_decision, head. They push a fix, answer the
+// review, undraft, and the fingerprint moves: the park lifts itself and the run
+// reconsiders. Nothing moves, and the park holds, because nothing HAS changed
+// since we gave up.
+//
+// It used to be bound to the fingerprint the CI waiter uses, which hashes the
+// CHECK TALLIES as well — so a parent merging retargeted the child, the whole
+// pipeline re-ran, `pending` moved, and a verdict a human had been asked to give
+// lifted itself. review-fix and arch-review were then re-dispatched at that PR
+// with the reason gone (ADR-002 A8/D1). A tally is the conveyor moving, never the
+// person; the shared hash stays exported for the one consumer whose subject
+// really is the tallies, and the park has its own (`parkFingerprint`).
+//
+// A ticket with no PR yet fingerprints over the little it has (its status), so it
+// simply stays parked until someone runs `clear`. That is the honest outcome
+// for "the executor could not start" — there is no external event to wait for —
+// and it falls out of the same rule rather than needing a special case.
+//
+// TWO KINDS, ONE STORE. `plan_defect` — k distinct failure signatures with no
+// green, i.e. the plan is wrong rather than the attempt — is a verdict about a
+// different subject, so it expires by a different rule: drift-record's plan hash,
+// REQUIRED from there rather than reimplemented. The PR fingerprint is ignored for
+// it on purpose. A push or an answered review says nothing about whether the plan
+// can be delivered as written, and lifting on one would hand the same wrong plan
+// straight back to an executor; re-decomposition rewrites the plan file, and that
+// is what lifts it. A record with no `kind` is every record written before this
+// existed, so it keeps the fingerprint rule byte for byte — a second store would
+// have been the easy way to get that guarantee, and the wrong one.
+
+const fs = require('fs');
+const path = require('path');
+const crypto = require('crypto');
+const { withLock, lockDirFor, writeAtomic } = require(path.join(__dirname, 'lock.cjs'));
+// Required, never reimplemented: two stores that expire against a plan must agree
+// on what "the same plan" means, or a re-decomposition lifts one park and not the
+// other.
+const { planHash } = require(path.join(__dirname, 'drift-record.cjs'));
+
+// Applied at READ time, never stored. The front prints this string as its
+// why-message and the sentinel as its PARKED_WHY, so the instruction the morning
+// human needs reaches both for free — with no change in either file.
+const PLAN_DEFECT_PREFIX = 'plan_defect — re-decompose: ';
+
+// The LIFTING RULE, in the words the human woken at 3am reads — and it lives
+// here, beside the branch in `activeEscalations` that decides when a park
+// actually lifts. It used to be composed independently at the two render sites
+// (the board's why-message and the guard's PARKED_WHY), which is precisely how
+// they came to contradict this file: a kind added to the store reaches a
+// renderer as a bare reason string, falls through to the older kind's sentence,
+// and the board then promises that moving the PR lifts a park that only a
+// re-plan lifts. One home means the next kind cannot be described with another
+// kind's semantics — it either gets an entry here or gets the fallback.
+const LIFTS = {
+  // Byte-identical to what it always said, and deliberately so: the sentence
+  // already named exactly the facts a PERSON moves — a push, a review answer,
+  // undrafting — and never claimed a finished check lifts anything. It was the
+  // CODE that also lifted on a CI tick, so `parkFingerprint` below makes the code
+  // match the promise rather than the promise match the code. (Same class as
+  // `BEHIND` in sentinel.cjs: prose asserting a behaviour the code did not have.)
+  // Three byte-exact assertions in tests/unit/front.test.cjs and two quotations in
+  // deliver.md rest on this string.
+  escalation: (id) =>
+    `It lifts by itself once the PR moves (a push, a review answer, undrafting); \`escalation-record.cjs clear ${id}\` to take it back.`,
+  // Deliberately says nothing at all about the PR. A push or an answered review
+  // is not evidence about the plan, and naming one here — even to deny it — is
+  // what put the falsehood on the board to begin with.
+  plan_defect: (id) =>
+    `Re-plan it (/shipyard:decompose): the park lifts when the plan file changes, and only then; \`escalation-record.cjs clear ${id}\` to take it back.`,
+};
+
+// The reason as the FLAT readers see it — the kind's prefix, applied at read time
+// and never stored, so `list --json` and any consumer of the flat map can still
+// see which rule a park is filed under. It is presentation, and nothing reads a
+// kind back out of it.
+function parkReason(park) {
+  return park.kind === 'plan_defect' ? PLAN_DEFECT_PREFIX + park.reason : park.reason;
+}
+
+/**
+ * The whole park message for one ticket, given the PARK RECORD `activeParks`
+ * returned for it — `{kind, reason}`. Both renderers assign this verbatim; their
+ * remaining job is placement, not wording.
+ *
+ * The kind comes from the record and from nowhere else. It used to be recovered
+ * by testing the reason against PLAN_DEFECT_PREFIX, which made free text a
+ * control channel: `mark <T> "plan_defect — re-decompose: …"` — a human pasting a
+ * board line back into the ordinary command — was then told that re-planning
+ * lifts a park that a PR move actually lifts, i.e. the exact falsehood this whole
+ * ticket exists to delete, one indirection further down. Found by Copilot on
+ * PR #8.
+ *
+ * An unknown or absent kind falls back to the ordinary-escalation sentence, and
+ * now does so structurally: `activeParks` reports the rule that ACTUALLY expired
+ * the park, so a record written before kinds existed reports `escalation` because
+ * it was expired by the fingerprint rule — the sentence and the expiry cannot
+ * disagree. A bare string (the flat `activeEscalations` view, which has already
+ * discarded the kind) is accepted as that same legacy shape.
+ */
+function escalationWhy(id, park) {
+  const p = typeof park === 'string' ? { reason: park } : (park || {});
+  const kind = LIFTS[p.kind] ? p.kind : 'escalation';
+  return `escalated — ${parkReason({ kind, reason: p.reason })}. ${LIFTS[kind](id)}`;
+}
+
+function fail(msg) {
+  process.stderr.write(`escalation-record: ${msg}\n`);
+  process.exit(1);
+}
+
+function graphDir(cwd = process.cwd()) {
+  return path.join(cwd, '.planning', 'graph');
+}
+
+// THE SHARED HASH, FROZEN. Every delivery-state fact that moves for any reason at
+// all, tallies included. `ci-wait.cjs` counts its empty windows against this and
+// is right to: there, a tally change IS the event being waited for. Nothing else
+// may use it (the park below and dispatch-record each have their own), and its
+// OUTPUT must not change — the waiter's store on disk is keyed by it, so a new
+// field or a reordered element silently resets every count and the waiter then
+// escalates a pipeline that is moving fine. Pinned in
+// tests/unit/escalation-record.test.cjs.
+//
+// Deliberately built from what delivery-state ALREADY carries: adding a field to
+// state-sync's bulk `gh pr list` window is what made a monorepo sync take 41s
+// instead of 7s, and state-sync runs on every babysit round.
+function fingerprint(s = {}) {
+  const c = s.checks || {};
+  return crypto.createHash('sha256').update(JSON.stringify([
+    s.status || null,
+    s.draft === true,
+    s.review_decision || null,
+    s.pr || null,
+    c.failing || 0, c.pending || 0, c.total || 0,
+    s.branch || null,
+  ])).digest('hex').slice(0, 16);
+}
+
+// THE PARK'S OWN HASH: the facts a PERSON moves on a PR they have been asked to
+// judge, and only those.
+//
+//   * `review_decision`, `draft`, `head_sha` — answering the review, undrafting,
+//     pushing. The three acts the park's own sentence names.
+//   * `status` — they closed it, or it landed.
+//   * `pr` — the verdict was about THAT pull request; a different number is a
+//     different subject, not a moved one.
+//
+// Excluded, each for a reason: `checks.*`, because a re-run is the conveyor
+// moving and lifting on it is the defect this function exists to fix; `pr_base`,
+// because the conveyor retargets cascade children; `branch`, because it comes
+// from tickets.json and moves on re-decomposition rather than by anyone's hand.
+//
+// `head_sha` is recorded by state-sync from T-24-04 on. Absent, it hashes as null
+// on both sides, so a park written before it exists simply expires on the other
+// fields — no migration, no special case.
+function parkFingerprint(s = {}) {
+  return crypto.createHash('sha256').update(JSON.stringify([
+    s.status || null,
+    s.draft === true,
+    s.review_decision || null,
+    s.head_sha || null,
+    s.pr || null,
+  ])).digest('hex').slice(0, 16);
+}
+
+function readState(cwd) {
+  try {
+    const raw = JSON.parse(fs.readFileSync(path.join(graphDir(cwd), 'delivery-state.json'), 'utf8'));
+    return raw && raw.tickets ? raw.tickets : raw || {};
+  } catch {
+    return {};
+  }
+}
+
+function load(cwd = process.cwd()) {
+  try {
+    const raw = JSON.parse(fs.readFileSync(path.join(graphDir(cwd), 'escalations.json'), 'utf8'));
+    return raw && typeof raw === 'object' && raw.tickets ? raw : { tickets: {} };
+  } catch {
+    return { tickets: {} };
+  }
+}
+
+// Read-modify-write plus the journal line, under ONE lock and written atomically.
+// state-sync and the sentinel read this store concurrently — the sentinel runs
+// alongside the main loop by design — and a torn read silently un-parks the
+// ticket for that round, which is the exact harm the record exists to prevent.
+function mutate(cwd, fn) {
+  fs.mkdirSync(graphDir(cwd), { recursive: true });
+  return withLock(lockDirFor(cwd), 'escalation-record', () => {
+    const store = load(cwd);
+    const extra = fn(store);
+    writeAtomic(path.join(graphDir(cwd), 'escalations.json'), JSON.stringify(store, null, 2) + '\n');
+    if (extra) fs.appendFileSync(path.join(graphDir(cwd), 'delivery-log.jsonl'), JSON.stringify(extra) + '\n');
+  }, { label: 'escalation-record' });
+}
+
+/**
+ * The parks still in force, as RECORDS: {ticket: {kind, reason}}. This is the
+ * authoritative reader — `activeEscalations` below is a flattening of it, and the
+ * two renderers take these records so the lifting sentence is derived from the
+ * kind rather than reconstructed from the text.
+ *
+ * A merged ticket is never parked, whichever kind it carries: whatever we gave up
+ * on, it landed.
+ *
+ * The two kinds expire against different subjects — an escalation against the PR
+ * it was a verdict about, a plan defect against the plan — and that branch is the
+ * whole of the difference. The `kind` reported here is therefore the rule that
+ * EXPIRED the park, not a copy of the stored field: a record with an absent or
+ * unrecognised kind is expired by the fingerprint rule, so it reports
+ * `escalation` and gets the ordinary sentence. That equivalence is what makes the
+ * fallback a property of the code rather than a promise in a docstring.
+ *
+ * `state` may be passed in by a caller that already has it, otherwise it is read
+ * from disk.
+ */
+function activeParks(cwd = process.cwd(), state = null) {
+  const live = state || readState(cwd);
+  const out = {};
+  for (const [id, rec] of Object.entries(load(cwd).tickets || {})) {
+    if (!rec) continue;
+    const s = live[id] || {};
+    if (s.status === 'merged') continue;
+
+    if (rec.kind === 'plan_defect') {
+      // Bound to the PLAN, and to nothing about the PR. A record with no plan
+      // recorded is spent rather than eternal (drift-record's rule), and reading
+      // it that way also keeps a hand-damaged store from throwing here — this
+      // function runs on every babysit round, for every ticket.
+      if (!rec.plan) continue;
+      const current = planHash(path.isAbsolute(rec.plan) ? rec.plan : path.join(cwd, rec.plan));
+      if (!current || current !== rec.plan_hash) continue; // re-decomposed, or the plan is gone
+      out[id] = { kind: 'plan_defect', reason: rec.reason || 'the plan cannot be delivered as written' };
+      continue;
+    }
+
+    // No kind (every record written before plan_defect existed) — the original
+    // rule: the verdict was about the PR as it stood, so it lifts when the PERSON
+    // it was addressed to moves it.
+    //
+    // WHICH hash comes from the record, never from this code's idea of the current
+    // one. A park written before the tallies were split out is bound to the shared
+    // hash, and re-reading it under the new rule would change a verdict already on
+    // disk — it keeps the old rule until it lifts, which is a store migration
+    // avoided rather than deferred.
+    if (rec.fingerprint) {
+      const current = rec.fingerprint_kind === 'park' ? parkFingerprint(s) : fingerprint(s);
+      if (current !== rec.fingerprint) continue; // a human moved it
+    }
+    out[id] = { kind: 'escalation', reason: rec.reason || 'escalated to a human' };
+  }
+  return out;
+}
+
+// A reason is the ENTIRE inheritance of the next session: it reads this string
+// and nothing else, so a park without one is the defect this store exists to
+// prevent. Checked on the JOINED, TRIMMED string, never on the argument count —
+// `mark T-01-01 ""` hands the parser a non-empty array holding nothing a human
+// can read, and so does `mark T-01-01 "" "  "`. That distinction was found by
+// Copilot's review of the PR that added `mark-plan-defect`, and only that call
+// site received it; the older, more-used `mark` kept `!reason.length` and
+// accepted the empty string for another epic. The condition lives here, once,
+// because a copy is exactly how the two came to disagree. The MESSAGE stays with
+// the caller: the two address different readers, one unblocking a PR and one
+// deciding how to re-plan.
+function requireReason(words, message) {
+  if (!words.join(' ').trim().length) fail(message);
+}
+
+/**
+ * The same parks as a flat {ticket: reason} map — the shape `list`/`list --json`
+ * prints and the one any external consumer already reads. It is a VIEW: the kind
+ * survives only as the rendered prefix, which is why a renderer must not take its
+ * kind from here (that inference is the defect Copilot found on PR #8). Renderers
+ * take `activeParks`; this stays for the CLI and for callers that only ever
+ * wanted the sentence a human reads.
+ */
+function activeEscalations(cwd = process.cwd(), state = null) {
+  const out = {};
+  for (const [id, park] of Object.entries(activeParks(cwd, state))) out[id] = parkReason(park);
+  return out;
+}
+
+// Repeatable and accepted in ANY position — the fixer that reaches this verdict
+// has one signature per distinct failure and pastes them in whatever order the
+// journal gave them. Enumerating the flag rather than inferring `--key value` is
+// what keeps it from eating the ticket id or the first word of the reason.
+function takeSignatures(args) {
+  const rest = [];
+  const sigs = [];
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--signature') {
+      const v = args[++i];
+      // A following flag (e.g. `--signature --signature abc123`) is not a value:
+      // consuming it would record the literal string "--signature" as evidence.
+      // Found by Copilot's review of this PR.
+      if (!v || v.startsWith('--')) fail('--signature needs a value — it is the evidence the verdict rests on');
+      sigs.push(v);
+      continue;
+    }
+    rest.push(args[i]);
+  }
+  // Distinct: the same signature twice is one piece of evidence, and the k-rule
+  // that produced this verdict counted distinct ones too.
+  return { rest, signatures: [...new Set(sigs)] };
+}
+
+if (require.main === module) {
+  const argv = process.argv.slice(2);
+  const gIdx = argv.indexOf('--graph');
+  // A `--graph` with no value, or one immediately followed by another flag, is
+  // not a directory: resolving it anyway (the old `|| ''` fallback resolved to
+  // TWO levels above cwd) would read/write escalations.json in a directory
+  // nobody asked for, silently. Same class of bug already fixed this round in
+  // failure-signature.cjs and attempt-history.cjs; found here by Copilot's
+  // review of this PR.
+  if (gIdx !== -1) {
+    const val = argv[gIdx + 1];
+    if (val === undefined || val.startsWith('--')) {
+      fail(`--graph needs a directory value (got ${val === undefined ? 'nothing' : `the flag "${val}"`})`);
+    }
+  }
+  const cwd = gIdx === -1 ? process.cwd() : path.resolve(argv[gIdx + 1], '..', '..');
+  if (gIdx !== -1) argv.splice(gIdx, 2);
+  // Fail-closed, matching drift-record.cjs/log-event.cjs's convention (CLAUDE.md,
+  // "the two durable stores"): a mark/mark-plan-defect run from a ticket worktree
+  // that happens to carry a stray/tracked delivery-state.json would otherwise
+  // succeed silently while state-sync and the front read the PROJECT graph,
+  // losing the verdict. `list`/`clear` are read/no-op-safe and stay permissive —
+  // only the write paths need the refusal.
+  const [cmd, ...rest] = argv;
+  if ((cmd === 'mark' || cmd === 'mark-plan-defect') && gIdx === -1 && !fs.existsSync(path.join(graphDir(cwd), 'tickets.json'))) {
+    fail(
+      `no ticket graph at ${graphDir(cwd)} — refusing to record a verdict nothing will read.\n` +
+      '  state-sync and the front read the PROJECT\'s graph; one written elsewhere is invisible to them.\n' +
+      '  Run this from the conveyor project, or pass --graph <project>/.planning/graph.'
+    );
+  }
+
+  if (cmd === 'mark') {
+    const [ticket, ...reason] = rest;
+    if (!ticket) fail('usage: escalation-record.cjs mark <ticket> <reason...>');
+    // Read by someone deciding how to UNBLOCK a PR — hence these words, and not
+    // `mark-plan-defect`'s. The condition itself is shared (see requireReason).
+    requireReason(
+      reason,
+      'an escalation with no reason is the defect this script exists to fix.\n' +
+      '  The next session inherits ONLY this string: say what a human must decide,\n' +
+      '  e.g. "auth token expired; the live capture this ticket rests on cannot run".'
+    );
+    const state = readState(cwd);
+    const s = state[ticket];
+    if (!s) fail(`no ${ticket} in delivery-state.json — run state-sync.cjs first, or check the id`);
+
+    // The park and its journal entry are ONE act, in one locked section. Splitting
+    // them is how T-16-05 ended up parked but uncounted — invisible to
+    // pipeline-stats' escalation rate, the metric that would have shown this.
+    mutate(cwd, (store) => {
+      store.tickets[ticket] = {
+        reason: reason.join(' '),
+        fingerprint: parkFingerprint(s),
+        // Which hash the line above is, so a reader upgrading over an existing
+        // store compares each record with the rule it was written under. No
+        // `kind` here on purpose: `activeParks` derives `escalation` from the
+        // rule that expired the park, and a stored one could disagree with it.
+        fingerprint_kind: 'park',
+        pr: s.pr || null,
+        at: new Date().toISOString(),
+      };
+      return {
+        ts: new Date().toISOString(),
+        event: 'escalation',
+        ticket,
+        pr: s.pr || null,
+        reason: reason.join(' '),
+        by: 'escalation-record',
+      };
+    });
+
+    console.log(
+      `escalation recorded for ${ticket} — it stays parked until a human moves the PR ` +
+      '(a push, a review answer, an undraft, a close), or you run `clear`. ' +
+      'A finished check does not lift it: that is the conveyor moving, not a person.'
+    );
+  } else if (cmd === 'mark-plan-defect') {
+    const { rest: positional, signatures } = takeSignatures(rest);
+    const [ticket, plan, ...reason] = positional;
+    if (!ticket || !plan) {
+      fail('usage: escalation-record.cjs mark-plan-defect <ticket> <plan-path> <reason...> [--signature <sig>]... [--graph <dir>]');
+    }
+    // Read by someone deciding how to RE-PLAN, not how to unblock a PR — so the
+    // words differ from `mark`'s while the condition does not.
+    requireReason(
+      reason,
+      'a plan defect with no reason is a dead end for whoever picks it up in the morning.\n' +
+      '  They inherit ONLY this string and the signatures: say what the PLAN got wrong,\n' +
+      '  e.g. "the plan assumes a sync endpoint; the API streams, so no fix inside these\n' +
+      '  files can pass" — never just "plan defect".'
+    );
+    const hash = planHash(plan);
+    if (!hash) fail(`cannot read the plan at ${plan} — a verdict with no plan to bind to would never expire`);
+    // The typo guard `mark` has, for the same reason: a park recorded against an
+    // id nothing knows is invisible to every reader. It also supplies the PR the
+    // journal line is attributed to.
+    const s = readState(cwd)[ticket];
+    if (!s) fail(`no ${ticket} in delivery-state.json — run state-sync.cjs first, or check the id`);
+    // Absolute, like drift-record's: this command runs from a ticket worktree
+    // while `activeEscalations` reads from the project root, so a path relative
+    // to either one resolves in the other.
+    const planAbs = path.resolve(plan);
+
+    mutate(cwd, (store) => {
+      const at = new Date().toISOString();
+      store.tickets[ticket] = {
+        kind: 'plan_defect',
+        reason: reason.join(' '),
+        plan: planAbs,
+        plan_hash: hash,
+        signatures,
+        pr: s.pr || null,
+        at,
+      };
+      return {
+        ts: at,
+        event: 'plan_defect',
+        ticket,
+        pr: s.pr || null,
+        reason: reason.join(' '),
+        plan: planAbs,
+        signatures,
+        plan_hash: hash,
+        by: 'escalation-record',
+      };
+    });
+
+    console.log(
+      `plan defect recorded for ${ticket} — it stays parked until ${planAbs} changes ` +
+      '(re-decompose it), or you run `clear`. Moving the PR does NOT lift it.'
+    );
+  } else if (cmd === 'clear') {
+    const [ticket] = rest;
+    if (!ticket) fail('usage: escalation-record.cjs clear <ticket>');
+    const had = !!load(cwd).tickets[ticket];
+    if (had) mutate(cwd, (store) => { delete store.tickets[ticket]; });
+    console.log(had ? `escalation cleared for ${ticket}` : `no escalation recorded for ${ticket}`);
+  } else if (cmd === 'list') {
+    const active = activeEscalations(cwd);
+    if (rest.includes('--json')) {
+      console.log(JSON.stringify(active, null, 2));
+    } else if (!Object.keys(active).length) {
+      console.log('no escalations in force');
+    } else {
+      for (const [id, reason] of Object.entries(active)) console.log(`${id}: ${reason}`);
+    }
+  } else {
+    fail('usage: escalation-record.cjs <mark|mark-plan-defect|clear|list> …');
+  }
+}
+
+module.exports = { activeParks, activeEscalations, fingerprint, parkFingerprint, escalationWhy };
