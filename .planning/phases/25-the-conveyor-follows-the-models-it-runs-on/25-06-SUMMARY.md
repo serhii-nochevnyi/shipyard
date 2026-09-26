@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 8dd612515259f18e8092ebf6a9cda36f7f57b0461097498a132fcfda8e771056
 phase: 25-the-conveyor-follows-the-models-it-runs-on
 plan: 06
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-08
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+shipyard_source_fingerprint: 8dd612515259f18e8092ebf6a9cda36f7f57b0461097498a132fcfda8e771056
 ---
 
 # Phase 25: Every home of a pinned fact agrees with the others — Delivery Projection

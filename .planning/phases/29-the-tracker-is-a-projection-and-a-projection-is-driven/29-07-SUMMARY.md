@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 7253fa0f86e5bac7bc0991b40d4823eca8d101a8a5ee381d6093be8117037574
 phase: 29-the-tracker-is-a-projection-and-a-projection-is-driven
 plan: 07
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-11
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+shipyard_source_fingerprint: 7253fa0f86e5bac7bc0991b40d4823eca8d101a8a5ee381d6093be8117037574
 ---
 
 # Phase 29: Wire it, pin the wiring, and keep it out of the tick rate — Delivery Projection

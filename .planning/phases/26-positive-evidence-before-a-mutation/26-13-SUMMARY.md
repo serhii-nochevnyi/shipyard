@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 5c2e25248e06c4d0bd7975a5b1d9f15a56b4787d6f66264ebc7e23daaeeaf3d6
 phase: 26-positive-evidence-before-a-mutation
 plan: 13
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-07
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+shipyard_source_fingerprint: 5c2e25248e06c4d0bd7975a5b1d9f15a56b4787d6f66264ebc7e23daaeeaf3d6
 ---
 
 # Phase 26: Drift is judged against the base the ticket is cut from — Delivery Projection

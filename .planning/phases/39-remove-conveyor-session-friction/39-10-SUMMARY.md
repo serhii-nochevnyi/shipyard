@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: bfdfd64a5fbfd87db2437fc8b2cc0823565279ef0025cdd627ab512257903ad1
 phase: 39-remove-conveyor-session-friction
 plan: 10
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-24
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+shipyard_source_fingerprint: bfdfd64a5fbfd87db2437fc8b2cc0823565279ef0025cdd627ab512257903ad1
 ---
 
 # Phase 39: Update decompose prose for bootstrap, hints, Jira plan and gates — Delivery Projection

@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 89912ec34e86b548d57be0ca3a8dc83e56f704a9240378966c2a326d237fee01
 phase: 24-the-conveyor-stops-interrupting-itself
 plan: 01
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-07
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+shipyard_source_fingerprint: 89912ec34e86b548d57be0ca3a8dc83e56f704a9240378966c2a326d237fee01
 ---
 
 # Phase 24: A plan defect needs no green between its signatures — Delivery Projection

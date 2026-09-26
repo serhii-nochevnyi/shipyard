@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: fedcc48eb14a5448a882cdbf2ee576444de179bce34ac2e0b9c5d269ac6fa31a
 phase: 31-not-every-ticket-is-available-work
 plan: 02
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-14
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+shipyard_source_fingerprint: fedcc48eb14a5448a882cdbf2ee576444de179bce34ac2e0b9c5d269ac6fa31a
 ---
 
 # Phase 31: Declare opt-in Jira To Do statuses — Delivery Projection

@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 4d10e2f9f18f9d516a4ca47f43e5808f9c83bb2c2173eabda3e9f4f91194b62d
 phase: 28-a-mechanism-nobody-connected-is-not-a-mechanism
 plan: 06
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-09
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+shipyard_source_fingerprint: 4d10e2f9f18f9d516a4ca47f43e5808f9c83bb2c2173eabda3e9f4f91194b62d
 ---
 
 # Phase 28: Every reader has a writer, or a recorded decision — Delivery Projection

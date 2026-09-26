@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 2e705daf465fdb1c732459d244cf312100788793a3227f64efcd3331ba1117ad
 phase: 40-build-delivery-seams-and-clean-target-project-prs
 plan: 23
 subsystem: shipyard delivery
@@ -22,7 +22,7 @@ key-decisions:
 duration: 0min
 status: halted
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+shipyard_source_fingerprint: 2e705daf465fdb1c732459d244cf312100788793a3227f64efcd3331ba1117ad
 ---
 
 # Phase 40: Run one live round per runtime on an in-repo fixture project and gate releases on a fresh receipt — Delivery Projection

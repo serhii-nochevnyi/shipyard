@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: d55da4ec111f0a6c2bd5f3ee2b9b063119ec9203781a77484536016eb7e90565
 phase: 32-measure-usage-and-make-the-backlog-actionable
 plan: 03
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-11
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+shipyard_source_fingerprint: d55da4ec111f0a6c2bd5f3ee2b9b063119ec9203781a77484536016eb7e90565
 ---
 
 # Phase 32: Expose routing attribution eligibility in delivery stats — Delivery Projection

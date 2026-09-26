@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 020e4666dbe50359f00fc5462d061f4147b39da9afa18a8fadfd656ca5373081
 phase: 26-positive-evidence-before-a-mutation
 plan: 10
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-08
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+shipyard_source_fingerprint: 020e4666dbe50359f00fc5462d061f4147b39da9afa18a8fadfd656ca5373081
 ---
 
 # Phase 26: Left behind is evidence, not arithmetic — Delivery Projection

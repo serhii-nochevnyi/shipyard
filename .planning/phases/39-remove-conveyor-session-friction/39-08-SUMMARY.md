@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 2e5be244ffa9da27cd68735fd7396799ca729756e9435361e997765770e82b1d
 phase: 39-remove-conveyor-session-friction
 plan: 08
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-24
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+shipyard_source_fingerprint: 2e5be244ffa9da27cd68735fd7396799ca729756e9435361e997765770e82b1d
 ---
 
 # Phase 39: State and enforce the research handback summary bound — Delivery Projection
