@@ -17,7 +17,9 @@ set -euo pipefail
 cmd="${1:-}"
 
 repo_root="$(git rev-parse --show-toplevel 2>/dev/null)" || { echo "not inside a git repository" >&2; exit 1; }
-reachability_script="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/run-reachability.cjs"
+scripts_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+reachability_script="$scripts_dir/run-reachability.cjs"
+pr_hygiene_cjs="$scripts_dir/pr-hygiene.cjs"
 
 default_branch() {
   # GSD's git.base_branch is the project's integration branch (it is what
@@ -74,6 +76,7 @@ lock_mtime() {
 # installed its own would have leaked the lock on every conflict.
 lock_held=false
 refresh_tmp_parent=""
+pr_body_tmp=""
 # `set -e` is LIVE inside an EXIT trap (`bash -ec 'trap "false; echo reached" EXIT;
 # true'` prints nothing and exits 1), so a handler whose job is to GIVE RESOURCES
 # BACK must not be interruptible by it: one failing step would skip every step
@@ -90,6 +93,7 @@ cleanup() {
     rm -rf "$refresh_tmp_parent"
     git -C "$repo_root" worktree prune >/dev/null 2>&1
   fi
+  [[ -n "$pr_body_tmp" ]] && rm -f "$pr_body_tmp"
   $lock_held && rm -rf "$git_lock"
   return $st
 }
@@ -344,9 +348,48 @@ case "$cmd" in
       echo "no-diff-yet: epic $epic has no commits ahead of $base — open the epic PR after the first ticket lands" >&2
       exit 0
     fi
+    if [[ "$epic" == epic/* ]]; then
+      pr_title="epic: ${epic#epic/} integration"
+      pr_body="$(printf 'Integration branch for the %s epic.\n\nAll ticket PRs in this phase stack into this branch; this PR merges the whole phase into %s once every ticket is green and integrated.\n\nEpic: %s' "${epic#epic/}" "$base" "$epic")"
+    else
+      # @contract: the subject and summary come from the graph epic record, never parsed from the branch string.
+      epic_meta="$(node -e '
+        const fs = require("fs"), path = require("path");
+        const root = process.argv[1], branch = process.argv[2];
+        let subject = "", jira = "", body = "- (no ticket titles recorded yet)";
+        try {
+          const g = JSON.parse(fs.readFileSync(path.join(root, ".planning", "graph", "tickets.json"), "utf8"));
+          const phase = Object.keys(g.epics || {}).find((ph) => g.epics[ph] && g.epics[ph].branch === branch);
+          if (phase) {
+            const e = g.epics[phase];
+            subject = String(e.phaseDir || "").replace(/^\d+-?/, "").replace(/-/g, " ").toLowerCase();
+            jira = e.jira || "";
+            const titles = Object.values(g.tickets || {}).filter((t) => t.epic === branch).map((t) => t.title);
+            if (titles.length) body = titles.map((t) => `- ${t}`).join("\n");
+          }
+        } catch {}
+        process.stdout.write(JSON.stringify({ subject, jira, body }));
+      ' "$repo_root" "$epic" 2>/dev/null)" || epic_meta='{}'
+      subject="$(node -e 'let s="";process.stdin.on("data",(d)=>s+=d).on("end",()=>{let v="";try{v=JSON.parse(s).subject||""}catch{}process.stdout.write(v)})' <<<"$epic_meta")"
+      [[ -n "$subject" ]] || subject="$(printf '%s' "${epic#*/}" | tr '-' ' ')"
+      phase_jira="$(node -e 'let s="";process.stdin.on("data",(d)=>s+=d).on("end",()=>{let v="";try{v=JSON.parse(s).jira||""}catch{}process.stdout.write(v)})' <<<"$epic_meta")"
+      pr_body="$(node -e 'let s="";process.stdin.on("data",(d)=>s+=d).on("end",()=>{let v="";try{v=JSON.parse(s).body||""}catch{}process.stdout.write(v)})' <<<"$epic_meta")"
+      jira_args=()
+      [[ -n "$phase_jira" ]] && jira_args=(--jira "$phase_jira")
+      if ! pr_title="$(node "$pr_hygiene_cjs" format --project-root "$repo_root" --type feat "${jira_args[@]+"${jira_args[@]}"}" --subject "$subject")"; then
+        echo "epic-branch.sh pr: refusing — pr-hygiene.cjs format failed for epic $epic (see above)" >&2
+        exit 1
+      fi
+    fi
+    pr_body_tmp="$(mktemp)"
+    printf '%s' "$pr_body" > "$pr_body_tmp"
+    if ! node "$pr_hygiene_cjs" check --project-root "$repo_root" --base "$base" --head "$epic" \
+        --title "$pr_title" --body-file "$pr_body_tmp" 1>&2; then
+      echo "epic-branch.sh pr: refusing — pr-hygiene.cjs check reported violations for epic $epic (see above)" >&2
+      exit 1
+    fi
     gh pr create --base "$base" --head "$epic" --draft \
-      --title "epic: ${epic#epic/} integration" \
-      --body "$(printf 'Integration branch for the %s epic.\n\nAll ticket PRs in this phase stack into this branch; this PR merges the whole phase into %s once every ticket is green and integrated.\n\nEpic: %s' "${epic#epic/}" "$base" "$epic")" 1>&2
+      --title "$pr_title" --body-file "$pr_body_tmp" 1>&2
     gh pr list --state open --head "$epic" --base "$base" --json number --jq '.[0].number'
     ;;
   status)
