@@ -21,28 +21,30 @@ function codexMarketplaceSource(source) {
   if (/^[\w.-]+\/[\w.-]+$/.test(source)) return { sourceType: 'git', source: `https://github.com/${source}.git` };
   return { sourceType: 'git', source };
 }
-function installCodexMarketplace(source) {
-  const existing = capture('codex', ['plugin', 'marketplace', 'list', '--json'])
+function installCodexMarketplace(source, execute = run, read = capture) {
+  const existing = read('codex', ['plugin', 'marketplace', 'list', '--json'])
     .marketplaces.find(item => item.name === 'shipyard');
   const target = codexMarketplaceSource(source);
   const registered = existing?.marketplaceSource;
   if (!registered || registered.sourceType === target.sourceType && registered.source === target.source) {
-    run('codex', ['plugin', 'marketplace', 'add', source]);
-    run('codex', ['plugin', 'add', 'shipyard@shipyard']);
+    if (!registered || target.sourceType === 'local')
+      execute('codex', ['plugin', 'marketplace', 'add', source]);
+    else execute('codex', ['plugin', 'marketplace', 'upgrade', 'shipyard']);
+    execute('codex', ['plugin', 'add', 'shipyard@shipyard']);
     return;
   }
   const former = registered.source;
-  const hadPlugin = capture('codex', ['plugin', 'list', '--json']).installed
+  const hadPlugin = read('codex', ['plugin', 'list', '--json']).installed
     .some(item => item.pluginId === 'shipyard@shipyard');
-  run('codex', ['plugin', 'marketplace', 'remove', 'shipyard']);
+  execute('codex', ['plugin', 'marketplace', 'remove', 'shipyard']);
   try {
-    run('codex', ['plugin', 'marketplace', 'add', source]);
-    run('codex', ['plugin', 'add', 'shipyard@shipyard']);
+    execute('codex', ['plugin', 'marketplace', 'add', source]);
+    execute('codex', ['plugin', 'add', 'shipyard@shipyard']);
   } catch (error) {
     try {
-      run('codex', ['plugin', 'marketplace', 'remove', 'shipyard']);
-      run('codex', ['plugin', 'marketplace', 'add', former]);
-      if (hadPlugin) run('codex', ['plugin', 'add', 'shipyard@shipyard']);
+      execute('codex', ['plugin', 'marketplace', 'remove', 'shipyard']);
+      execute('codex', ['plugin', 'marketplace', 'add', former]);
+      if (hadPlugin) execute('codex', ['plugin', 'add', 'shipyard@shipyard']);
     } catch (rollback) { throw new Error(`${error.message}; marketplace rollback failed: ${rollback.message}`); }
     throw error;
   }
@@ -124,7 +126,8 @@ function main(args) {
     run('bash', [path.join(root, 'scripts/install-shipyard-capability.sh'), 'claude'], env);
   }
 }
-module.exports = { main, claudeMarketplaceMatches, claudeMarketplaceSource, installClaudeMarketplace };
+module.exports = { main, installCodexMarketplace, claudeMarketplaceMatches,
+  claudeMarketplaceSource, installClaudeMarketplace };
 if (require.main === module) {
   try { main(process.argv.slice(2)); } catch (error) { console.error(error.message); process.exitCode = 1; }
 }

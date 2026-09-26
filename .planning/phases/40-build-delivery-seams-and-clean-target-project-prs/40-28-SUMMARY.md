@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: c628fab451e223c68a47ec3fef25f06fa6237fb418deefe3ea785cb3c1918f3f
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: d91c0ecb759a069a19cd57f8b3d56fbd86db89dfac3b6824e592874c85f95819
 phase: 40-build-delivery-seams-and-clean-target-project-prs
 plan: 28
 subsystem: shipyard delivery
@@ -22,7 +22,7 @@ key-decisions:
 duration: 0min
 status: halted
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: c628fab451e223c68a47ec3fef25f06fa6237fb418deefe3ea785cb3c1918f3f
+shipyard_source_fingerprint: d91c0ecb759a069a19cd57f8b3d56fbd86db89dfac3b6824e592874c85f95819
 ---
 
 # Phase 40: Deliver the canonical plan to sandboxed agents and refuse graph copies — Delivery Projection

@@ -2075,45 +2075,13 @@
   "T-42-01": {
     "branch": "ticket/T-42-01-resume-authenticated-completed-execution",
     "pr": 255,
-    "status": "pr-open",
-    "draft": false,
-    "review_decision": null,
+    "status": "merged",
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/255",
-    "pr_base": "epic/42-resume-trusted-finalization-without-executor-replay",
-    "pr_created_at": "2026-09-26T10:26:51Z",
-    "head_sha": "7d79bee1c96e43ac61beb6ead62c25b745e43808",
-    "merge_state": "CLEAN",
-    "behind_by": 0,
-    "checks": {
-      "total": 1,
-      "failing": 0,
-      "pending": 0,
-      "none_reported": false,
-      "unavailable": false
-    },
     "base": "epic/42-resume-trusted-finalization-without-executor-replay",
     "base_reason": "no primary parent — a root ticket PRs into epic/42-resume-trusted-finalization-without-executor-replay",
     "epic": "epic/42-resume-trusted-finalization-without-executor-replay",
-    "merge_scope": "stacked",
-    "reapable": false,
-    "since": "2026-09-26T10:40:49.348Z"
-  },
-  "T-40-01": {
-    "branch": "ticket/T-40-01-make-git-creating-unit-fixtures-hermetic",
-    "pr": null,
-    "status": "pending",
-    "base": "epic/40-build-delivery-seams-and-clean-target-project-prs",
-    "base_reason": "no primary parent — a root ticket PRs into epic/40-build-delivery-seams-and-clean-target-project-prs",
-    "epic": "epic/40-build-delivery-seams-and-clean-target-project-prs",
-    "ready": false,
-    "blocked_by": [
-      "T-42-01"
-    ],
-    "blocked_reasons": {
-      "T-42-01": "cross-phase parent must be MERGED and its phase 42 epic landed on main first (parent is pr-open)"
-    },
-    "reapable": false,
-    "since": "2026-09-24T19:40:45.987Z"
+    "reapable": true,
+    "since": "2026-09-26T11:46:08.540Z"
   },
   "T-40-06": {
     "branch": "ticket/T-40-06-refresh-the-runtime-file-digest-pin-only",
@@ -2127,7 +2095,75 @@
       "T-42-01"
     ],
     "blocked_reasons": {
-      "T-42-01": "cross-phase parent must be MERGED and its phase 42 epic landed on main first (parent is pr-open)"
+      "T-42-01": "cross-phase parent must land on main first (phase 42 epic still ahead)"
+    },
+    "reapable": false,
+    "since": "2026-09-24T19:40:45.987Z"
+  },
+  "T-40-18": {
+    "branch": "ticket/T-40-18-produce-clean-executor-pr-bodies-and-con",
+    "pr": null,
+    "status": "pending",
+    "base": "epic/40-build-delivery-seams-and-clean-target-project-prs",
+    "base_reason": "T-40-17 has no branch on the remote yet (status pending) — ticket/T-40-17-add-the-publish-time-pr-hygiene-gate-and is not a base that exists, so the base is epic/40-build-delivery-seams-and-clean-target-project-prs",
+    "epic": "epic/40-build-delivery-seams-and-clean-target-project-prs",
+    "ready": false,
+    "blocked_by": [
+      "T-40-17",
+      "T-42-01"
+    ],
+    "blocked_reasons": {
+      "T-40-17": "parent has no branch yet (nothing to cascade from)",
+      "T-42-01": "cross-phase parent must land on main first (phase 42 epic still ahead)"
+    },
+    "reapable": false,
+    "since": "2026-09-24T19:40:45.987Z"
+  },
+  "T-40-27": {
+    "branch": "ticket/T-40-27-a-diamond-child-is-ready-only-when-its-n",
+    "pr": null,
+    "status": "pending",
+    "base": "epic/40-build-delivery-seams-and-clean-target-project-prs",
+    "base_reason": "T-40-18 has no branch on the remote yet (status pending) — ticket/T-40-18-produce-clean-executor-pr-bodies-and-con is not a base that exists, so the base is epic/40-build-delivery-seams-and-clean-target-project-prs",
+    "epic": "epic/40-build-delivery-seams-and-clean-target-project-prs",
+    "ready": false,
+    "blocked_by": [
+      "T-40-18",
+      "T-42-01"
+    ],
+    "blocked_reasons": {
+      "T-40-18": "parent has no branch yet (nothing to cascade from)",
+      "T-42-01": "cross-phase parent must land on main first (phase 42 epic still ahead)"
+    },
+    "reapable": false,
+    "since": "2026-09-24T19:40:45.987Z"
+  },
+  "T-42-02": {
+    "branch": "ticket/T-42-02-deny-the-host-state-root-and-finalizatio",
+    "pr": null,
+    "status": "pending",
+    "base": "epic/42-resume-trusted-finalization-without-executor-replay",
+    "base_reason": "T-42-01 is MERGED, so its branch is no longer where work lands — the base is epic/42-resume-trusted-finalization-without-executor-replay (base-merge it in first to keep the review diff one slice)",
+    "epic": "epic/42-resume-trusted-finalization-without-executor-replay",
+    "ready": true,
+    "reapable": false,
+    "since": "2026-09-26T11:46:08.540Z"
+  },
+  "T-40-01": {
+    "branch": "ticket/T-40-01-make-git-creating-unit-fixtures-hermetic",
+    "pr": null,
+    "status": "pending",
+    "base": "epic/40-build-delivery-seams-and-clean-target-project-prs",
+    "base_reason": "no primary parent — a root ticket PRs into epic/40-build-delivery-seams-and-clean-target-project-prs",
+    "epic": "epic/40-build-delivery-seams-and-clean-target-project-prs",
+    "ready": false,
+    "blocked_by": [
+      "T-42-01",
+      "T-42-02"
+    ],
+    "blocked_reasons": {
+      "T-42-01": "cross-phase parent must land on main first (phase 42 epic still ahead)",
+      "T-42-02": "cross-phase parent must be MERGED and its phase 42 epic landed on main first (parent is pending)"
     },
     "reapable": false,
     "since": "2026-09-24T19:40:45.987Z"
@@ -2176,11 +2212,13 @@
     "ready": false,
     "blocked_by": [
       "T-40-13",
-      "T-42-01"
+      "T-42-01",
+      "T-42-02"
     ],
     "blocked_reasons": {
       "T-40-13": "parent has no branch yet (nothing to cascade from)",
-      "T-42-01": "cross-phase parent must be MERGED and its phase 42 epic landed on main first (parent is pr-open)"
+      "T-42-01": "cross-phase parent must land on main first (phase 42 epic still ahead)",
+      "T-42-02": "cross-phase parent must be MERGED and its phase 42 epic landed on main first (parent is pending)"
     },
     "reapable": false,
     "since": "2026-09-24T19:40:45.987Z"
@@ -2195,11 +2233,13 @@
     "ready": false,
     "blocked_by": [
       "T-40-12",
-      "T-42-01"
+      "T-42-01",
+      "T-42-02"
     ],
     "blocked_reasons": {
       "T-40-12": "parent has no branch yet (nothing to cascade from)",
-      "T-42-01": "cross-phase parent must be MERGED and its phase 42 epic landed on main first (parent is pr-open)"
+      "T-42-01": "cross-phase parent must land on main first (phase 42 epic still ahead)",
+      "T-42-02": "cross-phase parent must be MERGED and its phase 42 epic landed on main first (parent is pending)"
     },
     "reapable": false,
     "since": "2026-09-24T19:40:45.987Z"
@@ -2236,25 +2276,6 @@
     ],
     "blocked_reasons": {
       "T-40-01": "parent has no branch yet (nothing to cascade from)"
-    },
-    "reapable": false,
-    "since": "2026-09-24T19:40:45.987Z"
-  },
-  "T-40-18": {
-    "branch": "ticket/T-40-18-produce-clean-executor-pr-bodies-and-con",
-    "pr": null,
-    "status": "pending",
-    "base": "epic/40-build-delivery-seams-and-clean-target-project-prs",
-    "base_reason": "T-40-17 has no branch on the remote yet (status pending) — ticket/T-40-17-add-the-publish-time-pr-hygiene-gate-and is not a base that exists, so the base is epic/40-build-delivery-seams-and-clean-target-project-prs",
-    "epic": "epic/40-build-delivery-seams-and-clean-target-project-prs",
-    "ready": false,
-    "blocked_by": [
-      "T-40-17",
-      "T-42-01"
-    ],
-    "blocked_reasons": {
-      "T-40-17": "parent has no branch yet (nothing to cascade from)",
-      "T-42-01": "cross-phase parent must be MERGED and its phase 42 epic landed on main first (parent is pr-open)"
     },
     "reapable": false,
     "since": "2026-09-24T19:40:45.987Z"
@@ -2301,25 +2322,6 @@
     "reapable": false,
     "since": "2026-09-24T19:40:45.987Z"
   },
-  "T-40-27": {
-    "branch": "ticket/T-40-27-a-diamond-child-is-ready-only-when-its-n",
-    "pr": null,
-    "status": "pending",
-    "base": "epic/40-build-delivery-seams-and-clean-target-project-prs",
-    "base_reason": "T-40-18 has no branch on the remote yet (status pending) — ticket/T-40-18-produce-clean-executor-pr-bodies-and-con is not a base that exists, so the base is epic/40-build-delivery-seams-and-clean-target-project-prs",
-    "epic": "epic/40-build-delivery-seams-and-clean-target-project-prs",
-    "ready": false,
-    "blocked_by": [
-      "T-40-18",
-      "T-42-01"
-    ],
-    "blocked_reasons": {
-      "T-40-18": "parent has no branch yet (nothing to cascade from)",
-      "T-42-01": "cross-phase parent must be MERGED and its phase 42 epic landed on main first (parent is pr-open)"
-    },
-    "reapable": false,
-    "since": "2026-09-24T19:40:45.987Z"
-  },
   "T-40-28": {
     "branch": "ticket/T-40-28-deliver-the-canonical-plan-to-sandboxed",
     "pr": null,
@@ -2329,10 +2331,12 @@
     "epic": "epic/40-build-delivery-seams-and-clean-target-project-prs",
     "ready": false,
     "blocked_by": [
-      "T-40-14"
+      "T-40-14",
+      "T-42-02"
     ],
     "blocked_reasons": {
-      "T-40-14": "parent has no branch yet (nothing to cascade from)"
+      "T-40-14": "parent has no branch yet (nothing to cascade from)",
+      "T-42-02": "cross-phase parent must be MERGED and its phase 42 epic landed on main first (parent is pending)"
     },
     "reapable": false,
     "since": "2026-09-26T09:40:04.898Z"
@@ -2350,14 +2354,16 @@
       "T-40-07",
       "T-40-14",
       "T-40-28",
-      "T-42-01"
+      "T-42-01",
+      "T-42-02"
     ],
     "blocked_reasons": {
       "T-40-11": "parent has no branch yet (nothing to cascade from)",
       "T-40-07": "parent has no branch yet (nothing to cascade from)",
       "T-40-14": "parent has no branch yet (nothing to cascade from)",
       "T-40-28": "parent has no branch yet (nothing to cascade from)",
-      "T-42-01": "cross-phase parent must be MERGED and its phase 42 epic landed on main first (parent is pr-open)"
+      "T-42-01": "cross-phase parent must land on main first (phase 42 epic still ahead)",
+      "T-42-02": "cross-phase parent must be MERGED and its phase 42 epic landed on main first (parent is pending)"
     },
     "reapable": false,
     "since": "2026-09-24T19:40:45.987Z"
@@ -2443,5 +2449,458 @@
     },
     "reapable": false,
     "since": "2026-09-24T19:40:45.987Z"
+  },
+  "T-43-01": {
+    "branch": "ticket/T-43-01-register-per-repository-config-keys-for",
+    "pr": null,
+    "status": "pending",
+    "base": "epic/43-target-project-delivery-at-scale",
+    "base_reason": "no primary parent — a root ticket PRs into epic/43-target-project-delivery-at-scale",
+    "epic": "epic/43-target-project-delivery-at-scale",
+    "ready": false,
+    "blocked_by": [
+      "T-40-17"
+    ],
+    "blocked_reasons": {
+      "T-40-17": "cross-phase parent must be MERGED and its phase 40 epic landed on main first (parent is pending)"
+    },
+    "reapable": false,
+    "since": "2026-09-26T10:54:56.735Z"
+  },
+  "T-43-02": {
+    "branch": "ticket/T-43-02-resolve-the-publish-gate-base-from-the-r",
+    "pr": 264,
+    "status": "pr-open",
+    "draft": true,
+    "review_decision": null,
+    "url": "https://github.com/serhii-nochevnyi/shipyard/pull/264",
+    "pr_base": "epic/43-target-project-delivery-at-scale",
+    "pr_created_at": "2026-09-26T11:45:31Z",
+    "head_sha": "08ade4e2f56ff859098c08d7ea0c96876f897e2f",
+    "merge_state": "UNSTABLE",
+    "behind_by": 0,
+    "checks": {
+      "total": 1,
+      "failing": 1,
+      "pending": 0,
+      "none_reported": false,
+      "unavailable": false
+    },
+    "base": "epic/43-target-project-delivery-at-scale",
+    "base_reason": "no primary parent — a root ticket PRs into epic/43-target-project-delivery-at-scale",
+    "epic": "epic/43-target-project-delivery-at-scale",
+    "merge_scope": "stacked",
+    "reapable": false,
+    "since": "2026-09-26T11:46:08.540Z"
+  },
+  "T-43-03": {
+    "branch": "ticket/T-43-03-allow-configured-per-repository-comment",
+    "pr": null,
+    "status": "pending",
+    "base": "epic/43-target-project-delivery-at-scale",
+    "base_reason": "T-43-01 has no branch on the remote yet (status pending) — ticket/T-43-01-register-per-repository-config-keys-for is not a base that exists, so the base is epic/43-target-project-delivery-at-scale",
+    "epic": "epic/43-target-project-delivery-at-scale",
+    "ready": false,
+    "blocked_by": [
+      "T-43-01"
+    ],
+    "blocked_reasons": {
+      "T-43-01": "parent has no branch yet (nothing to cascade from)"
+    },
+    "reapable": false,
+    "since": "2026-09-26T10:54:56.735Z"
+  },
+  "T-43-04": {
+    "branch": "ticket/T-43-04-bounded-reachability-o-1-git-forms-a-lar",
+    "pr": null,
+    "status": "pending",
+    "base": "epic/43-target-project-delivery-at-scale",
+    "base_reason": "no primary parent — a root ticket PRs into epic/43-target-project-delivery-at-scale",
+    "epic": "epic/43-target-project-delivery-at-scale",
+    "ready": false,
+    "blocked_by": [
+      "T-40-19",
+      "T-40-22"
+    ],
+    "blocked_reasons": {
+      "T-40-19": "cross-phase parent must be MERGED and its phase 40 epic landed on main first (parent is pending)",
+      "T-40-22": "cross-phase parent must be MERGED and its phase 40 epic landed on main first (parent is pending)"
+    },
+    "reapable": false,
+    "since": "2026-09-26T10:54:56.735Z"
+  },
+  "T-43-05": {
+    "branch": "ticket/T-43-05-keep-an-arch-review-finding-of-unknown-t",
+    "pr": null,
+    "status": "pending",
+    "base": "epic/43-target-project-delivery-at-scale",
+    "base_reason": "no primary parent — a root ticket PRs into epic/43-target-project-delivery-at-scale",
+    "epic": "epic/43-target-project-delivery-at-scale",
+    "ready": false,
+    "blocked_by": [
+      "T-40-18"
+    ],
+    "blocked_reasons": {
+      "T-40-18": "cross-phase parent must be MERGED and its phase 40 epic landed on main first (parent is pending)"
+    },
+    "reapable": false,
+    "since": "2026-09-26T10:54:56.735Z"
+  },
+  "T-43-06": {
+    "branch": "ticket/T-43-06-one-exported-conveyor-scratch-set-for-th",
+    "pr": null,
+    "status": "pending",
+    "base": "epic/43-target-project-delivery-at-scale",
+    "base_reason": "T-43-05 has no branch on the remote yet (status pending) — ticket/T-43-05-keep-an-arch-review-finding-of-unknown-t is not a base that exists, so the base is epic/43-target-project-delivery-at-scale",
+    "epic": "epic/43-target-project-delivery-at-scale",
+    "ready": false,
+    "blocked_by": [
+      "T-43-05",
+      "T-40-16",
+      "T-40-22",
+      "T-42-01",
+      "T-40-18",
+      "T-40-27",
+      "T-40-12",
+      "T-40-14",
+      "T-40-28",
+      "T-40-01",
+      "T-40-09"
+    ],
+    "blocked_reasons": {
+      "T-43-05": "parent has no branch yet (nothing to cascade from)",
+      "T-40-16": "cross-phase parent must be MERGED and its phase 40 epic landed on main first (parent is pending)",
+      "T-40-22": "cross-phase parent must be MERGED and its phase 40 epic landed on main first (parent is pending)",
+      "T-42-01": "cross-phase parent must land on main first (phase 42 epic still ahead)",
+      "T-40-18": "cross-phase parent must be MERGED and its phase 40 epic landed on main first (parent is pending)",
+      "T-40-27": "cross-phase parent must be MERGED and its phase 40 epic landed on main first (parent is pending)",
+      "T-40-12": "cross-phase parent must be MERGED and its phase 40 epic landed on main first (parent is pending)",
+      "T-40-14": "cross-phase parent must be MERGED and its phase 40 epic landed on main first (parent is pending)",
+      "T-40-28": "cross-phase parent must be MERGED and its phase 40 epic landed on main first (parent is pending)",
+      "T-40-01": "cross-phase parent must be MERGED and its phase 40 epic landed on main first (parent is pending)",
+      "T-40-09": "cross-phase parent must be MERGED and its phase 40 epic landed on main first (parent is pending)"
+    },
+    "reapable": false,
+    "since": "2026-09-26T10:54:56.735Z"
+  },
+  "T-43-07": {
+    "branch": "ticket/T-43-07-cancelled-checks-ignore-superseded-runs",
+    "pr": 266,
+    "status": "pr-open",
+    "draft": true,
+    "review_decision": null,
+    "url": "https://github.com/serhii-nochevnyi/shipyard/pull/266",
+    "pr_base": "epic/43-target-project-delivery-at-scale",
+    "pr_created_at": "2026-09-26T11:47:38Z",
+    "head_sha": "7dabc8bf2739c8fa309f73a5410e798e9f60ebc6",
+    "merge_state": "UNSTABLE",
+    "behind_by": 0,
+    "checks": {
+      "total": 1,
+      "failing": 1,
+      "pending": 0,
+      "none_reported": false,
+      "unavailable": false
+    },
+    "base": "epic/43-target-project-delivery-at-scale",
+    "base_reason": "no primary parent — a root ticket PRs into epic/43-target-project-delivery-at-scale",
+    "epic": "epic/43-target-project-delivery-at-scale",
+    "merge_scope": "stacked",
+    "reapable": false,
+    "since": "2026-09-26T11:51:09.977Z"
+  },
+  "T-43-08": {
+    "branch": "ticket/T-43-08-a-stale-approval-from-a-declared-bot-doe",
+    "pr": null,
+    "status": "pending",
+    "base": "epic/43-target-project-delivery-at-scale",
+    "base_reason": "T-43-04 has no branch on the remote yet (status pending) — ticket/T-43-04-bounded-reachability-o-1-git-forms-a-lar is not a base that exists, so the base is epic/43-target-project-delivery-at-scale",
+    "epic": "epic/43-target-project-delivery-at-scale",
+    "ready": false,
+    "blocked_by": [
+      "T-43-04",
+      "T-43-01",
+      "T-40-19",
+      "T-40-22"
+    ],
+    "blocked_reasons": {
+      "T-43-04": "parent has no branch yet (nothing to cascade from)",
+      "T-43-01": "parent has no branch yet (nothing to cascade from)",
+      "T-40-19": "cross-phase parent must be MERGED and its phase 40 epic landed on main first (parent is pending)",
+      "T-40-22": "cross-phase parent must be MERGED and its phase 40 epic landed on main first (parent is pending)"
+    },
+    "reapable": false,
+    "since": "2026-09-26T10:54:56.735Z"
+  },
+  "T-43-09": {
+    "branch": "ticket/T-43-09-state-sync-lists-prs-by-ticket-head-and",
+    "pr": null,
+    "status": "pending",
+    "base": "epic/43-target-project-delivery-at-scale",
+    "base_reason": "no primary parent — a root ticket PRs into epic/43-target-project-delivery-at-scale",
+    "epic": "epic/43-target-project-delivery-at-scale",
+    "ready": false,
+    "blocked_by": [
+      "T-40-03",
+      "T-40-19",
+      "T-40-27"
+    ],
+    "blocked_reasons": {
+      "T-40-03": "cross-phase parent must be MERGED and its phase 40 epic landed on main first (parent is pending)",
+      "T-40-19": "cross-phase parent must be MERGED and its phase 40 epic landed on main first (parent is pending)",
+      "T-40-27": "cross-phase parent must be MERGED and its phase 40 epic landed on main first (parent is pending)"
+    },
+    "reapable": false,
+    "since": "2026-09-26T10:54:56.735Z"
+  },
+  "T-43-10": {
+    "branch": "ticket/T-43-10-honour-pipeline-gsd-sync-as-a-deprecated",
+    "pr": null,
+    "status": "pending",
+    "base": "epic/43-target-project-delivery-at-scale",
+    "base_reason": "T-43-09 has no branch on the remote yet (status pending) — ticket/T-43-09-state-sync-lists-prs-by-ticket-head-and is not a base that exists, so the base is epic/43-target-project-delivery-at-scale",
+    "epic": "epic/43-target-project-delivery-at-scale",
+    "ready": false,
+    "blocked_by": [
+      "T-43-09",
+      "T-43-01",
+      "T-40-17",
+      "T-40-03",
+      "T-40-19",
+      "T-40-27"
+    ],
+    "blocked_reasons": {
+      "T-43-09": "parent has no branch yet (nothing to cascade from)",
+      "T-43-01": "parent has no branch yet (nothing to cascade from)",
+      "T-40-17": "cross-phase parent must be MERGED and its phase 40 epic landed on main first (parent is pending)",
+      "T-40-03": "cross-phase parent must be MERGED and its phase 40 epic landed on main first (parent is pending)",
+      "T-40-19": "cross-phase parent must be MERGED and its phase 40 epic landed on main first (parent is pending)",
+      "T-40-27": "cross-phase parent must be MERGED and its phase 40 epic landed on main first (parent is pending)"
+    },
+    "reapable": false,
+    "since": "2026-09-26T10:54:56.735Z"
+  },
+  "T-43-11": {
+    "branch": "ticket/T-43-11-bind-pre-existing-jira-issues-by-recorde",
+    "pr": null,
+    "status": "pending",
+    "base": "epic/43-target-project-delivery-at-scale",
+    "base_reason": "no primary parent — a root ticket PRs into epic/43-target-project-delivery-at-scale",
+    "epic": "epic/43-target-project-delivery-at-scale",
+    "ready": false,
+    "blocked_by": [
+      "T-40-25"
+    ],
+    "blocked_reasons": {
+      "T-40-25": "cross-phase parent must be MERGED and its phase 40 epic landed on main first (parent is pending)"
+    },
+    "reapable": false,
+    "since": "2026-09-26T10:54:56.735Z"
+  },
+  "T-43-12": {
+    "branch": "ticket/T-43-12-human-checkpoint-takes-review-or-merge-t",
+    "pr": null,
+    "status": "pending",
+    "base": "epic/43-target-project-delivery-at-scale",
+    "base_reason": "T-43-08 has no branch on the remote yet (status pending) — ticket/T-43-08-a-stale-approval-from-a-declared-bot-doe is not a base that exists, so the base is epic/43-target-project-delivery-at-scale",
+    "epic": "epic/43-target-project-delivery-at-scale",
+    "ready": false,
+    "blocked_by": [
+      "T-43-08",
+      "T-43-11",
+      "T-40-19",
+      "T-40-22",
+      "T-40-20",
+      "T-40-03",
+      "T-40-25"
+    ],
+    "blocked_reasons": {
+      "T-43-08": "parent has no branch yet (nothing to cascade from)",
+      "T-43-11": "parent has no branch yet (nothing to cascade from)",
+      "T-40-19": "cross-phase parent must be MERGED and its phase 40 epic landed on main first (parent is pending)",
+      "T-40-22": "cross-phase parent must be MERGED and its phase 40 epic landed on main first (parent is pending)",
+      "T-40-20": "cross-phase parent must be MERGED and its phase 40 epic landed on main first (parent is pending)",
+      "T-40-03": "cross-phase parent must be MERGED and its phase 40 epic landed on main first (parent is pending)",
+      "T-40-25": "cross-phase parent must be MERGED and its phase 40 epic landed on main first (parent is pending)"
+    },
+    "reapable": false,
+    "since": "2026-09-26T10:54:56.735Z"
+  },
+  "T-43-13": {
+    "branch": "ticket/T-43-13-carry-a-conform-verdict-across-a-base-me",
+    "pr": null,
+    "status": "pending",
+    "base": "epic/43-target-project-delivery-at-scale",
+    "base_reason": "T-43-06 has no branch on the remote yet (status pending) — ticket/T-43-06-one-exported-conveyor-scratch-set-for-th is not a base that exists, so the base is epic/43-target-project-delivery-at-scale",
+    "epic": "epic/43-target-project-delivery-at-scale",
+    "ready": false,
+    "blocked_by": [
+      "T-43-06",
+      "T-40-19"
+    ],
+    "blocked_reasons": {
+      "T-43-06": "parent has no branch yet (nothing to cascade from)",
+      "T-40-19": "cross-phase parent must be MERGED and its phase 40 epic landed on main first (parent is pending)"
+    },
+    "reapable": false,
+    "since": "2026-09-26T10:54:56.735Z"
+  },
+  "T-43-14": {
+    "branch": "ticket/T-43-14-deliver-dispatch-builds-arch-review-ci-f",
+    "pr": null,
+    "status": "pending",
+    "base": "epic/43-target-project-delivery-at-scale",
+    "base_reason": "no primary parent — a root ticket PRs into epic/43-target-project-delivery-at-scale",
+    "epic": "epic/43-target-project-delivery-at-scale",
+    "ready": false,
+    "blocked_by": [
+      "T-40-15",
+      "T-40-24"
+    ],
+    "blocked_reasons": {
+      "T-40-15": "cross-phase parent must be MERGED and its phase 40 epic landed on main first (parent is pending)",
+      "T-40-24": "cross-phase parent must be MERGED and its phase 40 epic landed on main first (parent is pending)"
+    },
+    "reapable": false,
+    "since": "2026-09-26T10:54:56.735Z"
+  },
+  "T-43-15": {
+    "branch": "ticket/T-43-15-deliver-dispatch-builds-research-and-dec",
+    "pr": null,
+    "status": "pending",
+    "base": "epic/43-target-project-delivery-at-scale",
+    "base_reason": "T-43-12 has no branch on the remote yet (status pending) — ticket/T-43-12-human-checkpoint-takes-review-or-merge-t is not a base that exists, so the base is epic/43-target-project-delivery-at-scale",
+    "epic": "epic/43-target-project-delivery-at-scale",
+    "ready": false,
+    "blocked_by": [
+      "T-43-12",
+      "T-43-14",
+      "T-40-15",
+      "T-40-25"
+    ],
+    "blocked_reasons": {
+      "T-43-12": "parent has no branch yet (nothing to cascade from)",
+      "T-43-14": "parent has no branch yet (nothing to cascade from)",
+      "T-40-15": "cross-phase parent must be MERGED and its phase 40 epic landed on main first (parent is pending)",
+      "T-40-25": "cross-phase parent must be MERGED and its phase 40 epic landed on main first (parent is pending)"
+    },
+    "reapable": false,
+    "since": "2026-09-26T10:54:56.735Z"
+  },
+  "T-43-16": {
+    "branch": "ticket/T-43-16-host-side-verification-of-plan-declared",
+    "pr": null,
+    "status": "pending",
+    "base": "epic/43-target-project-delivery-at-scale",
+    "base_reason": "T-43-06 has no branch on the remote yet (status pending) — ticket/T-43-06-one-exported-conveyor-scratch-set-for-th is not a base that exists, so the base is epic/43-target-project-delivery-at-scale",
+    "epic": "epic/43-target-project-delivery-at-scale",
+    "ready": false,
+    "blocked_by": [
+      "T-43-06",
+      "T-43-01",
+      "T-42-01",
+      "T-40-10",
+      "T-40-13",
+      "T-40-14",
+      "T-40-28",
+      "T-40-12",
+      "T-40-01",
+      "T-40-09"
+    ],
+    "blocked_reasons": {
+      "T-43-06": "parent has no branch yet (nothing to cascade from)",
+      "T-43-01": "parent has no branch yet (nothing to cascade from)",
+      "T-42-01": "cross-phase parent must land on main first (phase 42 epic still ahead)",
+      "T-40-10": "cross-phase parent must be MERGED and its phase 40 epic landed on main first (parent is pending)",
+      "T-40-13": "cross-phase parent must be MERGED and its phase 40 epic landed on main first (parent is pending)",
+      "T-40-14": "cross-phase parent must be MERGED and its phase 40 epic landed on main first (parent is pending)",
+      "T-40-28": "cross-phase parent must be MERGED and its phase 40 epic landed on main first (parent is pending)",
+      "T-40-12": "cross-phase parent must be MERGED and its phase 40 epic landed on main first (parent is pending)",
+      "T-40-01": "cross-phase parent must be MERGED and its phase 40 epic landed on main first (parent is pending)",
+      "T-40-09": "cross-phase parent must be MERGED and its phase 40 epic landed on main first (parent is pending)"
+    },
+    "reapable": false,
+    "since": "2026-09-26T10:54:56.735Z"
+  },
+  "T-43-17": {
+    "branch": "ticket/T-43-17-record-a-sealed-coverage-entry-for-every",
+    "pr": null,
+    "status": "pending",
+    "base": "epic/43-target-project-delivery-at-scale",
+    "base_reason": "T-43-13 has no branch on the remote yet (status pending) — ticket/T-43-13-carry-a-conform-verdict-across-a-base-me is not a base that exists, so the base is epic/43-target-project-delivery-at-scale",
+    "epic": "epic/43-target-project-delivery-at-scale",
+    "ready": false,
+    "blocked_by": [
+      "T-43-13",
+      "T-43-16",
+      "T-42-01",
+      "T-40-18",
+      "T-40-27",
+      "T-40-10",
+      "T-40-13",
+      "T-40-14",
+      "T-40-28",
+      "T-40-12",
+      "T-40-01",
+      "T-40-09"
+    ],
+    "blocked_reasons": {
+      "T-43-13": "parent has no branch yet (nothing to cascade from)",
+      "T-43-16": "parent has no branch yet (nothing to cascade from)",
+      "T-42-01": "cross-phase parent must land on main first (phase 42 epic still ahead)",
+      "T-40-18": "cross-phase parent must be MERGED and its phase 40 epic landed on main first (parent is pending)",
+      "T-40-27": "cross-phase parent must be MERGED and its phase 40 epic landed on main first (parent is pending)",
+      "T-40-10": "cross-phase parent must be MERGED and its phase 40 epic landed on main first (parent is pending)",
+      "T-40-13": "cross-phase parent must be MERGED and its phase 40 epic landed on main first (parent is pending)",
+      "T-40-14": "cross-phase parent must be MERGED and its phase 40 epic landed on main first (parent is pending)",
+      "T-40-28": "cross-phase parent must be MERGED and its phase 40 epic landed on main first (parent is pending)",
+      "T-40-12": "cross-phase parent must be MERGED and its phase 40 epic landed on main first (parent is pending)",
+      "T-40-01": "cross-phase parent must be MERGED and its phase 40 epic landed on main first (parent is pending)",
+      "T-40-09": "cross-phase parent must be MERGED and its phase 40 epic landed on main first (parent is pending)"
+    },
+    "reapable": false,
+    "since": "2026-09-26T10:54:56.735Z"
+  },
+  "T-43-18": {
+    "branch": "ticket/T-43-18-run-only-declared-repository-remedy-work",
+    "pr": null,
+    "status": "pending",
+    "base": "epic/43-target-project-delivery-at-scale",
+    "base_reason": "T-43-17 has no branch on the remote yet (status pending) — ticket/T-43-17-record-a-sealed-coverage-entry-for-every is not a base that exists, so the base is epic/43-target-project-delivery-at-scale",
+    "epic": "epic/43-target-project-delivery-at-scale",
+    "ready": false,
+    "blocked_by": [
+      "T-43-17",
+      "T-43-08"
+    ],
+    "blocked_reasons": {
+      "T-43-17": "parent has no branch yet (nothing to cascade from)",
+      "T-43-08": "parent has no branch yet (nothing to cascade from)"
+    },
+    "reapable": false,
+    "since": "2026-09-26T10:54:56.735Z"
+  },
+  "T-43-19": {
+    "branch": "ticket/T-43-19-the-merge-gate-refuses-heads-the-conveyo",
+    "pr": null,
+    "status": "pending",
+    "base": "epic/43-target-project-delivery-at-scale",
+    "base_reason": "T-43-18 has no branch on the remote yet (status pending) — ticket/T-43-18-run-only-declared-repository-remedy-work is not a base that exists, so the base is epic/43-target-project-delivery-at-scale",
+    "epic": "epic/43-target-project-delivery-at-scale",
+    "ready": false,
+    "blocked_by": [
+      "T-43-18",
+      "T-43-12",
+      "T-40-19",
+      "T-40-22"
+    ],
+    "blocked_reasons": {
+      "T-43-18": "parent has no branch yet (nothing to cascade from)",
+      "T-43-12": "parent has no branch yet (nothing to cascade from)",
+      "T-40-19": "cross-phase parent must be MERGED and its phase 40 epic landed on main first (parent is pending)",
+      "T-40-22": "cross-phase parent must be MERGED and its phase 40 epic landed on main first (parent is pending)"
+    },
+    "reapable": false,
+    "since": "2026-09-26T10:54:56.735Z"
   }
 }

@@ -2,7 +2,8 @@
 
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { installClaudeMarketplace } = require('../../scripts/install-shipyard-marketplace.cjs');
+const { installClaudeMarketplace, installCodexMarketplace } =
+  require('../../scripts/install-shipyard-marketplace.cjs');
 
 function fixture({ pinned = true, failInstall = false } = {}) {
   let marketplace = { name: 'shipyard', source: 'github', repo: 'serhii-nochevnyi/shipyard',
@@ -50,4 +51,16 @@ test('refreshes an existing unpinned marketplace in place', () => {
   installClaudeMarketplace('serhii-nochevnyi/shipyard', host.execute, host.read);
   assert.deepEqual(host.calls, ['plugin marketplace update shipyard',
     'plugin update shipyard@shipyard']);
+});
+
+test('refreshes the Codex Git snapshot before reinstalling from the same source', () => {
+  const calls = [];
+  const read = (_command, args) => args[1] === 'marketplace'
+    ? { marketplaces: [{ name: 'shipyard', marketplaceSource: { sourceType: 'git',
+      source: 'https://github.com/serhii-nochevnyi/shipyard.git' } }] }
+    : { installed: [] };
+  const execute = (_command, args) => calls.push(args.join(' '));
+  installCodexMarketplace('serhii-nochevnyi/shipyard', execute, read);
+  assert.deepEqual(calls, ['plugin marketplace upgrade shipyard',
+    'plugin add shipyard@shipyard']);
 });
