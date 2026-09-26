@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 0ad9ede66f8ddd2c79729add1690607bcabad814804d071741f2d6a0e4449338
 phase: 26-positive-evidence-before-a-mutation
 plan: 11
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-08
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+shipyard_source_fingerprint: 0ad9ede66f8ddd2c79729add1690607bcabad814804d071741f2d6a0e4449338
 ---
 
 # Phase 26: Unavailable is not empty — Delivery Projection

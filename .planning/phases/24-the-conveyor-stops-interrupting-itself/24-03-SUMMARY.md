@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: f02cc104ec9d98154b51910d23facc51085c71cfac99adde29b2e008f3eb085d
 phase: 24-the-conveyor-stops-interrupting-itself
 plan: 03
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-07
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+shipyard_source_fingerprint: f02cc104ec9d98154b51910d23facc51085c71cfac99adde29b2e008f3eb085d
 ---
 
 # Phase 24: A wait on the parent is a bucket the front knows — Delivery Projection

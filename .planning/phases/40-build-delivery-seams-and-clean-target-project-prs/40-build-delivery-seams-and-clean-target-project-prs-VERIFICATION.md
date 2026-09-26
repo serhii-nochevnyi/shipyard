@@ -1,8 +1,8 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: e06d83bf23d8f630efa3e9d80acaf6edc20e9f03813d796229056c7f33e47d41
 phase: 40
 status: human_needed
-shipyard_source_fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+shipyard_source_fingerprint: e06d83bf23d8f630efa3e9d80acaf6edc20e9f03813d796229056c7f33e47d41
 ---
 
 # Phase 40: Build delivery seams and clean target-project PRs — Verification Projection

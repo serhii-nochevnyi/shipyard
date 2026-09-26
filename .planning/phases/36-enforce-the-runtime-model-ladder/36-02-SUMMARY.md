@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 3a1e85fa68bbdd6749d3b4a6cd912d2923f2cf77beefb8398516d7991ec9dd92
 phase: 36-enforce-the-runtime-model-ladder
 plan: 02
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-15
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+shipyard_source_fingerprint: 3a1e85fa68bbdd6749d3b4a6cd912d2923f2cf77beefb8398516d7991ec9dd92
 ---
 
 # Phase 36: Authoritative configuration bridge and override refusal — Delivery Projection

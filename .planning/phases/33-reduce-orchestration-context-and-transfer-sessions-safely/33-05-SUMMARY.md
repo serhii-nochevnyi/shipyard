@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 1c2b58413b87a93e645cfe7fa11a6fc6fc9ce6c19e079aa1b56dca78f98f08bb
 phase: 33-reduce-orchestration-context-and-transfer-sessions-safely
 plan: 05
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-17
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+shipyard_source_fingerprint: 1c2b58413b87a93e645cfe7fa11a6fc6fc9ce6c19e079aa1b56dca78f98f08bb
 ---
 
 # Phase 33: Bound research and decomposition handbacks — Delivery Projection

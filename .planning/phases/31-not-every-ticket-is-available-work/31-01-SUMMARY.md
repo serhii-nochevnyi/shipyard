@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: fb109217eb3e579df8e3ac6d0dce0068452980ff3ea31e9a4dea723baf6613bb
 phase: 31-not-every-ticket-is-available-work
 plan: 01
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-14
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+shipyard_source_fingerprint: fb109217eb3e579df8e3ac6d0dce0068452980ff3ea31e9a4dea723baf6613bb
 ---
 
 # Phase 31: Remove the external ticket import shortcut — Delivery Projection

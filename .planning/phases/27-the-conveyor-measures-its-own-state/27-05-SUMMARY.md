@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: a5251e231df6d45fe0bbf109fd59aad9dd256244c6d6e939401f4a80569ec50d
 phase: 27-the-conveyor-measures-its-own-state
 plan: 05
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-08
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+shipyard_source_fingerprint: a5251e231df6d45fe0bbf109fd59aad9dd256244c6d6e939401f4a80569ec50d
 ---
 
 # Phase 27: A journal records what was applied, and refuses to be written around — Delivery Projection

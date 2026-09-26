@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 2d804aa25f664d74412885e348fa3948db4aeda55e5e571788b70e2979d201b6
 phase: 27-the-conveyor-measures-its-own-state
 plan: 06
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-08
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+shipyard_source_fingerprint: 2d804aa25f664d74412885e348fa3948db4aeda55e5e571788b70e2979d201b6
 ---
 
 # Phase 27: The front says when it is behind, and one dispatch carries one base — Delivery Projection

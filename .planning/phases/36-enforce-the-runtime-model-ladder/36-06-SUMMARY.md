@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: fed5f4562b00450c27b6abd0014099bd1ffe3aca487894a77b2724e1e3ff68e5
 phase: 36-enforce-the-runtime-model-ladder
 plan: 06
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-16
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+shipyard_source_fingerprint: fed5f4562b00450c27b6abd0014099bd1ffe3aca487894a77b2724e1e3ff68e5
 ---
 
 # Phase 36: Route GSD decomposition through the mandatory boundary — Delivery Projection

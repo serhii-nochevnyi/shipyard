@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: f25a5c6353daa68530ad32d19ff0a8ad0ed80472ba3304b0fe525bdb7bd0c63c
 phase: 28-a-mechanism-nobody-connected-is-not-a-mechanism
 plan: 02
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-09
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+shipyard_source_fingerprint: f25a5c6353daa68530ad32d19ff0a8ad0ed80472ba3304b0fe525bdb7bd0c63c
 ---
 
 # Phase 28: A signature's history is a set with adjacency, not a count — Delivery Projection

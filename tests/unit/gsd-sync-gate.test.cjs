@@ -81,6 +81,17 @@ test('blocks check mode when the projection is stale', () => {
   assert.match(result.stderr, /blocked/);
 });
 
+test('a plan content edit reports only its own summary as stale, not the whole projection', () => {
+  const root = project();
+  assert.equal(run(root, 'write').status, 0);
+  const plan = path.join(root, '.planning', 'phases', '01-foundation', '01-01-PLAN.md');
+  fs.appendFileSync(plan, '\nAn additional implementation note.\n');
+  const result = run(root, 'check');
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /01-01-SUMMARY\.md is missing or stale/);
+  assert.doesNotMatch(result.stderr, /STATE\.md|REQUIREMENTS\.md|ROADMAP\.md|-UAT\.md|-VERIFICATION\.md/);
+});
+
 test('is inert for ordinary GSD projects', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-gsd-nonconveyor-'));
   const result = run(root, 'check');

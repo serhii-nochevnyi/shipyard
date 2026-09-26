@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: d0a3b1b2ee6b018ccd5ca032be7b00c2904adb0dee2a4a6f926324de520e3d9b
 phase: 26-positive-evidence-before-a-mutation
 plan: 09
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-07
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+shipyard_source_fingerprint: d0a3b1b2ee6b018ccd5ca032be7b00c2904adb0dee2a4a6f926324de520e3d9b
 ---
 
 # Phase 26: Workflow input is validated before any dispatch — Delivery Projection

@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 06e716deea1969f4e30f47fd129e6c1e440ecdf88abddde74d80b61f8eed895a
 phase: 34-improve-convergence-and-tune-from-measured-outcomes
 plan: 04
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-17
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+shipyard_source_fingerprint: 06e716deea1969f4e30f47fd129e6c1e440ecdf88abddde74d80b61f8eed895a
 ---
 
 # Phase 34: Admit distinct agents through shared account-scoped leases — Delivery Projection

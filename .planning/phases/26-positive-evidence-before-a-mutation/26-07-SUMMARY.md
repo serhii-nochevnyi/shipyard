@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: d2167c16ceea2fba4410bf68b59b09506318fd300bfd1496d1af4582b18a7723
 phase: 26-positive-evidence-before-a-mutation
 plan: 07
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-07
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+shipyard_source_fingerprint: d2167c16ceea2fba4410bf68b59b09506318fd300bfd1496d1af4582b18a7723
 ---
 
 # Phase 26: Tuning merges another owner's list, never replaces it — Delivery Projection

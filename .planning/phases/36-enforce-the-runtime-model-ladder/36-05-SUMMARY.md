@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: bb01df62f123d72807786a8e47f7d9f976dcb694a0521a963a71189a541abc91
 phase: 36-enforce-the-runtime-model-ladder
 plan: 05
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-16
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+shipyard_source_fingerprint: bb01df62f123d72807786a8e47f7d9f976dcb694a0521a963a71189a541abc91
 ---
 
 # Phase 36: Claude adapter and explicit workflow launch application — Delivery Projection

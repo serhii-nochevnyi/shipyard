@@ -1,10 +1,10 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 3a557472dfa7b27c8c97c595cfee27080b56bcc592b83162540be1b5f33228c5
 phase: 39
 status: failed
 result: failed
 shipyard_sync: evidence-projection
-shipyard_source_fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+shipyard_source_fingerprint: 3a557472dfa7b27c8c97c595cfee27080b56bcc592b83162540be1b5f33228c5
 ---
 
 # Phase 39: Remove conveyor session friction — UAT Projection

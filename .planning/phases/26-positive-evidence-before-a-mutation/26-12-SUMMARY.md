@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: da926196197afd25ebd174f3867f14984af9506c1bb3f61ce2c3b83fa2cdf524
 phase: 26-positive-evidence-before-a-mutation
 plan: 12
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-08
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+shipyard_source_fingerprint: da926196197afd25ebd174f3867f14984af9506c1bb3f61ce2c3b83fa2cdf524
 ---
 
 # Phase 26: A wave is cut to a concurrency the session can afford — Delivery Projection

@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: e9ac9204c632e340be824ce94d82d0e9d10aef220ed8759456580e797b4acf36
 phase: 39-remove-conveyor-session-friction
 plan: 17
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-25
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+shipyard_source_fingerprint: e9ac9204c632e340be824ce94d82d0e9d10aef220ed8759456580e797b4acf36
 ---
 
 # Phase 39: Bound role packets to the ADRs and backlog entries their plans reference — Delivery Projection

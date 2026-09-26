@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: e826099a98bedb1ca654d6337d3fdab91504cbc38853fea2ca2c9ad8ab703474
 phase: 28-a-mechanism-nobody-connected-is-not-a-mechanism
 plan: 04
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-09
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+shipyard_source_fingerprint: e826099a98bedb1ca654d6337d3fdab91504cbc38853fea2ca2c9ad8ab703474
 ---
 
 # Phase 28: A floor is measured against what is effective — Delivery Projection

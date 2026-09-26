@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 9c54e7ac9a0053e21d33eedb77eb12e6bd6c288cd83a500022bdb552c63b82bc
 gsd_state_version: '1.0'
 status: planning
 progress:
