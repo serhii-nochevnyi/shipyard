@@ -9,6 +9,8 @@ const { createCodexRuntimeHost, normalizeScope } = require('./codex-runtime-host
 const { launchAgent, ROLE_ALIASES } = require('./codex-agent.cjs');
 const { repoRootOf, resolveBaseRef } = require('./graph-dir.cjs');
 const policy = require('./model-policy.cjs');
+const { sealResearch, researchLineFailure, verifySealedLine, assertContained } = require('./planning-result-sealer.cjs');
+const { REPAIR: CODEX_ADAPTER_REPAIR } = require('./codex-model-remap.cjs');
 const { newDispatchId, createDurableRecorder } = require('./dispatch-boundary.cjs');
 const { createVerificationRunner } = require('./command-runner.cjs');
 const { createRunScope } = require('./run-scope.cjs');
@@ -27,6 +29,7 @@ const ENVELOPE_FORMAT = 'shipyard.host-authenticated.v1';
 const KEY_BYTES = 32;
 const MAX_STATE_BYTES = 1024 * 1024;
 const DOWNSTREAM_GATES = Object.freeze(['ci', 'review']);
+const REQUIRED_RESEARCH_LINES = Object.freeze(['system-state', 'alternatives', 'constraints', 'risks']);
 const RESUME_SCOPE_FIELDS = Object.freeze(['run_id', 'repository', 'worktree', 'phase', 'ticket']);
 const PLAN_COMMAND_TIMEOUT_MS = 10 * 60 * 1000;
 const PLAN_COMMAND_OUTPUT_BYTES = 1024 * 1024;
@@ -527,6 +530,148 @@ function storageDirectory(options, scope) {
   return directory;
 }
 
+function researchArtifactPath(worktree, invId, lineId) {
+  return path.join(worktree, '.planning', 'investigations', invId, 'research', `${lineId}.md`);
+}
+
+// @contract: strips the adapter repair suffix so researchLineFailure gets an adapter-free cause (T-40-13).
+function causeFromError(error, lineId) {
+  const message = error && typeof error.message === 'string' ? error.message : String(error);
+  const suffix = '. ' + CODEX_ADAPTER_REPAIR;
+  const cause = message.endsWith(suffix) ? message.slice(0, -suffix.length) : message;
+  const code = error && typeof error.code === 'string' && error.code.trim() ? error.code : 'RESEARCH_LINE_DISPATCH_FAILED';
+  return { line: lineId, code, cause };
+}
+
+function parseInvestigationScope(raw) {
+  const allowed = new Set(['invId', 'sourceRevision', 'repository', 'policyHash', 'lines', 'sealedLines']);
+  for (const key of Object.keys(raw)) {
+    if (!allowed.has(key)) fail('INVALID_INPUT', 'unsupported investigation field ' + key);
+  }
+  if (typeof raw.invId !== 'string' || !/^INV-[A-Za-z0-9-]+$/.test(raw.invId)) {
+    fail('INVALID_INPUT', 'investigation requires a valid invId');
+  }
+  if (typeof raw.sourceRevision !== 'string' || !/^[a-f0-9]{40}$/i.test(raw.sourceRevision)) {
+    fail('INVALID_INPUT', 'investigation requires a full 40-character source revision');
+  }
+  if (typeof raw.repository !== 'string' || !raw.repository.trim()) {
+    fail('INVALID_INPUT', 'investigation requires a repository identity');
+  }
+  if (typeof raw.policyHash !== 'string' || !/^[a-f0-9]{64}$/i.test(raw.policyHash)) {
+    fail('INVALID_INPUT', 'investigation requires a 64-character policy hash');
+  }
+  if (!Array.isArray(raw.lines) || (raw.lines.length !== REQUIRED_RESEARCH_LINES.length && raw.lines.length !== 1)) {
+    fail('INVALID_INPUT', 'investigation requires four research lines, or one for a verified re-dispatch');
+  }
+  const lines = raw.lines.map((line, index) => {
+    if (!object(line) || typeof line.id !== 'string' || !REQUIRED_RESEARCH_LINES.includes(line.id)
+        || (line.signals !== undefined && !object(line.signals))
+        || Object.keys(line).some((key) => !['id', 'signals'].includes(key))) {
+      fail('INVALID_INPUT', 'investigation line ' + (index + 1) + ' requires a recognized id and optional signals');
+    }
+    return { id: line.id, signals: line.signals || {} };
+  });
+  const ids = lines.map((line) => line.id);
+  const singleLine = lines.length === 1;
+  let sealedLines = [];
+  if (singleLine) {
+    if (!Array.isArray(raw.sealedLines) || raw.sealedLines.length !== REQUIRED_RESEARCH_LINES.length - 1) {
+      fail('INVALID_INPUT', 'a single-line investigation re-dispatch requires its three sealed sibling references');
+    }
+    const siblingIds = raw.sealedLines.map((entry) => (object(entry) ? entry.id : undefined));
+    const expected = REQUIRED_RESEARCH_LINES.filter((id) => id !== ids[0]);
+    if (new Set(siblingIds).size !== siblingIds.length || expected.some((id) => !siblingIds.includes(id))) {
+      fail('INVALID_INPUT', 'sealed sibling references must cover exactly the other three research lines');
+    }
+    sealedLines = raw.sealedLines;
+  } else {
+    if (raw.sealedLines !== undefined) fail('INVALID_INPUT', 'sealedLines is accepted only for a single-line re-dispatch');
+    if (new Set(ids).size !== REQUIRED_RESEARCH_LINES.length || REQUIRED_RESEARCH_LINES.some((id) => !ids.includes(id))) {
+      fail('INVALID_INPUT', 'investigation lines must be exactly ' + REQUIRED_RESEARCH_LINES.join(', '));
+    }
+  }
+  return { invId: raw.invId, sourceRevision: raw.sourceRevision, repository: raw.repository,
+    policyHash: raw.policyHash, lines, sealedLines };
+}
+
+async function investigationResearch(options, scope, runtimeHost, agentDir, agentManifest, env, prompt, baseContext, inv) {
+  const worktree = fs.realpathSync(scope.worktree);
+  const root = path.join(storageDirectory(options, scope), 'planning-artifacts');
+  const verifyScope = Object.freeze({ invId: inv.invId, sourceRevision: inv.sourceRevision,
+    repository: inv.repository, policyHash: inv.policyHash });
+  const verifiedSiblings = inv.sealedLines.map((line) => verifySealedLine({ root, scope: verifyScope, line }));
+  const allowedPaths = REQUIRED_RESEARCH_LINES.map((id) => researchArtifactPath(worktree, inv.invId, id));
+  const sealed = [];
+  for (const line of inv.lines) {
+    const artifactPath = researchArtifactPath(worktree, inv.invId, line.id);
+    fs.mkdirSync(path.dirname(artifactPath), { recursive: true, mode: 0o700 });
+    const failed = (error) => researchLineFailure({
+      scope: verifyScope, sealed: [...verifiedSiblings, ...sealed], failed: causeFromError(error, line.id),
+    });
+    let record;
+    try {
+      record = await launchAgent('research', {
+        cwd: scope.worktree,
+        flags: new Map(),
+        signals: line.signals,
+        scope,
+        host: runtimeHost,
+        capabilities: runtimeHost.capabilities,
+        recorder: runtimeHost.recorder,
+        controller: runtimeHost.controller,
+        agentDir,
+        agentManifest,
+        env,
+        context: {
+          ...baseContext,
+          prompt: prompt.trim() + '\n\nResearch line: ' + line.id + '.\nWrite the complete finding for this line to exactly: '
+            + artifactPath + '\nThe host reads that file directly; do not return the finding inline.',
+          research_line: line.id,
+          investigation: inv.invId,
+          artifactPath,
+        },
+      });
+    } catch (error) {
+      return failed(error);
+    }
+    try {
+      assertContained({ worktree, allowed: allowedPaths });
+    } catch (error) {
+      return failed(error);
+    }
+    let stat;
+    try {
+      stat = fs.lstatSync(artifactPath);
+    } catch {
+      return failed({ code: 'RESEARCH_LINE_MISSING', message: 'research line ' + line.id + ' artifact is missing: ' + artifactPath });
+    }
+    if (stat.isSymbolicLink() || !stat.isFile()) {
+      return failed({ code: 'RESEARCH_LINE_MISSING', message: 'research line ' + line.id + ' artifact is not a regular file: ' + artifactPath });
+    }
+    const bytes = fs.readFileSync(artifactPath);
+    const digest = crypto.createHash('sha256').update(bytes).digest('hex');
+    let sealedLine;
+    try {
+      sealedLine = sealResearch({
+        root, scope: { worktree },
+        lines: {
+          artifact: { role: 'research', subject: inv.invId + ':' + line.id, ticket: inv.invId + ':' + line.id,
+            worktreePath: worktree, sourceRevision: inv.sourceRevision, repository: inv.repository,
+            policyHash: inv.policyHash, artifactPath },
+          result: { id: line.id, status: 'completed', summary: 'Research line ' + line.id + ' completed.',
+            artifact: { path: artifactPath, bytes: bytes.length, content_bytes: bytes.length, sha256: digest, digest } },
+          record,
+        },
+      });
+    } catch (error) {
+      return failed(error);
+    }
+    sealed.push(Object.freeze({ id: line.id, ...sealedLine }));
+  }
+  const merged = [...verifiedSiblings, ...sealed];
+  return Object.freeze(REQUIRED_RESEARCH_LINES.map((id) => merged.find((entry) => entry.id === id)));
+}
+
 function stateRootOutsideWorktree(scope, stateRoot) {
   const worktree = fs.realpathSync(scope.worktree);
   let root = path.resolve(stateRoot);
@@ -827,6 +972,11 @@ function createCodexDeliveryHost(options = {}) {
       bind(context, 'runtime', 'codex');
       bind(context, 'provider', 'openai');
       if (policy.DYNAMIC_ROLES.includes(request.role)) context.sandbox_mode = 'workspace-write';
+      if (request.role === 'research' && object(context.investigation)) {
+        const inv = parseInvestigationScope(context.investigation);
+        const { investigation: _investigation, ...baseContext } = context;
+        return investigationResearch(options, scope, runtimeHost, agentDir, agentManifest, env, prompt, baseContext, inv);
+      }
       const committing = request.role === 'executor';
       const prepared = committing ? executorPreflight(options, scope) : null;
       if (committing) {
