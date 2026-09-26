@@ -1940,8 +1940,8 @@
   reapable: false
   status: "pending"
 "T-43-04":
-  base: "epic/43-target-project-delivery-at-scale"
-  base_reason: "no primary parent — a root ticket PRs into epic/43-target-project-delivery-at-scale"
+  base: "ticket/T-43-07-cancelled-checks-ignore-superseded-runs"
+  base_reason: "T-43-07 is pr-open — cascade off ticket/T-43-07-cancelled-checks-ignore-superseded-runs; the sentinel retargets this PR onto epic/43-target-project-delivery-at-scale when T-43-07 lands"
   blocked_by: ["T-40-19","T-40-22"]
   blocked_reasons: {"T-40-19":"cross-phase parent must be MERGED and its phase 40 epic landed on main first (parent is pending)","T-40-22":"cross-phase parent must be MERGED and its phase 40 epic landed on main first (parent is pending)"}
   branch: "ticket/T-43-04-bounded-reachability-o-1-git-forms-a-lar"

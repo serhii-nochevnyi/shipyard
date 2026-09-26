@@ -76,22 +76,22 @@ Q5 (remedy commit attribution) stays [ASSUMED] as researched: a remedy commit is
 | T-43-01 | Per-repo config keys | REQ-163, REQ-165, REQ-167, REQ-159, REQ-175 | 5 | — | T-40-17 | medium / false |
 | T-43-02 | publish-gate base resolution, hook passes ticket | REQ-170, REQ-175 | 1 | — | — | medium / false |
 | T-43-03 | Configured comment markers, comment edits not additions | REQ-163, REQ-175 | 6 | T-43-01, T-43-02 | — | medium / false |
-| T-43-04 | Bounded reachability | REQ-171, REQ-175 | 8 | — | T-40-19, T-40-22 | medium / false |
+| T-43-04 | Bounded reachability | REQ-171, REQ-175 | 11 | T-43-07 | T-40-19, T-40-22 | medium / false |
 | T-43-05 | Unknown arch-review finding type → informational | REQ-174, REQ-175 | 6 | — | T-40-18 | medium / false |
-| T-43-06 | One exported scratch set | REQ-166, REQ-175 | 9 | T-43-05 | T-40-16, T-40-22, T-42-01, T-40-18, T-40-27, T-40-12, T-40-14, T-40-28, T-40-01, T-40-09 | high / true |
-| T-43-07 | Cancelled checks, ci-wait 540 s | REQ-168, REQ-175 | 1 | — | — | high / true |
-| T-43-08 | Stale bot approval | REQ-167, REQ-175 | 9 | T-43-04, T-43-01, T-43-07 | T-40-19, T-40-22 | high / true |
+| T-43-06 | One exported scratch set | REQ-166, REQ-175 | 11 | T-43-05 | T-40-16, T-40-22, T-42-01, T-40-18, T-40-27, T-40-12, T-40-14, T-40-28, T-40-01, T-40-09 | high / true |
+| T-43-07 | Cancelled checks, ci-wait 540 s | REQ-168, REQ-175 | 10 | — | T-40-22 | high / true |
+| T-43-08 | Stale bot approval | REQ-167, REQ-175 | 12 | T-43-04, T-43-01, T-43-07 | T-40-19, T-40-22 | high / true |
 | T-43-09 | Targeted state-sync listing | REQ-173, REQ-175 | 7 | — | T-40-03, T-40-19, T-40-27 | medium / false |
 | T-43-10 | gsd_sync alias, ROADMAP, summarised warning | REQ-169, REQ-175 | 8 | T-43-09, T-43-01 | T-40-17, T-40-03, T-40-19, T-40-27 | medium / false |
-| T-43-11 | Jira bound by key | REQ-164, REQ-175 | 7 | — | T-40-25 | medium / false |
-| T-43-12 | `human_checkpoint: review\|merge` | REQ-162, REQ-175 | 10 | T-43-08, T-43-11 | T-40-19, T-40-22, T-40-20, T-40-03, T-40-25 | high / true |
-| T-43-13 | Verdict carry on identical own patch | REQ-161, REQ-175 | 10 | T-43-06 | T-40-19 | high / true |
-| T-43-14 | Builders: arch-review, ci-fix, review-fix | REQ-172, REQ-175 | 10 | — | T-40-15, T-40-24 | medium / false |
-| T-43-15 | Builders: research, decomposition | REQ-172, REQ-175 | 11 | T-43-12, T-43-14 | T-40-15, T-40-25 | medium / false |
-| T-43-16 | Host-side verification, both runtimes | REQ-159, REQ-175 | 10 | T-43-06, T-43-01 | T-42-01, T-40-10, T-40-13, T-40-14, T-40-28, T-40-12, T-40-01, T-40-09 | high / true |
-| T-43-17 | Sealed coverage records + rollout marker | REQ-160, REQ-159, REQ-175 | 11 | T-43-13, T-43-16 | T-42-01, T-40-18, T-40-27, T-40-10, T-40-13, T-40-14, T-40-28, T-40-12, T-40-01, T-40-09 | high / true |
-| T-43-18 | Declared remedy workflows | REQ-165, REQ-175 | 12 | T-43-17, T-43-08 | — | high / true |
-| T-43-19 | Merge gate refuses uncovered heads | REQ-160, REQ-175 | 13 | T-43-18, T-43-12 | T-40-19, T-40-22 | high / true |
+| T-43-11 | Jira bound by key | REQ-164, REQ-175 | 9 | — | T-40-25 | medium / false |
+| T-43-12 | `human_checkpoint: review\|merge` | 13 | 10 | T-43-08, T-43-11 | T-40-19, T-40-22, T-40-20, T-40-03, T-40-25 | high / true |
+| T-43-13 | Verdict carry on identical own patch | REQ-161, REQ-175 | 12 | T-43-06 | T-40-19 | high / true |
+| T-43-14 | Builders: arch-review, ci-fix, review-fix | REQ-172, REQ-175 | 12 | — | T-40-15, T-40-24 | medium / false |
+| T-43-15 | Builders: research, decomposition | REQ-172, REQ-175 | 14 | T-43-12, T-43-14 | T-40-15, T-40-25 | medium / false |
+| T-43-16 | Host-side verification, both runtimes | REQ-159, REQ-175 | 12 | T-43-06, T-43-01 | T-42-01, T-40-10, T-40-13, T-40-14, T-40-28, T-40-12, T-40-01, T-40-09 | high / true |
+| T-43-17 | Sealed coverage records + rollout marker | REQ-160, REQ-159, REQ-175 | 13 | T-43-13, T-43-16 | T-42-01, T-40-18, T-40-27, T-40-10, T-40-13, T-40-14, T-40-28, T-40-12, T-40-01, T-40-09 | high / true |
+| T-43-18 | Declared remedy workflows | REQ-165, REQ-175 | 14 | T-43-17, T-43-08 | — | high / true |
+| T-43-19 | Merge gate refuses uncovered heads | REQ-160, REQ-175 | 15 | T-43-18, T-43-12 | T-40-19, T-40-22 | high / true |
 
 Waves are `1 + max(parent wave)` over the whole graph, including cross-phase parents at their graph waves (T-40-17 4, T-40-18 5, T-40-19 3, T-40-22 7, T-40-24 9, T-40-25 6, T-40-27 6, T-40-09 8, T-40-15 8, T-42-01 1); `validate-graph.cjs` reports no wave disagreement and computes the same `primary_parent` for every ticket (deepest same-phase parent, lower id on a tie). REQ-175 is on every ticket: each plan's RED step must fail on base, and no ticket measures the proving-ground numbers.
 
@@ -120,6 +120,10 @@ Single-parent children: T-43-06 ← T-43-05 (`role-artifact.cjs`), T-43-13 ← T
 `validate-graph.cjs` warns "shares no files_modified" on exactly three edges, all imports of T-43-01's `repoValue`: 03←01, 08←01, 16←01.
 
 Phase depth: 13 waves (T-43-02/T-43-07 at wave 1 through T-43-19 at wave 13; previously 18). Critical path: T-40-09 (wave 8) → T-43-06 (9) → T-43-13 / T-43-16 (10) → T-43-17 (11) → T-43-18 (12) → T-43-19 (13). The recorder (T-43-17) still lands before the enforcer (T-43-19).
+
+### Replan of T-43-07 (2026-09-26, user decision)
+
+PR #266 showed the old `files_modified` was incomplete: keeping a lone CANCELLED check in `pending` (C-06) breaks the merge-gate expectation in `tests/unit/sentinel.test.cjs` ("a cancelled check is failing too"), and counting it as failing instead makes `front.cjs:631` route it to ci-fix (arch-review violation). T-43-07 now also owns `tests/unit/sentinel.test.cjs` (asserts the refusal as still running, never a merge) and gates its `gh run rerun` on a valid config (ADR-004 D2). Because T-40-22 owns that test file, T-43-07 depends on T-40-22; T-43-04, the next editor of the file, now depends on T-43-07. Waves in the table above are recomputed by `validate-graph.cjs` on the current graph.
 
 ## Cross-phase ownership notes
 
