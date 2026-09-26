@@ -15,6 +15,7 @@ const { loadClaudeReferenceContent } = require('./claude-reference-content.cjs')
 const { createRunController } = require('./run-controller.cjs');
 const { createRunScope } = require('./run-scope.cjs');
 const roleArtifact = require('./role-artifact.cjs');
+const { preflightRound } = require('./sentinel-preflight.cjs');
 
 const REQUEST_SCHEMA = 'shipyard.claude-role-request.v1';
 const REQUEST_MAX_BYTES = 32768;
@@ -195,7 +196,7 @@ function branchOid(options, worktree, branch, expectedOid) {
       command(options, 'git', ['-C', worktree, 'fetch', '--no-tags', 'origin',
         `+refs/heads/${name}:refs/remotes/origin/${name}`], worktree, 65536);
     } catch {
-      if (expectedOid === undefined) reject(`cannot refresh live base branch ${safe}`, 'BASE_REVISION_UNAVAILABLE');
+      reject(`cannot refresh live base branch ${safe}`, 'BASE_REVISION_UNAVAILABLE');
     }
   }
   const candidates = safe.startsWith('origin/') ? [safe, safe.slice('origin/'.length)] : [`origin/${safe}`, safe];
@@ -559,9 +560,32 @@ function prepareIntegrator(options, request, canonical, graph) {
     evidencePath: `.planning/phases/${phase}/INTEGRATION.md` });
 }
 
+function sentinelPreflightRound(options, canonical, graph, selection) {
+  const prs = [];
+  for (const item of selection.rows) {
+    const row = rowFor(graph, item.id);
+    const state = graph.state[item.id];
+    if (state && state.status === 'pr-open' && typeof state.pr_base === 'string' && state.pr_base) {
+      prs.push({ ticket: item.id, repo: row.repo || null, base: state.pr_base });
+    }
+  }
+  if (!prs.length) return Object.freeze({});
+  const run = typeof options.preflightRound === 'function' ? options.preflightRound : preflightRound;
+  const round = run({ projectWorktree: canonical.worktree, graphDir: graph.directory, prs, run: options.stateSyncRun });
+  if (!object(round) || !Array.isArray(round.repos)) reject('sentinel preflight returned an invalid round result');
+  const roots = {};
+  for (const entry of round.repos) {
+    if (!object(entry) || typeof entry.root !== 'string' || !entry.root) reject('sentinel preflight round result is malformed');
+    roots[entry.repo || ''] = entry.root;
+  }
+  return Object.freeze(roots);
+}
+
 function prepareSentinel(options, request, canonical, graph) {
   const selection = phaseSelection(graph, request.phase);
   const readOnlySmoke = options.readOnlySmoke === true;
+  const repoRoots = sentinelPreflightRound(options, canonical, graph, selection);
+  const rootFor = (repo) => repoRoots[repo || ''] || canonical.worktree;
   const defaultBranch = baseDefaultBranch(options, canonical.worktree, canonical.projectRoot);
   const artifactBase = branchOid(options, canonical.worktree, defaultBranch);
   const snapshots = [];
@@ -569,7 +593,8 @@ function prepareSentinel(options, request, canonical, graph) {
   for (const item of selection.rows) {
     const row = rowFor(graph, item.id);
     const state = graph.state[item.id];
-    const listed = listPullRequests(options, canonical.worktree, row.branch, row.repo || null, 'open');
+    const root = rootFor(row.repo);
+    const listed = listPullRequests(options, root, row.branch, row.repo || null, 'open');
     if (!Array.isArray(listed)) reject(`GitHub returned an invalid PR list for ${item.id}`);
     const candidates = listed.filter((pr) => object(pr) && pr.headRefName === row.branch && pr.state === 'OPEN');
     if (!state || state.status !== 'pr-open') {
@@ -583,14 +608,14 @@ function prepareSentinel(options, request, canonical, graph) {
     if (candidates.length !== 1 || candidates[0].number !== state.pr) {
       reject(`${item.id} does not have exactly one live PR matching delivery state`, 'STALE_CONTEXT');
     }
-    const live = getPullRequest(options, canonical.worktree, state.pr, row.repo || null);
+    const live = getPullRequest(options, root, state.pr, row.repo || null);
     if (!object(live) || live.number !== state.pr || live.state !== 'OPEN'
         || live.headRefName !== row.branch || live.headRefOid !== state.head_sha
         || live.baseRefName !== state.pr_base || !/^[a-f0-9]{40}$/i.test(live.baseRefOid || '')) {
       reject(`${item.id} live PR identity differs from delivery state`, 'STALE_CONTEXT');
     }
     const baseRef = safeBranch(live.baseRefName, `${item.id} PR base`);
-    branchOid(options, canonical.worktree, baseRef, live.baseRefOid);
+    branchOid(options, root, baseRef, live.baseRefOid);
     const repoKey = `${row.repo || ''}#${live.number}`;
     if (repoPrs.has(repoKey)) reject(`PR #${live.number} is assigned to more than one round ticket`);
     repoPrs.add(repoKey);
@@ -667,7 +692,7 @@ function prepareSentinel(options, request, canonical, graph) {
   const prompt = makePrompt('pr-sentinel', subject, packet, reference, readOnlySmoke);
   return Object.freeze({ role: 'pr-sentinel', ticket: subject, phase: selection.phase,
     phaseNumber: selection.phaseNumber, phaseTicketIds: selection.rows.map(({ id }) => id),
-    ticketSet, ticketSetDigest, base: artifactBase.ref, baseCommit: artifactBase.oid,
+    ticketSet, ticketSetDigest, base: artifactBase.ref, baseCommit: artifactBase.oid, repoRoots,
     livePullRequests: pullRequests, canonical, graph, rows, sources, packet, prompt, signals, readOnlySmoke,
     evidencePath: SENTINEL_EVIDENCE });
 }
@@ -1030,13 +1055,14 @@ function revalidateLiveInputs(options, prepared) {
     const expiredTickets = [];
     for (let index = 0; index < prepared.rows.length; index++) {
       const { id, row } = prepared.rows[index];
+      const root = prepared.repoRoots[row.repo || ''] || worktree;
       const before = prepared.livePullRequests[index];
       const ticket = prepared.ticketSet[index];
-      const live = getPullRequest(options, worktree, before.number, row.repo || null);
+      const live = getPullRequest(options, root, before.number, row.repo || null);
       if (!object(live) || live.number !== before.number) {
         reject(`live PR ${before.number} identity became unavailable while sentinel was running`, 'STALE_CONTEXT');
       }
-      const open = listPullRequests(options, worktree, row.branch, row.repo || null, 'open');
+      const open = listPullRequests(options, root, row.branch, row.repo || null, 'open');
       if (!Array.isArray(open)) reject(`GitHub returned an invalid PR list for ${id}`);
       const currentOpen = open.filter((pr) => object(pr) && pr.state === 'OPEN' && pr.headRefName === row.branch);
       if (currentOpen.some((pr) => pr.number !== before.number)) {
@@ -1057,7 +1083,7 @@ function revalidateLiveInputs(options, prepared) {
         expiredTickets.push(id);
         continue;
       }
-      branchOid(options, worktree, live.baseRefName, live.baseRefOid);
+      branchOid(options, root, live.baseRefName, live.baseRefOid);
     }
     for (const { id, row } of currentSelection.rows) {
       if (expectedIds.has(id)) continue;
