@@ -6799,7 +6799,8 @@
         "tests/fixtures/captured/boundaries/codex-agent-stream.json",
         "tests/fixtures/captured/codex-agent-stream-exec.jsonl",
         "tests/unit/codex-decompose-host.test.cjs",
-        "tests/unit/codex-delivery-host.test.cjs"
+        "tests/unit/codex-delivery-host.test.cjs",
+        ".planning/backlog/codex-usage-tests-write-session-meta-inline.md"
       ],
       "risk": "high",
       "type": "implementation",
