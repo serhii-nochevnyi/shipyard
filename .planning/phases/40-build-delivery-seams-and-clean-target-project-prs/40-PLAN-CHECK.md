@@ -161,3 +161,41 @@
 - `40-01`..`40-26-PLAN.md`: `wave` in the plans whose depth changed, `depends_on` in 01, 02, 05, 09, 10, 11, 15, 22, 23, 24, 25 and 26, and the "Graph position" bullets listed above.
 - `40-27-PLAN.md`: new.
 - `40-CONTEXT.md`: D-42, the ticket map regenerated from the plans, and the D-42 source-audit coverage.
+
+## Amendment after the pdffiller proving-ground run
+
+**Date:** 2026-09-25. **Decision (user):** fix in phase 40 only what phase 40 as planned would ship broken, found while delivering MYD-17835 in pdffiller (session b11246f1, Shipyard 0.63.0); the remaining findings go to a separate phase (CONTEXT D-43..D-45).
+
+### Scope changes
+
+1. **T-40-28 (new, D-43).** `plan-delivery.cjs`: `assertCanonicalGraph` (both hosts refuse an untracked graph copy in a non-main worktree) and `deliverPlan` (the canonical plan is mandatory; `.planning/` files named in Context reads are optional, bounded and reported as not delivered when they cannot be sent; `.planning/graph/` is never sent). The Claude host attaches a delivery per executor, drift-check and repair entry; the Codex host appends it to the executor, drift-check, ci-fix and review-fix prompts. The three workflows embed it. `prepareArgs` keeps a caller-supplied `deliveryRulesHint`. A plan inside the worktree (Shipyard) changes nothing.
+2. **T-40-15 (D-43, D-44).** One graph rule: a ticket worktree that tracks `.planning/graph/tickets.json` at `HEAD` (Shipyard) uses its own graph as today; otherwise the canonical project graph, never an untracked copy; the request carries `planSha256`; the entry point builds the executor context packet with no out-of-worktree `requiredRefs` in a target project; `pr-sentinel` runs `preflightRound`. File list unchanged; it now depends on T-40-28.
+3. **T-40-16 (D-44).** `preflightRound` groups a round's PRs by repository and measures each base in its owning checkout; in a foreign clone it only fetches and reads `origin/<base>`; `repository_root` must be non-null. No file list change.
+4. **T-40-17 (D-45).** `titleFormat`/`formatTitle`, a `format` CLI, the merged `pr_title_format` key, project slug from `origin` when `--repo` is absent; placeholder-free optional segments are match-only; an unrenderable title refuses. `files_modified` adds `pipeline-config.cjs` and its test.
+5. **T-40-20 and T-40-24 (D-45, D-43).** Titles are rendered through `pr-hygiene.cjs format` with the owning repository's slug (`--repo <row.repo>` for ticket PRs, the epic repository's `origin` for epic PRs); T-40-24 also drops the packet prose that assumes the plan is inside the worktree. No file list change.
+
+### Graph changes
+
+- **T-40-28 ← T-40-14** (primary; last previous editor of both delivery hosts and their tests). Wave 7.
+- **T-40-15 ← T-40-28** (new primary parent, deeper than T-40-14). T-40-15 moves to wave 8, so T-40-23 and T-40-24 move to wave 9 and T-40-26 to wave 10. The phase is now 10 waves deep.
+- **T-40-09 ← T-40-28.** T-40-28 edits `tests/unit/codex-delivery-host.test.cjs`; T-40-09 stays its last editor and migrates any record T-40-28 adds. T-40-09's primary parent stays T-40-11 and it stays in wave 8.
+- T-40-16's frontmatter wave is corrected from 3 to 4 (its cross-phase parent T-39-17 has depth 3; this predates the amendment).
+- `validate-graph: OK — 198 ticket(s), 20 wave(s)`, with no frontmatter-wave warning for any phase-40 ticket; `tickets.json`/`tickets.yaml` regenerated.
+
+| Child | Primary parent | Must land in the epic first |
+|---|---|---|
+| T-40-09 | T-40-11 | T-40-07, T-40-14, T-40-28 |
+| T-40-15 | T-40-28 | T-40-17, T-40-16 |
+
+### Ownership with other phases
+
+- `plan-delivery.cjs`, the three workflows, `workflows-args.test.cjs` and `pipeline-config.cjs` (+test) each have a single writer in phases 40/41.
+- Delivery hosts: 39-08 → 40-10 → 40-13 → 40-14 → 40-28 (Claude) and 42-01 → 40-12 → 40-14 → 40-28 (Codex); the Codex host test then goes to T-40-09.
+- `claude-role-host.cjs`: T-40-16 precedes T-40-22; its only phase-41 editor is T-41-01, a declared dependency of T-40-16.
+
+### Plan-check rounds of this amendment
+
+- Round 1 (`gsd-plan-checker`, claude-opus-5-5/medium, receipt verified, session cc1bdb31): ISSUES, 5 blockers / 5 warnings / 4 info — plan-reading roles beyond the executor, the Codex seam, graph copies, `{[!]}` rendering, title producers in T-40-20/24, merged config, `check` input, foreign clones, the context packet, commit subjects.
+- Round 2 (same role and rung, receipt verified): ISSUES, 3 blockers / 4 warnings / 4 info — optional references must not refuse and Shipyard must stay unchanged; both hosts, not only the entry point, must refuse graph copies; titles must use the owning repository's format; T-40-15 over budget (split into T-40-28 with RED steps per test); Codex plan fields and insertion point; packet ownership; bare phase references; stale anchors; per-ticket delivery; non-null `repository_root`.
+- Round 3 (same role and rung, receipt verified): ISSUES, 2 blockers / 4 warnings / 5 info — the Shipyard graph rule (worktree-tracked graph keeps today's path), Codex drift-check and repair prompts, a text slip in T-40-17's CLI lines, the collection rule for bare phase names and skipped references, a recorded baseline for byte-identity, graph directories outside any worktree; plus optional worktree argument, explicit Codex digest input, tracked-at-HEAD, project-repository main worktree, and T-40-16's wave.
+- Round 4 (same role and rung, receipt verified): **PASS** — no blockers; one warning (Codex roles in the Shipyard repository must resolve the worktree-tracked graph when launched outside the entry point) and three info items (name the rejected `plan*` context keys, name the Shipyard baseline source, T-40-28 at the 10-file line). The warning and the first two info items were applied as one sentence each plus a test case; no file was added.

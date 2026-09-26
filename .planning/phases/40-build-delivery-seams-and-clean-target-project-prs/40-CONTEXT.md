@@ -45,7 +45,7 @@ Resolution of `40-RESEARCH.md` "Open Questions" (all RESOLVED): Q1 untracking an
 - **D-27** Branch `<type>` is a deterministic map from the ticket's GSD `type`: `implementation`, `tdd`, `execute` → `feat`; `fix`, `bugfix`, `gap_closure` → `fix`; `docs` → `docs`; `refactor` → `refactor`; `test` → `test`; `chore`, `config` → `chore`; anything else → `feat`. `<JIRA-KEY>` comes from `delivery.jira` when the graph row carries one. The same map gives the conventional-commit type for titles.
 - **D-28** The pre-push hook (Pitfall 12) takes candidate directories from `git -C <path>` / `cd <path>` in the command and from the payload `cwd`. For each candidate it asks git (`git -C <dir> rev-parse --show-toplevel`) and gates the toplevel git returns. If the command names a target that git cannot resolve (unexpanded variable, missing directory, not a worktree), the hook fails closed with a remedy that names `git -C <absolute worktree> push`. It never falls back to the session cwd when the command names a different target.
 - **D-29** The in-flight record lives in `dispatch-record.cjs` beside `reservations`, reuses `DISPATCH_TTL_MS`, and counts as live only while `process.kill(pid, 0)` succeeds. `EPERM` counts as not live (fail closed).
-- **D-30** Plan path: the entry point resolves the graph directory from the ticket worktree with `graph-dir.cjs resolveGraphDir`, sets `planPath = path.resolve(graphDir, '..', '..', row.plan)`, and passes that graph directory to the detached host through `SHIPYARD_GRAPH_DIR` (Pitfall 2).
+- **D-30** (superseded by D-43 where the worktree does not track `.planning/`) Plan path: the entry point resolves the graph directory from the ticket worktree with `graph-dir.cjs resolveGraphDir`, sets `planPath = path.resolve(graphDir, '..', '..', row.plan)`, and passes that graph directory to the detached host through `SHIPYARD_GRAPH_DIR` (Pitfall 2).
 - **D-31** The PR number recorded at creation lives in a locked ledger `<graphDir>/pr-ledger.json` written by `pr-ledger.cjs record`. `state-sync.cjs` reads it and never rebuilds it from GitHub.
 - **D-32** The gate commit status uses the context `merge-gate`. Its description carries the existing trailer grammar (`arch-review=…, drift-check=…, tree=<short sha>`), at most 140 characters. A body trailer is read only as a legacy fallback when a PR has no `merge-gate` status.
 - **D-33** The provenance sidecar is written by `dispatch-record.cjs recordInflight` to `<graphDir>/provenance/<dispatch_id>.json`, so every host that records an in-flight dispatch stamps it at one site.
@@ -64,6 +64,15 @@ Resolution of `40-RESEARCH.md` "Open Questions" (all RESOLVED): Q1 untracking an
 ## Amendment after user review (2026-09-24)
 
 - **D-42 (T-40-27, REQ-138, REQ-136)** The graph carries real dependencies instead of the D-36 linearization, so a ticket may have several same-phase parents. A diamond child's primary parent still only needs to be `branched`, but every non-primary same-phase parent must have landed in the phase epic before the child is ready (`state-sync.cjs`, with the reason on the board). `ticket-worktree.sh create` merges the epic into the fresh child branch so its tree holds every parent, and the scope gates measure the child against the merge of its base and the epic. This supersedes D-36's single-parent rule and the "Deliberately NOT the fix" paragraph of `.planning/backlog/diamond-child-base-is-materially-incomplete.md`. Phase-40 diamond children are dispatched only once T-40-27 runs in the delivering conveyor (40-PLAN-CHECK "Amendment after user review").
+
+
+## Amendment after the pdffiller proving-ground run (2026-09-25)
+
+Evidence: pdffiller session b11246f1 delivering MYD-17835 (13 tickets across pdffiller, jsfiller, front-signature-flow, front-user-management, front-mobile-web and docs-platform) on Shipyard 0.63.0. User decision on 2026-09-25: fix inside phase 40 only the places where phase 40 as planned would ship a broken result; everything else found in that run goes to a separate phase.
+
+- **D-43 (T-40-28, T-40-15, REQ-138; supersedes D-30)** Graph rule: when the ticket worktree tracks `.planning/graph/tickets.json` at `HEAD` (the Shipyard repository), the worktree's graph is used as today (D-30); otherwise the entry point uses the canonical project graph, never an untracked copy inside a worktree. `planPath` follows that graph and the request carries its digest; the executor context packet never requires a path outside the worktree. Both delivery hosts refuse an untracked graph copy inside a non-main worktree, whoever built the request. Both hosts read the canonical plan (mandatory) and the `.planning/` files it names (optional, bounded, digest-labelled, reported when not delivered; never `.planning/graph/`) and put them in the prompt of every plan-reading role (executor, drift-check, ci-fix, review-fix). The agent's read scope is not widened and nothing is written into the worktree; a plan inside the worktree (the Shipyard repository) changes nothing. Reason: with `.planning/` untracked (D-16) and for every cross-repo ticket, the worktree has no graph, and the `--restricted` Claude executor cannot read a plan outside its worktree; all four wave-1 executors returned `no-contract` (rejected: copying `.planning/` into worktrees, which splits state; `--add-dir` for the plan directory, which widens the sandbox).
+- **D-44 (T-40-16, T-40-15, REQ-140)** Sentinel preflight and the pr-sentinel role work per repository: each PR's base is fetched, fast-forwarded and compared in the checkout of the repository that owns the PR, taken from `delivery-state.json` `repo_resolution.repository_root`; an unresolved repository is a refusal naming the `pipeline.repos` key. In a foreign clone the preflight only fetches and reads `origin/<base>`; it never moves the operator's branches. Reason: `prepareSentinel` compared a jsfiller PR's base against pdffiller's origin and refused, so no multi-repository phase could be guarded.
+- **D-45 (T-40-17, REQ-142; refines D-27 for titles)** The PR title format is the target repository's own convention, configured as `pipeline.pr_title_format` (one template or a map by `owner/repo` with `default`), Conventional Commits when unset. The format is chosen by the repository that owns the PR (`--repo <row.repo>`, else the project's `origin` slug). The hygiene gate checks the configured format and forbids internals; `formatTitle` and the `pr-hygiene.cjs format` CLI render titles for publication (T-40-24) and epic PRs (T-40-20) from the same template, and refuse when a required placeholder has no value. Commit subjects are not held to the format, because ticket PRs squash under their title; they stay under the internals rules. Branch names keep D-18/D-27. Reason: pdffiller squashes `[MYD-xxxxx] type: …` while the frontend fleet's commit-lint wants `type(scope): [MYD-xxxxx] …`; one hard-coded regex rejects one of them.
 
 </decisions>
 
@@ -105,25 +114,26 @@ Tickets whose `files_modified` meets a phase-39 plan's `files_modified` declare 
 | T-40-06 digest pin refresh + CI trailer | REQ-145 | 2 | — | T-39-12 |
 | T-40-07 boundary capture harness + contract test | REQ-137, REQ-136 | 1 | — | — |
 | T-40-08 captured Claude stream fixtures | REQ-137 | 2 | 07 | T-39-12 |
-| T-40-09 Codex task by file + digest, Codex consumer migration | REQ-148, REQ-137 | 8 | 11 (primary), 07, 14 | T-39-01 |
+| T-40-09 Codex task by file + digest, Codex consumer migration | REQ-148, REQ-137 | 8 | 11 (primary), 07, 14, 28 | T-39-01 |
 | T-40-10 shared planning-result sealer (Claude) | REQ-147 | 3 | 01 | T-39-01, T-39-08 |
 | T-40-11 Codex decompose sealing + researcher scope | REQ-148, REQ-147 | 7 | 14 (primary), 04 | T-39-01, T-39-07 |
 | T-40-12 Codex research consumer + single-line re-dispatch | REQ-147, REQ-148 | 5 | 13 | T-39-01 |
 | T-40-13 per-line research recovery | REQ-146 | 4 | 10 | T-39-08 |
 | T-40-14 in-flight record + host request validators | REQ-139, REQ-138 | 6 | 12 | T-39-03, T-39-08, T-39-01 |
-| T-40-15 deliver-dispatch entry point | REQ-138, REQ-136 | 7 | 14 (primary), 17, 16 | — |
-| T-40-16 sentinel preflight | REQ-140, REQ-136 | 3 | 01 | T-39-12 |
+| T-40-15 deliver-dispatch entry point | REQ-138, REQ-136 | 8 | 28 (primary), 14, 17, 16 | — |
+| T-40-16 sentinel preflight | REQ-140, REQ-136 | 4 | 01 | T-39-12, T-41-01, T-41-09 |
 | T-40-17 PR hygiene gate + `.planning/` untrack migration | REQ-142 | 4 | 19 | — |
 | T-40-18 clean executor PR artifacts | REQ-142 | 5 | 17 | — |
 | T-40-19 gate verdict as commit status | REQ-142 | 3 | 03 | — |
 | T-40-20 neutral ticket and epic branches | REQ-142 | 5 | 17 | T-39-06 |
 | T-40-21 dogfood install root + doctor cache check | REQ-144 | 3 | 05 | T-39-04 |
 | T-40-22 provenance sidecar + dogfood merge refusal | REQ-144, REQ-139 | 7 | 14 (primary), 21, 16, 19 | T-39-03, T-39-12 |
-| T-40-23 live round + release gate | REQ-141, REQ-136 | 8 | 15 (primary), 17 | — |
-| T-40-24 deliver prose on the seams | REQ-138, REQ-139, REQ-140, REQ-142, REQ-143, REQ-136 | 8 | 15 (primary), 17, 16 | T-39-03, T-41-07 |
+| T-40-23 live round + release gate | REQ-141, REQ-136 | 9 | 15 (primary), 17 | — |
+| T-40-24 deliver prose on the seams | REQ-138, REQ-139, REQ-140, REQ-142, REQ-143, REQ-136 | 9 | 15 (primary), 17, 16 | T-39-03, T-41-07 |
 | T-40-25 investigate/decompose prose | REQ-149, REQ-146, REQ-147, REQ-148, REQ-142 | 6 | 12 (primary), 17 | T-39-10, T-39-11 |
-| T-40-26 command surface (Makefile, README, CLAUDE.md) | REQ-137, REQ-141, REQ-144, REQ-145, REQ-136 | 9 | 23 (primary), 07 | T-39-04 |
+| T-40-26 command surface (Makefile, README, CLAUDE.md) | REQ-137, REQ-141, REQ-144, REQ-145, REQ-136 | 10 | 23 (primary), 07 | T-39-04 |
 | T-40-27 diamond child readiness + epic base-merge | REQ-138, REQ-136 | 6 | 18 | — |
+| T-40-28 plan delivery to sandboxed agents + canonical graph | REQ-138, REQ-136 | 7 | 14 | — |
 
 ## Source audit
 
@@ -132,7 +142,7 @@ Tickets whose `files_modified` meets a phase-39 plan's `files_modified` declare 
 | GOAL | — | Seams, live-gated releases, Codex loops repaired, dogfood provenance, clean target PRs | all | COVERED |
 | REQ | REQ-136 | Seams before point fixes; releases gated on a live round | graph + T-40-07, 15, 16, 23, 24, 26 | COVERED |
 | REQ | REQ-137 | Captured fixtures, make target, contract test (all Codex consumers migrated, D-37) | T-40-07, 08, 09, 26 | COVERED |
-| REQ | REQ-138 | Entry point, detached launch, status/wait; diamond children dispatched only into a complete tree (D-42) | T-40-14, 15, 24, 27 | COVERED |
+| REQ | REQ-138 | Entry point, detached launch, status/wait; diamond children dispatched only into a complete tree (D-42) | T-40-14, 15, 24, 27, 28 | COVERED |
 | REQ | REQ-139 | In-flight record | T-40-14, 22, 24 | COVERED |
 | REQ | REQ-140 | Sentinel preflight | T-40-16, 24 | COVERED |
 | REQ | REQ-141 | `make test-live`, release gate | T-40-23, 26 | COVERED |
@@ -148,4 +158,5 @@ Tickets whose `files_modified` meets a phase-39 plan's `files_modified` declare 
 | CONTEXT | D-16..D-24 | Planning refinements | T-40-17/25 (16,17), 20 (18), 15/17/18 (19), 19 (20), 23 (21,22), 22 (23), 05 (24) | COVERED |
 | CONTEXT | D-36..D-41 | Plan-check revisions | graph (36), 07/08/09 (37), 15/17 (38), 17 (39), 23 (40), 12 (41) | COVERED |
 | CONTEXT | D-42 | Real graph + diamond-child readiness and epic base-merge | graph, T-40-27 | COVERED |
+| CONTEXT | D-43..D-45 | pdffiller proving-ground amendment: plan delivery and canonical graph, per-repository sentinel, per-repository PR title format | T-40-28, 15, 24 (43); 16, 15 (44); 17, 20, 24 (45) | COVERED |
 | RESEARCH | Pitfalls 1-13 | Addressed in the owning tickets' Scope | T-40-15 (1,2,3), 06 (4), 16 (5), 18 (6), 25 (7), 20 (8), 19 (9), 22 (10), 01 (11), 02 (12), 05 (13) | COVERED |
