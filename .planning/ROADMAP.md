@@ -824,7 +824,7 @@ scratch set, and the point fixes found on the pdffiller proving ground.
 <!-- shipyard:gsd-sync:begin -->
 ## Shipyard synchronization (generated)
 
-- Source fingerprint: `62c2bffaa83b3e3e18d83b4ae74ea95ff14fb4fd239b3b326fc1b21ca5bac14f`
+- Source fingerprint: `559f0326c42c5dd8ba7c0d7c638101c1339466486b2eaea2aaed464f870982c8`
 - Plans merged: 172/219
 - Phases verified: 10/24
 - Current phase: 20

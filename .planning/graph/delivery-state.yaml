@@ -1888,10 +1888,10 @@
   base_reason: "no primary parent — a root ticket PRs into epic/42-resume-trusted-finalization-without-executor-replay"
   behind_by: 0
   branch: "ticket/T-42-01-resume-authenticated-completed-execution"
-  checks: {"failing":1,"none_reported":false,"pending":0,"total":1,"unavailable":false}
+  checks: {"failing":0,"none_reported":false,"pending":1,"total":1,"unavailable":false}
   draft: false
   epic: "epic/42-resume-trusted-finalization-without-executor-replay"
-  head_sha: "a3ed27eeb196d98299b89765c2313a486817520e"
+  head_sha: "d8d2f937a1d0a80ebe1759e94a4acac2b15b852b"
   merge_scope: "stacked"
   merge_state: "UNSTABLE"
   pr: 255

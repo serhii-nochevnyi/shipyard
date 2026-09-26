@@ -1,6 +1,6 @@
 # Requirements: shipyard
 
-<!-- shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 49aff0b33acc1648f1949099c151f544da787d9222d1184a69d5a1ba70890cdf -->
+<!-- shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 0a72fbd5fc394f19f739fb63801c59fb4b5b776cacd1b6bc553542bb2b083d29 -->
 
 **Defined:** 2026-09-10
 **Core Value:** Keep delivery decisions truthful, resumable, and synchronized between the Shipyard conveyor and native GSD workflows.
@@ -180,7 +180,7 @@
 - [ ] **REQ-172**: deliver-dispatch builds research, decomposition, arch-review, ci-fix and review-fix requests that round-trip through each host's exported validator, with Codex parity or a named reason.
 - [ ] **REQ-173**: state-sync lists PRs by ticket head and open state instead of a bulk all-state listing and skips tickets whose merge into a landed epic is recorded immutably, with --full re-deriving everything.
 - [ ] **REQ-174**: An arch-review finding of unknown type is kept as an informational note with its original type and never changes the verdict; violations and incomplete blocking findings still fail.
-- [ ] **REQ-175**: Phase 43 ships after phases 40, 41 and 42 are released; every fix carries unit or fixture tests that fail on base, and before/after measurements come from a later operator proving-ground rerun.
+- [ ] **REQ-175**: Phase 43 tickets start once their graph dependencies (including cross-phase ones on pending phase-40/42 tickets) have landed; every fix carries unit or fixture tests that fail on base, and before/after measurements come from a later operator proving-ground rerun.
 
 ## Out of Scope
 
