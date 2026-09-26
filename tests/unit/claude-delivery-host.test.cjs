@@ -461,7 +461,7 @@ test('default base reconciliation creates a verified signed merge before repair 
       },
     },
   });
-  const gnupgHome = fs.mkdtempSync('/tmp/crh-base-gpg-');
+  const gnupgHome = fs.mkdtempSync(path.join(os.tmpdir(), 'g1-'));
   fs.chmodSync(gnupgHome, 0o700);
   const previousHome = process.env.GNUPGHOME;
   try {
@@ -515,7 +515,7 @@ test('fast-forwarded base receives a host-signed marker before publication', asy
       },
     },
   });
-  const gnupgHome = fs.mkdtempSync('/tmp/crh-ff-gpg-');
+  const gnupgHome = fs.mkdtempSync(path.join(os.tmpdir(), 'g2-'));
   fs.chmodSync(gnupgHome, 0o700);
   const previousHome = process.env.GNUPGHOME;
   try {
@@ -861,7 +861,7 @@ test('fixed repair signs before sealing and reaches only the trusted publication
       },
     },
   });
-  const gnupgHome = fs.mkdtempSync('/tmp/crh-gpg-');
+  const gnupgHome = fs.mkdtempSync(path.join(os.tmpdir(), 'g3-'));
   fs.chmodSync(gnupgHome, 0o700);
   const previousHome = process.env.GNUPGHOME;
   try {
@@ -915,7 +915,7 @@ test('review repair publishes its signed code before host review actions', async
       },
     },
   });
-  const gnupgHome = fs.mkdtempSync('/tmp/crh-review-gpg-');
+  const gnupgHome = fs.mkdtempSync(path.join(os.tmpdir(), 'g4-'));
   fs.chmodSync(gnupgHome, 0o700);
   const previousHome = process.env.GNUPGHOME;
   try {
