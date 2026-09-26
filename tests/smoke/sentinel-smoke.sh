@@ -14,8 +14,9 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 SCRIPTS="$ROOT/plugins/delivery-pipeline/scripts"
 
-W="$(mktemp -d)"
+W="$(mktemp -d "${TMPDIR:-/tmp}/sentinel-smoke.XXXXXX")"
 trap 'rm -rf "$W"' EXIT
+export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=commit.gpgsign GIT_CONFIG_VALUE_0=false
 
 pass=0; fail=0
 ok()  { pass=$((pass + 1)); echo "  ✓ $1"; }
@@ -721,6 +722,63 @@ process.exit(named ? 0 : 1);
   ok "the gate refuses the merge against the live head, naming both"
 else
   bad "the gate refuses a superseded verdict" "$(head -20 "$hbmerge")"
+fi
+
+stproj="$W/stproj"
+mkdir -p "$stproj/.planning/graph" "$W/binS"
+cp "$hbproj/.planning/graph/tickets.json" "$stproj/.planning/graph/tickets.json"
+echo '{"pipeline":{}}' > "$stproj/.planning/config.json"
+cat > "$W/binS/gh" <<STUB
+#!/usr/bin/env bash
+argv="\$*"
+case "\$argv" in
+  "repo view --json defaultBranchRef"*) echo "main" ;;
+  "repo view --json owner,name"*) echo '{"owner":{"login":"acme"},"name":"demo"}' ;;
+  "pr list --state all"*)
+    echo '[{"number":301,"state":"OPEN","isDraft":false,"headRefName":"ticket/T-02-01-moved","headRefOid":"$LIVE","baseRefName":"epic/02-demo","mergedAt":null,"createdAt":"2026-01-01T00:00:00Z","url":"https://example/301","title":"T-02-01: moved"}]' ;;
+  "pr list --state open"*)
+    echo '[{"number":301,"reviewDecision":null,"body":"Ticket: T-02-01\n\ngate_status: arch-review=conform, checks=green, head=$JUDGED"}]' ;;
+  "api repos/{owner}/{repo}/branches"*) printf 'main\nepic/02-demo\nticket/T-02-01-moved\n' ;;
+  "api repos/{owner}/{repo}/compare"*) echo 0 ;;
+  "api repos/{owner}/{repo}/commits/\${SMOKE_STATUS_SHA:-none}/statuses"*)
+    echo '[{"context":"merge-gate","state":"success","description":"arch-review=conform, drift-check=fresh, degenerate-green=clean, checks=green"}]' ;;
+  "api repos/{owner}/{repo}/commits/"*"/statuses"*) echo '[]' ;;
+  "api graphql"*)
+    echo '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}' ;;
+  "pr checks 301"*) echo '[{"name":"build","state":"SUCCESS","bucket":"pass"}]' ;;
+  "pr view 301 --json"*)
+    echo '{"number":301,"state":"OPEN","isDraft":false,"baseRefName":"epic/02-demo","headRefName":"ticket/T-02-01-moved","headRefOid":"$LIVE","mergeStateStatus":"CLEAN","reviewDecision":null,"body":"Ticket: T-02-01\n\ngate_status: arch-review=conform, checks=green, head=$JUDGED"}' ;;
+  *) echo "stub gh: unhandled call: \$argv" >&2; exit 1 ;;
+esac
+STUB
+chmod +x "$W/binS/gh"
+ststate="$stproj/.planning/graph/delivery-state.json"
+sq() { node -e 'const s=require(process.argv[1]);const v=process.argv.slice(2).reduce((o,k)=>o&&o[k],s);process.stdout.write(String(v))' "$ststate" "$@"; }
+stmerge() {
+  ( cd "$stproj" && PATH="$W/binS:$PATH" SMOKE_STATUS_SHA="$1" node "$SCRIPTS/sentinel.cjs" merge T-02-01 --dry-run --json 2>/dev/null ) || true
+}
+
+( cd "$stproj" && PATH="$W/binS:$PATH" SMOKE_STATUS_SHA="$LIVE" node "$SCRIPTS/state-sync.cjs" > /dev/null 2>"$W/st-err.txt" ) \
+  || bad "state-sync runs against the status stub" "$(cat "$W/st-err.txt")"
+[[ "$(sq T-02-01 gate arch-review)" == "conform" && "$(sq T-02-01 gate head)" == "$LIVE" ]] \
+  && ok "state-sync reads the gate from the merge-gate status on the head, over a stale body trailer" \
+  || bad "state-sync reads the gate from the status" "got: $(sq T-02-01 gate)"
+
+if stmerge "$LIVE" | node -e '
+const r = JSON.parse(require("fs").readFileSync(0, "utf8")).results[0];
+process.exit(r && r.would_merge === true ? 0 : 1);
+' 2>/dev/null; then
+  ok "the guard merges with a conform merge-gate status on the live head"
+else
+  bad "the guard merges on a conform status" "$(stmerge "$LIVE" | head -20)"
+fi
+if stmerge "$JUDGED" | node -e '
+const r = JSON.parse(require("fs").readFileSync(0, "utf8")).results[0];
+process.exit(r && r.would_merge !== true && r.blockers.some((b) => /arch-review/.test(b)) ? 0 : 1);
+' 2>/dev/null; then
+  ok "a merge-gate status on another sha is not a verdict: the guard refuses"
+else
+  bad "a stale-sha status is refused" "$(stmerge "$JUDGED" | head -20)"
 fi
 
 # ── a PR where nothing ran is not a green PR ─────────────────────────────────
