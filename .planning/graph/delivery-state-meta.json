@@ -1,13 +1,13 @@
 {
   "schema_version": 1,
-  "generation": 369,
-  "generation_identity": "5f6952b5-9eab-4dcd-b113-5aedf0f7bdd4",
-  "previous_generation_identity": "16777245:12923510242:1790419239465342000:1061f7ea3fc1a58c189969cad02df7227468d5b2a0d156277f9f1ea71119fe1c",
-  "observed_at": "2026-09-26T10:40:49.348Z",
-  "generated_at": "2026-09-26T10:40:49.348Z",
+  "generation": 370,
+  "generation_identity": "4d04efc5-a18c-4b14-a848-b431c1598cfb",
+  "previous_generation_identity": "16777245:12923512531:1790419256943037700:0f012c3e060c6359e8481962d3088537f09021abfbc380084240e1f6cabb2cf6",
+  "observed_at": "2026-09-26T11:03:16.073Z",
+  "generated_at": "2026-09-26T11:03:16.073Z",
   "by": "state-sync",
-  "pid": 40376,
-  "observation_generation": 369,
+  "pid": 33083,
+  "observation_generation": 370,
   "observation_projection": {
     "tickets": {
       "T-20-01": {
@@ -2203,15 +2203,15 @@
         "status": "pr-open",
         "repository": null,
         "pr": 255,
-        "head": "7d79bee1c96e43ac61beb6ead62c25b745e43808",
+        "head": "a3ed27eeb196d98299b89765c2313a486817520e",
         "draft": false,
         "base": "epic/42-resume-trusted-finalization-without-executor-replay",
-        "merge_state": "CLEAN",
+        "merge_state": "UNSTABLE",
         "review_decision": null,
         "checks": {
           "total": 1,
           "pending": 0,
-          "failing": 0,
+          "failing": 1,
           "none_reported": false,
           "unavailable": false
         }
@@ -2220,9 +2220,9 @@
   },
   "binding": {
     "schema_version": 1,
-    "state_digest": "688c582b8355fe96b5ae9bef5c639caf6306991d19e127b267465cc0feb79626",
-    "front_digest": "277b7845f1db04671c6af5200c45dc6257cbfff1abf9a84b591cc319c7e41545",
-    "observation_digest": "6fba5f89b54b41dd7b5b83ec1b28bb899917b3a15f6188ab1592ca9014869fa4",
-    "observation_generation": 369
+    "state_digest": "eb163cc9991dee05a3dca299ecede1678e96051b55d40cde7db4d6fd0e4c9adc",
+    "front_digest": "e615f2f84ed48b73545197fb760ed3eb28428f3ef566019afb6166863e3c3150",
+    "observation_digest": "4bf4c82b5de1f57afbb0cae125ef2d66d12592a3471e2cf97b6ce8b90c547a2b",
+    "observation_generation": 370
   }
 }
