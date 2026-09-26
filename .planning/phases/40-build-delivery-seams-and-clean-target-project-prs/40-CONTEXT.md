@@ -106,7 +106,7 @@ Tickets whose `files_modified` meets a phase-39 plan's `files_modified` declare 
 
 | Ticket | Requirements | Wave | Same-phase depends_on | Cross-phase |
 |---|---|---|---|---|
-| T-40-01 hermetic git unit fixtures | REQ-150 | 2 | — | T-39-01 |
+| T-40-01 hermetic git unit fixtures | REQ-150 | 4 | — | T-39-01 |
 | ~~T-40-02~~ moved to phase 41 as T-41-08 (REQ-157) on 2026-09-25 | — | — | — | — |
 | T-40-03 PR ledger and head-branch matching | REQ-143 | 2 | 02 | — |
 | T-40-04 Codex config refusal remedy | REQ-149 | 3 | 05 | T-39-01 |
@@ -114,26 +114,26 @@ Tickets whose `files_modified` meets a phase-39 plan's `files_modified` declare 
 | T-40-06 digest pin refresh + CI trailer | REQ-145 | 2 | — | T-39-12 |
 | T-40-07 boundary capture harness + contract test | REQ-137, REQ-136 | 1 | — | — |
 | T-40-08 captured Claude stream fixtures | REQ-137 | 2 | 07 | T-39-12 |
-| T-40-09 Codex task by file + digest, Codex consumer migration | REQ-148, REQ-137 | 8 | 11 (primary), 07, 14, 28 | T-39-01 |
-| T-40-10 shared planning-result sealer (Claude) | REQ-147 | 3 | 01 | T-39-01, T-39-08 |
-| T-40-11 Codex decompose sealing + researcher scope | REQ-148, REQ-147 | 7 | 14 (primary), 04 | T-39-01, T-39-07 |
-| T-40-12 Codex research consumer + single-line re-dispatch | REQ-147, REQ-148 | 5 | 13 | T-39-01 |
-| T-40-13 per-line research recovery | REQ-146 | 4 | 10 | T-39-08 |
-| T-40-14 in-flight record + host request validators | REQ-139, REQ-138 | 6 | 12 | T-39-03, T-39-08, T-39-01 |
-| T-40-15 deliver-dispatch entry point | REQ-138, REQ-136 | 8 | 28 (primary), 14, 17, 16 | — |
-| T-40-16 sentinel preflight | REQ-140, REQ-136 | 4 | 01 | T-39-12, T-41-01, T-41-09 |
+| T-40-09 Codex task by file + digest, Codex consumer migration | REQ-148, REQ-137 | 11 | 11 (primary), 07, 14, 28 | T-39-01 |
+| T-40-10 shared planning-result sealer (Claude) | REQ-147 | 5 | 01 | T-39-01, T-39-08 |
+| T-40-11 Codex decompose sealing + researcher scope | REQ-148, REQ-147 | 9 | 14 (primary), 04 | T-39-01, T-39-07 |
+| T-40-12 Codex research consumer + single-line re-dispatch | REQ-147, REQ-148 | 7 | 13 | T-39-01 |
+| T-40-13 per-line research recovery | REQ-146 | 6 | 10 | T-39-08 |
+| T-40-14 in-flight record + host request validators | REQ-139, REQ-138 | 8 | 12 | T-39-03, T-39-08, T-39-01 |
+| T-40-15 deliver-dispatch entry point | REQ-138, REQ-136 | 11 | 28 (primary), 14, 17, 16 | — |
+| T-40-16 sentinel preflight | REQ-140, REQ-136 | 5 | 01 | T-39-12, T-41-01, T-41-09 |
 | T-40-17 PR hygiene gate + `.planning/` untrack migration | REQ-142 | 4 | 19 | — |
-| T-40-18 clean executor PR artifacts | REQ-142 | 5 | 17 | — |
+| T-40-18 clean executor PR artifacts | REQ-142 | 9 | 17, 14 | — |
 | T-40-19 gate verdict as commit status | REQ-142 | 3 | 03 | — |
 | T-40-20 neutral ticket and epic branches | REQ-142 | 5 | 17 | T-39-06 |
 | T-40-21 dogfood install root + doctor cache check | REQ-144 | 3 | 05 | T-39-04 |
-| T-40-22 provenance sidecar + dogfood merge refusal | REQ-144, REQ-139 | 7 | 14 (primary), 21, 16, 19 | T-39-03, T-39-12 |
-| T-40-23 live round + release gate | REQ-141, REQ-136 | 9 | 15 (primary), 17 | — |
-| T-40-24 deliver prose on the seams | REQ-138, REQ-139, REQ-140, REQ-142, REQ-143, REQ-136 | 9 | 15 (primary), 17, 16 | T-39-03, T-41-07 |
-| T-40-25 investigate/decompose prose | REQ-149, REQ-146, REQ-147, REQ-148, REQ-142 | 6 | 12 (primary), 17 | T-39-10, T-39-11 |
-| T-40-26 command surface (Makefile, README, CLAUDE.md) | REQ-137, REQ-141, REQ-144, REQ-145, REQ-136 | 10 | 23 (primary), 07 | T-39-04 |
-| T-40-27 diamond child readiness + epic base-merge | REQ-138, REQ-136 | 6 | 18 | — |
-| T-40-28 plan delivery to sandboxed agents + canonical graph | REQ-138, REQ-136 | 7 | 14 | — |
+| T-40-22 provenance sidecar + dogfood merge refusal | REQ-144, REQ-139 | 9 | 14 (primary), 21, 16, 19 | T-39-03, T-39-12 |
+| T-40-23 live round + release gate | REQ-141, REQ-136 | 12 | 15 (primary), 17 | — |
+| T-40-24 deliver prose on the seams | REQ-138, REQ-139, REQ-140, REQ-142, REQ-143, REQ-136 | 12 | 15 (primary), 17, 16 | T-39-03, T-41-07 |
+| T-40-25 investigate/decompose prose | REQ-149, REQ-146, REQ-147, REQ-148, REQ-142 | 8 | 12 (primary), 17 | T-39-10, T-39-11 |
+| T-40-26 command surface (Makefile, README, CLAUDE.md) | REQ-137, REQ-141, REQ-144, REQ-145, REQ-136 | 13 | 23 (primary), 07 | T-39-04 |
+| T-40-27 diamond child readiness + epic base-merge | REQ-138, REQ-136 | 10 | 18 | — |
+| T-40-28 plan delivery to sandboxed agents + canonical graph | REQ-138, REQ-136 | 10 | 14, 18 | — |
 
 ## Source audit
 
