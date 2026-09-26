@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 39e7a9422c8e1e6f44cc8b31b33fd0d645ba9376d7ae59c71f18c02ef3f47af8
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 2c233044fba5f03378bb7a6769f9b0933d0cc1b3417a1bb3f98e98b11196d2bb
 phase: 43-target-project-delivery-at-scale
 plan: 02
 subsystem: shipyard delivery
@@ -22,7 +22,7 @@ key-decisions:
 duration: 0min
 status: halted
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 39e7a9422c8e1e6f44cc8b31b33fd0d645ba9376d7ae59c71f18c02ef3f47af8
+shipyard_source_fingerprint: 2c233044fba5f03378bb7a6769f9b0933d0cc1b3417a1bb3f98e98b11196d2bb
 ---
 
 # Phase 43: Resolve the publish-gate base from the recorded ticket base and origin/HEAD; the pre-push hook passes the ticket — Delivery Projection
@@ -32,8 +32,8 @@ shipyard_source_fingerprint: 39e7a9422c8e1e6f44cc8b31b33fd0d645ba9376d7ae59c71f1
 ## Delivery Evidence
 
 - Ticket: T-43-02
-- Delivery status: pending
-- PR: not observed
+- Delivery status: pr-open
+- PR: #264
 - Source plan: .planning/phases/43-target-project-delivery-at-scale/43-02-PLAN.md
 - This summary is halted until the delivery state observes `merged`.
 
