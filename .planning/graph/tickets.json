@@ -6333,21 +6333,51 @@
       "pr_base": "ticket/T-42-01-resume-authenticated-completed-execution",
       "jira": null
     },
+    "T-42-03": {
+      "title": "Accept bash and make in PLAN-pinned verification commands",
+      "plan": ".planning/phases/42-resume-trusted-finalization-without-executor-replay/42-03-PLAN.md",
+      "phase": "42",
+      "repo": null,
+      "wave": 3,
+      "depends_on": [
+        "T-42-02"
+      ],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": false,
+      "files": [
+        "plugins/delivery-pipeline/scripts/codex-delivery-host.cjs",
+        "tests/unit/codex-delivery-host.test.cjs",
+        "plugins/shipyard/"
+      ],
+      "risk": "medium",
+      "type": "implementation",
+      "human_checkpoint": false,
+      "preauthorized": false,
+      "branch": "ticket/T-42-03-accept-bash-and-make-in-plan-pinned-veri",
+      "epic": "epic/42-resume-trusted-finalization-without-executor-replay",
+      "primary_parent": "T-42-02",
+      "pr_base": "ticket/T-42-02-deny-the-host-state-root-and-finalizatio",
+      "jira": null
+    },
     "T-40-01": {
       "title": "Make git-creating unit fixtures hermetic against global signing and fixed /tmp paths",
       "plan": ".planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-01-PLAN.md",
       "phase": "40",
       "repo": null,
-      "wave": 3,
+      "wave": 4,
       "depends_on": [
         "T-39-01",
         "T-42-01",
-        "T-42-02"
+        "T-42-02",
+        "T-42-03"
       ],
       "cross_phase_deps": [
         "T-39-01",
         "T-42-01",
-        "T-42-02"
+        "T-42-02",
+        "T-42-03"
       ],
       "cross_repo_deps": [],
       "unreachable_paths": false,
@@ -6374,7 +6404,7 @@
       "plan": ".planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-10-PLAN.md",
       "phase": "40",
       "repo": null,
-      "wave": 4,
+      "wave": 5,
       "depends_on": [
         "T-40-01",
         "T-39-01",
@@ -6411,7 +6441,7 @@
       "plan": ".planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-13-PLAN.md",
       "phase": "40",
       "repo": null,
-      "wave": 5,
+      "wave": 6,
       "depends_on": [
         "T-40-10",
         "T-39-08"
@@ -6445,17 +6475,19 @@
       "plan": ".planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-12-PLAN.md",
       "phase": "40",
       "repo": null,
-      "wave": 6,
+      "wave": 7,
       "depends_on": [
         "T-40-13",
         "T-39-01",
         "T-42-01",
-        "T-42-02"
+        "T-42-02",
+        "T-42-03"
       ],
       "cross_phase_deps": [
         "T-39-01",
         "T-42-01",
-        "T-42-02"
+        "T-42-02",
+        "T-42-03"
       ],
       "cross_repo_deps": [],
       "unreachable_paths": false,
@@ -6479,21 +6511,23 @@
       "plan": ".planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-14-PLAN.md",
       "phase": "40",
       "repo": null,
-      "wave": 7,
+      "wave": 8,
       "depends_on": [
         "T-40-12",
         "T-39-03",
         "T-39-08",
         "T-39-01",
         "T-42-01",
-        "T-42-02"
+        "T-42-02",
+        "T-42-03"
       ],
       "cross_phase_deps": [
         "T-39-03",
         "T-39-08",
         "T-39-01",
         "T-42-01",
-        "T-42-02"
+        "T-42-02",
+        "T-42-03"
       ],
       "cross_repo_deps": [],
       "unreachable_paths": false,
@@ -6522,7 +6556,7 @@
       "plan": ".planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-11-PLAN.md",
       "phase": "40",
       "repo": null,
-      "wave": 8,
+      "wave": 9,
       "depends_on": [
         "T-40-04",
         "T-40-14",
@@ -6559,7 +6593,7 @@
       "plan": ".planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-16-PLAN.md",
       "phase": "40",
       "repo": null,
-      "wave": 4,
+      "wave": 5,
       "depends_on": [
         "T-40-01",
         "T-39-12",
@@ -6601,7 +6635,7 @@
       "plan": ".planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-22-PLAN.md",
       "phase": "40",
       "repo": null,
-      "wave": 8,
+      "wave": 9,
       "depends_on": [
         "T-40-21",
         "T-40-16",
@@ -6650,7 +6684,7 @@
       "plan": ".planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-25-PLAN.md",
       "phase": "40",
       "repo": null,
-      "wave": 7,
+      "wave": 8,
       "depends_on": [
         "T-40-12",
         "T-40-17",
@@ -6686,13 +6720,15 @@
       "plan": ".planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-28-PLAN.md",
       "phase": "40",
       "repo": null,
-      "wave": 8,
+      "wave": 9,
       "depends_on": [
         "T-40-14",
-        "T-42-02"
+        "T-42-02",
+        "T-42-03"
       ],
       "cross_phase_deps": [
-        "T-42-02"
+        "T-42-02",
+        "T-42-03"
       ],
       "cross_repo_deps": [],
       "unreachable_paths": false,
@@ -6724,7 +6760,7 @@
       "plan": ".planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-09-PLAN.md",
       "phase": "40",
       "repo": null,
-      "wave": 9,
+      "wave": 10,
       "depends_on": [
         "T-40-11",
         "T-40-07",
@@ -6733,13 +6769,15 @@
         "T-39-01",
         "T-41-04",
         "T-42-01",
-        "T-42-02"
+        "T-42-02",
+        "T-42-03"
       ],
       "cross_phase_deps": [
         "T-39-01",
         "T-41-04",
         "T-42-01",
-        "T-42-02"
+        "T-42-02",
+        "T-42-03"
       ],
       "cross_repo_deps": [],
       "unreachable_paths": false,
@@ -6769,7 +6807,7 @@
       "plan": ".planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-15-PLAN.md",
       "phase": "40",
       "repo": null,
-      "wave": 9,
+      "wave": 10,
       "depends_on": [
         "T-40-28",
         "T-40-14",
@@ -6801,7 +6839,7 @@
       "plan": ".planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-23-PLAN.md",
       "phase": "40",
       "repo": null,
-      "wave": 10,
+      "wave": 11,
       "depends_on": [
         "T-40-15",
         "T-40-17"
@@ -6836,7 +6874,7 @@
       "plan": ".planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-24-PLAN.md",
       "phase": "40",
       "repo": null,
-      "wave": 10,
+      "wave": 11,
       "depends_on": [
         "T-40-15",
         "T-40-17",
@@ -6870,7 +6908,7 @@
       "plan": ".planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-26-PLAN.md",
       "phase": "40",
       "repo": null,
-      "wave": 11,
+      "wave": 12,
       "depends_on": [
         "T-40-23",
         "T-40-07",
@@ -6988,7 +7026,7 @@
       "plan": ".planning/phases/43-target-project-delivery-at-scale/43-04-PLAN.md",
       "phase": "43",
       "repo": null,
-      "wave": 9,
+      "wave": 10,
       "depends_on": [
         "T-40-19",
         "T-40-22"
@@ -7050,7 +7088,7 @@
       "plan": ".planning/phases/43-target-project-delivery-at-scale/43-06-PLAN.md",
       "phase": "43",
       "repo": null,
-      "wave": 10,
+      "wave": 11,
       "depends_on": [
         "T-43-05",
         "T-40-16",
@@ -7062,7 +7100,8 @@
         "T-40-14",
         "T-40-28",
         "T-40-01",
-        "T-40-09"
+        "T-40-09",
+        "T-42-03"
       ],
       "cross_phase_deps": [
         "T-40-16",
@@ -7074,7 +7113,8 @@
         "T-40-14",
         "T-40-28",
         "T-40-01",
-        "T-40-09"
+        "T-40-09",
+        "T-42-03"
       ],
       "cross_repo_deps": [],
       "unreachable_paths": false,
@@ -7136,7 +7176,7 @@
       "plan": ".planning/phases/43-target-project-delivery-at-scale/43-08-PLAN.md",
       "phase": "43",
       "repo": null,
-      "wave": 10,
+      "wave": 11,
       "depends_on": [
         "T-43-04",
         "T-43-01",
@@ -7251,7 +7291,7 @@
       "plan": ".planning/phases/43-target-project-delivery-at-scale/43-11-PLAN.md",
       "phase": "43",
       "repo": null,
-      "wave": 8,
+      "wave": 9,
       "depends_on": [
         "T-40-25"
       ],
@@ -7282,7 +7322,7 @@
       "plan": ".planning/phases/43-target-project-delivery-at-scale/43-12-PLAN.md",
       "phase": "43",
       "repo": null,
-      "wave": 11,
+      "wave": 12,
       "depends_on": [
         "T-43-08",
         "T-43-11",
@@ -7330,7 +7370,7 @@
       "plan": ".planning/phases/43-target-project-delivery-at-scale/43-13-PLAN.md",
       "phase": "43",
       "repo": null,
-      "wave": 11,
+      "wave": 12,
       "depends_on": [
         "T-43-06",
         "T-40-19"
@@ -7362,7 +7402,7 @@
       "plan": ".planning/phases/43-target-project-delivery-at-scale/43-14-PLAN.md",
       "phase": "43",
       "repo": null,
-      "wave": 11,
+      "wave": 12,
       "depends_on": [
         "T-40-15",
         "T-40-24"
@@ -7395,7 +7435,7 @@
       "plan": ".planning/phases/43-target-project-delivery-at-scale/43-15-PLAN.md",
       "phase": "43",
       "repo": null,
-      "wave": 12,
+      "wave": 13,
       "depends_on": [
         "T-43-12",
         "T-43-14",
@@ -7431,7 +7471,7 @@
       "plan": ".planning/phases/43-target-project-delivery-at-scale/43-16-PLAN.md",
       "phase": "43",
       "repo": null,
-      "wave": 11,
+      "wave": 12,
       "depends_on": [
         "T-43-06",
         "T-43-01",
@@ -7442,7 +7482,8 @@
         "T-40-28",
         "T-40-12",
         "T-40-01",
-        "T-40-09"
+        "T-40-09",
+        "T-42-03"
       ],
       "cross_phase_deps": [
         "T-42-01",
@@ -7452,7 +7493,8 @@
         "T-40-28",
         "T-40-12",
         "T-40-01",
-        "T-40-09"
+        "T-40-09",
+        "T-42-03"
       ],
       "cross_repo_deps": [],
       "unreachable_paths": false,
@@ -7482,7 +7524,7 @@
       "plan": ".planning/phases/43-target-project-delivery-at-scale/43-17-PLAN.md",
       "phase": "43",
       "repo": null,
-      "wave": 12,
+      "wave": 13,
       "depends_on": [
         "T-43-13",
         "T-43-16",
@@ -7495,7 +7537,8 @@
         "T-40-28",
         "T-40-12",
         "T-40-01",
-        "T-40-09"
+        "T-40-09",
+        "T-42-03"
       ],
       "cross_phase_deps": [
         "T-42-01",
@@ -7507,7 +7550,8 @@
         "T-40-28",
         "T-40-12",
         "T-40-01",
-        "T-40-09"
+        "T-40-09",
+        "T-42-03"
       ],
       "cross_repo_deps": [],
       "unreachable_paths": false,
@@ -7538,7 +7582,7 @@
       "plan": ".planning/phases/43-target-project-delivery-at-scale/43-18-PLAN.md",
       "phase": "43",
       "repo": null,
-      "wave": 13,
+      "wave": 14,
       "depends_on": [
         "T-43-17",
         "T-43-08"
@@ -7574,7 +7618,7 @@
       "plan": ".planning/phases/43-target-project-delivery-at-scale/43-19-PLAN.md",
       "phase": "43",
       "repo": null,
-      "wave": 14,
+      "wave": 15,
       "depends_on": [
         "T-43-18",
         "T-43-12",

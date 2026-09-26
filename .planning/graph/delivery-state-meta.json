@@ -1,13 +1,13 @@
 {
   "schema_version": 1,
-  "generation": 374,
-  "generation_identity": "556868cd-593c-4b13-bcc8-83c1dee50fe0",
-  "previous_generation_identity": "16777245:12923987016:1790425485216410000:7f80760945b74e3221c484c075b82a03aac7590733d8391a01ba031bee7bc835",
-  "observed_at": "2026-09-26T12:31:45.549Z",
-  "generated_at": "2026-09-26T12:31:45.549Z",
+  "generation": 377,
+  "generation_identity": "7306bf08-419f-47a3-ac7f-4b47ea7623d7",
+  "previous_generation_identity": "16777245:12924086568:1790426773270054000:caeb0545237a5c3d17b789e8947b4696789b62e4a57ab9747ebef19bba80579d",
+  "observed_at": "2026-09-26T13:34:42.802Z",
+  "generated_at": "2026-09-26T13:34:42.802Z",
   "by": "state-sync",
-  "pid": 60723,
-  "observation_generation": 374,
+  "pid": 92415,
+  "observation_generation": 377,
   "observation_projection": {
     "tickets": {
       "T-20-01": {
@@ -2221,6 +2221,17 @@
         "review_decision": null,
         "checks": null
       },
+      "T-42-03": {
+        "status": "pending",
+        "repository": null,
+        "pr": null,
+        "head": null,
+        "draft": false,
+        "base": "epic/42-resume-trusted-finalization-without-executor-replay",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
       "T-43-01": {
         "status": "pending",
         "repository": null,
@@ -2292,7 +2303,7 @@
         "repository": null,
         "pr": 266,
         "head": "be0084a28263bd59e04ef1902faccc888fb77f75",
-        "draft": true,
+        "draft": false,
         "base": "epic/43-target-project-delivery-at-scale",
         "merge_state": "CLEAN",
         "review_decision": null,
@@ -2440,9 +2451,9 @@
   },
   "binding": {
     "schema_version": 1,
-    "state_digest": "8cafa3e55d2ebb06a57c95781a633d4c849498f51c02e5f125879d8d7ee741e9",
-    "front_digest": "4176660908f82ca0d314819b43ff0ce465425499b61176e982457d2740e2eacd",
-    "observation_digest": "b63e6b1963c859629bc060abc44529f57c070889a00172630ad8c441d3a12477",
-    "observation_generation": 374
+    "state_digest": "8caa5756fd4395ac6ee780e58f82b2601d1f636930e82c724ee7564b0e4e06b7",
+    "front_digest": "280e89c1466e67c00fbffcca1a74508b2d6e179df5406e00a4c2a74d4b6bee2c",
+    "observation_digest": "5307335a0b6555ddf811cfd77893c7d63ee374621086b6a84dd9d985d17646af",
+    "observation_generation": 377
   }
 }
