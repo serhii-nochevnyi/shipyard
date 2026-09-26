@@ -25,7 +25,7 @@ const SCRIPTS = path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline',
 const DISPATCH = path.join(SCRIPTS, 'dispatch-record.cjs');
 const STOP_GATE = path.join(SCRIPTS, 'stop-gate.cjs');
 const { activeDispatches, dispatchWhy, dispatchFingerprint, reserveRound, recordRound, clearRound,
-  DISPATCH_SUBJECT, DISPATCH_TTL_MS } = require(DISPATCH);
+  recordInflight, clearInflight, DISPATCH_SUBJECT, DISPATCH_TTL_MS } = require(DISPATCH);
 // One role vocabulary for the whole conveyor — the same list `mark` validates
 // against. The per-role subject table below is checked against IT, not against a
 // second list written out here.
@@ -474,6 +474,56 @@ test('mark records the role and activeDispatches reports it', () => {
   const live = activeDispatches(project);
   assert.deepStrictEqual(Object.keys(live), ['T-01-01']);
   assert.equal(live['T-01-01'].role, 'executor');
+});
+
+const reapedPid = () => spawnSync(process.execPath, ['-e', '']).pid;
+const inflightStore = (graph) => {
+  try { return JSON.parse(fs.readFileSync(path.join(graph, 'dispatches.json'), 'utf8')).inflight || {}; }
+  catch { return {}; }
+};
+const rewriteInflight = (graph, id, patch) => {
+  const file = path.join(graph, 'dispatches.json');
+  const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
+  raw.inflight[id] = { ...raw.inflight[id], ...patch };
+  fs.writeFileSync(file, JSON.stringify(raw));
+};
+
+test('a live host pid within the TTL makes an in-flight record active', () => {
+  const { project, graph } = scratch({ 'T-01-01': { ...READY } });
+  recordInflight({ graphDir: graph, ticket: 'T-01-01', role: 'executor', dispatch_id: 'dispatch-live', pid: process.pid, host: 'claude' });
+  const live = activeDispatches(project);
+  assert.equal(live['T-01-01'].role, 'executor');
+  assert.equal(live['T-01-01'].dispatch_id, 'dispatch-live');
+  assert.equal(live['T-01-01'].pid, process.pid);
+});
+
+test('a dead pid or an expired started_at makes the in-flight record not live', () => {
+  const { project, graph } = scratch({ 'T-01-01': { ...READY }, 'T-01-02': { ...READY } });
+  recordInflight({ graphDir: graph, ticket: 'T-01-01', role: 'executor', dispatch_id: 'dispatch-dead', pid: reapedPid(), host: 'claude' });
+  recordInflight({ graphDir: graph, ticket: 'T-01-02', role: 'executor', dispatch_id: 'dispatch-old', pid: process.pid, host: 'codex' });
+  rewriteInflight(graph, 'dispatch-old', { started_at: new Date(Date.now() - DISPATCH_TTL_MS - 1000).toISOString() });
+  assert.deepStrictEqual(activeDispatches(project), {});
+});
+
+test('a forged or malformed in-flight row is dropped', () => {
+  const { project, graph } = scratch({ 'T-01-01': { ...READY } });
+  recordInflight({ graphDir: graph, ticket: 'T-01-01', role: 'executor', dispatch_id: 'dispatch-forged', pid: process.pid, host: 'claude' });
+  rewriteInflight(graph, 'dispatch-forged', { pid: 'self' });
+  assert.deepStrictEqual(activeDispatches(project), {});
+  assert.throws(() => recordInflight({ graphDir: graph, ticket: 'T-01-01', role: 'executor', dispatch_id: 'x', pid: 0, host: 'claude' }), /pid/);
+});
+
+test('clearInflight removes only its own pid and leaves the durable mark path unchanged', () => {
+  const { project, graph } = scratch({ 'T-01-01': { ...READY }, 'T-01-02': { ...READY } });
+  recordInflight({ graphDir: graph, ticket: 'T-01-01', role: 'executor', dispatch_id: 'dispatch-own', pid: process.pid, host: 'claude' });
+  assert.equal(clearInflight({ graphDir: graph, dispatch_id: 'dispatch-own', pid: process.pid + 1 }), false);
+  assert.ok(inflightStore(graph)['dispatch-own'], 'a foreign pid must not clear the record');
+  const r = run(['mark', 'T-01-02', 'executor'], project);
+  assert.equal(r.status, 0, `mark must succeed (${r.stderr})`);
+  assert.equal(store(graph)['T-01-02'].role, 'executor');
+  assert.equal(clearInflight({ graphDir: graph, dispatch_id: 'dispatch-own', pid: process.pid }), true);
+  assert.deepStrictEqual(inflightStore(graph), {});
+  assert.deepStrictEqual(Object.keys(activeDispatches(project)), ['T-01-02']);
 });
 
 test('a round reservation projects one in-flight guard and expires changed members independently', () => {

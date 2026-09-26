@@ -19,6 +19,7 @@ const {
   readRequestFile,
   requestValue,
   runCli,
+  validateArgs,
 } = require('../../plugins/delivery-pipeline/scripts/codex-delivery-host.cjs');
 const { createRunController } = require('../../plugins/delivery-pipeline/scripts/run-controller.cjs');
 
@@ -415,6 +416,47 @@ test('CLI heartbeats its out-of-worktree lease while a launch remains active', a
   } finally { clean(f); }
 });
 
+function inflightRows(graphDir) {
+  try { return JSON.parse(fs.readFileSync(path.join(graphDir, 'dispatches.json'), 'utf8')).inflight || {}; }
+  catch { return {}; }
+}
+
+for (const outcome of ['success', 'failure']) {
+  test(`CLI holds a pid in-flight record during the run and clears it after ${outcome}`, async () => {
+    const f = fixture();
+    const file = path.join(f.graphDir, 'request.json');
+    let during;
+    f.host.launchStatic = async (selection, context) => {
+      during = Object.values(inflightRows(f.graphDir));
+      if (outcome === 'failure') throw new Error('stubbed runtime launch failed');
+      return application(selection, context);
+    };
+    try {
+      fs.writeFileSync(file, JSON.stringify({
+        scope: f.scope, role: 'research', context: { prompt: 'Inspect.' },
+      }));
+      const running = runCli(['--args-file', file], { write() {} }, cliOptions(f));
+      if (outcome === 'failure') await assert.rejects(() => running, /stubbed runtime launch failed/);
+      else await running;
+      assert.equal(during.length, 1);
+      assert.equal(during[0].ticket, f.scope.ticket);
+      assert.equal(during[0].pid, process.pid);
+      assert.equal(during[0].host, 'codex');
+      assert.deepEqual(inflightRows(f.graphDir), {});
+    } finally { clean(f); }
+  });
+}
+
+test('validateArgs accepts the canonical request and surfaces unknown keys and UNSUPPORTED_SIGNAL unchanged', () => {
+  const valid = validateArgs({ role: 'executor', context: { prompt: 'Run.' } });
+  assert.equal(valid.request.role, 'executor');
+  assert.ok(valid.resolution.model);
+  assert.throws(() => validateArgs({ role: 'executor', model: 'gpt-6-luna' }),
+    (error) => error.code === 'INVALID_INPUT');
+  assert.throws(() => validateArgs({ role: 'research', signals: { type: 'implementation' } }),
+    (error) => error.code === 'UNSUPPORTED_SIGNAL');
+});
+
 test('CLI records failed ownership when executor makes no publishable delta', async () => {
   const f = fixture();
   const file = path.join(f.graphDir, 'request.json');
@@ -783,6 +825,169 @@ test('recovery takes over a stale fence left by a dead holder and refuses a live
     assert.equal(result.artifact.commit, git(f.root, 'rev-parse', 'HEAD'));
     assert.equal(fs.existsSync(lockPath), false);
     assert.equal(f.calls.length, 1);
+  } finally { clean(f); }
+});
+
+suite('codex-delivery-host — T-40-12 investigation research consumer');
+
+function baseInvestigation(f, overrides = {}) {
+  return {
+    invId: 'INV-100',
+    sourceRevision: f.base,
+    repository: 'acme/shipyard',
+    policyHash: policy.resolveDispatch({ runtime: 'codex', role: 'research' }).policy_hash,
+    lines: ['system-state', 'alternatives', 'constraints', 'risks'].map((id) => ({ id, signals: {} })),
+    ...overrides,
+  };
+}
+
+function researchLaunchStub(f, { skip = new Set(), rogueWrite } = {}) {
+  return (selection, context) => {
+    f.calls.push({ method: 'static', selection, context });
+    if (rogueWrite && context.research_line === rogueWrite.line) {
+      fs.writeFileSync(rogueWrite.path, rogueWrite.content || 'rogue write\n');
+    } else if (!skip.has(context.research_line)) {
+      fs.writeFileSync(context.artifactPath, `# ${context.research_line}\n\nfinding for ${context.research_line}\n`);
+    }
+    return application(selection, context);
+  };
+}
+
+test('a clean four-line investigation run seals every line through the shared sealer', async () => {
+  const f = fixture();
+  try {
+    f.host.launchStatic = researchLaunchStub(f);
+    const investigation = baseInvestigation(f);
+    const result = await delivery(f).run({
+      role: 'research', context: { prompt: 'Investigate the scoped topic.', investigation },
+    });
+    assert.deepEqual(result.map((entry) => entry.id), ['system-state', 'alternatives', 'constraints', 'risks']);
+    for (const entry of result) {
+      assert.equal(entry.schema, 'shipyard.role-artifact.v1');
+      assert.equal(entry.envelope.schema, 'shipyard.research-result.v1');
+      assert.equal(entry.envelope.subject, `INV-100:${entry.id}`);
+      assert.equal(entry.envelope.status, 'completed');
+      assert.equal(entry.envelope.source_revision, f.base);
+      assert.equal(entry.envelope.repository, 'acme/shipyard');
+      assert.equal(entry.envelope.policy_hash, investigation.policyHash);
+      assert.match(entry.artifact_digest, /^[a-f0-9]{64}$/);
+      assert.ok(fs.existsSync(entry.artifact_index.path));
+    }
+    assert.equal(f.calls.length, 4);
+  } finally { clean(f); }
+});
+
+test('a line writing outside its artifact refuses CONTAINMENT_VIOLATION naming the line', async () => {
+  const f = fixture();
+  try {
+    f.host.launchStatic = researchLaunchStub(f, {
+      rogueWrite: { line: 'alternatives', path: path.join(f.root, 'outside.txt') },
+    });
+    const investigation = baseInvestigation(f, {
+      lines: ['system-state', 'constraints', 'risks', 'alternatives'].map((id) => ({ id, signals: {} })),
+    });
+    const result = await delivery(f).run({ role: 'research', context: { prompt: 'Investigate.', investigation } });
+    assert.equal(result.status, 'blocked');
+    assert.equal(result.failed_line, 'alternatives');
+    assert.equal(result.code, 'CONTAINMENT_VIOLATION');
+    assert.deepEqual(result.sealed_lines.map((entry) => entry.id).sort(), ['constraints', 'risks', 'system-state']);
+  } finally { clean(f); }
+});
+
+test('a missing artifact names the line and RESEARCH_LINE_MISSING', async () => {
+  const f = fixture();
+  try {
+    f.host.launchStatic = researchLaunchStub(f, { skip: new Set(['risks']) });
+    const investigation = baseInvestigation(f);
+    const result = await delivery(f).run({ role: 'research', context: { prompt: 'Investigate.', investigation } });
+    assert.equal(result.status, 'blocked');
+    assert.equal(result.failed_line, 'risks');
+    assert.equal(result.code, 'RESEARCH_LINE_MISSING');
+    assert.equal(result.sealed_lines.length, 3);
+  } finally { clean(f); }
+});
+
+test('a request with a ticket type value in signals is still refused by the boundary (Pitfall 1 guard)', async () => {
+  const f = fixture();
+  try {
+    f.host.launchStatic = researchLaunchStub(f);
+    const investigation = baseInvestigation(f, {
+      lines: [
+        { id: 'system-state', signals: { type: 'implementation' } },
+        { id: 'alternatives', signals: {} },
+        { id: 'constraints', signals: {} },
+        { id: 'risks', signals: {} },
+      ],
+    });
+    const result = await delivery(f).run({ role: 'research', context: { prompt: 'Investigate.', investigation } });
+    assert.equal(result.status, 'blocked');
+    assert.equal(result.failed_line, 'system-state');
+    assert.equal(result.code, 'UNSUPPORTED_SIGNAL');
+    assert.equal(result.sealed_lines.length, 0);
+    assert.equal(f.calls.length, 0);
+  } finally { clean(f); }
+});
+
+test('a single-line re-dispatch launches only the failed line and leaves its sealed siblings unchanged', async () => {
+  const f = fixture();
+  try {
+    const skip = new Set(['alternatives']);
+    f.host.launchStatic = researchLaunchStub(f, { skip });
+    const investigation = baseInvestigation(f, {
+      lines: ['system-state', 'constraints', 'risks', 'alternatives'].map((id) => ({ id, signals: {} })),
+    });
+    const failure = await delivery(f).run({ role: 'research', context: { prompt: 'Investigate.', investigation } });
+    assert.equal(failure.status, 'blocked');
+    assert.equal(failure.failed_line, 'alternatives');
+    assert.equal(failure.code, 'RESEARCH_LINE_MISSING');
+    assert.equal(failure.sealed_lines.length, 3);
+    const digestsBefore = Object.fromEntries(failure.sealed_lines.map((entry) => [entry.id, entry.artifact_digest]));
+
+    skip.delete('alternatives');
+    const callsBefore = f.calls.length;
+    const redispatch = await delivery(f).run({
+      role: 'research',
+      context: {
+        prompt: 'Investigate.',
+        investigation: {
+          invId: investigation.invId, sourceRevision: investigation.sourceRevision,
+          repository: investigation.repository, policyHash: investigation.policyHash,
+          lines: [{ id: 'alternatives', signals: {} }],
+          sealedLines: failure.sealed_lines,
+        },
+      },
+    });
+    assert.equal(f.calls.length, callsBefore + 1);
+    assert.deepEqual(redispatch.map((entry) => entry.id), ['system-state', 'alternatives', 'constraints', 'risks']);
+    for (const id of ['system-state', 'constraints', 'risks']) {
+      assert.equal(redispatch.find((entry) => entry.id === id).artifact_digest, digestsBefore[id]);
+    }
+    assert.equal(redispatch.find((entry) => entry.id === 'alternatives').envelope.status, 'completed');
+  } finally { clean(f); }
+});
+
+test('a single-line request whose sibling artifact is missing refuses naming the sibling', async () => {
+  const f = fixture();
+  try {
+    f.host.launchStatic = researchLaunchStub(f);
+    const investigation = baseInvestigation(f);
+    const result = await delivery(f).run({ role: 'research', context: { prompt: 'Investigate.', investigation } });
+    const broken = result.find((entry) => entry.id === 'alternatives');
+    fs.rmSync(broken.artifact_ref);
+    const siblings = result.filter((entry) => entry.id !== 'system-state');
+
+    await assert.rejects(() => delivery(f).run({
+      role: 'research',
+      context: {
+        prompt: 'Investigate.',
+        investigation: {
+          invId: investigation.invId, sourceRevision: investigation.sourceRevision,
+          repository: investigation.repository, policyHash: investigation.policyHash,
+          lines: [{ id: 'system-state', signals: {} }],
+          sealedLines: siblings,
+        },
+      },
+    }), (error) => error.code === 'RESEARCH_VERIFY_MANIFEST_MISSING' && error.message.includes('alternatives'));
   } finally { clean(f); }
 });
 

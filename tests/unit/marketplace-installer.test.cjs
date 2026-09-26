@@ -64,3 +64,71 @@ test('refreshes the Codex Git snapshot before reinstalling from the same source'
   assert.deepEqual(calls, ['plugin marketplace upgrade shipyard',
     'plugin add shipyard@shipyard']);
 });
+
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { setupCodexHost } = require('../../scripts/install-shipyard-marketplace.cjs');
+
+function localSource() {
+  return fs.mkdtempSync(path.join(os.tmpdir(), 'marketplace-source-'));
+}
+
+test('refuses a dirty local Claude source before any claude plugin call', () => {
+  const host = fixture();
+  const reads = [];
+  const read = (...args) => { reads.push(args); return host.read(...args); };
+  const inspect = () => ({ version: '0.66.0', sha: 'aaa', tagSha: 'aaa', dirty: true });
+  assert.throws(() => installClaudeMarketplace(localSource(), host.execute, read, inspect),
+    /uncommitted changes.*--dogfood-root/s);
+  assert.deepEqual(host.calls, []);
+  assert.deepEqual(reads, []);
+});
+
+test('refuses an untagged local Claude source before any claude plugin call', () => {
+  const host = fixture();
+  const inspect = () => ({ version: '0.66.0', sha: 'bbb', tagSha: 'aaa', dirty: false });
+  assert.throws(() => installClaudeMarketplace(localSource(), host.execute, host.read, inspect),
+    /not the commit tagged v0\.66\.0.*install-shipyard-claude-hook\.sh --dogfood-root/s);
+  assert.deepEqual(host.calls, []);
+});
+
+test('installs a tagged clean local Claude source as before', () => {
+  const host = fixture();
+  const inspect = () => ({ version: '0.66.0', sha: 'aaa', tagSha: 'aaa', dirty: false });
+  const source = localSource();
+  installClaudeMarketplace(source, host.execute, host.read, inspect);
+  assert.deepEqual(host.calls, ['plugin marketplace remove shipyard',
+    `plugin marketplace add ${source}`, 'plugin install shipyard@shipyard']);
+});
+
+function codexHome(version) {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'marketplace-codex-'));
+  const dir = path.join(home, 'plugins/cache/shipyard/shipyard', version);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'package-build.json'), '{}');
+  return home;
+}
+
+function codexSetup(source, inspect) {
+  const version = '0.66.0+codex.0123456789abcdef';
+  const home = codexHome(version);
+  const runs = [];
+  const read = () => ({ installed: [{ pluginId: 'shipyard@shipyard', enabled: true, version }] });
+  setupCodexHost(source, (command, args, env) => runs.push({ command, args, env }), read, inspect, home);
+  assert.equal(runs.length, 1);
+  assert.match(runs[0].args[0], /host\/scripts\/bootstrap-shipyard-plugin\.cjs$/);
+  return runs[0].env;
+}
+
+test('a local Codex source passes dogfood with its sha to the host setup', () => {
+  const env = codexSetup(localSource(), () => ({ version: '0.66.0', sha: 'ccc', tagSha: 'aaa', dirty: true }));
+  assert.equal(env.SHIPYARD_INSTALL_KIND, 'dogfood');
+  assert.equal(env.SHIPYARD_SOURCE_SHA, 'ccc');
+  assert.equal(env.SHIPYARD_SOURCE_DIRTY, '1');
+});
+
+test('a git Codex source passes release to the host setup', () => {
+  const env = codexSetup('serhii-nochevnyi/shipyard', () => { throw new Error('must not inspect'); });
+  assert.equal(env.SHIPYARD_INSTALL_KIND, 'release');
+});

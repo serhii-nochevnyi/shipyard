@@ -8,6 +8,7 @@ const path = require('node:path');
 const ROOT = path.resolve(__dirname, '..');
 const { diagnostic, runBounded } = require(path.join(ROOT, 'plugins', 'delivery-pipeline', 'scripts', 'command-runner.cjs'));
 const { codexBlock } = require(path.join(ROOT, 'plugins', 'delivery-pipeline', 'scripts', 'auto-route.cjs'));
+const { readRecord, isDogfood } = require(path.join(ROOT, 'plugins', 'delivery-pipeline', 'scripts', 'host-provenance.cjs'));
 const sourcePlugin = path.join(ROOT, 'plugins', 'delivery-pipeline', '.claude-plugin', 'plugin.json');
 const sourceCapability = path.join(ROOT, 'capabilities', 'delivery-pipeline', 'capability.json');
 
@@ -21,12 +22,12 @@ function parseArgs(argv) {
     const arg = argv[i];
     if (arg === '--json') out.json = true;
     else if (arg === '--strict') out.strict = true;
-    else if (arg === '--claude-home' || arg === '--codex-home') {
+    else if (arg === '--claude-home' || arg === '--codex-home' || arg === '--release-repo') {
       const value = argv[++i];
       if (!value || value.startsWith('--')) fail(arg + ' needs a directory');
       out[arg.slice(2)] = path.resolve(value);
     } else if (arg === '--help') {
-      console.log('usage: node scripts/shipyard-doctor.cjs [--json] [--strict] [--claude-home DIR] [--codex-home DIR]');
+      console.log('usage: node scripts/shipyard-doctor.cjs [--json] [--strict] [--claude-home DIR] [--codex-home DIR] [--release-repo DIR]');
       process.exit(0);
     } else {
       fail('unknown option: ' + arg);
@@ -103,6 +104,94 @@ function validateHookBundle(entry) {
     fs.rmSync(cwd, { recursive: true, force: true });
   }
   return files.length;
+}
+
+function git(repo, args) {
+  const result = runBounded('git', ['-C', repo, ...args], { timeoutMs: 30000 });
+  return result.status === 0 ? result.stdout : null;
+}
+
+function releaseTag(repo, version) {
+  return git(repo, ['rev-parse', '-q', '--verify', 'refs/tags/v' + version + '^{commit}']) ? 'v' + version : null;
+}
+
+function cacheDirs(root) {
+  try {
+    return fs.readdirSync(root, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name).sort();
+  } catch {
+    return [];
+  }
+}
+
+function provenanceCheck(results, name, dir) {
+  const record = readRecord(dir);
+  if (!record) return null;
+  const detail = record.install_kind + ' ' + (record.version || '?') + ' (' + dir + ')';
+  if (isDogfood(record)) {
+    check(results, name, 'warn', 'dogfood ' + (record.version || '?') + ' sha ' + (record.source_sha || 'unknown') +
+      (record.dirty ? ' dirty' : ' clean') + ' (' + dir + ')');
+  } else check(results, name, 'ok', detail);
+  return record;
+}
+
+function claudeCacheChecks(results, claudeHome, repo) {
+  const cache = path.join(claudeHome, 'plugins', 'cache', 'shipyard', 'shipyard');
+  for (const version of cacheDirs(cache)) {
+    const dir = path.join(cache, version);
+    const name = 'claude-cache ' + version;
+    const record = provenanceCheck(results, 'claude-cache-provenance ' + version, dir);
+    const tag = repo && releaseTag(repo, version);
+    if (!tag) {
+      check(results, name, 'skip', 'no v' + version + ' tag to compare ' + dir);
+      continue;
+    }
+    const listing = git(repo, ['ls-tree', '-r', tag, '--', 'plugins/delivery-pipeline/']) || '';
+    const prefix = 'plugins/delivery-pipeline/';
+    const differ = [];
+    for (const line of listing.split('\n').filter(Boolean)) {
+      const [meta, file] = line.split('\t');
+      const blob = meta.split(' ')[2];
+      const rel = file.slice(prefix.length);
+      const local = path.join(dir, rel);
+      const hashed = fs.existsSync(local) ? git(repo, ['hash-object', '--no-filters', '--', local]) : null;
+      if (!hashed || hashed.trim() !== blob) differ.push(rel);
+    }
+    if (differ.length) {
+      check(results, name, 'error', 'cache matches no release (' + differ.length + ' files differ: ' + differ.join(', ') + ')');
+    } else check(results, name, 'ok', 'cache matches ' + tag + (isDogfood(record) ? ' (recorded as dogfood)' : ''));
+  }
+}
+
+function codexCacheChecks(results, codexHome, repo) {
+  const cache = path.join(codexHome, 'plugins', 'cache', 'shipyard', 'shipyard');
+  const agentsRecord = readRecord(path.join(codexHome, 'agents'));
+  for (const entry of cacheDirs(cache)) {
+    const match = entry.match(/^(.+)\+codex\.[0-9a-f]{16}$/);
+    if (!match) continue;
+    const dir = path.join(cache, entry);
+    const name = 'codex-cache ' + entry;
+    const record = readRecord(dir) || (agentsRecord && agentsRecord.version === entry ? agentsRecord : null);
+    if (isDogfood(record)) {
+      check(results, name + ' provenance', 'warn', 'dogfood sha ' + (record.source_sha || 'unknown') +
+        (record.dirty ? ' dirty' : ' clean') + ' (' + dir + ')');
+    }
+    const tag = repo && releaseTag(repo, match[1]);
+    if (!tag) {
+      check(results, name, 'skip', 'no v' + match[1] + ' tag to compare ' + dir);
+      continue;
+    }
+    const installed = readJson(path.join(dir, 'package-build.json'));
+    let released = null;
+    try {
+      released = JSON.parse(git(repo, ['show', tag + ':plugins/shipyard/package-build.json']) || 'null');
+    } catch {
+      released = null;
+    }
+    if (!installed || !released || installed.digest !== released.digest) {
+      check(results, name, 'error', 'codex cache matches no release (digest ' + (installed && installed.digest) +
+        ', ' + tag + ' ' + (released && released.digest) + ')');
+    } else check(results, name, 'ok', 'codex cache matches ' + tag);
+  }
 }
 
 function main(argv) {
@@ -283,6 +372,12 @@ function main(argv) {
       }
     }
   }
+
+  const releaseRepo = args['release-repo'] || ROOT;
+  provenanceCheck(results, 'claude-provenance', bundle);
+  provenanceCheck(results, 'codex-provenance', agentsDir);
+  claudeCacheChecks(results, claudeHome, releaseRepo);
+  codexCacheChecks(results, codexHome, releaseRepo);
 
   const errors = results.filter((result) => result.level === 'error');
   const warnings = results.filter((result) => result.level === 'warn');

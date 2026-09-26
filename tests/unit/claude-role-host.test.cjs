@@ -265,6 +265,11 @@ function hostOptions(fixture, extra = {}) {
       if (fixture.kind === 'pr-sentinel') return fixture.sentinelPrs.find((item) => item.number === number);
       return pr;
     },
+    preflightRound({ projectWorktree, prs }) {
+      const repos = [...new Set(prs.map((item) => item.repo || null))]
+        .map((repo) => ({ repo, root: projectWorktree, base: null, base_oid: null }));
+      return { repos, synced: true, committed: null };
+    },
     createRuntimeHost: fakeRuntimeFactory(fixture, extra),
   };
 }
@@ -758,6 +763,85 @@ test('integrator refuses a stale local base when refreshing origin fails', async
     await assert.rejects(createClaudeRoleHost(options).run(request(fixture)), /cannot refresh live base branch/);
   } finally {
     cleanupFixture(fixture);
+  }
+});
+
+test('arch-review refuses a fetch failure even when the local base already matches the expected oid', async () => {
+  const fixture = setupRepository('arch-review');
+  try {
+    git(fixture.root, ['remote', 'add', 'origin', path.join(fixture.root, 'missing-remote.git')]);
+    const options = hostOptions(fixture);
+    options.refreshGit = true;
+    await assert.rejects(createClaudeRoleHost(options).run(request(fixture)), /cannot refresh live base branch/);
+  } finally {
+    cleanupFixture(fixture);
+  }
+});
+
+test('pr-sentinel surfaces a sentinel-preflight refusal unchanged', async () => {
+  const fixture = setupSentinelRepository();
+  try {
+    const options = hostOptions(fixture);
+    options.preflightRound = () => {
+      const error = new Error('sentinel-preflight: fetch of main from origin failed; run: git -C /x fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main');
+      error.code = 'BASE_FETCH_FAILED';
+      throw error;
+    };
+    await assert.rejects(createClaudeRoleHost(options).run(request(fixture)),
+      (error) => error.code === 'BASE_FETCH_FAILED' && /sentinel-preflight: fetch of main from origin failed/.test(error.message));
+  } finally {
+    cleanupFixture(fixture);
+  }
+});
+
+test('pr-sentinel measures a second-repository ticket base in its own checkout, not the project worktree', async () => {
+  const fixture = setupSentinelRepository();
+  const foreignRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-claude-sentinel-foreign-'));
+  try {
+    git(foreignRoot, ['init', '-b', 'main']);
+    git(foreignRoot, ['config', 'user.name', 'Shipyard Test']);
+    git(foreignRoot, ['config', 'user.email', 'shipyard-test@example.invalid']);
+    git(foreignRoot, ['config', 'commit.gpgsign', 'false']);
+    fs.writeFileSync(path.join(foreignRoot, 'f.txt'), 'base\n');
+    git(foreignRoot, ['add', '.']);
+    git(foreignRoot, ['commit', '-m', 'chore: seed foreign repository']);
+    const foreignBase = git(foreignRoot, ['rev-parse', 'HEAD']);
+    git(foreignRoot, ['update-ref', 'refs/remotes/origin/main', foreignBase]);
+
+    const foreignTicket = fixture.ids[1];
+    const ticketsPath = path.join(fixture.root, '.planning/graph/tickets.json');
+    const statePath = path.join(fixture.root, '.planning/graph/delivery-state.json');
+    const tickets = JSON.parse(fs.readFileSync(ticketsPath, 'utf8'));
+    const state = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+    tickets.tickets[foreignTicket].repo = 'acme/frontend';
+    state[foreignTicket].repo_resolution = { resolution: 'configured', executable: true, repository_root: foreignRoot, reason: null };
+    fs.writeFileSync(ticketsPath, JSON.stringify(tickets));
+    fs.writeFileSync(statePath, JSON.stringify(state));
+    fixture.sentinelPrs[1].baseRefOid = foreignBase;
+    git(fixture.root, ['add', '.planning/graph']);
+    git(fixture.root, ['commit', '--quiet', '-m', 'test: mark second-repository ticket']);
+    fixture.head = git(fixture.root, ['rev-parse', 'HEAD']);
+    fixture.headTree = git(fixture.root, ['rev-parse', 'HEAD^{tree}']);
+
+    const seenRoots = [];
+    const options = hostOptions(fixture);
+    options.preflightRound = ({ projectWorktree, prs }) => {
+      for (const pr of prs) seenRoots.push({ ticket: pr.ticket, root: pr.repo ? foreignRoot : projectWorktree });
+      return {
+        repos: [
+          { repo: null, root: projectWorktree, base: 'main', base_oid: fixture.base },
+          { repo: 'acme/frontend', root: foreignRoot, base: 'main', base_oid: foreignBase },
+        ],
+        synced: true,
+        committed: null,
+      };
+    };
+    const result = await createClaudeRoleHost(options).run(request(fixture));
+    assert.equal(result.artifact.outcome, 'clear');
+    assert.equal(seenRoots.find((entry) => entry.ticket === foreignTicket).root, foreignRoot);
+  } finally {
+    cleanupFixture(fixture);
+    fs.rmSync(foreignRoot, { recursive: true, force: true });
   }
 });
 
