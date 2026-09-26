@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 992f95d618525eb4873662fd3329c5a9c1680fdde1d281d567b5dabd96cd4e21
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: cde5ff1fd2667de5a3d2cf56df5bfbc0f73b733dd082d9a6373aac8d9acec76a
 phase: 42-resume-trusted-finalization-without-executor-replay
 plan: 01
 subsystem: shipyard delivery
@@ -22,7 +22,7 @@ key-decisions:
 duration: 0min
 status: halted
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 992f95d618525eb4873662fd3329c5a9c1680fdde1d281d567b5dabd96cd4e21
+shipyard_source_fingerprint: cde5ff1fd2667de5a3d2cf56df5bfbc0f73b733dd082d9a6373aac8d9acec76a
 ---
 
 # Phase 42: Resume authenticated completed execution through trusted finalization — Delivery Projection
@@ -32,8 +32,8 @@ shipyard_source_fingerprint: 992f95d618525eb4873662fd3329c5a9c1680fdde1d281d567b
 ## Delivery Evidence
 
 - Ticket: T-42-01
-- Delivery status: pending
-- PR: not observed
+- Delivery status: pr-open
+- PR: #255
 - Source plan: .planning/phases/42-resume-trusted-finalization-without-executor-replay/42-01-PLAN.md
 - This summary is halted until the delivery state observes `merged`.
 
