@@ -317,4 +317,201 @@ test('complete usage and cohort counters still cannot claim total cost without f
   }
 });
 
+test('reopens and escaped defects also force rollback, not only the original quality keys', () => {
+  const f1 = fixture();
+  try {
+    const recorder = overhead.createRecorder(f1.graph);
+    recorder.record(identity({ observation_id: 'reopen-1', stage: 'model_turn', evidence: 'usage',
+      counts: { model_turns: 1 }, quality: { reopens: 2 } }));
+    const result = recorder.report({ experiment_id: 'exp-reopen' });
+    assert.equal(result.verdict, 'rollback');
+    assert.ok(result.verdict_reasons.some((reason) => reason.includes('reopens')));
+  } finally {
+    fs.rmSync(f1.root, { recursive: true, force: true });
+  }
+  const f2 = fixture();
+  try {
+    const recorder = overhead.createRecorder(f2.graph);
+    recorder.record(identity({ observation_id: 'escaped-1', stage: 'model_turn', evidence: 'usage',
+      counts: { model_turns: 1 }, quality: { escaped_defects: 1 } }));
+    const result = recorder.report({ experiment_id: 'exp-escaped' });
+    assert.equal(result.verdict, 'rollback');
+    assert.ok(result.verdict_reasons.some((reason) => reason.includes('escaped_defects')));
+  } finally {
+    fs.rmSync(f2.root, { recursive: true, force: true });
+  }
+});
+
+test('matched cohorts compute totals and percentiles per verified completion when runtime/model/effort/role/account are held fixed', () => {
+  const f = fixture();
+  try {
+    const recorder = overhead.createRecorder(f.graph);
+    const common = { run_id: 'run-cohort', role: 'executor', runtime: 'claude', model: 'opus', effort: 'high',
+      account_scope: 'anthropic-max', backend: 'workflow', policy_hash: 'a'.repeat(64), evidence: 'usage', bytes: 100,
+      stage: 'model_turn', estimated_tokens: null, counts: { model_turns: 1, tool_calls: 0 } };
+    recorder.record({ ...common, observation_id: 'baseline-a', dispatch_id: 'dispatch-a',
+      treatment: { wait_events: 'baseline', bounded_context: 'baseline' } });
+    recorder.record({ ...common, observation_id: 'treatment-b', dispatch_id: 'dispatch-b',
+      treatment: { wait_events: 'opt-06', bounded_context: 'baseline' } });
+    const result = recorder.report({
+      experiment_id: 'exp-cohort',
+      verified_completions: [{ ticket: 'T-41-06-a', run_id: 'run-cohort', dispatch_ids: ['dispatch-a'] }],
+    });
+    assert.equal(result.matched_cohorts.length, 1);
+    assert.equal(result.matched_cohorts[0].matched, true);
+    assert.equal(result.matched_cohorts[0].model, 'opus');
+    assert.equal(result.matched_cohorts[0].account_scope, 'anthropic-max');
+    assert.ok(!result.missing_coverage.some((m) => m.includes('comparable baseline')));
+    assert.equal(result.metrics_per_completion.completions, 1);
+    assert.equal(result.metrics_per_completion.bytes.value, 100);
+    assert.equal(result.metrics_per_completion.model_turns.value, 1);
+  } finally {
+    fs.rmSync(f.root, { recursive: true, force: true });
+  }
+});
+
+test('a treatment change bundled with a runtime change is not a matched cohort and stays inconclusive', () => {
+  const f = fixture();
+  try {
+    const recorder = overhead.createRecorder(f.graph);
+    recorder.record(identity({ observation_id: 'claude-baseline', runtime: 'claude', role: 'executor',
+      treatment: { wait_events: 'baseline', bounded_context: 'baseline' } }));
+    recorder.record(identity({ observation_id: 'codex-treatment', runtime: 'codex', role: 'executor',
+      treatment: { wait_events: 'opt-06', bounded_context: 'baseline' } }));
+    const result = recorder.report({ experiment_id: 'exp-mismatch', completed_tickets: 20, attribution_coverage: 1 });
+    assert.equal(result.matched_cohorts.length, 2);
+    assert.ok(result.matched_cohorts.every((cohort) => cohort.matched === false));
+    assert.ok(result.missing_coverage.some((m) => m.includes('matched by runtime/model/effort/role/account')));
+    assert.equal(result.verdict, 'inconclusive');
+  } finally {
+    fs.rmSync(f.root, { recursive: true, force: true });
+  }
+});
+
+test('every readiness gate satisfied together with a matched cohort and verified completions yields a promote verdict', () => {
+  const f = fixture();
+  try {
+    const recorder = overhead.createRecorder(f.graph);
+    const common = { run_id: 'run-promote', role: 'executor', runtime: 'claude', model: 'opus', effort: 'high',
+      account_scope: 'anthropic-max', backend: 'workflow', policy_hash: 'a'.repeat(64), evidence: 'usage',
+      bytes: 0, stage: 'model_turn', estimated_tokens: null,
+      provider_tokens: { input_tokens: 10, output_tokens: 2 }, counts: { model_turns: 1, tool_calls: 0 } };
+    recorder.record({ ...common, observation_id: 'promote-baseline', dispatch_id: 'dispatch-promote-baseline',
+      treatment: { wait_events: 'baseline', bounded_context: 'baseline' } });
+    recorder.record({ ...common, observation_id: 'promote-treatment', dispatch_id: 'dispatch-promote-treatment',
+      treatment: { wait_events: 'opt-06', bounded_context: 'baseline' } });
+    const result = recorder.report({
+      experiment_id: 'exp-promote', min_completed: 1, attribution_coverage: 1,
+      defect_window_days: 7, experiment_boundary: true, finalized_output_coverage: 'observed',
+      verified_completions: [
+        { ticket: 'T-41-06-promote', run_id: 'run-promote', dispatch_ids: ['dispatch-promote-baseline'] },
+      ],
+    });
+    assert.deepEqual(result.missing_coverage, []);
+    assert.equal(result.verdict, 'promote');
+    assert.deepEqual(result.status, {
+      implemented: true, installed: true, behaviorally_verified: true, efficiency_measured: true,
+    });
+  } finally {
+    fs.rmSync(f.root, { recursive: true, force: true });
+  }
+});
+
+const PROMOTE_OPTIONS = Object.freeze({ min_completed: 1, attribution_coverage: 1, defect_window_days: 7,
+  experiment_boundary: true, finalized_output_coverage: 'observed' });
+
+function promoteRow(overrides = {}) {
+  return { run_id: 'run-gate', role: 'executor', runtime: 'claude', model: 'opus', effort: 'high',
+    account_scope: 'anthropic-max', backend: 'workflow', policy_hash: 'a'.repeat(64), evidence: 'usage',
+    bytes: 0, stage: 'model_turn', estimated_tokens: null,
+    provider_tokens: { input_tokens: 10, output_tokens: 2 }, counts: { model_turns: 1, tool_calls: 0 }, ...overrides };
+}
+
+test('arms that change both treatments at once are not a matched cohort and stay inconclusive', () => {
+  const f = fixture();
+  try {
+    const recorder = overhead.createRecorder(f.graph);
+    recorder.record(promoteRow({ observation_id: 'both-baseline', dispatch_id: 'dispatch-both-baseline',
+      treatment: { wait_events: 'baseline', bounded_context: 'baseline' } }));
+    recorder.record(promoteRow({ observation_id: 'both-treated', dispatch_id: 'dispatch-both-treated',
+      treatment: { wait_events: 'opt-06', bounded_context: 'opt-07' } }));
+    const result = recorder.report({ experiment_id: 'exp-bundled', ...PROMOTE_OPTIONS,
+      verified_completions: [{ ticket: 'T-41-06-both', run_id: 'run-gate', dispatch_ids: ['dispatch-both-baseline'] }] });
+    assert.equal(result.matched_cohorts[0].matched, false);
+    assert.deepEqual(result.matched_cohorts[0].comparisons, []);
+    assert.ok(result.missing_coverage.some((m) => m.includes('single-treatment difference')));
+    assert.equal(result.verdict, 'inconclusive');
+    assert.equal(result.status.efficiency_measured, false);
+  } finally {
+    fs.rmSync(f.root, { recursive: true, force: true });
+  }
+});
+
+test('a cohort with unknown model, effort or account identity is never matched', () => {
+  const f = fixture();
+  try {
+    const recorder = overhead.createRecorder(f.graph);
+    const unknown = { model: null, effort: null, account_scope: null };
+    recorder.record(promoteRow({ ...unknown, observation_id: 'null-baseline', dispatch_id: 'dispatch-null-baseline',
+      treatment: { wait_events: 'baseline', bounded_context: 'baseline' } }));
+    recorder.record(promoteRow({ ...unknown, observation_id: 'null-treated', dispatch_id: 'dispatch-null-treated',
+      treatment: { wait_events: 'opt-06', bounded_context: 'baseline' } }));
+    const result = recorder.report({ experiment_id: 'exp-null', ...PROMOTE_OPTIONS,
+      verified_completions: [{ ticket: 'T-41-06-null', run_id: 'run-gate', dispatch_ids: ['dispatch-null-baseline'] }] });
+    assert.equal(result.matched_cohorts[0].matched, false);
+    assert.deepEqual(result.matched_cohorts[0].missing_identity, ['model', 'effort', 'account_scope']);
+    assert.ok(result.missing_coverage.includes('cohort identity for claude/executor (missing model, effort, account_scope)'));
+    assert.equal(result.verdict, 'inconclusive');
+    assert.equal(result.status.efficiency_measured, false);
+  } finally {
+    fs.rmSync(f.root, { recursive: true, force: true });
+  }
+});
+
+test('per-completion numerator is all cohort consumption, with failed attempts joined and the rest unassigned', () => {
+  const f = fixture();
+  try {
+    const recorder = overhead.createRecorder(f.graph);
+    const arm = { treatment: { wait_events: 'baseline', bounded_context: 'baseline' } };
+    recorder.record(promoteRow({ ...arm, observation_id: 'attempt-failed', run_id: 'run-failed',
+      dispatch_id: 'dispatch-failed', bytes: 5 }));
+    recorder.record(promoteRow({ ...arm, observation_id: 'attempt-recovery', run_id: 'run-recovery',
+      dispatch_id: 'dispatch-recovery', bytes: 12 }));
+    recorder.record(promoteRow({ ...arm, observation_id: 'attempt-other', run_id: 'run-other',
+      dispatch_id: 'dispatch-other', bytes: 20 }));
+    recorder.record(promoteRow({ ...arm, observation_id: 'attempt-orphan', run_id: 'run-orphan',
+      dispatch_id: 'dispatch-orphan', bytes: 3 }));
+    const result = recorder.report({ experiment_id: 'exp-numerator', verified_completions: [
+      { ticket: 'T-41-06-recovered', run_id: 'run-recovery', dispatch_ids: ['dispatch-failed', 'dispatch-recovery'] },
+      { ticket: 'T-41-06-other', run_id: 'run-other', dispatch_ids: ['dispatch-other'] },
+    ] });
+    const per = result.metrics_per_completion;
+    assert.deepEqual(per.rows.map((row) => [row.ticket, row.bytes, row.model_turns]),
+      [['T-41-06-recovered', 17, 2], ['T-41-06-other', 20, 1]]);
+    assert.deepEqual([per.bytes.sum, per.bytes.median, per.bytes.p90, per.bytes.cohort_total, per.bytes.per_completion],
+      [37, 17, 20, 40, 20]);
+    assert.deepEqual([per.model_turns.sum, per.model_turns.cohort_total, per.model_turns.per_completion], [3, 4, 2]);
+    assert.deepEqual(per.unassigned_overhead, { rows: 1, bytes: 3, estimated_tokens: null, wait_polls: null,
+      model_turns: 1, tool_calls: 0, retries: null });
+    assert.equal(per.shared_overhead.rows, 0);
+  } finally {
+    fs.rmSync(f.root, { recursive: true, force: true });
+  }
+});
+
+test('retries are counted as their own metric, separate from wait polls and model turns', () => {
+  const f = fixture();
+  try {
+    const recorder = overhead.createRecorder(f.graph);
+    recorder.record(identity({ observation_id: 'retry-1', stage: 'model_turn', evidence: 'controller',
+      counts: { retries: 3 } }));
+    const result = recorder.report({ experiment_id: 'exp-retries' });
+    assert.equal(result.metrics.retries.value, 3);
+    assert.equal(result.metrics.wait_polls.value, null);
+    assert.equal(result.metrics.model_turns.value, null);
+  } finally {
+    fs.rmSync(f.root, { recursive: true, force: true });
+  }
+});
+
 done();
