@@ -133,4 +133,68 @@ if [[ -f "$CLAUDE_HOME/settings.json" ]] && grep -q 'shipyard-auto-route' "$CLAU
   exit 1
 fi
 
+RELEASE_CACHE="$CLAUDE_HOME/plugins/cache/shipyard/shipyard/$PLUGIN_VERSION"
+mkdir -p "$RELEASE_CACHE"
+printf 'release\n' > "$RELEASE_CACHE/marker.txt"
+CACHE_BEFORE="$(ls -laR "$CLAUDE_HOME/plugins/cache")"
+DOGFOOD="$WORK/dogfood"
+HOME="$HOME_DIR" CLAUDE_HOME="$CLAUDE_HOME" SHIPYARD_GSD_AUTO_INSTALL=0 \
+  bash "$ROOT/scripts/install-shipyard-claude-hook.sh" --dogfood-root "$DOGFOOD" > "$WORK/dogfood.out"
+grep -q "claude --plugin-dir \"$DOGFOOD\"" "$WORK/dogfood.out" || { echo "dogfood launch line is missing" >&2; exit 1; }
+[[ -f "$DOGFOOD/.claude-plugin/plugin.json" ]] || { echo "dogfood payload was not copied" >&2; exit 1; }
+node - "$DOGFOOD/.shipyard-provenance.json" "$(git -C "$ROOT" rev-parse HEAD)" <<'NODE'
+const fs = require('node:fs');
+const [file, sha] = process.argv.slice(2);
+const p = JSON.parse(fs.readFileSync(file, 'utf8'));
+if (p.schema !== 'shipyard.host-provenance.v1' || p.install_kind !== 'dogfood') throw new Error('bad dogfood record: ' + JSON.stringify(p));
+if (p.source_sha !== sha || typeof p.dirty !== 'boolean') throw new Error('dogfood record lacks sha or dirty: ' + JSON.stringify(p));
+if ((fs.statSync(file).mode & 0o777) !== 0o644) throw new Error('dogfood record mode is not 0644');
+NODE
+[[ "$(ls -laR "$CLAUDE_HOME/plugins/cache")" == "$CACHE_BEFORE" ]] || { echo "dogfood install touched the Claude cache" >&2; exit 1; }
+if HOME="$HOME_DIR" CLAUDE_HOME="$CLAUDE_HOME" SHIPYARD_GSD_AUTO_INSTALL=0 \
+  bash "$ROOT/scripts/install-shipyard-claude-hook.sh" --dogfood-root "$RELEASE_CACHE/../dogfood" >/dev/null 2>&1; then
+  echo "a dogfood root inside the Claude cache was accepted" >&2
+  exit 1
+fi
+[[ ! -e "$RELEASE_CACHE/../dogfood" ]] || { echo "refused dogfood root was still created" >&2; exit 1; }
+[[ "$(ls -laR "$CLAUDE_HOME/plugins/cache")" == "$CACHE_BEFORE" ]] || { echo "refused dogfood install touched the Claude cache" >&2; exit 1; }
+
+REL_REPO="$WORK/release-repo"
+mkdir -p "$REL_REPO/plugins/delivery-pipeline/scripts" "$REL_REPO/plugins/shipyard"
+printf 'released\n' > "$REL_REPO/plugins/delivery-pipeline/scripts/a.cjs"
+printf '{"version":"1.0.0+codex.0123456789abcdef","digest":"good"}\n' > "$REL_REPO/plugins/shipyard/package-build.json"
+git -C "$REL_REPO" init -q
+git -C "$REL_REPO" add .
+git -C "$REL_REPO" -c user.name=t -c user.email=t@t -c commit.gpgsign=false commit -qm release
+git -C "$REL_REPO" -c tag.gpgsign=false tag v1.0.0
+CACHE_HOME="$WORK/cache-claude"
+CODEX_CACHE_HOME="$WORK/cache-codex"
+mkdir -p "$CACHE_HOME/plugins/cache/shipyard/shipyard/1.0.0/scripts" \
+  "$CODEX_CACHE_HOME/plugins/cache/shipyard/shipyard/1.0.0+codex.0123456789abcdef"
+cp "$REL_REPO/plugins/delivery-pipeline/scripts/a.cjs" "$CACHE_HOME/plugins/cache/shipyard/shipyard/1.0.0/scripts/a.cjs"
+cp "$REL_REPO/plugins/shipyard/package-build.json" "$CODEX_CACHE_HOME/plugins/cache/shipyard/shipyard/1.0.0+codex.0123456789abcdef/"
+
+cache_doctor() {
+  node "$ROOT/scripts/shipyard-doctor.cjs" --json --claude-home "$CACHE_HOME" \
+    --codex-home "$CODEX_CACHE_HOME" --release-repo "$REL_REPO" > "$WORK/doctor-cache.json" || true
+  node - "$WORK/doctor-cache.json" "$1" "$2" "$3" <<'NODE'
+const fs = require('node:fs');
+const [file, name, level, pattern] = process.argv.slice(2);
+const report = JSON.parse(fs.readFileSync(file, 'utf8'));
+const c = report.checks.find((x) => x.name === name);
+if (!c || c.level !== level || !new RegExp(pattern).test(c.detail)) throw new Error(`${name} expected ${level} /${pattern}/: ` + JSON.stringify(c));
+NODE
+}
+cache_doctor 'claude-cache 1.0.0' ok 'matches v1.0.0'
+cache_doctor 'codex-cache 1.0.0+codex.0123456789abcdef' ok 'matches v1.0.0'
+printf 'unmerged\n' > "$CACHE_HOME/plugins/cache/shipyard/shipyard/1.0.0/scripts/a.cjs"
+printf '{"version":"1.0.0+codex.0123456789abcdef","digest":"bad"}\n' \
+  > "$CODEX_CACHE_HOME/plugins/cache/shipyard/shipyard/1.0.0+codex.0123456789abcdef/package-build.json"
+CACHE_TREE_BEFORE="$(ls -laR "$CACHE_HOME" "$CODEX_CACHE_HOME")"
+cache_doctor 'claude-cache 1.0.0' error 'cache matches no release \(1 files differ: scripts/a\.cjs\)'
+cache_doctor 'codex-cache 1.0.0+codex.0123456789abcdef' error 'codex cache matches no release'
+[[ "$(ls -laR "$CACHE_HOME" "$CODEX_CACHE_HOME")" == "$CACHE_TREE_BEFORE" ]] || { echo "doctor wrote into a cache" >&2; exit 1; }
+mv "$CACHE_HOME/plugins/cache/shipyard/shipyard/1.0.0" "$CACHE_HOME/plugins/cache/shipyard/shipyard/2.0.0"
+cache_doctor 'claude-cache 2.0.0' skip 'no v2.0.0 tag'
+
 echo "claude hook smoke passed"

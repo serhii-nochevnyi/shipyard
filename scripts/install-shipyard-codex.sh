@@ -38,11 +38,13 @@ NOTIFY_DELEGATE="$CODEX_HOME/shipyard-notify-delegate.json"
 GSD_TOOLS="$CODEX_HOME/gsd-core/bin/gsd-tools.cjs"
 CAPABILITIES_FILE="${SHIPYARD_CODEX_CAPABILITIES_FILE:-}"
 AGENTS_MD="${CODEX_AGENTS_MD:-$CODEX_HOME/AGENTS.md}"
+DOGFOOD_ROOT="${SHIPYARD_DOGFOOD_ROOT:-}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --phase) PHASE="${2:?}"; shift 2 ;;
     --project-dir) PROJECT_DIR="${2:?}"; shift 2 ;;
+    --dogfood-root) DOGFOOD_ROOT="${2:?}"; shift 2 ;;
     -h | --help) sed -n '3,25p' "${BASH_SOURCE[0]}"; exit 0 ;;
     *) echo "unknown arg: $1" >&2; exit 2 ;;
   esac
@@ -50,6 +52,37 @@ done
 
 # ── preconditions ────────────────────────────────────────────────────────────
 command -v node >/dev/null 2>&1 || { echo "error: node not found on PATH" >&2; exit 1; }
+PROVENANCE="$PLUGIN_DIR/scripts/host-provenance.cjs"
+if [[ -n "$DOGFOOD_ROOT" ]]; then
+  [[ -f "$PROVENANCE" ]] || { echo "error: host-provenance.cjs not found under $PLUGIN_DIR" >&2; exit 1; }
+  DOGFOOD_ROOT="$(TARGET="$DOGFOOD_ROOT" DEFAULT_HOME="$HOME/.codex" node - <<'NODE'
+const fs = require('node:fs');
+const path = require('node:path');
+function real(p) {
+  const abs = path.resolve(p);
+  let base = abs;
+  while (!fs.existsSync(base)) base = path.dirname(base);
+  return path.join(fs.realpathSync(base), path.relative(base, abs));
+}
+const target = real(process.env.TARGET);
+const rel = path.relative(real(process.env.DEFAULT_HOME), target);
+if (rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel))) {
+  console.error(`error: refusing dogfood root at or inside the default CODEX_HOME: ${target}`);
+  process.exit(3);
+}
+process.stdout.write(target);
+NODE
+)"
+  CODEX_HOME="$DOGFOOD_ROOT"
+  AGENTS_SKILLS="${AGENTS_SKILLS_DIR:-$CODEX_HOME/.agents/skills}"
+  BUNDLE_ROOT="$CODEX_HOME/shipyard"
+  NOTIFY_DELEGATE="$CODEX_HOME/shipyard-notify-delegate.json"
+  GSD_TOOLS="$CODEX_HOME/gsd-core/bin/gsd-tools.cjs"
+  AGENTS_MD="${CODEX_AGENTS_MD:-$CODEX_HOME/AGENTS.md}"
+  export CODEX_HOME GSD_CAPABILITIES_DIR="${GSD_CAPABILITIES_DIR:-$CODEX_HOME/.gsd/capabilities}"
+  mkdir -p "$CODEX_HOME"
+  echo "→ dogfood CODEX_HOME $CODEX_HOME"
+fi
 [[ -d "$PLUGIN_DIR" ]] || { echo "error: plugin dir missing: $PLUGIN_DIR" >&2; exit 1; }
 [[ -d "$CAP_SRC" ]] || { echo "error: capability dir missing: $CAP_SRC" >&2; exit 1; }
 [[ -d "$PROJECT_DIR" ]] || { echo "error: project dir missing: $PROJECT_DIR" >&2; exit 1; }
@@ -719,6 +752,19 @@ node "$REPO_ROOT/scripts/configure-codex-notify.cjs" \
 # rollback active through the skill reconciliation is what makes a failed
 # second skill or bundle swap restore the earlier swaps as one generation.
 ROLLBACK_ACTIVE=0
+
+if [[ -f "$PROVENANCE" ]]; then
+  RECORD_VERSION=""
+  if [[ "${SHIPYARD_CODEX_MARKETPLACE:-0}" == 1 && -f "$REPO_ROOT/../package-build.json" ]]; then
+    RECORD_VERSION="$(node -e 'process.stdout.write(require(process.argv[1]).version || "")' "$REPO_ROOT/../package-build.json")"
+  fi
+  RECORD_ARGS=(record --plugin-root "$PLUGIN_DIR" --out "$CODEX_HOME/agents")
+  [[ -z "$RECORD_VERSION" ]] || RECORD_ARGS+=(--version "$RECORD_VERSION")
+  [[ -z "$DOGFOOD_ROOT" ]] || RECORD_ARGS+=(--kind dogfood)
+  echo "→ recording install provenance → $(node "$PROVENANCE" "${RECORD_ARGS[@]}")"
+else
+  echo "warning: host-provenance.cjs is missing from $PLUGIN_DIR; install provenance not recorded" >&2
+fi
 
 deliver_hint=""
 [[ "$PHASE" -ge 2 ]] && deliver_hint=' | $shipyard-deliver'
