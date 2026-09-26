@@ -10,6 +10,7 @@ const {
   sealResearch,
   sealDecomposition,
   researchLineFailure,
+  verifySealedLine,
   assertContained,
 } = require('../../plugins/delivery-pipeline/scripts/planning-result-sealer.cjs');
 
@@ -173,6 +174,85 @@ test('researchLineFailure freezes the blocked partial-failure shape', () => {
   assert.deepEqual(failure.sealed_lines, sealedLines);
   assert.ok(Object.isFrozen(failure));
   assert.ok(Object.isFrozen(failure.sealed_lines));
+});
+
+function verifyFixtureScope(fixture) {
+  return {
+    invId: 'INV-SEAL',
+    sourceRevision: fixture.lines.artifact.sourceRevision,
+    repository: fixture.lines.artifact.repository,
+    policyHash: fixture.lines.artifact.policyHash,
+  };
+}
+
+test('verifySealedLine re-reads and re-hashes a genuinely sealed line', () => {
+  const fixture = researchFixture();
+  try {
+    const sealed = sealFixtureLines(fixture);
+    const verified = verifySealedLine({
+      root: fixture.archiveRoot, scope: verifyFixtureScope(fixture),
+      line: { id: 'system-state', artifact_ref: sealed.artifact_ref, artifact_digest: sealed.artifact_digest },
+    });
+    assert.equal(verified.id, 'system-state');
+    assert.equal(verified.status, 'completed');
+    assert.equal(verified.summary, 'completed system-state');
+    assert.equal(verified.artifact_index.sha256, fixture.sha256);
+    assert.equal(verified.evidence_index, verified.artifact_index);
+    assert.ok(Object.isFrozen(verified));
+  } finally { fixture.clean(); }
+});
+
+const VERIFY_REFUSAL_CASES = [
+  ['RESEARCH_VERIFY_LINE_INVALID', (line) => { line.id = 'not-a-line'; }],
+  ['RESEARCH_VERIFY_REFERENCE_INVALID', (line) => { line.artifact_digest = 'not-hex'; }],
+  ['RESEARCH_VERIFY_DIGEST_MISMATCH', (line) => { line.artifact_digest = 'a'.repeat(64); }],
+  ['RESEARCH_VERIFY_MANIFEST_MISSING', (line) => { line.artifact_ref = `${line.artifact_ref}.missing`; }],
+];
+
+test('verifySealedLine refuses a claim that does not match its manifest', () => {
+  for (const [code, mutate] of VERIFY_REFUSAL_CASES) {
+    const fixture = researchFixture();
+    try {
+      const sealed = sealFixtureLines(fixture);
+      const line = { id: 'system-state', artifact_ref: sealed.artifact_ref, artifact_digest: sealed.artifact_digest };
+      mutate(line);
+      assert.throws(
+        () => verifySealedLine({ root: fixture.archiveRoot, scope: verifyFixtureScope(fixture), line }),
+        (error) => error.code === code,
+        `expected code ${code}`,
+      );
+    } finally { fixture.clean(); }
+  }
+});
+
+test('verifySealedLine refuses a tampered archived finding even when the manifest digest matches', () => {
+  const fixture = researchFixture();
+  try {
+    const sealed = sealFixtureLines(fixture);
+    fs.writeFileSync(sealed.artifact_index.path, 'tampered after sealing\n');
+    assert.throws(
+      () => verifySealedLine({
+        root: fixture.archiveRoot, scope: verifyFixtureScope(fixture),
+        line: { id: 'system-state', artifact_ref: sealed.artifact_ref, artifact_digest: sealed.artifact_digest },
+      }),
+      (error) => error.code === 'RESEARCH_VERIFY_ARCHIVE_MUTATED',
+    );
+  } finally { fixture.clean(); }
+});
+
+test('verifySealedLine refuses a manifest sealed under a different investigation', () => {
+  const fixture = researchFixture();
+  try {
+    const sealed = sealFixtureLines(fixture);
+    const scope = { ...verifyFixtureScope(fixture), invId: 'INV-OTHER' };
+    assert.throws(
+      () => verifySealedLine({
+        root: fixture.archiveRoot, scope,
+        line: { id: 'system-state', artifact_ref: sealed.artifact_ref, artifact_digest: sealed.artifact_digest },
+      }),
+      (error) => error.code === 'RESEARCH_VERIFY_SUBJECT_MISMATCH',
+    );
+  } finally { fixture.clean(); }
 });
 
 function decompositionFixture(fileCount) {
