@@ -32,10 +32,7 @@ const capabilities = {
 };
 const finalizerFile = path.join(__dirname, '../../plugins/delivery-pipeline/scripts/delivery-commit-finalizer.cjs');
 const finalizeCommit = require(fs.existsSync(finalizerFile) ? finalizerFile : process.env.SHIPYARD_T38_FINALIZER_FILE).finalizeDeliveryCommit;
-const temporary = (() => {
-  try { return fs.mkdtempSync('/tmp/scds-'); }
-  catch (error) { if (error.code !== 'EPERM' && error.code !== 'EACCES') throw error; return fs.mkdtempSync(path.join(os.tmpdir(), 'scds-')); }
-})();
+const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'scds-'));
 const previousEnv = {
   GNUPGHOME: process.env.GNUPGHOME,
   GIT_CONFIG_GLOBAL: process.env.GIT_CONFIG_GLOBAL,
