@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
   "generation": 370,
-  "generation_identity": "b2749c15-8a1c-45dc-bc8d-03035aa3ad15",
-  "previous_generation_identity": "16777245:12923571565:1790420090001189000:0f012c3e060c6359e8481962d3088537f09021abfbc380084240e1f6cabb2cf6",
-  "observed_at": "2026-09-26T10:54:56.735Z",
-  "generated_at": "2026-09-26T10:54:56.735Z",
+  "generation_identity": "4d04efc5-a18c-4b14-a848-b431c1598cfb",
+  "previous_generation_identity": "16777245:12923512531:1790419256943037700:0f012c3e060c6359e8481962d3088537f09021abfbc380084240e1f6cabb2cf6",
+  "observed_at": "2026-09-26T11:03:16.073Z",
+  "generated_at": "2026-09-26T11:03:16.073Z",
   "by": "state-sync",
-  "pid": 86213,
+  "pid": 33083,
   "observation_generation": 370,
   "observation_projection": {
     "tickets": {
@@ -2203,235 +2203,26 @@
         "status": "pr-open",
         "repository": null,
         "pr": 255,
-        "head": "7d79bee1c96e43ac61beb6ead62c25b745e43808",
+        "head": "a3ed27eeb196d98299b89765c2313a486817520e",
         "draft": false,
         "base": "epic/42-resume-trusted-finalization-without-executor-replay",
-        "merge_state": "CLEAN",
+        "merge_state": "UNSTABLE",
         "review_decision": null,
         "checks": {
           "total": 1,
           "pending": 0,
-          "failing": 0,
+          "failing": 1,
           "none_reported": false,
           "unavailable": false
         }
-      },
-      "T-43-01": {
-        "status": "pending",
-        "repository": null,
-        "pr": null,
-        "head": null,
-        "draft": false,
-        "base": "epic/43-target-project-delivery-at-scale",
-        "merge_state": null,
-        "review_decision": null,
-        "checks": null
-      },
-      "T-43-02": {
-        "status": "pending",
-        "repository": null,
-        "pr": null,
-        "head": null,
-        "draft": false,
-        "base": "epic/43-target-project-delivery-at-scale",
-        "merge_state": null,
-        "review_decision": null,
-        "checks": null
-      },
-      "T-43-03": {
-        "status": "pending",
-        "repository": null,
-        "pr": null,
-        "head": null,
-        "draft": false,
-        "base": "epic/43-target-project-delivery-at-scale",
-        "merge_state": null,
-        "review_decision": null,
-        "checks": null
-      },
-      "T-43-04": {
-        "status": "pending",
-        "repository": null,
-        "pr": null,
-        "head": null,
-        "draft": false,
-        "base": "epic/43-target-project-delivery-at-scale",
-        "merge_state": null,
-        "review_decision": null,
-        "checks": null
-      },
-      "T-43-05": {
-        "status": "pending",
-        "repository": null,
-        "pr": null,
-        "head": null,
-        "draft": false,
-        "base": "epic/43-target-project-delivery-at-scale",
-        "merge_state": null,
-        "review_decision": null,
-        "checks": null
-      },
-      "T-43-06": {
-        "status": "pending",
-        "repository": null,
-        "pr": null,
-        "head": null,
-        "draft": false,
-        "base": "epic/43-target-project-delivery-at-scale",
-        "merge_state": null,
-        "review_decision": null,
-        "checks": null
-      },
-      "T-43-07": {
-        "status": "pending",
-        "repository": null,
-        "pr": null,
-        "head": null,
-        "draft": false,
-        "base": "epic/43-target-project-delivery-at-scale",
-        "merge_state": null,
-        "review_decision": null,
-        "checks": null
-      },
-      "T-43-08": {
-        "status": "pending",
-        "repository": null,
-        "pr": null,
-        "head": null,
-        "draft": false,
-        "base": "epic/43-target-project-delivery-at-scale",
-        "merge_state": null,
-        "review_decision": null,
-        "checks": null
-      },
-      "T-43-09": {
-        "status": "pending",
-        "repository": null,
-        "pr": null,
-        "head": null,
-        "draft": false,
-        "base": "epic/43-target-project-delivery-at-scale",
-        "merge_state": null,
-        "review_decision": null,
-        "checks": null
-      },
-      "T-43-10": {
-        "status": "pending",
-        "repository": null,
-        "pr": null,
-        "head": null,
-        "draft": false,
-        "base": "epic/43-target-project-delivery-at-scale",
-        "merge_state": null,
-        "review_decision": null,
-        "checks": null
-      },
-      "T-43-11": {
-        "status": "pending",
-        "repository": null,
-        "pr": null,
-        "head": null,
-        "draft": false,
-        "base": "epic/43-target-project-delivery-at-scale",
-        "merge_state": null,
-        "review_decision": null,
-        "checks": null
-      },
-      "T-43-12": {
-        "status": "pending",
-        "repository": null,
-        "pr": null,
-        "head": null,
-        "draft": false,
-        "base": "epic/43-target-project-delivery-at-scale",
-        "merge_state": null,
-        "review_decision": null,
-        "checks": null
-      },
-      "T-43-13": {
-        "status": "pending",
-        "repository": null,
-        "pr": null,
-        "head": null,
-        "draft": false,
-        "base": "epic/43-target-project-delivery-at-scale",
-        "merge_state": null,
-        "review_decision": null,
-        "checks": null
-      },
-      "T-43-14": {
-        "status": "pending",
-        "repository": null,
-        "pr": null,
-        "head": null,
-        "draft": false,
-        "base": "epic/43-target-project-delivery-at-scale",
-        "merge_state": null,
-        "review_decision": null,
-        "checks": null
-      },
-      "T-43-15": {
-        "status": "pending",
-        "repository": null,
-        "pr": null,
-        "head": null,
-        "draft": false,
-        "base": "epic/43-target-project-delivery-at-scale",
-        "merge_state": null,
-        "review_decision": null,
-        "checks": null
-      },
-      "T-43-16": {
-        "status": "pending",
-        "repository": null,
-        "pr": null,
-        "head": null,
-        "draft": false,
-        "base": "epic/43-target-project-delivery-at-scale",
-        "merge_state": null,
-        "review_decision": null,
-        "checks": null
-      },
-      "T-43-17": {
-        "status": "pending",
-        "repository": null,
-        "pr": null,
-        "head": null,
-        "draft": false,
-        "base": "epic/43-target-project-delivery-at-scale",
-        "merge_state": null,
-        "review_decision": null,
-        "checks": null
-      },
-      "T-43-18": {
-        "status": "pending",
-        "repository": null,
-        "pr": null,
-        "head": null,
-        "draft": false,
-        "base": "epic/43-target-project-delivery-at-scale",
-        "merge_state": null,
-        "review_decision": null,
-        "checks": null
-      },
-      "T-43-19": {
-        "status": "pending",
-        "repository": null,
-        "pr": null,
-        "head": null,
-        "draft": false,
-        "base": "epic/43-target-project-delivery-at-scale",
-        "merge_state": null,
-        "review_decision": null,
-        "checks": null
       }
     }
   },
   "binding": {
     "schema_version": 1,
-    "state_digest": "b618c68cae73ee080b06e9381a66a7498c8d26b810a3109b375335d48f29f114",
-    "front_digest": "f3904e276ce675aa171458f0144b5972d1838b5eac0460e60825afb6d272b68c",
-    "observation_digest": "d4ef75916239c6797af5932ad722cb823743dd98c4744e6feb98e7288912defd",
+    "state_digest": "eb163cc9991dee05a3dca299ecede1678e96051b55d40cde7db4d6fd0e4c9adc",
+    "front_digest": "e615f2f84ed48b73545197fb760ed3eb28428f3ef566019afb6166863e3c3150",
+    "observation_digest": "4bf4c82b5de1f57afbb0cae125ef2d66d12592a3471e2cf97b6ce8b90c547a2b",
     "observation_generation": 370
   }
 }

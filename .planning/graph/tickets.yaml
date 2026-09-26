@@ -2976,7 +2976,7 @@ tickets:
     repo: null
     wave: 1
     depends_on: []
-    files: [plugins/delivery-pipeline/scripts/codex-delivery-host.cjs, plugins/delivery-pipeline/scripts/delivery-commit-finalizer.cjs, plugins/delivery-pipeline/scripts/command-runner.cjs, tests/unit/codex-delivery-host.test.cjs, tests/unit/delivery-commit-finalizer.test.cjs, tests/unit/command-runner.test.cjs, '.github/workflows/test.yml']
+    files: [plugins/delivery-pipeline/scripts/codex-delivery-host.cjs, plugins/delivery-pipeline/scripts/delivery-commit-finalizer.cjs, plugins/delivery-pipeline/scripts/command-runner.cjs, tests/unit/codex-delivery-host.test.cjs, tests/unit/delivery-commit-finalizer.test.cjs, tests/unit/command-runner.test.cjs, '.github/workflows/test.yml', plugins/shipyard/]
     risk: high
     human_checkpoint: true
     preauthorized: false

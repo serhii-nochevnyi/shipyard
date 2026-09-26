@@ -6185,7 +6185,8 @@
         "tests/unit/codex-delivery-host.test.cjs",
         "tests/unit/delivery-commit-finalizer.test.cjs",
         "tests/unit/command-runner.test.cjs",
-        ".github/workflows/test.yml"
+        ".github/workflows/test.yml",
+        "plugins/shipyard/"
       ],
       "risk": "high",
       "type": "implementation",
