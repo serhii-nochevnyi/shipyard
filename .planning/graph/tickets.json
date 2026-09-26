@@ -6164,6 +6164,33 @@
       "pr_base": "ticket/T-40-17-add-the-publish-time-pr-hygiene-gate-and",
       "jira": null
     },
+    "T-41-09": {
+      "title": "Align first-response usage with the usage-report Claude transcript semantics",
+      "plan": ".planning/phases/41-reduce-pipeline-subscription-overhead/41-09-PLAN.md",
+      "phase": "41",
+      "repo": null,
+      "wave": 2,
+      "depends_on": [
+        "T-41-01"
+      ],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": false,
+      "files": [
+        "plugins/delivery-pipeline/scripts/claude-role-host.cjs",
+        "tests/unit/claude-role-host.test.cjs"
+      ],
+      "risk": "medium",
+      "type": "implementation",
+      "human_checkpoint": false,
+      "preauthorized": false,
+      "branch": "ticket/T-41-09-align-first-response-usage-with-the-usag",
+      "epic": "epic/41-reduce-pipeline-subscription-overhead",
+      "primary_parent": "T-41-01",
+      "pr_base": "ticket/T-41-01-measure-bounded-judgment-launches-and-pr",
+      "jira": null
+    },
     "T-42-01": {
       "title": "Resume authenticated completed execution through trusted finalization",
       "plan": ".planning/phases/42-resume-trusted-finalization-without-executor-replay/42-01-PLAN.md",
@@ -6462,14 +6489,16 @@
         "T-39-14",
         "T-39-16",
         "T-39-17",
-        "T-41-01"
+        "T-41-01",
+        "T-41-09"
       ],
       "cross_phase_deps": [
         "T-39-12",
         "T-39-14",
         "T-39-16",
         "T-39-17",
-        "T-41-01"
+        "T-41-01",
+        "T-41-09"
       ],
       "cross_repo_deps": [],
       "unreachable_paths": false,
@@ -6571,7 +6600,8 @@
         "T-39-14",
         "T-39-16",
         "T-39-17",
-        "T-41-01"
+        "T-41-01",
+        "T-41-09"
       ],
       "cross_phase_deps": [
         "T-39-03",
@@ -6579,7 +6609,8 @@
         "T-39-14",
         "T-39-16",
         "T-39-17",
-        "T-41-01"
+        "T-41-01",
+        "T-41-09"
       ],
       "cross_repo_deps": [],
       "unreachable_paths": false,

@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: eaaf987276726f1d0e6183c8a0baa950f538facaedd3b28d70149e1bc3eacc45
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 8b5598031beed062552922a0efd2a67c3a817bbbeafa26cb4a3577834acd6965
 phase: 41-reduce-pipeline-subscription-overhead
 plan: 01
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-26
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: eaaf987276726f1d0e6183c8a0baa950f538facaedd3b28d70149e1bc3eacc45
+shipyard_source_fingerprint: 8b5598031beed062552922a0efd2a67c3a817bbbeafa26cb4a3577834acd6965
 ---
 
 # Phase 41: Measure bounded judgment launches and preserve governing references — Delivery Projection
