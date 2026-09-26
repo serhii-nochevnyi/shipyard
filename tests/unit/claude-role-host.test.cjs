@@ -21,6 +21,10 @@ function git(root, args) {
   return execFileSync('git', ['-C', root, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 }
 
+function fileSha(relative) {
+  return crypto.createHash('sha256').update(fs.readFileSync(path.join(__dirname, '..', '..', relative))).digest('hex');
+}
+
 function write(root, relative, value) {
   const file = path.join(root, relative);
   fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -1031,6 +1035,10 @@ test('the launch record separates the packet estimate from the complete prompt a
       assert.equal(result.context.model, result.dispatch.receipt.applied_model);
       assert.equal(result.context.effort, result.dispatch.receipt.applied_effort);
       assert.equal(result.context.policy_hash, packet.policy_hash);
+      assert.deepEqual(result.context.host_identity, {
+        role_host_sha256: fileSha('plugins/delivery-pipeline/scripts/claude-role-host.cjs'),
+        context_packet_sha256: fileSha('plugins/delivery-pipeline/scripts/context-packet.cjs'),
+      });
       assert.match(result.context.run_id, /^claude-role-/);
       assert.deepEqual(result.context.selected_backlog_ids, packet.backlog.selected_ids);
       assert.ok(result.context.selected_refs.some((ref) => ref.path.endsWith('PLAN.md')));

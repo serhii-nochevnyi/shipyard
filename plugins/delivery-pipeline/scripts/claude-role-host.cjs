@@ -56,6 +56,11 @@ function referenceDigest(reference) {
   return { sha256: sha(reference), bytes: Buffer.byteLength(reference, 'utf8') };
 }
 
+const HOST_IDENTITY = Object.freeze({
+  role_host_sha256: sha(fs.readFileSync(__filename)),
+  context_packet_sha256: sha(fs.readFileSync(require.resolve('./context-packet.cjs'))),
+});
+
 function canonicalJson(value) {
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
   if (!object(value)) return JSON.stringify(value);
@@ -1196,6 +1201,7 @@ function createClaudeRoleHost(options = {}) {
           artifact: { ref: validated.artifact_ref, digest: validated.artifact_digest,
             outcome: validated.envelope.outcome || validated.envelope.verdict },
           context: { run_id: runId, source_revision: prepared.canonical.head, policy_hash: record.policy_hash,
+            host_identity: HOST_IDENTITY,
             packet_digest: prepared.packet.digest || prepared.packet.sha256 || sha(canonicalJson(prepared.packet)),
             selected_refs: prepared.packet.required_refs.map((ref) => ({ path: ref.path, sha256: ref.sha256, bytes: ref.bytes })),
             selected_backlog_ids: prepared.packet.backlog.selected_ids,
