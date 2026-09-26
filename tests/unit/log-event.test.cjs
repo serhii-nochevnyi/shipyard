@@ -386,4 +386,21 @@ test('an empty value is absence too, not a bad level', () => {
     'an empty value must be omitted, not stored as ""');
 });
 
+suite('log-event — ci_rerun requires its run id');
+
+test('ci_rerun with every field is written', () => {
+  const { project, graph } = scratch();
+  const r = run(project, ['ci_rerun', 'ticket=T-43-07', 'pr=7', `head=${FULL}`, 'run_id=123']);
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.strictEqual(JSON.parse(lines(graph)[0]).run_id, 123);
+});
+
+test('ci_rerun without run_id is refused and writes nothing', () => {
+  const { project, graph } = scratch();
+  const r = run(project, ['ci_rerun', 'ticket=T-43-07', 'pr=7', `head=${FULL}`]);
+  assert.notStrictEqual(r.status, 0);
+  assert.ok(/run_id/.test(r.stderr), r.stderr);
+  assert.strictEqual(lines(graph).length, 0);
+});
+
 done();

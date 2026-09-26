@@ -21,7 +21,8 @@ test('the five buckets gh reports each land in exactly one tally', () => {
     { bucket: 'pass' }, { bucket: 'skipping' },
   ]);
   assert.deepStrictEqual(got, {
-    total: 5, failing: 2, pending: 1, passing: 1, skipped: 1, none_reported: false, unavailable: false,
+    total: 5, failing: 1, pending: 2, passing: 1, skipped: 1, cancelled: 1, superseded: 0,
+    cancelled_runs: [{ name: null, run_id: null, started_at: null }], none_reported: false, unavailable: false,
   });
 });
 
@@ -32,13 +33,53 @@ test('the tallies partition the rows — nothing is counted twice or dropped', (
   const rows = ['pass', 'fail', 'pending', 'skipping', 'cancel', 'weird', undefined]
     .map((bucket) => ({ bucket }));
   const c = classify(rows);
-  assert.strictEqual(c.failing + c.pending + c.passing + c.skipped, c.total);
+  assert.strictEqual(c.failing + c.pending + c.passing + c.skipped + c.superseded, c.total);
 });
 
-test('cancel is failing — a cancelled check is not a check that passed', () => {
-  const c = classify([{ bucket: 'cancel', state: 'CANCELLED' }]);
-  assert.strictEqual(c.failing, 1);
+test('a lone latest cancel is pending and cancelled — never passing, failing, or green', () => {
+  const c = classify([{
+    name: 'publish', bucket: 'cancel', state: 'CANCELLED', startedAt: '2026-09-01T10:00:00Z',
+    link: 'https://github.com/o/r/actions/runs/4242/job/9',
+  }]);
+  assert.strictEqual(c.pending, 1);
+  assert.strictEqual(c.cancelled, 1);
+  assert.strictEqual(c.failing, 0);
   assert.strictEqual(c.passing, 0);
+  assert.deepStrictEqual(c.cancelled_runs, [{ name: 'publish', run_id: '4242', started_at: '2026-09-01T10:00:00Z' }]);
+  assert.strictEqual(isGreen(c), false);
+  assert.strictEqual(isGreen({ failing: 0, pending: 0, cancelled: 1 }), false);
+});
+
+test('a cancel superseded by a newer run of the same name is ignored — newer pass is green', () => {
+  const c = classify([
+    { name: 'publish', bucket: 'cancel', startedAt: '2026-09-01T10:00:00Z', link: 'https://x/actions/runs/1/job/1' },
+    { name: 'publish', bucket: 'pass', startedAt: '2026-09-01T10:05:00Z', link: 'https://x/actions/runs/2/job/2' },
+  ]);
+  assert.strictEqual(c.superseded, 1);
+  assert.strictEqual(c.cancelled, 0);
+  assert.strictEqual(c.failing, 0);
+  assert.strictEqual(c.pending, 0);
+  assert.strictEqual(isGreen(c), true);
+});
+
+test('a cancel is not superseded by an OLDER run or a different name', () => {
+  const c = classify([
+    { name: 'publish', bucket: 'cancel', startedAt: '2026-09-01T10:05:00Z' },
+    { name: 'publish', bucket: 'pass', startedAt: '2026-09-01T10:00:00Z' },
+    { name: 'lint', bucket: 'pass', startedAt: '2026-09-01T11:00:00Z' },
+  ]);
+  assert.strictEqual(c.cancelled, 1);
+  assert.strictEqual(isGreen(c), false);
+});
+
+test('fail stays failing', () => {
+  const c = classify([{ name: 'test', bucket: 'fail', startedAt: '2026-09-01T10:00:00Z' }]);
+  assert.strictEqual(c.failing, 1);
+  assert.strictEqual(c.cancelled, 0);
+});
+
+test('CHECK_FIELDS asks for link, startedAt and workflow', () => {
+  for (const f of ['link', 'startedAt', 'workflow']) assert.ok(CHECK_FIELDS.split(',').includes(f), f);
 });
 
 test('skipping counts towards total and towards nothing else', () => {
@@ -100,7 +141,7 @@ test('gh spells its buckets lowercase, but a case difference must not read as un
 test('CHECK_FIELDS asks gh for the bucket — that is the whole point', () => {
   assert.ok(CHECK_FIELDS.split(',').includes('bucket'),
     'without `bucket` every row is unreadable and the board would never go green');
-  assert.strictEqual(CHECK_FIELDS, 'name,state,bucket',
+  assert.strictEqual(CHECK_FIELDS, 'name,state,bucket,link,startedAt,workflow',
     '`name` and `state` stay in the window: they are what the human-readable output prints');
 });
 
@@ -108,7 +149,8 @@ test('no rows is none_reported, and every tally is zero', () => {
   // What "nothing ran" MEANS is not this module's call (T-24-05 owns that) — it
   // only reports the fact.
   assert.deepStrictEqual(classify([]), {
-    total: 0, failing: 0, pending: 0, passing: 0, skipped: 0, none_reported: true, unavailable: false,
+    total: 0, failing: 0, pending: 0, passing: 0, skipped: 0, cancelled: 0, superseded: 0,
+    cancelled_runs: [], none_reported: true, unavailable: false,
   });
 });
 
@@ -124,7 +166,8 @@ suite('check-state — the fourth state: a reading that did not happen');
 
 test('a non-array is unavailable, NOT none_reported — the whole point of the state', () => {
   assert.deepStrictEqual(classify(null), {
-    total: 0, failing: 0, pending: 0, passing: 0, skipped: 0, none_reported: false, unavailable: true,
+    total: 0, failing: 0, pending: 0, passing: 0, skipped: 0, cancelled: 0, superseded: 0,
+    cancelled_runs: [], none_reported: false, unavailable: true,
   });
 });
 
