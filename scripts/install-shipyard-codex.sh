@@ -55,7 +55,7 @@ command -v node >/dev/null 2>&1 || { echo "error: node not found on PATH" >&2; e
 PROVENANCE="$PLUGIN_DIR/scripts/host-provenance.cjs"
 if [[ -n "$DOGFOOD_ROOT" ]]; then
   [[ -f "$PROVENANCE" ]] || { echo "error: host-provenance.cjs not found under $PLUGIN_DIR" >&2; exit 1; }
-  DOGFOOD_ROOT="$(TARGET="$DOGFOOD_ROOT" DEFAULT_HOME="$HOME/.codex" node - <<'NODE'
+  DOGFOOD_ROOT="$(TARGET="$DOGFOOD_ROOT" ACTIVE_HOME="$CODEX_HOME" DEFAULT_HOME="$HOME/.codex" node - <<'NODE'
 const fs = require('node:fs');
 const path = require('node:path');
 function real(p) {
@@ -65,10 +65,12 @@ function real(p) {
   return path.join(fs.realpathSync(base), path.relative(base, abs));
 }
 const target = real(process.env.TARGET);
-const rel = path.relative(real(process.env.DEFAULT_HOME), target);
-if (rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel))) {
-  console.error(`error: refusing dogfood root at or inside the default CODEX_HOME: ${target}`);
-  process.exit(3);
+for (const home of [process.env.ACTIVE_HOME, process.env.DEFAULT_HOME]) {
+  const rel = path.relative(real(home), target);
+  if (rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel))) {
+    console.error(`error: refusing dogfood root at or inside the Codex home ${real(home)}: ${target}`);
+    process.exit(3);
+  }
 }
 process.stdout.write(target);
 NODE

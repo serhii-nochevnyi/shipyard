@@ -159,6 +159,26 @@ fi
 [[ ! -e "$RELEASE_CACHE/../dogfood" ]] || { echo "refused dogfood root was still created" >&2; exit 1; }
 [[ "$(ls -laR "$CLAUDE_HOME/plugins/cache")" == "$CACHE_BEFORE" ]] || { echo "refused dogfood install touched the Claude cache" >&2; exit 1; }
 
+LIVE_CODEX="$WORK/live-codex"
+CODEX_RELEASE="$LIVE_CODEX/plugins/cache/shipyard/shipyard/1.0.0+codex.0123456789abcdef"
+mkdir -p "$CODEX_RELEASE" "$HOME_DIR/.codex"
+: > "$WORK/codex-dogfood.err"
+LIVE_BEFORE="$(ls -laR "$LIVE_CODEX")"
+for refused in "$LIVE_CODEX" "$CODEX_RELEASE" "$CODEX_RELEASE/../dogfood" "$HOME_DIR/.codex/dogfood"; do
+  status=0
+  HOME="$HOME_DIR" CODEX_HOME="$LIVE_CODEX" SHIPYARD_GSD_AUTO_INSTALL=0 \
+    bash "$ROOT/scripts/install-shipyard-codex.sh" --dogfood-root "$refused" >/dev/null 2>"$WORK/codex-dogfood.err" || status=$?
+  [[ "$status" == 3 ]] || { echo "codex dogfood root $refused was not refused (exit $status)" >&2; exit 1; }
+done
+[[ ! -e "$CODEX_RELEASE/../dogfood" && ! -e "$HOME_DIR/.codex/dogfood" ]] || { echo "refused codex dogfood root was still created" >&2; exit 1; }
+[[ "$(ls -laR "$LIVE_CODEX")" == "$LIVE_BEFORE" ]] || { echo "refused codex dogfood install touched the live CODEX_HOME" >&2; exit 1; }
+HOME="$HOME_DIR" CODEX_HOME="$LIVE_CODEX" SHIPYARD_GSD_AUTO_INSTALL=0 \
+  bash "$ROOT/scripts/install-shipyard-codex.sh" --dogfood-root "$WORK/codex-dogfood" >/dev/null 2>"$WORK/codex-dogfood.err" || true
+if grep -q 'refusing dogfood root' "$WORK/codex-dogfood.err"; then
+  echo "a separate codex dogfood root was refused" >&2
+  exit 1
+fi
+
 REL_REPO="$WORK/release-repo"
 mkdir -p "$REL_REPO/plugins/delivery-pipeline/scripts" "$REL_REPO/plugins/shipyard"
 printf 'released\n' > "$REL_REPO/plugins/delivery-pipeline/scripts/a.cjs"
