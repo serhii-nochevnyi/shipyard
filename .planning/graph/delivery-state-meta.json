@@ -1,13 +1,13 @@
 {
   "schema_version": 1,
-  "generation": 378,
-  "generation_identity": "26750a9b-af76-4afb-be05-c6ce19176fae",
-  "previous_generation_identity": "16777245:12924442034:1790431361793843500:74b26a396d7d7ef1d8ebec3843fb81fdfa4aaca19b784cb6678c07fc02f50e23",
-  "observed_at": "2026-09-26T14:12:04.622Z",
-  "generated_at": "2026-09-26T14:12:04.622Z",
+  "generation": 379,
+  "generation_identity": "72843b2b-c38d-4519-a64c-aaaa243a88b5",
+  "previous_generation_identity": "16777245:12924598882:1790433421190358000:3c6bc111ff4dd888424f4c0e4f9c1ddb5e208be7b88c4b7cfb32a7ed37337bed",
+  "observed_at": "2026-09-26T14:37:01.475Z",
+  "generated_at": "2026-09-26T14:37:01.475Z",
   "by": "state-sync",
-  "pid": 3426,
-  "observation_generation": 378,
+  "pid": 73372,
+  "observation_generation": 379,
   "observation_projection": {
     "tickets": {
       "T-20-01": {
@@ -2271,7 +2271,7 @@
         "pr": null,
         "head": null,
         "draft": false,
-        "base": "epic/43-target-project-delivery-at-scale",
+        "base": "ticket/T-43-07-cancelled-checks-ignore-superseded-runs",
         "merge_state": null,
         "review_decision": null,
         "checks": null
@@ -2451,9 +2451,9 @@
   },
   "binding": {
     "schema_version": 1,
-    "state_digest": "770455bf7ed3d34165086fc8f9a20f71a87ac0568befe3d6c50a45b9190038c9",
-    "front_digest": "a0c481a070b01677d614e3996919986e6056e600d41c657b27f346c30498e0a3",
-    "observation_digest": "eccdfdf40efbc06cd6857a94e165dfc71c6de7314df122e13649c81e95be480f",
-    "observation_generation": 378
+    "state_digest": "4f2d5f7f77be99041cbaa145d58984673ea12b364794514638412e193981c086",
+    "front_digest": "5424cc0db8a4ebee764621ee9c0662c52e79e4f2dde261e720dab36b1ea13991",
+    "observation_digest": "715b8efc1c63ff8f1603088c6e7cf2c6efc9b5f99e3c9636f57bac023ce43750",
+    "observation_generation": 379
   }
 }

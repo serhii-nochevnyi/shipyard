@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: faf472521e8044c23febe00bbce8a6135ca65a3deb16845dbb100d125a8ab92e
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: dfd236d7a4c5c9beaaee54370a250897964540eca3759747c91dc5a13328a483
 phase: 43-target-project-delivery-at-scale
 plan: 08
 subsystem: shipyard delivery
@@ -22,7 +22,7 @@ key-decisions:
 duration: 0min
 status: halted
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: faf472521e8044c23febe00bbce8a6135ca65a3deb16845dbb100d125a8ab92e
+shipyard_source_fingerprint: dfd236d7a4c5c9beaaee54370a250897964540eca3759747c91dc5a13328a483
 ---
 
 # Phase 43: A stale approval from a declared bot does not block the merge; re-request once, then escalate with the command — Delivery Projection

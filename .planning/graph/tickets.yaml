@@ -3353,22 +3353,6 @@ tickets:
     primary_parent: T-43-01
     pr_base: ticket/T-43-01-register-per-repository-config-keys-for
     jira: null
-  T-43-04:
-    title: 'Bounded reachability: O(1) git forms, a large buffer, and a declared-path epic check with a path-scoped fallback'
-    plan: '.planning/phases/43-target-project-delivery-at-scale/43-04-PLAN.md'
-    phase: '43'
-    repo: null
-    wave: 10
-    depends_on: [T-40-19, T-40-22]
-    files: [plugins/delivery-pipeline/scripts/run-reachability.cjs, tests/unit/run-reachability.test.cjs, plugins/delivery-pipeline/scripts/sentinel.cjs, tests/unit/sentinel.test.cjs]
-    risk: medium
-    human_checkpoint: false
-    preauthorized: false
-    branch: ticket/T-43-04-bounded-reachability-o-1-git-forms-a-lar
-    epic: epic/43-target-project-delivery-at-scale
-    primary_parent: null
-    pr_base: epic/43-target-project-delivery-at-scale
-    jira: null
   T-43-05:
     title: Keep an arch-review finding of unknown type as an informational note that never changes the verdict
     plan: '.planning/phases/43-target-project-delivery-at-scale/43-05-PLAN.md'
@@ -3406,9 +3390,9 @@ tickets:
     plan: '.planning/phases/43-target-project-delivery-at-scale/43-07-PLAN.md'
     phase: '43'
     repo: null
-    wave: 1
-    depends_on: []
-    files: [plugins/delivery-pipeline/scripts/check-state.cjs, tests/unit/check-state.test.cjs, plugins/delivery-pipeline/scripts/ci-wait.cjs, tests/unit/ci-wait.test.cjs, plugins/delivery-pipeline/scripts/log-event.cjs, tests/unit/log-event.test.cjs]
+    wave: 10
+    depends_on: [T-40-22]
+    files: [plugins/delivery-pipeline/scripts/check-state.cjs, tests/unit/check-state.test.cjs, plugins/delivery-pipeline/scripts/ci-wait.cjs, tests/unit/ci-wait.test.cjs, plugins/delivery-pipeline/scripts/log-event.cjs, tests/unit/log-event.test.cjs, tests/unit/sentinel.test.cjs]
     risk: high
     human_checkpoint: true
     preauthorized: true
@@ -3417,12 +3401,28 @@ tickets:
     primary_parent: null
     pr_base: epic/43-target-project-delivery-at-scale
     jira: null
+  T-43-04:
+    title: 'Bounded reachability: O(1) git forms, a large buffer, and a declared-path epic check with a path-scoped fallback'
+    plan: '.planning/phases/43-target-project-delivery-at-scale/43-04-PLAN.md'
+    phase: '43'
+    repo: null
+    wave: 11
+    depends_on: [T-43-07, T-40-19, T-40-22]
+    files: [plugins/delivery-pipeline/scripts/run-reachability.cjs, tests/unit/run-reachability.test.cjs, plugins/delivery-pipeline/scripts/sentinel.cjs, tests/unit/sentinel.test.cjs]
+    risk: medium
+    human_checkpoint: false
+    preauthorized: false
+    branch: ticket/T-43-04-bounded-reachability-o-1-git-forms-a-lar
+    epic: epic/43-target-project-delivery-at-scale
+    primary_parent: T-43-07
+    pr_base: ticket/T-43-07-cancelled-checks-ignore-superseded-runs
+    jira: null
   T-43-08:
     title: 'A stale approval from a declared bot does not block the merge; re-request once, then escalate with the command'
     plan: '.planning/phases/43-target-project-delivery-at-scale/43-08-PLAN.md'
     phase: '43'
     repo: null
-    wave: 11
+    wave: 12
     depends_on: [T-43-04, T-43-01, T-43-07, T-40-19, T-40-22]
     files: [plugins/delivery-pipeline/scripts/reviewers.cjs, tests/unit/reviewers.test.cjs, plugins/delivery-pipeline/scripts/sentinel.cjs, tests/unit/sentinel.test.cjs, plugins/delivery-pipeline/scripts/log-event.cjs, tests/unit/log-event.test.cjs]
     risk: high
@@ -3486,7 +3486,7 @@ tickets:
     plan: '.planning/phases/43-target-project-delivery-at-scale/43-12-PLAN.md'
     phase: '43'
     repo: null
-    wave: 12
+    wave: 13
     depends_on: [T-43-08, T-43-11, T-40-19, T-40-22, T-40-20, T-40-03, T-40-25]
     files: [plugins/delivery-pipeline/scripts/validate-graph.cjs, tests/smoke/graph-validator-smoke.sh, plugins/delivery-pipeline/scripts/front.cjs, tests/unit/front.test.cjs, plugins/delivery-pipeline/scripts/sentinel.cjs, tests/unit/sentinel.test.cjs, plugins/delivery-pipeline/scripts/pipeline-stats.cjs, tests/unit/pipeline-stats.test.cjs, plugins/delivery-pipeline/commands/decompose.md, plugins/delivery-pipeline/skills/delivery-rules/SKILL.md, '.shipyard/generated/gsd-delivery-rules/SKILL.md']
     risk: high
@@ -3534,7 +3534,7 @@ tickets:
     plan: '.planning/phases/43-target-project-delivery-at-scale/43-15-PLAN.md'
     phase: '43'
     repo: null
-    wave: 13
+    wave: 14
     depends_on: [T-43-12, T-43-14, T-40-15, T-40-25]
     files: [plugins/delivery-pipeline/scripts/deliver-dispatch.cjs, tests/unit/deliver-dispatch.test.cjs, plugins/delivery-pipeline/commands/investigate.md, plugins/delivery-pipeline/commands/decompose.md, tests/unit/planning-builders-contract.test.cjs]
     risk: medium
