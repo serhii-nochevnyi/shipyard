@@ -618,27 +618,28 @@ function handleCancelled(w, c) {
       try {
         noteRerun(w.id, { head, run_id: String(runId), at: new Date().toISOString() });
       } catch (e) {
-        return { rerun: false, run_id: String(runId), error: `rerun not recorded (${e.message})` };
+        return holdCancelled(c, { rerun: false, run_id: String(runId), error: `rerun not recorded (${e.message})` });
       }
       const logged = runBounded(process.execPath, [path.join(__dirname, 'log-event.cjs'), 'ci_rerun',
         `ticket=${w.id}`, `pr=${w.pr}`, `head=${head}`, `run_id=${runId}`, '--graph', GRAPH],
       { timeoutMs: INTERNAL_COMMAND_TIMEOUT_MS });
-      return { rerun: true, run_id: String(runId), journalled: logged.status === 0 };
+      return holdCancelled(c, { rerun: true, run_id: String(runId), journalled: logged.status === 0 });
     }
-    return failCancelled(c, { rerun: false, run_id: String(runId), error: diagnostic(r) });
+    return { rerun: false, run_id: String(runId), error: diagnostic(r) };
   }
   if (prior && head && prior.head === head) {
     const rerunAt = Date.parse(prior.at || '');
     const stale = c.cancelled_runs.every((r) => Number.isFinite(rerunAt) && !(Date.parse(r.started_at || '') > rerunAt));
-    if (stale) return { rerun: false, run_id: runId, awaiting_rerun: prior.run_id };
-    return failCancelled(c, { rerun: false, run_id: runId, already_rerun: prior.run_id });
+    if (stale) return holdCancelled(c, { rerun: false, run_id: runId, awaiting_rerun: prior.run_id });
+    return { rerun: false, run_id: runId, already_rerun: prior.run_id };
   }
-  return failCancelled(c, { rerun: false, run_id: runId, error: head ? 'no run id for the cancelled check' : 'no head sha on record' });
+  return { rerun: false, run_id: runId, error: head ? 'no run id for the cancelled check' : 'no head sha on record' };
 }
 
-function failCancelled(c, outcome) {
-  c.failing += c.cancelled;
-  c.pending -= c.cancelled;
+// @invariant: a cancel is failing in check-state; only while its one rerun is in flight does the wait hold it pending.
+function holdCancelled(c, outcome) {
+  c.failing -= c.cancelled;
+  c.pending += c.cancelled;
   return outcome;
 }
 

@@ -21,7 +21,7 @@ test('the five buckets gh reports each land in exactly one tally', () => {
     { bucket: 'pass' }, { bucket: 'skipping' },
   ]);
   assert.deepStrictEqual(got, {
-    total: 5, failing: 1, pending: 2, passing: 1, skipped: 1, cancelled: 1, superseded: 0,
+    total: 5, failing: 2, pending: 1, passing: 1, skipped: 1, cancelled: 1, superseded: 0,
     cancelled_runs: [{ name: null, run_id: null, started_at: null }], none_reported: false, unavailable: false,
   });
 });
@@ -36,14 +36,14 @@ test('the tallies partition the rows — nothing is counted twice or dropped', (
   assert.strictEqual(c.failing + c.pending + c.passing + c.skipped + c.superseded, c.total);
 });
 
-test('a lone latest cancel is pending and cancelled — never passing, failing, or green', () => {
+test('a lone latest cancel is failing and cancelled — never passing or green', () => {
   const c = classify([{
     name: 'publish', bucket: 'cancel', state: 'CANCELLED', startedAt: '2026-09-01T10:00:00Z',
     link: 'https://github.com/o/r/actions/runs/4242/job/9',
   }]);
-  assert.strictEqual(c.pending, 1);
+  assert.strictEqual(c.failing, 1);
   assert.strictEqual(c.cancelled, 1);
-  assert.strictEqual(c.failing, 0);
+  assert.strictEqual(c.pending, 0);
   assert.strictEqual(c.passing, 0);
   assert.deepStrictEqual(c.cancelled_runs, [{ name: 'publish', run_id: '4242', started_at: '2026-09-01T10:00:00Z' }]);
   assert.strictEqual(isGreen(c), false);

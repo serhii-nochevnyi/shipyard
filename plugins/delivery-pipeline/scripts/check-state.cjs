@@ -114,9 +114,9 @@ function classify(rows) {
     switch (bucket) {
       case 'pass': out.passing += 1; break;
       case 'fail': out.failing += 1; break;
-      // @invariant: a lone latest cancel is pending and cancelled, never passing or failing, so never green.
+      // @invariant: a lone latest cancel is failing and cancelled, never passing, so never green.
       case 'cancel':
-        out.pending += 1;
+        out.failing += 1;
         out.cancelled += 1;
         out.cancelled_runs.push({ name: row.name || null, run_id: runIdOf(row), started_at: row.startedAt || null });
         break;
