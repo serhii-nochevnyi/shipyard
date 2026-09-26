@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 94e5250756fd0b88fe6ccf7f4613efa5c8428deb51288ecb365e0d309e7f9246
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: b069eeaf75794eed6bf9c3c35957c0d4e4b2935a0da2d43ebb6f6f1dc0b49959
 phase: 43-target-project-delivery-at-scale
 plan: 17
 subsystem: shipyard delivery
@@ -22,7 +22,7 @@ key-decisions:
 duration: 0min
 status: halted
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 94e5250756fd0b88fe6ccf7f4613efa5c8428deb51288ecb365e0d309e7f9246
+shipyard_source_fingerprint: b069eeaf75794eed6bf9c3c35957c0d4e4b2935a0da2d43ebb6f6f1dc0b49959
 ---
 
 # Phase 43: Record a sealed coverage entry for every trusted finalization and mechanical base-merge, plus the rollout marker — Delivery Projection

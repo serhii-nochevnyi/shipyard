@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 32e6ec7b46409d3daa7169175a2c88a3806978e8b4d0eb8f66657b310672325c
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 656a4c5036d020811b6639577df78a109c04c49984afddeb08c45a9d4599fbb8
 phase: 43-target-project-delivery-at-scale
 plan: 07
 subsystem: shipyard delivery
@@ -22,7 +22,7 @@ key-decisions:
 duration: 0min
 status: halted
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 32e6ec7b46409d3daa7169175a2c88a3806978e8b4d0eb8f66657b310672325c
+shipyard_source_fingerprint: 656a4c5036d020811b6639577df78a109c04c49984afddeb08c45a9d4599fbb8
 ---
 
 # Phase 43: Cancelled checks: ignore superseded runs, one journalled rerun that is never green; ci-wait returns within 540 s on Claude — Delivery Projection
