@@ -109,7 +109,7 @@ function expectedVariants(phase) {
     .flatMap((role) => policy.CODEX_ROLE_RUNG_DEFINITIONS[role].map((rung) => ({
       role, rung: rung.name, file: policy.codexAgentFile(role, rung.name),
       model: policy.CODEX_MODEL_IDS[rung.model_key], effort: rung.effort,
-      sandbox: ['research', 'arch-review', 'drift-check'].includes(role) ? 'read-only' : 'workspace-write',
+      sandbox: ['arch-review', 'drift-check'].includes(role) ? 'read-only' : 'workspace-write',
     })));
 }
 
