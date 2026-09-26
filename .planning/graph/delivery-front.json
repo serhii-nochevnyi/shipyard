@@ -1,14 +1,13 @@
 {
-  "generated_at": "2026-09-26T07:31:19.195Z",
-  "observed_at": "2026-09-26T07:31:19.195Z",
-  "generation": 366,
+  "generated_at": "2026-09-26T08:26:39.239Z",
+  "observed_at": "2026-09-26T08:26:39.239Z",
+  "generation": 367,
   "parked_by_run": [],
   "auto_merge": "epic",
-  "dispatches_applied_at": "2026-09-26T07:31:19.195Z",
+  "dispatches_applied_at": "2026-09-26T08:26:39.239Z",
   "actionable": {
     "execute": [
       "T-42-01",
-      "T-41-09",
       "T-40-05",
       "T-40-07",
       "T-40-06"
@@ -222,7 +221,8 @@
       "T-41-05",
       "T-41-06",
       "T-41-07",
-      "T-41-08"
+      "T-41-08",
+      "T-41-09"
     ]
   },
   "why": {
@@ -236,7 +236,6 @@
     "T-40-19": "T-40-03 (parent has no branch yet (nothing to cascade from))",
     "T-40-17": "T-40-19 (parent has no branch yet (nothing to cascade from))",
     "T-40-20": "T-40-17 (parent has no branch yet (nothing to cascade from))",
-    "T-41-09": "ready — worktree + executor",
     "T-42-01": "ready — worktree + executor",
     "T-40-01": "T-42-01 (cross-phase parent must be MERGED and its phase 42 epic landed on main first (parent is pending))",
     "T-40-10": "T-40-01 (parent has no branch yet (nothing to cascade from))",
@@ -245,10 +244,10 @@
     "T-40-14": "T-40-12 (parent has no branch yet (nothing to cascade from)); T-42-01 (cross-phase parent must be MERGED and its phase 42 epic landed on main first (parent is pending))",
     "T-40-11": "T-40-04 (parent has no branch yet (nothing to cascade from)); T-40-14 (parent has no branch yet (nothing to cascade from))",
     "T-40-09": "T-40-11 (parent has no branch yet (nothing to cascade from)); T-40-07 (parent has no branch yet (nothing to cascade from)); T-40-14 (parent has no branch yet (nothing to cascade from)); T-41-04 (cross-phase parent must land on main first (phase 41 epic still ahead)); T-42-01 (cross-phase parent must be MERGED and its phase 42 epic landed on main first (parent is pending))",
-    "T-40-16": "T-40-01 (parent has no branch yet (nothing to cascade from)); T-41-01 (cross-phase parent must land on main first (phase 41 epic still ahead)); T-41-09 (cross-phase parent must be MERGED and its phase 41 epic landed on main first (parent is pending))",
+    "T-40-16": "T-40-01 (parent has no branch yet (nothing to cascade from)); T-41-01 (cross-phase parent must land on main first (phase 41 epic still ahead)); T-41-09 (cross-phase parent must land on main first (phase 41 epic still ahead))",
     "T-40-15": "T-40-14 (parent has no branch yet (nothing to cascade from)); T-40-17 (parent has no branch yet (nothing to cascade from)); T-40-16 (parent has no branch yet (nothing to cascade from))",
     "T-40-18": "T-40-17 (parent has no branch yet (nothing to cascade from)); T-42-01 (cross-phase parent must be MERGED and its phase 42 epic landed on main first (parent is pending))",
-    "T-40-22": "T-40-21 (parent has no branch yet (nothing to cascade from)); T-40-16 (parent has no branch yet (nothing to cascade from)); T-40-14 (parent has no branch yet (nothing to cascade from)); T-40-19 (parent has no branch yet (nothing to cascade from)); T-41-01 (cross-phase parent must land on main first (phase 41 epic still ahead)); T-41-09 (cross-phase parent must be MERGED and its phase 41 epic landed on main first (parent is pending))",
+    "T-40-22": "T-40-21 (parent has no branch yet (nothing to cascade from)); T-40-16 (parent has no branch yet (nothing to cascade from)); T-40-14 (parent has no branch yet (nothing to cascade from)); T-40-19 (parent has no branch yet (nothing to cascade from)); T-41-01 (cross-phase parent must land on main first (phase 41 epic still ahead)); T-41-09 (cross-phase parent must land on main first (phase 41 epic still ahead))",
     "T-40-23": "T-40-15 (parent has no branch yet (nothing to cascade from)); T-40-17 (parent has no branch yet (nothing to cascade from))",
     "T-40-24": "T-40-15 (parent has no branch yet (nothing to cascade from)); T-40-17 (parent has no branch yet (nothing to cascade from)); T-40-16 (parent has no branch yet (nothing to cascade from)); T-41-07 (cross-phase parent must land on main first (phase 41 epic still ahead))",
     "T-40-25": "T-40-12 (parent has no branch yet (nothing to cascade from)); T-40-17 (parent has no branch yet (nothing to cascade from))",
@@ -256,7 +255,7 @@
     "T-40-27": "T-40-18 (parent has no branch yet (nothing to cascade from)); T-42-01 (cross-phase parent must be MERGED and its phase 42 epic landed on main first (parent is pending))"
   },
   "counts": {
-    "execute": 5,
+    "execute": 4,
     "publish": 0,
     "fix": 0,
     "finalize": 0,
@@ -267,10 +266,10 @@
     "merge_human": 0,
     "human": 0,
     "blocked": 23,
-    "done": 171
+    "done": 172
   },
   "parent_of": {},
-  "actionable_count": 5,
+  "actionable_count": 4,
   "tracker_blocked_count": 0,
   "left_behind_count": 0,
   "fixpoint": false,
