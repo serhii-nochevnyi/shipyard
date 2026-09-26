@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 06fdd4b8fa9c1358928792a7a416941219096c510b4de487bb6e6806a5ab0d43
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 41370ba77680411be242772f1f9a325b6c74c5936118071bc3469f21a40f6da3
 phase: 40-build-delivery-seams-and-clean-target-project-prs
 plan: 11
 subsystem: shipyard delivery
@@ -22,7 +22,7 @@ key-decisions:
 duration: 0min
 status: halted
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 06fdd4b8fa9c1358928792a7a416941219096c510b4de487bb6e6806a5ab0d43
+shipyard_source_fingerprint: 41370ba77680411be242772f1f9a325b6c74c5936118071bc3469f21a40f6da3
 ---
 
 # Phase 40: Let the Codex GSD researcher write only its artifact and seal Codex decomposition results — Delivery Projection
