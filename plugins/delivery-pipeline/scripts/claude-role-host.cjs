@@ -1102,6 +1102,12 @@ function firstResponseUsage(evidence) {
     return { status: 'unknown', reason: 'transcript is unreadable' };
   }
   if (sha(content) !== transcript.sha256) return { status: 'unknown', reason: 'transcript content does not match its recorded digest' };
+
+  // @contract: mirrors usage-report.cjs Claude grouping — message id/uuid key, max-merge, stop_reason required.
+  const order = [];
+  const groups = new Map();
+  let sawSynthetic = false;
+  let sawNoIdentity = false;
   for (const line of content.toString('utf8').split(/\r?\n/)) {
     if (!line.trim()) continue;
     let record;
@@ -1111,11 +1117,38 @@ function firstResponseUsage(evidence) {
     const isAssistant = record.type === 'assistant' || (message !== null && message.role === 'assistant');
     const usage = object(record.usage) ? record.usage : message && object(message.usage) ? message.usage : null;
     if (!isAssistant || !usage) continue;
-    const counters = {};
-    for (const key of USAGE_FIELDS) counters[key] = Number.isSafeInteger(usage[key]) ? usage[key] : null;
-    return { status: 'observed', dispatch_identity: { session_id: evidence.session_id, launch_id: evidence.launch_id || null }, counters };
+    const model = message && typeof message.model === 'string' ? message.model : null;
+    if (model === '<synthetic>') { sawSynthetic = true; continue; }
+    const messageId = message && typeof message.id === 'string' && message.id ? message.id : null;
+    const key = messageId ? JSON.stringify(['message', messageId])
+      : typeof record.uuid === 'string' && record.uuid ? JSON.stringify(['uuid', record.uuid]) : null;
+    if (!key) { sawNoIdentity = true; continue; }
+    let group = groups.get(key);
+    if (!group) { group = { model, conflicting: false, records: [] }; groups.set(key, group); order.push(key); }
+    else if (model && group.model && model !== group.model) group.conflicting = true;
+    else if (model && !group.model) group.model = model;
+    group.records.push({ usage, stopReason: Boolean(message ? message.stop_reason : record.stop_reason) });
   }
-  return { status: 'unknown', reason: 'no matching first-response usage record' };
+  if (!order.length) {
+    if (sawNoIdentity) return { status: 'unknown', reason: 'no identity' };
+    if (sawSynthetic) return { status: 'unknown', reason: 'synthetic-only' };
+    return { status: 'unknown', reason: 'no matching first-response usage record' };
+  }
+  const first = groups.get(order[0]);
+  if (first.conflicting) return { status: 'unknown', reason: 'conflicting model' };
+  const counters = {};
+  for (const field of USAGE_FIELDS) counters[field] = null;
+  let complete = false;
+  for (const record of first.records) {
+    for (const field of USAGE_FIELDS) {
+      const value = record.usage[field];
+      if (!Number.isSafeInteger(value)) continue;
+      counters[field] = counters[field] === null ? value : Math.max(counters[field], value);
+    }
+    if (record.stopReason) complete = true;
+  }
+  if (!complete) return { status: 'unknown', reason: 'incomplete' };
+  return { status: 'observed', dispatch_identity: { session_id: evidence.session_id, launch_id: evidence.launch_id || null }, counters };
 }
 
 function sealResult(prepared, result, recorder, dispatchId) {
