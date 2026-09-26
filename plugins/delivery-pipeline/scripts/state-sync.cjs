@@ -68,7 +68,7 @@ const { classify, isGreen, unavailableNote, CHECK_FIELDS } = require(path.join(_
 const { resolveAndPersistRepository } = require(path.join(__dirname, 'repo-resolve.cjs'));
 // The trailer's parser lives with its writer (gate-trailer.cjs), because a
 // verdict the board and the guard must agree on cannot be held by three copies.
-const { parseGate } = require(path.join(__dirname, 'gate-trailer.cjs'));
+const { readGate } = require(path.join(__dirname, 'gate-trailer.cjs'));
 const { readCapacitySnapshot } = require(path.join(__dirname, 'capacity-lease.cjs'));
 
 const ROOT = process.cwd();
@@ -620,7 +620,7 @@ for (const [id, t] of Object.entries(tickets)) {
         const behind = typeof cmp === 'string' && /^\d+$/.test(cmp.trim()) ? parseInt(cmp.trim(), 10) : null;
         if (behind !== null) entry.behind_by = behind;
       }
-      const gate = parseGate(pr.body);
+      const gate = readGate({ repo, sha: entry.head_sha, body: pr.body });
       if (gate) entry.gate = gate;
       const { rows, note } = ghChecks(pr.number, repo);
       // check-state.cjs classifies; this file only records. The KEYS are the
