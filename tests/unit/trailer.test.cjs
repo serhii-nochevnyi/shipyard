@@ -62,6 +62,20 @@ fs.writeFileSync(GH, [
   '  "api graphql"*)',
   '    if [ -n "${SHIPYARD_TRAILER_THREADS:-}" ]; then cat "$SHIPYARD_TRAILER_THREADS";',
   '    else echo \'{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}\'; fi ;;',
+  '  "api repos/"*"/commits/"*"/statuses"*)',
+  '    sha="${argv#*commits/}"; sha="${sha%%/*}"',
+  '    if [ -n "${SHIPYARD_TRAILER_STATUSES:-}" ] && [ -f "$SHIPYARD_TRAILER_STATUSES/$sha.json" ]; then cat "$SHIPYARD_TRAILER_STATUSES/$sha.json"; else echo "[]"; fi ;;',
+  '  "api repos/"*"/statuses/"*)',
+  '    if [ -n "${SHIPYARD_TRAILER_CARRY_CWD:-}" ]; then pwd > "$SHIPYARD_TRAILER_CARRY_CWD"; fi',
+  '    sha="${2#*statuses/}"; st=""; ctx=""; desc=""; prev=""',
+  '    for a in "$@"; do',
+  '      if [ "$prev" = "-f" ]; then case "$a" in state=*) st="${a#state=}" ;; context=*) ctx="${a#context=}" ;; description=*) desc="${a#description=}" ;; esac; fi',
+  '      prev="$a"',
+  '    done',
+  '    mkdir -p "$SHIPYARD_TRAILER_STATUSES"',
+  '    printf \'[{"context":"%s","state":"%s","description":"%s"}]\' "$ctx" "$st" "$desc" > "$SHIPYARD_TRAILER_STATUSES/$sha.json"',
+  '    echo "$sha" >> "$SHIPYARD_TRAILER_STATUSES/posted.log"',
+  '    echo \'{"state":"success"}\' ;;',
   // The writer's own view is matched by its FIELD LIST, not by the absence of
   // `--repo`: with `--repo acme/demo` its argv starts `pr view 9 --repo` too, the
   // same prefix as the reviewers.cjs call below, and the first matching case wins.
@@ -407,34 +421,116 @@ const oneOpenThread = JSON.stringify({
   } } } },
 });
 
+const { gateFromStatus, readGate, STATUS_MAX } = require(TRAILER);
+
+function postedIn(dir) {
+  const log = path.join(dir, 'posted.log');
+  const shas = fs.existsSync(log) ? fs.readFileSync(log, 'utf8').split('\n').filter(Boolean) : [];
+  const posted = shas.map((sha) => ({ sha, ...JSON.parse(fs.readFileSync(path.join(dir, `${sha}.json`), 'utf8'))[0] }));
+  const last = posted[posted.length - 1];
+  return {
+    posted,
+    description: last ? last.description : null,
+    gate: last ? gateFromStatus(last, last.sha) : null,
+  };
+}
+
 function writeTrailer({ body, headRefOid, threads, args } = {}) {
   fs.writeFileSync(PRVIEW, JSON.stringify({ number: 9, body: body === undefined ? 'Ticket: T-01-01\n' : body, ...(headRefOid === null ? {} : { headRefOid: headRefOid || SHA_A }) }));
   try { fs.unlinkSync(EDIT); } catch { /* not written yet */ }
-  const env = { ...process.env, PATH: `${BIN}${path.delimiter}${process.env.PATH}`, SHIPYARD_TRAILER_PRVIEW: PRVIEW, SHIPYARD_TRAILER_EDIT: EDIT };
+  const statuses = fs.mkdtempSync(path.join(W, 'statuses-'));
+  const env = { ...process.env, PATH: `${BIN}${path.delimiter}${process.env.PATH}`, SHIPYARD_TRAILER_PRVIEW: PRVIEW, SHIPYARD_TRAILER_EDIT: EDIT, SHIPYARD_TRAILER_STATUSES: statuses };
   if (threads) { fs.writeFileSync(THREADS, threads); env.SHIPYARD_TRAILER_THREADS = THREADS; }
   const r = spawnSync(process.execPath, [TRAILER, ...(args || ['write', '9', '--arch-review', 'conform', '--drift-check', 'fresh', '--degenerate-green', 'clean'])], { encoding: 'utf8', env });
-  return { ...r, edited: fs.existsSync(EDIT) ? fs.readFileSync(EDIT, 'utf8') : null };
+  return { ...r, edited: fs.existsSync(EDIT) ? fs.readFileSync(EDIT, 'utf8') : null, ...postedIn(statuses) };
 }
 
-test('the written trailer carries the live head, and there is exactly ONE of them', () => {
-  // The stale line is STRIPPED, not appended past: a body with two lines hides
-  // the verdict above it, which is the failure mode the suites above pin. Here it
-  // cannot happen by construction.
+test('the verdict is posted as a merge-gate status on the live head, and a legacy line is removed', () => {
   const r = writeTrailer({
     body: `Ticket: T-01-01\n\nProblem: x\n\ngate_status: arch-review=conform, drift-check=fresh, degenerate-green=clean, checks=green, head=${SHA_B}`,
     headRefOid: SHA_A,
   });
   assert.strictEqual(r.status, 0, `${r.stdout}\n${r.stderr}`);
-  const lines = r.edited.split('\n').filter((l) => /^\s*gate_status:/i.test(l));
-  assert.strictEqual(lines.length, 1, `expected one trailer, got:\n${r.edited}`);
-  assert.ok(lines[0].includes(`head=${SHA_A}`), lines[0]);
+  assert.strictEqual(r.posted.length, 1, 'exactly one status is posted');
+  assert.strictEqual(r.posted[0].sha, SHA_A);
+  assert.strictEqual(r.posted[0].context, 'merge-gate');
+  assert.strictEqual(r.posted[0].state, 'success');
+  assert.ok(!/gate_status:/.test(r.edited), `the legacy trailer survived:\n${r.edited}`);
   assert.ok(!r.edited.includes(SHA_B), `the superseded head survived:\n${r.edited}`);
   assert.ok(r.edited.startsWith('Ticket: T-01-01'), `the body was not preserved:\n${r.edited}`);
-  // Writer → reader round trip: what this script writes is what the three
-  // readers accept for that head, and reject for any other. Asserting the text
-  // alone would pin the format and not the agreement.
-  assert.strictEqual(gateConform(parseGate(r.edited), SHA_A), true);
-  assert.strictEqual(gateConform(parseGate(r.edited), SHA_B), false);
+  assert.strictEqual(gateConform(r.gate, SHA_A), true);
+  assert.strictEqual(gateConform(r.gate, SHA_B), false);
+});
+
+test('a new verdict on a clean body never edits the PR body', () => {
+  const r = writeTrailer({ body: 'Ticket: T-01-01\n\nProblem: x\n' });
+  assert.strictEqual(r.status, 0, `${r.stdout}\n${r.stderr}`);
+  assert.strictEqual(r.edited, null, `the body was edited:\n${r.edited}`);
+  assert.strictEqual(r.posted.length, 1);
+});
+
+test('the status description round-trips through the parseGate grammar and fits 140 chars', () => {
+  const r = writeTrailer({
+    args: ['write', '9', '--arch-review', 'conform', '--drift-check', 'skipped',
+      '--degenerate-green', 'skipped', '--base-tree', SHA_B],
+  });
+  assert.strictEqual(r.status, 0, `${r.stdout}\n${r.stderr}`);
+  assert.ok(r.description.length <= STATUS_MAX, `${r.description.length}: ${r.description}`);
+  const parsed = parseGate(`gate_status: ${r.description}`);
+  assert.strictEqual(parsed['arch-review'], 'conform');
+  assert.strictEqual(parsed.base_tree, SHA_B);
+  assert.strictEqual(parsed['drift-check'], 'skipped');
+});
+
+suite('readGate: the merge-gate status first, the body trailer only as a legacy fallback');
+
+function withStatuses(map, fn) {
+  const dir = fs.mkdtempSync(path.join(W, 'read-'));
+  for (const [sha, rows] of Object.entries(map)) fs.writeFileSync(path.join(dir, `${sha}.json`), JSON.stringify(rows));
+  const saved = { PATH: process.env.PATH, S: process.env.SHIPYARD_TRAILER_STATUSES };
+  process.env.PATH = `${BIN}${path.delimiter}${process.env.PATH}`;
+  process.env.SHIPYARD_TRAILER_STATUSES = dir;
+  try { return fn(); } finally {
+    process.env.PATH = saved.PATH;
+    if (saved.S === undefined) delete process.env.SHIPYARD_TRAILER_STATUSES; else process.env.SHIPYARD_TRAILER_STATUSES = saved.S;
+  }
+}
+
+const conformStatus = { context: 'merge-gate', state: 'success', description: 'arch-review=conform, drift-check=fresh' };
+const legacyBody = (head) => `${PREAMBLE}gate_status: arch-review=conform, head=${head}`;
+
+test('a status wins over a body trailer', () => {
+  withStatuses({ [SHA_A]: [{ context: 'merge-gate', state: 'failure', description: 'arch-review=violation' }] }, () => {
+    const gate = readGate({ sha: SHA_A, body: legacyBody(SHA_A) });
+    assert.strictEqual(gateConform(gate, SHA_A), false, JSON.stringify(gate));
+  });
+  withStatuses({ [SHA_A]: [conformStatus] }, () => {
+    const gate = readGate({ sha: SHA_A, body: legacyBody(SHA_B) });
+    assert.strictEqual(gateConform(gate, SHA_A), true, JSON.stringify(gate));
+    assert.strictEqual(gate['drift-check'], 'fresh');
+  });
+});
+
+test('the newest merge-gate status wins and other contexts are ignored', () => {
+  withStatuses({ [SHA_A]: [{ context: 'ci/other', state: 'success', description: 'arch-review=conform' },
+    conformStatus, { context: 'merge-gate', state: 'failure', description: 'arch-review=violation' }] }, () => {
+    assert.strictEqual(gateConform(readGate({ sha: SHA_A, body: '' }), SHA_A), true);
+  });
+});
+
+test('without any status the legacy body trailer is honoured, bound to its head', () => {
+  withStatuses({}, () => {
+    assert.strictEqual(gateConform(readGate({ sha: SHA_A, body: legacyBody(SHA_A) }), SHA_A), true);
+    assert.strictEqual(gateConform(readGate({ sha: SHA_A, body: legacyBody(SHA_B) }), SHA_A), false);
+    assert.strictEqual(readGate({ sha: SHA_A, body: 'no trailer' }), null);
+  });
+});
+
+test('a status on a stale sha is not a verdict for the live head', () => {
+  withStatuses({ [SHA_B]: [conformStatus] }, () => {
+    assert.strictEqual(gateConform(readGate({ sha: SHA_A, body: '' }), SHA_A), false);
+    assert.strictEqual(gateConform(readGate({ sha: SHA_B, body: '' }), SHA_A), false);
+  });
 });
 
 test('an unresolved thread refuses the write, and nothing is edited', () => {
@@ -640,9 +736,8 @@ for (const [what, over, extra, expected] of [
   test(`accepted: ${what}`, () => {
     const r = writeTrailer({ args: argsWith(over, extra) });
     assert.strictEqual(r.status, 0, `expected the write to succeed\n${r.stdout}\n${r.stderr}`);
-    const lines = r.edited.split('\n').filter((l) => /^\s*gate_status:/i.test(l));
-    assert.strictEqual(lines.length, 1, `expected one trailer, got:\n${r.edited}`);
-    assert.ok(lines[0].includes(expected), `expected \`${expected}\` in: ${lines[0]}`);
+    assert.strictEqual(r.posted.length, 1, 'expected one status');
+    assert.ok(r.description.includes(expected), `expected \`${expected}\` in: ${r.description}`);
   });
 }
 
@@ -652,8 +747,8 @@ test('the writer accepts exactly the casing the readers do, and no other', () =>
   // it writes for; one that accepted `confrom` would be looser than its own docs.
   const r = writeTrailer({ args: argsWith({ 'arch-review': 'CONFORM', 'drift-check': 'Skipped' }) });
   assert.strictEqual(r.status, 0, `${r.stdout}\n${r.stderr}`);
-  assert.strictEqual(gateConform(parseGate(r.edited), SHA_A), true, `the reader must accept what was written:\n${r.edited}`);
-  assert.strictEqual(gateKind(parseGate(r.edited), SHA_B), 'stale', 'and still bind it to the head it judged');
+  assert.strictEqual(gateConform(r.gate, SHA_A), true, `the reader must accept what was written:\n${r.description}`);
+  assert.strictEqual(gateKind(r.gate, SHA_B), 'stale', 'and still bind it to the head it judged');
 });
 
 test('a rejected value is refused BEFORE the PR is read, not after', () => {
@@ -757,15 +852,14 @@ test('the sentinel\'s own invocation, flag for flag, still writes', () => {
       '--arch-review', 'conform', '--drift-check', 'skipped', '--degenerate-green', 'clean'],
   });
   assert.strictEqual(r.status, 0, `the guard's own invocation was refused\n${r.stdout}\n${r.stderr}`);
-  const lines = r.edited.split('\n').filter((l) => /^\s*gate_status:/i.test(l));
-  assert.strictEqual(lines.length, 1, `expected one trailer, got:\n${r.edited}`);
-  assert.ok(lines[0].includes('arch-review=conform'), lines[0]);
-  assert.ok(lines[0].includes('drift-check=skipped'), lines[0]);
-  assert.ok(lines[0].includes('degenerate-green=clean'), lines[0]);
-  assert.ok(lines[0].includes('checks=green'), lines[0]);
-  assert.ok(lines[0].includes(`head=${SHA_A}`), lines[0]);
-  // And what it wrote is what the three readers accept for that head.
-  assert.strictEqual(gateConform(parseGate(r.edited), SHA_A), true);
+  assert.strictEqual(r.posted.length, 1, 'expected one status');
+  const d = r.description;
+  assert.ok(d.includes('arch-review=conform'), d);
+  assert.ok(d.includes('drift-check=skipped'), d);
+  assert.ok(d.includes('degenerate-green=clean'), d);
+  assert.ok(d.includes('checks=green'), d);
+  assert.strictEqual(r.posted[0].sha, SHA_A);
+  assert.strictEqual(gateConform(r.gate, SHA_A), true);
 });
 
 test('a duplicate is refused BEFORE the PR is read, like every other usage error', () => {
@@ -833,7 +927,8 @@ function carryRepo({ move = 'empty-commit', base = 'same' } = {}) {
   g(repo, ['init', '-q']);
   g(repo, ['config', 'user.email', 't@e']);
   g(repo, ['config', 'user.name', 'T']);
-  const w = (rel, body) => fs.writeFileSync(path.join(repo, rel), body);
+  g(repo, ['config', 'commit.gpgsign', 'false']);
+  const w =(rel, body) => fs.writeFileSync(path.join(repo, rel), body);
 
   w('a.txt', 'x\ny\n');
   g(repo, ['add', '.']);
@@ -878,7 +973,8 @@ const conformTrailerFor = (head, baseTree) => `${PREAMBLE}gate_status: arch-revi
 // The carry runner. `--worktree` is passed explicitly rather than relying on the
 // cwd, because that is how base-merge.cjs calls it (an agent's cwd is its own
 // worktree, which may not be the one being merged).
-function carry(fixture, { body, headRefOid, baseRefName = 'base', args, from, to, cwdLog, prNumber = 9 } = {}) {
+function carry(fixture, { body, headRefOid, baseRefName = 'base', args, from, to, cwdLog, prNumber = 9, statuses } = {}) {
+  const statusDir = statuses || fs.mkdtempSync(path.join(W, 'statuses-'));
   fs.writeFileSync(PRVIEW, JSON.stringify({
     number: prNumber,
     baseRefName,
@@ -891,14 +987,18 @@ function carry(fixture, { body, headRefOid, baseRefName = 'base', args, from, to
     PATH: `${BIN}${path.delimiter}${process.env.PATH}`,
     SHIPYARD_TRAILER_PRVIEW: PRVIEW,
     SHIPYARD_TRAILER_EDIT: EDIT,
+    SHIPYARD_TRAILER_STATUSES: statusDir,
     ...(cwdLog ? { SHIPYARD_TRAILER_CARRY_CWD: cwdLog } : {}),
   };
+  fs.rmSync(path.join(statusDir, 'posted.log'), { force: true });
   const r = spawnSync(process.execPath, [TRAILER, ...(args || [
     'carry', 'T-01-01', '--pr', '9',
     '--from', from || fixture.from, '--to', to || fixture.to,
     '--worktree', fixture.repo, '--json',
   ])], { encoding: 'utf8', env });
-  return { ...r, edited: fs.existsSync(EDIT) ? fs.readFileSync(EDIT, 'utf8') : null };
+  const out = { ...r, edited: fs.existsSync(EDIT) ? fs.readFileSync(EDIT, 'utf8') : null, statuses: statusDir, ...postedIn(statusDir) };
+  if (r.status !== 0) assert.strictEqual(out.posted.length, 0, `a refused carry posted a status: ${JSON.stringify(out.posted)}`);
+  return out;
 }
 
 suite('gate-trailer write: base_tree records the base the verdict was rendered against');
@@ -921,11 +1021,9 @@ test('the writer records base_tree beside head when it is given one', () => {
       '--degenerate-green', 'clean', '--base-tree', SHA_B],
   });
   assert.strictEqual(r.status, 0, `${r.stdout}\n${r.stderr}`);
-  const lines = r.edited.split('\n').filter((l) => /^\s*gate_status:/i.test(l));
-  assert.strictEqual(lines.length, 1, `expected one trailer, got:\n${r.edited}`);
-  assert.ok(lines[0].includes(`base_tree=${SHA_B}`), lines[0]);
-  assert.ok(lines[0].includes(`head=${SHA_A}`), lines[0]);
-  assert.strictEqual(parseGate(r.edited).base_tree, SHA_B, 'the writer and the reader must agree');
+  assert.ok(r.description.includes(`base_tree=${SHA_B}`), r.description);
+  assert.strictEqual(r.posted[0].sha, SHA_A);
+  assert.strictEqual(r.gate.base_tree, SHA_B, 'the writer and the reader must agree');
 });
 
 test('--base-tree is optional, and its absence writes the trailer it wrote before', () => {
@@ -934,8 +1032,8 @@ test('--base-tree is optional, and its absence writes the trailer it wrote befor
   // accept. What it must NOT do is invent a base_tree nobody measured.
   const r = writeTrailer();
   assert.strictEqual(r.status, 0, `${r.stdout}\n${r.stderr}`);
-  assert.ok(!/base_tree/.test(r.edited), `a base_tree was invented:\n${r.edited}`);
-  assert.strictEqual(gateConform(parseGate(r.edited), SHA_A), true);
+  assert.ok(!/base_tree/.test(r.description), `a base_tree was invented:\n${r.description}`);
+  assert.strictEqual(gateConform(r.gate, SHA_A), true);
 });
 
 test('an ABBREVIATED base_tree is rejected on write, not silently accepted', () => {
@@ -1130,18 +1228,17 @@ test('the same tree under a new sha carries the verdict onto the new head', () =
 
   const r = carry(fx);
   assert.strictEqual(r.status, 0, `expected the carry to be proved\n${r.stdout}\n${r.stderr}`);
-  const lines = r.edited.split('\n').filter((l) => /^\s*gate_status:/i.test(l));
-  assert.strictEqual(lines.length, 1, `expected one trailer, got:\n${r.edited}`);
-  assert.ok(r.edited.startsWith('Ticket: T-01-01'), `the body was not preserved:\n${r.edited}`);
+  assert.strictEqual(r.edited, null, `carry edited the PR body:\n${r.edited}`);
+  assert.strictEqual(r.posted.length, 1);
+  assert.strictEqual(r.posted[0].sha, fx.to, 'the status goes on the NEW head');
+  assert.ok(r.description.length <= STATUS_MAX, r.description);
 
-  // The whole point, stated through the readers rather than through the text:
-  // the verdict now counts for the NEW head and no longer for the old one.
-  const gate = parseGate(r.edited);
-  assert.strictEqual(gateConform(gate, fx.to), true, `the new head is not conform:\n${lines[0]}`);
+  const gate = r.gate;
+  assert.strictEqual(gateConform(gate, fx.to), true, `the new head is not conform:\n${r.description}`);
   assert.strictEqual(gateKind(gate, fx.from), 'stale', 'the old head must no longer read conform');
   assert.strictEqual(gate.base_tree, fx.judgedBaseTree, 'the proof it was measured against is kept');
   assert.strictEqual(gate['drift-check'], 'fresh', 'every other recorded key survives');
-  assert.strictEqual(gate.carried_from, fx.from, 'the head a judge actually read is recorded');
+  assert.strictEqual(gate.carried_from, fx.from.slice(0, 7), 'the head a judge actually read is recorded');
   assert.strictEqual(JSON.parse(r.stdout).carried, true, r.stdout);
 });
 
@@ -1181,8 +1278,8 @@ test('checks=green NEVER carries — a green is measured by CI against a base', 
     conformTrailerFor(fx.from, fx.judgedBaseTree).includes('checks=green'),
     'the fixture body must carry a green to lose'
   );
-  assert.ok(!/checks=/.test(r.edited), `a green was carried onto an unbuilt commit:\n${r.edited}`);
-  assert.ok(!('checks' in parseGate(r.edited)), 'the reader must see no check claim at all');
+  assert.ok(!/checks=/.test(r.description), `a green was carried onto an unbuilt commit:\n${r.description}`);
+  assert.ok(!('checks' in r.gate), 'the reader must see no check claim at all');
 });
 
 test('a chain of carries keeps the head a judge actually read', () => {
@@ -1197,12 +1294,13 @@ test('a chain of carries keeps the head a judge actually read', () => {
   g(fx.repo, ['commit', '-q', '--allow-empty', '-m', 'another sha over the same tree']);
   const fourth = g(fx.repo, ['rev-parse', 'HEAD']);
   const second = carry(fx, {
-    body: first.edited, headRefOid: third, from: third, to: fourth,
+    headRefOid: third, from: third, to: fourth, statuses: first.statuses,
   });
   assert.strictEqual(second.status, 0, `${second.stdout}\n${second.stderr}`);
-  const gate = parseGate(second.edited);
+  const gate = second.gate;
+  assert.strictEqual(second.posted[0].sha, fourth);
   assert.strictEqual(gateConform(gate, fourth), true);
-  assert.strictEqual(gate.carried_from, fx.from, 'the originally judged head must survive the chain');
+  assert.strictEqual(gate.carried_from, fx.from.slice(0, 7), 'the originally judged head must survive the chain');
 });
 
 done();
