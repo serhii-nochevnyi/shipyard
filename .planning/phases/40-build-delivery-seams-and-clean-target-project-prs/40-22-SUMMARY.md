@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 1328d7c6d610def0e032b0f0f3af836a478ace3fefd28e2c766f7fce928ad2f0
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 6be75b8a8fc320b6e99120dbb4732ad0256b5aaf51628f73c3b34a02a462d48f
 phase: 40-build-delivery-seams-and-clean-target-project-prs
 plan: 22
 subsystem: shipyard delivery
@@ -22,7 +22,7 @@ key-decisions:
 duration: 0min
 status: halted
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 1328d7c6d610def0e032b0f0f3af836a478ace3fefd28e2c766f7fce928ad2f0
+shipyard_source_fingerprint: 6be75b8a8fc320b6e99120dbb4732ad0256b5aaf51628f73c3b34a02a462d48f
 ---
 
 # Phase 40: Stamp every dispatch with a provenance sidecar and refuse dogfood merges into a default branch — Delivery Projection
