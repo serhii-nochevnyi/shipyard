@@ -14,6 +14,7 @@ const { createVerificationRunner } = require('./command-runner.cjs');
 const { createRunScope } = require('./run-scope.cjs');
 const { createRunController, DEFAULT_LEASE_TTL_MS } = require('./run-controller.cjs');
 const { formatHint } = require('./refusal-hints.cjs');
+const { acquire: acquireLock, DEFAULT_TTL_MS: LOCK_TTL_MS } = require('./lock.cjs');
 
 const SCHEMA = 'shipyard.codex-delivery-host.v1';
 const MAX_ARGS_BYTES = 4 * 1024 * 1024;
@@ -27,6 +28,8 @@ const KEY_BYTES = 32;
 const MAX_STATE_BYTES = 1024 * 1024;
 const DOWNSTREAM_GATES = Object.freeze(['ci', 'review']);
 const RESUME_SCOPE_FIELDS = Object.freeze(['run_id', 'repository', 'worktree', 'phase', 'ticket']);
+const PLAN_COMMAND_TIMEOUT_MS = 10 * 60 * 1000;
+const PLAN_COMMAND_OUTPUT_BYTES = 1024 * 1024;
 
 function object(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -261,13 +264,38 @@ function planSnapshot(worktree, row) {
   if (!stat.isFile() || stat.isSymbolicLink() || stat.size > MAX_GRAPH_BYTES) {
     fail('VERIFICATION_SPEC_MISSING', 'approved source PLAN is not a bounded regular file');
   }
-  return Object.freeze({ path: row.plan, sha256: sha256(fs.readFileSync(file)) });
+  const content = fs.readFileSync(file);
+  return Object.freeze({ path: row.plan, sha256: sha256(content), text: content.toString('utf8') });
 }
 
-function pinnedVerification(options, worktree) {
-  const spec = options.verification;
+function planVerification(plan) {
+  const lines = plan.text.split(/\r?\n/);
+  const start = lines.findIndex((line) => /^##\s+Verification commands\s*$/.test(line));
+  if (start === -1) return null;
+  const commands = [];
+  for (const line of lines.slice(start + 1)) {
+    if (/^#{1,2}\s/.test(line)) break;
+    const match = /^\s*[-*]\s+`([^`]+)`\s*$/.exec(line);
+    if (!match) continue;
+    if (/[|&;<>()$\\"'*?~{}[\]!#]/.test(match[1])) {
+      fail('VERIFICATION_SPEC_UNSUPPORTED', 'PLAN verification command must be a plain argv without shell syntax: ' + match[1]
+        + '; split it into separate bullets under "## Verification commands"');
+    }
+    const [program, ...argv] = match[1].trim().split(/\s+/);
+    const executable = program === 'node' ? process.execPath : program;
+    if (!path.isAbsolute(executable)) {
+      fail('VERIFICATION_SPEC_UNSUPPORTED', 'PLAN verification command must start with node or an absolute executable: ' + match[1]);
+    }
+    commands.push({ id: 'plan-' + (commands.length + 1), executable, argv,
+      timeoutMs: PLAN_COMMAND_TIMEOUT_MS, maxOutputBytes: PLAN_COMMAND_OUTPUT_BYTES });
+  }
+  return { commands };
+}
+
+function pinnedVerification(options, worktree, plan) {
+  const spec = options.verification !== undefined ? options.verification : planVerification(plan);
   if (!object(spec) || !Array.isArray(spec.commands) || !spec.commands.length) {
-    fail('VERIFICATION_SPEC_MISSING', 'host has no verification specification; configure options.verification from the approved PLAN');
+    fail('VERIFICATION_SPEC_MISSING', 'approved PLAN ' + plan.path + ' lists no "## Verification commands"; add them to the PLAN');
   }
   const ids = new Set();
   const commands = spec.commands.map((command) => {
@@ -543,7 +571,7 @@ function executorPreflight(options, scope) {
   if (dirty.length) fail('WORKTREE_NOT_READY', 'executor worktree already has changes');
   const baseRef = resolveBaseRef(worktree, snapshot.row.pr_base);
   const plan = planSnapshot(worktree, snapshot.row);
-  const verification = pinnedVerification(options, worktree);
+  const verification = pinnedVerification(options, worktree, plan);
   const commit = Object.freeze({
     ticket: scope.ticket,
     worktree,
@@ -639,15 +667,10 @@ async function resumeFinalization(options, candidateId, liveScopeInput) {
     throw candidateRefusal('IDENTITY_CHANGED', 'original dispatch receipt differs from the candidate', candidate, ['receipt']);
   }
 
-  const lockFile = path.join(privateDirectory(stateRoot, 'recovery'), candidateId + '.lock');
-  let lock;
-  try { lock = fs.openSync(lockFile, 'wx', 0o600); }
-  catch (error) {
-    if (error.code === 'EEXIST') throw candidateRefusal('RECOVERY_IN_PROGRESS', 'another recovery holds candidate ' + candidateId, candidate);
-    throw error;
-  }
+  const lock = acquireLock(privateDirectory(stateRoot, 'recovery'), candidateId,
+    { ttlMs: LOCK_TTL_MS, waitMs: 0, label: 'resume-finalization:' + liveScope.run_id });
+  if (!lock) throw candidateRefusal('RECOVERY_IN_PROGRESS', 'another recovery holds candidate ' + candidateId, candidate);
   try {
-    fs.writeFileSync(lock, JSON.stringify({ pid: process.pid, run_id: liveScope.run_id }) + '\n');
     options.controller?.assertOwner(liveScope.run_id);
     const finalized = readSealed(finalizationFile(stateRoot, candidateId), key);
     if (finalized) {
@@ -690,7 +713,8 @@ async function resumeFinalization(options, candidateId, liveScopeInput) {
     check('signer', () => signerFingerprint(worktree) === candidate.signer);
     check('tree', () => scopedTreeOf({ commit: { worktree, expectedHead: candidate.expected_head,
       files_modified: candidate.files_modified } }, options).tree === candidate.scoped_tree);
-    check('verification-spec', () => pinnedVerification(options, worktree).digest === candidate.verification.spec_sha256);
+    check('verification-spec', () => pinnedVerification(options, worktree, planSnapshot(worktree, graph.snapshot.row))
+      .digest === candidate.verification.spec_sha256);
     for (const pinned of candidate.verification.records) {
       check('verification:' + pinned.id, () => {
         const file = path.join(stateRoot, 'verification', pinned.record_sha256 + '.json');
@@ -713,8 +737,7 @@ async function resumeFinalization(options, candidateId, liveScopeInput) {
     return Object.freeze({ schema: SCHEMA, status: 'committed', resumed: true, idempotent: false,
       candidate_id: candidateId, artifact });
   } finally {
-    fs.closeSync(lock);
-    fs.rmSync(lockFile, { force: true });
+    lock.release();
   }
 }
 

@@ -688,4 +688,84 @@ test('recovery-only CLI returns the signed artifact with zero executor launches 
   } finally { clean(f); }
 });
 
+function approvedPlan(f, commands) {
+  fs.writeFileSync(path.join(f.root, '.planning', 'PLAN.md'), '# approved plan\n\n## Verification commands\n\n'
+    + commands.map((command) => '- `' + command + '`\n').join('') + '\n## Next\n\n- `node --bogus`\n');
+  git(f.root, 'add', '-f', '.planning/PLAN.md');
+  git(f.root, '-c', 'commit.gpgsign=false', 'commit', '-qam', 'approve plan');
+  git(f.root, 'branch', '-f', 'main', 'HEAD');
+  f.base = git(f.root, 'rev-parse', 'HEAD');
+}
+
+test('CLI pins verification from the approved PLAN when no spec is injected', async () => {
+  const f = fixture();
+  const spy = [];
+  const file = path.join(f.graphDir, 'request.json');
+  try {
+    approvedPlan(f, ['node --version']);
+    fs.writeFileSync(file, JSON.stringify({
+      scope: f.scope, role: 'executor', context: { prompt: 'Implement scoped work.' },
+    }));
+    const { verification: _unused, ...options } = cliOptions(f);
+    const result = await runCli(['--args-file', file], { write() {} }, { ...options, verificationRunner: hostRunner(spy) });
+    assert.equal(result.artifact.status, 'committed');
+    assert.deepEqual(spy.map((spec) => [spec.id, spec.executable, spec.argv]), [['plan-1', process.execPath, ['--version']]]);
+    const candidate = JSON.parse(fs.readFileSync(candidatePath(f, result.artifact.candidate_id), 'utf8')).payload;
+    assert.deepEqual(candidate.verification.required, ['plan-1']);
+  } finally { clean(f); }
+});
+
+test('recovery-only CLI reuses the PLAN-pinned verification spec without an injected spec', async () => {
+  const f = fixture();
+  try {
+    approvedPlan(f, ['node --version']);
+    let captured;
+    await assert.rejects(() => delivery(f, { verification: undefined,
+      finalizeCommit() { throw Object.assign(new Error('gpg: signing failed'), { code: 'SIGNING_FAILED' }); },
+    }).run({ role: 'executor', context: { prompt: 'Implement the scoped ticket.' } }),
+    (error) => { captured = error; return error.code === 'SIGNING_FAILED'; });
+    const scopeFile = path.join(f.graphDir, 'recovery-scope.json');
+    fs.writeFileSync(scopeFile, JSON.stringify(liveScope(f)));
+    const result = await runCli(['--resume-finalization', captured.candidate_id, '--scope-file', scopeFile], { write() {} },
+      { storageRoot: f.storageRoot, graphDir: f.graphDir, finalizeCommit, recorder: f.host.recorder });
+    assert.equal(result.artifact.commit, git(f.root, 'rev-parse', 'HEAD'));
+    assert.equal(git(f.root, 'rev-parse', 'HEAD^'), f.base);
+    assert.equal(f.calls.length, 1);
+  } finally { clean(f); }
+});
+
+test('PLAN verification with shell syntax or a bare program refuses before launch', async () => {
+  for (const command of ['node a.cjs && rm -rf x', 'make test']) {
+    const f = fixture();
+    try {
+      approvedPlan(f, [command]);
+      await assert.rejects(() => delivery(f, { verification: undefined }).run({
+        role: 'executor', context: { prompt: 'Implement.' } }), (error) => error.code === 'VERIFICATION_SPEC_UNSUPPORTED');
+      assert.equal(f.calls.length, 0);
+    } finally { clean(f); }
+  }
+});
+
+test('recovery takes over a stale fence left by a dead holder and refuses a live one', async () => {
+  const f = fixture();
+  try {
+    const error = await failedFinalization(f);
+    const lockPath = path.join(stateRoot(f), 'recovery', error.candidate_id + '.lock');
+    const hold = (at) => {
+      fs.rmSync(lockPath, { recursive: true, force: true });
+      fs.mkdirSync(lockPath, { recursive: true });
+      fs.writeFileSync(path.join(lockPath, 'owner.json'), JSON.stringify({ pid: 999999, label: 'crashed', at, token: 'dead' }));
+    };
+    hold(new Date().toISOString());
+    await assert.rejects(() => recovery(f).resumeFinalization(error.candidate_id, liveScope(f)),
+      (refusal) => refusal.code === 'RECOVERY_IN_PROGRESS' && refusal.gates.downstream.ci === 'pending');
+    assert.equal(git(f.root, 'rev-parse', 'HEAD'), f.base);
+    hold(new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString());
+    const result = await recovery(f).resumeFinalization(error.candidate_id, liveScope(f));
+    assert.equal(result.artifact.commit, git(f.root, 'rev-parse', 'HEAD'));
+    assert.equal(fs.existsSync(lockPath), false);
+    assert.equal(f.calls.length, 1);
+  } finally { clean(f); }
+});
+
 done();
