@@ -964,8 +964,8 @@ function buildBoundary(prepared, runtime, dispatchId, ownerId) {
             { dispatchId, phase: prepared.phase, phaseNumber: prepared.phaseNumber,
               ticketSet: prepared.ticketSet, ticketSetDigest: prepared.ticketSetDigest, agentId: ownerId },
           );
-          hostOwnedFiles = roundOwnedFileDigests(prepared);
         }
+        hostOwnedFiles = roundOwnedFileDigests(prepared, dispatchId);
         const child = await runtime.agent(prepared.prompt, {
           model: selection.model,
           effort: selection.effort,
@@ -982,10 +982,10 @@ function buildBoundary(prepared, runtime, dispatchId, ownerId) {
     getHostOwnedFiles: () => hostOwnedFiles };
 }
 
-function roundOwnedFileDigests(prepared) {
+function roundOwnedFileDigests(prepared, dispatchId) {
   const graphRoot = path.resolve(prepared.graph.directory);
   const digests = new Map();
-  for (const relative of ['dispatches.json', 'delivery-front.json']) {
+  for (const relative of ['dispatches.json', 'delivery-front.json', `provenance/${dispatchId}.json`]) {
     const file = path.join(graphRoot, relative);
     let stat;
     try { stat = fs.lstatSync(file); } catch { continue; }
@@ -1213,7 +1213,12 @@ function createClaudeRoleHost(options = {}) {
         try { controller.heartbeat(scope.run_id); } catch (error) { heartbeatError = error; }
       }, 60000) : null;
       if (heartbeat) heartbeat.unref();
+      const inflight = { graphDir: prepared.graph.directory, dispatch_id: dispatchId, pid: process.pid };
+      let inflightRecorded = false;
       try {
+        require('./dispatch-record.cjs').recordInflight({ ...inflight, role: prepared.role, host: 'claude',
+          ticket: prepared.role === 'arch-review' ? prepared.ticket : prepared.rows[0].id });
+        inflightRecorded = true;
         const runtime = options.runtimeHost || runtimeFor(options, scope, controller, storage);
         if (controller && runtime.controller !== controller) reject('runtime host is not bound to the active run controller');
         roleArtifact.prepareRoleArtifact({ worktreePath: prepared.canonical.worktree, role: prepared.role,
@@ -1280,6 +1285,9 @@ function createClaudeRoleHost(options = {}) {
         throw error;
       } finally {
         if (heartbeat) clearInterval(heartbeat);
+        if (inflightRecorded) {
+          try { require('./dispatch-record.cjs').clearInflight(inflight); } catch {}
+        }
       }
     },
   });
