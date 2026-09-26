@@ -1,11 +1,11 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: efc39cdcc6aee529e11a8bad83ac4656650c1bccc0ba00539891a09d924eaf47
-phase: 40-build-delivery-seams-and-clean-target-project-prs
-plan: 27
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 992f95d618525eb4873662fd3329c5a9c1680fdde1d281d567b5dabd96cd4e21
+phase: 42-resume-trusted-finalization-without-executor-replay
+plan: 01
 subsystem: shipyard delivery
 tags: [shipyard, gsd, delivery-projection]
 provides:
-  - Tracked delivery state for T-40-27
+  - Tracked delivery state for T-42-01
 affects: [GSD progress, Shipyard delivery]
 actuals:
   tokens: 0
@@ -22,19 +22,19 @@ key-decisions:
 duration: 0min
 status: halted
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: efc39cdcc6aee529e11a8bad83ac4656650c1bccc0ba00539891a09d924eaf47
+shipyard_source_fingerprint: 992f95d618525eb4873662fd3329c5a9c1680fdde1d281d567b5dabd96cd4e21
 ---
 
-# Phase 40: A diamond child is ready only when its non-primary same-phase parents have landed in the epic — Delivery Projection
+# Phase 42: Resume authenticated completed execution through trusted finalization — Delivery Projection
 
 **Plan delivery is not complete; the projection preserves the current state.**
 
 ## Delivery Evidence
 
-- Ticket: T-40-27
+- Ticket: T-42-01
 - Delivery status: pending
 - PR: not observed
-- Source plan: .planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-27-PLAN.md
+- Source plan: .planning/phases/42-resume-trusted-finalization-without-executor-replay/42-01-PLAN.md
 - This summary is halted until the delivery state observes `merged`.
 
 ## Decisions & Deviations
