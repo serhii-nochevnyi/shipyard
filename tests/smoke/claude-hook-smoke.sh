@@ -89,6 +89,33 @@ node - "$WORK/doctor.json" <<'NODE'
 const fs = require('node:fs');
 const report = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
 if (report.status !== 'ok') throw new Error('doctor did not report a healthy hook: ' + report.status);
+const agents = report.checks.find((c) => c.name === 'codex-agents');
+if (!agents || agents.level !== 'skip') throw new Error('an absent agents manifest must skip: ' + JSON.stringify(agents));
+NODE
+
+CODEX_AGENTS_DIR="$WORK/codex/agents"
+mkdir -p "$CODEX_AGENTS_DIR"
+printf 'name = "shipyard-executor"\n' > "$CODEX_AGENTS_DIR/shipyard-executor.toml"
+printf '{"agent_files":["shipyard-executor.toml"]}' > "$CODEX_AGENTS_DIR/.shipyard-manifest.json"
+node "$ROOT/scripts/shipyard-doctor.cjs" --json \
+  --claude-home "$CLAUDE_HOME" --codex-home "$WORK/codex" > "$WORK/doctor-agents.json"
+node - "$WORK/doctor-agents.json" <<'NODE'
+const fs = require('node:fs');
+const report = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+const agents = report.checks.find((c) => c.name === 'codex-agents');
+if (!agents || agents.level !== 'ok') throw new Error('a populated agents manifest must report ok: ' + JSON.stringify(agents));
+if (report.status !== 'ok') throw new Error('a valid agents manifest must not fail the report: ' + report.status);
+NODE
+
+printf '{ not json' > "$CODEX_AGENTS_DIR/.shipyard-manifest.json"
+node "$ROOT/scripts/shipyard-doctor.cjs" --json \
+  --claude-home "$CLAUDE_HOME" --codex-home "$WORK/codex" > "$WORK/doctor-corrupt.json" || true
+node - "$WORK/doctor-corrupt.json" <<'NODE'
+const fs = require('node:fs');
+const report = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+const agents = report.checks.find((c) => c.name === 'codex-agents');
+if (!agents || agents.level !== 'error') throw new Error('a corrupt agents manifest must fail: ' + JSON.stringify(agents));
+if (report.status !== 'error') throw new Error('a corrupt agents manifest must fail the overall report: ' + report.status);
 NODE
 
 HOME="$HOME_DIR" CLAUDE_HOME="$CLAUDE_HOME" SHIPYARD_PLUGIN_DIR="$PLUGIN" \

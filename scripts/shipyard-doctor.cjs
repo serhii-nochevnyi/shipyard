@@ -265,6 +265,25 @@ function main(argv) {
     }
   }
 
+  const agentsDir = path.join(codexHome, 'agents');
+  const agentManifestFile = path.join(agentsDir, '.shipyard-manifest.json');
+  if (!fs.existsSync(agentManifestFile)) {
+    check(results, 'codex-agents', 'skip', codexHome + ' has no agents manifest');
+  } else {
+    const agentManifest = readJson(agentManifestFile);
+    if (!agentManifest || !Array.isArray(agentManifest.agent_files)) {
+      check(results, 'codex-agents', 'error', agentManifestFile + ' is corrupt or missing agent_files');
+    } else {
+      const missing = agentManifest.agent_files.filter(
+        (name) => typeof name !== 'string' || !fs.existsSync(path.join(agentsDir, name)));
+      if (missing.length) {
+        check(results, 'codex-agents', 'error', 'manifest names missing agent file(s): ' + missing.join(', '));
+      } else {
+        check(results, 'codex-agents', 'ok', agentManifest.agent_files.length + ' agent(s) registered');
+      }
+    }
+  }
+
   const errors = results.filter((result) => result.level === 'error');
   const warnings = results.filter((result) => result.level === 'warn');
   const report = {
