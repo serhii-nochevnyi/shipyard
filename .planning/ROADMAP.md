@@ -795,8 +795,8 @@ The OS-sandboxed trusted verification runner needs a host where real sandbox den
 <!-- shipyard:gsd-sync:begin -->
 ## Shipyard synchronization (generated)
 
-- Source fingerprint: `ca62240734aaa52663af0cad3c147443c087b4678fc9c2006f4615dafb93cdc9`
-- Plans merged: 166/198
+- Source fingerprint: `50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d`
+- Plans merged: 171/199
 - Phases verified: 10/23
 - Current phase: 20
 
@@ -823,7 +823,7 @@ The OS-sandboxed trusted verification runner needs a host where real sandbox den
 | 38 — Restore the native model ladder in delivery | 8 | 8 | passed |
 | 39 — Remove conveyor session friction | 17 | 17 | gaps_found |
 | 40 — Build delivery seams and clean target-project PRs | 26 | 0 | pending |
-| 41 — Reduce pipeline subscription overhead | 8 | 3 | pending |
+| 41 — Reduce pipeline subscription overhead | 9 | 8 | pending |
 | 42 — Resume trusted finalization without executor replay | 1 | 0 | pending |
 
 <!-- shipyard:gsd-sync:end -->
