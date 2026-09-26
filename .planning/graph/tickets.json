@@ -6638,7 +6638,6 @@
         "tests/unit/dispatch-record.test.cjs",
         "plugins/delivery-pipeline/scripts/claude-role-host.cjs",
         "tests/unit/claude-role-host.test.cjs",
-        "plugins/delivery-pipeline/scripts/sentinel.cjs",
         "tests/unit/sentinel.test.cjs"
       ],
       "risk": "high",
