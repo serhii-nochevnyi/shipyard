@@ -3120,7 +3120,7 @@ tickets:
     repo: null
     wave: 9
     depends_on: [T-40-04, T-40-14, T-39-01, T-39-07]
-    files: [plugins/delivery-pipeline/scripts/codex-decompose-host.cjs, plugins/delivery-pipeline/scripts/codex-dispatch-adapter.cjs, plugins/delivery-pipeline/scripts/gsd-tune.cjs, tests/unit/codex-decompose-host.test.cjs, tests/unit/codex-dispatch-adapter.test.cjs, tests/unit/gsd-tune.test.cjs]
+    files: [plugins/delivery-pipeline/scripts/codex-decompose-host.cjs, plugins/delivery-pipeline/scripts/codex-dispatch-adapter.cjs, plugins/delivery-pipeline/scripts/gsd-tune.cjs, tests/unit/codex-decompose-host.test.cjs, tests/unit/codex-dispatch-adapter.test.cjs, tests/unit/gsd-tune.test.cjs, tests/unit/gen-codex-shipyard.test.cjs]
     risk: high
     human_checkpoint: true
     preauthorized: true
