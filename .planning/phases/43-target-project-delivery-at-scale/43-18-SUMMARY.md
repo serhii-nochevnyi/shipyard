@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: f78ec237ccac02c437ee88fd084746fb9fa4b2934f12178ea48e00fe09a9bde9
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 55cccd686b475b3de4546496d5e971a901d8cff5e55da2735283ed5a7fe38c22
 phase: 43-target-project-delivery-at-scale
 plan: 18
 subsystem: shipyard delivery
@@ -22,7 +22,7 @@ key-decisions:
 duration: 0min
 status: halted
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: f78ec237ccac02c437ee88fd084746fb9fa4b2934f12178ea48e00fe09a9bde9
+shipyard_source_fingerprint: 55cccd686b475b3de4546496d5e971a901d8cff5e55da2735283ed5a7fe38c22
 ---
 
 # Phase 43: Run only declared repository remedy workflows before escalation and record their commits as chain links — Delivery Projection
