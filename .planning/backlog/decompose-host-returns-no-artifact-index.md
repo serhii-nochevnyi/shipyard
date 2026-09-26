@@ -2,6 +2,9 @@
 
 **Found:** 2026-09-24, decomposing phase 39.
 **Scope:** none of the phase 39 tickets.
+**Resolved:** T-40-10 — `planning-result-sealer.cjs` `sealDecomposition` seals a
+bounded `artifact_index` over CONTEXT.md and every PLAN.md, and
+`claude-decompose-host.cjs` returns it from `runDecomposition`.
 
 `commands/decompose.md` requires a sealed `shipyard.decomposition-result.v1`
 envelope with an `artifact_index` (paths, bytes, SHA-256 of CONTEXT.md and every

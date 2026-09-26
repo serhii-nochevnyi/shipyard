@@ -378,7 +378,8 @@ test('an over-long research summary is bounded to 500 code points instead of ref
     assert.equal(Array.from(sealed.summary).length, 500);
     const artifactFile = path.join(fixture.artifactRoot, 'system-state.md');
     assert.equal(fs.readFileSync(artifactFile, 'utf8'), '# Research system-state\n');
-    assert.ok(stderr.some((line) => line.includes('claude-delivery-host: research line system-state summary was 1106 characters; bounded to 500')
+    assert.ok(stderr.some((line) => line.includes('RESEARCH_SUMMARY_TOO_LONG')
+      && line.includes('research line system-state summary was 1106 characters; bounded to 500')
       && line.includes(artifactFile)));
     assert.equal(stderr.length, 1);
   } finally {
