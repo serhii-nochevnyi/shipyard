@@ -5749,6 +5749,7 @@
       "unreachable_paths": false,
       "missing_paths": true,
       "files": [
+        "scripts/capture-boundary-fixtures.cjs",
         "tests/fixtures/captured/boundaries/claude-stream.json",
         "tests/fixtures/captured/claude-stream-executor.jsonl",
         "tests/fixtures/captured/claude-stream-research.jsonl",
@@ -5788,7 +5789,9 @@
         "scripts/install-shipyard-claude-hook.sh",
         "scripts/install-shipyard-codex.sh",
         "scripts/shipyard-doctor.cjs",
-        "tests/smoke/claude-hook-smoke.sh"
+        "tests/smoke/claude-hook-smoke.sh",
+        "scripts/install-shipyard-marketplace.cjs",
+        "tests/unit/marketplace-installer.test.cjs"
       ],
       "risk": "high",
       "type": "implementation",
@@ -6063,7 +6066,8 @@
         "tests/unit/trailer.test.cjs",
         "plugins/delivery-pipeline/scripts/state-sync.cjs",
         "plugins/delivery-pipeline/scripts/sentinel.cjs",
-        "tests/smoke/sentinel-smoke.sh"
+        "tests/smoke/sentinel-smoke.sh",
+        "tests/unit/files-contract.test.cjs"
       ],
       "risk": "high",
       "type": "implementation",

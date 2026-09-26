@@ -62,6 +62,14 @@ const HINTS = Object.freeze({
     hint: 'The resolved model and effort selection is not one the runtime host supports.',
     remedy: 'Update the runtime host capabilities or the model policy, then re-run.',
   }),
+  CODEX_CONFIG_FIX: Object.freeze({
+    hint: 'The Codex launch was refused by a project or host configuration value, not a missing or stale install.',
+    remedy: 'Fix {key} in .planning/config.json, then run: node plugins/delivery-pipeline/scripts/gsd-tune.cjs --runtime codex --apply.',
+  }),
+  CODEX_GENERATED_AGENT_FIX: Object.freeze({
+    hint: 'The Codex launch was refused because the generated agent definition is missing or stale.',
+    remedy: 'Install an ADR-014-capable Codex host and regenerate agents with install-shipyard-codex.sh --phase 2; provide current host capabilities and retry the exact selection.',
+  }),
 });
 
 function hintFor(code) {
