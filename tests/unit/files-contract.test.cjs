@@ -290,10 +290,6 @@ test('an untracked path the incoming base ADDS refuses, and git names the path',
 const CARRY_W = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-carry-'));
 process.on('exit', () => { try { fs.rmSync(CARRY_W, { recursive: true, force: true }); } catch { /* best effort */ } });
 
-// A stub `gh` serving the calls a carry makes: read the PR, read and post its
-// merge-gate status, and record any body rewrite. Body and status travel through
-// FILES — both are free text, and hand-escaping one through a shell would break
-// the very input under test.
 const CARRY_BIN = path.join(CARRY_W, 'bin');
 const CARRY_VIEW = path.join(CARRY_W, 'pr-view.json');
 const CARRY_EDIT = path.join(CARRY_W, 'edited-body.txt');
@@ -348,7 +344,7 @@ function carryFixture({ squashDiffers }) {
     number: 9, body, headRefOid: judgedHead, baseRefName: 'epic',
   }));
   try { fs.unlinkSync(CARRY_EDIT); } catch { /* not written yet */ }
-  try { fs.unlinkSync(CARRY_STATUS); } catch { /* not written yet */ }
+  fs.rmSync(CARRY_STATUS, { force: true });
   return { proj, repo, judgedHead, judgedTree, judgedBaseTree };
 }
 
@@ -395,10 +391,6 @@ test('a merge that changed nothing carries the verdict onto the new head', () =>
     'the merge must not move the tree'
   );
 
-  // The carried verdict is a merge-gate status on the new head, read back the
-  // way readGate reads it; the body is never touched. A status bound to any
-  // other sha, or none at all, leaves the new head without a verdict and
-  // arch-review owed again.
   const status = postedStatus();
   assert.ok(status, `no ${STATUS_CONTEXT} status was posted: ${r.stdout}${r.stderr}`);
   assert.ok(status.endpoint.endsWith(`/statuses/${newHead}`), `the status is not on the new head: ${status.endpoint}`);
