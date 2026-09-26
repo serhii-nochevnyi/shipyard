@@ -1424,3 +1424,4 @@
 {"ts":"2026-09-26T12:46:05.627Z","event":"escalation","ticket":"T-40-07","pr":null,"reason":"Out of scope for this session's phase-42 run: phases 40 and 43 are owned by parallel sessions. Clear this park when that session or a person takes the ticket here.","by":"escalation-record"}
 {"ts":"2026-09-26T12:46:05.661Z","event":"escalation","ticket":"T-43-07","pr":266,"reason":"Out of scope for this session's phase-42 run: phases 40 and 43 are owned by parallel sessions. Clear this park when that session or a person takes the ticket here.","by":"escalation-record"}
 {"ts":"2026-09-26T13:34:42.802Z","event":"status_change","ticket":"T-42-03","from":null,"to":"pending","pr":null}
+{"ts":"2026-09-26T14:12:04.622Z","event":"status_change","ticket":"T-42-03","from":"pending","to":"merged","pr":274}
