@@ -1,0 +1,2433 @@
+#!/usr/bin/env node
+'use strict';
+
+// Routed selection uses resolveDispatch (ADR-014). The tier/effort readers below
+// retain the older policy exclusively for non-routed compatibility callers.
+// Single deterministic reader for the conveyor's configuration, plus the model
+// policy — a floor, a role-keyed effort table and an earned ceiling — and the
+// repair STRATEGY a failure signature's history implies.
+//
+// Before this module the policy lived only as prose inside the skills, so it was
+// unenforceable and drifted (it named model IDs the Agent tool does not accept).
+// Now the skills ASK for a model instead of reasoning one out:
+//
+//   node pipeline-config.cjs resolve                      # effective config, JSON
+//   node pipeline-config.cjs model <role> [flags]         # one tier alias
+//   node pipeline-config.cjs model <role> --json [flags]  # {model, effort, route}
+//                                                        # + strategy, with --signature-state
+//
+//   flags: --risk low|medium|high  --type <plan type>  --checkpoint
+//          --input-tokens <n>   the caller's own measurement of this dispatch's
+//                               input; the ceiling's window route reads it
+//          --contested          this judgement has already been contested once
+//          --signature-state first|progress|repeat|repeat_exhausted|
+//                            flake_candidate|flake|plan_defect
+//          --files <n>  --code-change|--no-code-change  --task-level <level>
+//          --attempt <n>  --previous-failed   ← all accepted, but INERT (see below)
+//          --explain     include the selected task level and ladder mode in JSON
+//
+// THE FLOOR IS `opus`, THE DEPTH IS EFFORT, AND `fable` IS EARNED (ADR-005 D1/D2
+// as amended 2026-09-08, D4/D5). Three layers, in this order:
+//
+//   1. the FLOOR — every role that writes code or renders a judgement resolves to
+//      `opus`. Two roles are exempt and stay on `sonnet`, each for a measured
+//      reason recorded beside it (see SONNET_ROLES): `pr-sentinel`, whose merge
+//      decision sentinel.cjs enforces mechanically, and `drift-check`, which
+//      returns a file list. No built-in path returns `haiku` any more.
+//   2. the DEPTH — a role-keyed EFFORT table (EFFORT_ROWS), because with the tier
+//      constant the old "effort follows the model" derivation collapsed to one
+//      value and `--signature-state repeat` stopped deepening anything. Measured
+//      2026-09-07 with the floor set through configuration: every role except
+//      drift-check came out `opus`/`xhigh`, so the repair ladder's depth rung had
+//      quietly gone.
+//   3. the CEILING — `fable` is reached by three mechanical routes and never by
+//      default (fableRoute): a measured input over `fable_window_tokens`, a
+//      repair whose signature came back a third time, or a contested judgement.
+//      `pipeline.fable` must be `auto` for any of them to be honoured; `off` (the
+//      default) degrades the route to `opus` at `max` effort and says why.
+//
+// EFFORT IS A QUALITY KNOB, NOT A PRICE ONE, and no row here may be justified as
+// a saving. Reconstructed from this project's usage ledger: output is 12–19% of a
+// model line and cache read+write are 82–87%, so `xhigh` → `high` moves about
+// 3.4% of a run against ≈2.5× for a tier step. An effort row buys or gives up
+// QUALITY at approximately constant price.
+//
+// AND EFFORT IS ONLY ENFORCED ON THE WORKFLOW PATH. The Agent tool takes no
+// `effort` parameter at all (verified against the live schema, CLI 2.1.263): only
+// Workflow's `agent()` carries it. So the table governs executors, drift judges
+// and fix rounds, and is a sentence in the prompt for an Agent-spawned background
+// guard.
+//
+// REPAIRS ESCALATE BY STRATEGY AND DEPTH, NOT BY TIER (ADR-001 D1). The repair
+// roles (ci-fix, review-fix, pr-sentinel) used to read `attempt >= 2 → opus`,
+// which is "try harder": the observed loss is one wrong hypothesis re-tried by
+// three models in sequence. Their tier is now the floor alone, and the failure
+// SIGNATURE's history — computed by failure-signature.cjs, passed in as
+// `--signature-state` — decides what to do differently, plus how deep to think at
+// that tier. Only its last rung moves the model, and it moves it to the CEILING
+// rather than up a tier: `repeat_exhausted` means the depth has already been
+// spent. `--attempt` and `--previous-failed` remain accepted for the callers and
+// docs that still pass them (and the attempt counter remains as telemetry), but
+// they no longer route anything.
+//
+// TWO CONFIG NAMESPACES, both in .planning/config.json:
+//
+//   delivery_pipeline.*  the capability's own declared config (GSD-native: it is
+//                        what the capability's gate `when:` clauses read, and it
+//                        is settable/validated through GSD's config tooling).
+//                        PREFERRED — it wins over pipeline.* below.
+//   pipeline.*           shipyard's runtime knobs. `pipeline` is NOT a valid GSD
+//                        config key, so `/gsd-config --set pipeline.x` is
+//                        rejected; edit config.json directly, or use the
+//                        delivery_pipeline.* form for the keys that have one.
+//
+// GSD's own top-level keys are READ (never written) where the conveyor has to
+// agree with GSD: `runtime`, `git.base_branch`, `git.branching_strategy`,
+// `response_language`. Disagreeing with them silently is how an epic branch ends
+// up cut from main in a repo that integrates into develop.
+
+const fs = require('fs');
+const path = require('path');
+const { resolveRuntime, readInheritedConfig } = require('./runtime-context.cjs');
+const modelPolicy = require('./model-policy.cjs');
+
+// A dispatch context is issued by loadConfig, not by a caller mutating the
+// returned config. Keep that binding private so routed readers can reject a
+// replacement before they fall back to compatibility behavior.
+const LOADED_DISPATCH_CONTEXTS = new WeakMap();
+
+// GSD resolves project-relative agent skills without consulting config.runtime,
+// which is the only form that remains correct when Claude and Codex share one
+// checkout. gsd-tune generates this projection from the canonical delivery-rules
+// source before it writes the agent_skills entries.
+const PROJECT_DELIVERY_RULES = '.shipyard/generated/gsd-delivery-rules';
+
+// The Agent tool validates `model` against exactly these aliases: a full model id
+// (`claude-opus-…`) or a suffixed alias (`opus[1m]`) is rejected on input. Full ids
+// and `inherit` do exist, but on a DIFFERENT surface — a subagent's own `model:`
+// frontmatter in `.claude/agents/*.md` — which is not the parameter a dispatch goes
+// through, so a docs page listing them is not permission to emit one here.
+// `opus` is Opus 5 from Claude Code 2.1.219 on. `fable` is Claude Fable 5.1 from
+// 2.1.255 on: Opus-tier, 1M-token context, adaptive thinking at xhigh effort, and
+// the only alias that expresses "top tier WITH a 1M window" — which is what this
+// repo's long-broken `opus[1m]` was reaching for. It is a CEILING the conveyor
+// reaches by itself through the three routes in `fableRoute`, and no role's
+// default: measured on this repository, the largest input in the whole system is
+// the phase epic diff at ~52k tokens, which Opus 5's ordinary window swallows.
+// Below CLI 2.1.255 the alias resolves to Fable 5 instead — ruled out — so
+// `pipeline.fable: auto` is a person's consent AND `gsd-tune.cjs` reports the
+// version floor at Step 0 of every delivery.
+const TIERS = ['opus', 'sonnet', 'haiku', 'fable'];
+const TOP_TIERS = new Set(['opus', 'fable']);
+
+// Workflow's agent() accepts these; GSD's ladder also has `minimal`, which is
+// Codex-only and clamps to `low`. `ultra` is deliberately NOT here: it is
+// advertised by one Codex model that no built-in path selects (ADR-005 D6/D7).
+const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
+// GSD's light/standard/heavy tier defaults used to be mirrored here and mapped
+// from the resolved model. That derivation is gone (see resolveEffort): with the
+// floor at `opus` it collapsed to one value. The names survive only in GSD's own
+// `effort.routing_tier_defaults`, which `gsd-tune` mirrors for GSD's agents.
+
+// Roles whose work is mechanical reconciliation. On the runtime whose effort axis
+// is flat (Codex) this is still the one distinction the axis makes; on Claude the
+// role's own row in EFFORT_ROWS decides, and drift-check's row is no longer the
+// cheapest one — it now carries the plan-defect burden the executor stopped
+// carrying (ADR-005 D2 as amended).
+const MECHANICAL_ROLES = new Set(['drift-check']);
+
+// ── task levels (ADR-012) ───────────────────────────────────────────────────
+//
+// Role alone is too coarse for a cost policy: a four-file low-risk executor
+// and a high-risk cross-cutting executor do not buy the same amount of model
+// quality. The level is derived from facts already present in the ticket or
+// dispatch. It is deliberately an ordered vocabulary so a requested level can
+// be guarded against an unsafe downgrade rather than trusted as prose.
+const TASK_LEVELS = ['mechanical', 'routine', 'complex', 'critical', 'recovery'];
+const TASK_LEVEL_RANK = Object.fromEntries(TASK_LEVELS.map((level, i) => [level, i]));
+const LADDER_MODES = ['conservative', 'adaptive'];
+
+// The first treatment is intentionally narrow. These are the roles for which a
+// small, low-risk task has a bounded failure surface and can be evaluated
+// against the existing acceptance gates. Repair and judgment roles stay on the
+// quality floor until their own evidence earns a broader treatment.
+const ADAPTIVE_ROUTINE_ROLES = new Set(['executor', 'research']);
+const ADAPTIVE_ROUTINE_MAX_FILES = 4;
+
+function integerSignal(value) {
+  const n = Number(value);
+  return Number.isInteger(n) && n >= 0 ? n : null;
+}
+
+function taskLevelRoute(role, signals = {}, cfg = {}) {
+  requireCompatibility(cfg, 'taskLevelRoute');
+  const requested = TASK_LEVELS.includes(signals.taskLevel) ? signals.taskLevel : null;
+  let value;
+  let rule;
+
+  // A completed recovery history is stronger evidence than the role's normal
+  // classification. In particular, pr-sentinel has a cheap normal lane but
+  // still needs its generated `-deep` file after an exhausted repair signature,
+  // and arch-review needs the same file after a contested judgement.
+  const exhaustedRepair = REPAIR_ROLES && REPAIR_ROLES.has(role)
+    && signals.signatureState === 'repeat_exhausted';
+  const contestedJudgement = JUDGMENT_ROLES && JUDGMENT_ROLES.has(role)
+    && signals.contested === true;
+  if (exhaustedRepair) {
+    value = 'recovery';
+    rule = 'auto:recovery:exhausted';
+  } else if (contestedJudgement) {
+    value = 'recovery';
+    rule = 'auto:recovery:contested';
+  } else if (MECHANICAL_ROLES.has(role) || role === 'pr-sentinel') {
+    value = 'mechanical';
+    rule = 'auto:mechanical';
+  } else if (signals.risk === 'high' || signals.checkpoint === true) {
+    value = 'critical';
+    rule = 'auto:critical';
+  } else if (JUDGMENT_ROLES && JUDGMENT_ROLES.has(role)) {
+    value = 'complex';
+    rule = 'auto:complex';
+  } else {
+    const files = integerSignal(signals.files);
+    const routine = cfg.model_ladder === 'adaptive'
+      && ADAPTIVE_ROUTINE_ROLES.has(role)
+      && signals.risk === 'low'
+      && files !== null
+      && files > 0
+      && files <= ADAPTIVE_ROUTINE_MAX_FILES
+      && signals.checkpoint !== true
+      && signals.contested !== true
+      && signals.signatureState === undefined;
+    if (routine) {
+      value = 'routine';
+      rule = `auto:routine<=${ADAPTIVE_ROUTINE_MAX_FILES}files`;
+    } else {
+      value = 'complex';
+      rule = 'auto:complex';
+    }
+  }
+
+  // A caller may request a higher lane explicitly, which is useful for a
+  // measured canary or a human-marked critical task. A lower request is
+  // guarded by the inferred minimum; missing evidence therefore never buys a
+  // cheaper model by accident.
+  if (requested) {
+    // These roles are deliberately mechanical. A prose flag must not turn a
+    // merge sentinel or drift inventory into a premium model; their external
+    // gates are the authority and the generated Codex bundle has no critical
+    // variant for them.
+    // A repair sentinel is normally mechanical, but its evidence-backed
+    // recovery lane is the deliberate exception that makes the generated
+    // `-deep` file reachable after `repeat_exhausted`.
+    const evidencedRecovery = requested === 'recovery'
+      && ((REPAIR_ROLES && REPAIR_ROLES.has(role)
+        && signals.signatureState === 'repeat_exhausted')
+        || (JUDGMENT_ROLES && JUDGMENT_ROLES.has(role)
+          && signals.contested === true));
+    if ((MECHANICAL_ROLES.has(role) || role === 'pr-sentinel')
+        && requested !== 'mechanical' && !evidencedRecovery) {
+      return { value, rule: `guarded:${value}`, requested };
+    }
+    // `routine` and `recovery` have role-specific contracts. Accepting either
+    // for an unrelated role would make telemetry claim a lane that has no model
+    // implementation behind it. A caller can still request `complex` or
+    // `critical` for any non-mechanical role.
+    if (requested === 'routine' && !ADAPTIVE_ROUTINE_ROLES.has(role)) {
+      return { value, rule: `guarded:${value}`, requested };
+    }
+    if (requested === 'recovery' && !evidencedRecovery) {
+      return { value, rule: `guarded:${value}`, requested };
+    }
+    if (TASK_LEVEL_RANK[requested] < TASK_LEVEL_RANK[value]) {
+      return { value, rule: `guarded:${value}`, requested };
+    }
+    return { value: requested, rule: `explicit:${requested}`, requested };
+  }
+  return { value, rule };
+}
+
+// ── the Codex model palette (ADR-005 D6/D7) ──────────────────────────────────
+//
+// An ORDERED list of the models a Codex agent may be written with, each with the
+// effort to USE — not the deepest the model accepts. That distinction is the
+// whole reason the field is shaped this way: ranking the models by which effort
+// levels they SUPPORT is what produced three wrong ladders in a row (GSD's
+// `codexModelEffort` is a support matrix, and nothing in it claims to be a
+// quality ranking).
+//
+// FIRST entry is the workhorse floor every role gets; LAST is the ceiling, which
+// only the integrator takes statically and the `-deep` agents make reachable
+// (ADR-005 D8 — on that runtime an agent is a FILE, so an escalation needs its
+// own file). `min_cli` is the Codex CLI version that can first CONFIGURE the
+// model; the generator refuses an entry above the host's version rather than
+// writing an agent the runtime may ignore. There is no id registry to validate a
+// model against — GSD's catalog does not carry every model an operator may have
+// — so an unknown id cannot be distinguished from a new one, and a hardcoded
+// allowlist here would go stale faster than the models do.
+//
+// Sol is the compatibility workhorse and ceiling for the current cost-efficient
+// Codex palette. Routed Codex dispatch reads ADR-014 directly; this palette
+// remains a compatibility input for callers that do not request a routed decision.
+const DEFAULT_CODEX_MODELS = [
+  { model: 'gpt-6-sol', effort: 'high', min_cli: '0.155.1' },
+  { model: 'gpt-6-sol', effort: 'xhigh', min_cli: '0.155.1' },
+];
+const CODEX_MODEL_KEYS = new Set(['model', 'effort', 'min_cli']);
+
+// `model[:effort][@min_cli]` — the GSD-settable spelling of one palette entry.
+// The capability declares `codex_models` as a STRING because GSD's capability
+// config vocabulary is boolean|string|number|enum (its own
+// `validateConfigSliceEntry`), so an array-typed slice would not be a declared,
+// settable knob at all. A hand-edited config may still use the object form.
+function parseCodexModelEntry(text) {
+  const raw = String(text).trim();
+  if (!raw) return null;
+  const at = raw.indexOf('@');
+  const head = at === -1 ? raw : raw.slice(0, at);
+  const minCli = at === -1 ? undefined : raw.slice(at + 1).trim();
+  const colon = head.indexOf(':');
+  const model = (colon === -1 ? head : head.slice(0, colon)).trim();
+  const effort = colon === -1 ? undefined : head.slice(colon + 1).trim();
+  const entry = { model };
+  if (effort) entry.effort = effort;
+  if (minCli) entry.min_cli = minCli;
+  return entry;
+}
+
+// One list out of any of the three accepted spellings: an array of objects, an
+// array of `model:effort@min_cli` strings, or one comma-separated string.
+// Malformed entries are SKIPPED with a warning — never half-honoured — and an
+// empty palette means "write no model", which is the previous behaviour and a
+// safe floor.
+function normalizeCodexModels(value, warnings) {
+  const items = typeof value === 'string'
+    ? value.split(',')
+    : Array.isArray(value) ? value : null;
+  if (items === null) {
+    warnings.push(
+      'pipeline.codex_models must be a list of {model, effort} entries (or a "model:effort@min_cli, …" string) — ignored'
+    );
+    return null;
+  }
+  const out = [];
+  for (const item of items) {
+    const entry = typeof item === 'string' || typeof item === 'number'
+      ? parseCodexModelEntry(item)
+      : (item && typeof item === 'object' && !Array.isArray(item)) ? { ...item } : null;
+    if (!entry) {
+      warnings.push(`pipeline.codex_models entry ${JSON.stringify(item)} is not a model — skipped`);
+      continue;
+    }
+    for (const key of Object.keys(entry)) {
+      if (!CODEX_MODEL_KEYS.has(key)) {
+        warnings.push(`pipeline.codex_models."${key}" is not an entry field — ignored (fields: ${[...CODEX_MODEL_KEYS].join(', ')})`);
+        delete entry[key];
+      }
+    }
+    if (typeof entry.model !== 'string' || !entry.model.trim()) {
+      warnings.push(`pipeline.codex_models entry ${JSON.stringify(item)} has no model id — skipped`);
+      continue;
+    }
+    entry.model = entry.model.trim();
+    if (entry.effort !== undefined && !EFFORTS.includes(entry.effort)) {
+      warnings.push(
+        `pipeline.codex_models."${entry.model}" effort "${entry.effort}" is not an effort level — ignored (${EFFORTS.join('|')}); the role's own effort applies`
+      );
+      delete entry.effort;
+    }
+    if (entry.min_cli !== undefined && !/^\d+(\.\d+)*$/.test(String(entry.min_cli))) {
+      warnings.push(`pipeline.codex_models."${entry.model}" min_cli "${entry.min_cli}" is not a version — ignored`);
+      delete entry.min_cli;
+    }
+    out.push(entry);
+  }
+  return out;
+}
+
+// The roles that repair an existing PR rather than build a ticket. They are the
+// ones ADR-001 D1 took the attempt counter away from, and the only ones a
+// signature state applies to — an executor has no failure history to read.
+const REPAIR_ROLES = new Set(['ci-fix', 'review-fix', 'pr-sentinel']);
+
+// What a signature's history means for the NEXT move. The keys are
+// failure-signature.cjs's verdict enum verbatim — it is the contract between the
+// two files, so a synonym or a seventh word here is a silent no-op there (the
+// unit test asserts the two lists are identical). Not imported: this reader must
+// stay free of the journal/lock chain, since every skill loads it.
+//
+// The values are pinned strings the babysit loop switches on. The last three
+// mean "do not dispatch a fixer at all".
+const STRATEGIES = {
+  first: 'fix',
+  progress: 'continue',
+  // Hold the tier, change the approach: re-read the plan, widen the context,
+  // raise the hypothesis above the symptom.
+  repeat: 'rethink',
+  // The same instruction, one rung up: the deeper effort has already been spent
+  // on this signature, so what changes is the MODEL (the ceiling's second route
+  // — see fableRoute), not the advice to the fixer. Deliberately NOT a new
+  // strategy word: `references/pr-sentinel.md` and `references/ci-fix.md` are
+  // what a fixer actually reads, and a seventh verb would be a contract only the
+  // resolver knew about.
+  repeat_exhausted: 'rethink',
+  flake_candidate: 'rerun',
+  flake: 'quarantine',
+  plan_defect: 'park',
+};
+const SIGNATURE_STATES = Object.keys(STRATEGIES);
+
+// Own-property only: `strategyFor('toString')` must be unknown, not a function.
+function strategyFor(state) {
+  return Object.prototype.hasOwnProperty.call(STRATEGIES, state) ? STRATEGIES[state] : undefined;
+}
+
+// Every `pipeline.*` knob that goes through the shared positive-number rule
+// below (loadConfig). Exported and read back by both the rule's own loop and
+// its test, so a knob added here needs no second, hand-mirrored copy to drift
+// out of sync with the rule that actually enforces it.
+const NUMERIC_KNOBS = ['max_attempts', 'pr_fetch_limit', 'stale_merge_hours', 'stale_draft_hours',
+  'plan_defect_signatures', 'fable_window_tokens', 'max_concurrent_agents'];
+
+// ── the four statuses a ticket actually moves through ───────────────────────
+//
+// In OUR order (`pending` < `branched` < `pr-open` < `merged`), which is the
+// order the projection's forward-only rule is measured in. These are the only
+// values `state-sync.cjs` ever writes into a ticket's `status`, and therefore
+// the only left-hand sides `jira_transitions` can be keyed by. The tempting
+// wrong values are the FRONT's bucket names (`fix`, `finalize`, `merge`, `ci`):
+// those are computed by `front.cjs` per round and never appear in the
+// `status_change` stream this map is consumed against.
+const TICKET_STATUSES = ['pending', 'branched', 'pr-open', 'merged'];
+
+// One map out of either accepted spelling: an object, or one comma-separated
+// `our-status:Their Target Status` string — the same two shapes `codex_models`
+// takes, and for the same reason (GSD's capability config vocabulary is
+// boolean|string|number|enum, so an object-typed knob would not be settable at
+// all). The right-hand side is the tracker's TARGET STATUS NAME, never the name
+// of a transition: the performing half looks up the offered transition whose
+// target status matches, because a workflow's transition names are not a stable
+// schema and its status names are.
+//
+// Malformed entries are SKIPPED with a warning, never half-honoured; a wholly
+// unusable value keeps the empty map, which means the projection is off.
+function normalizeJiraTransitions(value, warnings) {
+  const items = typeof value === 'string'
+    ? value.split(',')
+    : (value && typeof value === 'object' && !Array.isArray(value))
+      ? Object.entries(value).map(([k, v]) => `${k}:${v}`)
+      : null;
+  if (items === null) {
+    warnings.push(
+      'pipeline.jira_transitions must be a map of our status to the tracker\'s target status name '
+      + '(or a "pr-open:In Progress, merged:Done" string) — ignored'
+    );
+    return null;
+  }
+  const out = {};
+  for (const item of items) {
+    const raw = String(item).trim();
+    // A blank segment is SILENT: the capability's declared default is the empty
+    // string, and `''.split(',')` is `['']`, so warning here would put a warning
+    // on every load of an unconfigured project — which is how a reader learns to
+    // ignore warnings. A trailing comma is the same case.
+    if (!raw) continue;
+    // The first colon only: a Jira status name may contain anything but is
+    // conventionally spaced words, and splitting on every colon would silently
+    // truncate one that carries a colon of its own.
+    const colon = raw.indexOf(':');
+    if (colon === -1) {
+      warnings.push(
+        `pipeline.jira_transitions entry "${raw}" is not "<our status>:<their target status>" — skipped`
+      );
+      continue;
+    }
+    const from = raw.slice(0, colon).trim();
+    const target = raw.slice(colon + 1).trim();
+    if (!TICKET_STATUSES.includes(from)) {
+      warnings.push(
+        `pipeline.jira_transitions."${from}" is not a ticket status — skipped `
+        + `(statuses: ${TICKET_STATUSES.join(', ')}; the front's bucket names are not statuses)`
+      );
+      continue;
+    }
+    if (!target) {
+      warnings.push(`pipeline.jira_transitions."${from}" has no target status name — skipped`);
+      continue;
+    }
+    out[from] = target;
+  }
+  return out;
+}
+
+// One ordered set of tracker status NAMES from the comma-separated capability
+// spelling. Empty segments are silent so the declared empty default remains the
+// safe, disabled state; duplicate names collapse to their first occurrence.
+// Status spelling is intentionally preserved after trimming because matching is
+// against the tracker's name, not a normalized category or an invented alias.
+function normalizeJiraTodoStatuses(value, warnings) {
+  if (typeof value !== 'string') {
+    warnings.push(
+      'jira_todo_statuses must be a comma-separated string of tracker status names — ignored'
+    );
+    return null;
+  }
+  const out = [];
+  const seen = new Set();
+  for (const item of value.split(',')) {
+    const status = item.trim();
+    if (!status || seen.has(status)) continue;
+    seen.add(status);
+    out.push(status);
+  }
+  return out;
+}
+
+const DEFAULTS = {
+  integration_mode: 'epic-stacked',   // | direct-to-main
+  model_policy: 'balanced',           // economy | balanced | premium
+  // conservative preserves the role floor; adaptive classifies each dispatch
+  // and opens the routine lane for bounded low-risk work.
+  model_ladder: 'conservative',       // conservative | adaptive
+  use_workflow: 'auto',               // auto | false
+  // The PR sentinel: who drives open PRs to green and lands them in the stack
+  // while the main loop cascades onward.
+  //   sentinel:   auto (background guard when the runtime has one, otherwise a
+  //               mandatory duty pass every round) | off (main loop only)
+  //   auto_merge: epic — the sentinel squashes a green+conform ticket PR into
+  //               its base (phase epic or parent ticket branch). The epic →
+  //               integration-branch PR is NEVER auto-merged; that stays human.
+  //               off — every merge is a human's, the pre-sentinel behaviour.
+  sentinel: 'auto',                   // auto | off
+  auto_merge: 'epic',                 // epic | off
+  // A PR with NO reported checks is not a green PR — nothing ran. Both the board
+  // (front.cjs) and the guard (sentinel.cjs) therefore withhold the two actions
+  // that walk such a PR towards landing, and this is the project's way to say
+  // "there is no CI here, that absence is expected". Opt-in only, and it fails
+  // towards the human: see the coercion below.
+  merge_without_ci: false,
+  max_attempts: 5,                    // babysit rounds per PR (the backstop, not the ladder's input)
+  // How many agents a wave may hold at once (ADR-005 D11). The one axis no
+  // choice of TIER can address: the model policy is per dispatch and a spend
+  // limit is per SESSION, so what decides whether a run survives is how many
+  // dispatches are open together. On 2026-09-07 a run held nine opus/xhigh
+  // executors and a fable guard in flight, hit a per-session limit, and six
+  // agents died mid-ticket — five tickets lost their commits and the recovery
+  // cost a whole re-dispatch round. Priced on that session's volumes the entire
+  // ladder question is worth ~$26; this one is worth the run.
+  //
+  // 4 is a MEASUREMENT, not a round number: the largest wave this repository has
+  // completed without an interruption. Every role counts against it, the PR
+  // sentinel included — it is an agent, it holds tickets, and that session's
+  // failure included one.
+  //
+  // `front.cjs` reports it as `capacity: {max, in_flight, free}` and deliver.md
+  // builds the wave from `capacity.free`; the remainder is taken next round. A
+  // wave wider than the cap is CUT, never refused. Note the two failure
+  // directions are different on purpose: a malformed value here falls back to
+  // this default (below, with every other positive-number knob), because a typo
+  // in a number is not a decision to stop working — while a config file that
+  // does not PARSE resolves to a cap of 0 in front.cjs, because then no policy
+  // is in effect at all and a dispatch is a mutation.
+  max_concurrent_agents: 4,
+  // K of the k-distinct rule: this many DIFFERENT failure signatures with no
+  // green means the ticket is wrong, not the fix (ADR-001 D2). Same default as
+  // `failure-signature.cjs verdict --k`, and the two must agree.
+  plan_defect_signatures: 3,
+  pr_fetch_limit: 1000,               // `gh pr list --limit`
+  stale_merge_hours: 4,
+  stale_draft_hours: 24,
+  worktree_root: null,                // null → <repo>/../.wt-<repo-name>
+  graph_gate: true,                   // mirrors the capability's declared key
+  gsd_sync: true,                     // mirrors the capability's declared key
+  models: {},                         // per-role override → tier alias
+  effort: {},                         // per-role override → effort level
+  // The CEILING, and the consent that unlocks it (ADR-005 D5). `off` is the
+  // default because an unconsented Fable request in a background session waits
+  // out `dialogExpiry` and then ends the turn WITHOUT SENDING: silence is not
+  // consent, exactly as decomposition treats pre-authorization. Under `off`
+  // every ceiling route degrades to `opus` at `max` and prints the reason, so
+  // the escalation still happens — one rung lower and visibly.
+  fable: 'off',                       // off | auto
+  // The window route's threshold: five times the largest input measured on this
+  // repository (the phase-24 epic diff, the integrator's own input, at 210 KB
+  // ≈ 52k tokens). The caller MEASURES and passes `--input-tokens`; the resolver
+  // only decides. Absent, the route cannot fire — an absent signal must never
+  // resolve upward.
+  fable_window_tokens: 250000,
+  // The Codex model palette, in preference order (see DEFAULT_CODEX_MODELS).
+  // Mirrors the capability's declared `delivery_pipeline.codex_models`.
+  codex_models: DEFAULT_CODEX_MODELS,
+  // Sibling repositories the graph delivers into ("owner/name" → absolute local
+  // checkout path). Tracking a foreign repo needs nothing but `delivery.repo` on
+  // the ticket; EXECUTING there needs a local checkout, because worktrees,
+  // commits and pushes are local git operations.
+  repos: {},
+  // The root where a future foreign-repository checkout may be placed. It is
+  // resolved per project by loadConfig; null is reserved for a malformed
+  // explicit value so a writer cannot mistake bad configuration for consent.
+  repos_root: null,
+  jira: { enabled: true, project: null, issue_type: 'Task', epic_issue_type: 'Epic' },
+  // Our ticket status → the tracker's TARGET STATUS NAME, for the projection
+  // (ADR-008 D2). TOP-LEVEL and flat, deliberately NOT a member of `jira`:
+  // `delivery_pipeline` is merged over `pipeline` SHALLOWLY, so an object-valued
+  // `jira` in one namespace replaces the other's wholesale and a nested knob
+  // would vanish the moment a user set one key in the other place.
+  // EMPTY IS OFF, and empty is the default — the same posture as `fable: off`:
+  // silence is not consent to write into someone's tracker.
+  jira_transitions: {},
+  // Tracker status NAME allowlist for the eligibility gate. EMPTY IS OFF.
+  jira_todo_statuses: [],
+};
+
+const KNOWN_KEYS = new Set(Object.keys(DEFAULTS));
+const KNOWN_JIRA_KEYS = new Set(['enabled', 'project', 'issue_type', 'epic_issue_type']);
+const COMPATIBILITY_ROLES = Object.freeze(['integrator', 'arch-review', 'executor', 'ci-fix', 'review-fix', 'drift-check', 'research', 'pr-sentinel']);
+// Existing board/recorder consumers use ROLES with their compatibility tables.
+// Routed consumers share the canonical vocabulary, including decomposition,
+// explicitly; expanding ROLES would advertise support those tables do not have.
+const ROLES = COMPATIBILITY_ROLES;
+const ROUTED_ROLES = modelPolicy.ROLES;
+
+// Judgment roles are never cheapened: there is no mechanical safety net above
+// them, so a false verdict is the most expensive kind of error in the pipeline.
+// The floor covers every role now, so this set no longer decides a TIER — it has
+// exactly one reader, `fableRoute`'s contested route, because a re-judgement is
+// the only thing `--contested` can mean. The other half of the invariant (neither
+// of these may ever join SONNET_ROLES) is asserted in the unit test.
+const JUDGMENT_ROLES = new Set(['integrator', 'arch-review']);
+// ── the floor, and its two named exemptions (ADR-005 D1, amended D2) ─────────
+//
+// The floor is `opus`: the conveyor's failure mode is a wrong green reaching an
+// epic, and every mechanical gate above the executor costs more to run than the
+// difference between tiers. `haiku` is therefore returned by NO built-in path —
+// it stays in TIERS because a user override may still name it.
+//
+// Two roles stay below it, and the reason travels WITH the exemption: a bare one
+// is the thing a later reader deletes, and these two are 57% of all dispatches in
+// the journal, so nobody should have to re-derive them from a bill.
+const SONNET_ROLES = new Map([
+  // The guard's merge decision is MECHANICAL. `sentinel.cjs mergeOne` re-verifies
+  // every condition against live GitHub — open, undrafted, checks green, zero
+  // unresolved threads, a conform trailer bound to this head, not
+  // CHANGES_REQUESTED, not a checkpoint, base inside the stack — and refuses on
+  // anything unproven, so the MODEL is not the gate. 44% of all dispatches.
+  ['pr-sentinel', 'the merge decision is enforced by sentinel.cjs against live GitHub, not by the model'],
+  // It returns a file list and a set of reuse pointers. The plan-defect burden it
+  // inherited from the executor is bought with EFFORT instead (its row below is
+  // `high`, up from `low`) — effort is ~12% of a line, which makes this the
+  // cheapest possible home for that work rather than a saving on the work itself.
+  ['drift-check', 'it returns a file list and reuse pointers; its new plan-defect burden is bought with effort, not with a tier'],
+]);
+
+// ── the depth: one EFFORT row per role (ADR-005 D2 as amended 2026-09-08) ────
+//
+// Read this table beside `tests/unit/pipeline-config.test.cjs`'s EFFORT_MATRIX,
+// which asserts it row for row so no later edit can move one quietly.
+//
+//   drift-check                  high    (was `low`; it is now the role expected
+//                                        to notice a plan that no longer matches
+//                                        the codebase, and it runs BEFORE an
+//                                        executor is paid)
+//   research                     high    xhigh with --type alternatives
+//   executor                     high    xhigh at risk: high or a checkpoint
+//   ci-fix, review-fix,
+//     pr-sentinel                high
+//   arch-review, integrator      xhigh
+//   any repair role on a
+//     repeated signature         max     (see resolveEffort — it outranks this
+//                                        table, and it is the ONLY built-in path
+//                                        to `max`)
+//
+// `xhigh` and not `max` for the judges, DELIBERATELY: Anthropic's effort guidance
+// names `xhigh` the best setting for most coding and agentic work (it is Claude
+// Code's own default) and says to reach `max` only when measurement shows headroom
+// at the level below. Nothing has measured that here, so `max` is reserved for the
+// one case that IS a measurement — a signature that has repeated on one ticket.
+// Raising the judges by argument instead is what this sentence exists to prevent.
+//
+// The three rows that changed on 2026-09-08, each of which LOOKS like a saving
+// and is not (effort is 12–19% of a line):
+//
+//   * executor → high. Its job is to implement a contract; catching a defect in
+//     that contract is not its job. `xhigh` is kept where a defect is EXPENSIVE
+//     rather than merely possible — risk: high or a checkpoint, 6 of this
+//     project's 49 tickets. What this gives up, stated so nobody is surprised:
+//     on 2026-09-08 four of five executors corrected their own plan, and one of
+//     those four could only have been found by BUILDING AN EXPERIMENT against the
+//     code (a forty-round race probe that disproved the plan's prescribed atomic
+//     step). No upstream role does that, and this row accepts it.
+//   * drift-check → high, from low. It inherits the burden above, at the cheapest
+//     place in the system to put it.
+//   * pr-sentinel → high rather than xhigh, on the same reading as its tier: the
+//     merge decision is enforced by sentinel.cjs, not by the model.
+//
+// Codex is NOT this table: there the axis is two values wide by measurement
+// (ADR-005 D6) and RUNTIMES_WITH_FLAT_EFFORT answers first, above.
+const EFFORT_ROWS = {
+  'drift-check': () => 'high',
+  research: (s) => (s.type === 'alternatives' ? 'xhigh' : 'high'),
+  executor: (s) => (s.risk === 'high' || s.checkpoint === true ? 'xhigh' : 'high'),
+  'ci-fix': () => 'high',
+  'review-fix': () => 'high',
+  'pr-sentinel': () => 'high',
+  'arch-review': () => 'xhigh',
+  integrator: () => 'xhigh',
+};
+const DEFAULT_EFFORT_ROW = 'high';
+
+// GSD's own model_profile vocabulary, accepted as an alias for ours so a user who
+// knows GSD does not get a "not one of economy|balanced|premium" warning.
+const PROFILE_ALIASES = { budget: 'economy', quality: 'premium', adaptive: 'balanced', inherit: 'balanced' };
+
+function configPath(root) {
+  return path.join(root || process.cwd(), '.planning', 'config.json');
+}
+
+// Path policy shared by pipeline-config and repo-resolve. Keep the physical
+// resolution here: a second string-prefix implementation in the resolver would
+// eventually disagree on symlinks, missing clone destinations, or `sub_repos`.
+function policyPath(value) {
+  let current = path.resolve(value);
+  const missing = [];
+  while (!fs.existsSync(current)) {
+    const parent = path.dirname(current);
+    if (parent === current) return path.resolve(value);
+    missing.unshift(path.basename(current));
+    current = parent;
+  }
+  try {
+    return path.join(fs.realpathSync(current), ...missing);
+  } catch {
+    return path.resolve(value);
+  }
+}
+
+function defaultRepositoryRoot(projectRoot = process.cwd()) {
+  return path.resolve(path.dirname(path.resolve(projectRoot)));
+}
+
+function repositoryRootValue(value, projectRoot = process.cwd()) {
+  // GSD materializes string capability defaults into config.json. The declared
+  // empty string is therefore the persisted spelling of an omitted root, not a
+  // malformed operator policy; keep it on the documented project-parent path.
+  if (value === undefined || value === '') {
+    return { valid: true, path: defaultRepositoryRoot(projectRoot), reason: null };
+  }
+  if (typeof value !== 'string' || value.length === 0 || !path.isAbsolute(value)) {
+    return {
+      valid: false,
+      path: null,
+      reason: 'pipeline.repos_root must be a non-empty absolute path',
+    };
+  }
+  const resolved = path.resolve(value);
+  try {
+    if (!fs.statSync(resolved).isDirectory()) {
+      return {
+        valid: false,
+        path: null,
+        reason: 'pipeline.repos_root must name a directory or a path that does not exist yet',
+      };
+    }
+  } catch (error) {
+    if (error && error.code !== 'ENOENT') {
+      return {
+        valid: false,
+        path: null,
+        reason: `pipeline.repos_root cannot be inspected (${error.code || error.message})`,
+      };
+    }
+    // stat follows symlinks and reports a dangling link as ENOENT. lstat keeps
+    // that occupied destination fail-closed while still allowing a genuinely
+    // absent root, which a later clone may create.
+    try {
+      fs.lstatSync(resolved);
+      return {
+        valid: false,
+        path: null,
+        reason: 'pipeline.repos_root must name a directory or a path that does not exist yet',
+      };
+    } catch (entryError) {
+      if (entryError && entryError.code !== 'ENOENT') {
+        return {
+          valid: false,
+          path: null,
+          reason: `pipeline.repos_root cannot be inspected (${entryError.code || entryError.message})`,
+        };
+      }
+    }
+  }
+  return { valid: true, path: resolved, reason: null };
+}
+
+function isWithin(root, candidate) {
+  const relative = path.relative(policyPath(root), policyPath(candidate));
+  return relative !== ''
+    && !relative.startsWith(`..${path.sep}`)
+    && relative !== '..'
+    && !path.isAbsolute(relative);
+}
+
+/**
+ * Validate a repository checkout or future clone destination.
+ *
+ * `requireInsideRoot` applies the configured clone root in addition to the
+ * project nesting rule. The helper does not require the candidate to exist and
+ * never creates or modifies a path.
+ *
+ * @param {string} candidate
+ * @param {{projectRoot?: string, reposRoot?: string|null, subRepos?: string[], requireInsideRoot?: boolean, label?: string}} options
+ * @returns {{valid: boolean, path: string|null, project_root: string, repos_root: string|null, reason: string|null}}
+ */
+function validateRepositoryDestination(candidate, options = {}) {
+  const {
+    projectRoot = process.cwd(),
+    reposRoot,
+    subRepos = [],
+    requireInsideRoot = false,
+    label = 'repository destination',
+  } = options;
+  const project = policyPath(projectRoot);
+  if (typeof candidate !== 'string' || candidate.length === 0 || !path.isAbsolute(candidate)) {
+    return {
+      valid: false,
+      path: null,
+      project_root: project,
+      repos_root: null,
+      reason: `${label} must be a non-empty absolute path`,
+    };
+  }
+  const target = policyPath(candidate);
+  const relative = path.relative(project, target);
+  if (relative === '') {
+    return {
+      valid: false,
+      path: target,
+      project_root: project,
+      repos_root: null,
+      reason: `${label} "${target}" is the project root and cannot be adopted`,
+    };
+  }
+  const nested = relative
+    && !relative.startsWith(`..${path.sep}`)
+    && relative !== '..'
+    && !path.isAbsolute(relative);
+  if (nested) {
+    const top = relative.split(path.sep)[0];
+    if (!Array.isArray(subRepos) || !subRepos.includes(top)) {
+      return {
+        valid: false,
+        path: target,
+        project_root: project,
+        repos_root: null,
+        reason: `${label} "${target}" is nested inside this project "${project}" without sub_repos declaration for "${top}"`,
+      };
+    }
+  }
+
+  let root = null;
+  if (requireInsideRoot) {
+    const rootResult = repositoryRootValue(reposRoot, projectRoot);
+    if (!rootResult.valid) {
+      return {
+        valid: false,
+        path: target,
+        project_root: project,
+        repos_root: null,
+        reason: rootResult.reason,
+      };
+    }
+    root = policyPath(rootResult.path);
+    if (!isWithin(root, target)) {
+      return {
+        valid: false,
+        path: target,
+        project_root: project,
+        repos_root: root,
+        reason: `${label} "${target}" is outside pipeline.repos_root "${root}"`,
+      };
+    }
+  }
+  return {
+    valid: true,
+    path: target,
+    project_root: project,
+    repos_root: root,
+    reason: null,
+  };
+}
+
+// A config file that EXISTS but cannot be read is not the same fact as one that
+// is ABSENT, and every mutating caller has to be able to tell them apart (ADR-004
+// D2, audit F03). Absent means "nobody has configured this yet", and the defaults
+// are exactly the right answer. Unparseable means "what this project decided is
+// UNKNOWN" — and a truncated file that said `auto_merge: off` used to resolve to
+// the DEFAULT `epic` with nothing but a warning, so the guard merged under a
+// policy the file forbade.
+//
+// So `valid` is the field a WRITER checks and `config` stays populated for
+// readers: a board still has to render, a `resolve` still has to print. The
+// absent/unparseable split is the same distinction `drift-needed.cjs`'s
+// `readJsonDistinct` draws over delivery-state.json, drawn here over the config;
+// `exists` was already half of it.
+//
+//   { valid: true,  error: null }                  absent, or parsed to an object
+//   { valid: false, error: {file, relative, message} }  exists and does not parse
+//
+// `error.file` is ABSOLUTE (ci-wait.cjs runs from a worktree, where a relative
+// path names nothing a person can open) and `error.relative` is the project-root
+// spelling the human-facing sentences use.
+function loadConfig(root, options = {}) {
+  const base = root || process.cwd();
+  const file = configPath(base);
+  const warnings = [];
+  let raw = {};
+  let error = null;
+  const exists = fs.existsSync(file);
+  const invalid = (message) => {
+    error = { file, relative: path.relative(base, file), message };
+    raw = {};
+    // The warning says INVALID rather than "using defaults", because the
+    // defaults are precisely what must NOT apply: state-sync prints every
+    // warning on the board, and "using defaults" beside "no policy in effect"
+    // is the board contradicting itself in two consecutive lines.
+    warnings.push(
+      `${error.relative} ${message} — INVALID: no policy is in effect. Every mutation refuses `
+      + '(no merge, no escalation) until the file parses; the fix is the file, not a flag.'
+    );
+  };
+  if (exists) {
+    let parsed;
+    try {
+      parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
+    } catch (e) {
+      invalid(`is not valid JSON (${e.message})`);
+    }
+    // Checked BEFORE anything reads `raw.pipeline`: `JSON.parse('null')` returns
+    // null and the very next line used to throw a TypeError on it, so a config
+    // containing `null` took state-sync and the sentinel down with a stack trace
+    // instead of a refusal. An array or a scalar is the same absence of a
+    // configuration, reported the same way.
+    if (!error) {
+      const shape = parsed === null ? 'null' : Array.isArray(parsed) ? 'an array' : typeof parsed;
+      if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        invalid(`is not a JSON object (got ${shape})`);
+      } else {
+        raw = parsed;
+      }
+    }
+  }
+  const obj = (v) => (v && typeof v === 'object' && !Array.isArray(v) ? v : {});
+  // delivery_pipeline.* (the capability's declared, GSD-native namespace) wins
+  // over pipeline.* for any key present in both.
+  const legacyPipeline = obj(raw.pipeline);
+  const declaredPipeline = obj(raw.delivery_pipeline);
+  const merged = { ...legacyPipeline, ...declaredPipeline };
+  // gsd_sync is a capability-declared switch. Do not let the legacy pipeline
+  // namespace appear to configure a key that the lifecycle gate never reads.
+  if (Object.prototype.hasOwnProperty.call(legacyPipeline, 'gsd_sync')
+      && !Object.prototype.hasOwnProperty.call(declaredPipeline, 'gsd_sync')) {
+    delete merged.gsd_sync;
+    warnings.push('pipeline.gsd_sync is not supported — use delivery_pipeline.gsd_sync');
+  }
+
+  // GSD's own `sub_repos` (both the flat and the nested shape it accepts). It is
+  // the declared way to say "this nested checkout belongs to my project", and
+  // findProjectRoot honours it BEFORE its git-boundary guard — so it is the fix
+  // we point at when a `pipeline.repos` path turns out to be nested.
+  const subReposRaw = raw.sub_repos ?? obj(raw.planning).sub_repos;
+  const subRepos = Array.isArray(subReposRaw) ? subReposRaw : [];
+
+  // Every nested value is copied, never shared with DEFAULTS: a caller that
+  // sorts or filters the palette in place would otherwise change what the next
+  // loadConfig() in the same process returns.
+  const runtimeContext = resolveRuntime(base, {
+    ...options,
+    // Parse/configuration validity is the first refusal for routed loads. The
+    // strict runtime context is resolved below, after malformed project and
+    // inherited configuration can be reported with their own source.
+    routed: false,
+    scriptPath: options.scriptPath || __filename,
+  });
+  // Keep a strict context even for compatibility loads. A later routed caller
+  // must see the original error/overrides, not the parser's sanitized defaults.
+  let dispatchRuntime;
+  let dispatchError;
+  let inheritedConfig = {};
+  try {
+    if (error) throw modelPolicy.policyError('INVALID_CONFIG', error.message, { source: file });
+    inheritedConfig = readInheritedConfig(base, options);
+    dispatchRuntime = resolveRuntime(base, { ...options, scriptPath: options.scriptPath || __filename, routed: true });
+  } catch (failure) {
+    if (options.routed === true) throw failure;
+    dispatchError = { code: failure.code, message: failure.message, details: failure.details };
+  }
+
+  const dispatchContext = {
+    // This is the immutable mode boundary. `cfg.routed` remains as a legacy
+    // compatibility field for readers, but routed selection must never trust a
+    // caller-controlled copy of it after this context has been created.
+    mode: options.routed === true ? 'routed' : 'compatibility',
+    routed: options.routed === true,
+    runtime: dispatchRuntime || null,
+    error: dispatchError || null,
+    // Store selection inputs before namespace merging and validation. In
+    // particular a rejected full model ID must not disappear at this boundary.
+    configuration: selectionConfig({ ...inheritedConfig, ...raw }),
+  };
+  const cfg = {
+    ...DEFAULTS,
+    jira: { ...DEFAULTS.jira },
+    models: {},
+    effort: {},
+    repos: {},
+    codex_models: DEFAULT_CODEX_MODELS.map((e) => ({ ...e })),
+    jira_transitions: {},
+    jira_todo_statuses: [],
+    routed: options.routed === true,
+    policy_version: modelPolicy.POLICY_VERSION,
+    policy_hash: modelPolicy.POLICY_HASH,
+    dispatch_context: dispatchContext,
+  };
+  LOADED_DISPATCH_CONTEXTS.set(cfg, dispatchContext);
+  for (const [key, value] of Object.entries(merged)) {
+    if (!KNOWN_KEYS.has(key)) {
+      warnings.push(`unknown pipeline config key "${key}" — ignored (known: ${[...KNOWN_KEYS].sort().join(', ')})`);
+      continue;
+    }
+    if (key === 'jira') {
+      for (const [jk, jv] of Object.entries(obj(value))) {
+        if (!KNOWN_JIRA_KEYS.has(jk)) { warnings.push(`unknown pipeline.jira key "${jk}" — ignored`); continue; }
+        cfg.jira[jk] = jv;
+      }
+      continue;
+    }
+    if (key === 'models') {
+      for (const [role, tier] of Object.entries(obj(value))) {
+        if (!ROLES.includes(role)) {
+          warnings.push(`pipeline.models."${role}" is not a pipeline role — ignored (roles: ${ROLES.join(', ')})`);
+          continue;
+        }
+        if (!TIERS.includes(tier)) {
+          warnings.push(
+            `pipeline.models."${role}" = "${tier}" is not a tier alias — ignored. Use one of ${TIERS.join('|')}; ` +
+            'full model IDs are not accepted by the Agent tool (set them in GSD model_overrides instead).'
+          );
+          continue;
+        }
+        cfg.models[role] = tier;
+      }
+      continue;
+    }
+    if (key === 'repos') {
+      for (const [slug, local] of Object.entries(obj(value))) {
+        if (!/^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/.test(slug)) {
+          warnings.push(`pipeline.repos."${slug}" is not an owner/name slug — ignored (it must match delivery.repo in the plans)`);
+          continue;
+        }
+        if (typeof local !== 'string' || !local) {
+          warnings.push(`pipeline.repos."${slug}" must be a path to the local checkout — ignored`);
+          continue;
+        }
+        if (!path.isAbsolute(local)) {
+          warnings.push(`pipeline.repos."${slug}" = "${local}" is relative — the conveyor runs from several worktrees, so it must be an ABSOLUTE path`);
+          continue;
+        }
+        // A sibling checkout nested inside this project is the one layout where
+        // GSD's project-root resolution changed under us. Keep this warning on
+        // the shared helper so resolver adoption and config loading cannot
+        // disagree about the same physical path.
+        const destination = validateRepositoryDestination(local, {
+          projectRoot: base,
+          subRepos,
+          label: `pipeline.repos."${slug}" = "${local}"`,
+        });
+        if (!destination.valid) warnings.push(destination.reason);
+        cfg.repos[slug] = local;
+      }
+      continue;
+    }
+    if (key === 'codex_models') {
+      const palette = normalizeCodexModels(value, warnings);
+      // A wholly unusable value keeps the shipped palette; an explicitly EMPTY
+      // one is honoured, because "write no model" is a legitimate choice.
+      if (palette !== null) cfg.codex_models = palette;
+      continue;
+    }
+    if (key === 'jira_transitions') {
+      const map = normalizeJiraTransitions(value, warnings);
+      // A wholly unusable value keeps the empty map, which is the projection
+      // switched off — the safe direction for anything that writes to a tracker.
+      if (map !== null) cfg.jira_transitions = map;
+      continue;
+    }
+    if (key === 'jira_todo_statuses') {
+      const statuses = normalizeJiraTodoStatuses(value, warnings);
+      // A malformed value keeps the empty list, which leaves eligibility off.
+      if (statuses !== null) cfg.jira_todo_statuses = statuses;
+      continue;
+    }
+    if (key === 'effort') {
+      for (const [role, level] of Object.entries(obj(value))) {
+        if (!ROLES.includes(role)) {
+          warnings.push(`pipeline.effort."${role}" is not a pipeline role — ignored`);
+          continue;
+        }
+        if (level !== 'minimal' && !EFFORTS.includes(level)) {
+          warnings.push(`pipeline.effort."${role}" = "${level}" is not an effort level — ignored (${EFFORTS.join('|')})`);
+          continue;
+        }
+        // ADR-005 D3: the override is read BEFORE the signature rule, so on a
+        // repair role it also switches off the depth rung a repeated failure
+        // earns. It keeps its precedence — a person who measured something wins —
+        // but it no longer does that silently, because shipping the effort table
+        // as configuration is exactly how the repair ladder was disabled once.
+        if (REPAIR_ROLES.has(role)) {
+          warnings.push(
+            `pipeline.effort."${role}" = "${level}" outranks the repair ladder's depth rung: a repeated ` +
+            'failure signature would otherwise raise this role to "max". It is honoured, but the escalation ' +
+            'is now off for this role — remove the key to get it back.'
+          );
+        }
+        cfg.effort[role] = level;
+      }
+      continue;
+    }
+    cfg[key] = value;
+  }
+
+  // Resolve the root after the namespace merge so delivery_pipeline.repos_root
+  // wins over the legacy spelling just like every other pipeline key. A bad
+  // explicit value becomes null rather than silently becoming the project
+  // parent; repo-resolve then refuses a clone until the policy is fixed.
+  const repositoryRoot = repositoryRootValue(merged.repos_root, base);
+  cfg.repos_root = repositoryRoot.path;
+  if (!repositoryRoot.valid) warnings.push(`${repositoryRoot.reason} — ignored; cloning is refused until it is fixed`);
+  // The resolver consumes this normalized declaration through the same config
+  // object and the same destination helper below.
+  cfg.sub_repos = subRepos;
+
+  // Enum-ish knobs: a misspelling here decides whether PRs get merged at all, so
+  // it is reported rather than silently coerced to the safe value.
+  if (cfg.auto_merge === true) cfg.auto_merge = 'epic';
+  if (cfg.auto_merge === false) cfg.auto_merge = 'off';
+  if (!['epic', 'off'].includes(cfg.auto_merge)) {
+    warnings.push(`pipeline.auto_merge "${cfg.auto_merge}" is unknown — falling back to off (values: epic | off)`);
+    cfg.auto_merge = 'off';
+  }
+  if (cfg.sentinel === true) cfg.sentinel = 'auto';
+  if (cfg.sentinel === false) cfg.sentinel = 'off';
+  if (!['auto', 'off'].includes(cfg.sentinel)) {
+    warnings.push(`pipeline.sentinel "${cfg.sentinel}" is unknown — falling back to auto (values: auto | off)`);
+    cfg.sentinel = 'auto';
+  }
+  // The sentinel is what performs an auto-merge; without a guard there is nobody
+  // to re-verify the gate against live GitHub, so the pair must stay consistent.
+  if (cfg.sentinel === 'off' && cfg.auto_merge === 'epic') {
+    warnings.push('pipeline.sentinel is off, so nothing can auto-merge — treating pipeline.auto_merge as off (turn the sentinel back on to land ticket PRs automatically)');
+    cfg.auto_merge = 'off';
+  }
+  // The polarity is deliberately asymmetric, the same way `preauthorized` is in
+  // front.cjs: this knob authorizes landing a PR that nothing verified, so only
+  // a real `true` (or the string a hand-edited JSON file acquires) opts in, and
+  // anything else is reported rather than silently honoured. A misspelling here
+  // must not read as consent.
+  if (cfg.merge_without_ci === 'true') cfg.merge_without_ci = true;
+  if (cfg.merge_without_ci === 'false') cfg.merge_without_ci = false;
+  if (typeof cfg.merge_without_ci !== 'boolean') {
+    warnings.push(
+      `pipeline.merge_without_ci "${cfg.merge_without_ci}" is not a boolean — using false, ` +
+      'so a PR with no reported checks stays a human\'s merge (values: true | false)'
+    );
+    cfg.merge_without_ci = false;
+  }
+  // The consent knob for the paid ceiling, with `sentinel`'s polarity and for a
+  // sharper reason: this one authorizes a model that may bill usage credits and
+  // whose consent prompt an unattended session cannot answer. So only a real
+  // `auto` opts in, and anything else is reported rather than honoured — a
+  // misspelling must never read as consent.
+  if (cfg.fable === true) cfg.fable = 'auto';
+  if (cfg.fable === false) cfg.fable = 'off';
+  if (!['auto', 'off'].includes(cfg.fable)) {
+    warnings.push(
+      `pipeline.fable "${cfg.fable}" is unknown — falling back to off (values: auto | off), ` +
+      'so the ceiling routes degrade to opus at high effort'
+    );
+    cfg.fable = 'off';
+  }
+  if (!['epic-stacked', 'direct-to-main'].includes(cfg.integration_mode)) {
+    warnings.push(`pipeline.integration_mode "${cfg.integration_mode}" is unknown — falling back to epic-stacked`);
+    cfg.integration_mode = 'epic-stacked';
+  }
+  if (PROFILE_ALIASES[cfg.model_policy]) {
+    cfg.model_policy = PROFILE_ALIASES[cfg.model_policy];
+  } else if (!['economy', 'balanced', 'premium'].includes(cfg.model_policy)) {
+    warnings.push(`pipeline.model_policy "${cfg.model_policy}" is unknown — falling back to balanced`);
+    cfg.model_policy = 'balanced';
+  }
+  if (!LADDER_MODES.includes(cfg.model_ladder)) {
+    warnings.push(
+      `pipeline.model_ladder "${cfg.model_ladder}" is unknown — falling back to conservative ` +
+      `(values: ${LADDER_MODES.join(' | ')})`
+    );
+    cfg.model_ladder = 'conservative';
+  }
+  // ONE numeric rule for every positive-number knob, and it is shared on purpose:
+  // a bespoke coercion per knob is one more place to get the fallback direction
+  // wrong. Two values used to pass it silently, and BOTH were properties of the
+  // rule rather than of any knob — so they were shipped accepted for every one of
+  // these seven at once, and probing only the endpoints is exactly how:
+  //
+  //   `true`  — `Number(true) === 1`, a positive finite number, so
+  //             `max_concurrent_agents: true` capped a whole session at ONE agent
+  //             with no warning. `false` (→ 0 → the default) is the mirror, which
+  //             is why checking `false` proved nothing. A boolean is not a number:
+  //             it is refused BEFORE Number(), and a numeric STRING still works,
+  //             because a hand-edited config.json legitimately acquires those.
+  //   `4.5`   — survived intact and produced a FRACTIONAL board (`free: 0.5` is
+  //             truthy, so front.cjs's `free === 0` fixpoint branch never fired
+  //             while nothing could actually be dispatched). Floored, and the
+  //             floor is reported: a silently rounded knob is a value the operator
+  //             did not set.
+  //
+  // The floor runs BEFORE the positivity check, so `0.5` floors to 0 and then
+  // falls back to the default like any other non-positive value. That is
+  // deliberate rather than incidental: `front.cjs`'s `capMax` reserves `max === 0`
+  // for exactly one fact — no policy could be READ — and `formatFront` words its
+  // line off it, so letting a parsing file resolve 0 would make the board report
+  // it as unparseable. A malformed number in a readable file falls back; only an
+  // unreadable file dispatches nothing.
+  for (const numeric of NUMERIC_KNOBS) {
+    const given = cfg[numeric];
+    if (typeof given === 'boolean') {
+      warnings.push(
+        `pipeline.${numeric} is ${given}, which is not a number — using ${DEFAULTS[numeric]} `
+        + '(a boolean coerces to 1 or 0, so it would silently read as a value nobody set)'
+      );
+      cfg[numeric] = DEFAULTS[numeric];
+      continue;
+    }
+    const asNumber = Number(given);
+    const n = Number.isFinite(asNumber) ? Math.floor(asNumber) : asNumber;
+    if (!Number.isFinite(n) || n <= 0) {
+      warnings.push(`pipeline.${numeric} must be a positive number — using ${DEFAULTS[numeric]}`);
+      cfg[numeric] = DEFAULTS[numeric];
+    } else {
+      if (n !== asNumber) {
+        warnings.push(`pipeline.${numeric} is ${asNumber}, which is not a whole number — using ${n}`);
+      }
+      cfg[numeric] = n;
+    }
+  }
+  cfg.use_workflow = cfg.use_workflow === false || cfg.use_workflow === 'false' ? false : 'auto';
+  cfg.graph_gate = cfg.graph_gate !== false;
+
+  // These values are the normalized pipeline controls the routed bridge passes
+  // to the canonical resolver. Keep the normalized copy inside the frozen
+  // context so a post-load mutation of the compatibility-shaped `cfg` cannot
+  // change consent or the window threshold after the boundary was crossed.
+  dispatchContext.normalized = {
+    fable: cfg.fable,
+    fable_window_tokens: cfg.fable_window_tokens,
+    model_policy: cfg.model_policy,
+  };
+
+  // ── GSD's own settings the conveyor must agree with ───────────────────────
+  const git = obj(raw.git);
+  const workflow = obj(raw.workflow);
+  cfg.gsd = {
+    // `runtime` is an execution-context value. GSD resolves it from
+    // GSD_RUNTIME/the per-install marker; a project value is retained only as
+    // a legacy fallback by runtime-context.cjs. This lets one checkout be used
+    // by Claude and Codex concurrently without rewriting config.json per run.
+    runtime: runtimeContext.runtime,
+    runtime_source: runtimeContext.source,
+    persisted_runtime: runtimeContext.persisted,
+    base_branch: typeof git.base_branch === 'string' && git.base_branch ? git.base_branch : null,
+    branching_strategy: typeof git.branching_strategy === 'string' ? git.branching_strategy : null,
+    response_language: typeof raw.response_language === 'string' ? raw.response_language : null,
+    use_worktrees: typeof workflow.use_worktrees === 'boolean' ? workflow.use_worktrees : null,
+  };
+  if (runtimeContext.conflict) {
+    warnings.push(
+      `project runtime "${runtimeContext.conflict.persisted}" is a legacy persisted value, but the active ` +
+      `runtime is "${runtimeContext.conflict.effective}" (${runtimeContext.source}); using the active runtime. ` +
+      'Remove the top-level "runtime" key from .planning/config.json so both runtimes can share this checkout.'
+    );
+  }
+  // Same collision as branching_strategy, one level down. GSD's writer workflows
+  // fork their own git worktree when this is true — and the conveyor calls
+  // `/gsd-code-review --fix` from INSIDE a ticket worktree, so the fixer would
+  // nest a worktree within ours and commit the fix where no PR is watching.
+  // GSD 1.9.1 made `--fix` honor this setting, which is what makes `false` the
+  // correct value rather than a preference.
+  // No warning: `true` is GSD's own default and is fine here. This used to warn,
+  // on the belief that `/gsd-code-review --fix` — which the conveyor DOES call
+  // from inside a ticket worktree — would fork a nested one. Checked against the
+  // source (1.9.1): code-review never mentions worktrees, and `git worktree add`
+  // lives only in execute-phase, new-workspace and worktree-safety.cjs, none of
+  // which the conveyor invokes. The boundary that DOES matter is stated
+  // elsewhere and is about wave parallelism, not this flag: no shipyard path may
+  // call `execute-phase`, because two orchestrators creating worktrees for the
+  // same plans would collide. Keep the check keyed to that, not to a setting.
+  // GSD's phase/milestone strategies create their own branches; the conveyor owns
+  // branching (epic/<phase> + ticket/<id>) and the two would fight over it.
+  if (cfg.gsd.branching_strategy && cfg.gsd.branching_strategy !== 'none') {
+    warnings.push(
+      `git.branching_strategy is "${cfg.gsd.branching_strategy}", but the delivery conveyor owns branching ` +
+      '(epic/<phase> + ticket/<id> + PR per ticket). Set it to "none" so GSD does not also create phase/milestone branches.'
+    );
+  }
+  // The plugin-namespaced agent_skills form only resolves on the claude runtime.
+  const agentSkills = obj(raw.agent_skills);
+  for (const [agent, entries] of Object.entries(agentSkills)) {
+    const list = Array.isArray(entries) ? entries : [entries];
+    for (const entry of list) {
+      if (typeof entry !== 'string') continue;
+      const namespaced = entry.startsWith('global:') && entry.slice(7).includes(':');
+      if (namespaced && cfg.gsd.runtime && cfg.gsd.runtime !== 'claude') {
+        warnings.push(
+          `agent_skills."${agent}" uses "${entry}", a plugin-namespaced skill that GSD resolves ONLY on the claude ` +
+          `runtime — it is silently skipped on runtime "${cfg.gsd.runtime}". Use the project-relative ` +
+          `"${PROJECT_DELIVERY_RULES}" projection instead (run gsd-tune.cjs --apply).`
+        );
+      }
+      if (entry === PROJECT_DELIVERY_RULES
+          && !fs.existsSync(path.join(base, PROJECT_DELIVERY_RULES, 'SKILL.md'))) {
+        warnings.push(
+          `agent_skills."${agent}" points at "${PROJECT_DELIVERY_RULES}", but its SKILL.md is missing — ` +
+          'run gsd-tune.cjs --apply to generate the Shipyard project skill projection.'
+        );
+      }
+    }
+  }
+
+  freezeSelection(dispatchContext);
+  return { config: cfg, warnings, file, exists, valid: error === null, error };
+}
+
+function freezeSelection(value) {
+  if (value && typeof value === 'object') {
+    for (const child of Object.values(value)) freezeSelection(child);
+    Object.freeze(value);
+  }
+  return value;
+}
+
+function selectionConfig(raw) {
+  const keys = ['models', 'effort', 'model_overrides', 'model', 'reasoning_effort',
+    'override', 'overrides', 'selection', 'inline', 'inherit', 'session_inherited',
+    'model_profile', 'model_policy', 'fable', 'fable_window_tokens', 'codex_models'];
+  const pick = (object) => Object.fromEntries(keys
+    .filter((key) => Object.prototype.hasOwnProperty.call(object, key))
+    .map((key) => [key, object[key]]));
+  const result = pick(raw);
+  // GSD's Codex remap namespaces are not pipeline configuration, but they are
+  // still launch inputs. Keep the raw values so a later routed call cannot
+  // validate a sanitized pipeline view while the Codex adapter reads these
+  // entries independently.
+  for (const namespace of ['model_policy', 'model_profile_overrides']) {
+    if (Object.prototype.hasOwnProperty.call(raw, namespace)) result[namespace] = raw[namespace];
+  }
+  for (const namespace of ['pipeline', 'delivery_pipeline', 'gsd']) {
+    if (raw[namespace] && typeof raw[namespace] === 'object') result[namespace] = pick(raw[namespace]);
+  }
+  return result;
+}
+
+const GSD_ROLE_KEYS = Object.freeze({
+  research: ['research', 'gsd-project-researcher', 'gsd-phase-researcher'],
+  decomposition: ['planning', 'gsd-planner', 'gsd-plan-checker'],
+  executor: ['execution', 'gsd-executor'],
+  'pr-sentinel': ['verification', 'gsd-verifier'],
+  integrator: ['verification', 'gsd-integration-checker'],
+  'drift-check': ['verification', 'gsd-verifier'],
+  'arch-review': ['verification', 'gsd-code-reviewer'],
+  'ci-fix': ['execution', 'gsd-debugger'],
+  'review-fix': ['execution', 'gsd-code-fixer'],
+});
+
+function codexRemapSelection(value) {
+  const object = value && typeof value === 'object' && !Array.isArray(value) ? value : null;
+  const model = typeof value === 'string'
+    ? value.trim()
+    : object && typeof object.model === 'string'
+      ? object.model.trim()
+      : null;
+  // codex-model-remap accepts a string or {model}; keep any effort fields so a
+  // contradictory compound GSD entry cannot hide behind its matching model.
+  return object ? { ...object, model } : { model: model || value };
+}
+
+function isGsdStageTier(name, value) {
+  return ['planning', 'execution', 'research', 'verification'].includes(name)
+    && ['opus', 'sonnet', 'haiku'].includes(value);
+}
+
+function configurationSelections(raw, role, runtime, modelKey) {
+  const selections = [];
+  const addSelection = (source, selection) => {
+    if (selection !== undefined) selections.push({ source, selection });
+  };
+  const add = (source, field, value) => {
+    addSelection(source, value === undefined ? undefined : { [field]: value });
+  };
+  // GSD's canonical policy resolver treats these as configuration override
+  // sources. Keep them in the canonical request below and mirror the same
+  // source-level validation here for compatibility-shaped namespaces.
+  const modelPolicy = raw.model_policy;
+  if (modelPolicy !== undefined) {
+    if (!modelPolicy || typeof modelPolicy !== 'object' || Array.isArray(modelPolicy)) {
+      add('config.model_policy', 'model', modelPolicy);
+    } else {
+      add('config.model_policy.runtime', 'runtime', modelPolicy.runtime);
+      const values = modelPolicy.models;
+      if (values !== undefined) {
+        if (!values || typeof values !== 'object' || Array.isArray(values)) {
+          add('config.model_policy.models', 'model', values);
+        } else {
+          add(`config.model_policy.models.${role}`, 'model', values[role]);
+        }
+      }
+    }
+  }
+  if (runtime === 'codex') {
+    for (const [source, values] of [
+      ['model_policy.runtime_tiers.codex', raw.model_policy?.runtime_tiers?.codex],
+      ['model_profile_overrides.codex', raw.model_profile_overrides?.codex],
+    ]) {
+      if (values === undefined) continue;
+      if (!values || typeof values !== 'object' || Array.isArray(values)) {
+        addSelection(`config.${source}`, { model: values });
+        continue;
+      }
+      const tier = { luna: 'sonnet', astra: 'opus' }[modelKey];
+      if (tier && Object.prototype.hasOwnProperty.call(values, tier)) {
+        addSelection(`config.${source}.${tier}`, codexRemapSelection(values[tier]));
+      }
+    }
+  }
+  for (const [prefix, cfg] of [['config', raw], ...['pipeline', 'delivery_pipeline', 'gsd']
+    .filter((key) => raw[key]).map((key) => [key, raw[key]])]) {
+    const gsdNamespace = prefix === 'config' || prefix === 'gsd';
+    const keys = new Set([role, ...(gsdNamespace ? GSD_ROLE_KEYS[role] || [] : [])]);
+    for (const [key, field] of [['models', 'model'], ['effort', 'effort'], ['model_overrides', 'model']]) {
+      const values = cfg[key];
+      if (values === undefined) continue;
+      if (!values || typeof values !== 'object' || Array.isArray(values)) {
+        add(`${prefix}.${key}`, field, values);
+        continue;
+      }
+      for (const name of keys) {
+        // gsd-tune's stage tiers are portable GSD preferences, not concrete
+        // Shipyard selections (even when their spelling is a Claude alias).
+        // Only this vocabulary at these stage keys is superseded by ADR-014;
+        // role/agent keys, model_overrides and concrete stage IDs still validate.
+        if (gsdNamespace && key === 'models' && isGsdStageTier(name, values[name])) continue;
+        add(`${prefix}.${key}.${name}`, field, values[name]);
+      }
+      if (key === 'effort') {
+        for (const name of keys) add(`${prefix}.effort.agent_overrides.${name}`, field, values.agent_overrides?.[name]);
+        // Generic GSD tier defaults do not select a routed role's effort.
+        // Preserve validation of unknown tiers/values and concrete overrides.
+        for (const [tier, effort] of Object.entries(values.routing_tier_defaults || {})) {
+          if (gsdNamespace && ['light', 'standard', 'heavy'].includes(tier)
+              && ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'].includes(effort)) continue;
+          add(`${prefix}.effort.routing_tier_defaults.${tier}`, field, effort);
+        }
+      }
+    }
+    for (const field of ['model', 'reasoning_effort', 'inline', 'inherit', 'session_inherited']) {
+      add(`${prefix}.${field}`, field, cfg[field]);
+    }
+    for (const field of ['override', 'overrides', 'selection']) {
+      if (cfg[field] !== undefined) selections.push({ source: `${prefix}.${field}`, selection: cfg[field] });
+    }
+  }
+  return selections;
+}
+
+function canonicalizeRuntimeAlias(request, selection) {
+  if (request.runtime !== 'claude' || typeof selection.model !== 'string') return selection;
+  const model = modelPolicy.CLAUDE_MODEL_ALIASES[selection.model];
+  return model ? { ...selection, model } : selection;
+}
+
+function validateSelection(request, source, selection) {
+  try {
+    if (typeof selection === 'string') selection = { model: selection };
+    if (!selection || typeof selection !== 'object' || Array.isArray(selection)) {
+      throw modelPolicy.policyError('CONFLICTING_OVERRIDE', 'selection must be an object or model string');
+    }
+    selection = canonicalizeRuntimeAlias(request, selection);
+    for (const field of ['inline', 'inherit', 'session_inherited']) {
+      if (selection[field] !== undefined && typeof selection[field] !== 'boolean') {
+        throw modelPolicy.policyError('UNSUPPORTED_SELECTION', `${field} must be a boolean`);
+      }
+    }
+    modelPolicy.resolveDispatch({ ...request, override: selection });
+    // Check every alias independently: one matching model/effort must not hide
+    // a contradictory requested/applied value in the same override object.
+    for (const field of ['requested_model', 'applied_model', 'reasoning_effort', 'requested_effort', 'applied_effort']) {
+      if (selection[field] !== undefined) {
+        const key = field.endsWith('model') ? 'model' : 'effort';
+        const value = key === 'model'
+          ? canonicalizeRuntimeAlias(request, { model: selection[field] }).model
+          : selection[field];
+        modelPolicy.resolveDispatch({ ...request, override: { [key]: value } });
+      }
+    }
+  } catch (error) {
+    throw modelPolicy.policyError(error.code, `${source}: ${error.message}`, { ...error.details, source });
+  }
+}
+
+const GSD_MODEL_PROFILES = new Set(['quality', 'balanced', 'budget', 'adaptive', 'inherit']);
+const GSD_PROFILE_FOR_POLICY = Object.freeze({
+  economy: 'budget',
+  balanced: 'balanced',
+  premium: 'quality',
+});
+
+function boundDispatchContext(cfg) {
+  if (!cfg || typeof cfg !== 'object' || Array.isArray(cfg)) return null;
+  const context = LOADED_DISPATCH_CONTEXTS.get(cfg);
+  if (!context) {
+    // Copies retain routed intent but lose the loader's private binding. Never
+    // interpret that loss of provenance as permission to use compatibility.
+    if (cfg.routed === true || cfg.dispatch_context?.mode === 'routed' || cfg.dispatch_context?.routed === true) {
+      throw modelPolicy.policyError(
+        'INVALID_CONFIG',
+        'config.dispatch_context lacks a loadConfig binding for routed intent; reload with routed: true',
+        { source: 'config.dispatch_context' },
+      );
+    }
+    return null;
+  }
+  if (cfg.dispatch_context !== context) {
+    throw modelPolicy.policyError(
+      'INVALID_CONFIG',
+      'config.dispatch_context was replaced after loadConfig',
+      { source: 'config.dispatch_context' },
+    );
+  }
+  return context;
+}
+
+function routedConfig(cfg) {
+  const context = boundDispatchContext(cfg);
+  return Boolean(context && context.mode === 'routed' && context.routed === true);
+}
+
+function normalizedRoutedControls(cfg, context) {
+  const normalized = context.normalized;
+  if (!normalized || typeof normalized !== 'object' || Array.isArray(normalized)) {
+    throw modelPolicy.policyError(
+      'INVALID_CONFIG',
+      'config.dispatch_context.normalized is missing from the frozen routed context',
+      { source: 'config.dispatch_context.normalized' },
+    );
+  }
+  // `loadConfig` normalizes an unknown pipeline profile to `balanced` for
+  // compatibility readers. Routed readers must retain the raw nested value so
+  // an explicit typo cannot become indistinguishable from an omitted control.
+  for (const [namespace, values] of [
+    ['pipeline', context.configuration?.pipeline],
+    ['delivery_pipeline', context.configuration?.delivery_pipeline],
+    ['gsd', context.configuration?.gsd],
+  ]) {
+    if (!values || typeof values !== 'object' || Array.isArray(values)) continue;
+    for (const [field, valid] of [
+      ['fable', (value) => ['auto', 'off'].includes(value)],
+      ['fable_window_tokens', (value) => value === modelPolicy.WINDOW_THRESHOLD_TOKENS],
+    ]) {
+      if (Object.prototype.hasOwnProperty.call(values, field) && !valid(values[field])) {
+        const source = `${namespace}.${field}`;
+        throw modelPolicy.policyError('UNSUPPORTED_SELECTION',
+          `${source} ${JSON.stringify(values[field])} is not a canonical routed control`, { source });
+      }
+      if (field === 'fable' && Object.prototype.hasOwnProperty.call(values, field)
+          && values[field] !== normalized.fable) {
+        const source = `${namespace}.${field}`;
+        throw modelPolicy.policyError(
+          'CONFLICTING_OVERRIDE',
+          `${source} selects "${values[field]}", but pipeline.fable requires "${normalized.fable}"`,
+          { source, expected: normalized.fable, actual: values[field] },
+        );
+      }
+    }
+    if (!Object.prototype.hasOwnProperty.call(values, 'model_policy')) continue;
+    const raw = values.model_policy;
+    const profile = typeof raw === 'string' ? PROFILE_ALIASES[raw] || raw : null;
+    if (!['economy', 'balanced', 'premium'].includes(profile)) {
+      throw modelPolicy.policyError(
+        'UNSUPPORTED_SELECTION',
+        `${namespace}.model_policy ${JSON.stringify(raw)} is not a supported pipeline profile`,
+        { source: `${namespace}.model_policy` },
+      );
+    }
+    if (profile !== normalized.model_policy) {
+      throw modelPolicy.policyError(
+        'CONFLICTING_OVERRIDE',
+        `${namespace}.model_policy selects "${profile}", but pipeline.model_policy requires "${normalized.model_policy}"`,
+        { source: `${namespace}.model_policy`, expected: normalized.model_policy, actual: profile },
+      );
+    }
+  }
+  for (const [field, source] of [
+    ['fable', 'pipeline.fable'],
+    ['fable_window_tokens', 'pipeline.fable_window_tokens'],
+    ['model_policy', 'pipeline.model_policy'],
+  ]) {
+    if (cfg[field] !== normalized[field]) {
+      throw modelPolicy.policyError(
+        'INVALID_CONFIG',
+        `${source} changed after the routed configuration was loaded`,
+        { source },
+      );
+    }
+  }
+  if (!['auto', 'off'].includes(normalized.fable)) {
+    throw modelPolicy.policyError(
+      'INVALID_CONFIG',
+      `pipeline.fable "${normalized.fable}" is not a normalized consent value`,
+      { source: 'pipeline.fable' },
+    );
+  }
+  if (!Number.isInteger(normalized.fable_window_tokens) || normalized.fable_window_tokens <= 0) {
+    throw modelPolicy.policyError(
+      'INVALID_CONFIG',
+      'pipeline.fable_window_tokens is not a normalized positive integer',
+      { source: 'pipeline.fable_window_tokens' },
+    );
+  }
+  // ADR-014 fingerprints the threshold. The canonical resolver has no mutable
+  // per-dispatch threshold input, so a different normalized value must refuse
+  // instead of silently routing on the policy constant.
+  if (normalized.fable_window_tokens !== modelPolicy.WINDOW_THRESHOLD_TOKENS) {
+    throw modelPolicy.policyError(
+      'UNSUPPORTED_SELECTION',
+      `pipeline.fable_window_tokens is ${normalized.fable_window_tokens}, but the canonical resolver is fixed at ${modelPolicy.WINDOW_THRESHOLD_TOKENS}`,
+      { source: 'pipeline.fable_window_tokens', expected: modelPolicy.WINDOW_THRESHOLD_TOKENS, actual: normalized.fable_window_tokens },
+    );
+  }
+  return {
+    fable: normalized.fable,
+    fable_window_tokens: normalized.fable_window_tokens,
+    model_policy: normalized.model_policy,
+  };
+}
+
+function validateModelProfile(context, modelPolicyConfig, cfg, input) {
+  const configuration = context.configuration;
+  if (!configuration || typeof configuration !== 'object' || Array.isArray(configuration)) {
+    throw modelPolicy.policyError('INVALID_CONFIG', 'config.dispatch_context.configuration is missing', {
+      source: 'config.dispatch_context.configuration',
+    });
+  }
+  const hasProfile = Object.prototype.hasOwnProperty.call(configuration, 'model_profile');
+  // GSD's project profile default is balanced. Treating an omitted field as that
+  // fixed default keeps the routed bridge deterministic while still refusing an
+  // explicit inherited/unknown profile that could select another ladder.
+  const profiles = [['config.model_profile', hasProfile ? configuration.model_profile : 'balanced']];
+  for (const [source, object] of [['input', input], ['config', cfg],
+    ['pipeline', configuration.pipeline], ['delivery_pipeline', configuration.delivery_pipeline],
+    ['gsd', configuration.gsd], ['config.gsd', cfg.gsd]]) {
+    if (object && Object.prototype.hasOwnProperty.call(object, 'model_profile')) {
+      profiles.push([`${source}.model_profile`, object.model_profile]);
+    }
+  }
+  const expected = GSD_PROFILE_FOR_POLICY[modelPolicyConfig.model_policy] || 'balanced';
+  for (const [source, profile] of profiles) {
+    if (!GSD_MODEL_PROFILES.has(profile)) {
+      throw modelPolicy.policyError(
+        'UNSUPPORTED_SELECTION',
+        `${source} ${JSON.stringify(profile)} is not a supported GSD profile`,
+        { source },
+      );
+    }
+    if (profile !== expected) {
+      throw modelPolicy.policyError(
+        'CONFLICTING_OVERRIDE',
+        `${source} selects "${profile}", but pipeline.model_policy requires "${expected}"`,
+        { source, expected, actual: profile },
+      );
+    }
+  }
+}
+
+// Public configuration bridge. Pass {root, runtime, role, signals, dispatch_id}
+// or a config returned by loadConfig. Never call a compatibility tier reader to
+// supply a missing model/effort. Receipt-backed repair escalation stays private
+// to dispatch-boundary.cjs; this reader cannot manufacture receipt authority.
+function resolveDispatch(input) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) {
+    throw modelPolicy.policyError('INVALID_INPUT', 'dispatch input must be an object', { source: 'input' });
+  }
+  const cfg = input.config === undefined
+    ? loadConfig(input.root, { ...input, routed: true }).config : input.config;
+  const context = boundDispatchContext(cfg);
+  if (!context) throw modelPolicy.policyError('INVALID_CONFIG', 'config must come from loadConfig', { source: 'config' });
+  if (!routedConfig(cfg)) {
+    throw modelPolicy.policyError(
+      'UNSUPPORTED_SELECTION',
+      'config is compatibility-only; routed callers must load with routed: true',
+      { source: 'config.dispatch_context.mode' },
+    );
+  }
+  if (context.error) throw modelPolicy.policyError(context.error.code, context.error.message, context.error.details);
+  const controls = normalizedRoutedControls(cfg, context);
+  const runtime = context.runtime;
+  for (const [source, identity] of [['config', cfg], ['config.dispatch_context.runtime', runtime]]) {
+    for (const [field, expected] of [['policy_version', modelPolicy.POLICY_VERSION], ['policy_hash', modelPolicy.POLICY_HASH]]) {
+      if (identity?.[field] !== expected) {
+        const location = `${source}.${field}`;
+        throw modelPolicy.policyError('INVALID_CONFIG', `${location} has a missing or stale policy fingerprint`, { source: location });
+      }
+    }
+  }
+  const identity = resolveRuntime(null, {
+    runtime: input.runtime !== undefined ? input.runtime : runtime.runtime,
+    runtimeMarker: runtime.runtime,
+    env: {},
+    routed: true,
+    ...(input.dispatch_id !== undefined
+      ? { dispatch_id: input.dispatch_id }
+      : runtime.dispatch_id !== undefined ? { dispatch_id: runtime.dispatch_id } : {}),
+  });
+  if (input.dispatch_id !== undefined && runtime.dispatch_id !== undefined
+      && identity.dispatch_id !== runtime.dispatch_id) {
+    throw modelPolicy.policyError('CONFLICTING_OVERRIDE', 'input.dispatch_id conflicts with runtime context', { source: 'input.dispatch_id' });
+  }
+  validateModelProfile(context, controls, cfg, input);
+  if (runtime.runtime === 'codex') {
+    for (const [source, object] of [['input', input], ['config', context.configuration],
+      ['pipeline', context.configuration.pipeline], ['delivery_pipeline', context.configuration.delivery_pipeline],
+      ['gsd', context.configuration.gsd]]) {
+      if (object && Object.prototype.hasOwnProperty.call(object, 'codex_models')) {
+        throw modelPolicy.policyError('UNSUPPORTED_SELECTION',
+          `${source}.codex_models is compatibility-only; routed dispatch uses the canonical grid`,
+          { source: `${source}.codex_models` });
+      }
+    }
+    if (JSON.stringify(cfg.codex_models) !== JSON.stringify(DEFAULT_CODEX_MODELS)) {
+      throw modelPolicy.policyError('UNSUPPORTED_SELECTION',
+        'config.codex_models changed from the compatibility default', { source: 'config.codex_models' });
+    }
+  }
+  const canonicalConfig = {
+    ...context.configuration,
+    // Carry the normalized controls on the request even though the current
+    // canonical policy only consumes its fixed threshold. The post-resolution
+    // gate below refuses any fable result that the consent cannot authorize.
+    fable: controls.fable,
+    fable_window_tokens: controls.fable_window_tokens,
+    pipeline: {
+      ...(context.configuration.pipeline && typeof context.configuration.pipeline === 'object'
+        && !Array.isArray(context.configuration.pipeline) ? context.configuration.pipeline : {}),
+      fable: controls.fable,
+      fable_window_tokens: controls.fable_window_tokens,
+    },
+  };
+  // `research` is both a GSD stage and a Shipyard role. Remove only recognized
+  // stage tiers from the canonical input, retaining the frozen raw configuration
+  // for source validation; concrete IDs and pipeline.models remain untouched.
+  if (canonicalConfig.models && typeof canonicalConfig.models === 'object'
+      && !Array.isArray(canonicalConfig.models)) {
+    canonicalConfig.models = Object.fromEntries(Object.entries(canonicalConfig.models)
+      .filter(([name, value]) => !isGsdStageTier(name, value)));
+  }
+  const request = { ...input, config: canonicalConfig, runtime: runtime.runtime };
+  if (identity.dispatch_id !== undefined) request.dispatch_id = identity.dispatch_id;
+  const resolution = modelPolicy.resolveDispatch(request);
+  if (resolution.model === 'fable' && controls.fable !== 'auto') {
+    throw modelPolicy.policyError(
+      'CONFLICTING_OVERRIDE',
+      `pipeline.fable is "${controls.fable}", so the canonical fable selection is not consented`,
+      { source: 'pipeline.fable', expected: 'auto', actual: controls.fable },
+    );
+  }
+  const selections = configurationSelections(context.configuration, resolution.role, runtime.runtime, resolution.model_key);
+  if (cfg.gsd?.runtime !== runtime.runtime) {
+    throw modelPolicy.policyError('CONFLICTING_OVERRIDE', 'config.gsd.runtime conflicts with runtime context', { source: 'config.gsd.runtime' });
+  }
+  // Also validate current parsed values, so edits made after loadConfig cannot
+  // bypass checks against the original configuration.
+  selections.push(...configurationSelections({ pipeline: cfg }, resolution.role, runtime.runtime, resolution.model_key));
+  for (const field of ['inline', 'inherit', 'session_inherited']) {
+    if (input[field] !== undefined) selections.push({ source: `input.${field}`, selection: { [field]: input[field] } });
+  }
+  for (const field of ['inlineOverride', 'session', 'sessionOverride', 'inherited',
+    'override', 'overrides', 'selection', 'launch_arguments', 'gsdOverride', 'perRoleOverride', 'configOverride']) {
+    if (input[field] !== undefined) selections.push({ source: `input.${field}`, selection: input[field] });
+  }
+  for (const { source, selection } of selections) {
+    validateSelection(request, source, selection);
+  }
+  return resolution;
+}
+
+// JSON dispatch is an input boundary, so an unknown top-level field must not be
+// mistaken for an omitted signal or override. Keep this allowlist aligned with
+// the fields the bridge and canonical resolver inspect; nested signals retain
+// their own canonical validation.
+const DISPATCH_INPUT_KEYS = new Set([
+  'root', 'runtime', 'role', 'signals', 'dispatch_id', 'dispatchId', 'config',
+  'model_profile', 'model', 'requested_model', 'applied_model',
+  'effort', 'requested_effort', 'applied_effort', 'reasoning_effort',
+  'backend', 'mechanism', 'agent_file', 'logical_model', 'logical_rung', 'rung', 'rung_index',
+  'override', 'overrides', 'selection', 'launch_arguments',
+  'gsdOverride', 'perRoleOverride', 'configOverride',
+  'inline', 'inherit', 'session_inherited',
+  'inlineOverride', 'session', 'sessionOverride', 'inherited',
+]);
+
+function validateJsonDispatchInput(input) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) {
+    throw modelPolicy.policyError('INVALID_INPUT', 'dispatch input must be an object', { source: 'input' });
+  }
+  const unknown = Object.keys(input).filter((key) => !DISPATCH_INPUT_KEYS.has(key));
+  if (unknown.length) {
+    throw modelPolicy.policyError(
+      'INVALID_INPUT',
+      `dispatch input has unsupported top-level field(s): ${unknown.join(', ')}`,
+      { source: 'input', fields: unknown },
+    );
+  }
+  return input;
+}
+
+function requireCompatibility(cfg, source) {
+  if (routedConfig(cfg)) {
+    throw modelPolicy.policyError('UNSUPPORTED_SELECTION',
+      `${source} is compatibility-only; routed callers must use resolveDispatch`, { source });
+  }
+}
+
+// `fable` exists on the Claude runtime only. GSD's tier vocabulary is
+// opus|sonnet|haiku, and the Codex agent files are rendered through that map, so
+// asking for `fable` there produces a model nobody can resolve. Runtime-aware
+// here rather than at every call site: the ladder is the one place that decides
+// what "top tier" means.
+//
+// UNSET means opus, not fable — the asymmetry is deliberate. The two failures are
+// not equal: on Claude, `opus` instead of `fable` costs a smaller context window
+// on a job that usually fits anyway; on Codex, `fable` is a model id nothing can
+// resolve. So the default is the one that degrades rather than the one that
+// breaks, and the 1M tier is taken only where the runtime SAYS it is available.
+// The active runtime context supplies that declaration. `gsd-tune.cjs` refuses
+// to apply runtime-specific values without one and migrates legacy persisted
+// values away, because several behaviours, this one included, hang off it.
+const RUNTIMES_WITH_1M_TIER = new Set(['claude']);
+function topTier(cfg) {
+  const runtime = (cfg.gsd && cfg.gsd.runtime) || null;
+  return RUNTIMES_WITH_1M_TIER.has(runtime) ? 'fable' : 'opus';
+}
+function tierAllowedForRuntime(runtime, tier) {
+  if (!TIERS.includes(tier)) return false;
+  if (tier !== 'fable') return true;
+  return RUNTIMES_WITH_1M_TIER.has(runtime);
+}
+
+// A tier alias means the same STRENGTH everywhere but not the same ECONOMICS.
+// On Claude, `opus` is the ordinary choice for writing code. On Codex the top
+// tier is a premium reasoning model, and GSD's own catalog shows what that is
+// worth: of its 34 Codex agents, exactly TWO take the top model — `gsd-planner`
+// and `gsd-eval-planner`. Its executor, code-fixer, code-reviewer, debugger and
+// security-auditor are all on the workhorse tier. A straight tier-for-tier
+// mapping put four of our seven roles on the premium model, which is not the same
+// policy expressed on a different runtime — it is a more expensive one.
+//
+// So outside Claude the top model goes to NOBODY here, exactly as in GSD: the
+// only agents it gives `sol` to are `gsd-planner` and `gsd-eval-planner`, and the
+// conveyor has no planner among its roles — decomposition is done by the main
+// loop, not by a role agent. Its reviewer, executor, fixer and debugger are all
+// on the workhorse. GSD expresses depth through EFFORT at the same model —
+// `gsd-debugger` and `gsd-security-auditor` are `gsd-executor`'s model at xhigh
+// — and that is what this cap used to lean on. It no longer holds THERE:
+// ADR-005 D6 measured that the deeper efforts buy nothing on that runtime, so
+// the effort axis is two values wide (see RUNTIMES_WITH_FLAT_EFFORT) and depth
+// comes back from the model, through a second agent FILE per escalating role
+// (D8). The cap still stands, because what it decides is which tier the
+// GENERATOR renders a palette entry for, and the palette's own ceiling is what
+// the escalation reaches.
+const RUNTIMES_WITH_PREMIUM_TOP_TIER = new Set(['codex']);
+
+// Where the effort axis is flat: one cheap value for the mechanical role, one
+// working value for everything else (ADR-005 D6). Not a limitation of the
+// runtime — a measurement of it.
+const RUNTIMES_WITH_FLAT_EFFORT = new Set(['codex']);
+function capForRuntime(tier, cfg) {
+  const runtime = (cfg.gsd && cfg.gsd.runtime) || null;
+  if (!RUNTIMES_WITH_PREMIUM_TOP_TIER.has(runtime)) return tier;
+  return TOP_TIERS.has(tier) ? 'sonnet' : tier;
+}
+
+// A runtime name reaches the route from the CONFIG, so it is slugged before it
+// becomes a rule token: an operator's `runtime: "Claude Code"` would otherwise
+// risk a route with a space in it, which `parseRoute` — the grammar
+// dispatch-record validates against — would reject. Today both call sites below
+// gate on an EXACT `=== 'codex'` match against the raw value before either ever
+// reaches this function, so `runtimeToken` only ever sees `'codex'` in practice —
+// this guards a FUTURE caller (a broadened match, a third call site) rather than
+// a live failure, and the function's own contract (never a bare punctuation
+// remnant, see below) should hold regardless of who calls it or how.
+const runtimeToken = (cfg) => {
+  // A whitespace-only (or otherwise all-punctuation) runtime slugs to a bare
+  // "-", which is non-empty and so slips past the `|| 'unset'` fallback below —
+  // it would leak into a route token as e.g. `cap:-`. Trim the leading/trailing
+  // hyphens the replace can produce before testing for emptiness.
+  const slug = String((cfg.gsd && cfg.gsd.runtime) || 'unset')
+    .toLowerCase()
+    .replace(/[^a-z0-9-]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  return slug || 'unset';
+};
+
+// ── the ceiling: three mechanical routes to `fable` (ADR-005 D4) ─────────────
+//
+// Each route is COMPUTABLE from something the caller measured or the journal
+// recorded; none is a prompt rule, and none of them is a role's default. There is
+// no standing exception any more — the integrator goes through R1 like everything
+// else. (An earlier draft gave it `fable` unconditionally because it "reads the
+// largest input in the system, runs once per phase, and is the last mechanical
+// judgment before a person merges": all true, and none of it a measurement. Its
+// single run on 2026-09-08 consumed 291k tokens end to end, against `fable`
+// costing exactly 2× `opus` on every component. Being the last judgement before a
+// human merge is why its EFFORT is `xhigh` and never drops — not why it would
+// take the bigger model.)
+//
+// Returns null when no route fires, or {route, why, model, degraded, reason}.
+// `degraded` means the route fired and could NOT be honoured: the answer is then
+// `opus` at `max` effort, which is the ADR's own escalation ORDER (opus at depth
+// first, fable after) with the reason printed rather than silently swallowed.
+function fableRoute(role, signals = {}, cfg = DEFAULTS) {
+  requireCompatibility(cfg, 'fableRoute');
+  let route = null;
+  let why = '';
+  // R1 — window pressure. The CALLER measures its own input and passes the
+  // number; the resolver only compares. Absent (`undefined`, or anything
+  // non-numeric) cannot fire: an absent signal must never resolve upward.
+  const tokens = Number(signals.inputTokens);
+  const threshold = Number(cfg.fable_window_tokens) || DEFAULTS.fable_window_tokens;
+  if (Number.isFinite(tokens) && tokens > threshold) {
+    route = 'window';
+    why = `--input-tokens ${tokens} is over pipeline.fable_window_tokens (${threshold})`;
+  } else if (REPAIR_ROLES.has(role) && signals.signatureState === 'repeat_exhausted') {
+    // R2 — exhausted depth. The same failure a third time, after a `rethink` at
+    // `max` (Claude) or at the same effort (Codex) already failed. The verdict is
+    // computed once, by `failure-signature.cjs computeVerdict`, so the journal
+    // stays the single source and this stays a pure function.
+    route = 'exhausted';
+    why = 'the same failure signature came back after the deeper effort was already spent on it';
+  } else if (signals.contested === true && JUDGMENT_ROLES.has(role)) {
+    // R3 — contested JUDGMENT, and the role is part of the condition. Both facts
+    // that set this flag are a judge's own prior verdict: the journal already
+    // holds an `arch_review … verdict=violation` for this ticket, or the
+    // integrator has returned `needs-fix` on this epic before — a second reading
+    // at the same depth is what produced the contested verdict in the first
+    // place. A fixer carrying the flag is not a re-judgement, and a route that
+    // any role could open with one flag is not a ceiling that has to be earned.
+    route = 'contested';
+    why = 'this judgement has already been contested once (--contested)';
+  }
+  if (!route) return null;
+
+  const consented = cfg.fable === 'auto';
+  const runtimeHasIt = topTier(cfg) === 'fable';
+  if (consented && runtimeHasIt) return { route, why, model: 'fable', degraded: false, reason: null };
+  return {
+    route,
+    why,
+    model: 'opus',
+    degraded: true,
+    reason: !consented
+      ? `pipeline.fable is "${cfg.fable}", so the ceiling stays closed — opus at high effort instead ` +
+        '(set it to "auto" once a person has answered Fable\'s consent prompt interactively)'
+      : `the "${(cfg.gsd && cfg.gsd.runtime) || 'unset'}" runtime has no 1M-context tier, so the ` +
+        'ceiling is opus at high effort (on Codex the escalation is a `-deep` agent file — ADR-005 D8)',
+  };
+}
+
+// The ladder BEFORE the runtime cap — the strength this role deserves.
+//
+// Order: an explicit override, then the earned CEILING, then the FLOOR. The
+// ceiling sits ABOVE the floor deliberately: expressing the floor through
+// `pipeline.models.*` instead (which is how it was piloted) short-circuits this
+// function at the override and no escalation could ever fire.
+// Every step returns the RULE beside the value, and the value the callers below
+// take is `.value` — so the route is a BYPRODUCT of the decision rather than a
+// second function that describes it. A parallel `explainRoute()` mirroring these
+// branches is exactly the shape ADR-006's Consequences name: a claim about a
+// mechanism written from its documented intent, which is how three assertions in
+// one session came to be disproved by opening the file.
+function tierRoute(role, signals = {}, cfg = DEFAULTS) {
+  const override = cfg.models && cfg.models[role];
+  if (override) return { value: override, rule: 'override' };
+
+  // A fired route overrides the two sonnet exemptions as well: they say "the
+  // model is not the gate here", and a route firing is the measured evidence
+  // that on THIS dispatch it is.
+  const ceiling = fableRoute(role, signals, cfg);
+  if (ceiling) {
+    return { value: ceiling.model, rule: `ceiling:${ceiling.route}${ceiling.degraded ? ':degraded' : ''}` };
+  }
+
+  // Adaptive task levels are deliberately applied after overrides and earned
+  // ceilings. A routine lane is a bounded downgrade for executor/research; a
+  // critical lane makes the upgrade visible in the route even when the Claude
+  // floor already happens to be opus. An explicit critical request is honoured
+  // in conservative mode as a deliberate per-dispatch upgrade; automatic
+  // classification remains opt-in. Codex maps the same critical lane to its
+  // premium palette entry at generation/selection time.
+  const level = taskLevelRoute(role, signals, cfg);
+  const explicitCritical = level.requested === 'critical';
+  if (cfg.model_ladder === 'adaptive' || explicitCritical) {
+    if (level.value === 'routine' && ADAPTIVE_ROUTINE_ROLES.has(role)) {
+      return { value: 'sonnet', rule: 'level:routine' };
+    }
+    if (level.value === 'critical') {
+      return { value: 'opus', rule: 'level:critical' };
+    }
+  }
+
+  // The floor. `model_policy` deliberately does not appear: the floor is not a
+  // preference (ADR-005 D1), so no profile moves it in either direction. The key
+  // survives because `gsd-tune` mirrors it onto GSD's own `model_profile`, which
+  // governs GSD's agents rather than the conveyor's roles.
+  return SONNET_ROLES.has(role)
+    ? { value: 'sonnet', rule: 'floor:exempt' }
+    : { value: 'opus', rule: 'floor' };
+}
+
+// The tier the Agent tool is handed, and which rule produced it — the cap is
+// appended rather than replacing the rule, because "the floor chose opus and the
+// runtime capped it" is two facts and a reader of the journal needs both.
+function modelRoute(role, signals = {}, cfg = DEFAULTS) {
+  const tier = tierRoute(role, signals, cfg);
+  const capped = capForRuntime(tier.value, cfg);
+  if (capped === tier.value) return tier;
+  return { value: capped, rule: `${tier.rule}+cap:${runtimeToken(cfg)}` };
+}
+
+// role × signals routing. Returns a tier alias the Agent tool accepts.
+function resolveModel(role, signals = {}, cfg = DEFAULTS) {
+  if (routedConfig(cfg)) return resolveDispatch({ role, signals, config: cfg }).model;
+  return modelRoute(role, signals, cfg).value;
+}
+
+// Reasoning effort — the axis the policy now rests on, keyed on the ROLE and its
+// signals rather than on the resolved model (ADR-005 D2). The dependency had to
+// invert: the old rule derived the effort tier FROM the model, so the moment the
+// floor made the model constant everything collapsed to `xhigh` and
+// `--signature-state repeat` stopped deepening anything. `model` stays in the
+// signature for the callers that pass it, and drives nothing.
+//
+// Order, and every step of it is load-bearing:
+//   1. an explicit `pipeline.effort.<role>` override (warned about at load time
+//      when it shadows a repair role — ADR-005 D3);
+//   2. the flat-effort runtime (Codex), where the axis is two values wide by
+//      measurement and there is no deeper rung to escalate INTO;
+//   3. a repair role whose signature came back — `max`, the only built-in path to
+//      it, and earned by a repeated failure rather than chosen;
+//   4. a ceiling route that fired but could not be honoured — `max` at the floor
+//      model, which is the escalation the closed ceiling still owes;
+//   5. the role's own row in EFFORT_ROWS.
+function effortRoute(role, model, cfg = DEFAULTS, signals = null) {
+  const runtime = (cfg.gsd && cfg.gsd.runtime) || null;
+  const clamp = (level) => {
+    // `minimal` is Codex-only in GSD and is not in Workflow's enum at all.
+    // There is deliberately no `max` → `xhigh` clamp for Codex any more: both
+    // halves of its justification were false (ADR-005 D7). GSD's
+    // `codexModelEffort._baseline` advertises `max` for every model, and
+    // `advertisedCodexEffort` returns that baseline for any model it does not
+    // name — which the palette's ceiling is. No built-in path asks for `max`
+    // there, so the clamp only ever rewrote an operator's explicit choice.
+    if (level === 'minimal') return 'low';
+    return EFFORTS.includes(level) ? level : 'high';
+  };
+  // `+clamp` is appended wherever the clamp actually MOVED the value, so a route
+  // never reports a depth the resolver declined to return.
+  // @contract: Opus is capped at high; Sonnet, Fable and explicit overrides keep their rungs.
+  const opusCap = (level) => (/opus/.test(String(model)) && (level === 'xhigh' || level === 'max') ? 'high' : level);
+  const routed = (level, rule) => {
+    const value = rule === 'override' ? clamp(level) : opusCap(clamp(level));
+    return { value, rule: value === level ? rule : `${rule}+clamp` };
+  };
+  const override = cfg.effort && cfg.effort[role];
+  if (override) return routed(override, 'override');
+  // ADR-005 D6 — on THIS runtime the effort axis has two values, by measurement
+  // rather than by limitation: `xhigh` and `max` cost more there without a
+  // better result, and the ceiling model's best results are at `high`. So the
+  // ladder below does not apply; depth comes from the MODEL instead, which is
+  // what the `-deep` agents make reachable (D8). Placed after the override so an
+  // explicit configuration still wins, and before the repeat rule because there
+  // is no deeper rung here to escalate INTO — a repeat still changes strategy
+  // (`rethink`), which is the half that survives.
+  if (RUNTIMES_WITH_FLAT_EFFORT.has(runtime)) {
+    return routed(MECHANICAL_ROLES.has(role) ? 'low' : 'high', `flat:${runtimeToken(cfg)}`);
+  }
+  // The same failure came back: hold the tier, deepen the thinking (ADR-001 D1).
+  // `max` and not `xhigh` — under the opus floor `xhigh` is where the judges
+  // already sit, so it stopped being a raise at all, which is the regression this
+  // rung is being restored from. Both repeat states qualify: on `repeat_exhausted`
+  // the MODEL moves (fableRoute's R2) and the depth stays at the deepest rung,
+  // because backing the thinking off while raising the model is neither ladder.
+  // No mechanical-role guard is needed — no repair role is mechanical, and
+  // drift-check is not a repair.
+  if (signals && REPAIR_ROLES.has(role)
+      && (signals.signatureState === 'repeat' || signals.signatureState === 'repeat_exhausted')) {
+    // `repeat` and `repeat:exhausted` rather than the state's own spelling: the
+    // grammar below has no underscore in it, and the rule token is the one thing
+    // in a route that a later reader groups by.
+    return routed('max', signals.signatureState === 'repeat' ? 'repeat' : 'repeat:exhausted');
+  }
+  // A ceiling route that fired but cannot be honoured still owes the dispatch
+  // its depth escalation. This also outranks the ordinary critical lane: a
+  // high-risk input that exceeded the window must not lose the `degraded` proof
+  // merely because the task classifier saw the same risk flag.
+  if (signals) {
+    const ceiling = fableRoute(role, signals, cfg);
+    if (ceiling && ceiling.degraded) return routed('max', `degraded:${ceiling.route}`);
+  }
+  // A first-attempt critical signal is the ordinary adaptive upgrade. It comes
+  // after the repeated-signature branch above: a fixer that has already seen the
+  // same failure must spend the recovery depth even when that dispatch is also
+  // marked high-risk or checkpointed.
+  const level = taskLevelRoute(role, signals || {}, cfg);
+  if (cfg.model_ladder === 'adaptive' || level.requested === 'critical') {
+    if (level.value === 'critical') return routed('xhigh', 'level:critical');
+  }
+  const row = Object.prototype.hasOwnProperty.call(EFFORT_ROWS, role) ? EFFORT_ROWS[role] : null;
+  return routed(row ? row(signals || {}) : DEFAULT_EFFORT_ROW, row ? 'row' : 'row:default');
+}
+
+function resolveEffort(role, model, cfg = DEFAULTS, signals = undefined) {
+  if (routedConfig(cfg)) return resolveDispatch({ role, signals, config: cfg, model }).effort;
+  return effortRoute(role, model, cfg, signals).value;
+}
+
+function resolveTaskLevel(role, signals = {}, cfg = DEFAULTS) {
+  return taskLevelRoute(role, signals, cfg).value;
+}
+
+// ── THE ROUTE: which rule chose the tier, and which chose the effort ─────────
+//
+// The journal used to record a `reason` the CALLER composed — its own reading of
+// which branch of the ladder had fired — while the resolver named the route only
+// on stderr, as prose. So a field that exists to make a later ladder review cheap
+// held the caller's opinion of the mechanism instead of the mechanism's answer,
+// and two rows written by two callers were not comparable (ADR-006 D5, and the
+// review that found it reproduced the gap rather than reading it).
+//
+// One line, one grammar, both halves: `tier=<rule>(<alias>) effort=<rule>(<level>)`.
+// It is a REGULAR grammar because it is meant to be counted later — `parseRoute`
+// is exported so the recorder validates against the resolver's own definition
+// rather than a copy of it, the lesson `CODEX_DEEP_ROLES` already paid for.
+const ROUTE_RE = /^tier=([a-z][a-z0-9:+-]*)\(([a-z]+)\) effort=([a-z][a-z0-9:+-]*)\(([a-z]+)\)$/;
+
+function routeOf(role, signals = {}, cfg = DEFAULTS) {
+  // Legacy consumers parse tier/effort aliases; a canonical route alone loses
+  // the dispatch identity and cannot be recorded through that grammar.
+  if (routedConfig(cfg)) {
+    throw modelPolicy.policyError(
+      'UNSUPPORTED_SELECTION',
+      'routeOf is compatibility-only; routed callers must use the complete resolveDispatch result',
+      { source: 'routeOf' },
+    );
+  }
+  const m = modelRoute(role, signals, cfg);
+  const e = effortRoute(role, m.value, cfg, signals);
+  return `tier=${m.rule}(${m.value}) effort=${e.rule}(${e.value})`;
+}
+
+// Returns {tier: {rule, model}, effort: {rule, effort}} or null. The parenthesised
+// values are checked against TIERS/EFFORTS here, so a reader that parses a route
+// never has to re-validate them — and a hand-composed sentence cannot pass for
+// one, which is the whole point of the field.
+function parseRoute(text) {
+  const m = ROUTE_RE.exec(String(text == null ? '' : text));
+  if (!m) return null;
+  if (!TIERS.includes(m[2]) || !EFFORTS.includes(m[4])) return null;
+  return { tier: { rule: m[1], model: m[2] }, effort: { rule: m[3], effort: m[4] } };
+}
+
+// ── the signals a role's rows actually read, and what silence costs ──────────
+//
+// ADR-004's principle, turned on the ladder: A SIGNAL THAT IS ABSENT MUST NEVER
+// RESOLVE UPWARD. Under this table every signal-keyed row is an UPGRADE, so
+// silence resolves to the cheaper row by construction — which is the opposite of
+// the defect that produced this rule (`Number(undefined) <= 2` is false, so the
+// executor's light path never fired once in 173 dispatches and every one of them
+// silently bought the dearer answer).
+//
+// The direction inverts with it: a missing signal is no longer a cost surprise,
+// it is a DEPTH the dispatch quietly declined. So the resolver still says so on
+// stderr — the same channel the config warnings use, so the gap shows up in a
+// dispatch line rather than only in a bill or in a shallow verdict.
+//
+// Only signals that a row READS are listed. `--files`, `--code-change` /
+// `--no-code-change`, `--attempt` and `--previous-failed` are accepted and inert
+// (the floor removed the rows they used to gate), and warning about those would
+// fire on every dispatch — which is how a warning teaches its reader to ignore
+// warnings.
+const SIGNAL_GAPS = {
+  executor: [{
+    flag: '--risk <low|medium|high>',
+    absent: (s) => s.risk === undefined,
+    cost: 'assuming medium → effort high; the xhigh row needs --risk high or --checkpoint',
+  }],
+  research: [{
+    flag: '--type <plan type>',
+    absent: (s) => s.type === undefined,
+    cost: 'assuming facts → effort high; --type alternatives is the xhigh row',
+  }],
+  'arch-review': [{
+    flag: '--input-tokens <n>',
+    absent: (s) => !Number.isFinite(Number(s.inputTokens)),
+    cost: 'the ceiling\'s window route cannot fire without a measured input',
+  }],
+  integrator: [{
+    flag: '--input-tokens <n>',
+    absent: (s) => !Number.isFinite(Number(s.inputTokens)),
+    cost: 'the ceiling\'s window route cannot fire without a measured input',
+  }],
+};
+
+// The rows this dispatch could not reach for want of a signal, as sentences.
+function signalGaps(role, signals = {}, cfg = DEFAULTS) {
+  requireCompatibility(cfg, 'signalGaps');
+  const rows = Object.prototype.hasOwnProperty.call(SIGNAL_GAPS, role) ? SIGNAL_GAPS[role] : [];
+  const out = rows.filter((r) => r.absent(signals)).map((r) => `${role} reads ${r.flag} and did not get it — ${r.cost}`);
+  if (cfg.model_ladder === 'adaptive'
+      && ADAPTIVE_ROUTINE_ROLES.has(role)
+      && signals.risk === 'low'
+      && signals.files === undefined) {
+    out.push(
+      `${role} reads --files <n> for the adaptive routine lane and did not get it — ` +
+      `assuming complex; pass 1-${ADAPTIVE_ROUTINE_MAX_FILES} changed files to qualify`
+    );
+  }
+  return out;
+}
+
+module.exports = {
+  resolveDispatch, COMPATIBILITY_ROLES, ROUTED_ROLES,
+  loadConfig, resolveModel, resolveEffort, resolveTaskLevel, strategyFor, fableRoute, signalGaps,
+  routeOf, parseRoute, ROUTE_RE, runtimeToken,
+  parseCodexModelEntry, normalizeCodexModels,
+  normalizeJiraTransitions, TICKET_STATUSES,
+  DEFAULTS, TIERS, EFFORTS, ROLES, REPAIR_ROLES, STRATEGIES, SIGNATURE_STATES,
+  TASK_LEVELS, TASK_LEVEL_RANK, LADDER_MODES, taskLevelRoute,
+  DEFAULT_CODEX_MODELS, SONNET_ROLES, EFFORT_ROWS, NUMERIC_KNOBS, tierAllowedForRuntime,
+  defaultRepositoryRoot, repositoryRootValue, validateRepositoryDestination,
+  normalizeJiraTodoStatuses,
+};
+
+// ── CLI ─────────────────────────────────────────────────────────────────────
+if (require.main === module) {
+  const [, , cmd, ...rest] = process.argv;
+  // Routed CLI output is always the complete immutable launch decision.
+  // Parse before the compatibility flags can ignore an invalid signal.
+  if (cmd === 'dispatch' || rest.includes('--routed')) {
+    try {
+      let input;
+      if (cmd === 'dispatch') {
+        if (rest.length > 1) throw new Error('dispatch accepts one JSON argument and no trailing arguments');
+        input = validateJsonDispatchInput(JSON.parse(rest.length === 1 ? rest[0] : fs.readFileSync(0, 'utf8')));
+      } else {
+        if (cmd !== 'model') throw new Error('--routed requires model <role> or dispatch <json>');
+        input = { role: rest[0], signals: {} };
+        const flags = {
+          '--runtime': [input, 'runtime'], '--dispatch-id': [input, 'dispatch_id'],
+          '--model': [input, 'model'], '--effort': [input, 'effort'],
+          '--risk': [input.signals, 'risk'], '--type': [input.signals, 'type'],
+          '--complexity': [input.signals, 'complexity'], '--signature-state': [input.signals, 'signatureState'],
+          '--input-tokens': [input.signals, 'inputTokens'],
+        };
+        const seen = new Set();
+        for (let i = 1; i < rest.length; i++) {
+          const flag = rest[i];
+          if (seen.has(flag)) throw new Error(`duplicate routed flag ${flag}`);
+          seen.add(flag);
+          if (['--routed', '--json', '--explain'].includes(flag)) continue;
+          if (['--critical', '--checkpoint', '--contested'].includes(flag)) {
+            input.signals[flag.slice(2)] = true;
+          } else if (['--inline', '--inherit', '--session-inherited'].includes(flag)) {
+            input[flag.slice(2).replace(/-/g, '_')] = true;
+          } else if (flags[flag]) {
+            const value = rest[++i];
+            if (value === undefined || value.startsWith('--')) throw new Error(`${flag} requires a value`);
+            const [target, key] = flags[flag];
+            // Preserve the raw token text so the canonical signal validator can
+            // distinguish an explicit blank from numeric zero.
+            target[key] = value;
+          } else {
+            throw new Error(`unsupported routed flag ${flag}`);
+          }
+        }
+      }
+      process.stdout.write(JSON.stringify(resolveDispatch(input)) + '\n');
+    } catch (error) {
+      process.stderr.write(`pipeline-config: ${error.code || 'INVALID_INPUT'}: ${error.message}\n`);
+      process.exitCode = 1;
+    }
+  } else {
+  const runtimeIndex = rest.indexOf('--runtime');
+  const runtimeFlag = runtimeIndex === -1 ? undefined : rest[runtimeIndex + 1];
+  const { config, warnings, file, exists, valid, error } = loadConfig(
+    process.cwd(),
+    runtimeFlag ? { runtime: runtimeFlag } : {},
+  );
+
+  if (cmd === 'resolve' || cmd === undefined) {
+    // `valid` rides the CLI answer too, for the same reason it rides the module's
+    // (ADR-004 D2): this is loadConfig's shell face, and a reader taking
+    // `.config.auto_merge` off a corrupt file would get the DEFAULT `epic` with
+    // no way to see that the file said otherwise — F03 again, one surface over.
+    process.stdout.write(JSON.stringify({
+      config,
+      warnings,
+      valid,
+      error,
+      config_file: exists ? path.relative(process.cwd(), file) : null,
+    }, null, 2) + '\n');
+    process.exit(0);
+  }
+
+  if (cmd === 'model') {
+    const role = rest[0];
+    if (!ROLES.includes(role)) {
+      process.stderr.write(`pipeline-config: unknown role "${role}" (roles: ${ROLES.join(', ')})\n`);
+      process.exit(2);
+    }
+    const flag = (name) => {
+      const i = rest.indexOf(`--${name}`);
+      return i === -1 ? undefined : rest[i + 1];
+    };
+    // An unknown value is ignored with a warning — the same posture as every
+    // invalid config value in this file, and for a sharper reason here: a
+    // resolver that exits non-zero at 3am stops the round it exists to keep
+    // running.
+    let signatureState;
+    let signatureStateWarning = null;
+    if (rest.includes('--signature-state')) {
+      const value = flag('signature-state');
+      if (SIGNATURE_STATES.includes(value)) {
+        signatureState = value;
+      } else {
+        // Keep an invalid supplied value distinct from an omitted signal. An
+        // omitted signature is eligible for the adaptive routine lane; a bad
+        // signature must not silently qualify that cheaper route.
+        signatureState = null;
+        signatureStateWarning =
+          `--signature-state "${value === undefined ? '' : value}" is not a signature state — ignored ` +
+          `(${SIGNATURE_STATES.join('|')}; compute it with \`failure-signature.cjs verdict\`)`;
+      }
+    }
+    let taskLevel;
+    let taskLevelWarning = null;
+    if (rest.includes('--task-level')) {
+      const value = flag('task-level');
+      if (TASK_LEVELS.includes(value)) {
+        taskLevel = value;
+      } else {
+        taskLevelWarning =
+          `--task-level "${value === undefined ? '' : value}" is not a task level — ignored ` +
+          `(${TASK_LEVELS.join('|')}; omit it to use automatic classification)`;
+      }
+    }
+    const signals = {
+      risk: flag('risk'),
+      type: flag('type'),
+      // The caller's own measurement of this dispatch's input. Read by the
+      // ceiling's window route; anything non-numeric is the same as absent, and
+      // absent cannot fire it.
+      inputTokens: flag('input-tokens'),
+      contested: rest.includes('--contested'),
+      // Accepted, recorded, and INERT (ADR-001 D1 for the attempt pair; the opus
+      // floor for the other two — it removed the cheaper rows `files` and
+      // `codeChange` used to gate, so neither routes anything now). They stay
+      // because deliver.md and references/ still spell them and telemetry still
+      // passes them; passing one is not an error, so it does not warn. Both
+      // spellings of the code-change signal are parsed so that "no flag" and
+      // "yes, code changed" stop being the same value on the record.
+      files: flag('files'),
+      codeChange: rest.includes('--code-change') ? true : rest.includes('--no-code-change') ? false : undefined,
+      attempt: flag('attempt'),
+      previousFailed: rest.includes('--previous-failed'),
+      signatureState,
+      checkpoint: rest.includes('--checkpoint'),
+      taskLevel,
+    };
+    for (const w of warnings) process.stderr.write(`pipeline-config: warning: ${w}\n`);
+    if (signatureStateWarning) process.stderr.write(`pipeline-config: warning: ${signatureStateWarning}\n`);
+    if (taskLevelWarning) process.stderr.write(`pipeline-config: warning: ${taskLevelWarning}\n`);
+    // A row this dispatch could not reach for want of a signal (see SIGNAL_GAPS):
+    // it resolves DOWNWARD, which is correct, and it says so rather than leaving
+    // the gap visible only in a shallow verdict.
+    for (const gap of signalGaps(role, signals, config)) {
+      process.stderr.write(`pipeline-config: warning: ${gap}\n`);
+    }
+    // The ceiling, and the two ways it can be missed: a shut gate, or an override
+    // that outranks it. Both are legitimate; both are silent by default, and this
+    // is the one moment a reader can act on them.
+    const ceiling = fableRoute(role, signals, config);
+    if (ceiling) {
+      const override = config.models && config.models[role];
+      if (override) {
+        process.stderr.write(
+          `pipeline-config: warning: the ${ceiling.route} ceiling route fired for ${role} ` +
+          `(${ceiling.why}) but pipeline.models."${role}" = "${override}" outranks it — remove the ` +
+          'override to let the escalation through\n'
+        );
+      } else if (ceiling.degraded) {
+        process.stderr.write(
+          `pipeline-config: warning: the ${ceiling.route} ceiling route fired for ${role} ` +
+          `(${ceiling.why}) — ${ceiling.reason}\n`
+        );
+      }
+    }
+    const model = resolveModel(role, signals, config);
+    if (rest.includes('--json')) {
+      // `route` is the resolver's own answer to "which rule chose this", and it is
+      // what `dispatch-record.cjs mark --route` records: the journal's `reason`
+      // field holds the ladder's route rather than the caller's sentence about it
+      // (ADR-006 D5). Emitted on every `--json` call, because a field the caller
+      // has to ask for is one the caller composes when it forgets to.
+      const out = { model, effort: resolveEffort(role, model, config, signals), route: routeOf(role, signals, config) };
+      // `strategy` appears ONLY when a valid state was passed, so a consumer
+      // reading `{model, effort, route}` sees a stable shape either way.
+      if (signatureState) out.strategy = strategyFor(signatureState);
+      if (rest.includes('--explain')) {
+        const classification = taskLevelRoute(role, signals, config);
+        out.task_level = classification.value;
+        out.task_level_rule = classification.rule;
+        out.ladder_mode = config.model_ladder;
+        if (classification.requested) out.task_level_requested = classification.requested;
+      }
+      process.stdout.write(JSON.stringify(out) + '\n');
+    } else {
+      process.stdout.write(model + '\n');
+    }
+    process.exit(0);
+  }
+
+  process.stderr.write(
+    'usage: pipeline-config.cjs <resolve | model <role> [--json] [--explain] [flags]>\n' +
+    '  --runtime claude|codex  override the active runtime for this invocation\n' +
+    '  flags: --risk low|medium|high  --type <plan type>  --checkpoint\n' +
+    '         --input-tokens <n>   the caller\'s measurement of this dispatch\'s input;\n' +
+    '                              over pipeline.fable_window_tokens it earns the ceiling\n' +
+    '         --contested          this judgement was already contested once\n' +
+    '         --signature-state ' + SIGNATURE_STATES.join('|') + '\n' +
+    '         --files <n>  --code-change|--no-code-change  --task-level <level>\n' +
+    '         --attempt <n>  --previous-failed  --explain\n' +
+    '           (all accepted, telemetry only: the attempt pair never routed a repair\n' +
+    '            tier since ADR-001 D1, and the opus floor removed the cheaper rows the\n' +
+    '            other two used to gate)\n'
+  );
+  process.exit(2);
+  }
+}

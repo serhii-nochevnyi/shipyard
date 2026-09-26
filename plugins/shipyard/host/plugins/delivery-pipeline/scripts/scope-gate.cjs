@@ -1,0 +1,140 @@
+#!/usr/bin/env node
+'use strict';
+
+// scope-gate.cjs — does the branch's diff stay inside the ticket's declared
+// `files_modified`?
+//
+//   scope-gate.cjs <ticket> --worktree <path> --base <ref> [--json]
+//
+// The conveyor had two gates around an executor and a hole between them. Gate 2
+// validates the DECLARATION (every plan lists its paths, and unordered tickets
+// do not collide). The "did work" gate checks that COMMITS EXIST. Nothing
+// checked the thing both of those are about: that what the branch actually
+// changed is what the ticket said it would. Run by hand against a real project
+// this found three PRs in seconds, two of them genuinely dangerous.
+//
+// That gap matters more here than in an ordinary repo, because `files_modified`
+// is not documentation — it is what makes "dependency-unordered tickets never
+// collide" a checkable claim. A branch that edits outside it silently voids the
+// guarantee for every ticket running in parallel beside it, and the collision
+// surfaces later as a conflict, or worse, as a merge that quietly drops someone
+// else's change.
+//
+// Blocking, like the did-work gate: an out-of-scope edit is either work that
+// belongs to another ticket (escalate) or a plan that was wrong (re-plan). Both
+// are decisions, and neither is "push it and see".
+
+const path = require('path');
+const { execFileSync } = require('child_process');
+
+const argv = process.argv.slice(2);
+const asJson = argv.includes('--json');
+const flag = (name) => {
+  const i = argv.indexOf(`--${name}`);
+  return i === -1 ? null : argv[i + 1];
+};
+// `--graph` excluded like the other value-carrying flags: left out, a flag-first
+// invocation makes the graph PATH the "ticket". Not generalized — --json is
+// boolean, and a skip-after-any-flag rule would eat the ticket after it.
+const VALUE_FLAGS = ['--worktree', '--base', '--graph'];
+const ticket = argv.find((a, i) => !a.startsWith('--') && !VALUE_FLAGS.includes(argv[i - 1]));
+
+function fail(msg, code = 2) {
+  process.stderr.write(`scope-gate: ${msg}\n`);
+  process.exit(code);
+}
+
+if (!ticket || !flag('worktree') || !flag('base')) {
+  fail('usage: scope-gate.cjs <ticket> --worktree <path> --base <ref> [--json]');
+}
+
+const worktree = path.resolve(flag('worktree'));
+const requestedBase = flag('base');
+
+// Same resolution as base-merge: the graph belongs to the PROJECT, and the
+// worktree this gate is pointed at may be a checkout with no `.planning/` of its
+// own. Today the main loop calls this from the project, so it worked by luck of
+// the caller rather than by construction.
+const { loadTickets, resolveBaseRef } = require(path.join(__dirname, 'graph-dir.cjs'));
+const { tickets } = loadTickets(argv, worktree, 'scope-gate');
+
+// origin/<base> when it exists, for the same reason as base-merge — measured
+// against a bare stale local epic, this gate flagged the parent's files as a
+// scope violation RIGHT AFTER a correct base merge: the false positive its own
+// comment below names as the thing that gets a gate switched off. Deliberately
+// resolved WITHOUT fetching: a blocking pre-publish gate must not grow a network
+// dependency, so its staleness window is "since the last fetch" — which
+// base-merge closes at the moment it matters.
+const base = resolveBaseRef(worktree, requestedBase);
+const t = tickets[ticket];
+if (!t) fail(`ticket ${ticket} is not in the graph`);
+
+const declared = Array.isArray(t.files) ? t.files : [];
+if (!declared.length) fail(`ticket ${ticket} declares no files — Gate 2 should have rejected that graph`);
+
+// The ONE ownership matcher, shared with Gate 2's overlap check and base-merge,
+// so a path that satisfies one cannot fail another. The old test cut a
+// declaration at its first wildcard and compared the stump as a directory
+// prefix, which rejected this ticket's own legitimate edit to `src/fooBar.ts`
+// under `src/foo*.ts` — a blocker on a correct branch, and the same wrong owner
+// that made base-merge discard that edit (audit F01; ADR-004 D1).
+const { parse: parseDecl, owns, GRAMMAR } = require(path.join(__dirname, 'path-owner.cjs'));
+
+// No certainty, no verdict. Gate 2 rejects an entry the matcher cannot answer,
+// so reaching this gate with one means the graph was never validated — and the
+// same reasoning as the empty-declaration refusal above applies: guessing here
+// either blocks correct work or waves through an undeclared edit.
+const unanswerable = declared.filter((d) => parseDecl(d).error);
+if (unanswerable.length) {
+  fail(
+    `ticket ${ticket} declares ${unanswerable.length} entr${unanswerable.length === 1 ? 'y' : 'ies'} the ownership ` +
+    `matcher cannot answer exactly: ${unanswerable.map((d) => `"${d}"`).join(', ')} — Gate 2 should have rejected ` +
+    `that graph (run validate-graph.cjs). ${GRAMMAR}.`
+  );
+}
+
+const covered = (p) => declared.some((d) => owns(d, p));
+
+let changed;
+try {
+  // Three dots: what the BRANCH added, not what the base did meanwhile. With two
+  // dots a base that moved ahead would be reported as this ticket's work — the
+  // gate would then block on other people's merged commits, which is exactly the
+  // false positive that gets a gate switched off.
+  const out = execFileSync('git', ['-C', worktree, 'diff', '--name-only', `${base}...HEAD`], {
+    encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  changed = out.split('\n').map((s) => s.trim()).filter(Boolean);
+} catch (e) {
+  fail(`git diff failed in ${worktree}: ${e.stderr ? String(e.stderr).trim() : e.message}`);
+}
+
+const outside = changed.filter((p) => !covered(p));
+const result = { ticket, base, requested_base: requestedBase, worktree, changed: changed.length, declared, outside };
+
+if (asJson) {
+  console.log(JSON.stringify(result, null, 2));
+  process.exit(outside.length ? 1 : 0);
+}
+
+if (!changed.length) {
+  console.log(`scope-gate: ${ticket} — no changes against ${base} (the did-work gate is the one that should have caught this)`);
+  process.exit(0);
+}
+if (!outside.length) {
+  console.log(`scope-gate: ${ticket} OK — ${changed.length} changed path(s), all inside files_modified`);
+  process.exit(0);
+}
+
+console.error(`scope-gate: ${ticket} — ${outside.length} of ${changed.length} changed path(s) are OUTSIDE files_modified:`);
+for (const p of outside) console.error(`  - ${p}`);
+console.error('');
+console.error('declared:');
+for (const d of declared) console.error(`  - ${d}`);
+console.error('');
+console.error('This is a decision, not a retry. Either the edit belongs to another ticket');
+console.error('(revert it here and escalate: `files_modified` is what makes parallel tickets');
+console.error('non-colliding, and an undeclared edit voids that for everyone running beside');
+console.error('it), or the plan was wrong and the ticket needs re-planning with the path in');
+console.error('it. Do NOT push and open the PR over this.');
+process.exit(1);

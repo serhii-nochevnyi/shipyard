@@ -2,6 +2,16 @@ SHELL := /bin/bash
 
 GSD_CORE_VERSION ?= latest
 
+.PHONY: package-shipyard-codex install-shipyard-marketplace-codex install-shipyard-marketplace-claude
+package-shipyard-codex:
+	node scripts/package-shipyard-codex.cjs
+
+install-shipyard-marketplace-codex:
+	node scripts/install-shipyard-marketplace.cjs codex
+
+install-shipyard-marketplace-claude:
+	node scripts/install-shipyard-marketplace.cjs claude
+
 .PHONY: install-shipyard-codex install-shipyard-claude-hook remove-shipyard-claude-hook \
         install-shipyard-capability ensure-gsd-core-claude ensure-gsd-core-codex \
         gsd-tune gsd-tune-apply doctor \
@@ -11,7 +21,8 @@ GSD_CORE_VERSION ?= latest
 # Install or refresh the conveyor on a host OpenAI Codex CLI setup.
 # Set SHIPYARD_CODEX_PHASE=1 for investigate/decompose only.
 install-shipyard-codex:
-	./scripts/install-shipyard-codex.sh
+	node scripts/package-shipyard-codex.cjs
+	node scripts/install-shipyard-marketplace.cjs codex --source "$(CURDIR)"
 
 # Install or refresh the host Claude Code hooks that inject routing and enforce
 # the delivery stop gate.
