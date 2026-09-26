@@ -51,5 +51,16 @@ jobs:
           if [ -n "$GITHUB_BASE_REF" ]; then BASE=origin/$GITHUB_BASE_REF; fi
           node plugins/delivery-pipeline/scripts/publish-gate.cjs --base "$BASE" --working-tree --json
 
+      - name: OS sandbox backend
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq bubblewrap
+          if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+          bwrap --unshare-all --die-with-parent --ro-bind / / /bin/true
+
       - name: make test-fast
+        env:
+          SHIPYARD_REQUIRE_OS_SANDBOX: "1"
         run: make test-fast

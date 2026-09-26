@@ -751,6 +751,15 @@ function launchPrompt(prompt, content) {
   return generatedInstructions(content) + '\n\n' + base;
 }
 
+function resolveProtectedPath(entry) {
+  const resolved = path.resolve(entry);
+  try { return fs.realpathSync(resolved); } catch (_) { return resolved; }
+}
+
+function normalizeProtectedPaths(paths) {
+  return [...new Set((Array.isArray(paths) ? paths : []).filter(Boolean).map(resolveProtectedPath))];
+}
+
 function signerProtectionPaths(env, worktree) {
   const paths = [env.GNUPGHOME, process.env.GNUPGHOME, path.join(os.homedir(), '.gnupg'),
     path.join(os.homedir(), '.ssh')].filter(Boolean);
@@ -763,18 +772,14 @@ function signerProtectionPaths(env, worktree) {
     const file = path.resolve(key.startsWith('~/') ? path.join(os.homedir(), key.slice(2)) : key);
     paths.push(file);
   }
-  return [...new Set(paths.map((entry) => {
-    let resolved = path.resolve(entry);
-    try { resolved = fs.realpathSync(resolved); } catch (_) {}
-    return resolved;
-  }))];
+  return normalizeProtectedPaths(paths);
 }
 
 function signerPermissionProfileArgs(protectedPaths, sandbox) {
   if (!['read-only', 'workspace-write'].includes(sandbox)) {
     fail('INVALID_INPUT', 'Codex launch requires an explicit read-only or workspace-write permission profile');
   }
-  const paths = [...new Set(protectedPaths.map((entry) => path.resolve(entry)))];
+  const paths = normalizeProtectedPaths(protectedPaths);
   if (!paths.length) fail('SIGNER_ISOLATION_UNAVAILABLE', 'Codex signer paths could not be determined');
   const filesystem = '{' + paths.map((entry) => JSON.stringify(entry) + '="deny"').join(',') + '}';
   const parent = sandbox === 'read-only' ? ':read-only' : ':workspace';
@@ -794,6 +799,10 @@ function createCodexCliLauncher(options = {}) {
   const transcriptDir = options.transcriptDir;
   const environment = options.env && object(options.env) ? { ...options.env } : {};
   const capabilities = options.capabilities || {};
+  if (options.additionalProtectedPaths !== undefined && !Array.isArray(options.additionalProtectedPaths)) {
+    fail('INVALID_INPUT', 'additionalProtectedPaths must be an array of host-owned paths');
+  }
+  const hostProtectedPaths = normalizeProtectedPaths(options.additionalProtectedPaths);
 
   return async function launch(prompt, launchOptions = {}) {
     if (!object(launchOptions)) fail('INVALID_INPUT', 'Codex launch options must be an object');
@@ -824,7 +833,7 @@ function createCodexCliLauncher(options = {}) {
       fail('INVALID_INPUT', 'Codex launch requires an explicit read-only or workspace-write sandbox');
     }
     const env = { ...process.env, ...environment };
-    const protectedPaths = signerProtectionPaths(env, scope.worktree);
+    const protectedPaths = normalizeProtectedPaths([...signerProtectionPaths(env, scope.worktree), ...hostProtectedPaths]);
     for (const key of [
       'CODEX_MODEL', 'CODEX_MODEL_REASONING_EFFORT', 'CODEX_THREAD_ID', 'CODEX_SESSION_ID',
       'OPENAI_API_KEY', 'CODEX_API_KEY',
@@ -1028,6 +1037,7 @@ function createCodexRuntimeHost(options = {}) {
     transcriptDir: options.transcriptDir || path.join(scope.worktree, '.planning', 'graph', 'transcripts', 'codex'),
     ephemeral: options.ephemeral,
     approveForMe: options.approveForMe,
+    additionalProtectedPaths: options.additionalProtectedPaths,
   });
   const assertOwner = () => {
     if (controller && typeof controller.assertOwner === 'function') controller.assertOwner(runId);

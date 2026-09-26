@@ -181,6 +181,9 @@ function finalizeDeliveryCommit(options) {
         git(root, ['symbolic-ref', '--quiet', 'HEAD'], env).trim() !== branchRef) fail('branch moved during finalization');
 
     const tree = git(root, ['write-tree'], privateEnv).trim();
+    if (options.expectedTree !== undefined && tree !== requireOid(options.expectedTree, 'expectedTree')) {
+      fail('scoped tree differs from expectedTree');
+    }
     const commit = git(root, ['commit-tree', '-S', tree, '-p', head], privateEnv, {
       input: `(${ticket}): finalize scoped changes\n`,
     }).trim();
@@ -221,10 +224,38 @@ function finalizeDeliveryCommit(options) {
       if (lockFd !== undefined) fs.closeSync(lockFd);
       if (ownsLock) fs.rmSync(lockPath, { force: true });
     }
-    return Object.freeze({ ticket, worktree: root, base, previousHead: head, commit, signer: signature[1], changed: staged });
+    return Object.freeze({ ticket, worktree: root, base, previousHead: head, commit, tree, signer: signature[1], changed: staged });
   } finally {
     fs.rmSync(temporary, { recursive: true, force: true });
   }
 }
 
-module.exports = Object.freeze({ finalizeDeliveryCommit });
+function scopedTree(options) {
+  if (!options || typeof options !== 'object') fail('trusted host options are required');
+  const declared = options.files_modified;
+  if (!Array.isArray(declared) || !declared.length || declared.some((entry) => !validDeclaration(entry))) {
+    fail('files_modified must contain valid repository-relative declarations');
+  }
+  const root = fs.realpathSync(options.worktree);
+  const env = { ...process.env, GIT_OPTIONAL_LOCKS: '0' };
+  for (const key of ['GIT_INDEX_FILE', 'GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR']) delete env[key];
+  const head = git(root, ['rev-parse', '--verify', 'HEAD^{commit}'], env).trim();
+  if (options.expectedHead !== undefined && head !== requireOid(options.expectedHead, 'expectedHead')) {
+    fail('HEAD differs from expectedHead');
+  }
+  const status = scopedStatus(root, env);
+  const outside = status.filter((file) => !declared.some((entry) => owns(entry, file)));
+  if (outside.length) fail(`out-of-scope paths: ${outside.join(', ')}`);
+  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'delivery-scoped-tree-'));
+  const privateEnv = { ...env, GIT_INDEX_FILE: path.join(temporary, 'index') };
+  try {
+    git(root, ['read-tree', head], privateEnv);
+    if (status.length) git(root, ['add', '--all', '--', ...status.map((file) => `:(literal)${file}`)], privateEnv);
+    const changed = nulPaths(git(root, ['diff', '--cached', '--name-only', '-z', '--no-renames', head], privateEnv, { binary: true }));
+    return Object.freeze({ head, tree: git(root, ['write-tree'], privateEnv).trim(), changed: Object.freeze(changed) });
+  } finally {
+    fs.rmSync(temporary, { recursive: true, force: true });
+  }
+}
+
+module.exports = Object.freeze({ finalizeDeliveryCommit, scopedTree });
