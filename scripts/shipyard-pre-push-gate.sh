@@ -59,7 +59,16 @@ process.stdin.on("end", () => {
     process.exit(2);
   }
 
-  const gate = spawnSync(process.execPath, [PUBLISH_GATE, "--worktree", toplevel, "--working-tree", "--ticket", "publish"], {
+  let ticket = "publish";
+  try {
+    const branch = execFileSync("git", ["-C", toplevel, "symbolic-ref", "--quiet", "--short", "HEAD"], {
+      encoding: "utf8", stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    const m = /^ticket\/(T-\d{2}-\d{2})(?:-.*)?$/.exec(branch);
+    if (m) ticket = m[1];
+  } catch {}
+
+  const gate = spawnSync(process.execPath, [PUBLISH_GATE, "--worktree", toplevel, "--working-tree", "--ticket", ticket], {
     stdio: "inherit",
   });
   if (gate.status !== 0) {

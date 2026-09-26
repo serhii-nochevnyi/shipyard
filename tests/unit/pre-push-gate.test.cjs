@@ -32,12 +32,14 @@ function initRepo(dir, env) {
   git(dir, ['commit', '-q', '--allow-empty', '-m', 'init'], env);
 }
 
-function writeStubGate(logPath) {
+function writeStubGate(logPath, ticketLogPath) {
   const gatePath = path.join(path.dirname(logPath), 'stub-publish-gate.cjs');
   fs.writeFileSync(gatePath, [
     "const fs = require('fs');",
     "const i = process.argv.indexOf('--worktree');",
     `fs.appendFileSync(${JSON.stringify(logPath)}, (i === -1 ? 'NO-WORKTREE-ARG' : process.argv[i + 1]) + '\\n');`,
+    "const t = process.argv.indexOf('--ticket');",
+    `fs.appendFileSync(${JSON.stringify(ticketLogPath)}, (t === -1 ? 'NO-TICKET-ARG' : process.argv[t + 1]) + '\\n');`,
     'process.exit(0);',
     '',
   ].join('\n'));
@@ -57,8 +59,9 @@ function fixture() {
   initRepo(repoB, env);
   fs.mkdirSync(path.join(repoB, 'sub'), { recursive: true });
   const logPath = path.join(root, 'gate.log');
-  const gatePath = writeStubGate(logPath);
-  return { root, env, repoA, repoB, logPath, gatePath };
+  const ticketLogPath = path.join(root, 'ticket.log');
+  const gatePath = writeStubGate(logPath, ticketLogPath);
+  return { root, env, repoA, repoB, logPath, ticketLogPath, gatePath };
 }
 
 function runHook({ env, gatePath, cwd, command, payloadCwd }) {
@@ -139,6 +142,22 @@ test('a command without `git push` exits 0 without ever calling the gate', () =>
   const r = runHook({ env, gatePath, cwd: repoA, payloadCwd: repoA, command: 'git status' });
   assert.equal(r.status, 0, r.stderr);
   assert.equal(readLog(logPath), null);
+});
+
+test('a push of ticket/T-43-02-x invokes the gate with --ticket T-43-02', () => {
+  const { env, gatePath, repoB, ticketLogPath } = fixture();
+  git(repoB, ['checkout', '-q', '-b', 'ticket/T-43-02-x'], env);
+  const r = runHook({ env, gatePath, cwd: repoB, payloadCwd: repoB, command: 'git push' });
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(readLog(ticketLogPath), 'T-43-02');
+});
+
+test('a push of feat/x keeps --ticket publish', () => {
+  const { env, gatePath, repoB, ticketLogPath } = fixture();
+  git(repoB, ['checkout', '-q', '-b', 'feat/x'], env);
+  const r = runHook({ env, gatePath, cwd: repoB, payloadCwd: repoB, command: 'git push' });
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(readLog(ticketLogPath), 'publish');
 });
 
 done();
