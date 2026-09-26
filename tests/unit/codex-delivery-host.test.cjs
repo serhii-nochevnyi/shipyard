@@ -19,6 +19,7 @@ const {
   readRequestFile,
   requestValue,
   runCli,
+  validateArgs,
 } = require('../../plugins/delivery-pipeline/scripts/codex-delivery-host.cjs');
 const { createRunController } = require('../../plugins/delivery-pipeline/scripts/run-controller.cjs');
 
@@ -413,6 +414,47 @@ test('CLI heartbeats its out-of-worktree lease while a launch remains active', a
     assert.ok(during.owner.heartbeat_at > during.owner.acquired_at);
     assert.equal(runStatus(f).state, 'completed');
   } finally { clean(f); }
+});
+
+function inflightRows(graphDir) {
+  try { return JSON.parse(fs.readFileSync(path.join(graphDir, 'dispatches.json'), 'utf8')).inflight || {}; }
+  catch { return {}; }
+}
+
+for (const outcome of ['success', 'failure']) {
+  test(`CLI holds a pid in-flight record during the run and clears it after ${outcome}`, async () => {
+    const f = fixture();
+    const file = path.join(f.graphDir, 'request.json');
+    let during;
+    f.host.launchStatic = async (selection, context) => {
+      during = Object.values(inflightRows(f.graphDir));
+      if (outcome === 'failure') throw new Error('stubbed runtime launch failed');
+      return application(selection, context);
+    };
+    try {
+      fs.writeFileSync(file, JSON.stringify({
+        scope: f.scope, role: 'research', context: { prompt: 'Inspect.' },
+      }));
+      const running = runCli(['--args-file', file], { write() {} }, cliOptions(f));
+      if (outcome === 'failure') await assert.rejects(() => running, /stubbed runtime launch failed/);
+      else await running;
+      assert.equal(during.length, 1);
+      assert.equal(during[0].ticket, f.scope.ticket);
+      assert.equal(during[0].pid, process.pid);
+      assert.equal(during[0].host, 'codex');
+      assert.deepEqual(inflightRows(f.graphDir), {});
+    } finally { clean(f); }
+  });
+}
+
+test('validateArgs accepts the canonical request and surfaces unknown keys and UNSUPPORTED_SIGNAL unchanged', () => {
+  const valid = validateArgs({ role: 'executor', context: { prompt: 'Run.' } });
+  assert.equal(valid.request.role, 'executor');
+  assert.ok(valid.resolution.model);
+  assert.throws(() => validateArgs({ role: 'executor', model: 'gpt-6-luna' }),
+    (error) => error.code === 'INVALID_INPUT');
+  assert.throws(() => validateArgs({ role: 'research', signals: { type: 'implementation' } }),
+    (error) => error.code === 'UNSUPPORTED_SIGNAL');
 });
 
 test('CLI records failed ownership when executor makes no publishable delta', async () => {
