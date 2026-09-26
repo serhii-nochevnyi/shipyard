@@ -52,6 +52,20 @@ On a non-zero exit from a host launch, read its `hint[<CODE>]` stderr line and
 explain the hint and its remedy to the user in the user's language; never
 propose bypassing the host or switching runtime because of it.
 
+## Host evidence directory
+
+Every host this command launches keeps its run state, sealed research
+artifacts, and finalization keys under `~/.local/state/shipyard/` — one
+family of directories (`claude/`, `claude-decompose/`, `codex/`,
+`codex-decompose/`) per runtime and role, always outside the model
+worktree. `claude-delivery-host.cjs` (the engine behind
+`claude-investigation-host.cjs`) resolves its root under `claude/`;
+`codex-delivery-host.cjs` resolves its root under `codex/`; both refuse to
+start if that root would resolve inside the worktree instead. A path under
+`~/.local/state/shipyard/…` appearing during or after an investigation is
+expected host evidence, never the model's own output leaking onto disk —
+it is not a leak and not something to clean.
+
 ## Step 0 — Determine the mode
 
 Read `.planning/investigations/` (may not exist):
@@ -149,6 +163,10 @@ Read `.planning/investigations/` (may not exist):
    `completed|blocked`, a summary of at most 500 characters, and the validated
    artifact reference; never return a full draft inline.
 
+   The same shared sealer also produces the sibling
+   `shipyard.decomposition-result.v1` envelope for `/shipyard:decompose`'s
+   planner and checker callbacks — one contract, both loops, both runtimes.
+
    The synthesizer reads the four validated references by targeted ranges or
    files and copies every source, constraint, uncertainty, and command-backed
    finding into `RESEARCH.md`, `OPTIONS.md`, `RISKS.md`, and
@@ -157,6 +175,39 @@ Read `.planning/investigations/` (may not exist):
    it has no inline or direct researcher fallback.
 6. Show the user a summary: how many options, key risks, the list of
    open questions. Next — Step 2.
+
+### Recovering one failed research line
+
+When one line fails, the other three lines' sealed artifacts are kept
+untouched: the result names the failed line and its real cause (never a
+generic repair message), and the fan-out stays failed until all four lines
+are sealed — a partial result is never reported as success. Re-dispatch
+only the failed line, carrying the three sealed sibling references (each
+one's `id`, `status`, `summary`, and verified artifact reference and
+digest) so the host can verify them instead of re-running them.
+
+For Claude, invoke the same entry point again with a request file whose
+`args.lines` holds that one line and whose `args.sealedLines` holds the
+three sealed sibling references:
+
+```text
+node ${CLAUDE_PLUGIN_ROOT}/scripts/claude-investigation-host.cjs \
+  --request-file /absolute/path/investigation-request.json
+```
+
+For Codex, invoke the same delivery host again with an args file whose
+`context.investigation.lines` holds that one line and whose
+`context.investigation.sealedLines` holds the same three sealed sibling
+references:
+
+```bash
+node ${CLAUDE_PLUGIN_ROOT}/scripts/codex-delivery-host.cjs \
+  --args-file /absolute/path/research-line-request.json
+```
+
+Both hosts verify every sealed sibling reference before sealing the full
+`shipyard.research-result.v1` envelope; a missing or tampered sibling
+refuses, naming that sibling, rather than trusting the request.
 
 ## Step 2 — Iterative dialogue (the main resume mode)
 

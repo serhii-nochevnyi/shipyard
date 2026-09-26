@@ -57,6 +57,20 @@ Controller opt-in does not change host selection. An unavailable or refused
 host cannot switch to the other provider; stop its launch before planning
 output is accepted.
 
+## Host evidence directory
+
+Every host this command launches keeps its run state, sealed planning
+artifacts, and finalization keys under `~/.local/state/shipyard/` — one
+family of directories (`claude/`, `claude-decompose/`, `codex/`,
+`codex-decompose/`) per runtime and role, always outside the model
+worktree. `claude-decompose-host.cjs` resolves its root under
+`claude-decompose/`; `codex-decompose-host.cjs` resolves its root under
+`codex-decompose/`; both refuse to start if that root would resolve inside
+the worktree instead. A path under `~/.local/state/shipyard/…` appearing
+during or after a decomposition run is expected host evidence, never the
+model's own output leaking onto disk — it is not a leak and not something
+to clean.
+
 ## Step 0 — Find the input
 
 1. Read `.planning/architecture/` — the list of `ADR-*.md`.
@@ -79,7 +93,36 @@ output is accepted.
    tracked, tell the user once — delivery worktrees are created from git, so
    they will not contain the PLAN files or graph, and the conveyor falls
    back to `graph-dir.cjs` resolution. Remedy: commit `.planning/`, or keep
-   it untracked deliberately and pass the graph dir explicitly.
+   it untracked deliberately and pass the graph dir explicitly. This is the
+   Shipyard-repository meaning; a target project inverts it — see
+   "Planning files in target projects" below.
+
+### Planning files in target projects
+
+Target projects keep `.planning/` untracked (REQ-142): delivery worktrees
+are created from git, so a tracked `.planning/` would ship conveyor and GSD
+internals into that project's own history and PRs. The one-time migration
+is explicit and confirmed, never automatic — the conveyor never writes
+`.gitignore` on its own:
+
+```bash
+node ${CLAUDE_PLUGIN_ROOT}/scripts/planning-untrack.cjs --project-root <repo-root>
+node ${CLAUDE_PLUGIN_ROOT}/scripts/planning-untrack.cjs --project-root <repo-root> \
+  --apply --confirm untrack-planning
+```
+
+The first run is a dry run: it prints the `.gitignore` line and the
+`git rm -r --cached .planning` it would run, and changes nothing. The
+second commits the untrack on the current branch (never the default
+branch) for a normal PR; it refuses in the Shipyard repository itself, on a
+dirty worktree, on the default branch, or when `.planning/` is already
+untracked.
+
+In the Shipyard repository the warning above keeps its phase-39 meaning: it
+fires when `.planning/` is not tracked. In a target project it inverts
+(D-17): the warning fires when `.planning/` is tracked in a target project,
+since untracked is the expected state there and the migration above is the
+remedy.
 
 ## Step 0.5 — Mandatory GSD runtime dispatch
 
@@ -238,6 +281,11 @@ seals `shipyard.role-artifact.v1` with one of these envelopes:
 | --- | --- | --- | --- |
 | `gsd-phase-researcher` | `shipyard.research-result.v1` | `<INV-ID>:<line-id>` | the complete line artifact |
 | `gsd-planner` / `gsd-plan-checker` | `shipyard.decomposition-result.v1` | `phase=<phase>;repository=<repo>;adr=<ADR digest>` | `CONTEXT.md` and every materialized `PLAN.md` |
+
+This table is identical on both runtimes: `claude-decompose-host.cjs` and
+`codex-decompose-host.cjs` each seal their `gsd-planner` / `gsd-plan-checker`
+callback into this same `shipyard.decomposition-result.v1` envelope — one
+shared sealer, not a runtime-specific format.
 
 The decomposition envelope must carry a bounded `artifact_index` reference.
 That index lists the exact relative paths, byte counts, and SHA-256 digests of
