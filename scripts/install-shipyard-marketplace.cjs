@@ -47,6 +47,52 @@ function installCodexMarketplace(source) {
     throw error;
   }
 }
+function claudeMarketplaceMatches(existing, source) {
+  if (!existing || existing.ref) return false;
+  if (fs.existsSync(source)) return existing.source === 'directory' &&
+    fs.existsSync(existing.path || '') && fs.realpathSync(existing.path) === fs.realpathSync(source);
+  const github = source.match(/^(?:https:\/\/github\.com\/)?([\w.-]+\/[\w.-]+?)(?:\.git)?$/);
+  return !!github && existing.source === 'github' && existing.repo === github[1];
+}
+function claudeMarketplaceSource(existing) {
+  if (existing.source === 'github' && existing.repo)
+    return `${existing.repo}${existing.ref ? '@' + existing.ref : ''}`;
+  if (existing.source === 'directory' && existing.path) return existing.path;
+  if (existing.url) return existing.url;
+  throw new Error('Cannot restore previous Claude marketplace source');
+}
+function installClaudeMarketplace(source, execute = run, read = capture) {
+  const existing = read('claude', ['plugin', 'marketplace', 'list', '--json'])
+    .find(item => item.name === 'shipyard');
+  const installed = read('claude', ['plugin', 'list', '--json'])
+    .find(item => item.id === 'shipyard@shipyard');
+  if (claudeMarketplaceMatches(existing, source)) {
+    execute('claude', ['plugin', 'marketplace', 'update', 'shipyard']);
+    execute('claude', ['plugin', installed ? 'update' : 'install', 'shipyard@shipyard']);
+    return;
+  }
+  // @contract: A pinned marketplace cannot be updated to an unpinned source in place.
+  const former = existing && claudeMarketplaceSource(existing);
+  if (existing) execute('claude', ['plugin', 'marketplace', 'remove', 'shipyard']);
+  try {
+    execute('claude', ['plugin', 'marketplace', 'add', source]);
+    execute('claude', ['plugin', 'install', 'shipyard@shipyard']);
+  } catch (error) {
+    if (former) {
+      try {
+        const current = read('claude', ['plugin', 'marketplace', 'list', '--json']);
+        if (current.some(item => item.name === 'shipyard'))
+          execute('claude', ['plugin', 'marketplace', 'remove', 'shipyard']);
+        execute('claude', ['plugin', 'marketplace', 'add', former]);
+        if (installed) {
+          execute('claude', ['plugin', 'install', 'shipyard@shipyard']);
+          if (!installed.enabled) execute('claude', ['plugin', 'disable', 'shipyard@shipyard']);
+        }
+      } catch (rollback) { throw new Error(`${error.message}; marketplace rollback failed: ${rollback.message}`); }
+    }
+    throw error;
+  }
+}
 function main(args) {
   const runtime = args.shift();
   if (!['claude', 'codex'].includes(runtime)) throw new Error('Usage: node scripts/install-shipyard-marketplace.cjs <claude|codex> [--source <marketplace-root-or-git-url>]');
@@ -57,10 +103,7 @@ function main(args) {
   }
   ensure(runtime);
   if (runtime === 'codex') installCodexMarketplace(source);
-  else {
-    run('claude', ['plugin', 'marketplace', 'add', source]);
-    run('claude', ['plugin', 'install', 'shipyard@shipyard']);
-  }
+  else installClaudeMarketplace(source);
   if (runtime === 'codex') {
     const home = path.resolve(process.env.CODEX_HOME || path.join(os.homedir(), '.codex'));
     const result = spawnSync('codex', ['plugin', 'list', '--json'], { encoding: 'utf8', timeout: 30000 });
@@ -81,7 +124,7 @@ function main(args) {
     run('bash', [path.join(root, 'scripts/install-shipyard-capability.sh'), 'claude'], env);
   }
 }
-module.exports = { main };
+module.exports = { main, claudeMarketplaceMatches, claudeMarketplaceSource, installClaudeMarketplace };
 if (require.main === module) {
   try { main(process.argv.slice(2)); } catch (error) { console.error(error.message); process.exitCode = 1; }
 }

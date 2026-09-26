@@ -37,6 +37,12 @@ claude plugin marketplace add serhii-nochevnyi/shipyard
 claude plugin install shipyard@shipyard
 ```
 
+For a complete install or upgrade from this checkout, including GSD, use
+`make install-shipyard-marketplace-claude`. It refreshes an unpinned marketplace;
+if an older Shipyard marketplace is pinned to a tag, it switches that
+registration to the current release source and restores the old registration
+if installation fails. Start a new Claude session after upgrading.
+
 For the host hooks and the shared GSD capability, run the installers from this
 checkout:
 
