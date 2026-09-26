@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: b0349544b073e6928827f556742788db58ded2a2d5217981cbd8b75553d37eee
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: adcaccbcdc16ad13d21ad63be930824c5caf6ed960f0cce2daa91f82d1510ce2
 phase: 40-build-delivery-seams-and-clean-target-project-prs
 plan: 17
 subsystem: shipyard delivery
@@ -22,7 +22,7 @@ key-decisions:
 duration: 0min
 status: halted
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: b0349544b073e6928827f556742788db58ded2a2d5217981cbd8b75553d37eee
+shipyard_source_fingerprint: adcaccbcdc16ad13d21ad63be930824c5caf6ed960f0cce2daa91f82d1510ce2
 ---
 
 # Phase 40: Add the publish-time PR hygiene gate and the confirmed one-time .planning untrack migration — Delivery Projection

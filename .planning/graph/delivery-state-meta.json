@@ -1,13 +1,13 @@
 {
   "schema_version": 1,
-  "generation": 367,
-  "generation_identity": "bea5b72b-42ca-48fd-94e6-730f365272ea",
-  "previous_generation_identity": "16777245:12922874841:1790409893910859000:50e017c121392222bf05718cc3f49b089e41c3ed08a7ff9e31ca1131205b4599",
-  "observed_at": "2026-09-26T08:26:39.239Z",
-  "generated_at": "2026-09-26T08:26:39.239Z",
+  "generation": 368,
+  "generation_identity": "d09a7d3a-00cd-4517-aca1-006efa5d1f0f",
+  "previous_generation_identity": "16777245:12923041434:1790412389481866500:a3cc7f4ff4909de8d63cf20a8117df5aae3f8003ae1bdbff353025777588d0ff",
+  "observed_at": "2026-09-26T09:40:04.898Z",
+  "generated_at": "2026-09-26T09:40:04.898Z",
   "by": "state-sync",
-  "pid": 85349,
-  "observation_generation": 367,
+  "pid": 70179,
+  "observation_generation": 368,
   "observation_projection": {
     "tickets": {
       "T-20-01": {
@@ -2089,6 +2089,17 @@
         "review_decision": null,
         "checks": null
       },
+      "T-40-28": {
+        "status": "pending",
+        "repository": null,
+        "pr": null,
+        "head": null,
+        "draft": false,
+        "base": "epic/40-build-delivery-seams-and-clean-target-project-prs",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
       "T-41-01": {
         "status": "merged",
         "repository": null,
@@ -2203,9 +2214,9 @@
   },
   "binding": {
     "schema_version": 1,
-    "state_digest": "079587dc92323607961faea84ba3cc9e40c865b0ad13fb6d10ed9fde280c2f10",
-    "front_digest": "6c1188b388320e7e80a998fe5c9f1c63118b4b8ee62aaddcfe2145b477c96a42",
-    "observation_digest": "e2136231ceab0420af48f459488336d9b5d740978ea08c658bf18c3334fe1858",
-    "observation_generation": 367
+    "state_digest": "fb43b58cd68e19e35a419831bd251a8cdb38650aad2801287b1729cc3a90d06a",
+    "front_digest": "386614438138a77e5dbd338fb0bdae195c56423c145027c59d1b133917d49d45",
+    "observation_digest": "c575a915eb05686224fb68167b40643ea80191ac1a944bc0c4ed7627f03be8ec",
+    "observation_generation": 368
   }
 }

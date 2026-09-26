@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 14d42654498b35e14638259cf69bb581e8557b56d3bbd32e9bdfd11391d2f322
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: c7947306b08a394a9e5d1ec5864458aa589ccf0befd6ccff21a3e5658fc5781e
 phase: 40-build-delivery-seams-and-clean-target-project-prs
 plan: 20
 subsystem: shipyard delivery
@@ -22,7 +22,7 @@ key-decisions:
 duration: 0min
 status: halted
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 14d42654498b35e14638259cf69bb581e8557b56d3bbd32e9bdfd11391d2f322
+shipyard_source_fingerprint: c7947306b08a394a9e5d1ec5864458aa589ccf0befd6ccff21a3e5658fc5781e
 ---
 
 # Phase 40: Generate neutral ticket and epic branch names and a neutral epic PR in target projects — Delivery Projection

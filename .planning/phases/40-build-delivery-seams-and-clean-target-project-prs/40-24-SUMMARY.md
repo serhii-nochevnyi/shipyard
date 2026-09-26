@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: bad32f076a30aac11105c842ecfac76f30009abe0ec24dbbf85be5594a9016c0
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 8334490ad08235f836cd038309bf985a4a8d3c5044a505f40fe3ef8d531e8b9a
 phase: 40-build-delivery-seams-and-clean-target-project-prs
 plan: 24
 subsystem: shipyard delivery
@@ -22,7 +22,7 @@ key-decisions:
 duration: 0min
 status: halted
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: bad32f076a30aac11105c842ecfac76f30009abe0ec24dbbf85be5594a9016c0
+shipyard_source_fingerprint: 8334490ad08235f836cd038309bf985a4a8d3c5044a505f40fe3ef8d531e8b9a
 ---
 
 # Phase 40: Rewrite deliver.md around the dispatch entry point, in-flight record, sentinel preflight and clean publication — Delivery Projection
