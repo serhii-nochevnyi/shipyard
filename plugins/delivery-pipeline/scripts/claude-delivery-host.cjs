@@ -14,13 +14,13 @@ const { createRunController } = require('./run-controller.cjs');
 const { createRunScope } = require('./run-scope.cjs');
 const roleArtifact = require('./role-artifact.cjs');
 const { resolveBaseRef } = require('./graph-dir.cjs');
+const { sealResearch } = require('./planning-result-sealer.cjs');
 
 const WORKFLOWS = Object.freeze(['executors', 'fix-round', 'drift-gate', 'investigation-research']);
 const REQUEST_SCHEMA = 'shipyard.claude-delivery-request.v1';
 const REQUEST_MAX_BYTES = 1024 * 1024;
 const REVIEW_FEEDBACK_MAX_BYTES = 32768;
 const REVIEW_DISPOSITIONS_MAX_BYTES = 65536;
-const SUMMARY_MAX_CHARS = roleArtifact.SUMMARY_MAX_CHARS;
 
 function object(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -30,11 +30,6 @@ function reject(message) {
   const error = new Error(`claude-delivery-host: ${message}`);
   error.code = 'INVALID_HOST';
   throw error;
-}
-
-function capSummary(value) {
-  const chars = Array.from(value);
-  return chars.length <= SUMMARY_MAX_CHARS ? value : `${chars.slice(0, SUMMARY_MAX_CHARS - 3).join('')}...`;
 }
 
 function parallel(jobs) {
@@ -510,76 +505,8 @@ function executorCommitInput(options, entry) {
 }
 
 function sealPlanningResearch(input, options, scope) {
-  const { artifact, result, record } = input;
-  const match = /^((?:INV-[A-Za-z0-9-]+)):(system-state|alternatives|constraints|risks)$/.exec(artifact.subject || '');
-  if (!match || artifact.role !== 'research' || artifact.ticket !== artifact.subject
-      || !object(result) || result.id !== match[2]
-      || !['completed', 'blocked'].includes(result.status)
-      || typeof result.summary !== 'string'
-      || !object(record.receipt) || record.receipt.compliance !== 'verified'
-      || typeof record.receipt.dispatch_id !== 'string' || !record.receipt.dispatch_id) {
-    reject('planning research has invalid scope or result');
-  }
-  const summaryLength = Array.from(result.summary).length;
-  if (summaryLength > SUMMARY_MAX_CHARS) {
-    result.summary = capSummary(result.summary);
-    process.stderr.write(`claude-delivery-host: research line ${result.id} summary was ${summaryLength} characters; bounded to 500 (full finding at ${artifact.artifactPath})\n`);
-  }
-  const worktree = fs.realpathSync(scope.worktree);
-  if (fs.realpathSync(artifact.worktreePath) !== worktree) {
-    reject('planning research worktree differs from the authenticated run');
-  }
-  if (artifact.sourceRevision !== git(worktree, ['rev-parse', '--verify', 'HEAD^{commit}'])) {
-    reject('planning research revision differs from the authenticated run');
-  }
-  if (artifact.policyHash !== record.receipt.policy_hash) {
-    reject('planning research policy differs from the authenticated dispatch');
-  }
-  const investigation = path.join(artifact.worktreePath, '.planning', 'investigations', match[1]);
-  const canonicalInvestigation = path.join(worktree, '.planning', 'investigations', match[1]);
-  if (fs.realpathSync(investigation) !== canonicalInvestigation) {
-    reject('planning research directory is not canonical');
-  }
-  const file = artifact.artifactPath;
-  if (typeof file !== 'string' || !path.isAbsolute(file)
-      || path.relative(investigation, file).startsWith('..' + path.sep)
-      || path.relative(investigation, file) === '..'
-      || path.relative(investigation, file) === ''
-      || fs.realpathSync(file) !== path.join(worktree, path.relative(artifact.worktreePath, file))) {
-    reject('planning research artifact is outside its investigation');
-  }
-  const stat = fs.lstatSync(file);
-  if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 1024 * 1024) {
-    reject('planning research artifact must be a bounded regular file');
-  }
-  const bytes = fs.readFileSync(file);
-  const after = fs.lstatSync(file);
-  if (bytes.length !== stat.size || after.size !== stat.size || after.mtimeMs !== stat.mtimeMs) {
-    reject('planning research artifact changed during validation');
-  }
-  const sha256 = crypto.createHash('sha256').update(bytes).digest('hex');
-  const producer = Object.freeze({ path: file, bytes: bytes.length, content_bytes: bytes.length,
-    sha256, digest: sha256 });
-  if (!object(result.artifact) || Object.keys(producer).some((key) => result.artifact[key] !== producer[key])) {
-    reject('planning research producer reference differs from the artifact bytes');
-  }
-  const directory = path.join(storageDirectory({ ...options, scope }), 'planning-artifacts');
-  fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
-  const manifestName = crypto.createHash('sha256').update(record.receipt.dispatch_id).digest('hex');
-  const archivePath = path.join(directory, `${manifestName}.md`);
-  fs.writeFileSync(archivePath, bytes, { flag: 'wx', mode: 0o600 });
-  const index = Object.freeze({ ...producer, path: archivePath });
-  const envelope = Object.freeze({ schema: 'shipyard.research-result.v1', version: 1,
-    role: 'research', subject: artifact.subject, source_revision: artifact.sourceRevision,
-    repository: artifact.repository, policy_hash: artifact.policyHash, status: result.status,
-    summary: result.summary, artifact_index: index, evidence_index: index });
-  const manifest = Buffer.from(JSON.stringify({ schema: 'shipyard.role-artifact.v1',
-    dispatch_id: record.receipt.dispatch_id, envelope }) + '\n');
-  const manifestPath = path.join(directory, `${manifestName}.json`);
-  fs.writeFileSync(manifestPath, manifest, { flag: 'wx', mode: 0o600 });
-  return Object.freeze({ schema: 'shipyard.role-artifact.v1', artifact_ref: manifestPath,
-    artifact_digest: crypto.createHash('sha256').update(manifest).digest('hex'),
-    envelope, evidence_index: index, artifact_index: index });
+  const root = path.join(storageDirectory({ ...options, scope }), 'planning-artifacts');
+  return sealResearch({ root, scope: { worktree: scope.worktree }, lines: input });
 }
 
 function repairResult(input, repair, feedback) {
