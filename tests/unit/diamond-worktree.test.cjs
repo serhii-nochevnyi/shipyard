@@ -30,9 +30,9 @@ const write = (dir, file, text) => fs.writeFileSync(path.join(dir, file), text);
 const commitAll = (dir, msg) => { git(dir, 'add', '-A'); git(dir, 'commit', '-qm', msg); };
 
 const TICKETS = {
-  'T-90-01': { phase: '90', repo: null, branch: B(1), depends_on: [], epic: EPIC, files: ['a.txt', 'shared.txt'] },
-  'T-90-02': { phase: '90', branch: B(2), depends_on: [], epic: EPIC, files: ['b.txt'] },
-  'T-90-03': { phase: '90', branch: B(3), depends_on: ['T-90-01', 'T-90-02'], primary_parent: 'T-90-01', epic: EPIC, files: ['c.txt'] },
+  'T-90-01': { title: 'Diamond fixture ticket 1', type: 'implementation', phase: '90', repo: null, branch: B(1), depends_on: [], epic: EPIC, files: ['a.txt', 'shared.txt'] },
+  'T-90-02': { title: 'Diamond fixture ticket 2', type: 'implementation', phase: '90', branch: B(2), depends_on: [], epic: EPIC, files: ['b.txt'] },
+  'T-90-03': { title: 'Diamond fixture ticket 3', type: 'implementation', phase: '90', branch: B(3), depends_on: ['T-90-01', 'T-90-02'], primary_parent: 'T-90-01', epic: EPIC, files: ['c.txt'] },
 };
 
 let sequence = 0;

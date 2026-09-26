@@ -9,6 +9,7 @@ const { EventEmitter } = require('node:events');
 const { spawnSync } = require('node:child_process');
 const test = require('node:test');
 const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
+const { codexStaticVariants } = require('../../plugins/delivery-pipeline/scripts/gsd-tune.cjs');
 const { createDurableRecorder } = require('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs');
 const { createRunController } = require('../../plugins/delivery-pipeline/scripts/run-controller.cjs');
 const {
@@ -21,26 +22,51 @@ const capabilities = {
   supportedSelections: [{ model: 'gpt-6-sol', effort: 'high' }],
 };
 
+function git(root, ...args) {
+  const result = spawnSync('git', ['-C', root, '-c', 'commit.gpgsign=false', '-c', 'user.name=t',
+    '-c', 'user.email=t@example.invalid', ...args], { encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr);
+}
+
+function researchVariant(rung) {
+  return codexStaticVariants(2).find((variant) => variant.role === 'research' && variant.rung === rung);
+}
+
+function gsdAgentToml(role, instructions) {
+  const sandbox = role === 'gsd-plan-checker' ? 'read-only'
+    : role === 'gsd-phase-researcher'
+      ? codexStaticVariants(2).find((variant) => variant.role === 'research').sandbox : 'workspace-write';
+  return 'name = "' + role + '"\ndescription = "Installed GSD ' + role + '"\nsandbox_mode = "' + sandbox + '"\n'
+    + "developer_instructions = '''\n" + instructions + "\n'''\n";
+}
+
+function writeArtifacts(root, gsdRole) {
+  const phaseDir = path.join(root, '.planning', 'phases', '38-codex-decompose');
+  if (gsdRole === 'gsd-phase-researcher') fs.writeFileSync(path.join(phaseDir, '38-RESEARCH.md'), '# Research\n');
+  if (gsdRole === 'gsd-planner') fs.writeFileSync(path.join(phaseDir, '38-01-PLAN.md'), '# Plan\n');
+}
+
 function fixture() {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-codex-decompose-'));
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-codex-decompose-')));
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-codex-decompose-state-'));
   const codexHome = path.join(root, 'codex-home');
   const agentDir = path.join(codexHome, 'agents');
   fs.mkdirSync(path.join(root, '.planning'), { recursive: true });
   fs.mkdirSync(agentDir, { recursive: true });
   fs.writeFileSync(path.join(root, '.planning', 'config.json'), '{}\n');
+  fs.mkdirSync(path.join(root, '.planning', 'phases', '38-codex-decompose'), { recursive: true });
+  fs.writeFileSync(path.join(root, '.planning', 'phases', '38-codex-decompose', 'CONTEXT.md'), '# Context\n');
+  fs.writeFileSync(path.join(root, 'source.cjs'), "'use strict';\n");
+  fs.writeFileSync(path.join(root, '.gitignore'), 'codex-home/\nreceipts/\n*request.json\n');
+  git(root, 'init', '-q');
+  git(root, 'add', '-A');
+  git(root, 'commit', '-q', '-m', 'fixture');
   for (const role of ['gsd-phase-researcher', 'gsd-planner', 'gsd-plan-checker']) {
-    fs.writeFileSync(path.join(agentDir, role + '.toml'), [
-      'name = "' + role + '"',
-      'description = "Installed GSD ' + role + '"',
-      'sandbox_mode = "' + (role === 'gsd-planner' ? 'workspace-write' : 'read-only') + '"',
-      "developer_instructions = '''",
-      'Perform the exact installed ' + role + ' role.',
-      "'''",
-      '',
-    ].join('\n'));
+    fs.writeFileSync(path.join(agentDir, role + '.toml'),
+      gsdAgentToml(role, 'Perform the exact installed ' + role + ' role.'));
   }
   const resolved = policy.resolveDispatch({ runtime: 'codex', role: 'research' });
+  const variant = researchVariant(resolved.rung);
   const researchContent = [
     '# shipyard-policy-id = "' + policy.POLICY.id + '"',
     '# shipyard-policy-version = "' + resolved.policy_version + '"',
@@ -49,9 +75,9 @@ function fixture() {
     '# shipyard-policy-role = "research"',
     '# shipyard-policy-rung = "' + resolved.rung + '"',
     'name = "shipyard-inv-research"',
-    'model = "gpt-6-sol"',
-    'model_reasoning_effort = "high"',
-    'sandbox_mode = "read-only"',
+    'model = "' + variant.model + '"',
+    'model_reasoning_effort = "' + variant.effort + '"',
+    'sandbox_mode = "' + variant.sandbox + '"',
     "developer_instructions = '''",
     'Follow the generated research policy.',
     "'''",
@@ -71,11 +97,13 @@ function fixture() {
     worktree: root, runtime: 'codex', provider: 'openai',
   };
   const calls = [];
+  const state = { write: writeArtifacts };
   const host = {
     scope, capabilities,
-    recorder: createDurableRecorder(path.join(root, 'receipts')),
+    recorder: createDurableRecorder(path.join(stateRoot, 'receipts')),
     async launchTypedGsd(selection, context) {
       calls.push({ selection, context });
+      state.write(root, context.gsd_role);
       return {
         launch_id: 'codex-decompose-' + calls.length,
         applied_model: selection.model,
@@ -88,9 +116,9 @@ function fixture() {
     },
   };
   return {
-    root, stateRoot, codexHome, agentDir, scope, host, calls, researchDigest,
+    root, stateRoot, codexHome, agentDir, scope, host, calls, researchDigest, state,
     create: (over = {}) => createCodexDecomposeHost({
-      scope, host, env: { CODEX_HOME: codexHome }, agentDir,
+      scope, host, env: { CODEX_HOME: codexHome }, agentDir, sealRoot: path.join(stateRoot, 'sealed'),
       agentManifest: path.join(agentDir, '.shipyard-manifest.json'), ...over,
     }),
     clean: () => {
@@ -101,7 +129,7 @@ function fixture() {
 }
 
 for (const [gsdRole, logicalRole, sandbox] of [
-  ['gsd-phase-researcher', 'research', 'read-only'],
+  ['gsd-phase-researcher', 'research', 'workspace-write'],
   ['gsd-planner', 'decomposition', 'workspace-write'],
   ['gsd-plan-checker', 'decomposition', 'read-only'],
 ]) {
@@ -125,12 +153,60 @@ for (const [gsdRole, logicalRole, sandbox] of [
         assert.match(f.calls[0].context.prompt, /^Follow the generated research policy\./);
         assert.equal(result.receipt.agent_file_digest, f.researchDigest);
         assert.equal(f.calls[0].selection.agent_file_content, undefined);
+        assert.equal(result.schema, 'shipyard.research-result.v1');
+        assert.equal(result.artifact_path, path.join(f.root, '.planning', 'phases', '38-codex-decompose', '38-RESEARCH.md'));
+        const entries = JSON.parse(fs.readFileSync(result.artifact_index.path, 'utf8')).entries;
+        assert.deepEqual(entries.map((entry) => entry.path), [result.artifact_path]);
+        assert.equal(entries[0].sha256, crypto.createHash('sha256').update('# Research\n').digest('hex'));
+        assert.equal(path.relative(f.root, result.artifact_index.path).startsWith('..'), true);
+      } else if (gsdRole === 'gsd-planner') {
+        assert.equal(f.calls[0].context.prompt, 'Plan this phase.');
+        assert.equal(result.schema, 'shipyard.decomposition-result.v1');
+        assert.equal(result.plan_count, 2);
+        assert.match(result.artifact_index.sha256, /^[a-f0-9]{64}$/);
       } else {
         assert.equal(f.calls[0].context.prompt, 'Plan this phase.');
       }
     } finally { f.clean(); }
   });
 }
+
+test('researcher and planner writes outside their contained paths refuse with every path named', async () => {
+  for (const gsdRole of ['gsd-phase-researcher', 'gsd-planner']) {
+    const f = fixture();
+    try {
+      f.state.write = (root, role) => {
+        writeArtifacts(root, role);
+        fs.appendFileSync(path.join(root, 'source.cjs'), '// extra\n');
+        fs.writeFileSync(path.join(root, 'stray.md'), 'stray\n');
+      };
+      await assert.rejects(() => f.create().run({ gsd_role: gsdRole, prompt: 'Research.' }), (error) =>
+        error.code === 'CONTAINMENT_VIOLATION' && /source\.cjs/.test(error.message) && /stray\.md/.test(error.message));
+    } finally { f.clean(); }
+  }
+});
+
+test('the researcher artifact path is computed by the host and a missing artifact refuses', async () => {
+  const f = fixture();
+  try {
+    f.state.write = () => {};
+    await assert.rejects(() => f.create().run({ gsd_role: 'gsd-phase-researcher', prompt: 'Research.' }),
+      (error) => error.code === 'MISSING_ARTIFACT');
+  } finally { f.clean(); }
+});
+
+test('generated research variant and GSD researcher are workspace-write; plan-checker stays read-only', () => {
+  const f = fixture();
+  try {
+    for (const variant of codexStaticVariants(2).filter((entry) => entry.role === 'research')) {
+      assert.equal(variant.sandbox, 'workspace-write');
+    }
+    assert.match(fs.readFileSync(path.join(f.agentDir, 'gsd-phase-researcher.toml'), 'utf8'),
+      /sandbox_mode = "workspace-write"/);
+    assert.match(fs.readFileSync(path.join(f.agentDir, 'gsd-plan-checker.toml'), 'utf8'),
+      /sandbox_mode = "read-only"/);
+  } finally { f.clean(); }
+});
 
 test('unsupported role, injected selection and foreign scope refuse before launch', async () => {
   const f = fixture();
@@ -192,7 +268,7 @@ test('contradictory native child evidence never becomes a durable receipt', asyn
     });
     await assert.rejects(() => f.create().run({ gsd_role: 'gsd-planner', prompt: 'Plan.' }),
       (error) => error.code === 'RUNTIME_EVIDENCE_MISMATCH');
-    assert.equal(fs.readdirSync(path.join(f.root, 'receipts')).filter((name) => name.startsWith('record-')).length, 0);
+    assert.equal(fs.readdirSync(path.join(f.stateRoot, 'receipts')).filter((name) => name.startsWith('record-')).length, 0);
   } finally { f.clean(); }
 });
 
@@ -269,10 +345,7 @@ test('production ' + gsdRole + ' reaches its native child and records session ev
   }).join('\n') + '\n';
   const calls = [];
   try {
-    fs.writeFileSync(path.join(f.agentDir, gsdRole + '.toml'),
-      'name = "' + gsdRole + '"\ndescription = "Installed GSD role"\nsandbox_mode = "'
-      + (gsdRole === 'gsd-planner' ? 'workspace-write' : 'read-only') + '"\n'
-      + "developer_instructions = '''\n" + instructions + "'''\n");
+    fs.writeFileSync(path.join(f.agentDir, gsdRole + '.toml'), gsdAgentToml(gsdRole, instructions.replace(/\n$/, '')));
     const file = path.join(f.root, 'cli-request.json');
     fs.writeFileSync(file, JSON.stringify({ scope: f.scope, gsd_role: gsdRole, prompt: 'Check this phase plan.' }));
     const output = [];
@@ -281,11 +354,12 @@ test('production ' + gsdRole + ' reaches its native child and records session ev
       agentDir: f.agentDir,
       agentManifest: path.join(f.agentDir, '.shipyard-manifest.json'),
       testStateRoot: f.stateRoot,
-      leaseTtlMs: 120,
+      leaseTtlMs: 2000,
       heartbeatMs: 20,
       probe: { status: 'available', executable: 'codex', runtime_version: '0.155.1', capabilities },
       spawn: (_executable, args, options) => {
         calls.push({ args, options });
+        writeArtifacts(f.root, gsdRole);
         const now = new Date();
         const dir = path.join(f.codexHome, 'sessions', String(now.getFullYear()),
           String(now.getMonth() + 1).padStart(2, '0'), String(now.getDate()).padStart(2, '0'));

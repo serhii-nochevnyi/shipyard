@@ -103,6 +103,15 @@ test('removes inert source model and effort fields before building the explicit 
 test('routes each role through the boundary and durably records exact-role evidence', async () => {
   const f = fixture();
   try {
+    execFileSync('git', ['-C', f.worktree, 'config', 'user.name', 'Decompose Host Test']);
+    execFileSync('git', ['-C', f.worktree, 'config', 'user.email', 'decompose-host@example.test']);
+    fs.writeFileSync(path.join(f.worktree, 'README.md'), '# test\n');
+    execFileSync('git', ['-C', f.worktree, 'add', 'README.md']);
+    execFileSync('git', ['-C', f.worktree, '-c', 'commit.gpgsign=false', 'commit', '-qm', 'base']);
+    const phaseDir = path.join(fs.realpathSync(f.worktree), '.planning', 'phases', '38-test-phase');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    fs.writeFileSync(path.join(phaseDir, 'CONTEXT.md'), '# Context\n');
+    fs.writeFileSync(path.join(phaseDir, '38-01-PLAN.md'), '# Plan\n');
     for (const role of Object.keys(ROLES)) {
       const calls = [];
       const output = await runDecomposition(request(f.worktree, role), {
@@ -142,6 +151,19 @@ test('routes each role through the boundary and durably records exact-role evide
       assert.ok(files.some((file) => file.startsWith('record-')));
       const state = JSON.parse(fs.readFileSync(path.join(f.root, `store-${role}`, 'runs', 'runs.json'), 'utf8'));
       assert.equal(state.runs[output.run_id].run.state, 'completed');
+      if (ROLES[role] === 'decomposition') {
+        assert.equal(output.envelope.schema, 'shipyard.decomposition-result.v1');
+        assert.equal(output.envelope.role, 'decomposition');
+        assert.equal(output.envelope.plan_count, 2);
+        assert.ok(fs.existsSync(output.envelope.artifact_index.path));
+        const manifest = JSON.parse(fs.readFileSync(output.envelope.artifact_index.path, 'utf8'));
+        assert.deepEqual(manifest.entries.map((entry) => entry.path).sort(), [
+          path.join(phaseDir, '38-01-PLAN.md'),
+          path.join(phaseDir, 'CONTEXT.md'),
+        ].sort());
+      } else {
+        assert.equal(output.envelope, undefined);
+      }
     }
   } finally { f.clean(); }
 });

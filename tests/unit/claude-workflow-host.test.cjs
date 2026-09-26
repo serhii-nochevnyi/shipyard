@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
+const { EventEmitter } = require('node:events');
 const { suite, test, done, assert } = require('./assert-harness.cjs');
 const { transcriptEvidence: testTranscriptEvidence } = require('./claude-test-evidence.cjs');
 const {
@@ -12,6 +13,8 @@ const {
 const {
   CLAUDE_MODEL_ALIASES,
 } = require('../../plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs');
+const { createClaudeCliLauncher } = require('../../plugins/delivery-pipeline/scripts/claude-runtime-host.cjs');
+const { capture: captureSessionStart } = require('../../plugins/delivery-pipeline/scripts/claude-agent-start-hook.cjs');
 const {
   runClaudeWorkflow,
 } = require('../../plugins/delivery-pipeline/scripts/claude-workflow-host.cjs');
@@ -37,6 +40,74 @@ const OPUS_CAPABILITIES = Object.freeze({
 
 function transcriptEvidence(value) {
   return testTranscriptEvidence(value);
+}
+
+const ROOT = path.resolve(__dirname, '..', '..');
+const EXECUTOR_STREAM = 'tests/fixtures/captured/claude-stream-executor.jsonl';
+const REPLAY_SESSION = '33333333-3333-4333-8333-333333333333';
+
+function capturedLines(rel) {
+  const lines = fs.readFileSync(path.join(ROOT, rel), 'utf8').split('\n').filter((line) => line.trim());
+  assert.ok(JSON.parse(lines[0]).shipyard_fixture, `${rel} must start with a provenance line`);
+  return lines.slice(1);
+}
+
+function replayChild(rel, transform) {
+  const lines = capturedLines(rel);
+  const placeholder = JSON.parse(lines[0]).session_id;
+  const child = new EventEmitter();
+  child.stdout = new EventEmitter();
+  child.stderr = new EventEmitter();
+  child.stdin = { write() {}, end() {} };
+  child.pid = 24039;
+  process.nextTick(() => {
+    for (const line of lines) {
+      const record = transform(JSON.parse(line.split(placeholder).join(REPLAY_SESSION)));
+      child.stdout.emit('data', Buffer.from(`${JSON.stringify(record)}\n`));
+    }
+    child.emit('close', 0, null);
+  });
+  return child;
+}
+
+function withoutStructuredOutput(record) {
+  if (!Object.hasOwn(record, 'structured_output')) return record;
+  const { structured_output: _dropped, ...rest } = record;
+  return rest;
+}
+
+async function replayedHostResult(options, transform = (record) => record) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-claude-workflow-replay-'));
+  const projects = path.join(root, 'projects');
+  const transcript = path.join(projects, 'project-a', `${REPLAY_SESSION}.jsonl`);
+  fs.mkdirSync(path.dirname(transcript), { recursive: true });
+  fs.writeFileSync(transcript, `${JSON.stringify({
+    type: 'assistant', sessionId: REPLAY_SESSION, effort: options.effort,
+    message: { role: 'assistant', model: 'claude-sonnet-5' },
+  })}\n`);
+  try {
+    const launch = createClaudeCliLauncher({
+      scope: { run_id: 'run-40-08', ticket: 'T-40-08', phase: 40, worktree: root, runtime: 'claude', provider: 'anthropic' },
+      transcriptDir: null,
+      sessionTranscriptRoot: projects,
+      transcriptPollMs: 5,
+      uuid: () => REPLAY_SESSION,
+      spawn: (_executable, args) => {
+        const settings = JSON.parse(args[args.indexOf('--settings') + 1]);
+        const hookArgs = settings.hooks.SessionStart[0].hooks[0].args;
+        const value = (name) => hookArgs[hookArgs.indexOf(name) + 1];
+        captureSessionStart({
+          hook_event_name: 'SessionStart', source: 'startup', session_id: value('--expected-session'),
+          transcript_path: transcript, cwd: settings.sandbox.filesystem.allowWrite[0],
+        }, { evidenceFile: value('--evidence-file'), expectedSession: value('--expected-session') });
+        return replayChild(EXECUTOR_STREAM, transform);
+      },
+    });
+    const { applicationEvidence: _evidence, ...result } = await launch('host-bound prompt', { model: options.model, effort: options.effort });
+    return result;
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 }
 
 suite('claude-workflow-host — production sixth binding');
@@ -115,7 +186,7 @@ return dispatched.result
       scriptPath,
       args: {},
       agent: async (_prompt, options) => {
-        const result = hostResult();
+        const result = await hostResult(options);
         evidence.set(result, transcriptEvidence({
           launch_id: 'claude-workflow-output-test',
           applied_model: options.model,
@@ -136,15 +207,17 @@ return dispatched.result
 }
 
 test('a structured host output reaches the workflow as the agent result', async () => {
-  const output = { id: 'T-39-12', status: 'blocked', summary: 'structured handback' };
-  const result = await workflowResultFor(() => ({ status: 'completed', summary: 'prose', output }));
-  assert.deepEqual(result, output);
+  const captured = JSON.parse(capturedLines(EXECUTOR_STREAM).at(-1)).structured_output;
+  const result = await workflowResultFor((options) => replayedHostResult(options));
+  assert.deepEqual(result, captured);
+  assert.equal(result.status, 'committed');
 });
 
 test('a text host output keeps the host result unchanged', async () => {
-  const result = await workflowResultFor(() => ({ status: 'completed', summary: 'prose', output: 'plain text' }));
+  const captured = JSON.parse(capturedLines(EXECUTOR_STREAM).at(-1)).result;
+  const result = await workflowResultFor((options) => replayedHostResult(options, withoutStructuredOutput));
   assert.equal(result.status, 'completed');
-  assert.equal(result.output, 'plain text');
+  assert.equal(result.output, captured);
 });
 
 test('production investigation entry point pins the research workflow and runs all four lines', async () => {

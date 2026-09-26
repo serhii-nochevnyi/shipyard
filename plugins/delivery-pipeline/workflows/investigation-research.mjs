@@ -17,6 +17,7 @@ export const meta = {
 // The workflow deliberately receives the resolved selection rather than a
 // resolver or a model map. Resolution belongs to the routed command/boundary;
 // this script can only pass the explicit pair and exact signal evidence onward.
+// @contract: sealedLines is trusted only after the host runs verifySealedLine on it.
 
 const REQUIRED_LINES = ['system-state', 'alternatives', 'constraints', 'risks']
 const LINE_LABELS = Object.freeze({
@@ -25,6 +26,16 @@ const LINE_LABELS = Object.freeze({
   constraints: 'constraints',
   risks: 'risks and unknowns',
 })
+// @contract: exact copy of claude-dispatch-adapter.cjs REPAIR; that file is digest-pinned so this cannot import it.
+const ADAPTER_REPAIR_SUFFIX = '. Install an ADR-014-capable Claude host with explicit workflow model and effort support; provide current host capabilities and retry the exact selection.'
+const causeFromError = (error) => {
+  const message = error && typeof error.message === 'string' ? error.message : String(error)
+  const cause = message.endsWith(ADAPTER_REPAIR_SUFFIX) ? message.slice(0, -ADAPTER_REPAIR_SUFFIX.length) : message
+  const code = error && typeof error.code === 'string' && error.code.trim() ? error.code : 'RESEARCH_LINE_DISPATCH_FAILED'
+  return { code, cause }
+}
+// @contract: authority and integrity refusals fail the workflow closed; they never become a blocked line.
+const FAIL_CLOSED_CODES = new Set(['NONCOMPLIANT_RECEIPT', 'MISSING_RECEIPT', 'STALE_ARTIFACT', 'ARTIFACT_DIGEST_MISMATCH'])
 const OUT = {
   type: 'object',
   additionalProperties: false,
@@ -87,9 +98,10 @@ if (boundedArtifactContract) {
   }
   if (!isObject(argv.artifactPaths)) throw new Error('investigation-research: args.artifactPaths must map every research line to a file')
 }
-if (!Array.isArray(argv.lines) || argv.lines.length !== REQUIRED_LINES.length) {
-  throw new Error('investigation-research: args.lines must contain exactly four research lines')
+if (!Array.isArray(argv.lines) || (argv.lines.length !== REQUIRED_LINES.length && argv.lines.length !== 1)) {
+  throw new Error('investigation-research: args.lines must contain exactly four research lines, or exactly one for a verified re-dispatch')
 }
+const singleLineRedispatch = argv.lines.length === 1
 if (argv.contextPacketRequired === true && argv.lines.some((line) => !isObject(line) || line.contextPacket === undefined)) {
   throw new Error('investigation-research: every research line requires a targeted context packet')
 }
@@ -125,8 +137,38 @@ const lines = argv.lines.map((line, index) => {
   }
 })
 const ids = lines.map((line) => line.id)
-if (new Set(ids).size !== REQUIRED_LINES.length || REQUIRED_LINES.some((id) => !ids.includes(id))) {
-  throw new Error(`investigation-research: lines must be exactly ${REQUIRED_LINES.join(', ')}`)
+let sealedLines = []
+if (singleLineRedispatch) {
+  if (argv.sealedLines !== undefined && !Array.isArray(argv.sealedLines)) {
+    throw new Error('investigation-research: args.sealedLines must be an array when present')
+  }
+  const claims = Array.isArray(argv.sealedLines) ? argv.sealedLines : []
+  sealedLines = claims.map((entry, index) => {
+    if (!isObject(entry) || typeof entry.id !== 'string' || !entry.id.trim()
+        || typeof entry.status !== 'string' || !['completed', 'blocked'].includes(entry.status)
+        || typeof entry.summary !== 'string'
+        || typeof entry.artifact_ref !== 'string' || !entry.artifact_ref.trim()
+        || typeof entry.artifact_digest !== 'string' || !/^[a-f0-9]{64}$/.test(entry.artifact_digest)
+        || !isObject(entry.artifact_index) || !isObject(entry.evidence_index)) {
+      throw new Error(`investigation-research: args.sealedLines[${index}] must be a complete sealed-line reference`)
+    }
+    return entry
+  })
+  const sealedIds = sealedLines.map((entry) => entry.id)
+  if (new Set(sealedIds).size !== sealedIds.length || sealedIds.includes(ids[0])) {
+    throw new Error('investigation-research: args.sealedLines must not repeat the re-dispatched line or each other')
+  }
+  const missing = REQUIRED_LINES.filter((id) => id !== ids[0] && !sealedIds.includes(id))
+  if (missing.length) {
+    throw new Error(`investigation-research: args.sealedLines is missing the sealed reference for ${missing.join(', ')}`)
+  }
+} else {
+  if (argv.sealedLines !== undefined) {
+    throw new Error('investigation-research: args.sealedLines is accepted only for a single-line re-dispatch')
+  }
+  if (new Set(ids).size !== REQUIRED_LINES.length || REQUIRED_LINES.some((id) => !ids.includes(id))) {
+    throw new Error(`investigation-research: lines must be exactly ${REQUIRED_LINES.join(', ')}`)
+  }
 }
 
 // The Workflow DSL has no import surface. The bridge must be injected by an
@@ -276,7 +318,7 @@ const results = await parallel(lines.map((line) => async () => {
       },
     })
     if (!dispatched || !dispatched.receipt || dispatched.receipt.compliance !== 'verified') {
-      throw new Error(`research line ${line.id} completed without a boundary-verified receipt`)
+      throw Object.assign(new Error(`research line ${line.id} completed without a boundary-verified receipt`), { code: 'MISSING_RECEIPT' })
     }
     const result = validateResult(line, dispatched.result)
     return {
@@ -284,30 +326,41 @@ const results = await parallel(lines.map((line) => async () => {
       receipt: dispatched.receipt,
     }
   } catch (error) {
-    // A host/bridge failure or malformed agent result is a failed workflow,
-    // not an ordinary blocked research line. Only an explicit `status:
-    // blocked` result is allowed to enter the artifact stream as blocked.
-    throw error
+    const { code, cause } = causeFromError(error)
+    if (FAIL_CLOSED_CODES.has(code)) throw error
+    return { line: line.id, status: 'failed', code, cause }
   }
 }))
 
 if (!Array.isArray(results)) {
   throw new Error('investigation-research: parallel must return an array')
 }
-const resultIds = results.map((result) => isObject(result) ? result.id : undefined)
-const expectedIds = new Set(REQUIRED_LINES)
+const resultIds = results.map((result) => isObject(result) ? (result.id !== undefined ? result.id : result.line) : undefined)
+const expectedIds = new Set(ids)
 const resultIdCounts = new Map()
 for (const id of resultIds) {
   resultIdCounts.set(id, (resultIdCounts.get(id) || 0) + 1)
 }
-const missing = REQUIRED_LINES.filter((id) => resultIdCounts.get(id) !== 1)
+const missing = ids.filter((id) => resultIdCounts.get(id) !== 1)
 const surplus = [...resultIdCounts.keys()].filter((id) => !expectedIds.has(id))
-if (missing.length || surplus.length || resultIds.length !== REQUIRED_LINES.length) {
+if (missing.length || surplus.length || resultIds.length !== ids.length) {
   const details = []
   if (missing.length) details.push(`missing or duplicated: ${missing.join(', ')}`)
   if (surplus.length) details.push(`unexpected: ${surplus.join(', ')}`)
-  if (!details.length) details.push(`expected ${REQUIRED_LINES.length} results, got ${resultIds.length}`)
+  if (!details.length) details.push(`expected ${ids.length} results, got ${resultIds.length}`)
   throw new Error(`investigation-research: parallel must return exactly one result for each research line (${details.join('; ')})`)
 }
 
-return results
+const failed = results.find((result) => isObject(result) && result.status === 'failed')
+const dispatchedSealed = results.filter((result) => isObject(result) && result.status !== 'failed')
+if (failed) {
+  return Object.freeze({
+    status: 'blocked',
+    failed_line: failed.line,
+    code: failed.code,
+    cause: failed.cause,
+    sealed_lines: Object.freeze([...dispatchedSealed, ...sealedLines]),
+  })
+}
+if (!singleLineRedispatch) return results
+return REQUIRED_LINES.map((id) => [...dispatchedSealed, ...sealedLines].find((result) => result.id === id))

@@ -9,27 +9,46 @@ const prHygiene = require('./pr-hygiene.cjs');
 const { resolveGraphDir } = require('./graph-dir.cjs');
 const { scopeBase } = require('./diamond-parents.cjs');
 const SCRATCH = new Set(['.shipyard-pr-body.md', '.shipyard-evidence.md']);
+const MAX_GRAPH_BYTES = 8 * 1024 * 1024;
 
-function fail(message) {
-  throw new Error(`delivery commit finalizer: ${message}`);
+function fail(message, code) {
+  const error = new Error(`delivery commit finalizer: ${message}`);
+  if (code) error.code = code;
+  throw error;
 }
 
-// @security: hygiene comes from the committed base (prHygiene.applies), never worktree files or agent text.
-function finalizedSubject(options, root, base) {
+function graphRow(root, ticket) {
+  const { dir, how } = resolveGraphDir([], root);
+  let row;
+  try {
+    const file = path.join(dir, 'tickets.json');
+    const stat = fs.lstatSync(file);
+    if (how !== 'none' && stat.isFile() && !stat.isSymbolicLink() && stat.size <= MAX_GRAPH_BYTES) {
+      const graph = JSON.parse(fs.readFileSync(file, 'utf8'));
+      row = graph && graph.tickets && graph.tickets[ticket];
+    }
+  } catch {
+    row = undefined;
+  }
+  if (!row || typeof row !== 'object' || typeof row.title !== 'string' || !row.title.trim()) {
+    fail(`ticket ${ticket} has no canonical graph title to finalize a target-project commit subject`, 'TICKET_TITLE_UNAVAILABLE');
+  }
+  return row;
+}
+
+// @security: hygiene comes from the committed base and the title from the canonical graph, never agent text.
+function finalizedSubject(ticket, root, base) {
   if (!prHygiene.applies({ root, ref: base })) {
-    return `(${options.ticket}): finalize scoped changes`;
+    return `(${ticket}): finalize scoped changes`;
   }
-  const title = options.ticketTitle;
-  if (typeof title !== 'string' || !title.trim()) {
-    fail('ticketTitle is required to finalize a commit subject in a target project');
-  }
-  const trimmed = title.trim();
-  const type = prHygiene.conventionalType(options.ticketType);
-  const subject = `${type}: ${trimmed[0].toLowerCase()}${trimmed.slice(1)}`;
+  const row = graphRow(root, ticket);
+  const title = row.title.trim();
+  const subject = `${prHygiene.conventionalType(row.type)}: ${title[0].toLowerCase()}${title.slice(1)}`;
   const violations = prHygiene.check({ commits: [subject] }).violations
     .filter((violation) => violation.field === 'commits[0]');
   if (violations.length) {
-    fail(`finalized commit subject failed pr-hygiene: ${violations.map((violation) => violation.rule).join(', ')}`);
+    fail(`finalized commit subject failed pr-hygiene: ${violations.map((violation) => violation.rule).join(', ')}`,
+      'COMMIT_SUBJECT_LEAK');
   }
   return subject;
 }
@@ -183,7 +202,7 @@ function finalizeDeliveryCommit(options) {
     fail('expectedBase is not an ancestor of HEAD');
   }
   if (ancestor !== base) fail('expectedBase is not an ancestor of HEAD');
-  const subject = finalizedSubject(options, root, base);
+  const subject = finalizedSubject(ticket, root, base);
 
   const covered = (file) => declared.some((entry) => owns(entry, file));
   const from = diamondTree(root, base, expectedBranch, env) || base;

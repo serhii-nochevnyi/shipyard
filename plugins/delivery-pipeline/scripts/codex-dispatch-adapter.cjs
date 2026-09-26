@@ -96,7 +96,7 @@ function validateRuntimeEvidence(evidence, selection, resolution) {
   const native = evidence.native_session_evidence;
   const gsdRole = validateGsdRole(resolution);
   const expectedSandbox = selection.sandbox_mode
-    || (gsdRole === 'gsd-phase-researcher' || gsdRole === 'gsd-plan-checker' ? 'read-only' : 'workspace-write');
+    || (gsdRole === 'gsd-plan-checker' ? 'read-only' : 'workspace-write');
   const sandboxEvidence = evidence.sandbox_evidence;
   const expectedProfileParent = expectedSandbox === 'read-only' ? ':read-only' : ':workspace';
   const protectedPaths = sandboxEvidence && sandboxEvidence.protected_paths;
