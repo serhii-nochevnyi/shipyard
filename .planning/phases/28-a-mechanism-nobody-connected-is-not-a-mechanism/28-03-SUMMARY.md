@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 54e6dec520bb60f389d066671e11d221f04f07e1abf0426e548f79dfd9d07b27
 phase: 28-a-mechanism-nobody-connected-is-not-a-mechanism
 plan: 03
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-09
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+shipyard_source_fingerprint: 54e6dec520bb60f389d066671e11d221f04f07e1abf0426e548f79dfd9d07b27
 ---
 
 # Phase 28: One procedure for judgment, on both paths — Delivery Projection

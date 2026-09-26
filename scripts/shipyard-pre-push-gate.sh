@@ -1,38 +1,70 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-INPUT="$(cat)"
-DATA="$(printf '%s' "$INPUT" | node -e '
-let raw="";
-process.stdin.on("data", chunk => raw += chunk);
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+exec node -e '
+const { execFileSync, spawnSync } = require("child_process");
+const path = require("path");
+const fs = require("fs");
+
+const SCRIPT_DIR = process.argv[1];
+const PUBLISH_GATE = process.env.SHIPYARD_PUBLISH_GATE
+  || path.join(SCRIPT_DIR, "shipyard-stop-gate", "publish-gate.cjs");
+
+let raw = "";
+process.stdin.on("data", (chunk) => { raw += chunk; });
 process.stdin.on("end", () => {
+  let payload;
+  try { payload = JSON.parse(raw); } catch { process.exit(0); }
+  const command = String(payload.tool_input?.command || "");
+  const cwd = String(payload.cwd || process.cwd());
+
+  const hasPush = /(?:^|[;&|]\s*)git(?:\s+-C\s+(?:"[^"]+"|\x27[^\x27]+\x27|\S+))?\s+push(?:\s|$)/.test(command);
+  if (!hasPush) process.exit(0);
+
+  // @invariant: strip trailing ;/&/| — a bare path capture runs up to whitespace and can swallow one
+  const stripSeparators = (value) => value.replace(/[;&|]+$/, "");
+  const namedCandidate = (re) => {
+    const m = re.exec(command);
+    if (!m) return null;
+    const value = m[1] !== undefined ? m[1] : (m[2] !== undefined ? m[2] : stripSeparators(m[3]));
+    return { index: m.index, value };
+  };
+  const cFlag = namedCandidate(/(?:^|[;&|]\s*)git\s+-C\s+(?:"([^"]+)"|\x27([^\x27]+)\x27|(\S+))/);
+  const cdTo = namedCandidate(/(?:^|[;&|]\s*)cd\s+(?:"([^"]+)"|\x27([^\x27]+)\x27|(\S+))/);
+  const named = [cFlag, cdTo].filter(Boolean).sort((a, b) => a.index - b.index)[0] || null;
+
+  const target = named ? named.value : cwd;
+  const absoluteTarget = path.isAbsolute(target) ? target : path.resolve(cwd, target);
+
+  let toplevel = null;
   try {
-    const payload = JSON.parse(raw);
-    const command = String(payload.tool_input?.command || "");
-    const cwd = String(payload.cwd || process.cwd());
-    const hasPush = /(?:^|[;&|]\s*)git(?:\s+-C\s+(?:"[^"]+"|\x27[^\x27]+\x27|\S+))?\s+push(?:\s|$)/.test(command);
-    const path = command.match(/(?:^|[;&|]\s*)git\s+-C\s+(?:"([^"]+)"|\x27([^\x27]+)\x27|(\S+))/);
-    const cd = command.match(/(?:^|[;&|]\s*)cd\s+(?:"([^"]+)"|\x27([^\x27]+)\x27|(\S+))/);
-    process.stdout.write(JSON.stringify({
-      hasPush,
-      worktree: path?.[1] || path?.[2] || path?.[3] || cd?.[1] || cd?.[2] || cd?.[3] || cwd,
-    }));
-  } catch {
-    process.stdout.write(JSON.stringify({ hasPush: false }));
+    toplevel = execFileSync("git", ["-C", absoluteTarget, "rev-parse", "--show-toplevel"], {
+      encoding: "utf8", stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+  } catch {}
+
+  if (!toplevel) {
+    process.stderr.write(
+      "shipyard pre-push: cannot resolve \"" + target + "\" to a git worktree" +
+      (named ? " (the command names a target git cannot follow — no expansion, no such path, or not a worktree)" : "") +
+      " — retry the push as: git -C <absolute worktree> push\n"
+    );
+    process.exit(2);
+  }
+
+  if (!fs.existsSync(PUBLISH_GATE)) {
+    process.stderr.write("shipyard pre-push: publish gate is not installed\n");
+    process.exit(2);
+  }
+
+  const gate = spawnSync(process.execPath, [PUBLISH_GATE, "--worktree", toplevel, "--working-tree", "--ticket", "publish"], {
+    stdio: "inherit",
+  });
+  if (gate.status !== 0) {
+    process.stderr.write("shipyard pre-push: push blocked until publish-gate passes\n");
+    process.exit(2);
   }
 });
-')"
-HAS_PUSH="$(printf '%s' "$DATA" | node -e 'let raw="";process.stdin.on("data",c=>raw+=c);process.stdin.on("end",()=>{try{process.stdout.write(JSON.parse(raw).hasPush?"1":"0")}catch{process.stdout.write("0")}})')"
-[[ "$HAS_PUSH" == 1 ]] || exit 0
-
-WORKTREE="$(printf '%s' "$DATA" | node -e 'let raw="";process.stdin.on("data",c=>raw+=c);process.stdin.on("end",()=>{try{process.stdout.write(JSON.parse(raw).worktree||process.cwd())}catch{process.stdout.write(process.cwd())}})')"
-PUBLISH_GATE="$(printenv SHIPYARD_PUBLISH_GATE || true)"
-if [[ -z "$PUBLISH_GATE" ]]; then
-  PUBLISH_GATE="$(cd "$(dirname "$0")/shipyard-stop-gate" && pwd)/publish-gate.cjs"
-fi
-[[ -f "$PUBLISH_GATE" ]] || { echo "shipyard pre-push: publish gate is not installed" >&2; exit 2; }
-
-if ! node "$PUBLISH_GATE" --worktree "$WORKTREE" --working-tree --ticket publish; then
-  echo "shipyard pre-push: push blocked until publish-gate passes" >&2
-  exit 2
-fi
+' -- "$SCRIPT_DIR"

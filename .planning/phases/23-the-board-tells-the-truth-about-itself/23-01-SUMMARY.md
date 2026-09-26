@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 6817a82e7fd386ae8b2b360858cd20e9db234d72449d20e5ee03cebaa77dac8e
 phase: 23-the-board-tells-the-truth-about-itself
 plan: 01
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-08-26
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+shipyard_source_fingerprint: 6817a82e7fd386ae8b2b360858cd20e9db234d72449d20e5ee03cebaa77dac8e
 ---
 
 # Phase 23: A dispatched ticket is visible as dispatched — Delivery Projection

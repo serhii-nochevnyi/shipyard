@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: b8e4e27f7b33961a36a69d4bb9f4b338d6616adf60bb1c8e74cbc80f2d12b5da
 phase: 29-the-tracker-is-a-projection-and-a-projection-is-driven
 plan: 08
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-11
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+shipyard_source_fingerprint: b8e4e27f7b33961a36a69d4bb9f4b338d6616adf60bb1c8e74cbc80f2d12b5da
 ---
 
 # Phase 29: Bind projection evidence to the item actually performed — Delivery Projection

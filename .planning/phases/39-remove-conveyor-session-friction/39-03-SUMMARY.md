@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: d839c4504e0c1a4d25befa3b2a395009c2b4ebd9f8146de30d2ed68536117427
 phase: 39-remove-conveyor-session-friction
 plan: 03
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-25
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+shipyard_source_fingerprint: d839c4504e0c1a4d25befa3b2a395009c2b4ebd9f8146de30d2ed68536117427
 ---
 
 # Phase 39: Enforce the stop gate only in deliver-armed sessions — Delivery Projection

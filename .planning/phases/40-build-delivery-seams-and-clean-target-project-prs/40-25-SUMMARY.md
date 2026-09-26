@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: e132e7e67dfcd87aa89679ae24a4a1e3f83652577f58de3c9fe41bd2df2235fc
 phase: 40-build-delivery-seams-and-clean-target-project-prs
 plan: 25
 subsystem: shipyard delivery
@@ -22,7 +22,7 @@ key-decisions:
 duration: 0min
 status: halted
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+shipyard_source_fingerprint: e132e7e67dfcd87aa89679ae24a4a1e3f83652577f58de3c9fe41bd2df2235fc
 ---
 
 # Phase 40: Update investigate and decompose prose for host state, line re-dispatch, Codex sealing and untracked planning — Delivery Projection

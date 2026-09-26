@@ -1,10 +1,10 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: bb9c03f4b26f9fe9e38f0aed8f728398052bb931e6e1e9fe17a6e1dab801c99d
 phase: 41
-status: pending
-result: pending
+status: failed
+result: failed
 shipyard_sync: evidence-projection
-shipyard_source_fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+shipyard_source_fingerprint: bb9c03f4b26f9fe9e38f0aed8f728398052bb931e6e1e9fe17a6e1dab801c99d
 ---
 
 # Phase 41: Reduce pipeline subscription overhead — UAT Projection
@@ -12,16 +12,16 @@ shipyard_source_fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098
 This file is generated from the delivery graph and phase integration evidence.
 
 ### 1. Delivery plans are accounted for
-result: pending
+result: passed
 expected: all 9 phase plan(s) are merged
-actual: 8 merged
+actual: 9 merged
 
 ### 2. Integration evidence is explicit
-result: pending
+result: passed
 expected: an explicit passed verdict in .planning/phases/41-reduce-pipeline-subscription-overhead/INTEGRATION.md
-actual: pending — INTEGRATION.md is missing
+actual: passed — integration evidence records passed
 
 ### 3. Phase verification is evidence-backed
-result: pending
+result: failed
 expected: positive repository-local verification evidence is present
-actual: pending — INTEGRATION.md is missing
+actual: failed — verification evidence records a failed check

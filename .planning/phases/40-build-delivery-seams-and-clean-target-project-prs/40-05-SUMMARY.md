@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: cade2eace903680b4f9610f5a916e7cf7fd4ebbc9d314ea6272983873cbeeed7
 phase: 40-build-delivery-seams-and-clean-target-project-prs
 plan: 05
 subsystem: shipyard delivery
@@ -22,7 +22,7 @@ key-decisions:
 duration: 0min
 status: halted
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+shipyard_source_fingerprint: cade2eace903680b4f9610f5a916e7cf7fd4ebbc9d314ea6272983873cbeeed7
 ---
 
 # Phase 40: Codex tuning writes no Claude-only keys and doctor reads the Codex agents manifest — Delivery Projection

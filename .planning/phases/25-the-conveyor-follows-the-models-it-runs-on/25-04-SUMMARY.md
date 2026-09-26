@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 9c990c7875dd37223e6fc4eff9cf914c3eb71ce56bfe08958020eba914df9d98
 phase: 25-the-conveyor-follows-the-models-it-runs-on
 plan: 04
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-08
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+shipyard_source_fingerprint: 9c990c7875dd37223e6fc4eff9cf914c3eb71ce56bfe08958020eba914df9d98
 ---
 
 # Phase 25: The floor is opus, the depth is effort, and fable is earned — Delivery Projection

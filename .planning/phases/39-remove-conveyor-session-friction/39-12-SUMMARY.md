@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 30d4be8c13ac2299102eeee8e3271a1e193c7b720efd3babeccb6a3c68527aef
 phase: 39-remove-conveyor-session-friction
 plan: 12
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-24
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+shipyard_source_fingerprint: 30d4be8c13ac2299102eeee8e3271a1e193c7b720efd3babeccb6a3c68527aef
 ---
 
 # Phase 39: Forward the declared output schema to every Claude host launch — Delivery Projection

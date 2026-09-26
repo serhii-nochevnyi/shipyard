@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 89c3b98637bce81740d3c3d4d6a29fa5c2c2fb468eaa6257613ee6e858d46647
 phase: 33-reduce-orchestration-context-and-transfer-sessions-safely
 plan: 03
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-17
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+shipyard_source_fingerprint: 89c3b98637bce81740d3c3d4d6a29fa5c2c2fb468eaa6257613ee6e858d46647
 ---
 
 # Phase 33: Bound repair and drift results without losing findings — Delivery Projection

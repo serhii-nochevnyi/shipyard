@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 6e540b9698122418e7ff2b22c9442be0676d1b48d3bf244d5a6ba0b91ddab44e
 phase: 39-remove-conveyor-session-friction
 plan: 02
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-24
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+shipyard_source_fingerprint: 6e540b9698122418e7ff2b22c9442be0676d1b48d3bf244d5a6ba0b91ddab44e
 ---
 
 # Phase 39: Ship the ADR template and a no-write adr-ingest check — Delivery Projection

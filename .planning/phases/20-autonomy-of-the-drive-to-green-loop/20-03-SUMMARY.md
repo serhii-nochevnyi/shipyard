@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 9003c1edcca9aaa157f62910256af33719ee40c3f410afb4a5a4fde25fdf762d
 phase: 20-autonomy-of-the-drive-to-green-loop
 plan: 03
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-08-25
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+shipyard_source_fingerprint: 9003c1edcca9aaa157f62910256af33719ee40c3f410afb4a5a4fde25fdf762d
 ---
 
 # Phase 20: plan_defect: the third terminal outcome in the escalation store — Delivery Projection

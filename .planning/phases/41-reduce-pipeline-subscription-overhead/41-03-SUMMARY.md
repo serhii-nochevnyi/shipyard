@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: b0187ecc1d49adc92b97c8541dd3a1cecf30c0c03633de16ad8da31cb1814ec9
 phase: 41-reduce-pipeline-subscription-overhead
 plan: 03
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-25
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+shipyard_source_fingerprint: b0187ecc1d49adc92b97c8541dd3a1cecf30c0c03633de16ad8da31cb1814ec9
 ---
 
 # Phase 41: Prove installed owner-scoped stop and wake behavior — Delivery Projection

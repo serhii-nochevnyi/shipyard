@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: efc39cdcc6aee529e11a8bad83ac4656650c1bccc0ba00539891a09d924eaf47
 phase: 40-build-delivery-seams-and-clean-target-project-prs
 plan: 27
 subsystem: shipyard delivery
@@ -22,7 +22,7 @@ key-decisions:
 duration: 0min
 status: halted
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+shipyard_source_fingerprint: efc39cdcc6aee529e11a8bad83ac4656650c1bccc0ba00539891a09d924eaf47
 ---
 
 # Phase 40: A diamond child is ready only when its non-primary same-phase parents have landed in the epic — Delivery Projection

@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: f2fd14031646cdad02473a5894d9dbac803e6ceb4603c28d4f5cb3ee812e408e
 phase: 39-remove-conveyor-session-friction
 plan: 05
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-24
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+shipyard_source_fingerprint: f2fd14031646cdad02473a5894d9dbac803e6ceb4603c28d4f5cb3ee812e408e
 ---
 
 # Phase 39: Build a deterministic Jira export plan and key recorder — Delivery Projection

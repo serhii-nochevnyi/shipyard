@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 8c570f73359ae1cd40e44fcec0b12af9c5d788d7edd5ddfda68dd6aed7cc15cd
 phase: 26-positive-evidence-before-a-mutation
 plan: 15
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-08
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+shipyard_source_fingerprint: 8c570f73359ae1cd40e44fcec0b12af9c5d788d7edd5ddfda68dd6aed7cc15cd
 ---
 
 # Phase 26: The board is given the facts its predicates read — Delivery Projection

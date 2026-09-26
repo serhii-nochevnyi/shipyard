@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 53ced035010580e9bdb2ea5d0f6d54c3e7b322faeefb8809b331ac2e0e4426c2
 phase: 28-a-mechanism-nobody-connected-is-not-a-mechanism
 plan: 01
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-09
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+shipyard_source_fingerprint: 53ced035010580e9bdb2ea5d0f6d54c3e7b322faeefb8809b331ac2e0e4426c2
 ---
 
 # Phase 28: The cap counts distinct agents, not distinct roles — Delivery Projection

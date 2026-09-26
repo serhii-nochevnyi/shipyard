@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 72eadf5f5077af127fe35eaf2caa66e431fcd82a58b810e59a477bcdb9c6508a
 phase: 31-not-every-ticket-is-available-work
 plan: 03
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-14
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+shipyard_source_fingerprint: 72eadf5f5077af127fe35eaf2caa66e431fcd82a58b810e59a477bcdb9c6508a
 ---
 
 # Phase 31: Define status and assignee eligibility without history — Delivery Projection

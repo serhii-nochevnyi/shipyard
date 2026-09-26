@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 992f95d618525eb4873662fd3329c5a9c1680fdde1d281d567b5dabd96cd4e21
 phase: 42-resume-trusted-finalization-without-executor-replay
 plan: 01
 subsystem: shipyard delivery
@@ -22,7 +22,7 @@ key-decisions:
 duration: 0min
 status: halted
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+shipyard_source_fingerprint: 992f95d618525eb4873662fd3329c5a9c1680fdde1d281d567b5dabd96cd4e21
 ---
 
 # Phase 42: Resume authenticated completed execution through trusted finalization — Delivery Projection

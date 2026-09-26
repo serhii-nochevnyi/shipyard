@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 314dca4e5a998bfef98664ca3a51c7cbe2aebbcd72d9e4df55b28aa788b69766
 phase: 32-measure-usage-and-make-the-backlog-actionable
 plan: 06
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-11
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+shipyard_source_fingerprint: 314dca4e5a998bfef98664ca3a51c7cbe2aebbcd72d9e4df55b28aa788b69766
 ---
 
 # Phase 32: Deliver the accepted task-level model ladder canary — Delivery Projection

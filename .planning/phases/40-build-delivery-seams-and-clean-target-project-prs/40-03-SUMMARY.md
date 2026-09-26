@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 9472ac76a5dded89c11dcc8cd5f324522ec4fdfb084b885bb3f8c1a10ac70af9
 phase: 40-build-delivery-seams-and-clean-target-project-prs
 plan: 03
 subsystem: shipyard delivery
@@ -22,7 +22,7 @@ key-decisions:
 duration: 0min
 status: halted
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+shipyard_source_fingerprint: 9472ac76a5dded89c11dcc8cd5f324522ec4fdfb084b885bb3f8c1a10ac70af9
 ---
 
 # Phase 40: Match tickets to PRs by the PR number recorded at creation, then the exact head branch — Delivery Projection

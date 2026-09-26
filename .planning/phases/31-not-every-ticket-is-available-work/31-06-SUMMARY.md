@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: ee7bf5ffdb6987145f9d78594e5ff61f0a34d9e061c9b061299b0b5a001e416e
 phase: 31-not-every-ticket-is-available-work
 plan: 06
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-14
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+shipyard_source_fingerprint: ee7bf5ffdb6987145f9d78594e5ff61f0a34d9e061c9b061299b0b5a001e416e
 ---
 
 # Phase 31: Journal direct ticket overrides — Delivery Projection

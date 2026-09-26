@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 41eb4125f9026095d8ce9e7073e051f42370965f03ca147b0c9bcb68d16150f9
 phase: 26-positive-evidence-before-a-mutation
 plan: 08
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-07
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+shipyard_source_fingerprint: 41eb4125f9026095d8ce9e7073e051f42370965f03ca147b0c9bcb68d16150f9
 ---
 
 # Phase 26: Jira identity is namespaced by repository — Delivery Projection

@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 70d536e7164e50fd8a5c8b37eb420628ea2b51ce843f0390ab3e284e8cc8afdd
 phase: 34-improve-convergence-and-tune-from-measured-outcomes
 plan: 03
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-17
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+shipyard_source_fingerprint: 70d536e7164e50fd8a5c8b37eb420628ea2b51ce843f0390ab3e284e8cc8afdd
 ---
 
 # Phase 34: Strengthen manual merge verdict carry — Delivery Projection

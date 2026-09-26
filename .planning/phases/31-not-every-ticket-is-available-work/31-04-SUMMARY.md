@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: e12c3a2348c08bdfb665b22131b7ef42e468bf2d962b72144b0d31eb4663a23f
 phase: 31-not-every-ticket-is-available-work
 plan: 04
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-14
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+shipyard_source_fingerprint: e12c3a2348c08bdfb665b22131b7ef42e468bf2d962b72144b0d31eb4663a23f
 ---
 
 # Phase 31: Persist tracker verdicts and fail closed on unknown — Delivery Projection

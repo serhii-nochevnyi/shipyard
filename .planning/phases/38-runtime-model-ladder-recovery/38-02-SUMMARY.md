@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: b3cf12bc2188549eafa0153405ab52e54b097b326cf8528fa35684dc212288ee
 phase: 38-runtime-model-ladder-recovery
 plan: 02
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-23
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+shipyard_source_fingerprint: b3cf12bc2188549eafa0153405ab52e54b097b326cf8528fa35684dc212288ee
 ---
 
 # Phase 38: Prove Claude model and effort from the launched session — Delivery Projection

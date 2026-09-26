@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: cded5f76ab1a5924da8a694eabda2cd1e4cbc3e133f5b9c75cb65472b39e52eb
 phase: 20-autonomy-of-the-drive-to-green-loop
 plan: 04
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-08-25
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+shipyard_source_fingerprint: cded5f76ab1a5924da8a694eabda2cd1e4cbc3e133f5b9c75cb65472b39e52eb
 ---
 
 # Phase 20: Order the actionable front by unblocking power and CI length — Delivery Projection

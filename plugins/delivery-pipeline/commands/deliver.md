@@ -2738,6 +2738,41 @@ driving PRs hands the user a half-truth.
      proven `contested` judgement and `critical`/`checkpoint` evidence, then
      cross the one boundary:
 
+     **Phase 41 prelaunch gate (both runtimes).** For phase 41, immediately
+     before the integrator boundary on either runtime (`runtime: "claude"` or
+     `runtime: "codex"`), run the merged-parent preflight in the integration
+     worktree and then verify it against the exact integrator input:
+
+     ```text
+     node ${CLAUDE_PLUGIN_ROOT}/scripts/phase-integrator-preflight.cjs --phase 41 \
+       --graph-dir <project>/.planning/graph --worktree <epic-worktree> \
+       --proof-file <proof.json> --ticket-set-file <ticket-set.json> --json
+     node ${CLAUDE_PLUGIN_ROOT}/scripts/phase-integrator-preflight.cjs --verify \
+       --worktree <epic-worktree> --proof-file <proof.json> \
+       --ticket-set-file <ticket-set.json> --ticket-set-digest <ticket-set-digest> --json
+     ```
+
+     The preflight derives the complete phase ticket set only from the canonical
+     graph, requires exactly one live merged PR per ticket targeting the epic,
+     and proves each merge SHA with `git merge-base --is-ancestor` against the
+     pinned epic commit/tree. The `<ticket-set.json>` it writes IS the runtime
+     ticket-set file: `phaseSubject`, `role-artifact.cjs seal/validate` and the
+     integrator input use that file and its `ticket_set_digest` unchanged, and
+     the launch worktree and integrator source revision must equal the proof's
+     `epic.commit`/`epic.tree`. A non-zero exit or `"ok": false` from either
+     command — missing, open, duplicate, stale or mismatched PR, non-ancestor
+     merge, moved epic head, or ticket-set/digest mismatch — parks the phase
+     with the refusal verbatim and does NOT fall through to `boundary.dispatch`;
+     no model is launched. If the epic moves after the proof, re-run the
+     preflight; never reuse a stale proof. Attach only the bounded proof fields
+     (`proof_digest`, `ticket_set_digest`, `epic`, per-ticket `merges`) to the
+     integrator context, and record the proof digest and every per-ticket merge
+     SHA in the integration evidence beside the integrator receipt for the
+     human checkpoint. Claude's native merged-PR checks in its role host still
+     run as defense in depth. The preflight never writes
+     `.planning/phases/<phase>/INTEGRATION.md`; the standard sealer below
+     remains its only author. Other phases skip this gate.
+
      Before constructing the integrator prompt, clear its role-owned
      `.planning/phases/<phase>/INTEGRATION.md` scratch file in the integration
      worktree:

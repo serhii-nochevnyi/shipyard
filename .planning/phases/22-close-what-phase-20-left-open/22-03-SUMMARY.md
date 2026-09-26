@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 96090e81d80342f6f95c3bc6d335a8ffaf6fc0588f2672ea7cf23de30486033a
 phase: 22-close-what-phase-20-left-open
 plan: 03
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-08-25
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+shipyard_source_fingerprint: 96090e81d80342f6f95c3bc6d335a8ffaf6fc0588f2672ea7cf23de30486033a
 ---
 
 # Phase 22: One --graph spelling means one --graph parser — Delivery Projection

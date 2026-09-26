@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 642199bfa18645174313b131fbd44bf1b28381fd08671ee965d8f628213c2cfb
 phase: 40-build-delivery-seams-and-clean-target-project-prs
 plan: 04
 subsystem: shipyard delivery
@@ -22,7 +22,7 @@ key-decisions:
 duration: 0min
 status: halted
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+shipyard_source_fingerprint: 642199bfa18645174313b131fbd44bf1b28381fd08671ee965d8f628213c2cfb
 ---
 
 # Phase 40: Name the config fix, not a reinstall, when a Codex refusal is caused by project configuration — Delivery Projection

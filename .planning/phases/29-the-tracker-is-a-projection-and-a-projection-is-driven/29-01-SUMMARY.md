@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 65868f0b62d4d58d06af85ba0fcae03b9149d40f15b53e2e555ab9f5760505a8
 phase: 29-the-tracker-is-a-projection-and-a-projection-is-driven
 plan: 01
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-10
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+shipyard_source_fingerprint: 65868f0b62d4d58d06af85ba0fcae03b9149d40f15b53e2e555ab9f5760505a8
 ---
 
 # Phase 29: The negative pin: a transition NAME is never a target status — Delivery Projection

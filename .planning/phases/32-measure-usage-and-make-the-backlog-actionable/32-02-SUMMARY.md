@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 03a8ff3dfe930e9a270fa4f464e522a89588c0c4473c61ffa4ac792f904462c6
 phase: 32-measure-usage-and-make-the-backlog-actionable
 plan: 02
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-11
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+shipyard_source_fingerprint: 03a8ff3dfe930e9a270fa4f464e522a89588c0c4473c61ffa4ac792f904462c6
 ---
 
 # Phase 32: Index backlog sources with stable item identities — Delivery Projection

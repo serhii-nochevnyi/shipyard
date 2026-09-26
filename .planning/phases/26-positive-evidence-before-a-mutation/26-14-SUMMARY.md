@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 587de06a4e0366edf48e5122d0e352bd27ef7c07c5ebf37cbc409d4f6c22b589
 phase: 26-positive-evidence-before-a-mutation
 plan: 14
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-07
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+shipyard_source_fingerprint: 587de06a4e0366edf48e5122d0e352bd27ef7c07c5ebf37cbc409d4f6c22b589
 ---
 
 # Phase 26: A workflow returns a reference, not a document — Delivery Projection

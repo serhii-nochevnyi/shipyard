@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 5565873269fe51cacb4ef6db4a64740e3a5f095a181a8ab050cdd6b274e7d1ce
 phase: 27-the-conveyor-measures-its-own-state
 plan: 03
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-08
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+shipyard_source_fingerprint: 5565873269fe51cacb4ef6db4a64740e3a5f095a181a8ab050cdd6b274e7d1ce
 ---
 
 # Phase 27: A base is chosen for where the merge lands, and the epic is asserted to have received it — Delivery Projection

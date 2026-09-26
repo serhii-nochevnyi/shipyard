@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 34ce1750def6da4fe9d5304a7bf468332055675e08a5f36c14d7d58ba1ce47f6
 phase: 20-autonomy-of-the-drive-to-green-loop
 plan: 02
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-08-25
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+shipyard_source_fingerprint: 34ce1750def6da4fe9d5304a7bf468332055675e08a5f36c14d7d58ba1ce47f6
 ---
 
 # Phase 20: Model ladder reads signature state, not attempts, for repair roles — Delivery Projection

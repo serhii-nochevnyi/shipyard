@@ -1,8 +1,8 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 08c85548023837baea9d1671e8a684629066c49cff1006f57f0f00af53014ba9
 phase: 21
 status: human_needed
-shipyard_source_fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+shipyard_source_fingerprint: 08c85548023837baea9d1671e8a684629066c49cff1006f57f0f00af53014ba9
 ---
 
 # Phase 21: Verdicts a human would have made anyway — Verification Projection

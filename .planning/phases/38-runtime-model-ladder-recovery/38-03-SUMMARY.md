@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 56f5f4151c21965a339c4e821ec6f703a4d7468b36be8e7856eb2fcd9f762ff9
 phase: 38-runtime-model-ladder-recovery
 plan: 03
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-23
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+shipyard_source_fingerprint: 56f5f4151c21965a339c4e821ec6f703a4d7468b36be8e7856eb2fcd9f762ff9
 ---
 
 # Phase 38: Connect Claude delivery and investigation through the trusted host — Delivery Projection

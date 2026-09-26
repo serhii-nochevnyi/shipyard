@@ -1,10 +1,10 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: d6365c57abb24ab2c89ae39163c4efdef3bc5fd178b8ae9edde49f2bbf1616c7
 phase: 28
 status: failed
 result: failed
 shipyard_sync: evidence-projection
-shipyard_source_fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+shipyard_source_fingerprint: d6365c57abb24ab2c89ae39163c4efdef3bc5fd178b8ae9edde49f2bbf1616c7
 ---
 
 # Phase 28: A mechanism nobody connected is not a mechanism — UAT Projection

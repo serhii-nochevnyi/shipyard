@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 4facc582faeeefa0d6629325b3fd08aaaba98636de3bb9927bc1614abbc2eca9
 phase: 40-build-delivery-seams-and-clean-target-project-prs
 plan: 10
 subsystem: shipyard delivery
@@ -22,7 +22,7 @@ key-decisions:
 duration: 0min
 status: halted
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+shipyard_source_fingerprint: 4facc582faeeefa0d6629325b3fd08aaaba98636de3bb9927bc1614abbc2eca9
 ---
 
 # Phase 40: Extract one shared sealer for research-result and decomposition-result envelopes and use it on Claude — Delivery Projection

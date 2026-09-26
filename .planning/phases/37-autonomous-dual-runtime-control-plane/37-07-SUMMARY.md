@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: aa68cc3930136aba5bfbe5a0e6330442a2073434cce3ea6646e926dbdb7686d3
 phase: 37-autonomous-dual-runtime-control-plane
 plan: 07
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-22
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+shipyard_source_fingerprint: aa68cc3930136aba5bfbe5a0e6330442a2073434cce3ea6646e926dbdb7686d3
 ---
 
 # Phase 37: Join runtime receipts with usage and outcome evidence — Delivery Projection

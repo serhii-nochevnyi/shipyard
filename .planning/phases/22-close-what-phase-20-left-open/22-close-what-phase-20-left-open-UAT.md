@@ -1,10 +1,10 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: bb4f62211a7c391794b0bdfe3e967b843474b77de0a902c079041ef2fbbf5a8f
 phase: 22
 status: pending
 result: pending
 shipyard_sync: evidence-projection
-shipyard_source_fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+shipyard_source_fingerprint: bb4f62211a7c391794b0bdfe3e967b843474b77de0a902c079041ef2fbbf5a8f
 ---
 
 # Phase 22: Close what phase 20 left open — UAT Projection

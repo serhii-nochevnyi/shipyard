@@ -1,8 +1,8 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: d7a0fd17f8dd0b65eb9e61b7034e9a61eeea61e863266ba7e67c821f0b587df2
 phase: 37
 status: human_needed
-shipyard_source_fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+shipyard_source_fingerprint: d7a0fd17f8dd0b65eb9e61b7034e9a61eeea61e863266ba7e67c821f0b587df2
 ---
 
 # Phase 37: Run the autonomous dual-runtime control plane — Verification Projection

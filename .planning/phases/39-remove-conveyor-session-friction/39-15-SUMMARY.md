@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 076c6ebb1a84209696fe35407b1e64585ca90cf8a0b77b08c28deec48a376ab9
 phase: 39-remove-conveyor-session-friction
 plan: 15
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-25
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+shipyard_source_fingerprint: 076c6ebb1a84209696fe35407b1e64585ca90cf8a0b77b08c28deec48a376ab9
 ---
 
 # Phase 39: Make the ADR bootstrap produce a project the GSD projection accepts — Delivery Projection

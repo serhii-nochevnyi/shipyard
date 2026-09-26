@@ -1,10 +1,10 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: a2431db492bdef8d1e97a1f7fb4da54fa9488986ba47f04719018ab5d824e643
 phase: 27
 status: failed
 result: failed
 shipyard_sync: evidence-projection
-shipyard_source_fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+shipyard_source_fingerprint: a2431db492bdef8d1e97a1f7fb4da54fa9488986ba47f04719018ab5d824e643
 ---
 
 # Phase 27: The conveyor measures its own state — UAT Projection

@@ -61,6 +61,52 @@ function run(root, args = []) {
   });
 }
 
+const PHASE_TITLES = ['Foundation', 'Second', 'Third'];
+
+function multiPhaseProject() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-gsd-sync-multi-'));
+  const graph = path.join(root, '.planning', 'graph');
+  write(path.join(root, '.planning', 'PROJECT.md'), '# shipyard\n\n## Core Value\nOne truthful workflow\n');
+  const roadmap = ['# Roadmap: shipyard', '', '## Requirements', ''];
+  PHASE_TITLES.forEach((_, i) => roadmap.push(`- **SYNC-0${i + 1}** — Requirement for phase ${i + 1}.`));
+  roadmap.push('', '## Phases', '');
+  PHASE_TITLES.forEach((title, i) => roadmap.push(`### Phase ${i + 1}: ${title}`, `**Requirements**: SYNC-0${i + 1}`, ''));
+  write(path.join(root, '.planning', 'ROADMAP.md'), roadmap.join('\n'));
+  const tickets = {};
+  const state = {};
+  PHASE_TITLES.forEach((title, i) => {
+    const n = i + 1;
+    const dirName = `0${n}-${title.toLowerCase()}`;
+    const ticket = `T-0${n}-01`;
+    const phaseDir = path.join(root, '.planning', 'phases', dirName);
+    write(path.join(phaseDir, `0${n}-01-PLAN.md`), [
+      '---', `phase: ${n}`, 'plan: 1', `title: "${title} projection"`,
+      'files_modified: [src/example.js]', `requirements: [SYNC-0${n}]`,
+      'delivery:', `  ticket: ${ticket}`, '  risk: low', '---', '',
+      '## Goal', '', `Deliver phase ${n}.`,
+    ].join('\n'));
+    write(path.join(phaseDir, 'INTEGRATION.md'), '# Integration\n\nVerdict: passed\n\n## Verification evidence\n- node --test tests/unit/gsd-sync.test.cjs: exit 0\n');
+    tickets[ticket] = { phase: String(n), title: `${title} projection`, files: ['src/example.js'] };
+    state[ticket] = { status: 'merged', pr: 100 + n, since: '2026-09-10T10:00:00Z' };
+  });
+  write(path.join(graph, 'tickets.json'), JSON.stringify({ tickets }));
+  write(path.join(graph, 'delivery-state.json'), JSON.stringify(state));
+  return root;
+}
+
+function phasePaths(root, n, dirName) {
+  const dir = path.join(root, '.planning', 'phases', dirName);
+  return {
+    summary: path.join(dir, `0${n}-01-SUMMARY.md`),
+    uat: path.join(dir, `${dirName}-UAT.md`),
+    verification: path.join(dir, `${dirName}-VERIFICATION.md`),
+  };
+}
+
+function readAll(paths) {
+  return Object.fromEntries(Object.entries(paths).map(([key, file]) => [key, fs.readFileSync(file, 'utf8')]));
+}
+
 suite('gsd-sync — evidence projection');
 
 test('canonicalizes ticket identities and rejects malformed CLI flags', () => {
@@ -289,6 +335,166 @@ test('delivery facts invalidate the projection fingerprint', () => {
   const current = JSON.parse(check.stdout);
   assert.notEqual(current.source_fingerprint, initial.source_fingerprint);
   assert.ok(current.blockers.some((item) => /stale|missing/.test(item)), current.blockers.join('; '));
+});
+
+test('a plan content edit changes only its own ticket summary', () => {
+  const root = multiPhaseProject();
+  assert.equal(run(root).status, 0);
+  const paths = {
+    ...Object.fromEntries(Object.entries(phasePaths(root, 1, '01-foundation')).map(([k, v]) => [`p1_${k}`, v])),
+    ...Object.fromEntries(Object.entries(phasePaths(root, 2, '02-second')).map(([k, v]) => [`p2_${k}`, v])),
+    state: path.join(root, '.planning', 'STATE.md'),
+    requirements: path.join(root, '.planning', 'REQUIREMENTS.md'),
+    roadmap: path.join(root, '.planning', 'ROADMAP.md'),
+  };
+  const before = readAll(paths);
+
+  const plan = path.join(root, '.planning', 'phases', '01-foundation', '01-01-PLAN.md');
+  fs.appendFileSync(plan, '\nAn additional implementation note.\n');
+  assert.equal(run(root).status, 0);
+  const after = readAll(paths);
+
+  assert.notEqual(after.p1_summary, before.p1_summary);
+  for (const key of ['p1_uat', 'p1_verification', 'p2_summary', 'p2_uat', 'p2_verification', 'state', 'requirements', 'roadmap']) {
+    assert.equal(after[key], before[key], `${key} must stay byte-identical on an unrelated content-only plan edit`);
+  }
+});
+
+test('a delivery status change invalidates its own summary and containing phase only', () => {
+  const root = multiPhaseProject();
+  assert.equal(run(root).status, 0);
+  const p1 = phasePaths(root, 1, '01-foundation');
+  const p2 = phasePaths(root, 2, '02-second');
+  const before = { ...readAll(p1), ...Object.fromEntries(Object.entries(readAll(p2)).map(([k, v]) => [`other_${k}`, v])) };
+
+  const stateFile = path.join(root, '.planning', 'graph', 'delivery-state.json');
+  const state = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
+  state['T-01-01'].status = 'pr-open';
+  fs.writeFileSync(stateFile, JSON.stringify(state));
+  assert.equal(run(root).status, 0);
+
+  assert.notEqual(fs.readFileSync(p1.summary, 'utf8'), before.summary);
+  assert.notEqual(fs.readFileSync(p1.uat, 'utf8'), before.uat);
+  assert.notEqual(fs.readFileSync(p1.verification, 'utf8'), before.verification);
+  assert.equal(fs.readFileSync(p2.summary, 'utf8'), before.other_summary);
+  assert.equal(fs.readFileSync(p2.uat, 'utf8'), before.other_uat);
+  assert.equal(fs.readFileSync(p2.verification, 'utf8'), before.other_verification);
+});
+
+test('moving a plan to a different phase invalidates both former and new phase outputs', () => {
+  const root = multiPhaseProject();
+  assert.equal(run(root).status, 0);
+  const p1 = phasePaths(root, 1, '01-foundation');
+  const p2 = phasePaths(root, 2, '02-second');
+  const p3 = phasePaths(root, 3, '03-third');
+  const before = {
+    uat1: fs.readFileSync(p1.uat, 'utf8'), verification1: fs.readFileSync(p1.verification, 'utf8'),
+    uat2: fs.readFileSync(p2.uat, 'utf8'), verification2: fs.readFileSync(p2.verification, 'utf8'),
+    uat3: fs.readFileSync(p3.uat, 'utf8'), verification3: fs.readFileSync(p3.verification, 'utf8'),
+  };
+
+  const plan2 = path.join(root, '.planning', 'phases', '02-second', '02-01-PLAN.md');
+  fs.writeFileSync(plan2, fs.readFileSync(plan2, 'utf8').replace('phase: 2', 'phase: 1'));
+  assert.equal(run(root).status, 0);
+
+  assert.notEqual(fs.readFileSync(p1.uat, 'utf8'), before.uat1);
+  assert.notEqual(fs.readFileSync(p1.verification, 'utf8'), before.verification1);
+  assert.notEqual(fs.readFileSync(p2.uat, 'utf8'), before.uat2);
+  assert.notEqual(fs.readFileSync(p2.verification, 'utf8'), before.verification2);
+  assert.equal(fs.readFileSync(p3.uat, 'utf8'), before.uat3);
+  assert.equal(fs.readFileSync(p3.verification, 'utf8'), before.verification3);
+});
+
+test('a PROJECT.md core value edit changes only the global aggregates that read it', () => {
+  const root = multiPhaseProject();
+  assert.equal(run(root).status, 0);
+  const p1 = phasePaths(root, 1, '01-foundation');
+  const paths = {
+    state: path.join(root, '.planning', 'STATE.md'),
+    requirements: path.join(root, '.planning', 'REQUIREMENTS.md'),
+    roadmap: path.join(root, '.planning', 'ROADMAP.md'),
+    summary: p1.summary,
+    uat: p1.uat,
+    verification: p1.verification,
+  };
+  const before = readAll(paths);
+
+  write(path.join(root, '.planning', 'PROJECT.md'), '# shipyard\n\n## Core Value\nA different truthful workflow\n');
+  assert.equal(run(root).status, 0);
+  const after = readAll(paths);
+
+  assert.notEqual(after.state, before.state);
+  assert.notEqual(after.requirements, before.requirements);
+  assert.equal(after.roadmap, before.roadmap);
+  assert.equal(after.summary, before.summary);
+  assert.equal(after.uat, before.uat);
+  assert.equal(after.verification, before.verification);
+});
+
+test('a membership edge change invalidates dependent globals and --check reports it read-only', () => {
+  const root = multiPhaseProject();
+  assert.equal(run(root).status, 0);
+  const p1 = phasePaths(root, 1, '01-foundation');
+  const p2 = phasePaths(root, 2, '02-second');
+  const p3 = phasePaths(root, 3, '03-third');
+  const paths = { ...p1, state: path.join(root, '.planning', 'STATE.md'), requirements: path.join(root, '.planning', 'REQUIREMENTS.md') };
+  const before = readAll(paths);
+  const beforeUnrelated = readAll(p3);
+
+  const plan2 = path.join(root, '.planning', 'phases', '02-second', '02-01-PLAN.md');
+  fs.writeFileSync(plan2, fs.readFileSync(plan2, 'utf8').replace('phase: 2', 'phase: 1'));
+
+  const check = run(root, ['--check']);
+  assert.equal(check.status, 1);
+  const payload = JSON.parse(check.stdout);
+  assert.ok(payload.blockers.some((b) => /01-foundation-UAT\.md/.test(b)), payload.blockers.join('; '));
+  assert.ok(payload.blockers.some((b) => /01-foundation-VERIFICATION\.md/.test(b)), payload.blockers.join('; '));
+  assert.ok(payload.blockers.some((b) => /02-second-UAT\.md/.test(b)), payload.blockers.join('; '));
+  assert.ok(!payload.blockers.some((b) => /03-third/.test(b)), payload.blockers.join('; '));
+  assert.deepStrictEqual(readAll(paths), before);
+  assert.deepStrictEqual(readAll(p3), beforeUnrelated);
+
+  assert.equal(run(root).status, 0);
+  const after = readAll(paths);
+  assert.notEqual(after.uat, before.uat);
+  assert.notEqual(after.state, before.state);
+  assert.notEqual(after.requirements, before.requirements);
+  assert.deepStrictEqual(readAll(p3), beforeUnrelated);
+});
+
+test('counts changed files and diff bytes for a scoped status change against unrelated phases', () => {
+  const root = multiPhaseProject();
+  const first = run(root);
+  assert.equal(first.status, 0, first.stderr);
+  const firstPayload = JSON.parse(first.stdout);
+  const generatedFiles = firstPayload.generated_files.map((rel) => path.join(root, rel));
+  const before = new Map(generatedFiles.map((file) => [file, fs.readFileSync(file, 'utf8')]));
+
+  const stateFile = path.join(root, '.planning', 'graph', 'delivery-state.json');
+  const state = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
+  state['T-01-01'].status = 'pr-open';
+  fs.writeFileSync(stateFile, JSON.stringify(state));
+
+  const second = run(root);
+  assert.equal(second.status, 0, second.stderr);
+  const secondPayload = JSON.parse(second.stdout);
+  assert.equal(secondPayload.generated_files.length, firstPayload.generated_files.length);
+
+  let changedCount = 0;
+  let changedBytes = 0;
+  const changedRelative = [];
+  for (const file of generatedFiles) {
+    const after = fs.readFileSync(file, 'utf8');
+    const previous = before.get(file);
+    if (after !== previous) {
+      changedCount += 1;
+      changedBytes += Math.abs(Buffer.byteLength(after) - Buffer.byteLength(previous));
+      changedRelative.push(path.relative(root, file));
+    }
+  }
+  assert.equal(changedCount, 6, changedRelative.join(', '));
+  assert.ok(changedBytes > 0);
+  assert.ok(!changedRelative.some((rel) => rel.includes('02-second') || rel.includes('03-third')), changedRelative.join(', '));
 });
 
 test('does not convert needs-fix integration into a green phase', () => {

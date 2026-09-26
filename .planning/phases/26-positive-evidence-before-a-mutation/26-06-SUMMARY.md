@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 798c177e6f7892f4d8728f0d31f59572ae3b549e078d51c96884f3e839d168a1
 phase: 26-positive-evidence-before-a-mutation
 plan: 06
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-07
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+shipyard_source_fingerprint: 798c177e6f7892f4d8728f0d31f59572ae3b549e078d51c96884f3e839d168a1
 ---
 
 # Phase 26: The Codex config merge writes TOML the runtime can parse — Delivery Projection

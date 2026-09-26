@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 87951e8439f50deb141cc77b4016bdf1c49aa0fecb13e46f79b505b67cfeb410
 phase: 37-autonomous-dual-runtime-control-plane
 plan: 04
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-22
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+shipyard_source_fingerprint: 87951e8439f50deb141cc77b4016bdf1c49aa0fecb13e46f79b505b67cfeb410
 ---
 
 # Phase 37: Connect Codex to the scoped runtime controller — Delivery Projection

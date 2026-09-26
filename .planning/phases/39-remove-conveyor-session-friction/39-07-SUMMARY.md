@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: bbcd2321d67199e18666d39f30d7aaab2825321dd8b5abe366d9e9f767075f5d
 phase: 39-remove-conveyor-session-friction
 plan: 07
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-24
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+shipyard_source_fingerprint: bbcd2321d67199e18666d39f30d7aaab2825321dd8b5abe366d9e9f767075f5d
 ---
 
 # Phase 39: Name the missing config and its creating command in gsd-tune — Delivery Projection

@@ -415,6 +415,20 @@ test('recorded CLI 0.155.1 parent proves an explicit native typed spawn', () => 
   secondOutput.payload.call_id = 'wait-recheck';
   assert.equal(parseNativeParentSpawn([...records, secondWait, secondOutput].map((record) => JSON.stringify(record)).join('\n'),
     parent, 'gsd-plan-checker', 'gpt-6-luna', 'max').task_name, 'plan_checker_ready');
+  const withWaitOutput = (output) => transformJsonl(raw, (record) => {
+    if (record.type === 'response_item' && record.payload.call_id === waitCall.payload.call_id
+        && record.payload.type === 'function_call_output') record.payload.output = output;
+    return record;
+  });
+  assert.equal(parseNativeParentSpawn(withWaitOutput('{"message":"Wait timed out.","timed_out":true}'),
+    parent, 'gsd-plan-checker', 'gpt-6-luna', 'max').task_name, 'plan_checker_ready');
+  for (const bad of ['{"message":"Wait completed."}', '{"timed_out":"false"}', 'not json', '[]']) {
+    assert.throws(() => parseNativeParentSpawn(withWaitOutput(bad), parent, 'gsd-plan-checker', 'gpt-6-luna', 'max'),
+      (error) => error.code === 'RUNTIME_EVIDENCE_INVALID');
+  }
+  assert.throws(() => parseNativeParentSpawn(raw.split('\n').filter((line) => !line.includes(waitCall.payload.call_id)
+    || line.includes('"wait_agent"')).join('\n'), parent, 'gsd-plan-checker', 'gpt-6-luna', 'max'),
+  (error) => error.code === 'RUNTIME_EVIDENCE_MISSING');
   assert.throws(() => parseNativeParentSpawn(raw, parent, 'gsd-planner', 'gpt-6-luna', 'max'),
     (error) => error.code === 'RUNTIME_EVIDENCE_MISMATCH');
   assert.throws(() => parseNativeParentSpawn(raw, parent, 'gsd-plan-checker', 'gpt-6-sol', 'max'),
@@ -527,6 +541,50 @@ test('typed launch pins a prevalidated GSD file and accepts matching native chil
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
+});
+
+test('typed launch accepts a completed native child after timeout-only parent waits', async () => {
+  const { parent, child, parentRaw, childRaw, instructions } = recordedTypedSession();
+  const timeoutOnly = transformJsonl(parentRaw, (record) => {
+    if (record.type === 'response_item' && record.payload.type === 'function_call_output'
+        && /timed_out/.test(String(record.payload.output))) {
+      record.payload.output = '{"message":"Wait timed out.","timed_out":true}';
+    }
+    return record;
+  });
+  assert.ok(!timeoutOnly.includes('"timed_out\\":false'));
+  const runLaunch = async (childTranscript) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-codex-timeout-'));
+    const codeHome = path.join(root, 'codex-home');
+    const agents = path.join(codeHome, 'agents');
+    try {
+      fs.mkdirSync(agents, { recursive: true });
+      fs.writeFileSync(path.join(agents, 'gsd-plan-checker.toml'), 'name = "gsd-plan-checker"\ndescription = "Plan checker"\nsandbox_mode = "read-only"\ndeveloper_instructions = \'\'\'\n' + instructions + "'''\n");
+      const launch = createCodexCliLauncher({
+        scope: { ...SCOPE, worktree: root }, capabilities, env: { CODEX_HOME: codeHome },
+        spawn: () => {
+          const now = new Date();
+          const directory = path.join(codeHome, 'sessions', String(now.getFullYear()),
+            String(now.getMonth() + 1).padStart(2, '0'), String(now.getDate()).padStart(2, '0'));
+          fs.mkdirSync(directory, { recursive: true });
+          fs.writeFileSync(path.join(directory, 'rollout-' + parent + '.jsonl'), timeoutOnly);
+          if (childTranscript !== null) fs.writeFileSync(path.join(directory, 'rollout-' + child + '.jsonl'), childTranscript);
+          return childFor(stream(parent), 0, 24050);
+        },
+      });
+      return await launch('Check the scoped plan', {
+        model: 'gpt-6-luna', effort: 'max', sandbox_mode: 'read-only', gsd_role: 'gsd-plan-checker',
+      });
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  };
+  const result = await runLaunch(childRaw);
+  assert.equal(result.runtime_evidence.native_child_evidence.session_id, child);
+  await assert.rejects(runLaunch(null));
+  const lines = childRaw.split('\n');
+  const completion = lines.find((line) => /task_complete/.test(line));
+  if (completion) await assert.rejects(runLaunch(lines.concat(completion).join('\n')));
 });
 
 done();

@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 87630c389b011419a17aeb18c4cb15d4aca8ebe6846961d3435da4057f14334f
 phase: 32-measure-usage-and-make-the-backlog-actionable
 plan: 07
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-11
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+shipyard_source_fingerprint: 87630c389b011419a17aeb18c4cb15d4aca8ebe6846961d3435da4057f14334f
 ---
 
 # Phase 32: Join transcript usage to dispatches without guessing — Delivery Projection

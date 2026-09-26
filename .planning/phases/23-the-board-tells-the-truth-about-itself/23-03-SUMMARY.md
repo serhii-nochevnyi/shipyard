@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 6edc1dedc4b7376bbd4674494ed66a28733caa65c84a82229a431cb2f9148b97
 phase: 23-the-board-tells-the-truth-about-itself
 plan: 03
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-08-26
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+shipyard_source_fingerprint: 6edc1dedc4b7376bbd4674494ed66a28733caa65c84a82229a431cb2f9148b97
 ---
 
 # Phase 23: Two test files stop lying about the code they test — Delivery Projection

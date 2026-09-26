@@ -1,6 +1,6 @@
 # Requirements: shipyard
 
-<!-- shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d -->
+<!-- shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 33b49a99690a5696248cc91b1bbb94c60cac6238919afc9f4e4d08e417bbc712 -->
 
 **Defined:** 2026-09-10
 **Core Value:** Keep delivery decisions truthful, resumable, and synchronized between the Shipyard conveyor and native GSD workflows.
@@ -325,13 +325,13 @@
 | REQ-148 | Phase 40 | In Progress |
 | REQ-149 | Phase 40 | In Progress |
 | REQ-150 | Phase 40 | In Progress |
-| REQ-151 | Phase 41 | In Progress |
-| REQ-152 | Phase 41 | In Progress |
-| REQ-153 | Phase 41 | In Progress |
-| REQ-154 | Phase 41 | In Progress |
-| REQ-155 | Phase 41 | In Progress |
-| REQ-156 | Phase 41 | In Progress |
-| REQ-157 | Phase 41 | In Progress |
+| REQ-151 | Phase 41 | Blocked |
+| REQ-152 | Phase 41 | Blocked |
+| REQ-153 | Phase 41 | Blocked |
+| REQ-154 | Phase 41 | Blocked |
+| REQ-155 | Phase 41 | Blocked |
+| REQ-156 | Phase 41 | Blocked |
+| REQ-157 | Phase 41 | Blocked |
 
 **Coverage:**
 - v1 requirements: 156 total

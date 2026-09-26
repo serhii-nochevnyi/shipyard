@@ -5887,7 +5887,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
-      "missing_paths": true,
+      "missing_paths": false,
       "files": [
         "tests/unit/phase41-stop-wake.test.cjs"
       ],
@@ -5993,7 +5993,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
-      "missing_paths": true,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/scripts/phase-integrator-preflight.cjs",
         "tests/unit/phase-integrator-preflight.test.cjs",
@@ -6020,7 +6020,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
-      "missing_paths": true,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/scripts/state-sync.cjs",
         "tests/unit/state-sync-yaml.test.cjs",

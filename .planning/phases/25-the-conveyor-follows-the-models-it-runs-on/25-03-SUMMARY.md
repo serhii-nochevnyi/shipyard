@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 92faa49f9cdccea7cba64a4180f72be321eb890d386cfa095423604294367578
 phase: 25-the-conveyor-follows-the-models-it-runs-on
 plan: 03
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-08
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+shipyard_source_fingerprint: 92faa49f9cdccea7cba64a4180f72be321eb890d386cfa095423604294367578
 ---
 
 # Phase 25: The prose names the models the runtimes actually run — Delivery Projection

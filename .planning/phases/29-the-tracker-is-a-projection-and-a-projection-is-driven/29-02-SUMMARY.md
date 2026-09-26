@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 1deef5aacc0787cf6dba4df7d628ada0aea2f25a673a2c69ab7b601f9f334838
 phase: 29-the-tracker-is-a-projection-and-a-projection-is-driven
 plan: 02
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-10
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+shipyard_source_fingerprint: 1deef5aacc0787cf6dba4df7d628ada0aea2f25a673a2c69ab7b601f9f334838
 ---
 
 # Phase 29: The status map is a declared knob, and its empty default means off — Delivery Projection

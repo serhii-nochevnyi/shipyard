@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: e3650d275db193370709020580b4fa8122b4b67aef49b6e6a772057910b18a4f
 phase: 33-reduce-orchestration-context-and-transfer-sessions-safely
 plan: 09
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-17
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+shipyard_source_fingerprint: e3650d275db193370709020580b4fa8122b4b67aef49b6e6a772057910b18a4f
 ---
 
 # Phase 33: Recommend safe rotation and refuse unproven automation — Delivery Projection

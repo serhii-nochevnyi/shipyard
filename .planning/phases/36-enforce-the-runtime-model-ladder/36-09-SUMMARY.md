@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 1cf85d0a4ea3e25645277bf91857f20de263688bad1c4343c02e3b9044f500a9
 phase: 36-enforce-the-runtime-model-ladder
 plan: 09
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-16
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+shipyard_source_fingerprint: 1cf85d0a4ea3e25645277bf91857f20de263688bad1c4343c02e3b9044f500a9
 ---
 
 # Phase 36: Policy-aware telemetry and reconciliation reporting — Delivery Projection

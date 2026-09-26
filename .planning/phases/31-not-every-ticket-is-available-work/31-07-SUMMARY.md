@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 51952ed8cfd2c5d66464e441290e39fe3fa8fe9b59c1650511e5b36142fa4eb2
 phase: 31-not-every-ticket-is-available-work
 plan: 07
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-14
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+shipyard_source_fingerprint: 51952ed8cfd2c5d66464e441290e39fe3fa8fe9b59c1650511e5b36142fa4eb2
 ---
 
 # Phase 31: Read tracker eligibility at cold start and consume the cache — Delivery Projection

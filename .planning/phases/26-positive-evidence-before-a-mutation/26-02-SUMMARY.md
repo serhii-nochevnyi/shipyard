@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 520a938b0151fe1463dbf86d72f9923594b236b131131d35f7fc40ba4d3c187b
 phase: 26-positive-evidence-before-a-mutation
 plan: 02
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-08
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+shipyard_source_fingerprint: 520a938b0151fe1463dbf86d72f9923594b236b131131d35f7fc40ba4d3c187b
 ---
 
 # Phase 26: A corrupt configuration permits no mutation — Delivery Projection

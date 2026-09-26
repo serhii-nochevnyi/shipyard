@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 663fc768bb697a7bd254ba7bb143d15d64fab7ca3fd48ffe954e3ad353d9217e
 phase: 37-autonomous-dual-runtime-control-plane
 plan: 05
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-22
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+shipyard_source_fingerprint: 663fc768bb697a7bd254ba7bb143d15d64fab7ca3fd48ffe954e3ad353d9217e
 ---
 
 # Phase 37: Prove graph reachability before autonomous dispatch — Delivery Projection

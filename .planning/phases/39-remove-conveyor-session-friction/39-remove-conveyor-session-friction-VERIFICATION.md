@@ -1,8 +1,8 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 3a557472dfa7b27c8c97c595cfee27080b56bcc592b83162540be1b5f33228c5
 phase: 39
 status: gaps_found
-shipyard_source_fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+shipyard_source_fingerprint: 3a557472dfa7b27c8c97c595cfee27080b56bcc592b83162540be1b5f33228c5
 ---
 
 # Phase 39: Remove conveyor session friction — Verification Projection

@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 1a75e3afedcc41ea934b0eccc0824a55be660e7998981761b9d2d71bd78bd540
 phase: 36-enforce-the-runtime-model-ladder
 plan: 11
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-16
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+shipyard_source_fingerprint: 1a75e3afedcc41ea934b0eccc0824a55be660e7998981761b9d2d71bd78bd540
 ---
 
 # Phase 36: Cross-runtime generated-install smoke verification — Delivery Projection

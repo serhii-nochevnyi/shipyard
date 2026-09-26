@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: ae1eca32efae3b71f1b5071edbde569d9f29eb5e9adc0b0e85ba39868bc4bfc4
 phase: 40-build-delivery-seams-and-clean-target-project-prs
 plan: 16
 subsystem: shipyard delivery
@@ -22,7 +22,7 @@ key-decisions:
 duration: 0min
 status: halted
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+shipyard_source_fingerprint: ae1eca32efae3b71f1b5071edbde569d9f29eb5e9adc0b0e85ba39868bc4bfc4
 ---
 
 # Phase 40: Add the sentinel preflight that establishes base and state preconditions or refuses naming the command — Delivery Projection

@@ -1,8 +1,8 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: fbed6d361592a96e851fcd740f8b0952ede47f070c5cf7f588b3f9a9205dabf9
 phase: 24
 status: gaps_found
-shipyard_source_fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+shipyard_source_fingerprint: fbed6d361592a96e851fcd740f8b0952ede47f070c5cf7f588b3f9a9205dabf9
 ---
 
 # Phase 24: The conveyor stops interrupting itself — Verification Projection

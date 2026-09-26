@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: a6fc5702db8ac752fb5afee38b55e18d24cab4eabdc1344bf16dbd7c8eadec34
 phase: 39-remove-conveyor-session-friction
 plan: 01
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-24
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+shipyard_source_fingerprint: a6fc5702db8ac752fb5afee38b55e18d24cab4eabdc1344bf16dbd7c8eadec34
 ---
 
 # Phase 39: Add shared refusal hints to Claude and Codex hosts — Delivery Projection

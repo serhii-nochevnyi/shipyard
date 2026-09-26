@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 09cab008773b48f477a096a9eae4e92aba38196eaaa587d8a8d0df2a23fba98f
 phase: 21-verdicts-a-human-would-have-made-anyway
 plan: 02
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-08-26
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 50321ebae5080c55968ab3d6adc2852a8e9081cb86db5251098acf61597b070d
+shipyard_source_fingerprint: 09cab008773b48f477a096a9eae4e92aba38196eaaa587d8a8d0df2a23fba98f
 ---
 
 # Phase 21: One predicate decides whether a checkpoint still needs a person — Delivery Projection
