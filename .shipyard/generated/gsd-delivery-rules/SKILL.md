@@ -65,11 +65,15 @@ installed Claude `PreToolUse` hook invokes it for every `git push`.
    the contract side (types/tool names) into its own ticket rather than making the
    consumer wait for a full feature.
 
-3. **Do not invent branch names.** The canonical branch is
-   `ticket/<ID>-<slug>` where the slug is the sanitized ticket title
-   (lowercase, transliterated, non-alphanumerics collapsed to single
-   hyphens, ≤40 chars). Omit `delivery.branch` — the graph validator
-   generates it; an explicit value is validated against the same rule.
+3. **Do not invent branch names.** In a target project the canonical branch
+   is `<type>/<slug>` or `<type>/<JIRA-KEY>-<slug>` (the phase epic is
+   `feat/<slug>` or `feat/<JIRA-KEY>-<slug>`); in the Shipyard repository it
+   stays `ticket/<ID>-<slug>` (the epic `epic/<phase-dir>`). `<type>` maps the
+   ticket's GSD `type` to a Conventional Commits type; `<slug>` is the
+   sanitized ticket title (lowercase, transliterated, non-alphanumerics
+   collapsed to single hyphens, ≤40 chars). Omit `delivery.branch` — the
+   graph validator generates it; an explicit value is validated against the
+   rule for the project kind.
 4. **files_modified is a contract, not a guess** — list every path the plan
    touches. An EMPTY `files_modified` fails Gate 2 (it is what makes
    "dependency-unordered tickets never collide" checkable, and it is the
@@ -152,7 +156,9 @@ installed Claude `PreToolUse` hook invokes it for every `git push`.
    evidence — that is a legitimate outcome, silently ignoring it is not. Reuse
    never licenses leaving `files_modified`: if building on it would take you
    outside scope, that is an out-of-scope escalation (§1), not a wider diff.
-3. **Atomic commits** prefixed with the ticket id: `feat(T-01-02): …`.
+3. **Atomic commits.** In a target project use a plain Conventional Commits
+   subject with no ticket id (for example `feat: add search filters`); in
+   the Shipyard repository keep the `feat(T-01-02): …` prefix.
 4. **Run the plan's Verification commands locally to green** before
    declaring done; never claim verification without command output. Run those
    commands — do not "be thorough" by widening them to the whole suite (§6): CI

@@ -27,11 +27,13 @@
 
 const fs = require('fs');
 const path = require('path');
+const { execFileSync } = require('child_process');
 const { parseFrontmatter } = require(path.join(__dirname, 'frontmatter.cjs'));
 // The ONE ownership matcher. Gate 2's overlap check, the scope gate and
 // base-merge all ask it, so a declaration that passes here is one all three can
 // answer exactly — see path-owner.cjs for what the old prefix stump got wrong.
 const { parse: parseDecl, mayIntersect, literalPrefix, GRAMMAR } = require(path.join(__dirname, 'path-owner.cjs'));
+const { applies, conventionalType, CONVENTIONAL_TYPES } = require(path.join(__dirname, 'pr-hygiene.cjs'));
 
 const ROOT = process.cwd();
 const PHASES_DIR = path.join(ROOT, '.planning', 'phases');
@@ -80,9 +82,52 @@ function slugify(title, max = 40) {
     .slice(0, max)
     .replace(/-+$/g, '');
 }
-function branchFor(id, title) {
+// @security: reads the manifest at origin/HEAD, so a branch cannot grant its own hygiene exemption.
+function committedBaseRef(root) {
+  try {
+    const ref = execFileSync(
+      'git', ['-C', root, 'symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD'],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }
+    ).trim();
+    return ref || null;
+  } catch {
+    return null;
+  }
+}
+const hygiene = applies({ root: ROOT, ref: committedBaseRef(ROOT) || undefined });
+
+const deliveryStateRows = (() => {
+  try {
+    const raw = fs.readFileSync(path.join(GRAPH_DIR, 'delivery-state.json'), 'utf8');
+    const parsed = JSON.parse(raw);
+    return (parsed && parsed.tickets) ? parsed.tickets : (parsed || {});
+  } catch {
+    return {};
+  }
+})();
+
+// @contract: pr_branch is set only for a marker-matched PR whose head differs from the computed branch.
+function recordedLegacyBranch(id) {
+  const row = deliveryStateRows[id];
+  const head = row && typeof row.pr_branch === 'string' ? row.pr_branch : null;
+  return head && head.startsWith('ticket/') ? head : null;
+}
+
+const HYGIENE_SLUG_SRC = '[a-z0-9](?:[a-z0-9-]*[a-z0-9])?';
+const HYGIENE_JIRA_SRC = '[A-Z][A-Z]+-\\d+';
+const HYGIENE_BRANCH_RE = new RegExp(`^(?:${CONVENTIONAL_TYPES.join('|')})/(?:${HYGIENE_JIRA_SRC}-)?${HYGIENE_SLUG_SRC}$`);
+function legacyBranchOk(id, branch) {
+  return branch === `ticket/${id}` || branch.startsWith(`ticket/${id}-`);
+}
+
+function branchFor(id, title, type, jira) {
+  const legacy = recordedLegacyBranch(id);
+  if (legacy) return legacy;
   const slug = slugify(title);
-  return slug ? `ticket/${id}-${slug}` : `ticket/${id}`;
+  if (!hygiene) return slug ? `ticket/${id}-${slug}` : `ticket/${id}`;
+  const prefix = jira ? `${jira}-` : '';
+  const kind = conventionalType(type);
+  return slug ? `${kind}/${prefix}${slug}` : `${kind}/${prefix}${id}`;
 }
 const BRANCH_RE = /^[a-zA-Z0-9](?:[a-zA-Z0-9._/-]*[a-zA-Z0-9])?$/;
 const REPO_RE = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
@@ -151,13 +196,15 @@ for (const file of planFiles.sort()) {
   }
 
   const title = typeof fm.title === 'string' && fm.title.trim() ? fm.title.trim() : base;
+  const ticketType = fm.type ?? 'implementation';
+  const jira = delivery.jira != null ? String(delivery.jira) : null;
   tickets[id] = {
     id,
     file: rel,
     title,
     phase: String(fm.phase ?? fPhase),
     phaseDir: path.basename(path.dirname(rel)),
-    type: fm.type ?? 'implementation',
+    type: ticketType,
     depends_on: deps.filter((d) => d !== id),
     files: Array.isArray(fm.files_modified) ? fm.files_modified.map(String) : [],
     risk: String(delivery.risk ?? 'medium'),
@@ -171,10 +218,10 @@ for (const file of planFiles.sort()) {
     preauthorized: delivery.preauthorized === true,
     // default branch is derived from the ticket title (sanitized); an explicit
     // delivery.branch wins but must be a valid git ref chunk
-    branch: delivery.branch || branchFor(id, title),
+    branch: delivery.branch || branchFor(id, title, ticketType, jira),
     // optional projection into an external tracker (written back by
     // /shipyard:decompose Step 5); pass-through only — never a Gate 2 input
-    jira: delivery.jira != null ? String(delivery.jira) : null,
+    jira,
     // null = the project's own repo (where .planning/ lives)
     repo: delivery.repo != null && String(delivery.repo).trim() ? String(delivery.repo).trim() : null,
     declaredWave: Number.isInteger(fm.wave) ? fm.wave : null,
@@ -182,8 +229,13 @@ for (const file of planFiles.sort()) {
   if (tickets[id].repo && !REPO_RE.test(tickets[id].repo)) {
     errors.push(`${id}: delivery.repo "${tickets[id].repo}" is not an owner/name slug (e.g. pdffiller/jsfiller)`);
   }
-  if (delivery.branch && (!BRANCH_RE.test(delivery.branch) || String(delivery.branch).includes('..'))) {
-    errors.push(`${id}: delivery.branch "${delivery.branch}" contains invalid characters — expected form: ${branchFor(id, title)}`);
+  if (delivery.branch) {
+    const explicitBranch = String(delivery.branch);
+    if (!BRANCH_RE.test(explicitBranch) || explicitBranch.includes('..')) {
+      errors.push(`${id}: delivery.branch "${delivery.branch}" contains invalid characters — expected form: ${branchFor(id, title, ticketType, jira)}`);
+    } else if (hygiene ? !HYGIENE_BRANCH_RE.test(explicitBranch) : !legacyBranchOk(id, explicitBranch)) {
+      errors.push(`${id}: delivery.branch "${delivery.branch}" does not match this project's branch naming rule — expected form: ${branchFor(id, title, ticketType, jira)}`);
+    }
   }
   if (!['low', 'medium', 'high'].includes(tickets[id].risk)) {
     errors.push(`${id}: delivery.risk "${tickets[id].risk}" is not one of low|medium|high`);
@@ -324,6 +376,19 @@ for (const file of planFiles.sort()) {
   }
 }
 
+{
+  const byBranch = new Map();
+  for (const t of Object.values(tickets)) {
+    if (!byBranch.has(t.branch)) byBranch.set(t.branch, []);
+    byBranch.get(t.branch).push(t.id);
+  }
+  for (const [branch, ids] of [...byBranch.entries()].sort()) {
+    if (ids.length > 1) {
+      errors.push(`DUPLICATE_BRANCH: ${ids.sort().join(', ')} all resolve to branch "${branch}" — rename or re-slice so each ticket's branch is unique`);
+    }
+  }
+}
+
 // --- referential integrity ---
 for (const t of Object.values(tickets)) {
   for (const d of t.depends_on) {
@@ -397,18 +462,11 @@ const ownable = (f) => !parseDecl(f).error;
 // unwritten diff and MUST still contest. The state is state-sync's, rebuilt from
 // GitHub; when it is absent, unreadable, or silent about a ticket, that ticket
 // is treated as LIVE — a missing file must not quietly switch the gate off.
-const mergedIds = (() => {
-  const out = new Set();
-  try {
-    const raw = fs.readFileSync(path.join(GRAPH_DIR, 'delivery-state.json'), 'utf8');
-    const parsed = JSON.parse(raw);
-    const rows = parsed && parsed.tickets ? parsed.tickets : parsed;
-    for (const [id, row] of Object.entries(rows || {})) {
-      if (row && row.status === 'merged') out.add(id);
-    }
-  } catch { /* no state, or unreadable: every ticket stays live */ }
-  return out;
-})();
+const mergedIds = new Set(
+  Object.entries(deliveryStateRows)
+    .filter(([, row]) => row && row.status === 'merged')
+    .map(([id]) => id)
+);
 
 if (acyclic) {
   const contested = new Map();
@@ -505,13 +563,22 @@ for (const id of order) {
 const epics = {};
 for (const id of order) {
   const t = tickets[id];
-  if (!epics[t.phase]) epics[t.phase] = { branch: `epic/${t.phaseDir}`, base: null, phaseDir: t.phaseDir, repos: [] };
-  else if (epics[t.phase].phaseDir !== t.phaseDir) {
-    warnings.push(`phase ${t.phase} spans two directories (${epics[t.phase].phaseDir}, ${t.phaseDir}) — the epic branch is cut from the first one; keep one directory per phase`);
+  if (!epics[t.phase]) epics[t.phase] = { phaseDir: t.phaseDir, repos: [], jira: t.jira || null };
+  else {
+    if (epics[t.phase].phaseDir !== t.phaseDir) {
+      warnings.push(`phase ${t.phase} spans two directories (${epics[t.phase].phaseDir}, ${t.phaseDir}) — the epic branch is cut from the first one; keep one directory per phase`);
+    }
+    if (!epics[t.phase].jira && t.jira) epics[t.phase].jira = t.jira;
   }
   // One epic branch NAME per phase, but it has to exist in every repo the phase
   // touches — each repo integrates its own slice through its own epic PR.
   if (!epics[t.phase].repos.includes(t.repo || null)) epics[t.phase].repos.push(t.repo || null);
+}
+for (const e of Object.values(epics)) {
+  e.base = null;
+  e.branch = hygiene
+    ? `feat/${e.jira ? `${e.jira}-` : ''}${e.phaseDir.replace(/^\d+-?/, '')}`
+    : `epic/${e.phaseDir}`;
 }
 // primary parent = deepest same-phase, SAME-REPO dependency (tie-break: lowest
 // id). Cascading means "PR into the parent's branch", and a branch does not
@@ -570,7 +637,7 @@ const view = {
   tickets: {},
 };
 for (const [phase, e] of Object.entries(epics)) {
-  view.epics[phase] = { branch: e.branch, base: e.base, repos: e.repos };
+  view.epics[phase] = { branch: e.branch, base: e.base, repos: e.repos, phaseDir: e.phaseDir, jira: e.jira };
 }
 for (const id of order) {
   const t = tickets[id];
@@ -618,6 +685,8 @@ for (const [phase, e] of Object.entries(view.epics)) {
   yaml.push(`  ${yamlScalar(phase)}:`);
   yaml.push(`    branch: ${yamlScalar(e.branch)}`);
   yaml.push(`    repos: ${yamlList(e.repos || [null])}`);
+  yaml.push(`    phaseDir: ${yamlScalar(e.phaseDir)}`);
+  yaml.push(`    jira: ${yamlScalar(e.jira)}`);
 }
 yaml.push('tickets:');
 for (const [id, t] of Object.entries(view.tickets)) {
