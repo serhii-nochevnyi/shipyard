@@ -1,11 +1,11 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 654d66aefca5a93d2a506f9a6721780d7c4c6a48cd9c7750fb00e08b3e27f19e
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: c628fab451e223c68a47ec3fef25f06fa6237fb418deefe3ea785cb3c1918f3f
 phase: 40-build-delivery-seams-and-clean-target-project-prs
-plan: 26
+plan: 28
 subsystem: shipyard delivery
 tags: [shipyard, gsd, delivery-projection]
 provides:
-  - Tracked delivery state for T-40-26
+  - Tracked delivery state for T-40-28
 affects: [GSD progress, Shipyard delivery]
 actuals:
   tokens: 0
@@ -22,19 +22,19 @@ key-decisions:
 duration: 0min
 status: halted
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 654d66aefca5a93d2a506f9a6721780d7c4c6a48cd9c7750fb00e08b3e27f19e
+shipyard_source_fingerprint: c628fab451e223c68a47ec3fef25f06fa6237fb418deefe3ea785cb3c1918f3f
 ---
 
-# Phase 40: Expose capture, live, release, digest-refresh and dogfood commands through make and document them — Delivery Projection
+# Phase 40: Deliver the canonical plan to sandboxed agents and refuse graph copies — Delivery Projection
 
 **Plan delivery is not complete; the projection preserves the current state.**
 
 ## Delivery Evidence
 
-- Ticket: T-40-26
+- Ticket: T-40-28
 - Delivery status: pending
 - PR: not observed
-- Source plan: .planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-26-PLAN.md
+- Source plan: .planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-28-PLAN.md
 - This summary is halted until the delivery state observes `merged`.
 
 ## Decisions & Deviations

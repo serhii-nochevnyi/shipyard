@@ -56,6 +56,12 @@ main diff (proving-ground #693, #702). Evidence: INV-004 `research/`.
 - Point fixes: the state YAML is header-free and deterministic; the pre-push hook resolves the worktree through git instead of command text; the Codex config refusal names the config fix; `gsd-tune --runtime codex` writes no Claude-only keys; investigate and decompose prose explain the out-of-repo host state directory; doctor reads the Codex agents manifest.
 - Unit fixtures that create git repositories are hermetic against global commit signing and fixed `/tmp` paths.
 
+## Amendment (2026-09-25, after the pdffiller proving-ground run)
+
+- The dispatch entry point takes the plan from the canonical project graph, not from the ticket worktree, and the host delivers the plan content to the executor under a verified digest (phase 40 D-43). This replaces "plan path from the ticket worktree" above.
+- The sentinel preflight works per repository: each PR's base is fetched and compared in the checkout of the repository that owns it (phase 40 D-44).
+- Target-project PR titles follow the repository's configured convention, Conventional Commits by default; the hygiene gate still forbids conveyor internals in every format (phase 40 D-45).
+
 ## Consequences
 
 - The model no longer assembles dispatch requests or wait loops; `deliver.md` shrinks around the entry point.

@@ -2941,7 +2941,7 @@ tickets:
     repo: null
     wave: 4
     depends_on: [T-40-19]
-    files: [plugins/delivery-pipeline/scripts/pr-hygiene.cjs, tests/unit/pr-hygiene.test.cjs, plugins/delivery-pipeline/scripts/planning-untrack.cjs, tests/unit/planning-untrack.test.cjs]
+    files: [plugins/delivery-pipeline/scripts/pr-hygiene.cjs, tests/unit/pr-hygiene.test.cjs, plugins/delivery-pipeline/scripts/planning-untrack.cjs, tests/unit/planning-untrack.test.cjs, plugins/delivery-pipeline/scripts/pipeline-config.cjs, tests/unit/pipeline-config.test.cjs]
     risk: medium
     human_checkpoint: false
     preauthorized: false
@@ -3094,22 +3094,6 @@ tickets:
     primary_parent: T-40-14
     pr_base: ticket/T-40-14-hosts-write-a-pid-ttl-in-flight-record-a
     jira: null
-  T-40-09:
-    title: Pass Codex child tasks by host-owned file path plus a digest the host verifies
-    plan: '.planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-09-PLAN.md'
-    phase: '40'
-    repo: null
-    wave: 8
-    depends_on: [T-40-11, T-40-07, T-40-14, T-39-01, T-41-04, T-42-01]
-    files: [plugins/delivery-pipeline/scripts/codex-runtime-host.cjs, tests/unit/codex-runtime-host.test.cjs, tests/fixtures/captured/codex-agent-stream-parent.jsonl, tests/fixtures/captured/codex-agent-stream-child.jsonl, tests/fixtures/captured/boundaries/codex-agent-stream.json, tests/fixtures/captured/codex-agent-stream-exec.jsonl, tests/unit/codex-decompose-host.test.cjs, tests/unit/codex-delivery-host.test.cjs]
-    risk: high
-    human_checkpoint: true
-    preauthorized: true
-    branch: ticket/T-40-09-pass-codex-child-tasks-by-host-owned-fil
-    epic: epic/40-build-delivery-seams-and-clean-target-project-prs
-    primary_parent: T-40-11
-    pr_base: ticket/T-40-11-let-the-codex-gsd-researcher-write-only
-    jira: null
   T-40-16:
     title: Add the sentinel preflight that establishes base and state preconditions or refuses naming the command
     plan: '.planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-16-PLAN.md'
@@ -3125,22 +3109,6 @@ tickets:
     epic: epic/40-build-delivery-seams-and-clean-target-project-prs
     primary_parent: T-40-01
     pr_base: ticket/T-40-01-make-git-creating-unit-fixtures-hermetic
-    jira: null
-  T-40-15:
-    title: 'Add deliver-dispatch: build host requests from the graph, launch detached, and offer status and wait'
-    plan: '.planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-15-PLAN.md'
-    phase: '40'
-    repo: null
-    wave: 7
-    depends_on: [T-40-14, T-40-17, T-40-16]
-    files: [plugins/delivery-pipeline/scripts/deliver-dispatch.cjs, tests/unit/deliver-dispatch.test.cjs, plugins/delivery-pipeline/scripts/run-waker.cjs, tests/unit/run-waker.test.cjs]
-    risk: medium
-    human_checkpoint: false
-    preauthorized: false
-    branch: ticket/T-40-15-add-deliver-dispatch-build-host-requests
-    epic: epic/40-build-delivery-seams-and-clean-target-project-prs
-    primary_parent: T-40-14
-    pr_base: ticket/T-40-14-hosts-write-a-pid-ttl-in-flight-record-a
     jira: null
   T-40-18:
     title: Produce clean executor PR bodies and conventional host-finalized commits in target projects
@@ -3174,38 +3142,6 @@ tickets:
     primary_parent: T-40-14
     pr_base: ticket/T-40-14-hosts-write-a-pid-ttl-in-flight-record-a
     jira: null
-  T-40-23:
-    title: Run one live round per runtime on an in-repo fixture project and gate releases on a fresh receipt
-    plan: '.planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-23-PLAN.md'
-    phase: '40'
-    repo: null
-    wave: 8
-    depends_on: [T-40-15, T-40-17]
-    files: [tests/fixtures/live-project/README.md, tests/fixtures/live-project/Makefile, tests/fixtures/live-project/src/greeting.cjs, tests/fixtures/live-project/tests/greeting.test.cjs, tests/fixtures/live-project/planning/architecture/ADR-001-greeting-formats.md, tests/live/live-round.sh, plugins/delivery-pipeline/scripts/live-receipt.cjs, tests/unit/release-gate.test.cjs, scripts/release.sh]
-    risk: high
-    human_checkpoint: true
-    preauthorized: true
-    branch: ticket/T-40-23-run-one-live-round-per-runtime-on-an-in
-    epic: epic/40-build-delivery-seams-and-clean-target-project-prs
-    primary_parent: T-40-15
-    pr_base: ticket/T-40-15-add-deliver-dispatch-build-host-requests
-    jira: null
-  T-40-24:
-    title: 'Rewrite deliver.md around the dispatch entry point, in-flight record, sentinel preflight and clean publication'
-    plan: '.planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-24-PLAN.md'
-    phase: '40'
-    repo: null
-    wave: 8
-    depends_on: [T-40-15, T-40-17, T-40-16, T-39-03, T-41-07]
-    files: [plugins/delivery-pipeline/commands/deliver.md, tests/unit/deliver-seams-contract.test.cjs]
-    risk: medium
-    human_checkpoint: false
-    preauthorized: false
-    branch: ticket/T-40-24-rewrite-deliver-md-around-the-dispatch-e
-    epic: epic/40-build-delivery-seams-and-clean-target-project-prs
-    primary_parent: T-40-15
-    pr_base: ticket/T-40-15-add-deliver-dispatch-build-host-requests
-    jira: null
   T-40-25:
     title: 'Update investigate and decompose prose for host state, line re-dispatch, Codex sealing and untracked planning'
     plan: '.planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-25-PLAN.md'
@@ -3222,22 +3158,6 @@ tickets:
     primary_parent: T-40-12
     pr_base: ticket/T-40-12-add-the-codex-research-consumer-that-sea
     jira: null
-  T-40-26:
-    title: 'Expose capture, live, release, digest-refresh and dogfood commands through make and document them'
-    plan: '.planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-26-PLAN.md'
-    phase: '40'
-    repo: null
-    wave: 9
-    depends_on: [T-40-23, T-40-07, T-39-04]
-    files: [Makefile, README.md, CLAUDE.md]
-    risk: medium
-    human_checkpoint: false
-    preauthorized: false
-    branch: ticket/T-40-26-expose-capture-live-release-digest-refre
-    epic: epic/40-build-delivery-seams-and-clean-target-project-prs
-    primary_parent: T-40-23
-    pr_base: ticket/T-40-23-run-one-live-round-per-runtime-on-an-in
-    jira: null
   T-40-27:
     title: A diamond child is ready only when its non-primary same-phase parents have landed in the epic
     plan: '.planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-27-PLAN.md'
@@ -3253,4 +3173,100 @@ tickets:
     epic: epic/40-build-delivery-seams-and-clean-target-project-prs
     primary_parent: T-40-18
     pr_base: ticket/T-40-18-produce-clean-executor-pr-bodies-and-con
+    jira: null
+  T-40-28:
+    title: Deliver the canonical plan to sandboxed agents and refuse graph copies
+    plan: '.planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-28-PLAN.md'
+    phase: '40'
+    repo: null
+    wave: 7
+    depends_on: [T-40-14]
+    files: [plugins/delivery-pipeline/scripts/plan-delivery.cjs, tests/unit/plan-delivery.test.cjs, plugins/delivery-pipeline/scripts/claude-delivery-host.cjs, tests/unit/claude-delivery-host.test.cjs, plugins/delivery-pipeline/scripts/codex-delivery-host.cjs, tests/unit/codex-delivery-host.test.cjs, plugins/delivery-pipeline/workflows/executors.mjs, plugins/delivery-pipeline/workflows/drift-gate.mjs, plugins/delivery-pipeline/workflows/fix-round.mjs, tests/unit/workflows-args.test.cjs]
+    risk: medium
+    human_checkpoint: false
+    preauthorized: false
+    branch: ticket/T-40-28-deliver-the-canonical-plan-to-sandboxed
+    epic: epic/40-build-delivery-seams-and-clean-target-project-prs
+    primary_parent: T-40-14
+    pr_base: ticket/T-40-14-hosts-write-a-pid-ttl-in-flight-record-a
+    jira: null
+  T-40-09:
+    title: Pass Codex child tasks by host-owned file path plus a digest the host verifies
+    plan: '.planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-09-PLAN.md'
+    phase: '40'
+    repo: null
+    wave: 8
+    depends_on: [T-40-11, T-40-07, T-40-14, T-40-28, T-39-01, T-41-04, T-42-01]
+    files: [plugins/delivery-pipeline/scripts/codex-runtime-host.cjs, tests/unit/codex-runtime-host.test.cjs, tests/fixtures/captured/codex-agent-stream-parent.jsonl, tests/fixtures/captured/codex-agent-stream-child.jsonl, tests/fixtures/captured/boundaries/codex-agent-stream.json, tests/fixtures/captured/codex-agent-stream-exec.jsonl, tests/unit/codex-decompose-host.test.cjs, tests/unit/codex-delivery-host.test.cjs]
+    risk: high
+    human_checkpoint: true
+    preauthorized: true
+    branch: ticket/T-40-09-pass-codex-child-tasks-by-host-owned-fil
+    epic: epic/40-build-delivery-seams-and-clean-target-project-prs
+    primary_parent: T-40-11
+    pr_base: ticket/T-40-11-let-the-codex-gsd-researcher-write-only
+    jira: null
+  T-40-15:
+    title: 'Add deliver-dispatch: build host requests from the graph, launch detached, and offer status and wait'
+    plan: '.planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-15-PLAN.md'
+    phase: '40'
+    repo: null
+    wave: 8
+    depends_on: [T-40-28, T-40-14, T-40-17, T-40-16]
+    files: [plugins/delivery-pipeline/scripts/deliver-dispatch.cjs, tests/unit/deliver-dispatch.test.cjs, plugins/delivery-pipeline/scripts/run-waker.cjs, tests/unit/run-waker.test.cjs]
+    risk: medium
+    human_checkpoint: false
+    preauthorized: false
+    branch: ticket/T-40-15-add-deliver-dispatch-build-host-requests
+    epic: epic/40-build-delivery-seams-and-clean-target-project-prs
+    primary_parent: T-40-28
+    pr_base: ticket/T-40-28-deliver-the-canonical-plan-to-sandboxed
+    jira: null
+  T-40-23:
+    title: Run one live round per runtime on an in-repo fixture project and gate releases on a fresh receipt
+    plan: '.planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-23-PLAN.md'
+    phase: '40'
+    repo: null
+    wave: 9
+    depends_on: [T-40-15, T-40-17]
+    files: [tests/fixtures/live-project/README.md, tests/fixtures/live-project/Makefile, tests/fixtures/live-project/src/greeting.cjs, tests/fixtures/live-project/tests/greeting.test.cjs, tests/fixtures/live-project/planning/architecture/ADR-001-greeting-formats.md, tests/live/live-round.sh, plugins/delivery-pipeline/scripts/live-receipt.cjs, tests/unit/release-gate.test.cjs, scripts/release.sh]
+    risk: high
+    human_checkpoint: true
+    preauthorized: true
+    branch: ticket/T-40-23-run-one-live-round-per-runtime-on-an-in
+    epic: epic/40-build-delivery-seams-and-clean-target-project-prs
+    primary_parent: T-40-15
+    pr_base: ticket/T-40-15-add-deliver-dispatch-build-host-requests
+    jira: null
+  T-40-24:
+    title: 'Rewrite deliver.md around the dispatch entry point, in-flight record, sentinel preflight and clean publication'
+    plan: '.planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-24-PLAN.md'
+    phase: '40'
+    repo: null
+    wave: 9
+    depends_on: [T-40-15, T-40-17, T-40-16, T-39-03, T-41-07]
+    files: [plugins/delivery-pipeline/commands/deliver.md, tests/unit/deliver-seams-contract.test.cjs]
+    risk: medium
+    human_checkpoint: false
+    preauthorized: false
+    branch: ticket/T-40-24-rewrite-deliver-md-around-the-dispatch-e
+    epic: epic/40-build-delivery-seams-and-clean-target-project-prs
+    primary_parent: T-40-15
+    pr_base: ticket/T-40-15-add-deliver-dispatch-build-host-requests
+    jira: null
+  T-40-26:
+    title: 'Expose capture, live, release, digest-refresh and dogfood commands through make and document them'
+    plan: '.planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-26-PLAN.md'
+    phase: '40'
+    repo: null
+    wave: 10
+    depends_on: [T-40-23, T-40-07, T-39-04]
+    files: [Makefile, README.md, CLAUDE.md]
+    risk: medium
+    human_checkpoint: false
+    preauthorized: false
+    branch: ticket/T-40-26-expose-capture-live-release-digest-refre
+    epic: epic/40-build-delivery-seams-and-clean-target-project-prs
+    primary_parent: T-40-23
+    pr_base: ticket/T-40-23-run-one-live-round-per-runtime-on-an-in
     jira: null

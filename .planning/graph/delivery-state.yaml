@@ -1523,12 +1523,10 @@
 "T-40-03":
   base: "epic/40-build-delivery-seams-and-clean-target-project-prs"
   base_reason: "no primary parent — a root ticket PRs into epic/40-build-delivery-seams-and-clean-target-project-prs"
-  blocked_by: ["T-41-08"]
-  blocked_reasons: {"T-41-08":"cross-phase parent must land on main first (phase 41 epic still ahead)"}
   branch: "ticket/T-40-03-match-tickets-to-prs-by-the-pr-number-re"
   epic: "epic/40-build-delivery-seams-and-clean-target-project-prs"
   pr: null
-  ready: false
+  ready: true
   reapable: false
   status: "pending"
 "T-40-04":
@@ -1583,8 +1581,8 @@
 "T-40-09":
   base: "epic/40-build-delivery-seams-and-clean-target-project-prs"
   base_reason: "T-40-11 has no branch on the remote yet (status pending) — ticket/T-40-11-let-the-codex-gsd-researcher-write-only is not a base that exists, so the base is epic/40-build-delivery-seams-and-clean-target-project-prs"
-  blocked_by: ["T-40-11","T-40-07","T-40-14","T-41-04","T-42-01"]
-  blocked_reasons: {"T-40-07":"parent has no branch yet (nothing to cascade from)","T-40-11":"parent has no branch yet (nothing to cascade from)","T-40-14":"parent has no branch yet (nothing to cascade from)","T-41-04":"cross-phase parent must land on main first (phase 41 epic still ahead)","T-42-01":"cross-phase parent must be MERGED and its phase 42 epic landed on main first (parent is pending)"}
+  blocked_by: ["T-40-11","T-40-07","T-40-14","T-40-28","T-42-01"]
+  blocked_reasons: {"T-40-07":"parent has no branch yet (nothing to cascade from)","T-40-11":"parent has no branch yet (nothing to cascade from)","T-40-14":"parent has no branch yet (nothing to cascade from)","T-40-28":"parent has no branch yet (nothing to cascade from)","T-42-01":"cross-phase parent must be MERGED and its phase 42 epic landed on main first (parent is pending)"}
   branch: "ticket/T-40-09-pass-codex-child-tasks-by-host-owned-fil"
   epic: "epic/40-build-delivery-seams-and-clean-target-project-prs"
   pr: null
@@ -1648,9 +1646,9 @@
   status: "pending"
 "T-40-15":
   base: "epic/40-build-delivery-seams-and-clean-target-project-prs"
-  base_reason: "T-40-14 has no branch on the remote yet (status pending) — ticket/T-40-14-hosts-write-a-pid-ttl-in-flight-record-a is not a base that exists, so the base is epic/40-build-delivery-seams-and-clean-target-project-prs"
-  blocked_by: ["T-40-14","T-40-17","T-40-16"]
-  blocked_reasons: {"T-40-14":"parent has no branch yet (nothing to cascade from)","T-40-16":"parent has no branch yet (nothing to cascade from)","T-40-17":"parent has no branch yet (nothing to cascade from)"}
+  base_reason: "T-40-28 has no branch on the remote yet (status pending) — ticket/T-40-28-deliver-the-canonical-plan-to-sandboxed is not a base that exists, so the base is epic/40-build-delivery-seams-and-clean-target-project-prs"
+  blocked_by: ["T-40-28","T-40-14","T-40-17","T-40-16"]
+  blocked_reasons: {"T-40-14":"parent has no branch yet (nothing to cascade from)","T-40-16":"parent has no branch yet (nothing to cascade from)","T-40-17":"parent has no branch yet (nothing to cascade from)","T-40-28":"parent has no branch yet (nothing to cascade from)"}
   branch: "ticket/T-40-15-add-deliver-dispatch-build-host-requests"
   epic: "epic/40-build-delivery-seams-and-clean-target-project-prs"
   pr: null
@@ -1660,8 +1658,8 @@
 "T-40-16":
   base: "epic/40-build-delivery-seams-and-clean-target-project-prs"
   base_reason: "T-40-01 has no branch on the remote yet (status pending) — ticket/T-40-01-make-git-creating-unit-fixtures-hermetic is not a base that exists, so the base is epic/40-build-delivery-seams-and-clean-target-project-prs"
-  blocked_by: ["T-40-01","T-41-01","T-41-09"]
-  blocked_reasons: {"T-40-01":"parent has no branch yet (nothing to cascade from)","T-41-01":"cross-phase parent must land on main first (phase 41 epic still ahead)","T-41-09":"cross-phase parent must land on main first (phase 41 epic still ahead)"}
+  blocked_by: ["T-40-01"]
+  blocked_reasons: {"T-40-01":"parent has no branch yet (nothing to cascade from)"}
   branch: "ticket/T-40-16-add-the-sentinel-preflight-that-establis"
   epic: "epic/40-build-delivery-seams-and-clean-target-project-prs"
   pr: null
@@ -1726,8 +1724,8 @@
 "T-40-22":
   base: "epic/40-build-delivery-seams-and-clean-target-project-prs"
   base_reason: "T-40-14 has no branch on the remote yet (status pending) — ticket/T-40-14-hosts-write-a-pid-ttl-in-flight-record-a is not a base that exists, so the base is epic/40-build-delivery-seams-and-clean-target-project-prs"
-  blocked_by: ["T-40-21","T-40-16","T-40-14","T-40-19","T-41-01","T-41-09"]
-  blocked_reasons: {"T-40-14":"parent has no branch yet (nothing to cascade from)","T-40-16":"parent has no branch yet (nothing to cascade from)","T-40-19":"parent has no branch yet (nothing to cascade from)","T-40-21":"parent has no branch yet (nothing to cascade from)","T-41-01":"cross-phase parent must land on main first (phase 41 epic still ahead)","T-41-09":"cross-phase parent must land on main first (phase 41 epic still ahead)"}
+  blocked_by: ["T-40-21","T-40-16","T-40-14","T-40-19"]
+  blocked_reasons: {"T-40-14":"parent has no branch yet (nothing to cascade from)","T-40-16":"parent has no branch yet (nothing to cascade from)","T-40-19":"parent has no branch yet (nothing to cascade from)","T-40-21":"parent has no branch yet (nothing to cascade from)"}
   branch: "ticket/T-40-22-stamp-every-dispatch-with-a-provenance-s"
   epic: "epic/40-build-delivery-seams-and-clean-target-project-prs"
   pr: null
@@ -1748,8 +1746,8 @@
 "T-40-24":
   base: "epic/40-build-delivery-seams-and-clean-target-project-prs"
   base_reason: "T-40-15 has no branch on the remote yet (status pending) — ticket/T-40-15-add-deliver-dispatch-build-host-requests is not a base that exists, so the base is epic/40-build-delivery-seams-and-clean-target-project-prs"
-  blocked_by: ["T-40-15","T-40-17","T-40-16","T-41-07"]
-  blocked_reasons: {"T-40-15":"parent has no branch yet (nothing to cascade from)","T-40-16":"parent has no branch yet (nothing to cascade from)","T-40-17":"parent has no branch yet (nothing to cascade from)","T-41-07":"cross-phase parent must land on main first (phase 41 epic still ahead)"}
+  blocked_by: ["T-40-15","T-40-17","T-40-16"]
+  blocked_reasons: {"T-40-15":"parent has no branch yet (nothing to cascade from)","T-40-16":"parent has no branch yet (nothing to cascade from)","T-40-17":"parent has no branch yet (nothing to cascade from)"}
   branch: "ticket/T-40-24-rewrite-deliver-md-around-the-dispatch-e"
   epic: "epic/40-build-delivery-seams-and-clean-target-project-prs"
   pr: null
@@ -1784,6 +1782,17 @@
   blocked_by: ["T-40-18","T-42-01"]
   blocked_reasons: {"T-40-18":"parent has no branch yet (nothing to cascade from)","T-42-01":"cross-phase parent must be MERGED and its phase 42 epic landed on main first (parent is pending)"}
   branch: "ticket/T-40-27-a-diamond-child-is-ready-only-when-its-n"
+  epic: "epic/40-build-delivery-seams-and-clean-target-project-prs"
+  pr: null
+  ready: false
+  reapable: false
+  status: "pending"
+"T-40-28":
+  base: "epic/40-build-delivery-seams-and-clean-target-project-prs"
+  base_reason: "T-40-14 has no branch on the remote yet (status pending) — ticket/T-40-14-hosts-write-a-pid-ttl-in-flight-record-a is not a base that exists, so the base is epic/40-build-delivery-seams-and-clean-target-project-prs"
+  blocked_by: ["T-40-14"]
+  blocked_reasons: {"T-40-14":"parent has no branch yet (nothing to cascade from)"}
+  branch: "ticket/T-40-28-deliver-the-canonical-plan-to-sandboxed"
   epic: "epic/40-build-delivery-seams-and-clean-target-project-prs"
   pr: null
   ready: false
