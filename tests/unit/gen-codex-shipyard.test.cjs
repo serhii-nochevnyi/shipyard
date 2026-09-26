@@ -852,6 +852,10 @@ test('a phase downgrade removes only previously owned phase-specific skills', ()
 
 test('the installer bootstraps GSD before rejecting a missing converter/tools install', () => {
   withFixture({}, (f) => {
+    write(f.codexFile, '#!/bin/sh\ncase "$*" in\n' +
+      '"plugin marketplace list --json") echo \'{"marketplaces":[{"name":"gsd-core"}]}\' ;;\n' +
+      '"plugin list --json") echo \'{"installed":[{"pluginId":"gsd-core@gsd-core","version":"1.13.0","enabled":true}]}\' ;;\n' +
+      '*) exit 99 ;;\nesac\n');
     fs.rmSync(f.converter);
     const bootstrap = path.join(f.dir, 'bootstrap-gsd.cjs');
     write(bootstrap, [

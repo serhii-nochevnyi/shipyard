@@ -33,7 +33,7 @@ done
 
 for cmd in route investigate decompose deliver bench; do
   grep -q "/shipyard:$cmd" README.md || fail "README misses /shipyard:$cmd"
-  grep -q "\$shipyard-$cmd" README.md || fail "README misses \$shipyard-$cmd"
+  grep -q "\$shipyard:shipyard-$cmd" README.md || fail "README misses marketplace skill shipyard-$cmd"
 done
 
 node - <<'NODE'

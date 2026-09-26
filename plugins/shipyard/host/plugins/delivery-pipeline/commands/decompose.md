@@ -1,0 +1,632 @@
+---
+name: decompose
+description: "Decomposition (loop 2): ADR → GSD plan-tickets with dependencies → valid graph (Gate 2), then export to Jira. Finds undecomposed ADRs on its own. Use when the user explicitly wants an accepted design/ADR broken into tickets — it creates tickets, so invoke it deliberately, not from idle discussion."
+argument-hint: "[phase number — optional]"
+allowed-tools:
+  - Read
+  - Write
+  - Edit
+  - Bash
+  - Grep
+  - Glob
+  - AskUserQuestion
+  - Skill
+---
+
+# /shipyard:decompose
+
+You run loop 2: turning accepted architecture into tickets with an explicit DAG.
+A ticket = a GSD plan + a `delivery:` block in the frontmatter. Dependencies live in
+the plans' frontmatter; `graph/tickets.json` is the generated machine view every
+script consumes, and `graph/tickets.yaml` the same data rendered for humans. Both
+are generated — never hand-edited.
+
+> **Communication language.** These instructions and every artifact you produce
+> (PLAN files, frontmatter, branch names, the graph) are in English. But when you
+> talk to the *user* — AskUserQuestion prompts, the ticket-summary for approval,
+> progress notes — reply in the user's language (match the language they write to
+> you). English is for the pipeline; the user's language is for the conversation.
+
+**The SINGLE source of truth is the files `.planning/phases/<N>-*/<N>-<M>-PLAN.md`.**
+Jira/GitHub issues, ROLLOUT.md, chat lists are NOT conveyor tickets — at most they are
+export projections. Decomposition without materialized PLAN files does not
+exist: /shipyard:deliver reads only those. Declaring Gate 2 passed on the
+basis of any other artifacts is FORBIDDEN — Gate 2 is exclusively
+exit 0 from validate-graph.cjs.
+
+## Runtime and host selection
+
+Run `node ${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-config.cjs resolve --json` and
+take the active runtime from `config.gsd.runtime`; it must be exactly `claude`
+or `codex`. Keep it fixed for the complete GSD chain. Claude uses
+`${CLAUDE_PLUGIN_ROOT}/scripts/claude-decompose-host.cjs --request-file
+<json>`. Codex uses
+`${CLAUDE_PLUGIN_ROOT}/scripts/codex-decompose-host.cjs --args-file <json>`.
+Each host request carries one exact typed role (`gsd-phase-researcher`,
+`gsd-planner`, or `gsd-plan-checker`), declared signals, and scoped prompt
+data. Host request fields differ by runtime. The host resolves model and effort,
+generates or validates the dispatch id, builds `createDispatchBoundary`, calls
+`boundary.dispatch`, and proves the exact GSD agent in its durable receipt. Do
+not pass caller-selected model/effort fields or invoke GSD callbacks outside
+that host.
+
+Use `run-rollout.cjs status --json` to read the selected provider's controller
+status at `runtimes.<runtime>.launches_enabled`. This flag gates autonomous
+controller launches; it does not disable a command-issued decomposition.
+Controller opt-in does not change host selection. An unavailable or refused
+host cannot switch to the other provider; stop its launch before planning
+output is accepted.
+
+## Step 0 — Find the input
+
+1. Read `.planning/architecture/` — the list of `ADR-*.md`.
+2. Determine which ADRs are not yet decomposed: check ROADMAP.md and the existing
+   `phases/*/`*-PLAN.md for mentions of ADRs. If ambiguous — ask.
+3. No ADR at all → say to run `/shipyard:investigate` first, and stop.
+4. Multiple candidates → AskUserQuestion: which ADR (or several into one phase).
+5. Bootstrap a missing GSD project from the accepted ADR: when
+   `.planning/config.json`, `.planning/ROADMAP.md` or
+   `.planning/REQUIREMENTS.md` is missing, run `node
+   ${CLAUDE_PLUGIN_ROOT}/scripts/adr-bootstrap.cjs --adr <accepted ADR>
+   [--phase <N>] --json` from the project root; it creates only missing
+   files. Exit 1 means the ADR has no decisions — relay the message to the
+   user and stop. Requirements come from the bootstrap report, never
+   invented. `gsd-tune --apply` (Step 0.5) is allowed only for a
+   `config.json` this run's bootstrap created; otherwise Step 0.5 stays "do
+   not apply tuning automatically".
+6. Warn once on untracked planning, and never block: run `git ls-files
+   --error-unmatch .planning >/dev/null 2>&1`; if `.planning/` is not
+   tracked, tell the user once — delivery worktrees are created from git, so
+   they will not contain the PLAN files or graph, and the conveyor falls
+   back to `graph-dir.cjs` resolution. Remedy: commit `.planning/`, or keep
+   it untracked deliberately and pass the graph dir explicitly.
+
+## Step 0.5 — Mandatory GSD runtime dispatch
+
+Every GSD launch made by this command crosses the ADR-014 dispatch boundary.
+The selected executable host, not `.planning/config.json`, a model profile, or
+an inherited session, is the authority for runtime, model, effort, escalation,
+and receipt. The command invokes that host for each named role; the following
+boundary contract describes what the host enforces.
+
+1. Identify the active host runtime. It MUST be exactly `codex` or `claude` and
+   MUST be saved as `runtime` and passed explicitly to every later preflight
+   and host selection. A project preference, an installed integration, or an
+   ambiguous host is not runtime selection.
+2. With `runtime` fixed, preflight the project-relative delivery contract. Run
+   `node ${CLAUDE_PLUGIN_ROOT}/scripts/gsd-tune.cjs --check --runtime "$runtime"`
+   and inspect the report by category. Tuning drift is harmless and MUST NOT
+   block decomposition; required delivery-contract or projection failures and
+   every entry in the report's `blockers` array do block. A required failure
+   includes the conveyor setting, or a missing, stale, foreign, or unreadable
+   `.shipyard/generated/gsd-delivery-rules/SKILL.md` projection needed by the
+   planner and executor. A blocker is a non-remediable runtime/model floor or
+   equivalent REQUIRED refusal, so it must stop the chain until the runtime is
+   made capable. A hard preflight refusal is still fail-closed. Do not apply
+   tuning automatically, and do not treat the aggregate non-zero status caused
+   only by tuning drift as a block. The
+   explicit `--runtime "$runtime"` keeps a dual-runtime host from checking the
+   wrong install or reporting ambiguity; this preflight does not replace a
+   dispatch receipt.
+3. The selected host uses `createDispatchBoundary` from `dispatch-boundary.cjs` with
+   `requireGsdRole: true`, the matching `createCodexDispatchAdapter` or
+   `createClaudeDispatchAdapter`, and a `createDurableRecorder`. The adapter
+   must advertise the selected model and effort pair. If the adapter,
+   capabilities, recorder, or typed GSD launch hook is unavailable, refuse
+   before launching.
+4. Before every researcher, planner, or checker launch, the host loads the
+   authoritative routed configuration and resolves that role through
+   `pipelineConfig.resolveDispatch({ root, runtime, role, signals, dispatch_id })`.
+   This is mandatory even when the project has no overrides. The host keeps the
+   complete resolution and passes its selected `model` and `effort` to the
+   boundary. Any malformed, stale, ambiguous, or conflicting project/GSD
+   override is refused before launch; do not inspect compatibility settings or
+   continue with the canonical default.
+5. The host uses the canonical boundary call for each role, including its exact
+   typed GSD role:
+   `boundary.dispatch({ runtime, role, gsd_role, signals, dispatch_id,
+   model: resolution.model, effort: resolution.effort }, context)`.
+   Use `gsd-phase-researcher` for `research`, `gsd-planner` for the planner,
+   and `gsd-plan-checker` for the checker. With `requireGsdRole: true`, a
+   missing or mismatched typed role is refused before any host launch.
+   The boundary resolves and validates the canonical policy, invokes the
+   runtime adapter, verifies application evidence, and records the receipt.
+   Do not resolve a model and then launch it through another path.
+6. On a non-zero exit from any of these three host launches, read its
+   `hint[<CODE>]` stderr line and explain the hint and its remedy to the
+   user in the user's language; never propose bypassing the host or
+   switching runtime because of it.
+
+The GSD role mapping is fixed, explicit, and runtime-specific. Each runtime
+keeps its own native model ladder; never pass a logical model name from one
+ladder into the other.
+
+**Codex runtime — logical model ladder**
+
+| GSD launch | Boundary role | Base selection | Escalation selections | Declared escalation signals |
+| --- | --- | --- | --- | --- |
+| `gsd-phase-researcher` | `research` | Sol/high | Sol/xhigh | `complexity: very-complex` |
+| `gsd-planner` | `decomposition` | Sol/high | Sol/xhigh | `critical: true` or `checkpoint: true` |
+| `gsd-plan-checker` | `decomposition` | Sol/high | Sol/xhigh | `critical: true` or `checkpoint: true` |
+
+**Claude runtime — Anthropic alias ladder**
+
+| GSD launch | Boundary role | Base selection | Escalation selections | Declared escalation signals |
+| --- | --- | --- | --- | --- |
+| `gsd-phase-researcher` | `research` | opus/medium | opus/high | `complexity: very-complex` |
+| `gsd-planner` | `decomposition` | opus/medium | opus/high | `critical: true` or `checkpoint: true` |
+| `gsd-plan-checker` | `decomposition` | opus/medium | opus/high | `critical: true` or `checkpoint: true` |
+
+On the Codex ladder, research and decomposition start at Sol/high. Research
+may escalate to Sol/xhigh only for `complexity: very-complex`; `type:
+alternatives` is inert. Decomposition may escalate to Sol/xhigh only for
+the declared critical or checkpoint signal. On the Claude alias ladder,
+research starts at opus/medium and escalates to opus/high only for the declared
+`complexity: very-complex` signal; `type: alternatives` is inert. Decomposition
+starts at opus/medium and escalates to opus/high under the declared critical or
+checkpoint signal. If both declared signals are present, let the canonical
+policy choose the highest applicable rung and retain the signal evidence.
+Pass signals as policy inputs; never compose a model, effort, alias, or literal
+fallback in this command.
+
+For the Claude alias ladder, `opus/high` is the ADR-014 policy result for these
+research and decomposition escalations. Fable is not a valid rung for either
+role. The routed `pipeline-config.cjs` `resolveDispatch` bridge must validate the
+explicit runtime, the canonical role, and the declared signals before launch.
+If that bridge or the durable recorder is unavailable, refuse before launch; do
+not use the compatibility `model` reader, bypass the boundary, or invent an
+Opus/Fable fallback here.
+The `pipeline.fable: auto` consent remains relevant only to canonical roles that
+actually expose a Fable ceiling, such as the measured-window architecture
+review; it cannot add a rung to research or decomposition.
+
+Runtime-specific launch handling is also fixed:
+
+- Static Codex roles use the boundary's validated `agent_file` and immutable
+  handoff through `launchStatic`. Codex `decomposition` is dynamic: its
+  `agent_file` is null, so the boundary passes
+  `resolution.launch_arguments.model` and `reasoning_effort` to the typed GSD
+  host callback. The workflow-native alias runtime is dynamic for this role as
+  well and passes the native `model` and `effort` pair. Never send a dynamic
+  decomposition selection through `launchStatic`, translate a native alias into
+  a logical model id, or invent a selection here.
+
+The `/gsd-plan-phase` Skill is only a coordinator for these callbacks. Wire its
+`gsd-phase-researcher`, `gsd-planner`, and `gsd-plan-checker` launches to the
+boundary map above; an opaque Skill invocation that spawns them outside the
+boundary is unavailable and MUST be refused. The typed host callback MUST carry
+the exact `gsd-phase-researcher`, `gsd-planner`, or `gsd-plan-checker` name and
+its application evidence MUST attest that same named role before the boundary
+receipt is accepted. If the adapter cannot enforce that attestation, treat the
+callback as unavailable. The callback may run the named GSD role, but it must
+not replace it with a `generic-agent`, a bare Agent/Task launch, or a direct
+inline call. It must not inherit a model, effort, runtime, or session selection.
+
+The runtime adapters and the Workflow host enforce this contract. Codex routes
+through the host-owned `launchTypedGsd` method; Claude routes through the
+host-owned `typedGsdCallback`. Both methods receive the exact `gsd_role`, and
+their host application evidence must attest that same role together with
+`gsd_launch_mechanism: "typed-gsd-callback"` before the boundary receipt is
+accepted. If either typed method or the durable recorder is unavailable, the
+boundary refuses before launch. If the callback returns missing or mismatched
+application evidence, the boundary rejects that launch after it returns; it
+does not fall back to a generic launch. `context.gsd_role`, `agentType`,
+`agent_type`, bare Agent/Task markers, and self-asserted application evidence
+are not attestation; source-contract fixtures exercise the missing and
+mismatched cases as well as the successful typed path.
+
+The production entrypoints are `claude-decompose-host.cjs` and
+`codex-decompose-host.cjs`. They provide the typed runtime callback and refuse
+before accepting a plan without a verified boundary receipt. Do not call an
+ordinary `agent()` function or invoke an unbound native Workflow.
+
+Treat a dispatch as successful only when the returned record contains a
+boundary-verified receipt (`receipt.compliance` is `verified`) and the durable
+recorder has acknowledged the record. Retain the dispatch id, receipt, and
+trace as decomposition evidence for the corresponding researcher, planner, or
+checker launch. Host exit status or self-asserted application evidence alone
+is not a receipt. Missing or failed evidence is a refusal, not a fallback.
+
+Planning callbacks also have a bounded handback contract. Every researcher,
+planner, and checker receives the authenticated source revision, repository
+identity, policy hash, and a host-owned artifact destination. The callback may
+return only a bounded summary and a reference; it must not return a complete
+research draft, `CONTEXT.md`, or any `PLAN.md` inline. The trusted consumer
+seals `shipyard.role-artifact.v1` with one of these envelopes:
+
+| callback | envelope | authenticated subject | complete files that must remain on disk |
+| --- | --- | --- | --- |
+| `gsd-phase-researcher` | `shipyard.research-result.v1` | `<INV-ID>:<line-id>` | the complete line artifact |
+| `gsd-planner` / `gsd-plan-checker` | `shipyard.decomposition-result.v1` | `phase=<phase>;repository=<repo>;adr=<ADR digest>` | `CONTEXT.md` and every materialized `PLAN.md` |
+
+The decomposition envelope must carry a bounded `artifact_index` reference.
+That index lists the exact relative paths, byte counts, and SHA-256 digests of
+`CONTEXT.md` and every `PLAN.md`. The trusted consumer checks containment,
+source revision, phase/repository/ADR identity, and every listed digest before
+Gate 2. A success message without those materialized files, a wrong phase or
+ADR digest, a stale or altered plan, a missing receipt, or a forged application
+receipt is a hard refusal. Artifact validity never replaces the real
+`validate-graph.cjs` gate; it is evidence that the gate consumed the intended
+planning output.
+
+The routed configuration bridge above is required before every callback, not
+only when a caller happens to notice configuration. It performs canonical
+preflight and selection validation with the explicit active runtime. Its
+compatibility tier/model readers, GSD `models` or `model_overrides`,
+`model_profile`, and session defaults cannot select or authorize a launch, and
+they cannot replace the boundary receipt. If the bridge is unavailable or
+refuses a configuration conflict, stop before launching; there is no
+configuration-free fallback.
+
+## Step 1 — Clarify the mode and the ticket size
+
+One question (AskUserQuestion), with a recommendation based on the type of work:
+- `--tdd` — when the work is well testable at the unit level (recommend for
+  backend logic);
+- `--mvp` — vertical slices UI→API→DB (recommend for new features with UI);
+- no flags — standard planning.
+
+**Ticket size is `granularity`, not a flag.** GSD's top-level `granularity`
+controls how many tasks the planner emits per phase — `coarse` 2–4, `standard`
+4–6 (default), `fine` 6–10 — which is exactly the knob that decides how big a
+ticket gets. Check it, and propose changing it when the ADR's shape argues for it:
+`fine` for risky work you want reviewed in small PRs, `coarse` when the phase is a
+handful of large, cohesive units. Say which value you are planning under so the
+resulting ticket count is not a surprise.
+
+(If the input is a PRD or an acceptance-criteria document rather than an ADR,
+`/gsd-plan-phase --prd <path>` parses it into CONTEXT.md the same way `--ingest`
+parses ADRs.)
+
+## Step 2 — GSD chain
+
+Before invoking GSD, complete Step 0.5 and keep one durable boundary recorder
+for the chain. The invocation below is one coordinated operation: phase and GSD
+context first, then one callback set, then materialization verification.
+
+1. Pick the phase number: the next free one (or the user's argument), and
+   gather the selected ADR path(s) and the mode/granularity chosen in Step 1.
+2. Normalize every selected ADR before invoking GSD:
+   `mkdir -p .planning/.adr-ingest && node ${CLAUDE_PLUGIN_ROOT}/scripts/adr-ingest.cjs
+   --input <adr-path> [--input <another-adr-path>] --output-dir .planning/.adr-ingest --json`.
+   Repeat `--input` in the same invocation for multiple ADRs; the staging directory
+   is refreshed before the command writes its outputs. The command converts nested
+   `###` decision/consequence/scope sections into parser-compatible lists and exits
+   non-zero when an ADR has no decisions. Stop on that error; do not pass the raw ADR
+   to GSD.
+3. Gather/invoke the GSD context by running
+   `/gsd-plan-phase <N> --ingest .planning/.adr-ingest/*.ingest.md [--skip-ui] [--tdd|--mvp]` only through the
+   Skill. Add `--skip-ui` only when every selected ADR's header carries the
+   line `- **UI design:** none` (case-insensitive on `none`); when any
+   selected ADR lacks that line, invoke exactly as before, with no
+   `--skip-ui`. The Skill must first establish one explicit context carrying phase
+   `<N>`, the ADR path(s), mode, granularity, and relevant reads; no callback is
+   eligible before that context is fixed. If GSD, the Skill, callback wiring,
+   or the durable recorder is unavailable, refuse before launching or making
+   any callback; do not prompt the user to run an external command and do not
+   run the Skill opaquely.
+   Build the callback context with
+   `${CLAUDE_PLUGIN_ROOT}/scripts/context-packet.cjs` before the first typed
+   launch. The decomposition packet uses the resolved project root and source
+   revision, role `decomposition`, subject
+   `phase=<N>;repository=<repo>;adr=<ADR digest>`, the ADR-014 policy object and
+   `policy_hash`, complete ADR/requirements/research/context references, and
+   `roleContext: { adr_refs, requirements, research_refs, context }`. Select
+   backlog items through `backlog-index.cjs`, carry their source hashes and
+   `whySelected` metadata, and set `contextPacketRequired: true`. Researcher,
+   planner and checker callbacks receive the packet in their boundary context;
+   their prompts fence it as DATA. A missing requested item, stale verification,
+   altered reference, symlink escape or forged model/capability/callback field
+   refuses the callback before reservation. The packet keeps the full ADR,
+   requirements and mandatory GSD policy even when the estimated UTF-8/4 size
+   exceeds 12,000 tokens, recording overflow and indexed optional references.
+4. With that context fixed, invoke the selected host exactly three times, once
+   for each typed GSD role, in this order:
+   - `gsd-phase-researcher` → `role: research`, with only the declared research
+     signals.
+   - `gsd-planner` → `role: decomposition`, with only the declared
+     critical/checkpoint signals.
+   - `gsd-plan-checker` → `role: decomposition`, with only the declared
+     critical/checkpoint signals.
+
+   Each host request receives the same explicit context, its typed role, the
+   declared signals, and the planning artifact contract above. The host resolves
+   the model and effort and binds them to its dispatch id. Each call must return
+   one acknowledged, verified durable receipt and one bounded, receipt-bound
+   artifact reference. The set is exactly three host dispatches and three
+   verified receipts, one per typed role. Never collapse these roles into one
+   inline prompt or launch a generic agent when a host refuses.
+5. **Verify materialization**: inspect the trusted artifact index, then run
+   `ls .planning/phases/<N>-*/*-PLAN.md` and verify the listed `CONTEXT.md` plus
+   every `PLAN.md` still matches its sealed digest. The files MUST exist, and
+   the three receipts from item 3 must be present and verified. If the GSD
+   chain is unavailable, any receipt is missing or failed, the phase/ADR
+   identity is wrong, or the files were not created or were altered — stop with
+   a BLOCK. Do NOT substitute Jira tickets for them and do NOT create PLAN.md
+   files yourself; there is no receipt-bound decomposition fallback.
+
+   ```markdown
+   ---
+   # wave: 1 + max(wave of dependencies); no dependencies = 1. The graph is
+   # authoritative — validate-graph recomputes the depth and warns on a mismatch.
+   # requirements: REQUIRED. Requirement ids from ROADMAP.md; an empty array is a
+   # BLOCKER in both the GSD plan-checker and Gate 2. Importing from a tracker with
+   # no ROADMAP requirements — add a REQ entry to ROADMAP, or use the tracker id.
+   phase: <NN>
+   plan: <MM>
+   title: "<ticket title>"
+   type: implementation
+   wave: <N>
+   depends_on: [<T-...>]
+   files_modified: [<globs>]
+   requirements: [<REQ-ids>]
+   delivery:
+     ticket: T-<NN>-<MM>
+     risk: low|medium|high
+     human_checkpoint: false
+     # repo: owner/name  ← REQUIRED when the files live in another repository
+   ---
+   ## Goal / ## Context (Reads) / ## Scope / ## Out of scope /
+   ## Acceptance criteria / ## Test strategy / ## Verification commands
+   ```
+
+   **Verification commands are scoped to `files_modified`** (delivery-rules §6):
+   the specific test files/filters plus typecheck and lint over the touched
+   paths, runnable in a bare worktree with no external services. Never a bare
+   `npm test` / `make test` / the whole e2e suite — the executor runs these on
+   every attempt and the fix roles on every round, so an unscoped command sets
+   the tick rate of the entire conveyor. A check that genuinely needs a live
+   service belongs under Test strategy as CI-only, not here.
+
+   **Comments go on their own line, never after a value.** A trailing `# note` on
+   `files_modified`/`requirements` is rejected by Gate 2: it is almost always a
+   comment that leaked into the value, and a corrupted path silently disables the
+   file-overlap guarantee for that entry.
+5. Convergence belongs to the single checker path from item 3. That callback
+   may perform `/gsd-plan-review-convergence <N> --all --max-cycles 3` as
+   internal work, and its result must be covered by the same checker receipt;
+   it MUST NOT dispatch or record a second `gsd-plan-checker`. If the callback
+   cannot own convergence, use a deterministic local check that launches no
+   agent and creates no receipt. Either path leaves exactly three typed
+   callbacks, exactly three verified receipts, and the materialized PLAN set
+   above. If neither path is available, stop with a BLOCK. Never invoke an
+   opaque Skill, skip convergence as a tuning choice, or synthesize a
+   convergence result without evidence.
+
+## Step 3 — Delivery frontmatter extension
+
+For EACH generated `phases/<N>-*/**-PLAN.md`, add to the frontmatter:
+
+```yaml
+delivery:
+  ticket: T-<phase>-<plan>          # e.g. T-01-02
+  branch: ticket/T-<phase>-<plan>-<slug-from-title>   # can be omitted — validate-graph will generate it
+  risk: low|medium|high             # assess from the plan content
+  human_checkpoint: true|false      # true is MANDATORY if risk: high
+  # preauthorized: true|false       # do NOT set by hand — Step 4.3 writes it
+  repo: owner/name                  # ONLY if the ticket's files live in ANOTHER repository
+  # jira: <KEY>                     # do NOT set by hand — Step 5 writes it back after export
+```
+
+**`preauthorized` is a record of a decision, not a setting.** It says a person
+looked at THIS ticket while approving the set and accepted its risk in advance,
+so the merge no longer has to wake anyone. Only Step 4.3 writes it, and only onto
+a ticket that already carries `human_checkpoint: true` — authorizing a stop that
+does not exist is a planning mistake, and Gate 2 rejects it. Absent means `false`:
+nothing is pre-authorized by default. Never set it while writing a plan to make
+your own phase run unattended; a later reader must be able to read it as a
+person's signature and nothing else.
+
+**Multi-repo phases: `repo` is not optional.** If a ticket's files belong to a
+sibling repository (a frontend monorepo, an editor package), declare
+`delivery.repo: owner/name` and write `files_modified` **relative to that repo**.
+Two failure modes this closes, both observed in production:
+- no `repo` → the conveyor watches the wrong repository: the PR merges next door,
+  the board keeps saying `pending`, and every dependent is blocked behind a ticket
+  that can never move;
+- `../other-repo/src/x.ts` paths → an executor works in a `git worktree` and cannot
+  reach them at all; the ticket is a permanent no-op (Gate 2 warns, state-sync
+  parks it).
+Also prefer NOT to make a ticket depend across repos: branches do not cascade
+between repositories, so the child waits for a MERGE. Slice the contract (types,
+tool names, event shapes) into its own small ticket so both sides can proceed.
+
+**Branch naming**: the branch is the ticket title after sanitization:
+lowercase, Cyrillic is transliterated, ALL characters except letters and digits
+(spaces, `: , ( ) / ' " …`) are replaced with a single hyphen, edge hyphens
+are trimmed, slug length ≤ 40. Example: the title `Add API endpoint (v2): auth`
+→ `ticket/T-02-01-add-api-endpoint-v2-auth`. Do NOT invent the format yourself —
+the simplest option is to not fill in `branch` at all: `validate-graph` will generate the
+canonical name from the title, and an explicitly provided one it will validate.
+
+Make sure `files_modified` and `requirements` are filled in every plan —
+empty ones fail Gate 2 (an error, not a warning): without `files_modified` there is
+neither a guarantee that "independent tickets do not conflict" nor an executor scope. `depends_on`
+being empty is legal only for the root ticket. If the planner left the fields
+empty — fill them from the plan content.
+
+**`depends_on` is the backbone of the cascade, not just ordering.** In delivery (epic-stacked)
+dependencies determine where a PR is directed: the root ticket (empty
+`depends_on`) → PR into the phase epic branch; a dependent one → cascaded PR into the branch of the
+primary parent (the deepest dependency of the same phase), WITHOUT waiting for merge. So
+set dependencies deliberately and precisely: an extra dependency needlessly serializes the flow,
+a missing one gives the executor an incomplete base. `validate-graph` will itself compute the epic
+(`epic/<phase-dir>`), the primary parent, and `pr_base`; multiple dependencies of the same
+phase (diamond) it will flag as a warning — linearize the chain where possible.
+
+**Ordering without a code dependency is not a `depends_on`.** Linearize only
+if the child needs every parent's code at once — a sequencing preference
+alone is not a reason to add the edge. `validate-graph.cjs` warns when a
+same-phase dependency "shares no files_modified" with its parent; read that
+warning as a prompt to re-check the edge, not as a Gate 2 error, since a real
+import dependency (the child's code importing something the parent
+introduces) legitimately shares no files and may still trigger it correctly.
+
+## Step 4 — Gate 2
+
+Gate 2 is a MECHANICAL check, not a judgment. It passes if and only if
+`validate-graph.cjs` finished with exit 0 and `.planning/graph/tickets.json` is
+freshly written. Do not report decomposition success without this.
+
+1. `node ${CLAUDE_PLUGIN_ROOT}/scripts/validate-graph.cjs`
+2. Errors (cycle, file conflict, empty files_modified/requirements,
+   high-risk without checkpoint) → fix the frontmatter/slicing and retry. A file
+   conflict is more honestly resolved by a dependency or re-slicing than by extending
+   files_modified.
+3. OK → show the user a summary for approval:
+   - the phase epic branch (`tickets.json.epics`) — where the whole phase integrates;
+   - a table of tickets: id / title / wave / depends_on / pr_base (epic or parent
+     branch) / risk;
+   - who is high-risk and will wait for a human;
+   - how many waves and what will run in parallel; any diamond warnings of the graph.
+
+   **Then ask which risk classes are pre-authorized.** Every "approve this merge?"
+   that arrives at 3am is a decision that could have been made right here, with
+   the table already in front of the reader. Ask by CLASS, one question
+   (AskUserQuestion, in the user's language), naming the tickets it covers —
+   "medium-risk: T-03, T-07 — pre-authorize their merges?". Ask only about classes
+   that actually contain tickets with `human_checkpoint: true`: a ticket that
+   would never stop has nothing to authorize, so asking about it is a question
+   with no consequence.
+
+   Say plainly what a yes changes. Those tickets stop waiting for a person: the
+   guard merges them itself once they clear every other merge gate, and their
+   children cascade behind them instead of sitting behind an open checkpoint. It
+   does NOT reach the phase epic's own merge into the integration branch — that
+   boundary is never crossed unattended, whatever is pre-authorized underneath it.
+   A no changes nothing at all: those tickets reach green, they wait, and the
+   morning front offers them.
+
+   **Record per ticket, never by class.** For each ticket in an approved class,
+   write `delivery.preauthorized: true` into ITS plan frontmatter, then re-run
+   `validate-graph.cjs` so `tickets.json` carries the field — the same write-back
+   pattern Step 5 uses for `delivery.jira`. The plan file is the source of truth
+   and the thing that survives the session; a class recorded only in config could
+   never say which ticket a person actually looked at. If the set then changes
+   (Step 4.4), ask again after the re-slice: a flag written against a ticket that
+   has since been split or renumbered records an approval of something nobody saw.
+
+   **The default is no pre-authorization.** A declined class, a skipped question,
+   an unanswered one — each leaves the frontmatter untouched, requires no
+   re-validation, and leaves the conveyor behaving exactly as it does today.
+   Silence is not consent.
+4. The user wants changes ("split T-03 into two") → targeted edit of the plans →
+   back to Step 4.1.
+5. Approval → proceed to Step 5 (Jira export), then state the next step:
+   `/shipyard:deliver` (can be right away or a week later — deliver will do a
+   cold start itself).
+
+## Step 5 — Export tickets to Jira (English)
+
+After Gate 2 passes AND the user approves the set, project the validated graph
+into Jira. This is a **projection, not the source of truth** (§5.35): PLAN files
+remain canonical, deliver never reads Jira, and Gate 2 never depends on it.
+**All Jira content — epic and issue summaries, descriptions, comments — is
+written in ENGLISH**, regardless of the conversation language (it is a shipped
+artifact, per delivery-rules).
+
+**Export is automatic — no hand-written config required.** Run it by default on
+every decomposition, resolving everything yourself. It is skipped ONLY when:
+- `.planning/config.json` → `pipeline.jira.enabled` is explicitly `false`, OR
+- no Jira/Atlassian MCP is connected at runtime (nothing to export to).
+In both cases skip with a one-line note. A Jira error never blocks or fails
+decomposition (Gate 2 already passed) — report it and continue.
+
+**Auto-resolve the project (once per repo, then persisted).** Config is a CACHE
+you fill in, not a precondition the user must author. Resolution order:
+1. `.planning/config.json` → `pipeline.jira.project` if already set → use it.
+2. Else infer from the repo: scan recent PR titles, branch names, and any prior
+   `delivery.jira` keys for a dominant `[A-Z]+-\d+` project prefix (e.g. `MYD`);
+   a single clear winner → use it.
+3. Else `getVisibleJiraProjects`: exactly one visible → use it; several →
+   AskUserQuestion ONCE (in the user's language) to pick.
+4. **Persist** the resolved `{ enabled: true, project, issue_type, epic_issue_type }`
+   back into `.planning/config.json` → `pipeline.jira` (merge, don't clobber other
+   keys) so every later run is non-interactive.
+Defaults when unset: `issue_type: "Task"`, `epic_issue_type: "Epic"` — but first
+confirm the type exists via project issue-type metadata
+(`getJiraProjectIssueTypesMetadata`); if the project has no Epic type, skip epics
+and fall back to a `Task` (or the project's default) issue type rather than failing.
+
+The `pipeline.jira` block, once persisted, looks like:
+
+```json
+{
+  "pipeline": {
+    "jira": {
+      "enabled": true,
+      "project": "MYD",              // auto-resolved & cached; edit to override
+      "issue_type": "Task",
+      "epic_issue_type": "Epic"      // set null to skip per-phase epics
+    }
+  }
+}
+```
+
+**Tooling.** Use whatever Jira/Atlassian MCP is connected at runtime (e.g.
+Atlassian Rovo: `getVisibleJiraProjects`, `getJiraProjectIssueTypesMetadata`,
+`searchJiraIssuesUsingJql`, `createJiraIssue`, `editJiraIssue`, `createIssueLink`,
+`getIssueLinkTypes`). No Jira MCP available → skip with a note; do not hand-roll
+REST calls.
+
+**Identity is namespaced by repository.** Ticket ids restart at `T-01-01` in
+every repository, so two repositories exporting to the same Jira project must
+never find-and-update each other's issue. Derive `<owner>` and `<repo>` once
+per run from `gh repo view --json nameWithOwner --jq .nameWithOwner` (a raw
+`owner/repo` string, not the JSON object `--json` alone would return); split
+it on `/`, lowercase each half, sanitize to label-safe characters, and pass
+them as `--repo <owner>/<repo>` below.
+
+**Procedure — run the deterministic plan, then execute it verbatim.** The
+export content, the repo-namespaced labels, and the `is blocked by` link
+direction are computed once by a script instead of being worked out ad hoc
+per run:
+
+1. Run `node ${CLAUDE_PLUGIN_ROOT}/scripts/jira-export.cjs plan --repo
+   <owner>/<repo> --project <KEY> [--issue-type <t>] [--epic-issue-type
+   <t|none>] --json` (it reads `tickets.json` for the validated graph and
+   returns the ordered steps — parents before their links — with content,
+   labels and link direction already resolved).
+2. Execute each step of that plan verbatim through the connected Jira MCP
+   (see Tooling above): search, create or update an issue exactly as the
+   step instructs, resolving the link type whose inward description reads
+   `is blocked by` (`getIssueLinkTypes`) before calling `createIssueLink`.
+   Do not reinterpret, reorder, skip or add a step the plan did not emit.
+   For each epic or issue step, run its `lookup` entries' `jql` in order.
+   Apply an entry's `on_match` only when the hit's `Source of truth` line
+   names this repository (matching the entry's `requires_source_of_truth`)
+   or carries no prefix (matching `accepts_unprefixed`). On a `migrate`
+   match, add `add_label`, replace the pointer line with `pointer`, and
+   post the comment `label migrated`. Never update an issue whose
+   source-of-truth line names another repository, or has none — skip it
+   and move to the next entry. Create the issue when no entry claims a
+   hit. Stop and report to the user when one entry's `jql` returns more
+   than one issue.
+3. For each issue the plan created or found, run `node
+   ${CLAUDE_PLUGIN_ROOT}/scripts/jira-export.cjs record <T-NN-MM> <KEY>` —
+   this writes `delivery.jira: <KEY>` back into that ticket's plan
+   frontmatter.
+4. Re-run `validate-graph.cjs` so `tickets.json` carries the `jira` field.
+5. Report a compact map to the user (ticket-id → Jira key, epic key) in the
+   user's language.
+
+## Phase 34 experiment intake
+
+When a phase evaluates an optimization treatment, keep the baseline and
+treatment versions, runtime provider, declared account scope, cohort arm and
+policy revision in the plan metadata. Use one treatment per experiment and keep
+failed, parked and interrupted runs in the denominator. Missing attribution or
+quality evidence produces an inconclusive result and does not authorize a model
+ladder or orchestration change.
+
+At the experiment boundary, save the versioned report and register its linked
+candidate through `backlog-index.cjs candidate`. Candidate creation is a triage
+write with `auto_launch: false`; a later plan and review are required before any
+candidate becomes executable work.
+
+## Rules
+
+- Do not write product code — only plans and frontmatter.
+- Every ticket after you is a self-sufficient contract for a fresh-context executor:
+  Goal, Context reads, Scope, Out of scope, Acceptance criteria, Test strategy,
+  Verification commands.

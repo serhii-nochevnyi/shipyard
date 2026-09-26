@@ -37,6 +37,7 @@ test('codexBlock is marker-delimited and names the investigate route for phase 1
 
 test('codexBlock keeps the phase-aware large-work route', () => {
   assert.match(codexBlock(2), /`\$shipyard-decompose` -> `\$shipyard-deliver`/);
+  assert.match(codexBlock(2, true), /`\$shipyard:shipyard-decompose` -> `\$shipyard:shipyard-deliver`/);
   assert.match(codexBlock(1), /install phase 2 before delivery/);
   assert.strictEqual(/`\$shipyard-decompose` -> `\$shipyard-deliver`/.test(codexBlock(1)), false);
 });
