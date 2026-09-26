@@ -62,7 +62,13 @@ function git(repo, ...args) {
   }).trim();
 }
 
-function fixture() {
+function writeShipyardManifest(repo) {
+  const dir = path.join(repo, 'plugins', 'delivery-pipeline', '.claude-plugin');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'plugin.json'), JSON.stringify({ name: 'shipyard' }));
+}
+
+function fixture(config = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-codex-delivery-'));
   const agentDir = fs.mkdtempSync(path.join(temporary, 'agents-'));
   const project = fs.mkdtempSync(path.join(temporary, 'project-'));
@@ -76,6 +82,7 @@ function fixture() {
   fs.writeFileSync(path.join(root, 'outside.txt'), 'base\n');
   fs.mkdirSync(graphDir, { recursive: true });
   fs.writeFileSync(plan, '# approved plan\n');
+  if (config.target !== true) writeShipyardManifest(root);
   git(root, 'init', '-q', '-b', 'main');
   git(root, 'config', 'user.name', 'Delivery Test');
   git(root, 'config', 'user.email', 'delivery@example.test');
@@ -240,6 +247,33 @@ test('dynamic executor resolves Luna/max through the boundary with worktree writ
     assert.equal(git(f.root, 'show', '-s', '--format=%G?%x00%GF', 'HEAD'), `G\0${signer}`);
     assert.equal(git(f.root, 'status', '--porcelain'), '');
   } finally { clean(f); }
+});
+
+test('target-project executor finalizes a conventional, id-free subject from the canonical graph title', async () => {
+  const f = fixture({ target: true });
+  const previousGraph = process.env.SHIPYARD_GRAPH_DIR;
+  process.env.SHIPYARD_GRAPH_DIR = f.graphDir;
+  try {
+    let refusal;
+    await assert.rejects(() => delivery(f).run({ role: 'executor', dispatch_id: 'codex-target-untitled',
+      context: { prompt: 'Implement the scoped ticket.' } }), (error) => { refusal = error; return true; });
+    assert.match(refusal.message, /no canonical graph title/);
+    assert.equal(git(f.root, 'rev-parse', 'HEAD'), f.base);
+    const graphFile = path.join(f.graphDir, 'tickets.json');
+    const graph = JSON.parse(fs.readFileSync(graphFile, 'utf8'));
+    Object.assign(graph.tickets['T-38-04'], { title: 'Retry the flaky upload', type: 'bugfix' });
+    fs.writeFileSync(graphFile, JSON.stringify(graph));
+    git(f.root, 'checkout', '-q', '--', 'src/owned.txt');
+    const result = await delivery(f).run({ role: 'executor', dispatch_id: 'codex-target-titled',
+      context: { prompt: 'Implement the scoped ticket.' } });
+    assert.equal(result.artifact.status, 'committed');
+    assert.equal(git(f.root, 'log', '-1', '--format=%s', 'HEAD'), 'fix: retry the flaky upload');
+    assert.equal(git(f.root, 'rev-parse', 'HEAD^'), f.base);
+  } finally {
+    if (previousGraph === undefined) delete process.env.SHIPYARD_GRAPH_DIR;
+    else process.env.SHIPYARD_GRAPH_DIR = previousGraph;
+    clean(f);
+  }
 });
 
 test('production runtime host receives the scoped prompt and records native model evidence', async () => {
