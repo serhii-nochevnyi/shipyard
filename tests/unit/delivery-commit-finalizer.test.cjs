@@ -5,7 +5,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const { before, after, test } = require('node:test');
-const { finalizeDeliveryCommit } = require('../../plugins/delivery-pipeline/scripts/delivery-commit-finalizer.cjs');
+const os = require('node:os');
+const { finalizeDeliveryCommit, scopedTree } = require('../../plugins/delivery-pipeline/scripts/delivery-commit-finalizer.cjs');
 
 let temporary;
 let signer;
@@ -55,7 +56,8 @@ function indexBytes(repo) {
 }
 
 before(() => {
-  temporary = fs.mkdtempSync(path.join('/tmp', 'dcf-'));
+  try { temporary = fs.mkdtempSync(path.join('/tmp', 'dcf-')); }
+  catch (error) { if (error.code !== 'EPERM' && error.code !== 'EACCES') throw error; temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'dcf-')); }
   const gnupgHome = path.join(temporary, 'gnupg');
   fs.mkdirSync(gnupgHome, { mode: 0o700 });
   previousEnv = {
@@ -275,4 +277,27 @@ test('rejects a partially staged file before replacing the ordinary index', () =
   assert.throws(() => finalizeDeliveryCommit(options), /staged index content differs from worktree content/);
   assert.equal(git(repo, 'rev-parse', 'HEAD'), head);
   assert.deepEqual(indexBytes(repo), beforeIndex);
+});
+
+test('exposes the exact scoped tree it signs and refuses a different expected tree', () => {
+  const { repo, head, options } = makeRepo();
+  fs.writeFileSync(path.join(repo, 'src', 'owned.txt'), 'changed\n');
+  const scoped = scopedTree(options);
+  assert.equal(scoped.head, head);
+  assert.deepEqual([...scoped.changed], ['src/owned.txt']);
+  assert.throws(() => finalizeDeliveryCommit({ ...options, expectedTree: '0'.repeat(40) }), /scoped tree differs/);
+  assert.equal(git(repo, 'rev-parse', 'HEAD'), head);
+  const result = finalizeDeliveryCommit({ ...options, expectedTree: scoped.tree });
+  assert.equal(result.tree, scoped.tree);
+  assert.equal(git(repo, 'rev-parse', 'HEAD^{tree}'), scoped.tree);
+});
+
+test('scoped tree refuses out-of-scope changes and tracks a changed worktree', () => {
+  const { repo, options } = makeRepo();
+  fs.writeFileSync(path.join(repo, 'src', 'owned.txt'), 'one\n');
+  const first = scopedTree(options).tree;
+  fs.writeFileSync(path.join(repo, 'src', 'owned.txt'), 'two\n');
+  assert.notEqual(scopedTree(options).tree, first);
+  fs.writeFileSync(path.join(repo, 'outside.txt'), 'x\n');
+  assert.throws(() => scopedTree(options), /out-of-scope paths/);
 });
