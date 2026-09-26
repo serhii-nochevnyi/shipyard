@@ -759,6 +759,7 @@ function createCodexDeliveryHost(options = {}) {
   catch (error) { fail('INVALID_INPUT', 'worktree path cannot be inspected: ' + error.message); }
   if (!worktree.isDirectory()) fail('INVALID_INPUT', 'worktree path must be a directory');
   const storage = storageDirectory(options, scope);
+  const stateRoot = hostStateRoot(options, scope);
   const runtimeHost = options.host || createCodexRuntimeHost({
     scope,
     controller: options.controller,
@@ -773,6 +774,7 @@ function createCodexDeliveryHost(options = {}) {
     spawn: options.spawn,
     ephemeral: options.ephemeral,
     approveForMe: options.approveForMe,
+    additionalProtectedPaths: [stateRoot],
   });
   if (!runtimeHost || !object(runtimeHost.capabilities) || !runtimeHost.recorder) {
     fail('MISSING_ADAPTER', 'scoped Codex runtime host lacks capabilities or durable recorder');

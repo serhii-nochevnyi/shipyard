@@ -249,6 +249,7 @@ test('production runtime host receives the scoped prompt and records native mode
   const codeHome = path.join(temporary, 'codex-home-' + path.basename(f.root));
   const session = '44444444-4444-4444-8444-444444444444';
   const received = [];
+  let capturedArgs;
   const transcript = [
     { type: 'session_meta', payload: { id: session, session_id: session, model_provider: 'openai' } },
     { type: 'turn_context', payload: { model: 'gpt-6-luna', effort: 'max' } },
@@ -274,7 +275,8 @@ test('production runtime host receives the scoped prompt and records native mode
       agentManifest: path.join(f.agentDir, '.shipyard-manifest.json'),
       verification: f.verification,
       verificationRunner: hostRunner(),
-      spawn: (_executable, _args, options) => {
+      spawn: (_executable, args, options) => {
+        capturedArgs = args;
         assert.equal(options.env.GNUPGHOME, undefined);
         assert.equal(options.env.SSH_AUTH_SOCK, undefined);
         fs.writeFileSync(path.join(f.root, 'src', 'owned.txt'), 'changed\n');
@@ -302,6 +304,8 @@ test('production runtime host receives the scoped prompt and records native mode
     assert.equal(result.artifact.status, 'committed');
     assert.ok(result.receipt.runtime_evidence.transcript.path.startsWith(fs.realpathSync(f.storageRoot)));
     assert.equal(git(f.root, 'status', '--porcelain'), '');
+    const filesystemArg = capturedArgs.find((value) => value.startsWith('permissions.shipyard-runtime.filesystem='));
+    assert.ok(filesystemArg.includes(JSON.stringify(stateRoot(f)) + '="deny"'));
   } finally { clean(f); }
 });
 
