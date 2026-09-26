@@ -253,11 +253,11 @@ function authenticatedReceipt(recorder, dispatchId) {
   return Object.freeze({ receipt, digest: sha256(canonical(receipt)) });
 }
 
-function planSnapshot(worktree, row) {
+function planSnapshot(graph, row) {
   if (typeof row.plan !== 'string' || !row.plan || path.isAbsolute(row.plan) || row.plan.split('/').includes('..')) {
     fail('VERIFICATION_SPEC_MISSING', 'canonical graph names no approved source PLAN; re-run decomposition');
   }
-  const file = path.join(worktree, row.plan);
+  const file = path.resolve(path.dirname(graph), '..', '..', row.plan);
   let stat;
   try { stat = fs.lstatSync(file); }
   catch (_) { fail('VERIFICATION_SPEC_MISSING', 'approved source PLAN is missing: ' + row.plan); }
@@ -570,7 +570,7 @@ function executorPreflight(options, scope) {
     .split('\n').filter(Boolean).filter((entry) => !SCRATCH_STATUS.has(entry));
   if (dirty.length) fail('WORKTREE_NOT_READY', 'executor worktree already has changes');
   const baseRef = resolveBaseRef(worktree, snapshot.row.pr_base);
-  const plan = planSnapshot(worktree, snapshot.row);
+  const plan = planSnapshot(file, snapshot.row);
   const verification = pinnedVerification(options, worktree, plan);
   const commit = Object.freeze({
     ticket: scope.ticket,
@@ -707,13 +707,13 @@ async function resumeFinalization(options, candidateId, liveScopeInput) {
     check('base', () => git(worktree, ['rev-parse', '--verify', `${resolveBaseRef(worktree, graph.snapshot.row.pr_base)}^{commit}`])
       === candidate.expected_base);
     check('graph', () => graph && graph.snapshot.sha256 === candidate.graph_sha256);
-    check('plan', () => planSnapshot(worktree, graph.snapshot.row).sha256 === candidate.plan_sha256);
+    check('plan', () => planSnapshot(graph.file, graph.snapshot.row).sha256 === candidate.plan_sha256);
     check('policy', () => policy.resolveDispatch({ runtime: 'codex', role: 'executor', dispatch_id: candidate.dispatch_id })
       .policy_hash === candidate.policy_hash);
     check('signer', () => signerFingerprint(worktree) === candidate.signer);
     check('tree', () => scopedTreeOf({ commit: { worktree, expectedHead: candidate.expected_head,
       files_modified: candidate.files_modified } }, options).tree === candidate.scoped_tree);
-    check('verification-spec', () => pinnedVerification(options, worktree, planSnapshot(worktree, graph.snapshot.row))
+    check('verification-spec', () => pinnedVerification(options, worktree, planSnapshot(graph.file, graph.snapshot.row))
       .digest === candidate.verification.spec_sha256);
     for (const pinned of candidate.verification.records) {
       check('verification:' + pinned.id, () => {

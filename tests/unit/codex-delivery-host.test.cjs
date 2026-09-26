@@ -67,14 +67,17 @@ function git(repo, ...args) {
 function fixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-codex-delivery-'));
   const agentDir = fs.mkdtempSync(path.join(temporary, 'agents-'));
-  const graphDir = fs.mkdtempSync(path.join(temporary, 'graph-'));
+  const project = fs.mkdtempSync(path.join(temporary, 'project-'));
+  const graphDir = path.join(project, '.planning', 'graph');
+  const plan = path.join(project, '.planning', 'PLAN.md');
   const storageRoot = path.join(temporary, 'storage');
   fs.mkdirSync(path.join(root, '.planning'), { recursive: true });
   fs.mkdirSync(path.join(root, 'src'));
   fs.writeFileSync(path.join(root, '.planning', 'config.json'), '{}\n');
   fs.writeFileSync(path.join(root, 'src', 'owned.txt'), 'base\n');
   fs.writeFileSync(path.join(root, 'outside.txt'), 'base\n');
-  fs.writeFileSync(path.join(root, '.planning', 'PLAN.md'), '# approved plan\n');
+  fs.mkdirSync(graphDir, { recursive: true });
+  fs.writeFileSync(plan, '# approved plan\n');
   git(root, 'init', '-q', '-b', 'main');
   git(root, 'config', 'user.name', 'Delivery Test');
   git(root, 'config', 'user.email', 'delivery@example.test');
@@ -138,7 +141,7 @@ function fixture() {
   };
   const verification = { commands: [{ id: 'unit', executable: process.execPath, argv: ['-e', 'process.exit(0)'],
     timeoutMs: 5000, maxOutputBytes: 4096 }] };
-  return { root, agentDir, graphDir, storageRoot, scope, host, calls, file, fileDigest, base, verification };
+  return { root, agentDir, project, graphDir, plan, storageRoot, scope, host, calls, file, fileDigest, base, verification };
 }
 
 function hostRunner(spy = []) {
@@ -186,7 +189,7 @@ function delivery(f, overrides = {}) {
 function clean(f) {
   fs.rmSync(f.root, { recursive: true, force: true });
   fs.rmSync(f.agentDir, { recursive: true, force: true });
-  fs.rmSync(f.graphDir, { recursive: true, force: true });
+  fs.rmSync(f.project, { recursive: true, force: true });
 }
 
 function runStatus(f) {
@@ -607,9 +610,10 @@ test('changed tree, graph, base, plan, verification or receipt refuses and keeps
     fs.writeFileSync(graphFile, graph.replace('"pr_base"', '"note":"x","pr_base"'));
     await refused({ code: 'IDENTITY_CHANGED', names: ['graph'] });
     fs.writeFileSync(graphFile, graph);
-    fs.appendFileSync(path.join(f.root, '.planning', 'PLAN.md'), 'amended\n');
+    const plan = fs.readFileSync(f.plan);
+    fs.appendFileSync(f.plan, 'amended\n');
     await refused({ code: 'IDENTITY_CHANGED', names: ['plan'] });
-    git(f.root, 'checkout', '-q', '--', '.planning/PLAN.md');
+    fs.writeFileSync(f.plan, plan);
     await refused({ code: 'IDENTITY_CHANGED', names: ['verification-spec'],
     }, { verification: { commands: [{ ...f.verification.commands[0], argv: ['-e', '1'] }] } });
     const records = path.join(stateRoot(f), 'verification');
@@ -689,12 +693,8 @@ test('recovery-only CLI returns the signed artifact with zero executor launches 
 });
 
 function approvedPlan(f, commands) {
-  fs.writeFileSync(path.join(f.root, '.planning', 'PLAN.md'), '# approved plan\n\n## Verification commands\n\n'
+  fs.writeFileSync(f.plan, '# approved plan\n\n## Verification commands\n\n'
     + commands.map((command) => '- `' + command + '`\n').join('') + '\n## Next\n\n- `node --bogus`\n');
-  git(f.root, 'add', '-f', '.planning/PLAN.md');
-  git(f.root, '-c', 'commit.gpgsign=false', 'commit', '-qam', 'approve plan');
-  git(f.root, 'branch', '-f', 'main', 'HEAD');
-  f.base = git(f.root, 'rev-parse', 'HEAD');
 }
 
 test('CLI pins verification from the approved PLAN when no spec is injected', async () => {
