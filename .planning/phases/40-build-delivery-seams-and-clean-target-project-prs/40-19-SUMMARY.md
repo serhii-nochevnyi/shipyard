@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 297e142e64841d1ffd8c32b403082373cc04394c2718e8c7c7e3f5755041500f
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 20c56ca49aad88ab7ba0a7131e00d2582c773e8c940b393b6c8f06aaee0b4eb7
 phase: 40-build-delivery-seams-and-clean-target-project-prs
 plan: 19
 subsystem: shipyard delivery
@@ -22,7 +22,7 @@ key-decisions:
 duration: 0min
 status: halted
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 297e142e64841d1ffd8c32b403082373cc04394c2718e8c7c7e3f5755041500f
+shipyard_source_fingerprint: 20c56ca49aad88ab7ba0a7131e00d2582c773e8c940b393b6c8f06aaee0b4eb7
 ---
 
 # Phase 40: Record gate verdicts as a commit status instead of a PR-body trailer — Delivery Projection
