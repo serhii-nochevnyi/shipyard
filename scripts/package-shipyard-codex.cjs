@@ -69,7 +69,8 @@ function build(destination = path.join(root, 'plugins/shipyard')) {
   return destination;
 }
 function packageFreshnessRequired(baseRef) {
-  return !/^(epic|ticket)\//.test(String(baseRef || ''));
+  const ref = String(baseRef || '');
+  return !ref.startsWith('epic/') && !ref.startsWith('ticket/');
 }
 
 module.exports = { build, packageFreshnessRequired };
