@@ -148,6 +148,13 @@
         null
       ]
     },
+    "43": {
+      "branch": "epic/43-target-project-delivery-at-scale",
+      "base": null,
+      "repos": [
+        null
+      ]
+    },
     "33-reduce-orchestration-context-and-transfer-sessions-safely": {
       "branch": "epic/33-reduce-orchestration-context-and-transfer-sessions-safely",
       "base": null,
@@ -6847,6 +6854,716 @@
       "epic": "epic/40-build-delivery-seams-and-clean-target-project-prs",
       "primary_parent": "T-40-23",
       "pr_base": "ticket/T-40-23-run-one-live-round-per-runtime-on-an-in",
+      "jira": null
+    },
+    "T-43-01": {
+      "title": "Register per-repository config keys for comment markers, reviewer bots, remedy workflows and the verification allow-list",
+      "plan": ".planning/phases/43-target-project-delivery-at-scale/43-01-PLAN.md",
+      "phase": "43",
+      "repo": null,
+      "wave": 5,
+      "depends_on": [
+        "T-40-17"
+      ],
+      "cross_phase_deps": [
+        "T-40-17"
+      ],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": false,
+      "files": [
+        "plugins/delivery-pipeline/scripts/pipeline-config.cjs",
+        "tests/unit/pipeline-config.test.cjs"
+      ],
+      "risk": "medium",
+      "type": "implementation",
+      "human_checkpoint": false,
+      "preauthorized": false,
+      "branch": "ticket/T-43-01-register-per-repository-config-keys-for",
+      "epic": "epic/43-target-project-delivery-at-scale",
+      "primary_parent": null,
+      "pr_base": "epic/43-target-project-delivery-at-scale",
+      "jira": null
+    },
+    "T-43-02": {
+      "title": "Resolve the publish-gate base from the recorded ticket base and origin/HEAD; the pre-push hook passes the ticket",
+      "plan": ".planning/phases/43-target-project-delivery-at-scale/43-02-PLAN.md",
+      "phase": "43",
+      "repo": null,
+      "wave": 1,
+      "depends_on": [],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": true,
+      "files": [
+        "plugins/delivery-pipeline/scripts/publish-gate.cjs",
+        "scripts/shipyard-pre-push-gate.sh",
+        "tests/unit/publish-gate.test.cjs",
+        "tests/unit/pre-push-gate.test.cjs"
+      ],
+      "risk": "medium",
+      "type": "implementation",
+      "human_checkpoint": false,
+      "preauthorized": false,
+      "branch": "ticket/T-43-02-resolve-the-publish-gate-base-from-the-r",
+      "epic": "epic/43-target-project-delivery-at-scale",
+      "primary_parent": null,
+      "pr_base": "epic/43-target-project-delivery-at-scale",
+      "jira": null
+    },
+    "T-43-03": {
+      "title": "Allow configured per-repository comment markers; edits of existing comments are not additions",
+      "plan": ".planning/phases/43-target-project-delivery-at-scale/43-03-PLAN.md",
+      "phase": "43",
+      "repo": null,
+      "wave": 6,
+      "depends_on": [
+        "T-43-01",
+        "T-43-02"
+      ],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": true,
+      "files": [
+        "plugins/delivery-pipeline/scripts/comment-policy.cjs",
+        "tests/unit/comment-policy.test.cjs",
+        "plugins/delivery-pipeline/scripts/publish-gate.cjs",
+        "tests/unit/publish-gate.test.cjs"
+      ],
+      "risk": "medium",
+      "type": "implementation",
+      "human_checkpoint": false,
+      "preauthorized": false,
+      "branch": "ticket/T-43-03-allow-configured-per-repository-comment",
+      "epic": "epic/43-target-project-delivery-at-scale",
+      "primary_parent": "T-43-01",
+      "pr_base": "ticket/T-43-01-register-per-repository-config-keys-for",
+      "jira": null
+    },
+    "T-43-04": {
+      "title": "Bounded reachability: O(1) git forms, a large buffer, and a declared-path epic check with a path-scoped fallback",
+      "plan": ".planning/phases/43-target-project-delivery-at-scale/43-04-PLAN.md",
+      "phase": "43",
+      "repo": null,
+      "wave": 8,
+      "depends_on": [
+        "T-40-19",
+        "T-40-22"
+      ],
+      "cross_phase_deps": [
+        "T-40-19",
+        "T-40-22"
+      ],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": false,
+      "files": [
+        "plugins/delivery-pipeline/scripts/run-reachability.cjs",
+        "tests/unit/run-reachability.test.cjs",
+        "plugins/delivery-pipeline/scripts/sentinel.cjs",
+        "tests/unit/sentinel.test.cjs"
+      ],
+      "risk": "medium",
+      "type": "implementation",
+      "human_checkpoint": false,
+      "preauthorized": false,
+      "branch": "ticket/T-43-04-bounded-reachability-o-1-git-forms-a-lar",
+      "epic": "epic/43-target-project-delivery-at-scale",
+      "primary_parent": null,
+      "pr_base": "epic/43-target-project-delivery-at-scale",
+      "jira": null
+    },
+    "T-43-05": {
+      "title": "Keep an arch-review finding of unknown type as an informational note that never changes the verdict",
+      "plan": ".planning/phases/43-target-project-delivery-at-scale/43-05-PLAN.md",
+      "phase": "43",
+      "repo": null,
+      "wave": 6,
+      "depends_on": [
+        "T-40-18"
+      ],
+      "cross_phase_deps": [
+        "T-40-18"
+      ],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": false,
+      "files": [
+        "plugins/delivery-pipeline/scripts/role-artifact.cjs",
+        "tests/unit/role-artifact.test.cjs"
+      ],
+      "risk": "medium",
+      "type": "implementation",
+      "human_checkpoint": false,
+      "preauthorized": false,
+      "branch": "ticket/T-43-05-keep-an-arch-review-finding-of-unknown-t",
+      "epic": "epic/43-target-project-delivery-at-scale",
+      "primary_parent": null,
+      "pr_base": "epic/43-target-project-delivery-at-scale",
+      "jira": null
+    },
+    "T-43-06": {
+      "title": "One exported conveyor scratch set for the role host, finalizer, Codex host, base-merge and gc",
+      "plan": ".planning/phases/43-target-project-delivery-at-scale/43-06-PLAN.md",
+      "phase": "43",
+      "repo": null,
+      "wave": 9,
+      "depends_on": [
+        "T-43-05",
+        "T-40-16",
+        "T-40-22",
+        "T-42-01",
+        "T-40-18",
+        "T-40-27",
+        "T-40-12",
+        "T-40-14",
+        "T-40-28",
+        "T-40-01",
+        "T-40-09"
+      ],
+      "cross_phase_deps": [
+        "T-40-16",
+        "T-40-22",
+        "T-42-01",
+        "T-40-18",
+        "T-40-27",
+        "T-40-12",
+        "T-40-14",
+        "T-40-28",
+        "T-40-01",
+        "T-40-09"
+      ],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": true,
+      "files": [
+        "plugins/delivery-pipeline/scripts/conveyor-scratch.cjs",
+        "tests/unit/conveyor-scratch.test.cjs",
+        "plugins/delivery-pipeline/scripts/claude-role-host.cjs",
+        "tests/unit/claude-role-host.test.cjs",
+        "plugins/delivery-pipeline/scripts/delivery-commit-finalizer.cjs",
+        "tests/unit/delivery-commit-finalizer.test.cjs",
+        "plugins/delivery-pipeline/scripts/codex-delivery-host.cjs",
+        "tests/unit/codex-delivery-host.test.cjs",
+        "plugins/delivery-pipeline/scripts/base-merge.cjs",
+        "plugins/delivery-pipeline/scripts/ticket-worktree.sh",
+        "plugins/delivery-pipeline/scripts/role-artifact.cjs"
+      ],
+      "risk": "high",
+      "type": "implementation",
+      "human_checkpoint": true,
+      "preauthorized": true,
+      "branch": "ticket/T-43-06-one-exported-conveyor-scratch-set-for-th",
+      "epic": "epic/43-target-project-delivery-at-scale",
+      "primary_parent": "T-43-05",
+      "pr_base": "ticket/T-43-05-keep-an-arch-review-finding-of-unknown-t",
+      "jira": null
+    },
+    "T-43-07": {
+      "title": "Cancelled checks: ignore superseded runs, one journalled rerun that is never green; ci-wait returns within 540 s on Claude",
+      "plan": ".planning/phases/43-target-project-delivery-at-scale/43-07-PLAN.md",
+      "phase": "43",
+      "repo": null,
+      "wave": 1,
+      "depends_on": [],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": false,
+      "files": [
+        "plugins/delivery-pipeline/scripts/check-state.cjs",
+        "tests/unit/check-state.test.cjs",
+        "plugins/delivery-pipeline/scripts/ci-wait.cjs",
+        "tests/unit/ci-wait.test.cjs",
+        "plugins/delivery-pipeline/scripts/log-event.cjs",
+        "tests/unit/log-event.test.cjs"
+      ],
+      "risk": "high",
+      "type": "implementation",
+      "human_checkpoint": true,
+      "preauthorized": true,
+      "branch": "ticket/T-43-07-cancelled-checks-ignore-superseded-runs",
+      "epic": "epic/43-target-project-delivery-at-scale",
+      "primary_parent": null,
+      "pr_base": "epic/43-target-project-delivery-at-scale",
+      "jira": null
+    },
+    "T-43-08": {
+      "title": "A stale approval from a declared bot does not block the merge; re-request once, then escalate with the command",
+      "plan": ".planning/phases/43-target-project-delivery-at-scale/43-08-PLAN.md",
+      "phase": "43",
+      "repo": null,
+      "wave": 9,
+      "depends_on": [
+        "T-43-04",
+        "T-43-01",
+        "T-43-07",
+        "T-40-19",
+        "T-40-22"
+      ],
+      "cross_phase_deps": [
+        "T-40-19",
+        "T-40-22"
+      ],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": false,
+      "files": [
+        "plugins/delivery-pipeline/scripts/reviewers.cjs",
+        "tests/unit/reviewers.test.cjs",
+        "plugins/delivery-pipeline/scripts/sentinel.cjs",
+        "tests/unit/sentinel.test.cjs",
+        "plugins/delivery-pipeline/scripts/log-event.cjs",
+        "tests/unit/log-event.test.cjs"
+      ],
+      "risk": "high",
+      "type": "implementation",
+      "human_checkpoint": true,
+      "preauthorized": true,
+      "branch": "ticket/T-43-08-a-stale-approval-from-a-declared-bot-doe",
+      "epic": "epic/43-target-project-delivery-at-scale",
+      "primary_parent": "T-43-04",
+      "pr_base": "ticket/T-43-04-bounded-reachability-o-1-git-forms-a-lar",
+      "jira": null
+    },
+    "T-43-09": {
+      "title": "state-sync lists PRs by ticket head and open state and skips tickets whose merge into a landed epic is recorded; --full re-derives",
+      "plan": ".planning/phases/43-target-project-delivery-at-scale/43-09-PLAN.md",
+      "phase": "43",
+      "repo": null,
+      "wave": 7,
+      "depends_on": [
+        "T-40-03",
+        "T-40-19",
+        "T-40-27"
+      ],
+      "cross_phase_deps": [
+        "T-40-03",
+        "T-40-19",
+        "T-40-27"
+      ],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": true,
+      "files": [
+        "plugins/delivery-pipeline/scripts/state-sync.cjs",
+        "tests/unit/state-sync-listing.test.cjs"
+      ],
+      "risk": "medium",
+      "type": "implementation",
+      "human_checkpoint": false,
+      "preauthorized": false,
+      "branch": "ticket/T-43-09-state-sync-lists-prs-by-ticket-head-and",
+      "epic": "epic/43-target-project-delivery-at-scale",
+      "primary_parent": null,
+      "pr_base": "epic/43-target-project-delivery-at-scale",
+      "jira": null
+    },
+    "T-43-10": {
+      "title": "Honour pipeline.gsd_sync as a deprecated alias on the summary line; decompose phases reach ROADMAP; one summarised warning",
+      "plan": ".planning/phases/43-target-project-delivery-at-scale/43-10-PLAN.md",
+      "phase": "43",
+      "repo": null,
+      "wave": 8,
+      "depends_on": [
+        "T-43-09",
+        "T-43-01",
+        "T-40-17",
+        "T-40-03",
+        "T-40-19",
+        "T-40-27"
+      ],
+      "cross_phase_deps": [
+        "T-40-17",
+        "T-40-03",
+        "T-40-19",
+        "T-40-27"
+      ],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": false,
+      "files": [
+        "plugins/delivery-pipeline/scripts/pipeline-config.cjs",
+        "tests/unit/pipeline-config.test.cjs",
+        "capabilities/delivery-pipeline/checks/gsd-sync-gate.cjs",
+        "tests/unit/gsd-sync-gate.test.cjs",
+        "plugins/delivery-pipeline/scripts/gsd-sync.cjs",
+        "tests/unit/gsd-sync.test.cjs",
+        "plugins/delivery-pipeline/scripts/state-sync.cjs",
+        "plugins/delivery-pipeline/scripts/adr-bootstrap.cjs",
+        "tests/unit/adr-bootstrap.test.cjs"
+      ],
+      "risk": "medium",
+      "type": "implementation",
+      "human_checkpoint": false,
+      "preauthorized": false,
+      "branch": "ticket/T-43-10-honour-pipeline-gsd-sync-as-a-deprecated",
+      "epic": "epic/43-target-project-delivery-at-scale",
+      "primary_parent": "T-43-09",
+      "pr_base": "ticket/T-43-09-state-sync-lists-prs-by-ticket-head-and",
+      "jira": null
+    },
+    "T-43-11": {
+      "title": "Bind pre-existing Jira issues by recorded key: never create, refuse an unknown key, unlabelled issues are transitioned and commented only",
+      "plan": ".planning/phases/43-target-project-delivery-at-scale/43-11-PLAN.md",
+      "phase": "43",
+      "repo": null,
+      "wave": 7,
+      "depends_on": [
+        "T-40-25"
+      ],
+      "cross_phase_deps": [
+        "T-40-25"
+      ],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": true,
+      "files": [
+        "plugins/delivery-pipeline/scripts/jira-export.cjs",
+        "tests/unit/jira-export.test.cjs",
+        "plugins/delivery-pipeline/commands/decompose.md",
+        "tests/unit/jira-binding-contract.test.cjs"
+      ],
+      "risk": "medium",
+      "type": "implementation",
+      "human_checkpoint": false,
+      "preauthorized": false,
+      "branch": "ticket/T-43-11-bind-pre-existing-jira-issues-by-recorde",
+      "epic": "epic/43-target-project-delivery-at-scale",
+      "primary_parent": null,
+      "pr_base": "epic/43-target-project-delivery-at-scale",
+      "jira": null
+    },
+    "T-43-12": {
+      "title": "human_checkpoint takes review or merge; true keeps meaning merge; Gate 2 states the consequence; stats keep attribution",
+      "plan": ".planning/phases/43-target-project-delivery-at-scale/43-12-PLAN.md",
+      "phase": "43",
+      "repo": null,
+      "wave": 10,
+      "depends_on": [
+        "T-43-08",
+        "T-43-11",
+        "T-40-19",
+        "T-40-22",
+        "T-40-20",
+        "T-40-03",
+        "T-40-25"
+      ],
+      "cross_phase_deps": [
+        "T-40-19",
+        "T-40-22",
+        "T-40-20",
+        "T-40-03",
+        "T-40-25"
+      ],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": false,
+      "files": [
+        "plugins/delivery-pipeline/scripts/validate-graph.cjs",
+        "tests/smoke/graph-validator-smoke.sh",
+        "plugins/delivery-pipeline/scripts/front.cjs",
+        "tests/unit/front.test.cjs",
+        "plugins/delivery-pipeline/scripts/sentinel.cjs",
+        "tests/unit/sentinel.test.cjs",
+        "plugins/delivery-pipeline/scripts/pipeline-stats.cjs",
+        "tests/unit/pipeline-stats.test.cjs",
+        "plugins/delivery-pipeline/commands/decompose.md",
+        "plugins/delivery-pipeline/skills/delivery-rules/SKILL.md",
+        ".shipyard/generated/gsd-delivery-rules/SKILL.md"
+      ],
+      "risk": "high",
+      "type": "implementation",
+      "human_checkpoint": true,
+      "preauthorized": false,
+      "branch": "ticket/T-43-12-human-checkpoint-takes-review-or-merge-t",
+      "epic": "epic/43-target-project-delivery-at-scale",
+      "primary_parent": "T-43-08",
+      "pr_base": "ticket/T-43-08-a-stale-approval-from-a-declared-bot-doe",
+      "jira": null
+    },
+    "T-43-13": {
+      "title": "Carry a conform verdict across a base-merge when the ticket's own patch is identical and every other path equals the new base",
+      "plan": ".planning/phases/43-target-project-delivery-at-scale/43-13-PLAN.md",
+      "phase": "43",
+      "repo": null,
+      "wave": 10,
+      "depends_on": [
+        "T-43-06",
+        "T-40-19"
+      ],
+      "cross_phase_deps": [
+        "T-40-19"
+      ],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": true,
+      "files": [
+        "plugins/delivery-pipeline/scripts/gate-trailer.cjs",
+        "tests/unit/trailer.test.cjs",
+        "plugins/delivery-pipeline/scripts/base-merge.cjs",
+        "tests/unit/verdict-carry.test.cjs"
+      ],
+      "risk": "high",
+      "type": "implementation",
+      "human_checkpoint": true,
+      "preauthorized": true,
+      "branch": "ticket/T-43-13-carry-a-conform-verdict-across-a-base-me",
+      "epic": "epic/43-target-project-delivery-at-scale",
+      "primary_parent": "T-43-06",
+      "pr_base": "ticket/T-43-06-one-exported-conveyor-scratch-set-for-th",
+      "jira": null
+    },
+    "T-43-14": {
+      "title": "deliver-dispatch builds arch-review, ci-fix and review-fix requests that round-trip through the host validators",
+      "plan": ".planning/phases/43-target-project-delivery-at-scale/43-14-PLAN.md",
+      "phase": "43",
+      "repo": null,
+      "wave": 10,
+      "depends_on": [
+        "T-40-15",
+        "T-40-24"
+      ],
+      "cross_phase_deps": [
+        "T-40-15",
+        "T-40-24"
+      ],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": true,
+      "files": [
+        "plugins/delivery-pipeline/scripts/deliver-dispatch.cjs",
+        "tests/unit/deliver-dispatch.test.cjs",
+        "plugins/delivery-pipeline/commands/deliver.md",
+        "tests/unit/deliver-builders-contract.test.cjs"
+      ],
+      "risk": "medium",
+      "type": "implementation",
+      "human_checkpoint": false,
+      "preauthorized": false,
+      "branch": "ticket/T-43-14-deliver-dispatch-builds-arch-review-ci-f",
+      "epic": "epic/43-target-project-delivery-at-scale",
+      "primary_parent": null,
+      "pr_base": "epic/43-target-project-delivery-at-scale",
+      "jira": null
+    },
+    "T-43-15": {
+      "title": "deliver-dispatch builds research and decomposition requests from the investigation directory",
+      "plan": ".planning/phases/43-target-project-delivery-at-scale/43-15-PLAN.md",
+      "phase": "43",
+      "repo": null,
+      "wave": 11,
+      "depends_on": [
+        "T-43-12",
+        "T-43-14",
+        "T-40-15",
+        "T-40-25"
+      ],
+      "cross_phase_deps": [
+        "T-40-15",
+        "T-40-25"
+      ],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": true,
+      "files": [
+        "plugins/delivery-pipeline/scripts/deliver-dispatch.cjs",
+        "tests/unit/deliver-dispatch.test.cjs",
+        "plugins/delivery-pipeline/commands/investigate.md",
+        "plugins/delivery-pipeline/commands/decompose.md",
+        "tests/unit/planning-builders-contract.test.cjs"
+      ],
+      "risk": "medium",
+      "type": "implementation",
+      "human_checkpoint": false,
+      "preauthorized": false,
+      "branch": "ticket/T-43-15-deliver-dispatch-builds-research-and-dec",
+      "epic": "epic/43-target-project-delivery-at-scale",
+      "primary_parent": "T-43-12",
+      "pr_base": "ticket/T-43-12-human-checkpoint-takes-review-or-merge-t",
+      "jira": null
+    },
+    "T-43-16": {
+      "title": "Host-side verification of plan-declared, allow-listed commands before finalization on both runtimes",
+      "plan": ".planning/phases/43-target-project-delivery-at-scale/43-16-PLAN.md",
+      "phase": "43",
+      "repo": null,
+      "wave": 10,
+      "depends_on": [
+        "T-43-06",
+        "T-43-01",
+        "T-42-01",
+        "T-40-10",
+        "T-40-13",
+        "T-40-14",
+        "T-40-28",
+        "T-40-12",
+        "T-40-01",
+        "T-40-09"
+      ],
+      "cross_phase_deps": [
+        "T-42-01",
+        "T-40-10",
+        "T-40-13",
+        "T-40-14",
+        "T-40-28",
+        "T-40-12",
+        "T-40-01",
+        "T-40-09"
+      ],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": true,
+      "files": [
+        "plugins/delivery-pipeline/scripts/host-verification.cjs",
+        "tests/unit/host-verification.test.cjs",
+        "plugins/delivery-pipeline/scripts/claude-delivery-host.cjs",
+        "tests/unit/claude-delivery-host.test.cjs",
+        "plugins/delivery-pipeline/scripts/codex-delivery-host.cjs",
+        "tests/unit/codex-delivery-host.test.cjs",
+        "plugins/delivery-pipeline/scripts/command-runner.cjs",
+        "tests/unit/command-runner.test.cjs"
+      ],
+      "risk": "high",
+      "type": "implementation",
+      "human_checkpoint": true,
+      "preauthorized": true,
+      "branch": "ticket/T-43-16-host-side-verification-of-plan-declared",
+      "epic": "epic/43-target-project-delivery-at-scale",
+      "primary_parent": "T-43-06",
+      "pr_base": "ticket/T-43-06-one-exported-conveyor-scratch-set-for-th",
+      "jira": null
+    },
+    "T-43-17": {
+      "title": "Record a sealed coverage entry for every trusted finalization and mechanical base-merge, plus the rollout marker",
+      "plan": ".planning/phases/43-target-project-delivery-at-scale/43-17-PLAN.md",
+      "phase": "43",
+      "repo": null,
+      "wave": 11,
+      "depends_on": [
+        "T-43-13",
+        "T-43-16",
+        "T-42-01",
+        "T-40-18",
+        "T-40-27",
+        "T-40-10",
+        "T-40-13",
+        "T-40-14",
+        "T-40-28",
+        "T-40-12",
+        "T-40-01",
+        "T-40-09"
+      ],
+      "cross_phase_deps": [
+        "T-42-01",
+        "T-40-18",
+        "T-40-27",
+        "T-40-10",
+        "T-40-13",
+        "T-40-14",
+        "T-40-28",
+        "T-40-12",
+        "T-40-01",
+        "T-40-09"
+      ],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": true,
+      "files": [
+        "plugins/delivery-pipeline/scripts/conveyor-coverage.cjs",
+        "tests/unit/conveyor-coverage.test.cjs",
+        "plugins/delivery-pipeline/scripts/delivery-commit-finalizer.cjs",
+        "tests/unit/delivery-commit-finalizer.test.cjs",
+        "plugins/delivery-pipeline/scripts/base-merge.cjs",
+        "plugins/delivery-pipeline/scripts/claude-delivery-host.cjs",
+        "tests/unit/claude-delivery-host.test.cjs",
+        "plugins/delivery-pipeline/scripts/codex-delivery-host.cjs",
+        "tests/unit/codex-delivery-host.test.cjs"
+      ],
+      "risk": "high",
+      "type": "implementation",
+      "human_checkpoint": true,
+      "preauthorized": true,
+      "branch": "ticket/T-43-17-record-a-sealed-coverage-entry-for-every",
+      "epic": "epic/43-target-project-delivery-at-scale",
+      "primary_parent": "T-43-13",
+      "pr_base": "ticket/T-43-13-carry-a-conform-verdict-across-a-base-me",
+      "jira": null
+    },
+    "T-43-18": {
+      "title": "Run only declared repository remedy workflows before escalation and record their commits as chain links",
+      "plan": ".planning/phases/43-target-project-delivery-at-scale/43-18-PLAN.md",
+      "phase": "43",
+      "repo": null,
+      "wave": 12,
+      "depends_on": [
+        "T-43-17",
+        "T-43-08"
+      ],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": true,
+      "files": [
+        "plugins/delivery-pipeline/scripts/repo-remedy.cjs",
+        "tests/unit/repo-remedy.test.cjs",
+        "plugins/delivery-pipeline/scripts/escalation-record.cjs",
+        "tests/unit/escalation-record.test.cjs",
+        "plugins/delivery-pipeline/scripts/log-event.cjs",
+        "tests/unit/log-event.test.cjs",
+        "plugins/delivery-pipeline/scripts/conveyor-coverage.cjs",
+        "tests/unit/conveyor-coverage.test.cjs",
+        "plugins/delivery-pipeline/references/ci-fix.md",
+        "plugins/delivery-pipeline/references/pr-sentinel.md"
+      ],
+      "risk": "high",
+      "type": "implementation",
+      "human_checkpoint": true,
+      "preauthorized": true,
+      "branch": "ticket/T-43-18-run-only-declared-repository-remedy-work",
+      "epic": "epic/43-target-project-delivery-at-scale",
+      "primary_parent": "T-43-17",
+      "pr_base": "ticket/T-43-17-record-a-sealed-coverage-entry-for-every",
+      "jira": null
+    },
+    "T-43-19": {
+      "title": "The merge gate refuses heads the conveyor does not cover; PRs opened before release are journalled as legacy",
+      "plan": ".planning/phases/43-target-project-delivery-at-scale/43-19-PLAN.md",
+      "phase": "43",
+      "repo": null,
+      "wave": 13,
+      "depends_on": [
+        "T-43-18",
+        "T-43-12",
+        "T-40-19",
+        "T-40-22"
+      ],
+      "cross_phase_deps": [
+        "T-40-19",
+        "T-40-22"
+      ],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": true,
+      "files": [
+        "plugins/delivery-pipeline/scripts/sentinel.cjs",
+        "tests/unit/sentinel.test.cjs",
+        "plugins/delivery-pipeline/scripts/conveyor-coverage.cjs",
+        "tests/unit/conveyor-coverage.test.cjs",
+        "plugins/delivery-pipeline/scripts/log-event.cjs",
+        "tests/unit/log-event.test.cjs",
+        "plugins/delivery-pipeline/references/pr-sentinel.md"
+      ],
+      "risk": "high",
+      "type": "implementation",
+      "human_checkpoint": true,
+      "preauthorized": true,
+      "branch": "ticket/T-43-19-the-merge-gate-refuses-heads-the-conveyo",
+      "epic": "epic/43-target-project-delivery-at-scale",
+      "primary_parent": "T-43-18",
+      "pr_base": "ticket/T-43-18-run-only-declared-repository-remedy-work",
       "jira": null
     }
   }

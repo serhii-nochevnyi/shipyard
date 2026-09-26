@@ -83,3 +83,9 @@
 **Why:** While INV-007 was open, main gained phase 42 (T-42-01, trusted finalization resume split from T-41-04, delivered after phase 41 and before phase 40). This investigation's phase therefore takes number 43.
 **What was rejected:** Renumbering the existing phase 42.
 **Scope fence:** Only the number changes; research artifacts under `research/` keep their original wording as sealed evidence.
+
+
+## Phase 43 runs in parallel with phases 40 and 42 as its tickets become ready
+**Why:** User decision 2026-09-26, after decomposition showed that T-43-02 and T-43-07 have no dependencies and every other overlap with pending phase-40/42 work is already a cross-phase edge in the graph.
+**What was rejected:** Waiting for the release of phases 40, 41 and 42 as a whole (the earlier decision, now superseded).
+**Scope fence:** Ordering comes only from the graph: a phase-43 ticket that shares a file with a pending phase-40 or phase-42 ticket keeps its cross-phase dependency and waits for it to land on main. The proving-ground rerun stays outside the phase.
