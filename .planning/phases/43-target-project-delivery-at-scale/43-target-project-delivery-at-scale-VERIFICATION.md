@@ -1,8 +1,8 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 3a1a56a863a4fbd5efded9d21cd51530cd9a1ac4fb6f98934215361f64da9177
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 5b6d9979f2f323316d43aed1851a9ecd136aa4298bfbe34f53c01f0baa5526c3
 phase: 43
 status: human_needed
-shipyard_source_fingerprint: 3a1a56a863a4fbd5efded9d21cd51530cd9a1ac4fb6f98934215361f64da9177
+shipyard_source_fingerprint: 5b6d9979f2f323316d43aed1851a9ecd136aa4298bfbe34f53c01f0baa5526c3
 ---
 
 # Phase 43: Target-project delivery at scale — Verification Projection
@@ -22,7 +22,7 @@ shipyard_source_fingerprint: 3a1a56a863a4fbd5efded9d21cd51530cd9a1ac4fb6f9893421
 | Ticket | Delivery | Plan status |
 |---|---|---|
 | T-43-01 | pending | ? UNCERTAIN |
-| T-43-02 | pending | ? UNCERTAIN |
+| T-43-02 | pr-open | ? UNCERTAIN |
 | T-43-03 | pending | ? UNCERTAIN |
 | T-43-04 | pending | ? UNCERTAIN |
 | T-43-05 | pending | ? UNCERTAIN |
