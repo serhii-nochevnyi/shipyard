@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 654d66aefca5a93d2a506f9a6721780d7c4c6a48cd9c7750fb00e08b3e27f19e
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 7db171461712109023656ef2d17d877c4f8a5e06b4ce3e139279c9f1dcaf0bb7
 phase: 40-build-delivery-seams-and-clean-target-project-prs
 plan: 26
 subsystem: shipyard delivery
@@ -22,7 +22,7 @@ key-decisions:
 duration: 0min
 status: halted
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 654d66aefca5a93d2a506f9a6721780d7c4c6a48cd9c7750fb00e08b3e27f19e
+shipyard_source_fingerprint: 7db171461712109023656ef2d17d877c4f8a5e06b4ce3e139279c9f1dcaf0bb7
 ---
 
 # Phase 40: Expose capture, live, release, digest-refresh and dogfood commands through make and document them — Delivery Projection
