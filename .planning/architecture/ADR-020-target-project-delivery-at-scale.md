@@ -6,7 +6,7 @@ status: accepted
 - **Status:** accepted
 - **Date:** 2026-09-26
 - **Decision owner:** repository maintainer; decisions taken in the INV-007 dialogue
-- **Scope:** phase 43, delivered as one wave after phases 40, 41 and 42 are released (phase 42 is T-42-01, trusted finalization resume, split from T-41-04); implementation details belong to its plans
+- **Scope:** phase 43, delivered in parallel with phases 40 and 42 as tickets become ready (amended 2026-09-26; phase 42 is T-42-01, trusted finalization resume, split from T-41-04); implementation details belong to its plans
 - **Supersedes:** none
 - **Related:** ADR-004, ADR-008, ADR-014, ADR-017 (phase-40 amendment D-43..D-45), ADR-019
 - **UI design:** none
@@ -41,14 +41,14 @@ covers the rest; evidence with file:line and timestamps is in its `RESEARCH.md` 
 - `deliver-dispatch.cjs` builds research, decomposition, arch-review, ci-fix and review-fix requests from the graph and the investigation directory, each round-tripping through the host's exported validator, with Codex parity or a named reason.
 - `state-sync.cjs` lists PRs by ticket head and open state instead of `--state all --limit <pr_fetch_limit>`, and does not re-derive tickets whose merge into a landed epic is recorded immutably; `--full` re-derives everything.
 - An arch-review finding of unknown type is kept as an informational note with its original type and never changes the verdict; a violation or an incomplete blocking finding still fails the artifact.
-- Phase 43 is delivered as one wave after phases 40, 41 and 42 are released; every fix carries unit or fixture tests that fail on base, and the before/after measurements come from a later proving-ground rerun by the operator, outside the phase.
+- Phase 43 is delivered in parallel with phases 40 and 42: each ticket starts as soon as its graph dependencies have landed, and a ticket that shares a file with a pending phase-40 or phase-42 ticket waits for that ticket through a cross-phase dependency (amended by user decision 2026-09-26; previously one wave after the release of phases 40, 41 and 42); every fix carries unit or fixture tests that fail on base, and the before/after measurements come from a later proving-ground rerun by the operator, outside the phase.
 
 ## Consequences
 
 - Target-project runs stop depending on orchestrator hand work: verification, commits, pushes, base resolution, cancelled checks and scratch files are the conveyor's responsibility, and a hand commit can no longer reach an epic unnoticed.
 - The merge gate becomes stricter and the verdict carry looser; both are provable from object identities and journal records, not from judgement.
 - New project-config keys (comment markers, remedies, bot identities) follow D-45: registered in `pipeline-config.cjs`, keyed by `owner/repo`, `delivery_pipeline.*` wins, bad shapes warn and fall back.
-- Phase 43 waits for phase 40's release; about half its tickets rewrite files phase 40 still owns (`sentinel.cjs`, `claude-role-host.cjs`, `state-sync.cjs`, the delivery hosts, `pipeline-config.cjs`, `role-artifact.cjs`, `gate-trailer.cjs`).
+- Phase 43 no longer waits for phase 40's release as a whole, but about half its tickets rewrite files phase 40 still owns (`sentinel.cjs`, `claude-role-host.cjs`, `state-sync.cjs`, the delivery hosts, `pipeline-config.cjs`, `role-artifact.cjs`, `gate-trailer.cjs`).
 - Host-side verification adds wall time to the host per ticket and makes plan-declared commands an operator-authority path, bounded by the allow-list.
 - The success numbers are not produced by the phase itself; they need the operator's proving-ground rerun.
 

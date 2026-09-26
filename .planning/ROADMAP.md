@@ -407,7 +407,7 @@ script — not in a prompt.** Every requirement below is an instance of it.
 - **REQ-172** — deliver-dispatch builds research, decomposition, arch-review, ci-fix and review-fix requests that round-trip through each host's exported validator, with Codex parity or a named reason.
 - **REQ-173** — state-sync lists PRs by ticket head and open state instead of a bulk all-state listing and skips tickets whose merge into a landed epic is recorded immutably, with --full re-deriving everything.
 - **REQ-174** — An arch-review finding of unknown type is kept as an informational note with its original type and never changes the verdict; violations and incomplete blocking findings still fail.
-- **REQ-175** — Phase 43 ships after phases 40, 41 and 42 are released; every fix carries unit or fixture tests that fail on base, and before/after measurements come from a later operator proving-ground rerun.
+- **REQ-175** — Phase 43 tickets start once their graph dependencies (including cross-phase ones on pending phase-40/42 tickets) have landed; every fix carries unit or fixture tests that fail on base, and before/after measurements come from a later operator proving-ground rerun.
 
 ## Phases
 
@@ -812,8 +812,8 @@ The OS-sandboxed trusted verification runner needs a host where real sandbox den
 ### Phase 43: Target-project delivery at scale
 **Status**: planned (ADR-020)
 **Requirements**: REQ-159, REQ-160, REQ-161, REQ-162, REQ-163, REQ-164, REQ-165, REQ-166, REQ-167, REQ-168, REQ-169, REQ-170, REQ-171, REQ-172, REQ-173, REQ-174, REQ-175
-**Depends on**: Phases 40, 41 and 42 (released)
-**Delivery order**: one wave after phases 40, 41 and 42 are released
+**Depends on**: Phase 41 (released); per-ticket cross-phase dependencies on phases 40 and 42
+**Delivery order**: in parallel with phases 40 and 42 as tickets become ready (user decision 2026-09-26)
 
 Implement [ADR-020](architecture/ADR-020-target-project-delivery-at-scale.md) from
 [INV-007](investigations/INV-007-target-project-scale/): host-side verification and a

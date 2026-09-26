@@ -25,7 +25,7 @@
 - **D-14 (REQ-172)** `deliver-dispatch.cjs` builds research, decomposition, arch-review, ci-fix and review-fix requests from the graph and the investigation directory, each round-tripping through the host's exported validator, with Codex parity or a named reason.
 - **D-15 (REQ-173)** `state-sync.cjs` lists PRs by ticket head and open state instead of `--state all --limit <pr_fetch_limit>`, and does not re-derive tickets whose merge into a landed epic is recorded immutably. `--full` re-derives everything.
 - **D-16 (REQ-174)** An arch-review finding of unknown type is kept as an informational note with its original type and never changes the verdict. A violation or an incomplete blocking finding still fails the artifact.
-- **D-17 (REQ-175)** Phase 43 is delivered as one wave after phases 40, 41 and 42 are released. Every fix carries unit or fixture tests that fail on base. The before/after measurements come from a later proving-ground rerun by the operator, outside the phase.
+- **D-17 (REQ-175)** Phase 43 is delivered in parallel with phases 40 and 42: each ticket starts as soon as its graph dependencies have landed, and a ticket that shares a file with a pending phase-40 or phase-42 ticket waits for that ticket through a cross-phase dependency (user decision 2026-09-26, replacing "one wave after phases 40, 41 and 42 are released"). Every fix carries unit or fixture tests that fail on base. The before/after measurements come from a later proving-ground rerun by the operator, outside the phase.
 
 ## Planning decisions (user, 2026-09-26; answers to 43-RESEARCH Open Questions, locked)
 
