@@ -1,0 +1,309 @@
+diff --git a/.planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-09-PLAN.md b/.planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-09-PLAN.md
+index 9e043210..9c9f6194 100644
+--- a/.planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-09-PLAN.md
++++ b/.planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-09-PLAN.md
+@@ -4,7 +4,7 @@ plan: 09
+ title: "Pass Codex child tasks by host-owned file path plus a digest the host verifies"
+ type: implementation
+ wave: 8
+-depends_on: [T-40-11, T-40-07, T-40-14, T-39-01, T-41-04]
++depends_on: [T-40-11, T-40-07, T-40-14, T-40-15, T-39-01, T-41-04]
+ files_modified:
+   - plugins/delivery-pipeline/scripts/codex-runtime-host.cjs
+   - tests/unit/codex-runtime-host.test.cjs
+@@ -39,7 +39,7 @@ The Codex boundary fixtures are re-captured from the real CLI with the new launc
+ - `codex-runtime-host.cjs:632-672`: spawn evidence checks `agent_type/model/reasoning_effort/fork_turns/task_name` only. `:700-730`: the child session message scan, where the digest check goes.
+ - `tests/unit/codex-runtime-host.test.cjs:116-117, 400`: loads `tests/fixtures/codex-agent-{parent,child}-0.155.1.jsonl`.
+ - `tests/fixtures/captured/boundaries/codex-agent-stream.json` and `scripts/capture-boundary-fixtures.cjs` (T-40-07), including the `migrating` list.
+-- Graph position (amendment after user review): primary parent T-40-11, because both edit `tests/unit/codex-decompose-host.test.cjs`; its primary chain (T-40-11 → T-40-14 → T-40-12 → T-40-13 → T-40-10 → T-40-01) carries T-40-01, T-40-12 and T-40-14, the other writers of the files it migrates. It depends on T-40-07 directly (the capture tool and the boundary registry it re-captures and empties) and on T-40-14 directly (host test files it migrates). T-40-07 is a non-primary parent and reaches the worktree through the epic, so this ticket is ready only once T-40-07 has merged into the epic (T-40-27). Cross-phase T-39-01 because both consumer tests are T-39-01 files.
++- Graph position (amendment after user review): primary parent T-40-11, because both edit `tests/unit/codex-decompose-host.test.cjs`; its primary chain (T-40-11 → T-40-14 → T-40-12 → T-40-13 → T-40-10 → T-40-01) carries T-40-01, T-40-12 and T-40-14, the other writers of the files it migrates. It depends on T-40-07 directly (the capture tool and the boundary registry it re-captures and empties) and on T-40-14 directly (host test files it migrates). T-40-07 is a non-primary parent and reaches the worktree through the epic, so this ticket is ready only once T-40-07 has merged into the epic (T-40-27). Cross-phase T-39-01 because both consumer tests are T-39-01 files. Amendment after the pdffiller run (D-43): it also depends on T-40-15, which now edits `tests/unit/codex-delivery-host.test.cjs` for plan delivery; T-40-15 reaches this ticket through the epic, and this ticket stays the last editor of that file.
+ - `plugins/delivery-pipeline/scripts/role-artifact.cjs` `fileReference` `{path, bytes, content_bytes, sha256, digest}`: the digest shape to reuse (Don't Hand-Roll).
+ - 40-RESEARCH assumption A-5: whether the child session file records the child's first message is unverified. The human capture step settles it.
+ - Existing implementation: I searched `codex-runtime-host.cjs`, `codex-dispatch-adapter.cjs` and `run-scope.cjs` for an existing task-file or digest relay (`task_file`, `sha256`, `writeFileSync` of the prompt). None exists; the run-scope directory already holds host-owned state outside the worktree.
+@@ -54,7 +54,7 @@ The Codex boundary fixtures are re-captured from the real CLI with the new launc
+   - The decompose and delivery hosts keep passing with the task-file launch; if one of them needs a host change, stop and report it as a new ticket with the failing replay as evidence.
+ - `tests/fixtures/captured/codex-agent-stream-{parent,child,exec}.jsonl`: re-captured with the new launch shape through `scripts/capture-boundary-fixtures.cjs --boundary codex-agent-stream` (human-action checkpoint). `exec` is the parent's `codex exec --json` stdout.
+ - `tests/fixtures/captured/boundaries/codex-agent-stream.json`: add the three new fixtures and the captured `cli_version`, move all three Codex consumer tests from `migrating` to `consumers`, and leave `migrating` empty. Drop the 0.155.1 files from the registry, leaving `legacy` empty; no consumer may still read them.
+-- `tests/unit/codex-decompose-host.test.cjs` and `tests/unit/codex-delivery-host.test.cjs`: replace the inline `codex exec` stdout records (`codex-decompose-host.test.cjs:301-304`, `codex-delivery-host.test.cjs:225-227`, and any record T-40-11, T-40-12 or T-40-14 added) with a replay of the captured `exec` fixture, varying only process-level behaviour (exit code, stderr, timing). Keep every existing assertion's intent. This ticket is the last editor of both files on its chain (T-40-01, T-40-12, T-40-14, T-40-11).
++- `tests/unit/codex-decompose-host.test.cjs` and `tests/unit/codex-delivery-host.test.cjs`: replace the inline `codex exec` stdout records (`codex-decompose-host.test.cjs:301-304`, `codex-delivery-host.test.cjs:225-227`, and any record T-40-11, T-40-12, T-40-14 or T-40-15 added) with a replay of the captured `exec` fixture, varying only process-level behaviour (exit code, stderr, timing). Keep every existing assertion's intent. This ticket is the last editor of both files on its chain (T-40-01, T-40-12, T-40-14, T-40-11).
+ - `tests/unit/codex-runtime-host.test.cjs`: replay the new captures.
+   - The happy path verifies the digest.
+   - Refusal cases derive a mutated copy of the captured child stream in the test by a byte substitution on the path or digest value. This is allowed because it mutates a real capture rather than authoring records: a shortened task path refuses; a wrong digest refuses; a file modified after launch refuses; a missing child message refuses.
+diff --git a/.planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-15-PLAN.md b/.planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-15-PLAN.md
+index 9b46a876..fe909217 100644
+--- a/.planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-15-PLAN.md
++++ b/.planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-15-PLAN.md
+@@ -10,6 +10,12 @@ files_modified:
+   - tests/unit/deliver-dispatch.test.cjs
+   - plugins/delivery-pipeline/scripts/run-waker.cjs
+   - tests/unit/run-waker.test.cjs
++  - plugins/delivery-pipeline/workflows/executors.mjs
++  - tests/unit/workflows-args.test.cjs
++  - plugins/delivery-pipeline/scripts/claude-delivery-host.cjs
++  - tests/unit/claude-delivery-host.test.cjs
++  - plugins/delivery-pipeline/scripts/codex-delivery-host.cjs
++  - tests/unit/codex-delivery-host.test.cjs
+ requirements: [REQ-138, REQ-136]
+ delivery:
+   ticket: T-40-15
+@@ -22,7 +28,8 @@ delivery:
+ The dispatch seam (D-01, D-03). One deterministic script, `deliver-dispatch.cjs`, serves both Claude and Codex:
+ 
+ - it reads the actionable front;
+-- it builds each host request from the graph: branch from the graph row, plan path from the ticket worktree's graph directory (D-30), and signals mapped from the row with the ticket `type` never copied;
++- it builds each host request from the graph: branch from the graph row, plan path from the canonical project graph (D-43, which supersedes D-30), and signals mapped from the row with the ticket `type` never copied;
++- the host hands the executor the plan content with a verified digest, so a sandboxed agent never has to read outside its worktree (D-43);
+ - it validates the request through the host's exported validator;
+ - it launches the host detached;
+ - it offers `status` and `wait` through a new `dispatch` wait kind.
+@@ -42,6 +49,7 @@ The model no longer assembles requests, launches, or polls in the foreground.
+ - `plugins/delivery-pipeline/scripts/pr-hygiene.cjs` (T-40-17): `applies`, `NEUTRAL_PR_BODY_GUIDE`, `NEUTRAL_DELIVERY_RULES_HINT`. `plugins/delivery-pipeline/workflows/executors.mjs:188-189` reads `argv.deliveryRulesHint` and `argv.prBodyGuide`. Read only.
+ - Graph position (amendment after user review): three same-phase parents, each a real import: T-40-14 (request validators, in-flight record), T-40-17 (`pr-hygiene.cjs`) and T-40-16 (`sentinel-preflight.cjs`). The primary parent is T-40-14 (the deepest), so the worktree is cut from its branch. T-40-17 and T-40-16 are non-primary: this ticket is ready only once both have merged into the epic, and the worktree base-merges the epic before dispatch (T-40-27).
+ - 40-RESEARCH Pitfalls 1, 2 and 3, and Code example 1.
++- Amendment after the pdffiller proving-ground run (2026-09-25, session b11246f1, D-43): with `.planning/` untracked (D-16) the ticket worktree has no graph, and a cross-repo ticket's worktree (for example jsfiller) never has the project's graph. `resolveGraphDir` from the worktree then finds nothing (`graph-dir.cjs:46-61`), and the Claude executor runs `--restricted` with cwd = worktree (`claude-runtime-host.cjs:684-694`), so even a correct `planPath` outside the worktree is unreadable. All four wave-1 executors returned `no-contract`; the orchestrator worked around it by copying the graph and phase plans into every worktree and pointing `SHIPYARD_GRAPH_DIR` at the copy, which split dispatch records away from the canonical graph. The executor prompt today tells the agent to read `planPath` (`workflows/executors.mjs:263,292`).
+ - Existing implementation: I searched `plugins/delivery-pipeline/scripts` for any producer of `shipyard.claude-delivery-request.v1` or a Codex `--args-file` writer. The only reference to the schema is `claude-delivery-host.cjs:19`; the requests are hand-built from `deliver.md` prose today. `front.cjs` stays a read model and is not extended (it is imported by `stop-gate.cjs`).
+ 
+ ## Scope
+@@ -49,21 +57,26 @@ The model no longer assembles requests, launches, or polls in the foreground.
+ - NEW `plugins/delivery-pipeline/scripts/deliver-dispatch.cjs` with three subcommands.
+   - `launch --runtime claude|codex --ticket <id> --role <role> [--graph-dir <d>]`:
+     - Refuse unless the ticket is actionable in `computeFront` for that role.
+-    - Resolve `graphDir` from the ticket worktree with `resolveGraphDir`.
++    - Resolve `graphDir` as the canonical project graph: `--graph-dir`, else `resolveGraphDir` from the project root (the checkout the orchestrator runs in), never from the ticket worktree. Refuse `GRAPH_UNRESOLVED`, naming `--graph-dir <project>/.planning/graph`, when none is found. A copy of the graph inside a worktree is never used.
+     - Take `branch` from the row, never recomputed.
+-    - Set `planPath = path.resolve(graphDir, '..', '..', row.plan)`.
++    - Set `planPath = path.resolve(graphDir, '..', '..', row.plan)` (the canonical plan in the project, D-43), and compute its sha256 as `planSha256`. Both go into the request.
+     - Build `signals` from the allow-list only: `risk`, `checkpoint` when `human_checkpoint === true`, `critical` when the row marks it. The row `type` never enters `signals` (Pitfall 1).
+     - For executor requests in a target project (`prHygiene.applies({root: projectRoot, ref: base})` is true, T-40-17), set the existing executor arguments `prBodyGuide` to `NEUTRAL_PR_BODY_GUIDE` and `deliveryRulesHint` to `NEUTRAL_DELIVERY_RULES_HINT`. The default hint at `workflows/executors.mjs:188` tells the agent to commit with a `(T-id):` prefix, which leaks the id into commit subjects (D-19) whenever the agent commits. In the Shipyard repository, leave both unset so today's guide and hint apply.
+     - Claude: write a mode-0600 `{schema, scope, args}` request file outside the worktree and call `validateRequest`. Codex: write the args file and call `validateArgs`.
+-    - For `role: pr-sentinel`, run `sentinel-preflight.cjs` first and refuse with its message on failure.
+-    - Spawn `process.execPath` with the host script and file, with `detached: true`, `stdio: ['ignore', out, err]`, `env` including `SHIPYARD_GRAPH_DIR=graphDir`, and `unref()`. No intermediate shell (Pitfall 3).
++    - For `role: pr-sentinel`, run `sentinel-preflight.cjs` `preflightRound` first over every repository of the round's PRs (D-44) and refuse with its message on failure.
++    - Spawn `process.execPath` with the host script and file, with `detached: true`, `stdio: ['ignore', out, err]`, `env` including `SHIPYARD_GRAPH_DIR=graphDir` (the canonical graph), and `unref()`. No intermediate shell (Pitfall 3).
+     - Print one JSON line `{dispatch_id, ticket, role, runtime, log, result}`.
+   - `status --dispatch <id>`: reads the in-flight record liveness (`activeDispatches`) and the result file, and prints `running | exited-ok | exited-failed | lost`.
+   - `wait --dispatch <id> [--timeout-ms n]`: blocks in Node, checking status on an interval with no shell `sleep`. When the host is no longer live it records a `dispatch` wake event via `recordWakeEvent` and prints the final status. On timeout it prints `running` with exit 3.
+ - `run-waker.cjs`: add `'dispatch'` to `WAIT_KINDS`.
++- Plan delivery (D-43), in the trusted host, not in agent-reachable files:
++  - `claude-delivery-host.cjs` and `codex-delivery-host.cjs`: after `canonicalPlan` accepts `planPath`, read the plan bytes, require them to be non-empty, bounded (the existing reference byte cap) and equal to `planSha256`; otherwise refuse `PLAN_DIGEST_MISMATCH` naming the plan path. Pass the verified content to the workflow as `planContent` with `planSha256`. A request without `planSha256` still works for the Shipyard repository, where the plan is tracked and inside the worktree; it is refused in a target project (`prHygiene.applies`).
++  - `workflows/executors.mjs`: when `planContent` is present, the prompt embeds it as the ticket contract, delimited and labelled with `planSha256`, and the anti-injection line says the contract is that embedded block. The instruction to read `planPath` is kept only when `planContent` is absent. `no-contract` is returned only when the embedded contract is empty.
++  - The agent's permissions are not widened: no `--add-dir`, no read exception outside the worktree, and nothing is written into the worktree.
+ - NEW `tests/unit/deliver-dispatch.test.cjs`: fixture graph plus worktree in `os.tmpdir()`, with a stub host script path injected through an option, not by editing hosts. Cases:
+   - Pitfall 1: a row with `type: implementation` yields a request whose `signals` has no `type`, and which the real `validateRequest` accepts.
+   - Pitfall 2: `planPath` satisfies `canonicalPlan` when cwd is elsewhere.
++  - D-43: a target-project fixture with untracked `.planning/` and a cross-repo ticket whose worktree is a second temp repository yields a request whose `graphDir` is the project graph, whose `planPath` is the project plan, and whose `planSha256` matches; a worktree containing a stale copy of `.planning/graph` is ignored.
+   - Branch equals the row value.
+   - A non-actionable ticket refuses.
+   - A Codex request passes `validateArgs`.
+@@ -71,6 +84,8 @@ The model no longer assembles requests, launches, or polls in the foreground.
+   - `pr-sentinel` runs the preflight first (stubbed preflight refusal propagates).
+   - A target-project fixture gets `prBodyGuide === NEUTRAL_PR_BODY_GUIDE` and `deliveryRulesHint === NEUTRAL_DELIVERY_RULES_HINT`, a fixture with a committed `shipyard` manifest gets neither, and both requests pass `validateRequest`.
+ - `tests/unit/run-waker.test.cjs`: `dispatch` events are accepted, and unknown kinds are still refused.
++- `tests/unit/claude-delivery-host.test.cjs` and `tests/unit/codex-delivery-host.test.cjs` (stub launch at the host layer; author no Codex exec-stream record): a matching `planSha256` passes `planContent` to the workflow; a mismatched or missing digest in a target project refuses `PLAN_DIGEST_MISMATCH`; the Shipyard fixture without a digest keeps today's behaviour.
++- `tests/unit/workflows-args.test.cjs`, for `executors.mjs`: the built prompt contains the embedded contract and its digest and no instruction to read a path outside the worktree.
+ - Comment policy on added lines.
+ 
+ ## Out of scope
+@@ -84,6 +99,7 @@ The model no longer assembles requests, launches, or polls in the foreground.
+ - Every request the script builds round-trips through the real host validator in the tests. No test hand-writes a request shape.
+ - `wait` never uses a shell `sleep`, and returns within one interval after the host exits.
+ - Ticket `type` never appears under `signals` in any built request.
++- In a target project with untracked `.planning/`, a same-repo and a cross-repo executor request both deliver the contract to the agent without any file outside the worktree, and no graph copy is created in any worktree.
+ 
+ ## Test strategy (TDD: failing test first)
+ 
+@@ -99,5 +115,8 @@ A real detached launch through the ADR-014 boundary is exercised by the live rou
+ - `node --check plugins/delivery-pipeline/scripts/run-waker.cjs`
+ - `node tests/unit/deliver-dispatch.test.cjs`
+ - `node tests/unit/run-waker.test.cjs`
++- `node tests/unit/claude-delivery-host.test.cjs`
++- `node tests/unit/codex-delivery-host.test.cjs`
++- `node tests/unit/workflows-args.test.cjs`
+ - `node tests/unit/front.test.cjs`
+ - `node plugins/delivery-pipeline/scripts/publish-gate.cjs --base origin/main --working-tree --json`
+diff --git a/.planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-16-PLAN.md b/.planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-16-PLAN.md
+index e4782ddc..ec864a45 100644
+--- a/.planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-16-PLAN.md
++++ b/.planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-16-PLAN.md
+@@ -28,6 +28,8 @@ The sentinel seam (D-01, D-05). Before a PR-sentinel round, the conveyor establi
+ 
+ Otherwise it refuses with the exact command to run. `claude-role-host.cjs` no longer swallows a failed fetch.
+ 
++A phase can span several repositories (D-44). Every base is fetched, fast-forwarded and compared in the checkout of the repository that owns the PR, not in the project worktree.
++
+ ## Context (Reads)
+ 
+ - `plugins/delivery-pipeline/scripts/claude-role-host.cjs:169-188` `branchOid` (anchor A6): `catch { if (expectedOid === undefined) reject(...) }` swallows a fetch failure when `expectedOid` is given. `:485-520` `prepareSentinel`. As modified by T-39-12.
+@@ -37,6 +39,8 @@ Otherwise it refuses with the exact command to run. `claude-role-host.cjs` no lo
+ - 40-RESEARCH Pitfall 5: target projects leave `.planning/` untracked, so commit only when `git ls-files --error-unmatch .planning/graph/delivery-state.json` succeeds. The "clean worktree" test ignores untracked `.planning/`.
+ - Existing implementation: `branchOid` already does the fetch, and the preflight reuses the same refspec and safe-branch grammar. I searched `sentinel.cjs`, `epic-branch.sh` (`refresh`) and `base-merge.cjs` for an existing fetch + fast-forward + sync sequence. `epic-branch.sh refresh` fast-forwards epics only and does not run state-sync or commit, so the preflight is new and does not duplicate it.
+ 
++- Amendment after the pdffiller proving-ground run (2026-09-25, session b11246f1, D-44): a phase-02 round across pdffiller, jsfiller and four frontend repositories. `prepareSentinel` (`claude-role-host.cjs:554-586`) calls `branchOid(options, canonical.worktree, baseRef, live.baseRefOid)` for every PR, so a jsfiller PR's `epic/02-…` base was compared against pdffiller's origin and refused with `base branch … is missing or differs from its live GitHub revision`. The orchestrator abandoned the pr-sentinel role and ran `sentinel.cjs duty` plus per-PR arch-review by hand. The owning checkout is already recorded by state-sync as `delivery-state.json` `<ticket>.repo_resolution` (`{resolution, executable, repository_root}`, from `repo-resolve.cjs`).
++
+ - Graph position (plan-check revision): depends on T-40-01 because its verification runs `tests/unit/claude-role-host.test.cjs`, one of the INV-004 C-T15 failures on a host with global commit signing, and T-40-01's harness makes that run hermetic.
+ 
+ ## Scope
+@@ -48,15 +52,17 @@ Otherwise it refuses with the exact command to run. `claude-role-host.cjs` no lo
+   4. When `.planning/graph/delivery-state.json` is tracked and changed, commit only `.planning/graph/` with a conventional subject `chore: sync delivery state`. When untracked, commit nothing.
+   5. Refuse `WORKTREE_DIRTY`, naming `git -C <wt> status`, when tracked files outside `.planning/graph/` are dirty.
+   It returns `{base_oid, synced, committed}`.
+-- `claude-role-host.cjs`: in `branchOid`, any fetch failure rejects `BASE_REVISION_UNAVAILABLE` whether or not `expectedOid` is given. `prepareSentinel` calls `preflight(...)` first and surfaces its refusal unchanged. The identity and base checks are not relaxed.
++  6. Multi-repository (D-44): `preflightRound({projectWorktree, graphDir, prs: [{ticket, repo, base}], run})` groups the round's PRs by `repo`. The project repository (no `repo`, or the project's own slug) uses `projectWorktree`; every other repository uses `repo_resolution.repository_root` from `delivery-state.json`, which must be `executable: true`. Otherwise it refuses `REPO_UNRESOLVED`, naming the ticket, the repository and the `pipeline.repos` key to set. Steps 1, 2 and 5 run once per `(repository, base)` in that repository's checkout; steps 3 and 4 run once, in the project, after all fetches succeed. It returns `{repos: [{repo, root, base, base_oid}], synced, committed}`. The CLI gains `--round --graph-dir <dir>`.
++- `claude-role-host.cjs`: in `branchOid`, any fetch failure rejects `BASE_REVISION_UNAVAILABLE` whether or not `expectedOid` is given. `prepareSentinel` calls `preflightRound(...)` first and surfaces its refusal unchanged. For each PR it passes the owning checkout from the preflight result (not `canonical.worktree`) to `branchOid` and to every git read of that PR's base. The identity and base checks are not relaxed, and a PR whose repository is unresolved is refused, never measured in the project worktree.
+ - NEW `tests/unit/sentinel-preflight.test.cjs`: a hermetic bare origin plus clone in `os.tmpdir()` (own `GIT_CONFIG_GLOBAL`, `commit.gpgsign=false`) and a stub `state-sync` via an injected runner. Cases:
+   - unreachable origin refuses, naming the fetch command;
+   - behind base fast-forwards;
+   - diverged base refuses, naming `branch -f`;
+   - tracked graph change is committed;
+   - untracked `.planning/` commits nothing and passes;
+-  - dirty source file refuses.
+-- `tests/unit/claude-role-host.test.cjs`: a fetch failure with `expectedOid` given now refuses, and a preflight refusal reaches the caller.
++  - dirty source file refuses;
++  - multi-repository round (two hermetic origin+clone pairs, the second recorded as `repo_resolution.repository_root`): each base is fetched in its own clone and both base oids are returned; an `executable: false` resolution refuses `REPO_UNRESOLVED` naming the `pipeline.repos` key; the same branch name with different oids in the two repositories is not a conflict.
++- `tests/unit/claude-role-host.test.cjs`: a fetch failure with `expectedOid` given now refuses, and a preflight refusal reaches the caller; a round with a PR in a second repository measures that PR's base in the second clone and passes where today's code refuses.
+ - Comment policy on added lines.
+ 
+ ## Out of scope
+@@ -68,6 +74,7 @@ Otherwise it refuses with the exact command to run. `claude-role-host.cjs` no lo
+ 
+ - No code path in `claude-role-host.cjs` continues after a failed base fetch.
+ - Every refusal message contains a command the operator can copy and run.
++- A PR's base is never resolved in a repository other than the one that owns the PR.
+ - The preflight never commits outside `.planning/graph/` and never commits when `.planning/` is untracked.
+ 
+ ## Test strategy (TDD: failing test first)
+diff --git a/.planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-17-PLAN.md b/.planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-17-PLAN.md
+index a70500c2..87b2f867 100644
+--- a/.planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-17-PLAN.md
++++ b/.planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-17-PLAN.md
+@@ -10,6 +10,8 @@ files_modified:
+   - tests/unit/pr-hygiene.test.cjs
+   - plugins/delivery-pipeline/scripts/planning-untrack.cjs
+   - tests/unit/planning-untrack.test.cjs
++  - plugins/delivery-pipeline/scripts/pipeline-config.cjs
++  - tests/unit/pipeline-config.test.cjs
+ requirements: [REQ-142]
+ delivery:
+   ticket: T-40-17
+@@ -23,6 +25,7 @@ This is the core of D-07 for target projects.
+ 
+ - A deterministic gate, `pr-hygiene.cjs`, rejects a PR before publication when its title, body, head branch, commit subjects (D-19) or diff paths carry conveyor or GSD internals.
+ - A single applicability predicate exempts the Shipyard repository (D-26).
++- The title format is the target repository's own convention, read from project configuration, with Conventional Commits as the default (D-45). The gate forbids internals; it does not impose one format on every repository.
+ - `planning-untrack.cjs` is the explicit, confirmed, one-time migration that makes `.planning/` untracked in a target project (D-16). The conveyor never writes `.gitignore` on its own.
+ 
+ ## Context (Reads)
+@@ -34,6 +37,8 @@ This is the core of D-07 for target projects.
+ - 40-RESEARCH Code example 4 (applicability) and Runtime State Inventory (the untrack migration steps).
+ - Existing implementation: I searched `plugins/delivery-pipeline/scripts` for a PR text checker (`conventional`, `title`, `forbidden`, `hygiene`). `comment-policy.cjs` checks code comments only, and `role-artifact.cjs assertTicketMarker` requires the opposite. No PR text gate exists. For `.gitignore` or `git rm --cached` writers I searched `gsd-tune.cjs`, `adr-bootstrap.cjs` and `decompose.md`. None exists; the rejected alternative was automatic writes by bootstrap.
+ 
++- Amendment after the pdffiller proving-ground run (2026-09-25, session b11246f1, D-45): the six repositories of one phase use different, CI-enforced title conventions. pdffiller squashes `[MYD-17864] refactor: …`; jsfiller and the frontend repositories run a fleet commit-lint preset that accepted `feat(support-pages): [MYD-17873] …` and rejected `fix[MYD-17872]: …` and `T-02-09: …`. ADR-002 of that project records the per-repository formats as a decision. A single hard-coded `^(feat|…)(\(scope\))?!?: ` title rule would reject every pdffiller title that its own history and reviewers expect. `pipeline-config.cjs` already reads per-repository `pipeline.repos` entries; the title format is a sibling setting.
++
+ - Graph position (plan-check revision): depends on T-40-19 because the hygiene gate rejects `gate_status:` in bodies, which is only satisfiable once T-40-19 moves verdicts to the `merge-gate` status. After the user-review amendment T-40-01 no longer depends on this ticket; T-40-15, T-40-23, T-40-24 and T-40-25 depend on it directly as a non-primary parent and receive it through the epic (T-40-27).
+ 
+ ## Scope
+@@ -41,21 +46,26 @@ This is the core of D-07 for target projects.
+ - NEW `pr-hygiene.cjs`:
+   - `applies({root, ref})` per D-26. When `ref` is given, read the manifest with `git -C <root> show <ref>:plugins/delivery-pipeline/.claude-plugin/plugin.json`, a committed base that an agent cannot edit from its worktree. Without `ref`, read the file from `root`, which is only for trusted checkouts. It is fail-closed: any read or parse error means hygiene applies. A target-project worktree that adds a `shipyard` manifest does not become exempt when `ref` is the base.
+   - `conventionalType(ticketType)`: the D-27 map (GSD ticket `type` → conventional type). T-40-18 and T-40-20 import it, so there is one map.
++  - `titleFormat({root, repo})` (D-45): reads `.planning/config.json` `pipeline.pr_title_format` as either one pattern or a map `{<owner/repo>: <pattern>}`, with `default` for unlisted repositories. A pattern is a template over exactly `{type}`, `{scope}`, `{jira}` and `{subject}`, with optional segments written `{[`…`]}` (every other character, including `[`, `]`, `(` and `)`, is literal), for example `[{jira}] {type}: {subject}` or `{type}{[({scope})]}: {[[{jira}] ]}{subject}`. An optional segment is present only when every placeholder inside it has a value. Without configuration the format is Conventional Commits `{type}{[({scope})]}{[!]}: {subject}`. An unknown placeholder or an unparseable template refuses `TITLE_FORMAT_INVALID`, naming the key. The template compiles to one anchored regular expression.
++  - `formatTitle({type, scope, jira, subject}, format)`: renders a title in that format. The PR publication path (T-40-24) and the epic PR (T-40-20) build titles through it, so the generator and the gate share one definition.
+   - `NEUTRAL_PR_BODY_GUIDE`: the one-line body guide for target projects (summary, changes, tests; no ticket, phase, ADR, plan or tool names). T-40-15 passes it to executors through the existing `prBodyGuide` argument.
+   - `NEUTRAL_DELIVERY_RULES_HINT`: the one-line rules hint for target projects (work only within files_modified; conventional-commit subjects with no ticket id). T-40-15 passes it through the existing `deliveryRulesHint` argument. Both strings pass `check` themselves.
+   - `check({title, body, head, base, paths, commits, jiraKeys})` returns `{ok, violations: [{field, rule, excerpt}]}`:
+-    - title matches `^(feat|fix|docs|refactor|test|perf|build|ci|chore|revert)(\([a-z0-9-]+\))?!?: \S`, and the scope is not a ticket id;
++    - title matches the compiled `titleFormat` for the PR's repository (D-45); `{type}` is one of `feat|fix|docs|refactor|test|perf|build|ci|chore|revert`, and neither the scope nor the subject is a ticket id;
+     - head matches `<type>/<slug>` or `<type>/<JIRA-KEY>-<slug>` with the same type list (D-18 epic `feat/…` included);
+     - title, body, head and every commit subject contain none of: `T-\d{2}-\d{2}`, `Ticket:`, `\bPhase \d+`, `ADR-\d+`, `PLAN.md`, `ticket/`, `epic/`, `.planning/`, `.shipyard/`, `gate_status:`, and the words `shipyard`, `gsd`, `conveyor` (case-insensitive, word-bounded);
+     - no added, modified, copied or renamed path starts with `.planning/` or `.shipyard/`. Deleting such a path is allowed, because it removes internals: the one-time untrack migration below consists of those deletions and must pass this gate;
+-    - a Jira key is allowed in the head and body only when it is in `jiraKeys` from the graph.
+-  - CLI: `check --project-root <r> --base <b> --head <h> --title <t> --body-file <f> [--json]`. It collects `paths` with their status from `git diff --name-status <b>...<h>` and `commits` from `git log --format=%s <b>..<h>` using argument arrays. It exits 0 when `applies` is false (printing `exempt`), and exits 2 with the violations otherwise.
++    - a Jira key is allowed in the title, head and body only when it is in `jiraKeys` from the graph; in the title it is allowed only where the format places `{jira}`.
++  - CLI: `check --project-root <r> [--repo <owner/name>] --base <b> --head <h> --title <t> --body-file <f> [--json]`; `--repo` selects the title format (default: the project repository). It collects `paths` with their status from `git diff --name-status <b>...<h>` and `commits` from `git log --format=%s <b>..<h>` using argument arrays. It exits 0 when `applies` is false (printing `exempt`), and exits 2 with the violations otherwise.
++- `pipeline-config.cjs`: register `pr_title_format` (default `null`) so it is a known key, and validate its shape at load (a string, or an object of strings keyed by `owner/repo` or `default`); a bad shape is a warning that names the key and falls back to the default format. Template compilation stays in `pr-hygiene.cjs`.
++- `tests/unit/pipeline-config.test.cjs`: `pr_title_format` produces no unknown-key warning; a non-string map value warns and is ignored.
+ - NEW `planning-untrack.cjs`:
+   - CLI `--project-root <r>` is a dry run that prints the planned `.gitignore` line and `git rm -r --cached .planning`.
+   - `--apply --confirm untrack-planning` refuses when `applies` is false (Shipyard), the tree is dirty, the current branch is the default branch, or `.planning/` is already untracked. Otherwise it appends `/.planning/` to `.gitignore` if absent, runs `git rm -r --cached --quiet .planning`, and commits with the subject `chore: stop tracking local planning files` on the current branch, for a normal PR.
+ - NEW `tests/unit/pr-hygiene.test.cjs`:
+   - each rule rejects a positive example and accepts a neutral one;
+   - a Jira key allowed and not allowed;
++  - title formats (D-45): with no configuration, `feat(export): drop x` passes and `[MYD-1] refactor: drop x` fails; with `{"pdffiller/pdffiller": "[{jira}] {type}: {subject}", "default": "{type}{[({scope})]}: {[[{jira}] ]}{subject}"}`, `[MYD-17864] refactor: delete x` passes for pdffiller, `feat(support-pages): [MYD-17873] bake in x` passes for another repository, and `fix[MYD-17872]: x`, `T-02-09: x` and `[MYD-17864] refactor: x (T-02-01)` fail; a template with an unknown placeholder refuses `TITLE_FORMAT_INVALID`; `formatTitle` output passes `check` for every configured format;
+   - `applies` is false for a temp root with a committed `shipyard` manifest, true for a root without one, true for a corrupt manifest, and true when the manifest exists only as an uncommitted worktree file and `ref` names the base;
+   - the CLI over a hermetic git fixture in `os.tmpdir()` reports a commit subject `feat(T-40-03): x` and a `.planning/` path.
+ - NEW `tests/unit/planning-untrack.test.cjs` (hermetic git fixture): the dry run changes nothing; apply without `--confirm` refuses; apply on the default branch refuses; apply on a feature branch untracks and commits; the Shipyard manifest refuses; the migration branch passes `pr-hygiene.cjs check` (deletions of `.planning/` only), while a branch that adds a `.planning/` file does not.
+@@ -71,6 +81,7 @@ This is the core of D-07 for target projects.
+ 
+ - A PR shaped like proving-ground #702 (`T-22-03: …` title, `Ticket: T-22-03` body, `ticket/T-22-03-x` head, `.planning/phases/…` path) produces one violation per leak.
+ - A clean `feat/add-batch-replace` PR with a conventional title passes.
++- A repository with a configured title format accepts titles in that format only, and the conveyor's own rendered titles pass the gate in every configured format.
+ - The Shipyard repository is always `exempt`.
+ 
+ ## Test strategy (TDD: failing test first)
+@@ -85,4 +96,5 @@ This is the core of D-07 for target projects.
+ - `node --check plugins/delivery-pipeline/scripts/planning-untrack.cjs`
+ - `node tests/unit/pr-hygiene.test.cjs`
+ - `node tests/unit/planning-untrack.test.cjs`
++- `node tests/unit/pipeline-config.test.cjs`
+ - `node plugins/delivery-pipeline/scripts/publish-gate.cjs --base origin/main --working-tree --json`
+diff --git a/.planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-CONTEXT.md b/.planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-CONTEXT.md
+index 11f88780..e9ba2c7d 100644
+--- a/.planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-CONTEXT.md
++++ b/.planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-CONTEXT.md
+@@ -45,7 +45,7 @@ Resolution of `40-RESEARCH.md` "Open Questions" (all RESOLVED): Q1 untracking an
+ - **D-27** Branch `<type>` is a deterministic map from the ticket's GSD `type`: `implementation`, `tdd`, `execute` → `feat`; `fix`, `bugfix`, `gap_closure` → `fix`; `docs` → `docs`; `refactor` → `refactor`; `test` → `test`; `chore`, `config` → `chore`; anything else → `feat`. `<JIRA-KEY>` comes from `delivery.jira` when the graph row carries one. The same map gives the conventional-commit type for titles.
+ - **D-28** The pre-push hook (Pitfall 12) takes candidate directories from `git -C <path>` / `cd <path>` in the command and from the payload `cwd`. For each candidate it asks git (`git -C <dir> rev-parse --show-toplevel`) and gates the toplevel git returns. If the command names a target that git cannot resolve (unexpanded variable, missing directory, not a worktree), the hook fails closed with a remedy that names `git -C <absolute worktree> push`. It never falls back to the session cwd when the command names a different target.
+ - **D-29** The in-flight record lives in `dispatch-record.cjs` beside `reservations`, reuses `DISPATCH_TTL_MS`, and counts as live only while `process.kill(pid, 0)` succeeds. `EPERM` counts as not live (fail closed).
+-- **D-30** Plan path: the entry point resolves the graph directory from the ticket worktree with `graph-dir.cjs resolveGraphDir`, sets `planPath = path.resolve(graphDir, '..', '..', row.plan)`, and passes that graph directory to the detached host through `SHIPYARD_GRAPH_DIR` (Pitfall 2).
++- **D-30** (superseded by D-43) Plan path: the entry point resolves the graph directory from the ticket worktree with `graph-dir.cjs resolveGraphDir`, sets `planPath = path.resolve(graphDir, '..', '..', row.plan)`, and passes that graph directory to the detached host through `SHIPYARD_GRAPH_DIR` (Pitfall 2).
+ - **D-31** The PR number recorded at creation lives in a locked ledger `<graphDir>/pr-ledger.json` written by `pr-ledger.cjs record`. `state-sync.cjs` reads it and never rebuilds it from GitHub.
+ - **D-32** The gate commit status uses the context `merge-gate`. Its description carries the existing trailer grammar (`arch-review=…, drift-check=…, tree=<short sha>`), at most 140 characters. A body trailer is read only as a legacy fallback when a PR has no `merge-gate` status.
+ - **D-33** The provenance sidecar is written by `dispatch-record.cjs recordInflight` to `<graphDir>/provenance/<dispatch_id>.json`, so every host that records an in-flight dispatch stamps it at one site.
+@@ -65,6 +65,15 @@ Resolution of `40-RESEARCH.md` "Open Questions" (all RESOLVED): Q1 untracking an
+ 
+ - **D-42 (T-40-27, REQ-138, REQ-136)** The graph carries real dependencies instead of the D-36 linearization, so a ticket may have several same-phase parents. A diamond child's primary parent still only needs to be `branched`, but every non-primary same-phase parent must have landed in the phase epic before the child is ready (`state-sync.cjs`, with the reason on the board). `ticket-worktree.sh create` merges the epic into the fresh child branch so its tree holds every parent, and the scope gates measure the child against the merge of its base and the epic. This supersedes D-36's single-parent rule and the "Deliberately NOT the fix" paragraph of `.planning/backlog/diamond-child-base-is-materially-incomplete.md`. Phase-40 diamond children are dispatched only once T-40-27 runs in the delivering conveyor (40-PLAN-CHECK "Amendment after user review").
+ 
++
++## Amendment after the pdffiller proving-ground run (2026-09-25)
++
++Evidence: pdffiller session b11246f1 delivering MYD-17835 (13 tickets across pdffiller, jsfiller, front-signature-flow, front-user-management, front-mobile-web and docs-platform) on Shipyard 0.63.0. User decision on 2026-09-25: fix inside phase 40 only the places where phase 40 as planned would ship a broken result; everything else found in that run goes to a separate phase.
++
++- **D-43 (T-40-15, REQ-138; supersedes D-30)** The entry point resolves the graph from the project, never from the ticket worktree, and `planPath` is the canonical plan in the project. The host verifies the plan bytes against `planSha256` from the request and delivers the content to the executor inside the prompt; the agent's read scope is not widened and nothing is written into the worktree. Reason: with `.planning/` untracked (D-16) and for every cross-repo ticket, the worktree has no graph, and the `--restricted` Claude executor cannot read a plan outside its worktree. All four wave-1 executors returned `no-contract` (rejected: copying `.planning/` into worktrees, which splits state; `--add-dir` for the plan directory, which widens the sandbox).
++- **D-44 (T-40-16, T-40-15, REQ-140)** Sentinel preflight and the pr-sentinel role work per repository: each PR's base is fetched, fast-forwarded and compared in the checkout of the repository that owns the PR, taken from `delivery-state.json` `repo_resolution.repository_root`; an unresolved repository is a refusal naming the `pipeline.repos` key. Reason: `prepareSentinel` compared a jsfiller PR's base against pdffiller's origin and refused, so no multi-repository phase could be guarded.
++- **D-45 (T-40-17, REQ-142; refines D-27 for titles)** The PR title format is the target repository's own convention, configured as `pipeline.pr_title_format` (one template or a map by `owner/repo` with `default`), Conventional Commits when unset. The hygiene gate checks the configured format and forbids internals; `formatTitle` renders titles for publication and epic PRs from the same template. Branch names keep D-18/D-27. Reason: pdffiller squashes `[MYD-xxxxx] type: …` while the frontend fleet's commit-lint wants `type(scope): [MYD-xxxxx] …`; one hard-coded regex rejects one of them.
++
+ </decisions>
+ 
+ ## Scope fences (verbatim intent from INV-004 DECISIONS)
+diff --git a/.planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-PLAN-CHECK.md b/.planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-PLAN-CHECK.md
+index 95f022e4..cb09d87f 100644
+--- a/.planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-PLAN-CHECK.md
++++ b/.planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-PLAN-CHECK.md
+@@ -161,3 +161,27 @@
+ - `40-01`..`40-26-PLAN.md`: `wave` in the plans whose depth changed, `depends_on` in 01, 02, 05, 09, 10, 11, 15, 22, 23, 24, 25 and 26, and the "Graph position" bullets listed above.
+ - `40-27-PLAN.md`: new.
+ - `40-CONTEXT.md`: D-42, the ticket map regenerated from the plans, and the D-42 source-audit coverage.
++
++## Amendment after the pdffiller proving-ground run
++
++**Date:** 2026-09-25. **Decision (user):** fix in phase 40 only what phase 40 as planned would ship broken, found while delivering MYD-17835 in pdffiller (session b11246f1, Shipyard 0.63.0); the remaining findings go to a separate phase (CONTEXT D-43..D-45).
++
++### Scope changes
++
++1. **T-40-15 (D-43).** Graph and plan come from the project, not the ticket worktree. The Claude and Codex delivery hosts verify `planSha256` and pass `planContent`; `executors.mjs` embeds the contract in the prompt. `files_modified` adds `workflows/executors.mjs`, `tests/unit/workflows-args.test.cjs`, both delivery hosts and their tests.
++2. **T-40-16 (D-44).** `preflightRound` groups a round's PRs by repository and measures each base in its owning checkout; `prepareSentinel` uses it. No file list change.
++3. **T-40-17 (D-45).** `titleFormat`/`formatTitle` over `pipeline.pr_title_format`; the title rule checks the configured format. `files_modified` adds `pipeline-config.cjs` and its test to register the key.
++
++### Graph changes
++
++- **T-40-09 ← T-40-15.** Both now edit `tests/unit/codex-delivery-host.test.cjs`; T-40-09 stays that file's last editor and migrates any record T-40-15 adds. T-40-09's primary parent stays T-40-11; T-40-15 becomes a non-primary parent that must land in the epic first. T-40-09 stays in wave 8.
++- No other edge changes. `validate-graph: OK — 197 ticket(s), 20 wave(s)` after the amendment; `tickets.json`/`tickets.yaml` regenerated.
++
++| Child | Primary parent | Must land in the epic first |
++|---|---|---|
++| T-40-09 | T-40-11 | T-40-07, T-40-14, T-40-15 |
++
++### Ownership with other phases
++
++- `pipeline-config.cjs` and `workflows/executors.mjs` have no other phase-40/41 editor. The delivery hosts keep their existing order (T-41-04 → T-40-14 → T-40-15).
++- `claude-role-host.cjs`: T-40-16 precedes T-40-22 (unchanged); T-41-01 is a declared dependency of T-40-16; T-41-07 also edits it and lands with phase 41, which is released before phase 40.
