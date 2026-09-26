@@ -13,7 +13,7 @@ function die(msg, code = 1) {
 }
 
 function git(args) {
-  return execFileSync('git', args, { cwd: ROOT, encoding: 'utf8' });
+  return execFileSync('git', args, { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
 }
 
 function parseBase(argv) {
@@ -42,8 +42,14 @@ function refreshedPaths(message) {
 }
 
 function pinAt(rev) {
+  let raw;
   try {
-    return JSON.parse(git(['show', `${rev}:${REL_PIN}`])).files || {};
+    raw = git(['show', `${rev}:${REL_PIN}`]);
+  } catch {
+    return null;
+  }
+  try {
+    return JSON.parse(raw).files || {};
   } catch {
     return {};
   }
@@ -54,7 +60,7 @@ function main() {
   const range = `${base}..HEAD`;
   let shas;
   try {
-    shas = git(['log', '--format=%H', range, '--', REL_PIN])
+    shas = git(['log', '--no-merges', '--format=%H', range, '--', REL_PIN])
       .split('\n')
       .map((s) => s.trim())
       .filter(Boolean)
@@ -67,7 +73,8 @@ function main() {
   let failed = false;
   for (const sha of shas) {
     const before = pinAt(`${sha}^`);
-    const after = pinAt(sha);
+    if (before === null) continue;
+    const after = pinAt(sha) || {};
     const changed = Object.keys(after).filter((rel) => before[rel] !== after[rel]);
     if (!changed.length) continue;
     const named = refreshedPaths(git(['log', '-1', '--format=%B', sha]));

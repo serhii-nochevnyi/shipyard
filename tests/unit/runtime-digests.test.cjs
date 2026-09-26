@@ -170,4 +170,34 @@ test('ignores commits that do not touch the JSON', () => {
   assert.equal(result.status, 0, result.stderr);
 });
 
+test('treats a pin file missing from the parent as no previous pin', () => {
+  const { repo, env } = fixture();
+  git(repo, ['rm', '-q', PIN_REL], env);
+  git(repo, ['commit', '-q', '-m', 'drop pin'], env);
+  const base = git(repo, ['rev-parse', 'HEAD'], env);
+  writePin(repo, { [FILE_A]: sha256('const a = 1;\n'), [FILE_B]: sha256('const b = 2;\n') });
+  git(repo, ['add', '-A'], env);
+  git(repo, ['commit', '-q', '-m', 'seed pin'], env);
+  const result = runCheckTrailer(repo, ['--base', base]);
+  assert.equal(result.status, 0, result.stderr);
+  assert.doesNotMatch(result.stderr, /fatal/);
+});
+
+test('ignores pin commits a base merge brought in', () => {
+  const { repo, env } = fixture();
+  git(repo, ['checkout', '-q', '-b', 'ticket'], env);
+  writeFile(repo, 'README.md', 'ticket change\n');
+  git(repo, ['add', '-A'], env);
+  git(repo, ['commit', '-q', '-m', 'ticket work'], env);
+  git(repo, ['checkout', '-q', 'main'], env);
+  writeFile(repo, FILE_B, 'const b = 3;\n');
+  writePin(repo, { [FILE_A]: sha256('const a = 1;\n'), [FILE_B]: sha256('const b = 3;\n') });
+  git(repo, ['add', '-A'], env);
+  git(repo, ['commit', '-q', '-m', 'unannotated pin change on main'], env);
+  git(repo, ['checkout', '-q', 'ticket'], env);
+  git(repo, ['merge', '-q', '--no-edit', 'main'], env);
+  const result = runCheckTrailer(repo, ['--base', 'main']);
+  assert.equal(result.status, 0, result.stderr);
+});
+
 done();
