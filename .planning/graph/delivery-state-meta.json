@@ -1,13 +1,13 @@
 {
   "schema_version": 1,
-  "generation": 366,
-  "generation_identity": "4c0145a5-df50-4580-942b-1afaa3222174",
-  "previous_generation_identity": "16777245:12922742176:1790407878707274800:1fef46fd512249beaaeb3e0abbacaa7742bfa60b80b641e090eeeb68f7458ca1",
-  "observed_at": "2026-09-26T07:31:19.195Z",
-  "generated_at": "2026-09-26T07:31:19.195Z",
+  "generation": 367,
+  "generation_identity": "bea5b72b-42ca-48fd-94e6-730f365272ea",
+  "previous_generation_identity": "16777245:12922874841:1790409893910859000:50e017c121392222bf05718cc3f49b089e41c3ed08a7ff9e31ca1131205b4599",
+  "observed_at": "2026-09-26T08:26:39.239Z",
+  "generated_at": "2026-09-26T08:26:39.239Z",
   "by": "state-sync",
-  "pid": 2831,
-  "observation_generation": 366,
+  "pid": 85349,
+  "observation_generation": 367,
   "observation_projection": {
     "tickets": {
       "T-20-01": {
@@ -2178,9 +2178,9 @@
         "checks": null
       },
       "T-41-09": {
-        "status": "pending",
+        "status": "merged",
         "repository": null,
-        "pr": null,
+        "pr": 250,
         "head": null,
         "draft": false,
         "base": "epic/41-reduce-pipeline-subscription-overhead",
@@ -2203,9 +2203,9 @@
   },
   "binding": {
     "schema_version": 1,
-    "state_digest": "154f2c3629fc94b8341392496466b6c9d884c290593b18423b6204df9e93f0bd",
-    "front_digest": "28f9e643b5d4731bcb7152505bceaa88524fb66c30f53838c57056ecc3b79e4d",
-    "observation_digest": "8e8cc407f75bc637280f7c565c95b88807f8bfa12a9101574584d1e16d59edee",
-    "observation_generation": 366
+    "state_digest": "079587dc92323607961faea84ba3cc9e40c865b0ad13fb6d10ed9fde280c2f10",
+    "front_digest": "6c1188b388320e7e80a998fe5c9f1c63118b4b8ee62aaddcfe2145b477c96a42",
+    "observation_digest": "e2136231ceab0420af48f459488336d9b5d740978ea08c658bf18c3334fe1858",
+    "observation_generation": 367
   }
 }

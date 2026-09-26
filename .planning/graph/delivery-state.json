@@ -2080,14 +2080,14 @@
   },
   "T-41-09": {
     "branch": "ticket/T-41-09-align-first-response-usage-with-the-usag",
-    "pr": null,
-    "status": "pending",
+    "pr": 250,
+    "status": "merged",
+    "url": "https://github.com/serhii-nochevnyi/shipyard/pull/250",
     "base": "epic/41-reduce-pipeline-subscription-overhead",
     "base_reason": "T-41-01 is MERGED, so its branch is no longer where work lands — the base is epic/41-reduce-pipeline-subscription-overhead (base-merge it in first to keep the review diff one slice)",
     "epic": "epic/41-reduce-pipeline-subscription-overhead",
-    "ready": true,
-    "reapable": false,
-    "since": "2026-09-26T07:25:48.298Z"
+    "reapable": true,
+    "since": "2026-09-26T08:26:39.239Z"
   },
   "T-42-01": {
     "branch": "ticket/T-42-01-resume-authenticated-completed-execution",
@@ -2249,7 +2249,7 @@
     "blocked_reasons": {
       "T-40-01": "parent has no branch yet (nothing to cascade from)",
       "T-41-01": "cross-phase parent must land on main first (phase 41 epic still ahead)",
-      "T-41-09": "cross-phase parent must be MERGED and its phase 41 epic landed on main first (parent is pending)"
+      "T-41-09": "cross-phase parent must land on main first (phase 41 epic still ahead)"
     },
     "reapable": false,
     "since": "2026-09-24T19:40:45.987Z"
@@ -2316,7 +2316,7 @@
       "T-40-14": "parent has no branch yet (nothing to cascade from)",
       "T-40-19": "parent has no branch yet (nothing to cascade from)",
       "T-41-01": "cross-phase parent must land on main first (phase 41 epic still ahead)",
-      "T-41-09": "cross-phase parent must be MERGED and its phase 41 epic landed on main first (parent is pending)"
+      "T-41-09": "cross-phase parent must land on main first (phase 41 epic still ahead)"
     },
     "reapable": false,
     "since": "2026-09-24T19:40:45.987Z"
