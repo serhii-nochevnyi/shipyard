@@ -108,7 +108,32 @@ function locateNativeChildFile(codexHome, parentSessionId, now = new Date()) {
   return matches[0];
 }
 
-async function runClaudeStream({ scratchDir, transcriptDir }) {
+const CLAUDE_VARIANT_SCHEMAS = {
+  executor: {
+    type: 'object',
+    required: ['id', 'status', 'summary'],
+    properties: {
+      id: { type: 'string' },
+      status: { type: 'string', enum: ['committed', 'blocked'] },
+      summary: { type: 'string' },
+    },
+  },
+  research: {
+    type: 'object',
+    required: ['summary'],
+    properties: { summary: { type: 'string', maxLength: 500 } },
+  },
+};
+
+function claudeSchemaFor(variant) {
+  if (!Object.hasOwn(CLAUDE_VARIANT_SCHEMAS, variant || '')) {
+    fail(`claude-stream needs --variant executor or --variant research (got ${variant || 'none'})`);
+  }
+  return CLAUDE_VARIANT_SCHEMAS[variant];
+}
+
+async function runClaudeStream({ scratchDir, transcriptDir, variant }) {
+  const schema = claudeSchemaFor(variant);
   const host = require('../plugins/delivery-pipeline/scripts/claude-runtime-host.cjs');
   const { CLAUDE_MODEL_ALIASES } = require('../plugins/delivery-pipeline/scripts/runtime-adapters.cjs');
   const probe = host.probeClaudeRuntime({});
@@ -118,9 +143,10 @@ async function runClaudeStream({ scratchDir, transcriptDir }) {
     executable: probe.executable,
     transcriptDir,
   });
-  const result = await launcher(CAPTURE_PROMPT, { model: CLAUDE_MODEL_ALIASES.fable, effort: 'low' });
-  if (!result.transcript) fail('Claude launch produced no transcript to capture');
-  const raw = fs.readFileSync(result.transcript.path, 'utf8');
+  const result = await launcher(CAPTURE_PROMPT, { model: variant === 'research' ? CLAUDE_MODEL_ALIASES.opus : CLAUDE_MODEL_ALIASES.sonnet, effort: 'low', schema });
+  const transcript = result.transcript || (result.applicationEvidence && result.applicationEvidence.transcript);
+  if (!transcript) fail('Claude launch produced no transcript to capture');
+  const raw = fs.readFileSync(transcript.path, 'utf8');
   return { cliVersion: probe.runtime_version, outputs: [{ suffix: null, raw }] };
 }
 
@@ -203,8 +229,8 @@ async function main(argv) {
     return;
   }
 
-  const scratchDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-capture-'));
-  const transcriptDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-capture-transcript-'));
+  const scratchDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-capture-')));
+  const transcriptDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-capture-transcript-')));
   try {
     const { cliVersion, outputs } = await boundary.run({ scratchDir, transcriptDir, variant: args.variant });
     const written = [];
@@ -228,4 +254,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { scrub, provenanceLine };
+module.exports = { scrub, provenanceLine, claudeSchemaFor };
