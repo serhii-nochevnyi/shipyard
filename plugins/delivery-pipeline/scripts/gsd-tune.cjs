@@ -113,7 +113,7 @@ function codexStaticVariants(phase = 2) {
       role, rung: rung.name, model: policy.CODEX_MODEL_IDS[rung.model_key], effort: rung.effort,
       file: policy.codexAgentFile(role, rung.name),
       reference: role === 'research' ? 'inv-research' : role,
-      sandbox: ['research', 'arch-review', 'drift-check'].includes(role) ? 'read-only' : 'workspace-write',
+      sandbox: ['arch-review', 'drift-check'].includes(role) ? 'read-only' : 'workspace-write',
     })));
 }
 
