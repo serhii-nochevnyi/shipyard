@@ -64,9 +64,10 @@ artifacts, and finalization keys under `~/.local/state/shipyard/` — one
 family of directories (`claude/`, `claude-decompose/`, `codex/`,
 `codex-decompose/`) per runtime and role, always outside the model
 worktree. `claude-decompose-host.cjs` resolves its root under
-`claude-decompose/`; `codex-decompose-host.cjs` resolves its root under
-`codex-decompose/`; both refuse to start if that root would resolve inside
-the worktree instead. A path under `~/.local/state/shipyard/…` appearing
+`claude-decompose/` in the user's home directory and does not check it
+against the worktree; `codex-decompose-host.cjs` resolves its root under
+`codex-decompose/` and refuses to start if that root would resolve inside
+the worktree. A path under `~/.local/state/shipyard/…` appearing
 during or after a decomposition run is expected host evidence, never the
 model's own output leaking onto disk — it is not a leak and not something
 to clean.

@@ -59,9 +59,10 @@ artifacts, and finalization keys under `~/.local/state/shipyard/` — one
 family of directories (`claude/`, `claude-decompose/`, `codex/`,
 `codex-decompose/`) per runtime and role, always outside the model
 worktree. `claude-delivery-host.cjs` (the engine behind
-`claude-investigation-host.cjs`) resolves its root under `claude/`;
-`codex-delivery-host.cjs` resolves its root under `codex/`; both refuse to
-start if that root would resolve inside the worktree instead. A path under
+`claude-investigation-host.cjs`) resolves its root under `claude/` in the
+user's home directory and does not check it against the worktree;
+`codex-delivery-host.cjs` resolves its root under `codex/` and refuses to
+start if that root would resolve inside the worktree. A path under
 `~/.local/state/shipyard/…` appearing during or after an investigation is
 expected host evidence, never the model's own output leaking onto disk —
 it is not a leak and not something to clean.
