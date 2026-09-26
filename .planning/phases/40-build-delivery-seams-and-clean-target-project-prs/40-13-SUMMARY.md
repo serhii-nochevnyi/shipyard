@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: e40524ecc1e334a5f19de09f46da4297f81a2fbb309ae5a579f85f8ab1823f0b
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: edb6080054f0d639127f78549822d9772bc6ebd7fc7a377cd5673ee8a5de8382
 phase: 40-build-delivery-seams-and-clean-target-project-prs
 plan: 13
 subsystem: shipyard delivery
@@ -22,7 +22,7 @@ key-decisions:
 duration: 0min
 status: halted
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: e40524ecc1e334a5f19de09f46da4297f81a2fbb309ae5a579f85f8ab1823f0b
+shipyard_source_fingerprint: edb6080054f0d639127f78549822d9772bc6ebd7fc7a377cd5673ee8a5de8382
 ---
 
 # Phase 40: Keep sealed research lines, name the failed line and re-dispatch only that line — Delivery Projection

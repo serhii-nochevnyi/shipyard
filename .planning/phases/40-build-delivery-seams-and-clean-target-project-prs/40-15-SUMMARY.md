@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 1472af2e0593289552cbf452169c70e35b8a30d134bd2c9d39af6f7f7c043cde
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 5110f4f0a9370cbdd89e97099f9fcf80acf7ca711257b98e7573e1ad388aa207
 phase: 40-build-delivery-seams-and-clean-target-project-prs
 plan: 15
 subsystem: shipyard delivery
@@ -22,7 +22,7 @@ key-decisions:
 duration: 0min
 status: halted
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 1472af2e0593289552cbf452169c70e35b8a30d134bd2c9d39af6f7f7c043cde
+shipyard_source_fingerprint: 5110f4f0a9370cbdd89e97099f9fcf80acf7ca711257b98e7573e1ad388aa207
 ---
 
 # Phase 40: Add deliver-dispatch: build host requests from the graph, launch detached, and offer status and wait — Delivery Projection

@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 021f1c997c7e2f9ad5fc17ae32a3caf0355c9a7203f4a5a9f70917316786ef86
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 946b4dd51094b5845b4d7f3fe06912a9535535e42387aff3b164e5b2604cc3e9
 phase: 40-build-delivery-seams-and-clean-target-project-prs
 plan: 18
 subsystem: shipyard delivery
@@ -22,7 +22,7 @@ key-decisions:
 duration: 0min
 status: halted
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 021f1c997c7e2f9ad5fc17ae32a3caf0355c9a7203f4a5a9f70917316786ef86
+shipyard_source_fingerprint: 946b4dd51094b5845b4d7f3fe06912a9535535e42387aff3b164e5b2604cc3e9
 ---
 
 # Phase 40: Produce clean executor PR bodies and conventional host-finalized commits in target projects — Delivery Projection
