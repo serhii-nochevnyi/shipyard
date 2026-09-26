@@ -34,6 +34,8 @@ const causeFromError = (error) => {
   const code = error && typeof error.code === 'string' && error.code.trim() ? error.code : 'RESEARCH_LINE_DISPATCH_FAILED'
   return { code, cause }
 }
+// @contract: authority and integrity refusals fail the workflow closed; they never become a blocked line.
+const FAIL_CLOSED_CODES = new Set(['NONCOMPLIANT_RECEIPT', 'MISSING_RECEIPT', 'STALE_ARTIFACT', 'ARTIFACT_DIGEST_MISMATCH'])
 const OUT = {
   type: 'object',
   additionalProperties: false,
@@ -316,7 +318,7 @@ const results = await parallel(lines.map((line) => async () => {
       },
     })
     if (!dispatched || !dispatched.receipt || dispatched.receipt.compliance !== 'verified') {
-      throw new Error(`research line ${line.id} completed without a boundary-verified receipt`)
+      throw Object.assign(new Error(`research line ${line.id} completed without a boundary-verified receipt`), { code: 'MISSING_RECEIPT' })
     }
     const result = validateResult(line, dispatched.result)
     return {
@@ -325,6 +327,7 @@ const results = await parallel(lines.map((line) => async () => {
     }
   } catch (error) {
     const { code, cause } = causeFromError(error)
+    if (FAIL_CLOSED_CODES.has(code)) throw error
     return { line: line.id, status: 'failed', code, cause }
   }
 }))
