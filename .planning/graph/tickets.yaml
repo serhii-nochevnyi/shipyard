@@ -2736,7 +2736,7 @@ tickets:
     repo: null
     wave: 2
     depends_on: [T-40-07, T-39-12]
-    files: [tests/fixtures/captured/boundaries/claude-stream.json, tests/fixtures/captured/claude-stream-executor.jsonl, tests/fixtures/captured/claude-stream-research.jsonl, tests/fixtures/claude-assistant-session.jsonl, tests/unit/claude-runtime-host.test.cjs, tests/unit/claude-workflow-host.test.cjs]
+    files: [scripts/capture-boundary-fixtures.cjs, tests/fixtures/captured/boundaries/claude-stream.json, tests/fixtures/captured/claude-stream-executor.jsonl, tests/fixtures/captured/claude-stream-research.jsonl, tests/fixtures/claude-assistant-session.jsonl, tests/unit/claude-runtime-host.test.cjs, tests/unit/claude-workflow-host.test.cjs]
     risk: high
     human_checkpoint: true
     preauthorized: true
@@ -2752,7 +2752,7 @@ tickets:
     repo: null
     wave: 3
     depends_on: [T-40-05, T-39-04]
-    files: [plugins/delivery-pipeline/scripts/host-provenance.cjs, tests/unit/host-provenance.test.cjs, scripts/install-shipyard-claude-hook.sh, scripts/install-shipyard-codex.sh, scripts/shipyard-doctor.cjs, tests/smoke/claude-hook-smoke.sh]
+    files: [plugins/delivery-pipeline/scripts/host-provenance.cjs, tests/unit/host-provenance.test.cjs, scripts/install-shipyard-claude-hook.sh, scripts/install-shipyard-codex.sh, scripts/shipyard-doctor.cjs, tests/smoke/claude-hook-smoke.sh, scripts/install-shipyard-marketplace.cjs, tests/unit/marketplace-installer.test.cjs]
     risk: high
     human_checkpoint: true
     preauthorized: true
@@ -2912,7 +2912,7 @@ tickets:
     repo: null
     wave: 3
     depends_on: [T-40-03]
-    files: [plugins/delivery-pipeline/scripts/gate-trailer.cjs, tests/unit/trailer.test.cjs, plugins/delivery-pipeline/scripts/state-sync.cjs, plugins/delivery-pipeline/scripts/sentinel.cjs, tests/smoke/sentinel-smoke.sh]
+    files: [plugins/delivery-pipeline/scripts/gate-trailer.cjs, tests/unit/trailer.test.cjs, plugins/delivery-pipeline/scripts/state-sync.cjs, plugins/delivery-pipeline/scripts/sentinel.cjs, tests/smoke/sentinel-smoke.sh, tests/unit/files-contract.test.cjs]
     risk: high
     human_checkpoint: true
     preauthorized: true
