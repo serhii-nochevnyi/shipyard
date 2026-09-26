@@ -513,6 +513,27 @@ test('a forged or malformed in-flight row is dropped', () => {
   assert.throws(() => recordInflight({ graphDir: graph, ticket: 'T-01-01', role: 'executor', dispatch_id: 'x', pid: 0, host: 'claude' }), /pid/);
 });
 
+test('recordInflight writes a provenance sidecar once and never overwrites it', () => {
+  const { graph } = scratch({ 'T-01-01': { ...READY } });
+  const { readProvenance } = require(DISPATCH);
+  assert.equal(readProvenance(graph, 'dispatch-stamp'), null);
+  recordInflight({ graphDir: graph, ticket: 'T-01-01', role: 'executor', dispatch_id: 'dispatch-stamp', pid: process.pid, host: 'claude' });
+  const file = path.join(graph, 'provenance', 'dispatch-stamp.json');
+  const first = fs.readFileSync(file, 'utf8');
+  const stamp = readProvenance(graph, 'dispatch-stamp');
+  assert.equal(stamp.schema, 'shipyard.host-provenance.v1');
+  assert.ok(['release', 'dogfood'].includes(stamp.install_kind));
+  assert.equal(typeof stamp.dirty, 'boolean');
+  assert.ok('source_sha' in stamp);
+  assert.equal(stamp.dispatch_id, 'dispatch-stamp');
+  assert.equal(stamp.ticket, 'T-01-01');
+  assert.equal(stamp.role, 'executor');
+  assert.ok(Number.isFinite(Date.parse(stamp.recorded_at)));
+  recordInflight({ graphDir: graph, ticket: 'T-01-01', role: 'reviewer', dispatch_id: 'dispatch-stamp', pid: process.pid, host: 'codex' });
+  assert.equal(fs.readFileSync(file, 'utf8'), first, 'an existing sidecar must not be overwritten');
+  assert.deepStrictEqual(fs.readdirSync(path.join(graph, 'provenance')), ['dispatch-stamp.json']);
+});
+
 test('clearInflight removes only its own pid and leaves the durable mark path unchanged', () => {
   const { project, graph } = scratch({ 'T-01-01': { ...READY }, 'T-01-02': { ...READY } });
   recordInflight({ graphDir: graph, ticket: 'T-01-01', role: 'executor', dispatch_id: 'dispatch-own', pid: process.pid, host: 'claude' });
