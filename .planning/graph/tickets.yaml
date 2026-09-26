@@ -3168,7 +3168,7 @@ tickets:
     repo: null
     wave: 9
     depends_on: [T-40-21, T-40-16, T-40-14, T-40-19, T-39-03, T-39-12, T-39-14, T-39-16, T-39-17, T-41-01, T-41-09]
-    files: [plugins/delivery-pipeline/scripts/dispatch-record.cjs, tests/unit/dispatch-record.test.cjs, plugins/delivery-pipeline/scripts/claude-role-host.cjs, tests/unit/claude-role-host.test.cjs, plugins/delivery-pipeline/scripts/sentinel.cjs, tests/unit/sentinel.test.cjs]
+    files: [plugins/delivery-pipeline/scripts/dispatch-record.cjs, tests/unit/dispatch-record.test.cjs, plugins/delivery-pipeline/scripts/claude-role-host.cjs, tests/unit/claude-role-host.test.cjs, tests/unit/sentinel.test.cjs]
     risk: high
     human_checkpoint: true
     preauthorized: true
