@@ -88,6 +88,7 @@ const {
 } = require(path.join(__dirname, 'model-policy.cjs'));
 const { activeTrackerSnapshotLocked } = require(path.join(__dirname, 'tracker-record.cjs'));
 const runTelemetry = require(path.join(__dirname, 'run-telemetry.cjs'));
+const hostProvenance = require(path.join(__dirname, 'host-provenance.cjs'));
 
 // HOW LONG A DISPATCH MAY STAY SILENT — the backstop, not the main rule. It only
 // has to cover the longest stretch of REAL work that legitimately moves no
@@ -1518,8 +1519,43 @@ function recordInflight(input) {
     store.inflight[dispatchId] = row;
     return null;
   }, undefined, true);
+  writeProvenanceOnce(graphDir(cwd), { dispatch_id: dispatchId, ticket, role, recorded_at: row.started_at });
   refreshFront(cwd);
   return Object.freeze({ ...row });
+}
+
+function provenanceFile(dir, dispatchId) {
+  const issue = opaqueDispatchValueIssue(dispatchId);
+  if (issue) throw new Error(`provenance dispatch id is invalid: ${issue}`);
+  return path.join(dir, 'provenance', `${dispatchId}.json`);
+}
+
+// @invariant: a provenance sidecar is written once per dispatch_id and never overwritten.
+function writeProvenanceOnce(dir, fields) {
+  const file = provenanceFile(dir, fields.dispatch_id);
+  if (fs.existsSync(file)) return false;
+  const stamp = hostProvenance.current({ pluginRoot: path.join(__dirname, '..') });
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const staged = `${file}.${process.pid}.${crypto.randomUUID()}.tmp`;
+  writeAtomic(staged, JSON.stringify({ ...stamp, ...fields }, null, 2) + '\n');
+  try {
+    fs.linkSync(staged, file);
+    return true;
+  } catch (error) {
+    if (error.code === 'EEXIST') return false;
+    throw error;
+  } finally {
+    try { fs.unlinkSync(staged); } catch {}
+  }
+}
+
+function readProvenance(dir, dispatchId) {
+  try {
+    return JSON.parse(fs.readFileSync(provenanceFile(dir, dispatchId), 'utf8'));
+  } catch (error) {
+    if (error.code === 'ENOENT') return null;
+    throw error;
+  }
 }
 
 function clearInflight(input) {
@@ -1576,7 +1612,8 @@ function reserveRound(cwd, input) {
     const snapshot = strictRoundSnapshot(cwd);
     const members = roundMembersForSnapshot(snapshot.tickets, snapshot.state, phase, phaseNumber, ticketSet);
     const active = activeDispatches(cwd, snapshot.state);
-    const conflict = members.find((member) => active[member.ticket]);
+    const conflict = members.find((member) => active[member.ticket]
+      && active[member.ticket].dispatch_id !== dispatchId);
     if (conflict) throw new Error(`round ticket ${conflict.ticket} already has active dispatch ownership`);
     const at = new Date().toISOString();
     const reservation = {
@@ -1850,7 +1887,7 @@ function refreshFront(cwd) {
 
 module.exports = {
   activeDispatches, dispatchWhy, dispatchFingerprint, agentIdOf, reserveRound, recordRound, clearRound,
-  recordInflight, clearInflight, DISPATCH_SUBJECT, DISPATCH_TTL_MS,
+  recordInflight, clearInflight, readProvenance, DISPATCH_SUBJECT, DISPATCH_TTL_MS,
   MARK_FLAGS, MARK_FIELD, REFUSED_FLAGS, codexAgentFiles, agentFilesFor, agentRoleName,
   CODEX_DEEP_ROLES, CODEX_DEEP_SUFFIX, CODEX_CRITICAL_ROLES, CODEX_CRITICAL_SUFFIX,
   CODEX_AGENT_PREFIX, DISPATCH_RUNTIMES, DISPATCH_BACKENDS, newDispatchId,
