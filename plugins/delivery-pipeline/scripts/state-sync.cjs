@@ -69,6 +69,7 @@ const { resolveAndPersistRepository } = require(path.join(__dirname, 'repo-resol
 // The trailer's parser lives with its writer (gate-trailer.cjs), because a
 // verdict the board and the guard must agree on cannot be held by three copies.
 const { readGate } = require(path.join(__dirname, 'gate-trailer.cjs'));
+const { nonPrimaryParents, landedInEpic } = require(path.join(__dirname, 'diamond-parents.cjs'));
 const { readCapacitySnapshot } = require(path.join(__dirname, 'capacity-lease.cjs'));
 
 const ROOT = process.cwd();
@@ -578,6 +579,7 @@ for (const [id, t] of Object.entries(tickets)) {
     if (pr.state === 'MERGED') {
       entry.status = 'merged';
       entry.url = pr.url;
+      if (mode === 'epic-stacked') entry.merged_into = pr.baseRefName;
     } else if (pr.state === 'OPEN') {
       entry.status = 'pr-open';
       entry.draft = pr.isDraft;
@@ -840,6 +842,14 @@ for (const [id, t] of Object.entries(tickets)) {
     // still carry a foreign primary parent; never emit a base that does not
     // exist in this ticket's repo — `gh pr create --base` would just fail.
     const pp = t.primary_parent && repoOf(tickets[t.primary_parent]) === repoOf(t) ? t.primary_parent : null;
+    const diamond = nonPrimaryParents(id, tickets).filter((d) => state[d]);
+    for (const d of diamond) {
+      const l = landedInEpic(d, tickets, state, t.epic);
+      if (!l.landed) {
+        addBlocker(d, `non-primary parent ${d} is ${state[d].status} — ${id}'s worktree is cut from ${t.primary_parent} ` +
+          `and receives ${d} only through ${t.epic}; ${d} must merge into ${t.epic} first (${l.reason})`);
+      }
+    }
     const ppState = pp ? state[pp] : null;
     const ppBranch = pp && tickets[pp] ? tickets[pp].branch : null;
     const ppRepoOk = pp ? (repoData.get(repoOf(tickets[pp])) || {}).available === true : false;
@@ -866,6 +876,10 @@ for (const [id, t] of Object.entries(tickets)) {
       s.base_reason = `${pp} is ${ppState.status} — cascade off ${ppBranch}; the sentinel retargets this PR onto ${t.epic} when ${pp} lands`;
     }
     s.epic = t.epic;
+    if (diamond.length && blockers.length === 0) {
+      s.base_merge = t.epic;
+      s.base_reason += `; ticket-worktree.sh create merges ${t.epic} in for non-primary parent(s) ${diamond.join(', ')}`;
+    }
 
     // The sentinel's mandate boundary, computed rather than judged: `stacked`
     // means the open PR targets this phase's epic or a parent ticket branch IN
