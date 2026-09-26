@@ -16,6 +16,7 @@ const { createVerificationRunner } = require('./command-runner.cjs');
 const { createRunScope } = require('./run-scope.cjs');
 const { createRunController, DEFAULT_LEASE_TTL_MS } = require('./run-controller.cjs');
 const { formatHint } = require('./refusal-hints.cjs');
+const { recordInflight, clearInflight } = require('./dispatch-record.cjs');
 const { acquire: acquireLock, DEFAULT_TTL_MS: LOCK_TTL_MS } = require('./lock.cjs');
 
 const SCHEMA = 'shipyard.codex-delivery-host.v1';
@@ -72,6 +73,23 @@ function requestValue(input) {
   return { role, signals: input.signals || {}, context: { ...(input.context || {}) },
     ...(input.dispatch_id ? { dispatch_id: input.dispatch_id } : {}),
     ...(input.gsd_role !== undefined ? { gsd_role: input.gsd_role } : {}) };
+}
+
+// @contract: pure — no fs writes or spawn; the boundary's UNSUPPORTED_SIGNAL surfaces unchanged.
+function validateArgs(args) {
+  const request = requestValue(args);
+  const resolution = policy.resolveDispatch({
+    runtime: 'codex', role: request.role, signals: request.signals,
+    ...(request.dispatch_id ? { dispatch_id: request.dispatch_id } : {}),
+  });
+  return Object.freeze({ request, resolution });
+}
+
+function inflightGraphDir(options, worktree) {
+  const directory = path.resolve(options.graphDir || process.env.SHIPYARD_GRAPH_DIR
+    || path.join(repoRootOf(worktree) || worktree, '.planning', 'graph'));
+  if (path.basename(directory) !== 'graph' || path.basename(path.dirname(directory)) !== '.planning') return null;
+  return fs.existsSync(directory) ? directory : null;
 }
 
 function git(worktree, args) {
@@ -1142,8 +1160,13 @@ async function runCli(argv = process.argv.slice(2), stdout = process.stdout, opt
     catch (error) { heartbeatError = error; clearInterval(heartbeat); }
   }, heartbeatMs);
   heartbeat.unref?.();
+  const inflightDir = inflightGraphDir(options, scope.worktree);
+  const inflight = inflightDir ? { graphDir: inflightDir, dispatch_id: dispatchId, pid: process.pid } : null;
   let result;
   try {
+    if (inflight) {
+      recordInflight({ ...inflight, ticket: scope.ticket, role: resolution.role, host: 'codex' });
+    }
     const host = createCodexDeliveryHost({
       scope,
       controller,
@@ -1191,6 +1214,10 @@ async function runCli(argv = process.argv.slice(2), stdout = process.stdout, opt
       }
     }
     throw error;
+  } finally {
+    if (inflight) {
+      try { clearInflight(inflight); } catch {}
+    }
   }
   stdout.write(JSON.stringify(result) + '\n');
   return result;
@@ -1200,6 +1227,7 @@ module.exports = Object.freeze({
   SCHEMA,
   MAX_ARGS_BYTES,
   requestValue,
+  validateArgs,
   collectVerificationEvidence,
   createCodexDeliveryHost,
   createFinalizationRecoveryHost,

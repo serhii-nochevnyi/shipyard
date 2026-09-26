@@ -13,7 +13,8 @@ const { isDurableRecorder } = require('./dispatch-boundary.cjs');
 const { createRunController } = require('./run-controller.cjs');
 const { createRunScope } = require('./run-scope.cjs');
 const roleArtifact = require('./role-artifact.cjs');
-const { resolveBaseRef } = require('./graph-dir.cjs');
+const { resolveBaseRef, resolveGraphDir } = require('./graph-dir.cjs');
+const { recordInflight, clearInflight } = require('./dispatch-record.cjs');
 const { sealResearch, verifySealedLine } = require('./planning-result-sealer.cjs');
 
 const WORKFLOWS = Object.freeze(['executors', 'fix-round', 'drift-gate', 'investigation-research']);
@@ -830,11 +831,42 @@ function readRequest(file) {
     reject('request file must be a bounded regular file');
   }
   const request = JSON.parse(fs.readFileSync(absolute, 'utf8'));
+  assertRequestShape(request);
+  return request;
+}
+
+function assertRequestShape(request) {
   if (!object(request) || request.schema !== REQUEST_SCHEMA || !object(request.scope)
       || !object(request.args) || Object.keys(request).some((key) => !['schema', 'scope', 'args'].includes(key))) {
     reject('request file must contain schema, scope, and serializable args only');
   }
-  return request;
+}
+
+function hostScopeFor(workflow, request) {
+  if (workflow !== 'investigation-research') return request.scope;
+  if (request.scope.ticket !== request.args.invId) {
+    reject('investigation scope ticket must match the investigation id');
+  }
+  const phase = Number(request.scope.phase);
+  if (!Number.isSafeInteger(phase) || phase < 1 || phase > 99) {
+    reject('investigation run phase cannot form a scoped controller ticket');
+  }
+  return { ...request.scope, ticket: `T-${String(phase).padStart(2, '0')}-00` };
+}
+
+// @contract: pure — no fs, spawn or git; the CLI adds the realpath and repository checks.
+function validateRequest(workflow, request) {
+  if (!WORKFLOWS.includes(workflow)) reject(`unknown workflow ${workflow}`);
+  assertRequestShape(request);
+  const hostScope = hostScopeFor(workflow, request);
+  assertScopedWork(workflow, request.args, hostScope);
+  return Object.freeze({ workflow, request, hostScope });
+}
+
+function inflightGraphDir(hostOptions, worktree) {
+  if (typeof hostOptions.graphDir === 'string') return hostOptions.graphDir;
+  const resolved = resolveGraphDir([], worktree);
+  return resolved.how === 'none' ? null : resolved.dir;
 }
 
 function cliDispatch(workflow, args) {
@@ -860,23 +892,13 @@ async function runClaudeDeliveryCli(argv = process.argv.slice(2), output = proce
   const { workflow, requestFile } = parseCli(argv);
   const request = readRequest(requestFile);
   if (!object(hostOptions)) reject('CLI host options must be an object');
-  let hostScope = request.scope;
-  if (workflow === 'investigation-research') {
-    if (request.scope.ticket !== request.args.invId) {
-      reject('investigation scope ticket must match the investigation id');
-    }
-    const phase = Number(request.scope.phase);
-    if (!Number.isSafeInteger(phase) || phase < 1 || phase > 99) {
-      reject('investigation run phase cannot form a scoped controller ticket');
-    }
-    hostScope = { ...request.scope, ticket: `T-${String(phase).padStart(2, '0')}-00` };
-  }
-  assertScopedWork(workflow, request.args, hostScope);
+  const { hostScope } = validateRequest(workflow, request);
   const worktree = fs.realpathSync(hostScope.worktree);
   if (worktree !== hostScope.worktree || git(worktree, ['rev-parse', '--show-toplevel']) !== worktree) {
     reject('CLI run scope must name the canonical repository root');
   }
   const ownerId = `claude-cli-${crypto.randomUUID()}`;
+  const dispatch = cliDispatch(workflow, request.args);
   const scope = createRunScope({
     run_id: hostScope.run_id,
     repository_id: worktree,
@@ -885,19 +907,24 @@ async function runClaudeDeliveryCli(argv = process.argv.slice(2), output = proce
     worktree,
     runtime: 'claude',
     owner_id: ownerId,
-    dispatch: cliDispatch(workflow, request.args),
+    dispatch,
   });
   const controller = createRunController({
     storeDir: path.join(storageDirectory({ ...hostOptions, scope: hostScope }), 'controller'),
     ownerId,
   });
   controller.begin(scope);
+  const graphDir = inflightGraphDir(hostOptions, worktree);
+  const inflight = graphDir ? { graphDir, dispatch_id: dispatch.dispatch_id, pid: process.pid } : null;
   let heartbeatError;
   const heartbeat = setInterval(() => {
     try { controller.heartbeat(scope.run_id); } catch (error) { heartbeatError = error; }
   }, 60000);
   heartbeat.unref();
   try {
+    if (inflight) {
+      recordInflight({ ...inflight, ticket: hostScope.ticket, role: dispatch.role, host: 'claude' });
+    }
     const result = await createClaudeDeliveryHost({
       ...hostOptions, scope: hostScope, controller,
     }).run(workflow, request.args);
@@ -910,10 +937,15 @@ async function runClaudeDeliveryCli(argv = process.argv.slice(2), output = proce
     throw error;
   } finally {
     clearInterval(heartbeat);
+    if (inflight) {
+      try { clearInflight(inflight); } catch {}
+    }
   }
 }
 
-module.exports = Object.freeze({ WORKFLOWS, REQUEST_SCHEMA, createClaudeDeliveryHost, runClaudeDeliveryCli });
+module.exports = Object.freeze({
+  WORKFLOWS, REQUEST_SCHEMA, createClaudeDeliveryHost, runClaudeDeliveryCli, validateRequest,
+});
 
 if (require.main === module) {
   runClaudeDeliveryCli().catch((error) => {

@@ -7,7 +7,7 @@ const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const { suite, test, done, assert } = require('./assert-harness.cjs');
 const { createDurableRecorder } = require('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs');
-const { createClaudeDeliveryHost, runClaudeDeliveryCli, REQUEST_SCHEMA } = require('../../plugins/delivery-pipeline/scripts/claude-delivery-host.cjs');
+const { createClaudeDeliveryHost, runClaudeDeliveryCli, validateRequest, REQUEST_SCHEMA } = require('../../plugins/delivery-pipeline/scripts/claude-delivery-host.cjs');
 const { REFERENCE_PATHS } = require('../../plugins/delivery-pipeline/scripts/claude-reference-content.cjs');
 const { createRunScope } = require('../../plugins/delivery-pipeline/scripts/run-scope.cjs');
 const { createRunController } = require('../../plugins/delivery-pipeline/scripts/run-controller.cjs');
@@ -166,6 +166,67 @@ test('CLI constructs a durable owned run and dispatches a canonical repair', asy
   } finally {
     fs.rmSync(fixture.root, { recursive: true, force: true });
   }
+});
+
+function inflightRows(graphDir) {
+  try { return JSON.parse(fs.readFileSync(path.join(graphDir, 'dispatches.json'), 'utf8')).inflight || {}; }
+  catch { return {}; }
+}
+
+for (const outcome of ['success', 'failure']) {
+  test(`CLI holds a pid in-flight record during the run and clears it after ${outcome}`, async () => {
+    const fixture = repairFixture();
+    const requestFile = path.join(fixture.root, 'request.json');
+    let during;
+    try {
+      fs.writeFileSync(requestFile, JSON.stringify({
+        schema: REQUEST_SCHEMA,
+        scope: { run_id: `cli-inflight-${outcome}`, ticket: 'T-38-03', phase: 38, worktree: fixture.worktree },
+        args: fixture.args,
+      }));
+      const running = runClaudeDeliveryCli(
+        ['--workflow', 'fix-round', '--request-file', requestFile],
+        { write() {} },
+        {
+          graphDir: fixture.graphDir,
+          storageRoot: path.join(fixture.root, 'cli-storage'),
+          probe: { status: 'available' },
+          createRuntimeHost(options) {
+            during = Object.values(inflightRows(fixture.graphDir));
+            if (outcome === 'failure') throw new Error('stubbed runtime launch failed');
+            return { ...fixture.runtimeHost, scope: options.scope, recorder: createDurableRecorder(options.recorderDir) };
+          },
+        },
+      );
+      if (outcome === 'failure') await assert.rejects(() => running, /stubbed runtime launch failed/);
+      else await running;
+      assert.equal(during.length, 1);
+      assert.equal(during[0].ticket, 'T-38-03');
+      assert.equal(during[0].role, 'ci-fix');
+      assert.equal(during[0].pid, process.pid);
+      assert.equal(during[0].host, 'claude');
+      assert.deepEqual(inflightRows(fixture.graphDir), {});
+    } finally {
+      fs.rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+}
+
+test('validateRequest accepts the canonical request and refuses unknown keys without side effects', () => {
+  const worktree = path.join(os.tmpdir(), 'shipyard-validate-request-absent');
+  const request = {
+    schema: REQUEST_SCHEMA,
+    scope: { run_id: 'run-validate', ticket: 'T-38-03', phase: 38, worktree },
+    args: { tickets: [{ id: 'T-38-03', worktreePath: worktree }] },
+  };
+  const valid = validateRequest('executors', request);
+  assert.equal(valid.hostScope.ticket, 'T-38-03');
+  assert.equal(fs.existsSync(worktree), false);
+  assert.throws(() => validateRequest('executors', { ...request, extra: true }), /schema, scope, and serializable args only/);
+  assert.throws(() => validateRequest('executors', {
+    ...request, args: { tickets: [{ id: 'T-38-04', worktreePath: worktree }] },
+  }), /contradicts the runtime ticket/);
+  assert.throws(() => validateRequest('unknown', request), /unknown workflow/);
 });
 
 test('CLI fails closed on a noncanonical PR before launching the runtime', async () => {
