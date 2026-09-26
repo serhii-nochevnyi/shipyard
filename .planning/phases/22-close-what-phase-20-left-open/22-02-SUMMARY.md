@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 3efa642ab718a81afebf77942e9575b9d8ea34009063652ce59aae0eebd7140b
 phase: 22-close-what-phase-20-left-open
 plan: 02
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-08-25
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+shipyard_source_fingerprint: 3efa642ab718a81afebf77942e9575b9d8ea34009063652ce59aae0eebd7140b
 ---
 
 # Phase 22: A reason guard checks the value, not the argument count — Delivery Projection

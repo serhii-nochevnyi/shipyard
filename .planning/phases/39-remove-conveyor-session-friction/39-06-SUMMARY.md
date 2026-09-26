@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: a3d52b1e7e4a49d6b259a467c3c5aa90cb2e7ea18f1b6ff2b1ed0951ab2c2cfa
 phase: 39-remove-conveyor-session-friction
 plan: 06
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-24
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+shipyard_source_fingerprint: a3d52b1e7e4a49d6b259a467c3c5aa90cb2e7ea18f1b6ff2b1ed0951ab2c2cfa
 ---
 
 # Phase 39: Warn on order-only same-phase dependencies — Delivery Projection

@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 14821788e590b30db9eaf1f3eb4774fa7e276bbd13425fdcbb2326b5605763d3
 phase: 40-build-delivery-seams-and-clean-target-project-prs
 plan: 07
 subsystem: shipyard delivery
@@ -22,7 +22,7 @@ key-decisions:
 duration: 0min
 status: halted
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+shipyard_source_fingerprint: 14821788e590b30db9eaf1f3eb4774fa7e276bbd13425fdcbb2326b5605763d3
 ---
 
 # Phase 40: Add the scrubbed boundary-fixture capture harness and the contract test that refuses inline shapes — Delivery Projection

@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: b70830895a84656b7d78b117a7514211e4643f176136456ade5e80f05a19381b
 phase: 36-enforce-the-runtime-model-ladder
 plan: 04
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-15
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+shipyard_source_fingerprint: b70830895a84656b7d78b117a7514211e4643f176136456ade5e80f05a19381b
 ---
 
 # Phase 36: Generate and validate the Codex bundle with the amended model ladder — Delivery Projection

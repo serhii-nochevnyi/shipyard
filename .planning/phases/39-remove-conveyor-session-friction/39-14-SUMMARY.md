@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 651f211e17f1110966b72996fc5aca7a1bb20e26a87d4767a40ffddb2b88d9a0
 phase: 39-remove-conveyor-session-friction
 plan: 14
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-25
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+shipyard_source_fingerprint: 651f211e17f1110966b72996fc5aca7a1bb20e26a87d4767a40ffddb2b88d9a0
 ---
 
 # Phase 39: Make the integrator and sentinel result identity contract unambiguous — Delivery Projection

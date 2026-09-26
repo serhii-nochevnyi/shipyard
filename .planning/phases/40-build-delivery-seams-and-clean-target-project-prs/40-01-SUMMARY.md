@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: b033935866cf3a94d8e1502b33aaf001a228c2401e7fa57cab3698ab2b2f4531
 phase: 40-build-delivery-seams-and-clean-target-project-prs
 plan: 01
 subsystem: shipyard delivery
@@ -22,7 +22,7 @@ key-decisions:
 duration: 0min
 status: halted
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+shipyard_source_fingerprint: b033935866cf3a94d8e1502b33aaf001a228c2401e7fa57cab3698ab2b2f4531
 ---
 
 # Phase 40: Make git-creating unit fixtures hermetic against global signing and fixed /tmp paths — Delivery Projection

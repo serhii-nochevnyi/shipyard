@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: ccd50108cc151aacc9489ff3766be1208d8f13b90afb94be432231e3ca52bcee
 phase: 41-reduce-pipeline-subscription-overhead
 plan: 07
 subsystem: shipyard delivery
@@ -22,7 +22,7 @@ key-decisions:
 duration: 0min
 status: halted
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+shipyard_source_fingerprint: ccd50108cc151aacc9489ff3766be1208d8f13b90afb94be432231e3ca52bcee
 ---
 
 # Phase 41: Gate phase integration on the complete merged ticket set — Delivery Projection

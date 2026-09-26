@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 6e0c23072e0aab0374f4636b15daf80e87704e497e0a9103e130ab26adc74180
 phase: 39-remove-conveyor-session-friction
 plan: 13
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-25
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+shipyard_source_fingerprint: 6e0c23072e0aab0374f4636b15daf80e87704e497e0a9103e130ab26adc74180
 ---
 
 # Phase 39: Carry the ADR-004 D8 legacy lookup and foreign-repo refusal into the Jira export plan — Delivery Projection

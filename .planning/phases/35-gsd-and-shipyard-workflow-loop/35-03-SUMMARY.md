@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: d3c1bdddd4b42f26041fc7dbf7b7ea4ad33fc5e2f3e85993a3599d13aeb2057e
 phase: 35-gsd-and-shipyard-workflow-loop
 plan: 03
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-11
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+shipyard_source_fingerprint: d3c1bdddd4b42f26041fc7dbf7b7ea4ad33fc5e2f3e85993a3599d13aeb2057e
 ---
 
 # Phase 35: Document, normalize, and bootstrap the synchronized project — Delivery Projection

@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: b1884d66b161bfa4cd44330e343806a97a263303a9197df0599bc332e9c7be4f
 phase: 32-measure-usage-and-make-the-backlog-actionable
 plan: 05
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-11
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+shipyard_source_fingerprint: b1884d66b161bfa4cd44330e343806a97a263303a9197df0599bc332e9c7be4f
 ---
 
 # Phase 32: Wire batched dispatch lifecycle into the delivery loop — Delivery Projection

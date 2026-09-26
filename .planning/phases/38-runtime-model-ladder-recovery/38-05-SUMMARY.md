@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 5a07ffdd5b87ba825a10369be3eff3a55c0bd1328d2df51510fc2ea74906fdc4
 phase: 38-runtime-model-ladder-recovery
 plan: 05
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-24
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+shipyard_source_fingerprint: 5a07ffdd5b87ba825a10369be3eff3a55c0bd1328d2df51510fc2ea74906fdc4
 ---
 
 # Phase 38: Route delivery through independent runtime rollouts — Delivery Projection

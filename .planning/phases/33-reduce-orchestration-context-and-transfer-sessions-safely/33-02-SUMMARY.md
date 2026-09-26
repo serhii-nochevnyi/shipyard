@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 7667133642bece92598f4aaaf8592702543450a5332177c661e3925b18ace953
 phase: 33-reduce-orchestration-context-and-transfer-sessions-safely
 plan: 02
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-17
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+shipyard_source_fingerprint: 7667133642bece92598f4aaaf8592702543450a5332177c661e3925b18ace953
 ---
 
 # Phase 33: Validate bounded executor evidence at acceptance — Delivery Projection

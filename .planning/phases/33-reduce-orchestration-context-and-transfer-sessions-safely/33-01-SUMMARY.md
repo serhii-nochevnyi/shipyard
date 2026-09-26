@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 9e84b1a762d35cec22b57764c4ab963ece31777312e6ed68afa2f5cddd1bd8a3
 phase: 33-reduce-orchestration-context-and-transfer-sessions-safely
 plan: 01
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-17
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+shipyard_source_fingerprint: 9e84b1a762d35cec22b57764c4ab963ece31777312e6ed68afa2f5cddd1bd8a3
 ---
 
 # Phase 33: Deliver durable CI and review transition events — Delivery Projection

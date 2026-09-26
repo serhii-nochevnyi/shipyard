@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: bea9cb13db4371929e10c0baac47a1390ed37479dc4902d833471850b2c0251e
 phase: 30-a-ticket-you-cannot-reach-is-not-deliverable
 plan: 10
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-12
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+shipyard_source_fingerprint: bea9cb13db4371929e10c0baac47a1390ed37479dc4902d833471850b2c0251e
 ---
 
 # Phase 30: Make the sentinel honor observed ticket branches — Delivery Projection

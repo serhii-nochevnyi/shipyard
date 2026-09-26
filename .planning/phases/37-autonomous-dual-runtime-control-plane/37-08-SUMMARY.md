@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 6bf85ea7eb56c6caf67bdf10098bfbce225845907cab84f6e154f33011fceb47
 phase: 37-autonomous-dual-runtime-control-plane
 plan: 08
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-22
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: ba672bfcdece8726d19a4284ac9aed9dda7ec80e8e5bdc70657490f106e0c0a6
+shipyard_source_fingerprint: 6bf85ea7eb56c6caf67bdf10098bfbce225845907cab84f6e154f33011fceb47
 ---
 
 # Phase 37: Roll out and verify the autonomous control plane — Delivery Projection
