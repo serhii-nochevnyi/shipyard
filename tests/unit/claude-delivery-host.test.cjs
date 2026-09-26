@@ -1181,4 +1181,153 @@ test('target-project executor finalizes a conventional subject from the graph ti
   }
 });
 
+suite('claude-delivery-host — T-40-28 plan delivery (D-43)');
+
+test('executor and drift-check prompts carry the delivered plan contract; a caller deliveryRulesHint survives prepareArgs', async () => {
+  const releaseGpg = await holdGpg();
+  const fixture = repairFixture();
+  const gnupgHome = fs.mkdtempSync(path.join(os.tmpdir(), 'g6-'));
+  fs.chmodSync(gnupgHome, 0o700);
+  const previousHome = process.env.GNUPGHOME;
+  try {
+    process.env.GNUPGHOME = gnupgHome;
+    execFileSync('gpg', ['--batch', '--pinentry-mode', 'loopback', '--passphrase', '',
+      '--quick-generate-key', 'Repair Host Test <repair@example.test>', 'ed25519', 'sign', '0'],
+    { stdio: ['ignore', 'pipe', 'pipe'] });
+    const keys = execFileSync('gpg', ['--batch', '--with-colons', '--list-secret-keys'], { encoding: 'utf8' });
+    const fingerprint = keys.split('\n').find((line) => line.startsWith('fpr:')).split(':')[9];
+    git(fixture.worktree, 'config', 'user.signingkey', fingerprint);
+    await fixture.host.run('executors', {
+      tickets: [{
+        id: 'T-38-03', branch: 'ticket/T-38-03', prBase: 'main',
+        worktreePath: fixture.worktree, planPath: fixture.planPath,
+        model: 'sonnet', effort: 'max',
+      }],
+      deliveryRulesHint: 'CUSTOM RULES HINT FROM THE CALLER',
+    });
+    assert.match(fixture.prompts[0], /<TICKET-CONTRACT path="\.planning\/phases\/38\/38-03-PLAN\.md"/);
+    assert.match(fixture.prompts[0], /# Repair plan/);
+    assert.match(fixture.prompts[0], /CUSTOM RULES HINT FROM THE CALLER/);
+  } finally {
+    if (previousHome === undefined) delete process.env.GNUPGHOME;
+    else process.env.GNUPGHOME = previousHome;
+    fs.rmSync(gnupgHome, { recursive: true, force: true });
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+    releaseGpg();
+  }
+});
+
+function driftCapableHost(fixture) {
+  const prompts = [];
+  const controller = owner(fixture.root, fixture.worktree, 'T-38-03', 'run-drift-delivery');
+  const host = createClaudeDeliveryHost({
+    graphDir: fixture.graphDir,
+    controller,
+    runtimeHost: {
+      scope: { run_id: 'run-drift-delivery', ticket: 'T-38-03', worktree: fixture.worktree },
+      async agent(prompt, launchOptions) {
+        prompts.push(prompt);
+        fs.writeFileSync(path.join(fixture.worktree, '.shipyard-drift-evidence.md'), '# Drift evidence\nfresh\n');
+        const result = { id: 'T-38-03', verdict: 'fresh', moved: [], reuse_candidates: [], evidence: [] };
+        return result;
+      },
+      applicationEvidence: () => transcriptEvidence({
+        launch_id: `drift-${crypto.randomUUID()}`, applied_model: 'claude-opus-5-5', applied_effort: 'high',
+        observed_model: 'claude-opus-5-5', observed_effort: 'high',
+      }),
+      capabilities: Object.freeze({ supportedModels: ['claude-opus-5-5'], supportedEfforts: ['high'], observedModel: true, observedEffort: true }),
+      recorder: createDurableRecorder(path.join(fixture.root, 'drift-receipts')),
+    },
+  });
+  return { host, prompts };
+}
+
+test('drift-check and repair prompts carry the delivered plan contract when the plan lies outside the worktree', async () => {
+  const fixture = repairFixture();
+  const { host, prompts } = driftCapableHost(fixture);
+  try {
+    await host.run('drift-gate', {
+      tickets: [{
+        id: 'T-38-03', worktreePath: fixture.worktree, planPath: fixture.planPath, baseRef: 'main',
+        model: 'claude-opus-5-5', effort: 'high',
+      }],
+      driftRefPath: REFERENCE_PATHS['drift-check'],
+    });
+    assert.match(prompts[0], /<TICKET-CONTRACT path="\.planning\/phases\/38\/38-03-PLAN\.md"/);
+    assert.match(prompts[0], /# Repair plan/);
+    fs.rmSync(path.join(fixture.worktree, '.shipyard-drift-evidence.md'), { force: true });
+
+    await fixture.host.run('fix-round', fixture.args);
+    assert.match(fixture.prompts[0], /<TICKET-CONTRACT path="\.planning\/phases\/38\/38-03-PLAN\.md"/);
+  } finally {
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test('a Shipyard-shaped fixture (plan inside the worktree) leaves the drift-check prompt unchanged', async () => {
+  const fixture = repairFixture();
+  const inWorktreePlanPath = path.join(fixture.worktree, '.planning', 'phases', '38', '38-03-PLAN.md');
+  fs.mkdirSync(path.dirname(inWorktreePlanPath), { recursive: true });
+  fs.writeFileSync(inWorktreePlanPath, '# In-worktree plan\n');
+  const graph = JSON.parse(fs.readFileSync(path.join(fixture.graphDir, 'tickets.json'), 'utf8'));
+  graph.tickets['T-38-03'].plan = 'worktree/.planning/phases/38/38-03-PLAN.md';
+  fs.writeFileSync(path.join(fixture.graphDir, 'tickets.json'), JSON.stringify(graph));
+  const { host, prompts } = driftCapableHost(fixture);
+  try {
+    await host.run('drift-gate', {
+      tickets: [{
+        id: 'T-38-03', worktreePath: fixture.worktree, planPath: inWorktreePlanPath, baseRef: 'main',
+        model: 'claude-opus-5-5', effort: 'high',
+      }],
+      driftRefPath: REFERENCE_PATHS['drift-check'],
+    });
+    assert.ok(!prompts[0].includes('<TICKET-CONTRACT'));
+    assert.match(prompts[0], new RegExp(`Then read the ticket contract \\(plan file\\): ${inWorktreePlanPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
+  } finally {
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test('SHIPYARD_GRAPH_DIR pointing at an untracked graph copy in a non-main worktree refuses GRAPH_NOT_CANONICAL', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-claude-graph-copy-'));
+  const previousGraph = process.env.SHIPYARD_GRAPH_DIR;
+  try {
+    const repo = path.join(root, 'repo');
+    fs.mkdirSync(repo);
+    git(repo, 'init', '-q', '-b', 'main');
+    git(repo, 'config', 'user.name', 'Delivery Test');
+    git(repo, 'config', 'user.email', 'delivery@example.test');
+    fs.writeFileSync(path.join(repo, 'README.md'), 'x\n');
+    git(repo, 'add', '.');
+    git(repo, '-c', 'commit.gpgsign=false', 'commit', '-qm', 'base');
+    git(repo, 'branch', 'ticket/other');
+    const linked = path.join(root, 'linked');
+    git(repo, 'worktree', 'add', '-q', linked, 'ticket/other');
+    const copyGraphDir = path.join(linked, '.planning', 'graph');
+    fs.mkdirSync(copyGraphDir, { recursive: true });
+    fs.writeFileSync(path.join(copyGraphDir, 'tickets.json'), JSON.stringify({
+      tickets: { 'T-38-03': { branch: 'ticket/other', pr_base: 'main', files: ['src/file.js'] } },
+    }));
+    process.env.SHIPYARD_GRAPH_DIR = copyGraphDir;
+    const controller = owner(root, linked);
+    const host = createClaudeDeliveryHost({
+      controller,
+      runtimeHost: {
+        scope: { run_id: 'run-38-03', ticket: 'T-38-03', worktree: linked },
+        agent() { throw new Error('preflight must refuse before launch'); },
+        applicationEvidence() { throw new Error('preflight has no evidence'); },
+        capabilities: Object.freeze({ supportedModels: ['claude-opus-5-5'], supportedEfforts: ['low'], observedModel: true, observedEffort: true }),
+        recorder: createDurableRecorder(path.join(root, 'receipts')),
+      },
+    });
+    assert.throws(() => host.run('executors', { tickets: [{
+      id: 'T-38-03', branch: 'ticket/other', prBase: 'main', worktreePath: linked,
+    }] }), /an untracked graph copy inside a non-main worktree|canonical/);
+  } finally {
+    if (previousGraph === undefined) delete process.env.SHIPYARD_GRAPH_DIR;
+    else process.env.SHIPYARD_GRAPH_DIR = previousGraph;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 done();
