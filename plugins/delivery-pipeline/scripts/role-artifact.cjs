@@ -19,6 +19,7 @@ const {
   recordMeasurement,
   ESTIMATOR_VERSION,
 } = require('./orchestration-overhead.cjs');
+const prHygiene = require('./pr-hygiene.cjs');
 
 const ROLE_ARTIFACT_SCHEMA = 'shipyard.role-artifact.v1';
 const ENVELOPE_SCHEMA = 'shipyard.executor-result.v1';
@@ -409,6 +410,22 @@ function assertTicketMarker(content, ticket) {
   }
 }
 
+// @security: hygiene comes from the committed base (prHygiene.applies), never worktree files.
+function assertPrBody(content, ticket, hygiene) {
+  if (!hygiene) {
+    assertTicketMarker(content, ticket);
+    return;
+  }
+  const body = content.toString('utf8');
+  if (body.trim() === '') {
+    fail('PR_BODY_LEAK', 'PR body must be a non-empty neutral body in a target project', { ticket });
+  }
+  const violations = prHygiene.check({ body }).violations.filter((violation) => violation.field === 'body');
+  if (violations.length) {
+    fail('PR_BODY_LEAK', 'PR body must not contain internal identifiers in a target project', { violations });
+  }
+}
+
 function envelopeFor(metadata, resultData, files) {
   const evidenceIndex = fileReference(files.evidence.relative, files.evidence.content);
   const base = {
@@ -524,6 +541,7 @@ function sealExecutor(value, options) {
   const worktree = safeRealpath(fsApi, input.worktreePath, 'worktree');
   const trusted = trustedRecord(input);
   const identity = gitIdentity(input, worktree);
+  const hygiene = prHygiene.applies({ root: identity.repository.root, ref: identity.base_commit });
   const metadata = trustedMetadata(input, trusted, identity);
   metadata.trusted = trusted;
   const result = input.result;
@@ -542,7 +560,7 @@ function sealExecutor(value, options) {
       content: readImmutableFile(fsApi, fixedPath(worktree, EVIDENCE_NAME, 'evidence'), 'evidence'),
     },
   };
-  assertTicketMarker(files.pr_body.content, metadata.ticket);
+  assertPrBody(files.pr_body.content, metadata.ticket, hygiene);
   const envelope = envelopeFor(metadata, resultData, files);
   const manifest = manifestFor(metadata, trusted, envelope, files);
   const manifestPath = fixedPath(worktree, MANIFEST_NAME, 'artifact manifest');
@@ -660,6 +678,7 @@ function validateExecutor(value, options) {
   const worktree = safeRealpath(fsApi, input.worktreePath, 'worktree');
   const trusted = trustedRecord(input);
   const identity = gitIdentity(input, worktree);
+  const hygiene = prHygiene.applies({ root: identity.repository.root, ref: identity.base_commit });
   const manifestPath = input.artifactPath || input.artifact_path || input.artifact_ref
     || fixedPath(worktree, MANIFEST_NAME, 'artifact manifest');
   const manifestResolved = path.resolve(worktree, manifestPath);
@@ -690,7 +709,7 @@ function validateExecutor(value, options) {
   }
   const prBody = verifyFileReference(fsApi, worktree, manifest.files.pr_body, PR_BODY_NAME);
   const evidence = verifyFileReference(fsApi, worktree, manifest.files.evidence, EVIDENCE_NAME);
-  assertTicketMarker(prBody.content, metadata.ticket);
+  assertPrBody(prBody.content, metadata.ticket, hygiene);
   if (manifest.envelope.evidence_index.sha256 !== evidence.sha256
       || manifest.envelope.evidence_index.bytes !== evidence.bytes) {
     fail('ARTIFACT_DIGEST_MISMATCH', 'evidence index reference does not match the complete evidence bytes');

@@ -25,7 +25,13 @@ function git(repo, ...args) {
   return command('git', ['-C', repo, ...args]);
 }
 
-function makeRepo() {
+function writeShipyardManifest(repo) {
+  const dir = path.join(repo, 'plugins', 'delivery-pipeline', '.claude-plugin');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'plugin.json'), JSON.stringify({ name: 'shipyard' }));
+}
+
+function makeRepo(fixtureOptions = {}) {
   const repo = path.join(temporary, `repo-${++sequence}`);
   fs.mkdirSync(repo);
   git(repo, 'init', '-q', '-b', 'ticket/T-38-03');
@@ -36,6 +42,7 @@ function makeRepo() {
   fs.writeFileSync(path.join(repo, 'src', 'owned.txt'), 'base\n');
   fs.writeFileSync(path.join(repo, 'src', 'second.txt'), 'base\n');
   fs.writeFileSync(path.join(repo, 'outside.txt'), 'base\n');
+  if (fixtureOptions.exempt !== false) writeShipyardManifest(repo);
   git(repo, 'add', '.');
   git(repo, '-c', 'commit.gpgsign=false', 'commit', '-qm', 'base');
   const head = git(repo, 'rev-parse', 'HEAD');
@@ -47,6 +54,8 @@ function makeRepo() {
     expectedHead: head,
     expectedSigner: signer,
     files_modified: ['src/*.txt'],
+    ...(fixtureOptions.ticketTitle !== undefined ? { ticketTitle: fixtureOptions.ticketTitle } : {}),
+    ...(fixtureOptions.ticketType !== undefined ? { ticketType: fixtureOptions.ticketType } : {}),
   };
   return { repo, head, options };
 }
@@ -300,4 +309,32 @@ test('scoped tree refuses out-of-scope changes and tracks a changed worktree', (
   assert.notEqual(scopedTree(options).tree, first);
   fs.writeFileSync(path.join(repo, 'outside.txt'), 'x\n');
   assert.throws(() => scopedTree(options), /out-of-scope paths/);
+});
+
+test('an exempt project keeps the legacy ticket-id subject regardless of a supplied title', () => {
+  const { repo, options } = makeRepo({ exempt: true, ticketTitle: 'This title must be ignored' });
+  fs.writeFileSync(path.join(repo, 'src', 'owned.txt'), 'changed\n');
+  const result = finalizeDeliveryCommit(options);
+  assert.equal(git(repo, 'log', '-1', '--format=%s', result.commit), '(T-38-03): finalize scoped changes');
+});
+
+test('a target project finalizes a conventional, id-free commit subject', () => {
+  const { repo, options } = makeRepo({ exempt: false, ticketTitle: 'Fix the flaky retry loop', ticketType: 'bugfix' });
+  fs.writeFileSync(path.join(repo, 'src', 'owned.txt'), 'changed\n');
+  const result = finalizeDeliveryCommit(options);
+  assert.equal(git(repo, 'log', '-1', '--format=%s', result.commit), 'fix: fix the flaky retry loop');
+});
+
+test('a target project without a ticket title refuses before touching the branch or signer', () => {
+  const { repo, head, options } = makeRepo({ exempt: false });
+  fs.writeFileSync(path.join(repo, 'src', 'owned.txt'), 'changed\n');
+  assert.throws(() => finalizeDeliveryCommit(options), /ticketTitle is required/);
+  assert.equal(git(repo, 'rev-parse', 'HEAD'), head);
+});
+
+test('a target project refuses a ticket title that leaks the ticket id into the subject', () => {
+  const { repo, head, options } = makeRepo({ exempt: false, ticketTitle: 'Handle the T-38-03 edge case' });
+  fs.writeFileSync(path.join(repo, 'src', 'owned.txt'), 'changed\n');
+  assert.throws(() => finalizeDeliveryCommit(options), /finalized commit subject failed pr-hygiene/);
+  assert.equal(git(repo, 'rev-parse', 'HEAD'), head);
 });
