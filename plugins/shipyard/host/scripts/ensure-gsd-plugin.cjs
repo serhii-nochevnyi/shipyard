@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 'use strict';
 
-// Install the dependency as a real marketplace plugin, not only an npm payload.
+// @contract: GSD must be installed as an enabled marketplace plugin.
 const { spawnSync } = require('node:child_process');
 function run(runtime, args, json = false) {
   const result = spawnSync(runtime, args, { encoding: 'utf8', timeout: 180000,
@@ -27,7 +27,7 @@ function ensure(runtime) {
   let plugin = installed(runtime);
   if (!plugin) run(runtime, ['plugin', runtime === 'codex' ? 'add' : 'install', 'gsd-core@gsd-core']);
   else if (!plugin.enabled) {
-    // Codex add enables an installed plugin; Claude has an explicit enable verb.
+    // @contract: Codex add and Claude enable activate installed dependencies.
     run(runtime, ['plugin', runtime === 'codex' ? 'add' : 'enable', 'gsd-core@gsd-core']);
   }
   plugin = installed(runtime);

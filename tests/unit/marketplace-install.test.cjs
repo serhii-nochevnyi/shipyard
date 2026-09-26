@@ -10,7 +10,7 @@ const { build } = require('../../scripts/package-shipyard-codex.cjs');
 const root = path.resolve(__dirname, '../..');
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-marketplace-'));
 try {
-  // Exercise both CLIs' actual argument construction and structured parsing.
+  // @contract: Both CLIs use their native installation and enable commands.
   const bin = path.join(tmp, 'bin'); fs.mkdirSync(bin);
   const fake = `#!${process.execPath}\n` + `
 const fs=require('fs'); const file=process.env.TEST_STATE;

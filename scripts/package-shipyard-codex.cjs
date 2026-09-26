@@ -1,8 +1,7 @@
 #!/usr/bin/env node
 'use strict';
 
-// Portable marketplace package, generated only from reviewed source. Host-bound
-// agents and full GSD-converted workflows are generated on the receiving host.
+// @contract: Package reviewed source; generate host-bound agents on installation.
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
@@ -60,8 +59,7 @@ function build(destination = path.join(root, 'plugins/shipyard')) {
   }
   walk(destination);
   const sourceDigest = hash.digest('hex');
-  // Codex caches by manifest version. A deterministic build suffix refreshes a
-  // changed package while preserving the canonical Claude release version.
+  // @contract: The content suffix makes every changed package a fresh Codex cache version.
   manifest.version = `${sourceManifest.version}+codex.${sourceDigest.slice(0, 16)}`;
   write('.codex-plugin/plugin.json', JSON.stringify(manifest, null, 2) + '\n');
   const digest = crypto.createHash('sha256').update(sourceDigest).update('\0')

@@ -323,6 +323,21 @@ function analyze(worktree, base, options = {}) {
     if (stat.isSymbolicLink()) throw new Error(`changed file is a symlink: ${relative}`);
     if (!stat.isFile()) throw new Error(`changed path is not a regular file: ${relative}`);
     const content = fs.readFileSync(file);
+    const generatedPrefix = 'plugins/shipyard/host/';
+    if (relative.startsWith(generatedPrefix)) {
+      const source = relative.slice(generatedPrefix.length);
+      if (!['scripts/', 'plugins/delivery-pipeline/', 'capabilities/delivery-pipeline/']
+        .some(prefix => source.startsWith(prefix))) {
+        throw new Error(`unrecognized generated Shipyard path: ${relative}`);
+      }
+      const canonical = contained(worktree, source);
+      if (!fs.existsSync(canonical) || fs.lstatSync(canonical).isSymbolicLink()
+        || !content.equals(fs.readFileSync(canonical))) {
+        throw new Error(`generated Shipyard package differs from canonical source: ${relative}`);
+      }
+      skipped.push({ path: relative, reason: 'verified-generated-copy' });
+      continue;
+    }
     if (content.includes(0)) {
       skipped.push({ path: relative, reason: 'binary-file' });
       continue;

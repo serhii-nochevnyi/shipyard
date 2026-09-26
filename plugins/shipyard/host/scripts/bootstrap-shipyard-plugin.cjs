@@ -1,8 +1,7 @@
 #!/usr/bin/env node
 'use strict';
 
-// Runs from the installed Codex package's host/scripts directory. No checkout,
-// API key, model invocation, or installation of global Shipyard skills required.
+// @contract: Run from the installed Codex package's host/scripts directory.
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -64,14 +63,14 @@ function bootstrap({ packageRoot = path.resolve(__dirname, '../..'), projectDir 
       if (error.code !== 'ENOENT') throw error;
     }
     const candidates = migrationCandidates(skillsDir, previous);
-    // An unowned colliding skill cannot silently survive the migration.
+    // @contract: An unowned skill collision stops migration.
     for (const name of metadata.skills) {
       const target = path.join(skillsDir, name);
       if (fs.existsSync(target) && !candidates.includes(target)) throw new Error(`Unowned duplicate: ${target}`);
     }
     const gsd = ensure('codex');
     let current;
-    try { current = read(marker); } catch { /* first install */ }
+    try { current = read(marker); } catch {}
     if (current?.build === metadata.digest && current.gsd === gsd.version && candidates.length === 0
       && metadata.skills.every(s => fs.existsSync(path.join(nativeSkills, s, 'SKILL.md')))
       && installedFilesMatch(home, nativeSkills, previous)
@@ -87,7 +86,7 @@ function bootstrap({ packageRoot = path.resolve(__dirname, '../..'), projectDir 
     const env = { ...process.env, CODEX_HOME: home, AGENTS_SKILLS_DIR: nativeSkills,
       SHIPYARD_CODEX_MARKETPLACE: '1',
       SHIPYARD_PROJECT_DIR: projectDir, SHIPYARD_CODEX_CAPABILITIES_FILE: capabilities };
-    // Existing compatible GSD runtime files need no network reinstall per session.
+    // @contract: A matching GSD runtime needs no network reinstall per session.
     const versionFile = path.join(home, 'gsd-core/VERSION');
     const coreVersion = fs.existsSync(versionFile) ? fs.readFileSync(versionFile, 'utf8').trim() : null;
     env.GSD_CORE_VERSION = gsd.version;
@@ -97,8 +96,7 @@ function bootstrap({ packageRoot = path.resolve(__dirname, '../..'), projectDir 
       { env, stdio: 'inherit', timeout: 300000 });
     if (result.error || result.status !== 0) throw new Error(`Shipyard host setup failed: ${result.error?.message || result.status}`);
 
-    // The host is working before the old discovery paths are retired. Back up
-    // exact owned originals outside every skills discovery root; never delete.
+    // @contract: Back up exact owned originals outside skill discovery after host setup.
     const backup = fs.mkdtempSync(path.join(stateDir, 'previous-skills-'));
     const moved = [];
     try {

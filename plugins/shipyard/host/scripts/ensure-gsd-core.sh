@@ -68,8 +68,7 @@ else
   echo "→ gsd-core missing for $RUNTIME — installing $resolved"
 fi
 
-# Install the runtime payload and verify the separately managed marketplace
-# plugin for BOTH runtimes. A missing dependency is an installation failure.
+# @contract: Both runtimes require the GSD payload and enabled marketplace plugin.
 if npx --yes "@opengsd/gsd-core@${VERSION}" "${FLAGS[@]}" </dev/null; then
   after="$(installed_version)"
   # Report what the FILE says, not what was asked for: an install that quietly

@@ -1,9 +1,7 @@
 #!/usr/bin/env node
 'use strict';
 
-// One explicit installation transaction starts both marketplace installations.
-// Codex has no declarative plugin dependency resolver; do not invent a manifest
-// field or claim that its Install button runs a post-install script.
+// @contract: Install GSD and Shipyard marketplace plugins in one explicit setup.
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
@@ -12,6 +10,42 @@ const { ensure } = require('./ensure-gsd-plugin.cjs');
 function run(command, args, env = process.env) {
   const result = spawnSync(command, args, { env, stdio: 'inherit', timeout: 300000 });
   if (result.error || result.status !== 0) throw new Error(`${command} ${args.join(' ')} failed: ${result.error?.message || result.status}`);
+}
+function capture(command, args) {
+  const result = spawnSync(command, args, { encoding: 'utf8', timeout: 30000 });
+  if (result.error || result.status !== 0) throw new Error(`${command} ${args.join(' ')} failed`);
+  return JSON.parse(result.stdout);
+}
+function codexMarketplaceSource(source) {
+  if (fs.existsSync(source)) return { sourceType: 'local', source: fs.realpathSync(source) };
+  if (/^[\w.-]+\/[\w.-]+$/.test(source)) return { sourceType: 'git', source: `https://github.com/${source}.git` };
+  return { sourceType: 'git', source };
+}
+function installCodexMarketplace(source) {
+  const existing = capture('codex', ['plugin', 'marketplace', 'list', '--json'])
+    .marketplaces.find(item => item.name === 'shipyard');
+  const target = codexMarketplaceSource(source);
+  const registered = existing?.marketplaceSource;
+  if (!registered || registered.sourceType === target.sourceType && registered.source === target.source) {
+    run('codex', ['plugin', 'marketplace', 'add', source]);
+    run('codex', ['plugin', 'add', 'shipyard@shipyard']);
+    return;
+  }
+  const former = registered.source;
+  const hadPlugin = capture('codex', ['plugin', 'list', '--json']).installed
+    .some(item => item.pluginId === 'shipyard@shipyard');
+  run('codex', ['plugin', 'marketplace', 'remove', 'shipyard']);
+  try {
+    run('codex', ['plugin', 'marketplace', 'add', source]);
+    run('codex', ['plugin', 'add', 'shipyard@shipyard']);
+  } catch (error) {
+    try {
+      run('codex', ['plugin', 'marketplace', 'remove', 'shipyard']);
+      run('codex', ['plugin', 'marketplace', 'add', former]);
+      if (hadPlugin) run('codex', ['plugin', 'add', 'shipyard@shipyard']);
+    } catch (rollback) { throw new Error(`${error.message}; marketplace rollback failed: ${rollback.message}`); }
+    throw error;
+  }
 }
 function main(args) {
   const runtime = args.shift();
@@ -22,8 +56,11 @@ function main(args) {
     source = args[1];
   }
   ensure(runtime);
-  run(runtime, ['plugin', 'marketplace', 'add', source]);
-  run(runtime, ['plugin', runtime === 'codex' ? 'add' : 'install', 'shipyard@shipyard']);
+  if (runtime === 'codex') installCodexMarketplace(source);
+  else {
+    run('claude', ['plugin', 'marketplace', 'add', source]);
+    run('claude', ['plugin', 'install', 'shipyard@shipyard']);
+  }
   if (runtime === 'codex') {
     const home = path.resolve(process.env.CODEX_HOME || path.join(os.homedir(), '.codex'));
     const result = spawnSync('codex', ['plugin', 'list', '--json'], { encoding: 'utf8', timeout: 30000 });
@@ -36,8 +73,7 @@ function main(args) {
     if (!installed) throw new Error('Marketplace Shipyard lacks native Codex packaging; update the marketplace source before continuing');
     run(process.execPath, [path.join(installed, 'host/scripts/bootstrap-shipyard-plugin.cjs')]);
   } else {
-    // Claude's manifest dependency is also supported by native plugin install.
-    // Host hooks and GSD capability are installed from this checkout's release.
+    // @contract: Claude host hooks and capability come from this release checkout.
     const root = path.resolve(__dirname, '..');
     run('bash', [path.join(root, 'scripts/ensure-gsd-core.sh'), 'claude']);
     const env = { ...process.env, SHIPYARD_GSD_AUTO_INSTALL: '0' };

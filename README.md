@@ -75,7 +75,9 @@ node scripts/install-shipyard-marketplace.cjs codex --source "$PWD"
 ```
 
 For a published release, use the same installer without `--source` to register
-`serhii-nochevnyi/shipyard`. The repository contains separate Claude and Codex
+`serhii-nochevnyi/shipyard`. It switches an existing local Shipyard marketplace
+registration to that Git source and restores the prior registration if the new
+marketplace or plugin cannot be installed. The repository contains separate Claude and Codex
 marketplace catalogs; both identify Shipyard as `shipyard@shipyard`.
 
 Codex has no documented declarative plugin dependency installer. Its Install
