@@ -45,6 +45,7 @@ const {
   diagnostic, runBounded, timeoutFromEnv,
 } = require(path.join(__dirname, 'command-runner.cjs'));
 const { matchTicketPr } = require(path.join(__dirname, 'ticket-pr-match.cjs'));
+const { readLedger } = require(path.join(__dirname, 'pr-ledger.cjs'));
 const { loadConfig } = require(path.join(__dirname, 'pipeline-config.cjs'));
 const { computeFront, formatFront, ciEstimates, epicKey, agentsInFlight } = require(path.join(__dirname, 'front.cjs'));
 const { activeDrift } = require(path.join(__dirname, 'drift-record.cjs'));
@@ -540,16 +541,18 @@ function prsForBranch(repo, branch) {
 }
 
 // ── per-ticket status ───────────────────────────────────────────────────────
+const prLedger = readLedger(GRAPH_DIR);
 const state = {};
 for (const [id, t] of Object.entries(tickets)) {
   const repo = repoOf(t);
   const rd = repoData.get(repo);
   const prs = rd.prs;
   const remoteBranches = rd.branches;
-  let match = rd.available ? matchTicketPr(id, t, prs) : null;
+  const recorded = prLedger.entries[id];
+  let match = rd.available ? matchTicketPr(id, t, prs, recorded) : null;
   if (!match && rd.available && rd.truncated) {
     const extra = prsForBranch(repo, t.branch);
-    if (extra.length) match = matchTicketPr(id, t, prs.concat(extra));
+    if (extra.length) match = matchTicketPr(id, t, prs.concat(extra), recorded);
   }
   const pr = match ? match.pr : null;
   /** @type {Record<string, any>} */
@@ -566,7 +569,8 @@ for (const [id, t] of Object.entries(tickets)) {
       };
     }
   }
-  if (match && match.matchedBy === 'marker') {
+  if (recorded) entry.recorded_pr = recorded.number;
+  if (match && match.matchedBy === 'legacy-marker') {
     entry.matched_by = 'marker';
     entry.pr_branch = pr.headRefName;
   }
