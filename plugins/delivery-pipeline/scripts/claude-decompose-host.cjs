@@ -14,6 +14,7 @@ const { createRunScope } = require('./run-scope.cjs');
 const { matchesModelObservation } = require('./runtime-adapters.cjs');
 const pipelineConfig = require('./pipeline-config.cjs');
 const { formatHint } = require('./refusal-hints.cjs');
+const { sealDecomposition } = require('./planning-result-sealer.cjs');
 
 const ROLES = Object.freeze({
   'gsd-phase-researcher': 'research',
@@ -126,6 +127,50 @@ function canonicalRequest(input) {
     ticket: `T-${phase}-DECOMPOSE`, repository: common });
 }
 
+function phaseDirectory(worktree, phase) {
+  const phasesRoot = path.join(worktree, '.planning', 'phases');
+  let names;
+  try {
+    names = fs.readdirSync(phasesRoot);
+  } catch (error) {
+    refuse('PHASE_DIRECTORY_MISSING', `phase directory root is unavailable: ${error.message}`);
+  }
+  const prefix = `${phase}-`;
+  const matches = names.filter((name) => name.startsWith(prefix)
+    && fs.lstatSync(path.join(phasesRoot, name)).isDirectory());
+  if (matches.length !== 1) {
+    refuse('PHASE_DIRECTORY_MISSING', `expected exactly one phase directory for phase ${phase}, found ${matches.length}`);
+  }
+  return path.join(phasesRoot, matches[0]);
+}
+
+function decompositionPlans(directory) {
+  const contextPath = path.join(directory, 'CONTEXT.md');
+  if (!fs.existsSync(contextPath)) refuse('MISSING_ARTIFACT', `phase CONTEXT.md is missing: ${contextPath}`);
+  const planNames = fs.readdirSync(directory).filter((name) => /^\d+-\d+-PLAN\.md$/.test(name)).sort();
+  if (!planNames.length) refuse('MISSING_ARTIFACT', `no materialized PLAN.md files were found in ${directory}`);
+  return [contextPath, ...planNames.map((name) => path.join(directory, name))];
+}
+
+function decompositionEnvelope(scope, store, output) {
+  const plans = decompositionPlans(phaseDirectory(scope.worktree, scope.phase));
+  return sealDecomposition({
+    root: path.join(store, 'decomposition-index'),
+    scope: {
+      worktree: scope.worktree,
+      subject: `phase=${scope.phase};repository=${scope.repository}`,
+      sourceRevision: git(scope.worktree, 'rev-parse', 'HEAD'),
+      repository: scope.repository,
+      policyHash: output.receipt.policy_hash,
+      status: object(output.result) && output.result.status === 'blocked' ? 'blocked' : 'completed',
+      summary: object(output.result) && typeof output.result.summary === 'string'
+        ? output.result.summary
+        : `materialized plans for phase ${scope.phase}`,
+    },
+    plans,
+  });
+}
+
 function privateStore(scope) {
   const key = crypto.createHash('sha256').update(`${scope.repository}\n${scope.worktree}\n${scope.phase}`).digest('hex');
   const home = process.env.HOME || os.homedir();
@@ -195,9 +240,12 @@ async function runDecomposition(request, dependencies = {}) {
       }
       if (heartbeatFailure) throw heartbeatFailure;
       controller.assertOwner(runId);
+      const envelope = ROLES[scope.role] === 'decomposition'
+        ? decompositionEnvelope(scope, store, output)
+        : null;
       controller.complete(runId);
       return Object.freeze({ role: scope.role, result: output.result, receipt: output.receipt,
-        run_id: runId, dispatch_id: dispatchId });
+        run_id: runId, dispatch_id: dispatchId, ...(envelope ? { envelope } : {}) });
     } catch (error) {
       if (controller.status(runId).state === 'running') controller.fail(runId, { reason: error.message });
       throw error;
