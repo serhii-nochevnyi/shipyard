@@ -69,7 +69,9 @@ The conveyor has three layers:
 Codex artifacts are generated. Edit the Claude command or shared script first,
 then run `make package-shipyard-codex` and inspect the generated result.
 The marketplace package under `plugins/shipyard` is generated; never edit its
-`host/` copy directly. GSD is a required marketplace dependency on both hosts.
+`host/` copy directly. Ticket PRs into an `epic/*` branch do not regenerate it and CI
+skips its staleness check for them; regenerate it once on the epic before the
+epic → `main` PR, where the check is enforced. GSD is a required marketplace dependency on both hosts.
 
 The deterministic scripts own decisions that can be computed: frontmatter
 parsing, graph validation, ticket and PR matching, state synchronization,

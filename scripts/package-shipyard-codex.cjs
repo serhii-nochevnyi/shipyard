@@ -68,5 +68,9 @@ function build(destination = path.join(root, 'plugins/shipyard')) {
     skills: names.map(n => 'shipyard-' + n) }, null, 2) + '\n');
   return destination;
 }
-module.exports = { build };
+function packageFreshnessRequired(baseRef) {
+  return !String(baseRef || '').startsWith('epic/');
+}
+
+module.exports = { build, packageFreshnessRequired };
 if (require.main === module) console.log(build(process.argv[2]));

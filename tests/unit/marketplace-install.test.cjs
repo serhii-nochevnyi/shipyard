@@ -6,7 +6,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { spawnSync } = require('node:child_process');
 const { migrationCandidates } = require('../../scripts/bootstrap-shipyard-plugin.cjs');
-const { build } = require('../../scripts/package-shipyard-codex.cjs');
+const { build, packageFreshnessRequired } = require('../../scripts/package-shipyard-codex.cjs');
 const root = path.resolve(__dirname, '../..');
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-marketplace-'));
 try {
@@ -67,8 +67,13 @@ fs.writeFileSync(file,JSON.stringify(s));
       return [[e.name,crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex')]];
     });
   }
-  assert.deepEqual(snapshot(path.join(root,'plugins/shipyard')),snapshot(out),
-    'Marketplace package is stale: run make package-shipyard-codex');
+  assert.equal(packageFreshnessRequired(''),true);
+  assert.equal(packageFreshnessRequired('main'),true);
+  assert.equal(packageFreshnessRequired('epic/43-target-project-delivery-at-scale'),false);
+  if (packageFreshnessRequired(process.env.GITHUB_BASE_REF)) {
+    assert.deepEqual(snapshot(path.join(root,'plugins/shipyard')),snapshot(out),
+      'Marketplace package is stale: run make package-shipyard-codex');
+  }
   assert.equal(first.skills.length,6);
   assert(fs.existsSync(path.join(out,'host/scripts/ensure-gsd-plugin.cjs')));
   assert(fs.existsSync(path.join(out,'host/plugins/delivery-pipeline/scripts/model-policy.cjs')));
