@@ -1,13 +1,13 @@
 {
   "schema_version": 1,
-  "generation": 365,
-  "generation_identity": "5654b8c5-8544-48da-bf31-c1bfcf1f2eff",
-  "previous_generation_identity": "16777245:12922607520:1790405926256753200:8a6bd756bc240e42a18debc21353d2b5f919402580ec45b8e9c11f84c3d5a619",
-  "observed_at": "2026-09-26T06:59:08.772Z",
-  "generated_at": "2026-09-26T06:59:08.772Z",
+  "generation": 366,
+  "generation_identity": "4c0145a5-df50-4580-942b-1afaa3222174",
+  "previous_generation_identity": "16777245:12922742176:1790407878707274800:1fef46fd512249beaaeb3e0abbacaa7742bfa60b80b641e090eeeb68f7458ca1",
+  "observed_at": "2026-09-26T07:31:19.195Z",
+  "generated_at": "2026-09-26T07:31:19.195Z",
   "by": "state-sync",
-  "pid": 68461,
-  "observation_generation": 365,
+  "pid": 2831,
+  "observation_generation": 366,
   "observation_projection": {
     "tickets": {
       "T-20-01": {
@@ -2177,6 +2177,17 @@
         "review_decision": null,
         "checks": null
       },
+      "T-41-09": {
+        "status": "pending",
+        "repository": null,
+        "pr": null,
+        "head": null,
+        "draft": false,
+        "base": "epic/41-reduce-pipeline-subscription-overhead",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
       "T-42-01": {
         "status": "pending",
         "repository": null,
@@ -2192,9 +2203,9 @@
   },
   "binding": {
     "schema_version": 1,
-    "state_digest": "a486525495e9865dc253af550588aed69b8f2a5528498d421681c6cbadc19a6c",
-    "front_digest": "441cf76566cca9186d62dc3f1ab4e4f261ad66f3acb889335fd8293dee72b150",
-    "observation_digest": "35b62f6a70ca59f8da5a6108970e664607212b52f492919267eda2f671d03d7d",
-    "observation_generation": 365
+    "state_digest": "154f2c3629fc94b8341392496466b6c9d884c290593b18423b6204df9e93f0bd",
+    "front_digest": "28f9e643b5d4731bcb7152505bceaa88524fb66c30f53838c57056ecc3b79e4d",
+    "observation_digest": "8e8cc407f75bc637280f7c565c95b88807f8bfa12a9101574584d1e16d59edee",
+    "observation_generation": 366
   }
 }

@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: e5d4309d05245320d3f47de3a9f5f4f3750f73dd25f6df405156d68314c1ef67
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: ec400a6460090aefbba5587369e0bef0302b7d8d77c701e189f550ea6d01f0c4
 phase: 41-reduce-pipeline-subscription-overhead
 plan: 02
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-26
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: e5d4309d05245320d3f47de3a9f5f4f3750f73dd25f6df405156d68314c1ef67
+shipyard_source_fingerprint: ec400a6460090aefbba5587369e0bef0302b7d8d77c701e189f550ea6d01f0c4
 ---
 
 # Phase 41: Carry bounded durable handoff evidence at safe boundaries — Delivery Projection

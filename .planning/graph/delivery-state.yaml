@@ -1660,8 +1660,8 @@
 "T-40-16":
   base: "epic/40-build-delivery-seams-and-clean-target-project-prs"
   base_reason: "T-40-01 has no branch on the remote yet (status pending) — ticket/T-40-01-make-git-creating-unit-fixtures-hermetic is not a base that exists, so the base is epic/40-build-delivery-seams-and-clean-target-project-prs"
-  blocked_by: ["T-40-01","T-41-01"]
-  blocked_reasons: {"T-40-01":"parent has no branch yet (nothing to cascade from)","T-41-01":"cross-phase parent must land on main first (phase 41 epic still ahead)"}
+  blocked_by: ["T-40-01","T-41-01","T-41-09"]
+  blocked_reasons: {"T-40-01":"parent has no branch yet (nothing to cascade from)","T-41-01":"cross-phase parent must land on main first (phase 41 epic still ahead)","T-41-09":"cross-phase parent must be MERGED and its phase 41 epic landed on main first (parent is pending)"}
   branch: "ticket/T-40-16-add-the-sentinel-preflight-that-establis"
   epic: "epic/40-build-delivery-seams-and-clean-target-project-prs"
   pr: null
@@ -1726,8 +1726,8 @@
 "T-40-22":
   base: "epic/40-build-delivery-seams-and-clean-target-project-prs"
   base_reason: "T-40-14 has no branch on the remote yet (status pending) — ticket/T-40-14-hosts-write-a-pid-ttl-in-flight-record-a is not a base that exists, so the base is epic/40-build-delivery-seams-and-clean-target-project-prs"
-  blocked_by: ["T-40-21","T-40-16","T-40-14","T-40-19","T-41-01"]
-  blocked_reasons: {"T-40-14":"parent has no branch yet (nothing to cascade from)","T-40-16":"parent has no branch yet (nothing to cascade from)","T-40-19":"parent has no branch yet (nothing to cascade from)","T-40-21":"parent has no branch yet (nothing to cascade from)","T-41-01":"cross-phase parent must land on main first (phase 41 epic still ahead)"}
+  blocked_by: ["T-40-21","T-40-16","T-40-14","T-40-19","T-41-01","T-41-09"]
+  blocked_reasons: {"T-40-14":"parent has no branch yet (nothing to cascade from)","T-40-16":"parent has no branch yet (nothing to cascade from)","T-40-19":"parent has no branch yet (nothing to cascade from)","T-40-21":"parent has no branch yet (nothing to cascade from)","T-41-01":"cross-phase parent must land on main first (phase 41 epic still ahead)","T-41-09":"cross-phase parent must be MERGED and its phase 41 epic landed on main first (parent is pending)"}
   branch: "ticket/T-40-22-stamp-every-dispatch-with-a-provenance-s"
   epic: "epic/40-build-delivery-seams-and-clean-target-project-prs"
   pr: null
@@ -1863,6 +1863,15 @@
   reapable: true
   status: "merged"
   url: "https://github.com/serhii-nochevnyi/shipyard/pull/236"
+"T-41-09":
+  base: "epic/41-reduce-pipeline-subscription-overhead"
+  base_reason: "T-41-01 is MERGED, so its branch is no longer where work lands — the base is epic/41-reduce-pipeline-subscription-overhead (base-merge it in first to keep the review diff one slice)"
+  branch: "ticket/T-41-09-align-first-response-usage-with-the-usag"
+  epic: "epic/41-reduce-pipeline-subscription-overhead"
+  pr: null
+  ready: true
+  reapable: false
+  status: "pending"
 "T-42-01":
   base: "epic/42-resume-trusted-finalization-without-executor-replay"
   base_reason: "no primary parent — a root ticket PRs into epic/42-resume-trusted-finalization-without-executor-replay"

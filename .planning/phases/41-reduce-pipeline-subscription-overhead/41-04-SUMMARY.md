@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: bb53cc2964fa0855b0e16d1620b99a9d0896a84b661fd37232834a10b3055d2b
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: bf88737cbbd9b226b2423545f45920d249011e8254d8ffbad36f5552b4eba4a0
 phase: 41-reduce-pipeline-subscription-overhead
 plan: 04
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-26
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: bb53cc2964fa0855b0e16d1620b99a9d0896a84b661fd37232834a10b3055d2b
+shipyard_source_fingerprint: bf88737cbbd9b226b2423545f45920d249011e8254d8ffbad36f5552b4eba4a0
 ---
 
 # Phase 41: Accept asynchronous native child completion after parent wait timeouts — Delivery Projection

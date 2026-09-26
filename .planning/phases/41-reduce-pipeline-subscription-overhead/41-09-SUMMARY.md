@@ -1,11 +1,11 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 1328d7c6d610def0e032b0f0f3af836a478ace3fefd28e2c766f7fce928ad2f0
-phase: 40-build-delivery-seams-and-clean-target-project-prs
-plan: 22
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: e26a558460550e904d7fa3fb3c4a9ca6332933be3a5c3fb7d245fc057bc95c53
+phase: 41-reduce-pipeline-subscription-overhead
+plan: 09
 subsystem: shipyard delivery
 tags: [shipyard, gsd, delivery-projection]
 provides:
-  - Tracked delivery state for T-40-22
+  - Tracked delivery state for T-41-09
 affects: [GSD progress, Shipyard delivery]
 actuals:
   tokens: 0
@@ -22,19 +22,19 @@ key-decisions:
 duration: 0min
 status: halted
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 1328d7c6d610def0e032b0f0f3af836a478ace3fefd28e2c766f7fce928ad2f0
+shipyard_source_fingerprint: e26a558460550e904d7fa3fb3c4a9ca6332933be3a5c3fb7d245fc057bc95c53
 ---
 
-# Phase 40: Stamp every dispatch with a provenance sidecar and refuse dogfood merges into a default branch — Delivery Projection
+# Phase 41: Align first-response usage with the usage-report Claude transcript semantics — Delivery Projection
 
 **Plan delivery is not complete; the projection preserves the current state.**
 
 ## Delivery Evidence
 
-- Ticket: T-40-22
+- Ticket: T-41-09
 - Delivery status: pending
 - PR: not observed
-- Source plan: .planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-22-PLAN.md
+- Source plan: .planning/phases/41-reduce-pipeline-subscription-overhead/41-09-PLAN.md
 - This summary is halted until the delivery state observes `merged`.
 
 ## Decisions & Deviations
