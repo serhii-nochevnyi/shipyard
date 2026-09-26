@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 82041d540395135fc14137b1b2891c6cd69c1968a6ba15568a05eb407068c5f2
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 11e5b64f356d487165457963c37d34bdee174777ad7f8fa232159e453e19c5c5
 phase: 40-build-delivery-seams-and-clean-target-project-prs
 plan: 12
 subsystem: shipyard delivery
@@ -22,7 +22,7 @@ key-decisions:
 duration: 0min
 status: halted
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 82041d540395135fc14137b1b2891c6cd69c1968a6ba15568a05eb407068c5f2
+shipyard_source_fingerprint: 11e5b64f356d487165457963c37d34bdee174777ad7f8fa232159e453e19c5c5
 ---
 
 # Phase 40: Add the Codex research consumer that seals investigation research through the shared sealer — Delivery Projection

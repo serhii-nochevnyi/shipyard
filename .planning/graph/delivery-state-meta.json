@@ -1,13 +1,13 @@
 {
   "schema_version": 1,
-  "generation": 363,
-  "generation_identity": "2be6825a-d226-4b46-9ddf-11ce792b4879",
-  "previous_generation_identity": "16777245:12918489155:1790336648441934600:043a79f0a1fbc353125ccc18d5af1efa8ba656ba6308dc337422788f6408f4e8",
-  "observed_at": "2026-09-25T15:33:13.408Z",
-  "generated_at": "2026-09-25T15:33:13.408Z",
+  "generation": 365,
+  "generation_identity": "5654b8c5-8544-48da-bf31-c1bfcf1f2eff",
+  "previous_generation_identity": "16777245:12922607520:1790405926256753200:8a6bd756bc240e42a18debc21353d2b5f919402580ec45b8e9c11f84c3d5a619",
+  "observed_at": "2026-09-26T06:59:08.772Z",
+  "generated_at": "2026-09-26T06:59:08.772Z",
   "by": "state-sync",
-  "pid": 23228,
-  "observation_generation": 363,
+  "pid": 68461,
+  "observation_generation": 365,
   "observation_projection": {
     "tickets": {
       "T-20-01": {
@@ -2090,9 +2090,9 @@
         "checks": null
       },
       "T-41-01": {
-        "status": "pending",
+        "status": "merged",
         "repository": null,
-        "pr": null,
+        "pr": 244,
         "head": null,
         "draft": false,
         "base": "epic/41-reduce-pipeline-subscription-overhead",
@@ -2101,9 +2101,9 @@
         "checks": null
       },
       "T-41-02": {
-        "status": "pending",
+        "status": "merged",
         "repository": null,
-        "pr": null,
+        "pr": 237,
         "head": null,
         "draft": false,
         "base": "epic/41-reduce-pipeline-subscription-overhead",
@@ -2112,9 +2112,9 @@
         "checks": null
       },
       "T-41-03": {
-        "status": "pending",
+        "status": "merged",
         "repository": null,
-        "pr": null,
+        "pr": 238,
         "head": null,
         "draft": false,
         "base": "epic/41-reduce-pipeline-subscription-overhead",
@@ -2123,9 +2123,9 @@
         "checks": null
       },
       "T-41-04": {
-        "status": "pending",
+        "status": "merged",
         "repository": null,
-        "pr": null,
+        "pr": 246,
         "head": null,
         "draft": false,
         "base": "epic/41-reduce-pipeline-subscription-overhead",
@@ -2134,9 +2134,9 @@
         "checks": null
       },
       "T-41-05": {
-        "status": "pending",
+        "status": "merged",
         "repository": null,
-        "pr": null,
+        "pr": 240,
         "head": null,
         "draft": false,
         "base": "epic/41-reduce-pipeline-subscription-overhead",
@@ -2145,9 +2145,9 @@
         "checks": null
       },
       "T-41-06": {
-        "status": "pending",
+        "status": "merged",
         "repository": null,
-        "pr": null,
+        "pr": 241,
         "head": null,
         "draft": false,
         "base": "epic/41-reduce-pipeline-subscription-overhead",
@@ -2156,9 +2156,9 @@
         "checks": null
       },
       "T-41-07": {
-        "status": "pending",
+        "status": "merged",
         "repository": null,
-        "pr": null,
+        "pr": 235,
         "head": null,
         "draft": false,
         "base": "epic/41-reduce-pipeline-subscription-overhead",
@@ -2167,12 +2167,23 @@
         "checks": null
       },
       "T-41-08": {
+        "status": "merged",
+        "repository": null,
+        "pr": 236,
+        "head": null,
+        "draft": false,
+        "base": "epic/41-reduce-pipeline-subscription-overhead",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-42-01": {
         "status": "pending",
         "repository": null,
         "pr": null,
         "head": null,
         "draft": false,
-        "base": "epic/41-reduce-pipeline-subscription-overhead",
+        "base": "epic/42-resume-trusted-finalization-without-executor-replay",
         "merge_state": null,
         "review_decision": null,
         "checks": null
@@ -2181,9 +2192,9 @@
   },
   "binding": {
     "schema_version": 1,
-    "state_digest": "1f11c347056b994bc7891e6ae131fe3b9ab63223dcf23520421c5788ae5c2742",
-    "front_digest": "4e7f465fddbb82f7c4a40ecd5dd28a7ab26c768d36b7f501166293869ef318fe",
-    "observation_digest": "d230aca85789377632ee18a877e44938d7811bf6af0a169148c1bd2ec81fc9f7",
-    "observation_generation": 363
+    "state_digest": "a486525495e9865dc253af550588aed69b8f2a5528498d421681c6cbadc19a6c",
+    "front_digest": "441cf76566cca9186d62dc3f1ab4e4f261ad66f3acb889335fd8293dee72b150",
+    "observation_digest": "35b62f6a70ca59f8da5a6108970e664607212b52f492919267eda2f671d03d7d",
+    "observation_generation": 365
   }
 }

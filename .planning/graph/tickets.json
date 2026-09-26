@@ -141,6 +141,13 @@
         null
       ]
     },
+    "42": {
+      "branch": "epic/42-resume-trusted-finalization-without-executor-replay",
+      "base": null,
+      "repos": [
+        null
+      ]
+    },
     "33-reduce-orchestration-context-and-transfer-sessions-safely": {
       "branch": "epic/33-reduce-orchestration-context-and-transfer-sessions-safely",
       "base": null,
@@ -5857,7 +5864,8 @@
       "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/scripts/session-handoff.cjs",
-        "tests/unit/session-handoff.test.cjs"
+        "tests/unit/session-handoff.test.cjs",
+        "tests/unit/rotation-recommendation.test.cjs"
       ],
       "risk": "medium",
       "type": "implementation",
@@ -5879,7 +5887,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
-      "missing_paths": true,
+      "missing_paths": false,
       "files": [
         "tests/unit/phase41-stop-wake.test.cjs"
       ],
@@ -5894,7 +5902,7 @@
       "jira": null
     },
     "T-41-04": {
-      "title": "Resume authenticated completed execution through trusted finalization",
+      "title": "Accept asynchronous native child completion after parent wait timeouts",
       "plan": ".planning/phases/41-reduce-pipeline-subscription-overhead/41-04-PLAN.md",
       "phase": "41",
       "repo": null,
@@ -5906,317 +5914,16 @@
       "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/scripts/codex-runtime-host.cjs",
-        "tests/unit/codex-runtime-host.test.cjs",
-        "plugins/delivery-pipeline/scripts/codex-delivery-host.cjs",
-        "plugins/delivery-pipeline/scripts/delivery-commit-finalizer.cjs",
-        "plugins/delivery-pipeline/scripts/command-runner.cjs",
-        "tests/unit/codex-delivery-host.test.cjs",
-        "tests/unit/delivery-commit-finalizer.test.cjs",
-        "tests/unit/command-runner.test.cjs"
+        "tests/unit/codex-runtime-host.test.cjs"
       ],
-      "risk": "high",
+      "risk": "medium",
       "type": "implementation",
-      "human_checkpoint": true,
+      "human_checkpoint": false,
       "preauthorized": false,
-      "branch": "ticket/T-41-04-resume-authenticated-completed-execution",
+      "branch": "ticket/T-41-04-accept-asynchronous-native-child-complet",
       "epic": "epic/41-reduce-pipeline-subscription-overhead",
       "primary_parent": null,
       "pr_base": "epic/41-reduce-pipeline-subscription-overhead",
-      "jira": null
-    },
-    "T-40-01": {
-      "title": "Make git-creating unit fixtures hermetic against global signing and fixed /tmp paths",
-      "plan": ".planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-01-PLAN.md",
-      "phase": "40",
-      "repo": null,
-      "wave": 2,
-      "depends_on": [
-        "T-39-01",
-        "T-41-04"
-      ],
-      "cross_phase_deps": [
-        "T-39-01",
-        "T-41-04"
-      ],
-      "cross_repo_deps": [],
-      "unreachable_paths": false,
-      "missing_paths": true,
-      "files": [
-        "tests/unit/run.sh",
-        "tests/unit/assert-harness.cjs",
-        "tests/unit/claude-delivery-host.test.cjs",
-        "tests/unit/codex-delivery-host.test.cjs",
-        "tests/unit/test-hermeticity.test.cjs"
-      ],
-      "risk": "low",
-      "type": "implementation",
-      "human_checkpoint": false,
-      "preauthorized": false,
-      "branch": "ticket/T-40-01-make-git-creating-unit-fixtures-hermetic",
-      "epic": "epic/40-build-delivery-seams-and-clean-target-project-prs",
-      "primary_parent": null,
-      "pr_base": "epic/40-build-delivery-seams-and-clean-target-project-prs",
-      "jira": null
-    },
-    "T-40-10": {
-      "title": "Extract one shared sealer for research-result and decomposition-result envelopes and use it on Claude",
-      "plan": ".planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-10-PLAN.md",
-      "phase": "40",
-      "repo": null,
-      "wave": 3,
-      "depends_on": [
-        "T-40-01",
-        "T-39-01",
-        "T-39-08"
-      ],
-      "cross_phase_deps": [
-        "T-39-01",
-        "T-39-08"
-      ],
-      "cross_repo_deps": [],
-      "unreachable_paths": false,
-      "missing_paths": true,
-      "files": [
-        "plugins/delivery-pipeline/scripts/planning-result-sealer.cjs",
-        "tests/unit/planning-result-sealer.test.cjs",
-        "plugins/delivery-pipeline/scripts/claude-delivery-host.cjs",
-        "plugins/delivery-pipeline/scripts/claude-decompose-host.cjs",
-        "tests/unit/claude-decompose-host.test.cjs",
-        "tests/unit/planning-artifacts.test.cjs",
-        ".planning/backlog/decompose-host-returns-no-artifact-index.md"
-      ],
-      "risk": "medium",
-      "type": "implementation",
-      "human_checkpoint": false,
-      "preauthorized": false,
-      "branch": "ticket/T-40-10-extract-one-shared-sealer-for-research-r",
-      "epic": "epic/40-build-delivery-seams-and-clean-target-project-prs",
-      "primary_parent": "T-40-01",
-      "pr_base": "ticket/T-40-01-make-git-creating-unit-fixtures-hermetic",
-      "jira": null
-    },
-    "T-40-13": {
-      "title": "Keep sealed research lines, name the failed line and re-dispatch only that line",
-      "plan": ".planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-13-PLAN.md",
-      "phase": "40",
-      "repo": null,
-      "wave": 4,
-      "depends_on": [
-        "T-40-10",
-        "T-39-08"
-      ],
-      "cross_phase_deps": [
-        "T-39-08"
-      ],
-      "cross_repo_deps": [],
-      "unreachable_paths": false,
-      "missing_paths": true,
-      "files": [
-        "plugins/delivery-pipeline/workflows/investigation-research.mjs",
-        "plugins/delivery-pipeline/scripts/claude-delivery-host.cjs",
-        "plugins/delivery-pipeline/scripts/planning-result-sealer.cjs",
-        "tests/unit/investigation-research.test.cjs",
-        "tests/unit/claude-delivery-host.test.cjs",
-        "tests/unit/planning-result-sealer.test.cjs"
-      ],
-      "risk": "medium",
-      "type": "implementation",
-      "human_checkpoint": false,
-      "preauthorized": false,
-      "branch": "ticket/T-40-13-keep-sealed-research-lines-name-the-fail",
-      "epic": "epic/40-build-delivery-seams-and-clean-target-project-prs",
-      "primary_parent": "T-40-10",
-      "pr_base": "ticket/T-40-10-extract-one-shared-sealer-for-research-r",
-      "jira": null
-    },
-    "T-40-12": {
-      "title": "Add the Codex research consumer that seals investigation research through the shared sealer",
-      "plan": ".planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-12-PLAN.md",
-      "phase": "40",
-      "repo": null,
-      "wave": 5,
-      "depends_on": [
-        "T-40-13",
-        "T-39-01",
-        "T-41-04"
-      ],
-      "cross_phase_deps": [
-        "T-39-01",
-        "T-41-04"
-      ],
-      "cross_repo_deps": [],
-      "unreachable_paths": false,
-      "missing_paths": false,
-      "files": [
-        "plugins/delivery-pipeline/scripts/codex-delivery-host.cjs",
-        "tests/unit/codex-delivery-host.test.cjs"
-      ],
-      "risk": "medium",
-      "type": "implementation",
-      "human_checkpoint": false,
-      "preauthorized": false,
-      "branch": "ticket/T-40-12-add-the-codex-research-consumer-that-sea",
-      "epic": "epic/40-build-delivery-seams-and-clean-target-project-prs",
-      "primary_parent": "T-40-13",
-      "pr_base": "ticket/T-40-13-keep-sealed-research-lines-name-the-fail",
-      "jira": null
-    },
-    "T-40-14": {
-      "title": "Hosts write a pid+TTL in-flight record at launch and export their request validators",
-      "plan": ".planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-14-PLAN.md",
-      "phase": "40",
-      "repo": null,
-      "wave": 6,
-      "depends_on": [
-        "T-40-12",
-        "T-39-03",
-        "T-39-08",
-        "T-39-01",
-        "T-41-04"
-      ],
-      "cross_phase_deps": [
-        "T-39-03",
-        "T-39-08",
-        "T-39-01",
-        "T-41-04"
-      ],
-      "cross_repo_deps": [],
-      "unreachable_paths": false,
-      "missing_paths": false,
-      "files": [
-        "plugins/delivery-pipeline/scripts/dispatch-record.cjs",
-        "tests/unit/dispatch-record.test.cjs",
-        "tests/unit/stop-gate.test.cjs",
-        "plugins/delivery-pipeline/scripts/claude-delivery-host.cjs",
-        "plugins/delivery-pipeline/scripts/codex-delivery-host.cjs",
-        "tests/unit/claude-delivery-host.test.cjs",
-        "tests/unit/codex-delivery-host.test.cjs"
-      ],
-      "risk": "high",
-      "type": "implementation",
-      "human_checkpoint": true,
-      "preauthorized": true,
-      "branch": "ticket/T-40-14-hosts-write-a-pid-ttl-in-flight-record-a",
-      "epic": "epic/40-build-delivery-seams-and-clean-target-project-prs",
-      "primary_parent": "T-40-12",
-      "pr_base": "ticket/T-40-12-add-the-codex-research-consumer-that-sea",
-      "jira": null
-    },
-    "T-40-11": {
-      "title": "Let the Codex GSD researcher write only its artifact and seal Codex decomposition results",
-      "plan": ".planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-11-PLAN.md",
-      "phase": "40",
-      "repo": null,
-      "wave": 7,
-      "depends_on": [
-        "T-40-04",
-        "T-40-14",
-        "T-39-01",
-        "T-39-07"
-      ],
-      "cross_phase_deps": [
-        "T-39-01",
-        "T-39-07"
-      ],
-      "cross_repo_deps": [],
-      "unreachable_paths": false,
-      "missing_paths": false,
-      "files": [
-        "plugins/delivery-pipeline/scripts/codex-decompose-host.cjs",
-        "plugins/delivery-pipeline/scripts/codex-dispatch-adapter.cjs",
-        "plugins/delivery-pipeline/scripts/gsd-tune.cjs",
-        "tests/unit/codex-decompose-host.test.cjs",
-        "tests/unit/codex-dispatch-adapter.test.cjs",
-        "tests/unit/gsd-tune.test.cjs"
-      ],
-      "risk": "high",
-      "type": "implementation",
-      "human_checkpoint": true,
-      "preauthorized": true,
-      "branch": "ticket/T-40-11-let-the-codex-gsd-researcher-write-only",
-      "epic": "epic/40-build-delivery-seams-and-clean-target-project-prs",
-      "primary_parent": "T-40-14",
-      "pr_base": "ticket/T-40-14-hosts-write-a-pid-ttl-in-flight-record-a",
-      "jira": null
-    },
-    "T-40-09": {
-      "title": "Pass Codex child tasks by host-owned file path plus a digest the host verifies",
-      "plan": ".planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-09-PLAN.md",
-      "phase": "40",
-      "repo": null,
-      "wave": 8,
-      "depends_on": [
-        "T-40-11",
-        "T-40-07",
-        "T-40-14",
-        "T-39-01",
-        "T-41-04"
-      ],
-      "cross_phase_deps": [
-        "T-39-01",
-        "T-41-04"
-      ],
-      "cross_repo_deps": [],
-      "unreachable_paths": false,
-      "missing_paths": true,
-      "files": [
-        "plugins/delivery-pipeline/scripts/codex-runtime-host.cjs",
-        "tests/unit/codex-runtime-host.test.cjs",
-        "tests/fixtures/captured/codex-agent-stream-parent.jsonl",
-        "tests/fixtures/captured/codex-agent-stream-child.jsonl",
-        "tests/fixtures/captured/boundaries/codex-agent-stream.json",
-        "tests/fixtures/captured/codex-agent-stream-exec.jsonl",
-        "tests/unit/codex-decompose-host.test.cjs",
-        "tests/unit/codex-delivery-host.test.cjs"
-      ],
-      "risk": "high",
-      "type": "implementation",
-      "human_checkpoint": true,
-      "preauthorized": true,
-      "branch": "ticket/T-40-09-pass-codex-child-tasks-by-host-owned-fil",
-      "epic": "epic/40-build-delivery-seams-and-clean-target-project-prs",
-      "primary_parent": "T-40-11",
-      "pr_base": "ticket/T-40-11-let-the-codex-gsd-researcher-write-only",
-      "jira": null
-    },
-    "T-40-16": {
-      "title": "Add the sentinel preflight that establishes base and state preconditions or refuses naming the command",
-      "plan": ".planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-16-PLAN.md",
-      "phase": "40",
-      "repo": null,
-      "wave": 4,
-      "depends_on": [
-        "T-40-01",
-        "T-39-12",
-        "T-39-14",
-        "T-39-16",
-        "T-39-17",
-        "T-41-01"
-      ],
-      "cross_phase_deps": [
-        "T-39-12",
-        "T-39-14",
-        "T-39-16",
-        "T-39-17",
-        "T-41-01"
-      ],
-      "cross_repo_deps": [],
-      "unreachable_paths": false,
-      "missing_paths": true,
-      "files": [
-        "plugins/delivery-pipeline/scripts/sentinel-preflight.cjs",
-        "tests/unit/sentinel-preflight.test.cjs",
-        "plugins/delivery-pipeline/scripts/claude-role-host.cjs",
-        "tests/unit/claude-role-host.test.cjs"
-      ],
-      "risk": "medium",
-      "type": "implementation",
-      "human_checkpoint": false,
-      "preauthorized": false,
-      "branch": "ticket/T-40-16-add-the-sentinel-preflight-that-establis",
-      "epic": "epic/40-build-delivery-seams-and-clean-target-project-prs",
-      "primary_parent": "T-40-01",
-      "pr_base": "ticket/T-40-01-make-git-creating-unit-fixtures-hermetic",
       "jira": null
     },
     "T-41-05": {
@@ -6233,7 +5940,11 @@
       "files": [
         "plugins/delivery-pipeline/scripts/gsd-sync.cjs",
         "tests/unit/gsd-sync.test.cjs",
-        "tests/unit/gsd-sync-gate.test.cjs"
+        "tests/unit/gsd-sync-gate.test.cjs",
+        ".planning/STATE.md",
+        ".planning/REQUIREMENTS.md",
+        ".planning/ROADMAP.md",
+        ".planning/phases/"
       ],
       "risk": "medium",
       "type": "implementation",
@@ -6282,7 +5993,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
-      "missing_paths": true,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/scripts/phase-integrator-preflight.cjs",
         "tests/unit/phase-integrator-preflight.test.cjs",
@@ -6309,7 +6020,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
-      "missing_paths": true,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/scripts/state-sync.cjs",
         "tests/unit/state-sync-yaml.test.cjs",
@@ -6419,6 +6130,366 @@
       "pr_base": "ticket/T-40-19-record-gate-verdicts-as-a-commit-status",
       "jira": null
     },
+    "T-40-20": {
+      "title": "Generate neutral ticket and epic branch names and a neutral epic PR in target projects",
+      "plan": ".planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-20-PLAN.md",
+      "phase": "40",
+      "repo": null,
+      "wave": 5,
+      "depends_on": [
+        "T-40-17",
+        "T-39-06"
+      ],
+      "cross_phase_deps": [
+        "T-39-06"
+      ],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": false,
+      "files": [
+        "plugins/delivery-pipeline/scripts/validate-graph.cjs",
+        "tests/smoke/graph-validator-smoke.sh",
+        "plugins/delivery-pipeline/skills/delivery-rules/SKILL.md",
+        ".shipyard/generated/gsd-delivery-rules/SKILL.md",
+        "plugins/delivery-pipeline/scripts/epic-branch.sh",
+        "tests/smoke/worktree-smoke.sh"
+      ],
+      "risk": "medium",
+      "type": "implementation",
+      "human_checkpoint": false,
+      "preauthorized": false,
+      "branch": "ticket/T-40-20-generate-neutral-ticket-and-epic-branch",
+      "epic": "epic/40-build-delivery-seams-and-clean-target-project-prs",
+      "primary_parent": "T-40-17",
+      "pr_base": "ticket/T-40-17-add-the-publish-time-pr-hygiene-gate-and",
+      "jira": null
+    },
+    "T-42-01": {
+      "title": "Resume authenticated completed execution through trusted finalization",
+      "plan": ".planning/phases/42-resume-trusted-finalization-without-executor-replay/42-01-PLAN.md",
+      "phase": "42",
+      "repo": null,
+      "wave": 1,
+      "depends_on": [],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": false,
+      "files": [
+        "plugins/delivery-pipeline/scripts/codex-delivery-host.cjs",
+        "plugins/delivery-pipeline/scripts/delivery-commit-finalizer.cjs",
+        "plugins/delivery-pipeline/scripts/command-runner.cjs",
+        "tests/unit/codex-delivery-host.test.cjs",
+        "tests/unit/delivery-commit-finalizer.test.cjs",
+        "tests/unit/command-runner.test.cjs"
+      ],
+      "risk": "high",
+      "type": "implementation",
+      "human_checkpoint": true,
+      "preauthorized": false,
+      "branch": "ticket/T-42-01-resume-authenticated-completed-execution",
+      "epic": "epic/42-resume-trusted-finalization-without-executor-replay",
+      "primary_parent": null,
+      "pr_base": "epic/42-resume-trusted-finalization-without-executor-replay",
+      "jira": null
+    },
+    "T-40-01": {
+      "title": "Make git-creating unit fixtures hermetic against global signing and fixed /tmp paths",
+      "plan": ".planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-01-PLAN.md",
+      "phase": "40",
+      "repo": null,
+      "wave": 2,
+      "depends_on": [
+        "T-39-01",
+        "T-42-01"
+      ],
+      "cross_phase_deps": [
+        "T-39-01",
+        "T-42-01"
+      ],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": true,
+      "files": [
+        "tests/unit/run.sh",
+        "tests/unit/assert-harness.cjs",
+        "tests/unit/claude-delivery-host.test.cjs",
+        "tests/unit/codex-delivery-host.test.cjs",
+        "tests/unit/test-hermeticity.test.cjs"
+      ],
+      "risk": "low",
+      "type": "implementation",
+      "human_checkpoint": false,
+      "preauthorized": false,
+      "branch": "ticket/T-40-01-make-git-creating-unit-fixtures-hermetic",
+      "epic": "epic/40-build-delivery-seams-and-clean-target-project-prs",
+      "primary_parent": null,
+      "pr_base": "epic/40-build-delivery-seams-and-clean-target-project-prs",
+      "jira": null
+    },
+    "T-40-10": {
+      "title": "Extract one shared sealer for research-result and decomposition-result envelopes and use it on Claude",
+      "plan": ".planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-10-PLAN.md",
+      "phase": "40",
+      "repo": null,
+      "wave": 3,
+      "depends_on": [
+        "T-40-01",
+        "T-39-01",
+        "T-39-08"
+      ],
+      "cross_phase_deps": [
+        "T-39-01",
+        "T-39-08"
+      ],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": true,
+      "files": [
+        "plugins/delivery-pipeline/scripts/planning-result-sealer.cjs",
+        "tests/unit/planning-result-sealer.test.cjs",
+        "plugins/delivery-pipeline/scripts/claude-delivery-host.cjs",
+        "plugins/delivery-pipeline/scripts/claude-decompose-host.cjs",
+        "tests/unit/claude-decompose-host.test.cjs",
+        "tests/unit/planning-artifacts.test.cjs",
+        ".planning/backlog/decompose-host-returns-no-artifact-index.md"
+      ],
+      "risk": "medium",
+      "type": "implementation",
+      "human_checkpoint": false,
+      "preauthorized": false,
+      "branch": "ticket/T-40-10-extract-one-shared-sealer-for-research-r",
+      "epic": "epic/40-build-delivery-seams-and-clean-target-project-prs",
+      "primary_parent": "T-40-01",
+      "pr_base": "ticket/T-40-01-make-git-creating-unit-fixtures-hermetic",
+      "jira": null
+    },
+    "T-40-13": {
+      "title": "Keep sealed research lines, name the failed line and re-dispatch only that line",
+      "plan": ".planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-13-PLAN.md",
+      "phase": "40",
+      "repo": null,
+      "wave": 4,
+      "depends_on": [
+        "T-40-10",
+        "T-39-08"
+      ],
+      "cross_phase_deps": [
+        "T-39-08"
+      ],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": true,
+      "files": [
+        "plugins/delivery-pipeline/workflows/investigation-research.mjs",
+        "plugins/delivery-pipeline/scripts/claude-delivery-host.cjs",
+        "plugins/delivery-pipeline/scripts/planning-result-sealer.cjs",
+        "tests/unit/investigation-research.test.cjs",
+        "tests/unit/claude-delivery-host.test.cjs",
+        "tests/unit/planning-result-sealer.test.cjs"
+      ],
+      "risk": "medium",
+      "type": "implementation",
+      "human_checkpoint": false,
+      "preauthorized": false,
+      "branch": "ticket/T-40-13-keep-sealed-research-lines-name-the-fail",
+      "epic": "epic/40-build-delivery-seams-and-clean-target-project-prs",
+      "primary_parent": "T-40-10",
+      "pr_base": "ticket/T-40-10-extract-one-shared-sealer-for-research-r",
+      "jira": null
+    },
+    "T-40-12": {
+      "title": "Add the Codex research consumer that seals investigation research through the shared sealer",
+      "plan": ".planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-12-PLAN.md",
+      "phase": "40",
+      "repo": null,
+      "wave": 5,
+      "depends_on": [
+        "T-40-13",
+        "T-39-01",
+        "T-42-01"
+      ],
+      "cross_phase_deps": [
+        "T-39-01",
+        "T-42-01"
+      ],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": false,
+      "files": [
+        "plugins/delivery-pipeline/scripts/codex-delivery-host.cjs",
+        "tests/unit/codex-delivery-host.test.cjs"
+      ],
+      "risk": "medium",
+      "type": "implementation",
+      "human_checkpoint": false,
+      "preauthorized": false,
+      "branch": "ticket/T-40-12-add-the-codex-research-consumer-that-sea",
+      "epic": "epic/40-build-delivery-seams-and-clean-target-project-prs",
+      "primary_parent": "T-40-13",
+      "pr_base": "ticket/T-40-13-keep-sealed-research-lines-name-the-fail",
+      "jira": null
+    },
+    "T-40-14": {
+      "title": "Hosts write a pid+TTL in-flight record at launch and export their request validators",
+      "plan": ".planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-14-PLAN.md",
+      "phase": "40",
+      "repo": null,
+      "wave": 6,
+      "depends_on": [
+        "T-40-12",
+        "T-39-03",
+        "T-39-08",
+        "T-39-01",
+        "T-42-01"
+      ],
+      "cross_phase_deps": [
+        "T-39-03",
+        "T-39-08",
+        "T-39-01",
+        "T-42-01"
+      ],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": false,
+      "files": [
+        "plugins/delivery-pipeline/scripts/dispatch-record.cjs",
+        "tests/unit/dispatch-record.test.cjs",
+        "tests/unit/stop-gate.test.cjs",
+        "plugins/delivery-pipeline/scripts/claude-delivery-host.cjs",
+        "plugins/delivery-pipeline/scripts/codex-delivery-host.cjs",
+        "tests/unit/claude-delivery-host.test.cjs",
+        "tests/unit/codex-delivery-host.test.cjs"
+      ],
+      "risk": "high",
+      "type": "implementation",
+      "human_checkpoint": true,
+      "preauthorized": true,
+      "branch": "ticket/T-40-14-hosts-write-a-pid-ttl-in-flight-record-a",
+      "epic": "epic/40-build-delivery-seams-and-clean-target-project-prs",
+      "primary_parent": "T-40-12",
+      "pr_base": "ticket/T-40-12-add-the-codex-research-consumer-that-sea",
+      "jira": null
+    },
+    "T-40-11": {
+      "title": "Let the Codex GSD researcher write only its artifact and seal Codex decomposition results",
+      "plan": ".planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-11-PLAN.md",
+      "phase": "40",
+      "repo": null,
+      "wave": 7,
+      "depends_on": [
+        "T-40-04",
+        "T-40-14",
+        "T-39-01",
+        "T-39-07"
+      ],
+      "cross_phase_deps": [
+        "T-39-01",
+        "T-39-07"
+      ],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": false,
+      "files": [
+        "plugins/delivery-pipeline/scripts/codex-decompose-host.cjs",
+        "plugins/delivery-pipeline/scripts/codex-dispatch-adapter.cjs",
+        "plugins/delivery-pipeline/scripts/gsd-tune.cjs",
+        "tests/unit/codex-decompose-host.test.cjs",
+        "tests/unit/codex-dispatch-adapter.test.cjs",
+        "tests/unit/gsd-tune.test.cjs"
+      ],
+      "risk": "high",
+      "type": "implementation",
+      "human_checkpoint": true,
+      "preauthorized": true,
+      "branch": "ticket/T-40-11-let-the-codex-gsd-researcher-write-only",
+      "epic": "epic/40-build-delivery-seams-and-clean-target-project-prs",
+      "primary_parent": "T-40-14",
+      "pr_base": "ticket/T-40-14-hosts-write-a-pid-ttl-in-flight-record-a",
+      "jira": null
+    },
+    "T-40-09": {
+      "title": "Pass Codex child tasks by host-owned file path plus a digest the host verifies",
+      "plan": ".planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-09-PLAN.md",
+      "phase": "40",
+      "repo": null,
+      "wave": 8,
+      "depends_on": [
+        "T-40-11",
+        "T-40-07",
+        "T-40-14",
+        "T-39-01",
+        "T-41-04",
+        "T-42-01"
+      ],
+      "cross_phase_deps": [
+        "T-39-01",
+        "T-41-04",
+        "T-42-01"
+      ],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": true,
+      "files": [
+        "plugins/delivery-pipeline/scripts/codex-runtime-host.cjs",
+        "tests/unit/codex-runtime-host.test.cjs",
+        "tests/fixtures/captured/codex-agent-stream-parent.jsonl",
+        "tests/fixtures/captured/codex-agent-stream-child.jsonl",
+        "tests/fixtures/captured/boundaries/codex-agent-stream.json",
+        "tests/fixtures/captured/codex-agent-stream-exec.jsonl",
+        "tests/unit/codex-decompose-host.test.cjs",
+        "tests/unit/codex-delivery-host.test.cjs"
+      ],
+      "risk": "high",
+      "type": "implementation",
+      "human_checkpoint": true,
+      "preauthorized": true,
+      "branch": "ticket/T-40-09-pass-codex-child-tasks-by-host-owned-fil",
+      "epic": "epic/40-build-delivery-seams-and-clean-target-project-prs",
+      "primary_parent": "T-40-11",
+      "pr_base": "ticket/T-40-11-let-the-codex-gsd-researcher-write-only",
+      "jira": null
+    },
+    "T-40-16": {
+      "title": "Add the sentinel preflight that establishes base and state preconditions or refuses naming the command",
+      "plan": ".planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-16-PLAN.md",
+      "phase": "40",
+      "repo": null,
+      "wave": 4,
+      "depends_on": [
+        "T-40-01",
+        "T-39-12",
+        "T-39-14",
+        "T-39-16",
+        "T-39-17",
+        "T-41-01"
+      ],
+      "cross_phase_deps": [
+        "T-39-12",
+        "T-39-14",
+        "T-39-16",
+        "T-39-17",
+        "T-41-01"
+      ],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": true,
+      "files": [
+        "plugins/delivery-pipeline/scripts/sentinel-preflight.cjs",
+        "tests/unit/sentinel-preflight.test.cjs",
+        "plugins/delivery-pipeline/scripts/claude-role-host.cjs",
+        "tests/unit/claude-role-host.test.cjs"
+      ],
+      "risk": "medium",
+      "type": "implementation",
+      "human_checkpoint": false,
+      "preauthorized": false,
+      "branch": "ticket/T-40-16-add-the-sentinel-preflight-that-establis",
+      "epic": "epic/40-build-delivery-seams-and-clean-target-project-prs",
+      "primary_parent": "T-40-01",
+      "pr_base": "ticket/T-40-01-make-git-creating-unit-fixtures-hermetic",
+      "jira": null
+    },
     "T-40-15": {
       "title": "Add deliver-dispatch: build host requests from the graph, launch detached, and offer status and wait",
       "plan": ".planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-15-PLAN.md",
@@ -6459,11 +6530,11 @@
       "depends_on": [
         "T-40-17",
         "T-39-16",
-        "T-41-04"
+        "T-42-01"
       ],
       "cross_phase_deps": [
         "T-39-16",
-        "T-41-04"
+        "T-42-01"
       ],
       "cross_repo_deps": [],
       "unreachable_paths": false,
@@ -6479,40 +6550,6 @@
       "human_checkpoint": false,
       "preauthorized": false,
       "branch": "ticket/T-40-18-produce-clean-executor-pr-bodies-and-con",
-      "epic": "epic/40-build-delivery-seams-and-clean-target-project-prs",
-      "primary_parent": "T-40-17",
-      "pr_base": "ticket/T-40-17-add-the-publish-time-pr-hygiene-gate-and",
-      "jira": null
-    },
-    "T-40-20": {
-      "title": "Generate neutral ticket and epic branch names and a neutral epic PR in target projects",
-      "plan": ".planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-20-PLAN.md",
-      "phase": "40",
-      "repo": null,
-      "wave": 5,
-      "depends_on": [
-        "T-40-17",
-        "T-39-06"
-      ],
-      "cross_phase_deps": [
-        "T-39-06"
-      ],
-      "cross_repo_deps": [],
-      "unreachable_paths": false,
-      "missing_paths": false,
-      "files": [
-        "plugins/delivery-pipeline/scripts/validate-graph.cjs",
-        "tests/smoke/graph-validator-smoke.sh",
-        "plugins/delivery-pipeline/skills/delivery-rules/SKILL.md",
-        ".shipyard/generated/gsd-delivery-rules/SKILL.md",
-        "plugins/delivery-pipeline/scripts/epic-branch.sh",
-        "tests/smoke/worktree-smoke.sh"
-      ],
-      "risk": "medium",
-      "type": "implementation",
-      "human_checkpoint": false,
-      "preauthorized": false,
-      "branch": "ticket/T-40-20-generate-neutral-ticket-and-epic-branch",
       "epic": "epic/40-build-delivery-seams-and-clean-target-project-prs",
       "primary_parent": "T-40-17",
       "pr_base": "ticket/T-40-17-add-the-publish-time-pr-hygiene-gate-and",
@@ -6710,10 +6747,10 @@
       "wave": 6,
       "depends_on": [
         "T-40-18",
-        "T-41-04"
+        "T-42-01"
       ],
       "cross_phase_deps": [
-        "T-41-04"
+        "T-42-01"
       ],
       "cross_repo_deps": [],
       "unreachable_paths": false,

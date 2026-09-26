@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 0a89fb5aea2562c139a19ea4326ff79508d16964a197d93e0ad023587f2dbc4b
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 6c1dd85bb8ab288b20bd5889f3769633d25d33e3d91bc269a9eed9c8e170c08b
 phase: 40-build-delivery-seams-and-clean-target-project-prs
 plan: 14
 subsystem: shipyard delivery
@@ -22,7 +22,7 @@ key-decisions:
 duration: 0min
 status: halted
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 0a89fb5aea2562c139a19ea4326ff79508d16964a197d93e0ad023587f2dbc4b
+shipyard_source_fingerprint: 6c1dd85bb8ab288b20bd5889f3769633d25d33e3d91bc269a9eed9c8e170c08b
 ---
 
 # Phase 40: Hosts write a pid+TTL in-flight record at launch and export their request validators — Delivery Projection
