@@ -123,6 +123,10 @@ const TIMEOUT_S_EXPLICIT = argv.includes('--timeout');
 let TIMEOUT_S = flag('--timeout', 15 * 60);
 const WINDOW_FLOOR_S = 15 * 60;
 const WINDOW_CEIL_S = 60 * 60;
+// @contract: Claude's Bash tool kills a call at 600 s, so one default ci-wait call there returns within 540 s.
+const CLAUDE_WINDOW_CAP_S = 540;
+const ON_CLAUDE = !['CODEX_SANDBOX', 'CODEX_SANDBOX_NETWORK_DISABLED'].some((k) => process.env[k])
+  && ['CLAUDE_PLUGIN_ROOT', 'CLAUDE_CODE_ENTRYPOINT'].some((k) => process.env[k]);
 // Same "positive number or ignore it" rule as SHIPYARD_CI_WAIT_MAX_EMPTY below —
 // a garbage env value must fall back, not disable the sizing it was meant to tune.
 const ENV_TIMEOUT_S = (() => {
@@ -406,7 +410,8 @@ function checksOf({ pr, repo }) {
   // rows too: semantic observation compares check identity/state, while these
   // tallies are only enough to decide whether the PR settled.
   const c = classify(rows);
-  return { total: c.total, pending: c.pending, failing: c.failing, rows };
+  return { total: c.total, pending: c.pending, failing: c.failing, cancelled: c.cancelled,
+    cancelled_runs: c.cancelled_runs, rows };
 }
 
 // HOW MANY EMPTY WINDOWS BEFORE A PERSON IS ASKED. Three at the default 15m is
@@ -416,6 +421,10 @@ function checksOf({ pr, repo }) {
 // resets the count rather than accumulating toward a park nobody has earned.
 const MAX_EMPTY_RAW = Number(process.env.SHIPYARD_CI_WAIT_MAX_EMPTY || 3);
 const MAX_EMPTY = Number.isFinite(MAX_EMPTY_RAW) && MAX_EMPTY_RAW > 0 ? Math.floor(MAX_EMPTY_RAW) : 3;
+const BUDGET_ENV_S = (() => {
+  const v = Number(process.env.SHIPYARD_CI_WAIT_BUDGET_S);
+  return Number.isFinite(v) && v > 0 ? v : null;
+})();
 
 const WAITS = path.join(GRAPH, 'ci-waits.json');
 // The lock lives beside the store, exactly as drift-record.cjs derives it: a lock
@@ -499,15 +508,18 @@ function recordOutcomeInner(settledId, watched, goodEver) {
       if (goodEver && !goodEver.has(w.id)) continue;
       const fp = fingerprint(state[w.id] || {});
       const prev = store.tickets[w.id];
-      const empties = prev && prev.fingerprint === fp ? Number(prev.empty_windows || 0) + 1 : 1;
+      const same = prev && prev.fingerprint === fp;
+      const empties = same ? Number(prev.empty_windows || 0) + 1 : 1;
+      const waitedS = (same ? Number(prev.waited_s || 0) : 0) + (Date.now() - startedAt) / 1000;
       store.tickets[w.id] = {
         fingerprint: fp,
         empty_windows: empties,
+        waited_s: Math.round(waitedS * 1000) / 1000,
         first_at: (prev && prev.fingerprint === fp && prev.first_at) || now,
         last_at: now,
         pr: w.pr,
       };
-      if (empties >= MAX_EMPTY) escalations.push({ id: w.id, pr: w.pr, empties });
+      if (waitedS >= BUDGET_S) escalations.push({ id: w.id, pr: w.pr, empties, waitedS });
     }
     writeAtomic(WAITS, JSON.stringify(store, null, 2) + '\n');
   });
@@ -523,7 +535,7 @@ function recordOutcomeInner(settledId, watched, goodEver) {
       continue;
     }
     const reason =
-      `CI has not moved for ${e.empties} consecutive ci-wait windows (~${Math.round(e.empties * TIMEOUT_S / 60)}m) ` +
+      `CI has not moved for ${e.empties} consecutive ci-wait windows (~${Math.round(e.waitedS / 60)}m) ` +
       `on PR #${e.pr}, with no change to any delivery-state fact a check would touch. ` +
       'That is a pipeline that is not going to settle on its own, so waiting longer buys nothing. ' +
       'UNBLOCK: look at the run itself (a queued-forever job, a required check that never reports, a ' +
@@ -567,6 +579,68 @@ if (TIMEOUT_S_EXPLICIT) {
     windowSource = `ci_estimates (max=${Math.round(maxEst)}s / 3 = ${Math.round(derived)}s, clamped to `
       + `[${WINDOW_FLOOR_S}, ${WINDOW_CEIL_S}])`;
   }
+}
+
+const BUDGET_S = BUDGET_ENV_S !== null ? BUDGET_ENV_S : MAX_EMPTY * TIMEOUT_S;
+if (ON_CLAUDE && !TIMEOUT_S_EXPLICIT && TIMEOUT_S > CLAUDE_WINDOW_CAP_S) {
+  TIMEOUT_S = CLAUDE_WINDOW_CAP_S;
+  windowSource += `, capped at ${CLAUDE_WINDOW_CAP_S}s on Claude`;
+}
+
+function readReruns() {
+  try {
+    const store = JSON.parse(fs.readFileSync(WAITS, 'utf8'));
+    return (store && store.reruns && typeof store.reruns === 'object') ? store.reruns : {};
+  } catch { return {}; }
+}
+
+function noteRerun(id, entry) {
+  withLock(lockDirFor(LOCK_ROOT), 'ci-wait', () => {
+    const store = readJson(WAITS) || { tickets: {} };
+    if (!store.tickets || typeof store.tickets !== 'object') store.tickets = {};
+    if (!store.reruns || typeof store.reruns !== 'object') store.reruns = {};
+    store.reruns[id] = entry;
+    writeAtomic(WAITS, JSON.stringify(store, null, 2) + '\n');
+  });
+}
+
+// @invariant: one rerun per head; a lone cancel after that rerun is failing, and a rerun is never green.
+function handleCancelled(w, c) {
+  if (!c || !c.cancelled) return null;
+  const head = (state[w.id] || {}).head_sha || null;
+  const prior = readReruns()[w.id];
+  const runId = (c.cancelled_runs.find((r) => r.run_id) || {}).run_id || null;
+  if (head && runId && !(prior && prior.head === head)) {
+    const args = ['run', 'rerun', String(runId)];
+    if (w.repo) args.push('--repo', w.repo);
+    const r = runBounded('gh', args, { timeoutMs: GH_TIMEOUT_MS });
+    if (r.status === 0) {
+      try {
+        noteRerun(w.id, { head, run_id: String(runId), at: new Date().toISOString() });
+      } catch (e) {
+        return holdCancelled(c, { rerun: false, run_id: String(runId), error: `rerun not recorded (${e.message})` });
+      }
+      const logged = runBounded(process.execPath, [path.join(__dirname, 'log-event.cjs'), 'ci_rerun',
+        `ticket=${w.id}`, `pr=${w.pr}`, `head=${head}`, `run_id=${runId}`, '--graph', GRAPH],
+      { timeoutMs: INTERNAL_COMMAND_TIMEOUT_MS });
+      return holdCancelled(c, { rerun: true, run_id: String(runId), journalled: logged.status === 0 });
+    }
+    return { rerun: false, run_id: String(runId), error: diagnostic(r) };
+  }
+  if (prior && head && prior.head === head) {
+    const rerunAt = Date.parse(prior.at || '');
+    const stale = c.cancelled_runs.every((r) => Number.isFinite(rerunAt) && !(Date.parse(r.started_at || '') > rerunAt));
+    if (stale) return holdCancelled(c, { rerun: false, run_id: runId, awaiting_rerun: prior.run_id });
+    return { rerun: false, run_id: runId, already_rerun: prior.run_id };
+  }
+  return { rerun: false, run_id: runId, error: head ? 'no run id for the cancelled check' : 'no head sha on record' };
+}
+
+// @invariant: a cancel is failing in check-state; only while its one rerun is in flight does the wait hold it pending.
+function holdCancelled(c, outcome) {
+  c.failing -= c.cancelled;
+  c.pending += c.cancelled;
+  return outcome;
 }
 
 const startedAt = Date.now();
@@ -750,6 +824,8 @@ for (;;) {
   for (const w of watch) {
     const c = checksOf(w);
     if (c) goodEver.add(w.id);
+    const rerun = handleCancelled(w, c);
+    if (rerun && c) c.rerun = rerun;
     const event = observeWait(w, c);
     const eventAction = event && (event.pending_action || event.action);
     seen.push({ ...w, checks: c, wait_event: eventAction || null });

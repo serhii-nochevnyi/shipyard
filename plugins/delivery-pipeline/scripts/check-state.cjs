@@ -50,7 +50,7 @@ const BUCKETS = new Set(['pass', 'fail', 'pending', 'skipping', 'cancel']);
 // The `--json` window every consumer asks for. `bucket` is what this module
 // reads; `name` and `state` stay in it because they are what the human-readable
 // refusals and the board print — a tally alone cannot say WHICH check is red.
-const CHECK_FIELDS = 'name,state,bucket';
+const CHECK_FIELDS = 'name,state,bucket,link,startedAt,workflow';
 
 // One row → one of gh's five buckets. Unreadable rows come back as `pending`,
 // which is the fail-closed rule above, applied in the single place that knows it.
@@ -58,6 +58,19 @@ function stateBucket(row) {
   if (!row || typeof row !== 'object') return 'pending';
   const b = typeof row.bucket === 'string' ? row.bucket.trim().toLowerCase() : '';
   return BUCKETS.has(b) ? b : 'pending';
+}
+
+function runIdOf(row) {
+  const m = typeof row.link === 'string' ? row.link.match(/\/actions\/runs\/(\d+)(?:\/|$)/) : null;
+  return m ? m[1] : null;
+}
+
+function isSuperseded(row, list) {
+  if (typeof row.name !== 'string' || !row.name || typeof row.startedAt !== 'string' || !row.startedAt) return false;
+  const at = Date.parse(row.startedAt);
+  if (Number.isNaN(at)) return false;
+  return list.some((o) => o && o !== row && o.name === row.name
+    && typeof o.startedAt === 'string' && Date.parse(o.startedAt) > at);
 }
 
 // Rows → tallies. The four counters PARTITION the rows, so
@@ -86,6 +99,9 @@ function classify(rows) {
     pending: 0,
     passing: 0,
     skipped: 0,
+    cancelled: 0,
+    superseded: 0,
+    cancelled_runs: [],
     // Mutually exclusive by construction: an observed empty list is
     // `none_reported`, an answer that never arrived is `unavailable`. Both false
     // is the ordinary case; both true is unreachable.
@@ -93,11 +109,17 @@ function classify(rows) {
     unavailable: !readable,
   };
   for (const row of list) {
-    switch (stateBucket(row)) {
+    const bucket = stateBucket(row);
+    if (bucket === 'cancel' && isSuperseded(row, list)) { out.superseded += 1; continue; }
+    switch (bucket) {
       case 'pass': out.passing += 1; break;
-      // A cancelled run produced no verdict and will not produce one on its own.
-      // That is a red round to be re-driven, not a check that passed.
-      case 'fail': case 'cancel': out.failing += 1; break;
+      case 'fail': out.failing += 1; break;
+      // @invariant: a lone latest cancel is failing and cancelled, never passing, so never green.
+      case 'cancel':
+        out.failing += 1;
+        out.cancelled += 1;
+        out.cancelled_runs.push({ name: row.name || null, run_id: runIdOf(row), started_at: row.startedAt || null });
+        break;
       case 'skipping': out.skipped += 1; break;
       // 'pending', plus every unreadable row — see the fail-closed note above.
       default: out.pending += 1; break;
@@ -130,6 +152,7 @@ function classify(rows) {
 function isGreen(checks) {
   const c = checks || {};
   if (c.unavailable) return false;
+  if ((c.cancelled || 0) > 0) return false;
   return !((c.failing || 0) > 0) && !((c.pending || 0) > 0);
 }
 
@@ -161,4 +184,4 @@ function unavailableNote(r) {
     || `gh pr checks exited ${r.status}`;
 }
 
-module.exports = { classify, stateBucket, isGreen, unavailableNote, CHECK_FIELDS, BUCKETS };
+module.exports = { classify, stateBucket, isGreen, runIdOf, unavailableNote, CHECK_FIELDS, BUCKETS };

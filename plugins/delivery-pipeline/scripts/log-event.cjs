@@ -292,6 +292,18 @@ for (const pair of pairs) {
 const DECLARED_FIELDS = {
   base_merge: ['ticket', 'pr', 'base', 'head'],
 };
+// @contract: a ci_rerun row names the rerun it records; without every field it is refused, not logged.
+const REQUIRED_FIELDS = {
+  ci_rerun: ['ticket', 'pr', 'head', 'run_id'],
+};
+const required = REQUIRED_FIELDS[event];
+if (required) {
+  const missing = required.filter((k) => rec[k] === undefined || rec[k] === '');
+  if (missing.length) {
+    console.error(`log-event: ${event} requires ${required.join(', ')}; missing ${missing.join(', ')}`);
+    process.exit(2);
+  }
+}
 const declared = DECLARED_FIELDS[event];
 if (declared) {
   const missing = declared.filter((k) => rec[k] === undefined || rec[k] === '');
