@@ -1,11 +1,11 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 472193e0a2c57dc5d5a178abebe8dd070c9ccfc0700c5dc1edea4efb09a10af8
-phase: 40-build-delivery-seams-and-clean-target-project-prs
-plan: 12
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: c973d234161b92c4b765c77e8e000e4d3bc9a403ad2411ee238feae7a26cc91f
+phase: 42-resume-trusted-finalization-without-executor-replay
+plan: 02
 subsystem: shipyard delivery
 tags: [shipyard, gsd, delivery-projection]
 provides:
-  - Tracked delivery state for T-40-12
+  - Tracked delivery state for T-42-02
 affects: [GSD progress, Shipyard delivery]
 actuals:
   tokens: 0
@@ -22,19 +22,19 @@ key-decisions:
 duration: 0min
 status: halted
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 472193e0a2c57dc5d5a178abebe8dd070c9ccfc0700c5dc1edea4efb09a10af8
+shipyard_source_fingerprint: c973d234161b92c4b765c77e8e000e4d3bc9a403ad2411ee238feae7a26cc91f
 ---
 
-# Phase 40: Add the Codex research consumer that seals investigation research through the shared sealer — Delivery Projection
+# Phase 42: Deny the host state root and finalization key to the Codex executor — Delivery Projection
 
 **Plan delivery is not complete; the projection preserves the current state.**
 
 ## Delivery Evidence
 
-- Ticket: T-40-12
+- Ticket: T-42-02
 - Delivery status: pending
 - PR: not observed
-- Source plan: .planning/phases/40-build-delivery-seams-and-clean-target-project-prs/40-12-PLAN.md
+- Source plan: .planning/phases/42-resume-trusted-finalization-without-executor-replay/42-02-PLAN.md
 - This summary is halted until the delivery state observes `merged`.
 
 ## Decisions & Deviations

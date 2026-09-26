@@ -1,13 +1,13 @@
 {
   "schema_version": 1,
-  "generation": 371,
-  "generation_identity": "d0615c4c-25c1-41ca-bb97-74a8b21b7e51",
-  "previous_generation_identity": "16777245:12923710202:1790421853191295000:ce96273f1a2eb234f58143199a71e1c3cbe3de304816109b01774fdc8d7b015b",
-  "observed_at": "2026-09-26T11:24:13.579Z",
-  "generated_at": "2026-09-26T11:24:13.579Z",
+  "generation": 372,
+  "generation_identity": "42547376-b862-452b-909b-6abbe29722b8",
+  "previous_generation_identity": "16777245:12923813403:1790423138584339500:bb5d652a1fcb2aa783bab540ec1b5528e51ca9881dd2d6a1084a3c9ca23f28b0",
+  "observed_at": "2026-09-26T11:46:08.540Z",
+  "generated_at": "2026-09-26T11:46:08.540Z",
   "by": "state-sync",
-  "pid": 69272,
-  "observation_generation": 371,
+  "pid": 25686,
+  "observation_generation": 372,
   "observation_projection": {
     "tickets": {
       "T-20-01": {
@@ -2200,21 +2200,26 @@
         "checks": null
       },
       "T-42-01": {
-        "status": "pr-open",
+        "status": "merged",
         "repository": null,
         "pr": 255,
-        "head": "d8d2f937a1d0a80ebe1759e94a4acac2b15b852b",
+        "head": null,
         "draft": false,
         "base": "epic/42-resume-trusted-finalization-without-executor-replay",
-        "merge_state": "UNSTABLE",
+        "merge_state": null,
         "review_decision": null,
-        "checks": {
-          "total": 1,
-          "pending": 1,
-          "failing": 0,
-          "none_reported": false,
-          "unavailable": false
-        }
+        "checks": null
+      },
+      "T-42-02": {
+        "status": "pending",
+        "repository": null,
+        "pr": null,
+        "head": null,
+        "draft": false,
+        "base": "epic/42-resume-trusted-finalization-without-executor-replay",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
       },
       "T-43-01": {
         "status": "pending",
@@ -2228,15 +2233,21 @@
         "checks": null
       },
       "T-43-02": {
-        "status": "pending",
+        "status": "pr-open",
         "repository": null,
-        "pr": null,
-        "head": null,
-        "draft": false,
+        "pr": 264,
+        "head": "08ade4e2f56ff859098c08d7ea0c96876f897e2f",
+        "draft": true,
         "base": "epic/43-target-project-delivery-at-scale",
-        "merge_state": null,
+        "merge_state": "UNSTABLE",
         "review_decision": null,
-        "checks": null
+        "checks": {
+          "total": 1,
+          "pending": 1,
+          "failing": 0,
+          "none_reported": false,
+          "unavailable": false
+        }
       },
       "T-43-03": {
         "status": "pending",
@@ -2429,9 +2440,9 @@
   },
   "binding": {
     "schema_version": 1,
-    "state_digest": "ef2da7dd9fabbedc5b4c3f45c92034fe93fa0163d8e8af17221ca2e6acd04f07",
-    "front_digest": "484f65a5e62c28d9c64ae8b72639e36f845732172d3fbee8f3933fdd1ce42644",
-    "observation_digest": "03ce9c5929ecb46c2cc4efba706e625d94e1720c1d5a3efc1944bc613253e55b",
-    "observation_generation": 371
+    "state_digest": "236bfae7ba6947227a6296990f68b71901f4e0f99d73271f3728e86464957d67",
+    "front_digest": "efb6b715e77dcd0bd2d7fac1ff2149543db923d066d62b7772795ec9b665ce08",
+    "observation_digest": "904c749b4a40bd0851658b7b9dcf9bb2c4e07cb24a5fdda6c032aa1de155e925",
+    "observation_generation": 372
   }
 }
