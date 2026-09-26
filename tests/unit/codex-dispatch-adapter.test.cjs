@@ -7,7 +7,7 @@ const crypto = require('crypto');
 const { suite, test, done, assert } = require('./assert-harness.cjs');
 const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
 const { createDispatchBoundary } = require('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs');
-const { createCodexDispatchAdapter, CODEX_MODEL_IDS } = require('../../plugins/delivery-pipeline/scripts/codex-dispatch-adapter.cjs');
+const { createCodexDispatchAdapter, CODEX_MODEL_IDS, REPAIR, repairFor } = require('../../plugins/delivery-pipeline/scripts/codex-dispatch-adapter.cjs');
 
 const capabilities = {
   supportedModels: Object.values(CODEX_MODEL_IDS), supportedEfforts: ['low', 'medium', 'high', 'xhigh', 'max'],
@@ -515,6 +515,19 @@ test('asynchronous native application evidence is verified and recorded', async 
     assert.equal(result.receipt.compliance, 'verified');
     assert.equal(result.applied_effort, 'max');
   } finally { clean(f); }
+});
+
+test('an adapter-level config refusal carries the config remedy, not a reinstall', () => {
+  const message = repairFor('CONFLICTING_OVERRIDE', { key: 'model_profile_overrides.codex.luna' });
+  assert.match(message, /model_profile_overrides\.codex\.luna/);
+  assert.match(message, /\.planning\/config\.json/);
+  assert.match(message, /gsd-tune\.cjs --runtime codex/);
+  assert.doesNotMatch(message, /install-shipyard-codex/);
+});
+
+test('an adapter-level refusal without an identified config key keeps the historical reinstall remedy', () => {
+  assert.equal(repairFor('CONFLICTING_OVERRIDE', {}), REPAIR);
+  assert.equal(repairFor('STALE_GENERATED_AGENT', { key: 'anything' }), REPAIR);
 });
 
 done();
