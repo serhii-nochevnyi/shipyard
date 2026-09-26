@@ -290,19 +290,22 @@ test('an untracked path the incoming base ADDS refuses, and git names the path',
 const CARRY_W = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-carry-'));
 process.on('exit', () => { try { fs.rmSync(CARRY_W, { recursive: true, force: true }); } catch { /* best effort */ } });
 
-// A stub `gh` serving exactly the two calls a carry makes: read the PR, and
-// rewrite its body. The body travels through FILES in both directions — it is
-// multi-line by definition, and hand-escaping one through a shell would break
+// A stub `gh` serving the calls a carry makes: read the PR, read and post its
+// merge-gate status, and record any body rewrite. Body and status travel through
+// FILES — both are free text, and hand-escaping one through a shell would break
 // the very input under test.
 const CARRY_BIN = path.join(CARRY_W, 'bin');
 const CARRY_VIEW = path.join(CARRY_W, 'pr-view.json');
 const CARRY_EDIT = path.join(CARRY_W, 'edited-body.txt');
+const CARRY_STATUS = path.join(CARRY_W, 'posted-status.txt');
 fs.mkdirSync(CARRY_BIN, { recursive: true });
 fs.writeFileSync(path.join(CARRY_BIN, 'gh'), [
   '#!/usr/bin/env bash',
   'argv="$*"',
   'case "$argv" in',
   '  *"--json body,headRefOid"*) cat "$SHIPYARD_CARRY_VIEW" ;;',
+  '  "api "*"/commits/"*"/statuses") echo "[]" ;;',
+  '  "api "*"/statuses/"*) printf \'%s\\n\' "$@" > "$SHIPYARD_CARRY_STATUS"; echo "{}" ;;',
   '  "pr edit"*)',
   '    prev=""',
   '    for a in "$@"; do',
@@ -316,7 +319,7 @@ fs.writeFileSync(path.join(CARRY_BIN, 'gh'), [
 ].join('\n'));
 fs.chmodSync(path.join(CARRY_BIN, 'gh'), 0o755);
 
-const { parseGate, gateConform, gateKind } = require(path.join(SCRIPTS, 'gate-trailer.cjs'));
+const { gateConform, gateKind, gateFromStatus, STATUS_CONTEXT } = require(path.join(SCRIPTS, 'gate-trailer.cjs'));
 
 // The board is where the PR number comes from: no prompt has to learn a new flag
 // for the carry to happen, and a project whose graph carries no delivery state
@@ -345,6 +348,7 @@ function carryFixture({ squashDiffers }) {
     number: 9, body, headRefOid: judgedHead, baseRefName: 'epic',
   }));
   try { fs.unlinkSync(CARRY_EDIT); } catch { /* not written yet */ }
+  try { fs.unlinkSync(CARRY_STATUS); } catch { /* not written yet */ }
   return { proj, repo, judgedHead, judgedTree, judgedBaseTree };
 }
 
@@ -356,9 +360,21 @@ const baseMergeWithBoard = (proj, args) => spawnSync(process.execPath, [BASE_MER
     PATH: `${CARRY_BIN}${path.delimiter}${process.env.PATH}`,
     SHIPYARD_CARRY_VIEW: CARRY_VIEW,
     SHIPYARD_CARRY_EDIT: CARRY_EDIT,
+    SHIPYARD_CARRY_STATUS: CARRY_STATUS,
   },
 });
 const edited = () => (fs.existsSync(CARRY_EDIT) ? fs.readFileSync(CARRY_EDIT, 'utf8') : null);
+const postedStatus = () => {
+  if (!fs.existsSync(CARRY_STATUS)) return null;
+  const argv = fs.readFileSync(CARRY_STATUS, 'utf8').split('\n');
+  const fields = {};
+  argv.forEach((a, i) => {
+    if (argv[i - 1] !== '-f') return;
+    const eq = a.indexOf('=');
+    fields[a.slice(0, eq)] = a.slice(eq + 1);
+  });
+  return { endpoint: argv[1], ...fields };
+};
 
 suite('base merge — a verdict survives a head move it provably covers');
 
@@ -379,14 +395,18 @@ test('a merge that changed nothing carries the verdict onto the new head', () =>
     'the merge must not move the tree'
   );
 
-  // The body the PR carries after the merge, whether or not the carry rewrote
-  // it. Read this way, the RED on base says the right thing: the trailer still
-  // names the judged head, so the verdict reads `stale` for the head the branch
-  // is now at and arch-review is owed again.
-  const body = edited() || JSON.parse(fs.readFileSync(CARRY_VIEW, 'utf8')).body;
-  const gate = parseGate(body);
-  assert.ok(gate, `the PR carries no trailer at all:\n${body}`);
-  assert.strictEqual(gateConform(gate, newHead), true, `the verdict does not cover the new head:\n${body}`);
+  // The carried verdict is a merge-gate status on the new head, read back the
+  // way readGate reads it; the body is never touched. A status bound to any
+  // other sha, or none at all, leaves the new head without a verdict and
+  // arch-review owed again.
+  const status = postedStatus();
+  assert.ok(status, `no ${STATUS_CONTEXT} status was posted: ${r.stdout}${r.stderr}`);
+  assert.ok(status.endpoint.endsWith(`/statuses/${newHead}`), `the status is not on the new head: ${status.endpoint}`);
+  assert.strictEqual(status.context, STATUS_CONTEXT);
+  assert.strictEqual(status.state, 'success');
+  assert.strictEqual(edited(), null, `the carry edited the PR body:\n${edited()}`);
+  const gate = gateFromStatus(status, newHead);
+  assert.strictEqual(gateConform(gate, newHead), true, `the verdict does not cover the new head:\n${status.description}`);
   assert.strictEqual(gateKind(gate, fx.judgedHead), 'stale', 'the old head must no longer read conform');
   assert.strictEqual(gate.base_tree, fx.judgedBaseTree, 'the proof it was measured against is kept');
   assert.ok(!('checks' in gate), 'a green measured against the old base must not carry');
@@ -410,6 +430,7 @@ test('a merge that brought content refuses the carry and leaves the trailer alon
   );
   assert.strictEqual(payload.carry && payload.carry.carried, false, `the carry was allowed: ${r.stdout}`);
   assert.ok(/tree/i.test(payload.carry.reason), `the refusal does not name the trees: ${payload.carry.reason}`);
+  assert.strictEqual(postedStatus(), null, `a ${STATUS_CONTEXT} status was posted anyway`);
   assert.strictEqual(edited(), null, `the trailer was rewritten anyway:\n${edited()}`);
 });
 
