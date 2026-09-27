@@ -14,20 +14,20 @@
 
 ## Decisions for the user
 
-- [ ] P44-A collector shape (A1–A4) — owner: user
-- [ ] P44-B reuse key and single-flight (B1–B3) — owner: user
-- [ ] P44-C coverage manifest (C1–C3) — owner: user
-- [ ] P44-D rotation shadow observations (D1–D3) — owner: user
-- [ ] P44-E index granularity (E1–E3) — owner: user
-- [ ] P44-F reason model and whether phase 44 ships it record-only (F1–F3) — owner: user
-- [ ] P44-G experiment infrastructure (G1–G3) and eligible arms — owner: user
-- [ ] Sequencing against pending phase 43 (S1/S2) — owner: user
-- [ ] Where per-account quota samples live, and the account-scope identifier (opaque label vs salted hash) — owner: user
+- [x] P44-A collector shape → transcript reader plus Claude statusline wrapper (DECISIONS D-05)
+- [x] P44-B reuse key and single-flight → exact manifest + reservation (DECISIONS D-09)
+- [x] P44-C coverage manifest → manifest + installed-host verifier first (DECISIONS D-10)
+- [x] P44-D rotation shadow observations → extend `recommendRotation` (DECISIONS D-06)
+- [x] P44-E index granularity → file-level index + mandatory-source refusal (DECISIONS D-11)
+- [x] P44-F reason model → record-only `checkpoint_reason` (DECISIONS D-02)
+- [x] P44-G experiment infrastructure → protocol and schema only (DECISIONS D-03)
+- [x] Sequencing against pending phase 43 → two passes (DECISIONS D-01)
+- [x] Where per-account quota samples live, and the account identifier → private host state (DECISIONS D-07), local label (DECISIONS D-08)
 
 ## Facts that need an installed host or a live account
 
-- [ ] Idle-time Codex `account/rateLimits/read` under the ChatGPT login — owner: maintainer (read-only probe)
-- [ ] Effective Codex AGENTS.md budget and nested loading under `--ignore-user-config` — owner: maintainer / spike
-- [ ] Whether Claude session transcripts record the loaded CLAUDE.md/memory files — owner: maintainer / spike
-- [ ] Complete list of arch-review prompt inputs for the reuse key — owner: P44-B planner / spike
-- [ ] Whether the T-02-12 duplicate reviews were concurrent — owner: maintainer (not recorded in the audit)
+- [x] Idle-time Codex `account/rateLimits/read` → RISKS R-A5 (DECISIONS D-04)
+- [x] Effective Codex AGENTS.md budget → RISKS R-C5 (DECISIONS D-04)
+- [x] Claude loaded-instruction evidence → RISKS R-C6 (DECISIONS D-04)
+- [x] Complete arch-review input list → RISKS R-B7 (DECISIONS D-04)
+- [x] T-02-12 concurrency → RISKS R-B6 (DECISIONS D-04)

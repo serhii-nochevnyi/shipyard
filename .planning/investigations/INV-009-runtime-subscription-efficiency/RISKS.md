@@ -3,8 +3,6 @@
 From `research/risks.md` §4 (full evidence there), plus risks moved here from OPEN-QUESTIONS.md.
 Severity is the impact if the item is built wrong.
 
-## Cross-cutting
-
 ## R-X1 — Checkpoint signal silently dropped when T-43-12 lands
 severity: high
 mitigation: Both seams test `human_checkpoint === true` (`claude-role-host.cjs:377`, `deliver-dispatch.cjs:90`). Plan P44-F strictly after T-43-12. Add a regression fixture that `review`, `merge` and `true` all still yield `signals.checkpoint=true` until an accepted ADR-014 amendment. Ask the T-43-12 owner to include the assertion.
@@ -15,7 +13,7 @@ mitigation: Every P44 PLAN names the phase-43 ticket it follows on each shared f
 
 ## R-X3 — Readiness read from a stale state projection
 severity: medium
-mitigation: `delivery-state.json` lists phase 40 pending although it is merged. Readiness for phase 44 is defined by merged commits on `origin/main` plus installed-host digests, never by the projection. Run state-sync on the authoritative tree before the phase-44 graph gate; this investigation does not rewrite the projection (another session owns the main checkout).
+mitigation: `delivery-state.json` lists phase 40 pending although it is merged. Gate 2 takes its merged set from this projection (`validate-graph.cjs:465-469`), so every phase-44 ticket touching a phase-40 file would be reported as a contested path. Running state-sync in the phase-44 planning worktree before Gate 2 is therefore a hard prerequisite of decomposition, not an optional step. Readiness is defined by merged commits on `origin/main` plus installed-host digests. This investigation does not rewrite the main checkout's projection, which another session owns.
 
 ## R-X4 — Source present is not installed is not verified
 severity: high
@@ -28,8 +26,6 @@ mitigation: P44-B reuse stays arch-review only; any shared identity primitive is
 ## R-X6 — Efficiency claimed from inference
 severity: high
 mitigation: Reports say `inconclusive` until matched cohorts exist; no acceptance criterion contains a savings percentage.
-
-## P44-A
 
 ## R-A1 — Collector breaks or alters the user's statusline
 severity: high
@@ -55,8 +51,6 @@ mitigation: Idle `account/rateLimits/read` is unverified. Phase 44 relies on in-
 severity: medium
 mitigation: `concurrent_usage=unknown` by default, which makes the result inconclusive.
 
-## P44-B
-
 ## R-B1 — Reused verdict hides a violation or misses a changed input
 severity: high
 mitigation: Inventory every host input before fixing the key; a mutation test per key field must miss; a reused violation stays blocking; an unknown input field disables reuse.
@@ -76,8 +70,6 @@ mitigation: `outcome: reused` carries the original dispatch id and receipt; attr
 ## R-B5 — One provider's verdict satisfies a required other-provider review
 severity: high
 mitigation: Runtime/provider is a key field; a cross-provider requirement is evaluated independently of any cache.
-
-## P44-C
 
 ## R-C1 — Required instruction lost on one runtime
 severity: high
@@ -99,8 +91,6 @@ mitigation: Changes go through `gen-codex-shipyard.cjs` and its drift check, wit
 severity: medium
 mitigation: The effective AGENTS.md budget and nested loading under `--ignore-user-config` are unverified. The P44-C plan starts with a spike on the installed host and treats the measured limit as an input, never an assumed 32 KiB.
 
-## P44-D
-
 ## R-D1 — Advisory silently becomes automatic transfer
 severity: high
 mitigation: Keep the `automatic_transfer.allowed: false` literals; test that no P44-D path mutates ownership.
@@ -117,8 +107,6 @@ mitigation: Separate resume/fork/compact/fresh-start classes; totals include che
 severity: low
 mitigation: One decision per (recommendation, source-state fingerprint).
 
-## P44-E
-
 ## R-E1 — A shared false claim propagates to all four lines
 severity: high
 mitigation: Critical risk and constraint claims are rechecked against primary sources per line; contradictions force expansion.
@@ -130,8 +118,6 @@ mitigation: Content digest plus revision; any change invalidates.
 ## R-E3 — Selection omits material evidence without an overflow signal
 severity: high
 mitigation: Observed in this INV: contract-named files sat only in `source_refs`. The packet builder must refuse when a contract-mandated source is absent; add a fixture.
-
-## P44-F
 
 ## R-F1 — Policy change activated silently
 severity: high
@@ -149,8 +135,6 @@ mitigation: The reason is orthogonal to the `human_checkpoint` value; merge-perm
 severity: medium
 mitigation: Observed-selection receipts on both grids per reason value before any activation.
 
-## P44-G
-
 ## R-G1 — Experiment arm treated as baseline or active by default
 severity: high
 mitigation: Separate versioned schema, not a third `TREATMENT_KEYS` entry; disabled by default; activation only through recorded approval.
@@ -167,6 +151,14 @@ mitigation: Any pilot needs approval with an explicit cap.
 severity: high
 mitigation: Arms resolve only through the trusted host; no request-time override.
 
-## R-G5 — Duplicate-review concurrency unknown
+## R-B6 — Duplicate-review concurrency unknown
 severity: low
 mitigation: The audit does not record whether the T-02-12 reviews overlapped. The P44-B choice does not depend on it if single-flight is kept; if single-flight is dropped, concurrent duplicates remain possible and are measured by the reuse report.
+
+## R-C6 — Claude loaded-instruction evidence may be unavailable
+severity: medium
+mitigation: The headless `system/init` record lists no CLAUDE.md or memory paths, and whether the session transcript records them is unverified. The P44-C plan starts with an installed-host spike. If neither the stream nor the transcript names the loaded files, Claude coverage is proven by explicit role-level loading plus a digest of the injected content, and that limit is recorded in the coverage report.
+
+## R-B7 — Reuse key incomplete because a prompt input was missed
+severity: high
+mitigation: The research inventoried `prepareArch`, `observedSignals` and the result context, but not every `makePrompt`/`buildPacket` input. The P44-B plan starts with that exhaustive inventory, and its mutation tests cover each input. An input found later disables reuse until it is added to the key.

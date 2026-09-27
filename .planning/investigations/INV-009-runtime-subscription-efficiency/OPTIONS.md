@@ -12,12 +12,16 @@ Per scope item, from `research/alternatives.md` §1–§8, with the system-state
   authenticated process, and its retrieval is unproven.
 - **A3 Claude-first.** Claude wrapper plus the shared envelope; Codex rows stay
   `unsupported|unverified` until a read-only check passes.
-- **A4 stream-derived, both runtimes (new).** Parse the records the hosts already receive: Claude
-  `rate_limit_event` (fraction 0–1) in `claude-runtime-host.cjs`, and Codex
-  `token_count.rate_limits` in the native transcript, into one whitelisted envelope. No new
-  process, no installer change, no extra call. Optionally add the Claude statusline wrapper
-  later to cover the interactive parent session. Idle baselines are not available (samples
-  only arrive during model turns).
+- **A4 stream-derived, reader side, both runtimes (new).** Parse records the hosts already save:
+  Claude `rate_limit_event` (fraction 0–1) in the host transcripts under
+  `~/.local/state/shipyard/claude/*/transcripts/` (host check: the INV-009 research transcripts
+  hold 6–16 such records each), and Codex `token_count.rate_limits` in the native transcript that
+  `usage-report.cjs:479` already reads. Only the reader changes (`usage-report.cjs` plus the
+  envelope module); no runtime host, installer or phase-43 file is touched, and no new process or
+  call is made. Limits: samples exist only while a worker runs, so there is no idle baseline and
+  no coverage of the interactive parent session, which the audit says dominates consumption.
+  Bracketing a whole run needs parent-side samples, which only the statusline wrapper (A1/A2/A3)
+  provides; A4 can be combined with that wrapper later.
 
 ## P44-B — reuse key and single-flight
 
@@ -73,10 +77,16 @@ Per scope item, from `research/alternatives.md` §1–§8, with the system-state
 
 ## Sequencing against phase 43
 
-- **S1 plan now, with cross-phase dependencies**: every P44 ticket that shares a file with a
-  pending T-43 ticket depends on it; A/D (no shared files) can start at once.
-- **S2 plan now, deliver after the phase-43 epic merges**: no cross-phase edges needed beyond
-  documentation; the line numbers are re-read at planning time.
+Gate 2 rejects any unmerged, dependency-unordered pair of tickets that touch the same path
+(`validate-graph.cjs:470-512`), whatever the delivery date. B, C, E and F therefore need real
+cross-phase `depends_on` edges onto the pending T-43 tickets they share files with, and those
+edges keep them blocked until epic 43 reaches main (`:628`). The choice is what to decompose now:
+
+- **Seq-1 decompose all of P44 now**: A, D and G (as scoped) start at once; B, C, E and F carry
+  cross-phase edges and sit blocked behind phase 43. Line references in their plans are re-read
+  when they unblock.
+- **Seq-2 decompose only the independent items now** (A, D, G protocol) and decompose B, C, E and
+  F in a second planning pass after epic 43 merges, against the landed code.
 
 ## Comparison
 
@@ -85,7 +95,7 @@ Per scope item, from `research/alternatives.md` §1–§8, with the system-state
 | P44-A | A1 | S-M | launch coupling; Codex half may be empty | off-launch sampling | both |
 | P44-A | A2 | M | second auth process; daemon creep | — | both |
 | P44-A | A3 | S | asymmetric data | — | Claude |
-| P44-A | A4 | S | no idle baseline; units differ per runtime | — | none for fixtures; one live sample per runtime |
+| P44-A | A4 | S | worker-only samples, no parent or idle coverage; units differ per runtime | — | none for fixtures; transcripts already hold samples |
 | P44-B | B1 | M-L | incomplete key; liveness | — | no |
 | P44-B | B2 | M | concurrent duplicates remain | single-flight | no |
 | P44-B | B3 | L | crosses phase 45 | phase-45 choice | no |
