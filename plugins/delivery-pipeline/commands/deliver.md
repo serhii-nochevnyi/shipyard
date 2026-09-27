@@ -2152,10 +2152,11 @@ guard reports, clear only its returned id with
 opened after launch belongs to a fresh round; the host refuses a result if the
 round's membership changed before it was reconciled.
 
-For Codex, run `deliver-dispatch.cjs launch --runtime codex --ticket <T> --role pr-sentinel`
-once per guarded ticket; after the same preflight, the entry point starts
-`codex-delivery-host.cjs` with `role: "pr-sentinel"`, and the host requires
-explicit Luna/medium selection evidence and a concrete application receipt. Do not substitute `unsupported`, `unknown`, or
+Codex uses `codex-delivery-host.cjs`, the host that
+`deliver-dispatch.cjs launch --runtime codex --ticket <T> --role pr-sentinel`
+runs once per guarded ticket after the same preflight, with `role: "pr-sentinel"`;
+the host requires explicit Luna/medium selection evidence and a
+concrete application receipt. Do not substitute `unsupported`, `unknown`, or
 an omitted effort when the selected host cannot apply the configured level;
 refuse that launch before recording it. Record each returned dispatch id through the
 validated ticket-mark path; do not create a shared round row or clear-round
