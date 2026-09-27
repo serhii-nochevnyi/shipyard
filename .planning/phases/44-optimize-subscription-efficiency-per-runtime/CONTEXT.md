@@ -36,3 +36,8 @@
 ## Out of scope for this pass
 
 P44-B arch-review reuse, P44-C instruction coverage, P44-E research index, P44-F `checkpoint_reason` (second pass, after the phase-43 epic merges; their contracts are fixed in ADR-021). Everything in ADR-021 "Out of scope". Phase-45 work (INV-008).
+
+## Planning notes (orchestrator host checks, 2026-09-27)
+
+- Statusline host contract (44-RESEARCH Open Question 1): `~/.claude/settings.json` holds `"statusLine": {"type": "command", "command": "bash ~/.claude/statusline.sh", "padding": 0}`. The renderer reads the whole JSON from stdin once (`input=$(cat)`, then one `python3` pass) and uses `rate_limits.five_hour|seven_day.used_percentage` and `.resets_at`. The wrapper must preserve `type`, `command` and `padding` exactly and restore them on uninstall; other shapes are refused.
+- The 44-RESEARCH recommendations for Open Questions 2–6 are adopted: a private label map written only by the installer/store CLI with a per-run `--account-label` override; dedupe statusline samples per changed (series, percent, reset); shadow decisions recorded only with an explicit flag; rotation advice is `unknown` until instruction digests exist (stated in acceptance); the reader is path-agnostic and documents both `claude/` and `claude-decompose/` transcript roots.
