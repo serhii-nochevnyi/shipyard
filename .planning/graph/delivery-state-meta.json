@@ -1,13 +1,13 @@
 {
   "schema_version": 1,
-  "generation": 380,
-  "generation_identity": "69f9eb96-8e5a-490d-9694-d43a354ce72c",
-  "previous_generation_identity": "16777244:12931078489:1790526261481063400:895e01e1f7144e915077264695fca5f81f76cb7e73ca57e3f63dfa7cbff5804a",
-  "observed_at": "2026-09-27T17:44:25.772Z",
-  "generated_at": "2026-09-27T17:44:25.772Z",
+  "generation": 382,
+  "generation_identity": "1cf72646-46a9-40e1-b390-467f05d54cb4",
+  "previous_generation_identity": "16777244:12931242219:1790532673196124000:138c38e9597f4f5988a6a66b0970f6b48ce349fd9de71dd2319f124640207328",
+  "observed_at": "2026-09-27T18:11:57.006Z",
+  "generated_at": "2026-09-27T18:11:57.006Z",
   "by": "state-sync",
-  "pid": 83332,
-  "observation_generation": 380,
+  "pid": 37081,
+  "observation_generation": 382,
   "observation_projection": {
     "tickets": {
       "T-20-01": {
@@ -1551,9 +1551,9 @@
         "checks": null
       },
       "T-38-03": {
-        "status": "pending",
+        "status": "merged",
         "repository": null,
-        "pr": null,
+        "pr": 195,
         "head": null,
         "draft": false,
         "base": "epic/38-runtime-model-ladder-recovery",
@@ -2457,9 +2457,9 @@
   },
   "binding": {
     "schema_version": 1,
-    "state_digest": "24b1dd654d56bb04e2a746394504fe16db3739667a940f66fb95085ff4e871a0",
-    "front_digest": "fb4425a7e482f5d9205818272db78a602e990c9b0fc46611d62ed940249678aa",
-    "observation_digest": "bcc344e5c5dd58cc01de162faeb6e63401954dfcc86d82fdd4da41f57f316560",
-    "observation_generation": 380
+    "state_digest": "09a7bda74f845932b5ee934f783695e204339aad62961e85318bf870964ccb4c",
+    "front_digest": "392e18fb4ffb0f1e121014e6f2818cdf4ae3a3481feffe833bd4a270ddfce571",
+    "observation_digest": "ad3cce3a5f7864301614d5bb57383316c2c746c216bea27a5d4703035e9e62fa",
+    "observation_generation": 382
   }
 }

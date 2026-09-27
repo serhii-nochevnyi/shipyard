@@ -1445,13 +1445,15 @@
   base_reason: "T-38-02 is MERGED, so its branch is no longer where work lands — the base is epic/38-runtime-model-ladder-recovery (base-merge it in first to keep the review diff one slice)"
   branch: "ticket/T-38-03-connect-claude-delivery-and-investigatio"
   epic: "epic/38-runtime-model-ladder-recovery"
-  pr: null
-  ready: true
-  reapable: false
-  status: "pending"
+  merged_into: "epic/38-runtime-model-ladder-recovery"
+  pr: 195
+  reapable: true
+  recorded_pr: 195
+  status: "merged"
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/195"
 "T-38-04":
   base: "epic/38-runtime-model-ladder-recovery"
-  base_reason: "T-38-03 has no branch on the remote yet (status pending) — ticket/T-38-03-connect-claude-delivery-and-investigatio is not a base that exists, so the base is epic/38-runtime-model-ladder-recovery"
+  base_reason: "T-38-03 is MERGED, so its branch is no longer where work lands — the base is epic/38-runtime-model-ladder-recovery (base-merge it in first to keep the review diff one slice)"
   branch: "ticket/T-38-04-connect-codex-delivery-and-typed-gsd-dec"
   epic: "epic/38-runtime-model-ladder-recovery"
   matched_by: "marker"
@@ -2147,7 +2149,7 @@
 "T-43-07":
   base: "epic/43-target-project-delivery-at-scale"
   base_reason: "no primary parent — a root ticket PRs into epic/43-target-project-delivery-at-scale"
-  behind_by: 0
+  behind_by: 5
   branch: "ticket/T-43-07-cancelled-checks-ignore-superseded-runs"
   checks: {"failing":0,"none_reported":false,"pending":0,"total":1,"unavailable":false}
   draft: false

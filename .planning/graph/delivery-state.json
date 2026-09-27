@@ -1723,14 +1723,16 @@
   },
   "T-38-03": {
     "branch": "ticket/T-38-03-connect-claude-delivery-and-investigatio",
-    "pr": null,
-    "status": "pending",
+    "pr": 195,
+    "status": "merged",
+    "recorded_pr": 195,
+    "url": "https://github.com/serhii-nochevnyi/shipyard/pull/195",
+    "merged_into": "epic/38-runtime-model-ladder-recovery",
     "base": "epic/38-runtime-model-ladder-recovery",
     "base_reason": "T-38-02 is MERGED, so its branch is no longer where work lands — the base is epic/38-runtime-model-ladder-recovery (base-merge it in first to keep the review diff one slice)",
     "epic": "epic/38-runtime-model-ladder-recovery",
-    "ready": true,
-    "reapable": false,
-    "since": "2026-09-27T17:44:25.772Z"
+    "reapable": true,
+    "since": "2026-09-27T18:11:57.006Z"
   },
   "T-38-04": {
     "branch": "ticket/T-38-04-connect-codex-delivery-and-typed-gsd-dec",
@@ -1741,7 +1743,7 @@
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/192",
     "merged_into": "epic/38-runtime-model-ladder-recovery",
     "base": "epic/38-runtime-model-ladder-recovery",
-    "base_reason": "T-38-03 has no branch on the remote yet (status pending) — ticket/T-38-03-connect-claude-delivery-and-investigatio is not a base that exists, so the base is epic/38-runtime-model-ladder-recovery",
+    "base_reason": "T-38-03 is MERGED, so its branch is no longer where work lands — the base is epic/38-runtime-model-ladder-recovery (base-merge it in first to keep the review diff one slice)",
     "epic": "epic/38-runtime-model-ladder-recovery",
     "reapable": true,
     "since": "2026-09-23T17:54:56.642Z"
@@ -2560,7 +2562,7 @@
     "pr_created_at": "2026-09-26T11:47:38Z",
     "head_sha": "ad83211b322cdce3b92ff0a742451d8e0cb14e9b",
     "merge_state": "CLEAN",
-    "behind_by": 0,
+    "behind_by": 5,
     "checks": {
       "total": 1,
       "failing": 0,

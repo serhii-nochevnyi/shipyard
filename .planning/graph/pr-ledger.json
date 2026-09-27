@@ -1,0 +1,11 @@
+{
+  "schema": "shipyard.pr-ledger.v1",
+  "entries": {
+    "T-38-03": {
+      "number": 195,
+      "head": "prep/T-38-03-impl",
+      "repo": null,
+      "created_at": "2026-09-27T18:11:56.954Z"
+    }
+  }
+}

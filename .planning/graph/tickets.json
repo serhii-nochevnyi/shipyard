@@ -6,168 +6,225 @@
       "base": null,
       "repos": [
         null
-      ]
+      ],
+      "phaseDir": "20-autonomy-of-the-drive-to-green-loop",
+      "jira": null
     },
     "21": {
       "branch": "epic/21-verdicts-a-human-would-have-made-anyway",
       "base": null,
       "repos": [
         null
-      ]
+      ],
+      "phaseDir": "21-verdicts-a-human-would-have-made-anyway",
+      "jira": null
     },
     "22": {
       "branch": "epic/22-close-what-phase-20-left-open",
       "base": null,
       "repos": [
         null
-      ]
+      ],
+      "phaseDir": "22-close-what-phase-20-left-open",
+      "jira": null
     },
     "23": {
       "branch": "epic/23-the-board-tells-the-truth-about-itself",
       "base": null,
       "repos": [
         null
-      ]
+      ],
+      "phaseDir": "23-the-board-tells-the-truth-about-itself",
+      "jira": null
     },
     "24": {
       "branch": "epic/24-the-conveyor-stops-interrupting-itself",
       "base": null,
       "repos": [
         null
-      ]
+      ],
+      "phaseDir": "24-the-conveyor-stops-interrupting-itself",
+      "jira": null
     },
     "25": {
       "branch": "epic/25-the-conveyor-follows-the-models-it-runs-on",
       "base": null,
       "repos": [
         null
-      ]
+      ],
+      "phaseDir": "25-the-conveyor-follows-the-models-it-runs-on",
+      "jira": null
     },
     "26": {
       "branch": "epic/26-positive-evidence-before-a-mutation",
       "base": null,
       "repos": [
         null
-      ]
+      ],
+      "phaseDir": "26-positive-evidence-before-a-mutation",
+      "jira": null
     },
     "27": {
       "branch": "epic/27-the-conveyor-measures-its-own-state",
       "base": null,
       "repos": [
         null
-      ]
+      ],
+      "phaseDir": "27-the-conveyor-measures-its-own-state",
+      "jira": null
     },
     "28": {
       "branch": "epic/28-a-mechanism-nobody-connected-is-not-a-mechanism",
       "base": null,
       "repos": [
         null
-      ]
+      ],
+      "phaseDir": "28-a-mechanism-nobody-connected-is-not-a-mechanism",
+      "jira": null
     },
     "29": {
       "branch": "epic/29-the-tracker-is-a-projection-and-a-projection-is-driven",
       "base": null,
       "repos": [
         null
-      ]
+      ],
+      "phaseDir": "29-the-tracker-is-a-projection-and-a-projection-is-driven",
+      "jira": null
     },
     "30": {
       "branch": "epic/30-a-ticket-you-cannot-reach-is-not-deliverable",
       "base": null,
       "repos": [
         null
-      ]
+      ],
+      "phaseDir": "30-a-ticket-you-cannot-reach-is-not-deliverable",
+      "jira": null
     },
     "31": {
       "branch": "epic/31-not-every-ticket-is-available-work",
       "base": null,
       "repos": [
         null
-      ]
+      ],
+      "phaseDir": "31-not-every-ticket-is-available-work",
+      "jira": null
     },
     "32": {
       "branch": "epic/32-measure-usage-and-make-the-backlog-actionable",
       "base": null,
       "repos": [
         null
-      ]
+      ],
+      "phaseDir": "32-measure-usage-and-make-the-backlog-actionable",
+      "jira": null
     },
     "35": {
       "branch": "epic/35-gsd-and-shipyard-workflow-loop",
       "base": null,
       "repos": [
         null
-      ]
+      ],
+      "phaseDir": "35-gsd-and-shipyard-workflow-loop",
+      "jira": null
     },
     "36": {
       "branch": "epic/36-enforce-the-runtime-model-ladder",
       "base": null,
       "repos": [
         null
-      ]
+      ],
+      "phaseDir": "36-enforce-the-runtime-model-ladder",
+      "jira": null
     },
     "37": {
       "branch": "epic/37-autonomous-dual-runtime-control-plane",
       "base": null,
       "repos": [
         null
-      ]
+      ],
+      "phaseDir": "37-autonomous-dual-runtime-control-plane",
+      "jira": null
     },
     "38": {
       "branch": "epic/38-runtime-model-ladder-recovery",
       "base": null,
       "repos": [
         null
-      ]
+      ],
+      "phaseDir": "38-runtime-model-ladder-recovery",
+      "jira": null
     },
     "39": {
       "branch": "epic/39-remove-conveyor-session-friction",
       "base": null,
       "repos": [
         null
-      ]
+      ],
+      "phaseDir": "39-remove-conveyor-session-friction",
+      "jira": null
     },
     "40": {
       "branch": "epic/40-build-delivery-seams-and-clean-target-project-prs",
       "base": null,
       "repos": [
         null
-      ]
+      ],
+      "phaseDir": "40-build-delivery-seams-and-clean-target-project-prs",
+      "jira": null
     },
     "41": {
       "branch": "epic/41-reduce-pipeline-subscription-overhead",
       "base": null,
       "repos": [
         null
-      ]
+      ],
+      "phaseDir": "41-reduce-pipeline-subscription-overhead",
+      "jira": null
     },
     "42": {
       "branch": "epic/42-resume-trusted-finalization-without-executor-replay",
       "base": null,
       "repos": [
         null
-      ]
+      ],
+      "phaseDir": "42-resume-trusted-finalization-without-executor-replay",
+      "jira": null
     },
     "43": {
       "branch": "epic/43-target-project-delivery-at-scale",
       "base": null,
       "repos": [
         null
-      ]
+      ],
+      "phaseDir": "43-target-project-delivery-at-scale",
+      "jira": null
+    },
+    "44": {
+      "branch": "epic/44-optimize-subscription-efficiency-per-runtime",
+      "base": null,
+      "repos": [
+        null
+      ],
+      "phaseDir": "44-optimize-subscription-efficiency-per-runtime",
+      "jira": null
     },
     "33-reduce-orchestration-context-and-transfer-sessions-safely": {
       "branch": "epic/33-reduce-orchestration-context-and-transfer-sessions-safely",
       "base": null,
       "repos": [
         null
-      ]
+      ],
+      "phaseDir": "33-reduce-orchestration-context-and-transfer-sessions-safely",
+      "jira": null
     },
     "34-improve-convergence-and-tune-from-measured-outcomes": {
       "branch": "epic/34-improve-convergence-and-tune-from-measured-outcomes",
       "base": null,
       "repos": [
         null
-      ]
+      ],
+      "phaseDir": "34-improve-convergence-and-tune-from-measured-outcomes",
+      "jira": null
     }
   },
   "tickets": {
@@ -2513,7 +2570,7 @@
       "type": "implementation",
       "human_checkpoint": true,
       "preauthorized": false,
-      "branch": "ticket/T-30-04-require-an-explicit-operator-choice-befo",
+      "branch": "ticket/T-30-04-require-an-explicit-operator-choice-before-cloning",
       "epic": "epic/30-a-ticket-you-cannot-reach-is-not-deliverable",
       "primary_parent": "T-30-03",
       "pr_base": "ticket/T-30-03-discover-repository-checkouts-by-declare",
@@ -2543,10 +2600,10 @@
       "type": "implementation",
       "human_checkpoint": false,
       "preauthorized": false,
-      "branch": "ticket/T-30-05-validate-repository-destinations-with-th",
+      "branch": "ticket/T-30-05-validate-repository-destinations-with-existing-nesting-rule",
       "epic": "epic/30-a-ticket-you-cannot-reach-is-not-deliverable",
       "primary_parent": "T-30-04",
-      "pr_base": "ticket/T-30-04-require-an-explicit-operator-choice-befo",
+      "pr_base": "ticket/T-30-04-require-an-explicit-operator-choice-before-cloning",
       "jira": null
     },
     "T-30-06": {
@@ -2571,10 +2628,10 @@
       "type": "implementation",
       "human_checkpoint": false,
       "preauthorized": false,
-      "branch": "ticket/T-30-06-mirror-the-project-origin-protocol-for-r",
+      "branch": "ticket/T-30-06-mirror-project-origin-protocol-for-repository-clones",
       "epic": "epic/30-a-ticket-you-cannot-reach-is-not-deliverable",
       "primary_parent": "T-30-05",
-      "pr_base": "ticket/T-30-05-validate-repository-destinations-with-th",
+      "pr_base": "ticket/T-30-05-validate-repository-destinations-with-existing-nesting-rule",
       "jira": null
     },
     "T-30-07": {
@@ -2603,7 +2660,7 @@
       "branch": "ticket/T-30-07-use-a-full-clone-with-all-refs-required",
       "epic": "epic/30-a-ticket-you-cannot-reach-is-not-deliverable",
       "primary_parent": "T-30-06",
-      "pr_base": "ticket/T-30-06-mirror-the-project-origin-protocol-for-r",
+      "pr_base": "ticket/T-30-06-mirror-project-origin-protocol-for-repository-clones",
       "jira": null
     },
     "T-30-08": {
@@ -2630,7 +2687,7 @@
       "type": "implementation",
       "human_checkpoint": false,
       "preauthorized": false,
-      "branch": "ticket/T-30-08-adopt-matching-checkouts-and-refuse-to-c",
+      "branch": "ticket/T-30-08-adopt-matching-checkouts-and-refuse-to-clobber",
       "epic": "epic/30-a-ticket-you-cannot-reach-is-not-deliverable",
       "primary_parent": "T-30-07",
       "pr_base": "ticket/T-30-07-use-a-full-clone-with-all-refs-required",
@@ -2661,10 +2718,10 @@
       "type": "implementation",
       "human_checkpoint": false,
       "preauthorized": false,
-      "branch": "ticket/T-30-09-persist-resolved-checkouts-and-park-unre",
+      "branch": "ticket/T-30-09-persist-resolved-checkouts-and-park-unreachable",
       "epic": "epic/30-a-ticket-you-cannot-reach-is-not-deliverable",
       "primary_parent": "T-30-08",
-      "pr_base": "ticket/T-30-08-adopt-matching-checkouts-and-refuse-to-c",
+      "pr_base": "ticket/T-30-08-adopt-matching-checkouts-and-refuse-to-clobber",
       "jira": null
     },
     "T-30-10": {
@@ -2892,7 +2949,7 @@
       "type": "implementation",
       "human_checkpoint": true,
       "preauthorized": false,
-      "branch": "ticket/T-31-07-read-tracker-eligibility-at-cold-start-a",
+      "branch": "ticket/T-31-07-read-tracker-eligibility-at-cold-start",
       "epic": "epic/31-not-every-ticket-is-available-work",
       "primary_parent": "T-31-06",
       "pr_base": "ticket/T-31-06-journal-direct-ticket-overrides",
@@ -3147,7 +3204,7 @@
       "type": "implementation",
       "human_checkpoint": false,
       "preauthorized": false,
-      "branch": "ticket/T-32-07-join-transcript-usage-to-dispatches-with",
+      "branch": "ticket/T-32-07-join-transcripts-to-dispatches",
       "epic": "epic/32-measure-usage-and-make-the-backlog-actionable",
       "primary_parent": "T-32-05",
       "pr_base": "ticket/T-32-05-wire-batched-dispatch-lifecycle-into-the",
@@ -3480,7 +3537,7 @@
       "type": "execute",
       "human_checkpoint": false,
       "preauthorized": false,
-      "branch": "ticket/T-34-01-make-review-progress-and-resource-budget",
+      "branch": "ticket/T-34-01-review-progress-and-resource-budgets",
       "epic": "epic/34-improve-convergence-and-tune-from-measured-outcomes",
       "primary_parent": null,
       "pr_base": "epic/34-improve-convergence-and-tune-from-measured-outcomes",
@@ -3507,10 +3564,10 @@
       "type": "execute",
       "human_checkpoint": true,
       "preauthorized": true,
-      "branch": "ticket/T-34-02-require-runtime-capability-evidence-for",
+      "branch": "ticket/T-34-02-runtime-capability-evidence",
       "epic": "epic/34-improve-convergence-and-tune-from-measured-outcomes",
       "primary_parent": "T-34-01",
-      "pr_base": "ticket/T-34-01-make-review-progress-and-resource-budget",
+      "pr_base": "ticket/T-34-01-review-progress-and-resource-budgets",
       "jira": null
     },
     "T-34-03": {
@@ -3532,7 +3589,7 @@
       "type": "execute",
       "human_checkpoint": true,
       "preauthorized": true,
-      "branch": "ticket/T-34-03-strengthen-manual-merge-verdict-carry",
+      "branch": "ticket/T-34-03-merge-verdict-carry",
       "epic": "epic/34-improve-convergence-and-tune-from-measured-outcomes",
       "primary_parent": null,
       "pr_base": "epic/34-improve-convergence-and-tune-from-measured-outcomes",
@@ -3568,10 +3625,10 @@
       "type": "execute",
       "human_checkpoint": true,
       "preauthorized": true,
-      "branch": "ticket/T-34-04-admit-distinct-agents-through-shared-acc",
+      "branch": "ticket/T-34-04-shared-capacity-and-dispatch-boundary",
       "epic": "epic/34-improve-convergence-and-tune-from-measured-outcomes",
       "primary_parent": "T-34-02",
-      "pr_base": "ticket/T-34-02-require-runtime-capability-evidence-for",
+      "pr_base": "ticket/T-34-02-runtime-capability-evidence",
       "jira": null
     },
     "T-34-05": {
@@ -3607,7 +3664,7 @@
       "branch": "ticket/T-34-05-publish-versioned-optimization-evidence",
       "epic": "epic/34-improve-convergence-and-tune-from-measured-outcomes",
       "primary_parent": "T-34-04",
-      "pr_base": "ticket/T-34-04-admit-distinct-agents-through-shared-acc",
+      "pr_base": "ticket/T-34-04-shared-capacity-and-dispatch-boundary",
       "jira": null
     },
     "T-35-01": {
@@ -4167,7 +4224,7 @@
       "type": "implementation",
       "human_checkpoint": true,
       "preauthorized": true,
-      "branch": "ticket/T-36-04-generate-and-validate-the-codex-bundle-w",
+      "branch": "ticket/T-36-04-generate-and-validate-the-complete-codex",
       "epic": "epic/36-enforce-the-runtime-model-ladder",
       "primary_parent": "T-36-03",
       "pr_base": "ticket/T-36-03-strict-codex-adapter-and-named-model-pal",
@@ -4202,7 +4259,7 @@
       "branch": "ticket/T-36-05-claude-adapter-and-explicit-workflow-lau",
       "epic": "epic/36-enforce-the-runtime-model-ladder",
       "primary_parent": "T-36-04",
-      "pr_base": "ticket/T-36-04-generate-and-validate-the-codex-bundle-w",
+      "pr_base": "ticket/T-36-04-generate-and-validate-the-complete-codex",
       "jira": null
     },
     "T-36-06": {
@@ -4433,7 +4490,7 @@
       "type": "implementation",
       "human_checkpoint": true,
       "preauthorized": true,
-      "branch": "ticket/T-36-07-enforce-the-boundary-across-shipyard-del",
+      "branch": "ticket/T-36-07-enforce-the-boundary-across-shipyard-delivery-launches",
       "epic": "epic/36-enforce-the-runtime-model-ladder",
       "primary_parent": "T-36-06",
       "pr_base": "ticket/T-36-06-route-gsd-decomposition-through-the-mand",
@@ -4465,7 +4522,7 @@
       "branch": "ticket/T-36-08-application-receipts-and-dispatch-record",
       "epic": "epic/36-enforce-the-runtime-model-ladder",
       "primary_parent": "T-36-07",
-      "pr_base": "ticket/T-36-07-enforce-the-boundary-across-shipyard-del",
+      "pr_base": "ticket/T-36-07-enforce-the-boundary-across-shipyard-delivery-launches",
       "jira": null
     },
     "T-36-09": {
@@ -4491,7 +4548,7 @@
       "type": "implementation",
       "human_checkpoint": false,
       "preauthorized": false,
-      "branch": "ticket/T-36-09-policy-aware-telemetry-and-reconciliatio",
+      "branch": "ticket/T-36-09-policy-aware-telemetry-and-reconciliation-reporting",
       "epic": "epic/36-enforce-the-runtime-model-ladder",
       "primary_parent": "T-36-08",
       "pr_base": "ticket/T-36-08-application-receipts-and-dispatch-record",
@@ -4521,10 +4578,10 @@
       "type": "implementation",
       "human_checkpoint": false,
       "preauthorized": false,
-      "branch": "ticket/T-36-10-exhaustive-signal-matrix-and-negative-by",
+      "branch": "ticket/T-36-10-exhaustive-signal-matrix-and-negative-bypass-suite",
       "epic": "epic/36-enforce-the-runtime-model-ladder",
       "primary_parent": "T-36-09",
-      "pr_base": "ticket/T-36-09-policy-aware-telemetry-and-reconciliatio",
+      "pr_base": "ticket/T-36-09-policy-aware-telemetry-and-reconciliation-reporting",
       "jira": null
     },
     "T-36-11": {
@@ -4550,10 +4607,10 @@
       "type": "implementation",
       "human_checkpoint": true,
       "preauthorized": true,
-      "branch": "ticket/T-36-11-cross-runtime-generated-install-smoke-ve",
+      "branch": "ticket/T-36-11-cross-runtime-generated-install-smoke-verification",
       "epic": "epic/36-enforce-the-runtime-model-ladder",
       "primary_parent": "T-36-10",
-      "pr_base": "ticket/T-36-10-exhaustive-signal-matrix-and-negative-by",
+      "pr_base": "ticket/T-36-10-exhaustive-signal-matrix-and-negative-bypass-suite",
       "jira": null
     },
     "T-36-12": {
@@ -4587,7 +4644,7 @@
       "branch": "ticket/T-36-12-supersede-obsolete-ladder-documentation",
       "epic": "epic/36-enforce-the-runtime-model-ladder",
       "primary_parent": "T-36-10",
-      "pr_base": "ticket/T-36-10-exhaustive-signal-matrix-and-negative-by",
+      "pr_base": "ticket/T-36-10-exhaustive-signal-matrix-and-negative-bypass-suite",
       "jira": null
     },
     "T-37-01": {
@@ -4671,7 +4728,7 @@
       "type": "implementation",
       "human_checkpoint": true,
       "preauthorized": false,
-      "branch": "ticket/T-37-03-connect-claude-code-to-the-scoped-runtim",
+      "branch": "ticket/T-37-03-connect-claude-to-scoped-runtime-controller",
       "epic": "epic/37-autonomous-dual-runtime-control-plane",
       "primary_parent": "T-37-02",
       "pr_base": "ticket/T-37-02-persist-controller-leases-and-autonomous",
@@ -4701,7 +4758,7 @@
       "type": "implementation",
       "human_checkpoint": true,
       "preauthorized": false,
-      "branch": "ticket/T-37-04-connect-codex-to-the-scoped-runtime-cont",
+      "branch": "ticket/T-37-04-connect-codex-to-scoped-runtime-controller",
       "epic": "epic/37-autonomous-dual-runtime-control-plane",
       "primary_parent": "T-37-02",
       "pr_base": "ticket/T-37-02-persist-controller-leases-and-autonomous",
@@ -4731,7 +4788,7 @@
       "type": "implementation",
       "human_checkpoint": false,
       "preauthorized": false,
-      "branch": "ticket/T-37-05-prove-graph-reachability-before-autonomo",
+      "branch": "ticket/T-37-05-prove-graph-reachability-before-autonomous-run",
       "epic": "epic/37-autonomous-dual-runtime-control-plane",
       "primary_parent": "T-37-02",
       "pr_base": "ticket/T-37-02-persist-controller-leases-and-autonomous",
@@ -4764,7 +4821,7 @@
       "branch": "ticket/T-37-06-make-stop-and-wait-decisions-run-scoped",
       "epic": "epic/37-autonomous-dual-runtime-control-plane",
       "primary_parent": "T-37-05",
-      "pr_base": "ticket/T-37-05-prove-graph-reachability-before-autonomo",
+      "pr_base": "ticket/T-37-05-prove-graph-reachability-before-autonomous-run",
       "jira": null
     },
     "T-37-07": {
@@ -4797,7 +4854,7 @@
       "branch": "ticket/T-37-07-join-runtime-receipts-with-usage-and-out",
       "epic": "epic/37-autonomous-dual-runtime-control-plane",
       "primary_parent": "T-37-03",
-      "pr_base": "ticket/T-37-03-connect-claude-code-to-the-scoped-runtim",
+      "pr_base": "ticket/T-37-03-connect-claude-to-scoped-runtime-controller",
       "jira": null
     },
     "T-37-08": {
@@ -4903,7 +4960,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
-      "missing_paths": false,
+      "missing_paths": true,
       "files": [
         ".planning/phases/38-runtime-model-ladder-recovery/38-02-PLAN.md",
         "plugins/delivery-pipeline/scripts/claude-agent-start-hook.cjs",
@@ -5020,7 +5077,7 @@
       "type": "implementation",
       "human_checkpoint": true,
       "preauthorized": false,
-      "branch": "ticket/T-38-04-connect-codex-delivery-and-typed-gsd-dec",
+      "branch": "ticket/T-38-04-connect-codex-launches-to-delivery",
       "epic": "epic/38-runtime-model-ladder-recovery",
       "primary_parent": "T-38-03",
       "pr_base": "ticket/T-38-03-connect-claude-delivery-and-investigatio",
@@ -5079,7 +5136,7 @@
       "branch": "ticket/T-38-07-connect-claude-judgement-roles-through-t",
       "epic": "epic/38-runtime-model-ladder-recovery",
       "primary_parent": "T-38-04",
-      "pr_base": "ticket/T-38-04-connect-codex-delivery-and-typed-gsd-dec",
+      "pr_base": "ticket/T-38-04-connect-codex-launches-to-delivery",
       "jira": null
     },
     "T-38-08": {
@@ -5161,7 +5218,7 @@
       "type": "implementation",
       "human_checkpoint": true,
       "preauthorized": false,
-      "branch": "ticket/T-38-05-route-delivery-through-independent-runti",
+      "branch": "ticket/T-38-05-route-independent-runtime-rollouts",
       "epic": "epic/38-runtime-model-ladder-recovery",
       "primary_parent": "T-38-08",
       "pr_base": "ticket/T-38-08-connect-claude-sentinel-through-authenti",
@@ -5716,7 +5773,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
-      "missing_paths": true,
+      "missing_paths": false,
       "files": [
         "scripts/capture-boundary-fixtures.cjs",
         "tests/fixtures/captured/boundaries/codex-agent-stream.json",
@@ -5782,7 +5839,7 @@
       ],
       "cross_repo_deps": [],
       "unreachable_paths": false,
-      "missing_paths": true,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/scripts/host-provenance.cjs",
         "tests/unit/host-provenance.test.cjs",
@@ -5897,7 +5954,7 @@
       "type": "implementation",
       "human_checkpoint": false,
       "preauthorized": false,
-      "branch": "ticket/T-41-04-accept-asynchronous-native-child-complet",
+      "branch": "ticket/T-41-04-resume-authenticated-completed-execution",
       "epic": "epic/41-reduce-pipeline-subscription-overhead",
       "primary_parent": null,
       "pr_base": "epic/41-reduce-pipeline-subscription-overhead",
@@ -6029,7 +6086,7 @@
       ],
       "cross_repo_deps": [],
       "unreachable_paths": false,
-      "missing_paths": true,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/scripts/pr-ledger.cjs",
         "tests/unit/pr-ledger.test.cjs",
@@ -6091,7 +6148,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
-      "missing_paths": true,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/scripts/pr-hygiene.cjs",
         "tests/unit/pr-hygiene.test.cjs",
@@ -6218,7 +6275,7 @@
       ],
       "cross_repo_deps": [],
       "unreachable_paths": false,
-      "missing_paths": true,
+      "missing_paths": false,
       "files": [
         "tests/unit/source-contract.test.cjs",
         "tests/unit/runtime-file-digests.json",
@@ -6315,7 +6372,7 @@
       ],
       "cross_repo_deps": [],
       "unreachable_paths": false,
-      "missing_paths": true,
+      "missing_paths": false,
       "files": [
         "tests/unit/run.sh",
         "tests/unit/assert-harness.cjs",
@@ -6350,7 +6407,7 @@
       ],
       "cross_repo_deps": [],
       "unreachable_paths": false,
-      "missing_paths": true,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/scripts/planning-result-sealer.cjs",
         "tests/unit/planning-result-sealer.test.cjs",
@@ -6385,7 +6442,7 @@
       ],
       "cross_repo_deps": [],
       "unreachable_paths": false,
-      "missing_paths": true,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/workflows/investigation-research.mjs",
         "plugins/delivery-pipeline/scripts/claude-delivery-host.cjs",
@@ -6548,7 +6605,7 @@
       ],
       "cross_repo_deps": [],
       "unreachable_paths": false,
-      "missing_paths": true,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/scripts/sentinel-preflight.cjs",
         "tests/unit/sentinel-preflight.test.cjs",
@@ -6671,7 +6728,7 @@
       ],
       "cross_repo_deps": [],
       "unreachable_paths": false,
-      "missing_paths": true,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/commands/investigate.md",
         "plugins/delivery-pipeline/commands/decompose.md",
@@ -6702,7 +6759,7 @@
       ],
       "cross_repo_deps": [],
       "unreachable_paths": false,
-      "missing_paths": true,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/scripts/diamond-parents.cjs",
         "plugins/delivery-pipeline/scripts/state-sync.cjs",
@@ -6741,7 +6798,7 @@
       ],
       "cross_repo_deps": [],
       "unreachable_paths": false,
-      "missing_paths": true,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/scripts/plan-delivery.cjs",
         "tests/unit/plan-delivery.test.cjs",
@@ -6790,7 +6847,7 @@
       ],
       "cross_repo_deps": [],
       "unreachable_paths": false,
-      "missing_paths": true,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/scripts/codex-runtime-host.cjs",
         "tests/unit/codex-runtime-host.test.cjs",
@@ -6827,7 +6884,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
-      "missing_paths": true,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/scripts/deliver-dispatch.cjs",
         "tests/unit/deliver-dispatch.test.cjs",
@@ -6857,7 +6914,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
-      "missing_paths": true,
+      "missing_paths": false,
       "files": [
         "tests/fixtures/live-project/README.md",
         "tests/fixtures/live-project/Makefile",
@@ -6898,7 +6955,7 @@
       ],
       "cross_repo_deps": [],
       "unreachable_paths": false,
-      "missing_paths": true,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/commands/deliver.md",
         "tests/unit/deliver-seams-contract.test.cjs"
@@ -7665,6 +7722,202 @@
       "epic": "epic/43-target-project-delivery-at-scale",
       "primary_parent": "T-43-18",
       "pr_base": "ticket/T-43-18-run-only-declared-repository-remedy-work",
+      "jira": null
+    },
+    "T-44-01": {
+      "title": "Parse saved Claude and Codex quota records into one whitelisted observation envelope",
+      "plan": ".planning/phases/44-optimize-subscription-efficiency-per-runtime/44-01-PLAN.md",
+      "phase": "44",
+      "repo": null,
+      "wave": 1,
+      "depends_on": [],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": true,
+      "files": [
+        "plugins/delivery-pipeline/scripts/subscription-observation.cjs",
+        "tests/unit/subscription-observation.test.cjs",
+        "tests/fixtures/captured/boundaries/claude-stream.json",
+        "tests/fixtures/captured/boundaries/codex-agent-stream.json"
+      ],
+      "risk": "medium",
+      "type": "implementation",
+      "human_checkpoint": false,
+      "preauthorized": false,
+      "branch": "ticket/T-44-01-parse-saved-claude-and-codex-quota-recor",
+      "epic": "epic/44-optimize-subscription-efficiency-per-runtime",
+      "primary_parent": null,
+      "pr_base": "epic/44-optimize-subscription-efficiency-per-runtime",
+      "jira": null
+    },
+    "T-44-02": {
+      "title": "usage-report fills subscription_usage from saved quota records without touching token observations",
+      "plan": ".planning/phases/44-optimize-subscription-efficiency-per-runtime/44-02-PLAN.md",
+      "phase": "44",
+      "repo": null,
+      "wave": 2,
+      "depends_on": [
+        "T-44-01"
+      ],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": false,
+      "files": [
+        "plugins/delivery-pipeline/scripts/usage-report.cjs",
+        "tests/unit/usage-report.test.cjs",
+        "docs/usage-report.md"
+      ],
+      "risk": "medium",
+      "type": "implementation",
+      "human_checkpoint": false,
+      "preauthorized": false,
+      "branch": "ticket/T-44-02-usage-report-fills-subscription-usage-fr",
+      "epic": "epic/44-optimize-subscription-efficiency-per-runtime",
+      "primary_parent": "T-44-01",
+      "pr_base": "ticket/T-44-01-parse-saved-claude-and-codex-quota-recor",
+      "jira": null
+    },
+    "T-44-03": {
+      "title": "Private per-account subscription sample store with operator-declared account labels",
+      "plan": ".planning/phases/44-optimize-subscription-efficiency-per-runtime/44-03-PLAN.md",
+      "phase": "44",
+      "repo": null,
+      "wave": 2,
+      "depends_on": [
+        "T-44-01"
+      ],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": true,
+      "files": [
+        "plugins/delivery-pipeline/scripts/subscription-store.cjs",
+        "tests/unit/subscription-store.test.cjs"
+      ],
+      "risk": "medium",
+      "type": "implementation",
+      "human_checkpoint": false,
+      "preauthorized": false,
+      "branch": "ticket/T-44-03-private-per-account-subscription-sample",
+      "epic": "epic/44-optimize-subscription-efficiency-per-runtime",
+      "primary_parent": "T-44-01",
+      "pr_base": "ticket/T-44-01-parse-saved-claude-and-codex-quota-recor",
+      "jira": null
+    },
+    "T-44-04": {
+      "title": "Capture the Claude statusline input and add a byte-transparent statusline collector",
+      "plan": ".planning/phases/44-optimize-subscription-efficiency-per-runtime/44-04-PLAN.md",
+      "phase": "44",
+      "repo": null,
+      "wave": 3,
+      "depends_on": [
+        "T-44-03"
+      ],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": true,
+      "files": [
+        "scripts/capture-boundary-fixtures.cjs",
+        "tests/fixtures/captured/claude-statusline.jsonl",
+        "tests/fixtures/captured/boundaries/claude-statusline.json",
+        "plugins/delivery-pipeline/scripts/statusline-collector.cjs",
+        "tests/unit/statusline-collector.test.cjs"
+      ],
+      "risk": "medium",
+      "type": "implementation",
+      "human_checkpoint": true,
+      "preauthorized": false,
+      "branch": "ticket/T-44-04-capture-the-claude-statusline-input-and",
+      "epic": "epic/44-optimize-subscription-efficiency-per-runtime",
+      "primary_parent": "T-44-03",
+      "pr_base": "ticket/T-44-03-private-per-account-subscription-sample",
+      "jira": null
+    },
+    "T-44-05": {
+      "title": "Reversible installer for the Claude statusline collector with its own make targets",
+      "plan": ".planning/phases/44-optimize-subscription-efficiency-per-runtime/44-05-PLAN.md",
+      "phase": "44",
+      "repo": null,
+      "wave": 4,
+      "depends_on": [
+        "T-44-04"
+      ],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": true,
+      "files": [
+        "scripts/install-shipyard-claude-statusline.sh",
+        "tests/smoke/claude-statusline-smoke.sh",
+        "Makefile",
+        "README.md"
+      ],
+      "risk": "high",
+      "type": "implementation",
+      "human_checkpoint": true,
+      "preauthorized": false,
+      "branch": "ticket/T-44-05-reversible-installer-for-the-claude-stat",
+      "epic": "epic/44-optimize-subscription-efficiency-per-runtime",
+      "primary_parent": "T-44-04",
+      "pr_base": "ticket/T-44-04-capture-the-claude-statusline-input-and",
+      "jira": null
+    },
+    "T-44-06": {
+      "title": "Rotation advice compares model, effort, policy and instructions and records deduplicated shadow decisions",
+      "plan": ".planning/phases/44-optimize-subscription-efficiency-per-runtime/44-06-PLAN.md",
+      "phase": "44",
+      "repo": null,
+      "wave": 2,
+      "depends_on": [
+        "T-44-01"
+      ],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": false,
+      "files": [
+        "plugins/delivery-pipeline/scripts/session-handoff.cjs",
+        "plugins/delivery-pipeline/scripts/orchestration-overhead.cjs",
+        "tests/unit/rotation-recommendation.test.cjs",
+        "tests/unit/session-handoff.test.cjs",
+        "tests/unit/orchestration-overhead.test.cjs"
+      ],
+      "risk": "medium",
+      "type": "implementation",
+      "human_checkpoint": false,
+      "preauthorized": false,
+      "branch": "ticket/T-44-06-rotation-advice-compares-model-effort-po",
+      "epic": "epic/44-optimize-subscription-efficiency-per-runtime",
+      "primary_parent": "T-44-01",
+      "pr_base": "ticket/T-44-01-parse-saved-claude-and-codex-quota-recor",
+      "jira": null
+    },
+    "T-44-07": {
+      "title": "Versioned effort-experiment schema and report with a human-only promotion decision",
+      "plan": ".planning/phases/44-optimize-subscription-efficiency-per-runtime/44-07-PLAN.md",
+      "phase": "44",
+      "repo": null,
+      "wave": 1,
+      "depends_on": [],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": true,
+      "files": [
+        "plugins/delivery-pipeline/scripts/effort-experiment.cjs",
+        "tests/unit/effort-experiment.test.cjs"
+      ],
+      "risk": "medium",
+      "type": "implementation",
+      "human_checkpoint": false,
+      "preauthorized": false,
+      "branch": "ticket/T-44-07-versioned-effort-experiment-schema-and-r",
+      "epic": "epic/44-optimize-subscription-efficiency-per-runtime",
+      "primary_parent": null,
+      "pr_base": "epic/44-optimize-subscription-efficiency-per-runtime",
       "jira": null
     }
   }

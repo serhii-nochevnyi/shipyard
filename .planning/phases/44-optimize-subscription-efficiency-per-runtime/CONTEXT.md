@@ -41,3 +41,11 @@ P44-B arch-review reuse, P44-C instruction coverage, P44-E research index, P44-F
 
 - Statusline host contract (44-RESEARCH Open Question 1): `~/.claude/settings.json` holds `"statusLine": {"type": "command", "command": "bash ~/.claude/statusline.sh", "padding": 0}`. The renderer reads the whole JSON from stdin once (`input=$(cat)`, then one `python3` pass) and uses `rate_limits.five_hour|seven_day.used_percentage` and `.resets_at`. The wrapper must preserve `type`, `command` and `padding` exactly and restore them on uninstall; other shapes are refused.
 - The 44-RESEARCH recommendations for Open Questions 2–6 are adopted: a private label map written only by the installer/store CLI with a per-run `--account-label` override; dedupe statusline samples per changed (series, percent, reset); shadow decisions recorded only with an explicit flag; rotation advice is `unknown` until instruction digests exist (stated in acceptance); the reader is path-agnostic and documents both `claude/` and `claude-decompose/` transcript roots.
+
+## Planning notes (planner, first pass, 2026-09-27)
+
+- Seven tickets (44-RESEARCH proposed eight). The research T-44-06/T-44-07 are merged into one P44-D ticket, `44-06`, because they edit the same five files. P44-G is `44-07`, a root: it only reads `orchestration-overhead.cjs` and `model-policy.cjs` exports.
+- The statusline parser lives in `statusline-collector.cjs` (`44-04`), which keeps `subscription-observation.cjs` single-owner (`44-01`). `44-01` already declares the `claude-statusline` source and its percent unit.
+- No listed file appears in any `.planning/phases/43-*/43-*-PLAN.md` `files_modified` (Grep check, 2026-09-27).
+- Gate 2 on this worktree exits 1 on four pre-existing errors: T-38-03 (`pending` in `delivery-state.json`) contests paths with T-43-06/16/17. None of the errors involves phase 44. With T-38-03 treated as merged, the graph is OK (228 tickets) and the only phase-44 warnings concern new files and import-only `depends_on`. state-sync (ADR-021 last decision) must reconcile T-38-03 before Gate 2.
+- Resolved (orchestrator): T-38-03 merged as PR #195 from `prep/T-38-03-impl`, a head the current matcher cannot link (legacy markers need a `ticket/*` head). It is now recorded in `.planning/graph/pr-ledger.json` via `pr-ledger.cjs record`; after state-sync it is `merged` and Gate 2 exits 0.
