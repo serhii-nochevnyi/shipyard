@@ -1,51 +1,38 @@
-# Phase 44 — Optimize subscription efficiency per runtime
+# Phase 44: Optimize subscription efficiency per runtime - Context
 
-Status: queued; scoped preparation complete; authenticated decomposition pending.
-Authorized: user requested the next phase be prepared and placed in the execution queue on 2026-09-26, after reviewing the runtime-specific research.
-Runtime for planning: Codex. Target behavior: both Claude Code and Codex, each through its native host.
+**Source of decisions:** ADR-021 (`.planning/architecture/ADR-021-subscription-efficiency-per-runtime.md`, accepted 2026-09-27; ingest copy `.planning/.adr-ingest/ADR-021-subscription-efficiency-per-runtime.ingest.md`) and INV-009 `DECISIONS.md` D-01..D-11 (scope fences, binding). The queued preparation (`PREPARATION-CONTEXT.md`, `WORK-PACKAGES.md`, `evidence/`) is historical input, superseded where ADR-021 differs.
+**This pass:** the first of two (ADR-021 decision 1). It plans P44-A (subscription observation), P44-D (rotation advice) and P44-G (effort-experiment protocol) only. P44-B, P44-C, P44-E and P44-F are NOT planned now; they share files with pending phase-43 tickets and are planned in a second pass after the phase-43 epic merges.
+**Requirements:** REQ-176..REQ-184 (`.planning/REQUIREMENTS.md`, ROADMAP Phase 44).
+**Mode:** `--tdd`, granularity standard, one ticket = one PR. Every ticket writes its failing test first and shows it failing on base.
+**Research:** `.planning/investigations/INV-009-runtime-subscription-efficiency/RESEARCH.md` and `research/*.md` (seams at revision `bc127635`; phase 40–42 are merged, so these line numbers are current).
 
-## Goal
+<decisions>
 
-Reduce avoidable subscription consumption per verified completed outcome while preserving independent quality gates, authenticated artifacts, ownership, required instructions and runtime-native model ladders. Measure Claude and Codex independently; no API-price or raw-token-to-quota conversion.
+## Locked decisions for this pass (ADR-021 "Decision")
 
-## Queue and dependencies
+- **D-A1 (REQ-176)** The usage reader parses the quota records the hosts already save: Claude `rate_limit_event` records in the host transcripts (`~/.local/state/shipyard/claude/<key>/transcripts/*.jsonl`; `rate_limit_info.unifiedWindows.five_hour|seven_day`, `utilization` as a fraction 0–1; captured shape in `tests/fixtures/captured/claude-stream-executor.jsonl:8`) and Codex `event_msg/token_count` `rate_limits` in the native transcript (`limit_id`, `primary`/`secondary` with `used_percent`, `window_minutes`, `resets_at`; captured in `tests/fixtures/captured/codex-agent-stream-parent.jsonl:16,23,29`). It produces one whitelisted envelope. `claude-runtime-host.cjs` and `codex-runtime-host.cjs` are NOT changed; no process is started and no call is made.
+- **D-A2 (REQ-177)** The interactive Claude parent session is observed by a reversible statusline wrapper with its OWN supported installer entry point (a new script plus a `make` target), not `scripts/install-shipyard-claude-hook.sh` (pending T-43-03 edits it). It buffers stdin once, forwards identical bytes to the preexisting renderer command, never changes the renderer's stdout or exit status (collector failure is invisible), and on uninstall restores only the settings it owns. Tests use isolated homes; the user's active `~/.claude/statusline.sh` and `settings.json` are never edited by development or tests. The statusline input carries `rate_limits.five_hour|seven_day.used_percentage` (percent).
+- **D-A3 (REQ-178)** The envelope keeps provider, account label, bucket id, window, reset, used percentage normalized per source (Claude stream fraction → percent; statusline and Codex already percent), source, freshness and a concurrency status. It never maps `primary`/`secondary` to 5 h / 7 d by position (Codex `prolite` reports `primary` = 10080 min, `secondary` = null), never sums across provider, account or bucket, and a reset, a decrease, an account-label change or unknown concurrent usage is a discontinuity or an inconclusive result.
+- **D-A4 (REQ-179)** Idle Codex baselines and the Codex parent session are recorded as `unverified`. No app-server client, daemon, model turn, account mutation, API key or limit-reset operation.
+- **D-A5 (REQ-180)** Per-account samples live in private host state under `~/.local/state/shipyard/<runtime>/subscription/` (files 0600, directories 0700, bounded retention). Tracked reports carry only derived per-outcome and per-cohort values. No prompt, transcript excerpt or credential is stored. `.planning/` is tracked in this repository, so samples must never be written there.
+- **D-A6 (REQ-181)** An account is identified by an operator-declared local label per runtime home (for example `claude-max-1`). A missing label makes the observation `unattributed`. E-mail, user id, Codex `credits` and `plan_type` are never stored (a negative fixture proves it).
+- **D-D1 (REQ-182)** Rotation advice stays in `recommendRotation` (`plugins/delivery-pipeline/scripts/session-handoff.cjs:148-233`). `comparableKey` (`:78-80`, today role/backend/runtime) adds model, effort, policy hash and instruction digest; a mismatch yields `unknown`. One shadow decision is recorded per (recommendation id, source-state fingerprint) — no model wake for unchanged advice. Resume, history-copying fork, compaction and fresh start are separate classes whose costs include checkpoint collection, successor startup, rereads and cache warmup (`HANDOFF_COST_STAGES`, `:258`). `automatic_transfer.allowed: false` and T-41-02's ownership invariants are unchanged. Quota columns come from D-A1..A3 when present. Files: `session-handoff.cjs`, `orchestration-overhead.cjs` and their tests only; `runtime-context.cjs` is NOT edited (pending T-43-03 and T-43-07 edit it).
+- **D-G1 (REQ-183)** Effort experiments get a versioned schema and report: eligibility rules, metrics that count failed, repair, escalation and abandoned work, and a promotion rule that is always a recorded human decision above the 20-completion / 95 % attribution / seven-day floor. No resolver, policy object, config key or dispatch change; nothing is active. The existing `TREATMENT_KEYS` (`orchestration-overhead.cjs:18`) and report schema are not mutated — a new versioned schema is added. Effort is a cohort key today (`:410`), so arms that differ in effort cannot be treated as a matched treatment pair; the schema must express that explicitly. Claude Sonnet/high vs max is a candidate, not a baseline; Codex arms are defined only after a Luna/max baseline (installed Codex supports `gpt-6-luna` low..max).
+- **D-X1 (REQ-184)** Each item records installed, behaviourally verified and efficiency-measured states separately; every report says `inconclusive` until matched cohorts exist; no acceptance criterion contains a savings percentage.
 
-Execution order follows the existing queued phase 42 and phase 40 work. Phase 44 starts only after phase 40's required planning/launch/artifact interfaces and phase 42's trusted finalization recovery are installed and verified, plus phase 41 measurement and handoff prerequisites. Phase number is not execution order. Do not change the active phase or start implementation from this preparation.
+## Planning constraints (INV-009 research, binding)
 
-Phase 42 on current main is REQ-158 trusted finalization recovery, moved from phase 41. The older target-scale investigation in the plan42-target-scale worktree is a separate ownership record. Reconcile its F6/F17/F18 content before final decomposition; do not duplicate it based on its obsolete proposed phase number.
+- Extend `usage-report.cjs` / `usage-attribution.cjs` / `orchestration-overhead.cjs`; do not add another ledger (ADR-019). `usage-report.cjs:836-839` has the `subscription_usage: null` slot; `:479-490` already reads Codex `token_count`.
+- New host-facing shapes come from captured fixtures (`make capture-fixtures`), not hand-written shapes; the existing captured files already contain the records above.
+- Codex artifacts are generated: if a plan touches the canonical plugin, it notes that `make package-shipyard-codex` runs on the epic, not per ticket.
+- Avoid `claude-dispatch-adapter.cjs` and `runtime-adapters.cjs` (runtime-file digest pin).
+- No PLAN in this pass may list a file that a pending phase-43 ticket lists in `files_modified` (Gate 2 rejects unordered shared paths across phases). Known pending-43 files to avoid: `install-shipyard-claude-hook.sh`, `runtime-context.cjs`, `tests/smoke/docs-smoke.sh`, `claude-hook-smoke.sh` (T-43-02 merged, but keep the wrapper's smoke separate), `claude-role-host.cjs`, `role-artifact.cjs`, `validate-graph.cjs`, `deliver-dispatch.cjs`, `pipeline-config.cjs`, `commands/*.md`, the delivery-rules skills. The checker must verify every listed file against `.planning/phases/43-*/43-*-PLAN.md`.
+- README: a new `make` target named in `README.md` is checked by `tests/smoke/docs-smoke.sh` automatically; the plan edits README only, not the smoke.
+- Comment policy: `make test-comment-policy` blocks net-new free comments.
+- Verification commands per plan: `node`, `bash` or `make` only (host allowlist), scoped to the plan's files; `make test-fast` belongs to CI, not the plan's verification list.
 
-## In scope: local acceptance identifiers
+</decisions>
 
-These identifiers are phase-local, not assigned global REQ IDs. Global IDs and delivery tickets must be materialized by the validated planning flow.
+## Out of scope for this pass
 
-- P44-A: passive provider-specific subscription collection. Claude consumes existing statusline metadata; Codex consumes supported authenticated rate-limit snapshots and sparse updates. Preserve renderer behavior, account/bucket/reset identities, missing data and freshness. No model call for observation; no account mutation.
-- P44-B: exact-input architecture-review reuse and single-flight, including blocking violations. Bind all governing inputs and runtime/model/effort, validate original receipt and immutable evidence, keep live gates, and refuse unknown in-flight recovery. Never carry across changed base or satisfy a separately required cross-provider review.
-- P44-C: mandatory instruction coverage with runtime-specific delivery. Shared rule IDs and coverage manifest; Claude rules/imports and Codex startup/role references verified independently. No silent truncation, blanket omission or reliance on Claude rules in Codex. The pdffiller file is the motivating fixture, not authorization to rewrite six target repositories.
-- P44-D: connect existing rotation advice to comparable measurements and shadow observations; distinguish resume, history-copying fork, compaction and bounded fresh-start handoff. Include checkpoint/startup/cache warmup costs. Reuse phase 41 ownership/handoff; automatic transfer remains disabled absent separately verified capability and approved policy.
-- P44-E: content-addressed research fact/source index and selective synthesis through existing planning hosts. Preserve complete mandatory refs, four independent lines, critical primary-source rechecks and durable full evidence.
-- P44-F: typed administrative versus technical checkpoint reason design and tested migration, coordinated with the existing approval semantics owner. Preserve human approval obligations and conservative unknown/legacy escalation. Any resolver activation requires the canonical ADR-014 amendment and observed-selection evidence for each native grid.
-- P44-G: separate, disabled-by-default effort-experiment infrastructure and evaluation protocol. Claude Sonnet/high versus max is a candidate, not a new baseline. Codex first measures Luna/max and earned escalation; no automatic effort translation. Preserve reviews/tests, include failed/repair/escalation costs and require sufficient actual quota/quality evidence before any promotion.
-
-## Locked safety and quality requirements
-
-- Same acceptance contracts, required tests/CI and independent reviews; optimization never turns missing evidence green.
-- Provider/account/bucket quota percentages are not additive. Concurrent uncontrolled usage yields inconclusive attribution.
-- Runtime-specific parsing precedes normalized reporting. Count parent and child model work without double-counting transcript/CLI views.
-- Runtime, observed model/effort, instruction digests and installed host identity are explicit. Global Codex config is not launch authority when the host ignores it.
-- Root source remains the Claude plugin/shared scripts; generated Codex artifacts use the supported generator and installer.
-- Record installed, behaviorally verified and efficiency-measured status separately.
-- Existing 20-completion/95%-attribution/seven-day defect observation thresholds are a minimum evidence discipline, not proof of statistical non-inferiority.
-
-## Exclusions and existing owners
-
-Do not recreate phases 40/41/42: planning artifact sealing and launch/request builders; trusted finalization recovery; OS-sandboxed test runner; bounded handoff ownership; stop/wake handling; projection fingerprints; phase integration; existing prompt measurement and bounded artifact handback.
-Do not implement changed-base verdict carry, F17 merge/approval semantics or F18 automated remedy policy here. Coordinate only the checkpoint-to-model signal contract.
-No blanket model downgrade, mandatory double-provider review, provider fallback, quota-based provider scheduler, new daemon, destructive instruction cleanup, or automatic limit-reset/credit operation. Actual efficiency experiments and production policy promotion require their own explicit recorded activation gate.
-
-## Research and design
-
-See RESEARCH.md, WORK-PACKAGES.md and PLANNING-STATUS.md. Complete prior reports are copied under evidence/ with digests. They contain proposals and historical snapshots, not accepted ADRs or completed planning receipts.
-
-## Completion criteria
-
-Every P44 requirement maps to materialized PLAN files and validated source/artifact identities; both adapters pass shared quality/identity contract scenarios with native fixtures. A standard independent phase integrator validates the merged set. Installed-runtime observation proves both telemetry paths and instruction coverage. Efficiency remains inconclusive until matched cohorts and quality follow-up support a conclusion; no fixed savings percentage is an acceptance condition.
+P44-B arch-review reuse, P44-C instruction coverage, P44-E research index, P44-F `checkpoint_reason` (second pass, after the phase-43 epic merges; their contracts are fixed in ADR-021). Everything in ADR-021 "Out of scope". Phase-45 work (INV-008).
