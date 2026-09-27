@@ -96,3 +96,36 @@ test-codex-shipyard:
 
 test-releases:
 	./tests/smoke/release-notes-smoke.sh
+
+.PHONY: capture-fixtures test-live release refresh-runtime-digests untrack-planning \
+        install-shipyard-dogfood-claude install-shipyard-dogfood-codex
+
+capture-fixtures:
+	@test -n "$(BOUNDARY)" || { echo "capture-fixtures: set BOUNDARY (claude-stream or codex-agent-stream)" >&2; exit 1; }
+	node scripts/capture-boundary-fixtures.cjs --boundary "$(BOUNDARY)"
+
+test-live:
+	bash tests/live/live-round.sh --runtime claude
+	bash tests/live/live-round.sh --runtime codex
+
+release:
+	@test -n "$(VERSION)" || { echo "release: set VERSION (e.g. VERSION=1.2.3)" >&2; exit 1; }
+	bash scripts/release.sh "$(VERSION)"
+
+refresh-runtime-digests:
+	node scripts/refresh-runtime-digests.cjs
+
+install-shipyard-dogfood-claude:
+	@test -n "$(DOGFOOD_ROOT)" || { echo "install-shipyard-dogfood-claude: set DOGFOOD_ROOT" >&2; exit 1; }
+	./scripts/install-shipyard-claude-hook.sh --dogfood-root "$(DOGFOOD_ROOT)"
+
+install-shipyard-dogfood-codex:
+	@test -n "$(DOGFOOD_ROOT)" || { echo "install-shipyard-dogfood-codex: set DOGFOOD_ROOT" >&2; exit 1; }
+	./scripts/install-shipyard-codex.sh --dogfood-root "$(DOGFOOD_ROOT)"
+
+untrack-planning:
+ifeq ($(CONFIRM),untrack-planning)
+	node plugins/delivery-pipeline/scripts/planning-untrack.cjs --project-root "$(CURDIR)" --apply --confirm untrack-planning
+else
+	node plugins/delivery-pipeline/scripts/planning-untrack.cjs --project-root "$(CURDIR)"
+endif
