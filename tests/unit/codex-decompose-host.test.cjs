@@ -334,7 +334,6 @@ test('production ' + gsdRole + ' reaches its native child and records session ev
   const records = recorded.split('\n').filter(Boolean).map((line) => JSON.parse(line));
   const elided = records.find((record) => record.type === 'response_item'
     && record.payload.role === 'developer').payload.content[0].text;
-  // The fixture elides the role prompt; installed TOML instructions always end in a newline.
   const instructions = elided + '\n';
   const childRaw = recorded.replace(JSON.stringify(elided), JSON.stringify(instructions));
   const transform = (raw) => raw.split('\n').filter(Boolean).map((line) => {

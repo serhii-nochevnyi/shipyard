@@ -130,7 +130,6 @@ function recordedTypedSession() {
   const elided = recorded.split('\n').filter(Boolean).map((line) => JSON.parse(line))
     .find((record) => record.type === 'response_item' && record.payload.role === 'developer')
     .payload.content[0].text;
-  // The fixture elides the role prompt; installed TOML instructions always end in a newline.
   const instructions = elided + '\n';
   const childRaw = recorded.replace(JSON.stringify(elided), JSON.stringify(instructions));
   return { parentRaw, childRaw, parent: PARENT_ID, child: CHILD_ID, instructions };
