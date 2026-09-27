@@ -137,7 +137,7 @@ RELEASE_CACHE="$CLAUDE_HOME/plugins/cache/shipyard/shipyard/$PLUGIN_VERSION"
 mkdir -p "$RELEASE_CACHE"
 printf 'release\n' > "$RELEASE_CACHE/marker.txt"
 CACHE_BEFORE="$(ls -laR "$CLAUDE_HOME/plugins/cache")"
-DOGFOOD="$WORK/dogfood"
+DOGFOOD="$(cd "$WORK" && pwd -P)/dogfood"
 HOME="$HOME_DIR" CLAUDE_HOME="$CLAUDE_HOME" SHIPYARD_GSD_AUTO_INSTALL=0 \
   bash "$ROOT/scripts/install-shipyard-claude-hook.sh" --dogfood-root "$DOGFOOD" > "$WORK/dogfood.out"
 grep -q "claude --plugin-dir \"$DOGFOOD\"" "$WORK/dogfood.out" || { echo "dogfood launch line is missing" >&2; exit 1; }
