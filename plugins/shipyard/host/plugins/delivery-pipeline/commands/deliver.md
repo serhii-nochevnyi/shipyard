@@ -1561,8 +1561,10 @@ window size, and other global context are retained as evidence but cannot
 promote it. The returned receipt must be `verified` before the drift result is
 accepted. On Codex the boundary validates the generated
 `shipyard-drift-check.toml` and uses `launchStatic`; the Claude host passes the
-native alias and explicit effort through the workflow adapter. If the host
-cannot apply the selection or return the receipt, refuse the judge and treat
+native alias and explicit effort through the workflow adapter. The Codex
+read-only profile grants write access only to the fixed
+`.shipyard-drift-evidence.md` file so the judge can supply sealable evidence.
+If the host cannot apply the selection or return the receipt, refuse the judge and treat
 the ticket as needing drift handling; do not use a generic or inherited Agent.
   A crashed judge is a failed artifact dispatch and must be surfaced for
   retry; it is never converted into an unsealed `drifted` verdict.
@@ -2367,6 +2369,8 @@ loop:
      Codex's host resolves Sol/high or, only for measured/contested/critical/
      checkpoint evidence, Sol/xhigh and validates the generated
      `shipyard-arch-review.toml` or `shipyard-arch-review-critical.toml`.
+     Its read-only profile grants write access only to
+     `.shipyard-arch-review-evidence.md` for the complete judgment artifact.
      Claude's host independently resolves Opus/medium, Opus/high for critical evidence,
      or Fable/medium for the measured ceiling, always with explicit effort.
      Record the verdict only after the boundary receipt is verified; a missing
