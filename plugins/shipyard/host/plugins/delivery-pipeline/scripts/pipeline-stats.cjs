@@ -24,6 +24,7 @@ const fs = require('fs');
 const path = require('path');
 const { execFileSync } = require('child_process');
 const { matchTicketPr } = require(path.join(__dirname, 'ticket-pr-match.cjs'));
+const { readLedger } = require(path.join(__dirname, 'pr-ledger.cjs'));
 const { loadConfig, ROLES, EFFORTS, parseRoute } = require(path.join(__dirname, 'pipeline-config.cjs'));
 const usageAttribution = require(path.join(__dirname, 'usage-attribution.cjs'));
 const runTelemetry = require(path.join(__dirname, 'run-telemetry.cjs'));
@@ -91,6 +92,7 @@ const sessionObservations = [...sessionLatest.values()].filter((row) => withinWi
 // whole ledger or treating every dispatch as joined.
 const usageLedger = usageAttribution.readLedger(GRAPH_DIR);
 const attributionRecords = usageAttribution.latestRecords(usageLedger.records);
+const prLedger = readLedger(GRAPH_DIR);
 
 const loadedConfig = loadConfig(process.cwd());
 const { config: cfg } = loadedConfig;
@@ -164,7 +166,7 @@ for (const [id, t] of Object.entries(tickets)) {
     events.filter((e) => e.event === 'escalation').length +
     fixRounds.filter((e) => e.outcome === 'escalate').length;
 
-  const match = matchTicketPr(id, t, prsFor(t));
+  const match = matchTicketPr(id, t, prsFor(t), prLedger.entries[id]);
   const pr = match ? match.pr : null;
   // The guard's own merge record for this ticket, if it made one.
   const guardMerge = events.find((e) => e.event === 'merge' && e.by === 'sentinel') || null;

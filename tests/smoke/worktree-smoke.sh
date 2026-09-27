@@ -754,6 +754,129 @@ else
   ok "…and creates no branch for it, on origin or locally"
 fi
 
+git init -q --bare "$W/prorigin"
+git init -q "$W/prseed"
+( cd "$W/prseed"
+  echo base > p.txt
+  git add p.txt
+  git commit -qm 'init'
+  git remote add origin "$W/prorigin"
+  git push -q -u origin main
+  git checkout -q -b feat/sample-phase
+  echo work >> p.txt
+  git add p.txt
+  git commit -qm 'phase work'
+  git push -q -u origin feat/sample-phase
+  git checkout -q main
+  git checkout -q -b feat/second-phase
+  echo more >> p.txt
+  git add p.txt
+  git commit -qm 'second phase work'
+  git push -q -u origin feat/second-phase
+  git checkout -q main
+  git checkout -q -b epic/03-legacy-phase
+  echo legacy >> p.txt
+  git add p.txt
+  git commit -qm 'legacy phase work'
+  git push -q -u origin epic/03-legacy-phase
+  git checkout -q main )
+git clone -q "$W/prorigin" "$W/prclone"
+git -C "$W/prclone" branch --track feat/sample-phase origin/feat/sample-phase >/dev/null 2>&1
+git -C "$W/prclone" branch --track feat/second-phase origin/feat/second-phase >/dev/null 2>&1
+git -C "$W/prclone" branch --track epic/03-legacy-phase origin/epic/03-legacy-phase >/dev/null 2>&1
+mkdir -p "$W/prclone/plugins/delivery-pipeline/.claude-plugin"
+printf '{"name":"shipyard"}\n' > "$W/prclone/plugins/delivery-pipeline/.claude-plugin/plugin.json"
+mkdir -p "$W/prclone/.planning/graph"
+cat > "$W/prclone/.planning/graph/tickets.json" <<'JSON'
+{
+  "epics": {
+    "1": { "branch": "feat/sample-phase", "base": null, "repos": [null], "phaseDir": "01-sample-phase", "jira": null },
+    "2": { "branch": "feat/second-phase", "base": null, "repos": [null], "phaseDir": "02-second-phase", "jira": "MYD-9" }
+  },
+  "tickets": {
+    "T-01-01": { "title": "Add search filters", "epic": "feat/sample-phase" },
+    "T-01-02": { "title": "Patch a crash on load", "epic": "feat/sample-phase" },
+    "T-02-01": { "title": "Wire up the new endpoint", "epic": "feat/second-phase" }
+  }
+}
+JSON
+
+PR_CREATED_FLAG="$W/gh-pr-created.flag"
+CAPTURED_TITLE="$W/gh-pr-title.txt"
+CAPTURED_BODY="$W/gh-pr-body.txt"
+GHSTUB="$W/ghstub"; mkdir -p "$GHSTUB"
+cat > "$GHSTUB/gh" <<EOF
+#!/usr/bin/env bash
+if [[ "\$1" == "pr" && "\$2" == "list" ]]; then
+  if [[ -f "$PR_CREATED_FLAG" ]]; then echo 4242; else echo null; fi
+  exit 0
+fi
+if [[ "\$1" == "api" ]]; then
+  echo 3
+  exit 0
+fi
+if [[ "\$1" == "pr" && "\$2" == "create" ]]; then
+  : > "$PR_CREATED_FLAG"
+  prev=""
+  for a in "\$@"; do
+    [[ "\$prev" == "--title" ]] && printf '%s' "\$a" > "$CAPTURED_TITLE"
+    [[ "\$prev" == "--body-file" ]] && cp "\$a" "$CAPTURED_BODY"
+    prev="\$a"
+  done
+  echo 4242
+  exit 0
+fi
+exit 1
+EOF
+chmod +x "$GHSTUB/gh"
+run_pr_epic() { ( cd "$W/prclone" && PATH="$GHSTUB:$PATH" bash "$SCRIPTS/epic-branch.sh" "$@" ); }
+
+rm -f "$PR_CREATED_FLAG" "$CAPTURED_TITLE" "$CAPTURED_BODY"
+if out="$(run_pr_epic pr feat/sample-phase main 2>&1)"; then
+  ok "epic-branch.sh pr succeeds for a neutral (feat/…) epic branch"
+else
+  bad "epic-branch.sh pr succeeds for a neutral (feat/…) epic branch" "$out"
+fi
+[[ "$(cat "$CAPTURED_TITLE" 2>/dev/null)" == "feat: sample phase" ]] \
+  && ok "a feat/… epic gets a conventional title built from the graph's phase, not the branch text" \
+  || bad "a feat/… epic gets a conventional title from the graph" "$(cat "$CAPTURED_TITLE" 2>/dev/null || echo MISSING)"
+body="$(cat "$CAPTURED_BODY" 2>/dev/null || echo MISSING)"
+if grep -q 'Add search filters' <<<"$body" && grep -q 'Patch a crash on load' <<<"$body"; then
+  ok "the neutral epic PR body summarizes the phase's ticket titles"
+else
+  bad "the neutral epic PR body summarizes the ticket titles" "$body"
+fi
+if grep -qE 'T-[0-9]{2}-[0-9]{2}|[Pp]hase [0-9]|shipyard|gsd|conveyor' <<<"$body"; then
+  bad "the neutral epic PR body carries no ids, phase numbers or tool names" "$body"
+else
+  ok "the neutral epic PR body carries no ids, phase numbers or tool names"
+fi
+
+rm -f "$PR_CREATED_FLAG" "$CAPTURED_TITLE" "$CAPTURED_BODY"
+echo '{"pipeline":{"pr_title_format":"[{jira}] {type}: {subject}"}}' > "$W/prclone/.planning/config.json"
+if out="$(run_pr_epic pr feat/second-phase main 2>&1)"; then
+  ok "epic-branch.sh pr honours a configured pipeline.pr_title_format"
+else
+  bad "epic-branch.sh pr honours a configured pipeline.pr_title_format" "$out"
+fi
+[[ "$(cat "$CAPTURED_TITLE" 2>/dev/null)" == "[MYD-9] feat: second phase" ]] \
+  && ok "…and renders the phase's jira key into the configured format" \
+  || bad "the configured pr_title_format is rendered" "$(cat "$CAPTURED_TITLE" 2>/dev/null || echo MISSING)"
+rm -f "$W/prclone/.planning/config.json"
+
+rm -f "$PR_CREATED_FLAG" "$CAPTURED_TITLE" "$CAPTURED_BODY"
+if out="$(run_pr_epic pr epic/03-legacy-phase main 2>&1)"; then
+  ok "epic-branch.sh pr succeeds for a legacy (epic/…) epic branch"
+else
+  bad "epic-branch.sh pr succeeds for a legacy (epic/…) epic branch" "$out"
+fi
+[[ "$(cat "$CAPTURED_TITLE" 2>/dev/null)" == "epic: 03-legacy-phase integration" ]] \
+  && ok "an epic/… branch keeps its unchanged internal title" \
+  || bad "an epic/… branch keeps its unchanged title" "$(cat "$CAPTURED_TITLE" 2>/dev/null || echo MISSING)"
+grep -q 'Integration branch for the 03-legacy-phase epic' "$CAPTURED_BODY" 2>/dev/null \
+  && ok "…and its unchanged internal body" \
+  || bad "an epic/… branch keeps its unchanged body" "$(cat "$CAPTURED_BODY" 2>/dev/null || echo MISSING)"
+
 echo
 echo "$pass passed, $fail failed"
 [[ "$fail" -eq 0 ]] || exit 1

@@ -1983,15 +1983,15 @@ test('the routed-launch source sweep rejects native launches in shipped Markdown
   assert.match(offenders[0], /agent\(prompt\)/);
 });
 
-const RUNTIME_OWNED_FILE_DIGESTS = Object.freeze({
-  'plugins/delivery-pipeline/scripts/runtime-adapters.cjs': '949748da1bccd51704f9a7382cce5a93b1c58f7acfea21f2ffffe315831a05e5',
-  'plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs': '9d0682e37ee5d7a45d620eaaf6fc2b9e2b23ff0adc8bbed4e86d097cb9f3ba07',
-});
+const RUNTIME_OWNED_FILE_DIGESTS = Object.freeze(
+  JSON.parse(readRepo('tests/unit/runtime-file-digests.json')).files
+);
 
 test('Claude palette and provider adapter sources match their checked-in baselines and remain native', () => {
   for (const [rel, expectedDigest] of Object.entries(RUNTIME_OWNED_FILE_DIGESTS)) {
     const actualDigest = crypto.createHash('sha256').update(fs.readFileSync(path.join(REPO, rel))).digest('hex');
-    assert.equal(actualDigest, expectedDigest, `${rel} is a runtime-owned palette/provider file and must match its checked-in baseline`);
+    assert.equal(actualDigest, expectedDigest, `${rel} no longer matches tests/unit/runtime-file-digests.json — run `
+      + '`node scripts/refresh-runtime-digests.cjs` and add the printed Runtime-Digest-Refresh trailer');
   }
   assert.deepStrictEqual(CLAUDE_MODEL_ALIASES, { sonnet: 'sonnet', opus: 'claude-opus-5-5', fable: 'fable' });
   assert.equal(readRepo('plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs').includes('runtime: \'claude\''), true);

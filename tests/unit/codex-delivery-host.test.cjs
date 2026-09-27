@@ -19,6 +19,7 @@ const {
   readRequestFile,
   requestValue,
   runCli,
+  validateArgs,
 } = require('../../plugins/delivery-pipeline/scripts/codex-delivery-host.cjs');
 const { createRunController } = require('../../plugins/delivery-pipeline/scripts/run-controller.cjs');
 
@@ -32,10 +33,7 @@ const capabilities = {
 };
 const finalizerFile = path.join(__dirname, '../../plugins/delivery-pipeline/scripts/delivery-commit-finalizer.cjs');
 const finalizeCommit = require(fs.existsSync(finalizerFile) ? finalizerFile : process.env.SHIPYARD_T38_FINALIZER_FILE).finalizeDeliveryCommit;
-const temporary = (() => {
-  try { return fs.mkdtempSync('/tmp/scds-'); }
-  catch (error) { if (error.code !== 'EPERM' && error.code !== 'EACCES') throw error; return fs.mkdtempSync(path.join(os.tmpdir(), 'scds-')); }
-})();
+const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'scds-'));
 const previousEnv = {
   GNUPGHOME: process.env.GNUPGHOME,
   GIT_CONFIG_GLOBAL: process.env.GIT_CONFIG_GLOBAL,
@@ -58,13 +56,36 @@ const signer = execFileSync('gpg', ['--batch', '--with-colons', '--list-secret-k
   encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
 }).split('\n').find((line) => line.startsWith('fpr:')).split(':')[9];
 
+let graphEnvQueue = Promise.resolve();
+function withGraphDirEnv(value, action) {
+  const run = graphEnvQueue.then(async () => {
+    const previous = process.env.SHIPYARD_GRAPH_DIR;
+    if (value === undefined) delete process.env.SHIPYARD_GRAPH_DIR;
+    else process.env.SHIPYARD_GRAPH_DIR = value;
+    try {
+      return await action();
+    } finally {
+      if (previous === undefined) delete process.env.SHIPYARD_GRAPH_DIR;
+      else process.env.SHIPYARD_GRAPH_DIR = previous;
+    }
+  });
+  graphEnvQueue = run.catch(() => {});
+  return run;
+}
+
 function git(repo, ...args) {
   return execFileSync('git', ['-C', repo, ...args], {
     encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
   }).trim();
 }
 
-function fixture() {
+function writeShipyardManifest(repo) {
+  const dir = path.join(repo, 'plugins', 'delivery-pipeline', '.claude-plugin');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'plugin.json'), JSON.stringify({ name: 'shipyard' }));
+}
+
+function fixture(config = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-codex-delivery-'));
   const agentDir = fs.mkdtempSync(path.join(temporary, 'agents-'));
   const project = fs.mkdtempSync(path.join(temporary, 'project-'));
@@ -78,6 +99,7 @@ function fixture() {
   fs.writeFileSync(path.join(root, 'outside.txt'), 'base\n');
   fs.mkdirSync(graphDir, { recursive: true });
   fs.writeFileSync(plan, '# approved plan\n');
+  if (config.target !== true) writeShipyardManifest(root);
   git(root, 'init', '-q', '-b', 'main');
   git(root, 'config', 'user.name', 'Delivery Test');
   git(root, 'config', 'user.email', 'delivery@example.test');
@@ -231,6 +253,9 @@ test('dynamic executor resolves Luna/max through the boundary with worktree writ
     assert.equal(call.context.run_id, f.scope.run_id);
     assert.equal(call.context.worktreePath, f.scope.worktree);
     assert.match(call.context.prompt, /^Implement the scoped ticket\.\n\nLeave changes uncommitted/);
+    assert.match(call.context.prompt,
+      /Leave changes uncommitted\. The trusted host will stage, sign, and verify the commit\.\n\n<TICKET-CONTRACT path="\.planning\/PLAN\.md"/);
+    assert.match(call.context.prompt, /# approved plan/);
     assert.equal(result.receipt.compliance, 'verified');
     assert.equal(result.receipt.applied_model, 'gpt-6-luna');
     assert.equal(result.receipt.applied_effort, 'max');
@@ -244,21 +269,49 @@ test('dynamic executor resolves Luna/max through the boundary with worktree writ
   } finally { clean(f); }
 });
 
+test('target-project executor finalizes a conventional, id-free subject from the canonical graph title', async () => {
+  const f = fixture({ target: true });
+  try {
+    await withGraphDirEnv(f.graphDir, async () => {
+      let refusal;
+      await assert.rejects(() => delivery(f).run({ role: 'executor', dispatch_id: 'codex-target-untitled',
+        context: { prompt: 'Implement the scoped ticket.' } }), (error) => { refusal = error; return true; });
+      assert.match(refusal.message, /no canonical graph title/);
+      assert.equal(git(f.root, 'rev-parse', 'HEAD'), f.base);
+      const graphFile = path.join(f.graphDir, 'tickets.json');
+      const graph = JSON.parse(fs.readFileSync(graphFile, 'utf8'));
+      Object.assign(graph.tickets['T-38-04'], { title: 'Retry the flaky upload', type: 'bugfix' });
+      fs.writeFileSync(graphFile, JSON.stringify(graph));
+      git(f.root, 'checkout', '-q', '--', 'src/owned.txt');
+      const result = await delivery(f).run({ role: 'executor', dispatch_id: 'codex-target-titled',
+        context: { prompt: 'Implement the scoped ticket.' } });
+      assert.equal(result.artifact.status, 'committed');
+      assert.equal(git(f.root, 'log', '-1', '--format=%s', 'HEAD'), 'fix: retry the flaky upload');
+      assert.equal(git(f.root, 'rev-parse', 'HEAD^'), f.base);
+    });
+  } finally { clean(f); }
+});
+
+function captured(rel, values = {}) {
+  return fs.readFileSync(path.join(__dirname, '../..', rel), 'utf8').split('\n')
+    .filter((line) => line && !line.startsWith('{"shipyard_fixture"'))
+    .map((line) => line.replace(/<SESSION-\d+>/g, (token) => values[token] || token))
+    .join('\n') + '\n';
+}
+
 test('production runtime host receives the scoped prompt and records native model evidence', async () => {
   const f = fixture();
   const codeHome = path.join(temporary, 'codex-home-' + path.basename(f.root));
   const session = '44444444-4444-4444-8444-444444444444';
   const received = [];
   let capturedArgs;
-  const transcript = [
-    { type: 'session_meta', payload: { id: session, session_id: session, model_provider: 'openai' } },
-    { type: 'turn_context', payload: { model: 'gpt-6-luna', effort: 'max' } },
-  ].map((record) => JSON.stringify(record)).join('\n') + '\n';
-  const output = [
-    { type: 'thread.started', thread_id: session },
-    { type: 'turn.started' },
-    { type: 'turn.completed', usage: { input_tokens: 6, output_tokens: 2 } },
-  ].map((record) => JSON.stringify(record)).join('\n') + '\n';
+  const transcript = captured('tests/fixtures/captured/codex-agent-stream-parent.jsonl', { '<SESSION-2>': session })
+    .split('\n').filter(Boolean).map((line) => {
+      const record = JSON.parse(line);
+      if (record.type === 'turn_context') Object.assign(record.payload, { model: 'gpt-6-luna', effort: 'max' });
+      return JSON.stringify(record);
+    }).join('\n') + '\n';
+  const output = captured('tests/fixtures/captured/codex-agent-stream-exec.jsonl', { '<SESSION-1>': session });
   try {
     const result = await createCodexDeliveryHost({
       scope: f.scope,
@@ -267,8 +320,8 @@ test('production runtime host receives the scoped prompt and records native mode
       finalizeCommit,
       capabilities,
       probe: {
-        status: 'available', executable: 'codex', runtime_version: '0.155.1',
-        capabilities: { ...capabilities, cliVersion: '0.155.1' },
+        status: 'available', executable: 'codex', runtime_version: '0.157.1',
+        capabilities: { ...capabilities, cliVersion: '0.157.1' },
       },
       env: { CODEX_HOME: codeHome, GNUPGHOME: process.env.GNUPGHOME, SSH_AUTH_SOCK: '/tmp/ssh.sock' },
       agentDir: f.agentDir,
@@ -416,6 +469,47 @@ test('CLI heartbeats its out-of-worktree lease while a launch remains active', a
     assert.ok(during.owner.heartbeat_at > during.owner.acquired_at);
     assert.equal(runStatus(f).state, 'completed');
   } finally { clean(f); }
+});
+
+function inflightRows(graphDir) {
+  try { return JSON.parse(fs.readFileSync(path.join(graphDir, 'dispatches.json'), 'utf8')).inflight || {}; }
+  catch { return {}; }
+}
+
+for (const outcome of ['success', 'failure']) {
+  test(`CLI holds a pid in-flight record during the run and clears it after ${outcome}`, async () => {
+    const f = fixture();
+    const file = path.join(f.graphDir, 'request.json');
+    let during;
+    f.host.launchStatic = async (selection, context) => {
+      during = Object.values(inflightRows(f.graphDir));
+      if (outcome === 'failure') throw new Error('stubbed runtime launch failed');
+      return application(selection, context);
+    };
+    try {
+      fs.writeFileSync(file, JSON.stringify({
+        scope: f.scope, role: 'research', context: { prompt: 'Inspect.' },
+      }));
+      const running = runCli(['--args-file', file], { write() {} }, cliOptions(f));
+      if (outcome === 'failure') await assert.rejects(() => running, /stubbed runtime launch failed/);
+      else await running;
+      assert.equal(during.length, 1);
+      assert.equal(during[0].ticket, f.scope.ticket);
+      assert.equal(during[0].pid, process.pid);
+      assert.equal(during[0].host, 'codex');
+      assert.deepEqual(inflightRows(f.graphDir), {});
+    } finally { clean(f); }
+  });
+}
+
+test('validateArgs accepts the canonical request and surfaces unknown keys and UNSUPPORTED_SIGNAL unchanged', () => {
+  const valid = validateArgs({ role: 'executor', context: { prompt: 'Run.' } });
+  assert.equal(valid.request.role, 'executor');
+  assert.ok(valid.resolution.model);
+  assert.throws(() => validateArgs({ role: 'executor', model: 'gpt-6-luna' }),
+    (error) => error.code === 'INVALID_INPUT');
+  assert.throws(() => validateArgs({ role: 'research', signals: { type: 'implementation' } }),
+    (error) => error.code === 'UNSUPPORTED_SIGNAL');
 });
 
 test('CLI records failed ownership when executor makes no publishable delta', async () => {
@@ -788,5 +882,333 @@ test('recovery takes over a stale fence left by a dead holder and refuses a live
     assert.equal(f.calls.length, 1);
   } finally { clean(f); }
 });
+
+suite('codex-delivery-host — T-40-12 investigation research consumer');
+
+function baseInvestigation(f, overrides = {}) {
+  return {
+    invId: 'INV-100',
+    sourceRevision: f.base,
+    repository: 'acme/shipyard',
+    policyHash: policy.resolveDispatch({ runtime: 'codex', role: 'research' }).policy_hash,
+    lines: ['system-state', 'alternatives', 'constraints', 'risks'].map((id) => ({ id, signals: {} })),
+    ...overrides,
+  };
+}
+
+function researchLaunchStub(f, { skip = new Set(), rogueWrite } = {}) {
+  return (selection, context) => {
+    f.calls.push({ method: 'static', selection, context });
+    if (rogueWrite && context.research_line === rogueWrite.line) {
+      fs.writeFileSync(rogueWrite.path, rogueWrite.content || 'rogue write\n');
+    } else if (!skip.has(context.research_line)) {
+      fs.writeFileSync(context.artifactPath, `# ${context.research_line}\n\nfinding for ${context.research_line}\n`);
+    }
+    return application(selection, context);
+  };
+}
+
+test('a clean four-line investigation run seals every line through the shared sealer', async () => {
+  const f = fixture();
+  try {
+    f.host.launchStatic = researchLaunchStub(f);
+    const investigation = baseInvestigation(f);
+    const result = await delivery(f).run({
+      role: 'research', context: { prompt: 'Investigate the scoped topic.', investigation },
+    });
+    assert.deepEqual(result.map((entry) => entry.id), ['system-state', 'alternatives', 'constraints', 'risks']);
+    for (const entry of result) {
+      assert.equal(entry.schema, 'shipyard.role-artifact.v1');
+      assert.equal(entry.envelope.schema, 'shipyard.research-result.v1');
+      assert.equal(entry.envelope.subject, `INV-100:${entry.id}`);
+      assert.equal(entry.envelope.status, 'completed');
+      assert.equal(entry.envelope.source_revision, f.base);
+      assert.equal(entry.envelope.repository, 'acme/shipyard');
+      assert.equal(entry.envelope.policy_hash, investigation.policyHash);
+      assert.match(entry.artifact_digest, /^[a-f0-9]{64}$/);
+      assert.ok(fs.existsSync(entry.artifact_index.path));
+    }
+    assert.equal(f.calls.length, 4);
+  } finally { clean(f); }
+});
+
+test('a line writing outside its artifact refuses CONTAINMENT_VIOLATION naming the line', async () => {
+  const f = fixture();
+  try {
+    f.host.launchStatic = researchLaunchStub(f, {
+      rogueWrite: { line: 'alternatives', path: path.join(f.root, 'outside.txt') },
+    });
+    const investigation = baseInvestigation(f, {
+      lines: ['system-state', 'constraints', 'risks', 'alternatives'].map((id) => ({ id, signals: {} })),
+    });
+    const result = await delivery(f).run({ role: 'research', context: { prompt: 'Investigate.', investigation } });
+    assert.equal(result.status, 'blocked');
+    assert.equal(result.failed_line, 'alternatives');
+    assert.equal(result.code, 'CONTAINMENT_VIOLATION');
+    assert.deepEqual(result.sealed_lines.map((entry) => entry.id).sort(), ['constraints', 'risks', 'system-state']);
+  } finally { clean(f); }
+});
+
+test('a missing artifact names the line and RESEARCH_LINE_MISSING', async () => {
+  const f = fixture();
+  try {
+    f.host.launchStatic = researchLaunchStub(f, { skip: new Set(['risks']) });
+    const investigation = baseInvestigation(f);
+    const result = await delivery(f).run({ role: 'research', context: { prompt: 'Investigate.', investigation } });
+    assert.equal(result.status, 'blocked');
+    assert.equal(result.failed_line, 'risks');
+    assert.equal(result.code, 'RESEARCH_LINE_MISSING');
+    assert.equal(result.sealed_lines.length, 3);
+  } finally { clean(f); }
+});
+
+test('a request with a ticket type value in signals is still refused by the boundary (Pitfall 1 guard)', async () => {
+  const f = fixture();
+  try {
+    f.host.launchStatic = researchLaunchStub(f);
+    const investigation = baseInvestigation(f, {
+      lines: [
+        { id: 'system-state', signals: { type: 'implementation' } },
+        { id: 'alternatives', signals: {} },
+        { id: 'constraints', signals: {} },
+        { id: 'risks', signals: {} },
+      ],
+    });
+    const result = await delivery(f).run({ role: 'research', context: { prompt: 'Investigate.', investigation } });
+    assert.equal(result.status, 'blocked');
+    assert.equal(result.failed_line, 'system-state');
+    assert.equal(result.code, 'UNSUPPORTED_SIGNAL');
+    assert.equal(result.sealed_lines.length, 0);
+    assert.equal(f.calls.length, 0);
+  } finally { clean(f); }
+});
+
+test('a single-line re-dispatch launches only the failed line and leaves its sealed siblings unchanged', async () => {
+  const f = fixture();
+  try {
+    const skip = new Set(['alternatives']);
+    f.host.launchStatic = researchLaunchStub(f, { skip });
+    const investigation = baseInvestigation(f, {
+      lines: ['system-state', 'constraints', 'risks', 'alternatives'].map((id) => ({ id, signals: {} })),
+    });
+    const failure = await delivery(f).run({ role: 'research', context: { prompt: 'Investigate.', investigation } });
+    assert.equal(failure.status, 'blocked');
+    assert.equal(failure.failed_line, 'alternatives');
+    assert.equal(failure.code, 'RESEARCH_LINE_MISSING');
+    assert.equal(failure.sealed_lines.length, 3);
+    const digestsBefore = Object.fromEntries(failure.sealed_lines.map((entry) => [entry.id, entry.artifact_digest]));
+
+    skip.delete('alternatives');
+    const callsBefore = f.calls.length;
+    const redispatch = await delivery(f).run({
+      role: 'research',
+      context: {
+        prompt: 'Investigate.',
+        investigation: {
+          invId: investigation.invId, sourceRevision: investigation.sourceRevision,
+          repository: investigation.repository, policyHash: investigation.policyHash,
+          lines: [{ id: 'alternatives', signals: {} }],
+          sealedLines: failure.sealed_lines,
+        },
+      },
+    });
+    assert.equal(f.calls.length, callsBefore + 1);
+    assert.deepEqual(redispatch.map((entry) => entry.id), ['system-state', 'alternatives', 'constraints', 'risks']);
+    for (const id of ['system-state', 'constraints', 'risks']) {
+      assert.equal(redispatch.find((entry) => entry.id === id).artifact_digest, digestsBefore[id]);
+    }
+    assert.equal(redispatch.find((entry) => entry.id === 'alternatives').envelope.status, 'completed');
+  } finally { clean(f); }
+});
+
+test('a single-line request whose sibling artifact is missing refuses naming the sibling', async () => {
+  const f = fixture();
+  try {
+    f.host.launchStatic = researchLaunchStub(f);
+    const investigation = baseInvestigation(f);
+    const result = await delivery(f).run({ role: 'research', context: { prompt: 'Investigate.', investigation } });
+    const broken = result.find((entry) => entry.id === 'alternatives');
+    fs.rmSync(broken.artifact_ref);
+    const siblings = result.filter((entry) => entry.id !== 'system-state');
+
+    await assert.rejects(() => delivery(f).run({
+      role: 'research',
+      context: {
+        prompt: 'Investigate.',
+        investigation: {
+          invId: investigation.invId, sourceRevision: investigation.sourceRevision,
+          repository: investigation.repository, policyHash: investigation.policyHash,
+          lines: [{ id: 'system-state', signals: {} }],
+          sealedLines: siblings,
+        },
+      },
+    }), (error) => error.code === 'RESEARCH_VERIFY_MANIFEST_MISSING' && error.message.includes('alternatives'));
+  } finally { clean(f); }
+});
+
+suite('codex-delivery-host — T-40-28 plan delivery (D-43)');
+
+function agentManifestFor(agentDir, role) {
+  const resolution = policy.resolveDispatch({ runtime: 'codex', role });
+  const file = resolution.agent_file;
+  const content = [
+    '# shipyard-policy-id = "' + policy.POLICY.id + '"',
+    '# shipyard-policy-version = "' + resolution.policy_version + '"',
+    '# shipyard-policy-hash = "' + resolution.policy_hash + '"',
+    '# shipyard-policy-runtime = "codex"',
+    '# shipyard-policy-role = "' + role + '"',
+    '# shipyard-policy-rung = "' + resolution.rung + '"',
+    'name = "' + file.replace(/\.toml$/, '') + '"',
+    'model = "' + resolution.model + '"',
+    'model_reasoning_effort = "' + resolution.effort + '"',
+    'sandbox_mode = "read-only"',
+    "developer_instructions = '''",
+    'Follow the scoped role.',
+    "'''",
+    '',
+  ].join('\n');
+  const fileDigest = crypto.createHash('sha256').update(content).digest('hex');
+  fs.writeFileSync(path.join(agentDir, file), content);
+  fs.writeFileSync(path.join(agentDir, '.shipyard-manifest.json'), JSON.stringify({
+    policy_id: policy.POLICY.id, policy_version: resolution.policy_version, policy_hash: resolution.policy_hash,
+    agent_files: [file], agent_digests: { [file]: fileDigest },
+  }));
+  return path.join(agentDir, '.shipyard-manifest.json');
+}
+
+function ticketWorktreeFixture(role) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-codex-inworktree-'));
+  const agentDir = fs.mkdtempSync(path.join(temporary, 'agents-'));
+  const planRel = '.planning/phases/x/X-PLAN.md';
+  fs.mkdirSync(path.join(root, '.planning', 'phases', 'x'), { recursive: true });
+  fs.writeFileSync(path.join(root, planRel), '# plan\n\n## Context (Reads)\n\n- nothing planning-shaped here.\n');
+  fs.mkdirSync(path.join(root, 'src'));
+  fs.writeFileSync(path.join(root, 'src', 'owned.txt'), 'base\n');
+  fs.mkdirSync(path.join(root, '.planning', 'graph'), { recursive: true });
+  git(root, 'init', '-q', '-b', 'main');
+  git(root, 'config', 'user.name', 'Delivery Test');
+  git(root, 'config', 'user.email', 'delivery@example.test');
+  fs.writeFileSync(path.join(root, '.planning', 'graph', 'tickets.json'), JSON.stringify({ tickets: {
+    'T-38-04': { branch: 'main', pr_base: 'main', plan: planRel, files: ['src/owned.txt'] },
+  } }));
+  git(root, 'add', '.');
+  git(root, '-c', 'commit.gpgsign=false', 'commit', '-qm', 'base');
+  const agentManifest = agentManifestFor(agentDir, role);
+  const scope = {
+    run_id: 'run-codex-inworktree', ticket: 'T-38-04', phase: 38,
+    worktree: root, runtime: 'codex', provider: 'openai',
+  };
+  const calls = [];
+  const host = {
+    scope,
+    capabilities,
+    recorder: createDurableRecorder(fs.mkdtempSync(path.join(temporary, 'receipts-'))),
+    launchStatic(selection, context) { calls.push({ method: 'static', selection, context }); return application(selection, context); },
+  };
+  return { root, agentDir, agentManifest, scope, host, calls, planRel };
+}
+
+function withoutShipyardGraphDirEnv(action) {
+  return withGraphDirEnv(undefined, action);
+}
+
+test('requestValue accepts context.plan_sha256 and rejects every other plan* context field', () => {
+  requestValue({ role: 'drift-check', context: { prompt: 'hi', plan_sha256: '0'.repeat(64) } });
+  for (const bad of [{ plan_path: '/x' }, { plan: 'x' }, { plan_content: 'x' }]) {
+    assert.throws(() => requestValue({ role: 'drift-check', context: { prompt: 'hi', ...bad } }),
+      (error) => error.code === 'INVALID_INPUT');
+  }
+  assert.throws(() => requestValue({ role: 'drift-check', context: { prompt: 'hi', plan_sha256: 'not-hex' } }),
+    (error) => error.code === 'INVALID_INPUT');
+});
+
+test('a Shipyard-shaped worktree (graph tracked at HEAD, no flag or env) leaves the drift-check prompt unchanged', () =>
+  withoutShipyardGraphDirEnv(async () => {
+    const f = ticketWorktreeFixture('drift-check');
+    try {
+      await createCodexDeliveryHost({
+        scope: f.scope, host: f.host, capabilities, agentDir: f.agentDir, agentManifest: f.agentManifest,
+        storageRoot: fs.mkdtempSync(path.join(temporary, 'storage-')), env: {},
+      }).run({ role: 'drift-check', context: { prompt: 'Judge this ticket.' } });
+      assert.equal(f.calls[0].context.prompt, 'Judge this ticket.');
+    } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
+  }));
+
+test('a cross-repo review-fix prompt carries the delivered contract and files after the caller prompt', async () => {
+  const f = fixture();
+  const agentDir = fs.mkdtempSync(path.join(temporary, 'agents-'));
+  const agentManifest = agentManifestFor(agentDir, 'review-fix');
+  try {
+    fs.mkdirSync(path.dirname(path.join(f.project, '.planning', 'OTHER.md')), { recursive: true });
+    fs.writeFileSync(path.join(f.project, '.planning', 'OTHER.md'), 'other content\n');
+    const graph = JSON.parse(fs.readFileSync(path.join(f.graphDir, 'tickets.json'), 'utf8'));
+    graph.tickets['T-38-04'].plan = '.planning/PLAN-WITH-CONTEXT.md';
+    fs.writeFileSync(path.join(f.graphDir, 'tickets.json'), JSON.stringify(graph));
+    fs.writeFileSync(path.join(f.project, '.planning', 'PLAN-WITH-CONTEXT.md'),
+      '# plan\n\n## Context (Reads)\n\n- `.planning/OTHER.md`.\n');
+    const planSha256 = crypto.createHash('sha256')
+      .update(fs.readFileSync(path.join(f.project, '.planning', 'PLAN-WITH-CONTEXT.md'))).digest('hex');
+    const result = delivery(f, { agentDir, agentManifest });
+    await result.run({ role: 'review-fix', context: { prompt: 'Fix the review.', plan_sha256: planSha256 } });
+    const call = f.calls[0];
+    assert.match(call.context.prompt, /^Fix the review\.\n\n<TICKET-CONTRACT path="\.planning\/PLAN-WITH-CONTEXT\.md"/);
+    assert.match(call.context.prompt, /<CONTEXT-FILE path="\.planning\/OTHER\.md" sha256="[0-9a-f]{64}">\nother content/);
+  } finally { clean(f); }
+});
+
+test('a wrong context.plan_sha256 refuses PLAN_DIGEST_MISMATCH for a ticket-delivery role', async () => {
+  const f = fixture();
+  const agentDir = fs.mkdtempSync(path.join(temporary, 'agents-'));
+  const agentManifest = agentManifestFor(agentDir, 'ci-fix');
+  try {
+    await assert.rejects(() => delivery(f, { agentDir, agentManifest }).run({
+      role: 'ci-fix', context: { prompt: 'Fix CI.', plan_sha256: '0'.repeat(64) },
+    }), (error) => error.code === 'PLAN_DIGEST_MISMATCH');
+    assert.equal(f.calls.length, 0);
+  } finally { clean(f); }
+});
+
+test('a wrong context.plan_sha256 refuses PLAN_DIGEST_MISMATCH for the executor before the signer runs', async () => {
+  const f = fixture();
+  try {
+    await assert.rejects(() => delivery(f).run({
+      role: 'executor', context: { prompt: 'Implement.', plan_sha256: '0'.repeat(64) },
+    }), (error) => error.code === 'PLAN_DIGEST_MISMATCH');
+    assert.equal(f.calls.length, 0);
+    assert.equal(git(f.root, 'rev-parse', 'HEAD'), f.base);
+  } finally { clean(f); }
+});
+
+test('SHIPYARD_GRAPH_DIR pointing at an untracked graph copy in a non-main worktree refuses GRAPH_NOT_CANONICAL', () =>
+  withoutShipyardGraphDirEnv(async () => {
+    const f = ticketWorktreeFixture('drift-check');
+    const otherRepo = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-codex-other-repo-'));
+    try {
+      git(otherRepo, 'init', '-q', '-b', 'main');
+      git(otherRepo, 'config', 'user.name', 'Delivery Test');
+      git(otherRepo, 'config', 'user.email', 'delivery@example.test');
+      fs.writeFileSync(path.join(otherRepo, 'README.md'), 'x\n');
+      git(otherRepo, 'add', '.');
+      git(otherRepo, '-c', 'commit.gpgsign=false', 'commit', '-qm', 'base');
+      git(otherRepo, 'branch', 'other');
+      const linked = path.join(otherRepo, '..', 'shipyard-codex-other-linked');
+      git(otherRepo, 'worktree', 'add', '-q', linked, 'other');
+      const copyGraphDir = path.join(linked, '.planning', 'graph');
+      fs.mkdirSync(copyGraphDir, { recursive: true });
+      fs.writeFileSync(path.join(copyGraphDir, 'tickets.json'), JSON.stringify({ tickets: {
+        'T-38-04': { branch: 'main', pr_base: 'main', plan: f.planRel, files: ['src/owned.txt'] },
+      } }));
+      process.env.SHIPYARD_GRAPH_DIR = copyGraphDir;
+      await assert.rejects(() => createCodexDeliveryHost({
+        scope: f.scope, host: f.host, capabilities, agentDir: f.agentDir, agentManifest: f.agentManifest,
+        storageRoot: fs.mkdtempSync(path.join(temporary, 'storage-')), env: {},
+      }).run({ role: 'drift-check', context: { prompt: 'Judge.' } }), (error) => error.code === 'GRAPH_NOT_CANONICAL');
+      assert.equal(f.calls.length, 0);
+      fs.rmSync(linked, { recursive: true, force: true });
+    } finally {
+      fs.rmSync(f.root, { recursive: true, force: true });
+      fs.rmSync(otherRepo, { recursive: true, force: true });
+    }
+  }));
 
 done();

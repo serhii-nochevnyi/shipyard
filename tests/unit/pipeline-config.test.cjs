@@ -989,6 +989,59 @@ test('the returned status list is not shared with the disabled default', () => {
   assert.deepStrictEqual(DEFAULTS.jira_todo_statuses, []);
 });
 
+suite('pr_title_format — the target repository\'s own PR title convention (D-45)');
+
+test('unset → null, and no unknown-key warning', () => {
+  const { config, warnings } = withConfig(undefined);
+  assert.strictEqual(config.pr_title_format, null);
+  assert.ok(!warnings.some((w) => /pr_title_format/.test(w)), warnings.join('; '));
+});
+
+test('a single template string is accepted as-is', () => {
+  const { config, warnings } = withConfig({ pr_title_format: '[{jira}] {type}: {subject}' });
+  assert.strictEqual(config.pr_title_format, '[{jira}] {type}: {subject}');
+  assert.ok(!warnings.some((w) => /pr_title_format/.test(w)), warnings.join('; '));
+});
+
+test('a map keyed by owner/repo and "default" is accepted as-is', () => {
+  const map = {
+    'pdffiller/pdffiller': '[{jira}] {type}: {subject}',
+    default: '{type}{[({scope})]}: {[[{jira}] ]}{subject}',
+  };
+  const { config, warnings } = withConfig({ pr_title_format: map });
+  assert.deepStrictEqual(config.pr_title_format, map);
+  assert.ok(!warnings.some((w) => /pr_title_format/.test(w)), warnings.join('; '));
+});
+
+test('a non-string map value warns, names the key, and is ignored — the rest of the map survives', () => {
+  const { config, warnings } = withConfig({
+    pr_title_format: { 'pdffiller/pdffiller': '[{jira}] {type}: {subject}', 'acme/widgets': 7 },
+  });
+  assert.deepStrictEqual(config.pr_title_format, { 'pdffiller/pdffiller': '[{jira}] {type}: {subject}' });
+  assert.ok(warnings.some((w) => /pr_title_format.*"acme\/widgets"/.test(w)), warnings.join('; '));
+});
+
+test('a map key that is neither "default" nor an owner/name slug warns and is ignored', () => {
+  const { config, warnings } = withConfig({ pr_title_format: { bogus: '{type}: {subject}' } });
+  assert.deepStrictEqual(config.pr_title_format, {});
+  assert.ok(warnings.some((w) => /pr_title_format\."bogus"/.test(w)), warnings.join('; '));
+});
+
+test('a wholly malformed shape warns, names the key, and falls back to null', () => {
+  const { config, warnings } = withConfig({ pr_title_format: 42 });
+  assert.strictEqual(config.pr_title_format, null);
+  assert.ok(warnings.some((w) => /pr_title_format/.test(w)), warnings.join('; '));
+});
+
+test('delivery_pipeline.pr_title_format wins over the legacy namespace', () => {
+  const { config, warnings } = withRaw({
+    pipeline: { pr_title_format: 'legacy: {subject}' },
+    delivery_pipeline: { pr_title_format: '{type}: {subject}' },
+  });
+  assert.strictEqual(config.pr_title_format, '{type}: {subject}');
+  assert.deepStrictEqual(warnings, []);
+});
+
 suite('repos — sibling checkouts a multi-repo phase is driven in');
 
 test('no repos configured → an empty map, not undefined', () => {

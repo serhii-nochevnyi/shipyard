@@ -1,0 +1,21 @@
+{
+  "boundary": "claude-stream",
+  "producer": "claude --print --output-format stream-json --json-schema (stdout)",
+  "cli": "claude",
+  "cli_version": "2.1.283",
+  "fixtures": [
+    "tests/fixtures/captured/claude-stream-executor.jsonl",
+    "tests/fixtures/captured/claude-stream-research.jsonl"
+  ],
+  "consumers": [
+    "tests/unit/claude-runtime-host.test.cjs",
+    "tests/unit/claude-workflow-host.test.cjs"
+  ],
+  "migrating": [],
+  "inline_shapes": [
+    "[\"']?type[\"']?\\s*:\\s*[\"']result[\"'][^\\n]*[\"']?(?:subtype|structured_output)[\"']?\\s*:",
+    "[\"']?(?:subtype|structured_output)[\"']?\\s*:[^\\n]*[\"']?type[\"']?\\s*:\\s*[\"']result[\"']",
+    "[\"']?type[\"']?\\s*:\\s*[\"']system[\"'][^\\n]*[\"']?subtype[\"']?\\s*:\\s*[\"']init[\"']",
+    "[\"']?subtype[\"']?\\s*:\\s*[\"']init[\"'][^\\n]*[\"']?type[\"']?\\s*:\\s*[\"']system[\"']"
+  ]
+}

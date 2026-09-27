@@ -7,12 +7,13 @@ const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const { suite, test, done, assert } = require('./assert-harness.cjs');
 const { createDurableRecorder } = require('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs');
-const { createClaudeDeliveryHost, runClaudeDeliveryCli, REQUEST_SCHEMA } = require('../../plugins/delivery-pipeline/scripts/claude-delivery-host.cjs');
+const { createClaudeDeliveryHost, runClaudeDeliveryCli, validateRequest, REQUEST_SCHEMA } = require('../../plugins/delivery-pipeline/scripts/claude-delivery-host.cjs');
 const { REFERENCE_PATHS } = require('../../plugins/delivery-pipeline/scripts/claude-reference-content.cjs');
 const { createRunScope } = require('../../plugins/delivery-pipeline/scripts/run-scope.cjs');
 const { createRunController } = require('../../plugins/delivery-pipeline/scripts/run-controller.cjs');
 const { transcriptEvidence } = require('./claude-test-evidence.cjs');
 const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
+const { CLAUDE_MODEL_ALIASES } = require('../../plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs');
 
 suite('claude-delivery-host — registered runtime workflows');
 
@@ -47,6 +48,12 @@ function git(root, ...args) {
   return execFileSync('git', ['-C', root, ...args], { encoding: 'utf8' }).trim();
 }
 
+function writeShipyardManifest(repo) {
+  const dir = path.join(repo, 'plugins', 'delivery-pipeline', '.claude-plugin');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'plugin.json'), JSON.stringify({ name: 'shipyard' }));
+}
+
 function repairFixture(config = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-claude-repair-host-'));
   const worktreePath = path.join(root, 'worktree');
@@ -62,7 +69,8 @@ function repairFixture(config = {}) {
   git(worktree, 'config', 'user.email', 'repair@example.test');
   fs.mkdirSync(path.join(worktree, 'src'));
   fs.writeFileSync(path.join(worktree, 'src', 'owned.txt'), 'before\n');
-  git(worktree, 'add', 'src/owned.txt');
+  if (config.target !== true) writeShipyardManifest(worktree);
+  git(worktree, 'add', '.');
   git(worktree, '-c', 'commit.gpgsign=false', 'commit', '-qm', 'base');
   git(worktree, 'branch', 'main');
   fs.writeFileSync(path.join(graphDir, 'tickets.json'), JSON.stringify({
@@ -166,6 +174,67 @@ test('CLI constructs a durable owned run and dispatches a canonical repair', asy
   } finally {
     fs.rmSync(fixture.root, { recursive: true, force: true });
   }
+});
+
+function inflightRows(graphDir) {
+  try { return JSON.parse(fs.readFileSync(path.join(graphDir, 'dispatches.json'), 'utf8')).inflight || {}; }
+  catch { return {}; }
+}
+
+for (const outcome of ['success', 'failure']) {
+  test(`CLI holds a pid in-flight record during the run and clears it after ${outcome}`, async () => {
+    const fixture = repairFixture();
+    const requestFile = path.join(fixture.root, 'request.json');
+    let during;
+    try {
+      fs.writeFileSync(requestFile, JSON.stringify({
+        schema: REQUEST_SCHEMA,
+        scope: { run_id: `cli-inflight-${outcome}`, ticket: 'T-38-03', phase: 38, worktree: fixture.worktree },
+        args: fixture.args,
+      }));
+      const running = runClaudeDeliveryCli(
+        ['--workflow', 'fix-round', '--request-file', requestFile],
+        { write() {} },
+        {
+          graphDir: fixture.graphDir,
+          storageRoot: path.join(fixture.root, 'cli-storage'),
+          probe: { status: 'available' },
+          createRuntimeHost(options) {
+            during = Object.values(inflightRows(fixture.graphDir));
+            if (outcome === 'failure') throw new Error('stubbed runtime launch failed');
+            return { ...fixture.runtimeHost, scope: options.scope, recorder: createDurableRecorder(options.recorderDir) };
+          },
+        },
+      );
+      if (outcome === 'failure') await assert.rejects(() => running, /stubbed runtime launch failed/);
+      else await running;
+      assert.equal(during.length, 1);
+      assert.equal(during[0].ticket, 'T-38-03');
+      assert.equal(during[0].role, 'ci-fix');
+      assert.equal(during[0].pid, process.pid);
+      assert.equal(during[0].host, 'claude');
+      assert.deepEqual(inflightRows(fixture.graphDir), {});
+    } finally {
+      fs.rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+}
+
+test('validateRequest accepts the canonical request and refuses unknown keys without side effects', () => {
+  const worktree = path.join(os.tmpdir(), 'shipyard-validate-request-absent');
+  const request = {
+    schema: REQUEST_SCHEMA,
+    scope: { run_id: 'run-validate', ticket: 'T-38-03', phase: 38, worktree },
+    args: { tickets: [{ id: 'T-38-03', worktreePath: worktree }] },
+  };
+  const valid = validateRequest('executors', request);
+  assert.equal(valid.hostScope.ticket, 'T-38-03');
+  assert.equal(fs.existsSync(worktree), false);
+  assert.throws(() => validateRequest('executors', { ...request, extra: true }), /schema, scope, and serializable args only/);
+  assert.throws(() => validateRequest('executors', {
+    ...request, args: { tickets: [{ id: 'T-38-04', worktreePath: worktree }] },
+  }), /contradicts the runtime ticket/);
+  assert.throws(() => validateRequest('unknown', request), /unknown workflow/);
 });
 
 test('CLI fails closed on a noncanonical PR before launching the runtime', async () => {
@@ -461,7 +530,7 @@ test('default base reconciliation creates a verified signed merge before repair 
       },
     },
   });
-  const gnupgHome = fs.mkdtempSync('/tmp/crh-base-gpg-');
+  const gnupgHome = fs.mkdtempSync(path.join(os.tmpdir(), 'g1-'));
   fs.chmodSync(gnupgHome, 0o700);
   const previousHome = process.env.GNUPGHOME;
   try {
@@ -515,7 +584,7 @@ test('fast-forwarded base receives a host-signed marker before publication', asy
       },
     },
   });
-  const gnupgHome = fs.mkdtempSync('/tmp/crh-ff-gpg-');
+  const gnupgHome = fs.mkdtempSync(path.join(os.tmpdir(), 'g2-'));
   fs.chmodSync(gnupgHome, 0o700);
   const previousHome = process.env.GNUPGHOME;
   try {
@@ -771,6 +840,112 @@ test('investigation inlines its approved contract without exposing the plugin pa
   }
 });
 
+test('the host accepts a single-line re-dispatch only once its three siblings verify, and refuses a tampered claim', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-claude-investigation-redispatch-'));
+  const evidence = new WeakMap();
+  const labels = {
+    'system-state': 'system state',
+    alternatives: 'alternatives',
+    constraints: 'constraints',
+    risks: 'risks and unknowns',
+  };
+  try {
+    git(root, 'init', '-q', '-b', 'main');
+    git(root, 'config', 'user.name', 'Investigation Redispatch Test');
+    git(root, 'config', 'user.email', 'investigation-redispatch@example.test');
+    fs.writeFileSync(path.join(root, 'base.txt'), 'base\n');
+    git(root, 'add', 'base.txt');
+    git(root, '-c', 'commit.gpgsign=false', 'commit', '-qm', 'base');
+    const graphDir = path.join(root, '.planning', 'graph');
+    const invPath = path.join(root, '.planning', 'investigations', 'INV-REDISPATCH');
+    const artifactRoot = path.join(invPath, 'research');
+    fs.mkdirSync(graphDir, { recursive: true });
+    fs.mkdirSync(artifactRoot, { recursive: true });
+    fs.writeFileSync(path.join(graphDir, 'tickets.json'), '{"tickets":{}}');
+    const sourceRevision = git(root, 'rev-parse', 'HEAD');
+    const policyHash = policy.resolveDispatch({ runtime: 'claude', role: 'research', signals: { type: 'facts' } }).policy_hash;
+    const controller = owner(root, root, 'T-99-99', 'run-99-99');
+    let note = 'first-pass';
+    const host = createClaudeDeliveryHost({
+      graphDir,
+      storageRoot: path.join(root, 'host-state'),
+      controller,
+      runtimeHost: {
+        scope: { run_id: 'run-99-99', ticket: 'T-99-99', worktree: root },
+        agent(_prompt, options) {
+          const id = options.label.split(':').pop();
+          const file = path.join(artifactRoot, `${id}.md`);
+          const content = `# Research ${id} (${note})\n`;
+          fs.writeFileSync(file, content);
+          const sha256 = crypto.createHash('sha256').update(content).digest('hex');
+          const result = { id, status: 'completed', summary: id,
+            artifact: { path: file, bytes: Buffer.byteLength(content), content_bytes: Buffer.byteLength(content), sha256, digest: sha256 } };
+          evidence.set(result, transcriptEvidence({
+            launch_id: `claude-investigation-redispatch-${id}-${note}`,
+            applied_model: options.model,
+            applied_effort: options.effort,
+            observed_model: options.model,
+            observed_effort: options.effort,
+          }));
+          return result;
+        },
+        applicationEvidence: ({ result }) => evidence.get(result),
+        capabilities: Object.freeze({ supportedModels: ['claude-opus-5-5'], supportedEfforts: ['medium'], observedModel: true, observedEffort: true }),
+        recorder: createDurableRecorder(path.join(root, 'receipts')),
+      },
+    });
+    const baseArgs = {
+      invId: 'INV-REDISPATCH', invPath, worktreePath: root,
+      artifactContract: 'planning.v1', artifactRoot,
+      artifactPaths: Object.fromEntries(Object.keys(labels).map((id) => [id, path.join(artifactRoot, `${id}.md`)])),
+      sourceRevision, repository: 'shipyard/test', policyHash,
+      problemStatement: 'Inspect the single-line re-dispatch boundary',
+      referencePath: REFERENCE_PATHS['inv-research'],
+    };
+    const first = await host.run('investigation-research', {
+      ...baseArgs,
+      lines: Object.entries(labels).map(([id, label]) => ({ id, label, model: 'claude-opus-5-5', effort: 'medium', signals: { type: 'facts' } })),
+    });
+    assert.equal(first.length, 4);
+    const siblings = first.filter((line) => line.id !== 'alternatives')
+      .map(({ id, status, summary, artifact_ref, artifact_digest, artifact_index, evidence_index }) =>
+        ({ id, status, summary, artifact_ref, artifact_digest, artifact_index, evidence_index }));
+
+    const tampered = siblings.map((entry) => ({ ...entry }));
+    tampered[0].artifact_digest = tampered[0].artifact_digest.replace(/^./, tampered[0].artifact_digest[0] === 'a' ? 'b' : 'a');
+    let tamperedError = null;
+    try {
+      await host.run('investigation-research', {
+        ...baseArgs,
+        lines: [{ id: 'alternatives', label: labels.alternatives, model: 'claude-opus-5-5', effort: 'medium', signals: { type: 'facts' } }],
+        sealedLines: tampered,
+      });
+    } catch (e) {
+      tamperedError = e;
+    }
+    assert.ok(tamperedError, 'a tampered sealed-sibling claim must be refused');
+    assert.match(tamperedError.message, /RESEARCH_VERIFY_DIGEST_MISMATCH|manifest digest does not match/);
+
+    note = 'redispatch';
+    const second = await host.run('investigation-research', {
+      ...baseArgs,
+      lines: [{ id: 'alternatives', label: labels.alternatives, model: 'claude-opus-5-5', effort: 'medium', signals: { type: 'facts' } }],
+      sealedLines: siblings,
+    });
+    assert.equal(second.length, 4);
+    assert.ok(second.every((line) => line.status === 'completed'));
+    for (const sibling of siblings) {
+      const stillSealed = second.find((line) => line.id === sibling.id);
+      assert.equal(stillSealed.artifact_ref, sibling.artifact_ref);
+      assert.equal(stillSealed.artifact_digest, sibling.artifact_digest);
+    }
+    const redispatched = second.find((line) => line.id === 'alternatives');
+    assert.notEqual(redispatched.artifact_ref, first.find((line) => line.id === 'alternatives').artifact_ref);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('production investigation CLI owns a T-scoped run while sealing INV research', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-claude-investigation-cli-'));
   const worktree = fs.realpathSync(root);
@@ -861,7 +1036,7 @@ test('fixed repair signs before sealing and reaches only the trusted publication
       },
     },
   });
-  const gnupgHome = fs.mkdtempSync('/tmp/crh-gpg-');
+  const gnupgHome = fs.mkdtempSync(path.join(os.tmpdir(), 'g3-'));
   fs.chmodSync(gnupgHome, 0o700);
   const previousHome = process.env.GNUPGHOME;
   try {
@@ -915,7 +1090,7 @@ test('review repair publishes its signed code before host review actions', async
       },
     },
   });
-  const gnupgHome = fs.mkdtempSync('/tmp/crh-review-gpg-');
+  const gnupgHome = fs.mkdtempSync(path.join(os.tmpdir(), 'g4-'));
   fs.chmodSync(gnupgHome, 0o700);
   const previousHome = process.env.GNUPGHOME;
   try {
@@ -937,6 +1112,246 @@ test('review repair publishes its signed code before host review actions', async
     fs.rmSync(gnupgHome, { recursive: true, force: true });
     fs.rmSync(fixture.root, { recursive: true, force: true });
     releaseGpg();
+  }
+});
+
+test('target-project executor finalizes a conventional subject from the graph title and refuses a Ticket: body', async () => {
+  const releaseGpg = await holdGpg();
+  const fixture = repairFixture({ target: true });
+  const graphFile = path.join(fixture.graphDir, 'tickets.json');
+  const graph = JSON.parse(fs.readFileSync(graphFile, 'utf8'));
+  Object.assign(graph.tickets['T-38-03'], { title: 'Retry the flaky upload', type: 'bugfix' });
+  fs.writeFileSync(graphFile, JSON.stringify(graph));
+  const gnupgHome = fs.mkdtempSync(path.join(os.tmpdir(), 'g5-'));
+  fs.chmodSync(gnupgHome, 0o700);
+  const previous = { GNUPGHOME: process.env.GNUPGHOME, SHIPYARD_GRAPH_DIR: process.env.SHIPYARD_GRAPH_DIR };
+  const evidence = new WeakMap();
+  let body;
+  const executor = (graphDir, runId) => createClaudeDeliveryHost({
+    graphDir,
+    controller: owner(fixture.root, fixture.worktree, 'T-38-03', runId),
+    runtimeHost: {
+      ...fixture.runtimeHost,
+      scope: { run_id: runId, ticket: 'T-38-03', worktree: fixture.worktree },
+      async agent(_prompt, launchOptions) {
+        fs.writeFileSync(path.join(fixture.worktree, '.shipyard-pr-body.md'), body);
+        fs.writeFileSync(path.join(fixture.worktree, '.shipyard-evidence.md'), 'complete evidence\n');
+        fs.writeFileSync(path.join(fixture.worktree, 'src', 'owned.txt'), `${crypto.randomUUID()}\n`);
+        const result = { id: 'T-38-03', status: 'committed', summary: 'done', blocking_count: 0 };
+        evidence.set(result, transcriptEvidence({
+          launch_id: `target-${crypto.randomUUID()}`, applied_model: launchOptions.model,
+          applied_effort: launchOptions.effort, observed_model: launchOptions.model,
+          observed_effort: launchOptions.effort,
+        }));
+        return result;
+      },
+      applicationEvidence: ({ result }) => evidence.get(result),
+      capabilities: Object.freeze({ supportedModels: [CLAUDE_MODEL_ALIASES.sonnet], supportedEfforts: ['max'], observedModel: true, observedEffort: true }),
+    },
+  });
+  const ticket = () => ({ tickets: [{
+    id: 'T-38-03', title: 'Retry the flaky upload', planPath: fixture.planPath, branch: 'ticket/T-38-03',
+    worktreePath: fixture.worktree, prBase: 'main', model: 'sonnet', effort: 'max',
+  }] });
+  try {
+    process.env.GNUPGHOME = gnupgHome;
+    process.env.SHIPYARD_GRAPH_DIR = fixture.graphDir;
+    execFileSync('gpg', ['--batch', '--pinentry-mode', 'loopback', '--passphrase', '',
+      '--quick-generate-key', 'Repair Host Test <repair@example.test>', 'ed25519', 'sign', '0'],
+    { stdio: ['ignore', 'pipe', 'pipe'] });
+    const keys = execFileSync('gpg', ['--batch', '--with-colons', '--list-secret-keys'],
+      { encoding: 'utf8' });
+    const fingerprint = keys.split('\n').find((line) => line.startsWith('fpr:')).split(':')[9];
+    git(fixture.worktree, 'config', 'user.signingkey', fingerprint);
+    body = '## Summary\n\nRetries the upload.\n\n## Tests\n\nUnit tests pass.\n';
+    await executor(fixture.graphDir, 'run-target-neutral').run('executors', ticket());
+    assert.equal(git(fixture.worktree, 'log', '-1', '--format=%s', 'HEAD'), 'fix: retry the flaky upload');
+    git(fixture.worktree, 'verify-commit', 'HEAD');
+    fs.rmSync(path.join(fixture.worktree, '.shipyard-role-artifact.json'), { force: true });
+    body = 'Ticket: T-38-03\n\nRetries the upload.\n';
+    await assert.rejects(() => executor(fixture.graphDir, 'run-target-marker').run('executors', ticket()), /PR body must not contain internal identifiers in a target project/);
+  } finally {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    fs.rmSync(gnupgHome, { recursive: true, force: true });
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+    releaseGpg();
+  }
+});
+
+suite('claude-delivery-host — T-40-28 plan delivery (D-43)');
+
+test('executor and drift-check prompts carry the delivered plan contract; a caller deliveryRulesHint survives prepareArgs', async () => {
+  const releaseGpg = await holdGpg();
+  const fixture = repairFixture();
+  const prompts = [];
+  const evidence = new WeakMap();
+  const host = createClaudeDeliveryHost({
+    graphDir: fixture.graphDir,
+    controller: owner(fixture.root, fixture.worktree, 'T-38-03', 'run-executor-delivery'),
+    runtimeHost: {
+      ...fixture.runtimeHost,
+      scope: { run_id: 'run-executor-delivery', ticket: 'T-38-03', worktree: fixture.worktree },
+      async agent(prompt, launchOptions) {
+        prompts.push(prompt);
+        fs.writeFileSync(path.join(fixture.worktree, '.shipyard-pr-body.md'), 'Ticket: T-38-03\n\nDone.\n');
+        fs.writeFileSync(path.join(fixture.worktree, '.shipyard-evidence.md'), 'complete evidence\n');
+        fs.writeFileSync(path.join(fixture.worktree, 'src', 'owned.txt'), 'after\n');
+        const result = { id: 'T-38-03', status: 'committed', summary: 'done', blocking_count: 0 };
+        evidence.set(result, transcriptEvidence({
+          launch_id: `executor-${crypto.randomUUID()}`, applied_model: launchOptions.model,
+          applied_effort: launchOptions.effort, observed_model: launchOptions.model,
+          observed_effort: launchOptions.effort,
+        }));
+        return result;
+      },
+      applicationEvidence: ({ result }) => evidence.get(result),
+      capabilities: Object.freeze({ supportedModels: [CLAUDE_MODEL_ALIASES.sonnet], supportedEfforts: ['max'], observedModel: true, observedEffort: true }),
+    },
+  });
+  const gnupgHome = fs.mkdtempSync(path.join(os.tmpdir(), 'g6-'));
+  fs.chmodSync(gnupgHome, 0o700);
+  const previousHome = process.env.GNUPGHOME;
+  try {
+    process.env.GNUPGHOME = gnupgHome;
+    execFileSync('gpg', ['--batch', '--pinentry-mode', 'loopback', '--passphrase', '',
+      '--quick-generate-key', 'Repair Host Test <repair@example.test>', 'ed25519', 'sign', '0'],
+    { stdio: ['ignore', 'pipe', 'pipe'] });
+    const keys = execFileSync('gpg', ['--batch', '--with-colons', '--list-secret-keys'], { encoding: 'utf8' });
+    const fingerprint = keys.split('\n').find((line) => line.startsWith('fpr:')).split(':')[9];
+    git(fixture.worktree, 'config', 'user.signingkey', fingerprint);
+    await host.run('executors', {
+      tickets: [{
+        id: 'T-38-03', branch: 'ticket/T-38-03', prBase: 'main',
+        worktreePath: fixture.worktree, planPath: fixture.planPath,
+        model: 'sonnet', effort: 'max',
+      }],
+      deliveryRulesHint: 'CUSTOM RULES HINT FROM THE CALLER',
+    });
+    assert.match(prompts[0], /<TICKET-CONTRACT path="\.planning\/phases\/38\/38-03-PLAN\.md"/);
+    assert.match(prompts[0], /# Repair plan/);
+    assert.match(prompts[0], /CUSTOM RULES HINT FROM THE CALLER/);
+  } finally {
+    if (previousHome === undefined) delete process.env.GNUPGHOME;
+    else process.env.GNUPGHOME = previousHome;
+    fs.rmSync(gnupgHome, { recursive: true, force: true });
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+    releaseGpg();
+  }
+});
+
+function driftCapableHost(fixture) {
+  const prompts = [];
+  const controller = owner(fixture.root, fixture.worktree, 'T-38-03', 'run-drift-delivery');
+  const host = createClaudeDeliveryHost({
+    graphDir: fixture.graphDir,
+    controller,
+    runtimeHost: {
+      scope: { run_id: 'run-drift-delivery', ticket: 'T-38-03', worktree: fixture.worktree },
+      async agent(prompt, launchOptions) {
+        prompts.push(prompt);
+        fs.writeFileSync(path.join(fixture.worktree, '.shipyard-drift-evidence.md'), '# Drift evidence\nfresh\n');
+        const result = { id: 'T-38-03', verdict: 'fresh', moved: [], reuse_candidates: [], evidence: [] };
+        return result;
+      },
+      applicationEvidence: () => transcriptEvidence({
+        launch_id: `drift-${crypto.randomUUID()}`, applied_model: 'claude-opus-5-5', applied_effort: 'high',
+        observed_model: 'claude-opus-5-5', observed_effort: 'high',
+      }),
+      capabilities: Object.freeze({ supportedModels: ['claude-opus-5-5'], supportedEfforts: ['high'], observedModel: true, observedEffort: true }),
+      recorder: createDurableRecorder(path.join(fixture.root, 'drift-receipts')),
+    },
+  });
+  return { host, prompts };
+}
+
+test('drift-check and repair prompts carry the delivered plan contract when the plan lies outside the worktree', async () => {
+  const fixture = repairFixture();
+  const { host, prompts } = driftCapableHost(fixture);
+  try {
+    await host.run('drift-gate', {
+      tickets: [{
+        id: 'T-38-03', worktreePath: fixture.worktree, planPath: fixture.planPath, baseRef: 'main',
+        model: 'claude-opus-5-5', effort: 'high',
+      }],
+      driftRefPath: REFERENCE_PATHS['drift-check'],
+    });
+    assert.match(prompts[0], /<TICKET-CONTRACT path="\.planning\/phases\/38\/38-03-PLAN\.md"/);
+    assert.match(prompts[0], /# Repair plan/);
+    fs.rmSync(path.join(fixture.worktree, '.shipyard-drift-evidence.md'), { force: true });
+
+    await fixture.host.run('fix-round', fixture.args);
+    assert.match(fixture.prompts[0], /<TICKET-CONTRACT path="\.planning\/phases\/38\/38-03-PLAN\.md"/);
+  } finally {
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test('a Shipyard-shaped fixture (plan inside the worktree) leaves the drift-check prompt unchanged', async () => {
+  const fixture = repairFixture();
+  const inWorktreePlanPath = path.join(fixture.worktree, '.planning', 'phases', '38', '38-03-PLAN.md');
+  fs.mkdirSync(path.dirname(inWorktreePlanPath), { recursive: true });
+  fs.writeFileSync(inWorktreePlanPath, '# In-worktree plan\n');
+  const graph = JSON.parse(fs.readFileSync(path.join(fixture.graphDir, 'tickets.json'), 'utf8'));
+  graph.tickets['T-38-03'].plan = 'worktree/.planning/phases/38/38-03-PLAN.md';
+  fs.writeFileSync(path.join(fixture.graphDir, 'tickets.json'), JSON.stringify(graph));
+  const { host, prompts } = driftCapableHost(fixture);
+  try {
+    await host.run('drift-gate', {
+      tickets: [{
+        id: 'T-38-03', worktreePath: fixture.worktree, planPath: inWorktreePlanPath, baseRef: 'main',
+        model: 'claude-opus-5-5', effort: 'high',
+      }],
+      driftRefPath: REFERENCE_PATHS['drift-check'],
+    });
+    assert.ok(!prompts[0].includes('<TICKET-CONTRACT'));
+    assert.match(prompts[0], new RegExp(`Then read the ticket contract \\(plan file\\): ${inWorktreePlanPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
+  } finally {
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test('SHIPYARD_GRAPH_DIR pointing at an untracked graph copy in a non-main worktree refuses GRAPH_NOT_CANONICAL', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-claude-graph-copy-'));
+  const previousGraph = process.env.SHIPYARD_GRAPH_DIR;
+  try {
+    const repo = path.join(root, 'repo');
+    fs.mkdirSync(repo);
+    git(repo, 'init', '-q', '-b', 'main');
+    git(repo, 'config', 'user.name', 'Delivery Test');
+    git(repo, 'config', 'user.email', 'delivery@example.test');
+    fs.writeFileSync(path.join(repo, 'README.md'), 'x\n');
+    git(repo, 'add', '.');
+    git(repo, '-c', 'commit.gpgsign=false', 'commit', '-qm', 'base');
+    git(repo, 'branch', 'ticket/other');
+    const linked = path.join(root, 'linked');
+    git(repo, 'worktree', 'add', '-q', linked, 'ticket/other');
+    const copyGraphDir = path.join(linked, '.planning', 'graph');
+    fs.mkdirSync(copyGraphDir, { recursive: true });
+    fs.writeFileSync(path.join(copyGraphDir, 'tickets.json'), JSON.stringify({
+      tickets: { 'T-38-03': { branch: 'ticket/other', pr_base: 'main', files: ['src/file.js'] } },
+    }));
+    process.env.SHIPYARD_GRAPH_DIR = copyGraphDir;
+    const controller = owner(root, linked);
+    const host = createClaudeDeliveryHost({
+      controller,
+      runtimeHost: {
+        scope: { run_id: 'run-38-03', ticket: 'T-38-03', worktree: linked },
+        agent() { throw new Error('preflight must refuse before launch'); },
+        applicationEvidence() { throw new Error('preflight has no evidence'); },
+        capabilities: Object.freeze({ supportedModels: ['claude-opus-5-5'], supportedEfforts: ['low'], observedModel: true, observedEffort: true }),
+        recorder: createDurableRecorder(path.join(root, 'receipts')),
+      },
+    });
+    assert.throws(() => host.run('executors', { tickets: [{
+      id: 'T-38-03', branch: 'ticket/other', prBase: 'main', worktreePath: linked,
+    }] }), /an untracked graph copy inside a non-main worktree|canonical/);
+  } finally {
+    if (previousGraph === undefined) delete process.env.SHIPYARD_GRAPH_DIR;
+    else process.env.SHIPYARD_GRAPH_DIR = previousGraph;
+    fs.rmSync(root, { recursive: true, force: true });
   }
 });
 

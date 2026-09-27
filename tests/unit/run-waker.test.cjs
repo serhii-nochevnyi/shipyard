@@ -124,6 +124,25 @@ test('a foreign wake event cannot wake the selected run', async () => {
   }
 });
 
+test('a dispatch wake event is accepted and an unknown kind is still refused', () => {
+  const root = tempDir();
+  try {
+    const value = setup(root, 'run-a', 'T-37-06');
+    const event = waker.recordWakeEvent({
+      store_dir: value.storeDir, run_id: value.run.run_id, kind: 'dispatch',
+      event_id: 'deliver-dispatch:dd-1', reason: 'exited-ok',
+    });
+    assert.equal(event.recorded, true);
+    assert.equal(event.event.kind, 'dispatch');
+    assert.throws(
+      () => waker.recordWakeEvent({ store_dir: value.storeDir, run_id: value.run.run_id, kind: 'bogus' }),
+      (error) => error.code === 'INVALID_INPUT',
+    );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('bounded waiting returns a due run without spinning past its deadline', async () => {
   const root = tempDir();
   try {

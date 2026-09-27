@@ -88,6 +88,7 @@ const {
 } = require(path.join(__dirname, 'model-policy.cjs'));
 const { activeTrackerSnapshotLocked } = require(path.join(__dirname, 'tracker-record.cjs'));
 const runTelemetry = require(path.join(__dirname, 'run-telemetry.cjs'));
+const hostProvenance = require(path.join(__dirname, 'host-provenance.cjs'));
 
 // HOW LONG A DISPATCH MAY STAY SILENT — the backstop, not the main rule. It only
 // has to cover the longest stretch of REAL work that legitimately moves no
@@ -1457,7 +1458,122 @@ function activeDispatches(cwd = process.cwd(), state = null) {
         : { role: 'pr-sentinel', at: round.at, agent_id: agent, round_id: roundId, dispatch_id: roundId };
     }
   }
+  for (const [dispatchId, row] of Object.entries(roundObject(stored.inflight) ? stored.inflight : {})) {
+    if (!inflightRowLive(row, dispatchId, now)) continue;
+    if (out[row.ticket] || (ticketState[row.ticket] || {}).status === 'merged') continue;
+    out[row.ticket] = { role: row.role, at: row.started_at, dispatch_id: dispatchId, pid: row.pid, host: row.host };
+  }
   return out;
+}
+
+// @security: EPERM means the pid belongs to another user, so it is not this host and never counts as live.
+function pidLive(pid) {
+  if (!Number.isSafeInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+const INFLIGHT_TICKET = /^T-[A-Z0-9][A-Z0-9._-]*$/i;
+const INFLIGHT_TOKEN = /^[A-Za-z0-9._:-]{1,200}$/;
+
+function inflightRowLive(row, dispatchId, now = Date.now()) {
+  if (!roundObject(row) || row.dispatch_id !== dispatchId) return false;
+  if (typeof row.ticket !== 'string' || !INFLIGHT_TICKET.test(row.ticket)) return false;
+  if (typeof row.role !== 'string' || !INFLIGHT_TOKEN.test(row.role)) return false;
+  if (typeof row.host !== 'string' || !INFLIGHT_TOKEN.test(row.host)) return false;
+  const at = Date.parse(row.started_at || '');
+  if (!Number.isFinite(at) || now - at >= DISPATCH_TTL_MS || at - now > 60_000) return false;
+  return pidLive(row.pid);
+}
+
+function inflightCwd(input) {
+  if (!roundObject(input)) throw new Error('in-flight input must be an object');
+  if (typeof input.graphDir === 'string') {
+    if (!isCanonicalGraphDir(input.graphDir)) throw new Error('in-flight graphDir must be <project>/.planning/graph');
+    return path.dirname(path.dirname(path.resolve(input.graphDir)));
+  }
+  if (typeof input.cwd === 'string') return input.cwd;
+  throw new Error('in-flight input needs a graphDir');
+}
+
+function recordInflight(input) {
+  const cwd = inflightCwd(input);
+  const { ticket, role, dispatch_id: dispatchId, pid, host } = input;
+  if (typeof ticket !== 'string' || !INFLIGHT_TICKET.test(ticket)) throw new Error('in-flight ticket is invalid');
+  if (typeof role !== 'string' || !INFLIGHT_TOKEN.test(role)) throw new Error('in-flight role is invalid');
+  if (typeof host !== 'string' || !INFLIGHT_TOKEN.test(host)) throw new Error('in-flight host is invalid');
+  const issue = opaqueDispatchValueIssue(dispatchId);
+  if (issue) throw new Error(`in-flight dispatch id is invalid: ${issue}`);
+  if (!Number.isSafeInteger(pid) || pid <= 0) throw new Error('in-flight pid must be a positive integer');
+  const row = { ticket, role, dispatch_id: dispatchId, pid, host, started_at: new Date().toISOString() };
+  mutate(cwd, (store) => {
+    store.inflight = roundObject(store.inflight) ? store.inflight : {};
+    const existing = store.inflight[dispatchId];
+    if (existing && existing.pid !== pid && inflightRowLive(existing, dispatchId)) {
+      throw new Error(`in-flight dispatch id ${dispatchId} is held by another live process`);
+    }
+    store.inflight[dispatchId] = row;
+    return null;
+  }, undefined, true);
+  writeProvenanceOnce(graphDir(cwd), { dispatch_id: dispatchId, ticket, role, recorded_at: row.started_at });
+  refreshFront(cwd);
+  return Object.freeze({ ...row });
+}
+
+function provenanceFile(dir, dispatchId) {
+  const issue = opaqueDispatchValueIssue(dispatchId);
+  if (issue) throw new Error(`provenance dispatch id is invalid: ${issue}`);
+  return path.join(dir, 'provenance', `${dispatchId}.json`);
+}
+
+// @invariant: a provenance sidecar is written once per dispatch_id and never overwritten.
+function writeProvenanceOnce(dir, fields) {
+  const file = provenanceFile(dir, fields.dispatch_id);
+  if (fs.existsSync(file)) return false;
+  const stamp = hostProvenance.current({ pluginRoot: path.join(__dirname, '..') });
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const staged = `${file}.${process.pid}.${crypto.randomUUID()}.tmp`;
+  writeAtomic(staged, JSON.stringify({ ...stamp, ...fields }, null, 2) + '\n');
+  try {
+    fs.linkSync(staged, file);
+    return true;
+  } catch (error) {
+    if (error.code === 'EEXIST') return false;
+    throw error;
+  } finally {
+    try { fs.unlinkSync(staged); } catch {}
+  }
+}
+
+function readProvenance(dir, dispatchId) {
+  try {
+    return JSON.parse(fs.readFileSync(provenanceFile(dir, dispatchId), 'utf8'));
+  } catch (error) {
+    if (error.code === 'ENOENT') return null;
+    throw error;
+  }
+}
+
+function clearInflight(input) {
+  const cwd = inflightCwd(input);
+  const { dispatch_id: dispatchId, pid } = input;
+  const issue = opaqueDispatchValueIssue(dispatchId);
+  if (issue) throw new Error(`in-flight dispatch id is invalid: ${issue}`);
+  let cleared = false;
+  mutate(cwd, (store) => {
+    if (!roundObject(store.inflight)) return null;
+    const existing = store.inflight[dispatchId];
+    if (!existing || existing.pid !== pid) return null;
+    delete store.inflight[dispatchId];
+    cleared = true;
+    return null;
+  }, undefined, true);
+  if (cleared) refreshFront(cwd);
+  return cleared;
 }
 
 function reserveRound(cwd, input) {
@@ -1496,7 +1612,8 @@ function reserveRound(cwd, input) {
     const snapshot = strictRoundSnapshot(cwd);
     const members = roundMembersForSnapshot(snapshot.tickets, snapshot.state, phase, phaseNumber, ticketSet);
     const active = activeDispatches(cwd, snapshot.state);
-    const conflict = members.find((member) => active[member.ticket]);
+    const conflict = members.find((member) => active[member.ticket]
+      && active[member.ticket].dispatch_id !== dispatchId);
     if (conflict) throw new Error(`round ticket ${conflict.ticket} already has active dispatch ownership`);
     const at = new Date().toISOString();
     const reservation = {
@@ -1770,7 +1887,7 @@ function refreshFront(cwd) {
 
 module.exports = {
   activeDispatches, dispatchWhy, dispatchFingerprint, agentIdOf, reserveRound, recordRound, clearRound,
-  DISPATCH_SUBJECT, DISPATCH_TTL_MS,
+  recordInflight, clearInflight, readProvenance, DISPATCH_SUBJECT, DISPATCH_TTL_MS,
   MARK_FLAGS, MARK_FIELD, REFUSED_FLAGS, codexAgentFiles, agentFilesFor, agentRoleName,
   CODEX_DEEP_ROLES, CODEX_DEEP_SUFFIX, CODEX_CRITICAL_ROLES, CODEX_CRITICAL_SUFFIX,
   CODEX_AGENT_PREFIX, DISPATCH_RUNTIMES, DISPATCH_BACKENDS, newDispatchId,
