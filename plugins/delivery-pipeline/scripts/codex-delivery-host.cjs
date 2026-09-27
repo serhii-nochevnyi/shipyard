@@ -1270,7 +1270,9 @@ async function runCli(argv = process.argv.slice(2), stdout = process.stdout, opt
     }
     controller.complete(scope.run_id, {
       reason: request.role === 'executor' ? 'verified signed commit ' + result.artifact.commit
-        : 'verified dispatch receipt ' + result.receipt.dispatch_id,
+        : Array.isArray(result) ? 'sealed research lines ' + result.map((line) => line && line.id).join(', ')
+          : result && result.receipt ? 'verified dispatch receipt ' + result.receipt.dispatch_id
+            : 'research result ' + String(result && (result.status || result.code) || 'without a receipt'),
     });
   } catch (error) {
     clearInterval(heartbeat);

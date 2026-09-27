@@ -688,7 +688,28 @@ test('integrator and arch-review launch schemas declare the finding ticket contr
         },
         ticket_set_digest: { type: 'string' },
         head: { type: 'string' }, head_tree: { type: 'string' },
-        performed: { type: 'array' }, refused: { type: 'array' }, summary: { type: 'string' },
+        performed: { type: 'array', items: {
+          type: 'object', required: ['ticket', 'duty', 'status'],
+          properties: {
+            ticket: { type: 'string' },
+            duty: { type: 'string', enum: ['ci-fix', 'review-fix', 'base-merge', 'arch-review', 'undraft', 'merge',
+              'wait-ci', 'wait-parent', 'wait-human', 'parked', 'read-only-smoke'] },
+            status: { type: 'string', enum: ['complete', 'handed-back'] },
+            duty_id: { type: 'string' },
+          },
+        } },
+        refused: { type: 'array', items: {
+          type: 'object', required: ['ticket', 'duty', 'status', 'reason'],
+          properties: {
+            ticket: { type: 'string' },
+            duty: { type: 'string', enum: ['ci-fix', 'review-fix', 'base-merge', 'arch-review', 'undraft', 'merge',
+              'wait-ci', 'wait-parent', 'wait-human', 'parked', 'read-only-smoke'] },
+            status: { type: 'string', enum: ['refused'] },
+            reason: { type: 'string' },
+            duty_id: { type: 'string' },
+          },
+        } },
+        summary: { type: 'string' },
       },
       required: ['outcome', 'ticket_set', 'ticket_set_digest', 'head', 'head_tree', 'blocking_count'],
     });

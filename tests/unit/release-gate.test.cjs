@@ -41,6 +41,14 @@ test('both runtimes passing and fresh → ok', () => {
   assert.deepStrictEqual(result, { ok: true, missing: [], stale: [], failed: [] });
 });
 
+test('non-model stages such as push pass without a rung', () => {
+  const extra = [{ stage: 'push', ok: true, detail: '', requested: null, applied: null },
+    { stage: 'bootstrap', ok: true, detail: '', requested: null, applied: null }];
+  writeReceipt('t-push', 'claude', [...extra, ...stages()]);
+  writeReceipt('t-push', 'codex', [...extra, ...stages()]);
+  assert.deepStrictEqual(checkTree('t-push'), { ok: true, missing: [], stale: [], failed: [] });
+});
+
 test('one runtime missing → refused naming it', () => {
   writeReceipt('t-miss', 'claude', stages());
   const result = checkTree('t-miss');

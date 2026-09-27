@@ -42,7 +42,8 @@ function receiptFailures(receipt) {
   for (const stage of stages) {
     const name = stage && stage.stage;
     if (!stage || stage.ok !== true) reasons.push(`stage ${name} not ok`);
-    else if (rungKey(stage.requested) === null || rungKey(stage.requested) !== rungKey(stage.applied)) {
+    else if (REQUIRED_STAGES.includes(name)
+      && (rungKey(stage.requested) === null || rungKey(stage.requested) !== rungKey(stage.applied))) {
       reasons.push(`stage ${name} applied rung differs from requested`);
     }
   }

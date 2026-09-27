@@ -4,6 +4,7 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { claudeGsdAgentDirectory } = require('./gsd-agent-root.cjs');
 const { spawn, spawnSync } = require('node:child_process');
 const { CLAUDE_MODEL_ALIASES } = require('./runtime-adapters.cjs');
 const { createDurableRecorder } = require('./dispatch-boundary.cjs');
@@ -369,7 +370,7 @@ function gsdAgentDefinition(role, environment, configuredRoot) {
   const home = environment.HOME || os.homedir();
   const config = environment.CLAUDE_CONFIG_DIR || process.env.CLAUDE_CONFIG_DIR || path.join(home, '.claude');
   const expanded = config.startsWith('~/') ? path.join(home, config.slice(2)) : config;
-  const directory = path.resolve(configuredRoot || path.join(expanded, 'agents'));
+  const directory = path.resolve(configuredRoot || claudeGsdAgentDirectory(path.resolve(expanded), role));
   const file = path.join(directory, `${role}.md`);
   let parent;
   let stat;
