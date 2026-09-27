@@ -22,7 +22,7 @@ esac
 version="$(node -e 'process.stdout.write(String(require(process.argv[1]).version))' "$ROOT/plugins/delivery-pipeline/.claude-plugin/plugin.json")"
 tree_sha="$(git -C "$ROOT" rev-parse 'HEAD^{tree}')"
 head_sha="$(git -C "$ROOT" rev-parse HEAD)"
-work="$(mktemp -d "${TMPDIR:-/tmp}/shipyard-live.XXXXXX")"
+work="$(cd "$(mktemp -d "${TMPDIR:-/tmp}/shipyard-live.XXXXXX")" && pwd -P)"
 stages_file="$work/stages.jsonl"
 project="$work/project"
 : > "$stages_file"
@@ -124,27 +124,94 @@ printf '.planning/\n' >> "$project/.git-info-exclude"
 ) || fail_stage push "could not push the fixture to $repo"
 stage_json push true "pushed fixture to $repo" "" "" null null
 
+host_request() {
+  KIND="$1" RUNTIME="$runtime" PROJECT="$project" node -e '
+    const path = require("path");
+    const crypto = require("crypto");
+    const fs = require("fs");
+    const { execFileSync } = require("child_process");
+    const scripts = process.argv[1];
+    const { KIND: kind, RUNTIME: runtime, PROJECT: project } = process.env;
+    const policy = require(path.join(scripts, "model-policy.cjs"));
+    const git = (...args) => execFileSync("git", ["-C", project, ...args], { encoding: "utf8" }).trim();
+    const adr = ".planning/architecture/ADR-001-greeting-formats.md";
+    const invId = "INV-001-greeting-formats";
+    const invPath = path.join(project, ".planning", "investigations", invId);
+    const artifactRoot = path.join(invPath, "research");
+    const lines = ["system-state", "alternatives", "constraints", "risks"];
+    const labels = { "system-state": "system state", alternatives: "alternatives", constraints: "constraints", risks: "risks and unknowns" };
+    const problem = "Research how to implement the accepted ADR " + adr + " in this project.";
+    const plannerPrompt = "Decompose the accepted ADR " + adr + " into phase 1 plans under .planning/phases/."
+      + " Research findings: " + path.relative(project, artifactRoot) + "/*.md.";
+    const sourceRevision = git("rev-parse", "HEAD");
+    const repository = fs.realpathSync(git("rev-parse", "--path-format=absolute", "--git-common-dir"));
+    const codexScope = { run_id: "live-" + crypto.randomUUID(), ticket: "T-01-00", phase: 1, worktree: project, runtime: "codex", provider: "openai" };
+    let request;
+    if (kind === "research" && runtime === "claude") {
+      const claudeHost = require(path.join(scripts, "claude-delivery-host.cjs"));
+      const pipelineConfig = require(path.join(scripts, "pipeline-config.cjs"));
+      fs.mkdirSync(artifactRoot, { recursive: true });
+      request = {
+        schema: claudeHost.REQUEST_SCHEMA,
+        scope: { run_id: "live-" + crypto.randomUUID(), ticket: invId, phase: 1, worktree: project },
+        args: {
+          invId, invPath, problemStatement: problem, referencePath: "inv-research",
+          artifactContract: "planning.v1", worktreePath: project, artifactRoot, sourceRevision, repository,
+          policyHash: policy.POLICY_HASH,
+          artifactPaths: Object.fromEntries(lines.map((id) => [id, path.join(artifactRoot, id + ".md")])),
+          lines: lines.map((id) => {
+            const r = pipelineConfig.resolveDispatch({ root: project, runtime: "claude", role: "research", signals: {}, dispatch_id: "live-" + id });
+            return { id, label: labels[id], model: r.model, effort: r.effort, signals: {} };
+          }),
+        },
+      };
+      claudeHost.validateRequest("investigation-research", request);
+    } else if (kind === "research") {
+      const codexHost = require(path.join(scripts, "codex-delivery-host.cjs"));
+      request = {
+        scope: codexScope,
+        role: "research",
+        signals: {},
+        context: {
+          prompt: problem,
+          investigation: { invId, sourceRevision, repository, policyHash: policy.POLICY_HASH, lines: lines.map((id) => ({ id })) },
+        },
+      };
+      codexHost.validateArgs({ role: request.role, signals: request.signals, context: request.context });
+    } else if (runtime === "claude") {
+      request = { role: "gsd-planner", phase: 1, worktree: project, prompt: plannerPrompt, signals: {} };
+      require(path.join(scripts, "claude-decompose-host.cjs")).canonicalRequest(request);
+    } else {
+      request = { scope: codexScope, gsd_role: "gsd-planner", prompt: plannerPrompt, signals: {} };
+      require(path.join(scripts, "codex-decompose-host.cjs")).requestValue({ gsd_role: request.gsd_role, prompt: request.prompt, signals: request.signals });
+    }
+    process.stdout.write(JSON.stringify(request));
+  ' "$SCRIPTS" > "$work/$1.request.json"
+}
+
 research_out="$work/research.jsonl"
+host_request research 2>"$work/research.log" || fail_stage research "research request rejected by the host contract (see $work/research.log)" "" "research"
 (
   cd "$project"
   if [ "$runtime" = "claude" ]; then
-    node "$SCRIPTS/claude-investigation-host.cjs" --request-file <(printf '{"worktree":"%s","adr":".planning/architecture/ADR-001-greeting-formats.md"}' "$project")
+    node "$SCRIPTS/claude-investigation-host.cjs" --request-file "$work/research.request.json"
   else
-    node "$SCRIPTS/codex-delivery-host.cjs" --args-file <(printf '{"scope":{"worktree":"%s","runtime":"codex","provider":"openai"},"role":"investigation-researcher","signals":{},"context":{}}' "$project")
+    node "$SCRIPTS/codex-delivery-host.cjs" --args-file "$work/research.request.json"
   fi
-) > "$research_out" 2>"$work/research.log" || fail_stage research "research host failed (see $work/research.log)" "" "researcher"
-record_rung_stage research researcher "" "$(cat "$research_out")"
+) > "$research_out" 2>"$work/research.log" || fail_stage research "research host failed (see $work/research.log)" "" "research"
+record_rung_stage research research "" "$(cat "$research_out")"
 
 decompose_out="$work/decompose.jsonl"
+host_request decompose 2>"$work/decompose.log" || fail_stage decompose "decompose request rejected by the host contract (see $work/decompose.log)" "" "decomposition"
 (
   cd "$project"
   if [ "$runtime" = "claude" ]; then
-    node "$SCRIPTS/claude-decompose-host.cjs" --request-file <(printf '{"worktree":"%s","research":"%s"}' "$project" "$research_out")
+    node "$SCRIPTS/claude-decompose-host.cjs" --request-file "$work/decompose.request.json"
   else
-    node "$SCRIPTS/codex-decompose-host.cjs" --args-file <(printf '{"worktree":"%s","research":"%s"}' "$project" "$research_out")
+    node "$SCRIPTS/codex-decompose-host.cjs" --args-file "$work/decompose.request.json"
   fi
-) > "$decompose_out" 2>"$work/decompose.log" || fail_stage decompose "decompose host failed (see $work/decompose.log)" "" "planner"
-record_rung_stage decompose planner "" "$(cat "$decompose_out")"
+) > "$decompose_out" 2>"$work/decompose.log" || fail_stage decompose "decompose host failed (see $work/decompose.log)" "" "decomposition"
+record_rung_stage decompose decomposition "" "$(cat "$decompose_out")"
 
 graph_dir="$project/.planning/graph"
 ticket="$(node -e '
