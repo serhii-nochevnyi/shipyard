@@ -100,6 +100,29 @@ test('the executor path is the entry point, not a hand-assembled args/request li
   );
 });
 
+suite('deliver.md: the PR sentinel goes through the entry point, not a hand-written request');
+
+test('no instruction writes a sentinel request file or runs claude-role-host.cjs by hand', () => {
+  assert.doesNotMatch(text, /write that request/i, 'the sentinel request must be written by the entry point');
+  assert.doesNotMatch(
+    text,
+    /scripts\/claude-role-host\.cjs --args-file/,
+    'the sentinel host must be started by deliver-dispatch.cjs launch'
+  );
+});
+
+test('the executor and PR-sentinel runtime rows name deliver-dispatch.cjs launch', () => {
+  for (const label of ['Executor', 'PR sentinel']) {
+    const row = lines.find((line) => line.startsWith(`| ${label} |`));
+    assert.ok(row, `runtime table has no ${label} row`);
+    const cells = row.split(' | ').slice(1);
+    assert.ok(cells.length >= 2, `${label} row lacks runtime columns`);
+    for (const cell of cells) {
+      assert.match(cell, /deliver-dispatch\.cjs launch/, `${label} row cell does not route through the entry point: ${cell}`);
+    }
+  }
+});
+
 suite('deliver.md: every scripts/<name>.cjs path it names exists');
 
 test('every named script exists under plugins/delivery-pipeline/scripts', () => {

@@ -288,29 +288,26 @@ SENTINEL    ci-fix / base-merge / review-fix / arch-review / undraft / merge
 
 **Post the guard, then keep moving. Never wait for it.**
 
-- **Background sentinel.** After Step 3 publishes PRs, run the selected
-  runtime's shipped host. Claude runs one phase-scoped
-  `claude-role-host.cjs` request; it derives the live PR set from the canonical
-  graph and GitHub, resolves Sonnet/high through ADR-014, and reserves one
-  authenticated round before starting the model. Do not construct a
-  caller-owned member list or call native Workflow for this shared role:
-
-  ```json
-  {"schema":"shipyard.claude-role-request.v1","role":"pr-sentinel","worktree":"<absolute project worktree>","phase":"<phase directory>"}
-  ```
-
-  Write that request to a mode-0600 args file and run
-  `node ${CLAUDE_PLUGIN_ROOT}/scripts/claude-role-host.cjs --args-file <args-file>`
-  in the background. The boundary receipt and complete transcript are validated
+- **Background sentinel.** After Step 3 publishes PRs, launch the guard through
+  the dispatch entry point (Step 4):
+  `node ${CLAUDE_PLUGIN_ROOT}/scripts/deliver-dispatch.cjs launch --runtime <r> --ticket <T> --role pr-sentinel`.
+  The entry point runs the sentinel preflight first and then starts the selected
+  runtime's host itself. For Claude that is one phase-scoped
+  `claude-role-host.cjs` round; the host derives the live PR set from the
+  canonical graph and GitHub, resolves Sonnet/high through ADR-014, and reserves
+  one authenticated round before starting the model. Do not construct a
+  caller-owned member list, write a request file, or call native Workflow for
+  this shared role. The boundary receipt and complete transcript are validated
   before the reservation becomes one durable round row. The front projects that
   one guard to each unchanged member and counts it once. Clear the exact returned
   `round.dispatch_id` with `dispatch-record.cjs clear-round` when the report
   returns. A changed or merged member expires independently; a new PR belongs to
   a fresh round.
 
-  Codex runs one `codex-delivery-host.cjs` request per guarded ticket with
-  `role: "pr-sentinel"`. The host resolves Luna/medium, applies the generated
-  role file, and returns a verified receipt; record each returned dispatch id
+  For Codex, run the same `deliver-dispatch.cjs launch --runtime codex --ticket <T> --role pr-sentinel`
+  once per guarded ticket; the entry point starts `codex-delivery-host.cjs` with
+  `role: "pr-sentinel"`, and the host resolves Luna/medium, applies the generated
+  role file, and returns a verified receipt. Record each returned dispatch id
   against that ticket. Codex has no shared round-membership bridge, so do not
   label separate ticket receipts as one round. A missing host, explicit
   selection, or verified receipt is a refusal, not permission to launch a
@@ -1179,11 +1176,12 @@ fixed for the run and route every model-bearing role through its shipped host:
 
 | Role family | Claude entrypoint | Codex entrypoint |
 | --- | --- | --- |
-| Delivery, repair, drift | `claude-delivery-host.cjs --workflow <executors|fix-round|drift-gate> --request-file <json>` | `codex-delivery-host.cjs --args-file <json>` with the typed role |
+| Executor | `deliver-dispatch.cjs launch --runtime claude --ticket <T> --role executor` (internally `claude-delivery-host.cjs --workflow executors`) | `deliver-dispatch.cjs launch --runtime codex --ticket <T> --role executor` (internally `codex-delivery-host.cjs`) |
+| Repair, drift | `claude-delivery-host.cjs --workflow <fix-round|drift-gate> --request-file <json>` | `codex-delivery-host.cjs --args-file <json>` with the typed role |
 | Investigation | `claude-investigation-host.cjs --request-file <json>` | `codex-delivery-host.cjs --args-file <json>` with `role: research` |
 | Typed GSD decomposition | `claude-decompose-host.cjs --request-file <json>` | `codex-decompose-host.cjs --args-file <json>` |
 | Architecture review and integration | `claude-role-host.cjs --args-file <json>` | `codex-delivery-host.cjs --args-file <json>` with the typed role |
-| PR sentinel | `claude-role-host.cjs --args-file <json>` with one authenticated round | `codex-delivery-host.cjs --args-file <json>` once per ticket with `role: pr-sentinel` |
+| PR sentinel | `deliver-dispatch.cjs launch --runtime claude --ticket <T> --role pr-sentinel` (internally `claude-role-host.cjs`, one authenticated round) | `deliver-dispatch.cjs launch --runtime codex --ticket <T> --role pr-sentinel` (internally `codex-delivery-host.cjs`, once per ticket) |
 
 Every request carries only bounded scope, role signals, and task context. The
 host resolves model and effort; callers must not add selector output or
@@ -2154,9 +2152,10 @@ guard reports, clear only its returned id with
 opened after launch belongs to a fresh round; the host refuses a result if the
 round's membership changed before it was reconciled.
 
-Codex uses `codex-delivery-host.cjs` once per guarded ticket with
-`role: "pr-sentinel"`, explicit Luna/medium selection evidence, and a
-concrete application receipt. Do not substitute `unsupported`, `unknown`, or
+For Codex, run `deliver-dispatch.cjs launch --runtime codex --ticket <T> --role pr-sentinel`
+once per guarded ticket; after the same preflight, the entry point starts
+`codex-delivery-host.cjs` with `role: "pr-sentinel"`, and the host requires
+explicit Luna/medium selection evidence and a concrete application receipt. Do not substitute `unsupported`, `unknown`, or
 an omitted effort when the selected host cannot apply the configured level;
 refuse that launch before recording it. Record each returned dispatch id through the
 validated ticket-mark path; do not create a shared round row or clear-round
