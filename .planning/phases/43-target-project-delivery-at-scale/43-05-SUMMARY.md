@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 1218239d5a422394f94e0d3b867b355699a98a05c9f7a71c159815c914c8dad4
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 26c35f42e94b2b94ae785f3196134fd1ad7cfc85d61b96b6f81f7592c5151e53
 phase: 43-target-project-delivery-at-scale
 plan: 05
 subsystem: shipyard delivery
@@ -22,7 +22,7 @@ key-decisions:
 duration: 0min
 status: halted
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 1218239d5a422394f94e0d3b867b355699a98a05c9f7a71c159815c914c8dad4
+shipyard_source_fingerprint: 26c35f42e94b2b94ae785f3196134fd1ad7cfc85d61b96b6f81f7592c5151e53
 ---
 
 # Phase 43: Keep an arch-review finding of unknown type as an informational note that never changes the verdict — Delivery Projection
