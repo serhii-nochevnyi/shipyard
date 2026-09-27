@@ -396,6 +396,17 @@ function stubGh() {
     // that repository for its default branch.
     '  "repo view "*"defaultBranchRef"*) echo "${STUB_DEFAULT_BRANCH:-main}" ;;',
     '  "api graphql"*) echo \'{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}\' ;;',
+    '  "api repos/"*"/contents/"*)',
+    '    case "$argv" in',
+    '      *"/contents/src?ref=$STUB_HEAD_OID"*) echo "$STUB_HEAD_CONTENTS" ;;',
+    '      *"/contents/src?ref=epic%2F24-x"*) echo "$STUB_EPIC_CONTENTS" ;;',
+    '      *"/contents/src/file.txt?ref=$STUB_HEAD_OID"*)',
+    '        if [ -n "${STUB_HEAD_FILE:-}" ]; then echo "$STUB_HEAD_FILE"; else echo "gh: HTTP 404: Not Found" >&2; exit 1; fi ;;',
+    '      *"/contents/src/file.txt?ref=epic%2F24-x"*)',
+    '        if [ -n "${STUB_EPIC_FILE:-}" ]; then echo "$STUB_EPIC_FILE"; else echo "gh: HTTP 404: Not Found" >&2; exit 1; fi ;;',
+    '      *) echo "gh: HTTP 404: Not Found" >&2; exit 1 ;;',
+    '    esac ;;',
+    '  "api repos/"*"/git/trees/"*) echo "$STUB_TREE_JSON" ;;',
     // The compare endpoint is repo-QUALIFIED now (`repos/<owner>/<name>/…`), so
     // the pattern must not name the `{owner}/{repo}` placeholders. STUB_COMPARE_FAIL
     // is the "gh could not answer" case, which must refuse rather than pass.
@@ -1469,6 +1480,168 @@ test('when the live query fails the cached board is used, and the result says so
   );
   // A silent fallback is how a stale base becomes a person's problem.
   assert.ok((r.retarget_warnings || []).some((w) => /T-C/.test(w)), JSON.stringify(r.retarget_warnings));
+});
+
+suite('epic reachability reads only declared paths');
+
+function reachabilityRoot(files) {
+  const ticket = {
+    repo: 'acme/demo', phase: 43, branch: 'ticket/T-43-04', epic: 'epic/24-x', files,
+  };
+  const stateRow = {
+    ...openGreen(9, 'ticket/T-43-04', 'epic/24-x'), epic: 'epic/24-x', repo: 'acme/demo',
+  };
+  const root = project({ tickets: { 'T-43-04': ticket }, state: { 'T-43-04': stateRow }, config: epicConfig });
+  const configFile = path.join(root, '.planning', 'config.json');
+  const config = JSON.parse(fs.readFileSync(configFile, 'utf8'));
+  config.pipeline.repos = { 'acme/demo': path.join(root, 'not-checked-out') };
+  fs.writeFileSync(configFile, JSON.stringify(config));
+  return root;
+}
+
+function gitIn(cwd, args) {
+  return execFileSync('git', args, {
+    cwd,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+    env: { ...process.env, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null' },
+  }).trim();
+}
+
+function writeIn(root, relative, value) {
+  const file = path.join(root, relative);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, value);
+}
+
+function reachabilityEnv(log, extra = {}) {
+  return onPath(stubGh(), {
+    STUB_BASE: 'epic/24-x', STUB_HEAD: 'ticket/T-43-04', STUB_PR: '9',
+    STUB_HEAD_OID: '0123456789012345678901234567890123456789',
+    STUB_TRAILER_HEAD: '0123456789012345678901234567890123456789',
+    STUB_LOG: log,
+    ...extra,
+  });
+}
+
+test('a local checkout compares declared blobs even when unrelated blobs differ', () => {
+  const root = project({
+    tickets: { 'T-43-04': { repo: 'acme/demo', phase: 43, branch: 'ticket/T-43-04', epic: 'epic/24-x', files: ['src/declared.txt'] } },
+    state: { 'T-43-04': { ...openGreen(9, 'ticket/T-43-04', 'epic/24-x'), epic: 'epic/24-x', repo: 'acme/demo' } },
+    config: epicConfig,
+  });
+  const checkout = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-sentinel-checkout-'));
+  const origin = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-sentinel-origin-'));
+  roots.push(checkout, origin);
+  gitIn(origin, ['init', '--bare', '-q']);
+  gitIn(checkout, ['init', '-q', '-b', 'main']);
+  gitIn(checkout, ['config', 'user.email', 'sentinel@example.com']);
+  gitIn(checkout, ['config', 'user.name', 'Sentinel']);
+  gitIn(checkout, ['remote', 'add', 'origin', origin]);
+  writeIn(checkout, 'src/declared.txt', 'same declared blob\n');
+  writeIn(checkout, 'outside.txt', 'base blob\n');
+  gitIn(checkout, ['add', 'src/declared.txt', 'outside.txt']);
+  gitIn(checkout, ['commit', '-qm', 'base']);
+  gitIn(checkout, ['branch', 'epic/24-x']);
+  gitIn(checkout, ['checkout', '-q', 'epic/24-x']);
+  writeIn(checkout, 'outside.txt', 'epic-only blob\n');
+  gitIn(checkout, ['add', 'outside.txt']);
+  gitIn(checkout, ['commit', '-qm', 'epic change']);
+  gitIn(checkout, ['checkout', '-q', 'main']);
+  writeIn(checkout, 'outside.txt', 'head-only blob\n');
+  gitIn(checkout, ['add', 'outside.txt']);
+  gitIn(checkout, ['commit', '-qm', 'head change']);
+  gitIn(checkout, ['push', '-q', 'origin', 'main', 'epic/24-x']);
+  const headSha = gitIn(checkout, ['rev-parse', 'HEAD']);
+  const configFile = path.join(root, '.planning', 'config.json');
+  const config = JSON.parse(fs.readFileSync(configFile, 'utf8'));
+  config.pipeline.repos = { 'acme/demo': checkout };
+  fs.writeFileSync(configFile, JSON.stringify(config));
+  const log = logFile('reachability-local');
+  const r = JSON.parse(run(root, ['merge', 'T-43-04', '--json'], {
+    env: reachabilityEnv(log, { STUB_HEAD_OID: headSha, STUB_TRAILER_HEAD: headSha }),
+  }).stdout).results[0];
+  assert.strictEqual(r.merged, true, (r.blockers || []).join('; '));
+  assert.strictEqual(r.reachability.ok, true, r.reachability.why);
+  assert.strictEqual(r.reachability.checked, 1);
+  assert.ok(!callsIn(log).some((call) => call.includes('/contents/') || call.includes('/git/trees/')), callsIn(log).join('\n'));
+});
+
+test('a truncated path-scoped API tree returns unknown and never requests the full tree', () => {
+  const root = reachabilityRoot(['src']);
+  const log = logFile('reachability-truncated');
+  const headOid = '0123456789012345678901234567890123456789';
+  const r = JSON.parse(run(root, ['merge', 'T-43-04', '--json'], {
+    env: reachabilityEnv(log, {
+      STUB_HEAD_OID: headOid,
+      STUB_TRAILER_HEAD: headOid,
+      STUB_HEAD_CONTENTS: '[{"path":"src/nested","type":"dir","sha":"tree-src-nested"}]',
+      STUB_TREE_JSON: '{"tree":[],"truncated":true}',
+    }),
+  }).stdout).results[0];
+  assert.strictEqual(r.merged, true, (r.blockers || []).join('; '));
+  assert.strictEqual(r.reachability.ok, null);
+  assert.match(r.reachability.why, /truncated listing/);
+  const calls = callsIn(log);
+  assert.ok(!calls.some((call) => /\/git\/trees\/.*\?recursive=1/.test(call)), calls.join('\n'));
+});
+
+test('the API fallback resolves a glob from its literal prefix directory', () => {
+  const root = reachabilityRoot(['src/*.txt']);
+  const log = logFile('reachability-api-glob');
+  const headOid = '0123456789012345678901234567890123456789';
+  const entries = '[{"name":"file.txt","path":"src/file.txt","type":"file","sha":"blob-same"}]';
+  const r = JSON.parse(run(root, ['merge', 'T-43-04', '--json'], {
+    env: reachabilityEnv(log, {
+      STUB_HEAD_OID: headOid,
+      STUB_TRAILER_HEAD: headOid,
+      STUB_HEAD_CONTENTS: entries,
+      STUB_EPIC_CONTENTS: entries,
+    }),
+  }).stdout).results[0];
+  assert.strictEqual(r.merged, true, (r.blockers || []).join('; '));
+  assert.strictEqual(r.reachability.ok, true, r.reachability.why);
+  assert.strictEqual(r.reachability.checked, 1);
+  const calls = callsIn(log);
+  assert.ok(calls.some((call) => /\/contents\/src\?ref=/.test(call)), calls.join('\n'));
+  assert.ok(!calls.some((call) => /\/git\/trees\/.*\?recursive=1/.test(call)), calls.join('\n'));
+});
+
+test('a declared path missing from the epic is reported as absent', () => {
+  const root = reachabilityRoot(['src/file.txt']);
+  const log = logFile('reachability-absent');
+  const headOid = '0123456789012345678901234567890123456789';
+  const r = JSON.parse(run(root, ['merge', 'T-43-04', '--json'], {
+    env: reachabilityEnv(log, {
+      STUB_HEAD_OID: headOid,
+      STUB_TRAILER_HEAD: headOid,
+      STUB_HEAD_FILE: '{"path":"src/file.txt","type":"file","sha":"blob-head"}',
+    }),
+  }).stdout).results[0];
+  assert.strictEqual(r.merged, true, (r.blockers || []).join('; '));
+  assert.strictEqual(r.reachability.ok, false);
+  assert.deepStrictEqual(r.reachability.unreachable.map((row) => [row.path, row.why]), [
+    ['src/file.txt', 'absent from the epic'],
+  ]);
+  assert.ok(!callsIn(log).some((call) => /\/git\/trees\/.*\?recursive=1/.test(call)), callsIn(log).join('\n'));
+});
+
+test('a declared deletion is compared as absent from the merged head', () => {
+  const root = reachabilityRoot(['src/file.txt']);
+  const log = logFile('reachability-head-absent');
+  const headOid = '0123456789012345678901234567890123456789';
+  const r = JSON.parse(run(root, ['merge', 'T-43-04', '--json'], {
+    env: reachabilityEnv(log, {
+      STUB_HEAD_OID: headOid,
+      STUB_TRAILER_HEAD: headOid,
+      STUB_EPIC_FILE: '{"path":"src/file.txt","type":"file","sha":"blob-epic"}',
+    }),
+  }).stdout).results[0];
+  assert.strictEqual(r.merged, true, (r.blockers || []).join('; '));
+  assert.strictEqual(r.reachability.ok, false);
+  assert.deepStrictEqual(r.reachability.unreachable.map((row) => [row.path, row.why]), [
+    ['src/file.txt', 'absent from the merged head'],
+  ]);
 });
 
 suite('duty — a CHANGES_REQUESTED nobody can service belongs to a person');
