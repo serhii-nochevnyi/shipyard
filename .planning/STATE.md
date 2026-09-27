@@ -1,9 +1,9 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 552ad558504577c1e35524c4011fd240e308db0d0649357c3b1705aa05e3770c
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: fab2a66735b69019493182dfc9db84b35e173709d358fd1fb1bc0aff48195c1d
 gsd_state_version: '1.0'
 status: planning
 progress:
-  total_phases: 24
+  total_phases: 26
   completed_phases: 10
   total_plans: 221
   completed_plans: 176
@@ -21,7 +21,7 @@ See: .planning/PROJECT.md (updated by Shipyard GSD synchronization)
 
 ## Current Position
 
-Phase: 1 of 24 (Phase 20: Autonomy of the drive-to-green loop)
+Phase: 1 of 26 (Phase 20: Autonomy of the drive-to-green loop)
 Plan: 6 of 6 merged
 Status: pending
 Last activity: 2026-09-26 — Shipyard projection synchronized
@@ -62,6 +62,8 @@ Progress: [███████░░░] 79%
 | 41 | 9 | 9 | gaps_found |
 | 42 | 3 | 3 | gaps_found |
 | 43 | 19 | 1 | pending |
+| 44 | 0 | 0 | pending |
+| 45 | 0 | 0 | pending |
 
 ## Accumulated Context
 
