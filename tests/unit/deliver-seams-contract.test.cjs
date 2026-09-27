@@ -49,10 +49,6 @@ test('no `signals: { … }` object literal lists a bare `type` key', () => {
   const re = /signals:\s*\{([\s\S]*?)\}/g;
   let m;
   while ((m = re.exec(text))) {
-    // A bare `type` shorthand property — the ticket's own D-27 type, forwarded
-    // verbatim — is the INV-004 defect this test exists to keep fixed. A
-    // `type: <value>` assignment (the research `facts`/`alternatives` signal)
-    // is a different, legitimate shape: the negative lookahead excludes it.
     if (/\btype\b(?!\s*:)/.test(m[1])) offenders.push(m[0]);
   }
   assert.deepStrictEqual(offenders, [], `a signals object still lists a bare ticket type:\n${offenders.join('\n---\n')}`);
