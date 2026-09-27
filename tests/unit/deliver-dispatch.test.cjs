@@ -184,6 +184,36 @@ test('D-43: a Shipyard-shaped fixture resolves the worktree graph and plan exact
   }
 });
 
+test('an explicit canonical project graph overrides stale ticket-branch state', async () => {
+  const fixture = shipyardFixture();
+  const linked = path.join(fixture.root, '..', `${path.basename(fixture.root)}-ticket`);
+  try {
+    git(fixture.root, 'branch', ticketRow().branch);
+    git(fixture.root, 'worktree', 'add', '-q', linked, ticketRow().branch);
+    writeJson(path.join(linked, '.planning', 'graph', 'delivery-state.json'), {
+      [fixture.id]: { ready: false },
+    });
+    commitAll(linked, 'ticket: retain an older board');
+    let captured;
+    await deliverDispatch.launch([
+      '--runtime', 'claude', '--ticket', fixture.id, '--role', 'executor', '--graph-dir', fixture.graphDir,
+    ], {
+      cwd: linked,
+      stateDir: sharedStateDir,
+      spawn(command, spawnArgs) {
+        captured = JSON.parse(fs.readFileSync(spawnArgs[spawnArgs.indexOf('--request-file') + 1], 'utf8'));
+        return { pid: 999999, unref() {}, on() {} };
+      },
+    });
+    assert.equal(captured.args.tickets[0].worktreePath, fs.realpathSync(linked));
+    assert.equal(captured.args.tickets[0].planPath,
+      path.join(fs.realpathSync(fixture.root), ticketRow().plan));
+  } finally {
+    try { git(fixture.root, 'worktree', 'remove', '--force', linked); } catch {}
+    cleanup(fixture.root, linked);
+  }
+});
+
 test('D-43: a target-project fixture resolves the project graph, and its packet has no .planning ref', async () => {
   const fixture = targetProjectFixture();
   try {
