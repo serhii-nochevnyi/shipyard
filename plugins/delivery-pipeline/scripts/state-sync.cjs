@@ -155,6 +155,7 @@ function observationProjection(state) {
 // cannot know this, and a front that keeps re-offering an escalated PR is an
 // infinite babysit loop — so the caller passes them in.
 const argv = process.argv.slice(2);
+const FULL_SYNC = argv.includes('--full');
 const parkedArg = argv.indexOf('--parked');
 const RUN_PARKED = parkedArg === -1
   ? []
@@ -166,6 +167,18 @@ const RUN_PARKED = parkedArg === -1
 // it and a second, open-only pass fills it in (a handful of rows, ~1s). state-sync
 // runs on every babysit round, so its wall time is the conveyor's tick rate.
 const PR_FIELDS = 'number,state,isDraft,headRefName,headRefOid,baseRefName,mergedAt,createdAt,url,title';
+const FULL_PR_FIELDS = `${PR_FIELDS},mergeCommit`;
+const PR_LOOKUP_FIELDS = `${PR_FIELDS},mergeCommit,reviewDecision,body,mergeStateStatus`;
+
+function validMergeSha(value) {
+  return typeof value === 'string' && /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(value);
+}
+
+function mergeShaOf(pr) {
+  const commit = pr && pr.mergeCommit;
+  const oid = commit && typeof commit === 'object' ? commit.oid : null;
+  return validMergeSha(oid) ? oid : null;
+}
 // `headRefOid` is one scalar and carries none of the reviewDecision cost: it is
 // the head the `gate_status:` trailer is bound to, so without it the board can
 // read a conform verdict and not know it was rendered against a diff that has
@@ -364,6 +377,13 @@ let prev = {};
 if (fs.existsSync(STATE)) {
   try { prev = JSON.parse(fs.readFileSync(STATE, 'utf8')); } catch { prev = {}; }
 }
+let previousFront = {};
+if (fs.existsSync(FRONT)) {
+  try {
+    const saved = JSON.parse(fs.readFileSync(FRONT, 'utf8'));
+    if (saved && typeof saved === 'object' && !Array.isArray(saved)) previousFront = saved;
+  } catch { previousFront = {}; }
+}
 const nowIso = new Date().toISOString();
 // When THIS run started READING GitHub — which is the only timestamp that can
 // decide who gets to publish. Two syncs run concurrently by design (the main loop
@@ -452,19 +472,25 @@ if (!REPO_IDS.includes(null)) REPO_IDS.unshift(null); // the project's own repo 
 
 const repoArg = (repo) => (repo ? ['--repo', repo] : []);
 const apiBase = (repo) => (repo ? `repos/${repo}` : 'repos/{owner}/{repo}');
+const listingStats = { listedOpen: 0, lookedUp: 0, skippedLanded: 0 };
 
 function loadRepo(repo) {
   const label = repo || 'this repo';
   // A foreign repo can be unreachable (no access, a typo in delivery.repo). That
   // must NOT abort the sync: the rest of the graph is still deliverable, so the
   // repo is marked unavailable and its tickets are parked with that reason.
-  const listed = gh(['pr', 'list', ...repoArg(repo), '--state', 'all', '--limit', String(cfg.pr_fetch_limit), '--json', PR_FIELDS], { tolerate: !!repo });
+  const listed = gh(
+    ['pr', 'list', ...repoArg(repo), '--state', FULL_SYNC ? 'all' : 'open', '--limit', String(cfg.pr_fetch_limit), '--json', FULL_SYNC ? FULL_PR_FIELDS : PR_FIELDS],
+    { tolerate: !!repo || !FULL_SYNC }
+  );
   if (repo && listed == null) {
     notices.push(`repo ${label} is not reachable through gh — its tickets are parked as external; check access or the delivery.repo slug`);
-    return { repo, available: false, prs: [], branches: new Set(), truncated: false, defaultBranch: null };
+    return { repo, available: false, openListAvailable: false, prs: [], branches: new Set(), truncated: false, defaultBranch: null };
   }
+  if (listed == null) notices.push('the open PR listing for this repo was unavailable — falling back to per-ticket lookups');
   let prs = [];
-  try { prs = JSON.parse(listed); } catch { prs = []; }
+  try { prs = JSON.parse(listed || '[]'); } catch { prs = []; }
+  listingStats.listedOpen += prs.filter((p) => p.state === 'OPEN').length;
   const truncated = prs.length >= cfg.pr_fetch_limit;
   if (truncated) {
     notices.push(`the bulk PR listing for ${label} hit its limit (${cfg.pr_fetch_limit}) — falling back to per-ticket lookups for unmatched tickets (raise pipeline.pr_fetch_limit to avoid this)`);
@@ -492,7 +518,7 @@ function loadRepo(repo) {
   const defaultBranch = repo
     ? ((gh(['repo', 'view', repo, '--json', 'defaultBranchRef', '--jq', '.defaultBranchRef.name'], { tolerate: true }) || '').trim() || 'main')
     : DEFAULT_BRANCH;
-  return { repo, available: true, prs, branches, truncated, defaultBranch };
+  return { repo, available: true, openListAvailable: listed !== null, prs, branches, truncated, defaultBranch };
 }
 
 const repoData = new Map();
@@ -536,22 +562,82 @@ function prsForBranch(repo, branch) {
   // no trailer and no merge state — left out, a PR reached only through this
   // fallback would arrive with `merge_state: null`, which every reader treats as
   // "GitHub did not report BEHIND".
-  const out = gh(['pr', 'list', ...repoArg(repo), '--state', 'all', '--head', branch, '--limit', '50', '--json', `${PR_FIELDS},reviewDecision,body,mergeStateStatus`], { tolerate: true });
+  const out = gh(['pr', 'list', ...repoArg(repo), '--state', 'all', '--head', branch, '--limit', '50', '--json', PR_LOOKUP_FIELDS], { tolerate: true });
   if (!out) return [];
   try { return JSON.parse(out); } catch { return []; }
+}
+
+function prForNumber(repo, number) {
+  const out = gh(['pr', 'view', String(number), ...repoArg(repo), '--json', PR_LOOKUP_FIELDS], { tolerate: true });
+  if (!out) return [];
+  try {
+    const pr = JSON.parse(out);
+    return pr && typeof pr === 'object' && !Array.isArray(pr) ? [pr] : [];
+  } catch { return []; }
+}
+
+function isImmutableLandedTicket(ticket, before, recorded, repo, integrationBranch) {
+  if (FULL_SYNC || mode !== 'epic-stacked' || !before || before.status !== 'merged'
+      || !validMergeSha(before.merge_sha) || before.merged_into !== ticket.epic
+      || !recorded || recorded.number !== before.pr
+      || (before.recorded_pr !== undefined && recorded.number !== before.recorded_pr)
+      || (recorded.repo || null) !== repo
+      || (recorded.head !== before.branch && recorded.head !== ticket.branch)) return false;
+  const phase = String(ticket.phase ?? '');
+  const epic = epics[phase];
+  if (!epic || epic.branch !== ticket.epic) return false;
+  const proof = before.epic_pr;
+  return !!(proof && Number.isSafeInteger(proof.number) && proof.branch === ticket.epic
+    && proof.state === 'MERGED' && proof.base === integrationBranch && proof.landed === true);
+}
+
+function previousEpicProof(phase, repo, branch) {
+  const candidates = Object.entries(tickets)
+    .filter(([, ticket]) => String(ticket.phase) === String(phase) && repoOf(ticket) === repo && ticket.epic === branch)
+    .map(([id]) => prev[id] && prev[id].epic_pr)
+    .filter((proof) => proof && Number.isSafeInteger(proof.number) && proof.branch === branch);
+  const rowProof = candidates.find((proof) => proof.state === 'MERGED') || candidates[0];
+  if (rowProof) return rowProof;
+  const front = previousFront.epics && previousFront.epics[epicKey(phase, repo)];
+  const pr = front && front.pr;
+  return pr && Number.isSafeInteger(pr.number) && front.branch === branch
+    ? {
+      number: pr.number,
+      branch,
+      state: pr.state,
+      base: pr.baseRefName || front.base,
+      landed: front.landed === true,
+    }
+    : null;
 }
 
 // ── per-ticket status ───────────────────────────────────────────────────────
 const prLedger = readLedger(GRAPH_DIR);
 const state = {};
+const skippedLanded = new Set();
 for (const [id, t] of Object.entries(tickets)) {
   const repo = repoOf(t);
   const rd = repoData.get(repo);
   const prs = rd.prs;
   const remoteBranches = rd.branches;
   const recorded = prLedger.entries[id];
+  const integrationBranch = rd.defaultBranch || DEFAULT_BRANCH;
   let match = rd.available ? matchTicketPr(id, t, prs, recorded) : null;
-  if (!match && rd.available && rd.truncated) {
+  const openEpicPr = prs.some((candidate) => candidate.state === 'OPEN' && candidate.headRefName === t.epic);
+  if (!match && rd.available && rd.openListAvailable && !openEpicPr
+      && isImmutableLandedTicket(t, prev[id], recorded, repo, integrationBranch)) {
+    state[id] = prev[id];
+    skippedLanded.add(id);
+    listingStats.skippedLanded += 1;
+    continue;
+  }
+  if (!match && rd.available && !FULL_SYNC && recorded && Number.isSafeInteger(recorded.number)) {
+    listingStats.lookedUp += 1;
+    const extra = prForNumber(repo, recorded.number);
+    if (extra.length) match = matchTicketPr(id, t, prs.concat(extra), recorded);
+  }
+  if (!match && rd.available && (FULL_SYNC ? rd.truncated : (!recorded || rd.truncated))) {
+    listingStats.lookedUp += 1;
     const extra = prsForBranch(repo, t.branch);
     if (extra.length) match = matchTicketPr(id, t, prs.concat(extra), recorded);
   }
@@ -579,6 +665,11 @@ for (const [id, t] of Object.entries(tickets)) {
     if (pr.state === 'MERGED') {
       entry.status = 'merged';
       entry.url = pr.url;
+      const prior = prev[id];
+      const mergeSha = mergeShaOf(pr)
+        || (prior && prior.status === 'merged' && prior.pr === pr.number && validMergeSha(prior.merge_sha)
+          ? prior.merge_sha : null);
+      if (mergeSha) entry.merge_sha = mergeSha;
       if (mode === 'epic-stacked') entry.merged_into = pr.baseRefName;
     } else if (pr.state === 'OPEN') {
       entry.status = 'pr-open';
@@ -708,7 +799,40 @@ if (mode === 'epic-stacked') {
             : `epic ${e.branch} is ${n} commit(s) ahead of ${base}`;
         }
       }
-      const pr = rd.prs.find((p) => p.headRefName === e.branch && p.state !== 'CLOSED') || null;
+      const observedPr = rd.prs.find((p) => p.headRefName === e.branch && p.state !== 'CLOSED') || null;
+      let proof = previousEpicProof(phase, repo, e.branch);
+      if (!proof && !observedPr && rd.available) {
+        const hasLedgeredMerge = Object.entries(tickets).some(([id, ticket]) => {
+          const previous = prev[id];
+          const current = state[id];
+          const before = current && current.status === 'merged' ? current : previous;
+          const recorded = prLedger.entries[id];
+          return String(ticket.phase ?? '') === String(phase) && repoOf(ticket) === repo
+            && before && before.status === 'merged' && validMergeSha(before.merge_sha)
+            && recorded && recorded.number === before.pr;
+        });
+        if (hasLedgeredMerge) {
+          listingStats.lookedUp += 1;
+          proof = prsForBranch(repo, e.branch)
+            .filter((candidate) => candidate.headRefName === e.branch)
+            .map((candidate) => ({
+              number: candidate.number,
+              branch: e.branch,
+              state: candidate.state,
+              base: candidate.baseRefName,
+              landed: false,
+            }))[0] || null;
+        }
+      }
+      let previousPr = null;
+      if (!observedPr && proof && proof.state === 'MERGED' && proof.base === base) {
+        previousPr = { number: proof.number, state: 'MERGED', headRefName: e.branch, baseRefName: base };
+      } else if (!observedPr && proof && rd.available) {
+        listingStats.lookedUp += 1;
+        const refreshed = prForNumber(repo, proof.number);
+        previousPr = refreshed.find((candidate) => candidate.headRefName === e.branch && candidate.state !== 'CLOSED') || null;
+      }
+      const pr = observedPr || previousPr;
       // "landed" = nothing from this phase is still waiting outside the default
       // branch (either the epic never started, or its whole diff is already in);
       // `null` = the comparison did not answer, so nothing is proven either way.
@@ -716,6 +840,30 @@ if (mode === 'epic-stacked') {
     }
   }
 }
+
+for (const [id, ticket] of Object.entries(tickets)) {
+  if (skippedLanded.has(id)) continue;
+  const entry = state[id];
+  if (entry.status !== 'merged' || entry.merged_into !== ticket.epic) {
+    delete entry.epic_pr;
+    continue;
+  }
+  const info = epicInfo[epicKey(ticket.phase, repoOf(ticket))];
+  const pr = info && info.pr;
+  if (pr && Number.isSafeInteger(pr.number) && pr.headRefName === ticket.epic
+      && pr.baseRefName === info.base && (pr.state === 'OPEN' || pr.state === 'MERGED')) {
+    entry.epic_pr = {
+      number: pr.number,
+      branch: ticket.epic,
+      state: pr.state,
+      base: info.base,
+      landed: info.landed === true,
+    };
+  } else {
+    delete entry.epic_pr;
+  }
+}
+
 // `landed | not-landed | unknown` for one phase in one repository, WITH the
 // observation behind it: a blocker whose reason is "unknown" has to name what
 // could not be seen, or the board hands its reader a dead end. No epic record —
@@ -734,6 +882,7 @@ const phaseLanded = (phase, repo) => {
 // actionable front made a run declare "fixpoint" while a ticket sat idle.
 const UNDELIVERED = new Set(['pending', 'branched']);
 for (const [id, t] of Object.entries(tickets)) {
+  if (skippedLanded.has(id)) continue;
   const s = state[id];
   const deps = t.depends_on || [];
   const blockers = [];
@@ -933,6 +1082,7 @@ for (const [id, t] of Object.entries(tickets)) {
 // off its branch: no OPEN PR from it, and no OPEN PR targeting it as a base
 // (deleting the branch would orphan a cascade child).
 for (const [id, t] of Object.entries(tickets)) {
+  if (skippedLanded.has(id)) continue;
   const s = state[id];
   // scoped to the ticket's OWN repo: an identical branch name elsewhere says
   // nothing about whether this branch is safe to force-delete
@@ -948,6 +1098,7 @@ for (const [id, t] of Object.entries(tickets)) {
 // ── timestamps + journal every REAL status transition ───────────────────────
 const transitions = [];
 for (const [id, entry] of Object.entries(state)) {
+  if (skippedLanded.has(id)) continue;
   const before = prev[id];
   const unchanged = before && before.status === entry.status;
   entry.since = unchanged && before.since ? before.since : nowIso;
@@ -1210,6 +1361,7 @@ function ageLabel(sinceIso) { const h = ageH(sinceIso); return h >= 48 ? `${Math
 for (const w of cfgWarnings) console.log(`⚠ config: ${w}`);
 if (epicNotice) console.log(`note: ${epicNotice}`);
 for (const n of notices) console.log(`⚠ ${n}`);
+console.log(`PR listing: listed_open=${listingStats.listedOpen}, looked_up=${listingStats.lookedUp}, skipped_landed=${listingStats.skippedLanded}`);
 console.log(`integration mode: ${mode}${mode === 'epic-stacked' ? ` (→ ${DEFAULT_BRANCH} via epic)` : ` (→ ${DEFAULT_BRANCH})`} [base from ${DEFAULT_BRANCH_SOURCE}]`);
 console.log(`model policy: ${cfg.model_policy} | workflow: ${cfg.use_workflow === false ? 'forced-off' : 'auto'} | max attempts: ${cfg.max_attempts}`);
 // The `⚠ config: … INVALID …` line comes from the warnings loop above (loadConfig
@@ -1308,6 +1460,7 @@ for (const [id, s] of Object.entries(state)) {
   }
 }
 for (const [id, s] of Object.entries(state)) {
+  if (skippedLanded.has(id)) continue;
   if (s.matched_by === 'marker') {
     const how = s.status === 'merged' ? `merged as PR #${s.pr}` : 'matched by title marker';
     console.log(`⚠ branch drift: ${id} ${how} (PR head ${s.pr_branch} ≠ canonical ${s.branch})`);
