@@ -1,10 +1,10 @@
 {
-  "generated_at": "2026-09-27T18:20:08.524Z",
-  "observed_at": "2026-09-27T18:20:08.524Z",
-  "generation": 383,
+  "generated_at": "2026-09-27T19:29:45.317Z",
+  "observed_at": "2026-09-27T19:29:45.317Z",
+  "generation": 385,
   "parked_by_run": [],
   "auto_merge": "epic",
-  "dispatches_applied_at": "2026-09-27T18:20:08.524Z",
+  "dispatches_applied_at": "2026-09-27T19:29:45.317Z",
   "actionable": {
     "execute": [
       "T-43-01",
@@ -17,10 +17,10 @@
     ],
     "publish": [],
     "fix": [
-      "T-43-07"
+      "T-43-04"
     ],
     "finalize": [
-      "T-43-04"
+      "T-43-07"
     ],
     "merge": []
   },
@@ -261,8 +261,8 @@
     "T-43-03": "T-43-01 (parent has no branch yet (nothing to cascade from))",
     "T-43-05": "ready — worktree + executor",
     "T-43-06": "T-43-05 (parent has no branch yet (nothing to cascade from))",
-    "T-43-07": "PR #266: the base moved: `epic/43-target-project-delivery-at-scale` is 5 commit(s) ahead of this branch, so any green here was measured against a merge base that no longer exists. In the ticket worktree: `base-merge.cjs <ticket> --worktree <path> --base <base ref>` (or `git fetch origin && git merge origin/<base>`) — NEVER rebase: the PR is pushed, so a rebase is a force-push that dismisses approvals and re-anchors resolved threads.",
-    "T-43-04": "PR #319: green, no `gate_status: arch-review=conform` trailer — threads + arch-review still owed",
+    "T-43-07": "PR #266: green, no `gate_status: arch-review=conform` trailer — threads + arch-review still owed",
+    "T-43-04": "PR #319: the base moved: `ticket/T-43-07-cancelled-checks-ignore-superseded-runs` is 6 commit(s) ahead of this branch, so any green here was measured against a merge base that no longer exists. In the ticket worktree: `base-merge.cjs <ticket> --worktree <path> --base <base ref>` (or `git fetch origin && git merge origin/<base>`) — NEVER rebase: the PR is pushed, so a rebase is a force-push that dismisses approvals and re-anchors resolved threads.",
     "T-43-08": "T-43-01 (parent has no branch yet (nothing to cascade from)); T-43-07 (non-primary parent T-43-07 is pr-open — T-43-08's worktree is cut from T-43-04 and receives T-43-07 only through epic/43-target-project-delivery-at-scale; T-43-07 must merge into epic/43-target-project-delivery-at-scale first (T-43-07 is pr-open))",
     "T-43-09": "ready — worktree + executor",
     "T-43-10": "T-43-09 (parent has no branch yet (nothing to cascade from)); T-43-01 (parent has no branch yet (nothing to cascade from))",
@@ -309,8 +309,8 @@
   },
   "sentinel": {
     "duty": [
-      "T-43-07",
-      "T-43-04"
+      "T-43-04",
+      "T-43-07"
     ],
     "waiting_ci": [],
     "waiting_parent": [],

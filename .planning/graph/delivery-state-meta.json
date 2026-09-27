@@ -1,13 +1,13 @@
 {
   "schema_version": 1,
-  "generation": 383,
-  "generation_identity": "9040db4f-a1bb-4e7e-8982-65c942a85898",
-  "previous_generation_identity": "16777244:12931242976:1790532733060474000:fa34aa35f807ebc335c7d3d22719f6d25f4b13ffb13e61351ce971c8c04710e3",
-  "observed_at": "2026-09-27T18:20:08.524Z",
-  "generated_at": "2026-09-27T18:20:08.524Z",
+  "generation": 385,
+  "generation_identity": "08450e9a-1011-4d09-b0f5-2a7a7b25b35f",
+  "previous_generation_identity": "16777244:12931289762:1790537385043111000:879ae845e384f16091c5ed40bec261009bdecafbe8a2ad6096b1b71216cdcc4c",
+  "observed_at": "2026-09-27T19:29:45.317Z",
+  "generated_at": "2026-09-27T19:29:45.317Z",
   "by": "state-sync",
-  "pid": 50750,
-  "observation_generation": 383,
+  "pid": 71682,
+  "observation_generation": 385,
   "observation_projection": {
     "tickets": {
       "T-20-01": {
@@ -2308,7 +2308,7 @@
         "status": "pr-open",
         "repository": null,
         "pr": 266,
-        "head": "ad83211b322cdce3b92ff0a742451d8e0cb14e9b",
+        "head": "c93104cd47cb77a52490cab34da9aa71e3b7ffc3",
         "draft": false,
         "base": "epic/43-target-project-delivery-at-scale",
         "merge_state": "CLEAN",
@@ -2534,9 +2534,9 @@
   },
   "binding": {
     "schema_version": 1,
-    "state_digest": "31026a7aecb8e22848798d937dd8e4bdfdab49b1775f645242a03778b9a4653b",
-    "front_digest": "8b849577dd466c578643c0dc4bd2c408c36fe0c0c088645b5560c6c75ba12c2c",
-    "observation_digest": "65e4d825e5cbc211df0de230d3df51d09e49a015811c387d2ff7311286dc83e3",
-    "observation_generation": 383
+    "state_digest": "1044e63711b93ddca350cca3efe105c48e89550c69843ffc0aaf099428601822",
+    "front_digest": "fcb02da3be0327432a3306f8593bec6378bc1d5db65c37c15bc1d0d6e395e621",
+    "observation_digest": "b16255047b4de8959cd2032cad6e6b2325d2e2445f340e3a95024eb2cb7985a4",
+    "observation_generation": 385
   }
 }
