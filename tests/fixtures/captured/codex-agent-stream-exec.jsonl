@@ -1,4 +1,4 @@
-{"shipyard_fixture":{"boundary":"codex-agent-stream","cli":"codex","cli_version":"codex-cli 0.157.1","captured_at":"2026-09-27T09:15:22.974Z","scrubbed":true}}
+{"shipyard_fixture":{"boundary":"codex-agent-stream","cli":"codex","cli_version":"codex-cli 0.157.1","captured_at":"2026-09-27T09:15:22.974Z","scrubbed":true,"elided":true}}
 {"type":"thread.started","thread_id":"<SESSION-1>"}
 {"type":"turn.started"}
 {"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"OK"}}

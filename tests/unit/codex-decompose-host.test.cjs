@@ -328,12 +328,15 @@ test('production ' + gsdRole + ' reaches its native child and records session ev
   const parent = '01a0e224-6642-7f20-b2a3-68b283d429b9';
   const childId = '01a0e224-80bb-7d33-b57d-8c44061ac85d';
   const ids = { '<SESSION-2>': parent, '<SESSION-6>': childId };
-  const childRaw = captured('tests/fixtures/captured/codex-agent-stream-child.jsonl', ids);
+  const recorded = captured('tests/fixtures/captured/codex-agent-stream-child.jsonl', ids);
   const parentRaw = captured('tests/fixtures/captured/codex-agent-stream-parent.jsonl', ids);
   const execRaw = captured('tests/fixtures/captured/codex-agent-stream-exec.jsonl', { '<SESSION-1>': parent });
-  const records = childRaw.split('\n').filter(Boolean).map((line) => JSON.parse(line));
-  const instructions = records.find((record) => record.type === 'response_item'
+  const records = recorded.split('\n').filter(Boolean).map((line) => JSON.parse(line));
+  const elided = records.find((record) => record.type === 'response_item'
     && record.payload.role === 'developer').payload.content[0].text;
+  // The fixture elides the role prompt; installed TOML instructions always end in a newline.
+  const instructions = elided + '\n';
+  const childRaw = recorded.replace(JSON.stringify(elided), JSON.stringify(instructions));
   const transform = (raw) => raw.split('\n').filter(Boolean).map((line) => {
     const record = JSON.parse(line);
     if (record.type === 'turn_context') {

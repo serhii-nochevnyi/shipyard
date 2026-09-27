@@ -126,10 +126,13 @@ function staticContent(resolution = { model: 'gpt-6-sol', effort: 'high' }) {
 function recordedTypedSession() {
   const ids = { '<SESSION-2>': PARENT_ID, '<SESSION-6>': CHILD_ID };
   const parentRaw = captured(PARENT_FIXTURE, ids);
-  const childRaw = captured(CHILD_FIXTURE, ids);
-  const instructions = childRaw.split('\n').filter(Boolean).map((line) => JSON.parse(line))
+  const recorded = captured(CHILD_FIXTURE, ids);
+  const elided = recorded.split('\n').filter(Boolean).map((line) => JSON.parse(line))
     .find((record) => record.type === 'response_item' && record.payload.role === 'developer')
     .payload.content[0].text;
+  // The fixture elides the role prompt; installed TOML instructions always end in a newline.
+  const instructions = elided + '\n';
+  const childRaw = recorded.replace(JSON.stringify(elided), JSON.stringify(instructions));
   return { parentRaw, childRaw, parent: PARENT_ID, child: CHILD_ID, instructions };
 }
 
