@@ -1,7 +1,7 @@
 ---
-status: open
-closed:
-adr:
+status: closed
+closed: 2026-09-27
+adr: .planning/architecture/ADR-021-subscription-efficiency-per-runtime.md
 ---
 
 # Problem — subscription efficiency per runtime (phase 44)
