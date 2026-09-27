@@ -18,11 +18,13 @@ const { createRunController, DEFAULT_LEASE_TTL_MS } = require('./run-controller.
 const { formatHint } = require('./refusal-hints.cjs');
 const { recordInflight, clearInflight } = require('./dispatch-record.cjs');
 const { acquire: acquireLock, DEFAULT_TTL_MS: LOCK_TTL_MS } = require('./lock.cjs');
+const { assertCanonicalGraph, deliverPlan } = require('./plan-delivery.cjs');
 
 const SCHEMA = 'shipyard.codex-delivery-host.v1';
 const MAX_ARGS_BYTES = 4 * 1024 * 1024;
 const MAX_GRAPH_BYTES = 8 * 1024 * 1024;
 const SCRATCH_STATUS = new Set(['?? .shipyard-pr-body.md', '?? .shipyard-evidence.md']);
+const TICKET_DELIVERY_ROLES = new Set(['drift-check', 'ci-fix', 'review-fix']);
 const CANDIDATE_SCHEMA = 'shipyard.finalization-candidate.v1';
 const VERIFICATION_SCHEMA = 'shipyard.verification-record.v1';
 const FINALIZATION_SCHEMA = 'shipyard.finalization-record.v1';
@@ -66,6 +68,15 @@ function requestValue(input) {
   const role = ROLE_ALIASES[input.role] || input.role;
   if (input.signals !== undefined && !object(input.signals)) fail('INVALID_INPUT', 'signals must be an object');
   if (input.context !== undefined && !object(input.context)) fail('INVALID_INPUT', 'context must be an object');
+  for (const key of Object.keys(input.context || {})) {
+    if (key.startsWith('plan') && key !== 'plan_sha256') {
+      fail('INVALID_INPUT', 'unsupported delivery request context field ' + key);
+    }
+  }
+  if (input.context && input.context.plan_sha256 !== undefined
+      && !/^[0-9a-f]{64}$/i.test(input.context.plan_sha256)) {
+    fail('INVALID_INPUT', 'context.plan_sha256 must be a 64-character hex digest');
+  }
   if (input.dispatch_id !== undefined
       && (typeof input.dispatch_id !== 'string' || !input.dispatch_id.trim())) {
     fail('INVALID_INPUT', 'dispatch_id must be non-empty text');
@@ -104,10 +115,25 @@ function git(worktree, args) {
   }
 }
 
+function trackedAtHead(worktree, relPath) {
+  try {
+    execFileSync('git', ['-C', worktree, 'cat-file', '-e', 'HEAD:' + relPath], {
+      stdio: ['ignore', 'pipe', 'pipe'], timeout: 10000,
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function defaultGraphDir(worktree) {
+  if (trackedAtHead(worktree, '.planning/graph/tickets.json')) return path.join(worktree, '.planning', 'graph');
+  return path.join(repoRootOf(worktree) || worktree, '.planning', 'graph');
+}
+
 function graphFile(options, worktree) {
-  const common = repoRootOf(worktree);
-  const directory = path.resolve(options.graphDir || process.env.SHIPYARD_GRAPH_DIR
-    || path.join(common || worktree, '.planning', 'graph'));
+  const source = options.graphDir ? 'flag' : process.env.SHIPYARD_GRAPH_DIR ? 'env' : 'default';
+  const directory = path.resolve(options.graphDir || process.env.SHIPYARD_GRAPH_DIR || defaultGraphDir(worktree));
   let parent;
   let file;
   try {
@@ -120,7 +146,13 @@ function graphFile(options, worktree) {
       || !file.isFile() || file.isSymbolicLink() || file.size > MAX_GRAPH_BYTES) {
     fail('GRAPH_UNAVAILABLE', 'canonical ticket graph must be a bounded real file');
   }
-  return path.join(fs.realpathSync(directory), 'tickets.json');
+  const resolved = fs.realpathSync(directory);
+  try {
+    assertCanonicalGraph({ graphDir: resolved, worktree, source });
+  } catch (error) {
+    fail(error.code || 'GRAPH_NOT_CANONICAL', error.message.replace(/^plan-delivery: /, ''));
+  }
+  return path.join(resolved, 'tickets.json');
 }
 
 function graphSnapshot(file, ticket) {
@@ -736,7 +768,36 @@ function canonicalCliScope(input) {
   return Object.freeze({ ...scope, worktree, repository: repositoryId });
 }
 
-function executorPreflight(options, scope) {
+// @contract: empty for 'in-worktree' or no delivery, so the prompt stays byte-identical to today's.
+function planDeliveryBlock(delivery, planPath) {
+  if (!delivery || delivery.mode !== 'delivered') return '';
+  const parts = [
+    '', '',
+    `<TICKET-CONTRACT path="${delivery.plan.path}" sha256="${delivery.plan.sha256}">`,
+    delivery.plan.content,
+    '</TICKET-CONTRACT>',
+    `The block above is your ticket contract, delivered because your worktree does not contain `
+    + `${planPath || delivery.plan.path}. Read it exactly as instructed; do not try to open that path from disk.`,
+  ];
+  for (const file of delivery.files) {
+    parts.push('', `<CONTEXT-FILE path="${file.path}" sha256="${file.sha256}">`, file.content, '</CONTEXT-FILE>');
+  }
+  if (delivery.not_delivered.length) {
+    parts.push('',
+      'The following Context (Reads) references could not be delivered and are not available in '
+      + 'your worktree; do not try to read them:',
+      ...delivery.not_delivered.map((entry) => `- ${entry.path} (${entry.reason})`));
+  }
+  return parts.join('\n');
+}
+
+function ticketDelivery(options, worktree, ticket, expectedPlanSha256) {
+  const file = graphFile(options, worktree);
+  const row = graphSnapshot(file, ticket).row;
+  return deliverPlan({ graphDir: path.dirname(file), row, worktree, expectedSha256: expectedPlanSha256 });
+}
+
+function executorPreflight(options, scope, expectedPlanSha256) {
   if (!/^T-\d{2}-\d{2}$/.test(scope.ticket)) fail('SCOPE_MISMATCH', 'executor needs a ticket scope');
   const worktree = fs.realpathSync(scope.worktree);
   if (git(worktree, ['rev-parse', '--show-toplevel']) !== worktree) {
@@ -752,6 +813,10 @@ function executorPreflight(options, scope) {
   if (dirty.length) fail('WORKTREE_NOT_READY', 'executor worktree already has changes');
   const baseRef = resolveBaseRef(worktree, snapshot.row.pr_base);
   const plan = planSnapshot(file, snapshot.row);
+  if (typeof expectedPlanSha256 === 'string' && expectedPlanSha256 && expectedPlanSha256 !== plan.sha256) {
+    fail('PLAN_DIGEST_MISMATCH', 'delivered plan digest differs from the canonical source PLAN');
+  }
+  const delivery = deliverPlan({ graphDir: path.dirname(file), row: snapshot.row, worktree });
   const verification = pinnedVerification(options, worktree, plan);
   const commit = Object.freeze({
     ticket: scope.ticket,
@@ -764,7 +829,7 @@ function executorPreflight(options, scope) {
   });
   const stateRoot = hostStateRoot(options, scope);
   const commonDir = fs.realpathSync(git(worktree, ['rev-parse', '--path-format=absolute', '--git-common-dir']));
-  return Object.freeze({ commit, graphFile: file, graphDigest: snapshot.sha256, plan, verification, baseRef,
+  return Object.freeze({ commit, graphFile: file, graphDigest: snapshot.sha256, plan, delivery, verification, baseRef,
     stateRoot, key: hostKey(stateRoot), repository: 'git-common:' + sha256(commonDir) });
 }
 
@@ -996,9 +1061,14 @@ function createCodexDeliveryHost(options = {}) {
         return investigationResearch(options, scope, runtimeHost, agentDir, agentManifest, env, prompt, baseContext, inv);
       }
       const committing = request.role === 'executor';
-      const prepared = committing ? executorPreflight(options, scope) : null;
+      const prepared = committing ? executorPreflight(options, scope, context.plan_sha256) : null;
       if (committing) {
-        context.prompt = prompt.trim() + '\n\nLeave changes uncommitted. The trusted host will stage, sign, and verify the commit.';
+        context.prompt = prompt.trim() + '\n\nLeave changes uncommitted. The trusted host will stage, sign, and verify the commit.'
+          + planDeliveryBlock(prepared.delivery, prepared.plan.path);
+      } else if (TICKET_DELIVERY_ROLES.has(request.role)) {
+        const delivery = ticketDelivery(options, fs.realpathSync(scope.worktree), scope.ticket, context.plan_sha256);
+        const block = planDeliveryBlock(delivery, undefined);
+        if (block) context.prompt = prompt.trim() + block;
       }
       const result = await launchAgent(request.role, {
         cwd: scope.worktree,

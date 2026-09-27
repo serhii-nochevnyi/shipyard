@@ -56,6 +56,23 @@ const signer = execFileSync('gpg', ['--batch', '--with-colons', '--list-secret-k
   encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
 }).split('\n').find((line) => line.startsWith('fpr:')).split(':')[9];
 
+let graphEnvQueue = Promise.resolve();
+function withGraphDirEnv(value, action) {
+  const run = graphEnvQueue.then(async () => {
+    const previous = process.env.SHIPYARD_GRAPH_DIR;
+    if (value === undefined) delete process.env.SHIPYARD_GRAPH_DIR;
+    else process.env.SHIPYARD_GRAPH_DIR = value;
+    try {
+      return await action();
+    } finally {
+      if (previous === undefined) delete process.env.SHIPYARD_GRAPH_DIR;
+      else process.env.SHIPYARD_GRAPH_DIR = previous;
+    }
+  });
+  graphEnvQueue = run.catch(() => {});
+  return run;
+}
+
 function git(repo, ...args) {
   return execFileSync('git', ['-C', repo, ...args], {
     encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
@@ -236,6 +253,9 @@ test('dynamic executor resolves Luna/max through the boundary with worktree writ
     assert.equal(call.context.run_id, f.scope.run_id);
     assert.equal(call.context.worktreePath, f.scope.worktree);
     assert.match(call.context.prompt, /^Implement the scoped ticket\.\n\nLeave changes uncommitted/);
+    assert.match(call.context.prompt,
+      /Leave changes uncommitted\. The trusted host will stage, sign, and verify the commit\.\n\n<TICKET-CONTRACT path="\.planning\/PLAN\.md"/);
+    assert.match(call.context.prompt, /# approved plan/);
     assert.equal(result.receipt.compliance, 'verified');
     assert.equal(result.receipt.applied_model, 'gpt-6-luna');
     assert.equal(result.receipt.applied_effort, 'max');
@@ -251,29 +271,25 @@ test('dynamic executor resolves Luna/max through the boundary with worktree writ
 
 test('target-project executor finalizes a conventional, id-free subject from the canonical graph title', async () => {
   const f = fixture({ target: true });
-  const previousGraph = process.env.SHIPYARD_GRAPH_DIR;
-  process.env.SHIPYARD_GRAPH_DIR = f.graphDir;
   try {
-    let refusal;
-    await assert.rejects(() => delivery(f).run({ role: 'executor', dispatch_id: 'codex-target-untitled',
-      context: { prompt: 'Implement the scoped ticket.' } }), (error) => { refusal = error; return true; });
-    assert.match(refusal.message, /no canonical graph title/);
-    assert.equal(git(f.root, 'rev-parse', 'HEAD'), f.base);
-    const graphFile = path.join(f.graphDir, 'tickets.json');
-    const graph = JSON.parse(fs.readFileSync(graphFile, 'utf8'));
-    Object.assign(graph.tickets['T-38-04'], { title: 'Retry the flaky upload', type: 'bugfix' });
-    fs.writeFileSync(graphFile, JSON.stringify(graph));
-    git(f.root, 'checkout', '-q', '--', 'src/owned.txt');
-    const result = await delivery(f).run({ role: 'executor', dispatch_id: 'codex-target-titled',
-      context: { prompt: 'Implement the scoped ticket.' } });
-    assert.equal(result.artifact.status, 'committed');
-    assert.equal(git(f.root, 'log', '-1', '--format=%s', 'HEAD'), 'fix: retry the flaky upload');
-    assert.equal(git(f.root, 'rev-parse', 'HEAD^'), f.base);
-  } finally {
-    if (previousGraph === undefined) delete process.env.SHIPYARD_GRAPH_DIR;
-    else process.env.SHIPYARD_GRAPH_DIR = previousGraph;
-    clean(f);
-  }
+    await withGraphDirEnv(f.graphDir, async () => {
+      let refusal;
+      await assert.rejects(() => delivery(f).run({ role: 'executor', dispatch_id: 'codex-target-untitled',
+        context: { prompt: 'Implement the scoped ticket.' } }), (error) => { refusal = error; return true; });
+      assert.match(refusal.message, /no canonical graph title/);
+      assert.equal(git(f.root, 'rev-parse', 'HEAD'), f.base);
+      const graphFile = path.join(f.graphDir, 'tickets.json');
+      const graph = JSON.parse(fs.readFileSync(graphFile, 'utf8'));
+      Object.assign(graph.tickets['T-38-04'], { title: 'Retry the flaky upload', type: 'bugfix' });
+      fs.writeFileSync(graphFile, JSON.stringify(graph));
+      git(f.root, 'checkout', '-q', '--', 'src/owned.txt');
+      const result = await delivery(f).run({ role: 'executor', dispatch_id: 'codex-target-titled',
+        context: { prompt: 'Implement the scoped ticket.' } });
+      assert.equal(result.artifact.status, 'committed');
+      assert.equal(git(f.root, 'log', '-1', '--format=%s', 'HEAD'), 'fix: retry the flaky upload');
+      assert.equal(git(f.root, 'rev-parse', 'HEAD^'), f.base);
+    });
+  } finally { clean(f); }
 });
 
 test('production runtime host receives the scoped prompt and records native model evidence', async () => {
@@ -1024,5 +1040,170 @@ test('a single-line request whose sibling artifact is missing refuses naming the
     }), (error) => error.code === 'RESEARCH_VERIFY_MANIFEST_MISSING' && error.message.includes('alternatives'));
   } finally { clean(f); }
 });
+
+suite('codex-delivery-host — T-40-28 plan delivery (D-43)');
+
+function agentManifestFor(agentDir, role) {
+  const resolution = policy.resolveDispatch({ runtime: 'codex', role });
+  const file = resolution.agent_file;
+  const content = [
+    '# shipyard-policy-id = "' + policy.POLICY.id + '"',
+    '# shipyard-policy-version = "' + resolution.policy_version + '"',
+    '# shipyard-policy-hash = "' + resolution.policy_hash + '"',
+    '# shipyard-policy-runtime = "codex"',
+    '# shipyard-policy-role = "' + role + '"',
+    '# shipyard-policy-rung = "' + resolution.rung + '"',
+    'name = "' + file.replace(/\.toml$/, '') + '"',
+    'model = "' + resolution.model + '"',
+    'model_reasoning_effort = "' + resolution.effort + '"',
+    'sandbox_mode = "read-only"',
+    "developer_instructions = '''",
+    'Follow the scoped role.',
+    "'''",
+    '',
+  ].join('\n');
+  const fileDigest = crypto.createHash('sha256').update(content).digest('hex');
+  fs.writeFileSync(path.join(agentDir, file), content);
+  fs.writeFileSync(path.join(agentDir, '.shipyard-manifest.json'), JSON.stringify({
+    policy_id: policy.POLICY.id, policy_version: resolution.policy_version, policy_hash: resolution.policy_hash,
+    agent_files: [file], agent_digests: { [file]: fileDigest },
+  }));
+  return path.join(agentDir, '.shipyard-manifest.json');
+}
+
+function ticketWorktreeFixture(role) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-codex-inworktree-'));
+  const agentDir = fs.mkdtempSync(path.join(temporary, 'agents-'));
+  const planRel = '.planning/phases/x/X-PLAN.md';
+  fs.mkdirSync(path.join(root, '.planning', 'phases', 'x'), { recursive: true });
+  fs.writeFileSync(path.join(root, planRel), '# plan\n\n## Context (Reads)\n\n- nothing planning-shaped here.\n');
+  fs.mkdirSync(path.join(root, 'src'));
+  fs.writeFileSync(path.join(root, 'src', 'owned.txt'), 'base\n');
+  fs.mkdirSync(path.join(root, '.planning', 'graph'), { recursive: true });
+  git(root, 'init', '-q', '-b', 'main');
+  git(root, 'config', 'user.name', 'Delivery Test');
+  git(root, 'config', 'user.email', 'delivery@example.test');
+  fs.writeFileSync(path.join(root, '.planning', 'graph', 'tickets.json'), JSON.stringify({ tickets: {
+    'T-38-04': { branch: 'main', pr_base: 'main', plan: planRel, files: ['src/owned.txt'] },
+  } }));
+  git(root, 'add', '.');
+  git(root, '-c', 'commit.gpgsign=false', 'commit', '-qm', 'base');
+  const agentManifest = agentManifestFor(agentDir, role);
+  const scope = {
+    run_id: 'run-codex-inworktree', ticket: 'T-38-04', phase: 38,
+    worktree: root, runtime: 'codex', provider: 'openai',
+  };
+  const calls = [];
+  const host = {
+    scope,
+    capabilities,
+    recorder: createDurableRecorder(fs.mkdtempSync(path.join(temporary, 'receipts-'))),
+    launchStatic(selection, context) { calls.push({ method: 'static', selection, context }); return application(selection, context); },
+  };
+  return { root, agentDir, agentManifest, scope, host, calls, planRel };
+}
+
+function withoutShipyardGraphDirEnv(action) {
+  return withGraphDirEnv(undefined, action);
+}
+
+test('requestValue accepts context.plan_sha256 and rejects every other plan* context field', () => {
+  requestValue({ role: 'drift-check', context: { prompt: 'hi', plan_sha256: '0'.repeat(64) } });
+  for (const bad of [{ plan_path: '/x' }, { plan: 'x' }, { plan_content: 'x' }]) {
+    assert.throws(() => requestValue({ role: 'drift-check', context: { prompt: 'hi', ...bad } }),
+      (error) => error.code === 'INVALID_INPUT');
+  }
+  assert.throws(() => requestValue({ role: 'drift-check', context: { prompt: 'hi', plan_sha256: 'not-hex' } }),
+    (error) => error.code === 'INVALID_INPUT');
+});
+
+test('a Shipyard-shaped worktree (graph tracked at HEAD, no flag or env) leaves the drift-check prompt unchanged', () =>
+  withoutShipyardGraphDirEnv(async () => {
+    const f = ticketWorktreeFixture('drift-check');
+    try {
+      await createCodexDeliveryHost({
+        scope: f.scope, host: f.host, capabilities, agentDir: f.agentDir, agentManifest: f.agentManifest,
+        storageRoot: fs.mkdtempSync(path.join(temporary, 'storage-')), env: {},
+      }).run({ role: 'drift-check', context: { prompt: 'Judge this ticket.' } });
+      assert.equal(f.calls[0].context.prompt, 'Judge this ticket.');
+    } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
+  }));
+
+test('a cross-repo review-fix prompt carries the delivered contract and files after the caller prompt', async () => {
+  const f = fixture();
+  const agentDir = fs.mkdtempSync(path.join(temporary, 'agents-'));
+  const agentManifest = agentManifestFor(agentDir, 'review-fix');
+  try {
+    fs.mkdirSync(path.dirname(path.join(f.project, '.planning', 'OTHER.md')), { recursive: true });
+    fs.writeFileSync(path.join(f.project, '.planning', 'OTHER.md'), 'other content\n');
+    const graph = JSON.parse(fs.readFileSync(path.join(f.graphDir, 'tickets.json'), 'utf8'));
+    graph.tickets['T-38-04'].plan = '.planning/PLAN-WITH-CONTEXT.md';
+    fs.writeFileSync(path.join(f.graphDir, 'tickets.json'), JSON.stringify(graph));
+    fs.writeFileSync(path.join(f.project, '.planning', 'PLAN-WITH-CONTEXT.md'),
+      '# plan\n\n## Context (Reads)\n\n- `.planning/OTHER.md`.\n');
+    const planSha256 = crypto.createHash('sha256')
+      .update(fs.readFileSync(path.join(f.project, '.planning', 'PLAN-WITH-CONTEXT.md'))).digest('hex');
+    const result = delivery(f, { agentDir, agentManifest });
+    await result.run({ role: 'review-fix', context: { prompt: 'Fix the review.', plan_sha256: planSha256 } });
+    const call = f.calls[0];
+    assert.match(call.context.prompt, /^Fix the review\.\n\n<TICKET-CONTRACT path="\.planning\/PLAN-WITH-CONTEXT\.md"/);
+    assert.match(call.context.prompt, /<CONTEXT-FILE path="\.planning\/OTHER\.md" sha256="[0-9a-f]{64}">\nother content/);
+  } finally { clean(f); }
+});
+
+test('a wrong context.plan_sha256 refuses PLAN_DIGEST_MISMATCH for a ticket-delivery role', async () => {
+  const f = fixture();
+  const agentDir = fs.mkdtempSync(path.join(temporary, 'agents-'));
+  const agentManifest = agentManifestFor(agentDir, 'ci-fix');
+  try {
+    await assert.rejects(() => delivery(f, { agentDir, agentManifest }).run({
+      role: 'ci-fix', context: { prompt: 'Fix CI.', plan_sha256: '0'.repeat(64) },
+    }), (error) => error.code === 'PLAN_DIGEST_MISMATCH');
+    assert.equal(f.calls.length, 0);
+  } finally { clean(f); }
+});
+
+test('a wrong context.plan_sha256 refuses PLAN_DIGEST_MISMATCH for the executor before the signer runs', async () => {
+  const f = fixture();
+  try {
+    await assert.rejects(() => delivery(f).run({
+      role: 'executor', context: { prompt: 'Implement.', plan_sha256: '0'.repeat(64) },
+    }), (error) => error.code === 'PLAN_DIGEST_MISMATCH');
+    assert.equal(f.calls.length, 0);
+    assert.equal(git(f.root, 'rev-parse', 'HEAD'), f.base);
+  } finally { clean(f); }
+});
+
+test('SHIPYARD_GRAPH_DIR pointing at an untracked graph copy in a non-main worktree refuses GRAPH_NOT_CANONICAL', () =>
+  withoutShipyardGraphDirEnv(async () => {
+    const f = ticketWorktreeFixture('drift-check');
+    const otherRepo = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-codex-other-repo-'));
+    try {
+      git(otherRepo, 'init', '-q', '-b', 'main');
+      git(otherRepo, 'config', 'user.name', 'Delivery Test');
+      git(otherRepo, 'config', 'user.email', 'delivery@example.test');
+      fs.writeFileSync(path.join(otherRepo, 'README.md'), 'x\n');
+      git(otherRepo, 'add', '.');
+      git(otherRepo, '-c', 'commit.gpgsign=false', 'commit', '-qm', 'base');
+      git(otherRepo, 'branch', 'other');
+      const linked = path.join(otherRepo, '..', 'shipyard-codex-other-linked');
+      git(otherRepo, 'worktree', 'add', '-q', linked, 'other');
+      const copyGraphDir = path.join(linked, '.planning', 'graph');
+      fs.mkdirSync(copyGraphDir, { recursive: true });
+      fs.writeFileSync(path.join(copyGraphDir, 'tickets.json'), JSON.stringify({ tickets: {
+        'T-38-04': { branch: 'main', pr_base: 'main', plan: f.planRel, files: ['src/owned.txt'] },
+      } }));
+      process.env.SHIPYARD_GRAPH_DIR = copyGraphDir;
+      await assert.rejects(() => createCodexDeliveryHost({
+        scope: f.scope, host: f.host, capabilities, agentDir: f.agentDir, agentManifest: f.agentManifest,
+        storageRoot: fs.mkdtempSync(path.join(temporary, 'storage-')), env: {},
+      }).run({ role: 'drift-check', context: { prompt: 'Judge.' } }), (error) => error.code === 'GRAPH_NOT_CANONICAL');
+      assert.equal(f.calls.length, 0);
+      fs.rmSync(linked, { recursive: true, force: true });
+    } finally {
+      fs.rmSync(f.root, { recursive: true, force: true });
+      fs.rmSync(otherRepo, { recursive: true, force: true });
+    }
+  }));
 
 done();

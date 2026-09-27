@@ -16,6 +16,7 @@ const roleArtifact = require('./role-artifact.cjs');
 const { resolveBaseRef, resolveGraphDir } = require('./graph-dir.cjs');
 const { recordInflight, clearInflight } = require('./dispatch-record.cjs');
 const { sealResearch, verifySealedLine } = require('./planning-result-sealer.cjs');
+const { assertCanonicalGraph, deliverPlan } = require('./plan-delivery.cjs');
 
 const WORKFLOWS = Object.freeze(['executors', 'fix-round', 'drift-gate', 'investigation-research']);
 const REQUEST_SCHEMA = 'shipyard.claude-delivery-request.v1';
@@ -44,7 +45,8 @@ function prepareArgs(name, args, reviewFeedback, scope) {
   if (name === 'executors') {
     return {
       ...args,
-      deliveryRulesHint: 'Work only within files_modified. The trusted host stages and signs the commit after verification.',
+      deliveryRulesHint: args.deliveryRulesHint
+        || 'Work only within files_modified. The trusted host stages and signs the commit after verification.',
       hostFinalizesCommit: true,
     };
   }
@@ -144,7 +146,8 @@ function git(worktree, args) {
   }
 }
 
-function graphDirectory(options) {
+function graphDirectory(options, worktree) {
+  const source = options.graphDir ? 'flag' : process.env.SHIPYARD_GRAPH_DIR ? 'env' : 'default';
   const directory = path.resolve(options.graphDir || process.env.SHIPYARD_GRAPH_DIR
     || path.join(process.cwd(), '.planning', 'graph'));
   let stat;
@@ -156,11 +159,17 @@ function graphDirectory(options) {
   if (!stat.isDirectory() || stat.isSymbolicLink()) {
     reject('canonical graph directory must be a real directory');
   }
-  return fs.realpathSync(directory);
+  const resolved = fs.realpathSync(directory);
+  try {
+    assertCanonicalGraph({ graphDir: resolved, worktree, source });
+  } catch (error) {
+    reject(error.message.replace(/^plan-delivery: /, ''));
+  }
+  return resolved;
 }
 
-function readGraphFile(options, name) {
-  const file = path.join(graphDirectory(options), name);
+function readGraphFile(options, name, worktree) {
+  const file = path.join(graphDirectory(options, worktree), name);
   let stat;
   try {
     stat = fs.lstatSync(file);
@@ -198,7 +207,7 @@ function signingFingerprint(worktree) {
 }
 
 function graphTicket(options, ticket, worktree) {
-  const graph = readGraphFile(options, 'tickets.json');
+  const graph = readGraphFile(options, 'tickets.json', worktree);
   const row = graph && graph.tickets && graph.tickets[ticket];
   if (!object(row) || !Array.isArray(row.files) || !row.files.length
       || typeof row.branch !== 'string' || typeof row.pr_base !== 'string') {
@@ -214,7 +223,7 @@ function graphTicket(options, ticket, worktree) {
 }
 
 function canonicalPlan(options, row, entry) {
-  const expected = path.resolve(graphDirectory(options), '..', '..', row.plan || '');
+  const expected = path.resolve(graphDirectory(options, entry && entry.worktreePath), '..', '..', row.plan || '');
   if (typeof row.plan !== 'string' || !row.plan.trim()
       || typeof entry.planPath !== 'string' || !fs.existsSync(entry.planPath)
       || fs.realpathSync(entry.planPath) !== expected) {
@@ -228,8 +237,8 @@ function canonicalBase(worktree, value, expected) {
   return resolved;
 }
 
-function boardTicket(options, entry, row) {
-  const state = readGraphFile(options, 'delivery-state.json');
+function boardTicket(options, entry, row, worktree) {
+  const state = readGraphFile(options, 'delivery-state.json', worktree);
   const board = state && state[entry.id];
   if (!object(board) || !Number.isInteger(board.pr) || board.pr !== entry.pr
       || board.branch !== row.branch || typeof board.base !== 'string' || !board.base.trim()) {
@@ -242,7 +251,7 @@ function repairPreflight(options, entry) {
   const worktree = fs.realpathSync(entry.worktreePath);
   const row = graphTicket(options, entry.id, worktree);
   canonicalPlan(options, row, entry);
-  const board = boardTicket(options, entry, row);
+  const board = boardTicket(options, entry, row, worktree);
   if (entry.branch !== row.branch) reject('repair branch differs from the canonical graph');
   const baseRef = canonicalBase(worktree, entry.base || entry.prBase, board.base);
   return Object.freeze({
@@ -257,6 +266,7 @@ function repairPreflight(options, entry) {
     files_modified: row.files,
     repo: row.repo || null,
     needsReviewFix: entry.needsReviewFix === true,
+    planDelivery: deliverPlan({ graphDir: graphDirectory(options, worktree), row, worktree }),
   });
 }
 
@@ -302,7 +312,7 @@ function reconcileBaseWithScript(options, repair) {
   let output;
   try {
     output = hostCommand(options, process.execPath, [script, repair.ticket,
-      '--worktree', repair.worktree, '--base', repair.base, '--graph', graphDirectory(options),
+      '--worktree', repair.worktree, '--base', repair.base, '--graph', graphDirectory(options, repair.worktree),
       '--no-fetch', '--json'], {
       cwd: repair.worktree, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
       timeout: 120000, maxBuffer: 65536,
@@ -334,11 +344,12 @@ function driftPreflight(options, entry, args) {
   canonicalPlan(options, row, entry);
   const base = entry.baseRef || args.baseRef;
   canonicalBase(worktree, base, row.pr_base);
+  return deliverPlan({ graphDir: graphDirectory(options, worktree), row, worktree });
 }
 
 function investigationPreflight(options, args, scope) {
-  const project = path.resolve(graphDirectory(options), '..', '..');
   const worktree = fs.realpathSync(args.worktreePath);
+  const project = path.resolve(graphDirectory(options, worktree), '..', '..');
   if (git(worktree, ['rev-parse', '--show-toplevel']) !== worktree || worktree !== project) {
     reject('investigation worktree differs from the canonical graph repository');
   }
@@ -513,6 +524,7 @@ function executorCommitInput(options, entry) {
     expectedHead: git(worktree, ['rev-parse', '--verify', 'HEAD^{commit}']),
     expectedSigner: signingFingerprint(worktree),
     files_modified: row.files,
+    planDelivery: deliverPlan({ graphDir: graphDirectory(options, worktree), row, worktree }),
   });
 }
 
@@ -736,11 +748,19 @@ function createClaudeDeliveryHost(options = {}) {
       }
       suppliedController.assertOwner(scope.run_id);
       assertScopedWork(name, args, scope);
+      let deliveredArgs = args;
       if (name === 'executors' && Array.isArray(args.tickets) && args.tickets.length === 1) {
-        prepared.set(args.tickets[0].id, executorCommitInput(options, args.tickets[0]));
+        const commit = executorCommitInput(options, args.tickets[0]);
+        prepared.set(args.tickets[0].id, commit);
+        deliveredArgs = { ...args, tickets: [{ ...args.tickets[0], planDelivery: commit.planDelivery }] };
       }
       if (name === 'drift-gate' && Array.isArray(args.tickets)) {
-        for (const entry of args.tickets) driftPreflight(options, entry, args);
+        deliveredArgs = {
+          ...args,
+          tickets: args.tickets.map((entry) => ({
+            ...entry, planDelivery: driftPreflight(options, entry, args),
+          })),
+        };
       }
       const verifiedSealedLines = name === 'investigation-research'
         ? investigationPreflight(options, args, scope) : undefined;
@@ -769,8 +789,9 @@ function createClaudeDeliveryHost(options = {}) {
         }
         repairs.set(repair.ticket, repair);
         reviewFeedbacks.set(repair.ticket, feedback);
+        deliveredArgs = { ...args, prs: [{ ...args.prs[0], planDelivery: repair.planDelivery }] };
       }
-      const workflowArgs = prepareArgs(name, args, feedback, scope);
+      const workflowArgs = prepareArgs(name, deliveredArgs, feedback, scope);
       const finalArgs = verifiedSealedLines !== undefined
         ? { ...workflowArgs, sealedLines: verifiedSealedLines } : workflowArgs;
       const run = () => registered.run(name, { args: finalArgs });
