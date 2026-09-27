@@ -561,7 +561,7 @@ Waves follow real data and file dependencies. Every file below was checked progr
 | A8 | The Codex executor base is Luna/max (from CLAUDE.md, not read from `model-policy-internal.cjs` this session) | Pattern 6 | Wrong baseline check; the test should read `model-policy.cjs` exports instead of a literal |
 | A9 | The code sketches' function names (`fromTranscriptRows`, `summarize`, `collect`) | Code Examples | None (naming only) |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **Statusline host contract (A1, A2).**
    - Known: INV-009's host check says the input has `rate_limits.five_hour/seven_day.used_percentage` and that settings contain `statusLine: bash ~/.claude/statusline.sh`.
