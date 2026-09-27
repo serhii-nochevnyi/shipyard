@@ -1210,6 +1210,14 @@ test('repoValue picks a repository entry, then default, then null', () => {
   assert.strictEqual(repoValue(cfg, 'not_a_key', 'acme/widgets'), null);
 });
 
+test('repoValue accepts the result returned by loadConfig', () => {
+  const loaded = withRaw({ delivery_pipeline: {
+    comment_markers: { 'acme/widgets': ['repo'], default: ['fallback'] },
+  } });
+  assert.deepStrictEqual(repoValue(loaded, 'comment_markers', 'acme/widgets'), ['repo']);
+  assert.deepStrictEqual(repoValue(loaded, 'comment_markers', 'other/repo'), ['fallback']);
+});
+
 suite('repos — sibling checkouts a multi-repo phase is driven in');
 
 test('no repos configured → an empty map, not undefined', () => {

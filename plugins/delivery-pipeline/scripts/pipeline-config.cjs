@@ -611,7 +611,8 @@ function normalizeVerificationCommands(value, warnings) {
 }
 
 function repoValue(cfg, key, repo) {
-  const map = cfg && cfg[key];
+  const source = cfg && cfg.config && Array.isArray(cfg.warnings) ? cfg.config : cfg;
+  const map = source && source[key];
   if (!map || typeof map !== 'object' || Array.isArray(map)) return null;
   if (Object.prototype.hasOwnProperty.call(map, repo) && map[repo] !== undefined) return map[repo] ?? null;
   if (Object.prototype.hasOwnProperty.call(map, 'default')) return map.default ?? null;
