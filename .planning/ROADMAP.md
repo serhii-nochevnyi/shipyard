@@ -408,6 +408,15 @@ script — not in a prompt.** Every requirement below is an instance of it.
 - **REQ-173** — state-sync lists PRs by ticket head and open state instead of a bulk all-state listing and skips tickets whose merge into a landed epic is recorded immutably, with --full re-deriving everything.
 - **REQ-174** — An arch-review finding of unknown type is kept as an informational note with its original type and never changes the verdict; violations and incomplete blocking findings still fail.
 - **REQ-175** — Phase 43 tickets start once their graph dependencies (including cross-phase ones on pending phase-40/42 tickets) have landed; every fix carries unit or fixture tests that fail on base, and before/after measurements come from a later operator proving-ground rerun.
+- **REQ-176** — The usage reader parses quota records the hosts already save (Claude rate_limit_event in host transcripts, Codex token_count.rate_limits) into one whitelisted observation envelope, without changing either runtime host, starting a process or making a call.
+- **REQ-177** — A reversible Claude statusline wrapper with its own installer entry point records the parent session's rate limits: stdin is buffered once and forwarded byte-identical, renderer output and exit are unchanged, and uninstall restores only owned settings.
+- **REQ-178** — The observation envelope keeps provider, account label, bucket id, window, reset, per-source normalized used percentage, source, freshness and concurrency; it never maps primary/secondary by position or sums across provider, account or bucket, and a reset, decrease, label change or unknown concurrency is a discontinuity or inconclusive.
+- **REQ-179** — Idle Codex baselines and the Codex parent session are recorded as unverified; phase 44 adds no app-server client, daemon, model turn, account mutation, API key or limit-reset operation.
+- **REQ-180** — Per-account samples live in private host state under ~/.local/state/shipyard/<runtime>/subscription/ (0600 files, 0700 directories, bounded retention); tracked reports carry only derived per-outcome and per-cohort values, and no prompt, transcript excerpt or credential is stored.
+- **REQ-181** — An account is identified by an operator-declared local label per runtime home; a missing label makes the observation unattributed, and e-mail, user id, credits and plan_type are never stored.
+- **REQ-182** — Rotation advice compares model, effort, policy hash and instruction digest (a mismatch is unknown), records one shadow decision per recommendation and source-state fingerprint, separates resume, fork, compaction and fresh start with full handoff costs, and keeps automatic transfer disabled.
+- **REQ-183** — A versioned effort-experiment schema and report define eligibility, metrics that count failed, repair, escalation and abandoned work, and a promotion rule that is always a recorded human decision above the 20-completion / 95% / seven-day floor, with no resolver, policy, config or dispatch change and nothing active.
+- **REQ-184** — Each phase-44 item records installed, behaviourally verified and efficiency-measured states separately, reports say inconclusive until matched cohorts exist, and no acceptance criterion contains a savings percentage.
 
 ## Phases
 
@@ -822,13 +831,16 @@ repository-declared comment markers, Jira binding by key, declared remedy workfl
 scratch set, and the point fixes found on the pdffiller proving ground.
 
 ### Phase 44: Optimize subscription efficiency per runtime
-**Status**: queued preparation; authenticated decomposition pending (renumbered from local phase 43 on 2026-09-27)
+**Status**: first pass planned (ADR-021); P44-B, P44-C, P44-E and P44-F are planned in a second pass after the phase-43 epic merges
 **Goal**: reduce avoidable subscription consumption per verified completion on Claude Code and Codex through provider-specific observation, exact-input reuse, required-instruction coverage, measured rotation advice, research fact indexing, typed checkpoint reasons, and separately gated effort experiments.
-**Depends on**: Phases 40, 41 and 42
-**Requirements**: P44-A–G are phase-local scope identifiers; global IDs await validated planning
-**Plans**: 0 plans; see [phase context](phases/44-optimize-subscription-efficiency-per-runtime/CONTEXT.md) and [work packages](phases/44-optimize-subscription-efficiency-per-runtime/WORK-PACKAGES.md)
+**Depends on**: Phases 40, 41 and 42 (merged); second-pass items on phase 43
+**Requirements**: REQ-176, REQ-177, REQ-178, REQ-179, REQ-180, REQ-181, REQ-182, REQ-183, REQ-184
 
-No production model-policy change or automatic provider scheduler is authorized by this queue entry. Formal planning requires authenticated investigation, typed researcher/planner/checker artifacts and the graph gate.
+Implement the first pass of [ADR-021](architecture/ADR-021-subscription-efficiency-per-runtime.md) from
+[INV-009](investigations/INV-009-runtime-subscription-efficiency/): passive quota observation from the
+transcripts the hosts already save plus a reversible Claude statusline wrapper, comparable rotation
+advice with shadow decisions, and a versioned effort-experiment protocol. No production model-policy
+change, experiment or provider scheduler is activated.
 
 ### Phase 45: Close residual pipeline efficiency gaps
 **Status**: queued scope; authenticated investigation (INV-008) and decomposition pending (renumbered from local phase 44 on 2026-09-27)
@@ -842,8 +854,8 @@ S1 is a separate high-risk correctness fix with its own ticket and human checkpo
 <!-- shipyard:gsd-sync:begin -->
 ## Shipyard synchronization (generated)
 
-- Source fingerprint: `6e63da58685a4b767f50f864f7ef7e2c8f90eda0f8f52d9d2dca663a05b6076f`
-- Plans merged: 176/221
+- Source fingerprint: `f8a85703e1ce73e67e9fd6a00670f8a97ebe1de9c898635d51748ff0fd17423a`
+- Plans merged: 203/228
 - Phases verified: 10/26
 - Current phase: 20
 
@@ -869,11 +881,11 @@ S1 is a separate high-risk correctness fix with its own ticket and human checkpo
 | 37 — Run the autonomous dual-runtime control plane | 8 | 8 | pending |
 | 38 — Restore the native model ladder in delivery | 8 | 8 | passed |
 | 39 — Remove conveyor session friction | 17 | 17 | gaps_found |
-| 40 — Build delivery seams and clean target-project PRs | 27 | 0 | pending |
+| 40 — Build delivery seams and clean target-project PRs | 27 | 27 | pending |
 | 41 — Reduce pipeline subscription overhead | 9 | 9 | gaps_found |
 | 42 — Resume trusted finalization without executor replay | 3 | 3 | gaps_found |
 | 43 — Target-project delivery at scale | 19 | 1 | pending |
-| 44 — Optimize subscription efficiency per runtime | 0 | 0 | pending |
+| 44 — Optimize subscription efficiency per runtime | 7 | 0 | pending |
 | 45 — Close residual pipeline efficiency gaps | 0 | 0 | pending |
 
 <!-- shipyard:gsd-sync:end -->
