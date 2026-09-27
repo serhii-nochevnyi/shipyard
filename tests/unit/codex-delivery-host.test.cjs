@@ -56,6 +56,23 @@ const signer = execFileSync('gpg', ['--batch', '--with-colons', '--list-secret-k
   encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
 }).split('\n').find((line) => line.startsWith('fpr:')).split(':')[9];
 
+let graphEnvQueue = Promise.resolve();
+function withGraphDirEnv(value, action) {
+  const run = graphEnvQueue.then(async () => {
+    const previous = process.env.SHIPYARD_GRAPH_DIR;
+    if (value === undefined) delete process.env.SHIPYARD_GRAPH_DIR;
+    else process.env.SHIPYARD_GRAPH_DIR = value;
+    try {
+      return await action();
+    } finally {
+      if (previous === undefined) delete process.env.SHIPYARD_GRAPH_DIR;
+      else process.env.SHIPYARD_GRAPH_DIR = previous;
+    }
+  });
+  graphEnvQueue = run.catch(() => {});
+  return run;
+}
+
 function git(repo, ...args) {
   return execFileSync('git', ['-C', repo, ...args], {
     encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
@@ -254,29 +271,25 @@ test('dynamic executor resolves Luna/max through the boundary with worktree writ
 
 test('target-project executor finalizes a conventional, id-free subject from the canonical graph title', async () => {
   const f = fixture({ target: true });
-  const previousGraph = process.env.SHIPYARD_GRAPH_DIR;
-  process.env.SHIPYARD_GRAPH_DIR = f.graphDir;
   try {
-    let refusal;
-    await assert.rejects(() => delivery(f).run({ role: 'executor', dispatch_id: 'codex-target-untitled',
-      context: { prompt: 'Implement the scoped ticket.' } }), (error) => { refusal = error; return true; });
-    assert.match(refusal.message, /no canonical graph title/);
-    assert.equal(git(f.root, 'rev-parse', 'HEAD'), f.base);
-    const graphFile = path.join(f.graphDir, 'tickets.json');
-    const graph = JSON.parse(fs.readFileSync(graphFile, 'utf8'));
-    Object.assign(graph.tickets['T-38-04'], { title: 'Retry the flaky upload', type: 'bugfix' });
-    fs.writeFileSync(graphFile, JSON.stringify(graph));
-    git(f.root, 'checkout', '-q', '--', 'src/owned.txt');
-    const result = await delivery(f).run({ role: 'executor', dispatch_id: 'codex-target-titled',
-      context: { prompt: 'Implement the scoped ticket.' } });
-    assert.equal(result.artifact.status, 'committed');
-    assert.equal(git(f.root, 'log', '-1', '--format=%s', 'HEAD'), 'fix: retry the flaky upload');
-    assert.equal(git(f.root, 'rev-parse', 'HEAD^'), f.base);
-  } finally {
-    if (previousGraph === undefined) delete process.env.SHIPYARD_GRAPH_DIR;
-    else process.env.SHIPYARD_GRAPH_DIR = previousGraph;
-    clean(f);
-  }
+    await withGraphDirEnv(f.graphDir, async () => {
+      let refusal;
+      await assert.rejects(() => delivery(f).run({ role: 'executor', dispatch_id: 'codex-target-untitled',
+        context: { prompt: 'Implement the scoped ticket.' } }), (error) => { refusal = error; return true; });
+      assert.match(refusal.message, /no canonical graph title/);
+      assert.equal(git(f.root, 'rev-parse', 'HEAD'), f.base);
+      const graphFile = path.join(f.graphDir, 'tickets.json');
+      const graph = JSON.parse(fs.readFileSync(graphFile, 'utf8'));
+      Object.assign(graph.tickets['T-38-04'], { title: 'Retry the flaky upload', type: 'bugfix' });
+      fs.writeFileSync(graphFile, JSON.stringify(graph));
+      git(f.root, 'checkout', '-q', '--', 'src/owned.txt');
+      const result = await delivery(f).run({ role: 'executor', dispatch_id: 'codex-target-titled',
+        context: { prompt: 'Implement the scoped ticket.' } });
+      assert.equal(result.artifact.status, 'committed');
+      assert.equal(git(f.root, 'log', '-1', '--format=%s', 'HEAD'), 'fix: retry the flaky upload');
+      assert.equal(git(f.root, 'rev-parse', 'HEAD^'), f.base);
+    });
+  } finally { clean(f); }
 });
 
 test('production runtime host receives the scoped prompt and records native model evidence', async () => {
@@ -1091,12 +1104,7 @@ function ticketWorktreeFixture(role) {
 }
 
 function withoutShipyardGraphDirEnv(action) {
-  const previous = process.env.SHIPYARD_GRAPH_DIR;
-  delete process.env.SHIPYARD_GRAPH_DIR;
-  return Promise.resolve().then(action).finally(() => {
-    if (previous === undefined) delete process.env.SHIPYARD_GRAPH_DIR;
-    else process.env.SHIPYARD_GRAPH_DIR = previous;
-  });
+  return withGraphDirEnv(undefined, action);
 }
 
 test('requestValue accepts context.plan_sha256 and rejects every other plan* context field', () => {

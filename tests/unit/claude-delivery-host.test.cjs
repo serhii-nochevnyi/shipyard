@@ -1186,6 +1186,31 @@ suite('claude-delivery-host — T-40-28 plan delivery (D-43)');
 test('executor and drift-check prompts carry the delivered plan contract; a caller deliveryRulesHint survives prepareArgs', async () => {
   const releaseGpg = await holdGpg();
   const fixture = repairFixture();
+  const prompts = [];
+  const evidence = new WeakMap();
+  const host = createClaudeDeliveryHost({
+    graphDir: fixture.graphDir,
+    controller: owner(fixture.root, fixture.worktree, 'T-38-03', 'run-executor-delivery'),
+    runtimeHost: {
+      ...fixture.runtimeHost,
+      scope: { run_id: 'run-executor-delivery', ticket: 'T-38-03', worktree: fixture.worktree },
+      async agent(prompt, launchOptions) {
+        prompts.push(prompt);
+        fs.writeFileSync(path.join(fixture.worktree, '.shipyard-pr-body.md'), 'Ticket: T-38-03\n\nDone.\n');
+        fs.writeFileSync(path.join(fixture.worktree, '.shipyard-evidence.md'), 'complete evidence\n');
+        fs.writeFileSync(path.join(fixture.worktree, 'src', 'owned.txt'), 'after\n');
+        const result = { id: 'T-38-03', status: 'committed', summary: 'done', blocking_count: 0 };
+        evidence.set(result, transcriptEvidence({
+          launch_id: `executor-${crypto.randomUUID()}`, applied_model: launchOptions.model,
+          applied_effort: launchOptions.effort, observed_model: launchOptions.model,
+          observed_effort: launchOptions.effort,
+        }));
+        return result;
+      },
+      applicationEvidence: ({ result }) => evidence.get(result),
+      capabilities: Object.freeze({ supportedModels: [CLAUDE_MODEL_ALIASES.sonnet], supportedEfforts: ['max'], observedModel: true, observedEffort: true }),
+    },
+  });
   const gnupgHome = fs.mkdtempSync(path.join(os.tmpdir(), 'g6-'));
   fs.chmodSync(gnupgHome, 0o700);
   const previousHome = process.env.GNUPGHOME;
@@ -1197,7 +1222,7 @@ test('executor and drift-check prompts carry the delivered plan contract; a call
     const keys = execFileSync('gpg', ['--batch', '--with-colons', '--list-secret-keys'], { encoding: 'utf8' });
     const fingerprint = keys.split('\n').find((line) => line.startsWith('fpr:')).split(':')[9];
     git(fixture.worktree, 'config', 'user.signingkey', fingerprint);
-    await fixture.host.run('executors', {
+    await host.run('executors', {
       tickets: [{
         id: 'T-38-03', branch: 'ticket/T-38-03', prBase: 'main',
         worktreePath: fixture.worktree, planPath: fixture.planPath,
@@ -1205,9 +1230,9 @@ test('executor and drift-check prompts carry the delivered plan contract; a call
       }],
       deliveryRulesHint: 'CUSTOM RULES HINT FROM THE CALLER',
     });
-    assert.match(fixture.prompts[0], /<TICKET-CONTRACT path="\.planning\/phases\/38\/38-03-PLAN\.md"/);
-    assert.match(fixture.prompts[0], /# Repair plan/);
-    assert.match(fixture.prompts[0], /CUSTOM RULES HINT FROM THE CALLER/);
+    assert.match(prompts[0], /<TICKET-CONTRACT path="\.planning\/phases\/38\/38-03-PLAN\.md"/);
+    assert.match(prompts[0], /# Repair plan/);
+    assert.match(prompts[0], /CUSTOM RULES HINT FROM THE CALLER/);
   } finally {
     if (previousHome === undefined) delete process.env.GNUPGHOME;
     else process.env.GNUPGHOME = previousHome;
