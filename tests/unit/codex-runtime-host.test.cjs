@@ -375,6 +375,50 @@ test('static launcher consumes the immutable generated instructions', async () =
   }
 });
 
+test('read-only judgment roles can write only their evidence file', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-codex-evidence-'));
+  const codeHome = path.join(root, 'codex-home');
+  const content = staticContent();
+  const digest = crypto.createHash('sha256').update(content).digest('hex');
+  const calls = [];
+  let count = 0;
+  try {
+    const launch = createCodexCliLauncher({
+      scope: { ...SCOPE, worktree: root }, capabilities, transcriptDir: null,
+      env: { CODEX_HOME: codeHome },
+      spawn: (_executable, args, options) => {
+        calls.push(args);
+        const session = count++ === 0
+          ? '44444444-4444-4444-8444-444444444444'
+          : '55555555-5555-4555-8555-555555555555';
+        writeSession(options.env.CODEX_HOME, session, 'gpt-6-sol', 'high');
+        return childFor(stream(session), 0, 24040 + count, []);
+      },
+    });
+    for (const [agentFile, evidenceName] of [
+      ['shipyard-drift-check.toml', '.shipyard-drift-evidence.md'],
+      ['shipyard-arch-review-critical.toml', '.shipyard-arch-review-evidence.md'],
+    ]) {
+      const result = await launch('judge', {
+        model: 'gpt-6-sol', effort: 'high', sandbox_mode: 'read-only',
+        agent_file: agentFile, agent_file_digest: digest, agent_file_content: content,
+        dispatch_id: 'dispatch-evidence-' + count,
+      });
+      const filesystem = calls.at(-1).find((value) => value.startsWith('permissions.shipyard-runtime.filesystem='));
+      assert.ok(calls.at(-1).includes('permissions.shipyard-runtime.extends=":read-only"'));
+      assert.ok(filesystem.includes(JSON.stringify(path.join(root, evidenceName)) + '="write"'));
+      assert.equal(result.runtime_evidence.sandbox_evidence.evidence_write_path, path.join(root, evidenceName));
+    }
+    fs.symlinkSync(path.join(root, 'outside'), path.join(root, '.shipyard-drift-evidence.md'));
+    await assert.rejects(() => launch('judge', {
+      model: 'gpt-6-sol', effort: 'high', sandbox_mode: 'read-only',
+      agent_file: 'shipyard-drift-check.toml', agent_file_digest: digest,
+      agent_file_content: content, dispatch_id: 'dispatch-evidence-symlink',
+    }), (error) => error.code === 'INVALID_INPUT');
+    assert.equal(calls.length, 2);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
 test('controller-owned host binds run identity and returns process evidence', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-codex-host-'));
   const session = '11111111-1111-4111-8111-111111111111';

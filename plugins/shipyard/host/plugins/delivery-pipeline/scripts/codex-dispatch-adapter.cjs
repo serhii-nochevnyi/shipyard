@@ -100,8 +100,18 @@ function validateRuntimeEvidence(evidence, selection, resolution) {
   const sandboxEvidence = evidence.sandbox_evidence;
   const expectedProfileParent = expectedSandbox === 'read-only' ? ':read-only' : ':workspace';
   const protectedPaths = sandboxEvidence && sandboxEvidence.protected_paths;
+  const evidenceNames = {
+    'shipyard-drift-check.toml': '.shipyard-drift-evidence.md',
+    'shipyard-arch-review.toml': '.shipyard-arch-review-evidence.md',
+    'shipyard-arch-review-critical.toml': '.shipyard-arch-review-evidence.md',
+  };
+  const expectedEvidencePath = expectedSandbox === 'read-only' && evidenceNames[resolution.agent_file]
+    && typeof evidence.worktree === 'string' && path.isAbsolute(evidence.worktree)
+    ? path.join(evidence.worktree, evidenceNames[resolution.agent_file]) : null;
+  const evidenceWritePath = sandboxEvidence && sandboxEvidence.evidence_write_path;
   const expectedFilesystem = Array.isArray(protectedPaths) && protectedPaths.length
-    ? '{' + protectedPaths.map((entry) => JSON.stringify(entry) + '=\"deny\"').join(',') + '}' : null;
+    ? '{' + [...protectedPaths.map((entry) => JSON.stringify(entry) + '=\"deny\"'),
+      ...(evidenceWritePath ? [JSON.stringify(evidenceWritePath) + '=\"write\"'] : [])].join(',') + '}' : null;
   const configArgs = evidence.command.args.filter((value) => typeof value === 'string'
     && value.startsWith('default_permissions='));
   const profileParents = evidence.command.args.filter((value) => typeof value === 'string'
@@ -118,6 +128,7 @@ function validateRuntimeEvidence(evidence, selection, resolution) {
       || !Array.isArray(protectedPaths) || !protectedPaths.length
       || protectedPaths.some((entry) => typeof entry !== 'string' || !path.isAbsolute(entry))
       || new Set(protectedPaths).size !== protectedPaths.length
+      || (evidenceWritePath !== undefined && evidenceWritePath !== expectedEvidencePath)
       || configArgs.length !== 1 || configArgs[0] !== 'default_permissions=\"shipyard-runtime\"'
       || profileParents.length !== 1
       || profileParents[0] !== 'permissions.shipyard-runtime.extends=' + JSON.stringify(expectedProfileParent)

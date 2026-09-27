@@ -926,13 +926,34 @@ function signerProtectionPaths(env, worktree) {
   return normalizeProtectedPaths(paths);
 }
 
-function signerPermissionProfileArgs(protectedPaths, sandbox) {
+function staticEvidenceWritePath(worktree, launchOptions, sandbox) {
+  if (sandbox !== 'read-only' || typeof launchOptions.agent_file_content !== 'string') return null;
+  const names = {
+    'shipyard-drift-check.toml': '.shipyard-drift-evidence.md',
+    'shipyard-arch-review.toml': '.shipyard-arch-review-evidence.md',
+    'shipyard-arch-review-critical.toml': '.shipyard-arch-review-evidence.md',
+  };
+  const name = names[launchOptions.agent_file];
+  if (!name) return null;
+  const file = path.join(worktree, name);
+  try {
+    const stat = fs.lstatSync(file);
+    if (stat.isSymbolicLink() || !stat.isFile()) fail('INVALID_INPUT', 'role evidence path must be a regular file');
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+  }
+  return file;
+}
+
+function signerPermissionProfileArgs(protectedPaths, sandbox, evidenceWritePath = null) {
   if (!['read-only', 'workspace-write'].includes(sandbox)) {
     fail('INVALID_INPUT', 'Codex launch requires an explicit read-only or workspace-write permission profile');
   }
   const paths = normalizeProtectedPaths(protectedPaths);
   if (!paths.length) fail('SIGNER_ISOLATION_UNAVAILABLE', 'Codex signer paths could not be determined');
-  const filesystem = '{' + paths.map((entry) => JSON.stringify(entry) + '="deny"').join(',') + '}';
+  const rules = paths.map((entry) => JSON.stringify(entry) + '="deny"');
+  if (evidenceWritePath) rules.push(JSON.stringify(evidenceWritePath) + '="write"');
+  const filesystem = '{' + rules.join(',') + '}';
   const parent = sandbox === 'read-only' ? ':read-only' : ':workspace';
   return [
     '--config', 'default_permissions=' + JSON.stringify(PERMISSION_PROFILE),
@@ -988,6 +1009,7 @@ function createCodexCliLauncher(options = {}) {
     const task = agent ? writeTaskFile(taskDir, scope, launchOptions.dispatch_id, launchPrompt(prompt)) : null;
     try {
     const protectedPaths = normalizeProtectedPaths([...signerProtectionPaths(env, scope.worktree), ...hostProtectedPaths]);
+    const evidenceWritePath = staticEvidenceWritePath(scope.worktree, launchOptions, sandbox);
     for (const key of [
       'CODEX_MODEL', 'CODEX_MODEL_REASONING_EFFORT', 'CODEX_THREAD_ID', 'CODEX_SESSION_ID',
       'OPENAI_API_KEY', 'CODEX_API_KEY',
@@ -1006,7 +1028,7 @@ function createCodexCliLauncher(options = {}) {
       '--config', 'forced_login_method="chatgpt"',
       '--cd', scope.worktree, '--ignore-user-config',
     ];
-    args.push(...signerPermissionProfileArgs(protectedPaths, sandbox));
+    args.push(...signerPermissionProfileArgs(protectedPaths, sandbox, evidenceWritePath));
     if (agent) {
       args.push('--config', 'features.multi_agent=true');
       args.push('--config', 'features.multi_agent_v2=false');
@@ -1100,6 +1122,7 @@ function createCodexCliLauncher(options = {}) {
           profile: PERMISSION_PROFILE,
           base_profile: sandbox === 'read-only' ? ':read-only' : ':workspace',
           protected_paths: protectedPaths,
+          ...(evidenceWritePath ? { evidence_write_path: evidenceWritePath } : {}),
         },
         selection_source: selection.source,
         applied_model: selection.model,
