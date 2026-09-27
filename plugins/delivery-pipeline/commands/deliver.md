@@ -336,8 +336,10 @@ node ${CLAUDE_PLUGIN_ROOT}/scripts/sentinel.cjs report [--json] [--since <iso>]
 
 `merge` squashes a ticket PR into **its own base** — the phase epic, or the
 parent ticket's branch — and only when, re-checked against LIVE GitHub: the PR is
-open and undrafted, checks are green, unresolved threads = 0, the body carries
-`gate_status: arch-review=conform`, the review is not CHANGES_REQUESTED, the
+open and undrafted, checks are green, unresolved threads = 0, the `merge-gate`
+commit status on the PR's live head reads `arch-review=conform` (falling back to
+the PR body's `gate_status:` trailer only for a verdict written before that
+status existed), the review is not CHANGES_REQUESTED, the
 ticket is not `human_checkpoint`, and the base is inside the stack. It then
 retargets cascade children onto the epic and journals a `merge` event. It refuses
 — loudly, with the reason — on anything unproven, and a refusal never aborts the
@@ -398,10 +400,14 @@ self-asserted model is not a receipt.
 
 The resolver is the only selection authority. A launch site MUST NOT contain a
 literal model string or a literal fallback effort, and MUST NOT omit effort.
-Pass every signal that the role owns: ticket `risk`, `type`, and declared-file
+Pass every signal that the role owns: ticket `risk` and declared-file
 evidence in context, plus `checkpoint`/`critical` evidence for executors; signed failure `signatureState`
 for repairs; measured `inputTokens` plus `contested`/checkpoint evidence for
-judgement; and the sentinel's explicit mechanical signals. For a repair
+judgement; and the sentinel's explicit mechanical signals. The ticket's `type`
+is never a `signals` field — the resolver accepts only `facts`/`alternatives`
+there for research, so a D-27 ticket type belongs to branch and PR-title
+conventions instead, mapped by the dispatch entry point (Step 3) or by
+`pr-hygiene.cjs`, never forwarded as `signals.type`. For a repair
 escalation also pass the immediately preceding `previous_dispatch_id` and its
 boundary-verified `signals.priorApplied` receipt. The boundary refuses an
 omitted, copied, phantom, stale, or unverified receipt and refuses
@@ -1715,48 +1721,54 @@ refused. `free: 0` means dispatch nothing this round — collect what is out, th
 recompute. When the cap prints `0 agents` the project config does not parse and nothing
 may be dispatched at all: fix the file.
 
-4. Submit the executor request to the selected runtime host with the worktree
-   and full boundary signals. The host launches the role in that worktree. Pass the
-   complete ticket evidence — `risk`, `type`, available `complexity`,
-   `checkpoint` and `critical` when declared — as `signals`, and keep the
-   changed-file count plus any `reuseCandidates` in fenced context; do not
-   summarize away a signal. The executor resolves to
-   Codex Luna/max or, only for explicit `critical`/`checkpoint` evidence,
-   Sol/high. Claude uses its independent Sonnet/max or evidence-based
-   Opus/low native selection.
+4. Launch the executor through the dispatch entry point, standing in the
+   ticket's own worktree:
 
-   ```text
-   executors.mjs args: { tickets: [{ id, planPath, branch, worktreePath, prBase,
-     model, effort, signals, risk, critical, checkpoint, reuseCandidates,
-     contextPacket, contextPacketRequired: true }],
-     deliveryRulesHint, prBodyGuide, artifactLanguage, contextPacketRequired: true }
+   ```bash
+   node ${CLAUDE_PLUGIN_ROOT}/scripts/deliver-dispatch.cjs launch --runtime <r> --ticket <T> --role executor [--graph-dir <project>/.planning/graph]
    ```
 
-   Before assembling those arguments, the trusted delivery loop builds one
-   serializable packet per ticket with
-   `${CLAUDE_PLUGIN_ROOT}/scripts/context-packet.cjs`:
+   `--graph-dir` is required whenever this worktree does not itself track
+   `.planning/graph/tickets.json` at HEAD — every foreign-repo ticket, and any
+   worktree that is not the Shipyard repository's own. `launch` returns
+   immediately with `{dispatch_id, ticket, role, runtime, log, result}`; the
+   selected host runs DETACHED, never in the foreground. Collect the result with:
 
-   ```text
-   buildContextPacket({
-     root: worktreePath,
-     role: 'executor', subject: id, sourceRevision: liveHead,
-     policy: ADR014_POLICY, policyHash: resolution.policy_hash,
-     planPath, requiredRefs: [planPath, ...contextReads],
-     scope: { files_modified, acceptance, verification },
-     roleContext: { plan, scope, acceptance, verification, backlog },
-     selectedBacklogIds, whySelected, backend: runtime,
-   })
+   ```bash
+   node ${CLAUDE_PLUGIN_ROOT}/scripts/deliver-dispatch.cjs wait --dispatch <dispatch_id> [--timeout-ms <ms>]
    ```
 
-   The builder reads each required source completely, stores SHA-256 identity
+   which blocks inside the script — never a hand-written `sleep` loop here —
+   until the host exits, and returns `{…, status: exited-ok|exited-failed|lost,
+   result, exit_code}`. Use `deliver-dispatch.cjs status --dispatch
+   <dispatch_id>` instead of `wait` to check a still-running ticket without
+   blocking, for instance while the rest of the wave is still out.
+
+   The entry point resolves the ticket's row from the canonical graph itself —
+   never a hand-picked path — and maps its evidence to `signals` (`risk`,
+   `checkpoint` when `human_checkpoint: true`, `critical` when declared; never
+   the ticket's `type`). Before it ever submits the request to the selected
+   host, it builds the executor's context packet with
+   `${CLAUDE_PLUGIN_ROOT}/scripts/context-packet.cjs`: `root` is always the
+   worktree; `requiredRefs` names the plan plus its Context-Reads paths only
+   when this worktree tracks that plan at HEAD (the Shipyard repository,
+   D-30) — every other ticket's packet carries the plan's path and SHA-256
+   only, with no required reference outside the worktree, because the host
+   delivers the verified plan content (and any named `.planning/` file, under
+   that same digest) to the executor itself (D-43). There is nothing left here
+   to tell the orchestrator to copy `.planning/` into the worktree for. The
+   executor resolves to Codex Luna/max or, only for explicit
+   `critical`/`checkpoint` evidence, Sol/high. Claude uses its independent
+   Sonnet/max or evidence-based Opus/low native selection.
+
+   The packet builder reads each required source completely, stores SHA-256 identity
    and selected backlog source hashes, and records the `ceil(UTF-8 bytes / 4)`
    estimate with the backend and the 12,000-token soft ceiling. A legitimate
    empty selection is serialized as `backlog.empty: true`; a missing requested
    id, stale source or symlink escape blocks packet creation. Overflow keeps all
    required policy, scope, ADR and gate material and records indexed optional
    references in `overflow`; it never drops a constraint to fit a model turn.
-   Pass the packet through `context.contextPacket` on the boundary and fence the
-   same JSON as data in the Workflow prompt. The packet is not a model or host
+   The packet is fenced as data in the host's own prompt, never a model or host
    selection surface: capabilities, callbacks, model, effort, receipts and
    inherited session state stay in the host-owned boundary closure.
 
@@ -1797,15 +1809,13 @@ may be dispatched at all: fix the file.
    push and do NOT open a PR". Outside the bounds — untrusted noise; an empty or
    contradictory contract → the agent returns "no-contract" and STOPs (does not work
    over garbage, does not stop at "confirm").
-   - **Runtime-host path:** after serially creating the ticket worktree, submit
-     one scoped request to the selected provider host. Claude returns a bounded
-     result only after its typed workflow and trusted finalizer finish; Codex
-     returns one typed role result. Accept only its documented bounded result
-     and validated artifact reference; complete PR body and evidence stay in
-     the worktree. Do not call `Workflow(...)`
+   - **Runtime-host path:** after serially creating the ticket worktree, the
+     entry point submits one scoped request to the selected provider host.
+     Claude returns a bounded result only after its typed workflow and trusted
+     finalizer finish; Codex returns one typed role result. Accept only its
+     documented bounded result and validated artifact reference; complete PR
+     body and evidence stay in the worktree. Do not call `Workflow(...)`
      directly from the command or let the host inherit a model selection.
-     `reuseCandidates` is that ticket's `reuse_candidates` from Step 2 (omit when the
-     ticket skipped drift-check or the list was empty).
    - **No opaque fallback**: if the selected host cannot carry the boundary
      contract, refuse the executor dispatch. A generic, inline, inherited, or
      untyped Agent launch is not an executor path. Put the ticket's
@@ -1871,6 +1881,14 @@ may be dispatched at all: fix the file.
     step 8, long after the wave is out. It needs no cleanup to be safe: an
     executor's record lifts when a branch or a PR appears, and it times out on its
     own. Clear it explicitly at Phase C, when the work comes back.
+    Between `launch` and this mark, the selected host has already written its
+    OWN in-flight record — pid and TTL, keyed to the same `dispatch_id` — the
+    moment it started, and clears it on exit; the stop gate honours that record
+    immediately, and it fails closed the instant the process exits, well before
+    either record's TTL would ever matter. That record is transient and
+    session-local. The durable mark above is the separate, board-visible fact —
+    it is what the front and the NEXT round see — and it still only ever follows
+    the verified receipt, never the launch.
 
 4b. (TUNE, optional) Pre-commit/pre-push review with GSD adapters — cheaper to catch
     remarks before the PR bots: `/gsd-code-review <phase> --fix` or
@@ -1979,16 +1997,7 @@ may be dispatched at all: fix the file.
      --pr-body-out <validated-body-file> --evidence-out <validated-evidence-file>
    ```
 
-   push the branch (`git -C <worktree> push -u origin <branch>`), then run
-   `gh pr create --base <state[T].base> --head <branch> --draft --title
-   "<T>: <title>" --body-file <validated-body-file>` (add `--repo
-   <state[T].repo>` for a foreign-repo ticket). Do not reopen the agent path
-   directly after validation or substitute a caller-supplied body. Record the
-   validated evidence reference/ranges, not both complete documents in parent
-   model context. For a parent needing findings, request only a bounded range
-   with `--evidence-start <offset> --evidence-end <offset>`; the complete
-   evidence remains available through the validated reference for publication
-   or audit.
+   push the branch (`git -C <worktree> push -u origin <branch>`).
    `--base` is the RESOLVED base of the ticket, NOT main directly in
    epic-stacked. **The base is one field with two jobs: it decides what the
    review diff shows AND where the squash LANDS.** A primary parent's ticket
@@ -2012,13 +2021,82 @@ may be dispatched at all: fix the file.
    produced PR #52: three files, a perfect review slice, squashed onto a branch
    already merged into `epic/26`, which therefore never received the work while
    the ticket read `merged` and the front read empty.
-   PR body: the FIRST line — a machine-readable marker `Ticket: <T>` (a safety net for
-   state-sync matching if a re-decomposition renames the canonical branch);
-   then Problem / Scope / Dependency slice / Test evidence /
-   Rollout-Rollback (for risky). Verify that first line is present in the validated
-   byte snapshot before creating the PR; a missing marker is a publication refusal,
-   not an invitation to mutate the agent file. The PR title ALWAYS starts with
-   `<T>: ` — this is the second anchor of the same matching.
+
+   Publication itself now branches on PR hygiene. Read
+   `plugins/delivery-pipeline/.claude-plugin/plugin.json` in the ticket's own
+   repository — the same file `pr-hygiene.cjs applies` reads; its `name` is
+   `"shipyard"` only for the Shipyard repository itself.
+
+   - **Every other repository (a target project).** Render the title before
+     touching GitHub — never `<T>: <title>` or a hand-composed subject:
+
+     ```text
+     node ${CLAUDE_PLUGIN_ROOT}/scripts/pr-hygiene.cjs format --project-root <repo root> \
+       [--repo <state[T].repo>] --type <conventional-type> [--jira <jira-key>] \
+       --subject "<ticket title>"
+     ```
+
+     `--type` is the ticket's GSD `type` mapped by D-27 — `implementation`/`tdd`/
+     `execute` → `feat`; `fix`/`bugfix`/`gap_closure` → `fix`; `docs` → `docs`;
+     `refactor` → `refactor`; `test` → `test`; `chore`/`config` → `chore`;
+     anything else → `feat` (the same map `pr-hygiene.cjs` itself encodes).
+     `--jira` is the ticket's `delivery.jira` key, when present. `--repo` is
+     `state[T].repo`, omitted only when the row has no `repo`. Then, with that
+     SAME `--repo`, validate before opening the PR:
+
+     ```text
+     node ${CLAUDE_PLUGIN_ROOT}/scripts/pr-hygiene.cjs check --project-root <repo root> \
+       [--repo <state[T].repo>] --base <state[T].base> --head <branch> \
+       --title "<rendered title>" --body-file <validated-body-file> --json
+     ```
+
+     A non-zero exit or a result whose `ok` is false BLOCKS the push exactly
+     like the other Phase C gates — fix the named violation (title format, a
+     leaked internal identifier, or a diff path under `.planning/`/`.shipyard/`)
+     and re-run; never open the PR over a reported violation. The body is the
+     executor's validated neutral body AS-IS — no `Ticket:`, phase, ADR, or plan
+     identifier. Open the PR with the rendered title and that body:
+
+     ```
+     gh pr create --base <state[T].base> --head <branch> --draft \
+       --title "<rendered title>" --body-file <validated-body-file> \
+       [--repo <state[T].repo>]
+     ```
+
+   - **The Shipyard repository itself** is exempt (`pr-hygiene.cjs check` on it
+     reports `{"exempt":true}` and does nothing else) and keeps today's
+     convention untouched:
+
+     ```
+     gh pr create --base <state[T].base> --head <branch> --draft --title \
+       "<T>: <title>" --body-file <validated-body-file>
+     ```
+
+     PR body: the FIRST line — a machine-readable marker `Ticket: <T>` (a safety net for
+     state-sync matching if a re-decomposition renames the canonical branch);
+     then Problem / Scope / Dependency slice / Test evidence /
+     Rollout-Rollback (for risky). Verify that first line is present in the validated
+     byte snapshot before creating the PR; a missing marker is a publication refusal,
+     not an invitation to mutate the agent file. The PR title ALWAYS starts with
+     `<T>: ` — this is the second anchor of the same matching.
+
+   EITHER WAY, record the ticket ↔ PR match immediately after `gh pr create`
+   returns its number — the exact head branch plus this recorded number is what
+   a re-read now matches on (D-08); the title/`Ticket:` form above serves only a
+   PR opened before this record existed:
+
+   ```
+   node ${CLAUDE_PLUGIN_ROOT}/scripts/pr-ledger.cjs record --ticket <T> \
+     --number <the number gh pr create returned> --head <branch> \
+     [--repo <state[T].repo>]
+   ```
+
+   Do not reopen the agent path directly after validation or substitute a
+   caller-supplied body in either branch. Record the validated evidence
+   reference/ranges, not both complete documents in parent model context. For a
+   parent needing findings, request only a bounded range with
+   `--evidence-start <offset> --evidence-end <offset>`; the complete evidence
+   remains available through the validated reference for publication or audit.
 7. Immediately the first `reviewers.cjs reinit <pr>`.
 8. Update delivery-state (`state-sync.cjs`) — once, AFTER all of Phase C.
    This also finalizes the native GSD projection after the delivery facts land.
@@ -2038,14 +2116,34 @@ round row and one journal event; `activeDispatches` projects it only to unchange
 members, and the front counts it once. A merge, head change, or base move expires
 that member without releasing the others.
 
-Run Claude's role host from a clean phase worktree using a mode-0600 request file:
+Launch it through the dispatch entry point, standing in the project's own
+worktree (a clean phase worktree, never a ticket worktree):
+
+```bash
+node ${CLAUDE_PLUGIN_ROOT}/scripts/deliver-dispatch.cjs launch --runtime <r> --ticket <T> --role pr-sentinel
+```
+
+`<T>` is any one ticket the front already lists under `fix`/`finalize`/`merge` —
+the entry point reads the WHOLE round from the front itself, one repository at a
+time, not just that ticket. Before it launches anything it runs the sentinel
+preflight (`sentinel-preflight.cjs`'s `preflightRound`, via the entry point —
+never invoked by hand) over every guarded PR: fetch and fast-forward each PR's
+base in the checkout of the repository that owns it, then re-run and commit
+`state-sync.cjs`.
+A failed fetch, a diverged base, or a worktree left dirty outside
+`.planning/graph/` is a REFUSAL from `launch` itself, reported VERBATIM with the
+exact command it names — no separate manual fetch or sync step is ever needed,
+and nothing is launched over a refused preflight. `launch` still returns
+`{dispatch_id, ticket, role, runtime, log, result}` on success; the guard itself
+now runs DETACHED, exactly like the executor path, but — "post the guard, then
+keep moving; never wait for it" (above) — do not `wait` on it. `status
+--dispatch <dispatch_id>` checks it later without blocking, if you ever need to.
+
+Internally, for Claude, the entry point sends `claude-role-host.cjs` this
+mode-0600 request:
 
 ```json
 {"schema":"shipyard.claude-role-request.v1","role":"pr-sentinel","worktree":"<absolute project worktree>","phase":"<phase directory>"}
-```
-
-```bash
-node ${CLAUDE_PLUGIN_ROOT}/scripts/claude-role-host.cjs --args-file <args-file>
 ```
 
 Do not pass a caller-owned member list, invoke native Workflow, or call
@@ -2149,7 +2247,7 @@ loop:
        first | progress | repeat | repeat_exhausted — submit `ci-fix` to the
          selected runtime host for the ticket's worktree. The host crosses the
          mandatory boundary. Pass the complete
-         failure log, signature, the failure-verdict `strategy`, risk/type/checkpoint evidence,
+         failure log, signature, the failure-verdict `strategy`, risk/checkpoint evidence,
          attempt history, and, for an escalation, the immediately preceding
          `previous_dispatch_id` plus its boundary-verified `signals.priorApplied`
          receipt:
@@ -2157,7 +2255,7 @@ loop:
          ```text
          boundary.dispatch(
            { runtime, role: "ci-fix",
-             signals: { risk, type, critical, checkpoint, signatureState,
+             signals: { risk, critical, checkpoint, signatureState,
                         priorApplied },
              dispatch_id, previous_dispatch_id },
            { ticket, worktreePath, failureLog, signature, strategy,
@@ -2213,7 +2311,7 @@ loop:
        ```text
        boundary.dispatch(
          { runtime, role: "review-fix",
-           signals: { risk, type, critical, checkpoint, signatureState,
+           signals: { risk, critical, checkpoint, signatureState,
                       priorApplied },
            dispatch_id, previous_dispatch_id },
            { ticket, worktreePath, reviewEvidence, codeChange, attemptHistory,
@@ -2256,7 +2354,7 @@ loop:
      ```text
      boundary.dispatch(
        { runtime, role: "arch-review",
-         signals: { risk, type, critical, checkpoint, contested, inputTokens },
+         signals: { risk, critical, checkpoint, contested, inputTokens },
          dispatch_id },
        { promptPath: "${CLAUDE_PLUGIN_ROOT}/references/arch-review.md",
          ticket, pr, head, diff, architecturePath, measuredInputTokens,
@@ -2785,7 +2883,7 @@ driving PRs hands the user a half-truth.
      ```text
      boundary.dispatch(
        { runtime, role: "integrator",
-         signals: { risk, type, critical, checkpoint, contested, inputTokens,
+         signals: { risk, critical, checkpoint, contested, inputTokens,
                     priorApplied },
          dispatch_id, previous_dispatch_id },
        { promptPath: "${CLAUDE_PLUGIN_ROOT}/references/integrator.md",
