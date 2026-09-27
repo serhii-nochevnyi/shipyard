@@ -1,19 +1,19 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: efb492daaca7e285591ebd4e76ac7ad84b42f1567f3985d4d2965501dee12d79
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: c466b5472052389e3faf5036192465ec01f3a2b7132d5e46ce0b35d4a76f75eb
 phase: 38
-status: passed
-shipyard_source_fingerprint: efb492daaca7e285591ebd4e76ac7ad84b42f1567f3985d4d2965501dee12d79
+status: human_needed
+shipyard_source_fingerprint: c466b5472052389e3faf5036192465ec01f3a2b7132d5e46ce0b35d4a76f75eb
 ---
 
 # Phase 38: Restore the native model ladder in delivery — Verification Projection
 
-**Status:** passed
+**Status:** human_needed
 
 ## Observable Truths
 
 | Truth | Evidence | Status |
 |---|---|---|
-| Every phase plan is accounted for | 8/8 delivery records are merged | ✓ VERIFIED |
+| Every phase plan is accounted for | 7/8 delivery records are merged | ? UNCERTAIN |
 | Integration is coherent | integration evidence records passed | ✓ VERIFIED |
 | Verification evidence is present | integration evidence records repository-local verification facts | ✓ VERIFIED |
 
@@ -23,7 +23,7 @@ shipyard_source_fingerprint: efb492daaca7e285591ebd4e76ac7ad84b42f1567f3985d4d29
 |---|---|---|
 | T-38-01 | merged | ✓ VERIFIED |
 | T-38-02 | merged | ✓ VERIFIED |
-| T-38-03 | merged | ✓ VERIFIED |
+| T-38-03 | pending | ? UNCERTAIN |
 | T-38-04 | merged | ✓ VERIFIED |
 | T-38-05 | merged | ✓ VERIFIED |
 | T-38-06 | merged | ✓ VERIFIED |
@@ -37,4 +37,4 @@ shipyard_source_fingerprint: efb492daaca7e285591ebd4e76ac7ad84b42f1567f3985d4d29
 
 ## Gaps Summary
 
-**No gaps found in the available repository evidence.**
+**Not green:** 1 plan(s) are not merged.
