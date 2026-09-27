@@ -81,7 +81,6 @@ function writeShipyardManifest(root) {
   writeJson(path.join(root, 'plugins', 'delivery-pipeline', '.claude-plugin', 'plugin.json'), { name: 'shipyard' });
 }
 
-// A single-worktree project that tracks .planning/graph at HEAD — "today's" Shipyard case.
 function shipyardFixture(id = 'T-01-01') {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-deliver-dispatch-sy-'));
   initRepo(root);
@@ -97,8 +96,6 @@ function shipyardFixture(id = 'T-01-01') {
   return { root, id, graphDir: path.join(root, '.planning', 'graph') };
 }
 
-// A target project with untracked .planning/, plus a fully separate ticket worktree
-// (a second temp repository), matching the cross-repo scenario D-43 describes.
 function targetProjectFixture(id = 'T-02-02') {
   const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-deliver-dispatch-tp-'));
   initRepo(projectRoot);
@@ -107,7 +104,6 @@ function targetProjectFixture(id = 'T-02-02') {
   fs.mkdirSync(path.join(projectRoot, '.planning', 'phases', '02-demo'), { recursive: true });
   fs.writeFileSync(path.join(projectRoot, '.planning', 'phases', '02-demo', '02-02-PLAN.md'), PLAN_TEXT);
   commitAll(projectRoot, 'demo: seed target project (no .planning tracked)');
-  // .planning/graph is written AFTER the commit, so it stays untracked (D-16/D-142).
   writeJson(path.join(projectRoot, '.planning', 'graph', 'tickets.json'), {
     tickets: { [id]: ticketRow({ branch: 'feat/demo-ticket', plan: '.planning/phases/02-demo/02-02-PLAN.md' }) },
   });
