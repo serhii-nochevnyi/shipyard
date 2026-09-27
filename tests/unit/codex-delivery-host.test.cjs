@@ -292,21 +292,26 @@ test('target-project executor finalizes a conventional, id-free subject from the
   } finally { clean(f); }
 });
 
+function captured(rel, values = {}) {
+  return fs.readFileSync(path.join(__dirname, '../..', rel), 'utf8').split('\n')
+    .filter((line) => line && !line.startsWith('{"shipyard_fixture"'))
+    .map((line) => line.replace(/<SESSION-\d+>/g, (token) => values[token] || token))
+    .join('\n') + '\n';
+}
+
 test('production runtime host receives the scoped prompt and records native model evidence', async () => {
   const f = fixture();
   const codeHome = path.join(temporary, 'codex-home-' + path.basename(f.root));
   const session = '44444444-4444-4444-8444-444444444444';
   const received = [];
   let capturedArgs;
-  const transcript = [
-    { type: 'session_meta', payload: { id: session, session_id: session, model_provider: 'openai' } },
-    { type: 'turn_context', payload: { model: 'gpt-6-luna', effort: 'max' } },
-  ].map((record) => JSON.stringify(record)).join('\n') + '\n';
-  const output = [
-    { type: 'thread.started', thread_id: session },
-    { type: 'turn.started' },
-    { type: 'turn.completed', usage: { input_tokens: 6, output_tokens: 2 } },
-  ].map((record) => JSON.stringify(record)).join('\n') + '\n';
+  const transcript = captured('tests/fixtures/captured/codex-agent-stream-parent.jsonl', { '<SESSION-2>': session })
+    .split('\n').filter(Boolean).map((line) => {
+      const record = JSON.parse(line);
+      if (record.type === 'turn_context') Object.assign(record.payload, { model: 'gpt-6-luna', effort: 'max' });
+      return JSON.stringify(record);
+    }).join('\n') + '\n';
+  const output = captured('tests/fixtures/captured/codex-agent-stream-exec.jsonl', { '<SESSION-1>': session });
   try {
     const result = await createCodexDeliveryHost({
       scope: f.scope,
@@ -315,8 +320,8 @@ test('production runtime host receives the scoped prompt and records native mode
       finalizeCommit,
       capabilities,
       probe: {
-        status: 'available', executable: 'codex', runtime_version: '0.155.1',
-        capabilities: { ...capabilities, cliVersion: '0.155.1' },
+        status: 'available', executable: 'codex', runtime_version: '0.157.1',
+        capabilities: { ...capabilities, cliVersion: '0.157.1' },
       },
       env: { CODEX_HOME: codeHome, GNUPGHOME: process.env.GNUPGHOME, SSH_AUTH_SOCK: '/tmp/ssh.sock' },
       agentDir: f.agentDir,
