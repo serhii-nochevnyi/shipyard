@@ -17,6 +17,7 @@ const sentinelPreflight = require('./sentinel-preflight.cjs');
 const prHygiene = require('./pr-hygiene.cjs');
 const { buildContextPacket } = require('./context-packet.cjs');
 const modelPolicy = require('./model-policy.cjs');
+const pipelineConfig = require('./pipeline-config.cjs');
 const runWaker = require('./run-waker.cjs');
 
 const ROLE_BUCKETS = Object.freeze({
@@ -153,7 +154,11 @@ function buildExecutorPacket({ worktreePath, row, id, planPath, planSha256, plan
   return buildContextPacket(options);
 }
 
-function buildClaudeExecutorRequest({ id, row, worktreePath, planPath, planSha256, packet, hygiene }) {
+function buildClaudeExecutorRequest({ id, row, worktreePath, planPath, planSha256, packet, hygiene, projectRoot, resolve }) {
+  const signals = buildSignals(row);
+  const selection = (resolve || pipelineConfig.resolveDispatch)({
+    root: projectRoot || worktreePath, runtime: 'claude', role: 'executor', signals,
+  });
   const entry = {
     id,
     branch: row.branch,
@@ -161,13 +166,15 @@ function buildClaudeExecutorRequest({ id, row, worktreePath, planPath, planSha25
     planSha256,
     worktreePath,
     prBase: row.pr_base,
-    signals: buildSignals(row),
+    model: selection.model,
+    effort: selection.effort,
+    signals,
     contextPacket: packet,
     contextPacketRequired: true,
   };
   return {
     schema: claudeHost.REQUEST_SCHEMA,
-    scope: { run_id: `deliver-${crypto.randomUUID()}`, ticket: id, phase: row.phase, worktree: worktreePath },
+    scope: { run_id: `deliver-${crypto.randomUUID()}`, ticket: id, phase: phaseNumber(row.phase), worktree: worktreePath },
     args: {
       tickets: [entry],
       ...(hygiene ? { prBodyGuide: prHygiene.NEUTRAL_PR_BODY_GUIDE, deliveryRulesHint: prHygiene.NEUTRAL_DELIVERY_RULES_HINT } : {}),
@@ -175,15 +182,25 @@ function buildClaudeExecutorRequest({ id, row, worktreePath, planPath, planSha25
   };
 }
 
+function phaseNumber(value) {
+  const match = /^0*(\d+)(?:-|$)/.exec(String(value));
+  if (!match || Number(match[1]) < 1) fail('INVALID_PHASE', `ticket phase ${value} has no positive phase number`);
+  return Number(match[1]);
+}
+
 function buildCodexExecutorRequest({ id, row, worktreePath, planSha256 }) {
   return {
     scope: {
-      run_id: `deliver-${crypto.randomUUID()}`, ticket: id, phase: Number(row.phase),
+      run_id: `deliver-${crypto.randomUUID()}`, ticket: id, phase: phaseNumber(row.phase),
       worktree: worktreePath, runtime: 'codex', provider: 'openai',
     },
     role: 'executor',
     signals: buildSignals(row),
-    context: { plan_sha256: planSha256 },
+    context: {
+      prompt: `Implement ticket ${id}${row.title ? ` (${row.title})` : ''} exactly as its delivered PLAN describes, `
+        + 'within its files_modified, and run its Verification commands to green.',
+      plan_sha256: planSha256,
+    },
   };
 }
 
@@ -253,12 +270,15 @@ function launchPrSentinel({ args, row, projectRoot, graphDir, dispatchId, dir, o
   }
   const request = {
     scope: {
-      run_id: `deliver-${crypto.randomUUID()}`, ticket: args.ticket, phase: Number(row.phase),
+      run_id: `deliver-${crypto.randomUUID()}`, ticket: args.ticket, phase: phaseNumber(row.phase),
       worktree: projectRoot, runtime: 'codex', provider: 'openai',
     },
     role: 'pr-sentinel',
     signals: buildSignals(row),
-    context: {},
+    context: {
+      prompt: `Guard the open pull request of ticket ${args.ticket}: read its live CI and review state, perform the `
+        + 'documented sentinel duty for it, and report what you performed or refused.',
+    },
   };
   codexHost.validateArgs({ role: request.role, signals: request.signals, context: request.context });
   const hostScript = options.codexHostScript || path.join(__dirname, 'codex-delivery-host.cjs');
@@ -318,7 +338,7 @@ async function launch(argv, options = {}) {
   const hygiene = prHygiene.applies({ root: projectRoot, ref: row.pr_base });
 
   if (args.runtime === 'claude') {
-    const request = buildClaudeExecutorRequest({ id: args.ticket, row, worktreePath, planPath, planSha256, packet, hygiene });
+    const request = buildClaudeExecutorRequest({ id: args.ticket, row, worktreePath, planPath, planSha256, packet, hygiene, projectRoot });
     claudeHost.validateRequest('executors', request);
     const hostScript = options.claudeHostScript || path.join(__dirname, 'claude-delivery-host.cjs');
     const requestFile = writeRequestFile(dir, 'request.json', request);
@@ -459,6 +479,7 @@ module.exports = Object.freeze({
   buildExecutorPacket,
   buildClaudeExecutorRequest,
   buildCodexExecutorRequest,
+  phaseNumber,
   sentinelRoundPrs,
   launch,
   statusOnce,

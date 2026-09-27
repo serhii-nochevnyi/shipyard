@@ -5,6 +5,7 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { claudeGsdAgentDirectory } = require('./gsd-agent-root.cjs');
 const { execFileSync } = require('node:child_process');
 const { createClaudeRuntimeHost, probeClaudeRuntime } = require('./claude-runtime-host.cjs');
 const { createClaudeWorkflowDispatch } = require('./claude-dispatch-adapter.cjs');
@@ -75,7 +76,7 @@ function inlineReferences(source, root) {
 }
 
 function trustedAgent(role, configRoot) {
-  const agents = path.join(configRoot, 'agents');
+  const agents = claudeGsdAgentDirectory(configRoot, role);
   const source = realFile(`${role}.md`, agents);
   const match = /^---\r?\n([\s\S]*?)\r?\n---\r?\n([\s\S]+)$/.exec(source);
   if (!match) refuse('REFERENCE_UNAVAILABLE', 'GSD agent definition is malformed');
@@ -135,8 +136,7 @@ function phaseDirectory(worktree, phase) {
   } catch (error) {
     refuse('PHASE_DIRECTORY_MISSING', `phase directory root is unavailable: ${error.message}`);
   }
-  const prefix = `${phase}-`;
-  const matches = names.filter((name) => name.startsWith(prefix)
+  const matches = names.filter((name) => /^\d+-/.test(name) && Number(name.split('-')[0]) === Number(phase)
     && fs.lstatSync(path.join(phasesRoot, name)).isDirectory());
   if (matches.length !== 1) {
     refuse('PHASE_DIRECTORY_MISSING', `expected exactly one phase directory for phase ${phase}, found ${matches.length}`);
@@ -303,4 +303,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = Object.freeze({ ROLES, canonicalRequest, inlineReferences, trustedAgent, parseArguments, runDecomposition, main });
+module.exports = Object.freeze({ ROLES, canonicalRequest, inlineReferences, trustedAgent, phaseDirectory, parseArguments, runDecomposition, main });

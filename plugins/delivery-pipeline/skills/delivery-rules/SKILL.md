@@ -107,7 +107,10 @@ installed Claude `PreToolUse` hook invokes it for every `git push`.
    mistakes. A command that cannot be scoped (a suite that needs a live
    database, a browser, a deployed environment) is a CI-only check — say so
    under Test strategy and leave it out of Verification commands rather than
-   handing the executor something it cannot run.
+   handing the executor something it cannot run. Each command starts with
+   `node`, `bash` or `make` (or an absolute executable path): trusted host
+   verification runs PLAN commands through a fixed allowlist and refuses
+   anything else, such as `git`, `npm` or a shell pipeline.
 7. **`depends_on` drives the cascade, not just ordering.** Under epic-stacked
    delivery (the default), a root ticket (empty `depends_on`) PRs into the
    phase epic branch; a dependent ticket cascades — it PRs into its primary

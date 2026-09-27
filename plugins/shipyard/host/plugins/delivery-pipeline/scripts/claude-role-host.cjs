@@ -400,6 +400,11 @@ function baseDefaultBranch(options, worktree, projectRoot) {
   }
 }
 
+function phaseNumberOf(value) {
+  const match = /^0*(\d+)(?:-|$)/.exec(String(value));
+  return match ? Number(match[1]) : NaN;
+}
+
 function phaseSelection(graph, requested) {
   const rows = Object.entries(graph.tickets).filter(([, row]) => object(row) && row.phase !== undefined
     && (String(row.phase) === requested || path.basename(path.dirname(row.plan || '')) === requested));
@@ -407,7 +412,7 @@ function phaseSelection(graph, requested) {
   const dirs = new Set(rows.map(([, row]) => path.basename(path.dirname(row.plan || ''))));
   if (dirs.size !== 1) reject('phase tickets resolve to multiple plan directories');
   const phaseDir = [...dirs][0];
-  const phaseNumber = Number(String(rows[0][1].phase));
+  const phaseNumber = phaseNumberOf(rows[0][1].phase);
   if (!Number.isSafeInteger(phaseNumber) || phaseNumber < 1) reject('phase number is invalid');
   return { phase: phaseDir, phaseNumber, rows: rows.map(([id, row]) => ({ id, row })).sort((a, b) => a.id.localeCompare(b.id)) };
 }
@@ -459,7 +464,7 @@ function prepareArch(options, request, canonical, graph, rows) {
   const packet = buildPacket(canonical, 'arch-review', id, sources, plan, roleContext);
   const signals = observedSignals(request, rows, [live], estimatePromptTokens('arch-review', packet, plan, live, reference));
   const prompt = makePrompt('arch-review', id, packet, reference);
-  return Object.freeze({ role: 'arch-review', ticket: id, phase: String(row.phase), phaseNumber: Number(row.phase),
+  return Object.freeze({ role: 'arch-review', ticket: id, phase: String(row.phase), phaseNumber: phaseNumberOf(row.phase),
     pr: live.number, base, baseName, baseCommit: live.baseRefOid, mergeBase, mergeBaseTree,
     livePullRequests: [live], canonical, graph, rows, sources, packet, prompt, signals, evidencePath: ARCH_EVIDENCE });
 }
@@ -670,6 +675,8 @@ function prepareSentinel(options, request, canonical, graph) {
     phase_contracts: phaseContracts,
     ticket_set: ticketSet,
     ticket_set_digest: ticketSetDigest,
+    head: canonical.head,
+    head_tree: canonical.headTree,
     guarded_tickets: guardedTickets,
     pr_state: prState,
     ci_review_observations: ciReviewObservations,
@@ -742,8 +749,8 @@ function makePrompt(role, subject, packet, reference, readOnlySmoke = false) {
     : role === 'integrator'
       ? 'Return one JSON object matching the integrator reference schema. Judge the complete authenticated phase ticket set and combined diff.'
     : readOnlySmoke
-      ? 'Return one JSON object matching the pr-sentinel reference schema. This is a read-only runtime smoke: do not perform any PR duty or attempt a mutation; return awaiting-human, an empty performed list, and one refused read-only-smoke duty for every guarded ticket.'
-      : 'Return one JSON object matching the pr-sentinel reference schema. Perform the documented duties for every authenticated open PR and report the complete ticket set.';
+      ? 'Return one JSON object matching the pr-sentinel reference schema. This is a read-only runtime smoke: do not perform any PR duty or attempt a mutation; return awaiting-human, an empty performed list, one refused read-only-smoke duty for every guarded ticket, blocking_count equal to the number of refused entries, and head, head_tree, ticket_set and ticket_set_digest copied from the context packet.'
+      : 'Return one JSON object matching the pr-sentinel reference schema. Perform the documented duties for every authenticated open PR and report the complete ticket set. Set blocking_count to the number of refused entries, and copy head, head_tree, ticket_set and ticket_set_digest from the context packet.';
   const prompt = [
     'You are running as a fixed Shipyard judgement role.',
     reference,
@@ -805,6 +812,23 @@ const TICKET_SET_SCHEMA = Object.freeze({
 
 const FINDING_TICKET_SCHEMA = Object.freeze({ type: ['string', 'null'] });
 
+const SENTINEL_DUTIES = Object.freeze(['ci-fix', 'review-fix', 'base-merge', 'arch-review', 'undraft', 'merge',
+  'wait-ci', 'wait-parent', 'wait-human', 'parked', 'read-only-smoke']);
+
+function SENTINEL_DUTY_SCHEMA(kind) {
+  return {
+    type: 'object',
+    required: kind === 'refused' ? ['ticket', 'duty', 'status', 'reason'] : ['ticket', 'duty', 'status'],
+    properties: {
+      ticket: { type: 'string' },
+      duty: { type: 'string', enum: [...SENTINEL_DUTIES] },
+      status: { type: 'string', enum: kind === 'refused' ? ['refused'] : ['complete', 'handed-back'] },
+      ...(kind === 'refused' ? { reason: { type: 'string' } } : {}),
+      duty_id: { type: 'string' },
+    },
+  };
+}
+
 const FIX_TICKET_SCHEMA = Object.freeze({
   type: 'object',
   additionalProperties: false,
@@ -849,7 +873,9 @@ function roleOutputSchema(role) {
     outcome: { type: 'string', enum: ['clear', 'blocked', 'awaiting-human'] },
     ticket_set: TICKET_SET_SCHEMA, ticket_set_digest: { type: 'string' },
     head: { type: 'string' }, head_tree: { type: 'string' },
-    performed: { type: 'array' }, refused: { type: 'array' }, summary: { type: 'string' },
+    performed: { type: 'array', items: SENTINEL_DUTY_SCHEMA('performed') },
+    refused: { type: 'array', items: SENTINEL_DUTY_SCHEMA('refused') },
+    summary: { type: 'string' },
   });
   return { type: 'object', properties,
     required: ['outcome', 'ticket_set', 'ticket_set_digest', 'head', 'head_tree', 'blocking_count'] };

@@ -396,7 +396,9 @@ without a matching trailer.
 round needs the runtime CLI and `gh` on `PATH` and authenticated, plus
 `SHIPYARD_LIVE_REPO=<owner>/<throwaway-repo>` naming a disposable repository,
 and writes a receipt to
-`~/.local/state/shipyard/live/<version>/<tree sha>/<runtime>.json`.
+`~/.local/state/shipyard/live/<version>/<tree sha>/<runtime>.json`. The Codex round clears `CLAUDECODE`/`CLAUDE_CODE_*` so it can run
+from inside a Claude Code session; point `CODEX_HOME` at the Codex install
+being released when it is not the default home.
 
 ```bash
 make release VERSION=<x.y.z>
