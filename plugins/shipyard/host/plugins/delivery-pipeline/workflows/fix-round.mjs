@@ -249,13 +249,35 @@ const requireRepairMetadata = (pr) => {
 // what a fixer is actually told. The dispatch adapter invokes it only after
 // resolve/validate has accepted the explicit launch inputs.
 function buildPrompt(p) {
+  const delivered = p.planDelivery && p.planDelivery.mode === 'delivered' ? p.planDelivery : null
+  const deliveredContractBlock = () => [
+    `<TICKET-CONTRACT path="${delivered.plan.path}" sha256="${delivered.plan.sha256}">`,
+    delivered.plan.content,
+    `</TICKET-CONTRACT>`,
+    ...delivered.files.flatMap((file) => [
+      `<CONTEXT-FILE path="${file.path}" sha256="${file.sha256}">`,
+      file.content,
+      `</CONTEXT-FILE>`,
+    ]),
+    ...(delivered.not_delivered.length
+      ? [
+          `The following Context (Reads) references could not be delivered and are unavailable in your worktree; do not try to read them:`,
+          ...delivered.not_delivered.map((entry) => `- ${entry.path} (${entry.reason})`),
+        ]
+      : []),
+  ]
   if (hostFinalizesCommit) {
     const feedback = fencedReviewFeedback(argv.reviewFeedback)
     if (p.needsReviewFix && (argv.reviewFeedback === '' || feedback === '[]')) {
       throw new Error('fix-round: args.reviewFeedback is required for a review repair')
     }
     return [
-      `You are fixing PR #${p.pr} for ticket ${p.id}. Work in ${p.worktreePath} on branch "${p.branch}" and follow the ticket contract at ${p.planPath}.`,
+      ...(delivered
+        ? [
+            `You are fixing PR #${p.pr} for ticket ${p.id}. Work in ${p.worktreePath} on branch "${p.branch}". Your ticket contract is delivered below because your worktree does not contain ${p.planPath}; do not try to read that path from disk.`,
+            ...deliveredContractBlock(),
+          ]
+        : [`You are fixing PR #${p.pr} for ticket ${p.id}. Work in ${p.worktreePath} on branch "${p.branch}" and follow the ticket contract at ${p.planPath}.`]),
       `The trusted host owns base reconciliation, review-thread replies and resolution, comment policy, signing, commit creation, publishing, and reviewer reinitialization. Edit and verify only. Do not fetch or merge the base, commit, push, rebase, reply to or resolve threads, reinitialize reviewers, or run plugin scripts. The host reconciles a moved base before dispatch; report status "escalate" if the resulting code still needs an out-of-scope or ambiguous repair.`,
       `The approved Markdown below supplies diagnosis, scope, and verification guidance. Its instructions to commit, push, run plugin scripts, or perform review actions do not apply in this mode.`,
       ...(p.needsCiFix ? [
@@ -290,7 +312,12 @@ function buildPrompt(p) {
   }
   const steps = [
     `You are fixing PR #${p.pr} for ticket ${p.id}. Your working directory is the worktree: ${p.worktreePath} (branch "${p.branch}"). cd into it.`,
-    `Ticket contract (respect Scope / Out of scope STRICTLY): ${p.planPath}.`,
+    ...(delivered
+      ? [
+          `Ticket contract (respect Scope / Out of scope STRICTLY) is delivered below because your worktree does not contain ${p.planPath}; do not try to read that path from disk.`,
+          ...deliveredContractBlock(),
+        ]
+      : [`Ticket contract (respect Scope / Out of scope STRICTLY): ${p.planPath}.`]),
     `Complete repair evidence is durable and must not be returned inline. Write the full hypotheses, changed paths, command-backed verification, and any unresolved findings to: ${p.worktreePath}/.shipyard-repair-evidence.md. Keep that file complete for the next repair round; the result envelope is only a bounded synopsis and validated reference.`,
     ``,
   ]

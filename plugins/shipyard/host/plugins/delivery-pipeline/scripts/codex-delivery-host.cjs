@@ -9,17 +9,22 @@ const { createCodexRuntimeHost, normalizeScope } = require('./codex-runtime-host
 const { launchAgent, ROLE_ALIASES } = require('./codex-agent.cjs');
 const { repoRootOf, resolveBaseRef } = require('./graph-dir.cjs');
 const policy = require('./model-policy.cjs');
+const { sealResearch, researchLineFailure, verifySealedLine, assertContained } = require('./planning-result-sealer.cjs');
+const { REPAIR: CODEX_ADAPTER_REPAIR } = require('./codex-model-remap.cjs');
 const { newDispatchId, createDurableRecorder } = require('./dispatch-boundary.cjs');
 const { createVerificationRunner } = require('./command-runner.cjs');
 const { createRunScope } = require('./run-scope.cjs');
 const { createRunController, DEFAULT_LEASE_TTL_MS } = require('./run-controller.cjs');
 const { formatHint } = require('./refusal-hints.cjs');
+const { recordInflight, clearInflight } = require('./dispatch-record.cjs');
 const { acquire: acquireLock, DEFAULT_TTL_MS: LOCK_TTL_MS } = require('./lock.cjs');
+const { assertCanonicalGraph, deliverPlan } = require('./plan-delivery.cjs');
 
 const SCHEMA = 'shipyard.codex-delivery-host.v1';
 const MAX_ARGS_BYTES = 4 * 1024 * 1024;
 const MAX_GRAPH_BYTES = 8 * 1024 * 1024;
 const SCRATCH_STATUS = new Set(['?? .shipyard-pr-body.md', '?? .shipyard-evidence.md']);
+const TICKET_DELIVERY_ROLES = new Set(['drift-check', 'ci-fix', 'review-fix']);
 const CANDIDATE_SCHEMA = 'shipyard.finalization-candidate.v1';
 const VERIFICATION_SCHEMA = 'shipyard.verification-record.v1';
 const FINALIZATION_SCHEMA = 'shipyard.finalization-record.v1';
@@ -27,6 +32,7 @@ const ENVELOPE_FORMAT = 'shipyard.host-authenticated.v1';
 const KEY_BYTES = 32;
 const MAX_STATE_BYTES = 1024 * 1024;
 const DOWNSTREAM_GATES = Object.freeze(['ci', 'review']);
+const REQUIRED_RESEARCH_LINES = Object.freeze(['system-state', 'alternatives', 'constraints', 'risks']);
 const RESUME_SCOPE_FIELDS = Object.freeze(['run_id', 'repository', 'worktree', 'phase', 'ticket']);
 const PLAN_COMMAND_TIMEOUT_MS = 10 * 60 * 1000;
 const PLAN_COMMAND_OUTPUT_BYTES = 1024 * 1024;
@@ -62,6 +68,15 @@ function requestValue(input) {
   const role = ROLE_ALIASES[input.role] || input.role;
   if (input.signals !== undefined && !object(input.signals)) fail('INVALID_INPUT', 'signals must be an object');
   if (input.context !== undefined && !object(input.context)) fail('INVALID_INPUT', 'context must be an object');
+  for (const key of Object.keys(input.context || {})) {
+    if (key.startsWith('plan') && key !== 'plan_sha256') {
+      fail('INVALID_INPUT', 'unsupported delivery request context field ' + key);
+    }
+  }
+  if (input.context && input.context.plan_sha256 !== undefined
+      && !/^[0-9a-f]{64}$/i.test(input.context.plan_sha256)) {
+    fail('INVALID_INPUT', 'context.plan_sha256 must be a 64-character hex digest');
+  }
   if (input.dispatch_id !== undefined
       && (typeof input.dispatch_id !== 'string' || !input.dispatch_id.trim())) {
     fail('INVALID_INPUT', 'dispatch_id must be non-empty text');
@@ -69,6 +84,23 @@ function requestValue(input) {
   return { role, signals: input.signals || {}, context: { ...(input.context || {}) },
     ...(input.dispatch_id ? { dispatch_id: input.dispatch_id } : {}),
     ...(input.gsd_role !== undefined ? { gsd_role: input.gsd_role } : {}) };
+}
+
+// @contract: pure — no fs writes or spawn; the boundary's UNSUPPORTED_SIGNAL surfaces unchanged.
+function validateArgs(args) {
+  const request = requestValue(args);
+  const resolution = policy.resolveDispatch({
+    runtime: 'codex', role: request.role, signals: request.signals,
+    ...(request.dispatch_id ? { dispatch_id: request.dispatch_id } : {}),
+  });
+  return Object.freeze({ request, resolution });
+}
+
+function inflightGraphDir(options, worktree) {
+  const directory = path.resolve(options.graphDir || process.env.SHIPYARD_GRAPH_DIR
+    || path.join(repoRootOf(worktree) || worktree, '.planning', 'graph'));
+  if (path.basename(directory) !== 'graph' || path.basename(path.dirname(directory)) !== '.planning') return null;
+  return fs.existsSync(directory) ? directory : null;
 }
 
 function git(worktree, args) {
@@ -83,10 +115,25 @@ function git(worktree, args) {
   }
 }
 
+function trackedAtHead(worktree, relPath) {
+  try {
+    execFileSync('git', ['-C', worktree, 'cat-file', '-e', 'HEAD:' + relPath], {
+      stdio: ['ignore', 'pipe', 'pipe'], timeout: 10000,
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function defaultGraphDir(worktree) {
+  if (trackedAtHead(worktree, '.planning/graph/tickets.json')) return path.join(worktree, '.planning', 'graph');
+  return path.join(repoRootOf(worktree) || worktree, '.planning', 'graph');
+}
+
 function graphFile(options, worktree) {
-  const common = repoRootOf(worktree);
-  const directory = path.resolve(options.graphDir || process.env.SHIPYARD_GRAPH_DIR
-    || path.join(common || worktree, '.planning', 'graph'));
+  const source = options.graphDir ? 'flag' : process.env.SHIPYARD_GRAPH_DIR ? 'env' : 'default';
+  const directory = path.resolve(options.graphDir || process.env.SHIPYARD_GRAPH_DIR || defaultGraphDir(worktree));
   let parent;
   let file;
   try {
@@ -99,7 +146,13 @@ function graphFile(options, worktree) {
       || !file.isFile() || file.isSymbolicLink() || file.size > MAX_GRAPH_BYTES) {
     fail('GRAPH_UNAVAILABLE', 'canonical ticket graph must be a bounded real file');
   }
-  return path.join(fs.realpathSync(directory), 'tickets.json');
+  const resolved = fs.realpathSync(directory);
+  try {
+    assertCanonicalGraph({ graphDir: resolved, worktree, source });
+  } catch (error) {
+    fail(error.code || 'GRAPH_NOT_CANONICAL', error.message.replace(/^plan-delivery: /, ''));
+  }
+  return path.join(resolved, 'tickets.json');
 }
 
 function graphSnapshot(file, ticket) {
@@ -527,6 +580,148 @@ function storageDirectory(options, scope) {
   return directory;
 }
 
+function researchArtifactPath(worktree, invId, lineId) {
+  return path.join(worktree, '.planning', 'investigations', invId, 'research', `${lineId}.md`);
+}
+
+// @contract: strips the adapter repair suffix so researchLineFailure gets an adapter-free cause (T-40-13).
+function causeFromError(error, lineId) {
+  const message = error && typeof error.message === 'string' ? error.message : String(error);
+  const suffix = '. ' + CODEX_ADAPTER_REPAIR;
+  const cause = message.endsWith(suffix) ? message.slice(0, -suffix.length) : message;
+  const code = error && typeof error.code === 'string' && error.code.trim() ? error.code : 'RESEARCH_LINE_DISPATCH_FAILED';
+  return { line: lineId, code, cause };
+}
+
+function parseInvestigationScope(raw) {
+  const allowed = new Set(['invId', 'sourceRevision', 'repository', 'policyHash', 'lines', 'sealedLines']);
+  for (const key of Object.keys(raw)) {
+    if (!allowed.has(key)) fail('INVALID_INPUT', 'unsupported investigation field ' + key);
+  }
+  if (typeof raw.invId !== 'string' || !/^INV-[A-Za-z0-9-]+$/.test(raw.invId)) {
+    fail('INVALID_INPUT', 'investigation requires a valid invId');
+  }
+  if (typeof raw.sourceRevision !== 'string' || !/^[a-f0-9]{40}$/i.test(raw.sourceRevision)) {
+    fail('INVALID_INPUT', 'investigation requires a full 40-character source revision');
+  }
+  if (typeof raw.repository !== 'string' || !raw.repository.trim()) {
+    fail('INVALID_INPUT', 'investigation requires a repository identity');
+  }
+  if (typeof raw.policyHash !== 'string' || !/^[a-f0-9]{64}$/i.test(raw.policyHash)) {
+    fail('INVALID_INPUT', 'investigation requires a 64-character policy hash');
+  }
+  if (!Array.isArray(raw.lines) || (raw.lines.length !== REQUIRED_RESEARCH_LINES.length && raw.lines.length !== 1)) {
+    fail('INVALID_INPUT', 'investigation requires four research lines, or one for a verified re-dispatch');
+  }
+  const lines = raw.lines.map((line, index) => {
+    if (!object(line) || typeof line.id !== 'string' || !REQUIRED_RESEARCH_LINES.includes(line.id)
+        || (line.signals !== undefined && !object(line.signals))
+        || Object.keys(line).some((key) => !['id', 'signals'].includes(key))) {
+      fail('INVALID_INPUT', 'investigation line ' + (index + 1) + ' requires a recognized id and optional signals');
+    }
+    return { id: line.id, signals: line.signals || {} };
+  });
+  const ids = lines.map((line) => line.id);
+  const singleLine = lines.length === 1;
+  let sealedLines = [];
+  if (singleLine) {
+    if (!Array.isArray(raw.sealedLines) || raw.sealedLines.length !== REQUIRED_RESEARCH_LINES.length - 1) {
+      fail('INVALID_INPUT', 'a single-line investigation re-dispatch requires its three sealed sibling references');
+    }
+    const siblingIds = raw.sealedLines.map((entry) => (object(entry) ? entry.id : undefined));
+    const expected = REQUIRED_RESEARCH_LINES.filter((id) => id !== ids[0]);
+    if (new Set(siblingIds).size !== siblingIds.length || expected.some((id) => !siblingIds.includes(id))) {
+      fail('INVALID_INPUT', 'sealed sibling references must cover exactly the other three research lines');
+    }
+    sealedLines = raw.sealedLines;
+  } else {
+    if (raw.sealedLines !== undefined) fail('INVALID_INPUT', 'sealedLines is accepted only for a single-line re-dispatch');
+    if (new Set(ids).size !== REQUIRED_RESEARCH_LINES.length || REQUIRED_RESEARCH_LINES.some((id) => !ids.includes(id))) {
+      fail('INVALID_INPUT', 'investigation lines must be exactly ' + REQUIRED_RESEARCH_LINES.join(', '));
+    }
+  }
+  return { invId: raw.invId, sourceRevision: raw.sourceRevision, repository: raw.repository,
+    policyHash: raw.policyHash, lines, sealedLines };
+}
+
+async function investigationResearch(options, scope, runtimeHost, agentDir, agentManifest, env, prompt, baseContext, inv) {
+  const worktree = fs.realpathSync(scope.worktree);
+  const root = path.join(storageDirectory(options, scope), 'planning-artifacts');
+  const verifyScope = Object.freeze({ invId: inv.invId, sourceRevision: inv.sourceRevision,
+    repository: inv.repository, policyHash: inv.policyHash });
+  const verifiedSiblings = inv.sealedLines.map((line) => verifySealedLine({ root, scope: verifyScope, line }));
+  const allowedPaths = REQUIRED_RESEARCH_LINES.map((id) => researchArtifactPath(worktree, inv.invId, id));
+  const sealed = [];
+  for (const line of inv.lines) {
+    const artifactPath = researchArtifactPath(worktree, inv.invId, line.id);
+    fs.mkdirSync(path.dirname(artifactPath), { recursive: true, mode: 0o700 });
+    const failed = (error) => researchLineFailure({
+      scope: verifyScope, sealed: [...verifiedSiblings, ...sealed], failed: causeFromError(error, line.id),
+    });
+    let record;
+    try {
+      record = await launchAgent('research', {
+        cwd: scope.worktree,
+        flags: new Map(),
+        signals: line.signals,
+        scope,
+        host: runtimeHost,
+        capabilities: runtimeHost.capabilities,
+        recorder: runtimeHost.recorder,
+        controller: runtimeHost.controller,
+        agentDir,
+        agentManifest,
+        env,
+        context: {
+          ...baseContext,
+          prompt: prompt.trim() + '\n\nResearch line: ' + line.id + '.\nWrite the complete finding for this line to exactly: '
+            + artifactPath + '\nThe host reads that file directly; do not return the finding inline.',
+          research_line: line.id,
+          investigation: inv.invId,
+          artifactPath,
+        },
+      });
+    } catch (error) {
+      return failed(error);
+    }
+    try {
+      assertContained({ worktree, allowed: allowedPaths });
+    } catch (error) {
+      return failed(error);
+    }
+    let stat;
+    try {
+      stat = fs.lstatSync(artifactPath);
+    } catch {
+      return failed({ code: 'RESEARCH_LINE_MISSING', message: 'research line ' + line.id + ' artifact is missing: ' + artifactPath });
+    }
+    if (stat.isSymbolicLink() || !stat.isFile()) {
+      return failed({ code: 'RESEARCH_LINE_MISSING', message: 'research line ' + line.id + ' artifact is not a regular file: ' + artifactPath });
+    }
+    const bytes = fs.readFileSync(artifactPath);
+    const digest = crypto.createHash('sha256').update(bytes).digest('hex');
+    let sealedLine;
+    try {
+      sealedLine = sealResearch({
+        root, scope: { worktree },
+        lines: {
+          artifact: { role: 'research', subject: inv.invId + ':' + line.id, ticket: inv.invId + ':' + line.id,
+            worktreePath: worktree, sourceRevision: inv.sourceRevision, repository: inv.repository,
+            policyHash: inv.policyHash, artifactPath },
+          result: { id: line.id, status: 'completed', summary: 'Research line ' + line.id + ' completed.',
+            artifact: { path: artifactPath, bytes: bytes.length, content_bytes: bytes.length, sha256: digest, digest } },
+          record,
+        },
+      });
+    } catch (error) {
+      return failed(error);
+    }
+    sealed.push(Object.freeze({ id: line.id, ...sealedLine }));
+  }
+  const merged = [...verifiedSiblings, ...sealed];
+  return Object.freeze(REQUIRED_RESEARCH_LINES.map((id) => merged.find((entry) => entry.id === id)));
+}
+
 function stateRootOutsideWorktree(scope, stateRoot) {
   const worktree = fs.realpathSync(scope.worktree);
   let root = path.resolve(stateRoot);
@@ -573,7 +768,36 @@ function canonicalCliScope(input) {
   return Object.freeze({ ...scope, worktree, repository: repositoryId });
 }
 
-function executorPreflight(options, scope) {
+// @contract: empty for 'in-worktree' or no delivery, so the prompt stays byte-identical to today's.
+function planDeliveryBlock(delivery, planPath) {
+  if (!delivery || delivery.mode !== 'delivered') return '';
+  const parts = [
+    '', '',
+    `<TICKET-CONTRACT path="${delivery.plan.path}" sha256="${delivery.plan.sha256}">`,
+    delivery.plan.content,
+    '</TICKET-CONTRACT>',
+    `The block above is your ticket contract, delivered because your worktree does not contain `
+    + `${planPath || delivery.plan.path}. Read it exactly as instructed; do not try to open that path from disk.`,
+  ];
+  for (const file of delivery.files) {
+    parts.push('', `<CONTEXT-FILE path="${file.path}" sha256="${file.sha256}">`, file.content, '</CONTEXT-FILE>');
+  }
+  if (delivery.not_delivered.length) {
+    parts.push('',
+      'The following Context (Reads) references could not be delivered and are not available in '
+      + 'your worktree; do not try to read them:',
+      ...delivery.not_delivered.map((entry) => `- ${entry.path} (${entry.reason})`));
+  }
+  return parts.join('\n');
+}
+
+function ticketDelivery(options, worktree, ticket, expectedPlanSha256) {
+  const file = graphFile(options, worktree);
+  const row = graphSnapshot(file, ticket).row;
+  return deliverPlan({ graphDir: path.dirname(file), row, worktree, expectedSha256: expectedPlanSha256 });
+}
+
+function executorPreflight(options, scope, expectedPlanSha256) {
   if (!/^T-\d{2}-\d{2}$/.test(scope.ticket)) fail('SCOPE_MISMATCH', 'executor needs a ticket scope');
   const worktree = fs.realpathSync(scope.worktree);
   if (git(worktree, ['rev-parse', '--show-toplevel']) !== worktree) {
@@ -589,6 +813,10 @@ function executorPreflight(options, scope) {
   if (dirty.length) fail('WORKTREE_NOT_READY', 'executor worktree already has changes');
   const baseRef = resolveBaseRef(worktree, snapshot.row.pr_base);
   const plan = planSnapshot(file, snapshot.row);
+  if (typeof expectedPlanSha256 === 'string' && expectedPlanSha256 && expectedPlanSha256 !== plan.sha256) {
+    fail('PLAN_DIGEST_MISMATCH', 'delivered plan digest differs from the canonical source PLAN');
+  }
+  const delivery = deliverPlan({ graphDir: path.dirname(file), row: snapshot.row, worktree });
   const verification = pinnedVerification(options, worktree, plan);
   const commit = Object.freeze({
     ticket: scope.ticket,
@@ -601,7 +829,7 @@ function executorPreflight(options, scope) {
   });
   const stateRoot = hostStateRoot(options, scope);
   const commonDir = fs.realpathSync(git(worktree, ['rev-parse', '--path-format=absolute', '--git-common-dir']));
-  return Object.freeze({ commit, graphFile: file, graphDigest: snapshot.sha256, plan, verification, baseRef,
+  return Object.freeze({ commit, graphFile: file, graphDigest: snapshot.sha256, plan, delivery, verification, baseRef,
     stateRoot, key: hostKey(stateRoot), repository: 'git-common:' + sha256(commonDir) });
 }
 
@@ -827,10 +1055,20 @@ function createCodexDeliveryHost(options = {}) {
       bind(context, 'runtime', 'codex');
       bind(context, 'provider', 'openai');
       if (policy.DYNAMIC_ROLES.includes(request.role)) context.sandbox_mode = 'workspace-write';
+      if (request.role === 'research' && object(context.investigation)) {
+        const inv = parseInvestigationScope(context.investigation);
+        const { investigation: _investigation, ...baseContext } = context;
+        return investigationResearch(options, scope, runtimeHost, agentDir, agentManifest, env, prompt, baseContext, inv);
+      }
       const committing = request.role === 'executor';
-      const prepared = committing ? executorPreflight(options, scope) : null;
+      const prepared = committing ? executorPreflight(options, scope, context.plan_sha256) : null;
       if (committing) {
-        context.prompt = prompt.trim() + '\n\nLeave changes uncommitted. The trusted host will stage, sign, and verify the commit.';
+        context.prompt = prompt.trim() + '\n\nLeave changes uncommitted. The trusted host will stage, sign, and verify the commit.'
+          + planDeliveryBlock(prepared.delivery, prepared.plan.path);
+      } else if (TICKET_DELIVERY_ROLES.has(request.role)) {
+        const delivery = ticketDelivery(options, fs.realpathSync(scope.worktree), scope.ticket, context.plan_sha256);
+        const block = planDeliveryBlock(delivery, undefined);
+        if (block) context.prompt = prompt.trim() + block;
       }
       const result = await launchAgent(request.role, {
         cwd: scope.worktree,
@@ -992,8 +1230,13 @@ async function runCli(argv = process.argv.slice(2), stdout = process.stdout, opt
     catch (error) { heartbeatError = error; clearInterval(heartbeat); }
   }, heartbeatMs);
   heartbeat.unref?.();
+  const inflightDir = inflightGraphDir(options, scope.worktree);
+  const inflight = inflightDir ? { graphDir: inflightDir, dispatch_id: dispatchId, pid: process.pid } : null;
   let result;
   try {
+    if (inflight) {
+      recordInflight({ ...inflight, ticket: scope.ticket, role: resolution.role, host: 'codex' });
+    }
     const host = createCodexDeliveryHost({
       scope,
       controller,
@@ -1041,6 +1284,10 @@ async function runCli(argv = process.argv.slice(2), stdout = process.stdout, opt
       }
     }
     throw error;
+  } finally {
+    if (inflight) {
+      try { clearInflight(inflight); } catch {}
+    }
   }
   stdout.write(JSON.stringify(result) + '\n');
   return result;
@@ -1050,6 +1297,7 @@ module.exports = Object.freeze({
   SCHEMA,
   MAX_ARGS_BYTES,
   requestValue,
+  validateArgs,
   collectVerificationEvidence,
   createCodexDeliveryHost,
   createFinalizationRecoveryHost,

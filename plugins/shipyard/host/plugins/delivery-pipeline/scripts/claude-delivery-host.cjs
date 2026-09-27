@@ -13,14 +13,16 @@ const { isDurableRecorder } = require('./dispatch-boundary.cjs');
 const { createRunController } = require('./run-controller.cjs');
 const { createRunScope } = require('./run-scope.cjs');
 const roleArtifact = require('./role-artifact.cjs');
-const { resolveBaseRef } = require('./graph-dir.cjs');
+const { resolveBaseRef, resolveGraphDir } = require('./graph-dir.cjs');
+const { recordInflight, clearInflight } = require('./dispatch-record.cjs');
+const { sealResearch, verifySealedLine } = require('./planning-result-sealer.cjs');
+const { assertCanonicalGraph, deliverPlan } = require('./plan-delivery.cjs');
 
 const WORKFLOWS = Object.freeze(['executors', 'fix-round', 'drift-gate', 'investigation-research']);
 const REQUEST_SCHEMA = 'shipyard.claude-delivery-request.v1';
 const REQUEST_MAX_BYTES = 1024 * 1024;
 const REVIEW_FEEDBACK_MAX_BYTES = 32768;
 const REVIEW_DISPOSITIONS_MAX_BYTES = 65536;
-const SUMMARY_MAX_CHARS = roleArtifact.SUMMARY_MAX_CHARS;
 
 function object(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -30,11 +32,6 @@ function reject(message) {
   const error = new Error(`claude-delivery-host: ${message}`);
   error.code = 'INVALID_HOST';
   throw error;
-}
-
-function capSummary(value) {
-  const chars = Array.from(value);
-  return chars.length <= SUMMARY_MAX_CHARS ? value : `${chars.slice(0, SUMMARY_MAX_CHARS - 3).join('')}...`;
 }
 
 function parallel(jobs) {
@@ -48,7 +45,8 @@ function prepareArgs(name, args, reviewFeedback, scope) {
   if (name === 'executors') {
     return {
       ...args,
-      deliveryRulesHint: 'Work only within files_modified. The trusted host stages and signs the commit after verification.',
+      deliveryRulesHint: args.deliveryRulesHint
+        || 'Work only within files_modified. The trusted host stages and signs the commit after verification.',
       hostFinalizesCommit: true,
     };
   }
@@ -148,7 +146,8 @@ function git(worktree, args) {
   }
 }
 
-function graphDirectory(options) {
+function graphDirectory(options, worktree) {
+  const source = options.graphDir ? 'flag' : process.env.SHIPYARD_GRAPH_DIR ? 'env' : 'default';
   const directory = path.resolve(options.graphDir || process.env.SHIPYARD_GRAPH_DIR
     || path.join(process.cwd(), '.planning', 'graph'));
   let stat;
@@ -160,11 +159,17 @@ function graphDirectory(options) {
   if (!stat.isDirectory() || stat.isSymbolicLink()) {
     reject('canonical graph directory must be a real directory');
   }
-  return fs.realpathSync(directory);
+  const resolved = fs.realpathSync(directory);
+  try {
+    assertCanonicalGraph({ graphDir: resolved, worktree, source });
+  } catch (error) {
+    reject(error.message.replace(/^plan-delivery: /, ''));
+  }
+  return resolved;
 }
 
-function readGraphFile(options, name) {
-  const file = path.join(graphDirectory(options), name);
+function readGraphFile(options, name, worktree) {
+  const file = path.join(graphDirectory(options, worktree), name);
   let stat;
   try {
     stat = fs.lstatSync(file);
@@ -202,7 +207,7 @@ function signingFingerprint(worktree) {
 }
 
 function graphTicket(options, ticket, worktree) {
-  const graph = readGraphFile(options, 'tickets.json');
+  const graph = readGraphFile(options, 'tickets.json', worktree);
   const row = graph && graph.tickets && graph.tickets[ticket];
   if (!object(row) || !Array.isArray(row.files) || !row.files.length
       || typeof row.branch !== 'string' || typeof row.pr_base !== 'string') {
@@ -218,7 +223,7 @@ function graphTicket(options, ticket, worktree) {
 }
 
 function canonicalPlan(options, row, entry) {
-  const expected = path.resolve(graphDirectory(options), '..', '..', row.plan || '');
+  const expected = path.resolve(graphDirectory(options, entry && entry.worktreePath), '..', '..', row.plan || '');
   if (typeof row.plan !== 'string' || !row.plan.trim()
       || typeof entry.planPath !== 'string' || !fs.existsSync(entry.planPath)
       || fs.realpathSync(entry.planPath) !== expected) {
@@ -232,8 +237,8 @@ function canonicalBase(worktree, value, expected) {
   return resolved;
 }
 
-function boardTicket(options, entry, row) {
-  const state = readGraphFile(options, 'delivery-state.json');
+function boardTicket(options, entry, row, worktree) {
+  const state = readGraphFile(options, 'delivery-state.json', worktree);
   const board = state && state[entry.id];
   if (!object(board) || !Number.isInteger(board.pr) || board.pr !== entry.pr
       || board.branch !== row.branch || typeof board.base !== 'string' || !board.base.trim()) {
@@ -246,7 +251,7 @@ function repairPreflight(options, entry) {
   const worktree = fs.realpathSync(entry.worktreePath);
   const row = graphTicket(options, entry.id, worktree);
   canonicalPlan(options, row, entry);
-  const board = boardTicket(options, entry, row);
+  const board = boardTicket(options, entry, row, worktree);
   if (entry.branch !== row.branch) reject('repair branch differs from the canonical graph');
   const baseRef = canonicalBase(worktree, entry.base || entry.prBase, board.base);
   return Object.freeze({
@@ -261,6 +266,7 @@ function repairPreflight(options, entry) {
     files_modified: row.files,
     repo: row.repo || null,
     needsReviewFix: entry.needsReviewFix === true,
+    planDelivery: deliverPlan({ graphDir: graphDirectory(options, worktree), row, worktree }),
   });
 }
 
@@ -306,7 +312,7 @@ function reconcileBaseWithScript(options, repair) {
   let output;
   try {
     output = hostCommand(options, process.execPath, [script, repair.ticket,
-      '--worktree', repair.worktree, '--base', repair.base, '--graph', graphDirectory(options),
+      '--worktree', repair.worktree, '--base', repair.base, '--graph', graphDirectory(options, repair.worktree),
       '--no-fetch', '--json'], {
       cwd: repair.worktree, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
       timeout: 120000, maxBuffer: 65536,
@@ -338,11 +344,12 @@ function driftPreflight(options, entry, args) {
   canonicalPlan(options, row, entry);
   const base = entry.baseRef || args.baseRef;
   canonicalBase(worktree, base, row.pr_base);
+  return deliverPlan({ graphDir: graphDirectory(options, worktree), row, worktree });
 }
 
-function investigationPreflight(options, args) {
-  const project = path.resolve(graphDirectory(options), '..', '..');
+function investigationPreflight(options, args, scope) {
   const worktree = fs.realpathSync(args.worktreePath);
+  const project = path.resolve(graphDirectory(options, worktree), '..', '..');
   if (git(worktree, ['rev-parse', '--show-toplevel']) !== worktree || worktree !== project) {
     reject('investigation worktree differs from the canonical graph repository');
   }
@@ -355,6 +362,17 @@ function investigationPreflight(options, args) {
       && args.sourceRevision !== git(worktree, ['rev-parse', '--verify', 'HEAD^{commit}'])) {
     reject('investigation source revision differs from the canonical repository');
   }
+  if (args.sealedLines === undefined) return undefined;
+  if (!Array.isArray(args.lines) || args.lines.length !== 1 || !Array.isArray(args.sealedLines)
+      || args.sealedLines.length !== 3) {
+    reject('sealed sibling lines are accepted only for a single-line investigation re-dispatch with its three siblings');
+  }
+  const root = path.join(storageDirectory({ ...options, scope }), 'planning-artifacts');
+  const verifyScope = {
+    invId: args.invId, sourceRevision: args.sourceRevision,
+    repository: args.repository, policyHash: args.policyHash,
+  };
+  return args.sealedLines.map((line) => verifySealedLine({ root, scope: verifyScope, line }));
 }
 
 function fetchReviewFeedback(options, repair) {
@@ -506,80 +524,13 @@ function executorCommitInput(options, entry) {
     expectedHead: git(worktree, ['rev-parse', '--verify', 'HEAD^{commit}']),
     expectedSigner: signingFingerprint(worktree),
     files_modified: row.files,
+    planDelivery: deliverPlan({ graphDir: graphDirectory(options, worktree), row, worktree }),
   });
 }
 
 function sealPlanningResearch(input, options, scope) {
-  const { artifact, result, record } = input;
-  const match = /^((?:INV-[A-Za-z0-9-]+)):(system-state|alternatives|constraints|risks)$/.exec(artifact.subject || '');
-  if (!match || artifact.role !== 'research' || artifact.ticket !== artifact.subject
-      || !object(result) || result.id !== match[2]
-      || !['completed', 'blocked'].includes(result.status)
-      || typeof result.summary !== 'string'
-      || !object(record.receipt) || record.receipt.compliance !== 'verified'
-      || typeof record.receipt.dispatch_id !== 'string' || !record.receipt.dispatch_id) {
-    reject('planning research has invalid scope or result');
-  }
-  const summaryLength = Array.from(result.summary).length;
-  if (summaryLength > SUMMARY_MAX_CHARS) {
-    result.summary = capSummary(result.summary);
-    process.stderr.write(`claude-delivery-host: research line ${result.id} summary was ${summaryLength} characters; bounded to 500 (full finding at ${artifact.artifactPath})\n`);
-  }
-  const worktree = fs.realpathSync(scope.worktree);
-  if (fs.realpathSync(artifact.worktreePath) !== worktree) {
-    reject('planning research worktree differs from the authenticated run');
-  }
-  if (artifact.sourceRevision !== git(worktree, ['rev-parse', '--verify', 'HEAD^{commit}'])) {
-    reject('planning research revision differs from the authenticated run');
-  }
-  if (artifact.policyHash !== record.receipt.policy_hash) {
-    reject('planning research policy differs from the authenticated dispatch');
-  }
-  const investigation = path.join(artifact.worktreePath, '.planning', 'investigations', match[1]);
-  const canonicalInvestigation = path.join(worktree, '.planning', 'investigations', match[1]);
-  if (fs.realpathSync(investigation) !== canonicalInvestigation) {
-    reject('planning research directory is not canonical');
-  }
-  const file = artifact.artifactPath;
-  if (typeof file !== 'string' || !path.isAbsolute(file)
-      || path.relative(investigation, file).startsWith('..' + path.sep)
-      || path.relative(investigation, file) === '..'
-      || path.relative(investigation, file) === ''
-      || fs.realpathSync(file) !== path.join(worktree, path.relative(artifact.worktreePath, file))) {
-    reject('planning research artifact is outside its investigation');
-  }
-  const stat = fs.lstatSync(file);
-  if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 1024 * 1024) {
-    reject('planning research artifact must be a bounded regular file');
-  }
-  const bytes = fs.readFileSync(file);
-  const after = fs.lstatSync(file);
-  if (bytes.length !== stat.size || after.size !== stat.size || after.mtimeMs !== stat.mtimeMs) {
-    reject('planning research artifact changed during validation');
-  }
-  const sha256 = crypto.createHash('sha256').update(bytes).digest('hex');
-  const producer = Object.freeze({ path: file, bytes: bytes.length, content_bytes: bytes.length,
-    sha256, digest: sha256 });
-  if (!object(result.artifact) || Object.keys(producer).some((key) => result.artifact[key] !== producer[key])) {
-    reject('planning research producer reference differs from the artifact bytes');
-  }
-  const directory = path.join(storageDirectory({ ...options, scope }), 'planning-artifacts');
-  fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
-  const manifestName = crypto.createHash('sha256').update(record.receipt.dispatch_id).digest('hex');
-  const archivePath = path.join(directory, `${manifestName}.md`);
-  fs.writeFileSync(archivePath, bytes, { flag: 'wx', mode: 0o600 });
-  const index = Object.freeze({ ...producer, path: archivePath });
-  const envelope = Object.freeze({ schema: 'shipyard.research-result.v1', version: 1,
-    role: 'research', subject: artifact.subject, source_revision: artifact.sourceRevision,
-    repository: artifact.repository, policy_hash: artifact.policyHash, status: result.status,
-    summary: result.summary, artifact_index: index, evidence_index: index });
-  const manifest = Buffer.from(JSON.stringify({ schema: 'shipyard.role-artifact.v1',
-    dispatch_id: record.receipt.dispatch_id, envelope }) + '\n');
-  const manifestPath = path.join(directory, `${manifestName}.json`);
-  fs.writeFileSync(manifestPath, manifest, { flag: 'wx', mode: 0o600 });
-  return Object.freeze({ schema: 'shipyard.role-artifact.v1', artifact_ref: manifestPath,
-    artifact_digest: crypto.createHash('sha256').update(manifest).digest('hex'),
-    envelope, evidence_index: index, artifact_index: index });
+  const root = path.join(storageDirectory({ ...options, scope }), 'planning-artifacts');
+  return sealResearch({ root, scope: { worktree: scope.worktree }, lines: input });
 }
 
 function repairResult(input, repair, feedback) {
@@ -797,13 +748,22 @@ function createClaudeDeliveryHost(options = {}) {
       }
       suppliedController.assertOwner(scope.run_id);
       assertScopedWork(name, args, scope);
+      let deliveredArgs = args;
       if (name === 'executors' && Array.isArray(args.tickets) && args.tickets.length === 1) {
-        prepared.set(args.tickets[0].id, executorCommitInput(options, args.tickets[0]));
+        const commit = executorCommitInput(options, args.tickets[0]);
+        prepared.set(args.tickets[0].id, commit);
+        deliveredArgs = { ...args, tickets: [{ ...args.tickets[0], planDelivery: commit.planDelivery }] };
       }
       if (name === 'drift-gate' && Array.isArray(args.tickets)) {
-        for (const entry of args.tickets) driftPreflight(options, entry, args);
+        deliveredArgs = {
+          ...args,
+          tickets: args.tickets.map((entry) => ({
+            ...entry, planDelivery: driftPreflight(options, entry, args),
+          })),
+        };
       }
-      if (name === 'investigation-research') investigationPreflight(options, args);
+      const verifiedSealedLines = name === 'investigation-research'
+        ? investigationPreflight(options, args, scope) : undefined;
       let feedback = [];
       let repair;
       let baseCommit;
@@ -829,9 +789,12 @@ function createClaudeDeliveryHost(options = {}) {
         }
         repairs.set(repair.ticket, repair);
         reviewFeedbacks.set(repair.ticket, feedback);
+        deliveredArgs = { ...args, prs: [{ ...args.prs[0], planDelivery: repair.planDelivery }] };
       }
-      const workflowArgs = prepareArgs(name, args, feedback, scope);
-      const run = () => registered.run(name, { args: workflowArgs });
+      const workflowArgs = prepareArgs(name, deliveredArgs, feedback, scope);
+      const finalArgs = verifiedSealedLines !== undefined
+        ? { ...workflowArgs, sealedLines: verifiedSealedLines } : workflowArgs;
+      const run = () => registered.run(name, { args: finalArgs });
       if (!repair) return run();
       repairActive = true;
       let launched;
@@ -889,19 +852,54 @@ function readRequest(file) {
     reject('request file must be a bounded regular file');
   }
   const request = JSON.parse(fs.readFileSync(absolute, 'utf8'));
+  assertRequestShape(request);
+  return request;
+}
+
+function assertRequestShape(request) {
   if (!object(request) || request.schema !== REQUEST_SCHEMA || !object(request.scope)
       || !object(request.args) || Object.keys(request).some((key) => !['schema', 'scope', 'args'].includes(key))) {
     reject('request file must contain schema, scope, and serializable args only');
   }
-  return request;
+}
+
+function hostScopeFor(workflow, request) {
+  if (workflow !== 'investigation-research') return request.scope;
+  if (request.scope.ticket !== request.args.invId) {
+    reject('investigation scope ticket must match the investigation id');
+  }
+  const phase = Number(request.scope.phase);
+  if (!Number.isSafeInteger(phase) || phase < 1 || phase > 99) {
+    reject('investigation run phase cannot form a scoped controller ticket');
+  }
+  return { ...request.scope, ticket: `T-${String(phase).padStart(2, '0')}-00` };
+}
+
+// @contract: pure — no fs, spawn or git; the CLI adds the realpath and repository checks.
+function validateRequest(workflow, request) {
+  if (!WORKFLOWS.includes(workflow)) reject(`unknown workflow ${workflow}`);
+  assertRequestShape(request);
+  const hostScope = hostScopeFor(workflow, request);
+  assertScopedWork(workflow, request.args, hostScope);
+  return Object.freeze({ workflow, request, hostScope });
+}
+
+function inflightGraphDir(hostOptions, worktree) {
+  if (typeof hostOptions.graphDir === 'string') return hostOptions.graphDir;
+  const resolved = resolveGraphDir([], worktree);
+  return resolved.how === 'none' ? null : resolved.dir;
 }
 
 function cliDispatch(workflow, args) {
   const entries = workflow === 'executors' || workflow === 'drift-gate' ? args.tickets
     : workflow === 'fix-round' ? args.prs : args.lines;
-  if (!Array.isArray(entries) || entries.length !== (workflow === 'investigation-research' ? 4 : 1)
-      || !object(entries[0])) {
+  if (!Array.isArray(entries) || !object(entries[0])) {
     reject('CLI request requires one scoped ticket or PR, or four investigation lines');
+  }
+  const singleLineRedispatch = workflow === 'investigation-research' && entries.length === 1
+    && Array.isArray(args.sealedLines) && args.sealedLines.length === 3;
+  if (entries.length !== (workflow === 'investigation-research' ? 4 : 1) && !singleLineRedispatch) {
+    reject('CLI request requires one scoped ticket or PR, four investigation lines, or one investigation line with its three sealed siblings');
   }
   const first = entries[0];
   const role = workflow === 'executors' ? 'executor'
@@ -915,23 +913,13 @@ async function runClaudeDeliveryCli(argv = process.argv.slice(2), output = proce
   const { workflow, requestFile } = parseCli(argv);
   const request = readRequest(requestFile);
   if (!object(hostOptions)) reject('CLI host options must be an object');
-  let hostScope = request.scope;
-  if (workflow === 'investigation-research') {
-    if (request.scope.ticket !== request.args.invId) {
-      reject('investigation scope ticket must match the investigation id');
-    }
-    const phase = Number(request.scope.phase);
-    if (!Number.isSafeInteger(phase) || phase < 1 || phase > 99) {
-      reject('investigation run phase cannot form a scoped controller ticket');
-    }
-    hostScope = { ...request.scope, ticket: `T-${String(phase).padStart(2, '0')}-00` };
-  }
-  assertScopedWork(workflow, request.args, hostScope);
+  const { hostScope } = validateRequest(workflow, request);
   const worktree = fs.realpathSync(hostScope.worktree);
   if (worktree !== hostScope.worktree || git(worktree, ['rev-parse', '--show-toplevel']) !== worktree) {
     reject('CLI run scope must name the canonical repository root');
   }
   const ownerId = `claude-cli-${crypto.randomUUID()}`;
+  const dispatch = cliDispatch(workflow, request.args);
   const scope = createRunScope({
     run_id: hostScope.run_id,
     repository_id: worktree,
@@ -940,19 +928,24 @@ async function runClaudeDeliveryCli(argv = process.argv.slice(2), output = proce
     worktree,
     runtime: 'claude',
     owner_id: ownerId,
-    dispatch: cliDispatch(workflow, request.args),
+    dispatch,
   });
   const controller = createRunController({
     storeDir: path.join(storageDirectory({ ...hostOptions, scope: hostScope }), 'controller'),
     ownerId,
   });
   controller.begin(scope);
+  const graphDir = inflightGraphDir(hostOptions, worktree);
+  const inflight = graphDir ? { graphDir, dispatch_id: dispatch.dispatch_id, pid: process.pid } : null;
   let heartbeatError;
   const heartbeat = setInterval(() => {
     try { controller.heartbeat(scope.run_id); } catch (error) { heartbeatError = error; }
   }, 60000);
   heartbeat.unref();
   try {
+    if (inflight) {
+      recordInflight({ ...inflight, ticket: hostScope.ticket, role: dispatch.role, host: 'claude' });
+    }
     const result = await createClaudeDeliveryHost({
       ...hostOptions, scope: hostScope, controller,
     }).run(workflow, request.args);
@@ -965,10 +958,15 @@ async function runClaudeDeliveryCli(argv = process.argv.slice(2), output = proce
     throw error;
   } finally {
     clearInterval(heartbeat);
+    if (inflight) {
+      try { clearInflight(inflight); } catch {}
+    }
   }
 }
 
-module.exports = Object.freeze({ WORKFLOWS, REQUEST_SCHEMA, createClaudeDeliveryHost, runClaudeDeliveryCli });
+module.exports = Object.freeze({
+  WORKFLOWS, REQUEST_SCHEMA, createClaudeDeliveryHost, runClaudeDeliveryCli, validateRequest,
+});
 
 if (require.main === module) {
   runClaudeDeliveryCli().catch((error) => {

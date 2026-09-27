@@ -353,7 +353,7 @@ function integrationBranchOf(repo) {
 // The parser, the four-state classification and its words are imported from the
 // trailer's own module rather than copied: this file and front.cjs must agree on
 // whether a verdict counts, or the board offers what the guard refuses.
-const { parseGate, gateKind, gateConform, gateWhy } = require(path.join(__dirname, 'gate-trailer.cjs'));
+const { readGate, gateKind, gateConform, gateWhy } = require(path.join(__dirname, 'gate-trailer.cjs'));
 
 function journal(rec) {
   fs.mkdirSync(GRAPH_DIR, { recursive: true });
@@ -1000,10 +1000,10 @@ function mergeOne(id) {
   // only a verdict about the diff it was rendered against. `head_sha` on the
   // board is minutes old, and "it was that diff last tick" is the same reasoning
   // this whole live re-verification exists to refuse.
-  const gate = parseGate(pr.body);
+  const gate = readGate({ repo, sha: pr.headRefOid, body: pr.body });
   if (!gateConform(gate, pr.headRefOid)) {
     return block(gateKind(gate, pr.headRefOid) === 'unrecorded'
-      ? 'the PR body carries no `gate_status: arch-review=conform` trailer — the architecture verdict is not recorded'
+      ? 'no `merge-gate` status (nor legacy `gate_status: arch-review=conform` trailer) on this head — the architecture verdict is not recorded'
       : `${gateWhy(gate, pr.headRefOid)} — arch-review is owed again on this head before it can land`);
   }
   res.gate = gate;
