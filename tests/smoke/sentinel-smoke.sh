@@ -1742,9 +1742,6 @@ git -C "$rrepo" add -A && git -C "$rrepo" commit -qm T-06-02
 ROOT_OID="$(git -C "$rrepo" rev-parse ticket/T-06-01-root)"
 CHILD_OID="$(git -C "$rrepo" rev-parse ticket/T-06-02-child)"
 
-# `git/trees/<ref>?recursive=1` answered from that repository, so the ONLY thing
-# this fixture asserts is what the trees really contain. `git ls-tree -r` prints
-# `<mode> <type> <sha>\t<path>`; the API shape is one object per blob.
 cat > "$W/tree2json.cjs" <<'JS'
 let s = '';
 process.stdin.on('data', (d) => { s += d; }).on('end', () => {
@@ -1799,6 +1796,17 @@ case "\$argv" in
     echo '{"number":602,"state":"OPEN","isDraft":false,"baseRefName":"ticket/T-06-01-root","headRefName":"ticket/T-06-02-child","headRefOid":"$CHILD_OID","mergeStateStatus":"CLEAN","reviewDecision":null,"body":"Ticket: T-06-02\n\ngate_status: arch-review=conform, checks=green, head=$CHILD_OID"}' ;;
   "api graphql"*)
     echo '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}' ;;
+  "api repos/"*"/contents/"*"?ref="*)
+    item="\${argv#*/contents/}"
+    ref="\${item#*?ref=}"
+    item="\${item%%\\?ref=*}"
+    ref="\$(node -p 'decodeURIComponent(process.argv[1])' "\$ref")"
+    entry="\$(git -C "$rrepo" ls-tree -r "\$ref" -- "\$item" | head -1)"
+    if [ -z "\$entry" ]; then
+      echo "gh: HTTP 404: Not Found (\$item at \$ref)" >&2; exit 1
+    fi
+    printf '%s\n' "\$entry" | node "$W/tree2json.cjs" \
+      | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const e=JSON.parse(s).tree[0];process.stdout.write(JSON.stringify({type:"file",path:e.path,sha:e.sha})+"\n")})' ;;
   # The trees the assertion measures — straight out of the real repository.
   "api "*"/git/trees/"*)
     ref="\${argv#*/git/trees/}"; ref="\${ref%%\\?*}"
