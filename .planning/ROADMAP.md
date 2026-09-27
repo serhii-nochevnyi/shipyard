@@ -821,12 +821,30 @@ receipt-gated merge, verdict carry across sibling base-merges, review/merge chec
 repository-declared comment markers, Jira binding by key, declared remedy workflows, a shared
 scratch set, and the point fixes found on the pdffiller proving ground.
 
+### Phase 44: Optimize subscription efficiency per runtime
+**Status**: queued preparation; authenticated decomposition pending (renumbered from local phase 43 on 2026-09-27)
+**Goal**: reduce avoidable subscription consumption per verified completion on Claude Code and Codex through provider-specific observation, exact-input reuse, required-instruction coverage, measured rotation advice, research fact indexing, typed checkpoint reasons, and separately gated effort experiments.
+**Depends on**: Phases 40, 41 and 42
+**Requirements**: P44-A–G are phase-local scope identifiers; global IDs await validated planning
+**Plans**: 0 plans; see [phase context](phases/44-optimize-subscription-efficiency-per-runtime/CONTEXT.md) and [work packages](phases/44-optimize-subscription-efficiency-per-runtime/WORK-PACKAGES.md)
+
+No production model-policy change or automatic provider scheduler is authorized by this queue entry. Formal planning requires authenticated investigation, typed researcher/planner/checker artifacts and the graph gate.
+
+### Phase 45: Close residual pipeline efficiency gaps
+**Status**: queued scope; authenticated investigation (INV-008) and decomposition pending (renumbered from local phase 44 on 2026-09-27)
+**Goal**: correct armed Stop-gate session/board ownership, make stacked delivery reliable on target projects, and remove repeated planning-role launches and routine delivery model work left outside phase 44, with native receipts and independent gates intact.
+**Depends on**: package-specific — S1 uses phase-39 arming and phase-41 scoped-run contracts; R packages build on the phase-40 delivery seams and ADR-020 (phase 43); P/D packages use phase-40/42/44 contracts where their own work packages require them.
+**Requirements**: phase-local S1, R1–R11, P1–P5 and D1–D5; global IDs await validated planning
+**Plans**: 0 plans; see [phase context](phases/45-close-residual-pipeline-efficiency-gaps/CONTEXT.md), [work packages](phases/45-close-residual-pipeline-efficiency-gaps/WORK-PACKAGES.md) and the [phase-40 delivery findings](investigations/INV-008-residual-pipeline-efficiency/intake/phase40-delivery-findings.md)
+
+S1 is a separate high-risk correctness fix with its own ticket and human checkpoint at formal decomposition. This is a queued scope, not an executable ticket graph or approval to activate model-policy experiments.
+
 <!-- shipyard:gsd-sync:begin -->
 ## Shipyard synchronization (generated)
 
-- Source fingerprint: `a976842a17674fb057df48382e39ebe62e1433f1a4f9ffdbb164b4e1f5ff038e`
-- Plans merged: 173/220
-- Phases verified: 10/24
+- Source fingerprint: `6e63da58685a4b767f50f864f7ef7e2c8f90eda0f8f52d9d2dca663a05b6076f`
+- Plans merged: 176/221
+- Phases verified: 10/26
 - Current phase: 20
 
 | Phase | Plans | Merged | Verification |
@@ -853,7 +871,9 @@ scratch set, and the point fixes found on the pdffiller proving ground.
 | 39 — Remove conveyor session friction | 17 | 17 | gaps_found |
 | 40 — Build delivery seams and clean target-project PRs | 27 | 0 | pending |
 | 41 — Reduce pipeline subscription overhead | 9 | 9 | gaps_found |
-| 42 — Resume trusted finalization without executor replay | 2 | 1 | pending |
-| 43 — Target-project delivery at scale | 19 | 0 | pending |
+| 42 — Resume trusted finalization without executor replay | 3 | 3 | gaps_found |
+| 43 — Target-project delivery at scale | 19 | 1 | pending |
+| 44 — Optimize subscription efficiency per runtime | 0 | 0 | pending |
+| 45 — Close residual pipeline efficiency gaps | 0 | 0 | pending |
 
 <!-- shipyard:gsd-sync:end -->

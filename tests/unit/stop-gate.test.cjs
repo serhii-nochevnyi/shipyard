@@ -1118,4 +1118,59 @@ test('capacity.max: -1 is unreadable, not a binding zero — front.cjs never emi
   assert.ok(/2 item\(s\) are actionable/.test(v.reason), v.reason);
 });
 
+suite('stop-gate — a host in-flight record is live only while its pid runs within the TTL');
+
+const dispatchRecord = require(path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'dispatch-record.cjs'));
+
+function inflightProject() {
+  const cwd = project({
+    generated_at: fresh(), parked_by_run: [], auto_merge: 'off', left_behind_count: 0,
+    actionable_count: 1, actionable: { execute: ['T-01-01'], publish: [], fix: [], finalize: [], merge: [] },
+  });
+  const graph = path.join(cwd, '.planning', 'graph');
+  fs.writeFileSync(path.join(graph, 'tickets.json'), JSON.stringify({ tickets: { 'T-01-01': { phase: '01' }, 'T-01-09': { phase: '01' } } }));
+  fs.writeFileSync(path.join(graph, 'delivery-state.json'), JSON.stringify({
+    'T-01-01': { status: 'pending', ready: true }, 'T-01-09': { status: 'merged' },
+  }));
+  return { cwd, graph };
+}
+
+function gateIn(cwd) {
+  const r = spawnSync('node', [SCRIPT], {
+    cwd, input: JSON.stringify(armedPayload(cwd, {})), encoding: 'utf8',
+    env: { ...process.env, SHIPYARD_GRAPH_DIR: '' },
+  });
+  assert.equal(r.status, 0, `the hook must always exit 0 (stderr: ${r.stderr})`);
+  const out = (r.stdout || '').trim();
+  return out ? JSON.parse(out) : null;
+}
+
+const reapedPid = () => spawnSync(process.execPath, ['-e', '']).pid;
+
+test('an armed gate stays silent while the host that launched the ticket is alive', () => {
+  const { cwd, graph } = inflightProject();
+  assert.equal(gateIn(cwd).decision, 'block', 'negative control: the seeded board must block');
+  dispatchRecord.recordInflight({ graphDir: graph, ticket: 'T-01-01', role: 'executor', dispatch_id: 'dispatch-gate-live', pid: process.pid, host: 'claude' });
+  assert.equal(gateIn(cwd), null, 'a live in-flight dispatch must not be interrupted');
+});
+
+test('an armed gate blocks when the in-flight host pid is dead', () => {
+  const { cwd, graph } = inflightProject();
+  dispatchRecord.recordInflight({ graphDir: graph, ticket: 'T-01-01', role: 'executor', dispatch_id: 'dispatch-gate-dead', pid: reapedPid(), host: 'claude' });
+  const v = gateIn(cwd);
+  assert.ok(v && v.decision === 'block', 'a dead host pid must leave the ticket offered');
+});
+
+test('an armed gate blocks when the in-flight record outlived the TTL', () => {
+  const { cwd, graph } = inflightProject();
+  dispatchRecord.recordInflight({ graphDir: graph, ticket: 'T-01-01', role: 'executor', dispatch_id: 'dispatch-gate-old', pid: process.pid, host: 'claude' });
+  const file = path.join(graph, 'dispatches.json');
+  const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
+  raw.inflight['dispatch-gate-old'].started_at = new Date(Date.now() - dispatchRecord.DISPATCH_TTL_MS - 1000).toISOString();
+  fs.writeFileSync(file, JSON.stringify(raw));
+  dispatchRecord.recordInflight({ graphDir: graph, ticket: 'T-01-09', role: 'executor', dispatch_id: 'dispatch-gate-refresh', pid: process.pid, host: 'claude' });
+  const v = gateIn(cwd);
+  assert.ok(v && v.decision === 'block', 'an expired record must leave the ticket offered');
+});
+
 done();

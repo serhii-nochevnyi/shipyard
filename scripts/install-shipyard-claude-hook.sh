@@ -42,9 +42,58 @@ SESSION_CMD="node \"$SESSION_HOOK\" hook"
 OLD_STOP_CMD="node \"$OLD_STOP_HOOK\""
 
 REMOVE=0
-[[ "${1:-}" == "--remove" ]] && REMOVE=1
+DOGFOOD_ROOT="${SHIPYARD_DOGFOOD_ROOT:-}"
+WIRE_HOOKS=0
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --remove) REMOVE=1; shift ;;
+    --dogfood-root) DOGFOOD_ROOT="${2:?--dogfood-root needs a directory}"; shift 2 ;;
+    --wire-hooks) WIRE_HOOKS=1; shift ;;
+    *) echo "error: unknown arg: $1" >&2; exit 2 ;;
+  esac
+done
 
 command -v node >/dev/null 2>&1 || { echo "error: node not found on PATH" >&2; exit 1; }
+PROVENANCE="$ROOT/plugins/delivery-pipeline/scripts/host-provenance.cjs"
+
+if [[ -n "$DOGFOOD_ROOT" ]]; then
+  [[ "$REMOVE" == 0 ]] || { echo "error: --dogfood-root cannot be combined with --remove" >&2; exit 2; }
+  [[ -f "$PROVENANCE" ]] || { echo "error: host-provenance.cjs not found under $ROOT/plugins/delivery-pipeline" >&2; exit 1; }
+  DOGFOOD_ROOT="$(TARGET="$DOGFOOD_ROOT" CACHE="$CLAUDE_HOME/plugins/cache" node - <<'NODE'
+const fs = require('node:fs');
+const path = require('node:path');
+function real(p) {
+  const abs = path.resolve(p);
+  let base = abs;
+  while (!fs.existsSync(base)) base = path.dirname(base);
+  return path.join(fs.realpathSync(base), path.relative(base, abs));
+}
+const target = real(process.env.TARGET);
+const cache = real(process.env.CACHE);
+const rel = path.relative(cache, target);
+if (rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel))) {
+  console.error(`error: refusing dogfood root inside the Claude plugin cache: ${target}`);
+  process.exit(3);
+}
+process.stdout.write(target);
+NODE
+)"
+  if [[ -d "$DOGFOOD_ROOT" && -n "$(ls -A "$DOGFOOD_ROOT")" && ! -f "$DOGFOOD_ROOT/.shipyard-provenance.json" ]]; then
+    echo "error: refusing to replace non-empty directory without a Shipyard provenance record: $DOGFOOD_ROOT" >&2
+    exit 3
+  fi
+  rm -rf "$DOGFOOD_ROOT"
+  mkdir -p "$DOGFOOD_ROOT"
+  cp -R "$ROOT/plugins/delivery-pipeline/." "$DOGFOOD_ROOT/"
+  node "$PROVENANCE" record --plugin-root "$ROOT/plugins/delivery-pipeline" --out "$DOGFOOD_ROOT" --kind dogfood >/dev/null
+  echo "→ wrote dogfood root $DOGFOOD_ROOT"
+  echo "  launch: claude --plugin-dir \"$DOGFOOD_ROOT\""
+  if [[ "$WIRE_HOOKS" == 0 ]]; then
+    echo "✓ dogfood root ready; hooks left unchanged (pass --wire-hooks to point them at this root)"
+    exit 0
+  fi
+  SHIPYARD_PLUGIN_DIR="$DOGFOOD_ROOT"
+fi
 
 # drop_hook <event> <command> — remove one command from one event, preserving
 # every other hook, group and event.
@@ -214,6 +263,12 @@ process.stdout.write(JSON.stringify(value));
 NODE
 )"
   printf '{"shipyard_version":%s}\n' "$STOP_VERSION_JSON" > "$STOP_TMP/version.json"
+fi
+STOP_PLUGIN_ROOT="$(cd "$(dirname "$STOP_SRC")/.." && pwd)"
+if [[ -f "$STOP_PLUGIN_ROOT/.shipyard-provenance.json" ]]; then
+  cp "$STOP_PLUGIN_ROOT/.shipyard-provenance.json" "$STOP_TMP/.shipyard-provenance.json"
+elif [[ -f "$PROVENANCE" ]]; then
+  node "$PROVENANCE" record --plugin-root "$STOP_PLUGIN_ROOT" --out "$STOP_TMP" >/dev/null
 fi
 while IFS= read -r -d '' file; do
   node --check "$file"

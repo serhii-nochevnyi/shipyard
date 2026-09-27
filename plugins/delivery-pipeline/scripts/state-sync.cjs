@@ -45,6 +45,7 @@ const {
   diagnostic, runBounded, timeoutFromEnv,
 } = require(path.join(__dirname, 'command-runner.cjs'));
 const { matchTicketPr } = require(path.join(__dirname, 'ticket-pr-match.cjs'));
+const { readLedger } = require(path.join(__dirname, 'pr-ledger.cjs'));
 const { loadConfig } = require(path.join(__dirname, 'pipeline-config.cjs'));
 const { computeFront, formatFront, ciEstimates, epicKey, agentsInFlight } = require(path.join(__dirname, 'front.cjs'));
 const { activeDrift } = require(path.join(__dirname, 'drift-record.cjs'));
@@ -67,7 +68,8 @@ const { classify, isGreen, unavailableNote, CHECK_FIELDS } = require(path.join(_
 const { resolveAndPersistRepository } = require(path.join(__dirname, 'repo-resolve.cjs'));
 // The trailer's parser lives with its writer (gate-trailer.cjs), because a
 // verdict the board and the guard must agree on cannot be held by three copies.
-const { parseGate } = require(path.join(__dirname, 'gate-trailer.cjs'));
+const { readGate } = require(path.join(__dirname, 'gate-trailer.cjs'));
+const { nonPrimaryParents, landedInEpic } = require(path.join(__dirname, 'diamond-parents.cjs'));
 const { readCapacitySnapshot } = require(path.join(__dirname, 'capacity-lease.cjs'));
 
 const ROOT = process.cwd();
@@ -540,16 +542,18 @@ function prsForBranch(repo, branch) {
 }
 
 // ── per-ticket status ───────────────────────────────────────────────────────
+const prLedger = readLedger(GRAPH_DIR);
 const state = {};
 for (const [id, t] of Object.entries(tickets)) {
   const repo = repoOf(t);
   const rd = repoData.get(repo);
   const prs = rd.prs;
   const remoteBranches = rd.branches;
-  let match = rd.available ? matchTicketPr(id, t, prs) : null;
+  const recorded = prLedger.entries[id];
+  let match = rd.available ? matchTicketPr(id, t, prs, recorded) : null;
   if (!match && rd.available && rd.truncated) {
     const extra = prsForBranch(repo, t.branch);
-    if (extra.length) match = matchTicketPr(id, t, prs.concat(extra));
+    if (extra.length) match = matchTicketPr(id, t, prs.concat(extra), recorded);
   }
   const pr = match ? match.pr : null;
   /** @type {Record<string, any>} */
@@ -566,7 +570,8 @@ for (const [id, t] of Object.entries(tickets)) {
       };
     }
   }
-  if (match && match.matchedBy === 'marker') {
+  if (recorded) entry.recorded_pr = recorded.number;
+  if (match && match.matchedBy === 'legacy-marker') {
     entry.matched_by = 'marker';
     entry.pr_branch = pr.headRefName;
   }
@@ -574,6 +579,7 @@ for (const [id, t] of Object.entries(tickets)) {
     if (pr.state === 'MERGED') {
       entry.status = 'merged';
       entry.url = pr.url;
+      if (mode === 'epic-stacked') entry.merged_into = pr.baseRefName;
     } else if (pr.state === 'OPEN') {
       entry.status = 'pr-open';
       entry.draft = pr.isDraft;
@@ -616,7 +622,7 @@ for (const [id, t] of Object.entries(tickets)) {
         const behind = typeof cmp === 'string' && /^\d+$/.test(cmp.trim()) ? parseInt(cmp.trim(), 10) : null;
         if (behind !== null) entry.behind_by = behind;
       }
-      const gate = parseGate(pr.body);
+      const gate = readGate({ repo, sha: entry.head_sha, body: pr.body });
       if (gate) entry.gate = gate;
       const { rows, note } = ghChecks(pr.number, repo);
       // check-state.cjs classifies; this file only records. The KEYS are the
@@ -836,6 +842,14 @@ for (const [id, t] of Object.entries(tickets)) {
     // still carry a foreign primary parent; never emit a base that does not
     // exist in this ticket's repo — `gh pr create --base` would just fail.
     const pp = t.primary_parent && repoOf(tickets[t.primary_parent]) === repoOf(t) ? t.primary_parent : null;
+    const diamond = nonPrimaryParents(id, tickets).filter((d) => state[d]);
+    for (const d of diamond) {
+      const l = landedInEpic(d, tickets, state, t.epic);
+      if (!l.landed) {
+        addBlocker(d, `non-primary parent ${d} is ${state[d].status} — ${id}'s worktree is cut from ${t.primary_parent} ` +
+          `and receives ${d} only through ${t.epic}; ${d} must merge into ${t.epic} first (${l.reason})`);
+      }
+    }
     const ppState = pp ? state[pp] : null;
     const ppBranch = pp && tickets[pp] ? tickets[pp].branch : null;
     const ppRepoOk = pp ? (repoData.get(repoOf(tickets[pp])) || {}).available === true : false;
@@ -862,6 +876,10 @@ for (const [id, t] of Object.entries(tickets)) {
       s.base_reason = `${pp} is ${ppState.status} — cascade off ${ppBranch}; the sentinel retargets this PR onto ${t.epic} when ${pp} lands`;
     }
     s.epic = t.epic;
+    if (diamond.length && blockers.length === 0) {
+      s.base_merge = t.epic;
+      s.base_reason += `; ticket-worktree.sh create merges ${t.epic} in for non-primary parent(s) ${diamond.join(', ')}`;
+    }
 
     // The sentinel's mandate boundary, computed rather than judged: `stacked`
     // means the open PR targets this phase's epic or a parent ticket branch IN

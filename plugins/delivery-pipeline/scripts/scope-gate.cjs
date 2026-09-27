@@ -95,13 +95,22 @@ if (unanswerable.length) {
 
 const covered = (p) => declared.some((d) => owns(d, p));
 
+const { scopeBase } = require(path.join(__dirname, 'diamond-parents.cjs'));
+let measured;
+try {
+  measured = scopeBase({ root: worktree, base, row: t, tickets });
+} catch (e) {
+  fail(e.message);
+}
+
 let changed;
 try {
   // Three dots: what the BRANCH added, not what the base did meanwhile. With two
   // dots a base that moved ahead would be reported as this ticket's work — the
   // gate would then block on other people's merged commits, which is exactly the
   // false positive that gets a gate switched off.
-  const out = execFileSync('git', ['-C', worktree, 'diff', '--name-only', `${base}...HEAD`], {
+  const range = measured.kind === 'tree' ? [measured.tree, 'HEAD'] : [`${base}...HEAD`];
+  const out = execFileSync('git', ['-C', worktree, 'diff', '--name-only', ...range], {
     encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
   });
   changed = out.split('\n').map((s) => s.trim()).filter(Boolean);
@@ -111,6 +120,7 @@ try {
 
 const outside = changed.filter((p) => !covered(p));
 const result = { ticket, base, requested_base: requestedBase, worktree, changed: changed.length, declared, outside };
+if (measured.kind === 'tree') result.diamond_epic = measured.epic;
 
 if (asJson) {
   console.log(JSON.stringify(result, null, 2));

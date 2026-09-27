@@ -5,10 +5,52 @@ const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const { parse, owns } = require('./path-owner.cjs');
+const prHygiene = require('./pr-hygiene.cjs');
+const { resolveGraphDir } = require('./graph-dir.cjs');
+const { scopeBase } = require('./diamond-parents.cjs');
 const SCRATCH = new Set(['.shipyard-pr-body.md', '.shipyard-evidence.md']);
+const MAX_GRAPH_BYTES = 8 * 1024 * 1024;
 
-function fail(message) {
-  throw new Error(`delivery commit finalizer: ${message}`);
+function fail(message, code) {
+  const error = new Error(`delivery commit finalizer: ${message}`);
+  if (code) error.code = code;
+  throw error;
+}
+
+function graphRow(root, ticket) {
+  const { dir, how } = resolveGraphDir([], root);
+  let row;
+  try {
+    const file = path.join(dir, 'tickets.json');
+    const stat = fs.lstatSync(file);
+    if (how !== 'none' && stat.isFile() && !stat.isSymbolicLink() && stat.size <= MAX_GRAPH_BYTES) {
+      const graph = JSON.parse(fs.readFileSync(file, 'utf8'));
+      row = graph && graph.tickets && graph.tickets[ticket];
+    }
+  } catch {
+    row = undefined;
+  }
+  if (!row || typeof row !== 'object' || typeof row.title !== 'string' || !row.title.trim()) {
+    fail(`ticket ${ticket} has no canonical graph title to finalize a target-project commit subject`, 'TICKET_TITLE_UNAVAILABLE');
+  }
+  return row;
+}
+
+// @security: hygiene comes from the committed base and the title from the canonical graph, never agent text.
+function finalizedSubject(ticket, root, base) {
+  if (!prHygiene.applies({ root, ref: base })) {
+    return `(${ticket}): finalize scoped changes`;
+  }
+  const row = graphRow(root, ticket);
+  const title = row.title.trim();
+  const subject = `${prHygiene.conventionalType(row.type)}: ${title[0].toLowerCase()}${title.slice(1)}`;
+  const violations = prHygiene.check({ commits: [subject] }).violations
+    .filter((violation) => violation.field === 'commits[0]');
+  if (violations.length) {
+    fail(`finalized commit subject failed pr-hygiene: ${violations.map((violation) => violation.rule).join(', ')}`,
+      'COMMIT_SUBJECT_LEAK');
+  }
+  return subject;
 }
 
 function git(worktree, args, env, options = {}) {
@@ -105,6 +147,26 @@ function indexEntries(worktree, env) {
   return entries;
 }
 
+function diamondTree(root, base, expectedBranch, env) {
+  const { dir, how } = resolveGraphDir([], root);
+  if (how === 'none') return null;
+  let tickets;
+  try {
+    tickets = JSON.parse(fs.readFileSync(path.join(dir, 'tickets.json'), 'utf8')).tickets || {};
+  } catch {
+    return null;
+  }
+  const row = Object.values(tickets).find((candidate) => candidate && candidate.branch === expectedBranch);
+  if (!row) return null;
+  let measured;
+  try {
+    measured = scopeBase({ root, base, row, tickets, env });
+  } catch (error) {
+    fail(error.message);
+  }
+  return measured.kind === 'tree' ? measured.tree : null;
+}
+
 function finalizeDeliveryCommit(options) {
   if (!options || typeof options !== 'object' || Array.isArray(options)) fail('trusted host options are required');
   const { ticket, worktree, expectedBranch, expectedBase, expectedHead, expectedSigner } = options;
@@ -140,9 +202,11 @@ function finalizeDeliveryCommit(options) {
     fail('expectedBase is not an ancestor of HEAD');
   }
   if (ancestor !== base) fail('expectedBase is not an ancestor of HEAD');
+  const subject = finalizedSubject(ticket, root, base);
 
   const covered = (file) => declared.some((entry) => owns(entry, file));
-  const committed = nulPaths(git(root, ['diff', '--name-only', '-z', '--no-renames', base, head], env, { binary: true }));
+  const from = diamondTree(root, base, expectedBranch, env) || base;
+  const committed = nulPaths(git(root, ['diff', '--name-only', '-z', '--no-renames', from, head], env, { binary: true }));
   const status = scopedStatus(root, env);
   const outside = [...new Set([...committed, ...status].filter((file) => !covered(file)))];
   if (outside.length) fail(`out-of-scope paths: ${outside.join(', ')}`);
@@ -181,8 +245,11 @@ function finalizeDeliveryCommit(options) {
         git(root, ['symbolic-ref', '--quiet', 'HEAD'], env).trim() !== branchRef) fail('branch moved during finalization');
 
     const tree = git(root, ['write-tree'], privateEnv).trim();
+    if (options.expectedTree !== undefined && tree !== requireOid(options.expectedTree, 'expectedTree')) {
+      fail('scoped tree differs from expectedTree');
+    }
     const commit = git(root, ['commit-tree', '-S', tree, '-p', head], privateEnv, {
-      input: `(${ticket}): finalize scoped changes\n`,
+      input: `${subject}\n`,
     }).trim();
     git(root, ['verify-commit', commit], env);
     const signature = git(root, ['show', '-s', '--format=%G?%x00%GF', commit], env).trim().split('\0');
@@ -221,10 +288,38 @@ function finalizeDeliveryCommit(options) {
       if (lockFd !== undefined) fs.closeSync(lockFd);
       if (ownsLock) fs.rmSync(lockPath, { force: true });
     }
-    return Object.freeze({ ticket, worktree: root, base, previousHead: head, commit, signer: signature[1], changed: staged });
+    return Object.freeze({ ticket, worktree: root, base, previousHead: head, commit, tree, signer: signature[1], changed: staged });
   } finally {
     fs.rmSync(temporary, { recursive: true, force: true });
   }
 }
 
-module.exports = Object.freeze({ finalizeDeliveryCommit });
+function scopedTree(options) {
+  if (!options || typeof options !== 'object') fail('trusted host options are required');
+  const declared = options.files_modified;
+  if (!Array.isArray(declared) || !declared.length || declared.some((entry) => !validDeclaration(entry))) {
+    fail('files_modified must contain valid repository-relative declarations');
+  }
+  const root = fs.realpathSync(options.worktree);
+  const env = { ...process.env, GIT_OPTIONAL_LOCKS: '0' };
+  for (const key of ['GIT_INDEX_FILE', 'GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR']) delete env[key];
+  const head = git(root, ['rev-parse', '--verify', 'HEAD^{commit}'], env).trim();
+  if (options.expectedHead !== undefined && head !== requireOid(options.expectedHead, 'expectedHead')) {
+    fail('HEAD differs from expectedHead');
+  }
+  const status = scopedStatus(root, env);
+  const outside = status.filter((file) => !declared.some((entry) => owns(entry, file)));
+  if (outside.length) fail(`out-of-scope paths: ${outside.join(', ')}`);
+  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'delivery-scoped-tree-'));
+  const privateEnv = { ...env, GIT_INDEX_FILE: path.join(temporary, 'index') };
+  try {
+    git(root, ['read-tree', head], privateEnv);
+    if (status.length) git(root, ['add', '--all', '--', ...status.map((file) => `:(literal)${file}`)], privateEnv);
+    const changed = nulPaths(git(root, ['diff', '--cached', '--name-only', '-z', '--no-renames', head], privateEnv, { binary: true }));
+    return Object.freeze({ head, tree: git(root, ['write-tree'], privateEnv).trim(), changed: Object.freeze(changed) });
+  } finally {
+    fs.rmSync(temporary, { recursive: true, force: true });
+  }
+}
+
+module.exports = Object.freeze({ finalizeDeliveryCommit, scopedTree });

@@ -4,6 +4,26 @@
 // small and runs on the supported host Node runtime.
 
 const assert = require('assert');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const { execFileSync } = require('child_process');
+
+if (!process.env.GIT_CONFIG_GLOBAL) {
+  const gitHome = fs.mkdtempSync(path.join(os.tmpdir(), 'shy-git-'));
+  const configFile = path.join(gitHome, 'gitconfig');
+  fs.writeFileSync(configFile, '');
+  for (const [key, value] of [
+    ['user.name', 'Shipyard Unit Tests'],
+    ['user.email', 'unit-tests@shipyard.invalid'],
+    ['commit.gpgsign', 'false'],
+    ['tag.gpgsign', 'false'],
+    ['init.defaultBranch', 'main'],
+  ]) execFileSync('git', ['config', '--file', configFile, key, value]);
+  process.env.GIT_CONFIG_GLOBAL = configFile;
+  process.env.GIT_CONFIG_NOSYSTEM = '1';
+  process.on('exit', () => fs.rmSync(gitHome, { recursive: true, force: true }));
+}
 
 let passed = 0;
 const failures = [];

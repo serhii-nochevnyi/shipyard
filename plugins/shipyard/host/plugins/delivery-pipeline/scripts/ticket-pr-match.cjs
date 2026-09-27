@@ -49,14 +49,23 @@ function hasIdMarker(id, pr) {
 
 // prs: rows from `gh pr list --json number,state,title,headRefName,...`
 // → { pr, matchedBy: 'branch' | 'marker' } | null
-function matchTicketPr(id, ticket, prs) {
+function matchTicketPr(id, ticket, prs, recorded) {
+  if (recorded && Number.isInteger(recorded.number)) {
+    const pr = prs.find((p) => p.number === recorded.number);
+    if (pr) {
+      return pr.headRefName === recorded.head || pr.headRefName === ticket.branch
+        ? { pr, matchedBy: 'recorded' }
+        : null;
+    }
+  }
+
   const exact = prs
     .filter((p) => p.headRefName === ticket.branch)
     .sort((a, b) => (PR_STATE_RANK[a.state] ?? 9) - (PR_STATE_RANK[b.state] ?? 9) || byRecency(a, b));
-  if (exact.length) return { pr: exact[0], matchedBy: 'branch' };
+  if (exact.length) return { pr: exact[0], matchedBy: 'head' };
 
   const candidates = prs
-    .filter((p) => hasIdMarker(id, p))
+    .filter((p) => String(p.headRefName || '').startsWith('ticket/') && hasIdMarker(id, p))
     .map((p) => ({ p, sim: titleSimilarity(ticket.title, p.title) }))
     .filter((c) => c.sim >= SIMILARITY_MIN)
     .sort(
@@ -65,7 +74,7 @@ function matchTicketPr(id, ticket, prs) {
         b.sim - a.sim ||
         byRecency(a.p, b.p)
     );
-  return candidates.length ? { pr: candidates[0].p, matchedBy: 'marker' } : null;
+  return candidates.length ? { pr: candidates[0].p, matchedBy: 'legacy-marker' } : null;
 }
 
 module.exports = { matchTicketPr, titleSimilarity, PR_STATE_RANK };

@@ -709,6 +709,146 @@ mkdir -p "$WORK/badrepo/.planning/phases/01-a"
 plan badrepo '01-a/01-PLAN.md' T-01-01 '' 'src/a.ts' REQ-1 low false '' 'repo: not-a-slug'
 rejects badrepo 'is not an owner/name slug' "an invalid delivery.repo value is rejected"
 
+mkproj hygieneproject
+mkdir -p "$WORK/hygieneproject/.planning/phases/01-search" "$WORK/hygieneproject/.planning/phases/02-crash-fix"
+cat > "$WORK/hygieneproject/.planning/phases/01-search/01-PLAN.md" <<'EOF'
+---
+phase: 01
+plan: 01
+title: "Add search filters"
+type: implementation
+depends_on: []
+files_modified: [src/a.ts]
+requirements: [REQ-1]
+delivery:
+  ticket: T-01-01
+  risk: low
+  human_checkpoint: false
+---
+Goal: x
+EOF
+cat > "$WORK/hygieneproject/.planning/phases/02-crash-fix/01-PLAN.md" <<'EOF'
+---
+phase: 02
+plan: 01
+title: "Patch a crash on load"
+type: fix
+depends_on: []
+files_modified: [src/b.ts]
+requirements: [REQ-2]
+delivery:
+  ticket: T-02-01
+  risk: low
+  human_checkpoint: false
+  jira: MYD-123
+---
+Goal: x
+EOF
+if out="$(run_validator hygieneproject)"; then
+  j="$WORK/hygieneproject/.planning/graph/tickets.json"
+  node -e '
+    const b = require(process.argv[1]).tickets["T-01-01"].branch;
+    if (b !== "feat/add-search-filters") throw new Error("got " + b);
+  ' "$j" && ok "a target-project ticket with no jira gets a feat/<slug> branch" \
+         || bad "a target-project ticket with no jira gets a feat/<slug> branch"
+  node -e '
+    const b = require(process.argv[1]).tickets["T-02-01"].branch;
+    if (b !== "fix/MYD-123-patch-a-crash-on-load") throw new Error("got " + b);
+  ' "$j" && ok "a target-project ticket with a jira key gets a fix/<JIRA>-<slug> branch" \
+         || bad "a target-project ticket with a jira key gets a fix/<JIRA>-<slug> branch"
+  node -e '
+    const b = require(process.argv[1]).epics["1"].branch;
+    if (b !== "feat/search") throw new Error("got " + b);
+  ' "$j" && ok "a target-project phase epic is feat/<slug>, never epic/<phase-dir>" \
+         || bad "a target-project phase epic is feat/<slug>"
+else
+  bad "a target-project graph (no shipyard manifest) validates" "$out"
+fi
+
+mkproj shipyardproject
+mkdir -p "$WORK/shipyardproject/plugins/delivery-pipeline/.claude-plugin" "$WORK/shipyardproject/.planning/phases/01-x"
+printf '{"name":"shipyard"}' > "$WORK/shipyardproject/plugins/delivery-pipeline/.claude-plugin/plugin.json"
+cat > "$WORK/shipyardproject/.planning/phases/01-x/01-PLAN.md" <<'EOF'
+---
+phase: 01
+plan: 01
+title: "Add search filters"
+type: implementation
+depends_on: []
+files_modified: [src/a.ts]
+requirements: [REQ-1]
+delivery:
+  ticket: T-01-01
+  risk: low
+  human_checkpoint: false
+---
+Goal: x
+EOF
+if out="$(run_validator shipyardproject)"; then
+  node -e '
+    const g = require(process.argv[1]);
+    if (g.tickets["T-01-01"].branch !== "ticket/T-01-01-add-search-filters") throw new Error("branch: got " + g.tickets["T-01-01"].branch);
+    if (g.epics["1"].branch !== "epic/01-x") throw new Error("epic: got " + g.epics["1"].branch);
+  ' "$WORK/shipyardproject/.planning/graph/tickets.json" \
+    && ok "a Shipyard-manifest fixture keeps ticket/… and epic/… names" \
+    || bad "a Shipyard-manifest fixture keeps ticket/… and epic/… names"
+else
+  bad "a Shipyard-manifest project graph validates" "$out"
+fi
+
+mkproj dupslug
+mkdir -p "$WORK/dupslug/.planning/phases/01-x"
+cat > "$WORK/dupslug/.planning/phases/01-x/01-PLAN.md" <<'EOF'
+---
+phase: 01
+plan: 01
+title: "Refresh the shared cache layer"
+type: implementation
+depends_on: []
+files_modified: [src/a.ts]
+requirements: [REQ-1]
+delivery:
+  ticket: T-01-01
+  risk: low
+  human_checkpoint: false
+---
+Goal: x
+EOF
+cat > "$WORK/dupslug/.planning/phases/01-x/02-PLAN.md" <<'EOF'
+---
+phase: 01
+plan: 02
+title: "Refresh The Shared Cache Layer"
+type: implementation
+depends_on: []
+files_modified: [src/b.ts]
+requirements: [REQ-2]
+delivery:
+  ticket: T-01-02
+  risk: low
+  human_checkpoint: false
+---
+Goal: x
+EOF
+rejects dupslug 'DUPLICATE_BRANCH' "two tickets whose titles collapse to the same slug fail with DUPLICATE_BRANCH"
+rejects dupslug 'T-01-01, T-01-02' "…and the error names both colliding ticket ids"
+
+mkproj legacypr
+mkdir -p "$WORK/legacypr/.planning/phases/01-x" "$WORK/legacypr/.planning/graph"
+plan legacypr '01-x/01-PLAN.md' T-01-01 '' 'src/a.ts' REQ-1
+printf '{"tickets":{"T-01-01":{"pr":42,"matched_by":"marker","pr_branch":"ticket/T-01-01-original-slug"}}}' \
+  > "$WORK/legacypr/.planning/graph/delivery-state.json"
+if out="$(run_validator legacypr)"; then
+  node -e '
+    const b = require(process.argv[1]).tickets["T-01-01"].branch;
+    if (b !== "ticket/T-01-01-original-slug") throw new Error("got " + b);
+  ' "$WORK/legacypr/.planning/graph/tickets.json" \
+    && ok "a ticket with a recorded legacy PR keeps its ticket/… branch" \
+    || bad "a ticket with a recorded legacy PR keeps its ticket/… branch"
+else
+  bad "a project with a recorded legacy PR still validates" "$out"
+fi
+
 # ── 8. the generated YAML view must be parseable ────────────────────────────
 mkproj globs
 mkdir -p "$WORK/globs/.planning/phases/01-x"

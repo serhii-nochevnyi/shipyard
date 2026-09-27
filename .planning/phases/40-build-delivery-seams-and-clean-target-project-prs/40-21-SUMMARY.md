@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 6fce0315a74e3cb47fcfc5dafdd854fdf225bb4e026d6a605acf6571b98571b6
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: ecce1cd76b11ede4c28187b658b3592d0e8ec21f024dc6a3ae65577194459565
 phase: 40-build-delivery-seams-and-clean-target-project-prs
 plan: 21
 subsystem: shipyard delivery
@@ -22,7 +22,7 @@ key-decisions:
 duration: 0min
 status: halted
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 6fce0315a74e3cb47fcfc5dafdd854fdf225bb4e026d6a605acf6571b98571b6
+shipyard_source_fingerprint: ecce1cd76b11ede4c28187b658b3592d0e8ec21f024dc6a3ae65577194459565
 ---
 
 # Phase 40: Support a dogfood install root with recorded host provenance and a doctor cache-vs-release check — Delivery Projection

@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 585fe6602b30216061cac907db6bc3d90790194b131d48ced2772222f4f97c86
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 5ea9a1d1341d21439030a282d42d235a1452c06b2eef7c156420deb1fa81a607
 phase: 43-target-project-delivery-at-scale
 plan: 15
 subsystem: shipyard delivery
@@ -22,7 +22,7 @@ key-decisions:
 duration: 0min
 status: halted
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 585fe6602b30216061cac907db6bc3d90790194b131d48ced2772222f4f97c86
+shipyard_source_fingerprint: 5ea9a1d1341d21439030a282d42d235a1452c06b2eef7c156420deb1fa81a607
 ---
 
 # Phase 43: deliver-dispatch builds research and decomposition requests from the investigation directory — Delivery Projection

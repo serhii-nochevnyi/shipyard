@@ -7,7 +7,7 @@ const crypto = require('crypto');
 const { suite, test, done, assert } = require('./assert-harness.cjs');
 const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
 const { createDispatchBoundary } = require('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs');
-const { createCodexDispatchAdapter, CODEX_MODEL_IDS } = require('../../plugins/delivery-pipeline/scripts/codex-dispatch-adapter.cjs');
+const { createCodexDispatchAdapter, CODEX_MODEL_IDS, REPAIR, repairFor } = require('../../plugins/delivery-pipeline/scripts/codex-dispatch-adapter.cjs');
 
 const capabilities = {
   supportedModels: Object.values(CODEX_MODEL_IDS), supportedEfforts: ['low', 'medium', 'high', 'xhigh', 'max'],
@@ -30,7 +30,7 @@ function fixture() {
         'name = "' + file.replace(/\.toml$/, '') + '"',
         'model = "' + CODEX_MODEL_IDS[rung.model_key] + '"',
         'model_reasoning_effort = "' + rung.effort + '"',
-        'sandbox_mode = "' + (['research', 'arch-review', 'drift-check'].includes(role) ? 'read-only' : 'workspace-write') + '"',
+        'sandbox_mode = "' + (['arch-review', 'drift-check'].includes(role) ? 'read-only' : 'workspace-write') + '"',
         "developer_instructions = '''\nRun the exact role.\n'''\n",
       ].join('\n');
       fs.writeFileSync(path.join(root, file), content);
@@ -270,6 +270,36 @@ test('runtime receipt requires matching model and effort from the bound native t
         assert.throws(() => f.boundary.dispatch({ runtime: 'codex', role: 'executor' }),
           (error) => error.code === 'MISSING_RECEIPT');
       }
+    } finally { clean(f); }
+  }
+});
+
+test('default sandbox per role: researchers write, the plan-checker stays read-only, explicit selection wins', () => {
+  const cases = [
+    [{ role: 'research' }, ':workspace', true],
+    [{ role: 'research' }, ':read-only', false],
+    [{ role: 'research', gsd_role: 'gsd-phase-researcher' }, ':workspace', true],
+    [{ role: 'research', gsd_role: 'gsd-phase-researcher' }, ':read-only', false],
+    [{ role: 'decomposition', gsd_role: 'gsd-plan-checker' }, ':read-only', true],
+    [{ role: 'decomposition', gsd_role: 'gsd-plan-checker' }, ':workspace', false],
+    [{ role: 'arch-review' }, ':read-only', true],
+    [{ role: 'arch-review' }, ':workspace', false],
+  ];
+  for (const [request, baseProfile, accepted] of cases) {
+    const launch = (selection, context) => {
+      const evidence = runtimeEvidence(selection, context);
+      evidence.sandbox_evidence.base_profile = baseProfile;
+      evidence.command.args = evidence.command.args.map((arg) => arg.startsWith('permissions.shipyard-runtime.extends=')
+        ? 'permissions.shipyard-runtime.extends=' + JSON.stringify(baseProfile) : arg);
+      return { ...applied(selection), observed_model: selection.model, observed_effort: selection.reasoning_effort,
+        gsd_role: context.gsd_role, gsd_launch_mechanism: 'typed-gsd-callback', runtime_evidence: evidence };
+    };
+    const f = setup({ host: { requireRuntimeEvidence: true, launch, launchStatic: launch,
+      launchTypedGsd: launch } });
+    try {
+      const run = () => f.boundary.dispatch({ runtime: 'codex', ...request });
+      if (accepted) assert.equal(run().receipt.compliance, 'verified');
+      else assert.throws(run, (error) => error.code === 'MISSING_RECEIPT');
     } finally { clean(f); }
   }
 });
@@ -515,6 +545,19 @@ test('asynchronous native application evidence is verified and recorded', async 
     assert.equal(result.receipt.compliance, 'verified');
     assert.equal(result.applied_effort, 'max');
   } finally { clean(f); }
+});
+
+test('an adapter-level config refusal carries the config remedy, not a reinstall', () => {
+  const message = repairFor('CONFLICTING_OVERRIDE', { key: 'model_profile_overrides.codex.luna' });
+  assert.match(message, /model_profile_overrides\.codex\.luna/);
+  assert.match(message, /\.planning\/config\.json/);
+  assert.match(message, /gsd-tune\.cjs --runtime codex/);
+  assert.doesNotMatch(message, /install-shipyard-codex/);
+});
+
+test('an adapter-level refusal without an identified config key keeps the historical reinstall remedy', () => {
+  assert.equal(repairFor('CONFLICTING_OVERRIDE', {}), REPAIR);
+  assert.equal(repairFor('STALE_GENERATED_AGENT', { key: 'anything' }), REPAIR);
 });
 
 done();

@@ -212,7 +212,10 @@ test('targeted role-artifact consumption records selected bytes separately from 
   git(root, ['config', 'user.name', 'Overhead Test']);
   git(root, ['config', 'commit.gpgsign', 'false']);
   fs.writeFileSync(path.join(root, 'base.txt'), 'base\n');
-  git(root, ['add', 'base.txt']);
+  const manifestDir = path.join(root, 'plugins', 'delivery-pipeline', '.claude-plugin');
+  fs.mkdirSync(manifestDir, { recursive: true });
+  fs.writeFileSync(path.join(manifestDir, 'plugin.json'), JSON.stringify({ name: 'shipyard' }));
+  git(root, ['add', 'base.txt', 'plugins']);
   git(root, ['commit', '--quiet', '-m', 'overhead base']);
   git(root, ['switch', '--quiet', '-c', `ticket/${ticket}`]);
   const recorder = createDurableRecorder(receipts);

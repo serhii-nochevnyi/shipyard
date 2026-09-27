@@ -623,6 +623,36 @@ test('...and the SAME pre-authorized ticket does land on its epic (the control)'
   assert.strictEqual(r.preauthorized, true, 'the result records WHY the checkpoint was passable');
 });
 
+const DOGFOOD_ENV = { SHIPYARD_INSTALL_KIND: 'dogfood', SHIPYARD_SOURCE_SHA: 'a'.repeat(40), SHIPYARD_SOURCE_DIRTY: '1' };
+
+test('a dogfood host is refused a merge into the integration branch', () => {
+  const root = project({
+    tickets: epicTickets,
+    state: {
+      'T-PRE': { ...openGreen(9, 'ticket/T-PRE', 'main'), merge_scope: 'integration' },
+      'T-TWO': openGreen(10, 'ticket/T-TWO', 'epic/21-x'),
+    },
+    config: epicConfig,
+  });
+  const env = onPath(stubGh(), { ...DOGFOOD_ENV, STUB_BASE: 'main', STUB_HEAD: 'ticket/T-PRE', STUB_PR: '9' });
+  const r = JSON.parse(run(root, ['merge', 'T-PRE', '--json'], { env }).stdout).results[0];
+  assert.strictEqual(r.merged, false);
+  assert.strictEqual(r.would_merge, undefined);
+  assert.ok(r.blockers.some((b) => /integration branch/.test(b)), r.blockers.join('; '));
+});
+
+test('a dogfood host is not refused by the integration-branch guard on an epic base', () => {
+  const root = project({
+    tickets: epicTickets,
+    state: { 'T-PRE': openGreen(9, 'ticket/T-PRE', 'epic/21-x'), 'T-TWO': openGreen(10, 'ticket/T-TWO', 'epic/21-x') },
+    config: epicConfig,
+  });
+  const env = onPath(stubGh(), { ...DOGFOOD_ENV, STUB_BASE: 'epic/21-x', STUB_HEAD: 'ticket/T-PRE', STUB_PR: '9' });
+  const r = JSON.parse(run(root, ['merge', 'T-PRE', '--json', '--dry-run'], { env }).stdout).results[0];
+  assert.ok(!(r.blockers || []).some((b) => /integration branch/.test(b)), (r.blockers || []).join('; '));
+  assert.strictEqual(r.would_merge, true, (r.blockers || []).join('; '));
+});
+
 test('an un-authorized checkpoint is still refused, in today\'s words, before any gh call', () => {
   const root = project({
     tickets: { 'T-HOLD': { human_checkpoint: true, branch: 'ticket/T-HOLD', epic: 'epic/21-x' } },

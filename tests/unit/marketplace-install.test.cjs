@@ -70,6 +70,7 @@ fs.writeFileSync(file,JSON.stringify(s));
   assert.equal(packageFreshnessRequired(''),true);
   assert.equal(packageFreshnessRequired('main'),true);
   assert.equal(packageFreshnessRequired('epic/43-target-project-delivery-at-scale'),false);
+  assert.equal(packageFreshnessRequired('ticket/T-40-17-add-the-publish-time-pr-hygiene-gate-and'),false);
   if (packageFreshnessRequired(process.env.GITHUB_BASE_REF)) {
     assert.deepEqual(snapshot(path.join(root,'plugins/shipyard')),snapshot(out),
       'Marketplace package is stale: run make package-shipyard-codex');

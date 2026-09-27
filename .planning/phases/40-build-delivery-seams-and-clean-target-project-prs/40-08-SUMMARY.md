@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: c241122b944499af4f61388f2ca5850d1b199c8a94ea953bbeb1a4547732dbc3
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 91d760c0a00aaf85affdb314b250fd1a6005d54dbe79077baf6c20ab412b8667
 phase: 40-build-delivery-seams-and-clean-target-project-prs
 plan: 08
 subsystem: shipyard delivery
@@ -22,7 +22,7 @@ key-decisions:
 duration: 0min
 status: halted
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: c241122b944499af4f61388f2ca5850d1b199c8a94ea953bbeb1a4547732dbc3
+shipyard_source_fingerprint: 91d760c0a00aaf85affdb314b250fd1a6005d54dbe79077baf6c20ab412b8667
 ---
 
 # Phase 40: Capture the real Claude stream and make the Claude host tests replay it — Delivery Projection

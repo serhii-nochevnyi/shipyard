@@ -138,6 +138,27 @@ npm GSD runtime payload is also needed by host tools; it is not a substitute for
 the marketplace plugin. Dependency installation errors are propagated instead
 of reporting a partially working Shipyard installation as successful.
 
+### Dogfooding unreleased hosts
+
+Run unreleased worktree code on purpose, through a separate install root that
+never overwrites the release cache:
+
+```bash
+make install-shipyard-dogfood-claude DOGFOOD_ROOT=/path/to/dogfood
+make install-shipyard-dogfood-codex DOGFOOD_ROOT=/path/to/dogfood
+```
+
+The Codex dogfood install still needs `SHIPYARD_CODEX_CAPABILITIES_FILE`, like
+any direct Codex host install. Each writes a `.shipyard-provenance.json` record
+(install kind, source sha, dirty flag, version) into the dogfood root instead
+of `$CLAUDE_HOME` / `$CODEX_HOME`'s release cache; the Claude installer prints
+the `claude --plugin-dir <dir>` launch line and leaves hooks untouched unless
+`--wire-hooks` is passed directly to the script. `make doctor` reports a
+release cache whose files match no release tag, and reports a dogfood root as
+a warning naming its source sha and dirty flag. A dogfood host is refused by
+the sentinel the same way every host is when a PR targets the repository's
+default integration branch, so dogfooding cannot reach a default-branch merge.
+
 ## First run
 
 Open the target repository and describe the work. The router chooses the
@@ -355,6 +376,69 @@ repeat the check:
 ```bash
 node plugins/delivery-pipeline/scripts/gsd-sync.cjs
 ```
+
+Change the pinned digest of a runtime-owned file (`runtime-adapters.cjs`,
+`claude-dispatch-adapter.cjs`) only through:
+
+```bash
+make refresh-runtime-digests
+```
+
+It rewrites `tests/unit/runtime-file-digests.json` and prints one
+`Runtime-Digest-Refresh: <path>` line per changed file. Carry those lines as
+commit trailers on the commit that changes the pin; CI rejects a pin change
+without a matching trailer.
+
+## Release and live verification
+
+`make test-live` runs one live round per runtime (`bash tests/live/live-round.sh
+--runtime claude`, then `--runtime codex`), stopping at the first failure. Each
+round needs the runtime CLI and `gh` on `PATH` and authenticated, plus
+`SHIPYARD_LIVE_REPO=<owner>/<throwaway-repo>` naming a disposable repository,
+and writes a receipt to
+`~/.local/state/shipyard/live/<version>/<tree sha>/<runtime>.json`. The Codex round clears `CLAUDECODE`/`CLAUDE_CODE_*` so it can run
+from inside a Claude Code session; point `CODEX_HOME` at the Codex install
+being released when it is not the default home.
+
+```bash
+make release VERSION=<x.y.z>
+```
+
+`make release` refuses to tag a release unless both runtimes have a passing,
+matching live receipt for the exact plugin version and tree sha, no older than
+7 days; it names the missing or stale runtime and the `make test-live` command
+to re-run. `VERSION` is required and must match
+`plugins/delivery-pipeline/.claude-plugin/plugin.json`.
+
+## Boundary fixtures
+
+```bash
+make capture-fixtures BOUNDARY=claude-stream
+make capture-fixtures BOUNDARY=codex-agent-stream
+```
+
+`make capture-fixtures` runs the real CLI once, scrubs home paths, tokens and
+session ids from its output, and writes a provenance-stamped fixture under
+`tests/fixtures/captured/` recording the CLI version. Re-capture a boundary
+after a CLI upgrade changes its output shape, or when
+`tests/unit/boundary-fixtures.test.cjs` warns about a `cli_version` mismatch,
+then update that boundary's registry entry under
+`tests/fixtures/captured/boundaries/` with the printed fixture paths.
+
+## Planning files in target projects
+
+Stop tracking `.planning/` in a target project once its conveyor is set up
+(D-16), the one-time migration `pr-hygiene.cjs` expects:
+
+```bash
+node /path/to/shipyard/plugins/delivery-pipeline/scripts/planning-untrack.cjs --project-root <target-project-root>
+node /path/to/shipyard/plugins/delivery-pipeline/scripts/planning-untrack.cjs --project-root <target-project-root> --apply --confirm untrack-planning
+```
+
+`make untrack-planning` is the equivalent dry run when run from this checkout;
+add `CONFIRM=untrack-planning` to apply. It refuses on a dirty worktree, on the
+repository's default branch, when `.planning/` is already untracked, or inside
+the Shipyard repository itself, which is always exempt.
 
 ## Troubleshooting
 

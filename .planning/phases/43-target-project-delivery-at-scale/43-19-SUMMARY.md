@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: d6571e6746b2174f16a2f40a41d2ebb3031a640450de5431292560c058c2bfb6
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: f45a69ab0fe51cbd84030ca7ff450be990ecd4ee1d1f6022c70714a5bb714a1b
 phase: 43-target-project-delivery-at-scale
 plan: 19
 subsystem: shipyard delivery
@@ -22,7 +22,7 @@ key-decisions:
 duration: 0min
 status: halted
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: d6571e6746b2174f16a2f40a41d2ebb3031a640450de5431292560c058c2bfb6
+shipyard_source_fingerprint: f45a69ab0fe51cbd84030ca7ff450be990ecd4ee1d1f6022c70714a5bb714a1b
 ---
 
 # Phase 43: The merge gate refuses heads the conveyor does not cover; PRs opened before release are journalled as legacy — Delivery Projection
