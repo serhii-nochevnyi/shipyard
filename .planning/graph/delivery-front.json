@@ -1,17 +1,19 @@
 {
-  "generated_at": "2026-09-27T18:11:57.006Z",
-  "observed_at": "2026-09-27T18:11:57.006Z",
-  "generation": 382,
+  "generated_at": "2026-09-27T18:20:08.524Z",
+  "observed_at": "2026-09-27T18:20:08.524Z",
+  "generation": 383,
   "parked_by_run": [],
   "auto_merge": "epic",
-  "dispatches_applied_at": "2026-09-27T18:11:57.006Z",
+  "dispatches_applied_at": "2026-09-27T18:20:08.524Z",
   "actionable": {
     "execute": [
       "T-43-01",
       "T-43-05",
+      "T-44-01",
       "T-43-11",
       "T-43-09",
-      "T-43-14"
+      "T-43-14",
+      "T-44-07"
     ],
     "publish": [],
     "fix": [
@@ -41,7 +43,12 @@
       "T-43-16",
       "T-43-17",
       "T-43-18",
-      "T-43-19"
+      "T-43-19",
+      "T-44-02",
+      "T-44-03",
+      "T-44-04",
+      "T-44-05",
+      "T-44-06"
     ],
     "done": [
       "T-20-01",
@@ -267,10 +274,17 @@
     "T-43-16": "T-43-06 (parent has no branch yet (nothing to cascade from)); T-43-01 (parent has no branch yet (nothing to cascade from))",
     "T-43-17": "T-43-13 (parent has no branch yet (nothing to cascade from)); T-43-16 (parent has no branch yet (nothing to cascade from))",
     "T-43-18": "T-43-17 (parent has no branch yet (nothing to cascade from)); T-43-08 (parent has no branch yet (nothing to cascade from))",
-    "T-43-19": "T-43-18 (parent has no branch yet (nothing to cascade from)); T-43-12 (parent has no branch yet (nothing to cascade from))"
+    "T-43-19": "T-43-18 (parent has no branch yet (nothing to cascade from)); T-43-12 (parent has no branch yet (nothing to cascade from))",
+    "T-44-01": "ready — worktree + executor",
+    "T-44-02": "T-44-01 (parent has no branch yet (nothing to cascade from))",
+    "T-44-03": "T-44-01 (parent has no branch yet (nothing to cascade from))",
+    "T-44-04": "T-44-03 (parent has no branch yet (nothing to cascade from))",
+    "T-44-05": "T-44-04 (parent has no branch yet (nothing to cascade from))",
+    "T-44-06": "T-44-01 (parent has no branch yet (nothing to cascade from))",
+    "T-44-07": "ready — worktree + executor"
   },
   "counts": {
-    "execute": 5,
+    "execute": 7,
     "publish": 0,
     "fix": 1,
     "finalize": 1,
@@ -280,11 +294,11 @@
     "parent": 0,
     "merge_human": 0,
     "human": 0,
-    "blocked": 11,
+    "blocked": 16,
     "done": 203
   },
   "parent_of": {},
-  "actionable_count": 7,
+  "actionable_count": 9,
   "tracker_blocked_count": 0,
   "left_behind_count": 0,
   "fixpoint": false,

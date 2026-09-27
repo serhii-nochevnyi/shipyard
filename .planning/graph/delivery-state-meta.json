@@ -1,13 +1,13 @@
 {
   "schema_version": 1,
-  "generation": 382,
-  "generation_identity": "1cf72646-46a9-40e1-b390-467f05d54cb4",
-  "previous_generation_identity": "16777244:12931242219:1790532673196124000:138c38e9597f4f5988a6a66b0970f6b48ce349fd9de71dd2319f124640207328",
-  "observed_at": "2026-09-27T18:11:57.006Z",
-  "generated_at": "2026-09-27T18:11:57.006Z",
+  "generation": 383,
+  "generation_identity": "9040db4f-a1bb-4e7e-8982-65c942a85898",
+  "previous_generation_identity": "16777244:12931242976:1790532733060474000:fa34aa35f807ebc335c7d3d22719f6d25f4b13ffb13e61351ce971c8c04710e3",
+  "observed_at": "2026-09-27T18:20:08.524Z",
+  "generated_at": "2026-09-27T18:20:08.524Z",
   "by": "state-sync",
-  "pid": 37081,
-  "observation_generation": 382,
+  "pid": 50750,
+  "observation_generation": 383,
   "observation_projection": {
     "tickets": {
       "T-20-01": {
@@ -2452,14 +2452,91 @@
         "merge_state": null,
         "review_decision": null,
         "checks": null
+      },
+      "T-44-01": {
+        "status": "pending",
+        "repository": null,
+        "pr": null,
+        "head": null,
+        "draft": false,
+        "base": "epic/44-optimize-subscription-efficiency-per-runtime",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-44-02": {
+        "status": "pending",
+        "repository": null,
+        "pr": null,
+        "head": null,
+        "draft": false,
+        "base": "epic/44-optimize-subscription-efficiency-per-runtime",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-44-03": {
+        "status": "pending",
+        "repository": null,
+        "pr": null,
+        "head": null,
+        "draft": false,
+        "base": "epic/44-optimize-subscription-efficiency-per-runtime",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-44-04": {
+        "status": "pending",
+        "repository": null,
+        "pr": null,
+        "head": null,
+        "draft": false,
+        "base": "epic/44-optimize-subscription-efficiency-per-runtime",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-44-05": {
+        "status": "pending",
+        "repository": null,
+        "pr": null,
+        "head": null,
+        "draft": false,
+        "base": "epic/44-optimize-subscription-efficiency-per-runtime",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-44-06": {
+        "status": "pending",
+        "repository": null,
+        "pr": null,
+        "head": null,
+        "draft": false,
+        "base": "epic/44-optimize-subscription-efficiency-per-runtime",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-44-07": {
+        "status": "pending",
+        "repository": null,
+        "pr": null,
+        "head": null,
+        "draft": false,
+        "base": "epic/44-optimize-subscription-efficiency-per-runtime",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
       }
     }
   },
   "binding": {
     "schema_version": 1,
-    "state_digest": "09a7bda74f845932b5ee934f783695e204339aad62961e85318bf870964ccb4c",
-    "front_digest": "392e18fb4ffb0f1e121014e6f2818cdf4ae3a3481feffe833bd4a270ddfce571",
-    "observation_digest": "ad3cce3a5f7864301614d5bb57383316c2c746c216bea27a5d4703035e9e62fa",
-    "observation_generation": 382
+    "state_digest": "31026a7aecb8e22848798d937dd8e4bdfdab49b1775f645242a03778b9a4653b",
+    "front_digest": "8b849577dd466c578643c0dc4bd2c408c36fe0c0c088645b5560c6c75ba12c2c",
+    "observation_digest": "65e4d825e5cbc211df0de230d3df51d09e49a015811c387d2ff7311286dc83e3",
+    "observation_generation": 383
   }
 }

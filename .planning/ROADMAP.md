@@ -854,9 +854,9 @@ S1 is a separate high-risk correctness fix with its own ticket and human checkpo
 <!-- shipyard:gsd-sync:begin -->
 ## Shipyard synchronization (generated)
 
-- Source fingerprint: `72b0057defad5cfd517a49159dc8da70c8607cd12c4effd69ab67b91eb96d61e`
-- Plans merged: 202/221
-- Phases verified: 9/26
+- Source fingerprint: `f8a85703e1ce73e67e9fd6a00670f8a97ebe1de9c898635d51748ff0fd17423a`
+- Plans merged: 203/228
+- Phases verified: 10/26
 - Current phase: 20
 
 | Phase | Plans | Merged | Verification |
@@ -879,13 +879,13 @@ S1 is a separate high-risk correctness fix with its own ticket and human checkpo
 | 35 — Close the GSD and Shipyard workflow loop | 3 | 3 | passed |
 | 36 — Enforce the runtime model ladder | 12 | 12 | passed |
 | 37 — Run the autonomous dual-runtime control plane | 8 | 8 | pending |
-| 38 — Restore the native model ladder in delivery | 8 | 7 | pending |
+| 38 — Restore the native model ladder in delivery | 8 | 8 | passed |
 | 39 — Remove conveyor session friction | 17 | 17 | gaps_found |
 | 40 — Build delivery seams and clean target-project PRs | 27 | 27 | pending |
 | 41 — Reduce pipeline subscription overhead | 9 | 9 | gaps_found |
 | 42 — Resume trusted finalization without executor replay | 3 | 3 | gaps_found |
 | 43 — Target-project delivery at scale | 19 | 1 | pending |
-| 44 — Optimize subscription efficiency per runtime | 0 | 0 | pending |
+| 44 — Optimize subscription efficiency per runtime | 7 | 0 | pending |
 | 45 — Close residual pipeline efficiency gaps | 0 | 0 | pending |
 
 <!-- shipyard:gsd-sync:end -->
