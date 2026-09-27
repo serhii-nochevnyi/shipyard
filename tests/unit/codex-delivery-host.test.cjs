@@ -56,8 +56,6 @@ const signer = execFileSync('gpg', ['--batch', '--with-colons', '--list-secret-k
   encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
 }).split('\n').find((line) => line.startsWith('fpr:')).split(':')[9];
 
-// The harness runs async tests concurrently, so every test that sets or clears
-// SHIPYARD_GRAPH_DIR queues here; otherwise one test's graph leaks into another's finalizer.
 let graphEnvQueue = Promise.resolve();
 function withGraphDirEnv(value, action) {
   const run = graphEnvQueue.then(async () => {
