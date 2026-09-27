@@ -62,7 +62,6 @@ function isInsidePath(root, candidate) {
   return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
 }
 
-// @contract: worktree tracking wins (D-30); otherwise the project graph, never an untracked worktree copy.
 function canonicalizeGraphDir(dir, worktree, source) {
   let resolved;
   try { resolved = fs.realpathSync(dir); }
@@ -73,11 +72,16 @@ function canonicalizeGraphDir(dir, worktree, source) {
 }
 
 function resolveLaunchGraphDir({ worktree, explicitGraphDir }) {
+  if (explicitGraphDir) {
+    if (!fs.existsSync(path.join(explicitGraphDir, 'tickets.json'))) {
+      fail('GRAPH_UNRESOLVED', `no canonical ticket graph found (looked in ${explicitGraphDir})`);
+    }
+    return canonicalizeGraphDir(explicitGraphDir, worktree, 'flag');
+  }
   if (trackedAtHead(worktree, '.planning/graph/tickets.json')) {
     return canonicalizeGraphDir(path.join(worktree, '.planning', 'graph'), worktree, 'worktree');
   }
-  const flagArgv = explicitGraphDir ? ['--graph', explicitGraphDir] : [];
-  const resolved = resolveGraphDir(flagArgv, null);
+  const resolved = resolveGraphDir([], null);
   if (resolved.how === 'none' || !fs.existsSync(path.join(resolved.dir, 'tickets.json'))) {
     fail('GRAPH_UNRESOLVED', `no canonical ticket graph found (looked in ${resolved.dir}); pass --graph-dir <project>/.planning/graph`);
   }
