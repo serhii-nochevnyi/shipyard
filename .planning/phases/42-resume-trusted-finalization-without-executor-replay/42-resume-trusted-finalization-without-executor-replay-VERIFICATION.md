@@ -1,28 +1,29 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 932bfeb4360af9bbc8229a6f6e6768e3a22d9c290c9497fc4d8926cde989871f
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: baf9e9eb14a276b00a33f9edd634761e0217926145bfa3dc5f39779aaa55ad5c
 phase: 42
-status: human_needed
-shipyard_source_fingerprint: 932bfeb4360af9bbc8229a6f6e6768e3a22d9c290c9497fc4d8926cde989871f
+status: gaps_found
+shipyard_source_fingerprint: baf9e9eb14a276b00a33f9edd634761e0217926145bfa3dc5f39779aaa55ad5c
 ---
 
 # Phase 42: Resume trusted finalization without executor replay — Verification Projection
 
-**Status:** human_needed
+**Status:** gaps_found
 
 ## Observable Truths
 
 | Truth | Evidence | Status |
 |---|---|---|
-| Every phase plan is accounted for | 1/2 delivery records are merged | ? UNCERTAIN |
-| Integration is coherent | INTEGRATION.md is missing | ? UNCERTAIN |
-| Verification evidence is present | INTEGRATION.md is missing | ? UNCERTAIN |
+| Every phase plan is accounted for | 3/3 delivery records are merged | ✓ VERIFIED |
+| Integration is coherent | integration evidence records passed | ✓ VERIFIED |
+| Verification evidence is present | verification evidence records a failed check | ✗ FAILED |
 
 ## Plan Evidence
 
 | Ticket | Delivery | Plan status |
 |---|---|---|
 | T-42-01 | merged | ✓ VERIFIED |
-| T-42-02 | pending | ? UNCERTAIN |
+| T-42-02 | merged | ✓ VERIFIED |
+| T-42-03 | merged | ✓ VERIFIED |
 
 ## Verification Commands
 
@@ -31,4 +32,4 @@ shipyard_source_fingerprint: 932bfeb4360af9bbc8229a6f6e6768e3a22d9c290c9497fc4d8
 
 ## Gaps Summary
 
-**Not green:** 1 plan(s) are not merged.
+**Not green:** verification evidence records a failed check.

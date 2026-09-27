@@ -2,6 +2,7 @@
 'use strict';
 
 const crypto = require('node:crypto');
+const { execFileSync } = require('node:child_process');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -12,11 +13,12 @@ const { newDispatchId } = require('./dispatch-boundary.cjs');
 const { createRunScope } = require('./run-scope.cjs');
 const { createRunController, DEFAULT_LEASE_TTL_MS } = require('./run-controller.cjs');
 const { formatHint } = require('./refusal-hints.cjs');
+const { sealDecomposition, assertContained } = require('./planning-result-sealer.cjs');
 
 const SCHEMA = 'shipyard.codex-decompose-host.v1';
 const MAX_ARGS_BYTES = 4 * 1024 * 1024;
 const ROLES = Object.freeze({
-  'gsd-phase-researcher': Object.freeze({ role: 'research', sandbox: 'read-only' }),
+  'gsd-phase-researcher': Object.freeze({ role: 'research', sandbox: 'workspace-write' }),
   'gsd-planner': Object.freeze({ role: 'decomposition', sandbox: 'workspace-write' }),
   'gsd-plan-checker': Object.freeze({ role: 'decomposition', sandbox: 'read-only' }),
 });
@@ -89,6 +91,85 @@ function defaultRunStoreDir(scope, stateRoot = path.join(os.homedir(), '.local',
   return path.join(root, key, 'runs');
 }
 
+function phaseDirectory(worktree, phase) {
+  const root = path.join(worktree, '.planning', 'phases');
+  let names;
+  try { names = fs.readdirSync(root); }
+  catch (error) { fail('PHASE_DIRECTORY_MISSING', 'phase directory root is unavailable: ' + error.message); }
+  const matches = names.filter((name) => /^\d+-/.test(name) && Number(name.split('-')[0]) === Number(phase)
+    && fs.lstatSync(path.join(root, name)).isDirectory());
+  if (matches.length !== 1) {
+    fail('PHASE_DIRECTORY_MISSING', 'expected exactly one phase directory for phase ' + phase + ', found ' + matches.length);
+  }
+  return path.join(root, matches[0]);
+}
+
+function researchArtifact(worktree, phase) {
+  const directory = phaseDirectory(worktree, phase);
+  return path.join(directory, path.basename(directory).split('-')[0] + '-RESEARCH.md');
+}
+
+function sourceRevision(worktree) {
+  try {
+    return execFileSync('git', ['-C', worktree, 'rev-parse', '--verify', 'HEAD^{commit}'], {
+      encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 10000,
+    }).trim();
+  } catch (error) {
+    fail('SOURCE_REVISION_UNAVAILABLE', 'worktree HEAD cannot be resolved: ' + String(error.stderr || error.message).trim());
+  }
+}
+
+function sealScope(scope, output, summary) {
+  const repository = typeof scope.repository === 'string' ? scope.repository
+    : object(scope.repository) ? scope.repository.repository_id || scope.repository.id : fs.realpathSync(scope.worktree);
+  const result = object(output.result) ? output.result : {};
+  return {
+    worktree: scope.worktree,
+    subject: 'phase=' + scope.phase + ';repository=' + repository,
+    sourceRevision: sourceRevision(scope.worktree),
+    repository,
+    policyHash: output.receipt.policy_hash,
+    status: result.status === 'blocked' ? 'blocked' : 'completed',
+    summary: typeof result.summary === 'string' ? result.summary : summary,
+  };
+}
+
+function sealResearchArtifact(scope, root, output) {
+  const artifact = researchArtifact(scope.worktree, scope.phase);
+  assertContained({ worktree: scope.worktree, allowed: [path.relative(scope.worktree, artifact)] });
+  let stat;
+  try { stat = fs.lstatSync(artifact); }
+  catch (_) { fail('MISSING_ARTIFACT', 'phase research artifact is missing: ' + artifact); }
+  if (stat.isSymbolicLink() || !stat.isFile()) fail('MISSING_ARTIFACT', 'phase research artifact is not a regular file: ' + artifact);
+  const sealed = sealDecomposition({
+    root: path.join(root, 'research-index'),
+    scope: sealScope(scope, output, 'researched phase ' + scope.phase),
+    plans: [artifact],
+  });
+  return Object.freeze({
+    schema: 'shipyard.research-result.v1', version: 1, role: 'research',
+    subject: sealed.subject, source_revision: sealed.source_revision, repository: sealed.repository,
+    policy_hash: sealed.policy_hash, status: sealed.status, summary: sealed.summary,
+    artifact_path: artifact, artifact_index: sealed.artifact_index, evidence_index: sealed.evidence_index,
+    receipt: output.receipt,
+  });
+}
+
+function sealPlans(scope, root, output) {
+  const directory = phaseDirectory(scope.worktree, scope.phase);
+  assertContained({ worktree: scope.worktree, allowed: [path.relative(scope.worktree, directory)] });
+  const names = fs.readdirSync(directory).filter((name) => /^\d+-\d+-PLAN\.md$/.test(name)).sort();
+  if (!names.length) fail('MISSING_ARTIFACT', 'no materialized PLAN.md files were found in ' + directory);
+  const plans = [...(fs.existsSync(path.join(directory, 'CONTEXT.md')) ? ['CONTEXT.md'] : []), ...names]
+    .map((name) => path.join(directory, name));
+  return sealDecomposition({
+    root: path.join(root, 'decomposition-index'),
+    scope: sealScope(scope, output, 'materialized plans for phase ' + scope.phase),
+    plans,
+    extra: { receipt: output.receipt },
+  });
+}
+
 function createCodexDecomposeHost(options = {}) {
   if (!object(options)) fail('INVALID_INPUT', 'host options must be an object');
   const scope = normalizeScope(options.scope || options.runScope || {});
@@ -98,6 +179,7 @@ function createCodexDecomposeHost(options = {}) {
   catch (error) { fail('INVALID_INPUT', 'worktree path cannot be inspected: ' + error.message); }
   if (!stat.isDirectory()) fail('INVALID_INPUT', 'worktree path must be a directory');
   const env = options.env || process.env;
+  const sealRoot = options.sealRoot || path.join(path.dirname(defaultRunStoreDir(scope)), 'sealed');
   const runtimeHost = options.host || createCodexRuntimeHost({
     scope,
     controller: options.controller,
@@ -168,7 +250,7 @@ function createCodexDecomposeHost(options = {}) {
             : applied;
         },
       });
-      return launchAgent(chosen.role, {
+      const output = await launchAgent(chosen.role, {
         cwd: scope.worktree,
         flags: new Map(),
         signals: request.signals,
@@ -194,6 +276,9 @@ function createCodexDecomposeHost(options = {}) {
           sandbox_mode: chosen.sandbox,
         },
       });
+      if (request.gsd_role === 'gsd-phase-researcher') return sealResearchArtifact(scope, sealRoot, output);
+      if (request.gsd_role === 'gsd-planner') return sealPlans(scope, sealRoot, output);
+      return output;
     },
   });
 }
@@ -291,6 +376,7 @@ async function runCli(argv = process.argv.slice(2), stdout = process.stdout, opt
       spawn: options.spawn,
       agentDir: options.agentDir,
       agentManifest: options.agentManifest,
+      sealRoot: path.join(hostStateDir, 'sealed'),
     });
     result = await host.run({ ...request, dispatch_id: dispatchId });
     clearInterval(heartbeat);
@@ -319,6 +405,8 @@ module.exports = Object.freeze({
   MAX_ARGS_BYTES,
   ROLES,
   defaultRunStoreDir,
+  phaseDirectory,
+  researchArtifact,
   requestValue,
   createCodexDecomposeHost,
   parseCliArguments,

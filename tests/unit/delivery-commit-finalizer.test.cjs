@@ -5,7 +5,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const { before, after, test } = require('node:test');
-const { finalizeDeliveryCommit } = require('../../plugins/delivery-pipeline/scripts/delivery-commit-finalizer.cjs');
+const os = require('node:os');
+const { finalizeDeliveryCommit, scopedTree } = require('../../plugins/delivery-pipeline/scripts/delivery-commit-finalizer.cjs');
 
 let temporary;
 let signer;
@@ -24,7 +25,13 @@ function git(repo, ...args) {
   return command('git', ['-C', repo, ...args]);
 }
 
-function makeRepo() {
+function writeShipyardManifest(repo) {
+  const dir = path.join(repo, 'plugins', 'delivery-pipeline', '.claude-plugin');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'plugin.json'), JSON.stringify({ name: 'shipyard' }));
+}
+
+function makeRepo(fixtureOptions = {}) {
   const repo = path.join(temporary, `repo-${++sequence}`);
   fs.mkdirSync(repo);
   git(repo, 'init', '-q', '-b', 'ticket/T-38-03');
@@ -35,6 +42,7 @@ function makeRepo() {
   fs.writeFileSync(path.join(repo, 'src', 'owned.txt'), 'base\n');
   fs.writeFileSync(path.join(repo, 'src', 'second.txt'), 'base\n');
   fs.writeFileSync(path.join(repo, 'outside.txt'), 'base\n');
+  if (fixtureOptions.exempt !== false) writeShipyardManifest(repo);
   git(repo, 'add', '.');
   git(repo, '-c', 'commit.gpgsign=false', 'commit', '-qm', 'base');
   const head = git(repo, 'rev-parse', 'HEAD');
@@ -47,6 +55,9 @@ function makeRepo() {
     expectedSigner: signer,
     files_modified: ['src/*.txt'],
   };
+  const row = fixtureOptions.graphRow;
+  fs.writeFileSync(path.join(process.env.SHIPYARD_GRAPH_DIR, 'tickets.json'),
+    JSON.stringify({ tickets: row ? { 'T-38-03': row } : {} }));
   return { repo, head, options };
 }
 
@@ -55,14 +66,18 @@ function indexBytes(repo) {
 }
 
 before(() => {
-  temporary = fs.mkdtempSync(path.join('/tmp', 'dcf-'));
+  try { temporary = fs.mkdtempSync(path.join('/tmp', 'dcf-')); }
+  catch (error) { if (error.code !== 'EPERM' && error.code !== 'EACCES') throw error; temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'dcf-')); }
   const gnupgHome = path.join(temporary, 'gnupg');
   fs.mkdirSync(gnupgHome, { mode: 0o700 });
   previousEnv = {
     GNUPGHOME: process.env.GNUPGHOME,
     GIT_CONFIG_GLOBAL: process.env.GIT_CONFIG_GLOBAL,
     GIT_CONFIG_NOSYSTEM: process.env.GIT_CONFIG_NOSYSTEM,
+    SHIPYARD_GRAPH_DIR: process.env.SHIPYARD_GRAPH_DIR,
   };
+  process.env.SHIPYARD_GRAPH_DIR = path.join(temporary, 'graph');
+  fs.mkdirSync(process.env.SHIPYARD_GRAPH_DIR);
   process.env.GNUPGHOME = gnupgHome;
   process.env.GIT_CONFIG_GLOBAL = path.join(temporary, 'empty-gitconfig');
   process.env.GIT_CONFIG_NOSYSTEM = '1';
@@ -275,4 +290,59 @@ test('rejects a partially staged file before replacing the ordinary index', () =
   assert.throws(() => finalizeDeliveryCommit(options), /staged index content differs from worktree content/);
   assert.equal(git(repo, 'rev-parse', 'HEAD'), head);
   assert.deepEqual(indexBytes(repo), beforeIndex);
+});
+
+test('exposes the exact scoped tree it signs and refuses a different expected tree', () => {
+  const { repo, head, options } = makeRepo();
+  fs.writeFileSync(path.join(repo, 'src', 'owned.txt'), 'changed\n');
+  const scoped = scopedTree(options);
+  assert.equal(scoped.head, head);
+  assert.deepEqual([...scoped.changed], ['src/owned.txt']);
+  assert.throws(() => finalizeDeliveryCommit({ ...options, expectedTree: '0'.repeat(40) }), /scoped tree differs/);
+  assert.equal(git(repo, 'rev-parse', 'HEAD'), head);
+  const result = finalizeDeliveryCommit({ ...options, expectedTree: scoped.tree });
+  assert.equal(result.tree, scoped.tree);
+  assert.equal(git(repo, 'rev-parse', 'HEAD^{tree}'), scoped.tree);
+});
+
+test('scoped tree refuses out-of-scope changes and tracks a changed worktree', () => {
+  const { repo, options } = makeRepo();
+  fs.writeFileSync(path.join(repo, 'src', 'owned.txt'), 'one\n');
+  const first = scopedTree(options).tree;
+  fs.writeFileSync(path.join(repo, 'src', 'owned.txt'), 'two\n');
+  assert.notEqual(scopedTree(options).tree, first);
+  fs.writeFileSync(path.join(repo, 'outside.txt'), 'x\n');
+  assert.throws(() => scopedTree(options), /out-of-scope paths/);
+});
+
+test('an exempt project keeps the legacy ticket-id subject regardless of the graph title', () => {
+  const { repo, options } = makeRepo({ exempt: true, graphRow: { title: 'This title must be ignored', type: 'fix' } });
+  fs.writeFileSync(path.join(repo, 'src', 'owned.txt'), 'changed\n');
+  const result = finalizeDeliveryCommit(options);
+  assert.equal(git(repo, 'log', '-1', '--format=%s', result.commit), '(T-38-03): finalize scoped changes');
+});
+
+test('a target project finalizes a conventional, id-free subject from the canonical graph title', () => {
+  const { repo, options } = makeRepo({ exempt: false, graphRow: { title: 'Fix the flaky retry loop', type: 'bugfix' } });
+  fs.writeFileSync(path.join(repo, 'src', 'owned.txt'), 'changed\n');
+  const result = finalizeDeliveryCommit({ ...options, ticketTitle: 'Caller text must be ignored' });
+  assert.equal(git(repo, 'log', '-1', '--format=%s', result.commit), 'fix: fix the flaky retry loop');
+});
+
+test('a target project without a graph row or title refuses before touching the branch or signer', () => {
+  for (const graphRow of [undefined, { type: 'implementation' }, { title: '  ' }]) {
+    const { repo, head, options } = makeRepo({ exempt: false, graphRow });
+    fs.writeFileSync(path.join(repo, 'src', 'owned.txt'), 'changed\n');
+    assert.throws(() => finalizeDeliveryCommit({ ...options, ticketTitle: 'Caller text must be ignored' }),
+      (error) => error.code === 'TICKET_TITLE_UNAVAILABLE');
+    assert.equal(git(repo, 'rev-parse', 'HEAD'), head);
+  }
+});
+
+test('a target project refuses a graph title that leaks the ticket id into the subject', () => {
+  const { repo, head, options } = makeRepo({ exempt: false, graphRow: { title: 'Handle the T-38-03 edge case' } });
+  fs.writeFileSync(path.join(repo, 'src', 'owned.txt'), 'changed\n');
+  assert.throws(() => finalizeDeliveryCommit(options), (error) => error.code === 'COMMIT_SUBJECT_LEAK'
+    && /finalized commit subject failed pr-hygiene/.test(error.message));
+  assert.equal(git(repo, 'rev-parse', 'HEAD'), head);
 });

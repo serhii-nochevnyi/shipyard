@@ -12,7 +12,7 @@ const SCHEMA = 'shipyard.run-waker.v1';
 const VERSION = 1;
 const EVENTS_FILE = 'wake-events.jsonl';
 const CLAIMS_FILE = 'wake-claims.json';
-const WAIT_KINDS = new Set(['ci', 'review', 'quota', 'lease', 'host']);
+const WAIT_KINDS = new Set(['ci', 'review', 'quota', 'lease', 'host', 'dispatch']);
 const TERMINAL = new Set(['completed', 'failed', 'human_checkpoint']);
 
 function object(value) {

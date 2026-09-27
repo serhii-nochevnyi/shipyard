@@ -1,5 +1,16 @@
 # A diamond child's worktree is missing its non-primary parents' code
 
+**RESOLVED — T-40-27 (REQ-138, D-42).** `state-sync.cjs` keeps a diamond child
+blocked until every non-primary same-phase, same-repo parent has landed in the
+phase epic, and the board line names that parent, the primary parent and the
+epic. `ticket-worktree.sh create` merges `origin/<epic>` into a fresh diamond
+branch (exit 13 and nothing left behind on a conflict or a missing epic), and
+`scope-gate.cjs` plus the commit finalizer measure the child against the merge
+of its base and the epic. By user decision on 2026-09-24 (D-42) this waiting
+rule replaces the "Deliberately NOT the fix" paragraph below; parallelism along
+the primary chain is kept and only non-primary parents wait. The incident text
+is kept as recorded.
+
 **Found:** 2026-08-25, dispatching T-20-06 in the first `/shipyard:deliver` run
 on this repo.
 **Scope:** none of phase 20's tickets — T-20-06 was unblocked by hand.

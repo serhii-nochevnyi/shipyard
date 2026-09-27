@@ -44,6 +44,13 @@ make test-hooks         # Claude hook dependency bundle and migration
 make test-codex-shipyard # generator, installer and capability integration
 make test-releases      # release metadata contract
 make test               # test-fast plus the host Codex and release checks
+make capture-fixtures    # manual, scrubbed boundary-fixture capture; needs BOUNDARY=
+make test-live           # one live round per runtime; needs gh auth and SHIPYARD_LIVE_REPO
+make release             # tag once both runtimes have a fresh live receipt; needs VERSION=
+make refresh-runtime-digests         # the only way to change the runtime-file digest pin
+make install-shipyard-dogfood-claude # separate install root; needs DOGFOOD_ROOT=
+make install-shipyard-dogfood-codex  # separate install root; needs DOGFOOD_ROOT=
+make untrack-planning    # dry run; apply needs CONFIRM=untrack-planning
 ```
 
 Run `make test-fast` after each edit. It requires only the host shell and Node;
@@ -69,7 +76,7 @@ The conveyor has three layers:
 Codex artifacts are generated. Edit the Claude command or shared script first,
 then run `make package-shipyard-codex` and inspect the generated result.
 The marketplace package under `plugins/shipyard` is generated; never edit its
-`host/` copy directly. Ticket PRs into an `epic/*` branch do not regenerate it and CI
+`host/` copy directly. Ticket PRs into an `epic/*` branch, or stacked on a `ticket/*` branch, do not regenerate it and CI
 skips its staleness check for them; regenerate it once on the epic before the
 epic → `main` PR, where the check is enforced. GSD is a required marketplace dependency on both hosts.
 
@@ -120,6 +127,8 @@ installed Claude hook and Codex bundle. It is read-only.
 - Preserve unrelated worktree changes; this repository is often edited while a
   delivery session is active.
 - Update `README.md` when the supported command or installation flow changes.
+- Change the runtime-file digest pin only with `make refresh-runtime-digests`
+  and the printed trailer.
 
 The detailed conveyor protocol is in
 [`docs/gsd_multilevel_delivery_pipeline.md`](docs/gsd_multilevel_delivery_pipeline.md).

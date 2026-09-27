@@ -1,0 +1,25 @@
+{
+  "schema": "phase44.research-sources.v1",
+  "copied_at": "2026-09-26T08:46:02.065904+00:00",
+  "note": "Research documents are source evidence, not accepted ADRs or verified planning receipts. Original relative source-snapshot links refer to the original audit directory.",
+  "sources": [
+    {
+      "path": "evidence/REPORT.md",
+      "original_path": "/Volumes/KINGSTON/claude-session-audits/2026-09-25-pdffiller/REPORT.md",
+      "sha256": "3fb96d5f69e3534ab71b9162bb1f698581c9cc89e189890072c0bd8826f16452",
+      "bytes": 21184
+    },
+    {
+      "path": "evidence/IMPLEMENTATION-RESEARCH.md",
+      "original_path": "/Volumes/KINGSTON/claude-session-audits/2026-09-25-pdffiller/IMPLEMENTATION-RESEARCH.md",
+      "sha256": "0bdc739d64cddb24231f333b270a758b86cd6a76c122ba098f914374ddf72ac0",
+      "bytes": 25322
+    },
+    {
+      "path": "evidence/RUNTIME-SPECIFIC-ADDENDUM.md",
+      "original_path": "/Volumes/KINGSTON/claude-session-audits/2026-09-25-pdffiller/RUNTIME-SPECIFIC-ADDENDUM.md",
+      "sha256": "7cb72cddcb865cdbd5fc3cd6a7bc995a4cefecd2374cfed985476741ac20524a",
+      "bytes": 13156
+    }
+  ]
+}

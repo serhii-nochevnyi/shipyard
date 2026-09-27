@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 65a5456ddedd2cf242594d60bd1ba746c4858393c111a01fe2526ce5ffd2f67e
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: cf070f4f1b445a7e7710f45c9e7a93ee8214bbd5ea0d930cbbbb52e39f4d553e
 phase: 43-target-project-delivery-at-scale
 plan: 04
 subsystem: shipyard delivery
@@ -22,7 +22,7 @@ key-decisions:
 duration: 0min
 status: halted
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 65a5456ddedd2cf242594d60bd1ba746c4858393c111a01fe2526ce5ffd2f67e
+shipyard_source_fingerprint: cf070f4f1b445a7e7710f45c9e7a93ee8214bbd5ea0d930cbbbb52e39f4d553e
 ---
 
 # Phase 43: Bounded reachability: O(1) git forms, a large buffer, and a declared-path epic check with a path-scoped fallback — Delivery Projection

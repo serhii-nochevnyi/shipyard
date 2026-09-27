@@ -168,7 +168,48 @@ function gateWhy(gate, headSha) {
   return `the conform trailer is for ${shortSha((gate || {}).head)}, the PR is at ${shortSha(headSha)}`;
 }
 
-module.exports = { USAGE, CARRY_USAGE, TREE_SHA, parseGate, gateKind, gateConform, gateWhy, shortSha };
+const STATUS_CONTEXT = 'merge-gate';
+const STATUS_MAX = 140;
+const apiBase = (repo) => (repo ? `repos/${repo}` : 'repos/{owner}/{repo}');
+
+// @contract: a merge-gate status is a verdict about the sha it sits on, so head= is that sha.
+function gateFromStatus(status, sha) {
+  if (!status) return null;
+  const head = normSha(sha);
+  if (String(status.state || '').toLowerCase() !== 'success') return { status: status.state || null, head };
+  return { ...(parseGate(`gate_status: ${status.description || ''}`) || {}), head };
+}
+
+// @invariant: the newest merge-gate status on sha wins; the body trailer is read only when none exists.
+function readGate({ repo, sha, body, cwd } = {}) {
+  const head = normSha(sha);
+  if (!head) return parseGate(body);
+  const r = spawnSync('gh', ['api', `${apiBase(repo)}/commits/${head}/statuses`],
+    { encoding: 'utf8', ...(cwd ? { cwd } : {}) });
+  let rows = null;
+  if (r.status === 0) {
+    try { rows = JSON.parse(r.stdout); } catch { rows = null; }
+  }
+  if (!Array.isArray(rows)) return parseGate(body);
+  const newest = rows.find((s) => s && s.context === STATUS_CONTEXT);
+  return newest ? gateFromStatus(newest, head) : parseGate(body);
+}
+
+function postGate({ repo, sha, description, cwd }) {
+  if (description.length > STATUS_MAX) {
+    return { ok: false, why: `the status description is ${description.length} characters, over GitHub's ${STATUS_MAX}` };
+  }
+  const r = spawnSync('gh', ['api', `${apiBase(repo)}/statuses/${normSha(sha)}`, '-f', 'state=success',
+    '-f', `context=${STATUS_CONTEXT}`, '-f', `description=${description}`],
+  { encoding: 'utf8', ...(cwd ? { cwd } : {}) });
+  if (r.status !== 0) return { ok: false, why: (r.stderr || '').trim() || `exit ${r.status}` };
+  return { ok: true };
+}
+
+module.exports = {
+  USAGE, CARRY_USAGE, TREE_SHA, STATUS_CONTEXT, STATUS_MAX,
+  parseGate, gateKind, gateConform, gateWhy, shortSha, gateFromStatus, readGate,
+};
 
 // ── write: the only thing that composes a trailer ───────────────────────────
 // Behind require.main because front.cjs imports this file (and sentinel.cjs
@@ -361,23 +402,26 @@ if (require.main === module) {
       + 'service them first (fix or reply with reasoning, then RESOLVE each one)');
   }
 
-  // One trailer per body: every previous `gate_status:` line goes, including its
-  // stale head. Appending instead would leave a shadowed verdict behind — the
-  // exact shape that made a recorded verdict read as missing.
-  const kept = String(live.body || '').split('\n').filter((l) => !/^\s*gate_status:/i.test(l));
-  while (kept.length && kept[kept.length - 1].trim() === '') kept.pop();
-  const trailer = `gate_status: arch-review=${archReview}, drift-check=${driftCheck}, `
+  const description = `arch-review=${archReview}, drift-check=${driftCheck}, `
     + `degenerate-green=${degenerateGreen}, checks=${checks}`
-    + (baseTree ? `, base_tree=${normSha(baseTree)}` : '')
-    + `, head=${head}`;
-  const body = `${kept.join('\n')}\n\n${trailer}\n`;
+    + (baseTree ? `, base_tree=${normSha(baseTree)}` : '');
+  const posted = postGate({ repo, sha: head, description });
+  if (!posted.ok) die(`could not record the ${STATUS_CONTEXT} status on ${shortSha(head)}: ${posted.why}`);
+  stripLegacyTrailer(pr, repoArg, live.body);
+  console.log(JSON.stringify({ pr, head, context: STATUS_CONTEXT, description, unresolved }, null, 2));
 
-  try {
-    execFileSync('gh', ['pr', 'edit', String(pr), ...repoArg, '--body', body], { stdio: ['ignore', 'pipe', 'pipe'] });
-  } catch (e) {
-    die(`gh pr edit ${pr} failed: ${e.stderr ? String(e.stderr).trim() : e.message}`);
+  function stripLegacyTrailer(n, rArg, rawBody, cwd) {
+    const lines = String(rawBody || '').split('\n');
+    const kept = lines.filter((l) => !/^\s*gate_status:/i.test(l));
+    if (kept.length === lines.length) return;
+    while (kept.length && kept[kept.length - 1].trim() === '') kept.pop();
+    try {
+      execFileSync('gh', ['pr', 'edit', String(n), ...rArg, '--body', `${kept.join('\n')}\n`],
+        { stdio: ['ignore', 'pipe', 'pipe'], ...(cwd ? { cwd } : {}) });
+    } catch (e) {
+      die(`gh pr edit ${n} failed: ${e.stderr ? String(e.stderr).trim() : e.message}`);
+    }
   }
-  console.log(JSON.stringify({ pr, head, trailer, unresolved }, null, 2));
 
   // ── carry: the only writer of a CARRIED verdict ────────────────────────────
   //
@@ -472,9 +516,9 @@ if (require.main === module) {
     if (live.number !== undefined && Number(live.number) !== pr) {
       refuse(`live PR identity is #${live.number}, but carry was requested for #${pr} — refusing to bind a verdict to another PR`);
     }
-    const gate = parseGate(live.body);
+    const gate = readGate({ repo, sha: from, body: live.body, cwd: worktree });
     if (!gate || String(gate['arch-review'] || '').toLowerCase() !== 'conform') {
-      refuse('the PR body carries no `gate_status: arch-review=conform` trailer — there is no '
+      refuse(`neither a ${STATUS_CONTEXT} status nor the PR body carries \`arch-review=conform\` — there is no `
         + 'verdict to carry, so it is owed against this head like any other');
     }
     if (normSha(gate.head) !== from) {
@@ -557,21 +601,13 @@ if (require.main === module) {
       if (k === 'head' || k === 'checks' || k === 'carried_from') continue;
       parts.push(`${k}=${v}`);
     }
-    parts.push(`carried_from=${normSha(gate.carried_from) || from}`);
-    parts.push(`head=${to}`);
-    const trailer = `gate_status: ${parts.join(', ')}`;
-    const kept = String(live.body || '').split('\n').filter((l) => !/^\s*gate_status:/i.test(l));
-    while (kept.length && kept[kept.length - 1].trim() === '') kept.pop();
-    const body = `${kept.join('\n')}\n\n${trailer}\n`;
-
-    try {
-      execFileSync('gh', ['pr', 'edit', String(pr), ...repoArg, '--body', body], { stdio: ['ignore', 'pipe', 'pipe'], cwd: worktree });
-    } catch (e) {
-      die(`gh pr edit ${pr} failed: ${e.stderr ? String(e.stderr).trim() : e.message}`);
-    }
+    parts.push(`carried_from=${normSha(gate.carried_from) || shortSha(from)}`);
+    const description = parts.join(', ');
+    const posted = postGate({ repo, sha: to, description, cwd: worktree });
+    if (!posted.ok) die(`could not record the ${STATUS_CONTEXT} status on ${shortSha(to)}: ${posted.why}`);
     console.log(JSON.stringify({
       ticket, pr, carried: true, from, to, head_tree: toTree, base_ref: baseRef,
-      base_tree: judgedBaseTree, trailer,
+      base_tree: judgedBaseTree, context: STATUS_CONTEXT, description,
     }, null, 2));
     process.exit(0);
   }

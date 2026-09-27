@@ -15,6 +15,7 @@ const { loadClaudeReferenceContent } = require('./claude-reference-content.cjs')
 const { createRunController } = require('./run-controller.cjs');
 const { createRunScope } = require('./run-scope.cjs');
 const roleArtifact = require('./role-artifact.cjs');
+const { preflightRound } = require('./sentinel-preflight.cjs');
 
 const REQUEST_SCHEMA = 'shipyard.claude-role-request.v1';
 const REQUEST_MAX_BYTES = 32768;
@@ -195,7 +196,7 @@ function branchOid(options, worktree, branch, expectedOid) {
       command(options, 'git', ['-C', worktree, 'fetch', '--no-tags', 'origin',
         `+refs/heads/${name}:refs/remotes/origin/${name}`], worktree, 65536);
     } catch {
-      if (expectedOid === undefined) reject(`cannot refresh live base branch ${safe}`, 'BASE_REVISION_UNAVAILABLE');
+      reject(`cannot refresh live base branch ${safe}`, 'BASE_REVISION_UNAVAILABLE');
     }
   }
   const candidates = safe.startsWith('origin/') ? [safe, safe.slice('origin/'.length)] : [`origin/${safe}`, safe];
@@ -399,6 +400,11 @@ function baseDefaultBranch(options, worktree, projectRoot) {
   }
 }
 
+function phaseNumberOf(value) {
+  const match = /^0*(\d+)(?:-|$)/.exec(String(value));
+  return match ? Number(match[1]) : NaN;
+}
+
 function phaseSelection(graph, requested) {
   const rows = Object.entries(graph.tickets).filter(([, row]) => object(row) && row.phase !== undefined
     && (String(row.phase) === requested || path.basename(path.dirname(row.plan || '')) === requested));
@@ -406,7 +412,7 @@ function phaseSelection(graph, requested) {
   const dirs = new Set(rows.map(([, row]) => path.basename(path.dirname(row.plan || ''))));
   if (dirs.size !== 1) reject('phase tickets resolve to multiple plan directories');
   const phaseDir = [...dirs][0];
-  const phaseNumber = Number(String(rows[0][1].phase));
+  const phaseNumber = phaseNumberOf(rows[0][1].phase);
   if (!Number.isSafeInteger(phaseNumber) || phaseNumber < 1) reject('phase number is invalid');
   return { phase: phaseDir, phaseNumber, rows: rows.map(([id, row]) => ({ id, row })).sort((a, b) => a.id.localeCompare(b.id)) };
 }
@@ -458,7 +464,7 @@ function prepareArch(options, request, canonical, graph, rows) {
   const packet = buildPacket(canonical, 'arch-review', id, sources, plan, roleContext);
   const signals = observedSignals(request, rows, [live], estimatePromptTokens('arch-review', packet, plan, live, reference));
   const prompt = makePrompt('arch-review', id, packet, reference);
-  return Object.freeze({ role: 'arch-review', ticket: id, phase: String(row.phase), phaseNumber: Number(row.phase),
+  return Object.freeze({ role: 'arch-review', ticket: id, phase: String(row.phase), phaseNumber: phaseNumberOf(row.phase),
     pr: live.number, base, baseName, baseCommit: live.baseRefOid, mergeBase, mergeBaseTree,
     livePullRequests: [live], canonical, graph, rows, sources, packet, prompt, signals, evidencePath: ARCH_EVIDENCE });
 }
@@ -559,9 +565,32 @@ function prepareIntegrator(options, request, canonical, graph) {
     evidencePath: `.planning/phases/${phase}/INTEGRATION.md` });
 }
 
+function sentinelPreflightRound(options, canonical, graph, selection) {
+  const prs = [];
+  for (const item of selection.rows) {
+    const row = rowFor(graph, item.id);
+    const state = graph.state[item.id];
+    if (state && state.status === 'pr-open' && typeof state.pr_base === 'string' && state.pr_base) {
+      prs.push({ ticket: item.id, repo: row.repo || null, base: state.pr_base });
+    }
+  }
+  if (!prs.length) return Object.freeze({});
+  const run = typeof options.preflightRound === 'function' ? options.preflightRound : preflightRound;
+  const round = run({ projectWorktree: canonical.worktree, graphDir: graph.directory, prs, run: options.stateSyncRun });
+  if (!object(round) || !Array.isArray(round.repos)) reject('sentinel preflight returned an invalid round result');
+  const roots = {};
+  for (const entry of round.repos) {
+    if (!object(entry) || typeof entry.root !== 'string' || !entry.root) reject('sentinel preflight round result is malformed');
+    roots[entry.repo || ''] = entry.root;
+  }
+  return Object.freeze(roots);
+}
+
 function prepareSentinel(options, request, canonical, graph) {
   const selection = phaseSelection(graph, request.phase);
   const readOnlySmoke = options.readOnlySmoke === true;
+  const repoRoots = sentinelPreflightRound(options, canonical, graph, selection);
+  const rootFor = (repo) => repoRoots[repo || ''] || canonical.worktree;
   const defaultBranch = baseDefaultBranch(options, canonical.worktree, canonical.projectRoot);
   const artifactBase = branchOid(options, canonical.worktree, defaultBranch);
   const snapshots = [];
@@ -569,7 +598,8 @@ function prepareSentinel(options, request, canonical, graph) {
   for (const item of selection.rows) {
     const row = rowFor(graph, item.id);
     const state = graph.state[item.id];
-    const listed = listPullRequests(options, canonical.worktree, row.branch, row.repo || null, 'open');
+    const root = rootFor(row.repo);
+    const listed = listPullRequests(options, root, row.branch, row.repo || null, 'open');
     if (!Array.isArray(listed)) reject(`GitHub returned an invalid PR list for ${item.id}`);
     const candidates = listed.filter((pr) => object(pr) && pr.headRefName === row.branch && pr.state === 'OPEN');
     if (!state || state.status !== 'pr-open') {
@@ -583,14 +613,14 @@ function prepareSentinel(options, request, canonical, graph) {
     if (candidates.length !== 1 || candidates[0].number !== state.pr) {
       reject(`${item.id} does not have exactly one live PR matching delivery state`, 'STALE_CONTEXT');
     }
-    const live = getPullRequest(options, canonical.worktree, state.pr, row.repo || null);
+    const live = getPullRequest(options, root, state.pr, row.repo || null);
     if (!object(live) || live.number !== state.pr || live.state !== 'OPEN'
         || live.headRefName !== row.branch || live.headRefOid !== state.head_sha
         || live.baseRefName !== state.pr_base || !/^[a-f0-9]{40}$/i.test(live.baseRefOid || '')) {
       reject(`${item.id} live PR identity differs from delivery state`, 'STALE_CONTEXT');
     }
     const baseRef = safeBranch(live.baseRefName, `${item.id} PR base`);
-    branchOid(options, canonical.worktree, baseRef, live.baseRefOid);
+    branchOid(options, root, baseRef, live.baseRefOid);
     const repoKey = `${row.repo || ''}#${live.number}`;
     if (repoPrs.has(repoKey)) reject(`PR #${live.number} is assigned to more than one round ticket`);
     repoPrs.add(repoKey);
@@ -645,6 +675,8 @@ function prepareSentinel(options, request, canonical, graph) {
     phase_contracts: phaseContracts,
     ticket_set: ticketSet,
     ticket_set_digest: ticketSetDigest,
+    head: canonical.head,
+    head_tree: canonical.headTree,
     guarded_tickets: guardedTickets,
     pr_state: prState,
     ci_review_observations: ciReviewObservations,
@@ -667,7 +699,7 @@ function prepareSentinel(options, request, canonical, graph) {
   const prompt = makePrompt('pr-sentinel', subject, packet, reference, readOnlySmoke);
   return Object.freeze({ role: 'pr-sentinel', ticket: subject, phase: selection.phase,
     phaseNumber: selection.phaseNumber, phaseTicketIds: selection.rows.map(({ id }) => id),
-    ticketSet, ticketSetDigest, base: artifactBase.ref, baseCommit: artifactBase.oid,
+    ticketSet, ticketSetDigest, base: artifactBase.ref, baseCommit: artifactBase.oid, repoRoots,
     livePullRequests: pullRequests, canonical, graph, rows, sources, packet, prompt, signals, readOnlySmoke,
     evidencePath: SENTINEL_EVIDENCE });
 }
@@ -717,8 +749,8 @@ function makePrompt(role, subject, packet, reference, readOnlySmoke = false) {
     : role === 'integrator'
       ? 'Return one JSON object matching the integrator reference schema. Judge the complete authenticated phase ticket set and combined diff.'
     : readOnlySmoke
-      ? 'Return one JSON object matching the pr-sentinel reference schema. This is a read-only runtime smoke: do not perform any PR duty or attempt a mutation; return awaiting-human, an empty performed list, and one refused read-only-smoke duty for every guarded ticket.'
-      : 'Return one JSON object matching the pr-sentinel reference schema. Perform the documented duties for every authenticated open PR and report the complete ticket set.';
+      ? 'Return one JSON object matching the pr-sentinel reference schema. This is a read-only runtime smoke: do not perform any PR duty or attempt a mutation; return awaiting-human, an empty performed list, one refused read-only-smoke duty for every guarded ticket, blocking_count equal to the number of refused entries, and head, head_tree, ticket_set and ticket_set_digest copied from the context packet.'
+      : 'Return one JSON object matching the pr-sentinel reference schema. Perform the documented duties for every authenticated open PR and report the complete ticket set. Set blocking_count to the number of refused entries, and copy head, head_tree, ticket_set and ticket_set_digest from the context packet.';
   const prompt = [
     'You are running as a fixed Shipyard judgement role.',
     reference,
@@ -780,6 +812,23 @@ const TICKET_SET_SCHEMA = Object.freeze({
 
 const FINDING_TICKET_SCHEMA = Object.freeze({ type: ['string', 'null'] });
 
+const SENTINEL_DUTIES = Object.freeze(['ci-fix', 'review-fix', 'base-merge', 'arch-review', 'undraft', 'merge',
+  'wait-ci', 'wait-parent', 'wait-human', 'parked', 'read-only-smoke']);
+
+function SENTINEL_DUTY_SCHEMA(kind) {
+  return {
+    type: 'object',
+    required: kind === 'refused' ? ['ticket', 'duty', 'status', 'reason'] : ['ticket', 'duty', 'status'],
+    properties: {
+      ticket: { type: 'string' },
+      duty: { type: 'string', enum: [...SENTINEL_DUTIES] },
+      status: { type: 'string', enum: kind === 'refused' ? ['refused'] : ['complete', 'handed-back'] },
+      ...(kind === 'refused' ? { reason: { type: 'string' } } : {}),
+      duty_id: { type: 'string' },
+    },
+  };
+}
+
 const FIX_TICKET_SCHEMA = Object.freeze({
   type: 'object',
   additionalProperties: false,
@@ -824,7 +873,9 @@ function roleOutputSchema(role) {
     outcome: { type: 'string', enum: ['clear', 'blocked', 'awaiting-human'] },
     ticket_set: TICKET_SET_SCHEMA, ticket_set_digest: { type: 'string' },
     head: { type: 'string' }, head_tree: { type: 'string' },
-    performed: { type: 'array' }, refused: { type: 'array' }, summary: { type: 'string' },
+    performed: { type: 'array', items: SENTINEL_DUTY_SCHEMA('performed') },
+    refused: { type: 'array', items: SENTINEL_DUTY_SCHEMA('refused') },
+    summary: { type: 'string' },
   });
   return { type: 'object', properties,
     required: ['outcome', 'ticket_set', 'ticket_set_digest', 'head', 'head_tree', 'blocking_count'] };
@@ -939,8 +990,8 @@ function buildBoundary(prepared, runtime, dispatchId, ownerId) {
             { dispatchId, phase: prepared.phase, phaseNumber: prepared.phaseNumber,
               ticketSet: prepared.ticketSet, ticketSetDigest: prepared.ticketSetDigest, agentId: ownerId },
           );
-          hostOwnedFiles = roundOwnedFileDigests(prepared);
         }
+        hostOwnedFiles = roundOwnedFileDigests(prepared, dispatchId);
         const child = await runtime.agent(prepared.prompt, {
           model: selection.model,
           effort: selection.effort,
@@ -957,10 +1008,10 @@ function buildBoundary(prepared, runtime, dispatchId, ownerId) {
     getHostOwnedFiles: () => hostOwnedFiles };
 }
 
-function roundOwnedFileDigests(prepared) {
+function roundOwnedFileDigests(prepared, dispatchId) {
   const graphRoot = path.resolve(prepared.graph.directory);
   const digests = new Map();
-  for (const relative of ['dispatches.json', 'delivery-front.json']) {
+  for (const relative of ['dispatches.json', 'delivery-front.json', `provenance/${dispatchId}.json`]) {
     const file = path.join(graphRoot, relative);
     let stat;
     try { stat = fs.lstatSync(file); } catch { continue; }
@@ -1030,13 +1081,14 @@ function revalidateLiveInputs(options, prepared) {
     const expiredTickets = [];
     for (let index = 0; index < prepared.rows.length; index++) {
       const { id, row } = prepared.rows[index];
+      const root = prepared.repoRoots[row.repo || ''] || worktree;
       const before = prepared.livePullRequests[index];
       const ticket = prepared.ticketSet[index];
-      const live = getPullRequest(options, worktree, before.number, row.repo || null);
+      const live = getPullRequest(options, root, before.number, row.repo || null);
       if (!object(live) || live.number !== before.number) {
         reject(`live PR ${before.number} identity became unavailable while sentinel was running`, 'STALE_CONTEXT');
       }
-      const open = listPullRequests(options, worktree, row.branch, row.repo || null, 'open');
+      const open = listPullRequests(options, root, row.branch, row.repo || null, 'open');
       if (!Array.isArray(open)) reject(`GitHub returned an invalid PR list for ${id}`);
       const currentOpen = open.filter((pr) => object(pr) && pr.state === 'OPEN' && pr.headRefName === row.branch);
       if (currentOpen.some((pr) => pr.number !== before.number)) {
@@ -1057,7 +1109,7 @@ function revalidateLiveInputs(options, prepared) {
         expiredTickets.push(id);
         continue;
       }
-      branchOid(options, worktree, live.baseRefName, live.baseRefOid);
+      branchOid(options, root, live.baseRefName, live.baseRefOid);
     }
     for (const { id, row } of currentSelection.rows) {
       if (expectedIds.has(id)) continue;
@@ -1187,7 +1239,12 @@ function createClaudeRoleHost(options = {}) {
         try { controller.heartbeat(scope.run_id); } catch (error) { heartbeatError = error; }
       }, 60000) : null;
       if (heartbeat) heartbeat.unref();
+      const inflight = { graphDir: prepared.graph.directory, dispatch_id: dispatchId, pid: process.pid };
+      let inflightRecorded = false;
       try {
+        require('./dispatch-record.cjs').recordInflight({ ...inflight, role: prepared.role, host: 'claude',
+          ticket: prepared.role === 'arch-review' ? prepared.ticket : prepared.rows[0].id });
+        inflightRecorded = true;
         const runtime = options.runtimeHost || runtimeFor(options, scope, controller, storage);
         if (controller && runtime.controller !== controller) reject('runtime host is not bound to the active run controller');
         roleArtifact.prepareRoleArtifact({ worktreePath: prepared.canonical.worktree, role: prepared.role,
@@ -1254,6 +1311,9 @@ function createClaudeRoleHost(options = {}) {
         throw error;
       } finally {
         if (heartbeat) clearInterval(heartbeat);
+        if (inflightRecorded) {
+          try { require('./dispatch-record.cjs').clearInflight(inflight); } catch {}
+        }
       }
     },
   });

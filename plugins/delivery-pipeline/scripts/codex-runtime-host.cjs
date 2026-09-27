@@ -485,7 +485,8 @@ async function readNativeCodexChild(parentId, role, model, effort, agent, spawnE
           || Buffer.byteLength(raw, 'utf8') !== after.size) {
         fail('RUNTIME_EVIDENCE_INVALID', 'native child transcript changed during verification');
       }
-      return parseNativeChildTranscript(raw, child.id, parentId, role, model, effort, agent, spawnEvidence);
+      const evidence = parseNativeChildTranscript(raw, child.id, parentId, role, model, effort, agent, spawnEvidence);
+      return options.task ? freeze({ ...evidence, task_relay: verifyTaskRelay(raw, options.task, spawnEvidence) }) : evidence;
     }
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
@@ -512,6 +513,156 @@ function writeTranscript(directory, scope, sessionId, stdout) {
     bytes: bytes.length,
     sha256: crypto.createHash('sha256').update(bytes).digest('hex'),
   });
+}
+
+function pathInside(root, candidate) {
+  const relative = path.relative(root, candidate);
+  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+}
+
+function realOrResolved(entry) {
+  let current = path.resolve(entry);
+  const tail = [];
+  while (true) {
+    try { return path.join(fs.realpathSync(current), ...tail); }
+    catch (_) {
+      const parent = path.dirname(current);
+      if (parent === current) return path.join(current, ...tail);
+      tail.unshift(path.basename(current));
+      current = parent;
+    }
+  }
+}
+
+function taskStateDir(options, scope) {
+  const explicit = options.taskDir !== undefined;
+  let candidate;
+  if (explicit) candidate = text(options.taskDir, 'taskDir', 4096);
+  else if (options.transcriptDir) candidate = path.join(path.dirname(path.resolve(options.transcriptDir)), 'tasks');
+  const worktree = realOrResolved(scope.worktree);
+  if (candidate && pathInside(worktree, realOrResolved(candidate))) {
+    if (explicit) fail('INVALID_STATE_DIR', 'Codex task directory must resolve outside the worktree');
+    candidate = undefined;
+  }
+  if (!candidate) {
+    candidate = path.join(os.homedir(), '.local', 'state', 'shipyard', 'codex-runtime',
+      scope.run_id.replace(/[^A-Za-z0-9._-]/g, '_'), 'tasks');
+  }
+  if (pathInside(worktree, realOrResolved(candidate))) {
+    fail('INVALID_STATE_DIR', 'Codex task directory must resolve outside the worktree');
+  }
+  return path.resolve(candidate);
+}
+
+function writeTaskFile(directory, scope, id, body) {
+  fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+  const safe = String(id || scope.run_id + '-' + crypto.randomBytes(8).toString('hex')).replace(/[^A-Za-z0-9._-]/g, '_');
+  const file = path.join(fs.realpathSync(directory), safe + '.md');
+  if (pathInside(realOrResolved(scope.worktree), file)) {
+    fail('INVALID_STATE_DIR', 'Codex task file must resolve outside the worktree');
+  }
+  const bytes = Buffer.from(body, 'utf8');
+  const temporary = file + '.' + process.pid + '.' + crypto.randomBytes(8).toString('hex') + '.tmp';
+  try {
+    fs.writeFileSync(temporary, bytes, { mode: 0o600 });
+    fs.renameSync(temporary, file);
+  } finally {
+    try { fs.unlinkSync(temporary); } catch (_) {}
+  }
+  return Object.freeze({
+    path: file, bytes: bytes.length,
+    sha256: crypto.createHash('sha256').update(bytes).digest('hex'),
+  });
+}
+
+function taskRelayInput(role, model, effort, task) {
+  return 'Call spawn_agent exactly once with agent_type ' + role
+    + ', model ' + model + ', reasoning_effort ' + effort
+    + ', fork_turns none, and task_name gsd_task. Give that child exactly this message:\n'
+    + 'TASK_FILE=' + task.path + '\nTASK_SHA256=' + task.sha256 + '\n'
+    + 'Read TASK_FILE, confirm its sha256 equals TASK_SHA256, and follow it exactly.\n'
+    + 'Wait for that child to finish. Do not perform the task yourself.';
+}
+
+function messageText(payload) {
+  if (!Array.isArray(payload.content)) return typeof payload.content === 'string' ? payload.content : '';
+  return payload.content.filter((entry) => object(entry) && typeof entry.text === 'string')
+    .map((entry) => entry.text).join('\n');
+}
+
+function plaintextRelay(text, task) {
+  const values = new Map();
+  for (const line of text.split(/\r?\n/)) {
+    const match = /^\s*(TASK_FILE|TASK_SHA256)=(.*?)\s*$/.exec(line);
+    if (match && !values.has(match[1])) values.set(match[1], match[2]);
+  }
+  return values.get('TASK_FILE') === task.path && values.get('TASK_SHA256') === task.sha256;
+}
+
+function readsExactPath(command, file) {
+  let index = command.indexOf(file);
+  while (index >= 0) {
+    const next = command.charAt(index + file.length);
+    if (!/[A-Za-z0-9._\/-]/.test(next)) return true;
+    index = command.indexOf(file, index + 1);
+  }
+  return false;
+}
+
+function toolCommand(item) {
+  if (item.type === 'custom_tool_call' && typeof item.input === 'string') return item.input;
+  if (item.type === 'function_call' && typeof item.arguments === 'string') return item.arguments;
+  return null;
+}
+
+function toolOutput(item) {
+  if (typeof item.output === 'string') return item.output;
+  return Array.isArray(item.output) ? messageText({ content: item.output }) : '';
+}
+
+function verifyTaskRelay(childRaw, task, relay = {}) {
+  const missing = [];
+  let parentBound = false;
+  let delivered = false;
+  let plaintext = false;
+  let firstCall = null;
+  const outputs = new Map();
+  for (const line of String(childRaw || '').split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    let record;
+    try { record = JSON.parse(line); } catch (_) { continue; }
+    if (!object(record) || !object(record.payload)) continue;
+    const item = record.payload;
+    if (record.type === 'session_meta') {
+      parentBound = typeof relay.parent_thread_id === 'string' && item.parent_thread_id === relay.parent_thread_id;
+      continue;
+    }
+    if (record.type !== 'response_item') continue;
+    if (item.type === 'custom_tool_call_output' || item.type === 'function_call_output') {
+      if (typeof item.call_id === 'string' && !outputs.has(item.call_id)) outputs.set(item.call_id, toolOutput(item));
+      continue;
+    }
+    if (firstCall) continue;
+    if (item.type === 'agent_message' && item.author === '/root'
+        && typeof relay.task_path === 'string' && item.recipient === relay.task_path) delivered = true;
+    if (item.type === 'message' && (item.role === 'user' || item.role === 'developer')
+        && plaintextRelay(messageText(item), task)) plaintext = true;
+    if (toolCommand(item) !== null) firstCall = item;
+  }
+  if (!parentBound) missing.push('child session parent');
+  if (!delivered && !plaintext) missing.push('/root agent_message to ' + (relay.task_path || 'child task'));
+  if (!plaintext) {
+    if (!firstCall || !readsExactPath(toolCommand(firstCall), task.path)) missing.push('first tool call reading TASK_FILE');
+    else if (!String(outputs.get(firstCall.call_id) || '').includes(task.sha256)) missing.push('TASK_SHA256 in child tool output');
+  }
+  let current = null;
+  try { current = crypto.createHash('sha256').update(fs.readFileSync(task.path)).digest('hex'); }
+  catch (_) {}
+  if (current !== task.sha256) missing.push('unchanged task file');
+  if (missing.length) {
+    fail('TASK_RELAY_UNVERIFIED', 'native child relay is missing ' + missing.join(', '), { missing });
+  }
+  return Object.freeze({ path: task.path, bytes: task.bytes, sha256: task.sha256 });
 }
 
 function generatedInstructions(content) {
@@ -751,6 +902,15 @@ function launchPrompt(prompt, content) {
   return generatedInstructions(content) + '\n\n' + base;
 }
 
+function resolveProtectedPath(entry) {
+  const resolved = path.resolve(entry);
+  try { return fs.realpathSync(resolved); } catch (_) { return resolved; }
+}
+
+function normalizeProtectedPaths(paths) {
+  return [...new Set((Array.isArray(paths) ? paths : []).filter(Boolean).map(resolveProtectedPath))];
+}
+
 function signerProtectionPaths(env, worktree) {
   const paths = [env.GNUPGHOME, process.env.GNUPGHOME, path.join(os.homedir(), '.gnupg'),
     path.join(os.homedir(), '.ssh')].filter(Boolean);
@@ -763,18 +923,14 @@ function signerProtectionPaths(env, worktree) {
     const file = path.resolve(key.startsWith('~/') ? path.join(os.homedir(), key.slice(2)) : key);
     paths.push(file);
   }
-  return [...new Set(paths.map((entry) => {
-    let resolved = path.resolve(entry);
-    try { resolved = fs.realpathSync(resolved); } catch (_) {}
-    return resolved;
-  }))];
+  return normalizeProtectedPaths(paths);
 }
 
 function signerPermissionProfileArgs(protectedPaths, sandbox) {
   if (!['read-only', 'workspace-write'].includes(sandbox)) {
     fail('INVALID_INPUT', 'Codex launch requires an explicit read-only or workspace-write permission profile');
   }
-  const paths = [...new Set(protectedPaths.map((entry) => path.resolve(entry)))];
+  const paths = normalizeProtectedPaths(protectedPaths);
   if (!paths.length) fail('SIGNER_ISOLATION_UNAVAILABLE', 'Codex signer paths could not be determined');
   const filesystem = '{' + paths.map((entry) => JSON.stringify(entry) + '="deny"').join(',') + '}';
   const parent = sandbox === 'read-only' ? ':read-only' : ':workspace';
@@ -794,6 +950,11 @@ function createCodexCliLauncher(options = {}) {
   const transcriptDir = options.transcriptDir;
   const environment = options.env && object(options.env) ? { ...options.env } : {};
   const capabilities = options.capabilities || {};
+  if (options.additionalProtectedPaths !== undefined && !Array.isArray(options.additionalProtectedPaths)) {
+    fail('INVALID_INPUT', 'additionalProtectedPaths must be an array of host-owned paths');
+  }
+  const hostProtectedPaths = normalizeProtectedPaths(options.additionalProtectedPaths);
+  const taskDir = taskStateDir(options, scope);
 
   return async function launch(prompt, launchOptions = {}) {
     if (!object(launchOptions)) fail('INVALID_INPUT', 'Codex launch options must be an object');
@@ -824,7 +985,9 @@ function createCodexCliLauncher(options = {}) {
       fail('INVALID_INPUT', 'Codex launch requires an explicit read-only or workspace-write sandbox');
     }
     const env = { ...process.env, ...environment };
-    const protectedPaths = signerProtectionPaths(env, scope.worktree);
+    const task = agent ? writeTaskFile(taskDir, scope, launchOptions.dispatch_id, launchPrompt(prompt)) : null;
+    try {
+    const protectedPaths = normalizeProtectedPaths([...signerProtectionPaths(env, scope.worktree), ...hostProtectedPaths]);
     for (const key of [
       'CODEX_MODEL', 'CODEX_MODEL_REASONING_EFFORT', 'CODEX_THREAD_ID', 'CODEX_SESSION_ID',
       'OPENAI_API_KEY', 'CODEX_API_KEY',
@@ -872,12 +1035,7 @@ function createCodexCliLauncher(options = {}) {
     child.stdout.on('data', (chunk) => stdout.push(Buffer.from(chunk)));
     child.stderr.on('data', (chunk) => stderr.push(Buffer.from(chunk)));
     try {
-      const input = agent
-        ? 'Call spawn_agent exactly once with agent_type ' + agent.role
-          + ', model ' + model + ', reasoning_effort ' + effort
-          + ', fork_turns none, and task_name gsd_task. Give that child this exact task:\n'
-          + launchPrompt(prompt) + '\nWait for that child to finish. Do not perform the task yourself.'
-        : launchPrompt(prompt, content);
+      const input = agent ? taskRelayInput(agent.role, model, effort, task) : launchPrompt(prompt, content);
       child.stdin.write(input);
       child.stdin.end();
     } catch (error) {
@@ -916,7 +1074,7 @@ function createCodexCliLauncher(options = {}) {
         const parentRaw = readNativeParentRaw(parsed.session_id, nativeEvidence, env);
         const spawnEvidence = parseNativeParentSpawn(parentRaw, parsed.session_id, agent.role, model, effort);
         typedEvidence = await readNativeCodexChild(parsed.session_id, agent.role, model, effort, agent,
-          spawnEvidence, { env, startedAt });
+          spawnEvidence, { env, startedAt, task });
         const current = installedGsdAgent(agent.role, environment);
         if (current.file !== agent.file || current.sha256 !== agent.sha256) {
           fail('STALE_GSD_AGENT', 'installed GSD role changed during native launch');
@@ -983,6 +1141,9 @@ function createCodexCliLauncher(options = {}) {
       if (error && error.name === 'CodexRuntimeHostError') throw error;
       fail('RUNTIME_EVIDENCE_INVALID', error.message);
     }
+    } finally {
+      if (task) fs.rmSync(task.path, { force: true });
+    }
   };
 }
 
@@ -1028,6 +1189,8 @@ function createCodexRuntimeHost(options = {}) {
     transcriptDir: options.transcriptDir || path.join(scope.worktree, '.planning', 'graph', 'transcripts', 'codex'),
     ephemeral: options.ephemeral,
     approveForMe: options.approveForMe,
+    additionalProtectedPaths: options.additionalProtectedPaths,
+    taskDir: options.taskDir,
   });
   const assertOwner = () => {
     if (controller && typeof controller.assertOwner === 'function') controller.assertOwner(runId);
@@ -1145,6 +1308,8 @@ module.exports = Object.freeze({
   readNativeCodexSession,
   observedSelection,
   writeTranscript,
+  writeTaskFile,
+  verifyTaskRelay,
   createCodexCliLauncher,
   createCodexRuntimeHost,
 });

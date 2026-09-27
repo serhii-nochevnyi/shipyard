@@ -19,6 +19,16 @@ for f in plugins/delivery-pipeline/scripts/*.sh scripts/*.sh tests/smoke/*.sh te
   bash -n "$f" || { echo "syntax error in $f"; exit 1; }
 done
 
+unit_git_home="$(mktemp -d "${TMPDIR:-/tmp}/shipyard-unit.XXXXXX")"
+trap 'rm -rf "$unit_git_home"' EXIT
+export GIT_CONFIG_GLOBAL="$unit_git_home/gitconfig"
+export GIT_CONFIG_NOSYSTEM=1
+git config --file "$GIT_CONFIG_GLOBAL" user.name 'Shipyard Unit Tests'
+git config --file "$GIT_CONFIG_GLOBAL" user.email 'unit-tests@shipyard.invalid'
+git config --file "$GIT_CONFIG_GLOBAL" commit.gpgsign false
+git config --file "$GIT_CONFIG_GLOBAL" tag.gpgsign false
+git config --file "$GIT_CONFIG_GLOBAL" init.defaultBranch main
+
 failed=0
 for t in tests/unit/*.test.cjs; do
   echo "═══ $t"

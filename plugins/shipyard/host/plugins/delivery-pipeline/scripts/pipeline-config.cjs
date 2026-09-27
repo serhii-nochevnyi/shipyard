@@ -465,6 +465,30 @@ function normalizeJiraTransitions(value, warnings) {
 // safe, disabled state; duplicate names collapse to their first occurrence.
 // Status spelling is intentionally preserved after trimming because matching is
 // against the tracker's name, not a normalized category or an invented alias.
+function normalizePrTitleFormat(value, warnings) {
+  if (typeof value === 'string') return value;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    warnings.push(
+      'pipeline.pr_title_format must be a title-format string, or a map of "owner/repo" (or "default") to a '
+      + 'title-format string — ignored'
+    );
+    return null;
+  }
+  const out = {};
+  for (const [key, pattern] of Object.entries(value)) {
+    if (key !== 'default' && !/^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/.test(key)) {
+      warnings.push(`pipeline.pr_title_format."${key}" is not "default" or an owner/name slug — ignored`);
+      continue;
+    }
+    if (typeof pattern !== 'string' || !pattern) {
+      warnings.push(`pipeline.pr_title_format."${key}" must be a non-empty title-format string — ignored`);
+      continue;
+    }
+    out[key] = pattern;
+  }
+  return out;
+}
+
 function normalizeJiraTodoStatuses(value, warnings) {
   if (typeof value !== 'string') {
     warnings.push(
@@ -567,6 +591,7 @@ const DEFAULTS = {
   // resolved per project by loadConfig; null is reserved for a malformed
   // explicit value so a writer cannot mistake bad configuration for consent.
   repos_root: null,
+  pr_title_format: null,
   jira: { enabled: true, project: null, issue_type: 'Task', epic_issue_type: 'Epic' },
   // Our ticket status → the tracker's TARGET STATUS NAME, for the projection
   // (ADR-008 D2). TOP-LEVEL and flat, deliberately NOT a member of `jira`:
@@ -1066,6 +1091,11 @@ function loadConfig(root, options = {}) {
       const statuses = normalizeJiraTodoStatuses(value, warnings);
       // A malformed value keeps the empty list, which leaves eligibility off.
       if (statuses !== null) cfg.jira_todo_statuses = statuses;
+      continue;
+    }
+    if (key === 'pr_title_format') {
+      const format = normalizePrTitleFormat(value, warnings);
+      if (format !== null) cfg.pr_title_format = format;
       continue;
     }
     if (key === 'effort') {
@@ -2217,7 +2247,7 @@ module.exports = {
   loadConfig, resolveModel, resolveEffort, resolveTaskLevel, strategyFor, fableRoute, signalGaps,
   routeOf, parseRoute, ROUTE_RE, runtimeToken,
   parseCodexModelEntry, normalizeCodexModels,
-  normalizeJiraTransitions, TICKET_STATUSES,
+  normalizeJiraTransitions, TICKET_STATUSES, normalizePrTitleFormat,
   DEFAULTS, TIERS, EFFORTS, ROLES, REPAIR_ROLES, STRATEGIES, SIGNATURE_STATES,
   TASK_LEVELS, TASK_LEVEL_RANK, LADDER_MODES, taskLevelRoute,
   DEFAULT_CODEX_MODELS, SONNET_ROLES, EFFORT_ROWS, NUMERIC_KNOBS, tierAllowedForRuntime,
