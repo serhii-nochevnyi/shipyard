@@ -190,7 +190,8 @@ host_request() {
       + " Write one PLAN.md per ticket (01-01-PLAN.md, 01-02-PLAN.md). Each has YAML frontmatter with phase: 1, plan, title, type: implementation, wave, depends_on, files_modified, requirements"
       + " and a delivery block (ticket: T-01-<MM>, risk: low, human_checkpoint: false), then these Markdown sections as ## headings with bullet lists:"
       + " Goal, Context (Reads), Scope, Out of scope, Acceptance criteria, Test strategy, Verification commands."
-      + " Verification commands are scoped to files_modified and runnable offline."
+      + " Verification commands are scoped to files_modified and runnable offline, and each one starts with node, bash or make"
+      + " (the hosts run PLAN verification through a fixed allowlist of those executables; no git, npm or shell pipelines)."
       + " Research findings: " + path.relative(project, artifactRoot) + "/*.md.";
     const sourceRevision = git("rev-parse", "HEAD");
     const repository = fs.realpathSync(git("rev-parse", "--path-format=absolute", "--git-common-dir"));
