@@ -1,5 +1,11 @@
 # Phase 44 queue and readiness
 
+Status: FIRST PASS PLANNED (2026-09-27) — seven tickets T-44-01..07 (P44-A, P44-D, P44-G; REQ-176..REQ-184) from ADR-021 / INV-009. Typed researcher, planner and checker ran through `claude-decompose-host.cjs` with verified receipts (Claude opus/medium); the checker's sealed decomposition index matches CONTEXT.md and all seven PLAN files; Gate 2 (`validate-graph.cjs`) exits 0. T-44-04 and T-44-05 carry `human_checkpoint: true` and were preauthorized by the user at Gate 2. Jira export is disabled for this repository.
+Second pass: P44-B, P44-C, P44-E and P44-F are planned after the phase-43 epic merges to main (ADR-021 decision 1).
+
+The text below is the 2026-09-26 queue record, kept for history. Its "Blocking formal decomposition" section is superseded: the installed decompose hosts carry the planning artifact contract (INV-009 RESEARCH.md, "Deployment"), and ADR-021 is the accepted design.
+
+
 Status: QUEUED — scoped preparation available; NOT EXECUTION-READY.
 Registered by supported GSD phase.add on 2026-09-26. No delivery PLAN files, global requirement IDs, tickets, PRs or Jira issues were fabricated. No active delivery run was started.
 

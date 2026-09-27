@@ -3720,7 +3720,7 @@ tickets:
     files: [scripts/capture-boundary-fixtures.cjs, tests/fixtures/captured/claude-statusline.jsonl, tests/fixtures/captured/boundaries/claude-statusline.json, plugins/delivery-pipeline/scripts/statusline-collector.cjs, tests/unit/statusline-collector.test.cjs]
     risk: medium
     human_checkpoint: true
-    preauthorized: false
+    preauthorized: true
     branch: ticket/T-44-04-capture-the-claude-statusline-input-and
     epic: epic/44-optimize-subscription-efficiency-per-runtime
     primary_parent: T-44-03
@@ -3736,7 +3736,7 @@ tickets:
     files: [scripts/install-shipyard-claude-statusline.sh, tests/smoke/claude-statusline-smoke.sh, Makefile, README.md]
     risk: high
     human_checkpoint: true
-    preauthorized: false
+    preauthorized: true
     branch: ticket/T-44-05-reversible-installer-for-the-claude-stat
     epic: epic/44-optimize-subscription-efficiency-per-runtime
     primary_parent: T-44-04
