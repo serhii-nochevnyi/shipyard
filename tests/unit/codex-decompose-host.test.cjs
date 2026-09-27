@@ -313,17 +313,29 @@ test('default run controller state is outside the model worktree and keyed to it
   } finally { f.clean(); }
 });
 
+const CAPTURED_SHA256 = 'de94a486861cedd3587db16ba051e5c5bf80e0ab05fa44ed50ad48688e6f8b4c';
+
+function captured(rel, values = {}) {
+  return fs.readFileSync(path.join(__dirname, '../..', rel), 'utf8').split('\n')
+    .filter((line) => line && !line.startsWith('{"shipyard_fixture"'))
+    .map((line) => line.replace(/<SESSION-\d+>/g, (token) => values[token] || token))
+    .join('\n') + '\n';
+}
+
 for (const gsdRole of ['gsd-phase-researcher', 'gsd-planner', 'gsd-plan-checker']) {
 test('production ' + gsdRole + ' reaches its native child and records session evidence', async () => {
   const f = fixture();
-  const parent = '01a0ce68-961a-72d1-b55e-d293ab9d19f4';
-  const childId = '01a0ce68-afef-7bc2-baa6-b1ae8d6ce121';
-  const fixtureRoot = path.join(__dirname, '..', 'fixtures');
-  const childRaw = fs.readFileSync(path.join(fixtureRoot, 'codex-agent-child-0.155.1.jsonl'), 'utf8');
-  const parentRaw = fs.readFileSync(path.join(fixtureRoot, 'codex-agent-parent-0.155.1.jsonl'), 'utf8');
-  const records = childRaw.split('\n').filter(Boolean).map((line) => JSON.parse(line));
-  const instructions = records.find((record) => record.type === 'response_item'
+  const parent = '01a0e224-6642-7f20-b2a3-68b283d429b9';
+  const childId = '01a0e224-80bb-7d33-b57d-8c44061ac85d';
+  const ids = { '<SESSION-2>': parent, '<SESSION-6>': childId };
+  const recorded = captured('tests/fixtures/captured/codex-agent-stream-child.jsonl', ids);
+  const parentRaw = captured('tests/fixtures/captured/codex-agent-stream-parent.jsonl', ids);
+  const execRaw = captured('tests/fixtures/captured/codex-agent-stream-exec.jsonl', { '<SESSION-1>': parent });
+  const records = recorded.split('\n').filter(Boolean).map((line) => JSON.parse(line));
+  const elided = records.find((record) => record.type === 'response_item'
     && record.payload.role === 'developer').payload.content[0].text;
+  const instructions = elided + '\n';
+  const childRaw = recorded.replace(JSON.stringify(elided), JSON.stringify(instructions));
   const transform = (raw) => raw.split('\n').filter(Boolean).map((line) => {
     const record = JSON.parse(line);
     if (record.type === 'turn_context') {
@@ -356,26 +368,31 @@ test('production ' + gsdRole + ' reaches its native child and records session ev
       testStateRoot: f.stateRoot,
       leaseTtlMs: 2000,
       heartbeatMs: 20,
-      probe: { status: 'available', executable: 'codex', runtime_version: '0.155.1', capabilities },
+      probe: { status: 'available', executable: 'codex', runtime_version: '0.157.1', capabilities },
       spawn: (_executable, args, options) => {
         calls.push({ args, options });
         writeArtifacts(f.root, gsdRole);
-        const now = new Date();
-        const dir = path.join(f.codexHome, 'sessions', String(now.getFullYear()),
-          String(now.getMonth() + 1).padStart(2, '0'), String(now.getDate()).padStart(2, '0'));
-        fs.mkdirSync(dir, { recursive: true });
-        fs.writeFileSync(path.join(dir, 'rollout-' + parent + '.jsonl'), transform(parentRaw));
-        fs.writeFileSync(path.join(dir, 'rollout-' + childId + '.jsonl'), transform(childRaw));
+        const sent = [];
         const process = new EventEmitter();
         process.stdout = new EventEmitter();
         process.stderr = new EventEmitter();
-        process.stdin = { write() {}, end() {} };
+        process.stdin = {
+          write(value) { sent.push(String(value)); },
+          end() {
+            const task = /^TASK_FILE=(.*)$/m.exec(sent.join(''))[1];
+            const sha256 = /^TASK_SHA256=(.*)$/m.exec(sent.join(''))[1];
+            const now = new Date();
+            const dir = path.join(f.codexHome, 'sessions', String(now.getFullYear()),
+              String(now.getMonth() + 1).padStart(2, '0'), String(now.getDate()).padStart(2, '0'));
+            fs.mkdirSync(dir, { recursive: true });
+            fs.writeFileSync(path.join(dir, 'rollout-' + parent + '.jsonl'), transform(parentRaw));
+            fs.writeFileSync(path.join(dir, 'rollout-' + childId + '.jsonl'), transform(childRaw)
+              .split('<TMP>').join(JSON.stringify(task).slice(1, -1)).split(CAPTURED_SHA256).join(sha256));
+          },
+        };
         process.pid = 38004;
         setTimeout(() => {
-          process.stdout.emit('data', Buffer.from([
-            { type: 'thread.started', thread_id: parent },
-            { type: 'turn.completed', usage: { input_tokens: 4, output_tokens: 2 } },
-          ].map((record) => JSON.stringify(record)).join('\n') + '\n'));
+          process.stdout.emit('data', Buffer.from(execRaw));
           process.emit('close', 0, null);
         }, 170);
         return process;
@@ -431,7 +448,7 @@ test('standalone CLI records a failed owned run after launch preflight refusal',
       env: { CODEX_HOME: f.codexHome },
       agentDir: f.agentDir,
       testStateRoot: f.stateRoot,
-      probe: { status: 'available', executable: 'codex', runtime_version: '0.155.1', capabilities },
+      probe: { status: 'available', executable: 'codex', runtime_version: '0.157.1', capabilities },
     }), (error) => error.code === 'CONFLICTING_OVERRIDE');
     const status = createRunController({ storeDir: defaultRunStoreDir(f.scope, f.stateRoot) })
       .status(f.scope.run_id);

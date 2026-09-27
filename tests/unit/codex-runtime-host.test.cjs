@@ -39,21 +39,32 @@ const capabilities = {
   observedEffort: true,
 };
 
+const EXEC_FIXTURE = 'tests/fixtures/captured/codex-agent-stream-exec.jsonl';
+const PARENT_FIXTURE = 'tests/fixtures/captured/codex-agent-stream-parent.jsonl';
+const CHILD_FIXTURE = 'tests/fixtures/captured/codex-agent-stream-child.jsonl';
+const PARENT_ID = '01a0e224-6642-7f20-b2a3-68b283d429b9';
+const CHILD_ID = '01a0e224-80bb-7d33-b57d-8c44061ac85d';
+const CAPTURED_TASK = 'Reply with the single word OK and take no other action.';
+const CAPTURED_SHA256 = 'de94a486861cedd3587db16ba051e5c5bf80e0ab05fa44ed50ad48688e6f8b4c';
+
+function captured(rel, values = {}) {
+  return fs.readFileSync(path.join(__dirname, '../..', rel), 'utf8').split('\n')
+    .filter((line) => line && !line.startsWith('{"shipyard_fixture"'))
+    .map((line) => line.replace(/<SESSION-\d+>|<TMP>/g,
+      (token) => (values[token] === undefined ? token : JSON.stringify(values[token]).slice(1, -1))))
+    .join('\n') + '\n';
+}
+
 function stream(session = '11111111-1111-4111-8111-111111111111') {
-  return [
-    { type: 'thread.started', thread_id: session },
-    { type: 'turn.started' },
-    { type: 'item.completed', item: { type: 'agent_message', text: 'done' } },
-    { type: 'turn.completed', usage: { input_tokens: 4, output_tokens: 2, reasoning_output_tokens: 1 } },
-  ].map((record) => JSON.stringify(record)).join('\n') + '\n';
+  return captured(EXEC_FIXTURE, { '<SESSION-1>': session });
 }
 
 function sessionTranscript(session, model = 'gpt-6-luna', effort = 'max', provider = 'openai') {
-  return [
-    { type: 'session_meta', payload: { id: session, session_id: session, model_provider: provider } },
-    { type: 'turn_context', payload: { model, effort } },
-    { type: 'response_item', payload: { item: { model: 'gpt-6-astra', effort: 'low' } } },
-  ].map((record) => JSON.stringify(record)).join('\n') + '\n';
+  return transformJsonl(captured(PARENT_FIXTURE, { '<SESSION-2>': session }), (record) => {
+    if (record.type === 'session_meta') record.payload.model_provider = provider;
+    if (record.type === 'turn_context') Object.assign(record.payload, { model, effort });
+    return record;
+  });
 }
 
 function writeSession(codeHome, session, model = 'gpt-6-luna', effort = 'max', provider = 'openai') {
@@ -113,18 +124,50 @@ function staticContent(resolution = { model: 'gpt-6-sol', effort: 'high' }) {
 }
 
 function recordedTypedSession() {
-  const parentRaw = fs.readFileSync(path.join(__dirname, '../fixtures/codex-agent-parent-0.155.1.jsonl'), 'utf8');
-  const childRaw = fs.readFileSync(path.join(__dirname, '../fixtures/codex-agent-child-0.155.1.jsonl'), 'utf8');
-  const parent = '01a0ce68-961a-72d1-b55e-d293ab9d19f4';
-  const child = '01a0ce68-afef-7bc2-baa6-b1ae8d6ce121';
-  const instructions = childRaw.split('\n').filter(Boolean).map((line) => JSON.parse(line))
+  const ids = { '<SESSION-2>': PARENT_ID, '<SESSION-6>': CHILD_ID };
+  const parentRaw = captured(PARENT_FIXTURE, ids);
+  const recorded = captured(CHILD_FIXTURE, ids);
+  const elided = recorded.split('\n').filter(Boolean).map((line) => JSON.parse(line))
     .find((record) => record.type === 'response_item' && record.payload.role === 'developer')
     .payload.content[0].text;
-  return { parentRaw, childRaw, parent, child, instructions };
+  const instructions = elided + '\n';
+  const childRaw = recorded.replace(JSON.stringify(elided), JSON.stringify(instructions));
+  return { parentRaw, childRaw, parent: PARENT_ID, child: CHILD_ID, instructions };
 }
 
 function transformJsonl(raw, transform) {
   return raw.split('\n').filter(Boolean).map((line) => JSON.stringify(transform(JSON.parse(line)))).join('\n') + '\n';
+}
+
+function relayChild(codeHome, parentRaw, childRaw, options = {}) {
+  const input = options.input || [];
+  const child = new EventEmitter();
+  child.stdout = new EventEmitter();
+  child.stderr = new EventEmitter();
+  child.pid = options.pid || 24050;
+  child.stdin = {
+    write(value) { input.push(String(value)); },
+    end() {
+      const sent = input.join('');
+      const task = { file: /^TASK_FILE=(.*)$/m.exec(sent)[1], sha256: /^TASK_SHA256=(.*)$/m.exec(sent)[1] };
+      const now = new Date();
+      const directory = path.join(codeHome, 'sessions', String(now.getFullYear()),
+        String(now.getMonth() + 1).padStart(2, '0'), String(now.getDate()).padStart(2, '0'));
+      fs.mkdirSync(directory, { recursive: true });
+      fs.writeFileSync(path.join(directory, 'rollout-' + PARENT_ID + '.jsonl'), parentRaw);
+      if (childRaw !== null) {
+        const replay = childRaw.split('<TMP>').join(JSON.stringify(task.file).slice(1, -1));
+        fs.writeFileSync(path.join(directory, 'rollout-' + CHILD_ID + '.jsonl'),
+          options.mutate ? options.mutate(replay, task) : replay);
+      }
+      if (options.onTask) options.onTask(task);
+      process.nextTick(() => {
+        child.stdout.emit('data', Buffer.from(stream(PARENT_ID)));
+        child.emit('close', 0, null);
+      });
+    },
+  };
+  return child;
 }
 
 suite('codex-runtime-host — native launch and independent evidence');
@@ -434,12 +477,11 @@ test('launchAgent sends dynamic selection through the adapter boundary', () => {
   }
 });
 
-test('recorded CLI 0.155.1 parent proves an explicit native typed spawn', () => {
-  const raw = fs.readFileSync(path.join(__dirname, '../fixtures/codex-agent-parent-0.155.1.jsonl'), 'utf8');
-  const parent = '01a0ce68-961a-72d1-b55e-d293ab9d19f4';
-  const value = parseNativeParentSpawn(raw, parent, 'gsd-plan-checker', 'gpt-6-luna', 'max');
+test('recorded CLI 0.157.1 parent proves an explicit native typed spawn', () => {
+  const { parentRaw: raw, parent } = recordedTypedSession();
+  const value = parseNativeParentSpawn(raw, parent, 'gsd-plan-checker', 'gpt-6-luna', 'low');
   assert.equal(value.parent_thread_id, parent);
-  assert.equal(value.task_name, 'plan_checker_ready');
+  assert.equal(value.task_name, 'gsd_task');
   const records = raw.split('\n').filter(Boolean).map((line) => JSON.parse(line));
   const waitCall = records.find((record) => record.type === 'response_item'
     && record.payload.type === 'function_call' && record.payload.name === 'wait_agent');
@@ -452,30 +494,30 @@ test('recorded CLI 0.155.1 parent proves an explicit native typed spawn', () => 
   secondOutput.payload.id = 'wait-output-recheck';
   secondOutput.payload.call_id = 'wait-recheck';
   assert.equal(parseNativeParentSpawn([...records, secondWait, secondOutput].map((record) => JSON.stringify(record)).join('\n'),
-    parent, 'gsd-plan-checker', 'gpt-6-luna', 'max').task_name, 'plan_checker_ready');
+    parent, 'gsd-plan-checker', 'gpt-6-luna', 'low').task_name, 'gsd_task');
   const withWaitOutput = (output) => transformJsonl(raw, (record) => {
     if (record.type === 'response_item' && record.payload.call_id === waitCall.payload.call_id
         && record.payload.type === 'function_call_output') record.payload.output = output;
     return record;
   });
   assert.equal(parseNativeParentSpawn(withWaitOutput('{"message":"Wait timed out.","timed_out":true}'),
-    parent, 'gsd-plan-checker', 'gpt-6-luna', 'max').task_name, 'plan_checker_ready');
+    parent, 'gsd-plan-checker', 'gpt-6-luna', 'low').task_name, 'gsd_task');
   for (const bad of ['{"message":"Wait completed."}', '{"timed_out":"false"}', 'not json', '[]']) {
-    assert.throws(() => parseNativeParentSpawn(withWaitOutput(bad), parent, 'gsd-plan-checker', 'gpt-6-luna', 'max'),
+    assert.throws(() => parseNativeParentSpawn(withWaitOutput(bad), parent, 'gsd-plan-checker', 'gpt-6-luna', 'low'),
       (error) => error.code === 'RUNTIME_EVIDENCE_INVALID');
   }
   assert.throws(() => parseNativeParentSpawn(raw.split('\n').filter((line) => !line.includes(waitCall.payload.call_id)
-    || line.includes('"wait_agent"')).join('\n'), parent, 'gsd-plan-checker', 'gpt-6-luna', 'max'),
+    || line.includes('"wait_agent"')).join('\n'), parent, 'gsd-plan-checker', 'gpt-6-luna', 'low'),
   (error) => error.code === 'RUNTIME_EVIDENCE_MISSING');
-  assert.throws(() => parseNativeParentSpawn(raw, parent, 'gsd-planner', 'gpt-6-luna', 'max'),
+  assert.throws(() => parseNativeParentSpawn(raw, parent, 'gsd-planner', 'gpt-6-luna', 'low'),
     (error) => error.code === 'RUNTIME_EVIDENCE_MISMATCH');
   assert.throws(() => parseNativeParentSpawn(raw, parent, 'gsd-plan-checker', 'gpt-6-sol', 'max'),
     (error) => error.code === 'RUNTIME_EVIDENCE_MISMATCH');
   assert.throws(() => parseNativeParentSpawn(raw + raw.split('\n').filter((line) => line.includes('"spawn_agent"'))[0] + '\n',
-    parent, 'gsd-plan-checker', 'gpt-6-luna', 'max'),
+    parent, 'gsd-plan-checker', 'gpt-6-luna', 'low'),
   (error) => error.code === 'RUNTIME_EVIDENCE_MISSING');
   assert.throws(() => parseNativeParentSpawn(raw.split('\n').filter((line) => !line.includes('"wait_agent"')).join('\n'),
-    parent, 'gsd-plan-checker', 'gpt-6-luna', 'max'),
+    parent, 'gsd-plan-checker', 'gpt-6-luna', 'low'),
   (error) => error.code === 'RUNTIME_EVIDENCE_MISSING');
   assert.throws(() => parseNativeParentSpawn(transformJsonl(raw, (record) => {
     if (record.type === 'response_item' && record.payload.name === 'spawn_agent') {
@@ -484,22 +526,22 @@ test('recorded CLI 0.155.1 parent proves an explicit native typed spawn', () => 
       record.payload.arguments = JSON.stringify(args);
     }
     return record;
-  }), parent, 'gsd-plan-checker', 'gpt-6-luna', 'max'),
+  }), parent, 'gsd-plan-checker', 'gpt-6-luna', 'low'),
   (error) => error.code === 'RUNTIME_EVIDENCE_MISMATCH');
 });
 
 test('recorded CLI child proves task identity and exact developer instructions', () => {
   const { parentRaw, childRaw, parent, child, instructions } = recordedTypedSession();
-  const spawnEvidence = parseNativeParentSpawn(parentRaw, parent, 'gsd-plan-checker', 'gpt-6-luna', 'max');
+  const spawnEvidence = parseNativeParentSpawn(parentRaw, parent, 'gsd-plan-checker', 'gpt-6-luna', 'low');
   const agent = {
     file: '/tmp/codex-home/agents/gsd-plan-checker.toml', sha256: 'a'.repeat(64),
     instructions, instructions_sha256: crypto.createHash('sha256').update(instructions).digest('hex'),
   };
   const observed = parseNativeChildTranscript(childRaw, child, parent, 'gsd-plan-checker',
-    'gpt-6-luna', 'max', agent, spawnEvidence);
-  assert.equal(observed.task_path, '/root/plan_checker_ready');
+    'gpt-6-luna', 'low', agent, spawnEvidence);
+  assert.equal(observed.task_path, '/root/gsd_task');
   assert.equal(observed.agent_instructions_digest, agent.instructions_sha256);
-  const reject = (raw, expectedParent = parent, expectedRole = 'gsd-plan-checker', expectedEffort = 'max', evidence = spawnEvidence) =>
+  const reject = (raw, expectedParent = parent, expectedRole = 'gsd-plan-checker', expectedEffort = 'low', evidence = spawnEvidence) =>
     assert.throws(() => parseNativeChildTranscript(raw, child, expectedParent, expectedRole,
       'gpt-6-luna', expectedEffort, agent, evidence),
     (error) => ['RUNTIME_EVIDENCE_MISMATCH', 'RUNTIME_EVIDENCE_INVALID', 'RUNTIME_EVIDENCE_MISSING'].includes(error.code));
@@ -508,7 +550,7 @@ test('recorded CLI child proves task identity and exact developer instructions',
   reject(childRaw, parent, 'gsd-plan-checker', 'high');
   reject(childRaw + childRaw.split('\n')[0] + '\n');
   reject(childRaw.split('\n').filter((line) => !line.includes('"task_complete"')).join('\n'));
-  reject(childRaw, parent, 'gsd-plan-checker', 'max', { ...spawnEvidence, task_path: '/root/foreign' });
+  reject(childRaw, parent, 'gsd-plan-checker', 'low', { ...spawnEvidence, task_path: '/root/foreign' });
   reject(transformJsonl(childRaw, (record) => {
     if (record.type === 'response_item' && record.payload.role === 'developer'
         && record.payload.content[0]?.text === instructions) {
@@ -530,6 +572,9 @@ test('recorded CLI child proves task identity and exact developer instructions',
   }));
 });
 
+const ROLE_TOML = (instructions) => 'name = "gsd-plan-checker"\ndescription = "Plan checker"\nsandbox_mode = "read-only"\ndeveloper_instructions = \'\'\'\n' + instructions + "'''\n";
+const TYPED = { model: 'gpt-6-luna', effort: 'low', sandbox_mode: 'read-only', gsd_role: 'gsd-plan-checker' };
+
 test('typed launch pins a prevalidated GSD file and accepts matching native child evidence', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-codex-typed-'));
   const codeHome = path.join(root, 'codex-home');
@@ -539,30 +584,25 @@ test('typed launch pins a prevalidated GSD file and accepts matching native chil
   const calls = [];
   try {
     fs.mkdirSync(agents, { recursive: true });
-    fs.writeFileSync(roleFile, 'name = "gsd-plan-checker"\ndescription = "Plan checker"\nsandbox_mode = "read-only"\ndeveloper_instructions = \'\'\'\n' + instructions + "'''\n");
+    fs.writeFileSync(roleFile, ROLE_TOML(instructions));
     const agent = installedGsdAgent('gsd-plan-checker', { CODEX_HOME: codeHome });
     assert.equal(agent.file, roleFile);
     const launch = createCodexCliLauncher({
-      scope: { ...SCOPE, worktree: root }, capabilities, env: {
+      scope: { ...SCOPE, worktree: root }, capabilities, taskDir: root + '-tasks', env: {
         CODEX_HOME: codeHome, GNUPGHOME: '/tmp/secret-gpg', GPG_TTY: '/tmp/tty',
         SSH_AUTH_SOCK: '/tmp/ssh.sock', ANTHROPIC_API_KEY: 'test-secret', OPENAI_API_KEY: 'test-secret',
       },
       spawn: (_executable, args, options) => {
         calls.push({ args, options });
-        const directory = path.join(codeHome, 'sessions', String(new Date().getFullYear()),
-          String(new Date().getMonth() + 1).padStart(2, '0'), String(new Date().getDate()).padStart(2, '0'));
-        fs.mkdirSync(directory, { recursive: true });
-        fs.writeFileSync(path.join(directory, 'rollout-' + parent + '.jsonl'), parentRaw);
-        fs.writeFileSync(path.join(directory, 'rollout-' + child + '.jsonl'), childRaw);
-        return childFor(stream(parent), 0, 24050);
+        return relayChild(codeHome, parentRaw, childRaw);
       },
     });
-    const result = await launch('Check the scoped plan', {
-      model: 'gpt-6-luna', effort: 'max', sandbox_mode: 'read-only', gsd_role: 'gsd-plan-checker',
-    });
+    const result = await launch(CAPTURED_TASK, TYPED);
     assert.equal(result.gsd_role, 'gsd-plan-checker');
     assert.equal(result.runtime_evidence.native_child_evidence.session_id, child);
-    assert.equal(result.runtime_evidence.native_child_evidence.task_path, '/root/plan_checker_ready');
+    assert.equal(result.runtime_evidence.native_child_evidence.parent_thread_id, parent);
+    assert.equal(result.runtime_evidence.native_child_evidence.task_path, '/root/gsd_task');
+    assert.equal(result.runtime_evidence.native_child_evidence.task_relay.sha256, CAPTURED_SHA256);
     assert.equal(result.runtime_evidence.native_child_evidence.agent_file_digest, agent.sha256);
     assert.equal(calls.length, 1);
     assert.ok(calls[0].args.includes('agents.gsd-plan-checker.config_file=' + JSON.stringify(roleFile)));
@@ -577,12 +617,13 @@ test('typed launch pins a prevalidated GSD file and accepts matching native chil
     assert.throws(() => installedGsdAgent('gsd-plan-checker', { CODEX_HOME: codeHome }),
       (error) => error.code === 'CONFLICTING_OVERRIDE');
   } finally {
+    fs.rmSync(root + '-tasks', { recursive: true, force: true });
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
 
 test('typed launch accepts a completed native child after timeout-only parent waits', async () => {
-  const { parent, child, parentRaw, childRaw, instructions } = recordedTypedSession();
+  const { child, parentRaw, childRaw, instructions } = recordedTypedSession();
   const timeoutOnly = transformJsonl(parentRaw, (record) => {
     if (record.type === 'response_item' && record.payload.type === 'function_call_output'
         && /timed_out/.test(String(record.payload.output))) {
@@ -594,25 +635,15 @@ test('typed launch accepts a completed native child after timeout-only parent wa
   const runLaunch = async (childTranscript) => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-codex-timeout-'));
     const codeHome = path.join(root, 'codex-home');
-    const agents = path.join(codeHome, 'agents');
     try {
-      fs.mkdirSync(agents, { recursive: true });
-      fs.writeFileSync(path.join(agents, 'gsd-plan-checker.toml'), 'name = "gsd-plan-checker"\ndescription = "Plan checker"\nsandbox_mode = "read-only"\ndeveloper_instructions = \'\'\'\n' + instructions + "'''\n");
+      fs.mkdirSync(path.join(codeHome, 'agents'), { recursive: true });
+      fs.writeFileSync(path.join(codeHome, 'agents', 'gsd-plan-checker.toml'), ROLE_TOML(instructions));
       const launch = createCodexCliLauncher({
-        scope: { ...SCOPE, worktree: root }, capabilities, env: { CODEX_HOME: codeHome },
-        spawn: () => {
-          const now = new Date();
-          const directory = path.join(codeHome, 'sessions', String(now.getFullYear()),
-            String(now.getMonth() + 1).padStart(2, '0'), String(now.getDate()).padStart(2, '0'));
-          fs.mkdirSync(directory, { recursive: true });
-          fs.writeFileSync(path.join(directory, 'rollout-' + parent + '.jsonl'), timeoutOnly);
-          if (childTranscript !== null) fs.writeFileSync(path.join(directory, 'rollout-' + child + '.jsonl'), childTranscript);
-          return childFor(stream(parent), 0, 24050);
-        },
+        scope: { ...SCOPE, worktree: path.join(root, 'worktree') }, capabilities,
+        taskDir: path.join(root, 'tasks'), env: { CODEX_HOME: codeHome },
+        spawn: () => relayChild(codeHome, timeoutOnly, childTranscript),
       });
-      return await launch('Check the scoped plan', {
-        model: 'gpt-6-luna', effort: 'max', sandbox_mode: 'read-only', gsd_role: 'gsd-plan-checker',
-      });
+      return await launch(CAPTURED_TASK, TYPED);
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
@@ -622,7 +653,80 @@ test('typed launch accepts a completed native child after timeout-only parent wa
   await assert.rejects(runLaunch(null));
   const lines = childRaw.split('\n');
   const completion = lines.find((line) => /task_complete/.test(line));
-  if (completion) await assert.rejects(runLaunch(lines.concat(completion).join('\n')));
+  assert.ok(completion);
+  await assert.rejects(runLaunch(lines.concat(completion).join('\n')));
+});
+
+test('typed launch relays the task by host-owned file path and digest outside the worktree', async () => {
+  const { parentRaw, childRaw, instructions } = recordedTypedSession();
+  const runRelay = async (options = {}) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-codex-relay-'));
+    const worktree = path.join(root, 'worktree');
+    const taskDir = path.join(root, 'state', 'tasks');
+    const codeHome = path.join(root, 'codex-home');
+    const input = [];
+    const observed = {};
+    try {
+      fs.mkdirSync(path.join(codeHome, 'agents'), { recursive: true });
+      fs.mkdirSync(worktree, { recursive: true });
+      fs.writeFileSync(path.join(codeHome, 'agents', 'gsd-plan-checker.toml'), ROLE_TOML(instructions));
+      assert.throws(() => createCodexCliLauncher({ scope: { ...SCOPE, worktree }, capabilities,
+        taskDir: path.join(worktree, 'tasks') }), (error) => error.code === 'INVALID_STATE_DIR');
+      const launch = createCodexCliLauncher({
+        scope: { ...SCOPE, worktree }, capabilities, taskDir, env: { CODEX_HOME: codeHome },
+        spawn: () => relayChild(codeHome, parentRaw, childRaw, {
+          input,
+          mutate: options.mutate,
+          onTask(task) {
+            Object.assign(observed, task, {
+              real: fs.realpathSync(task.file), mode: fs.statSync(task.file).mode & 0o777,
+              body: fs.readFileSync(task.file, 'utf8'),
+            });
+            if (options.onTask) options.onTask(task);
+          },
+        }),
+      });
+      let outcome;
+      try { outcome = { result: await launch(CAPTURED_TASK, { ...TYPED, dispatch_id: 'd-1' }) }; }
+      catch (error) { outcome = { error }; }
+      assert.equal(observed.mode, 0o600);
+      assert.equal(observed.body, CAPTURED_TASK);
+      assert.equal(observed.sha256, CAPTURED_SHA256);
+      assert.equal(path.dirname(observed.real), fs.realpathSync(taskDir));
+      assert.ok(!observed.real.startsWith(fs.realpathSync(worktree) + path.sep));
+      assert.ok(input.join('').includes('TASK_FILE=' + observed.file + '\n'));
+      assert.ok(!input.join('').includes(CAPTURED_TASK));
+      assert.ok(!fs.existsSync(observed.file));
+      return outcome;
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  };
+  const happy = await runRelay();
+  assert.equal(happy.error, undefined);
+  assert.equal(happy.result.runtime_evidence.native_child_evidence.task_relay.sha256, CAPTURED_SHA256);
+  const onToolCall = (edit) => (raw) => transformJsonl(raw, (record) => {
+    if (record.type === 'response_item' && record.payload.type === 'custom_tool_call') edit(record.payload);
+    return record;
+  });
+  const tampered = {
+    'first tool call reading TASK_FILE': { mutate: (raw, task) => onToolCall((item) => {
+      item.input = item.input.split(task.file).join(task.file.slice(0, -3));
+    })(raw) },
+    'TASK_SHA256 in child tool output': { mutate: (raw) => raw.split(CAPTURED_SHA256 + '  ').join('0'.repeat(64) + '  ') },
+    'unchanged task file': { onTask: (task) => fs.appendFileSync(task.file, 'shortened\n') },
+    '/root agent_message to /root/gsd_task': { mutate: (raw) => raw.split('\n')
+      .filter((line) => !line.includes('"type":"agent_message"')).join('\n') },
+    'first tool call reading TASK_FILE ': { mutate: (raw, task) => onToolCall((item) => {
+      item.input = item.input.split(task.file).join(path.join(path.dirname(task.file), 'other.md'));
+    })(raw) },
+  };
+  for (const [missing, options] of Object.entries(tampered)) {
+    const outcome = await runRelay(options);
+    assert.ok(outcome.error, missing);
+    assert.equal(outcome.error.code, 'TASK_RELAY_UNVERIFIED', missing + ': ' + outcome.error.message);
+    assert.ok(outcome.error.details.missing.includes(missing.trim()), missing + ': ' + outcome.error.message);
+  }
 });
 
 done();

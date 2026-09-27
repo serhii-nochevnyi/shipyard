@@ -2,20 +2,19 @@
   "boundary": "codex-agent-stream",
   "producer": "codex exec (parent/child)",
   "cli": "codex",
-  "cli_version": "0.155.1",
+  "cli_version": "0.157.1",
   "fixtures": [
-    "tests/fixtures/codex-agent-parent-0.155.1.jsonl",
-    "tests/fixtures/codex-agent-child-0.155.1.jsonl"
+    "tests/fixtures/captured/codex-agent-stream-parent.jsonl",
+    "tests/fixtures/captured/codex-agent-stream-child.jsonl",
+    "tests/fixtures/captured/codex-agent-stream-exec.jsonl"
   ],
-  "legacy": [
-    "tests/fixtures/codex-agent-parent-0.155.1.jsonl",
-    "tests/fixtures/codex-agent-child-0.155.1.jsonl"
-  ],
-  "consumers": [],
-  "migrating": [
+  "legacy": [],
+  "consumers": [
     "tests/unit/codex-runtime-host.test.cjs",
     "tests/unit/codex-decompose-host.test.cjs",
-    "tests/unit/codex-delivery-host.test.cjs",
+    "tests/unit/codex-delivery-host.test.cjs"
+  ],
+  "migrating": [
     "tests/unit/usage-attribution.test.cjs",
     "tests/unit/usage-report.test.cjs"
   ],
