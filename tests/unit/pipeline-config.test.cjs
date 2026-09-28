@@ -230,10 +230,23 @@ test('the native GSD synchronization key is understood by the runtime config rea
   assert.ok(!warnings.some((warning) => /gsd_sync/.test(warning)), warnings.join('; '));
 });
 
-test('the native GSD synchronization key is declared-only', () => {
+test('legacy pipeline.gsd_sync is honored with one deprecation warning', () => {
   const { config, warnings } = withRaw({ pipeline: { gsd_sync: false } });
+  assert.strictEqual(config.gsd_sync, false);
+  assert.deepStrictEqual(warnings, [
+    'pipeline.gsd_sync is deprecated — rename it to delivery_pipeline.gsd_sync',
+  ]);
+});
+
+test('delivery_pipeline.gsd_sync takes precedence over the deprecated alias', () => {
+  const { config, warnings } = withRaw({
+    pipeline: { gsd_sync: false },
+    delivery_pipeline: { gsd_sync: true },
+  });
   assert.strictEqual(config.gsd_sync, true);
-  assert.ok(warnings.some((warning) => /pipeline\.gsd_sync.*delivery_pipeline\.gsd_sync/.test(warning)), warnings.join('; '));
+  assert.deepStrictEqual(warnings, [
+    'pipeline.gsd_sync is deprecated — rename it to delivery_pipeline.gsd_sync',
+  ]);
 });
 
 // ── absent is not the same fact as unparseable (ADR-004 D2, audit F03) ──────

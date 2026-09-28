@@ -578,6 +578,7 @@ function phaseEvidence(phase, planRecords, integration) {
 
 function checkSource({ roadmapText, roadmapInfo, projectText, plans, planErrors, graph, state, front }) {
   const blockers = [...planErrors];
+  const undeclaredPhases = new Map();
   if (!graph || typeof graph !== 'object' || !graph.tickets || typeof graph.tickets !== 'object') {
     blockers.push('tickets.json is missing a tickets mapping');
   }
@@ -604,13 +605,16 @@ function checkSource({ roadmapText, roadmapInfo, projectText, plans, planErrors,
       }
     }
     if (!roadmapInfo.phases.some((phase) => phase.number === plan.phase)) {
-      blockers.push(`${posixRelative(plan.file)}: phase ${plan.phase} is not declared in ROADMAP.md`);
+      undeclaredPhases.set(plan.phase, (undeclaredPhases.get(plan.phase) || 0) + 1);
     }
   }
   for (const id of Object.keys(graphTickets)) {
     if (!seen.has(id) && /^T-\d{2}-\d{2}/.test(id)) blockers.push(`${id}: graph ticket has no matching PLAN.md`);
   }
-  return blockers;
+  const warnings = [...undeclaredPhases.entries()]
+    .sort(([left], [right]) => left - right)
+    .map(([phase, count]) => `phase ${phase}: ${count} plan(s) not declared in ROADMAP.md`);
+  return { blockers, warnings };
 }
 
 function makePlanRecords(plans, state) {
@@ -1139,6 +1143,7 @@ function buildSnapshot({ phase: focusPhase = null, adoptNative = false } = {}) {
       applicable: false,
       ok: true,
       blockers: [],
+      warnings: [],
       source_fingerprint: null,
       generated: [],
       obsolete: [],
@@ -1146,7 +1151,8 @@ function buildSnapshot({ phase: focusPhase = null, adoptNative = false } = {}) {
       counts: { phases: 0, plans: 0, merged_plans: 0, verified_phases: 0, generated_files: 0, obsolete_files: 0 },
     };
   }
-  const blockers = checkSource({ roadmapText, roadmapInfo, projectText, plans: collected.plans, planErrors: collected.errors, graph, state, front });
+  const sourceCheck = checkSource({ roadmapText, roadmapInfo, projectText, plans: collected.plans, planErrors: collected.errors, graph, state, front });
+  const { blockers, warnings } = sourceCheck;
   if (focusPhase != null && !phaseList.some((phase) => phase.number === Number(focusPhase))) {
     blockers.push(`requested phase ${focusPhase} is not declared in ROADMAP.md`);
   }
@@ -1204,6 +1210,7 @@ function buildSnapshot({ phase: focusPhase = null, adoptNative = false } = {}) {
     applicable: true,
     ok: blockers.length === 0,
     blockers,
+    warnings,
     source_fingerprint: fingerprint,
     generated,
     obsolete,
@@ -1260,6 +1267,7 @@ function resultFor(snapshot, args, drift = []) {
     obsolete_files: snapshot.obsolete.map(posixRelative),
     phases: snapshot.phases,
     counts: snapshot.counts,
+    warnings: snapshot.warnings || [],
     blockers: [...snapshot.blockers, ...drift],
   };
 }
@@ -1310,6 +1318,7 @@ function main(argv = process.argv.slice(2)) {
     if (args.json) console.log(JSON.stringify(output.result));
     else if (output.result && output.result.applicable === false) console.log('gsd-sync: not applicable — no Shipyard delivery plans');
     else if (output.result && output.result.ok) {
+      for (const warning of output.result.warnings || []) console.error(`gsd-sync: warning: ${warning}`);
       if (args.adoptNative && !args.check) {
         const adopted = output.result.adopted_files || [];
         console.log(`gsd-sync: native adoption — ${adopted.length ? adopted.join(', ') : 'none'}`);

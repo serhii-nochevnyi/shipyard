@@ -8,6 +8,7 @@ const { suite, test, done, assert } = require('./assert-harness.cjs');
 
 const ROOT = path.join(__dirname, '..', '..');
 const SCRIPT = path.join(ROOT, 'plugins', 'delivery-pipeline', 'scripts', 'gsd-sync.cjs');
+const STATE_SYNC = path.join(ROOT, 'plugins', 'delivery-pipeline', 'scripts', 'state-sync.cjs');
 const sync = require(SCRIPT);
 
 function write(file, content) {
@@ -92,6 +93,77 @@ function multiPhaseProject() {
   write(path.join(graph, 'tickets.json'), JSON.stringify({ tickets }));
   write(path.join(graph, 'delivery-state.json'), JSON.stringify(state));
   return root;
+}
+
+function undeclaredPhaseProject() {
+  const root = project();
+  const phaseDir = path.join(root, '.planning', 'phases', '02-undeclared');
+  fs.unlinkSync(path.join(root, '.planning', 'phases', '01-foundation', '01-01-PLAN.md'));
+  const ticketsFile = path.join(root, '.planning', 'graph', 'tickets.json');
+  const stateFile = path.join(root, '.planning', 'graph', 'delivery-state.json');
+  const tickets = {};
+  const state = {};
+  for (let index = 1; index <= 3; index += 1) {
+    const ticket = `T-02-0${index}`;
+    write(path.join(phaseDir, `02-0${index}-PLAN.md`), [
+      '---', 'phase: 2', `plan: ${index}`, `title: "Undeclared ${index}"`,
+      'files_modified: [src/example.js]', 'requirements: [SYNC-01]',
+      'delivery:', `  ticket: ${ticket}`, '  risk: low', '---', '',
+      `## Goal\n\nDeliver plan ${index}.`,
+    ].join('\n'));
+    tickets[ticket] = { phase: '2', title: `Undeclared ${index}`, files: ['src/example.js'] };
+    state[ticket] = { status: 'merged', pr: 20 + index, since: '2026-09-10T10:00:00Z' };
+  }
+  write(ticketsFile, JSON.stringify({ tickets }));
+  write(stateFile, JSON.stringify(state));
+  return root;
+}
+
+function stateSyncProject(gsdSync) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-state-sync-gsd-'));
+  const graphDir = path.join(root, '.planning', 'graph');
+  const phaseDir = path.join(root, '.planning', 'phases', '01-projection');
+  const bin = path.join(root, 'bin');
+  fs.mkdirSync(graphDir, { recursive: true });
+  fs.mkdirSync(bin, { recursive: true });
+  write(path.join(root, '.planning', 'config.json'), JSON.stringify({
+    git: { base_branch: 'main' },
+    pipeline: { gsd_sync: gsdSync },
+  }));
+  write(path.join(graphDir, 'tickets.json'), JSON.stringify({ tickets: {
+    'T-01-01': { phase: '1', branch: 'ticket/T-01-01-projection', title: 'projection', depends_on: [], risk: 'low' },
+  } }));
+  write(path.join(phaseDir, '01-01-PLAN.md'), [
+    '---', 'phase: 1', 'plan: 1', 'title: Projection',
+    'files_modified: [src/example.js]', 'requirements: [SYNC-01]',
+    'delivery:', '  ticket: T-01-01', '  risk: low', '---', '',
+    '## Goal', '', 'Exercise state-sync GSD projection behavior.',
+  ].join('\n'));
+  fs.writeFileSync(path.join(bin, 'gh'), [
+    '#!/usr/bin/env node',
+    "'use strict';",
+    'const args = process.argv.slice(2);',
+    "if (args[0] === 'pr' && args[1] === 'list') process.stdout.write('[]');",
+    "else if (args[0] === 'api') process.stdout.write('main\\n');",
+    "else if (args[0] === 'repo' && args[1] === 'view') process.stdout.write('main\\n');",
+    "else { process.stderr.write('unexpected gh call: ' + args.join(' ') + '\\n'); process.exitCode = 2; }",
+    '',
+  ].join('\n'), { mode: 0o755 });
+  return { root, bin };
+}
+
+function runStateSync(projectFixture) {
+  const env = testEnv(projectFixture.root);
+  for (const key of Object.keys(env)) {
+    if (/^(?:GH_|GITHUB_)/.test(key)) delete env[key];
+  }
+  env.PATH = projectFixture.bin + path.delimiter + env.PATH;
+  return spawnSync(process.execPath, [STATE_SYNC], {
+    cwd: projectFixture.root,
+    encoding: 'utf8',
+    env,
+    timeout: 20000,
+  });
 }
 
 function phasePaths(root, n, dirName) {
@@ -535,14 +607,26 @@ test('malformed delivery plans remain applicable and block publication', () => {
   assert.match(r.stdout, /malformed frontmatter/);
 });
 
-test('rejects plans whose phase is absent from the roadmap', () => {
-  const root = project();
-  const plan = path.join(root, '.planning', 'phases', '01-foundation', '01-01-PLAN.md');
-  const raw = fs.readFileSync(plan, 'utf8').replace('phase: 1', 'phase: 2');
-  write(plan, raw);
-  const r = run(root);
-  assert.equal(r.status, 1);
-  assert.match(r.stdout, /phase 2 is not declared/);
+test('three plans in one undeclared phase produce one summary warning and no blocker', () => {
+  const root = undeclaredPhaseProject();
+  const result = run(root);
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  const payload = JSON.parse(result.stdout);
+  assert.deepEqual(payload.blockers, []);
+  assert.deepEqual(payload.warnings, ['phase 2: 3 plan(s) not declared in ROADMAP.md']);
+});
+
+test('state-sync shows the GSD deprecation on projection failure and the final summary', () => {
+  const warning = 'pipeline.gsd_sync is deprecated — rename it to delivery_pipeline.gsd_sync';
+  const blocked = runStateSync(stateSyncProject(true));
+  assert.equal(blocked.status, 1, `${blocked.stdout}\n${blocked.stderr}`);
+  assert.ok(blocked.stdout.includes(`⚠ config: ${warning}`), `${blocked.stdout}\n${blocked.stderr}`);
+  assert.match(blocked.stderr, /gsd-sync finalization blocked/, `${blocked.stdout}\n${blocked.stderr}`);
+
+  const completed = runStateSync(stateSyncProject(false));
+  assert.equal(completed.status, 0, `${completed.stdout}\n${completed.stderr}`);
+  const finalLine = completed.stdout.trim().split('\n').slice(-1)[0];
+  assert.ok(finalLine.endsWith(warning), finalLine);
 });
 
 test('renders open delivery records as uncertain rather than failed', () => {
