@@ -826,8 +826,14 @@ if (mode === 'epic-stacked') {
         }
       }
       const observedPr = rd.prs.find((p) => p.headRefName === e.branch && p.state !== 'CLOSED') || null;
-      let proof = previousEpicProof(phase, repo, e.branch);
-      if (!proof && !observedPr && rd.available) {
+      let proof = FULL_SYNC ? null : previousEpicProof(phase, repo, e.branch);
+      let previousPr = null;
+      if (!observedPr && rd.available && FULL_SYNC) {
+        listingStats.lookedUp += 1;
+        previousPr = prsForBranch(repo, e.branch)
+          .find((candidate) => candidate.headRefName === e.branch && candidate.state !== 'CLOSED') || null;
+      }
+      if (!proof && !observedPr && rd.available && !FULL_SYNC) {
         const hasLedgeredMerge = Object.entries(tickets).some(([id, ticket]) => {
           const previous = prev[id];
           const current = state[id];
@@ -850,10 +856,9 @@ if (mode === 'epic-stacked') {
             }))[0] || null;
         }
       }
-      let previousPr = null;
       if (!observedPr && proof && proof.state === 'MERGED' && proof.base === base) {
         previousPr = { number: proof.number, state: 'MERGED', headRefName: e.branch, baseRefName: base };
-      } else if (!observedPr && proof && rd.available) {
+      } else if (!observedPr && proof && rd.available && !FULL_SYNC) {
         listingStats.lookedUp += 1;
         const refreshed = prForNumber(repo, proof.number);
         previousPr = refreshed.find((candidate) => candidate.headRefName === e.branch && candidate.state !== 'CLOSED') || null;

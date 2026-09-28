@@ -147,8 +147,9 @@ function state(f) {
 }
 
 function isTicketLookup(args) {
+  const headIndex = args.indexOf('--head');
   return args[0] === 'pr' && ((args[1] === 'view' && args[2] !== '399')
-    || (args[1] === 'list' && args.includes('--head')));
+    || (args[1] === 'list' && headIndex !== -1 && args[headIndex + 1] === BRANCH));
 }
 
 suite('state-sync — open PR listing and immutable landed-ticket cache');
@@ -243,6 +244,28 @@ test('--full records the merge proof that a later normal sync can reuse', () => 
   assert.equal(normal.status, 0, normal.stderr);
   assert.equal(calls(f).filter(isTicketLookup).length, 0);
   assert.match(normal.stdout, /looked_up=0.*skipped_landed=1/);
+});
+
+test('--full refreshes an omitted epic PR from its branch listing instead of historical merge proof', () => {
+  const mergedTicketPr = pr(305, 'MERGED');
+  const currentEpicPr = pr(400, 'OPEN', EPIC, 'main');
+  const f = fixture({
+    ledger: 305,
+    previousState: { [TICKET]: priorMergedRow(305) },
+    responses: {
+      all: [mergedTicketPr],
+      head: { [EPIC]: [currentEpicPr] },
+      comparisons: { [`main...${EPIC}`]: 1 },
+    },
+  });
+
+  const result = run(f, ['--full']);
+  assert.equal(result.status, 0, result.stderr);
+  assert.ok(calls(f).some((args) => args[0] === 'pr' && args[1] === 'list' && args.includes('--head')
+    && args[args.indexOf('--head') + 1] === EPIC));
+  assert.deepEqual(state(f)[TICKET].epic_pr, {
+    number: 400, branch: EPIC, state: 'OPEN', base: 'main', landed: false,
+  });
 });
 
 test('re-derives a ticket while its epic PR is still open', () => {
