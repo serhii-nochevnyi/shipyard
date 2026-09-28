@@ -9,13 +9,15 @@
   ],
   "consumers": [
     "tests/unit/claude-runtime-host.test.cjs",
-    "tests/unit/claude-workflow-host.test.cjs"
+    "tests/unit/claude-workflow-host.test.cjs",
+    "tests/unit/subscription-observation.test.cjs"
   ],
   "migrating": [],
   "inline_shapes": [
     "[\"']?type[\"']?\\s*:\\s*[\"']result[\"'][^\\n]*[\"']?(?:subtype|structured_output)[\"']?\\s*:",
     "[\"']?(?:subtype|structured_output)[\"']?\\s*:[^\\n]*[\"']?type[\"']?\\s*:\\s*[\"']result[\"']",
     "[\"']?type[\"']?\\s*:\\s*[\"']system[\"'][^\\n]*[\"']?subtype[\"']?\\s*:\\s*[\"']init[\"']",
-    "[\"']?subtype[\"']?\\s*:\\s*[\"']init[\"'][^\\n]*[\"']?type[\"']?\\s*:\\s*[\"']system[\"']"
+    "[\"']?subtype[\"']?\\s*:\\s*[\"']init[\"'][^\\n]*[\"']?type[\"']?\\s*:\\s*[\"']system[\"']",
+    "[\"']?type[\"']?\\s*:\\s*[\"']rate_limit_event[\"']"
   ]
 }

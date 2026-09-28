@@ -3,6 +3,7 @@
   base_reason: "no primary parent — a root ticket PRs into epic/20-autonomy-of-the-drive-to-green-loop"
   branch: "ticket/T-20-01-failure-signature-normalize-history-verd"
   epic: "epic/20-autonomy-of-the-drive-to-green-loop"
+  merged_into: "epic/20-autonomy-of-the-drive-to-green-loop"
   pr: 1
   reapable: true
   status: "merged"
@@ -12,6 +13,7 @@
   base_reason: "T-20-01 is MERGED, so its branch is no longer where work lands — the base is epic/20-autonomy-of-the-drive-to-green-loop (base-merge it in first to keep the review diff one slice)"
   branch: "ticket/T-20-02-model-ladder-reads-signature-state-not-a"
   epic: "epic/20-autonomy-of-the-drive-to-green-loop"
+  merged_into: "epic/20-autonomy-of-the-drive-to-green-loop"
   pr: 4
   reapable: true
   status: "merged"
@@ -21,6 +23,7 @@
   base_reason: "T-20-01 is MERGED, so its branch is no longer where work lands — the base is epic/20-autonomy-of-the-drive-to-green-loop (base-merge it in first to keep the review diff one slice)"
   branch: "ticket/T-20-03-plan-defect-the-third-terminal-outcome-i"
   epic: "epic/20-autonomy-of-the-drive-to-green-loop"
+  merged_into: "epic/20-autonomy-of-the-drive-to-green-loop"
   pr: 5
   reapable: true
   status: "merged"
@@ -30,6 +33,7 @@
   base_reason: "no primary parent — a root ticket PRs into epic/20-autonomy-of-the-drive-to-green-loop"
   branch: "ticket/T-20-04-order-the-actionable-front-by-unblocking"
   epic: "epic/20-autonomy-of-the-drive-to-green-loop"
+  merged_into: "epic/20-autonomy-of-the-drive-to-green-loop"
   pr: 2
   reapable: true
   status: "merged"
@@ -39,15 +43,18 @@
   base_reason: "no primary parent — a root ticket PRs into epic/20-autonomy-of-the-drive-to-green-loop"
   branch: "ticket/T-20-05-attempt-history-handed-to-fixers-as-inpu"
   epic: "epic/20-autonomy-of-the-drive-to-green-loop"
+  merged_into: "epic/20-autonomy-of-the-drive-to-green-loop"
   pr: 3
   reapable: true
   status: "merged"
   url: "https://github.com/serhii-nochevnyi/shipyard/pull/3"
 "T-20-06":
   base: "epic/20-autonomy-of-the-drive-to-green-loop"
-  base_reason: "T-20-02 is MERGED, so its branch is no longer where work lands — the base is epic/20-autonomy-of-the-drive-to-green-loop (base-merge it in first to keep the review diff one slice)"
+  base_merge: "epic/20-autonomy-of-the-drive-to-green-loop"
+  base_reason: "T-20-02 is MERGED, so its branch is no longer where work lands — the base is epic/20-autonomy-of-the-drive-to-green-loop (base-merge it in first to keep the review diff one slice); ticket-worktree.sh create merges epic/20-autonomy-of-the-drive-to-green-loop in for non-primary parent(s) T-20-01, T-20-03, T-20-05"
   branch: "ticket/T-20-06-wire-the-babysit-loop-to-signature-verdi"
   epic: "epic/20-autonomy-of-the-drive-to-green-loop"
+  merged_into: "epic/20-autonomy-of-the-drive-to-green-loop"
   pr: 6
   reapable: true
   status: "merged"
@@ -57,6 +64,7 @@
   base_reason: "no primary parent — a root ticket PRs into epic/21-verdicts-a-human-would-have-made-anyway"
   branch: "ticket/T-21-01-pre-authorization-is-recorded-in-the-pla"
   epic: "epic/21-verdicts-a-human-would-have-made-anyway"
+  merged_into: "epic/21-verdicts-a-human-would-have-made-anyway"
   pr: 14
   reapable: true
   status: "merged"
@@ -66,6 +74,7 @@
   base_reason: "T-21-01 is MERGED, so its branch is no longer where work lands — the base is epic/21-verdicts-a-human-would-have-made-anyway (base-merge it in first to keep the review diff one slice)"
   branch: "ticket/T-21-02-one-predicate-decides-whether-a-checkpoi"
   epic: "epic/21-verdicts-a-human-would-have-made-anyway"
+  merged_into: "epic/21-verdicts-a-human-would-have-made-anyway"
   pr: 17
   reapable: true
   status: "merged"
@@ -75,6 +84,7 @@
   base_reason: "T-21-01 is MERGED, so its branch is no longer where work lands — the base is epic/21-verdicts-a-human-would-have-made-anyway (base-merge it in first to keep the review diff one slice)"
   branch: "ticket/T-21-03-decomposition-asks-for-the-approval-the"
   epic: "epic/21-verdicts-a-human-would-have-made-anyway"
+  merged_into: "epic/21-verdicts-a-human-would-have-made-anyway"
   pr: 18
   reapable: true
   status: "merged"
@@ -84,6 +94,7 @@
   base_reason: "no primary parent — a root ticket PRs into epic/21-verdicts-a-human-would-have-made-anyway"
   branch: "ticket/T-21-04-degenerate-green-is-detected-on-the-diff"
   epic: "epic/21-verdicts-a-human-would-have-made-anyway"
+  merged_into: "epic/21-verdicts-a-human-would-have-made-anyway"
   pr: 15
   reapable: true
   status: "merged"
@@ -93,6 +104,7 @@
   base_reason: "T-21-04 is MERGED, so its branch is no longer where work lands — the base is epic/21-verdicts-a-human-would-have-made-anyway (base-merge it in first to keep the review diff one slice)"
   branch: "ticket/T-21-05-the-degenerate-green-verdict-rides-the-t"
   epic: "epic/21-verdicts-a-human-would-have-made-anyway"
+  merged_into: "epic/21-verdicts-a-human-would-have-made-anyway"
   pr: 19
   reapable: true
   status: "merged"
@@ -102,6 +114,7 @@
   base_reason: "no primary parent — a root ticket PRs into epic/22-close-what-phase-20-left-open"
   branch: "ticket/T-22-01-a-park-is-described-by-the-store-that-ow"
   epic: "epic/22-close-what-phase-20-left-open"
+  merged_into: "epic/22-close-what-phase-20-left-open"
   pr: 8
   reapable: true
   status: "merged"
@@ -111,6 +124,7 @@
   base_reason: "T-22-01 is MERGED, so its branch is no longer where work lands — the base is epic/22-close-what-phase-20-left-open (base-merge it in first to keep the review diff one slice)"
   branch: "ticket/T-22-02-a-reason-guard-checks-the-value-not-the"
   epic: "epic/22-close-what-phase-20-left-open"
+  merged_into: "epic/22-close-what-phase-20-left-open"
   pr: 11
   reapable: true
   status: "merged"
@@ -120,6 +134,7 @@
   base_reason: "no primary parent — a root ticket PRs into epic/22-close-what-phase-20-left-open"
   branch: "ticket/T-22-03-one-graph-spelling-means-one-graph-parse"
   epic: "epic/22-close-what-phase-20-left-open"
+  merged_into: "epic/22-close-what-phase-20-left-open"
   pr: 9
   reapable: true
   status: "merged"
@@ -129,6 +144,7 @@
   base_reason: "no primary parent — a root ticket PRs into epic/22-close-what-phase-20-left-open"
   branch: "ticket/T-22-04-a-lock-is-held-from-the-instant-it-exist"
   epic: "epic/22-close-what-phase-20-left-open"
+  merged_into: "epic/22-close-what-phase-20-left-open"
   pr: 10
   reapable: true
   status: "merged"
@@ -138,6 +154,7 @@
   base_reason: "T-22-04 is MERGED, so its branch is no longer where work lands — the base is epic/22-close-what-phase-20-left-open (base-merge it in first to keep the review diff one slice)"
   branch: "ticket/T-22-05-the-harness-must-be-able-to-fail-an-asyn"
   epic: "epic/22-close-what-phase-20-left-open"
+  merged_into: "epic/22-close-what-phase-20-left-open"
   pr: 12
   reapable: true
   status: "merged"
@@ -147,6 +164,7 @@
   base_reason: "no primary parent — a root ticket PRs into epic/23-the-board-tells-the-truth-about-itself"
   branch: "ticket/T-23-01-a-dispatched-ticket-is-visible-as-dispat"
   epic: "epic/23-the-board-tells-the-truth-about-itself"
+  merged_into: "epic/23-the-board-tells-the-truth-about-itself"
   pr: 20
   reapable: true
   status: "merged"
@@ -156,6 +174,7 @@
   base_reason: "no primary parent — a root ticket PRs into epic/23-the-board-tells-the-truth-about-itself"
   branch: "ticket/T-23-02-the-backlog-states-what-is-true-now"
   epic: "epic/23-the-board-tells-the-truth-about-itself"
+  merged_into: "epic/23-the-board-tells-the-truth-about-itself"
   pr: 21
   reapable: true
   status: "merged"
@@ -165,6 +184,7 @@
   base_reason: "no primary parent — a root ticket PRs into epic/23-the-board-tells-the-truth-about-itself"
   branch: "ticket/T-23-03-two-test-files-stop-lying-about-the-code"
   epic: "epic/23-the-board-tells-the-truth-about-itself"
+  merged_into: "epic/23-the-board-tells-the-truth-about-itself"
   pr: 22
   reapable: true
   status: "merged"
@@ -174,6 +194,7 @@
   base_reason: "no primary parent — a root ticket PRs into epic/24-the-conveyor-stops-interrupting-itself"
   branch: "ticket/T-24-01-a-plan-defect-needs-no-green-between-its"
   epic: "epic/24-the-conveyor-stops-interrupting-itself"
+  merged_into: "epic/24-the-conveyor-stops-interrupting-itself"
   pr: 27
   reapable: true
   status: "merged"
@@ -183,6 +204,7 @@
   base_reason: "T-24-01 is MERGED, so its branch is no longer where work lands — the base is epic/24-the-conveyor-stops-interrupting-itself (base-merge it in first to keep the review diff one slice)"
   branch: "ticket/T-24-02-check-state-has-one-vocabulary"
   epic: "epic/24-the-conveyor-stops-interrupting-itself"
+  merged_into: "epic/24-the-conveyor-stops-interrupting-itself"
   pr: 31
   reapable: true
   status: "merged"
@@ -192,6 +214,7 @@
   base_reason: "T-24-02 is MERGED, so its branch is no longer where work lands — the base is epic/24-the-conveyor-stops-interrupting-itself (base-merge it in first to keep the review diff one slice)"
   branch: "ticket/T-24-03-a-wait-on-the-parent-is-a-bucket-the-fro"
   epic: "epic/24-the-conveyor-stops-interrupting-itself"
+  merged_into: "epic/24-the-conveyor-stops-interrupting-itself"
   pr: 32
   reapable: true
   status: "merged"
@@ -201,6 +224,7 @@
   base_reason: "T-24-03 is MERGED, so its branch is no longer where work lands — the base is epic/24-the-conveyor-stops-interrupting-itself (base-merge it in first to keep the review diff one slice)"
   branch: "ticket/T-24-04-a-conform-verdict-is-bound-to-the-head-i"
   epic: "epic/24-the-conveyor-stops-interrupting-itself"
+  merged_into: "epic/24-the-conveyor-stops-interrupting-itself"
   pr: 42
   reapable: true
   status: "merged"
@@ -210,6 +234,7 @@
   base_reason: "T-24-04 is MERGED, so its branch is no longer where work lands — the base is epic/24-the-conveyor-stops-interrupting-itself (base-merge it in first to keep the review diff one slice)"
   branch: "ticket/T-24-05-merge-verifies-what-the-cache-cannot-kno"
   epic: "epic/24-the-conveyor-stops-interrupting-itself"
+  merged_into: "epic/24-the-conveyor-stops-interrupting-itself"
   pr: 44
   reapable: true
   status: "merged"
@@ -219,6 +244,7 @@
   base_reason: "T-24-05 is MERGED, so its branch is no longer where work lands — the base is epic/24-the-conveyor-stops-interrupting-itself (base-merge it in first to keep the review diff one slice)"
   branch: "ticket/T-24-06-the-guard-names-a-remedy-that-exists"
   epic: "epic/24-the-conveyor-stops-interrupting-itself"
+  merged_into: "epic/24-the-conveyor-stops-interrupting-itself"
   pr: 45
   reapable: true
   status: "merged"
@@ -228,6 +254,7 @@
   base_reason: "T-24-06 is MERGED, so its branch is no longer where work lands — the base is epic/24-the-conveyor-stops-interrupting-itself (base-merge it in first to keep the review diff one slice)"
   branch: "ticket/T-24-07-the-prose-names-only-what-the-scripts-im"
   epic: "epic/24-the-conveyor-stops-interrupting-itself"
+  merged_into: "epic/24-the-conveyor-stops-interrupting-itself"
   pr: 46
   reapable: true
   status: "merged"
@@ -237,6 +264,7 @@
   base_reason: "no primary parent — a root ticket PRs into epic/24-the-conveyor-stops-interrupting-itself"
   branch: "ticket/T-24-08-a-record-is-lifted-only-by-a-fact-its-ow"
   epic: "epic/24-the-conveyor-stops-interrupting-itself"
+  merged_into: "epic/24-the-conveyor-stops-interrupting-itself"
   pr: 28
   reapable: true
   status: "merged"
@@ -246,6 +274,7 @@
   base_reason: "no primary parent — a root ticket PRs into epic/24-the-conveyor-stops-interrupting-itself"
   branch: "ticket/T-24-09-the-stop-gate-blocks-as-often-as-the-cas"
   epic: "epic/24-the-conveyor-stops-interrupting-itself"
+  merged_into: "epic/24-the-conveyor-stops-interrupting-itself"
   pr: 29
   reapable: true
   status: "merged"
@@ -255,6 +284,7 @@
   base_reason: "T-24-03 is MERGED, so its branch is no longer where work lands — the base is epic/24-the-conveyor-stops-interrupting-itself (base-merge it in first to keep the review diff one slice)"
   branch: "ticket/T-24-10-the-ci-waiter-tells-a-stall-from-an-outa"
   epic: "epic/24-the-conveyor-stops-interrupting-itself"
+  merged_into: "epic/24-the-conveyor-stops-interrupting-itself"
   pr: 43
   reapable: true
   status: "merged"
@@ -264,6 +294,7 @@
   base_reason: "T-24-07 is MERGED, so its branch is no longer where work lands — the base is epic/24-the-conveyor-stops-interrupting-itself (base-merge it in first to keep the review diff one slice)"
   branch: "ticket/T-24-11-a-resync-writes-the-front-it-means"
   epic: "epic/24-the-conveyor-stops-interrupting-itself"
+  merged_into: "epic/24-the-conveyor-stops-interrupting-itself"
   pr: 47
   reapable: true
   status: "merged"
@@ -273,6 +304,7 @@
   base_reason: "no primary parent — a root ticket PRs into epic/25-the-conveyor-follows-the-models-it-runs-on"
   branch: "ticket/T-25-01-the-image-pins-the-runtimes-the-conveyor"
   epic: "epic/25-the-conveyor-follows-the-models-it-runs-on"
+  merged_into: "epic/25-the-conveyor-follows-the-models-it-runs-on"
   pr: 33
   reapable: true
   status: "merged"
@@ -282,6 +314,7 @@
   base_reason: "T-25-01 is MERGED, so its branch is no longer where work lands — the base is epic/25-the-conveyor-follows-the-models-it-runs-on (base-merge it in first to keep the review diff one slice)"
   branch: "ticket/T-25-02-a-codex-agent-carries-the-model-its-effo"
   epic: "epic/25-the-conveyor-follows-the-models-it-runs-on"
+  merged_into: "epic/25-the-conveyor-follows-the-models-it-runs-on"
   pr: 51
   reapable: true
   status: "merged"
@@ -291,6 +324,7 @@
   base_reason: "T-25-02 is MERGED, so its branch is no longer where work lands — the base is epic/25-the-conveyor-follows-the-models-it-runs-on (base-merge it in first to keep the review diff one slice)"
   branch: "ticket/T-25-03-the-prose-names-the-models-the-runtimes"
   epic: "epic/25-the-conveyor-follows-the-models-it-runs-on"
+  merged_into: "epic/25-the-conveyor-follows-the-models-it-runs-on"
   pr: 53
   reapable: true
   status: "merged"
@@ -300,6 +334,7 @@
   base_reason: "T-25-03 is MERGED, so its branch is no longer where work lands — the base is epic/25-the-conveyor-follows-the-models-it-runs-on (base-merge it in first to keep the review diff one slice)"
   branch: "ticket/T-25-04-the-floor-is-opus-the-depth-is-effort-an"
   epic: "epic/25-the-conveyor-follows-the-models-it-runs-on"
+  merged_into: "epic/25-the-conveyor-follows-the-models-it-runs-on"
   pr: 57
   reapable: true
   status: "merged"
@@ -309,6 +344,7 @@
   base_reason: "T-25-04 is MERGED, so its branch is no longer where work lands — the base is epic/25-the-conveyor-follows-the-models-it-runs-on (base-merge it in first to keep the review diff one slice)"
   branch: "ticket/T-25-05-a-dispatch-records-what-it-dispatched"
   epic: "epic/25-the-conveyor-follows-the-models-it-runs-on"
+  merged_into: "epic/25-the-conveyor-follows-the-models-it-runs-on"
   pr: 58
   reapable: true
   status: "merged"
@@ -318,6 +354,7 @@
   base_reason: "no primary parent — a root ticket PRs into epic/25-the-conveyor-follows-the-models-it-runs-on"
   branch: "ticket/T-25-06-every-home-of-a-pinned-fact-agrees-with"
   epic: "epic/25-the-conveyor-follows-the-models-it-runs-on"
+  merged_into: "epic/25-the-conveyor-follows-the-models-it-runs-on"
   pr: 59
   reapable: true
   status: "merged"
@@ -327,6 +364,7 @@
   base_reason: "no primary parent — a root ticket PRs into epic/26-positive-evidence-before-a-mutation"
   branch: "ticket/T-26-01-one-ownership-matcher-exact-by-construct"
   epic: "epic/26-positive-evidence-before-a-mutation"
+  merged_into: "epic/26-positive-evidence-before-a-mutation"
   pr: 37
   reapable: true
   status: "merged"
@@ -336,6 +374,7 @@
   base_reason: "T-26-11 is MERGED, so its branch is no longer where work lands — the base is epic/26-positive-evidence-before-a-mutation (base-merge it in first to keep the review diff one slice)"
   branch: "ticket/T-26-02-a-corrupt-configuration-permits-no-mutat"
   epic: "epic/26-positive-evidence-before-a-mutation"
+  merged_into: "epic/26-positive-evidence-before-a-mutation"
   pr: 60
   reapable: true
   status: "merged"
@@ -345,6 +384,7 @@
   base_reason: "T-26-15 is MERGED, so its branch is no longer where work lands — the base is epic/26-positive-evidence-before-a-mutation (base-merge it in first to keep the review diff one slice)"
   branch: "ticket/T-26-03-readiness-needs-positive-evidence"
   epic: "epic/26-positive-evidence-before-a-mutation"
+  merged_into: "ticket/T-26-15-the-board-is-given-the-facts-its-predica"
   pr: 52
   reapable: true
   status: "merged"
@@ -354,6 +394,7 @@
   base_reason: "no primary parent — a root ticket PRs into epic/26-positive-evidence-before-a-mutation"
   branch: "ticket/T-26-04-gc-removes-only-what-is-proven-landed"
   epic: "epic/26-positive-evidence-before-a-mutation"
+  merged_into: "epic/26-positive-evidence-before-a-mutation"
   pr: 38
   reapable: true
   status: "merged"
@@ -363,6 +404,7 @@
   base_reason: "T-26-03 is MERGED, so its branch is no longer where work lands — the base is epic/26-positive-evidence-before-a-mutation (base-merge it in first to keep the review diff one slice)"
   branch: "ticket/T-26-05-locks-prove-ownership-snapshots-carry-a"
   epic: "epic/26-positive-evidence-before-a-mutation"
+  merged_into: "epic/26-positive-evidence-before-a-mutation"
   pr: 54
   reapable: true
   status: "merged"
@@ -372,6 +414,7 @@
   base_reason: "no primary parent — a root ticket PRs into epic/26-positive-evidence-before-a-mutation"
   branch: "ticket/T-26-06-the-codex-config-merge-writes-toml-the-r"
   epic: "epic/26-positive-evidence-before-a-mutation"
+  merged_into: "epic/26-positive-evidence-before-a-mutation"
   pr: 39
   reapable: true
   status: "merged"
@@ -381,6 +424,7 @@
   base_reason: "no primary parent — a root ticket PRs into epic/26-positive-evidence-before-a-mutation"
   branch: "ticket/T-26-07-tuning-merges-another-owner-s-list-never"
   epic: "epic/26-positive-evidence-before-a-mutation"
+  merged_into: "epic/26-positive-evidence-before-a-mutation"
   pr: 34
   reapable: true
   status: "merged"
@@ -390,6 +434,7 @@
   base_reason: "no primary parent — a root ticket PRs into epic/26-positive-evidence-before-a-mutation"
   branch: "ticket/T-26-08-jira-identity-is-namespaced-by-repositor"
   epic: "epic/26-positive-evidence-before-a-mutation"
+  merged_into: "epic/26-positive-evidence-before-a-mutation"
   pr: 35
   reapable: true
   status: "merged"
@@ -399,6 +444,7 @@
   base_reason: "no primary parent — a root ticket PRs into epic/26-positive-evidence-before-a-mutation"
   branch: "ticket/T-26-09-workflow-input-is-validated-before-any-d"
   epic: "epic/26-positive-evidence-before-a-mutation"
+  merged_into: "epic/26-positive-evidence-before-a-mutation"
   pr: 36
   reapable: true
   status: "merged"
@@ -408,6 +454,7 @@
   base_reason: "T-26-05 is MERGED, so its branch is no longer where work lands — the base is epic/26-positive-evidence-before-a-mutation (base-merge it in first to keep the review diff one slice)"
   branch: "ticket/T-26-10-left-behind-is-evidence-not-arithmetic"
   epic: "epic/26-positive-evidence-before-a-mutation"
+  merged_into: "epic/26-positive-evidence-before-a-mutation"
   pr: 55
   reapable: true
   status: "merged"
@@ -417,6 +464,7 @@
   base_reason: "T-26-10 is MERGED, so its branch is no longer where work lands — the base is epic/26-positive-evidence-before-a-mutation (base-merge it in first to keep the review diff one slice)"
   branch: "ticket/T-26-11-unavailable-is-not-empty"
   epic: "epic/26-positive-evidence-before-a-mutation"
+  merged_into: "epic/26-positive-evidence-before-a-mutation"
   pr: 56
   reapable: true
   status: "merged"
@@ -426,6 +474,7 @@
   base_reason: "T-26-02 is MERGED, so its branch is no longer where work lands — the base is epic/26-positive-evidence-before-a-mutation (base-merge it in first to keep the review diff one slice)"
   branch: "ticket/T-26-12-a-wave-is-cut-to-a-concurrency-the-sessi"
   epic: "epic/26-positive-evidence-before-a-mutation"
+  merged_into: "epic/26-positive-evidence-before-a-mutation"
   pr: 61
   reapable: true
   status: "merged"
@@ -435,6 +484,7 @@
   base_reason: "no primary parent — a root ticket PRs into epic/26-positive-evidence-before-a-mutation"
   branch: "ticket/T-26-13-drift-is-judged-against-the-base-the-tic"
   epic: "epic/26-positive-evidence-before-a-mutation"
+  merged_into: "epic/26-positive-evidence-before-a-mutation"
   pr: 48
   reapable: true
   status: "merged"
@@ -444,6 +494,7 @@
   base_reason: "no primary parent — a root ticket PRs into epic/26-positive-evidence-before-a-mutation"
   branch: "ticket/T-26-14-a-workflow-returns-a-reference-not-a-doc"
   epic: "epic/26-positive-evidence-before-a-mutation"
+  merged_into: "epic/26-positive-evidence-before-a-mutation"
   pr: 49
   reapable: true
   status: "merged"
@@ -453,6 +504,7 @@
   base_reason: "no primary parent — a root ticket PRs into epic/26-positive-evidence-before-a-mutation"
   branch: "ticket/T-26-15-the-board-is-given-the-facts-its-predica"
   epic: "epic/26-positive-evidence-before-a-mutation"
+  merged_into: "epic/26-positive-evidence-before-a-mutation"
   pr: 50
   reapable: true
   status: "merged"
@@ -462,6 +514,7 @@
   base_reason: "no primary parent — a root ticket PRs into epic/27-the-conveyor-measures-its-own-state"
   branch: "ticket/T-27-01-the-cap-counts-agents-and-the-three-capa"
   epic: "epic/27-the-conveyor-measures-its-own-state"
+  merged_into: "epic/27-the-conveyor-measures-its-own-state"
   pr: 63
   reapable: true
   status: "merged"
@@ -471,6 +524,7 @@
   base_reason: "no primary parent — a root ticket PRs into epic/27-the-conveyor-measures-its-own-state"
   branch: "ticket/T-27-02-a-verdict-survives-a-head-move-it-provab"
   epic: "epic/27-the-conveyor-measures-its-own-state"
+  merged_into: "epic/27-the-conveyor-measures-its-own-state"
   pr: 64
   reapable: true
   status: "merged"
@@ -480,6 +534,7 @@
   base_reason: "T-27-01 is MERGED, so its branch is no longer where work lands — the base is epic/27-the-conveyor-measures-its-own-state (base-merge it in first to keep the review diff one slice)"
   branch: "ticket/T-27-03-a-base-is-chosen-for-where-the-merge-lan"
   epic: "epic/27-the-conveyor-measures-its-own-state"
+  merged_into: "epic/27-the-conveyor-measures-its-own-state"
   pr: 66
   reapable: true
   status: "merged"
@@ -489,6 +544,7 @@
   base_reason: "T-27-03 is MERGED, so its branch is no longer where work lands — the base is epic/27-the-conveyor-measures-its-own-state (base-merge it in first to keep the review diff one slice)"
   branch: "ticket/T-27-04-an-epic-learns-what-landed-under-it-and"
   epic: "epic/27-the-conveyor-measures-its-own-state"
+  merged_into: "epic/27-the-conveyor-measures-its-own-state"
   pr: 68
   reapable: true
   status: "merged"
@@ -498,6 +554,7 @@
   base_reason: "T-27-04 is MERGED, so its branch is no longer where work lands — the base is epic/27-the-conveyor-measures-its-own-state (base-merge it in first to keep the review diff one slice)"
   branch: "ticket/T-27-05-a-journal-records-what-was-applied-and-r"
   epic: "epic/27-the-conveyor-measures-its-own-state"
+  merged_into: "epic/27-the-conveyor-measures-its-own-state"
   pr: 69
   reapable: true
   status: "merged"
@@ -507,6 +564,7 @@
   base_reason: "T-27-05 is MERGED, so its branch is no longer where work lands — the base is epic/27-the-conveyor-measures-its-own-state (base-merge it in first to keep the review diff one slice)"
   branch: "ticket/T-27-06-the-front-says-when-it-is-behind-and-one"
   epic: "epic/27-the-conveyor-measures-its-own-state"
+  merged_into: "epic/27-the-conveyor-measures-its-own-state"
   pr: 70
   reapable: true
   status: "merged"
@@ -516,6 +574,7 @@
   base_reason: "no primary parent — a root ticket PRs into epic/27-the-conveyor-measures-its-own-state"
   branch: "ticket/T-27-07-a-guard-asserts-a-sweep-not-a-list-of-kn"
   epic: "epic/27-the-conveyor-measures-its-own-state"
+  merged_into: "epic/27-the-conveyor-measures-its-own-state"
   pr: 65
   reapable: true
   status: "merged"
@@ -525,6 +584,7 @@
   base_reason: "T-27-06 is MERGED, so its branch is no longer where work lands — the base is epic/27-the-conveyor-measures-its-own-state (base-merge it in first to keep the review diff one slice)"
   branch: "ticket/T-27-08-the-remaining-adr-004-d2-gaps-and-the-r"
   epic: "epic/27-the-conveyor-measures-its-own-state"
+  merged_into: "epic/27-the-conveyor-measures-its-own-state"
   pr: 71
   reapable: true
   status: "merged"
@@ -534,6 +594,7 @@
   base_reason: "no primary parent — a root ticket PRs into epic/27-the-conveyor-measures-its-own-state"
   branch: "ticket/T-27-09-the-judge-s-base-tree-reaches-the-traile"
   epic: "epic/27-the-conveyor-measures-its-own-state"
+  merged_into: "epic/27-the-conveyor-measures-its-own-state"
   pr: 72
   reapable: true
   status: "merged"
@@ -543,6 +604,7 @@
   base_reason: "no primary parent — a root ticket PRs into epic/28-a-mechanism-nobody-connected-is-not-a-mechanism"
   branch: "ticket/T-28-01-the-cap-counts-distinct-agents-not-disti"
   epic: "epic/28-a-mechanism-nobody-connected-is-not-a-mechanism"
+  merged_into: "epic/28-a-mechanism-nobody-connected-is-not-a-mechanism"
   pr: 76
   reapable: true
   status: "merged"
@@ -552,6 +614,7 @@
   base_reason: "no primary parent — a root ticket PRs into epic/28-a-mechanism-nobody-connected-is-not-a-mechanism"
   branch: "ticket/T-28-02-a-signature-s-history-is-a-set-with-adja"
   epic: "epic/28-a-mechanism-nobody-connected-is-not-a-mechanism"
+  merged_into: "epic/28-a-mechanism-nobody-connected-is-not-a-mechanism"
   pr: 73
   reapable: true
   status: "merged"
@@ -561,6 +624,7 @@
   base_reason: "T-28-01 is MERGED, so its branch is no longer where work lands — the base is epic/28-a-mechanism-nobody-connected-is-not-a-mechanism (base-merge it in first to keep the review diff one slice)"
   branch: "ticket/T-28-03-one-procedure-for-judgment-on-both-paths"
   epic: "epic/28-a-mechanism-nobody-connected-is-not-a-mechanism"
+  merged_into: "epic/28-a-mechanism-nobody-connected-is-not-a-mechanism"
   pr: 80
   reapable: true
   status: "merged"
@@ -570,6 +634,7 @@
   base_reason: "no primary parent — a root ticket PRs into epic/28-a-mechanism-nobody-connected-is-not-a-mechanism"
   branch: "ticket/T-28-04-a-floor-is-measured-against-what-is-effe"
   epic: "epic/28-a-mechanism-nobody-connected-is-not-a-mechanism"
+  merged_into: "epic/28-a-mechanism-nobody-connected-is-not-a-mechanism"
   pr: 74
   reapable: true
   status: "merged"
@@ -579,6 +644,7 @@
   base_reason: "T-28-04 is MERGED, so its branch is no longer where work lands — the base is epic/28-a-mechanism-nobody-connected-is-not-a-mechanism (base-merge it in first to keep the review diff one slice)"
   branch: "ticket/T-28-05-an-installer-owns-what-it-wrote"
   epic: "epic/28-a-mechanism-nobody-connected-is-not-a-mechanism"
+  merged_into: "epic/28-a-mechanism-nobody-connected-is-not-a-mechanism"
   pr: 78
   reapable: true
   status: "merged"
@@ -588,6 +654,7 @@
   base_reason: "T-28-03 is MERGED, so its branch is no longer where work lands — the base is epic/28-a-mechanism-nobody-connected-is-not-a-mechanism (base-merge it in first to keep the review diff one slice)"
   branch: "ticket/T-28-06-every-reader-has-a-writer-or-a-recorded"
   epic: "epic/28-a-mechanism-nobody-connected-is-not-a-mechanism"
+  merged_into: "epic/28-a-mechanism-nobody-connected-is-not-a-mechanism"
   pr: 81
   reapable: true
   status: "merged"
@@ -597,6 +664,7 @@
   base_reason: "no primary parent — a root ticket PRs into epic/28-a-mechanism-nobody-connected-is-not-a-mechanism"
   branch: "ticket/T-28-07-dirty-means-tracked-and-a-declared-path"
   epic: "epic/28-a-mechanism-nobody-connected-is-not-a-mechanism"
+  merged_into: "epic/28-a-mechanism-nobody-connected-is-not-a-mechanism"
   pr: 75
   reapable: true
   status: "merged"
@@ -606,6 +674,7 @@
   base_reason: "no primary parent — a root ticket PRs into epic/28-a-mechanism-nobody-connected-is-not-a-mechanism"
   branch: "ticket/T-28-08-a-clean-exit-is-not-evidence-of-a-cohere"
   epic: "epic/28-a-mechanism-nobody-connected-is-not-a-mechanism"
+  merged_into: "epic/28-a-mechanism-nobody-connected-is-not-a-mechanism"
   pr: 77
   reapable: true
   status: "merged"
@@ -615,6 +684,7 @@
   base_reason: "no primary parent — a root ticket PRs into epic/28-a-mechanism-nobody-connected-is-not-a-mechanism"
   branch: "ticket/T-28-09-the-wired-mechanism-pin-must-fail-when-t"
   epic: "epic/28-a-mechanism-nobody-connected-is-not-a-mechanism"
+  merged_into: "epic/28-a-mechanism-nobody-connected-is-not-a-mechanism"
   pr: 82
   reapable: true
   status: "merged"
@@ -624,6 +694,7 @@
   base_reason: "no primary parent — a root ticket PRs into epic/29-the-tracker-is-a-projection-and-a-projection-is-driven"
   branch: "ticket/T-29-01-the-negative-pin-a-transition-name-is-ne"
   epic: "epic/29-the-tracker-is-a-projection-and-a-projection-is-driven"
+  merged_into: "epic/29-the-tracker-is-a-projection-and-a-projection-is-driven"
   pr: 83
   reapable: true
   status: "merged"
@@ -633,6 +704,7 @@
   base_reason: "no primary parent — a root ticket PRs into epic/29-the-tracker-is-a-projection-and-a-projection-is-driven"
   branch: "ticket/T-29-02-the-status-map-is-a-declared-knob-and-it"
   epic: "epic/29-the-tracker-is-a-projection-and-a-projection-is-driven"
+  merged_into: "epic/29-the-tracker-is-a-projection-and-a-projection-is-driven"
   pr: 84
   reapable: true
   status: "merged"
@@ -642,6 +714,7 @@
   base_reason: "T-29-02 is MERGED, so its branch is no longer where work lands — the base is epic/29-the-tracker-is-a-projection-and-a-projection-is-driven (base-merge it in first to keep the review diff one slice)"
   branch: "ticket/T-29-03-the-watermark-store-exactly-once-and-onl"
   epic: "epic/29-the-tracker-is-a-projection-and-a-projection-is-driven"
+  merged_into: "epic/29-the-tracker-is-a-projection-and-a-projection-is-driven"
   pr: 86
   reapable: true
   status: "merged"
@@ -651,6 +724,7 @@
   base_reason: "T-29-03 is MERGED, so its branch is no longer where work lands — the base is epic/29-the-tracker-is-a-projection-and-a-projection-is-driven (base-merge it in first to keep the review diff one slice)"
   branch: "ticket/T-29-04-the-planner-three-local-files-in-a-work"
   epic: "epic/29-the-tracker-is-a-projection-and-a-projection-is-driven"
+  merged_into: "epic/29-the-tracker-is-a-projection-and-a-projection-is-driven"
   pr: 87
   reapable: true
   status: "merged"
@@ -660,6 +734,7 @@
   base_reason: "T-29-04 is MERGED, so its branch is no longer where work lands — the base is epic/29-the-tracker-is-a-projection-and-a-projection-is-driven (base-merge it in first to keep the review diff one slice)"
   branch: "ticket/T-29-05-the-recorder-refuses-a-bare-done-and-the"
   epic: "epic/29-the-tracker-is-a-projection-and-a-projection-is-driven"
+  merged_into: "epic/29-the-tracker-is-a-projection-and-a-projection-is-driven"
   pr: 88
   reapable: true
   status: "merged"
@@ -669,6 +744,7 @@
   base_reason: "T-29-05 is MERGED, so its branch is no longer where work lands — the base is epic/29-the-tracker-is-a-projection-and-a-projection-is-driven (base-merge it in first to keep the review diff one slice)"
   branch: "ticket/T-29-06-the-acting-half-resolve-by-target-status"
   epic: "epic/29-the-tracker-is-a-projection-and-a-projection-is-driven"
+  merged_into: "epic/29-the-tracker-is-a-projection-and-a-projection-is-driven"
   pr: 89
   reapable: true
   status: "merged"
@@ -678,6 +754,7 @@
   base_reason: "T-29-06 is MERGED, so its branch is no longer where work lands — the base is epic/29-the-tracker-is-a-projection-and-a-projection-is-driven (base-merge it in first to keep the review diff one slice)"
   branch: "ticket/T-29-07-wire-it-pin-the-wiring-and-keep-it-out-o"
   epic: "epic/29-the-tracker-is-a-projection-and-a-projection-is-driven"
+  merged_into: "epic/29-the-tracker-is-a-projection-and-a-projection-is-driven"
   pr: 90
   reapable: true
   status: "merged"
@@ -687,6 +764,7 @@
   base_reason: "T-29-07 is MERGED, so its branch is no longer where work lands — the base is epic/29-the-tracker-is-a-projection-and-a-projection-is-driven (base-merge it in first to keep the review diff one slice)"
   branch: "ticket/T-29-08-bind-projection-evidence-to-the-item-act"
   epic: "epic/29-the-tracker-is-a-projection-and-a-projection-is-driven"
+  merged_into: "epic/29-the-tracker-is-a-projection-and-a-projection-is-driven"
   pr: 91
   reapable: true
   status: "merged"
@@ -696,6 +774,7 @@
   base_reason: "no primary parent — a root ticket PRs into epic/30-a-ticket-you-cannot-reach-is-not-deliverable"
   branch: "ticket/T-30-01-make-verification-claims-executable-acro"
   epic: "epic/30-a-ticket-you-cannot-reach-is-not-deliverable"
+  merged_into: "epic/30-a-ticket-you-cannot-reach-is-not-deliverable"
   pr: 109
   reapable: true
   status: "merged"
@@ -705,6 +784,7 @@
   base_reason: "no primary parent — a root ticket PRs into epic/30-a-ticket-you-cannot-reach-is-not-deliverable"
   branch: "ticket/T-30-02-resolve-configured-repositories-before-f"
   epic: "epic/30-a-ticket-you-cannot-reach-is-not-deliverable"
+  merged_into: "epic/30-a-ticket-you-cannot-reach-is-not-deliverable"
   pr: 110
   reapable: true
   status: "merged"
@@ -714,6 +794,7 @@
   base_reason: "T-30-02 is MERGED, so its branch is no longer where work lands — the base is epic/30-a-ticket-you-cannot-reach-is-not-deliverable (base-merge it in first to keep the review diff one slice)"
   branch: "ticket/T-30-03-discover-repository-checkouts-by-declare"
   epic: "epic/30-a-ticket-you-cannot-reach-is-not-deliverable"
+  merged_into: "epic/30-a-ticket-you-cannot-reach-is-not-deliverable"
   pr: 111
   reapable: true
   status: "merged"
@@ -724,6 +805,7 @@
   branch: "ticket/T-30-04-require-an-explicit-operator-choice-befo"
   epic: "epic/30-a-ticket-you-cannot-reach-is-not-deliverable"
   matched_by: "marker"
+  merged_into: "epic/30-a-ticket-you-cannot-reach-is-not-deliverable"
   pr: 113
   pr_branch: "ticket/T-30-04-require-an-explicit-operator-choice-before-cloning"
   reapable: true
@@ -735,6 +817,7 @@
   branch: "ticket/T-30-05-validate-repository-destinations-with-th"
   epic: "epic/30-a-ticket-you-cannot-reach-is-not-deliverable"
   matched_by: "marker"
+  merged_into: "epic/30-a-ticket-you-cannot-reach-is-not-deliverable"
   pr: 114
   pr_branch: "ticket/T-30-05-validate-repository-destinations-with-existing-nesting-rule"
   reapable: true
@@ -746,6 +829,7 @@
   branch: "ticket/T-30-06-mirror-the-project-origin-protocol-for-r"
   epic: "epic/30-a-ticket-you-cannot-reach-is-not-deliverable"
   matched_by: "marker"
+  merged_into: "epic/30-a-ticket-you-cannot-reach-is-not-deliverable"
   pr: 115
   pr_branch: "ticket/T-30-06-mirror-project-origin-protocol-for-repository-clones"
   reapable: true
@@ -756,6 +840,7 @@
   base_reason: "T-30-06 is MERGED, so its branch is no longer where work lands — the base is epic/30-a-ticket-you-cannot-reach-is-not-deliverable (base-merge it in first to keep the review diff one slice)"
   branch: "ticket/T-30-07-use-a-full-clone-with-all-refs-required"
   epic: "epic/30-a-ticket-you-cannot-reach-is-not-deliverable"
+  merged_into: "epic/30-a-ticket-you-cannot-reach-is-not-deliverable"
   pr: 116
   reapable: true
   status: "merged"
@@ -766,6 +851,7 @@
   branch: "ticket/T-30-08-adopt-matching-checkouts-and-refuse-to-c"
   epic: "epic/30-a-ticket-you-cannot-reach-is-not-deliverable"
   matched_by: "marker"
+  merged_into: "epic/30-a-ticket-you-cannot-reach-is-not-deliverable"
   pr: 117
   pr_branch: "ticket/T-30-08-adopt-matching-checkouts-and-refuse-to-clobber"
   reapable: true
@@ -777,6 +863,7 @@
   branch: "ticket/T-30-09-persist-resolved-checkouts-and-park-unre"
   epic: "epic/30-a-ticket-you-cannot-reach-is-not-deliverable"
   matched_by: "marker"
+  merged_into: "epic/30-a-ticket-you-cannot-reach-is-not-deliverable"
   pr: 118
   pr_branch: "ticket/T-30-09-persist-resolved-checkouts-and-park-unreachable"
   reapable: true
@@ -787,6 +874,7 @@
   base_reason: "T-30-03 is MERGED, so its branch is no longer where work lands — the base is epic/30-a-ticket-you-cannot-reach-is-not-deliverable (base-merge it in first to keep the review diff one slice)"
   branch: "ticket/T-30-10-make-the-sentinel-honor-observed-ticket"
   epic: "epic/30-a-ticket-you-cannot-reach-is-not-deliverable"
+  merged_into: "epic/30-a-ticket-you-cannot-reach-is-not-deliverable"
   pr: 122
   reapable: true
   status: "merged"
@@ -796,6 +884,7 @@
   base_reason: "no primary parent — a root ticket PRs into epic/31-not-every-ticket-is-available-work"
   branch: "ticket/T-31-01-remove-the-external-ticket-import-shortc"
   epic: "epic/31-not-every-ticket-is-available-work"
+  merged_into: "epic/31-not-every-ticket-is-available-work"
   pr: 128
   reapable: true
   status: "merged"
@@ -805,6 +894,7 @@
   base_reason: "T-31-01 is MERGED, so its branch is no longer where work lands — the base is epic/31-not-every-ticket-is-available-work (base-merge it in first to keep the review diff one slice)"
   branch: "ticket/T-31-02-declare-opt-in-jira-to-do-statuses"
   epic: "epic/31-not-every-ticket-is-available-work"
+  merged_into: "epic/31-not-every-ticket-is-available-work"
   pr: 129
   reapable: true
   status: "merged"
@@ -814,6 +904,7 @@
   base_reason: "T-31-02 is MERGED, so its branch is no longer where work lands — the base is epic/31-not-every-ticket-is-available-work (base-merge it in first to keep the review diff one slice)"
   branch: "ticket/T-31-03-define-status-and-assignee-eligibility-w"
   epic: "epic/31-not-every-ticket-is-available-work"
+  merged_into: "ticket/T-31-02-declare-opt-in-jira-to-do-statuses"
   pr: 131
   reapable: true
   status: "merged"
@@ -823,6 +914,7 @@
   base_reason: "T-31-03 is MERGED, so its branch is no longer where work lands — the base is epic/31-not-every-ticket-is-available-work (base-merge it in first to keep the review diff one slice)"
   branch: "ticket/T-31-04-persist-tracker-verdicts-and-fail-closed"
   epic: "epic/31-not-every-ticket-is-available-work"
+  merged_into: "epic/31-not-every-ticket-is-available-work"
   pr: 132
   reapable: true
   status: "merged"
@@ -832,6 +924,7 @@
   base_reason: "T-31-04 is MERGED, so its branch is no longer where work lands — the base is epic/31-not-every-ticket-is-available-work (base-merge it in first to keep the review diff one slice)"
   branch: "ticket/T-31-05-gate-only-the-execute-transition-on-trac"
   epic: "epic/31-not-every-ticket-is-available-work"
+  merged_into: "epic/31-not-every-ticket-is-available-work"
   pr: 133
   reapable: true
   status: "merged"
@@ -841,6 +934,7 @@
   base_reason: "T-31-05 is MERGED, so its branch is no longer where work lands — the base is epic/31-not-every-ticket-is-available-work (base-merge it in first to keep the review diff one slice)"
   branch: "ticket/T-31-06-journal-direct-ticket-overrides"
   epic: "epic/31-not-every-ticket-is-available-work"
+  merged_into: "epic/31-not-every-ticket-is-available-work"
   pr: 134
   reapable: true
   status: "merged"
@@ -851,6 +945,7 @@
   branch: "ticket/T-31-07-read-tracker-eligibility-at-cold-start-a"
   epic: "epic/31-not-every-ticket-is-available-work"
   matched_by: "marker"
+  merged_into: "epic/31-not-every-ticket-is-available-work"
   pr: 135
   pr_branch: "ticket/T-31-07-read-tracker-eligibility-at-cold-start"
   reapable: true
@@ -861,6 +956,7 @@
   base_reason: "no primary parent — a root ticket PRs into epic/32-measure-usage-and-make-the-backlog-actionable"
   branch: "ticket/T-32-01-collect-deduplicated-usage-from-explicit"
   epic: "epic/32-measure-usage-and-make-the-backlog-actionable"
+  merged_into: "epic/32-measure-usage-and-make-the-backlog-actionable"
   pr: 92
   reapable: true
   status: "merged"
@@ -870,15 +966,18 @@
   base_reason: "no primary parent — a root ticket PRs into epic/32-measure-usage-and-make-the-backlog-actionable"
   branch: "ticket/T-32-02-index-backlog-sources-with-stable-item-i"
   epic: "epic/32-measure-usage-and-make-the-backlog-actionable"
+  merged_into: "epic/32-measure-usage-and-make-the-backlog-actionable"
   pr: 93
   reapable: true
   status: "merged"
   url: "https://github.com/serhii-nochevnyi/shipyard/pull/93"
 "T-32-03":
   base: "epic/32-measure-usage-and-make-the-backlog-actionable"
-  base_reason: "T-32-06 is MERGED, so its branch is no longer where work lands — the base is epic/32-measure-usage-and-make-the-backlog-actionable (base-merge it in first to keep the review diff one slice)"
+  base_merge: "epic/32-measure-usage-and-make-the-backlog-actionable"
+  base_reason: "T-32-06 is MERGED, so its branch is no longer where work lands — the base is epic/32-measure-usage-and-make-the-backlog-actionable (base-merge it in first to keep the review diff one slice); ticket-worktree.sh create merges epic/32-measure-usage-and-make-the-backlog-actionable in for non-primary parent(s) T-32-01"
   branch: "ticket/T-32-03-expose-routing-attribution-eligibility-i"
   epic: "epic/32-measure-usage-and-make-the-backlog-actionable"
+  merged_into: "epic/32-measure-usage-and-make-the-backlog-actionable"
   pr: 97
   reapable: true
   status: "merged"
@@ -888,6 +987,7 @@
   base_reason: "T-32-03 is MERGED, so its branch is no longer where work lands — the base is epic/32-measure-usage-and-make-the-backlog-actionable (base-merge it in first to keep the review diff one slice)"
   branch: "ticket/T-32-04-batch-dispatch-attribution-atomically"
   epic: "epic/32-measure-usage-and-make-the-backlog-actionable"
+  merged_into: "epic/32-measure-usage-and-make-the-backlog-actionable"
   pr: 99
   reapable: true
   status: "merged"
@@ -897,6 +997,7 @@
   base_reason: "T-32-04 is MERGED, so its branch is no longer where work lands — the base is epic/32-measure-usage-and-make-the-backlog-actionable (base-merge it in first to keep the review diff one slice)"
   branch: "ticket/T-32-05-wire-batched-dispatch-lifecycle-into-the"
   epic: "epic/32-measure-usage-and-make-the-backlog-actionable"
+  merged_into: "epic/32-measure-usage-and-make-the-backlog-actionable"
   pr: 100
   reapable: true
   status: "merged"
@@ -906,6 +1007,7 @@
   base_reason: "no primary parent — a root ticket PRs into epic/32-measure-usage-and-make-the-backlog-actionable"
   branch: "ticket/T-32-06-deliver-the-accepted-task-level-model-la"
   epic: "epic/32-measure-usage-and-make-the-backlog-actionable"
+  merged_into: "epic/32-measure-usage-and-make-the-backlog-actionable"
   pr: 95
   reapable: true
   status: "merged"
@@ -916,6 +1018,7 @@
   branch: "ticket/T-32-07-join-transcript-usage-to-dispatches-with"
   epic: "epic/32-measure-usage-and-make-the-backlog-actionable"
   matched_by: "marker"
+  merged_into: "epic/32-measure-usage-and-make-the-backlog-actionable"
   pr: 102
   pr_branch: "ticket/T-32-07-join-transcripts-to-dispatches"
   reapable: true
@@ -926,6 +1029,7 @@
   base_reason: "no primary parent — a root ticket PRs into epic/33-reduce-orchestration-context-and-transfer-sessions-safely"
   branch: "ticket/T-33-01-deliver-durable-ci-and-review-transition"
   epic: "epic/33-reduce-orchestration-context-and-transfer-sessions-safely"
+  merged_into: "epic/33-reduce-orchestration-context-and-transfer-sessions-safely"
   pr: 154
   reapable: true
   status: "merged"
@@ -935,6 +1039,7 @@
   base_reason: "T-33-01 is MERGED, so its branch is no longer where work lands — the base is epic/33-reduce-orchestration-context-and-transfer-sessions-safely (base-merge it in first to keep the review diff one slice)"
   branch: "ticket/T-33-02-validate-bounded-executor-evidence-at-ac"
   epic: "epic/33-reduce-orchestration-context-and-transfer-sessions-safely"
+  merged_into: "epic/33-reduce-orchestration-context-and-transfer-sessions-safely"
   pr: 155
   reapable: true
   status: "merged"
@@ -944,6 +1049,7 @@
   base_reason: "T-33-02 is MERGED, so its branch is no longer where work lands — the base is epic/33-reduce-orchestration-context-and-transfer-sessions-safely (base-merge it in first to keep the review diff one slice)"
   branch: "ticket/T-33-03-bound-repair-and-drift-results-without-l"
   epic: "epic/33-reduce-orchestration-context-and-transfer-sessions-safely"
+  merged_into: "epic/33-reduce-orchestration-context-and-transfer-sessions-safely"
   pr: 156
   reapable: true
   status: "merged"
@@ -953,6 +1059,7 @@
   base_reason: "T-33-03 is MERGED, so its branch is no longer where work lands — the base is epic/33-reduce-orchestration-context-and-transfer-sessions-safely (base-merge it in first to keep the review diff one slice)"
   branch: "ticket/T-33-04-preserve-complete-architecture-and-integ"
   epic: "epic/33-reduce-orchestration-context-and-transfer-sessions-safely"
+  merged_into: "epic/33-reduce-orchestration-context-and-transfer-sessions-safely"
   pr: 157
   reapable: true
   status: "merged"
@@ -962,6 +1069,7 @@
   base_reason: "T-33-04 is MERGED, so its branch is no longer where work lands — the base is epic/33-reduce-orchestration-context-and-transfer-sessions-safely (base-merge it in first to keep the review diff one slice)"
   branch: "ticket/T-33-05-bound-research-and-decomposition-handbac"
   epic: "epic/33-reduce-orchestration-context-and-transfer-sessions-safely"
+  merged_into: "epic/33-reduce-orchestration-context-and-transfer-sessions-safely"
   pr: 158
   reapable: true
   status: "merged"
@@ -971,6 +1079,7 @@
   base_reason: "T-33-05 is MERGED, so its branch is no longer where work lands — the base is epic/33-reduce-orchestration-context-and-transfer-sessions-safely (base-merge it in first to keep the review diff one slice)"
   branch: "ticket/T-33-06-build-targeted-launch-packets-with-requi"
   epic: "epic/33-reduce-orchestration-context-and-transfer-sessions-safely"
+  merged_into: "epic/33-reduce-orchestration-context-and-transfer-sessions-safely"
   pr: 159
   reapable: true
   status: "merged"
@@ -980,6 +1089,7 @@
   base_reason: "T-33-06 is MERGED, so its branch is no longer where work lands — the base is epic/33-reduce-orchestration-context-and-transfer-sessions-safely (base-merge it in first to keep the review diff one slice)"
   branch: "ticket/T-33-07-measure-waiting-and-context-treatments-i"
   epic: "epic/33-reduce-orchestration-context-and-transfer-sessions-safely"
+  merged_into: "epic/33-reduce-orchestration-context-and-transfer-sessions-safely"
   pr: 160
   reapable: true
   status: "merged"
@@ -989,6 +1099,7 @@
   base_reason: "T-33-07 is MERGED, so its branch is no longer where work lands — the base is epic/33-reduce-orchestration-context-and-transfer-sessions-safely (base-merge it in first to keep the review diff one slice)"
   branch: "ticket/T-33-08-resume-a-checkpoint-with-one-fenced-ackn"
   epic: "epic/33-reduce-orchestration-context-and-transfer-sessions-safely"
+  merged_into: "epic/33-reduce-orchestration-context-and-transfer-sessions-safely"
   pr: 161
   reapable: true
   status: "merged"
@@ -998,6 +1109,7 @@
   base_reason: "T-33-08 is MERGED, so its branch is no longer where work lands — the base is epic/33-reduce-orchestration-context-and-transfer-sessions-safely (base-merge it in first to keep the review diff one slice)"
   branch: "ticket/T-33-09-recommend-safe-rotation-and-refuse-unpro"
   epic: "epic/33-reduce-orchestration-context-and-transfer-sessions-safely"
+  merged_into: "epic/33-reduce-orchestration-context-and-transfer-sessions-safely"
   pr: 162
   reapable: true
   status: "merged"
@@ -1008,6 +1120,7 @@
   branch: "ticket/T-34-01-make-review-progress-and-resource-budget"
   epic: "epic/34-improve-convergence-and-tune-from-measured-outcomes"
   matched_by: "marker"
+  merged_into: "epic/34-improve-convergence-and-tune-from-measured-outcomes"
   pr: 167
   pr_branch: "ticket/T-34-01-review-progress-and-resource-budgets"
   reapable: true
@@ -1019,6 +1132,7 @@
   branch: "ticket/T-34-02-require-runtime-capability-evidence-for"
   epic: "epic/34-improve-convergence-and-tune-from-measured-outcomes"
   matched_by: "marker"
+  merged_into: "epic/34-improve-convergence-and-tune-from-measured-outcomes"
   pr: 168
   pr_branch: "ticket/T-34-02-runtime-capability-evidence"
   reapable: true
@@ -1030,6 +1144,7 @@
   branch: "ticket/T-34-03-strengthen-manual-merge-verdict-carry"
   epic: "epic/34-improve-convergence-and-tune-from-measured-outcomes"
   matched_by: "marker"
+  merged_into: "epic/34-improve-convergence-and-tune-from-measured-outcomes"
   pr: 169
   pr_branch: "ticket/T-34-03-merge-verdict-carry"
   reapable: true
@@ -1041,6 +1156,7 @@
   branch: "ticket/T-34-04-admit-distinct-agents-through-shared-acc"
   epic: "epic/34-improve-convergence-and-tune-from-measured-outcomes"
   matched_by: "marker"
+  merged_into: "epic/34-improve-convergence-and-tune-from-measured-outcomes"
   pr: 170
   pr_branch: "ticket/T-34-04-shared-capacity-and-dispatch-boundary"
   reapable: true
@@ -1048,9 +1164,11 @@
   url: "https://github.com/serhii-nochevnyi/shipyard/pull/170"
 "T-34-05":
   base: "epic/34-improve-convergence-and-tune-from-measured-outcomes"
-  base_reason: "T-34-04 is MERGED, so its branch is no longer where work lands — the base is epic/34-improve-convergence-and-tune-from-measured-outcomes (base-merge it in first to keep the review diff one slice)"
+  base_merge: "epic/34-improve-convergence-and-tune-from-measured-outcomes"
+  base_reason: "T-34-04 is MERGED, so its branch is no longer where work lands — the base is epic/34-improve-convergence-and-tune-from-measured-outcomes (base-merge it in first to keep the review diff one slice); ticket-worktree.sh create merges epic/34-improve-convergence-and-tune-from-measured-outcomes in for non-primary parent(s) T-34-01"
   branch: "ticket/T-34-05-publish-versioned-optimization-evidence"
   epic: "epic/34-improve-convergence-and-tune-from-measured-outcomes"
+  merged_into: "epic/34-improve-convergence-and-tune-from-measured-outcomes"
   pr: 171
   reapable: true
   status: "merged"
@@ -1060,6 +1178,7 @@
   base_reason: "no primary parent — a root ticket PRs into epic/35-gsd-and-shipyard-workflow-loop"
   branch: "ticket/T-35-01-deterministic-native-gsd-projection"
   epic: "epic/35-gsd-and-shipyard-workflow-loop"
+  merged_into: "epic/35-gsd-and-shipyard-workflow-loop"
   pr: 96
   reapable: true
   status: "merged"
@@ -1069,6 +1188,7 @@
   base_reason: "T-35-01 is MERGED, so its branch is no longer where work lands — the base is epic/35-gsd-and-shipyard-workflow-loop (base-merge it in first to keep the review diff one slice)"
   branch: "ticket/T-35-02-wire-synchronization-into-both-gsd-runti"
   epic: "epic/35-gsd-and-shipyard-workflow-loop"
+  merged_into: "epic/35-gsd-and-shipyard-workflow-loop"
   pr: 98
   reapable: true
   status: "merged"
@@ -1078,6 +1198,7 @@
   base_reason: "T-35-02 is MERGED, so its branch is no longer where work lands — the base is epic/35-gsd-and-shipyard-workflow-loop (base-merge it in first to keep the review diff one slice)"
   branch: "ticket/T-35-03-document-normalize-and-bootstrap-the-syn"
   epic: "epic/35-gsd-and-shipyard-workflow-loop"
+  merged_into: "epic/35-gsd-and-shipyard-workflow-loop"
   pr: 101
   reapable: true
   status: "merged"
@@ -1087,6 +1208,7 @@
   base_reason: "no primary parent — a root ticket PRs into epic/36-enforce-the-runtime-model-ladder"
   branch: "ticket/T-36-01-canonical-runtime-neutral-policy-and-res"
   epic: "epic/36-enforce-the-runtime-model-ladder"
+  merged_into: "epic/36-enforce-the-runtime-model-ladder"
   pr: 125
   reapable: true
   status: "merged"
@@ -1096,6 +1218,7 @@
   base_reason: "T-36-01 is MERGED, so its branch is no longer where work lands — the base is epic/36-enforce-the-runtime-model-ladder (base-merge it in first to keep the review diff one slice)"
   branch: "ticket/T-36-02-authoritative-configuration-bridge-and-o"
   epic: "epic/36-enforce-the-runtime-model-ladder"
+  merged_into: "epic/36-enforce-the-runtime-model-ladder"
   pr: 137
   reapable: true
   status: "merged"
@@ -1105,6 +1228,7 @@
   base_reason: "T-36-02 is MERGED, so its branch is no longer where work lands — the base is epic/36-enforce-the-runtime-model-ladder (base-merge it in first to keep the review diff one slice)"
   branch: "ticket/T-36-03-strict-codex-adapter-and-named-model-pal"
   epic: "epic/36-enforce-the-runtime-model-ladder"
+  merged_into: "epic/36-enforce-the-runtime-model-ladder"
   pr: 138
   reapable: true
   status: "merged"
@@ -1115,6 +1239,7 @@
   branch: "ticket/T-36-04-generate-and-validate-the-codex-bundle-w"
   epic: "epic/36-enforce-the-runtime-model-ladder"
   matched_by: "marker"
+  merged_into: "epic/36-enforce-the-runtime-model-ladder"
   pr: 139
   pr_branch: "ticket/T-36-04-generate-and-validate-the-complete-codex"
   reapable: true
@@ -1125,6 +1250,7 @@
   base_reason: "T-36-04 is MERGED, so its branch is no longer where work lands — the base is epic/36-enforce-the-runtime-model-ladder (base-merge it in first to keep the review diff one slice)"
   branch: "ticket/T-36-05-claude-adapter-and-explicit-workflow-lau"
   epic: "epic/36-enforce-the-runtime-model-ladder"
+  merged_into: "epic/36-enforce-the-runtime-model-ladder"
   pr: 140
   reapable: true
   status: "merged"
@@ -1134,6 +1260,7 @@
   base_reason: "T-36-05 is MERGED, so its branch is no longer where work lands — the base is epic/36-enforce-the-runtime-model-ladder (base-merge it in first to keep the review diff one slice)"
   branch: "ticket/T-36-06-route-gsd-decomposition-through-the-mand"
   epic: "epic/36-enforce-the-runtime-model-ladder"
+  merged_into: "epic/36-enforce-the-runtime-model-ladder"
   pr: 141
   reapable: true
   status: "merged"
@@ -1144,6 +1271,7 @@
   branch: "ticket/T-36-07-enforce-the-boundary-across-shipyard-del"
   epic: "epic/36-enforce-the-runtime-model-ladder"
   matched_by: "marker"
+  merged_into: "epic/36-enforce-the-runtime-model-ladder"
   pr: 142
   pr_branch: "ticket/T-36-07-enforce-the-boundary-across-shipyard-delivery-launches"
   reapable: true
@@ -1154,6 +1282,7 @@
   base_reason: "T-36-07 is MERGED, so its branch is no longer where work lands — the base is epic/36-enforce-the-runtime-model-ladder (base-merge it in first to keep the review diff one slice)"
   branch: "ticket/T-36-08-application-receipts-and-dispatch-record"
   epic: "epic/36-enforce-the-runtime-model-ladder"
+  merged_into: "epic/36-enforce-the-runtime-model-ladder"
   pr: 143
   reapable: true
   status: "merged"
@@ -1164,6 +1293,7 @@
   branch: "ticket/T-36-09-policy-aware-telemetry-and-reconciliatio"
   epic: "epic/36-enforce-the-runtime-model-ladder"
   matched_by: "marker"
+  merged_into: "epic/36-enforce-the-runtime-model-ladder"
   pr: 144
   pr_branch: "ticket/T-36-09-policy-aware-telemetry-and-reconciliation-reporting"
   reapable: true
@@ -1175,6 +1305,7 @@
   branch: "ticket/T-36-10-exhaustive-signal-matrix-and-negative-by"
   epic: "epic/36-enforce-the-runtime-model-ladder"
   matched_by: "marker"
+  merged_into: "epic/36-enforce-the-runtime-model-ladder"
   pr: 145
   pr_branch: "ticket/T-36-10-exhaustive-signal-matrix-and-negative-bypass-suite"
   reapable: true
@@ -1186,6 +1317,7 @@
   branch: "ticket/T-36-11-cross-runtime-generated-install-smoke-ve"
   epic: "epic/36-enforce-the-runtime-model-ladder"
   matched_by: "marker"
+  merged_into: "epic/36-enforce-the-runtime-model-ladder"
   pr: 146
   pr_branch: "ticket/T-36-11-cross-runtime-generated-install-smoke-verification"
   reapable: true
@@ -1196,6 +1328,7 @@
   base_reason: "T-36-10 is MERGED, so its branch is no longer where work lands — the base is epic/36-enforce-the-runtime-model-ladder (base-merge it in first to keep the review diff one slice)"
   branch: "ticket/T-36-12-supersede-obsolete-ladder-documentation"
   epic: "epic/36-enforce-the-runtime-model-ladder"
+  merged_into: "epic/36-enforce-the-runtime-model-ladder"
   pr: 147
   reapable: true
   status: "merged"
@@ -1205,6 +1338,7 @@
   base_reason: "no primary parent — a root ticket PRs into epic/37-autonomous-dual-runtime-control-plane"
   branch: "ticket/T-37-01-define-the-scoped-autonomous-run-contrac"
   epic: "epic/37-autonomous-dual-runtime-control-plane"
+  merged_into: "epic/37-autonomous-dual-runtime-control-plane"
   pr: 178
   reapable: true
   status: "merged"
@@ -1214,6 +1348,7 @@
   base_reason: "T-37-01 is MERGED, so its branch is no longer where work lands — the base is epic/37-autonomous-dual-runtime-control-plane (base-merge it in first to keep the review diff one slice)"
   branch: "ticket/T-37-02-persist-controller-leases-and-autonomous"
   epic: "epic/37-autonomous-dual-runtime-control-plane"
+  merged_into: "ticket/T-37-01-define-the-scoped-autonomous-run-contrac"
   pr: 179
   reapable: true
   status: "merged"
@@ -1224,6 +1359,7 @@
   branch: "ticket/T-37-03-connect-claude-code-to-the-scoped-runtim"
   epic: "epic/37-autonomous-dual-runtime-control-plane"
   matched_by: "marker"
+  merged_into: "ticket/T-37-02-persist-controller-leases-and-autonomous"
   pr: 180
   pr_branch: "ticket/T-37-03-connect-claude-to-scoped-runtime-controller"
   reapable: true
@@ -1235,6 +1371,7 @@
   branch: "ticket/T-37-04-connect-codex-to-the-scoped-runtime-cont"
   epic: "epic/37-autonomous-dual-runtime-control-plane"
   matched_by: "marker"
+  merged_into: "ticket/T-37-02-persist-controller-leases-and-autonomous"
   pr: 182
   pr_branch: "ticket/T-37-04-connect-codex-to-scoped-runtime-controller"
   reapable: true
@@ -1246,6 +1383,7 @@
   branch: "ticket/T-37-05-prove-graph-reachability-before-autonomo"
   epic: "epic/37-autonomous-dual-runtime-control-plane"
   matched_by: "marker"
+  merged_into: "ticket/T-37-02-persist-controller-leases-and-autonomous"
   pr: 181
   pr_branch: "ticket/T-37-05-prove-graph-reachability-before-autonomous-run"
   reapable: true
@@ -1256,15 +1394,18 @@
   base_reason: "T-37-05 is MERGED, so its branch is no longer where work lands — the base is epic/37-autonomous-dual-runtime-control-plane (base-merge it in first to keep the review diff one slice)"
   branch: "ticket/T-37-06-make-stop-and-wait-decisions-run-scoped"
   epic: "epic/37-autonomous-dual-runtime-control-plane"
+  merged_into: "ticket/T-37-05-prove-graph-reachability-before-autonomous-run"
   pr: 183
   reapable: true
   status: "merged"
   url: "https://github.com/serhii-nochevnyi/shipyard/pull/183"
 "T-37-07":
   base: "epic/37-autonomous-dual-runtime-control-plane"
-  base_reason: "T-37-03 is MERGED, so its branch is no longer where work lands — the base is epic/37-autonomous-dual-runtime-control-plane (base-merge it in first to keep the review diff one slice)"
+  base_merge: "epic/37-autonomous-dual-runtime-control-plane"
+  base_reason: "T-37-03 is MERGED, so its branch is no longer where work lands — the base is epic/37-autonomous-dual-runtime-control-plane (base-merge it in first to keep the review diff one slice); ticket-worktree.sh create merges epic/37-autonomous-dual-runtime-control-plane in for non-primary parent(s) T-37-04"
   branch: "ticket/T-37-07-join-runtime-receipts-with-usage-and-out"
   epic: "epic/37-autonomous-dual-runtime-control-plane"
+  merged_into: "ticket/T-37-03-connect-claude-to-scoped-runtime-controller"
   pr: 184
   reapable: true
   status: "merged"
@@ -1274,6 +1415,7 @@
   base_reason: "T-37-06 is MERGED, so its branch is no longer where work lands — the base is epic/37-autonomous-dual-runtime-control-plane (base-merge it in first to keep the review diff one slice)"
   branch: "ticket/T-37-08-roll-out-and-verify-the-autonomous-contr"
   epic: "epic/37-autonomous-dual-runtime-control-plane"
+  merged_into: "ticket/T-37-05-prove-graph-reachability-before-autonomous-run"
   pr: 185
   reapable: true
   status: "merged"
@@ -1283,6 +1425,7 @@
   base_reason: "no primary parent — a root ticket PRs into epic/38-runtime-model-ladder-recovery"
   branch: "ticket/T-38-01-pin-the-current-runtime-model-identifier"
   epic: "epic/38-runtime-model-ladder-recovery"
+  merged_into: "epic/38-runtime-model-ladder-recovery"
   pr: 190
   reapable: true
   status: "merged"
@@ -1292,6 +1435,7 @@
   base_reason: "T-38-01 is MERGED, so its branch is no longer where work lands — the base is epic/38-runtime-model-ladder-recovery (base-merge it in first to keep the review diff one slice)"
   branch: "ticket/T-38-02-prove-claude-model-and-effort-from-the-l"
   epic: "epic/38-runtime-model-ladder-recovery"
+  merged_into: "epic/38-runtime-model-ladder-recovery"
   pr: 191
   reapable: true
   status: "merged"
@@ -1301,10 +1445,10 @@
   base_reason: "T-38-02 is MERGED, so its branch is no longer where work lands — the base is epic/38-runtime-model-ladder-recovery (base-merge it in first to keep the review diff one slice)"
   branch: "ticket/T-38-03-connect-claude-delivery-and-investigatio"
   epic: "epic/38-runtime-model-ladder-recovery"
-  matched_by: "marker"
+  merged_into: "epic/38-runtime-model-ladder-recovery"
   pr: 195
-  pr_branch: "prep/T-38-03-impl"
   reapable: true
+  recorded_pr: 195
   status: "merged"
   url: "https://github.com/serhii-nochevnyi/shipyard/pull/195"
 "T-38-04":
@@ -1313,6 +1457,7 @@
   branch: "ticket/T-38-04-connect-codex-delivery-and-typed-gsd-dec"
   epic: "epic/38-runtime-model-ladder-recovery"
   matched_by: "marker"
+  merged_into: "epic/38-runtime-model-ladder-recovery"
   pr: 192
   pr_branch: "ticket/T-38-04-connect-codex-launches-to-delivery"
   reapable: true
@@ -1320,10 +1465,12 @@
   url: "https://github.com/serhii-nochevnyi/shipyard/pull/192"
 "T-38-05":
   base: "epic/38-runtime-model-ladder-recovery"
-  base_reason: "T-38-08 is MERGED, so its branch is no longer where work lands — the base is epic/38-runtime-model-ladder-recovery (base-merge it in first to keep the review diff one slice)"
+  base_merge: "epic/38-runtime-model-ladder-recovery"
+  base_reason: "T-38-08 is MERGED, so its branch is no longer where work lands — the base is epic/38-runtime-model-ladder-recovery (base-merge it in first to keep the review diff one slice); ticket-worktree.sh create merges epic/38-runtime-model-ladder-recovery in for non-primary parent(s) T-38-04, T-38-06, T-38-07"
   branch: "ticket/T-38-05-route-delivery-through-independent-runti"
   epic: "epic/38-runtime-model-ladder-recovery"
   matched_by: "marker"
+  merged_into: "epic/38-runtime-model-ladder-recovery"
   pr: 199
   pr_branch: "ticket/T-38-05-route-independent-runtime-rollouts"
   reapable: true
@@ -1334,6 +1481,7 @@
   base_reason: "T-38-02 is MERGED, so its branch is no longer where work lands — the base is epic/38-runtime-model-ladder-recovery (base-merge it in first to keep the review diff one slice)"
   branch: "ticket/T-38-06-apply-typed-claude-gsd-agents-to-decompo"
   epic: "epic/38-runtime-model-ladder-recovery"
+  merged_into: "epic/38-runtime-model-ladder-recovery"
   pr: 194
   reapable: true
   status: "merged"
@@ -1343,6 +1491,7 @@
   base_reason: "T-38-04 is MERGED, so its branch is no longer where work lands — the base is epic/38-runtime-model-ladder-recovery (base-merge it in first to keep the review diff one slice)"
   branch: "ticket/T-38-07-connect-claude-judgement-roles-through-t"
   epic: "epic/38-runtime-model-ladder-recovery"
+  merged_into: "epic/38-runtime-model-ladder-recovery"
   pr: 197
   reapable: true
   status: "merged"
@@ -1352,6 +1501,7 @@
   base_reason: "T-38-07 is MERGED, so its branch is no longer where work lands — the base is epic/38-runtime-model-ladder-recovery (base-merge it in first to keep the review diff one slice)"
   branch: "ticket/T-38-08-connect-claude-sentinel-through-authenti"
   epic: "epic/38-runtime-model-ladder-recovery"
+  merged_into: "epic/38-runtime-model-ladder-recovery"
   pr: 198
   reapable: true
   status: "merged"
@@ -1361,6 +1511,7 @@
   base_reason: "no primary parent — a root ticket PRs into epic/39-remove-conveyor-session-friction"
   branch: "ticket/T-39-01-add-shared-refusal-hints-to-claude-and-c"
   epic: "epic/39-remove-conveyor-session-friction"
+  merged_into: "epic/39-remove-conveyor-session-friction"
   pr: 206
   reapable: true
   status: "merged"
@@ -1370,6 +1521,7 @@
   base_reason: "no primary parent — a root ticket PRs into epic/39-remove-conveyor-session-friction"
   branch: "ticket/T-39-02-ship-the-adr-template-and-a-no-write-adr"
   epic: "epic/39-remove-conveyor-session-friction"
+  merged_into: "epic/39-remove-conveyor-session-friction"
   pr: 205
   reapable: true
   status: "merged"
@@ -1379,6 +1531,7 @@
   base_reason: "no primary parent — a root ticket PRs into epic/39-remove-conveyor-session-friction"
   branch: "ticket/T-39-03-enforce-the-stop-gate-only-in-deliver-ar"
   epic: "epic/39-remove-conveyor-session-friction"
+  merged_into: "epic/39-remove-conveyor-session-friction"
   pr: 207
   reapable: true
   status: "merged"
@@ -1388,6 +1541,7 @@
   base_reason: "no primary parent — a root ticket PRs into epic/39-remove-conveyor-session-friction"
   branch: "ticket/T-39-04-make-the-auto-route-hook-stdin-aware-wit"
   epic: "epic/39-remove-conveyor-session-friction"
+  merged_into: "epic/39-remove-conveyor-session-friction"
   pr: 208
   reapable: true
   status: "merged"
@@ -1397,6 +1551,7 @@
   base_reason: "no primary parent — a root ticket PRs into epic/39-remove-conveyor-session-friction"
   branch: "ticket/T-39-05-build-a-deterministic-jira-export-plan-a"
   epic: "epic/39-remove-conveyor-session-friction"
+  merged_into: "epic/39-remove-conveyor-session-friction"
   pr: 210
   reapable: true
   status: "merged"
@@ -1406,6 +1561,7 @@
   base_reason: "no primary parent — a root ticket PRs into epic/39-remove-conveyor-session-friction"
   branch: "ticket/T-39-06-warn-on-order-only-same-phase-dependenci"
   epic: "epic/39-remove-conveyor-session-friction"
+  merged_into: "epic/39-remove-conveyor-session-friction"
   pr: 211
   reapable: true
   status: "merged"
@@ -1415,6 +1571,7 @@
   base_reason: "no primary parent — a root ticket PRs into epic/39-remove-conveyor-session-friction"
   branch: "ticket/T-39-07-name-the-missing-config-and-its-creating"
   epic: "epic/39-remove-conveyor-session-friction"
+  merged_into: "epic/39-remove-conveyor-session-friction"
   pr: 209
   reapable: true
   status: "merged"
@@ -1424,6 +1581,7 @@
   base_reason: "no primary parent — a root ticket PRs into epic/39-remove-conveyor-session-friction"
   branch: "ticket/T-39-08-state-and-enforce-the-research-handback"
   epic: "epic/39-remove-conveyor-session-friction"
+  merged_into: "epic/39-remove-conveyor-session-friction"
   pr: 217
   reapable: true
   status: "merged"
@@ -1433,6 +1591,7 @@
   base_reason: "T-39-02 is MERGED, so its branch is no longer where work lands — the base is epic/39-remove-conveyor-session-friction (base-merge it in first to keep the review diff one slice)"
   branch: "ticket/T-39-09-bootstrap-a-minimal-gsd-project-from-an"
   epic: "epic/39-remove-conveyor-session-friction"
+  merged_into: "epic/39-remove-conveyor-session-friction"
   pr: 212
   reapable: true
   status: "merged"
@@ -1442,6 +1601,7 @@
   base_reason: "no primary parent — a root ticket PRs into epic/39-remove-conveyor-session-friction"
   branch: "ticket/T-39-10-update-decompose-prose-for-bootstrap-hin"
   epic: "epic/39-remove-conveyor-session-friction"
+  merged_into: "epic/39-remove-conveyor-session-friction"
   pr: 213
   reapable: true
   status: "merged"
@@ -1451,6 +1611,7 @@
   base_reason: "no primary parent — a root ticket PRs into epic/39-remove-conveyor-session-friction"
   branch: "ticket/T-39-11-update-investigate-prose-for-gate-1-adr"
   epic: "epic/39-remove-conveyor-session-friction"
+  merged_into: "epic/39-remove-conveyor-session-friction"
   pr: 216
   reapable: true
   status: "merged"
@@ -1460,6 +1621,7 @@
   base_reason: "no primary parent — a root ticket PRs into epic/39-remove-conveyor-session-friction"
   branch: "ticket/T-39-12-forward-the-declared-output-schema-to-ev"
   epic: "epic/39-remove-conveyor-session-friction"
+  merged_into: "epic/39-remove-conveyor-session-friction"
   pr: 204
   reapable: true
   status: "merged"
@@ -1469,6 +1631,7 @@
   base_reason: "no primary parent — a root ticket PRs into epic/39-remove-conveyor-session-friction"
   branch: "ticket/T-39-13-carry-the-adr-004-d8-legacy-lookup-and-f"
   epic: "epic/39-remove-conveyor-session-friction"
+  merged_into: "epic/39-remove-conveyor-session-friction"
   pr: 224
   reapable: true
   status: "merged"
@@ -1478,6 +1641,7 @@
   base_reason: "no primary parent — a root ticket PRs into epic/39-remove-conveyor-session-friction"
   branch: "ticket/T-39-14-make-the-integrator-and-sentinel-result"
   epic: "epic/39-remove-conveyor-session-friction"
+  merged_into: "epic/39-remove-conveyor-session-friction"
   pr: 229
   reapable: true
   status: "merged"
@@ -1487,6 +1651,7 @@
   base_reason: "no primary parent — a root ticket PRs into epic/39-remove-conveyor-session-friction"
   branch: "ticket/T-39-15-make-the-adr-bootstrap-produce-a-project"
   epic: "epic/39-remove-conveyor-session-friction"
+  merged_into: "epic/39-remove-conveyor-session-friction"
   pr: 227
   reapable: true
   status: "merged"
@@ -1496,6 +1661,7 @@
   base_reason: "T-39-14 is MERGED, so its branch is no longer where work lands — the base is epic/39-remove-conveyor-session-friction (base-merge it in first to keep the review diff one slice)"
   branch: "ticket/T-39-16-make-the-role-result-finding-contract-un"
   epic: "epic/39-remove-conveyor-session-friction"
+  merged_into: "epic/39-remove-conveyor-session-friction"
   pr: 232
   reapable: true
   status: "merged"
@@ -1505,6 +1671,7 @@
   base_reason: "T-39-16 is MERGED, so its branch is no longer where work lands — the base is epic/39-remove-conveyor-session-friction (base-merge it in first to keep the review diff one slice)"
   branch: "ticket/T-39-17-bound-role-packets-to-the-adrs-and-backl"
   epic: "epic/39-remove-conveyor-session-friction"
+  merged_into: "ticket/T-39-16-make-the-role-result-finding-contract-un"
   pr: 231
   reapable: true
   status: "merged"
@@ -1512,299 +1679,289 @@
 "T-40-01":
   base: "epic/40-build-delivery-seams-and-clean-target-project-prs"
   base_reason: "no primary parent — a root ticket PRs into epic/40-build-delivery-seams-and-clean-target-project-prs"
-  blocked_by: ["T-42-01","T-42-02","T-42-03"]
-  blocked_reasons: {"T-42-01":"cross-phase parent must land on main first (phase 42 epic still ahead)","T-42-02":"cross-phase parent must land on main first (phase 42 epic still ahead)","T-42-03":"cross-phase parent must land on main first (phase 42 epic still ahead)"}
   branch: "ticket/T-40-01-make-git-creating-unit-fixtures-hermetic"
   epic: "epic/40-build-delivery-seams-and-clean-target-project-prs"
-  pr: null
-  ready: false
-  reapable: false
-  status: "pending"
+  merged_into: "epic/40-build-delivery-seams-and-clean-target-project-prs"
+  pr: 290
+  reapable: true
+  status: "merged"
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/290"
 "T-40-03":
   base: "epic/40-build-delivery-seams-and-clean-target-project-prs"
   base_reason: "no primary parent — a root ticket PRs into epic/40-build-delivery-seams-and-clean-target-project-prs"
   branch: "ticket/T-40-03-match-tickets-to-prs-by-the-pr-number-re"
   epic: "epic/40-build-delivery-seams-and-clean-target-project-prs"
-  pr: null
-  ready: true
-  reapable: false
-  status: "pending"
+  merged_into: "epic/40-build-delivery-seams-and-clean-target-project-prs"
+  pr: 279
+  reapable: true
+  status: "merged"
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/279"
 "T-40-04":
   base: "epic/40-build-delivery-seams-and-clean-target-project-prs"
-  base_reason: "T-40-05 has no branch on the remote yet (status pending) — ticket/T-40-05-codex-tuning-writes-no-claude-only-keys is not a base that exists, so the base is epic/40-build-delivery-seams-and-clean-target-project-prs"
-  blocked_by: ["T-40-05"]
-  blocked_reasons: {"T-40-05":"parent has no branch yet (nothing to cascade from)"}
+  base_reason: "T-40-05 is MERGED, so its branch is no longer where work lands — the base is epic/40-build-delivery-seams-and-clean-target-project-prs (base-merge it in first to keep the review diff one slice)"
   branch: "ticket/T-40-04-name-the-config-fix-not-a-reinstall-when"
   epic: "epic/40-build-delivery-seams-and-clean-target-project-prs"
-  pr: null
-  ready: false
-  reapable: false
-  status: "pending"
+  merged_into: "epic/40-build-delivery-seams-and-clean-target-project-prs"
+  pr: 283
+  reapable: true
+  status: "merged"
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/283"
 "T-40-05":
   base: "epic/40-build-delivery-seams-and-clean-target-project-prs"
   base_reason: "no primary parent — a root ticket PRs into epic/40-build-delivery-seams-and-clean-target-project-prs"
   branch: "ticket/T-40-05-codex-tuning-writes-no-claude-only-keys"
   epic: "epic/40-build-delivery-seams-and-clean-target-project-prs"
-  pr: null
-  ready: true
-  reapable: false
-  status: "pending"
+  merged_into: "epic/40-build-delivery-seams-and-clean-target-project-prs"
+  pr: 280
+  reapable: true
+  status: "merged"
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/280"
 "T-40-06":
   base: "epic/40-build-delivery-seams-and-clean-target-project-prs"
   base_reason: "no primary parent — a root ticket PRs into epic/40-build-delivery-seams-and-clean-target-project-prs"
-  blocked_by: ["T-42-01"]
-  blocked_reasons: {"T-42-01":"cross-phase parent must land on main first (phase 42 epic still ahead)"}
   branch: "ticket/T-40-06-refresh-the-runtime-file-digest-pin-only"
   epic: "epic/40-build-delivery-seams-and-clean-target-project-prs"
-  pr: null
-  ready: false
-  reapable: false
-  status: "pending"
+  merged_into: "epic/40-build-delivery-seams-and-clean-target-project-prs"
+  pr: 288
+  reapable: true
+  status: "merged"
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/288"
 "T-40-07":
   base: "epic/40-build-delivery-seams-and-clean-target-project-prs"
   base_reason: "no primary parent — a root ticket PRs into epic/40-build-delivery-seams-and-clean-target-project-prs"
   branch: "ticket/T-40-07-add-the-scrubbed-boundary-fixture-captur"
   epic: "epic/40-build-delivery-seams-and-clean-target-project-prs"
-  pr: null
-  ready: true
-  reapable: false
-  status: "pending"
+  merged_into: "epic/40-build-delivery-seams-and-clean-target-project-prs"
+  pr: 281
+  reapable: true
+  status: "merged"
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/281"
 "T-40-08":
   base: "epic/40-build-delivery-seams-and-clean-target-project-prs"
-  base_reason: "T-40-07 has no branch on the remote yet (status pending) — ticket/T-40-07-add-the-scrubbed-boundary-fixture-captur is not a base that exists, so the base is epic/40-build-delivery-seams-and-clean-target-project-prs"
-  blocked_by: ["T-40-07"]
-  blocked_reasons: {"T-40-07":"parent has no branch yet (nothing to cascade from)"}
+  base_reason: "T-40-07 is MERGED, so its branch is no longer where work lands — the base is epic/40-build-delivery-seams-and-clean-target-project-prs (base-merge it in first to keep the review diff one slice)"
   branch: "ticket/T-40-08-capture-the-real-claude-stream-and-make"
   epic: "epic/40-build-delivery-seams-and-clean-target-project-prs"
-  pr: null
-  ready: false
-  reapable: false
-  status: "pending"
+  merged_into: "epic/40-build-delivery-seams-and-clean-target-project-prs"
+  pr: 296
+  reapable: true
+  status: "merged"
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/296"
 "T-40-09":
   base: "epic/40-build-delivery-seams-and-clean-target-project-prs"
-  base_reason: "T-40-11 has no branch on the remote yet (status pending) — ticket/T-40-11-let-the-codex-gsd-researcher-write-only is not a base that exists, so the base is epic/40-build-delivery-seams-and-clean-target-project-prs"
-  blocked_by: ["T-40-11","T-40-07","T-40-14","T-40-28","T-42-01","T-42-02","T-42-03"]
-  blocked_reasons: {"T-40-07":"parent has no branch yet (nothing to cascade from)","T-40-11":"parent has no branch yet (nothing to cascade from)","T-40-14":"parent has no branch yet (nothing to cascade from)","T-40-28":"parent has no branch yet (nothing to cascade from)","T-42-01":"cross-phase parent must land on main first (phase 42 epic still ahead)","T-42-02":"cross-phase parent must land on main first (phase 42 epic still ahead)","T-42-03":"cross-phase parent must land on main first (phase 42 epic still ahead)"}
+  base_merge: "epic/40-build-delivery-seams-and-clean-target-project-prs"
+  base_reason: "T-40-28 is MERGED, so its branch is no longer where work lands — the base is epic/40-build-delivery-seams-and-clean-target-project-prs (base-merge it in first to keep the review diff one slice); ticket-worktree.sh create merges epic/40-build-delivery-seams-and-clean-target-project-prs in for non-primary parent(s) T-40-11, T-40-07, T-40-14"
   branch: "ticket/T-40-09-pass-codex-child-tasks-by-host-owned-fil"
   epic: "epic/40-build-delivery-seams-and-clean-target-project-prs"
-  pr: null
-  ready: false
-  reapable: false
-  status: "pending"
+  merged_into: "epic/40-build-delivery-seams-and-clean-target-project-prs"
+  pr: 312
+  reapable: true
+  status: "merged"
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/312"
 "T-40-10":
   base: "epic/40-build-delivery-seams-and-clean-target-project-prs"
-  base_reason: "T-40-01 has no branch on the remote yet (status pending) — ticket/T-40-01-make-git-creating-unit-fixtures-hermetic is not a base that exists, so the base is epic/40-build-delivery-seams-and-clean-target-project-prs"
-  blocked_by: ["T-40-01"]
-  blocked_reasons: {"T-40-01":"parent has no branch yet (nothing to cascade from)"}
+  base_reason: "T-40-01 is MERGED, so its branch is no longer where work lands — the base is epic/40-build-delivery-seams-and-clean-target-project-prs (base-merge it in first to keep the review diff one slice)"
   branch: "ticket/T-40-10-extract-one-shared-sealer-for-research-r"
   epic: "epic/40-build-delivery-seams-and-clean-target-project-prs"
-  pr: null
-  ready: false
-  reapable: false
-  status: "pending"
+  merged_into: "epic/40-build-delivery-seams-and-clean-target-project-prs"
+  pr: 292
+  reapable: true
+  status: "merged"
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/292"
 "T-40-11":
   base: "epic/40-build-delivery-seams-and-clean-target-project-prs"
-  base_reason: "T-40-14 has no branch on the remote yet (status pending) — ticket/T-40-14-hosts-write-a-pid-ttl-in-flight-record-a is not a base that exists, so the base is epic/40-build-delivery-seams-and-clean-target-project-prs"
-  blocked_by: ["T-40-04","T-40-14"]
-  blocked_reasons: {"T-40-04":"parent has no branch yet (nothing to cascade from)","T-40-14":"parent has no branch yet (nothing to cascade from)"}
+  base_merge: "epic/40-build-delivery-seams-and-clean-target-project-prs"
+  base_reason: "T-40-14 is MERGED, so its branch is no longer where work lands — the base is epic/40-build-delivery-seams-and-clean-target-project-prs (base-merge it in first to keep the review diff one slice); ticket-worktree.sh create merges epic/40-build-delivery-seams-and-clean-target-project-prs in for non-primary parent(s) T-40-04"
   branch: "ticket/T-40-11-let-the-codex-gsd-researcher-write-only"
   epic: "epic/40-build-delivery-seams-and-clean-target-project-prs"
-  pr: null
-  ready: false
-  reapable: false
-  status: "pending"
+  merged_into: "epic/40-build-delivery-seams-and-clean-target-project-prs"
+  pr: 303
+  reapable: true
+  status: "merged"
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/303"
 "T-40-12":
   base: "epic/40-build-delivery-seams-and-clean-target-project-prs"
-  base_reason: "T-40-13 has no branch on the remote yet (status pending) — ticket/T-40-13-keep-sealed-research-lines-name-the-fail is not a base that exists, so the base is epic/40-build-delivery-seams-and-clean-target-project-prs"
-  blocked_by: ["T-40-13","T-42-01","T-42-02","T-42-03"]
-  blocked_reasons: {"T-40-13":"parent has no branch yet (nothing to cascade from)","T-42-01":"cross-phase parent must land on main first (phase 42 epic still ahead)","T-42-02":"cross-phase parent must land on main first (phase 42 epic still ahead)","T-42-03":"cross-phase parent must land on main first (phase 42 epic still ahead)"}
+  base_reason: "T-40-13 is MERGED, so its branch is no longer where work lands — the base is epic/40-build-delivery-seams-and-clean-target-project-prs (base-merge it in first to keep the review diff one slice)"
   branch: "ticket/T-40-12-add-the-codex-research-consumer-that-sea"
   epic: "epic/40-build-delivery-seams-and-clean-target-project-prs"
-  pr: null
-  ready: false
-  reapable: false
-  status: "pending"
+  merged_into: "epic/40-build-delivery-seams-and-clean-target-project-prs"
+  pr: 298
+  reapable: true
+  status: "merged"
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/298"
 "T-40-13":
   base: "epic/40-build-delivery-seams-and-clean-target-project-prs"
-  base_reason: "T-40-10 has no branch on the remote yet (status pending) — ticket/T-40-10-extract-one-shared-sealer-for-research-r is not a base that exists, so the base is epic/40-build-delivery-seams-and-clean-target-project-prs"
-  blocked_by: ["T-40-10"]
-  blocked_reasons: {"T-40-10":"parent has no branch yet (nothing to cascade from)"}
+  base_reason: "T-40-10 is MERGED, so its branch is no longer where work lands — the base is epic/40-build-delivery-seams-and-clean-target-project-prs (base-merge it in first to keep the review diff one slice)"
   branch: "ticket/T-40-13-keep-sealed-research-lines-name-the-fail"
   epic: "epic/40-build-delivery-seams-and-clean-target-project-prs"
-  pr: null
-  ready: false
-  reapable: false
-  status: "pending"
+  merged_into: "epic/40-build-delivery-seams-and-clean-target-project-prs"
+  pr: 297
+  reapable: true
+  status: "merged"
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/297"
 "T-40-14":
   base: "epic/40-build-delivery-seams-and-clean-target-project-prs"
-  base_reason: "T-40-12 has no branch on the remote yet (status pending) — ticket/T-40-12-add-the-codex-research-consumer-that-sea is not a base that exists, so the base is epic/40-build-delivery-seams-and-clean-target-project-prs"
-  blocked_by: ["T-40-12","T-42-01","T-42-02","T-42-03"]
-  blocked_reasons: {"T-40-12":"parent has no branch yet (nothing to cascade from)","T-42-01":"cross-phase parent must land on main first (phase 42 epic still ahead)","T-42-02":"cross-phase parent must land on main first (phase 42 epic still ahead)","T-42-03":"cross-phase parent must land on main first (phase 42 epic still ahead)"}
+  base_reason: "T-40-12 is MERGED, so its branch is no longer where work lands — the base is epic/40-build-delivery-seams-and-clean-target-project-prs (base-merge it in first to keep the review diff one slice)"
   branch: "ticket/T-40-14-hosts-write-a-pid-ttl-in-flight-record-a"
   epic: "epic/40-build-delivery-seams-and-clean-target-project-prs"
-  pr: null
-  ready: false
-  reapable: false
-  status: "pending"
+  merged_into: "epic/40-build-delivery-seams-and-clean-target-project-prs"
+  pr: 300
+  reapable: true
+  status: "merged"
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/300"
 "T-40-15":
   base: "epic/40-build-delivery-seams-and-clean-target-project-prs"
-  base_reason: "T-40-28 has no branch on the remote yet (status pending) — ticket/T-40-28-deliver-the-canonical-plan-to-sandboxed is not a base that exists, so the base is epic/40-build-delivery-seams-and-clean-target-project-prs"
-  blocked_by: ["T-40-28","T-40-14","T-40-17","T-40-16"]
-  blocked_reasons: {"T-40-14":"parent has no branch yet (nothing to cascade from)","T-40-16":"parent has no branch yet (nothing to cascade from)","T-40-17":"parent has no branch yet (nothing to cascade from)","T-40-28":"parent has no branch yet (nothing to cascade from)"}
+  base_merge: "epic/40-build-delivery-seams-and-clean-target-project-prs"
+  base_reason: "T-40-28 is MERGED, so its branch is no longer where work lands — the base is epic/40-build-delivery-seams-and-clean-target-project-prs (base-merge it in first to keep the review diff one slice); ticket-worktree.sh create merges epic/40-build-delivery-seams-and-clean-target-project-prs in for non-primary parent(s) T-40-14, T-40-17, T-40-16"
   branch: "ticket/T-40-15-add-deliver-dispatch-build-host-requests"
   epic: "epic/40-build-delivery-seams-and-clean-target-project-prs"
-  pr: null
-  ready: false
-  reapable: false
-  status: "pending"
+  merged_into: "epic/40-build-delivery-seams-and-clean-target-project-prs"
+  pr: 307
+  reapable: true
+  status: "merged"
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/307"
 "T-40-16":
   base: "epic/40-build-delivery-seams-and-clean-target-project-prs"
-  base_reason: "T-40-01 has no branch on the remote yet (status pending) — ticket/T-40-01-make-git-creating-unit-fixtures-hermetic is not a base that exists, so the base is epic/40-build-delivery-seams-and-clean-target-project-prs"
-  blocked_by: ["T-40-01"]
-  blocked_reasons: {"T-40-01":"parent has no branch yet (nothing to cascade from)"}
+  base_reason: "T-40-01 is MERGED, so its branch is no longer where work lands — the base is epic/40-build-delivery-seams-and-clean-target-project-prs (base-merge it in first to keep the review diff one slice)"
   branch: "ticket/T-40-16-add-the-sentinel-preflight-that-establis"
   epic: "epic/40-build-delivery-seams-and-clean-target-project-prs"
-  pr: null
-  ready: false
-  reapable: false
-  status: "pending"
+  merged_into: "epic/40-build-delivery-seams-and-clean-target-project-prs"
+  pr: 294
+  reapable: true
+  status: "merged"
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/294"
 "T-40-17":
   base: "epic/40-build-delivery-seams-and-clean-target-project-prs"
-  base_reason: "T-40-19 has no branch on the remote yet (status pending) — ticket/T-40-19-record-gate-verdicts-as-a-commit-status is not a base that exists, so the base is epic/40-build-delivery-seams-and-clean-target-project-prs"
-  blocked_by: ["T-40-19"]
-  blocked_reasons: {"T-40-19":"parent has no branch yet (nothing to cascade from)"}
+  base_reason: "T-40-19 is MERGED, so its branch is no longer where work lands — the base is epic/40-build-delivery-seams-and-clean-target-project-prs (base-merge it in first to keep the review diff one slice)"
   branch: "ticket/T-40-17-add-the-publish-time-pr-hygiene-gate-and"
   epic: "epic/40-build-delivery-seams-and-clean-target-project-prs"
-  pr: null
-  ready: false
-  reapable: false
-  status: "pending"
+  merged_into: "epic/40-build-delivery-seams-and-clean-target-project-prs"
+  pr: 284
+  reapable: true
+  status: "merged"
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/284"
 "T-40-18":
   base: "epic/40-build-delivery-seams-and-clean-target-project-prs"
-  base_reason: "T-40-17 has no branch on the remote yet (status pending) — ticket/T-40-17-add-the-publish-time-pr-hygiene-gate-and is not a base that exists, so the base is epic/40-build-delivery-seams-and-clean-target-project-prs"
-  blocked_by: ["T-40-17","T-42-01"]
-  blocked_reasons: {"T-40-17":"parent has no branch yet (nothing to cascade from)","T-42-01":"cross-phase parent must land on main first (phase 42 epic still ahead)"}
+  base_merge: "epic/40-build-delivery-seams-and-clean-target-project-prs"
+  base_reason: "T-40-14 is MERGED, so its branch is no longer where work lands — the base is epic/40-build-delivery-seams-and-clean-target-project-prs (base-merge it in first to keep the review diff one slice); ticket-worktree.sh create merges epic/40-build-delivery-seams-and-clean-target-project-prs in for non-primary parent(s) T-40-17"
   branch: "ticket/T-40-18-produce-clean-executor-pr-bodies-and-con"
   epic: "epic/40-build-delivery-seams-and-clean-target-project-prs"
-  pr: null
-  ready: false
-  reapable: false
-  status: "pending"
+  merged_into: "epic/40-build-delivery-seams-and-clean-target-project-prs"
+  pr: 285
+  reapable: true
+  status: "merged"
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/285"
 "T-40-19":
   base: "epic/40-build-delivery-seams-and-clean-target-project-prs"
-  base_reason: "T-40-03 has no branch on the remote yet (status pending) — ticket/T-40-03-match-tickets-to-prs-by-the-pr-number-re is not a base that exists, so the base is epic/40-build-delivery-seams-and-clean-target-project-prs"
-  blocked_by: ["T-40-03"]
-  blocked_reasons: {"T-40-03":"parent has no branch yet (nothing to cascade from)"}
+  base_reason: "T-40-03 is MERGED, so its branch is no longer where work lands — the base is epic/40-build-delivery-seams-and-clean-target-project-prs (base-merge it in first to keep the review diff one slice)"
   branch: "ticket/T-40-19-record-gate-verdicts-as-a-commit-status"
   epic: "epic/40-build-delivery-seams-and-clean-target-project-prs"
-  pr: null
-  ready: false
-  reapable: false
-  status: "pending"
+  merged_into: "epic/40-build-delivery-seams-and-clean-target-project-prs"
+  pr: 282
+  reapable: true
+  status: "merged"
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/282"
 "T-40-20":
   base: "epic/40-build-delivery-seams-and-clean-target-project-prs"
-  base_reason: "T-40-17 has no branch on the remote yet (status pending) — ticket/T-40-17-add-the-publish-time-pr-hygiene-gate-and is not a base that exists, so the base is epic/40-build-delivery-seams-and-clean-target-project-prs"
-  blocked_by: ["T-40-17"]
-  blocked_reasons: {"T-40-17":"parent has no branch yet (nothing to cascade from)"}
+  base_reason: "T-40-17 is MERGED, so its branch is no longer where work lands — the base is epic/40-build-delivery-seams-and-clean-target-project-prs (base-merge it in first to keep the review diff one slice)"
   branch: "ticket/T-40-20-generate-neutral-ticket-and-epic-branch"
   epic: "epic/40-build-delivery-seams-and-clean-target-project-prs"
-  pr: null
-  ready: false
-  reapable: false
-  status: "pending"
+  merged_into: "epic/40-build-delivery-seams-and-clean-target-project-prs"
+  pr: 286
+  reapable: true
+  status: "merged"
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/286"
 "T-40-21":
   base: "epic/40-build-delivery-seams-and-clean-target-project-prs"
-  base_reason: "T-40-05 has no branch on the remote yet (status pending) — ticket/T-40-05-codex-tuning-writes-no-claude-only-keys is not a base that exists, so the base is epic/40-build-delivery-seams-and-clean-target-project-prs"
-  blocked_by: ["T-40-05"]
-  blocked_reasons: {"T-40-05":"parent has no branch yet (nothing to cascade from)"}
+  base_reason: "T-40-05 is MERGED, so its branch is no longer where work lands — the base is epic/40-build-delivery-seams-and-clean-target-project-prs (base-merge it in first to keep the review diff one slice)"
   branch: "ticket/T-40-21-support-a-dogfood-install-root-with-reco"
   epic: "epic/40-build-delivery-seams-and-clean-target-project-prs"
-  pr: null
-  ready: false
-  reapable: false
-  status: "pending"
+  merged_into: "epic/40-build-delivery-seams-and-clean-target-project-prs"
+  pr: 291
+  reapable: true
+  status: "merged"
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/291"
 "T-40-22":
   base: "epic/40-build-delivery-seams-and-clean-target-project-prs"
-  base_reason: "T-40-14 has no branch on the remote yet (status pending) — ticket/T-40-14-hosts-write-a-pid-ttl-in-flight-record-a is not a base that exists, so the base is epic/40-build-delivery-seams-and-clean-target-project-prs"
-  blocked_by: ["T-40-21","T-40-16","T-40-14","T-40-19"]
-  blocked_reasons: {"T-40-14":"parent has no branch yet (nothing to cascade from)","T-40-16":"parent has no branch yet (nothing to cascade from)","T-40-19":"parent has no branch yet (nothing to cascade from)","T-40-21":"parent has no branch yet (nothing to cascade from)"}
+  base_merge: "epic/40-build-delivery-seams-and-clean-target-project-prs"
+  base_reason: "T-40-14 is MERGED, so its branch is no longer where work lands — the base is epic/40-build-delivery-seams-and-clean-target-project-prs (base-merge it in first to keep the review diff one slice); ticket-worktree.sh create merges epic/40-build-delivery-seams-and-clean-target-project-prs in for non-primary parent(s) T-40-21, T-40-16, T-40-19"
   branch: "ticket/T-40-22-stamp-every-dispatch-with-a-provenance-s"
   epic: "epic/40-build-delivery-seams-and-clean-target-project-prs"
-  pr: null
-  ready: false
-  reapable: false
-  status: "pending"
+  merged_into: "epic/40-build-delivery-seams-and-clean-target-project-prs"
+  pr: 304
+  reapable: true
+  status: "merged"
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/304"
 "T-40-23":
   base: "epic/40-build-delivery-seams-and-clean-target-project-prs"
-  base_reason: "T-40-15 has no branch on the remote yet (status pending) — ticket/T-40-15-add-deliver-dispatch-build-host-requests is not a base that exists, so the base is epic/40-build-delivery-seams-and-clean-target-project-prs"
-  blocked_by: ["T-40-15","T-40-17"]
-  blocked_reasons: {"T-40-15":"parent has no branch yet (nothing to cascade from)","T-40-17":"parent has no branch yet (nothing to cascade from)"}
+  base_merge: "epic/40-build-delivery-seams-and-clean-target-project-prs"
+  base_reason: "T-40-15 is MERGED, so its branch is no longer where work lands — the base is epic/40-build-delivery-seams-and-clean-target-project-prs (base-merge it in first to keep the review diff one slice); ticket-worktree.sh create merges epic/40-build-delivery-seams-and-clean-target-project-prs in for non-primary parent(s) T-40-17"
   branch: "ticket/T-40-23-run-one-live-round-per-runtime-on-an-in"
   epic: "epic/40-build-delivery-seams-and-clean-target-project-prs"
-  pr: null
-  ready: false
-  reapable: false
-  status: "pending"
+  merged_into: "epic/40-build-delivery-seams-and-clean-target-project-prs"
+  pr: 308
+  reapable: true
+  status: "merged"
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/308"
 "T-40-24":
   base: "epic/40-build-delivery-seams-and-clean-target-project-prs"
-  base_reason: "T-40-15 has no branch on the remote yet (status pending) — ticket/T-40-15-add-deliver-dispatch-build-host-requests is not a base that exists, so the base is epic/40-build-delivery-seams-and-clean-target-project-prs"
-  blocked_by: ["T-40-15","T-40-17","T-40-16"]
-  blocked_reasons: {"T-40-15":"parent has no branch yet (nothing to cascade from)","T-40-16":"parent has no branch yet (nothing to cascade from)","T-40-17":"parent has no branch yet (nothing to cascade from)"}
+  base_merge: "epic/40-build-delivery-seams-and-clean-target-project-prs"
+  base_reason: "T-40-15 is MERGED, so its branch is no longer where work lands — the base is epic/40-build-delivery-seams-and-clean-target-project-prs (base-merge it in first to keep the review diff one slice); ticket-worktree.sh create merges epic/40-build-delivery-seams-and-clean-target-project-prs in for non-primary parent(s) T-40-17, T-40-16"
   branch: "ticket/T-40-24-rewrite-deliver-md-around-the-dispatch-e"
   epic: "epic/40-build-delivery-seams-and-clean-target-project-prs"
-  pr: null
-  ready: false
-  reapable: false
-  status: "pending"
+  merged_into: "epic/40-build-delivery-seams-and-clean-target-project-prs"
+  pr: 310
+  reapable: true
+  status: "merged"
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/310"
 "T-40-25":
   base: "epic/40-build-delivery-seams-and-clean-target-project-prs"
-  base_reason: "T-40-12 has no branch on the remote yet (status pending) — ticket/T-40-12-add-the-codex-research-consumer-that-sea is not a base that exists, so the base is epic/40-build-delivery-seams-and-clean-target-project-prs"
-  blocked_by: ["T-40-12","T-40-17"]
-  blocked_reasons: {"T-40-12":"parent has no branch yet (nothing to cascade from)","T-40-17":"parent has no branch yet (nothing to cascade from)"}
+  base_merge: "epic/40-build-delivery-seams-and-clean-target-project-prs"
+  base_reason: "T-40-12 is MERGED, so its branch is no longer where work lands — the base is epic/40-build-delivery-seams-and-clean-target-project-prs (base-merge it in first to keep the review diff one slice); ticket-worktree.sh create merges epic/40-build-delivery-seams-and-clean-target-project-prs in for non-primary parent(s) T-40-17"
   branch: "ticket/T-40-25-update-investigate-and-decompose-prose-f"
   epic: "epic/40-build-delivery-seams-and-clean-target-project-prs"
-  pr: null
-  ready: false
-  reapable: false
-  status: "pending"
+  merged_into: "epic/40-build-delivery-seams-and-clean-target-project-prs"
+  pr: 299
+  reapable: true
+  status: "merged"
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/299"
 "T-40-26":
   base: "epic/40-build-delivery-seams-and-clean-target-project-prs"
-  base_reason: "T-40-23 has no branch on the remote yet (status pending) — ticket/T-40-23-run-one-live-round-per-runtime-on-an-in is not a base that exists, so the base is epic/40-build-delivery-seams-and-clean-target-project-prs"
-  blocked_by: ["T-40-23","T-40-07"]
-  blocked_reasons: {"T-40-07":"parent has no branch yet (nothing to cascade from)","T-40-23":"parent has no branch yet (nothing to cascade from)"}
+  base_merge: "epic/40-build-delivery-seams-and-clean-target-project-prs"
+  base_reason: "T-40-23 is MERGED, so its branch is no longer where work lands — the base is epic/40-build-delivery-seams-and-clean-target-project-prs (base-merge it in first to keep the review diff one slice); ticket-worktree.sh create merges epic/40-build-delivery-seams-and-clean-target-project-prs in for non-primary parent(s) T-40-07"
   branch: "ticket/T-40-26-expose-capture-live-release-digest-refre"
   epic: "epic/40-build-delivery-seams-and-clean-target-project-prs"
-  pr: null
-  ready: false
-  reapable: false
-  status: "pending"
+  merged_into: "epic/40-build-delivery-seams-and-clean-target-project-prs"
+  pr: 309
+  reapable: true
+  status: "merged"
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/309"
 "T-40-27":
   base: "epic/40-build-delivery-seams-and-clean-target-project-prs"
-  base_reason: "T-40-18 has no branch on the remote yet (status pending) — ticket/T-40-18-produce-clean-executor-pr-bodies-and-con is not a base that exists, so the base is epic/40-build-delivery-seams-and-clean-target-project-prs"
-  blocked_by: ["T-40-18","T-42-01"]
-  blocked_reasons: {"T-40-18":"parent has no branch yet (nothing to cascade from)","T-42-01":"cross-phase parent must land on main first (phase 42 epic still ahead)"}
+  base_reason: "T-40-18 is MERGED, so its branch is no longer where work lands — the base is epic/40-build-delivery-seams-and-clean-target-project-prs (base-merge it in first to keep the review diff one slice)"
   branch: "ticket/T-40-27-a-diamond-child-is-ready-only-when-its-n"
   epic: "epic/40-build-delivery-seams-and-clean-target-project-prs"
-  pr: null
-  ready: false
-  reapable: false
-  status: "pending"
+  merged_into: "epic/40-build-delivery-seams-and-clean-target-project-prs"
+  pr: 289
+  reapable: true
+  status: "merged"
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/289"
 "T-40-28":
   base: "epic/40-build-delivery-seams-and-clean-target-project-prs"
-  base_reason: "T-40-14 has no branch on the remote yet (status pending) — ticket/T-40-14-hosts-write-a-pid-ttl-in-flight-record-a is not a base that exists, so the base is epic/40-build-delivery-seams-and-clean-target-project-prs"
-  blocked_by: ["T-40-14","T-42-02","T-42-03"]
-  blocked_reasons: {"T-40-14":"parent has no branch yet (nothing to cascade from)","T-42-02":"cross-phase parent must land on main first (phase 42 epic still ahead)","T-42-03":"cross-phase parent must land on main first (phase 42 epic still ahead)"}
+  base_merge: "epic/40-build-delivery-seams-and-clean-target-project-prs"
+  base_reason: "T-40-18 is MERGED, so its branch is no longer where work lands — the base is epic/40-build-delivery-seams-and-clean-target-project-prs (base-merge it in first to keep the review diff one slice); ticket-worktree.sh create merges epic/40-build-delivery-seams-and-clean-target-project-prs in for non-primary parent(s) T-40-14"
   branch: "ticket/T-40-28-deliver-the-canonical-plan-to-sandboxed"
   epic: "epic/40-build-delivery-seams-and-clean-target-project-prs"
-  pr: null
-  ready: false
-  reapable: false
-  status: "pending"
+  merged_into: "epic/40-build-delivery-seams-and-clean-target-project-prs"
+  pr: 305
+  reapable: true
+  status: "merged"
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/305"
 "T-41-01":
   base: "epic/41-reduce-pipeline-subscription-overhead"
   base_reason: "no primary parent — a root ticket PRs into epic/41-reduce-pipeline-subscription-overhead"
   branch: "ticket/T-41-01-measure-bounded-judgment-launches-and-pr"
   epic: "epic/41-reduce-pipeline-subscription-overhead"
+  merged_into: "epic/41-reduce-pipeline-subscription-overhead"
   pr: 244
   reapable: true
   status: "merged"
@@ -1814,6 +1971,7 @@
   base_reason: "no primary parent — a root ticket PRs into epic/41-reduce-pipeline-subscription-overhead"
   branch: "ticket/T-41-02-carry-bounded-durable-handoff-evidence-a"
   epic: "epic/41-reduce-pipeline-subscription-overhead"
+  merged_into: "epic/41-reduce-pipeline-subscription-overhead"
   pr: 237
   reapable: true
   status: "merged"
@@ -1823,6 +1981,7 @@
   base_reason: "no primary parent — a root ticket PRs into epic/41-reduce-pipeline-subscription-overhead"
   branch: "ticket/T-41-03-prove-installed-owner-scoped-stop-and-wa"
   epic: "epic/41-reduce-pipeline-subscription-overhead"
+  merged_into: "epic/41-reduce-pipeline-subscription-overhead"
   pr: 238
   reapable: true
   status: "merged"
@@ -1833,6 +1992,7 @@
   branch: "ticket/T-41-04-accept-asynchronous-native-child-complet"
   epic: "epic/41-reduce-pipeline-subscription-overhead"
   matched_by: "marker"
+  merged_into: "epic/41-reduce-pipeline-subscription-overhead"
   pr: 246
   pr_branch: "ticket/T-41-04-resume-authenticated-completed-execution"
   reapable: true
@@ -1843,6 +2003,7 @@
   base_reason: "no primary parent — a root ticket PRs into epic/41-reduce-pipeline-subscription-overhead"
   branch: "ticket/T-41-05-fingerprint-each-gsd-projection-from-its"
   epic: "epic/41-reduce-pipeline-subscription-overhead"
+  merged_into: "epic/41-reduce-pipeline-subscription-overhead"
   pr: 240
   reapable: true
   status: "merged"
@@ -1852,6 +2013,7 @@
   base_reason: "no primary parent — a root ticket PRs into epic/41-reduce-pipeline-subscription-overhead"
   branch: "ticket/T-41-06-join-deduplicated-usage-and-recovery-cos"
   epic: "epic/41-reduce-pipeline-subscription-overhead"
+  merged_into: "epic/41-reduce-pipeline-subscription-overhead"
   pr: 241
   reapable: true
   status: "merged"
@@ -1861,6 +2023,7 @@
   base_reason: "no primary parent — a root ticket PRs into epic/41-reduce-pipeline-subscription-overhead"
   branch: "ticket/T-41-07-gate-phase-integration-on-the-complete-m"
   epic: "epic/41-reduce-pipeline-subscription-overhead"
+  merged_into: "epic/41-reduce-pipeline-subscription-overhead"
   pr: 235
   reapable: true
   status: "merged"
@@ -1870,6 +2033,7 @@
   base_reason: "no primary parent — a root ticket PRs into epic/41-reduce-pipeline-subscription-overhead"
   branch: "ticket/T-41-08-unblock-pushes-header-free-state-yaml-an"
   epic: "epic/41-reduce-pipeline-subscription-overhead"
+  merged_into: "epic/41-reduce-pipeline-subscription-overhead"
   pr: 236
   reapable: true
   status: "merged"
@@ -1879,6 +2043,7 @@
   base_reason: "T-41-01 is MERGED, so its branch is no longer where work lands — the base is epic/41-reduce-pipeline-subscription-overhead (base-merge it in first to keep the review diff one slice)"
   branch: "ticket/T-41-09-align-first-response-usage-with-the-usag"
   epic: "epic/41-reduce-pipeline-subscription-overhead"
+  merged_into: "epic/41-reduce-pipeline-subscription-overhead"
   pr: 250
   reapable: true
   status: "merged"
@@ -1888,6 +2053,7 @@
   base_reason: "no primary parent — a root ticket PRs into epic/42-resume-trusted-finalization-without-executor-replay"
   branch: "ticket/T-42-01-resume-authenticated-completed-execution"
   epic: "epic/42-resume-trusted-finalization-without-executor-replay"
+  merged_into: "epic/42-resume-trusted-finalization-without-executor-replay"
   pr: 255
   reapable: true
   status: "merged"
@@ -1897,6 +2063,7 @@
   base_reason: "T-42-01 is MERGED, so its branch is no longer where work lands — the base is epic/42-resume-trusted-finalization-without-executor-replay (base-merge it in first to keep the review diff one slice)"
   branch: "ticket/T-42-02-deny-the-host-state-root-and-finalizatio"
   epic: "epic/42-resume-trusted-finalization-without-executor-replay"
+  merged_into: "epic/42-resume-trusted-finalization-without-executor-replay"
   pr: 270
   reapable: true
   status: "merged"
@@ -1906,6 +2073,7 @@
   base_reason: "T-42-02 is MERGED, so its branch is no longer where work lands — the base is epic/42-resume-trusted-finalization-without-executor-replay (base-merge it in first to keep the review diff one slice)"
   branch: "ticket/T-42-03-accept-bash-and-make-in-plan-pinned-veri"
   epic: "epic/42-resume-trusted-finalization-without-executor-replay"
+  merged_into: "epic/42-resume-trusted-finalization-without-executor-replay"
   pr: 274
   reapable: true
   status: "merged"
@@ -1913,76 +2081,80 @@
 "T-43-01":
   base: "epic/43-target-project-delivery-at-scale"
   base_reason: "no primary parent — a root ticket PRs into epic/43-target-project-delivery-at-scale"
-  blocked_by: ["T-40-17"]
-  blocked_reasons: {"T-40-17":"cross-phase parent must be MERGED and its phase 40 epic landed on main first (parent is pending)"}
   branch: "ticket/T-43-01-register-per-repository-config-keys-for"
   epic: "epic/43-target-project-delivery-at-scale"
-  pr: null
-  ready: false
-  reapable: false
-  status: "pending"
+  merged_into: "epic/43-target-project-delivery-at-scale"
+  pr: 323
+  reapable: true
+  status: "merged"
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/323"
 "T-43-02":
   base: "epic/43-target-project-delivery-at-scale"
   base_reason: "no primary parent — a root ticket PRs into epic/43-target-project-delivery-at-scale"
   branch: "ticket/T-43-02-resolve-the-publish-gate-base-from-the-r"
   epic: "epic/43-target-project-delivery-at-scale"
+  merged_into: "epic/43-target-project-delivery-at-scale"
   pr: 264
   reapable: true
   status: "merged"
   url: "https://github.com/serhii-nochevnyi/shipyard/pull/264"
 "T-43-03":
   base: "epic/43-target-project-delivery-at-scale"
-  base_reason: "T-43-01 has no branch on the remote yet (status pending) — ticket/T-43-01-register-per-repository-config-keys-for is not a base that exists, so the base is epic/43-target-project-delivery-at-scale"
-  blocked_by: ["T-43-01"]
-  blocked_reasons: {"T-43-01":"parent has no branch yet (nothing to cascade from)"}
+  base_merge: "epic/43-target-project-delivery-at-scale"
+  base_reason: "T-43-01 is MERGED, so its branch is no longer where work lands — the base is epic/43-target-project-delivery-at-scale (base-merge it in first to keep the review diff one slice); ticket-worktree.sh create merges epic/43-target-project-delivery-at-scale in for non-primary parent(s) T-43-02"
   branch: "ticket/T-43-03-allow-configured-per-repository-comment"
   epic: "epic/43-target-project-delivery-at-scale"
-  pr: null
-  ready: false
-  reapable: false
-  status: "pending"
+  merged_into: "epic/43-target-project-delivery-at-scale"
+  pr: 338
+  reapable: true
+  status: "merged"
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/338"
 "T-43-04":
   base: "ticket/T-43-07-cancelled-checks-ignore-superseded-runs"
   base_reason: "T-43-07 is pr-open — cascade off ticket/T-43-07-cancelled-checks-ignore-superseded-runs; the sentinel retargets this PR onto epic/43-target-project-delivery-at-scale when T-43-07 lands"
-  blocked_by: ["T-40-19","T-40-22"]
-  blocked_reasons: {"T-40-19":"cross-phase parent must be MERGED and its phase 40 epic landed on main first (parent is pending)","T-40-22":"cross-phase parent must be MERGED and its phase 40 epic landed on main first (parent is pending)"}
+  behind_by: 43
   branch: "ticket/T-43-04-bounded-reachability-o-1-git-forms-a-lar"
+  checks: {"failing":0,"none_reported":false,"pending":0,"total":1,"unavailable":false}
+  draft: false
   epic: "epic/43-target-project-delivery-at-scale"
-  pr: null
-  ready: false
+  head_sha: "6e467fa671521381deb4c51910ffb3de35e7b5fb"
+  merge_scope: "stacked"
+  merge_state: "CLEAN"
+  pr: 319
+  pr_base: "ticket/T-43-07-cancelled-checks-ignore-superseded-runs"
+  pr_created_at: "2026-09-27T17:30:45Z"
   reapable: false
-  status: "pending"
+  review_decision: null
+  status: "pr-open"
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/319"
 "T-43-05":
   base: "epic/43-target-project-delivery-at-scale"
   base_reason: "no primary parent — a root ticket PRs into epic/43-target-project-delivery-at-scale"
-  blocked_by: ["T-40-18"]
-  blocked_reasons: {"T-40-18":"cross-phase parent must be MERGED and its phase 40 epic landed on main first (parent is pending)"}
   branch: "ticket/T-43-05-keep-an-arch-review-finding-of-unknown-t"
   epic: "epic/43-target-project-delivery-at-scale"
-  pr: null
-  ready: false
-  reapable: false
-  status: "pending"
+  merged_into: "epic/43-target-project-delivery-at-scale"
+  pr: 328
+  reapable: true
+  status: "merged"
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/328"
 "T-43-06":
   base: "epic/43-target-project-delivery-at-scale"
-  base_reason: "T-43-05 has no branch on the remote yet (status pending) — ticket/T-43-05-keep-an-arch-review-finding-of-unknown-t is not a base that exists, so the base is epic/43-target-project-delivery-at-scale"
-  blocked_by: ["T-43-05","T-40-16","T-40-22","T-42-01","T-40-18","T-40-27","T-40-12","T-40-14","T-40-28","T-40-01","T-40-09","T-42-03"]
-  blocked_reasons: {"T-40-01":"cross-phase parent must be MERGED and its phase 40 epic landed on main first (parent is pending)","T-40-09":"cross-phase parent must be MERGED and its phase 40 epic landed on main first (parent is pending)","T-40-12":"cross-phase parent must be MERGED and its phase 40 epic landed on main first (parent is pending)","T-40-14":"cross-phase parent must be MERGED and its phase 40 epic landed on main first (parent is pending)","T-40-16":"cross-phase parent must be MERGED and its phase 40 epic landed on main first (parent is pending)","T-40-18":"cross-phase parent must be MERGED and its phase 40 epic landed on main first (parent is pending)","T-40-22":"cross-phase parent must be MERGED and its phase 40 epic landed on main first (parent is pending)","T-40-27":"cross-phase parent must be MERGED and its phase 40 epic landed on main first (parent is pending)","T-40-28":"cross-phase parent must be MERGED and its phase 40 epic landed on main first (parent is pending)","T-42-01":"cross-phase parent must land on main first (phase 42 epic still ahead)","T-42-03":"cross-phase parent must land on main first (phase 42 epic still ahead)","T-43-05":"parent has no branch yet (nothing to cascade from)"}
+  base_reason: "T-43-05 is MERGED, so its branch is no longer where work lands — the base is epic/43-target-project-delivery-at-scale (base-merge it in first to keep the review diff one slice)"
   branch: "ticket/T-43-06-one-exported-conveyor-scratch-set-for-th"
   epic: "epic/43-target-project-delivery-at-scale"
   pr: null
-  ready: false
+  ready: true
   reapable: false
   status: "pending"
 "T-43-07":
   base: "epic/43-target-project-delivery-at-scale"
   base_reason: "no primary parent — a root ticket PRs into epic/43-target-project-delivery-at-scale"
-  behind_by: 0
+  behind_by: 2
   branch: "ticket/T-43-07-cancelled-checks-ignore-superseded-runs"
   checks: {"failing":0,"none_reported":false,"pending":0,"total":1,"unavailable":false}
-  draft: false
+  draft: true
   epic: "epic/43-target-project-delivery-at-scale"
-  head_sha: "be0084a28263bd59e04ef1902faccc888fb77f75"
+  head_sha: "fef7d105eaf6614575117c88a4224932a3253911"
   merge_scope: "stacked"
   merge_state: "CLEAN"
   pr: 266
@@ -1993,10 +2165,10 @@
   status: "pr-open"
   url: "https://github.com/serhii-nochevnyi/shipyard/pull/266"
 "T-43-08":
-  base: "epic/43-target-project-delivery-at-scale"
-  base_reason: "T-43-04 has no branch on the remote yet (status pending) — ticket/T-43-04-bounded-reachability-o-1-git-forms-a-lar is not a base that exists, so the base is epic/43-target-project-delivery-at-scale"
-  blocked_by: ["T-43-04","T-43-01","T-40-19","T-40-22"]
-  blocked_reasons: {"T-40-19":"cross-phase parent must be MERGED and its phase 40 epic landed on main first (parent is pending)","T-40-22":"cross-phase parent must be MERGED and its phase 40 epic landed on main first (parent is pending)","T-43-01":"parent has no branch yet (nothing to cascade from)","T-43-04":"parent has no branch yet (nothing to cascade from)"}
+  base: "ticket/T-43-04-bounded-reachability-o-1-git-forms-a-lar"
+  base_reason: "T-43-04 is pr-open — cascade off ticket/T-43-04-bounded-reachability-o-1-git-forms-a-lar; the sentinel retargets this PR onto epic/43-target-project-delivery-at-scale when T-43-04 lands"
+  blocked_by: ["T-43-07"]
+  blocked_reasons: {"T-43-07":"non-primary parent T-43-07 is pr-open — T-43-08's worktree is cut from T-43-04 and receives T-43-07 only through epic/43-target-project-delivery-at-scale; T-43-07 must merge into epic/43-target-project-delivery-at-scale first (T-43-07 is pr-open)"}
   branch: "ticket/T-43-08-a-stale-approval-from-a-declared-bot-doe"
   epic: "epic/43-target-project-delivery-at-scale"
   pr: null
@@ -2006,41 +2178,55 @@
 "T-43-09":
   base: "epic/43-target-project-delivery-at-scale"
   base_reason: "no primary parent — a root ticket PRs into epic/43-target-project-delivery-at-scale"
-  blocked_by: ["T-40-03","T-40-19","T-40-27"]
-  blocked_reasons: {"T-40-03":"cross-phase parent must be MERGED and its phase 40 epic landed on main first (parent is pending)","T-40-19":"cross-phase parent must be MERGED and its phase 40 epic landed on main first (parent is pending)","T-40-27":"cross-phase parent must be MERGED and its phase 40 epic landed on main first (parent is pending)"}
   branch: "ticket/T-43-09-state-sync-lists-prs-by-ticket-head-and"
   epic: "epic/43-target-project-delivery-at-scale"
-  pr: null
-  ready: false
-  reapable: false
-  status: "pending"
+  merged_into: "epic/43-target-project-delivery-at-scale"
+  pr: 326
+  reapable: true
+  status: "merged"
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/326"
 "T-43-10":
   base: "epic/43-target-project-delivery-at-scale"
-  base_reason: "T-43-09 has no branch on the remote yet (status pending) — ticket/T-43-09-state-sync-lists-prs-by-ticket-head-and is not a base that exists, so the base is epic/43-target-project-delivery-at-scale"
-  blocked_by: ["T-43-09","T-43-01","T-40-17","T-40-03","T-40-19","T-40-27"]
-  blocked_reasons: {"T-40-03":"cross-phase parent must be MERGED and its phase 40 epic landed on main first (parent is pending)","T-40-17":"cross-phase parent must be MERGED and its phase 40 epic landed on main first (parent is pending)","T-40-19":"cross-phase parent must be MERGED and its phase 40 epic landed on main first (parent is pending)","T-40-27":"cross-phase parent must be MERGED and its phase 40 epic landed on main first (parent is pending)","T-43-01":"parent has no branch yet (nothing to cascade from)","T-43-09":"parent has no branch yet (nothing to cascade from)"}
+  base_merge: "epic/43-target-project-delivery-at-scale"
+  base_reason: "T-43-09 is MERGED, so its branch is no longer where work lands — the base is epic/43-target-project-delivery-at-scale (base-merge it in first to keep the review diff one slice); ticket-worktree.sh create merges epic/43-target-project-delivery-at-scale in for non-primary parent(s) T-43-01"
+  behind_by: 1
   branch: "ticket/T-43-10-honour-pipeline-gsd-sync-as-a-deprecated"
+  checks: {"failing":0,"none_reported":false,"pending":0,"total":1,"unavailable":false}
+  draft: true
   epic: "epic/43-target-project-delivery-at-scale"
-  pr: null
-  ready: false
+  head_sha: "244c3351843e40822bef4349acc140cc9ce19c1d"
+  merge_scope: "stacked"
+  merge_state: "CLEAN"
+  pr: 346
+  pr_base: "epic/43-target-project-delivery-at-scale"
+  pr_created_at: "2026-09-28T11:20:59Z"
   reapable: false
-  status: "pending"
+  review_decision: null
+  status: "pr-open"
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/346"
 "T-43-11":
   base: "epic/43-target-project-delivery-at-scale"
   base_reason: "no primary parent — a root ticket PRs into epic/43-target-project-delivery-at-scale"
-  blocked_by: ["T-40-25"]
-  blocked_reasons: {"T-40-25":"cross-phase parent must be MERGED and its phase 40 epic landed on main first (parent is pending)"}
+  behind_by: 1
   branch: "ticket/T-43-11-bind-pre-existing-jira-issues-by-recorde"
+  checks: {"failing":0,"none_reported":false,"pending":0,"total":1,"unavailable":false}
+  draft: true
   epic: "epic/43-target-project-delivery-at-scale"
-  pr: null
-  ready: false
+  head_sha: "105759c579945cff51ba111023132fc24126a592"
+  merge_scope: "stacked"
+  merge_state: "UNKNOWN"
+  pr: 334
+  pr_base: "epic/43-target-project-delivery-at-scale"
+  pr_created_at: "2026-09-28T08:08:04Z"
   reapable: false
-  status: "pending"
+  review_decision: null
+  status: "pr-open"
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/334"
 "T-43-12":
   base: "epic/43-target-project-delivery-at-scale"
   base_reason: "T-43-08 has no branch on the remote yet (status pending) — ticket/T-43-08-a-stale-approval-from-a-declared-bot-doe is not a base that exists, so the base is epic/43-target-project-delivery-at-scale"
-  blocked_by: ["T-43-08","T-43-11","T-40-19","T-40-22","T-40-20","T-40-03","T-40-25"]
-  blocked_reasons: {"T-40-03":"cross-phase parent must be MERGED and its phase 40 epic landed on main first (parent is pending)","T-40-19":"cross-phase parent must be MERGED and its phase 40 epic landed on main first (parent is pending)","T-40-20":"cross-phase parent must be MERGED and its phase 40 epic landed on main first (parent is pending)","T-40-22":"cross-phase parent must be MERGED and its phase 40 epic landed on main first (parent is pending)","T-40-25":"cross-phase parent must be MERGED and its phase 40 epic landed on main first (parent is pending)","T-43-08":"parent has no branch yet (nothing to cascade from)","T-43-11":"parent has no branch yet (nothing to cascade from)"}
+  blocked_by: ["T-43-08","T-43-11"]
+  blocked_reasons: {"T-43-08":"parent has no branch yet (nothing to cascade from)","T-43-11":"non-primary parent T-43-11 is pr-open — T-43-12's worktree is cut from T-43-08 and receives T-43-11 only through epic/43-target-project-delivery-at-scale; T-43-11 must merge into epic/43-target-project-delivery-at-scale first (T-43-11 is pr-open)"}
   branch: "ticket/T-43-12-human-checkpoint-takes-review-or-merge-t"
   epic: "epic/43-target-project-delivery-at-scale"
   pr: null
@@ -2050,8 +2236,8 @@
 "T-43-13":
   base: "epic/43-target-project-delivery-at-scale"
   base_reason: "T-43-06 has no branch on the remote yet (status pending) — ticket/T-43-06-one-exported-conveyor-scratch-set-for-th is not a base that exists, so the base is epic/43-target-project-delivery-at-scale"
-  blocked_by: ["T-43-06","T-40-19"]
-  blocked_reasons: {"T-40-19":"cross-phase parent must be MERGED and its phase 40 epic landed on main first (parent is pending)","T-43-06":"parent has no branch yet (nothing to cascade from)"}
+  blocked_by: ["T-43-06"]
+  blocked_reasons: {"T-43-06":"parent has no branch yet (nothing to cascade from)"}
   branch: "ticket/T-43-13-carry-a-conform-verdict-across-a-base-me"
   epic: "epic/43-target-project-delivery-at-scale"
   pr: null
@@ -2061,19 +2247,18 @@
 "T-43-14":
   base: "epic/43-target-project-delivery-at-scale"
   base_reason: "no primary parent — a root ticket PRs into epic/43-target-project-delivery-at-scale"
-  blocked_by: ["T-40-15","T-40-24"]
-  blocked_reasons: {"T-40-15":"cross-phase parent must be MERGED and its phase 40 epic landed on main first (parent is pending)","T-40-24":"cross-phase parent must be MERGED and its phase 40 epic landed on main first (parent is pending)"}
   branch: "ticket/T-43-14-deliver-dispatch-builds-arch-review-ci-f"
   epic: "epic/43-target-project-delivery-at-scale"
-  pr: null
-  ready: false
-  reapable: false
-  status: "pending"
+  merged_into: "epic/43-target-project-delivery-at-scale"
+  pr: 355
+  reapable: true
+  status: "merged"
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/355"
 "T-43-15":
   base: "epic/43-target-project-delivery-at-scale"
   base_reason: "T-43-12 has no branch on the remote yet (status pending) — ticket/T-43-12-human-checkpoint-takes-review-or-merge-t is not a base that exists, so the base is epic/43-target-project-delivery-at-scale"
-  blocked_by: ["T-43-12","T-43-14","T-40-15","T-40-25"]
-  blocked_reasons: {"T-40-15":"cross-phase parent must be MERGED and its phase 40 epic landed on main first (parent is pending)","T-40-25":"cross-phase parent must be MERGED and its phase 40 epic landed on main first (parent is pending)","T-43-12":"parent has no branch yet (nothing to cascade from)","T-43-14":"parent has no branch yet (nothing to cascade from)"}
+  blocked_by: ["T-43-12"]
+  blocked_reasons: {"T-43-12":"parent has no branch yet (nothing to cascade from)"}
   branch: "ticket/T-43-15-deliver-dispatch-builds-research-and-dec"
   epic: "epic/43-target-project-delivery-at-scale"
   pr: null
@@ -2083,8 +2268,8 @@
 "T-43-16":
   base: "epic/43-target-project-delivery-at-scale"
   base_reason: "T-43-06 has no branch on the remote yet (status pending) — ticket/T-43-06-one-exported-conveyor-scratch-set-for-th is not a base that exists, so the base is epic/43-target-project-delivery-at-scale"
-  blocked_by: ["T-43-06","T-43-01","T-42-01","T-40-10","T-40-13","T-40-14","T-40-28","T-40-12","T-40-01","T-40-09","T-42-03"]
-  blocked_reasons: {"T-40-01":"cross-phase parent must be MERGED and its phase 40 epic landed on main first (parent is pending)","T-40-09":"cross-phase parent must be MERGED and its phase 40 epic landed on main first (parent is pending)","T-40-10":"cross-phase parent must be MERGED and its phase 40 epic landed on main first (parent is pending)","T-40-12":"cross-phase parent must be MERGED and its phase 40 epic landed on main first (parent is pending)","T-40-13":"cross-phase parent must be MERGED and its phase 40 epic landed on main first (parent is pending)","T-40-14":"cross-phase parent must be MERGED and its phase 40 epic landed on main first (parent is pending)","T-40-28":"cross-phase parent must be MERGED and its phase 40 epic landed on main first (parent is pending)","T-42-01":"cross-phase parent must land on main first (phase 42 epic still ahead)","T-42-03":"cross-phase parent must land on main first (phase 42 epic still ahead)","T-43-01":"parent has no branch yet (nothing to cascade from)","T-43-06":"parent has no branch yet (nothing to cascade from)"}
+  blocked_by: ["T-43-06"]
+  blocked_reasons: {"T-43-06":"parent has no branch yet (nothing to cascade from)"}
   branch: "ticket/T-43-16-host-side-verification-of-plan-declared"
   epic: "epic/43-target-project-delivery-at-scale"
   pr: null
@@ -2094,8 +2279,8 @@
 "T-43-17":
   base: "epic/43-target-project-delivery-at-scale"
   base_reason: "T-43-13 has no branch on the remote yet (status pending) — ticket/T-43-13-carry-a-conform-verdict-across-a-base-me is not a base that exists, so the base is epic/43-target-project-delivery-at-scale"
-  blocked_by: ["T-43-13","T-43-16","T-42-01","T-40-18","T-40-27","T-40-10","T-40-13","T-40-14","T-40-28","T-40-12","T-40-01","T-40-09","T-42-03"]
-  blocked_reasons: {"T-40-01":"cross-phase parent must be MERGED and its phase 40 epic landed on main first (parent is pending)","T-40-09":"cross-phase parent must be MERGED and its phase 40 epic landed on main first (parent is pending)","T-40-10":"cross-phase parent must be MERGED and its phase 40 epic landed on main first (parent is pending)","T-40-12":"cross-phase parent must be MERGED and its phase 40 epic landed on main first (parent is pending)","T-40-13":"cross-phase parent must be MERGED and its phase 40 epic landed on main first (parent is pending)","T-40-14":"cross-phase parent must be MERGED and its phase 40 epic landed on main first (parent is pending)","T-40-18":"cross-phase parent must be MERGED and its phase 40 epic landed on main first (parent is pending)","T-40-27":"cross-phase parent must be MERGED and its phase 40 epic landed on main first (parent is pending)","T-40-28":"cross-phase parent must be MERGED and its phase 40 epic landed on main first (parent is pending)","T-42-01":"cross-phase parent must land on main first (phase 42 epic still ahead)","T-42-03":"cross-phase parent must land on main first (phase 42 epic still ahead)","T-43-13":"parent has no branch yet (nothing to cascade from)","T-43-16":"parent has no branch yet (nothing to cascade from)"}
+  blocked_by: ["T-43-13","T-43-16"]
+  blocked_reasons: {"T-43-13":"parent has no branch yet (nothing to cascade from)","T-43-16":"parent has no branch yet (nothing to cascade from)"}
   branch: "ticket/T-43-17-record-a-sealed-coverage-entry-for-every"
   epic: "epic/43-target-project-delivery-at-scale"
   pr: null
@@ -2116,11 +2301,227 @@
 "T-43-19":
   base: "epic/43-target-project-delivery-at-scale"
   base_reason: "T-43-18 has no branch on the remote yet (status pending) — ticket/T-43-18-run-only-declared-repository-remedy-work is not a base that exists, so the base is epic/43-target-project-delivery-at-scale"
-  blocked_by: ["T-43-18","T-43-12","T-40-19","T-40-22"]
-  blocked_reasons: {"T-40-19":"cross-phase parent must be MERGED and its phase 40 epic landed on main first (parent is pending)","T-40-22":"cross-phase parent must be MERGED and its phase 40 epic landed on main first (parent is pending)","T-43-12":"parent has no branch yet (nothing to cascade from)","T-43-18":"parent has no branch yet (nothing to cascade from)"}
+  blocked_by: ["T-43-18","T-43-12"]
+  blocked_reasons: {"T-43-12":"parent has no branch yet (nothing to cascade from)","T-43-18":"parent has no branch yet (nothing to cascade from)"}
   branch: "ticket/T-43-19-the-merge-gate-refuses-heads-the-conveyo"
   epic: "epic/43-target-project-delivery-at-scale"
   pr: null
   ready: false
+  reapable: false
+  status: "pending"
+"T-44-01":
+  base: "epic/44-optimize-subscription-efficiency-per-runtime"
+  base_reason: "no primary parent — a root ticket PRs into epic/44-optimize-subscription-efficiency-per-runtime"
+  branch: "ticket/T-44-01-parse-saved-claude-and-codex-quota-recor"
+  epic: "epic/44-optimize-subscription-efficiency-per-runtime"
+  merged_into: "epic/44-optimize-subscription-efficiency-per-runtime"
+  pr: 331
+  reapable: true
+  status: "merged"
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/331"
+"T-44-02":
+  base: "epic/44-optimize-subscription-efficiency-per-runtime"
+  base_reason: "T-44-01 is MERGED, so its branch is no longer where work lands — the base is epic/44-optimize-subscription-efficiency-per-runtime (base-merge it in first to keep the review diff one slice)"
+  branch: "ticket/T-44-02-usage-report-fills-subscription-usage-fr"
+  epic: "epic/44-optimize-subscription-efficiency-per-runtime"
+  merged_into: "epic/44-optimize-subscription-efficiency-per-runtime"
+  pr: 335
+  reapable: true
+  status: "merged"
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/335"
+"T-44-03":
+  base: "epic/44-optimize-subscription-efficiency-per-runtime"
+  base_reason: "T-44-01 is MERGED, so its branch is no longer where work lands — the base is epic/44-optimize-subscription-efficiency-per-runtime (base-merge it in first to keep the review diff one slice)"
+  branch: "ticket/T-44-03-private-per-account-subscription-sample"
+  epic: "epic/44-optimize-subscription-efficiency-per-runtime"
+  merged_into: "epic/44-optimize-subscription-efficiency-per-runtime"
+  pr: 337
+  reapable: true
+  status: "merged"
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/337"
+"T-44-04":
+  base: "epic/44-optimize-subscription-efficiency-per-runtime"
+  base_reason: "T-44-03 is MERGED, so its branch is no longer where work lands — the base is epic/44-optimize-subscription-efficiency-per-runtime (base-merge it in first to keep the review diff one slice)"
+  branch: "ticket/T-44-04-capture-the-claude-statusline-input-and"
+  epic: "epic/44-optimize-subscription-efficiency-per-runtime"
+  merged_into: "epic/44-optimize-subscription-efficiency-per-runtime"
+  pr: 340
+  reapable: true
+  status: "merged"
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/340"
+"T-44-05":
+  base: "epic/44-optimize-subscription-efficiency-per-runtime"
+  base_reason: "T-44-04 is MERGED, so its branch is no longer where work lands — the base is epic/44-optimize-subscription-efficiency-per-runtime (base-merge it in first to keep the review diff one slice)"
+  branch: "ticket/T-44-05-reversible-installer-for-the-claude-stat"
+  epic: "epic/44-optimize-subscription-efficiency-per-runtime"
+  merged_into: "epic/44-optimize-subscription-efficiency-per-runtime"
+  pr: 341
+  reapable: true
+  status: "merged"
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/341"
+"T-44-06":
+  base: "epic/44-optimize-subscription-efficiency-per-runtime"
+  base_reason: "T-44-01 is MERGED, so its branch is no longer where work lands — the base is epic/44-optimize-subscription-efficiency-per-runtime (base-merge it in first to keep the review diff one slice)"
+  branch: "ticket/T-44-06-rotation-advice-compares-model-effort-po"
+  epic: "epic/44-optimize-subscription-efficiency-per-runtime"
+  merged_into: "epic/44-optimize-subscription-efficiency-per-runtime"
+  pr: 336
+  reapable: true
+  status: "merged"
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/336"
+"T-44-07":
+  base: "epic/44-optimize-subscription-efficiency-per-runtime"
+  base_reason: "no primary parent — a root ticket PRs into epic/44-optimize-subscription-efficiency-per-runtime"
+  branch: "ticket/T-44-07-versioned-effort-experiment-schema-and-r"
+  epic: "epic/44-optimize-subscription-efficiency-per-runtime"
+  merged_into: "epic/44-optimize-subscription-efficiency-per-runtime"
+  pr: 332
+  reapable: true
+  status: "merged"
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/332"
+"T-44-08":
+  base: "epic/44-optimize-subscription-efficiency-per-runtime"
+  base_reason: "T-44-05 is MERGED, so its branch is no longer where work lands — the base is epic/44-optimize-subscription-efficiency-per-runtime (base-merge it in first to keep the review diff one slice)"
+  branch: "ticket/T-44-08-name-the-test-statusline-make-target-in"
+  epic: "epic/44-optimize-subscription-efficiency-per-runtime"
+  merged_into: "epic/44-optimize-subscription-efficiency-per-runtime"
+  pr: 344
+  reapable: true
+  status: "merged"
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/344"
+"T-45-01":
+  base: "epic/45-close-residual-pipeline-efficiency-gaps"
+  base_reason: "no primary parent — a root ticket PRs into epic/45-close-residual-pipeline-efficiency-gaps"
+  branch: "ticket/T-45-01-armed-stop-gate-binds-the-realpath-of-it"
+  epic: "epic/45-close-residual-pipeline-efficiency-gaps"
+  pr: null
+  ready: true
+  reapable: false
+  status: "pending"
+"T-45-02":
+  base: "epic/45-close-residual-pipeline-efficiency-gaps"
+  base_reason: "no primary parent — a root ticket PRs into epic/45-close-residual-pipeline-efficiency-gaps"
+  branch: "ticket/T-45-02-doctor-classifies-another-checkout-s-dog"
+  epic: "epic/45-close-residual-pipeline-efficiency-gaps"
+  pr: null
+  ready: true
+  reapable: false
+  status: "pending"
+"T-45-03":
+  base: "epic/45-close-residual-pipeline-efficiency-gaps"
+  base_reason: "T-45-02 has no branch on the remote yet (status pending) — ticket/T-45-02-doctor-classifies-another-checkout-s-dog is not a base that exists, so the base is epic/45-close-residual-pipeline-efficiency-gaps"
+  blocked_by: ["T-45-02"]
+  blocked_reasons: {"T-45-02":"parent has no branch yet (nothing to cascade from)"}
+  branch: "ticket/T-45-03-dogfood-installs-default-to-a-dedicated"
+  epic: "epic/45-close-residual-pipeline-efficiency-gaps"
+  pr: null
+  ready: false
+  reapable: false
+  status: "pending"
+"T-45-04":
+  base: "epic/45-close-residual-pipeline-efficiency-gaps"
+  base_reason: "no primary parent — a root ticket PRs into epic/45-close-residual-pipeline-efficiency-gaps"
+  branch: "ticket/T-45-04-codex-decompose-host-run-lease-uses-an-i"
+  epic: "epic/45-close-residual-pipeline-efficiency-gaps"
+  pr: null
+  ready: true
+  reapable: false
+  status: "pending"
+"T-45-05":
+  base: "epic/45-close-residual-pipeline-efficiency-gaps"
+  base_reason: "no primary parent — a root ticket PRs into epic/45-close-residual-pipeline-efficiency-gaps"
+  branch: "ticket/T-45-05-session-handoff-successor-race-and-dispa"
+  epic: "epic/45-close-residual-pipeline-efficiency-gaps"
+  pr: null
+  ready: true
+  reapable: false
+  status: "pending"
+"T-45-06":
+  base: "epic/45-close-residual-pipeline-efficiency-gaps"
+  base_reason: "no primary parent — a root ticket PRs into epic/45-close-residual-pipeline-efficiency-gaps"
+  branch: "ticket/T-45-06-usage-report-counts-codex-host-stream-tu"
+  epic: "epic/45-close-residual-pipeline-efficiency-gaps"
+  pr: null
+  ready: true
+  reapable: false
+  status: "pending"
+"T-45-07":
+  base: "epic/45-close-residual-pipeline-efficiency-gaps"
+  base_reason: "no primary parent — a root ticket PRs into epic/45-close-residual-pipeline-efficiency-gaps"
+  branch: "ticket/T-45-07-planning-tree-writer-lease-with-owner-ba"
+  epic: "epic/45-close-residual-pipeline-efficiency-gaps"
+  pr: null
+  ready: true
+  reapable: false
+  status: "pending"
+"T-45-08":
+  base: "epic/45-close-residual-pipeline-efficiency-gaps"
+  base_reason: "T-45-04 has no branch on the remote yet (status pending) — ticket/T-45-04-codex-decompose-host-run-lease-uses-an-i is not a base that exists, so the base is epic/45-close-residual-pipeline-efficiency-gaps"
+  blocked_by: ["T-45-04","T-45-07"]
+  blocked_reasons: {"T-45-04":"parent has no branch yet (nothing to cascade from)","T-45-07":"parent has no branch yet (nothing to cascade from)"}
+  branch: "ticket/T-45-08-both-decompose-hosts-hold-the-planning-w"
+  epic: "epic/45-close-residual-pipeline-efficiency-gaps"
+  pr: null
+  ready: false
+  reapable: false
+  status: "pending"
+"T-45-09":
+  base: "epic/45-close-residual-pipeline-efficiency-gaps"
+  base_reason: "T-45-08 has no branch on the remote yet (status pending) — ticket/T-45-08-both-decompose-hosts-hold-the-planning-w is not a base that exists, so the base is epic/45-close-residual-pipeline-efficiency-gaps"
+  blocked_by: ["T-45-05","T-45-08"]
+  blocked_reasons: {"T-45-05":"parent has no branch yet (nothing to cascade from)","T-45-08":"parent has no branch yet (nothing to cascade from)"}
+  branch: "ticket/T-45-09-codex-decompose-host-recovers-a-complete"
+  epic: "epic/45-close-residual-pipeline-efficiency-gaps"
+  pr: null
+  ready: false
+  reapable: false
+  status: "pending"
+"T-45-10":
+  base: "epic/45-close-residual-pipeline-efficiency-gaps"
+  base_reason: "T-45-09 has no branch on the remote yet (status pending) — ticket/T-45-09-codex-decompose-host-recovers-a-complete is not a base that exists, so the base is epic/45-close-residual-pipeline-efficiency-gaps"
+  blocked_by: ["T-45-09"]
+  blocked_reasons: {"T-45-09":"parent has no branch yet (nothing to cascade from)"}
+  branch: "ticket/T-45-10-claude-decompose-host-recovers-a-complet"
+  epic: "epic/45-close-residual-pipeline-efficiency-gaps"
+  pr: null
+  ready: false
+  reapable: false
+  status: "pending"
+"T-45-11":
+  base: "epic/45-close-residual-pipeline-efficiency-gaps"
+  base_reason: "T-45-09 has no branch on the remote yet (status pending) — ticket/T-45-09-codex-decompose-host-recovers-a-complete is not a base that exists, so the base is epic/45-close-residual-pipeline-efficiency-gaps"
+  blocked_by: ["T-45-09"]
+  blocked_reasons: {"T-45-09":"parent has no branch yet (nothing to cascade from)"}
+  branch: "ticket/T-45-11-codex-decomposition-runs-detached-so-the"
+  epic: "epic/45-close-residual-pipeline-efficiency-gaps"
+  pr: null
+  ready: false
+  reapable: false
+  status: "pending"
+"T-45-12":
+  base: "epic/45-close-residual-pipeline-efficiency-gaps"
+  base_reason: "no primary parent — a root ticket PRs into epic/45-close-residual-pipeline-efficiency-gaps"
+  branch: "ticket/T-45-12-advisory-run-phase-aggregate-admission-l"
+  epic: "epic/45-close-residual-pipeline-efficiency-gaps"
+  pr: null
+  ready: true
+  reapable: false
+  status: "pending"
+"T-45-13":
+  base: "epic/45-close-residual-pipeline-efficiency-gaps"
+  base_reason: "no primary parent — a root ticket PRs into epic/45-close-residual-pipeline-efficiency-gaps"
+  branch: "ticket/T-45-13-drift-gate-re-asks-a-self-contradictory"
+  epic: "epic/45-close-residual-pipeline-efficiency-gaps"
+  pr: null
+  ready: true
+  reapable: false
+  status: "pending"
+"T-45-14":
+  base: "epic/45-close-residual-pipeline-efficiency-gaps"
+  base_reason: "no primary parent — a root ticket PRs into epic/45-close-residual-pipeline-efficiency-gaps"
+  branch: "ticket/T-45-14-capture-scrubber-replaces-codex-account"
+  epic: "epic/45-close-residual-pipeline-efficiency-gaps"
+  pr: null
+  ready: true
   reapable: false
   status: "pending"

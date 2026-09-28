@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 56f5f4151c21965a339c4e821ec6f703a4d7468b36be8e7856eb2fcd9f762ff9
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 6916815faffe0bcc52657e62501ea14b6b223478b7d97cdf27f499f100deedfe
 phase: 38-runtime-model-ladder-recovery
 plan: 03
 subsystem: shipyard delivery
@@ -20,10 +20,10 @@ key-files:
 key-decisions:
   - "Shipyard delivery state is projected; no native executor claim is invented."
 duration: 0min
-completed: 2026-09-23
+completed: 2026-09-27
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 56f5f4151c21965a339c4e821ec6f703a4d7468b36be8e7856eb2fcd9f762ff9
+shipyard_source_fingerprint: 6916815faffe0bcc52657e62501ea14b6b223478b7d97cdf27f499f100deedfe
 ---
 
 # Phase 38: Connect Claude delivery and investigation through the trusted host — Delivery Projection

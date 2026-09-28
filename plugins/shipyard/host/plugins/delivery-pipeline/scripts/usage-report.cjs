@@ -8,6 +8,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const pipeline = require('./pipeline-config.cjs');
 const attributionRules = require('./usage-attribution.cjs');
+const subscriptionObservation = require('./subscription-observation.cjs');
 
 const FIELDS = ['input_tokens', 'cache_read_input_tokens', 'cache_creation_input_tokens', 'output_tokens'];
 const CODEX_FIELDS = ['input_tokens', 'cached_input_tokens', 'cache_write_input_tokens',
@@ -540,6 +541,18 @@ function report(sources, options = {}) {
     }
   }
 
+  // @contract: a separate, total pass over the same sources; never mutates observations/groups/warnings/comparable.
+  let subscriptionUsage;
+  try {
+    const allRows = sources.flatMap((source) => Array.isArray(source?.rows) ? source.rows : []);
+    const quota = subscriptionObservation.fromTranscriptRows(allRows, { accountLabels: options.accountLabels });
+    const summary = subscriptionObservation.summarize(quota.envelopes, {});
+    subscriptionUsage = { ...summary, warnings: [...quota.warnings, ...summary.warnings] };
+  } catch (error) {
+    const empty = subscriptionObservation.summarize([], {});
+    subscriptionUsage = { ...empty, warnings: [...empty.warnings, `subscription usage pass failed: ${error.message}`] };
+  }
+
   function claudeContext(q, kind) {
     return {
       runtime: 'claude', kind,
@@ -834,7 +847,7 @@ function report(sources, options = {}) {
   return {
     schema_version: 2,
     units: 'tokens processed; not subscription quota',
-    subscription_usage: null,
+    subscription_usage: subscriptionUsage,
     usage_rows: usageRows,
     comparison_scope: 'provider-normalized processing units; model/effort comparison only for attributed observations; not subscription billing',
     comparable: uniqueWarnings.length === 0,
@@ -887,7 +900,7 @@ function report(sources, options = {}) {
 }
 
 function parseCli(args) {
-  const transcripts = [], attribution = [], outcomes = [];
+  const transcripts = [], attribution = [], outcomes = [], accountLabels = {};
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     if (arg === '--attribution') {
@@ -898,11 +911,24 @@ function parseCli(args) {
       const value = args[++i];
       if (!value || value.startsWith('--')) throw new Error('--outcomes needs a JSONL ledger path');
       outcomes.push(value);
+    } else if (arg === '--account-label') {
+      const value = args[++i];
+      if (!value || value.startsWith('--')) throw new Error('--account-label needs <runtime>=<label>');
+      const eq = value.indexOf('=');
+      if (eq <= 0) throw new Error(`--account-label must be <runtime>=<label>, got "${value}"`);
+      const runtimeName = value.slice(0, eq);
+      const label = value.slice(eq + 1);
+      if (runtimeName !== 'claude' && runtimeName !== 'codex') {
+        throw new Error(`--account-label runtime must be claude or codex, got "${runtimeName}"`);
+      }
+      try { subscriptionObservation.normalizeLabel(label); }
+      catch (error) { throw new Error(`--account-label ${runtimeName}: ${error.message}`); }
+      accountLabels[runtimeName] = label;
     } else if (arg.startsWith('--')) {
       throw new Error(`unsupported option ${arg}; see --help`);
     } else transcripts.push(arg);
   }
-  return { transcripts, attribution, outcomes };
+  return { transcripts, attribution, outcomes, accountLabels };
 }
 
 function readJsonl(file, malformed, label) {
@@ -941,8 +967,8 @@ function loadJsonlInputs(files, malformed, label, warnings, asSource) {
 
 function main(args) {
   if (args.length === 1 && args[0] === '--help') {
-    console.log('usage: node usage-report.cjs <transcript.jsonl> [more.jsonl ...] [--attribution ledger.jsonl] [--outcomes outcomes.jsonl]');
-    console.log('Read-only; explicit transcript, attribution and outcome files only. JSON to stdout; no prompts or quota estimates.');
+    console.log('usage: node usage-report.cjs <transcript.jsonl> [more.jsonl ...] [--attribution ledger.jsonl] [--outcomes outcomes.jsonl] [--account-label <runtime>=<label> ...]');
+    console.log('Read-only; explicit transcript, attribution and outcome files only. JSON to stdout; no prompts. subscription_usage is derived from saved quota records and is never a price or token-to-quota conversion.');
     return;
   }
   const parsed = parseCli(args);
@@ -959,6 +985,7 @@ function main(args) {
   const result = report(sources, {
     ...(attributions === undefined ? {} : { attributions }),
     ...(outcomes === undefined ? {} : { outcomes }),
+    accountLabels: parsed.accountLabels,
   });
   result.warnings.push(...pathWarnings);
   result.warnings.push(...malformed);

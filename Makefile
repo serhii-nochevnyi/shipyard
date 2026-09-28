@@ -13,6 +13,7 @@ install-shipyard-marketplace-claude:
 	node scripts/install-shipyard-marketplace.cjs claude
 
 .PHONY: install-shipyard-codex install-shipyard-claude-hook remove-shipyard-claude-hook \
+        install-shipyard-claude-statusline remove-shipyard-claude-statusline test-statusline \
         install-shipyard-capability ensure-gsd-core-claude ensure-gsd-core-codex \
         gsd-tune gsd-tune-apply doctor \
         test test-fast test-unit test-graph test-worktree test-worktree-gates \
@@ -31,6 +32,12 @@ install-shipyard-claude-hook:
 
 remove-shipyard-claude-hook:
 	./scripts/install-shipyard-claude-hook.sh --remove
+
+install-shipyard-claude-statusline:
+	./scripts/install-shipyard-claude-statusline.sh
+
+remove-shipyard-claude-statusline:
+	./scripts/install-shipyard-claude-statusline.sh --remove
 
 # Install the shared GSD capability for a host runtime. Codex installation
 # already performs this step; this target is useful for Claude Code.
@@ -55,7 +62,7 @@ doctor:
 	node scripts/shipyard-doctor.cjs
 
 # Fast, deterministic checks for every local edit and every pull request.
-test-fast: test-unit test-graph test-worktree test-worktree-gates test-gsd-sync test-sentinel test-docs test-hooks test-comment-policy test-model-ladder-runtime
+test-fast: test-unit test-graph test-worktree test-worktree-gates test-gsd-sync test-sentinel test-docs test-hooks test-comment-policy test-model-ladder-runtime test-statusline
 
 # The complete host-side suite. The Codex smoke additionally exercises the
 # network-backed gsd-core conversion and therefore stays out of test-fast.
@@ -87,6 +94,9 @@ test-docs:
 
 test-hooks:
 	./tests/smoke/claude-hook-smoke.sh
+
+test-statusline:
+	./tests/smoke/claude-statusline-smoke.sh
 
 test-comment-policy:
 	node plugins/delivery-pipeline/scripts/publish-gate.cjs --base "$(or $(COMMENT_POLICY_BASE),origin/main)" --working-tree --json

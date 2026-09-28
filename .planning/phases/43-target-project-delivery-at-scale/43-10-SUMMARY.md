@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 02810ba4c430c802a8e495e6aa3ebeb2ebf1d1c6fc1ef2d08e1745f10dadd465
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 5c571f36898dc8a3998a8b8a1eeebbe8d5ba250c018b738b0ea39a2b296da10f
 phase: 43-target-project-delivery-at-scale
 plan: 10
 subsystem: shipyard delivery
@@ -22,7 +22,7 @@ key-decisions:
 duration: 0min
 status: halted
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 02810ba4c430c802a8e495e6aa3ebeb2ebf1d1c6fc1ef2d08e1745f10dadd465
+shipyard_source_fingerprint: 5c571f36898dc8a3998a8b8a1eeebbe8d5ba250c018b738b0ea39a2b296da10f
 ---
 
 # Phase 43: Honour pipeline.gsd_sync as a deprecated alias on the summary line; decompose phases reach ROADMAP; one summarised warning — Delivery Projection
@@ -32,8 +32,8 @@ shipyard_source_fingerprint: 02810ba4c430c802a8e495e6aa3ebeb2ebf1d1c6fc1ef2d08e1
 ## Delivery Evidence
 
 - Ticket: T-43-10
-- Delivery status: pending
-- PR: not observed
+- Delivery status: pr-open
+- PR: #346
 - Source plan: .planning/phases/43-target-project-delivery-at-scale/43-10-PLAN.md
 - This summary is halted until the delivery state observes `merged`.
 

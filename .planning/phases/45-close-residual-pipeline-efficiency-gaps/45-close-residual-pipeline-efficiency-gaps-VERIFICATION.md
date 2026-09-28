@@ -1,8 +1,8 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: bea1e7b35da12770b341048affe9839edcb9d12edecac39d0fba1ecba3399a69
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: d633372eab837d171e8ae74aae1321e871914fe45b7afdca10c118a881752a10
 phase: 45
 status: human_needed
-shipyard_source_fingerprint: bea1e7b35da12770b341048affe9839edcb9d12edecac39d0fba1ecba3399a69
+shipyard_source_fingerprint: d633372eab837d171e8ae74aae1321e871914fe45b7afdca10c118a881752a10
 ---
 
 # Phase 45: Close residual pipeline efficiency gaps — Verification Projection
@@ -13,7 +13,7 @@ shipyard_source_fingerprint: bea1e7b35da12770b341048affe9839edcb9d12edecac39d0fb
 
 | Truth | Evidence | Status |
 |---|---|---|
-| Every phase plan is accounted for | No PLAN files are present; delivery evidence is missing | ? UNCERTAIN |
+| Every phase plan is accounted for | 0/14 delivery records are merged | ? UNCERTAIN |
 | Integration is coherent | INTEGRATION.md is missing | ? UNCERTAIN |
 | Verification evidence is present | INTEGRATION.md is missing | ? UNCERTAIN |
 
@@ -21,7 +21,20 @@ shipyard_source_fingerprint: bea1e7b35da12770b341048affe9839edcb9d12edecac39d0fb
 
 | Ticket | Delivery | Plan status |
 |---|---|---|
-| — | no plans | ? UNCERTAIN |
+| T-45-01 | pending | ? UNCERTAIN |
+| T-45-02 | pending | ? UNCERTAIN |
+| T-45-03 | pending | ? UNCERTAIN |
+| T-45-04 | pending | ? UNCERTAIN |
+| T-45-05 | pending | ? UNCERTAIN |
+| T-45-06 | pending | ? UNCERTAIN |
+| T-45-07 | pending | ? UNCERTAIN |
+| T-45-08 | pending | ? UNCERTAIN |
+| T-45-09 | pending | ? UNCERTAIN |
+| T-45-10 | pending | ? UNCERTAIN |
+| T-45-11 | pending | ? UNCERTAIN |
+| T-45-12 | pending | ? UNCERTAIN |
+| T-45-13 | pending | ? UNCERTAIN |
+| T-45-14 | pending | ? UNCERTAIN |
 
 ## Verification Commands
 
@@ -30,4 +43,4 @@ shipyard_source_fingerprint: bea1e7b35da12770b341048affe9839edcb9d12edecac39d0fb
 
 ## Gaps Summary
 
-**Not green:** phase has no PLAN files yet.
+**Not green:** 14 plan(s) are not merged.

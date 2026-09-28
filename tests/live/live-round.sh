@@ -136,7 +136,9 @@ case "$repo" in
   *) fail_stage preconditions "repository must be owner/name: $repo" ;;
 esac
 gh repo view "$repo" >/dev/null 2>&1 || fail_stage preconditions "repository $repo is not reachable"
-node "$ROOT/scripts/shipyard-doctor.cjs" >/dev/null 2>&1 || fail_stage preconditions "installed hosts are not the release layout (shipyard-doctor failed)"
+doctor_args=()
+[ -n "${CODEX_HOME:-}" ] && doctor_args=(--codex-home "$CODEX_HOME")
+node "$ROOT/scripts/shipyard-doctor.cjs" ${doctor_args[@]+"${doctor_args[@]}"} >/dev/null 2>&1 || fail_stage preconditions "installed hosts are not the release layout (shipyard-doctor failed)"
 
 for n in $(gh pr list --repo "$repo" --state open --json number -q '.[].number' 2>/dev/null); do
   gh pr close "$n" --repo "$repo" --delete-branch >/dev/null 2>&1 || true

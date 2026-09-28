@@ -6,9 +6,12 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { report } = require('../../plugins/delivery-pipeline/scripts/usage-report.cjs');
+const subscriptionObservation = require('../../plugins/delivery-pipeline/scripts/subscription-observation.cjs');
 const claude = (usage, extra = {}) => ({type:'assistant', requestId:'r1', sessionId:'s1',
   message:{id:'m1',model:'example-model',usage,...extra}});
 const files = (...rows) => [{source:'fixture',rows}];
+const loadFixtureRows = (relPath) => fs.readFileSync(path.resolve(__dirname, '../..', relPath), 'utf8')
+  .split('\n').filter((line) => line.trim()).map((line) => JSON.parse(line));
 
 test('Claude streaming updates and file replay count a response once', () => {
   const a=claude({input_tokens:5,cache_creation_input_tokens:0,cache_read_input_tokens:100,output_tokens:1});
@@ -605,4 +608,150 @@ test('CLI accepts an --outcomes ledger and diagnoses an unreadable path', () => 
   const out=JSON.parse(r.stdout);
   assert.ok(out.warnings.some((w)=>w.includes('unreadable outcome path')));
  } finally { fs.rmSync(dir,{recursive:true,force:true}); }
+});
+
+const CLAUDE_EXECUTOR_FIXTURE = 'tests/fixtures/captured/claude-stream-executor.jsonl';
+const CODEX_PARENT_FIXTURE = 'tests/fixtures/captured/codex-agent-stream-parent.jsonl';
+
+const CLAUDE_EXECUTOR_OBSERVATIONS = [{
+  provider:'anthropic', kind:'ordinary', unit:'response_aggregate', finalized:false, source:'fixture',
+  runtime:'claude', provider_family:'anthropic', session_id:'<SESSION-3>', request_id:'req_011CfScSPvNtJtkUKGJ2Xdmt',
+  message_id:'msg_011CfScSQiGRDtXBBXV5V4ri', dispatch_id:null, project_id:null, run_id:null, ticket:null, role:null,
+  task_level:null, backend:null, requested_model:null, requested_effort:null, effort_applied:null,
+  observed_effort:null, effort_source:'unknown', model:'claude-sonnet-5', observed_model:'claude-sonnet-5',
+  model_source:'transcript', attribution_status:'unattributed', attribution_level:null, completion_status:'unknown',
+  verified_completion_status:'unknown', input_tokens:16288, uncached_input_tokens:2, cache_read_input_tokens:12743,
+  cache_creation_input_tokens:3543, output_tokens:1, reasoning_output_tokens:null,
+}];
+const CLAUDE_EXECUTOR_GROUPS = [{
+  provider:'anthropic', provider_family:'anthropic', runtime:'claude', kind:'ordinary', model:'claude-sonnet-5',
+  observed_effort:null, requested_model:null, requested_effort:null, effort_applied:null, role:null, task_level:null,
+  backend:null, unit:'response_aggregate', observations:1, finalized:0, attributed:0,
+  model_sources:{transcript:1}, effort_sources:{unknown:1}, attribution_statuses:{unattributed:1},
+  ticket_count:0, dispatch_count:0, input_tokens:16288, uncached_input_tokens:2, cache_read_input_tokens:12743,
+  cache_creation_input_tokens:3543, output_tokens:1, reasoning_output_tokens:null,
+  missing:{reasoning_output_tokens:1},
+}];
+
+const CODEX_PARENT_COMMON_OBSERVATION = {
+  provider:'openai', kind:'ordinary', unit:'model_pass', finalized:false, source:'fixture', runtime:'codex',
+  provider_family:'openai', session_id:'<SESSION-2>', request_id:'<SESSION-4>', dispatch_id:null, project_id:null,
+  run_id:null, ticket:null, role:null, task_level:null, backend:null, requested_model:null, requested_effort:null,
+  effort_applied:null, observed_effort:'low', effort_source:'transcript', model:'gpt-6-luna',
+  observed_model:'gpt-6-luna', model_source:'transcript', attribution_status:'unattributed', attribution_level:null,
+  completion_status:'unknown', verified_completion_status:'unknown',
+};
+const CODEX_PARENT_OBSERVATIONS = [
+  {...CODEX_PARENT_COMMON_OBSERVATION, message_id:'resp_091f5b341a77ba46016ab8de4ff1bc87d2827760ff82492d8e',
+    input_tokens:20581, uncached_input_tokens:13669, cache_read_input_tokens:6912, cache_creation_input_tokens:0,
+    output_tokens:167, reasoning_output_tokens:0},
+  {...CODEX_PARENT_COMMON_OBSERVATION, message_id:'resp_091f5b341a77ba46016ab8de54831887d291ff086cdfec60ff',
+    input_tokens:20771, uncached_input_tokens:547, cache_read_input_tokens:20224, cache_creation_input_tokens:0,
+    output_tokens:22, reasoning_output_tokens:0},
+  {...CODEX_PARENT_COMMON_OBSERVATION, message_id:'resp_091f5b341a77ba46016ab8de5cbd4487d29a50fc321fe6a0be',
+    input_tokens:20857, uncached_input_tokens:633, cache_read_input_tokens:20224, cache_creation_input_tokens:0,
+    output_tokens:12, reasoning_output_tokens:0},
+];
+const CODEX_PARENT_GROUPS = [{
+  provider:'openai', provider_family:'openai', runtime:'codex', kind:'ordinary', model:'gpt-6-luna',
+  observed_effort:'low', requested_model:null, requested_effort:null, effort_applied:null, role:null,
+  task_level:null, backend:null, unit:'model_pass', observations:3, finalized:0, attributed:0,
+  model_sources:{transcript:3}, effort_sources:{transcript:3}, attribution_statuses:{unattributed:3},
+  ticket_count:0, dispatch_count:0, input_tokens:62209, uncached_input_tokens:14849, cache_read_input_tokens:47360,
+  cache_creation_input_tokens:0, output_tokens:201, reasoning_output_tokens:0, missing:{},
+}];
+
+function assertQuotaInvariants(usage) {
+  assert.equal(usage.schema, 'shipyard.subscription-usage.v1');
+  assert.equal(usage.verdict, 'inconclusive');
+  assert.deepEqual(usage.coverage, {codex_parent:'unverified', codex_idle_baseline:'unverified'});
+}
+
+test('subscription_usage on the captured Claude executor fixture gives the two Claude buckets', () => {
+  const rows = loadFixtureRows(CLAUDE_EXECUTOR_FIXTURE);
+  const r = report([{source:'fixture', rows}]);
+  assert.equal(r.units, 'tokens processed; not subscription quota');
+  assertQuotaInvariants(r.subscription_usage);
+  assert.deepEqual(r.subscription_usage.series.map((s) => s.bucket_id).sort(), ['five_hour', 'seven_day']);
+  const byBucket = Object.fromEntries(r.subscription_usage.series.map((s) => [s.bucket_id, s]));
+  assert.equal(byBucket.five_hour.last.used_percent, 70);
+  assert.equal(byBucket.five_hour.provider, 'anthropic');
+  assert.equal(byBucket.seven_day.last.used_percent, 57);
+  assert.deepEqual(r.subscription_usage.warnings, []);
+  assert.deepEqual(r.observations, CLAUDE_EXECUTOR_OBSERVATIONS);
+  assert.deepEqual(r.groups, CLAUDE_EXECUTOR_GROUPS);
+  assert.deepEqual(r.warnings, []);
+  assert.equal(r.comparable, true);
+});
+
+test('subscription_usage on the Codex parent native fixture gives one codex:primary series despite the token_usage_record skip', () => {
+  const rows = loadFixtureRows(CODEX_PARENT_FIXTURE);
+  const r = report([{source:'fixture', rows}]);
+  assertQuotaInvariants(r.subscription_usage);
+  assert.equal(r.subscription_usage.series.length, 1);
+  assert.equal(r.subscription_usage.series[0].bucket_id, 'codex:primary');
+  assert.equal(r.subscription_usage.series[0].provider, 'openai');
+  assert.equal(r.subscription_usage.series[0].samples, 3);
+  assert.deepEqual(r.subscription_usage.warnings, []);
+  assert.deepEqual(r.observations, CODEX_PARENT_OBSERVATIONS);
+  assert.deepEqual(r.groups, CODEX_PARENT_GROUPS);
+  assert.deepEqual(r.warnings, []);
+  assert.equal(r.comparable, true);
+});
+
+test('a malformed rate_limit_event adds only to subscription_usage.warnings and leaves a true comparable true', () => {
+  const rows = loadFixtureRows(CLAUDE_EXECUTOR_FIXTURE);
+  const original = rows.find((row) => row.type === 'rate_limit_event');
+  const malformed = JSON.parse(JSON.stringify(original));
+  delete malformed.rate_limit_info.unifiedWindows.five_hour.utilization;
+  const mutatedRows = rows.filter((row) => row.type !== 'rate_limit_event').concat(malformed);
+  const r = report([{source:'fixture', rows: mutatedRows}]);
+  assertQuotaInvariants(r.subscription_usage);
+  assert.ok(r.subscription_usage.warnings.some((w) => w.includes('missing or non-numeric utilization')));
+  assert.deepEqual(r.subscription_usage.series.map((s) => s.bucket_id), ['seven_day']);
+  assert.deepEqual(r.observations, CLAUDE_EXECUTOR_OBSERVATIONS);
+  assert.deepEqual(r.groups, CLAUDE_EXECUTOR_GROUPS);
+  assert.deepEqual(r.warnings, []);
+  assert.equal(r.comparable, true);
+});
+
+test('subscription_usage stays a populated schema object with no quota record at all', () => {
+  const r = report(files(claude({input_tokens:5,cache_read_input_tokens:0,cache_creation_input_tokens:0,output_tokens:1},{stop_reason:'end_turn'})));
+  assertQuotaInvariants(r.subscription_usage);
+  assert.deepEqual(r.subscription_usage.series, []);
+  assert.deepEqual(r.subscription_usage.discontinuities, []);
+  assert.notEqual(r.subscription_usage, null);
+});
+
+test('--account-label declares attribution and an invalid runtime or label exits 2', () => {
+  const cli = path.resolve(__dirname, '../../plugins/delivery-pipeline/scripts/usage-report.cjs');
+  const fixture = path.resolve(__dirname, '../..', CODEX_PARENT_FIXTURE);
+  let r = spawnSync(process.execPath, [cli, fixture], {encoding:'utf8'});
+  assert.equal(r.status, 0, r.stderr);
+  for (const needle of ['creator_user_id', 'credits', 'plan_type', 'balance']) {
+    assert.equal(r.stdout.includes(needle), false, `stdout must not leak ${needle}`);
+  }
+  const out = JSON.parse(r.stdout);
+  assert.equal(out.subscription_usage.series[0].account_label, null);
+
+  r = spawnSync(process.execPath, [cli, fixture, '--account-label', 'codex=codex-prolite'], {encoding:'utf8'});
+  assert.equal(r.status, 0, r.stderr);
+  const labeled = JSON.parse(r.stdout);
+  assert.equal(labeled.subscription_usage.series[0].account_label, 'codex-prolite');
+  const rows = loadFixtureRows(CODEX_PARENT_FIXTURE);
+  const direct = subscriptionObservation.fromTranscriptRows(rows, {accountLabels:{codex:'codex-prolite'}});
+  assert.equal(direct.envelopes[0].attribution, 'declared');
+
+  r = spawnSync(process.execPath, [cli, fixture, '--account-label', 'codex=me@x'], {encoding:'utf8'});
+  assert.equal(r.status, 2, r.stderr);
+
+  r = spawnSync(process.execPath, [cli, fixture, '--account-label', 'jira=me'], {encoding:'utf8'});
+  assert.equal(r.status, 2, r.stderr);
+});
+
+test('usage-report.cjs requires none of the network or process-spawning core modules', () => {
+  const src = fs.readFileSync(path.resolve(__dirname, '../../plugins/delivery-pipeline/scripts/usage-report.cjs'), 'utf8');
+  for (const forbidden of ['child_process', 'net', 'http', 'https', 'dgram']) {
+    assert.equal(new RegExp(`require\\(['"](node:)?${forbidden}['"]\\)`).test(src), false, `must not require ${forbidden}`);
+  }
 });

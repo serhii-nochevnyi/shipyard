@@ -22,9 +22,10 @@ const TREATMENT_VALUES = Object.freeze({
 });
 const STAGES = new Set([
   'startup', 'ordinary_input', 'parent_reingestion', 'checkpoint_collection',
-  'successor_startup', 'cache_warmup', 'wait_poll', 'model_turn', 'tool_call',
+  'successor_startup', 'successor_reread', 'cache_warmup', 'wait_poll', 'model_turn', 'tool_call',
 ]);
-const HANDOFF_COST_STAGES = new Set(['checkpoint_collection', 'successor_startup', 'cache_warmup']);
+const HANDOFF_COST_STAGES = new Set(['checkpoint_collection', 'successor_startup', 'cache_warmup', 'successor_reread']);
+const LIFECYCLE_CLASS_VALUES = Object.freeze(['resume', 'fork', 'compaction', 'fresh_start']);
 const PASS_KINDS = new Set(['ordinary', 'advisor']);
 const EVIDENCE = new Set(['usage', 'transcript', 'wait-event', 'controller', 'none']);
 const COUNT_KEYS = Object.freeze(['polls', 'model_turns', 'tool_calls', 'retries']);
@@ -185,6 +186,12 @@ function normalizeObservation(raw, now = new Date().toISOString()) {
   const policyHash = raw.policy_hash === undefined || raw.policy_hash === null
     ? null : text(raw.policy_hash, 'policy_hash');
   if (policyHash !== null && !/^[a-f0-9]{64}$/i.test(policyHash)) fail('INVALID_OBSERVATION', 'policy_hash must be SHA-256 when present');
+  const instructionDigest = raw.instruction_digest === undefined || raw.instruction_digest === null
+    ? null : text(raw.instruction_digest, 'instruction_digest');
+  if (instructionDigest !== null && !/^[a-f0-9]{64}$/i.test(instructionDigest)) fail('INVALID_OBSERVATION', 'instruction_digest must be SHA-256 when present');
+  const lifecycleClass = raw.lifecycle_class === undefined || raw.lifecycle_class === null
+    ? null : text(raw.lifecycle_class, 'lifecycle_class');
+  if (lifecycleClass !== null && !LIFECYCLE_CLASS_VALUES.includes(lifecycleClass)) fail('INVALID_OBSERVATION', `unsupported lifecycle_class ${lifecycleClass}`);
   const policyId = raw.policy_id === undefined || raw.policy_id === null ? null : text(raw.policy_id, 'policy_id');
   const policyVersion = raw.policy_version === undefined || raw.policy_version === null
     ? null : text(raw.policy_version, 'policy_version');
@@ -224,6 +231,9 @@ function normalizeObservation(raw, now = new Date().toISOString()) {
     attribution_status: raw.attribution_status === undefined ? 'unknown' : text(raw.attribution_status, 'attribution_status'),
     quality: normalizeQuality(raw.quality),
     completed_at: raw.completed_at === undefined ? null : text(raw.completed_at, 'completed_at', { nullable: true }),
+    // @invariant: omit absent keys so old rows keep their observation_id digest
+    ...(instructionDigest !== null ? { instruction_digest: instructionDigest } : {}),
+    ...(lifecycleClass !== null ? { lifecycle_class: lifecycleClass } : {}),
   };
   const observationId = raw.observation_id === undefined || raw.observation_id === null
     ? digest({ ...dimensions, sequence: raw.poll_sequence === undefined ? null : safeInteger(raw.poll_sequence, 'poll_sequence') }).slice(0, 48)
@@ -328,6 +338,32 @@ function recordHandoffCost(recorder, value = {}) {
     evidence: value.evidence === undefined ? 'controller' : value.evidence,
     source: value.source === undefined ? 'session-handoff' : value.source,
   });
+}
+
+function handoffCostSummary(rows) {
+  const list = latestRows(Array.isArray(rows) ? rows : []);
+  const stages = [...HANDOFF_COST_STAGES];
+  const byLifecycleClass = LIFECYCLE_CLASS_VALUES.map((lifecycleClass) => {
+    const classRows = list.filter((row) => row.lifecycle_class === lifecycleClass);
+    const totals = {};
+    const missingStages = [];
+    for (const stage of stages) {
+      const stageRows = classRows.filter((row) => row.stage === stage);
+      if (!stageRows.length) { missingStages.push(stage); continue; }
+      totals[stage] = {
+        bytes: sumField(stageRows, (row) => row.bytes),
+        estimated_tokens: sumField(stageRows, (row) => row.estimated_tokens),
+      };
+    }
+    return { lifecycle_class: lifecycleClass, stages: totals, missing_stages: missingStages, rows: classRows.length };
+  });
+  const installed = list.some((row) => row.lifecycle_class && HANDOFF_COST_STAGES.has(row.stage));
+  return {
+    schema: 'shipyard.handoff-cost-summary.v1', version: SCHEMA_VERSION,
+    by_lifecycle_class: byLifecycleClass,
+    status: { implemented: true, installed, behaviorally_verified: false, efficiency_measured: false },
+    verdict: 'inconclusive',
+  };
 }
 
 function recordModelEvidence(recorder, value = {}) {
@@ -628,10 +664,10 @@ function cli(argv = process.argv.slice(2)) {
 
 module.exports = Object.freeze({
   SCHEMA_VERSION, STREAM_NAME, REPORT_SCHEMA, ESTIMATOR_VERSION, STAGES,
-  HANDOFF_COST_STAGES, PASS_KINDS,
+  HANDOFF_COST_STAGES, LIFECYCLE_CLASS_VALUES, PASS_KINDS,
   TREATMENT_KEYS, TREATMENT_VALUES, OverheadError, normalizeTreatment, treatmentId,
   normalizeObservation, recordBatch, recordMeasurement, recordHandoffCost, recordModelEvidence,
-  readStream, latestRows, report, createRecorder,
+  handoffCostSummary, readStream, latestRows, report, createRecorder,
 });
 
 if (require.main === module) {

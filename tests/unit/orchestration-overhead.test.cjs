@@ -517,4 +517,79 @@ test('retries are counted as their own metric, separate from wait polls and mode
   }
 });
 
+test('TREATMENT_KEYS names exactly the two orchestration treatments, unchanged by this ticket', () => {
+  assert.deepEqual(overhead.TREATMENT_KEYS, ['wait_events', 'bounded_context']);
+});
+
+test('STAGES and HANDOFF_COST_STAGES both accept the successor_reread stage', () => {
+  assert.ok(overhead.STAGES.has('successor_reread'));
+  assert.ok(overhead.HANDOFF_COST_STAGES.has('successor_reread'));
+});
+
+test('an observation without instruction_digest and lifecycle_class keeps its exact pre-change observation_id', () => {
+  const row = overhead.normalizeObservation({
+    run_id: 'r', role: 'executor', runtime: 'claude', backend: 'workflow', stage: 'startup',
+    treatment: {}, bytes: 100, estimated_tokens: 25,
+  }, '2026-01-01T00:00:00.000Z');
+  assert.equal(row.observation_id, 'b29ead30bb9b1fa8b35cf82328bf322517bc6212fbd8b8d5');
+  assert.equal(row.instruction_digest, undefined);
+  assert.equal(row.lifecycle_class, undefined);
+});
+
+test('instruction_digest and lifecycle_class are validated and only change the observation_id when present', () => {
+  const base = {
+    run_id: 'r', role: 'executor', runtime: 'claude', backend: 'workflow', stage: 'startup',
+    treatment: {}, bytes: 100, estimated_tokens: 25,
+  };
+  const bare = overhead.normalizeObservation(base);
+  const withDigest = overhead.normalizeObservation({ ...base, instruction_digest: 'a'.repeat(64) });
+  const withClass = overhead.normalizeObservation({ ...base, lifecycle_class: 'resume' });
+  assert.notEqual(withDigest.observation_id, bare.observation_id);
+  assert.notEqual(withClass.observation_id, bare.observation_id);
+  assert.equal(withDigest.instruction_digest, 'a'.repeat(64));
+  assert.equal(withClass.lifecycle_class, 'resume');
+  assert.throws(() => overhead.normalizeObservation({ ...base, instruction_digest: 'not-hex' }),
+    (error) => error.code === 'INVALID_OBSERVATION');
+  assert.throws(() => overhead.normalizeObservation({ ...base, lifecycle_class: 'reboot' }),
+    (error) => error.code === 'INVALID_OBSERVATION');
+});
+
+test('recordHandoffCost accepts successor_reread and handoffCostSummary reports four stages per lifecycle class', () => {
+  const f = fixture();
+  try {
+    const recorder = overhead.createRecorder(f.graph);
+    for (const [stage, bytes] of [
+      ['checkpoint_collection', 40], ['successor_startup', 80], ['successor_reread', 20], ['cache_warmup', 12],
+    ]) {
+      const result = overhead.recordHandoffCost(recorder, {
+        observation_id: `resume-${stage}`, run_id: 'run-lifecycle', dispatch_id: `dispatch-${stage}`,
+        role: 'executor', runtime: 'claude', backend: 'workflow', policy_hash: 'a'.repeat(64),
+        treatment: { wait_events: 'baseline', bounded_context: 'opt-07' },
+        stage, lifecycle_class: 'resume', bytes, estimated_tokens: bytes / 4,
+      });
+      assert.equal(result.recorded.length, 1);
+    }
+    const summary = overhead.handoffCostSummary(recorder.latest());
+    assert.equal(summary.schema, 'shipyard.handoff-cost-summary.v1');
+    assert.equal(summary.verdict, 'inconclusive');
+    assert.equal(summary.status.implemented, true);
+    assert.equal(summary.status.installed, true);
+    assert.equal(summary.status.behaviorally_verified, false);
+    assert.equal(summary.status.efficiency_measured, false);
+    const resume = summary.by_lifecycle_class.find((entry) => entry.lifecycle_class === 'resume');
+    assert.deepEqual(resume.missing_stages, []);
+    assert.deepEqual(Object.keys(resume.stages).sort(), [
+      'cache_warmup', 'checkpoint_collection', 'successor_reread', 'successor_startup',
+    ]);
+    assert.equal(resume.stages.successor_reread.bytes, 20);
+    const fork = summary.by_lifecycle_class.find((entry) => entry.lifecycle_class === 'fork');
+    assert.deepEqual(fork.missing_stages, [
+      'checkpoint_collection', 'successor_startup', 'cache_warmup', 'successor_reread',
+    ]);
+    assert.equal(fork.rows, 0);
+  } finally {
+    fs.rmSync(f.root, { recursive: true, force: true });
+  }
+});
+
 done();
