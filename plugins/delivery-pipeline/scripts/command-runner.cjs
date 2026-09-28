@@ -139,14 +139,16 @@ function sbplString(value) {
   return JSON.stringify(value);
 }
 
-function darwinProfile({ writable, denied }) {
+function darwinProfile({ writable, denied, readOnly, temporary }) {
+  const temporaryPaths = [...new Set([temporary, '/private/tmp', '/tmp'])];
   return [
     '(version 1)',
     '(deny default)',
     '(allow process-exec process-fork signal sysctl-read mach-lookup ipc-posix-shm iokit-open)',
     '(allow file-read*)',
+    `(allow file-write* ${[writable, ...temporaryPaths].map((entry) => `(subpath ${sbplString(entry)})`).join(' ')} (literal "/dev/null"))`,
+    ...readOnly.map((entry) => `(deny file-write* (subpath ${sbplString(entry)}))`),
     ...denied.map((entry) => `(deny file-read* file-write* (subpath ${sbplString(entry)}))`),
-    `(allow file-write* (subpath ${sbplString(writable)}) (literal "/dev/null"))`,
     '(allow file-ioctl (literal "/dev/null"))',
     '',
   ].join('\n');
@@ -179,7 +181,7 @@ function verificationSpec(spec) {
     && typeof spec.executable === 'string' && path.isAbsolute(spec.executable)
     && Array.isArray(spec.argv) && spec.argv.every((value) => typeof value === 'string' && !value.includes('\0'))
     && typeof spec.cwd === 'string' && path.isAbsolute(spec.cwd)
-    && Number.isSafeInteger(spec.timeoutMs) && spec.timeoutMs > 0 && spec.timeoutMs <= 10 * 60 * 1000
+    && Number.isSafeInteger(spec.timeoutMs) && spec.timeoutMs > 0 && spec.timeoutMs <= 3600_000
     && Number.isSafeInteger(spec.maxOutputBytes) && spec.maxOutputBytes > 0
     && spec.maxOutputBytes <= MAX_VERIFICATION_OUTPUT_BYTES;
   if (!valid) throw sandboxError('VERIFICATION_SPEC_UNSUPPORTED', 'verification spec needs id, absolute executable/cwd, argv, timeoutMs and maxOutputBytes');
@@ -219,7 +221,7 @@ function createVerificationRunner(options = {}) {
       let args;
       let profile;
       if (backend.kind === 'sandbox-exec') {
-        profile = darwinProfile({ writable, denied });
+        profile = darwinProfile({ writable, denied, readOnly, temporary: tempRoot });
         file = backend.path;
         args = ['-p', profile, spec.executable, ...spec.argv];
       } else {
@@ -230,6 +232,7 @@ function createVerificationRunner(options = {}) {
       }
       const result = runBounded(file, args, {
         cwd, env: backend.kind === 'sandbox-exec' ? env : {}, timeoutMs: spec.timeoutMs,
+        maxTimeoutMs: 3600_000,
         maxBuffer: spec.maxOutputBytes * 4,
       });
       const stdout = bounded(result.stdout, spec.maxOutputBytes);
@@ -263,10 +266,37 @@ function createVerificationRunner(options = {}) {
   return Object.freeze({ backend, run });
 }
 
+function createHostProfileRunner(options = {}) {
+  const timeoutMs = integer(options.timeoutMs, DEFAULT_TIMEOUT_MS, 3600_000);
+  const maxOutput = integer(options.maxOutput, MAX_VERIFICATION_OUTPUT_BYTES, MAX_VERIFICATION_OUTPUT_BYTES);
+  const allowed = new Set(options.envAllowList || ['PATH', 'LANG', 'LC_ALL']);
+  const source = options.env || process.env;
+  const env = Object.fromEntries([...allowed].filter((key) => typeof source[key] === 'string')
+    .map((key) => [key, source[key]]));
+  return Object.freeze({ run(spec) {
+    if (!spec || typeof spec.executable !== 'string' || !path.isAbsolute(spec.executable)
+        || !Array.isArray(spec.argv) || spec.argv.some((arg) => typeof arg !== 'string' || arg.includes('\0'))
+        || typeof spec.cwd !== 'string' || !path.isAbsolute(spec.cwd)) {
+      throw sandboxError('VERIFICATION_SPEC_UNSUPPORTED', 'host profile requires absolute executable/cwd and argv');
+    }
+    const result = runBounded(spec.executable, spec.argv, {
+      cwd: spec.cwd, env, timeoutMs: Math.min(spec.timeoutMs || timeoutMs, timeoutMs),
+      maxTimeoutMs: 3600_000, maxBuffer: maxOutput,
+    });
+    const stdout = bounded(result.stdout, maxOutput);
+    const stderr = bounded(result.stderr, maxOutput);
+    return Object.freeze({ id: spec.id, status: result.status, signal: result.signal,
+      error_code: result.errorCode, timed_out: result.timedOut,
+      stdout, stderr, stdout_sha256: sha256(stdout), stderr_sha256: sha256(stderr),
+      backend: Object.freeze({ kind: 'host' }), profile_sha256: null });
+  } });
+}
+
 module.exports = {
   SANDBOX_CANDIDATES,
   selectSandboxBackend,
   createVerificationRunner,
+  createHostProfileRunner,
   DEFAULT_TIMEOUT_MS,
   DEFAULT_MAX_BUFFER_BYTES,
   diagnostic,

@@ -13,6 +13,8 @@ const { sealResearch, researchLineFailure, verifySealedLine, assertContained } =
 const { REPAIR: CODEX_ADAPTER_REPAIR } = require('./codex-model-remap.cjs');
 const { newDispatchId, createDurableRecorder } = require('./dispatch-boundary.cjs');
 const { createVerificationRunner } = require('./command-runner.cjs');
+const hostVerification = require('./host-verification.cjs');
+const { loadConfig, repoValue } = require('./pipeline-config.cjs');
 const { createRunScope } = require('./run-scope.cjs');
 const { createRunController, DEFAULT_LEASE_TTL_MS } = require('./run-controller.cjs');
 const { formatHint } = require('./refusal-hints.cjs');
@@ -325,10 +327,18 @@ function planSnapshot(graph, row) {
   return Object.freeze({ path: row.plan, sha256: sha256(content), text: content.toString('utf8') });
 }
 
-function resolveVerificationExecutable(program) {
+function resolveVerificationExecutable(program, allowList) {
   if (program === 'node') return process.execPath;
   const candidates = PLAN_EXECUTABLE_ALLOWLIST[program];
-  if (!candidates) return program;
+  if (!candidates) {
+    if (!Array.isArray(allowList) || path.isAbsolute(program)) return program;
+    const found = (process.env.PATH || '').split(path.delimiter).map((directory) => path.join(directory, program))
+      .find((candidate) => {
+        try { const stat = fs.statSync(candidate); return stat.isFile() && (stat.mode & 0o111) !== 0; }
+        catch { return false; }
+      });
+    return found ? fs.realpathSync(found) : program;
+  }
   const found = candidates.find((candidate) => {
     try { return fs.statSync(candidate).isFile(); } catch (_) { return false; }
   });
@@ -339,23 +349,17 @@ function resolveVerificationExecutable(program) {
   return found;
 }
 
-function planVerification(plan) {
-  const lines = plan.text.split(/\r?\n/);
-  const start = lines.findIndex((line) => /^##\s+Verification commands\s*$/.test(line));
-  if (start === -1) return null;
+function planVerification(plan, allowList) {
+  let parsed;
+  try { parsed = hostVerification.planCommands(plan.text); }
+  catch (error) { fail('VERIFICATION_SPEC_UNSUPPORTED', error.message); }
+  if (!parsed.length) return null;
   const commands = [];
-  for (const line of lines.slice(start + 1)) {
-    if (/^#{1,2}\s/.test(line)) break;
-    const match = /^\s*[-*]\s+`([^`]+)`\s*$/.exec(line);
-    if (!match) continue;
-    if (/[|&;<>()$\\"'*?~{}[\]!#]/.test(match[1])) {
-      fail('VERIFICATION_SPEC_UNSUPPORTED', 'PLAN verification command must be a plain argv without shell syntax: ' + match[1]
-        + '; split it into separate bullets under "## Verification commands"');
-    }
-    const [program, ...argv] = match[1].trim().split(/\s+/);
-    const executable = resolveVerificationExecutable(program);
+  for (const [program, ...argv] of parsed) {
+    const executable = resolveVerificationExecutable(program, allowList);
     if (!path.isAbsolute(executable)) {
-      fail('VERIFICATION_SPEC_UNSUPPORTED', 'PLAN verification command must start with node, bash, make or an absolute executable: ' + match[1]);
+      fail('VERIFICATION_SPEC_UNSUPPORTED', 'PLAN verification command needs an available executable: '
+        + [program, ...argv].join(' '));
     }
     commands.push({ id: 'plan-' + (commands.length + 1), executable, argv,
       timeoutMs: PLAN_COMMAND_TIMEOUT_MS, maxOutputBytes: PLAN_COMMAND_OUTPUT_BYTES });
@@ -363,8 +367,16 @@ function planVerification(plan) {
   return { commands };
 }
 
-function pinnedVerification(options, worktree, plan) {
-  const spec = options.verification !== undefined ? options.verification : planVerification(plan);
+function configuredAllowList(prepared, options) {
+  if (options.verificationAllowList !== undefined) return options.verificationAllowList;
+  const project = path.resolve(path.dirname(prepared.graphFile), '..', '..');
+  const config = loadConfig(project);
+  if (config.valid === false) fail('VERIFICATION_SPEC_UNSUPPORTED', 'project verification configuration is invalid');
+  return repoValue(config, 'verification_commands', prepared.repo);
+}
+
+function pinnedVerification(options, worktree, plan, allowList) {
+  const spec = options.verification !== undefined ? options.verification : planVerification(plan, allowList);
   if (!object(spec) || !Array.isArray(spec.commands) || !spec.commands.length) {
     fail('VERIFICATION_SPEC_MISSING', 'approved PLAN ' + plan.path + ' lists no "## Verification commands"; add them to the PLAN');
   }
@@ -422,6 +434,19 @@ function scopedTreeOf(prepared, options) {
 }
 
 function collectVerificationEvidence(prepared, verificationSpec, options = {}) {
+  const allowList = prepared.verificationAllowList;
+  if (Array.isArray(allowList)) {
+    const verified = hostVerification.collectVerificationEvidence({ planText: prepared.plan.text, allowList,
+      worktree: prepared.commit.worktree, stateRoot: prepared.stateRoot, ticket: prepared.commit.ticket,
+      planSha256: prepared.plan.sha256, expectedHead: prepared.commit.expectedHead,
+      files_modified: prepared.commit.files_modified, sandboxRunner: options.verificationRunner,
+      hostRunner: options.hostVerificationRunner,
+      treeDigest: options.scopedTree ? () => scopedTreeOf(prepared, options).tree : undefined });
+    return Object.freeze(Object.assign(verificationSpec.spec.commands.map((command) => Object.freeze({
+      id: command.id, record_sha256: verified.digest, outcome: 'passed',
+      host_evidence_digest: verified.digest,
+    })), { evidenceDigest: verified.digest }));
+  }
   const runner = verificationRunner(options, prepared);
   const directory = privateDirectory(prepared.stateRoot, 'verification');
   const records = [];
@@ -465,7 +490,9 @@ function collectVerificationEvidence(prepared, verificationSpec, options = {}) {
     error.gates = { pre_commit: records, downstream: pendingGates() };
     throw error;
   }
-  return Object.freeze(records);
+  const unconfigured = hostVerification.evidence([], { stateRoot: prepared.stateRoot,
+    ticket: prepared.commit.ticket, plan_sha256: prepared.plan.sha256, configured: false });
+  return Object.freeze(Object.assign(records, { evidenceDigest: unconfigured.digest }));
 }
 
 function pendingGates() {
@@ -494,6 +521,7 @@ function admitCandidate(prepared, verification, records, tree) {
     expected_base: prepared.commit.expectedBase, base_ref: prepared.baseRef,
     scoped_tree: tree.tree, changed: [...tree.changed],
     verification: { spec_sha256: verification.digest, required: [...verification.spec.required],
+      evidence_digest: records.evidenceDigest || null,
       records: records.map((record) => ({ ...record })) },
     gates: { pre_commit: 'passed', downstream: pendingGates() },
   };
@@ -541,6 +569,7 @@ function finalizeCandidate(candidate, stateRoot, key, options) {
     expectedBase: candidate.expected_base, expectedHead: candidate.expected_head,
     expectedSigner: candidate.signer, files_modified: [...candidate.files_modified],
     expectedTree: candidate.scoped_tree,
+    verificationEvidenceDigest: candidate.verification.evidence_digest,
   });
   const artifact = signedArtifact(candidate.worktree, candidate, committed);
   atomicWrite(finalizationFile(stateRoot, candidate.candidate_id), JSON.stringify(seal({
@@ -818,7 +847,8 @@ function executorPreflight(options, scope, expectedPlanSha256) {
     fail('PLAN_DIGEST_MISMATCH', 'delivered plan digest differs from the canonical source PLAN');
   }
   const delivery = deliverPlan({ graphDir: path.dirname(file), row: snapshot.row, worktree });
-  const verification = pinnedVerification(options, worktree, plan);
+  const verificationAllowList = configuredAllowList({ graphFile: file, repo: snapshot.row.repo || null }, options);
+  const verification = pinnedVerification(options, worktree, plan, verificationAllowList);
   const commit = Object.freeze({
     ticket: scope.ticket,
     worktree,
@@ -830,8 +860,9 @@ function executorPreflight(options, scope, expectedPlanSha256) {
   });
   const stateRoot = hostStateRoot(options, scope);
   const commonDir = fs.realpathSync(git(worktree, ['rev-parse', '--path-format=absolute', '--git-common-dir']));
-  return Object.freeze({ commit, graphFile: file, graphDigest: snapshot.sha256, plan, delivery, verification, baseRef,
-    stateRoot, key: hostKey(stateRoot), repository: 'git-common:' + sha256(commonDir) });
+  const prepared = { commit, graphFile: file, graphDigest: snapshot.sha256, plan, delivery, verification, baseRef,
+    stateRoot, key: hostKey(stateRoot), repository: 'git-common:' + sha256(commonDir), repo: snapshot.row.repo || null };
+  return Object.freeze({ ...prepared, verificationAllowList });
 }
 
 function finalizedArtifact(result, prepared, options) {
@@ -856,7 +887,13 @@ function finalizedArtifact(result, prepared, options) {
     model: original.receipt.applied_model || null, effort: original.receipt.applied_effort || null,
   });
   const staged = { ...prepared, identity };
-  const records = collectVerificationEvidence(staged, prepared.verification, options);
+  let records;
+  try { records = collectVerificationEvidence(staged, prepared.verification, options); }
+  catch (error) {
+    if (error.status !== 'verification_failed') throw error;
+    return Object.freeze({ ...result, status: 'verification_failed', command: error.command,
+      evidence_digest: error.evidence_digest, summary: error.message.slice(0, 500) });
+  }
   const candidate = admitCandidate(staged, prepared.verification, records, tree);
   options.controller?.assertOwner(options.scope.run_id);
   let artifact;
@@ -961,12 +998,30 @@ async function resumeFinalization(options, candidateId, liveScopeInput) {
     check('signer', () => signerFingerprint(worktree) === candidate.signer);
     check('tree', () => scopedTreeOf({ commit: { worktree, expectedHead: candidate.expected_head,
       files_modified: candidate.files_modified } }, options).tree === candidate.scoped_tree);
-    check('verification-spec', () => pinnedVerification(options, worktree, planSnapshot(graph.file, graph.snapshot.row))
+    check('verification-spec', () => pinnedVerification(options, worktree, planSnapshot(graph.file, graph.snapshot.row),
+      configuredAllowList({ graphFile: graph.file, repo: graph.snapshot.row.repo || null }, options))
       .digest === candidate.verification.spec_sha256);
+    check('verification-evidence', () => {
+      const digest = candidate.verification.evidence_digest;
+      if (digest === undefined) return true;
+      if (!/^[0-9a-f]{64}$/.test(digest || '')) return false;
+      const record = hostVerification.readEvidence(path.join(stateRoot, 'verification', digest + '.json'), digest);
+      return record && record.ticket === candidate.ticket && record.plan_sha256 === candidate.plan_sha256
+        && record.verification === (candidate.verification.records[0]?.host_evidence_digest ? 'configured' : 'not-configured');
+    });
     for (const pinned of candidate.verification.records) {
       check('verification:' + pinned.id, () => {
         const file = path.join(stateRoot, 'verification', pinned.record_sha256 + '.json');
-        const record = readSealed(file, key);
+        const record = hostVerification.readEvidence(file, pinned.record_sha256) || readSealed(file, key);
+        if (record?.schema === 'shipyard.host-verification.v1') {
+          return pinned.outcome === 'passed' && record.verification === 'configured'
+            && pinned.record_sha256 === candidate.verification.evidence_digest
+            && record.ticket === candidate.ticket && record.plan_sha256 === candidate.plan_sha256
+            && record.results.length === candidate.verification.required.length
+            && record.results.every((result) => result.outcome === 'passed'
+              && result.tree_after === candidate.scoped_tree)
+            && sha256(canonical(JSON.parse(fs.readFileSync(file, 'utf8')))) === pinned.record_sha256;
+        }
         return record && pinned.outcome === 'passed' && record.outcome === 'passed'
           && sha256(canonical(JSON.parse(fs.readFileSync(file, 'utf8')))) === pinned.record_sha256
           && record.command_id === pinned.id && record.dispatch_id === candidate.dispatch_id
@@ -1173,6 +1228,7 @@ async function runResumeCli(argv, stdout, options) {
     const host = createFinalizationRecoveryHost({
       controller, graphDir: options.graphDir, storageRoot: options.storageRoot,
       finalizeCommit: options.finalizeCommit, verification: options.verification,
+      verificationAllowList: options.verificationAllowList,
       recorder: options.recorder, scopedTree: options.scopedTree,
     });
     result = await host.resumeFinalization(parsed.candidateId, scope);
@@ -1259,7 +1315,9 @@ async function runCli(argv = process.argv.slice(2), stdout = process.stdout, opt
       storageRoot: options.storageRoot,
       finalizeCommit: options.finalizeCommit,
       verification: options.verification,
+      verificationAllowList: options.verificationAllowList,
       verificationRunner: options.verificationRunner,
+      hostVerificationRunner: options.hostVerificationRunner,
       scopedTree: options.scopedTree,
       host: options.host,
     });
@@ -1267,10 +1325,14 @@ async function runCli(argv = process.argv.slice(2), stdout = process.stdout, opt
     clearInterval(heartbeat);
     if (heartbeatError) throw heartbeatError;
     controller.assertOwner(scope.run_id);
-    if (request.role === 'executor' && (!result.artifact || result.artifact.status !== 'committed')) {
+    if (request.role === 'executor' && result.status !== 'verification_failed'
+        && (!result.artifact || result.artifact.status !== 'committed')) {
       fail('MISSING_ARTIFACT', 'executor produced no committed artifact');
     }
-    controller.complete(scope.run_id, {
+    if (result.status === 'verification_failed') controller.fail(scope.run_id, {
+      reason: 'host verification failed: ' + result.command.join(' '),
+    });
+    else controller.complete(scope.run_id, {
       reason: request.role === 'executor' ? 'verified signed commit ' + result.artifact.commit
         : Array.isArray(result) ? 'sealed research lines ' + result.map((line) => line && line.id).join(', ')
           : result && result.receipt ? 'verified dispatch receipt ' + result.receipt.dispatch_id

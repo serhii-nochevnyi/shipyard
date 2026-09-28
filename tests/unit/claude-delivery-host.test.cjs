@@ -121,7 +121,7 @@ function repairFixture(config = {}) {
     }],
   };
   const host = createClaudeDeliveryHost({
-    graphDir, controller, runtimeHost,
+    graphDir, controller, runtimeHost, storageRoot: path.join(root, 'host-storage'),
     ...(config.hostOptions || {}),
   });
   return { root, worktree, graphDir, planPath, host, runtimeHost, args, prompts, launches: () => launches };
@@ -450,6 +450,44 @@ test('trusted repair host blocks a failed signed finalizer before sealing or pub
   } finally {
     fs.rmSync(fixture.root, { recursive: true, force: true });
   }
+});
+
+test('allow-listed host verification failure blocks Claude repair finalization', async () => {
+  let finalized = 0;
+  const fixture = repairFixture({ status: 'fixed', changeCode: true,
+    hostOptions: { verificationAllowList: [{ argv: ['node', 'check.cjs'], profile: 'host' }],
+      verificationTreeDigest() { return 'same'; },
+      hostVerificationRunner: { run() { return { status: 7, stdout: '', stderr: 'failed' }; } },
+      signingFingerprint() { return 'A'.repeat(40); },
+      finalizeCommit() { finalized++; },
+    } });
+  try {
+    fs.writeFileSync(fixture.planPath, '## Verification commands\n- `node check.cjs`\n');
+    const result = await fixture.host.run('fix-round', fixture.args);
+    assert.equal(result[0].status, 'verification_failed');
+    assert.deepEqual(result[0].command, ['node', 'check.cjs']);
+    assert.match(result[0].evidence_digest, /^[0-9a-f]{64}$/);
+    assert.deepEqual(result[0].receipt,
+      fixture.runtimeHost.recorder.getVerifiedRecord(result[0].receipt.dispatch_id).receipt);
+    assert.equal(finalized, 0);
+  } finally { fs.rmSync(fixture.root, { recursive: true, force: true }); }
+});
+
+test('passing Claude host verification sends sealed digest to finalizer', async () => {
+  let digest;
+  const fixture = repairFixture({ status: 'fixed', changeCode: true,
+    hostOptions: { verificationAllowList: [{ argv: ['node', 'check.cjs'], profile: 'host' }],
+      verificationTreeDigest() { return 'same'; },
+      hostVerificationRunner: { run() { return { status: 0, stdout: '', stderr: '' }; } },
+      signingFingerprint() { return 'A'.repeat(40); },
+      finalizeCommit(input) { digest = input.verificationEvidenceDigest; return { commit: 'signed' }; },
+      publishRepair() { return { pushed: true }; },
+    } });
+  try {
+    fs.writeFileSync(fixture.planPath, '## Verification commands\n- `node check.cjs`\n');
+    await fixture.host.run('fix-round', fixture.args);
+    assert.match(digest, /^[0-9a-f]{64}$/);
+  } finally { fs.rmSync(fixture.root, { recursive: true, force: true }); }
 });
 
 test('trusted repair host refuses a mismatched canonical PR and caller-supplied reference data', () => {

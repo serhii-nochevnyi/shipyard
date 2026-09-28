@@ -9,6 +9,8 @@ const { createClaudeRuntimeHost, probeClaudeRuntime } = require('./claude-runtim
 const { registerClaudeWorkflowHost } = require('./claude-workflow-host.cjs');
 const { loadClaudeReferenceContent } = require('./claude-reference-content.cjs');
 const { finalizeDeliveryCommit } = require('./delivery-commit-finalizer.cjs');
+const { verifyPlan } = require('./host-verification.cjs');
+const { loadConfig, repoValue } = require('./pipeline-config.cjs');
 const { isDurableRecorder } = require('./dispatch-boundary.cjs');
 const { createRunController } = require('./run-controller.cjs');
 const { createRunScope } = require('./run-scope.cjs');
@@ -254,6 +256,7 @@ function repairPreflight(options, entry) {
   const board = boardTicket(options, entry, row, worktree);
   if (entry.branch !== row.branch) reject('repair branch differs from the canonical graph');
   const baseRef = canonicalBase(worktree, entry.base || entry.prBase, board.base);
+  const verification = verificationInput(options, worktree, row);
   return Object.freeze({
     ticket: entry.id,
     pr: entry.pr,
@@ -265,6 +268,7 @@ function repairPreflight(options, entry) {
     expectedHead: git(worktree, ['rev-parse', '--verify', 'HEAD^{commit}']),
     files_modified: row.files,
     repo: row.repo || null,
+    ...verification,
     needsReviewFix: entry.needsReviewFix === true,
     planDelivery: deliverPlan({ graphDir: graphDirectory(options, worktree), row, worktree }),
   });
@@ -516,6 +520,7 @@ function executorCommitInput(options, entry) {
     reject('executor branch or base contradicts the canonical ticket graph');
   }
   const baseRef = resolveBaseRef(worktree, row.pr_base);
+  const verification = verificationInput(options, worktree, row);
   return Object.freeze({
     ticket: entry.id,
     worktree,
@@ -524,8 +529,38 @@ function executorCommitInput(options, entry) {
     expectedHead: git(worktree, ['rev-parse', '--verify', 'HEAD^{commit}']),
     expectedSigner: signingFingerprint(worktree),
     files_modified: row.files,
+    repo: row.repo || null,
+    ...verification,
     planDelivery: deliverPlan({ graphDir: graphDirectory(options, worktree), row, worktree }),
   });
+}
+
+function verificationInput(options, worktree, row) {
+  const project = path.resolve(graphDirectory(options, worktree), '..', '..');
+  const config = options.verificationConfig || loadConfig(project);
+  if (config.valid === false) reject('project verification configuration is invalid');
+  const planPath = path.resolve(project, row.plan);
+  const planStat = fs.lstatSync(planPath);
+  if (!planStat.isFile() || planStat.isSymbolicLink() || planStat.size > 8 * 1024 * 1024) {
+    reject('approved PLAN must be a bounded regular file');
+  }
+  const planText = fs.readFileSync(planPath, 'utf8');
+  return { planPath, planText,
+    planSha256: crypto.createHash('sha256').update(planText).digest('hex'),
+    verificationAllowList: options.verificationAllowList !== undefined
+      ? options.verificationAllowList : repoValue(config, 'verification_commands', row.repo || null) };
+}
+
+function verifyCommit(options, commit) {
+  if (crypto.createHash('sha256').update(fs.readFileSync(commit.planPath)).digest('hex') !== commit.planSha256) {
+    reject('approved PLAN changed during executor or repair dispatch');
+  }
+  return verifyPlan({ planText: commit.planText, allowList: commit.verificationAllowList,
+    worktree: commit.worktree, stateRoot: storageDirectory({ ...options, scope: options.scope }),
+    ticket: commit.ticket, planSha256: commit.planSha256,
+    expectedHead: commit.expectedHead, files_modified: commit.files_modified,
+    sandboxRunner: options.verificationRunner, hostRunner: options.hostVerificationRunner,
+    treeDigest: options.verificationTreeDigest });
 }
 
 function sealPlanningResearch(input, options, scope) {
@@ -595,8 +630,9 @@ function withHiddenRepairArtifacts(worktree, action) {
 
 function finalizedRepair(options, repair) {
   const expectedSigner = (options.signingFingerprint || signingFingerprint)(repair.worktree);
-  return withHiddenRepairArtifacts(repair.worktree, () =>
-    (options.finalizeCommit || finalizeDeliveryCommit)({
+  return withHiddenRepairArtifacts(repair.worktree, () => {
+    const verified = verifyCommit(options, repair);
+    return (options.finalizeCommit || finalizeDeliveryCommit)({
       ticket: repair.ticket,
       worktree: repair.worktree,
       expectedBranch: repair.branch,
@@ -604,7 +640,9 @@ function finalizedRepair(options, repair) {
       expectedHead: repair.expectedHead,
       expectedSigner,
       files_modified: repair.files_modified,
-    }));
+      verificationEvidenceDigest: verified.digest,
+    });
+  });
 }
 
 function reinitializeRepairReviewers(repair) {
@@ -701,6 +739,7 @@ function createClaudeDeliveryHost(options = {}) {
   const reviewFeedbacks = new Map();
   const reviewActions = new Map();
   const committedRepairs = new Map();
+  let verificationFailure = null;
   let repairActive = false;
   const sealArtifact = options.artifactConsumer || ((input) => roleArtifact.seal({
     ...input.artifact,
@@ -715,7 +754,14 @@ function createClaudeDeliveryHost(options = {}) {
     if (input.artifact.role === 'executor' && input.result && input.result.status === 'committed') {
       const commit = prepared.get(input.artifact.ticket);
       if (!commit) reject('executor has no trusted commit preflight');
-      finalizeDeliveryCommit(commit);
+      let verified;
+      try { verified = verifyCommit({ ...options, scope }, commit); }
+      catch (error) {
+        if (error.code === 'VERIFICATION_FAILED') verificationFailure = { error, receipt: input.record.receipt };
+        throw error;
+      }
+      (options.finalizeCommit || finalizeDeliveryCommit)({ ...commit,
+        verificationEvidenceDigest: verified.digest });
     }
     if (input.artifact.role === 'ci-fix' || input.artifact.role === 'review-fix') {
       const repair = repairs.get(input.artifact.ticket);
@@ -726,7 +772,11 @@ function createClaudeDeliveryHost(options = {}) {
       }
       if (hasRepairChanges(repair.worktree)) {
         if (result.status !== 'fixed') reject('repair changed files without reporting fixed');
-        committedRepairs.set(repair.ticket, finalizedRepair(options, repair));
+        try { committedRepairs.set(repair.ticket, finalizedRepair({ ...options, scope }, repair)); }
+        catch (error) {
+          if (error.code === 'VERIFICATION_FAILED') verificationFailure = { error, receipt: input.record.receipt };
+          throw error;
+        }
       }
     }
     return sealArtifact(input);
@@ -747,6 +797,7 @@ function createClaudeDeliveryHost(options = {}) {
         reject('workflow args cannot supply a script path or host resources');
       }
       suppliedController.assertOwner(scope.run_id);
+      verificationFailure = null;
       assertScopedWork(name, args, scope);
       let deliveredArgs = args;
       if (name === 'executors' && Array.isArray(args.tickets) && args.tickets.length === 1) {
@@ -795,10 +846,19 @@ function createClaudeDeliveryHost(options = {}) {
       const finalArgs = verifiedSealedLines !== undefined
         ? { ...workflowArgs, sealedLines: verifiedSealedLines } : workflowArgs;
       const run = () => registered.run(name, { args: finalArgs });
-      if (!repair) return run();
+      const verificationResult = (error) => {
+        if (!verificationFailure) throw error;
+        const failed = verificationFailure;
+        verificationFailure = null;
+        return [Object.freeze({ id: scope.ticket, status: 'verification_failed', pushed: false,
+          command: failed.error.command, evidence_digest: failed.error.evidence_digest,
+          summary: failed.error.message.slice(0, 500), receipt: failed.receipt })];
+      };
+      if (!repair) return Promise.resolve().then(run).catch(verificationResult);
       repairActive = true;
       let launched;
-      try { launched = run(); } catch (error) { repairActive = false; throw error; }
+      try { launched = run(); }
+      catch (error) { repairActive = false; return Promise.resolve(verificationResult(error)); }
       return Promise.resolve(launched).then(async (result) => {
         const bounded = result && result[0];
         if (!bounded || (bounded.status !== 'fixed' && !(bounded.status === 'no-op' && baseCommit))) return result;
@@ -831,7 +891,7 @@ function createClaudeDeliveryHost(options = {}) {
         }
         committedRepairs.delete(repair.ticket);
         return result.map((entry) => Object.freeze({ ...entry, status: 'fixed', host_publication: publication }));
-      }).finally(() => { repairActive = false; });
+      }).catch(verificationResult).finally(() => { repairActive = false; });
     },
   });
 }
@@ -950,7 +1010,9 @@ async function runClaudeDeliveryCli(argv = process.argv.slice(2), output = proce
       ...hostOptions, scope: hostScope, controller,
     }).run(workflow, request.args);
     if (heartbeatError) throw heartbeatError;
-    controller.complete(scope.run_id);
+    if (Array.isArray(result) && result.some((entry) => entry?.status === 'verification_failed')) {
+      controller.fail(scope.run_id, { reason: 'host verification failed' });
+    } else controller.complete(scope.run_id);
     output.write(`${JSON.stringify(result)}\n`);
     return result;
   } catch (error) {

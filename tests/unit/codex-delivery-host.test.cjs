@@ -713,6 +713,38 @@ test('verification failures, missing specs and tree-changing checks refuse befor
   } finally { clean(f); }
 });
 
+test('Codex host verification refuses an admitted failure without finalizing', async () => {
+  const f = fixture();
+  let finalized = 0;
+  try {
+    approvedPlan(f, ['node check.cjs']);
+    const result = await delivery(f, { verification: undefined,
+      verificationAllowList: [{ argv: ['node', 'check.cjs'], profile: 'host' }],
+      hostVerificationRunner: { run() { return { status: 3, stdout: '', stderr: 'failed', backend: { kind: 'host' } }; } },
+      finalizeCommit() { finalized++; },
+    }).run({ role: 'executor', context: { prompt: 'Implement.' } });
+    assert.equal(result.status, 'verification_failed');
+    assert.deepEqual(result.command, ['node', 'check.cjs']);
+    assert.match(result.evidence_digest, /^[0-9a-f]{64}$/);
+    assert.deepEqual(result.receipt, f.host.recorder.getVerifiedRecord(result.receipt.dispatch_id).receipt);
+    assert.equal(finalized, 0);
+  } finally { clean(f); }
+});
+
+test('Codex host verification passes sealed evidence digest to trusted finalizer', async () => {
+  const f = fixture();
+  let digest;
+  try {
+    approvedPlan(f, ['node check.cjs']);
+    await assert.rejects(() => delivery(f, { verification: undefined,
+      verificationAllowList: [{ argv: ['node', 'check.cjs'], profile: 'host' }],
+      hostVerificationRunner: { run() { return { status: 0, stdout: '', stderr: '', backend: { kind: 'host' } }; } },
+      finalizeCommit(input) { digest = input.verificationEvidenceDigest; throw new Error('stop after evidence'); },
+    }).run({ role: 'executor', context: { prompt: 'Implement.' } }), /stop after evidence/);
+    assert.match(digest, /^[0-9a-f]{64}$/);
+  } finally { clean(f); }
+});
+
 test('changed tree, graph, base, plan, verification or receipt refuses and keeps the candidate visible', async () => {
   const f = fixture();
   try {
@@ -738,7 +770,8 @@ test('changed tree, graph, base, plan, verification or receipt refuses and keeps
     await refused({ code: 'IDENTITY_CHANGED', names: ['verification-spec'],
     }, { verification: { commands: [{ ...f.verification.commands[0], argv: ['-e', '1'] }] } });
     const records = path.join(stateRoot(f), 'verification');
-    const recordFile = path.join(records, fs.readdirSync(records)[0]);
+    const pinned = JSON.parse(fs.readFileSync(candidatePath(f, id), 'utf8')).payload.verification.records[0];
+    const recordFile = path.join(records, pinned.record_sha256 + '.json');
     const original = fs.readFileSync(recordFile, 'utf8');
     fs.writeFileSync(recordFile, original.replace('"outcome":"passed"', '"outcome":"failed"'));
     await refused({ code: 'IDENTITY_CHANGED', names: ['verification:unit'] });
