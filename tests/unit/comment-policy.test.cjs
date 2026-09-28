@@ -295,6 +295,30 @@ test('a net-new free comment still blocks', () => {
   assert.strictEqual(report.files[0].comment_lines, 1);
 });
 
+test('committed diff uses merge-base pre-image while worktree diff uses base-tip pre-image', () => {
+  const repo = fixture(
+    { 'src/app.js': 'const value = 1;\n' },
+    { 'src/app.js': '// ticket explanation\n' },
+  );
+
+  git(repo, ['checkout', 'main']);
+  fs.writeFileSync(path.join(repo, 'src/app.js'), '// base explanation\n');
+  git(repo, ['add', 'src/app.js']);
+  git(repo, ['commit', '-qm', 'base changes code to comment']);
+  git(repo, ['checkout', 'ticket/T-01-01']);
+
+  const committed = commentPolicy.analyze(repo, 'main');
+  assert.strictEqual(committed.ok, false);
+  assert.strictEqual(committed.files[0].comment_lines, 1);
+  assert.deepStrictEqual(committed.files[0].findings.map((finding) => finding.kind), ['cleanable']);
+
+  fs.writeFileSync(path.join(repo, 'src/app.js'), '// revised ticket explanation\n');
+  const workingTree = commentPolicy.analyze(repo, 'main', { workingTree: true });
+  assert.strictEqual(workingTree.ok, true);
+  assert.strictEqual(workingTree.files[0].comment_lines, 0);
+  assert.deepStrictEqual(workingTree.files[0].findings.map((finding) => finding.kind), ['edited_comment']);
+});
+
 test('deleting a comment does not create an added-line report', () => {
   const repo = fixture(
     { 'src/app.js': '// existing explanation\nconst value = 1;\n' },

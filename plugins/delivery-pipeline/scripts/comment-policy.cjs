@@ -366,7 +366,11 @@ function ratioFor(comments, code) {
 
 function analyze(worktree, base, options = {}) {
   const resolvedBase = resolveBase(worktree, base);
-  const diff = diffFor(worktree, resolvedBase, Boolean(options.workingTree));
+  const workingTree = Boolean(options.workingTree);
+  const diff = diffFor(worktree, resolvedBase, workingTree);
+  const preimage = workingTree
+    ? resolvedBase
+    : git(worktree, ['merge-base', resolvedBase, 'HEAD']).trim();
   const changes = parseDiff(diff);
   const projectRoot = options.projectRoot || null;
   const repo = options.repo || repositorySlug(worktree);
@@ -418,7 +422,7 @@ function analyze(worktree, base, options = {}) {
     let baseScanned = [];
     if (change.edited.size) {
       try {
-        const baseContent = git(worktree, ['show', `${resolvedBase}:${relative}`]);
+        const baseContent = git(worktree, ['show', `${preimage}:${relative}`]);
         baseScanned = scanText(baseContent, language, configuredMarkers);
       } catch {}
     }
