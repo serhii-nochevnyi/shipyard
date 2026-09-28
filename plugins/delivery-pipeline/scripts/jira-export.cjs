@@ -261,7 +261,10 @@ function planExport(graphDir, opts = {}) {
       'Acceptance criteria:', secs['Acceptance criteria'] || '', '',
       pointer,
     ].join('\n');
-    const hasRecordedKey = typeof t.jira === 'string' && JIRA_KEY_RE.test(t.jira);
+    const hasRecordedKey = t.jira !== null && t.jira !== undefined && t.jira !== '';
+    if (hasRecordedKey && (typeof t.jira !== 'string' || !JIRA_KEY_RE.test(t.jira))) {
+      throw new Error(`${id} has invalid recorded Jira key "${String(t.jira)}" — refusing Jira export`);
+    }
     steps.push({
       step: 'issue',
       ticket: id,

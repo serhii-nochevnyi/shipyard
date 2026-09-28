@@ -232,6 +232,15 @@ test('a recorded Jira key becomes an authoritative key lookup with restricted un
   assert.equal(issue.unlabelled, 'transition-and-comment-only');
 });
 
+test('a malformed nonempty recorded Jira key refuses export instead of falling back to create', () => {
+  const p = project({ 'T-01-01': { phase: 1, title: 'Root', jira: 'not-a-jira-key' } });
+
+  assert.throws(
+    () => mod.planExport(p.graph, { repo: 'acme/demo', project: 'MYD' }),
+    /T-01-01 has invalid recorded Jira key/
+  );
+});
+
 
 test('the epic lookup has a legacy entry and the epic description carries one pointer line', () => {
   const p = project({ 'T-01-01': { phase: '01', title: 'Root', depends_on: [] } });
