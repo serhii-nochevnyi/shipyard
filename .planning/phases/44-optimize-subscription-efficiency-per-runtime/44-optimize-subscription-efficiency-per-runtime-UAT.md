@@ -1,10 +1,10 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: b7b2accd7d720f383d253189fbc6d3fe0244e3134f24ec26bb74b8ac0e19c2a3
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 379e555d08d73adb8d93e5a956cbc6592151a0be618394ed68c45d8a6ad468ec
 phase: 44
 status: pending
 result: pending
 shipyard_sync: evidence-projection
-shipyard_source_fingerprint: b7b2accd7d720f383d253189fbc6d3fe0244e3134f24ec26bb74b8ac0e19c2a3
+shipyard_source_fingerprint: 379e555d08d73adb8d93e5a956cbc6592151a0be618394ed68c45d8a6ad468ec
 ---
 
 # Phase 44: Optimize subscription efficiency per runtime — UAT Projection
@@ -13,8 +13,8 @@ This file is generated from the delivery graph and phase integration evidence.
 
 ### 1. Delivery plans are accounted for
 result: pending
-expected: all 7 phase plan(s) are merged
-actual: 0 merged
+expected: all 8 phase plan(s) are merged
+actual: 7 merged
 
 ### 2. Integration evidence is explicit
 result: pending

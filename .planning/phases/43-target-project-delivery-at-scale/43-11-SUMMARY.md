@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: be13697b07eac32ba7f076a7a707e578df0f75789f174a162d1f0a1e84ba4d2d
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: cc529df5f8bb9ee5c0c13aabb51fb8b922ba25797331699239857ba5bfe3de66
 phase: 43-target-project-delivery-at-scale
 plan: 11
 subsystem: shipyard delivery
@@ -22,7 +22,7 @@ key-decisions:
 duration: 0min
 status: halted
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: be13697b07eac32ba7f076a7a707e578df0f75789f174a162d1f0a1e84ba4d2d
+shipyard_source_fingerprint: cc529df5f8bb9ee5c0c13aabb51fb8b922ba25797331699239857ba5bfe3de66
 ---
 
 # Phase 43: Bind pre-existing Jira issues by recorded key: never create, refuse an unknown key, unlabelled issues are transitioned and commented only — Delivery Projection
@@ -32,8 +32,8 @@ shipyard_source_fingerprint: be13697b07eac32ba7f076a7a707e578df0f75789f174a162d1
 ## Delivery Evidence
 
 - Ticket: T-43-11
-- Delivery status: pending
-- PR: not observed
+- Delivery status: pr-open
+- PR: #334
 - Source plan: .planning/phases/43-target-project-delivery-at-scale/43-11-PLAN.md
 - This summary is halted until the delivery state observes `merged`.
 
