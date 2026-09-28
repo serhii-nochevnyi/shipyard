@@ -12,6 +12,7 @@ const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs
 const { codexStaticVariants } = require('../../plugins/delivery-pipeline/scripts/gsd-tune.cjs');
 const { createDurableRecorder } = require('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs');
 const { createRunController } = require('../../plugins/delivery-pipeline/scripts/run-controller.cjs');
+const { createPlanningWriterLease } = require('../../plugins/delivery-pipeline/scripts/planning-writer-lease.cjs');
 const {
   createCodexDecomposeHost, defaultRunStoreDir, parseCliArguments, readRequestFile, requestValue, runCli,
 } = require('../../plugins/delivery-pipeline/scripts/codex-decompose-host.cjs');
@@ -26,6 +27,10 @@ function git(root, ...args) {
   const result = spawnSync('git', ['-C', root, '-c', 'commit.gpgsign=false', '-c', 'user.name=t',
     '-c', 'user.email=t@example.invalid', ...args], { encoding: 'utf8' });
   assert.equal(result.status, 0, result.stderr);
+}
+
+function headRevision(root) {
+  return spawnSync('git', ['-C', root, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
 }
 
 function researchVariant(rung) {
@@ -548,5 +553,138 @@ test('standalone CLI owns runtime unavailability and fails the run', async () =>
     assert.equal(status.state, 'failed');
     assert.equal(status.owner.status, 'failed');
     assert.equal(status.scope.runtime.provider, 'openai');
+  } finally { f.clean(); }
+});
+
+test('a second session planning the same worktree and phase is refused with WRITER_LEASED before any model launch', async () => {
+  const f = fixture();
+  try {
+    const file = path.join(f.root, 'cli-request.json');
+    fs.writeFileSync(file, JSON.stringify({ scope: f.scope, gsd_role: 'gsd-planner', prompt: 'Plan.' }));
+    const leaseStateRoot = fs.mkdtempSync(path.join(f.stateRoot, 'lease-state-'));
+    const phaseDir = path.join(f.root, '.planning', 'phases', '38-codex-decompose');
+    const writerLease = createPlanningWriterLease({ worktree: f.root, phaseDir, stateRoot: leaseStateRoot });
+    writerLease.acquire({ owner: 'other-session', base_revision: headRevision(f.root) });
+    let spawnCalls = 0;
+    await assert.rejects(() => runCli(['--args-file', file], { write() {} }, {
+      env: { CODEX_HOME: f.codexHome },
+      testStateRoot: f.stateRoot,
+      writerLease,
+      probe: { status: 'available', executable: 'codex', runtime_version: '0.157.1', capabilities },
+      spawn: () => { spawnCalls += 1; throw new Error('spawn should not be called'); },
+    }), (error) => error.code === 'WRITER_LEASED');
+    assert.equal(spawnCalls, 0);
+  } finally { f.clean(); }
+});
+
+test('different phases in the same worktree do not contend for the planning writer lease', async () => {
+  const f = fixture();
+  try {
+    const file = path.join(f.root, 'cli-request.json');
+    fs.writeFileSync(file, JSON.stringify({ scope: f.scope, gsd_role: 'gsd-planner', prompt: 'Plan.' }));
+    const leaseStateRoot = fs.mkdtempSync(path.join(f.stateRoot, 'lease-state-'));
+    const otherPhaseLease = createPlanningWriterLease({
+      worktree: f.root, phaseDir: path.join(f.root, '.planning', 'phases', '39-other-codex-decompose'), stateRoot: leaseStateRoot,
+    });
+    otherPhaseLease.acquire({ owner: 'holder-of-phase-39', base_revision: headRevision(f.root) });
+    const phase38Lease = createPlanningWriterLease({
+      worktree: f.root, phaseDir: path.join(f.root, '.planning', 'phases', '38-codex-decompose'), stateRoot: leaseStateRoot,
+    });
+    await assert.rejects(() => runCli(['--args-file', file], { write() {} }, {
+      env: { CODEX_HOME: f.codexHome },
+      testStateRoot: f.stateRoot,
+      writerLease: phase38Lease,
+      probe: { status: 'unavailable', reason: 'runtime_missing' },
+    }), (error) => error.code === 'RUNTIME_UNAVAILABLE');
+  } finally { f.clean(); }
+});
+
+test('a lease takeover before sealing refuses with WRITER_FENCED and seals nothing', async () => {
+  const f = fixture();
+  try {
+    let clock = 1_000;
+    const leaseStateRoot = fs.mkdtempSync(path.join(f.stateRoot, 'lease-state-'));
+    const phaseDir = path.join(f.root, '.planning', 'phases', '38-codex-decompose');
+    const writerLease = createPlanningWriterLease({
+      worktree: f.root, phaseDir, stateRoot: leaseStateRoot, now: () => clock, ttlMs: 100,
+    });
+    const leaseHandle = writerLease.acquire({ owner: 'run-a', base_revision: headRevision(f.root) });
+    const snapshot = writerLease.snapshotTree();
+    const launch = f.host.launchTypedGsd;
+    f.host.launchTypedGsd = async (selection, context) => {
+      clock += 500;
+      writerLease.acquire({ owner: 'intruder', base_revision: headRevision(f.root) });
+      return launch(selection, context);
+    };
+    await assert.rejects(() => f.create({
+      lease: { writerLease, token: leaseHandle.token, epoch: leaseHandle.epoch, snapshot },
+    }).run({ gsd_role: 'gsd-planner', prompt: 'Plan.' }), (error) => error.code === 'WRITER_FENCED');
+    assert.equal(fs.existsSync(path.join(f.stateRoot, 'sealed', 'decomposition-index')), false);
+  } finally { f.clean(); }
+});
+
+test('a foreign edit to the phase directory mid-run refuses with FOREIGN_EDIT, naming the path', async () => {
+  const f = fixture();
+  try {
+    const leaseStateRoot = fs.mkdtempSync(path.join(f.stateRoot, 'lease-state-'));
+    const phaseDir = path.join(f.root, '.planning', 'phases', '38-codex-decompose');
+    const writerLease = createPlanningWriterLease({ worktree: f.root, phaseDir, stateRoot: leaseStateRoot });
+    const leaseHandle = writerLease.acquire({ owner: 'run-a', base_revision: headRevision(f.root) });
+    const snapshot = writerLease.snapshotTree();
+    const launch = f.host.launchTypedGsd;
+    f.host.launchTypedGsd = async (selection, context) => {
+      fs.writeFileSync(path.join(phaseDir, 'stray.md'), 'stray\n');
+      return launch(selection, context);
+    };
+    await assert.rejects(() => f.create({
+      lease: { writerLease, token: leaseHandle.token, epoch: leaseHandle.epoch, snapshot },
+    }).run({ gsd_role: 'gsd-planner', prompt: 'Plan.' }),
+      (error) => error.code === 'FOREIGN_EDIT' && /stray\.md/.test(error.message));
+    assert.equal(fs.existsSync(path.join(f.stateRoot, 'sealed', 'decomposition-index')), false);
+  } finally { f.clean(); }
+});
+
+test('the planning writer lease releases on success and on failure so a following run acquires immediately', async () => {
+  const f = fixture();
+  const fixtureData = buildNativeChildFixture('gsd-planner');
+  const clock = manualClock(Date.now());
+  const heartbeat = manualHeartbeat();
+  try {
+    fs.writeFileSync(path.join(f.agentDir, 'gsd-planner.toml'), gsdAgentToml('gsd-planner', fixtureData.instructions.replace(/\n$/, '')));
+    const file = path.join(f.root, 'cli-request.json');
+    fs.writeFileSync(file, JSON.stringify({ scope: f.scope, gsd_role: 'gsd-planner', prompt: 'Plan this phase.' }));
+    const phaseDir = path.join(f.root, '.planning', 'phases', '38-codex-decompose');
+    const successStateRoot = fs.mkdtempSync(path.join(f.stateRoot, 'lease-state-success-'));
+    const successLease = createPlanningWriterLease({ worktree: f.root, phaseDir, stateRoot: successStateRoot });
+    const { spawn } = attachFakeSpawn(f, 'gsd-planner', fixtureData, () => { clock.advance(50); heartbeat.fire(); });
+    const result = await runCli(['--args-file', file], { write() {} }, {
+      env: { CODEX_HOME: f.codexHome },
+      agentDir: f.agentDir,
+      agentManifest: path.join(f.agentDir, '.shipyard-manifest.json'),
+      testStateRoot: f.stateRoot,
+      writerLease: successLease,
+      leaseTtlMs: 1000,
+      now: clock,
+      heartbeat: heartbeat.scheduler,
+      probe: { status: 'available', executable: 'codex', runtime_version: '0.157.1', capabilities },
+      spawn,
+    });
+    assert.equal(result.receipt.compliance, 'verified');
+    assert.doesNotThrow(() => successLease.acquire({ owner: 'a-following-run', base_revision: headRevision(f.root) }));
+
+    const failureStateRoot = fs.mkdtempSync(path.join(f.stateRoot, 'lease-state-failure-'));
+    const failureLease = createPlanningWriterLease({ worktree: f.root, phaseDir, stateRoot: failureStateRoot });
+    const failureScope = { ...f.scope, run_id: 'run-codex-decompose-test-failure' };
+    const failureFile = path.join(f.root, 'cli-request-failure.json');
+    fs.writeFileSync(failureFile, JSON.stringify({ scope: failureScope, gsd_role: 'gsd-planner', prompt: 'Plan.' }));
+    fs.appendFileSync(path.join(f.agentDir, 'gsd-planner.toml'), 'model = "gpt-6-luna"\n');
+    await assert.rejects(() => runCli(['--args-file', failureFile], { write() {} }, {
+      env: { CODEX_HOME: f.codexHome },
+      agentDir: f.agentDir,
+      testStateRoot: f.stateRoot,
+      writerLease: failureLease,
+      probe: { status: 'available', executable: 'codex', runtime_version: '0.157.1', capabilities },
+    }), (error) => error.code === 'CONFLICTING_OVERRIDE');
+    assert.doesNotThrow(() => failureLease.acquire({ owner: 'a-following-run', base_revision: headRevision(f.root) }));
   } finally { f.clean(); }
 });

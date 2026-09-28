@@ -9,6 +9,7 @@ const { execFileSync } = require('node:child_process');
 const test = require('node:test');
 const { transcriptEvidence } = require('./claude-test-evidence.cjs');
 const { ROLES, canonicalRequest, inlineReferences, trustedAgent, parseArguments, runDecomposition } = require('../../plugins/delivery-pipeline/scripts/claude-decompose-host.cjs');
+const { createPlanningWriterLease } = require('../../plugins/delivery-pipeline/scripts/planning-writer-lease.cjs');
 
 function fixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-decompose-host-'));
@@ -28,6 +29,53 @@ function fixture() {
 
 function request(worktree, role) {
   return { phase: 38, worktree, role, prompt: 'Create the phase plan.' };
+}
+
+function preparedPhaseFixture() {
+  const f = fixture();
+  execFileSync('git', ['-C', f.worktree, 'config', 'user.name', 'Decompose Host Test']);
+  execFileSync('git', ['-C', f.worktree, 'config', 'user.email', 'decompose-host@example.test']);
+  fs.writeFileSync(path.join(f.worktree, 'README.md'), '# test\n');
+  execFileSync('git', ['-C', f.worktree, 'add', 'README.md']);
+  execFileSync('git', ['-C', f.worktree, '-c', 'commit.gpgsign=false', 'commit', '-qm', 'base']);
+  const phaseDir = path.join(fs.realpathSync(f.worktree), '.planning', 'phases', '38-test-phase');
+  fs.mkdirSync(phaseDir, { recursive: true });
+  fs.writeFileSync(path.join(phaseDir, 'CONTEXT.md'), '# Context\n');
+  fs.writeFileSync(path.join(phaseDir, '38-01-PLAN.md'), '# Plan\n');
+  return { ...f, phaseDir };
+}
+
+function successDependencies(f, { store, writerLease, onLaunch, mutateEvidence } = {}) {
+  const calls = [];
+  return {
+    calls,
+    deps: {
+      configRoot: f.config,
+      store,
+      ...(writerLease ? { writerLease } : {}),
+      resolveDispatch: ({ runtime, role: boundaryRole, dispatch_id }) => ({
+        runtime, role: boundaryRole, dispatch_id, model: 'claude-opus-5-5', effort: 'medium',
+      }),
+      probe: () => ({ status: 'available', executable: 'claude', runtime_version: 'test' }),
+      runtimeHostFactory: ({ recorder, controller, scope }) => ({
+        recorder, controller, scope,
+        capabilities: { supportedModels: ['claude-opus-5-5'], supportedEfforts: ['medium'], observedModel: true, observedEffort: true },
+        typedGsdCallback: async (prompt, options, launchedRole) => {
+          calls.push({ prompt, options, launchedRole });
+          if (onLaunch) await onLaunch();
+          const evidence = transcriptEvidence({
+            launch_id: `launch-${launchedRole}`, applied_model: options.model,
+            applied_effort: options.effort, observed_model: options.model,
+            observed_effort: options.effort, gsd_role: launchedRole,
+            gsd_launch_mechanism: options.gsd_launch_mechanism,
+          });
+          if (mutateEvidence) mutateEvidence(evidence);
+          return evidence;
+        },
+        applicationEvidence: ({ result }) => result,
+      }),
+    },
+  };
 }
 
 const HELP_MARKERS = [
@@ -208,7 +256,7 @@ test('capability-only failure JSON keeps every existing key and adds a hint', ()
 });
 
 test('refuses missing, wrong, or cross-session typed role evidence', async () => {
-  const f = fixture();
+  const f = preparedPhaseFixture();
   try {
     for (const invalid of [
       (evidence) => { delete evidence.gsd_agent_evidence; },
@@ -243,5 +291,91 @@ test('refuses missing, wrong, or cross-session typed role evidence', async () =>
         ? fs.readdirSync(path.join(store, 'receipts')).filter((file) => file.startsWith('record-')) : [];
       assert.equal(receiptFiles.length, 0);
     }
+  } finally { f.clean(); }
+});
+
+test('a second session planning the same worktree and phase is refused with WRITER_LEASED before any model launch', async () => {
+  const f = preparedPhaseFixture();
+  try {
+    const stateRoot = fs.mkdtempSync(path.join(f.root, 'lease-state-'));
+    const writerLease = createPlanningWriterLease({ worktree: fs.realpathSync(f.worktree), phaseDir: f.phaseDir, stateRoot });
+    writerLease.acquire({ owner: 'other-session', base_revision: 'deadbeef' });
+    const { deps, calls } = successDependencies(f, { store: path.join(f.root, 'store-second-session'), writerLease });
+    await assert.rejects(runDecomposition(request(f.worktree, 'gsd-plan-checker'), deps),
+      (error) => error.code === 'WRITER_LEASED');
+    assert.equal(calls.length, 0);
+  } finally { f.clean(); }
+});
+
+test('different phases in the same worktree do not contend for the planning writer lease', async () => {
+  const f = preparedPhaseFixture();
+  try {
+    const otherPhaseDir = path.join(fs.realpathSync(f.worktree), '.planning', 'phases', '39-other-phase');
+    fs.mkdirSync(otherPhaseDir, { recursive: true });
+    fs.writeFileSync(path.join(otherPhaseDir, 'CONTEXT.md'), '# Context\n');
+    fs.writeFileSync(path.join(otherPhaseDir, '39-01-PLAN.md'), '# Plan\n');
+    const stateRoot = fs.mkdtempSync(path.join(f.root, 'lease-state-'));
+    const leaseA = createPlanningWriterLease({ worktree: fs.realpathSync(f.worktree), phaseDir: f.phaseDir, stateRoot });
+    leaseA.acquire({ owner: 'holder-of-phase-38', base_revision: 'deadbeef' });
+    const leaseB = createPlanningWriterLease({ worktree: fs.realpathSync(f.worktree), phaseDir: otherPhaseDir, stateRoot });
+    const otherRequest = { phase: 39, worktree: f.worktree, role: 'gsd-plan-checker', prompt: 'Check the other phase.' };
+    const { deps } = successDependencies(f, { store: path.join(f.root, 'store-phase-39'), writerLease: leaseB });
+    const output = await runDecomposition(otherRequest, deps);
+    assert.equal(output.receipt.compliance, 'verified');
+  } finally { f.clean(); }
+});
+
+test('a lease takeover before sealing refuses with WRITER_FENCED and seals nothing', async () => {
+  const f = preparedPhaseFixture();
+  try {
+    let clock = 1_000;
+    const stateRoot = fs.mkdtempSync(path.join(f.root, 'lease-state-'));
+    const writerLease = createPlanningWriterLease({
+      worktree: fs.realpathSync(f.worktree), phaseDir: f.phaseDir, stateRoot, now: () => clock, ttlMs: 100,
+    });
+    const store = path.join(f.root, 'store-takeover');
+    const { deps } = successDependencies(f, {
+      store, writerLease,
+      onLaunch: () => { clock += 500; writerLease.acquire({ owner: 'intruder', base_revision: 'deadbeef' }); },
+    });
+    await assert.rejects(runDecomposition(request(f.worktree, 'gsd-plan-checker'), deps),
+      (error) => error.code === 'WRITER_FENCED');
+    assert.equal(fs.existsSync(path.join(store, 'decomposition-index')), false);
+  } finally { f.clean(); }
+});
+
+test('a foreign edit to the phase directory mid-run refuses with FOREIGN_EDIT, naming the path', async () => {
+  const f = preparedPhaseFixture();
+  try {
+    const store = path.join(f.root, 'store-foreign-edit');
+    const { deps } = successDependencies(f, {
+      store,
+      onLaunch: () => { fs.writeFileSync(path.join(f.phaseDir, 'stray.md'), 'stray\n'); },
+    });
+    await assert.rejects(runDecomposition(request(f.worktree, 'gsd-plan-checker'), deps),
+      (error) => error.code === 'FOREIGN_EDIT' && /stray\.md/.test(error.message));
+    assert.equal(fs.existsSync(path.join(store, 'decomposition-index')), false);
+  } finally { f.clean(); }
+});
+
+test('the planning writer lease releases on success and on failure so a following run acquires immediately', async () => {
+  const f = preparedPhaseFixture();
+  try {
+    const successStateRoot = fs.mkdtempSync(path.join(f.root, 'lease-state-success-'));
+    const successLease = createPlanningWriterLease({ worktree: fs.realpathSync(f.worktree), phaseDir: f.phaseDir, stateRoot: successStateRoot });
+    const { deps: successDeps } = successDependencies(f, { store: path.join(f.root, 'store-release-success'), writerLease: successLease });
+    const output = await runDecomposition(request(f.worktree, 'gsd-plan-checker'), successDeps);
+    assert.equal(output.receipt.compliance, 'verified');
+    assert.doesNotThrow(() => successLease.acquire({ owner: 'a-following-run', base_revision: 'deadbeef' }));
+
+    const failureStateRoot = fs.mkdtempSync(path.join(f.root, 'lease-state-failure-'));
+    const failureLease = createPlanningWriterLease({ worktree: fs.realpathSync(f.worktree), phaseDir: f.phaseDir, stateRoot: failureStateRoot });
+    const { deps: failureDeps } = successDependencies(f, {
+      store: path.join(f.root, 'store-release-failure'), writerLease: failureLease,
+      mutateEvidence: (evidence) => { delete evidence.gsd_agent_evidence; },
+    });
+    await assert.rejects(runDecomposition(request(f.worktree, 'gsd-plan-checker'), failureDeps),
+      (error) => error.code === 'NONCOMPLIANT_RECEIPT');
+    assert.doesNotThrow(() => failureLease.acquire({ owner: 'a-following-run', base_revision: 'deadbeef' }));
   } finally { f.clean(); }
 });

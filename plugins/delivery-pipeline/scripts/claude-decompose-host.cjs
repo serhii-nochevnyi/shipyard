@@ -16,6 +16,7 @@ const { matchesModelObservation } = require('./runtime-adapters.cjs');
 const pipelineConfig = require('./pipeline-config.cjs');
 const { formatHint } = require('./refusal-hints.cjs');
 const { sealDecomposition } = require('./planning-result-sealer.cjs');
+const { createPlanningWriterLease } = require('./planning-writer-lease.cjs');
 
 const ROLES = Object.freeze({
   'gsd-phase-researcher': 'research',
@@ -177,83 +178,115 @@ function privateStore(scope) {
   return path.join(home, '.local', 'state', 'shipyard', 'claude-decompose', key);
 }
 
+function foreignPhaseEdits(directory, declaredAbsolutePaths, writerLease, snapshot) {
+  const declared = new Set(declaredAbsolutePaths.map((full) => path.relative(directory, full).split(path.sep).join('/')));
+  const { changed, lease: currentLease } = writerLease.changedSince(snapshot);
+  return { foreign: changed.filter((relPath) => !declared.has(relPath)), currentLease };
+}
+
 async function runDecomposition(request, dependencies = {}) {
   const scope = canonicalRequest(request);
-  const dispatchId = `decompose-${crypto.randomUUID()}`;
-  const resolution = (dependencies.resolveDispatch || pipelineConfig.resolveDispatch)({
-    root: scope.worktree, runtime: 'claude', role: ROLES[scope.role],
-    signals: scope.signals, dispatch_id: dispatchId,
+  const store = dependencies.store || privateStore(scope);
+  const phaseDir = phaseDirectory(scope.worktree, scope.phase);
+  const controller = (dependencies.controllerFactory || createRunController)({ storeDir: path.join(store, 'runs') });
+  const runId = `decompose-${crypto.randomUUID()}`;
+  const writerLease = dependencies.writerLease || createPlanningWriterLease({
+    worktree: scope.worktree, phaseDir, stateRoot: path.join(store, 'writer'),
   });
-  if (!object(resolution) || resolution.dispatch_id !== dispatchId || resolution.runtime !== 'claude'
-      || resolution.role !== ROLES[scope.role] || typeof resolution.model !== 'string'
-      || typeof resolution.effort !== 'string') {
-    refuse('CONFLICTING_OVERRIDE', 'routed resolution does not match the requested GSD launch');
-  }
-  const configRoot = dependencies.configRoot || process.env.CLAUDE_CONFIG_DIR || path.join(process.env.HOME || os.homedir(), '.claude');
-  const definition = trustedAgent(scope.role, configRoot);
-  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-gsd-definition-'));
-  fs.chmodSync(temporary, 0o700);
+  const leaseHandle = writerLease.acquire({
+    owner: JSON.stringify({ run_id: runId, owner_id: controller.owner_id }),
+    base_revision: git(scope.worktree, 'rev-parse', 'HEAD'),
+  });
+  const preLaunchSnapshot = writerLease.snapshotTree();
   try {
-    fs.writeFileSync(path.join(temporary, `${scope.role}.md`), definition, { flag: 'wx', mode: 0o600 });
-    const store = dependencies.store || privateStore(scope);
-    const recorder = (dependencies.recorderFactory || createDurableRecorder)(path.join(store, 'receipts'));
-    const controller = (dependencies.controllerFactory || createRunController)({ storeDir: path.join(store, 'runs') });
-    const runId = `decompose-${crypto.randomUUID()}`;
-    controller.begin(createRunScope({
-      run_id: runId, repository_id: scope.repository, phase: scope.phase, ticket: scope.ticket,
-      worktree: scope.worktree, runtime: 'claude', owner_id: controller.owner_id,
-      dispatch: { dispatch_id: dispatchId, role: ROLES[scope.role], model: resolution.model, effort: resolution.effort },
-    }));
-    let heartbeatFailure;
-    const heartbeat = setInterval(() => {
-      try { controller.heartbeat(runId); }
-      catch (error) { heartbeatFailure = error; }
-    }, 60 * 1000);
-    heartbeat.unref();
+    const dispatchId = `decompose-${crypto.randomUUID()}`;
+    const resolution = (dependencies.resolveDispatch || pipelineConfig.resolveDispatch)({
+      root: scope.worktree, runtime: 'claude', role: ROLES[scope.role],
+      signals: scope.signals, dispatch_id: dispatchId,
+    });
+    if (!object(resolution) || resolution.dispatch_id !== dispatchId || resolution.runtime !== 'claude'
+        || resolution.role !== ROLES[scope.role] || typeof resolution.model !== 'string'
+        || typeof resolution.effort !== 'string') {
+      refuse('CONFLICTING_OVERRIDE', 'routed resolution does not match the requested GSD launch');
+    }
+    const configRoot = dependencies.configRoot || process.env.CLAUDE_CONFIG_DIR || path.join(process.env.HOME || os.homedir(), '.claude');
+    const definition = trustedAgent(scope.role, configRoot);
+    const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-gsd-definition-'));
+    fs.chmodSync(temporary, 0o700);
     try {
-      const probe = (dependencies.probe || probeClaudeRuntime)();
-      const host = (dependencies.runtimeHostFactory || createClaudeRuntimeHost)({
-        scope: { run_id: runId, ticket: scope.ticket, phase: scope.phase, worktree: scope.worktree,
-          runtime: 'claude', provider: 'anthropic', repository: scope.repository },
-        recorder, controller, probe, gsdAgentRoot: temporary,
-        transcriptDir: path.join(store, 'transcripts'),
-      });
-      const output = await createClaudeWorkflowDispatch({
-        host, prompt: scope.prompt, role: ROLES[scope.role], gsdRole: scope.role,
-        model: resolution.model, effort: resolution.effort, signals: scope.signals,
-        dispatchId, requireGsdRole: true,
-        context: { ticket: scope.ticket, phase: scope.phase, run_id: runId,
-          worktreePath: scope.worktree, runtime: 'claude', provider: 'anthropic' },
-      });
-      if (!output || output.receipt?.compliance !== 'verified'
-          || output.receipt.gsd_role !== scope.role
-          || output.receipt.applied_model !== resolution.model
-          || output.receipt.applied_effort !== resolution.effort
-          || !matchesModelObservation('claude', output.receipt.observed_model, resolution.model)
-          || output.receipt.observed_effort !== resolution.effort
-          || output.receipt.gsd_agent_evidence?.role !== scope.role
-          || output.receipt.gsd_agent_evidence?.session_id !== output.receipt.session_id
-          || output.receipt.gsd_agent_evidence?.session_start_agent_type !== scope.role
-          || output.receipt.gsd_agent_evidence?.transcript_agent_setting !== scope.role
-          || output.receipt.selection_evidence?.session_id !== output.receipt.session_id) {
-        refuse('NONCOMPLIANT_RECEIPT', 'typed GSD dispatch has no compliant exact-role receipt');
+      fs.writeFileSync(path.join(temporary, `${scope.role}.md`), definition, { flag: 'wx', mode: 0o600 });
+      const recorder = (dependencies.recorderFactory || createDurableRecorder)(path.join(store, 'receipts'));
+      controller.begin(createRunScope({
+        run_id: runId, repository_id: scope.repository, phase: scope.phase, ticket: scope.ticket,
+        worktree: scope.worktree, runtime: 'claude', owner_id: controller.owner_id,
+        dispatch: { dispatch_id: dispatchId, role: ROLES[scope.role], model: resolution.model, effort: resolution.effort },
+      }));
+      let heartbeatFailure;
+      const heartbeat = setInterval(() => {
+        try { controller.heartbeat(runId); }
+        catch (error) { heartbeatFailure = error; }
+        try { writerLease.heartbeat({ token: leaseHandle.token, epoch: leaseHandle.epoch }); }
+        catch (error) { heartbeatFailure = heartbeatFailure || error; }
+      }, 60 * 1000);
+      heartbeat.unref();
+      try {
+        const probe = (dependencies.probe || probeClaudeRuntime)();
+        const host = (dependencies.runtimeHostFactory || createClaudeRuntimeHost)({
+          scope: { run_id: runId, ticket: scope.ticket, phase: scope.phase, worktree: scope.worktree,
+            runtime: 'claude', provider: 'anthropic', repository: scope.repository },
+          recorder, controller, probe, gsdAgentRoot: temporary,
+          transcriptDir: path.join(store, 'transcripts'),
+        });
+        const output = await createClaudeWorkflowDispatch({
+          host, prompt: scope.prompt, role: ROLES[scope.role], gsdRole: scope.role,
+          model: resolution.model, effort: resolution.effort, signals: scope.signals,
+          dispatchId, requireGsdRole: true,
+          context: { ticket: scope.ticket, phase: scope.phase, run_id: runId,
+            worktreePath: scope.worktree, runtime: 'claude', provider: 'anthropic' },
+        });
+        if (!output || output.receipt?.compliance !== 'verified'
+            || output.receipt.gsd_role !== scope.role
+            || output.receipt.applied_model !== resolution.model
+            || output.receipt.applied_effort !== resolution.effort
+            || !matchesModelObservation('claude', output.receipt.observed_model, resolution.model)
+            || output.receipt.observed_effort !== resolution.effort
+            || output.receipt.gsd_agent_evidence?.role !== scope.role
+            || output.receipt.gsd_agent_evidence?.session_id !== output.receipt.session_id
+            || output.receipt.gsd_agent_evidence?.session_start_agent_type !== scope.role
+            || output.receipt.gsd_agent_evidence?.transcript_agent_setting !== scope.role
+            || output.receipt.selection_evidence?.session_id !== output.receipt.session_id) {
+          refuse('NONCOMPLIANT_RECEIPT', 'typed GSD dispatch has no compliant exact-role receipt');
+        }
+        if (heartbeatFailure) throw heartbeatFailure;
+        controller.assertOwner(runId);
+        let envelope = null;
+        if (ROLES[scope.role] === 'decomposition') {
+          writerLease.assertFence({ token: leaseHandle.token, epoch: leaseHandle.epoch,
+            base_revision: git(scope.worktree, 'rev-parse', 'HEAD') });
+          const directory = phaseDirectory(scope.worktree, scope.phase);
+          const { foreign, currentLease } = foreignPhaseEdits(
+            directory, decompositionPlans(directory), writerLease, preLaunchSnapshot);
+          if (foreign.length) {
+            refuse('FOREIGN_EDIT', `phase directory path(s) changed outside this run's own paths: ${foreign.join(', ')} `
+              + `(lease owner ${currentLease.owner}, epoch ${currentLease.epoch})`);
+          }
+          envelope = decompositionEnvelope(scope, store, output);
+        }
+        controller.complete(runId);
+        return Object.freeze({ role: scope.role, result: output.result, receipt: output.receipt,
+          run_id: runId, dispatch_id: dispatchId, ...(envelope ? { envelope } : {}) });
+      } catch (error) {
+        if (controller.status(runId).state === 'running') controller.fail(runId, { reason: error.message });
+        throw error;
+      } finally {
+        clearInterval(heartbeat);
       }
-      if (heartbeatFailure) throw heartbeatFailure;
-      controller.assertOwner(runId);
-      const envelope = ROLES[scope.role] === 'decomposition'
-        ? decompositionEnvelope(scope, store, output)
-        : null;
-      controller.complete(runId);
-      return Object.freeze({ role: scope.role, result: output.result, receipt: output.receipt,
-        run_id: runId, dispatch_id: dispatchId, ...(envelope ? { envelope } : {}) });
-    } catch (error) {
-      if (controller.status(runId).state === 'running') controller.fail(runId, { reason: error.message });
-      throw error;
     } finally {
-      clearInterval(heartbeat);
+      fs.rmSync(temporary, { recursive: true, force: true });
     }
   } finally {
-    fs.rmSync(temporary, { recursive: true, force: true });
+    try { writerLease.release({ token: leaseHandle.token, epoch: leaseHandle.epoch }); }
+    catch { /* @invariant: a fenced or expired lease has nothing left to release */ }
   }
 }
 
