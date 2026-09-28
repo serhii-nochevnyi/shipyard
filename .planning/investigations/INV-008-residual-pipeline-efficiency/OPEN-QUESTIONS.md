@@ -1,10 +1,10 @@
 # Open questions
 
 ## Decisions (maintainer)
-- [ ] Q1: Phase-level strategy: A (S1 only), B (correctness-first, then measured treatments), C (host-owned conveyor bundle) or D (buy hosted primitives)? — see [OPTIONS.md](OPTIONS.md)
-- [ ] Q2: Accept the recommended per-package options (the bold rows in OPTIONS.md) as the contracts?
-- [ ] Q3: R10 adjudication authority: a deterministic policy (R10-b) or a human-signed record (R10-c)?
-- [ ] Q4: R18: GitHub merge queue (R18-c) or a host merge-result attestation (R18-b), both with `base-merge.cjs` as fallback?
+- [x] Q1: Phase-level strategy: A (S1 only), B (correctness-first, then measured treatments), C (host-owned conveyor bundle) or D (buy hosted primitives)? — see [OPTIONS.md](OPTIONS.md)
+- [x] Q2: Accept the recommended per-package options (the bold rows in OPTIONS.md) as the contracts?
+- [x] Q3: R10 adjudication authority: a deterministic policy (R10-b) or a human-signed record (R10-c)?
+- [x] Q4: R18: GitHub merge queue (R18-c) or a host merge-result attestation (R18-b), both with `base-merge.cjs` as fallback?
 
 ## Research-answerable (closed by the four lines)
 - [x] Which packages are already fixed on 0.68.0? N47; N43 partly (#316); the PREFLIGHT host blocker. — [RESEARCH.md](RESEARCH.md)
@@ -18,4 +18,4 @@
 - [x] Whether a worktree-local writable reviewer `TMPDIR` is admissible under ADR-020 (R10-d): a spike at the start of R10. — recorded in RESEARCH.md "Unknowns"
 - [x] Whether the installed hook and bundles match 0.68.0: checked by the doctor before S1 acceptance. — RISKS.md
 
-Gate 1 stays open until Q1–Q4 are decided.
+All decisions are recorded in [DECISIONS.md](DECISIONS.md) (2026-09-28).

@@ -961,9 +961,11 @@
     "since": "2026-09-12T00:07:42.789Z"
   },
   "T-30-04": {
-    "branch": "ticket/T-30-04-require-an-explicit-operator-choice-before-cloning",
+    "branch": "ticket/T-30-04-require-an-explicit-operator-choice-befo",
     "pr": 113,
     "status": "merged",
+    "matched_by": "marker",
+    "pr_branch": "ticket/T-30-04-require-an-explicit-operator-choice-before-cloning",
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/113",
     "merged_into": "epic/30-a-ticket-you-cannot-reach-is-not-deliverable",
     "base": "epic/30-a-ticket-you-cannot-reach-is-not-deliverable",
@@ -973,9 +975,11 @@
     "since": "2026-09-12T19:57:33.322Z"
   },
   "T-30-05": {
-    "branch": "ticket/T-30-05-validate-repository-destinations-with-existing-nesting-rule",
+    "branch": "ticket/T-30-05-validate-repository-destinations-with-th",
     "pr": 114,
     "status": "merged",
+    "matched_by": "marker",
+    "pr_branch": "ticket/T-30-05-validate-repository-destinations-with-existing-nesting-rule",
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/114",
     "merged_into": "epic/30-a-ticket-you-cannot-reach-is-not-deliverable",
     "base": "epic/30-a-ticket-you-cannot-reach-is-not-deliverable",
@@ -985,9 +989,11 @@
     "since": "2026-09-12T19:57:33.322Z"
   },
   "T-30-06": {
-    "branch": "ticket/T-30-06-mirror-project-origin-protocol-for-repository-clones",
+    "branch": "ticket/T-30-06-mirror-the-project-origin-protocol-for-r",
     "pr": 115,
     "status": "merged",
+    "matched_by": "marker",
+    "pr_branch": "ticket/T-30-06-mirror-project-origin-protocol-for-repository-clones",
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/115",
     "merged_into": "epic/30-a-ticket-you-cannot-reach-is-not-deliverable",
     "base": "epic/30-a-ticket-you-cannot-reach-is-not-deliverable",
@@ -1009,9 +1015,11 @@
     "since": "2026-09-12T19:57:33.322Z"
   },
   "T-30-08": {
-    "branch": "ticket/T-30-08-adopt-matching-checkouts-and-refuse-to-clobber",
+    "branch": "ticket/T-30-08-adopt-matching-checkouts-and-refuse-to-c",
     "pr": 117,
     "status": "merged",
+    "matched_by": "marker",
+    "pr_branch": "ticket/T-30-08-adopt-matching-checkouts-and-refuse-to-clobber",
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/117",
     "merged_into": "epic/30-a-ticket-you-cannot-reach-is-not-deliverable",
     "base": "epic/30-a-ticket-you-cannot-reach-is-not-deliverable",
@@ -1021,9 +1029,11 @@
     "since": "2026-09-12T19:57:33.322Z"
   },
   "T-30-09": {
-    "branch": "ticket/T-30-09-persist-resolved-checkouts-and-park-unreachable",
+    "branch": "ticket/T-30-09-persist-resolved-checkouts-and-park-unre",
     "pr": 118,
     "status": "merged",
+    "matched_by": "marker",
+    "pr_branch": "ticket/T-30-09-persist-resolved-checkouts-and-park-unreachable",
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/118",
     "merged_into": "epic/30-a-ticket-you-cannot-reach-is-not-deliverable",
     "base": "epic/30-a-ticket-you-cannot-reach-is-not-deliverable",
@@ -1117,9 +1127,11 @@
     "since": "2026-09-14T19:18:25.449Z"
   },
   "T-31-07": {
-    "branch": "ticket/T-31-07-read-tracker-eligibility-at-cold-start",
+    "branch": "ticket/T-31-07-read-tracker-eligibility-at-cold-start-a",
     "pr": 135,
     "status": "merged",
+    "matched_by": "marker",
+    "pr_branch": "ticket/T-31-07-read-tracker-eligibility-at-cold-start",
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/135",
     "merged_into": "epic/31-not-every-ticket-is-available-work",
     "base": "epic/31-not-every-ticket-is-available-work",
@@ -1202,9 +1214,11 @@
     "since": "2026-09-11T18:59:59.751Z"
   },
   "T-32-07": {
-    "branch": "ticket/T-32-07-join-transcripts-to-dispatches",
+    "branch": "ticket/T-32-07-join-transcript-usage-to-dispatches-with",
     "pr": 102,
     "status": "merged",
+    "matched_by": "marker",
+    "pr_branch": "ticket/T-32-07-join-transcripts-to-dispatches",
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/102",
     "merged_into": "epic/32-measure-usage-and-make-the-backlog-actionable",
     "base": "epic/32-measure-usage-and-make-the-backlog-actionable",
@@ -1322,9 +1336,11 @@
     "since": "2026-09-17T09:36:22.933Z"
   },
   "T-34-01": {
-    "branch": "ticket/T-34-01-review-progress-and-resource-budgets",
+    "branch": "ticket/T-34-01-make-review-progress-and-resource-budget",
     "pr": 167,
     "status": "merged",
+    "matched_by": "marker",
+    "pr_branch": "ticket/T-34-01-review-progress-and-resource-budgets",
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/167",
     "merged_into": "epic/34-improve-convergence-and-tune-from-measured-outcomes",
     "base": "epic/34-improve-convergence-and-tune-from-measured-outcomes",
@@ -1334,9 +1350,11 @@
     "since": "2026-09-17T16:19:24.785Z"
   },
   "T-34-02": {
-    "branch": "ticket/T-34-02-runtime-capability-evidence",
+    "branch": "ticket/T-34-02-require-runtime-capability-evidence-for",
     "pr": 168,
     "status": "merged",
+    "matched_by": "marker",
+    "pr_branch": "ticket/T-34-02-runtime-capability-evidence",
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/168",
     "merged_into": "epic/34-improve-convergence-and-tune-from-measured-outcomes",
     "base": "epic/34-improve-convergence-and-tune-from-measured-outcomes",
@@ -1346,9 +1364,11 @@
     "since": "2026-09-17T16:20:00.050Z"
   },
   "T-34-03": {
-    "branch": "ticket/T-34-03-merge-verdict-carry",
+    "branch": "ticket/T-34-03-strengthen-manual-merge-verdict-carry",
     "pr": 169,
     "status": "merged",
+    "matched_by": "marker",
+    "pr_branch": "ticket/T-34-03-merge-verdict-carry",
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/169",
     "merged_into": "epic/34-improve-convergence-and-tune-from-measured-outcomes",
     "base": "epic/34-improve-convergence-and-tune-from-measured-outcomes",
@@ -1358,9 +1378,11 @@
     "since": "2026-09-17T16:19:24.785Z"
   },
   "T-34-04": {
-    "branch": "ticket/T-34-04-shared-capacity-and-dispatch-boundary",
+    "branch": "ticket/T-34-04-admit-distinct-agents-through-shared-acc",
     "pr": 170,
     "status": "merged",
+    "matched_by": "marker",
+    "pr_branch": "ticket/T-34-04-shared-capacity-and-dispatch-boundary",
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/170",
     "merged_into": "epic/34-improve-convergence-and-tune-from-measured-outcomes",
     "base": "epic/34-improve-convergence-and-tune-from-measured-outcomes",
@@ -1455,9 +1477,11 @@
     "since": "2026-09-15T07:39:31.619Z"
   },
   "T-36-04": {
-    "branch": "ticket/T-36-04-generate-and-validate-the-complete-codex",
+    "branch": "ticket/T-36-04-generate-and-validate-the-codex-bundle-w",
     "pr": 139,
     "status": "merged",
+    "matched_by": "marker",
+    "pr_branch": "ticket/T-36-04-generate-and-validate-the-complete-codex",
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/139",
     "merged_into": "epic/36-enforce-the-runtime-model-ladder",
     "base": "epic/36-enforce-the-runtime-model-ladder",
@@ -1491,9 +1515,11 @@
     "since": "2026-09-16T17:20:49.458Z"
   },
   "T-36-07": {
-    "branch": "ticket/T-36-07-enforce-the-boundary-across-shipyard-delivery-launches",
+    "branch": "ticket/T-36-07-enforce-the-boundary-across-shipyard-del",
     "pr": 142,
     "status": "merged",
+    "matched_by": "marker",
+    "pr_branch": "ticket/T-36-07-enforce-the-boundary-across-shipyard-delivery-launches",
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/142",
     "merged_into": "epic/36-enforce-the-runtime-model-ladder",
     "base": "epic/36-enforce-the-runtime-model-ladder",
@@ -1515,9 +1541,11 @@
     "since": "2026-09-16T17:20:49.458Z"
   },
   "T-36-09": {
-    "branch": "ticket/T-36-09-policy-aware-telemetry-and-reconciliation-reporting",
+    "branch": "ticket/T-36-09-policy-aware-telemetry-and-reconciliatio",
     "pr": 144,
     "status": "merged",
+    "matched_by": "marker",
+    "pr_branch": "ticket/T-36-09-policy-aware-telemetry-and-reconciliation-reporting",
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/144",
     "merged_into": "epic/36-enforce-the-runtime-model-ladder",
     "base": "epic/36-enforce-the-runtime-model-ladder",
@@ -1527,9 +1555,11 @@
     "since": "2026-09-16T17:20:49.458Z"
   },
   "T-36-10": {
-    "branch": "ticket/T-36-10-exhaustive-signal-matrix-and-negative-bypass-suite",
+    "branch": "ticket/T-36-10-exhaustive-signal-matrix-and-negative-by",
     "pr": 145,
     "status": "merged",
+    "matched_by": "marker",
+    "pr_branch": "ticket/T-36-10-exhaustive-signal-matrix-and-negative-bypass-suite",
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/145",
     "merged_into": "epic/36-enforce-the-runtime-model-ladder",
     "base": "epic/36-enforce-the-runtime-model-ladder",
@@ -1539,9 +1569,11 @@
     "since": "2026-09-16T17:20:49.458Z"
   },
   "T-36-11": {
-    "branch": "ticket/T-36-11-cross-runtime-generated-install-smoke-verification",
+    "branch": "ticket/T-36-11-cross-runtime-generated-install-smoke-ve",
     "pr": 146,
     "status": "merged",
+    "matched_by": "marker",
+    "pr_branch": "ticket/T-36-11-cross-runtime-generated-install-smoke-verification",
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/146",
     "merged_into": "epic/36-enforce-the-runtime-model-ladder",
     "base": "epic/36-enforce-the-runtime-model-ladder",
@@ -1587,9 +1619,11 @@
     "since": "2026-09-22T19:26:00.502Z"
   },
   "T-37-03": {
-    "branch": "ticket/T-37-03-connect-claude-to-scoped-runtime-controller",
+    "branch": "ticket/T-37-03-connect-claude-code-to-the-scoped-runtim",
     "pr": 180,
     "status": "merged",
+    "matched_by": "marker",
+    "pr_branch": "ticket/T-37-03-connect-claude-to-scoped-runtime-controller",
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/180",
     "merged_into": "ticket/T-37-02-persist-controller-leases-and-autonomous",
     "base": "epic/37-autonomous-dual-runtime-control-plane",
@@ -1599,9 +1633,11 @@
     "since": "2026-09-22T19:26:00.502Z"
   },
   "T-37-04": {
-    "branch": "ticket/T-37-04-connect-codex-to-scoped-runtime-controller",
+    "branch": "ticket/T-37-04-connect-codex-to-the-scoped-runtime-cont",
     "pr": 182,
     "status": "merged",
+    "matched_by": "marker",
+    "pr_branch": "ticket/T-37-04-connect-codex-to-scoped-runtime-controller",
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/182",
     "merged_into": "ticket/T-37-02-persist-controller-leases-and-autonomous",
     "base": "epic/37-autonomous-dual-runtime-control-plane",
@@ -1611,9 +1647,11 @@
     "since": "2026-09-22T19:26:00.502Z"
   },
   "T-37-05": {
-    "branch": "ticket/T-37-05-prove-graph-reachability-before-autonomous-run",
+    "branch": "ticket/T-37-05-prove-graph-reachability-before-autonomo",
     "pr": 181,
     "status": "merged",
+    "matched_by": "marker",
+    "pr_branch": "ticket/T-37-05-prove-graph-reachability-before-autonomous-run",
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/181",
     "merged_into": "ticket/T-37-02-persist-controller-leases-and-autonomous",
     "base": "epic/37-autonomous-dual-runtime-control-plane",
@@ -1654,9 +1692,8 @@
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/185",
     "merged_into": "ticket/T-37-05-prove-graph-reachability-before-autonomous-run",
     "base": "epic/37-autonomous-dual-runtime-control-plane",
-    "base_reason": "T-37-06 is MERGED, so its branch is no longer where work lands — the base is epic/37-autonomous-dual-runtime-control-plane (base-merge it in first to keep the review diff one slice); ticket-worktree.sh create merges epic/37-autonomous-dual-runtime-control-plane in for non-primary parent(s) T-37-07",
+    "base_reason": "T-37-06 is MERGED, so its branch is no longer where work lands — the base is epic/37-autonomous-dual-runtime-control-plane (base-merge it in first to keep the review diff one slice)",
     "epic": "epic/37-autonomous-dual-runtime-control-plane",
-    "base_merge": "epic/37-autonomous-dual-runtime-control-plane",
     "reapable": true,
     "since": "2026-09-22T19:26:00.502Z"
   },
@@ -1698,9 +1735,11 @@
     "since": "2026-09-27T18:11:57.006Z"
   },
   "T-38-04": {
-    "branch": "ticket/T-38-04-connect-codex-launches-to-delivery",
+    "branch": "ticket/T-38-04-connect-codex-delivery-and-typed-gsd-dec",
     "pr": 192,
     "status": "merged",
+    "matched_by": "marker",
+    "pr_branch": "ticket/T-38-04-connect-codex-launches-to-delivery",
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/192",
     "merged_into": "epic/38-runtime-model-ladder-recovery",
     "base": "epic/38-runtime-model-ladder-recovery",
@@ -1746,9 +1785,11 @@
     "since": "2026-09-24T07:16:23.997Z"
   },
   "T-38-05": {
-    "branch": "ticket/T-38-05-route-independent-runtime-rollouts",
+    "branch": "ticket/T-38-05-route-delivery-through-independent-runti",
     "pr": 199,
     "status": "merged",
+    "matched_by": "marker",
+    "pr_branch": "ticket/T-38-05-route-independent-runtime-rollouts",
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/199",
     "merged_into": "epic/38-runtime-model-ladder-recovery",
     "base": "epic/38-runtime-model-ladder-recovery",
@@ -2059,9 +2100,11 @@
     "since": "2026-09-25T20:24:22.890Z"
   },
   "T-41-04": {
-    "branch": "ticket/T-41-04-resume-authenticated-completed-execution",
+    "branch": "ticket/T-41-04-accept-asynchronous-native-child-complet",
     "pr": 246,
     "status": "merged",
+    "matched_by": "marker",
+    "pr_branch": "ticket/T-41-04-resume-authenticated-completed-execution",
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/246",
     "merged_into": "epic/41-reduce-pipeline-subscription-overhead",
     "base": "epic/41-reduce-pipeline-subscription-overhead",
@@ -2511,7 +2554,7 @@
     "pr_created_at": "2026-09-26T11:47:38Z",
     "head_sha": "fef7d105eaf6614575117c88a4224932a3253911",
     "merge_state": "CLEAN",
-    "behind_by": 0,
+    "behind_by": 1,
     "checks": {
       "total": 1,
       "failing": 0,
@@ -2590,9 +2633,9 @@
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/346",
     "pr_base": "epic/43-target-project-delivery-at-scale",
     "pr_created_at": "2026-09-28T11:20:59Z",
-    "head_sha": "f1eecaf606e26655268c2521f4fa8b78990ebbef",
+    "head_sha": "244c3351843e40822bef4349acc140cc9ce19c1d",
     "merge_state": "CLEAN",
-    "behind_by": 16,
+    "behind_by": 0,
     "checks": {
       "total": 1,
       "failing": 0,
@@ -2619,7 +2662,7 @@
     "pr_created_at": "2026-09-28T08:08:04Z",
     "head_sha": "a3a70f25af4ff7c3046bd257f4f01b759e334fff",
     "merge_state": "CLEAN",
-    "behind_by": 1,
+    "behind_by": 2,
     "checks": {
       "total": 1,
       "failing": 0,

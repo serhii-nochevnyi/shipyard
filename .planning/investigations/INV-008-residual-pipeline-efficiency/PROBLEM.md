@@ -1,7 +1,7 @@
 ---
-status: open
-closed:
-adr:
+status: closed
+closed: 2026-09-28
+adr: .planning/architecture/ADR-023-residual-pipeline-efficiency.md
 ---
 
 # Problem — residual pipeline efficiency after phase 44
