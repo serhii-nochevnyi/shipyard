@@ -3488,7 +3488,7 @@ tickets:
     repo: null
     wave: 11
     depends_on: [T-40-03, T-40-19, T-40-27]
-    files: [plugins/delivery-pipeline/scripts/state-sync.cjs, tests/unit/state-sync-listing.test.cjs]
+    files: [plugins/delivery-pipeline/scripts/state-sync.cjs, tests/unit/state-sync-listing.test.cjs, tests/smoke/sentinel-smoke.sh]
     risk: medium
     human_checkpoint: false
     preauthorized: false
@@ -3520,7 +3520,7 @@ tickets:
     repo: null
     wave: 9
     depends_on: [T-40-25]
-    files: [plugins/delivery-pipeline/scripts/jira-export.cjs, tests/unit/jira-export.test.cjs, plugins/delivery-pipeline/commands/decompose.md, tests/unit/jira-binding-contract.test.cjs]
+    files: [plugins/delivery-pipeline/scripts/jira-export.cjs, tests/unit/jira-export.test.cjs, plugins/delivery-pipeline/commands/decompose.md, tests/unit/jira-binding-contract.test.cjs, tests/smoke/docs-smoke.sh]
     risk: medium
     human_checkpoint: false
     preauthorized: false
