@@ -657,6 +657,7 @@ function readWaitStore() {
         || typeof entry.at !== 'string' || !Number.isFinite(Date.parse(entry.at))
         || (entry.journalled !== undefined && typeof entry.journalled !== 'boolean')
         || (entry.status !== undefined && !['claimed', 'applied'].includes(entry.status))
+        || (entry.unknown_time !== undefined && typeof entry.unknown_time !== 'boolean')
         || (entry.applied_at !== undefined && (typeof entry.applied_at !== 'string' || !Number.isFinite(Date.parse(entry.applied_at))))
         || (entry.journalled_at !== undefined && (typeof entry.journalled_at !== 'string' || !Number.isFinite(Date.parse(entry.journalled_at))))) {
       throw new Error(`ci-waits.json rerun record ${key} is invalid`);
@@ -701,7 +702,8 @@ function readRerunJournal(w, head) {
         || !['string', 'number'].includes(typeof event.pr) || String(event.pr) === ''
         || typeof event.head !== 'string' || !/^[0-9a-f]{40}$/i.test(event.head)
         || !['string', 'number'].includes(typeof event.run_id) || String(event.run_id) === ''
-        || typeof event.ts !== 'string' || !Number.isFinite(Date.parse(event.ts))) {
+        || typeof event.ts !== 'string' || !Number.isFinite(Date.parse(event.ts))
+        || (event.claim_at !== undefined && (typeof event.claim_at !== 'string' || !Number.isFinite(Date.parse(event.claim_at))))) {
       throw new Error('delivery-log.jsonl contains a malformed ci_rerun row');
     }
   }
@@ -732,7 +734,8 @@ function claimRerun(w, head, runId) {
         return;
       }
       const recovered = {
-        head, run_id: String(applied.run_id), at: applied.ts,
+        head, run_id: String(applied.run_id), at: applied.claim_at === undefined ? applied.ts : applied.claim_at,
+        ...(applied.claim_at === undefined ? { unknown_time: true } : {}),
         status: 'applied', applied_at: applied.ts,
         journalled: true, journalled_at: applied.ts,
       };
@@ -803,7 +806,7 @@ function reconcileRerunJournal(w, head, entry, verifiedApplied = false) {
       ? numericRunId : String(entry.run_id);
     const event = {
       ts: new Date().toISOString(), event: 'ci_rerun', ticket: w.id,
-      pr: Number(w.pr), head, run_id: runId,
+      pr: Number(w.pr), head, run_id: runId, claim_at: entry.at,
     };
     fs.mkdirSync(path.dirname(JOURNAL), { recursive: true });
     fs.appendFileSync(JOURNAL, `${journalText && !journalText.endsWith('\n') ? '\n' : ''}${JSON.stringify(event)}\n`);
@@ -856,7 +859,7 @@ function handleCancelled(w, c) {
   let journalError = statusError;
   try {
     journalled = reconcileRerunJournal(w, head,
-      { run_id: String(runId), status: 'applied', journalled: false }, true);
+      { run_id: String(runId), at: claim.entry.at, status: 'applied', journalled: false }, true);
     if (!journalled) throw new Error('the applied rerun was not added to the journal');
     try {
       markRerunJournalled(w.id, head, runId);
@@ -893,6 +896,10 @@ function priorRerunOutcome(c, w, prior, head, runId) {
     } catch (e) {
       return holdCancelled(c, { rerun: false, run_id: runId, awaiting_journal: prior.run_id,
         error: `rerun journal recovery failed (${e.message})` });
+    }
+    if (prior.unknown_time === true) {
+      return holdCancelled(c, { rerun: false, run_id: runId, awaiting_rerun: prior.run_id,
+        unknown_time: true, reason: 'ci_rerun journal row is missing claim_at; time is unknown' });
     }
     const rerunAt = Date.parse(prior.at || '');
     const stale = c.cancelled_runs.every((r) => Number.isFinite(rerunAt) && !(Date.parse(r.started_at || '') > rerunAt));

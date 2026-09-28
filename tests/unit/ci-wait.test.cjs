@@ -974,7 +974,10 @@ test('a malformed prior ci_rerun row fails closed before claim or dispatch', () 
   gh.setRows([cancelRow('2099-01-01T00:00:00Z')]);
   const graph = path.join(dir, '.planning', 'graph');
   const journalFile = path.join(graph, 'delivery-log.jsonl');
-  const malformed = JSON.stringify({ ts: '2020-01-01T00:00:00Z', event: 'ci_rerun', ticket: 'T-01-01', pr: 101, head: HEAD }) + '\n';
+  const malformed = JSON.stringify({
+    ts: '2020-01-01T00:00:00Z', event: 'ci_rerun', ticket: 'T-01-01',
+    pr: 101, head: HEAD, run_id: 777, claim_at: 'not-a-timestamp',
+  }) + '\n';
   fs.writeFileSync(journalFile, malformed);
 
   const { json } = asJson(null, null, shortWait, { dir, bin: gh.bin });
@@ -1107,6 +1110,87 @@ test('a successful rerun is journalled after a missed append, exactly once', () 
     .map((line) => JSON.parse(line)).filter((event) => event.event === 'ci_rerun');
   assert.equal(events.length, 1, 'reconciliation is idempotent');
   assert.deepStrictEqual(gh.reruns(), ['777'], 'recovery never issues a second rerun');
+});
+
+test('missing wait-store recovery keeps the original claim time for a cancellation before journal append', () => {
+  const dir = project(ciOnly(), stateWith({
+    'T-01-01': { pr: 101, repo: 'acme/widgets', status: 'pr-open', head_sha: HEAD },
+  }));
+  const graph = path.join(dir, '.planning', 'graph');
+  const waitFile = path.join(graph, 'ci-waits.json');
+  const journal = path.join(graph, 'delivery-log.jsonl');
+  const gh = stubGhRerun(dir, { rerunDelaySeconds: 0.3, journalDirectoryAfterRerun: journal });
+  gh.setRows([cancelRow('2020-01-01T00:00:00Z')]);
+
+  const first = asJson(null, null, shortWait, { dir, bin: gh.bin });
+  const originalClaimAt = waits(dir).reruns[`T-01-01:${HEAD}`].at;
+  assert.equal(first.json.settled, null, 'the applied rerun is never green');
+  assert.deepStrictEqual(gh.reruns(), ['777'], 'the external action succeeded once');
+  assert.equal(fs.statSync(journal).isDirectory(), true, 'the injected journal append failure remains visible');
+
+  const secondStartedAt = new Date(Date.parse(originalClaimAt) + 150).toISOString();
+  assert.ok(Date.parse(secondStartedAt) > Date.parse(originalClaimAt), 'the second check starts after the claim');
+  gh.setRows([cancelRow(secondStartedAt)]);
+  const beforeJournalAppend = asJson(null, null, shortWait, { dir, bin: gh.bin });
+  assert.equal(beforeJournalAppend.json.settled, null, 'the missing journal keeps the cancellation pending');
+  assert.equal(beforeJournalAppend.json.watched[0].checks.pending, 1);
+  assert.equal(beforeJournalAppend.json.watched[0].checks.failing, 0);
+
+  fs.rmSync(journal, { recursive: true, force: true });
+  const reconciled = asJson(null, null, shortWait, { dir, bin: gh.bin });
+  assert.equal(reconciled.json.settled, 'T-01-01', 'the cancellation after the claim fails once journalled');
+  const appended = fs.readFileSync(journal, 'utf8').split('\n').filter(Boolean)
+    .map((line) => JSON.parse(line)).filter((event) => event.event === 'ci_rerun');
+  assert.equal(appended.length, 1, 'reconciliation writes one journal row');
+  assert.ok(Date.parse(secondStartedAt) < Date.parse(appended[0].ts), 'the second check started before journal append');
+
+  fs.unlinkSync(waitFile);
+  assert.equal(fs.existsSync(waitFile), false, 'only ci-waits.json is removed before recovery');
+  const recovered = asJson(null, null, shortWait, { dir, bin: gh.bin });
+  assert.equal(recovered.json.settled, 'T-01-01', 'journal recovery preserves the post-claim failing outcome');
+  assert.equal(recovered.json.watched[0].checks.failing, 1);
+  assert.equal(recovered.json.watched[0].checks.pending, 0);
+  assert.deepStrictEqual(gh.reruns(), ['777'], 'missing-store recovery does not dispatch another rerun');
+  const events = fs.readFileSync(journal, 'utf8').split('\n').filter(Boolean)
+    .map((line) => JSON.parse(line)).filter((event) => event.event === 'ci_rerun');
+  assert.equal(events.length, 1, 'missing-store recovery leaves one journal row');
+  assert.equal(events[0].claim_at, originalClaimAt, 'the journal keeps the original claim timestamp');
+});
+
+test('a legacy journal row without claim_at stays pending with durable unknown time after store loss', () => {
+  const dir = project(ciOnly(), stateWith({
+    'T-01-01': { pr: 101, repo: 'acme/widgets', status: 'pr-open', head_sha: HEAD },
+  }));
+  const graph = path.join(dir, '.planning', 'graph');
+  const waitFile = path.join(graph, 'ci-waits.json');
+  const journal = path.join(graph, 'delivery-log.jsonl');
+  const gh = stubGhRerun(dir);
+  gh.setRows([cancelRow('2099-01-01T00:00:00Z')]);
+  fs.writeFileSync(journal, `${JSON.stringify({
+    ts: '2020-01-01T00:00:00.000Z', event: 'ci_rerun', ticket: 'T-01-01',
+    pr: 101, head: HEAD, run_id: 777,
+  })}\n`);
+  assert.equal(fs.existsSync(waitFile), false, 'the fixture starts with a missing wait store');
+
+  let previousOutcome;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const { json } = asJson(null, null, shortWait, { dir, bin: gh.bin });
+    const check = json.watched[0].checks;
+    assert.equal(json.settled, null, 'unknown rerun time stays pending, never green');
+    assert.equal(check.pending, 1);
+    assert.equal(check.failing, 0, 'unknown time cannot falsely fail this cancellation');
+    assert.equal(check.rerun.unknown_time, true, 'the outcome exposes unknown timing');
+    assert.match(check.rerun.reason, /missing claim_at|time is unknown/i, check.rerun.reason);
+    assert.equal(waits(dir).reruns[`T-01-01:${HEAD}`].unknown_time, true,
+      'the unknown-time decision is durable in the recovered wait store');
+    if (previousOutcome) assert.deepStrictEqual(check.rerun, previousOutcome, 'repeated calls return the same outcome');
+    previousOutcome = check.rerun;
+  }
+  assert.deepStrictEqual(gh.reruns(), [], 'a legacy journal row never authorizes a duplicate external action');
+  const events = fs.readFileSync(journal, 'utf8').split('\n').filter(Boolean)
+    .map((line) => JSON.parse(line)).filter((event) => event.event === 'ci_rerun');
+  assert.equal(events.length, 1, 'legacy recovery preserves the single existing journal row');
+  assert.equal(Object.hasOwn(events[0], 'claim_at'), false, 'the legacy row remains in its original format');
 });
 
 test('a malformed wait store fails closed without rerun or destructive rewrite', () => {
