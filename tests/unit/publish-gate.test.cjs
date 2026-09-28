@@ -7,6 +7,7 @@ const { spawnSync } = require('child_process');
 const { suite, test, done, assert } = require('./assert-harness.cjs');
 
 const SCRIPT = path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'publish-gate.cjs');
+const commentPolicy = require(path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'comment-policy.cjs'));
 
 const trash = [];
 process.on('exit', () => {
@@ -123,8 +124,10 @@ test('a recorded delivery-state base wins over origin/HEAD for a ticket branch',
   const { dir, env } = root();
   const bare = makeOrigin(dir, env, { defaultBranch: 'master', extraBranches: ['epic/43-x'] });
   const worktree = cloneWorktree(dir, bare, env);
-  writeState(worktree, 'T-43-01', 'epic/43-x');
-  const r = run(worktree, { env, ticket: 'T-43-01' });
+  const projectRoot = path.join(dir, 'project-root');
+  fs.mkdirSync(projectRoot, { recursive: true });
+  writeState(projectRoot, 'T-43-01', 'epic/43-x');
+  const r = run(worktree, { env, ticket: 'T-43-01', extra: ['--project-root', projectRoot] });
   assert.strictEqual(r.status, 0, r.stderr);
   assert.strictEqual(r.json.base, 'origin/epic/43-x');
   assert.strictEqual(r.json.base_source, 'recorded');
@@ -138,6 +141,67 @@ test('a Shipyard-shaped fixture (main, no origin/HEAD) still resolves origin/mai
   assert.strictEqual(r.status, 0, r.stderr);
   assert.strictEqual(r.json.base, 'origin/main');
   assert.strictEqual(r.json.base_source, 'fallback');
+  const report = commentPolicy.analyze(worktree, 'origin/main', {
+    workingTree: true,
+    projectRoot: worktree,
+    repo: commentPolicy.repositorySlug(worktree),
+  });
+  assert.deepStrictEqual(report.policy.allowed_markers, [
+    '@invariant:', '@security:', '@contract:',
+  ]);
+});
+
+test('a configured repository marker uses the target origin when project root differs', () => {
+  const { dir, env } = root();
+  const bare = makeOrigin(dir, env, { defaultBranch: 'main' });
+  const worktree = cloneWorktree(dir, bare, env);
+  git(worktree, ['remote', 'set-url', 'origin', 'https://github.com/acme/app.git'], env);
+  const projectRoot = path.join(dir, 'project-root');
+  fs.mkdirSync(projectRoot, { recursive: true });
+  spawnSync('git', ['init', '-q', projectRoot], { env });
+  git(projectRoot, ['remote', 'add', 'origin', 'https://github.com/acme/project-config.git'], env);
+  const planning = path.join(projectRoot, '.planning');
+  fs.mkdirSync(planning, { recursive: true });
+  fs.writeFileSync(path.join(planning, 'config.json'), JSON.stringify({
+    delivery_pipeline: { comment_markers: { 'acme/app': ['@ai-generated'] } },
+  }));
+  const source = path.join(worktree, 'src', 'app.js');
+  fs.mkdirSync(path.dirname(source), { recursive: true });
+  fs.writeFileSync(source, '// @ai-generated model=x\nconst answer = 42;\n');
+  git(worktree, ['add', 'src/app.js'], env);
+
+  assert.strictEqual(commentPolicy.repositorySlug(projectRoot), 'acme/project-config');
+  assert.strictEqual(commentPolicy.repositorySlug(worktree), 'acme/app');
+  const r = run(worktree, { env, extra: ['--project-root', projectRoot] });
+  assert.strictEqual(r.status, 0, r.stderr || r.stdout);
+  const report = commentPolicy.analyze(worktree, 'origin/main', {
+    workingTree: true,
+    projectRoot,
+    repo: commentPolicy.repositorySlug(worktree),
+  });
+  assert.deepStrictEqual(report.policy.allowed_markers, [
+    '@invariant:', '@security:', '@contract:', '@ai-generated',
+  ]);
+});
+
+test('publish gate ignores a tempting target config when the project root is omitted', () => {
+  const { dir, env } = root();
+  const bare = makeOrigin(dir, env, { defaultBranch: 'main' });
+  const worktree = cloneWorktree(dir, bare, env);
+  git(worktree, ['remote', 'set-url', 'origin', 'https://github.com/acme/app.git'], env);
+  const planning = path.join(worktree, '.planning');
+  fs.mkdirSync(planning, { recursive: true });
+  fs.writeFileSync(path.join(planning, 'config.json'), JSON.stringify({
+    delivery_pipeline: { comment_markers: { 'acme/app': ['@ai-generated'] } },
+  }));
+  const source = path.join(worktree, 'src', 'app.js');
+  fs.mkdirSync(path.dirname(source), { recursive: true });
+  fs.writeFileSync(source, '// @ai-generated model=x\nconst answer = 42;\n');
+  git(worktree, ['add', 'src/app.js'], env);
+
+  const r = run(worktree, { env, extra: ['--base', 'origin/main'] });
+  assert.strictEqual(r.status, 1, r.stderr || r.stdout);
+  assert.deepStrictEqual(r.json.violations, ['src/app.js']);
 });
 
 test('no candidate at all exits 2, naming the tried candidates', () => {
