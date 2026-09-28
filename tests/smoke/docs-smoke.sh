@@ -36,26 +36,24 @@ for cmd in route investigate decompose deliver bench; do
   grep -q "\$shipyard:shipyard-$cmd" README.md || fail "README misses marketplace skill shipyard-$cmd"
 done
 
-node - <<'NODE'
-const fs = require('node:fs');
-const path = require('node:path');
+node -e 'const fs = require("node:fs");
+const path = require("node:path");
 
 const root = process.cwd();
-const plugin = JSON.parse(fs.readFileSync(path.join(root, 'plugins/delivery-pipeline/.claude-plugin/plugin.json'), 'utf8'));
-const readme = fs.readFileSync(path.join(root, 'README.md'), 'utf8');
+const plugin = JSON.parse(fs.readFileSync(path.join(root, "plugins/delivery-pipeline/.claude-plugin/plugin.json"), "utf8"));
+const readme = fs.readFileSync(path.join(root, "README.md"), "utf8");
 for (const command of plugin.commands) {
-  const name = path.basename(command, '.md');
-  if (!readme.includes('/shipyard:' + name)) throw new Error('README misses plugin command ' + name);
+  const name = path.basename(command, ".md");
+  if (!readme.includes("/shipyard:" + name)) throw new Error("README misses plugin command " + name);
 }
 const capability = JSON.parse(fs.readFileSync(
-  path.join(root, 'capabilities/delivery-pipeline/capability.json'), 'utf8'
+  path.join(root, "capabilities/delivery-pipeline/capability.json"), "utf8"
 ));
 const match = readme.match(/"codex_models":\s*"([^"]+)"/);
-if (!match) throw new Error('README misses the Codex palette example');
-if (match[1] !== capability.config['delivery_pipeline.codex_models'].default) {
-  throw new Error('README Codex palette differs from capability.json');
-}
-NODE
+if (!match) throw new Error("README misses the Codex palette example");
+if (match[1] !== capability.config["delivery_pipeline.codex_models"].default) {
+  throw new Error("README Codex palette differs from capability.json");
+}'
 
 while IFS= read -r target; do
   [[ -z "$target" ]] && continue
