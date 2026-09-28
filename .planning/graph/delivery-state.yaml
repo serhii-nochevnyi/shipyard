@@ -2486,20 +2486,14 @@
 "T-43-06":
   base: "epic/43-target-project-delivery-at-scale"
   base_reason: "T-43-05 is MERGED, so its branch is no longer where work lands — the base is epic/43-target-project-delivery-at-scale (base-merge it in first to keep the review diff one slice)"
-  behind_by: 0
   branch: "ticket/T-43-06-one-exported-conveyor-scratch-set-for-th"
-  checks: {"failing":1,"none_reported":false,"pending":0,"total":1,"unavailable":false}
-  draft: true
   epic: "epic/43-target-project-delivery-at-scale"
-  head_sha: "3b80565e2bb24efa7ce5293558389ffac265305c"
-  merge_scope: "stacked"
-  merge_state: "UNSTABLE"
+  epic_pr: {"base":"main","branch":"epic/43-target-project-delivery-at-scale","landed":false,"number":320,"state":"OPEN"}
+  merge_sha: "3df641bf99b8ecf9cb59ec831bd2e798daf45e60"
+  merged_into: "epic/43-target-project-delivery-at-scale"
   pr: 371
-  pr_base: "epic/43-target-project-delivery-at-scale"
-  pr_created_at: "2026-09-28T21:15:37Z"
-  reapable: false
-  review_decision: null
-  status: "pr-open"
+  reapable: true
+  status: "merged"
   url: "https://github.com/serhii-nochevnyi/shipyard/pull/371"
 "T-43-07":
   base: "epic/43-target-project-delivery-at-scale"
@@ -2517,20 +2511,14 @@
   base: "epic/43-target-project-delivery-at-scale"
   base_merge: "epic/43-target-project-delivery-at-scale"
   base_reason: "T-43-04 is MERGED, so its branch is no longer where work lands — the base is epic/43-target-project-delivery-at-scale (base-merge it in first to keep the review diff one slice); ticket-worktree.sh create merges epic/43-target-project-delivery-at-scale in for non-primary parent(s) T-43-01, T-43-07"
-  behind_by: 0
   branch: "ticket/T-43-08-a-stale-approval-from-a-declared-bot-doe"
-  checks: {"failing":1,"none_reported":false,"pending":0,"total":1,"unavailable":false}
-  draft: true
   epic: "epic/43-target-project-delivery-at-scale"
-  head_sha: "49d35edaea2db8036f6e97471700346c22767070"
-  merge_scope: "stacked"
-  merge_state: "UNSTABLE"
+  epic_pr: {"base":"main","branch":"epic/43-target-project-delivery-at-scale","landed":false,"number":320,"state":"OPEN"}
+  merge_sha: "db64621da2a013a6b81d1aae4748f08f0f6de6fa"
+  merged_into: "epic/43-target-project-delivery-at-scale"
   pr: 370
-  pr_base: "epic/43-target-project-delivery-at-scale"
-  pr_created_at: "2026-09-28T19:32:40Z"
-  reapable: false
-  review_decision: null
-  status: "pr-open"
+  reapable: true
+  status: "merged"
   url: "https://github.com/serhii-nochevnyi/shipyard/pull/370"
 "T-43-09":
   base: "epic/43-target-project-delivery-at-scale"
@@ -2570,9 +2558,9 @@
   status: "merged"
   url: "https://github.com/serhii-nochevnyi/shipyard/pull/334"
 "T-43-12":
-  base: "ticket/T-43-08-a-stale-approval-from-a-declared-bot-doe"
+  base: "epic/43-target-project-delivery-at-scale"
   base_merge: "epic/43-target-project-delivery-at-scale"
-  base_reason: "T-43-08 is pr-open — cascade off ticket/T-43-08-a-stale-approval-from-a-declared-bot-doe; the sentinel retargets this PR onto epic/43-target-project-delivery-at-scale when T-43-08 lands; ticket-worktree.sh create merges epic/43-target-project-delivery-at-scale in for non-primary parent(s) T-43-11"
+  base_reason: "T-43-08 is MERGED, so its branch is no longer where work lands — the base is epic/43-target-project-delivery-at-scale (base-merge it in first to keep the review diff one slice); ticket-worktree.sh create merges epic/43-target-project-delivery-at-scale in for non-primary parent(s) T-43-11"
   branch: "ticket/T-43-12-human-checkpoint-takes-review-or-merge-t"
   epic: "epic/43-target-project-delivery-at-scale"
   pr: null
@@ -2580,8 +2568,8 @@
   reapable: false
   status: "pending"
 "T-43-13":
-  base: "ticket/T-43-06-one-exported-conveyor-scratch-set-for-th"
-  base_reason: "T-43-06 is pr-open — cascade off ticket/T-43-06-one-exported-conveyor-scratch-set-for-th; the sentinel retargets this PR onto epic/43-target-project-delivery-at-scale when T-43-06 lands"
+  base: "epic/43-target-project-delivery-at-scale"
+  base_reason: "T-43-06 is MERGED, so its branch is no longer where work lands — the base is epic/43-target-project-delivery-at-scale (base-merge it in first to keep the review diff one slice)"
   branch: "ticket/T-43-13-carry-a-conform-verdict-across-a-base-me"
   epic: "epic/43-target-project-delivery-at-scale"
   pr: null
@@ -2612,9 +2600,9 @@
   reapable: false
   status: "pending"
 "T-43-16":
-  base: "ticket/T-43-06-one-exported-conveyor-scratch-set-for-th"
+  base: "epic/43-target-project-delivery-at-scale"
   base_merge: "epic/43-target-project-delivery-at-scale"
-  base_reason: "T-43-06 is pr-open — cascade off ticket/T-43-06-one-exported-conveyor-scratch-set-for-th; the sentinel retargets this PR onto epic/43-target-project-delivery-at-scale when T-43-06 lands; ticket-worktree.sh create merges epic/43-target-project-delivery-at-scale in for non-primary parent(s) T-43-01"
+  base_reason: "T-43-06 is MERGED, so its branch is no longer where work lands — the base is epic/43-target-project-delivery-at-scale (base-merge it in first to keep the review diff one slice); ticket-worktree.sh create merges epic/43-target-project-delivery-at-scale in for non-primary parent(s) T-43-01"
   branch: "ticket/T-43-16-host-side-verification-of-plan-declared"
   epic: "epic/43-target-project-delivery-at-scale"
   pr: null
@@ -2635,8 +2623,8 @@
 "T-43-18":
   base: "epic/43-target-project-delivery-at-scale"
   base_reason: "T-43-17 has no branch on the remote yet (status pending) — ticket/T-43-17-record-a-sealed-coverage-entry-for-every is not a base that exists, so the base is epic/43-target-project-delivery-at-scale"
-  blocked_by: ["T-43-17","T-43-08"]
-  blocked_reasons: {"T-43-08":"non-primary parent T-43-08 is pr-open — T-43-18's worktree is cut from T-43-17 and receives T-43-08 only through epic/43-target-project-delivery-at-scale; T-43-08 must merge into epic/43-target-project-delivery-at-scale first (T-43-08 is pr-open)","T-43-17":"parent has no branch yet (nothing to cascade from)"}
+  blocked_by: ["T-43-17"]
+  blocked_reasons: {"T-43-17":"parent has no branch yet (nothing to cascade from)"}
   branch: "ticket/T-43-18-run-only-declared-repository-remedy-work"
   epic: "epic/43-target-project-delivery-at-scale"
   pr: null
