@@ -2829,11 +2829,37 @@ test('only GSD stage tier aliases are exempt, not concrete or inherited selectio
       }
     }
   }
-  for (const role of ['decomposition', 'arch-review']) {
-    const agent = role === 'decomposition' ? 'gsd-planner' : 'gsd-code-reviewer';
-    const { config } = routedConfig({ pipeline: { fable: 'auto' },
-      model_overrides: { [agent]: 'fable' } }, 'claude');
-    refusesSource(() => resolveDispatch({ config, role }), `config.model_overrides.${agent}`);
+  const { config } = routedConfig({ model_overrides: { 'gsd-planner': 'haiku' } }, 'claude');
+  refusesSource(() => resolveDispatch({ config, role: 'decomposition' }), 'config.model_overrides.gsd-planner');
+});
+
+test('GSD code-reviewer overrides do not select arch-review, while direct arch-review overrides still refuse', () => {
+  for (const runtime of ['claude', 'codex']) {
+    for (const signals of [{}, { critical: true }]) {
+      const expected = canonicalPolicy.resolveDispatch({ runtime, role: 'arch-review', signals });
+      for (const [namespace, wrap, sourcePrefix] of [
+        ['root', (value) => value, 'config'],
+        ['gsd', (value) => ({ gsd: value }), 'gsd'],
+      ]) {
+        for (const selection of [
+          { model_overrides: { 'gsd-code-reviewer': 'haiku' } },
+          { effort: { agent_overrides: { 'gsd-code-reviewer': 'low' } } },
+        ]) {
+          const { config } = routedConfig(wrap(selection), runtime);
+          assert.deepStrictEqual(resolveDispatch({ config, role: 'arch-review', signals }), expected,
+            `${runtime} ${JSON.stringify(signals)} ${namespace} GSD code-reviewer preference`);
+        }
+
+        for (const [selection, source] of [
+          [{ model_overrides: { 'arch-review': 'haiku' } }, `${sourcePrefix}.model_overrides.arch-review`],
+          [{ effort: { agent_overrides: { 'arch-review': 'low' } } },
+            `${sourcePrefix}.effort.agent_overrides.arch-review`],
+        ]) {
+          const { config } = routedConfig(wrap(selection), runtime);
+          refusesSource(() => resolveDispatch({ config, role: 'arch-review', signals }), source);
+        }
+      }
+    }
   }
 });
 

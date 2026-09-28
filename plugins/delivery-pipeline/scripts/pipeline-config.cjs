@@ -1527,7 +1527,7 @@ const GSD_ROLE_KEYS = Object.freeze({
   'pr-sentinel': ['verification', 'gsd-verifier'],
   integrator: ['verification', 'gsd-integration-checker'],
   'drift-check': ['verification', 'gsd-verifier'],
-  'arch-review': ['verification', 'gsd-code-reviewer'],
+  'arch-review': ['verification'],
   'ci-fix': ['execution', 'gsd-debugger'],
   'review-fix': ['execution', 'gsd-code-fixer'],
 });
