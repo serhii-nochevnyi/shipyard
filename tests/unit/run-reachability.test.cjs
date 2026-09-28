@@ -7,6 +7,7 @@ const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const test = require('node:test');
 const reachability = require('../../plugins/delivery-pipeline/scripts/run-reachability.cjs');
+const { owns } = require('../../plugins/delivery-pipeline/scripts/path-owner.cjs');
 
 function tempDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-reachability-'));
@@ -17,7 +18,8 @@ function git(cwd, args, options = {}) {
     cwd,
     encoding: 'utf8',
     stdio: options.stdio || ['ignore', 'pipe', 'pipe'],
-    env: { ...process.env, GIT_CONFIG_NOSYSTEM: '1', ...options.env },
+    maxBuffer: options.maxBuffer || 1024 * 1024,
+    env: { ...process.env, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null', ...options.env },
   }).trim();
 }
 
@@ -175,5 +177,48 @@ test('does not accept an ambiguous origin or an escaping declaration', () => {
     assert.equal(escaping.result.reason.code, 'DECLARATION_UNREACHABLE');
   } finally {
     cleanup(g);
+  }
+});
+
+test('scopes declared file and glob listings when the full tree exceeds one MiB', () => {
+  const root = tempDir();
+  try {
+    git(root, ['init', '-q', '-b', 'main']);
+    git(root, ['config', 'user.email', 'reachability@example.com']);
+    git(root, ['config', 'user.name', 'Reachability']);
+    const unrelated = path.join(root, 'unrelated');
+    const declaredDir = path.join(root, 'declared');
+    fs.mkdirSync(unrelated, { recursive: true });
+    fs.mkdirSync(declaredDir, { recursive: true });
+    for (let i = 0; i < 6000; i += 1) {
+      fs.writeFileSync(path.join(unrelated, `f-${String(i).padStart(5, '0')}-${'x'.repeat(180)}.txt`), 'x');
+    }
+    fs.writeFileSync(path.join(declaredDir, 'literal.txt'), 'literal');
+    fs.writeFileSync(path.join(declaredDir, 'generated-one.txt'), 'one');
+    fs.writeFileSync(path.join(declaredDir, 'generated-two.txt'), 'two');
+    fs.writeFileSync(path.join(declaredDir, 'other.bin'), 'other');
+    fs.writeFileSync(path.join(root, 'summary.md'), 'summary');
+    git(root, ['add', '--all']);
+    git(root, ['-c', 'user.email=reachability@example.com', '-c', 'user.name=Reachability', 'commit', '-qm', 'large tree']);
+
+    const sha = git(root, ['rev-parse', 'HEAD']);
+    const fullListing = git(root, ['ls-tree', '-r', '--name-only', sha], { maxBuffer: 64 * 1024 * 1024 });
+    assert.ok(Buffer.byteLength(fullListing) > 1024 * 1024);
+
+    const declarations = ['declared/literal.txt', 'declared/generated-*.txt', '*.md'];
+    const fullFiles = fullListing.split('\n').filter(Boolean);
+    const matches = declarations.map((declaration) => ({
+      declaration,
+      files: fullFiles.filter((file) => owns(declaration, file)),
+    }));
+    const expected = {
+      declarations,
+      matched_files: [...new Set(matches.flatMap((row) => row.files))].sort(),
+      matches,
+      missing_declarations: matches.filter((row) => row.files.length === 0).map((row) => row.declaration),
+    };
+    assert.deepEqual(reachability.declaredFiles(root, sha, declarations), expected);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
   }
 });

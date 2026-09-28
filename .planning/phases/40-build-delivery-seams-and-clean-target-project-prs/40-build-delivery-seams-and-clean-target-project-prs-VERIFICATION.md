@@ -1,8 +1,8 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 63cddecf0270dc1f4df2ef29ca324e11c0dcce6643047312a50cb41171c4ccdd
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 9f266d2811c4b4e5a7d13225eb6ec5e88681c8891cc248a2f6be599634b80362
 phase: 40
 status: human_needed
-shipyard_source_fingerprint: 63cddecf0270dc1f4df2ef29ca324e11c0dcce6643047312a50cb41171c4ccdd
+shipyard_source_fingerprint: 9f266d2811c4b4e5a7d13225eb6ec5e88681c8891cc248a2f6be599634b80362
 ---
 
 # Phase 40: Build delivery seams and clean target-project PRs — Verification Projection
@@ -13,7 +13,7 @@ shipyard_source_fingerprint: 63cddecf0270dc1f4df2ef29ca324e11c0dcce6643047312a50
 
 | Truth | Evidence | Status |
 |---|---|---|
-| Every phase plan is accounted for | 0/27 delivery records are merged | ? UNCERTAIN |
+| Every phase plan is accounted for | 27/27 delivery records are merged | ✓ VERIFIED |
 | Integration is coherent | INTEGRATION.md is missing | ? UNCERTAIN |
 | Verification evidence is present | INTEGRATION.md is missing | ? UNCERTAIN |
 
@@ -21,33 +21,33 @@ shipyard_source_fingerprint: 63cddecf0270dc1f4df2ef29ca324e11c0dcce6643047312a50
 
 | Ticket | Delivery | Plan status |
 |---|---|---|
-| T-40-01 | pending | ? UNCERTAIN |
-| T-40-03 | pending | ? UNCERTAIN |
-| T-40-04 | pending | ? UNCERTAIN |
-| T-40-05 | pending | ? UNCERTAIN |
-| T-40-06 | pending | ? UNCERTAIN |
-| T-40-07 | pending | ? UNCERTAIN |
-| T-40-08 | pending | ? UNCERTAIN |
-| T-40-09 | pending | ? UNCERTAIN |
-| T-40-10 | pending | ? UNCERTAIN |
-| T-40-11 | pending | ? UNCERTAIN |
-| T-40-12 | pending | ? UNCERTAIN |
-| T-40-13 | pending | ? UNCERTAIN |
-| T-40-14 | pending | ? UNCERTAIN |
-| T-40-15 | pending | ? UNCERTAIN |
-| T-40-16 | pending | ? UNCERTAIN |
-| T-40-17 | pending | ? UNCERTAIN |
-| T-40-18 | pending | ? UNCERTAIN |
-| T-40-19 | pending | ? UNCERTAIN |
-| T-40-20 | pending | ? UNCERTAIN |
-| T-40-21 | pending | ? UNCERTAIN |
-| T-40-22 | pending | ? UNCERTAIN |
-| T-40-23 | pending | ? UNCERTAIN |
-| T-40-24 | pending | ? UNCERTAIN |
-| T-40-25 | pending | ? UNCERTAIN |
-| T-40-26 | pending | ? UNCERTAIN |
-| T-40-27 | pending | ? UNCERTAIN |
-| T-40-28 | pending | ? UNCERTAIN |
+| T-40-01 | merged | ✓ VERIFIED |
+| T-40-03 | merged | ✓ VERIFIED |
+| T-40-04 | merged | ✓ VERIFIED |
+| T-40-05 | merged | ✓ VERIFIED |
+| T-40-06 | merged | ✓ VERIFIED |
+| T-40-07 | merged | ✓ VERIFIED |
+| T-40-08 | merged | ✓ VERIFIED |
+| T-40-09 | merged | ✓ VERIFIED |
+| T-40-10 | merged | ✓ VERIFIED |
+| T-40-11 | merged | ✓ VERIFIED |
+| T-40-12 | merged | ✓ VERIFIED |
+| T-40-13 | merged | ✓ VERIFIED |
+| T-40-14 | merged | ✓ VERIFIED |
+| T-40-15 | merged | ✓ VERIFIED |
+| T-40-16 | merged | ✓ VERIFIED |
+| T-40-17 | merged | ✓ VERIFIED |
+| T-40-18 | merged | ✓ VERIFIED |
+| T-40-19 | merged | ✓ VERIFIED |
+| T-40-20 | merged | ✓ VERIFIED |
+| T-40-21 | merged | ✓ VERIFIED |
+| T-40-22 | merged | ✓ VERIFIED |
+| T-40-23 | merged | ✓ VERIFIED |
+| T-40-24 | merged | ✓ VERIFIED |
+| T-40-25 | merged | ✓ VERIFIED |
+| T-40-26 | merged | ✓ VERIFIED |
+| T-40-27 | merged | ✓ VERIFIED |
+| T-40-28 | merged | ✓ VERIFIED |
 
 ## Verification Commands
 
@@ -56,4 +56,4 @@ shipyard_source_fingerprint: 63cddecf0270dc1f4df2ef29ca324e11c0dcce6643047312a50
 
 ## Gaps Summary
 
-**Not green:** 27 plan(s) are not merged.
+**Not green:** INTEGRATION.md is missing.

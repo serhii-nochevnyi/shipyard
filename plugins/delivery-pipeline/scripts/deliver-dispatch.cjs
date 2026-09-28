@@ -449,9 +449,235 @@ function parseLaunchArgs(argv) {
   return { runtime, ticket, role, graphDir };
 }
 
+function buildFail(field, message) {
+  const error = new Error(`deliver-dispatch: ${message}`);
+  error.code = 'BUILD_REFUSED';
+  error.field = field;
+  error.exitCode = 2;
+  throw error;
+}
+
+function parseBuildArgs(argv) {
+  const role = argv[0];
+  const ticket = argv[1];
+  if (!['arch-review', 'ci-fix', 'review-fix'].includes(role)) {
+    buildFail('--role', `build role must be arch-review, ci-fix, or review-fix`);
+  }
+  if (typeof ticket !== 'string' || !ticket.trim()) buildFail('<ticket>', 'build ticket is required');
+  const args = { role, ticket, runtime: 'claude' };
+  const seen = new Set();
+  for (let index = 2; index < argv.length; index++) {
+    const flag = argv[index];
+    if (!['--runtime', '--pr', '--failure-file', '--review-file'].includes(flag)) {
+      buildFail(flag, `unsupported build field ${flag}`);
+    }
+    if (seen.has(flag)) buildFail(flag, `${flag} may be supplied only once`);
+    seen.add(flag);
+    const value = argv[++index];
+    if (typeof value !== 'string' || !value.trim() || value.startsWith('--')) {
+      buildFail(flag, `${flag} requires a value`);
+    }
+    if (flag === '--runtime') {
+      if (value !== 'claude' && value !== 'codex') buildFail(flag, '--runtime must be claude or codex');
+      args.runtime = value;
+    } else if (flag === '--pr') {
+      if (!/^\d+$/.test(value) || !Number.isSafeInteger(Number(value)) || Number(value) < 1) {
+        buildFail(flag, '--pr must be a positive integer');
+      }
+      args.pr = Number(value);
+    } else if (flag === '--failure-file') args.failureFile = value;
+    else args.reviewFile = value;
+  }
+  if (role === 'ci-fix' && !args.failureFile) buildFail('--failure-file', 'ci-fix requires --failure-file <f>');
+  if (role === 'review-fix' && !args.reviewFile) buildFail('--review-file', 'review-fix requires --review-file <f>');
+  if (role !== 'ci-fix' && args.failureFile) buildFail('--failure-file', '--failure-file is only valid for ci-fix');
+  if (role !== 'review-fix' && args.reviewFile) buildFail('--review-file', '--review-file is only valid for review-fix');
+  return args;
+}
+
+function resolveBuildGraphDir(worktree, options) {
+  if (options.graphDir) {
+    if (!fs.existsSync(path.join(options.graphDir, 'tickets.json'))) {
+      buildFail('--graph-dir', `canonical ticket graph is unavailable: ${options.graphDir}`);
+    }
+    try { return canonicalizeGraphDir(options.graphDir, worktree, 'flag'); }
+    catch (error) { buildFail('--graph-dir', error.message.replace(/^deliver-dispatch: /, '')); }
+  }
+  if (trackedAtHead(worktree, '.planning/graph/tickets.json')) {
+    try { return canonicalizeGraphDir(path.join(worktree, '.planning', 'graph'), worktree, 'worktree'); }
+    catch (error) { buildFail('graph', error.message.replace(/^deliver-dispatch: /, '')); }
+  }
+  const resolved = resolveGraphDir([], worktree);
+  if (resolved.how === 'none' || !fs.existsSync(path.join(resolved.dir, 'tickets.json'))) {
+    buildFail('graph', `no canonical ticket graph found (looked in ${resolved.dir}); set SHIPYARD_GRAPH_DIR`);
+  }
+  try { return canonicalizeGraphDir(resolved.dir, worktree, resolved.how); }
+  catch (error) { buildFail('graph', error.message.replace(/^deliver-dispatch: /, '')); }
+}
+
+function buildTicketContext(args, options) {
+  const cwd = options.cwd || process.cwd();
+  let worktree;
+  try { worktree = fs.realpathSync(cwd); }
+  catch { buildFail('worktree', `ticket worktree ${cwd} does not exist`); }
+  const graphDir = resolveBuildGraphDir(worktree, options);
+  const graph = readJsonBounded(path.join(graphDir, 'tickets.json'));
+  const row = graph && object(graph.tickets) ? graph.tickets[args.ticket] : null;
+  if (!object(row)) buildFail('ticket', `ticket ${args.ticket} has no canonical graph entry in ${graphDir}`);
+  if (typeof row.branch !== 'string' || !row.branch.trim()) buildFail('branch', 'graph row branch is required');
+  if (typeof row.plan !== 'string' || !row.plan.trim() || path.isAbsolute(row.plan)
+      || row.plan.split(/[\\/]/).includes('..')) buildFail('planPath', 'graph row plan path is invalid');
+  if (!Array.isArray(row.files) || !row.files.length
+      || row.files.some((file) => typeof file !== 'string' || !file.trim())) {
+    buildFail('files', 'graph row files must be an array of paths');
+  }
+  try { phaseNumber(row.phase); }
+  catch (error) { buildFail('phase', error.message.replace(/^deliver-dispatch: /, '')); }
+  let branch;
+  try { branch = git(worktree, ['symbolic-ref', '--quiet', '--short', 'HEAD']); }
+  catch { buildFail('branch', 'ticket worktree must be on a named branch'); }
+  if (branch !== row.branch) buildFail('branch', `worktree branch ${branch} differs from canonical graph branch ${row.branch}`);
+  const projectRoot = path.resolve(graphDir, '..', '..');
+  const planPath = path.resolve(projectRoot, row.plan);
+  if (!isInsidePath(projectRoot, planPath)) buildFail('planPath', 'canonical plan path escapes the project root');
+  let planStat;
+  try { planStat = fs.lstatSync(planPath); } catch { buildFail('planPath', `canonical plan is unavailable: ${planPath}`); }
+  if (!planStat.isFile() || planStat.isSymbolicLink()) buildFail('planPath', 'canonical plan must be a regular file');
+  const rawState = readJsonBounded(path.join(graphDir, 'delivery-state.json')) || {};
+  const state = object(rawState) && object(rawState.tickets) ? rawState.tickets : rawState;
+  const stateRow = object(state) && object(state[args.ticket]) ? state[args.ticket] : {};
+  return { worktree, graphDir, graph, row, projectRoot, planPath, stateRow };
+}
+
+function evidenceInput(worktree, value, field) {
+  const candidate = path.resolve(worktree, value);
+  let realPath;
+  try { realPath = fs.realpathSync(candidate); }
+  catch { buildFail(field, `${field} file is unavailable: ${candidate}`); }
+  let stat;
+  try { stat = fs.lstatSync(candidate); } catch { buildFail(field, `${field} file is unavailable: ${candidate}`); }
+  if (!stat.isFile() || stat.isSymbolicLink()) buildFail(field, `${field} must be a regular non-symlink file`);
+  if (stat.size > 8 * 1024 * 1024) buildFail(field, `${field} exceeds the 8388608-byte limit`);
+  let bytes;
+  try { bytes = fs.readFileSync(candidate); } catch { buildFail(field, `${field} file cannot be read: ${candidate}`); }
+  if (bytes.length !== stat.size) buildFail(field, `${field} changed while its digest was computed`);
+  return Object.freeze({ path: realPath, sha256: crypto.createHash('sha256').update(bytes).digest('hex') });
+}
+
+function validateBuildRequest(role, validator, request) {
+  try { return validator(request); }
+  catch (error) {
+    const message = String(error && error.message || error);
+    const field = ['schema', 'role', 'worktree', 'ticket', 'pr', 'signals', 'scope', 'args', 'phase']
+      .find((name) => new RegExp(`\\b${name}\\b`, 'i').test(message)) || 'request';
+    buildFail(field, `${role} request field ${field} rejected by host validator: ${message}`);
+  }
+}
+
+function claudeFixCandidate(args, input, evidence) {
+  const isCi = args.role === 'ci-fix';
+  const pr = args.pr || input.stateRow.pr;
+  if (!Number.isSafeInteger(pr) || pr < 1) buildFail('--pr', 'fix request needs --pr or a canonical delivery-state PR number');
+  const base = input.stateRow.base || input.stateRow.pr_base || input.row.pr_base;
+  if (typeof base !== 'string' || !base.trim()) buildFail('base', 'fix request needs a canonical delivery-state base');
+  return {
+    schema: claudeHost.REQUEST_SCHEMA,
+    scope: {
+      run_id: `deliver-build-${args.role}-${args.ticket}`,
+      ticket: args.ticket,
+      phase: phaseNumber(input.row.phase),
+      worktree: input.worktree,
+    },
+    args: {
+      prs: [{
+        id: args.ticket,
+        pr,
+        branch: input.row.branch,
+        worktreePath: input.worktree,
+        planPath: input.planPath,
+        base,
+        needsCiFix: isCi,
+        needsReviewFix: !isCi,
+        signals: buildSignals(input.row),
+        repo: input.row.repo || null,
+        files_modified: input.row.files,
+        ...(isCi ? { failureEvidence: evidence } : { reviewEvidence: evidence }),
+      }],
+    },
+  };
+}
+
+function codexCandidate(args, input, evidence) {
+  return {
+    role: args.role,
+    signals: buildSignals(input.row),
+    context: {
+      ticket: args.ticket,
+      pr: args.pr || input.stateRow.pr || null,
+      worktreePath: input.worktree,
+      branch: input.row.branch,
+      repository: input.row.repo || null,
+      files_modified: input.row.files,
+      evidence_path: evidence ? evidence.path : null,
+      evidence_sha256: evidence ? evidence.sha256 : null,
+    },
+  };
+}
+
+function incompleteHostReason(runtime, role) {
+  if (runtime === 'codex' && role === 'arch-review') {
+    return 'codex arch-review host contract missing: the released host requires a caller-built prompt and does not derive the graph-bound PR diff and ADR corpus';
+  }
+  if (runtime === 'codex') {
+    const evidence = role === 'ci-fix' ? 'failure' : 'review';
+    return `codex ${role} host contract missing: the released host does not bind the graph ticket, PR, and ${evidence} evidence SHA-256 at launch`;
+  }
+  const evidence = role === 'ci-fix' ? 'failure' : 'review';
+  return `claude ${role} host contract missing: fix-round does not authenticate the supplied ${evidence} evidence path and SHA-256 at launch`;
+}
+
+function build(argv, options = {}) {
+  const args = parseBuildArgs(argv);
+  const input = buildTicketContext(args, options);
+  const signals = buildSignals(input.row);
+  const evidence = args.failureFile
+    ? evidenceInput(input.worktree, args.failureFile, '--failure-file')
+    : args.reviewFile ? evidenceInput(input.worktree, args.reviewFile, '--review-file') : null;
+
+  if (args.role === 'arch-review' && args.runtime === 'claude') {
+    const pr = args.pr || (Number.isSafeInteger(input.stateRow.pr) && input.stateRow.pr > 0
+      ? input.stateRow.pr : undefined);
+    const request = {
+      schema: claudeRoleHost.REQUEST_SCHEMA,
+      role: args.role,
+      worktree: input.worktree,
+      ticket: args.ticket,
+      ...(pr ? { pr } : {}),
+      ...(Object.keys(signals).length ? { signals } : {}),
+    };
+    validateBuildRequest(args.role, (value) => claudeRoleHost.parseRequest(value), request);
+    return request;
+  }
+
+  if (args.runtime === 'claude') {
+    const request = claudeFixCandidate(args, input, evidence);
+    validateBuildRequest(args.role, (value) => claudeHost.validateRequest('fix-round', value), request);
+    buildFail('host contract', incompleteHostReason(args.runtime, args.role));
+  }
+
+  const request = codexCandidate(args, input, evidence);
+  validateBuildRequest(args.role, (value) => codexHost.validateArgs(value), request);
+  buildFail('host contract', incompleteHostReason(args.runtime, args.role));
+}
+
 async function main(argv = process.argv.slice(2), output = process.stdout, options = {}) {
   const command = argv[0];
   const rest = argv.slice(1);
+  if (command === 'build') {
+    const request = build(rest, options);
+    output.write(`${JSON.stringify(request)}\n`);
+    return 0;
+  }
   if (command === 'launch') {
     const result = await launch(rest, options);
     output.write(`${JSON.stringify(result)}\n`);
@@ -472,7 +698,7 @@ async function main(argv = process.argv.slice(2), output = process.stdout, optio
     output.write(`${JSON.stringify(result)}\n`);
     return result.exit_code;
   }
-  return fail('USAGE', 'usage: deliver-dispatch.cjs launch|status|wait ...');
+  return fail('USAGE', 'usage: deliver-dispatch.cjs build|launch|status|wait ...');
 }
 
 module.exports = Object.freeze({
@@ -483,6 +709,8 @@ module.exports = Object.freeze({
   buildExecutorPacket,
   buildClaudeExecutorRequest,
   buildCodexExecutorRequest,
+  parseBuildArgs,
+  build,
   phaseNumber,
   sentinelRoundPrs,
   launch,
@@ -496,6 +724,6 @@ module.exports = Object.freeze({
 if (require.main === module) {
   main().then((code) => { process.exitCode = code; }).catch((error) => {
     process.stderr.write(`${error && error.message ? error.message : error}\n`);
-    process.exitCode = 1;
+    process.exitCode = error && error.exitCode === 2 ? 2 : 1;
   });
 }

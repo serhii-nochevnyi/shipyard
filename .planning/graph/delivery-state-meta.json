@@ -1,13 +1,13 @@
 {
   "schema_version": 1,
-  "generation": 379,
-  "generation_identity": "72843b2b-c38d-4519-a64c-aaaa243a88b5",
-  "previous_generation_identity": "16777245:12924598882:1790433421190358000:3c6bc111ff4dd888424f4c0e4f9c1ddb5e208be7b88c4b7cfb32a7ed37337bed",
-  "observed_at": "2026-09-26T14:37:01.475Z",
-  "generated_at": "2026-09-26T14:37:01.475Z",
+  "generation": 396,
+  "generation_identity": "9f96ae8a-5dca-4233-bb6d-14ab94ee1cdd",
+  "previous_generation_identity": "16777245:12934260860:1790611713162323200:cfd3c3157dbab19d0b853b9e7cd500820b23ea16b99c3962c3a1390f6fcf760b",
+  "observed_at": "2026-09-28T16:14:24.960Z",
+  "generated_at": "2026-09-28T16:14:24.960Z",
   "by": "state-sync",
-  "pid": 73372,
-  "observation_generation": 379,
+  "pid": 13602,
+  "observation_generation": 396,
   "observation_projection": {
     "tickets": {
       "T-20-01": {
@@ -1804,9 +1804,9 @@
         "checks": null
       },
       "T-40-01": {
-        "status": "pending",
+        "status": "merged",
         "repository": null,
-        "pr": null,
+        "pr": 290,
         "head": null,
         "draft": false,
         "base": "epic/40-build-delivery-seams-and-clean-target-project-prs",
@@ -1815,9 +1815,9 @@
         "checks": null
       },
       "T-40-03": {
-        "status": "pending",
+        "status": "merged",
         "repository": null,
-        "pr": null,
+        "pr": 279,
         "head": null,
         "draft": false,
         "base": "epic/40-build-delivery-seams-and-clean-target-project-prs",
@@ -1826,9 +1826,9 @@
         "checks": null
       },
       "T-40-04": {
-        "status": "pending",
+        "status": "merged",
         "repository": null,
-        "pr": null,
+        "pr": 283,
         "head": null,
         "draft": false,
         "base": "epic/40-build-delivery-seams-and-clean-target-project-prs",
@@ -1837,9 +1837,9 @@
         "checks": null
       },
       "T-40-05": {
-        "status": "pending",
+        "status": "merged",
         "repository": null,
-        "pr": null,
+        "pr": 280,
         "head": null,
         "draft": false,
         "base": "epic/40-build-delivery-seams-and-clean-target-project-prs",
@@ -1848,9 +1848,9 @@
         "checks": null
       },
       "T-40-06": {
-        "status": "pending",
+        "status": "merged",
         "repository": null,
-        "pr": null,
+        "pr": 288,
         "head": null,
         "draft": false,
         "base": "epic/40-build-delivery-seams-and-clean-target-project-prs",
@@ -1859,9 +1859,9 @@
         "checks": null
       },
       "T-40-07": {
-        "status": "pending",
+        "status": "merged",
         "repository": null,
-        "pr": null,
+        "pr": 281,
         "head": null,
         "draft": false,
         "base": "epic/40-build-delivery-seams-and-clean-target-project-prs",
@@ -1870,9 +1870,9 @@
         "checks": null
       },
       "T-40-08": {
-        "status": "pending",
+        "status": "merged",
         "repository": null,
-        "pr": null,
+        "pr": 296,
         "head": null,
         "draft": false,
         "base": "epic/40-build-delivery-seams-and-clean-target-project-prs",
@@ -1881,9 +1881,9 @@
         "checks": null
       },
       "T-40-09": {
-        "status": "pending",
+        "status": "merged",
         "repository": null,
-        "pr": null,
+        "pr": 312,
         "head": null,
         "draft": false,
         "base": "epic/40-build-delivery-seams-and-clean-target-project-prs",
@@ -1892,9 +1892,9 @@
         "checks": null
       },
       "T-40-10": {
-        "status": "pending",
+        "status": "merged",
         "repository": null,
-        "pr": null,
+        "pr": 292,
         "head": null,
         "draft": false,
         "base": "epic/40-build-delivery-seams-and-clean-target-project-prs",
@@ -1903,9 +1903,9 @@
         "checks": null
       },
       "T-40-11": {
-        "status": "pending",
+        "status": "merged",
         "repository": null,
-        "pr": null,
+        "pr": 303,
         "head": null,
         "draft": false,
         "base": "epic/40-build-delivery-seams-and-clean-target-project-prs",
@@ -1914,9 +1914,9 @@
         "checks": null
       },
       "T-40-12": {
-        "status": "pending",
+        "status": "merged",
         "repository": null,
-        "pr": null,
+        "pr": 298,
         "head": null,
         "draft": false,
         "base": "epic/40-build-delivery-seams-and-clean-target-project-prs",
@@ -1925,9 +1925,9 @@
         "checks": null
       },
       "T-40-13": {
-        "status": "pending",
+        "status": "merged",
         "repository": null,
-        "pr": null,
+        "pr": 297,
         "head": null,
         "draft": false,
         "base": "epic/40-build-delivery-seams-and-clean-target-project-prs",
@@ -1936,9 +1936,9 @@
         "checks": null
       },
       "T-40-14": {
-        "status": "pending",
+        "status": "merged",
         "repository": null,
-        "pr": null,
+        "pr": 300,
         "head": null,
         "draft": false,
         "base": "epic/40-build-delivery-seams-and-clean-target-project-prs",
@@ -1947,9 +1947,9 @@
         "checks": null
       },
       "T-40-15": {
-        "status": "pending",
+        "status": "merged",
         "repository": null,
-        "pr": null,
+        "pr": 307,
         "head": null,
         "draft": false,
         "base": "epic/40-build-delivery-seams-and-clean-target-project-prs",
@@ -1958,9 +1958,9 @@
         "checks": null
       },
       "T-40-16": {
-        "status": "pending",
+        "status": "merged",
         "repository": null,
-        "pr": null,
+        "pr": 294,
         "head": null,
         "draft": false,
         "base": "epic/40-build-delivery-seams-and-clean-target-project-prs",
@@ -1969,9 +1969,9 @@
         "checks": null
       },
       "T-40-17": {
-        "status": "pending",
+        "status": "merged",
         "repository": null,
-        "pr": null,
+        "pr": 284,
         "head": null,
         "draft": false,
         "base": "epic/40-build-delivery-seams-and-clean-target-project-prs",
@@ -1980,9 +1980,9 @@
         "checks": null
       },
       "T-40-18": {
-        "status": "pending",
+        "status": "merged",
         "repository": null,
-        "pr": null,
+        "pr": 285,
         "head": null,
         "draft": false,
         "base": "epic/40-build-delivery-seams-and-clean-target-project-prs",
@@ -1991,9 +1991,9 @@
         "checks": null
       },
       "T-40-19": {
-        "status": "pending",
+        "status": "merged",
         "repository": null,
-        "pr": null,
+        "pr": 282,
         "head": null,
         "draft": false,
         "base": "epic/40-build-delivery-seams-and-clean-target-project-prs",
@@ -2002,9 +2002,9 @@
         "checks": null
       },
       "T-40-20": {
-        "status": "pending",
+        "status": "merged",
         "repository": null,
-        "pr": null,
+        "pr": 286,
         "head": null,
         "draft": false,
         "base": "epic/40-build-delivery-seams-and-clean-target-project-prs",
@@ -2013,9 +2013,9 @@
         "checks": null
       },
       "T-40-21": {
-        "status": "pending",
+        "status": "merged",
         "repository": null,
-        "pr": null,
+        "pr": 291,
         "head": null,
         "draft": false,
         "base": "epic/40-build-delivery-seams-and-clean-target-project-prs",
@@ -2024,9 +2024,9 @@
         "checks": null
       },
       "T-40-22": {
-        "status": "pending",
+        "status": "merged",
         "repository": null,
-        "pr": null,
+        "pr": 304,
         "head": null,
         "draft": false,
         "base": "epic/40-build-delivery-seams-and-clean-target-project-prs",
@@ -2035,9 +2035,9 @@
         "checks": null
       },
       "T-40-23": {
-        "status": "pending",
+        "status": "merged",
         "repository": null,
-        "pr": null,
+        "pr": 308,
         "head": null,
         "draft": false,
         "base": "epic/40-build-delivery-seams-and-clean-target-project-prs",
@@ -2046,9 +2046,9 @@
         "checks": null
       },
       "T-40-24": {
-        "status": "pending",
+        "status": "merged",
         "repository": null,
-        "pr": null,
+        "pr": 310,
         "head": null,
         "draft": false,
         "base": "epic/40-build-delivery-seams-and-clean-target-project-prs",
@@ -2057,9 +2057,9 @@
         "checks": null
       },
       "T-40-25": {
-        "status": "pending",
+        "status": "merged",
         "repository": null,
-        "pr": null,
+        "pr": 299,
         "head": null,
         "draft": false,
         "base": "epic/40-build-delivery-seams-and-clean-target-project-prs",
@@ -2068,9 +2068,9 @@
         "checks": null
       },
       "T-40-26": {
-        "status": "pending",
+        "status": "merged",
         "repository": null,
-        "pr": null,
+        "pr": 309,
         "head": null,
         "draft": false,
         "base": "epic/40-build-delivery-seams-and-clean-target-project-prs",
@@ -2079,9 +2079,9 @@
         "checks": null
       },
       "T-40-27": {
-        "status": "pending",
+        "status": "merged",
         "repository": null,
-        "pr": null,
+        "pr": 289,
         "head": null,
         "draft": false,
         "base": "epic/40-build-delivery-seams-and-clean-target-project-prs",
@@ -2090,9 +2090,9 @@
         "checks": null
       },
       "T-40-28": {
-        "status": "pending",
+        "status": "merged",
         "repository": null,
-        "pr": null,
+        "pr": 305,
         "head": null,
         "draft": false,
         "base": "epic/40-build-delivery-seams-and-clean-target-project-prs",
@@ -2233,9 +2233,9 @@
         "checks": null
       },
       "T-43-01": {
-        "status": "pending",
+        "status": "merged",
         "repository": null,
-        "pr": null,
+        "pr": 323,
         "head": null,
         "draft": false,
         "base": "epic/43-target-project-delivery-at-scale",
@@ -2255,9 +2255,9 @@
         "checks": null
       },
       "T-43-03": {
-        "status": "pending",
+        "status": "merged",
         "repository": null,
-        "pr": null,
+        "pr": 338,
         "head": null,
         "draft": false,
         "base": "epic/43-target-project-delivery-at-scale",
@@ -2266,20 +2266,26 @@
         "checks": null
       },
       "T-43-04": {
-        "status": "pending",
+        "status": "pr-open",
         "repository": null,
-        "pr": null,
-        "head": null,
+        "pr": 319,
+        "head": "6e467fa671521381deb4c51910ffb3de35e7b5fb",
         "draft": false,
         "base": "ticket/T-43-07-cancelled-checks-ignore-superseded-runs",
-        "merge_state": null,
+        "merge_state": "CLEAN",
         "review_decision": null,
-        "checks": null
+        "checks": {
+          "total": 1,
+          "pending": 0,
+          "failing": 0,
+          "none_reported": false,
+          "unavailable": false
+        }
       },
       "T-43-05": {
-        "status": "pending",
+        "status": "merged",
         "repository": null,
-        "pr": null,
+        "pr": 328,
         "head": null,
         "draft": false,
         "base": "epic/43-target-project-delivery-at-scale",
@@ -2302,8 +2308,8 @@
         "status": "pr-open",
         "repository": null,
         "pr": 266,
-        "head": "be0084a28263bd59e04ef1902faccc888fb77f75",
-        "draft": false,
+        "head": "fef7d105eaf6614575117c88a4224932a3253911",
+        "draft": true,
         "base": "epic/43-target-project-delivery-at-scale",
         "merge_state": "CLEAN",
         "review_decision": null,
@@ -2321,15 +2327,15 @@
         "pr": null,
         "head": null,
         "draft": false,
-        "base": "epic/43-target-project-delivery-at-scale",
+        "base": "ticket/T-43-04-bounded-reachability-o-1-git-forms-a-lar",
         "merge_state": null,
         "review_decision": null,
         "checks": null
       },
       "T-43-09": {
-        "status": "pending",
+        "status": "merged",
         "repository": null,
-        "pr": null,
+        "pr": 326,
         "head": null,
         "draft": false,
         "base": "epic/43-target-project-delivery-at-scale",
@@ -2338,26 +2344,38 @@
         "checks": null
       },
       "T-43-10": {
-        "status": "pending",
+        "status": "pr-open",
         "repository": null,
-        "pr": null,
-        "head": null,
-        "draft": false,
+        "pr": 346,
+        "head": "244c3351843e40822bef4349acc140cc9ce19c1d",
+        "draft": true,
         "base": "epic/43-target-project-delivery-at-scale",
-        "merge_state": null,
+        "merge_state": "CLEAN",
         "review_decision": null,
-        "checks": null
+        "checks": {
+          "total": 1,
+          "pending": 0,
+          "failing": 0,
+          "none_reported": false,
+          "unavailable": false
+        }
       },
       "T-43-11": {
-        "status": "pending",
+        "status": "pr-open",
         "repository": null,
-        "pr": null,
-        "head": null,
-        "draft": false,
+        "pr": 334,
+        "head": "105759c579945cff51ba111023132fc24126a592",
+        "draft": true,
         "base": "epic/43-target-project-delivery-at-scale",
-        "merge_state": null,
+        "merge_state": "UNKNOWN",
         "review_decision": null,
-        "checks": null
+        "checks": {
+          "total": 1,
+          "pending": 0,
+          "failing": 0,
+          "none_reported": false,
+          "unavailable": false
+        }
       },
       "T-43-12": {
         "status": "pending",
@@ -2382,9 +2400,9 @@
         "checks": null
       },
       "T-43-14": {
-        "status": "pending",
+        "status": "merged",
         "repository": null,
-        "pr": null,
+        "pr": 355,
         "head": null,
         "draft": false,
         "base": "epic/43-target-project-delivery-at-scale",
@@ -2446,14 +2464,256 @@
         "merge_state": null,
         "review_decision": null,
         "checks": null
+      },
+      "T-44-01": {
+        "status": "merged",
+        "repository": null,
+        "pr": 331,
+        "head": null,
+        "draft": false,
+        "base": "epic/44-optimize-subscription-efficiency-per-runtime",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-44-02": {
+        "status": "merged",
+        "repository": null,
+        "pr": 335,
+        "head": null,
+        "draft": false,
+        "base": "epic/44-optimize-subscription-efficiency-per-runtime",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-44-03": {
+        "status": "merged",
+        "repository": null,
+        "pr": 337,
+        "head": null,
+        "draft": false,
+        "base": "epic/44-optimize-subscription-efficiency-per-runtime",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-44-04": {
+        "status": "merged",
+        "repository": null,
+        "pr": 340,
+        "head": null,
+        "draft": false,
+        "base": "epic/44-optimize-subscription-efficiency-per-runtime",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-44-05": {
+        "status": "merged",
+        "repository": null,
+        "pr": 341,
+        "head": null,
+        "draft": false,
+        "base": "epic/44-optimize-subscription-efficiency-per-runtime",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-44-06": {
+        "status": "merged",
+        "repository": null,
+        "pr": 336,
+        "head": null,
+        "draft": false,
+        "base": "epic/44-optimize-subscription-efficiency-per-runtime",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-44-07": {
+        "status": "merged",
+        "repository": null,
+        "pr": 332,
+        "head": null,
+        "draft": false,
+        "base": "epic/44-optimize-subscription-efficiency-per-runtime",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-44-08": {
+        "status": "merged",
+        "repository": null,
+        "pr": 344,
+        "head": null,
+        "draft": false,
+        "base": "epic/44-optimize-subscription-efficiency-per-runtime",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-45-01": {
+        "status": "pending",
+        "repository": null,
+        "pr": null,
+        "head": null,
+        "draft": false,
+        "base": "epic/45-close-residual-pipeline-efficiency-gaps",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-45-02": {
+        "status": "pending",
+        "repository": null,
+        "pr": null,
+        "head": null,
+        "draft": false,
+        "base": "epic/45-close-residual-pipeline-efficiency-gaps",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-45-03": {
+        "status": "pending",
+        "repository": null,
+        "pr": null,
+        "head": null,
+        "draft": false,
+        "base": "epic/45-close-residual-pipeline-efficiency-gaps",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-45-04": {
+        "status": "pending",
+        "repository": null,
+        "pr": null,
+        "head": null,
+        "draft": false,
+        "base": "epic/45-close-residual-pipeline-efficiency-gaps",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-45-05": {
+        "status": "pending",
+        "repository": null,
+        "pr": null,
+        "head": null,
+        "draft": false,
+        "base": "epic/45-close-residual-pipeline-efficiency-gaps",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-45-06": {
+        "status": "pending",
+        "repository": null,
+        "pr": null,
+        "head": null,
+        "draft": false,
+        "base": "epic/45-close-residual-pipeline-efficiency-gaps",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-45-07": {
+        "status": "pending",
+        "repository": null,
+        "pr": null,
+        "head": null,
+        "draft": false,
+        "base": "epic/45-close-residual-pipeline-efficiency-gaps",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-45-08": {
+        "status": "pending",
+        "repository": null,
+        "pr": null,
+        "head": null,
+        "draft": false,
+        "base": "epic/45-close-residual-pipeline-efficiency-gaps",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-45-09": {
+        "status": "pending",
+        "repository": null,
+        "pr": null,
+        "head": null,
+        "draft": false,
+        "base": "epic/45-close-residual-pipeline-efficiency-gaps",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-45-10": {
+        "status": "pending",
+        "repository": null,
+        "pr": null,
+        "head": null,
+        "draft": false,
+        "base": "epic/45-close-residual-pipeline-efficiency-gaps",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-45-11": {
+        "status": "pending",
+        "repository": null,
+        "pr": null,
+        "head": null,
+        "draft": false,
+        "base": "epic/45-close-residual-pipeline-efficiency-gaps",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-45-12": {
+        "status": "pending",
+        "repository": null,
+        "pr": null,
+        "head": null,
+        "draft": false,
+        "base": "epic/45-close-residual-pipeline-efficiency-gaps",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-45-13": {
+        "status": "pending",
+        "repository": null,
+        "pr": null,
+        "head": null,
+        "draft": false,
+        "base": "epic/45-close-residual-pipeline-efficiency-gaps",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-45-14": {
+        "status": "pending",
+        "repository": null,
+        "pr": null,
+        "head": null,
+        "draft": false,
+        "base": "epic/45-close-residual-pipeline-efficiency-gaps",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
       }
     }
   },
   "binding": {
     "schema_version": 1,
-    "state_digest": "4f2d5f7f77be99041cbaa145d58984673ea12b364794514638412e193981c086",
-    "front_digest": "5424cc0db8a4ebee764621ee9c0662c52e79e4f2dde261e720dab36b1ea13991",
-    "observation_digest": "715b8efc1c63ff8f1603088c6e7cf2c6efc9b5f99e3c9636f57bac023ce43750",
-    "observation_generation": 379
+    "state_digest": "6fdda69e7f189d22f293676f7afc89d2ac39c508da385f5b3ed14e782e0c2386",
+    "front_digest": "75736593daa3115cdfb9f647eba8303a31d1d5dbcef7a61c33ec5d5f31179fd2",
+    "observation_digest": "9070fd5b03927f5249e38ca8ce46d5dddbd12e713825cba84dc845ba6997ed79",
+    "observation_generation": 396
   }
 }

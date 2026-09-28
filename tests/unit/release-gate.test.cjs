@@ -147,4 +147,10 @@ test('refuses without receipts and tags with them', () => {
   }
 });
 
+test('the live round checks the Codex home it was pointed at', () => {
+  const script = fs.readFileSync(path.join(__dirname, '..', '..', 'tests', 'live', 'live-round.sh'), 'utf8');
+  assert.match(script, /doctor_args=\(--codex-home "\$CODEX_HOME"\)/);
+  assert.match(script, /shipyard-doctor\.cjs" \$\{doctor_args\[@\]\+"\$\{doctor_args\[@\]\}"\}/);
+});
+
 done();

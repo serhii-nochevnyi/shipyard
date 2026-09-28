@@ -11,7 +11,10 @@ const {
   createSessionHandoff,
   resolveRepositoryIdentity,
   ownershipStorePath,
+  LIFECYCLE_CLASSES,
+  lifecycleClassStatus,
 } = require('../../plugins/delivery-pipeline/scripts/session-handoff.cjs');
+const overhead = require('../../plugins/delivery-pipeline/scripts/orchestration-overhead.cjs');
 const {
   createDispatchBoundary,
   createDurableRecorder,
@@ -673,6 +676,42 @@ test('omitting a required checkpoint field refuses before owner transfer and nam
     );
     assert.doesNotThrow(() => handoff.assertOwner(owner));
     handoff.checkpoint(owner, checkpointPayload(root));
+  } finally {
+    clean(root);
+  }
+});
+
+test('the lifecycle class table names a Codex fork unsupported while every class keeps the four handoff cost stages', () => {
+  assert.equal(LIFECYCLE_CLASSES.fork.history_copying, true);
+  assert.equal(LIFECYCLE_CLASSES.resume.history_copying, false);
+  assert.equal(LIFECYCLE_CLASSES.compaction.history_copying, false);
+  assert.equal(LIFECYCLE_CLASSES.fresh_start.history_copying, false);
+  assert.equal(lifecycleClassStatus('fork', 'codex').supported, false);
+  assert.equal(lifecycleClassStatus('fork', 'claude').supported, true);
+  for (const name of ['resume', 'fork', 'compaction', 'fresh_start']) {
+    assert.deepEqual(LIFECYCLE_CLASSES[name].stages, [
+      'checkpoint_collection', 'successor_startup', 'cache_warmup', 'successor_reread',
+    ]);
+  }
+});
+
+test('recordLifecycleCost forwards the session model, effort and instruction_digest to the recorded checkpoint cost', () => {
+  const root = repoFixture();
+  const graph = path.join(root, 'overhead');
+  try {
+    const recorder = overhead.createRecorder(graph);
+    const handoff = createSessionHandoff({
+      cwd: root, overheadRecorder: recorder, runtime: 'claude', backend: 'workflow',
+      model: 'opus', effort: 'high', instruction_digest: 'c'.repeat(64),
+    });
+    const owner = handoff.begin({ runId: 'run-lifecycle-fields', sessionId: 'session-lifecycle-fields', phase: '41', tickets: ['T-41-02-lifecycle-fields'] });
+    handoff.checkpoint(owner, checkpointPayload(root));
+    const rows = recorder.latest();
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].model, 'opus');
+    assert.equal(rows[0].effort, 'high');
+    assert.equal(rows[0].instruction_digest, 'c'.repeat(64));
+    assert.equal(rows[0].lifecycle_class, undefined);
   } finally {
     clean(root);
   }

@@ -526,6 +526,9 @@ freshly written. Do not report decomposition success without this.
    - the phase epic branch (`tickets.json.epics`) — where the whole phase integrates;
    - a table of tickets: id / title / wave / depends_on / pr_base (epic or parent
      branch) / risk;
+   - a proposed ticket → existing Jira issue mapping derived from keys named in
+     the investigation's `PROBLEM.md` or intake material. Show this mapping beside
+     the ticket set and ask the user to approve the mapping with that set;
    - who is high-risk and will wait for a human;
    - how many waves and what will run in parallel; any diamond warnings of the graph.
 
@@ -573,6 +576,13 @@ remain canonical, deliver never reads Jira, and Gate 2 never depends on it.
 **All Jira content — epic and issue summaries, descriptions, comments — is
 written in ENGLISH**, regardless of the conversation language (it is a shipped
 artifact, per delivery-rules).
+
+The ticket → existing Jira issue mapping proposed at Gate 2 comes from Jira keys
+named in the investigation's `PROBLEM.md` or intake material. After the user
+approves the mapping, record each approved key with
+`node ${CLAUDE_PLUGIN_ROOT}/scripts/jira-export.cjs record <T-NN-MM> <KEY>`.
+Then re-run `validate-graph.cjs` so `tickets.json` carries those authoritative
+keys before planning the export.
 
 **Export is automatic — no hand-written config required.** Run it by default on
 every decomposition, resolving everything yourself. It is skipped ONLY when:
@@ -641,16 +651,25 @@ per run:
    step instructs, resolving the link type whose inward description reads
    `is blocked by` (`getIssueLinkTypes`) before calling `createIssueLink`.
    Do not reinterpret, reorder, skip or add a step the plan did not emit.
-   For each epic or issue step, run its `lookup` entries' `jql` in order.
-   Apply an entry's `on_match` only when the hit's `Source of truth` line
-   names this repository (matching the entry's `requires_source_of_truth`)
-   or carries no prefix (matching `accepts_unprefixed`). On a `migrate`
-   match, add `add_label`, replace the pointer line with `pointer`, and
-   post the comment `label migrated`. Never update an issue whose
-   source-of-truth line names another repository, or has none — skip it
-   and move to the next entry. Create the issue when no entry claims a
-   hit. Stop and report to the user when one entry's `jql` returns more
-   than one issue.
+   Apply these recorded-key rules to an issue step whose lookup has
+   `kind: key`:
+   - A recorded key is looked up by key directly; accept only an issue whose
+     returned key exactly matches it.
+   - Never create an issue for a recorded key. An unknown key (missing or
+     mismatched) refuses that ticket: stop its export and report the refusal.
+   - If the issue has the step's shipyard label, update only the fields listed in
+     `labelled_only_fields` (`summary` and `description`).
+   - If the issue is unlabelled, only transition and comment; leave its summary
+     and description unchanged.
+   For steps without a recorded key, run each `lookup` entry's `jql` in order.
+   Apply an entry's `on_match` only when the hit's `Source of truth` line names
+   this repository (matching `requires_source_of_truth`) or carries no prefix
+   (matching `accepts_unprefixed`). On a `migrate` match, add `add_label`, replace
+   the pointer line with `pointer`, and post the comment `label migrated`. Never
+   update an issue whose source-of-truth line names another repository, or has
+   none — skip it and move to the next entry. Create an issue only when the step
+   says `on_no_match: create`. Stop and report to the user when one entry's
+   `jql` returns more than one issue.
 3. For each issue the plan created or found, run `node
    ${CLAUDE_PLUGIN_ROOT}/scripts/jira-export.cjs record <T-NN-MM> <KEY>` —
    this writes `delivery.jira: <KEY>` back into that ticket's plan

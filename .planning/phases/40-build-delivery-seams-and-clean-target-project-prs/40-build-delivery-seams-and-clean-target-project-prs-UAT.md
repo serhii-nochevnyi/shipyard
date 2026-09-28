@@ -1,10 +1,10 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 63cddecf0270dc1f4df2ef29ca324e11c0dcce6643047312a50cb41171c4ccdd
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 9f266d2811c4b4e5a7d13225eb6ec5e88681c8891cc248a2f6be599634b80362
 phase: 40
 status: pending
 result: pending
 shipyard_sync: evidence-projection
-shipyard_source_fingerprint: 63cddecf0270dc1f4df2ef29ca324e11c0dcce6643047312a50cb41171c4ccdd
+shipyard_source_fingerprint: 9f266d2811c4b4e5a7d13225eb6ec5e88681c8891cc248a2f6be599634b80362
 ---
 
 # Phase 40: Build delivery seams and clean target-project PRs — UAT Projection
@@ -12,9 +12,9 @@ shipyard_source_fingerprint: 63cddecf0270dc1f4df2ef29ca324e11c0dcce6643047312a50
 This file is generated from the delivery graph and phase integration evidence.
 
 ### 1. Delivery plans are accounted for
-result: pending
+result: passed
 expected: all 27 phase plan(s) are merged
-actual: 0 merged
+actual: 27 merged
 
 ### 2. Integration evidence is explicit
 result: pending
