@@ -153,6 +153,20 @@ test('configured markers apply to the matching origin repository only', () => {
   ]);
 });
 
+test('configured markers match scp-style origins with git output newlines', () => {
+  const repo = fixture(
+    { 'src/app.js': 'const value = 1;\n' },
+    { 'src/app.js': 'const value = 1;\n// @ai-generated model=x\n' },
+  );
+  git(repo, ['remote', 'add', 'origin', 'git@github.com:acme/app.git']);
+  configureMarkers(repo, { 'acme/app': ['@ai-generated'] });
+
+  assert.strictEqual(commentPolicy.repositorySlug(repo), 'acme/app');
+  const report = commentPolicy.analyze(repo, 'main', { projectRoot: repo });
+  assert.strictEqual(report.ok, true);
+  assert.strictEqual(report.policy.allowed_markers.includes('@ai-generated'), true);
+});
+
 test('default configured markers do not apply when origin cannot identify a repository', () => {
   const repo = fixture(
     { 'src/app.js': 'const value = 1;\n' },

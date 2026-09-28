@@ -292,7 +292,7 @@ function git(worktree, args) {
 function repositorySlug(root) {
   if (!root) return null;
   let remote;
-  try { remote = git(root, ['remote', 'get-url', 'origin']); } catch { return null; }
+  try { remote = git(root, ['remote', 'get-url', 'origin']).trim(); } catch { return null; }
   let remotePath = remote;
   const scp = remote.match(/^[^/]+@[^:]+:(.+)$/);
   if (scp) remotePath = scp[1];
