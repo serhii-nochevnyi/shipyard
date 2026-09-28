@@ -134,12 +134,25 @@ function provenanceCheck(results, name, dir) {
   return record;
 }
 
-function claudeCacheChecks(results, claudeHome, repo) {
+function classifyDogfoodCache(record, ownRoot) {
+  if (!record || !isDogfood(record) || !record.source_root) return null;
+  const shaDirty = 'sha ' + (record.source_sha || 'unknown') + (record.dirty ? ' dirty' : ' clean');
+  if (record.source_root === ownRoot) return { level: 'warn', detail: 'own dogfood ' + shaDirty + ' (' + ownRoot + ')' };
+  return { level: 'foreign', detail: 'foreign dogfood ' + shaDirty +
+    ' (source ' + record.source_root + ', this checkout ' + ownRoot + ')' };
+}
+
+function claudeCacheChecks(results, claudeHome, repo, ownRoot) {
   const cache = path.join(claudeHome, 'plugins', 'cache', 'shipyard', 'shipyard');
   for (const version of cacheDirs(cache)) {
     const dir = path.join(cache, version);
     const name = 'claude-cache ' + version;
     const record = provenanceCheck(results, 'claude-cache-provenance ' + version, dir);
+    const classified = classifyDogfoodCache(record, ownRoot);
+    if (classified) {
+      check(results, name, classified.level, classified.detail);
+      continue;
+    }
     const tag = repo && releaseTag(repo, version);
     if (!tag) {
       check(results, name, 'skip', 'no v' + version + ' tag to compare ' + dir);
@@ -162,7 +175,7 @@ function claudeCacheChecks(results, claudeHome, repo) {
   }
 }
 
-function codexCacheChecks(results, codexHome, repo) {
+function codexCacheChecks(results, codexHome, repo, ownRoot) {
   const cache = path.join(codexHome, 'plugins', 'cache', 'shipyard', 'shipyard');
   const agentsRecord = readRecord(path.join(codexHome, 'agents'));
   for (const entry of cacheDirs(cache)) {
@@ -174,6 +187,11 @@ function codexCacheChecks(results, codexHome, repo) {
     if (isDogfood(record)) {
       check(results, name + ' provenance', 'warn', 'dogfood sha ' + (record.source_sha || 'unknown') +
         (record.dirty ? ' dirty' : ' clean') + ' (' + dir + ')');
+    }
+    const classified = classifyDogfoodCache(record, ownRoot);
+    if (classified) {
+      check(results, name, classified.level, classified.detail);
+      continue;
     }
     const tag = repo && releaseTag(repo, match[1]);
     if (!tag) {
@@ -374,10 +392,11 @@ function main(argv) {
   }
 
   const releaseRepo = args['release-repo'] || ROOT;
+  const ownRoot = fs.realpathSync(ROOT);
   provenanceCheck(results, 'claude-provenance', bundle);
   provenanceCheck(results, 'codex-provenance', agentsDir);
-  claudeCacheChecks(results, claudeHome, releaseRepo);
-  codexCacheChecks(results, codexHome, releaseRepo);
+  claudeCacheChecks(results, claudeHome, releaseRepo, ownRoot);
+  codexCacheChecks(results, codexHome, releaseRepo, ownRoot);
 
   const errors = results.filter((result) => result.level === 'error');
   const warnings = results.filter((result) => result.level === 'warn');
