@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 58c7fabe4f533fc2b9f185e739c0461d0655c9684d74a3927f2111a09aa3a0d4
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: c63e1631283fdab70119a8cee6da8a4f191807dd6fb8c4758bb8aa738dffd047
 phase: 43-target-project-delivery-at-scale
 plan: 06
 subsystem: shipyard delivery
@@ -22,7 +22,7 @@ key-decisions:
 duration: 0min
 status: halted
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 58c7fabe4f533fc2b9f185e739c0461d0655c9684d74a3927f2111a09aa3a0d4
+shipyard_source_fingerprint: c63e1631283fdab70119a8cee6da8a4f191807dd6fb8c4758bb8aa738dffd047
 ---
 
 # Phase 43: One exported conveyor scratch set for the role host, finalizer, Codex host, base-merge and gc — Delivery Projection
@@ -32,8 +32,8 @@ shipyard_source_fingerprint: 58c7fabe4f533fc2b9f185e739c0461d0655c9684d74a3927f2
 ## Delivery Evidence
 
 - Ticket: T-43-06
-- Delivery status: pending
-- PR: not observed
+- Delivery status: pr-open
+- PR: #371
 - Source plan: .planning/phases/43-target-project-delivery-at-scale/43-06-PLAN.md
 - This summary is halted until the delivery state observes `merged`.
 
