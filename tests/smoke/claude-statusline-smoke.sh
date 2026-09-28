@@ -16,6 +16,7 @@ mkdir -p "$CLAUDE_HOME"
 fail() { echo "statusline smoke: $*" >&2; exit 1; }
 sha() { shasum -a 256 "$1" | awk '{print $1}'; }
 run() { bash "$INSTALLER" "$@"; }
+mode() { node -e 'process.stdout.write((require("node:fs").statSync(process.argv[1]).mode & 0o777).toString(8))' "$1"; }
 BEFORE_TREE="$(git -C "$ROOT" status --porcelain --untracked-files=all)"
 
 RENDERER="$CLAUDE_HOME/statusline.sh"
@@ -70,8 +71,8 @@ cmp -s "$WORK/out" "$WORK/want-out" || fail "case 3: stdout differs"
 cmp -s "$WORK/err" "$WORK/want-err" || fail "case 3: stderr differs"
 sample="$(ls "$STATE"/samples-*.jsonl 2>/dev/null | head -1 || true)"
 [[ -n "$sample" ]] || fail "case 3: no sample under $STATE"
-[[ "$(stat -f '%Lp' "$sample" 2>/dev/null || stat -c '%a' "$sample")" == 600 ]] || fail "case 3: sample mode"
-[[ "$(stat -f '%Lp' "$STATE" 2>/dev/null || stat -c '%a' "$STATE")" == 700 ]] || fail "case 3: state dir mode"
+[[ "$(mode "$sample")" == 600 ]] || fail "case 3: sample mode"
+[[ "$(mode "$STATE")" == 700 ]] || fail "case 3: state dir mode"
 [[ "$(git -C "$ROOT" status --porcelain --untracked-files=all)" == "$BEFORE_TREE" ]] || fail "case 3: worktree changed"
 echo "case 3 ok"
 
