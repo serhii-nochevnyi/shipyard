@@ -386,13 +386,15 @@ test('an empty value is absence too, not a bad level', () => {
     'an empty value must be omitted, not stored as ""');
 });
 
-suite('log-event — ci_rerun requires its run id');
+suite('log-event — ci_rerun must come from an applied-action owner');
 
-test('ci_rerun with every field is written', () => {
+test('direct ci_rerun is refused even with every field because no rerun was verified', () => {
   const { project, graph } = scratch();
   const r = run(project, ['ci_rerun', 'ticket=T-43-07', 'pr=7', `head=${FULL}`, 'run_id=123']);
-  assert.strictEqual(r.status, 0, r.stderr);
-  assert.strictEqual(JSON.parse(lines(graph)[0]).run_id, 123);
+  assert.notStrictEqual(r.status, 0, 'a complete-looking journal line is not evidence of a GH action');
+  assert.ok(/ci-wait\.cjs/.test(r.stderr), r.stderr);
+  assert.ok(/verified|applied/i.test(r.stderr), r.stderr);
+  assert.strictEqual(lines(graph).length, 0, 'an unverified event never reaches the journal');
 });
 
 test('ci_rerun without run_id is refused and writes nothing', () => {

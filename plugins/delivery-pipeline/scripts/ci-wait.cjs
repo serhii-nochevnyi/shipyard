@@ -83,7 +83,20 @@ const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
 const { diagnostic, runBounded, timeoutFromEnv } = require(path.join(__dirname, 'command-runner.cjs'));
-const { withLock, lockDirFor, writeAtomic } = require(path.join(__dirname, 'lock.cjs'));
+let activeSharedLockDeadline = Number.POSITIVE_INFINITY;
+const lockModule = require(path.join(__dirname, 'lock.cjs'));
+const { withLock, lockDirFor, writeAtomic } = lockModule;
+const sharedWithLock = lockModule.withLock;
+lockModule.withLock = (dir, name, fn, options = {}) => {
+  if (!['wait-events', 'state', 'orchestration-overhead', 'run-waker-events'].includes(name)
+      || !Number.isFinite(activeSharedLockDeadline)) {
+    return sharedWithLock(dir, name, fn, options);
+  }
+  const remaining = remainingTimeoutMs(DEFAULT_LOCK_WAIT_MS, activeSharedLockDeadline, LOCK_TAIL_RESERVE_MS);
+  if (remaining <= 0) throw new Error('wait call deadline reached before shared lock');
+  const waitMs = Number.isFinite(options.waitMs) ? Math.min(options.waitMs, remaining) : remaining;
+  return sharedWithLock(dir, name, fn, { ...options, waitMs });
+};
 // The state-moved rule, taken from the store that already owns it. Never
 // reimplemented: two stores that expire against the same subject must not come to
 // disagree about what "the PR moved" means.
@@ -95,6 +108,8 @@ const runWaker = require(path.join(__dirname, 'run-waker.cjs'));
 
 const GH_TIMEOUT_MS = timeoutFromEnv('SHIPYARD_GH_TIMEOUT_MS', 60_000, 5 * 60_000);
 const INTERNAL_COMMAND_TIMEOUT_MS = timeoutFromEnv('SHIPYARD_INTERNAL_COMMAND_TIMEOUT_MS', 30_000, 5 * 60_000);
+const DEFAULT_LOCK_WAIT_MS = 60_000;
+const LOCK_TAIL_RESERVE_MS = 500;
 
 const callStartedAt = Date.now();
 const argv = process.argv.slice(2);
@@ -427,6 +442,7 @@ const BUDGET_ENV_S = (() => {
 })();
 
 const WAITS = path.join(GRAPH, 'ci-waits.json');
+const JOURNAL = path.join(GRAPH, 'delivery-log.jsonl');
 // The lock lives beside the store, exactly as drift-record.cjs derives it: a lock
 // taken at some other cwd serializes nothing, which is how six concurrent marks
 // once produced five records.
@@ -488,10 +504,10 @@ function recordOutcome(settledId, watched, goodEver) {
 
 function recordOutcomeInner(settledId, watched, goodEver) {
   const escalations = [];
+  const timeoutMs = remainingTimeoutMs(INTERNAL_COMMAND_TIMEOUT_MS, waitWallDeadline(), LOCK_TAIL_RESERVE_MS);
+  if (timeoutMs <= 0) throw new Error('wait call deadline reached before wait-record lock');
   withLock(lockDirFor(LOCK_ROOT), 'ci-wait', () => {
-    let store = { tickets: {} };
-    try { store = JSON.parse(fs.readFileSync(WAITS, 'utf8')) || { tickets: {} }; } catch { /* first wait */ }
-    if (!store.tickets || typeof store.tickets !== 'object') store.tickets = {};
+    const store = readWaitStore();
     const now = new Date().toISOString();
 
     for (const w of watched) {
@@ -525,7 +541,7 @@ function recordOutcomeInner(settledId, watched, goodEver) {
       if (waitedS >= BUDGET_S) escalations.push({ id: w.id, pr: w.pr, empties, waitedS });
     }
     writeAtomic(WAITS, JSON.stringify(store, null, 2) + '\n');
-  });
+  }, { waitMs: timeoutMs });
 
   // Park OUTSIDE the lock: escalation-record takes its own, beside its own store.
   const parked = [];
@@ -597,7 +613,11 @@ function rerunKey(id, head) {
   return `${id}:${head}`;
 }
 
-function readRerunStore() {
+function isRecord(value) {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function readWaitStore() {
   let store;
   try {
     store = JSON.parse(fs.readFileSync(WAITS, 'utf8'));
@@ -605,17 +625,43 @@ function readRerunStore() {
     if (e.code === 'ENOENT') return { tickets: {}, reruns: {} };
     throw new Error(`could not read ci-waits.json (${e.message})`);
   }
-  if (!store || typeof store !== 'object' || Array.isArray(store)) {
+  if (!isRecord(store)) {
     throw new Error('ci-waits.json must contain a JSON object');
   }
-  if (store.tickets !== undefined && (!store.tickets || typeof store.tickets !== 'object' || Array.isArray(store.tickets))) {
+  if (store.tickets !== undefined && !isRecord(store.tickets)) {
     throw new Error('ci-waits.json tickets must be an object');
   }
-  if (store.reruns !== undefined && (!store.reruns || typeof store.reruns !== 'object' || Array.isArray(store.reruns))) {
+  if (store.reruns !== undefined && !isRecord(store.reruns)) {
     throw new Error('ci-waits.json reruns must be an object');
   }
-  if (!store.tickets) store.tickets = {};
-  if (!store.reruns) store.reruns = {};
+  if (store.tickets === undefined) store.tickets = {};
+  if (store.reruns === undefined) store.reruns = {};
+  for (const [ticket, entry] of Object.entries(store.tickets)) {
+    if (!isRecord(entry)) throw new Error(`ci-waits.json ticket record ${ticket} must be an object`);
+    if (entry.fingerprint !== undefined && typeof entry.fingerprint !== 'string') {
+      throw new Error(`ci-waits.json ticket record ${ticket} has an invalid fingerprint`);
+    }
+    if (entry.head_sha !== undefined && entry.head_sha !== null && typeof entry.head_sha !== 'string') {
+      throw new Error(`ci-waits.json ticket record ${ticket} has an invalid head_sha`);
+    }
+    for (const field of ['empty_windows', 'waited_s']) {
+      if (entry[field] !== undefined && (typeof entry[field] !== 'number' || !Number.isFinite(entry[field]) || entry[field] < 0)) {
+        throw new Error(`ci-waits.json ticket record ${ticket} has an invalid ${field}`);
+      }
+    }
+  }
+  for (const [key, entry] of Object.entries(store.reruns)) {
+    if (!isRecord(entry)
+        || typeof entry.head !== 'string' || !/^[0-9a-f]{40}$/i.test(entry.head)
+        || !['string', 'number'].includes(typeof entry.run_id) || String(entry.run_id) === ''
+        || typeof entry.at !== 'string' || !Number.isFinite(Date.parse(entry.at))
+        || (entry.journalled !== undefined && typeof entry.journalled !== 'boolean')
+        || (entry.status !== undefined && !['claimed', 'applied'].includes(entry.status))
+        || (entry.applied_at !== undefined && (typeof entry.applied_at !== 'string' || !Number.isFinite(Date.parse(entry.applied_at))))
+        || (entry.journalled_at !== undefined && (typeof entry.journalled_at !== 'string' || !Number.isFinite(Date.parse(entry.journalled_at))))) {
+      throw new Error(`ci-waits.json rerun record ${key} is invalid`);
+    }
+  }
   return store;
 }
 
@@ -629,21 +675,28 @@ function rerunFrom(store, id, head) {
 }
 
 function readRerun(id, head) {
-  return rerunFrom(readJson(WAITS), id, head);
+  return rerunFrom(readWaitStore(), id, head);
+}
+
+function rerunEntryFor(store, id, head) {
+  const key = rerunKey(id, head);
+  if (store.reruns[key] && store.reruns[key].head === head) return store.reruns[key];
+  if (store.reruns[id] && store.reruns[id].head === head) return store.reruns[id];
+  return null;
 }
 
 function claimRerun(id, head, runId) {
-  const timeoutMs = remainingTimeoutMs(INTERNAL_COMMAND_TIMEOUT_MS, deadline);
+  const timeoutMs = remainingTimeoutMs(INTERNAL_COMMAND_TIMEOUT_MS, deadline, LOCK_TAIL_RESERVE_MS);
   if (timeoutMs <= 0) throw new Error('wait call deadline reached before rerun claim');
   let result;
   withLock(lockDirFor(LOCK_ROOT), 'ci-wait', () => {
-    const store = readRerunStore();
+    const store = readWaitStore();
     const prior = rerunFrom(store, id, head);
     if (prior) {
       result = { claimed: false, prior };
       return;
     }
-    const entry = { head, run_id: String(runId), at: new Date().toISOString(), journalled: false };
+    const entry = { head, run_id: String(runId), at: new Date().toISOString(), status: 'claimed', journalled: false };
     store.reruns[rerunKey(id, head)] = entry;
     writeAtomic(WAITS, JSON.stringify(store, null, 2) + '\n');
     result = { claimed: true, entry };
@@ -651,18 +704,76 @@ function claimRerun(id, head, runId) {
   return result;
 }
 
-function markRerunJournalled(id, head, runId) {
-  const timeoutMs = remainingTimeoutMs(INTERNAL_COMMAND_TIMEOUT_MS, deadline);
-  if (timeoutMs <= 0) throw new Error('wait call deadline reached before rerun journal status');
+function updateRerun(id, head, runId, update) {
+  const timeoutMs = remainingTimeoutMs(INTERNAL_COMMAND_TIMEOUT_MS, waitWallDeadline(), LOCK_TAIL_RESERVE_MS);
+  if (timeoutMs <= 0) throw new Error('wait call deadline reached before rerun status update');
   withLock(lockDirFor(LOCK_ROOT), 'ci-wait', () => {
-    const store = readRerunStore();
-    const entry = store.reruns[rerunKey(id, head)];
-    if (!entry || entry.run_id !== String(runId)) {
+    const store = readWaitStore();
+    const entry = rerunEntryFor(store, id, head);
+    if (!entry || String(entry.run_id) !== String(runId)) {
       throw new Error(`rerun claim for ${id} at ${head} is missing`);
     }
-    entry.journalled = true;
+    update(entry);
     writeAtomic(WAITS, JSON.stringify(store, null, 2) + '\n');
   }, { waitMs: timeoutMs });
+}
+
+function markRerunApplied(id, head, runId) {
+  updateRerun(id, head, runId, (entry) => {
+    entry.status = 'applied';
+    entry.applied_at = entry.applied_at || new Date().toISOString();
+  });
+}
+
+function markRerunJournalled(id, head, runId) {
+  updateRerun(id, head, runId, (entry) => {
+    entry.status = 'applied';
+    entry.applied_at = entry.applied_at || new Date().toISOString();
+    entry.journalled = true;
+    entry.journalled_at = entry.journalled_at || new Date().toISOString();
+  });
+}
+
+function reconcileRerunJournal(w, head, entry, verifiedApplied = false) {
+  const timeoutMs = remainingTimeoutMs(INTERNAL_COMMAND_TIMEOUT_MS, waitWallDeadline(), LOCK_TAIL_RESERVE_MS);
+  if (timeoutMs <= 0) throw new Error('wait call deadline reached before rerun journal');
+  let recorded = false;
+  withLock(lockDirFor(LOCK_ROOT), 'ci-wait', () => {
+    let lines = [];
+    let journalText = '';
+    try {
+      journalText = fs.readFileSync(JOURNAL, 'utf8');
+      lines = journalText.split('\n').filter(Boolean);
+    } catch (e) {
+      if (e.code !== 'ENOENT') throw new Error(`could not read delivery-log.jsonl (${e.message})`);
+    }
+    const events = lines.map((line) => {
+      try { return JSON.parse(line); } catch (e) { throw new Error(`delivery-log.jsonl contains malformed JSON (${e.message})`); }
+    });
+    const priorRows = events.filter((event) => event && event.event === 'ci_rerun'
+      && event.ticket === w.id && event.head === head);
+    if (priorRows.length > 1) throw new Error(`multiple ci_rerun rows already exist for ${w.id} at ${head}`);
+    if (priorRows.length === 1) {
+      const prior = priorRows[0];
+      if (String(prior.run_id) !== String(entry.run_id) || String(prior.pr) !== String(w.pr)) {
+        throw new Error(`ci_rerun row for ${w.id} at ${head} conflicts with the durable claim`);
+      }
+      recorded = true;
+      return;
+    }
+    if (!(verifiedApplied || entry.status === 'applied')) return;
+    const numericRunId = Number(entry.run_id);
+    const runId = /^\d+$/.test(String(entry.run_id)) && Number.isSafeInteger(numericRunId)
+      ? numericRunId : String(entry.run_id);
+    const event = {
+      ts: new Date().toISOString(), event: 'ci_rerun', ticket: w.id,
+      pr: Number(w.pr), head, run_id: runId,
+    };
+    fs.mkdirSync(path.dirname(JOURNAL), { recursive: true });
+    fs.appendFileSync(JOURNAL, `${journalText && !journalText.endsWith('\n') ? '\n' : ''}${JSON.stringify(event)}\n`);
+    recorded = true;
+  }, { waitMs: timeoutMs });
+  return recorded;
 }
 
 // @invariant: one rerun per head; only a journalled second cancel on that head is failing.
@@ -671,15 +782,11 @@ function handleCancelled(w, c) {
   const head = (state[w.id] || {}).head_sha || null;
   const runId = (c.cancelled_runs.find((r) => r.run_id) || {}).run_id || null;
   if (!head) return { rerun: false, run_id: runId, error: 'no head sha on record' };
-  if (!runId) {
-    const prior = readRerun(w.id, head);
-    return prior ? priorRerunOutcome(c, prior, head, runId)
-      : { rerun: false, run_id: null, error: 'no run id for the cancelled check' };
-  }
   if (!CONFIG.valid) {
-    const prior = readRerun(w.id, head);
-    return prior ? priorRerunOutcome(c, prior, head, runId)
-      : holdCancelled(c, { rerun: false, run_id: String(runId), error: CONFIG_REASON });
+    return holdCancelled(c, { rerun: false, run_id: runId === null ? null : String(runId), error: CONFIG_REASON });
+  }
+  if (!runId) {
+    return priorOrReason(c, w, head, runId, 'no run id for the cancelled check');
   }
 
   let claim;
@@ -688,7 +795,7 @@ function handleCancelled(w, c) {
   } catch (e) {
     return holdCancelled(c, { rerun: false, run_id: String(runId), error: `rerun not claimed (${e.message})` });
   }
-  if (!claim.claimed) return priorRerunOutcome(c, claim.prior, head, runId);
+  if (!claim.claimed) return priorRerunOutcome(c, w, claim.prior, head, runId);
 
   const timeoutMs = remainingTimeoutMs(GH_TIMEOUT_MS, deadline);
   if (timeoutMs <= 0) {
@@ -703,23 +810,26 @@ function handleCancelled(w, c) {
       error: diagnostic(r) });
   }
 
-  const journalTimeoutMs = remainingTimeoutMs(INTERNAL_COMMAND_TIMEOUT_MS, deadline);
-  if (journalTimeoutMs <= 0) {
-    return holdCancelled(c, { rerun: true, run_id: String(runId), journalled: false,
-      error: 'wait call deadline reached before rerun journal' });
+  let statusError = null;
+  try {
+    markRerunApplied(w.id, head, runId);
+  } catch (e) {
+    statusError = `applied rerun status not recorded (${e.message})`;
   }
-  const logged = runBounded(process.execPath, [path.join(__dirname, 'log-event.cjs'), 'ci_rerun',
-    `ticket=${w.id}`, `pr=${w.pr}`, `head=${head}`, `run_id=${runId}`, '--graph', GRAPH],
-  { timeoutMs: journalTimeoutMs });
-  let journalled = logged.status === 0;
-  let journalError = journalled ? null : diagnostic(logged);
-  if (journalled) {
+  let journalled = false;
+  let journalError = statusError;
+  try {
+    journalled = reconcileRerunJournal(w, head,
+      { run_id: String(runId), status: 'applied', journalled: false }, true);
+    if (!journalled) throw new Error('the applied rerun was not added to the journal');
     try {
       markRerunJournalled(w.id, head, runId);
     } catch (e) {
       journalled = false;
       journalError = `rerun journal status not recorded (${e.message})`;
     }
+  } catch (e) {
+    journalError = `rerun journal not recorded (${e.message})`;
   }
   return holdCancelled(c, {
     rerun: true, run_id: String(runId), journalled,
@@ -727,12 +837,31 @@ function handleCancelled(w, c) {
   });
 }
 
-function priorRerunOutcome(c, prior, head, runId) {
+function priorOrReason(c, w, head, runId, reason) {
+  let prior;
+  try {
+    prior = readRerun(w.id, head);
+  } catch (e) {
+    return holdCancelled(c, { rerun: false, run_id: runId, error: `rerun state unavailable (${e.message})` });
+  }
+  return prior ? priorRerunOutcome(c, w, prior, head, runId)
+    : holdCancelled(c, { rerun: false, run_id: runId, error: reason });
+}
+
+function priorRerunOutcome(c, w, prior, head, runId) {
   if (prior && head && prior.head === head) {
+    let journalled = false;
+    try {
+      journalled = reconcileRerunJournal(w, head, prior);
+      if (journalled && prior.journalled !== true) markRerunJournalled(w.id, head, prior.run_id);
+    } catch (e) {
+      return holdCancelled(c, { rerun: false, run_id: runId, awaiting_journal: prior.run_id,
+        error: `rerun journal recovery failed (${e.message})` });
+    }
     const rerunAt = Date.parse(prior.at || '');
     const stale = c.cancelled_runs.every((r) => Number.isFinite(rerunAt) && !(Date.parse(r.started_at || '') > rerunAt));
     if (stale) return holdCancelled(c, { rerun: false, run_id: runId, awaiting_rerun: prior.run_id });
-    if (prior.journalled) {
+    if (journalled) {
       return failCancelled(c, { rerun: false, run_id: runId, already_rerun: prior.run_id });
     }
     return holdCancelled(c, { rerun: false, run_id: runId, awaiting_journal: prior.run_id });
@@ -760,6 +889,18 @@ let deadline = TIMEOUT_S_EXPLICIT ? startedAt + TIMEOUT_S * 1000 : callDeadline 
 function remainingTimeoutMs(limit, deadlineAt, marginMs = 25) {
   const remaining = Math.floor(deadlineAt - Date.now() - marginMs);
   return remaining > 0 ? Math.min(limit, remaining) : 0;
+}
+
+function waitWallDeadline() {
+  return TIMEOUT_S_EXPLICIT
+    ? startedAt + TIMEOUT_S * 1000 + INTERNAL_COMMAND_TIMEOUT_MS + LOCK_TAIL_RESERVE_MS
+    : callDeadline;
+}
+
+function withSharedLockDeadline(deadlineAt, fn) {
+  const previous = activeSharedLockDeadline;
+  activeSharedLockDeadline = deadlineAt;
+  try { return fn(); } finally { activeSharedLockDeadline = previous; }
 }
 let nextWakeAt = null;
 let lastWaitEvent = null;
@@ -836,7 +977,7 @@ function refreshPublishedState() {
     publisherHealthy = false;
     return { enabled: true, ok: false, reason: `state-sync did not publish (${diagnostic(sync)})` };
   }
-  const published = waitEvents.readPublished({ graphDir: GRAPH });
+  const published = withSharedLockDeadline(deadline, () => waitEvents.readPublished({ graphDir: GRAPH }));
   if (!published || !published.ok) {
     publisherHealthy = false;
     return { enabled: true, ok: false, reason: published && published.reason ? published.reason : 'published state binding is unavailable' };
@@ -867,7 +1008,7 @@ function observeWait(w, checks) {
   } else if (publisherEnabled) {
     observation.reviews = { unavailable: true };
   }
-  const result = waitEvents.observe({
+  const result = withSharedLockDeadline(deadline, () => waitEvents.observe({
     graphDir: GRAPH,
     run_id: RUN_ID,
     ticket: w.id,
@@ -877,7 +1018,7 @@ function observeWait(w, checks) {
     observation,
     eligibility: readJson(path.join(GRAPH, 'delivery-front.json')),
     window_id: WAIT_WINDOW_ID,
-  }, { interval_ms: INTERVAL_S * 1000, deadline: new Date(deadline).toISOString() });
+  }, { interval_ms: INTERVAL_S * 1000, deadline: new Date(deadline).toISOString() }));
   if (result && result.ok) {
     const wake = result.pending_action || result.action || null;
     if (wake) lastWaitEvent = wake;
@@ -892,14 +1033,17 @@ function observeWait(w, checks) {
 
 function recordWake(w, kind, reason) {
   if (!SCOPED_RUN || !STORE_DIR) return null;
+  if (remainingTimeoutMs(DEFAULT_LOCK_WAIT_MS, waitWallDeadline(), LOCK_TAIL_RESERVE_MS) <= 0) {
+    return { recorded: false, error: 'wait call deadline reached before the wake-event lock' };
+  }
   try {
-    return runWaker.recordWakeEvent({
+    return withSharedLockDeadline(waitWallDeadline(), () => runWaker.recordWakeEvent({
       store_dir: STORE_DIR,
       run_id: RUN_ID,
       kind,
       event_id: `ci-wait:${RUN_ID}:${WAIT_WINDOW_ID}:${w.id}:${kind}`,
       reason,
-    });
+    }));
   } catch (cause) {
     return { recorded: false, error: cause.message };
   }

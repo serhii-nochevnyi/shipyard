@@ -967,6 +967,36 @@ test('an invalid project config blocks a cancelled-check rerun and its journal e
     'the refused rerun must not be journalled');
 });
 
+test('an invalid config does not reconcile an applied rerun claim', () => {
+  const dir = project(ciOnly(), stateWith({
+    'T-01-01': { pr: 101, repo: 'acme/widgets', status: 'pr-open', head_sha: HEAD },
+  }), TRUNCATED);
+  const gh = stubGhRerun(dir);
+  gh.setRows([cancelRow('2019-01-01T00:00:00Z')]);
+  const rerun = {
+    head: HEAD, run_id: '777', at: '2020-01-01T00:00:00Z',
+    status: 'applied', applied_at: '2020-01-01T00:01:00Z', journalled: false,
+  };
+  const initialReruns = { [`T-01-01:${HEAD}`]: rerun };
+  const waitFile = path.join(dir, '.planning', 'graph', 'ci-waits.json');
+  fs.writeFileSync(waitFile, JSON.stringify({ tickets: {}, reruns: initialReruns }));
+
+  const { json } = asJson(null, null, shortWait, { dir, bin: gh.bin });
+
+  assert.equal(json.config_valid, false);
+  assert.equal(json.watched[0].checks.pending, 1, 'the cancelled check remains pending');
+  assert.deepStrictEqual(waits(dir).reruns, initialReruns,
+    'wait-budget bookkeeping may change, but the existing rerun claim remains unchanged');
+  assert.deepStrictEqual(gh.reruns(), [], 'invalid config must not issue another rerun');
+  const journalFile = path.join(dir, '.planning', 'graph', 'delivery-log.jsonl');
+  const events = fs.existsSync(journalFile)
+    ? fs.readFileSync(journalFile, 'utf8').split('\n').filter(Boolean).map((line) => JSON.parse(line)) : [];
+  assert.equal(events.filter((event) => event.event === 'ci_rerun').length, 0,
+    'invalid config must not reconcile a ci_rerun row');
+  assert.ok(/configuration does not parse/.test(json.watched[0].checks.rerun.error),
+    json.watched[0].checks.rerun.error);
+});
+
 test('a failed durable rerun claim write prevents mutation on every same-head attempt', () => {
   const dir = project(ciOnly(), stateWith({
     'T-01-01': { pr: 101, repo: 'acme/widgets', status: 'pr-open', head_sha: HEAD },
@@ -980,6 +1010,56 @@ test('a failed durable rerun claim write prevents mutation on every same-head at
   assert.equal(first.json.watched[0].checks.pending, 1);
   assert.equal(second.json.watched[0].checks.pending, 1);
   assert.deepStrictEqual(gh.reruns(), [], 'the rerun must not run unless its claim was written');
+});
+
+test('a successful rerun is journalled after a missed append, exactly once', () => {
+  const dir = project(ciOnly(), stateWith({
+    'T-01-01': { pr: 101, repo: 'acme/widgets', status: 'pr-open', head_sha: HEAD },
+  }));
+  const gh = stubGhRerun(dir);
+  gh.setRows([cancelRow('2020-01-01T00:00:00Z')]);
+  const graph = path.join(dir, '.planning', 'graph');
+  const journal = path.join(graph, 'delivery-log.jsonl');
+  fs.mkdirSync(journal);
+
+  const first = asJson(null, null, shortWait, { dir, bin: gh.bin });
+  assert.equal(first.json.watched[0].checks.pending, 1, 'the successful action remains pending until checks move');
+  assert.deepStrictEqual(gh.reruns(), ['777'], 'the external action succeeded once');
+  assert.equal(fs.statSync(journal).isDirectory(), true, 'the injected journal failure remains visible');
+
+  fs.rmSync(journal, { recursive: true, force: true });
+  const second = asJson(null, null, shortWait, { dir, bin: gh.bin });
+  assert.equal(second.json.watched[0].checks.pending, 1);
+  let events = fs.readFileSync(journal, 'utf8').split('\n').filter(Boolean)
+    .map((line) => JSON.parse(line)).filter((event) => event.event === 'ci_rerun');
+  assert.equal(events.length, 1, 'a later wait reconciles the already-applied rerun');
+  assert.equal(events[0].run_id, 777);
+
+  asJson(null, null, shortWait, { dir, bin: gh.bin });
+  events = fs.readFileSync(journal, 'utf8').split('\n').filter(Boolean)
+    .map((line) => JSON.parse(line)).filter((event) => event.event === 'ci_rerun');
+  assert.equal(events.length, 1, 'reconciliation is idempotent');
+  assert.deepStrictEqual(gh.reruns(), ['777'], 'recovery never issues a second rerun');
+});
+
+test('a malformed wait store fails closed without rerun or destructive rewrite', () => {
+  const dir = project(ciOnly(), stateWith({
+    'T-01-01': { pr: 101, repo: 'acme/widgets', status: 'pr-open', head_sha: HEAD },
+  }));
+  const gh = stubGhRerun(dir);
+  gh.setRows([cancelRow('2020-01-01T00:00:00Z')]);
+  const waitFile = path.join(dir, '.planning', 'graph', 'ci-waits.json');
+  const malformed = '{"tickets":{},"reruns":{"T-01-01:';
+  fs.writeFileSync(waitFile, malformed);
+
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const { json } = asJson(null, null, shortWait, { dir, bin: gh.bin });
+    assert.equal(json.watched[0].checks.pending, 1, 'corrupt state cannot authorize a rerun');
+    assert.deepStrictEqual(gh.reruns(), [], 'uncertain state never retries an external action');
+    assert.equal(fs.readFileSync(waitFile, 'utf8'), malformed, 'the corrupt claim is preserved byte for byte');
+  }
+  const journal = path.join(dir, '.planning', 'graph', 'delivery-log.jsonl');
+  assert.equal(fs.existsSync(journal), false, 'no unverified rerun is journalled');
 });
 
 test('concurrent waiters atomically claim one rerun for a ticket head', async () => {
@@ -1014,6 +1094,37 @@ test('a superseded cancel is ignored: the newer pass settles green', () => {
 });
 
 suite('ci-wait — on Claude one call returns within 540 s, and parking is by time');
+
+test('the default deadline includes wait-events and final wait-record lock contention', () => {
+  const dir = project(ciOnly(), stateWith());
+  const bin = stubGh(dir, [{ name: 'Tests', state: 'IN_PROGRESS', bucket: 'pending' }]);
+  const lockDir = path.join(dir, '.planning', 'graph', '.locks');
+  const waitEventsLock = path.join(lockDir, 'wait-events.lock');
+  const waitRecordLock = path.join(lockDir, 'ci-wait.lock');
+  for (const lock of [waitEventsLock, waitRecordLock]) {
+    fs.mkdirSync(lock, { recursive: true });
+    fs.writeFileSync(path.join(lock, 'owner.json'), JSON.stringify({
+      pid: process.pid, label: 'deadline fixture', at: new Date().toISOString(), token: 'fixture-held',
+    }));
+  }
+  const releaseScript = 'const fs=require("node:fs");const [first,last]=JSON.parse(process.argv[1]);'
+    + 'setTimeout(()=>fs.rmSync(first,{recursive:true,force:true}),400);'
+    + 'setTimeout(()=>fs.rmSync(last,{recursive:true,force:true}),1800);';
+  const release = spawn(process.execPath, ['-e', releaseScript, JSON.stringify([waitEventsLock, waitRecordLock])], {
+    detached: true, stdio: 'ignore',
+  });
+  release.unref();
+
+  const started = process.hrtime.bigint();
+  const { code, json } = asJson(null, null, ['--interval', '0.1'], { dir, bin, env: {
+    SHIPYARD_CI_WAIT_TIMEOUT_S: '1', CLAUDE_CODE_ENTRYPOINT: 'cli',
+    CODEX_SANDBOX: '', CODEX_SANDBOX_NETWORK_DISABLED: '',
+  } });
+  const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
+  assert.equal(code, 0);
+  assert.equal(json.timed_out, true);
+  assert.ok(elapsedMs < 1500, `the one-second default call took ${elapsedMs.toFixed(0)}ms with held locks`);
+});
 
 test('on Claude with no --timeout the window is at most 540 s', () => {
   const dir = project(ciOnly(), stateWith());
