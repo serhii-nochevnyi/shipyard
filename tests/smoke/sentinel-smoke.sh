@@ -41,7 +41,13 @@ cat > "$W/bin/gh" <<'STUB'
 argv="$*"
 case "$argv" in
   "repo view --json defaultBranchRef"*) echo "main" ;;
-  "pr list --state open"*)
+  "pr list --state open"*"--json number,state,isDraft,headRefName,headRefOid,baseRefName,mergedAt,createdAt,url,title"*)
+    cat <<'JSON'
+[{"number":101,"state":"OPEN","isDraft":false,"headRefName":"ticket/T-01-01-root","headRefOid":"1111111111111111111111111111111111111111","baseRefName":"epic/01-demo","mergedAt":null,"createdAt":"2026-01-01T00:00:00Z","url":"https://example/101","title":"T-01-01: root"},
+ {"number":102,"state":"OPEN","isDraft":false,"headRefName":"ticket/T-01-02-child","headRefOid":"3333333333333333333333333333333333333333","baseRefName":"ticket/T-01-01-root","mergedAt":null,"createdAt":"2026-01-01T00:00:00Z","url":"https://example/102","title":"T-01-02: child"}]
+JSON
+    ;;
+  "pr list --state open"*"--json number,reviewDecision,body,mergeStateStatus"*)
     # the open-only pass: reviewDecision + body (the gate_status trailer) + the
     # merge state. PR 101's trailer names the SAME head the row below reports,
     # which is the ordinary path — the mismatch has its own fixture at the end of
@@ -654,7 +660,9 @@ case "\$argv" in
   # head the verdict was rendered against. That is the whole fixture.
   "pr list --state all"*)
     echo '[{"number":301,"state":"OPEN","isDraft":false,"headRefName":"ticket/T-02-01-moved","headRefOid":"$LIVE","baseRefName":"epic/02-demo","mergedAt":null,"createdAt":"2026-01-01T00:00:00Z","url":"https://example/301","title":"T-02-01: moved"}]' ;;
-  "pr list --state open"*)
+  "pr list --state open"*"--json number,state,isDraft,headRefName,headRefOid,baseRefName,mergedAt,createdAt,url,title"*)
+    echo '[{"number":301,"state":"OPEN","isDraft":false,"headRefName":"ticket/T-02-01-moved","headRefOid":"$LIVE","baseRefName":"epic/02-demo","mergedAt":null,"createdAt":"2026-01-01T00:00:00Z","url":"https://example/301","title":"T-02-01: moved"}]' ;;
+  "pr list --state open"*"--json number,reviewDecision,body,mergeStateStatus"*)
     echo '[{"number":301,"reviewDecision":null,"body":"Ticket: T-02-01\n\ngate_status: arch-review=conform, drift-check=fresh, degenerate-green=clean, checks=green, head=$JUDGED"}]' ;;
   "api repos/{owner}/{repo}/branches"*) printf 'main\nepic/02-demo\nticket/T-02-01-moved\n' ;;
   "api repos/{owner}/{repo}/compare"*) echo 0 ;;
@@ -736,7 +744,9 @@ case "\$argv" in
   "repo view --json owner,name"*) echo '{"owner":{"login":"acme"},"name":"demo"}' ;;
   "pr list --state all"*)
     echo '[{"number":301,"state":"OPEN","isDraft":false,"headRefName":"ticket/T-02-01-moved","headRefOid":"$LIVE","baseRefName":"epic/02-demo","mergedAt":null,"createdAt":"2026-01-01T00:00:00Z","url":"https://example/301","title":"T-02-01: moved"}]' ;;
-  "pr list --state open"*)
+  "pr list --state open"*"--json number,state,isDraft,headRefName,headRefOid,baseRefName,mergedAt,createdAt,url,title"*)
+    echo '[{"number":301,"state":"OPEN","isDraft":false,"headRefName":"ticket/T-02-01-moved","headRefOid":"$LIVE","baseRefName":"epic/02-demo","mergedAt":null,"createdAt":"2026-01-01T00:00:00Z","url":"https://example/301","title":"T-02-01: moved"}]' ;;
+  "pr list --state open"*"--json number,reviewDecision,body,mergeStateStatus"*)
     echo '[{"number":301,"reviewDecision":null,"body":"Ticket: T-02-01\n\ngate_status: arch-review=conform, checks=green, head=$JUDGED"}]' ;;
   "api repos/{owner}/{repo}/branches"*) printf 'main\nepic/02-demo\nticket/T-02-01-moved\n' ;;
   "api repos/{owner}/{repo}/compare"*) echo 0 ;;
@@ -906,7 +916,9 @@ argv="\$*"
 case "\$argv" in
   "repo view --json defaultBranchRef"*) echo "main" ;;
   "repo view --json owner,name"*) echo '{"owner":{"login":"acme"},"name":"demo"}' ;;
-  "pr list --state open"*)
+  "pr list --state open"*"--json number,state,isDraft,headRefName,headRefOid,baseRefName,mergedAt,createdAt,url,title"*)
+    echo '[{"number":501,"state":"OPEN","isDraft":false,"headRefName":"ticket/T-05-01-unread","headRefOid":"$URHEAD","baseRefName":"epic/05-demo","mergedAt":null,"createdAt":"2026-01-01T00:00:00Z","url":"https://example/501","title":"T-05-01: unreadable checks"}]' ;;
+  "pr list --state open"*"--json number,reviewDecision,body,mergeStateStatus"*)
     echo '[{"number":501,"reviewDecision":"APPROVED","mergeStateStatus":"CLEAN","body":"Ticket: T-05-01\n\ngate_status: arch-review=conform, checks=green, head=$URHEAD"}]' ;;
   "pr list --state all"*)
     echo '[{"number":501,"state":"OPEN","isDraft":false,"headRefName":"ticket/T-05-01-unread","headRefOid":"$URHEAD","baseRefName":"epic/05-demo","mergedAt":null,"createdAt":"2026-01-01T00:00:00Z","url":"https://example/501","title":"T-05-01: unreadable checks"}]' ;;
@@ -1332,7 +1344,9 @@ case "$argv" in
   # The review verdict is the ONE fact this fixture varies, and it is answered on
   # both calls that read it — the sync's open-only pass and the guard's own PR
   # view — because a fixture where the two disagree tests neither.
-  "pr list --state open"*)
+  "pr list --state open"*"--json number,state,isDraft,headRefName,headRefOid,baseRefName,mergedAt,createdAt,url,title"*)
+    echo '[{"number":501,"state":"OPEN","isDraft":false,"headRefName":"ticket/T-04-01-x","headRefOid":"5555555555555555555555555555555555555555","baseRefName":"epic/04-demo","mergedAt":null,"createdAt":"2026-01-01T00:00:00Z","url":"https://example/501","title":"T-04-01: x"}]' ;;
+  "pr list --state open"*"--json number,reviewDecision,body,mergeStateStatus"*)
     cat <<JSON
 [{"number":501,"reviewDecision":"${SENTINEL_SMOKE_REVIEW:-CHANGES_REQUESTED}","mergeStateStatus":"CLEAN","body":"Ticket: T-04-01\n\ngate_status: arch-review=conform, drift-check=fresh, checks=green, head=5555555555555555555555555555555555555555"}]
 JSON
@@ -1766,7 +1780,16 @@ case "\$argv" in
   "repo view --json owner,name"*) echo '{"owner":{"login":"acme"},"name":"demo"}' ;;
   # SMOKE_PARENT_MERGED is the ONE fact the two boards differ by: whether the
   # parent's PR has landed. Everything else about the fixture is identical.
-  "pr list --state open"*)
+  "pr list --state open"*"--json number,state,isDraft,headRefName,headRefOid,baseRefName,mergedAt,createdAt,url,title"*)
+    if [ -n "\${SMOKE_PARENT_UNSTARTED:-}" ]; then
+      echo '[]'
+    elif [ -n "\${SMOKE_PARENT_MERGED:-}" ]; then
+      echo '[{"number":602,"state":"OPEN","isDraft":false,"headRefName":"ticket/T-06-02-child","headRefOid":"$CHILD_OID","baseRefName":"ticket/T-06-01-root","mergedAt":null,"createdAt":"2026-09-08T00:00:00Z","url":"https://example/602","title":"T-06-02: child"}]'
+    else
+      echo '[{"number":601,"state":"OPEN","isDraft":false,"headRefName":"ticket/T-06-01-root","headRefOid":"$ROOT_OID","baseRefName":"epic/06-demo","mergedAt":null,"createdAt":"2026-09-08T00:00:00Z","url":"https://example/601","title":"T-06-01: root"},
+ {"number":602,"state":"OPEN","isDraft":false,"headRefName":"ticket/T-06-02-child","headRefOid":"$CHILD_OID","baseRefName":"ticket/T-06-01-root","mergedAt":null,"createdAt":"2026-09-08T00:00:00Z","url":"https://example/602","title":"T-06-02: child"}]'
+    fi ;;
+  "pr list --state open"*"--json number,reviewDecision,body,mergeStateStatus"*)
     if [ -n "\${SMOKE_PARENT_UNSTARTED:-}" ]; then
       echo '[]'
     elif [ -n "\${SMOKE_PARENT_MERGED:-}" ]; then
