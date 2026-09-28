@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 5e4a77502fd51b9a6d18d9c704289b4ef1c71513e8fcf04152c49f19d5fb9434
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 507e0a2625b24b6cc7d528e31b50e5124561136e1383fc3621ecc13c8d259ecc
 phase: 43-target-project-delivery-at-scale
 plan: 09
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-28
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 5e4a77502fd51b9a6d18d9c704289b4ef1c71513e8fcf04152c49f19d5fb9434
+shipyard_source_fingerprint: 507e0a2625b24b6cc7d528e31b50e5124561136e1383fc3621ecc13c8d259ecc
 ---
 
 # Phase 43: state-sync lists PRs by ticket head and open state and skips tickets whose merge into a landed epic is recorded; --full re-derives — Delivery Projection

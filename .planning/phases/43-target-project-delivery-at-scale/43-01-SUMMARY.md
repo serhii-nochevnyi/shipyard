@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: b610ccb154fa3dd65286f35aec18f7fa5b5539b715167fd9f40bd16089187803
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: a340a93044879415bcd1f14e12d0b084f3fafba82d31aa9b18908cc92bfaa8a5
 phase: 43-target-project-delivery-at-scale
 plan: 01
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-28
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: b610ccb154fa3dd65286f35aec18f7fa5b5539b715167fd9f40bd16089187803
+shipyard_source_fingerprint: a340a93044879415bcd1f14e12d0b084f3fafba82d31aa9b18908cc92bfaa8a5
 ---
 
 # Phase 43: Register per-repository config keys for comment markers, reviewer bots, remedy workflows and the verification allow-list — Delivery Projection
