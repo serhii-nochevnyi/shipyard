@@ -46,6 +46,7 @@ const JUDGMENT_EVIDENCE_NAMES = Object.freeze({
 });
 const SENTINEL_PERFORMED_STATUSES = new Set(['complete', 'handed-back']);
 const SENTINEL_REFUSED_STATUSES = new Set(['refused']);
+const NORMALIZED_UNKNOWN_ARCH_FINDINGS = new WeakSet();
 
 function fail(code, message, details = {}) {
   throw boundaryError(code, message, details);
@@ -1292,7 +1293,20 @@ function completeFinding(finding, index, role) {
     } else if (type === 'note' || type === 'informational') {
       findingText(finding, ['summary', 'reason'], `${role} finding ${index}.summary`);
     } else {
-      fail('INCOMPLETE_FINDING', `${role} finding ${index} has unsupported type ${JSON.stringify(rawType)}`);
+      if (finding.blocking === true) {
+        fail('INCOMPLETE_FINDING', `${role} finding ${index} has blocking unsupported type ${JSON.stringify(rawType)}`);
+      }
+      const summary = findingText(finding, ['summary', 'reason'], `${role} finding ${index}.summary`);
+      const normalized = {
+        ...finding,
+        id,
+        type: 'informational',
+        original_type: rawType,
+        summary,
+        blocking: false,
+      };
+      NORMALIZED_UNKNOWN_ARCH_FINDINGS.add(normalized);
+      return normalized;
     }
   } else if (role === 'integrator') {
     if (type === 'fix-ticket' || type === 'fix') {
@@ -1609,7 +1623,12 @@ function judgmentResultData(result, metadata, input, identity) {
       fail('INVALID_RESULT', 'architecture judgment verdict must be conform, violation, or adr-outdated', { verdict });
     }
     const findings = completeFindingIndex(result, role);
-    if (verdict === 'conform' && findings.finding_count !== 0) {
+    const conformRetainsOnlyUnknownNotes = findings.findings.every((finding) => (
+      NORMALIZED_UNKNOWN_ARCH_FINDINGS.has(finding)
+      && finding.type === 'informational'
+      && finding.blocking === false
+    ));
+    if (verdict === 'conform' && findings.finding_count !== 0 && !conformRetainsOnlyUnknownNotes) {
       fail('JUDGMENT_OUTCOME_MISMATCH', 'conform architecture judgment must retain an empty finding index');
     }
     if (verdict !== 'conform' && findings.blocking_count === 0) {
@@ -2038,7 +2057,7 @@ function validateJudgmentManifest(value, options) {
       }),
     }),
     evidence: evidence.content.toString('utf8'),
-    findings: result,
+    findings: role === 'arch-review' ? { ...result, findings: data.findings } : result,
     evidencePath: evidence.path,
     findingsPath: findings.path,
     role,
