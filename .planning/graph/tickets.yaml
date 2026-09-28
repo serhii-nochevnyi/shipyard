@@ -3774,3 +3774,19 @@ tickets:
     primary_parent: null
     pr_base: epic/44-optimize-subscription-efficiency-per-runtime
     jira: null
+  T-44-08:
+    title: Name the test-statusline make target in the README statusline section
+    plan: '.planning/phases/44-optimize-subscription-efficiency-per-runtime/44-08-PLAN.md'
+    phase: '44'
+    repo: null
+    wave: 5
+    depends_on: [T-44-05]
+    files: [README.md]
+    risk: low
+    human_checkpoint: false
+    preauthorized: false
+    branch: ticket/T-44-08-name-the-test-statusline-make-target-in
+    epic: epic/44-optimize-subscription-efficiency-per-runtime
+    primary_parent: T-44-05
+    pr_base: ticket/T-44-05-reversible-installer-for-the-claude-stat
+    jira: null
