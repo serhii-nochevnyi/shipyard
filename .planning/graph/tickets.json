@@ -7202,78 +7202,6 @@
       "pr_base": "epic/43-target-project-delivery-at-scale",
       "jira": null
     },
-    "T-43-04": {
-      "title": "Bounded reachability: O(1) git forms, a large buffer, and a declared-path epic check with a path-scoped fallback",
-      "plan": ".planning/phases/43-target-project-delivery-at-scale/43-04-PLAN.md",
-      "phase": "43",
-      "repo": null,
-      "wave": 11,
-      "depends_on": [
-        "T-43-07",
-        "T-40-19",
-        "T-40-22"
-      ],
-      "cross_phase_deps": [
-        "T-40-19",
-        "T-40-22"
-      ],
-      "cross_repo_deps": [],
-      "unreachable_paths": false,
-      "missing_paths": false,
-      "files": [
-        "plugins/delivery-pipeline/scripts/run-reachability.cjs",
-        "tests/unit/run-reachability.test.cjs",
-        "plugins/delivery-pipeline/scripts/sentinel.cjs",
-        "tests/unit/sentinel.test.cjs"
-      ],
-      "risk": "medium",
-      "type": "implementation",
-      "human_checkpoint": false,
-      "preauthorized": false,
-      "branch": "ticket/T-43-04-bounded-reachability-o-1-git-forms-a-lar",
-      "epic": "epic/43-target-project-delivery-at-scale",
-      "primary_parent": "T-43-07",
-      "pr_base": "ticket/T-43-07-cancelled-checks-ignore-superseded-runs",
-      "jira": null
-    },
-    "T-43-08": {
-      "title": "A stale approval from a declared bot does not block the merge; re-request once, then escalate with the command",
-      "plan": ".planning/phases/43-target-project-delivery-at-scale/43-08-PLAN.md",
-      "phase": "43",
-      "repo": null,
-      "wave": 12,
-      "depends_on": [
-        "T-43-04",
-        "T-43-01",
-        "T-43-07",
-        "T-40-19",
-        "T-40-22"
-      ],
-      "cross_phase_deps": [
-        "T-40-19",
-        "T-40-22"
-      ],
-      "cross_repo_deps": [],
-      "unreachable_paths": false,
-      "missing_paths": false,
-      "files": [
-        "plugins/delivery-pipeline/scripts/reviewers.cjs",
-        "tests/unit/reviewers.test.cjs",
-        "plugins/delivery-pipeline/scripts/sentinel.cjs",
-        "tests/unit/sentinel.test.cjs",
-        "plugins/delivery-pipeline/scripts/log-event.cjs",
-        "tests/unit/log-event.test.cjs"
-      ],
-      "risk": "high",
-      "type": "implementation",
-      "human_checkpoint": true,
-      "preauthorized": true,
-      "branch": "ticket/T-43-08-a-stale-approval-from-a-declared-bot-doe",
-      "epic": "epic/43-target-project-delivery-at-scale",
-      "primary_parent": "T-43-04",
-      "pr_base": "ticket/T-43-04-bounded-reachability-o-1-git-forms-a-lar",
-      "jira": null
-    },
     "T-43-09": {
       "title": "state-sync lists PRs by ticket head and open state and skips tickets whose merge into a landed epic is recorded; --full re-derives",
       "plan": ".planning/phases/43-target-project-delivery-at-scale/43-09-PLAN.md",
@@ -7306,6 +7234,80 @@
       "epic": "epic/43-target-project-delivery-at-scale",
       "primary_parent": null,
       "pr_base": "epic/43-target-project-delivery-at-scale",
+      "jira": null
+    },
+    "T-43-04": {
+      "title": "Bounded reachability: O(1) git forms, a large buffer, and a declared-path epic check with a path-scoped fallback",
+      "plan": ".planning/phases/43-target-project-delivery-at-scale/43-04-PLAN.md",
+      "phase": "43",
+      "repo": null,
+      "wave": 12,
+      "depends_on": [
+        "T-43-07",
+        "T-43-09",
+        "T-40-19",
+        "T-40-22"
+      ],
+      "cross_phase_deps": [
+        "T-40-19",
+        "T-40-22"
+      ],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": false,
+      "files": [
+        "plugins/delivery-pipeline/scripts/run-reachability.cjs",
+        "tests/unit/run-reachability.test.cjs",
+        "plugins/delivery-pipeline/scripts/sentinel.cjs",
+        "tests/unit/sentinel.test.cjs",
+        "tests/smoke/sentinel-smoke.sh"
+      ],
+      "risk": "medium",
+      "type": "implementation",
+      "human_checkpoint": false,
+      "preauthorized": false,
+      "branch": "ticket/T-43-04-bounded-reachability-o-1-git-forms-a-lar",
+      "epic": "epic/43-target-project-delivery-at-scale",
+      "primary_parent": "T-43-09",
+      "pr_base": "ticket/T-43-09-state-sync-lists-prs-by-ticket-head-and",
+      "jira": null
+    },
+    "T-43-08": {
+      "title": "A stale approval from a declared bot does not block the merge; re-request once, then escalate with the command",
+      "plan": ".planning/phases/43-target-project-delivery-at-scale/43-08-PLAN.md",
+      "phase": "43",
+      "repo": null,
+      "wave": 13,
+      "depends_on": [
+        "T-43-04",
+        "T-43-01",
+        "T-43-07",
+        "T-40-19",
+        "T-40-22"
+      ],
+      "cross_phase_deps": [
+        "T-40-19",
+        "T-40-22"
+      ],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": false,
+      "files": [
+        "plugins/delivery-pipeline/scripts/reviewers.cjs",
+        "tests/unit/reviewers.test.cjs",
+        "plugins/delivery-pipeline/scripts/sentinel.cjs",
+        "tests/unit/sentinel.test.cjs",
+        "plugins/delivery-pipeline/scripts/log-event.cjs",
+        "tests/unit/log-event.test.cjs"
+      ],
+      "risk": "high",
+      "type": "implementation",
+      "human_checkpoint": true,
+      "preauthorized": true,
+      "branch": "ticket/T-43-08-a-stale-approval-from-a-declared-bot-doe",
+      "epic": "epic/43-target-project-delivery-at-scale",
+      "primary_parent": "T-43-04",
+      "pr_base": "ticket/T-43-04-bounded-reachability-o-1-git-forms-a-lar",
       "jira": null
     },
     "T-43-10": {
@@ -7389,7 +7391,7 @@
       "plan": ".planning/phases/43-target-project-delivery-at-scale/43-12-PLAN.md",
       "phase": "43",
       "repo": null,
-      "wave": 13,
+      "wave": 14,
       "depends_on": [
         "T-43-08",
         "T-43-11",
@@ -7502,7 +7504,7 @@
       "plan": ".planning/phases/43-target-project-delivery-at-scale/43-15-PLAN.md",
       "phase": "43",
       "repo": null,
-      "wave": 14,
+      "wave": 15,
       "depends_on": [
         "T-43-12",
         "T-43-14",
