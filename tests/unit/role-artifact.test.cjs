@@ -10,6 +10,7 @@ const {
   CLAUDE_MODEL_ALIASES,
 } = require('../../plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs');
 const {
+  createDispatchBoundary,
   createDurableRecorder,
 } = require('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs');
 const {
@@ -138,6 +139,92 @@ async function runFixture(options = {}) {
 
 function clean(value) {
   fs.rmSync(value.root, { recursive: true, force: true });
+}
+
+function judgmentReceipt(resolution) {
+  const launchId = `judgment-launch-${resolution.dispatch_id}`;
+  return {
+    receipt_type: 'adr-014.application',
+    runtime: resolution.runtime,
+    role: resolution.role,
+    dispatch_id: resolution.dispatch_id,
+    launch_id: launchId,
+    requested_model: resolution.requested_model,
+    requested_effort: resolution.requested_effort,
+    applied_model: resolution.model,
+    applied_effort: resolution.effort,
+    observed_model: resolution.model,
+    observed_effort: resolution.effort,
+    policy_hash: resolution.policy_hash,
+    compliance: 'verified',
+    compliance_proof: {
+      status: 'verified',
+      boundary: 'adr-014.dispatch-boundary',
+      policy_hash: resolution.policy_hash,
+      dispatch_id: resolution.dispatch_id,
+      launch_id: launchId,
+    },
+  };
+}
+
+function judgmentFixture(ticket = 'T-43-05-role-artifact-judgment') {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-role-artifact-judgment-'));
+  git(root, ['init', '--quiet', '--initial-branch=main']);
+  git(root, ['config', 'user.email', 'role-artifact-judgment@example.test']);
+  git(root, ['config', 'user.name', 'Role Artifact Judgment Test']);
+  git(root, ['config', 'commit.gpgsign', 'false']);
+  fs.writeFileSync(path.join(root, 'base.txt'), 'base\n');
+  git(root, ['add', 'base.txt']);
+  git(root, ['commit', '--quiet', '-m', 'judgment base']);
+  git(root, ['update-ref', 'refs/remotes/origin/main', git(root, ['rev-parse', 'main'])]);
+  git(root, ['switch', '--quiet', '-c', `ticket/${ticket}`]);
+  fs.writeFileSync(path.join(root, 'change.txt'), 'change\n');
+  git(root, ['add', 'change.txt']);
+  git(root, ['commit', '--quiet', '-m', 'judgment change']);
+
+  const recorder = createDurableRecorder(path.join(root, 'receipts'));
+  const boundary = createDispatchBoundary({
+    adapters: { claude: { launch: judgmentReceipt } },
+    recorder,
+  });
+  const dispatch = boundary.dispatch(
+    { runtime: 'claude', role: 'arch-review', signals: {} },
+    { ticket },
+  );
+  return { root, ticket, recorder, dispatch };
+}
+
+function archReviewResult(value, extra = {}) {
+  const head = git(value.root, ['rev-parse', 'HEAD']);
+  const mergeBase = git(value.root, ['merge-base', 'main', 'HEAD']);
+  const baseTree = git(value.root, ['rev-parse', `${mergeBase}^{tree}`]);
+  return {
+    id: value.ticket,
+    pr: 404,
+    verdict: 'violation',
+    head,
+    base_tree: baseTree,
+    blocking_count: 1,
+    summary: 'architecture review summary',
+    findings: [],
+    ...extra,
+  };
+}
+
+function sealArchReview(value, result) {
+  const evidencePath = path.join(value.root, '.shipyard-arch-review-evidence.md');
+  fs.writeFileSync(evidencePath, 'complete architecture review evidence\n');
+  return roleArtifact.seal({
+    worktreePath: value.root,
+    base: 'main',
+    role: 'arch-review',
+    ticket: value.ticket,
+    pr: 404,
+    recorder: value.recorder,
+    dispatchId: value.dispatch.receipt.dispatch_id,
+    result,
+    evidencePath,
+  });
 }
 
 function rejectsCode(fn, code) {
@@ -457,6 +544,141 @@ test('an uncommitted worktree shipyard manifest does not grant the exemption', a
   } finally {
     clean(value);
   }
+});
+
+suite('role-artifact — unknown architecture finding types');
+
+test('keeps an unknown arch-review type as an informational note beside a blocker', () => {
+  const value = judgmentFixture();
+  try {
+    const result = archReviewResult(value, {
+      blocking_count: 1,
+      findings: [
+        {
+          id: 'F1', type: 'violation', blocking: true, adr: 'ADR-014', section: '§4 dispatch boundary',
+          file: 'src/example.cjs', line: 1, hunk: 'src/example.cjs:1', remediation: 'preserve the boundary',
+          summary: 'blocking architecture violation',
+        },
+        { id: 'F2', type: 'external-review-note', summary: 'informational finding from another reviewer' },
+      ],
+    });
+    const sealed = sealArchReview(value, result);
+    assert.equal(sealed.envelope.verdict, 'violation');
+    assert.equal(sealed.envelope.schema, 'shipyard.judgment-result.v1');
+    assert.equal(sealed.envelope.blocking_count, 1);
+    const read = roleArtifact.read({
+      worktreePath: value.root,
+      base: 'main',
+      role: 'arch-review',
+      ticket: value.ticket,
+      pr: 404,
+      recorder: value.recorder,
+      dispatchId: value.dispatch.receipt.dispatch_id,
+      artifactPath: sealed.artifact_ref,
+      artifactDigest: sealed.artifact_digest,
+    });
+    assert.equal(read.findings.findings[1].type, 'informational');
+    assert.equal(read.findings.findings[1].original_type, 'external-review-note');
+    assert.equal(read.findings.findings[1].blocking, false);
+  } finally {
+    clean(value);
+  }
+});
+
+test('keeps an unknown arch-review note under a conform verdict', () => {
+  const value = judgmentFixture('T-43-05-conform-unknown-note');
+  try {
+    const result = archReviewResult(value, {
+      verdict: 'conform',
+      blocking_count: 0,
+      findings: [{ id: 'F1', type: 'external-review-note', summary: 'informational reviewer note' }],
+    });
+    const sealed = sealArchReview(value, result);
+    assert.equal(sealed.envelope.verdict, 'conform');
+    assert.equal(sealed.envelope.outcome, 'conform');
+    assert.equal(sealed.envelope.blocking_count, 0);
+    assert.equal(sealed.envelope.finding_count, 1);
+
+    const read = roleArtifact.read({
+      worktreePath: value.root,
+      base: 'main',
+      role: 'arch-review',
+      ticket: value.ticket,
+      pr: 404,
+      recorder: value.recorder,
+      dispatchId: value.dispatch.receipt.dispatch_id,
+      artifactPath: sealed.artifact_ref,
+      artifactDigest: sealed.artifact_digest,
+    });
+    assert.equal(read.envelope.verdict, 'conform');
+    assert.deepEqual(read.findings.findings[0], {
+      id: 'F1',
+      type: 'informational',
+      summary: 'informational reviewer note',
+      original_type: 'external-review-note',
+      blocking: false,
+    });
+  } finally {
+    clean(value);
+  }
+});
+
+test('an incomplete violation still fails and unknown notes require summary and non-blocking status', () => {
+  const cases = [
+    {
+      ticket: 'T-43-05-missing-violation-file',
+      finding: {
+        id: 'F1', type: 'violation', blocking: true, adr: 'ADR-014', section: '§4 dispatch boundary',
+        line: 1, hunk: 'src/example.cjs:1', remediation: 'preserve the boundary', summary: 'missing file',
+      },
+      blockingCount: 1,
+    },
+    {
+      ticket: 'T-43-05-unknown-missing-summary',
+      finding: { id: 'F1', type: 'external-review-note', blocking: false },
+      blockingCount: 0,
+    },
+    {
+      ticket: 'T-43-05-unknown-blocking',
+      finding: { id: 'F1', type: 'external-review-note', blocking: true, summary: 'must not downgrade' },
+      blockingCount: 1,
+    },
+  ];
+  for (const item of cases) {
+    const value = judgmentFixture(item.ticket);
+    try {
+      const result = archReviewResult(value, {
+        blocking_count: item.blockingCount,
+        findings: [item.finding],
+      });
+      assert.throws(
+        () => sealArchReview(value, result),
+        (error) => error && error.code === 'INCOMPLETE_FINDING',
+      );
+    } finally {
+      clean(value);
+    }
+  }
+});
+
+test('blocking_count is checked after an omitted unknown-note blocking value becomes false', () => {
+  const value = judgmentFixture('T-43-05-unknown-blocking-count');
+  try {
+    const result = archReviewResult(value, {
+      blocking_count: 1,
+      findings: [{ id: 'F1', type: 'external-review-note', summary: 'informational note' }],
+    });
+    assert.throws(
+      () => sealArchReview(value, result),
+      (error) => error && error.code === 'JUDGMENT_COUNT_MISMATCH',
+    );
+  } finally {
+    clean(value);
+  }
+});
+
+test('unknown arch-review normalization keeps the role artifact schema string', () => {
+  assert.equal(roleArtifact.ROLE_ARTIFACT_SCHEMA, 'shipyard.role-artifact.v1');
 });
 
 done();
