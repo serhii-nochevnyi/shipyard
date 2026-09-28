@@ -2301,8 +2301,8 @@ loop:
      verdicts + engagement — `unresolved` alone is only half of what CodeRabbit
      and Copilot actually said, and the half they file as issue comments is the
      half that silently went unaddressed)
-     there is feedback → build the role request from the canonical ticket graph
-       and review evidence file:
+     there is feedback → submit `review-fix` by building the role request from
+       the canonical ticket graph and review evidence file:
 
        ```text
        node ${CLAUDE_PLUGIN_ROOT}/scripts/deliver-dispatch.cjs build review-fix <T> \
