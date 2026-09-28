@@ -125,13 +125,13 @@ release:
 refresh-runtime-digests:
 	node scripts/refresh-runtime-digests.cjs
 
+dogfood_root = $(shell SHIPYARD_DOGFOOD_RUNTIME=$(1) node -e "const c=require('node:crypto');const fs=require('node:fs');const os=require('node:os');const p=require('node:path');const r=fs.realpathSync(process.cwd());const d=c.createHash('sha256').update(r).digest('hex').slice(0,16);const b=process.env.XDG_STATE_HOME||p.join(os.homedir(),'.local','state');process.stdout.write(p.join(b,'shipyard','dogfood',process.env.SHIPYARD_DOGFOOD_RUNTIME,d));")
+
 install-shipyard-dogfood-claude:
-	@test -n "$(DOGFOOD_ROOT)" || { echo "install-shipyard-dogfood-claude: set DOGFOOD_ROOT" >&2; exit 1; }
-	./scripts/install-shipyard-claude-hook.sh --dogfood-root "$(DOGFOOD_ROOT)"
+	./scripts/install-shipyard-claude-hook.sh --dogfood-root "$(or $(DOGFOOD_ROOT),$(call dogfood_root,claude))"
 
 install-shipyard-dogfood-codex:
-	@test -n "$(DOGFOOD_ROOT)" || { echo "install-shipyard-dogfood-codex: set DOGFOOD_ROOT" >&2; exit 1; }
-	./scripts/install-shipyard-codex.sh --dogfood-root "$(DOGFOOD_ROOT)"
+	./scripts/install-shipyard-codex.sh --dogfood-root "$(or $(DOGFOOD_ROOT),$(call dogfood_root,codex))"
 
 untrack-planning:
 ifeq ($(CONFIRM),untrack-planning)
