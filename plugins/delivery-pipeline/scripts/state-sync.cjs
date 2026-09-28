@@ -631,12 +631,14 @@ for (const [id, t] of Object.entries(tickets)) {
     listingStats.skippedLanded += 1;
     continue;
   }
+  let ledgerLookupMiss = false;
   if (!match && rd.available && !FULL_SYNC && recorded && Number.isSafeInteger(recorded.number)) {
     listingStats.lookedUp += 1;
     const extra = prForNumber(repo, recorded.number);
     if (extra.length) match = matchTicketPr(id, t, prs.concat(extra), recorded);
+    ledgerLookupMiss = !match;
   }
-  if (!match && rd.available && (FULL_SYNC ? rd.truncated : (!recorded || rd.truncated))) {
+  if (!match && rd.available && (FULL_SYNC ? rd.truncated : (!recorded || !Number.isSafeInteger(recorded.number) || rd.truncated || ledgerLookupMiss))) {
     listingStats.lookedUp += 1;
     const extra = prsForBranch(repo, t.branch);
     if (extra.length) match = matchTicketPr(id, t, prs.concat(extra), recorded);

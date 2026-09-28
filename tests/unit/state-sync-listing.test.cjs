@@ -191,6 +191,22 @@ test('looks up a closed-unmerged PR by its ledger number', () => {
   assert.match(result.stdout, /looked_up=1/);
 });
 
+test('falls back to the ticket branch when its ledger PR number is missing', () => {
+  const branchPr = pr(309, 'CLOSED');
+  const f = fixture({
+    ledger: 308,
+    responses: { head: { [BRANCH]: [branchPr] } },
+  });
+  const result = run(f);
+  assert.equal(result.status, 0, result.stderr);
+  assert.ok(calls(f).some((args) => args[0] === 'pr' && args[1] === 'view' && args[2] === '308'));
+  assert.ok(calls(f).some((args) => args[0] === 'pr' && args[1] === 'list' && args.includes('--head')
+    && args[args.indexOf('--head') + 1] === BRANCH));
+  assert.equal(state(f)[TICKET].pr, 309);
+  assert.equal(state(f)[TICKET].status, 'branched');
+  assert.match(result.stdout, /looked_up=2/);
+});
+
 test('--full re-derives a previously landed ticket from the all-state listing', () => {
   const closed = pr(304, 'CLOSED');
   const f = fixture({
