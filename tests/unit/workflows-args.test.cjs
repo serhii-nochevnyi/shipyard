@@ -27,6 +27,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { execFileSync } = require('child_process');
 const { suite, test, done, assert } = require(path.join(__dirname, 'assert-harness.cjs'));
 const { nativeModel, transcriptEvidence: testTranscriptEvidence } = require('./claude-test-evidence.cjs');
 const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
@@ -39,6 +40,7 @@ const {
   createClaudeDispatchAdapter,
   createClaudeWorkflowDispatch,
 } = require('../../plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs');
+const roleArtifact = require('../../plugins/delivery-pipeline/scripts/role-artifact.cjs');
 
 const WORKFLOWS = path.join(
   __dirname, '..', '..', 'plugins', 'delivery-pipeline', 'workflows'
@@ -369,6 +371,215 @@ test('a throwing judge is a failed dispatch, not an unsealed drift verdict', asy
   assert.equal(error.name, 'DispatchBoundaryError');
   assert.equal(error.code, 'DISPATCH_FAILED');
   assert.match(error.message, /judge exploded/);
+});
+
+suite('drift-gate.mjs — pinning the drift-check contradiction error shape (T-45-13 Wave 0)');
+
+function driftPinWorktree() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-drift-contradiction-'));
+  const git = (args) => execFileSync('git', ['-C', root, ...args], { encoding: 'utf8' });
+  git(['init', '--quiet', '--initial-branch=main']);
+  git(['config', 'user.email', 'drift-contradiction@example.test']);
+  git(['config', 'user.name', 'Drift Contradiction Test']);
+  git(['config', 'commit.gpgsign', 'false']);
+  fs.writeFileSync(path.join(root, 'base.txt'), 'base\n');
+  git(['add', 'base.txt']);
+  git(['commit', '--quiet', '-m', 'drift contradiction base']);
+  git(['switch', '--quiet', '-c', 'ticket/T-45-13-drift-pin']);
+  return { root, recorder: createDurableRecorder(path.join(root, 'receipts')) };
+}
+
+test('a fresh verdict with moved findings rejects with an unwrapped DispatchBoundaryError, code INVALID_RESULT, no cause', async () => {
+  const fixture = driftPinWorktree();
+  const ticket = 'T-45-13-DRIFT-PIN';
+  try {
+    let rejected;
+    try {
+      await createClaudeWorkflowDispatch({
+        agent: async () => ({
+          id: ticket,
+          verdict: 'fresh',
+          moved: [{ id: 'drift-1' }],
+          reuse_candidates: [],
+          evidence: ['git status --short — exit 0'],
+        }),
+        prompt: 'pin test',
+        role: 'drift-check',
+        model: 'claude-opus-5-5',
+        effort: 'high',
+        requireArtifact: true,
+        artifact: { role: 'drift-check', ticket, worktreePath: fixture.root, base: 'main' },
+        context: { ticket },
+        capabilities: WORKFLOW_CAPABILITIES,
+        recorder: fixture.recorder,
+        applicationEvidence: () => testTranscriptEvidence({
+          launch_id: 'drift-contradiction-pin',
+          applied_model: 'claude-opus-5-5',
+          applied_effort: 'high',
+          observed_model: nativeModel('claude-opus-5-5'),
+          observed_effort: 'high',
+        }),
+        artifactConsumer: (input) => roleArtifact.seal({
+          ...input.artifact,
+          result: input.result,
+          recorder: fixture.recorder,
+          dispatchId: input.record.receipt.dispatch_id,
+        }),
+      });
+    } catch (e) {
+      rejected = e;
+    }
+    assert.ok(rejected, 'a fresh verdict with moved findings must reject');
+    assert.equal(rejected.name, 'DispatchBoundaryError');
+    assert.equal(rejected.code, 'INVALID_RESULT');
+    assert.equal(rejected.message, 'fresh drift verdict cannot contain moved findings');
+    assert.equal(rejected.cause, undefined);
+  } finally {
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+suite('drift-gate.mjs — a self-contradictory drift verdict gets one bounded repair (T-45-13)');
+
+function driftContradictionError() {
+  const error = new Error('fresh drift verdict cannot contain moved findings');
+  error.name = 'DispatchBoundaryError';
+  error.code = 'INVALID_RESULT';
+  return error;
+}
+
+function driftAwareArtifactConsumer(input) {
+  const result = input.result;
+  if (result && result.verdict === 'fresh' && Array.isArray(result.moved) && result.moved.length) {
+    throw driftContradictionError();
+  }
+  return workflowArtifactConsumer(input);
+}
+
+function driftRepairDispatchFactory(captured) {
+  return (options) => {
+    captured.push({
+      dispatchId: options.dispatchId,
+      previousDispatchId: options.previousDispatchId,
+      model: options.model,
+      effort: options.effort,
+      signals: options.signals,
+      risk: options.risk,
+      artifact: options.artifact,
+      prompt: options.prompt,
+    });
+    return testDispatchFactory({ ...options, artifactConsumer: driftAwareArtifactConsumer });
+  };
+}
+
+const DRIFT_REPAIR_TICKET = {
+  id: 'T-99-DRIFT-01', planPath: '/p/drift-01.md', worktreePath: '/w/drift-01',
+  baseRef: 'origin/main', model: 'claude-opus-5-5', effort: 'high',
+  signals: { risk: 'low' }, risk: 'low',
+};
+
+test('one repair: a fresh+moved verdict then a valid fresh verdict produces one result with repaired_from set', async () => {
+  const captured = [];
+  let call = 0;
+  const agent = async () => {
+    call += 1;
+    return call === 1
+      ? { id: DRIFT_REPAIR_TICKET.id, verdict: 'fresh', moved: [{ id: 'drift-1' }], reuse_candidates: [], evidence: [] }
+      : {
+          id: DRIFT_REPAIR_TICKET.id, verdict: 'fresh', moved: [],
+          reuse_candidates: ['plugins/example.mjs:1 — existing behavior'],
+          evidence: ['git status --short — exit 0'],
+        };
+  };
+  const { value, calls } = await run('drift-gate', {
+    tickets: [DRIFT_REPAIR_TICKET],
+    driftRefPath: '/x/drift-check.md',
+    baseRef: 'origin/main',
+  }, { agent, dispatchFactory: driftRepairDispatchFactory(captured) });
+
+  assert.strictEqual(calls.length, 2, 'exactly two agent launches');
+  assert.strictEqual(captured.length, 2, 'exactly two boundary dispatches');
+  assert.ok(captured[0].dispatchId, 'the first dispatch must carry a known id');
+  assert.ok(captured[1].dispatchId, 'the repair dispatch must carry a known id');
+  assert.notStrictEqual(captured[1].dispatchId, captured[0].dispatchId, 'the two dispatch ids must differ');
+  assert.strictEqual(captured[1].previousDispatchId, captured[0].dispatchId,
+    "the repair dispatch's previousDispatchId must be the first dispatch id");
+  assert.strictEqual(captured[1].model, captured[0].model, 'routing: identical model');
+  assert.strictEqual(captured[1].effort, captured[0].effort, 'routing: identical effort');
+  assert.deepStrictEqual(captured[1].signals, captured[0].signals, 'routing: identical signals');
+  assert.strictEqual(captured[1].risk, captured[0].risk, 'routing: identical risk');
+  assert.deepStrictEqual(captured[1].artifact, captured[0].artifact, 'routing: identical artifact');
+  assert.match(captured[1].prompt, /fresh drift verdict cannot contain moved findings/);
+  assert.equal(captured[1].prompt.startsWith(captured[0].prompt), true,
+    'the repair prompt appends to, rather than replaces, the fixed prompt');
+
+  assert.strictEqual(value.length, 1);
+  const [result] = value;
+  assert.strictEqual(result.id, DRIFT_REPAIR_TICKET.id);
+  assert.strictEqual(result.verdict, 'fresh');
+  assert.strictEqual(result.moved_count, 0);
+  assert.strictEqual(result.repaired_from, captured[0].dispatchId);
+  assert.strictEqual(result.repair_reason, 'fresh drift verdict cannot contain moved findings');
+});
+
+test('two refuse: two contradictory results in a row reject with DRIFT_REPAIR_EXHAUSTED naming both errors and both dispatch ids, no third dispatch', async () => {
+  const captured = [];
+  const agent = async () => ({
+    id: DRIFT_REPAIR_TICKET.id, verdict: 'fresh', moved: [{ id: 'drift-1' }], reuse_candidates: [], evidence: [],
+  });
+  const error = await rejects('drift-gate', {
+    tickets: [DRIFT_REPAIR_TICKET],
+    driftRefPath: '/x/drift-check.md',
+    baseRef: 'origin/main',
+  }, { agent, dispatchFactory: driftRepairDispatchFactory(captured) });
+
+  assert.strictEqual(captured.length, 2, 'no third dispatch');
+  assert.strictEqual(error.code, 'DRIFT_REPAIR_EXHAUSTED');
+  assert.ok(error.message.includes(captured[0].dispatchId), 'message must name the first dispatch id');
+  assert.ok(error.message.includes(captured[1].dispatchId), 'message must name the repair dispatch id');
+  const occurrences = (error.message.match(/fresh drift verdict cannot contain moved findings/g) || []).length;
+  assert.strictEqual(occurrences, 2, 'message must contain both error texts, one per dispatch');
+});
+
+test('other errors are not retried: a different INVALID_RESULT message, a throwing judge, and a receipt failure all reach the caller unchanged', async () => {
+  const otherError = new Error('drift moved findings must be an array');
+  otherError.name = 'DispatchBoundaryError';
+  otherError.code = 'INVALID_RESULT';
+  const captured = [];
+  const dispatchFactory = (options) => {
+    captured.push(options);
+    return testDispatchFactory({ ...options, artifactConsumer: () => { throw otherError; } });
+  };
+  const error = await rejects('drift-gate', {
+    tickets: [DRIFT_REPAIR_TICKET],
+    driftRefPath: '/x/drift-check.md',
+    baseRef: 'origin/main',
+  }, {
+    agent: async () => ({ id: DRIFT_REPAIR_TICKET.id, verdict: 'fresh', moved: [], reuse_candidates: [], evidence: [] }),
+    dispatchFactory,
+  });
+  assert.strictEqual(captured.length, 1, 'a differently worded INVALID_RESULT must not be retried');
+  assert.strictEqual(error, otherError);
+
+  const thrownJudge = await rejects(
+    'drift-gate',
+    { tickets: driftTickets(TICKETS), driftRefPath: '/x/drift-check.md', baseRef: 'origin/main' },
+    { agent: async () => { throw new Error('judge exploded'); } }
+  );
+  assert.equal(thrownJudge.name, 'DispatchBoundaryError');
+  assert.equal(thrownJudge.code, 'DISPATCH_FAILED');
+
+  const receiptFailureFactory = (options) => testDispatchFactory({
+    ...options,
+    applicationEvidence: () => { throw new Error('host receipt unavailable'); },
+  });
+  const receiptFailure = await rejects('drift-gate', {
+    tickets: driftTickets([TICKETS[0]]),
+    driftRefPath: '/x/drift-check.md',
+    baseRef: 'origin/main',
+  }, { dispatchFactory: receiptFailureFactory });
+  assert.strictEqual(receiptFailure.name, 'DispatchBoundaryError');
+  assert.strictEqual(receiptFailure.code, 'MISSING_RECEIPT');
 });
 
 // T-26-14 — executors.mjs returns a REFERENCE to the two documents it makes
