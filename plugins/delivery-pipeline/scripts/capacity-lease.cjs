@@ -219,4 +219,153 @@ function readCapacitySnapshot(storeDir, options = {}) {
   return createCapacityCoordinator({ ...options, storeDir }).snapshot();
 }
 
-module.exports = Object.freeze({ SCHEMA_VERSION, DEFAULT_TTL_MS, createCapacityCoordinator, readCapacitySnapshot });
+const ADMISSION_LEDGER_SCHEMA_VERSION = 'shipyard.admission-ledger.v1';
+const DEFAULT_LAUNCH_BUDGET = 12;
+const RESERVATION_KINDS = new Set(['launch', 'verification', 'checkpoint']);
+
+function normalizeKey(value) {
+  if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+  return clean(value);
+}
+
+function readAdmissionLedger(file) {
+  if (!fs.existsSync(file)) return { schema_version: ADMISSION_LEDGER_SCHEMA_VERSION, entries: {} };
+  const value = JSON.parse(fs.readFileSync(file, 'utf8'));
+  if (!object(value) || value.schema_version !== ADMISSION_LEDGER_SCHEMA_VERSION || !object(value.entries)) {
+    throw new Error('admission ledger store has an unknown schema');
+  }
+  return value;
+}
+
+function countReservedLaunches(entries, runKey, phaseKey) {
+  let count = 0;
+  for (const entry of Object.values(entries)) {
+    if (entry.kind === 'launch' && entry.decision === 'would_admit'
+      && entry.run_id === runKey && entry.phase === phaseKey) count += 1;
+  }
+  return count;
+}
+
+// @contract: shadow mode only — reserve() never returns a decision a caller may enforce on
+function createAdmissionLedger(options = {}) {
+  const storeDir = typeof options.storeDir === 'string' && options.storeDir.trim()
+    ? path.resolve(options.storeDir) : null;
+  if (!storeDir) throw new Error('createAdmissionLedger requires a storeDir');
+  const storeFile = path.join(storeDir, 'admission-ledger.json');
+  const lockDir = path.join(storeDir, '.locks');
+  const now = options.now;
+  const explicitBudget = Number.isSafeInteger(options.launchBudget) && options.launchBudget > 0;
+  const launchBudget = explicitBudget ? options.launchBudget : DEFAULT_LAUNCH_BUDGET;
+  const budgetSource = explicitBudget ? 'constructor' : 'default';
+  const lockWaitMs = Number.isFinite(options.lockWaitMs) && options.lockWaitMs > 0 ? options.lockWaitMs : 5000;
+
+  function read() {
+    return readAdmissionLedger(storeFile);
+  }
+
+  function write(value) {
+    fs.mkdirSync(storeDir, { recursive: true, mode: 0o700 });
+    writeAtomic(storeFile, `${JSON.stringify(value, null, 2)}\n`);
+    fs.chmodSync(storeFile, 0o600);
+    return true;
+  }
+
+  function locked(fn) {
+    return withLock(lockDir, 'admission-ledger', fn, { label: 'admission-ledger', waitMs: lockWaitMs });
+  }
+
+  function reserve(input = {}) {
+    const dispatchId = clean(input.dispatch_id);
+    if (!dispatchId) throw new Error('reserve requires a dispatch_id');
+    const runKey = normalizeKey(input.run_id);
+    const phaseKey = normalizeKey(input.phase);
+    const kind = RESERVATION_KINDS.has(input.kind) ? input.kind : 'launch';
+    return locked(() => {
+      const store = read();
+      const existing = store.entries[dispatchId];
+      if (existing) {
+        const reserved = countReservedLaunches(store.entries, existing.run_id, existing.phase);
+        return {
+          decision: existing.decision, mode: 'shadow', launches_reserved: reserved,
+          launch_budget: launchBudget, idempotent: true,
+        };
+      }
+      const before = countReservedLaunches(store.entries, runKey, phaseKey);
+      const decision = kind === 'launch'
+        ? (before < launchBudget ? 'would_admit' : 'would_refuse')
+        : 'would_admit';
+      store.entries[dispatchId] = {
+        dispatch_id: dispatchId, run_id: runKey, phase: phaseKey, kind, decision,
+        reserved_at: nowValue(now), observed: 'unknown', budget_source: budgetSource,
+      };
+      write(store);
+      const reserved = kind === 'launch' && decision === 'would_admit' ? before + 1 : before;
+      return { decision, mode: 'shadow', launches_reserved: reserved, launch_budget: launchBudget };
+    });
+  }
+
+  function reconcile(input = {}) {
+    const dispatchId = clean(input.dispatch_id);
+    if (!dispatchId) throw new Error('reconcile requires a dispatch_id');
+    const observed = Object.prototype.hasOwnProperty.call(input, 'observed') && input.observed !== undefined
+      ? input.observed : 'unknown';
+    return locked(() => {
+      const store = read();
+      const entry = store.entries[dispatchId];
+      if (!entry) return { reconciled: false, reason: 'unknown-dispatch', dispatch_id: dispatchId };
+      entry.observed = observed;
+      write(store);
+      return { reconciled: true, dispatch_id: dispatchId, observed };
+    });
+  }
+
+  function report(input = {}) {
+    const runKey = normalizeKey(input.run_id);
+    const phaseKey = normalizeKey(input.phase);
+    return locked(() => {
+      const store = read();
+      let launchesReserved = 0;
+      let launchesRefused = 0;
+      let verificationsReserved = 0;
+      let checkpointsReserved = 0;
+      let observed = false;
+      for (const entry of Object.values(store.entries)) {
+        if (entry.run_id !== runKey || entry.phase !== phaseKey) continue;
+        if (entry.observed !== 'unknown') observed = true;
+        if (entry.kind === 'launch') {
+          if (entry.decision === 'would_admit') launchesReserved += 1; else launchesRefused += 1;
+        } else if (entry.kind === 'verification') {
+          verificationsReserved += 1;
+        } else if (entry.kind === 'checkpoint') {
+          checkpointsReserved += 1;
+        }
+      }
+      return {
+        run_id: runKey, phase: phaseKey, mode: 'shadow', launch_budget: launchBudget,
+        launches_reserved: launchesReserved, launches_refused: launchesRefused,
+        verifications_reserved: verificationsReserved, checkpoints_reserved: checkpointsReserved,
+        quota: observed ? 'observed' : 'unknown',
+      };
+    });
+  }
+
+  return Object.freeze({
+    schema_version: ADMISSION_LEDGER_SCHEMA_VERSION,
+    mode: 'shadow',
+    launch_budget: launchBudget,
+    budget_source: budgetSource,
+    reserve,
+    reconcile,
+    report,
+  });
+}
+
+module.exports = Object.freeze({
+  SCHEMA_VERSION,
+  DEFAULT_TTL_MS,
+  createCapacityCoordinator,
+  readCapacitySnapshot,
+  ADMISSION_LEDGER_SCHEMA_VERSION,
+  DEFAULT_LAUNCH_BUDGET,
+  createAdmissionLedger,
+});
