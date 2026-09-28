@@ -1,10 +1,10 @@
 {
-  "generated_at": "2026-09-28T21:24:56.496Z",
-  "observed_at": "2026-09-28T21:24:56.496Z",
-  "generation": 397,
+  "generated_at": "2026-09-28T21:57:30.563Z",
+  "observed_at": "2026-09-28T21:57:30.563Z",
+  "generation": 398,
   "parked_by_run": [],
   "auto_merge": "epic",
-  "dispatches_applied_at": "2026-09-28T21:24:56.496Z",
+  "dispatches_applied_at": "2026-09-28T21:57:30.563Z",
   "actionable": {
     "execute": [
       "T-43-13",
@@ -15,8 +15,6 @@
     ],
     "publish": [],
     "fix": [
-      "T-43-06",
-      "T-43-08",
       "T-45-14"
     ],
     "finalize": [
@@ -245,9 +243,11 @@
       "T-43-02",
       "T-43-03",
       "T-43-05",
+      "T-43-06",
       "T-43-07",
       "T-43-09",
       "T-43-04",
+      "T-43-08",
       "T-43-10",
       "T-43-11",
       "T-43-14",
@@ -272,14 +272,12 @@
     ]
   },
   "why": {
-    "T-43-06": "PR #371: 1 failing check(s)",
-    "T-43-08": "PR #370: 1 failing check(s)",
     "T-43-12": "ready — worktree + executor",
     "T-43-13": "ready — worktree + executor",
     "T-43-15": "T-43-12 (parent has no branch yet (nothing to cascade from))",
     "T-43-16": "ready — worktree + executor",
     "T-43-17": "T-43-13 (parent has no branch yet (nothing to cascade from)); T-43-16 (parent has no branch yet (nothing to cascade from))",
-    "T-43-18": "T-43-17 (parent has no branch yet (nothing to cascade from)); T-43-08 (non-primary parent T-43-08 is pr-open — T-43-18's worktree is cut from T-43-17 and receives T-43-08 only through epic/43-target-project-delivery-at-scale; T-43-08 must merge into epic/43-target-project-delivery-at-scale first (T-43-08 is pr-open))",
+    "T-43-18": "T-43-17 (parent has no branch yet (nothing to cascade from))",
     "T-43-19": "T-43-18 (parent has no branch yet (nothing to cascade from)); T-43-12 (parent has no branch yet (nothing to cascade from))",
     "T-45-09": "PR #369: green, no `gate_status: arch-review=conform` trailer — threads + arch-review still owed",
     "T-45-10": "ready — worktree + executor",
@@ -289,7 +287,7 @@
   "counts": {
     "execute": 5,
     "publish": 0,
-    "fix": 3,
+    "fix": 1,
     "finalize": 1,
     "merge": 0,
     "ci": 0,
@@ -298,10 +296,10 @@
     "merge_human": 0,
     "human": 0,
     "blocked": 4,
-    "done": 230
+    "done": 232
   },
   "parent_of": {},
-  "actionable_count": 9,
+  "actionable_count": 7,
   "tracker_blocked_count": 0,
   "left_behind_count": 0,
   "fixpoint": false,
@@ -312,8 +310,6 @@
   },
   "sentinel": {
     "duty": [
-      "T-43-06",
-      "T-43-08",
       "T-45-14",
       "T-45-09"
     ],

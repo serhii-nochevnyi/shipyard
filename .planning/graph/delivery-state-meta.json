@@ -1,13 +1,13 @@
 {
   "schema_version": 1,
-  "generation": 397,
-  "generation_identity": "a767c1fd-01eb-4198-a2f5-02aff8e0ba9a",
-  "previous_generation_identity": "16777245:12934625267:1790630441216686300:9194da9a4440cc2a9b84a665a52419996cbdbbde4885e2c2e39e616a35385221",
-  "observed_at": "2026-09-28T21:24:56.496Z",
-  "generated_at": "2026-09-28T21:24:56.496Z",
+  "generation": 398,
+  "generation_identity": "e35fa521-9e1b-489d-b312-2e0d89f7f161",
+  "previous_generation_identity": "16777245:12934676491:1790632650121419500:1bf8a56c3c37e6edcd664ebcd95c479395a7cf243813602808fda3f371be4c3e",
+  "observed_at": "2026-09-28T21:57:30.563Z",
+  "generated_at": "2026-09-28T21:57:30.563Z",
   "by": "state-sync",
-  "pid": 21827,
-  "observation_generation": 397,
+  "pid": 10722,
+  "observation_generation": 398,
   "observation_projection": {
     "tickets": {
       "T-20-01": {
@@ -2288,21 +2288,15 @@
         "checks": null
       },
       "T-43-06": {
-        "status": "pr-open",
+        "status": "merged",
         "repository": null,
         "pr": 371,
-        "head": "3b80565e2bb24efa7ce5293558389ffac265305c",
-        "draft": true,
+        "head": null,
+        "draft": false,
         "base": "epic/43-target-project-delivery-at-scale",
-        "merge_state": "UNSTABLE",
+        "merge_state": null,
         "review_decision": null,
-        "checks": {
-          "total": 1,
-          "pending": 0,
-          "failing": 1,
-          "none_reported": false,
-          "unavailable": false
-        }
+        "checks": null
       },
       "T-43-07": {
         "status": "merged",
@@ -2316,21 +2310,15 @@
         "checks": null
       },
       "T-43-08": {
-        "status": "pr-open",
+        "status": "merged",
         "repository": null,
         "pr": 370,
-        "head": "49d35edaea2db8036f6e97471700346c22767070",
-        "draft": true,
+        "head": null,
+        "draft": false,
         "base": "epic/43-target-project-delivery-at-scale",
-        "merge_state": "UNSTABLE",
+        "merge_state": null,
         "review_decision": null,
-        "checks": {
-          "total": 1,
-          "pending": 0,
-          "failing": 1,
-          "none_reported": false,
-          "unavailable": false
-        }
+        "checks": null
       },
       "T-43-09": {
         "status": "merged",
@@ -2371,7 +2359,7 @@
         "pr": null,
         "head": null,
         "draft": false,
-        "base": "ticket/T-43-08-a-stale-approval-from-a-declared-bot-doe",
+        "base": "epic/43-target-project-delivery-at-scale",
         "merge_state": null,
         "review_decision": null,
         "checks": null
@@ -2382,7 +2370,7 @@
         "pr": null,
         "head": null,
         "draft": false,
-        "base": "ticket/T-43-06-one-exported-conveyor-scratch-set-for-th",
+        "base": "epic/43-target-project-delivery-at-scale",
         "merge_state": null,
         "review_decision": null,
         "checks": null
@@ -2415,7 +2403,7 @@
         "pr": null,
         "head": null,
         "draft": false,
-        "base": "ticket/T-43-06-one-exported-conveyor-scratch-set-for-th",
+        "base": "epic/43-target-project-delivery-at-scale",
         "merge_state": null,
         "review_decision": null,
         "checks": null
@@ -2711,9 +2699,9 @@
   },
   "binding": {
     "schema_version": 1,
-    "state_digest": "81b5b406bc98b0f160a332fcf3284cef247b8a1249fec8adc9159d17d2bc9a20",
-    "front_digest": "7f13234ea6aad66c5df620cd95e3885ebf97aa1612e6012641ed7558414536e9",
-    "observation_digest": "af0675ac7b3a633d23db2388fdca8f6e92c742c9b4744c6fd1a2c592e8c2145d",
-    "observation_generation": 397
+    "state_digest": "58c0ef3911432c66f3f07374c42648f192eb6cc0b24a1a943c674b68c29d03d7",
+    "front_digest": "5ad50d1d0902bb74e88f7858c41712d8c5c68368e228a1adf7ba1a666fcf045b",
+    "observation_digest": "1d7e450ebe36bd9e93689228259b58bd2ea047b8e371428478e01d2938622b13",
+    "observation_generation": 398
   }
 }
