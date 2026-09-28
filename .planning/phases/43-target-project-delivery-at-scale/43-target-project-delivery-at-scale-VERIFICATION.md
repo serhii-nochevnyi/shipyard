@@ -1,8 +1,8 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 92dafa47a4e05cde39fbdf8f4aab20a92f63aec2e9c9999b0478b9c0300fe9bb
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: b444b5ea183b46dcc2e7fcfedc249e2471de02ffc624eb4d3f08243ce1a382ae
 phase: 43
 status: human_needed
-shipyard_source_fingerprint: 92dafa47a4e05cde39fbdf8f4aab20a92f63aec2e9c9999b0478b9c0300fe9bb
+shipyard_source_fingerprint: b444b5ea183b46dcc2e7fcfedc249e2471de02ffc624eb4d3f08243ce1a382ae
 ---
 
 # Phase 43: Target-project delivery at scale — Verification Projection
@@ -13,7 +13,7 @@ shipyard_source_fingerprint: 92dafa47a4e05cde39fbdf8f4aab20a92f63aec2e9c9999b047
 
 | Truth | Evidence | Status |
 |---|---|---|
-| Every phase plan is accounted for | 1/19 delivery records are merged | ? UNCERTAIN |
+| Every phase plan is accounted for | 2/19 delivery records are merged | ? UNCERTAIN |
 | Integration is coherent | INTEGRATION.md is missing | ? UNCERTAIN |
 | Verification evidence is present | INTEGRATION.md is missing | ? UNCERTAIN |
 
@@ -21,17 +21,17 @@ shipyard_source_fingerprint: 92dafa47a4e05cde39fbdf8f4aab20a92f63aec2e9c9999b047
 
 | Ticket | Delivery | Plan status |
 |---|---|---|
-| T-43-01 | pending | ? UNCERTAIN |
+| T-43-01 | merged | ✓ VERIFIED |
 | T-43-02 | merged | ✓ VERIFIED |
-| T-43-03 | pending | ? UNCERTAIN |
+| T-43-03 | pr-open | ? UNCERTAIN |
 | T-43-04 | pr-open | ? UNCERTAIN |
-| T-43-05 | pending | ? UNCERTAIN |
+| T-43-05 | pr-open | ? UNCERTAIN |
 | T-43-06 | pending | ? UNCERTAIN |
 | T-43-07 | pr-open | ? UNCERTAIN |
 | T-43-08 | pending | ? UNCERTAIN |
-| T-43-09 | pending | ? UNCERTAIN |
+| T-43-09 | pr-open | ? UNCERTAIN |
 | T-43-10 | pending | ? UNCERTAIN |
-| T-43-11 | pending | ? UNCERTAIN |
+| T-43-11 | pr-open | ? UNCERTAIN |
 | T-43-12 | pending | ? UNCERTAIN |
 | T-43-13 | pending | ? UNCERTAIN |
 | T-43-14 | pending | ? UNCERTAIN |
@@ -48,4 +48,4 @@ shipyard_source_fingerprint: 92dafa47a4e05cde39fbdf8f4aab20a92f63aec2e9c9999b047
 
 ## Gaps Summary
 
-**Not green:** 18 plan(s) are not merged.
+**Not green:** 17 plan(s) are not merged.
