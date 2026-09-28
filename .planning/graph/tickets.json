@@ -7032,7 +7032,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
-      "missing_paths": true,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/scripts/publish-gate.cjs",
         "scripts/shipyard-pre-push-gate.sh",
@@ -7062,7 +7062,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
-      "missing_paths": true,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/scripts/comment-policy.cjs",
         "tests/unit/comment-policy.test.cjs",
@@ -7295,7 +7295,8 @@
       "missing_paths": true,
       "files": [
         "plugins/delivery-pipeline/scripts/state-sync.cjs",
-        "tests/unit/state-sync-listing.test.cjs"
+        "tests/unit/state-sync-listing.test.cjs",
+        "tests/smoke/sentinel-smoke.sh"
       ],
       "risk": "medium",
       "type": "implementation",
@@ -7370,7 +7371,8 @@
         "plugins/delivery-pipeline/scripts/jira-export.cjs",
         "tests/unit/jira-export.test.cjs",
         "plugins/delivery-pipeline/commands/decompose.md",
-        "tests/unit/jira-binding-contract.test.cjs"
+        "tests/unit/jira-binding-contract.test.cjs",
+        "tests/smoke/docs-smoke.sh"
       ],
       "risk": "medium",
       "type": "implementation",
