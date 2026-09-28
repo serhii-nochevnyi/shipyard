@@ -685,13 +685,62 @@ function rerunEntryFor(store, id, head) {
   return null;
 }
 
-function claimRerun(id, head, runId) {
+function readRerunJournal(w, head) {
+  let journalText = '';
+  try {
+    journalText = fs.readFileSync(JOURNAL, 'utf8');
+  } catch (e) {
+    if (e.code !== 'ENOENT') throw new Error(`could not read delivery-log.jsonl (${e.message})`);
+  }
+  const events = journalText.split('\n').filter(Boolean).map((line) => {
+    try { return JSON.parse(line); } catch (e) { throw new Error(`delivery-log.jsonl contains malformed JSON (${e.message})`); }
+  });
+  const reruns = events.filter((event) => isRecord(event) && event.event === 'ci_rerun');
+  for (const event of reruns) {
+    if (typeof event.ticket !== 'string' || event.ticket === ''
+        || !['string', 'number'].includes(typeof event.pr) || String(event.pr) === ''
+        || typeof event.head !== 'string' || !/^[0-9a-f]{40}$/i.test(event.head)
+        || !['string', 'number'].includes(typeof event.run_id) || String(event.run_id) === ''
+        || typeof event.ts !== 'string' || !Number.isFinite(Date.parse(event.ts))) {
+      throw new Error('delivery-log.jsonl contains a malformed ci_rerun row');
+    }
+  }
+  const priorRows = reruns.filter((event) => event.ticket === w.id && event.head === head);
+  if (priorRows.length > 1) throw new Error(`multiple ci_rerun rows already exist for ${w.id} at ${head}`);
+  if (priorRows.length === 1 && String(priorRows[0].pr) !== String(w.pr)) {
+    throw new Error(`ci_rerun row for ${w.id} at ${head} conflicts with the recorded PR`);
+  }
+  return { journalText, priorRows };
+}
+
+function claimRerun(w, head, runId) {
+  const { id } = w;
   const timeoutMs = remainingTimeoutMs(INTERNAL_COMMAND_TIMEOUT_MS, deadline, LOCK_TAIL_RESERVE_MS);
   if (timeoutMs <= 0) throw new Error('wait call deadline reached before rerun claim');
   let result;
   withLock(lockDirFor(LOCK_ROOT), 'ci-wait', () => {
+    const { priorRows } = readRerunJournal(w, head);
     const store = readWaitStore();
     const prior = rerunFrom(store, id, head);
+    if (priorRows.length === 1) {
+      const applied = priorRows[0];
+      if (prior && String(prior.run_id) !== String(applied.run_id)) {
+        throw new Error(`ci_rerun row for ${id} at ${head} conflicts with the durable claim`);
+      }
+      if (prior) {
+        result = { claimed: false, prior };
+        return;
+      }
+      const recovered = {
+        head, run_id: String(applied.run_id), at: applied.ts,
+        status: 'applied', applied_at: applied.ts,
+        journalled: true, journalled_at: applied.ts,
+      };
+      store.reruns[rerunKey(id, head)] = recovered;
+      writeAtomic(WAITS, JSON.stringify(store, null, 2) + '\n');
+      result = { claimed: false, prior: recovered };
+      return;
+    }
     if (prior) {
       result = { claimed: false, prior };
       return;
@@ -739,20 +788,7 @@ function reconcileRerunJournal(w, head, entry, verifiedApplied = false) {
   if (timeoutMs <= 0) throw new Error('wait call deadline reached before rerun journal');
   let recorded = false;
   withLock(lockDirFor(LOCK_ROOT), 'ci-wait', () => {
-    let lines = [];
-    let journalText = '';
-    try {
-      journalText = fs.readFileSync(JOURNAL, 'utf8');
-      lines = journalText.split('\n').filter(Boolean);
-    } catch (e) {
-      if (e.code !== 'ENOENT') throw new Error(`could not read delivery-log.jsonl (${e.message})`);
-    }
-    const events = lines.map((line) => {
-      try { return JSON.parse(line); } catch (e) { throw new Error(`delivery-log.jsonl contains malformed JSON (${e.message})`); }
-    });
-    const priorRows = events.filter((event) => event && event.event === 'ci_rerun'
-      && event.ticket === w.id && event.head === head);
-    if (priorRows.length > 1) throw new Error(`multiple ci_rerun rows already exist for ${w.id} at ${head}`);
+    const { journalText, priorRows } = readRerunJournal(w, head);
     if (priorRows.length === 1) {
       const prior = priorRows[0];
       if (String(prior.run_id) !== String(entry.run_id) || String(prior.pr) !== String(w.pr)) {
@@ -791,7 +827,7 @@ function handleCancelled(w, c) {
 
   let claim;
   try {
-    claim = claimRerun(w.id, head, runId);
+    claim = claimRerun(w, head, runId);
   } catch (e) {
     return holdCancelled(c, { rerun: false, run_id: String(runId), error: `rerun not claimed (${e.message})` });
   }

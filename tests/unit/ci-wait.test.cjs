@@ -877,11 +877,13 @@ function stubGhRerun(dir, options = {}) {
   const log = path.join(dir, 'reruns.log');
   const rerunDelay = Number(options.rerunDelaySeconds) > 0
     ? `sleep ${Number(options.rerunDelaySeconds)}; ` : '';
+  const journalFailure = options.journalDirectoryAfterRerun
+    ? `mkdir ${JSON.stringify(options.journalDirectoryAfterRerun)}; ` : '';
   fs.writeFileSync(path.join(bin, 'gh'),
     '#!/bin/sh\n' +
     'case "$1 $2" in\n' +
     `  "pr checks") cat ${JSON.stringify(rows)}; exit 8 ;;\n` +
-    `  "run rerun") echo "$3" >> ${JSON.stringify(log)}; ${rerunDelay}exit 0 ;;\n` +
+    `  "run rerun") echo "$3" >> ${JSON.stringify(log)}; ${rerunDelay}${journalFailure}exit 0 ;;\n` +
     '  *) echo "stub gh: unhandled: $*" >&2; exit 1 ;;\n' +
     'esac\n', { mode: 0o755 });
   const setRows = (r) => fs.writeFileSync(rows, JSON.stringify(r));
@@ -932,6 +934,72 @@ test('a lone cancel is rerun once and journalled; a second cancel on the head is
   assert.equal(second.json.checks.failing, 1, 'the rerun cancelled again: reported failing');
   assert.equal(second.json.checks.pending, 0, 'a journalled second cancel is no longer pending');
   assert.deepStrictEqual(gh.reruns(), ['777'], 'and no second rerun');
+});
+
+test('a journalled rerun survives a missing wait store and is not dispatched again', () => {
+  const dir = project(ciOnly(), stateWith({ 'T-01-01': { pr: 101, repo: 'acme/widgets', status: 'pr-open', head_sha: HEAD } }));
+  const gh = stubGhRerun(dir);
+  gh.setRows([cancelRow('2020-01-01T00:00:00Z'), { name: 'lint', state: 'SUCCESS', bucket: 'pass' }]);
+  const first = asJson(null, null, shortWait, { dir, bin: gh.bin });
+  assert.equal(first.json.settled, null, 'the first rerun does not make the cancelled check green');
+  assert.equal(first.json.watched[0].checks.pending, 1);
+  assert.deepStrictEqual(gh.reruns(), ['777']);
+
+  const graph = path.join(dir, '.planning', 'graph');
+  const waitFile = path.join(graph, 'ci-waits.json');
+  const journalFile = path.join(graph, 'delivery-log.jsonl');
+  const originalJournal = fs.readFileSync(journalFile, 'utf8');
+  const originalEvents = originalJournal.split('\n').filter(Boolean).map((line) => JSON.parse(line))
+    .filter((event) => event.event === 'ci_rerun');
+  assert.equal(originalEvents.length, 1, 'the first applied rerun has one canonical journal row');
+  fs.unlinkSync(waitFile);
+  assert.equal(fs.existsSync(waitFile), false, 'only the wait store is removed');
+  assert.equal(fs.readFileSync(journalFile, 'utf8'), originalJournal, 'the applied-action journal remains intact');
+
+  gh.setRows([cancelRow('2099-01-01T00:00:00Z'), { name: 'lint', state: 'SUCCESS', bucket: 'pass' }]);
+  const second = asJson(null, null, shortWait, { dir, bin: gh.bin });
+  assert.equal(second.json.settled, 'T-01-01', 'the later cancelled result is settled as failing, never green');
+  assert.equal(second.json.watched[0].checks.pending, 0);
+  assert.equal(second.json.watched[0].checks.failing, 1);
+  assert.deepStrictEqual(gh.reruns(), ['777'], 'the existing applied-action row prevents a second dispatch');
+  const events = fs.readFileSync(journalFile, 'utf8').split('\n').filter(Boolean)
+    .map((line) => JSON.parse(line)).filter((event) => event.event === 'ci_rerun');
+  assert.equal(events.length, 1, 'recovery leaves exactly the original journal row');
+  assert.deepStrictEqual(events, originalEvents);
+});
+
+test('a malformed prior ci_rerun row fails closed before claim or dispatch', () => {
+  const dir = project(ciOnly(), stateWith({ 'T-01-01': { pr: 101, repo: 'acme/widgets', status: 'pr-open', head_sha: HEAD } }));
+  const gh = stubGhRerun(dir);
+  gh.setRows([cancelRow('2099-01-01T00:00:00Z')]);
+  const graph = path.join(dir, '.planning', 'graph');
+  const journalFile = path.join(graph, 'delivery-log.jsonl');
+  const malformed = JSON.stringify({ ts: '2020-01-01T00:00:00Z', event: 'ci_rerun', ticket: 'T-01-01', pr: 101, head: HEAD }) + '\n';
+  fs.writeFileSync(journalFile, malformed);
+
+  const { json } = asJson(null, null, shortWait, { dir, bin: gh.bin });
+
+  assert.equal(json.settled, null);
+  assert.equal(json.watched[0].checks.pending, 1);
+  assert.deepStrictEqual(gh.reruns(), [], 'a malformed action record cannot authorize another external action');
+  assert.equal(waits(dir).reruns[`T-01-01:${HEAD}`], undefined, 'no new durable claim is written');
+  assert.equal(fs.readFileSync(journalFile, 'utf8'), malformed, 'the conflicting prior evidence remains unchanged');
+});
+
+test('an unreadable action journal fails closed before claim or dispatch', () => {
+  const dir = project(ciOnly(), stateWith({ 'T-01-01': { pr: 101, repo: 'acme/widgets', status: 'pr-open', head_sha: HEAD } }));
+  const gh = stubGhRerun(dir);
+  gh.setRows([cancelRow('2099-01-01T00:00:00Z')]);
+  const journalFile = path.join(dir, '.planning', 'graph', 'delivery-log.jsonl');
+  fs.mkdirSync(journalFile);
+
+  const { json } = asJson(null, null, shortWait, { dir, bin: gh.bin });
+
+  assert.equal(json.settled, null);
+  assert.equal(json.watched[0].checks.pending, 1);
+  assert.deepStrictEqual(gh.reruns(), [], 'an unreadable action journal cannot authorize an external action');
+  assert.equal(waits(dir).reruns[`T-01-01:${HEAD}`], undefined, 'no new durable claim is written');
+  assert.equal(fs.statSync(journalFile).isDirectory(), true, 'the unreadable journal source remains untouched');
 });
 
 test('a second same-head cancel without a journal entry stays pending and is not rerun', () => {
@@ -1016,11 +1084,10 @@ test('a successful rerun is journalled after a missed append, exactly once', () 
   const dir = project(ciOnly(), stateWith({
     'T-01-01': { pr: 101, repo: 'acme/widgets', status: 'pr-open', head_sha: HEAD },
   }));
-  const gh = stubGhRerun(dir);
-  gh.setRows([cancelRow('2020-01-01T00:00:00Z')]);
   const graph = path.join(dir, '.planning', 'graph');
   const journal = path.join(graph, 'delivery-log.jsonl');
-  fs.mkdirSync(journal);
+  const gh = stubGhRerun(dir, { journalDirectoryAfterRerun: journal });
+  gh.setRows([cancelRow('2020-01-01T00:00:00Z')]);
 
   const first = asJson(null, null, shortWait, { dir, bin: gh.bin });
   assert.equal(first.json.watched[0].checks.pending, 1, 'the successful action remains pending until checks move');
