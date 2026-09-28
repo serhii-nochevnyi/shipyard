@@ -489,6 +489,136 @@ function normalizePrTitleFormat(value, warnings) {
   return out;
 }
 
+const REPOSITORY_CONFIG_SLUG_RE = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
+const COMMENT_MARKER_REGEX_METACHARS = new Set(['\\', '^', '$', '*', '+', '?', '(', ')', '[', ']', '{', '}', '|']);
+
+function normalizeRepositoryArrayMap(value, warnings, key, allowDefault, normalizeItem) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    warnings.push(`pipeline.${key} must be an object keyed by ${allowDefault ? '"owner/repo" or "default"' : '"owner/repo"'} — ignored`);
+    return null;
+  }
+  const out = {};
+  for (const [repo, entries] of Object.entries(value)) {
+    if (!(allowDefault && repo === 'default') && !REPOSITORY_CONFIG_SLUG_RE.test(repo)) {
+      warnings.push(`pipeline.${key}."${repo}" is not ${allowDefault ? '"default" or ' : ''}an owner/repo slug — ignored`);
+      continue;
+    }
+    if (!Array.isArray(entries)) {
+      warnings.push(`pipeline.${key}."${repo}" must be an array — ignored`);
+      continue;
+    }
+    const normalized = [];
+    for (const entry of entries) {
+      const result = normalizeItem(entry);
+      if (!result.ok) {
+        warnings.push(`pipeline.${key}."${repo}" ${result.error} — skipped`);
+        continue;
+      }
+      normalized.push(result.value);
+    }
+    out[repo] = normalized;
+  }
+  return out;
+}
+
+function normalizeCommentMarkers(value, warnings) {
+  return normalizeRepositoryArrayMap(value, warnings, 'comment_markers', true, (token) => {
+    const chars = typeof token === 'string' ? [...token] : [];
+    const invalid = typeof token !== 'string' || chars.length < 1 || chars.length > 64
+      || /\s/.test(token) || chars.some((char) => COMMENT_MARKER_REGEX_METACHARS.has(char));
+    return invalid
+      ? { ok: false, error: `token ${JSON.stringify(token)} must be 1..64 characters with no whitespace or regex metacharacters` }
+      : { ok: true, value: token };
+  });
+}
+
+function normalizeReviewerBots(value, warnings) {
+  return normalizeRepositoryArrayMap(value, warnings, 'reviewer_bots', true, (login) => {
+    const wildcard = typeof login === 'string' && login.endsWith('*');
+    const base = typeof login === 'string' ? (wildcard ? login.slice(0, -1) : login) : '';
+    const name = base.endsWith('[bot]') ? base.slice(0, -5) : base;
+    const valid = typeof login === 'string' && login.length > 0 && !/\s/.test(login)
+      && (login.match(/\*/g) || []).length === (wildcard ? 1 : 0)
+      && /^[A-Za-z0-9][A-Za-z0-9-]*$/.test(name)
+      && (wildcard || !name.endsWith('-'));
+    return valid
+      ? { ok: true, value: login }
+      : { ok: false, error: `login ${JSON.stringify(login)} must be a login optionally ending in one "*"` };
+  });
+}
+
+function normalizeRepositoryRemedies(value, warnings) {
+  return normalizeRepositoryArrayMap(value, warnings, 'repo_remedies', false, (remedy) => {
+    if (!remedy || typeof remedy !== 'object' || Array.isArray(remedy)) {
+      return { ok: false, error: `entry ${JSON.stringify(remedy)} must be an object` };
+    }
+    const allowed = new Set(['signature', 'workflow', 'inputs', 'ref']);
+    const extra = Object.keys(remedy).find((field) => !allowed.has(field));
+    if (extra) return { ok: false, error: `entry has unknown field "${extra}"` };
+    if (typeof remedy.signature !== 'string' || !remedy.signature.trim()) {
+      return { ok: false, error: 'entry signature must be a non-empty string' };
+    }
+    if (typeof remedy.workflow !== 'string' || !/^[A-Za-z0-9._-]+\.ya?ml$/.test(remedy.workflow)) {
+      return { ok: false, error: 'entry workflow must be a workflow filename ending in .yml or .yaml' };
+    }
+    if (Object.prototype.hasOwnProperty.call(remedy, 'inputs')
+        && (!remedy.inputs || typeof remedy.inputs !== 'object' || Array.isArray(remedy.inputs)
+          || Object.values(remedy.inputs).some((input) => typeof input !== 'string'))) {
+      return { ok: false, error: 'entry inputs must be an object of string values' };
+    }
+    if (Object.prototype.hasOwnProperty.call(remedy, 'ref')
+        && (typeof remedy.ref !== 'string' || !remedy.ref)) {
+      return { ok: false, error: 'entry ref must be a non-empty string' };
+    }
+    const normalized = { signature: remedy.signature, workflow: remedy.workflow };
+    if (Object.prototype.hasOwnProperty.call(remedy, 'inputs')) {
+      normalized.inputs = Object.fromEntries(Object.entries(remedy.inputs));
+    }
+    if (Object.prototype.hasOwnProperty.call(remedy, 'ref')) normalized.ref = remedy.ref;
+    return { ok: true, value: normalized };
+  });
+}
+
+function normalizeVerificationCommands(value, warnings) {
+  return normalizeRepositoryArrayMap(value, warnings, 'verification_commands', true, (command) => {
+    if (!command || typeof command !== 'object' || Array.isArray(command)) {
+      return { ok: false, error: `entry ${JSON.stringify(command)} must be an object with an argv array` };
+    }
+    const allowed = new Set(['argv', 'profile', 'timeout_s']);
+    const extra = Object.keys(command).find((field) => !allowed.has(field));
+    if (extra) return { ok: false, error: `entry has unknown field "${extra}"` };
+    if (!Array.isArray(command.argv) || command.argv.length === 0
+        || command.argv.some((arg) => typeof arg !== 'string' || arg.length === 0)) {
+      return { ok: false, error: 'entry argv must be a non-empty array of non-empty strings; shell strings are refused' };
+    }
+    if (Object.prototype.hasOwnProperty.call(command, 'profile')
+        && command.profile !== 'sandbox' && command.profile !== 'host') {
+      return { ok: false, error: 'entry profile must be "sandbox" or "host"' };
+    }
+    if (Object.prototype.hasOwnProperty.call(command, 'timeout_s')
+        && (!Number.isInteger(command.timeout_s) || command.timeout_s < 1 || command.timeout_s > 3600)) {
+      return { ok: false, error: 'entry timeout_s must be an integer from 1 to 3600' };
+    }
+    return {
+      ok: true,
+      value: {
+        argv: command.argv.slice(),
+        profile: command.profile || 'sandbox',
+        ...(Object.prototype.hasOwnProperty.call(command, 'timeout_s') ? { timeout_s: command.timeout_s } : {}),
+      },
+    };
+  });
+}
+
+function repoValue(cfg, key, repo) {
+  const source = cfg && cfg.config && Array.isArray(cfg.warnings) ? cfg.config : cfg;
+  const map = source && source[key];
+  if (!map || typeof map !== 'object' || Array.isArray(map)) return null;
+  if (Object.prototype.hasOwnProperty.call(map, repo) && map[repo] !== undefined) return map[repo] ?? null;
+  if (Object.prototype.hasOwnProperty.call(map, 'default')) return map.default ?? null;
+  return null;
+}
+
 function normalizeJiraTodoStatuses(value, warnings) {
   if (typeof value !== 'string') {
     warnings.push(
@@ -592,6 +722,10 @@ const DEFAULTS = {
   // explicit value so a writer cannot mistake bad configuration for consent.
   repos_root: null,
   pr_title_format: null,
+  comment_markers: null,
+  reviewer_bots: null,
+  repo_remedies: null,
+  verification_commands: null,
   jira: { enabled: true, project: null, issue_type: 'Task', epic_issue_type: 'Epic' },
   // Our ticket status → the tracker's TARGET STATUS NAME, for the projection
   // (ADR-008 D2). TOP-LEVEL and flat, deliberately NOT a member of `jira`:
@@ -1047,7 +1181,7 @@ function loadConfig(root, options = {}) {
     }
     if (key === 'repos') {
       for (const [slug, local] of Object.entries(obj(value))) {
-        if (!/^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/.test(slug)) {
+        if (!REPOSITORY_CONFIG_SLUG_RE.test(slug)) {
           warnings.push(`pipeline.repos."${slug}" is not an owner/name slug — ignored (it must match delivery.repo in the plans)`);
           continue;
         }
@@ -1096,6 +1230,26 @@ function loadConfig(root, options = {}) {
     if (key === 'pr_title_format') {
       const format = normalizePrTitleFormat(value, warnings);
       if (format !== null) cfg.pr_title_format = format;
+      continue;
+    }
+    if (key === 'comment_markers') {
+      const markers = normalizeCommentMarkers(value, warnings);
+      if (markers !== null) cfg.comment_markers = markers;
+      continue;
+    }
+    if (key === 'reviewer_bots') {
+      const bots = normalizeReviewerBots(value, warnings);
+      if (bots !== null) cfg.reviewer_bots = bots;
+      continue;
+    }
+    if (key === 'repo_remedies') {
+      const remedies = normalizeRepositoryRemedies(value, warnings);
+      if (remedies !== null) cfg.repo_remedies = remedies;
+      continue;
+    }
+    if (key === 'verification_commands') {
+      const commands = normalizeVerificationCommands(value, warnings);
+      if (commands !== null) cfg.verification_commands = commands;
       continue;
     }
     if (key === 'effort') {
@@ -1373,7 +1527,7 @@ const GSD_ROLE_KEYS = Object.freeze({
   'pr-sentinel': ['verification', 'gsd-verifier'],
   integrator: ['verification', 'gsd-integration-checker'],
   'drift-check': ['verification', 'gsd-verifier'],
-  'arch-review': ['verification', 'gsd-code-reviewer'],
+  'arch-review': ['verification'],
   'ci-fix': ['execution', 'gsd-debugger'],
   'review-fix': ['execution', 'gsd-code-fixer'],
 });
@@ -2244,7 +2398,7 @@ function signalGaps(role, signals = {}, cfg = DEFAULTS) {
 
 module.exports = {
   resolveDispatch, COMPATIBILITY_ROLES, ROUTED_ROLES,
-  loadConfig, resolveModel, resolveEffort, resolveTaskLevel, strategyFor, fableRoute, signalGaps,
+  loadConfig, resolveModel, resolveEffort, resolveTaskLevel, strategyFor, fableRoute, signalGaps, repoValue,
   routeOf, parseRoute, ROUTE_RE, runtimeToken,
   parseCodexModelEntry, normalizeCodexModels,
   normalizeJiraTransitions, TICKET_STATUSES, normalizePrTitleFormat,
