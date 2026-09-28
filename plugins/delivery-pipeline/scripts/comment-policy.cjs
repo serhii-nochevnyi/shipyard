@@ -5,7 +5,6 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const { loadConfig, repoValue } = require('./pipeline-config.cjs');
-const { repoRootOf } = require('./graph-dir.cjs');
 
 const MAX_MARKER_LENGTH = 120;
 const MARKER_PATTERN = /^@(invariant|security|contract)\s*:/i;
@@ -219,6 +218,7 @@ function diffPath(value, prefix) {
 function parseDiff(diff) {
   const changes = new Map();
   let file = null;
+  let oldFile = null;
   let hunk = null;
   const finishHunk = () => {
     if (!file || !hunk) return;
@@ -233,7 +233,12 @@ function parseDiff(diff) {
     if (raw.startsWith('diff --git ')) {
       finishHunk();
       file = null;
+      oldFile = null;
       hunk = null;
+      continue;
+    }
+    if (raw.startsWith('--- ') && !hunk) {
+      oldFile = diffPath(raw.slice(4), 'a/');
       continue;
     }
     if (raw.startsWith('+++ ') && !hunk) {
@@ -257,7 +262,9 @@ function parseDiff(diff) {
     }
     if (!file || !hunk || raw.length === 0) continue;
     if (raw[0] === '+') {
-      if (!changes.has(file)) changes.set(file, { additions: new Set(), edited: new Map() });
+      if (!changes.has(file)) {
+        changes.set(file, { additions: new Set(), edited: new Map(), preimagePath: oldFile || file });
+      }
       const change = changes.get(file);
       change.additions.add(hunk.newLine);
       hunk.added.push(hunk.newLine);
@@ -311,7 +318,9 @@ function repositorySlug(root) {
 function extraMarkers({ projectRoot, repo }) {
   if (!projectRoot || !repo) return [];
   try {
-    const configured = repoValue(loadConfig(projectRoot), 'comment_markers', repo);
+    const loaded = loadConfig(projectRoot);
+    if (!loaded.valid) return [];
+    const configured = repoValue(loaded, 'comment_markers', repo);
     if (!Array.isArray(configured)) return [];
     return configured.filter((token) => {
       const chars = typeof token === 'string' ? [...token] : [];
@@ -422,7 +431,7 @@ function analyze(worktree, base, options = {}) {
     let baseScanned = [];
     if (change.edited.size) {
       try {
-        const baseContent = git(worktree, ['show', `${preimage}:${relative}`]);
+        const baseContent = git(worktree, ['show', `${preimage}:${change.preimagePath}`]);
         baseScanned = scanText(baseContent, language, configuredMarkers);
       } catch {}
     }
@@ -533,11 +542,11 @@ function argumentsFor(argv) {
   };
 }
 
-function resolveProjectRoot(argv, worktree) {
+function resolveProjectRoot(argv) {
   const supplied = flag(argv, 'project-root');
   if (supplied) return path.resolve(supplied);
   if (process.env.SHIPYARD_PROJECT_ROOT) return path.resolve(process.env.SHIPYARD_PROJECT_ROOT);
-  return repoRootOf(worktree);
+  return null;
 }
 
 function printCheck(result, ticket) {
@@ -605,9 +614,16 @@ function applyCleanup(input, before) {
 function main(argv = process.argv.slice(2)) {
   const input = argumentsFor(argv);
   const options = {
-    projectRoot: resolveProjectRoot(argv, input.worktree),
+    projectRoot: resolveProjectRoot(argv),
     repo: repositorySlug(input.worktree),
   };
+  if (input.command === 'clean' && input.apply && options.projectRoot) {
+    const config = loadConfig(options.projectRoot);
+    if (!config.valid) {
+      const invalidConfigPath = config.error && config.error.file ? config.error.file : config.file;
+      throw new Error(`clean --apply refused: invalid project config at ${invalidConfigPath}`);
+    }
+  }
   const before = analyze(input.worktree, input.base, options);
   if (input.command === 'check') {
     if (input.json) console.log(JSON.stringify({ ticket: input.ticket, ...before }, null, 2));

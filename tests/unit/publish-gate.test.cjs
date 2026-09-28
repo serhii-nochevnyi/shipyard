@@ -124,8 +124,10 @@ test('a recorded delivery-state base wins over origin/HEAD for a ticket branch',
   const { dir, env } = root();
   const bare = makeOrigin(dir, env, { defaultBranch: 'master', extraBranches: ['epic/43-x'] });
   const worktree = cloneWorktree(dir, bare, env);
-  writeState(worktree, 'T-43-01', 'epic/43-x');
-  const r = run(worktree, { env, ticket: 'T-43-01' });
+  const projectRoot = path.join(dir, 'project-root');
+  fs.mkdirSync(projectRoot, { recursive: true });
+  writeState(projectRoot, 'T-43-01', 'epic/43-x');
+  const r = run(worktree, { env, ticket: 'T-43-01', extra: ['--project-root', projectRoot] });
   assert.strictEqual(r.status, 0, r.stderr);
   assert.strictEqual(r.json.base, 'origin/epic/43-x');
   assert.strictEqual(r.json.base_source, 'recorded');
@@ -180,6 +182,26 @@ test('a configured repository marker uses the target origin when project root di
   assert.deepStrictEqual(report.policy.allowed_markers, [
     '@invariant:', '@security:', '@contract:', '@ai-generated',
   ]);
+});
+
+test('publish gate ignores a tempting target config when the project root is omitted', () => {
+  const { dir, env } = root();
+  const bare = makeOrigin(dir, env, { defaultBranch: 'main' });
+  const worktree = cloneWorktree(dir, bare, env);
+  git(worktree, ['remote', 'set-url', 'origin', 'https://github.com/acme/app.git'], env);
+  const planning = path.join(worktree, '.planning');
+  fs.mkdirSync(planning, { recursive: true });
+  fs.writeFileSync(path.join(planning, 'config.json'), JSON.stringify({
+    delivery_pipeline: { comment_markers: { 'acme/app': ['@ai-generated'] } },
+  }));
+  const source = path.join(worktree, 'src', 'app.js');
+  fs.mkdirSync(path.dirname(source), { recursive: true });
+  fs.writeFileSync(source, '// @ai-generated model=x\nconst answer = 42;\n');
+  git(worktree, ['add', 'src/app.js'], env);
+
+  const r = run(worktree, { env, extra: ['--base', 'origin/main'] });
+  assert.strictEqual(r.status, 1, r.stderr || r.stdout);
+  assert.deepStrictEqual(r.json.violations, ['src/app.js']);
 });
 
 test('no candidate at all exits 2, naming the tried candidates', () => {
