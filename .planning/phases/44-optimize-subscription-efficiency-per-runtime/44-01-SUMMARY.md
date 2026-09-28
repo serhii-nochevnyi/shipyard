@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 3984439a18332f615824cc2f9453bf1de036393c1844015eb842e28caf4c5b9f
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 1f50a93cd0644877119f0c1adc81e27c6c0309e1690e913e45ab1a55faeef94b
 phase: 44-optimize-subscription-efficiency-per-runtime
 plan: 01
 subsystem: shipyard delivery
@@ -22,7 +22,7 @@ key-decisions:
 duration: 0min
 status: halted
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 3984439a18332f615824cc2f9453bf1de036393c1844015eb842e28caf4c5b9f
+shipyard_source_fingerprint: 1f50a93cd0644877119f0c1adc81e27c6c0309e1690e913e45ab1a55faeef94b
 ---
 
 # Phase 44: Parse saved Claude and Codex quota records into one whitelisted observation envelope — Delivery Projection
