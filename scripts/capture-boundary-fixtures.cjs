@@ -182,8 +182,14 @@ async function runCodexAgentStream({ scratchDir, transcriptDir, variant }) {
   return { cliVersion: probe.runtime_version, outputs };
 }
 
+async function runClaudeStatusline() {
+  fail('claude-statusline has no live capture: run one interactive `claude --settings <file>` session whose '
+    + 'statusLine.command copies stdin to $TMPDIR/statusline-raw.jsonl, then rerun with --dry-run --input <that file>');
+}
+
 const BOUNDARIES = Object.freeze({
   'claude-stream': { cli: 'claude', run: runClaudeStream },
+  'claude-statusline': { cli: 'claude', run: runClaudeStatusline },
   'codex-agent-stream': { cli: 'codex', run: runCodexAgentStream },
 });
 
