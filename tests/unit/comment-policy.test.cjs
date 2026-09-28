@@ -153,6 +153,20 @@ test('configured markers apply to the matching origin repository only', () => {
   ]);
 });
 
+test('default configured markers do not apply when origin cannot identify a repository', () => {
+  const repo = fixture(
+    { 'src/app.js': 'const value = 1;\n' },
+    { 'src/app.js': 'const value = 1;\n// @ai-generated model=x\n' },
+  );
+  configureMarkers(repo, { default: ['@ai-generated'] });
+
+  const report = commentPolicy.analyze(repo, 'main', { projectRoot: repo });
+  assert.strictEqual(report.ok, false);
+  assert.deepStrictEqual(report.policy.allowed_markers, [
+    '@invariant:', '@security:', '@contract:',
+  ]);
+});
+
 test('configured marker tokens containing whitespace or regex metacharacters are dropped', () => {
   const repo = fixture(
     { 'src/app.js': 'const value = 1;\n' },

@@ -308,7 +308,7 @@ function repositorySlug(root) {
 }
 
 function extraMarkers({ projectRoot, repo }) {
-  if (!projectRoot) return [];
+  if (!projectRoot || !repo) return [];
   try {
     const configured = repoValue(loadConfig(projectRoot), 'comment_markers', repo);
     if (!Array.isArray(configured)) return [];
