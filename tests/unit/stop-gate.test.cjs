@@ -16,6 +16,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
+delete process.env.SHIPYARD_GRAPH_DIR;
 const { suite, test, done, assert } = require(path.join(__dirname, 'assert-harness.cjs'));
 const scope = require(path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'run-scope.cjs'));
 const { createRunController } = require(path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'run-controller.cjs'));
@@ -399,7 +400,7 @@ const shipped = {
   fixpoint: true,
 };
 
-test('a stale all-clear in the session cwd does not answer for a live sibling worktree', () => {
+test('legacy unbound: a stale all-clear in the session cwd does not answer for a live sibling worktree', () => {
   const { main } = repoWithPhaseWorktree(shipped, live({
     actionable_count: 4, left_behind_count: 0,
     actionable: { execute: [], publish: [], fix: [], finalize: ['T-21-01', 'T-21-02', 'T-21-03', 'T-21-04'], merge: [] },
@@ -423,7 +424,7 @@ test('a verdict off the cwd\'s own board does not send anyone elsewhere', () => 
   assert.ok(!/NOT your cwd/.test(reason), 'no redirection when there is nowhere to redirect to');
 });
 
-test('the newest board wins even when the nearest one is the live-looking fake', () => {
+test('legacy unbound: the newest board wins even when the nearest one is the live-looking fake', () => {
   // Reversed: the session cwd holds a FRESH but empty board and the worktree an
   // old busy one. Freshness must decide, or the fix trades one wrong board for
   // another.
@@ -746,7 +747,7 @@ test('an unreadable or malformed marker allows the stop', () => {
   assert.equal(runIn(dir, { session_id: 'dir-marker-session' }, {}, false), null, 'unreadable');
 });
 
-test('an armed session with a stale main checkout and a live worktree front blocks', () => {
+test('legacy unbound: an armed session with a stale main checkout and a live worktree front blocks', () => {
   const { main } = repoWithPhaseWorktree(shipped, live());
   const v = runIn(main, { session_id: 'armed-cross-worktree' });
   assert.ok(v && v.decision === 'block');
@@ -1171,6 +1172,143 @@ test('an armed gate blocks when the in-flight record outlived the TTL', () => {
   dispatchRecord.recordInflight({ graphDir: graph, ticket: 'T-01-09', role: 'executor', dispatch_id: 'dispatch-gate-refresh', pid: process.pid, host: 'claude' });
   const v = gateIn(cwd);
   assert.ok(v && v.decision === 'block', 'an expired record must leave the ticket offered');
+});
+
+suite('stop-gate — a bound marker reads only its own board');
+
+function addWorktree(main, name, front) {
+  const dir = path.join(path.dirname(main), name);
+  git(main, 'worktree', 'add', '-q', '-b', `wt/${name}`, dir);
+  if (front) {
+    fs.mkdirSync(path.join(dir, '.planning', 'graph'), { recursive: true });
+    fs.writeFileSync(path.join(dir, '.planning', 'graph', 'delivery-front.json'), JSON.stringify(front));
+  }
+  return fs.realpathSync(dir);
+}
+
+function twoSessions(liveNewer) {
+  const { main } = repoWithPhaseWorktree(shipped, shipped);
+  const olderAt = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+  const newerAt = fresh();
+  const liveFront = live({ generated_at: liveNewer ? newerAt : olderAt });
+  const fixFront = { ...shipped, generated_at: liveNewer ? olderAt : newerAt };
+  const a = addWorktree(main, 'wt-a', liveFront);
+  const b = addWorktree(main, 'wt-b', fixFront);
+  return { main, a, b };
+}
+
+const boardIn = (dir) => fs.realpathSync(path.join(dir, '.planning', 'graph'));
+
+for (const liveNewer of [false, true]) {
+  test(`two armed sibling sessions each answer from their own board (live board ${liveNewer ? 'newer' : 'older'})`, () => {
+    const { a, b } = twoSessions(liveNewer);
+    const armA = armer.arm(a, 'session-a-0001');
+    const armB = armer.arm(b, 'session-b-0001');
+    assert.equal(armA.board, boardIn(a), 'a bare arm inside a linked worktree binds its own board');
+    assert.equal(armB.board, boardIn(b));
+    const va = runIn(a, { session_id: 'session-a-0001' }, {}, false);
+    assert.ok(va && va.decision === 'block', 'A blocks from its own live board');
+    assert.ok(va.reason.includes('T-01-03'));
+    assert.equal(runIn(b, { session_id: 'session-b-0001' }, {}, false), null, 'B allows from its own fixpoint');
+  });
+}
+
+test('a stale main cwd bound to a live phase board blocks from the phase board', () => {
+  const { main, phase } = repoWithPhaseWorktree(shipped, live());
+  const r = armer.arm(main, 'bound-main-0001', { graphDir: path.join(phase, '.planning', 'graph') });
+  assert.equal(r.board, boardIn(phase));
+  const v = runIn(main, { session_id: 'bound-main-0001' }, {}, false);
+  assert.ok(v && v.decision === 'block');
+  assert.ok(v.reason.includes(path.join('phase', '.planning', 'graph')));
+});
+
+test('bound counterpart: a stale all-clear board bound in main allows even beside a live sibling', () => {
+  const { main } = repoWithPhaseWorktree(shipped, live());
+  armer.arm(main, 'bound-main-0002', { graphDir: path.join(main, '.planning', 'graph') });
+  assert.equal(runIn(main, { session_id: 'bound-main-0002' }, {}, false), null);
+});
+
+test('bound counterpart: a bound busy board blocks even when a sibling board is newer', () => {
+  const { main, phase } = repoWithPhaseWorktree(
+    { generated_at: fresh(), actionable_count: 0, left_behind_count: 0, actionable: {}, fixpoint: true },
+    live({ generated_at: new Date(Date.now() - 10 * 60 * 1000).toISOString() }));
+  armer.arm(main, 'bound-main-0003', { graphDir: path.join(phase, '.planning', 'graph') });
+  const v = runIn(main, { session_id: 'bound-main-0003' }, {}, false);
+  assert.ok(v && v.decision === 'block');
+});
+
+test('a bare arm from a stale main beside a live linked front is unbound and still blocks', () => {
+  const { main, phase } = repoWithPhaseWorktree(shipped, live());
+  const cli = spawnSync('node', [path.join(path.dirname(SCRIPT), 'stop-gate-arm.cjs'), 'arm', '--session-id', 'bare-main-0001'],
+    { cwd: main, encoding: 'utf8', env: { ...process.env, SHIPYARD_GRAPH_DIR: '' } });
+  assert.equal(cli.status, 0, cli.stderr);
+  assert.ok(/unbound/.test(cli.stdout), cli.stdout);
+  assert.ok(cli.stdout.includes(boardIn(phase)), 'the CLI names the competing board');
+  assert.equal(armer.readMarker(main, 'bare-main-0001').board, undefined);
+  const v = runIn(main, { session_id: 'bare-main-0001' }, {}, false);
+  assert.ok(v && v.decision === 'block', 'the legacy scan still reaches the live phase board');
+  assert.ok(/arm --graph-dir/.test(v.reason), 'the refusal names the remedy');
+});
+
+function boundThenBroken(breakIt) {
+  const { main, phase } = repoWithPhaseWorktree(live(), live());
+  const dir = main;
+  armer.arm(dir, 'broken-bound-01', { graphDir: path.join(main, '.planning', 'graph') });
+  const file = armer.markerPath(dir, 'broken-bound-01');
+  const body = JSON.parse(fs.readFileSync(file, 'utf8'));
+  breakIt(body, dir, file, { main, phase });
+  const r = spawnSync('node', [SCRIPT], { cwd: dir, input: JSON.stringify({ session_id: 'broken-bound-01' }), encoding: 'utf8' });
+  assert.equal(r.status, 0);
+  assert.equal(r.stdout.trim(), '', 'never blocks from another board');
+  assert.ok(/arm --graph-dir/.test(r.stderr) && /disarm/.test(r.stderr), r.stderr);
+}
+
+test('a bound board that went missing allows with the remedy line', () => {
+  boundThenBroken((body) => { fs.rmSync(body.board, { recursive: true, force: true }); });
+});
+
+test('a bound board whose realpath changed allows with the remedy line', () => {
+  boundThenBroken((body, dir, file, { phase }) => {
+    const graph = body.board;
+    fs.rmSync(graph, { recursive: true, force: true });
+    fs.symlinkSync(path.join(phase, '.planning', 'graph'), graph);
+  });
+});
+
+test('a bound board without the .planning/graph suffix allows with the remedy line', () => {
+  boundThenBroken((body, dir, file) => {
+    body.board = fs.realpathSync(dir);
+    fs.writeFileSync(file, JSON.stringify(body));
+  });
+});
+
+suite('stop-gate — an unbound marker is bounded');
+
+test('an unbound marker refuses at most once per turn, even when the board advanced', () => {
+  const { main, phase } = repoWithPhaseWorktree(shipped, live({ generated_at: minsAgo(2) }));
+  armer.arm(main, 'legacy-turn-0001');
+  assert.ok(runIn(main, { session_id: 'legacy-turn-0001' }, {}, false).decision === 'block');
+  putFront(phase, live({ generated_at: fresh() }));
+  assert.equal(runIn(main, { session_id: 'legacy-turn-0001', stop_hook_active: true }, {}, false), null,
+    'round advancement does not re-arm an unbound refusal');
+});
+
+test('an unbound marker older than RESYNC_MS never refuses', () => {
+  const { main } = repoWithPhaseWorktree(shipped, live());
+  armer.arm(main, 'legacy-old-00001');
+  const file = armer.markerPath(main, 'legacy-old-00001');
+  const body = JSON.parse(fs.readFileSync(file, 'utf8'));
+  body.armed_at = agesAgo();
+  fs.writeFileSync(file, JSON.stringify(body));
+  assert.equal(runIn(main, { session_id: 'legacy-old-00001' }, {}, false), null);
+});
+
+test('after disarm the hook allows', () => {
+  const dir = project(live());
+  armer.arm(dir, 'disarm-then-stop');
+  assert.ok(runIn(dir, { session_id: 'disarm-then-stop' }, {}, false).decision === 'block');
+  armer.disarm(dir, 'disarm-then-stop');
+  assert.equal(runIn(dir, { session_id: 'disarm-then-stop' }, {}, false), null);
 });
 
 done();
