@@ -19,11 +19,11 @@ const { formatHint } = require('./refusal-hints.cjs');
 const { recordInflight, clearInflight } = require('./dispatch-record.cjs');
 const { acquire: acquireLock, DEFAULT_TTL_MS: LOCK_TTL_MS } = require('./lock.cjs');
 const { assertCanonicalGraph, deliverPlan } = require('./plan-delivery.cjs');
+const { isScratch } = require('./conveyor-scratch.cjs');
 
 const SCHEMA = 'shipyard.codex-delivery-host.v1';
 const MAX_ARGS_BYTES = 4 * 1024 * 1024;
 const MAX_GRAPH_BYTES = 8 * 1024 * 1024;
-const SCRATCH_STATUS = new Set(['?? .shipyard-pr-body.md', '?? .shipyard-evidence.md']);
 const TICKET_DELIVERY_ROLES = new Set(['drift-check', 'ci-fix', 'review-fix']);
 const CANDIDATE_SCHEMA = 'shipyard.finalization-candidate.v1';
 const VERIFICATION_SCHEMA = 'shipyard.verification-record.v1';
@@ -809,7 +809,8 @@ function executorPreflight(options, scope, expectedPlanSha256) {
     fail('SCOPE_MISMATCH', 'executor branch differs from canonical ticket graph');
   }
   const dirty = git(worktree, ['status', '--porcelain=v1', '--untracked-files=all'])
-    .split('\n').filter(Boolean).filter((entry) => !SCRATCH_STATUS.has(entry));
+    .split('\n').filter(Boolean).filter((entry) =>
+      !(entry.startsWith('?? ') && isScratch(entry.slice(3), { forJudge: false })));
   if (dirty.length) fail('WORKTREE_NOT_READY', 'executor worktree already has changes');
   const baseRef = resolveBaseRef(worktree, snapshot.row.pr_base);
   const plan = planSnapshot(file, snapshot.row);
@@ -844,7 +845,8 @@ function finalizedArtifact(result, prepared, options) {
   const after = graphSnapshot(prepared.graphFile, prepared.commit.ticket);
   if (after.sha256 !== prepared.graphDigest) fail('GRAPH_CHANGED', 'canonical ticket graph changed during executor launch');
   const delta = git(prepared.commit.worktree, ['status', '--porcelain=v1', '--untracked-files=all'])
-    .split('\n').filter(Boolean).filter((entry) => !SCRATCH_STATUS.has(entry));
+    .split('\n').filter(Boolean).filter((entry) =>
+      !(entry.startsWith('?? ') && isScratch(entry.slice(3), { forJudge: false })));
   if (!delta.length) fail('NO_PUBLISHABLE_DELTA', 'executor produced no worktree changes to finalize');
   const tree = scopedTreeOf(prepared, options);
   const identity = Object.freeze({

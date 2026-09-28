@@ -58,6 +58,7 @@
 const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
+const { statusIgnoringScratch } = require('./conveyor-scratch.cjs');
 
 const argv = process.argv.slice(2);
 const asJson = argv.includes('--json');
@@ -140,7 +141,7 @@ const git = (args, { tolerate = false } = {}) => {
 
 // THE QUESTION IS ABOUT UNSAVED WORK, AND THAT MEANS TRACKED CONTENT.
 // `--porcelain` alone prints `?? path` for untracked files, and the executor
-// contract writes `.shipyard-pr-body.md` and `.shipyard-evidence.md` into EVERY
+// contract writes the files named by conveyor-scratch.cjs into EVERY
 // executor worktree as untracked scratch (T-26-14, on the reasoning that the
 // scope gate reads `git diff` and never sees them — right about the scope gate,
 // wrong about every other reader of `git status`). So this script refused in the
@@ -151,9 +152,8 @@ const git = (args, { tolerate = false } = {}) => {
 // references/pr-sentinel.md, three of them read by dispatched agents, none of
 // which is told what to do about the refusal.
 //
-// Deliberately NOT fixed by exempting the two known filenames: a list of names
-// is the same shape as the pin's list of homes that T-27-07 replaced with a
-// sweep, and the next scratch file added would silently re-open it.
+// The shared scratch definition is used here while the tracked-only question
+// stays unchanged.
 //
 // What the relaxed check stops covering is an untracked path the incoming BASE
 // ADDS at the same path — and that is still refused, by `git merge` itself,
@@ -164,11 +164,14 @@ const git = (args, { tolerate = false } = {}) => {
 // A `git status` that FAILS prints nothing, and reading that silence as "clean"
 // is the same bug ticket-worktree.sh's GC checks went fail-closed for: a status
 // this script could not establish is never treated as a status of "no changes".
-const dirtyCheck = git(['status', '--porcelain', '--untracked-files=no'], { tolerate: true });
-if (dirtyCheck.status !== 0) {
-  fail(`git status failed — cannot confirm the worktree is clean: ${dirtyCheck.err || 'unknown error'}`);
+let dirtyCheck;
+try {
+  dirtyCheck = statusIgnoringScratch(worktree, { untracked: 'no' });
+} catch (error) {
+  fail(`git status failed — cannot confirm the worktree is clean: ${String(error.stderr || error.message).trim() || 'unknown error'}`);
 }
-if (dirtyCheck.out) {
+if (!dirtyCheck.ok) fail(`git status failed — cannot confirm the worktree is clean: ${dirtyCheck.code}`);
+if (dirtyCheck.entries.length) {
   fail('the worktree has uncommitted changes to tracked files — commit or stash before merging the base in');
 }
 

@@ -7,6 +7,7 @@ const { execFileSync } = require('node:child_process');
 const { before, after, test } = require('node:test');
 const os = require('node:os');
 const { finalizeDeliveryCommit, scopedTree } = require('../../plugins/delivery-pipeline/scripts/delivery-commit-finalizer.cjs');
+const { SCRATCH_FILES } = require('../../plugins/delivery-pipeline/scripts/conveyor-scratch.cjs');
 
 let temporary;
 let signer;
@@ -209,15 +210,17 @@ test('rejects an index-only edit that the private index cannot faithfully stage'
   assert.deepEqual(indexBytes(repo), beforeIndex);
 });
 
-test('excludes only the two fixed regular untracked scratch documents', () => {
+test('excludes every declared scratch file and archive content from the finalized tree', () => {
   const { repo, options } = makeRepo();
   fs.writeFileSync(path.join(repo, 'src', 'owned.txt'), 'changed\n');
-  fs.writeFileSync(path.join(repo, '.shipyard-pr-body.md'), 'body\n');
-  fs.writeFileSync(path.join(repo, '.shipyard-evidence.md'), 'evidence\n');
+  for (const name of SCRATCH_FILES) fs.writeFileSync(path.join(repo, name), 'scratch\n');
+  fs.mkdirSync(path.join(repo, '.shipyard-role-artifacts'));
+  fs.writeFileSync(path.join(repo, '.shipyard-role-artifacts', 'result.json'), '{}\n');
   const result = finalizeDeliveryCommit(options);
   assert.deepEqual(result.changed, ['src/owned.txt']);
-  assert.equal(git(repo, 'ls-tree', '--name-only', 'HEAD', '.shipyard-pr-body.md', '.shipyard-evidence.md'), '');
-  assert.equal(git(repo, 'status', '--porcelain'), '?? .shipyard-evidence.md\n?? .shipyard-pr-body.md');
+  assert.equal(git(repo, 'ls-tree', '--name-only', 'HEAD', ...SCRATCH_FILES, '.shipyard-role-artifacts'), '');
+  assert.equal(git(repo, 'status', '--porcelain', '--untracked-files=all').split('\n').length,
+    SCRATCH_FILES.length + 1);
 });
 
 test('rejects a symlinked scratch document and other untracked host artifacts', () => {

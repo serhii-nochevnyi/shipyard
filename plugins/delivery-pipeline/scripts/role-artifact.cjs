@@ -20,6 +20,11 @@ const {
   ESTIMATOR_VERSION,
 } = require('./orchestration-overhead.cjs');
 const prHygiene = require('./pr-hygiene.cjs');
+const {
+  MANIFEST_NAME, PR_BODY_NAME, EVIDENCE_NAME, REPAIR_EVIDENCE_NAME,
+  DRIFT_EVIDENCE_NAME, ARCH_REVIEW_EVIDENCE_NAME, SENTINEL_EVIDENCE_NAME,
+  ARTIFACT_ARCHIVE_DIR,
+} = require('./conveyor-scratch.cjs');
 
 const ROLE_ARTIFACT_SCHEMA = 'shipyard.role-artifact.v1';
 const ENVELOPE_SCHEMA = 'shipyard.executor-result.v1';
@@ -27,12 +32,6 @@ const ENVELOPE_VERSION = 1;
 const SUMMARY_MAX_CHARS = 500;
 const ENVELOPE_MAX_BYTES = 8192;
 const EVIDENCE_RANGE_MAX_CHARS = 4096;
-const MANIFEST_NAME = '.shipyard-role-artifact.json';
-const PR_BODY_NAME = '.shipyard-pr-body.md';
-const EVIDENCE_NAME = '.shipyard-evidence.md';
-const REPAIR_EVIDENCE_NAME = '.shipyard-repair-evidence.md';
-const DRIFT_EVIDENCE_NAME = '.shipyard-drift-evidence.md';
-const ARTIFACT_ARCHIVE_DIR = '.shipyard-role-artifacts';
 const FINDINGS_NAME = 'findings.json';
 const REPAIR_ENVELOPE_SCHEMA = 'shipyard.repair-result.v1';
 const DRIFT_ENVELOPE_SCHEMA = 'shipyard.drift-result.v1';
@@ -40,8 +39,8 @@ const JUDGMENT_ENVELOPE_SCHEMA = 'shipyard.judgment-result.v1';
 const REPAIR_ROLES = new Set(['ci-fix', 'review-fix']);
 const JUDGMENT_ROLES = new Set(['arch-review', 'pr-sentinel', 'integrator']);
 const JUDGMENT_EVIDENCE_NAMES = Object.freeze({
-  'arch-review': '.shipyard-arch-review-evidence.md',
-  'pr-sentinel': '.shipyard-sentinel-evidence.md',
+  'arch-review': ARCH_REVIEW_EVIDENCE_NAME,
+  'pr-sentinel': SENTINEL_EVIDENCE_NAME,
   integrator: 'INTEGRATION.md',
 });
 const SENTINEL_PERFORMED_STATUSES = new Set(['complete', 'handed-back']);

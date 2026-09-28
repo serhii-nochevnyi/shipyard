@@ -41,6 +41,7 @@ repo_name="$(basename "$repo_root")"
 wt_base="${SHIPYARD_WORKTREE_ROOT:-$(dirname "$repo_root")/.wt-${repo_name}}"
 reachability_script="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/run-reachability.cjs"
 diamond_script="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/diamond-parents.cjs"
+scratch_script="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/conveyor-scratch.cjs"
 
 # Serialize everything that writes to the SHARED .git. `git worktree add` and
 # branch creation both take index.lock, and since the PR sentinel guards open PRs
@@ -350,6 +351,8 @@ case "$cmd" in
     fi
     ;;
   gc)
+    scratch_names="$(node "$scratch_script" list)" || { echo "conveyor scratch list is unavailable" >&2; exit 2; }
+    [[ -n "$scratch_names" ]] || { echo "conveyor scratch list is empty" >&2; exit 2; }
     do_prune=false; as_json=false
     for arg in "${@:2}"; do
       case "$arg" in
@@ -434,15 +437,14 @@ case "$cmd" in
       elif ! porcelain="$(git -C "$wt_path" status --porcelain --untracked-files=no 2>/dev/null)"; then
         # `--untracked-files=no`: the question `dirty` answers is "is there
         # unsaved WORK here", and that means TRACKED content. Every executor
-        # worktree carries `.shipyard-pr-body.md` and `.shipyard-evidence.md` as
+        # worktree carries files from the shared conveyor scratch list as
         # untracked scratch (T-26-14), so the bare `--porcelain` reported EVERY
         # delivered ticket's worktree as `dirty` — the one class gc NEVER prunes,
         # deliberately. Measured: all five phase-27 worktrees `dirty`, two of
         # them with merged PRs, gc's own verdict `0 removable`; at cold start 32
         # worktrees with the E2BIG warning printed and still `0 removable`. The
         # count only ever came down because the reaper works from `reapable`.
-        # NOT fixed by exempting the two known filenames — the next scratch file
-        # added would silently re-open it. `dirty` keeps its meaning for real
+        # `dirty` keeps its meaning for real
         # uncommitted work; only the question changed. The under-lock re-check
         # below asks the SAME question, because a classification that says
         # `landed` and a re-check that then says `dirty` prunes nothing at all.

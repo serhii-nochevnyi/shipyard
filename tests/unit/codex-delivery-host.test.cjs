@@ -22,6 +22,7 @@ const {
   validateArgs,
 } = require('../../plugins/delivery-pipeline/scripts/codex-delivery-host.cjs');
 const { createRunController } = require('../../plugins/delivery-pipeline/scripts/run-controller.cjs');
+const { SCRATCH_FILES } = require('../../plugins/delivery-pipeline/scripts/conveyor-scratch.cjs');
 
 const capabilities = {
   supportedModels: ['gpt-6-luna', 'gpt-6-sol'],
@@ -236,6 +237,28 @@ function cliOptions(f) {
 }
 
 suite('codex-delivery-host — scoped production dispatch');
+
+test('executor leaves every shared scratch file outside the signed tree', async () => {
+  const f = fixture();
+  try {
+    for (const name of SCRATCH_FILES) fs.writeFileSync(path.join(f.root, name), 'scratch\n');
+    const result = await delivery(f).run({ role: 'executor', dispatch_id: 'all-scratch',
+      context: { prompt: 'Implement the scoped ticket.' } });
+    assert.equal(result.artifact.status, 'committed');
+    assert.deepEqual(result.artifact.changed, ['src/owned.txt']);
+    assert.equal(git(f.root, 'ls-tree', '--name-only', 'HEAD', ...SCRATCH_FILES), '');
+  } finally { clean(f); }
+});
+
+test('executor refuses an untracked file outside the shared scratch set', async () => {
+  const f = fixture();
+  try {
+    fs.writeFileSync(path.join(f.root, '.shipyard-x.js'), 'agent content\n');
+    await assert.rejects(delivery(f).run({ role: 'executor', dispatch_id: 'other-untracked',
+      context: { prompt: 'Implement the scoped ticket.' } }),
+    (error) => error.code === 'WORKTREE_NOT_READY');
+  } finally { clean(f); }
+});
 
 test('dynamic executor resolves Luna/max through the boundary with worktree write access', async () => {
   const f = fixture();
