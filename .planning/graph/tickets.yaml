@@ -115,6 +115,11 @@ epics:
     repos: [null]
     phaseDir: '44-optimize-subscription-efficiency-per-runtime'
     jira: null
+  '45':
+    branch: epic/45-close-residual-pipeline-efficiency-gaps
+    repos: [null]
+    phaseDir: '45-close-residual-pipeline-efficiency-gaps'
+    jira: null
   '33-reduce-orchestration-context-and-transfer-sessions-safely':
     branch: epic/33-reduce-orchestration-context-and-transfer-sessions-safely
     repos: [null]
@@ -1417,7 +1422,7 @@ tickets:
     risk: high
     human_checkpoint: true
     preauthorized: false
-    branch: ticket/T-30-04-require-an-explicit-operator-choice-befo
+    branch: ticket/T-30-04-require-an-explicit-operator-choice-before-cloning
     epic: epic/30-a-ticket-you-cannot-reach-is-not-deliverable
     primary_parent: T-30-03
     pr_base: ticket/T-30-03-discover-repository-checkouts-by-declare
@@ -1433,10 +1438,10 @@ tickets:
     risk: medium
     human_checkpoint: false
     preauthorized: false
-    branch: ticket/T-30-05-validate-repository-destinations-with-th
+    branch: ticket/T-30-05-validate-repository-destinations-with-existing-nesting-rule
     epic: epic/30-a-ticket-you-cannot-reach-is-not-deliverable
     primary_parent: T-30-04
-    pr_base: ticket/T-30-04-require-an-explicit-operator-choice-befo
+    pr_base: ticket/T-30-04-require-an-explicit-operator-choice-before-cloning
     jira: null
   T-30-06:
     title: Mirror the project origin protocol for repository clones
@@ -1449,10 +1454,10 @@ tickets:
     risk: medium
     human_checkpoint: false
     preauthorized: false
-    branch: ticket/T-30-06-mirror-the-project-origin-protocol-for-r
+    branch: ticket/T-30-06-mirror-project-origin-protocol-for-repository-clones
     epic: epic/30-a-ticket-you-cannot-reach-is-not-deliverable
     primary_parent: T-30-05
-    pr_base: ticket/T-30-05-validate-repository-destinations-with-th
+    pr_base: ticket/T-30-05-validate-repository-destinations-with-existing-nesting-rule
     jira: null
   T-30-07:
     title: Use a full clone with all refs required for base resolution
@@ -1468,7 +1473,7 @@ tickets:
     branch: ticket/T-30-07-use-a-full-clone-with-all-refs-required
     epic: epic/30-a-ticket-you-cannot-reach-is-not-deliverable
     primary_parent: T-30-06
-    pr_base: ticket/T-30-06-mirror-the-project-origin-protocol-for-r
+    pr_base: ticket/T-30-06-mirror-project-origin-protocol-for-repository-clones
     jira: null
   T-30-08:
     title: Adopt matching checkouts and refuse to clobber other paths
@@ -1481,7 +1486,7 @@ tickets:
     risk: medium
     human_checkpoint: false
     preauthorized: false
-    branch: ticket/T-30-08-adopt-matching-checkouts-and-refuse-to-c
+    branch: ticket/T-30-08-adopt-matching-checkouts-and-refuse-to-clobber
     epic: epic/30-a-ticket-you-cannot-reach-is-not-deliverable
     primary_parent: T-30-07
     pr_base: ticket/T-30-07-use-a-full-clone-with-all-refs-required
@@ -1497,10 +1502,10 @@ tickets:
     risk: medium
     human_checkpoint: false
     preauthorized: false
-    branch: ticket/T-30-09-persist-resolved-checkouts-and-park-unre
+    branch: ticket/T-30-09-persist-resolved-checkouts-and-park-unreachable
     epic: epic/30-a-ticket-you-cannot-reach-is-not-deliverable
     primary_parent: T-30-08
-    pr_base: ticket/T-30-08-adopt-matching-checkouts-and-refuse-to-c
+    pr_base: ticket/T-30-08-adopt-matching-checkouts-and-refuse-to-clobber
     jira: null
   T-30-10:
     title: Make the sentinel honor observed ticket branches
@@ -1625,7 +1630,7 @@ tickets:
     risk: high
     human_checkpoint: true
     preauthorized: false
-    branch: ticket/T-31-07-read-tracker-eligibility-at-cold-start-a
+    branch: ticket/T-31-07-read-tracker-eligibility-at-cold-start
     epic: epic/31-not-every-ticket-is-available-work
     primary_parent: T-31-06
     pr_base: ticket/T-31-06-journal-direct-ticket-overrides
@@ -1737,7 +1742,7 @@ tickets:
     risk: medium
     human_checkpoint: false
     preauthorized: false
-    branch: ticket/T-32-07-join-transcript-usage-to-dispatches-with
+    branch: ticket/T-32-07-join-transcripts-to-dispatches
     epic: epic/32-measure-usage-and-make-the-backlog-actionable
     primary_parent: T-32-05
     pr_base: ticket/T-32-05-wire-batched-dispatch-lifecycle-into-the
@@ -1897,7 +1902,7 @@ tickets:
     risk: medium
     human_checkpoint: false
     preauthorized: false
-    branch: ticket/T-34-01-make-review-progress-and-resource-budget
+    branch: ticket/T-34-01-review-progress-and-resource-budgets
     epic: epic/34-improve-convergence-and-tune-from-measured-outcomes
     primary_parent: null
     pr_base: epic/34-improve-convergence-and-tune-from-measured-outcomes
@@ -1913,10 +1918,10 @@ tickets:
     risk: high
     human_checkpoint: true
     preauthorized: true
-    branch: ticket/T-34-02-require-runtime-capability-evidence-for
+    branch: ticket/T-34-02-runtime-capability-evidence
     epic: epic/34-improve-convergence-and-tune-from-measured-outcomes
     primary_parent: T-34-01
-    pr_base: ticket/T-34-01-make-review-progress-and-resource-budget
+    pr_base: ticket/T-34-01-review-progress-and-resource-budgets
     jira: null
   T-34-03:
     title: Strengthen manual merge verdict carry
@@ -1929,7 +1934,7 @@ tickets:
     risk: high
     human_checkpoint: true
     preauthorized: true
-    branch: ticket/T-34-03-strengthen-manual-merge-verdict-carry
+    branch: ticket/T-34-03-merge-verdict-carry
     epic: epic/34-improve-convergence-and-tune-from-measured-outcomes
     primary_parent: null
     pr_base: epic/34-improve-convergence-and-tune-from-measured-outcomes
@@ -1945,10 +1950,10 @@ tickets:
     risk: high
     human_checkpoint: true
     preauthorized: true
-    branch: ticket/T-34-04-admit-distinct-agents-through-shared-acc
+    branch: ticket/T-34-04-shared-capacity-and-dispatch-boundary
     epic: epic/34-improve-convergence-and-tune-from-measured-outcomes
     primary_parent: T-34-02
-    pr_base: ticket/T-34-02-require-runtime-capability-evidence-for
+    pr_base: ticket/T-34-02-runtime-capability-evidence
     jira: null
   T-34-05:
     title: Publish versioned optimization evidence and backlog candidates
@@ -1964,7 +1969,7 @@ tickets:
     branch: ticket/T-34-05-publish-versioned-optimization-evidence
     epic: epic/34-improve-convergence-and-tune-from-measured-outcomes
     primary_parent: T-34-04
-    pr_base: ticket/T-34-04-admit-distinct-agents-through-shared-acc
+    pr_base: ticket/T-34-04-shared-capacity-and-dispatch-boundary
     jira: null
   T-35-01:
     title: Deterministic native-GSD projection
@@ -2073,7 +2078,7 @@ tickets:
     risk: high
     human_checkpoint: true
     preauthorized: true
-    branch: ticket/T-36-04-generate-and-validate-the-codex-bundle-w
+    branch: ticket/T-36-04-generate-and-validate-the-complete-codex
     epic: epic/36-enforce-the-runtime-model-ladder
     primary_parent: T-36-03
     pr_base: ticket/T-36-03-strict-codex-adapter-and-named-model-pal
@@ -2092,7 +2097,7 @@ tickets:
     branch: ticket/T-36-05-claude-adapter-and-explicit-workflow-lau
     epic: epic/36-enforce-the-runtime-model-ladder
     primary_parent: T-36-04
-    pr_base: ticket/T-36-04-generate-and-validate-the-codex-bundle-w
+    pr_base: ticket/T-36-04-generate-and-validate-the-complete-codex
     jira: null
   T-36-06:
     title: Route GSD decomposition through the mandatory boundary
@@ -2121,7 +2126,7 @@ tickets:
     risk: high
     human_checkpoint: true
     preauthorized: true
-    branch: ticket/T-36-07-enforce-the-boundary-across-shipyard-del
+    branch: ticket/T-36-07-enforce-the-boundary-across-shipyard-delivery-launches
     epic: epic/36-enforce-the-runtime-model-ladder
     primary_parent: T-36-06
     pr_base: ticket/T-36-06-route-gsd-decomposition-through-the-mand
@@ -2140,7 +2145,7 @@ tickets:
     branch: ticket/T-36-08-application-receipts-and-dispatch-record
     epic: epic/36-enforce-the-runtime-model-ladder
     primary_parent: T-36-07
-    pr_base: ticket/T-36-07-enforce-the-boundary-across-shipyard-del
+    pr_base: ticket/T-36-07-enforce-the-boundary-across-shipyard-delivery-launches
     jira: null
   T-36-09:
     title: Policy-aware telemetry and reconciliation reporting
@@ -2153,7 +2158,7 @@ tickets:
     risk: medium
     human_checkpoint: false
     preauthorized: false
-    branch: ticket/T-36-09-policy-aware-telemetry-and-reconciliatio
+    branch: ticket/T-36-09-policy-aware-telemetry-and-reconciliation-reporting
     epic: epic/36-enforce-the-runtime-model-ladder
     primary_parent: T-36-08
     pr_base: ticket/T-36-08-application-receipts-and-dispatch-record
@@ -2169,10 +2174,10 @@ tickets:
     risk: medium
     human_checkpoint: false
     preauthorized: false
-    branch: ticket/T-36-10-exhaustive-signal-matrix-and-negative-by
+    branch: ticket/T-36-10-exhaustive-signal-matrix-and-negative-bypass-suite
     epic: epic/36-enforce-the-runtime-model-ladder
     primary_parent: T-36-09
-    pr_base: ticket/T-36-09-policy-aware-telemetry-and-reconciliatio
+    pr_base: ticket/T-36-09-policy-aware-telemetry-and-reconciliation-reporting
     jira: null
   T-36-11:
     title: Cross-runtime generated-install smoke verification
@@ -2185,10 +2190,10 @@ tickets:
     risk: high
     human_checkpoint: true
     preauthorized: true
-    branch: ticket/T-36-11-cross-runtime-generated-install-smoke-ve
+    branch: ticket/T-36-11-cross-runtime-generated-install-smoke-verification
     epic: epic/36-enforce-the-runtime-model-ladder
     primary_parent: T-36-10
-    pr_base: ticket/T-36-10-exhaustive-signal-matrix-and-negative-by
+    pr_base: ticket/T-36-10-exhaustive-signal-matrix-and-negative-bypass-suite
     jira: null
   T-36-12:
     title: Supersede obsolete ladder documentation
@@ -2204,7 +2209,7 @@ tickets:
     branch: ticket/T-36-12-supersede-obsolete-ladder-documentation
     epic: epic/36-enforce-the-runtime-model-ladder
     primary_parent: T-36-10
-    pr_base: ticket/T-36-10-exhaustive-signal-matrix-and-negative-by
+    pr_base: ticket/T-36-10-exhaustive-signal-matrix-and-negative-bypass-suite
     jira: null
   T-37-01:
     title: Define the scoped autonomous run contract
@@ -2249,7 +2254,7 @@ tickets:
     risk: high
     human_checkpoint: true
     preauthorized: false
-    branch: ticket/T-37-03-connect-claude-code-to-the-scoped-runtim
+    branch: ticket/T-37-03-connect-claude-to-scoped-runtime-controller
     epic: epic/37-autonomous-dual-runtime-control-plane
     primary_parent: T-37-02
     pr_base: ticket/T-37-02-persist-controller-leases-and-autonomous
@@ -2265,7 +2270,7 @@ tickets:
     risk: high
     human_checkpoint: true
     preauthorized: false
-    branch: ticket/T-37-04-connect-codex-to-the-scoped-runtime-cont
+    branch: ticket/T-37-04-connect-codex-to-scoped-runtime-controller
     epic: epic/37-autonomous-dual-runtime-control-plane
     primary_parent: T-37-02
     pr_base: ticket/T-37-02-persist-controller-leases-and-autonomous
@@ -2281,7 +2286,7 @@ tickets:
     risk: medium
     human_checkpoint: false
     preauthorized: false
-    branch: ticket/T-37-05-prove-graph-reachability-before-autonomo
+    branch: ticket/T-37-05-prove-graph-reachability-before-autonomous-run
     epic: epic/37-autonomous-dual-runtime-control-plane
     primary_parent: T-37-02
     pr_base: ticket/T-37-02-persist-controller-leases-and-autonomous
@@ -2300,7 +2305,7 @@ tickets:
     branch: ticket/T-37-06-make-stop-and-wait-decisions-run-scoped
     epic: epic/37-autonomous-dual-runtime-control-plane
     primary_parent: T-37-05
-    pr_base: ticket/T-37-05-prove-graph-reachability-before-autonomo
+    pr_base: ticket/T-37-05-prove-graph-reachability-before-autonomous-run
     jira: null
   T-37-07:
     title: Join runtime receipts with usage and outcome evidence
@@ -2316,7 +2321,7 @@ tickets:
     branch: ticket/T-37-07-join-runtime-receipts-with-usage-and-out
     epic: epic/37-autonomous-dual-runtime-control-plane
     primary_parent: T-37-03
-    pr_base: ticket/T-37-03-connect-claude-code-to-the-scoped-runtim
+    pr_base: ticket/T-37-03-connect-claude-to-scoped-runtime-controller
     jira: null
   T-37-08:
     title: Roll out and verify the autonomous control plane
@@ -2393,7 +2398,7 @@ tickets:
     risk: high
     human_checkpoint: true
     preauthorized: false
-    branch: ticket/T-38-04-connect-codex-delivery-and-typed-gsd-dec
+    branch: ticket/T-38-04-connect-codex-launches-to-delivery
     epic: epic/38-runtime-model-ladder-recovery
     primary_parent: T-38-03
     pr_base: ticket/T-38-03-connect-claude-delivery-and-investigatio
@@ -2428,7 +2433,7 @@ tickets:
     branch: ticket/T-38-07-connect-claude-judgement-roles-through-t
     epic: epic/38-runtime-model-ladder-recovery
     primary_parent: T-38-04
-    pr_base: ticket/T-38-04-connect-codex-delivery-and-typed-gsd-dec
+    pr_base: ticket/T-38-04-connect-codex-launches-to-delivery
     jira: null
   T-38-08:
     title: Connect Claude sentinel through authenticated round dispatch
@@ -2457,7 +2462,7 @@ tickets:
     risk: high
     human_checkpoint: true
     preauthorized: false
-    branch: ticket/T-38-05-route-delivery-through-independent-runti
+    branch: ticket/T-38-05-route-independent-runtime-rollouts
     epic: epic/38-runtime-model-ladder-recovery
     primary_parent: T-38-08
     pr_base: ticket/T-38-08-connect-claude-sentinel-through-authenti
@@ -2873,7 +2878,7 @@ tickets:
     risk: medium
     human_checkpoint: false
     preauthorized: false
-    branch: ticket/T-41-04-accept-asynchronous-native-child-complet
+    branch: ticket/T-41-04-resume-authenticated-completed-execution
     epic: epic/41-reduce-pipeline-subscription-overhead
     primary_parent: null
     pr_base: epic/41-reduce-pipeline-subscription-overhead
@@ -3789,4 +3794,228 @@ tickets:
     epic: epic/44-optimize-subscription-efficiency-per-runtime
     primary_parent: T-44-05
     pr_base: ticket/T-44-05-reversible-installer-for-the-claude-stat
+    jira: null
+  T-45-01:
+    title: 'Armed Stop gate binds the realpath of its own delivery board, bounds legacy markers and gains disarm'
+    plan: '.planning/phases/45-close-residual-pipeline-efficiency-gaps/45-01-PLAN.md'
+    phase: '45'
+    repo: null
+    wave: 1
+    depends_on: []
+    files: [plugins/delivery-pipeline/scripts/stop-gate.cjs, plugins/delivery-pipeline/scripts/stop-gate-arm.cjs, tests/unit/stop-gate.test.cjs, tests/unit/stop-gate-arm.test.cjs, tests/unit/stop-gate-installed.test.cjs]
+    risk: high
+    human_checkpoint: true
+    preauthorized: false
+    branch: ticket/T-45-01-armed-stop-gate-binds-the-realpath-of-it
+    epic: epic/45-close-residual-pipeline-efficiency-gaps
+    primary_parent: null
+    pr_base: epic/45-close-residual-pipeline-efficiency-gaps
+    jira: null
+  T-45-02:
+    title: 'Doctor classifies another checkout''s dogfood cache as foreign instead of a release error'
+    plan: '.planning/phases/45-close-residual-pipeline-efficiency-gaps/45-02-PLAN.md'
+    phase: '45'
+    repo: null
+    wave: 1
+    depends_on: []
+    files: [plugins/delivery-pipeline/scripts/host-provenance.cjs, tests/unit/host-provenance.test.cjs, scripts/shipyard-doctor.cjs, tests/smoke/claude-hook-smoke.sh]
+    risk: medium
+    human_checkpoint: false
+    preauthorized: false
+    branch: ticket/T-45-02-doctor-classifies-another-checkout-s-dog
+    epic: epic/45-close-residual-pipeline-efficiency-gaps
+    primary_parent: null
+    pr_base: epic/45-close-residual-pipeline-efficiency-gaps
+    jira: null
+  T-45-03:
+    title: Dogfood installs default to a dedicated per-checkout runtime home
+    plan: '.planning/phases/45-close-residual-pipeline-efficiency-gaps/45-03-PLAN.md'
+    phase: '45'
+    repo: null
+    wave: 2
+    depends_on: [T-45-02]
+    files: [scripts/install-shipyard-marketplace.cjs, tests/unit/marketplace-installer.test.cjs, scripts/install-shipyard-codex.sh, Makefile, README.md, CLAUDE.md]
+    risk: medium
+    human_checkpoint: false
+    preauthorized: false
+    branch: ticket/T-45-03-dogfood-installs-default-to-a-dedicated
+    epic: epic/45-close-residual-pipeline-efficiency-gaps
+    primary_parent: T-45-02
+    pr_base: ticket/T-45-02-doctor-classifies-another-checkout-s-dog
+    jira: null
+  T-45-04:
+    title: codex-decompose-host run lease uses an injected clock and heartbeat so the native-child test is deterministic
+    plan: '.planning/phases/45-close-residual-pipeline-efficiency-gaps/45-04-PLAN.md'
+    phase: '45'
+    repo: null
+    wave: 1
+    depends_on: []
+    files: [plugins/delivery-pipeline/scripts/codex-decompose-host.cjs, tests/unit/codex-decompose-host.test.cjs]
+    risk: medium
+    human_checkpoint: false
+    preauthorized: false
+    branch: ticket/T-45-04-codex-decompose-host-run-lease-uses-an-i
+    epic: epic/45-close-residual-pipeline-efficiency-gaps
+    primary_parent: null
+    pr_base: epic/45-close-residual-pipeline-efficiency-gaps
+    jira: null
+  T-45-05:
+    title: session-handoff successor race and dispatch-boundary cross-process reservation tests use explicit barriers
+    plan: '.planning/phases/45-close-residual-pipeline-efficiency-gaps/45-05-PLAN.md'
+    phase: '45'
+    repo: null
+    wave: 1
+    depends_on: []
+    files: [tests/unit/session-handoff.test.cjs, tests/unit/dispatch-boundary.test.cjs, plugins/delivery-pipeline/scripts/session-handoff.cjs, plugins/delivery-pipeline/scripts/dispatch-boundary.cjs]
+    risk: medium
+    human_checkpoint: false
+    preauthorized: false
+    branch: ticket/T-45-05-session-handoff-successor-race-and-dispa
+    epic: epic/45-close-residual-pipeline-efficiency-gaps
+    primary_parent: null
+    pr_base: epic/45-close-residual-pipeline-efficiency-gaps
+    jira: null
+  T-45-06:
+    title: usage-report counts Codex host-stream turn.completed.usage records
+    plan: '.planning/phases/45-close-residual-pipeline-efficiency-gaps/45-06-PLAN.md'
+    phase: '45'
+    repo: null
+    wave: 1
+    depends_on: []
+    files: [plugins/delivery-pipeline/scripts/usage-report.cjs, tests/unit/usage-report.test.cjs]
+    risk: low
+    human_checkpoint: false
+    preauthorized: false
+    branch: ticket/T-45-06-usage-report-counts-codex-host-stream-tu
+    epic: epic/45-close-residual-pipeline-efficiency-gaps
+    primary_parent: null
+    pr_base: epic/45-close-residual-pipeline-efficiency-gaps
+    jira: null
+  T-45-07:
+    title: 'Planning-tree writer lease with owner, base revision and a monotonic fencing token'
+    plan: '.planning/phases/45-close-residual-pipeline-efficiency-gaps/45-07-PLAN.md'
+    phase: '45'
+    repo: null
+    wave: 1
+    depends_on: []
+    files: [plugins/delivery-pipeline/scripts/planning-writer-lease.cjs, tests/unit/planning-writer-lease.test.cjs]
+    risk: medium
+    human_checkpoint: false
+    preauthorized: false
+    branch: ticket/T-45-07-planning-tree-writer-lease-with-owner-ba
+    epic: epic/45-close-residual-pipeline-efficiency-gaps
+    primary_parent: null
+    pr_base: epic/45-close-residual-pipeline-efficiency-gaps
+    jira: null
+  T-45-08:
+    title: Both decompose hosts hold the planning writer lease from launch to seal and refuse fenced or foreign-edited seals
+    plan: '.planning/phases/45-close-residual-pipeline-efficiency-gaps/45-08-PLAN.md'
+    phase: '45'
+    repo: null
+    wave: 2
+    depends_on: [T-45-04, T-45-07]
+    files: [plugins/delivery-pipeline/scripts/claude-decompose-host.cjs, tests/unit/claude-decompose-host.test.cjs, plugins/delivery-pipeline/scripts/codex-decompose-host.cjs, tests/unit/codex-decompose-host.test.cjs]
+    risk: medium
+    human_checkpoint: false
+    preauthorized: false
+    branch: ticket/T-45-08-both-decompose-hosts-hold-the-planning-w
+    epic: epic/45-close-residual-pipeline-efficiency-gaps
+    primary_parent: T-45-04
+    pr_base: ticket/T-45-04-codex-decompose-host-run-lease-uses-an-i
+    jira: null
+  T-45-09:
+    title: 'Codex decompose host recovers a completed judgment role from its reservation, native transcripts and artifact digest without relaunch'
+    plan: '.planning/phases/45-close-residual-pipeline-efficiency-gaps/45-09-PLAN.md'
+    phase: '45'
+    repo: null
+    wave: 3
+    depends_on: [T-45-05, T-45-08]
+    files: [plugins/delivery-pipeline/scripts/dispatch-boundary.cjs, tests/unit/dispatch-boundary.test.cjs, plugins/delivery-pipeline/scripts/codex-runtime-host.cjs, plugins/delivery-pipeline/scripts/codex-decompose-host.cjs, tests/unit/codex-decompose-host.test.cjs]
+    risk: high
+    human_checkpoint: true
+    preauthorized: false
+    branch: ticket/T-45-09-codex-decompose-host-recovers-a-complete
+    epic: epic/45-close-residual-pipeline-efficiency-gaps
+    primary_parent: T-45-08
+    pr_base: ticket/T-45-08-both-decompose-hosts-hold-the-planning-w
+    jira: null
+  T-45-10:
+    title: 'Claude decompose host recovers a completed judgment role from its reservation, saved transcripts and artifact snapshot without relaunch'
+    plan: '.planning/phases/45-close-residual-pipeline-efficiency-gaps/45-10-PLAN.md'
+    phase: '45'
+    repo: null
+    wave: 4
+    depends_on: [T-45-09]
+    files: [plugins/delivery-pipeline/scripts/claude-runtime-host.cjs, plugins/delivery-pipeline/scripts/claude-decompose-host.cjs, tests/unit/claude-decompose-host.test.cjs]
+    risk: high
+    human_checkpoint: true
+    preauthorized: false
+    branch: ticket/T-45-10-claude-decompose-host-recovers-a-complet
+    epic: epic/45-close-residual-pipeline-efficiency-gaps
+    primary_parent: T-45-09
+    pr_base: ticket/T-45-09-codex-decompose-host-recovers-a-complete
+    jira: null
+  T-45-11:
+    title: Codex decomposition runs detached so the parent blocks in deliver-dispatch wait with parent and child usage attributed separately
+    plan: '.planning/phases/45-close-residual-pipeline-efficiency-gaps/45-11-PLAN.md'
+    phase: '45'
+    repo: null
+    wave: 4
+    depends_on: [T-45-09]
+    files: [plugins/delivery-pipeline/scripts/codex-decompose-host.cjs, tests/unit/codex-decompose-host.test.cjs, plugins/delivery-pipeline/scripts/orchestration-overhead.cjs, tests/unit/orchestration-overhead.test.cjs, tests/unit/decompose-dispatch-wait-contract.test.cjs]
+    risk: medium
+    human_checkpoint: false
+    preauthorized: false
+    branch: ticket/T-45-11-codex-decomposition-runs-detached-so-the
+    epic: epic/45-close-residual-pipeline-efficiency-gaps
+    primary_parent: T-45-09
+    pr_base: ticket/T-45-09-codex-decompose-host-recovers-a-complete
+    jira: null
+  T-45-12:
+    title: Advisory run/phase aggregate admission ledger on capacity-lease with reserved verification and checkpoint capacity
+    plan: '.planning/phases/45-close-residual-pipeline-efficiency-gaps/45-12-PLAN.md'
+    phase: '45'
+    repo: null
+    wave: 1
+    depends_on: []
+    files: [plugins/delivery-pipeline/scripts/capacity-lease.cjs, tests/unit/capacity-lease.test.cjs]
+    risk: medium
+    human_checkpoint: false
+    preauthorized: false
+    branch: ticket/T-45-12-advisory-run-phase-aggregate-admission-l
+    epic: epic/45-close-residual-pipeline-efficiency-gaps
+    primary_parent: null
+    pr_base: epic/45-close-residual-pipeline-efficiency-gaps
+    jira: null
+  T-45-13:
+    title: 'drift-gate re-asks a self-contradictory drift-check verdict once, then refuses with both errors'
+    plan: '.planning/phases/45-close-residual-pipeline-efficiency-gaps/45-13-PLAN.md'
+    phase: '45'
+    repo: null
+    wave: 1
+    depends_on: []
+    files: [plugins/delivery-pipeline/workflows/drift-gate.mjs, tests/unit/workflows-args.test.cjs]
+    risk: medium
+    human_checkpoint: false
+    preauthorized: false
+    branch: ticket/T-45-13-drift-gate-re-asks-a-self-contradictory
+    epic: epic/45-close-residual-pipeline-efficiency-gaps
+    primary_parent: null
+    pr_base: epic/45-close-residual-pipeline-efficiency-gaps
+    jira: null
+  T-45-14:
+    title: 'Capture scrubber replaces Codex account identifiers, the scratch dir is a git repo, and the fixture scan rejects leaked account ids'
+    plan: '.planning/phases/45-close-residual-pipeline-efficiency-gaps/45-14-PLAN.md'
+    phase: '45'
+    repo: null
+    wave: 1
+    depends_on: []
+    files: [scripts/capture-boundary-fixtures.cjs, tests/unit/boundary-fixtures.test.cjs]
+    risk: low
+    human_checkpoint: false
+    preauthorized: false
+    branch: ticket/T-45-14-capture-scrubber-replaces-codex-account
+    epic: epic/45-close-residual-pipeline-efficiency-gaps
+    primary_parent: null
+    pr_base: epic/45-close-residual-pipeline-efficiency-gaps
     jira: null

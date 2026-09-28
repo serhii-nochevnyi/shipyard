@@ -1,11 +1,11 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 8630c236b628635fa3a82db8c68d5181b044cfd141c0d731fe2493e104ac7adc
-phase: 43-target-project-delivery-at-scale
-plan: 14
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 9a73b66dc024152467156029d9af4d3a7e80f686ceba16aa4b4aacf5987d4b4a
+phase: 45-close-residual-pipeline-efficiency-gaps
+plan: 04
 subsystem: shipyard delivery
 tags: [shipyard, gsd, delivery-projection]
 provides:
-  - Tracked delivery state for T-43-14
+  - Tracked delivery state for T-45-04
 affects: [GSD progress, Shipyard delivery]
 actuals:
   tokens: 0
@@ -22,19 +22,19 @@ key-decisions:
 duration: 0min
 status: halted
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 8630c236b628635fa3a82db8c68d5181b044cfd141c0d731fe2493e104ac7adc
+shipyard_source_fingerprint: 9a73b66dc024152467156029d9af4d3a7e80f686ceba16aa4b4aacf5987d4b4a
 ---
 
-# Phase 43: deliver-dispatch builds arch-review, ci-fix and review-fix requests that round-trip through the host validators — Delivery Projection
+# Phase 45: codex-decompose-host run lease uses an injected clock and heartbeat so the native-child test is deterministic — Delivery Projection
 
 **Plan delivery is not complete; the projection preserves the current state.**
 
 ## Delivery Evidence
 
-- Ticket: T-43-14
-- Delivery status: pr-open
-- PR: #355
-- Source plan: .planning/phases/43-target-project-delivery-at-scale/43-14-PLAN.md
+- Ticket: T-45-04
+- Delivery status: pending
+- PR: not observed
+- Source plan: .planning/phases/45-close-residual-pipeline-efficiency-gaps/45-04-PLAN.md
 - This summary is halted until the delivery state observes `merged`.
 
 ## Decisions & Deviations

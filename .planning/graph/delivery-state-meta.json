@@ -1,13 +1,13 @@
 {
   "schema_version": 1,
-  "generation": 394,
-  "generation_identity": "0a4b36da-ea7d-4348-952f-49d722604e67",
-  "previous_generation_identity": "16777245:12934211754:1790609347625155000:f0dfdf1c1f88ab4d3c24b1d562db40f0496f69270ce8e9f7e5365dd94ab2425e",
-  "observed_at": "2026-09-28T15:29:26.571Z",
-  "generated_at": "2026-09-28T15:29:26.571Z",
+  "generation": 395,
+  "generation_identity": "0fd5a578-9fdc-47b8-82f8-7fa1eb872645",
+  "previous_generation_identity": "16777245:12934213833:1790609383650133800:8e2c4fd05dcb98a1f6edebcb453a46432f4aa2177fac5fd8ae7c17c6b5c39b05",
+  "observed_at": "2026-09-28T16:08:11.338Z",
+  "generated_at": "2026-09-28T16:08:11.338Z",
   "by": "state-sync",
-  "pid": 97812,
-  "observation_generation": 394,
+  "pid": 4220,
+  "observation_generation": 395,
   "observation_projection": {
     "tickets": {
       "T-20-01": {
@@ -2367,11 +2367,11 @@
         "head": "105759c579945cff51ba111023132fc24126a592",
         "draft": true,
         "base": "epic/43-target-project-delivery-at-scale",
-        "merge_state": "UNSTABLE",
+        "merge_state": "CLEAN",
         "review_decision": null,
         "checks": {
           "total": 1,
-          "pending": 1,
+          "pending": 0,
           "failing": 0,
           "none_reported": false,
           "unavailable": false
@@ -2400,15 +2400,21 @@
         "checks": null
       },
       "T-43-14": {
-        "status": "pending",
+        "status": "pr-open",
         "repository": null,
-        "pr": null,
-        "head": null,
+        "pr": 355,
+        "head": "eaa3dc588e51d724b4d87e837e059eff4abf8841",
         "draft": false,
         "base": "epic/43-target-project-delivery-at-scale",
-        "merge_state": null,
+        "merge_state": "CLEAN",
         "review_decision": null,
-        "checks": null
+        "checks": {
+          "total": 2,
+          "pending": 0,
+          "failing": 0,
+          "none_reported": false,
+          "unavailable": false
+        }
       },
       "T-43-15": {
         "status": "pending",
@@ -2552,14 +2558,168 @@
         "merge_state": null,
         "review_decision": null,
         "checks": null
+      },
+      "T-45-01": {
+        "status": "pending",
+        "repository": null,
+        "pr": null,
+        "head": null,
+        "draft": false,
+        "base": "epic/45-close-residual-pipeline-efficiency-gaps",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-45-02": {
+        "status": "pending",
+        "repository": null,
+        "pr": null,
+        "head": null,
+        "draft": false,
+        "base": "epic/45-close-residual-pipeline-efficiency-gaps",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-45-03": {
+        "status": "pending",
+        "repository": null,
+        "pr": null,
+        "head": null,
+        "draft": false,
+        "base": "epic/45-close-residual-pipeline-efficiency-gaps",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-45-04": {
+        "status": "pending",
+        "repository": null,
+        "pr": null,
+        "head": null,
+        "draft": false,
+        "base": "epic/45-close-residual-pipeline-efficiency-gaps",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-45-05": {
+        "status": "pending",
+        "repository": null,
+        "pr": null,
+        "head": null,
+        "draft": false,
+        "base": "epic/45-close-residual-pipeline-efficiency-gaps",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-45-06": {
+        "status": "pending",
+        "repository": null,
+        "pr": null,
+        "head": null,
+        "draft": false,
+        "base": "epic/45-close-residual-pipeline-efficiency-gaps",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-45-07": {
+        "status": "pending",
+        "repository": null,
+        "pr": null,
+        "head": null,
+        "draft": false,
+        "base": "epic/45-close-residual-pipeline-efficiency-gaps",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-45-08": {
+        "status": "pending",
+        "repository": null,
+        "pr": null,
+        "head": null,
+        "draft": false,
+        "base": "epic/45-close-residual-pipeline-efficiency-gaps",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-45-09": {
+        "status": "pending",
+        "repository": null,
+        "pr": null,
+        "head": null,
+        "draft": false,
+        "base": "epic/45-close-residual-pipeline-efficiency-gaps",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-45-10": {
+        "status": "pending",
+        "repository": null,
+        "pr": null,
+        "head": null,
+        "draft": false,
+        "base": "epic/45-close-residual-pipeline-efficiency-gaps",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-45-11": {
+        "status": "pending",
+        "repository": null,
+        "pr": null,
+        "head": null,
+        "draft": false,
+        "base": "epic/45-close-residual-pipeline-efficiency-gaps",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-45-12": {
+        "status": "pending",
+        "repository": null,
+        "pr": null,
+        "head": null,
+        "draft": false,
+        "base": "epic/45-close-residual-pipeline-efficiency-gaps",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-45-13": {
+        "status": "pending",
+        "repository": null,
+        "pr": null,
+        "head": null,
+        "draft": false,
+        "base": "epic/45-close-residual-pipeline-efficiency-gaps",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-45-14": {
+        "status": "pending",
+        "repository": null,
+        "pr": null,
+        "head": null,
+        "draft": false,
+        "base": "epic/45-close-residual-pipeline-efficiency-gaps",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
       }
     }
   },
   "binding": {
     "schema_version": 1,
-    "state_digest": "28f71870d9c377f14a5446691bb0c4da5708459fbc3c86d7ebfcff2ab9cff506",
-    "front_digest": "5b33e52cf7596eae6b21582fbc2dffd4359cba7d5b4c38f11a31eaeca3a77c2b",
-    "observation_digest": "14f67cd5c7b26e2ac9f1abd7beab389e27fc8bddec5e7511a55bb313e44c060e",
-    "observation_generation": 394
+    "state_digest": "e60be6b7f5c64744007113b72061a32ce3224b8308e66bea5ea9145bda0001d3",
+    "front_digest": "6d031b7b4e1ce2078b5cdd317dc449ce94fd50509de87c850f44d1d8800e6f85",
+    "observation_digest": "17ba93b6218018f93ffa16f44b516a8002c67988b9d08383f8da136aadb6792e",
+    "observation_generation": 395
   }
 }
