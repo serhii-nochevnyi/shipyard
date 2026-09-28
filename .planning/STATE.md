@@ -1,12 +1,12 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: daba67b318a9f69963f1e15d7939c4f10ba10addc051f346e8ff0a14f9948865
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 4112ddf752e808eed5157bb2dedecd23f08f31dd8583a89769f571f7e77ed061
 gsd_state_version: '1.0'
 status: planning
 progress:
   total_phases: 26
   completed_phases: 10
   total_plans: 229
-  completed_plans: 213
+  completed_plans: 215
   percent: 93
 ---
 
@@ -30,7 +30,7 @@ Progress: [█████████░] 93%
 
 ## Performance Metrics
 
-- Total plans completed: 213
+- Total plans completed: 215
 - Average duration: not measured by the projection
 - Total execution time: not measured by the projection
 
@@ -61,7 +61,7 @@ Progress: [█████████░] 93%
 | 40 | 27 | 27 | pending |
 | 41 | 9 | 9 | gaps_found |
 | 42 | 3 | 3 | gaps_found |
-| 43 | 19 | 3 | pending |
+| 43 | 19 | 5 | pending |
 | 44 | 8 | 8 | pending |
 | 45 | 0 | 0 | pending |
 
@@ -78,14 +78,14 @@ Review and resolve phase integration findings shown in the phase artifacts.
 
 ### Blockers/Concerns
 
-- T-43-03: delivery status is pr-open
 - T-43-04: delivery status is pr-open
-- T-43-05: delivery status is pr-open
 - T-43-06: delivery status is pending
 - T-43-07: delivery status is pr-open
 - T-43-08: delivery status is pending
 - T-43-10: delivery status is pr-open
 - T-43-11: delivery status is pr-open
+- T-43-12: delivery status is pending
+- T-43-13: delivery status is pending
 
 ## Deferred Items
 
@@ -95,6 +95,6 @@ Review and resolve phase integration findings shown in the phase artifacts.
 
 ## Session Continuity
 
-Last session: 2026-09-28 12:15
+Last session: 2026-09-28 14:36
 Stopped at: Shipyard GSD projection synchronized from the delivery graph.
 Resume file: None

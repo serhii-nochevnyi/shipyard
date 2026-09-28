@@ -1478,3 +1478,5 @@
 {"ts":"2026-09-28T12:15:39.036Z","event":"status_change","ticket":"T-43-09","from":"pr-open","to":"merged","pr":326}
 {"ts":"2026-09-28T12:15:39.036Z","event":"status_change","ticket":"T-43-10","from":"pending","to":"pr-open","pr":346}
 {"ts":"2026-09-28T12:15:39.036Z","event":"status_change","ticket":"T-44-08","from":"pending","to":"merged","pr":344}
+{"ts":"2026-09-28T14:36:17.976Z","event":"status_change","ticket":"T-43-03","from":"pr-open","to":"merged","pr":338}
+{"ts":"2026-09-28T14:36:17.976Z","event":"status_change","ticket":"T-43-05","from":"pr-open","to":"merged","pr":328}

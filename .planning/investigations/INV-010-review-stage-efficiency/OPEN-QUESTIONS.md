@@ -1,11 +1,11 @@
 # Open questions
 
 ## Decisions (maintainer)
-- [ ] Q1: Which combination of options is adopted: A only, A+B (merge-candidate gating, B1 strict or B2 disjoint-aware), A+B+C (own-patch input), or D (batched per-ticket verdicts)? — owner: maintainer; see [OPTIONS.md](OPTIONS.md)
-- [ ] Q2: Draft precondition (N46): does the host review a draft, with `isDraft` as a recorded input, or does the conveyor undraft before review? — owner: maintainer / R13
-- [ ] Q3: Under merge-candidate gating, how long may a ranked candidate that waits on a human hold its siblings? Reuse the `wait-parent` exception for a parent waiting on a person, or add a timeout? — owner: maintainer
-- [ ] Q4: Integrator overlap: does the integrator keep judging the full combined diff, or only cross-ticket interfaces once every ticket has a head-bound verdict? — owner: maintainer / R11
-- [ ] Q5: Metric: does an R10 environment-only adjudication count as a review launch, and what is the cohort key for review-timing treatments (tickets per epic, stack depth, repository count, runtime)? — owner: maintainer
+- [x] Q1: Which combination of options is adopted: A only, A+B (merge-candidate gating, B1 strict or B2 disjoint-aware), A+B+C (own-patch input), or D (batched per-ticket verdicts)? — owner: maintainer; see [OPTIONS.md](OPTIONS.md)
+- [x] Q2: Draft precondition (N46): does the host review a draft, with `isDraft` as a recorded input, or does the conveyor undraft before review? — owner: maintainer / R13
+- [x] Q3: Under merge-candidate gating, how long may a ranked candidate that waits on a human hold its siblings? Reuse the `wait-parent` exception for a parent waiting on a person, or add a timeout? — owner: maintainer
+- [x] Q4: Integrator overlap: does the integrator keep judging the full combined diff, or only cross-ticket interfaces once every ticket has a head-bound verdict? — owner: maintainer / R11
+- [x] Q5: Metric: does an R10 environment-only adjudication count as a review launch, and what is the cohort key for review-timing treatments (tickets per epic, stack depth, repository count, runtime)? — owner: maintainer
 
 ## Research-answerable (closed by the research lines and operator data)
 - [x] What is launched when, and what is judged, today? — [RESEARCH.md](RESEARCH.md) "Current system state"
@@ -19,4 +19,4 @@
 - [x] T-43-13's tree-based patch-id reproduction (A3) is settled by its RED step. — owner: T-43-13 executor; recorded in RISKS.md R-12
 - [x] Drift-check (D4) shares the stale-on-base-move problem, so its timing follows the rule decided here. — owner: D4; recorded as a consequence in DECISIONS.md
 
-Gate 1 stays open until Q1–Q5 are decided.
+All decisions are recorded in [DECISIONS.md](DECISIONS.md) (2026-09-28).
