@@ -14,6 +14,7 @@ const { createRunScope } = require('./run-scope.cjs');
 const { createRunController, DEFAULT_LEASE_TTL_MS } = require('./run-controller.cjs');
 const { formatHint } = require('./refusal-hints.cjs');
 const { sealDecomposition, assertContained } = require('./planning-result-sealer.cjs');
+const { createPlanningWriterLease } = require('./planning-writer-lease.cjs');
 
 const SCHEMA = 'shipyard.codex-decompose-host.v1';
 const MAX_ARGS_BYTES = 4 * 1024 * 1024;
@@ -134,13 +135,26 @@ function sealScope(scope, output, summary) {
   };
 }
 
-function sealResearchArtifact(scope, root, output) {
+function assertNoForeignEdit(leaseCtx, scope, directory, declaredAbsolutePaths) {
+  if (!leaseCtx) return;
+  leaseCtx.writerLease.assertFence({ token: leaseCtx.token, epoch: leaseCtx.epoch, base_revision: sourceRevision(scope.worktree) });
+  const declared = new Set(declaredAbsolutePaths.map((full) => path.relative(directory, full).split(path.sep).join('/')));
+  const { changed, lease } = leaseCtx.writerLease.changedSince(leaseCtx.snapshot);
+  const foreign = changed.filter((relPath) => !declared.has(relPath));
+  if (foreign.length) {
+    fail('FOREIGN_EDIT', "phase directory path(s) changed outside this run's own paths: " + foreign.join(', ')
+      + ' (lease owner ' + lease.owner + ', epoch ' + lease.epoch + ')');
+  }
+}
+
+function sealResearchArtifact(scope, root, output, leaseCtx) {
   const artifact = researchArtifact(scope.worktree, scope.phase);
   assertContained({ worktree: scope.worktree, allowed: [path.relative(scope.worktree, artifact)] });
   let stat;
   try { stat = fs.lstatSync(artifact); }
   catch (_) { fail('MISSING_ARTIFACT', 'phase research artifact is missing: ' + artifact); }
   if (stat.isSymbolicLink() || !stat.isFile()) fail('MISSING_ARTIFACT', 'phase research artifact is not a regular file: ' + artifact);
+  assertNoForeignEdit(leaseCtx, scope, phaseDirectory(scope.worktree, scope.phase), [artifact]);
   const sealed = sealDecomposition({
     root: path.join(root, 'research-index'),
     scope: sealScope(scope, output, 'researched phase ' + scope.phase),
@@ -155,13 +169,14 @@ function sealResearchArtifact(scope, root, output) {
   });
 }
 
-function sealPlans(scope, root, output) {
+function sealPlans(scope, root, output, leaseCtx) {
   const directory = phaseDirectory(scope.worktree, scope.phase);
   assertContained({ worktree: scope.worktree, allowed: [path.relative(scope.worktree, directory)] });
   const names = fs.readdirSync(directory).filter((name) => /^\d+-\d+-PLAN\.md$/.test(name)).sort();
   if (!names.length) fail('MISSING_ARTIFACT', 'no materialized PLAN.md files were found in ' + directory);
   const plans = [...(fs.existsSync(path.join(directory, 'CONTEXT.md')) ? ['CONTEXT.md'] : []), ...names]
     .map((name) => path.join(directory, name));
+  assertNoForeignEdit(leaseCtx, scope, directory, plans);
   return sealDecomposition({
     root: path.join(root, 'decomposition-index'),
     scope: sealScope(scope, output, 'materialized plans for phase ' + scope.phase),
@@ -276,8 +291,8 @@ function createCodexDecomposeHost(options = {}) {
           sandbox_mode: chosen.sandbox,
         },
       });
-      if (request.gsd_role === 'gsd-phase-researcher') return sealResearchArtifact(scope, sealRoot, output);
-      if (request.gsd_role === 'gsd-planner') return sealPlans(scope, sealRoot, output);
+      if (request.gsd_role === 'gsd-phase-researcher') return sealResearchArtifact(scope, sealRoot, output, options.lease || null);
+      if (request.gsd_role === 'gsd-planner') return sealPlans(scope, sealRoot, output, options.lease || null);
       return output;
     },
   });
@@ -327,18 +342,28 @@ async function runCli(argv = process.argv.slice(2), stdout = process.stdout, opt
   try { worktree = fs.statSync(scope.worktree); }
   catch (error) { fail('INVALID_INPUT', 'worktree path cannot be inspected: ' + error.message); }
   if (!worktree.isDirectory()) fail('INVALID_INPUT', 'worktree path must be a directory');
-  const request = parsed.launch;
-  const dispatchId = request.dispatch_id || newDispatchId();
-  const resolution = policy.resolveDispatch({
-    runtime: 'codex', role: ROLES[request.gsd_role].role,
-    signals: request.signals, dispatch_id: dispatchId,
-  });
   const runStoreDir = options.testRunStoreDir || defaultRunStoreDir(scope, options.testStateRoot);
   const hostStateDir = path.dirname(runStoreDir);
   const controller = createRunController({
     storeDir: runStoreDir,
     ...(options.leaseTtlMs === undefined ? {} : { leaseTtlMs: options.leaseTtlMs }),
     ...(options.now === undefined ? {} : { now: options.now }),
+  });
+  const phaseDir = phaseDirectory(scope.worktree, scope.phase);
+  const writerLease = options.writerLease || createPlanningWriterLease({
+    worktree: scope.worktree, phaseDir, stateRoot: path.join(hostStateDir, 'writer'),
+    ...(options.now === undefined ? {} : { now: options.now }),
+  });
+  const leaseHandle = writerLease.acquire({
+    owner: JSON.stringify({ run_id: scope.run_id, owner_id: controller.owner_id }),
+    base_revision: sourceRevision(scope.worktree),
+  });
+  const leaseSnapshot = writerLease.snapshotTree();
+  const request = parsed.launch;
+  const dispatchId = request.dispatch_id || newDispatchId();
+  const resolution = policy.resolveDispatch({
+    runtime: 'codex', role: ROLES[request.gsd_role].role,
+    signals: request.signals, dispatch_id: dispatchId,
   });
   const repository = scope.repository;
   const repositoryId = typeof repository === 'string' ? repository
@@ -370,6 +395,8 @@ async function runCli(argv = process.argv.slice(2), stdout = process.stdout, opt
   stopHeartbeat = heartbeatScheduler.start(() => {
     try { controller.heartbeat(scope.run_id); }
     catch (error) { heartbeatError = error; stopHeartbeat(); }
+    try { writerLease.heartbeat({ token: leaseHandle.token, epoch: leaseHandle.epoch }); }
+    catch (error) { heartbeatError = heartbeatError || error; }
   }, heartbeatMs);
   let result;
   try {
@@ -387,6 +414,7 @@ async function runCli(argv = process.argv.slice(2), stdout = process.stdout, opt
       agentDir: options.agentDir,
       agentManifest: options.agentManifest,
       sealRoot: path.join(hostStateDir, 'sealed'),
+      lease: { writerLease, token: leaseHandle.token, epoch: leaseHandle.epoch, snapshot: leaseSnapshot },
     });
     result = await host.run({ ...request, dispatch_id: dispatchId });
     stopHeartbeat();
@@ -405,6 +433,9 @@ async function runCli(argv = process.argv.slice(2), stdout = process.stdout, opt
       }
     }
     throw error;
+  } finally {
+    try { writerLease.release({ token: leaseHandle.token, epoch: leaseHandle.epoch }); }
+    catch { /* @invariant: a fenced or expired lease has nothing left to release */ }
   }
   stdout.write(JSON.stringify(result) + '\n');
   return result;

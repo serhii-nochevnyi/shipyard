@@ -68,7 +68,7 @@ test('refreshes the Codex Git snapshot before reinstalling from the same source'
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { setupCodexHost } = require('../../scripts/install-shipyard-marketplace.cjs');
+const { setupCodexHost, installKindEnv, dogfoodHome } = require('../../scripts/install-shipyard-marketplace.cjs');
 
 function localSource() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'marketplace-source-'));
@@ -110,15 +110,35 @@ function codexHome(version) {
   return home;
 }
 
-function codexSetup(source, inspect) {
+// @contract: Isolates env vars the dedicated-home formula reads, so tests never touch the real ~/.codex.
+function withEnv(overrides, fn) {
+  const saved = {};
+  for (const key of Object.keys(overrides)) saved[key] = process.env[key];
+  for (const [key, value] of Object.entries(overrides)) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+  try { return fn(); }
+  finally {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+}
+
+function codexSetup(source, inspect, { sandbox = fs.mkdtempSync(path.join(os.tmpdir(), 'marketplace-sandbox-')),
+  codexHomeEnv } = {}) {
   const version = '0.66.0+codex.0123456789abcdef';
   const home = codexHome(version);
   const runs = [];
   const read = () => ({ installed: [{ pluginId: 'shipyard@shipyard', enabled: true, version }] });
-  setupCodexHost(source, (command, args, env) => runs.push({ command, args, env }), read, inspect, home);
-  assert.equal(runs.length, 1);
-  assert.match(runs[0].args[0], /host\/scripts\/bootstrap-shipyard-plugin\.cjs$/);
-  return runs[0].env;
+  return withEnv({ HOME: sandbox, XDG_STATE_HOME: path.join(sandbox, 'xdg-state'), CODEX_HOME: codexHomeEnv }, () => {
+    setupCodexHost(source, (command, args, env) => runs.push({ command, args, env }), read, inspect, home);
+    assert.equal(runs.length, 1);
+    assert.match(runs[0].args[0], /host\/scripts\/bootstrap-shipyard-plugin\.cjs$/);
+    return runs[0].env;
+  });
 }
 
 test('a local Codex source passes dogfood with its sha to the host setup', () => {
@@ -131,4 +151,71 @@ test('a local Codex source passes dogfood with its sha to the host setup', () =>
 test('a git Codex source passes release to the host setup', () => {
   const env = codexSetup('serhii-nochevnyi/shipyard', () => { throw new Error('must not inspect'); });
   assert.equal(env.SHIPYARD_INSTALL_KIND, 'release');
+});
+
+test('installKindEnv returns SHIPYARD_SOURCE_ROOT for a dogfood checkout', () => {
+  const source = localSource();
+  const env = installKindEnv(source, () => ({ version: '0.66.0', sha: 'aaa', tagSha: 'bbb', dirty: false }));
+  assert.equal(env.SHIPYARD_INSTALL_KIND, 'dogfood');
+  assert.equal(env.SHIPYARD_SOURCE_ROOT, fs.realpathSync(source));
+});
+
+test('installKindEnv omits SHIPYARD_SOURCE_ROOT for a tagged release checkout', () => {
+  const source = localSource();
+  const env = installKindEnv(source, () => ({ version: '0.66.0', sha: 'aaa', tagSha: 'aaa', dirty: false }));
+  assert.equal(env.SHIPYARD_INSTALL_KIND, 'release');
+  assert.equal('SHIPYARD_SOURCE_ROOT' in env, false);
+});
+
+// @contract: Mirrors codexSetup's own env shape, so the expected path is computed under the same sandbox.
+function expectedDedicatedHome(sandbox, source) {
+  return withEnv({ HOME: sandbox, XDG_STATE_HOME: path.join(sandbox, 'xdg-state') },
+    () => dogfoodHome('codex', fs.realpathSync(source)));
+}
+
+test('a dogfood Codex install with CODEX_HOME unset targets the dedicated per-checkout home', () => {
+  const source = localSource();
+  const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), 'marketplace-sandbox-'));
+  const inspect = () => ({ version: '0.66.0', sha: 'ddd', tagSha: 'aaa', dirty: true });
+  const env = codexSetup(source, inspect, { sandbox });
+  const expected = expectedDedicatedHome(sandbox, source);
+  assert.equal(env.CODEX_HOME, expected);
+  assert.ok(fs.existsSync(env.CODEX_HOME));
+  assert.equal(fs.statSync(env.CODEX_HOME).mode & 0o777, 0o700);
+});
+
+test('two different dogfood checkouts get two different dedicated Codex homes', () => {
+  const inspect = () => ({ version: '0.66.0', sha: 'eee', tagSha: 'aaa', dirty: true });
+  const envA = codexSetup(localSource(), inspect);
+  const envB = codexSetup(localSource(), inspect);
+  assert.notEqual(envA.CODEX_HOME, envB.CODEX_HOME);
+});
+
+test('refuses a dogfood Codex install aimed at the shared default Codex home', () => {
+  const source = localSource();
+  const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), 'marketplace-sandbox-'));
+  const defaultHome = path.join(sandbox, '.codex');
+  const expected = expectedDedicatedHome(sandbox, source);
+  const inspect = () => ({ version: '0.66.0', sha: 'fff', tagSha: 'aaa', dirty: true });
+  let thrown = null;
+  try { codexSetup(source, inspect, { sandbox, codexHomeEnv: defaultHome }); }
+  catch (error) { thrown = error; }
+  assert.ok(thrown, 'expected setupCodexHost to refuse a dogfood source aimed at the shared default home');
+  assert.ok(thrown.message.includes(defaultHome), 'refusal must name the shared default home');
+  assert.ok(thrown.message.includes(expected), 'refusal must name the dedicated path');
+});
+
+test('an explicit non-default CODEX_HOME still wins for a dogfood Codex install', () => {
+  const source = localSource();
+  const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), 'marketplace-sandbox-'));
+  const custom = path.join(sandbox, 'custom-codex-home');
+  const inspect = () => ({ version: '0.66.0', sha: 'ggg', tagSha: 'aaa', dirty: true });
+  const env = codexSetup(source, inspect, { sandbox, codexHomeEnv: custom });
+  assert.equal(env.CODEX_HOME, custom);
+});
+
+test('a release Codex install is not redirected, even with CODEX_HOME unset', () => {
+  const env = codexSetup('serhii-nochevnyi/shipyard', () => { throw new Error('must not inspect'); });
+  assert.equal(env.SHIPYARD_INSTALL_KIND, 'release');
+  assert.equal('CODEX_HOME' in env, false);
 });
