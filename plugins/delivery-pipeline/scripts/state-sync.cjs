@@ -474,9 +474,22 @@ const repoArg = (repo) => (repo ? ['--repo', repo] : []);
 const apiBase = (repo) => (repo ? `repos/${repo}` : 'repos/{owner}/{repo}');
 const listingStats = { listedOpen: 0, lookedUp: 0, skippedLanded: 0 };
 
+function parsePRList(raw) {
+  if (raw === null || raw === undefined) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed) || parsed.some((pr) => !pr || typeof pr !== 'object' || Array.isArray(pr)
+        || !Number.isSafeInteger(pr.number) || !['OPEN', 'CLOSED', 'MERGED'].includes(pr.state)
+        || typeof pr.headRefName !== 'string' || typeof pr.baseRefName !== 'string'
+        || typeof pr.title !== 'string')) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
 function loadRepo(repo) {
   const label = repo || 'this repo';
-  // A foreign repo can be unreachable (no access, a typo in delivery.repo). That
   // must NOT abort the sync: the rest of the graph is still deliverable, so the
   // repo is marked unavailable and its tickets are parked with that reason.
   const listed = gh(
@@ -487,9 +500,11 @@ function loadRepo(repo) {
     notices.push(`repo ${label} is not reachable through gh — its tickets are parked as external; check access or the delivery.repo slug`);
     return { repo, available: false, openListAvailable: false, prs: [], branches: new Set(), truncated: false, defaultBranch: null };
   }
+  const parsedPrs = parsePRList(listed);
+  const openListAvailable = parsedPrs !== null;
   if (listed == null) notices.push('the open PR listing for this repo was unavailable — falling back to per-ticket lookups');
-  let prs = [];
-  try { prs = JSON.parse(listed || '[]'); } catch { prs = []; }
+  else if (!openListAvailable) notices.push(`the open PR listing for ${label} was malformed — falling back to per-ticket lookups`);
+  const prs = parsedPrs || [];
   listingStats.listedOpen += prs.filter((p) => p.state === 'OPEN').length;
   const truncated = prs.length >= cfg.pr_fetch_limit;
   if (truncated) {
@@ -518,7 +533,7 @@ function loadRepo(repo) {
   const defaultBranch = repo
     ? ((gh(['repo', 'view', repo, '--json', 'defaultBranchRef', '--jq', '.defaultBranchRef.name'], { tolerate: true }) || '').trim() || 'main')
     : DEFAULT_BRANCH;
-  return { repo, available: true, openListAvailable: listed !== null, prs, branches, truncated, defaultBranch };
+  return { repo, available: true, openListAvailable, prs, branches, truncated, defaultBranch };
 }
 
 const repoData = new Map();
@@ -556,15 +571,18 @@ for (const repo of REPO_IDS) {
   }
 }
 
-function prsForBranch(repo, branch) {
-  // branch-scoped, so a handful of rows: asking for the open-only fields here is
-  // cheap and keeps a fallback-matched open PR from looking like it has no review,
-  // no trailer and no merge state — left out, a PR reached only through this
-  // fallback would arrive with `merge_state: null`, which every reader treats as
-  // "GitHub did not report BEHIND".
+function prsForBranchResult(repo, branch) {
   const out = gh(['pr', 'list', ...repoArg(repo), '--state', 'all', '--head', branch, '--limit', '50', '--json', PR_LOOKUP_FIELDS], { tolerate: true });
-  if (!out) return [];
-  try { return JSON.parse(out); } catch { return []; }
+  const parsed = parsePRList(out);
+  return {
+    available: parsed !== null,
+    prs: parsed || [],
+    truncated: parsed !== null && parsed.length >= 50,
+  };
+}
+
+function prsForBranch(repo, branch) {
+  return prsForBranchResult(repo, branch).prs;
 }
 
 function prForNumber(repo, number) {
@@ -611,7 +629,6 @@ function previousEpicProof(phase, repo, branch) {
     : null;
 }
 
-// ── per-ticket status ───────────────────────────────────────────────────────
 const prLedger = readLedger(GRAPH_DIR);
 const state = {};
 const skippedLanded = new Set();
@@ -624,7 +641,18 @@ for (const [id, t] of Object.entries(tickets)) {
   const integrationBranch = rd.defaultBranch || DEFAULT_BRANCH;
   let match = rd.available ? matchTicketPr(id, t, prs, recorded) : null;
   const openEpicPr = prs.some((candidate) => candidate.state === 'OPEN' && candidate.headRefName === t.epic);
-  if (!match && rd.available && rd.openListAvailable && !openEpicPr
+  let branchLookupAttempted = false;
+  let branchLookupComplete = false;
+  if (!match && rd.available && !FULL_SYNC && rd.truncated) {
+    branchLookupAttempted = true;
+    listingStats.lookedUp += 1;
+    const branchLookup = prsForBranchResult(repo, t.branch);
+    const extra = branchLookup.prs;
+    branchLookupComplete = branchLookup.available && !branchLookup.truncated;
+    const branchMatch = matchTicketPr(id, t, prs.concat(extra), null);
+    if (branchMatch) match = branchMatch;
+  }
+  if (!match && rd.available && rd.openListAvailable && !rd.truncated && !openEpicPr
       && isImmutableLandedTicket(t, prev[id], recorded, repo, integrationBranch)) {
     state[id] = prev[id];
     skippedLanded.add(id);
@@ -638,10 +666,22 @@ for (const [id, t] of Object.entries(tickets)) {
     if (extra.length) match = matchTicketPr(id, t, prs.concat(extra), recorded);
     ledgerLookupMiss = !match;
   }
-  if (!match && rd.available && (FULL_SYNC ? rd.truncated : (!recorded || !Number.isSafeInteger(recorded.number) || rd.truncated || ledgerLookupMiss))) {
+  const staleLedgerMatchWithUnknownList = !rd.openListAvailable && match && match.pr.state !== 'OPEN';
+  if (rd.available && !branchLookupAttempted && (FULL_SYNC
+    ? (!match && rd.truncated)
+    : ((!match && (!recorded || !Number.isSafeInteger(recorded.number) || rd.truncated || ledgerLookupMiss))
+      || staleLedgerMatchWithUnknownList))) {
+    branchLookupAttempted = true;
     listingStats.lookedUp += 1;
-    const extra = prsForBranch(repo, t.branch);
-    if (extra.length) match = matchTicketPr(id, t, prs.concat(extra), recorded);
+    const branchLookup = prsForBranchResult(repo, t.branch);
+    const extra = branchLookup.prs;
+    branchLookupComplete = branchLookup.available && !branchLookup.truncated;
+    const branchMatch = matchTicketPr(id, t, prs.concat(extra), null);
+    if (branchMatch) match = branchMatch;
+    else if (!match && extra.length) match = matchTicketPr(id, t, extra, recorded);
+  }
+  if (match && match.pr.state !== 'OPEN' && (rd.truncated || !rd.openListAvailable) && !branchLookupComplete) {
+    match = null;
   }
   const pr = match ? match.pr : null;
   /** @type {Record<string, any>} */
@@ -754,9 +794,6 @@ for (const [id, t] of Object.entries(tickets)) {
 //    satisfied once its own phase's epic has landed on the default branch) ────
 // Keyed per phase AND repo: one epic NAME per phase, but a separate branch (and
 // integration PR) in every repository the phase touches. `epicKey` comes from
-// front.cjs and is not spelled again here: `computeFront` LOOKS UP these very
-// records to decide whether a ticket was left behind by its own phase, and a
-// key written twice is a lookup that can miss while both spellings look right.
 const epicInfo = {};
 if (mode === 'epic-stacked') {
   for (const [phase, e] of Object.entries(epics)) {
@@ -767,25 +804,12 @@ if (mode === 'epic-stacked') {
       const rd = repoData.get(repo) || { available: false, prs: [], branches: new Set(), defaultBranch: null };
       const base = rd.defaultBranch || DEFAULT_BRANCH;
       const exists = rd.branches.has(e.branch);
-      // Integration state is `landed | not-landed | unknown` (ADR-004 D3), and
-      // the third value is the whole point. This was `let ahead = 0; … ahead =
-      // cmp ? parseInt(cmp) || 0 : 0` with `landed: !exists || ahead === 0`, so
-      // a failed compare (`null`), an empty answer and a REAL zero were the same
-      // number and `landed` came out TRUE off a call that never answered. The
-      // audit reproduced it with a rate-limited compare (F07): a parent merged
-      // into its still-unlanded epic, and every phase-N+1 child of it became
-      // `ready` on a base that does not contain it. `null` means "not observed":
-      // it parks the dependents with the reason and is retried on the next sync,
-      // never mapped onto zero.
       let ahead = 0;
       let landed = true;
       let landedReason = `epic ${e.branch} does not exist — nothing from this phase is outside ${base}`;
       if (exists) {
         const cmpPath = `${apiBase(repo)}/compare/${base}...${e.branch}`;
         const cmp = ghTry(['api', cmpPath, '--jq', '.ahead_by']);
-        // Strict on purpose: `parseInt` is what collapsed the states. A rate-limit
-        // message, an HTML error page, jq's `null` and an empty answer all yield
-        // NaN, and `NaN || 0` is a zero nobody measured.
         const n = cmp.status === 0 && /^\d+$/.test(cmp.stdout) ? parseInt(cmp.stdout, 10) : null;
         if (n === null) {
           ahead = null;
@@ -837,7 +861,6 @@ if (mode === 'epic-stacked') {
       const pr = observedPr || previousPr;
       // "landed" = nothing from this phase is still waiting outside the default
       // branch (either the epic never started, or its whole diff is already in);
-      // `null` = the comparison did not answer, so nothing is proven either way.
       epicInfo[epicKey(phase, repo)] = { phase: String(phase), repo, branch: e.branch, base, exists, ahead, pr, landed, landed_reason: landedReason };
     }
   }
@@ -1053,7 +1076,6 @@ for (const [id, t] of Object.entries(tickets)) {
         reasons[d] = 'parent not merged (direct-to-main waits for the merge)';
       }
     }
-    // stacking only works inside one repo (see the epic-stacked branch above)
     const unmergedDep = deps
       .filter((d) => state[d] && state[d].status !== 'merged' && tickets[d] && repoOf(tickets[d]) === repoOf(t))
       .sort((a, b) => (tickets[b].wave || 0) - (tickets[a].wave || 0))[0];
@@ -1084,17 +1106,19 @@ for (const [id, t] of Object.entries(tickets)) {
 // off its branch: no OPEN PR from it, and no OPEN PR targeting it as a base
 // (deleting the branch would orphan a cascade child).
 for (const [id, t] of Object.entries(tickets)) {
-  if (skippedLanded.has(id)) continue;
   const s = state[id];
   // scoped to the ticket's OWN repo: an identical branch name elsewhere says
   // nothing about whether this branch is safe to force-delete
-  const pool = repoData.get(repoOf(t)).prs;
+  const rd = repoData.get(repoOf(t));
+  const pool = rd.prs;
   const openFromBranch = pool.filter((p) => p.state === 'OPEN' && p.headRefName === t.branch).map((p) => p.number);
   const openOntoBranch = pool.filter((p) => p.state === 'OPEN' && p.baseRefName === t.branch).map((p) => p.number);
-  s.reapable = s.status === 'merged' && openFromBranch.length === 0 && openOntoBranch.length === 0;
+  const completeOpenListing = rd.openListAvailable && !rd.truncated;
+  s.reapable = completeOpenListing && s.status === 'merged' && openFromBranch.length === 0 && openOntoBranch.length === 0;
   if (s.status === 'merged' && !s.reapable) {
     s.reap_blocked_by = { open_from_branch: openFromBranch, open_onto_branch: openOntoBranch };
-  }
+    if (!completeOpenListing) s.reap_blocked_by.listing_complete = false;
+  } else delete s.reap_blocked_by;
 }
 
 // ── timestamps + journal every REAL status transition ───────────────────────
@@ -1413,7 +1437,6 @@ if (mode === 'epic-stacked') {
     // Never print a count that was not measured: `${info.ahead} ahead of main`
     // rendered an unobserved state as "null ahead of", which reads to a person
     // exactly like "nothing left to land" — the same collapse the tri-state above
-    // exists to undo, one layer up.
     const aheadPart = !info.exists
       ? 'not created'
       : (info.ahead === null
@@ -1469,7 +1492,11 @@ for (const [id, s] of Object.entries(state)) {
   }
   if (s.status === 'merged' && !s.reapable) {
     const b = s.reap_blocked_by;
-    console.log(`⚠ ${id} is merged but NOT reapable — open PRs still depend on its branch (from: ${b.open_from_branch.join(', ') || 'none'}; onto: ${b.open_onto_branch.join(', ') || 'none'}). Retarget them before deleting ${s.branch}.`);
+    if (b.listing_complete === false) {
+      console.log(`⚠ ${id} is merged but NOT reapable — the current open PR listing was unavailable or truncated. Refresh state before deleting ${s.branch}.`);
+    } else {
+      console.log(`⚠ ${id} is merged but NOT reapable — open PRs still depend on its branch (from: ${b.open_from_branch.join(', ') || 'none'}; onto: ${b.open_onto_branch.join(', ') || 'none'}). Retarget them before deleting ${s.branch}.`);
+    }
   }
 }
 

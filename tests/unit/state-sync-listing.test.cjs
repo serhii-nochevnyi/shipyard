@@ -43,9 +43,11 @@ const value = (flag) => { const i = args.indexOf(flag); return i < 0 ? null : ar
 const emit = (value) => process.stdout.write(typeof value === 'string' ? value : JSON.stringify(value));
 if (args[0] === 'pr' && args[1] === 'list') {
   const head = value('--head');
-  if (head) emit((fixture.head || {})[head] || []);
+  if (head && Object.prototype.hasOwnProperty.call(fixture.headRaw || {}, head)) emit(fixture.headRaw[head]);
+  else if (head) emit((fixture.head || {})[head] || []);
   else if (value('--state') === 'all') emit(fixture.all || []);
   else if (value('--state') === 'open' && (value('--json') || '').includes('reviewDecision')) emit(fixture.review || fixture.open || []);
+  else if (value('--state') === 'open' && Object.prototype.hasOwnProperty.call(fixture, 'openRaw')) emit(fixture.openRaw);
   else if (value('--state') === 'open') emit(fixture.open || []);
   else { process.stderr.write('unexpected PR list state\\n'); process.exit(2); }
 } else if (args[0] === 'pr' && args[1] === 'view') {
@@ -94,7 +96,7 @@ function fixture(options = {}) {
   fs.mkdirSync(bin, { recursive: true });
   fs.writeFileSync(path.join(root, '.planning', 'config.json'), JSON.stringify({
     git: { base_branch: 'main' },
-    delivery_pipeline: { integration_mode: 'epic-stacked', gsd_sync: false, pr_fetch_limit: 10 },
+    delivery_pipeline: { integration_mode: 'epic-stacked', gsd_sync: false, pr_fetch_limit: options.limit || 10 },
   }));
   fs.writeFileSync(path.join(graphDir, 'tickets.json'), JSON.stringify({
     epics: { '43': { branch: EPIC, base: 'main', repos: [null] } },
@@ -276,6 +278,86 @@ test('an open follow-up PR takes precedence over an older landed ticket row', ()
   assert.equal(state(f)[TICKET].pr, 307);
   assert.equal(state(f)[TICKET].status, 'pr-open');
   assert.match(result.stdout, /looked_up=0.*skipped_landed=0/);
+});
+
+test('malformed successful open-list JSON cannot authorize a landed skip', () => {
+  const previous = priorMergedRow(301);
+  const followUp = pr(310, 'OPEN');
+  const f = fixture({
+    ledger: 301,
+    previousState: { [TICKET]: previous },
+    responses: {
+      openRaw: '{not-json',
+      view: { 301: pr(301, 'MERGED') },
+      head: { [BRANCH]: [followUp] },
+    },
+  });
+  const result = run(f);
+  assert.equal(result.status, 0, result.stderr);
+  assert.ok(calls(f).some((args) => args[0] === 'pr' && args[1] === 'view' && args[2] === '301'));
+  assert.ok(calls(f).some((args) => args[0] === 'pr' && args[1] === 'list' && args.includes('--head')
+    && args[args.indexOf('--head') + 1] === BRANCH));
+  assert.equal(state(f)[TICKET].pr, 310);
+  assert.equal(state(f)[TICKET].status, 'pr-open');
+  assert.match(result.stdout, /looked_up=2.*skipped_landed=0/);
+
+  const unreadableHead = fixture({
+    ledger: 301,
+    previousState: { [TICKET]: previous },
+    responses: {
+      openRaw: '{not-json',
+      view: { 301: pr(301, 'MERGED') },
+      headRaw: { [BRANCH]: '{not-json' },
+    },
+  });
+  const unknown = run(unreadableHead);
+  assert.equal(unknown.status, 0, unknown.stderr);
+  assert.equal(state(unreadableHead)[TICKET].status, 'branched');
+  assert.equal(state(unreadableHead)[TICKET].pr, null);
+  assert.equal(state(unreadableHead)[TICKET].merge_sha, undefined);
+  assert.equal(state(unreadableHead)[TICKET].reapable, false);
+  assert.match(unknown.stdout, /skipped_landed=0/);
+});
+
+test('a truncated open listing resolves the ticket head before skipping a landed row', () => {
+  const crowdedListing = Array.from({ length: 10 }, (_, index) => ({
+    ...pr(500 + index, 'OPEN', `feature/other-${index}`, 'main'),
+    title: `unrelated change ${index}`,
+  }));
+  const followUp = pr(311, 'OPEN');
+  const f = fixture({
+    limit: 10,
+    ledger: 301,
+    previousState: { [TICKET]: priorMergedRow(301) },
+    responses: {
+      open: crowdedListing,
+      review: crowdedListing,
+      head: { [BRANCH]: [followUp] },
+      view: { 301: pr(301, 'MERGED') },
+    },
+  });
+  const result = run(f);
+  assert.equal(result.status, 0, result.stderr);
+  assert.ok(calls(f).some((args) => args[0] === 'pr' && args[1] === 'list' && args.includes('--head')
+    && args[args.indexOf('--head') + 1] === BRANCH));
+  assert.equal(state(f)[TICKET].pr, 311);
+  assert.equal(state(f)[TICKET].status, 'pr-open');
+  assert.match(result.stdout, /skipped_landed=0/);
+});
+
+test('refreshes reap safety on a skipped landed ticket when an open PR targets its branch', () => {
+  const dependent = { ...pr(312, 'OPEN', 'ticket/T-43-02-child', BRANCH), title: 'child change' };
+  const f = fixture({
+    ledger: 301,
+    previousState: { [TICKET]: priorMergedRow(301) },
+    responses: { open: [dependent], review: [dependent] },
+  });
+  const result = run(f);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(calls(f).filter(isTicketLookup).length, 0);
+  assert.equal(state(f)[TICKET].reapable, false);
+  assert.deepEqual(state(f)[TICKET].reap_blocked_by, { open_from_branch: [], open_onto_branch: [312] });
+  assert.match(result.stdout, /skipped_landed=1/);
 });
 
 done();
