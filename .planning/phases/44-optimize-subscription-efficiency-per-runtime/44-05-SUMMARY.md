@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: d47f3aa4320e895004b8d2937b54b479f97749f50494bc2cb6e14998953f06c8
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: fe52e51d9f54390571312d812415795a441a985abb4aebb9292f43d234451423
 phase: 44-optimize-subscription-efficiency-per-runtime
 plan: 05
 subsystem: shipyard delivery
@@ -22,7 +22,7 @@ key-decisions:
 duration: 0min
 status: halted
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: d47f3aa4320e895004b8d2937b54b479f97749f50494bc2cb6e14998953f06c8
+shipyard_source_fingerprint: fe52e51d9f54390571312d812415795a441a985abb4aebb9292f43d234451423
 ---
 
 # Phase 44: Reversible installer for the Claude statusline collector with its own make targets — Delivery Projection

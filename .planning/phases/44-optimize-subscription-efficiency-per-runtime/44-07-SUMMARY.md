@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: f0ba5c3463d9b054c0e2fa0156bb335c2ef9327a9854589ca38956fbcf2b071e
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: b45d864dba0c7e5cd47979034b884c5ccb2c522eb088430e7939695449ef0d08
 phase: 44-optimize-subscription-efficiency-per-runtime
 plan: 07
 subsystem: shipyard delivery
@@ -22,7 +22,7 @@ key-decisions:
 duration: 0min
 status: halted
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: f0ba5c3463d9b054c0e2fa0156bb335c2ef9327a9854589ca38956fbcf2b071e
+shipyard_source_fingerprint: b45d864dba0c7e5cd47979034b884c5ccb2c522eb088430e7939695449ef0d08
 ---
 
 # Phase 44: Versioned effort-experiment schema and report with a human-only promotion decision — Delivery Projection
