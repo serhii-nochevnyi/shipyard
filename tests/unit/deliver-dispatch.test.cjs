@@ -4,12 +4,23 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
-const { execFileSync } = require('node:child_process');
+const { execFileSync, spawnSync } = require('node:child_process');
 const { suite, test, done, assert } = require('./assert-harness.cjs');
 
+const codexSessionEnv = Object.fromEntries(['CODEX_SANDBOX', 'CODEX_SANDBOX_NETWORK_DISABLED']
+  .map((name) => [name, process.env[name]]));
+for (const name of Object.keys(codexSessionEnv)) delete process.env[name];
+process.on('exit', () => {
+  for (const [name, value] of Object.entries(codexSessionEnv)) {
+    if (value === undefined) delete process.env[name];
+    else process.env[name] = value;
+  }
+});
+
 const deliverDispatch = require('../../plugins/delivery-pipeline/scripts/deliver-dispatch.cjs');
-const { validateRequest, REQUEST_SCHEMA } = require('../../plugins/delivery-pipeline/scripts/claude-delivery-host.cjs');
+const { validateRequest } = require('../../plugins/delivery-pipeline/scripts/claude-delivery-host.cjs');
 const { validateArgs } = require('../../plugins/delivery-pipeline/scripts/codex-delivery-host.cjs');
+const { parseRequest, REQUEST_SCHEMA: ROLE_REQUEST_SCHEMA } = require('../../plugins/delivery-pipeline/scripts/claude-role-host.cjs');
 const { validateContextPacket } = require('../../plugins/delivery-pipeline/scripts/context-packet.cjs');
 const modelPolicy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
 const prHygiene = require('../../plugins/delivery-pipeline/scripts/pr-hygiene.cjs');
@@ -96,6 +107,15 @@ function shipyardFixture(id = 'T-01-01') {
   return { root, id, graphDir: path.join(root, '.planning', 'graph') };
 }
 
+function builderFixture(id = 'T-11-11') {
+  const fixture = shipyardFixture(id);
+  git(fixture.root, 'checkout', '-q', '-b', ticketRow().branch);
+  writeJson(path.join(fixture.graphDir, 'delivery-state.json'), {
+    [id]: { ready: true, status: 'pr-open', pr: 501, branch: ticketRow().branch, base: 'main' },
+  });
+  return fixture;
+}
+
 function targetProjectFixture(id = 'T-02-02') {
   const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-deliver-dispatch-tp-'));
   initRepo(projectRoot);
@@ -131,6 +151,100 @@ test('Pitfall 1: ticket type never enters signals, and the row shape is accepted
   assert.equal(Object.prototype.hasOwnProperty.call(signals, 'type'), false);
   assert.deepEqual(signals, { risk: 'low' });
   assert.deepEqual(modelPolicy.normalizeSignals(signals), { risk: 'low' });
+});
+
+test('build emits an arch-review request accepted by the Claude role host', async () => {
+  const fixture = builderFixture();
+  try {
+    let output = '';
+    const code = await deliverDispatch.main([
+      'build', 'arch-review', fixture.id, '--runtime', 'claude', '--pr', '501',
+    ], { write(value) { output += value; } }, { cwd: fixture.root, graphDir: fixture.graphDir });
+    assert.equal(code, 0);
+    const request = JSON.parse(output);
+    const accepted = parseRequest(request);
+    assert.equal(request.schema, ROLE_REQUEST_SCHEMA);
+    assert.equal(accepted.role, 'arch-review');
+    assert.equal(accepted.ticket, fixture.id);
+    assert.equal(accepted.pr, 501);
+    assert.equal(accepted.worktree, fs.realpathSync(fixture.root));
+    assert.equal(Object.prototype.hasOwnProperty.call(request.signals || {}, 'type'), false);
+    assert.equal(Object.prototype.hasOwnProperty.call(request.signals || {}, 'model'), false);
+    assert.equal(Object.prototype.hasOwnProperty.call(request.signals || {}, 'effort'), false);
+  } finally {
+    cleanup(fixture.root);
+  }
+});
+
+test('Codex arch-review shape acceptance is not evidence-bound host parity', () => {
+  const fixture = builderFixture('T-12-12');
+  try {
+    const shape = validateArgs({ role: 'arch-review', signals: {}, context: {} });
+    assert.equal(shape.request.role, 'arch-review');
+    assert.equal(shape.request.context.prompt, undefined);
+    assert.throws(
+      () => deliverDispatch.build(['arch-review', fixture.id, '--runtime', 'codex', '--pr', '501'], {
+        cwd: fixture.root, graphDir: fixture.graphDir,
+      }),
+      (error) => error.exitCode === 2 && /codex arch-review host contract missing/.test(error.message)
+        && /caller-built prompt/.test(error.message),
+    );
+  } finally {
+    cleanup(fixture.root);
+  }
+});
+
+test('fix builders refuse shape-only hosts after checking evidence paths and digests', () => {
+  const fixture = builderFixture('T-13-13');
+  const failureFile = path.join(fixture.root, 'failure.log');
+  const reviewFile = path.join(fixture.root, 'review.md');
+  fs.writeFileSync(failureFile, 'failing test output\n');
+  fs.writeFileSync(reviewFile, 'review thread evidence\n');
+  try {
+    for (const runtime of ['claude', 'codex']) {
+      for (const [role, flag, evidence, hostName] of [
+        ['ci-fix', '--failure-file', failureFile, 'failure evidence'],
+        ['review-fix', '--review-file', reviewFile, 'review evidence'],
+      ]) {
+        if (runtime === 'codex') {
+          const shape = validateArgs({ role, signals: {}, context: { evidence_path: evidence,
+            evidence_sha256: crypto.createHash('sha256').update(fs.readFileSync(evidence)).digest('hex') } });
+          assert.equal(shape.request.role, role);
+        }
+        assert.throws(
+          () => deliverDispatch.build([role, fixture.id, '--runtime', runtime, '--pr', '501', flag, evidence], {
+            cwd: fixture.root, graphDir: fixture.graphDir,
+          }),
+          (error) => error.exitCode === 2 && new RegExp(`${runtime} ${role} host contract missing`).test(error.message)
+            && new RegExp(hostName).test(error.message),
+        );
+      }
+    }
+  } finally {
+    cleanup(fixture.root);
+  }
+});
+
+test('build exits 2 and names --failure-file when CI evidence is missing', () => {
+  const fixture = builderFixture('T-14-14');
+  try {
+    const script = path.resolve(__dirname, '../../plugins/delivery-pipeline/scripts/deliver-dispatch.cjs');
+    const options = {
+      cwd: fixture.root,
+      encoding: 'utf8',
+      env: { ...process.env, SHIPYARD_GRAPH_DIR: fixture.graphDir },
+    };
+    const absentFlag = spawnSync(process.execPath, [script, 'build', 'ci-fix', fixture.id,
+      '--runtime', 'claude', '--pr', '501'], options);
+    const missingFile = spawnSync(process.execPath, [script, 'build', 'ci-fix', fixture.id,
+      '--runtime', 'claude', '--pr', '501', '--failure-file', 'missing.log'], options);
+    assert.equal(absentFlag.status, 2);
+    assert.match(absentFlag.stderr, /--failure-file/);
+    assert.equal(missingFile.status, 2);
+    assert.match(missingFile.stderr, /--failure-file file is unavailable/);
+  } finally {
+    cleanup(fixture.root);
+  }
 });
 
 test('Pitfall 2: planPath satisfies the canonical-plan formula regardless of process.cwd()', async () => {
