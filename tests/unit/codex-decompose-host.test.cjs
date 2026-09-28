@@ -322,9 +322,30 @@ function captured(rel, values = {}) {
     .join('\n') + '\n';
 }
 
-for (const gsdRole of ['gsd-phase-researcher', 'gsd-planner', 'gsd-plan-checker']) {
-test('production ' + gsdRole + ' reaches its native child and records session evidence', async () => {
-  const f = fixture();
+function manualClock(start) {
+  let value = start;
+  const clock = () => value;
+  clock.advance = (ms) => { value += ms; };
+  return clock;
+}
+
+function manualHeartbeat() {
+  let tick = null;
+  return {
+    scheduler: Object.freeze({
+      start(fn, _ms) {
+        tick = fn;
+        return () => { tick = null; };
+      },
+    }),
+    fire() {
+      assert.equal(typeof tick, 'function', 'heartbeat scheduler must be started before firing');
+      tick();
+    },
+  };
+}
+
+function buildNativeChildFixture(gsdRole) {
   const parent = '01a0e224-6642-7f20-b2a3-68b283d429b9';
   const childId = '01a0e224-80bb-7d33-b57d-8c44061ac85d';
   const ids = { '<SESSION-2>': parent, '<SESSION-6>': childId };
@@ -355,48 +376,70 @@ test('production ' + gsdRole + ' reaches its native child and records session ev
     }
     return JSON.stringify(record);
   }).join('\n') + '\n';
+  return { parent, childId, instructions, parentRaw, childRaw, execRaw, transform };
+}
+
+function attachFakeSpawn(f, gsdRole, fixtureData, onSpawn) {
+  const { parent, childId, parentRaw, childRaw, execRaw, transform } = fixtureData;
   const calls = [];
+  const spawn = (_executable, args, options) => {
+    calls.push({ args, options });
+    writeArtifacts(f.root, gsdRole);
+    if (onSpawn) onSpawn();
+    const sent = [];
+    const process = new EventEmitter();
+    process.stdout = new EventEmitter();
+    process.stderr = new EventEmitter();
+    process.stdin = {
+      write(value) { sent.push(String(value)); },
+      end() {
+        const task = /^TASK_FILE=(.*)$/m.exec(sent.join(''))[1];
+        const sha256 = /^TASK_SHA256=(.*)$/m.exec(sent.join(''))[1];
+        const now = new Date();
+        const dir = path.join(f.codexHome, 'sessions', String(now.getFullYear()),
+          String(now.getMonth() + 1).padStart(2, '0'), String(now.getDate()).padStart(2, '0'));
+        fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(path.join(dir, 'rollout-' + parent + '.jsonl'), transform(parentRaw));
+        fs.writeFileSync(path.join(dir, 'rollout-' + childId + '.jsonl'), transform(childRaw)
+          .split('<TMP>').join(JSON.stringify(task).slice(1, -1)).split(CAPTURED_SHA256).join(sha256));
+      },
+    };
+    process.pid = 38004;
+    setTimeout(() => {
+      process.stdout.emit('data', Buffer.from(execRaw));
+      process.emit('close', 0, null);
+    }, 170);
+    return process;
+  };
+  return { spawn, calls };
+}
+
+for (const gsdRole of ['gsd-phase-researcher', 'gsd-planner', 'gsd-plan-checker']) {
+test('production ' + gsdRole + ' reaches its native child and records session evidence', async () => {
+  const f = fixture();
+  const fixtureData = buildNativeChildFixture(gsdRole);
+  const { parent, childId, instructions } = fixtureData;
+  const clock = manualClock(Date.now());
+  const heartbeat = manualHeartbeat();
   try {
     fs.writeFileSync(path.join(f.agentDir, gsdRole + '.toml'), gsdAgentToml(gsdRole, instructions.replace(/\n$/, '')));
     const file = path.join(f.root, 'cli-request.json');
     fs.writeFileSync(file, JSON.stringify({ scope: f.scope, gsd_role: gsdRole, prompt: 'Check this phase plan.' }));
     const output = [];
+    const { spawn, calls } = attachFakeSpawn(f, gsdRole, fixtureData, () => {
+      clock.advance(50);
+      heartbeat.fire();
+    });
     const result = await runCli(['--args-file', file], { write(value) { output.push(value); } }, {
       env: { CODEX_HOME: f.codexHome },
       agentDir: f.agentDir,
       agentManifest: path.join(f.agentDir, '.shipyard-manifest.json'),
       testStateRoot: f.stateRoot,
-      leaseTtlMs: 2000,
-      heartbeatMs: 20,
+      leaseTtlMs: 1000,
+      now: clock,
+      heartbeat: heartbeat.scheduler,
       probe: { status: 'available', executable: 'codex', runtime_version: '0.157.1', capabilities },
-      spawn: (_executable, args, options) => {
-        calls.push({ args, options });
-        writeArtifacts(f.root, gsdRole);
-        const sent = [];
-        const process = new EventEmitter();
-        process.stdout = new EventEmitter();
-        process.stderr = new EventEmitter();
-        process.stdin = {
-          write(value) { sent.push(String(value)); },
-          end() {
-            const task = /^TASK_FILE=(.*)$/m.exec(sent.join(''))[1];
-            const sha256 = /^TASK_SHA256=(.*)$/m.exec(sent.join(''))[1];
-            const now = new Date();
-            const dir = path.join(f.codexHome, 'sessions', String(now.getFullYear()),
-              String(now.getMonth() + 1).padStart(2, '0'), String(now.getDate()).padStart(2, '0'));
-            fs.mkdirSync(dir, { recursive: true });
-            fs.writeFileSync(path.join(dir, 'rollout-' + parent + '.jsonl'), transform(parentRaw));
-            fs.writeFileSync(path.join(dir, 'rollout-' + childId + '.jsonl'), transform(childRaw)
-              .split('<TMP>').join(JSON.stringify(task).slice(1, -1)).split(CAPTURED_SHA256).join(sha256));
-          },
-        };
-        process.pid = 38004;
-        setTimeout(() => {
-          process.stdout.emit('data', Buffer.from(execRaw));
-          process.emit('close', 0, null);
-        }, 170);
-        return process;
-      },
+      spawn,
     });
     const storeDir = defaultRunStoreDir(f.scope, f.stateRoot);
     const status = createRunController({ storeDir })
@@ -436,6 +479,38 @@ test('production ' + gsdRole + ' reaches its native child and records session ev
   } finally { f.clean(); }
 });
 }
+
+test('advancing the injected clock past the lease TTL with no heartbeat still refuses with LEASE_EXPIRED', async () => {
+  const f = fixture();
+  const gsdRole = 'gsd-planner';
+  const fixtureData = buildNativeChildFixture(gsdRole);
+  const clock = manualClock(Date.now());
+  const heartbeat = manualHeartbeat();
+  try {
+    fs.writeFileSync(path.join(f.agentDir, gsdRole + '.toml'),
+      gsdAgentToml(gsdRole, fixtureData.instructions.replace(/\n$/, '')));
+    const file = path.join(f.root, 'cli-request.json');
+    fs.writeFileSync(file, JSON.stringify({ scope: f.scope, gsd_role: gsdRole, prompt: 'Check this phase plan.' }));
+    const { spawn } = attachFakeSpawn(f, gsdRole, fixtureData, () => {
+      clock.advance(5000);
+    });
+    await assert.rejects(() => runCli(['--args-file', file], { write() {} }, {
+      env: { CODEX_HOME: f.codexHome },
+      agentDir: f.agentDir,
+      agentManifest: path.join(f.agentDir, '.shipyard-manifest.json'),
+      testStateRoot: f.stateRoot,
+      leaseTtlMs: 1000,
+      now: clock,
+      heartbeat: heartbeat.scheduler,
+      probe: { status: 'available', executable: 'codex', runtime_version: '0.157.1', capabilities },
+      spawn,
+    }), (error) => error.code === 'LEASE_EXPIRED');
+    const storeDir = defaultRunStoreDir(f.scope, f.stateRoot);
+    const status = createRunController({ storeDir, now: clock }).status(f.scope.run_id);
+    assert.notEqual(status.state, 'completed');
+    assert.equal(status.owner.status, 'expired');
+  } finally { f.clean(); }
+});
 
 test('standalone CLI records a failed owned run after launch preflight refusal', async () => {
   const f = fixture();
