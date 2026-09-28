@@ -86,9 +86,7 @@
 // never `dispatches_applied_at` — dispatch marks touch the file without
 // resyncing, so counting them as freshness would hide exactly the case below.
 //
-// Two sessions delivering different phases of one repo would let the busier
-// board answer for the quieter one. That is bounded to a single block per turn
-// by `stop_hook_active`, and the alternative is measured at six hours.
+// @invariant: a bound marker reads only its own board; an unbound one refuses once per turn.
 //
 // ── THE TWO STALE CASES ──────────────────────────────────────────────────────
 // "A stale front never traps a session" was one rule covering two different
@@ -203,7 +201,7 @@ const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
 const runWaker = require('./run-waker.cjs');
-const { isArmed } = require('./stop-gate-arm.cjs');
+const { readMarker } = require('./stop-gate-arm.cjs');
 
 // Older than this and the front no longer describes the board as it stands.
 const FRESH_MS = envMs('SHIPYARD_STOP_GATE_FRESH_MS', 45 * 60 * 1000);
@@ -234,6 +232,8 @@ const LEDGER_NAME = 'stop-gate-ledger.json';
 
 function allow() { process.exit(0); }
 
+const shellQuote = (value) => `'${String(value).replace(/'/g, `'\\''`)}'`;
+
 function pendingScope(reason) {
   process.stdout.write(JSON.stringify({ decision: 'block', reason: `shipyard: run scope is pending — ${reason}` }) + '\n');
   process.exit(0);
@@ -248,7 +248,11 @@ function verdict(reason) {
   if (gate.note) process.stderr.write(gate.note);
   if (!gate.mayBlock) allow();
   if (gate.blocks) recordBlock(gate.blocks);
-  process.stdout.write(JSON.stringify({ decision: 'block', reason }) + '\n');
+  const remedy = legacyMarker
+    ? '\nThis session\'s stop-gate marker is unbound, so this refusal comes once per turn. Bind it with '
+      + `\`stop-gate-arm.cjs arm --graph-dir ${shellQuote(graphDir)}\`, or \`stop-gate-arm.cjs disarm\`.`
+    : '';
+  process.stdout.write(JSON.stringify({ decision: 'block', reason: reason + remedy }) + '\n');
   process.exit(0);
 }
 
@@ -412,6 +416,7 @@ function advancedSince(rec) {
 // the count to record when it may, `note` a line for stderr either way.
 function blockAllowance() {
   const active = !!payload.stop_hook_active;
+  if (legacyMarker) return { mayBlock: !active };
   if (!sessionId) return { mayBlock: !active }; // the old rule, verbatim
 
   const prev = readLedger();
@@ -493,6 +498,7 @@ const requestedRunId = typeof payload.run_id === 'string' && payload.run_id.trim
 const scopedMode = Boolean(requestedRunId || String(process.env.SHIPYARD_RUN_CONTROL || '').toLowerCase() === 'scoped'
   || process.env.SHIPYARD_RUN_STORE_DIR);
 let candidates = [];
+let legacyMarker = false;
 if (scopedMode) {
   if (!requestedRunId) pendingScope('run_id is missing from the stop payload');
   let scoped;
@@ -513,9 +519,27 @@ if (scopedMode) {
   }
   candidates = [scopedFront];
 } else {
-  if (!sessionId || !isArmed(cwd, sessionId)) allow();
+  if (!sessionId) allow();
+  const marker = readMarker(cwd, sessionId);
+  if (!marker) allow();
+  if (marker.board !== undefined) {
+    const board = typeof marker.board === 'string' ? marker.board : '';
+    let real = null;
+    try { real = fs.realpathSync(board); if (!fs.statSync(real).isDirectory()) real = null; } catch { real = null; }
+    if (!real || real !== board || !real.endsWith(`${path.sep}.planning${path.sep}graph`)) {
+      process.stderr.write(`stop-gate: the bound board ${shellQuote(board)} is missing or changed — allowing this stop. `
+        + `Re-arm with \`stop-gate-arm.cjs arm --graph-dir <board>\`, or \`stop-gate-arm.cjs disarm\`.\n`);
+      allow();
+    }
+    const c = readFront(path.join(real, 'delivery-front.json'));
+    if (c) candidates.push(c);
+  } else {
+    legacyMarker = true;
+    const armedAt = Date.parse(marker.armed_at || '');
+    if (!Number.isFinite(armedAt) || Date.now() - armedAt > RESYNC_MS) allow();
+  }
   const seen = new Set();
-  for (const dir of [cwd, ...worktreesOf(cwd)]) {
+  for (const dir of legacyMarker ? [cwd, ...worktreesOf(cwd)] : []) {
     const file = frontFileIn(dir);
     if (seen.has(file)) continue;
     seen.add(file);
@@ -638,7 +662,6 @@ const agentsOut = () => (agesCache || (agesCache = dispatchAges(graphDir, dispat
 // command. Graph paths come from the host and may contain spaces, quotes or
 // shell metacharacters; leaving one unquoted turns a copy/paste instruction into
 // a different command (or lets a path fragment be interpreted by the shell).
-const shellQuote = (value) => `'${String(value).replace(/'/g, `'\\''`)}'`;
 
 // The dispatch marks that did NOT keep this quiet, as a sentence. Shared by the
 // CI branch and the front-is-not-empty verdict below: on a board the cap called
