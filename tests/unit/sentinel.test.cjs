@@ -373,7 +373,7 @@ function stubGh() {
     // default — an absent head on both sides is the pre-head-binding case, and
     // `${VAR:+…}` adds nothing at all rather than an empty `head=`.
     '  "pr view "*)',
-    '    printf \'{"number":%s,"state":"OPEN","isDraft":false,"baseRefName":"%s","headRefName":"%s","headRefOid":"%s","mergeStateStatus":"%s","reviewDecision":null,"body":"gate_status: arch-review=conform%s, checks=green"}\\n\' "${STUB_PR:-9}" "${STUB_BASE}" "${STUB_HEAD}" "${STUB_HEAD_OID:-}" "${STUB_MERGE_STATE:-CLEAN}" "${STUB_TRAILER_HEAD:+, head=$STUB_TRAILER_HEAD}" ;;',
+    '    printf \'{"number":%s,"state":"OPEN","isDraft":false,"baseRefName":"%s","headRefName":"%s","headRefOid":"%s","mergeStateStatus":"%s","reviewDecision":%s,"body":"gate_status: arch-review=conform%s, checks=green"}\\n\' "${STUB_PR:-9}" "${STUB_BASE}" "${STUB_HEAD}" "${STUB_HEAD_OID:-}" "${STUB_MERGE_STATE:-CLEAN}" "${STUB_REVIEW_DECISION:-null}" "${STUB_TRAILER_HEAD:+, head=$STUB_TRAILER_HEAD}" ;;',
     // The rows carry gh's own `bucket`, because check-state.cjs reads that
     // field and a row without one is PENDING by its fail-closed rule — a
     // bucket-less stub would leave every merge case waiting on CI forever.
@@ -396,6 +396,18 @@ function stubGh() {
     // that repository for its default branch.
     '  "repo view "*"defaultBranchRef"*) echo "${STUB_DEFAULT_BRANCH:-main}" ;;',
     '  "api graphql"*) echo \'{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}\' ;;',
+    '  "api repos/"*"/issues/"*"/comments"*) echo "${STUB_COMMENTS:-[]}" ;;',
+    '  "api repos/"*"/pulls/"*"/reviews"*) echo "${STUB_REVIEWS:-[]}" ;;',
+    '  "api repos/"*"/rules/branches/"*)',
+    '    if [ -n "${STUB_RULES_FAIL:-}" ]; then echo "HTTP 403" >&2; exit 1; fi',
+    '    echo "${STUB_RULES:-[]}" ;;',
+    '  "api repos/"*"/branches/"*) echo \'{"protected":false}\' ;;',
+    '  "api -X POST "*"/requested_reviewers"*)',
+    '    if [ -n "${STUB_REQUEST_FAIL:-}" ]; then echo "HTTP 403" >&2; exit 1; fi',
+    '    echo \'{}\' ;;',
+    '  "pr comment "*)',
+    '    if [ -n "${STUB_REQUEST_FAIL:-}" ]; then echo "HTTP 403" >&2; exit 1; fi',
+    '    echo "commented" ;;',
     '  "api repos/"*"/contents/"*)',
     '    case "$argv" in',
     '      *"/contents/src?ref=$STUB_HEAD_OID"*) echo "$STUB_HEAD_CONTENTS" ;;',
@@ -2011,6 +2023,61 @@ test('an ABSENT config is untouched by all of this — the defaults still apply'
   fs.writeFileSync(path.join(root, '.planning', 'graph', 'delivery-state.json'), JSON.stringify(cfgState));
   const r = JSON.parse(run(root, ['merge', 'T-OK', '--json', '--dry-run'], { env: cfgEnv() }).stdout).results[0];
   assert.strictEqual(r.would_merge, true, (r.blockers || []).join('; '));
+});
+
+// @contract: a stale declared bot gets one applied request per head, then an actionable escalation.
+suite('merge — stale bot review recovery');
+const staleBotEnv = (extra = {}) => onPath(stubGh(), {
+  STUB_BASE: 'epic/21-x', STUB_HEAD: 'ticket/T-AR', STUB_PR: '9',
+  STUB_HEAD_OID: SHA_LIVE, STUB_TRAILER_HEAD: SHA_LIVE,
+  STUB_REVIEW_DECISION: '"APPROVED"', STUB_RULES_FAIL: '1',
+  STUB_REVIEWS: JSON.stringify([{
+    user: { login: 'coderabbitai[bot]', type: 'Bot' }, state: 'APPROVED',
+    submitted_at: '2026-09-07T09:00:00Z', commit_id: '1'.repeat(40),
+  }]),
+  ...extra,
+});
+const mergeReview = (root, env) => JSON.parse(run(root, ['merge', 'T-AR', '--json'], { env }).stdout).results[0];
+
+test('one review_rerequest is journalled, then the same head escalates with the command', () => {
+  const root = arRoot();
+  const log = logFile('review-rerequest');
+  const env = staleBotEnv({ STUB_LOG: log });
+  const first = mergeReview(root, env);
+  assert.match(first.blockers.join('; '), /re-requested/);
+  const second = mergeReview(root, env);
+  assert.match(second.blockers.join('; '), /reviewers\.cjs reinit 9 --force/);
+  assert.match(second.blockers.join('; '), /escalated/);
+  assert.match(mergeReview(root, env).blockers.join('; '), /escalated/);
+  const rows = fs.readFileSync(path.join(root, '.planning', 'graph', 'delivery-log.jsonl'), 'utf8')
+    .split('\n').filter(Boolean).map((line) => JSON.parse(line));
+  const requests = rows.filter((row) => row.event === 'review_rerequest');
+  assert.strictEqual(requests.length, 1);
+  assert.strictEqual(rows.filter((row) => row.event === 'escalation').length, 1);
+  assert.strictEqual(requests[0].head, SHA_LIVE);
+  assert.deepStrictEqual(requests[0].reviewers, ['coderabbitai', 'copilot']);
+  assert.strictEqual(callsIn(log).filter((line) => line.startsWith('pr comment ')).length, 1);
+});
+
+test('a rejected re-request is recorded once and the next tick escalates', () => {
+  const root = arRoot();
+  const log = logFile('review-rejected');
+  const env = staleBotEnv({ STUB_LOG: log, STUB_REQUEST_FAIL: '1' });
+  assert.match(mergeReview(root, env).blockers.join('; '), /re-request failed/);
+  assert.match(mergeReview(root, env).blockers.join('; '), /reviewers\.cjs reinit 9 --force/);
+  const rows = fs.readFileSync(path.join(root, '.planning', 'graph', 'delivery-log.jsonl'), 'utf8')
+    .split('\n').filter(Boolean).map((line) => JSON.parse(line));
+  assert.strictEqual(rows.filter((row) => row.event === 'review_rerequest').length, 1);
+  assert.deepStrictEqual(rows[0].reviewers, []);
+  assert.strictEqual(callsIn(log).filter((line) => line.startsWith('pr comment ')).length, 1);
+});
+
+test('GitHub BLOCKED still refuses when stale bot evidence is ignorable', () => {
+  const root = arRoot();
+  const result = mergeReview(root, staleBotEnv({ STUB_RULES_FAIL: '', STUB_MERGE_STATE: 'BLOCKED' }));
+  assert.match(result.blockers.join('; '), /BLOCKED/);
+  assert.strictEqual(result.merged, false);
+  assert.strictEqual(fs.existsSync(path.join(root, '.planning', 'graph', 'delivery-log.jsonl')), false);
 });
 
 for (const r of roots) {

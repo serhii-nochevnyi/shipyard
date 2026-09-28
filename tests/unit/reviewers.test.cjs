@@ -59,6 +59,12 @@ function stubGh() {
     '  "pr view "*)  echo "$STUB_PR_VIEW" ;;',
     '  "api repos/"*"/issues/"*"/comments"*) echo "${STUB_COMMENTS:-[]}" ;;',
     '  "api repos/"*"/pulls/"*"/reviews"*) echo "${STUB_REVIEWS:-[]}" ;;',
+    '  "api repos/"*"/rules/branches/"*)',
+    '    if [ -n "${STUB_RULES_FAIL:-}" ]; then echo "HTTP 403" >&2; exit 1; fi',
+    '    echo "${STUB_RULES:-[]}" ;;',
+    '  "api repos/"*"/branches/"*)',
+    '    if [ -n "${STUB_BRANCH_FAIL:-}" ]; then echo "HTTP 403" >&2; exit 1; fi',
+    '    if [ -n "${STUB_BRANCH:-}" ]; then echo "$STUB_BRANCH"; else echo \'{"protected":false}\'; fi ;;',
     '  "api repos/"*"/commits/"*) echo "${STUB_COMMIT_DATE:-}" ;;',
     '  *) echo "stub gh: unhandled call: $argv" >&2; exit 1 ;;',
     'esac',
@@ -85,8 +91,8 @@ const prView = (over = {}) => JSON.stringify({
 const comment = (login, at, body) => ({
   user: { login }, created_at: at, html_url: `https://example/c/${at}`, body,
 });
-const review = (login, state, at, commit_id) => ({
-  user: { login }, state, submitted_at: at, html_url: `https://example/r/${at}`, body: '',
+const review = (login, state, at, commit_id, type = 'Bot') => ({
+  user: { login, type }, state, submitted_at: at, html_url: `https://example/r/${at}`, body: '',
   ...(commit_id ? { commit_id } : {}),
 });
 
@@ -100,7 +106,7 @@ const callsIn = (log) => (fs.existsSync(log) ? fs.readFileSync(log, 'utf8').spli
 function run(args, env = {}) {
   const dir = stubGh();
   const r = spawnSync(process.execPath, [REVIEWERS, ...args], {
-    cwd: os.tmpdir(),
+    cwd: env.TEST_PROJECT_ROOT || os.tmpdir(),
     encoding: 'utf8',
     env: {
       ...process.env,
@@ -143,6 +149,7 @@ test('an approved review must name the current head', () => {
   const out = json(run(['unresolved', '27'], {
     STUB_PR_VIEW: prView({ reviewDecision: 'APPROVED' }),
     STUB_REVIEWS: JSON.stringify([review('coderabbitai[bot]', 'APPROVED', AFTER, '1111111111111111111111111111111111111111')]),
+    STUB_RULES_FAIL: '1',
   }));
   assert.strictEqual(out.review_fresh, false, JSON.stringify(out));
   assert.match(out.review_freshness_reason, /current head/);
@@ -161,6 +168,83 @@ test('an approved decision without readable review evidence is stale', () => {
     STUB_PR_VIEW: prView({ reviewDecision: 'APPROVED' }),
     STUB_REVIEWS: 'not json',
   }));
+  assert.strictEqual(out.review_fresh, false, JSON.stringify(out));
+});
+
+// @contract: only declared stale bots may use positive current-head or branch-rule evidence.
+suite('reviewers — stale approval identity and branch evidence');
+const stale = (login, type = 'Bot') => review(login, 'APPROVED', BEFORE, '1'.repeat(40), type);
+const headReview = (login, type = 'User') => review(login, 'APPROVED', AFTER, HEAD_OID, type);
+const freshness = (rows, env = {}) => json(run(['unresolved', '27', '--repo', 'acme/demo'], {
+  STUB_PR_VIEW: prView({ reviewDecision: 'APPROVED' }),
+  STUB_REVIEWS: JSON.stringify(rows), ...env,
+}));
+
+test('declared stale bot plus current human approval is fresh', () => {
+  const out = freshness([stale('coderabbitai[bot]'), headReview('alice')], { STUB_RULES_FAIL: '1' });
+  assert.strictEqual(out.review_fresh, true, JSON.stringify(out));
+  assert.strictEqual(out.review_freshness_reason, 'stale-bot-ignored');
+});
+
+test('declared stale bot on a branch with no rules is fresh', () => {
+  const out = freshness([stale('coderabbitai[bot]')]);
+  assert.strictEqual(out.review_fresh, true, JSON.stringify(out));
+  assert.strictEqual(out.review_freshness_reason, 'stale-bot-ignored');
+});
+
+for (const [name, env] of [
+  ['protected branch', { STUB_BRANCH: '{"protected":true}' }],
+  ['unreadable branch', { STUB_BRANCH_FAIL: '1' }],
+  ['unreadable rules', { STUB_RULES_FAIL: '1' }],
+]) test(`declared stale bot with ${name} stays stale`, () => {
+  const out = freshness([stale('coderabbitai[bot]')], env);
+  assert.strictEqual(out.review_fresh, false, JSON.stringify(out));
+  assert.strictEqual(out.remedy, 'reviewers.cjs reinit 27 --force');
+  assert.deepStrictEqual(out.stale_authors, ['coderabbitai[bot]']);
+});
+
+test('stale human approval still blocks despite a head bot approval', () => {
+  const out = freshness([stale('alice', 'User'), headReview('coderabbitai[bot]', 'Bot')]);
+  assert.strictEqual(out.review_fresh, false, JSON.stringify(out));
+});
+
+test('unconfigured stale login counts as human', () => {
+  const out = freshness([stale('mystery[bot]')]);
+  assert.strictEqual(out.review_fresh, false, JSON.stringify(out));
+});
+
+test('configured bot login is treated as a bot', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-reviewer-config-'));
+  dirs.push(root);
+  fs.mkdirSync(path.join(root, '.planning'));
+  fs.writeFileSync(path.join(root, '.planning', 'config.json'), JSON.stringify({
+    pipeline: { reviewer_bots: { 'acme/demo': ['acme-bot[bot]'] } },
+  }));
+  const out = freshness([stale('acme-bot[bot]')], { TEST_PROJECT_ROOT: root });
+  assert.strictEqual(out.review_fresh, true, JSON.stringify(out));
+  assert.strictEqual(out.review_freshness_reason, 'stale-bot-ignored');
+});
+
+test('configured wildcard matches a prefix and does not declare other logins', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-reviewer-wildcard-'));
+  dirs.push(root);
+  fs.mkdirSync(path.join(root, '.planning'));
+  fs.writeFileSync(path.join(root, '.planning', 'config.json'), JSON.stringify({
+    pipeline: { reviewer_bots: { 'acme/demo': ['acme-*'] } },
+  }));
+  const env = { TEST_PROJECT_ROOT: root };
+  assert.strictEqual(freshness([stale('acme-reviewer[bot]')], env).review_fresh, true);
+  assert.strictEqual(freshness([stale('mystery[bot]')], env).review_fresh, false);
+});
+
+test('freshness and branch probes are exported without running the CLI', () => {
+  const exported = require(REVIEWERS);
+  assert.strictEqual(typeof exported.reviewFreshness, 'function');
+  assert.strictEqual(typeof exported.branchRequiresNoReview, 'function');
+});
+
+test('a head approval with user.type Bot is not human evidence', () => {
+  const out = freshness([stale('coderabbitai[bot]'), headReview('mystery[bot]', 'Bot')], { STUB_RULES_FAIL: '1' });
   assert.strictEqual(out.review_fresh, false, JSON.stringify(out));
 });
 

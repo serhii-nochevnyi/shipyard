@@ -19,7 +19,7 @@ const SCRIPT = path.join(
 
 function run(cwd, args, env = {}) {
   return spawnSync('node', [SCRIPT, ...args], {
-    cwd, encoding: 'utf8', env: { ...process.env, ...env },
+    cwd, encoding: 'utf8', env: { ...process.env, SHIPYARD_GRAPH_DIR: undefined, ...env },
   });
 }
 
@@ -297,7 +297,9 @@ test('attempt-history does not charge a mechanical merge to the repair record', 
   const AH = path.join(
     __dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'attempt-history.cjs'
   );
-  const h = spawnSync('node', [AH, 'T-24-06', '--json'], { cwd: project, encoding: 'utf8' });
+  const h = spawnSync('node', [AH, 'T-24-06', '--json'], {
+    cwd: project, encoding: 'utf8', env: { ...process.env, SHIPYARD_GRAPH_DIR: undefined },
+  });
   assert.strictEqual(h.status, 0, h.stderr);
   const out = JSON.parse(h.stdout);
   assert.strictEqual(out.attempts, 0, 'a base merge is not a repair attempt');
@@ -402,6 +404,14 @@ test('ci_rerun without run_id is refused and writes nothing', () => {
   const r = run(project, ['ci_rerun', 'ticket=T-43-07', 'pr=7', `head=${FULL}`]);
   assert.notStrictEqual(r.status, 0);
   assert.ok(/run_id/.test(r.stderr), r.stderr);
+  assert.strictEqual(lines(graph).length, 0);
+});
+
+test('review_rerequest without head is refused and writes nothing', () => {
+  const { project, graph } = scratch();
+  const r = run(project, ['review_rerequest', 'ticket=T-43-08', 'pr=7']);
+  assert.notStrictEqual(r.status, 0);
+  assert.match(r.stderr, /head/);
   assert.strictEqual(lines(graph).length, 0);
 });
 
