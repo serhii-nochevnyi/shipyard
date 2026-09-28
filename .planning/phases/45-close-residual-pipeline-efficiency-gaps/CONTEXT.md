@@ -18,6 +18,7 @@ The phase-local identifiers below map to the acceptance cases in [WORK-PACKAGES.
 
 - S1: bind an armed Claude Stop-gate session to its selected delivery board/run; refuse selection of a newer foreign worktree board. Give this correctness fix its own high-risk ticket and checkpoint.
 - P1–P5: planning worktree single-writer lease; completed judgment-role timeout recovery; bounded checker revision protocol; Codex parent/wait overhead treatment; exact-revision INV reuse and stable research reporting.
+- R18: investigate exact merge-result CI attestation for a clean PR after its epic base moves, so an unrelated merge does not mechanically change the ticket head ([merge-base research](MERGE-BASE-RESEARCH.md)); no stale check, GitHub `CLEAN` status or old-run rerun is accepted as proof.
 - R10/R17: classify reviewer sandbox failures before spending another judgment turn, and persist and recover executor-owned publication payload without replaying a completed model turn ([environment/recovery research](ENVIRONMENT-RECOVERY-RESEARCH.md)); no waiver or artifact synthesis is authorized.
 - D1–D6: host-owned sentinel duty scheduling; stage/runtime delivery instruction loading; repair grouping with measured ticket granularity; exact-input drift-scan reuse; run/phase aggregate admission budget; bounded Codex outer-agent coordination handoff and routing (D6), subject to phase-44 measurement and an approved model experiment, see [model-routing research](MODEL-ROUTING-RESEARCH.md).
 

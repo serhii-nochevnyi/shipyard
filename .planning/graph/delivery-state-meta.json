@@ -1,13 +1,13 @@
 {
   "schema_version": 1,
-  "generation": 391,
-  "generation_identity": "765f0379-4123-4cb6-b6aa-741f402052fa",
-  "previous_generation_identity": "16777245:12934057316:1790603912202201900:2150225dde425ab666bca92ff0fcb9977d0d152fc6f236567f123a121bef7086",
-  "observed_at": "2026-09-28T14:36:17.976Z",
-  "generated_at": "2026-09-28T14:36:17.976Z",
+  "generation": 392,
+  "generation_identity": "047a8d3e-1f8c-40e7-bfe2-768ac6b6c2c6",
+  "previous_generation_identity": "16777245:12934135600:1790606522397051600:094e2d669f0ef0183f57b02feb12bdf78fcad58fbe88e44302841d829b059c0d",
+  "observed_at": "2026-09-28T14:42:03.372Z",
+  "generated_at": "2026-09-28T14:42:03.372Z",
   "by": "state-sync",
-  "pid": 32818,
-  "observation_generation": 391,
+  "pid": 45918,
+  "observation_generation": 392,
   "observation_projection": {
     "tickets": {
       "T-20-01": {
@@ -2272,7 +2272,7 @@
         "head": "6e467fa671521381deb4c51910ffb3de35e7b5fb",
         "draft": false,
         "base": "ticket/T-43-07-cancelled-checks-ignore-superseded-runs",
-        "merge_state": "UNKNOWN",
+        "merge_state": "CLEAN",
         "review_decision": null,
         "checks": {
           "total": 1,
@@ -2367,7 +2367,7 @@
         "head": "a3a70f25af4ff7c3046bd257f4f01b759e334fff",
         "draft": true,
         "base": "epic/43-target-project-delivery-at-scale",
-        "merge_state": "UNKNOWN",
+        "merge_state": "CLEAN",
         "review_decision": null,
         "checks": {
           "total": 1,
@@ -2557,9 +2557,9 @@
   },
   "binding": {
     "schema_version": 1,
-    "state_digest": "4c26efe9f99dc50dfa8c3da9f477ec82a97431a422145d11417b00aaeca29861",
-    "front_digest": "16255e17f46caee075649089deaaf1cb963f44d2163b74bde4e11c8fc3f8831e",
-    "observation_digest": "fddec713d17eb358d968ee304263e58ba062c129d253a2a25611968e30ebd601",
-    "observation_generation": 391
+    "state_digest": "244584bf26bb0f577bb30d12c7e317b7988968e16c74140f507f9b58ed404167",
+    "front_digest": "25a0367a0ec687af5153273bea30c0dcc68b55b5c67116bf7e8a6267de315a97",
+    "observation_digest": "5c6f5dcdbb5f9d72e4b8e7c67b293d690f74bbedf27880ec179e05fc4ff39e53",
+    "observation_generation": 392
   }
 }
