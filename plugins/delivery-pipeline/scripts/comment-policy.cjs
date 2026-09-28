@@ -432,7 +432,7 @@ function analyze(worktree, base, options = {}) {
     if (change.edited.size) {
       try {
         const baseContent = git(worktree, ['show', `${preimage}:${change.preimagePath}`]);
-        baseScanned = scanText(baseContent, language, configuredMarkers);
+        baseScanned = scanText(baseContent, languageFor(change.preimagePath), configuredMarkers);
       } catch {}
     }
     const findings = [];

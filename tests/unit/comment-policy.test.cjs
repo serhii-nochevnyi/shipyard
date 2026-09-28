@@ -340,6 +340,80 @@ test('editing an existing comment in a renamed file uses the old-path pre-image'
   assert.deepStrictEqual(report.files[0].findings.map((finding) => finding.kind), ['edited_comment']);
 });
 
+test('cross-language rename scans the pre-image with the old language and still blocks new comments', () => {
+  const repo = fixture(
+    {
+      'src/old.py': [
+        '# stale explanation',
+        'value = 1',
+        'value += 2',
+        'value += 3',
+        'value += 4',
+        'value += 5',
+      ].join('\n') + '\n',
+    },
+    {
+      'src/new.js': [
+        '// revised explanation',
+        'value = 1',
+        'value += 2',
+        'value += 3',
+        'value += 4',
+        'value += 5',
+        '// net-new free comment',
+      ].join('\n') + '\n',
+    },
+  );
+  git(repo, ['rm', 'src/old.py']);
+  git(repo, ['commit', '-qm', 'rename Python file to JavaScript and edit comment']);
+
+  const report = commentPolicy.analyze(repo, 'main');
+  assert.strictEqual(report.files.length, 1);
+  assert.strictEqual(report.files[0].path, 'src/new.js');
+  assert.strictEqual(report.files[0].language, 'c-like');
+  assert.strictEqual(report.files[0].comment_lines, 1);
+  assert.strictEqual(report.files[0].added_lines, 1);
+  assert.deepStrictEqual(report.files[0].findings.map((finding) => finding.kind), [
+    'edited_comment',
+    'cleanable',
+  ]);
+  assert.strictEqual(report.ok, false);
+});
+
+test('unsupported old language on rename fails closed for new comments', () => {
+  const repo = fixture(
+    {
+      'src/old.unknown': [
+        '# old unsupported comment',
+        'value = 1',
+        'value += 2',
+        'value += 3',
+        'value += 4',
+        'value += 5',
+      ].join('\n') + '\n',
+    },
+    {
+      'src/new.js': [
+        '// revised comment',
+        'value = 1',
+        'value += 2',
+        'value += 3',
+        'value += 4',
+        'value += 5',
+        '// net-new free comment',
+      ].join('\n') + '\n',
+    },
+  );
+  git(repo, ['rm', 'src/old.unknown']);
+  git(repo, ['commit', '-qm', 'rename unsupported source to JavaScript']);
+
+  const report = commentPolicy.analyze(repo, 'main');
+  assert.strictEqual(report.files.length, 1);
+  assert.strictEqual(report.files[0].path, 'src/new.js');
+  assert.strictEqual(report.files[0].comment_lines, 2);
+  assert.strictEqual(report.ok, false);
+});
+
 test('turning a code line into a comment still blocks', () => {
   const repo = fixture(
     { 'src/app.js': 'const value = 1;\n' },
