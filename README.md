@@ -332,6 +332,7 @@ only if the installed value is still in place; a statusLine you edited is kept.
 `--check` prints `installed`, `foreign` or `absent` and writes nothing.
 `ACCOUNT_LABEL` is an operator-declared local label; without one, samples are
 `unattributed`. E-mail, user ids and plan details are never stored.
+`make test-statusline` runs the collector and installer smoke.
 
 Private per-account samples live in
 `~/.local/state/shipyard/<runtime>/subscription/` (files 0600, directories
