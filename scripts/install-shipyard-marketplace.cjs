@@ -5,6 +5,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
+const crypto = require('node:crypto');
 const { spawnSync } = require('node:child_process');
 const { ensure } = require('./ensure-gsd-plugin.cjs');
 function run(command, args, env = process.env) {
@@ -35,8 +36,16 @@ function isTaggedRelease(state) {
 function installKindEnv(source, inspect = inspectCheckout) {
   if (!fs.existsSync(source)) return { SHIPYARD_INSTALL_KIND: 'release' };
   const state = inspect(source);
-  return { SHIPYARD_INSTALL_KIND: isTaggedRelease(state) ? 'release' : 'dogfood',
+  const env = { SHIPYARD_INSTALL_KIND: isTaggedRelease(state) ? 'release' : 'dogfood',
     SHIPYARD_SOURCE_SHA: state.sha || '', SHIPYARD_SOURCE_DIRTY: state.dirty ? '1' : '0' };
+  if (env.SHIPYARD_INSTALL_KIND === 'dogfood') env.SHIPYARD_SOURCE_ROOT = fs.realpathSync(source);
+  return env;
+}
+// @contract: Formula shared with install-shipyard-codex.sh's own dogfood-root fallback.
+function dogfoodHome(runtime, sourceRoot) {
+  const digest = crypto.createHash('sha256').update(sourceRoot).digest('hex').slice(0, 16);
+  const base = process.env.XDG_STATE_HOME || path.join(os.homedir(), '.local', 'state');
+  return path.join(base, 'shipyard', 'dogfood', runtime, digest);
 }
 // @invariant: A Claude local install shares the release cache directory, so only the tagged clean release may use it.
 function refuseUnreleasedClaudeSource(source, inspect = inspectCheckout) {
@@ -138,8 +147,23 @@ function setupCodexHost(source, execute = run, read = capture, inspect = inspect
   const candidates = [plugin.version, 'local'].filter(Boolean).map(v => path.join(cache, v));
   const installed = candidates.find(p => fs.existsSync(path.join(p, 'package-build.json')));
   if (!installed) throw new Error('Marketplace Shipyard lacks native Codex packaging; update the marketplace source before continuing');
-  execute(process.execPath, [path.join(installed, 'host/scripts/bootstrap-shipyard-plugin.cjs')],
-    { ...process.env, ...installKindEnv(source, inspect) });
+  const env = { ...process.env, ...installKindEnv(source, inspect) };
+  // @invariant: A dogfood Codex install never lands in the shared release cache other sessions read.
+  if (env.SHIPYARD_INSTALL_KIND === 'dogfood') {
+    const defaultHome = path.join(os.homedir(), '.codex');
+    const dedicated = dogfoodHome('codex', env.SHIPYARD_SOURCE_ROOT);
+    if (!process.env.CODEX_HOME) {
+      fs.mkdirSync(dedicated, { recursive: true, mode: 0o700 });
+      env.CODEX_HOME = dedicated;
+      console.log(`→ dogfood Codex home: ${dedicated}`);
+      console.log(`  export CODEX_HOME="${dedicated}"`);
+    } else if (path.resolve(process.env.CODEX_HOME) === defaultHome) {
+      throw new Error(`Refusing dogfood Codex source ${source}: CODEX_HOME is the shared default ` +
+        `${defaultHome}, and a dogfood install there overwrites the release cache other sessions use. ` +
+        `Unset CODEX_HOME to use the dedicated ${dedicated}, or set CODEX_HOME="${dedicated}" directly.`);
+    }
+  }
+  execute(process.execPath, [path.join(installed, 'host/scripts/bootstrap-shipyard-plugin.cjs')], env);
 }
 function main(args) {
   const runtime = args.shift();
@@ -163,7 +187,7 @@ function main(args) {
   }
 }
 module.exports = { main, installCodexMarketplace, claudeMarketplaceMatches,
-  claudeMarketplaceSource, installClaudeMarketplace, installKindEnv, setupCodexHost };
+  claudeMarketplaceSource, installClaudeMarketplace, installKindEnv, setupCodexHost, dogfoodHome };
 if (require.main === module) {
   try { main(process.argv.slice(2)); } catch (error) { console.error(error.message); process.exitCode = 1; }
 }
