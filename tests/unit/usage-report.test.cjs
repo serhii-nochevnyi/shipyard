@@ -239,6 +239,104 @@ test('Codex turn metadata is scoped by session, not only by turn_id', () => {
  ]);
 });
 
+const CODEX_STREAM_EXEC_FIXTURE = 'tests/fixtures/captured/codex-agent-stream-exec.jsonl';
+
+test('a Codex host-stream transcript (thread.started/turn.completed) yields a per-session sum', () => {
+  const rows = loadFixtureRows(CODEX_STREAM_EXEC_FIXTURE);
+  const r = report([{ source: 'fixture', rows }]);
+  assert.equal(r.observations.length, 1);
+  assert.equal(r.observations[0].unit, 'session_stream_sum');
+  assert.equal(r.observations[0].session_id, '<SESSION-1>');
+  assert.equal(r.observations[0].attribution_status, 'unattributed');
+  assert.equal(r.observations[0].input_tokens, 20391);
+  assert.equal(r.observations[0].cache_read_input_tokens, 6912);
+  assert.equal(r.observations[0].cache_creation_input_tokens, 0);
+  assert.equal(r.observations[0].uncached_input_tokens, 13479);
+  assert.equal(r.observations[0].output_tokens, 5);
+  assert.equal(r.observations[0].reasoning_output_tokens, 0);
+});
+
+test('a two-turn Codex stream is summed per session, never max-merged', () => {
+  const rows = [
+    { type: 'thread.started', thread_id: 'two-turn-session' },
+    { type: 'turn.started' },
+    { type: 'turn.completed', usage: { input_tokens: 100, cached_input_tokens: 20, cache_write_input_tokens: 0, output_tokens: 10, reasoning_output_tokens: 1 } },
+    { type: 'turn.started' },
+    { type: 'turn.completed', usage: { input_tokens: 150, cached_input_tokens: 30, cache_write_input_tokens: 0, output_tokens: 15, reasoning_output_tokens: 2 } },
+  ];
+  const r = report([{ source: 'two-turn.jsonl', rows }]);
+  assert.equal(r.observations.length, 1);
+  assert.equal(r.observations[0].input_tokens, 250);
+  assert.equal(r.observations[0].cache_read_input_tokens, 50);
+  assert.equal(r.observations[0].output_tokens, 25);
+  assert.equal(r.observations[0].reasoning_output_tokens, 3);
+});
+
+test('a session present as both a stream and a token_usage_record rollout is counted once, with a warning', () => {
+  const streamRows = [
+    { type: 'thread.started', thread_id: 'codex-session' },
+    { type: 'turn.started' },
+    { type: 'turn.completed', usage: { input_tokens: 999, cached_input_tokens: 100, cache_write_input_tokens: 0, output_tokens: 50, reasoning_output_tokens: 0 } },
+  ];
+  const r = report([
+    { source: 'native.jsonl', rows: [meta, codexCurrent] },
+    { source: 'stream.jsonl', rows: streamRows },
+  ]);
+  assert.equal(r.observations.length, 1);
+  assert.equal(r.observations[0].unit, 'session_cumulative');
+  assert.equal(r.groups[0].input_tokens, 300);
+  assert.ok(r.warnings.some((w) => w.includes('more than one usage schema')));
+});
+
+test('a stream scanned before its session\'s token_usage_record rollout still yields one observation', () => {
+  const session = 'reordered-thread';
+  const streamRows = [
+    { type: 'thread.started', thread_id: session },
+    { type: 'turn.completed', usage: { input_tokens: 5, cached_input_tokens: 1, cache_write_input_tokens: 0, output_tokens: 1, reasoning_output_tokens: 0 } },
+  ];
+  const nativeRows = [
+    { type: 'session_meta', payload: { id: session } },
+    { type: 'token_usage_record', timestamp: '2026-09-10T00:00:00Z', payload: {
+      session_id: session,
+      total_token_usage: { input_tokens: 400, cached_input_tokens: 40, cache_write_input_tokens: 0, output_tokens: 4, reasoning_output_tokens: 0, total_tokens: 404 },
+    } },
+  ];
+  const r = report([
+    { source: 'stream.jsonl', rows: streamRows },
+    { source: 'native.jsonl', rows: nativeRows },
+  ]);
+  assert.equal(r.observations.length, 1);
+  assert.equal(r.observations[0].unit, 'session_cumulative');
+  assert.equal(r.groups[0].input_tokens, 400);
+  assert.ok(r.warnings.some((w) => w.includes('more than one usage schema')));
+});
+
+test('a stream turn without a preceding thread.started is skipped with a warning', () => {
+  const rows = [
+    { type: 'turn.started' },
+    { type: 'turn.completed', usage: { input_tokens: 10, cached_input_tokens: 2, cache_write_input_tokens: 0, output_tokens: 1, reasoning_output_tokens: 0 } },
+  ];
+  const r = report([{ source: 'orphan-stream.jsonl', rows }]);
+  assert.equal(r.observations.length, 0);
+  assert.ok(r.warnings.some((w) => w.includes('without a preceding thread.started')));
+});
+
+test('Codex stream sessions get model/effort only from the attribution ledger', () => {
+  const rows = [
+    { type: 'thread.started', thread_id: 'attributed-stream' },
+    { type: 'turn.completed', usage: { input_tokens: 30, cached_input_tokens: 5, cache_write_input_tokens: 0, output_tokens: 3, reasoning_output_tokens: 0 } },
+  ];
+  const r = report([{ source: 'attributed-stream.jsonl', rows }], { attributions: [
+    { dispatch_id: 'dispatch-stream', runtime: 'codex', provider: 'openai', source: 'attributed-stream.jsonl',
+      session_id: 'attributed-stream', ticket: 'T-01-01', role: 'executor', task_level: 'complex', backend: 'codex-agent',
+      model: 'sonnet', effort: 'high', observed_model: 'gpt-6-luna', observed_effort: 'high' },
+  ] });
+  assert.equal(r.observations.length, 1);
+  assert.equal(r.observations[0].attribution_status, 'session');
+  assert.equal(r.observations[0].model, 'gpt-6-luna');
+  assert.equal(r.observations[0].observed_effort, 'high');
+});
+
 test('malformed transcript effort stays visible but is not eligible for comparison', () => {
  const row = {source:'session-bad-effort.jsonl',rows:[
    {type:'session_meta',payload:{id:'session-bad-effort'}},
