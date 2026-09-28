@@ -12,6 +12,7 @@ const { createClaudeRoleHost, parseCli, parseRequest, REQUEST_SCHEMA } = require
 const { activeDispatches } = require('../../plugins/delivery-pipeline/scripts/dispatch-record.cjs');
 const { agentsInFlight } = require('../../plugins/delivery-pipeline/scripts/front.cjs');
 const { loadClaudeReferenceContent } = require('../../plugins/delivery-pipeline/scripts/claude-reference-content.cjs');
+const { SCRATCH_FILES } = require('../../plugins/delivery-pipeline/scripts/conveyor-scratch.cjs');
 
 const POLICY_MD = '# ADR-014 test\nExplicit model and effort are required.\n';
 const PHASE = '38-role-host-test';
@@ -338,6 +339,51 @@ test('request contract accepts only host-owned role selectors and capability pro
     assert.throws(() => parseRequest({ ...request(fixture), signals: { inputTokens: 1 } }), /host-derived or unsupported/);
     await assert.rejects(createClaudeRoleHost(hostOptions(fixture)).run({ ...request(fixture), signals: { checkpoint: false } }), /differs from authenticated/);
     assert.throws(() => parseCli(['--args-file', 'args.json', '--capability-only']), /either --capability-only or --args-file/);
+  } finally {
+    cleanupFixture(fixture);
+  }
+});
+
+test('role preflight permits only the exact root scratch names', async () => {
+  for (const [name, permitted] of [
+    ['.shipyard-pr-body.md', true],
+    ['.shipyard-role-artifact.json', true],
+    ['.shipyard-role-artifacts/agent.txt', false],
+    ['notes.txt', false],
+    ['.shipyard-x.js', false],
+  ]) {
+    const fixture = setupRepository('arch-review');
+    try {
+      write(fixture.root, name, 'scratch or agent content\n');
+      const run = createClaudeRoleHost(hostOptions(fixture)).run(request(fixture));
+      if (permitted) assert.equal((await run).artifact.outcome, 'conform');
+      else await assert.rejects(run, /worktree has local changes before role dispatch/);
+    } finally {
+      cleanupFixture(fixture);
+    }
+  }
+});
+
+test('role dispatch proceeds with the entire exported scratch file set present', async () => {
+  const fixture = setupRepository('arch-review');
+  try {
+    for (const name of SCRATCH_FILES) write(fixture.root, name, 'scratch\n');
+    const result = await createClaudeRoleHost(hostOptions(fixture)).run(request(fixture));
+    assert.equal(result.artifact.outcome, 'conform');
+  } finally {
+    cleanupFixture(fixture);
+  }
+});
+
+test('role mutation check refuses changes to a pre-existing scratch file', async () => {
+  const fixture = setupRepository('arch-review');
+  try {
+    write(fixture.root, '.shipyard-pr-body.md', 'before\n');
+    const options = hostOptions(fixture, {
+      onLaunch() { write(fixture.root, '.shipyard-pr-body.md', 'after\n'); },
+    });
+    await assert.rejects(createClaudeRoleHost(options).run(request(fixture)),
+      (error) => error.code === 'WORKTREE_MUTATED');
   } finally {
     cleanupFixture(fixture);
   }

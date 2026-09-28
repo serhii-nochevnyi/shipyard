@@ -8,7 +8,7 @@ const { parse, owns } = require('./path-owner.cjs');
 const prHygiene = require('./pr-hygiene.cjs');
 const { resolveGraphDir } = require('./graph-dir.cjs');
 const { scopeBase } = require('./diamond-parents.cjs');
-const SCRATCH = new Set(['.shipyard-pr-body.md', '.shipyard-evidence.md']);
+const { SCRATCH_FILES, isScratch } = require('./conveyor-scratch.cjs');
 const MAX_GRAPH_BYTES = 8 * 1024 * 1024;
 
 function fail(message, code) {
@@ -88,7 +88,7 @@ function entriesFromStatus(buffer) {
 
 function scopedStatus(worktree, env) {
   const entries = entriesFromStatus(git(worktree, ['status', '--porcelain=v1', '-z', '--untracked-files=all'], env, { binary: true }));
-  for (const name of SCRATCH) {
+  for (const name of SCRATCH_FILES) {
     let file;
     try {
       file = fs.lstatSync(path.join(worktree, name));
@@ -100,7 +100,7 @@ function scopedStatus(worktree, env) {
   }
   const paths = new Set();
   for (const entry of entries) {
-    if (SCRATCH.has(entry.path) && entry.status === '??') {
+    if (entry.status === '??' && isScratch(entry.path, { forJudge: false })) {
       continue;
     } else {
       paths.add(entry.path);
