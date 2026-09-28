@@ -18,7 +18,7 @@ const {
   taskLevelRoute, routeOf,
   TIERS, EFFORTS, DEFAULTS, ROLES, SIGNATURE_STATES, DEFAULT_CODEX_MODELS, SONNET_ROLES,
   NUMERIC_KNOBS, TICKET_STATUSES, TASK_LEVELS, defaultRepositoryRoot,
-  validateRepositoryDestination, resolveDispatch, COMPATIBILITY_ROLES, ROUTED_ROLES,
+  validateRepositoryDestination, resolveDispatch, COMPATIBILITY_ROLES, ROUTED_ROLES, repoValue,
 } = require(mod);
 const sigMod = path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'failure-signature.cjs');
 
@@ -1040,6 +1040,182 @@ test('delivery_pipeline.pr_title_format wins over the legacy namespace', () => {
   });
   assert.strictEqual(config.pr_title_format, '{type}: {subject}');
   assert.deepStrictEqual(warnings, []);
+});
+
+suite('per-repository config maps (ADR-020 D-01, D-05, D-07, D-09)');
+
+test('the four keys default to null and do not change Shipyard config warnings', () => {
+  const own = loadConfig(path.join(__dirname, '..', '..'));
+  assert.deepStrictEqual(own.warnings, []);
+  for (const key of ['comment_markers', 'reviewer_bots', 'repo_remedies', 'verification_commands']) {
+    assert.strictEqual(own.config[key], null, `${key} should stay unset`);
+  }
+});
+
+test('all four keys are registered and accept their declared shapes without unknown-key warnings', () => {
+  const { config, warnings } = withConfig({
+    comment_markers: { 'acme/widgets': ['P1', '<!--shipyard-->'], default: ['shipyard-ok', '@=-_.:'] },
+    reviewer_bots: { 'acme/widgets': ['coderabbitai[bot]', 'copilot-*'] },
+    repo_remedies: {
+      'acme/widgets': [{ signature: 'ci:failed', workflow: 'repair-ci.yml', inputs: { issue: '123' }, ref: 'main' }],
+    },
+    verification_commands: {
+      'acme/widgets': [{ argv: ['npm', 'test'] }, { argv: ['./verify'], profile: 'host', timeout_s: 30 }],
+    },
+  });
+  assert.deepStrictEqual(warnings, []);
+  assert.deepStrictEqual(config.comment_markers, {
+    'acme/widgets': ['P1', '<!--shipyard-->'], default: ['shipyard-ok', '@=-_.:'],
+  });
+  assert.deepStrictEqual(config.reviewer_bots, { 'acme/widgets': ['coderabbitai[bot]', 'copilot-*'] });
+  assert.deepStrictEqual(config.repo_remedies, {
+    'acme/widgets': [{ signature: 'ci:failed', workflow: 'repair-ci.yml', inputs: { issue: '123' }, ref: 'main' }],
+  });
+  assert.deepStrictEqual(config.verification_commands, {
+    'acme/widgets': [
+      { argv: ['npm', 'test'], profile: 'sandbox' },
+      { argv: ['./verify'], profile: 'host', timeout_s: 30 },
+    ],
+  });
+});
+
+test('a non-map shape warns by key and falls back to null for each setting', () => {
+  for (const key of ['comment_markers', 'reviewer_bots', 'repo_remedies', 'verification_commands']) {
+    const { config, warnings } = withConfig({ [key]: 7 });
+    assert.strictEqual(config[key], null, key);
+    assert.ok(warnings.some((warning) => new RegExp(`pipeline\\.${key}`).test(warning)),
+      `${key}: ${warnings.join('; ')}`);
+  }
+});
+
+test('comment marker maps drop bad keys, arrays, and tokens with named warnings', () => {
+  const { config, warnings } = withConfig({
+    comment_markers: {
+      'bad/repo/extra': ['P1'],
+      'acme/widgets': ['P1', 'two words', 'P[2]', `${'x'.repeat(65)}`],
+      default: 'shipyard-ok',
+    },
+  });
+  assert.deepStrictEqual(config.comment_markers, { 'acme/widgets': ['P1'] });
+  assert.ok(warnings.some((warning) => /comment_markers.*bad\/repo\/extra/.test(warning)), warnings.join('; '));
+  assert.ok(warnings.some((warning) => /comment_markers.*two words/.test(warning)), warnings.join('; '));
+  assert.ok(warnings.some((warning) => /comment_markers.*P\[2\]/.test(warning)), warnings.join('; '));
+  assert.ok(warnings.some((warning) => warning.includes('x'.repeat(65))), warnings.join('; '));
+  assert.ok(warnings.some((warning) => /comment_markers.*default/.test(warning)), warnings.join('; '));
+});
+
+test('reviewer bot maps accept exact logins and one trailing prefix star, dropping invalid values', () => {
+  const { config, warnings } = withConfig({
+    reviewer_bots: {
+      'acme/widgets': ['coderabbitai[bot]', 'copilot-*', 'bot*name', 'bot**', 'two words', ''],
+      default: 'github-actions[bot]',
+    },
+  });
+  assert.deepStrictEqual(config.reviewer_bots, { 'acme/widgets': ['coderabbitai[bot]', 'copilot-*'] });
+  assert.ok(warnings.filter((warning) => /reviewer_bots/.test(warning)).length >= 4, warnings.join('; '));
+  assert.ok(warnings.some((warning) => /reviewer_bots.*default/.test(warning)), warnings.join('; '));
+});
+
+test('repository remedies drop invalid slugs and entries with a warning naming the key', () => {
+  const { config, warnings } = withConfig({
+    repo_remedies: {
+      default: [{ signature: 'x', workflow: 'repair.yml' }],
+      'other/repo': 'not-an-array',
+      'acme/widgets': [
+        { signature: 'ci:failed', workflow: 'repair-ci.yml', inputs: { issue: '123' } },
+        { signature: '', workflow: 'repair.yml' },
+        { signature: 'ci:failed', workflow: '../repair.yml' },
+        { signature: 'ci:failed', workflow: 'repair.yml', inputs: { issue: 123 } },
+        { signature: 'ci:failed', workflow: 'repair.yml', ref: 4 },
+      ],
+    },
+  });
+  assert.deepStrictEqual(config.repo_remedies, {
+    'acme/widgets': [{ signature: 'ci:failed', workflow: 'repair-ci.yml', inputs: { issue: '123' } }],
+  });
+  assert.ok(warnings.some((warning) => /repo_remedies.*default/.test(warning)), warnings.join('; '));
+  assert.ok(warnings.some((warning) => /repo_remedies.*other\/repo/.test(warning)), warnings.join('; '));
+  assert.ok(warnings.filter((warning) => /repo_remedies.*acme\/widgets/.test(warning)).length >= 4,
+    warnings.join('; '));
+});
+
+test('verification command maps validate argv arrays, profile, and timeout', () => {
+  const { config, warnings } = withConfig({
+    verification_commands: {
+      'acme/widgets': [
+        { argv: ['npm', 'test'] },
+        { argv: 'npm test' },
+        { argv: [] },
+        { argv: ['verify'], timeout_s: 1 },
+        { argv: ['verify'], timeout_s: 3600 },
+        { argv: ['npm'], profile: 'bare' },
+        { argv: ['npm'], timeout_s: 3601 },
+        { argv: ['npm'], timeout_s: 1.5 },
+      ],
+      bogus: [{ argv: ['npm'] }],
+      'other/repo': 'npm test',
+    },
+  });
+  assert.deepStrictEqual(config.verification_commands, {
+    'acme/widgets': [
+      { argv: ['npm', 'test'], profile: 'sandbox' },
+      { argv: ['verify'], profile: 'sandbox', timeout_s: 1 },
+      { argv: ['verify'], profile: 'sandbox', timeout_s: 3600 },
+    ],
+  });
+  assert.ok(warnings.some((warning) => /verification_commands.*argv/.test(warning)), warnings.join('; '));
+  assert.ok(warnings.some((warning) => /verification_commands.*bogus/.test(warning)), warnings.join('; '));
+  assert.ok(warnings.some((warning) => /verification_commands.*other\/repo/.test(warning)), warnings.join('; '));
+  assert.ok(warnings.filter((warning) => /verification_commands.*acme\/widgets/.test(warning)).length >= 5,
+    warnings.join('; '));
+});
+
+test('a repository verification command cannot use a shell string in place of argv', () => {
+  const { config, warnings } = withConfig({
+    verification_commands: { 'acme/widgets': [{ argv: 'npm test && echo unsafe' }] },
+  });
+  assert.deepStrictEqual(config.verification_commands, { 'acme/widgets': [] });
+  assert.ok(warnings.some((warning) => /verification_commands.*argv/.test(warning)), warnings.join('; '));
+});
+
+test('delivery_pipeline values win over pipeline values for all four maps', () => {
+  const legacy = { 'acme/widgets': ['legacy'] };
+  const declared = { 'acme/widgets': ['declared'] };
+  const { config, warnings } = withRaw({
+    pipeline: {
+      comment_markers: legacy,
+      reviewer_bots: legacy,
+      repo_remedies: { 'acme/widgets': [{ signature: 'old', workflow: 'old.yml' }] },
+      verification_commands: { 'acme/widgets': [{ argv: ['old'] }] },
+    },
+    delivery_pipeline: {
+      comment_markers: declared,
+      reviewer_bots: declared,
+      repo_remedies: { 'acme/widgets': [{ signature: 'new', workflow: 'new.yml' }] },
+      verification_commands: { 'acme/widgets': [{ argv: ['new'] }] },
+    },
+  });
+  assert.deepStrictEqual(config.comment_markers, declared);
+  assert.deepStrictEqual(config.reviewer_bots, declared);
+  assert.deepStrictEqual(config.repo_remedies, { 'acme/widgets': [{ signature: 'new', workflow: 'new.yml' }] });
+  assert.deepStrictEqual(config.verification_commands, { 'acme/widgets': [{ argv: ['new'], profile: 'sandbox' }] });
+  assert.deepStrictEqual(warnings, []);
+});
+
+test('repoValue picks a repository entry, then default, then null', () => {
+  const cfg = { comment_markers: { 'acme/widgets': ['repo'], default: ['fallback'] } };
+  assert.deepStrictEqual(repoValue(cfg, 'comment_markers', 'acme/widgets'), ['repo']);
+  assert.deepStrictEqual(repoValue(cfg, 'comment_markers', 'other/repo'), ['fallback']);
+  assert.strictEqual(repoValue({ reviewer_bots: {} }, 'reviewer_bots', 'acme/widgets'), null);
+  assert.strictEqual(repoValue(cfg, 'not_a_key', 'acme/widgets'), null);
+});
+
+test('repoValue accepts the result returned by loadConfig', () => {
+  const loaded = withRaw({ delivery_pipeline: {
+    comment_markers: { 'acme/widgets': ['repo'], default: ['fallback'] },
+  } });
+  assert.deepStrictEqual(repoValue(loaded, 'comment_markers', 'acme/widgets'), ['repo']);
+  assert.deepStrictEqual(repoValue(loaded, 'comment_markers', 'other/repo'), ['fallback']);
 });
 
 suite('repos — sibling checkouts a multi-repo phase is driven in');
@@ -2653,11 +2829,37 @@ test('only GSD stage tier aliases are exempt, not concrete or inherited selectio
       }
     }
   }
-  for (const role of ['decomposition', 'arch-review']) {
-    const agent = role === 'decomposition' ? 'gsd-planner' : 'gsd-code-reviewer';
-    const { config } = routedConfig({ pipeline: { fable: 'auto' },
-      model_overrides: { [agent]: 'fable' } }, 'claude');
-    refusesSource(() => resolveDispatch({ config, role }), `config.model_overrides.${agent}`);
+  const { config } = routedConfig({ model_overrides: { 'gsd-planner': 'haiku' } }, 'claude');
+  refusesSource(() => resolveDispatch({ config, role: 'decomposition' }), 'config.model_overrides.gsd-planner');
+});
+
+test('GSD code-reviewer overrides do not select arch-review, while direct arch-review overrides still refuse', () => {
+  for (const runtime of ['claude', 'codex']) {
+    for (const signals of [{}, { critical: true }]) {
+      const expected = canonicalPolicy.resolveDispatch({ runtime, role: 'arch-review', signals });
+      for (const [namespace, wrap, sourcePrefix] of [
+        ['root', (value) => value, 'config'],
+        ['gsd', (value) => ({ gsd: value }), 'gsd'],
+      ]) {
+        for (const selection of [
+          { model_overrides: { 'gsd-code-reviewer': 'haiku' } },
+          { effort: { agent_overrides: { 'gsd-code-reviewer': 'low' } } },
+        ]) {
+          const { config } = routedConfig(wrap(selection), runtime);
+          assert.deepStrictEqual(resolveDispatch({ config, role: 'arch-review', signals }), expected,
+            `${runtime} ${JSON.stringify(signals)} ${namespace} GSD code-reviewer preference`);
+        }
+
+        for (const [selection, source] of [
+          [{ model_overrides: { 'arch-review': 'haiku' } }, `${sourcePrefix}.model_overrides.arch-review`],
+          [{ effort: { agent_overrides: { 'arch-review': 'low' } } },
+            `${sourcePrefix}.effort.agent_overrides.arch-review`],
+        ]) {
+          const { config } = routedConfig(wrap(selection), runtime);
+          refusesSource(() => resolveDispatch({ config, role: 'arch-review', signals }), source);
+        }
+      }
+    }
   }
 });
 
