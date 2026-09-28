@@ -125,3 +125,8 @@ Status legend: **open** = no owner yet; **covered** = owned by an existing phase
 
 Note: #316 (in 0.68.0) lets an explicit `--graph-dir` take precedence over a stale ticket worktree graph. Recheck N43 on 0.68.0 before planning R12.
 
+## Found during phase-43 delivery (open)
+
+- **N57 — a reviewer sandbox failure becomes a blocking verdict.** T-43-03 (PR #338) had green exact-head CI, but its Sol/xhigh architecture review reported `violation` because both test commands hit `EPERM` creating temporary files in the reviewer's read-only sandbox, before any assertion ran. The immutable violation cannot be carried into conform. No supported adjudication exists for environment-only findings, so resolving it costs another full review. See [environment/recovery research](../../../phases/45-close-residual-pipeline-efficiency-gaps/ENVIRONMENT-RECOVERY-RESEARCH.md).
+- **N58 — a signed executor commit loses its publication payload.** T-43-14's Luna/max executor finalized a signed commit but did not leave the PR body, evidence and bounded result. A second turn produced them, but the host refused `NO_PUBLISHABLE_DELTA`, and those files cannot be rebound to the first dispatch. Phase-42 recovery restores commit metadata only, and the worktree lifecycle cannot re-cut the unmerged canonical branch. See the same research.
+

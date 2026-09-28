@@ -2570,7 +2570,7 @@
       "type": "implementation",
       "human_checkpoint": true,
       "preauthorized": false,
-      "branch": "ticket/T-30-04-require-an-explicit-operator-choice-befo",
+      "branch": "ticket/T-30-04-require-an-explicit-operator-choice-before-cloning",
       "epic": "epic/30-a-ticket-you-cannot-reach-is-not-deliverable",
       "primary_parent": "T-30-03",
       "pr_base": "ticket/T-30-03-discover-repository-checkouts-by-declare",
@@ -2600,10 +2600,10 @@
       "type": "implementation",
       "human_checkpoint": false,
       "preauthorized": false,
-      "branch": "ticket/T-30-05-validate-repository-destinations-with-th",
+      "branch": "ticket/T-30-05-validate-repository-destinations-with-existing-nesting-rule",
       "epic": "epic/30-a-ticket-you-cannot-reach-is-not-deliverable",
       "primary_parent": "T-30-04",
-      "pr_base": "ticket/T-30-04-require-an-explicit-operator-choice-befo",
+      "pr_base": "ticket/T-30-04-require-an-explicit-operator-choice-before-cloning",
       "jira": null
     },
     "T-30-06": {
@@ -2628,10 +2628,10 @@
       "type": "implementation",
       "human_checkpoint": false,
       "preauthorized": false,
-      "branch": "ticket/T-30-06-mirror-the-project-origin-protocol-for-r",
+      "branch": "ticket/T-30-06-mirror-project-origin-protocol-for-repository-clones",
       "epic": "epic/30-a-ticket-you-cannot-reach-is-not-deliverable",
       "primary_parent": "T-30-05",
-      "pr_base": "ticket/T-30-05-validate-repository-destinations-with-th",
+      "pr_base": "ticket/T-30-05-validate-repository-destinations-with-existing-nesting-rule",
       "jira": null
     },
     "T-30-07": {
@@ -2660,7 +2660,7 @@
       "branch": "ticket/T-30-07-use-a-full-clone-with-all-refs-required",
       "epic": "epic/30-a-ticket-you-cannot-reach-is-not-deliverable",
       "primary_parent": "T-30-06",
-      "pr_base": "ticket/T-30-06-mirror-the-project-origin-protocol-for-r",
+      "pr_base": "ticket/T-30-06-mirror-project-origin-protocol-for-repository-clones",
       "jira": null
     },
     "T-30-08": {
@@ -2687,7 +2687,7 @@
       "type": "implementation",
       "human_checkpoint": false,
       "preauthorized": false,
-      "branch": "ticket/T-30-08-adopt-matching-checkouts-and-refuse-to-c",
+      "branch": "ticket/T-30-08-adopt-matching-checkouts-and-refuse-to-clobber",
       "epic": "epic/30-a-ticket-you-cannot-reach-is-not-deliverable",
       "primary_parent": "T-30-07",
       "pr_base": "ticket/T-30-07-use-a-full-clone-with-all-refs-required",
@@ -2718,10 +2718,10 @@
       "type": "implementation",
       "human_checkpoint": false,
       "preauthorized": false,
-      "branch": "ticket/T-30-09-persist-resolved-checkouts-and-park-unre",
+      "branch": "ticket/T-30-09-persist-resolved-checkouts-and-park-unreachable",
       "epic": "epic/30-a-ticket-you-cannot-reach-is-not-deliverable",
       "primary_parent": "T-30-08",
-      "pr_base": "ticket/T-30-08-adopt-matching-checkouts-and-refuse-to-c",
+      "pr_base": "ticket/T-30-08-adopt-matching-checkouts-and-refuse-to-clobber",
       "jira": null
     },
     "T-30-10": {
@@ -2949,7 +2949,7 @@
       "type": "implementation",
       "human_checkpoint": true,
       "preauthorized": false,
-      "branch": "ticket/T-31-07-read-tracker-eligibility-at-cold-start-a",
+      "branch": "ticket/T-31-07-read-tracker-eligibility-at-cold-start",
       "epic": "epic/31-not-every-ticket-is-available-work",
       "primary_parent": "T-31-06",
       "pr_base": "ticket/T-31-06-journal-direct-ticket-overrides",
@@ -3204,7 +3204,7 @@
       "type": "implementation",
       "human_checkpoint": false,
       "preauthorized": false,
-      "branch": "ticket/T-32-07-join-transcript-usage-to-dispatches-with",
+      "branch": "ticket/T-32-07-join-transcripts-to-dispatches",
       "epic": "epic/32-measure-usage-and-make-the-backlog-actionable",
       "primary_parent": "T-32-05",
       "pr_base": "ticket/T-32-05-wire-batched-dispatch-lifecycle-into-the",
@@ -3537,7 +3537,7 @@
       "type": "execute",
       "human_checkpoint": false,
       "preauthorized": false,
-      "branch": "ticket/T-34-01-make-review-progress-and-resource-budget",
+      "branch": "ticket/T-34-01-review-progress-and-resource-budgets",
       "epic": "epic/34-improve-convergence-and-tune-from-measured-outcomes",
       "primary_parent": null,
       "pr_base": "epic/34-improve-convergence-and-tune-from-measured-outcomes",
@@ -3564,10 +3564,10 @@
       "type": "execute",
       "human_checkpoint": true,
       "preauthorized": true,
-      "branch": "ticket/T-34-02-require-runtime-capability-evidence-for",
+      "branch": "ticket/T-34-02-runtime-capability-evidence",
       "epic": "epic/34-improve-convergence-and-tune-from-measured-outcomes",
       "primary_parent": "T-34-01",
-      "pr_base": "ticket/T-34-01-make-review-progress-and-resource-budget",
+      "pr_base": "ticket/T-34-01-review-progress-and-resource-budgets",
       "jira": null
     },
     "T-34-03": {
@@ -3589,7 +3589,7 @@
       "type": "execute",
       "human_checkpoint": true,
       "preauthorized": true,
-      "branch": "ticket/T-34-03-strengthen-manual-merge-verdict-carry",
+      "branch": "ticket/T-34-03-merge-verdict-carry",
       "epic": "epic/34-improve-convergence-and-tune-from-measured-outcomes",
       "primary_parent": null,
       "pr_base": "epic/34-improve-convergence-and-tune-from-measured-outcomes",
@@ -3625,10 +3625,10 @@
       "type": "execute",
       "human_checkpoint": true,
       "preauthorized": true,
-      "branch": "ticket/T-34-04-admit-distinct-agents-through-shared-acc",
+      "branch": "ticket/T-34-04-shared-capacity-and-dispatch-boundary",
       "epic": "epic/34-improve-convergence-and-tune-from-measured-outcomes",
       "primary_parent": "T-34-02",
-      "pr_base": "ticket/T-34-02-require-runtime-capability-evidence-for",
+      "pr_base": "ticket/T-34-02-runtime-capability-evidence",
       "jira": null
     },
     "T-34-05": {
@@ -3664,7 +3664,7 @@
       "branch": "ticket/T-34-05-publish-versioned-optimization-evidence",
       "epic": "epic/34-improve-convergence-and-tune-from-measured-outcomes",
       "primary_parent": "T-34-04",
-      "pr_base": "ticket/T-34-04-admit-distinct-agents-through-shared-acc",
+      "pr_base": "ticket/T-34-04-shared-capacity-and-dispatch-boundary",
       "jira": null
     },
     "T-35-01": {
@@ -4224,7 +4224,7 @@
       "type": "implementation",
       "human_checkpoint": true,
       "preauthorized": true,
-      "branch": "ticket/T-36-04-generate-and-validate-the-codex-bundle-w",
+      "branch": "ticket/T-36-04-generate-and-validate-the-complete-codex",
       "epic": "epic/36-enforce-the-runtime-model-ladder",
       "primary_parent": "T-36-03",
       "pr_base": "ticket/T-36-03-strict-codex-adapter-and-named-model-pal",
@@ -4259,7 +4259,7 @@
       "branch": "ticket/T-36-05-claude-adapter-and-explicit-workflow-lau",
       "epic": "epic/36-enforce-the-runtime-model-ladder",
       "primary_parent": "T-36-04",
-      "pr_base": "ticket/T-36-04-generate-and-validate-the-codex-bundle-w",
+      "pr_base": "ticket/T-36-04-generate-and-validate-the-complete-codex",
       "jira": null
     },
     "T-36-06": {
@@ -4490,7 +4490,7 @@
       "type": "implementation",
       "human_checkpoint": true,
       "preauthorized": true,
-      "branch": "ticket/T-36-07-enforce-the-boundary-across-shipyard-del",
+      "branch": "ticket/T-36-07-enforce-the-boundary-across-shipyard-delivery-launches",
       "epic": "epic/36-enforce-the-runtime-model-ladder",
       "primary_parent": "T-36-06",
       "pr_base": "ticket/T-36-06-route-gsd-decomposition-through-the-mand",
@@ -4522,7 +4522,7 @@
       "branch": "ticket/T-36-08-application-receipts-and-dispatch-record",
       "epic": "epic/36-enforce-the-runtime-model-ladder",
       "primary_parent": "T-36-07",
-      "pr_base": "ticket/T-36-07-enforce-the-boundary-across-shipyard-del",
+      "pr_base": "ticket/T-36-07-enforce-the-boundary-across-shipyard-delivery-launches",
       "jira": null
     },
     "T-36-09": {
@@ -4548,7 +4548,7 @@
       "type": "implementation",
       "human_checkpoint": false,
       "preauthorized": false,
-      "branch": "ticket/T-36-09-policy-aware-telemetry-and-reconciliatio",
+      "branch": "ticket/T-36-09-policy-aware-telemetry-and-reconciliation-reporting",
       "epic": "epic/36-enforce-the-runtime-model-ladder",
       "primary_parent": "T-36-08",
       "pr_base": "ticket/T-36-08-application-receipts-and-dispatch-record",
@@ -4578,10 +4578,10 @@
       "type": "implementation",
       "human_checkpoint": false,
       "preauthorized": false,
-      "branch": "ticket/T-36-10-exhaustive-signal-matrix-and-negative-by",
+      "branch": "ticket/T-36-10-exhaustive-signal-matrix-and-negative-bypass-suite",
       "epic": "epic/36-enforce-the-runtime-model-ladder",
       "primary_parent": "T-36-09",
-      "pr_base": "ticket/T-36-09-policy-aware-telemetry-and-reconciliatio",
+      "pr_base": "ticket/T-36-09-policy-aware-telemetry-and-reconciliation-reporting",
       "jira": null
     },
     "T-36-11": {
@@ -4607,10 +4607,10 @@
       "type": "implementation",
       "human_checkpoint": true,
       "preauthorized": true,
-      "branch": "ticket/T-36-11-cross-runtime-generated-install-smoke-ve",
+      "branch": "ticket/T-36-11-cross-runtime-generated-install-smoke-verification",
       "epic": "epic/36-enforce-the-runtime-model-ladder",
       "primary_parent": "T-36-10",
-      "pr_base": "ticket/T-36-10-exhaustive-signal-matrix-and-negative-by",
+      "pr_base": "ticket/T-36-10-exhaustive-signal-matrix-and-negative-bypass-suite",
       "jira": null
     },
     "T-36-12": {
@@ -4644,7 +4644,7 @@
       "branch": "ticket/T-36-12-supersede-obsolete-ladder-documentation",
       "epic": "epic/36-enforce-the-runtime-model-ladder",
       "primary_parent": "T-36-10",
-      "pr_base": "ticket/T-36-10-exhaustive-signal-matrix-and-negative-by",
+      "pr_base": "ticket/T-36-10-exhaustive-signal-matrix-and-negative-bypass-suite",
       "jira": null
     },
     "T-37-01": {
@@ -4728,7 +4728,7 @@
       "type": "implementation",
       "human_checkpoint": true,
       "preauthorized": false,
-      "branch": "ticket/T-37-03-connect-claude-code-to-the-scoped-runtim",
+      "branch": "ticket/T-37-03-connect-claude-to-scoped-runtime-controller",
       "epic": "epic/37-autonomous-dual-runtime-control-plane",
       "primary_parent": "T-37-02",
       "pr_base": "ticket/T-37-02-persist-controller-leases-and-autonomous",
@@ -4758,7 +4758,7 @@
       "type": "implementation",
       "human_checkpoint": true,
       "preauthorized": false,
-      "branch": "ticket/T-37-04-connect-codex-to-the-scoped-runtime-cont",
+      "branch": "ticket/T-37-04-connect-codex-to-scoped-runtime-controller",
       "epic": "epic/37-autonomous-dual-runtime-control-plane",
       "primary_parent": "T-37-02",
       "pr_base": "ticket/T-37-02-persist-controller-leases-and-autonomous",
@@ -4788,7 +4788,7 @@
       "type": "implementation",
       "human_checkpoint": false,
       "preauthorized": false,
-      "branch": "ticket/T-37-05-prove-graph-reachability-before-autonomo",
+      "branch": "ticket/T-37-05-prove-graph-reachability-before-autonomous-run",
       "epic": "epic/37-autonomous-dual-runtime-control-plane",
       "primary_parent": "T-37-02",
       "pr_base": "ticket/T-37-02-persist-controller-leases-and-autonomous",
@@ -4821,7 +4821,7 @@
       "branch": "ticket/T-37-06-make-stop-and-wait-decisions-run-scoped",
       "epic": "epic/37-autonomous-dual-runtime-control-plane",
       "primary_parent": "T-37-05",
-      "pr_base": "ticket/T-37-05-prove-graph-reachability-before-autonomo",
+      "pr_base": "ticket/T-37-05-prove-graph-reachability-before-autonomous-run",
       "jira": null
     },
     "T-37-07": {
@@ -4854,7 +4854,7 @@
       "branch": "ticket/T-37-07-join-runtime-receipts-with-usage-and-out",
       "epic": "epic/37-autonomous-dual-runtime-control-plane",
       "primary_parent": "T-37-03",
-      "pr_base": "ticket/T-37-03-connect-claude-code-to-the-scoped-runtim",
+      "pr_base": "ticket/T-37-03-connect-claude-to-scoped-runtime-controller",
       "jira": null
     },
     "T-37-08": {
@@ -5077,7 +5077,7 @@
       "type": "implementation",
       "human_checkpoint": true,
       "preauthorized": false,
-      "branch": "ticket/T-38-04-connect-codex-delivery-and-typed-gsd-dec",
+      "branch": "ticket/T-38-04-connect-codex-launches-to-delivery",
       "epic": "epic/38-runtime-model-ladder-recovery",
       "primary_parent": "T-38-03",
       "pr_base": "ticket/T-38-03-connect-claude-delivery-and-investigatio",
@@ -5136,7 +5136,7 @@
       "branch": "ticket/T-38-07-connect-claude-judgement-roles-through-t",
       "epic": "epic/38-runtime-model-ladder-recovery",
       "primary_parent": "T-38-04",
-      "pr_base": "ticket/T-38-04-connect-codex-delivery-and-typed-gsd-dec",
+      "pr_base": "ticket/T-38-04-connect-codex-launches-to-delivery",
       "jira": null
     },
     "T-38-08": {
@@ -5218,7 +5218,7 @@
       "type": "implementation",
       "human_checkpoint": true,
       "preauthorized": false,
-      "branch": "ticket/T-38-05-route-delivery-through-independent-runti",
+      "branch": "ticket/T-38-05-route-independent-runtime-rollouts",
       "epic": "epic/38-runtime-model-ladder-recovery",
       "primary_parent": "T-38-08",
       "pr_base": "ticket/T-38-08-connect-claude-sentinel-through-authenti",
@@ -5954,7 +5954,7 @@
       "type": "implementation",
       "human_checkpoint": false,
       "preauthorized": false,
-      "branch": "ticket/T-41-04-accept-asynchronous-native-child-complet",
+      "branch": "ticket/T-41-04-resume-authenticated-completed-execution",
       "epic": "epic/41-reduce-pipeline-subscription-overhead",
       "primary_parent": null,
       "pr_base": "epic/41-reduce-pipeline-subscription-overhead",
