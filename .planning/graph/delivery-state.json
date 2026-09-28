@@ -2660,13 +2660,13 @@
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/334",
     "pr_base": "epic/43-target-project-delivery-at-scale",
     "pr_created_at": "2026-09-28T08:08:04Z",
-    "head_sha": "a3a70f25af4ff7c3046bd257f4f01b759e334fff",
-    "merge_state": "CLEAN",
-    "behind_by": 2,
+    "head_sha": "105759c579945cff51ba111023132fc24126a592",
+    "merge_state": "UNSTABLE",
+    "behind_by": 0,
     "checks": {
       "total": 1,
       "failing": 0,
-      "pending": 0,
+      "pending": 1,
       "none_reported": false,
       "unavailable": false
     },

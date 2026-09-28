@@ -2207,14 +2207,14 @@
 "T-43-11":
   base: "epic/43-target-project-delivery-at-scale"
   base_reason: "no primary parent — a root ticket PRs into epic/43-target-project-delivery-at-scale"
-  behind_by: 2
+  behind_by: 0
   branch: "ticket/T-43-11-bind-pre-existing-jira-issues-by-recorde"
-  checks: {"failing":0,"none_reported":false,"pending":0,"total":1,"unavailable":false}
+  checks: {"failing":0,"none_reported":false,"pending":1,"total":1,"unavailable":false}
   draft: true
   epic: "epic/43-target-project-delivery-at-scale"
-  head_sha: "a3a70f25af4ff7c3046bd257f4f01b759e334fff"
+  head_sha: "105759c579945cff51ba111023132fc24126a592"
   merge_scope: "stacked"
-  merge_state: "CLEAN"
+  merge_state: "UNSTABLE"
   pr: 334
   pr_base: "epic/43-target-project-delivery-at-scale"
   pr_created_at: "2026-09-28T08:08:04Z"
