@@ -1868,47 +1868,6 @@ test('caller capability claims cannot relax stored observation requirements', ()
   (error) => error.code === 'UNVERIFIED_RECEIPT');
 });
 
-test('file-backed reservation is atomic across concurrent Node processes', async () => {
-  const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-boundary-race-'));
-  const modulePath = path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'dispatch-boundary.cjs');
-  const script = [
-    'const b = require(process.argv[1]);',
-    'const r = b.createDurableRecorder(process.argv[2]);',
-    'process.send("ready");',
-    'process.once("message", () => { process.stdout.write(JSON.stringify(r.reserve(process.argv[3]))); process.disconnect(); });',
-  ].join('\n');
-  const children = Array.from({ length: 8 }, () => {
-    const child = spawn(process.execPath, ['-e', script, modulePath, storeDir, 'atomic-id'], {
-      stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
-    });
-    let stdout = '';
-    let stderr = '';
-    child.stdout.on('data', (chunk) => { stdout += chunk; });
-    child.stderr.on('data', (chunk) => { stderr += chunk; });
-    const ready = new Promise((resolve, reject) => {
-      child.once('message', resolve);
-      child.once('error', reject);
-      child.once('exit', () => reject(new Error('child exited before ready')));
-    });
-    const result = new Promise((resolve, reject) => {
-      child.once('error', reject);
-      child.once('exit', (code) => {
-        if (code !== 0) return reject(new Error(stderr || `child exited ${code}`));
-        try { resolve(JSON.parse(stdout)); } catch (error) { reject(error); }
-      });
-    });
-    return { child, ready, result };
-  });
-  await Promise.all(children.map(({ ready }) => ready));
-  children.forEach(({ child }) => child.send('reserve'));
-  const results = await Promise.all(children.map(({ result }) => result));
-  assert.equal(results.filter((result) => result.reserved).length, 1);
-  assert.equal(results.filter((result) => !result.reserved).length, 7);
-  const files = fs.readdirSync(storeDir);
-  assert.equal(files.length, 1);
-  assert.equal(JSON.parse(fs.readFileSync(path.join(storeDir, files[0]), 'utf8')).dispatch_id, 'atomic-id');
-});
-
 test('the boundary launches every native base and escalation tuple for both runtimes', () => {
   const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-boundary-runtime-matrix-'));
   try {
@@ -2339,6 +2298,113 @@ test('repair promotion requires the immediately preceding boundary receipt on th
   } finally {
     fs.rmSync(storeDir, { recursive: true, force: true });
   }
+});
+
+// @invariant: kept last — assert-harness runs later sync tests before this async body settles.
+test('file-backed reservation is atomic across concurrent Node processes', async () => {
+  const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-boundary-race-'));
+  const modulePath = path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'dispatch-boundary.cjs');
+  // @invariant: publish the authority key before children spawn so only reserve() races.
+  boundaryModule.createDurableRecorder(storeDir);
+  const script = [
+    'const b = require(process.argv[1]);',
+    'const r = b.createDurableRecorder(process.argv[2]);',
+    'process.send("ready");',
+    'process.once("message", () => { process.stdout.write(JSON.stringify(r.reserve(process.argv[3]))); process.disconnect(); });',
+  ].join('\n');
+  const children = Array.from({ length: 8 }, () => {
+    const child = spawn(process.execPath, ['-e', script, modulePath, storeDir, 'atomic-id'], {
+      stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
+    });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (chunk) => { stdout += chunk; });
+    child.stderr.on('data', (chunk) => { stderr += chunk; });
+    const ready = new Promise((resolve, reject) => {
+      child.once('message', resolve);
+      child.once('error', reject);
+      child.once('exit', () => reject(new Error('child exited before ready')));
+    });
+    const result = new Promise((resolve, reject) => {
+      child.once('error', reject);
+      child.once('exit', (code) => {
+        if (code !== 0) return reject(new Error(stderr || `child exited ${code}`));
+        try { resolve(JSON.parse(stdout)); } catch (error) { reject(error); }
+      });
+    });
+    return { child, ready, result };
+  });
+  await Promise.all(children.map(({ ready }) => ready));
+  children.forEach(({ child }) => child.send('reserve'));
+  const results = await Promise.all(children.map(({ result }) => result));
+  assert.equal(results.filter((result) => result.reserved).length, 1);
+  assert.equal(results.filter((result) => !result.reserved).length, 7);
+  const files = fs.readdirSync(storeDir);
+  assert.equal(files.length, 1);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(storeDir, files[0]), 'utf8')).dispatch_id, 'atomic-id');
+});
+
+// @contract: test-only fs monkeypatch (never a production seam) proves the race test above still detects the defect.
+test('a non-atomic reservation replacement lets more than one process win the same reservation', async () => {
+  const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-boundary-race-removed-guard-'));
+  const barrierDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-boundary-race-barrier-'));
+  const modulePath = path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'dispatch-boundary.cjs');
+  boundaryModule.createDurableRecorder(storeDir);
+  const childCount = 4;
+  const script = [
+    'const fs = require("fs");',
+    'const path = require("path");',
+    'const barrierDir = process.argv[4];',
+    'const myId = process.argv[5];',
+    'const originalLinkSync = fs.linkSync.bind(fs);',
+    'fs.linkSync = function (src, dest) {',
+    '  if (!/reservation-/.test(dest)) return originalLinkSync(src, dest);',
+    '  const existed = fs.existsSync(dest);',
+    '  fs.writeFileSync(path.join(barrierDir, "checked-" + myId), "");',
+    '  const deadline = Date.now() + 10000;',
+    '  const flag = new Int32Array(new SharedArrayBuffer(4));',
+    '  while (!fs.existsSync(path.join(barrierDir, "go"))) {',
+    '    if (Date.now() > deadline) throw new Error("guard-removal barrier timeout");',
+    '    Atomics.wait(flag, 0, 0, 5);',
+    '  }',
+    '  if (existed) { const err = new Error("EEXIST"); err.code = "EEXIST"; throw err; }',
+    '  fs.copyFileSync(src, dest);',
+    '};',
+    'const b = require(process.argv[1]);',
+    'const r = b.createDurableRecorder(process.argv[2]);',
+    'process.stdout.write(JSON.stringify(r.reserve(process.argv[3])));',
+  ].join('\n');
+  let nextIndex = 0;
+  const children = Array.from({ length: childCount }, () => {
+    const index = nextIndex++;
+    const child = spawn(process.execPath, ['-e', script, modulePath, storeDir, 'removed-guard-id', barrierDir, String(index)], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (chunk) => { stdout += chunk; });
+    child.stderr.on('data', (chunk) => { stderr += chunk; });
+    return new Promise((resolve, reject) => {
+      child.once('error', reject);
+      child.once('exit', (code) => {
+        if (code !== 0) return reject(new Error(stderr || `child exited ${code}`));
+        try { resolve(JSON.parse(stdout)); } catch (error) { reject(error); }
+      });
+    });
+  });
+  const deadline = Date.now() + 10000;
+  while (fs.readdirSync(barrierDir).filter((name) => name.startsWith('checked-')).length < childCount) {
+    if (Date.now() > deadline) throw new Error('guard-removal parent timed out waiting for children to check in');
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  fs.writeFileSync(path.join(barrierDir, 'go'), '');
+  const results = await Promise.all(children);
+  assert.ok(
+    results.filter((result) => result.reserved).length > 1,
+    `the non-atomic replacement must let more than one process win the same reservation (${JSON.stringify(results)})`,
+  );
+  fs.rmSync(barrierDir, { recursive: true, force: true });
+  fs.rmSync(storeDir, { recursive: true, force: true });
 });
 
 done();
