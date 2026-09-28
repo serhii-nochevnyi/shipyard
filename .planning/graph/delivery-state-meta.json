@@ -1,13 +1,13 @@
 {
   "schema_version": 1,
-  "generation": 390,
-  "generation_identity": "31429c57-cae5-4921-8775-ce09fe3c3e1a",
-  "previous_generation_identity": "16777245:12934030913:1790603105616881700:89a863e67c7604ef845290bbffbf3daa470b7d94b40b7608b882c18fa375d5e1",
-  "observed_at": "2026-09-28T13:45:20.729Z",
-  "generated_at": "2026-09-28T13:45:20.729Z",
+  "generation": 391,
+  "generation_identity": "765f0379-4123-4cb6-b6aa-741f402052fa",
+  "previous_generation_identity": "16777245:12934057316:1790603912202201900:2150225dde425ab666bca92ff0fcb9977d0d152fc6f236567f123a121bef7086",
+  "observed_at": "2026-09-28T14:36:17.976Z",
+  "generated_at": "2026-09-28T14:36:17.976Z",
   "by": "state-sync",
-  "pid": 91133,
-  "observation_generation": 390,
+  "pid": 32818,
+  "observation_generation": 391,
   "observation_projection": {
     "tickets": {
       "T-20-01": {
@@ -2255,21 +2255,15 @@
         "checks": null
       },
       "T-43-03": {
-        "status": "pr-open",
+        "status": "merged",
         "repository": null,
         "pr": 338,
-        "head": "494f63875dedbc926507ec5b43a847a7dd5c5ede",
-        "draft": true,
+        "head": null,
+        "draft": false,
         "base": "epic/43-target-project-delivery-at-scale",
-        "merge_state": "CLEAN",
+        "merge_state": null,
         "review_decision": null,
-        "checks": {
-          "total": 1,
-          "pending": 0,
-          "failing": 0,
-          "none_reported": false,
-          "unavailable": false
-        }
+        "checks": null
       },
       "T-43-04": {
         "status": "pr-open",
@@ -2278,7 +2272,7 @@
         "head": "6e467fa671521381deb4c51910ffb3de35e7b5fb",
         "draft": false,
         "base": "ticket/T-43-07-cancelled-checks-ignore-superseded-runs",
-        "merge_state": "CLEAN",
+        "merge_state": "UNKNOWN",
         "review_decision": null,
         "checks": {
           "total": 1,
@@ -2289,21 +2283,15 @@
         }
       },
       "T-43-05": {
-        "status": "pr-open",
+        "status": "merged",
         "repository": null,
         "pr": 328,
-        "head": "6ea29470bf9f7e47e78e322d9d4d4eb278511851",
-        "draft": true,
+        "head": null,
+        "draft": false,
         "base": "epic/43-target-project-delivery-at-scale",
-        "merge_state": "CLEAN",
+        "merge_state": null,
         "review_decision": null,
-        "checks": {
-          "total": 1,
-          "pending": 0,
-          "failing": 0,
-          "none_reported": false,
-          "unavailable": false
-        }
+        "checks": null
       },
       "T-43-06": {
         "status": "pending",
@@ -2311,7 +2299,7 @@
         "pr": null,
         "head": null,
         "draft": false,
-        "base": "ticket/T-43-05-keep-an-arch-review-finding-of-unknown-t",
+        "base": "epic/43-target-project-delivery-at-scale",
         "merge_state": null,
         "review_decision": null,
         "checks": null
@@ -2320,7 +2308,7 @@
         "status": "pr-open",
         "repository": null,
         "pr": 266,
-        "head": "a319307b021701b10e316524b83e2682dac2179e",
+        "head": "fef7d105eaf6614575117c88a4224932a3253911",
         "draft": true,
         "base": "epic/43-target-project-delivery-at-scale",
         "merge_state": "CLEAN",
@@ -2376,10 +2364,10 @@
         "status": "pr-open",
         "repository": null,
         "pr": 334,
-        "head": "8ff6312f33079c10e8b398a86a27d49823bd78b2",
+        "head": "a3a70f25af4ff7c3046bd257f4f01b759e334fff",
         "draft": true,
         "base": "epic/43-target-project-delivery-at-scale",
-        "merge_state": "CLEAN",
+        "merge_state": "UNKNOWN",
         "review_decision": null,
         "checks": {
           "total": 1,
@@ -2569,9 +2557,9 @@
   },
   "binding": {
     "schema_version": 1,
-    "state_digest": "350fff4419d39d23671726ae88890e2883dc3739a45ab86618a6c780f07648cf",
-    "front_digest": "14c1560205e2466dca7fe234248478bfdfc338f6e7bb6aaf3d6efc3e1723cf3d",
-    "observation_digest": "60059145922441feb866d1fcfed989dcd870bcf9776ab637b20fa2988b6e8806",
-    "observation_generation": 390
+    "state_digest": "4c26efe9f99dc50dfa8c3da9f477ec82a97431a422145d11417b00aaeca29861",
+    "front_digest": "16255e17f46caee075649089deaaf1cb963f44d2163b74bde4e11c8fc3f8831e",
+    "observation_digest": "fddec713d17eb358d968ee304263e58ba062c129d253a2a25611968e30ebd601",
+    "observation_generation": 391
   }
 }
