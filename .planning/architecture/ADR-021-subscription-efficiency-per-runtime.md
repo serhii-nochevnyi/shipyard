@@ -64,3 +64,8 @@ with file:line is in the INV's `RESEARCH.md` and `research/`.
 - Blanket model downgrades, mandatory double-provider review, provider fallback, quota-based scheduling, automatic session transfer, new daemons, and destructive instruction edits in target repositories.
 - Generating native instruction forms from the coverage manifest, and range- or claim-level research indexing.
 - API-price or token-to-quota conversion, and any fixed savings target.
+
+## Amendment — 2026-09-28
+
+The first pass (P44-A, P44-D, P44-G, plus the T-44-08 gap closure) was delivered and released in 0.68.0. The second pass moves from phase 44 to phase 45 as workstream C (C1 = P44-B, C2 = P44-C, C3 = P44-E, C4 = P44-F), so that INV-008 can settle one input-identity primitive shared by arch-review reuse, drift-scan reuse (phase-45 D4) and research reuse (phase-45 P5). The decisions above for these four items are unchanged. Phase 45 carries them as accepted inputs, and they still wait for the phase-43 epic to merge.
+

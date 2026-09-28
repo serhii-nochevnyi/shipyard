@@ -12,6 +12,7 @@ Recheck after release 0.67.0 (2026-09-27): phase 40 is merged and released, incl
 - Twenty-three bounded work packages (eleven original plus R1–R12), including the separately owned high-risk S1 Stop-gate correctness fix, and their dependencies and acceptance/refusal cases are in [WORK-PACKAGES.md](WORK-PACKAGES.md).
 - 2026-09-27: workstream R (stacked-delivery reliability; R11 added after the epic merge) was added from the [phase-40 delivery findings](../../investigations/INV-008-residual-pipeline-efficiency/intake/phase40-delivery-findings.md). T-40-12 and T-40-11 are now merged into `epic/40-build-delivery-seams-and-clean-target-project-prs` and have since landed on `main` in release 0.67.0.
 - No global requirements, ticket IDs, delivery PLAN files, PRs or provider experiments were created.
-- Phase 44 is still queued preparation. Phase-40/42 installed-host capability and phase-44 observation evidence must be rechecked before phase-45 decomposition or activation.
+- Phase 44's first pass was delivered in 0.68.0, which gives phase 45 the quota observation it needs for a baseline. Phase-40/42 installed-host capability must be rechecked before phase-45 decomposition or activation.
+- 2026-09-28: workstream C (C1–C4 = P44-B, P44-C, P44-E, P44-F) moved here from phase 44 under the ADR-021 amendment; it waits for the phase-43 epic.
 
 Next formal step: use the supported authenticated Shipyard/GSD investigation and planning path, reconcile current upstream owners and shared-file edits, obtain the required ADR review, then materialize typed planner/checker artifacts and run validate-graph. Do not use a private host or infer a passing gate from this scope document.
