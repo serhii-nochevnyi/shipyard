@@ -292,6 +292,25 @@ for (const pair of pairs) {
 const DECLARED_FIELDS = {
   base_merge: ['ticket', 'pr', 'base', 'head'],
 };
+// @contract: a ci_rerun row names the rerun it records; without every field it is refused, not logged.
+const REQUIRED_FIELDS = {
+  ci_rerun: ['ticket', 'pr', 'head', 'run_id'],
+};
+const required = REQUIRED_FIELDS[event];
+if (required) {
+  const missing = required.filter((k) => rec[k] === undefined || rec[k] === '');
+  if (missing.length) {
+    console.error(`log-event: ${event} requires ${required.join(', ')}; missing ${missing.join(', ')}`);
+    process.exit(2);
+  }
+}
+if (event === 'ci_rerun') {
+  console.error(
+    'log-event: refusing an unverified ci_rerun. Only ci-wait.cjs may append this event after ' +
+    '`gh run rerun` succeeds; a hand-written line would claim an action that may not have happened.'
+  );
+  process.exit(1);
+}
 const declared = DECLARED_FIELDS[event];
 if (declared) {
   const missing = declared.filter((k) => rec[k] === undefined || rec[k] === '');
