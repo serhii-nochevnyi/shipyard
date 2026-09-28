@@ -831,9 +831,9 @@ repository-declared comment markers, Jira binding by key, declared remedy workfl
 scratch set, and the point fixes found on the pdffiller proving ground.
 
 ### Phase 44: Optimize subscription efficiency per runtime
-**Status**: first pass planned (ADR-021); P44-B, P44-C, P44-E and P44-F are planned in a second pass after the phase-43 epic merges
+**Status**: delivered (first pass, T-44-01..08, #342, released in 0.68.0). The second-pass items P44-B, P44-C, P44-E and P44-F moved to phase 45 (workstream C) on 2026-09-28
 **Goal**: reduce avoidable subscription consumption per verified completion on Claude Code and Codex through provider-specific observation, exact-input reuse, required-instruction coverage, measured rotation advice, research fact indexing, typed checkpoint reasons, and separately gated effort experiments.
-**Depends on**: Phases 40, 41 and 42 (merged); second-pass items on phase 43
+**Depends on**: Phases 40, 41 and 42 (merged)
 **Requirements**: REQ-176, REQ-177, REQ-178, REQ-179, REQ-180, REQ-181, REQ-182, REQ-183, REQ-184
 
 Implement the first pass of [ADR-021](architecture/ADR-021-subscription-efficiency-per-runtime.md) from
@@ -845,8 +845,8 @@ change, experiment or provider scheduler is activated.
 ### Phase 45: Close residual pipeline efficiency gaps
 **Status**: queued scope; authenticated investigation (INV-008) and decomposition pending (renumbered from local phase 44 on 2026-09-27)
 **Goal**: correct armed Stop-gate session/board ownership, make stacked delivery reliable on target projects, and remove repeated planning-role launches and routine delivery model work left outside phase 44, with native receipts and independent gates intact.
-**Depends on**: package-specific — S1 uses phase-39 arming and phase-41 scoped-run contracts; R packages build on the phase-40 delivery seams and ADR-020 (phase 43); P/D packages use phase-40/42/44 contracts where their own work packages require them.
-**Requirements**: phase-local S1, R1–R12, P1–P5 and D1–D5; global IDs await validated planning
+**Depends on**: package-specific — S1 uses phase-39 arming and phase-41 scoped-run contracts; R packages build on the phase-40 delivery seams and ADR-020 (phase 43); C packages are planned after the phase-43 epic merges (ADR-021); P/D packages use phase-40/42/44 contracts where their own work packages require them.
+**Requirements**: phase-local S1, R1–R12, P1–P5, D1–D5 and C1–C4 (carried from phase 44 under ADR-021); global IDs await validated planning
 **Plans**: 0 plans; see [phase context](phases/45-close-residual-pipeline-efficiency-gaps/CONTEXT.md), [work packages](phases/45-close-residual-pipeline-efficiency-gaps/WORK-PACKAGES.md) and the [phase-40 delivery findings](investigations/INV-008-residual-pipeline-efficiency/intake/phase40-delivery-findings.md)
 
 S1 is a separate high-risk correctness fix with its own ticket and human checkpoint at formal decomposition. This is a queued scope, not an executable ticket graph or approval to activate model-policy experiments.
@@ -854,8 +854,8 @@ S1 is a separate high-risk correctness fix with its own ticket and human checkpo
 <!-- shipyard:gsd-sync:begin -->
 ## Shipyard synchronization (generated)
 
-- Source fingerprint: `b1a4ef358c0f28c32611a2935d37475ac430fe5e2993b377cdf14115e369f678`
-- Plans merged: 211/229
+- Source fingerprint: `4669df0813be3cc1046732999917ba1fd33d9bda3c6280c62bc81e6524e454b2`
+- Plans merged: 213/229
 - Phases verified: 10/26
 - Current phase: 20
 
@@ -884,8 +884,8 @@ S1 is a separate high-risk correctness fix with its own ticket and human checkpo
 | 40 — Build delivery seams and clean target-project PRs | 27 | 27 | pending |
 | 41 — Reduce pipeline subscription overhead | 9 | 9 | gaps_found |
 | 42 — Resume trusted finalization without executor replay | 3 | 3 | gaps_found |
-| 43 — Target-project delivery at scale | 19 | 2 | pending |
-| 44 — Optimize subscription efficiency per runtime | 8 | 7 | pending |
+| 43 — Target-project delivery at scale | 19 | 3 | pending |
+| 44 — Optimize subscription efficiency per runtime | 8 | 8 | pending |
 | 45 — Close residual pipeline efficiency gaps | 0 | 0 | pending |
 
 <!-- shipyard:gsd-sync:end -->

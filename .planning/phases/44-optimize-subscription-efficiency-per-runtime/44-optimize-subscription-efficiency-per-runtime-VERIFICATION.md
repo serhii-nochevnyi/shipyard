@@ -1,8 +1,8 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 379e555d08d73adb8d93e5a956cbc6592151a0be618394ed68c45d8a6ad468ec
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: df4d32cfa32bf221f429510341e38aaf267fad910cadae0455504528dfe50584
 phase: 44
 status: human_needed
-shipyard_source_fingerprint: 379e555d08d73adb8d93e5a956cbc6592151a0be618394ed68c45d8a6ad468ec
+shipyard_source_fingerprint: df4d32cfa32bf221f429510341e38aaf267fad910cadae0455504528dfe50584
 ---
 
 # Phase 44: Optimize subscription efficiency per runtime — Verification Projection
@@ -13,7 +13,7 @@ shipyard_source_fingerprint: 379e555d08d73adb8d93e5a956cbc6592151a0be618394ed68c
 
 | Truth | Evidence | Status |
 |---|---|---|
-| Every phase plan is accounted for | 7/8 delivery records are merged | ? UNCERTAIN |
+| Every phase plan is accounted for | 8/8 delivery records are merged | ✓ VERIFIED |
 | Integration is coherent | INTEGRATION.md is missing | ? UNCERTAIN |
 | Verification evidence is present | INTEGRATION.md is missing | ? UNCERTAIN |
 
@@ -28,7 +28,7 @@ shipyard_source_fingerprint: 379e555d08d73adb8d93e5a956cbc6592151a0be618394ed68c
 | T-44-05 | merged | ✓ VERIFIED |
 | T-44-06 | merged | ✓ VERIFIED |
 | T-44-07 | merged | ✓ VERIFIED |
-| T-44-08 | pending | ? UNCERTAIN |
+| T-44-08 | merged | ✓ VERIFIED |
 
 ## Verification Commands
 
@@ -37,4 +37,4 @@ shipyard_source_fingerprint: 379e555d08d73adb8d93e5a956cbc6592151a0be618394ed68c
 
 ## Gaps Summary
 
-**Not green:** 1 plan(s) are not merged.
+**Not green:** INTEGRATION.md is missing.
