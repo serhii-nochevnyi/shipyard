@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: bae30cc10be09fc3add20618fb869ee862e7560c6bacf785b34c05ec7964094f
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: b3988e35ee76ce701f0a2c0d861af6a889ac259dc31a7154350717ad66a8c97f
 phase: 45-close-residual-pipeline-efficiency-gaps
 plan: 14
 subsystem: shipyard delivery
@@ -22,7 +22,7 @@ key-decisions:
 duration: 0min
 status: halted
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: bae30cc10be09fc3add20618fb869ee862e7560c6bacf785b34c05ec7964094f
+shipyard_source_fingerprint: b3988e35ee76ce701f0a2c0d861af6a889ac259dc31a7154350717ad66a8c97f
 ---
 
 # Phase 45: Capture scrubber replaces Codex account identifiers, the scratch dir is a git repo, and the fixture scan rejects leaked account ids — Delivery Projection
@@ -32,8 +32,8 @@ shipyard_source_fingerprint: bae30cc10be09fc3add20618fb869ee862e7560c6bacf785b34
 ## Delivery Evidence
 
 - Ticket: T-45-14
-- Delivery status: pending
-- PR: not observed
+- Delivery status: pr-open
+- PR: #365
 - Source plan: .planning/phases/45-close-residual-pipeline-efficiency-gaps/45-14-PLAN.md
 - This summary is halted until the delivery state observes `merged`.
 
