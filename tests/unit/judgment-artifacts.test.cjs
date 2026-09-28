@@ -274,6 +274,65 @@ test('a conform architecture judgment cannot hide a non-blocking ADR finding', (
   }
 });
 
+test('a conform architecture judgment can retain an unknown type as an informational note', () => {
+  const value = fixture('arch-review', 'T-33-04-arch-conform-unknown-note');
+  try {
+    const result = archResult(value.root, value.boundaryTicket, {
+      verdict: 'conform',
+      blocking_count: 0,
+      findings: [{ id: 'F1', type: 'future-review-signal', summary: 'unrecognized but informational' }],
+    });
+    const sealed = roleArtifact.seal(sealInput(value, result, {
+      role: 'arch-review',
+      evidencePath: evidence(value.root, '.shipyard-arch-review-evidence.md', 'complete evidence'),
+    }));
+    assert.equal(sealed.envelope.verdict, 'conform');
+    assert.equal(sealed.envelope.outcome, 'conform');
+    assert.equal(sealed.envelope.blocking_count, 0);
+    assert.equal(sealed.envelope.finding_count, 1);
+
+    const read = roleArtifact.read(sealInput(value, undefined, {
+      role: 'arch-review',
+      ticket: value.boundaryTicket,
+      artifactPath: sealed.artifact_ref,
+      artifactDigest: sealed.artifact_digest,
+    }));
+    assert.deepEqual(read.findings.findings[0], {
+      id: 'F1',
+      type: 'informational',
+      summary: 'unrecognized but informational',
+      original_type: 'future-review-signal',
+      blocking: false,
+    });
+  } finally {
+    fs.rmSync(value.root, { recursive: true, force: true });
+  }
+});
+
+test('a known informational or note finding cannot forge original_type under conform', () => {
+  for (const type of ['informational', 'note']) {
+    const value = fixture('arch-review', `T-33-04-arch-forged-original-${type}`);
+    try {
+      const result = archResult(value.root, value.boundaryTicket, {
+        verdict: 'conform',
+        blocking_count: 0,
+        findings: [{
+          id: 'F1', type, blocking: false, summary: 'known informational finding', original_type: 'future-review-signal',
+        }],
+      });
+      assert.throws(
+        () => roleArtifact.seal(sealInput(value, result, {
+          role: 'arch-review',
+          evidencePath: evidence(value.root, '.shipyard-arch-review-evidence.md', 'complete evidence'),
+        })),
+        (error) => error && error.code === 'JUDGMENT_OUTCOME_MISMATCH',
+      );
+    } finally {
+      fs.rmSync(value.root, { recursive: true, force: true });
+    }
+  }
+});
+
 test('a sentinel round is bound to its complete guarded ticket set, not one fabricated ticket', () => {
   const tickets = [
     { id: 'T-33-A', pr: 501, head: 'a'.repeat(40), base: 'epic/33' },

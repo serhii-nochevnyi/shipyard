@@ -4,9 +4,12 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
+const { loadConfig, repoValue } = require('./pipeline-config.cjs');
 
 const MAX_MARKER_LENGTH = 120;
 const MARKER_PATTERN = /^@(invariant|security|contract)\s*:/i;
+const BUILTIN_MARKERS = ['@invariant:', '@security:', '@contract:'];
+const COMMENT_MARKER_REGEX_METACHARS = new Set(['\\', '^', '$', '*', '+', '?', '(', ')', '[', ']', '{', '}', '|']);
 const HISTORY_PATTERN =
   /(?:\b(?:todo|fixme|hack|workaround|temporary|ticket|issue|pull request|commit|history|legacy|previously|because)\b|#\d+\b|\b(?:adr|myd|pdf)-?\d+\b)/i;
 const EXTENSIONS = new Map([
@@ -56,16 +59,18 @@ function protectedComment(text) {
   return /^(?:SPDX-License-Identifier\b|copyright\b|\(c\)\b|@(?:ts-check|ts-ignore|ts-expect-error|generated)\b|eslint(?:-disable|-enable)?\b|biome-ignore\b|tslint(?::|-)\s*|prettier-ignore\b|jshint\b|c8\s+ignore\b|istanbul\s+ignore\b|coverage:\s*|shellcheck\b|noqa\b|nosec\b|nolint\b|lint:ignore\b|go:(?:build|generate|embed|linkname)\b|line\s+\S+:\d+\b|pragma\b|keep\b|shipyard(?:[-:]|\s)|gsd-sync\b|managed\s+by\b|do\s+not\s+edit\b|generated\s+file\b)/i.test(body);
 }
 
-function markerComment(text) {
+function markerComment(text, extraMarkers = []) {
   const body = commentBody(text);
+  const configuredMarker = extraMarkers.some((token) =>
+    body.startsWith(token) && (body.length === token.length || /\s/.test(body[token.length])));
   return (
-    MARKER_PATTERN.test(body) &&
+    (MARKER_PATTERN.test(body) || configuredMarker) &&
     text.trim().length <= MAX_MARKER_LENGTH &&
     !HISTORY_PATTERN.test(body)
   );
 }
 
-function scanText(text, language) {
+function scanText(text, language, extraMarkers = []) {
   const spec = SPECS[language];
   if (!spec) throw new Error(`unsupported language: ${language}`);
   const lines = text.split('\n');
@@ -123,7 +128,7 @@ function scanText(text, language) {
           protected:
             line.trimStart().startsWith('#!') ||
             protectedComment(fragment) ||
-            markerComment(fragment),
+            markerComment(fragment, extraMarkers),
           block: false,
           openedHere: true,
           closedHere: true,
@@ -137,7 +142,7 @@ function scanText(text, language) {
         const end = close === -1 ? line.length : close + spec.block[1].length;
         const fragment = line.slice(i, end);
         const isProtected =
-          protectedComment(fragment) || (close !== -1 && markerComment(fragment));
+          protectedComment(fragment) || (close !== -1 && markerComment(fragment, extraMarkers));
         fragments.push({
           text: fragment,
           protected: isProtected,
@@ -211,36 +216,73 @@ function diffPath(value, prefix) {
 }
 
 function parseDiff(diff) {
-  const additions = new Map();
+  const changes = new Map();
   let file = null;
-  let nextLine = null;
+  let oldFile = null;
+  let hunk = null;
+  const finishHunk = () => {
+    if (!file || !hunk) return;
+    const change = changes.get(file);
+    if (!change) return;
+    const pairs = Math.min(hunk.removed.length, hunk.added.length);
+    for (let index = 0; index < pairs; index++) {
+      change.edited.set(hunk.added[index], hunk.removed[index]);
+    }
+  };
   for (const raw of diff.split('\n')) {
     if (raw.startsWith('diff --git ')) {
+      finishHunk();
       file = null;
-      nextLine = null;
+      oldFile = null;
+      hunk = null;
       continue;
     }
-    if (raw.startsWith('+++ ') && nextLine === null) {
+    if (raw.startsWith('--- ') && !hunk) {
+      oldFile = diffPath(raw.slice(4), 'a/');
+      continue;
+    }
+    if (raw.startsWith('+++ ') && !hunk) {
       file = diffPath(raw.slice(4), 'b/');
-      nextLine = null;
       continue;
     }
-    const hunk = raw.match(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/);
-    if (hunk) {
-      nextLine = Number(hunk[1]);
+    const header = raw.match(/^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,(\d+))? @@/);
+    if (header) {
+      finishHunk();
+      if (!file) {
+        hunk = null;
+        continue;
+      }
+      hunk = {
+        oldLine: Number(header[1]),
+        newLine: Number(header[2]),
+        removed: [],
+        added: [],
+      };
       continue;
     }
-    if (!file || nextLine === null || raw.length === 0) continue;
+    if (!file || !hunk || raw.length === 0) continue;
     if (raw[0] === '+') {
-      if (!additions.has(file)) additions.set(file, new Set());
-      additions.get(file).add(nextLine);
-      nextLine++;
+      if (!changes.has(file)) {
+        changes.set(file, { additions: new Set(), edited: new Map(), preimagePath: oldFile || file });
+      }
+      const change = changes.get(file);
+      change.additions.add(hunk.newLine);
+      hunk.added.push(hunk.newLine);
+      hunk.newLine++;
       continue;
     }
-    if (raw[0] === '-') continue;
-    if (raw[0] === ' ') nextLine++;
+    if (raw[0] === '-') {
+      hunk.removed.push(hunk.oldLine);
+      hunk.oldLine++;
+      continue;
+    }
+    if (raw[0] === ' ') {
+      hunk.oldLine++;
+      hunk.newLine++;
+    }
   }
-  return additions;
+  finishHunk();
+  return changes;
 }
 
 function git(worktree, args) {
@@ -252,6 +294,41 @@ function git(worktree, args) {
   } catch (error) {
     const detail = error.stderr ? String(error.stderr).trim() : error.message;
     throw new Error(`git ${args.join(' ')} failed: ${detail}`);
+  }
+}
+
+function repositorySlug(root) {
+  if (!root) return null;
+  let remote;
+  try { remote = git(root, ['remote', 'get-url', 'origin']).trim(); } catch { return null; }
+  let remotePath = remote;
+  const scp = remote.match(/^[^/]+@[^:]+:(.+)$/);
+  if (scp) remotePath = scp[1];
+  else {
+    try {
+      const url = new URL(remote);
+      if (url.protocol !== 'file:') remotePath = url.pathname;
+    } catch {}
+  }
+  const parts = remotePath.replace(/\.git$/i, '').split(/[\\/]/).filter(Boolean);
+  if (parts.length < 2) return null;
+  return `${parts[parts.length - 2]}/${parts[parts.length - 1]}`;
+}
+
+function extraMarkers({ projectRoot, repo }) {
+  if (!projectRoot || !repo) return [];
+  try {
+    const loaded = loadConfig(projectRoot);
+    if (!loaded.valid) return [];
+    const configured = repoValue(loaded, 'comment_markers', repo);
+    if (!Array.isArray(configured)) return [];
+    return configured.filter((token) => {
+      const chars = typeof token === 'string' ? [...token] : [];
+      return chars.length >= 1 && chars.length <= 64 && !/\s/.test(token)
+        && !chars.some((char) => COMMENT_MARKER_REGEX_METACHARS.has(char));
+    });
+  } catch {
+    return [];
   }
 }
 
@@ -298,8 +375,16 @@ function ratioFor(comments, code) {
 
 function analyze(worktree, base, options = {}) {
   const resolvedBase = resolveBase(worktree, base);
-  const diff = diffFor(worktree, resolvedBase, Boolean(options.workingTree));
-  const additions = parseDiff(diff);
+  const workingTree = Boolean(options.workingTree);
+  const diff = diffFor(worktree, resolvedBase, workingTree);
+  const preimage = workingTree
+    ? resolvedBase
+    : git(worktree, ['merge-base', resolvedBase, 'HEAD']).trim();
+  const changes = parseDiff(diff);
+  const projectRoot = options.projectRoot || null;
+  const repo = options.repo || repositorySlug(worktree);
+  const configuredMarkers = extraMarkers({ projectRoot, repo });
+  const allowedMarkers = [...new Set([...BUILTIN_MARKERS, ...configuredMarkers])];
   const files = [];
   const skipped = [];
   let totals = {
@@ -311,7 +396,7 @@ function analyze(worktree, base, options = {}) {
     manual_comment_lines: 0,
   };
 
-  for (const [relative, lineNumbers] of additions) {
+  for (const [relative, change] of changes) {
     const language = languageFor(relative);
     if (!language) {
       skipped.push({ path: relative, reason: 'unsupported-file-type' });
@@ -342,7 +427,14 @@ function analyze(worktree, base, options = {}) {
       skipped.push({ path: relative, reason: 'binary-file' });
       continue;
     }
-    const scanned = scanText(content.toString('utf8'), language);
+    const scanned = scanText(content.toString('utf8'), language, configuredMarkers);
+    let baseScanned = [];
+    if (change.edited.size) {
+      try {
+        const baseContent = git(worktree, ['show', `${preimage}:${change.preimagePath}`]);
+        baseScanned = scanText(baseContent, languageFor(change.preimagePath), configuredMarkers);
+      } catch {}
+    }
     const findings = [];
     const counts = {
       added_lines: 0,
@@ -352,9 +444,21 @@ function analyze(worktree, base, options = {}) {
       cleanable_comment_lines: 0,
       manual_comment_lines: 0,
     };
-    for (const line of [...lineNumbers].sort((a, b) => a - b)) {
+    for (const line of [...change.additions].sort((a, b) => a - b)) {
       const item = scanned[line - 1];
       if (!item) throw new Error(`diff line is outside file: ${relative}:${line}`);
+      const previousLine = change.edited.get(line);
+      const previous = previousLine ? baseScanned[previousLine - 1] : null;
+      const wasComment = previous && (previous.comment || previous.protected);
+      const isComment = item.comment || item.protected;
+      if (wasComment && isComment) {
+        findings.push({
+          line,
+          kind: 'edited_comment',
+          text: item.text.trim().slice(0, 160),
+        });
+        continue;
+      }
       counts.added_lines++;
       if (item.code) counts.code_lines++;
       if (item.comment) {
@@ -394,7 +498,7 @@ function analyze(worktree, base, options = {}) {
     policy: {
       mode: 'strict',
       max_marker_length: MAX_MARKER_LENGTH,
-      allowed_markers: ['@invariant:', '@security:', '@contract:'],
+      allowed_markers: allowedMarkers,
       scope: 'non-allowed comments on added lines in supported code/config files',
       per_file: true,
     },
@@ -418,16 +522,16 @@ function flag(argv, name) {
 }
 
 function argumentsFor(argv) {
-  const valueFlags = new Set(['--worktree', '--base']);
+  const valueFlags = new Set(['--worktree', '--base', '--project-root']);
   const positionals = argv.filter((value, index) => !value.startsWith('--') && !valueFlags.has(argv[index - 1]));
   const command = positionals[0];
   const ticket = positionals[1];
   if (!['check', 'clean'].includes(command) || !ticket) {
-    throw new Error('usage: comment-policy.cjs check|clean <ticket> --worktree <path> --base <ref> [--json] [--apply]');
+    throw new Error('usage: comment-policy.cjs check|clean <ticket> --worktree <path> --base <ref> [--project-root <path>] [--json] [--apply]');
   }
   const worktree = flag(argv, 'worktree');
   const base = flag(argv, 'base');
-  if (!worktree || !base) throw new Error('usage: comment-policy.cjs check|clean <ticket> --worktree <path> --base <ref> [--json] [--apply]');
+  if (!worktree || !base) throw new Error('usage: comment-policy.cjs check|clean <ticket> --worktree <path> --base <ref> [--project-root <path>] [--json] [--apply]');
   return {
     command,
     ticket,
@@ -436,6 +540,13 @@ function argumentsFor(argv) {
     json: argv.includes('--json'),
     apply: argv.includes('--apply'),
   };
+}
+
+function resolveProjectRoot(argv) {
+  const supplied = flag(argv, 'project-root');
+  if (supplied) return path.resolve(supplied);
+  if (process.env.SHIPYARD_PROJECT_ROOT) return path.resolve(process.env.SHIPYARD_PROJECT_ROOT);
+  return null;
 }
 
 function printCheck(result, ticket) {
@@ -502,7 +613,18 @@ function applyCleanup(input, before) {
 
 function main(argv = process.argv.slice(2)) {
   const input = argumentsFor(argv);
-  const before = analyze(input.worktree, input.base);
+  const options = {
+    projectRoot: resolveProjectRoot(argv),
+    repo: repositorySlug(input.worktree),
+  };
+  if (input.command === 'clean' && input.apply && options.projectRoot) {
+    const config = loadConfig(options.projectRoot);
+    if (!config.valid) {
+      const invalidConfigPath = config.error && config.error.file ? config.error.file : config.file;
+      throw new Error(`clean --apply refused: invalid project config at ${invalidConfigPath}`);
+    }
+  }
+  const before = analyze(input.worktree, input.base, options);
   if (input.command === 'check') {
     if (input.json) console.log(JSON.stringify({ ticket: input.ticket, ...before }, null, 2));
     else printCheck(before, input.ticket);
@@ -521,7 +643,7 @@ function main(argv = process.argv.slice(2)) {
     return before.ok ? 0 : 1;
   }
   const removed = applyCleanup(input, before);
-  const after = analyze(input.worktree, input.base, { workingTree: true });
+  const after = analyze(input.worktree, input.base, { ...options, workingTree: true });
   const result = {
     ticket: input.ticket,
     command: 'clean',
@@ -539,6 +661,8 @@ function main(argv = process.argv.slice(2)) {
 
 module.exports = {
   MAX_MARKER_LENGTH,
+  repositorySlug,
+  extraMarkers,
   languageFor,
   protectedComment,
   markerComment,

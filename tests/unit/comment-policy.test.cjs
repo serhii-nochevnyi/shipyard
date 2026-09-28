@@ -9,6 +9,7 @@ const { suite, test, done, assert } = require('./assert-harness.cjs');
 const ROOT = path.join(__dirname, '..', '..');
 const SCRIPT = path.join(ROOT, 'plugins', 'delivery-pipeline', 'scripts', 'comment-policy.cjs');
 const PUBLISH_SCRIPT = path.join(ROOT, 'plugins', 'delivery-pipeline', 'scripts', 'publish-gate.cjs');
+const commentPolicy = require(SCRIPT);
 
 function git(cwd, args) {
   const result = spawnSync('git', ['-C', cwd, ...args], { encoding: 'utf8' });
@@ -40,8 +41,8 @@ function fixture(base, change) {
   return repo;
 }
 
-function run(repo, args) {
-  return spawnSync(process.execPath, [SCRIPT, ...args], { cwd: repo, encoding: 'utf8' });
+function run(repo, args, env = process.env) {
+  return spawnSync(process.execPath, [SCRIPT, ...args], { cwd: repo, encoding: 'utf8', env });
 }
 
 function runPublish(repo, args) {
@@ -54,6 +55,14 @@ function args(command, repo, extra = []) {
 
 function read(repo, file) {
   return fs.readFileSync(path.join(repo, file), 'utf8');
+}
+
+function configureMarkers(projectRoot, markers) {
+  const planning = path.join(projectRoot, '.planning');
+  fs.mkdirSync(planning, { recursive: true });
+  fs.writeFileSync(path.join(planning, 'config.json'), JSON.stringify({
+    delivery_pipeline: { comment_markers: markers },
+  }));
 }
 
 suite('comment-policy — strict pre-push policy and explicit cleanup');
@@ -119,6 +128,371 @@ test('allows only short invariant, security and contract markers', () => {
     '@invariant:',
     '@security:',
     '@contract:',
+  ]);
+});
+
+test('configured markers apply to the matching origin repository only', () => {
+  const repo = fixture(
+    { 'src/app.js': 'const value = 1;\n' },
+    { 'src/app.js': 'const value = 1;\n// @ai-generated model=x\n' },
+  );
+  git(repo, ['remote', 'add', 'origin', 'https://github.com/acme/app.git']);
+  configureMarkers(repo, { 'acme/app': ['@ai-generated'] });
+
+  const matching = commentPolicy.analyze(repo, 'main', { projectRoot: repo });
+  assert.strictEqual(matching.ok, true);
+  assert.deepStrictEqual(matching.policy.allowed_markers, [
+    '@invariant:', '@security:', '@contract:', '@ai-generated',
+  ]);
+
+  git(repo, ['remote', 'set-url', 'origin', 'https://github.com/acme/other.git']);
+  const other = commentPolicy.analyze(repo, 'main', { projectRoot: repo });
+  assert.strictEqual(other.ok, false);
+  assert.deepStrictEqual(other.policy.allowed_markers, [
+    '@invariant:', '@security:', '@contract:',
+  ]);
+});
+
+test('direct check and clean CLI load markers from a distinct project root', () => {
+  const repo = fixture(
+    { 'src/app.js': 'const answer = 42;\n' },
+    { 'src/app.js': '// @ai-generated model=x\nconst answer = 42;\n' },
+  );
+  git(repo, ['remote', 'add', 'origin', 'https://github.com/acme/app.git']);
+  const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-comment-project-'));
+  configureMarkers(projectRoot, { 'acme/app': ['@ai-generated'] });
+  const cliArgs = ['--project-root', projectRoot, '--json'];
+
+  const checked = run(repo, args('check', repo, cliArgs));
+  const cleaned = run(repo, args('clean', repo, cliArgs));
+  assert.deepStrictEqual([checked.status, cleaned.status], [0, 0],
+    `${checked.stdout}${checked.stderr}${cleaned.stdout}${cleaned.stderr}`);
+  assert.deepStrictEqual(JSON.parse(checked.stdout).policy.allowed_markers, [
+    '@invariant:', '@security:', '@contract:', '@ai-generated',
+  ]);
+  assert.deepStrictEqual(JSON.parse(cleaned.stdout).before.policy.allowed_markers, [
+    '@invariant:', '@security:', '@contract:', '@ai-generated',
+  ]);
+});
+
+test('direct CLI uses SHIPYARD_PROJECT_ROOT but does not infer it from the worktree', () => {
+  const repo = fixture(
+    { 'src/app.js': 'const answer = 42;\n' },
+    { 'src/app.js': '// @ai-generated model=x\nconst answer = 42;\n' },
+  );
+  git(repo, ['remote', 'add', 'origin', 'https://github.com/acme/app.git']);
+  configureMarkers(repo, { 'acme/app': ['@ai-generated'] });
+
+  const fromWorktreeRoot = run(repo, args('check', repo, ['--json']), {
+    ...process.env,
+    SHIPYARD_PROJECT_ROOT: '',
+  });
+  const fromEnvironment = run(repo, args('check', repo, ['--json']), {
+    ...process.env,
+    SHIPYARD_PROJECT_ROOT: repo,
+  });
+  assert.deepStrictEqual([fromWorktreeRoot.status, fromEnvironment.status], [1, 0],
+    `${fromWorktreeRoot.stdout}${fromWorktreeRoot.stderr}${fromEnvironment.stdout}${fromEnvironment.stderr}`);
+  assert.deepStrictEqual(JSON.parse(fromWorktreeRoot.stdout).policy.allowed_markers, [
+    '@invariant:', '@security:', '@contract:',
+  ]);
+  assert.strictEqual(JSON.parse(fromEnvironment.stdout).policy.allowed_markers.includes('@ai-generated'), true);
+});
+
+test('direct CLI fails closed when the target worktree has no origin', () => {
+  const repo = fixture(
+    { 'src/app.js': 'const answer = 42;\n' },
+    { 'src/app.js': '// @ai-generated model=x\nconst answer = 42;\n' },
+  );
+  const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-comment-project-'));
+  git(projectRoot, ['init', '-q']);
+  git(projectRoot, ['remote', 'add', 'origin', 'https://github.com/acme/app.git']);
+  configureMarkers(projectRoot, { 'acme/app': ['@ai-generated'] });
+
+  const result = run(repo, args('check', repo, ['--project-root', projectRoot, '--json']));
+  assert.strictEqual(result.status, 1, result.stdout + result.stderr);
+  const report = JSON.parse(result.stdout);
+  assert.strictEqual(report.ok, false);
+  assert.deepStrictEqual(report.policy.allowed_markers, [
+    '@invariant:', '@security:', '@contract:',
+  ]);
+});
+
+test('omitting the project root ignores tempting target config but an explicit root stays trusted', () => {
+  const repo = fixture(
+    { 'src/app.js': 'const value = 1;\n' },
+    {
+      'src/app.js': [
+        'const value = 1;',
+        '// @target-generated model=x',
+        '// @trusted-generated model=y',
+      ].join('\n') + '\n',
+    },
+  );
+  git(repo, ['remote', 'add', 'origin', 'https://github.com/acme/app.git']);
+  configureMarkers(repo, { 'acme/app': ['@target-generated'] });
+  const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-trusted-project-'));
+  configureMarkers(projectRoot, { 'acme/app': ['@trusted-generated'] });
+
+  const trusted = commentPolicy.analyze(repo, 'main', { projectRoot });
+  assert.strictEqual(trusted.policy.allowed_markers.includes('@trusted-generated'), true);
+  assert.strictEqual(trusted.policy.allowed_markers.includes('@target-generated'), false);
+  assert.strictEqual(trusted.files[0].comment_lines, 1);
+
+  const missingRoot = run(repo, args('check', repo, ['--json']), {
+    ...process.env,
+    SHIPYARD_PROJECT_ROOT: '',
+  });
+  assert.strictEqual(missingRoot.status, 1, missingRoot.stdout + missingRoot.stderr);
+  assert.deepStrictEqual(JSON.parse(missingRoot.stdout).policy.allowed_markers, [
+    '@invariant:', '@security:', '@contract:',
+  ]);
+  assert.strictEqual(JSON.parse(missingRoot.stdout).files[0].comment_lines, 2);
+});
+
+test('configured markers match scp-style origins with git output newlines', () => {
+  const repo = fixture(
+    { 'src/app.js': 'const value = 1;\n' },
+    { 'src/app.js': 'const value = 1;\n// @ai-generated model=x\n' },
+  );
+  git(repo, ['remote', 'add', 'origin', 'git@github.com:acme/app.git']);
+  configureMarkers(repo, { 'acme/app': ['@ai-generated'] });
+
+  assert.strictEqual(commentPolicy.repositorySlug(repo), 'acme/app');
+  const report = commentPolicy.analyze(repo, 'main', { projectRoot: repo });
+  assert.strictEqual(report.ok, true);
+  assert.strictEqual(report.policy.allowed_markers.includes('@ai-generated'), true);
+});
+
+test('default configured markers do not apply when origin cannot identify a repository', () => {
+  const repo = fixture(
+    { 'src/app.js': 'const value = 1;\n' },
+    { 'src/app.js': 'const value = 1;\n// @ai-generated model=x\n' },
+  );
+  configureMarkers(repo, { default: ['@ai-generated'] });
+
+  const report = commentPolicy.analyze(repo, 'main', { projectRoot: repo });
+  assert.strictEqual(report.ok, false);
+  assert.deepStrictEqual(report.policy.allowed_markers, [
+    '@invariant:', '@security:', '@contract:',
+  ]);
+});
+
+test('configured marker tokens containing whitespace or regex metacharacters are dropped', () => {
+  const repo = fixture(
+    { 'src/app.js': 'const value = 1;\n' },
+    {
+      'src/app.js': [
+        'const value = 1;',
+        '// @bad marker model=x',
+        '// @bad(marker model=x',
+      ].join('\n') + '\n',
+    },
+  );
+  git(repo, ['remote', 'add', 'origin', 'https://github.com/acme/app.git']);
+  configureMarkers(repo, { 'acme/app': ['@bad marker', '@bad('] });
+
+  const report = commentPolicy.analyze(repo, 'main', { projectRoot: repo });
+  assert.strictEqual(report.ok, false);
+  assert.strictEqual(report.files[0].comment_lines, 2);
+  assert.deepStrictEqual(report.policy.allowed_markers, [
+    '@invariant:', '@security:', '@contract:',
+  ]);
+});
+
+test('editing an existing comment is reported without blocking', () => {
+  const repo = fixture(
+    { 'src/app.js': '// stale explanation\nconst value = 1;\n' },
+    { 'src/app.js': '// updated explanation\nconst value = 1;\n' },
+  );
+  const report = commentPolicy.analyze(repo, 'main');
+  assert.strictEqual(report.ok, true);
+  assert.strictEqual(report.files[0].added_lines, 0);
+  assert.strictEqual(report.files[0].comment_lines, 0);
+  assert.deepStrictEqual(report.files[0].findings.map((finding) => finding.kind), ['edited_comment']);
+});
+
+test('editing an existing comment in a renamed file uses the old-path pre-image', () => {
+  const repo = fixture(
+    {
+      'src/old.js': [
+        '// stale explanation',
+        'const value = 1;',
+        'const keep = 2;',
+        'const another = 3;',
+      ].join('\n') + '\n',
+    },
+    {
+      'src/new.js': [
+        '// revised explanation',
+        'const value = 1;',
+        'const keep = 2;',
+        'const another = 3;',
+      ].join('\n') + '\n',
+    },
+  );
+  git(repo, ['rm', 'src/old.js']);
+  git(repo, ['commit', '-qm', 'rename and edit existing comment']);
+
+  const report = commentPolicy.analyze(repo, 'main');
+  assert.strictEqual(report.ok, true);
+  assert.strictEqual(report.files[0].comment_lines, 0);
+  assert.deepStrictEqual(report.files[0].findings.map((finding) => finding.kind), ['edited_comment']);
+});
+
+test('cross-language rename scans the pre-image with the old language and still blocks new comments', () => {
+  const repo = fixture(
+    {
+      'src/old.py': [
+        '# stale explanation',
+        'value = 1',
+        'value += 2',
+        'value += 3',
+        'value += 4',
+        'value += 5',
+      ].join('\n') + '\n',
+    },
+    {
+      'src/new.js': [
+        '// revised explanation',
+        'value = 1',
+        'value += 2',
+        'value += 3',
+        'value += 4',
+        'value += 5',
+        '// net-new free comment',
+      ].join('\n') + '\n',
+    },
+  );
+  git(repo, ['rm', 'src/old.py']);
+  git(repo, ['commit', '-qm', 'rename Python file to JavaScript and edit comment']);
+
+  const report = commentPolicy.analyze(repo, 'main');
+  assert.strictEqual(report.files.length, 1);
+  assert.strictEqual(report.files[0].path, 'src/new.js');
+  assert.strictEqual(report.files[0].language, 'c-like');
+  assert.strictEqual(report.files[0].comment_lines, 1);
+  assert.strictEqual(report.files[0].added_lines, 1);
+  assert.deepStrictEqual(report.files[0].findings.map((finding) => finding.kind), [
+    'edited_comment',
+    'cleanable',
+  ]);
+  assert.strictEqual(report.ok, false);
+});
+
+test('unsupported old language on rename fails closed for new comments', () => {
+  const repo = fixture(
+    {
+      'src/old.unknown': [
+        '# old unsupported comment',
+        'value = 1',
+        'value += 2',
+        'value += 3',
+        'value += 4',
+        'value += 5',
+      ].join('\n') + '\n',
+    },
+    {
+      'src/new.js': [
+        '// revised comment',
+        'value = 1',
+        'value += 2',
+        'value += 3',
+        'value += 4',
+        'value += 5',
+        '// net-new free comment',
+      ].join('\n') + '\n',
+    },
+  );
+  git(repo, ['rm', 'src/old.unknown']);
+  git(repo, ['commit', '-qm', 'rename unsupported source to JavaScript']);
+
+  const report = commentPolicy.analyze(repo, 'main');
+  assert.strictEqual(report.files.length, 1);
+  assert.strictEqual(report.files[0].path, 'src/new.js');
+  assert.strictEqual(report.files[0].comment_lines, 2);
+  assert.strictEqual(report.ok, false);
+});
+
+test('turning a code line into a comment still blocks', () => {
+  const repo = fixture(
+    { 'src/app.js': 'const value = 1;\n' },
+    { 'src/app.js': '// const value = 1;\n' },
+  );
+  const report = commentPolicy.analyze(repo, 'main');
+  assert.strictEqual(report.ok, false);
+  assert.strictEqual(report.files[0].comment_lines, 1);
+});
+
+test('a net-new free comment still blocks', () => {
+  const repo = fixture(
+    { 'src/app.js': 'const value = 1;\n' },
+    { 'src/app.js': 'const value = 1;\n// new explanation\n' },
+  );
+  const report = commentPolicy.analyze(repo, 'main');
+  assert.strictEqual(report.ok, false);
+  assert.strictEqual(report.files[0].comment_lines, 1);
+});
+
+test('committed diff uses merge-base pre-image while worktree diff uses base-tip pre-image', () => {
+  const repo = fixture(
+    { 'src/app.js': 'const value = 1;\n' },
+    { 'src/app.js': '// ticket explanation\n' },
+  );
+
+  git(repo, ['checkout', 'main']);
+  fs.writeFileSync(path.join(repo, 'src/app.js'), '// base explanation\n');
+  git(repo, ['add', 'src/app.js']);
+  git(repo, ['commit', '-qm', 'base changes code to comment']);
+  git(repo, ['checkout', 'ticket/T-01-01']);
+
+  const committed = commentPolicy.analyze(repo, 'main');
+  assert.strictEqual(committed.ok, false);
+  assert.strictEqual(committed.files[0].comment_lines, 1);
+  assert.deepStrictEqual(committed.files[0].findings.map((finding) => finding.kind), ['cleanable']);
+
+  fs.writeFileSync(path.join(repo, 'src/app.js'), '// revised ticket explanation\n');
+  const workingTree = commentPolicy.analyze(repo, 'main', { workingTree: true });
+  assert.strictEqual(workingTree.ok, true);
+  assert.strictEqual(workingTree.files[0].comment_lines, 0);
+  assert.deepStrictEqual(workingTree.files[0].findings.map((finding) => finding.kind), ['edited_comment']);
+});
+
+test('deleting a comment does not create an added-line report', () => {
+  const repo = fixture(
+    { 'src/app.js': '// existing explanation\nconst value = 1;\n' },
+    { 'src/app.js': 'const value = 1;\n' },
+  );
+  const report = commentPolicy.analyze(repo, 'main');
+  assert.strictEqual(report.ok, true);
+  assert.deepStrictEqual(report.files, []);
+});
+
+test('editing inside a block comment uses the whole base blob to recognize its pre-image', () => {
+  const repo = fixture(
+    { 'src/app.js': 'const value = 1;\n/*\n * stale explanation\n */\n' },
+    { 'src/app.js': 'const value = 1;\n/*\n * revised explanation\n */\n' },
+  );
+  const report = commentPolicy.analyze(repo, 'main');
+  assert.strictEqual(report.ok, true);
+  assert.deepStrictEqual(report.files[0].findings.map((finding) => finding.kind), ['edited_comment']);
+});
+
+test('project configuration is read from the supplied project root, not the ticket worktree', () => {
+  const repo = fixture(
+    { 'src/app.js': 'const value = 1;\n' },
+    {
+      'src/app.js': 'const value = 1;\n// @ai-generated model=x\n',
+      '.planning/config.json': JSON.stringify({
+        delivery_pipeline: { comment_markers: { 'acme/app': ['@ai-generated'] } },
+      }) + '\n',
+    },
+  );
+  const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-comment-project-'));
+  const report = commentPolicy.analyze(repo, 'main', { projectRoot, repo: 'acme/app' });
+  assert.strictEqual(report.ok, false);
+  assert.deepStrictEqual(report.policy.allowed_markers, [
+    '@invariant:', '@security:', '@contract:',
   ]);
 });
 
@@ -270,6 +644,22 @@ test('refuses cleanup over an uncommitted tracked worktree', () => {
   const result = run(repo, args('clean', repo, ['--apply', '--json']));
   assert.strictEqual(result.status, 2, result.stdout + result.stderr);
   assert.match(result.stderr, /clean tracked worktree/);
+});
+
+test('clean --apply refuses an invalid project config and names it without changing files', () => {
+  const repo = fixture(
+    { 'src/app.js': 'const value = 1;\n' },
+    { 'src/app.js': 'const value = 1;\n// remove this narration\n' },
+  );
+  const configFile = path.join(repo, '.planning', 'config.json');
+  fs.mkdirSync(path.dirname(configFile), { recursive: true });
+  fs.writeFileSync(configFile, '{ invalid json');
+  const before = read(repo, 'src/app.js');
+
+  const result = run(repo, args('clean', repo, ['--project-root', repo, '--apply', '--json']));
+  assert.strictEqual(result.status, 2, result.stdout + result.stderr);
+  assert.ok(result.stderr.includes(configFile), result.stderr);
+  assert.strictEqual(read(repo, 'src/app.js'), before);
 });
 
 done();
