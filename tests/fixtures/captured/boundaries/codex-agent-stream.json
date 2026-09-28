@@ -12,7 +12,8 @@
   "consumers": [
     "tests/unit/codex-runtime-host.test.cjs",
     "tests/unit/codex-decompose-host.test.cjs",
-    "tests/unit/codex-delivery-host.test.cjs"
+    "tests/unit/codex-delivery-host.test.cjs",
+    "tests/unit/subscription-observation.test.cjs"
   ],
   "migrating": [
     "tests/unit/usage-attribution.test.cjs",
@@ -25,6 +26,7 @@
     "[\"']?type[\"']?\\s*:\\s*[\"']turn\\.completed[\"']",
     "[\"']?type[\"']?\\s*:\\s*[\"']session_meta[\"']",
     "[\"']?type[\"']?\\s*:\\s*[\"']turn_context[\"']",
-    "[\"']?type[\"']?\\s*:\\s*[\"']response_item[\"']"
+    "[\"']?type[\"']?\\s*:\\s*[\"']response_item[\"']",
+    "used_percent[\"']?\\s*:"
   ]
 }
