@@ -890,7 +890,10 @@ test('a lone cancel is rerun once and journalled; a second cancel on the head is
   gh.setRows([cancelRow('2020-01-01T00:00:00Z'), { name: 'lint', state: 'SUCCESS', bucket: 'pass' }]);
   const first = asJson(null, null, shortWait, { dir, bin: gh.bin });
   assert.equal(first.json.settled, null, 'a rerun cancel is never settled, let alone green');
+  assert.equal(first.json.watched[0].checks.failing, 0, 'the first cancel remains pending');
+  assert.equal(first.json.watched[0].checks.pending, 1, 'the rerun is still in flight');
   assert.deepStrictEqual(gh.reruns(), ['777']);
+  assert.equal(waits(dir).reruns['T-01-01'].journalled, true, 'the same-head rerun is journalled');
   const journal = fs.readFileSync(path.join(dir, '.planning', 'graph', 'delivery-log.jsonl'), 'utf8')
     .split('\n').filter(Boolean).map((l) => JSON.parse(l)).filter((e) => e.event === 'ci_rerun');
   assert.equal(journal.length, 1);
@@ -902,7 +905,23 @@ test('a lone cancel is rerun once and journalled; a second cancel on the head is
   const second = asJson(null, null, shortWait, { dir, bin: gh.bin });
   assert.equal(second.json.settled, 'T-01-01');
   assert.equal(second.json.checks.failing, 1, 'the rerun cancelled again: reported failing');
+  assert.equal(second.json.checks.pending, 0, 'a journalled second cancel is no longer pending');
   assert.deepStrictEqual(gh.reruns(), ['777'], 'and no second rerun');
+});
+
+test('a second same-head cancel without a journal entry stays pending and is not rerun', () => {
+  const dir = project(ciOnly(), stateWith({ 'T-01-01': { pr: 101, repo: 'acme/widgets', status: 'pr-open', head_sha: HEAD } }));
+  const gh = stubGhRerun(dir);
+  gh.setRows([cancelRow('2099-01-01T00:00:00Z')]);
+  fs.writeFileSync(path.join(dir, '.planning', 'graph', 'ci-waits.json'), JSON.stringify({
+    tickets: {},
+    reruns: { 'T-01-01': { head: HEAD, run_id: '777', at: '2020-01-01T00:00:00Z', journalled: false } },
+  }));
+  const { json } = asJson(null, null, shortWait, { dir, bin: gh.bin });
+  assert.equal(json.settled, null, 'without a journal entry the second cancel stays unsettled');
+  assert.equal(json.watched[0].checks.failing, 0);
+  assert.equal(json.watched[0].checks.pending, 1);
+  assert.deepStrictEqual(gh.reruns(), [], 'the recorded rerun is not repeated');
 });
 
 test('a superseded cancel is ignored: the newer pass settles green', () => {
@@ -920,14 +939,18 @@ suite('ci-wait — on Claude one call returns within 540 s, and parking is by ti
 test('on Claude with no --timeout the window is at most 540 s', () => {
   const dir = project(ciOnly(), stateWith());
   const bin = stubGh(dir, [{ name: 'Tests', state: 'SUCCESS', bucket: 'pass' }]);
-  const { json } = asJson(null, null, ['--interval', '1'], { dir, bin, env: { CLAUDE_CODE_ENTRYPOINT: 'cli' } });
+  const { json } = asJson(null, null, ['--interval', '1'], { dir, bin, env: {
+    CLAUDE_CODE_ENTRYPOINT: 'cli', CODEX_SANDBOX: '', CODEX_SANDBOX_NETWORK_DISABLED: '',
+  } });
   assert.ok(json.window_s <= 540, `window ${json.window_s}`);
 });
 
 test('on Claude an explicit --timeout 900 is honoured', () => {
   const dir = project(ciOnly(), stateWith());
   const bin = stubGh(dir, [{ name: 'Tests', state: 'SUCCESS', bucket: 'pass' }]);
-  const { json } = asJson(null, null, ['--timeout', '900', '--interval', '1'], { dir, bin, env: { CLAUDE_CODE_ENTRYPOINT: 'cli' } });
+  const { json } = asJson(null, null, ['--timeout', '900', '--interval', '1'], { dir, bin, env: {
+    CLAUDE_CODE_ENTRYPOINT: 'cli', CODEX_SANDBOX: '', CODEX_SANDBOX_NETWORK_DISABLED: '',
+  } });
   assert.equal(json.window_s, 900);
 });
 

@@ -828,10 +828,11 @@ test('ACTION_REQUIRED is a failing check, and the merge is refused', () => {
   assert.ok(r.blockers.some((b) => /1 failing check\(s\)/.test(b)), r.blockers.join('; '));
 });
 
-test('a cancelled check is failing too — no verdict is not a passing verdict', () => {
+test('a cancelled check is still running — the merge is refused, never merged', () => {
   const r = arMerge([{ name: 'x', state: 'CANCELLED', bucket: 'cancel' }]);
+  assert.strictEqual(r.merged, false);
   assert.strictEqual(r.would_merge, undefined);
-  assert.ok(r.blockers.some((b) => /1 failing check\(s\)/.test(b)), r.blockers.join('; '));
+  assert.ok(r.blockers.some((b) => /1 check\(s\) still running/.test(b)), r.blockers.join('; '));
 });
 
 test('a row whose bucket the gate cannot read keeps it WAITING, not landing', () => {

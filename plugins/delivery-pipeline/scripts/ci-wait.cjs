@@ -604,7 +604,7 @@ function noteRerun(id, entry) {
   });
 }
 
-// @invariant: one rerun per head; a lone cancel after that rerun is failing, and a rerun is never green.
+// @invariant: one rerun per head; only a journalled second cancel on that head is failing.
 function handleCancelled(w, c) {
   if (!c || !c.cancelled) return null;
   const head = (state[w.id] || {}).head_sha || null;
@@ -615,15 +615,29 @@ function handleCancelled(w, c) {
     if (w.repo) args.push('--repo', w.repo);
     const r = runBounded('gh', args, { timeoutMs: GH_TIMEOUT_MS });
     if (r.status === 0) {
+      const at = new Date().toISOString();
       try {
-        noteRerun(w.id, { head, run_id: String(runId), at: new Date().toISOString() });
+        noteRerun(w.id, { head, run_id: String(runId), at, journalled: false });
       } catch (e) {
         return holdCancelled(c, { rerun: false, run_id: String(runId), error: `rerun not recorded (${e.message})` });
       }
       const logged = runBounded(process.execPath, [path.join(__dirname, 'log-event.cjs'), 'ci_rerun',
         `ticket=${w.id}`, `pr=${w.pr}`, `head=${head}`, `run_id=${runId}`, '--graph', GRAPH],
       { timeoutMs: INTERNAL_COMMAND_TIMEOUT_MS });
-      return holdCancelled(c, { rerun: true, run_id: String(runId), journalled: logged.status === 0 });
+      let journalled = logged.status === 0;
+      let journalError = null;
+      if (journalled) {
+        try {
+          noteRerun(w.id, { head, run_id: String(runId), at, journalled: true });
+        } catch (e) {
+          journalled = false;
+          journalError = `rerun journal status not recorded (${e.message})`;
+        }
+      }
+      return holdCancelled(c, {
+        rerun: true, run_id: String(runId), journalled,
+        ...(journalError ? { error: journalError } : {}),
+      });
     }
     return { rerun: false, run_id: String(runId), error: diagnostic(r) };
   }
@@ -631,15 +645,23 @@ function handleCancelled(w, c) {
     const rerunAt = Date.parse(prior.at || '');
     const stale = c.cancelled_runs.every((r) => Number.isFinite(rerunAt) && !(Date.parse(r.started_at || '') > rerunAt));
     if (stale) return holdCancelled(c, { rerun: false, run_id: runId, awaiting_rerun: prior.run_id });
-    return { rerun: false, run_id: runId, already_rerun: prior.run_id };
+    if (prior.journalled) {
+      return failCancelled(c, { rerun: false, run_id: runId, already_rerun: prior.run_id });
+    }
+    return holdCancelled(c, { rerun: false, run_id: runId, awaiting_journal: prior.run_id });
   }
   return { rerun: false, run_id: runId, error: head ? 'no run id for the cancelled check' : 'no head sha on record' };
 }
 
-// @invariant: a cancel is failing in check-state; only while its one rerun is in flight does the wait hold it pending.
+// @invariant: check-state already counts a first cancel as pending; promote it only after a journalled rerun.
 function holdCancelled(c, outcome) {
-  c.failing -= c.cancelled;
-  c.pending += c.cancelled;
+  c.pending = Math.max(c.pending, c.cancelled);
+  return outcome;
+}
+
+function failCancelled(c, outcome) {
+  c.pending = Math.max(0, c.pending - c.cancelled);
+  c.failing += c.cancelled;
   return outcome;
 }
 
