@@ -585,6 +585,37 @@ function journal(rec) {
   }, { label: 'sentinel journal' });
 }
 
+// @contract: the state lock permits one request attempt per PR head.
+function rerequestReviewOnce(ticket, pr, head, repo) {
+  return withLock(lockDirFor(ROOT), 'state', () => {
+    const rows = fs.existsSync(JOURNAL) ? fs.readFileSync(JOURNAL, 'utf8').split('\n') : [];
+    const prior = rows.some((line) => {
+      try {
+        const row = JSON.parse(line);
+        return row.event === 'review_rerequest' && row.ticket === ticket && row.pr === pr && row.head === head;
+      } catch { return false; }
+    });
+    if (prior) return { already: true };
+    const call = runBounded('node', [path.join(__dirname, 'reviewers.cjs'), 'reinit', String(pr), '--force', '--json', ...repoArg(repo)], {
+      timeoutMs: REVIEWER_TIMEOUT_MS,
+    });
+    let result = null;
+    let error = call.status !== 0 ? diagnostic(call) : null;
+    if (!error) {
+      try { result = JSON.parse(call.stdout); } catch { error = 'reinit returned unreadable JSON'; }
+    }
+    const reviewers = result
+      ? [result.coderabbit?.requested && 'coderabbitai', result.copilot?.requested && 'copilot'].filter(Boolean)
+      : [];
+    if (!error && !reviewers.length) error = 'reinit did not request any reviewer';
+    fs.appendFileSync(JOURNAL, JSON.stringify({
+      ts: new Date().toISOString(), event: 'review_rerequest', ticket, pr, head, reviewers,
+      ...(error ? { error } : {}),
+    }) + '\n');
+    return error ? { error } : { reviewers };
+  }, { label: 'sentinel review rerequest' });
+}
+
 // ── duty: who owns each open PR right now ───────────────────────────────────
 // The `--parked` flag alone is not the parked set. The front also parks on the
 // durable records (escalations, drift verdicts), and the guard runs CONCURRENTLY
@@ -1272,7 +1303,24 @@ function mergeOne(id) {
     unresolved = reviewState.unresolved_count;
   } catch { unresolved = null; }
   if (typeof unresolved !== 'number') return block('review threads unreadable — refusing to merge blind');
+  if (pr.mergeStateStatus === 'BLOCKED') return block('GitHub reports the merge as BLOCKED (branch protection: a required review or check is missing)');
   if (reviewState.review_fresh === false) {
+    if (reviewState.stale_bot_only && pr.headRefOid) {
+      const remedy = reviewState.remedy || `reviewers.cjs reinit ${s.pr} --force`;
+      if (dryRun) return block(`stale bot approval — would re-request review once; if still stale, run ${remedy}`);
+      const request = rerequestReviewOnce(id, s.pr, pr.headRefOid, repo);
+      if (request.already) {
+        const reason = `stale bot approval remains after one re-request on this head — ${remedy}`;
+        if (!ESCALATED[id]) {
+          const marked = runBounded('node', [path.join(__dirname, 'escalation-record.cjs'),
+            'mark', id, reason, '--graph', GRAPH_DIR], { timeoutMs: REVIEWER_TIMEOUT_MS });
+          if (marked.status !== 0) return block(`${reason}; escalation record failed (${diagnostic(marked)})`);
+        }
+        return block(`escalated: ${reason}`);
+      }
+      if (request.error) return block(`stale bot approval; re-request failed (${request.error}) — escalate: ${remedy}`);
+      return block(`stale bot approval — re-requested ${request.reviewers.join(', ')} on this head; waiting for review`);
+    }
     return block(`${reviewState.review_freshness_reason || 'the approved review is stale'} — review approval must cover the current head`);
   }
   if (unresolved > 0) return block(`${unresolved} unresolved review thread(s)`);
@@ -1292,7 +1340,6 @@ function mergeOne(id) {
       'resolve, commit, push (NO force). Do not rebase a branch that already has a PR.'
     );
   }
-  if (pr.mergeStateStatus === 'BLOCKED') return block('GitHub reports the merge as BLOCKED (branch protection: a required review or check is missing)');
 
   // The green that is the most expensive to trust: CI passed against a base that
   // has since moved. Retargeting a cascade child updates WHERE it points; it does
