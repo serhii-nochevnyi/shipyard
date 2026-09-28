@@ -312,6 +312,35 @@ counters are cumulative session observations, so they are not added once per
 response. Missing or ambiguous attribution is reported instead of being folded
 into a model's efficiency result.
 
+### Subscription observation
+
+The interactive Claude session reports its quota windows through a reversible
+statusline wrapper. It forwards the statusline input unchanged to your existing
+renderer, keeps its stdout, stderr and exit status, and records only the quota
+fields:
+
+```bash
+ACCOUNT_LABEL=claude-max-1 make install-shipyard-claude-statusline
+bash scripts/install-shipyard-claude-statusline.sh --check
+make remove-shipyard-claude-statusline
+```
+
+The installer changes only `statusLine` in `~/.claude/settings.json`, and only
+when it is a `{"type": "command", ...}` object. It keeps an ownership record in
+`~/.claude/shipyard-statusline/owned.json`. Removal restores the previous value
+only if the installed value is still in place; a statusLine you edited is kept.
+`--check` prints `installed`, `foreign` or `absent` and writes nothing.
+`ACCOUNT_LABEL` is an operator-declared local label; without one, samples are
+`unattributed`. E-mail, user ids and plan details are never stored.
+
+Private per-account samples live in
+`~/.local/state/shipyard/<runtime>/subscription/` (files 0600, directories
+0700) and are kept after removal. Tracked reports carry only derived values.
+The usage reader also reads quota records from host transcripts under
+`~/.local/state/shipyard/claude/…`, `~/.local/state/shipyard/claude-decompose/…`
+and `$CODEX_HOME/sessions/…`. Codex parent-session and idle observation are
+`unverified`, and every result is `inconclusive` until matched cohorts exist.
+
 ## Verification and maintenance
 
 Run the deterministic suite from this checkout:
