@@ -417,6 +417,18 @@ script — not in a prompt.** Every requirement below is an instance of it.
 - **REQ-182** — Rotation advice compares model, effort, policy hash and instruction digest (a mismatch is unknown), records one shadow decision per recommendation and source-state fingerprint, separates resume, fork, compaction and fresh start with full handoff costs, and keeps automatic transfer disabled.
 - **REQ-183** — A versioned effort-experiment schema and report define eligibility, metrics that count failed, repair, escalation and abandoned work, and a promotion rule that is always a recorded human decision above the 20-completion / 95% / seven-day floor, with no resolver, policy, config or dispatch change and nothing active.
 - **REQ-184** — Each phase-44 item records installed, behaviourally verified and efficiency-measured states separately, reports say inconclusive until matched cohorts exist, and no acceptance criterion contains a savings percentage.
+- **REQ-185** — An armed Stop-gate marker binds the realpath of the delivery board chosen at arm time; while bound, the hook reads only that board with no newest-wins fallback, a missing or changed binding allows with a remedy and never selects another board, and a legacy unbound marker refuses at most once per turn and never after the resync window.
+- **REQ-186** — `stop-gate-arm.cjs disarm` removes only the caller's own marker, and a two-armed-session fixture plus the installed copied Claude hook bundle prove that each session decides from its own board, verified at a human checkpoint.
+- **REQ-187** — The provenance record carries the owning checkout, and the doctor reports another checkout's dogfood cache as foreign without an error exit, while a release cache that matches no tag stays an error.
+- **REQ-188** — Dogfood installs default to a dedicated per-checkout runtime home, an explicit home still wins, and a dogfood source aimed at the shared default Codex home is refused.
+- **REQ-189** — The codex-decompose-host native-child lease test, the session-handoff successor race and the dispatch-boundary cross-process reservation use injected clocks or explicit barriers, pass 50 consecutive runs, and still fail when their guard is removed.
+- **REQ-190** — `usage-report` counts Codex host-stream `turn.completed.usage` records as summed per-session usage, counts a thread once across stream and rollout schemas, and never fabricates a timestamp, model or effort.
+- **REQ-191** — A planning-tree writer lease bound to owner, base revision and a monotonic fencing token is held by both decompose hosts from launch to seal; a second writer is refused before launch, a fenced or foreign-edited seal is refused with path and writer evidence, and crash recovery is explicit and bounded.
+- **REQ-192** — A completed researcher, planner or checker whose host timed out or died is recovered into its one original receipt from the durable reservation, authenticated transcripts and launch-time artifact snapshot without relaunch; missing, incomplete, altered or still-live evidence refuses, and no receipt is synthesized.
+- **REQ-193** — Codex decomposition can run detached with a record the existing `deliver-dispatch.cjs wait` blocks on unchanged, and parent wait and child model usage are attributed separately and reported inconclusive until matched cohorts exist.
+- **REQ-194** — An advisory, shadow-only run/phase admission ledger on `capacity-lease.cjs` reserves launches atomically against a constructor budget, always admits verification and checkpoint capacity, reports unknown quota instead of a percentage, and adds no config key or launch wiring.
+- **REQ-195** — A Claude drift-check verdict rejected as fresh with moved findings gets exactly one repair dispatch in the same round with the validation error as data; a second invalid result refuses with both errors and both dispatch ids.
+- **REQ-196** — The capture scrubber replaces Codex account identifiers with stable placeholders before session-id replacement, live captures run in a git-initialised scratch directory, and the fixture scan rejects any leaked account id without rewriting committed fixtures.
 
 ## Phases
 
@@ -846,10 +858,26 @@ change, experiment or provider scheduler is activated.
 **Status**: INV-008 closed with ADR-023 (plus ADR-021 for C1–C4 and ADR-022 for review timing); typed decomposition pending
 **Goal**: correct armed Stop-gate session/board ownership, make stacked delivery reliable on target projects, and remove repeated planning-role launches and routine delivery model work left outside phase 44, with native receipts and independent gates intact.
 **Depends on**: package-specific — S1 uses phase-39 arming and phase-41 scoped-run contracts; R packages build on the phase-40 delivery seams and ADR-020 (phase 43); C packages are planned after the phase-43 epic merges (ADR-021); P/D packages use phase-40/42/44 contracts where their own work packages require them.
-**Requirements**: phase-local S1, R1–R18, P1–P5, D1–D6 and C1–C4 (carried from phase 44 under ADR-021); global IDs await validated planning
-**Plans**: 0 plans; see [phase context](phases/45-close-residual-pipeline-efficiency-gaps/CONTEXT.md), [work packages](phases/45-close-residual-pipeline-efficiency-gaps/WORK-PACKAGES.md) and the [phase-40 delivery findings](investigations/INV-008-residual-pipeline-efficiency/intake/phase40-delivery-findings.md)
+**Requirements**: REQ-185, REQ-186, REQ-187, REQ-188, REQ-189, REQ-190, REQ-191, REQ-192, REQ-193, REQ-194, REQ-195, REQ-196 (first pass); the remaining phase-local packages (R1–R8 and R10–R18 parts, P3, P5, D1–D4, D6, C1–C4) get global IDs in the second pass
+**Plans**: 14 plans (first pass: 45-01 … 45-14, T-45-01 … T-45-14); see [phase context](phases/45-close-residual-pipeline-efficiency-gaps/CONTEXT.md), [work packages](phases/45-close-residual-pipeline-efficiency-gaps/WORK-PACKAGES.md) and the [phase-40 delivery findings](investigations/INV-008-residual-pipeline-efficiency/intake/phase40-delivery-findings.md)
 
-S1 is a separate high-risk correctness fix with its own ticket and human checkpoint at formal decomposition. This is a queued scope, not an executable ticket graph or approval to activate model-policy experiments.
+First-pass plans (correctness-first under ADR-023; no file overlaps any phase-43 `files_modified`):
+- [ ] 45-01-PLAN.md — S1 armed Stop gate binds its board, legacy bound, disarm, installed hook (high risk, human checkpoint)
+- [ ] 45-02-PLAN.md — R16 doctor reports a foreign dogfood cache as foreign
+- [ ] 45-03-PLAN.md — R16 dedicated dogfood runtime home by default
+- [ ] 45-04-PLAN.md — R9 codex-decompose-host lease clock and heartbeat
+- [ ] 45-05-PLAN.md — R9 session-handoff and dispatch-boundary barriers
+- [ ] 45-06-PLAN.md — R13/N48 usage-report counts turn.completed.usage
+- [ ] 45-07-PLAN.md — P1 planning writer lease module
+- [ ] 45-08-PLAN.md — P1 lease held by both decompose hosts
+- [ ] 45-09-PLAN.md — P2 Codex judgment-role recovery (high risk, human checkpoint)
+- [ ] 45-10-PLAN.md — P2 Claude judgment-role recovery (high risk, human checkpoint)
+- [ ] 45-11-PLAN.md — P4 detached Codex decomposition with a blocking wait
+- [ ] 45-12-PLAN.md — D5 advisory admission ledger
+- [ ] 45-13-PLAN.md — R6 one bounded drift-check repair
+- [ ] 45-14-PLAN.md — R8 capture scrubber for account ids
+
+S1 is a separate high-risk correctness fix with its own ticket and human checkpoint. This is a queued scope, not an executable ticket graph or approval to activate model-policy experiments.
 
 <!-- shipyard:gsd-sync:begin -->
 ## Shipyard synchronization (generated)
