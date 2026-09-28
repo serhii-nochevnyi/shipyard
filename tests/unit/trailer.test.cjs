@@ -1242,6 +1242,22 @@ test('the same tree under a new sha carries the verdict onto the new head', () =
   assert.strictEqual(JSON.parse(r.stdout).carried, true, r.stdout);
 });
 
+test('a carried status keeps the verdict grammar within 140 characters at its longest values', () => {
+  const fx = carryRepo();
+  const body = `gate_status: arch-review=conform, drift-check=skipped, `
+    + `degenerate-green=skipped, base_tree=${fx.judgedBaseTree}, head=${fx.from}`;
+  const r = carry(fx, { body });
+  assert.strictEqual(r.status, 0, `${r.stdout}\n${r.stderr}`);
+  assert.ok(r.description.length <= STATUS_MAX, `${r.description.length}: ${r.description}`);
+  assert.strictEqual(r.posted[0].context, 'merge-gate');
+  const parsed = parseGate(`gate_status: ${r.description}`);
+  assert.strictEqual(parsed['arch-review'], 'conform');
+  assert.strictEqual(parsed['drift-check'], 'skipped');
+  assert.strictEqual(parsed['degenerate-green'], 'skipped');
+  assert.strictEqual(parsed.base_tree || parsed.base, fx.judgedBaseTree);
+  assert.strictEqual(parsed.carried_from || parsed.from, fx.from.slice(0, 7));
+});
+
 test('carry runs both gh calls with cwd: <worktree>, not the caller\'s own cwd', () => {
   // base-merge.cjs invokes `carry` from ITS OWN cwd (a conveyor project
   // directory, not necessarily the ticket worktree). Without `--repo`, `gh`

@@ -43,11 +43,9 @@
 // T-25-05, a merge whose whole tree was byte-identical cost a full re-judgement
 // at ~150k tokens, 42% of that ticket's cost, once per cascade step per ticket.
 // So after a merge it completed, this script hands the pre-merge and post-merge
-// heads to `gate-trailer.cjs carry`, which re-derives both object identities
-// itself and refuses otherwise. A merge that changed content resolves to a
-// different tree and is refused BY CONSTRUCTION, so this caller needs no
-// judgement of its own — and a refusal is not a failure here: the verdict is
-// simply owed again, exactly as before.
+// heads and both base refs to `gate-trailer.cjs carry`. That script proves either
+// tree equality or an identical owned patch over the new base. This caller
+// makes no judgement of its own; a refusal means the verdict is owed again.
 //
 // One consequence worth naming: the carry runs BEFORE the push (this script does
 // not push), so between the two the trailer names a head origin has not seen and
@@ -187,6 +185,8 @@ const baseRef = resolveBaseRef(worktree, base);
 // The head the architecture verdict was rendered against, read before anything
 // moves it. Everything the carry proves is about this sha and the one after.
 const preMergeHead = git(['rev-parse', 'HEAD'], { tolerate: true }).out;
+const preMergeBase = preMergeHead
+  ? git(['merge-base', baseRef, preMergeHead], { tolerate: true }).out : null;
 
 // WHICH PR, from the BOARD rather than from a flag. No prompt has to learn a new
 // argument for the carry to happen — this script is named in ci-fix.md,
@@ -212,10 +212,14 @@ function carryVerdict() {
   if (!preMergeHead || !postMergeHead || preMergeHead === postMergeHead) return null;
   const pr = boardPr(ticket);
   if (!pr) return null;
+  const postMergeBase = git(['merge-base', baseRef, postMergeHead], { tolerate: true }).out;
   const r = spawnSync('node', [
     path.join(__dirname, 'gate-trailer.cjs'), 'carry', ticket, '--pr', String(pr),
     ...(t.repo ? ['--repo', t.repo] : []),
-    '--from', preMergeHead, '--to', postMergeHead, '--worktree', worktree, '--json',
+    '--from', preMergeHead, '--to', postMergeHead,
+    ...(preMergeBase ? ['--from-base', preMergeBase] : []),
+    ...(postMergeBase ? ['--to-base', postMergeBase] : []),
+    '--graph', graphDir, '--worktree', worktree, '--json',
   ], { encoding: 'utf8' });
   try {
     const out = JSON.parse(r.stdout);
@@ -231,8 +235,8 @@ function carryVerdict() {
 }
 
 const carryLine = (c) => (c.carried
-  ? `The architecture verdict CARRIED onto ${c.to.slice(0, 7)}: the head tree and the base tree are `
-    + 'the same objects the judge measured. CI still re-runs — a green is measured against a base.'
+  ? `The architecture verdict CARRIED onto ${c.to.slice(0, 7)} (${c.carry}). `
+    + 'CI still re-runs — a green is measured against a base.'
   : `No verdict carried — ${c.reason}. arch-review is owed against the new head.`);
 
 const merge = git(['merge', '--no-edit', baseRef], { tolerate: true });
