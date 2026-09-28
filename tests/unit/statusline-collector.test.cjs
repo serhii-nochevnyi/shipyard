@@ -103,9 +103,12 @@ for (const code of [0, 3]) {
 }
 
 test('a renderer killed by SIGTERM makes wrap end by SIGTERM', () => {
-  const r = renderer('cat >/dev/null; kill -TERM $$');
-  const { result } = runWrap(r.command, renderBytes);
-  assert.equal(result.signal, 'SIGTERM');
+  const command = 'cat >/dev/null; kill -TERM $$';
+  const { result } = runWrap(command, renderBytes);
+  const direct = runDirect(command, renderBytes);
+  assert.equal(direct.signal, 'SIGTERM');
+  assert.equal(result.signal, direct.signal);
+  assert.equal(result.status, direct.status);
 });
 
 const failureCases = [
