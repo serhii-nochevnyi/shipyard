@@ -1,6 +1,6 @@
 # Requirements: shipyard
 
-<!-- shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 28ec020f822269469977266ce2861f9f00b34f7aa49028785d7f34b2f043ae07 -->
+<!-- shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 3a5126c3a892f98dace9b1129623116202ae3ab4474910736943b3f86370ace3 -->
 
 **Defined:** 2026-09-10
 **Core Value:** Keep delivery decisions truthful, resumable, and synchronized between the Shipyard conveyor and native GSD workflows.
@@ -190,6 +190,18 @@
 - [ ] **REQ-182**: Rotation advice compares model, effort, policy hash and instruction digest (a mismatch is unknown), records one shadow decision per recommendation and source-state fingerprint, separates resume, fork, compaction and fresh start with full handoff costs, and keeps automatic transfer disabled.
 - [ ] **REQ-183**: A versioned effort-experiment schema and report define eligibility, metrics that count failed, repair, escalation and abandoned work, and a promotion rule that is always a recorded human decision above the 20-completion / 95% / seven-day floor, with no resolver, policy, config or dispatch change and nothing active.
 - [ ] **REQ-184**: Each phase-44 item records installed, behaviourally verified and efficiency-measured states separately, reports say inconclusive until matched cohorts exist, and no acceptance criterion contains a savings percentage.
+- [ ] **REQ-185**: An armed Stop-gate marker binds the realpath of the delivery board chosen at arm time; while bound, the hook reads only that board with no newest-wins fallback, a missing or changed binding allows with a remedy and never selects another board, and a legacy unbound marker refuses at most once per turn and never after the resync window.
+- [ ] **REQ-186**: `stop-gate-arm.cjs disarm` removes only the caller's own marker, and a two-armed-session fixture plus the installed copied Claude hook bundle prove that each session decides from its own board, verified at a human checkpoint.
+- [ ] **REQ-187**: The provenance record carries the owning checkout, and the doctor reports another checkout's dogfood cache as foreign without an error exit, while a release cache that matches no tag stays an error.
+- [ ] **REQ-188**: Dogfood installs default to a dedicated per-checkout runtime home, an explicit home still wins, and a dogfood source aimed at the shared default Codex home is refused.
+- [ ] **REQ-189**: The codex-decompose-host native-child lease test, the session-handoff successor race and the dispatch-boundary cross-process reservation use injected clocks or explicit barriers, pass 50 consecutive runs, and still fail when their guard is removed.
+- [ ] **REQ-190**: `usage-report` counts Codex host-stream `turn.completed.usage` records as summed per-session usage, counts a thread once across stream and rollout schemas, and never fabricates a timestamp, model or effort.
+- [ ] **REQ-191**: A planning-tree writer lease bound to owner, base revision and a monotonic fencing token is held by both decompose hosts from launch to seal; a second writer is refused before launch, a fenced or foreign-edited seal is refused with path and writer evidence, and crash recovery is explicit and bounded.
+- [ ] **REQ-192**: A completed researcher, planner or checker whose host timed out or died is recovered into its one original receipt from the durable reservation, authenticated transcripts and launch-time artifact snapshot without relaunch; missing, incomplete, altered or still-live evidence refuses, and no receipt is synthesized.
+- [ ] **REQ-193**: Codex decomposition can run detached with a record the existing `deliver-dispatch.cjs wait` blocks on unchanged, and parent wait and child model usage are attributed separately and reported inconclusive until matched cohorts exist.
+- [ ] **REQ-194**: An advisory, shadow-only run/phase admission ledger on `capacity-lease.cjs` reserves launches atomically against a constructor budget, always admits verification and checkpoint capacity, reports unknown quota instead of a percentage, and adds no config key or launch wiring.
+- [ ] **REQ-195**: A Claude drift-check verdict rejected as fresh with moved findings gets exactly one repair dispatch in the same round with the validation error as data; a second invalid result refuses with both errors and both dispatch ids.
+- [ ] **REQ-196**: The capture scrubber replaces Codex account identifiers with stable placeholders before session-id replacement, live captures run in a git-initialised scratch directory, and the fixture scan rejects any leaked account id without rewriting committed fixtures.
 
 ## Out of Scope
 
@@ -384,10 +396,22 @@
 | REQ-182 | Phase 44 | In Progress |
 | REQ-183 | Phase 44 | In Progress |
 | REQ-184 | Phase 44 | In Progress |
+| REQ-185 | Phase 45 | In Progress |
+| REQ-186 | Phase 45 | In Progress |
+| REQ-187 | Phase 45 | In Progress |
+| REQ-188 | Phase 45 | In Progress |
+| REQ-189 | Phase 45 | In Progress |
+| REQ-190 | Phase 45 | In Progress |
+| REQ-191 | Phase 45 | In Progress |
+| REQ-192 | Phase 45 | In Progress |
+| REQ-193 | Phase 45 | In Progress |
+| REQ-194 | Phase 45 | In Progress |
+| REQ-195 | Phase 45 | In Progress |
+| REQ-196 | Phase 45 | In Progress |
 
 **Coverage:**
-- v1 requirements: 182 total
-- Mapped to phases: 180
+- v1 requirements: 194 total
+- Mapped to phases: 192
 - Unmapped: 2 ⚠️
 
 ---

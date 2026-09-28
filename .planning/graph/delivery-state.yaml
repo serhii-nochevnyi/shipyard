@@ -2149,7 +2149,7 @@
 "T-43-07":
   base: "epic/43-target-project-delivery-at-scale"
   base_reason: "no primary parent — a root ticket PRs into epic/43-target-project-delivery-at-scale"
-  behind_by: 1
+  behind_by: 2
   branch: "ticket/T-43-07-cancelled-checks-ignore-superseded-runs"
   checks: {"failing":0,"none_reported":false,"pending":0,"total":1,"unavailable":false}
   draft: true
@@ -2189,7 +2189,7 @@
   base: "epic/43-target-project-delivery-at-scale"
   base_merge: "epic/43-target-project-delivery-at-scale"
   base_reason: "T-43-09 is MERGED, so its branch is no longer where work lands — the base is epic/43-target-project-delivery-at-scale (base-merge it in first to keep the review diff one slice); ticket-worktree.sh create merges epic/43-target-project-delivery-at-scale in for non-primary parent(s) T-43-01"
-  behind_by: 0
+  behind_by: 1
   branch: "ticket/T-43-10-honour-pipeline-gsd-sync-as-a-deprecated"
   checks: {"failing":0,"none_reported":false,"pending":0,"total":1,"unavailable":false}
   draft: true
@@ -2207,14 +2207,14 @@
 "T-43-11":
   base: "epic/43-target-project-delivery-at-scale"
   base_reason: "no primary parent — a root ticket PRs into epic/43-target-project-delivery-at-scale"
-  behind_by: 2
+  behind_by: 1
   branch: "ticket/T-43-11-bind-pre-existing-jira-issues-by-recorde"
   checks: {"failing":0,"none_reported":false,"pending":0,"total":1,"unavailable":false}
   draft: true
   epic: "epic/43-target-project-delivery-at-scale"
-  head_sha: "a3a70f25af4ff7c3046bd257f4f01b759e334fff"
+  head_sha: "105759c579945cff51ba111023132fc24126a592"
   merge_scope: "stacked"
-  merge_state: "CLEAN"
+  merge_state: "UNKNOWN"
   pr: 334
   pr_base: "epic/43-target-project-delivery-at-scale"
   pr_created_at: "2026-09-28T08:08:04Z"
@@ -2249,15 +2249,16 @@
   base_reason: "no primary parent — a root ticket PRs into epic/43-target-project-delivery-at-scale"
   branch: "ticket/T-43-14-deliver-dispatch-builds-arch-review-ci-f"
   epic: "epic/43-target-project-delivery-at-scale"
-  pr: null
-  ready: true
-  reapable: false
-  status: "pending"
+  merged_into: "epic/43-target-project-delivery-at-scale"
+  pr: 355
+  reapable: true
+  status: "merged"
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/355"
 "T-43-15":
   base: "epic/43-target-project-delivery-at-scale"
   base_reason: "T-43-12 has no branch on the remote yet (status pending) — ticket/T-43-12-human-checkpoint-takes-review-or-merge-t is not a base that exists, so the base is epic/43-target-project-delivery-at-scale"
-  blocked_by: ["T-43-12","T-43-14"]
-  blocked_reasons: {"T-43-12":"parent has no branch yet (nothing to cascade from)","T-43-14":"parent has no branch yet (nothing to cascade from)"}
+  blocked_by: ["T-43-12"]
+  blocked_reasons: {"T-43-12":"parent has no branch yet (nothing to cascade from)"}
   branch: "ticket/T-43-15-deliver-dispatch-builds-research-and-dec"
   epic: "epic/43-target-project-delivery-at-scale"
   pr: null
@@ -2388,3 +2389,139 @@
   reapable: true
   status: "merged"
   url: "https://github.com/serhii-nochevnyi/shipyard/pull/344"
+"T-45-01":
+  base: "epic/45-close-residual-pipeline-efficiency-gaps"
+  base_reason: "no primary parent — a root ticket PRs into epic/45-close-residual-pipeline-efficiency-gaps"
+  branch: "ticket/T-45-01-armed-stop-gate-binds-the-realpath-of-it"
+  epic: "epic/45-close-residual-pipeline-efficiency-gaps"
+  pr: null
+  ready: true
+  reapable: false
+  status: "pending"
+"T-45-02":
+  base: "epic/45-close-residual-pipeline-efficiency-gaps"
+  base_reason: "no primary parent — a root ticket PRs into epic/45-close-residual-pipeline-efficiency-gaps"
+  branch: "ticket/T-45-02-doctor-classifies-another-checkout-s-dog"
+  epic: "epic/45-close-residual-pipeline-efficiency-gaps"
+  pr: null
+  ready: true
+  reapable: false
+  status: "pending"
+"T-45-03":
+  base: "epic/45-close-residual-pipeline-efficiency-gaps"
+  base_reason: "T-45-02 has no branch on the remote yet (status pending) — ticket/T-45-02-doctor-classifies-another-checkout-s-dog is not a base that exists, so the base is epic/45-close-residual-pipeline-efficiency-gaps"
+  blocked_by: ["T-45-02"]
+  blocked_reasons: {"T-45-02":"parent has no branch yet (nothing to cascade from)"}
+  branch: "ticket/T-45-03-dogfood-installs-default-to-a-dedicated"
+  epic: "epic/45-close-residual-pipeline-efficiency-gaps"
+  pr: null
+  ready: false
+  reapable: false
+  status: "pending"
+"T-45-04":
+  base: "epic/45-close-residual-pipeline-efficiency-gaps"
+  base_reason: "no primary parent — a root ticket PRs into epic/45-close-residual-pipeline-efficiency-gaps"
+  branch: "ticket/T-45-04-codex-decompose-host-run-lease-uses-an-i"
+  epic: "epic/45-close-residual-pipeline-efficiency-gaps"
+  pr: null
+  ready: true
+  reapable: false
+  status: "pending"
+"T-45-05":
+  base: "epic/45-close-residual-pipeline-efficiency-gaps"
+  base_reason: "no primary parent — a root ticket PRs into epic/45-close-residual-pipeline-efficiency-gaps"
+  branch: "ticket/T-45-05-session-handoff-successor-race-and-dispa"
+  epic: "epic/45-close-residual-pipeline-efficiency-gaps"
+  pr: null
+  ready: true
+  reapable: false
+  status: "pending"
+"T-45-06":
+  base: "epic/45-close-residual-pipeline-efficiency-gaps"
+  base_reason: "no primary parent — a root ticket PRs into epic/45-close-residual-pipeline-efficiency-gaps"
+  branch: "ticket/T-45-06-usage-report-counts-codex-host-stream-tu"
+  epic: "epic/45-close-residual-pipeline-efficiency-gaps"
+  pr: null
+  ready: true
+  reapable: false
+  status: "pending"
+"T-45-07":
+  base: "epic/45-close-residual-pipeline-efficiency-gaps"
+  base_reason: "no primary parent — a root ticket PRs into epic/45-close-residual-pipeline-efficiency-gaps"
+  branch: "ticket/T-45-07-planning-tree-writer-lease-with-owner-ba"
+  epic: "epic/45-close-residual-pipeline-efficiency-gaps"
+  pr: null
+  ready: true
+  reapable: false
+  status: "pending"
+"T-45-08":
+  base: "epic/45-close-residual-pipeline-efficiency-gaps"
+  base_reason: "T-45-04 has no branch on the remote yet (status pending) — ticket/T-45-04-codex-decompose-host-run-lease-uses-an-i is not a base that exists, so the base is epic/45-close-residual-pipeline-efficiency-gaps"
+  blocked_by: ["T-45-04","T-45-07"]
+  blocked_reasons: {"T-45-04":"parent has no branch yet (nothing to cascade from)","T-45-07":"parent has no branch yet (nothing to cascade from)"}
+  branch: "ticket/T-45-08-both-decompose-hosts-hold-the-planning-w"
+  epic: "epic/45-close-residual-pipeline-efficiency-gaps"
+  pr: null
+  ready: false
+  reapable: false
+  status: "pending"
+"T-45-09":
+  base: "epic/45-close-residual-pipeline-efficiency-gaps"
+  base_reason: "T-45-08 has no branch on the remote yet (status pending) — ticket/T-45-08-both-decompose-hosts-hold-the-planning-w is not a base that exists, so the base is epic/45-close-residual-pipeline-efficiency-gaps"
+  blocked_by: ["T-45-05","T-45-08"]
+  blocked_reasons: {"T-45-05":"parent has no branch yet (nothing to cascade from)","T-45-08":"parent has no branch yet (nothing to cascade from)"}
+  branch: "ticket/T-45-09-codex-decompose-host-recovers-a-complete"
+  epic: "epic/45-close-residual-pipeline-efficiency-gaps"
+  pr: null
+  ready: false
+  reapable: false
+  status: "pending"
+"T-45-10":
+  base: "epic/45-close-residual-pipeline-efficiency-gaps"
+  base_reason: "T-45-09 has no branch on the remote yet (status pending) — ticket/T-45-09-codex-decompose-host-recovers-a-complete is not a base that exists, so the base is epic/45-close-residual-pipeline-efficiency-gaps"
+  blocked_by: ["T-45-09"]
+  blocked_reasons: {"T-45-09":"parent has no branch yet (nothing to cascade from)"}
+  branch: "ticket/T-45-10-claude-decompose-host-recovers-a-complet"
+  epic: "epic/45-close-residual-pipeline-efficiency-gaps"
+  pr: null
+  ready: false
+  reapable: false
+  status: "pending"
+"T-45-11":
+  base: "epic/45-close-residual-pipeline-efficiency-gaps"
+  base_reason: "T-45-09 has no branch on the remote yet (status pending) — ticket/T-45-09-codex-decompose-host-recovers-a-complete is not a base that exists, so the base is epic/45-close-residual-pipeline-efficiency-gaps"
+  blocked_by: ["T-45-09"]
+  blocked_reasons: {"T-45-09":"parent has no branch yet (nothing to cascade from)"}
+  branch: "ticket/T-45-11-codex-decomposition-runs-detached-so-the"
+  epic: "epic/45-close-residual-pipeline-efficiency-gaps"
+  pr: null
+  ready: false
+  reapable: false
+  status: "pending"
+"T-45-12":
+  base: "epic/45-close-residual-pipeline-efficiency-gaps"
+  base_reason: "no primary parent — a root ticket PRs into epic/45-close-residual-pipeline-efficiency-gaps"
+  branch: "ticket/T-45-12-advisory-run-phase-aggregate-admission-l"
+  epic: "epic/45-close-residual-pipeline-efficiency-gaps"
+  pr: null
+  ready: true
+  reapable: false
+  status: "pending"
+"T-45-13":
+  base: "epic/45-close-residual-pipeline-efficiency-gaps"
+  base_reason: "no primary parent — a root ticket PRs into epic/45-close-residual-pipeline-efficiency-gaps"
+  branch: "ticket/T-45-13-drift-gate-re-asks-a-self-contradictory"
+  epic: "epic/45-close-residual-pipeline-efficiency-gaps"
+  pr: null
+  ready: true
+  reapable: false
+  status: "pending"
+"T-45-14":
+  base: "epic/45-close-residual-pipeline-efficiency-gaps"
+  base_reason: "no primary parent — a root ticket PRs into epic/45-close-residual-pipeline-efficiency-gaps"
+  branch: "ticket/T-45-14-capture-scrubber-replaces-codex-account"
+  epic: "epic/45-close-residual-pipeline-efficiency-gaps"
+  pr: null
+  ready: true
+  reapable: false
+  status: "pending"

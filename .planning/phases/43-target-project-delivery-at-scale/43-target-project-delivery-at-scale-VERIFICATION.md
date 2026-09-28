@@ -1,8 +1,8 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: c079e5a3e844544d955caae9de56a6d8f1c7a59deae87510d636a921891239b7
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 9827545272dc9034371d965d2571f872595594a82172da9a0a157b9432ff43b1
 phase: 43
 status: human_needed
-shipyard_source_fingerprint: c079e5a3e844544d955caae9de56a6d8f1c7a59deae87510d636a921891239b7
+shipyard_source_fingerprint: 9827545272dc9034371d965d2571f872595594a82172da9a0a157b9432ff43b1
 ---
 
 # Phase 43: Target-project delivery at scale — Verification Projection
@@ -13,7 +13,7 @@ shipyard_source_fingerprint: c079e5a3e844544d955caae9de56a6d8f1c7a59deae87510d63
 
 | Truth | Evidence | Status |
 |---|---|---|
-| Every phase plan is accounted for | 5/19 delivery records are merged | ? UNCERTAIN |
+| Every phase plan is accounted for | 6/19 delivery records are merged | ? UNCERTAIN |
 | Integration is coherent | INTEGRATION.md is missing | ? UNCERTAIN |
 | Verification evidence is present | INTEGRATION.md is missing | ? UNCERTAIN |
 
@@ -34,7 +34,7 @@ shipyard_source_fingerprint: c079e5a3e844544d955caae9de56a6d8f1c7a59deae87510d63
 | T-43-11 | pr-open | ? UNCERTAIN |
 | T-43-12 | pending | ? UNCERTAIN |
 | T-43-13 | pending | ? UNCERTAIN |
-| T-43-14 | pending | ? UNCERTAIN |
+| T-43-14 | merged | ✓ VERIFIED |
 | T-43-15 | pending | ? UNCERTAIN |
 | T-43-16 | pending | ? UNCERTAIN |
 | T-43-17 | pending | ? UNCERTAIN |
@@ -48,4 +48,4 @@ shipyard_source_fingerprint: c079e5a3e844544d955caae9de56a6d8f1c7a59deae87510d63
 
 ## Gaps Summary
 
-**Not green:** 14 plan(s) are not merged.
+**Not green:** 13 plan(s) are not merged.
