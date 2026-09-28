@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: c36a4a26efc35df3548af0762e331cd183afb30fd073fdfd60deeef30560b84e
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: f55f757f81c825ab4654e25dbcde1e9220de72f630ae4ecbad20dd5929755a15
 phase: 43-target-project-delivery-at-scale
 plan: 14
 subsystem: shipyard delivery
@@ -22,7 +22,7 @@ key-decisions:
 duration: 0min
 status: halted
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: c36a4a26efc35df3548af0762e331cd183afb30fd073fdfd60deeef30560b84e
+shipyard_source_fingerprint: f55f757f81c825ab4654e25dbcde1e9220de72f630ae4ecbad20dd5929755a15
 ---
 
 # Phase 43: deliver-dispatch builds arch-review, ci-fix and review-fix requests that round-trip through the host validators — Delivery Projection

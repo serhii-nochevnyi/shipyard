@@ -5,7 +5,6 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const commentPolicy = require('./comment-policy.cjs');
-const { repoRootOf } = require('./graph-dir.cjs');
 
 function value(argv, name) {
   const i = argv.indexOf(`--${name}`);
@@ -22,11 +21,11 @@ function git(worktree, args) {
   }).trim();
 }
 
-function resolveProjectRoot(argv, worktree) {
+function resolveProjectRoot(argv) {
   const flag = value(argv, 'project-root');
   if (flag) return path.resolve(flag);
   if (process.env.SHIPYARD_PROJECT_ROOT) return path.resolve(process.env.SHIPYARD_PROJECT_ROOT);
-  return repoRootOf(worktree);
+  return null;
 }
 
 function recordedBase(projectRoot, ticket) {
@@ -90,9 +89,14 @@ function main(argv = process.argv.slice(2)) {
   const worktree = path.resolve(value(argv, 'worktree') || process.cwd());
   if (!fs.existsSync(path.join(worktree, '.git'))) throw new Error(`not a git worktree: ${worktree}`);
   const ticket = value(argv, 'ticket');
-  const projectRoot = resolveProjectRoot(argv, worktree);
+  const projectRoot = resolveProjectRoot(argv);
   const { base, base_source } = baseFor(worktree, value(argv, 'base'), { ticket, projectRoot });
-  const result = commentPolicy.analyze(worktree, base, { workingTree: argv.includes('--working-tree') });
+  const repo = commentPolicy.repositorySlug(worktree);
+  const result = commentPolicy.analyze(worktree, base, {
+    workingTree: argv.includes('--working-tree'),
+    projectRoot,
+    repo,
+  });
   const output = {
     gate: 'publish',
     ticket: ticket || null,
