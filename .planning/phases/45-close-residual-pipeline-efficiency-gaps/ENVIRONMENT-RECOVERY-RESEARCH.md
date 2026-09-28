@@ -27,4 +27,4 @@ Phase-42 `--resume-finalization` recovers the signed commit metadata, not the pr
 - Where should the host persist producer payload so that recovery is atomic with dispatch/finalization identity and private bounded storage?
 - How does the ticket-worktree lifecycle recover a signed but unpublished unmerged branch when original producer bytes are absent, without silently replacing its history?
 
-Until those contracts are accepted, the T-43-03 violation remains a real gate refusal and T-43-14 remains unpublished; this research does not authorize an ad hoc bypass.
+At 13:47 UTC on 2026-09-28, the operator manually merged PR #338 into the phase-43 epic at `305cae896aeaf761586454cb4f7a2ec2872dde8a`. The previous `violation` artifact was not rewritten. This one-off operator action does not establish a supported non-model adjudication path and does not change the proposed R10 contract (ADR-023 keeps a human-signed record as the only resolution). T-43-14 remains unpublished. This research does not authorize future ad hoc bypasses.
