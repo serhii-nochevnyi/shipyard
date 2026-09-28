@@ -20,6 +20,8 @@ const concreteEffort = (value) => Array.isArray(pipeline.EFFORTS) && pipeline.EF
 const validModel = (value) => typeof value === 'string' && value.trim().length > 0;
 const isCurrentCodexUsage = (row) => row?.type === 'token_usage_record'
   && Boolean(row.payload?.thread_token_usage || row.payload?.total_token_usage);
+const isCodexStreamTurn = (row) => row?.type === 'turn.completed'
+  && row.usage !== null && typeof row.usage === 'object' && !Array.isArray(row.usage);
 // @contract: outcome status is supplied evidence (delivery-state/receipt); a transcript stop is never completion.
 const OUTCOME_STATUSES = new Set(['completed', 'failed', 'interrupted', 'parked']);
 
@@ -389,6 +391,7 @@ function report(sources, options = {}) {
   // current token_usage_record is encountered in another file and both views
   // contaminate the same cumulative accumulator.
   const currentCodexSessions = new Set();
+  const legacyCodexSessions = new Set();
   const codexSourceSessions = new Map();
   for (const source of sources) {
     const rows = Array.isArray(source?.rows) ? source.rows : [];
@@ -400,9 +403,13 @@ function report(sources, options = {}) {
     // visited. Codex files can place a token_usage_record before metadata.
     codexSourceSessions.set(source, metaSession);
     for (const row of rows) {
-      if (!isCurrentCodexUsage(row)) continue;
-      const id = row.payload?.session_id || row.sessionId || row.session_id || metaSession;
-      if (id) currentCodexSessions.add(id);
+      if (isCurrentCodexUsage(row)) {
+        const id = row.payload?.session_id || row.sessionId || row.session_id || metaSession;
+        if (id) currentCodexSessions.add(id);
+      } else if (row?.type === 'event_msg' && row.payload?.type === 'token_count' && row.payload?.info?.total_token_usage) {
+        const id = row.payload?.session_id || row.sessionId || row.session_id || metaSession;
+        if (id) legacyCodexSessions.add(id);
+      }
     }
   }
   function mergeUsage(dest, src, fields, label) {
@@ -412,9 +419,19 @@ function report(sources, options = {}) {
       dest[f] = Math.max(dest[f] ?? 0, src[f]);
     }
   }
+  // @invariant: a stream turn's usage is summed, never max-merged; a missing or invalid field makes the total unknown.
+  function sumStreamUsage(dest, src) {
+    for (const f of CODEX_FIELDS) {
+      if (dest[f] === null) continue;
+      if (src[f] === undefined || src[f] === null) { dest[f] = null; continue; }
+      if (!number(src[f])) { warn(`Codex stream: invalid ${f}`); dest[f] = null; continue; }
+      dest[f] = (dest[f] ?? 0) + src[f];
+    }
+  }
   for (const source of sources) {
     const rows = Array.isArray(source?.rows) ? source.rows : [];
     let session = codexSourceSessions.get(source) || null;
+    let streamThread = null;
     // Recent Codex transcripts contain both the legacy event_msg snapshot and
     // the newer token_usage_record for the same response. They expose related
     // but different cumulative views, so combining them makes counters appear
@@ -425,6 +442,9 @@ function report(sources, options = {}) {
     for (const row of rows) {
       if (!row || typeof row !== 'object') continue;
       if (row.type === 'session_meta') session = row.payload?.id || row.payload?.session_id || null;
+      if (row.type === 'thread.started' && typeof row.thread_id === 'string' && row.thread_id.trim()) {
+        streamThread = row.thread_id.trim();
+      }
       if (row.type === 'turn_context' && row.payload?.turn_id) {
         const turnId = row.payload.turn_id;
         const metadata = {
@@ -537,6 +557,17 @@ function report(sources, options = {}) {
         }
         current.entries.push({ at: row.timestamp, values });
         sessions.set(session, current);
+      } else if (isCodexStreamTurn(row)) {
+        usageRows++;
+        if (!streamThread) { warn('Codex stream usage without a preceding thread.started was skipped'); continue; }
+        if (currentCodexSessions.has(streamThread) || legacyCodexSessions.has(streamThread)) {
+          warn(`Codex session ${streamThread} has more than one usage schema; the stream turns were skipped`);
+          continue;
+        }
+        const streamSession = sessions.get(streamThread) || { format: 'stream', sources: new Set(), streamUsage: {} };
+        if (sourceName) streamSession.sources.add(sourceName);
+        sumStreamUsage(streamSession.streamUsage, row.usage);
+        sessions.set(streamThread, streamSession);
       }
     }
   }
@@ -650,6 +681,14 @@ function report(sources, options = {}) {
   }
 
   for (const [sessionId, current] of sessions.entries()) {
+    if (current.format === 'stream') {
+      addObservation({
+        runtime: 'codex', kind: 'ordinary', sources: [...current.sources], session_id: sessionId,
+      }, {
+        input_tokens: null, cache_read_input_tokens: null, cache_creation_input_tokens: null, output_tokens: null,
+      }, null, null, 'session_stream_sum', false, 'unknown', codexTotals(current.streamUsage));
+      continue;
+    }
     const cumulative = codexCumulative(current);
     // The current Codex schema gives each response its own usage and the
     // turn_context row names the concrete model and effort. Summing those
