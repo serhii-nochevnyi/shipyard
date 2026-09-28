@@ -28,6 +28,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const { diagnostic, runBounded, timeoutFromEnv } = require(path.join(__dirname, 'command-runner.cjs'));
 const { loadConfig } = require(path.join(__dirname, 'pipeline-config.cjs'));
 const { withLock, lockDirFor, writeAtomic } = require(path.join(__dirname, 'lock.cjs'));
@@ -187,60 +188,282 @@ function behindBy(base, head, repo) {
 // nothing was ever going to notice — the detection for the whole class is one
 // question asked after every squash.
 //
-// TREES, not a diff, and for the same reason ADR-006 D2 gives: a diff is a
-// rendering that depends on rename detection, context size, whitespace and
-// `diff.algorithm`, while two blob identities have no such surface. `owns` is
-// the ownership matcher Gate 2 and the scope gate already share (path-owner.cjs),
-// evaluated here against the epic's tree listing rather than against a diff.
-//
-// One `git/trees/<ref>?recursive=1` per ref, on the MERGE path only — never on
-// the tick. A truncated listing or an unreadable ref is an UNKNOWN that says so:
-// an unknown is not a pass, but it is not an alarm either, because this runs
-// AFTER an irreversible squash and a cried-wolf alarm on the merge line is how
-// an alarm stops being read.
-const { owns } = require(path.join(__dirname, 'path-owner.cjs'));
-function treeBlobs(ref, repo) {
-  const out = gh(['api', `${apiBase(repo)}/git/trees/${ref}?recursive=1`], { tolerate: true });
-  if (typeof out !== 'string') return { error: (out && out.error) || 'gh api git/trees failed' };
-  let j;
-  try { j = JSON.parse(out); } catch (e) { return { error: `git/trees answered unparseable JSON (${e.message})` }; }
-  if (!j || !Array.isArray(j.tree)) return { error: 'git/trees answered no `tree` array' };
-  // A partial tree can only produce a false alarm: every path it happens not to
-  // list would read as "absent from the epic".
-  if (j.truncated) return { error: `GitHub truncated the recursive listing of ${ref} — a partial tree cannot answer this` };
+const { owns, parse, literalPrefix, segMatch } = require(path.join(__dirname, 'path-owner.cjs'));
+const repoResolver = require(path.join(__dirname, 'repo-resolve.cjs'));
+const REACHABILITY_MAX_BUFFER = 64 * 1024 * 1024;
+
+function gitResult(repo, args) {
+  return runBounded('git', ['-C', repo, ...args], {
+    timeoutMs: GH_TIMEOUT_MS,
+    maxBuffer: REACHABILITY_MAX_BUFFER,
+    env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+  });
+}
+
+function gitRoot(candidate) {
+  const result = gitResult(candidate, ['rev-parse', '--show-toplevel']);
+  if (result.error || result.status !== 0 || !result.stdout.trim()) return null;
+  return path.resolve(result.stdout.trim());
+}
+
+function localCheckout(repo, ticket) {
+  if (!repo) return gitRoot(ROOT);
+  let resolved = null;
+  try {
+    resolved = repoResolver.resolveRepository({ repo, ticket, config: cfg, projectRoot: ROOT });
+  } catch { return null; }
+  if (resolved.executable) return resolved.repository_root;
+  if (cfg.repos && Object.prototype.hasOwnProperty.call(cfg.repos, repo)) return null;
+  const root = gitRoot(ROOT);
+  if (!root) return null;
+  const origin = gitResult(root, ['remote', 'get-url', 'origin']);
+  return !origin.error && origin.status === 0
+    && repoResolver.normalizeOrigin(origin.stdout.trim()) === repo.toLowerCase()
+    ? root
+    : null;
+}
+
+function pathspecsForDeclared(declared) {
+  const pathspecs = new Set();
+  const rootGlobs = [];
+  for (const declaration of declared) {
+    if (declaration.startsWith('/') || declaration.split('/').includes('..')) {
+      return { error: `unsafe declared path ${JSON.stringify(declaration)}` };
+    }
+    const parsed = parse(declaration);
+    if (parsed.error) return { error: `${declaration}: ${parsed.error}` };
+    if (parsed.kind === 'glob') {
+      const prefix = literalPrefix(declaration);
+      if (prefix) pathspecs.add(`:(literal)${prefix}`);
+      else rootGlobs.push(declaration);
+    } else {
+      pathspecs.add(`:(literal)${declaration.replace(/\/\*\*$/, '').replace(/\/+$/, '')}`);
+    }
+  }
+  return { pathspecs: [...pathspecs], rootGlobs };
+}
+
+function gitTreeBlobs(repo, ref, declared) {
+  const scoped = pathspecsForDeclared(declared);
+  if (scoped.error) return scoped;
+  const pathspecs = new Set(scoped.pathspecs);
+  if (scoped.rootGlobs.length) {
+    const root = gitResult(repo, ['ls-tree', '-z', ref]);
+    if (root.error || root.status !== 0) return { error: `git ls-tree root failed: ${diagnostic(root)}` };
+    for (const record of root.stdout.split('\0')) {
+      if (!record) continue;
+      const tab = record.indexOf('\t');
+      if (tab === -1) return { error: 'git ls-tree answered malformed root output' };
+      const [, type] = record.slice(0, tab).split(' ');
+      const entry = record.slice(tab + 1);
+      for (const declaration of scoped.rootGlobs) {
+        const parsed = parse(declaration);
+        if (parsed.segs.length === 1 && type === 'blob' && owns(declaration, entry)) {
+          pathspecs.add(`:(literal)${entry}`);
+        } else if (parsed.segs.length > 1 && type === 'tree' && segMatch(parsed.segs[0], entry)) {
+          pathspecs.add(`:(literal)${entry}`);
+        }
+      }
+    }
+  }
+  if (!pathspecs.size) return { blobs: new Map() };
+  const result = gitResult(repo, ['ls-tree', '-r', '-z', ref, '--', ...pathspecs]);
+  if (result.error || result.status !== 0) return { error: `git ls-tree failed: ${diagnostic(result)}` };
   const blobs = new Map();
-  for (const e of j.tree) {
-    if (e && e.type === 'blob' && typeof e.path === 'string') blobs.set(e.path, e.sha);
+  for (const record of result.stdout.split('\0')) {
+    if (!record) continue;
+    const tab = record.indexOf('\t');
+    if (tab === -1) return { error: 'git ls-tree answered malformed output' };
+    const [, type, sha] = record.slice(0, tab).split(' ');
+    const file = record.slice(tab + 1);
+    if (type === 'blob' && sha && declared.some((declaration) => owns(declaration, file))) blobs.set(file, sha);
   }
   return { blobs };
+}
+
+function apiJson(endpoint) {
+  const out = gh(['api', endpoint], { tolerate: true });
+  if (typeof out !== 'string') {
+    const error = (out && out.error) || 'gh api did not answer';
+    return /\b404\b|not found/i.test(error) ? { absent: true } : { error };
+  }
+  let json;
+  try { json = JSON.parse(out); } catch (error) { return { error: `API answered unparseable JSON (${error.message})` }; }
+  if (json && json.truncated === true) return { error: 'truncated listing' };
+  return { json };
+}
+
+function apiContents(ref, itemPath, repo) {
+  const suffix = itemPath
+    ? `/${itemPath.split('/').map((segment) => encodeURIComponent(segment)).join('/')}`
+    : '';
+  return apiJson(`${apiBase(repo)}/contents${suffix}?ref=${encodeURIComponent(ref)}`);
+}
+
+function apiTreeBlobs(treeSha, rootPath, repo, blobs, seen = new Set()) {
+  if (seen.has(treeSha)) return { error: 'tree response contains a repeated directory' };
+  seen.add(treeSha);
+  const result = apiJson(`${apiBase(repo)}/git/trees/${encodeURIComponent(treeSha)}`);
+  if (result.error) return result;
+  if (result.absent) return { error: 'directory tree could not be read' };
+  if (!result.json || !Array.isArray(result.json.tree)) return { error: 'git/trees answered no `tree` array' };
+  for (const entry of result.json.tree) {
+    if (!entry || typeof entry.path !== 'string') return { error: 'git/trees answered a malformed entry' };
+    const file = path.posix.join(rootPath, entry.path);
+    if (entry.type === 'blob') {
+      if (typeof entry.sha !== 'string') return { error: 'git/trees answered a blob with no sha' };
+      blobs.set(file, entry.sha);
+    } else if (entry.type === 'tree') {
+      if (typeof entry.sha !== 'string') return { error: 'git/trees answered a directory with no sha' };
+      const nested = apiTreeBlobs(entry.sha, file, repo, blobs, seen);
+      if (nested.error) return nested;
+    }
+  }
+  return { blobs };
+}
+
+function apiDirectoryBlobs(ref, entries, repo, blobs) {
+  if (entries.length >= 1000) return { error: 'truncated listing' };
+  for (const entry of entries) {
+    if (!entry || typeof entry.path !== 'string') return { error: 'contents answered a malformed directory entry' };
+    if (entry.type === 'file') {
+      if (!entry.submodule_git_url) {
+        if (typeof entry.sha !== 'string') return { error: 'contents answered a file with no sha' };
+        blobs.set(entry.path, entry.sha);
+      }
+    } else if (entry.type === 'dir') {
+      if (typeof entry.sha !== 'string') return { error: 'contents answered a directory with no sha' };
+      const nested = apiTreeBlobs(entry.sha, entry.path, repo, blobs);
+      if (nested.error) return nested;
+    }
+  }
+  return { blobs };
+}
+
+function apiPathBlobs(ref, declared, repo) {
+  const blobs = new Map();
+  for (const declaration of declared) {
+    if (declaration.startsWith('/') || declaration.split('/').includes('..')) {
+      return { error: `unsafe declared path ${JSON.stringify(declaration)}` };
+    }
+    const parsed = parse(declaration);
+    if (parsed.error) return { error: `${declaration}: ${parsed.error}` };
+    if (parsed.kind !== 'glob') {
+      const itemPath = declaration.replace(/\/\*\*$/, '').replace(/\/+$/, '');
+      const result = apiContents(ref, itemPath, repo);
+      if (result.error) return result;
+      if (result.absent) continue;
+      if (Array.isArray(result.json)) {
+        const nested = apiDirectoryBlobs(ref, result.json, repo, blobs);
+        if (nested.error) return nested;
+      } else if (result.json && ['file', 'symlink'].includes(result.json.type)) {
+        if (!result.json.submodule_git_url) {
+          if (typeof result.json.sha !== 'string' || typeof result.json.path !== 'string') {
+            return { error: 'contents answered a file with no path or sha' };
+          }
+          blobs.set(result.json.path, result.json.sha);
+        }
+      } else {
+        return { error: 'contents answered neither a file nor a directory' };
+      }
+      continue;
+    }
+
+    const starIndex = parsed.segs.findIndex((segment) => segment.includes('*'));
+    const parent = parsed.segs.slice(0, starIndex).join('/');
+    const listing = apiContents(ref, parent, repo);
+    if (listing.error) return listing;
+    if (listing.absent) {
+      if (!parent) return { error: 'repository root listing could not be read' };
+      continue;
+    }
+    if (!Array.isArray(listing.json)) return { error: 'contents answered no directory listing' };
+    if (listing.json.length >= 1000) return { error: 'truncated listing' };
+    for (const entry of listing.json) {
+      if (!entry || typeof entry.path !== 'string' || typeof entry.name !== 'string') {
+        return { error: 'contents answered a malformed directory entry' };
+      }
+      if (!segMatch(parsed.segs[starIndex], entry.name)) continue;
+      if (starIndex === parsed.segs.length - 1) {
+        if (entry.type === 'file' && !entry.submodule_git_url && typeof entry.sha === 'string'
+            && owns(declaration, entry.path)) blobs.set(entry.path, entry.sha);
+        continue;
+      }
+      if (entry.type !== 'dir') continue;
+      const itemPath = path.posix.join(entry.path, ...parsed.segs.slice(starIndex + 1));
+      const item = apiContents(ref, itemPath, repo);
+      if (item.error) return item;
+      if (item.absent) continue;
+      if (item.json && item.json.type === 'file' && !item.json.submodule_git_url
+          && typeof item.json.sha === 'string' && owns(declaration, item.json.path)) {
+        blobs.set(item.json.path, item.json.sha);
+      }
+    }
+  }
+  return { blobs };
+}
+
+function localTreeBlobs(repo, headSha, epic, declared) {
+  if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(headSha)) return { error: 'the PR head sha is invalid' };
+  const scoped = pathspecsForDeclared(declared);
+  if (scoped.error) return scoped;
+  const nonce = `${process.pid}/${crypto.randomUUID()}`;
+  const headRef = `refs/shipyard/reachability/${nonce}/head`;
+  const epicRef = `refs/shipyard/reachability/${nonce}/epic`;
+  const runGit = (args) => gitResult(repo, args);
+  try {
+    const branchRef = `refs/heads/${epic}`;
+    const validEpic = runGit(['check-ref-format', branchRef]);
+    if (validEpic.error || validEpic.status !== 0) return { error: `the epic ref ${epic} is invalid` };
+    const fetchedHead = runGit(['fetch', '--quiet', '--no-tags', 'origin', `${headSha}:${headRef}`]);
+    if (fetchedHead.error || fetchedHead.status !== 0) return { error: `the PR head could not be fetched: ${diagnostic(fetchedHead)}` };
+    const fetchedEpic = runGit(['fetch', '--quiet', '--no-tags', 'origin', `+${branchRef}:${epicRef}`]);
+    if (fetchedEpic.error || fetchedEpic.status !== 0) return { error: `the epic ref could not be fetched: ${diagnostic(fetchedEpic)}` };
+    const head = gitTreeBlobs(repo, headRef, declared);
+    if (head.error) return { error: `the PR head declared paths could not be read: ${head.error}` };
+    const epicTree = gitTreeBlobs(repo, epicRef, declared);
+    if (epicTree.error) return { error: `the epic declared paths could not be read: ${epicTree.error}` };
+    return { head, epic: epicTree };
+  } finally {
+    runGit(['update-ref', '-d', headRef]);
+    runGit(['update-ref', '-d', epicRef]);
+  }
 }
 
 // `{ ok: true|false|null }` — reachable, an alarm, or an honest unknown — plus
 // the paths and the reason. Never a refusal: the squash cannot be undone, so the
 // value here is that the operator hears about it in the same breath.
-function epicReceived({ t, pr, repo, epic }) {
+function epicReceived({ t, pr, repo, epic, ticket }) {
   const declared = (t.files || []).filter((f) => typeof f === 'string' && f.trim());
   if (!epic) return { ok: null, why: 'the ticket carries no epic (direct-to-main) — there is no epic that could have received it' };
   if (!declared.length) return { ok: null, epic, why: 'the ticket declares no files_modified — there is nothing to assert' };
   if (!pr.headRefOid) return { ok: null, epic, why: 'the live PR view reported no head sha, so the merged tree cannot be identified' };
-  const head = treeBlobs(pr.headRefOid, repo);
-  if (head.error) return { ok: null, epic, why: `the merged head tree could not be read: ${head.error}` };
-  const ep = treeBlobs(epic, repo);
-  if (ep.error) return { ok: null, epic, why: `the ${epic} tree could not be read: ${ep.error}` };
+  const checkout = localCheckout(repo, ticket);
+  let head;
+  let ep;
+  if (checkout) {
+    const local = localTreeBlobs(checkout, pr.headRefOid, epic, declared);
+    if (local.error) return { ok: null, epic, why: `local declared paths could not be read: ${local.error}` };
+    head = local.head;
+    ep = local.epic;
+  } else {
+    head = apiPathBlobs(pr.headRefOid, declared, repo);
+    if (head.error) return { ok: null, epic, why: `the merged head declared paths could not be read: ${head.error}` };
+    ep = apiPathBlobs(epic, declared, repo);
+    if (ep.error) return { ok: null, epic, why: `the ${epic} declared paths could not be read: ${ep.error}` };
+  }
 
-  // Every path in the MERGED head that a declaration owns must be in the epic
-  // with the same blob. A path the ticket DELETED owns nothing in the head and is
-  // therefore not asserted — the assertion fails safe rather than reading a
-  // deletion as an absence.
   const unreachable = [];
   let checked = 0;
   for (const decl of declared) {
-    for (const [p, sha] of head.blobs) {
-      if (!owns(decl, p)) continue;
+    const paths = new Set([...head.blobs.keys(), ...ep.blobs.keys()].filter((p) => owns(decl, p)));
+    for (const p of paths) {
       checked += 1;
+      const headSha = head.blobs.get(p);
       const epicSha = ep.blobs.get(p);
-      if (!epicSha) unreachable.push({ path: p, declared_by: decl, why: 'absent from the epic' });
-      else if (epicSha !== sha) unreachable.push({ path: p, declared_by: decl, why: `a different blob in the epic (${epicSha.slice(0, 7)} ≠ ${String(sha).slice(0, 7)})` });
+      if (!headSha) unreachable.push({ path: p, declared_by: decl, why: 'absent from the merged head' });
+      else if (!epicSha) unreachable.push({ path: p, declared_by: decl, why: 'absent from the epic' });
+      else if (epicSha !== headSha) unreachable.push({ path: p, declared_by: decl, why: `a different blob in the epic (${epicSha.slice(0, 7)} ≠ ${String(headSha).slice(0, 7)})` });
     }
   }
   if (!checked) return { ok: null, epic, why: `no path in the merged tree is owned by any of the ${declared.length} declared entr${declared.length === 1 ? 'y' : 'ies'} — nothing was asserted` };
@@ -1223,7 +1446,7 @@ function mergeOne(id) {
   // result carries the verdict, the merge line prints it, and an ALARM is
   // journalled by the same writer that owns the `merge` event above, so a run
   // that ends before anyone reads stdout has still recorded it.
-  res.reachability = epicReceived({ t, pr, repo, epic });
+  res.reachability = epicReceived({ t, pr, repo, epic, ticket: id });
   if (res.reachability.ok === false) {
     res.epic_unreachable = res.reachability.unreachable.map((u) => u.path);
     journal({
