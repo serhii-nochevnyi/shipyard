@@ -882,8 +882,8 @@ S1 is a separate high-risk correctness fix with its own ticket and human checkpo
 <!-- shipyard:gsd-sync:begin -->
 ## Shipyard synchronization (generated)
 
-- Source fingerprint: `a2ccf546a4a280a73d9a7157f16c0fb81055dd2e37c3cc2e6fbedcd1e8968b5e`
-- Plans merged: 215/243
+- Source fingerprint: `42aef15f046ad37228ef2d842a5512a2f1129e27e93001d593688f92ad728892`
+- Plans merged: 216/243
 - Phases verified: 10/26
 - Current phase: 20
 
@@ -912,7 +912,7 @@ S1 is a separate high-risk correctness fix with its own ticket and human checkpo
 | 40 — Build delivery seams and clean target-project PRs | 27 | 27 | pending |
 | 41 — Reduce pipeline subscription overhead | 9 | 9 | gaps_found |
 | 42 — Resume trusted finalization without executor replay | 3 | 3 | gaps_found |
-| 43 — Target-project delivery at scale | 19 | 5 | pending |
+| 43 — Target-project delivery at scale | 19 | 6 | pending |
 | 44 — Optimize subscription efficiency per runtime | 8 | 8 | pending |
 | 45 — Close residual pipeline efficiency gaps | 14 | 0 | pending |
 

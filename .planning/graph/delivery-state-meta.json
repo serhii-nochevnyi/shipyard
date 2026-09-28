@@ -1,13 +1,13 @@
 {
   "schema_version": 1,
-  "generation": 395,
-  "generation_identity": "0fd5a578-9fdc-47b8-82f8-7fa1eb872645",
-  "previous_generation_identity": "16777245:12934213833:1790609383650133800:8e2c4fd05dcb98a1f6edebcb453a46432f4aa2177fac5fd8ae7c17c6b5c39b05",
-  "observed_at": "2026-09-28T16:08:11.338Z",
-  "generated_at": "2026-09-28T16:08:11.338Z",
+  "generation": 396,
+  "generation_identity": "9f96ae8a-5dca-4233-bb6d-14ab94ee1cdd",
+  "previous_generation_identity": "16777245:12934260860:1790611713162323200:cfd3c3157dbab19d0b853b9e7cd500820b23ea16b99c3962c3a1390f6fcf760b",
+  "observed_at": "2026-09-28T16:14:24.960Z",
+  "generated_at": "2026-09-28T16:14:24.960Z",
   "by": "state-sync",
-  "pid": 4220,
-  "observation_generation": 395,
+  "pid": 13602,
+  "observation_generation": 396,
   "observation_projection": {
     "tickets": {
       "T-20-01": {
@@ -2367,7 +2367,7 @@
         "head": "105759c579945cff51ba111023132fc24126a592",
         "draft": true,
         "base": "epic/43-target-project-delivery-at-scale",
-        "merge_state": "CLEAN",
+        "merge_state": "UNKNOWN",
         "review_decision": null,
         "checks": {
           "total": 1,
@@ -2400,21 +2400,15 @@
         "checks": null
       },
       "T-43-14": {
-        "status": "pr-open",
+        "status": "merged",
         "repository": null,
         "pr": 355,
-        "head": "eaa3dc588e51d724b4d87e837e059eff4abf8841",
+        "head": null,
         "draft": false,
         "base": "epic/43-target-project-delivery-at-scale",
-        "merge_state": "CLEAN",
+        "merge_state": null,
         "review_decision": null,
-        "checks": {
-          "total": 2,
-          "pending": 0,
-          "failing": 0,
-          "none_reported": false,
-          "unavailable": false
-        }
+        "checks": null
       },
       "T-43-15": {
         "status": "pending",
@@ -2717,9 +2711,9 @@
   },
   "binding": {
     "schema_version": 1,
-    "state_digest": "e60be6b7f5c64744007113b72061a32ce3224b8308e66bea5ea9145bda0001d3",
-    "front_digest": "6d031b7b4e1ce2078b5cdd317dc449ce94fd50509de87c850f44d1d8800e6f85",
-    "observation_digest": "17ba93b6218018f93ffa16f44b516a8002c67988b9d08383f8da136aadb6792e",
-    "observation_generation": 395
+    "state_digest": "6fdda69e7f189d22f293676f7afc89d2ac39c508da385f5b3ed14e782e0c2386",
+    "front_digest": "75736593daa3115cdfb9f647eba8303a31d1d5dbcef7a61c33ec5d5f31179fd2",
+    "observation_digest": "9070fd5b03927f5249e38ca8ce46d5dddbd12e713825cba84dc845ba6997ed79",
+    "observation_generation": 396
   }
 }

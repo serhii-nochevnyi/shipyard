@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: c1e1dd226946b6568d918aa4c703f9e38fe3c1fc1388e50c2b04bf1815adbaa5
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: aed7fe53f3fb216a789ff4dd730189305431d76a7d9c892a68340e660eba3d91
 phase: 45-close-residual-pipeline-efficiency-gaps
 plan: 10
 subsystem: shipyard delivery
@@ -22,7 +22,7 @@ key-decisions:
 duration: 0min
 status: halted
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: c1e1dd226946b6568d918aa4c703f9e38fe3c1fc1388e50c2b04bf1815adbaa5
+shipyard_source_fingerprint: aed7fe53f3fb216a789ff4dd730189305431d76a7d9c892a68340e660eba3d91
 ---
 
 # Phase 45: Claude decompose host recovers a completed judgment role from its reservation, saved transcripts and artifact snapshot without relaunch — Delivery Projection

@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 66cc4ec1d9b7cebb1d949f7e15dfc44628d1c2ac707d4adff659ecdd5c977040
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 42c5fd5cc2c8705512bbc45455ad1e26ed4e6e912ef5264e9852dd58e23a5253
 phase: 45-close-residual-pipeline-efficiency-gaps
 plan: 01
 subsystem: shipyard delivery
@@ -22,7 +22,7 @@ key-decisions:
 duration: 0min
 status: halted
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 66cc4ec1d9b7cebb1d949f7e15dfc44628d1c2ac707d4adff659ecdd5c977040
+shipyard_source_fingerprint: 42c5fd5cc2c8705512bbc45455ad1e26ed4e6e912ef5264e9852dd58e23a5253
 ---
 
 # Phase 45: Armed Stop gate binds the realpath of its own delivery board, bounds legacy markers and gains disarm — Delivery Projection

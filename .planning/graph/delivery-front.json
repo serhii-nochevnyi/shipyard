@@ -1,10 +1,10 @@
 {
-  "generated_at": "2026-09-28T16:08:11.338Z",
-  "observed_at": "2026-09-28T16:08:11.338Z",
-  "generation": 395,
+  "generated_at": "2026-09-28T16:14:24.960Z",
+  "observed_at": "2026-09-28T16:14:24.960Z",
+  "generation": 396,
   "parked_by_run": [],
   "auto_merge": "epic",
-  "dispatches_applied_at": "2026-09-28T16:08:11.338Z",
+  "dispatches_applied_at": "2026-09-28T16:14:24.960Z",
   "actionable": {
     "execute": [
       "T-43-06",
@@ -26,9 +26,7 @@
       "T-43-10"
     ],
     "finalize": [],
-    "merge": [
-      "T-43-14"
-    ]
+    "merge": []
   },
   "waiting": {
     "ci": [],
@@ -261,6 +259,7 @@
       "T-43-03",
       "T-43-05",
       "T-43-09",
+      "T-43-14",
       "T-44-01",
       "T-44-02",
       "T-44-03",
@@ -273,15 +272,14 @@
   },
   "why": {
     "T-43-06": "ready — worktree + executor",
-    "T-43-07": "PR #266: the base moved: `epic/43-target-project-delivery-at-scale` is 1 commit(s) ahead of this branch, so any green here was measured against a merge base that no longer exists. In the ticket worktree: `base-merge.cjs <ticket> --worktree <path> --base <base ref>` (or `git fetch origin && git merge origin/<base>`) — NEVER rebase: the PR is pushed, so a rebase is a force-push that dismisses approvals and re-anchors resolved threads.",
+    "T-43-07": "PR #266: the base moved: `epic/43-target-project-delivery-at-scale` is 2 commit(s) ahead of this branch, so any green here was measured against a merge base that no longer exists. In the ticket worktree: `base-merge.cjs <ticket> --worktree <path> --base <base ref>` (or `git fetch origin && git merge origin/<base>`) — NEVER rebase: the PR is pushed, so a rebase is a force-push that dismisses approvals and re-anchors resolved threads.",
     "T-43-04": "PR #319: the base moved: `ticket/T-43-07-cancelled-checks-ignore-superseded-runs` is 43 commit(s) ahead of this branch, so any green here was measured against a merge base that no longer exists. In the ticket worktree: `base-merge.cjs <ticket> --worktree <path> --base <base ref>` (or `git fetch origin && git merge origin/<base>`) — NEVER rebase: the PR is pushed, so a rebase is a force-push that dismisses approvals and re-anchors resolved threads.",
     "T-43-08": "T-43-07 (non-primary parent T-43-07 is pr-open — T-43-08's worktree is cut from T-43-04 and receives T-43-07 only through epic/43-target-project-delivery-at-scale; T-43-07 must merge into epic/43-target-project-delivery-at-scale first (T-43-07 is pr-open))",
     "T-43-10": "PR #346: the base moved: `epic/43-target-project-delivery-at-scale` is 1 commit(s) ahead of this branch, so any green here was measured against a merge base that no longer exists. In the ticket worktree: `base-merge.cjs <ticket> --worktree <path> --base <base ref>` (or `git fetch origin && git merge origin/<base>`) — NEVER rebase: the PR is pushed, so a rebase is a force-push that dismisses approvals and re-anchors resolved threads.",
     "T-43-11": "PR #334: the base moved: `epic/43-target-project-delivery-at-scale` is 1 commit(s) ahead of this branch, so any green here was measured against a merge base that no longer exists. In the ticket worktree: `base-merge.cjs <ticket> --worktree <path> --base <base ref>` (or `git fetch origin && git merge origin/<base>`) — NEVER rebase: the PR is pushed, so a rebase is a force-push that dismisses approvals and re-anchors resolved threads.",
     "T-43-12": "T-43-08 (parent has no branch yet (nothing to cascade from)); T-43-11 (non-primary parent T-43-11 is pr-open — T-43-12's worktree is cut from T-43-08 and receives T-43-11 only through epic/43-target-project-delivery-at-scale; T-43-11 must merge into epic/43-target-project-delivery-at-scale first (T-43-11 is pr-open))",
     "T-43-13": "T-43-06 (parent has no branch yet (nothing to cascade from))",
-    "T-43-14": "PR #355: green + conform — squash into epic/43-target-project-delivery-at-scale (sentinel)",
-    "T-43-15": "T-43-12 (parent has no branch yet (nothing to cascade from)); T-43-14 (non-primary parent T-43-14 is pr-open — T-43-15's worktree is cut from T-43-12 and receives T-43-14 only through epic/43-target-project-delivery-at-scale; T-43-14 must merge into epic/43-target-project-delivery-at-scale first (T-43-14 is pr-open))",
+    "T-43-15": "T-43-12 (parent has no branch yet (nothing to cascade from))",
     "T-43-16": "T-43-06 (parent has no branch yet (nothing to cascade from))",
     "T-43-17": "T-43-13 (parent has no branch yet (nothing to cascade from)); T-43-16 (parent has no branch yet (nothing to cascade from))",
     "T-43-18": "T-43-17 (parent has no branch yet (nothing to cascade from)); T-43-08 (parent has no branch yet (nothing to cascade from))",
@@ -306,17 +304,17 @@
     "publish": 0,
     "fix": 4,
     "finalize": 0,
-    "merge": 1,
+    "merge": 0,
     "ci": 0,
     "dispatched": 0,
     "parent": 0,
     "merge_human": 0,
     "human": 0,
     "blocked": 13,
-    "done": 215
+    "done": 216
   },
   "parent_of": {},
-  "actionable_count": 15,
+  "actionable_count": 14,
   "tracker_blocked_count": 0,
   "left_behind_count": 0,
   "fixpoint": false,
@@ -330,8 +328,7 @@
       "T-43-07",
       "T-43-04",
       "T-43-11",
-      "T-43-10",
-      "T-43-14"
+      "T-43-10"
     ],
     "waiting_ci": [],
     "waiting_parent": [],
