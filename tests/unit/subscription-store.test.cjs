@@ -148,7 +148,8 @@ test('a changed used_percent stores a new line', () => {
   const stateRoot = freshStateRoot();
   const envelope = codexParentEnvelope();
   store.append(envelope, { runtime: 'codex', stateRoot, now: new Date('2026-05-01T00:00:00Z') });
-  const changed = { ...envelope, used_percent: envelope.used_percent + 5 };
+  const changed = { ...envelope };
+  changed.used_percent = envelope.used_percent + 5;
   const result = store.append(changed, { runtime: 'codex', stateRoot, now: new Date('2026-05-02T00:00:00Z') });
   assert.equal(result.appended, true);
   assert.equal(store.list({ runtime: 'codex', stateRoot }).envelopes.length, 2);
