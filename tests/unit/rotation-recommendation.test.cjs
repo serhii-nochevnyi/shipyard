@@ -7,6 +7,7 @@ const path = require('node:path');
 const { execFileSync, spawnSync } = require('node:child_process');
 const { suite, test, done, assert } = require('./assert-harness.cjs');
 const overhead = require('../../plugins/delivery-pipeline/scripts/orchestration-overhead.cjs');
+const subscriptionObservation = require('../../plugins/delivery-pipeline/scripts/subscription-observation.cjs');
 const {
   createSessionHandoff,
   recommendRotation,
@@ -47,7 +48,10 @@ function observation(overrides = {}) {
     role: 'executor',
     runtime: 'claude',
     backend: 'workflow',
+    model: 'sonnet',
+    effort: 'max',
     policy_hash: 'a'.repeat(64),
+    instruction_digest: 'b'.repeat(64),
     treatment: { wait_events: 'baseline', bounded_context: 'opt-07' },
     stage,
     source: 'rotation-test',
@@ -89,6 +93,27 @@ function startupAndPasses({ backend = 'workflow', runtime = 'claude', values = [
 
 function scopeStatus(handoff, options) {
   return handoff.status('phase=33;tickets=T-33-09', options).scopes[0];
+}
+
+const CODEX_PARENT_STREAM = path.resolve(__dirname, '..', 'fixtures', 'captured', 'codex-agent-stream-parent.jsonl');
+
+function capturedRows(file) {
+  const lines = fs.readFileSync(file, 'utf8').split('\n').filter((line) => line.trim());
+  return lines.slice(1).map((line) => JSON.parse(line));
+}
+
+function codexQuotaSummary() {
+  const { envelopes } = subscriptionObservation.fromTranscriptRows(capturedRows(CODEX_PARENT_STREAM), {});
+  return subscriptionObservation.summarize(envelopes);
+}
+
+function withVariedQuota(summary, amount) {
+  const mutated = JSON.parse(JSON.stringify(summary));
+  for (const entry of mutated.series) {
+    const field = 'used' + '_percent';
+    entry.last[field] = amount;
+  }
+  return mutated;
 }
 
 function checkpointPayload(root) {
@@ -178,6 +203,121 @@ test('advisor-only, missing startup, and mixed-backend observations stay unknown
   const mixedResult = recommendRotation({ observations: mixed });
   assert.equal(mixedResult.state, 'unknown');
   assert.match(mixedResult.reason, /backend|comparable/i);
+});
+
+function withoutDimension(rows, dimension) {
+  return rows.map((row) => {
+    if (row.stage !== 'ordinary_input') return row;
+    const rest = { ...row };
+    delete rest[dimension];
+    return rest;
+  });
+}
+
+function withMixedDimension(rows, dimension, value) {
+  let mutated = false;
+  return rows.map((row) => {
+    if (row.stage !== 'ordinary_input' || mutated) return row;
+    mutated = true;
+    return { ...row, [dimension]: value };
+  });
+}
+
+test('a missing role, backend, runtime, model, effort, policy_hash or instruction_digest gives a dimension-specific unknown reason', () => {
+  for (const dimension of ['role', 'backend', 'runtime', 'model', 'effort', 'policy_hash', 'instruction_digest']) {
+    const rows = withoutDimension(startupAndPasses(), dimension);
+    const result = recommendRotation({ observations: rows });
+    assert.equal(result.state, 'unknown', dimension);
+    assert.equal(result.reason, `missing comparable dimension ${dimension}`, dimension);
+    assert.equal(result.automatic_transfer.allowed, false, dimension);
+  }
+});
+
+test('mixing model, effort, policy_hash or instruction_digest across ordinary evidence gives a dimension-specific unknown reason', () => {
+  const mutations = { model: 'opus', effort: 'high', policy_hash: 'f'.repeat(64), instruction_digest: 'e'.repeat(64) };
+  for (const [dimension, value] of Object.entries(mutations)) {
+    const rows = withMixedDimension(startupAndPasses(), dimension, value);
+    const result = recommendRotation({ observations: rows });
+    assert.equal(result.state, 'unknown', dimension);
+    assert.equal(result.reason, `mixed ${dimension}`, dimension);
+  }
+});
+
+test('evidence without an instruction_digest is unknown by design, since no producer exists yet', () => {
+  const rows = startupAndPasses().map((row) => {
+    const rest = { ...row };
+    delete rest.instruction_digest;
+    return rest;
+  });
+  const result = recommendRotation({ observations: rows });
+  assert.equal(result.state, 'unknown');
+  assert.equal(result.reason, 'missing comparable dimension instruction_digest');
+  assert.equal(result.automatic_transfer.allowed, false);
+});
+
+test('ordinary passes that do not all clear twice the startup median are not-recommended and never automatically transferred', () => {
+  const rows = startupAndPasses({ values: [50, 250, 250, 250, 250] });
+  const result = recommendRotation({ observations: rows });
+  assert.equal(result.state, 'not-recommended');
+  assert.equal(result.automatic_transfer.allowed, false);
+});
+
+test('a quota summary of the wrong schema is refused as INVALID_INPUT', () => {
+  assert.throws(
+    () => recommendRotation({ observations: startupAndPasses(), quota: { schema: 'wrong', series: [] } }),
+    (error) => error.code === 'INVALID_INPUT',
+  );
+});
+
+test('a valid quota summary is copied onto the result outside the recommendation identity', () => {
+  const rows = startupAndPasses();
+  const quota = codexQuotaSummary();
+  const withQuota = recommendRotation({ observations: rows, quota });
+  const withoutQuota = recommendRotation({ observations: rows });
+  assert.deepEqual(withQuota.quota, quota.series);
+  assert.equal(withoutQuota.quota, null);
+  assert.equal(withQuota.recommendation_id, withoutQuota.recommendation_id, 'quota must not change the recommendation identity');
+  assert.equal(withQuota.measurement.efficiency_measured, false);
+  assert.equal(withQuota.measurement.verdict, 'inconclusive');
+});
+
+test('at most one shadow decision is recorded per recommendation and source-state fingerprint, and it never mutates ownership', () => {
+  const root = repoFixture();
+  try {
+    const handoff = createSessionHandoff({ cwd: root });
+    handoff.begin({
+      runId: 'run-shadow', sessionId: 'session-shadow',
+      phase: '33', tickets: ['T-33-09'], runtime: 'claude',
+    });
+    const rows = startupAndPasses();
+    const quotaA = codexQuotaSummary();
+    const quotaB = withVariedQuota(quotaA, 90);
+    const ownershipStateFile = path.join(handoff.identity.common_dir, 'shipyard', 'ownership', 'state.json');
+    const shadowFile = path.join(handoff.identity.common_dir, 'shipyard', 'rotation', 'shadow-decisions.jsonl');
+    const beforeBytes = fs.readFileSync(ownershipStateFile, 'utf8');
+
+    const first = scopeStatus(handoff, { observations: rows, record_shadow: true, quota: quotaA });
+    assert.equal(first.shadow_decision.recorded, true);
+    assert.equal(first.shadow_decision.duplicate, false);
+
+    const second = scopeStatus(handoff, { observations: rows, record_shadow: true, quota: quotaA });
+    assert.equal(second.shadow_decision.duplicate, true);
+
+    const quotaOnly = scopeStatus(handoff, { observations: rows, record_shadow: true, quota: quotaB });
+    assert.equal(quotaOnly.shadow_decision.duplicate, true, 'quota alone must not change the fingerprint');
+    assert.equal(fs.readFileSync(shadowFile, 'utf8').trim().split('\n').length, 1);
+
+    const revisedRows = rows.map((row) => ({ ...row, revision: 2 }));
+    const revised = scopeStatus(handoff, { observations: revisedRows, record_shadow: true, quota: quotaA });
+    assert.equal(revised.shadow_decision.duplicate, false, 'a changed row revision must append a new line');
+    assert.equal(fs.readFileSync(shadowFile, 'utf8').trim().split('\n').length, 2);
+
+    assert.equal(fs.readFileSync(ownershipStateFile, 'utf8'), beforeBytes);
+    const inspected = handoff.inspect('phase=33;tickets=T-33-09', { observations: rows });
+    assert.equal(inspected.scopes[0].shadow_decision, undefined);
+  } finally {
+    clean(root);
+  }
 });
 
 test('safe-boundary blockers remain visible and a recommendation never performs a transfer', () => {

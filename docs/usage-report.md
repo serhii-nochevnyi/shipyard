@@ -61,6 +61,14 @@ node plugins/delivery-pipeline/scripts/usage-report.cjs \
   --attribution .planning/graph/usage-attribution.jsonl
 ```
 
+The reader never discovers a transcript on its own; the operator passes the
+paths. The explicit roots this repository writes transcripts under are
+`~/.local/state/shipyard/claude/<key>/transcripts/`,
+`~/.local/state/shipyard/claude-decompose/<key>/transcripts/` and
+`$CODEX_HOME/sessions/YYYY/MM/DD/*.jsonl`. A Codex `exec` stdout copy carries
+no `rate_limits`, so it still contributes token counts but never a quota
+series.
+
 The JSON contains:
 
 - `groups`: token totals split by runtime/provider, ordinary/advisor kind,
@@ -75,8 +83,28 @@ The JSON contains:
   input counters are eligible for comparison. `exclusion_reasons` explains
   every excluded row. `input_per_verified_completion` stays `null` until a
   verified delivery outcome join is supplied;
-- `subscription_usage: null`: local transcripts do not prove a subscription
-  allowance or credit delta.
+- `subscription_usage`: the `shipyard.subscription-usage.v1` summary derived
+  from any `rate_limit_event` (Claude) or `event_msg`/`token_count` with
+  `rate_limits` (Codex) rows in the same sources. Each `series` entry is one
+  provider/runtime/account-label/bucket/window; it is never summed across
+  provider, account label or bucket, and its `delta` stays `null` unless the
+  series is continuous end to end (`segment: 'measured'`). `discontinuities`
+  names every break by reason (`reset`, `decrease`, `account_label_change`,
+  `unattributed`, `unknown_concurrency`, `window_change`).
+  `coverage.codex_parent` and `coverage.codex_idle_baseline` are always
+  `unverified`, and `verdict` is always `inconclusive`: a saved transcript
+  cannot confirm which process shares a Codex quota window or that the account
+  was idle before the first sample. A malformed quota record only adds to
+  `subscription_usage.warnings`; it never changes the top-level `warnings` or
+  `comparable`. `subscription_usage` is never a price or a token-to-quota
+  conversion.
+
+Pass `--account-label <runtime>=<label>` (repeatable; `<runtime>` is `claude`
+or `codex`) to set `account_label` on that runtime's series instead of leaving
+it `null`. The label must match `/^[a-z0-9][a-z0-9._-]{0,63}$/`; an invalid
+label or runtime exits 2. Without the option every quota observation is
+unattributed — this script never reads a runtime's private state to guess
+which account a transcript belongs to.
 
 `exact` and `session` attribution can be used for a model comparison. An
 `ambiguous`, `mismatch` or `unattributed` row is excluded from the ready counts.
