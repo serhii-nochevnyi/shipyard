@@ -7,6 +7,7 @@ const { spawnSync } = require('child_process');
 const { suite, test, done, assert } = require('./assert-harness.cjs');
 
 const SCRIPT = path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'publish-gate.cjs');
+const commentPolicy = require(path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'comment-policy.cjs'));
 
 const trash = [];
 process.on('exit', () => {
@@ -138,6 +139,40 @@ test('a Shipyard-shaped fixture (main, no origin/HEAD) still resolves origin/mai
   assert.strictEqual(r.status, 0, r.stderr);
   assert.strictEqual(r.json.base, 'origin/main');
   assert.strictEqual(r.json.base_source, 'fallback');
+  const report = commentPolicy.analyze(worktree, 'origin/main', {
+    workingTree: true,
+    projectRoot: worktree,
+    repo: commentPolicy.repositorySlug(worktree),
+  });
+  assert.deepStrictEqual(report.policy.allowed_markers, [
+    '@invariant:', '@security:', '@contract:',
+  ]);
+});
+
+test('a configured repository marker passes the publish gate end to end', () => {
+  const { dir, env } = root();
+  const bare = makeOrigin(dir, env, { defaultBranch: 'main' });
+  const worktree = cloneWorktree(dir, bare, env);
+  git(worktree, ['remote', 'set-url', 'origin', 'https://github.com/acme/app.git'], env);
+  const planning = path.join(worktree, '.planning');
+  fs.mkdirSync(planning, { recursive: true });
+  fs.writeFileSync(path.join(planning, 'config.json'), JSON.stringify({
+    delivery_pipeline: { comment_markers: { 'acme/app': ['@ai-generated'] } },
+  }));
+  const source = path.join(worktree, 'src', 'app.js');
+  fs.mkdirSync(path.dirname(source), { recursive: true });
+  fs.writeFileSync(source, '// @ai-generated model=x\nconst answer = 42;\n');
+
+  const r = run(worktree, { env, extra: ['--project-root', worktree] });
+  assert.strictEqual(r.status, 0, r.stderr || r.stdout);
+  const report = commentPolicy.analyze(worktree, 'origin/main', {
+    workingTree: true,
+    projectRoot: worktree,
+    repo: commentPolicy.repositorySlug(worktree),
+  });
+  assert.deepStrictEqual(report.policy.allowed_markers, [
+    '@invariant:', '@security:', '@contract:', '@ai-generated',
+  ]);
 });
 
 test('no candidate at all exits 2, naming the tried candidates', () => {

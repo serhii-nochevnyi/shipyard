@@ -92,7 +92,12 @@ function main(argv = process.argv.slice(2)) {
   const ticket = value(argv, 'ticket');
   const projectRoot = resolveProjectRoot(argv, worktree);
   const { base, base_source } = baseFor(worktree, value(argv, 'base'), { ticket, projectRoot });
-  const result = commentPolicy.analyze(worktree, base, { workingTree: argv.includes('--working-tree') });
+  const repo = commentPolicy.repositorySlug(projectRoot || worktree);
+  const result = commentPolicy.analyze(worktree, base, {
+    workingTree: argv.includes('--working-tree'),
+    projectRoot,
+    repo,
+  });
   const output = {
     gate: 'publish',
     ticket: ticket || null,

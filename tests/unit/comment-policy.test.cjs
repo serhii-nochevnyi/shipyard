@@ -9,6 +9,7 @@ const { suite, test, done, assert } = require('./assert-harness.cjs');
 const ROOT = path.join(__dirname, '..', '..');
 const SCRIPT = path.join(ROOT, 'plugins', 'delivery-pipeline', 'scripts', 'comment-policy.cjs');
 const PUBLISH_SCRIPT = path.join(ROOT, 'plugins', 'delivery-pipeline', 'scripts', 'publish-gate.cjs');
+const commentPolicy = require(SCRIPT);
 
 function git(cwd, args) {
   const result = spawnSync('git', ['-C', cwd, ...args], { encoding: 'utf8' });
@@ -54,6 +55,14 @@ function args(command, repo, extra = []) {
 
 function read(repo, file) {
   return fs.readFileSync(path.join(repo, file), 'utf8');
+}
+
+function configureMarkers(projectRoot, markers) {
+  const planning = path.join(projectRoot, '.planning');
+  fs.mkdirSync(planning, { recursive: true });
+  fs.writeFileSync(path.join(planning, 'config.json'), JSON.stringify({
+    delivery_pipeline: { comment_markers: markers },
+  }));
 }
 
 suite('comment-policy — strict pre-push policy and explicit cleanup');
@@ -119,6 +128,120 @@ test('allows only short invariant, security and contract markers', () => {
     '@invariant:',
     '@security:',
     '@contract:',
+  ]);
+});
+
+test('configured markers apply to the matching origin repository only', () => {
+  const repo = fixture(
+    { 'src/app.js': 'const value = 1;\n' },
+    { 'src/app.js': 'const value = 1;\n// @ai-generated model=x\n' },
+  );
+  git(repo, ['remote', 'add', 'origin', 'https://github.com/acme/app.git']);
+  configureMarkers(repo, { 'acme/app': ['@ai-generated'] });
+
+  const matching = commentPolicy.analyze(repo, 'main', { projectRoot: repo });
+  assert.strictEqual(matching.ok, true);
+  assert.deepStrictEqual(matching.policy.allowed_markers, [
+    '@invariant:', '@security:', '@contract:', '@ai-generated',
+  ]);
+
+  git(repo, ['remote', 'set-url', 'origin', 'https://github.com/acme/other.git']);
+  const other = commentPolicy.analyze(repo, 'main', { projectRoot: repo });
+  assert.strictEqual(other.ok, false);
+  assert.deepStrictEqual(other.policy.allowed_markers, [
+    '@invariant:', '@security:', '@contract:',
+  ]);
+});
+
+test('configured marker tokens containing whitespace or regex metacharacters are dropped', () => {
+  const repo = fixture(
+    { 'src/app.js': 'const value = 1;\n' },
+    {
+      'src/app.js': [
+        'const value = 1;',
+        '// @bad marker model=x',
+        '// @bad(marker model=x',
+      ].join('\n') + '\n',
+    },
+  );
+  git(repo, ['remote', 'add', 'origin', 'https://github.com/acme/app.git']);
+  configureMarkers(repo, { 'acme/app': ['@bad marker', '@bad('] });
+
+  const report = commentPolicy.analyze(repo, 'main', { projectRoot: repo });
+  assert.strictEqual(report.ok, false);
+  assert.strictEqual(report.files[0].comment_lines, 2);
+  assert.deepStrictEqual(report.policy.allowed_markers, [
+    '@invariant:', '@security:', '@contract:',
+  ]);
+});
+
+test('editing an existing comment is reported without blocking', () => {
+  const repo = fixture(
+    { 'src/app.js': '// stale explanation\nconst value = 1;\n' },
+    { 'src/app.js': '// updated explanation\nconst value = 1;\n' },
+  );
+  const report = commentPolicy.analyze(repo, 'main');
+  assert.strictEqual(report.ok, true);
+  assert.strictEqual(report.files[0].added_lines, 0);
+  assert.strictEqual(report.files[0].comment_lines, 0);
+  assert.deepStrictEqual(report.files[0].findings.map((finding) => finding.kind), ['edited_comment']);
+});
+
+test('turning a code line into a comment still blocks', () => {
+  const repo = fixture(
+    { 'src/app.js': 'const value = 1;\n' },
+    { 'src/app.js': '// const value = 1;\n' },
+  );
+  const report = commentPolicy.analyze(repo, 'main');
+  assert.strictEqual(report.ok, false);
+  assert.strictEqual(report.files[0].comment_lines, 1);
+});
+
+test('a net-new free comment still blocks', () => {
+  const repo = fixture(
+    { 'src/app.js': 'const value = 1;\n' },
+    { 'src/app.js': 'const value = 1;\n// new explanation\n' },
+  );
+  const report = commentPolicy.analyze(repo, 'main');
+  assert.strictEqual(report.ok, false);
+  assert.strictEqual(report.files[0].comment_lines, 1);
+});
+
+test('deleting a comment does not create an added-line report', () => {
+  const repo = fixture(
+    { 'src/app.js': '// existing explanation\nconst value = 1;\n' },
+    { 'src/app.js': 'const value = 1;\n' },
+  );
+  const report = commentPolicy.analyze(repo, 'main');
+  assert.strictEqual(report.ok, true);
+  assert.deepStrictEqual(report.files, []);
+});
+
+test('editing inside a block comment uses the whole base blob to recognize its pre-image', () => {
+  const repo = fixture(
+    { 'src/app.js': 'const value = 1;\n/*\n * stale explanation\n */\n' },
+    { 'src/app.js': 'const value = 1;\n/*\n * revised explanation\n */\n' },
+  );
+  const report = commentPolicy.analyze(repo, 'main');
+  assert.strictEqual(report.ok, true);
+  assert.deepStrictEqual(report.files[0].findings.map((finding) => finding.kind), ['edited_comment']);
+});
+
+test('project configuration is read from the supplied project root, not the ticket worktree', () => {
+  const repo = fixture(
+    { 'src/app.js': 'const value = 1;\n' },
+    {
+      'src/app.js': 'const value = 1;\n// @ai-generated model=x\n',
+      '.planning/config.json': JSON.stringify({
+        delivery_pipeline: { comment_markers: { 'acme/app': ['@ai-generated'] } },
+      }) + '\n',
+    },
+  );
+  const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-comment-project-'));
+  const report = commentPolicy.analyze(repo, 'main', { projectRoot, repo: 'acme/app' });
+  assert.strictEqual(report.ok, false);
+  assert.deepStrictEqual(report.policy.allowed_markers, [
+    '@invariant:', '@security:', '@contract:',
   ]);
 });
 
