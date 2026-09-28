@@ -41,8 +41,8 @@ function fixture(base, change) {
   return repo;
 }
 
-function run(repo, args) {
-  return spawnSync(process.execPath, [SCRIPT, ...args], { cwd: repo, encoding: 'utf8' });
+function run(repo, args, env = process.env) {
+  return spawnSync(process.execPath, [SCRIPT, ...args], { cwd: repo, encoding: 'utf8', env });
 }
 
 function runPublish(repo, args) {
@@ -149,6 +149,66 @@ test('configured markers apply to the matching origin repository only', () => {
   const other = commentPolicy.analyze(repo, 'main', { projectRoot: repo });
   assert.strictEqual(other.ok, false);
   assert.deepStrictEqual(other.policy.allowed_markers, [
+    '@invariant:', '@security:', '@contract:',
+  ]);
+});
+
+test('direct check and clean CLI load markers from a distinct project root', () => {
+  const repo = fixture(
+    { 'src/app.js': 'const answer = 42;\n' },
+    { 'src/app.js': '// @ai-generated model=x\nconst answer = 42;\n' },
+  );
+  git(repo, ['remote', 'add', 'origin', 'https://github.com/acme/app.git']);
+  const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-comment-project-'));
+  configureMarkers(projectRoot, { 'acme/app': ['@ai-generated'] });
+  const cliArgs = ['--project-root', projectRoot, '--json'];
+
+  const checked = run(repo, args('check', repo, cliArgs));
+  const cleaned = run(repo, args('clean', repo, cliArgs));
+  assert.deepStrictEqual([checked.status, cleaned.status], [0, 0],
+    `${checked.stdout}${checked.stderr}${cleaned.stdout}${cleaned.stderr}`);
+  assert.deepStrictEqual(JSON.parse(checked.stdout).policy.allowed_markers, [
+    '@invariant:', '@security:', '@contract:', '@ai-generated',
+  ]);
+  assert.deepStrictEqual(JSON.parse(cleaned.stdout).before.policy.allowed_markers, [
+    '@invariant:', '@security:', '@contract:', '@ai-generated',
+  ]);
+});
+
+test('direct CLI resolves SHIPYARD_PROJECT_ROOT and the worktree project root', () => {
+  const repo = fixture(
+    { 'src/app.js': 'const answer = 42;\n' },
+    { 'src/app.js': '// @ai-generated model=x\nconst answer = 42;\n' },
+  );
+  git(repo, ['remote', 'add', 'origin', 'https://github.com/acme/app.git']);
+  configureMarkers(repo, { 'acme/app': ['@ai-generated'] });
+
+  const fromWorktreeRoot = run(repo, args('check', repo, ['--json']));
+  const fromEnvironment = run(repo, args('check', repo, ['--json']), {
+    ...process.env,
+    SHIPYARD_PROJECT_ROOT: repo,
+  });
+  assert.deepStrictEqual([fromWorktreeRoot.status, fromEnvironment.status], [0, 0],
+    `${fromWorktreeRoot.stdout}${fromWorktreeRoot.stderr}${fromEnvironment.stdout}${fromEnvironment.stderr}`);
+  assert.strictEqual(JSON.parse(fromWorktreeRoot.stdout).policy.allowed_markers.includes('@ai-generated'), true);
+  assert.strictEqual(JSON.parse(fromEnvironment.stdout).policy.allowed_markers.includes('@ai-generated'), true);
+});
+
+test('direct CLI fails closed when the target worktree has no origin', () => {
+  const repo = fixture(
+    { 'src/app.js': 'const answer = 42;\n' },
+    { 'src/app.js': '// @ai-generated model=x\nconst answer = 42;\n' },
+  );
+  const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-comment-project-'));
+  git(projectRoot, ['init', '-q']);
+  git(projectRoot, ['remote', 'add', 'origin', 'https://github.com/acme/app.git']);
+  configureMarkers(projectRoot, { 'acme/app': ['@ai-generated'] });
+
+  const result = run(repo, args('check', repo, ['--project-root', projectRoot, '--json']));
+  assert.strictEqual(result.status, 1, result.stdout + result.stderr);
+  const report = JSON.parse(result.stdout);
+  assert.strictEqual(report.ok, false);
+  assert.deepStrictEqual(report.policy.allowed_markers, [
     '@invariant:', '@security:', '@contract:',
   ]);
 });

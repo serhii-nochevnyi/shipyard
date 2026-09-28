@@ -149,12 +149,16 @@ test('a Shipyard-shaped fixture (main, no origin/HEAD) still resolves origin/mai
   ]);
 });
 
-test('a configured repository marker passes the publish gate end to end', () => {
+test('a configured repository marker uses the target origin when project root differs', () => {
   const { dir, env } = root();
   const bare = makeOrigin(dir, env, { defaultBranch: 'main' });
   const worktree = cloneWorktree(dir, bare, env);
   git(worktree, ['remote', 'set-url', 'origin', 'https://github.com/acme/app.git'], env);
-  const planning = path.join(worktree, '.planning');
+  const projectRoot = path.join(dir, 'project-root');
+  fs.mkdirSync(projectRoot, { recursive: true });
+  spawnSync('git', ['init', '-q', projectRoot], { env });
+  git(projectRoot, ['remote', 'add', 'origin', 'https://github.com/acme/project-config.git'], env);
+  const planning = path.join(projectRoot, '.planning');
   fs.mkdirSync(planning, { recursive: true });
   fs.writeFileSync(path.join(planning, 'config.json'), JSON.stringify({
     delivery_pipeline: { comment_markers: { 'acme/app': ['@ai-generated'] } },
@@ -162,12 +166,15 @@ test('a configured repository marker passes the publish gate end to end', () => 
   const source = path.join(worktree, 'src', 'app.js');
   fs.mkdirSync(path.dirname(source), { recursive: true });
   fs.writeFileSync(source, '// @ai-generated model=x\nconst answer = 42;\n');
+  git(worktree, ['add', 'src/app.js'], env);
 
-  const r = run(worktree, { env, extra: ['--project-root', worktree] });
+  assert.strictEqual(commentPolicy.repositorySlug(projectRoot), 'acme/project-config');
+  assert.strictEqual(commentPolicy.repositorySlug(worktree), 'acme/app');
+  const r = run(worktree, { env, extra: ['--project-root', projectRoot] });
   assert.strictEqual(r.status, 0, r.stderr || r.stdout);
   const report = commentPolicy.analyze(worktree, 'origin/main', {
     workingTree: true,
-    projectRoot: worktree,
+    projectRoot,
     repo: commentPolicy.repositorySlug(worktree),
   });
   assert.deepStrictEqual(report.policy.allowed_markers, [

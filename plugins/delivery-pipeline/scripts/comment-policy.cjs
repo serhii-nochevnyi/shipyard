@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const { loadConfig, repoValue } = require('./pipeline-config.cjs');
+const { repoRootOf } = require('./graph-dir.cjs');
 
 const MAX_MARKER_LENGTH = 120;
 const MARKER_PATTERN = /^@(invariant|security|contract)\s*:/i;
@@ -368,7 +369,7 @@ function analyze(worktree, base, options = {}) {
   const diff = diffFor(worktree, resolvedBase, Boolean(options.workingTree));
   const changes = parseDiff(diff);
   const projectRoot = options.projectRoot || null;
-  const repo = options.repo || repositorySlug(projectRoot || worktree);
+  const repo = options.repo || repositorySlug(worktree);
   const configuredMarkers = extraMarkers({ projectRoot, repo });
   const allowedMarkers = [...new Set([...BUILTIN_MARKERS, ...configuredMarkers])];
   const files = [];
@@ -508,16 +509,16 @@ function flag(argv, name) {
 }
 
 function argumentsFor(argv) {
-  const valueFlags = new Set(['--worktree', '--base']);
+  const valueFlags = new Set(['--worktree', '--base', '--project-root']);
   const positionals = argv.filter((value, index) => !value.startsWith('--') && !valueFlags.has(argv[index - 1]));
   const command = positionals[0];
   const ticket = positionals[1];
   if (!['check', 'clean'].includes(command) || !ticket) {
-    throw new Error('usage: comment-policy.cjs check|clean <ticket> --worktree <path> --base <ref> [--json] [--apply]');
+    throw new Error('usage: comment-policy.cjs check|clean <ticket> --worktree <path> --base <ref> [--project-root <path>] [--json] [--apply]');
   }
   const worktree = flag(argv, 'worktree');
   const base = flag(argv, 'base');
-  if (!worktree || !base) throw new Error('usage: comment-policy.cjs check|clean <ticket> --worktree <path> --base <ref> [--json] [--apply]');
+  if (!worktree || !base) throw new Error('usage: comment-policy.cjs check|clean <ticket> --worktree <path> --base <ref> [--project-root <path>] [--json] [--apply]');
   return {
     command,
     ticket,
@@ -526,6 +527,13 @@ function argumentsFor(argv) {
     json: argv.includes('--json'),
     apply: argv.includes('--apply'),
   };
+}
+
+function resolveProjectRoot(argv, worktree) {
+  const supplied = flag(argv, 'project-root');
+  if (supplied) return path.resolve(supplied);
+  if (process.env.SHIPYARD_PROJECT_ROOT) return path.resolve(process.env.SHIPYARD_PROJECT_ROOT);
+  return repoRootOf(worktree);
 }
 
 function printCheck(result, ticket) {
@@ -592,7 +600,11 @@ function applyCleanup(input, before) {
 
 function main(argv = process.argv.slice(2)) {
   const input = argumentsFor(argv);
-  const before = analyze(input.worktree, input.base);
+  const options = {
+    projectRoot: resolveProjectRoot(argv, input.worktree),
+    repo: repositorySlug(input.worktree),
+  };
+  const before = analyze(input.worktree, input.base, options);
   if (input.command === 'check') {
     if (input.json) console.log(JSON.stringify({ ticket: input.ticket, ...before }, null, 2));
     else printCheck(before, input.ticket);
@@ -611,7 +623,7 @@ function main(argv = process.argv.slice(2)) {
     return before.ok ? 0 : 1;
   }
   const removed = applyCleanup(input, before);
-  const after = analyze(input.worktree, input.base, { workingTree: true });
+  const after = analyze(input.worktree, input.base, { ...options, workingTree: true });
   const result = {
     ticket: input.ticket,
     command: 'clean',
