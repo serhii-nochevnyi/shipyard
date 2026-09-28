@@ -221,6 +221,17 @@ test('the issue lookup is ordered primary, ADR-004 spelling, then bare legacy', 
   assert.equal(issue.on_no_match, 'create');
 });
 
+test('a recorded Jira key becomes an authoritative key lookup with restricted unlabelled behavior', () => {
+  const p = project({ 'T-01-01': { phase: 1, title: 'Root', jira: 'MYD-42' } });
+  const out = mod.planExport(p.graph, { repo: 'acme/demo', project: 'MYD' });
+  const issue = out.steps.find((s) => s.step === 'issue' && s.ticket === 'T-01-01');
+
+  assert.deepEqual(issue.lookup, [{ kind: 'key', key: 'MYD-42' }]);
+  assert.equal(issue.on_no_match, 'refuse');
+  assert.deepEqual(issue.labelled_only_fields, ['summary', 'description']);
+  assert.equal(issue.unlabelled, 'transition-and-comment-only');
+});
+
 
 test('the epic lookup has a legacy entry and the epic description carries one pointer line', () => {
   const p = project({ 'T-01-01': { phase: '01', title: 'Root', depends_on: [] } });
@@ -296,6 +307,37 @@ test('resolveLookup updates a namespaced hit', () => {
     [legacy.order]: [{ key: 'MYD-4', description: `Source of truth: ${legacy.accepts_unprefixed} (this issue is a generated projection)` }],
   };
   assert.deepEqual(mod.resolveLookup(issue, hits), { action: 'update', key: 'MYD-3' });
+});
+
+test('resolveLookup updates a recorded issue returned as one object or an array', () => {
+  const p = project({ 'T-01-01': { phase: 1, title: 'Root', jira: 'MYD-42' } });
+  const issue = mod.planExport(p.graph, { repo: 'acme/demo', project: 'MYD' }).steps
+    .find((s) => s.step === 'issue' && s.ticket === 'T-01-01');
+  const hit = { key: 'MYD-42', fields: { labels: issue.labels } };
+
+  assert.deepEqual(mod.resolveLookup(issue, hit), { action: 'update', key: 'MYD-42' });
+  assert.deepEqual(mod.resolveLookup(issue, [hit]), { action: 'update', key: 'MYD-42' });
+});
+
+test('resolveLookup only transitions and comments when a recorded issue lacks the shipyard label', () => {
+  const p = project({ 'T-01-01': { phase: 1, title: 'Root', jira: 'MYD-42' } });
+  const issue = mod.planExport(p.graph, { repo: 'acme/demo', project: 'MYD' }).steps
+    .find((s) => s.step === 'issue' && s.ticket === 'T-01-01');
+
+  assert.deepEqual(mod.resolveLookup(issue, { key: 'MYD-42', fields: { labels: ['other-label'] } }), {
+    action: 'transition-comment',
+  });
+});
+
+test('resolveLookup refuses a missing or mismatched recorded key instead of creating', () => {
+  const p = project({ 'T-01-01': { phase: 1, title: 'Root', jira: 'MYD-42' } });
+  const issue = mod.planExport(p.graph, { repo: 'acme/demo', project: 'MYD' }).steps
+    .find((s) => s.step === 'issue' && s.ticket === 'T-01-01');
+
+  assert.deepEqual(mod.resolveLookup(issue, []), { action: 'refuse', reason: 'unknown key MYD-42' });
+  assert.deepEqual(mod.resolveLookup(issue, { key: 'MYD-99', fields: { labels: issue.labels } }), {
+    action: 'refuse', reason: 'unknown key MYD-42',
+  });
 });
 
 test('resolveLookup reports two hits on one entry as ambiguous and never claims an issue without a pointer', () => {
