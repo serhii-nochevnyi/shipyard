@@ -96,6 +96,7 @@ const runWaker = require(path.join(__dirname, 'run-waker.cjs'));
 const GH_TIMEOUT_MS = timeoutFromEnv('SHIPYARD_GH_TIMEOUT_MS', 60_000, 5 * 60_000);
 const INTERNAL_COMMAND_TIMEOUT_MS = timeoutFromEnv('SHIPYARD_INTERNAL_COMMAND_TIMEOUT_MS', 30_000, 5 * 60_000);
 
+const callStartedAt = Date.now();
 const argv = process.argv.slice(2);
 const JSON_OUT = argv.includes('--json');
 
@@ -381,7 +382,9 @@ if (!watch.length) {
 function checksOf({ pr, repo }) {
   const args = ['pr', 'checks', String(pr), '--json', CHECK_FIELDS];
   if (repo) args.push('--repo', repo);
-  const r = runBounded('gh', args, { timeoutMs: GH_TIMEOUT_MS });
+  const timeoutMs = remainingTimeoutMs(GH_TIMEOUT_MS, deadline);
+  if (timeoutMs <= 0) return null;
+  const r = runBounded('gh', args, { timeoutMs });
   const stdout = (r.stdout || '').trim();
   let rows;
   if (stdout) {
@@ -407,8 +410,6 @@ function checksOf({ pr, repo }) {
   // list, and it was the only one of three that called ACTION_REQUIRED failing —
   // three copies, three answers. The SHAPE stays {total, pending, failing}: it is
   // what `--json` reports and what the settle test below reads. Keep the raw
-  // rows too: semantic observation compares check identity/state, while these
-  // tallies are only enough to decide whether the PR settled.
   const c = classify(rows);
   return { total: c.total, pending: c.pending, failing: c.failing, cancelled: c.cancelled,
     cancelled_runs: c.cancelled_runs, rows };
@@ -418,7 +419,6 @@ function checksOf({ pr, repo }) {
 // 45 minutes in which that ticket's OWN pipeline did not move — not a slow
 // pipeline, a stuck one. Bound to escalation-record's own fingerprint, so ANY
 // real change (a check finishing, a push, a draft lifting, a review landing)
-// resets the count rather than accumulating toward a park nobody has earned.
 const MAX_EMPTY_RAW = Number(process.env.SHIPYARD_CI_WAIT_MAX_EMPTY || 3);
 const MAX_EMPTY = Number.isFinite(MAX_EMPTY_RAW) && MAX_EMPTY_RAW > 0 ? Math.floor(MAX_EMPTY_RAW) : 3;
 const BUDGET_ENV_S = (() => {
@@ -506,16 +506,19 @@ function recordOutcomeInner(settledId, watched, goodEver) {
       // Never got a readable answer this window (gh unreachable throughout) —
       // see the doc comment on `recordOutcome` above. Leave it untouched.
       if (goodEver && !goodEver.has(w.id)) continue;
-      const fp = fingerprint(state[w.id] || {});
+      const subject = state[w.id] || {};
+      const fp = fingerprint(subject);
+      const headSha = subject.head_sha || null;
       const prev = store.tickets[w.id];
-      const same = prev && prev.fingerprint === fp;
+      const same = prev && prev.fingerprint === fp && prev.head_sha === headSha;
       const empties = same ? Number(prev.empty_windows || 0) + 1 : 1;
       const waitedS = (same ? Number(prev.waited_s || 0) : 0) + (Date.now() - startedAt) / 1000;
       store.tickets[w.id] = {
         fingerprint: fp,
+        head_sha: headSha,
         empty_windows: empties,
         waited_s: Math.round(waitedS * 1000) / 1000,
-        first_at: (prev && prev.fingerprint === fp && prev.first_at) || now,
+        first_at: (same && prev.first_at) || now,
         last_at: now,
         pr: w.pr,
       };
@@ -542,9 +545,15 @@ function recordOutcomeInner(settledId, watched, goodEver) {
       'self-hosted runner that is down are the usual three), then `escalation-record.cjs clear ' +
       `${e.id}` + '` — or simply answer the PR, since this park lifts by itself once the delivery ' +
       'facts change.';
+    const timeoutMs = remainingTimeoutMs(INTERNAL_COMMAND_TIMEOUT_MS, callDeadline);
+    if (timeoutMs <= 0) {
+      parked.push({ id: e.id, pr: e.pr, empty_windows: e.empties, ok: false,
+        error: 'wait call deadline reached before escalation could be recorded' });
+      continue;
+    }
     const r = runBounded(process.execPath,
       [path.join(__dirname, 'escalation-record.cjs'), 'mark', e.id, reason, '--graph', GRAPH],
-      { timeoutMs: INTERNAL_COMMAND_TIMEOUT_MS });
+      { timeoutMs });
     parked.push({ id: e.id, pr: e.pr, empty_windows: e.empties, ok: r.status === 0,
       error: r.status === 0 ? null : diagnostic(r) });
   }
@@ -570,9 +579,6 @@ if (TIMEOUT_S_EXPLICIT) {
     .map((w) => Number((front.ci_estimates || {})[w.id] || 0))
     .filter((v) => Number.isFinite(v) && v > 0);
   if (estimates.length) {
-    // The MAX across watched tickets, not one arbitrarily picked: the window is
-    // shared by the whole round, so it must not undersize the slowest pipeline
-    // it is also watching.
     const maxEst = Math.max(...estimates);
     const derived = maxEst / 3;
     TIMEOUT_S = Math.min(WINDOW_CEIL_S, Math.max(WINDOW_FLOOR_S, derived));
@@ -587,60 +593,141 @@ if (ON_CLAUDE && !TIMEOUT_S_EXPLICIT && TIMEOUT_S > CLAUDE_WINDOW_CAP_S) {
   windowSource += `, capped at ${CLAUDE_WINDOW_CAP_S}s on Claude`;
 }
 
-function readReruns() {
-  try {
-    const store = JSON.parse(fs.readFileSync(WAITS, 'utf8'));
-    return (store && store.reruns && typeof store.reruns === 'object') ? store.reruns : {};
-  } catch { return {}; }
+function rerunKey(id, head) {
+  return `${id}:${head}`;
 }
 
-function noteRerun(id, entry) {
+function readRerunStore() {
+  let store;
+  try {
+    store = JSON.parse(fs.readFileSync(WAITS, 'utf8'));
+  } catch (e) {
+    if (e.code === 'ENOENT') return { tickets: {}, reruns: {} };
+    throw new Error(`could not read ci-waits.json (${e.message})`);
+  }
+  if (!store || typeof store !== 'object' || Array.isArray(store)) {
+    throw new Error('ci-waits.json must contain a JSON object');
+  }
+  if (store.tickets !== undefined && (!store.tickets || typeof store.tickets !== 'object' || Array.isArray(store.tickets))) {
+    throw new Error('ci-waits.json tickets must be an object');
+  }
+  if (store.reruns !== undefined && (!store.reruns || typeof store.reruns !== 'object' || Array.isArray(store.reruns))) {
+    throw new Error('ci-waits.json reruns must be an object');
+  }
+  if (!store.tickets) store.tickets = {};
+  if (!store.reruns) store.reruns = {};
+  return store;
+}
+
+function rerunFrom(store, id, head) {
+  const records = store && store.reruns;
+  if (!records || typeof records !== 'object') return null;
+  const keyed = records[rerunKey(id, head)];
+  if (keyed && keyed.head === head) return keyed;
+  const legacy = records[id];
+  return legacy && legacy.head === head ? legacy : null;
+}
+
+function readRerun(id, head) {
+  return rerunFrom(readJson(WAITS), id, head);
+}
+
+function claimRerun(id, head, runId) {
+  const timeoutMs = remainingTimeoutMs(INTERNAL_COMMAND_TIMEOUT_MS, deadline);
+  if (timeoutMs <= 0) throw new Error('wait call deadline reached before rerun claim');
+  let result;
   withLock(lockDirFor(LOCK_ROOT), 'ci-wait', () => {
-    const store = readJson(WAITS) || { tickets: {} };
-    if (!store.tickets || typeof store.tickets !== 'object') store.tickets = {};
-    if (!store.reruns || typeof store.reruns !== 'object') store.reruns = {};
-    store.reruns[id] = entry;
+    const store = readRerunStore();
+    const prior = rerunFrom(store, id, head);
+    if (prior) {
+      result = { claimed: false, prior };
+      return;
+    }
+    const entry = { head, run_id: String(runId), at: new Date().toISOString(), journalled: false };
+    store.reruns[rerunKey(id, head)] = entry;
     writeAtomic(WAITS, JSON.stringify(store, null, 2) + '\n');
-  });
+    result = { claimed: true, entry };
+  }, { waitMs: timeoutMs });
+  return result;
+}
+
+function markRerunJournalled(id, head, runId) {
+  const timeoutMs = remainingTimeoutMs(INTERNAL_COMMAND_TIMEOUT_MS, deadline);
+  if (timeoutMs <= 0) throw new Error('wait call deadline reached before rerun journal status');
+  withLock(lockDirFor(LOCK_ROOT), 'ci-wait', () => {
+    const store = readRerunStore();
+    const entry = store.reruns[rerunKey(id, head)];
+    if (!entry || entry.run_id !== String(runId)) {
+      throw new Error(`rerun claim for ${id} at ${head} is missing`);
+    }
+    entry.journalled = true;
+    writeAtomic(WAITS, JSON.stringify(store, null, 2) + '\n');
+  }, { waitMs: timeoutMs });
 }
 
 // @invariant: one rerun per head; only a journalled second cancel on that head is failing.
 function handleCancelled(w, c) {
   if (!c || !c.cancelled) return null;
   const head = (state[w.id] || {}).head_sha || null;
-  const prior = readReruns()[w.id];
   const runId = (c.cancelled_runs.find((r) => r.run_id) || {}).run_id || null;
-  if (head && runId && !(prior && prior.head === head)) {
-    const args = ['run', 'rerun', String(runId)];
-    if (w.repo) args.push('--repo', w.repo);
-    const r = runBounded('gh', args, { timeoutMs: GH_TIMEOUT_MS });
-    if (r.status === 0) {
-      const at = new Date().toISOString();
-      try {
-        noteRerun(w.id, { head, run_id: String(runId), at, journalled: false });
-      } catch (e) {
-        return holdCancelled(c, { rerun: false, run_id: String(runId), error: `rerun not recorded (${e.message})` });
-      }
-      const logged = runBounded(process.execPath, [path.join(__dirname, 'log-event.cjs'), 'ci_rerun',
-        `ticket=${w.id}`, `pr=${w.pr}`, `head=${head}`, `run_id=${runId}`, '--graph', GRAPH],
-      { timeoutMs: INTERNAL_COMMAND_TIMEOUT_MS });
-      let journalled = logged.status === 0;
-      let journalError = null;
-      if (journalled) {
-        try {
-          noteRerun(w.id, { head, run_id: String(runId), at, journalled: true });
-        } catch (e) {
-          journalled = false;
-          journalError = `rerun journal status not recorded (${e.message})`;
-        }
-      }
-      return holdCancelled(c, {
-        rerun: true, run_id: String(runId), journalled,
-        ...(journalError ? { error: journalError } : {}),
-      });
-    }
-    return { rerun: false, run_id: String(runId), error: diagnostic(r) };
+  if (!head) return { rerun: false, run_id: runId, error: 'no head sha on record' };
+  if (!runId) {
+    const prior = readRerun(w.id, head);
+    return prior ? priorRerunOutcome(c, prior, head, runId)
+      : { rerun: false, run_id: null, error: 'no run id for the cancelled check' };
   }
+  if (!CONFIG.valid) {
+    const prior = readRerun(w.id, head);
+    return prior ? priorRerunOutcome(c, prior, head, runId)
+      : holdCancelled(c, { rerun: false, run_id: String(runId), error: CONFIG_REASON });
+  }
+
+  let claim;
+  try {
+    claim = claimRerun(w.id, head, runId);
+  } catch (e) {
+    return holdCancelled(c, { rerun: false, run_id: String(runId), error: `rerun not claimed (${e.message})` });
+  }
+  if (!claim.claimed) return priorRerunOutcome(c, claim.prior, head, runId);
+
+  const timeoutMs = remainingTimeoutMs(GH_TIMEOUT_MS, deadline);
+  if (timeoutMs <= 0) {
+    return holdCancelled(c, { rerun: false, run_id: String(runId), awaiting_rerun: String(runId),
+      error: 'wait call deadline reached after rerun claim' });
+  }
+  const args = ['run', 'rerun', String(runId)];
+  if (w.repo) args.push('--repo', w.repo);
+  const r = runBounded('gh', args, { timeoutMs });
+  if (r.status !== 0) {
+    return holdCancelled(c, { rerun: false, run_id: String(runId), awaiting_rerun: String(runId),
+      error: diagnostic(r) });
+  }
+
+  const journalTimeoutMs = remainingTimeoutMs(INTERNAL_COMMAND_TIMEOUT_MS, deadline);
+  if (journalTimeoutMs <= 0) {
+    return holdCancelled(c, { rerun: true, run_id: String(runId), journalled: false,
+      error: 'wait call deadline reached before rerun journal' });
+  }
+  const logged = runBounded(process.execPath, [path.join(__dirname, 'log-event.cjs'), 'ci_rerun',
+    `ticket=${w.id}`, `pr=${w.pr}`, `head=${head}`, `run_id=${runId}`, '--graph', GRAPH],
+  { timeoutMs: journalTimeoutMs });
+  let journalled = logged.status === 0;
+  let journalError = journalled ? null : diagnostic(logged);
+  if (journalled) {
+    try {
+      markRerunJournalled(w.id, head, runId);
+    } catch (e) {
+      journalled = false;
+      journalError = `rerun journal status not recorded (${e.message})`;
+    }
+  }
+  return holdCancelled(c, {
+    rerun: true, run_id: String(runId), journalled,
+    ...(!journalled && journalError ? { error: journalError } : {}),
+  });
+}
+
+function priorRerunOutcome(c, prior, head, runId) {
   if (prior && head && prior.head === head) {
     const rerunAt = Date.parse(prior.at || '');
     const stale = c.cancelled_runs.every((r) => Number.isFinite(rerunAt) && !(Date.parse(r.started_at || '') > rerunAt));
@@ -650,7 +737,7 @@ function handleCancelled(w, c) {
     }
     return holdCancelled(c, { rerun: false, run_id: runId, awaiting_journal: prior.run_id });
   }
-  return { rerun: false, run_id: runId, error: head ? 'no run id for the cancelled check' : 'no head sha on record' };
+  return holdCancelled(c, { rerun: false, run_id: runId, error: 'rerun claim changed while handling cancellation' });
 }
 
 // @invariant: check-state already counts a first cancel as pending; promote it only after a journalled rerun.
@@ -666,7 +753,14 @@ function failCancelled(c, outcome) {
 }
 
 const startedAt = Date.now();
-let deadline = startedAt + TIMEOUT_S * 1000;
+const callDeadline = TIMEOUT_S_EXPLICIT ? Number.POSITIVE_INFINITY : callStartedAt + TIMEOUT_S * 1000;
+const finalizeReserveMs = TIMEOUT_S_EXPLICIT ? 0 : Math.min(Math.floor(TIMEOUT_S * 1000 / 4),
+  Math.max(100, Math.min(1000, Math.ceil(TIMEOUT_S * 100))));
+let deadline = TIMEOUT_S_EXPLICIT ? startedAt + TIMEOUT_S * 1000 : callDeadline - finalizeReserveMs;
+function remainingTimeoutMs(limit, deadlineAt, marginMs = 25) {
+  const remaining = Math.floor(deadlineAt - Date.now() - marginMs);
+  return remaining > 0 ? Math.min(limit, remaining) : 0;
+}
 let nextWakeAt = null;
 let lastWaitEvent = null;
 const WAIT_WINDOW_ID = process.env.SHIPYARD_WAIT_WINDOW_ID
@@ -704,10 +798,13 @@ if (!JSON_OUT) {
 // first place (see the header). Found by phase 26's integrator, 2026-09-08.
 const sleep = (s) => {
   const ms = Math.round(s * 1000);
-  return spawnSync(process.execPath, ['-e', `setTimeout(()=>{}, ${ms})`], { timeout: ms + 5000 });
+  const timeout = remainingTimeoutMs(ms + 5000, callDeadline);
+  if (timeout <= 0) return null;
+  return spawnSync(process.execPath, ['-e', `setTimeout(()=>{}, ${ms})`], { timeout });
 };
 
 let rounds = 0;
+const lastSeen = new Map();
 // A ticket earns an entry here the first time `checksOf` returns a READABLE
 // answer this window (settled, moved or unchanged — anything but `null`). A
 // ticket that never appears here taught this window nothing: `gh` was
@@ -729,10 +826,11 @@ function refreshPublishedState() {
   const current = readJson(path.join(GRAPH, 'delivery-front.json')) || {};
   const parked = Array.isArray(current.parked_by_run) ? current.parked_by_run : [];
   const args = parked.length ? [STATE_SYNC, '--parked', parked.join(',')] : [STATE_SYNC];
-  const remainingMs = Math.max(1, deadline - Date.now());
+  const timeoutMs = remainingTimeoutMs(60000, deadline);
+  if (timeoutMs <= 0) return { enabled: true, ok: false, reason: 'wait call deadline reached before state refresh' };
   const sync = runBounded(process.execPath, args, {
     cwd: LOCK_ROOT,
-    timeoutMs: Math.max(1, Math.min(60000, Math.ceil(remainingMs))),
+    timeoutMs,
   });
   if (sync.error || sync.status !== 0) {
     publisherHealthy = false;
@@ -779,7 +877,7 @@ function observeWait(w, checks) {
     observation,
     eligibility: readJson(path.join(GRAPH, 'delivery-front.json')),
     window_id: WAIT_WINDOW_ID,
-  }, { interval_ms: INTERVAL_S * 1000, timeout_ms: TIMEOUT_S * 1000 });
+  }, { interval_ms: INTERVAL_S * 1000, deadline: new Date(deadline).toISOString() });
   if (result && result.ok) {
     const wake = result.pending_action || result.action || null;
     if (wake) lastWaitEvent = wake;
@@ -850,7 +948,9 @@ for (;;) {
     if (rerun && c) c.rerun = rerun;
     const event = observeWait(w, c);
     const eventAction = event && (event.pending_action || event.action);
-    seen.push({ ...w, checks: c, wait_event: eventAction || null });
+    const observation = { ...w, checks: c, wait_event: eventAction || null };
+    seen.push(observation);
+    if (c) lastSeen.set(w.id, observation);
     if (event && event.interrupted) {
       finish(
         { settled: null, interrupted: true, reason: 'actionable work appeared while waiting', rounds,
@@ -903,10 +1003,11 @@ for (;;) {
     // so nothing is recorded.
     const outage = watch.length > 0 && goodEver.size === 0;
     const parked = outage ? [] : recordOutcome(null, watch, goodEver);
+    const reportSeen = lastSeen.size ? [...lastSeen.values()] : seen;
     const lines = parkLines(parked);
     finish(
       { settled: null, timed_out: true, rounds, waited_s: Math.round((Date.now() - startedAt) / 1000),
-        watched: seen, escalated: parked, wait_event: lastWaitEvent,
+        watched: reportSeen, escalated: parked, wait_event: lastWaitEvent,
         window_s: Math.round(TIMEOUT_S), window_source: windowSource,
         outage, ...CONFIG_FIELDS },
       (outage

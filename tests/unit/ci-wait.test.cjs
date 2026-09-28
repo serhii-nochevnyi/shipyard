@@ -13,7 +13,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { spawnSync } = require('child_process');
+const { spawn, spawnSync } = require('child_process');
 const { suite, test, done, assert } = require(path.join(__dirname, 'assert-harness.cjs'));
 
 const SCRIPT = path.join(
@@ -134,6 +134,22 @@ const asJson = (front, state, args = [], opts = {}) => {
   const r = run(front, state, ['--json', ...args], opts);
   return { code: r.code, json: JSON.parse(r.out), dir: r.dir };
 };
+
+function runAsync(dir, args = [], opts = {}) {
+  const env = { ...process.env };
+  for (const k of ['CLAUDE_PLUGIN_ROOT', 'CLAUDE_CODE_ENTRYPOINT', 'SHIPYARD_GRAPH_DIR']) delete env[k];
+  Object.assign(env, opts.env || {});
+  if (opts.bin) env.PATH = `${opts.bin}:${env.PATH}`;
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [SCRIPT, ...args], { cwd: dir, env });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.setEncoding('utf8').on('data', (chunk) => { stdout += chunk; });
+    child.stderr.setEncoding('utf8').on('data', (chunk) => { stderr += chunk; });
+    child.on('error', reject);
+    child.on('close', (code) => resolve({ code, stdout, stderr }));
+  });
+}
 
 suite('ci-wait — it refuses whenever waiting is not the run\'s next move');
 
@@ -698,12 +714,11 @@ test('the sleep timeout is an integer for every remainder, not 88% of them', () 
 });
 
 test('the script derives both sleep numbers from ONE rounding', () => {
-  // The regression was two separate derivations from the same fractional input:
-  // the `-e` body rounded, the `timeout` did not. Pin the shape, because the
-  // rule above cannot see which expression the file actually passes.
   const src = fs.readFileSync(SCRIPT, 'utf8');
   assert.ok(/const ms = Math\.round\(s \* 1000\)/.test(src), 'the milliseconds are rounded once');
-  assert.ok(/timeout: ms \+ 5000/.test(src), 'and the timeout is derived from that same integer');
+  assert.ok(/const timeout = remainingTimeoutMs\(ms \+ 5000, callDeadline\)/.test(src),
+    'the fallback timeout is derived from that integer and the hard deadline');
+  assert.ok(/\{ timeout \}/.test(src), 'and the bounded timeout is what spawnSync receives');
   assert.ok(!/timeout: \(s \+ 5\) \* 1000/.test(src), 'never again from the fractional seconds');
 });
 
@@ -843,13 +858,6 @@ test('capacity.free: -1 is unreadable, not a spent cap — front.cjs never emits
 });
 
 test('capacity.max unreadable with free: 0 does not bind — the readers must agree, not just this one', () => {
-  // `capBinds` used to be derived from `free` alone. A partially-written front
-  // (`free: 0`, `max` missing or garbled) then read as a spent cap here while
-  // stop-gate.cjs's `capacityFull` — which requires `max` to be a readable
-  // number greater than zero — would call the SAME board not full. Two readers
-  // disagreeing about one board is the exact defect this ticket exists to
-  // remove, so an unreadable `max` must fall back to "no cap in force" (the
-  // pre-cap refusal) here too, matching stop-gate's own requirement.
   const { code, json } = asJson(ciOnly({
     actionable_count: 1, actionable: { ...EMPTY_ACTIONABLE, execute: ['T-01-05'] },
     capacity: { max: 'corrupt', in_flight: 4, free: 0 },
@@ -862,21 +870,38 @@ suite('ci-wait — a cancelled check gets one journalled rerun, and is never gre
 
 const HEAD = 'b'.repeat(39) + '2';
 
-function stubGhRerun(dir) {
+function stubGhRerun(dir, options = {}) {
   const bin = path.join(dir, 'bin');
   fs.mkdirSync(bin, { recursive: true });
   const rows = path.join(dir, 'rows.json');
   const log = path.join(dir, 'reruns.log');
+  const rerunDelay = Number(options.rerunDelaySeconds) > 0
+    ? `sleep ${Number(options.rerunDelaySeconds)}; ` : '';
   fs.writeFileSync(path.join(bin, 'gh'),
     '#!/bin/sh\n' +
     'case "$1 $2" in\n' +
     `  "pr checks") cat ${JSON.stringify(rows)}; exit 8 ;;\n` +
-    `  "run rerun") echo "$3" >> ${JSON.stringify(log)}; exit 0 ;;\n` +
+    `  "run rerun") echo "$3" >> ${JSON.stringify(log)}; ${rerunDelay}exit 0 ;;\n` +
     '  *) echo "stub gh: unhandled: $*" >&2; exit 1 ;;\n' +
     'esac\n', { mode: 0o755 });
   const setRows = (r) => fs.writeFileSync(rows, JSON.stringify(r));
   const reruns = () => (fs.existsSync(log) ? fs.readFileSync(log, 'utf8').split('\n').filter(Boolean) : []);
   return { bin, setRows, reruns };
+}
+
+function stubGhSlowChecks(dir, delayMs) {
+  const bin = path.join(dir, 'bin');
+  fs.mkdirSync(bin, { recursive: true });
+  const called = path.join(dir, 'slow-gh-called');
+  const payload = JSON.stringify([{ name: 'Tests', state: 'IN_PROGRESS', bucket: 'pending' }]);
+  const delayedNode = `setTimeout(() => { process.stdout.write(${JSON.stringify(payload)}); process.exit(8); }, ${delayMs})`;
+  fs.writeFileSync(path.join(bin, 'gh'),
+    '#!/bin/sh\n' +
+    'case "$1 $2" in\n' +
+    `  "pr checks") echo called > ${JSON.stringify(called)}; exec node -e '${delayedNode}' ;;\n` +
+    '  *) echo "stub gh: unhandled: $*" >&2; exit 1 ;;\n' +
+    'esac\n', { mode: 0o755 });
+  return { bin, called: () => fs.existsSync(called) };
 }
 
 const cancelRow = (startedAt) => ({
@@ -893,7 +918,7 @@ test('a lone cancel is rerun once and journalled; a second cancel on the head is
   assert.equal(first.json.watched[0].checks.failing, 0, 'the first cancel remains pending');
   assert.equal(first.json.watched[0].checks.pending, 1, 'the rerun is still in flight');
   assert.deepStrictEqual(gh.reruns(), ['777']);
-  assert.equal(waits(dir).reruns['T-01-01'].journalled, true, 'the same-head rerun is journalled');
+  assert.equal(waits(dir).reruns[`T-01-01:${HEAD}`].journalled, true, 'the same-head rerun is journalled');
   const journal = fs.readFileSync(path.join(dir, '.planning', 'graph', 'delivery-log.jsonl'), 'utf8')
     .split('\n').filter(Boolean).map((l) => JSON.parse(l)).filter((e) => e.event === 'ci_rerun');
   assert.equal(journal.length, 1);
@@ -924,6 +949,60 @@ test('a second same-head cancel without a journal entry stays pending and is not
   assert.deepStrictEqual(gh.reruns(), [], 'the recorded rerun is not repeated');
 });
 
+test('an invalid project config blocks a cancelled-check rerun and its journal event', () => {
+  const dir = project(ciOnly(), stateWith({
+    'T-01-01': { pr: 101, repo: 'acme/widgets', status: 'pr-open', head_sha: HEAD },
+  }), TRUNCATED);
+  const gh = stubGhRerun(dir);
+  gh.setRows([cancelRow('2020-01-01T00:00:00Z')]);
+  const { json } = asJson(null, null, shortWait, { dir, bin: gh.bin });
+  assert.equal(json.config_valid, false);
+  assert.deepStrictEqual(gh.reruns(), [], 'invalid config must prevent the external mutation');
+  assert.equal(json.watched[0].checks.failing, 0, 'a cancelled check is not made green or failing here');
+  assert.equal(json.watched[0].checks.pending, 1, 'the cancelled check remains pending');
+  const journalFile = path.join(dir, '.planning', 'graph', 'delivery-log.jsonl');
+  const events = fs.existsSync(journalFile)
+    ? fs.readFileSync(journalFile, 'utf8').split('\n').filter(Boolean).map((line) => JSON.parse(line)) : [];
+  assert.equal(events.filter((event) => event.event === 'ci_rerun').length, 0,
+    'the refused rerun must not be journalled');
+});
+
+test('a failed durable rerun claim write prevents mutation on every same-head attempt', () => {
+  const dir = project(ciOnly(), stateWith({
+    'T-01-01': { pr: 101, repo: 'acme/widgets', status: 'pr-open', head_sha: HEAD },
+  }));
+  const gh = stubGhRerun(dir);
+  gh.setRows([cancelRow('2020-01-01T00:00:00Z')]);
+  fs.mkdirSync(path.join(dir, '.planning', 'graph', 'ci-waits.json'));
+
+  const first = asJson(null, null, shortWait, { dir, bin: gh.bin });
+  const second = asJson(null, null, shortWait, { dir, bin: gh.bin });
+  assert.equal(first.json.watched[0].checks.pending, 1);
+  assert.equal(second.json.watched[0].checks.pending, 1);
+  assert.deepStrictEqual(gh.reruns(), [], 'the rerun must not run unless its claim was written');
+});
+
+test('concurrent waiters atomically claim one rerun for a ticket head', async () => {
+  const dir = project(ciOnly(), stateWith({
+    'T-01-01': { pr: 101, repo: 'acme/widgets', status: 'pr-open', head_sha: HEAD },
+  }));
+  const gh = stubGhRerun(dir, { rerunDelaySeconds: 1.2 });
+  gh.setRows([cancelRow('2020-01-01T00:00:00Z')]);
+  const args = ['--json', '--timeout', '3', '--interval', '1'];
+  const results = await Promise.all([
+    runAsync(dir, args, { bin: gh.bin }),
+    runAsync(dir, args, { bin: gh.bin }),
+  ]);
+  for (const result of results) {
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(JSON.parse(result.stdout).watched[0].checks.pending, 1);
+  }
+  assert.deepStrictEqual(gh.reruns(), ['777'], 'only one process may perform the rerun');
+  const journal = fs.readFileSync(path.join(dir, '.planning', 'graph', 'delivery-log.jsonl'), 'utf8')
+    .split('\n').filter(Boolean).map((line) => JSON.parse(line)).filter((event) => event.event === 'ci_rerun');
+  assert.equal(journal.length, 1, 'the claimed rerun is journalled once');
+});
+
 test('a superseded cancel is ignored: the newer pass settles green', () => {
   const dir = project(ciOnly(), stateWith({ 'T-01-01': { pr: 101, repo: 'acme/widgets', status: 'pr-open', head_sha: HEAD } }));
   const gh = stubGhRerun(dir);
@@ -945,6 +1024,22 @@ test('on Claude with no --timeout the window is at most 540 s', () => {
   assert.ok(json.window_s <= 540, `window ${json.window_s}`);
 });
 
+test('on Claude a slow gh poll cannot outlive the remaining call wall-clock budget', () => {
+  const dir = project(ciOnly(), stateWith());
+  const gh = stubGhSlowChecks(dir, 5000);
+  const started = process.hrtime.bigint();
+  const { code, json } = asJson(null, null, ['--interval', '1'], { dir, bin: gh.bin, env: {
+    CLAUDE_CODE_ENTRYPOINT: 'cli', CODEX_SANDBOX: '', CODEX_SANDBOX_NETWORK_DISABLED: '',
+    SHIPYARD_CI_WAIT_TIMEOUT_S: '2', SHIPYARD_GH_TIMEOUT_MS: '10000',
+  } });
+  const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
+  assert.equal(code, 0);
+  assert.ok(gh.called(), 'the slow gh fixture ran');
+  assert.equal(json.timed_out, true);
+  assert.equal(json.window_s, 2, 'the short env window keeps the real wall-clock regression focused');
+  assert.ok(elapsedMs < 3500, `call took ${elapsedMs.toFixed(0)}ms for a 2s budget`);
+});
+
 test('on Claude an explicit --timeout 900 is honoured', () => {
   const dir = project(ciOnly(), stateWith());
   const bin = stubGh(dir, [{ name: 'Tests', state: 'SUCCESS', bucket: 'pass' }]);
@@ -964,6 +1059,31 @@ test('accumulated seconds across three calls reach the park threshold by time', 
   assert.equal(rec.empty_windows, 3, 'far below the window count of 100');
   assert.ok(rec.waited_s >= 2, `waited ${rec.waited_s}s`);
   assert.equal(json.escalated.length, 1, 'parked by accumulated time');
+});
+
+test('a changed head resets accumulated wait time when check tallies are unchanged', () => {
+  const { fingerprint } = require(path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'escalation-record.cjs'));
+  const oldHead = 'a'.repeat(40);
+  const current = { pr: 101, repo: 'acme/widgets', status: 'pr-open', head_sha: HEAD };
+  const dir = project(ciOnly(), stateWith({ 'T-01-01': current }));
+  const waitFile = path.join(dir, '.planning', 'graph', 'ci-waits.json');
+  fs.writeFileSync(waitFile, JSON.stringify({ tickets: {
+    'T-01-01': {
+      fingerprint: fingerprint({ ...current, head_sha: oldHead }),
+      head_sha: oldHead,
+      empty_windows: 8,
+      waited_s: 90,
+      first_at: '2020-01-01T00:00:00.000Z',
+      last_at: '2020-01-01T00:01:00.000Z',
+      pr: 101,
+    },
+  } }));
+  const { json } = asJson(null, null, shortWait, { dir, bin: pending(dir), env: { SHIPYARD_CI_WAIT_BUDGET_S: '2' } });
+  const rec = JSON.parse(fs.readFileSync(waitFile, 'utf8')).tickets['T-01-01'];
+  assert.equal(rec.head_sha, HEAD);
+  assert.equal(rec.empty_windows, 1, 'a new head begins a fresh run of empty windows');
+  assert.ok(rec.waited_s < 2, `new-head waited budget should be fresh, got ${rec.waited_s}s`);
+  assert.equal(json.escalated.length, 0, 'old-head elapsed time cannot park the new head');
 });
 
 done();
