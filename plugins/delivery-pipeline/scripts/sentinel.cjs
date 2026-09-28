@@ -30,7 +30,8 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { diagnostic, runBounded, timeoutFromEnv } = require(path.join(__dirname, 'command-runner.cjs'));
-const { loadConfig } = require(path.join(__dirname, 'pipeline-config.cjs'));
+const { loadConfig, repoValue } = require(path.join(__dirname, 'pipeline-config.cjs'));
+const { reviewFreshness } = require(path.join(__dirname, 'reviewers.cjs'));
 const { withLock, lockDirFor, writeAtomic } = require(path.join(__dirname, 'lock.cjs'));
 const reviewSignatures = require(path.join(__dirname, 'review-signature.cjs'));
 const { classify, unavailableNote, CHECK_FIELDS } = require(path.join(__dirname, 'check-state.cjs'));
@@ -153,6 +154,64 @@ const repoArg = (repo) => (repo ? ['--repo', repo] : []);
 // built with `repoArg` measured the wrong repository or simply errored. Every
 // `gh api <path>` in this file goes through here.
 const apiBase = (repo) => (repo ? `repos/${repo}` : 'repos/{owner}/{repo}');
+
+function reviewCheckpointApproval(pr, repo) {
+  if (!pr.headRefOid || !pr.author || !pr.author.login) return false;
+  const out = gh(['api', `${apiBase(repo)}/pulls/${pr.number}/reviews`, '--paginate'], { tolerate: true });
+  if (typeof out !== 'string') return false;
+  let reviews;
+  try { reviews = JSON.parse(out); } catch { return false; }
+  if (!Array.isArray(reviews)) return false;
+  let slug = repo;
+  if (!slug) {
+    const repoOut = gh(['repo', 'view', '--json', 'owner,name'], { tolerate: true });
+    if (typeof repoOut === 'string') {
+      try {
+        const value = JSON.parse(repoOut);
+        if (value.owner && value.owner.login && value.name) slug = `${value.owner.login}/${value.name}`;
+      } catch { /* @contract: an unreadable repo identity cannot match a repo-specific bot list. */ }
+    }
+  }
+  if (!slug) return false;
+  const configured = repoValue(cfg, 'reviewer_bots', slug);
+  const bots = [...(Array.isArray(configured) ? configured : []), 'coderabbitai*', 'copilot*'];
+  const author = String(pr.author.login).toLowerCase();
+  const bot = (login) => {
+    const name = String(login || '').toLowerCase();
+    return name.endsWith('[bot]') || name.startsWith('coderabbitai') || name.startsWith('copilot')
+      || bots.some((entry) => {
+        const value = String(entry).toLowerCase();
+        return value.endsWith('*') ? name.startsWith(value.slice(0, -1)) : name === value;
+      });
+  };
+  const latest = new Map();
+  for (const review of reviews) {
+    if (!review || !review.user || !review.user.login || !['APPROVED', 'CHANGES_REQUESTED', 'DISMISSED'].includes(review.state)) continue;
+    if (!Number.isFinite(Date.parse(review.submitted_at || ''))) return false;
+    const login = String(review.user.login).toLowerCase();
+    const prev = latest.get(login);
+    if (!prev || Date.parse(review.submitted_at || '') >= Date.parse(prev.submitted_at || '')) latest.set(login, review);
+  }
+  // @contract: freshness is a separate refusal; positive human identity and head binding are required as well.
+  const freshness = reviewFreshness({ ...pr, reviewDecision: 'APPROVED' }, reviews, true, bots);
+  return freshness.fresh && [...latest.values()].some((review) => {
+    const login = String(review.user.login).toLowerCase();
+    return review.state === 'APPROVED' && review.commit_id === pr.headRefOid
+      && review.user.type === 'User' && login !== author && !bot(login);
+  });
+}
+
+function reviewCheckpointReady(s) {
+  if (!s.pr) return false;
+  const repo = s.repo || null;
+  const out = gh(['pr', 'view', String(s.pr), ...repoArg(repo), '--json',
+    'number,state,headRefOid,reviewDecision,author'], { tolerate: true });
+  if (typeof out !== 'string') return false;
+  try {
+    const pr = JSON.parse(out);
+    return pr.state === 'OPEN' && reviewCheckpointApproval(pr, repo);
+  } catch { return false; }
+}
 
 // `gh pr checks` reports CI state through its EXIT CODE while still printing the
 // JSON (8 = pending, 1 = failing or no checks at all) — see state-sync.cjs.
@@ -945,7 +1004,10 @@ function dutyItems() {
     } else if (s.draft) {
       item.action = 'undraft';
       item.why = 'green + conform, still a draft — ready it (`gh pr ready`); nothing else is owed';
-    } else if (needsHuman(t)) {
+    } else if (t.checkpoint === 'review' && !reviewCheckpointReady(s)) {
+      item.action = 'human';
+      item.why = 'awaiting human review';
+    } else if (needsHuman(t) && t.checkpoint !== 'review') {
       // Only an UNANSWERED checkpoint is the human's. A pre-authorized one
       // (ADR-001 D6) falls through to the ordinary chain below: the person
       // supplied that judgement while approving the ticket set, so what is left
@@ -1156,17 +1218,17 @@ function mergeOne(id) {
   if (!AUTO_MERGE) return block(`auto-merge refused: ${AUTO_MERGE_WHY}`);
   if (s.status !== 'pr-open') return block(`status is ${s.status}, not pr-open`);
   if (!s.pr) return block('no PR recorded for the ticket');
-  if (needsHuman(t)) return block('human_checkpoint ticket — the merge is the human\'s by contract');
+  if (needsHuman(t) && t.checkpoint !== 'review') return block('human_checkpoint ticket — the merge is the human\'s by contract');
   // WHY this checkpoint was passable, recorded on the result and, below, on the
   // journal line. Design-time authorization is only defensible if it is auditable
   // afterwards: without this the board cannot tell "a human approved this in
   // advance" from "the guard merged a checkpoint it should have refused".
   // Set here rather than at the merge call so a `--dry-run` reports it too.
-  if (t.human_checkpoint && t.preauthorized === true) res.preauthorized = true;
+  if (t.human_checkpoint && t.checkpoint !== 'review' && t.preauthorized === true) res.preauthorized = true;
 
   const repo = s.repo || null;
   const view = gh(['pr', 'view', String(s.pr), ...repoArg(repo), '--json',
-    'number,state,isDraft,baseRefName,headRefName,headRefOid,mergeStateStatus,reviewDecision,body'], { tolerate: true });
+    'number,state,isDraft,baseRefName,headRefName,headRefOid,mergeStateStatus,reviewDecision,author,body'], { tolerate: true });
   if (typeof view !== 'string') return block(`gh pr view failed: ${view.error}`);
   let pr;
   try { pr = JSON.parse(view); } catch (e) { return block(`gh pr view returned unparseable JSON (${e.message})`); }
@@ -1174,6 +1236,10 @@ function mergeOne(id) {
   res.base = pr.baseRefName;
   if (pr.state !== 'OPEN') return block(`PR is ${pr.state}, not OPEN`);
   if (pr.isDraft) return block('PR is still a draft — the conform gate has not been passed');
+  if (t.checkpoint === 'review') {
+    if (!reviewCheckpointApproval(pr, repo)) return block('awaiting human review');
+    res.checkpoint = 'review';
+  }
 
   // The stack boundary. A ticket PR may only land on the phase epic or on a
   // parent ticket's branch, both inside its own repo AND inside its own PHASE.
@@ -1401,7 +1467,8 @@ function mergeOne(id) {
   // reader can count design-time approvals without re-deriving them from the
   // graph — and an ordinary merge never claims one.
   journal({ event: 'merge', ticket: id, pr: s.pr, base: pr.baseRefName, repo, by: 'sentinel',
-    ...(res.preauthorized ? { preauthorized: true } : {}) });
+    ...(res.preauthorized ? { preauthorized: true } : {}),
+    ...(res.checkpoint ? { checkpoint: res.checkpoint } : {}) });
 
   // Cascade children based on THIS branch now have to move onto the epic —
   // GitHub does it by itself when the head branch is deleted, and we do not
