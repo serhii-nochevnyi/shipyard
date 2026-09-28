@@ -1,11 +1,11 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 30019822e3effbec638fc1ab35ab5f32021f37e6061bbef6d035d1d724f2223c
-phase: 43-target-project-delivery-at-scale
-plan: 09
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: b089149b701c1a45a5669c1a88f904cc073bc288d33fbc739e333f4340330ca5
+phase: 44-optimize-subscription-efficiency-per-runtime
+plan: 08
 subsystem: shipyard delivery
 tags: [shipyard, gsd, delivery-projection]
 provides:
-  - Tracked delivery state for T-43-09
+  - Tracked delivery state for T-44-08
 affects: [GSD progress, Shipyard delivery]
 actuals:
   tokens: 0
@@ -22,19 +22,19 @@ key-decisions:
 duration: 0min
 status: halted
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 30019822e3effbec638fc1ab35ab5f32021f37e6061bbef6d035d1d724f2223c
+shipyard_source_fingerprint: b089149b701c1a45a5669c1a88f904cc073bc288d33fbc739e333f4340330ca5
 ---
 
-# Phase 43: state-sync lists PRs by ticket head and open state and skips tickets whose merge into a landed epic is recorded; --full re-derives — Delivery Projection
+# Phase 44: Name the test-statusline make target in the README statusline section — Delivery Projection
 
 **Plan delivery is not complete; the projection preserves the current state.**
 
 ## Delivery Evidence
 
-- Ticket: T-43-09
-- Delivery status: pr-open
-- PR: #326
-- Source plan: .planning/phases/43-target-project-delivery-at-scale/43-09-PLAN.md
+- Ticket: T-44-08
+- Delivery status: pending
+- PR: not observed
+- Source plan: .planning/phases/44-optimize-subscription-efficiency-per-runtime/44-08-PLAN.md
 - This summary is halted until the delivery state observes `merged`.
 
 ## Decisions & Deviations

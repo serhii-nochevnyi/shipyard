@@ -9,7 +9,7 @@ Recheck after release 0.66.0: the blocker remained. `origin/main` assigns phase 
 Recheck after release 0.67.0 (2026-09-27): phase 40 is merged and released, including T-40-12 (Codex planning-artifact consumer) and T-40-11. Rerun the installed-host preflight before dispatching the INV-008 research lines.
 
 - GSD `phase.add` originally reserved this phase as local phase 44; it was renumbered to 45 when it entered the `main` roadmap.
-- Twenty-two bounded work packages (eleven original plus R1–R11), including the separately owned high-risk S1 Stop-gate correctness fix, and their dependencies and acceptance/refusal cases are in [WORK-PACKAGES.md](WORK-PACKAGES.md).
+- Twenty-three bounded work packages (eleven original plus R1–R12), including the separately owned high-risk S1 Stop-gate correctness fix, and their dependencies and acceptance/refusal cases are in [WORK-PACKAGES.md](WORK-PACKAGES.md).
 - 2026-09-27: workstream R (stacked-delivery reliability; R11 added after the epic merge) was added from the [phase-40 delivery findings](../../investigations/INV-008-residual-pipeline-efficiency/intake/phase40-delivery-findings.md). T-40-12 and T-40-11 are now merged into `epic/40-build-delivery-seams-and-clean-target-project-prs` and have since landed on `main` in release 0.67.0.
 - No global requirements, ticket IDs, delivery PLAN files, PRs or provider experiments were created.
 - Phase 44 is still queued preparation. Phase-40/42 installed-host capability and phase-44 observation evidence must be rechecked before phase-45 decomposition or activation.

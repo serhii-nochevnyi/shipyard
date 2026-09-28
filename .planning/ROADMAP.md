@@ -846,7 +846,7 @@ change, experiment or provider scheduler is activated.
 **Status**: queued scope; authenticated investigation (INV-008) and decomposition pending (renumbered from local phase 44 on 2026-09-27)
 **Goal**: correct armed Stop-gate session/board ownership, make stacked delivery reliable on target projects, and remove repeated planning-role launches and routine delivery model work left outside phase 44, with native receipts and independent gates intact.
 **Depends on**: package-specific — S1 uses phase-39 arming and phase-41 scoped-run contracts; R packages build on the phase-40 delivery seams and ADR-020 (phase 43); P/D packages use phase-40/42/44 contracts where their own work packages require them.
-**Requirements**: phase-local S1, R1–R11, P1–P5 and D1–D5; global IDs await validated planning
+**Requirements**: phase-local S1, R1–R12, P1–P5 and D1–D5; global IDs await validated planning
 **Plans**: 0 plans; see [phase context](phases/45-close-residual-pipeline-efficiency-gaps/CONTEXT.md), [work packages](phases/45-close-residual-pipeline-efficiency-gaps/WORK-PACKAGES.md) and the [phase-40 delivery findings](investigations/INV-008-residual-pipeline-efficiency/intake/phase40-delivery-findings.md)
 
 S1 is a separate high-risk correctness fix with its own ticket and human checkpoint at formal decomposition. This is a queued scope, not an executable ticket graph or approval to activate model-policy experiments.
@@ -854,8 +854,8 @@ S1 is a separate high-risk correctness fix with its own ticket and human checkpo
 <!-- shipyard:gsd-sync:begin -->
 ## Shipyard synchronization (generated)
 
-- Source fingerprint: `f8a85703e1ce73e67e9fd6a00670f8a97ebe1de9c898635d51748ff0fd17423a`
-- Plans merged: 203/228
+- Source fingerprint: `b1a4ef358c0f28c32611a2935d37475ac430fe5e2993b377cdf14115e369f678`
+- Plans merged: 211/229
 - Phases verified: 10/26
 - Current phase: 20
 
@@ -884,8 +884,8 @@ S1 is a separate high-risk correctness fix with its own ticket and human checkpo
 | 40 — Build delivery seams and clean target-project PRs | 27 | 27 | pending |
 | 41 — Reduce pipeline subscription overhead | 9 | 9 | gaps_found |
 | 42 — Resume trusted finalization without executor replay | 3 | 3 | gaps_found |
-| 43 — Target-project delivery at scale | 19 | 1 | pending |
-| 44 — Optimize subscription efficiency per runtime | 7 | 0 | pending |
+| 43 — Target-project delivery at scale | 19 | 2 | pending |
+| 44 — Optimize subscription efficiency per runtime | 8 | 7 | pending |
 | 45 — Close residual pipeline efficiency gaps | 0 | 0 | pending |
 
 <!-- shipyard:gsd-sync:end -->

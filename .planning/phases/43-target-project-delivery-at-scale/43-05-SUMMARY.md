@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 26c35f42e94b2b94ae785f3196134fd1ad7cfc85d61b96b6f81f7592c5151e53
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 71a6a69f03f62ef58ab79389c5738d2dbee283abf7042e1e7b76d01b69c9af85
 phase: 43-target-project-delivery-at-scale
 plan: 05
 subsystem: shipyard delivery
@@ -22,7 +22,7 @@ key-decisions:
 duration: 0min
 status: halted
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 26c35f42e94b2b94ae785f3196134fd1ad7cfc85d61b96b6f81f7592c5151e53
+shipyard_source_fingerprint: 71a6a69f03f62ef58ab79389c5738d2dbee283abf7042e1e7b76d01b69c9af85
 ---
 
 # Phase 43: Keep an arch-review finding of unknown type as an informational note that never changes the verdict — Delivery Projection
@@ -32,8 +32,8 @@ shipyard_source_fingerprint: 26c35f42e94b2b94ae785f3196134fd1ad7cfc85d61b96b6f81
 ## Delivery Evidence
 
 - Ticket: T-43-05
-- Delivery status: pending
-- PR: not observed
+- Delivery status: pr-open
+- PR: #328
 - Source plan: .planning/phases/43-target-project-delivery-at-scale/43-05-PLAN.md
 - This summary is halted until the delivery state observes `merged`.
 
