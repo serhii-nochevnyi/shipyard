@@ -311,6 +311,14 @@ function readRequestFile(file) {
   return { scope, launch: requestValue(launch) };
 }
 
+const DEFAULT_HEARTBEAT_SCHEDULER = Object.freeze({
+  start(fn, ms) {
+    const handle = setInterval(fn, ms);
+    handle.unref?.();
+    return () => clearInterval(handle);
+  },
+});
+
 async function runCli(argv = process.argv.slice(2), stdout = process.stdout, options = {}) {
   if (!object(options)) fail('INVALID_INPUT', 'host options must be an object');
   const parsed = readRequestFile(parseCliArguments(argv));
@@ -330,6 +338,7 @@ async function runCli(argv = process.argv.slice(2), stdout = process.stdout, opt
   const controller = createRunController({
     storeDir: runStoreDir,
     ...(options.leaseTtlMs === undefined ? {} : { leaseTtlMs: options.leaseTtlMs }),
+    ...(options.now === undefined ? {} : { now: options.now }),
   });
   const repository = scope.repository;
   const repositoryId = typeof repository === 'string' ? repository
@@ -355,12 +364,13 @@ async function runCli(argv = process.argv.slice(2), stdout = process.stdout, opt
   controller.begin(run);
   const heartbeatMs = options.heartbeatMs || Math.min(60_000,
     Math.max(1_000, Math.floor((options.leaseTtlMs || DEFAULT_LEASE_TTL_MS) / 3)));
+  const heartbeatScheduler = options.heartbeat || DEFAULT_HEARTBEAT_SCHEDULER;
   let heartbeatError = null;
-  const heartbeat = setInterval(() => {
+  let stopHeartbeat = () => {};
+  stopHeartbeat = heartbeatScheduler.start(() => {
     try { controller.heartbeat(scope.run_id); }
-    catch (error) { heartbeatError = error; clearInterval(heartbeat); }
+    catch (error) { heartbeatError = error; stopHeartbeat(); }
   }, heartbeatMs);
-  heartbeat.unref?.();
   let result;
   try {
     const host = createCodexDecomposeHost({
@@ -379,12 +389,12 @@ async function runCli(argv = process.argv.slice(2), stdout = process.stdout, opt
       sealRoot: path.join(hostStateDir, 'sealed'),
     });
     result = await host.run({ ...request, dispatch_id: dispatchId });
-    clearInterval(heartbeat);
+    stopHeartbeat();
     if (heartbeatError) throw heartbeatError;
     controller.assertOwner(scope.run_id);
     controller.complete(scope.run_id, { reason: 'verified typed GSD receipt ' + result.receipt.dispatch_id });
   } catch (error) {
-    clearInterval(heartbeat);
+    stopHeartbeat();
     try {
       controller.fail(scope.run_id, {
         reason: String(error && error.message || error).replace(/[\u0000-\u001f\u007f]/g, ' ').slice(0, 400),

@@ -217,4 +217,67 @@ cache_doctor 'codex-cache 1.0.0+codex.0123456789abcdef' error 'codex cache match
 mv "$CACHE_HOME/plugins/cache/shipyard/shipyard/1.0.0" "$CACHE_HOME/plugins/cache/shipyard/shipyard/2.0.0"
 cache_doctor 'claude-cache 2.0.0' skip 'no v2.0.0 tag'
 
+write_dogfood_record() {
+  DOG_FILE="$1" DOG_ROOT="$2" DOG_SHA="$3" node -e '
+const fs = require("node:fs");
+const e = process.env;
+fs.writeFileSync(e.DOG_FILE, JSON.stringify({ schema: "shipyard.host-provenance.v1", install_kind: "dogfood",
+  version: "1.0.0", source_sha: e.DOG_SHA, dirty: false, source_root: e.DOG_ROOT }) + "\n");
+'
+}
+
+OWN_ROOT="$(ROOT="$ROOT" node -e 'process.stdout.write(require("node:fs").realpathSync(process.env.ROOT))')"
+OTHER_ROOT="$WORK/other-checkout"
+
+# @invariant: runs before the claude fixtures below, clearing the earlier mutation's stale error row.
+DOGFOOD_CODEX_DIR="$CODEX_CACHE_HOME/plugins/cache/shipyard/shipyard/1.0.0+codex.0123456789abcdef"
+write_dogfood_record "$DOGFOOD_CODEX_DIR/.shipyard-provenance.json" "$OTHER_ROOT" "codexforeignsha"
+CODEX_FOREIGN_STATUS=0
+node "$ROOT/scripts/shipyard-doctor.cjs" --json --claude-home "$CACHE_HOME" \
+  --codex-home "$CODEX_CACHE_HOME" --release-repo "$REL_REPO" > "$WORK/doctor-codex-foreign.json" || CODEX_FOREIGN_STATUS=$?
+[[ "$CODEX_FOREIGN_STATUS" == 0 ]] || { echo "a foreign codex dogfood cache set a non-zero exit code ($CODEX_FOREIGN_STATUS)" >&2; exit 1; }
+node - "$WORK/doctor-codex-foreign.json" "$OTHER_ROOT" "$OWN_ROOT" <<'NODE'
+const fs = require('node:fs');
+const [file, otherRoot, ownRoot] = process.argv.slice(2);
+const report = JSON.parse(fs.readFileSync(file, 'utf8'));
+const c = report.checks.find((x) => x.name === 'codex-cache 1.0.0+codex.0123456789abcdef');
+if (!c || c.level !== 'foreign') throw new Error('a foreign codex dogfood cache must report foreign: ' + JSON.stringify(c));
+if (!c.detail.includes(otherRoot) || !c.detail.includes(ownRoot)) throw new Error('foreign detail must name both roots: ' + c.detail);
+NODE
+
+DOGFOOD_CLAUDE_DIR="$CACHE_HOME/plugins/cache/shipyard/shipyard/1.0.0"
+mkdir -p "$DOGFOOD_CLAUDE_DIR/scripts"
+printf 'work in progress\n' > "$DOGFOOD_CLAUDE_DIR/scripts/a.cjs"
+
+printf '{"schema":"shipyard.host-provenance.v1","install_kind":"dogfood","version":"1.0.0","source_sha":"legacysha","dirty":false}\n' \
+  > "$DOGFOOD_CLAUDE_DIR/.shipyard-provenance.json"
+cache_doctor 'claude-cache 1.0.0' error 'cache matches no release \(1 files differ: scripts/a\.cjs\)'
+
+write_dogfood_record "$DOGFOOD_CLAUDE_DIR/.shipyard-provenance.json" "$OTHER_ROOT" "foreignsha0000"
+FOREIGN_STATUS=0
+node "$ROOT/scripts/shipyard-doctor.cjs" --json --claude-home "$CACHE_HOME" \
+  --codex-home "$CODEX_CACHE_HOME" --release-repo "$REL_REPO" > "$WORK/doctor-foreign.json" || FOREIGN_STATUS=$?
+[[ "$FOREIGN_STATUS" == 0 ]] || { echo "a foreign dogfood cache set a non-zero exit code ($FOREIGN_STATUS)" >&2; exit 1; }
+node - "$WORK/doctor-foreign.json" "$OTHER_ROOT" "$OWN_ROOT" <<'NODE'
+const fs = require('node:fs');
+const [file, otherRoot, ownRoot] = process.argv.slice(2);
+const report = JSON.parse(fs.readFileSync(file, 'utf8'));
+const c = report.checks.find((x) => x.name === 'claude-cache 1.0.0');
+if (!c || c.level !== 'foreign') throw new Error('a foreign dogfood cache must report foreign: ' + JSON.stringify(c));
+if (!c.detail.includes(otherRoot) || !c.detail.includes(ownRoot)) throw new Error('foreign detail must name both roots: ' + c.detail);
+if (!c.detail.includes('foreignsha0000')) throw new Error('foreign detail must name the sha: ' + c.detail);
+NODE
+
+write_dogfood_record "$DOGFOOD_CLAUDE_DIR/.shipyard-provenance.json" "$OWN_ROOT" "ownsha0000"
+OWN_DOGFOOD_STATUS=0
+node "$ROOT/scripts/shipyard-doctor.cjs" --json --claude-home "$CACHE_HOME" \
+  --codex-home "$CODEX_CACHE_HOME" --release-repo "$REL_REPO" > "$WORK/doctor-own.json" || OWN_DOGFOOD_STATUS=$?
+[[ "$OWN_DOGFOOD_STATUS" == 0 ]] || { echo "this checkout's own dogfood cache set a non-zero exit code ($OWN_DOGFOOD_STATUS)" >&2; exit 1; }
+node - "$WORK/doctor-own.json" <<'NODE'
+const fs = require('node:fs');
+const report = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+const c = report.checks.find((x) => x.name === 'claude-cache 1.0.0');
+if (!c || c.level !== 'warn') throw new Error('this checkout own dogfood cache must report warn: ' + JSON.stringify(c));
+NODE
+
 echo "claude hook smoke passed"
