@@ -1,10 +1,8 @@
 {
   "generated_at": "2026-09-28T14:42:03.372Z",
-  "observed_at": "2026-09-28T14:42:03.372Z",
-  "generation": 392,
   "parked_by_run": [],
   "auto_merge": "epic",
-  "dispatches_applied_at": "2026-09-28T14:42:03.372Z",
+  "dispatches_applied_at": "2026-09-28T15:12:28.833Z",
   "actionable": {
     "execute": [
       "T-43-06",
