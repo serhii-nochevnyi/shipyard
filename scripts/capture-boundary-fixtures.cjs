@@ -4,10 +4,13 @@
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { spawnSync } = require('node:child_process');
 
 const ROOT = path.resolve(__dirname, '..');
 const CAPTURE_PROMPT = 'Reply with the single word OK and take no other action.';
 const UUID_RE = /\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b/g;
+const USER_ID_KEYS = ['creator_user_id', 'user_id'];
+const ACCOUNT_ID_KEY_RE = /"(creator_user_id|user_id|creator_account_id|account_id|chatgpt_account_id|organization_id)"\s*:\s*"([^"]*)"/g;
 
 function fail(message) {
   const error = new Error(message);
@@ -29,6 +32,21 @@ function replaceTokens(input) {
     .replace(/\bghp_[A-Za-z0-9]{20,}\b/g, '<TOKEN>')
     .replace(/\bsess-[A-Za-z0-9_-]{10,}\b/g, '<TOKEN>')
     .replace(/(["']?(?:api[_-]?key|apikey|token|password|secret|authorization)["']?\s*[:=]\s*["']?)[^\s"',}]+/gi, '$1<TOKEN>');
+}
+
+function replaceAccountIds(input, context) {
+  const userMap = context.userIds || (context.userIds = new Map());
+  const accountMap = context.accountIds || (context.accountIds = new Map());
+  const bucketFor = (key) => (USER_ID_KEYS.includes(key) ? userMap : accountMap);
+  for (const [, key, value] of input.matchAll(ACCOUNT_ID_KEY_RE)) {
+    const map = bucketFor(key);
+    if (!map.has(value)) map.set(value, map.size + 1);
+  }
+  return input.replace(ACCOUNT_ID_KEY_RE, (full, key, value) => {
+    const map = bucketFor(key);
+    const base = USER_ID_KEYS.includes(key) ? 'USER-ID' : 'ACCOUNT-ID';
+    return `"${key}":"<${map.size > 1 ? `${base}-${map.get(value)}` : base}>"`;
+  });
 }
 
 function replaceSessionIds(input, context) {
@@ -60,6 +78,7 @@ function scrub(text, context = {}) {
   out = replaceExtraPaths(out, context);
   out = replacePathPrefixes(out);
   out = replaceTokens(out);
+  out = replaceAccountIds(out, context);
   out = replaceSessionIds(out, context);
   return out;
 }
@@ -220,25 +239,36 @@ function writeFixture(outDir, name, raw, meta, context) {
   return file;
 }
 
-async function main(argv) {
-  const args = parseArgs(argv);
-  const boundary = BOUNDARIES[args.boundary];
-  const outDir = path.resolve(args.outDir);
-  const context = {};
-  const baseName = args.boundary + (args.variant ? `-${args.variant}` : '');
+const SCRATCH_GIT_NAME = 'Shipyard Capture';
+const SCRATCH_GIT_EMAIL = 'capture@shipyard.invalid';
+const SCRATCH_GIT_DATE = '2020-01-01T00:00:00Z';
 
-  if (args.dryRun) {
-    const raw = fs.readFileSync(path.resolve(args.input), 'utf8');
-    writeFixture(outDir, baseName, raw, {
-      boundary: args.boundary, cli: boundary.cli, cli_version: 'dry-run',
-    }, context);
-    return;
-  }
+function initScratchGitRepo(scratchDir) {
+  const env = {
+    ...process.env,
+    GIT_CONFIG_GLOBAL: '/dev/null',
+    GIT_AUTHOR_NAME: SCRATCH_GIT_NAME,
+    GIT_AUTHOR_EMAIL: SCRATCH_GIT_EMAIL,
+    GIT_AUTHOR_DATE: SCRATCH_GIT_DATE,
+    GIT_COMMITTER_NAME: SCRATCH_GIT_NAME,
+    GIT_COMMITTER_EMAIL: SCRATCH_GIT_EMAIL,
+    GIT_COMMITTER_DATE: SCRATCH_GIT_DATE,
+  };
+  const identity = ['-c', `user.name=${SCRATCH_GIT_NAME}`, '-c', `user.email=${SCRATCH_GIT_EMAIL}`, '-c', 'core.hooksPath=/dev/null'];
+  const git = (...gitArgs) => spawnSync('git', ['-C', scratchDir, ...identity, ...gitArgs], { env, encoding: 'utf8' });
+  let result = git('init', '-q');
+  if (result.status !== 0) fail(`git init failed in the capture scratch dir: ${(result.stderr || '').trim() || result.error}`);
+  result = git('commit', '--allow-empty', '-q', '-m', 'shipyard capture scratch');
+  if (result.status !== 0) fail(`git commit failed in the capture scratch dir: ${(result.stderr || '').trim() || result.error}`);
+}
 
+async function captureLive(boundary, args, context) {
   const scratchDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-capture-')));
   const transcriptDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-capture-transcript-')));
+  initScratchGitRepo(scratchDir);
   try {
     const { cliVersion, outputs } = await boundary.run({ scratchDir, transcriptDir, variant: args.variant });
+    const outDir = path.resolve(args.outDir);
     const written = [];
     for (const output of outputs) {
       const name = args.boundary + (output.suffix ? `-${output.suffix}` : (args.variant ? `-${args.variant}` : ''));
@@ -246,11 +276,30 @@ async function main(argv) {
         boundary: args.boundary, cli: boundary.cli, cli_version: cliVersion,
       }, context));
     }
-    process.stdout.write(`registry entry: update tests/fixtures/captured/boundaries/${args.boundary}.json fixtures with: ${written.join(', ')}\n`);
+    return written;
   } finally {
     fs.rmSync(scratchDir, { recursive: true, force: true });
     fs.rmSync(transcriptDir, { recursive: true, force: true });
   }
+}
+
+async function main(argv) {
+  const args = parseArgs(argv);
+  const boundary = BOUNDARIES[args.boundary];
+  const context = {};
+  const baseName = args.boundary + (args.variant ? `-${args.variant}` : '');
+
+  if (args.dryRun) {
+    const outDir = path.resolve(args.outDir);
+    const raw = fs.readFileSync(path.resolve(args.input), 'utf8');
+    writeFixture(outDir, baseName, raw, {
+      boundary: args.boundary, cli: boundary.cli, cli_version: 'dry-run',
+    }, context);
+    return;
+  }
+
+  const written = await captureLive(boundary, args, context);
+  process.stdout.write(`registry entry: update tests/fixtures/captured/boundaries/${args.boundary}.json fixtures with: ${written.join(', ')}\n`);
 }
 
 if (require.main === module) {
@@ -260,4 +309,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { scrub, provenanceLine, claudeSchemaFor };
+module.exports = { scrub, provenanceLine, claudeSchemaFor, captureLive };
