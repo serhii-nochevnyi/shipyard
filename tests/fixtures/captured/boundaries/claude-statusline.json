@@ -1,0 +1,16 @@
+{
+  "boundary": "claude-statusline",
+  "producer": "claude interactive statusLine command (stdin JSON, one object per render)",
+  "cli": "claude",
+  "cli_version": "2.1.283",
+  "fixtures": [
+    "tests/fixtures/captured/claude-statusline.jsonl"
+  ],
+  "consumers": [
+    "tests/unit/statusline-collector.test.cjs"
+  ],
+  "migrating": [],
+  "inline_shapes": [
+    "[\"']?used_percentage[\"']?\\s*:"
+  ]
+}
