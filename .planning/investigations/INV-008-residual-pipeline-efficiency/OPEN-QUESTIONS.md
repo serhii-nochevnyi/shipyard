@@ -1,10 +1,11 @@
 # Open questions
 
-- [ ] Which of S1, P1–P5 and D1–D5 still has a distinct owner after the installed phase-39–43 contracts are reconciled? — owner: authenticated system-state and constraints research
+- [ ] Which of S1, P1–P5, D1–D6, R1–R13 and C1–C4 still has a distinct owner after the installed phase-39–43 contracts are reconciled? — owner: authenticated system-state and constraints research
 - [ ] What durable, explicit binding lets an armed Claude session enforce its selected phase worktree while rejecting another session's newer board, including fork, crash and scope-switch cases? — owner: authenticated system-state/alternatives research and maintainer decision
 - [ ] What exact authenticated identity, lease, reuse, and refusal contracts allow each treatment without duplicate launches or lost review gates? — owner: authenticated constraints and alternatives research
 - [ ] Which policy changes, especially bounded checker revision and aggregate admission, should be accepted after comparing conservative alternatives? — owner: maintainer after research options
 - [ ] What provider-specific baseline, rollout order, stopping rule, and quality threshold justify activating each treatment? — owner: maintainer after research options
+- [ ] Can bounded outer Codex delivery coordination preserve every instruction, ownership and native-role gate while reducing total verified-completion work? Which stages qualify for Luna/max, when must they promote to Sol, and can the phase-44 observations measure the subscription effect without confounding? — owner: authenticated alternatives research and maintainer model-policy decision; see [phase-45 model-routing research](../../phases/45-close-residual-pipeline-efficiency-gaps/MODEL-ROUTING-RESEARCH.md)
 - [ ] Are phase-40 Codex research and decomposition artifact hosts installed and verified, and is phase-44 outcome observation ready to serve as a baseline? — owner: installed-host preflight and phase dependencies
 
 Gate 1 remains open. The preflight in [PREFLIGHT.md](PREFLIGHT.md) establishes a host blocker, not answers from the four required research lines.

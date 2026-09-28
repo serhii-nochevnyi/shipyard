@@ -18,13 +18,13 @@ The phase-local identifiers below map to the acceptance cases in [WORK-PACKAGES.
 
 - S1: bind an armed Claude Stop-gate session to its selected delivery board/run; refuse selection of a newer foreign worktree board. Give this correctness fix its own high-risk ticket and checkpoint.
 - P1–P5: planning worktree single-writer lease; completed judgment-role timeout recovery; bounded checker revision protocol; Codex parent/wait overhead treatment; exact-revision INV reuse and stable research reporting.
-- D1–D5: host-owned sentinel duty scheduling; stage/runtime delivery instruction loading; repair grouping with measured ticket granularity; exact-input drift-scan reuse; run/phase aggregate admission budget.
+- D1–D6: host-owned sentinel duty scheduling; stage/runtime delivery instruction loading; repair grouping with measured ticket granularity; exact-input drift-scan reuse; run/phase aggregate admission budget; bounded Codex outer-agent coordination handoff and routing (D6), subject to phase-44 measurement and an approved model experiment, see [model-routing research](MODEL-ROUTING-RESEARCH.md).
 
 Keep each treatment independent for measurement and rollback. Shared source and host files need serialized ticket ownership when the graph is planned.
 
 ## Existing owners and exclusions
 
-Phase 44 owns subscription collection/reporting, exact arch-review reuse, mandatory instruction coverage, rotation advice, fact indexing, checkpoint reasons and native effort experiments. Phases 40–42 own planning artifact sealing, delivery dispatch/preflight, wake/handoff, complete-prompt measurement and executor finalization recovery. Phase 45 may consume their contracts but must not implement them again. The repair loop may not weaken independent reviewer or CI requirements; the admission budget may not convert missing quota into a green verdict.
+Phase 44 (delivered in 0.68.0) owns subscription collection/reporting, rotation advice and the native effort-experiment protocol. Exact arch-review reuse, mandatory instruction coverage, fact indexing and checkpoint reasons were carried into this phase as workstream C (C1–C4, ADR-021). Phases 40–42 own planning artifact sealing, delivery dispatch/preflight, wake/handoff, complete-prompt measurement and executor finalization recovery. Phase 45 may consume their contracts but must not implement them again. The repair loop may not weaken independent reviewer or CI requirements; the admission budget may not convert missing quota into a green verdict.
 
 Adaptive 1/2/4 investigation fan-out conflicts with phase 44's four independent perspectives and is not authorized here. Automatic session transfer, provider fallback or quota-based cross-provider scheduling, global model downgrades, and an always-on sentinel daemon are excluded. Each would need a separately accepted design, capability proof and quality evaluation.
 
