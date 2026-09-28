@@ -486,6 +486,9 @@ async function readNativeCodexChild(parentId, role, model, effort, agent, spawnE
         fail('RUNTIME_EVIDENCE_INVALID', 'native child transcript changed during verification');
       }
       const evidence = parseNativeChildTranscript(raw, child.id, parentId, role, model, effort, agent, spawnEvidence);
+      if (options.includeCompletion === true) {
+        return freeze({ ...evidence, last_agent_message: completionMessage(raw) });
+      }
       return options.task ? freeze({ ...evidence, task_relay: verifyTaskRelay(raw, options.task, spawnEvidence) }) : evidence;
     }
     await new Promise((resolve) => setTimeout(resolve, 100));
@@ -821,9 +824,24 @@ function parseNativeParentSpawn(raw, parentId, role, model, effort) {
   });
 }
 
-function readNativeParentRaw(sessionId, evidence, env) {
+function completionMessage(raw) {
+  const messages = [];
+  for (const line of raw.split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    const record = JSON.parse(line);
+    if (record.type === 'event_msg' && object(record.payload) && record.payload.type === 'task_complete') {
+      messages.push(record.payload.last_agent_message);
+    }
+  }
+  if (messages.length !== 1 || typeof messages[0] !== 'string') {
+    fail('RUNTIME_EVIDENCE_INVALID', 'native child has no single task_complete agent message');
+  }
+  return messages[0];
+}
+
+function readNativeParentRaw(sessionId, evidence, env, now) {
   const home = path.resolve(env.CODEX_HOME || process.env.CODEX_HOME || path.join(os.homedir(), '.codex'));
-  const files = nativeSessionCandidates(path.join(home, 'sessions'), sessionId);
+  const files = nativeSessionCandidates(path.join(home, 'sessions'), sessionId, now);
   if (files.length !== 1 || path.basename(files[0]) !== evidence.file) {
     fail('RUNTIME_EVIDENCE_MISSING', 'native parent transcript cannot be rebound to session evidence');
   }
@@ -888,6 +906,38 @@ function parseNativeChildTranscript(raw, childId, parentId, role, model, effort,
     task_path: spawnEvidence.task_path,
     provider: native.provider, models: native.models, efforts: native.efforts,
     selections: native.selections, sha256: native.sha256,
+  });
+}
+
+async function verifyCompletedNativeLaunch(input = {}) {
+  if (!object(input)) fail('INVALID_INPUT', 'native verification input must be an object');
+  const env = object(input.env) ? input.env : {};
+  const selection = object(input.selection) ? input.selection : {};
+  const model = text(selection.model, 'model', 256);
+  const effort = text(selection.effort || selection.reasoning_effort, 'effort', 32);
+  const recovery = input.allowTimedOutWait === true;
+  const timing = {
+    ...(input.waitMs === undefined ? {} : { waitMs: input.waitMs }),
+    ...(input.now === undefined ? {} : { now: input.now }),
+  };
+  const nativeEvidence = await readNativeCodexSession(input.session_id, { env, ...timing });
+  if (!input.agent) return freeze({ native_session_evidence: nativeEvidence });
+  const agent = input.agent;
+  const parentRaw = readNativeParentRaw(input.session_id, nativeEvidence, env, input.now);
+  const spawnEvidence = parseNativeParentSpawn(parentRaw, input.session_id, agent.role, model, effort);
+  const child = await readNativeCodexChild(input.session_id, agent.role, model, effort, agent, spawnEvidence, {
+    env, ...timing, startedAt: input.startedAt,
+    ...(recovery ? { includeCompletion: true } : { task: input.task }),
+  });
+  // @invariant: recovery accepts a timed-out parent wait only with one task_complete bound to parent and role.
+  if (recovery && (child.parent_thread_id !== input.session_id || child.agent_role !== agent.role
+      || typeof child.last_agent_message !== 'string')) {
+    fail('RUNTIME_EVIDENCE_INVALID', 'recovered native child did not complete for this parent and role');
+  }
+  return freeze({
+    native_session_evidence: nativeEvidence,
+    native_child_evidence: child,
+    spawn_evidence: spawnEvidence,
   });
 }
 
@@ -1086,17 +1136,17 @@ function createCodexCliLauncher(options = {}) {
     let parsed;
     try {
       parsed = parseCodexStream(rawStdout);
-      const nativeEvidence = await readNativeCodexSession(parsed.session_id, { env });
+      const verified = await verifyCompletedNativeLaunch({
+        session_id: parsed.session_id, selection: { model, effort }, agent, env,
+        allowTimedOutWait: false, startedAt, task,
+      });
+      const nativeEvidence = verified.native_session_evidence;
       const selection = observedSelection(parsed, model, effort, {
         model: args[args.indexOf('--model') + 1],
         effort: (args.find((value) => value.startsWith('model_reasoning_effort=')) || '').match(/^model_reasoning_effort="([^"]+)"$/)?.[1],
       }, nativeEvidence);
-      let typedEvidence = null;
+      const typedEvidence = verified.native_child_evidence || null;
       if (agent) {
-        const parentRaw = readNativeParentRaw(parsed.session_id, nativeEvidence, env);
-        const spawnEvidence = parseNativeParentSpawn(parentRaw, parsed.session_id, agent.role, model, effort);
-        typedEvidence = await readNativeCodexChild(parsed.session_id, agent.role, model, effort, agent,
-          spawnEvidence, { env, startedAt, task });
         const current = installedGsdAgent(agent.role, environment);
         if (current.file !== agent.file || current.sha256 !== agent.sha256) {
           fail('STALE_GSD_AGENT', 'installed GSD role changed during native launch');
@@ -1329,6 +1379,7 @@ module.exports = Object.freeze({
   signerPermissionProfileArgs,
   nativeSessionCandidates,
   readNativeCodexSession,
+  verifyCompletedNativeLaunch,
   observedSelection,
   writeTranscript,
   writeTaskFile,

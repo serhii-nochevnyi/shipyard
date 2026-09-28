@@ -2407,4 +2407,52 @@ test('a non-atomic reservation replacement lets more than one process win the sa
   fs.rmSync(storeDir, { recursive: true, force: true });
 });
 
+test('getReservation reports a durable reservation read-only and whether it was recorded', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'boundary-reservation-'));
+  try {
+    const recorder = boundaryModule.createDurableRecorder(path.join(dir, 'receipts'));
+    assert.equal(recorder.getReservation('dispatch-absent'), null);
+    assert.equal(recorder.getReservation(''), null);
+    const before = fs.readdirSync(path.join(dir, 'receipts')).sort();
+    assert.equal(recorder.getReservation('dispatch-absent'), null);
+    assert.deepStrictEqual(fs.readdirSync(path.join(dir, 'receipts')).sort(), before);
+    assert.deepStrictEqual(recorder.reserve('dispatch-held'), { reserved: true });
+    const held = recorder.getReservation('dispatch-held');
+    assert.equal(held.dispatch_id, 'dispatch-held');
+    assert.equal(typeof held.reserved_at, 'string');
+    assert.equal(held.recorded, false);
+    const writer = boundaryModule.createDispatchBoundary({ recorder, adapters: { codex: fakeAdapter() } });
+    const result = writer.dispatch({ runtime: 'codex', role: 'executor' }, { ticket: 'T-45-09' });
+    assert.equal(recorder.getReservation(result.dispatch_id).recorded, true);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('recoverReserved records only an existing, unrecorded durable reservation', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'boundary-recover-'));
+  try {
+    const recorder = boundaryModule.createDurableRecorder(path.join(dir, 'receipts'));
+    const recovering = () => boundaryModule.createDispatchBoundary({
+      recorder, adapters: { codex: fakeAdapter() }, recoverReserved: true,
+    });
+    assert.throws(() => recovering().dispatch({ runtime: 'codex', role: 'executor', dispatch_id: 'dispatch-none' },
+      { ticket: 'T-45-09' }), (error) => error.code === 'RECOVERY_NO_RESERVATION');
+    assert.equal(recorder.getReservation('dispatch-none'), null);
+    recorder.reserve('dispatch-orphan');
+    const recovered = recovering().dispatch({ runtime: 'codex', role: 'executor', dispatch_id: 'dispatch-orphan' },
+      { ticket: 'T-45-09' });
+    assert.equal(recovered.receipt.dispatch_id, 'dispatch-orphan');
+    assert.equal(recovered.receipt.compliance, 'verified');
+    assert.equal(recorder.getVerifiedRecord('dispatch-orphan').receipt.dispatch_id, 'dispatch-orphan');
+    assert.throws(() => recovering().dispatch({ runtime: 'codex', role: 'executor', dispatch_id: 'dispatch-orphan' },
+      { ticket: 'T-45-09' }), (error) => error.code === 'RECOVERY_ALREADY_RECORDED');
+    const live = boundaryModule.createDispatchBoundary({ recorder, adapters: { codex: fakeAdapter() } });
+    assert.throws(() => live.dispatch({ runtime: 'codex', role: 'executor', dispatch_id: 'dispatch-orphan' },
+      { ticket: 'T-45-09' }), (error) => error.code === 'DUPLICATE_DISPATCH_ID');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 done();
