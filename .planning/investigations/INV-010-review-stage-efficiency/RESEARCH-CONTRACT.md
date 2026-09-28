@@ -4,7 +4,7 @@ Read-only research. Do not edit code or any file except your own artifact.
 
 ## Inputs
 - `PROBLEM.md` (this directory).
-- Accepted designs that bound the scope:
+- Accepted designs that bound the scope (ADR-017 and ADR-019 are background, read them only if needed):
   - `.planning/architecture/ADR-014-*.md` (model grids);
   - `ADR-017-*.md`, `ADR-019-*.md`;
   - `ADR-020-*.md` (host-side verification, own-diff verdict carry);
