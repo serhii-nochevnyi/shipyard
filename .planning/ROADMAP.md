@@ -843,7 +843,7 @@ advice with shadow decisions, and a versioned effort-experiment protocol. No pro
 change, experiment or provider scheduler is activated.
 
 ### Phase 45: Close residual pipeline efficiency gaps
-**Status**: queued scope; authenticated investigation (INV-008) and decomposition pending (renumbered from local phase 44 on 2026-09-27)
+**Status**: INV-008 closed with ADR-023 (plus ADR-021 for C1–C4 and ADR-022 for review timing); typed decomposition pending
 **Goal**: correct armed Stop-gate session/board ownership, make stacked delivery reliable on target projects, and remove repeated planning-role launches and routine delivery model work left outside phase 44, with native receipts and independent gates intact.
 **Depends on**: package-specific — S1 uses phase-39 arming and phase-41 scoped-run contracts; R packages build on the phase-40 delivery seams and ADR-020 (phase 43); C packages are planned after the phase-43 epic merges (ADR-021); P/D packages use phase-40/42/44 contracts where their own work packages require them.
 **Requirements**: phase-local S1, R1–R18, P1–P5, D1–D6 and C1–C4 (carried from phase 44 under ADR-021); global IDs await validated planning
@@ -854,7 +854,7 @@ S1 is a separate high-risk correctness fix with its own ticket and human checkpo
 <!-- shipyard:gsd-sync:begin -->
 ## Shipyard synchronization (generated)
 
-- Source fingerprint: `100e8e5bcce73a9012a0c6bee313a1d01552c4836494fc190e09b45ef29e452b`
+- Source fingerprint: `083b4c7e02344ed3aa61eac8fc7cf8386adc4523ae93761ef399e4f80b682318`
 - Plans merged: 215/229
 - Phases verified: 10/26
 - Current phase: 20
