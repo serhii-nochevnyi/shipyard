@@ -1365,6 +1365,10 @@ const published = withLock(lockDirFor(ROOT), 'tracker-record', () => withLock(lo
   return { front, generation };
 }, { label: 'state-sync' }), { label: 'state-sync tracker snapshot' });
 
+for (const w of cfgWarnings) console.log(`⚠ config: ${w}`);
+const gsdSyncDeprecation = cfgWarnings.find((warning) => warning.startsWith('pipeline.gsd_sync is deprecated'));
+const gsdSyncSummary = gsdSyncDeprecation ? ` — ${gsdSyncDeprecation}` : '';
+
 // A refusal is an OUTCOME, not a failure: the board on disk is the better of the
 // two snapshots and the run that has it is the one driving. Exit 0 before any
 // board line — printing a summary built from facts we just declined to publish is
@@ -1378,7 +1382,7 @@ if (published.stale) {
   );
   console.log(
     `  this run observed ${OBSERVED_AT} and wrote nothing. Nothing is lost: the newer board already ` +
-    'reflects GitHub more recently than this read does. Re-run state-sync for the current front.'
+    `reflects GitHub more recently than this read does. Re-run state-sync for the current front.${gsdSyncSummary}`
   );
   process.exit(0);
 }
@@ -1389,7 +1393,6 @@ publishGsdProjection();
 function ageH(sinceIso) { return (Date.parse(nowIso) - Date.parse(sinceIso)) / 3_600_000; }
 function ageLabel(sinceIso) { const h = ageH(sinceIso); return h >= 48 ? `${Math.round(h / 24)}d` : `${Math.round(h)}h`; }
 
-for (const w of cfgWarnings) console.log(`⚠ config: ${w}`);
 if (epicNotice) console.log(`note: ${epicNotice}`);
 for (const n of notices) console.log(`⚠ ${n}`);
 console.log(`PR listing: listed_open=${listingStats.listedOpen}, looked_up=${listingStats.lookedUp}, skipped_landed=${listingStats.skippedLanded}`);
@@ -1513,5 +1516,5 @@ if (RUN_PARKED.length) console.log(`parked by this run: ${RUN_PARKED.join(', ')}
 for (const line of formatFront(front)) console.log(line);
 console.log(
   `wrote .planning/graph/delivery-state.json, delivery-state.yaml, delivery-front.json ` +
-  `and delivery-state-meta.json (snapshot generation ${published.generation})`
+  `and delivery-state-meta.json (snapshot generation ${published.generation})${gsdSyncSummary}`
 );
