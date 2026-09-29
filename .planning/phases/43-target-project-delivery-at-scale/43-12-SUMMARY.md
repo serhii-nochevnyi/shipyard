@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 4360cf2d83a7ff43153fe38c8fecdec33ce752eb064c7dcfb699dbb6bb37514c
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 601b5c5b2145c35953d899b26c2104e3fd50af09720f9dc6f3db514ff9cd8e12
 phase: 43-target-project-delivery-at-scale
 plan: 12
 subsystem: shipyard delivery
@@ -22,7 +22,7 @@ key-decisions:
 duration: 0min
 status: halted
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 4360cf2d83a7ff43153fe38c8fecdec33ce752eb064c7dcfb699dbb6bb37514c
+shipyard_source_fingerprint: 601b5c5b2145c35953d899b26c2104e3fd50af09720f9dc6f3db514ff9cd8e12
 ---
 
 # Phase 43: human_checkpoint takes review or merge; true keeps meaning merge; Gate 2 states the consequence; stats keep attribution — Delivery Projection
