@@ -588,7 +588,8 @@ if (require.main === module) {
       };
       const judgedPaths = names(judgedBaseTree, fromTree);
       const newPaths = names(newBaseTree, toTree);
-      if (!judgedPaths || !newPaths) refuse('a patch path list is unreadable');
+      const headChangedPaths = names(fromTree, toTree);
+      if (!judgedPaths || !newPaths || !headChangedPaths) refuse('a patch path list is unreadable');
       const isOwned = (p) => declared.some((d) => owns(d, p));
       const outside = newPaths.find((p) => !isOwned(p));
       if (outside) refuse(`candidate diff changes non-owned path ${outside} — another path differs from the new base`);
@@ -601,7 +602,7 @@ if (require.main === module) {
         const entry = r.out.split('\0').find((line) => line.endsWith(`\t${name}`));
         return entry && /^\d+ blob [0-9a-f]{40}\t/.test(entry) ? entry.split('\t')[0].split(' ')[2] : undefined;
       };
-      for (const name of new Set([...judgedPaths, ...newPaths])) {
+      for (const name of new Set([...judgedPaths, ...newPaths, ...headChangedPaths.filter(isOwned)])) {
         const before = blob(fromTree, name);
         const after = blob(toTree, name);
         if (before === undefined || after === undefined || before !== after) {

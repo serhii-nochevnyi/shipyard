@@ -49,8 +49,9 @@ function fixture({ sibling = 'unowned', adapt = false, duplicate = false, extra 
   git(repo, 'config', 'user.email', 'test@example.invalid');
   git(repo, 'config', 'commit.gpgsign', 'false');
   fs.writeFileSync(path.join(repo, 'owned.js'), 'function own() { return call(); }\n');
+  fs.writeFileSync(path.join(repo, 'owned-other.js'), 'module.exports = 1;\n');
   fs.writeFileSync(path.join(repo, 'sibling.js'), 'function call() { return 1; }\n');
-  git(repo, 'add', 'owned.js', 'sibling.js');
+  git(repo, 'add', 'owned.js', 'owned-other.js', 'sibling.js');
   git(repo, 'commit', '-qm', 'base');
   const judgedBase = git(repo, 'rev-parse', 'HEAD');
   const judgedBaseTree = git(repo, 'rev-parse', 'HEAD^{tree}');
@@ -62,22 +63,22 @@ function fixture({ sibling = 'unowned', adapt = false, duplicate = false, extra 
   git(repo, 'checkout', '-q', 'base');
   if (!treeEqual) {
     if (sibling === 'owned') fs.appendFileSync(path.join(repo, 'owned.js'), 'function sibling() { return 2; }\n');
+    else if (sibling === 'other-owned') fs.writeFileSync(path.join(repo, 'owned-other.js'), 'module.exports = 2;\n');
     else if (sibling === 'delete-call') fs.writeFileSync(path.join(repo, 'sibling.js'), '// removed call\n');
     else fs.appendFileSync(path.join(repo, 'sibling.js'), 'function sibling() { return 2; }\n');
     git(repo, 'commit', '-qam', 'sibling squash');
   }
   const newBase = git(repo, 'rev-parse', 'HEAD');
   git(repo, 'checkout', '-q', 'ticket');
-  if (deferMerge) { /* base-merge.cjs makes the commit in the wiring test. */ }
-  else if (treeEqual) git(repo, 'commit', '-q', '--allow-empty', '-m', 'empty base merge');
-  else if (sibling === 'owned') {
+  if (!deferMerge && treeEqual) git(repo, 'commit', '-q', '--allow-empty', '-m', 'empty base merge');
+  else if (!deferMerge && sibling === 'owned') {
     const merged = 'function own() { return call(); }\nfunction sibling() { return 2; }\nfunction ticket() { return own(); }\n';
     const merge = spawnSync('git', ['-C', repo, 'merge', '--no-commit', '--no-ff', 'base'], { encoding: 'utf8' });
     assert.strictEqual(merge.status, 1, `expected an owned conflict: ${merge.stdout} ${merge.stderr}`);
     fs.writeFileSync(path.join(repo, 'owned.js'), merged);
     git(repo, 'add', 'owned.js');
     git(repo, 'commit', '-qm', 'resolve owned conflict');
-  } else git(repo, 'merge', '-q', '--no-edit', 'base');
+  } else if (!deferMerge) git(repo, 'merge', '-q', '--no-edit', 'base');
   if (!deferMerge && (adapt || duplicate)) {
     fs.appendFileSync(path.join(repo, 'owned.js'), duplicate
       ? 'function ticket() { return own(); }\n' : 'function adapted() { return 3; }\n');
@@ -89,7 +90,7 @@ function fixture({ sibling = 'unowned', adapt = false, duplicate = false, extra 
     git(repo, 'commit', '-qm', 'non-owned merge adaptation');
   }
   const to = git(repo, 'rev-parse', 'HEAD');
-  fs.writeFileSync(path.join(graph, 'tickets.json'), JSON.stringify({ tickets: { 'T-01-01': { files: ['owned.js'] } } }));
+  fs.writeFileSync(path.join(graph, 'tickets.json'), JSON.stringify({ tickets: { 'T-01-01': { files: ['owned.js', 'owned-other.js'] } } }));
   fs.writeFileSync(path.join(graph, 'delivery-state.json'), JSON.stringify({ 'T-01-01': { pr: 9 } }));
   const prView = path.join(repo, 'view.json');
   fs.writeFileSync(prView, JSON.stringify({ number: 9, headRefOid: from, baseRefName: 'base',
@@ -147,6 +148,13 @@ test('sibling deletion of a called function carries while an owned adaptation re
 test('sibling change to an owned path re-owes', () => {
   const r = carry(fixture({ sibling: 'owned' }));
   assert.strictEqual(r.data.carry, 're-owed');
+  assert.deepStrictEqual(r.posted, []);
+});
+test('a sibling-only change to a second declared owned path re-owes', () => {
+  const r = carry(fixture({ sibling: 'other-owned' }));
+  assert.strictEqual(r.status, 1);
+  assert.strictEqual(r.data.carry, 're-owed');
+  assert.match(r.data.reason, /owned blob.*owned-other\.js/);
   assert.deepStrictEqual(r.posted, []);
 });
 test('a non-owned path differing from the new base re-owes', () => {

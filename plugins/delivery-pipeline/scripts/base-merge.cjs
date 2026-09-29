@@ -229,6 +229,7 @@ function carryVerdict() {
     ticket,
     pr,
     carried: false,
+    carry: 're-owed',
     reason: (r.stderr || '').trim().split('\n').pop()
       || `gate-trailer.cjs carry exited ${r.status} without a verdict`,
   };
