@@ -519,9 +519,12 @@ dismiss it. Nobody owes work here, which is why the board answers `waiting.human
 and not `parked`. Name it in the report and move on; do NOT dispatch review-fix
 at it.
 
-**`human` / `human-merge`** — out of your hands (a `human_checkpoint` ticket, a
-certified draft in a repo where nothing ran, or a PR targeting the integration
-branch). Record it in the report and move on.
+**`human` / `human-merge`** — out of your hands (a `human_checkpoint: merge` or
+legacy `true` ticket, a certified draft in a repo where nothing ran, or a PR
+targeting the integration branch). Record it in the report and move on. A
+`human_checkpoint: review` ticket becomes eligible for guarded merge only after
+the board sees a fresh current-head human approval; the guard verifies that
+approval again against GitHub before merging it into the epic.
 
 ## After EVERY push
 ```bash

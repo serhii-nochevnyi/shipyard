@@ -46,7 +46,8 @@ const {
 } = require(path.join(__dirname, 'command-runner.cjs'));
 const { matchTicketPr } = require(path.join(__dirname, 'ticket-pr-match.cjs'));
 const { readLedger } = require(path.join(__dirname, 'pr-ledger.cjs'));
-const { loadConfig } = require(path.join(__dirname, 'pipeline-config.cjs'));
+const { loadConfig, repoValue } = require(path.join(__dirname, 'pipeline-config.cjs'));
+const { reviewFreshness } = require(path.join(__dirname, 'reviewers.cjs'));
 const { computeFront, formatFront, ciEstimates, epicKey, agentsInFlight } = require(path.join(__dirname, 'front.cjs'));
 const { activeDrift } = require(path.join(__dirname, 'drift-record.cjs'));
 // The park RECORDS, never the flat `activeEscalations` view: the board's lifting
@@ -130,7 +131,7 @@ function observationProjection(state) {
   const tickets = {};
   for (const id of Object.keys(state).sort()) {
     const s = state[id] || {};
-    tickets[id] = {
+    const projected = {
       status: s.status || null,
       repository: s.repo || null,
       pr: s.pr === undefined ? null : s.pr,
@@ -147,6 +148,13 @@ function observationProjection(state) {
         unavailable: s.checks.unavailable === true,
       } : null,
     };
+    if (Object.prototype.hasOwnProperty.call(s, 'review_fresh')) {
+      projected.author = s.author || null;
+      projected.approved_reviews = Array.isArray(s.approved_reviews) ? s.approved_reviews : [];
+      projected.reviewer_bots = Array.isArray(s.reviewer_bots) ? s.reviewer_bots : [];
+      projected.review_fresh = s.review_fresh === true;
+    }
+    tickets[id] = projected;
   }
   return { tickets };
 }
@@ -223,7 +231,7 @@ function mergeShaOf(pr) {
 // (BEHIND/DIRTY) — the same order `sentinel.cjs baseCheck` uses, for the same
 // reason: a second opinion buys nothing once there is a verdict.
 // `SHIPYARD_TIME=1` prints the per-call timings if this ever regresses.
-const REVIEW_FIELDS = 'number,reviewDecision,body,mergeStateStatus';
+const REVIEW_FIELDS = 'number,reviewDecision,body,mergeStateStatus,author';
 
 function fail(msg) {
   console.error(`state-sync: ${msg}`);
@@ -472,6 +480,62 @@ if (!REPO_IDS.includes(null)) REPO_IDS.unshift(null); // the project's own repo 
 
 const repoArg = (repo) => (repo ? ['--repo', repo] : []);
 const apiBase = (repo) => (repo ? `repos/${repo}` : 'repos/{owner}/{repo}');
+let ownRepositorySlug;
+function repositorySlug(repo) {
+  if (repo) return repo;
+  if (ownRepositorySlug !== undefined) return ownRepositorySlug;
+  const raw = gh(['repo', 'view', '--json', 'owner,name'], { tolerate: true });
+  if (typeof raw !== 'string') {
+    ownRepositorySlug = null;
+    return ownRepositorySlug;
+  }
+  try {
+    const value = JSON.parse(raw);
+    ownRepositorySlug = value.owner && value.owner.login && value.name
+      ? `${value.owner.login}/${value.name}` : null;
+  } catch {
+    ownRepositorySlug = null;
+  }
+  return ownRepositorySlug;
+}
+
+// @contract: The front and live merge guard must make the same checkpoint decision.
+// @contract: Query reviews only for an approved review checkpoint.
+function reviewCheckpointObservation(pr, repo) {
+  const entry = {
+    author: pr.author && typeof pr.author.login === 'string' ? { login: pr.author.login } : null,
+    approved_reviews: [],
+    reviewer_bots: [],
+    review_fresh: false,
+    review_freshness_reason: null,
+  };
+  if (pr.reviewDecision !== 'APPROVED' || !pr.headRefOid || !pr.author || !pr.author.login) return entry;
+
+  const slug = repositorySlug(repo);
+  if (!slug) {
+    entry.review_freshness_reason = 'repository identity could not be read';
+    return entry;
+  }
+  const configured = repoValue(cfg, 'reviewer_bots', slug);
+  entry.reviewer_bots = Array.isArray(configured) ? configured : [];
+  const raw = gh(['api', `${apiBase(repo)}/pulls/${pr.number}/reviews`, '--paginate'], { tolerate: true });
+  let reviews = null;
+  let readable = false;
+  if (typeof raw === 'string') {
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        reviews = parsed;
+        readable = true;
+      }
+    } catch { /* @contract: A parse failure cannot count as a human approval. */ }
+  }
+  const freshness = reviewFreshness(pr, reviews, readable, entry.reviewer_bots);
+  entry.approved_reviews = Array.isArray(freshness.approved_reviews) ? freshness.approved_reviews : [];
+  entry.review_fresh = freshness.review_fresh === true;
+  entry.review_freshness_reason = freshness.review_freshness_reason || null;
+  return entry;
+}
 const listingStats = { listedOpen: 0, lookedUp: 0, skippedLanded: 0 };
 
 function parsePRList(raw) {
@@ -523,6 +587,7 @@ function loadRepo(repo) {
         p.reviewDecision = r.reviewDecision || null;
         p.body = r.body || '';
         p.mergeStateStatus = r.mergeStateStatus || null;
+        p.author = r.author || null;
       }
     }
   }
@@ -724,6 +789,9 @@ for (const [id, t] of Object.entries(tickets)) {
       // `gateConform(gate, head_sha)` is absent when they disagree, so a push
       // after arch-review re-owes the verdict instead of inheriting it.
       entry.head_sha = pr.headRefOid || null;
+      if (t.human_checkpoint === true && t.checkpoint === 'review') {
+        Object.assign(entry, reviewCheckpointObservation(pr, repo));
+      }
       // GitHub's own verdict on whether this branch can still land where it
       // points, recorded under the name both readers use (`sentinel.cjs`'s
       // `settlement` reads the identical field off its own PR view). BEHIND and

@@ -451,7 +451,7 @@ delivery:
   ticket: T-<phase>-<plan>          # e.g. T-01-02
   branch: ticket/T-<phase>-<plan>-<slug-from-title>   # can be omitted — validate-graph will generate it
   risk: low|medium|high             # assess from the plan content
-  human_checkpoint: true|false      # true is MANDATORY if risk: high
+  human_checkpoint: false|review|merge|true  # high risk requires review, merge, or true
   # preauthorized: true|false       # do NOT set by hand — Step 4.3 writes it
   repo: owner/name                  # ONLY if the ticket's files live in ANOTHER repository
   # jira: <KEY>                     # do NOT set by hand — Step 5 writes it back after export
@@ -459,12 +459,22 @@ delivery:
 
 **`preauthorized` is a record of a decision, not a setting.** It says a person
 looked at THIS ticket while approving the set and accepted its risk in advance,
-so the merge no longer has to wake anyone. Only Step 4.3 writes it, and only onto
-a ticket that already carries `human_checkpoint: true` — authorizing a stop that
+so a `merge` checkpoint no longer has to wake anyone. A `review` checkpoint
+still requires a human approval on the current PR head. Only Step 4.3 writes
+it, and only onto
+a ticket that already declares a checkpoint — authorizing a stop that
 does not exist is a planning mistake, and Gate 2 rejects it. Absent means `false`:
 nothing is pre-authorized by default. Never set it while writing a plan to make
 your own phase run unattended; a later reader must be able to read it as a
 person's signature and nothing else.
+
+**Choose the checkpoint consequence at Gate 2.** `review` means a human approves
+the ticket PR on its current head, then the guard merges it into the epic.
+`merge` means the human performs the merge; use it for external-dependency
+holds. The legacy boolean `true` has exactly the `merge` consequence. `false`
+declares no checkpoint. Either `review` or `merge` satisfies the high-risk
+checkpoint requirement. A child of an open `review` checkpoint parent still
+waits for that parent to land before it can merge.
 
 **Multi-repo phases: `repo` is not optional.** If a ticket's files belong to a
 sibling repository (a frontend monorepo, an editor package), declare
@@ -537,13 +547,19 @@ freshly written. Do not report decomposition success without this.
    the table already in front of the reader. Ask by CLASS, one question
    (AskUserQuestion, in the user's language), naming the tickets it covers —
    "medium-risk: T-03, T-07 — pre-authorize their merges?". Ask only about classes
-   that actually contain tickets with `human_checkpoint: true`: a ticket that
+   that actually contain tickets with `human_checkpoint: merge` or `true`: a ticket that
    would never stop has nothing to authorize, so asking about it is a question
    with no consequence.
 
-   Say plainly what a yes changes. Those tickets stop waiting for a person: the
-   guard merges them itself once they clear every other merge gate, and their
-   children cascade behind them instead of sitting behind an open checkpoint. It
+   State the chosen `human_checkpoint` value and its consequence beside each
+   ticket at Gate 2: `review` waits for a human head approval before the guard
+   merges into the epic; `merge` waits for a human merge and is the mode for
+   external-dependency holds; `true` means `merge`. Only then ask about
+   pre-authorization, which records the person's separate plan-time approval.
+
+   Say plainly what a yes changes. Those `merge` tickets stop waiting for a
+   person: the guard merges them itself once they clear every other merge gate,
+   and their children cascade behind them instead of sitting behind an open checkpoint. It
    does NOT reach the phase epic's own merge into the integration branch — that
    boundary is never crossed unattended, whatever is pre-authorized underneath it.
    A no changes nothing at all: those tickets reach green, they wait, and the

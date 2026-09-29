@@ -1527,6 +1527,29 @@ test('needsHuman is exported, and only an unquoted true lifts the checkpoint', (
   assert.strictEqual(needsHuman({ preauthorized: true }), false);
 });
 
+test('review checkpoint waits until the board records a human approval on its head', () => {
+  const ticket = { human_checkpoint: true, checkpoint: 'review' };
+  const row = { ...landed, head_sha: 'head-1', gate: conformAt('head-1'), review_decision: 'APPROVED', review_fresh: true };
+  assert.strictEqual(needsHuman(ticket, row), true);
+  assert.strictEqual(needsHuman({ ...ticket, preauthorized: true }, row), true);
+  assert.strictEqual(needsHuman(ticket, { ...row, approved_reviews: [
+    { state: 'APPROVED', commit_id: 'older', user: { login: 'alice', type: 'User' } },
+  ] }), true);
+  assert.strictEqual(needsHuman(ticket, { ...row, approved_reviews: [
+    { state: 'APPROVED', commit_id: 'head-1', user: { login: 'alice', type: 'User' } },
+  ], author: { login: 'bob' } }), false);
+  assert.strictEqual(needsHuman(ticket, { ...row, review_fresh: false, approved_reviews: [
+    { state: 'APPROVED', commit_id: 'head-1', user: { login: 'alice', type: 'User' } },
+  ], author: { login: 'bob' } }), true, 'the live guard also requires the full approval history to be fresh');
+  const pending = computeFront({ T: ticket }, { T: { ...row } }, { autoMerge: true });
+  assert.deepStrictEqual(pending.waiting.human, ['T']);
+  const approved = computeFront({ T: ticket }, { T: { ...row, author: { login: 'bob' },
+    approved_reviews: [{ state: 'APPROVED', commit_id: 'head-1', user: { login: 'alice', type: 'User' } }] } },
+  { autoMerge: true });
+  assert.deepStrictEqual(approved.actionable.merge, ['T']);
+  assert.deepStrictEqual(approved.waiting.human, []);
+});
+
 test('a pre-authorized checkpoint, green + conform + stacked, is an actionable merge', () => {
   const f = computeFront(
     { T: { human_checkpoint: true, preauthorized: true } },

@@ -373,7 +373,7 @@ function stubGh() {
     // default — an absent head on both sides is the pre-head-binding case, and
     // `${VAR:+…}` adds nothing at all rather than an empty `head=`.
     '  "pr view "*)',
-    '    printf \'{"number":%s,"state":"OPEN","isDraft":false,"baseRefName":"%s","headRefName":"%s","headRefOid":"%s","mergeStateStatus":"%s","reviewDecision":%s,"body":"gate_status: arch-review=conform%s, checks=green"}\\n\' "${STUB_PR:-9}" "${STUB_BASE}" "${STUB_HEAD}" "${STUB_HEAD_OID:-}" "${STUB_MERGE_STATE:-CLEAN}" "${STUB_REVIEW_DECISION:-null}" "${STUB_TRAILER_HEAD:+, head=$STUB_TRAILER_HEAD}" ;;',
+    '    printf \'{"number":%s,"state":"OPEN","isDraft":false,"baseRefName":"%s","headRefName":"%s","headRefOid":"%s","mergeStateStatus":"%s","reviewDecision":%s,"author":{"login":"%s"},"body":"gate_status: arch-review=conform%s, checks=green"}\\n\' "${STUB_PR:-9}" "${STUB_BASE}" "${STUB_HEAD}" "${STUB_HEAD_OID:-}" "${STUB_MERGE_STATE:-CLEAN}" "${STUB_REVIEW_DECISION:-null}" "${STUB_AUTHOR:-owner}" "${STUB_TRAILER_HEAD:+, head=$STUB_TRAILER_HEAD}" ;;',
     // The rows carry gh's own `bucket`, because check-state.cjs reads that
     // field and a row without one is PENDING by its fail-closed rule — a
     // bucket-less stub would leave every merge case waiting on CI forever.
@@ -686,6 +686,118 @@ test('an un-authorized checkpoint is still refused, in today\'s words, before an
   assert.strictEqual(r.merged, false);
   assert.deepStrictEqual(r.blockers, ['human_checkpoint ticket — the merge is the human\'s by contract']);
   assert.strictEqual(r.preauthorized, undefined, 'nothing to record — no pre-authorization was involved');
+});
+
+suite('review checkpoints — approval authorizes the guard on this head');
+
+function reviewMerge(reviews, overrides = {}) {
+  const root = project({
+    tickets: { 'T-REVIEW': { human_checkpoint: true, checkpoint: 'review',
+      branch: 'ticket/T-REVIEW', epic: 'epic/21-x' } },
+    state: { 'T-REVIEW': openGreen(9, 'ticket/T-REVIEW', 'epic/21-x') },
+    config: epicConfig,
+  });
+  const env = onPath(stubGh(), { STUB_BASE: 'epic/21-x', STUB_HEAD: 'ticket/T-REVIEW',
+    STUB_HEAD_OID: 'head-1', STUB_TRAILER_HEAD: 'head-1', STUB_PR: '9',
+    STUB_REVIEW_DECISION: '"APPROVED"', STUB_REVIEWS: JSON.stringify(reviews), ...overrides });
+  const result = JSON.parse(run(root, ['merge', 'T-REVIEW', '--json'], { env }).stdout).results[0];
+  return { root, result };
+}
+
+const approval = (login, type = 'User') => ({ state: 'APPROVED', commit_id: 'head-1',
+  user: { login, type }, submitted_at: '2026-09-29T01:00:00Z' });
+
+test('a human head approval merges and journals checkpoint review', () => {
+  const { root, result } = reviewMerge([approval('alice')]);
+  assert.strictEqual(result.merged, true, result.blockers.join('; '));
+  const journal = fs.readFileSync(path.join(root, '.planning', 'graph', 'delivery-log.jsonl'), 'utf8');
+  assert.ok(journal.split('\n').some((line) => line && JSON.parse(line).checkpoint === 'review'));
+});
+
+test('a stale built-in bot review does not hide a human approval on the head', () => {
+  const staleBot = { ...approval('coderabbitai[bot]', 'Bot'), commit_id: 'old-head',
+    submitted_at: '2026-09-28T01:00:00Z' };
+  const { result } = reviewMerge([staleBot, approval('alice')]);
+  assert.strictEqual(result.merged, true, result.blockers.join('; '));
+});
+
+test('preauthorization does not replace the PR approval in review mode', () => {
+  const root = project({
+    tickets: { A: { human_checkpoint: true, checkpoint: 'review', preauthorized: true,
+      branch: 'ticket/A', epic: 'epic/21-x' } },
+    state: { A: openGreen(9, 'ticket/A', 'epic/21-x') },
+    config: epicConfig,
+  });
+  const env = onPath(stubGh(), { STUB_BASE: 'epic/21-x', STUB_HEAD: 'ticket/A',
+    STUB_HEAD_OID: 'head-1', STUB_PR: '9', STUB_REVIEW_DECISION: '"APPROVED"', STUB_REVIEWS: '[]' });
+  const result = JSON.parse(run(root, ['merge', 'A', '--json'], { env }).stdout).results[0];
+  assert.deepStrictEqual(result.blockers, ['awaiting human review']);
+});
+
+test('explicit merge mode keeps the human merge refusal', () => {
+  const root = project({
+    tickets: { A: { human_checkpoint: true, checkpoint: 'merge', branch: 'ticket/A', epic: 'epic/21-x' } },
+    state: { A: openGreen(9, 'ticket/A', 'epic/21-x') },
+    config: epicConfig,
+  });
+  const result = JSON.parse(run(root, ['merge', 'A', '--json'], { env: onPath(denyGh()) }).stdout).results[0];
+  assert.deepStrictEqual(result.blockers, ['human_checkpoint ticket — the merge is the human\'s by contract']);
+});
+
+test('duty offers the guard merge after a live human head approval', () => {
+  const root = project({
+    tickets: { 'T-REVIEW': { human_checkpoint: true, checkpoint: 'review', branch: 'ticket/T-REVIEW', epic: 'epic/21-x' } },
+    state: { 'T-REVIEW': openGreen(9, 'ticket/T-REVIEW', 'epic/21-x') },
+    config: epicConfig,
+  });
+  const env = onPath(stubGh(), { STUB_BASE: 'epic/21-x', STUB_HEAD: 'ticket/T-REVIEW',
+    STUB_HEAD_OID: 'head-1', STUB_PR: '9', STUB_REVIEW_DECISION: '"APPROVED"',
+    STUB_REVIEWS: JSON.stringify([approval('alice')]) });
+  const item = JSON.parse(run(root, ['duty', '--json'], { env }).stdout).items[0];
+  assert.strictEqual(item.action, 'merge', item.why);
+});
+
+for (const [label, reviews, overrides] of [
+  ['built-in bot', [approval('coderabbitai[bot]', 'Bot')], {}],
+  ['unconfigured Bot', [approval('arbitrary-reviewer', 'Bot')], {}],
+  ['unknown user type', [approval('alice', null)], {}],
+  ['PR author', [approval('owner')], {}],
+  ['stale human', [{ ...approval('alice'), commit_id: 'old-head' }], {}],
+]) {
+  test(`a ${label} approval does not authorize review checkpoint merge`, () => {
+    const { result } = reviewMerge(reviews, overrides);
+    assert.strictEqual(result.merged, false);
+    assert.ok(result.blockers.some((reason) => /awaiting human review/.test(reason)), result.blockers.join('; '));
+  });
+}
+
+test('a configured bot login cannot authorize a review checkpoint', () => {
+  const root = project({
+    tickets: { A: { human_checkpoint: true, checkpoint: 'review', branch: 'ticket/A', epic: 'epic/21-x' } },
+    state: { A: openGreen(9, 'ticket/A', 'epic/21-x') },
+    config: { ...epicConfig, delivery_pipeline: { reviewer_bots: { 'acme/demo': ['review-helper*'] } } },
+  });
+  const env = onPath(stubGh(), { STUB_BASE: 'epic/21-x', STUB_HEAD: 'ticket/A',
+    STUB_HEAD_OID: 'head-1', STUB_PR: '9', STUB_REVIEW_DECISION: '"APPROVED"',
+    STUB_REVIEWS: JSON.stringify([approval('review-helper-1')]) });
+  const result = JSON.parse(run(root, ['merge', 'A', '--json'], { env }).stdout).results[0];
+  assert.strictEqual(result.merged, false);
+  assert.ok(result.blockers.includes('awaiting human review'), result.blockers.join('; '));
+});
+
+test('an open review checkpoint parent still holds its child', () => {
+  const root = project({
+    tickets: {
+      P: { human_checkpoint: true, checkpoint: 'review', branch: 'ticket/P', epic: 'epic/21-x' },
+      C: { primary_parent: 'P', branch: 'ticket/C', epic: 'epic/21-x' },
+    },
+    state: { P: openGreen(11, 'ticket/P', 'epic/21-x'), C: openGreen(14, 'ticket/C', 'ticket/P') },
+    config: epicConfig,
+  });
+  const env = onPath(stubGh(), { STUB_BASE: 'ticket/P', STUB_HEAD: 'ticket/C', STUB_PR: '14' });
+  const result = JSON.parse(run(root, ['merge', 'C', '--json'], { env }).stdout).results[0];
+  assert.strictEqual(result.merged, false);
+  assert.ok(result.blockers.some((reason) => /human_checkpoint/.test(reason)), result.blockers.join('; '));
 });
 
 suite('pre-authorization — a child still waits for its parent to land');

@@ -2433,9 +2433,13 @@ loop:
          says `finalize` and the guard refuses the merge, naming both SHAs.
        → gh pr ready <pr> (remove draft)
        → then split on the checkpoint:
-           human_checkpoint: true  → mark `awaiting-human` (green, but the
-             merge/approval is a human's), notify, and CONTINUE the front —
-             do NOT block the cycle while waiting
+           human_checkpoint: review → mark `awaiting-human` until the board shows
+             a fresh human approval on this head; then the guard rechecks the
+             approval live and, once other merge gates pass, merges into the epic. Notify and CONTINUE the
+             front while the review is outstanding — do NOT block the cycle.
+           human_checkpoint: merge or true → mark `awaiting-human` (the human
+             owns the merge), notify, and CONTINUE the front — do NOT block the
+             cycle while waiting
            human_checkpoint: false → status green → LAND IT:
              node ${CLAUDE_PLUGIN_ROOT}/scripts/sentinel.cjs merge <T>
                merged  → the ticket is IN THE EPIC; the script retargets cascade
@@ -2968,7 +2972,7 @@ driving PRs hands the user a half-truth.
   `STATE.md`, `REQUIREMENTS.md`, `*-SUMMARY.md`, `*-UAT.md`, or
   `*-VERIFICATION.md` files. Use `--check` to diagnose drift and rerun the
   write command to repair it.
-- A `human_checkpoint` ticket is never auto-merged, however green it is.
+- A `human_checkpoint: review` ticket may be merged by the guard only after a fresh human approval on the current head, which the guard rechecks live. `merge` and legacy `true` remain human-merged, however green they are.
 - Never force-push. Never commit directly into the default branch/epic (only
   via a ticket-PR into the base). The epic branch is moved only by ticket-PR merges.
 - **When the base moves under an OPEN PR, merge it in — never rebase.**
