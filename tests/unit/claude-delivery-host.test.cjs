@@ -476,18 +476,25 @@ test('allow-listed host verification failure blocks Claude repair finalization',
 
 test('passing Claude host verification sends sealed digest to finalizer', async () => {
   let digest;
+  let coverage;
   const fixture = repairFixture({ status: 'fixed', changeCode: true,
     hostOptions: { verificationAllowList: [{ argv: ['node', 'check.cjs'], profile: 'host' }],
       verificationTreeDigest() { return 'same'; },
       hostVerificationRunner: { run() { return { status: 0, stdout: '', stderr: '' }; } },
       signingFingerprint() { return 'A'.repeat(40); },
-      finalizeCommit(input) { digest = input.verificationEvidenceDigest; return { commit: 'signed', verificationEvidenceDigest: digest }; },
+      finalizeCommit(input) { digest = input.verificationEvidenceDigest; coverage = input.coverage;
+        return { commit: 'signed', verificationEvidenceDigest: digest }; },
       publishRepair() { return { pushed: true }; },
     } });
   try {
     fs.writeFileSync(fixture.planPath, '## Verification commands\n- `node check.cjs`\n');
     await fixture.host.run('fix-round', fixture.args);
     assert.match(digest, /^[0-9a-f]{64}$/);
+    assert.equal(coverage.kind, 'fixer');
+    assert.match(coverage.dispatch_id, /^dispatch-/);
+    assert.match(coverage.receipt_digest, /^[0-9a-f]{64}$/);
+    assert.equal(coverage.verification_digest, digest);
+    assert.equal(coverage.receipt_store, fixture.runtimeHost.recorder.storeDir);
   } finally { fs.rmSync(fixture.root, { recursive: true, force: true }); }
 });
 

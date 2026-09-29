@@ -560,7 +560,7 @@ function finalizationFile(root, id) {
 function admitCandidate(prepared, verification, records, tree) {
   const body = {
     schema: CANDIDATE_SCHEMA, version: 1,
-    repository: prepared.repository, worktree: prepared.commit.worktree,
+    repository: prepared.repository, repo: prepared.repo, worktree: prepared.commit.worktree,
     phase: prepared.identity.phase, ticket: prepared.commit.ticket, branch: prepared.commit.expectedBranch,
     files_modified: [...prepared.commit.files_modified],
     run_id: prepared.identity.run_id, dispatch_id: prepared.identity.dispatch_id, launch_id: prepared.identity.launch_id,
@@ -630,6 +630,10 @@ function finalizeCandidate(candidate, stateRoot, key, options) {
     expectedSigner: candidate.signer, files_modified: [...candidate.files_modified],
     expectedTree: candidate.scoped_tree,
     verificationEvidenceDigest: candidate.verification.evidence_digest,
+    coverage: { kind: 'executor', repo: candidate.repo, dispatch_id: candidate.dispatch_id,
+      receipt_digest: candidate.receipt_sha256,
+      verification_digest: candidate.verification.evidence_digest,
+      receipt_store: options.recorder && options.recorder.storeDir },
   });
   const artifact = signedArtifact(candidate.worktree, candidate, committed);
   atomicWrite(finalizationFile(stateRoot, candidate.candidate_id), JSON.stringify(seal({
@@ -1158,7 +1162,7 @@ async function resumeFinalization(options, candidateId, liveScopeInput) {
         + invalidated.join(', '), candidate, invalidated);
     }
     options.controller?.assertOwner(liveScope.run_id);
-    const artifact = finalizeCandidate(candidate, stateRoot, key, options);
+    const artifact = finalizeCandidate(candidate, stateRoot, key, { ...options, recorder });
     return Object.freeze({ schema: SCHEMA, status: 'committed', resumed: true, idempotent: false,
       candidate_id: candidateId, artifact });
   } finally {
