@@ -5,6 +5,7 @@ const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
 const { suite, test, done, assert } = require('./assert-harness.cjs');
+const { needsHuman } = require('../../plugins/delivery-pipeline/scripts/front.cjs');
 
 const ROOT = path.join(__dirname, '..', '..');
 const SCRIPT = path.join(ROOT, 'plugins', 'delivery-pipeline', 'scripts', 'state-sync.cjs');
@@ -22,6 +23,7 @@ function pr(number, state, headRefName = BRANCH, baseRefName = EPIC) {
     headRefName,
     headRefOid: 'b'.repeat(40),
     baseRefName,
+    author: { login: 'pr-author' },
     mergedAt: state === 'MERGED' ? '2026-09-01T00:00:00Z' : null,
     createdAt: '2026-09-01T00:00:00Z',
     url: `https://example.test/pull/${number}`,
@@ -60,17 +62,22 @@ if (args[0] === 'pr' && args[1] === 'list') {
   else if (endpoint.includes('/compare/')) {
     const key = endpoint.split('/compare/')[1];
     emit(String((fixture.comparisons || {})[key] ?? 0) + '\\n');
+  } else if (/\\/pulls\\/\\d+\\/reviews$/.test(endpoint)) {
+    const number = Number(endpoint.match(/\\/pulls\\/(\\d+)\\/reviews$/)[1]);
+    if (Object.prototype.hasOwnProperty.call(fixture.pullReviewsRaw || {}, number)) emit(fixture.pullReviewsRaw[number]);
+    else emit((fixture.pullReviews || {})[number] || []);
   } else { process.stderr.write('unexpected api request: ' + endpoint + '\\n'); process.exit(2); }
 } else if (args[0] === 'repo' && args[1] === 'view') {
-  emit((fixture.defaultBranch || 'main') + '\\n');
+  if ((value('--json') || '').includes('owner,name')) emit({ owner: { login: 'acme' }, name: 'demo' });
+  else emit((fixture.defaultBranch || 'main') + '\\n');
 } else {
   process.stderr.write('unexpected gh call: ' + args.join(' ') + '\\n');
   process.exit(2);
 }
 `;
 
-function ticket() {
-  return { phase: '43', branch: BRANCH, title: 'demo', epic: EPIC, depends_on: [], risk: 'low' };
+function ticket(overrides = {}) {
+  return { phase: '43', branch: BRANCH, title: 'demo', epic: EPIC, depends_on: [], risk: 'low', ...overrides };
 }
 
 function priorMergedRow(number = 301, epicState = 'MERGED', epicLanded = true) {
@@ -97,10 +104,11 @@ function fixture(options = {}) {
   fs.writeFileSync(path.join(root, '.planning', 'config.json'), JSON.stringify({
     git: { base_branch: 'main' },
     delivery_pipeline: { integration_mode: 'epic-stacked', gsd_sync: false, pr_fetch_limit: options.limit || 10 },
+    pipeline: options.pipeline || {},
   }));
   fs.writeFileSync(path.join(graphDir, 'tickets.json'), JSON.stringify({
     epics: { '43': { branch: EPIC, base: 'main', repos: [null] } },
-    tickets: { [TICKET]: ticket() },
+    tickets: { [TICKET]: ticket(options.ticket) },
   }));
   if (options.previousState) {
     fs.writeFileSync(path.join(graphDir, 'delivery-state.json'), JSON.stringify(options.previousState));
@@ -113,7 +121,7 @@ function fixture(options = {}) {
   const responseFile = path.join(root, 'gh-fixture.json');
   const callsFile = path.join(root, 'gh-calls.jsonl');
   fs.writeFileSync(responseFile, JSON.stringify({
-    open: [], all: [], head: {}, view: {}, branches: ['main', EPIC, BRANCH],
+    open: [], all: [], head: {}, view: {}, pullReviews: {}, branches: ['main', EPIC, BRANCH],
     comparisons: { [`main...${EPIC}`]: 0 },
     ...options.responses,
   }));
@@ -144,6 +152,10 @@ function calls(f) {
 
 function state(f) {
   return JSON.parse(fs.readFileSync(path.join(f.graphDir, 'delivery-state.json'), 'utf8'));
+}
+
+function metadata(f) {
+  return JSON.parse(fs.readFileSync(path.join(f.graphDir, 'delivery-state-meta.json'), 'utf8'));
 }
 
 function isTicketLookup(args) {
@@ -180,6 +192,99 @@ test('finds an open ticket PR in the one bounded open listing', () => {
   assert.equal(state(f)[TICKET].status, 'pr-open');
   assert.match(result.stdout, /listed_open=1/);
   assert.equal(calls(f).filter(isTicketLookup).length, 0);
+});
+
+test('state-sync publishes current human approval evidence for review checkpoints', () => {
+  const approved = { ...pr(330, 'OPEN'), reviewDecision: 'APPROVED' };
+  const reviewRows = [
+    { user: { login: 'alice', type: 'User' }, state: 'CHANGES_REQUESTED', commit_id: 'old-head', submitted_at: '2026-09-01T00:00:00Z' },
+    { user: { login: 'alice', type: 'User' }, state: 'APPROVED', commit_id: approved.headRefOid, submitted_at: '2026-09-02T00:00:00Z' },
+  ];
+  const f = fixture({
+    ticket: { human_checkpoint: true, checkpoint: 'review' },
+    pipeline: { reviewer_bots: { 'acme/demo': ['review-helper*'] } },
+    responses: { open: [approved], review: [approved], pullReviews: { 330: reviewRows } },
+  });
+  const result = run(f);
+  assert.equal(result.status, 0, result.stderr);
+  const row = state(f)[TICKET];
+  assert.deepEqual(row.author, { login: 'pr-author' });
+  assert.deepEqual(row.reviewer_bots, ['review-helper*']);
+  assert.deepEqual(row.approved_reviews, [{
+    author: 'alice', state: 'APPROVED', commit_id: approved.headRefOid,
+    submitted_at: '2026-09-02T00:00:00Z', user: { login: 'alice', type: 'User' },
+  }]);
+  assert.equal(row.review_fresh, true);
+  assert.equal(needsHuman(ticket({ human_checkpoint: true, checkpoint: 'review' }), row), false,
+    'the front consumes the same observed fields rather than synthetic test-only values');
+  assert.equal(needsHuman(ticket({ human_checkpoint: true, checkpoint: 'review' }), {
+    ...row,
+    approved_reviews: [{
+      state: 'APPROVED', commit_id: approved.headRefOid,
+      user: { login: 'review-helper[bot]', type: 'User' },
+    }],
+  }), true, 'the state-sync bot configuration prevents a machine reviewer from clearing the gate');
+  assert.equal(needsHuman(ticket({ human_checkpoint: true, checkpoint: 'review' }), {
+    ...row,
+    approved_reviews: [{
+      state: 'APPROVED', commit_id: approved.headRefOid,
+      user: { login: 'pr-author', type: 'User' },
+    }],
+  }), true, 'the PR author cannot clear their own checkpoint');
+  const projected = metadata(f).observation_projection.tickets[TICKET];
+  assert.deepEqual(projected.author, row.author);
+  assert.deepEqual(projected.reviewer_bots, row.reviewer_bots);
+  assert.equal(projected.review_fresh, true);
+  assert.deepEqual(projected.approved_reviews, row.approved_reviews);
+  assert.equal(calls(f).filter((args) => args[0] === 'api' && /\/pulls\/330\/reviews$/.test(args[1])).length, 1,
+    'one review-history read supplies every front field');
+});
+
+test('unreadable approval history leaves a review checkpoint waiting for a person', () => {
+  const approved = { ...pr(331, 'OPEN'), reviewDecision: 'APPROVED' };
+  const f = fixture({
+    ticket: { human_checkpoint: true, checkpoint: 'review' },
+    responses: { open: [approved], review: [approved], pullReviewsRaw: { 331: 'not-json' } },
+  });
+  const result = run(f);
+  assert.equal(result.status, 0, result.stderr);
+  const row = state(f)[TICKET];
+  assert.equal(row.review_fresh, false);
+  assert.deepEqual(row.approved_reviews, []);
+  assert.equal(needsHuman(ticket({ human_checkpoint: true, checkpoint: 'review' }), row), true);
+});
+
+test('a stale human verdict keeps the board aligned with the live guard', () => {
+  const approved = { ...pr(334, 'OPEN'), reviewDecision: 'APPROVED' };
+  const reviews = [
+    { user: { login: 'alice', type: 'User' }, state: 'APPROVED', commit_id: 'old-head', submitted_at: '2026-09-01T00:00:00Z' },
+    { user: { login: 'bob', type: 'User' }, state: 'APPROVED', commit_id: approved.headRefOid, submitted_at: '2026-09-02T00:00:00Z' },
+  ];
+  const f = fixture({
+    ticket: { human_checkpoint: true, checkpoint: 'review' },
+    responses: { open: [approved], review: [approved], pullReviews: { 334: reviews } },
+  });
+  assert.equal(run(f).status, 0);
+  const row = state(f)[TICKET];
+  assert.equal(row.review_fresh, false);
+  assert.equal(row.approved_reviews.some((review) => review.user.login === 'bob' && review.commit_id === approved.headRefOid), true);
+  assert.equal(needsHuman(ticket({ human_checkpoint: true, checkpoint: 'review' }), row), true,
+    'a current approval does not bypass the stale human verdict that blocks the sentinel');
+});
+
+test('ordinary tickets and unapproved review checkpoints do not query review history', () => {
+  const ordinaryApproved = { ...pr(332, 'OPEN'), reviewDecision: 'APPROVED' };
+  const normal = fixture({ responses: { open: [ordinaryApproved], review: [ordinaryApproved] } });
+  assert.equal(run(normal).status, 0);
+  assert.equal(calls(normal).filter((args) => args[0] === 'api' && /\/pulls\/\d+\/reviews$/.test(args[1])).length, 0);
+
+  const waiting = { ...pr(333, 'OPEN'), reviewDecision: 'CHANGES_REQUESTED' };
+  const checkpoint = fixture({
+    ticket: { human_checkpoint: true, checkpoint: 'review' },
+    responses: { open: [waiting], review: [waiting] },
+  });
+  assert.equal(run(checkpoint).status, 0);
+  assert.equal(calls(checkpoint).filter((args) => args[0] === 'api' && /\/pulls\/\d+\/reviews$/.test(args[1])).length, 0);
 });
 
 test('looks up a closed-unmerged PR by its ledger number', () => {

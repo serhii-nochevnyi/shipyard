@@ -218,8 +218,13 @@ function reviewFreshness(view, reviews, readable = true, configured = undefined)
     head_committed_at: headAt ? new Date(headAt).toISOString() : null,
     approved_reviews: approvals.map((row) => ({
       author: row.author,
+      state: row.state,
       commit_id: row.commit_id || null,
       submitted_at: row.submitted_at || null,
+      user: row.user && typeof row.user === 'object' ? {
+        login: row.user.login || row.author,
+        type: row.user.type || null,
+      } : null,
     })),
   };
 }
