@@ -42,6 +42,7 @@ wt_base="${SHIPYARD_WORKTREE_ROOT:-$(dirname "$repo_root")/.wt-${repo_name}}"
 reachability_script="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/run-reachability.cjs"
 diamond_script="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/diamond-parents.cjs"
 scratch_script="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/conveyor-scratch.cjs"
+ticket_base_script="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/ticket-base.cjs"
 
 # Serialize everything that writes to the SHARED .git. `git worktree add` and
 # branch creation both take index.lock, and since the PR sentinel guards open PRs
@@ -212,6 +213,11 @@ case "$cmd" in
 
     proof_args=(prove --repo "$repo_root" --base "$base" --branch "$branch" --worktree "$wt_dir" --json)
     graph_dir="$repo_root/.planning/graph"
+    if [[ -f "$graph_dir/tickets.json" ]]; then
+      # @contract: the delivery board resolves a merged primary parent to its live landing base.
+      base="$(node "$ticket_base_script" resolve --graph-dir "$graph_dir" --ticket "$ticket" --requested-base "$base")"
+      proof_args=(prove --repo "$repo_root" --base "$base" --branch "$branch" --worktree "$wt_dir" --json)
+    fi
     diamond_epic=""
     diamond_parents=""
     if [[ -f "$graph_dir/tickets.json" ]] && node -e 'const j=JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")); process.exit(j.tickets && j.tickets[process.argv[2]] ? 0 : 1)' "$graph_dir/tickets.json" "$ticket" 2>/dev/null; then

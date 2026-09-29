@@ -7,7 +7,8 @@ const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const { suite, test, done, assert } = require('./assert-harness.cjs');
 const { createDurableRecorder } = require('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs');
-const { createClaudeDeliveryHost, runClaudeDeliveryCli, validateRequest, REQUEST_SCHEMA } = require('../../plugins/delivery-pipeline/scripts/claude-delivery-host.cjs');
+const { createClaudeDeliveryHost, runClaudeDeliveryCli, validateRequest, REQUEST_SCHEMA,
+  verificationFailureContext, verificationFailureReason } = require('../../plugins/delivery-pipeline/scripts/claude-delivery-host.cjs');
 const { REFERENCE_PATHS } = require('../../plugins/delivery-pipeline/scripts/claude-reference-content.cjs');
 const { createRunScope } = require('../../plugins/delivery-pipeline/scripts/run-scope.cjs');
 const { createRunController } = require('../../plugins/delivery-pipeline/scripts/run-controller.cjs');
@@ -121,7 +122,7 @@ function repairFixture(config = {}) {
     }],
   };
   const host = createClaudeDeliveryHost({
-    graphDir, controller, runtimeHost,
+    graphDir, controller, runtimeHost, storageRoot: path.join(root, 'host-storage'),
     ...(config.hostOptions || {}),
   });
   return { root, worktree, graphDir, planPath, host, runtimeHost, args, prompts, launches: () => launches };
@@ -450,6 +451,44 @@ test('trusted repair host blocks a failed signed finalizer before sealing or pub
   } finally {
     fs.rmSync(fixture.root, { recursive: true, force: true });
   }
+});
+
+test('allow-listed host verification failure blocks Claude repair finalization', async () => {
+  let finalized = 0;
+  const fixture = repairFixture({ status: 'fixed', changeCode: true,
+    hostOptions: { verificationAllowList: [{ argv: ['node', 'check.cjs'], profile: 'host' }],
+      verificationTreeDigest() { return 'same'; },
+      hostVerificationRunner: { run() { return { status: 7, stdout: '', stderr: 'failed' }; } },
+      signingFingerprint() { return 'A'.repeat(40); },
+      finalizeCommit() { finalized++; },
+    } });
+  try {
+    fs.writeFileSync(fixture.planPath, '## Verification commands\n- `node check.cjs`\n');
+    const result = await fixture.host.run('fix-round', fixture.args);
+    assert.equal(result[0].status, 'verification_failed');
+    assert.deepEqual(result[0].command, ['node', 'check.cjs']);
+    assert.match(result[0].evidence_digest, /^[0-9a-f]{64}$/);
+    assert.deepEqual(result[0].receipt,
+      fixture.runtimeHost.recorder.getVerifiedRecord(result[0].receipt.dispatch_id).receipt);
+    assert.equal(finalized, 0);
+  } finally { fs.rmSync(fixture.root, { recursive: true, force: true }); }
+});
+
+test('passing Claude host verification sends sealed digest to finalizer', async () => {
+  let digest;
+  const fixture = repairFixture({ status: 'fixed', changeCode: true,
+    hostOptions: { verificationAllowList: [{ argv: ['node', 'check.cjs'], profile: 'host' }],
+      verificationTreeDigest() { return 'same'; },
+      hostVerificationRunner: { run() { return { status: 0, stdout: '', stderr: '' }; } },
+      signingFingerprint() { return 'A'.repeat(40); },
+      finalizeCommit(input) { digest = input.verificationEvidenceDigest; return { commit: 'signed', verificationEvidenceDigest: digest }; },
+      publishRepair() { return { pushed: true }; },
+    } });
+  try {
+    fs.writeFileSync(fixture.planPath, '## Verification commands\n- `node check.cjs`\n');
+    await fixture.host.run('fix-round', fixture.args);
+    assert.match(digest, /^[0-9a-f]{64}$/);
+  } finally { fs.rmSync(fixture.root, { recursive: true, force: true }); }
 });
 
 test('trusted repair host refuses a mismatched canonical PR and caller-supplied reference data', () => {
@@ -1115,13 +1154,24 @@ test('review repair publishes its signed code before host review actions', async
   }
 });
 
-test('target-project executor finalizes a conventional subject from the graph title and refuses a Ticket: body', async () => {
+test('executor uses the live base after its primary parent merges and refuses a Ticket: body', async () => {
   const releaseGpg = await holdGpg();
   const fixture = repairFixture({ target: true });
   const graphFile = path.join(fixture.graphDir, 'tickets.json');
   const graph = JSON.parse(fs.readFileSync(graphFile, 'utf8'));
-  Object.assign(graph.tickets['T-38-03'], { title: 'Retry the flaky upload', type: 'bugfix' });
+  const parentBranch = 'ticket/T-38-02-merged-parent';
+  Object.assign(graph.tickets['T-38-03'], {
+    title: 'Retry the flaky upload', type: 'bugfix', pr_base: parentBranch,
+    primary_parent: 'T-38-02', epic: 'main',
+  });
+  graph.tickets['T-38-02'] = { branch: parentBranch, pr_base: 'main', epic: 'main', files: ['src/owned.txt'] };
   fs.writeFileSync(graphFile, JSON.stringify(graph));
+  const boardFile = path.join(fixture.graphDir, 'delivery-state.json');
+  const board = JSON.parse(fs.readFileSync(boardFile, 'utf8'));
+  Object.assign(board['T-38-03'], { base: 'main', epic: 'main' });
+  board['T-38-02'] = { branch: parentBranch, base: 'main', epic: 'main', status: 'merged', merged_into: 'main' };
+  fs.writeFileSync(boardFile, JSON.stringify(board));
+  const liveBase = git(fixture.worktree, 'rev-parse', 'main');
   const gnupgHome = fs.mkdtempSync(path.join(os.tmpdir(), 'g5-'));
   fs.chmodSync(gnupgHome, 0o700);
   const previous = { GNUPGHOME: process.env.GNUPGHOME, SHIPYARD_GRAPH_DIR: process.env.SHIPYARD_GRAPH_DIR };
@@ -1151,7 +1201,7 @@ test('target-project executor finalizes a conventional subject from the graph ti
   });
   const ticket = () => ({ tickets: [{
     id: 'T-38-03', title: 'Retry the flaky upload', planPath: fixture.planPath, branch: 'ticket/T-38-03',
-    worktreePath: fixture.worktree, prBase: 'main', model: 'sonnet', effort: 'max',
+    worktreePath: fixture.worktree, prBase: parentBranch, model: 'sonnet', effort: 'max',
   }] });
   try {
     process.env.GNUPGHOME = gnupgHome;
@@ -1166,6 +1216,7 @@ test('target-project executor finalizes a conventional subject from the graph ti
     body = '## Summary\n\nRetries the upload.\n\n## Tests\n\nUnit tests pass.\n';
     await executor(fixture.graphDir, 'run-target-neutral').run('executors', ticket());
     assert.equal(git(fixture.worktree, 'log', '-1', '--format=%s', 'HEAD'), 'fix: retry the flaky upload');
+    assert.equal(git(fixture.worktree, 'rev-parse', 'HEAD^'), liveBase);
     git(fixture.worktree, 'verify-commit', 'HEAD');
     fs.rmSync(path.join(fixture.worktree, '.shipyard-role-artifact.json'), { force: true });
     body = 'Ticket: T-38-03\n\nRetries the upload.\n';
@@ -1240,6 +1291,90 @@ test('executor and drift-check prompts carry the delivered plan contract; a call
     fs.rmSync(fixture.root, { recursive: true, force: true });
     releaseGpg();
   }
+});
+
+test('executor retries one failed host verification with its sealed diagnostic', async () => {
+  const releaseGpg = await holdGpg();
+  const fixture = repairFixture();
+  const runId = 'run-executor-verification-retry';
+  const controller = owner(fixture.root, fixture.worktree, 'T-38-03', runId);
+  const prompts = [];
+  const evidence = new WeakMap();
+  const gnupgHome = fs.mkdtempSync(path.join(os.tmpdir(), 'g7-'));
+  fs.chmodSync(gnupgHome, 0o700);
+  const previousHome = process.env.GNUPGHOME;
+  let launches = 0;
+  let checks = 0;
+  try {
+    process.env.GNUPGHOME = gnupgHome;
+    execFileSync('gpg', ['--batch', '--pinentry-mode', 'loopback', '--passphrase', '',
+      '--quick-generate-key', 'Repair Host Test <repair@example.test>', 'ed25519', 'sign', '0'],
+    { stdio: ['ignore', 'pipe', 'pipe'] });
+    const keys = execFileSync('gpg', ['--batch', '--with-colons', '--list-secret-keys'], { encoding: 'utf8' });
+    git(fixture.worktree, 'config', 'user.signingkey', keys.split('\n').find((line) => line.startsWith('fpr:')).split(':')[9]);
+    fs.writeFileSync(fixture.planPath, '# Repair plan\n\n## Verification commands\n\n- `node check.cjs`\n');
+    const runtimeHost = {
+      ...fixture.runtimeHost,
+      scope: { run_id: runId, ticket: 'T-38-03', worktree: fixture.worktree },
+      async agent(prompt, launchOptions) {
+        launches++;
+        prompts.push(prompt);
+        fs.writeFileSync(path.join(fixture.worktree, '.shipyard-pr-body.md'), 'Ticket: T-38-03\n\nExecutor repair.\n');
+        fs.writeFileSync(path.join(fixture.worktree, '.shipyard-evidence.md'), 'Host verification is sealed.\n');
+        fs.writeFileSync(path.join(fixture.worktree, 'src', 'owned.txt'), `round-${launches}\n`);
+        const result = { id: 'T-38-03', status: 'committed', summary: `round ${launches}`, blocking_count: 0 };
+        evidence.set(result, transcriptEvidence({
+          launch_id: `executor-${launches}-${crypto.randomUUID()}`,
+          applied_model: launchOptions.model, applied_effort: launchOptions.effort,
+          observed_model: launchOptions.model, observed_effort: launchOptions.effort,
+        }));
+        return result;
+      },
+      applicationEvidence: ({ result }) => evidence.get(result),
+      capabilities: Object.freeze({ supportedModels: [CLAUDE_MODEL_ALIASES.sonnet],
+        supportedEfforts: ['max'], observedModel: true, observedEffort: true }),
+    };
+    const host = createClaudeDeliveryHost({
+      graphDir: fixture.graphDir, controller, runtimeHost, storageRoot: path.join(fixture.root, 'retry-storage'),
+      verificationAllowList: [{ argv: ['node', 'check.cjs'], profile: 'host' }],
+      hostVerificationRunner: { run() {
+        checks++;
+        return { status: checks === 1 ? 7 : 0, stdout: '', stderr: checks === 1 ? 'failed' : '' };
+      } },
+    });
+    const result = await host.run('executors', { tickets: [{
+      id: 'T-38-03', title: 'Retry verification', planPath: fixture.planPath,
+      branch: 'ticket/T-38-03', worktreePath: fixture.worktree, prBase: 'main', model: 'sonnet', effort: 'max',
+    }] });
+    assert.equal(checks, 2, 'the second executor should receive another host verification');
+    assert.equal(launches, 2, 'the one bounded retry should dispatch a second executor');
+    assert.match(prompts[1], /<HOST-VERIFICATION-FAILURE>/);
+    assert.match(prompts[1], /"attempt":1/);
+    assert.match(prompts[1], /"evidence_digest":"[0-9a-f]{64}"/);
+    assert.equal(controller.status(runId).retry.attempts, 1);
+    assert.equal(git(fixture.worktree, 'show', '-s', '--format=%B', 'HEAD').split('\n').some((line) =>
+      /^Shipyard-Verification-Evidence: [0-9a-f]{64}$/.test(line)), true);
+  } finally {
+    if (previousHome === undefined) delete process.env.GNUPGHOME;
+    else process.env.GNUPGHOME = previousHome;
+    fs.rmSync(gnupgHome, { recursive: true, force: true });
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+    releaseGpg();
+  }
+});
+
+test('verification failure reason safely handles an absent command', () => {
+  assert.match(verificationFailureReason({ command: null, summary: 'no command matched' }),
+    /no allow-listed verification command matched/);
+});
+
+test('Claude retry diagnostic remains within its byte limit for oversized Unicode evidence', () => {
+  const diagnostic = verificationFailureContext({
+    command: Array(64).fill('💥'.repeat(256)), evidence_digest: 'a'.repeat(64), summary: '⚠'.repeat(500),
+  });
+  assert.ok(Buffer.byteLength(JSON.stringify(diagnostic), 'utf8') <= 2048);
+  assert.equal(diagnostic.attempt, 1);
+  assert.equal(Object.isFrozen(diagnostic.command), true);
 });
 
 function driftCapableHost(fixture) {
