@@ -323,7 +323,6 @@ for gate in scope-gate base-merge; do
 done
 ok "both gates refuse a declaration the ownership matcher cannot answer"
 
-# @contract: A merged parent's absent ticket ref resolves to the board's live epic before worktree creation.
 P6="$WORK/proj6"
 O6="$WORK/origin6.git"
 SEED6="$WORK/seed6"
