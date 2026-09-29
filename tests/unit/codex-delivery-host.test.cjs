@@ -42,10 +42,12 @@ const previousEnv = {
   GNUPGHOME: process.env.GNUPGHOME,
   GIT_CONFIG_GLOBAL: process.env.GIT_CONFIG_GLOBAL,
   GIT_CONFIG_NOSYSTEM: process.env.GIT_CONFIG_NOSYSTEM,
+  SHIPYARD_COVERAGE_ROOT: process.env.SHIPYARD_COVERAGE_ROOT,
 };
 process.env.GNUPGHOME = path.join(temporary, 'gnupg');
 process.env.GIT_CONFIG_GLOBAL = path.join(temporary, 'empty-gitconfig');
 process.env.GIT_CONFIG_NOSYSTEM = '1';
+process.env.SHIPYARD_COVERAGE_ROOT = path.join(temporary, 'coverage');
 fs.mkdirSync(process.env.GNUPGHOME, { mode: 0o700 });
 process.on('exit', () => {
   for (const [key, value] of Object.entries(previousEnv)) {
@@ -907,9 +909,14 @@ test('tampered candidate and wrong scope refuse; commit without a finalization r
     await assert.rejects(() => recovery(f).resumeFinalization('f'.repeat(64), liveScope(f)),
       (refusal) => refusal.code === 'CANDIDATE_MISSING');
     const candidate = JSON.parse(original).payload;
+    const receiptStore = f.host.recorder.storeDir;
     finalizeCommit({ ticket: candidate.ticket, worktree: candidate.worktree, expectedBranch: candidate.branch,
       expectedBase: candidate.expected_base, expectedHead: candidate.expected_head, expectedSigner: signer,
-      files_modified: candidate.files_modified, expectedTree: candidate.scoped_tree });
+      files_modified: candidate.files_modified, expectedTree: candidate.scoped_tree,
+      verificationEvidenceDigest: candidate.verification.evidence_digest,
+      coverage: { kind: 'executor', repo: candidate.repo, dispatch_id: candidate.dispatch_id,
+        receipt_digest: candidate.receipt_sha256, verification_digest: candidate.verification.evidence_digest,
+        receipt_store: receiptStore } });
     const head = git(f.root, 'rev-parse', 'HEAD');
     await assert.rejects(() => recovery(f).resumeFinalization(id, liveScope(f)),
       (refusal) => refusal.code === 'RECONCILIATION_REQUIRED');

@@ -9,7 +9,7 @@ const prHygiene = require('./pr-hygiene.cjs');
 const { resolveGraphDir } = require('./graph-dir.cjs');
 const { scopeBase } = require('./diamond-parents.cjs');
 const { SCRATCH_FILES, isScratch } = require('./conveyor-scratch.cjs');
-const { createCoverageWriter, repoSlug } = require('./conveyor-coverage.cjs');
+const { createCoverageWriter, repoSlug, repositoryIdentity, validateFinalizationEvidence } = require('./conveyor-coverage.cjs');
 const MAX_GRAPH_BYTES = 8 * 1024 * 1024;
 
 function fail(message, code) {
@@ -187,8 +187,24 @@ function finalizeDeliveryCommit(options) {
       && (typeof verificationEvidenceDigest !== 'string' || !/^[0-9a-f]{64}$/.test(verificationEvidenceDigest))) {
     fail('verificationEvidenceDigest must be a SHA-256 digest');
   }
+  if (!options.coverage || !verificationEvidenceDigest) {
+    fail('trusted finalization requires executor or fixer coverage evidence and its signed verification digest',
+      'COVERAGE_EVIDENCE_REQUIRED');
+  }
 
   const root = fs.realpathSync(worktree);
+  if (options.coverage) {
+    const coverage = options.coverage;
+    if (coverage.verification_digest !== verificationEvidenceDigest) {
+      fail('coverage verification digest differs from the signed verification evidence digest', 'COVERAGE_EVIDENCE_INVALID');
+    }
+    try {
+      validateFinalizationEvidence({ ...coverage, ticket,
+        repo: repoSlug(root, coverage.repo), repository_id: repositoryIdentity(root) });
+    } catch (error) {
+      fail(`invalid finalization coverage evidence: ${error.message}`, 'COVERAGE_EVIDENCE_INVALID');
+    }
+  }
   const env = { ...process.env, GIT_OPTIONAL_LOCKS: '0' };
   delete env.GIT_INDEX_FILE;
   delete env.GIT_DIR;
