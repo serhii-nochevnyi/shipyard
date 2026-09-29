@@ -132,7 +132,7 @@ const epicKey = (phase, repo) => `${String(phase ?? '')}\0${repo || ''}`;
 // "Does this ticket still need a person?" — the one question both files ask.
 //
 // @contract: merge-mode preauthorization lifts the wait; review mode needs a
-// @contract: human approval on the head even when plan-time approval exists.
+// @contract: human approval and the live guard's freshness verdict on the head are both required.
 //
 // The polarity is deliberately asymmetric. The checkpoint is recognised on a
 // TRUTHY value, so anything that reached the graph looking like a stop still
@@ -147,7 +147,7 @@ function needsHuman(ticket, row) {
     const approved = Array.isArray(s.approved_reviews) ? s.approved_reviews : [];
     const configured = Array.isArray(s.reviewer_bots) ? s.reviewer_bots : [];
     // @contract: only a positively human, current-head review answers a review checkpoint.
-    return !Boolean(author && s.head_sha && s.review_decision === 'APPROVED' && approved.some((r) => {
+    return !Boolean(author && s.head_sha && s.review_decision === 'APPROVED' && s.review_fresh === true && approved.some((r) => {
       const login = String((r.user && r.user.login) || '').toLowerCase();
       const bot = configured.some((entry) => {
         const value = String(entry).toLowerCase();

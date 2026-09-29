@@ -163,6 +163,20 @@ test('an approved review on the current head is fresh', () => {
   assert.strictEqual(out.review_fresh, true, JSON.stringify(out));
 });
 
+test('current approval rows preserve the state and positively observed GitHub user identity', () => {
+  const out = json(run(['unresolved', '27'], {
+    STUB_PR_VIEW: prView({ reviewDecision: 'APPROVED' }),
+    STUB_REVIEWS: JSON.stringify([review('alice', 'APPROVED', AFTER, HEAD_OID, 'User')]),
+  }));
+  assert.deepStrictEqual(out.approved_reviews, [{
+    author: 'alice',
+    state: 'APPROVED',
+    commit_id: HEAD_OID,
+    submitted_at: AFTER,
+    user: { login: 'alice', type: 'User' },
+  }]);
+});
+
 test('an approved decision without readable review evidence is stale', () => {
   const out = json(run(['unresolved', '27'], {
     STUB_PR_VIEW: prView({ reviewDecision: 'APPROVED' }),
