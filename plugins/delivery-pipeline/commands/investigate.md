@@ -92,45 +92,45 @@ Read `.planning/investigations/` (may not exist):
    AskUserQuestion the questions that are missing for PROBLEM.md: for whom / current
    pain / what success will be / what is definitely out of scope. Ask only what you
    cannot derive from the statement. Fill in PROBLEM.md.
-5. **Research fan-out**: build each line request from the canonical graph and
-   investigation files with `deliver-dispatch.cjs build research <INV-id>
-   --line <name>`. The builder reads `PROBLEM.md`, `RESEARCH-CONTRACT.md`,
-   `DECISIONS.md`, and the canonical ticket graph, and includes only their paths
-   and SHA-256 digests. It rejects an invalid investigation id or a missing
-   input file. It never includes file contents or a model/effort selection.
-   Pass the active runtime explicitly:
+5. **Research fan-out**: build the initial four-line request once from the
+   canonical graph and investigation files with
+   `deliver-dispatch.cjs build research <INV-id>`. The builder reads
+   `PROBLEM.md`, `RESEARCH-CONTRACT.md`, `DECISIONS.md`, and the canonical
+   ticket graph, then attaches a verified context packet with required source
+   content and digest-bound optional references. The packet has an explicit
+   empty backlog; when optional file bodies exceed the token ceiling, it keeps
+   their paths and hashes and the researcher reads only relevant files on
+   demand. It rejects an invalid investigation id or a missing input file. It
+   never chooses a model or effort. Pass the active runtime explicitly:
 
    ```bash
    node ${CLAUDE_PLUGIN_ROOT}/scripts/deliver-dispatch.cjs \
-     build research "$invId" --line "$line" --runtime "$runtime"
+     build research "$invId" --runtime "$runtime"
    ```
 
    Use the canonical line names `system-state`, `alternatives`, `constraints`,
    and `risks`. The generated request has already passed its runtime's exported
-   validator. The selected host owns runtime selection and its durable receipt;
-   do not add model or effort fields to the request. Before the fan-out, build
-   one packet for each research line with
-   `${CLAUDE_PLUGIN_ROOT}/scripts/context-packet.cjs`. Use the investigation
-   worktree as `root`, role `research`, subject `${invId}:${line.id}`, the
-   authenticated `sourceRevision`, the ADR-014 policy object and its
-   `policy_hash`, the full problem/contract reference plus every declared
-   source reference, and `roleContext: { problem_statement, source_refs }`.
-   Include the current backlog selection, source hashes and a
-   `whySelected` map. Put the resulting serializable object in
-   `line.contextPacket`; the research workflow passes it as
+   validator. The selected host owns runtime selection, model/effort resolution,
+   and its durable receipt; do not add model or effort fields to the request.
+   Claude gets one targeted packet per research line. Codex gets one packet
+   bound to the investigation and all four lines. The builder-created packets
+   use the authenticated source revision, ADR-014 policy hash, required problem
+   and contract material, and declared source references. The research workflow
+   passes each packet as
    `context.contextPacket` and fences it as DATA in each line prompt. The
    adapter validates the role, subject, policy hash, root and live source
    digests before the callback runs. Missing ids, altered sources, symlink
    escapes and a packet carrying model/capability/callback fields are hard
-   failures. The packet's explicit empty backlog and overflow record remain
+   failures. The packet's explicit empty backlog and token/omission accounting remain
    visible to the researcher; required problem, ADR and gate material is never
    summarized away.
 
-   The Codex request uses the typed `gsd-phase-researcher` role and the same
-   path/digest inputs. Its host resolves the runtime-specific selection,
-   crosses `createDispatchBoundary`, and records an application receipt. The
-   request file contains only bounded serializable inputs; the host owns
-   callbacks, capabilities, recording, and application evidence.
+   The Codex request uses the `research` role through
+   `codex-delivery-host.cjs`, with the investigation scope and verified packet.
+   That host resolves the runtime-specific selection, crosses
+   `createDispatchBoundary`, and records an application receipt. The request
+   file contains only bounded serializable inputs; the host owns callbacks,
+   capabilities, recording, and application evidence.
 
    Never call `spawn_agent`, the native Agent tool, a generic session, or a
    direct `agent()` function for a research line. There is no unverified

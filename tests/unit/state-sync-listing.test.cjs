@@ -179,6 +179,91 @@ test('skips per-ticket GitHub lookups for a ledgered merge into a landed epic', 
   assert.deepEqual(state(f)[TICKET], previous);
 });
 
+test('revalidates and records a prior landed PR after a plan rename changes its canonical branch', () => {
+  const renamedBranch = 'ticket/T-43-01-renamed-plan-title';
+  const previous = priorMergedRow(301);
+  const merged = { ...pr(301, 'MERGED', BRANCH, EPIC), mergeCommit: { oid: MERGE_SHA } };
+  const f = fixture({
+    ticket: { branch: renamedBranch },
+    previousState: { [TICKET]: previous },
+    responses: { view: { 301: merged } },
+  });
+
+  const result = run(f);
+  assert.equal(result.status, 0, result.stderr);
+  assert.ok(calls(f).some((args) => args[0] === 'pr' && args[1] === 'view' && args[2] === '301'));
+  assert.equal(state(f)[TICKET].status, 'merged');
+  assert.equal(state(f)[TICKET].branch, renamedBranch);
+  assert.equal(state(f)[TICKET].pr_branch, BRANCH);
+  assert.equal(state(f)[TICKET].recorded_pr, 301);
+  assert.equal(state(f)[TICKET].merge_sha, MERGE_SHA);
+  const ledger = JSON.parse(fs.readFileSync(path.join(f.graphDir, 'pr-ledger.json'), 'utf8'));
+  assert.deepEqual(ledger.entries[TICKET], {
+    number: 301, head: BRANCH, repo: null, created_at: ledger.entries[TICKET].created_at,
+  });
+
+  fs.writeFileSync(f.callsFile, '');
+  const repeated = run(f);
+  assert.equal(repeated.status, 0, repeated.stderr);
+  assert.equal(calls(f).some((args) => args[0] === 'pr' && args[1] === 'view' && args[2] === '301'), false);
+  assert.match(repeated.stdout, /skipped_landed=1/);
+});
+
+test('an old ledger branch does not authorize a skip after the canonical branch changes', () => {
+  const renamedBranch = 'ticket/T-43-01-renamed-plan-title';
+  const merged = { ...pr(301, 'MERGED', BRANCH, EPIC), mergeCommit: { oid: MERGE_SHA } };
+  const f = fixture({
+    ticket: { branch: renamedBranch },
+    ledger: 301,
+    previousState: { [TICKET]: priorMergedRow(301) },
+    responses: { view: { 301: merged } },
+  });
+
+  const result = run(f);
+  assert.equal(result.status, 0, result.stderr);
+  assert.ok(calls(f).some((args) => args[0] === 'pr' && args[1] === 'view' && args[2] === '301'));
+  assert.equal(state(f)[TICKET].status, 'merged');
+  assert.equal(state(f)[TICKET].branch, renamedBranch);
+  assert.equal(state(f)[TICKET].pr_branch, BRANCH);
+});
+
+test('an open ticket-ID follow-up prevents reuse of its previous landed PR', () => {
+  const renamedBranch = 'ticket/T-43-01-renamed-plan-title';
+  const previous = priorMergedRow(301);
+  const unrelatedFollowUp = { ...pr(307, 'OPEN', 'ticket/T-43-01-follow-up'), title: 'unrelated rewrite' };
+  const f = fixture({
+    ticket: { branch: renamedBranch, title: 'new delivery goal' },
+    previousState: { [TICKET]: previous },
+    ledger: 301,
+    responses: { open: [unrelatedFollowUp], review: [unrelatedFollowUp], view: { 301: pr(301, 'MERGED') } },
+  });
+
+  const result = run(f);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(state(f)[TICKET].status, 'pending');
+  assert.equal(state(f)[TICKET].pr, null);
+  assert.equal(calls(f).some((args) => args[0] === 'pr' && args[1] === 'view' && args[2] === '301'), false);
+});
+
+test('a new remote branch prevents the previous landed PR from erasing fresh work', () => {
+  const renamedBranch = 'ticket/T-43-01-renamed-plan-title';
+  const f = fixture({
+    ticket: { branch: renamedBranch },
+    ledger: 301,
+    previousState: { [TICKET]: priorMergedRow(301) },
+    responses: {
+      view: { 301: { ...pr(301, 'MERGED'), mergeCommit: { oid: MERGE_SHA } } },
+      branches: ['main', EPIC, BRANCH, renamedBranch],
+    },
+  });
+
+  const result = run(f);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(state(f)[TICKET].status, 'branched');
+  assert.equal(state(f)[TICKET].branch, renamedBranch);
+  assert.equal(state(f)[TICKET].pr, null);
+});
+
 test('finds an open ticket PR in the one bounded open listing', () => {
   const open = pr(302, 'OPEN');
   const f = fixture({ responses: { open: [open], review: [open] } });
