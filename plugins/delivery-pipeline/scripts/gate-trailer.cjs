@@ -52,9 +52,6 @@
 // same tree object and the same diff against the new base, re-judged at ~150k
 // tokens — 42% of that ticket's cost, once per cascade step per ticket.
 //
-// The tree-equal proof remains. When a sibling moves the base, a second proof
-// checks stable patch IDs, ticket path ownership, and owned blob identities.
-// A changed owned base blob or a non-owned candidate diff refuses the carry.
 //
 // So the trailer records `base_tree=` beside `head=`. A TREE, never a branch
 // name: the old base branch gets reaped, and a rule that recomputes
@@ -422,8 +419,6 @@ if (require.main === module) {
 
   // ── carry: the only writer of a CARRIED verdict ────────────────────────────
   //
-  // Re-stamps the verdict the PR already carries onto a new head only after
-  // the tree-equal proof or the owned-patch proof succeeds. Anything else —
   // a missing `base_tree`, a sha this repository does not have, either tree
   // moved — is a REFUSAL, and a refusal is not an error: the verdict is simply
   // owed again, which is what the conveyor did before this verb existed. Hence
@@ -471,7 +466,6 @@ if (require.main === module) {
       process.exit(1);
     };
 
-    // Resolve the two head trees before consulting the PR or its recorded base.
     const treeOf = (sha) => {
       const r = git(['rev-parse', '--verify', '-q', `${sha}^{tree}`]);
       return r.status === 0 && TREE_SHA.test(r.out) ? r.out : null;
@@ -541,7 +535,6 @@ if (require.main === module) {
       refuse(`--from-base does not resolve to the recorded judged base tree ${judgedBaseTree}`);
     }
 
-    // Measure the new base tree. A tree-equal carry still requires base equality.
     // `origin/<base>` when it exists, for the same reason base-merge measures
     // against it: after the sentinel squash-merges a parent through the API the
     // local branch does not move (see resolveBaseRef). No fetch — the caller has

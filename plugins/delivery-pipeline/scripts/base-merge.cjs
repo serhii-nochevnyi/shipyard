@@ -43,9 +43,6 @@
 // T-25-05, a merge whose whole tree was byte-identical cost a full re-judgement
 // at ~150k tokens, 42% of that ticket's cost, once per cascade step per ticket.
 // So after a merge it completed, this script hands the pre-merge and post-merge
-// heads and both base refs to `gate-trailer.cjs carry`. That script proves either
-// tree equality or an identical owned patch over the new base. This caller
-// makes no judgement of its own; a refusal means the verdict is owed again.
 //
 // One consequence worth naming: the carry runs BEFORE the push (this script does
 // not push), so between the two the trailer names a head origin has not seen and
