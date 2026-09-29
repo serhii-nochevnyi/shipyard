@@ -183,28 +183,8 @@ function finalizeDeliveryCommit(options) {
   if (typeof expectedSigner !== 'string' || !expectedSigner.trim()) fail('expectedSigner is required');
   const verificationEvidenceDigest = options.verificationEvidenceDigest === undefined
     || options.verificationEvidenceDigest === null ? null : options.verificationEvidenceDigest;
-  if (verificationEvidenceDigest !== null
-      && (typeof verificationEvidenceDigest !== 'string' || !/^[0-9a-f]{64}$/.test(verificationEvidenceDigest))) {
-    fail('verificationEvidenceDigest must be a SHA-256 digest');
-  }
-  if (!options.coverage || !verificationEvidenceDigest) {
-    fail('trusted finalization requires executor or fixer coverage evidence and its signed verification digest',
-      'COVERAGE_EVIDENCE_REQUIRED');
-  }
 
   const root = fs.realpathSync(worktree);
-  if (options.coverage) {
-    const coverage = options.coverage;
-    if (coverage.verification_digest !== verificationEvidenceDigest) {
-      fail('coverage verification digest differs from the signed verification evidence digest', 'COVERAGE_EVIDENCE_INVALID');
-    }
-    try {
-      validateFinalizationEvidence({ ...coverage, ticket,
-        repo: repoSlug(root, coverage.repo), repository_id: repositoryIdentity(root) });
-    } catch (error) {
-      fail(`invalid finalization coverage evidence: ${error.message}`, 'COVERAGE_EVIDENCE_INVALID');
-    }
-  }
   const env = { ...process.env, GIT_OPTIONAL_LOCKS: '0' };
   delete env.GIT_INDEX_FILE;
   delete env.GIT_DIR;
@@ -234,6 +214,26 @@ function finalizeDeliveryCommit(options) {
   const outside = [...new Set([...committed, ...status].filter((file) => !covered(file)))];
   if (outside.length) fail(`out-of-scope paths: ${outside.join(', ')}`);
   if (!status.length) fail('no worktree changes to commit');
+
+  if (verificationEvidenceDigest !== null
+      && (typeof verificationEvidenceDigest !== 'string' || !/^[0-9a-f]{64}$/.test(verificationEvidenceDigest))) {
+    fail('verificationEvidenceDigest must be a SHA-256 digest');
+  }
+  if (!options.coverage || !verificationEvidenceDigest) {
+    fail('trusted finalization requires executor or fixer coverage evidence and its signed verification digest',
+      'COVERAGE_EVIDENCE_REQUIRED');
+  }
+  const coverage = options.coverage;
+  if (coverage.verification_digest !== verificationEvidenceDigest) {
+    fail('coverage verification digest differs from the signed verification evidence digest', 'COVERAGE_EVIDENCE_INVALID');
+  }
+  try {
+    validateFinalizationEvidence({ ...coverage, ticket,
+      repo: repoSlug(root, coverage.repo), repository_id: repositoryIdentity(root) });
+  } catch (error) {
+    fail(`invalid finalization coverage evidence: ${error.message}`, 'COVERAGE_EVIDENCE_INVALID');
+  }
+
   const indexPath = path.resolve(root, git(root, ['rev-parse', '--git-path', 'index'], env).trim());
   const originalIndex = indexSnapshot(indexPath);
 
