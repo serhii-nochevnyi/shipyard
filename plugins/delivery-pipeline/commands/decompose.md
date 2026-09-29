@@ -335,6 +335,20 @@ context first, then one callback set, then materialization verification.
 
 1. Pick the phase number: the next free one (or the user's argument), and
    gather the selected ADR path(s) and the mode/granularity chosen in Step 1.
+   Build the planner request from the selected investigation or ADR and the
+   canonical graph with `deliver-dispatch.cjs build decomposition
+   <INV-id|ADR-id> --phase <N>`. Pass the active runtime explicitly:
+
+   ```bash
+   node ${CLAUDE_PLUGIN_ROOT}/scripts/deliver-dispatch.cjs \
+     build decomposition "$planningInput" --phase "$phase" --runtime "$runtime"
+   ```
+
+   The builder carries source and graph paths with SHA-256 digests, never file
+   contents, model, or effort. It validates the generated request with the
+   selected runtime's exported validator. Use that payload for the typed
+   `gsd-planner` request; the host remains responsible for runtime selection
+   and receipts.
 2. Normalize every selected ADR before invoking GSD:
    `mkdir -p .planning/.adr-ingest && node ${CLAUDE_PLUGIN_ROOT}/scripts/adr-ingest.cjs
    --input <adr-path> [--input <another-adr-path>] --output-dir .planning/.adr-ingest --json`.

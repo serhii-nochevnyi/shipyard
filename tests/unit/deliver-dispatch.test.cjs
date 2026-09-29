@@ -19,6 +19,8 @@ process.on('exit', () => {
 
 const deliverDispatch = require('../../plugins/delivery-pipeline/scripts/deliver-dispatch.cjs');
 const { validateRequest } = require('../../plugins/delivery-pipeline/scripts/claude-delivery-host.cjs');
+const claudeDecomposeHost = require('../../plugins/delivery-pipeline/scripts/claude-decompose-host.cjs');
+const codexDecomposeHost = require('../../plugins/delivery-pipeline/scripts/codex-decompose-host.cjs');
 const { validateArgs } = require('../../plugins/delivery-pipeline/scripts/codex-delivery-host.cjs');
 const { parseRequest, REQUEST_SCHEMA: ROLE_REQUEST_SCHEMA } = require('../../plugins/delivery-pipeline/scripts/claude-role-host.cjs');
 const { validateContextPacket } = require('../../plugins/delivery-pipeline/scripts/context-packet.cjs');
@@ -116,6 +118,19 @@ function builderFixture(id = 'T-11-11') {
   return fixture;
 }
 
+function planningBuilderFixture(invId = 'INV-43-15') {
+  const fixture = shipyardFixture('T-43-15');
+  const invPath = path.join(fixture.root, '.planning', 'investigations', invId);
+  fs.mkdirSync(path.join(invPath, 'research'), { recursive: true });
+  fs.writeFileSync(path.join(invPath, 'PROBLEM.md'), '# Problem\n');
+  fs.writeFileSync(path.join(invPath, 'RESEARCH-CONTRACT.md'), '# Research contract\n');
+  fs.writeFileSync(path.join(invPath, 'DECISIONS.md'), '# Decisions\n');
+  writeJson(path.join(fixture.graphDir, 'tickets.json'), {
+    tickets: { 'T-43-15': ticketRow({ phase: 43 }) },
+  });
+  return { ...fixture, invId, invPath };
+}
+
 function targetProjectFixture(id = 'T-02-02') {
   const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-deliver-dispatch-tp-'));
   initRepo(projectRoot);
@@ -171,6 +186,97 @@ test('build emits an arch-review request accepted by the Claude role host', asyn
     assert.equal(Object.prototype.hasOwnProperty.call(request.signals || {}, 'type'), false);
     assert.equal(Object.prototype.hasOwnProperty.call(request.signals || {}, 'model'), false);
     assert.equal(Object.prototype.hasOwnProperty.call(request.signals || {}, 'effort'), false);
+  } finally {
+    cleanup(fixture.root);
+  }
+});
+
+test('research and decomposition builders round-trip through both runtimes’ real validators', () => {
+  const fixture = planningBuilderFixture();
+  const sourcePaths = ['PROBLEM.md', 'RESEARCH-CONTRACT.md', 'DECISIONS.md']
+    .map((name) => fs.realpathSync(path.join(fixture.invPath, name)));
+  sourcePaths.push(fs.realpathSync(path.join(fixture.graphDir, 'tickets.json')));
+  const sourceRefs = sourcePaths.map((file) => ({
+    path: file,
+    sha256: crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex'),
+  }));
+  try {
+    for (const [role, argv] of [
+      ['research', ['research', fixture.invId, '--line', 'system-state']],
+      ['decomposition', ['decomposition', fixture.invId, '--phase', '44']],
+    ]) {
+      for (const runtime of ['claude', 'codex']) {
+        const request = deliverDispatch.build([...argv, '--runtime', runtime], {
+          cwd: fixture.root,
+          graphDir: fixture.graphDir,
+        });
+        let accepted;
+        if (role === 'research' && runtime === 'claude') {
+          accepted = validateRequest('investigation-research', request);
+          assert.equal(accepted.workflow, 'investigation-research');
+          assert.equal(request.scope.ticket, fixture.invId);
+          assert.equal(request.scope.phase, 43);
+          assert.equal(request.args.lines[0].id, 'system-state');
+          assert.equal(request.args.sourceRefs.length, 4);
+          assert.deepEqual(request.args.sourceRefs, sourceRefs);
+          assert.equal(Object.hasOwn(request.args.lines[0], 'model'), false);
+          assert.equal(Object.hasOwn(request.args.lines[0], 'effort'), false);
+        } else if (role === 'decomposition' && runtime === 'claude') {
+          accepted = claudeDecomposeHost.canonicalRequest(request);
+          assert.equal(accepted.role, 'gsd-planner');
+          assert.equal(accepted.phase, 44);
+          assert.equal(accepted.worktree, fs.realpathSync(fixture.root));
+          for (const source of sourceRefs) {
+            assert.ok(request.prompt.includes(source.path));
+            assert.ok(request.prompt.includes(source.sha256));
+          }
+        } else {
+          accepted = codexDecomposeHost.requestValue(request);
+          assert.equal(accepted.gsd_role, role === 'research' ? 'gsd-phase-researcher' : 'gsd-planner');
+          if (role === 'research') assert.ok(request.prompt.includes('system-state'));
+          for (const source of sourceRefs) {
+            assert.ok(request.prompt.includes(source.path));
+            assert.ok(request.prompt.includes(source.sha256));
+          }
+        }
+        assert.ok(accepted);
+        assert.equal(JSON.stringify(request).includes('"model"'), false);
+        assert.equal(JSON.stringify(request).includes('"effort"'), false);
+      }
+    }
+  } finally {
+    cleanup(fixture.root);
+  }
+});
+
+test('planning builders are deterministic and missing PROBLEM.md exits 2 naming that input', () => {
+  const fixture = planningBuilderFixture('INV-43-16');
+  const args = ['research', fixture.invId, '--line', 'risks', '--runtime', 'codex'];
+  try {
+    const first = deliverDispatch.build(args, { cwd: fixture.root, graphDir: fixture.graphDir });
+    const second = deliverDispatch.build(args, { cwd: fixture.root, graphDir: fixture.graphDir });
+    assert.deepEqual(second, first);
+    fs.rmSync(path.join(fixture.invPath, 'PROBLEM.md'));
+    const result = spawnSync(process.execPath, [
+      path.resolve(__dirname, '../../plugins/delivery-pipeline/scripts/deliver-dispatch.cjs'),
+      'build', ...args,
+    ], {
+      cwd: fixture.root,
+      encoding: 'utf8',
+      env: { ...process.env, SHIPYARD_GRAPH_DIR: fixture.graphDir },
+    });
+    assert.equal(result.status, 2);
+    assert.match(result.stderr, /PROBLEM\.md/);
+    const invalid = spawnSync(process.execPath, [
+      path.resolve(__dirname, '../../plugins/delivery-pipeline/scripts/deliver-dispatch.cjs'),
+      'build', 'research', 'not-an-investigation', '--line', 'system-state',
+    ], {
+      cwd: fixture.root,
+      encoding: 'utf8',
+      env: { ...process.env, SHIPYARD_GRAPH_DIR: fixture.graphDir },
+    });
+    assert.equal(invalid.status, 2);
+    assert.match(invalid.stderr, /not-an-investigation/);
   } finally {
     cleanup(fixture.root);
   }

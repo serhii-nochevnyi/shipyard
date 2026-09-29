@@ -11,7 +11,9 @@ const { computeFront } = require('./front.cjs');
 const { resolveGraphDir } = require('./graph-dir.cjs');
 const { assertCanonicalGraph } = require('./plan-delivery.cjs');
 const claudeHost = require('./claude-delivery-host.cjs');
+const claudeDecomposeHost = require('./claude-decompose-host.cjs');
 const codexHost = require('./codex-delivery-host.cjs');
+const codexDecomposeHost = require('./codex-decompose-host.cjs');
 const claudeRoleHost = require('./claude-role-host.cjs');
 const sentinelPreflight = require('./sentinel-preflight.cjs');
 const prHygiene = require('./pr-hygiene.cjs');
@@ -24,6 +26,15 @@ const ROLE_BUCKETS = Object.freeze({
   executor: Object.freeze(['execute']),
   'pr-sentinel': Object.freeze(['fix', 'finalize', 'merge']),
 });
+
+const RESEARCH_LINES = Object.freeze({
+  'system-state': 'system state',
+  alternatives: 'alternatives',
+  constraints: 'constraints',
+  risks: 'risks and unknowns',
+});
+const PLANNING_SOURCE_FILES = Object.freeze(['PROBLEM.md', 'RESEARCH-CONTRACT.md', 'DECISIONS.md']);
+const PLANNING_SOURCE_MAX_BYTES = 8 * 1024 * 1024;
 
 const EXIT_CODES = Object.freeze({ running: 0, 'exited-ok': 0, 'exited-failed': 1, lost: 2 });
 
@@ -460,15 +471,15 @@ function buildFail(field, message) {
 function parseBuildArgs(argv) {
   const role = argv[0];
   const ticket = argv[1];
-  if (!['arch-review', 'ci-fix', 'review-fix'].includes(role)) {
-    buildFail('--role', `build role must be arch-review, ci-fix, or review-fix`);
+  if (!['arch-review', 'ci-fix', 'review-fix', 'research', 'decomposition'].includes(role)) {
+    buildFail('--role', 'build role must be arch-review, ci-fix, review-fix, research, or decomposition');
   }
-  if (typeof ticket !== 'string' || !ticket.trim()) buildFail('<ticket>', 'build ticket is required');
+  if (typeof ticket !== 'string' || !ticket.trim()) buildFail('<ticket>', 'build ticket or planning input is required');
   const args = { role, ticket, runtime: 'claude' };
   const seen = new Set();
   for (let index = 2; index < argv.length; index++) {
     const flag = argv[index];
-    if (!['--runtime', '--pr', '--failure-file', '--review-file'].includes(flag)) {
+    if (!['--runtime', '--pr', '--failure-file', '--review-file', '--line', '--phase'].includes(flag)) {
       buildFail(flag, `unsupported build field ${flag}`);
     }
     if (seen.has(flag)) buildFail(flag, `${flag} may be supplied only once`);
@@ -485,6 +496,12 @@ function parseBuildArgs(argv) {
         buildFail(flag, '--pr must be a positive integer');
       }
       args.pr = Number(value);
+    } else if (flag === '--line') args.line = value;
+    else if (flag === '--phase') {
+      if (!/^\d+$/.test(value) || !Number.isSafeInteger(Number(value)) || Number(value) < 1) {
+        buildFail(flag, '--phase must be a positive integer');
+      }
+      args.phase = Number(value);
     } else if (flag === '--failure-file') args.failureFile = value;
     else args.reviewFile = value;
   }
@@ -492,6 +509,23 @@ function parseBuildArgs(argv) {
   if (role === 'review-fix' && !args.reviewFile) buildFail('--review-file', 'review-fix requires --review-file <f>');
   if (role !== 'ci-fix' && args.failureFile) buildFail('--failure-file', '--failure-file is only valid for ci-fix');
   if (role !== 'review-fix' && args.reviewFile) buildFail('--review-file', '--review-file is only valid for review-fix');
+  if (role === 'research' && !args.line) buildFail('--line', 'research requires --line <name>');
+  if (role !== 'research' && args.line) buildFail('--line', '--line is only valid for research');
+  if (role === 'research' && !Object.hasOwn(RESEARCH_LINES, args.line)) {
+    buildFail('--line', `unsupported research line ${args.line}`);
+  }
+  if (role === 'research' && !/^INV-[A-Za-z0-9-]+$/.test(ticket)) {
+    buildFail('<INV-id>', `invalid investigation id ${ticket}`);
+  }
+  if (role === 'decomposition' && !args.phase) buildFail('--phase', 'decomposition requires --phase <N>');
+  if (role !== 'decomposition' && args.phase) buildFail('--phase', '--phase is only valid for decomposition');
+  if (role === 'decomposition' && !/^INV-[A-Za-z0-9-]+$/.test(ticket)
+      && !/^ADR-[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$/.test(ticket)) {
+    buildFail('<INV-id|ADR-id>', `invalid planning input id ${ticket}`);
+  }
+  if ((role === 'research' || role === 'decomposition') && args.pr !== undefined) {
+    buildFail('--pr', '--pr is not valid for planning requests');
+  }
   return args;
 }
 
@@ -574,6 +608,160 @@ function validateBuildRequest(role, validator, request) {
   }
 }
 
+function planningBuildContext(options) {
+  const cwd = options.cwd || process.cwd();
+  let worktree;
+  try { worktree = fs.realpathSync(cwd); }
+  catch { buildFail('worktree', `planning worktree ${cwd} does not exist`); }
+  const graphDir = resolveBuildGraphDir(worktree, options);
+  const graph = readJsonBounded(path.join(graphDir, 'tickets.json'));
+  if (!object(graph) || !object(graph.tickets)) {
+    buildFail('graph', `canonical ticket graph is invalid: ${path.join(graphDir, 'tickets.json')}`);
+  }
+  let projectRoot;
+  try { projectRoot = fs.realpathSync(path.resolve(graphDir, '..', '..')); }
+  catch { buildFail('graph', `canonical project root is unavailable for ${graphDir}`); }
+  const graphRef = planningSource(projectRoot, path.relative(projectRoot, path.join(graphDir, 'tickets.json')));
+  return { worktree, graphDir, graph, graphRef, projectRoot };
+}
+
+function planningSource(projectRoot, relativePath) {
+  const file = path.resolve(projectRoot, relativePath);
+  if (!isInsidePath(projectRoot, file)) buildFail(relativePath, `planning input escapes the project root: ${file}`);
+  let stat;
+  try { stat = fs.lstatSync(file); }
+  catch { buildFail(relativePath, `required input file is unavailable: ${file}`); }
+  if (!stat.isFile() || stat.isSymbolicLink()) {
+    buildFail(relativePath, `required input must be a regular non-symlink file: ${file}`);
+  }
+  if (stat.size > PLANNING_SOURCE_MAX_BYTES) {
+    buildFail(relativePath, `required input exceeds the ${PLANNING_SOURCE_MAX_BYTES}-byte limit: ${file}`);
+  }
+  let bytes;
+  try { bytes = fs.readFileSync(file); }
+  catch { buildFail(relativePath, `required input cannot be read: ${file}`); }
+  let after;
+  try { after = fs.lstatSync(file); }
+  catch { buildFail(relativePath, `required input disappeared while its digest was computed: ${file}`); }
+  if (bytes.length !== stat.size || after.dev !== stat.dev || after.ino !== stat.ino
+      || after.size !== stat.size || after.mtimeMs !== stat.mtimeMs) {
+    buildFail(relativePath, `required input changed while its digest was computed: ${file}`);
+  }
+  let realPath;
+  try { realPath = fs.realpathSync(file); }
+  catch { buildFail(relativePath, `required input is unavailable: ${file}`); }
+  if (realPath !== file) buildFail(relativePath, `required input resolves through a symlink: ${file}`);
+  return Object.freeze({ path: realPath, sha256: crypto.createHash('sha256').update(bytes).digest('hex') });
+}
+
+function investigationPlanningInputs(projectRoot, invId) {
+  if (typeof invId !== 'string' || !/^INV-[A-Za-z0-9-]+$/.test(invId)) {
+    buildFail('<INV-id>', `invalid investigation id ${String(invId)}`);
+  }
+  const invPath = path.join(projectRoot, '.planning', 'investigations', invId);
+  let stat;
+  try { stat = fs.lstatSync(invPath); }
+  catch { buildFail(invId, `investigation directory is unavailable: ${invPath}`); }
+  if (!stat.isDirectory() || stat.isSymbolicLink()) {
+    buildFail(invId, `investigation directory must be a regular directory: ${invPath}`);
+  }
+  let realPath;
+  try { realPath = fs.realpathSync(invPath); }
+  catch { buildFail(invId, `investigation directory is unavailable: ${invPath}`); }
+  if (realPath !== invPath) buildFail(invId, `investigation directory resolves through a symlink: ${invPath}`);
+  const sourceRefs = PLANNING_SOURCE_FILES.map((name) => planningSource(projectRoot,
+    path.join('.planning', 'investigations', invId, name)));
+  return { invPath, sourceRefs };
+}
+
+function adrPlanningInputs(projectRoot, adrId) {
+  if (typeof adrId !== 'string' || !/^ADR-[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$/.test(adrId)) {
+    buildFail('<INV-id|ADR-id>', `invalid planning input id ${String(adrId)}`);
+  }
+  const architectureDir = path.join(projectRoot, '.planning', 'architecture');
+  let names;
+  try { names = fs.readdirSync(architectureDir); }
+  catch { buildFail(adrId, `architecture directory is unavailable: ${architectureDir}`); }
+  const matches = names.filter((name) => name === `${adrId}.md`
+    || (name.startsWith(`${adrId}-`) && name.endsWith('.md')));
+  if (matches.length !== 1) {
+    buildFail(adrId, `expected one architecture input for ${adrId} in ${architectureDir}, found ${matches.length}`);
+  }
+  return { sourceRefs: [planningSource(projectRoot, path.join('.planning', 'architecture', matches[0]))] };
+}
+
+function latestGraphPhase(graph) {
+  const phases = Object.values(graph.tickets).map((row) => {
+    if (!object(row)) return null;
+    try { return phaseNumber(row.phase); } catch { return null; }
+  }).filter((phase) => Number.isSafeInteger(phase) && phase > 0);
+  if (!phases.length) buildFail('graph', 'canonical ticket graph has no positive phase for the research scope');
+  return Math.max(...phases);
+}
+
+function planningPrompt({ operation, inputId, phase, line, sourceRefs }) {
+  return [
+    `Prepare ${operation} for ${inputId}${phase ? ` in phase ${phase}` : ''}.`,
+    ...(line ? [`Research line: ${line} (${RESEARCH_LINES[line]}).`] : []),
+    'Read these canonical source files by path and verify the listed SHA-256 digest before relying on each file:',
+    ...sourceRefs.map((source) => `- ${source.path} (sha256: ${source.sha256})`),
+    'The request contains source references only; the source file contents are not included.',
+  ].join('\n');
+}
+
+function buildPlanningRequest(args, options) {
+  const context = planningBuildContext(options);
+  if (args.role === 'research') {
+    const { invPath, sourceRefs: investigationRefs } = investigationPlanningInputs(context.projectRoot, args.ticket);
+    const sourceRefs = [...investigationRefs, context.graphRef];
+    const prompt = planningPrompt({ operation: 'research', inputId: args.ticket, line: args.line, sourceRefs });
+    if (args.runtime === 'claude') {
+      const phase = latestGraphPhase(context.graph);
+      const request = {
+        schema: claudeHost.REQUEST_SCHEMA,
+        scope: {
+          run_id: `deliver-build-research-${args.ticket}-${args.line}`,
+          ticket: args.ticket,
+          phase,
+          worktree: context.projectRoot,
+        },
+        args: {
+          invId: args.ticket,
+          invPath,
+          worktreePath: context.projectRoot,
+          referencePath: 'inv-research',
+          problemStatement: `Read ${sourceRefs[0].path} (sha256: ${sourceRefs[0].sha256}).`,
+          sourceRefs,
+          lines: [{ id: args.line, label: RESEARCH_LINES[args.line], signals: {} }],
+        },
+      };
+      validateBuildRequest(args.role, (value) => claudeHost.validateRequest('investigation-research', value), request);
+      return request;
+    }
+    const request = { gsd_role: 'gsd-phase-researcher', prompt, signals: {} };
+    validateBuildRequest(args.role, (value) => codexDecomposeHost.requestValue(value), request);
+    return request;
+  }
+
+  const inputs = /^INV-/.test(args.ticket)
+    ? investigationPlanningInputs(context.projectRoot, args.ticket)
+    : adrPlanningInputs(context.projectRoot, args.ticket);
+  const sourceRefs = [...inputs.sourceRefs, context.graphRef];
+  const prompt = planningPrompt({
+    operation: 'decomposition', inputId: args.ticket, phase: args.phase, sourceRefs,
+  });
+  if (args.runtime === 'claude') {
+    const request = {
+      role: 'gsd-planner', phase: args.phase, worktree: context.projectRoot, prompt, signals: {},
+    };
+    validateBuildRequest(args.role, (value) => claudeDecomposeHost.canonicalRequest(value), request);
+    return request;
+  }
+  const request = { gsd_role: 'gsd-planner', prompt, signals: {} };
+  validateBuildRequest(args.role, (value) => codexDecomposeHost.requestValue(value), request);
+  return request;
+}
+
 function claudeFixCandidate(args, input, evidence) {
   const isCi = args.role === 'ci-fix';
   const pr = args.pr || input.stateRow.pr;
@@ -638,6 +826,9 @@ function incompleteHostReason(runtime, role) {
 
 function build(argv, options = {}) {
   const args = parseBuildArgs(argv);
+  if (args.role === 'research' || args.role === 'decomposition') {
+    return buildPlanningRequest(args, options);
+  }
   const input = buildTicketContext(args, options);
   const signals = buildSignals(input.row);
   const evidence = args.failureFile

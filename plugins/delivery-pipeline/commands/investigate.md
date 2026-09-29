@@ -92,31 +92,24 @@ Read `.planning/investigations/` (may not exist):
    AskUserQuestion the questions that are missing for PROBLEM.md: for whom / current
    pain / what success will be / what is definitely out of scope. Ask only what you
    cannot derive from the statement. Fill in PROBLEM.md.
-5. **Research fan-out**: prepare the four declared line selections for the fixed
-   runtime and route them through its shipped host. Never call the compatibility
-   `pipeline-config.cjs model` reader, compose a model or effort in this command,
-   or let a session/default selection leak into the launch. For Claude, resolve
-   each selection through the routed `pipeline-config.cjs resolveDispatch`
-   bridge before launch. The host boundary verifies application of that exact
-   selection. The base is Opus/medium and only an explicit
-   `complexity: very-complex` signal escalates research to Opus/high; the
-   `alternatives` line does not promote the rung. For Codex, the base is
-   Sol/high and the same explicit very-complex signal escalates to Sol/xhigh.
-   Keep each line's declared signals and context attached to that line. For
-   Codex, send each line's signals to its host request — for example,
-   `type: alternatives` or `complexity: very-complex`. The host resolves and
-   applies the selection; the command does not pass model, agent-file, or
-   effort overrides. Do not reuse one line's selection for another.
+5. **Research fan-out**: build each line request from the canonical graph and
+   investigation files with `deliver-dispatch.cjs build research <INV-id>
+   --line <name>`. The builder reads `PROBLEM.md`, `RESEARCH-CONTRACT.md`,
+   `DECISIONS.md`, and the canonical ticket graph, and includes only their paths
+   and SHA-256 digests. It rejects an invalid investigation id or a missing
+   input file. It never includes file contents or a model/effort selection.
+   Pass the active runtime explicitly:
 
-   For Claude, invoke the fixed investigation entry point once with the bounded
-   request file containing the four line selections:
-
-   ```text
-   node ${CLAUDE_PLUGIN_ROOT}/scripts/claude-investigation-host.cjs \
-     --request-file /absolute/path/investigation-request.json
+   ```bash
+   node ${CLAUDE_PLUGIN_ROOT}/scripts/deliver-dispatch.cjs \
+     build research "$invId" --line "$line" --runtime "$runtime"
    ```
 
-   Before the fan-out, build one packet for each research line with
+   Use the canonical line names `system-state`, `alternatives`, `constraints`,
+   and `risks`. The generated request has already passed its runtime's exported
+   validator. The selected host owns runtime selection and its durable receipt;
+   do not add model or effort fields to the request. Before the fan-out, build
+   one packet for each research line with
    `${CLAUDE_PLUGIN_ROOT}/scripts/context-packet.cjs`. Use the investigation
    worktree as `root`, role `research`, subject `${invId}:${line.id}`, the
    authenticated `sourceRevision`, the ADR-014 policy object and its
@@ -133,17 +126,11 @@ Read `.planning/investigations/` (may not exist):
    visible to the researcher; required problem, ADR and gate material is never
    summarized away.
 
-   For Codex, call the fixed delivery host once per research line. Each request
-   uses `role: research`, that line's signals and context packet. The host
-   resolves the runtime-specific selection, crosses `createDispatchBoundary`,
-   and records an application receipt. The request file contains only bounded
-   serializable inputs; the host owns callbacks, capabilities, recording, and
-   application evidence.
-
-   ```bash
-   node ${CLAUDE_PLUGIN_ROOT}/scripts/codex-delivery-host.cjs \
-     --args-file /absolute/path/research-line-request.json
-   ```
+   The Codex request uses the typed `gsd-phase-researcher` role and the same
+   path/digest inputs. Its host resolves the runtime-specific selection,
+   crosses `createDispatchBoundary`, and records an application receipt. The
+   request file contains only bounded serializable inputs; the host owns
+   callbacks, capabilities, recording, and application evidence.
 
    Never call `spawn_agent`, the native Agent tool, a generic session, or a
    direct `agent()` function for a research line. There is no unverified
