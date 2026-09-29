@@ -81,3 +81,25 @@ test('only pinned PLAN text is parsed; changed scoped tree fails; sealed digest 
     assert.equal(readEvidence(first.path, first.digest), null);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
+
+test('only an admitted command with a clean, completed nonzero exit is retryable', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'host-verification-retry-'));
+  const planText = '## Verification commands\n- `node check.cjs`';
+  const base = { planText, worktree: root, stateRoot: path.join(root, 'state'),
+    ticket: 'T-43-16', treeDigest: () => 'stable' };
+  try {
+    assert.throws(() => verifyPlan({ ...base, allowList: [], hostRunner: { run() {
+      assert.fail('an unmatched PLAN command must not run');
+    } } }), (error) => error.retryable === false && error.command?.join(' ') === 'node check.cjs');
+    assert.throws(() => verifyPlan({ ...base,
+      allowList: [{ argv: ['node', 'check.cjs'], profile: 'host' }],
+      hostRunner: { run() { return { status: 4, stdout: '', stderr: 'failed' }; } },
+    }), (error) => error.retryable === true && error.command?.join(' ') === 'node check.cjs');
+    let tree = 0;
+    assert.throws(() => verifyPlan({ ...base,
+      allowList: [{ argv: ['node', 'check.cjs'], profile: 'host' }],
+      treeDigest: () => String(tree++),
+      hostRunner: { run() { return { status: 4, stdout: '', stderr: 'failed' }; } },
+    }), (error) => error.retryable === false && /changed scoped tree/.test(error.message));
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});

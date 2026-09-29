@@ -263,6 +263,9 @@ function verifyPlan({ planText, allowList, worktree, stateRoot, ticket, planSha2
     error.status = 'verification_failed';
     error.command = failure?.argv || null;
     error.evidence_digest = sealed.digest;
+    error.retryable = Boolean(failure && failure.outcome === 'failed' && failure.profile
+      && Number.isSafeInteger(failure.status) && failure.status !== 0 && !failure.signal
+      && !failure.timed_out && !failure.error_code && failure.tree_before === failure.tree_after);
     throw error;
   }
   return sealed;

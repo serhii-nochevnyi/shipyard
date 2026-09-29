@@ -180,6 +180,12 @@ function finalizeDeliveryCommit(options) {
     fail('files_modified must contain valid repository-relative declarations');
   }
   if (typeof expectedSigner !== 'string' || !expectedSigner.trim()) fail('expectedSigner is required');
+  const verificationEvidenceDigest = options.verificationEvidenceDigest === undefined
+    || options.verificationEvidenceDigest === null ? null : options.verificationEvidenceDigest;
+  if (verificationEvidenceDigest !== null
+      && (typeof verificationEvidenceDigest !== 'string' || !/^[0-9a-f]{64}$/.test(verificationEvidenceDigest))) {
+    fail('verificationEvidenceDigest must be a SHA-256 digest');
+  }
 
   const root = fs.realpathSync(worktree);
   const env = { ...process.env, GIT_OPTIONAL_LOCKS: '0' };
@@ -248,13 +254,20 @@ function finalizeDeliveryCommit(options) {
     if (options.expectedTree !== undefined && tree !== requireOid(options.expectedTree, 'expectedTree')) {
       fail('scoped tree differs from expectedTree');
     }
+    const verificationTrailer = verificationEvidenceDigest
+      ? `\n\nShipyard-Verification-Evidence: ${verificationEvidenceDigest}` : '';
     const commit = git(root, ['commit-tree', '-S', tree, '-p', head], privateEnv, {
-      input: `${subject}\n`,
+      input: `${subject}${verificationTrailer}\n`,
     }).trim();
     git(root, ['verify-commit', commit], env);
     const signature = git(root, ['show', '-s', '--format=%G?%x00%GF', commit], env).trim().split('\0');
     if (!['G', 'U'].includes(signature[0]) || signature[1] !== expectedSigner.trim()) {
       fail('commit signature does not match expectedSigner');
+    }
+    const recordedEvidenceDigest = verificationEvidenceDigestFromMessage(
+      git(root, ['show', '-s', '--format=%B', commit], env));
+    if (recordedEvidenceDigest !== (verificationEvidenceDigest || undefined)) {
+      fail('signed commit does not bind the supplied verification evidence digest');
     }
     const lockPath = `${indexPath}.lock`;
     let lockFd;
@@ -288,10 +301,20 @@ function finalizeDeliveryCommit(options) {
       if (lockFd !== undefined) fs.closeSync(lockFd);
       if (ownsLock) fs.rmSync(lockPath, { force: true });
     }
-    return Object.freeze({ ticket, worktree: root, base, previousHead: head, commit, tree, signer: signature[1], changed: staged });
+    return Object.freeze({ ticket, worktree: root, base, previousHead: head, commit, tree, signer: signature[1], changed: staged,
+      ...(verificationEvidenceDigest ? { verificationEvidenceDigest } : {}) });
   } finally {
     fs.rmSync(temporary, { recursive: true, force: true });
   }
+}
+
+function verificationEvidenceDigestFromMessage(message) {
+  if (typeof message !== 'string') return null;
+  const trailers = message.split(/\r?\n/).filter((line) => line.startsWith('Shipyard-Verification-Evidence:'));
+  if (!trailers.length) return undefined;
+  if (trailers.length !== 1) return null;
+  const match = /^Shipyard-Verification-Evidence: ([0-9a-f]{64})$/.exec(trailers[0]);
+  return match ? match[1] : null;
 }
 
 function scopedTree(options) {
@@ -322,4 +345,4 @@ function scopedTree(options) {
   }
 }
 
-module.exports = Object.freeze({ finalizeDeliveryCommit, scopedTree });
+module.exports = Object.freeze({ finalizeDeliveryCommit, scopedTree, verificationEvidenceDigestFromMessage });

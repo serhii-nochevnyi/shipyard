@@ -121,6 +121,27 @@ test('creates a verified signed commit and refreshes the ordinary index to a cle
   assert.equal(git(repo, 'show', 'HEAD:outside.txt'), 'base');
 });
 
+test('binds the sealed verification digest into the signed finalization commit', () => {
+  const { repo, options } = makeRepo();
+  const digest = 'a'.repeat(64);
+  fs.writeFileSync(path.join(repo, 'src', 'owned.txt'), 'verified\n');
+
+  const result = finalizeDeliveryCommit({ ...options, verificationEvidenceDigest: digest });
+
+  assert.equal(result.verificationEvidenceDigest, digest);
+  assert.equal(git(repo, 'show', '-s', '--format=%B', result.commit).trim().split('\n').at(-1),
+    `Shipyard-Verification-Evidence: ${digest}`);
+  assert.equal(git(repo, 'show', '-s', '--format=%G?%x00%GF', result.commit), `G\0${signer}`);
+});
+
+test('rejects a malformed verification evidence digest before finalizing', () => {
+  const { repo, head, options } = makeRepo();
+  fs.writeFileSync(path.join(repo, 'src', 'owned.txt'), 'changed\n');
+  assert.throws(() => finalizeDeliveryCommit({ ...options, verificationEvidenceDigest: 'not-a-digest' }),
+    /verificationEvidenceDigest must be a SHA-256 digest/);
+  assert.equal(git(repo, 'rev-parse', 'HEAD'), head);
+});
+
 test('rejects stale branch or HEAD before changing the branch', () => {
   const { repo, head, options } = makeRepo();
   fs.writeFileSync(path.join(repo, 'src', 'owned.txt'), 'changed\n');

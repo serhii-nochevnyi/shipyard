@@ -20,8 +20,11 @@ const {
   requestValue,
   runCli,
   validateArgs,
+  verificationFailureContext,
+  verificationFailureReason,
 } = require('../../plugins/delivery-pipeline/scripts/codex-delivery-host.cjs');
 const { createRunController } = require('../../plugins/delivery-pipeline/scripts/run-controller.cjs');
+const { createRunScope } = require('../../plugins/delivery-pipeline/scripts/run-scope.cjs');
 const { SCRATCH_FILES } = require('../../plugins/delivery-pipeline/scripts/conveyor-scratch.cjs');
 
 const capabilities = {
@@ -112,6 +115,9 @@ function fixture(config = {}) {
   fs.writeFileSync(path.join(graphDir, 'tickets.json'), JSON.stringify({ tickets: {
     'T-38-04': { branch: 'ticket/T-38-04', pr_base: 'main', plan: '.planning/PLAN.md', files: ['src/owned.txt'] },
   } }));
+  fs.writeFileSync(path.join(graphDir, 'delivery-state.json'), JSON.stringify({
+    'T-38-04': { branch: 'ticket/T-38-04', base: 'main', status: 'pending' },
+  }));
   const resolution = policy.resolveDispatch({ runtime: 'codex', role: 'research' });
   const file = resolution.agent_file;
   const content = [
@@ -165,6 +171,22 @@ function fixture(config = {}) {
   const verification = { commands: [{ id: 'unit', executable: process.execPath, argv: ['-e', 'process.exit(0)'],
     timeoutMs: 5000, maxOutputBytes: 4096 }] };
   return { root, agentDir, project, graphDir, plan, storageRoot, scope, host, calls, file, fileDigest, base, verification };
+}
+
+function configureMergedParentBase(f) {
+  const parentBranch = 'ticket/T-38-03-merged-parent';
+  const graphFile = path.join(f.graphDir, 'tickets.json');
+  const graph = JSON.parse(fs.readFileSync(graphFile, 'utf8'));
+  Object.assign(graph.tickets['T-38-04'], {
+    pr_base: parentBranch, primary_parent: 'T-38-03', epic: 'main',
+  });
+  graph.tickets['T-38-03'] = { branch: parentBranch, pr_base: 'main', epic: 'main', files: ['src/owned.txt'] };
+  fs.writeFileSync(graphFile, JSON.stringify(graph));
+  const boardFile = path.join(f.graphDir, 'delivery-state.json');
+  const board = JSON.parse(fs.readFileSync(boardFile, 'utf8'));
+  Object.assign(board['T-38-04'], { base: 'main', epic: 'main' });
+  board['T-38-03'] = { branch: parentBranch, base: 'main', epic: 'main', status: 'merged', merged_into: 'main' };
+  fs.writeFileSync(boardFile, JSON.stringify(board));
 }
 
 function hostRunner(spy = []) {
@@ -689,6 +711,37 @@ test('recovery resumes the unchanged candidate without an executor launch and re
   } finally { clean(f); }
 });
 
+test('executor and recovery use the live board base after the recorded primary parent is merged', async () => {
+  const f = fixture();
+  try {
+    configureMergedParentBase(f);
+    assert.equal(spawnSync('git', ['-C', f.root, 'show-ref', '--verify', '--hash',
+      'refs/heads/ticket/T-38-03-merged-parent'], { encoding: 'utf8' }).status !== 0, true);
+    const error = await failedFinalization(f);
+    const candidate = JSON.parse(fs.readFileSync(candidatePath(f, error.candidate_id), 'utf8')).payload;
+    assert.equal(candidate.base_ref, 'main');
+    assert.equal(candidate.expected_base, f.base);
+    const result = await recovery(f).resumeFinalization(error.candidate_id, liveScope(f));
+    assert.equal(result.status, 'committed');
+    assert.equal(git(f.root, 'rev-parse', 'HEAD^'), f.base);
+  } finally { clean(f); }
+});
+
+test('executor refuses a changed live base that is not justified by a merged parent', async () => {
+  const f = fixture();
+  try {
+    configureMergedParentBase(f);
+    const boardFile = path.join(f.graphDir, 'delivery-state.json');
+    const board = JSON.parse(fs.readFileSync(boardFile, 'utf8'));
+    board['T-38-03'].status = 'pr-open';
+    fs.writeFileSync(boardFile, JSON.stringify(board));
+    await assert.rejects(() => delivery(f).run({ role: 'executor', dispatch_id: 'unproved-live-base',
+      context: { prompt: 'Implement the scoped ticket.' } }),
+    (error) => error.code === 'BASE_MISMATCH' && /neither its open primary parent nor its merged destination/.test(error.message));
+    assert.equal(f.calls.length, 0, 'the executor must not launch on an unproved base');
+  } finally { clean(f); }
+});
+
 test('verification failures, missing specs and tree-changing checks refuse before any candidate', async () => {
   const f = fixture();
   try {
@@ -726,6 +779,7 @@ test('Codex host verification refuses an admitted failure without finalizing', a
     assert.equal(result.status, 'verification_failed');
     assert.deepEqual(result.command, ['node', 'check.cjs']);
     assert.match(result.evidence_digest, /^[0-9a-f]{64}$/);
+    assert.equal(result.retryable, true);
     assert.deepEqual(result.receipt, f.host.recorder.getVerifiedRecord(result.receipt.dispatch_id).receipt);
     assert.equal(finalized, 0);
   } finally { clean(f); }
@@ -742,6 +796,43 @@ test('Codex host verification passes sealed evidence digest to trusted finalizer
       finalizeCommit(input) { digest = input.verificationEvidenceDigest; throw new Error('stop after evidence'); },
     }).run({ role: 'executor', context: { prompt: 'Implement.' } }), /stop after evidence/);
     assert.match(digest, /^[0-9a-f]{64}$/);
+  } finally { clean(f); }
+});
+
+test('Codex retries one failed plan command with sealed diagnostics and binds the passing digest', async () => {
+  const f = fixture();
+  const controllerOwner = 'verification-retry-owner';
+  const controller = createRunController({ storeDir: path.join(f.storageRoot, 'retry-controller'), ownerId: controllerOwner });
+  controller.begin(createRunScope({
+    run_id: f.scope.run_id, repository_id: 'shipyard/test', phase: f.scope.phase,
+    ticket: f.scope.ticket, worktree: f.root, runtime: 'codex', provider: 'openai',
+    owner_id: controllerOwner,
+    dispatch: { dispatch_id: 'verification-retry-initial', role: 'executor', model: 'gpt-6-luna', effort: 'max' },
+  }));
+  let checks = 0;
+  try {
+    approvedPlan(f, ['node check.cjs']);
+    const launch = f.host.launch.bind(f.host);
+    f.host.launch = (selection, context) => ({ ...launch(selection, context), launch_id: `codex-delivery-${f.calls.length}` });
+    const result = await delivery(f, {
+      controller,
+      verification: undefined,
+      verificationAllowList: [{ argv: ['node', 'check.cjs'], profile: 'host' }],
+      hostVerificationRunner: { run() {
+        checks++;
+        return { status: checks === 1 ? 7 : 0, stdout: '', stderr: checks === 1 ? 'failed' : '', backend: { kind: 'host' } };
+      } },
+    }).run({ role: 'executor', dispatch_id: 'verification-retry-initial', context: { prompt: 'Implement.' } });
+    assert.equal(result.artifact.status, 'committed');
+    assert.equal(checks, 2);
+    assert.equal(f.calls.length, 2);
+    assert.match(f.calls[1].context.prompt, /<HOST-VERIFICATION-FAILURE>/);
+    assert.match(f.calls[1].context.prompt, /"attempt":1/);
+    assert.equal(controller.status(f.scope.run_id).retry.attempts, 1);
+    const candidate = JSON.parse(fs.readFileSync(candidatePath(f, result.artifact.candidate_id), 'utf8')).payload;
+    assert.match(candidate.verification.allow_list_sha256, /^[0-9a-f]{64}$/);
+    assert.match(git(f.root, 'show', '-s', '--format=%B', 'HEAD'),
+      new RegExp(`Shipyard-Verification-Evidence: ${candidate.verification.evidence_digest}`));
   } finally { clean(f); }
 });
 
@@ -769,6 +860,8 @@ test('changed tree, graph, base, plan, verification or receipt refuses and keeps
     fs.writeFileSync(f.plan, plan);
     await refused({ code: 'IDENTITY_CHANGED', names: ['verification-spec'],
     }, { verification: { commands: [{ ...f.verification.commands[0], argv: ['-e', '1'] }] } });
+    await refused({ code: 'IDENTITY_CHANGED', names: ['verification-allow-list'] },
+      { verificationAllowList: [] });
     const records = path.join(stateRoot(f), 'verification');
     const pinned = JSON.parse(fs.readFileSync(candidatePath(f, id), 'utf8')).payload.verification.records[0];
     const recordFile = path.join(records, pinned.record_sha256 + '.json');
@@ -867,6 +960,43 @@ test('CLI pins verification from the approved PLAN when no spec is injected', as
     const candidate = JSON.parse(fs.readFileSync(candidatePath(f, result.artifact.candidate_id), 'utf8')).payload;
     assert.deepEqual(candidate.verification.required, ['plan-1']);
   } finally { clean(f); }
+});
+
+test('CLI returns a PLAN command when the configured allow-list has no match and does not retry it', async () => {
+  const f = fixture();
+  const requestFile = path.join(f.graphDir, 'request-empty-allow-list.json');
+  const output = [];
+  try {
+    approvedPlan(f, ['node check.cjs']);
+    fs.writeFileSync(requestFile, JSON.stringify({
+      scope: f.scope, role: 'executor', context: { prompt: 'Implement scoped work.' },
+    }));
+    const result = await runCli(['--args-file', requestFile], { write(chunk) { output.push(chunk); } }, {
+      ...cliOptions(f), verification: undefined, verificationAllowList: [],
+      hostVerificationRunner: { run() { assert.fail('an empty allow-list must not launch a command'); } },
+    });
+    assert.equal(result.status, 'verification_failed');
+    assert.deepEqual(result.command, ['node', 'check.cjs']);
+    assert.match(result.evidence_digest, /^[0-9a-f]{64}$/);
+    assert.equal(result.retryable, false);
+    assert.equal(runStatus(f).state, 'failed');
+    assert.equal(f.calls.length, 1);
+    assert.equal(JSON.parse(output.join('')).status, 'verification_failed');
+  } finally { clean(f); }
+});
+
+test('verification failure reason safely handles an absent command', () => {
+  assert.match(verificationFailureReason({ command: null, summary: 'no command matched' }),
+    /no allow-listed verification command matched/);
+});
+
+test('Codex retry diagnostic remains within its byte limit for oversized Unicode evidence', () => {
+  const diagnostic = verificationFailureContext({
+    command: Array(64).fill('💥'.repeat(256)), evidence_digest: 'a'.repeat(64), summary: '⚠'.repeat(500),
+  });
+  assert.ok(Buffer.byteLength(JSON.stringify(diagnostic), 'utf8') <= 2048);
+  assert.equal(diagnostic.attempt, 1);
+  assert.equal(Object.isFrozen(diagnostic.command), true);
 });
 
 test('recovery-only CLI reuses the PLAN-pinned verification spec without an injected spec', async () => {
