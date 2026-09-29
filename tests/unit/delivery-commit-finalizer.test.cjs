@@ -121,6 +121,51 @@ test('creates a verified signed commit and refreshes the ordinary index to a cle
   assert.equal(git(repo, 'show', 'HEAD:outside.txt'), 'base');
 });
 
+test('successful trusted finalization records its exact commit once', () => {
+  const { repo, head, options } = makeRepo();
+  const root = path.join(temporary, `coverage-${++sequence}`);
+  const prior = process.env.SHIPYARD_COVERAGE_ROOT;
+  process.env.SHIPYARD_COVERAGE_ROOT = root;
+  try {
+    fs.writeFileSync(path.join(repo, 'src', 'owned.txt'), 'covered\n');
+    const result = finalizeDeliveryCommit({ ...options, coverage: {
+      kind: 'executor', dispatch_id: 'dispatch-test', receipt_digest: 'a'.repeat(64),
+      verification_digest: 'b'.repeat(64), receipt_store: path.join(temporary, 'receipts'),
+    } });
+    assert.equal(result.previousHead, head);
+    const records = fs.readdirSync(path.join(root, 'coverage'));
+    assert.equal(records.length, 1);
+    const file = path.join(root, 'coverage', records[0], `${result.commit}.json`);
+    assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).payload.commit, result.commit);
+    assert.equal(fs.readdirSync(path.dirname(file)).length, 1);
+    assert.ok(fs.existsSync(path.join(root, 'rollout-marker.json')));
+  } finally {
+    if (prior === undefined) delete process.env.SHIPYARD_COVERAGE_ROOT;
+    else process.env.SHIPYARD_COVERAGE_ROOT = prior;
+  }
+});
+
+test('failed update-ref leaves no coverage record', () => {
+  const { repo, head, options } = makeRepo();
+  const root = path.join(temporary, `failed-coverage-${++sequence}`);
+  const prior = process.env.SHIPYARD_COVERAGE_ROOT;
+  process.env.SHIPYARD_COVERAGE_ROOT = root;
+  try {
+    fs.writeFileSync(path.join(repo, 'src', 'owned.txt'), 'changed\n');
+    const branch = path.resolve(repo, git(repo, 'rev-parse', '--git-path', 'refs/heads/ticket/T-38-03'));
+    fs.writeFileSync(branch + '.lock', 'busy');
+    assert.throws(() => finalizeDeliveryCommit({ ...options, coverage: {
+      kind: 'executor', dispatch_id: 'dispatch-test', receipt_digest: 'a'.repeat(64),
+      verification_digest: 'b'.repeat(64), receipt_store: path.join(temporary, 'receipts'),
+    } }), /update-ref failed/);
+    assert.equal(git(repo, 'rev-parse', 'HEAD'), head);
+    assert.equal(fs.existsSync(path.join(root, 'coverage')), false);
+  } finally {
+    if (prior === undefined) delete process.env.SHIPYARD_COVERAGE_ROOT;
+    else process.env.SHIPYARD_COVERAGE_ROOT = prior;
+  }
+});
+
 test('binds the sealed verification digest into the signed finalization commit', () => {
   const { repo, options } = makeRepo();
   const digest = 'a'.repeat(64);

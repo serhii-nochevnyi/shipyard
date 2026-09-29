@@ -9,6 +9,7 @@ const prHygiene = require('./pr-hygiene.cjs');
 const { resolveGraphDir } = require('./graph-dir.cjs');
 const { scopeBase } = require('./diamond-parents.cjs');
 const { SCRATCH_FILES, isScratch } = require('./conveyor-scratch.cjs');
+const { createCoverageWriter, repoSlug } = require('./conveyor-coverage.cjs');
 const MAX_GRAPH_BYTES = 8 * 1024 * 1024;
 
 function fail(message, code) {
@@ -300,6 +301,19 @@ function finalizeDeliveryCommit(options) {
     } finally {
       if (lockFd !== undefined) fs.closeSync(lockFd);
       if (ownsLock) fs.rmSync(lockPath, { force: true });
+    }
+    if (options.coverage) {
+      try {
+        const coverage = options.coverage;
+        createCoverageWriter(options.coverageWriterOptions).record({
+          commit, parents: [head], tree, ticket, worktree: root,
+          repo: repoSlug(root, coverage.repo), kind: coverage.kind,
+          dispatch_id: coverage.dispatch_id, receipt_digest: coverage.receipt_digest,
+          verification_digest: coverage.verification_digest, receipt_store: coverage.receipt_store,
+        });
+      } catch (error) {
+        fail(`commit ${commit} exists but coverage recording failed: ${error.message}`, 'COVERAGE_RECORD_FAILED');
+      }
     }
     return Object.freeze({ ticket, worktree: root, base, previousHead: head, commit, tree, signer: signature[1], changed: staged,
       ...(verificationEvidenceDigest ? { verificationEvidenceDigest } : {}) });

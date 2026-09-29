@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const { stableStringify } = require('./model-policy-internal.cjs');
 const { execFileSync } = require('node:child_process');
 const { createClaudeRuntimeHost, probeClaudeRuntime } = require('./claude-runtime-host.cjs');
 const { registerClaudeWorkflowHost } = require('./claude-workflow-host.cjs');
@@ -727,7 +728,7 @@ function withHiddenRepairArtifacts(worktree, action) {
   }
 }
 
-function finalizedRepair(options, repair) {
+function finalizedRepair(options, repair, record, receiptStore) {
   const expectedSigner = (options.signingFingerprint || signingFingerprint)(repair.worktree);
   return withHiddenRepairArtifacts(repair.worktree, () => {
     const verified = verifyCommit(options, repair);
@@ -740,6 +741,9 @@ function finalizedRepair(options, repair) {
       expectedSigner,
       files_modified: repair.files_modified,
       verificationEvidenceDigest: verified.digest,
+      coverage: { kind: 'fixer', repo: repair.repo, dispatch_id: record.receipt.dispatch_id,
+        receipt_digest: crypto.createHash('sha256').update(stableStringify(record.receipt)).digest('hex'),
+        verification_digest: verified.digest, receipt_store: receiptStore },
     });
     return commitVerificationMatches(finalized, verified.digest);
   });
@@ -861,7 +865,10 @@ function createClaudeDeliveryHost(options = {}) {
         throw error;
       }
       const finalized = (options.finalizeCommit || finalizeDeliveryCommit)({ ...commit,
-        verificationEvidenceDigest: verified.digest });
+        verificationEvidenceDigest: verified.digest,
+        coverage: { kind: 'executor', repo: commit.repo, dispatch_id: input.record.receipt.dispatch_id,
+          receipt_digest: crypto.createHash('sha256').update(stableStringify(input.record.receipt)).digest('hex'),
+          verification_digest: verified.digest, receipt_store: runtime.recorder.storeDir } });
       commitVerificationMatches(finalized, verified.digest);
     }
     if (input.artifact.role === 'ci-fix' || input.artifact.role === 'review-fix') {
@@ -873,7 +880,8 @@ function createClaudeDeliveryHost(options = {}) {
       }
       if (hasRepairChanges(repair.worktree)) {
         if (result.status !== 'fixed') reject('repair changed files without reporting fixed');
-        try { committedRepairs.set(repair.ticket, finalizedRepair({ ...options, scope }, repair)); }
+        try { committedRepairs.set(repair.ticket, finalizedRepair({ ...options, scope }, repair,
+          input.record, runtime.recorder.storeDir)); }
         catch (error) {
           if (error.code === 'VERIFICATION_FAILED') verificationFailure = { error, receipt: input.record.receipt };
           throw error;

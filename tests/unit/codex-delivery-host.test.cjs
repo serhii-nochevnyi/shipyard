@@ -788,14 +788,21 @@ test('Codex host verification refuses an admitted failure without finalizing', a
 test('Codex host verification passes sealed evidence digest to trusted finalizer', async () => {
   const f = fixture();
   let digest;
+  let coverage;
   try {
     approvedPlan(f, ['node check.cjs']);
     await assert.rejects(() => delivery(f, { verification: undefined,
       verificationAllowList: [{ argv: ['node', 'check.cjs'], profile: 'host' }],
       hostVerificationRunner: { run() { return { status: 0, stdout: '', stderr: '', backend: { kind: 'host' } }; } },
-      finalizeCommit(input) { digest = input.verificationEvidenceDigest; throw new Error('stop after evidence'); },
+      finalizeCommit(input) { digest = input.verificationEvidenceDigest; coverage = input.coverage;
+        throw new Error('stop after evidence'); },
     }).run({ role: 'executor', context: { prompt: 'Implement.' } }), /stop after evidence/);
     assert.match(digest, /^[0-9a-f]{64}$/);
+    assert.equal(coverage.kind, 'executor');
+    assert.match(coverage.dispatch_id, /^dispatch-/);
+    assert.match(coverage.receipt_digest, /^[0-9a-f]{64}$/);
+    assert.equal(coverage.verification_digest, digest);
+    assert.equal(coverage.receipt_store, f.host.recorder.storeDir);
   } finally { clean(f); }
 });
 
