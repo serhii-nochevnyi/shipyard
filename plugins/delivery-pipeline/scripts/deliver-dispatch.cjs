@@ -11,7 +11,9 @@ const { computeFront } = require('./front.cjs');
 const { resolveGraphDir } = require('./graph-dir.cjs');
 const { assertCanonicalGraph } = require('./plan-delivery.cjs');
 const claudeHost = require('./claude-delivery-host.cjs');
+const claudeDecomposeHost = require('./claude-decompose-host.cjs');
 const codexHost = require('./codex-delivery-host.cjs');
+const codexPlanningContextHost = require('./codex-planning-context-host.cjs');
 const claudeRoleHost = require('./claude-role-host.cjs');
 const sentinelPreflight = require('./sentinel-preflight.cjs');
 const prHygiene = require('./pr-hygiene.cjs');
@@ -24,6 +26,16 @@ const ROLE_BUCKETS = Object.freeze({
   executor: Object.freeze(['execute']),
   'pr-sentinel': Object.freeze(['fix', 'finalize', 'merge']),
 });
+
+const RESEARCH_LINES = Object.freeze({
+  'system-state': 'system state',
+  alternatives: 'alternatives',
+  constraints: 'constraints',
+  risks: 'risks and unknowns',
+});
+const RESEARCH_LINE_IDS = Object.freeze(Object.keys(RESEARCH_LINES));
+const PLANNING_SOURCE_FILES = Object.freeze(['PROBLEM.md', 'RESEARCH-CONTRACT.md', 'DECISIONS.md']);
+const PLANNING_SOURCE_MAX_BYTES = 8 * 1024 * 1024;
 
 const EXIT_CODES = Object.freeze({ running: 0, 'exited-ok': 0, 'exited-failed': 1, lost: 2 });
 
@@ -460,15 +472,15 @@ function buildFail(field, message) {
 function parseBuildArgs(argv) {
   const role = argv[0];
   const ticket = argv[1];
-  if (!['arch-review', 'ci-fix', 'review-fix'].includes(role)) {
-    buildFail('--role', `build role must be arch-review, ci-fix, or review-fix`);
+  if (!['arch-review', 'ci-fix', 'review-fix', 'research', 'decomposition'].includes(role)) {
+    buildFail('--role', 'build role must be arch-review, ci-fix, review-fix, research, or decomposition');
   }
-  if (typeof ticket !== 'string' || !ticket.trim()) buildFail('<ticket>', 'build ticket is required');
+  if (typeof ticket !== 'string' || !ticket.trim()) buildFail('<ticket>', 'build ticket or planning input is required');
   const args = { role, ticket, runtime: 'claude' };
   const seen = new Set();
   for (let index = 2; index < argv.length; index++) {
     const flag = argv[index];
-    if (!['--runtime', '--pr', '--failure-file', '--review-file'].includes(flag)) {
+    if (!['--runtime', '--pr', '--failure-file', '--review-file', '--line', '--phase'].includes(flag)) {
       buildFail(flag, `unsupported build field ${flag}`);
     }
     if (seen.has(flag)) buildFail(flag, `${flag} may be supplied only once`);
@@ -485,6 +497,12 @@ function parseBuildArgs(argv) {
         buildFail(flag, '--pr must be a positive integer');
       }
       args.pr = Number(value);
+    } else if (flag === '--line') args.line = value;
+    else if (flag === '--phase') {
+      if (!/^\d+$/.test(value) || !Number.isSafeInteger(Number(value)) || Number(value) < 1) {
+        buildFail(flag, '--phase must be a positive integer');
+      }
+      args.phase = Number(value);
     } else if (flag === '--failure-file') args.failureFile = value;
     else args.reviewFile = value;
   }
@@ -492,6 +510,25 @@ function parseBuildArgs(argv) {
   if (role === 'review-fix' && !args.reviewFile) buildFail('--review-file', 'review-fix requires --review-file <f>');
   if (role !== 'ci-fix' && args.failureFile) buildFail('--failure-file', '--failure-file is only valid for ci-fix');
   if (role !== 'review-fix' && args.reviewFile) buildFail('--review-file', '--review-file is only valid for review-fix');
+  if (role !== 'research' && args.line) buildFail('--line', '--line is only valid for research');
+  if (role === 'research' && args.line && !Object.hasOwn(RESEARCH_LINES, args.line)) {
+    buildFail('--line', `unsupported research line ${args.line}`);
+  }
+  if (role === 'research' && args.line) {
+    buildFail('--line', 'initial research builds all four canonical lines in one host request; omit --line');
+  }
+  if (role === 'research' && !/^INV-[A-Za-z0-9-]+$/.test(ticket)) {
+    buildFail('<INV-id>', `invalid investigation id ${ticket}`);
+  }
+  if (role === 'decomposition' && !args.phase) buildFail('--phase', 'decomposition requires --phase <N>');
+  if (role !== 'decomposition' && args.phase) buildFail('--phase', '--phase is only valid for decomposition');
+  if (role === 'decomposition' && !/^INV-[A-Za-z0-9-]+$/.test(ticket)
+      && !/^ADR-[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$/.test(ticket)) {
+    buildFail('<INV-id|ADR-id>', `invalid planning input id ${ticket}`);
+  }
+  if ((role === 'research' || role === 'decomposition') && args.pr !== undefined) {
+    buildFail('--pr', '--pr is not valid for planning requests');
+  }
   return args;
 }
 
@@ -574,6 +611,357 @@ function validateBuildRequest(role, validator, request) {
   }
 }
 
+function planningBuildContext(options) {
+  const cwd = options.cwd || process.cwd();
+  let worktree;
+  try { worktree = fs.realpathSync(cwd); }
+  catch { buildFail('worktree', `planning worktree ${cwd} does not exist`); }
+  const graphDir = resolveBuildGraphDir(worktree, options);
+  const graph = readJsonBounded(path.join(graphDir, 'tickets.json'));
+  if (!object(graph) || !object(graph.tickets)) {
+    buildFail('graph', `canonical ticket graph is invalid: ${path.join(graphDir, 'tickets.json')}`);
+  }
+  let projectRoot;
+  try { projectRoot = fs.realpathSync(path.resolve(graphDir, '..', '..')); }
+  catch { buildFail('graph', `canonical project root is unavailable for ${graphDir}`); }
+  const graphRef = planningSource(projectRoot, path.relative(projectRoot, path.join(graphDir, 'tickets.json')));
+  return { worktree, graphDir, graph, graphRef, projectRoot };
+}
+
+function planningSource(projectRoot, relativePath) {
+  const file = path.resolve(projectRoot, relativePath);
+  if (!isInsidePath(projectRoot, file)) buildFail(relativePath, `planning input escapes the project root: ${file}`);
+  let stat;
+  try { stat = fs.lstatSync(file); }
+  catch { buildFail(relativePath, `required input file is unavailable: ${file}`); }
+  if (!stat.isFile() || stat.isSymbolicLink()) {
+    buildFail(relativePath, `required input must be a regular non-symlink file: ${file}`);
+  }
+  if (stat.size > PLANNING_SOURCE_MAX_BYTES) {
+    buildFail(relativePath, `required input exceeds the ${PLANNING_SOURCE_MAX_BYTES}-byte limit: ${file}`);
+  }
+  let bytes;
+  try { bytes = fs.readFileSync(file); }
+  catch { buildFail(relativePath, `required input cannot be read: ${file}`); }
+  let after;
+  try { after = fs.lstatSync(file); }
+  catch { buildFail(relativePath, `required input disappeared while its digest was computed: ${file}`); }
+  if (bytes.length !== stat.size || after.dev !== stat.dev || after.ino !== stat.ino
+      || after.size !== stat.size || after.mtimeMs !== stat.mtimeMs) {
+    buildFail(relativePath, `required input changed while its digest was computed: ${file}`);
+  }
+  let realPath;
+  try { realPath = fs.realpathSync(file); }
+  catch { buildFail(relativePath, `required input is unavailable: ${file}`); }
+  if (realPath !== file) buildFail(relativePath, `required input resolves through a symlink: ${file}`);
+  return Object.freeze({ path: realPath, sha256: crypto.createHash('sha256').update(bytes).digest('hex') });
+}
+
+function investigationPlanningInputs(projectRoot, invId) {
+  if (typeof invId !== 'string' || !/^INV-[A-Za-z0-9-]+$/.test(invId)) {
+    buildFail('<INV-id>', `invalid investigation id ${String(invId)}`);
+  }
+  const invPath = path.join(projectRoot, '.planning', 'investigations', invId);
+  let stat;
+  try { stat = fs.lstatSync(invPath); }
+  catch { buildFail(invId, `investigation directory is unavailable: ${invPath}`); }
+  if (!stat.isDirectory() || stat.isSymbolicLink()) {
+    buildFail(invId, `investigation directory must be a regular directory: ${invPath}`);
+  }
+  let realPath;
+  try { realPath = fs.realpathSync(invPath); }
+  catch { buildFail(invId, `investigation directory is unavailable: ${invPath}`); }
+  if (realPath !== invPath) buildFail(invId, `investigation directory resolves through a symlink: ${invPath}`);
+  const sourceRefs = PLANNING_SOURCE_FILES.map((name) => planningSource(projectRoot,
+    path.join('.planning', 'investigations', invId, name)));
+  return { invPath, sourceRefs };
+}
+
+function optionalPlanningSources(projectRoot, relativePaths) {
+  return relativePaths.filter((relativePath) => fs.existsSync(path.resolve(projectRoot, relativePath)))
+    .map((relativePath) => planningSource(projectRoot, relativePath));
+}
+
+function phasePlanningInputs(projectRoot, phase) {
+  const phaseRoot = path.join(projectRoot, '.planning', 'phases');
+  let names;
+  try { names = fs.readdirSync(phaseRoot); }
+  catch { return { requiredRefs: [], optionalRefs: [] }; }
+  const matches = names.filter((name) => /^\d+-/.test(name) && Number(name.split('-')[0]) === phase);
+  if (matches.length > 1) buildFail('--phase', `phase ${phase} has more than one planning directory`);
+  if (!matches.length) return { requiredRefs: [], optionalRefs: [] };
+  const directory = path.join(phaseRoot, matches[0]);
+  const stat = fs.lstatSync(directory);
+  if (!stat.isDirectory() || stat.isSymbolicLink()) {
+    buildFail('--phase', `phase ${phase} planning directory must be a regular directory`);
+  }
+  const phaseRelative = path.relative(projectRoot, directory);
+  return {
+    requiredRefs: optionalPlanningSources(projectRoot, [path.join(phaseRelative, `${phase}-CONTEXT.md`)]),
+    optionalRefs: optionalPlanningSources(projectRoot, [path.join(phaseRelative, `${phase}-RESEARCH.md`)]),
+  };
+}
+
+function decompositionPlanningInputs(projectRoot, inputId, phase) {
+  const shared = optionalPlanningSources(projectRoot, ['.planning/REQUIREMENTS.md', '.planning/ROADMAP.md']);
+  const phaseInputs = phasePlanningInputs(projectRoot, phase);
+  const graphRef = planningSource(projectRoot, path.join('.planning', 'graph', 'tickets.json'));
+  if (/^INV-/.test(inputId)) {
+    const inputs = investigationPlanningInputs(projectRoot, inputId);
+    const invRelative = path.join('.planning', 'investigations', inputId);
+    const linkedAdr = linkedAdrPlanningSources(projectRoot, inputs.sourceRefs[0], inputId);
+    const topLevel = ['RESEARCH.md', 'OPTIONS.md', 'RISKS.md', 'OPEN-QUESTIONS.md', 'SCOPING-NOTES.md', 'PREFLIGHT.md']
+      .map((name) => path.join(invRelative, name));
+    const researchDirectory = path.join(projectRoot, invRelative, 'research');
+    let researchFiles = [];
+    try {
+      researchFiles = fs.readdirSync(researchDirectory).filter((name) => name.endsWith('.md')).sort()
+        .map((name) => path.join(invRelative, 'research', name));
+    } catch { /* The accepted investigation may not have a research fan-out yet. */ }
+    const requiredRefs = [...inputs.sourceRefs, ...linkedAdr, ...phaseInputs.requiredRefs];
+    const optionalRefs = [...optionalPlanningSources(projectRoot, [...topLevel, ...researchFiles]),
+      ...shared, ...phaseInputs.optionalRefs, graphRef];
+    return { requiredRefs, optionalRefs, sourceRefs: [...requiredRefs, ...optionalRefs] };
+  }
+  const selected = adrPlanningInputs(projectRoot, inputId);
+  const requiredRefs = [...selected.sourceRefs, ...phaseInputs.requiredRefs];
+  const optionalRefs = [...shared, ...phaseInputs.optionalRefs, graphRef];
+  return { requiredRefs, optionalRefs, sourceRefs: [...requiredRefs, ...optionalRefs] };
+}
+
+function linkedAdrPlanningSources(projectRoot, problemSource, inputId) {
+  const content = fs.readFileSync(problemSource.path, 'utf8');
+  const frontmatter = content.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/);
+  if (!frontmatter) return [];
+  const match = frontmatter[1].match(/^adr:\s*["']?([^\s"']+)["']?\s*$/m);
+  if (!match) return [];
+  const relative = match[1];
+  if (path.isAbsolute(relative) || relative.split(/[\\/]+/).includes('..')
+      || !relative.startsWith('.planning/architecture/') || !relative.endsWith('.md')) {
+    buildFail(inputId, `linked ADR path is not a repository-relative architecture file: ${relative}`);
+  }
+  return [planningSource(projectRoot, relative)];
+}
+
+function planningRepository(projectRoot) {
+  try {
+    const remote = git(projectRoot, ['config', '--get', 'remote.origin.url']);
+    const github = remote.match(/(?:github\.com[:/])([^/\s]+\/[^/\s]+?)(?:\.git)?$/i);
+    if (github) return github[1].toLowerCase();
+  } catch { /* A local fixture or target project may not have an origin. */ }
+  return projectRoot;
+}
+
+function planningSourceRevision(projectRoot) {
+  try { return git(projectRoot, ['rev-parse', '--verify', 'HEAD^{commit}']); }
+  catch { buildFail('sourceRevision', 'planning source revision cannot be resolved'); }
+}
+
+function buildPlanningPacket({ context, role, subject, sourceRefs, requiredRefs, optionalRefs, roleContext }) {
+  try {
+    return buildContextPacket({
+      root: context.projectRoot,
+      role,
+      subject,
+      sourceRevision: planningSourceRevision(context.projectRoot),
+      policy: modelPolicy.POLICY,
+      policyHash: modelPolicy.POLICY_HASH,
+      scope: { files_modified: [] },
+      acceptance: [],
+      verification: [],
+      requiredRefs: (requiredRefs || sourceRefs).map((source) => source.path),
+      optionalRefs: (optionalRefs || []).map((source) => source.path),
+      selectedBacklogIds: [],
+      backlogInventory: 'selected',
+      backlogWhySelected: 'No backlog items are selected; the structured planning source references define the launch context.',
+      roleContext,
+    });
+  } catch (error) {
+    buildFail('contextPacket', `could not build verified ${role} context packet: ${error.message}`);
+  }
+}
+
+function packetSourceRefs(context, sourceRefs) {
+  return sourceRefs.map((source) => ({
+    path: path.relative(context.projectRoot, source.path).split(path.sep).join('/'),
+    sha256: source.sha256,
+  }));
+}
+
+function adrPlanningInputs(projectRoot, adrId) {
+  if (typeof adrId !== 'string' || !/^ADR-[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$/.test(adrId)) {
+    buildFail('<INV-id|ADR-id>', `invalid planning input id ${String(adrId)}`);
+  }
+  const architectureDir = path.join(projectRoot, '.planning', 'architecture');
+  let names;
+  try { names = fs.readdirSync(architectureDir); }
+  catch { buildFail(adrId, `architecture directory is unavailable: ${architectureDir}`); }
+  const matches = names.filter((name) => name === `${adrId}.md`
+    || (name.startsWith(`${adrId}-`) && name.endsWith('.md')));
+  if (matches.length !== 1) {
+    buildFail(adrId, `expected one architecture input for ${adrId} in ${architectureDir}, found ${matches.length}`);
+  }
+  return { sourceRefs: [planningSource(projectRoot, path.join('.planning', 'architecture', matches[0]))] };
+}
+
+function latestGraphPhase(graph) {
+  const phases = Object.values(graph.tickets).map((row) => {
+    if (!object(row)) return null;
+    try { return phaseNumber(row.phase); } catch { return null; }
+  }).filter((phase) => Number.isSafeInteger(phase) && phase > 0);
+  if (!phases.length) buildFail('graph', 'canonical ticket graph has no positive phase for the research scope');
+  return Math.max(...phases);
+}
+
+function planningPrompt({ operation, inputId, phase, sourceRefs }) {
+  return [
+    `Prepare ${operation} for ${inputId}${phase ? ` in phase ${phase}` : ''}.`,
+    'Use the attached verified context packet as the source of truth. Its structured references bind source files to live SHA-256 digests. Use inline source content when present. If a reference marks content as omitted, read its listed path and verify the SHA-256 before relying on it; choose only sources relevant to this planning scope.',
+    ...sourceRefs.map((source) => `- ${source.path} (sha256: ${source.sha256})`),
+  ].join('\n');
+}
+
+function buildPlanningRequest(args, options) {
+  const context = planningBuildContext(options);
+  if (args.role === 'research') {
+    const { invPath, sourceRefs: investigationRefs } = investigationPlanningInputs(context.projectRoot, args.ticket);
+    const sourceRefs = [...investigationRefs, context.graphRef];
+    const requiredRefs = investigationRefs.filter((source) => ['PROBLEM.md', 'RESEARCH-CONTRACT.md', 'DECISIONS.md']
+      .includes(path.basename(source.path)));
+    const requiredPaths = new Set(requiredRefs.map((source) => source.path));
+    const optionalRefs = sourceRefs.filter((source) => !requiredPaths.has(source.path));
+    const prompt = planningPrompt({ operation: 'research', inputId: args.ticket, sourceRefs });
+    const repository = planningRepository(context.projectRoot);
+    const sourceRevision = planningSourceRevision(context.projectRoot);
+    const refs = packetSourceRefs(context, sourceRefs);
+    const lines = RESEARCH_LINE_IDS.map((id) => ({
+      id,
+      label: RESEARCH_LINES[id],
+      signals: {},
+      contextPacket: buildPlanningPacket({
+        context,
+        role: 'research',
+        subject: `${args.ticket}:${id}`,
+        sourceRefs,
+        requiredRefs,
+        optionalRefs,
+        roleContext: {
+          problem_statement: `Read ${refs[0].path} (sha256: ${refs[0].sha256}).`,
+          source_refs: refs,
+        },
+      }),
+    }));
+    if (args.runtime === 'claude') {
+      const phase = latestGraphPhase(context.graph);
+      const request = {
+        schema: claudeHost.REQUEST_SCHEMA,
+        scope: {
+          run_id: `deliver-build-research-${args.ticket}`,
+          ticket: args.ticket,
+          phase,
+          worktree: context.projectRoot,
+        },
+        args: {
+          invId: args.ticket,
+          invPath,
+          worktreePath: context.projectRoot,
+          referencePath: 'inv-research',
+          problemStatement: `Read ${refs[0].path} (sha256: ${refs[0].sha256}).`,
+          sourceRefs,
+          artifactContract: 'planning.v1',
+          artifactRoot: path.join(invPath, 'research'),
+          artifactPaths: Object.fromEntries(RESEARCH_LINE_IDS.map((id) => [id, path.join(invPath, 'research', `${id}.md`)])),
+          sourceRevision,
+          repository,
+          policyHash: modelPolicy.POLICY_HASH,
+          contextPacketRequired: true,
+          lines,
+        },
+      };
+      validateBuildRequest(args.role, (value) => claudeHost.validateRequest('investigation-research', value), request);
+      return request;
+    }
+    const packet = buildPlanningPacket({
+      context,
+      role: 'research',
+      subject: args.ticket,
+      sourceRefs,
+      requiredRefs,
+      optionalRefs,
+      roleContext: {
+        problem_statement: `Read ${refs[0].path} (sha256: ${refs[0].sha256}).`,
+        source_refs: refs,
+      },
+    });
+    const request = {
+      role: 'research',
+      signals: {},
+      context: {
+        prompt,
+        worktreePath: context.projectRoot,
+        subject: args.ticket,
+        sourceRevision,
+        contextPacket: packet,
+        contextPacketRequired: true,
+        investigation: {
+          invId: args.ticket,
+          sourceRevision,
+          repository,
+          policyHash: modelPolicy.POLICY_HASH,
+          lines: RESEARCH_LINE_IDS.map((id) => ({ id, signals: {} })),
+        },
+      },
+    };
+    validateBuildRequest(args.role, (value) => codexHost.validateArgs(value), request);
+    return request;
+  }
+
+  const inputs = decompositionPlanningInputs(context.projectRoot, args.ticket, args.phase);
+  const sourceRefs = inputs.sourceRefs;
+  const prompt = planningPrompt({
+    operation: 'decomposition', inputId: args.ticket, phase: args.phase, sourceRefs,
+  });
+  if (args.runtime === 'claude') {
+    const request = {
+      role: 'gsd-planner', phase: args.phase, worktree: context.projectRoot, prompt, signals: {},
+    };
+    validateBuildRequest(args.role, (value) => claudeDecomposeHost.canonicalRequest(value), request);
+    return request;
+  }
+  const repository = planningRepository(context.projectRoot);
+  const sourceRevision = planningSourceRevision(context.projectRoot);
+  const refs = packetSourceRefs(context, sourceRefs);
+  const subject = `phase=${args.phase};input=${args.ticket};repository=${repository}`;
+  const packet = buildPlanningPacket({
+    context,
+    role: 'decomposition',
+    subject,
+    sourceRefs,
+    requiredRefs: inputs.requiredRefs,
+    optionalRefs: inputs.optionalRefs,
+    roleContext: {
+      adr_refs: refs.filter((source) => source.path.startsWith('.planning/architecture/')),
+      requirements: refs.filter((source) => source.path === '.planning/REQUIREMENTS.md'),
+      research_refs: refs.filter((source) => source.path.includes('/research/')
+        || source.path.endsWith('-RESEARCH.md')),
+      context: { phase: args.phase, input: args.ticket, source_refs: refs },
+    },
+  });
+  const request = {
+    gsd_role: 'gsd-planner',
+    prompt,
+    signals: {},
+    subject,
+    sourceRevision,
+    contextPacket: packet,
+    contextPacketRequired: true,
+  };
+  validateBuildRequest(args.role, (value) => codexPlanningContextHost.requestValue(value, {
+    worktreePath: context.projectRoot,
+  }), request);
+  return request;
+}
+
 function claudeFixCandidate(args, input, evidence) {
   const isCi = args.role === 'ci-fix';
   const pr = args.pr || input.stateRow.pr;
@@ -638,6 +1026,9 @@ function incompleteHostReason(runtime, role) {
 
 function build(argv, options = {}) {
   const args = parseBuildArgs(argv);
+  if (args.role === 'research' || args.role === 'decomposition') {
+    return buildPlanningRequest(args, options);
+  }
   const input = buildTicketContext(args, options);
   const signals = buildSignals(input.row);
   const evidence = args.failureFile

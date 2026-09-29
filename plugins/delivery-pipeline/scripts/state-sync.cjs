@@ -45,7 +45,7 @@ const {
   diagnostic, runBounded, timeoutFromEnv,
 } = require(path.join(__dirname, 'command-runner.cjs'));
 const { matchTicketPr } = require(path.join(__dirname, 'ticket-pr-match.cjs'));
-const { readLedger } = require(path.join(__dirname, 'pr-ledger.cjs'));
+const { readLedger, recordPr } = require(path.join(__dirname, 'pr-ledger.cjs'));
 const { loadConfig, repoValue } = require(path.join(__dirname, 'pipeline-config.cjs'));
 const { reviewFreshness } = require(path.join(__dirname, 'reviewers.cjs'));
 const { computeFront, formatFront, ciEstimates, epicKey, agentsInFlight } = require(path.join(__dirname, 'front.cjs'));
@@ -592,13 +592,14 @@ function loadRepo(repo) {
     }
   }
   const branchesRaw = gh(['api', `${apiBase(repo)}/branches`, '--paginate', '--jq', '.[].name'], { tolerate: !!repo });
-  const branches = new Set(String(branchesRaw || '').split('\n').filter(Boolean));
+  const branchesAvailable = typeof branchesRaw === 'string';
+  const branches = new Set((branchesAvailable ? branchesRaw : '').split('\n').filter(Boolean));
   // git.base_branch is the PROJECT's integration branch, so it only applies to
   // the project's own repo; a sibling repo keeps its own default.
   const defaultBranch = repo
     ? ((gh(['repo', 'view', repo, '--json', 'defaultBranchRef', '--jq', '.defaultBranchRef.name'], { tolerate: true }) || '').trim() || 'main')
     : DEFAULT_BRANCH;
-  return { repo, available: true, openListAvailable, prs, branches, truncated, defaultBranch };
+  return { repo, available: true, openListAvailable, prs, branches, branchesAvailable, truncated, defaultBranch };
 }
 
 const repoData = new Map();
@@ -659,19 +660,40 @@ function prForNumber(repo, number) {
   } catch { return []; }
 }
 
-function isImmutableLandedTicket(ticket, before, recorded, repo, integrationBranch) {
+function immutableLandedSnapshot(ticket, before, integrationBranch) {
   if (FULL_SYNC || mode !== 'epic-stacked' || !before || before.status !== 'merged'
-      || !validMergeSha(before.merge_sha) || before.merged_into !== ticket.epic
-      || !recorded || recorded.number !== before.pr
-      || (before.recorded_pr !== undefined && recorded.number !== before.recorded_pr)
-      || (recorded.repo || null) !== repo
-      || (recorded.head !== before.branch && recorded.head !== ticket.branch)) return false;
+      || !Number.isSafeInteger(before.pr) || !validMergeSha(before.merge_sha)
+      || before.merged_into !== ticket.epic) return false;
   const phase = String(ticket.phase ?? '');
   const epic = epics[phase];
   if (!epic || epic.branch !== ticket.epic) return false;
   const proof = before.epic_pr;
   return !!(proof && Number.isSafeInteger(proof.number) && proof.branch === ticket.epic
     && proof.state === 'MERGED' && proof.base === integrationBranch && proof.landed === true);
+}
+
+function isImmutableLandedTicket(ticket, before, recorded, repo, integrationBranch) {
+  if (!immutableLandedSnapshot(ticket, before, integrationBranch)
+      || !recorded || recorded.number !== before.pr
+      || (before.recorded_pr !== undefined && recorded.number !== before.recorded_pr)
+      || (recorded.repo || null) !== repo) return false;
+  if (before.branch !== ticket.branch && before.pr_branch !== ticket.branch) return false;
+  const historicalBranch = before.pr_branch || before.branch;
+  return recorded.head === historicalBranch || recorded.head === ticket.branch;
+}
+
+function hasOpenTicketPr(ticketId, prs, epicBranch) {
+  const escaped = String(ticketId).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const marker = new RegExp(`(^|[^\\w-])${escaped}([^\\w-]|$)`);
+  return prs.some((pr) => pr.state === 'OPEN' && pr.headRefName !== epicBranch
+    && (String(pr.headRefName || '').startsWith(`ticket/${ticketId}-`) || marker.test(pr.title || '')));
+}
+
+function verifiesPriorLandedPr(before, candidate) {
+  const historicalBranch = before && (before.pr_branch || before.branch);
+  return !!(candidate && before && candidate.number === before.pr && candidate.state === 'MERGED'
+    && candidate.headRefName === historicalBranch && candidate.baseRefName === before.merged_into
+    && mergeShaOf(candidate) === before.merge_sha);
 }
 
 function previousEpicProof(phase, repo, branch) {
@@ -702,10 +724,22 @@ for (const [id, t] of Object.entries(tickets)) {
   const rd = repoData.get(repo);
   const prs = rd.prs;
   const remoteBranches = rd.branches;
+  const before = prev[id];
+  const historicalBranch = before && (before.pr_branch || before.branch);
+  const canonicalBranchChanged = !!(before && typeof historicalBranch === 'string'
+    && t.branch !== historicalBranch);
+  const currentBranchSupersedesHistorical = !!(before && typeof historicalBranch === 'string'
+    && t.branch !== historicalBranch && remoteBranches.has(t.branch));
+  const branchObservationUnknown = !!(before && typeof historicalBranch === 'string'
+    && t.branch !== historicalBranch && !rd.branchesAvailable);
   const recorded = prLedger.entries[id];
   const integrationBranch = rd.defaultBranch || DEFAULT_BRANCH;
   let match = rd.available ? matchTicketPr(id, t, prs, recorded) : null;
   const openEpicPr = prs.some((candidate) => candidate.state === 'OPEN' && candidate.headRefName === t.epic);
+  const openTicketPr = hasOpenTicketPr(id, prs, t.epic);
+  if (match && match.pr.state !== 'OPEN' && openTicketPr) match = null;
+  if (match && match.pr.state !== 'OPEN' && currentBranchSupersedesHistorical
+      && match.pr.headRefName !== t.branch) match = null;
   let branchLookupAttempted = false;
   let branchLookupComplete = false;
   if (!match && rd.available && !FULL_SYNC && rd.truncated) {
@@ -718,14 +752,16 @@ for (const [id, t] of Object.entries(tickets)) {
     if (branchMatch) match = branchMatch;
   }
   if (!match && rd.available && rd.openListAvailable && !rd.truncated && !openEpicPr
-      && isImmutableLandedTicket(t, prev[id], recorded, repo, integrationBranch)) {
+      && rd.branchesAvailable && !openTicketPr && !currentBranchSupersedesHistorical && !branchObservationUnknown
+      && isImmutableLandedTicket(t, before, recorded, repo, integrationBranch)) {
     state[id] = prev[id];
     skippedLanded.add(id);
     listingStats.skippedLanded += 1;
     continue;
   }
   let ledgerLookupMiss = false;
-  if (!match && rd.available && !FULL_SYNC && recorded && Number.isSafeInteger(recorded.number)) {
+  if (!match && !openTicketPr && !canonicalBranchChanged && !currentBranchSupersedesHistorical && !branchObservationUnknown
+      && rd.available && !FULL_SYNC && recorded && Number.isSafeInteger(recorded.number)) {
     listingStats.lookedUp += 1;
     const extra = prForNumber(repo, recorded.number);
     if (extra.length) match = matchTicketPr(id, t, prs.concat(extra), recorded);
@@ -748,6 +784,34 @@ for (const [id, t] of Object.entries(tickets)) {
   if (match && match.pr.state !== 'OPEN' && (rd.truncated || !rd.openListAvailable) && !branchLookupComplete) {
     match = null;
   }
+  if (match && match.pr.state !== 'OPEN' && currentBranchSupersedesHistorical
+      && match.pr.headRefName !== t.branch) match = null;
+  const ledgerMatchesPrior = !recorded || (recorded.number === before?.pr
+    && recorded.head === historicalBranch && (recorded.repo || null) === repo
+    && (before.recorded_pr === undefined || recorded.number === before.recorded_pr));
+  if (!match && rd.available && rd.openListAvailable && !rd.truncated && !openEpicPr
+      && rd.branchesAvailable && !openTicketPr && !currentBranchSupersedesHistorical
+      && !branchObservationUnknown && ledgerMatchesPrior
+      && immutableLandedSnapshot(t, before, integrationBranch)) {
+    listingStats.lookedUp += 1;
+    const priorPr = prForNumber(repo, before.pr).find((candidate) => verifiesPriorLandedPr(before, candidate));
+    if (priorPr) {
+      let ledgerRecorded = recorded;
+      if (!ledgerRecorded) {
+        try {
+          ledgerRecorded = recordPr({
+            graphDir: GRAPH_DIR, ticket: id, number: before.pr, head: historicalBranch, repo,
+          });
+        } catch {
+          ledgerRecorded = null;
+        }
+      }
+      if (ledgerRecorded && ledgerRecorded.number === before.pr && ledgerRecorded.head === historicalBranch
+          && (ledgerRecorded.repo || null) === repo) {
+        match = { pr: priorPr, matchedBy: 'previous-merged' };
+      }
+    }
+  }
   const pr = match ? match.pr : null;
   /** @type {Record<string, any>} */
   const entry = { branch: t.branch, pr: pr ? pr.number : null, status: 'pending' };
@@ -764,8 +828,12 @@ for (const [id, t] of Object.entries(tickets)) {
     }
   }
   if (recorded) entry.recorded_pr = recorded.number;
+  else if (match && match.matchedBy === 'previous-merged') entry.recorded_pr = match.pr.number;
   if (match && match.matchedBy === 'legacy-marker') {
     entry.matched_by = 'marker';
+    entry.pr_branch = pr.headRefName;
+  } else if (match && match.matchedBy === 'previous-merged') {
+    entry.matched_by = 'previous-merged';
     entry.pr_branch = pr.headRefName;
   }
   if (pr) {

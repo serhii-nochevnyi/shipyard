@@ -41,7 +41,9 @@ take the active runtime from `config.gsd.runtime`; it must be exactly `claude`
 or `codex`. Keep it fixed for the complete GSD chain. Claude uses
 `${CLAUDE_PLUGIN_ROOT}/scripts/claude-decompose-host.cjs --request-file
 <json>`. Codex uses
-`${CLAUDE_PLUGIN_ROOT}/scripts/codex-decompose-host.cjs --args-file <json>`.
+`${CLAUDE_PLUGIN_ROOT}/scripts/codex-planning-context-host.cjs --args-file <json>`;
+that adapter verifies the structured packet against the live worktree, then
+delegates the typed launch and durable receipt to `codex-decompose-host.cjs`.
 Each host request carries one exact typed role (`gsd-phase-researcher`,
 `gsd-planner`, or `gsd-plan-checker`), declared signals, and scoped prompt
 data. Host request fields differ by runtime. The host resolves model and effort,
@@ -335,6 +337,27 @@ context first, then one callback set, then materialization verification.
 
 1. Pick the phase number: the next free one (or the user's argument), and
    gather the selected ADR path(s) and the mode/granularity chosen in Step 1.
+   Build the planner request from the selected investigation or ADR and the
+   canonical graph with `deliver-dispatch.cjs build decomposition
+   <INV-id|ADR-id> --phase <N>`. Pass the active runtime explicitly:
+
+   ```bash
+   node ${CLAUDE_PLUGIN_ROOT}/scripts/deliver-dispatch.cjs \
+     build decomposition "$planningInput" --phase "$phase" --runtime "$runtime"
+   ```
+
+   The builder attaches a verified context packet with required source content
+   and digest-bound references for the selected ADR or investigation,
+   requirements, roadmap, applicable research, phase context, and graph. It
+   never selects a model or effort. Optional file bodies are elided to fit the
+   token ceiling while their paths and hashes remain verifiable; the planner
+   reads only relevant omitted files and checks their hashes. It validates the
+   generated request with the selected runtime's exported host validator. Codex
+   decomposition passes the packet through `codex-planning-context-host.cjs`,
+   which checks the packet, source digests, policy hash, and source revision
+   against the live worktree immediately before launch. It includes the verified
+   packet as structured JSON data in the typed planner prompt and delegates
+   runtime selection and receipt creation to `codex-decompose-host.cjs`.
 2. Normalize every selected ADR before invoking GSD:
    `mkdir -p .planning/.adr-ingest && node ${CLAUDE_PLUGIN_ROOT}/scripts/adr-ingest.cjs
    --input <adr-path> [--input <another-adr-path>] --output-dir .planning/.adr-ingest --json`.
@@ -362,9 +385,9 @@ context first, then one callback set, then materialization verification.
    `policy_hash`, complete ADR/requirements/research/context references, and
    `roleContext: { adr_refs, requirements, research_refs, context }`. Select
    backlog items through `backlog-index.cjs`, carry their source hashes and
-   `whySelected` metadata, and set `contextPacketRequired: true`. Researcher,
-   planner and checker callbacks receive the packet in their boundary context;
-   their prompts fence it as DATA. A missing requested item, stale verification,
+   `whySelected` metadata, and set `contextPacketRequired: true`. Claude callbacks
+   receive the packet as boundary context; the Codex planning adapter validates
+   and fences it as DATA in the typed prompt. A missing requested item, stale verification,
    altered reference, symlink escape or forged model/capability/callback field
    refuses the callback before reservation. The packet keeps the full ADR,
    requirements and mandatory GSD policy even when the estimated UTF-8/4 size
