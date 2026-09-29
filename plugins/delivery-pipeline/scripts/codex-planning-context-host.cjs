@@ -1,10 +1,6 @@
 #!/usr/bin/env node
 'use strict';
 
-// Validates the bounded planning packet immediately before handing the request
-// to the long-lived Codex decomposition host. Keeping this adapter separate
-// lets later host lifecycle work evolve without changing packet verification.
-
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
