@@ -136,7 +136,6 @@ const epicKey = (phase, repo) => `${String(phase ?? '')}\0${repo || ''}`;
 //
 // The polarity is deliberately asymmetric. The checkpoint is recognised on a
 // TRUTHY value, so anything that reached the graph looking like a stop still
-// stops the run; only a real unquoted `true` lifts a merge-mode wait. Gate 2 refuses every
 // other spelling at plan time — but a field whose whole purpose is to authorize
 // an unattended merge must fail towards the human, not away from them.
 function needsHuman(ticket, row) {
