@@ -1527,3 +1527,4 @@
 {"ts":"2026-09-30T12:36:40.389Z","event":"status_change","ticket":"T-46-04","from":null,"to":"pending","pr":null}
 {"ts":"2026-09-30T12:36:40.389Z","event":"status_change","ticket":"T-46-05","from":null,"to":"pending","pr":null}
 {"ts":"2026-09-30T12:36:40.389Z","event":"status_change","ticket":"T-46-06","from":null,"to":"pending","pr":null}
+{"ts":"2026-09-30T14:07:00.197Z","event":"reuse_scan","ticket":"T-46-01","hits":2,"verdict":"fresh"}
