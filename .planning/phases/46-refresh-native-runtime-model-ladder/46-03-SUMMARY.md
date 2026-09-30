@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 50adcf9437fb62dd8eb9079c04cbc0a7e9fae899663f60072284fb74de2022f3
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 8ef0c66fc4f51f30f9f3f337796174b14a0fe95ad04ba9dd40ce68af68fbf67a
 phase: 46-refresh-native-runtime-model-ladder
 plan: 03
 subsystem: shipyard delivery
@@ -22,7 +22,7 @@ key-decisions:
 duration: 0min
 status: halted
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 50adcf9437fb62dd8eb9079c04cbc0a7e9fae899663f60072284fb74de2022f3
+shipyard_source_fingerprint: 8ef0c66fc4f51f30f9f3f337796174b14a0fe95ad04ba9dd40ce68af68fbf67a
 ---
 
 # Phase 46: Verify pinned Claude 5.5 selection and exact native observation — Delivery Projection

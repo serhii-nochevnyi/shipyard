@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 137739debe02fd877ef2316f533637fc2410501a4fcd3a092348495fd6d5eeec
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 005751de602ca22f683cfa6cd643c16bd2279858f7ae7318963cb227622ccad9
 phase: 46-refresh-native-runtime-model-ladder
 plan: 02
 subsystem: shipyard delivery
@@ -22,7 +22,7 @@ key-decisions:
 duration: 0min
 status: halted
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 137739debe02fd877ef2316f533637fc2410501a4fcd3a092348495fd6d5eeec
+shipyard_source_fingerprint: 005751de602ca22f683cfa6cd643c16bd2279858f7ae7318963cb227622ccad9
 ---
 
 # Phase 46: Verify Codex dynamic launches and static agent projection against the new contract — Delivery Projection

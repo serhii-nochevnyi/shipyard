@@ -1,13 +1,13 @@
 {
   "schema_version": 1,
-  "generation": 398,
-  "generation_identity": "eb9327ee-16cc-4f14-a444-1254d3d9ad46",
-  "previous_generation_identity": "16777245:12938844308:1790771764672945400:96b288a61d8b01413d2461743a44ea6ea4aa866707b3bd9cc5422215aa96afd6",
-  "observed_at": "2026-09-30T12:36:40.389Z",
-  "generated_at": "2026-09-30T12:36:40.389Z",
+  "generation": 399,
+  "generation_identity": "e09514e3-27d1-4357-9391-0cc3c78ea0e9",
+  "previous_generation_identity": "16777245:12938845326:1790771813582017300:cea51184760c73c964ee4db605aa2727bbe084fa4b063480af12cd87abbcd13f",
+  "observed_at": "2026-09-30T13:18:21.192Z",
+  "generated_at": "2026-09-30T13:18:21.192Z",
   "by": "state-sync",
-  "pid": 58735,
-  "observation_generation": 398,
+  "pid": 39832,
+  "observation_generation": 399,
   "observation_projection": {
     "tickets": {
       "T-20-01": {
@@ -2627,7 +2627,7 @@
         "status": "pr-open",
         "repository": null,
         "pr": 369,
-        "head": "06cc666fcb036928b7eb9e23422ca67ed1b93330",
+        "head": "1611e10565f8661569b9aa78f712be4a26afedda",
         "draft": false,
         "base": "epic/45-close-residual-pipeline-efficiency-gaps",
         "merge_state": "CLEAN",
@@ -2765,9 +2765,9 @@
   },
   "binding": {
     "schema_version": 1,
-    "state_digest": "aad4e39023fabeb33425de691cd0feda5180ad02debe083647c279d7468e426d",
-    "front_digest": "aa0794239e1b2e04bd62576092812559bb10378c643de54bfc660860348ee549",
-    "observation_digest": "1baf961c0a0a97fb9c0a66193019af14f4c5d44d8dab49533496ee93a421dcb7",
-    "observation_generation": 398
+    "state_digest": "10cd247f5eeef4c3cec95e56d23bab2596c266e9886f1f1b2716d1a7993a1300",
+    "front_digest": "77026362ca1e2d091a75c0a7c7273d530ee3f270a7e3e4763e1db1400fe4c1d0",
+    "observation_digest": "74879f727e3c32192493e0056c71724e7b25d81aee3975ea09566eeccf87e3e9",
+    "observation_generation": 399
   }
 }
