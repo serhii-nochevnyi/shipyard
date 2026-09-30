@@ -142,6 +142,12 @@ const forgedState = (e) =>
 const OWNED_BY_SCRIPTS = {
   merge: { by: 'sentinel.cjs merge', why: duplicate },
   status_change: { by: 'state-sync.cjs', why: duplicate },
+  // @contract: only the successful repository remedy run may charge this attempt budget.
+  remedy_dispatch: {
+    by: 'repo-remedy.cjs run',
+    why: () => 'refusing an unverified workflow dispatch. A hand-written row spends an attempt ' +
+      'without running the declared workflow; use repo-remedy.cjs run with matching failure evidence.',
+  },
   escalation: {
     by: 'escalation-record.cjs mark', kind: 'escalation', why: halfAct,
     fix: 'escalation-record.cjs mark <ticket> <reason...>',
