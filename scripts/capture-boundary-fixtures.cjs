@@ -10,7 +10,7 @@ const ROOT = path.resolve(__dirname, '..');
 const CAPTURE_PROMPT = 'Reply with the single word OK and take no other action.';
 const UUID_RE = /\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b/g;
 const USER_ID_KEYS = ['creator_user_id', 'user_id'];
-const ACCOUNT_ID_KEY_RE = /"(creator_user_id|user_id|creator_account_id|account_id|chatgpt_account_id|organization_id)"\s*:\s*"([^"]*)"/g;
+const ACCOUNT_ID_KEY_RE = /(\\*)"(creator_user_id|user_id|creator_account_id|account_id|chatgpt_account_id|organization_id)(\\*)"(\s*:\s*)(\\*)"((?:\\.|[^"\\])*?)\5"(?=\s*[,}\]])/g;
 
 function fail(message) {
   const error = new Error(message);
@@ -38,14 +38,14 @@ function replaceAccountIds(input, context) {
   const userMap = context.userIds || (context.userIds = new Map());
   const accountMap = context.accountIds || (context.accountIds = new Map());
   const bucketFor = (key) => (USER_ID_KEYS.includes(key) ? userMap : accountMap);
-  for (const [, key, value] of input.matchAll(ACCOUNT_ID_KEY_RE)) {
+  for (const [, , key, , , , value] of input.matchAll(ACCOUNT_ID_KEY_RE)) {
     const map = bucketFor(key);
     if (!map.has(value)) map.set(value, map.size + 1);
   }
-  return input.replace(ACCOUNT_ID_KEY_RE, (full, key, value) => {
+  return input.replace(ACCOUNT_ID_KEY_RE, (full, keyQuotePrefix, key, keyQuoteSuffix, separator, valueQuotePrefix, value) => {
     const map = bucketFor(key);
     const base = USER_ID_KEYS.includes(key) ? 'USER-ID' : 'ACCOUNT-ID';
-    return `"${key}":"<${map.size > 1 ? `${base}-${map.get(value)}` : base}>"`;
+    return `${keyQuotePrefix}"${key}${keyQuoteSuffix}"${separator}${valueQuotePrefix}"<${map.size > 1 ? `${base}-${map.get(value)}` : base}>${valueQuotePrefix}"`;
   });
 }
 

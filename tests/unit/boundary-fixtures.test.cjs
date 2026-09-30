@@ -11,7 +11,7 @@ const ROOT = path.resolve(__dirname, '../..');
 const BOUNDARIES_DIR = path.join(ROOT, 'tests/fixtures/captured/boundaries');
 const UNIT_DIR = path.join(ROOT, 'tests/unit');
 const UUID_RE = /\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b/;
-const ACCOUNT_ID_SCAN_RE = /"(creator_user_id|user_id|creator_account_id|account_id|chatgpt_account_id|organization_id)"\s*:\s*"([^"]*)"/g;
+const ACCOUNT_ID_SCAN_RE = /(\\*)"(creator_user_id|user_id|creator_account_id|account_id|chatgpt_account_id|organization_id)(\\*)"(\s*:\s*)(\\*)"((?:\\.|[^"\\])*?)\5"(?=\s*[,}\]])/g;
 const PLACEHOLDER_RE = /^<[^<>]+>$/;
 const THREAD_STARTED_SHAPE = String.raw`["']?type["']?\s*:\s*["']thread\.started["']`;
 const TURN_COMPLETED_SHAPE = String.raw`["']?type["']?\s*:\s*["']turn\.completed["']`;
@@ -59,7 +59,7 @@ function checkFixtureScrub(entry) {
         || /Bearer\s+[^\s"']+/i.test(content)) {
       violations.push(`${rel}: contains a token-shaped string`);
     }
-    for (const [, key, value] of content.matchAll(ACCOUNT_ID_SCAN_RE)) {
+    for (const [, , key, , , , value] of content.matchAll(ACCOUNT_ID_SCAN_RE)) {
       if (!PLACEHOLDER_RE.test(value)) violations.push(`${rel}: ${key} is not scrubbed to a placeholder`);
     }
   }
@@ -260,6 +260,23 @@ test('scrub replaces account identifier fields, never as a session, and leaves r
   assert.ok(out.includes('"session_id":"<SESSION-1>"'));
 });
 
+test('scrub replaces account identifiers inside escaped structured JSON', () => {
+  const accountUuid = '55555555-5555-4555-8555-555555555555';
+  const sessionUuid = '66666666-6666-4666-8666-666666666666';
+  const input = JSON.stringify({
+    type: 'response_item',
+    payload: {
+      text: JSON.stringify({ creator_user_id: 'user_secret_123', creator_account_id: accountUuid }),
+      session_id: sessionUuid,
+    },
+  });
+  const out = JSON.parse(scrub(input, {}));
+  const inner = JSON.parse(out.payload.text);
+  assert.equal(inner.creator_user_id, '<USER-ID>');
+  assert.equal(inner.creator_account_id, '<ACCOUNT-ID>');
+  assert.equal(out.payload.session_id, '<SESSION-1>');
+});
+
 test('scrub numbers account ids with a stable index only when more than one distinct value appears', () => {
   const single = scrub('{"account_id":"acct-1"}\n{"organization_id":"acct-1"}', {});
   assert.ok(single.includes('"account_id":"<ACCOUNT-ID>"'));
@@ -309,6 +326,23 @@ test('a fixture carrying a raw account id fails the scrub scan, naming the key',
   try {
     const file = path.join(dir, 'leaked.jsonl');
     fs.writeFileSync(file, '{"type":"session_meta","payload":{"creator_account_id":"acct_raw_12345"}}\n');
+    const violations = checkFixtureScrub({ fixtures: [path.relative(ROOT, file)] });
+    assert.equal(violations.length, 1);
+    assert.match(violations[0], /creator_account_id is not scrubbed to a placeholder/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a fixture carrying a raw account id in escaped structured JSON fails the scrub scan', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'boundary-fixtures-account-escaped-'));
+  try {
+    const file = path.join(dir, 'leaked.jsonl');
+    const content = JSON.stringify({
+      type: 'response_item',
+      payload: { text: JSON.stringify({ creator_account_id: 'acct_raw_escaped_12345' }) },
+    });
+    fs.writeFileSync(file, `${content}\n`);
     const violations = checkFixtureScrub({ fixtures: [path.relative(ROOT, file)] });
     assert.equal(violations.length, 1);
     assert.match(violations[0], /creator_account_id is not scrubbed to a placeholder/);
