@@ -294,6 +294,7 @@ function createDurableRecorder(storeDir) {
   const repairCommitFile = (dispatchId) => file('repair-commit', dispatchId);
   const claimFile = (dispatchId) => file('claim', dispatchId);
   const claimLockFile = (dispatchId) => file('claim-recovery', dispatchId);
+  const provisionalPreviousLatest = new Map();
   const newFenceToken = () => typeof crypto.randomUUID === 'function'
     ? crypto.randomUUID()
     : crypto.randomBytes(16).toString('hex');
@@ -610,6 +611,7 @@ function createDurableRecorder(storeDir) {
         return { recorded: false };
       }
       if (!fs.existsSync(reservationFile(dispatchId))) return { recorded: false };
+      const priorLatest = readStored(latestFile(receipt.runtime, receipt.role));
       const predecessorDispatchId = recordInput.predecessor_dispatch_id;
       const predecessorConsumerId = recordInput.predecessor_consumer_id;
       try {
@@ -657,6 +659,7 @@ function createDurableRecorder(storeDir) {
           if (!existingStored.authenticated) atomicReplaceJson(recordFile(dispatchId), durableRecord);
         }
         atomicReplaceJson(latestFile(receipt.runtime, receipt.role), durableRecord);
+        provisionalPreviousLatest.set(dispatchId, priorLatest && priorLatest.authenticated ? priorLatest.payload : null);
       } catch (error) {
         throw boundaryError('RECORD_FAILED', `durable dispatch record failed: ${error.message}`, { dispatch_id: dispatchId });
       }
@@ -692,10 +695,44 @@ function createDurableRecorder(storeDir) {
         const durableRecord = seal(recordInput);
         atomicReplaceJson(recordFile(dispatchId), durableRecord);
         atomicReplaceJson(latestFile(receipt.runtime, receipt.role), durableRecord);
+        provisionalPreviousLatest.delete(dispatchId);
         return { finalized: true };
       } catch (error) {
         throw boundaryError('RECORD_FAILED', `durable dispatch finalization failed: ${error.message}`, { dispatch_id: dispatchId });
       }
+    },
+    abortProvisional(recordInput, authority) {
+      if (authority !== RECORDER_AUTHORITY) return { aborted: false };
+      const dispatchId = recordInput && recordInput.dispatch_id;
+      const receipt = recordInput && recordInput.receipt;
+      if (typeof dispatchId !== 'string' || !isObject(receipt) || receipt.dispatch_id !== dispatchId) return { aborted: false };
+      const expected = canonicalStableStringify(recordInput);
+      const matches = (filePath, payload = recordInput) => {
+        const stored = readStored(filePath);
+        return stored && stored.authenticated
+          && canonicalStableStringify(stored.payload) === canonicalStableStringify(payload);
+      };
+      const ownRecord = recordFile(dispatchId);
+      if (!matches(ownRecord)) return { aborted: false };
+      const latest = latestFile(receipt.runtime, receipt.role);
+      const predecessor = recordInput.predecessor_dispatch_id;
+      const marker = predecessor === undefined ? null : repairCommitFile(predecessor);
+      const markerStored = marker && readStored(marker);
+      if (markerStored && (!markerStored.authenticated
+          || !isObject(markerStored.payload)
+          || markerStored.payload.successor_dispatch_id !== dispatchId
+          || canonicalStableStringify(markerStored.payload.record_input) !== expected)) return { aborted: false };
+      // A newer dispatch may already own the latest pointer. Leave it and all
+      // unrelated history alone; only remove bytes authenticated for this call.
+      if (matches(latest)) {
+        const previous = provisionalPreviousLatest.get(dispatchId);
+        if (previous) atomicReplaceJson(latest, seal(previous));
+        else fs.unlinkSync(latest);
+      }
+      if (markerStored) fs.unlinkSync(marker);
+      fs.unlinkSync(ownRecord);
+      provisionalPreviousLatest.delete(dispatchId);
+      return { aborted: true };
     },
     getReservation(dispatchId) {
       if (typeof dispatchId !== 'string' || dispatchId.trim() === '') return null;
@@ -1538,6 +1575,15 @@ function recorderFinalize(recorder, recordInput) {
   if (!affirmative(result, 'finalized')) {
     refuse('RECORD_FAILED', 'durable dispatch record could not be finalized after acknowledgement', { dispatch_id: recordInput.dispatch_id });
   }
+}
+
+function recorderAbortProvisional(recorder, recordInput) {
+  const target = recorderMethod(recorder, ['abortProvisional']);
+  if (!target) return false;
+  const args = DURABLE_RECORDERS.has(recorder)
+    ? [recordInput, RECORDER_AUTHORITY] : [recordInput];
+  const result = invokeSync(target.fn, target.receiver, args, 'provisional record abort');
+  return affirmative(result, 'aborted');
 }
 
 function recorderReserve(recorder, dispatchId, reservation) {
@@ -2445,7 +2491,23 @@ function createDispatchBoundary(options = {}) {
         stages.push({ stage: 'record', status: 'passed' });
         stages.push({ stage: 'receipt', status: 'passed', launch_id: applicationReceipt.launch_id });
         finalizedRecord = deepFreeze(snapshot({ ...baseTrace, trace: stages }));
-        return finishRecord();
+        const afterRecord = () => {
+          if (priorLease) priorLease.assertHealthy();
+          return finishRecord();
+        };
+        const abortOwnRecord = (error) => {
+          if (DURABLE_RECORDERS.has(record) && !recorderAbortProvisional(record, recordInput)) {
+            refuse('RECORD_FAILED', 'provisional dispatch record ownership could not be proved for abort',
+              { dispatch_id: validatedResolution.dispatch_id, cause: error && error.code });
+          }
+          throw error;
+        };
+        try {
+          const secondValidation = validateBeforeMutation();
+          return secondValidation && typeof secondValidation.then === 'function'
+            ? secondValidation.then(afterRecord).catch(abortOwnRecord)
+            : afterRecord();
+        } catch (error) { return abortOwnRecord(error); }
       };
       const validation = validateBeforeMutation();
       return validation && typeof validation.then === 'function'

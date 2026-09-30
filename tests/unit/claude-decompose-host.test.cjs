@@ -852,3 +852,31 @@ test('Claude recovery fences takeover and foreign edits at the recorder boundary
     }
   }
 });
+
+test('Claude recovery aborts a provisional role record when ownership changes before finalize', async () => {
+  for (const role of Object.keys(ROLES)) {
+    for (const refusal of ['WRITER_FENCED', 'FOREIGN_EDIT']) {
+      const f = recoveryFixture(role);
+      try {
+        const original = f.deps.writerLease;
+        let afterRecord = 0;
+        const writerLease = { ...original,
+          assertFence(input) {
+            if (f.recorder.getReservation(f.dispatchId).recorded) {
+              afterRecord++;
+              if (refusal === 'WRITER_FENCED') {
+                throw Object.assign(new Error('writer taken over after record'), { code: 'WRITER_FENCED' });
+              }
+              fs.writeFileSync(path.join(f.phaseDir, 'stray.md'), 'foreign after record\n');
+            }
+            return original.assertFence(input);
+          },
+        };
+        await assert.rejects(recoverDecomposition(f.dispatchId, { ...f.deps, writerLease }), { code: refusal });
+        assert.equal(afterRecord, 1);
+        assert.equal(fs.readdirSync(path.join(f.store, 'receipts')).filter((name) => name.startsWith('record-')).length, 0);
+        assert.equal(f.recorder.getReservation(f.dispatchId).recorded, false);
+      } finally { f.finish(); }
+    }
+  }
+});

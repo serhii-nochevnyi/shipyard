@@ -547,7 +547,7 @@ function buildNativeChildFixture(gsdRole, artifactPathsOrOptions = {}) {
     artifactPaths: declaredArtifactPaths, writeArtifactPaths: declaredArtifactPaths };
 }
 
-function attachFakeSpawn(f, gsdRole, fixtureData, onSpawn, exitCode = 0) {
+function attachFakeSpawn(f, gsdRole, fixtureData, onSpawn, exitCode = 0, pid = 38004) {
   const { parent, childId, parentRaw, childRaw, execRaw, transform } = fixtureData;
   const calls = [];
   const spawn = (_executable, args, options) => {
@@ -572,7 +572,7 @@ function attachFakeSpawn(f, gsdRole, fixtureData, onSpawn, exitCode = 0) {
           .split('<TMP>').join(JSON.stringify(task).slice(1, -1)).split(CAPTURED_SHA256).join(sha256));
       },
     };
-    process.pid = 38004;
+    process.pid = pid;
     setTimeout(() => {
       process.stdout.emit('data', Buffer.from(execRaw));
       process.emit('close', exitCode, null);
@@ -1034,7 +1034,12 @@ async function recoverySetup(gsdRole, {
   if (!complete) {
     fixtureData.childRaw = fixtureData.childRaw.split('\n').filter((line) => !line.includes('"task_complete"')).join('\n') + '\n';
   }
-  const { spawn, calls: runtimeSpawnCalls } = attachFakeSpawn(f, gsdRole, fixtureData, undefined, complete ? 0 : 1);
+  const stoppedProcess = spawnSync(process.execPath, ['-e', '']);
+  assert.equal(stoppedProcess.status, 0);
+  assert.ok(Number.isSafeInteger(stoppedProcess.pid) && stoppedProcess.pid > 0);
+  assert.throws(() => process.kill(stoppedProcess.pid, 0), { code: 'ESRCH' });
+  const { spawn, calls: runtimeSpawnCalls } = attachFakeSpawn(f, gsdRole, fixtureData,
+    undefined, complete ? 0 : 1, stoppedProcess.pid);
   const nativeHost = createCodexRuntimeHost({
     scope: f.scope, capabilities, recorder, env, transcriptDir, spawn,
     probe: { status: 'available', executable: 'codex', runtime_version: '0.157.1', capabilities },
@@ -1549,6 +1554,36 @@ test('Codex recovery gates every judgment role at the recorder boundary', async 
           },
         };
         await assert.rejects(setup.recover(setup.dispatchId, { writerLease }), { code: refusal });
+        assert.equal(fs.readdirSync(setup.receipts).filter((name) => name.startsWith('record-')).length, 0);
+        assert.equal(setup.recorder.getReservation(setup.dispatchId).recorded, false);
+      } finally { setup.f.clean(); }
+    }
+  }
+});
+
+test('Codex recovery aborts a provisional role record when ownership changes before finalize', async () => {
+  for (const role of ['gsd-phase-researcher', 'gsd-planner', 'gsd-plan-checker']) {
+    for (const refusal of ['WRITER_FENCED', 'FOREIGN_EDIT']) {
+      const setup = await recoverySetup(role);
+      try {
+        setup.setLeasePid(2147483647);
+        const original = setup.writerLease;
+        let afterRecord = 0;
+        const writerLease = { ...original,
+          assertFence(input) {
+            if (setup.recorder.getReservation(setup.dispatchId).recorded) {
+              afterRecord++;
+              if (refusal === 'WRITER_FENCED') {
+                throw Object.assign(new Error('writer taken over after record'), { code: 'WRITER_FENCED' });
+              }
+              fs.writeFileSync(path.join(setup.f.root, '.planning', 'phases', '38-codex-decompose',
+                'stray.md'), 'foreign after record\n');
+            }
+            return original.assertFence(input);
+          },
+        };
+        await assert.rejects(setup.recover(setup.dispatchId, { writerLease }), { code: refusal });
+        assert.equal(afterRecord, 1);
         assert.equal(fs.readdirSync(setup.receipts).filter((name) => name.startsWith('record-')).length, 0);
         assert.equal(setup.recorder.getReservation(setup.dispatchId).recorded, false);
       } finally { setup.f.clean(); }

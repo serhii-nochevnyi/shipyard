@@ -9,6 +9,7 @@ const { EventEmitter } = require('node:events');
 const { suite, test, done, assert } = require('./assert-harness.cjs');
 const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
 const { createDurableRecorder } = require('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs');
+const { createPlanningWriterLease } = require('../../plugins/delivery-pipeline/scripts/planning-writer-lease.cjs');
 const { runBounded } = require('../../plugins/delivery-pipeline/scripts/command-runner.cjs');
 const {
   createCodexDeliveryHost,
@@ -427,7 +428,18 @@ test('generated static role uses its immutable file and declared read-only sandb
 test('typed GSD delivery goes through the host-owned typed callback', async () => {
   const f = fixture();
   try {
-    const result = await delivery(f).run({
+    const actualPhaseDir = path.join(f.root, '.planning', 'phases', '38');
+    fs.mkdirSync(actualPhaseDir, { recursive: true });
+    fs.mkdirSync(f.storageRoot, { recursive: true });
+    const phaseDir = path.join(f.storageRoot, 'phase-alias');
+    fs.symlinkSync(actualPhaseDir, phaseDir, 'dir');
+    assert.notEqual(path.resolve(phaseDir), fs.realpathSync(phaseDir));
+    const lease = createPlanningWriterLease({ worktree: f.root, phaseDir,
+      stateRoot: path.join(f.storageRoot, 'writer') });
+    const handle = lease.acquire({ owner: 'typed-delivery', base_revision: f.base });
+    const writerSession = { lease, handle, base_revision: f.base, phaseDir,
+      snapshot: lease.snapshotTree(), declaredPaths: [] };
+    const result = await delivery(f, { writerSession }).run({
       role: 'decomposition',
       gsd_role: 'gsd-planner',
       context: { prompt: 'Create the approved phase plan.' },
@@ -436,7 +448,65 @@ test('typed GSD delivery goes through the host-owned typed callback', async () =
     assert.equal(f.calls[0].selection.model, 'gpt-6-sol');
     assert.equal(f.calls[0].selection.reasoning_effort, 'high');
     assert.equal(result.receipt.gsd_launch_mechanism, 'typed-gsd-callback');
+    assert.ok(f.host.recorder.getVerifiedRecord(result.receipt.dispatch_id));
+    lease.release(handle);
   } finally { clean(f); }
+});
+
+test('typed GSD delivery refuses a phase symlink escaping the scoped worktree', async () => {
+  const f = fixture();
+  try {
+    const outsidePhaseDir = path.join(f.storageRoot, 'outside-phase');
+    fs.mkdirSync(outsidePhaseDir, { recursive: true });
+    const phaseDir = path.join(f.root, '.planning', 'phase-link');
+    fs.symlinkSync(outsidePhaseDir, phaseDir, 'dir');
+    const lease = createPlanningWriterLease({ worktree: f.root, phaseDir,
+      stateRoot: path.join(f.storageRoot, 'writer') });
+    const handle = lease.acquire({ owner: 'typed-delivery', base_revision: f.base });
+    const writerSession = { lease, handle, base_revision: f.base, phaseDir,
+      snapshot: lease.snapshotTree(), declaredPaths: [] };
+    await assert.rejects(delivery(f, { writerSession }).run({ role: 'decomposition',
+      gsd_role: 'gsd-planner', context: { prompt: 'Plan.' } }), { code: 'WRITER_FENCED' });
+    assert.equal(fs.readdirSync(f.host.recorder.storeDir).filter((name) => name.startsWith('record-')).length, 0);
+    lease.release(handle);
+  } finally { clean(f); }
+});
+
+test('typed GSD delivery rejects request writer authority and a missing host lease', async () => {
+  const f = fixture();
+  try {
+    await assert.rejects(delivery(f).run({ role: 'decomposition', gsd_role: 'gsd-planner',
+      context: { prompt: 'Plan.', preRecordValidation: () => true } }), { code: 'INVALID_INPUT' });
+    assert.equal(f.calls.length, 0);
+    await assert.rejects(delivery(f).run({ role: 'decomposition', gsd_role: 'gsd-planner',
+      context: { prompt: 'Plan.' } }), { code: 'WRITER_FENCED' });
+    assert.equal(fs.readdirSync(f.host.recorder.storeDir).filter((name) => name.startsWith('record-')).length, 0);
+  } finally { clean(f); }
+});
+
+test('typed GSD delivery checks host lease takeover and foreign edits before recording', async () => {
+  for (const mode of ['takeover', 'foreign']) {
+    const f = fixture();
+    try {
+      const phaseDir = path.join(f.root, '.planning', 'phases', '38');
+      fs.mkdirSync(phaseDir, { recursive: true });
+      const lease = createPlanningWriterLease({ worktree: f.root, phaseDir,
+        stateRoot: path.join(f.storageRoot, 'writer') });
+      const handle = lease.acquire({ owner: 'typed-delivery', base_revision: f.base });
+      const writerSession = { lease, handle, base_revision: f.base, phaseDir,
+        snapshot: lease.snapshotTree(), declaredPaths: [] };
+      f.host.launchTypedGsd = (selection, context) => {
+        f.calls.push({ method: 'typed', selection, context });
+        if (mode === 'takeover') { lease.release(handle); lease.acquire({ owner: 'new-owner', base_revision: f.base }); }
+        else fs.writeFileSync(path.join(phaseDir, 'stray.md'), 'foreign');
+        return application(selection, context);
+      };
+      await assert.rejects(delivery(f, { writerSession }).run({ role: 'decomposition',
+        gsd_role: 'gsd-planner', context: { prompt: 'Plan.' } }),
+      { code: mode === 'takeover' ? 'WRITER_FENCED' : 'FOREIGN_EDIT' });
+      assert.equal(fs.readdirSync(f.host.recorder.storeDir).filter((name) => name.startsWith('record-')).length, 0);
+    } finally { clean(f); }
+  }
 });
 
 test('executor without a worktree delta fails closed before calling the signer', async () => {

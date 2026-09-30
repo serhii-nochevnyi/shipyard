@@ -71,6 +71,9 @@ function requestValue(input) {
   if (input.signals !== undefined && !object(input.signals)) fail('INVALID_INPUT', 'signals must be an object');
   if (input.context !== undefined && !object(input.context)) fail('INVALID_INPUT', 'context must be an object');
   for (const key of Object.keys(input.context || {})) {
+    if (key === 'preRecordValidation' || key === 'writerSession') {
+      fail('INVALID_INPUT', 'request context cannot supply writer authority');
+    }
     if (key.startsWith('plan') && key !== 'plan_sha256') {
       fail('INVALID_INPUT', 'unsupported delivery request context field ' + key);
     }
@@ -1205,6 +1208,30 @@ function createCodexDeliveryHost(options = {}) {
     approveForMe: options.approveForMe,
     additionalProtectedPaths: [stateRoot],
   });
+  const writerSession = options.writerSession;
+  const preRecordValidation = writerSession && function validateHostWriter() {
+    const { lease, handle, base_revision: baseRevision, snapshot, phaseDir, declaredPaths } = writerSession;
+    if (!lease || lease.schema !== 'shipyard.planning-writer-lease.v1'
+        || typeof lease.assertFence !== 'function' || typeof lease.changedSince !== 'function'
+        || !object(handle) || typeof handle.token !== 'string' || !Number.isSafeInteger(handle.epoch)
+        || typeof baseRevision !== 'string' || snapshot?.schema !== 'shipyard.planning-writer-lease.snapshot.v1'
+        || typeof phaseDir !== 'string' || !path.isAbsolute(phaseDir) || !Array.isArray(declaredPaths)
+        || declaredPaths.some((item) => typeof item !== 'string' || !item.trim()
+          || path.isAbsolute(item) || item.split(/[\\/]/).includes('..'))) {
+      fail('WRITER_FENCED', 'host writer session is incomplete');
+    }
+    const relativePhase = path.relative(fs.realpathSync(scope.worktree), fs.realpathSync(phaseDir));
+    if (relativePhase.startsWith('..') || path.isAbsolute(relativePhase)) {
+      fail('WRITER_FENCED', 'host writer phase is outside the scoped worktree');
+    }
+    lease.assertFence({ token: handle.token, epoch: handle.epoch, base_revision: baseRevision });
+    const allowed = new Set(declaredPaths.map((item) => item.replace(/\\/g, '/')));
+    const { changed } = lease.changedSince(snapshot);
+    const foreign = changed.filter((item) => !allowed.has(item));
+    if (foreign.length || changed.length !== allowed.size || allowed.size !== declaredPaths.length) {
+      fail('FOREIGN_EDIT', `foreign phase edit or declared path mismatch: ${foreign.join(', ')}`);
+    }
+  };
   if (!runtimeHost || !object(runtimeHost.capabilities) || !runtimeHost.recorder) {
     fail('MISSING_ADAPTER', 'scoped Codex runtime host lacks capabilities or durable recorder');
   }
@@ -1269,7 +1296,8 @@ function createCodexDeliveryHost(options = {}) {
         agentDir,
         agentManifest,
         env,
-        context: taskContext,
+        context: request.gsd_role !== undefined && preRecordValidation
+          ? { ...taskContext, preRecordValidation } : taskContext,
       });
       let result = await dispatchAgent(request.dispatch_id || newDispatchId(), context);
       options.controller?.assertOwner(scope.run_id);

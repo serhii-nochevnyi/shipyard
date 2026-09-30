@@ -10,6 +10,7 @@ const { transcriptEvidence: testTranscriptEvidence } = require('./claude-test-ev
 const {
   createDurableRecorder,
 } = require('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs');
+const { createPlanningWriterLease } = require('../../plugins/delivery-pipeline/scripts/planning-writer-lease.cjs');
 const {
   CLAUDE_MODEL_ALIASES,
 } = require('../../plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs');
@@ -322,6 +323,12 @@ test('routes a named GSD callback through the host-owned typed resource', async 
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-claude-workflow-typed-host-'));
   const scriptPath = path.join(root, 'workflow.mjs');
   const recorder = createDurableRecorder(path.join(root, 'receipts'));
+  const worktree = path.join(root, 'worktree');
+  fs.mkdirSync(worktree);
+  const lease = createPlanningWriterLease({ worktree, phaseDir: worktree, stateRoot: path.join(root, 'writer') });
+  const handle = lease.acquire({ owner: 'typed-workflow', base_revision: 'fixture-base' });
+  const writerSession = { lease, handle, base_revision: 'fixture-base', phaseDir: worktree,
+    snapshot: lease.snapshotTree(), declaredPaths: [] };
   fs.writeFileSync(scriptPath, `
 export const meta = { name: 'typed-host-test' }
 return await __createClaudeWorkflowDispatch({
@@ -359,6 +366,7 @@ return await __createClaudeWorkflowDispatch({
       parallel: async (thunks) => Promise.all(thunks.map((thunk) => thunk())),
       capabilities: OPUS_CAPABILITIES,
       recorder,
+      writerSession,
       applicationEvidence: ({ result }) => result,
     });
     assert.equal(typedCalls, 1);
@@ -368,9 +376,106 @@ return await __createClaudeWorkflowDispatch({
     assert.equal(value.receipt.applied_model, 'claude-opus-5-5');
     assert.equal(value.receipt.applied_effort, 'medium');
     assert.ok(recorder.getVerifiedRecord(value.receipt.dispatch_id));
+    lease.release(handle);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
+});
+
+test('typed workflow refuses missing and script-supplied writer authority without a record', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-typed-authority-'));
+  const recorderDir = path.join(root, 'receipts');
+  const recorder = createDurableRecorder(recorderDir);
+  const scriptPath = path.join(root, 'workflow.mjs');
+  const dispatch = (context) => `return await __createClaudeWorkflowDispatch({ agent, prompt: 'plan',
+    role: 'decomposition', model: 'claude-opus-5-5', effort: 'medium',
+    gsdRole: 'gsd-planner', context: ${context} })\n`;
+  const options = { scriptPath, agent: async () => { throw new Error('generic callback'); },
+    parallel: async (thunks) => Promise.all(thunks.map((thunk) => thunk())),
+    typedGsdCallback: async (_prompt, selection, gsdRole) => transcriptEvidence({
+      launch_id: 'typed-authority', applied_model: selection.model, applied_effort: selection.effort,
+      observed_model: selection.model, observed_effort: selection.effort,
+      gsd_role: gsdRole, gsd_launch_mechanism: selection.gsd_launch_mechanism,
+    }), capabilities: OPUS_CAPABILITIES, recorder, applicationEvidence: ({ result }) => result };
+  try {
+    fs.writeFileSync(scriptPath, dispatch('{ ticket: "T-45-16" }'));
+    await assert.rejects(runClaudeWorkflow(options), { code: 'WRITER_FENCED' });
+    assert.equal(fs.readdirSync(recorderDir).filter((name) => name.startsWith('record-')).length, 0);
+    fs.writeFileSync(scriptPath, dispatch('{ ticket: "T-45-16", preRecordValidation: () => true }'));
+    await assert.rejects(runClaudeWorkflow(options), { code: 'INVALID_HOST' });
+    await assert.rejects(runClaudeWorkflow({ ...options,
+      args: { preRecordValidation: 'untrusted' } }), { code: 'INVALID_HOST' });
+    assert.equal(fs.readdirSync(recorderDir).filter((name) => name.startsWith('record-')).length, 0);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('typed workflow checks host lease takeover and foreign edits before recording', async () => {
+  for (const mode of ['takeover', 'foreign']) {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-typed-writer-'));
+    try {
+      const worktree = path.join(root, 'worktree');
+      fs.mkdirSync(worktree);
+      const lease = createPlanningWriterLease({ worktree, phaseDir: worktree,
+        stateRoot: path.join(root, 'writer') });
+      const handle = lease.acquire({ owner: 'typed-workflow', base_revision: 'fixture-base' });
+      const writerSession = { lease, handle, base_revision: 'fixture-base', phaseDir: worktree,
+        snapshot: lease.snapshotTree(), declaredPaths: [] };
+      const recorderDir = path.join(root, 'receipts');
+      const scriptPath = path.join(root, 'workflow.mjs');
+      fs.writeFileSync(scriptPath, `return await __createClaudeWorkflowDispatch({ agent,
+        prompt: 'plan', role: 'decomposition', model: 'claude-opus-5-5', effort: 'medium',
+        gsdRole: 'gsd-planner', context: { ticket: 'T-45-16' } })\n`);
+      await assert.rejects(runClaudeWorkflow({ scriptPath,
+        agent: async () => { throw new Error('generic callback'); },
+        parallel: async (thunks) => Promise.all(thunks.map((thunk) => thunk())),
+        typedGsdCallback: async (_prompt, selection, gsdRole) => {
+          if (mode === 'takeover') { lease.release(handle); lease.acquire({ owner: 'new-owner', base_revision: 'fixture-base' }); }
+          else fs.writeFileSync(path.join(worktree, 'stray.md'), 'foreign');
+          return transcriptEvidence({ launch_id: `typed-${mode}`, applied_model: selection.model,
+            applied_effort: selection.effort, observed_model: selection.model,
+            observed_effort: selection.effort, gsd_role: gsdRole,
+            gsd_launch_mechanism: selection.gsd_launch_mechanism });
+        }, capabilities: OPUS_CAPABILITIES, recorder: createDurableRecorder(recorderDir),
+        writerSession, applicationEvidence: ({ result }) => result,
+      }), { code: mode === 'takeover' ? 'WRITER_FENCED' : 'FOREIGN_EDIT' });
+      assert.equal(fs.readdirSync(recorderDir).filter((name) => name.startsWith('record-')).length, 0);
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  }
+});
+
+test('typed workflow refuses a phase symlink escaping the scoped worktree', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-typed-phase-link-'));
+  try {
+    const worktree = path.join(root, 'worktree');
+    const outside = path.join(root, 'outside');
+    fs.mkdirSync(worktree);
+    fs.mkdirSync(outside);
+    const phaseDir = path.join(worktree, 'phase-link');
+    fs.symlinkSync(outside, phaseDir, 'dir');
+    const lease = createPlanningWriterLease({ worktree, phaseDir,
+      stateRoot: path.join(root, 'writer') });
+    const handle = lease.acquire({ owner: 'typed-workflow', base_revision: 'fixture-base' });
+    const writerSession = { lease, handle, base_revision: 'fixture-base', phaseDir,
+      snapshot: lease.snapshotTree(), declaredPaths: [] };
+    const recorderDir = path.join(root, 'receipts');
+    const scriptPath = path.join(root, 'workflow.mjs');
+    fs.writeFileSync(scriptPath, `return await __createClaudeWorkflowDispatch({ agent,
+      prompt: 'plan', role: 'decomposition', model: 'claude-opus-5-5', effort: 'medium',
+      gsdRole: 'gsd-planner', context: { ticket: 'T-45-16' } })\n`);
+    await assert.rejects(runClaudeWorkflow({ scriptPath,
+      agent: async () => { throw new Error('generic callback'); },
+      parallel: async (thunks) => Promise.all(thunks.map((thunk) => thunk())),
+      typedGsdCallback: async (_prompt, selection, gsdRole) => transcriptEvidence({
+        launch_id: 'typed-phase-link', applied_model: selection.model,
+        applied_effort: selection.effort, observed_model: selection.model,
+        observed_effort: selection.effort, gsd_role: gsdRole,
+        gsd_launch_mechanism: selection.gsd_launch_mechanism,
+      }), capabilities: OPUS_CAPABILITIES, recorder: createDurableRecorder(recorderDir),
+      runScope: { worktree }, writerSession, applicationEvidence: ({ result }) => result,
+    }), { code: 'INVALID_HOST' });
+    assert.equal(fs.readdirSync(recorderDir).filter((name) => name.startsWith('record-')).length, 0);
+    lease.release(handle);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
 test('refuses a typed GSD dispatch without host-owned role and mechanism evidence', async () => {

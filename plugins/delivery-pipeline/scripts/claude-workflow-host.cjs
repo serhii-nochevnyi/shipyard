@@ -95,6 +95,7 @@ function registeredHostOptions(options) {
     runScope: hostResource(options, 'runScope'),
     controller: hostResource(options, 'controller'),
     runId: hostResource(options, 'runId') || hostResource(options, 'run_id'),
+    writerSession: hostResource(options, 'writerSession'),
   });
 }
 
@@ -127,10 +128,16 @@ function registerClaudeWorkflowHost(options = {}) {
         'artifactConsumer', 'artifactPreparer', 'handoff', 'sessionHandoff',
         'ownerCapability', 'owner', 'capacity', 'runScope', 'run_scope', 'controller',
         'runId', 'run_id',
+        'writerSession', 'preRecordValidation',
       ]) {
         if (Object.prototype.hasOwnProperty.call(runOptions, key)) {
           reject(`registered host owns ${key}`);
         }
+      }
+      if (object(runOptions.args)
+          && (Object.hasOwn(runOptions.args, 'preRecordValidation')
+            || Object.hasOwn(runOptions.args, 'writerSession'))) {
+        reject('workflow args cannot carry writer authority');
       }
       return runClaudeWorkflow({
         ...hostOptions,
@@ -235,6 +242,36 @@ function createClaudeWorkflowDispatchBridge(options = {}) {
   const controller = hostResource(options, 'controller');
   const runId = hostResource(options, 'runId') || hostResource(options, 'run_id')
     || (runScope && runScope.run_id);
+  const writerSession = hostResource(options, 'writerSession');
+  const preRecordValidation = writerSession && function validateHostWriter() {
+    const { lease, handle, base_revision: baseRevision, snapshot, phaseDir, declaredPaths } = writerSession;
+    if (!lease || lease.schema !== 'shipyard.planning-writer-lease.v1'
+        || typeof lease.assertFence !== 'function' || typeof lease.changedSince !== 'function'
+        || !object(handle) || typeof handle.token !== 'string' || !Number.isSafeInteger(handle.epoch)
+        || typeof baseRevision !== 'string' || snapshot?.schema !== 'shipyard.planning-writer-lease.snapshot.v1'
+        || typeof phaseDir !== 'string' || !path.isAbsolute(phaseDir) || !Array.isArray(declaredPaths)
+        || declaredPaths.some((item) => typeof item !== 'string' || !item.trim()
+          || path.isAbsolute(item) || item.split(/[\\/]/).includes('..'))) {
+      reject('host writer session is incomplete');
+    }
+    const scopedWorktree = runScope && (object(runScope.worktree)
+      ? runScope.worktree.path || runScope.worktree.worktree : runScope.worktree);
+    if (typeof scopedWorktree === 'string') {
+      const relativePhase = path.relative(fs.realpathSync(scopedWorktree), fs.realpathSync(phaseDir));
+      if (relativePhase.startsWith('..') || path.isAbsolute(relativePhase)) {
+        reject('host writer phase is outside the scoped worktree');
+      }
+    }
+    lease.assertFence({ token: handle.token, epoch: handle.epoch, base_revision: baseRevision });
+    const allowed = new Set(declaredPaths.map((item) => item.replace(/\\/g, '/')));
+    const { changed } = lease.changedSince(snapshot);
+    const foreign = changed.filter((item) => !allowed.has(item));
+    if (foreign.length || changed.length !== allowed.size || allowed.size !== declaredPaths.length) {
+      const error = new Error(`foreign phase edit or declared path mismatch: ${foreign.join(', ')}`);
+      error.code = 'FOREIGN_EDIT';
+      throw error;
+    }
+  };
   if (!object(capabilities)) reject('explicit host capabilities are required');
   if (!durableRecorder(recorder)) reject('a frozen durable receipt recorder is required');
   if (handoff !== undefined && !isOwnerCapability(handoff)) {
@@ -311,6 +348,13 @@ function createClaudeWorkflowDispatchBridge(options = {}) {
   });
   return Object.freeze((dispatchOptions = {}) => {
     if (!object(dispatchOptions)) reject('dispatch options must be an object');
+    if (Object.hasOwn(dispatchOptions, 'preRecordValidation')
+        || Object.hasOwn(dispatchOptions, 'writerSession')
+        || (object(dispatchOptions.context)
+          && (Object.hasOwn(dispatchOptions.context, 'preRecordValidation')
+            || Object.hasOwn(dispatchOptions.context, 'writerSession')))) {
+      reject('workflow dispatch cannot supply writer authority');
+    }
     if (controller && typeof controller.assertOwner === 'function') {
       if (typeof runId !== 'string' || !runId.trim()) reject('controller-owned host requires runId');
       controller.assertOwner(runId);
@@ -320,13 +364,18 @@ function createClaudeWorkflowDispatchBridge(options = {}) {
       ...dispatchOptions,
       agent: options.agent,
       host,
-      ...(context === undefined ? {} : { context }),
+      context: { ...(context || {}), ...(preRecordValidation ? { preRecordValidation } : {}) },
     });
   });
 }
 
 async function runClaudeWorkflow(options = {}) {
   if (!object(options)) reject('options must be an object');
+  if (object(options.args)
+      && (Object.hasOwn(options.args, 'preRecordValidation')
+        || Object.hasOwn(options.args, 'writerSession'))) {
+    reject('workflow args cannot carry writer authority');
+  }
   if (typeof options.scriptPath !== 'string' || !options.scriptPath.trim()) {
     reject('scriptPath is required');
   }

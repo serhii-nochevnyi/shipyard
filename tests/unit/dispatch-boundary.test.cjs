@@ -8,6 +8,7 @@ const { spawn, spawnSync } = require('child_process');
 const { suite, test, done, assert } = require('./assert-harness.cjs');
 const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
 const boundaryModule = require('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs');
+const { createPlanningWriterLease } = require('../../plugins/delivery-pipeline/scripts/planning-writer-lease.cjs');
 
 function receiptFor(resolution, extra = {}) {
   return {
@@ -160,6 +161,98 @@ test('typed judgment waits for host validation before any durable recorder mutat
       assert.equal(fs.readdirSync(asyncStore).filter((name) => name.startsWith('record-')).length, 0);
     }
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('typed judgment checks ownership again after record and aborts only its provisional record', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-second-writer-gate-'));
+  try {
+    const worktree = path.join(root, 'worktree');
+    const phaseDir = path.join(worktree, 'phase');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    const lease = createPlanningWriterLease({ worktree, phaseDir, stateRoot: path.join(root, 'writer') });
+    for (const mode of ['control', 'takeover', 'foreign']) {
+      const handle = lease.acquire({ owner: `owner-${mode}`, base_revision: 'base' });
+      const snapshot = lease.snapshotTree();
+      const store = path.join(root, `receipts-${mode}`);
+      const recorder = boundaryModule.createDurableRecorder(store);
+      const gsdRole = 'gsd-planner';
+      const boundary = boundaryModule.createDispatchBoundary({
+        adapters: { codex: fakeAdapter({ receipt: (resolution) => receiptFor(resolution, {
+          gsd_role: gsdRole, gsd_launch_mechanism: 'typed-gsd-callback',
+        }) }) }, recorder, requireGsdRole: true,
+      });
+      let checks = 0;
+      const validate = () => {
+        checks++;
+        if (checks === 2 && mode === 'takeover') {
+          lease.release(handle);
+          lease.acquire({ owner: 'new-owner', base_revision: 'base' });
+        }
+        if (checks === 2 && mode === 'foreign') fs.writeFileSync(path.join(phaseDir, 'stray.md'), 'foreign');
+        lease.assertFence({ ...handle, base_revision: 'base' });
+        const foreign = lease.changedSince(snapshot).changed;
+        if (foreign.length) throw Object.assign(new Error(foreign.join(', ')), { code: 'FOREIGN_EDIT' });
+      };
+      const dispatchId = `second-gate-${mode}`;
+      const call = () => boundary.dispatch({ runtime: 'codex', role: 'decomposition', gsd_role: gsdRole,
+        dispatch_id: dispatchId }, { ticket: 'T-45-16', preRecordValidation: validate });
+      if (mode === 'control') {
+        const record = await call();
+        assert.equal(record.receipt.dispatch_id, dispatchId);
+        assert.ok(recorder.getVerifiedRecord(dispatchId));
+        lease.release(handle);
+      } else {
+        await assert.rejects(Promise.resolve().then(call), { code: mode === 'takeover' ? 'WRITER_FENCED' : 'FOREIGN_EDIT' });
+        assert.equal(recorder.getVerifiedRecord(dispatchId), null);
+        assert.equal(fs.readdirSync(store).filter((name) => name.startsWith('record-')).length, 0);
+        if (mode === 'foreign') { fs.rmSync(path.join(phaseDir, 'stray.md')); lease.release(handle); }
+        else {
+          // The new owner belongs to this fixture; release it for the next case.
+          const current = JSON.parse(fs.readFileSync(path.join(root, 'writer', lease.key, 'lease.json')));
+          lease.release({ token: current.token, epoch: current.epoch });
+        }
+      }
+      assert.equal(checks, 2, 'both validation calls are required');
+    }
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('provisional rollback restores the prior authenticated latest receipt', async () => {
+  const store = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-rollback-history-'));
+  try {
+    const recorder = boundaryModule.createDurableRecorder(store);
+    const worktree = path.join(store, 'worktree');
+    fs.mkdirSync(worktree);
+    const lease = createPlanningWriterLease({ worktree, phaseDir: worktree,
+      stateRoot: path.join(store, 'writer') });
+    const handle = lease.acquire({ owner: 'history-control', base_revision: 'base' });
+    const snapshot = lease.snapshotTree();
+    const validateWriter = () => {
+      lease.assertFence({ ...handle, base_revision: 'base' });
+      const changed = lease.changedSince(snapshot).changed;
+      if (changed.length) throw Object.assign(new Error(changed.join(', ')), { code: 'FOREIGN_EDIT' });
+    };
+    const gsdRole = 'gsd-planner';
+    const boundary = boundaryModule.createDispatchBoundary({
+      adapters: { codex: fakeAdapter({ receipt: (resolution) => receiptFor(resolution, {
+        gsd_role: gsdRole, gsd_launch_mechanism: 'typed-gsd-callback',
+      }) }) }, recorder, requireGsdRole: true,
+    });
+    const dispatch = (id, validate) => boundary.dispatch({ runtime: 'codex', role: 'decomposition',
+      gsd_role: gsdRole, dispatch_id: id }, { ticket: 'T-45-16', preRecordValidation: validate });
+    const previous = await dispatch('history-control', validateWriter);
+    let checks = 0;
+    await assert.rejects(Promise.resolve().then(() => dispatch('history-refused', () => {
+      validateWriter();
+      if (++checks === 2) throw Object.assign(new Error('writer takeover'), { code: 'WRITER_FENCED' });
+    })), { code: 'WRITER_FENCED' });
+    assert.equal(checks, 2);
+    assert.equal(recorder.getVerifiedRecord('history-refused'), null);
+    assert.deepEqual(recorder.getVerifiedRecord('history-control').receipt, previous.receipt);
+    assert.equal(recorder.getLatestReceipt('codex', 'decomposition').dispatch_id, 'history-control');
+    assert.equal(fs.readdirSync(store).filter((name) => name.startsWith('record-')).length, 1);
+    lease.release(handle);
+  } finally { fs.rmSync(store, { recursive: true, force: true }); }
 });
 
 test('capacity admission fences an in-flight launch and releases after its receipt', async () => {
