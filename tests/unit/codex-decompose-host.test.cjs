@@ -835,7 +835,7 @@ function timedOutWaits(raw) {
   }).join('\n') + '\n';
 }
 
-async function recoverySetup(gsdRole, { complete = true } = {}) {
+async function recoverySetup(gsdRole, { complete = true, crashBeforeCompletionCallback = false } = {}) {
   const f = fixture();
   const fixtureData = buildNativeChildFixture(gsdRole);
   fixtureData.parentRaw = timedOutWaits(fixtureData.parentRaw);
@@ -869,6 +869,28 @@ async function recoverySetup(gsdRole, { complete = true } = {}) {
   const runtimeHost = Object.freeze({
     ...nativeHost,
     async launchTypedGsd(selection, context) {
+      if (crashBeforeCompletionCallback) {
+        let relay = null;
+        let taskBytes = null;
+        try {
+          await nativeHost.launchTypedGsd(selection, {
+            ...context,
+            onSessionStarted(started) {
+              context.onSessionStarted(started);
+              relay = started.runtime_launch.task_relay;
+              taskBytes = fs.readFileSync(relay.path);
+            },
+            onCompleted() {
+              throw Object.assign(new Error('simulated host death before the completion callback'), {
+                name: 'CodexRuntimeHostError', code: 'SIMULATED_HOST_DEATH',
+              });
+            },
+          });
+        } catch (error) {
+          if (relay && taskBytes) fs.writeFileSync(relay.path, taskBytes, { mode: 0o600 });
+          throw error;
+        }
+      }
       await nativeHost.launchTypedGsd(selection, context);
       throw Object.assign(new Error('simulated host death after durable child completion and before launch return'), {
         code: 'SIMULATED_HOST_DEATH',
@@ -938,9 +960,12 @@ test('recover rebuilds the original ' + gsdRole + ' receipt after completion was
     assert.equal(result.receipt.launch_id, 'codex-' + setup.expectedSessionId);
     assert.equal(result.receipt.runtime_evidence.native_child_evidence.session_id,
       setup.fixtureData.childId);
-    assert.equal(result.receipt.runtime_evidence.native_session_evidence.sha256,
-      JSON.parse(fs.readFileSync(path.join(setup.hostState, 'launches',
-        fs.readdirSync(path.join(setup.hostState, 'launches'))[0]), 'utf8')).completed.parent_sha256);
+    const launchDir = path.join(setup.hostState, 'launches');
+    const launchRecord = JSON.parse(fs.readFileSync(path.join(launchDir, fs.readdirSync(launchDir)[0]), 'utf8'));
+    assert.deepEqual(result.receipt.runtime_evidence.native_child_evidence,
+      launchRecord.completed.runtime_evidence.native_child_evidence);
+    assert.deepEqual(result.receipt.runtime_evidence.native_session_evidence,
+      launchRecord.completed.runtime_evidence.native_session_evidence);
     const recorder = createDurableRecorder(setup.receipts);
     assert.equal(recorder.getReservation(setup.dispatchId).recorded, true);
     assert.equal(recorder.getVerifiedRecord(setup.dispatchId).receipt.dispatch_id, setup.dispatchId);
@@ -949,6 +974,26 @@ test('recover rebuilds the original ' + gsdRole + ' receipt after completion was
   } finally { setup.f.clean(); }
 });
 }
+
+test('recover rebuilds a completed dispatch when the host dies before its completion callback', async () => {
+  const setup = await recoverySetup('gsd-planner', { crashBeforeCompletionCallback: true });
+  try {
+    assert.equal(setup.crashError.code, 'SIMULATED_HOST_DEATH');
+    const launchFile = path.join(setup.hostState, 'launches', fs.readdirSync(path.join(setup.hostState, 'launches'))[0]);
+    const record = JSON.parse(fs.readFileSync(launchFile, 'utf8'));
+    assert.equal(record.completed, undefined);
+    assert.ok(fs.existsSync(record.session_started.runtime_launch.task_relay.path));
+    assert.equal(setup.recorder.getReservation(setup.dispatchId).recorded, false);
+    setup.setLeasePid(2147483647);
+    const recovered = await setup.recover();
+    assert.equal(recovered.recovered, true);
+    assert.equal(recovered.receipt.dispatch_id, setup.dispatchId);
+    assert.deepEqual(recovered.receipt.runtime_evidence.native_child_evidence.task_relay,
+      record.session_started.runtime_launch.task_relay);
+    assert.equal(setup.spawned.length, 0);
+    assert.equal(setup.recorder.getReservation(setup.dispatchId).recorded, true);
+  } finally { setup.f.clean(); }
+});
 
 test('recover refuses a dispatch with no reservation and one already recorded', async () => {
   const setup = await recoverySetup('gsd-planner');
@@ -1000,6 +1045,47 @@ test('recover refuses a changed original prompt and policy signals before record
     }));
     await assert.rejects(setup.recover(), (error) => error.code === 'RECOVERY_EVIDENCE_INCOMPLETE');
     assert.equal(setup.recorder.getReservation(setup.dispatchId).recorded, false);
+  } finally { setup.f.clean(); }
+});
+
+test('recover refuses a tampered task_relay binding before recording', async () => {
+  const setup = await recoverySetup('gsd-planner');
+  try {
+    setup.setLeasePid(2147483647);
+    const launchDir = path.join(setup.hostState, 'launches');
+    const launchFile = path.join(launchDir, fs.readdirSync(launchDir)[0]);
+    const record = JSON.parse(fs.readFileSync(launchFile, 'utf8'));
+    record.completed.runtime_evidence.native_child_evidence.task_relay.sha256 = '0'.repeat(64);
+    fs.writeFileSync(launchFile, JSON.stringify(record), { mode: 0o600 });
+    await assert.rejects(setup.recover(), (error) => error.code === 'RECOVERY_ARTIFACT_ALTERED');
+    assert.equal(fs.existsSync(setup.recordFile), false);
+    assert.equal(setup.recorder.getReservation(setup.dispatchId).recorded, false);
+    assert.equal(setup.spawned.length, 0);
+  } finally { setup.f.clean(); }
+});
+
+test('recover refuses a changed original generated research agent digest before recording', async () => {
+  const setup = await recoverySetup('gsd-phase-researcher');
+  try {
+    setup.setLeasePid(2147483647);
+    const launchDir = path.join(setup.hostState, 'launches');
+    const launchFile = path.join(launchDir, fs.readdirSync(launchDir)[0]);
+    const record = JSON.parse(fs.readFileSync(launchFile, 'utf8'));
+    assert.equal(record.binding.generated_agent.sha256, setup.f.researchDigest);
+    const agentFile = path.join(setup.f.agentDir, record.binding.generated_agent.file);
+    const original = fs.readFileSync(agentFile, 'utf8');
+    const changed = original.replace('Follow the generated research policy.', 'Follow a changed generated research policy.');
+    assert.notEqual(changed, original);
+    const digest = crypto.createHash('sha256').update(changed).digest('hex');
+    fs.writeFileSync(agentFile, changed);
+    const manifestFile = path.join(setup.f.agentDir, '.shipyard-manifest.json');
+    const manifest = JSON.parse(fs.readFileSync(manifestFile, 'utf8'));
+    manifest.agent_digests[record.binding.generated_agent.file] = digest;
+    fs.writeFileSync(manifestFile, JSON.stringify(manifest));
+    await assert.rejects(setup.recover(), (error) => error.code === 'RECOVERY_EVIDENCE_INCOMPLETE');
+    assert.equal(fs.existsSync(setup.recordFile), false);
+    assert.equal(setup.recorder.getReservation(setup.dispatchId).recorded, false);
+    assert.equal(setup.spawned.length, 0);
   } finally { setup.f.clean(); }
 });
 
