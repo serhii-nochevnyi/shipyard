@@ -2110,22 +2110,14 @@
   status: "merged"
   url: "https://github.com/serhii-nochevnyi/shipyard/pull/338"
 "T-43-04":
-  base: "ticket/T-43-07-cancelled-checks-ignore-superseded-runs"
-  base_reason: "T-43-07 is pr-open — cascade off ticket/T-43-07-cancelled-checks-ignore-superseded-runs; the sentinel retargets this PR onto epic/43-target-project-delivery-at-scale when T-43-07 lands"
-  behind_by: 43
+  base: "epic/43-target-project-delivery-at-scale"
+  base_reason: "T-43-07 is MERGED, so its branch is no longer where work lands — the base is epic/43-target-project-delivery-at-scale (base-merge it in first to keep the review diff one slice)"
   branch: "ticket/T-43-04-bounded-reachability-o-1-git-forms-a-lar"
-  checks: {"failing":0,"none_reported":false,"pending":0,"total":1,"unavailable":false}
-  draft: false
   epic: "epic/43-target-project-delivery-at-scale"
-  head_sha: "6e467fa671521381deb4c51910ffb3de35e7b5fb"
-  merge_scope: "stacked"
-  merge_state: "CLEAN"
+  merged_into: "epic/43-target-project-delivery-at-scale"
   pr: 319
-  pr_base: "ticket/T-43-07-cancelled-checks-ignore-superseded-runs"
-  pr_created_at: "2026-09-27T17:30:45Z"
-  reapable: false
-  review_decision: null
-  status: "pr-open"
+  reapable: true
+  status: "merged"
   url: "https://github.com/serhii-nochevnyi/shipyard/pull/319"
 "T-43-05":
   base: "epic/43-target-project-delivery-at-scale"
@@ -2142,39 +2134,32 @@
   base_reason: "T-43-05 is MERGED, so its branch is no longer where work lands — the base is epic/43-target-project-delivery-at-scale (base-merge it in first to keep the review diff one slice)"
   branch: "ticket/T-43-06-one-exported-conveyor-scratch-set-for-th"
   epic: "epic/43-target-project-delivery-at-scale"
-  pr: null
-  ready: true
-  reapable: false
-  status: "pending"
+  merged_into: "epic/43-target-project-delivery-at-scale"
+  pr: 371
+  reapable: true
+  status: "merged"
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/371"
 "T-43-07":
   base: "epic/43-target-project-delivery-at-scale"
   base_reason: "no primary parent — a root ticket PRs into epic/43-target-project-delivery-at-scale"
-  behind_by: 2
   branch: "ticket/T-43-07-cancelled-checks-ignore-superseded-runs"
-  checks: {"failing":0,"none_reported":false,"pending":0,"total":1,"unavailable":false}
-  draft: true
   epic: "epic/43-target-project-delivery-at-scale"
-  head_sha: "fef7d105eaf6614575117c88a4224932a3253911"
-  merge_scope: "stacked"
-  merge_state: "CLEAN"
+  merged_into: "epic/43-target-project-delivery-at-scale"
   pr: 266
-  pr_base: "epic/43-target-project-delivery-at-scale"
-  pr_created_at: "2026-09-26T11:47:38Z"
-  reapable: false
-  review_decision: null
-  status: "pr-open"
+  reapable: true
+  status: "merged"
   url: "https://github.com/serhii-nochevnyi/shipyard/pull/266"
 "T-43-08":
-  base: "ticket/T-43-04-bounded-reachability-o-1-git-forms-a-lar"
-  base_reason: "T-43-04 is pr-open — cascade off ticket/T-43-04-bounded-reachability-o-1-git-forms-a-lar; the sentinel retargets this PR onto epic/43-target-project-delivery-at-scale when T-43-04 lands"
-  blocked_by: ["T-43-07"]
-  blocked_reasons: {"T-43-07":"non-primary parent T-43-07 is pr-open — T-43-08's worktree is cut from T-43-04 and receives T-43-07 only through epic/43-target-project-delivery-at-scale; T-43-07 must merge into epic/43-target-project-delivery-at-scale first (T-43-07 is pr-open)"}
+  base: "epic/43-target-project-delivery-at-scale"
+  base_merge: "epic/43-target-project-delivery-at-scale"
+  base_reason: "T-43-04 is MERGED, so its branch is no longer where work lands — the base is epic/43-target-project-delivery-at-scale (base-merge it in first to keep the review diff one slice); ticket-worktree.sh create merges epic/43-target-project-delivery-at-scale in for non-primary parent(s) T-43-01, T-43-07"
   branch: "ticket/T-43-08-a-stale-approval-from-a-declared-bot-doe"
   epic: "epic/43-target-project-delivery-at-scale"
-  pr: null
-  ready: false
-  reapable: false
-  status: "pending"
+  merged_into: "epic/43-target-project-delivery-at-scale"
+  pr: 370
+  reapable: true
+  status: "merged"
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/370"
 "T-43-09":
   base: "epic/43-target-project-delivery-at-scale"
   base_reason: "no primary parent — a root ticket PRs into epic/43-target-project-delivery-at-scale"
@@ -2189,61 +2174,44 @@
   base: "epic/43-target-project-delivery-at-scale"
   base_merge: "epic/43-target-project-delivery-at-scale"
   base_reason: "T-43-09 is MERGED, so its branch is no longer where work lands — the base is epic/43-target-project-delivery-at-scale (base-merge it in first to keep the review diff one slice); ticket-worktree.sh create merges epic/43-target-project-delivery-at-scale in for non-primary parent(s) T-43-01"
-  behind_by: 1
   branch: "ticket/T-43-10-honour-pipeline-gsd-sync-as-a-deprecated"
-  checks: {"failing":0,"none_reported":false,"pending":0,"total":1,"unavailable":false}
-  draft: true
   epic: "epic/43-target-project-delivery-at-scale"
-  head_sha: "244c3351843e40822bef4349acc140cc9ce19c1d"
-  merge_scope: "stacked"
-  merge_state: "CLEAN"
+  merged_into: "epic/43-target-project-delivery-at-scale"
   pr: 346
-  pr_base: "epic/43-target-project-delivery-at-scale"
-  pr_created_at: "2026-09-28T11:20:59Z"
-  reapable: false
-  review_decision: null
-  status: "pr-open"
+  reapable: true
+  status: "merged"
   url: "https://github.com/serhii-nochevnyi/shipyard/pull/346"
 "T-43-11":
   base: "epic/43-target-project-delivery-at-scale"
   base_reason: "no primary parent — a root ticket PRs into epic/43-target-project-delivery-at-scale"
-  behind_by: 1
   branch: "ticket/T-43-11-bind-pre-existing-jira-issues-by-recorde"
-  checks: {"failing":0,"none_reported":false,"pending":0,"total":1,"unavailable":false}
-  draft: true
   epic: "epic/43-target-project-delivery-at-scale"
-  head_sha: "105759c579945cff51ba111023132fc24126a592"
-  merge_scope: "stacked"
-  merge_state: "UNKNOWN"
+  merged_into: "epic/43-target-project-delivery-at-scale"
   pr: 334
-  pr_base: "epic/43-target-project-delivery-at-scale"
-  pr_created_at: "2026-09-28T08:08:04Z"
-  reapable: false
-  review_decision: null
-  status: "pr-open"
+  reapable: true
+  status: "merged"
   url: "https://github.com/serhii-nochevnyi/shipyard/pull/334"
 "T-43-12":
   base: "epic/43-target-project-delivery-at-scale"
-  base_reason: "T-43-08 has no branch on the remote yet (status pending) — ticket/T-43-08-a-stale-approval-from-a-declared-bot-doe is not a base that exists, so the base is epic/43-target-project-delivery-at-scale"
-  blocked_by: ["T-43-08","T-43-11"]
-  blocked_reasons: {"T-43-08":"parent has no branch yet (nothing to cascade from)","T-43-11":"non-primary parent T-43-11 is pr-open — T-43-12's worktree is cut from T-43-08 and receives T-43-11 only through epic/43-target-project-delivery-at-scale; T-43-11 must merge into epic/43-target-project-delivery-at-scale first (T-43-11 is pr-open)"}
+  base_merge: "epic/43-target-project-delivery-at-scale"
+  base_reason: "T-43-08 is MERGED, so its branch is no longer where work lands — the base is epic/43-target-project-delivery-at-scale (base-merge it in first to keep the review diff one slice); ticket-worktree.sh create merges epic/43-target-project-delivery-at-scale in for non-primary parent(s) T-43-11"
   branch: "ticket/T-43-12-human-checkpoint-takes-review-or-merge-t"
   epic: "epic/43-target-project-delivery-at-scale"
-  pr: null
-  ready: false
-  reapable: false
-  status: "pending"
+  merged_into: "epic/43-target-project-delivery-at-scale"
+  pr: 375
+  reapable: true
+  status: "merged"
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/375"
 "T-43-13":
   base: "epic/43-target-project-delivery-at-scale"
-  base_reason: "T-43-06 has no branch on the remote yet (status pending) — ticket/T-43-06-one-exported-conveyor-scratch-set-for-th is not a base that exists, so the base is epic/43-target-project-delivery-at-scale"
-  blocked_by: ["T-43-06"]
-  blocked_reasons: {"T-43-06":"parent has no branch yet (nothing to cascade from)"}
+  base_reason: "T-43-06 is MERGED, so its branch is no longer where work lands — the base is epic/43-target-project-delivery-at-scale (base-merge it in first to keep the review diff one slice)"
   branch: "ticket/T-43-13-carry-a-conform-verdict-across-a-base-me"
   epic: "epic/43-target-project-delivery-at-scale"
-  pr: null
-  ready: false
-  reapable: false
-  status: "pending"
+  merged_into: "epic/43-target-project-delivery-at-scale"
+  pr: 376
+  reapable: true
+  status: "merged"
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/376"
 "T-43-14":
   base: "epic/43-target-project-delivery-at-scale"
   base_reason: "no primary parent — a root ticket PRs into epic/43-target-project-delivery-at-scale"
@@ -2256,59 +2224,66 @@
   url: "https://github.com/serhii-nochevnyi/shipyard/pull/355"
 "T-43-15":
   base: "epic/43-target-project-delivery-at-scale"
-  base_reason: "T-43-12 has no branch on the remote yet (status pending) — ticket/T-43-12-human-checkpoint-takes-review-or-merge-t is not a base that exists, so the base is epic/43-target-project-delivery-at-scale"
-  blocked_by: ["T-43-12"]
-  blocked_reasons: {"T-43-12":"parent has no branch yet (nothing to cascade from)"}
+  base_merge: "epic/43-target-project-delivery-at-scale"
+  base_reason: "T-43-12 is MERGED, so its branch is no longer where work lands — the base is epic/43-target-project-delivery-at-scale (base-merge it in first to keep the review diff one slice); ticket-worktree.sh create merges epic/43-target-project-delivery-at-scale in for non-primary parent(s) T-43-14"
   branch: "ticket/T-43-15-deliver-dispatch-builds-research-and-dec"
   epic: "epic/43-target-project-delivery-at-scale"
-  pr: null
-  ready: false
-  reapable: false
-  status: "pending"
+  merged_into: "epic/43-target-project-delivery-at-scale"
+  pr: 377
+  reapable: true
+  status: "merged"
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/377"
 "T-43-16":
   base: "epic/43-target-project-delivery-at-scale"
-  base_reason: "T-43-06 has no branch on the remote yet (status pending) — ticket/T-43-06-one-exported-conveyor-scratch-set-for-th is not a base that exists, so the base is epic/43-target-project-delivery-at-scale"
-  blocked_by: ["T-43-06"]
-  blocked_reasons: {"T-43-06":"parent has no branch yet (nothing to cascade from)"}
+  base_merge: "epic/43-target-project-delivery-at-scale"
+  base_reason: "T-43-06 is MERGED, so its branch is no longer where work lands — the base is epic/43-target-project-delivery-at-scale (base-merge it in first to keep the review diff one slice); ticket-worktree.sh create merges epic/43-target-project-delivery-at-scale in for non-primary parent(s) T-43-01"
   branch: "ticket/T-43-16-host-side-verification-of-plan-declared"
   epic: "epic/43-target-project-delivery-at-scale"
-  pr: null
-  ready: false
-  reapable: false
-  status: "pending"
+  merged_into: "epic/43-target-project-delivery-at-scale"
+  pr: 374
+  reapable: true
+  status: "merged"
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/374"
 "T-43-17":
   base: "epic/43-target-project-delivery-at-scale"
-  base_reason: "T-43-13 has no branch on the remote yet (status pending) — ticket/T-43-13-carry-a-conform-verdict-across-a-base-me is not a base that exists, so the base is epic/43-target-project-delivery-at-scale"
-  blocked_by: ["T-43-13","T-43-16"]
-  blocked_reasons: {"T-43-13":"parent has no branch yet (nothing to cascade from)","T-43-16":"parent has no branch yet (nothing to cascade from)"}
+  base_merge: "epic/43-target-project-delivery-at-scale"
+  base_reason: "T-43-13 is MERGED, so its branch is no longer where work lands — the base is epic/43-target-project-delivery-at-scale (base-merge it in first to keep the review diff one slice); ticket-worktree.sh create merges epic/43-target-project-delivery-at-scale in for non-primary parent(s) T-43-16"
   branch: "ticket/T-43-17-record-a-sealed-coverage-entry-for-every"
   epic: "epic/43-target-project-delivery-at-scale"
-  pr: null
-  ready: false
-  reapable: false
-  status: "pending"
+  merged_into: "epic/43-target-project-delivery-at-scale"
+  pr: 378
+  reapable: true
+  status: "merged"
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/378"
 "T-43-18":
   base: "epic/43-target-project-delivery-at-scale"
-  base_reason: "T-43-17 has no branch on the remote yet (status pending) — ticket/T-43-17-record-a-sealed-coverage-entry-for-every is not a base that exists, so the base is epic/43-target-project-delivery-at-scale"
-  blocked_by: ["T-43-17","T-43-08"]
-  blocked_reasons: {"T-43-08":"parent has no branch yet (nothing to cascade from)","T-43-17":"parent has no branch yet (nothing to cascade from)"}
+  base_merge: "epic/43-target-project-delivery-at-scale"
+  base_reason: "T-43-17 is MERGED, so its branch is no longer where work lands — the base is epic/43-target-project-delivery-at-scale (base-merge it in first to keep the review diff one slice); ticket-worktree.sh create merges epic/43-target-project-delivery-at-scale in for non-primary parent(s) T-43-08"
   branch: "ticket/T-43-18-run-only-declared-repository-remedy-work"
   epic: "epic/43-target-project-delivery-at-scale"
-  pr: null
-  ready: false
-  reapable: false
-  status: "pending"
+  merged_into: "epic/43-target-project-delivery-at-scale"
+  pr: 379
+  reapable: true
+  status: "merged"
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/379"
 "T-43-19":
   base: "epic/43-target-project-delivery-at-scale"
-  base_reason: "T-43-18 has no branch on the remote yet (status pending) — ticket/T-43-18-run-only-declared-repository-remedy-work is not a base that exists, so the base is epic/43-target-project-delivery-at-scale"
-  blocked_by: ["T-43-18","T-43-12"]
-  blocked_reasons: {"T-43-12":"parent has no branch yet (nothing to cascade from)","T-43-18":"parent has no branch yet (nothing to cascade from)"}
+  base_merge: "epic/43-target-project-delivery-at-scale"
+  base_reason: "T-43-18 is MERGED, so its branch is no longer where work lands — the base is epic/43-target-project-delivery-at-scale (base-merge it in first to keep the review diff one slice); ticket-worktree.sh create merges epic/43-target-project-delivery-at-scale in for non-primary parent(s) T-43-12"
   branch: "ticket/T-43-19-the-merge-gate-refuses-heads-the-conveyo"
+  checks: {"failing":1,"none_reported":false,"pending":0,"total":1,"unavailable":false}
+  draft: true
   epic: "epic/43-target-project-delivery-at-scale"
-  pr: null
-  ready: false
+  head_sha: "b7162195a10d2600c47f2b9bf228fcb0a2552a7a"
+  merge_scope: "stacked"
+  merge_state: "DIRTY"
+  pr: 380
+  pr_base: "epic/43-target-project-delivery-at-scale"
+  pr_created_at: "2026-09-30T10:23:49Z"
   reapable: false
-  status: "pending"
+  review_decision: null
+  status: "pr-open"
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/380"
 "T-44-01":
   base: "epic/44-optimize-subscription-efficiency-per-runtime"
   base_reason: "no primary parent — a root ticket PRs into epic/44-optimize-subscription-efficiency-per-runtime"
@@ -2394,108 +2369,117 @@
   base_reason: "no primary parent — a root ticket PRs into epic/45-close-residual-pipeline-efficiency-gaps"
   branch: "ticket/T-45-01-armed-stop-gate-binds-the-realpath-of-it"
   epic: "epic/45-close-residual-pipeline-efficiency-gaps"
-  pr: null
-  ready: true
-  reapable: false
-  status: "pending"
+  merged_into: "epic/45-close-residual-pipeline-efficiency-gaps"
+  pr: 361
+  reapable: true
+  status: "merged"
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/361"
 "T-45-02":
   base: "epic/45-close-residual-pipeline-efficiency-gaps"
   base_reason: "no primary parent — a root ticket PRs into epic/45-close-residual-pipeline-efficiency-gaps"
   branch: "ticket/T-45-02-doctor-classifies-another-checkout-s-dog"
   epic: "epic/45-close-residual-pipeline-efficiency-gaps"
-  pr: null
-  ready: true
-  reapable: false
-  status: "pending"
+  merged_into: "epic/45-close-residual-pipeline-efficiency-gaps"
+  pr: 359
+  reapable: true
+  status: "merged"
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/359"
 "T-45-03":
   base: "epic/45-close-residual-pipeline-efficiency-gaps"
-  base_reason: "T-45-02 has no branch on the remote yet (status pending) — ticket/T-45-02-doctor-classifies-another-checkout-s-dog is not a base that exists, so the base is epic/45-close-residual-pipeline-efficiency-gaps"
-  blocked_by: ["T-45-02"]
-  blocked_reasons: {"T-45-02":"parent has no branch yet (nothing to cascade from)"}
+  base_reason: "T-45-02 is MERGED, so its branch is no longer where work lands — the base is epic/45-close-residual-pipeline-efficiency-gaps (base-merge it in first to keep the review diff one slice)"
   branch: "ticket/T-45-03-dogfood-installs-default-to-a-dedicated"
   epic: "epic/45-close-residual-pipeline-efficiency-gaps"
-  pr: null
-  ready: false
-  reapable: false
-  status: "pending"
+  merged_into: "epic/45-close-residual-pipeline-efficiency-gaps"
+  pr: 367
+  reapable: true
+  status: "merged"
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/367"
 "T-45-04":
   base: "epic/45-close-residual-pipeline-efficiency-gaps"
   base_reason: "no primary parent — a root ticket PRs into epic/45-close-residual-pipeline-efficiency-gaps"
   branch: "ticket/T-45-04-codex-decompose-host-run-lease-uses-an-i"
   epic: "epic/45-close-residual-pipeline-efficiency-gaps"
-  pr: null
-  ready: true
-  reapable: false
-  status: "pending"
+  merged_into: "epic/45-close-residual-pipeline-efficiency-gaps"
+  pr: 360
+  reapable: true
+  status: "merged"
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/360"
 "T-45-05":
   base: "epic/45-close-residual-pipeline-efficiency-gaps"
   base_reason: "no primary parent — a root ticket PRs into epic/45-close-residual-pipeline-efficiency-gaps"
   branch: "ticket/T-45-05-session-handoff-successor-race-and-dispa"
   epic: "epic/45-close-residual-pipeline-efficiency-gaps"
-  pr: null
-  ready: true
-  reapable: false
-  status: "pending"
+  merged_into: "epic/45-close-residual-pipeline-efficiency-gaps"
+  pr: 363
+  reapable: true
+  status: "merged"
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/363"
 "T-45-06":
   base: "epic/45-close-residual-pipeline-efficiency-gaps"
   base_reason: "no primary parent — a root ticket PRs into epic/45-close-residual-pipeline-efficiency-gaps"
   branch: "ticket/T-45-06-usage-report-counts-codex-host-stream-tu"
   epic: "epic/45-close-residual-pipeline-efficiency-gaps"
-  pr: null
-  ready: true
-  reapable: false
-  status: "pending"
+  merged_into: "epic/45-close-residual-pipeline-efficiency-gaps"
+  pr: 362
+  reapable: true
+  status: "merged"
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/362"
 "T-45-07":
   base: "epic/45-close-residual-pipeline-efficiency-gaps"
   base_reason: "no primary parent — a root ticket PRs into epic/45-close-residual-pipeline-efficiency-gaps"
   branch: "ticket/T-45-07-planning-tree-writer-lease-with-owner-ba"
   epic: "epic/45-close-residual-pipeline-efficiency-gaps"
+  merged_into: "epic/45-close-residual-pipeline-efficiency-gaps"
+  pr: 357
+  reapable: true
+  status: "merged"
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/357"
+"T-45-08":
+  base: "epic/45-close-residual-pipeline-efficiency-gaps"
+  base_merge: "epic/45-close-residual-pipeline-efficiency-gaps"
+  base_reason: "T-45-04 is MERGED, so its branch is no longer where work lands — the base is epic/45-close-residual-pipeline-efficiency-gaps (base-merge it in first to keep the review diff one slice); ticket-worktree.sh create merges epic/45-close-residual-pipeline-efficiency-gaps in for non-primary parent(s) T-45-07"
+  branch: "ticket/T-45-08-both-decompose-hosts-hold-the-planning-w"
+  epic: "epic/45-close-residual-pipeline-efficiency-gaps"
+  merged_into: "epic/45-close-residual-pipeline-efficiency-gaps"
+  pr: 366
+  reapable: true
+  status: "merged"
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/366"
+"T-45-09":
+  base: "epic/45-close-residual-pipeline-efficiency-gaps"
+  base_merge: "epic/45-close-residual-pipeline-efficiency-gaps"
+  base_reason: "T-45-08 is MERGED, so its branch is no longer where work lands — the base is epic/45-close-residual-pipeline-efficiency-gaps (base-merge it in first to keep the review diff one slice); ticket-worktree.sh create merges epic/45-close-residual-pipeline-efficiency-gaps in for non-primary parent(s) T-45-05"
+  behind_by: 0
+  branch: "ticket/T-45-09-codex-decompose-host-recovers-a-complete"
+  checks: {"failing":0,"none_reported":false,"pending":0,"total":1,"unavailable":false}
+  draft: false
+  epic: "epic/45-close-residual-pipeline-efficiency-gaps"
+  head_sha: "06cc666fcb036928b7eb9e23422ca67ed1b93330"
+  merge_scope: "stacked"
+  merge_state: "CLEAN"
+  pr: 369
+  pr_base: "epic/45-close-residual-pipeline-efficiency-gaps"
+  pr_created_at: "2026-09-28T18:05:59Z"
+  reapable: false
+  review_decision: null
+  status: "pr-open"
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/369"
+"T-45-10":
+  base: "ticket/T-45-09-codex-decompose-host-recovers-a-complete"
+  base_reason: "T-45-09 is pr-open — cascade off ticket/T-45-09-codex-decompose-host-recovers-a-complete; the sentinel retargets this PR onto epic/45-close-residual-pipeline-efficiency-gaps when T-45-09 lands"
+  branch: "ticket/T-45-10-claude-decompose-host-recovers-a-complet"
+  epic: "epic/45-close-residual-pipeline-efficiency-gaps"
   pr: null
   ready: true
   reapable: false
   status: "pending"
-"T-45-08":
-  base: "epic/45-close-residual-pipeline-efficiency-gaps"
-  base_reason: "T-45-04 has no branch on the remote yet (status pending) — ticket/T-45-04-codex-decompose-host-run-lease-uses-an-i is not a base that exists, so the base is epic/45-close-residual-pipeline-efficiency-gaps"
-  blocked_by: ["T-45-04","T-45-07"]
-  blocked_reasons: {"T-45-04":"parent has no branch yet (nothing to cascade from)","T-45-07":"parent has no branch yet (nothing to cascade from)"}
-  branch: "ticket/T-45-08-both-decompose-hosts-hold-the-planning-w"
-  epic: "epic/45-close-residual-pipeline-efficiency-gaps"
-  pr: null
-  ready: false
-  reapable: false
-  status: "pending"
-"T-45-09":
-  base: "epic/45-close-residual-pipeline-efficiency-gaps"
-  base_reason: "T-45-08 has no branch on the remote yet (status pending) — ticket/T-45-08-both-decompose-hosts-hold-the-planning-w is not a base that exists, so the base is epic/45-close-residual-pipeline-efficiency-gaps"
-  blocked_by: ["T-45-05","T-45-08"]
-  blocked_reasons: {"T-45-05":"parent has no branch yet (nothing to cascade from)","T-45-08":"parent has no branch yet (nothing to cascade from)"}
-  branch: "ticket/T-45-09-codex-decompose-host-recovers-a-complete"
-  epic: "epic/45-close-residual-pipeline-efficiency-gaps"
-  pr: null
-  ready: false
-  reapable: false
-  status: "pending"
-"T-45-10":
-  base: "epic/45-close-residual-pipeline-efficiency-gaps"
-  base_reason: "T-45-09 has no branch on the remote yet (status pending) — ticket/T-45-09-codex-decompose-host-recovers-a-complete is not a base that exists, so the base is epic/45-close-residual-pipeline-efficiency-gaps"
-  blocked_by: ["T-45-09"]
-  blocked_reasons: {"T-45-09":"parent has no branch yet (nothing to cascade from)"}
-  branch: "ticket/T-45-10-claude-decompose-host-recovers-a-complet"
-  epic: "epic/45-close-residual-pipeline-efficiency-gaps"
-  pr: null
-  ready: false
-  reapable: false
-  status: "pending"
 "T-45-11":
-  base: "epic/45-close-residual-pipeline-efficiency-gaps"
-  base_reason: "T-45-09 has no branch on the remote yet (status pending) — ticket/T-45-09-codex-decompose-host-recovers-a-complete is not a base that exists, so the base is epic/45-close-residual-pipeline-efficiency-gaps"
-  blocked_by: ["T-45-09"]
-  blocked_reasons: {"T-45-09":"parent has no branch yet (nothing to cascade from)"}
+  base: "ticket/T-45-09-codex-decompose-host-recovers-a-complete"
+  base_reason: "T-45-09 is pr-open — cascade off ticket/T-45-09-codex-decompose-host-recovers-a-complete; the sentinel retargets this PR onto epic/45-close-residual-pipeline-efficiency-gaps when T-45-09 lands"
   branch: "ticket/T-45-11-codex-decomposition-runs-detached-so-the"
   epic: "epic/45-close-residual-pipeline-efficiency-gaps"
   pr: null
-  ready: false
+  ready: true
   reapable: false
   status: "pending"
 "T-45-12":
@@ -2503,25 +2487,92 @@
   base_reason: "no primary parent — a root ticket PRs into epic/45-close-residual-pipeline-efficiency-gaps"
   branch: "ticket/T-45-12-advisory-run-phase-aggregate-admission-l"
   epic: "epic/45-close-residual-pipeline-efficiency-gaps"
-  pr: null
-  ready: true
-  reapable: false
-  status: "pending"
+  merged_into: "epic/45-close-residual-pipeline-efficiency-gaps"
+  pr: 364
+  reapable: true
+  status: "merged"
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/364"
 "T-45-13":
   base: "epic/45-close-residual-pipeline-efficiency-gaps"
   base_reason: "no primary parent — a root ticket PRs into epic/45-close-residual-pipeline-efficiency-gaps"
   branch: "ticket/T-45-13-drift-gate-re-asks-a-self-contradictory"
   epic: "epic/45-close-residual-pipeline-efficiency-gaps"
-  pr: null
-  ready: true
-  reapable: false
-  status: "pending"
+  merged_into: "epic/45-close-residual-pipeline-efficiency-gaps"
+  pr: 368
+  reapable: true
+  status: "merged"
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/368"
 "T-45-14":
   base: "epic/45-close-residual-pipeline-efficiency-gaps"
   base_reason: "no primary parent — a root ticket PRs into epic/45-close-residual-pipeline-efficiency-gaps"
   branch: "ticket/T-45-14-capture-scrubber-replaces-codex-account"
   epic: "epic/45-close-residual-pipeline-efficiency-gaps"
+  merged_into: "epic/45-close-residual-pipeline-efficiency-gaps"
+  pr: 365
+  reapable: true
+  status: "merged"
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/365"
+"T-46-01":
+  base: "epic/46-refresh-native-runtime-model-ladder"
+  base_reason: "no primary parent — a root ticket PRs into epic/46-refresh-native-runtime-model-ladder"
+  branch: "ticket/T-46-01-version-the-canonical-codex-and-claude-n"
+  epic: "epic/46-refresh-native-runtime-model-ladder"
   pr: null
   ready: true
+  reapable: false
+  status: "pending"
+"T-46-02":
+  base: "epic/46-refresh-native-runtime-model-ladder"
+  base_reason: "T-46-01 has no branch on the remote yet (status pending) — ticket/T-46-01-version-the-canonical-codex-and-claude-n is not a base that exists, so the base is epic/46-refresh-native-runtime-model-ladder"
+  blocked_by: ["T-46-01"]
+  blocked_reasons: {"T-46-01":"parent has no branch yet (nothing to cascade from)"}
+  branch: "ticket/T-46-02-verify-codex-dynamic-launches-and-static"
+  epic: "epic/46-refresh-native-runtime-model-ladder"
+  pr: null
+  ready: false
+  reapable: false
+  status: "pending"
+"T-46-03":
+  base: "epic/46-refresh-native-runtime-model-ladder"
+  base_reason: "T-46-01 has no branch on the remote yet (status pending) — ticket/T-46-01-version-the-canonical-codex-and-claude-n is not a base that exists, so the base is epic/46-refresh-native-runtime-model-ladder"
+  blocked_by: ["T-46-01"]
+  blocked_reasons: {"T-46-01":"parent has no branch yet (nothing to cascade from)"}
+  branch: "ticket/T-46-03-verify-pinned-claude-5-5-selection-and-e"
+  epic: "epic/46-refresh-native-runtime-model-ladder"
+  pr: null
+  ready: false
+  reapable: false
+  status: "pending"
+"T-46-04":
+  base: "epic/46-refresh-native-runtime-model-ladder"
+  base_reason: "no primary parent — a root ticket PRs into epic/46-refresh-native-runtime-model-ladder"
+  blocked_by: ["T-43-14","T-43-15","T-43-19"]
+  blocked_reasons: {"T-43-14":"cross-phase parent must land on main first (phase 43 epic still ahead)","T-43-15":"cross-phase parent must land on main first (phase 43 epic still ahead)","T-43-19":"cross-phase parent must be MERGED and its phase 43 epic landed on main first (parent is pr-open)"}
+  branch: "ticket/T-46-04-align-supported-native-ladder-instructio"
+  epic: "epic/46-refresh-native-runtime-model-ladder"
+  pr: null
+  ready: false
+  reapable: false
+  status: "pending"
+"T-46-05":
+  base: "epic/46-refresh-native-runtime-model-ladder"
+  base_reason: "T-46-04 has no branch on the remote yet (status pending) — ticket/T-46-04-align-supported-native-ladder-instructio is not a base that exists, so the base is epic/46-refresh-native-runtime-model-ladder"
+  blocked_by: ["T-46-02","T-46-03","T-46-04"]
+  blocked_reasons: {"T-46-02":"parent has no branch yet (nothing to cascade from)","T-46-03":"parent has no branch yet (nothing to cascade from)","T-46-04":"parent has no branch yet (nothing to cascade from)"}
+  branch: "ticket/T-46-05-regenerate-the-reviewed-package-and-veri"
+  epic: "epic/46-refresh-native-runtime-model-ladder"
+  pr: null
+  ready: false
+  reapable: false
+  status: "pending"
+"T-46-06":
+  base: "epic/46-refresh-native-runtime-model-ladder"
+  base_reason: "T-46-05 has no branch on the remote yet (status pending) — ticket/T-46-05-regenerate-the-reviewed-package-and-veri is not a base that exists, so the base is epic/46-refresh-native-runtime-model-ladder"
+  blocked_by: ["T-46-05"]
+  blocked_reasons: {"T-46-05":"parent has no branch yet (nothing to cascade from)"}
+  branch: "ticket/T-46-06-independently-review-native-application"
+  epic: "epic/46-refresh-native-runtime-model-ladder"
+  pr: null
+  ready: false
   reapable: false
   status: "pending"

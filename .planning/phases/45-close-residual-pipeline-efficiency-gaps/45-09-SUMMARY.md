@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: f7b96d54184eee7c5a0ff9c3b834cba153f4f4ed582029b4bde59c0740d15722
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: d716d1a08b8e32c921e8ed50f6402b518eae04ac10a84cc16265b6e17b8bd34b
 phase: 45-close-residual-pipeline-efficiency-gaps
 plan: 09
 subsystem: shipyard delivery
@@ -22,7 +22,7 @@ key-decisions:
 duration: 0min
 status: halted
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: f7b96d54184eee7c5a0ff9c3b834cba153f4f4ed582029b4bde59c0740d15722
+shipyard_source_fingerprint: d716d1a08b8e32c921e8ed50f6402b518eae04ac10a84cc16265b6e17b8bd34b
 ---
 
 # Phase 45: Codex decompose host recovers a completed judgment role from its reservation, native transcripts and artifact digest without relaunch — Delivery Projection
@@ -32,8 +32,8 @@ shipyard_source_fingerprint: f7b96d54184eee7c5a0ff9c3b834cba153f4f4ed582029b4bde
 ## Delivery Evidence
 
 - Ticket: T-45-09
-- Delivery status: pending
-- PR: not observed
+- Delivery status: pr-open
+- PR: #369
 - Source plan: .planning/phases/45-close-residual-pipeline-efficiency-gaps/45-09-PLAN.md
 - This summary is halted until the delivery state observes `merged`.
 

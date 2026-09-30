@@ -1,24 +1,24 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 691fdcc68b36089e10705722b5f5d7d151267b7d9967e3e840307bdc6ba784bc
-phase: 45
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: ff19780a65370309f896723421002dedb132445fed751ea450ba8aaa47612027
+phase: 46
 status: pending
 result: pending
 shipyard_sync: evidence-projection
-shipyard_source_fingerprint: 691fdcc68b36089e10705722b5f5d7d151267b7d9967e3e840307bdc6ba784bc
+shipyard_source_fingerprint: ff19780a65370309f896723421002dedb132445fed751ea450ba8aaa47612027
 ---
 
-# Phase 45: Close residual pipeline efficiency gaps — UAT Projection
+# Phase 46: Refresh the native runtime model ladder — UAT Projection
 
 This file is generated from the delivery graph and phase integration evidence.
 
 ### 1. Delivery plans are accounted for
 result: pending
-expected: all 14 phase plan(s) are merged
-actual: 11 merged
+expected: all 6 phase plan(s) are merged
+actual: 0 merged
 
 ### 2. Integration evidence is explicit
 result: pending
-expected: an explicit passed verdict in .planning/phases/45-close-residual-pipeline-efficiency-gaps/INTEGRATION.md
+expected: an explicit passed verdict in .planning/phases/46-refresh-native-runtime-model-ladder/INTEGRATION.md
 actual: pending — INTEGRATION.md is missing
 
 ### 3. Phase verification is evidence-backed

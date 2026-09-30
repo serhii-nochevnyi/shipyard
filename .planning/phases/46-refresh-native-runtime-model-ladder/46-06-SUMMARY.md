@@ -1,11 +1,11 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: f24cdc0791dc2f2eb9f365ca8a7dc4db3078b857e536535e3fabf73edbdcaac6
-phase: 43-target-project-delivery-at-scale
-plan: 19
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 90f4afd83b8cb9f7d543cd99561a6c7ac87ad37a889909c280f78e95023d0aed
+phase: 46-refresh-native-runtime-model-ladder
+plan: 06
 subsystem: shipyard delivery
 tags: [shipyard, gsd, delivery-projection]
 provides:
-  - Tracked delivery state for T-43-19
+  - Tracked delivery state for T-46-06
 affects: [GSD progress, Shipyard delivery]
 actuals:
   tokens: 0
@@ -22,19 +22,19 @@ key-decisions:
 duration: 0min
 status: halted
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: f24cdc0791dc2f2eb9f365ca8a7dc4db3078b857e536535e3fabf73edbdcaac6
+shipyard_source_fingerprint: 90f4afd83b8cb9f7d543cd99561a6c7ac87ad37a889909c280f78e95023d0aed
 ---
 
-# Phase 43: The merge gate refuses heads the conveyor does not cover; PRs opened before release are journalled as legacy — Delivery Projection
+# Phase 46: Independently review native application evidence and hold the rollout boundary — Delivery Projection
 
 **Plan delivery is not complete; the projection preserves the current state.**
 
 ## Delivery Evidence
 
-- Ticket: T-43-19
-- Delivery status: pr-open
-- PR: #380
-- Source plan: .planning/phases/43-target-project-delivery-at-scale/43-19-PLAN.md
+- Ticket: T-46-06
+- Delivery status: pending
+- PR: not observed
+- Source plan: .planning/phases/46-refresh-native-runtime-model-ladder/46-06-PLAN.md
 - This summary is halted until the delivery state observes `merged`.
 
 ## Decisions & Deviations

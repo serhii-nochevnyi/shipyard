@@ -1,8 +1,8 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 9827545272dc9034371d965d2571f872595594a82172da9a0a157b9432ff43b1
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: d5189d5749e06ce1c647e98534a1e54be90381c244ea9c9c2861f8797beeb513
 phase: 43
 status: human_needed
-shipyard_source_fingerprint: 9827545272dc9034371d965d2571f872595594a82172da9a0a157b9432ff43b1
+shipyard_source_fingerprint: d5189d5749e06ce1c647e98534a1e54be90381c244ea9c9c2861f8797beeb513
 ---
 
 # Phase 43: Target-project delivery at scale — Verification Projection
@@ -13,7 +13,7 @@ shipyard_source_fingerprint: 9827545272dc9034371d965d2571f872595594a82172da9a0a1
 
 | Truth | Evidence | Status |
 |---|---|---|
-| Every phase plan is accounted for | 6/19 delivery records are merged | ? UNCERTAIN |
+| Every phase plan is accounted for | 18/19 delivery records are merged | ? UNCERTAIN |
 | Integration is coherent | INTEGRATION.md is missing | ? UNCERTAIN |
 | Verification evidence is present | INTEGRATION.md is missing | ? UNCERTAIN |
 
@@ -24,22 +24,22 @@ shipyard_source_fingerprint: 9827545272dc9034371d965d2571f872595594a82172da9a0a1
 | T-43-01 | merged | ✓ VERIFIED |
 | T-43-02 | merged | ✓ VERIFIED |
 | T-43-03 | merged | ✓ VERIFIED |
-| T-43-04 | pr-open | ? UNCERTAIN |
+| T-43-04 | merged | ✓ VERIFIED |
 | T-43-05 | merged | ✓ VERIFIED |
-| T-43-06 | pending | ? UNCERTAIN |
-| T-43-07 | pr-open | ? UNCERTAIN |
-| T-43-08 | pending | ? UNCERTAIN |
+| T-43-06 | merged | ✓ VERIFIED |
+| T-43-07 | merged | ✓ VERIFIED |
+| T-43-08 | merged | ✓ VERIFIED |
 | T-43-09 | merged | ✓ VERIFIED |
-| T-43-10 | pr-open | ? UNCERTAIN |
-| T-43-11 | pr-open | ? UNCERTAIN |
-| T-43-12 | pending | ? UNCERTAIN |
-| T-43-13 | pending | ? UNCERTAIN |
+| T-43-10 | merged | ✓ VERIFIED |
+| T-43-11 | merged | ✓ VERIFIED |
+| T-43-12 | merged | ✓ VERIFIED |
+| T-43-13 | merged | ✓ VERIFIED |
 | T-43-14 | merged | ✓ VERIFIED |
-| T-43-15 | pending | ? UNCERTAIN |
-| T-43-16 | pending | ? UNCERTAIN |
-| T-43-17 | pending | ? UNCERTAIN |
-| T-43-18 | pending | ? UNCERTAIN |
-| T-43-19 | pending | ? UNCERTAIN |
+| T-43-15 | merged | ✓ VERIFIED |
+| T-43-16 | merged | ✓ VERIFIED |
+| T-43-17 | merged | ✓ VERIFIED |
+| T-43-18 | merged | ✓ VERIFIED |
+| T-43-19 | pr-open | ? UNCERTAIN |
 
 ## Verification Commands
 
@@ -48,4 +48,4 @@ shipyard_source_fingerprint: 9827545272dc9034371d965d2571f872595594a82172da9a0a1
 
 ## Gaps Summary
 
-**Not green:** 13 plan(s) are not merged.
+**Not green:** 1 plan(s) are not merged.
