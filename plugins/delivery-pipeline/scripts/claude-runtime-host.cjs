@@ -592,6 +592,83 @@ function writeTranscript(directory, scope, sessionId, stdout) {
   });
 }
 
+function saveSessionTranscript(directory, source, relative, expectedSha256) {
+  const root = path.join(path.resolve(directory), 'projects');
+  const file = path.join(root, relative);
+  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+  fs.chmodSync(root, 0o700);
+  fs.chmodSync(path.dirname(file), 0o700);
+  const temporary = `${file}.${process.pid}.${crypto.randomBytes(8).toString('hex')}.tmp`;
+  try {
+    fs.copyFileSync(source, temporary);
+    fs.chmodSync(temporary, 0o600);
+    const actual = crypto.createHash('sha256').update(fs.readFileSync(temporary)).digest('hex');
+    if (actual !== expectedSha256) fail('RUNTIME_EVIDENCE_INVALID', 'Claude session transcript changed while it was saved');
+    fs.renameSync(temporary, file);
+  } finally { try { fs.unlinkSync(temporary); } catch {} }
+}
+
+async function verifyCompletedClaudeLaunch({ session_id: sessionId, start_evidence_file: evidenceFile,
+  transcript_path: transcriptFile, model, effort, gsd_role: gsdRole, worktree }) {
+  const startEvidence = readSessionStartEvidence(evidenceFile, sessionId, gsdRole, worktree);
+  const privateRoot = path.join(path.dirname(transcriptFile), 'projects');
+  const nativeFile = path.resolve(startEvidence.transcript_path);
+  const project = path.basename(path.dirname(nativeFile));
+  if (!/^[A-Za-z0-9._-]+$/.test(project) || path.basename(nativeFile) !== `${sessionId}.jsonl`) {
+    fail('RUNTIME_EVIDENCE_INVALID', 'SessionStart transcript path has an invalid project or session');
+  }
+  const savedStart = { ...startEvidence,
+    transcript_path: path.join(privateRoot, project, `${sessionId}.jsonl`) };
+  const sessionEvidence = await readSessionEvidence(savedStart, sessionId, model, effort, gsdRole,
+    { sessionTranscriptRoot: privateRoot, transcriptTimeoutMs: 200, transcriptPollMs: 1 });
+  let stat;
+  try { stat = fs.lstatSync(transcriptFile); }
+  catch (error) {
+    if (error && error.code === 'ENOENT') fail('RUNTIME_EVIDENCE_MISSING', 'saved Claude stream transcript is missing');
+    fail('RUNTIME_EVIDENCE_INVALID', `saved Claude stream transcript cannot be inspected: ${error.message}`);
+  }
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.size > TRANSCRIPT_MAX_BYTES) {
+    fail('RUNTIME_EVIDENCE_INVALID', 'saved Claude stream transcript is not a bounded regular file');
+  }
+  const bytes = fs.readFileSync(transcriptFile);
+  const raw = bytes.toString('utf8');
+  if (!raw.endsWith('\n')) fail('RUNTIME_EVIDENCE_MISSING', 'saved Claude stream transcript is incomplete');
+  const parsed = parseClaudeStream(raw);
+  if (parsed.session_id !== sessionId || !parsed.result || parsed.result.type !== 'result'
+      || parsed.records.at(-1) !== parsed.result || parsed.result.is_error === true) {
+    fail('RUNTIME_EVIDENCE_MISSING', 'saved Claude stream has no final result for the launched session');
+  }
+  const result = {
+    status: 'completed',
+    summary: bounded(streamText(parsed), 500) || 'Claude Code completed the scoped launch',
+    output: parsed.result.structured_output !== undefined ? parsed.result.structured_output : streamText(parsed),
+  };
+  return Object.freeze({ result, applicationEvidence: Object.freeze({
+    launch_id: `claude-${sessionId}`, session_id: sessionId,
+    applied_model: model, applied_effort: effort,
+    observed_model: sessionEvidence.model, observed_effort: sessionEvidence.effort,
+    selection_evidence: {
+      source: 'claude-session-assistant-transcript', session_id: sessionId,
+      assistant_records: sessionEvidence.assistant_records,
+      model: sessionEvidence.model, effort: sessionEvidence.effort,
+      transcript: sessionEvidence.transcript,
+    },
+    stream_evidence: {
+      format: STREAM_FORMAT, records: parsed.records.length,
+      assistant_messages: parsed.assistant_count, usage_records: parsed.usage_count,
+    },
+    transcript: { path: transcriptFile, bytes: bytes.length,
+      sha256: crypto.createHash('sha256').update(bytes).digest('hex') },
+    ...(gsdRole ? { gsd_role: gsdRole, gsd_launch_mechanism: 'typed-gsd-callback',
+      gsd_agent_evidence: {
+        schema: 'shipyard.gsd-agent-application.v1', runtime: 'claude', role: gsdRole,
+        session_id: sessionId, session_start_agent_type: startEvidence.agent_type,
+        transcript_agent_setting: sessionEvidence.agent_role,
+        agent_setting_records: sessionEvidence.agent_setting_records,
+      } } : {}),
+  }) });
+}
+
 function streamText(parsed) {
   const candidates = [];
   for (const record of parsed.records) {
@@ -643,8 +720,15 @@ function createClaudeCliLauncher(options = {}) {
       if (typeof schemaJson !== 'string') fail('INVALID_INPUT', 'schema must be serializable JSON');
     }
     const agentDefinition = gsdRole ? gsdAgentDefinition(gsdRole, childEnvironment, options.gsdAgentRoot) : null;
-    const evidenceDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-claude-session-start-'));
-    const evidenceFile = path.join(evidenceDirectory, 'session-start.json');
+    const persistentEvidence = typeof options.startEvidenceFile === 'string';
+    const evidenceDirectory = persistentEvidence ? path.dirname(path.resolve(options.startEvidenceFile))
+      : fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-claude-session-start-'));
+    if (persistentEvidence) {
+      fs.mkdirSync(evidenceDirectory, { recursive: true, mode: 0o700 });
+      fs.chmodSync(evidenceDirectory, 0o700);
+    }
+    const evidenceFile = persistentEvidence ? path.resolve(options.startEvidenceFile)
+      : path.join(evidenceDirectory, 'session-start.json');
     try {
       const evidenceGlob = `//${evidenceDirectory.split(path.sep).filter(Boolean).join('/')}/**`;
       const settings = JSON.stringify({
@@ -702,6 +786,7 @@ function createClaudeCliLauncher(options = {}) {
       if (!child || !child.stdout || !child.stderr || !child.stdin || typeof child.on !== 'function') {
         fail('RUNTIME_UNAVAILABLE', 'Claude launcher returned an invalid child process');
       }
+      if (typeof options.onChildSpawn === 'function') options.onChildSpawn(child.pid);
       const stdout = [];
       const stderr = [];
       child.stdout.on('data', (chunk) => stdout.push(Buffer.from(chunk)));
@@ -742,6 +827,12 @@ function createClaudeCliLauncher(options = {}) {
         now: options.now,
         sleep: options.sleep,
       });
+      if (persistentEvidence) {
+        const original = transcriptPathForEvidence(projectsDirectory(options, childEnvironment),
+          startEvidence.transcript_path, sessionId);
+        saveSessionTranscript(transcriptDir, original, sessionEvidence.transcript.path,
+          sessionEvidence.transcript.sha256);
+      }
       const transcript = writeTranscript(transcriptDir, scope, parsed.session_id, rawStdout);
       const result = {
         status: 'completed',
@@ -788,12 +879,13 @@ function createClaudeCliLauncher(options = {}) {
         } : {}),
       };
       const resultWithEvidence = Object.freeze({ ...result, applicationEvidence: freeze(evidence) });
+      if (typeof options.onCompleted === 'function') options.onCompleted(resultWithEvidence);
       return resultWithEvidence;
     } catch (error) {
       if (error && error.name === 'ClaudeRuntimeHostError') throw error;
       fail('RUNTIME_EVIDENCE_INVALID', error.message);
     } finally {
-      fs.rmSync(evidenceDirectory, { recursive: true, force: true });
+      if (!persistentEvidence) fs.rmSync(evidenceDirectory, { recursive: true, force: true });
     }
   };
 }
@@ -834,6 +926,9 @@ function createClaudeRuntimeHost(options = {}) {
     transcriptDir: options.transcriptDir === undefined
       ? path.join(scope.worktree, '.planning', 'graph', 'transcripts', 'claude')
       : options.transcriptDir,
+    startEvidenceFile: options.startEvidenceFile,
+    onChildSpawn: options.onChildSpawn,
+    onCompleted: options.onCompleted,
     sessionTranscriptRoot: options.sessionTranscriptRoot,
     gsdAgentRoot: options.gsdAgentRoot,
     transcriptTimeoutMs: options.transcriptTimeoutMs,
@@ -924,6 +1019,7 @@ module.exports = Object.freeze({
   parseClaudeStream,
   observedSelection,
   writeTranscript,
+  verifyCompletedClaudeLaunch,
   createClaudeCliLauncher,
   createClaudeRuntimeHost,
 });
