@@ -14,6 +14,7 @@ const { createDurableRecorder } = require('../../plugins/delivery-pipeline/scrip
 const { createRunController } = require('../../plugins/delivery-pipeline/scripts/run-controller.cjs');
 const { createPlanningWriterLease } = require('../../plugins/delivery-pipeline/scripts/planning-writer-lease.cjs');
 const { createCodexRuntimeHost } = require('../../plugins/delivery-pipeline/scripts/codex-runtime-host.cjs');
+const orchestrationOverhead = require('../../plugins/delivery-pipeline/scripts/orchestration-overhead.cjs');
 const {
   createCodexDecomposeHost, defaultRunStoreDir, parseCliArguments, parseRecoverArguments, readRequestFile, requestValue, runCli,
 } = require('../../plugins/delivery-pipeline/scripts/codex-decompose-host.cjs');
@@ -362,6 +363,79 @@ test('child telemetry collector failure warns without leaking collector details 
   } finally { f.clean(); }
 });
 
+test('multi-turn child telemetry keeps turn totals unknown and separated by actor', async () => {
+  const f = fixture();
+  const gsdRole = 'gsd-planner';
+  const fixtureData = buildNativeChildFixture(gsdRole, { childTurnContexts: 2 });
+  const clock = manualClock(Date.now());
+  const heartbeat = manualHeartbeat();
+  try {
+    fs.writeFileSync(path.join(f.agentDir, 'gsd-planner.toml'),
+      gsdAgentToml(gsdRole, fixtureData.instructions.replace(/\n$/, '')));
+    const file = path.join(f.root, 'multi-turn-request.json');
+    fs.writeFileSync(file, JSON.stringify({
+      scope: f.scope, gsd_role: gsdRole, prompt: 'Check this phase plan.',
+    }));
+    const output = [];
+    const graphDir = path.join(f.root, '.planning', 'graph');
+    const overheadRecorder = orchestrationOverhead.createRecorder(graphDir);
+    const { spawn } = attachFakeSpawn(f, gsdRole, fixtureData, () => {
+      clock.advance(50);
+      heartbeat.fire();
+    });
+    const result = await runCli(['--args-file', file], { write(value) { output.push(value); } }, {
+      env: { CODEX_HOME: f.codexHome },
+      agentDir: f.agentDir,
+      agentManifest: path.join(f.agentDir, '.shipyard-manifest.json'),
+      testStateRoot: f.stateRoot,
+      leaseTtlMs: 1000,
+      now: clock,
+      heartbeat: heartbeat.scheduler,
+      probe: { status: 'available', executable: 'codex', runtime_version: '0.157.1', capabilities },
+      spawn,
+      overheadRecorder,
+    });
+
+    const now = new Date();
+    const transcriptPath = path.join(f.codexHome, 'sessions', String(now.getFullYear()),
+      String(now.getMonth() + 1).padStart(2, '0'), String(now.getDate()).padStart(2, '0'),
+      'rollout-' + fixtureData.childId + '.jsonl');
+    const childTranscript = fs.readFileSync(transcriptPath, 'utf8').split('\n')
+      .filter(Boolean).map((line) => JSON.parse(line));
+    assert.equal(childTranscript.filter((record) => record.type === 'turn_context').length, 2);
+    const childEvidence = result.receipt.runtime_evidence.native_child_evidence;
+    assert.equal(Object.hasOwn(childEvidence, 'turn_contexts'), false);
+
+    orchestrationOverhead.recordWaitPoll(overheadRecorder, {
+      observation_id: 'multi-turn-parent-wait',
+      run_id: f.scope.run_id,
+      dispatch_id: result.receipt.dispatch_id,
+      role: 'decomposition',
+      runtime: 'codex',
+      backend: 'codex-decompose',
+    });
+    const rows = overheadRecorder.latest();
+    const child = rows.find((row) => row.actor === 'child');
+    const parent = rows.find((row) => row.actor === 'parent');
+    assert.equal(child.evidence, 'none');
+    assert.equal(child.counts.model_turns, null);
+    assert.equal(child.model, result.receipt.observed_model);
+    assert.equal(child.effort, result.receipt.observed_effort);
+    assert.equal(parent.counts.polls, 1);
+
+    const report = overheadRecorder.report({ experiment_id: 'exp-multi-turn-child' });
+    const byActor = new Map(report.by_actor.map((entry) => [entry.actor, entry.metrics]));
+    assert.equal(byActor.get('parent').wait_polls.value, 1);
+    assert.equal(byActor.get('parent').model_turns.value, null);
+    assert.equal(byActor.get('child').wait_polls.value, null);
+    assert.equal(byActor.get('child').model_turns.value, null);
+    assert.equal(report.metrics.model_turns.value, null);
+    assert.ok(report.missing_coverage.includes('supported transcript/usage evidence for model turns'));
+    assert.equal(report.verdict, 'inconclusive');
+    assert.equal(Object.keys(report).some((key) => /percent/i.test(key)), false);
+  } finally { f.clean(); }
+});
+
 const CAPTURED_SHA256 = 'de94a486861cedd3587db16ba051e5c5bf80e0ab05fa44ed50ad48688e6f8b4c';
 
 function captured(rel, values = {}) {
@@ -394,7 +468,7 @@ function manualHeartbeat() {
   };
 }
 
-function buildNativeChildFixture(gsdRole) {
+function buildNativeChildFixture(gsdRole, { childTurnContexts } = {}) {
   const parent = '01a0e224-6642-7f20-b2a3-68b283d429b9';
   const childId = '01a0e224-80bb-7d33-b57d-8c44061ac85d';
   const ids = { '<SESSION-2>': parent, '<SESSION-6>': childId };
@@ -405,7 +479,17 @@ function buildNativeChildFixture(gsdRole) {
   const elided = records.find((record) => record.type === 'response_item'
     && record.payload.role === 'developer').payload.content[0].text;
   const instructions = elided + '\n';
-  const childRaw = recorded.replace(JSON.stringify(elided), JSON.stringify(instructions));
+  let childRaw = recorded.replace(JSON.stringify(elided), JSON.stringify(instructions));
+  if (childTurnContexts !== undefined) {
+    assert.ok(Number.isSafeInteger(childTurnContexts) && childTurnContexts > 0);
+    const records = childRaw.split('\n').filter(Boolean).map((line) => JSON.parse(line));
+    const context = records.find((record) => record.type === 'turn_context');
+    assert.ok(context);
+    const withoutContexts = records.filter((record) => record.type !== 'turn_context');
+    const sessionIndex = withoutContexts.findIndex((record) => record.type === 'session_meta');
+    withoutContexts.splice(sessionIndex + 1, 0, ...Array.from({ length: childTurnContexts }, () => context));
+    childRaw = withoutContexts.map((record) => JSON.stringify(record)).join('\n') + '\n';
+  }
   const transform = (raw) => raw.split('\n').filter(Boolean).map((line) => {
     const record = JSON.parse(line);
     if (record.type === 'turn_context') {

@@ -914,7 +914,7 @@ function recordChildModelEvidence(scope, dispatchId, result, resolution, options
     const graphDir = options.graphDir || env.SHIPYARD_GRAPH_DIR;
     const recorder = options.overheadRecorder || (graphDir ? orchestrationOverhead.createRecorder(graphDir) : null);
     if (!recorder) return;
-    orchestrationOverhead.recordModelEvidence(recorder, {
+    orchestrationOverhead.recordMeasurement(recorder, {
       observation_id: `codex-decompose:${dispatchId}:child`,
       run_id: scope.run_id,
       dispatch_id: dispatchId,
@@ -930,8 +930,8 @@ function recordChildModelEvidence(scope, dispatchId, result, resolution, options
       observed_effort: receipt.observed_effort,
       actor: 'child',
       stage: 'model_turn',
-      evidence: 'transcript',
-      count: Number.isSafeInteger(child.turn_contexts) && child.turn_contexts > 0 ? child.turn_contexts : 1,
+      evidence: 'none',
+      counts: { polls: null, model_turns: null, tool_calls: null, retries: null },
       provider_tokens: null,
       bytes: 0,
       estimated_tokens: null,
