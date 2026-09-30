@@ -343,6 +343,24 @@ function artifactDigests(scope, writerLease, snapshot, declared, code) {
     fail(code, 'planning tree delta differs from the authenticated child artifact declaration');
   }
   const directory = phaseDirectory(scope.worktree, scope.phase);
+  try {
+    assertContained({ worktree: scope.worktree, allowed: [path.relative(scope.worktree, directory)] });
+  } catch (_) {
+    fail(code, 'planning tree changed outside the current phase directory');
+  }
+  let worktreeReal;
+  let directoryReal;
+  try {
+    worktreeReal = fs.realpathSync(scope.worktree);
+    directoryReal = fs.realpathSync(directory);
+  } catch (_) {
+    fail(code, 'planning phase directory does not resolve within the current worktree');
+  }
+  const directoryFromWorktree = path.relative(worktreeReal, directoryReal);
+  if (directoryFromWorktree === '..' || directoryFromWorktree.startsWith('..' + path.sep)
+      || path.isAbsolute(directoryFromWorktree)) {
+    fail(code, 'planning phase directory resolves outside the current worktree');
+  }
   const digests = {};
   for (const relative of declared) {
     const full = path.join(directory, ...relative.split('/'));
@@ -350,9 +368,18 @@ function artifactDigests(scope, writerLease, snapshot, declared, code) {
     try { stat = fs.lstatSync(full); }
     catch (_) { fail(code, 'declared artifact is missing: ' + relative); }
     if (stat.isSymbolicLink() || !stat.isFile()) fail(code, 'declared artifact is not a regular file: ' + relative);
+    let real;
     try {
-      assertContained({ worktree: scope.worktree, allowed: [path.relative(scope.worktree, full)] });
-    } catch (_) { fail(code, 'declared artifact resolves outside the current worktree: ' + relative); }
+      real = fs.realpathSync(full);
+    } catch (_) { fail(code, 'declared artifact cannot be resolved within the current worktree: ' + relative); }
+    const artifactFromWorktree = path.relative(worktreeReal, real);
+    const artifactFromDirectory = path.relative(directoryReal, real);
+    if (artifactFromWorktree === '..' || artifactFromWorktree.startsWith('..' + path.sep)
+        || path.isAbsolute(artifactFromWorktree)
+        || artifactFromDirectory === '..' || artifactFromDirectory.startsWith('..' + path.sep)
+        || path.isAbsolute(artifactFromDirectory)) {
+      fail(code, 'declared artifact resolves outside the current worktree phase: ' + relative);
+    }
     const digest = sha256File(full);
     if (!digest) fail(code, 'declared artifact cannot be digested: ' + relative);
     digests[relative] = digest;

@@ -46,10 +46,17 @@ function gsdAgentToml(role, instructions) {
     + "developer_instructions = '''\n" + instructions + "\n'''\n";
 }
 
-function writeArtifacts(root, gsdRole) {
+function writeArtifacts(root, gsdRole, artifactPaths = null) {
   const phaseDir = path.join(root, '.planning', 'phases', '38-codex-decompose');
   if (gsdRole === 'gsd-phase-researcher') fs.writeFileSync(path.join(phaseDir, '38-RESEARCH.md'), '# Research\n');
-  if (gsdRole === 'gsd-planner') fs.writeFileSync(path.join(phaseDir, '38-01-PLAN.md'), '# Plan\n');
+  if (gsdRole === 'gsd-planner') {
+    const paths = artifactPaths || ['.planning/phases/38-codex-decompose/38-01-PLAN.md'];
+    for (const relative of paths) {
+      const full = path.join(root, ...relative.split('/'));
+      fs.mkdirSync(path.dirname(full), { recursive: true });
+      fs.writeFileSync(full, '# Plan\n');
+    }
+  }
 }
 
 function fixture() {
@@ -351,9 +358,12 @@ function manualHeartbeat() {
   };
 }
 
-function buildNativeChildFixture(gsdRole) {
+function buildNativeChildFixture(gsdRole, artifactPaths) {
   const parent = '01a0e224-6642-7f20-b2a3-68b283d429b9';
   const childId = '01a0e224-80bb-7d33-b57d-8c44061ac85d';
+  const declaredArtifactPaths = artifactPaths || (gsdRole === 'gsd-phase-researcher'
+    ? ['.planning/phases/38-codex-decompose/38-RESEARCH.md']
+    : gsdRole === 'gsd-planner' ? ['.planning/phases/38-codex-decompose/38-01-PLAN.md'] : []);
   const ids = { '<SESSION-2>': parent, '<SESSION-6>': childId };
   const recorded = captured('tests/fixtures/captured/codex-agent-stream-child.jsonl', ids);
   const parentRaw = captured('tests/fixtures/captured/codex-agent-stream-parent.jsonl', ids);
@@ -381,16 +391,14 @@ function buildNativeChildFixture(gsdRole) {
       record.payload.source.subagent.thread_spawn.agent_role = gsdRole;
     }
     if (record.type === 'event_msg' && record.payload.type === 'task_complete') {
-      const artifactPaths = gsdRole === 'gsd-phase-researcher'
-        ? ['.planning/phases/38-codex-decompose/38-RESEARCH.md']
-        : gsdRole === 'gsd-planner' ? ['.planning/phases/38-codex-decompose/38-01-PLAN.md'] : [];
       record.payload.last_agent_message = JSON.stringify({
-        schema: 'shipyard.codex-decompose-output.v1', artifact_paths: artifactPaths,
+        schema: 'shipyard.codex-decompose-output.v1', artifact_paths: declaredArtifactPaths,
       });
     }
     return JSON.stringify(record);
   }).join('\n') + '\n';
-  return { parent, childId, instructions, parentRaw, childRaw, execRaw, transform };
+  return { parent, childId, instructions, parentRaw, childRaw, execRaw, transform,
+    artifactPaths: declaredArtifactPaths, writeArtifactPaths: declaredArtifactPaths };
 }
 
 function attachFakeSpawn(f, gsdRole, fixtureData, onSpawn, exitCode = 0) {
@@ -398,7 +406,7 @@ function attachFakeSpawn(f, gsdRole, fixtureData, onSpawn, exitCode = 0) {
   const calls = [];
   const spawn = (_executable, args, options) => {
     calls.push({ args, options });
-    writeArtifacts(f.root, gsdRole);
+    writeArtifacts(f.root, gsdRole, fixtureData.writeArtifactPaths);
     if (onSpawn) onSpawn();
     const sent = [];
     const process = new EventEmitter();
@@ -711,9 +719,15 @@ function timedOutWaits(raw) {
 
 async function recoverySetup(gsdRole, {
   complete = true, crashBeforeCompletionCallback = false, crashBeforeTranscriptWrite = false,
+  artifactPaths, writeArtifactPaths, preexistingResearchBaseline = false,
 } = {}) {
   const f = fixture();
-  const fixtureData = buildNativeChildFixture(gsdRole);
+  if (preexistingResearchBaseline) {
+    fs.writeFileSync(path.join(f.root, '.planning', 'phases', '38-codex-decompose', '38-RESEARCH.md'),
+      '# Authorized research baseline\n');
+  }
+  const fixtureData = buildNativeChildFixture(gsdRole, artifactPaths);
+  if (writeArtifactPaths) fixtureData.writeArtifactPaths = writeArtifactPaths;
   fixtureData.parentRaw = timedOutWaits(fixtureData.parentRaw);
   fs.writeFileSync(path.join(f.agentDir, gsdRole + '.toml'),
     gsdAgentToml(gsdRole, fixtureData.instructions.replace(/\n$/, '')));
@@ -885,6 +899,62 @@ test('recover rebuilds the original ' + gsdRole + ' receipt after completion was
   } finally { setup.f.clean(); }
 });
 }
+
+test('planner accepts multiple declared plans with a preexisting phase research baseline', async () => {
+  const artifactPaths = [
+    '.planning/phases/38-codex-decompose/38-01-PLAN.md',
+    '.planning/phases/38-codex-decompose/38-02-PLAN.md',
+  ];
+  const setup = await recoverySetup('gsd-planner', { artifactPaths, preexistingResearchBaseline: true });
+  try {
+    assert.equal(setup.crashError && setup.crashError.code, 'SIMULATED_HOST_DEATH',
+      setup.crashError && setup.crashError.message);
+    const launchDir = path.join(setup.hostState, 'launches');
+    const launchRecord = JSON.parse(fs.readFileSync(path.join(launchDir, fs.readdirSync(launchDir)[0]), 'utf8'));
+    assert.deepEqual(Object.keys(launchRecord.completed.artifact_digests).sort(), ['38-01-PLAN.md', '38-02-PLAN.md']);
+    assert.equal(fs.readFileSync(path.join(setup.f.root, '.planning', 'phases', '38-codex-decompose', '38-RESEARCH.md'), 'utf8'),
+      '# Authorized research baseline\n');
+
+    setup.setLeasePid(2147483647);
+    const recovered = await setup.recover();
+    assert.equal(recovered.receipt.dispatch_id, setup.dispatchId);
+    assert.equal(recovered.receipt.compliance, 'verified');
+    assert.deepEqual(JSON.parse(recovered.recovered_output).artifact_paths, artifactPaths);
+    assert.equal(setup.spawned.length, 0);
+  } finally { setup.f.clean(); }
+});
+
+test('planner refuses an undeclared planning delta when multiple plans are declared', async () => {
+  const declared = [
+    '.planning/phases/38-codex-decompose/38-01-PLAN.md',
+    '.planning/phases/38-codex-decompose/38-02-PLAN.md',
+  ];
+  const setup = await recoverySetup('gsd-planner', {
+    artifactPaths: declared,
+    writeArtifactPaths: [...declared, '.planning/phases/38-codex-decompose/38-03-PLAN.md'],
+  });
+  try {
+    assert.equal(setup.crashError && setup.crashError.code, 'RUNTIME_EVIDENCE_INVALID',
+      setup.crashError && setup.crashError.message);
+    assert.match(setup.crashError.message, /planning tree delta differs/);
+    assert.equal(setup.recorder.getReservation(setup.dispatchId).recorded, false);
+    assert.equal(fs.existsSync(setup.recordFile), false);
+  } finally { setup.f.clean(); }
+});
+
+test('planner refuses an artifact path that escapes its phase', async () => {
+  const setup = await recoverySetup('gsd-planner', {
+    artifactPaths: ['../../outside.md'],
+    writeArtifactPaths: ['.planning/phases/38-codex-decompose/38-01-PLAN.md'],
+  });
+  try {
+    assert.equal(setup.crashError && setup.crashError.code, 'RUNTIME_EVIDENCE_INVALID',
+      setup.crashError && setup.crashError.message);
+    assert.match(setup.crashError.message, /invalid artifact path/);
+    assert.equal(setup.recorder.getReservation(setup.dispatchId).recorded, false);
+    assert.equal(fs.existsSync(setup.recordFile), false);
+  } finally { setup.f.clean(); }
+});
 
 test('recover rebuilds a completed dispatch when the host dies before its completion callback', async () => {
   const setup = await recoverySetup('gsd-planner', { crashBeforeCompletionCallback: true });
