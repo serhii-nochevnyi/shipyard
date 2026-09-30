@@ -199,9 +199,33 @@ function writeLaunch(store, record) {
   if (Buffer.byteLength(raw, 'utf8') > MAX_LAUNCH) refuse('INVALID_INPUT', 'private launch snapshot exceeds 4 MiB');
   try {
     fs.writeFileSync(temporary, raw, { mode: 0o600 });
+    const handle = fs.openSync(temporary, 'r');
+    try { fs.fsyncSync(handle); } finally { fs.closeSync(handle); }
     fs.renameSync(temporary, file);
+    const directory = fs.openSync(path.dirname(file), 'r');
+    try { fs.fsyncSync(directory); } finally { fs.closeSync(directory); }
   } finally { try { fs.unlinkSync(temporary); } catch {} }
 }
+
+function digestValue(value) {
+  return crypto.createHash('sha256').update(value).digest('hex');
+}
+
+function requestBinding(scope, runId, resolution) {
+  return {
+    repository: scope.repository, worktree: scope.worktree, phase: scope.phase,
+    ticket: scope.ticket, run_id: runId, role: scope.role,
+    request_sha256: digestValue(JSON.stringify({ role: scope.role, phase: scope.phase,
+      worktree: scope.worktree, prompt: scope.prompt, signals: scope.signals })),
+    model: resolution.model, effort: resolution.effort,
+    policy_hash: resolution.policy_hash ?? null,
+    policy_version: resolution.policy_version ?? null,
+    policy_id: resolution.policy_id ?? null,
+    policy_rung: resolution.rung ?? resolution.policy_rung ?? null,
+  };
+}
+
+function sameValue(left, right) { return JSON.stringify(left) === JSON.stringify(right); }
 
 function readLaunch(store, dispatchId) {
   const file = launchFile(store, dispatchId);
@@ -304,7 +328,10 @@ async function runDecomposition(request, dependencies = {}) {
       const launchRecord = {
         dispatch_id: dispatchId, run_id: runId, session_id: sessionId,
         lease_epoch: leaseHandle.epoch, tree_snapshot: preLaunchSnapshot,
-        request, resolution: { model: resolution.model, effort: resolution.effort },
+        request, resolution: { model: resolution.model, effort: resolution.effort,
+          policy_hash: resolution.policy_hash ?? null, policy_version: resolution.policy_version ?? null,
+          policy_id: resolution.policy_id ?? null, rung: resolution.rung ?? resolution.policy_rung ?? null },
+        binding: requestBinding(scope, runId, resolution),
         start_evidence_file: startEvidenceFile, transcript_path: transcriptFile,
       };
       writeLaunch(store, launchRecord);
@@ -326,15 +353,37 @@ async function runDecomposition(request, dependencies = {}) {
           recorder, controller, probe, gsdAgentRoot: temporary,
           transcriptDir,
           startEvidenceFile,
-          onChildSpawn: (pid) => { launchRecord.pid = pid; writeLaunch(store, launchRecord); },
+          onChildSpawn: (pid) => {
+            if (!Number.isSafeInteger(pid) || pid <= 0) refuse('RECOVERY_EVIDENCE_INCOMPLETE', 'Claude child pid is invalid');
+            launchRecord.child_pid = pid;
+            writeLaunch(store, launchRecord);
+          },
           onCompleted: (completed) => {
             const changed = writerLease.changedSince(preLaunchSnapshot).changed;
+            const declared = declaredChanges({ output: completed.output }, phaseDir);
+            if (!sameValue(changed, declared)) refuse('RECOVERY_ARTIFACT_ALTERED', 'final assistant declaration differs from completed phase changes');
+            const artifactDigests = Object.fromEntries(changed.map((rel) => [rel, fileDigest(path.join(phaseDir, rel))]));
+            if (Object.values(artifactDigests).some((digest) => digest === null)) {
+              refuse('RECOVERY_ARTIFACT_ALTERED', 'completed artifact is missing');
+            }
+            const reservation = recorder.getReservation(dispatchId);
+            if (!reservation || reservation.recorded || !reservation.reserved_at) {
+              refuse('RECOVERY_NO_RESERVATION', 'completed Claude launch has no original reservation');
+            }
+            const selectionPath = path.join(transcriptDir, 'projects',
+              completed.applicationEvidence.selection_evidence.transcript.path);
             launchRecord.completed = {
+              reservation_at: reservation.reserved_at,
               stream_sha256: completed.applicationEvidence.transcript.sha256,
               selection_sha256: completed.applicationEvidence.selection_evidence.transcript.sha256,
               start_sha256: fileDigest(startEvidenceFile),
-              artifact_digests: Object.fromEntries(changed.map((rel) => [rel, fileDigest(path.join(phaseDir, rel))])),
+              declared_paths: declared, changed_paths: changed, artifact_digests: artifactDigests,
             };
+            launchRecord.saved_native_transcript = selectionPath;
+            launchRecord.saved_native_transcript_sha256 = launchRecord.completed.selection_sha256;
+            launchRecord.saved_native_transcript_bytes = completed.applicationEvidence.selection_evidence.transcript.bytes;
+            launchRecord.start_evidence_sha256 = launchRecord.completed.start_sha256;
+            launchRecord.native_transcript_path = JSON.parse(fs.readFileSync(startEvidenceFile, 'utf8')).transcript_path;
             writeLaunch(store, launchRecord);
           },
         });
@@ -443,18 +492,34 @@ async function recoverDecomposition(dispatchId, dependencies = {}) {
     reason: `recover completed Claude dispatch ${dispatchId}`,
   });
   try {
+    if (!Number.isSafeInteger(launch.lease_epoch) || leaseHandle.epoch !== launch.lease_epoch + 1) {
+      refuse('RECOVERY_EVIDENCE_INCOMPLETE', 'writer lease no longer follows the original launch epoch');
+    }
     const reservation = recorder.getReservation?.(dispatchId);
     if (!reservation) refuse('RECOVERY_NO_RESERVATION', `dispatch ${dispatchId} has no durable reservation`);
     if (reservation.recorded) refuse('RECOVERY_ALREADY_RECORDED', `dispatch ${dispatchId} already has a durable record`);
-    if (pidAlive(launch.pid)) refuse('RECOVERY_UNKNOWN_LIVE', `recorded Claude pid ${launch.pid} is still alive`);
+    if (!Number.isSafeInteger(launch.child_pid) || launch.child_pid <= 0) {
+      refuse('RECOVERY_EVIDENCE_INCOMPLETE', 'original Claude child pid is missing or invalid');
+    }
+    if (pidAlive(launch.child_pid)) refuse('RECOVERY_UNKNOWN_LIVE', `recorded Claude pid ${launch.child_pid} is still alive`);
     const expectedTranscript = path.join(store, 'transcripts', `${launch.run_id}-${launch.session_id}.jsonl`);
     const expectedStart = path.join(store, 'transcripts', `${launch.run_id}-${launch.session_id}.session-start.json`);
     if (launch.transcript_path !== expectedTranscript || launch.start_evidence_file !== expectedStart
         || !object(launch.completed) || typeof launch.completed.stream_sha256 !== 'string'
         || typeof launch.completed.selection_sha256 !== 'string'
         || typeof launch.completed.start_sha256 !== 'string'
-        || !object(launch.completed.artifact_digests)) {
+        || !object(launch.completed.artifact_digests) || !Array.isArray(launch.completed.declared_paths)
+        || !Array.isArray(launch.completed.changed_paths)
+        || typeof launch.saved_native_transcript !== 'string'
+        || !Number.isSafeInteger(launch.saved_native_transcript_bytes)
+        || launch.saved_native_transcript_bytes <= 0
+        || typeof launch.native_transcript_path !== 'string') {
       refuse('RECOVERY_EVIDENCE_INCOMPLETE', 'Claude launch has no completed private transcript evidence');
+    }
+    if (reservation.reserved_at !== launch.completed.reservation_at
+        || !sameValue(launch.binding, requestBinding(scope, launch.run_id, launch.resolution))
+        || launch.binding?.run_id !== launch.run_id || launch.binding?.role !== scope.role) {
+      refuse('RECOVERY_EVIDENCE_INCOMPLETE', 'original reservation, request or scope binding changed');
     }
     if (fileDigest(expectedStart) !== launch.completed.start_sha256) {
       refuse('RECOVERY_ARTIFACT_ALTERED', 'saved SessionStart evidence changed after completion');
@@ -463,13 +528,16 @@ async function recoverDecomposition(dispatchId, dependencies = {}) {
       root: scope.worktree, runtime: 'claude', role: ROLES[scope.role],
       signals: scope.signals, dispatch_id: dispatchId,
     });
-    if (resolution.model !== launch.resolution?.model || resolution.effort !== launch.resolution?.effort) {
+    if (!sameValue(requestBinding(scope, launch.run_id, resolution), launch.binding)) {
       refuse('RECOVERY_EVIDENCE_INCOMPLETE', 'saved selection differs from the routed selection');
     }
     let verified;
     try {
       verified = await verifyCompletedClaudeLaunch({ session_id: launch.session_id,
         start_evidence_file: expectedStart, transcript_path: expectedTranscript,
+        saved_native_transcript: launch.saved_native_transcript,
+        original_projects_root: path.join(dependencies.configRoot || process.env.CLAUDE_CONFIG_DIR
+          || path.join(process.env.HOME || os.homedir(), '.claude'), 'projects'),
         model: resolution.model, effort: resolution.effort, gsd_role: scope.role,
         worktree: scope.worktree });
     } catch (error) {
@@ -477,13 +545,19 @@ async function recoverDecomposition(dispatchId, dependencies = {}) {
         `Claude launch evidence cannot be re-verified: ${error.message}`);
     }
     if (verified.applicationEvidence.transcript.sha256 !== launch.completed.stream_sha256
-        || verified.applicationEvidence.selection_evidence.transcript.sha256 !== launch.completed.selection_sha256) {
+        || verified.applicationEvidence.selection_evidence.transcript.sha256 !== launch.completed.selection_sha256
+        || verified.applicationEvidence.selection_evidence.transcript.bytes !== launch.saved_native_transcript_bytes
+        || launch.saved_native_transcript_sha256 !== launch.completed.selection_sha256
+        || launch.start_evidence_sha256 !== launch.completed.start_sha256
+        || JSON.parse(fs.readFileSync(expectedStart, 'utf8')).transcript_path !== launch.native_transcript_path) {
       refuse('RECOVERY_ARTIFACT_ALTERED', 'saved Claude transcripts differ from the completed launch');
     }
     const changed = writerLease.changedSince(launch.tree_snapshot).changed;
     const declared = declaredChanges(verified.result, phaseDir);
     const savedPaths = Object.keys(launch.completed.artifact_digests).sort();
     if (changed.length !== declared.length || changed.some((item, index) => item !== declared[index])
+        || !sameValue(launch.completed.declared_paths, declared)
+        || !sameValue(launch.completed.changed_paths, changed)
         || savedPaths.length !== declared.length || savedPaths.some((item, index) => item !== declared[index])
         || declared.some((item) => fileDigest(path.join(phaseDir, item)) !== launch.completed.artifact_digests[item])) {
       refuse('RECOVERY_ARTIFACT_ALTERED', 'phase artifacts differ from the final assistant result');
@@ -491,7 +565,7 @@ async function recoverDecomposition(dispatchId, dependencies = {}) {
     writerLease.assertFence({ token: leaseHandle.token, epoch: leaseHandle.epoch,
       base_revision: git(scope.worktree, 'rev-parse', 'HEAD') });
     const applied = Object.freeze({ ...verified.applicationEvidence,
-      ...(Number.isSafeInteger(launch.pid) ? { process_id: launch.pid } : {}),
+      process_id: launch.child_pid,
       ...(typeof launch.runtime_version === 'string' ? { runtime_version: launch.runtime_version } : {}),
     });
     const capabilities = { supportedModels: [resolution.model], supportedEfforts: [resolution.effort],

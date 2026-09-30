@@ -409,7 +409,9 @@ function recoveryFixture(role, { cli = false } = {}) {
   const dispatchId = `decompose-${crypto.randomUUID()}`;
   const runId = `decompose-${crypto.randomUUID()}`;
   const sessionId = crypto.randomUUID();
-  const resolution = { model: 'claude-opus-5-5', effort: 'medium' };
+  const resolution = { model: 'claude-opus-5-5', effort: 'medium',
+    ...(cli ? { policy_hash: require('../../plugins/delivery-pipeline/scripts/model-policy.cjs').POLICY_HASH,
+      policy_version: 'adr-014.v6', rung: 'base' } : {}) };
   const writerLease = createPlanningWriterLease({ worktree: fs.realpathSync(f.worktree), phaseDir: f.phaseDir,
     stateRoot: path.join(store, 'writer') });
   const head = execFileSync('git', ['-C', f.worktree, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
@@ -445,15 +447,28 @@ function recoveryFixture(role, { cli = false } = {}) {
   const digest = (file) => crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
   const record = { dispatch_id: dispatchId, run_id: runId, session_id: sessionId,
     lease_epoch: handle.epoch, tree_snapshot: snapshot, request: request(f.worktree, role),
-    resolution, start_evidence_file: startFile, transcript_path: streamFile,
+    resolution, child_pid: 99999999, start_evidence_file: startFile, transcript_path: streamFile,
+    native_transcript_path: nativeFile, saved_native_transcript: savedNativeFile,
+    saved_native_transcript_sha256: digest(savedNativeFile),
+    saved_native_transcript_bytes: fs.statSync(savedNativeFile).size,
+    start_evidence_sha256: digest(startFile),
+    binding: { repository, worktree, phase: 38, ticket: 'T-38-DECOMPOSE', run_id: runId,
+      role, request_sha256: digestValue(JSON.stringify({ role, phase: 38, worktree,
+        prompt: 'Create the phase plan.', signals: {} })), model: resolution.model,
+      effort: resolution.effort, policy_hash: resolution.policy_hash ?? null,
+      policy_version: cli ? 'adr-014.v6' : null, policy_id: null,
+      policy_rung: cli ? 'base' : null },
     completed: { stream_sha256: digest(streamFile), selection_sha256: digest(savedNativeFile),
-      start_sha256: digest(startFile), artifact_digests: { '38-01-PLAN.md': digest(path.join(f.phaseDir, '38-01-PLAN.md')) } } };
+      start_sha256: digest(startFile), declared_paths: ['38-01-PLAN.md'], changed_paths: ['38-01-PLAN.md'],
+      artifact_digests: { '38-01-PLAN.md': digest(path.join(f.phaseDir, '38-01-PLAN.md')) } } };
   const launchFile = path.join(store, 'launches', `${digestValue(dispatchId)}.launch.json`);
   fs.mkdirSync(path.dirname(launchFile), { recursive: true, mode: 0o700 });
   const save = () => fs.writeFileSync(launchFile, `${JSON.stringify(record)}\n`, { mode: 0o600 });
   save();
   const recorder = createDurableRecorder(path.join(store, 'receipts'));
   recorder.reserve(dispatchId);
+  record.completed.reservation_at = recorder.getReservation(dispatchId).reserved_at;
+  save();
   const priorConfig = process.env.CLAUDE_CONFIG_DIR;
   process.env.CLAUDE_CONFIG_DIR = f.config;
   const deps = { store, writerLease,
@@ -539,6 +554,38 @@ test('a live Claude launcher saves evidence that verifies identically after the 
   } finally { f.clean(); }
 });
 
+test('a missing child pid or failed synchronous pid persistence kills Claude before stdin', async () => {
+  const f = preparedPhaseFixture();
+  try {
+    for (const pid of [undefined, -1, 24038]) {
+      let stdinWrites = 0;
+      let kills = 0;
+      let persisted = 0;
+      const launch = createClaudeCliLauncher({
+        scope: { run_id: `decompose-${crypto.randomUUID()}`, ticket: 'T-38-DECOMPOSE',
+          phase: 38, worktree: f.worktree, runtime: 'claude', provider: 'anthropic' },
+        gsdAgentRoot: path.join(f.config, 'agents'), env: { CLAUDE_CONFIG_DIR: f.config },
+        onChildSpawn: () => { persisted++; throw new Error('synchronous pid write failed'); },
+        spawn: () => {
+          const child = new EventEmitter();
+          child.pid = pid;
+          child.stdout = new EventEmitter();
+          child.stderr = new EventEmitter();
+          child.stdin = { write() { stdinWrites++; }, end() {} };
+          child.kill = () => { kills++; return true; };
+          return child;
+        },
+      });
+      await assert.rejects(launch('Create the plan.', { model: 'claude-opus-5-5',
+        effort: 'medium', session_id: crypto.randomUUID(), gsd_role: 'gsd-planner' }),
+      { code: 'RUNTIME_UNAVAILABLE' });
+      assert.equal(stdinWrites, 0);
+      assert.equal(kills, 1);
+      assert.equal(persisted, pid === 24038 ? 1 : 0);
+    }
+  } finally { f.clean(); }
+});
+
 test('a completed saved Claude launch recovers one receipt per judgment role with its original dispatch', async () => {
   for (const role of Object.keys(ROLES)) {
     const f = recoveryFixture(role);
@@ -579,6 +626,8 @@ test('recovery refuses missing reservations, incomplete transcripts, mismatched 
   const cases = [
     { code: 'RECOVERY_NO_RESERVATION', mutate: (f) => fs.rmSync(path.join(f.store, 'receipts'), { recursive: true }) },
     { code: 'RECOVERY_EVIDENCE_MISSING', mutate: (f) => fs.rmSync(f.streamFile) },
+    { code: 'RECOVERY_ARTIFACT_ALTERED', mutate: (f) => fs.rmSync(f.record.start_evidence_file) },
+    { code: 'RECOVERY_EVIDENCE_MISSING', mutate: (f) => fs.rmSync(f.nativeFile) },
     { code: 'RECOVERY_EVIDENCE_INCOMPLETE', mutate: (f) => { delete f.record.completed; f.save(); } },
     { code: 'RECOVERY_EVIDENCE_MISSING', mutate: (f) => {
       fs.writeFileSync(f.nativeFile, JSON.stringify({ type: 'agent-setting', sessionId: f.sessionId,
@@ -603,7 +652,16 @@ test('recovery refuses missing reservations, incomplete transcripts, mismatched 
     } },
     { code: 'RECOVERY_ARTIFACT_ALTERED', mutate: (f) => fs.writeFileSync(path.join(f.phaseDir, 'stray.md'), 'stray\n') },
     { code: 'RECOVERY_ARTIFACT_ALTERED', mutate: (f) => fs.writeFileSync(path.join(f.phaseDir, '38-01-PLAN.md'), '# tampered\n') },
-    { code: 'RECOVERY_UNKNOWN_LIVE', mutate: (f) => { f.record.pid = process.pid; f.save(); } },
+    { code: 'RECOVERY_EVIDENCE_INCOMPLETE', mutate: (f) => { delete f.record.child_pid; f.save(); } },
+    { code: 'RECOVERY_EVIDENCE_INCOMPLETE', mutate: (f) => { f.record.child_pid = -1; f.save(); } },
+    { code: 'RECOVERY_UNKNOWN_LIVE', mutate: (f) => { f.record.child_pid = process.pid; f.save(); } },
+    { code: 'RECOVERY_EVIDENCE_INCOMPLETE', mutate: (f) => { f.record.request.prompt = 'Substituted'; f.save(); } },
+    { code: 'RECOVERY_EVIDENCE_INCOMPLETE', mutate: (f) => { f.record.binding.policy_hash = 'substituted'; f.save(); } },
+    { code: 'RECOVERY_EVIDENCE_INCOMPLETE', mutate: (f) => { f.record.completed.reservation_at = 'substituted'; f.save(); } },
+    { code: 'RECOVERY_EVIDENCE_INCOMPLETE', mutate: (f) => { f.record.lease_epoch++; f.save(); } },
+    { code: 'RECOVERY_ARTIFACT_ALTERED', mutate: (f) => { f.record.saved_native_transcript_bytes++; f.save(); } },
+    { code: 'RECOVERY_EVIDENCE_INCOMPLETE', mutate: (f) => { f.record.saved_native_transcript = f.streamFile; f.save(); } },
+    { code: 'RECOVERY_ARTIFACT_ALTERED', mutate: (f) => { f.record.completed.declared_paths = []; f.save(); } },
   ];
   for (const { code, mutate } of cases) {
     const f = recoveryFixture('gsd-planner');

@@ -609,8 +609,11 @@ function saveSessionTranscript(directory, source, relative, expectedSha256) {
 }
 
 async function verifyCompletedClaudeLaunch({ session_id: sessionId, start_evidence_file: evidenceFile,
-  transcript_path: transcriptFile, model, effort, gsd_role: gsdRole, worktree }) {
+  transcript_path: transcriptFile, saved_native_transcript: savedNativeTranscript,
+  original_projects_root: originalProjectsRoot, model, effort, gsd_role: gsdRole, worktree }) {
   const startEvidence = readSessionStartEvidence(evidenceFile, sessionId, gsdRole, worktree);
+  // The original file may have disappeared, but its project/session location must still be authentic.
+  if (originalProjectsRoot) transcriptPathForEvidence(originalProjectsRoot, startEvidence.transcript_path, sessionId);
   const privateRoot = path.join(path.dirname(transcriptFile), 'projects');
   const nativeFile = path.resolve(startEvidence.transcript_path);
   const project = path.basename(path.dirname(nativeFile));
@@ -619,6 +622,9 @@ async function verifyCompletedClaudeLaunch({ session_id: sessionId, start_eviden
   }
   const savedStart = { ...startEvidence,
     transcript_path: path.join(privateRoot, project, `${sessionId}.jsonl`) };
+  if (savedNativeTranscript !== undefined && savedNativeTranscript !== savedStart.transcript_path) {
+    fail('RUNTIME_EVIDENCE_MISMATCH', 'saved Claude native transcript differs from the launch reference');
+  }
   const sessionEvidence = await readSessionEvidence(savedStart, sessionId, model, effort, gsdRole,
     { sessionTranscriptRoot: privateRoot, transcriptTimeoutMs: 200, transcriptPollMs: 1 });
   let stat;
@@ -786,7 +792,17 @@ function createClaudeCliLauncher(options = {}) {
       if (!child || !child.stdout || !child.stderr || !child.stdin || typeof child.on !== 'function') {
         fail('RUNTIME_UNAVAILABLE', 'Claude launcher returned an invalid child process');
       }
-      if (typeof options.onChildSpawn === 'function') options.onChildSpawn(child.pid);
+      try {
+        if (!Number.isSafeInteger(child.pid) || child.pid <= 0) {
+          fail('RUNTIME_UNAVAILABLE', 'Claude process did not provide a valid child pid');
+        }
+        if (typeof options.onChildSpawn === 'function') options.onChildSpawn(child.pid);
+      } catch (error) {
+        child.on('error', () => {});
+        try { child.kill(); } catch (_) {}
+        if (error && error.name === 'ClaudeRuntimeHostError') throw error;
+        fail('RUNTIME_UNAVAILABLE', `Claude child pid could not be persisted: ${error.message}`);
+      }
       const stdout = [];
       const stderr = [];
       child.stdout.on('data', (chunk) => stdout.push(Buffer.from(chunk)));
