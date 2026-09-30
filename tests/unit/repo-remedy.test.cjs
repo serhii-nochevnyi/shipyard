@@ -10,6 +10,7 @@ const { computeSignature } = require('../../plugins/delivery-pipeline/scripts/fa
 const coverage = require('../../plugins/delivery-pipeline/scripts/conveyor-coverage.cjs');
 
 const SCRIPT = path.resolve(__dirname, '../../plugins/delivery-pipeline/scripts/repo-remedy.cjs');
+const LOG_EVENT = path.resolve(__dirname, '../../plugins/delivery-pipeline/scripts/log-event.cjs');
 const TICKET = 'T-43-18';
 const REPO = 'owner/repo';
 const LOG = 'FAIL tests/screenshot.test.js\nAssertionError: screenshot differs\n';
@@ -93,6 +94,12 @@ test('only the declared signature matches; dispatch uses exact argv and journals
   assert.equal(f.events()[0].head, f.head);
   assert.equal(f.events()[0].inputs, undefined);
   assert.match(f.events()[0].inputs_digest, /^[0-9a-f]{64}$/);
+  const manual = spawnSync(process.execPath, [LOG_EVENT, 'remedy_dispatch',
+    ...Object.entries(f.events()[0]).filter(([key]) => !['event', 'ts'].includes(key))
+      .map(([key, value]) => `${key}=${value}`), '--graph', f.graph],
+  { cwd: f.root, env: f.env, encoding: 'utf8' });
+  assert.notEqual(manual.status, 0, 'a real run event must not make manual rows acceptable');
+  assert.equal(f.events().length, 1, 'the successful run owns the sole dispatch event');
 });
 
 test('run refuses absent, nonmatching, and head-stale signature evidence', () => {

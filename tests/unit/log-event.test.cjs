@@ -60,7 +60,7 @@ test('merge coverage events require their identifying fields', () => {
   assert.strictEqual(lines(graph).length, 2);
 });
 
-test('remedy dispatch requires complete metadata and journals one complete row', () => {
+test('manual remedy dispatch is refused even with complete metadata', () => {
   const { project, graph } = scratch();
   const fields = ['ticket=T-43-18', 'pr=43', 'repo=owner/repo', 'entry_index=0',
     'signature=abc123', 'workflow=repair.yml', 'ref=ticket/T-43-18',
@@ -71,9 +71,9 @@ test('remedy dispatch requires complete metadata and journals one complete row',
   }
   assert.strictEqual(lines(graph).length, 0);
   const result = run(project, ['remedy_dispatch', ...fields]);
-  assert.strictEqual(result.status, 0, result.stderr);
-  assert.strictEqual(lines(graph).length, 1);
-  assert.strictEqual(JSON.parse(lines(graph)[0]).workflow, 'repair.yml');
+  assert.notStrictEqual(result.status, 0, 'only repo-remedy run can record a dispatch');
+  assert.match(result.stderr, /repo-remedy\.cjs run/);
+  assert.strictEqual(lines(graph).length, 0);
 });
 
 test('logging from a checkout with no graph refuses, and creates nothing', () => {
