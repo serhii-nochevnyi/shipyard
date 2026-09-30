@@ -1427,7 +1427,7 @@ tickets:
     risk: high
     human_checkpoint: true
     preauthorized: false
-    branch: ticket/T-30-04-require-an-explicit-operator-choice-before-cloning
+    branch: ticket/T-30-04-require-an-explicit-operator-choice-befo
     epic: epic/30-a-ticket-you-cannot-reach-is-not-deliverable
     primary_parent: T-30-03
     pr_base: ticket/T-30-03-discover-repository-checkouts-by-declare
@@ -1443,10 +1443,10 @@ tickets:
     risk: medium
     human_checkpoint: false
     preauthorized: false
-    branch: ticket/T-30-05-validate-repository-destinations-with-existing-nesting-rule
+    branch: ticket/T-30-05-validate-repository-destinations-with-th
     epic: epic/30-a-ticket-you-cannot-reach-is-not-deliverable
     primary_parent: T-30-04
-    pr_base: ticket/T-30-04-require-an-explicit-operator-choice-before-cloning
+    pr_base: ticket/T-30-04-require-an-explicit-operator-choice-befo
     jira: null
   T-30-06:
     title: Mirror the project origin protocol for repository clones
@@ -1459,10 +1459,10 @@ tickets:
     risk: medium
     human_checkpoint: false
     preauthorized: false
-    branch: ticket/T-30-06-mirror-project-origin-protocol-for-repository-clones
+    branch: ticket/T-30-06-mirror-the-project-origin-protocol-for-r
     epic: epic/30-a-ticket-you-cannot-reach-is-not-deliverable
     primary_parent: T-30-05
-    pr_base: ticket/T-30-05-validate-repository-destinations-with-existing-nesting-rule
+    pr_base: ticket/T-30-05-validate-repository-destinations-with-th
     jira: null
   T-30-07:
     title: Use a full clone with all refs required for base resolution
@@ -1478,7 +1478,7 @@ tickets:
     branch: ticket/T-30-07-use-a-full-clone-with-all-refs-required
     epic: epic/30-a-ticket-you-cannot-reach-is-not-deliverable
     primary_parent: T-30-06
-    pr_base: ticket/T-30-06-mirror-project-origin-protocol-for-repository-clones
+    pr_base: ticket/T-30-06-mirror-the-project-origin-protocol-for-r
     jira: null
   T-30-08:
     title: Adopt matching checkouts and refuse to clobber other paths
@@ -1491,7 +1491,7 @@ tickets:
     risk: medium
     human_checkpoint: false
     preauthorized: false
-    branch: ticket/T-30-08-adopt-matching-checkouts-and-refuse-to-clobber
+    branch: ticket/T-30-08-adopt-matching-checkouts-and-refuse-to-c
     epic: epic/30-a-ticket-you-cannot-reach-is-not-deliverable
     primary_parent: T-30-07
     pr_base: ticket/T-30-07-use-a-full-clone-with-all-refs-required
@@ -1507,10 +1507,10 @@ tickets:
     risk: medium
     human_checkpoint: false
     preauthorized: false
-    branch: ticket/T-30-09-persist-resolved-checkouts-and-park-unreachable
+    branch: ticket/T-30-09-persist-resolved-checkouts-and-park-unre
     epic: epic/30-a-ticket-you-cannot-reach-is-not-deliverable
     primary_parent: T-30-08
-    pr_base: ticket/T-30-08-adopt-matching-checkouts-and-refuse-to-clobber
+    pr_base: ticket/T-30-08-adopt-matching-checkouts-and-refuse-to-c
     jira: null
   T-30-10:
     title: Make the sentinel honor observed ticket branches
@@ -1635,7 +1635,7 @@ tickets:
     risk: high
     human_checkpoint: true
     preauthorized: false
-    branch: ticket/T-31-07-read-tracker-eligibility-at-cold-start
+    branch: ticket/T-31-07-read-tracker-eligibility-at-cold-start-a
     epic: epic/31-not-every-ticket-is-available-work
     primary_parent: T-31-06
     pr_base: ticket/T-31-06-journal-direct-ticket-overrides
@@ -1747,7 +1747,7 @@ tickets:
     risk: medium
     human_checkpoint: false
     preauthorized: false
-    branch: ticket/T-32-07-join-transcripts-to-dispatches
+    branch: ticket/T-32-07-join-transcript-usage-to-dispatches-with
     epic: epic/32-measure-usage-and-make-the-backlog-actionable
     primary_parent: T-32-05
     pr_base: ticket/T-32-05-wire-batched-dispatch-lifecycle-into-the
@@ -1907,7 +1907,7 @@ tickets:
     risk: medium
     human_checkpoint: false
     preauthorized: false
-    branch: ticket/T-34-01-review-progress-and-resource-budgets
+    branch: ticket/T-34-01-make-review-progress-and-resource-budget
     epic: epic/34-improve-convergence-and-tune-from-measured-outcomes
     primary_parent: null
     pr_base: epic/34-improve-convergence-and-tune-from-measured-outcomes
@@ -1923,10 +1923,10 @@ tickets:
     risk: high
     human_checkpoint: true
     preauthorized: true
-    branch: ticket/T-34-02-runtime-capability-evidence
+    branch: ticket/T-34-02-require-runtime-capability-evidence-for
     epic: epic/34-improve-convergence-and-tune-from-measured-outcomes
     primary_parent: T-34-01
-    pr_base: ticket/T-34-01-review-progress-and-resource-budgets
+    pr_base: ticket/T-34-01-make-review-progress-and-resource-budget
     jira: null
   T-34-03:
     title: Strengthen manual merge verdict carry
@@ -1939,7 +1939,7 @@ tickets:
     risk: high
     human_checkpoint: true
     preauthorized: true
-    branch: ticket/T-34-03-merge-verdict-carry
+    branch: ticket/T-34-03-strengthen-manual-merge-verdict-carry
     epic: epic/34-improve-convergence-and-tune-from-measured-outcomes
     primary_parent: null
     pr_base: epic/34-improve-convergence-and-tune-from-measured-outcomes
@@ -1955,10 +1955,10 @@ tickets:
     risk: high
     human_checkpoint: true
     preauthorized: true
-    branch: ticket/T-34-04-shared-capacity-and-dispatch-boundary
+    branch: ticket/T-34-04-admit-distinct-agents-through-shared-acc
     epic: epic/34-improve-convergence-and-tune-from-measured-outcomes
     primary_parent: T-34-02
-    pr_base: ticket/T-34-02-runtime-capability-evidence
+    pr_base: ticket/T-34-02-require-runtime-capability-evidence-for
     jira: null
   T-34-05:
     title: Publish versioned optimization evidence and backlog candidates
@@ -1974,7 +1974,7 @@ tickets:
     branch: ticket/T-34-05-publish-versioned-optimization-evidence
     epic: epic/34-improve-convergence-and-tune-from-measured-outcomes
     primary_parent: T-34-04
-    pr_base: ticket/T-34-04-shared-capacity-and-dispatch-boundary
+    pr_base: ticket/T-34-04-admit-distinct-agents-through-shared-acc
     jira: null
   T-35-01:
     title: Deterministic native-GSD projection
@@ -2083,7 +2083,7 @@ tickets:
     risk: high
     human_checkpoint: true
     preauthorized: true
-    branch: ticket/T-36-04-generate-and-validate-the-complete-codex
+    branch: ticket/T-36-04-generate-and-validate-the-codex-bundle-w
     epic: epic/36-enforce-the-runtime-model-ladder
     primary_parent: T-36-03
     pr_base: ticket/T-36-03-strict-codex-adapter-and-named-model-pal
@@ -2102,7 +2102,7 @@ tickets:
     branch: ticket/T-36-05-claude-adapter-and-explicit-workflow-lau
     epic: epic/36-enforce-the-runtime-model-ladder
     primary_parent: T-36-04
-    pr_base: ticket/T-36-04-generate-and-validate-the-complete-codex
+    pr_base: ticket/T-36-04-generate-and-validate-the-codex-bundle-w
     jira: null
   T-36-06:
     title: Route GSD decomposition through the mandatory boundary
@@ -2131,7 +2131,7 @@ tickets:
     risk: high
     human_checkpoint: true
     preauthorized: true
-    branch: ticket/T-36-07-enforce-the-boundary-across-shipyard-delivery-launches
+    branch: ticket/T-36-07-enforce-the-boundary-across-shipyard-del
     epic: epic/36-enforce-the-runtime-model-ladder
     primary_parent: T-36-06
     pr_base: ticket/T-36-06-route-gsd-decomposition-through-the-mand
@@ -2150,7 +2150,7 @@ tickets:
     branch: ticket/T-36-08-application-receipts-and-dispatch-record
     epic: epic/36-enforce-the-runtime-model-ladder
     primary_parent: T-36-07
-    pr_base: ticket/T-36-07-enforce-the-boundary-across-shipyard-delivery-launches
+    pr_base: ticket/T-36-07-enforce-the-boundary-across-shipyard-del
     jira: null
   T-36-09:
     title: Policy-aware telemetry and reconciliation reporting
@@ -2163,7 +2163,7 @@ tickets:
     risk: medium
     human_checkpoint: false
     preauthorized: false
-    branch: ticket/T-36-09-policy-aware-telemetry-and-reconciliation-reporting
+    branch: ticket/T-36-09-policy-aware-telemetry-and-reconciliatio
     epic: epic/36-enforce-the-runtime-model-ladder
     primary_parent: T-36-08
     pr_base: ticket/T-36-08-application-receipts-and-dispatch-record
@@ -2179,10 +2179,10 @@ tickets:
     risk: medium
     human_checkpoint: false
     preauthorized: false
-    branch: ticket/T-36-10-exhaustive-signal-matrix-and-negative-bypass-suite
+    branch: ticket/T-36-10-exhaustive-signal-matrix-and-negative-by
     epic: epic/36-enforce-the-runtime-model-ladder
     primary_parent: T-36-09
-    pr_base: ticket/T-36-09-policy-aware-telemetry-and-reconciliation-reporting
+    pr_base: ticket/T-36-09-policy-aware-telemetry-and-reconciliatio
     jira: null
   T-36-11:
     title: Cross-runtime generated-install smoke verification
@@ -2195,10 +2195,10 @@ tickets:
     risk: high
     human_checkpoint: true
     preauthorized: true
-    branch: ticket/T-36-11-cross-runtime-generated-install-smoke-verification
+    branch: ticket/T-36-11-cross-runtime-generated-install-smoke-ve
     epic: epic/36-enforce-the-runtime-model-ladder
     primary_parent: T-36-10
-    pr_base: ticket/T-36-10-exhaustive-signal-matrix-and-negative-bypass-suite
+    pr_base: ticket/T-36-10-exhaustive-signal-matrix-and-negative-by
     jira: null
   T-36-12:
     title: Supersede obsolete ladder documentation
@@ -2214,7 +2214,7 @@ tickets:
     branch: ticket/T-36-12-supersede-obsolete-ladder-documentation
     epic: epic/36-enforce-the-runtime-model-ladder
     primary_parent: T-36-10
-    pr_base: ticket/T-36-10-exhaustive-signal-matrix-and-negative-bypass-suite
+    pr_base: ticket/T-36-10-exhaustive-signal-matrix-and-negative-by
     jira: null
   T-37-01:
     title: Define the scoped autonomous run contract
@@ -2259,7 +2259,7 @@ tickets:
     risk: high
     human_checkpoint: true
     preauthorized: false
-    branch: ticket/T-37-03-connect-claude-to-scoped-runtime-controller
+    branch: ticket/T-37-03-connect-claude-code-to-the-scoped-runtim
     epic: epic/37-autonomous-dual-runtime-control-plane
     primary_parent: T-37-02
     pr_base: ticket/T-37-02-persist-controller-leases-and-autonomous
@@ -2275,7 +2275,7 @@ tickets:
     risk: high
     human_checkpoint: true
     preauthorized: false
-    branch: ticket/T-37-04-connect-codex-to-scoped-runtime-controller
+    branch: ticket/T-37-04-connect-codex-to-the-scoped-runtime-cont
     epic: epic/37-autonomous-dual-runtime-control-plane
     primary_parent: T-37-02
     pr_base: ticket/T-37-02-persist-controller-leases-and-autonomous
@@ -2291,7 +2291,7 @@ tickets:
     risk: medium
     human_checkpoint: false
     preauthorized: false
-    branch: ticket/T-37-05-prove-graph-reachability-before-autonomous-run
+    branch: ticket/T-37-05-prove-graph-reachability-before-autonomo
     epic: epic/37-autonomous-dual-runtime-control-plane
     primary_parent: T-37-02
     pr_base: ticket/T-37-02-persist-controller-leases-and-autonomous
@@ -2310,7 +2310,7 @@ tickets:
     branch: ticket/T-37-06-make-stop-and-wait-decisions-run-scoped
     epic: epic/37-autonomous-dual-runtime-control-plane
     primary_parent: T-37-05
-    pr_base: ticket/T-37-05-prove-graph-reachability-before-autonomous-run
+    pr_base: ticket/T-37-05-prove-graph-reachability-before-autonomo
     jira: null
   T-37-07:
     title: Join runtime receipts with usage and outcome evidence
@@ -2326,7 +2326,7 @@ tickets:
     branch: ticket/T-37-07-join-runtime-receipts-with-usage-and-out
     epic: epic/37-autonomous-dual-runtime-control-plane
     primary_parent: T-37-03
-    pr_base: ticket/T-37-03-connect-claude-to-scoped-runtime-controller
+    pr_base: ticket/T-37-03-connect-claude-code-to-the-scoped-runtim
     jira: null
   T-37-08:
     title: Roll out and verify the autonomous control plane
@@ -2403,7 +2403,7 @@ tickets:
     risk: high
     human_checkpoint: true
     preauthorized: false
-    branch: ticket/T-38-04-connect-codex-launches-to-delivery
+    branch: ticket/T-38-04-connect-codex-delivery-and-typed-gsd-dec
     epic: epic/38-runtime-model-ladder-recovery
     primary_parent: T-38-03
     pr_base: ticket/T-38-03-connect-claude-delivery-and-investigatio
@@ -2438,7 +2438,7 @@ tickets:
     branch: ticket/T-38-07-connect-claude-judgement-roles-through-t
     epic: epic/38-runtime-model-ladder-recovery
     primary_parent: T-38-04
-    pr_base: ticket/T-38-04-connect-codex-launches-to-delivery
+    pr_base: ticket/T-38-04-connect-codex-delivery-and-typed-gsd-dec
     jira: null
   T-38-08:
     title: Connect Claude sentinel through authenticated round dispatch
@@ -2467,7 +2467,7 @@ tickets:
     risk: high
     human_checkpoint: true
     preauthorized: false
-    branch: ticket/T-38-05-route-independent-runtime-rollouts
+    branch: ticket/T-38-05-route-delivery-through-independent-runti
     epic: epic/38-runtime-model-ladder-recovery
     primary_parent: T-38-08
     pr_base: ticket/T-38-08-connect-claude-sentinel-through-authenti
@@ -2883,7 +2883,7 @@ tickets:
     risk: medium
     human_checkpoint: false
     preauthorized: false
-    branch: ticket/T-41-04-resume-authenticated-completed-execution
+    branch: ticket/T-41-04-accept-asynchronous-native-child-complet
     epic: epic/41-reduce-pipeline-subscription-overhead
     primary_parent: null
     pr_base: epic/41-reduce-pipeline-subscription-overhead
