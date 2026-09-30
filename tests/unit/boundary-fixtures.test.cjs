@@ -5,12 +5,14 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { suite, test, done, assert } = require('./assert-harness.cjs');
-const { scrub, provenanceLine } = require('../../scripts/capture-boundary-fixtures.cjs');
+const { scrub, provenanceLine, captureLive } = require('../../scripts/capture-boundary-fixtures.cjs');
 
 const ROOT = path.resolve(__dirname, '../..');
 const BOUNDARIES_DIR = path.join(ROOT, 'tests/fixtures/captured/boundaries');
 const UNIT_DIR = path.join(ROOT, 'tests/unit');
 const UUID_RE = /\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b/;
+const ACCOUNT_ID_SCAN_RE = /(\\*)"(creator_user_id|user_id|creator_account_id|account_id|chatgpt_account_id|organization_id)(\\*)"(\s*:\s*)(\\*)"((?:\\.|[^"\\])*?)\5"(?=\s*[,}\]])/g;
+const PLACEHOLDER_RE = /^<[^<>]+>$/;
 const THREAD_STARTED_SHAPE = String.raw`["']?type["']?\s*:\s*["']thread\.started["']`;
 const TURN_COMPLETED_SHAPE = String.raw`["']?type["']?\s*:\s*["']turn\.completed["']`;
 
@@ -56,6 +58,9 @@ function checkFixtureScrub(entry) {
     if (/\bsk-[A-Za-z0-9_-]{10,}\b/.test(content) || /\bghp_[A-Za-z0-9]{20,}\b/.test(content)
         || /Bearer\s+[^\s"']+/i.test(content)) {
       violations.push(`${rel}: contains a token-shaped string`);
+    }
+    for (const [, , key, , , , value] of content.matchAll(ACCOUNT_ID_SCAN_RE)) {
+      if (!PLACEHOLDER_RE.test(value)) violations.push(`${rel}: ${key} is not scrubbed to a placeholder`);
     }
   }
   return violations;
@@ -243,6 +248,45 @@ test('scrub assigns distinct placeholders to distinct session ids', () => {
   assert.ok(out.includes('<SESSION-2>'));
 });
 
+test('scrub replaces account identifier fields, never as a session, and leaves real session numbering intact', () => {
+  const accountUuid = '33333333-3333-4333-8333-333333333333';
+  const sessionUuid = '44444444-4444-4444-8444-444444444444';
+  const input = `{"creator_user_id":"user_abc123","creator_account_id":"${accountUuid}"}\n`
+    + `{"session_id":"${sessionUuid}"}`;
+  const out = scrub(input, {});
+  assert.ok(out.includes('"creator_user_id":"<USER-ID>"'));
+  assert.ok(out.includes('"creator_account_id":"<ACCOUNT-ID>"'));
+  assert.ok(!out.includes(accountUuid));
+  assert.ok(out.includes('"session_id":"<SESSION-1>"'));
+});
+
+test('scrub replaces account identifiers inside escaped structured JSON', () => {
+  const accountUuid = '55555555-5555-4555-8555-555555555555';
+  const sessionUuid = '66666666-6666-4666-8666-666666666666';
+  const input = JSON.stringify({
+    type: 'response_item',
+    payload: {
+      text: JSON.stringify({ creator_user_id: 'user_secret_123', creator_account_id: accountUuid }),
+      session_id: sessionUuid,
+    },
+  });
+  const out = JSON.parse(scrub(input, {}));
+  const inner = JSON.parse(out.payload.text);
+  assert.equal(inner.creator_user_id, '<USER-ID>');
+  assert.equal(inner.creator_account_id, '<ACCOUNT-ID>');
+  assert.equal(out.payload.session_id, '<SESSION-1>');
+});
+
+test('scrub numbers account ids with a stable index only when more than one distinct value appears', () => {
+  const single = scrub('{"account_id":"acct-1"}\n{"organization_id":"acct-1"}', {});
+  assert.ok(single.includes('"account_id":"<ACCOUNT-ID>"'));
+  assert.ok(single.includes('"organization_id":"<ACCOUNT-ID>"'));
+
+  const multiple = scrub('{"account_id":"acct-1"}\n{"organization_id":"acct-2"}', {});
+  assert.ok(multiple.includes('"account_id":"<ACCOUNT-ID-1>"'));
+  assert.ok(multiple.includes('"organization_id":"<ACCOUNT-ID-2>"'));
+});
+
 test('provenanceLine emits the required shape', () => {
   const line = JSON.parse(provenanceLine({
     boundary: 'codex-agent-stream', cli: 'codex', cli_version: '0.155.1', captured_at: '2026-01-01T00:00:00.000Z',
@@ -273,6 +317,67 @@ test('dry-run scrubs a given input and writes a provenance line with no network 
   assert.equal(provenance.shipyard_fixture.boundary, 'codex-agent-stream');
   assert.equal(provenance.shipyard_fixture.scrubbed, true);
   assert.ok(!written.includes('/Users/'));
+});
+
+suite('boundary-fixtures — fixture scan rejects leaked account ids');
+
+test('a fixture carrying a raw account id fails the scrub scan, naming the key', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'boundary-fixtures-account-'));
+  try {
+    const file = path.join(dir, 'leaked.jsonl');
+    fs.writeFileSync(file, '{"type":"session_meta","payload":{"creator_account_id":"acct_raw_12345"}}\n');
+    const violations = checkFixtureScrub({ fixtures: [path.relative(ROOT, file)] });
+    assert.equal(violations.length, 1);
+    assert.match(violations[0], /creator_account_id is not scrubbed to a placeholder/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a fixture carrying a raw account id in escaped structured JSON fails the scrub scan', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'boundary-fixtures-account-escaped-'));
+  try {
+    const file = path.join(dir, 'leaked.jsonl');
+    const content = JSON.stringify({
+      type: 'response_item',
+      payload: { text: JSON.stringify({ creator_account_id: 'acct_raw_escaped_12345' }) },
+    });
+    fs.writeFileSync(file, `${content}\n`);
+    const violations = checkFixtureScrub({ fixtures: [path.relative(ROOT, file)] });
+    assert.equal(violations.length, 1);
+    assert.match(violations[0], /creator_account_id is not scrubbed to a placeholder/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a fixture carrying an already-placeholdered account id passes the scrub scan', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'boundary-fixtures-account-ok-'));
+  try {
+    const file = path.join(dir, 'clean.jsonl');
+    fs.writeFileSync(file, '{"type":"session_meta","payload":{"creator_account_id":"<ACCOUNT-ID>","creator_user_id":"<USER-ID>"}}\n');
+    assert.deepEqual(checkFixtureScrub({ fixtures: [path.relative(ROOT, file)] }), []);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+suite('boundary-fixtures — live-capture scratch dir is a real git repository');
+
+test('a capture run hands the boundary runner a scratchDir that is already a git work tree', async () => {
+  let observed = null;
+  const stubBoundary = {
+    cli: 'stub',
+    async run({ scratchDir }) {
+      const check = spawnSync('git', ['-C', scratchDir, 'rev-parse', '--is-inside-work-tree'], { encoding: 'utf8' });
+      observed = { status: check.status, stdout: (check.stdout || '').trim() };
+      return { cliVersion: 'stub', outputs: [] };
+    },
+  };
+  const written = await captureLive(stubBoundary, { boundary: 'stub', outDir: os.tmpdir() }, {});
+  assert.deepEqual(written, []);
+  assert.equal(observed.status, 0);
+  assert.equal(observed.stdout, 'true');
 });
 
 done();
