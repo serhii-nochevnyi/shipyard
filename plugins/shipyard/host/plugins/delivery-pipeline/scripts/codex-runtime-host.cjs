@@ -486,20 +486,42 @@ async function readNativeCodexChild(parentId, role, model, effort, agent, spawnE
         fail('RUNTIME_EVIDENCE_INVALID', 'native child transcript changed during verification');
       }
       const evidence = parseNativeChildTranscript(raw, child.id, parentId, role, model, effort, agent, spawnEvidence);
-      return options.task ? freeze({ ...evidence, task_relay: verifyTaskRelay(raw, options.task, spawnEvidence) }) : evidence;
+      if (options.includeCompletion === true) {
+        return freeze({
+          ...evidence,
+          last_agent_message: completionMessage(raw),
+          ...(options.task ? { task_relay: verifyTaskRelay(raw, options.task, spawnEvidence,
+            options.allowMissingTaskFile === true) } : {}),
+        });
+      }
+      return options.task ? freeze({ ...evidence, task_relay: verifyTaskRelay(raw, options.task, spawnEvidence,
+        options.allowMissingTaskFile === true) }) : evidence;
     }
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
   fail('RUNTIME_EVIDENCE_MISSING', 'native typed GSD child transcript was not found');
 }
 
-function writeTranscript(directory, scope, sessionId, stdout) {
+function transcriptEvidence(directory, scope, sessionId, stdout) {
   if (directory === undefined || directory === null) return null;
   const root = path.resolve(text(directory, 'transcriptDir', 4096));
-  fs.mkdirSync(root, { recursive: true, mode: 0o700 });
   const safeRun = scope.run_id.replace(/[^A-Za-z0-9._-]/g, '_');
   const safeSession = sessionId.replace(/[^A-Za-z0-9._-]/g, '_');
   const file = path.join(root, safeRun + '-' + safeSession + '.jsonl');
+  const bytes = Buffer.from(stdout, 'utf8');
+  return Object.freeze({
+    path: file,
+    bytes: bytes.length,
+    sha256: crypto.createHash('sha256').update(bytes).digest('hex'),
+  });
+}
+
+function writeTranscript(directory, scope, sessionId, stdout) {
+  const evidence = transcriptEvidence(directory, scope, sessionId, stdout);
+  if (!evidence) return null;
+  const root = path.dirname(evidence.path);
+  const file = evidence.path;
+  fs.mkdirSync(root, { recursive: true, mode: 0o700 });
   const temporary = file + '.' + process.pid + '.' + crypto.randomBytes(8).toString('hex') + '.tmp';
   const bytes = Buffer.from(stdout, 'utf8');
   try {
@@ -508,11 +530,7 @@ function writeTranscript(directory, scope, sessionId, stdout) {
   } finally {
     try { fs.unlinkSync(temporary); } catch (_) {}
   }
-  return Object.freeze({
-    path: file,
-    bytes: bytes.length,
-    sha256: crypto.createHash('sha256').update(bytes).digest('hex'),
-  });
+  return evidence;
 }
 
 function pathInside(root, candidate) {
@@ -580,7 +598,8 @@ function taskRelayInput(role, model, effort, task) {
     + ', model ' + model + ', reasoning_effort ' + effort
     + ', fork_turns none, and task_name gsd_task. Give that child exactly this message:\n'
     + 'TASK_FILE=' + task.path + '\nTASK_SHA256=' + task.sha256 + '\n'
-    + 'Read TASK_FILE, confirm its sha256 equals TASK_SHA256, and follow it exactly.\n'
+    + 'Your FIRST tool call must read TASK_FILE and every mandatory GSD/AGENTS initial source required by your role in that same call. If those sources must come first, read them before TASK_FILE.\n'
+    + 'In that same call, compute SHA-256 from the TASK_FILE bytes and print the exact standalone line TASK_SHA256=<digest> in the call output. Then follow TASK_FILE exactly.\n'
     + 'Wait for that child to finish. Do not perform the task yourself.';
 }
 
@@ -620,7 +639,12 @@ function toolOutput(item) {
   return Array.isArray(item.output) ? messageText({ content: item.output }) : '';
 }
 
-function verifyTaskRelay(childRaw, task, relay = {}) {
+function verifyTaskRelay(childRaw, task, relay = {}, allowMissingTaskFile = false) {
+  if (!object(task) || typeof task.path !== 'string' || !path.isAbsolute(task.path)
+      || path.normalize(task.path) !== task.path || !Number.isSafeInteger(task.bytes) || task.bytes < 0
+      || !/^[a-f0-9]{64}$/.test(task.sha256 || '')) {
+    fail('TASK_RELAY_UNVERIFIED', 'native child relay has an invalid task-file binding');
+  }
   const missing = [];
   let parentBound = false;
   let delivered = false;
@@ -655,10 +679,23 @@ function verifyTaskRelay(childRaw, task, relay = {}) {
     if (!firstCall || !readsExactPath(toolCommand(firstCall), task.path)) missing.push('first tool call reading TASK_FILE');
     else if (!String(outputs.get(firstCall.call_id) || '').includes(task.sha256)) missing.push('TASK_SHA256 in child tool output');
   }
-  let current = null;
-  try { current = crypto.createHash('sha256').update(fs.readFileSync(task.path)).digest('hex'); }
-  catch (_) {}
-  if (current !== task.sha256) missing.push('unchanged task file');
+  let taskFileMissing = false;
+  try {
+    const stat = fs.lstatSync(task.path);
+    if (stat.isSymbolicLink() || !stat.isFile() || (stat.mode & 0o077) !== 0) {
+      missing.push('private regular task file');
+    } else {
+      const bytes = fs.readFileSync(task.path);
+      if (bytes.length !== task.bytes
+          || crypto.createHash('sha256').update(bytes).digest('hex') !== task.sha256) {
+        missing.push('unchanged task file');
+      }
+    }
+  } catch (error) {
+    if (error && error.code === 'ENOENT') taskFileMissing = true;
+    else throw error;
+  }
+  if (taskFileMissing && !allowMissingTaskFile) missing.push('unchanged task file');
   if (missing.length) {
     fail('TASK_RELAY_UNVERIFIED', 'native child relay is missing ' + missing.join(', '), { missing });
   }
@@ -818,12 +855,28 @@ function parseNativeParentSpawn(raw, parentId, role, model, effort) {
   return freeze({
     parent_thread_id: parentId, call_id: call.call_id,
     task_name: args.task_name, task_path: output.task_name,
+    timed_out: waitResults.some((waited) => waited.timed_out),
   });
 }
 
-function readNativeParentRaw(sessionId, evidence, env) {
+function completionMessage(raw) {
+  const messages = [];
+  for (const line of raw.split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    const record = JSON.parse(line);
+    if (record.type === 'event_msg' && object(record.payload) && record.payload.type === 'task_complete') {
+      messages.push(record.payload.last_agent_message);
+    }
+  }
+  if (messages.length !== 1 || typeof messages[0] !== 'string') {
+    fail('RUNTIME_EVIDENCE_INVALID', 'native child has no single task_complete agent message');
+  }
+  return messages[0];
+}
+
+function readNativeParentRaw(sessionId, evidence, env, now) {
   const home = path.resolve(env.CODEX_HOME || process.env.CODEX_HOME || path.join(os.homedir(), '.codex'));
-  const files = nativeSessionCandidates(path.join(home, 'sessions'), sessionId);
+  const files = nativeSessionCandidates(path.join(home, 'sessions'), sessionId, now);
   if (files.length !== 1 || path.basename(files[0]) !== evidence.file) {
     fail('RUNTIME_EVIDENCE_MISSING', 'native parent transcript cannot be rebound to session evidence');
   }
@@ -888,6 +941,40 @@ function parseNativeChildTranscript(raw, childId, parentId, role, model, effort,
     task_path: spawnEvidence.task_path,
     provider: native.provider, models: native.models, efforts: native.efforts,
     selections: native.selections, sha256: native.sha256,
+  });
+}
+
+async function verifyCompletedNativeLaunch(input = {}) {
+  if (!object(input)) fail('INVALID_INPUT', 'native verification input must be an object');
+  const env = object(input.env) ? input.env : {};
+  const selection = object(input.selection) ? input.selection : {};
+  const model = text(selection.model, 'model', 256);
+  const effort = text(selection.effort || selection.reasoning_effort, 'effort', 32);
+  const timing = {
+    ...(input.waitMs === undefined ? {} : { waitMs: input.waitMs }),
+    ...(input.now === undefined ? {} : { now: input.now }),
+  };
+  const nativeEvidence = await readNativeCodexSession(input.session_id, { env, ...timing });
+  if (!input.agent) return freeze({ native_session_evidence: nativeEvidence });
+  const agent = input.agent;
+  const parentRaw = readNativeParentRaw(input.session_id, nativeEvidence, env, input.now);
+  const spawnEvidence = parseNativeParentSpawn(parentRaw, input.session_id, agent.role, model, effort);
+  const child = await readNativeCodexChild(input.session_id, agent.role, model, effort, agent, spawnEvidence, {
+    env, ...timing, startedAt: input.startedAt,
+    includeCompletion: true,
+    ...(input.task ? { task: input.task, allowMissingTaskFile: input.allowMissingTaskFile === true } : {}),
+  });
+  // @invariant: timed_out describes the parent wait; only the child's bound task_complete proves completion.
+  if (child.parent_thread_id !== input.session_id || child.agent_role !== agent.role
+      || typeof child.last_agent_message !== 'string') {
+    fail('RUNTIME_EVIDENCE_INVALID', 'native child did not complete for this parent and role');
+  }
+  const { last_agent_message: lastAgentMessage, ...childEvidence } = child;
+  return freeze({
+    native_session_evidence: nativeEvidence,
+    native_child_evidence: freeze(childEvidence),
+    spawn_evidence: spawnEvidence,
+    last_agent_message: lastAgentMessage,
   });
 }
 
@@ -1039,6 +1126,29 @@ function createCodexCliLauncher(options = {}) {
     if (options.approveForMe === true || launchOptions.approve_for_me === true) args.push('--approve-for-me');
     args.push('-');
     const startedAt = Date.now();
+    const commandDigest = crypto.createHash('sha256').update(JSON.stringify(args)).digest('hex');
+    const runtimeLaunch = freeze({
+      runtime: 'codex', provider: 'openai', run_id: scope.run_id,
+      ticket: scope.ticket, phase: scope.phase, worktree: scope.worktree,
+      dispatch_id: launchOptions.dispatch_id,
+      ...(typedRole ? {
+        gsd_role: typedRole,
+        agent_file: agent.file,
+        agent_file_digest: agent.sha256,
+        agent_instructions_digest: agent.instructions_sha256,
+        task_relay: task,
+      } : {}),
+      command_digest: commandDigest, command: { executable, args: [...args] },
+      sandbox_evidence: {
+        profile: PERMISSION_PROFILE,
+        base_profile: sandbox === 'read-only' ? ':read-only' : ':workspace',
+        protected_paths: protectedPaths,
+        ...(evidenceWritePath ? { evidence_write_path: evidenceWritePath } : {}),
+      },
+      selection_source: 'codex-native-session-transcript',
+      applied_model: model, applied_effort: effort,
+      observed_model: model, observed_effort: effort,
+    });
     let child;
     try {
       child = spawnImpl(executable, args, {
@@ -1054,7 +1164,53 @@ function createCodexCliLauncher(options = {}) {
     }
     const stdout = [];
     const stderr = [];
-    child.stdout.on('data', (chunk) => stdout.push(Buffer.from(chunk)));
+    let sessionLineBuffer = '';
+    let announcedSessionId = null;
+    let sessionCallbackError = null;
+    const announceSession = (record) => {
+      if (!object(record) || record.type !== 'thread.started'
+          || typeof record.thread_id !== 'string' || !record.thread_id.trim()) return;
+      const sessionId = record.thread_id.trim();
+      if (announcedSessionId && announcedSessionId !== sessionId) {
+        sessionCallbackError = hostError('RUNTIME_EVIDENCE_INVALID', 'Codex output reported conflicting thread identities');
+        try { child.kill(); } catch (_) {}
+        return;
+      }
+      if (announcedSessionId) return;
+      announcedSessionId = sessionId;
+      if (typeof launchOptions.onSessionStarted === 'function') {
+        try {
+          launchOptions.onSessionStarted(freeze({
+            session_id: sessionId,
+            process_id: Number.isInteger(child.pid) ? child.pid : null,
+            runtime_launch: runtimeLaunch,
+          }));
+        } catch (error) {
+          sessionCallbackError = error;
+          try { child.kill(); } catch (_) {}
+        }
+      }
+    };
+    const inspectSessionRecords = (chunk, flush = false) => {
+      if (typeof launchOptions.onSessionStarted !== 'function') return;
+      sessionLineBuffer += chunk.toString('utf8');
+      const lines = sessionLineBuffer.split(/\r?\n/);
+      sessionLineBuffer = lines.pop() || '';
+      if (flush && sessionLineBuffer.trim()) {
+        lines.push(sessionLineBuffer);
+        sessionLineBuffer = '';
+      }
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        try { announceSession(JSON.parse(line)); }
+        catch (_) {}
+      }
+    };
+    child.stdout.on('data', (chunk) => {
+      const bytes = Buffer.from(chunk);
+      stdout.push(bytes);
+      inspectSessionRecords(bytes);
+    });
     child.stderr.on('data', (chunk) => stderr.push(Buffer.from(chunk)));
     try {
       const input = agent ? taskRelayInput(agent.role, model, effort, task) : launchPrompt(prompt, content);
@@ -1075,6 +1231,8 @@ function createCodexCliLauncher(options = {}) {
       child.on('close', (code, signal) => finish({ code, signal }));
       child.on('exit', (code, signal) => finish({ code, signal }));
     });
+    inspectSessionRecords(Buffer.alloc(0), true);
+    if (sessionCallbackError) throw sessionCallbackError;
     const rawStdout = Buffer.concat(stdout).toString('utf8');
     const rawStderr = Buffer.concat(stderr).toString('utf8');
     if (exit.error) fail('RUNTIME_UNAVAILABLE', 'Codex process failed: ' + exit.error.message);
@@ -1086,24 +1244,26 @@ function createCodexCliLauncher(options = {}) {
     let parsed;
     try {
       parsed = parseCodexStream(rawStdout);
-      const nativeEvidence = await readNativeCodexSession(parsed.session_id, { env });
+      if (typeof launchOptions.onSessionStarted === 'function' && announcedSessionId !== parsed.session_id) {
+        fail('RUNTIME_EVIDENCE_MISSING', 'Codex session identity was not durably announced while the process ran');
+      }
+      const verified = await verifyCompletedNativeLaunch({
+        session_id: parsed.session_id, selection: { model, effort }, agent, env,
+        allowTimedOutWait: false, startedAt, task,
+      });
+      const nativeEvidence = verified.native_session_evidence;
       const selection = observedSelection(parsed, model, effort, {
         model: args[args.indexOf('--model') + 1],
         effort: (args.find((value) => value.startsWith('model_reasoning_effort=')) || '').match(/^model_reasoning_effort="([^"]+)"$/)?.[1],
       }, nativeEvidence);
-      let typedEvidence = null;
+      const typedEvidence = verified.native_child_evidence || null;
       if (agent) {
-        const parentRaw = readNativeParentRaw(parsed.session_id, nativeEvidence, env);
-        const spawnEvidence = parseNativeParentSpawn(parentRaw, parsed.session_id, agent.role, model, effort);
-        typedEvidence = await readNativeCodexChild(parsed.session_id, agent.role, model, effort, agent,
-          spawnEvidence, { env, startedAt, task });
         const current = installedGsdAgent(agent.role, environment);
         if (current.file !== agent.file || current.sha256 !== agent.sha256) {
           fail('STALE_GSD_AGENT', 'installed GSD role changed during native launch');
         }
       }
-      const transcript = writeTranscript(transcriptDir, scope, parsed.session_id, rawStdout);
-      const commandDigest = crypto.createHash('sha256').update(JSON.stringify(args)).digest('hex');
+      const expectedTranscript = transcriptEvidence(transcriptDir, scope, parsed.session_id, rawStdout);
       const runtimeEvidence = {
         schema: 'shipyard.codex-runtime-evidence.v1',
         version: 1,
@@ -1137,7 +1297,7 @@ function createCodexCliLauncher(options = {}) {
           turns: parsed.turns,
           usage_records: parsed.usage_records,
         },
-        ...(transcript ? { transcript } : {}),
+        ...(expectedTranscript ? { transcript: expectedTranscript } : {}),
       };
       const evidence = {
         launch_id: 'codex-' + parsed.session_id,
@@ -1159,6 +1319,35 @@ function createCodexCliLauncher(options = {}) {
           agent_file_digest: agent.sha256,
         } : {}),
       };
+      if (typeof launchOptions.onNativeCompleted === 'function') {
+        launchOptions.onNativeCompleted(freeze({
+          launch_id: evidence.launch_id,
+          session_id: evidence.session_id,
+          process_id: Number.isInteger(evidence.process_id) ? evidence.process_id : null,
+          runtime_evidence: evidence.runtime_evidence,
+          last_agent_message: verified.last_agent_message,
+          spawn_evidence: verified.spawn_evidence,
+        }));
+      }
+      const transcript = writeTranscript(transcriptDir, scope, parsed.session_id, rawStdout);
+      if ((transcript === null) !== (expectedTranscript === null)
+          || (transcript && (transcript.path !== expectedTranscript.path
+            || transcript.bytes !== expectedTranscript.bytes || transcript.sha256 !== expectedTranscript.sha256))) {
+        fail('RUNTIME_EVIDENCE_INVALID', 'saved host transcript differs from the verified launch stream');
+      }
+      if (typeof launchOptions.onTranscriptWritten === 'function') {
+        launchOptions.onTranscriptWritten(freeze({ session_id: parsed.session_id, transcript }));
+      }
+      if (typeof launchOptions.onCompleted === 'function') {
+        launchOptions.onCompleted(freeze({
+          launch_id: evidence.launch_id,
+          session_id: evidence.session_id,
+          process_id: Number.isInteger(evidence.process_id) ? evidence.process_id : null,
+          runtime_evidence: evidence.runtime_evidence,
+          last_agent_message: verified.last_agent_message,
+          spawn_evidence: verified.spawn_evidence,
+        }));
+      }
       return freeze(evidence);
     } catch (error) {
       if (error && error.name === 'CodexRuntimeHostError') throw error;
@@ -1245,6 +1434,10 @@ function createCodexRuntimeHost(options = {}) {
         dispatch_id: input.dispatch_id,
         sandbox_mode: selection.sandbox_mode || input.sandbox_mode,
         gsd_role: input.gsd_role,
+        onSessionStarted: input.onSessionStarted,
+        onNativeCompleted: input.onNativeCompleted,
+        onTranscriptWritten: input.onTranscriptWritten,
+        onCompleted: input.onCompleted,
       });
       assertOwner();
       return result;
@@ -1329,6 +1522,7 @@ module.exports = Object.freeze({
   signerPermissionProfileArgs,
   nativeSessionCandidates,
   readNativeCodexSession,
+  verifyCompletedNativeLaunch,
   observedSelection,
   writeTranscript,
   writeTaskFile,
