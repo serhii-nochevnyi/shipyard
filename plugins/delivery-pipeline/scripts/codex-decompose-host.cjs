@@ -2,7 +2,7 @@
 'use strict';
 
 const crypto = require('node:crypto');
-const { execFileSync } = require('node:child_process');
+const { execFileSync, spawn } = require('node:child_process');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -18,6 +18,8 @@ const { createRunController, DEFAULT_LEASE_TTL_MS } = require('./run-controller.
 const { formatHint } = require('./refusal-hints.cjs');
 const { sealDecomposition, assertContained } = require('./planning-result-sealer.cjs');
 const { createPlanningWriterLease } = require('./planning-writer-lease.cjs');
+const { dispatchStateDir } = require('./deliver-dispatch.cjs');
+const orchestrationOverhead = require('./orchestration-overhead.cjs');
 
 const SCHEMA = 'shipyard.codex-decompose-host.v1';
 const LAUNCH_SCHEMA = 'shipyard.codex-decompose-launch.v1';
@@ -412,6 +414,14 @@ function parseCliArguments(argv) {
   return path.resolve(argv[1]);
 }
 
+function parseDetachArguments(argv) {
+  if (!Array.isArray(argv) || argv.length !== 3 || argv[0] !== '--detach'
+      || argv[1] !== '--args-file' || typeof argv[2] !== 'string' || !argv[2].trim()) {
+    fail('INVALID_INPUT', 'usage: codex-decompose-host.cjs --detach --args-file <json>');
+  }
+  return path.resolve(argv[2]);
+}
+
 function readRequestFile(file) {
   let stat;
   try { stat = fs.lstatSync(file); }
@@ -452,6 +462,121 @@ function parseRecoverArguments(argv) {
 function recoveryCode(error) {
   if (error && error.code === 'RUNTIME_EVIDENCE_MISSING') return 'RECOVERY_EVIDENCE_MISSING';
   return 'RECOVERY_EVIDENCE_INCOMPLETE';
+}
+
+function detachedDispatchId(request) {
+  return request.dispatch_id || newDispatchId();
+}
+
+function detachCli(argv, stdout, options) {
+  const parsed = readRequestFile(parseDetachArguments(argv));
+  const scope = normalizeScope(parsed.scope);
+  let worktree;
+  try { worktree = fs.statSync(scope.worktree); }
+  catch (error) { fail('INVALID_INPUT', 'worktree path cannot be inspected: ' + error.message); }
+  if (!worktree.isDirectory()) fail('INVALID_INPUT', 'worktree path must be a directory');
+
+  const dispatchId = detachedDispatchId(parsed.launch);
+  if (dispatchId === '.' || dispatchId === '..' || /[\\/]/.test(dispatchId) || path.isAbsolute(dispatchId)) {
+    fail('INVALID_INPUT', 'dispatch_id must be a path-safe identifier for detached mode');
+  }
+  const stateRoot = path.resolve(dispatchStateDir(options));
+  const directory = path.resolve(stateRoot, dispatchId);
+  const relative = path.relative(stateRoot, directory);
+  if (relative === '' || relative.startsWith('..') || path.isAbsolute(relative)) {
+    fail('INVALID_INPUT', 'dispatch_id escapes the dispatch state directory');
+  }
+  fs.mkdirSync(stateRoot, { recursive: true, mode: 0o700 });
+  try { fs.mkdirSync(directory, { recursive: false, mode: 0o700 }); }
+  catch (error) {
+    if (error.code === 'EEXIST') fail('DISPATCH_EXISTS', 'dispatch state already exists for ' + dispatchId);
+    throw error;
+  }
+  fs.chmodSync(directory, 0o700);
+
+  const resultFile = path.join(directory, 'result.jsonl');
+  const logFile = path.join(directory, 'host.log');
+  const argsFile = path.join(directory, 'args.json');
+  fs.writeFileSync(argsFile, JSON.stringify({ scope: parsed.scope, ...parsed.launch, dispatch_id: dispatchId }) + '\n', {
+    mode: 0o600,
+  });
+  const environment = options.env ? { ...process.env, ...options.env } : { ...process.env };
+  const graphDir = path.resolve(environment.SHIPYARD_GRAPH_DIR || path.join(scope.worktree, '.planning', 'graph'));
+  environment.SHIPYARD_GRAPH_DIR = graphDir;
+  const resultFd = fs.openSync(resultFile, 'a', 0o600);
+  const logFd = fs.openSync(logFile, 'a', 0o600);
+  const spawnFn = options.spawn || spawn;
+  let child;
+  try {
+    child = spawnFn(process.execPath, [path.resolve(__filename), '--args-file', argsFile], {
+      cwd: scope.worktree,
+      detached: true,
+      stdio: ['ignore', resultFd, logFd],
+      env: environment,
+    });
+  } finally {
+    fs.closeSync(resultFd);
+    fs.closeSync(logFd);
+  }
+  if (!child || typeof child.unref !== 'function' || typeof child.on !== 'function'
+      || !Number.isSafeInteger(child.pid) || child.pid <= 0) {
+    fail('SPAWN_FAILED', 'detached Codex host did not return a child process');
+  }
+  child.on('error', (error) => {
+    try { fs.appendFileSync(logFile, `codex-decompose-host: spawn error: ${error.message}\n`); }
+    catch { /* best-effort */ }
+  });
+  child.unref();
+  const record = {
+    dispatch_id: dispatchId,
+    ticket: scope.ticket || 'decomposition',
+    role: parsed.launch.gsd_role,
+    runtime: 'codex',
+    graph_dir: graphDir,
+    pid: child.pid,
+    result: resultFile,
+    log: logFile,
+    started_at: new Date().toISOString(),
+  };
+  fs.writeFileSync(path.join(directory, 'record.json'), JSON.stringify(record));
+  const wait = `node ${path.resolve(__dirname, 'deliver-dispatch.cjs')} wait --dispatch ${dispatchId}`;
+  const response = Object.freeze({ dispatch_id: dispatchId, wait });
+  stdout.write(JSON.stringify(response) + '\n');
+  return response;
+}
+
+function recordChildModelEvidence(scope, dispatchId, result, resolution, options) {
+  const receipt = result && result.receipt;
+  const child = receipt && receipt.runtime_evidence && receipt.runtime_evidence.native_child_evidence;
+  if (!child) return;
+  const env = options.env || process.env;
+  const graphDir = options.graphDir || env.SHIPYARD_GRAPH_DIR;
+  const recorder = options.overheadRecorder || (graphDir ? orchestrationOverhead.createRecorder(graphDir) : null);
+  if (!recorder) return;
+  try {
+    orchestrationOverhead.recordModelEvidence(recorder, {
+      observation_id: `codex-decompose:${dispatchId}:child`,
+      run_id: scope.run_id,
+      dispatch_id: dispatchId,
+      role: resolution.role,
+      runtime: 'codex',
+      backend: 'codex-agent',
+      policy_hash: resolution.policy_hash,
+      model: receipt.observed_model,
+      effort: receipt.observed_effort,
+      requested_model: receipt.requested_model,
+      requested_effort: receipt.requested_effort,
+      observed_model: receipt.observed_model,
+      observed_effort: receipt.observed_effort,
+      actor: 'child',
+      stage: 'model_turn',
+      evidence: 'transcript',
+      count: Number.isSafeInteger(child.turn_contexts) && child.turn_contexts > 0 ? child.turn_contexts : 1,
+      provider_tokens: null,
+      bytes: 0,
+      estimated_tokens: null,
+    });
+  } catch { /* @invariant: optional efficiency accounting cannot invalidate a verified receipt */ }
 }
 
 async function recoverCli(argv, stdout, options) {
@@ -578,6 +703,7 @@ async function recoverCli(argv, stdout, options) {
 
 async function runCli(argv = process.argv.slice(2), stdout = process.stdout, options = {}) {
   if (!object(options)) fail('INVALID_INPUT', 'host options must be an object');
+  if (Array.isArray(argv) && argv[0] === '--detach') return detachCli(argv, stdout, options);
   if (Array.isArray(argv) && argv[0] === 'recover') return recoverCli(argv, stdout, options);
   const parsed = readRequestFile(parseCliArguments(argv));
   const scope = normalizeScope(parsed.scope);
@@ -681,6 +807,7 @@ async function runCli(argv = process.argv.slice(2), stdout = process.stdout, opt
     try { writerLease.release({ token: leaseHandle.token, epoch: leaseHandle.epoch }); }
     catch { /* @invariant: a fenced or expired lease has nothing left to release */ }
   }
+  recordChildModelEvidence(scope, dispatchId, result, resolution, options);
   stdout.write(JSON.stringify(result) + '\n');
   return result;
 }
