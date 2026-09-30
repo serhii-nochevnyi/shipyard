@@ -8,6 +8,8 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const test = require('node:test');
 const dispatch = require('../../plugins/delivery-pipeline/scripts/deliver-dispatch.cjs');
+const { createDurableRecorder } = require('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs');
+const { defaultRunStoreDir, readRequestFile } = require('../../plugins/delivery-pipeline/scripts/codex-decompose-host.cjs');
 const overhead = require('../../plugins/delivery-pipeline/scripts/orchestration-overhead.cjs');
 
 const HOST = path.resolve(__dirname, '../../plugins/delivery-pipeline/scripts/codex-decompose-host.cjs');
@@ -54,6 +56,14 @@ function fixtureData(gsdRole) {
     if (record.type === 'session_meta' && record.payload.parent_thread_id === parent) {
       record.payload.agent_role = gsdRole;
       record.payload.source.subagent.thread_spawn.agent_role = gsdRole;
+    }
+    if (record.type === 'event_msg' && record.payload.type === 'task_complete') {
+      const artifactPaths = gsdRole === 'gsd-phase-researcher'
+        ? ['.planning/phases/45-detached-contract/45-RESEARCH.md']
+        : gsdRole === 'gsd-planner' ? ['.planning/phases/45-detached-contract/45-01-PLAN.md'] : [];
+      record.payload.last_agent_message = JSON.stringify({
+        schema: 'shipyard.codex-decompose-output.v1', artifact_paths: artifactPaths,
+      });
     }
     return JSON.stringify(record);
   }).join('\n') + '\n';
@@ -165,7 +175,7 @@ function createFixture({ installPlanner = true, includeDispatchId = true } = {})
   if (includeDispatchId) requestBody.dispatch_id = dispatchId;
   fs.writeFileSync(request, JSON.stringify(requestBody));
   return {
-    base, root, home, codexHome, graph, env, request, dispatchId, data,
+    base, root, home, codexHome, graph, env, request, dispatchId, data, scope,
     stateDir: path.join(home, '.local', 'state', 'shipyard', 'dispatch'),
     clean() { fs.rmSync(base, { recursive: true, force: true }); },
   };
@@ -188,15 +198,18 @@ function waitOptions(f) {
   };
 }
 
-test('detached decomposition result follows deliver-dispatch wait and refusal never becomes JSON', async () => {
-  const f = createFixture({ includeDispatchId: false });
+for (const includeDispatchId of [true, false]) {
+test(`detached decomposition preserves ${includeDispatchId ? 'explicit' : 'omitted'} dispatch identity through wait`, async () => {
+  const f = createFixture({ includeDispatchId });
   let childPid;
   try {
+    const requestedDispatchId = includeDispatchId ? f.dispatchId : null;
     const launched = launch(f);
     assert.equal(launched.status, 0, launched.stderr);
     assert.equal(launched.stderr, '');
     const handoff = JSON.parse(launched.stdout.trim());
     f.dispatchId = handoff.dispatch_id;
+    if (requestedDispatchId !== null) assert.equal(handoff.dispatch_id, requestedDispatchId);
     assert.equal(handoff.dispatch_id, f.dispatchId);
     assert.equal(handoff.wait,
       `node ${path.resolve(__dirname, '../../plugins/delivery-pipeline/scripts/deliver-dispatch.cjs')} wait --dispatch ${f.dispatchId}`);
@@ -215,6 +228,10 @@ test('detached decomposition result follows deliver-dispatch wait and refusal ne
     assert.ok(Number.isSafeInteger(record.pid) && record.pid > 0);
     assert.equal(path.basename(record.result), 'result.jsonl');
     assert.ok(fs.existsSync(record.log));
+    const childRequestFile = path.join(f.stateDir, f.dispatchId, 'args.json');
+    assert.equal(fs.statSync(childRequestFile).mode & 0o777, 0o600);
+    const validatedChildRequest = readRequestFile(childRequestFile);
+    assert.equal(validatedChildRequest.launch.dispatch_id, f.dispatchId);
     const live = dispatch.statusOnce(f.dispatchId, { stateDir: f.stateDir });
     assert.equal(live.status, 'running', 'the detached host pid remains live while the stub runtime executes');
 
@@ -228,17 +245,35 @@ test('detached decomposition result follows deliver-dispatch wait and refusal ne
     assert.equal(waited.result.receipt.requested_effort, 'high');
     assert.equal(waited.result.receipt.observed_model, 'gpt-6-sol');
     assert.equal(waited.result.receipt.observed_effort, 'high');
+    const childStoreDir = defaultRunStoreDir(f.scope,
+      path.join(f.home, '.local', 'state', 'shipyard', 'codex-decompose'));
+    const childRecorder = createDurableRecorder(path.join(path.dirname(childStoreDir), 'receipts'));
+    const childReservation = childRecorder.getReservation(f.dispatchId);
+    assert.equal(childReservation.dispatch_id, record.dispatch_id);
+    assert.equal(childReservation.recorded, true);
+    assert.equal(childRecorder.getVerifiedRecord(f.dispatchId).receipt.dispatch_id, f.dispatchId);
 
     const foregroundEnv = { ...f.env, HOME: path.join(f.base, 'foreground-home') };
     delete foregroundEnv.SHIPYARD_GRAPH_DIR;
-    const foreground = launch(f, false, foregroundEnv);
+    fs.rmSync(path.join(f.root, '.planning', 'phases', '45-detached-contract', '45-01-PLAN.md'));
+    const foregroundRequest = path.join(f.base, 'foreground-request.json');
+    const requestBody = JSON.parse(fs.readFileSync(f.request, 'utf8'));
+    fs.writeFileSync(foregroundRequest, JSON.stringify({ ...requestBody, dispatch_id: f.dispatchId }));
+    const foreground = spawnSync(process.execPath, [HOST, '--args-file', foregroundRequest], {
+      cwd: f.root, env: foregroundEnv, encoding: 'utf8', timeout: 15000,
+    });
     assert.equal(foreground.status, 0, foreground.stderr);
     const foregroundResult = JSON.parse(foreground.stdout.trim());
     for (const field of ['compliance', 'gsd_role', 'requested_model', 'requested_effort',
-      'applied_model', 'applied_effort', 'observed_model', 'observed_effort']) {
+      'dispatch_id', 'applied_model', 'applied_effort', 'observed_model', 'observed_effort']) {
       assert.equal(waited.result.receipt[field], foregroundResult.receipt[field],
         `detached and foreground receipts agree on ${field}`);
     }
+    const foregroundStoreDir = defaultRunStoreDir(f.scope,
+      path.join(foregroundEnv.HOME, '.local', 'state', 'shipyard', 'codex-decompose'));
+    const foregroundRecorder = createDurableRecorder(path.join(path.dirname(foregroundStoreDir), 'receipts'));
+    assert.equal(foregroundRecorder.getReservation(f.dispatchId).dispatch_id, f.dispatchId);
+    assert.equal(foregroundRecorder.getVerifiedRecord(f.dispatchId).receipt.dispatch_id, f.dispatchId);
     assert.equal(foregroundResult.receipt.runtime_evidence.native_child_evidence.agent_role,
       waited.result.receipt.runtime_evidence.native_child_evidence.agent_role);
 
@@ -262,11 +297,12 @@ test('detached decomposition result follows deliver-dispatch wait and refusal ne
     assert.equal(timedOut.exit_code, 3);
   } finally {
     if (childPid && dispatch.pidLive(childPid)) {
-      try { process.kill(childPid, 'SIGTERM'); } catch { /* already exited */ }
+      try { process.kill(childPid, 'SIGTERM'); } catch {}
     }
     f.clean();
   }
 });
+}
 
 test('detached host refusal has no JSON result and wait reports exited-failed', async () => {
   const f = createFixture({ installPlanner: false });
@@ -286,7 +322,7 @@ test('detached host refusal has no JSON result and wait reports exited-failed', 
     assert.match(fs.readFileSync(record.log, 'utf8'), /STALE_GSD_AGENT|installed GSD role/i);
   } finally {
     if (childPid && dispatch.pidLive(childPid)) {
-      try { process.kill(childPid, 'SIGTERM'); } catch { /* already exited */ }
+      try { process.kill(childPid, 'SIGTERM'); } catch {}
     }
     f.clean();
   }

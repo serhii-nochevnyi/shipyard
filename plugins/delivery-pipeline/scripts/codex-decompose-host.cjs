@@ -773,7 +773,8 @@ function detachCli(argv, stdout, options) {
   const resultFile = path.join(directory, 'result.jsonl');
   const logFile = path.join(directory, 'host.log');
   const argsFile = path.join(directory, 'args.json');
-  fs.writeFileSync(argsFile, JSON.stringify({ scope: parsed.scope, ...parsed.launch, dispatch_id: dispatchId }) + '\n', {
+  const childRequest = { scope: parsed.scope, ...requestValue({ ...parsed.launch, dispatch_id: dispatchId }) };
+  fs.writeFileSync(argsFile, JSON.stringify(childRequest) + '\n', {
     mode: 0o600,
   });
   const environment = options.env ? { ...process.env, ...options.env } : { ...process.env };
@@ -800,7 +801,7 @@ function detachCli(argv, stdout, options) {
   }
   child.on('error', (error) => {
     try { fs.appendFileSync(logFile, `codex-decompose-host: spawn error: ${error.message}\n`); }
-    catch { /* best-effort */ }
+    catch {}
   });
   child.unref();
   const record = {

@@ -248,7 +248,6 @@ function normalizeObservation(raw, now = new Date().toISOString()) {
     ...(lifecycleClass !== null ? { lifecycle_class: lifecycleClass } : {}),
   };
   const identityDimensions = { ...dimensions };
-  // @invariant: absent actors keep legacy observation ids stable.
   if (actor === null) delete identityDimensions.actor;
   const observationId = raw.observation_id === undefined || raw.observation_id === null
     ? digest({ ...identityDimensions, sequence: raw.poll_sequence === undefined ? null : safeInteger(raw.poll_sequence, 'poll_sequence') }).slice(0, 48)

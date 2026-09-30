@@ -494,6 +494,89 @@ test('production ' + gsdRole + ' reaches its native child and records session ev
 });
 }
 
+for (const includeDispatchId of [true, false]) {
+test(`detached ${includeDispatchId ? 'explicit' : 'omitted'} dispatch ID reaches its validated child request and verified receipt`, async () => {
+  const f = fixture();
+  const gsdRole = 'gsd-planner';
+  const fixtureData = buildNativeChildFixture(gsdRole);
+  try {
+    fs.writeFileSync(path.join(f.agentDir, 'gsd-planner.toml'),
+      gsdAgentToml(gsdRole, fixtureData.instructions.replace(/\n$/, '')));
+    const requestedDispatchId = includeDispatchId ? 'explicit-decompose-' + crypto.randomBytes(5).toString('hex') : null;
+    const requestBody = { scope: f.scope, gsd_role: gsdRole, prompt: 'Check this phase plan.' };
+    if (requestedDispatchId !== null) requestBody.dispatch_id = requestedDispatchId;
+    const requestFile = path.join(f.root, 'detached-request.json');
+    fs.writeFileSync(requestFile, JSON.stringify(requestBody));
+
+    const dispatchDir = path.join(f.stateRoot, 'dispatch');
+    let childRequestFile;
+    const detachedProcess = new EventEmitter();
+    detachedProcess.pid = 1_000_000_000;
+    detachedProcess.unref = () => {};
+    const handoffOutput = [];
+    const handoff = await runCli(['--detach', '--args-file', requestFile], {
+      write(value) { handoffOutput.push(value); },
+    }, {
+      env: { CODEX_HOME: f.codexHome },
+      stateDir: dispatchDir,
+      spawn(executable, args, options) {
+        assert.equal(executable, process.execPath);
+        assert.equal(args[0], path.resolve(__dirname, '../../plugins/delivery-pipeline/scripts/codex-decompose-host.cjs'));
+        assert.deepEqual(args.slice(1, 2), ['--args-file']);
+        assert.equal(options.detached, true);
+        childRequestFile = args[2];
+        return detachedProcess;
+      },
+    });
+    assert.deepEqual(JSON.parse(handoffOutput.join('')), handoff);
+    const dispatchId = handoff.dispatch_id;
+    if (requestedDispatchId !== null) assert.equal(dispatchId, requestedDispatchId);
+    const record = JSON.parse(fs.readFileSync(path.join(dispatchDir, dispatchId, 'record.json'), 'utf8'));
+    assert.equal(record.dispatch_id, dispatchId);
+    const validatedChildRequest = readRequestFile(childRequestFile);
+    assert.equal(validatedChildRequest.launch.dispatch_id, dispatchId);
+
+    const makeOptions = (testStateRoot, spawn) => ({
+      env: { CODEX_HOME: f.codexHome },
+      agentDir: f.agentDir,
+      agentManifest: path.join(f.agentDir, '.shipyard-manifest.json'),
+      testStateRoot,
+      leaseTtlMs: 1000,
+      probe: { status: 'available', executable: 'codex', runtime_version: '0.157.1', capabilities },
+      spawn,
+    });
+    const detachedChildState = path.join(f.stateRoot, 'detached-child');
+    const detachedSpawn = attachFakeSpawn(f, gsdRole, fixtureData).spawn;
+    const detachedResult = await runCli(['--args-file', childRequestFile], { write() {} },
+      makeOptions(detachedChildState, detachedSpawn));
+    const detachedStoreDir = defaultRunStoreDir(f.scope, detachedChildState);
+    const detachedRecorder = createDurableRecorder(path.join(path.dirname(detachedStoreDir), 'receipts'));
+    const detachedReservation = detachedRecorder.getReservation(dispatchId);
+    assert.equal(detachedReservation.dispatch_id, record.dispatch_id);
+    assert.equal(detachedReservation.recorded, true);
+    assert.equal(detachedRecorder.getVerifiedRecord(dispatchId).receipt.dispatch_id, dispatchId);
+
+    const foregroundState = path.join(f.stateRoot, 'foreground');
+    const foregroundFile = path.join(f.root, 'foreground-request.json');
+    fs.rmSync(path.join(f.root, '.planning', 'phases', '38-codex-decompose', '38-01-PLAN.md'));
+    fs.writeFileSync(foregroundFile, JSON.stringify({ ...requestBody, dispatch_id: dispatchId }));
+    const foregroundSpawn = attachFakeSpawn(f, gsdRole, fixtureData).spawn;
+    const foregroundResult = await runCli(['--args-file', foregroundFile], { write() {} },
+      makeOptions(foregroundState, foregroundSpawn));
+    const foregroundStoreDir = defaultRunStoreDir(f.scope, foregroundState);
+    const foregroundRecorder = createDurableRecorder(path.join(path.dirname(foregroundStoreDir), 'receipts'));
+    assert.equal(foregroundRecorder.getReservation(dispatchId).dispatch_id, dispatchId);
+    assert.equal(foregroundRecorder.getVerifiedRecord(dispatchId).receipt.dispatch_id, dispatchId);
+    for (const field of ['dispatch_id', 'role', 'gsd_role', 'compliance', 'policy_hash',
+      'requested_model', 'requested_effort', 'applied_model', 'applied_effort',
+      'observed_model', 'observed_effort']) {
+      assert.equal(detachedResult.receipt[field], foregroundResult.receipt[field],
+        `detached and foreground receipts agree on ${field}`);
+    }
+  } finally { f.clean(); }
+});
+}
+
 test('advancing the injected clock past the lease TTL with no heartbeat still refuses with LEASE_EXPIRED', async () => {
   const f = fixture();
   const gsdRole = 'gsd-planner';
