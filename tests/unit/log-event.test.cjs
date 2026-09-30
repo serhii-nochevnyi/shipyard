@@ -19,7 +19,7 @@ const SCRIPT = path.join(
 
 function run(cwd, args, env = {}) {
   return spawnSync('node', [SCRIPT, ...args], {
-    cwd, encoding: 'utf8', env: { ...process.env, ...env },
+    cwd, encoding: 'utf8', env: { ...process.env, SHIPYARD_GRAPH_DIR: undefined, ...env },
   });
 }
 
@@ -44,6 +44,37 @@ const lines = (g) => {
 const FULL = 'a'.repeat(39) + '1';
 
 suite('log-event — the journal lands beside its graph');
+
+test('merge coverage events require their identifying fields', () => {
+  const { project, graph } = scratch();
+  for (const [event, fields] of [
+    ['merge_gate_legacy', ['ticket=T-43-19', 'pr=19', `head=${FULL}`]],
+    ['merge_gate_uncovered', ['ticket=T-43-19', 'pr=19', `head=${FULL}`, `commit=${FULL}`]],
+  ]) {
+    for (const missing of fields) {
+      const result = run(project, [event, ...fields.filter((field) => field !== missing)]);
+      assert.notStrictEqual(result.status, 0, `${event} accepted missing ${missing}`);
+    }
+    assert.strictEqual(run(project, [event, ...fields]).status, 0);
+  }
+  assert.strictEqual(lines(graph).length, 2);
+});
+
+test('manual remedy dispatch is refused even with complete metadata', () => {
+  const { project, graph } = scratch();
+  const fields = ['ticket=T-43-18', 'pr=43', 'repo=owner/repo', 'entry_index=0',
+    'signature=abc123', 'workflow=repair.yml', 'ref=ticket/T-43-18',
+    'bot=github-actions[bot]', `inputs_digest=${'b'.repeat(64)}`, `head=${FULL}`];
+  for (const missing of ['workflow=', 'bot=', 'inputs_digest=', 'head=']) {
+    const args = fields.filter((field) => !field.startsWith(missing));
+    assert.notStrictEqual(run(project, ['remedy_dispatch', ...args]).status, 0, missing);
+  }
+  assert.strictEqual(lines(graph).length, 0);
+  const result = run(project, ['remedy_dispatch', ...fields]);
+  assert.notStrictEqual(result.status, 0, 'only repo-remedy run can record a dispatch');
+  assert.match(result.stderr, /repo-remedy\.cjs run/);
+  assert.strictEqual(lines(graph).length, 0);
+});
 
 test('logging from a checkout with no graph refuses, and creates nothing', () => {
   const { borrowed } = scratch();
@@ -297,7 +328,9 @@ test('attempt-history does not charge a mechanical merge to the repair record', 
   const AH = path.join(
     __dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'attempt-history.cjs'
   );
-  const h = spawnSync('node', [AH, 'T-24-06', '--json'], { cwd: project, encoding: 'utf8' });
+  const h = spawnSync('node', [AH, 'T-24-06', '--json'], {
+    cwd: project, encoding: 'utf8', env: { ...process.env, SHIPYARD_GRAPH_DIR: undefined },
+  });
   assert.strictEqual(h.status, 0, h.stderr);
   const out = JSON.parse(h.stdout);
   assert.strictEqual(out.attempts, 0, 'a base merge is not a repair attempt');
@@ -384,6 +417,33 @@ test('an empty value is absence too, not a bad level', () => {
   const rec = JSON.parse(lines(graph)[0]);
   assert.strictEqual(Object.prototype.hasOwnProperty.call(rec, 'effort_applied'), false,
     'an empty value must be omitted, not stored as ""');
+});
+
+suite('log-event — ci_rerun must come from an applied-action owner');
+
+test('direct ci_rerun is refused even with every field because no rerun was verified', () => {
+  const { project, graph } = scratch();
+  const r = run(project, ['ci_rerun', 'ticket=T-43-07', 'pr=7', `head=${FULL}`, 'run_id=123']);
+  assert.notStrictEqual(r.status, 0, 'a complete-looking journal line is not evidence of a GH action');
+  assert.ok(/ci-wait\.cjs/.test(r.stderr), r.stderr);
+  assert.ok(/verified|applied/i.test(r.stderr), r.stderr);
+  assert.strictEqual(lines(graph).length, 0, 'an unverified event never reaches the journal');
+});
+
+test('ci_rerun without run_id is refused and writes nothing', () => {
+  const { project, graph } = scratch();
+  const r = run(project, ['ci_rerun', 'ticket=T-43-07', 'pr=7', `head=${FULL}`]);
+  assert.notStrictEqual(r.status, 0);
+  assert.ok(/run_id/.test(r.stderr), r.stderr);
+  assert.strictEqual(lines(graph).length, 0);
+});
+
+test('review_rerequest without head is refused and writes nothing', () => {
+  const { project, graph } = scratch();
+  const r = run(project, ['review_rerequest', 'ticket=T-43-08', 'pr=7']);
+  assert.notStrictEqual(r.status, 0);
+  assert.match(r.stderr, /head/);
+  assert.strictEqual(lines(graph).length, 0);
 });
 
 done();

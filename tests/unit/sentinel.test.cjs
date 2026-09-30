@@ -9,6 +9,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const crypto = require('crypto');
 const { execFileSync, spawnSync } = require('child_process');
 const { suite, test, done, assert } = require(path.join(__dirname, 'assert-harness.cjs'));
 const { nativeModel, transcriptEvidence: testTranscriptEvidence } = require('./claude-test-evidence.cjs');
@@ -33,6 +34,9 @@ function project({ tickets, state, config, configRaw }) {
   fs.mkdirSync(graph, { recursive: true });
   fs.writeFileSync(path.join(graph, 'tickets.json'), JSON.stringify({ tickets, epics: {} }));
   fs.writeFileSync(path.join(graph, 'delivery-state.json'), JSON.stringify(state));
+  const coverageRoot = path.join(root, 'coverage-state');
+  fs.mkdirSync(coverageRoot, { mode: 0o700 });
+  fs.writeFileSync(path.join(coverageRoot, 'coverage.key'), crypto.randomBytes(32), { mode: 0o600 });
   fs.writeFileSync(
     path.join(root, '.planning', 'config.json'),
     configRaw !== undefined ? configRaw : JSON.stringify(config || { pipeline: {} })
@@ -47,7 +51,7 @@ function run(root, args, opts = {}) {
     // The merge path re-reads the PR from LIVE GitHub by design, so every case
     // past the pre-gh refusals needs a `gh` on PATH that answers. `stubGh`
     // below builds one; the cases that must stay hermetic pass the deny-all.
-    env: { ...process.env, ...(opts.env || {}) },
+    env: { ...process.env, SHIPYARD_COVERAGE_ROOT: path.join(root, 'coverage-state'), ...(opts.env || {}) },
   });
   return { status: r.status, stdout: r.stdout, stderr: r.stderr };
 }
@@ -373,7 +377,7 @@ function stubGh() {
     // default — an absent head on both sides is the pre-head-binding case, and
     // `${VAR:+…}` adds nothing at all rather than an empty `head=`.
     '  "pr view "*)',
-    '    printf \'{"number":%s,"state":"OPEN","isDraft":false,"baseRefName":"%s","headRefName":"%s","headRefOid":"%s","mergeStateStatus":"%s","reviewDecision":null,"body":"gate_status: arch-review=conform%s, checks=green"}\\n\' "${STUB_PR:-9}" "${STUB_BASE}" "${STUB_HEAD}" "${STUB_HEAD_OID:-}" "${STUB_MERGE_STATE:-CLEAN}" "${STUB_TRAILER_HEAD:+, head=$STUB_TRAILER_HEAD}" ;;',
+    '    printf \'{"number":%s,"state":"OPEN","isDraft":false,"baseRefName":"%s","headRefName":"%s","headRefOid":"%s","createdAt":"%s","mergeStateStatus":"%s","reviewDecision":%s,"author":{"login":"%s"},"body":"gate_status: arch-review=conform%s, checks=green"}\\n\' "${STUB_PR:-9}" "${STUB_BASE}" "${STUB_HEAD}" "${STUB_HEAD_OID:-}" "${STUB_CREATED_AT:-2026-09-30T12:00:00Z}" "${STUB_MERGE_STATE:-CLEAN}" "${STUB_REVIEW_DECISION:-null}" "${STUB_AUTHOR:-owner}" "${STUB_TRAILER_HEAD:+, head=$STUB_TRAILER_HEAD}" ;;',
     // The rows carry gh's own `bucket`, because check-state.cjs reads that
     // field and a row without one is PENDING by its fail-closed rule — a
     // bucket-less stub would leave every merge case waiting on CI forever.
@@ -396,6 +400,29 @@ function stubGh() {
     // that repository for its default branch.
     '  "repo view "*"defaultBranchRef"*) echo "${STUB_DEFAULT_BRANCH:-main}" ;;',
     '  "api graphql"*) echo \'{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}\' ;;',
+    '  "api repos/"*"/issues/"*"/comments"*) echo "${STUB_COMMENTS:-[]}" ;;',
+    '  "api repos/"*"/pulls/"*"/reviews"*) echo "${STUB_REVIEWS:-[]}" ;;',
+    '  "api repos/"*"/rules/branches/"*)',
+    '    if [ -n "${STUB_RULES_FAIL:-}" ]; then echo "HTTP 403" >&2; exit 1; fi',
+    '    echo "${STUB_RULES:-[]}" ;;',
+    '  "api repos/"*"/branches/"*) echo \'{"protected":false}\' ;;',
+    '  "api -X POST "*"/requested_reviewers"*)',
+    '    if [ -n "${STUB_REQUEST_FAIL:-}" ]; then echo "HTTP 403" >&2; exit 1; fi',
+    '    echo \'{}\' ;;',
+    '  "pr comment "*)',
+    '    if [ -n "${STUB_REQUEST_FAIL:-}" ]; then echo "HTTP 403" >&2; exit 1; fi',
+    '    echo "commented" ;;',
+    '  "api repos/"*"/contents/"*)',
+    '    case "$argv" in',
+    '      *"/contents/src?ref=$STUB_HEAD_OID"*) echo "$STUB_HEAD_CONTENTS" ;;',
+    '      *"/contents/src?ref=epic%2F24-x"*) echo "$STUB_EPIC_CONTENTS" ;;',
+    '      *"/contents/src/file.txt?ref=$STUB_HEAD_OID"*)',
+    '        if [ -n "${STUB_HEAD_FILE:-}" ]; then echo "$STUB_HEAD_FILE"; else echo "gh: HTTP 404: Not Found" >&2; exit 1; fi ;;',
+    '      *"/contents/src/file.txt?ref=epic%2F24-x"*)',
+    '        if [ -n "${STUB_EPIC_FILE:-}" ]; then echo "$STUB_EPIC_FILE"; else echo "gh: HTTP 404: Not Found" >&2; exit 1; fi ;;',
+    '      *) echo "gh: HTTP 404: Not Found" >&2; exit 1 ;;',
+    '    esac ;;',
+    '  "api repos/"*"/git/trees/"*) echo "$STUB_TREE_JSON" ;;',
     // The compare endpoint is repo-QUALIFIED now (`repos/<owner>/<name>/…`), so
     // the pattern must not name the `{owner}/{repo}` placeholders. STUB_COMPARE_FAIL
     // is the "gh could not answer" case, which must refuse rather than pass.
@@ -665,6 +692,152 @@ test('an un-authorized checkpoint is still refused, in today\'s words, before an
   assert.strictEqual(r.preauthorized, undefined, 'nothing to record — no pre-authorization was involved');
 });
 
+suite('review checkpoints — approval authorizes the guard on this head');
+
+function reviewMerge(reviews, overrides = {}) {
+  const root = project({
+    tickets: { 'T-REVIEW': { human_checkpoint: true, checkpoint: 'review',
+      branch: 'ticket/T-REVIEW', epic: 'epic/21-x' } },
+    state: { 'T-REVIEW': openGreen(9, 'ticket/T-REVIEW', 'epic/21-x') },
+    config: epicConfig,
+  });
+  const env = onPath(stubGh(), { STUB_BASE: 'epic/21-x', STUB_HEAD: 'ticket/T-REVIEW',
+    STUB_HEAD_OID: 'head-1', STUB_TRAILER_HEAD: 'head-1', STUB_PR: '9',
+    STUB_REVIEW_DECISION: '"APPROVED"', STUB_REVIEWS: JSON.stringify(reviews), ...overrides });
+  const result = JSON.parse(run(root, ['merge', 'T-REVIEW', '--json'], { env }).stdout).results[0];
+  return { root, result };
+}
+
+const approval = (login, type = 'User') => ({ state: 'APPROVED', commit_id: 'head-1',
+  user: { login, type }, submitted_at: '2026-09-29T01:00:00Z' });
+
+test('a human head approval merges and journals checkpoint review', () => {
+  const { root, result } = reviewMerge([approval('alice')]);
+  assert.strictEqual(result.merged, true, result.blockers.join('; '));
+  const journal = fs.readFileSync(path.join(root, '.planning', 'graph', 'delivery-log.jsonl'), 'utf8');
+  assert.ok(journal.split('\n').some((line) => line && JSON.parse(line).checkpoint === 'review'));
+});
+
+test('a stale built-in bot review does not hide a human approval on the head', () => {
+  const staleBot = { ...approval('coderabbitai[bot]', 'Bot'), commit_id: 'old-head',
+    submitted_at: '2026-09-28T01:00:00Z' };
+  const { result } = reviewMerge([staleBot, approval('alice')]);
+  assert.strictEqual(result.merged, true, result.blockers.join('; '));
+});
+
+test('foreign checkpoint uses its own empty bot config and keeps live human-head approval', () => {
+  const repo = 'foreign/target';
+  const root = project({
+    tickets: { A: { human_checkpoint: true, checkpoint: 'review', repo,
+      branch: 'ticket/A', epic: 'epic/21-x' } },
+    state: { A: { ...openGreen(9, 'ticket/A', 'epic/21-x'), repo } },
+    config: { ...epicConfig, delivery_pipeline: { reviewer_bots: {
+      'acme/demo': ['alice'], [repo]: [],
+    } } },
+  });
+  const log = path.join(root, 'gh-calls.log');
+  const staleBot = { ...approval('coderabbitai[bot]', 'Bot'), commit_id: 'old-head',
+    submitted_at: '2026-09-28T01:00:00Z' };
+  const base = { STUB_BASE: 'epic/21-x', STUB_HEAD: 'ticket/A', STUB_HEAD_OID: 'head-1',
+    STUB_PR: '9', STUB_REVIEW_DECISION: '"APPROVED"', STUB_LOG: log, STUB_RULES_FAIL: '1' };
+  const approvedEnv = onPath(stubGh(), { ...base, STUB_REVIEWS: JSON.stringify([staleBot, approval('alice')]) });
+  const approved = JSON.parse(run(root, ['duty', '--json'], { env: approvedEnv }).stdout).items[0];
+  assert.strictEqual(approved.action, 'merge', approved.why);
+  const staleEnv = onPath(stubGh(), { ...base, STUB_REVIEWS: JSON.stringify([staleBot]) });
+  const stale = JSON.parse(run(root, ['duty', '--json'], { env: staleEnv }).stdout).items[0];
+  assert.strictEqual(stale.action, 'human', stale.why);
+  assert.ok(fs.readFileSync(log, 'utf8').includes(`api repos/${repo}/rules/branches/`));
+});
+
+test('unreadable live review history never authorizes checkpoint merge', () => {
+  const { result } = reviewMerge([], { STUB_REVIEWS: 'not-json' });
+  assert.strictEqual(result.merged, false);
+  assert.ok(result.blockers.includes('awaiting human review'), result.blockers.join('; '));
+});
+
+test('preauthorization does not replace the PR approval in review mode', () => {
+  const root = project({
+    tickets: { A: { human_checkpoint: true, checkpoint: 'review', preauthorized: true,
+      branch: 'ticket/A', epic: 'epic/21-x' } },
+    state: { A: openGreen(9, 'ticket/A', 'epic/21-x') },
+    config: epicConfig,
+  });
+  const env = onPath(stubGh(), { STUB_BASE: 'epic/21-x', STUB_HEAD: 'ticket/A',
+    STUB_HEAD_OID: 'head-1', STUB_PR: '9', STUB_REVIEW_DECISION: '"APPROVED"', STUB_REVIEWS: '[]' });
+  const result = JSON.parse(run(root, ['merge', 'A', '--json'], { env }).stdout).results[0];
+  assert.deepStrictEqual(result.blockers, ['awaiting human review']);
+});
+
+test('explicit merge mode keeps the human merge refusal', () => {
+  const root = project({
+    tickets: { A: { human_checkpoint: true, checkpoint: 'merge', branch: 'ticket/A', epic: 'epic/21-x' } },
+    state: { A: openGreen(9, 'ticket/A', 'epic/21-x') },
+    config: epicConfig,
+  });
+  const result = JSON.parse(run(root, ['merge', 'A', '--json'], { env: onPath(denyGh()) }).stdout).results[0];
+  assert.deepStrictEqual(result.blockers, ['human_checkpoint ticket — the merge is the human\'s by contract']);
+});
+
+test('duty offers the guard merge after a live human head approval', () => {
+  const root = project({
+    tickets: { 'T-REVIEW': { human_checkpoint: true, checkpoint: 'review', branch: 'ticket/T-REVIEW', epic: 'epic/21-x' } },
+    state: { 'T-REVIEW': openGreen(9, 'ticket/T-REVIEW', 'epic/21-x') },
+    config: epicConfig,
+  });
+  const env = onPath(stubGh(), { STUB_BASE: 'epic/21-x', STUB_HEAD: 'ticket/T-REVIEW',
+    STUB_HEAD_OID: 'head-1', STUB_PR: '9', STUB_REVIEW_DECISION: '"APPROVED"',
+    STUB_REVIEWS: JSON.stringify([approval('alice')]) });
+  const item = JSON.parse(run(root, ['duty', '--json'], { env }).stdout).items[0];
+  assert.strictEqual(item.action, 'merge', item.why);
+});
+
+for (const [label, reviews, overrides] of [
+  ['built-in bot', [approval('coderabbitai[bot]', 'Bot')], {}],
+  ['unconfigured Bot', [approval('arbitrary-reviewer', 'Bot')], {}],
+  ['unknown user type', [approval('alice', null)], {}],
+  ['PR author', [approval('owner')], {}],
+  ['stale human', [{ ...approval('alice'), commit_id: 'old-head' }], {}],
+  ['stale human beside another head approval', [
+    { ...approval('alice'), commit_id: 'old-head', submitted_at: '2026-09-28T01:00:00Z' },
+    approval('bob'),
+  ], {}],
+]) {
+  test(`a ${label} approval does not authorize review checkpoint merge`, () => {
+    const { result } = reviewMerge(reviews, overrides);
+    assert.strictEqual(result.merged, false);
+    assert.ok(result.blockers.some((reason) => /awaiting human review/.test(reason)), result.blockers.join('; '));
+  });
+}
+
+test('a configured bot login cannot authorize a review checkpoint', () => {
+  const root = project({
+    tickets: { A: { human_checkpoint: true, checkpoint: 'review', branch: 'ticket/A', epic: 'epic/21-x' } },
+    state: { A: openGreen(9, 'ticket/A', 'epic/21-x') },
+    config: { ...epicConfig, delivery_pipeline: { reviewer_bots: { 'acme/demo': ['review-helper*'] } } },
+  });
+  const env = onPath(stubGh(), { STUB_BASE: 'epic/21-x', STUB_HEAD: 'ticket/A',
+    STUB_HEAD_OID: 'head-1', STUB_PR: '9', STUB_REVIEW_DECISION: '"APPROVED"',
+    STUB_REVIEWS: JSON.stringify([approval('review-helper-1')]) });
+  const result = JSON.parse(run(root, ['merge', 'A', '--json'], { env }).stdout).results[0];
+  assert.strictEqual(result.merged, false);
+  assert.ok(result.blockers.includes('awaiting human review'), result.blockers.join('; '));
+});
+
+test('an open review checkpoint parent still holds its child', () => {
+  const root = project({
+    tickets: {
+      P: { human_checkpoint: true, checkpoint: 'review', branch: 'ticket/P', epic: 'epic/21-x' },
+      C: { primary_parent: 'P', branch: 'ticket/C', epic: 'epic/21-x' },
+    },
+    state: { P: openGreen(11, 'ticket/P', 'epic/21-x'), C: openGreen(14, 'ticket/C', 'ticket/P') },
+    config: epicConfig,
+  });
+  const env = onPath(stubGh(), { STUB_BASE: 'ticket/P', STUB_HEAD: 'ticket/C', STUB_PR: '14' });
+  const result = JSON.parse(run(root, ['merge', 'C', '--json'], { env }).stdout).results[0];
+  assert.strictEqual(result.merged, false);
+  assert.ok(result.blockers.some((reason) => /human_checkpoint/.test(reason)), result.blockers.join('; '));
+});
+
 suite('pre-authorization — a child still waits for its parent to land');
 
 const childTickets = {
@@ -828,10 +1001,11 @@ test('ACTION_REQUIRED is a failing check, and the merge is refused', () => {
   assert.ok(r.blockers.some((b) => /1 failing check\(s\)/.test(b)), r.blockers.join('; '));
 });
 
-test('a cancelled check is failing too — no verdict is not a passing verdict', () => {
+test('a cancelled check is still running — the merge is refused, never merged', () => {
   const r = arMerge([{ name: 'x', state: 'CANCELLED', bucket: 'cancel' }]);
+  assert.strictEqual(r.merged, false);
   assert.strictEqual(r.would_merge, undefined);
-  assert.ok(r.blockers.some((b) => /1 failing check\(s\)/.test(b)), r.blockers.join('; '));
+  assert.ok(r.blockers.some((b) => /1 check\(s\) still running/.test(b)), r.blockers.join('; '));
 });
 
 test('a row whose bucket the gate cannot read keeps it WAITING, not landing', () => {
@@ -1471,6 +1645,168 @@ test('when the live query fails the cached board is used, and the result says so
   assert.ok((r.retarget_warnings || []).some((w) => /T-C/.test(w)), JSON.stringify(r.retarget_warnings));
 });
 
+suite('epic reachability reads only declared paths');
+
+function reachabilityRoot(files) {
+  const ticket = {
+    repo: 'acme/demo', phase: 43, branch: 'ticket/T-43-04', epic: 'epic/24-x', files,
+  };
+  const stateRow = {
+    ...openGreen(9, 'ticket/T-43-04', 'epic/24-x'), epic: 'epic/24-x', repo: 'acme/demo',
+  };
+  const root = project({ tickets: { 'T-43-04': ticket }, state: { 'T-43-04': stateRow }, config: epicConfig });
+  const configFile = path.join(root, '.planning', 'config.json');
+  const config = JSON.parse(fs.readFileSync(configFile, 'utf8'));
+  config.pipeline.repos = { 'acme/demo': path.join(root, 'not-checked-out') };
+  fs.writeFileSync(configFile, JSON.stringify(config));
+  return root;
+}
+
+function gitIn(cwd, args) {
+  return execFileSync('git', args, {
+    cwd,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+    env: { ...process.env, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null' },
+  }).trim();
+}
+
+function writeIn(root, relative, value) {
+  const file = path.join(root, relative);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, value);
+}
+
+function reachabilityEnv(log, extra = {}) {
+  return onPath(stubGh(), {
+    STUB_BASE: 'epic/24-x', STUB_HEAD: 'ticket/T-43-04', STUB_PR: '9',
+    STUB_HEAD_OID: '0123456789012345678901234567890123456789',
+    STUB_TRAILER_HEAD: '0123456789012345678901234567890123456789',
+    STUB_LOG: log,
+    ...extra,
+  });
+}
+
+test('a local checkout compares declared blobs even when unrelated blobs differ', () => {
+  const root = project({
+    tickets: { 'T-43-04': { repo: 'acme/demo', phase: 43, branch: 'ticket/T-43-04', epic: 'epic/24-x', files: ['src/declared.txt'] } },
+    state: { 'T-43-04': { ...openGreen(9, 'ticket/T-43-04', 'epic/24-x'), epic: 'epic/24-x', repo: 'acme/demo' } },
+    config: epicConfig,
+  });
+  const checkout = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-sentinel-checkout-'));
+  const origin = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-sentinel-origin-'));
+  roots.push(checkout, origin);
+  gitIn(origin, ['init', '--bare', '-q']);
+  gitIn(checkout, ['init', '-q', '-b', 'main']);
+  gitIn(checkout, ['config', 'user.email', 'sentinel@example.com']);
+  gitIn(checkout, ['config', 'user.name', 'Sentinel']);
+  gitIn(checkout, ['remote', 'add', 'origin', origin]);
+  writeIn(checkout, 'src/declared.txt', 'same declared blob\n');
+  writeIn(checkout, 'outside.txt', 'base blob\n');
+  gitIn(checkout, ['add', 'src/declared.txt', 'outside.txt']);
+  gitIn(checkout, ['commit', '-qm', 'base']);
+  gitIn(checkout, ['branch', 'epic/24-x']);
+  gitIn(checkout, ['checkout', '-q', 'epic/24-x']);
+  writeIn(checkout, 'outside.txt', 'epic-only blob\n');
+  gitIn(checkout, ['add', 'outside.txt']);
+  gitIn(checkout, ['commit', '-qm', 'epic change']);
+  gitIn(checkout, ['checkout', '-q', 'main']);
+  writeIn(checkout, 'outside.txt', 'head-only blob\n');
+  gitIn(checkout, ['add', 'outside.txt']);
+  gitIn(checkout, ['commit', '-qm', 'head change']);
+  gitIn(checkout, ['push', '-q', 'origin', 'main', 'epic/24-x']);
+  const headSha = gitIn(checkout, ['rev-parse', 'HEAD']);
+  const configFile = path.join(root, '.planning', 'config.json');
+  const config = JSON.parse(fs.readFileSync(configFile, 'utf8'));
+  config.pipeline.repos = { 'acme/demo': checkout };
+  fs.writeFileSync(configFile, JSON.stringify(config));
+  const log = logFile('reachability-local');
+  const r = JSON.parse(run(root, ['merge', 'T-43-04', '--json'], {
+    env: reachabilityEnv(log, { STUB_HEAD_OID: headSha, STUB_TRAILER_HEAD: headSha }),
+  }).stdout).results[0];
+  assert.strictEqual(r.merged, true, (r.blockers || []).join('; '));
+  assert.strictEqual(r.reachability.ok, true, r.reachability.why);
+  assert.strictEqual(r.reachability.checked, 1);
+  assert.ok(!callsIn(log).some((call) => call.includes('/contents/') || call.includes('/git/trees/')), callsIn(log).join('\n'));
+});
+
+test('a truncated path-scoped API tree returns unknown and never requests the full tree', () => {
+  const root = reachabilityRoot(['src']);
+  const log = logFile('reachability-truncated');
+  const headOid = '0123456789012345678901234567890123456789';
+  const r = JSON.parse(run(root, ['merge', 'T-43-04', '--json'], {
+    env: reachabilityEnv(log, {
+      STUB_HEAD_OID: headOid,
+      STUB_TRAILER_HEAD: headOid,
+      STUB_HEAD_CONTENTS: '[{"path":"src/nested","type":"dir","sha":"tree-src-nested"}]',
+      STUB_TREE_JSON: '{"tree":[],"truncated":true}',
+    }),
+  }).stdout).results[0];
+  assert.strictEqual(r.merged, true, (r.blockers || []).join('; '));
+  assert.strictEqual(r.reachability.ok, null);
+  assert.match(r.reachability.why, /truncated listing/);
+  const calls = callsIn(log);
+  assert.ok(!calls.some((call) => /\/git\/trees\/.*\?recursive=1/.test(call)), calls.join('\n'));
+});
+
+test('the API fallback resolves a glob from its literal prefix directory', () => {
+  const root = reachabilityRoot(['src/*.txt']);
+  const log = logFile('reachability-api-glob');
+  const headOid = '0123456789012345678901234567890123456789';
+  const entries = '[{"name":"file.txt","path":"src/file.txt","type":"file","sha":"blob-same"}]';
+  const r = JSON.parse(run(root, ['merge', 'T-43-04', '--json'], {
+    env: reachabilityEnv(log, {
+      STUB_HEAD_OID: headOid,
+      STUB_TRAILER_HEAD: headOid,
+      STUB_HEAD_CONTENTS: entries,
+      STUB_EPIC_CONTENTS: entries,
+    }),
+  }).stdout).results[0];
+  assert.strictEqual(r.merged, true, (r.blockers || []).join('; '));
+  assert.strictEqual(r.reachability.ok, true, r.reachability.why);
+  assert.strictEqual(r.reachability.checked, 1);
+  const calls = callsIn(log);
+  assert.ok(calls.some((call) => /\/contents\/src\?ref=/.test(call)), calls.join('\n'));
+  assert.ok(!calls.some((call) => /\/git\/trees\/.*\?recursive=1/.test(call)), calls.join('\n'));
+});
+
+test('a declared path missing from the epic is reported as absent', () => {
+  const root = reachabilityRoot(['src/file.txt']);
+  const log = logFile('reachability-absent');
+  const headOid = '0123456789012345678901234567890123456789';
+  const r = JSON.parse(run(root, ['merge', 'T-43-04', '--json'], {
+    env: reachabilityEnv(log, {
+      STUB_HEAD_OID: headOid,
+      STUB_TRAILER_HEAD: headOid,
+      STUB_HEAD_FILE: '{"path":"src/file.txt","type":"file","sha":"blob-head"}',
+    }),
+  }).stdout).results[0];
+  assert.strictEqual(r.merged, true, (r.blockers || []).join('; '));
+  assert.strictEqual(r.reachability.ok, false);
+  assert.deepStrictEqual(r.reachability.unreachable.map((row) => [row.path, row.why]), [
+    ['src/file.txt', 'absent from the epic'],
+  ]);
+  assert.ok(!callsIn(log).some((call) => /\/git\/trees\/.*\?recursive=1/.test(call)), callsIn(log).join('\n'));
+});
+
+test('a declared deletion is compared as absent from the merged head', () => {
+  const root = reachabilityRoot(['src/file.txt']);
+  const log = logFile('reachability-head-absent');
+  const headOid = '0123456789012345678901234567890123456789';
+  const r = JSON.parse(run(root, ['merge', 'T-43-04', '--json'], {
+    env: reachabilityEnv(log, {
+      STUB_HEAD_OID: headOid,
+      STUB_TRAILER_HEAD: headOid,
+      STUB_EPIC_FILE: '{"path":"src/file.txt","type":"file","sha":"blob-epic"}',
+    }),
+  }).stdout).results[0];
+  assert.strictEqual(r.merged, true, (r.blockers || []).join('; '));
+  assert.strictEqual(r.reachability.ok, false);
+  assert.deepStrictEqual(r.reachability.unreachable.map((row) => [row.path, row.why]), [
+    ['src/file.txt', 'absent from the merged head'],
+  ]);
+});
+
 suite('duty — a CHANGES_REQUESTED nobody can service belongs to a person');
 
 // A10. `review_decision === 'CHANGES_REQUESTED'` routed to review-fix regardless
@@ -1835,8 +2171,222 @@ test('an ABSENT config is untouched by all of this — the defaults still apply'
   fs.mkdirSync(path.join(root, '.planning', 'graph'), { recursive: true });
   fs.writeFileSync(path.join(root, '.planning', 'graph', 'tickets.json'), JSON.stringify({ tickets: cfgTickets, epics: {} }));
   fs.writeFileSync(path.join(root, '.planning', 'graph', 'delivery-state.json'), JSON.stringify(cfgState));
+  fs.mkdirSync(path.join(root, 'coverage-state'), { mode: 0o700 });
+  fs.writeFileSync(path.join(root, 'coverage-state', 'coverage.key'), crypto.randomBytes(32), { mode: 0o600 });
   const r = JSON.parse(run(root, ['merge', 'T-OK', '--json', '--dry-run'], { env: cfgEnv() }).stdout).results[0];
   assert.strictEqual(r.would_merge, true, (r.blockers || []).join('; '));
+});
+
+// @contract: a stale declared bot gets one applied request per head, then an actionable escalation.
+suite('merge — stale bot review recovery');
+const staleBotEnv = (extra = {}) => onPath(stubGh(), {
+  STUB_BASE: 'epic/21-x', STUB_HEAD: 'ticket/T-AR', STUB_PR: '9',
+  STUB_HEAD_OID: SHA_LIVE, STUB_TRAILER_HEAD: SHA_LIVE,
+  STUB_REVIEW_DECISION: '"APPROVED"', STUB_RULES_FAIL: '1',
+  STUB_REVIEWS: JSON.stringify([{
+    user: { login: 'coderabbitai[bot]', type: 'Bot' }, state: 'APPROVED',
+    submitted_at: '2026-09-07T09:00:00Z', commit_id: '1'.repeat(40),
+  }]),
+  ...extra,
+});
+const mergeReview = (root, env) => JSON.parse(run(root, ['merge', 'T-AR', '--json'], { env }).stdout).results[0];
+
+test('one review_rerequest is journalled, then the same head escalates with the command', () => {
+  const root = arRoot();
+  const log = logFile('review-rerequest');
+  const env = staleBotEnv({ STUB_LOG: log });
+  const first = mergeReview(root, env);
+  assert.match(first.blockers.join('; '), /re-requested/);
+  const second = mergeReview(root, env);
+  assert.match(second.blockers.join('; '), /reviewers\.cjs reinit 9 --force/);
+  assert.match(second.blockers.join('; '), /escalated/);
+  assert.match(mergeReview(root, env).blockers.join('; '), /escalated/);
+  const rows = fs.readFileSync(path.join(root, '.planning', 'graph', 'delivery-log.jsonl'), 'utf8')
+    .split('\n').filter(Boolean).map((line) => JSON.parse(line));
+  const requests = rows.filter((row) => row.event === 'review_rerequest');
+  assert.strictEqual(requests.length, 1);
+  assert.strictEqual(rows.filter((row) => row.event === 'escalation').length, 1);
+  assert.strictEqual(requests[0].head, SHA_LIVE);
+  assert.deepStrictEqual(requests[0].reviewers, ['coderabbitai', 'copilot']);
+  assert.strictEqual(callsIn(log).filter((line) => line.startsWith('pr comment ')).length, 1);
+});
+
+test('a rejected re-request is recorded once and the next tick escalates', () => {
+  const root = arRoot();
+  const log = logFile('review-rejected');
+  const env = staleBotEnv({ STUB_LOG: log, STUB_REQUEST_FAIL: '1' });
+  assert.match(mergeReview(root, env).blockers.join('; '), /re-request failed/);
+  assert.match(mergeReview(root, env).blockers.join('; '), /reviewers\.cjs reinit 9 --force/);
+  const rows = fs.readFileSync(path.join(root, '.planning', 'graph', 'delivery-log.jsonl'), 'utf8')
+    .split('\n').filter(Boolean).map((line) => JSON.parse(line));
+  assert.strictEqual(rows.filter((row) => row.event === 'review_rerequest').length, 1);
+  assert.deepStrictEqual(rows[0].reviewers, []);
+  assert.strictEqual(callsIn(log).filter((line) => line.startsWith('pr comment ')).length, 1);
+});
+
+test('GitHub BLOCKED still refuses when stale bot evidence is ignorable', () => {
+  const root = arRoot();
+  const result = mergeReview(root, staleBotEnv({ STUB_RULES_FAIL: '', STUB_MERGE_STATE: 'BLOCKED' }));
+  assert.match(result.blockers.join('; '), /BLOCKED/);
+  assert.strictEqual(result.merged, false);
+  assert.strictEqual(fs.existsSync(path.join(root, '.planning', 'graph', 'delivery-log.jsonl')), false);
+});
+
+suite('merge — sealed conveyor coverage');
+
+function coverageMergeFixture({ signTicket = false } = {}) {
+  const root = project({ tickets: { 'T-43-19': { repo: 'acme/demo', phase: 43,
+    branch: 'ticket/T-43-19', epic: 'epic/43-x' } },
+  state: { 'T-43-19': { ...openGreen(19, 'ticket/T-43-19', 'epic/43-x'),
+    repo: 'acme/demo', epic: 'epic/43-x' } }, config: epicConfig });
+  const checkout = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-coverage-checkout-'));
+  const origin = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-coverage-origin-'));
+  roots.push(checkout, origin);
+  gitIn(origin, ['init', '--bare', '-q']);
+  gitIn(checkout, ['init', '-q', '-b', 'main']);
+  gitIn(checkout, ['config', 'user.email', 'sentinel@example.test']);
+  gitIn(checkout, ['config', 'user.name', 'Sentinel Fixture']);
+  gitIn(checkout, ['remote', 'add', 'origin', origin]);
+  writeIn(checkout, 'base.txt', 'base\n');
+  gitIn(checkout, ['add', '.']); gitIn(checkout, ['commit', '-qm', 'base']);
+  gitIn(checkout, ['checkout', '-qb', 'epic/43-x']);
+  writeIn(checkout, 'sibling.txt', 'sibling squash\n');
+  gitIn(checkout, ['add', '.']); gitIn(checkout, ['commit', '-qm', 'sibling squash']);
+  gitIn(checkout, ['checkout', '-qb', 'ticket/T-43-19']);
+  if (signTicket) {
+    const key = path.join(root, 'signing-key');
+    execFileSync('ssh-keygen', ['-q', '-t', 'ed25519', '-N', '', '-f', key]);
+    gitIn(checkout, ['config', 'gpg.format', 'ssh']);
+    gitIn(checkout, ['config', 'user.signingkey', key]);
+  }
+  writeIn(checkout, 'ticket.txt', 'ticket\n');
+  gitIn(checkout, ['add', '.']); gitIn(checkout, ['commit', ...(signTicket ? ['-S'] : []), '-qm', 'ticket work']);
+  const ticketCommit = gitIn(checkout, ['rev-parse', 'HEAD']);
+  gitIn(checkout, ['push', '-q', 'origin', 'epic/43-x', 'ticket/T-43-19']);
+  const configFile = path.join(root, '.planning', 'config.json');
+  const config = JSON.parse(fs.readFileSync(configFile, 'utf8'));
+  config.pipeline.repos = { 'acme/demo': checkout };
+  fs.writeFileSync(configFile, JSON.stringify(config));
+  const coverage = require('../../plugins/delivery-pipeline/scripts/conveyor-coverage.cjs');
+  const coverageRoot = path.join(root, 'coverage-state');
+  const writer = coverage.createCoverageWriter({ root: coverageRoot });
+  const record = (commit) => writer.record({ commit, repo: 'acme/demo', ticket: 'T-43-19',
+    parents: gitIn(checkout, ['show', '-s', '--format=%P', commit]).split(' ').filter(Boolean),
+    tree: gitIn(checkout, ['show', '-s', '--format=%T', commit]), kind: 'base-merge', worktree: checkout,
+    base_merge: { base: 'epic/43-x', requested_base: 'epic/43-x', taken_from_base: [] } });
+  const marker = () => coverage.ensureRolloutMarker({ recorded_at: '2026-09-29T12:00:00Z',
+    repo: 'acme/demo', repository_id: coverage.repositoryIdentity(checkout), root: coverageRoot });
+  const merge = (extra = {}) => {
+    const log = logFile('coverage-merge');
+    const env = onPath(stubGh(), { STUB_BASE: 'epic/43-x', STUB_HEAD: 'ticket/T-43-19',
+      STUB_PR: '19', STUB_HEAD_OID: ticketCommit, STUB_TRAILER_HEAD: ticketCommit,
+      STUB_LOG: log, ...extra });
+    const result = JSON.parse(run(root, ['merge', 'T-43-19', '--json'], { env }).stdout).results[0];
+    return { result, calls: callsIn(log) };
+  };
+  const journal = () => {
+    const file = path.join(root, '.planning', 'graph', 'delivery-log.jsonl');
+    return fs.existsSync(file) ? fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).map(JSON.parse) : [];
+  };
+  return { root, checkout, origin, ticketCommit, record, marker, merge, journal, coverageRoot };
+}
+
+test('a post-rollout hand commit refuses with the first commit and the fixer command', () => {
+  const f = coverageMergeFixture({ signTicket: true });
+  assert.match(gitIn(f.checkout, ['cat-file', '-p', f.ticketCommit]), /gpgsig -----BEGIN SSH SIGNATURE-----/);
+  f.marker();
+  const { result, calls } = f.merge();
+  assert.strictEqual(result.merged, false);
+  assert.match(result.blockers.join('; '), new RegExp(f.ticketCommit));
+  assert.match(result.blockers.join('; '), /deliver-dispatch\.cjs build ci-fix\|review-fix/);
+  assert.ok(!calls.some((call) => call.startsWith('pr merge ')));
+  assert.strictEqual(f.journal().filter((row) => row.event === 'merge_gate_uncovered')[0].commit, f.ticketCommit);
+});
+
+test('covered post-rollout commit merges while sibling squashes on the base need no record', () => {
+  const f = coverageMergeFixture();
+  f.record(f.ticketCommit);
+  f.marker();
+  const covered = f.merge();
+  assert.strictEqual(covered.result.merged, true, covered.result.blockers.join('; '));
+  assert.strictEqual(f.journal().find((row) => row.event === 'merge').coverage, 'chain');
+});
+
+test('a pre-rollout PR with a hand commit merges and journals legacy once', () => {
+  const f = coverageMergeFixture();
+  f.marker();
+  const old = { STUB_CREATED_AT: '2026-09-28T12:00:00Z' };
+  assert.strictEqual(f.merge(old).result.merged, true);
+  assert.strictEqual(f.merge(old).result.merged, true);
+  assert.strictEqual(f.journal().filter((row) => row.event === 'merge_gate_legacy').length, 1);
+});
+
+test('a readable store without a marker keeps the legacy merge rule', () => {
+  const f = coverageMergeFixture();
+  const { result } = f.merge();
+  assert.strictEqual(result.merged, true, result.blockers.join('; '));
+  assert.strictEqual(f.journal().find((row) => row.event === 'merge').coverage, 'legacy');
+  assert.strictEqual(f.journal().filter((row) => row.event === 'merge_gate_legacy').length, 1);
+});
+
+test('post-rollout missing checkout refuses with the remedy and checkout hint', () => {
+  const f = coverageMergeFixture();
+  f.marker();
+  const configFile = path.join(f.root, '.planning', 'config.json');
+  const config = JSON.parse(fs.readFileSync(configFile, 'utf8'));
+  config.pipeline.repos['acme/demo'] = path.join(f.root, 'missing-checkout');
+  fs.writeFileSync(configFile, JSON.stringify(config));
+  const { result, calls } = f.merge();
+  assert.strictEqual(result.merged, false);
+  assert.match(result.blockers.join('; '), /local checkout/);
+  assert.match(result.blockers.join('; '), /deliver-dispatch\.cjs/);
+  assert.ok(!calls.some((call) => call.startsWith('pr merge ')));
+});
+
+test('post-rollout unreadable Git chain refuses with the remedy and checkout hint', () => {
+  const f = coverageMergeFixture();
+  f.marker();
+  gitIn(f.checkout, ['remote', 'set-url', 'origin', path.join(f.root, 'missing-origin')]);
+  const { result, calls } = f.merge();
+  assert.strictEqual(result.merged, false);
+  assert.match(result.blockers.join('; '), /coverage base could not be fetched/);
+  assert.match(result.blockers.join('; '), /local checkout and state root/);
+  assert.match(result.blockers.join('; '), /deliver-dispatch\.cjs/);
+  assert.ok(!calls.some((call) => call.startsWith('pr merge ')));
+});
+
+test('an unrecorded hand resolution of a base merge refuses', () => {
+  const f = coverageMergeFixture();
+  f.record(f.ticketCommit);
+  writeIn(f.checkout, 'base.txt', 'ticket edition\n');
+  gitIn(f.checkout, ['add', '.']); gitIn(f.checkout, ['commit', '-qm', 'ticket edition']);
+  f.record(gitIn(f.checkout, ['rev-parse', 'HEAD']));
+  gitIn(f.checkout, ['checkout', '-q', 'epic/43-x']);
+  writeIn(f.checkout, 'base.txt', 'epic edition\n');
+  gitIn(f.checkout, ['add', '.']); gitIn(f.checkout, ['commit', '-qm', 'epic edition']);
+  gitIn(f.checkout, ['push', '-q', 'origin', 'epic/43-x']);
+  gitIn(f.checkout, ['checkout', '-q', 'ticket/T-43-19']);
+  const conflict = spawnSync('git', ['merge', '--no-ff', 'epic/43-x'], { cwd: f.checkout, encoding: 'utf8' });
+  assert.notStrictEqual(conflict.status, 0, 'the merge must need a hand resolution');
+  writeIn(f.checkout, 'base.txt', 'hand resolution\n');
+  gitIn(f.checkout, ['add', '.']); gitIn(f.checkout, ['commit', '-qm', 'hand base-merge resolution']);
+  const resolution = gitIn(f.checkout, ['rev-parse', 'HEAD']);
+  gitIn(f.checkout, ['push', '-q', 'origin', 'ticket/T-43-19']);
+  f.marker();
+  const { result } = f.merge({ STUB_HEAD_OID: resolution, STUB_TRAILER_HEAD: resolution });
+  assert.strictEqual(result.merged, false);
+  assert.match(result.blockers.join('; '), new RegExp(resolution));
+  assert.match(result.blockers.join('; '), /hand base-merge resolution/);
+});
+
+test('a missing state root or tampered marker refuses instead of becoming legacy', () => {
+  const f = coverageMergeFixture();
+  f.marker();
+  const markerFile = path.join(f.coverageRoot, 'rollout-markers', 'acme%2Fdemo.json');
+  fs.writeFileSync(markerFile, '{}');
+  assert.match(f.merge().result.blockers.join('; '), /coverage|marker|checkout/i);
+  fs.rmSync(f.coverageRoot, { recursive: true });
+  assert.match(f.merge().result.blockers.join('; '), /coverage|state root|checkout/i);
 });
 
 for (const r of roots) {

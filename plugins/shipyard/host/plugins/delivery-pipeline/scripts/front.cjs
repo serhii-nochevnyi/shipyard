@@ -131,19 +131,26 @@ const epicKey = (phase, repo) => `${String(phase ?? '')}\0${repo || ''}`;
 
 // "Does this ticket still need a person?" — the one question both files ask.
 //
-// `human_checkpoint` says a human must act on this ticket; `preauthorized`
-// (ADR-001 D6, written by validate-graph.cjs) says the human already did, while
-// approving the ticket set. The two are not synonyms and must not collapse:
-// what pre-authorization lifts is the WAIT, never the checkpoint itself.
+// @contract: merge-mode preauthorization lifts the wait; review mode needs a
+// @contract: human approval and the live guard's freshness verdict on the head are both required.
 //
 // The polarity is deliberately asymmetric. The checkpoint is recognised on a
 // TRUTHY value, so anything that reached the graph looking like a stop still
-// stops the run; only a real unquoted `true` lifts it. Gate 2 refuses every
 // other spelling at plan time — but a field whose whole purpose is to authorize
 // an unattended merge must fail towards the human, not away from them.
-function needsHuman(ticket) {
+function needsHuman(ticket, row) {
   const t = ticket || {};
   if (!t.human_checkpoint) return false;
+  if (t.checkpoint === 'review') {
+    const s = row || {};
+    const author = String((s.author && s.author.login) || s.author || '').toLowerCase();
+    const approved = Array.isArray(s.approved_reviews) ? s.approved_reviews : [];
+    const { effectiveBotPolicy, isHumanHeadApproval } = require(path.join(__dirname, 'reviewers.cjs'));
+    const bots = effectiveBotPolicy(s.repo, s.reviewer_bots);
+    // @contract: only a positively human, current-head review answers a review checkpoint.
+    return !Boolean(author && s.head_sha && s.review_decision === 'APPROVED' && s.review_fresh === true
+      && approved.some((r) => isHumanHeadApproval(r, s.head_sha, author, bots)));
+  }
   return t.preauthorized !== true;
 }
 
@@ -679,16 +686,16 @@ function computeFront(tickets, state, opts = {}) {
         // are all still ahead, and every one of them is work the run can do now.
         actionable.finalize.push(id);
         why[id] = `PR #${s.pr}: green and still a draft — threads, arch-review, conform gate`;
-      } else if (needsHuman(t) && green) {
+      } else if (needsHuman(t, s) && green) {
         // Out of draft on a checkpoint ticket whose judgement nobody has supplied
         // = the gate was cleared and the approval/merge is the human's. A
         // checkpoint parks the PUBLISH step only; it never justifies leaving the
-        // code unwritten (see deliver.md). A PRE-AUTHORIZED one falls through to
-        // the merge branch below: the person answered at plan time, so the wait
-        // has already been served — the gate itself (conform trailer, threads,
-        // stacked base) is still enforced there, exactly as for any other ticket.
+        // @contract: preauthorization lifts a merge-mode wait; review mode
+        // @contract: requires a human approval on the current PR head.
         waiting.human.push(id);
-        why[id] = `PR #${s.pr}: human_checkpoint — awaiting approval/merge`;
+        why[id] = t.checkpoint === 'review'
+          ? `PR #${s.pr}: human_checkpoint — awaiting human review`
+          : `PR #${s.pr}: human_checkpoint — awaiting human merge`;
       } else if (reviewStandsAlone(s.review_decision, s.unresolved_count)) {
         // A verdict with nothing behind it to service. `waiting.human`, NOT
         // parked: nobody owes work, a reviewer holds the key — the same class as

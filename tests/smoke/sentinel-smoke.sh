@@ -17,6 +17,10 @@ SCRIPTS="$ROOT/plugins/delivery-pipeline/scripts"
 W="$(mktemp -d "${TMPDIR:-/tmp}/sentinel-smoke.XXXXXX")"
 trap 'rm -rf "$W"' EXIT
 export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=commit.gpgsign GIT_CONFIG_VALUE_0=false
+export SHIPYARD_COVERAGE_ROOT="$W/coverage-state"
+mkdir -m 700 "$SHIPYARD_COVERAGE_ROOT"
+node -e 'require("fs").writeFileSync(process.argv[1], require("crypto").randomBytes(32), { mode: 0o600 })' \
+  "$SHIPYARD_COVERAGE_ROOT/coverage.key"
 
 pass=0; fail=0
 ok()  { pass=$((pass + 1)); echo "  ✓ $1"; }
@@ -35,171 +39,112 @@ hasnt() {
 
 # ── a stub gh that answers exactly the calls state-sync makes ────────────────
 mkdir -p "$W/bin"
-cat > "$W/bin/gh" <<'STUB'
-#!/usr/bin/env bash
-# canned GitHub. Args are matched loosely — the point is the payload shape.
-argv="$*"
-case "$argv" in
-  "repo view --json defaultBranchRef"*) echo "main" ;;
-  "pr list --state open"*)
-    # the open-only pass: reviewDecision + body (the gate_status trailer) + the
-    # merge state. PR 101's trailer names the SAME head the row below reports,
-    # which is the ordinary path — the mismatch has its own fixture at the end of
-    # this file.
-    #
-    # `mergeStateStatus` is answered HERE and NOWHERE ELSE, deliberately: the bulk
-    # `pr list --state all` row below does not carry it, so a `merge_state` in the
-    # written board can only have come from this open-only pass — which is the
-    # rule ADR-002 imposes (never a new field in the bulk window) expressed as a
-    # fixture rather than as a comment.
-    #
-    # UNQUOTED heredoc: SENTINEL_SMOKE_MERGE_STATE has to reach the SYNC and not
-    # only `pr view 101` below, because one fact read two ways — by the board and
-    # by the guard — is what this whole file is about. (`\n` survives an unquoted
-    # heredoc; printf would turn it into a real newline and the JSON would stop
-    # parsing.)
-    cat <<JSON
-[{"number":101,"reviewDecision":null,"mergeStateStatus":"${SENTINEL_SMOKE_MERGE_STATE:-CLEAN}","body":"Ticket: T-01-01\n\nProblem: x\n\ngate_status: arch-review=conform, drift-check=fresh, checks=green, head=1111111111111111111111111111111111111111"},
- {"number":102,"reviewDecision":"CHANGES_REQUESTED","mergeStateStatus":"CLEAN","body":"Ticket: T-01-02\n"}]
-JSON
-    ;;
-  "pr list --state all"*)
-    # `headRefOid` rides in the bulk window: it is the head the trailer's verdict
-    # is bound to, and state-sync records it as head_sha. Without it the board
-    # reads a conform verdict and cannot tell which diff it covered.
-    cat <<'JSON'
-[{"number":101,"state":"OPEN","isDraft":false,"headRefName":"ticket/T-01-01-root","headRefOid":"1111111111111111111111111111111111111111","baseRefName":"epic/01-demo","mergedAt":null,"createdAt":"2026-01-01T00:00:00Z","url":"https://example/101","title":"T-01-01: root"},
- {"number":102,"state":"OPEN","isDraft":false,"headRefName":"ticket/T-01-02-child","headRefOid":"3333333333333333333333333333333333333333","baseRefName":"ticket/T-01-01-root","mergedAt":null,"createdAt":"2026-01-01T00:00:00Z","url":"https://example/102","title":"T-01-02: child"}]
-JSON
-    ;;
-  "api repos/{owner}/{repo}/branches"*) printf 'main\nepic/01-demo\nticket/T-01-01-root\nticket/T-01-02-child\n' ;;
-  # epic-branch's ahead_by AND the merge gate's behindBy both land here. The
-  # gate's probe is head...base, so a non-zero answer means "the base moved".
-  # reviewers.cjs `unresolved` asks GraphQL for the review threads, and the merge
-  # gate refuses to merge blind when it cannot read them — so every assertion
-  # PAST that point needs this answered. Zero open threads is the clean case.
-  # reviewers.cjs resolves the repo slug before anything else; without this every
-  # thread read fails and the merge gate refuses "blind" long before the rules
-  # under test are reached.
-  "repo view --json owner,name"*) echo '{"owner":{"login":"acme"},"name":"demo"}' ;;
-  "api graphql"*)
-    echo '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}' ;;
-  # Any base the child is measured against: the cascade parent's branch while
-  # that parent's PR is open, or the EPIC once it has landed and the child has
-  # been retargeted (ADR-006 D3 — a merged parent's branch is no longer a legal
-  # base, so the post-merge staleness case is measured against the epic).
-  "api repos/{owner}/{repo}/compare/ticket/T-01-02-child..."*)
-    echo "${SENTINEL_SMOKE_BEHIND:-0}" ;;
-  "api repos/{owner}/{repo}/compare"*) echo 0 ;;
-  # Every row carries gh's own `bucket` beside its `state`. check-state.cjs reads
-  # the bucket and a row WITHOUT one is PENDING by its fail-closed rule, so a
-  # bucket-less fixture would park this whole smoke on "checks still running".
-  "pr checks 101"*) echo '[{"name":"build","state":"SUCCESS","bucket":"pass"}]' ;;
-  # The checkpoint-parent case drives PR 102 to green; the earlier duty cases
-  # rely on it being red. Both are served: SENTINEL_SMOKE_GREEN_102 flips it.
-  "pr checks 102"*)
-    if [ -n "${SENTINEL_SMOKE_GREEN_102:-}" ]; then echo '[{"name":"build","state":"SUCCESS","bucket":"pass"}]';
-    # ACTION_REQUIRED on purpose: gh buckets it `fail`, and it was in NO
-    # hand-written list on the state-sync/sentinel side — it fell through both
-    # filters and the board read the PR as GREEN. This fixture pins the third
-    # consumer on that exact row, end to end (tally → ci-fix duty → refusal).
-    else echo '[{"name":"build","state":"ACTION_REQUIRED","bucket":"fail"}]'; exit 1; fi ;;
-  # The merge gate re-reads the PR from live GitHub by design, so the stub has to
-  # answer it for any merge-path assertion. This one reports NO headRefOid and
-  # its trailer names no head — deliberately, because that pair is the
-  # backwards-compatibility case (a PR verdicted by the previous release on a
-  # board synced by it): with nothing to compare, the verdict still stands, and
-  # every merge-path assertion below therefore measures its own rule and not the
-  # head binding.
-  # SENTINEL_SMOKE_BASE_102 is where the child's PR POINTS: the parent's branch
-  # while that PR is open (the default, the cascade as designed), or the epic once
-  # the parent has landed and the retarget has happened.
-  "pr view 102 --json"*)
-    printf '{"number":102,"state":"OPEN","isDraft":false,"baseRefName":"%s","headRefName":"ticket/T-01-02-child","mergeStateStatus":"CLEAN","reviewDecision":null,"body":"Ticket: T-01-02\\n\\ngate_status: arch-review=conform, drift-check=fresh, checks=green"}\n' "${SENTINEL_SMOKE_BASE_102:-ticket/T-01-01-root}" ;;
-  # `reviewers.cjs unresolved` reads the review decision AND the merge state off
-  # one PR view — which is how `duty` learns the base moved without a second call
-  # per PR per round. SENTINEL_SMOKE_MERGE_STATE is the moved-base fixture.
-  "pr view 101 --json"*)
-    printf '{"number":101,"state":"OPEN","isDraft":false,"baseRefName":"epic/01-demo","headRefName":"ticket/T-01-01-root","mergeStateStatus":"%s","reviewDecision":null,"body":"Ticket: T-01-01"}\n' "${SENTINEL_SMOKE_MERGE_STATE:-CLEAN}" ;;
-  # The merge path's own three calls. The retarget asks GitHub which open PRs
-  # each graph child has RIGHT NOW instead of trusting the last sync — a child
-  # whose PR opened after it used to be left pointing at a branch that had just
-  # been squashed away. One call per child, on the merge path only.
-  "pr list --head "*) echo "${SENTINEL_SMOKE_CHILD_PRS:-[]}" ;;
-  "pr merge "*) echo "squash-merged" ;;
-  "pr edit "*) echo "retargeted" ;;
-  *) echo "stub gh: unhandled call: $argv" >&2; exit 1 ;;
-esac
-STUB
+printf '%s\n' \
+  '#!/usr/bin/env bash' \
+  '# canned GitHub. Args are matched loosely — the point is the payload shape.' \
+  'argv="$*"' \
+  'case "$argv" in' \
+  '  "repo view --json defaultBranchRef"*) echo "main" ;;' \
+  '  "pr list --state open"*"--json number,state,isDraft,headRefName,headRefOid,baseRefName,mergedAt,createdAt,url,title"*)' \
+  '    printf '"'"'%s\n'"'"' \' \
+  '  '"'"'[{"number":101,"state":"OPEN","isDraft":false,"headRefName":"ticket/T-01-01-root","headRefOid":"1111111111111111111111111111111111111111","baseRefName":"epic/01-demo","mergedAt":null,"createdAt":"2026-01-01T00:00:00Z","url":"https://example/101","title":"T-01-01: root"},'"'"' \' \
+  '  '"'"' {"number":102,"state":"OPEN","isDraft":false,"headRefName":"ticket/T-01-02-child","headRefOid":"3333333333333333333333333333333333333333","baseRefName":"ticket/T-01-01-root","mergedAt":null,"createdAt":"2026-01-01T00:00:00Z","url":"https://example/102","title":"T-01-02: child"}]'"'"'' \
+  '    ;;' \
+  '  "pr list --state open"*"--json number,reviewDecision,body,mergeStateStatus"*)' \
+  '    printf '"'"'%s\n'"'"' \' \
+  '  "[{\"number\":101,\"reviewDecision\":null,\"mergeStateStatus\":\"${SENTINEL_SMOKE_MERGE_STATE:-CLEAN}\",\"body\":\"Ticket: T-01-01\n\nProblem: x\n\ngate_status: arch-review=conform, drift-check=fresh, checks=green, head=1111111111111111111111111111111111111111\"}," \' \
+  '  " {\"number\":102,\"reviewDecision\":\"CHANGES_REQUESTED\",\"mergeStateStatus\":\"CLEAN\",\"body\":\"Ticket: T-01-02\n\"}]"' \
+  '    ;;' \
+  '  "pr list --state all"*)' \
+  '    printf '"'"'%s\n'"'"' \' \
+  '  '"'"'[{"number":101,"state":"OPEN","isDraft":false,"headRefName":"ticket/T-01-01-root","headRefOid":"1111111111111111111111111111111111111111","baseRefName":"epic/01-demo","mergedAt":null,"createdAt":"2026-01-01T00:00:00Z","url":"https://example/101","title":"T-01-01: root"},'"'"' \' \
+  '  '"'"' {"number":102,"state":"OPEN","isDraft":false,"headRefName":"ticket/T-01-02-child","headRefOid":"3333333333333333333333333333333333333333","baseRefName":"ticket/T-01-01-root","mergedAt":null,"createdAt":"2026-01-01T00:00:00Z","url":"https://example/102","title":"T-01-02: child"}]'"'"'' \
+  '    ;;' \
+  '  "api repos/{owner}/{repo}/branches"*) printf '"'"'main\nepic/01-demo\nticket/T-01-01-root\nticket/T-01-02-child\n'"'"' ;;' \
+  '' \
+  '  "repo view --json owner,name"*) echo '"'"'{"owner":{"login":"acme"},"name":"demo"}'"'"' ;;' \
+  '  "api graphql"*)' \
+  '    echo '"'"'{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}'"'"' ;;' \
+  '  "api repos/{owner}/{repo}/compare/ticket/T-01-02-child..."*)' \
+  '    echo "${SENTINEL_SMOKE_BEHIND:-0}" ;;' \
+  '  "api repos/{owner}/{repo}/compare"*) echo 0 ;;' \
+  '  "pr checks 101"*) echo '"'"'[{"name":"build","state":"SUCCESS","bucket":"pass"}]'"'"' ;;' \
+  '  "pr checks 102"*)' \
+  '    if [ -n "${SENTINEL_SMOKE_GREEN_102:-}" ]; then echo '"'"'[{"name":"build","state":"SUCCESS","bucket":"pass"}]'"'"';' \
+  '    else echo '"'"'[{"name":"build","state":"ACTION_REQUIRED","bucket":"fail"}]'"'"'; exit 1; fi ;;' \
+  '  "pr view 102 --json"*)' \
+  '    printf '"'"'{"number":102,"state":"OPEN","isDraft":false,"baseRefName":"%s","headRefName":"ticket/T-01-02-child","mergeStateStatus":"CLEAN","reviewDecision":null,"body":"Ticket: T-01-02\\n\\ngate_status: arch-review=conform, drift-check=fresh, checks=green"}\n'"'"' "${SENTINEL_SMOKE_BASE_102:-ticket/T-01-01-root}" ;;' \
+  '  "pr view 101 --json"*)' \
+  '    printf '"'"'{"number":101,"state":"OPEN","isDraft":false,"baseRefName":"epic/01-demo","headRefName":"ticket/T-01-01-root","mergeStateStatus":"%s","reviewDecision":null,"body":"Ticket: T-01-01"}\n'"'"' "${SENTINEL_SMOKE_MERGE_STATE:-CLEAN}" ;;' \
+  '  "pr list --head "*) echo "${SENTINEL_SMOKE_CHILD_PRS:-[]}" ;;' \
+  '  "pr merge "*) echo "squash-merged" ;;' \
+  '  "pr edit "*) echo "retargeted" ;;' \
+  '  *) echo "stub gh: unhandled call: $argv" >&2; exit 1 ;;' \
+  'esac' > "$W/bin/gh"
 chmod +x "$W/bin/gh"
 export PATH="$W/bin:$PATH"
 
 # ── the fixture project ──────────────────────────────────────────────────────
 proj="$W/proj"
 mkdir -p "$proj/.planning/graph"
-cat > "$proj/.planning/graph/tickets.json" <<'JSON'
-{
-  "epics": { "1": { "branch": "epic/01-demo", "repos": [null] } },
-  "tickets": {
-    "T-01-01": { "phase": "1", "epic": "epic/01-demo", "branch": "ticket/T-01-01-root",
-                 "title": "root", "depends_on": [], "risk": "low" },
-    "T-01-02": { "phase": "1", "epic": "epic/01-demo", "branch": "ticket/T-01-02-child",
-                 "title": "child", "depends_on": ["T-01-01"], "primary_parent": "T-01-01", "risk": "low" }
-  }
-}
-JSON
+printf '%s\n' \
+  '{' \
+  '  "epics": { "1": { "branch": "epic/01-demo", "repos": [null] } },' \
+  '  "tickets": {' \
+  '    "T-01-01": { "phase": "1", "epic": "epic/01-demo", "branch": "ticket/T-01-01-root",' \
+  '                 "title": "root", "depends_on": [], "risk": "low" },' \
+  '    "T-01-02": { "phase": "1", "epic": "epic/01-demo", "branch": "ticket/T-01-02-child",' \
+  '                 "title": "child", "depends_on": ["T-01-01"], "primary_parent": "T-01-01", "risk": "low" }' \
+  '  }' \
+  '}' > "$proj/.planning/graph/tickets.json"
 echo '{"pipeline":{}}' > "$proj/.planning/config.json"
 
 # The delivery writer is also the finalization boundary for the native GSD
 # projection. Give the fixture one complete delivery phase so the assertion
 # below proves state-sync actually invokes gsd-sync after publishing state.
-cat > "$proj/.planning/PROJECT.md" <<'MD'
-# Demo
-
-## Core Value
-
-Keep the delivery read model truthful.
-MD
-cat > "$proj/.planning/ROADMAP.md" <<'MD'
-# Roadmap: demo
-
-## Requirements
-
-- **SYNC-01** — Native GSD state matches the delivery graph.
-
-## Phases
-
-### Phase 1: Demo
-**Requirements**: SYNC-01
-MD
+printf '%s\n' \
+  '# Demo' \
+  '' \
+  '## Core Value' \
+  '' \
+  'Keep the delivery read model truthful.' > "$proj/.planning/PROJECT.md"
+printf '%s\n' \
+  '# Roadmap: demo' \
+  '' \
+  '## Requirements' \
+  '' \
+  '- **SYNC-01** — Native GSD state matches the delivery graph.' \
+  '' \
+  '## Phases' \
+  '' \
+  '### Phase 1: Demo' \
+  '**Requirements**: SYNC-01' > "$proj/.planning/ROADMAP.md"
 mkdir -p "$proj/.planning/phases/01-demo"
 for ticket in 01-01 01-02; do
-  cat > "$proj/.planning/phases/01-demo/${ticket}-PLAN.md" <<MD
----
-phase: 1
-plan: ${ticket#01-}
-title: "${ticket} projection"
-files_modified: [src/${ticket}.js]
-requirements: [SYNC-01]
-delivery:
-  ticket: T-${ticket}
-  risk: low
----
-
-## Goal
-
-Keep the projection synchronized.
-MD
+  printf '%s\n' \
+  "---" \
+  "phase: 1" \
+  "plan: ${ticket#01-}" \
+  "title: \"${ticket} projection\"" \
+  "files_modified: [src/${ticket}.js]" \
+  "requirements: [SYNC-01]" \
+  "delivery:" \
+  "  ticket: T-${ticket}" \
+  "  risk: low" \
+  "---" \
+  "" \
+  "## Goal" \
+  "" \
+  "Keep the projection synchronized." > "$proj/.planning/phases/01-demo/${ticket}-PLAN.md"
 done
-cat > "$proj/.planning/phases/01-demo/INTEGRATION.md" <<'MD'
-# Integration
-
-Verdict: passed
-
-## Verification evidence
-
-- test-fast: exit 0
-MD
+printf '%s\n' \
+  '# Integration' \
+  '' \
+  'Verdict: passed' \
+  '' \
+  '## Verification evidence' \
+  '' \
+  '- test-fast: exit 0' > "$proj/.planning/phases/01-demo/INTEGRATION.md"
 
 echo "sentinel / state-sync smoke"
 
@@ -392,17 +337,16 @@ rm -rf "$locks/state.lock"
 # attempt logged under a role the ladder never resolved.
 sproj="$W/statsproj"
 mkdir -p "$sproj/.planning/graph" "$W/bin2"
-cat > "$sproj/.planning/graph/tickets.json" <<'JSON'
-{
-  "epics": { "1": { "branch": "epic/01-demo", "repos": [null] } },
-  "tickets": {
-    "T-01-01": { "phase": "1", "epic": "epic/01-demo", "branch": "ticket/T-01-01-guarded",
-                 "title": "guarded", "depends_on": [], "risk": "low" },
-    "T-01-02": { "phase": "1", "epic": "epic/01-demo", "branch": "ticket/T-01-02-raw",
-                 "title": "raw", "depends_on": [], "risk": "low" }
-  }
-}
-JSON
+printf '%s\n' \
+  '{' \
+  '  "epics": { "1": { "branch": "epic/01-demo", "repos": [null] } },' \
+  '  "tickets": {' \
+  '    "T-01-01": { "phase": "1", "epic": "epic/01-demo", "branch": "ticket/T-01-01-guarded",' \
+  '                 "title": "guarded", "depends_on": [], "risk": "low" },' \
+  '    "T-01-02": { "phase": "1", "epic": "epic/01-demo", "branch": "ticket/T-01-02-raw",' \
+  '                 "title": "raw", "depends_on": [], "risk": "low" }' \
+  '  }' \
+  '}' > "$sproj/.planning/graph/tickets.json"
 echo '{"pipeline":{}}' > "$sproj/.planning/config.json"
 # Both merged on GitHub; only the first went through the guard.
 # The duplicate on the third line is what a run wrote by hand seconds after the
@@ -412,27 +356,22 @@ echo '{"pipeline":{}}' > "$sproj/.planning/config.json"
 # fixture frozen in the past would exercise only the empty case and quietly stop
 # testing anything. `--since all` covers the lifetime path separately.
 NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-cat > "$sproj/.planning/graph/delivery-log.jsonl" <<JSON
-{"ts":"$NOW","event":"merge","ticket":"T-01-01","pr":201,"base":"epic/01-demo","by":"sentinel"}
-{"ts":"$NOW","event":"merge","ticket":"T-01-01","pr":201,"outcome":"merged"}
-{"ts":"$NOW","event":"attempt","ticket":"T-01-02","role":"frontend-delivery","outcome":"pushed"}
-{"ts":"2026-01-02T00:01:00Z","event":"attempt","ticket":"T-01-02","role":"long-ago-role","outcome":"pushed"}
-JSON
-cat > "$W/bin2/gh" <<STUB
-#!/usr/bin/env bash
-case "\$*" in
-  "pr list --state all"*)
-    cat <<JSON
-[{"number":201,"state":"MERGED","isDraft":false,"headRefName":"ticket/T-01-01-guarded","baseRefName":"epic/01-demo","mergedAt":"$NOW","createdAt":"$NOW","url":"https://example/201","reviewDecision":null,"title":"T-01-01: guarded"},
- {"number":202,"state":"MERGED","isDraft":false,"headRefName":"ticket/T-01-02-raw","baseRefName":"epic/01-demo","mergedAt":"$NOW","createdAt":"$NOW","url":"https://example/202","reviewDecision":null,"title":"T-01-02: raw"}]
-JSON
-    ;;
-  # Asked only for the PRs already flagged — never in the bulk window, where this
-  # field costs the same order as reviewDecision.
-  "pr view 202 --json mergedBy"*) echo "octo-human" ;;
-  *) echo "stub gh2: unhandled: \$*" >&2; exit 1 ;;
-esac
-STUB
+printf '%s\n' \
+  "{\"ts\":\"$NOW\",\"event\":\"merge\",\"ticket\":\"T-01-01\",\"pr\":201,\"base\":\"epic/01-demo\",\"by\":\"sentinel\"}" \
+  "{\"ts\":\"$NOW\",\"event\":\"merge\",\"ticket\":\"T-01-01\",\"pr\":201,\"outcome\":\"merged\"}" \
+  "{\"ts\":\"$NOW\",\"event\":\"attempt\",\"ticket\":\"T-01-02\",\"role\":\"frontend-delivery\",\"outcome\":\"pushed\"}" \
+  "{\"ts\":\"2026-01-02T00:01:00Z\",\"event\":\"attempt\",\"ticket\":\"T-01-02\",\"role\":\"long-ago-role\",\"outcome\":\"pushed\"}" > "$sproj/.planning/graph/delivery-log.jsonl"
+printf '%s\n' \
+  "#!/usr/bin/env bash" \
+  "case \"\$*\" in" \
+  "  \"pr list --state all\"*)" \
+  "    printf '%s\n'   \"[{\\\"number\\\":201,\\\"state\\\":\\\"MERGED\\\",\\\"isDraft\\\":false,\\\"headRefName\\\":\\\"ticket/T-01-01-guarded\\\",\\\"baseRefName\\\":\\\"epic/01-demo\\\",\\\"mergedAt\\\":\\\"$NOW\\\",\\\"createdAt\\\":\\\"$NOW\\\",\\\"url\\\":\\\"https://example/201\\\",\\\"reviewDecision\\\":null,\\\"title\\\":\\\"T-01-01: guarded\\\"},\"   \" {\\\"number\\\":202,\\\"state\\\":\\\"MERGED\\\",\\\"isDraft\\\":false,\\\"headRefName\\\":\\\"ticket/T-01-02-raw\\\",\\\"baseRefName\\\":\\\"epic/01-demo\\\",\\\"mergedAt\\\":\\\"$NOW\\\",\\\"createdAt\\\":\\\"$NOW\\\",\\\"url\\\":\\\"https://example/202\\\",\\\"reviewDecision\\\":null,\\\"title\\\":\\\"T-01-02: raw\\\"}]\"" \
+  "    ;;" \
+  "  # Asked only for the PRs already flagged — never in the bulk window, where this" \
+  "  # field costs the same order as reviewDecision." \
+  "  \"pr view 202 --json mergedBy\"*) echo \"octo-human\" ;;" \
+  "  *) echo \"stub gh2: unhandled: \$*\" >&2; exit 1 ;;" \
+  "esac" > "$W/bin2/gh"
 chmod +x "$W/bin2/gh"
 ( cd "$sproj" && PATH="$W/bin2:$PATH" node "$SCRIPTS/pipeline-stats.cjs" ) > "$W/stats.txt" 2>&1 || true
 
@@ -462,31 +401,27 @@ hasnt "and no empty base leaks into the summary" "$W/stats.txt" "stack (, "
 # same reason — this pins that review feedback finally does too.
 tproj="$W/threadsproj"
 mkdir -p "$tproj/.planning/graph" "$W/bin3"
-cat > "$tproj/.planning/graph/tickets.json" <<'JSON'
-{ "epics": { "1": { "branch": "epic/01-demo", "repos": [null] } },
-  "tickets": { "T-01-01": { "phase": "1", "epic": "epic/01-demo", "branch": "ticket/T-01-01-x",
-                            "title": "x", "depends_on": [], "risk": "low" } } }
-JSON
-cat > "$tproj/.planning/graph/delivery-state.json" <<'JSON'
-{ "T-01-01": { "status": "pr-open", "pr": 301, "branch": "ticket/T-01-01-x", "base": "epic/01-demo",
-               "draft": false, "merge_scope": "stacked", "checks": { "failing": 0, "pending": 2 } } }
-JSON
+printf '%s\n' \
+  '{ "epics": { "1": { "branch": "epic/01-demo", "repos": [null] } },' \
+  '  "tickets": { "T-01-01": { "phase": "1", "epic": "epic/01-demo", "branch": "ticket/T-01-01-x",' \
+  '                            "title": "x", "depends_on": [], "risk": "low" } } }' > "$tproj/.planning/graph/tickets.json"
+printf '%s\n' \
+  '{ "T-01-01": { "status": "pr-open", "pr": 301, "branch": "ticket/T-01-01-x", "base": "epic/01-demo",' \
+  '               "draft": false, "merge_scope": "stacked", "checks": { "failing": 0, "pending": 2 } } }' > "$tproj/.planning/graph/delivery-state.json"
 echo '{"pipeline":{}}' > "$tproj/.planning/config.json"
-cat > "$W/bin3/gh" <<'STUB'
-#!/usr/bin/env bash
-case "$*" in
-  "repo view --json owner,name"*) echo '{"owner":{"login":"acme"},"name":"repo"}' ;;
-  *"api graphql"*)
-    cat <<'JSON'
-{"data":{"repository":{"pullRequest":{"reviewThreads":{"pageInfo":{"hasNextPage":false,"endCursor":null},
- "nodes":[{"id":"PRRT_kwAAA","isResolved":false,"isOutdated":false,"path":"src/a.ts","line":7,
- "comments":{"totalCount":1,"pageInfo":{"hasNextPage":false},
- "nodes":[{"author":{"login":"coderabbitai"},"body":"nit: rename this","url":"https://example/1"}]}}]}}}}}
-JSON
-    ;;
-  *) echo "stub gh3: unhandled: $*" >&2; exit 1 ;;
-esac
-STUB
+printf '%s\n' \
+  '#!/usr/bin/env bash' \
+  'case "$*" in' \
+  '  "repo view --json owner,name"*) echo '"'"'{"owner":{"login":"acme"},"name":"repo"}'"'"' ;;' \
+  '  *"api graphql"*)' \
+  '    printf '"'"'%s\n'"'"' \' \
+  '  '"'"'{"data":{"repository":{"pullRequest":{"reviewThreads":{"pageInfo":{"hasNextPage":false,"endCursor":null},'"'"' \' \
+  '  '"'"' "nodes":[{"id":"PRRT_kwAAA","isResolved":false,"isOutdated":false,"path":"src/a.ts","line":7,'"'"' \' \
+  '  '"'"' "comments":{"totalCount":1,"pageInfo":{"hasNextPage":false},'"'"' \' \
+  '  '"'"' "nodes":[{"author":{"login":"coderabbitai"},"body":"nit: rename this","url":"https://example/1"}]}}]}}}}}'"'"'' \
+  '    ;;' \
+  '  *) echo "stub gh3: unhandled: $*" >&2; exit 1 ;;' \
+  'esac' > "$W/bin3/gh"
 chmod +x "$W/bin3/gh"
 ( cd "$tproj" && PATH="$W/bin3:$PATH" node "$SCRIPTS/sentinel.cjs" duty --json ) > "$W/duty.json" 2>"$W/duty.err" || true
 
@@ -525,31 +460,29 @@ node -e '
 # gate re-reads baseRefName from live GitHub by design.
 cpproj="$W/cpproj"
 mkdir -p "$cpproj/.planning/graph"
-cat > "$cpproj/.planning/graph/tickets.json" <<'JSON'
-{
-  "epics": { "1": { "branch": "epic/01-demo", "repos": [null] } },
-  "tickets": {
-    "T-01-01": { "phase": "1", "epic": "epic/01-demo", "branch": "ticket/T-01-01-root",
-                 "title": "root", "depends_on": [], "risk": "high", "human_checkpoint": true },
-    "T-01-02": { "phase": "1", "epic": "epic/01-demo", "branch": "ticket/T-01-02-child",
-                 "title": "child", "depends_on": ["T-01-01"], "primary_parent": "T-01-01", "risk": "low" }
-  }
-}
-JSON
+printf '%s\n' \
+  '{' \
+  '  "epics": { "1": { "branch": "epic/01-demo", "repos": [null] } },' \
+  '  "tickets": {' \
+  '    "T-01-01": { "phase": "1", "epic": "epic/01-demo", "branch": "ticket/T-01-01-root",' \
+  '                 "title": "root", "depends_on": [], "risk": "high", "human_checkpoint": true },' \
+  '    "T-01-02": { "phase": "1", "epic": "epic/01-demo", "branch": "ticket/T-01-02-child",' \
+  '                 "title": "child", "depends_on": ["T-01-01"], "primary_parent": "T-01-01", "risk": "low" }' \
+  '  }' \
+  '}' > "$cpproj/.planning/graph/tickets.json"
 echo '{"pipeline":{}}' > "$cpproj/.planning/config.json"
 
 # The child is green + conform + stacked on the parent's branch; the parent's PR
 # is still OPEN. Written directly so the case does not depend on a sync pass.
-cat > "$cpproj/.planning/graph/delivery-state.json" <<'JSON'
-{
-  "T-01-01": { "status": "pr-open", "pr": 101, "draft": false, "branch": "ticket/T-01-01-root",
-               "epic": "epic/01-demo", "checks": { "total": 1, "failing": 0, "pending": 0 } },
-  "T-01-02": { "status": "pr-open", "pr": 102, "draft": false, "branch": "ticket/T-01-02-child",
-               "epic": "epic/01-demo", "pr_base": "ticket/T-01-01-root", "merge_scope": "stacked",
-               "gate": { "arch-review": "conform" },
-               "checks": { "total": 1, "failing": 0, "pending": 0 } }
-}
-JSON
+printf '%s\n' \
+  '{' \
+  '  "T-01-01": { "status": "pr-open", "pr": 101, "draft": false, "branch": "ticket/T-01-01-root",' \
+  '               "epic": "epic/01-demo", "checks": { "total": 1, "failing": 0, "pending": 0 } },' \
+  '  "T-01-02": { "status": "pr-open", "pr": 102, "draft": false, "branch": "ticket/T-01-02-child",' \
+  '               "epic": "epic/01-demo", "pr_base": "ticket/T-01-01-root", "merge_scope": "stacked",' \
+  '               "gate": { "arch-review": "conform" },' \
+  '               "checks": { "total": 1, "failing": 0, "pending": 0 } }' \
+  '}' > "$cpproj/.planning/graph/delivery-state.json"
 
 cpout="$W/cp-merge.json"
 ( cd "$cpproj" && SENTINEL_SMOKE_GREEN_102=1 node "$SCRIPTS/sentinel.cjs" merge T-01-02 --json > "$cpout" 2>"$W/cp-err.txt" ) || true
@@ -644,41 +577,41 @@ JUDGED=1111111111111111111111111111111111111111
 LIVE=2222222222222222222222222222222222222222
 hbproj="$W/hbproj"
 mkdir -p "$hbproj/.planning/graph" "$W/bin3"
-cat > "$W/bin3/gh" <<STUB
-#!/usr/bin/env bash
-argv="\$*"
-case "\$argv" in
-  "repo view --json defaultBranchRef"*) echo "main" ;;
-  "repo view --json owner,name"*) echo '{"owner":{"login":"acme"},"name":"demo"}' ;;
-  # The row reports the head the branch is at NOW; the body's trailer names the
-  # head the verdict was rendered against. That is the whole fixture.
-  "pr list --state all"*)
-    echo '[{"number":301,"state":"OPEN","isDraft":false,"headRefName":"ticket/T-02-01-moved","headRefOid":"$LIVE","baseRefName":"epic/02-demo","mergedAt":null,"createdAt":"2026-01-01T00:00:00Z","url":"https://example/301","title":"T-02-01: moved"}]' ;;
-  "pr list --state open"*)
-    echo '[{"number":301,"reviewDecision":null,"body":"Ticket: T-02-01\n\ngate_status: arch-review=conform, drift-check=fresh, degenerate-green=clean, checks=green, head=$JUDGED"}]' ;;
-  "api repos/{owner}/{repo}/branches"*) printf 'main\nepic/02-demo\nticket/T-02-01-moved\n' ;;
-  "api repos/{owner}/{repo}/compare"*) echo 0 ;;
-  "api graphql"*)
-    echo '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}' ;;
-  "pr checks 301"*) echo '[{"name":"build","state":"SUCCESS","bucket":"pass"}]' ;;
-  # The merge gate compares against the LIVE head, not the board's — the cached
-  # one is minutes old, which is the same reasoning the whole live
-  # re-verification exists to refuse.
-  "pr view 301 --json"*)
-    echo '{"number":301,"state":"OPEN","isDraft":false,"baseRefName":"epic/02-demo","headRefName":"ticket/T-02-01-moved","headRefOid":"$LIVE","mergeStateStatus":"CLEAN","reviewDecision":null,"body":"Ticket: T-02-01\n\ngate_status: arch-review=conform, drift-check=fresh, degenerate-green=clean, checks=green, head=$JUDGED"}' ;;
-  *) echo "stub gh: unhandled call: \$argv" >&2; exit 1 ;;
-esac
-STUB
+printf '%s\n' \
+  "#!/usr/bin/env bash" \
+  "argv=\"\$*\"" \
+  "case \"\$argv\" in" \
+  "  \"repo view --json defaultBranchRef\"*) echo \"main\" ;;" \
+  "  \"repo view --json owner,name\"*) echo '{\"owner\":{\"login\":\"acme\"},\"name\":\"demo\"}' ;;" \
+  "  # The row reports the head the branch is at NOW; the body's trailer names the" \
+  "  # head the verdict was rendered against. That is the whole fixture." \
+  "  \"pr list --state all\"*)" \
+  "    echo '[{\"number\":301,\"state\":\"OPEN\",\"isDraft\":false,\"headRefName\":\"ticket/T-02-01-moved\",\"headRefOid\":\"$LIVE\",\"baseRefName\":\"epic/02-demo\",\"mergedAt\":null,\"createdAt\":\"2026-01-01T00:00:00Z\",\"url\":\"https://example/301\",\"title\":\"T-02-01: moved\"}]' ;;" \
+  "  \"pr list --state open\"*\"--json number,state,isDraft,headRefName,headRefOid,baseRefName,mergedAt,createdAt,url,title\"*)" \
+  "    echo '[{\"number\":301,\"state\":\"OPEN\",\"isDraft\":false,\"headRefName\":\"ticket/T-02-01-moved\",\"headRefOid\":\"$LIVE\",\"baseRefName\":\"epic/02-demo\",\"mergedAt\":null,\"createdAt\":\"2026-01-01T00:00:00Z\",\"url\":\"https://example/301\",\"title\":\"T-02-01: moved\"}]' ;;" \
+  "  \"pr list --state open\"*\"--json number,reviewDecision,body,mergeStateStatus\"*)" \
+  "    echo '[{\"number\":301,\"reviewDecision\":null,\"body\":\"Ticket: T-02-01\n\ngate_status: arch-review=conform, drift-check=fresh, degenerate-green=clean, checks=green, head=$JUDGED\"}]' ;;" \
+  "  \"api repos/{owner}/{repo}/branches\"*) printf 'main\nepic/02-demo\nticket/T-02-01-moved\n' ;;" \
+  "  \"api repos/{owner}/{repo}/compare\"*) echo 0 ;;" \
+  "  \"api graphql\"*)" \
+  "    echo '{\"data\":{\"repository\":{\"pullRequest\":{\"reviewThreads\":{\"nodes\":[],\"pageInfo\":{\"hasNextPage\":false,\"endCursor\":null}}}}}}' ;;" \
+  "  \"pr checks 301\"*) echo '[{\"name\":\"build\",\"state\":\"SUCCESS\",\"bucket\":\"pass\"}]' ;;" \
+  "  # The merge gate compares against the LIVE head, not the board's — the cached" \
+  "  # one is minutes old, which is the same reasoning the whole live" \
+  "  # re-verification exists to refuse." \
+  "  \"pr view 301 --json\"*)" \
+  "    echo '{\"number\":301,\"state\":\"OPEN\",\"isDraft\":false,\"baseRefName\":\"epic/02-demo\",\"headRefName\":\"ticket/T-02-01-moved\",\"headRefOid\":\"$LIVE\",\"mergeStateStatus\":\"CLEAN\",\"reviewDecision\":null,\"body\":\"Ticket: T-02-01\n\ngate_status: arch-review=conform, drift-check=fresh, degenerate-green=clean, checks=green, head=$JUDGED\"}' ;;" \
+  "  *) echo \"stub gh: unhandled call: \$argv\" >&2; exit 1 ;;" \
+  "esac" > "$W/bin3/gh"
 chmod +x "$W/bin3/gh"
-cat > "$hbproj/.planning/graph/tickets.json" <<'JSON'
-{
-  "epics": { "2": { "branch": "epic/02-demo", "repos": [null] } },
-  "tickets": {
-    "T-02-01": { "phase": "2", "epic": "epic/02-demo", "branch": "ticket/T-02-01-moved",
-                 "title": "moved", "depends_on": [], "risk": "low" }
-  }
-}
-JSON
+printf '%s\n' \
+  '{' \
+  '  "epics": { "2": { "branch": "epic/02-demo", "repos": [null] } },' \
+  '  "tickets": {' \
+  '    "T-02-01": { "phase": "2", "epic": "epic/02-demo", "branch": "ticket/T-02-01-moved",' \
+  '                 "title": "moved", "depends_on": [], "risk": "low" }' \
+  '  }' \
+  '}' > "$hbproj/.planning/graph/tickets.json"
 echo '{"pipeline":{}}' > "$hbproj/.planning/config.json"
 
 hbboard="$W/hb-board.txt"
@@ -728,29 +661,30 @@ stproj="$W/stproj"
 mkdir -p "$stproj/.planning/graph" "$W/binS"
 cp "$hbproj/.planning/graph/tickets.json" "$stproj/.planning/graph/tickets.json"
 echo '{"pipeline":{}}' > "$stproj/.planning/config.json"
-cat > "$W/binS/gh" <<STUB
-#!/usr/bin/env bash
-argv="\$*"
-case "\$argv" in
-  "repo view --json defaultBranchRef"*) echo "main" ;;
-  "repo view --json owner,name"*) echo '{"owner":{"login":"acme"},"name":"demo"}' ;;
-  "pr list --state all"*)
-    echo '[{"number":301,"state":"OPEN","isDraft":false,"headRefName":"ticket/T-02-01-moved","headRefOid":"$LIVE","baseRefName":"epic/02-demo","mergedAt":null,"createdAt":"2026-01-01T00:00:00Z","url":"https://example/301","title":"T-02-01: moved"}]' ;;
-  "pr list --state open"*)
-    echo '[{"number":301,"reviewDecision":null,"body":"Ticket: T-02-01\n\ngate_status: arch-review=conform, checks=green, head=$JUDGED"}]' ;;
-  "api repos/{owner}/{repo}/branches"*) printf 'main\nepic/02-demo\nticket/T-02-01-moved\n' ;;
-  "api repos/{owner}/{repo}/compare"*) echo 0 ;;
-  "api repos/{owner}/{repo}/commits/\${SMOKE_STATUS_SHA:-none}/statuses"*)
-    echo '[{"context":"merge-gate","state":"success","description":"arch-review=conform, drift-check=fresh, degenerate-green=clean, checks=green"}]' ;;
-  "api repos/{owner}/{repo}/commits/"*"/statuses"*) echo '[]' ;;
-  "api graphql"*)
-    echo '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}' ;;
-  "pr checks 301"*) echo '[{"name":"build","state":"SUCCESS","bucket":"pass"}]' ;;
-  "pr view 301 --json"*)
-    echo '{"number":301,"state":"OPEN","isDraft":false,"baseRefName":"epic/02-demo","headRefName":"ticket/T-02-01-moved","headRefOid":"$LIVE","mergeStateStatus":"CLEAN","reviewDecision":null,"body":"Ticket: T-02-01\n\ngate_status: arch-review=conform, checks=green, head=$JUDGED"}' ;;
-  *) echo "stub gh: unhandled call: \$argv" >&2; exit 1 ;;
-esac
-STUB
+printf '%s\n' \
+  "#!/usr/bin/env bash" \
+  "argv=\"\$*\"" \
+  "case \"\$argv\" in" \
+  "  \"repo view --json defaultBranchRef\"*) echo \"main\" ;;" \
+  "  \"repo view --json owner,name\"*) echo '{\"owner\":{\"login\":\"acme\"},\"name\":\"demo\"}' ;;" \
+  "  \"pr list --state all\"*)" \
+  "    echo '[{\"number\":301,\"state\":\"OPEN\",\"isDraft\":false,\"headRefName\":\"ticket/T-02-01-moved\",\"headRefOid\":\"$LIVE\",\"baseRefName\":\"epic/02-demo\",\"mergedAt\":null,\"createdAt\":\"2026-01-01T00:00:00Z\",\"url\":\"https://example/301\",\"title\":\"T-02-01: moved\"}]' ;;" \
+  "  \"pr list --state open\"*\"--json number,state,isDraft,headRefName,headRefOid,baseRefName,mergedAt,createdAt,url,title\"*)" \
+  "    echo '[{\"number\":301,\"state\":\"OPEN\",\"isDraft\":false,\"headRefName\":\"ticket/T-02-01-moved\",\"headRefOid\":\"$LIVE\",\"baseRefName\":\"epic/02-demo\",\"mergedAt\":null,\"createdAt\":\"2026-01-01T00:00:00Z\",\"url\":\"https://example/301\",\"title\":\"T-02-01: moved\"}]' ;;" \
+  "  \"pr list --state open\"*\"--json number,reviewDecision,body,mergeStateStatus\"*)" \
+  "    echo '[{\"number\":301,\"reviewDecision\":null,\"body\":\"Ticket: T-02-01\n\ngate_status: arch-review=conform, checks=green, head=$JUDGED\"}]' ;;" \
+  "  \"api repos/{owner}/{repo}/branches\"*) printf 'main\nepic/02-demo\nticket/T-02-01-moved\n' ;;" \
+  "  \"api repos/{owner}/{repo}/compare\"*) echo 0 ;;" \
+  "  \"api repos/{owner}/{repo}/commits/\${SMOKE_STATUS_SHA:-none}/statuses\"*)" \
+  "    echo '[{\"context\":\"merge-gate\",\"state\":\"success\",\"description\":\"arch-review=conform, drift-check=fresh, degenerate-green=clean, checks=green\"}]' ;;" \
+  "  \"api repos/{owner}/{repo}/commits/\"*\"/statuses\"*) echo '[]' ;;" \
+  "  \"api graphql\"*)" \
+  "    echo '{\"data\":{\"repository\":{\"pullRequest\":{\"reviewThreads\":{\"nodes\":[],\"pageInfo\":{\"hasNextPage\":false,\"endCursor\":null}}}}}}' ;;" \
+  "  \"pr checks 301\"*) echo '[{\"name\":\"build\",\"state\":\"SUCCESS\",\"bucket\":\"pass\"}]' ;;" \
+  "  \"pr view 301 --json\"*)" \
+  "    echo '{\"number\":301,\"state\":\"OPEN\",\"isDraft\":false,\"baseRefName\":\"epic/02-demo\",\"headRefName\":\"ticket/T-02-01-moved\",\"headRefOid\":\"$LIVE\",\"mergeStateStatus\":\"CLEAN\",\"reviewDecision\":null,\"body\":\"Ticket: T-02-01\n\ngate_status: arch-review=conform, checks=green, head=$JUDGED\"}' ;;" \
+  "  *) echo \"stub gh: unhandled call: \$argv\" >&2; exit 1 ;;" \
+  "esac" > "$W/binS/gh"
 chmod +x "$W/binS/gh"
 ststate="$stproj/.planning/graph/delivery-state.json"
 sq() { node -e 'const s=require(process.argv[1]);const v=process.argv.slice(2).reduce((o,k)=>o&&o[k],s);process.stdout.write(String(v))' "$ststate" "$@"; }
@@ -791,38 +725,35 @@ fi
 NCHEAD=4444444444444444444444444444444444444444
 ncproj="$W/nociproj"
 mkdir -p "$ncproj/.planning/graph" "$W/bin4"
-cat > "$ncproj/.planning/graph/tickets.json" <<'JSON'
-{ "epics": { "3": { "branch": "epic/03-demo", "repos": [null] } },
-  "tickets": { "T-03-01": { "phase": "3", "epic": "epic/03-demo", "branch": "ticket/T-03-01-noci",
-                            "title": "no ci here", "depends_on": [], "risk": "low" } } }
-JSON
-cat > "$ncproj/.planning/graph/delivery-state.json" <<JSON
-{ "T-03-01": { "status": "pr-open", "pr": 401, "draft": false, "branch": "ticket/T-03-01-noci",
-               "epic": "epic/03-demo", "pr_base": "epic/03-demo", "merge_scope": "stacked",
-               "gate": { "arch-review": "conform", "head": "$NCHEAD" }, "head_sha": "$NCHEAD",
-               "checks": { "total": 0, "failing": 0, "pending": 0, "none_reported": true } } }
-JSON
+printf '%s\n' \
+  '{ "epics": { "3": { "branch": "epic/03-demo", "repos": [null] } },' \
+  '  "tickets": { "T-03-01": { "phase": "3", "epic": "epic/03-demo", "branch": "ticket/T-03-01-noci",' \
+  '                            "title": "no ci here", "depends_on": [], "risk": "low" } } }' > "$ncproj/.planning/graph/tickets.json"
+printf '%s\n' \
+  "{ \"T-03-01\": { \"status\": \"pr-open\", \"pr\": 401, \"draft\": false, \"branch\": \"ticket/T-03-01-noci\"," \
+  "               \"epic\": \"epic/03-demo\", \"pr_base\": \"epic/03-demo\", \"merge_scope\": \"stacked\"," \
+  "               \"gate\": { \"arch-review\": \"conform\", \"head\": \"$NCHEAD\" }, \"head_sha\": \"$NCHEAD\"," \
+  "               \"checks\": { \"total\": 0, \"failing\": 0, \"pending\": 0, \"none_reported\": true } } }" > "$ncproj/.planning/graph/delivery-state.json"
 echo '{"pipeline":{}}' > "$ncproj/.planning/config.json"
-cat > "$W/bin4/gh" <<STUB
-#!/usr/bin/env bash
-argv="\$*"
-if [ -n "\${SENTINEL_SMOKE_LOG:-}" ]; then printf '%s\n' "\$argv" >> "\$SENTINEL_SMOKE_LOG"; fi
-case "\$argv" in
-  "repo view --json defaultBranchRef"*) echo "main" ;;
-  "repo view --json owner,name"*) echo '{"owner":{"login":"acme"},"name":"demo"}' ;;
-  # The repo has no CI configured at all: gh exits 0 and reports nothing, which
-  # is the one case that genuinely means "no checks" (see sentinel.cjs ghChecks).
-  "pr checks 401"*) echo -n "" ;;
-  "pr view 401 --json"*)
-    echo '{"number":401,"state":"OPEN","isDraft":false,"baseRefName":"epic/03-demo","headRefName":"ticket/T-03-01-noci","headRefOid":"$NCHEAD","mergeStateStatus":"CLEAN","reviewDecision":null,"body":"Ticket: T-03-01\n\ngate_status: arch-review=conform, checks=green, head=$NCHEAD"}' ;;
-  "api graphql"*)
-    echo '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}' ;;
-  "api repos/"*"/compare/"*) echo 0 ;;
-  "pr list --head "*) echo "[]" ;;
-  "pr merge "*) echo "squash-merged" ;;
-  *) echo "stub gh4: unhandled call: \$argv" >&2; exit 1 ;;
-esac
-STUB
+printf '%s\n' \
+  "#!/usr/bin/env bash" \
+  "argv=\"\$*\"" \
+  "if [ -n \"\${SENTINEL_SMOKE_LOG:-}\" ]; then printf '%s\n' \"\$argv\" >> \"\$SENTINEL_SMOKE_LOG\"; fi" \
+  "case \"\$argv\" in" \
+  "  \"repo view --json defaultBranchRef\"*) echo \"main\" ;;" \
+  "  \"repo view --json owner,name\"*) echo '{\"owner\":{\"login\":\"acme\"},\"name\":\"demo\"}' ;;" \
+  "  # The repo has no CI configured at all: gh exits 0 and reports nothing, which" \
+  "  # is the one case that genuinely means \"no checks\" (see sentinel.cjs ghChecks)." \
+  "  \"pr checks 401\"*) echo -n \"\" ;;" \
+  "  \"pr view 401 --json\"*)" \
+  "    echo '{\"number\":401,\"state\":\"OPEN\",\"isDraft\":false,\"baseRefName\":\"epic/03-demo\",\"headRefName\":\"ticket/T-03-01-noci\",\"headRefOid\":\"$NCHEAD\",\"mergeStateStatus\":\"CLEAN\",\"reviewDecision\":null,\"body\":\"Ticket: T-03-01\n\ngate_status: arch-review=conform, checks=green, head=$NCHEAD\"}' ;;" \
+  "  \"api graphql\"*)" \
+  "    echo '{\"data\":{\"repository\":{\"pullRequest\":{\"reviewThreads\":{\"nodes\":[],\"pageInfo\":{\"hasNextPage\":false,\"endCursor\":null}}}}}}' ;;" \
+  "  \"api repos/\"*\"/compare/\"*) echo 0 ;;" \
+  "  \"pr list --head \"*) echo \"[]\" ;;" \
+  "  \"pr merge \"*) echo \"squash-merged\" ;;" \
+  "  *) echo \"stub gh4: unhandled call: \$argv\" >&2; exit 1 ;;" \
+  "esac" > "$W/bin4/gh"
 chmod +x "$W/bin4/gh"
 
 # The board, from the state file alone — front.cjs needs no GitHub at all.
@@ -894,47 +825,47 @@ fi
 URHEAD=5555555555555555555555555555555555555555
 urproj="$W/urproj"
 mkdir -p "$urproj/.planning/graph" "$W/bin8"
-cat > "$urproj/.planning/graph/tickets.json" <<'JSON'
-{ "epics": { "5": { "branch": "epic/05-demo", "repos": [null] } },
-  "tickets": { "T-05-01": { "phase": "5", "epic": "epic/05-demo", "branch": "ticket/T-05-01-unread",
-                            "title": "unreadable checks", "depends_on": [], "risk": "low" } } }
-JSON
+printf '%s\n' \
+  '{ "epics": { "5": { "branch": "epic/05-demo", "repos": [null] } },' \
+  '  "tickets": { "T-05-01": { "phase": "5", "epic": "epic/05-demo", "branch": "ticket/T-05-01-unread",' \
+  '                            "title": "unreadable checks", "depends_on": [], "risk": "low" } } }' > "$urproj/.planning/graph/tickets.json"
 echo '{"pipeline":{}}' > "$urproj/.planning/config.json"
-cat > "$W/bin8/gh" <<STUB
-#!/usr/bin/env bash
-argv="\$*"
-case "\$argv" in
-  "repo view --json defaultBranchRef"*) echo "main" ;;
-  "repo view --json owner,name"*) echo '{"owner":{"login":"acme"},"name":"demo"}' ;;
-  "pr list --state open"*)
-    echo '[{"number":501,"reviewDecision":"APPROVED","mergeStateStatus":"CLEAN","body":"Ticket: T-05-01\n\ngate_status: arch-review=conform, checks=green, head=$URHEAD"}]' ;;
-  "pr list --state all"*)
-    echo '[{"number":501,"state":"OPEN","isDraft":false,"headRefName":"ticket/T-05-01-unread","headRefOid":"$URHEAD","baseRefName":"epic/05-demo","mergedAt":null,"createdAt":"2026-01-01T00:00:00Z","url":"https://example/501","title":"T-05-01: unreadable checks"}]' ;;
-  "api repos/{owner}/{repo}/branches"*) printf 'main\nepic/05-demo\nticket/T-05-01-unread\n' ;;
-  # The ONE call that does not answer. gh prints the cause to stderr, nothing to
-  # stdout, and exits non-zero — which is not the same fact as an empty list.
-  # SENTINEL_SMOKE_CHECKS_OK flips it to the exit-1-with-\`[]\` control below:
-  # \`gh pr checks\` exits 1 for a PR with no checks AT ALL as well as for a red
-  # one, so that exit code is DATA and the two must stay tellable apart.
-  "pr checks 501"*)
-    # SENTINEL_SMOKE_CHECKS_JUNK is the THIRD mode: gh exits 0 and answers
-    # something that is not a JSON array (an API error object, a wrapper, a
-    # notice contaminating stdout). Exit 0 certifies that the COMMAND ran, never
-    # that the ANSWER was readable, so the exit code must not be consulted at all
-    # while stdout is non-empty.
-    if [ -n "\${SENTINEL_SMOKE_CHECKS_JUNK:-}" ]; then echo '{"message":"Bad credentials"}'; exit 0; fi
-    if [ -n "\${SENTINEL_SMOKE_CHECKS_OK:-}" ]; then echo '[]'; exit 1; fi
-    echo "gh: HTTP 503: Service Unavailable (api.github.com)" >&2; exit 1 ;;
-  "pr view 501 --json"*)
-    echo '{"number":501,"state":"OPEN","isDraft":false,"baseRefName":"epic/05-demo","headRefName":"ticket/T-05-01-unread","headRefOid":"$URHEAD","mergeStateStatus":"CLEAN","reviewDecision":"APPROVED","body":"Ticket: T-05-01\n\ngate_status: arch-review=conform, checks=green, head=$URHEAD"}' ;;
-  "api graphql"*)
-    echo '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}' ;;
-  "api repos/"*"/compare/"*) echo 0 ;;
-  "pr list --head "*) echo "[]" ;;
-  "pr merge "*) echo "squash-merged" ;;
-  *) echo "stub gh8: unhandled call: \$argv" >&2; exit 1 ;;
-esac
-STUB
+printf '%s\n' \
+  "#!/usr/bin/env bash" \
+  "argv=\"\$*\"" \
+  "case \"\$argv\" in" \
+  "  \"repo view --json defaultBranchRef\"*) echo \"main\" ;;" \
+  "  \"repo view --json owner,name\"*) echo '{\"owner\":{\"login\":\"acme\"},\"name\":\"demo\"}' ;;" \
+  "  \"pr list --state open\"*\"--json number,state,isDraft,headRefName,headRefOid,baseRefName,mergedAt,createdAt,url,title\"*)" \
+  "    echo '[{\"number\":501,\"state\":\"OPEN\",\"isDraft\":false,\"headRefName\":\"ticket/T-05-01-unread\",\"headRefOid\":\"$URHEAD\",\"baseRefName\":\"epic/05-demo\",\"mergedAt\":null,\"createdAt\":\"2026-01-01T00:00:00Z\",\"url\":\"https://example/501\",\"title\":\"T-05-01: unreadable checks\"}]' ;;" \
+  "  \"pr list --state open\"*\"--json number,reviewDecision,body,mergeStateStatus\"*)" \
+  "    echo '[{\"number\":501,\"reviewDecision\":\"APPROVED\",\"mergeStateStatus\":\"CLEAN\",\"body\":\"Ticket: T-05-01\n\ngate_status: arch-review=conform, checks=green, head=$URHEAD\"}]' ;;" \
+  "  \"pr list --state all\"*)" \
+  "    echo '[{\"number\":501,\"state\":\"OPEN\",\"isDraft\":false,\"headRefName\":\"ticket/T-05-01-unread\",\"headRefOid\":\"$URHEAD\",\"baseRefName\":\"epic/05-demo\",\"mergedAt\":null,\"createdAt\":\"2026-01-01T00:00:00Z\",\"url\":\"https://example/501\",\"title\":\"T-05-01: unreadable checks\"}]' ;;" \
+  "  \"api repos/{owner}/{repo}/branches\"*) printf 'main\nepic/05-demo\nticket/T-05-01-unread\n' ;;" \
+  "  # The ONE call that does not answer. gh prints the cause to stderr, nothing to" \
+  "  # stdout, and exits non-zero — which is not the same fact as an empty list." \
+  "  # SENTINEL_SMOKE_CHECKS_OK flips it to the exit-1-with-\`[]\` control below:" \
+  "  # \`gh pr checks\` exits 1 for a PR with no checks AT ALL as well as for a red" \
+  "  # one, so that exit code is DATA and the two must stay tellable apart." \
+  "  \"pr checks 501\"*)" \
+  "    # SENTINEL_SMOKE_CHECKS_JUNK is the THIRD mode: gh exits 0 and answers" \
+  "    # something that is not a JSON array (an API error object, a wrapper, a" \
+  "    # notice contaminating stdout). Exit 0 certifies that the COMMAND ran, never" \
+  "    # that the ANSWER was readable, so the exit code must not be consulted at all" \
+  "    # while stdout is non-empty." \
+  "    if [ -n \"\${SENTINEL_SMOKE_CHECKS_JUNK:-}\" ]; then echo '{\"message\":\"Bad credentials\"}'; exit 0; fi" \
+  "    if [ -n \"\${SENTINEL_SMOKE_CHECKS_OK:-}\" ]; then echo '[]'; exit 1; fi" \
+  "    echo \"gh: HTTP 503: Service Unavailable (api.github.com)\" >&2; exit 1 ;;" \
+  "  \"pr view 501 --json\"*)" \
+  "    echo '{\"number\":501,\"state\":\"OPEN\",\"isDraft\":false,\"baseRefName\":\"epic/05-demo\",\"headRefName\":\"ticket/T-05-01-unread\",\"headRefOid\":\"$URHEAD\",\"mergeStateStatus\":\"CLEAN\",\"reviewDecision\":\"APPROVED\",\"body\":\"Ticket: T-05-01\n\ngate_status: arch-review=conform, checks=green, head=$URHEAD\"}' ;;" \
+  "  \"api graphql\"*)" \
+  "    echo '{\"data\":{\"repository\":{\"pullRequest\":{\"reviewThreads\":{\"nodes\":[],\"pageInfo\":{\"hasNextPage\":false,\"endCursor\":null}}}}}}' ;;" \
+  "  \"api repos/\"*\"/compare/\"*) echo 0 ;;" \
+  "  \"pr list --head \"*) echo \"[]\" ;;" \
+  "  \"pr merge \"*) echo \"squash-merged\" ;;" \
+  "  *) echo \"stub gh8: unhandled call: \$argv\" >&2; exit 1 ;;" \
+  "esac" > "$W/bin8/gh"
 chmod +x "$W/bin8/gh"
 
 urboard="$W/ur-board.txt"
@@ -1321,46 +1252,40 @@ sync_g SHIPYARD_STATE_OBSERVED_AT="$same" || bad "a re-run of the same observati
 rsproj="$W/reviewstands"
 RSHEAD=5555555555555555555555555555555555555555
 mkdir -p "$rsproj/.planning/graph" "$W/bin5"
-cat > "$W/bin5/gh" <<'STUB'
-#!/usr/bin/env bash
-argv="$*"
-case "$argv" in
-  "repo view --json defaultBranchRef"*) echo "main" ;;
-  "repo view --json owner,name"*) echo '{"owner":{"login":"acme"},"name":"demo"}' ;;
-  "pr list --state all"*)
-    echo '[{"number":501,"state":"OPEN","isDraft":false,"headRefName":"ticket/T-04-01-x","headRefOid":"5555555555555555555555555555555555555555","baseRefName":"epic/04-demo","mergedAt":null,"createdAt":"2026-01-01T00:00:00Z","url":"https://example/501","title":"T-04-01: x"}]' ;;
-  # The review verdict is the ONE fact this fixture varies, and it is answered on
-  # both calls that read it — the sync's open-only pass and the guard's own PR
-  # view — because a fixture where the two disagree tests neither.
-  "pr list --state open"*)
-    cat <<JSON
-[{"number":501,"reviewDecision":"${SENTINEL_SMOKE_REVIEW:-CHANGES_REQUESTED}","mergeStateStatus":"CLEAN","body":"Ticket: T-04-01\n\ngate_status: arch-review=conform, drift-check=fresh, checks=green, head=5555555555555555555555555555555555555555"}]
-JSON
-    ;;
-  "api repos/{owner}/{repo}/branches"*) printf 'main\nepic/04-demo\nticket/T-04-01-x\n' ;;
-  "api repos/{owner}/{repo}/compare"*) echo 0 ;;
-  # ZERO review threads: every thread the reviewer filed is resolved and the
-  # verdict still stands. This is the state a fixer cannot service — the threads
-  # are closed, and the verdict is lifted neither by resolving them nor by
-  # pushing.
-  "api graphql"*)
-    echo '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}' ;;
-  "pr checks 501"*) echo '[{"name":"build","state":"SUCCESS","bucket":"pass"}]' ;;
-  "pr view 501 --json"*)
-    cat <<JSON
-{"number":501,"state":"OPEN","isDraft":false,"baseRefName":"epic/04-demo","headRefName":"ticket/T-04-01-x","headRefOid":"5555555555555555555555555555555555555555","mergeStateStatus":"CLEAN","reviewDecision":"${SENTINEL_SMOKE_REVIEW:-CHANGES_REQUESTED}","body":"Ticket: T-04-01\n\ngate_status: arch-review=conform, drift-check=fresh, checks=green, head=5555555555555555555555555555555555555555"}
-JSON
-    ;;
-  "pr list --head "*) echo "[]" ;;
-  *) echo "stub gh5: unhandled call: $argv" >&2; exit 1 ;;
-esac
-STUB
+printf '%s\n' \
+  '#!/usr/bin/env bash' \
+  'argv="$*"' \
+  'case "$argv" in' \
+  '  "repo view --json defaultBranchRef"*) echo "main" ;;' \
+  '  "repo view --json owner,name"*) echo '"'"'{"owner":{"login":"acme"},"name":"demo"}'"'"' ;;' \
+  '  "pr list --state all"*)' \
+  '    echo '"'"'[{"number":501,"state":"OPEN","isDraft":false,"headRefName":"ticket/T-04-01-x","headRefOid":"5555555555555555555555555555555555555555","baseRefName":"epic/04-demo","mergedAt":null,"createdAt":"2026-01-01T00:00:00Z","url":"https://example/501","title":"T-04-01: x"}]'"'"' ;;' \
+  '  # The review verdict is the ONE fact this fixture varies, and it is answered on' \
+  '  # both calls that read it — the sync'"'"'s open-only pass and the guard'"'"'s own PR' \
+  '  # view — because a fixture where the two disagree tests neither.' \
+  '  "pr list --state open"*"--json number,state,isDraft,headRefName,headRefOid,baseRefName,mergedAt,createdAt,url,title"*)' \
+  '    echo '"'"'[{"number":501,"state":"OPEN","isDraft":false,"headRefName":"ticket/T-04-01-x","headRefOid":"5555555555555555555555555555555555555555","baseRefName":"epic/04-demo","mergedAt":null,"createdAt":"2026-01-01T00:00:00Z","url":"https://example/501","title":"T-04-01: x"}]'"'"' ;;' \
+  '  "pr list --state open"*"--json number,reviewDecision,body,mergeStateStatus"*)' \
+  '    printf '"'"'%s\n'"'"' \' \
+  '  "[{\"number\":501,\"reviewDecision\":\"${SENTINEL_SMOKE_REVIEW:-CHANGES_REQUESTED}\",\"mergeStateStatus\":\"CLEAN\",\"body\":\"Ticket: T-04-01\n\ngate_status: arch-review=conform, drift-check=fresh, checks=green, head=5555555555555555555555555555555555555555\"}]"' \
+  '    ;;' \
+  '  "api repos/{owner}/{repo}/branches"*) printf '"'"'main\nepic/04-demo\nticket/T-04-01-x\n'"'"' ;;' \
+  '  "api repos/{owner}/{repo}/compare"*) echo 0 ;;' \
+  '  "api graphql"*)' \
+  '    echo '"'"'{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}'"'"' ;;' \
+  '  "pr checks 501"*) echo '"'"'[{"name":"build","state":"SUCCESS","bucket":"pass"}]'"'"' ;;' \
+  '  "pr view 501 --json"*)' \
+  '    printf '"'"'%s\n'"'"' \' \
+  '  "{\"number\":501,\"state\":\"OPEN\",\"isDraft\":false,\"baseRefName\":\"epic/04-demo\",\"headRefName\":\"ticket/T-04-01-x\",\"headRefOid\":\"5555555555555555555555555555555555555555\",\"mergeStateStatus\":\"CLEAN\",\"reviewDecision\":\"${SENTINEL_SMOKE_REVIEW:-CHANGES_REQUESTED}\",\"body\":\"Ticket: T-04-01\n\ngate_status: arch-review=conform, drift-check=fresh, checks=green, head=5555555555555555555555555555555555555555\"}"' \
+  '    ;;' \
+  '  "pr list --head "*) echo "[]" ;;' \
+  '  *) echo "stub gh5: unhandled call: $argv" >&2; exit 1 ;;' \
+  'esac' > "$W/bin5/gh"
 chmod +x "$W/bin5/gh"
-cat > "$rsproj/.planning/graph/tickets.json" <<'JSON'
-{ "epics": { "4": { "branch": "epic/04-demo", "repos": [null] } },
-  "tickets": { "T-04-01": { "phase": "4", "epic": "epic/04-demo", "branch": "ticket/T-04-01-x",
-                            "title": "x", "depends_on": [], "risk": "low" } } }
-JSON
+printf '%s\n' \
+  '{ "epics": { "4": { "branch": "epic/04-demo", "repos": [null] } },' \
+  '  "tickets": { "T-04-01": { "phase": "4", "epic": "epic/04-demo", "branch": "ticket/T-04-01-x",' \
+  '                            "title": "x", "depends_on": [], "risk": "low" } } }' > "$rsproj/.planning/graph/tickets.json"
 echo '{"pipeline":{}}' > "$rsproj/.planning/config.json"
 rsstate="$rsproj/.planning/graph/delivery-state.json"
 rsfront="$rsproj/.planning/graph/delivery-front.json"
@@ -1477,50 +1402,48 @@ fi
 # demand — none of which the shared `$proj` above has.
 xproj="$W/crossphase"
 mkdir -p "$xproj/.planning/graph" "$W/bin6"
-cat > "$W/bin6/gh" <<'STUB'
-#!/usr/bin/env bash
-argv="$*"
-case "$argv" in
-  "repo view --json defaultBranchRef"*) echo "main" ;;
-  "repo view --json owner,name"*) echo '{"owner":{"login":"acme"},"name":"demo"}' ;;
-  "pr list --state all"*)
-    echo '[{"number":601,"state":"MERGED","isDraft":false,"headRefName":"ticket/T-01-01-parent","headRefOid":"6666666666666666666666666666666666666666","baseRefName":"epic/01-demo","mergedAt":"2026-01-02T00:00:00Z","createdAt":"2026-01-01T00:00:00Z","url":"https://example/601","title":"T-01-01: parent"}]' ;;
-  "pr list --state open"*) echo '[]' ;;
-  # phase 2's epic is deliberately absent: an epic that never started is landed
-  # by construction and is never compared, so the ONE compare this fixture makes
-  # is phase 1's — the fact under test.
-  "api repos/{owner}/{repo}/branches"*) printf 'main\nepic/01-demo\nticket/T-01-01-parent\n' ;;
-  # Ordered BEFORE the generic compare below, and the only call this fixture
-  # varies. Exit 1 with the message GitHub actually sends: `gh` fails, the
-  # tolerant helper returns null, and nothing about the phase has been observed.
-  "api repos/{owner}/{repo}/compare/main...epic/01-demo"*)
-    case "${SMOKE_COMPARE:-0}" in
-      fail) echo "gh: API rate limit exceeded (HTTP 403)" >&2; exit 1 ;;
-      # An exit-0 answer that is not a commit count is the same absence of
-      # evidence: `parseInt("null") || 0` was the other half of the collapse.
-      garbage) echo "null" ;;
-      *) echo "${SMOKE_COMPARE:-0}" ;;
-    esac ;;
-  "api repos/{owner}/{repo}/compare"*) echo 0 ;;
-  "pr list --head "*) echo "[]" ;;
-  *) echo "stub gh6: unhandled call: $argv" >&2; exit 1 ;;
-esac
-STUB
+printf '%s\n' \
+  '#!/usr/bin/env bash' \
+  'argv="$*"' \
+  'case "$argv" in' \
+  '  "repo view --json defaultBranchRef"*) echo "main" ;;' \
+  '  "repo view --json owner,name"*) echo '"'"'{"owner":{"login":"acme"},"name":"demo"}'"'"' ;;' \
+  '  "pr list --state all"*)' \
+  '    echo '"'"'[{"number":601,"state":"MERGED","isDraft":false,"headRefName":"ticket/T-01-01-parent","headRefOid":"6666666666666666666666666666666666666666","baseRefName":"epic/01-demo","mergedAt":"2026-01-02T00:00:00Z","createdAt":"2026-01-01T00:00:00Z","url":"https://example/601","title":"T-01-01: parent"}]'"'"' ;;' \
+  '  "pr list --state open"*) echo '"'"'[]'"'"' ;;' \
+  '  # phase 2'"'"'s epic is deliberately absent: an epic that never started is landed' \
+  '  # by construction and is never compared, so the ONE compare this fixture makes' \
+  '  # is phase 1'"'"'s — the fact under test.' \
+  '  "api repos/{owner}/{repo}/branches"*) printf '"'"'main\nepic/01-demo\nticket/T-01-01-parent\n'"'"' ;;' \
+  '  # Ordered BEFORE the generic compare below, and the only call this fixture' \
+  '  # varies. Exit 1 with the message GitHub actually sends: `gh` fails, the' \
+  '  # tolerant helper returns null, and nothing about the phase has been observed.' \
+  '  "api repos/{owner}/{repo}/compare/main...epic/01-demo"*)' \
+  '    case "${SMOKE_COMPARE:-0}" in' \
+  '      fail) echo "gh: API rate limit exceeded (HTTP 403)" >&2; exit 1 ;;' \
+  '      # An exit-0 answer that is not a commit count is the same absence of' \
+  '      # evidence: `parseInt("null") || 0` was the other half of the collapse.' \
+  '      garbage) echo "null" ;;' \
+  '      *) echo "${SMOKE_COMPARE:-0}" ;;' \
+  '    esac ;;' \
+  '  "api repos/{owner}/{repo}/compare"*) echo 0 ;;' \
+  '  "pr list --head "*) echo "[]" ;;' \
+  '  *) echo "stub gh6: unhandled call: $argv" >&2; exit 1 ;;' \
+  'esac' > "$W/bin6/gh"
 chmod +x "$W/bin6/gh"
-cat > "$xproj/.planning/graph/tickets.json" <<'JSON'
-{
-  "epics": {
-    "1": { "branch": "epic/01-demo", "repos": [null] },
-    "2": { "branch": "epic/02-demo", "repos": [null] }
-  },
-  "tickets": {
-    "T-01-01": { "phase": "1", "epic": "epic/01-demo", "branch": "ticket/T-01-01-parent",
-                 "title": "parent", "depends_on": [], "risk": "low" },
-    "T-02-01": { "phase": "2", "epic": "epic/02-demo", "branch": "ticket/T-02-01-child",
-                 "title": "child", "depends_on": ["T-01-01"], "risk": "low" }
-  }
-}
-JSON
+printf '%s\n' \
+  '{' \
+  '  "epics": {' \
+  '    "1": { "branch": "epic/01-demo", "repos": [null] },' \
+  '    "2": { "branch": "epic/02-demo", "repos": [null] }' \
+  '  },' \
+  '  "tickets": {' \
+  '    "T-01-01": { "phase": "1", "epic": "epic/01-demo", "branch": "ticket/T-01-01-parent",' \
+  '                 "title": "parent", "depends_on": [], "risk": "low" },' \
+  '    "T-02-01": { "phase": "2", "epic": "epic/02-demo", "branch": "ticket/T-02-01-child",' \
+  '                 "title": "child", "depends_on": ["T-01-01"], "risk": "low" }' \
+  '  }' \
+  '}' > "$xproj/.planning/graph/tickets.json"
 echo '{"pipeline":{}}' > "$xproj/.planning/config.json"
 xboard="$W/x-board.txt"
 xstate="$xproj/.planning/graph/delivery-state.json"
@@ -1589,36 +1512,34 @@ fi
 # mode split.
 dmproj="$W/directmain"
 mkdir -p "$dmproj/.planning/graph" "$W/bin7"
-cat > "$W/bin7/gh" <<'STUB'
-#!/usr/bin/env bash
-argv="$*"
-case "$argv" in
-  "repo view --json defaultBranchRef"*) echo "main" ;;
-  "repo view --json owner,name"*) echo '{"owner":{"login":"acme"},"name":"demo"}' ;;
-  # The foreign repo answers nothing: no access, or a typo in delivery.repo.
-  # loadRepo tolerates that and marks the repo unavailable.
-  *"--repo acme/other"*) echo "gh: Could not resolve to a Repository (HTTP 404)" >&2; exit 1 ;;
-  "api repos/acme/other/"*) echo "gh: Could not resolve to a Repository (HTTP 404)" >&2; exit 1 ;;
-  "pr list --state all"*) echo '[]' ;;
-  "pr list --state open"*) echo '[]' ;;
-  "api repos/{owner}/{repo}/branches"*) printf 'main\n' ;;
-  "api repos/{owner}/{repo}/compare"*) echo 0 ;;
-  "pr list --head "*) echo "[]" ;;
-  *) echo "stub gh7: unhandled call: $argv" >&2; exit 1 ;;
-esac
-STUB
+printf '%s\n' \
+  '#!/usr/bin/env bash' \
+  'argv="$*"' \
+  'case "$argv" in' \
+  '  "repo view --json defaultBranchRef"*) echo "main" ;;' \
+  '  "repo view --json owner,name"*) echo '"'"'{"owner":{"login":"acme"},"name":"demo"}'"'"' ;;' \
+  '  # The foreign repo answers nothing: no access, or a typo in delivery.repo.' \
+  '  # loadRepo tolerates that and marks the repo unavailable.' \
+  '  *"--repo acme/other"*) echo "gh: Could not resolve to a Repository (HTTP 404)" >&2; exit 1 ;;' \
+  '  "api repos/acme/other/"*) echo "gh: Could not resolve to a Repository (HTTP 404)" >&2; exit 1 ;;' \
+  '  "pr list --state all"*) echo '"'"'[]'"'"' ;;' \
+  '  "pr list --state open"*) echo '"'"'[]'"'"' ;;' \
+  '  "api repos/{owner}/{repo}/branches"*) printf '"'"'main\n'"'"' ;;' \
+  '  "api repos/{owner}/{repo}/compare"*) echo 0 ;;' \
+  '  "pr list --head "*) echo "[]" ;;' \
+  '  *) echo "stub gh7: unhandled call: $argv" >&2; exit 1 ;;' \
+  'esac' > "$W/bin7/gh"
 chmod +x "$W/bin7/gh"
-cat > "$dmproj/.planning/graph/tickets.json" <<'JSON'
-{
-  "epics": {},
-  "tickets": {
-    "T-03-01": { "phase": "3", "branch": "ticket/T-03-01-escapes", "title": "escapes",
-                 "depends_on": [], "risk": "low", "unreachable_paths": true },
-    "T-03-02": { "phase": "3", "branch": "ticket/T-03-02-foreign", "title": "foreign",
-                 "depends_on": [], "risk": "low", "repo": "acme/other" }
-  }
-}
-JSON
+printf '%s\n' \
+  '{' \
+  '  "epics": {},' \
+  '  "tickets": {' \
+  '    "T-03-01": { "phase": "3", "branch": "ticket/T-03-01-escapes", "title": "escapes",' \
+  '                 "depends_on": [], "risk": "low", "unreachable_paths": true },' \
+  '    "T-03-02": { "phase": "3", "branch": "ticket/T-03-02-foreign", "title": "foreign",' \
+  '                 "depends_on": [], "risk": "low", "repo": "acme/other" }' \
+  '  }' \
+  '}' > "$dmproj/.planning/graph/tickets.json"
 echo '{"pipeline":{"integration_mode":"direct-to-main"}}' > "$dmproj/.planning/config.json"
 dmboard="$W/dm-board.txt"
 dmstate="$dmproj/.planning/graph/delivery-state.json"
@@ -1742,97 +1663,110 @@ git -C "$rrepo" add -A && git -C "$rrepo" commit -qm T-06-02
 ROOT_OID="$(git -C "$rrepo" rev-parse ticket/T-06-01-root)"
 CHILD_OID="$(git -C "$rrepo" rev-parse ticket/T-06-02-child)"
 
-# `git/trees/<ref>?recursive=1` answered from that repository, so the ONLY thing
-# this fixture asserts is what the trees really contain. `git ls-tree -r` prints
-# `<mode> <type> <sha>\t<path>`; the API shape is one object per blob.
-cat > "$W/tree2json.cjs" <<'JS'
-let s = '';
-process.stdin.on('data', (d) => { s += d; }).on('end', () => {
-  const tree = s.split('\n').filter((l) => l.trim()).map((line) => {
-    const [meta, p] = line.split('\t');
-    const parts = meta.split(/\s+/);
-    return { path: p, mode: parts[0], type: parts[1], sha: parts[2] };
-  });
-  process.stdout.write(JSON.stringify({ truncated: false, tree }) + '\n');
-});
-JS
+printf '%s\n' \
+  'let s = '"'"''"'"';' \
+  'process.stdin.on('"'"'data'"'"', (d) => { s += d; }).on('"'"'end'"'"', () => {' \
+  '  const tree = s.split('"'"'\n'"'"').filter((l) => l.trim()).map((line) => {' \
+  '    const [meta, p] = line.split('"'"'\t'"'"');' \
+  '    const parts = meta.split(/\s+/);' \
+  '    return { path: p, mode: parts[0], type: parts[1], sha: parts[2] };' \
+  '  });' \
+  '  process.stdout.write(JSON.stringify({ truncated: false, tree }) + '"'"'\n'"'"');' \
+  '});' > "$W/tree2json.cjs"
 
 mkdir -p "$W/bin9"
-cat > "$W/bin9/gh" <<STUB
-#!/usr/bin/env bash
-argv="\$*"
-case "\$argv" in
-  "repo view --json defaultBranchRef"*) echo "main" ;;
-  "repo view --json owner,name"*) echo '{"owner":{"login":"acme"},"name":"demo"}' ;;
-  # SMOKE_PARENT_MERGED is the ONE fact the two boards differ by: whether the
-  # parent's PR has landed. Everything else about the fixture is identical.
-  "pr list --state open"*)
-    if [ -n "\${SMOKE_PARENT_UNSTARTED:-}" ]; then
-      echo '[]'
-    elif [ -n "\${SMOKE_PARENT_MERGED:-}" ]; then
-      echo '[{"number":602,"reviewDecision":null,"mergeStateStatus":"CLEAN","body":"Ticket: T-06-02\n\ngate_status: arch-review=conform, checks=green, head=$CHILD_OID"}]'
-    else
-      echo '[{"number":601,"reviewDecision":null,"mergeStateStatus":"CLEAN","body":"Ticket: T-06-01\n\ngate_status: arch-review=conform, checks=green, head=$ROOT_OID"},
- {"number":602,"reviewDecision":null,"mergeStateStatus":"CLEAN","body":"Ticket: T-06-02\n\ngate_status: arch-review=conform, checks=green, head=$CHILD_OID"}]'
-    fi ;;
-  "pr list --state all"*)
-    if [ -n "\${SMOKE_PARENT_UNSTARTED:-}" ]; then
-      echo '[]'
-    elif [ -n "\${SMOKE_PARENT_MERGED:-}" ]; then
-      echo '[{"number":601,"state":"MERGED","isDraft":false,"headRefName":"ticket/T-06-01-root","headRefOid":"$ROOT_OID","baseRefName":"epic/06-demo","mergedAt":"2026-09-08T00:00:00Z","createdAt":"2026-09-08T00:00:00Z","url":"https://example/601","title":"T-06-01: root"},
- {"number":602,"state":"OPEN","isDraft":false,"headRefName":"ticket/T-06-02-child","headRefOid":"$CHILD_OID","baseRefName":"ticket/T-06-01-root","mergedAt":null,"createdAt":"2026-09-08T00:00:00Z","url":"https://example/602","title":"T-06-02: child"}]'
-    else
-      echo '[{"number":601,"state":"OPEN","isDraft":false,"headRefName":"ticket/T-06-01-root","headRefOid":"$ROOT_OID","baseRefName":"epic/06-demo","mergedAt":null,"createdAt":"2026-09-08T00:00:00Z","url":"https://example/601","title":"T-06-01: root"},
- {"number":602,"state":"OPEN","isDraft":false,"headRefName":"ticket/T-06-02-child","headRefOid":"$CHILD_OID","baseRefName":"ticket/T-06-01-root","mergedAt":null,"createdAt":"2026-09-08T00:00:00Z","url":"https://example/602","title":"T-06-02: child"}]'
-    fi ;;
-  # SMOKE_PARENT_UNSTARTED is the third fact the board can be in: nothing of this
-  # phase exists on the remote yet, so the parent's status is \`pending\` — which is
-  # NOT "the parent is early", it is "no branch was observed", and a base that
-  # does not exist is not a base.
-  "api repos/{owner}/{repo}/branches"*)
-    if [ -n "\${SMOKE_PARENT_UNSTARTED:-}" ]; then printf 'main\nepic/06-demo\n'
-    else printf 'main\nepic/06-demo\nticket/T-06-01-root\nticket/T-06-02-child\n'; fi ;;
-  "pr checks "*) echo '[{"name":"build","state":"SUCCESS","bucket":"pass"}]' ;;
-  "pr view 601 --json"*)
-    echo '{"number":601,"state":"OPEN","isDraft":false,"baseRefName":"epic/06-demo","headRefName":"ticket/T-06-01-root","headRefOid":"$ROOT_OID","mergeStateStatus":"CLEAN","reviewDecision":null,"body":"Ticket: T-06-01\n\ngate_status: arch-review=conform, checks=green, head=$ROOT_OID"}' ;;
-  "pr view 602 --json"*)
-    echo '{"number":602,"state":"OPEN","isDraft":false,"baseRefName":"ticket/T-06-01-root","headRefName":"ticket/T-06-02-child","headRefOid":"$CHILD_OID","mergeStateStatus":"CLEAN","reviewDecision":null,"body":"Ticket: T-06-02\n\ngate_status: arch-review=conform, checks=green, head=$CHILD_OID"}' ;;
-  "api graphql"*)
-    echo '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}' ;;
-  # The trees the assertion measures — straight out of the real repository.
-  "api "*"/git/trees/"*)
-    ref="\${argv#*/git/trees/}"; ref="\${ref%%\\?*}"
-    if git -C "$rrepo" rev-parse --verify -q "\$ref" >/dev/null; then
-      git -C "$rrepo" ls-tree -r "\$ref" | node "$W/tree2json.cjs"
-    else
-      echo "gh: HTTP 404: Not Found (\$ref)" >&2; exit 1
-    fi ;;
-  "api repos/"*"/compare/"*) echo 0 ;;
-  # THE STALE-BOARD WINDOW, as a stub that deliberately disagrees with the board:
-  # the snapshot on disk says the parent's PR is open, the LIVE query says that
-  # branch has no open PR any more. That is the only window in which a squash can
-  # still land on a limb, and the whole reason the assertion exists beside the
-  # gate's cached check.
-  "pr list --head "*) echo "[]" ;;
-  "pr merge "*) echo "squash-merged" ;;
-  "pr edit "*) echo "retargeted" ;;
-  *) echo "stub gh9: unhandled call: \$argv" >&2; exit 1 ;;
-esac
-STUB
+printf '%s\n' \
+  "#!/usr/bin/env bash" \
+  "argv=\"\$*\"" \
+  "case \"\$argv\" in" \
+  "  \"repo view --json defaultBranchRef\"*) echo \"main\" ;;" \
+  "  \"repo view --json owner,name\"*) echo '{\"owner\":{\"login\":\"acme\"},\"name\":\"demo\"}' ;;" \
+  "  # SMOKE_PARENT_MERGED is the ONE fact the two boards differ by: whether the" \
+  "  # parent's PR has landed. Everything else about the fixture is identical." \
+  "  \"pr list --state open\"*\"--json number,state,isDraft,headRefName,headRefOid,baseRefName,mergedAt,createdAt,url,title\"*)" \
+  "    if [ -n \"\${SMOKE_PARENT_UNSTARTED:-}\" ]; then" \
+  "      echo '[]'" \
+  "    elif [ -n \"\${SMOKE_PARENT_MERGED:-}\" ]; then" \
+  "      echo '[{\"number\":602,\"state\":\"OPEN\",\"isDraft\":false,\"headRefName\":\"ticket/T-06-02-child\",\"headRefOid\":\"$CHILD_OID\",\"baseRefName\":\"ticket/T-06-01-root\",\"mergedAt\":null,\"createdAt\":\"2026-09-08T00:00:00Z\",\"url\":\"https://example/602\",\"title\":\"T-06-02: child\"}]'" \
+  "    else" \
+  "      echo '[{\"number\":601,\"state\":\"OPEN\",\"isDraft\":false,\"headRefName\":\"ticket/T-06-01-root\",\"headRefOid\":\"$ROOT_OID\",\"baseRefName\":\"epic/06-demo\",\"mergedAt\":null,\"createdAt\":\"2026-09-08T00:00:00Z\",\"url\":\"https://example/601\",\"title\":\"T-06-01: root\"}," \
+  " {\"number\":602,\"state\":\"OPEN\",\"isDraft\":false,\"headRefName\":\"ticket/T-06-02-child\",\"headRefOid\":\"$CHILD_OID\",\"baseRefName\":\"ticket/T-06-01-root\",\"mergedAt\":null,\"createdAt\":\"2026-09-08T00:00:00Z\",\"url\":\"https://example/602\",\"title\":\"T-06-02: child\"}]'" \
+  "    fi ;;" \
+  "  \"pr list --state open\"*\"--json number,reviewDecision,body,mergeStateStatus\"*)" \
+  "    if [ -n \"\${SMOKE_PARENT_UNSTARTED:-}\" ]; then" \
+  "      echo '[]'" \
+  "    elif [ -n \"\${SMOKE_PARENT_MERGED:-}\" ]; then" \
+  "      echo '[{\"number\":602,\"reviewDecision\":null,\"mergeStateStatus\":\"CLEAN\",\"body\":\"Ticket: T-06-02\n\ngate_status: arch-review=conform, checks=green, head=$CHILD_OID\"}]'" \
+  "    else" \
+  "      echo '[{\"number\":601,\"reviewDecision\":null,\"mergeStateStatus\":\"CLEAN\",\"body\":\"Ticket: T-06-01\n\ngate_status: arch-review=conform, checks=green, head=$ROOT_OID\"}," \
+  " {\"number\":602,\"reviewDecision\":null,\"mergeStateStatus\":\"CLEAN\",\"body\":\"Ticket: T-06-02\n\ngate_status: arch-review=conform, checks=green, head=$CHILD_OID\"}]'" \
+  "    fi ;;" \
+  "  \"pr list --state all\"*)" \
+  "    if [ -n \"\${SMOKE_PARENT_UNSTARTED:-}\" ]; then" \
+  "      echo '[]'" \
+  "    elif [ -n \"\${SMOKE_PARENT_MERGED:-}\" ]; then" \
+  "      echo '[{\"number\":601,\"state\":\"MERGED\",\"isDraft\":false,\"headRefName\":\"ticket/T-06-01-root\",\"headRefOid\":\"$ROOT_OID\",\"baseRefName\":\"epic/06-demo\",\"mergedAt\":\"2026-09-08T00:00:00Z\",\"createdAt\":\"2026-09-08T00:00:00Z\",\"url\":\"https://example/601\",\"title\":\"T-06-01: root\"}," \
+  " {\"number\":602,\"state\":\"OPEN\",\"isDraft\":false,\"headRefName\":\"ticket/T-06-02-child\",\"headRefOid\":\"$CHILD_OID\",\"baseRefName\":\"ticket/T-06-01-root\",\"mergedAt\":null,\"createdAt\":\"2026-09-08T00:00:00Z\",\"url\":\"https://example/602\",\"title\":\"T-06-02: child\"}]'" \
+  "    else" \
+  "      echo '[{\"number\":601,\"state\":\"OPEN\",\"isDraft\":false,\"headRefName\":\"ticket/T-06-01-root\",\"headRefOid\":\"$ROOT_OID\",\"baseRefName\":\"epic/06-demo\",\"mergedAt\":null,\"createdAt\":\"2026-09-08T00:00:00Z\",\"url\":\"https://example/601\",\"title\":\"T-06-01: root\"}," \
+  " {\"number\":602,\"state\":\"OPEN\",\"isDraft\":false,\"headRefName\":\"ticket/T-06-02-child\",\"headRefOid\":\"$CHILD_OID\",\"baseRefName\":\"ticket/T-06-01-root\",\"mergedAt\":null,\"createdAt\":\"2026-09-08T00:00:00Z\",\"url\":\"https://example/602\",\"title\":\"T-06-02: child\"}]'" \
+  "    fi ;;" \
+  "  # SMOKE_PARENT_UNSTARTED is the third fact the board can be in: nothing of this" \
+  "  # phase exists on the remote yet, so the parent's status is \`pending\` — which is" \
+  "  # NOT \"the parent is early\", it is \"no branch was observed\", and a base that" \
+  "  # does not exist is not a base." \
+  "  \"api repos/{owner}/{repo}/branches\"*)" \
+  "    if [ -n \"\${SMOKE_PARENT_UNSTARTED:-}\" ]; then printf 'main\nepic/06-demo\n'" \
+  "    else printf 'main\nepic/06-demo\nticket/T-06-01-root\nticket/T-06-02-child\n'; fi ;;" \
+  "  \"pr checks \"*) echo '[{\"name\":\"build\",\"state\":\"SUCCESS\",\"bucket\":\"pass\"}]' ;;" \
+  "  \"pr view 601 --json\"*)" \
+  "    echo '{\"number\":601,\"state\":\"OPEN\",\"isDraft\":false,\"baseRefName\":\"epic/06-demo\",\"headRefName\":\"ticket/T-06-01-root\",\"headRefOid\":\"$ROOT_OID\",\"mergeStateStatus\":\"CLEAN\",\"reviewDecision\":null,\"body\":\"Ticket: T-06-01\n\ngate_status: arch-review=conform, checks=green, head=$ROOT_OID\"}' ;;" \
+  "  \"pr view 602 --json\"*)" \
+  "    echo '{\"number\":602,\"state\":\"OPEN\",\"isDraft\":false,\"baseRefName\":\"ticket/T-06-01-root\",\"headRefName\":\"ticket/T-06-02-child\",\"headRefOid\":\"$CHILD_OID\",\"mergeStateStatus\":\"CLEAN\",\"reviewDecision\":null,\"body\":\"Ticket: T-06-02\n\ngate_status: arch-review=conform, checks=green, head=$CHILD_OID\"}' ;;" \
+  "  \"api graphql\"*)" \
+  "    echo '{\"data\":{\"repository\":{\"pullRequest\":{\"reviewThreads\":{\"nodes\":[],\"pageInfo\":{\"hasNextPage\":false,\"endCursor\":null}}}}}}' ;;" \
+  "  \"api repos/\"*\"/contents/\"*\"?ref=\"*)" \
+  "    item=\"\${argv#*/contents/}\"" \
+  "    ref=\"\${item#*?ref=}\"" \
+  "    item=\"\${item%%\\?ref=*}\"" \
+  "    ref=\"\$(node -p 'decodeURIComponent(process.argv[1])' \"\$ref\")\"" \
+  "    entry=\"\$(git -C \"$rrepo\" ls-tree -r \"\$ref\" -- \"\$item\" | head -1)\"" \
+  "    if [ -z \"\$entry\" ]; then" \
+  "      echo \"gh: HTTP 404: Not Found (\$item at \$ref)\" >&2; exit 1" \
+  "    fi" \
+  "    printf '%s\n' \"\$entry\" | node \"$W/tree2json.cjs\"       | node -e 'let s=\"\";process.stdin.on(\"data\",d=>s+=d).on(\"end\",()=>{const e=JSON.parse(s).tree[0];process.stdout.write(JSON.stringify({type:\"file\",path:e.path,sha:e.sha})+\"\n\")})' ;;" \
+  "  # The trees the assertion measures — straight out of the real repository." \
+  "  \"api \"*\"/git/trees/\"*)" \
+  "    ref=\"\${argv#*/git/trees/}\"; ref=\"\${ref%%\\?*}\"" \
+  "    if git -C \"$rrepo\" rev-parse --verify -q \"\$ref\" >/dev/null; then" \
+  "      git -C \"$rrepo\" ls-tree -r \"\$ref\" | node \"$W/tree2json.cjs\"" \
+  "    else" \
+  "      echo \"gh: HTTP 404: Not Found (\$ref)\" >&2; exit 1" \
+  "    fi ;;" \
+  "  \"api repos/\"*\"/compare/\"*) echo 0 ;;" \
+  "  # THE STALE-BOARD WINDOW, as a stub that deliberately disagrees with the board:" \
+  "  # the snapshot on disk says the parent's PR is open, the LIVE query says that" \
+  "  # branch has no open PR any more. That is the only window in which a squash can" \
+  "  # still land on a limb, and the whole reason the assertion exists beside the" \
+  "  # gate's cached check." \
+  "  \"pr list --head \"*) echo \"[]\" ;;" \
+  "  \"pr merge \"*) echo \"squash-merged\" ;;" \
+  "  \"pr edit \"*) echo \"retargeted\" ;;" \
+  "  *) echo \"stub gh9: unhandled call: \$argv\" >&2; exit 1 ;;" \
+  "esac" > "$W/bin9/gh"
 chmod +x "$W/bin9/gh"
 
-reach_tickets() { cat <<'JSON'
-{
-  "epics": { "6": { "branch": "epic/06-demo", "repos": [null] } },
-  "tickets": {
-    "T-06-01": { "phase": "6", "epic": "epic/06-demo", "branch": "ticket/T-06-01-root",
-                 "title": "root", "depends_on": [], "risk": "low", "files": ["src/root.txt"] },
-    "T-06-02": { "phase": "6", "epic": "epic/06-demo", "branch": "ticket/T-06-02-child",
-                 "title": "child", "depends_on": ["T-06-01"], "primary_parent": "T-06-01",
-                 "risk": "low", "files": ["src/child.txt"] }
-  }
-}
-JSON
+reach_tickets() { printf '%s\n' \
+  '{' \
+  '  "epics": { "6": { "branch": "epic/06-demo", "repos": [null] } },' \
+  '  "tickets": {' \
+  '    "T-06-01": { "phase": "6", "epic": "epic/06-demo", "branch": "ticket/T-06-01-root",' \
+  '                 "title": "root", "depends_on": [], "risk": "low", "files": ["src/root.txt"] },' \
+  '    "T-06-02": { "phase": "6", "epic": "epic/06-demo", "branch": "ticket/T-06-02-child",' \
+  '                 "title": "child", "depends_on": ["T-06-01"], "primary_parent": "T-06-01",' \
+  '                 "risk": "low", "files": ["src/child.txt"] }' \
+  '  }' \
+  '}'
 }
 
 # ── arm 1: the parent's PR is OPEN → the child cascades off its branch ───────
@@ -2002,63 +1936,58 @@ has "…and names the file that never reached the epic" "$W/r-merge2.txt" "src/c
 # or network access. A pending ticket is read once; a resumed PR is never read.
 trproj="$W/trackerproj"
 mkdir -p "$trproj/.planning/graph"
-cat > "$trproj/.planning/graph/tickets.json" <<'JSON'
-{
-  "epics": { "7": { "branch": "epic/07-tracker", "repos": [null] } },
-  "tickets": {
-    "T-07-01": { "phase": "7", "epic": "epic/07-tracker", "branch": "ticket/T-07-01-eligible",
-                 "title": "eligible", "depends_on": [], "jira": "MYD-701", "risk": "low" },
-    "T-07-02": { "phase": "7", "epic": "epic/07-tracker", "branch": "ticket/T-07-02-assigned",
-                 "title": "assigned", "depends_on": [], "jira": "MYD-702", "risk": "low" },
-    "T-07-03": { "phase": "7", "epic": "epic/07-tracker", "branch": "ticket/T-07-03-unknown",
-                 "title": "unknown", "depends_on": [], "jira": "MYD-703", "risk": "low" },
-    "T-07-04": { "phase": "7", "epic": "epic/07-tracker", "branch": "ticket/T-07-04-expiring",
-                 "title": "expiring", "depends_on": [], "jira": "MYD-704", "risk": "low" },
-    "T-07-05": { "phase": "7", "epic": "epic/07-tracker", "branch": "ticket/T-01-01-root",
-                 "title": "resumed PR", "depends_on": [], "jira": "MYD-705", "risk": "low" }
-  }
-}
-JSON
-cat > "$trproj/.planning/config.json" <<'JSON'
-{"pipeline":{"jira_todo_statuses":"To Do"}}
-JSON
-cat > "$trproj/.planning/PROJECT.md" <<'MD'
-# Tracker fixture
-
-## Core Value
-
-Keep pending work limited to tickets available in the tracker.
-MD
-cat > "$trproj/.planning/ROADMAP.md" <<'MD'
-# Roadmap: tracker fixture
-
-## Requirements
-
-- **TRACKER-01** — Pending delivery observes tracker eligibility.
-
-## Phases
-
-### Phase 7: Tracker
-**Requirements**: TRACKER-01
-MD
+printf '%s\n' \
+  '{' \
+  '  "epics": { "7": { "branch": "epic/07-tracker", "repos": [null] } },' \
+  '  "tickets": {' \
+  '    "T-07-01": { "phase": "7", "epic": "epic/07-tracker", "branch": "ticket/T-07-01-eligible",' \
+  '                 "title": "eligible", "depends_on": [], "jira": "MYD-701", "risk": "low" },' \
+  '    "T-07-02": { "phase": "7", "epic": "epic/07-tracker", "branch": "ticket/T-07-02-assigned",' \
+  '                 "title": "assigned", "depends_on": [], "jira": "MYD-702", "risk": "low" },' \
+  '    "T-07-03": { "phase": "7", "epic": "epic/07-tracker", "branch": "ticket/T-07-03-unknown",' \
+  '                 "title": "unknown", "depends_on": [], "jira": "MYD-703", "risk": "low" },' \
+  '    "T-07-04": { "phase": "7", "epic": "epic/07-tracker", "branch": "ticket/T-07-04-expiring",' \
+  '                 "title": "expiring", "depends_on": [], "jira": "MYD-704", "risk": "low" },' \
+  '    "T-07-05": { "phase": "7", "epic": "epic/07-tracker", "branch": "ticket/T-01-01-root",' \
+  '                 "title": "resumed PR", "depends_on": [], "jira": "MYD-705", "risk": "low" }' \
+  '  }' \
+  '}' > "$trproj/.planning/graph/tickets.json"
+printf '%s\n' \
+  '{"pipeline":{"jira_todo_statuses":"To Do"}}' > "$trproj/.planning/config.json"
+printf '%s\n' \
+  '# Tracker fixture' \
+  '' \
+  '## Core Value' \
+  '' \
+  'Keep pending work limited to tickets available in the tracker.' > "$trproj/.planning/PROJECT.md"
+printf '%s\n' \
+  '# Roadmap: tracker fixture' \
+  '' \
+  '## Requirements' \
+  '' \
+  '- **TRACKER-01** — Pending delivery observes tracker eligibility.' \
+  '' \
+  '## Phases' \
+  '' \
+  '### Phase 7: Tracker' \
+  '**Requirements**: TRACKER-01' > "$trproj/.planning/ROADMAP.md"
 mkdir -p "$trproj/.planning/phases/07-tracker"
 for ticket in 07-01 07-02 07-03 07-04 07-05; do
-  cat > "$trproj/.planning/phases/07-tracker/${ticket}-PLAN.md" <<MD
----
-phase: 7
-plan: ${ticket#07-}
-title: "${ticket} tracker fixture"
-files_modified: [src/${ticket}.js]
-requirements: [TRACKER-01]
-delivery:
-  ticket: T-${ticket}
-  risk: low
----
-
-## Goal
-
-Keep the tracker fixture executable.
-MD
+  printf '%s\n' \
+  "---" \
+  "phase: 7" \
+  "plan: ${ticket#07-}" \
+  "title: \"${ticket} tracker fixture\"" \
+  "files_modified: [src/${ticket}.js]" \
+  "requirements: [TRACKER-01]" \
+  "delivery:" \
+  "  ticket: T-${ticket}" \
+  "  risk: low" \
+  "---" \
+  "" \
+  "## Goal" \
+  "" \
+  "Keep the tracker fixture executable." > "$trproj/.planning/phases/07-tracker/${ticket}-PLAN.md"
 done
 
 trlog="$trproj/.planning/graph/jira-projection.json"
@@ -2068,50 +1997,48 @@ trinitial="$W/tracker-initial.txt"
 ( cd "$trproj" && PATH="$W/bin:$PATH" node "$SCRIPTS/state-sync.cjs" > "$trinitial" 2>"$W/tracker-initial.err" ) \
   || bad "tracker fixture state-sync runs before observations" "$(cat "$W/tracker-initial.err")"
 
-cat > "$W/tracker-mcp-responses.json" <<'JSON'
-{
-  "T-07-01": {"key":"MYD-701","status":{"name":"To Do"},"assignee":null},
-  "T-07-02": {"key":"MYD-702","fields":{"status":{"name":"To Do"},"assignee":{"accountId":"user-5"}}},
-  "T-07-03": {"key":"MYD-703","error":"Jira API timed out"},
-  "T-07-04": {"key":"MYD-704","fields":{"status":{"name":"To Do"},"assignee":null}}
-}
-JSON
+printf '%s\n' \
+  '{' \
+  '  "T-07-01": {"key":"MYD-701","status":{"name":"To Do"},"assignee":null},' \
+  '  "T-07-02": {"key":"MYD-702","fields":{"status":{"name":"To Do"},"assignee":{"accountId":"user-5"}}},' \
+  '  "T-07-03": {"key":"MYD-703","error":"Jira API timed out"},' \
+  '  "T-07-04": {"key":"MYD-704","fields":{"status":{"name":"To Do"},"assignee":null}}' \
+  '}' > "$W/tracker-mcp-responses.json"
 
 # This is the documented adapter boundary: the orchestrator has already made
 # one issue read per pending ticket and converts only status NAME + assignee
 # into the recorder's CLI vocabulary. The resumed PR T-07-05 is intentionally
 # absent, proving the gate is only on pending → execute.
-node - "$W/tracker-mcp-responses.json" "$trproj" "$SCRIPTS/tracker-record.cjs" <<'NODE'
-const fs = require('fs');
-const path = require('path');
-const { spawnSync } = require('child_process');
-
-const [responsesFile, project, recorder] = process.argv.slice(2);
-const responses = JSON.parse(fs.readFileSync(responsesFile, 'utf8'));
-const graph = path.join(project, '.planning', 'graph');
-let reads = 0;
-for (const [ticket, issue] of Object.entries(responses)) {
-  reads += 1;
-  const key = issue.key;
-  if (issue.error) {
-    const r = spawnSync('node', [recorder, 'unknown', ticket, key, '--reason', issue.error, '--graph', graph], { encoding: 'utf8' });
-    if (r.status !== 0) process.exit(r.status || 1);
-    continue;
-  }
-  const fields = issue.fields || issue;
-  const status = fields.status && fields.status.name;
-  const assignee = fields.assignee;
-  const identity = assignee === null ? 'none' : assignee && (assignee.accountId || assignee.id || assignee.name);
-  if (!status || !identity) {
-    const r = spawnSync('node', [recorder, 'unknown', ticket, key, '--reason', 'MCP response omitted status or assignee', '--graph', graph], { encoding: 'utf8' });
-    if (r.status !== 0) process.exit(r.status || 1);
-    continue;
-  }
-  const r = spawnSync('node', [recorder, 'mark', ticket, key, '--status', status, '--assignee', identity, '--graph', graph], { encoding: 'utf8' });
-  if (r.status !== 0) process.exit(r.status || 1);
-}
-if (reads !== 4) process.exit(2);
-NODE
+printf '%s\n' \
+  'const fs = require('"'"'fs'"'"');' \
+  'const path = require('"'"'path'"'"');' \
+  'const { spawnSync } = require('"'"'child_process'"'"');' \
+  '' \
+  'const [responsesFile, project, recorder] = process.argv.slice(2);' \
+  'const responses = JSON.parse(fs.readFileSync(responsesFile, '"'"'utf8'"'"'));' \
+  'const graph = path.join(project, '"'"'.planning'"'"', '"'"'graph'"'"');' \
+  'let reads = 0;' \
+  'for (const [ticket, issue] of Object.entries(responses)) {' \
+  '  reads += 1;' \
+  '  const key = issue.key;' \
+  '  if (issue.error) {' \
+  '    const r = spawnSync('"'"'node'"'"', [recorder, '"'"'unknown'"'"', ticket, key, '"'"'--reason'"'"', issue.error, '"'"'--graph'"'"', graph], { encoding: '"'"'utf8'"'"' });' \
+  '    if (r.status !== 0) process.exit(r.status || 1);' \
+  '    continue;' \
+  '  }' \
+  '  const fields = issue.fields || issue;' \
+  '  const status = fields.status && fields.status.name;' \
+  '  const assignee = fields.assignee;' \
+  '  const identity = assignee === null ? '"'"'none'"'"' : assignee && (assignee.accountId || assignee.id || assignee.name);' \
+  '  if (!status || !identity) {' \
+  '    const r = spawnSync('"'"'node'"'"', [recorder, '"'"'unknown'"'"', ticket, key, '"'"'--reason'"'"', '"'"'MCP response omitted status or assignee'"'"', '"'"'--graph'"'"', graph], { encoding: '"'"'utf8'"'"' });' \
+  '    if (r.status !== 0) process.exit(r.status || 1);' \
+  '    continue;' \
+  '  }' \
+  '  const r = spawnSync('"'"'node'"'"', [recorder, '"'"'mark'"'"', ticket, key, '"'"'--status'"'"', status, '"'"'--assignee'"'"', identity, '"'"'--graph'"'"', graph], { encoding: '"'"'utf8'"'"' });' \
+  '  if (r.status !== 0) process.exit(r.status || 1);' \
+  '}' \
+  'if (reads !== 4) process.exit(2);' | node - "$W/tracker-mcp-responses.json" "$trproj" "$SCRIPTS/tracker-record.cjs"
 
 trboard="$W/tracker-board.txt"
 ( cd "$trproj" && PATH="$W/bin:$PATH" node "$SCRIPTS/state-sync.cjs" > "$trboard" 2>"$W/tracker-sync.err" ) \

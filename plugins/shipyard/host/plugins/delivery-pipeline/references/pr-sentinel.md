@@ -212,6 +212,21 @@ the check again. Push only after it passes. A fix that needs out-of-scope change
 `escalate: out-of-scope` — park the PR, keep the others moving. Follow
 `references/ci-fix.md` — it is the same contract.
 
+Before `escalation-record.cjs mark`, run
+`node $SHIPYARD_ROOT/scripts/repo-remedy.cjs match --repo <owner/repo> --signature-file <current-signature-file> --json`.
+Use JSON evidence containing the normalized `signature` from
+`failure-signature.cjs compute` and the PR `head` where the failure occurred;
+refresh it after any head change.
+For a matching declaration within the attempt budget, run the returned
+`entry_index` with `repo-remedy.cjs run <ticket> --repo <owner/repo> --pr <number> --entry <index> --signature-file <current-signature-evidence.json>`.
+The command rechecks both the selected signature and current PR head before dispatch.
+Then use `repo-remedy.cjs attribute <ticket> --repo <owner/repo> --run <id>` on
+the successful run. That commit is a coverage link and still needs arch-review
+and CI before merge. If there is no declared match, include the candidate
+workflow name in the escalation reason; no discovered workflow may run.
+Pass the same signature file to `escalation-record.cjs mark` when repository
+remedy declarations exist.
+
 **`base-merge`** — the base moved under the branch. TWO different facts with one
 remedy, and the duty does not blur them: `mergeStateStatus: BEHIND`, or
 `behind_by` above zero, is STALENESS — the branch is simply behind its base;
@@ -503,6 +518,17 @@ unproven; a refusal is data, not an error — read the reason, fix that, come ba
 It squashes into the ticket's base (the phase epic, or its parent's branch),
 leaves the branch for the reaper, and retargets cascade children onto the epic.
 
+The merge guard reads the sealed rollout marker and fetches the PR's current base.
+For a PR opened after the marker, every commit between that base and the live
+head needs a sealed conveyor coverage record. An uncovered commit, including a
+hand-resolved base merge, refuses with its SHA, subject and author. Re-run the
+work through `deliver-dispatch.cjs build ci-fix|review-fix <ticket>` or the
+executor entry point, or remove the hand commit, then re-verify. A missing local
+checkout or unreadable coverage store also refuses and names the checkout or
+state root to repair. PRs opened on or before the marker, and PRs in a readable
+store with no marker, keep the prior merge rule; successful legacy merges are
+journalled once per PR as `merge_gate_legacy`.
+
 Two refusals you must NOT retry in a loop, because no amount of work by you will
 clear them: `BLOCKED` (branch protection wants a human review or a check that
 does not exist) and a base outside the stack. Park those as `awaiting-human`,
@@ -519,9 +545,12 @@ dismiss it. Nobody owes work here, which is why the board answers `waiting.human
 and not `parked`. Name it in the report and move on; do NOT dispatch review-fix
 at it.
 
-**`human` / `human-merge`** — out of your hands (a `human_checkpoint` ticket, a
-certified draft in a repo where nothing ran, or a PR targeting the integration
-branch). Record it in the report and move on.
+**`human` / `human-merge`** — out of your hands (a `human_checkpoint: merge` or
+legacy `true` ticket, a certified draft in a repo where nothing ran, or a PR
+targeting the integration branch). Record it in the report and move on. A
+`human_checkpoint: review` ticket becomes eligible for guarded merge only after
+the board sees a fresh current-head human approval; the guard verifies that
+approval again against GitHub before merging it into the epic.
 
 ## After EVERY push
 ```bash

@@ -66,6 +66,25 @@ command-backed evidence is not verification.
    detail: re-read the plan, widen the context, raise the hypothesis above the
    symptom. When every plausible explanation in reach is already in the record,
    `escalate` — another pass at one that failed is not progress.
+
+   Before a human escalation, compute the current failure signature and run
+   `node <scripts>/repo-remedy.cjs match --repo <owner/repo> --signature-file <current-signature-file> --json`
+   from the conveyor project. Use JSON evidence with `signature` from
+   `failure-signature.cjs compute --log <failure-log> --job <check-name>` and
+   `head` set to the PR head where that failure occurred. Refresh it when the
+   PR head changes.
+   If it returns a declared entry and the shared
+   attempt budget remains, follow its `entry_index` with
+   `node <scripts>/repo-remedy.cjs run <ticket> --repo <owner/repo> --pr <number> --entry <index> --signature-file <current-signature-evidence.json>`.
+   `run` rechecks the signature against that entry and the evidence head against
+   the current PR head before dispatch.
+   Only the normalized `repo_remedies` declaration authorizes a dispatch. Each
+   successful dispatch is journalled and charges one attempt. A pushed remedy
+   commit must pass `repo-remedy.cjs attribute` and then arch-review and CI on
+   the new head. If no declaration matches, name the candidate workflow in the
+   escalation reason; do not launch it by discovery.
+   Pass that same signature file to `escalation-record.cjs mark` when the
+   repository has remedy declarations, including when none matches.
 4. Make the smallest change that fixes the root cause. Do not refactor
    surrounding code, do not touch files outside the ticket's `files_modified`
    scope. If the real fix requires out-of-scope changes, STOP and report

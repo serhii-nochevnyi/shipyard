@@ -1,19 +1,19 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 71e1b7053f93db71205f4a37973bb537e52c6c928b7c57afc75828ac443b27c3
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 62c2e10379fdbdd996d0bc3abd45afafccf940bcdd98a99453866d477b5daf04
 phase: 30
-status: passed
-shipyard_source_fingerprint: 71e1b7053f93db71205f4a37973bb537e52c6c928b7c57afc75828ac443b27c3
+status: human_needed
+shipyard_source_fingerprint: 62c2e10379fdbdd996d0bc3abd45afafccf940bcdd98a99453866d477b5daf04
 ---
 
 # Phase 30: A ticket you cannot reach is not deliverable — Verification Projection
 
-**Status:** passed
+**Status:** human_needed
 
 ## Observable Truths
 
 | Truth | Evidence | Status |
 |---|---|---|
-| Every phase plan is accounted for | 10/10 delivery records are merged | ✓ VERIFIED |
+| Every phase plan is accounted for | 5/10 delivery records are merged | ? UNCERTAIN |
 | Integration is coherent | integration evidence records passed | ✓ VERIFIED |
 | Verification evidence is present | integration evidence records repository-local verification facts | ✓ VERIFIED |
 
@@ -24,12 +24,12 @@ shipyard_source_fingerprint: 71e1b7053f93db71205f4a37973bb537e52c6c928b7c57afc75
 | T-30-01 | merged | ✓ VERIFIED |
 | T-30-02 | merged | ✓ VERIFIED |
 | T-30-03 | merged | ✓ VERIFIED |
-| T-30-04 | merged | ✓ VERIFIED |
-| T-30-05 | merged | ✓ VERIFIED |
-| T-30-06 | merged | ✓ VERIFIED |
+| T-30-04 | pending | ? UNCERTAIN |
+| T-30-05 | pending | ? UNCERTAIN |
+| T-30-06 | pending | ? UNCERTAIN |
 | T-30-07 | merged | ✓ VERIFIED |
-| T-30-08 | merged | ✓ VERIFIED |
-| T-30-09 | merged | ✓ VERIFIED |
+| T-30-08 | pending | ? UNCERTAIN |
+| T-30-09 | pending | ? UNCERTAIN |
 | T-30-10 | merged | ✓ VERIFIED |
 
 ## Verification Commands
@@ -39,4 +39,4 @@ shipyard_source_fingerprint: 71e1b7053f93db71205f4a37973bb537e52c6c928b7c57afc75
 
 ## Gaps Summary
 
-**No gaps found in the available repository evidence.**
+**Not green:** 5 plan(s) are not merged.

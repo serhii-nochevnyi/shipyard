@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: f689e8511fe406d3f61286eb2e453d2aaa07a5368fc0d19e1516269add2f5866
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: ad7181a01c80a6063085bba9cbca0e842f6399224586bb66d5b48bd884d0897a
 phase: 43-target-project-delivery-at-scale
 plan: 16
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-30
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: f689e8511fe406d3f61286eb2e453d2aaa07a5368fc0d19e1516269add2f5866
+shipyard_source_fingerprint: ad7181a01c80a6063085bba9cbca0e842f6399224586bb66d5b48bd884d0897a
 ---
 
 # Phase 43: Host-side verification of plan-declared, allow-listed commands before finalization on both runtimes — Delivery Projection
