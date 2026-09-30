@@ -591,7 +591,7 @@ async function recoverDecomposition(dispatchId, dependencies = {}) {
       ...(envelope ? { envelope } : {}) });
   } finally {
     try { writerLease.release({ token: leaseHandle.token, epoch: leaseHandle.epoch }); }
-    catch { /* a fenced or expired lease has nothing left to release */ }
+    catch { }
   }
 }
 

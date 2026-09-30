@@ -612,7 +612,6 @@ async function verifyCompletedClaudeLaunch({ session_id: sessionId, start_eviden
   transcript_path: transcriptFile, saved_native_transcript: savedNativeTranscript,
   original_projects_root: originalProjectsRoot, model, effort, gsd_role: gsdRole, worktree }) {
   const startEvidence = readSessionStartEvidence(evidenceFile, sessionId, gsdRole, worktree);
-  // The original file may have disappeared, but its project/session location must still be authentic.
   if (originalProjectsRoot) transcriptPathForEvidence(originalProjectsRoot, startEvidence.transcript_path, sessionId);
   const privateRoot = path.join(path.dirname(transcriptFile), 'projects');
   const nativeFile = path.resolve(startEvidence.transcript_path);

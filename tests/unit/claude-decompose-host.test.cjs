@@ -578,7 +578,6 @@ test('fixture launcher and no-relaunch recovery produce identical authenticated 
           const hookArgs = settings.hooks.SessionStart[0].hooks[0].args;
           const startFile = hookArgs[hookArgs.indexOf('--evidence-file') + 1];
           originalNativeFile = path.join(nativeDir, `${sessionId}.jsonl`);
-          // Native-shaped test fixtures only: this is not actual Claude CLI live evidence.
           fs.writeFileSync(originalNativeFile, [
             { type: 'agent-setting', sessionId, agentSetting: role },
             { type: 'assistant', sessionId, effort: 'medium', agentSetting: role,
@@ -616,7 +615,6 @@ test('fixture launcher and no-relaunch recovery produce identical authenticated 
     assert.equal(launch.native_transcript_path, originalNativeFile);
     assert.equal(launch.completed.reservation_at, originalReservation.reserved_at);
     const recordFile = path.join(store, 'receipts', `record-${digestValue(live.dispatch_id)}.json`);
-    // Model the post-completion, pre-record crash boundary using the completed fixture launch.
     fs.rmSync(recordFile);
     assert.deepEqual(recorder.getReservation(live.dispatch_id), { ...originalReservation, recorded: false });
     fs.rmSync(originalNativeFile);
