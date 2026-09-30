@@ -9,6 +9,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const crypto = require('crypto');
 const { execFileSync, spawnSync } = require('child_process');
 const { suite, test, done, assert } = require(path.join(__dirname, 'assert-harness.cjs'));
 const { nativeModel, transcriptEvidence: testTranscriptEvidence } = require('./claude-test-evidence.cjs');
@@ -33,6 +34,9 @@ function project({ tickets, state, config, configRaw }) {
   fs.mkdirSync(graph, { recursive: true });
   fs.writeFileSync(path.join(graph, 'tickets.json'), JSON.stringify({ tickets, epics: {} }));
   fs.writeFileSync(path.join(graph, 'delivery-state.json'), JSON.stringify(state));
+  const coverageRoot = path.join(root, 'coverage-state');
+  fs.mkdirSync(coverageRoot, { mode: 0o700 });
+  fs.writeFileSync(path.join(coverageRoot, 'coverage.key'), crypto.randomBytes(32), { mode: 0o600 });
   fs.writeFileSync(
     path.join(root, '.planning', 'config.json'),
     configRaw !== undefined ? configRaw : JSON.stringify(config || { pipeline: {} })
@@ -47,7 +51,7 @@ function run(root, args, opts = {}) {
     // The merge path re-reads the PR from LIVE GitHub by design, so every case
     // past the pre-gh refusals needs a `gh` on PATH that answers. `stubGh`
     // below builds one; the cases that must stay hermetic pass the deny-all.
-    env: { ...process.env, ...(opts.env || {}) },
+    env: { ...process.env, SHIPYARD_COVERAGE_ROOT: path.join(root, 'coverage-state'), ...(opts.env || {}) },
   });
   return { status: r.status, stdout: r.stdout, stderr: r.stderr };
 }
@@ -373,7 +377,7 @@ function stubGh() {
     // default — an absent head on both sides is the pre-head-binding case, and
     // `${VAR:+…}` adds nothing at all rather than an empty `head=`.
     '  "pr view "*)',
-    '    printf \'{"number":%s,"state":"OPEN","isDraft":false,"baseRefName":"%s","headRefName":"%s","headRefOid":"%s","mergeStateStatus":"%s","reviewDecision":%s,"author":{"login":"%s"},"body":"gate_status: arch-review=conform%s, checks=green"}\\n\' "${STUB_PR:-9}" "${STUB_BASE}" "${STUB_HEAD}" "${STUB_HEAD_OID:-}" "${STUB_MERGE_STATE:-CLEAN}" "${STUB_REVIEW_DECISION:-null}" "${STUB_AUTHOR:-owner}" "${STUB_TRAILER_HEAD:+, head=$STUB_TRAILER_HEAD}" ;;',
+    '    printf \'{"number":%s,"state":"OPEN","isDraft":false,"baseRefName":"%s","headRefName":"%s","headRefOid":"%s","createdAt":"%s","mergeStateStatus":"%s","reviewDecision":%s,"author":{"login":"%s"},"body":"gate_status: arch-review=conform%s, checks=green"}\\n\' "${STUB_PR:-9}" "${STUB_BASE}" "${STUB_HEAD}" "${STUB_HEAD_OID:-}" "${STUB_CREATED_AT:-2026-09-30T12:00:00Z}" "${STUB_MERGE_STATE:-CLEAN}" "${STUB_REVIEW_DECISION:-null}" "${STUB_AUTHOR:-owner}" "${STUB_TRAILER_HEAD:+, head=$STUB_TRAILER_HEAD}" ;;',
     // The rows carry gh's own `bucket`, because check-state.cjs reads that
     // field and a row without one is PENDING by its fail-closed rule — a
     // bucket-less stub would leave every merge case waiting on CI forever.
@@ -2133,6 +2137,8 @@ test('an ABSENT config is untouched by all of this — the defaults still apply'
   fs.mkdirSync(path.join(root, '.planning', 'graph'), { recursive: true });
   fs.writeFileSync(path.join(root, '.planning', 'graph', 'tickets.json'), JSON.stringify({ tickets: cfgTickets, epics: {} }));
   fs.writeFileSync(path.join(root, '.planning', 'graph', 'delivery-state.json'), JSON.stringify(cfgState));
+  fs.mkdirSync(path.join(root, 'coverage-state'), { mode: 0o700 });
+  fs.writeFileSync(path.join(root, 'coverage-state', 'coverage.key'), crypto.randomBytes(32), { mode: 0o600 });
   const r = JSON.parse(run(root, ['merge', 'T-OK', '--json', '--dry-run'], { env: cfgEnv() }).stdout).results[0];
   assert.strictEqual(r.would_merge, true, (r.blockers || []).join('; '));
 });
@@ -2190,6 +2196,163 @@ test('GitHub BLOCKED still refuses when stale bot evidence is ignorable', () => 
   assert.match(result.blockers.join('; '), /BLOCKED/);
   assert.strictEqual(result.merged, false);
   assert.strictEqual(fs.existsSync(path.join(root, '.planning', 'graph', 'delivery-log.jsonl')), false);
+});
+
+suite('merge — sealed conveyor coverage');
+
+function coverageMergeFixture({ signTicket = false } = {}) {
+  const root = project({ tickets: { 'T-43-19': { repo: 'acme/demo', phase: 43,
+    branch: 'ticket/T-43-19', epic: 'epic/43-x' } },
+  state: { 'T-43-19': { ...openGreen(19, 'ticket/T-43-19', 'epic/43-x'),
+    repo: 'acme/demo', epic: 'epic/43-x' } }, config: epicConfig });
+  const checkout = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-coverage-checkout-'));
+  const origin = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-coverage-origin-'));
+  roots.push(checkout, origin);
+  gitIn(origin, ['init', '--bare', '-q']);
+  gitIn(checkout, ['init', '-q', '-b', 'main']);
+  gitIn(checkout, ['config', 'user.email', 'sentinel@example.test']);
+  gitIn(checkout, ['config', 'user.name', 'Sentinel Fixture']);
+  gitIn(checkout, ['remote', 'add', 'origin', origin]);
+  writeIn(checkout, 'base.txt', 'base\n');
+  gitIn(checkout, ['add', '.']); gitIn(checkout, ['commit', '-qm', 'base']);
+  gitIn(checkout, ['checkout', '-qb', 'epic/43-x']);
+  writeIn(checkout, 'sibling.txt', 'sibling squash\n');
+  gitIn(checkout, ['add', '.']); gitIn(checkout, ['commit', '-qm', 'sibling squash']);
+  gitIn(checkout, ['checkout', '-qb', 'ticket/T-43-19']);
+  if (signTicket) {
+    const key = path.join(root, 'signing-key');
+    execFileSync('ssh-keygen', ['-q', '-t', 'ed25519', '-N', '', '-f', key]);
+    gitIn(checkout, ['config', 'gpg.format', 'ssh']);
+    gitIn(checkout, ['config', 'user.signingkey', key]);
+  }
+  writeIn(checkout, 'ticket.txt', 'ticket\n');
+  gitIn(checkout, ['add', '.']); gitIn(checkout, ['commit', ...(signTicket ? ['-S'] : []), '-qm', 'ticket work']);
+  const ticketCommit = gitIn(checkout, ['rev-parse', 'HEAD']);
+  gitIn(checkout, ['push', '-q', 'origin', 'epic/43-x', 'ticket/T-43-19']);
+  const configFile = path.join(root, '.planning', 'config.json');
+  const config = JSON.parse(fs.readFileSync(configFile, 'utf8'));
+  config.pipeline.repos = { 'acme/demo': checkout };
+  fs.writeFileSync(configFile, JSON.stringify(config));
+  const coverage = require('../../plugins/delivery-pipeline/scripts/conveyor-coverage.cjs');
+  const coverageRoot = path.join(root, 'coverage-state');
+  const writer = coverage.createCoverageWriter({ root: coverageRoot });
+  const record = (commit) => writer.record({ commit, repo: 'acme/demo', ticket: 'T-43-19',
+    parents: gitIn(checkout, ['show', '-s', '--format=%P', commit]).split(' ').filter(Boolean),
+    tree: gitIn(checkout, ['show', '-s', '--format=%T', commit]), kind: 'base-merge', worktree: checkout,
+    base_merge: { base: 'epic/43-x', requested_base: 'epic/43-x', taken_from_base: [] } });
+  const marker = () => coverage.ensureRolloutMarker({ recorded_at: '2026-09-29T12:00:00Z',
+    repo: 'acme/demo', repository_id: coverage.repositoryIdentity(checkout), root: coverageRoot });
+  const merge = (extra = {}) => {
+    const log = logFile('coverage-merge');
+    const env = onPath(stubGh(), { STUB_BASE: 'epic/43-x', STUB_HEAD: 'ticket/T-43-19',
+      STUB_PR: '19', STUB_HEAD_OID: ticketCommit, STUB_TRAILER_HEAD: ticketCommit,
+      STUB_LOG: log, ...extra });
+    const result = JSON.parse(run(root, ['merge', 'T-43-19', '--json'], { env }).stdout).results[0];
+    return { result, calls: callsIn(log) };
+  };
+  const journal = () => {
+    const file = path.join(root, '.planning', 'graph', 'delivery-log.jsonl');
+    return fs.existsSync(file) ? fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).map(JSON.parse) : [];
+  };
+  return { root, checkout, origin, ticketCommit, record, marker, merge, journal, coverageRoot };
+}
+
+test('a post-rollout hand commit refuses with the first commit and the fixer command', () => {
+  const f = coverageMergeFixture({ signTicket: true });
+  assert.match(gitIn(f.checkout, ['cat-file', '-p', f.ticketCommit]), /gpgsig -----BEGIN SSH SIGNATURE-----/);
+  f.marker();
+  const { result, calls } = f.merge();
+  assert.strictEqual(result.merged, false);
+  assert.match(result.blockers.join('; '), new RegExp(f.ticketCommit));
+  assert.match(result.blockers.join('; '), /deliver-dispatch\.cjs build ci-fix\|review-fix/);
+  assert.ok(!calls.some((call) => call.startsWith('pr merge ')));
+  assert.strictEqual(f.journal().filter((row) => row.event === 'merge_gate_uncovered')[0].commit, f.ticketCommit);
+});
+
+test('covered post-rollout commit merges while sibling squashes on the base need no record', () => {
+  const f = coverageMergeFixture();
+  f.record(f.ticketCommit);
+  f.marker();
+  const covered = f.merge();
+  assert.strictEqual(covered.result.merged, true, covered.result.blockers.join('; '));
+  assert.strictEqual(f.journal().find((row) => row.event === 'merge').coverage, 'chain');
+});
+
+test('a pre-rollout PR with a hand commit merges and journals legacy once', () => {
+  const f = coverageMergeFixture();
+  f.marker();
+  const old = { STUB_CREATED_AT: '2026-09-28T12:00:00Z' };
+  assert.strictEqual(f.merge(old).result.merged, true);
+  assert.strictEqual(f.merge(old).result.merged, true);
+  assert.strictEqual(f.journal().filter((row) => row.event === 'merge_gate_legacy').length, 1);
+});
+
+test('a readable store without a marker keeps the legacy merge rule', () => {
+  const f = coverageMergeFixture();
+  const { result } = f.merge();
+  assert.strictEqual(result.merged, true, result.blockers.join('; '));
+  assert.strictEqual(f.journal().find((row) => row.event === 'merge').coverage, 'legacy');
+  assert.strictEqual(f.journal().filter((row) => row.event === 'merge_gate_legacy').length, 1);
+});
+
+test('post-rollout missing checkout refuses with the remedy and checkout hint', () => {
+  const f = coverageMergeFixture();
+  f.marker();
+  const configFile = path.join(f.root, '.planning', 'config.json');
+  const config = JSON.parse(fs.readFileSync(configFile, 'utf8'));
+  config.pipeline.repos['acme/demo'] = path.join(f.root, 'missing-checkout');
+  fs.writeFileSync(configFile, JSON.stringify(config));
+  const { result, calls } = f.merge();
+  assert.strictEqual(result.merged, false);
+  assert.match(result.blockers.join('; '), /local checkout/);
+  assert.match(result.blockers.join('; '), /deliver-dispatch\.cjs/);
+  assert.ok(!calls.some((call) => call.startsWith('pr merge ')));
+});
+
+test('post-rollout unreadable Git chain refuses with the remedy and checkout hint', () => {
+  const f = coverageMergeFixture();
+  f.marker();
+  gitIn(f.checkout, ['remote', 'set-url', 'origin', path.join(f.root, 'missing-origin')]);
+  const { result, calls } = f.merge();
+  assert.strictEqual(result.merged, false);
+  assert.match(result.blockers.join('; '), /coverage base could not be fetched/);
+  assert.match(result.blockers.join('; '), /local checkout and state root/);
+  assert.match(result.blockers.join('; '), /deliver-dispatch\.cjs/);
+  assert.ok(!calls.some((call) => call.startsWith('pr merge ')));
+});
+
+test('an unrecorded hand resolution of a base merge refuses', () => {
+  const f = coverageMergeFixture();
+  f.record(f.ticketCommit);
+  writeIn(f.checkout, 'base.txt', 'ticket edition\n');
+  gitIn(f.checkout, ['add', '.']); gitIn(f.checkout, ['commit', '-qm', 'ticket edition']);
+  f.record(gitIn(f.checkout, ['rev-parse', 'HEAD']));
+  gitIn(f.checkout, ['checkout', '-q', 'epic/43-x']);
+  writeIn(f.checkout, 'base.txt', 'epic edition\n');
+  gitIn(f.checkout, ['add', '.']); gitIn(f.checkout, ['commit', '-qm', 'epic edition']);
+  gitIn(f.checkout, ['push', '-q', 'origin', 'epic/43-x']);
+  gitIn(f.checkout, ['checkout', '-q', 'ticket/T-43-19']);
+  const conflict = spawnSync('git', ['merge', '--no-ff', 'epic/43-x'], { cwd: f.checkout, encoding: 'utf8' });
+  assert.notStrictEqual(conflict.status, 0, 'the merge must need a hand resolution');
+  writeIn(f.checkout, 'base.txt', 'hand resolution\n');
+  gitIn(f.checkout, ['add', '.']); gitIn(f.checkout, ['commit', '-qm', 'hand base-merge resolution']);
+  const resolution = gitIn(f.checkout, ['rev-parse', 'HEAD']);
+  gitIn(f.checkout, ['push', '-q', 'origin', 'ticket/T-43-19']);
+  f.marker();
+  const { result } = f.merge({ STUB_HEAD_OID: resolution, STUB_TRAILER_HEAD: resolution });
+  assert.strictEqual(result.merged, false);
+  assert.match(result.blockers.join('; '), new RegExp(resolution));
+  assert.match(result.blockers.join('; '), /hand base-merge resolution/);
+});
+
+test('a missing state root or tampered marker refuses instead of becoming legacy', () => {
+  const f = coverageMergeFixture();
+  f.marker();
+  const markerFile = path.join(f.coverageRoot, 'rollout-markers', 'acme%2Fdemo.json');
+  fs.writeFileSync(markerFile, '{}');
+  assert.match(f.merge().result.blockers.join('; '), /coverage|marker|checkout/i);
+  fs.rmSync(f.coverageRoot, { recursive: true });
+  assert.match(f.merge().result.blockers.join('; '), /coverage|state root|checkout/i);
 });
 
 for (const r of roots) {

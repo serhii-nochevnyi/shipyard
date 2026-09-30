@@ -514,6 +514,17 @@ unproven; a refusal is data, not an error — read the reason, fix that, come ba
 It squashes into the ticket's base (the phase epic, or its parent's branch),
 leaves the branch for the reaper, and retargets cascade children onto the epic.
 
+The merge guard reads the sealed rollout marker and fetches the PR's current base.
+For a PR opened after the marker, every commit between that base and the live
+head needs a sealed conveyor coverage record. An uncovered commit, including a
+hand-resolved base merge, refuses with its SHA, subject and author. Re-run the
+work through `deliver-dispatch.cjs build ci-fix|review-fix <ticket>` or the
+executor entry point, or remove the hand commit, then re-verify. A missing local
+checkout or unreadable coverage store also refuses and names the checkout or
+state root to repair. PRs opened on or before the marker, and PRs in a readable
+store with no marker, keep the prior merge rule; successful legacy merges are
+journalled once per PR as `merge_gate_legacy`.
+
 Two refusals you must NOT retry in a loop, because no amount of work by you will
 clear them: `BLOCKED` (branch protection wants a human review or a check that
 does not exist) and a base outside the stack. Park those as `awaiting-human`,

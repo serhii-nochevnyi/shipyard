@@ -45,6 +45,21 @@ const FULL = 'a'.repeat(39) + '1';
 
 suite('log-event — the journal lands beside its graph');
 
+test('merge coverage events require their identifying fields', () => {
+  const { project, graph } = scratch();
+  for (const [event, fields] of [
+    ['merge_gate_legacy', ['ticket=T-43-19', 'pr=19', `head=${FULL}`]],
+    ['merge_gate_uncovered', ['ticket=T-43-19', 'pr=19', `head=${FULL}`, `commit=${FULL}`]],
+  ]) {
+    for (const missing of fields) {
+      const result = run(project, [event, ...fields.filter((field) => field !== missing)]);
+      assert.notStrictEqual(result.status, 0, `${event} accepted missing ${missing}`);
+    }
+    assert.strictEqual(run(project, [event, ...fields]).status, 0);
+  }
+  assert.strictEqual(lines(graph).length, 2);
+});
+
 test('remedy dispatch requires complete metadata and journals one complete row', () => {
   const { project, graph } = scratch();
   const fields = ['ticket=T-43-18', 'pr=43', 'repo=owner/repo', 'entry_index=0',
