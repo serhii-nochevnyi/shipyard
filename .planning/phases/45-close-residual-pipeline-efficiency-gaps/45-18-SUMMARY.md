@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: dc6aacb687a85725f236ed1cc2c62c4e2e7b5c782cb978a91a2ccc4817de7422
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 47aa3e72add8c11ead578a50947a1bdf600214f2f7ea2e2fd012593172f36fa8
 phase: 45-close-residual-pipeline-efficiency-gaps
 plan: 18
 subsystem: shipyard delivery
@@ -22,7 +22,7 @@ key-decisions:
 duration: 0min
 status: halted
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: dc6aacb687a85725f236ed1cc2c62c4e2e7b5c782cb978a91a2ccc4817de7422
+shipyard_source_fingerprint: 47aa3e72add8c11ead578a50947a1bdf600214f2f7ea2e2fd012593172f36fa8
 ---
 
 # Phase 45: Refresh the 0.70.0 Codex package after both integration repairs merge — Delivery Projection

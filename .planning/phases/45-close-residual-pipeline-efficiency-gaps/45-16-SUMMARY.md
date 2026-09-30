@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 633851d68a6e0db395a006e75d0a1a89760bf491ffa33fe1e2080b2f27aa9078
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 6686cab071d9472894eebbc21df08be80d74ea99763455a65bde777bb7529e24
 phase: 45-close-residual-pipeline-efficiency-gaps
 plan: 16
 subsystem: shipyard delivery
@@ -22,7 +22,7 @@ key-decisions:
 duration: 0min
 status: halted
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 633851d68a6e0db395a006e75d0a1a89760bf491ffa33fe1e2080b2f27aa9078
+shipyard_source_fingerprint: 6686cab071d9472894eebbc21df08be80d74ea99763455a65bde777bb7529e24
 ---
 
 # Phase 45: Close judgment recovery, native process proof, and pre-receipt writer fences — Delivery Projection

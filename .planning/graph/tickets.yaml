@@ -4289,7 +4289,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/codex-decompose-host.cjs, plugins/delivery-pipeline/scripts/claude-decompose-host.cjs, plugins/delivery-pipeline/scripts/codex-runtime-host.cjs, plugins/delivery-pipeline/scripts/dispatch-boundary.cjs, plugins/delivery-pipeline/scripts/planning-writer-lease.cjs, tests/unit/codex-decompose-host.test.cjs, tests/unit/claude-decompose-host.test.cjs, tests/unit/codex-runtime-host.test.cjs, tests/unit/dispatch-boundary.test.cjs, tests/unit/planning-writer-lease.test.cjs]
     risk: high
     human_checkpoint: true
-    checkpoint: merge
+    checkpoint: review
     preauthorized: false
     branch: ticket/T-45-16-close-judgment-recovery-native-process-p
     epic: epic/45-close-residual-pipeline-efficiency-gaps
@@ -4321,9 +4321,9 @@ tickets:
     wave: 7
     depends_on: [T-45-15, T-45-16, T-45-17]
     files: ['plugins/shipyard/**']
-    risk: high
-    human_checkpoint: true
-    checkpoint: merge
+    risk: low
+    human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-45-18-refresh-the-0-70-0-codex-package-after-b
     epic: epic/45-close-residual-pipeline-efficiency-gaps

@@ -8687,7 +8687,7 @@
       "risk": "high",
       "type": "implementation",
       "human_checkpoint": true,
-      "checkpoint": "merge",
+      "checkpoint": "review",
       "preauthorized": false,
       "branch": "ticket/T-45-16-close-judgment-recovery-native-process-p",
       "epic": "epic/45-close-residual-pipeline-efficiency-gaps",
@@ -8745,10 +8745,10 @@
       "files": [
         "plugins/shipyard/**"
       ],
-      "risk": "high",
+      "risk": "low",
       "type": "implementation",
-      "human_checkpoint": true,
-      "checkpoint": "merge",
+      "human_checkpoint": false,
+      "checkpoint": null,
       "preauthorized": false,
       "branch": "ticket/T-45-18-refresh-the-0-70-0-codex-package-after-b",
       "epic": "epic/45-close-residual-pipeline-efficiency-gaps",
