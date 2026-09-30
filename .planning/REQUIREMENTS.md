@@ -1,6 +1,6 @@
 # Requirements: shipyard
 
-<!-- shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 3a5126c3a892f98dace9b1129623116202ae3ab4474910736943b3f86370ace3 -->
+<!-- shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 6922fa84ee42563771190493257c6298c4503ecb5782d0d5ce8f42567677d5e7 -->
 
 **Defined:** 2026-09-10
 **Core Value:** Keep delivery decisions truthful, resumable, and synchronized between the Shipyard conveyor and native GSD workflows.
@@ -404,7 +404,7 @@
 | REQ-190 | Phase 45 | In Progress |
 | REQ-191 | Phase 45 | In Progress |
 | REQ-192 | Phase 45 | In Progress |
-| REQ-193 | Phase 45 | In Progress |
+| REQ-193 | Phase 47 | In Progress |
 | REQ-194 | Phase 45 | In Progress |
 | REQ-195 | Phase 45 | In Progress |
 | REQ-196 | Phase 45 | In Progress |

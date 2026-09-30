@@ -4019,3 +4019,19 @@ tickets:
     primary_parent: null
     pr_base: epic/45-close-residual-pipeline-efficiency-gaps
     jira: null
+  T-45-15:
+    title: Prepare the 0.69.0 release from the fully merged phase-45 epic
+    plan: '.planning/phases/45-close-residual-pipeline-efficiency-gaps/45-15-PLAN.md'
+    phase: '45'
+    repo: null
+    wave: 5
+    depends_on: [T-45-01, T-45-02, T-45-03, T-45-04, T-45-05, T-45-06, T-45-07, T-45-08, T-45-09, T-45-10, T-45-11, T-45-12, T-45-13, T-45-14]
+    files: [plugins/delivery-pipeline/.claude-plugin/plugin.json, capabilities/delivery-pipeline/capability.json, 'plugins/shipyard/**', docs/releases/v0.69.0.md]
+    risk: low
+    human_checkpoint: false
+    preauthorized: false
+    branch: ticket/T-45-15-prepare-the-0-69-0-release-from-the-full
+    epic: epic/45-close-residual-pipeline-efficiency-gaps
+    primary_parent: T-45-10
+    pr_base: ticket/T-45-10-claude-decompose-host-recovers-a-complet
+    jira: null
