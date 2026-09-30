@@ -32,6 +32,9 @@ function fixture() {
   const signatureFile = path.join(root, 'failure.log');
   fs.writeFileSync(signatureFile, LOG);
   const signature = computeSignature(LOG).signature;
+  const evidenceFile = path.join(root, 'failure-evidence.json');
+  const writeEvidence = (value = { signature, head }) => fs.writeFileSync(evidenceFile, JSON.stringify(value));
+  writeEvidence();
   const writeConfig = (entries = [{ signature, workflow: 'repair.yml', inputs: { z: 'last', a: 'first' } }], max = 2) => {
     fs.writeFileSync(path.join(root, '.planning', 'config.json'), JSON.stringify({ pipeline: {
       max_attempts: max, repo_remedies: { [REPO]: entries },
@@ -69,7 +72,8 @@ else process.exit(1);
   const calls = () => fs.existsSync(callsFile) ? fs.readFileSync(callsFile, 'utf8').trim().split('\n').map(JSON.parse) : [];
   const events = () => fs.existsSync(path.join(graph, 'delivery-log.jsonl'))
     ? fs.readFileSync(path.join(graph, 'delivery-log.jsonl'), 'utf8').trim().split('\n').map(JSON.parse) : [];
-  return { root, graph, git, head, signature, signatureFile, state, save, writeConfig, invoke, calls, events, env };
+  return { root, graph, git, head, signature, signatureFile, evidenceFile, writeEvidence,
+    state, save, writeConfig, invoke, calls, events, env };
 }
 
 test('only the declared signature matches; dispatch uses exact argv and journals one charged event', () => {
@@ -79,7 +83,7 @@ test('only the declared signature matches; dispatch uses exact argv and journals
   assert.equal(JSON.parse(matched.stdout).match.entry_index, 0);
   fs.writeFileSync(f.signatureFile, f.signature + '\n');
   assert.equal(JSON.parse(f.invoke('match', '--repo', REPO, '--signature-file', f.signatureFile).stdout).match.entry_index, 0);
-  const dispatched = f.invoke('run', TICKET, '--repo', REPO, '--pr', '43', '--entry', '0');
+  const dispatched = f.invoke('run', TICKET, '--repo', REPO, '--pr', '43', '--entry', '0', '--signature-file', f.evidenceFile);
   assert.equal(dispatched.status, 0, dispatched.stderr);
   assert.deepEqual(f.calls().filter((args) => args[0] === 'workflow'), [
     ['workflow', 'run', 'repair.yml', '--repo', REPO, '--ref', 'ticket/T-43-18', '-f', 'a=first', '-f', 'z=last'],
@@ -91,21 +95,75 @@ test('only the declared signature matches; dispatch uses exact argv and journals
   assert.match(f.events()[0].inputs_digest, /^[0-9a-f]{64}$/);
 });
 
-test('undeclared, malformed and exhausted entries never dispatch', () => {
+test('run refuses absent, nonmatching, and head-stale signature evidence', () => {
   const f = fixture();
-  fs.writeFileSync(f.signatureFile, 'TypeError: a different failure');
-  assert.equal(JSON.parse(f.invoke('match', '--repo', REPO, '--signature-file', f.signatureFile).stdout).match, null);
-  for (const entry of ['-1', '1', 'nope']) {
-    assert.notEqual(f.invoke('run', TICKET, '--repo', REPO, '--pr', '43', '--entry', entry).status, 0);
-  }
-  f.writeConfig([{ signature: f.signature, workflow: '../unsafe.yml' }]);
-  assert.notEqual(f.invoke('run', TICKET, '--repo', REPO, '--pr', '43', '--entry', '0').status, 0);
+  const base = ['run', TICKET, '--repo', REPO, '--pr', '43', '--entry', '0'];
+  assert.notEqual(f.invoke(...base).status, 0, 'signature evidence is mandatory');
+  assert.notEqual(f.invoke(...base, '--signature-file', f.signatureFile).status, 0,
+    'a raw log has no failure head');
+  f.writeEvidence({ signature: 'a'.repeat(16), head: f.head });
+  assert.notEqual(f.invoke(...base, '--signature-file', f.evidenceFile).status, 0,
+    'the selected declaration must match the current signature');
+  f.writeEvidence({ signature: f.signature, head: 'b'.repeat(40) });
+  assert.notEqual(f.invoke(...base, '--signature-file', f.evidenceFile).status, 0,
+    'evidence for an earlier head is stale');
+  f.writeEvidence();
+  f.state.pr.headRefOid = 'c'.repeat(40); f.save();
+  assert.notEqual(f.invoke(...base, '--signature-file', f.evidenceFile).status, 0,
+    'a PR head change makes the evidence stale');
+  assert.equal(f.calls().some((args) => args[0] === 'workflow'), false);
+  assert.equal(f.events().length, 0);
+});
+
+test('one validated config snapshot supplies both declaration and attempt budget', () => {
+  const f = fixture();
   f.writeConfig(undefined, 1);
   fs.writeFileSync(path.join(f.graph, 'delivery-log.jsonl'), JSON.stringify({ ticket: TICKET,
     event: 'remedy_dispatch', ts: new Date().toISOString(), pr: 43, repo: REPO,
     entry_index: 0, signature: f.signature, workflow: 'repair.yml', ref: 'ticket/T-43-18',
     bot: 'github-actions[bot]', inputs_digest: 'b'.repeat(64), head: f.head }) + '\n');
-  assert.notEqual(f.invoke('run', TICKET, '--repo', REPO, '--pr', '43', '--entry', '0').status, 0);
+  const program = `const fs = require('node:fs');
+const config = require(process.argv[1]);
+const original = config.loadConfig;
+let reads = 0;
+config.loadConfig = (...args) => {
+  const loaded = original(...args);
+  if (++reads === 1) fs.writeFileSync(process.argv[3], '{invalid');
+  return loaded;
+};
+const remedy = require(process.argv[2]);
+try { remedy.run({ticket: 'T-43-18', repo: 'owner/repo', pr: 43, index: 0,
+    signatureFile: process.argv[5], graph: process.argv[4]});
+  process.exitCode = 2;
+} catch (error) { console.error(error.message); }`;
+  const result = spawnSync(process.execPath, ['-e', program,
+    path.resolve(__dirname, '../../plugins/delivery-pipeline/scripts/pipeline-config.cjs'), SCRIPT,
+    path.join(f.root, '.planning', 'config.json'), f.graph, f.evidenceFile],
+  { cwd: f.root, env: f.env, encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stderr, /attempt budget exhausted/);
+  assert.equal(f.calls().some((args) => args[0] === 'workflow'), false);
+  assert.equal(f.events().length, 1);
+});
+
+test('undeclared, malformed and exhausted entries never dispatch', () => {
+  const f = fixture();
+  fs.writeFileSync(f.signatureFile, 'TypeError: a different failure');
+  assert.equal(JSON.parse(f.invoke('match', '--repo', REPO, '--signature-file', f.signatureFile).stdout).match, null);
+  for (const entry of ['-1', '1', 'nope']) {
+    assert.notEqual(f.invoke('run', TICKET, '--repo', REPO, '--pr', '43', '--entry', entry,
+      '--signature-file', f.evidenceFile).status, 0);
+  }
+  f.writeConfig([{ signature: f.signature, workflow: '../unsafe.yml' }]);
+  assert.notEqual(f.invoke('run', TICKET, '--repo', REPO, '--pr', '43', '--entry', '0',
+    '--signature-file', f.evidenceFile).status, 0);
+  f.writeConfig(undefined, 1);
+  fs.writeFileSync(path.join(f.graph, 'delivery-log.jsonl'), JSON.stringify({ ticket: TICKET,
+    event: 'remedy_dispatch', ts: new Date().toISOString(), pr: 43, repo: REPO,
+    entry_index: 0, signature: f.signature, workflow: 'repair.yml', ref: 'ticket/T-43-18',
+    bot: 'github-actions[bot]', inputs_digest: 'b'.repeat(64), head: f.head }) + '\n');
+  assert.notEqual(f.invoke('run', TICKET, '--repo', REPO, '--pr', '43', '--entry', '0',
+    '--signature-file', f.evidenceFile).status, 0);
   assert.equal(f.calls().some((args) => args[0] === 'workflow'), false);
 });
 
@@ -116,10 +174,11 @@ test('ticket/PR mismatches and a failed gh dispatch write no attempt', () => {
     [TICKET, '--repo', 'other/repo', '--pr', '43'],
     [TICKET, '--repo', REPO, '--pr', '99'],
   ]) {
-    assert.notEqual(f.invoke('run', ...args, '--entry', '0').status, 0);
+    assert.notEqual(f.invoke('run', ...args, '--entry', '0', '--signature-file', f.evidenceFile).status, 0);
   }
   f.state.failWorkflow = true; f.save();
-  assert.notEqual(f.invoke('run', TICKET, '--repo', REPO, '--pr', '43', '--entry', '0').status, 0);
+  assert.notEqual(f.invoke('run', TICKET, '--repo', REPO, '--pr', '43', '--entry', '0',
+    '--signature-file', f.evidenceFile).status, 0);
   assert.equal(f.events().length, 0);
 });
 
@@ -129,12 +188,14 @@ test('the project repository is resolved from origin when the graph repo is null
   fs.writeFileSync(path.join(f.graph, 'tickets.json'), JSON.stringify({ tickets: {
     [TICKET]: { repo: null, branch: 'ticket/T-43-18' },
   } }));
-  assert.equal(f.invoke('run', TICKET, '--repo', REPO, '--pr', '43', '--entry', '0').status, 0);
+  assert.equal(f.invoke('run', TICKET, '--repo', REPO, '--pr', '43', '--entry', '0',
+    '--signature-file', f.evidenceFile).status, 0);
 });
 
 test('run attribution requires unique matching workflow metadata, parent and bot', () => {
   const f = fixture();
-  assert.equal(f.invoke('run', TICKET, '--repo', REPO, '--pr', '43', '--entry', '0').status, 0);
+  assert.equal(f.invoke('run', TICKET, '--repo', REPO, '--pr', '43', '--entry', '0',
+    '--signature-file', f.evidenceFile).status, 0);
   fs.writeFileSync(path.join(f.root, 'file'), 'remedied\n');
   f.git('add', 'file'); f.git('commit', '-qm', 'remedy');
   const next = f.git('rev-parse', 'HEAD');
