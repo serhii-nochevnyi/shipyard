@@ -1,10 +1,10 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 691fdcc68b36089e10705722b5f5d7d151267b7d9967e3e840307bdc6ba784bc
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 2db2b8c469f882364849acb56856b5d33556e3d9321146def31a1c20b00763e6
 phase: 45
 status: pending
 result: pending
 shipyard_sync: evidence-projection
-shipyard_source_fingerprint: 691fdcc68b36089e10705722b5f5d7d151267b7d9967e3e840307bdc6ba784bc
+shipyard_source_fingerprint: 2db2b8c469f882364849acb56856b5d33556e3d9321146def31a1c20b00763e6
 ---
 
 # Phase 45: Close residual pipeline efficiency gaps — UAT Projection

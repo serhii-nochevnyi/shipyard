@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: aed7fe53f3fb216a789ff4dd730189305431d76a7d9c892a68340e660eba3d91
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 38b76a1450144b9b507771fb0fafc9199e077007c0bde29f825dc31b8be3b751
 phase: 45-close-residual-pipeline-efficiency-gaps
 plan: 10
 subsystem: shipyard delivery
@@ -22,7 +22,7 @@ key-decisions:
 duration: 0min
 status: halted
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: aed7fe53f3fb216a789ff4dd730189305431d76a7d9c892a68340e660eba3d91
+shipyard_source_fingerprint: 38b76a1450144b9b507771fb0fafc9199e077007c0bde29f825dc31b8be3b751
 ---
 
 # Phase 45: Claude decompose host recovers a completed judgment role from its reservation, saved transcripts and artifact snapshot without relaunch — Delivery Projection
@@ -32,8 +32,8 @@ shipyard_source_fingerprint: aed7fe53f3fb216a789ff4dd730189305431d76a7d9c892a683
 ## Delivery Evidence
 
 - Ticket: T-45-10
-- Delivery status: pending
-- PR: not observed
+- Delivery status: pr-open
+- PR: #383
 - Source plan: .planning/phases/45-close-residual-pipeline-efficiency-gaps/45-10-PLAN.md
 - This summary is halted until the delivery state observes `merged`.
 

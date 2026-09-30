@@ -1,8 +1,8 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 691fdcc68b36089e10705722b5f5d7d151267b7d9967e3e840307bdc6ba784bc
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 2db2b8c469f882364849acb56856b5d33556e3d9321146def31a1c20b00763e6
 phase: 45
 status: human_needed
-shipyard_source_fingerprint: 691fdcc68b36089e10705722b5f5d7d151267b7d9967e3e840307bdc6ba784bc
+shipyard_source_fingerprint: 2db2b8c469f882364849acb56856b5d33556e3d9321146def31a1c20b00763e6
 ---
 
 # Phase 45: Close residual pipeline efficiency gaps — Verification Projection
@@ -30,8 +30,8 @@ shipyard_source_fingerprint: 691fdcc68b36089e10705722b5f5d7d151267b7d9967e3e8403
 | T-45-07 | merged | ✓ VERIFIED |
 | T-45-08 | merged | ✓ VERIFIED |
 | T-45-09 | pr-open | ? UNCERTAIN |
-| T-45-10 | pending | ? UNCERTAIN |
-| T-45-11 | pending | ? UNCERTAIN |
+| T-45-10 | pr-open | ? UNCERTAIN |
+| T-45-11 | pr-open | ? UNCERTAIN |
 | T-45-12 | merged | ✓ VERIFIED |
 | T-45-13 | merged | ✓ VERIFIED |
 | T-45-14 | merged | ✓ VERIFIED |

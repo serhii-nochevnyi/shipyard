@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: fa18ae064435ee37a0cc94d76ea67d16fdca7fade40fa951d10ecc91d705c729
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: fec7c5afb1fdddac511fc6a597e34b5c0a5949ee520968e748faea98abd85f40
 phase: 45-close-residual-pipeline-efficiency-gaps
 plan: 11
 subsystem: shipyard delivery
@@ -22,7 +22,7 @@ key-decisions:
 duration: 0min
 status: halted
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: fa18ae064435ee37a0cc94d76ea67d16fdca7fade40fa951d10ecc91d705c729
+shipyard_source_fingerprint: fec7c5afb1fdddac511fc6a597e34b5c0a5949ee520968e748faea98abd85f40
 ---
 
 # Phase 45: Codex decomposition runs detached so the parent blocks in deliver-dispatch wait with parent and child usage attributed separately — Delivery Projection
@@ -32,8 +32,8 @@ shipyard_source_fingerprint: fa18ae064435ee37a0cc94d76ea67d16fdca7fade40fa951d10
 ## Delivery Evidence
 
 - Ticket: T-45-11
-- Delivery status: pending
-- PR: not observed
+- Delivery status: pr-open
+- PR: #382
 - Source plan: .planning/phases/45-close-residual-pipeline-efficiency-gaps/45-11-PLAN.md
 - This summary is halted until the delivery state observes `merged`.
 

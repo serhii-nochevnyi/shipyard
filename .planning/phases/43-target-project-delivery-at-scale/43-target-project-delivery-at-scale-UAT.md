@@ -1,10 +1,10 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: d5189d5749e06ce1c647e98534a1e54be90381c244ea9c9c2861f8797beeb513
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 5569cf70ccd2973a1f8dd1e0d3c1566e09f5a77d8eb444c2be476fb1e73d50ba
 phase: 43
 status: pending
 result: pending
 shipyard_sync: evidence-projection
-shipyard_source_fingerprint: d5189d5749e06ce1c647e98534a1e54be90381c244ea9c9c2861f8797beeb513
+shipyard_source_fingerprint: 5569cf70ccd2973a1f8dd1e0d3c1566e09f5a77d8eb444c2be476fb1e73d50ba
 ---
 
 # Phase 43: Target-project delivery at scale — UAT Projection
@@ -12,9 +12,9 @@ shipyard_source_fingerprint: d5189d5749e06ce1c647e98534a1e54be90381c244ea9c9c286
 This file is generated from the delivery graph and phase integration evidence.
 
 ### 1. Delivery plans are accounted for
-result: pending
+result: passed
 expected: all 19 phase plan(s) are merged
-actual: 18 merged
+actual: 19 merged
 
 ### 2. Integration evidence is explicit
 result: pending
