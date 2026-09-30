@@ -294,6 +294,7 @@ const DECLARED_FIELDS = {
 };
 // @contract: a ci_rerun row names the rerun it records; without every field it is refused, not logged.
 const REQUIRED_FIELDS = {
+  remedy_dispatch: ['ticket', 'pr', 'repo', 'entry_index', 'signature', 'workflow', 'ref', 'bot', 'inputs_digest', 'head'],
   ci_rerun: ['ticket', 'pr', 'head', 'run_id'],
   // @contract: a review request can be retried only against the head recorded with it.
   review_rerequest: ['ticket', 'pr', 'head'],

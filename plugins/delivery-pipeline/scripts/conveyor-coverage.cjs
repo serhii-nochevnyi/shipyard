@@ -207,6 +207,17 @@ function validateFinalizationEvidence(input) {
   return stored;
 }
 
+// @contract: a remedy link is usable only with the declared workflow and its dispatch identity.
+function validateRemedy(input) {
+  const remedy = input && input.remedy;
+  if (!remedy || typeof remedy !== 'object' || Array.isArray(remedy)
+      || typeof remedy.workflow !== 'string' || !/^[A-Za-z0-9._-]+\.ya?ml$/.test(remedy.workflow)
+      || typeof remedy.run_id !== 'string' || !/^[1-9]\d*$/.test(remedy.run_id)
+      || !OID.test(remedy.dispatch_head || '')) {
+    throw new Error('remedy coverage requires workflow, run_id and dispatch_head');
+  }
+}
+
 function signedVerificationDigest(worktree, commit) {
   const message = execFileSync('git', ['-C', worktree, 'show', '-s', '--format=%B', commit],
     { encoding: 'utf8', env: gitEnv(), stdio: ['ignore', 'pipe', 'pipe'] });
@@ -249,6 +260,7 @@ function createCoverageWriter({ keyPath, root = coverageRoot() } = {}) {
           || !Array.isArray(input.base_merge.taken_from_base))) {
       throw new Error('base-merge coverage requires merge evidence');
     }
+    if (input.kind === 'remedy') validateRemedy(input);
     const { worktree: _worktree, ...fields } = input;
     const payload = Object.fromEntries(Object.entries({ ...fields, repository_id }).filter(([, value]) => value !== undefined));
     const target = fileFor(root, payload.repo, payload.commit);
@@ -279,6 +291,7 @@ function verify({ commit, repo, worktree = process.cwd(), keyPath, root = covera
       }
       validateFinalizationEvidence({ ...record, repository_id: record.repository_id });
     }
+    if (record.kind === 'remedy') validateRemedy(record);
     return { covered: true, record };
   } catch (error) { return { covered: false, reason: error.message }; }
 }

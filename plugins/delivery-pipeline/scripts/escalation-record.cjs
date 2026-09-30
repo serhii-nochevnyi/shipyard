@@ -371,7 +371,12 @@ if (require.main === module) {
   }
 
   if (cmd === 'mark') {
-    const [ticket, ...reason] = rest;
+    const signatureAt = rest.indexOf('--signature-file');
+    const signatureFile = signatureAt < 0 ? null : rest[signatureAt + 1];
+    if (signatureAt >= 0 && (!signatureFile || signatureFile.startsWith('--'))) fail('--signature-file needs a file');
+    const markArgs = rest.slice();
+    if (signatureAt >= 0) markArgs.splice(signatureAt, 2);
+    const [ticket, ...reason] = markArgs;
     if (!ticket) fail('usage: escalation-record.cjs mark <ticket> <reason...>');
     // Read by someone deciding how to UNBLOCK a PR — hence these words, and not
     // `mark-plan-defect`'s. The condition itself is shared (see requireReason).
@@ -385,12 +390,53 @@ if (require.main === module) {
     const s = state[ticket];
     if (!s) fail(`no ${ticket} in delivery-state.json — run state-sync.cjs first, or check the id`);
 
+    // @contract: a matching declared workflow spends a charged attempt before a human park.
+    const graph = graphDir(cwd);
+    const ticketGraph = JSON.parse(fs.readFileSync(path.join(graph, 'tickets.json'), 'utf8')).tickets || {};
+    const remedy = require('./repo-remedy.cjs');
+    const repo = (ticketGraph[ticket] || {}).repo || s.repo || remedy.projectRepository(graph);
+    if (!repo) {
+      const loaded = require('./pipeline-config.cjs').loadConfig(cwd);
+      if (!loaded.valid) fail(`invalid pipeline config: ${loaded.error.message}`);
+      if (loaded.config.repo_remedies && Object.values(loaded.config.repo_remedies).some((entries) => entries.length)) {
+        fail('cannot identify the repository for declared remedies; check the project origin');
+      }
+    }
+    let candidate = '';
+    if (repo && s.pr) {
+      const { loadConfig, repoValue } = require('./pipeline-config.cjs');
+      const loaded = loadConfig(cwd);
+      if (!loaded.valid) fail(`invalid pipeline config: ${loaded.error.message}`);
+      if (!signatureFile && (repoValue(loaded, 'repo_remedies', repo) || []).length) {
+        fail('declared remedies require a current failure signature; pass --signature-file <failure-log>');
+      }
+      const found = signatureFile
+        ? remedy.match({ repo, signatureFile, graph })
+        : { match: null };
+      if (found.match) {
+        const { runBounded } = require('./command-runner.cjs');
+        const check = runBounded(process.execPath,
+          [path.join(__dirname, 'attempt-history.cjs'), ticket, '--json', '--graph', graph],
+          { timeoutMs: 30_000, maxBuffer: 1024 * 1024 });
+        if (check.status !== 0 || check.error) fail('cannot read remedy attempt budget');
+        const attempts = JSON.parse(check.stdout).attempts;
+        const budget = loaded.config.max_attempts;
+        candidate = found.match.workflow;
+        if (attempts < budget) {
+          fail(`declared remedy must run before escalation: repo-remedy.cjs run ${ticket} --repo ${repo} --pr ${s.pr} --entry ${found.match.entry_index}`);
+        }
+      }
+    }
+    if (!candidate) candidate = (reason.join(' ').match(/\b[A-Za-z0-9._-]+\.ya?ml\b/) || [])[0] || '';
+    const candidateNote = repo && s.pr
+      ? ` Candidate remedy: ${candidate || 'none declared'} (operator declaration or budget required).` : '';
+
     // The park and its journal entry are ONE act, in one locked section. Splitting
     // them is how T-16-05 ended up parked but uncounted — invisible to
     // pipeline-stats' escalation rate, the metric that would have shown this.
     mutate(cwd, (store) => {
       store.tickets[ticket] = {
-        reason: reason.join(' '),
+        reason: reason.join(' ') + candidateNote,
         fingerprint: parkFingerprint(s),
         // Which hash the line above is, so a reader upgrading over an existing
         // store compares each record with the rule it was written under. No
@@ -405,7 +451,7 @@ if (require.main === module) {
         event: 'escalation',
         ticket,
         pr: s.pr || null,
-        reason: reason.join(' '),
+        reason: reason.join(' ') + candidateNote,
         by: 'escalation-record',
       };
     });

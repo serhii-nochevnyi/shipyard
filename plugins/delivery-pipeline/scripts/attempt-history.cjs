@@ -121,7 +121,7 @@ if (!GRAPH_EXPLICIT && !fs.existsSync(path.join(GRAPH_DIR, 'tickets.json'))) {
 // else in the journal (reuse_scan, status_change, merge) describes the ticket's
 // PROGRESS, not an attempt at a fix, and rendering it here would read as one.
 const REPAIR_EVENTS = new Set([
-  'attempt', 'fix_round', 'escalation', 'plan_defect', 'flake', 'flake_rerun', 'flake_lift',
+  'attempt', 'remedy_dispatch', 'fix_round', 'escalation', 'plan_defect', 'flake', 'flake_rerun', 'flake_lift',
 ]);
 
 const JOURNAL = path.join(GRAPH_DIR, 'delivery-log.jsonl');
@@ -135,6 +135,9 @@ for (const line of raw) {
   try { rec = JSON.parse(line); } catch { continue; }
   if (!rec || typeof rec !== 'object') continue;
   if (rec.ticket !== ticket || !REPAIR_EVENTS.has(rec.event)) continue;
+  if (rec.event === 'remedy_dispatch' && (['pr', 'repo', 'entry_index', 'signature', 'workflow',
+    'ref', 'bot', 'inputs_digest', 'head', 'ts'].some((key) => rec[key] === undefined || rec[key] === '')
+      || !Number.isFinite(Date.parse(rec.ts)))) continue;
   events.push(rec);
 }
 
@@ -246,7 +249,8 @@ const detailed = details ? shown.map((event) => {
 //     would charge it and contradict the file that instructs it;
 //   * counted over `ordered`, never over `shown` — `--limit` decides what a
 //     fixer READS, and a display flag must not lower the backstop's input.
-const attempts = ordered.filter((e) => e.event === 'attempt' && e.outcome !== 'flake').length;
+const attempts = ordered.filter((e) => e.event === 'remedy_dispatch'
+  || (e.event === 'attempt' && e.outcome !== 'flake')).length;
 const nextN = attempts + 1;
 
 if (asJson) {
