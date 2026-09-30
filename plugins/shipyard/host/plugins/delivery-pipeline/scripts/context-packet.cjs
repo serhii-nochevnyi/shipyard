@@ -453,26 +453,12 @@ function buildContextPacket(options = {}) {
   if (!Number.isSafeInteger(requestedCeiling) || requestedCeiling < 1) fail('INVALID_CONTEXT_PACKET', 'tokenCeiling must be a positive integer');
   let estimate = estimateTokens(packetWithoutAccounting(packet));
   if (estimate > requestedCeiling && optionalRefs.length) {
-    const completeOptional = optionalRefs.map((ref) => ({ ref, content: ref.content }));
     for (const ref of optionalRefs) {
       delete ref.content;
       ref.content_omitted = true;
       ref.content_ref = { path: ref.path, sha256: ref.sha256, bytes: ref.bytes };
     }
-    const reducedEstimate = estimateTokens(packetWithoutAccounting(packet));
-    if (reducedEstimate <= requestedCeiling) {
-      // Do not claim an overflow when the indexed optional detail actually
-      // brings the packet under the ceiling. Keep the complete source and
-      // make the packet self-validating without a hidden omission.
-      for (const { ref, content } of completeOptional) {
-        ref.content = content;
-        delete ref.content_omitted;
-        delete ref.content_ref;
-      }
-      estimate = estimateTokens(packetWithoutAccounting(packet));
-    } else {
-      estimate = reducedEstimate;
-    }
+    estimate = estimateTokens(packetWithoutAccounting(packet));
   }
   const backend = options.backend === undefined ? 'unspecified' : text(options.backend, 'backend');
   packet.accounting = {
@@ -481,6 +467,7 @@ function buildContextPacket(options = {}) {
     estimated_bytes: Buffer.byteLength(JSON.stringify(packetWithoutAccounting(packet)), 'utf8'),
     soft_ceiling: requestedCeiling,
     overflow: estimate > requestedCeiling,
+    omitted_optional_refs: optionalRefs.filter((ref) => ref.content_omitted).map((ref) => ref.path),
   };
   if (estimate > requestedCeiling) {
     packet.overflow = {
@@ -567,10 +554,23 @@ function validateContextPacket(packet, expected = {}) {
     assertDigestRef(root, ref, 'required reference', false);
   }
   const overflow = packet.accounting && packet.accounting.overflow === true;
+  const omittedOptionalRefs = packet.accounting && packet.accounting.omitted_optional_refs;
+  if (omittedOptionalRefs !== undefined
+      && (!Array.isArray(omittedOptionalRefs) || omittedOptionalRefs.some((ref) => typeof ref !== 'string'))) {
+    fail('INVALID_CONTEXT_PACKET', 'packet omitted optional reference index is invalid');
+  }
+  const omittedPaths = new Set(omittedOptionalRefs || []);
   for (const ref of packet.optional_refs) {
     if (refs.has(ref && ref.path)) fail('INVALID_CONTEXT_PACKET', 'packet references must be unique');
     refs.add(ref && ref.path);
-    assertDigestRef(root, ref, 'optional reference', overflow);
+    const declaredOmitted = omittedPaths.has(ref && ref.path);
+    if (declaredOmitted !== Boolean(ref && ref.content_omitted)) {
+      fail('INVALID_CONTEXT_PACKET', 'packet optional reference omission does not match its index');
+    }
+    assertDigestRef(root, ref, 'optional reference', overflow || declaredOmitted);
+  }
+  if ([...omittedPaths].some((source) => !packet.optional_refs.some((ref) => ref && ref.path === source))) {
+    fail('INVALID_CONTEXT_PACKET', 'packet omitted optional reference index names an unknown source');
   }
   if (!object(packet.backlog) || !object(packet.backlog.inventory) || !Array.isArray(packet.backlog.inventory.items)
       || !Array.isArray(packet.backlog.selected_ids) || !Array.isArray(packet.backlog.selected)) {
