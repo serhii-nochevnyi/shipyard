@@ -12,7 +12,7 @@ const { transcriptEvidence } = require('./claude-test-evidence.cjs');
 const { ROLES, canonicalRequest, inlineReferences, trustedAgent, parseArguments, runDecomposition, recoverDecomposition } = require('../../plugins/delivery-pipeline/scripts/claude-decompose-host.cjs');
 const { createPlanningWriterLease } = require('../../plugins/delivery-pipeline/scripts/planning-writer-lease.cjs');
 const { createDurableRecorder } = require('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs');
-const { createClaudeCliLauncher, verifyCompletedClaudeLaunch } = require('../../plugins/delivery-pipeline/scripts/claude-runtime-host.cjs');
+const { createClaudeCliLauncher, createClaudeRuntimeHost, verifyCompletedClaudeLaunch } = require('../../plugins/delivery-pipeline/scripts/claude-runtime-host.cjs');
 
 function fixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-decompose-host-'));
@@ -551,6 +551,105 @@ test('a live Claude launcher saves evidence that verifies identically after the 
     assert.deepEqual(recovered.applicationEvidence.selection_evidence, live.applicationEvidence.selection_evidence);
     assert.deepEqual(recovered.applicationEvidence.gsd_agent_evidence, live.applicationEvidence.gsd_agent_evidence);
     assert.deepEqual(recovered.applicationEvidence.stream_evidence, live.applicationEvidence.stream_evidence);
+  } finally { f.clean(); }
+});
+
+test('fixture launcher and no-relaunch recovery produce identical authenticated boundary receipt fields for one dispatch', async () => {
+  const f = preparedPhaseFixture();
+  const store = path.join(f.root, 'same-dispatch-store');
+  const role = 'gsd-planner';
+  const nativeDir = path.join(f.config, 'projects', 'fixture-project');
+  fs.mkdirSync(nativeDir, { recursive: true });
+  let launches = 0;
+  let originalNativeFile;
+  try {
+    const deps = {
+      configRoot: f.config, store,
+      resolveDispatch: ({ runtime, role: boundaryRole, dispatch_id }) => ({
+        runtime, role: boundaryRole, dispatch_id, model: 'claude-opus-5-5', effort: 'medium',
+      }),
+      probe: () => ({ status: 'available', executable: 'claude-fixture', runtime_version: 'fixture' }),
+      runtimeHostFactory: (options) => createClaudeRuntimeHost({
+        ...options, env: { CLAUDE_CONFIG_DIR: f.config }, transcriptPollMs: 1,
+        spawn: (_executable, args) => {
+          launches++;
+          const sessionId = args[args.indexOf('--session-id') + 1];
+          const settings = JSON.parse(args[args.indexOf('--settings') + 1]);
+          const hookArgs = settings.hooks.SessionStart[0].hooks[0].args;
+          const startFile = hookArgs[hookArgs.indexOf('--evidence-file') + 1];
+          originalNativeFile = path.join(nativeDir, `${sessionId}.jsonl`);
+          // Native-shaped test fixtures only: this is not actual Claude CLI live evidence.
+          fs.writeFileSync(originalNativeFile, [
+            { type: 'agent-setting', sessionId, agentSetting: role },
+            { type: 'assistant', sessionId, effort: 'medium', agentSetting: role,
+              message: { role: 'assistant', model: 'claude-opus-5-5', content: 'completed' } },
+          ].map(JSON.stringify).join('\n') + '\n');
+          fs.writeFileSync(startFile, JSON.stringify({ hook_event_name: 'SessionStart', source: 'startup',
+            session_id: sessionId, transcript_path: originalNativeFile, agent_type: role,
+            cwd: fs.realpathSync(f.worktree) }), { mode: 0o600 });
+          fs.writeFileSync(path.join(f.phaseDir, '38-01-PLAN.md'), '# Completed plan\n');
+          const stream = [
+            { type: 'assistant', session_id: sessionId, message: { role: 'assistant', content: 'completed' } },
+            { type: 'result', session_id: sessionId, result: 'completed',
+              structured_output: { changed_paths: ['38-01-PLAN.md'] } },
+          ].map(JSON.stringify).join('\n') + '\n';
+          const child = new EventEmitter();
+          child.pid = 99999999;
+          child.stdout = new EventEmitter();
+          child.stderr = new EventEmitter();
+          child.stdin = { write() {}, end() {} };
+          process.nextTick(() => { child.stdout.emit('data', Buffer.from(stream)); child.emit('close', 0, null); });
+          return child;
+        },
+      }),
+    };
+    const live = await runDecomposition(request(f.worktree, role), deps);
+    assert.equal(launches, 1);
+    const recorder = createDurableRecorder(path.join(store, 'receipts'));
+    const originalReservation = recorder.getReservation(live.dispatch_id);
+    assert.ok(originalReservation?.reserved_at);
+    const liveRecord = recorder.getVerifiedRecord(live.dispatch_id);
+    assert.ok(liveRecord, 'launcher receipt must come from the authenticated boundary record');
+    assert.deepEqual(liveRecord.receipt, live.receipt);
+    const launchFile = path.join(store, 'launches', `${digestValue(live.dispatch_id)}.launch.json`);
+    const launch = JSON.parse(fs.readFileSync(launchFile, 'utf8'));
+    assert.equal(launch.native_transcript_path, originalNativeFile);
+    assert.equal(launch.completed.reservation_at, originalReservation.reserved_at);
+    const recordFile = path.join(store, 'receipts', `record-${digestValue(live.dispatch_id)}.json`);
+    // Model the post-completion, pre-record crash boundary using the completed fixture launch.
+    fs.rmSync(recordFile);
+    assert.deepEqual(recorder.getReservation(live.dispatch_id), { ...originalReservation, recorded: false });
+    fs.rmSync(originalNativeFile);
+    const recoveryDeps = { ...deps,
+      runtimeHostFactory: () => { throw new Error('recovery relaunched Claude'); },
+    };
+    const recovered = await recoverDecomposition(live.dispatch_id, recoveryDeps);
+    assert.equal(launches, 1, 'recovery must make zero additional launcher calls');
+    assert.equal(recovered.recovered, true);
+    assert.equal(live.recovered, undefined);
+    assert.equal(recovered.dispatch_id, live.dispatch_id);
+    assert.equal(recovered.run_id, live.run_id);
+    const recoveredRecord = recorder.getVerifiedRecord(live.dispatch_id);
+    assert.ok(recoveredRecord, 'recovered receipt must be authenticated by the boundary recorder');
+    assert.deepEqual(recoveredRecord.receipt, recovered.receipt);
+    assert.deepEqual(recoveredRecord.resolution, liveRecord.resolution);
+    assert.deepEqual(Object.keys(recovered.receipt).sort(), Object.keys(live.receipt).sort());
+    for (const field of Object.keys(live.receipt)) {
+      assert.deepEqual(recovered.receipt[field], live.receipt[field], `same-dispatch receipt field ${field}`);
+    }
+    assert.equal(recovered.receipt.dispatch_id, originalReservation.dispatch_id);
+    assert.equal(recovered.receipt.gsd_role, role);
+    assert.equal(recovered.receipt.applied_model, 'claude-opus-5-5');
+    assert.equal(recovered.receipt.applied_effort, 'medium');
+    assert.equal(recovered.receipt.selection_evidence.source, 'claude-session-assistant-transcript');
+    assert.equal(recovered.receipt.gsd_agent_evidence.session_start_agent_type, role);
+    assert.equal(recovered.receipt.gsd_agent_evidence.transcript_agent_setting, role);
+    assert.ok(recovered.receipt.stream_evidence.records >= 2);
+    assert.equal(recovered.receipt.transcript.sha256, live.receipt.transcript.sha256);
+    assert.equal(recovered.receipt.policy_hash, live.receipt.policy_hash);
+    assert.equal(recovered.receipt.policy_version, live.receipt.policy_version);
+    assert.equal(recovered.receipt.compliance_proof.dispatch_id, originalReservation.dispatch_id);
+    assert.equal(recorder.getReservation(live.dispatch_id).reserved_at, originalReservation.reserved_at);
   } finally { f.clean(); }
 });
 
