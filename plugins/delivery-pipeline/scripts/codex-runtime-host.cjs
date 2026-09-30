@@ -490,10 +490,12 @@ async function readNativeCodexChild(parentId, role, model, effort, agent, spawnE
         return freeze({
           ...evidence,
           last_agent_message: completionMessage(raw),
-          ...(options.task ? { task_relay: verifyTaskRelay(raw, options.task, spawnEvidence) } : {}),
+          ...(options.task ? { task_relay: verifyTaskRelay(raw, options.task, spawnEvidence,
+            options.allowMissingTaskFile === true) } : {}),
         });
       }
-      return options.task ? freeze({ ...evidence, task_relay: verifyTaskRelay(raw, options.task, spawnEvidence) }) : evidence;
+      return options.task ? freeze({ ...evidence, task_relay: verifyTaskRelay(raw, options.task, spawnEvidence,
+        options.allowMissingTaskFile === true) }) : evidence;
     }
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
@@ -627,7 +629,12 @@ function toolOutput(item) {
   return Array.isArray(item.output) ? messageText({ content: item.output }) : '';
 }
 
-function verifyTaskRelay(childRaw, task, relay = {}) {
+function verifyTaskRelay(childRaw, task, relay = {}, allowMissingTaskFile = false) {
+  if (!object(task) || typeof task.path !== 'string' || !path.isAbsolute(task.path)
+      || path.normalize(task.path) !== task.path || !Number.isSafeInteger(task.bytes) || task.bytes < 0
+      || !/^[a-f0-9]{64}$/.test(task.sha256 || '')) {
+    fail('TASK_RELAY_UNVERIFIED', 'native child relay has an invalid task-file binding');
+  }
   const missing = [];
   let parentBound = false;
   let delivered = false;
@@ -662,10 +669,23 @@ function verifyTaskRelay(childRaw, task, relay = {}) {
     if (!firstCall || !readsExactPath(toolCommand(firstCall), task.path)) missing.push('first tool call reading TASK_FILE');
     else if (!String(outputs.get(firstCall.call_id) || '').includes(task.sha256)) missing.push('TASK_SHA256 in child tool output');
   }
-  let current = null;
-  try { current = crypto.createHash('sha256').update(fs.readFileSync(task.path)).digest('hex'); }
-  catch (_) {}
-  if (current !== task.sha256) missing.push('unchanged task file');
+  let taskFileMissing = false;
+  try {
+    const stat = fs.lstatSync(task.path);
+    if (stat.isSymbolicLink() || !stat.isFile() || (stat.mode & 0o077) !== 0) {
+      missing.push('private regular task file');
+    } else {
+      const bytes = fs.readFileSync(task.path);
+      if (bytes.length !== task.bytes
+          || crypto.createHash('sha256').update(bytes).digest('hex') !== task.sha256) {
+        missing.push('unchanged task file');
+      }
+    }
+  } catch (error) {
+    if (error && error.code === 'ENOENT') taskFileMissing = true;
+    else throw error;
+  }
+  if (taskFileMissing && !allowMissingTaskFile) missing.push('unchanged task file');
   if (missing.length) {
     fail('TASK_RELAY_UNVERIFIED', 'native child relay is missing ' + missing.join(', '), { missing });
   }
@@ -920,7 +940,6 @@ async function verifyCompletedNativeLaunch(input = {}) {
   const selection = object(input.selection) ? input.selection : {};
   const model = text(selection.model, 'model', 256);
   const effort = text(selection.effort || selection.reasoning_effort, 'effort', 32);
-  const recovery = input.allowTimedOutWait === true;
   const timing = {
     ...(input.waitMs === undefined ? {} : { waitMs: input.waitMs }),
     ...(input.now === undefined ? {} : { now: input.now }),
@@ -933,7 +952,7 @@ async function verifyCompletedNativeLaunch(input = {}) {
   const child = await readNativeCodexChild(input.session_id, agent.role, model, effort, agent, spawnEvidence, {
     env, ...timing, startedAt: input.startedAt,
     includeCompletion: true,
-    ...(!recovery && input.task ? { task: input.task } : {}),
+    ...(input.task ? { task: input.task, allowMissingTaskFile: input.allowMissingTaskFile === true } : {}),
   });
   // @invariant: timed_out describes the parent wait; only the child's bound task_complete proves completion.
   if (child.parent_thread_id !== input.session_id || child.agent_role !== agent.role
@@ -1107,6 +1126,7 @@ function createCodexCliLauncher(options = {}) {
         agent_file: agent.file,
         agent_file_digest: agent.sha256,
         agent_instructions_digest: agent.instructions_sha256,
+        task_relay: task,
       } : {}),
       command_digest: commandDigest, command: { executable, args: [...args] },
       sandbox_evidence: {
