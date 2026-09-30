@@ -248,9 +248,9 @@ function readLaunch(store, dispatchId) {
 }
 
 function pidAlive(pid) {
-  if (!Number.isSafeInteger(pid) || pid <= 0) return false;
+  if (!Number.isSafeInteger(pid) || pid <= 0) return true;
   try { process.kill(pid, 0); return true; }
-  catch (error) { return Boolean(error && error.code === 'EPERM'); }
+  catch (error) { return !error || error.code !== 'ESRCH'; }
 }
 
 function fileDigest(file) {
@@ -280,6 +280,28 @@ function foreignPhaseEdits(directory, declaredAbsolutePaths, writerLease, snapsh
   const declared = new Set(declaredAbsolutePaths.map((full) => path.relative(directory, full).split(path.sep).join('/')));
   const { changed, lease: currentLease } = writerLease.changedSince(snapshot);
   return { foreign: changed.filter((relPath) => !declared.has(relPath)), currentLease };
+}
+
+function validateJudgmentWriter(scope, directory, writerLease, leaseHandle, snapshot, launch) {
+  writerLease.assertFence({ token: leaseHandle.token, epoch: leaseHandle.epoch,
+    base_revision: git(scope.worktree, 'rev-parse', 'HEAD') });
+  const completed = launch.completed;
+  if (!object(completed) || !Array.isArray(completed.declared_paths)
+      || !Array.isArray(completed.changed_paths) || !object(completed.artifact_digests)) {
+    refuse('RECOVERY_EVIDENCE_INCOMPLETE', 'typed Claude dispatch lacks its original completed checkpoint');
+  }
+  const declared = completed.declared_paths;
+  const { changed, lease } = writerLease.changedSince(snapshot);
+  const foreign = changed.filter((item) => !declared.includes(item));
+  if (foreign.length) {
+    refuse('FOREIGN_EDIT', `phase directory path(s) changed outside this run's own paths: ${foreign.join(', ')} `
+      + `(lease owner ${lease.owner}, epoch ${lease.epoch})`);
+  }
+  if (!sameValue(changed, declared) || !sameValue(completed.changed_paths, declared)
+      || !sameValue(Object.keys(completed.artifact_digests).sort(), declared)
+      || declared.some((item) => fileDigest(path.join(directory, item)) !== completed.artifact_digests[item])) {
+    refuse('RECOVERY_ARTIFACT_ALTERED', 'completed Claude artifact bytes changed before recorder mutation');
+  }
 }
 
 async function runDecomposition(request, dependencies = {}) {
@@ -393,7 +415,12 @@ async function runDecomposition(request, dependencies = {}) {
           dispatchId, requireGsdRole: true,
           agentOptions: { session_id: sessionId },
           context: { ticket: scope.ticket, phase: scope.phase, run_id: runId,
-            worktreePath: scope.worktree, runtime: 'claude', provider: 'anthropic' },
+            worktreePath: scope.worktree, runtime: 'claude', provider: 'anthropic',
+            preRecordValidation: () => typeof dependencies.preRecordValidation === 'function'
+              ? dependencies.preRecordValidation({ scope, phaseDir, writerLease, leaseHandle,
+                snapshot: preLaunchSnapshot, launchRecord })
+              : validateJudgmentWriter(scope, phaseDir, writerLease, leaseHandle,
+                preLaunchSnapshot, launchRecord) },
         });
         if (!receiptCompliant(output, scope, resolution)) {
           refuse('NONCOMPLIANT_RECEIPT', 'typed GSD dispatch has no compliant exact-role receipt');
@@ -554,6 +581,8 @@ async function recoverDecomposition(dispatchId, dependencies = {}) {
     }
     const changed = writerLease.changedSince(launch.tree_snapshot).changed;
     const declared = declaredChanges(verified.result, phaseDir);
+    const foreign = changed.filter((item) => !declared.includes(item));
+    if (foreign.length) refuse('FOREIGN_EDIT', `phase directory path(s) changed outside the original Claude declaration: ${foreign.join(', ')}`);
     const savedPaths = Object.keys(launch.completed.artifact_digests).sort();
     if (changed.length !== declared.length || changed.some((item, index) => item !== declared[index])
         || !sameValue(launch.completed.declared_paths, declared)
@@ -580,6 +609,8 @@ async function recoverDecomposition(dispatchId, dependencies = {}) {
       signals: scope.signals, dispatch_id: dispatchId }, {
       ticket: scope.ticket, phase: scope.phase, run_id: launch.run_id,
       worktreePath: scope.worktree, runtime: 'claude', provider: 'anthropic',
+      preRecordValidation: () => validateJudgmentWriter(
+        scope, phaseDir, writerLease, leaseHandle, launch.tree_snapshot, launch),
     });
     const output = { result: verified.result, receipt: record.receipt };
     if (!receiptCompliant(output, scope, resolution)) {

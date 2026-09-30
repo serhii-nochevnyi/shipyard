@@ -131,10 +131,27 @@ function fixture() {
   };
   return {
     root, stateRoot, codexHome, agentDir, scope, host, calls, researchDigest, state,
-    create: (over = {}) => createCodexDecomposeHost({
-      scope, host, env: { CODEX_HOME: codexHome }, agentDir, sealRoot: path.join(stateRoot, 'sealed'),
-      agentManifest: path.join(agentDir, '.shipyard-manifest.json'), ...over,
-    }),
+    create: (over = {}) => {
+      const phaseDir = path.join(root, '.planning', 'phases', '38-codex-decompose');
+      const writerLease = over.lease?.writerLease || createPlanningWriterLease({
+        worktree: root, phaseDir, stateRoot: path.join(stateRoot, 'stub-writer'),
+      });
+      const handle = over.lease ? null : writerLease.acquire({ owner: 'stub-host', base_revision: headRevision(root) });
+      const lease = over.lease || { writerLease, token: handle.token, epoch: handle.epoch,
+        snapshot: writerLease.snapshotTree() };
+      const validateStubWriter = ({ role }) => {
+        writerLease.assertFence({ token: lease.token, epoch: lease.epoch, base_revision: headRevision(root) });
+        const own = role === 'gsd-phase-researcher' ? ['38-RESEARCH.md']
+          : role === 'gsd-planner' ? ['38-01-PLAN.md'] : [];
+        const foreign = writerLease.changedSince(lease.snapshot).changed.filter((item) => !own.includes(item));
+        if (foreign.length) throw Object.assign(new Error(`foreign phase edit: ${foreign.join(', ')}`), { code: 'FOREIGN_EDIT' });
+      };
+      return createCodexDecomposeHost({
+        scope, host, env: { CODEX_HOME: codexHome }, agentDir, sealRoot: path.join(stateRoot, 'sealed'),
+        agentManifest: path.join(agentDir, '.shipyard-manifest.json'), lease,
+        preRecordValidation: validateStubWriter, ...over,
+      });
+    },
     clean: () => {
       fs.rmSync(root, { recursive: true, force: true });
       fs.rmSync(stateRoot, { recursive: true, force: true });
@@ -849,6 +866,7 @@ test('a lease takeover before sealing refuses with WRITER_FENCED and seals nothi
       lease: { writerLease, token: leaseHandle.token, epoch: leaseHandle.epoch, snapshot },
     }).run({ gsd_role: 'gsd-planner', prompt: 'Plan.' }), (error) => error.code === 'WRITER_FENCED');
     assert.equal(fs.existsSync(path.join(f.stateRoot, 'sealed', 'decomposition-index')), false);
+    assert.equal(fs.readdirSync(path.join(f.stateRoot, 'receipts')).filter((name) => name.startsWith('record-')).length, 0);
   } finally { f.clean(); }
 });
 
@@ -870,7 +888,33 @@ test('a foreign edit to the phase directory mid-run refuses with FOREIGN_EDIT, n
     }).run({ gsd_role: 'gsd-planner', prompt: 'Plan.' }),
       (error) => error.code === 'FOREIGN_EDIT' && /stray\.md/.test(error.message));
     assert.equal(fs.existsSync(path.join(f.stateRoot, 'sealed', 'decomposition-index')), false);
+    assert.equal(fs.readdirSync(path.join(f.stateRoot, 'receipts')).filter((name) => name.startsWith('record-')).length, 0);
   } finally { f.clean(); }
+});
+
+test('Codex live judgment roles gate takeover and foreign edits before recorder files exist', async () => {
+  for (const role of ['gsd-phase-researcher', 'gsd-planner', 'gsd-plan-checker']) {
+    for (const refusal of ['WRITER_FENCED', 'FOREIGN_EDIT']) {
+      const f = fixture();
+      try {
+        const phaseDir = path.join(f.root, '.planning', 'phases', '38-codex-decompose');
+        const original = createPlanningWriterLease({ worktree: f.root, phaseDir,
+          stateRoot: path.join(f.stateRoot, `role-gate-${role}-${refusal}`) });
+        const handle = original.acquire({ owner: 'role-gate', base_revision: headRevision(f.root) });
+        const writerLease = refusal === 'WRITER_FENCED' ? { ...original,
+          assertFence() { throw Object.assign(new Error('writer taken over'), { code: 'WRITER_FENCED' }); },
+        } : original;
+        const launch = f.host.launchTypedGsd;
+        f.host.launchTypedGsd = async (selection, context) => {
+          if (refusal === 'FOREIGN_EDIT') fs.writeFileSync(path.join(phaseDir, 'stray.md'), 'foreign\n');
+          return launch(selection, context);
+        };
+        await assert.rejects(f.create({ lease: { writerLease, token: handle.token, epoch: handle.epoch,
+          snapshot: original.snapshotTree() } }).run({ gsd_role: role, prompt: 'Plan.' }), { code: refusal });
+        assert.equal(fs.readdirSync(path.join(f.stateRoot, 'receipts')).filter((name) => name.startsWith('record-')).length, 0);
+      } finally { f.clean(); }
+    }
+  }
 });
 
 test('the planning writer lease releases on success and on failure so a following run acquires immediately', async () => {
@@ -918,6 +962,32 @@ test('the planning writer lease releases on success and on failure so a followin
   } finally { f.clean(); }
 });
 
+test('post-acquire snapshot and heartbeat setup failures release the original writer lease', async () => {
+  for (const failure of ['snapshot', 'heartbeat']) {
+    const f = fixture();
+    try {
+      const file = path.join(f.root, 'cli-request.json');
+      fs.writeFileSync(file, JSON.stringify({ scope: f.scope, gsd_role: 'gsd-planner', prompt: 'Plan.' }));
+      const phaseDir = path.join(f.root, '.planning', 'phases', '38-codex-decompose');
+      const realLease = createPlanningWriterLease({ worktree: f.root, phaseDir,
+        stateRoot: path.join(f.stateRoot, 'post-acquire-writer') });
+      const writerLease = { ...realLease,
+        snapshotTree: failure === 'snapshot'
+          ? () => { throw Object.assign(new Error('snapshot failed'), { code: 'SNAPSHOT_FAILED' }); }
+          : realLease.snapshotTree,
+      };
+      await assert.rejects(runCli(['--args-file', file], { write() {} }, {
+        testStateRoot: f.stateRoot, env: { CODEX_HOME: f.codexHome }, writerLease,
+        heartbeat: failure === 'heartbeat'
+          ? { start() { throw Object.assign(new Error('heartbeat failed'), { code: 'HEARTBEAT_FAILED' }); } }
+          : undefined,
+      }), { code: failure === 'snapshot' ? 'SNAPSHOT_FAILED' : 'HEARTBEAT_FAILED' });
+      const next = realLease.acquire({ owner: 'next-run', base_revision: headRevision(f.root) });
+      assert.ok(next.token);
+    } finally { f.clean(); }
+  }
+});
+
 function timedOutWaits(raw) {
   return raw.split('\n').filter(Boolean).map((line) => {
     const record = JSON.parse(line);
@@ -930,7 +1000,8 @@ function timedOutWaits(raw) {
 }
 
 async function recoverySetup(gsdRole, {
-  complete = true, crashBeforeCompletionCallback = false, crashBeforeTranscriptWrite = false,
+  complete = true, crashBeforeCompletionCallback = false, crashBeforeNativeCheckpoint = false,
+  crashBeforeTranscriptWrite = false,
   artifactPaths, writeArtifactPaths, preexistingResearchBaseline = false,
 } = {}) {
   const f = fixture();
@@ -968,9 +1039,21 @@ async function recoverySetup(gsdRole, {
     scope: f.scope, capabilities, recorder, env, transcriptDir, spawn,
     probe: { status: 'available', executable: 'codex', runtime_version: '0.157.1', capabilities },
   });
+  let checkpointFailpointReached = false;
   const runtimeHost = Object.freeze({
     ...nativeHost,
     async launchTypedGsd(selection, context) {
+      if (crashBeforeNativeCheckpoint) {
+        return nativeHost.launchTypedGsd(selection, {
+          ...context,
+          onNativeCompleted() {
+            checkpointFailpointReached = true;
+            throw Object.assign(new Error('simulated host death before native completion checkpoint'), {
+              code: 'SIMULATED_HOST_DEATH',
+            });
+          },
+        });
+      }
       if (crashBeforeTranscriptWrite) {
         let relay = null;
         let taskBytes = null;
@@ -1050,8 +1133,8 @@ async function recoverySetup(gsdRole, {
     probe: { status: 'available', executable: 'codex', runtime_version: '0.157.1', capabilities },
   };
   const spawned = [];
-  const recover = (id = dispatchId) => runCli(['recover', '--dispatch', id, '--args-file', file], { write() {} },
-    { ...base, spawn: (...args) => { spawned.push(args); throw new Error('recovery must not spawn'); } });
+  const recover = (id = dispatchId, overrides = {}) => runCli(['recover', '--dispatch', id, '--args-file', file], { write() {} },
+    { ...base, ...overrides, spawn: (...args) => { spawned.push(args); throw new Error('recovery must not spawn'); } });
   const writerLeaseFile = path.join(writerStateRoot, writerLease.key, 'lease.json');
   const setLeasePid = (pid) => {
     const current = JSON.parse(fs.readFileSync(writerLeaseFile, 'utf8'));
@@ -1060,7 +1143,8 @@ async function recoverySetup(gsdRole, {
   };
   return {
     f, fixtureData, dispatchId, crashError, expectedSessionId: fixtureData.parent, runtimeSpawnCalls,
-    recorder, receipts, recordFile, hostState, spawned, recover, file, writerLeaseFile, setLeasePid,
+    recorder, receipts, recordFile, hostState, writerLease, spawned, recover, file, writerLeaseFile, setLeasePid,
+    checkpointFailpointReached,
   };
 }
 
@@ -1168,7 +1252,7 @@ test('planner refuses an artifact path that escapes its phase', async () => {
   } finally { setup.f.clean(); }
 });
 
-test('recover rebuilds a completed dispatch when the host dies before its completion callback', async () => {
+test('recover rebuilds a completed dispatch after the native checkpoint and before the final callback', async () => {
   const setup = await recoverySetup('gsd-planner', { crashBeforeCompletionCallback: true });
   try {
     assert.equal(setup.crashError.code, 'SIMULATED_HOST_DEATH');
@@ -1186,6 +1270,22 @@ test('recover rebuilds a completed dispatch when the host dies before its comple
       record.session_started.runtime_launch.task_relay);
     assert.equal(setup.spawned.length, 0);
     assert.equal(setup.recorder.getReservation(setup.dispatchId).recorded, true);
+  } finally { setup.f.clean(); }
+});
+
+test('pre-checkpoint host death refuses recovery with zero durable recorder records', async () => {
+  const setup = await recoverySetup('gsd-planner', { crashBeforeNativeCheckpoint: true });
+  try {
+    assert.ok(setup.crashError);
+    assert.equal(setup.checkpointFailpointReached, true);
+    const launchDir = path.join(setup.hostState, 'launches');
+    const launch = JSON.parse(fs.readFileSync(path.join(launchDir, fs.readdirSync(launchDir)[0]), 'utf8'));
+    assert.equal(launch.completed, undefined);
+    setup.setLeasePid(2147483647);
+    await assert.rejects(setup.recover(), { code: 'RECOVERY_EVIDENCE_INCOMPLETE' });
+    assert.equal(fs.readdirSync(setup.receipts).filter((name) => name.startsWith('record-')).length, 0);
+    assert.equal(setup.recorder.getReservation(setup.dispatchId).recorded, false);
+    assert.equal(setup.spawned.length, 0);
   } finally { setup.f.clean(); }
 });
 
@@ -1352,14 +1452,30 @@ const refusals = [
   ['artifact digest changed', 'RECOVERY_ARTIFACT_ALTERED', (s) => {
     fs.appendFileSync(path.join(s.f.root, '.planning', 'phases', '38-codex-decompose', '38-01-PLAN.md'), 'tampered\n');
   }],
-  ['undeclared phase path changed', 'RECOVERY_ARTIFACT_ALTERED', (s) => {
+  ['undeclared phase path changed', 'FOREIGN_EDIT', (s) => {
     fs.writeFileSync(path.join(s.f.root, '.planning', 'phases', '38-codex-decompose', 'stray.md'), 'not declared\n');
   }],
   ['live child pid', 'RECOVERY_UNKNOWN_LIVE', (s) => {
     const dir = path.join(s.hostState, 'launches');
     const file = path.join(dir, fs.readdirSync(dir)[0]);
     const record = JSON.parse(fs.readFileSync(file, 'utf8'));
+    record.process_spawned.pid = process.pid;
+    record.session_started.process_id = process.pid;
     record.completed.pid = process.pid;
+    fs.writeFileSync(file, JSON.stringify(record), { mode: 0o600 });
+  }],
+  ['missing original pid', 'RECOVERY_EVIDENCE_INCOMPLETE', (s) => {
+    const dir = path.join(s.hostState, 'launches');
+    const file = path.join(dir, fs.readdirSync(dir)[0]);
+    const record = JSON.parse(fs.readFileSync(file, 'utf8'));
+    delete record.process_spawned;
+    fs.writeFileSync(file, JSON.stringify(record), { mode: 0o600 });
+  }],
+  ['invalid original pid', 'RECOVERY_EVIDENCE_INCOMPLETE', (s) => {
+    const dir = path.join(s.hostState, 'launches');
+    const file = path.join(dir, fs.readdirSync(dir)[0]);
+    const record = JSON.parse(fs.readFileSync(file, 'utf8'));
+    record.process_spawned.pid = 0;
     fs.writeFileSync(file, JSON.stringify(record), { mode: 0o600 });
   }],
   ['original reservation changed', 'RECOVERY_EVIDENCE_INCOMPLETE', (s) => {
@@ -1382,11 +1498,63 @@ test('recover refuses ' + name + ' with ' + code + ' and records nothing', async
     mutate(setup);
     await assert.rejects(setup.recover(), (error) => error.code === code);
     assert.equal(fs.existsSync(setup.recordFile), false);
+    assert.equal(fs.readdirSync(setup.receipts).filter((name) => name.startsWith('record-')).length, 0);
     assert.equal(createDurableRecorder(setup.receipts).getReservation(setup.dispatchId).recorded, false);
     assert.equal(setup.spawned.length, 0);
   } finally { setup.f.clean(); }
 });
 }
+
+test('unknown native pid probe refuses recovery with zero durable recorder records', async () => {
+  const setup = await recoverySetup('gsd-planner');
+  const originalKill = process.kill;
+  try {
+    setup.setLeasePid(2147483647);
+    const dir = path.join(setup.hostState, 'launches');
+    const launch = JSON.parse(fs.readFileSync(path.join(dir, fs.readdirSync(dir)[0]), 'utf8'));
+    process.kill = (pid, signal) => {
+      if (pid === launch.process_spawned.pid) throw Object.assign(new Error('probe unavailable'), { code: 'EACCES' });
+      return originalKill(pid, signal);
+    };
+    await assert.rejects(setup.recover(), { code: 'RECOVERY_UNKNOWN_LIVE' });
+    assert.equal(fs.readdirSync(setup.receipts).filter((name) => name.startsWith('record-')).length, 0);
+    assert.equal(setup.recorder.getReservation(setup.dispatchId).recorded, false);
+  } finally {
+    process.kill = originalKill;
+    setup.f.clean();
+  }
+});
+
+test('Codex recovery gates every judgment role at the recorder boundary', async () => {
+  for (const role of ['gsd-phase-researcher', 'gsd-planner', 'gsd-plan-checker']) {
+    for (const refusal of ['WRITER_FENCED', 'FOREIGN_EDIT']) {
+      const setup = await recoverySetup(role);
+      try {
+        setup.setLeasePid(2147483647);
+        let fenceChecks = 0;
+        let changeChecks = 0;
+        const original = setup.writerLease;
+        const writerLease = { ...original,
+          assertFence(input) {
+            if (refusal === 'WRITER_FENCED' && ++fenceChecks === 2) {
+              throw Object.assign(new Error('writer taken over before record'), { code: 'WRITER_FENCED' });
+            }
+            return original.assertFence(input);
+          },
+          changedSince(snapshot) {
+            if (refusal === 'FOREIGN_EDIT' && ++changeChecks === 3) {
+              fs.writeFileSync(path.join(setup.f.root, '.planning', 'phases', '38-codex-decompose', 'stray.md'), 'foreign\n');
+            }
+            return original.changedSince(snapshot);
+          },
+        };
+        await assert.rejects(setup.recover(setup.dispatchId, { writerLease }), { code: refusal });
+        assert.equal(fs.readdirSync(setup.receipts).filter((name) => name.startsWith('record-')).length, 0);
+        assert.equal(setup.recorder.getReservation(setup.dispatchId).recorded, false);
+      } finally { setup.f.clean(); }
+    }
+  }
+});
 
 test('a host killed before the child completes refuses recovery with RECOVERY_EVIDENCE_INCOMPLETE', async () => {
   const setup = await recoverySetup('gsd-planner', { complete: false });

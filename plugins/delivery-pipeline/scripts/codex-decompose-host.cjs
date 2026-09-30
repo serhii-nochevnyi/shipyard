@@ -202,7 +202,11 @@ function writeLaunchRecord(directory, record) {
   const temporary = file + '.' + process.pid + '.' + crypto.randomBytes(8).toString('hex') + '.tmp';
   try {
     fs.writeFileSync(temporary, JSON.stringify({ schema: LAUNCH_SCHEMA, version: 1, ...record }) + '\n', { mode: 0o600 });
+    const handle = fs.openSync(temporary, 'r');
+    try { fs.fsyncSync(handle); } finally { fs.closeSync(handle); }
     fs.renameSync(temporary, file);
+    const directoryHandle = fs.openSync(directory, 'r');
+    try { fs.fsyncSync(directoryHandle); } finally { fs.closeSync(directoryHandle); }
   } finally {
     try { fs.unlinkSync(temporary); } catch (_) {}
   }
@@ -479,69 +483,10 @@ function verifyRuntimeEvidence(record, scope, binding, transcriptDir) {
   }
 }
 
-function runtimeEvidenceFromSessionStart(sessionStarted, scope, binding, transcriptDir, verified) {
-  const sessionId = sessionStarted.session_id;
-  const expectedTranscript = runtimeTranscriptPath(transcriptDir, scope, sessionId);
-  let stat;
-  try { stat = fs.lstatSync(expectedTranscript); }
-  catch (_) { fail('RECOVERY_EVIDENCE_MISSING', 'the host transcript is missing for the session-start record'); }
-  if (!stat.isFile() || stat.isSymbolicLink() || (stat.mode & 0o077) !== 0) {
-    fail('RECOVERY_EVIDENCE_MISSING', 'the host transcript is not a private regular file');
-  }
-  let raw;
-  try { raw = fs.readFileSync(expectedTranscript, 'utf8'); }
-  catch (_) { fail('RECOVERY_EVIDENCE_MISSING', 'the host transcript cannot be read for the session-start record'); }
-  const after = fs.lstatSync(expectedTranscript);
-  if (after.size !== stat.size || after.mtimeMs !== stat.mtimeMs || Buffer.byteLength(raw, 'utf8') !== after.size) {
-    fail('RECOVERY_ARTIFACT_ALTERED', 'the host transcript changed while recovery was reading it');
-  }
-  let stream;
-  try { stream = parseCodexStream(raw); }
-  catch (error) { fail('RECOVERY_EVIDENCE_INCOMPLETE', 'the host transcript cannot be parsed: ' + error.message); }
-  if (stream.session_id !== sessionId) {
-    fail('RECOVERY_ARTIFACT_ALTERED', 'the host transcript does not belong to the recorded session');
-  }
-  const runtimeLaunch = sessionStarted.runtime_launch;
-  return {
-    schema: 'shipyard.codex-runtime-evidence.v1',
-    version: 1,
-    runtime: 'codex',
-    provider: 'openai',
-    run_id: scope.run_id,
-    ticket: scope.ticket,
-    phase: scope.phase,
-    worktree: scope.worktree,
-    dispatch_id: binding.dispatch_id,
-    session_id: sessionId,
-    ...(Number.isSafeInteger(sessionStarted.process_id) ? { process_id: sessionStarted.process_id } : {}),
-    command_digest: runtimeLaunch.command_digest,
-    command: runtimeLaunch.command,
-    sandbox_evidence: runtimeLaunch.sandbox_evidence,
-    selection_source: runtimeLaunch.selection_source,
-    applied_model: runtimeLaunch.applied_model,
-    applied_effort: runtimeLaunch.applied_effort,
-    observed_model: runtimeLaunch.observed_model,
-    observed_effort: runtimeLaunch.observed_effort,
-    native_session_evidence: verified.native_session_evidence,
-    native_child_evidence: verified.native_child_evidence,
-    stream_evidence: {
-      format: 'jsonl',
-      records: stream.records.length,
-      turns: stream.turns,
-      usage_records: stream.usage_records,
-    },
-    transcript: {
-      path: expectedTranscript,
-      bytes: after.size,
-      sha256: sha256Text(raw),
-    },
-  };
-}
-
 function pidAlive(pid) {
-  if (!Number.isSafeInteger(pid) || pid <= 0) return false;
+  if (!Number.isSafeInteger(pid) || pid <= 0) return true;
   try { process.kill(pid, 0); return true; }
-  catch (error) { return Boolean(error && error.code === 'EPERM'); }
+  catch (error) { return !error || error.code !== 'ESRCH'; }
 }
 
 function recoverAgent(role, options) {
@@ -658,11 +603,18 @@ function createCodexDecomposeHost(options = {}) {
             launched_at: new Date().toISOString(),
           } : null;
           if (launchRecord) writeLaunchRecord(options.launchDir, launchRecord);
+          const captureProcessSpawned = launchRecord ? (pid) => {
+            if (!Number.isSafeInteger(pid) || pid <= 0) {
+              fail('RUNTIME_EVIDENCE_MISSING', 'native process has no positive original pid');
+            }
+            writeLaunchRecord(options.launchDir, { ...launchRecord, process_spawned: { pid } });
+          } : undefined;
           let startedSession = null;
           const captureSessionStarted = launchRecord ? (started) => {
             const runtimeLaunch = started && started.runtime_launch;
             if (!object(started) || typeof started.session_id !== 'string' || !started.session_id
-                || (started.process_id !== null && !Number.isSafeInteger(started.process_id))
+                || !Number.isSafeInteger(started.process_id) || started.process_id <= 0
+                || readLaunchRecord(options.launchDir, context.dispatch_id).process_spawned?.pid !== started.process_id
                 || !object(runtimeLaunch) || runtimeLaunch.run_id !== scope.run_id
                 || runtimeLaunch.ticket !== scope.ticket || runtimeLaunch.phase !== scope.phase
                 || runtimeLaunch.worktree !== scope.worktree
@@ -678,12 +630,14 @@ function createCodexDecomposeHost(options = {}) {
               fail('RUNTIME_EVIDENCE_INVALID', 'native session start reported conflicting identities');
             }
             startedSession = { session_id: started.session_id, process_id: started.process_id, runtime_launch: runtimeLaunch };
-            writeLaunchRecord(options.launchDir, { ...launchRecord, session_started: startedSession });
+            writeLaunchRecord(options.launchDir, {
+              ...readLaunchRecord(options.launchDir, context.dispatch_id), session_started: startedSession,
+            });
           } : undefined;
           const completedRecordFrom = (completed) => {
             const runtimeEvidence = completed && completed.runtime_evidence;
             if (!startedSession || !object(completed) || completed.session_id !== startedSession.session_id
-                || (completed.process_id !== null && !Number.isSafeInteger(completed.process_id))
+                || !Number.isSafeInteger(completed.process_id) || completed.process_id <= 0
                 || completed.process_id !== startedSession.process_id || !object(runtimeEvidence)
                 || runtimeEvidence.session_id !== startedSession.session_id
                 || runtimeEvidence.run_id !== scope.run_id || runtimeEvidence.ticket !== scope.ticket
@@ -721,6 +675,8 @@ function createCodexDecomposeHost(options = {}) {
               child_sha256: runtimeEvidence.native_child_evidence.sha256,
               completion_message_sha256: sha256Text(completed.last_agent_message),
               parent_wait_timed_out: completed.spawn_evidence.timed_out,
+              declared_paths: declared,
+              changed_paths: Object.keys(digests).sort(),
               artifact_digests: digests,
               runtime_evidence: runtimeEvidence,
             };
@@ -729,7 +685,7 @@ function createCodexDecomposeHost(options = {}) {
           const captureNativeCompleted = launchRecord ? (completed) => {
             const completedRecord = completedRecordFrom(completed);
             writeLaunchRecord(options.launchDir, {
-              ...launchRecord,
+              ...readLaunchRecord(options.launchDir, context.dispatch_id),
               session_started: startedSession,
               completed: { ...completedRecord, transcript_saved: false },
             });
@@ -766,6 +722,7 @@ function createCodexDecomposeHost(options = {}) {
             : await runtimeHost.launchTypedGsd(selected, {
               ...context,
               prompt: launchRecord ? completionInstructions(prompt, request.gsd_role) : prompt,
+              ...(captureProcessSpawned ? { onProcessSpawned: captureProcessSpawned } : {}),
               ...(captureSessionStarted ? { onSessionStarted: captureSessionStarted } : {}),
               ...(captureNativeCompleted ? { onNativeCompleted: captureNativeCompleted } : {}),
               ...(captureTranscriptWritten ? { onTranscriptWritten: captureTranscriptWritten } : {}),
@@ -822,6 +779,35 @@ function createCodexDecomposeHost(options = {}) {
           runtime: 'codex',
           provider: 'openai',
           sandbox_mode: chosen.sandbox,
+          preRecordValidation: ({ dispatch_id: recordedDispatchId }) => {
+            if (typeof options.preRecordValidation === 'function') {
+              return options.preRecordValidation({ lease: leaseCtx, scope, role: request.gsd_role,
+                dispatch_id: recordedDispatchId });
+            }
+            if (!leaseCtx || !options.launchDir) fail('WRITER_FENCED', 'typed dispatch has no writer lease checkpoint');
+            const durable = readLaunchRecord(options.launchDir, recordedDispatchId);
+            const completed = durable.completed;
+            if (!object(completed) || !object(completed.artifact_digests)
+                || !Array.isArray(completed.declared_paths) || !Array.isArray(completed.changed_paths)
+                || !object(durable.process_spawned)
+                || durable.process_spawned.pid !== durable.session_started?.process_id
+                || completed.pid !== durable.process_spawned.pid) {
+              fail('RECOVERY_EVIDENCE_INCOMPLETE', 'typed dispatch lacks its original process and completion checkpoint');
+            }
+            const directory = phaseDirectory(scope.worktree, scope.phase);
+            const declared = Object.keys(completed.artifact_digests).sort();
+            if (canonicalJson(declared) !== canonicalJson(completed.declared_paths)
+                || canonicalJson(declared) !== canonicalJson(completed.changed_paths)) {
+              fail('RECOVERY_EVIDENCE_INCOMPLETE', 'typed dispatch completion path sets disagree');
+            }
+            assertNoForeignEdit(leaseCtx, scope, directory,
+              declared.map((item) => path.join(directory, item)));
+            const current = artifactDigests(scope, leaseCtx.writerLease, leaseCtx.snapshot,
+              declared, 'RECOVERY_ARTIFACT_ALTERED');
+            if (canonicalJson(current) !== canonicalJson(completed.artifact_digests)) {
+              fail('RECOVERY_ARTIFACT_ALTERED', 'completed artifact bytes changed before recorder mutation');
+            }
+          },
         },
       });
       const recoveredFields = recovering ? { recovered: true, recovered_output: runOptions.recovered.output } : null;
@@ -1077,31 +1063,35 @@ async function recoverCli(argv, stdout, options) {
     writerLease.assertFence({ token: leaseHandle.token, epoch: leaseHandle.epoch,
       base_revision: sourceRevision(scope.worktree) });
     const sessionStarted = record.session_started;
-    let completed = record.completed;
+    const completed = record.completed;
     if (!object(sessionStarted) || typeof sessionStarted.session_id !== 'string'
         || !object(sessionStarted.runtime_launch) || !validTaskRelay(sessionStarted.runtime_launch.task_relay)) {
       fail('RECOVERY_EVIDENCE_INCOMPLETE', 'dispatch ' + dispatchId + ' has no bound native session-start record');
     }
-    if (completed !== undefined && (!object(completed) || typeof completed.parent_session_id !== 'string'
-        || !object(completed.runtime_evidence) || !object(completed.artifact_digests))) {
-      fail('RECOVERY_EVIDENCE_INCOMPLETE', 'dispatch ' + dispatchId + ' has malformed completion evidence');
+    if (!object(completed) || typeof completed.parent_session_id !== 'string'
+        || !object(completed.runtime_evidence) || !object(completed.artifact_digests)
+        || !Array.isArray(completed.declared_paths) || !Array.isArray(completed.changed_paths)) {
+      fail('RECOVERY_EVIDENCE_INCOMPLETE', 'dispatch ' + dispatchId + ' has no original completed checkpoint');
     }
-    if ((Number.isSafeInteger(sessionStarted.process_id) && pidAlive(sessionStarted.process_id))
-        || (completed && Number.isSafeInteger(completed.pid) && pidAlive(completed.pid))) {
-      fail('RECOVERY_UNKNOWN_LIVE', 'recorded Codex process is still alive');
+    if (!Number.isSafeInteger(record.process_spawned?.pid) || record.process_spawned.pid <= 0
+        || sessionStarted.process_id !== record.process_spawned.pid || completed.pid !== record.process_spawned.pid) {
+      fail('RECOVERY_EVIDENCE_INCOMPLETE', 'dispatch lacks its original positive native process identity');
     }
-    if (completed && sessionStarted.session_id !== completed.parent_session_id) {
+    if (pidAlive(record.process_spawned.pid)) {
+      fail('RECOVERY_UNKNOWN_LIVE', 'recorded Codex process is live or its state is unknown');
+    }
+    if (sessionStarted.session_id !== completed.parent_session_id) {
       fail('RECOVERY_EVIDENCE_INCOMPLETE', 'completed record does not bind the original native session');
     }
     const transcriptDir = options.transcriptDir || path.join(hostStateDir, 'transcripts');
-    if (completed) verifyRuntimeEvidence(record, scope, binding, transcriptDir);
+    verifyRuntimeEvidence(record, scope, binding, transcriptDir);
     const repository = scope.repository;
     let verified;
     try {
       verified = await verifyCompletedNativeLaunch({
         session_id: sessionStarted.session_id, selection: { model: resolution.model, effort: resolution.effort },
         agent, env, allowTimedOutWait: true, waitMs: 0, startedAt: 0, now: new Date(record.launched_at),
-        task: sessionStarted.runtime_launch.task_relay, allowMissingTaskFile: Boolean(completed),
+        task: sessionStarted.runtime_launch.task_relay, allowMissingTaskFile: true,
       });
     } catch (error) {
       fail(recoveryCode(error), 'native launch evidence cannot be re-verified: ' + error.message);
@@ -1109,21 +1099,6 @@ async function recoverCli(argv, stdout, options) {
     const session = verified.native_session_evidence;
     const child = verified.native_child_evidence;
     const output = verified.last_agent_message;
-    if (!completed) {
-      const runtimeEvidence = runtimeEvidenceFromSessionStart(sessionStarted, scope, binding, transcriptDir, verified);
-      completed = {
-        launch_id: 'codex-' + sessionStarted.session_id,
-        parent_session_id: sessionStarted.session_id,
-        pid: sessionStarted.process_id,
-        parent_sha256: session.sha256,
-        child_session_id: child.session_id,
-        child_sha256: child.sha256,
-        completion_message_sha256: sha256Text(output),
-        parent_wait_timed_out: verified.spawn_evidence.timed_out,
-        artifact_digests: {},
-        runtime_evidence: runtimeEvidence,
-      };
-    }
     if (typeof output !== 'string' || sha256Text(output) !== completed.completion_message_sha256
         || session.sha256 !== completed.parent_sha256 || child.sha256 !== completed.child_sha256
         || child.session_id !== completed.child_session_id
@@ -1131,14 +1106,18 @@ async function recoverCli(argv, stdout, options) {
       fail('RECOVERY_ARTIFACT_ALTERED', 'native transcripts differ from the digests recorded at launch');
     }
     const declared = declaredArtifactPaths(output, scope, request.gsd_role);
+    if (canonicalJson(declared) !== canonicalJson(completed.declared_paths)
+        || canonicalJson(declared) !== canonicalJson(completed.changed_paths)
+        || canonicalJson(declared) !== canonicalJson(Object.keys(completed.artifact_digests).sort())) {
+      fail('RECOVERY_EVIDENCE_INCOMPLETE', 'original completion changed-path sets disagree');
+    }
+    const declaredSet = new Set(declared);
+    const foreign = writerLease.changedSince(record.tree_snapshot).changed.filter((item) => !declaredSet.has(item));
+    if (foreign.length) fail('FOREIGN_EDIT', 'phase directory path(s) changed outside the authenticated child declaration: ' + foreign.join(', '));
     const currentDigests = artifactDigests(scope, writerLease, record.tree_snapshot, declared,
       'RECOVERY_ARTIFACT_ALTERED');
-    if (record.completed && canonicalJson(currentDigests) !== canonicalJson(completed.artifact_digests)) {
+    if (canonicalJson(currentDigests) !== canonicalJson(completed.artifact_digests)) {
       fail('RECOVERY_ARTIFACT_ALTERED', 'phase artifacts differ from the digests recorded when the child completed');
-    }
-    if (!record.completed) {
-      completed.artifact_digests = currentDigests;
-      verifyRuntimeEvidence({ ...record, completed }, scope, binding, transcriptDir);
     }
     controller.begin(createRunScope({
       run_id: scope.run_id,
@@ -1188,6 +1167,7 @@ async function recoverCli(argv, stdout, options) {
       spawn: () => fail('RECOVERY_SPAWN_FORBIDDEN', 'recovery never launches a runtime process'),
       agentDir: options.agentDir, agentManifest: options.agentManifest,
       sealRoot: path.join(hostStateDir, 'sealed'),
+      launchDir,
     });
     const result = await host.run(request, {
       recovered: { applied, output, binding: record.binding },
@@ -1237,10 +1217,15 @@ async function runCli(argv = process.argv.slice(2), stdout = process.stdout, opt
     owner: JSON.stringify({ run_id: scope.run_id, owner_id: controller.owner_id }),
     base_revision: sourceRevision(scope.worktree),
   });
+  let result;
+  let resolution;
+  let dispatchId;
+  let stopHeartbeat = () => {};
+  try {
   const leaseSnapshot = writerLease.snapshotTree();
   const request = parsed.launch;
-  const dispatchId = request.dispatch_id || newDispatchId();
-  const resolution = policy.resolveDispatch({
+  dispatchId = request.dispatch_id || newDispatchId();
+  resolution = policy.resolveDispatch({
     runtime: 'codex', role: ROLES[request.gsd_role].role,
     signals: request.signals, dispatch_id: dispatchId,
   });
@@ -1270,15 +1255,12 @@ async function runCli(argv = process.argv.slice(2), stdout = process.stdout, opt
     Math.max(1_000, Math.floor((options.leaseTtlMs || DEFAULT_LEASE_TTL_MS) / 3)));
   const heartbeatScheduler = options.heartbeat || DEFAULT_HEARTBEAT_SCHEDULER;
   let heartbeatError = null;
-  let stopHeartbeat = () => {};
   stopHeartbeat = heartbeatScheduler.start(() => {
     try { controller.heartbeat(scope.run_id); }
     catch (error) { heartbeatError = error; stopHeartbeat(); }
     try { writerLease.heartbeat({ token: leaseHandle.token, epoch: leaseHandle.epoch }); }
     catch (error) { heartbeatError = heartbeatError || error; }
   }, heartbeatMs);
-  let result;
-  try {
     const host = createCodexDecomposeHost({
       scope,
       controller,

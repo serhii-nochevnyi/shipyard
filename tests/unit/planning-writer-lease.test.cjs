@@ -153,6 +153,19 @@ test('recover refuses while the owner is live and unexpired', () => fixture(({ s
   assert.throws(() => lease.recover({ owner: 'owner-b', reason: 'crash recovery drill' }), (error) => error.code === 'WRITER_LEASED');
 }));
 
+test('recover treats unknown process-probe errors as live until explicit expiry', () => fixture(({ stateRoot, worktree }) => {
+  let now = 1000;
+  const lease = createPlanningWriterLease({ stateRoot, worktree, phaseDir: 'phase', now: () => now, ttlMs: 100 });
+  lease.acquire({ owner: 'original', base_revision: 'rev' });
+  const originalKill = process.kill;
+  try {
+    process.kill = () => { throw Object.assign(new Error('probe unavailable'), { code: 'EACCES' }); };
+    assert.throws(() => lease.recover({ owner: 'successor', reason: 'crash' }), { code: 'WRITER_LEASED' });
+    now = 1100;
+    assert.equal(lease.recover({ owner: 'successor', reason: 'expired' }).recovered, true);
+  } finally { process.kill = originalKill; }
+}));
+
 test('recover succeeds once the ttl has expired, with a strictly greater epoch', () => fixture(({ stateRoot, worktree }) => {
   let clock = 1_000;
   const lease = createPlanningWriterLease({ stateRoot, worktree, phaseDir: 'phase', now: () => clock, ttlMs: 100 });

@@ -133,6 +133,35 @@ test('dynamic Codex execution receives explicit model and reasoning effort and r
   assert.ok(Object.isFrozen(result.trace));
 });
 
+test('typed judgment waits for host validation before any durable recorder mutation', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-judgment-gate-'));
+  try {
+    for (const gsdRole of ['gsd-planner', 'gsd-plan-checker']) {
+      const store = path.join(root, gsdRole);
+      const recorder = boundaryModule.createDurableRecorder(store);
+      const adapter = fakeAdapter({ receipt: (resolution) => receiptFor(resolution, {
+        gsd_role: gsdRole, gsd_launch_mechanism: 'typed-gsd-callback',
+      }) });
+      const boundary = boundaryModule.createDispatchBoundary({ adapters: { codex: adapter }, recorder,
+        requireGsdRole: true });
+      const input = { runtime: 'codex', role: 'decomposition', gsd_role: gsdRole,
+        dispatch_id: `gate-${gsdRole}` };
+      await assert.rejects(Promise.resolve().then(() => boundary.dispatch(input, { ticket: 'T-45-16' })),
+        { code: 'WRITER_FENCED' });
+      assert.equal(fs.readdirSync(store).filter((name) => name.startsWith('record-')).length, 0);
+      const refused = boundaryModule.createDispatchBoundary({ adapters: { codex: adapter },
+        recorder: boundaryModule.createDurableRecorder(path.join(root, `${gsdRole}-async`)),
+        requireGsdRole: true });
+      const asyncStore = path.join(root, `${gsdRole}-async`);
+      await assert.rejects(Promise.resolve().then(() => refused.dispatch({ ...input,
+        dispatch_id: `async-${gsdRole}` }, { ticket: 'T-45-16',
+        preRecordValidation: async () => { throw Object.assign(new Error('taken over'), { code: 'WRITER_FENCED' }); },
+      })), { code: 'WRITER_FENCED' });
+      assert.equal(fs.readdirSync(asyncStore).filter((name) => name.startsWith('record-')).length, 0);
+    }
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
 test('capacity admission fences an in-flight launch and releases after its receipt', async () => {
   let nextLease = 0;
   const leases = new Set();

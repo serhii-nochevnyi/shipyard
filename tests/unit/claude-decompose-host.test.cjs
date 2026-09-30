@@ -48,6 +48,15 @@ function preparedPhaseFixture() {
   return { ...f, phaseDir };
 }
 
+function validateStubWriter({ scope, writerLease, leaseHandle, snapshot }) {
+  const base_revision = execFileSync('git', ['-C', scope.worktree, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+  writerLease.assertFence({ token: leaseHandle.token, epoch: leaseHandle.epoch, base_revision });
+  const own = scope.role === 'gsd-phase-researcher' ? ['38-RESEARCH.md']
+    : scope.role === 'gsd-planner' ? ['38-01-PLAN.md'] : [];
+  const foreign = writerLease.changedSince(snapshot).changed.filter((item) => !own.includes(item));
+  if (foreign.length) throw Object.assign(new Error(`foreign phase edit: ${foreign.join(', ')}`), { code: 'FOREIGN_EDIT' });
+}
+
 function successDependencies(f, { store, writerLease, onLaunch, mutateEvidence } = {}) {
   const calls = [];
   return {
@@ -55,6 +64,7 @@ function successDependencies(f, { store, writerLease, onLaunch, mutateEvidence }
     deps: {
       configRoot: f.config,
       store,
+      preRecordValidation: validateStubWriter,
       ...(writerLease ? { writerLease } : {}),
       resolveDispatch: ({ runtime, role: boundaryRole, dispatch_id }) => ({
         runtime, role: boundaryRole, dispatch_id, model: 'claude-opus-5-5', effort: 'medium',
@@ -169,6 +179,7 @@ test('routes each role through the boundary and durably records exact-role evide
       const output = await runDecomposition(request(f.worktree, role), {
         configRoot: f.config,
         store: path.join(f.root, `store-${role}`),
+        preRecordValidation: validateStubWriter,
         resolveDispatch: ({ runtime, role: boundaryRole, dispatch_id }) => ({
           runtime, role: boundaryRole, dispatch_id, model: 'claude-opus-5-5', effort: 'medium',
         }),
@@ -375,6 +386,28 @@ test('a foreign edit to the phase directory mid-run refuses with FOREIGN_EDIT, n
         && error.message.includes(`run_id=${error.run_id}`));
     assert.equal(fs.existsSync(path.join(store, 'decomposition-index')), false);
   } finally { f.clean(); }
+});
+
+test('Claude live judgment roles refuse takeover and foreign edits before recorder files exist', async () => {
+  for (const role of Object.keys(ROLES)) {
+    for (const refusal of ['WRITER_FENCED', 'FOREIGN_EDIT']) {
+      const f = preparedPhaseFixture();
+      const store = path.join(f.root, `gate-${role}-${refusal}`);
+      try {
+        const original = createPlanningWriterLease({ worktree: fs.realpathSync(f.worktree),
+          phaseDir: f.phaseDir, stateRoot: path.join(f.root, `writer-${role}-${refusal}`) });
+        const writerLease = refusal === 'WRITER_FENCED' ? { ...original,
+          assertFence() { throw Object.assign(new Error('writer taken over'), { code: 'WRITER_FENCED' }); },
+        } : original;
+        const { deps } = successDependencies(f, { store, writerLease,
+          onLaunch: refusal === 'FOREIGN_EDIT'
+            ? () => fs.writeFileSync(path.join(f.phaseDir, 'stray.md'), 'foreign\n') : undefined,
+        });
+        await assert.rejects(runDecomposition(request(f.worktree, role), deps), { code: refusal });
+        assert.equal(fs.readdirSync(path.join(store, 'receipts')).filter((name) => name.startsWith('record-')).length, 0);
+      } finally { f.clean(); }
+    }
+  }
 });
 
 test('the planning writer lease releases on success and on failure so a following run acquires immediately', async () => {
@@ -747,7 +780,7 @@ test('recovery refuses missing reservations, incomplete transcripts, mismatched 
     { code: 'RECOVERY_ARTIFACT_ALTERED', mutate: (f) => {
       fs.appendFileSync(f.record.start_evidence_file, ' ');
     } },
-    { code: 'RECOVERY_ARTIFACT_ALTERED', mutate: (f) => fs.writeFileSync(path.join(f.phaseDir, 'stray.md'), 'stray\n') },
+    { code: 'FOREIGN_EDIT', mutate: (f) => fs.writeFileSync(path.join(f.phaseDir, 'stray.md'), 'stray\n') },
     { code: 'RECOVERY_ARTIFACT_ALTERED', mutate: (f) => fs.writeFileSync(path.join(f.phaseDir, '38-01-PLAN.md'), '# tampered\n') },
     { code: 'RECOVERY_EVIDENCE_INCOMPLETE', mutate: (f) => { delete f.record.child_pid; f.save(); } },
     { code: 'RECOVERY_EVIDENCE_INCOMPLETE', mutate: (f) => { f.record.child_pid = -1; f.save(); } },
@@ -766,6 +799,56 @@ test('recovery refuses missing reservations, incomplete transcripts, mismatched 
       mutate(f);
       await assert.rejects(recoverDecomposition(f.dispatchId, f.deps), { code });
       assert.notEqual(f.recorder.getReservation(f.dispatchId)?.recorded, true);
+      if (fs.existsSync(path.join(f.store, 'receipts'))) {
+        assert.equal(fs.readdirSync(path.join(f.store, 'receipts')).filter((name) => name.startsWith('record-')).length, 0);
+      }
     } finally { f.finish(); }
+  }
+});
+
+test('unknown Claude process probe refuses every judgment role without recorder mutation', async () => {
+  const originalKill = process.kill;
+  for (const role of Object.keys(ROLES)) {
+    const f = recoveryFixture(role);
+    try {
+      process.kill = (pid, signal) => {
+        if (pid === f.record.child_pid) throw Object.assign(new Error('unknown probe'), { code: 'EACCES' });
+        return originalKill(pid, signal);
+      };
+      await assert.rejects(recoverDecomposition(f.dispatchId, f.deps), { code: 'RECOVERY_UNKNOWN_LIVE' });
+      assert.equal(fs.readdirSync(path.join(f.store, 'receipts')).filter((name) => name.startsWith('record-')).length, 0);
+      assert.equal(f.recorder.getReservation(f.dispatchId).recorded, false);
+    } finally { process.kill = originalKill; f.finish(); }
+  }
+});
+
+test('Claude recovery fences takeover and foreign edits at the recorder boundary for every judgment role', async () => {
+  for (const role of Object.keys(ROLES)) {
+    for (const refusal of ['WRITER_FENCED', 'FOREIGN_EDIT']) {
+      const f = recoveryFixture(role);
+      try {
+        let fenceChecks = 0;
+        let changeChecks = 0;
+        const original = f.deps.writerLease;
+        const writerLease = { ...original,
+          assertFence(input) {
+            fenceChecks++;
+            if (refusal === 'WRITER_FENCED' && fenceChecks === 2) {
+              throw Object.assign(new Error('writer taken over before record'), { code: 'WRITER_FENCED' });
+            }
+            return original.assertFence(input);
+          },
+          changedSince(snapshot) {
+            if (refusal === 'FOREIGN_EDIT' && ++changeChecks === 2) {
+              fs.writeFileSync(path.join(f.phaseDir, 'stray.md'), 'outside declaration\n');
+            }
+            return original.changedSince(snapshot);
+          },
+        };
+        await assert.rejects(recoverDecomposition(f.dispatchId, { ...f.deps, writerLease }), { code: refusal });
+        assert.equal(fs.readdirSync(path.join(f.store, 'receipts')).filter((name) => name.startsWith('record-')).length, 0);
+        assert.equal(f.recorder.getReservation(f.dispatchId).recorded, false);
+      } finally { f.finish(); }
+    }
   }
 });

@@ -40,11 +40,11 @@ function nowValue(clock) {
   return value;
 }
 
-// @security: EPERM means the pid belongs to another user, so it still counts as live.
+// @security: only ESRCH proves the recorded process stopped.
 function pidAlive(pid) {
-  if (!Number.isSafeInteger(pid) || pid <= 0) return false;
+  if (!Number.isSafeInteger(pid) || pid <= 0) return true;
   try { process.kill(pid, 0); return true; }
-  catch (error) { return Boolean(error && error.code === 'EPERM'); }
+  catch (error) { return !error || error.code !== 'ESRCH'; }
 }
 
 function realpathClosest(target) {
