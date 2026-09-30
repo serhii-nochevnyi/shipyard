@@ -1,12 +1,16 @@
 'use strict';
 
 const assert = require('node:assert/strict');
+const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const { before, after, test } = require('node:test');
 const os = require('node:os');
 const { finalizeDeliveryCommit, scopedTree } = require('../../plugins/delivery-pipeline/scripts/delivery-commit-finalizer.cjs');
+const { SCRATCH_FILES } = require('../../plugins/delivery-pipeline/scripts/conveyor-scratch.cjs');
+const { createDurableRecorder } = require('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs');
+const { stableStringify } = require('../../plugins/delivery-pipeline/scripts/model-policy-internal.cjs');
 
 let temporary;
 let signer;
@@ -23,6 +27,24 @@ function command(program, args, options = {}) {
 
 function git(repo, ...args) {
   return command('git', ['-C', repo, ...args]);
+}
+
+function testReceipt(ticket, role = 'executor') {
+  const dispatch_id = `dispatch-finalizer-${++sequence}`;
+  const store = path.join(temporary, `${dispatch_id}-receipts`);
+  createDurableRecorder(store);
+  const keyPath = path.join(path.dirname(store), `.shipyard-dispatch-authority-${crypto.createHash('sha256')
+    .update(path.resolve(store)).digest('hex')}.key`);
+  const key = fs.readFileSync(keyPath);
+  const receipt = { dispatch_id, compliance: 'verified', runtime: 'codex', role };
+  const payload = { dispatch_id, ticket, runtime: receipt.runtime, role, receipt };
+  const raw = { format: 'adr-014.durable-boundary.v1', payload,
+    integrity: { algorithm: 'hmac-sha256', mac: crypto.createHmac('sha256', key)
+      .update(stableStringify(payload)).digest('hex') } };
+  fs.writeFileSync(path.join(store, `record-${crypto.createHash('sha256').update(dispatch_id).digest('hex')}.json`),
+    JSON.stringify(raw), { mode: 0o600 });
+  return { dispatch_id, receipt_digest: crypto.createHash('sha256').update(stableStringify(receipt)).digest('hex'),
+    receipt_store: store };
 }
 
 function writeShipyardManifest(repo) {
@@ -55,6 +77,11 @@ function makeRepo(fixtureOptions = {}) {
     expectedSigner: signer,
     files_modified: ['src/*.txt'],
   };
+  const verificationEvidenceDigest = 'a'.repeat(64);
+  const receipt = testReceipt(options.ticket);
+  options.verificationEvidenceDigest = verificationEvidenceDigest;
+  options.coverage = { ...receipt, kind: 'executor', repo: `owner/${path.basename(repo)}`,
+    verification_digest: verificationEvidenceDigest };
   const row = fixtureOptions.graphRow;
   fs.writeFileSync(path.join(process.env.SHIPYARD_GRAPH_DIR, 'tickets.json'),
     JSON.stringify({ tickets: row ? { 'T-38-03': row } : {} }));
@@ -75,12 +102,14 @@ before(() => {
     GIT_CONFIG_GLOBAL: process.env.GIT_CONFIG_GLOBAL,
     GIT_CONFIG_NOSYSTEM: process.env.GIT_CONFIG_NOSYSTEM,
     SHIPYARD_GRAPH_DIR: process.env.SHIPYARD_GRAPH_DIR,
+    SHIPYARD_COVERAGE_ROOT: process.env.SHIPYARD_COVERAGE_ROOT,
   };
   process.env.SHIPYARD_GRAPH_DIR = path.join(temporary, 'graph');
   fs.mkdirSync(process.env.SHIPYARD_GRAPH_DIR);
   process.env.GNUPGHOME = gnupgHome;
   process.env.GIT_CONFIG_GLOBAL = path.join(temporary, 'empty-gitconfig');
   process.env.GIT_CONFIG_NOSYSTEM = '1';
+  process.env.SHIPYARD_COVERAGE_ROOT = path.join(temporary, 'coverage');
   command('gpg', ['--batch', '--pinentry-mode', 'loopback', '--passphrase', '', '--quick-generate-key',
     'Delivery Test <delivery@example.test>', 'ed25519', 'sign', '0']);
   const keys = command('gpg', ['--batch', '--with-colons', '--list-secret-keys']);
@@ -118,6 +147,106 @@ test('creates a verified signed commit and refreshes the ordinary index to a cle
   assert.equal(git(repo, 'status', '--porcelain'), '');
   assert.equal(git(repo, 'show', 'HEAD:src/new.txt'), 'new');
   assert.equal(git(repo, 'show', 'HEAD:outside.txt'), 'base');
+});
+
+test('successful trusted finalization records its exact commit once', () => {
+  const { repo, head, options } = makeRepo();
+  const root = path.join(temporary, `coverage-${++sequence}`);
+  const prior = process.env.SHIPYARD_COVERAGE_ROOT;
+  process.env.SHIPYARD_COVERAGE_ROOT = root;
+  try {
+    fs.writeFileSync(path.join(repo, 'src', 'owned.txt'), 'covered\n');
+    const verificationDigest = 'b'.repeat(64);
+    const receipt = testReceipt(options.ticket);
+    const result = finalizeDeliveryCommit({ ...options, coverage: {
+      ...receipt, kind: 'executor', verification_digest: verificationDigest,
+    }, verificationEvidenceDigest: verificationDigest });
+    assert.equal(result.previousHead, head);
+    const records = fs.readdirSync(path.join(root, 'coverage'));
+    assert.equal(records.length, 1);
+    const file = path.join(root, 'coverage', records[0], `${result.commit}.json`);
+    assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).payload.commit, result.commit);
+    assert.equal(fs.readdirSync(path.dirname(file)).length, 1);
+    assert.equal(fs.readdirSync(path.join(root, 'rollout-markers')).length, 1);
+  } finally {
+    if (prior === undefined) delete process.env.SHIPYARD_COVERAGE_ROOT;
+    else process.env.SHIPYARD_COVERAGE_ROOT = prior;
+  }
+});
+
+test('failed update-ref leaves no coverage record', () => {
+  const { repo, head, options } = makeRepo();
+  const root = path.join(temporary, `failed-coverage-${++sequence}`);
+  const prior = process.env.SHIPYARD_COVERAGE_ROOT;
+  process.env.SHIPYARD_COVERAGE_ROOT = root;
+  try {
+    fs.writeFileSync(path.join(repo, 'src', 'owned.txt'), 'changed\n');
+    const verificationDigest = 'b'.repeat(64);
+    const receipt = testReceipt(options.ticket);
+    const branch = path.resolve(repo, git(repo, 'rev-parse', '--git-path', 'refs/heads/ticket/T-38-03'));
+    fs.writeFileSync(branch + '.lock', 'busy');
+    assert.throws(() => finalizeDeliveryCommit({ ...options, coverage: {
+      ...receipt, kind: 'executor', verification_digest: verificationDigest,
+    }, verificationEvidenceDigest: verificationDigest }), /update-ref failed/);
+    assert.equal(git(repo, 'rev-parse', 'HEAD'), head);
+    assert.equal(fs.existsSync(path.join(root, 'coverage')), false);
+  } finally {
+    if (prior === undefined) delete process.env.SHIPYARD_COVERAGE_ROOT;
+    else process.env.SHIPYARD_COVERAGE_ROOT = prior;
+  }
+});
+
+test('binds the sealed verification digest into the signed finalization commit', () => {
+  const { repo, options } = makeRepo();
+  const digest = 'a'.repeat(64);
+  fs.writeFileSync(path.join(repo, 'src', 'owned.txt'), 'verified\n');
+
+  const receipt = testReceipt(options.ticket);
+  const result = finalizeDeliveryCommit({ ...options, verificationEvidenceDigest: digest,
+    coverage: { ...receipt, kind: 'executor', verification_digest: digest } });
+
+  assert.equal(result.verificationEvidenceDigest, digest);
+  assert.equal(git(repo, 'show', '-s', '--format=%B', result.commit).trim().split('\n').at(-1),
+    `Shipyard-Verification-Evidence: ${digest}`);
+  assert.equal(git(repo, 'show', '-s', '--format=%G?%x00%GF', result.commit), `G\0${signer}`);
+});
+
+test('verified finalization refuses missing receipt-store evidence before moving HEAD', () => {
+  const { repo, head, options } = makeRepo();
+  const digest = 'c'.repeat(64);
+  fs.writeFileSync(path.join(repo, 'src', 'owned.txt'), 'verified but receipt missing\n');
+  assert.throws(() => finalizeDeliveryCommit({ ...options, verificationEvidenceDigest: digest,
+    coverage: { kind: 'executor', dispatch_id: 'missing-dispatch', receipt_digest: 'd'.repeat(64),
+      verification_digest: digest, receipt_store: path.join(temporary, 'missing-receipts') } }),
+  (error) => error.code === 'COVERAGE_EVIDENCE_INVALID');
+  assert.equal(git(repo, 'rev-parse', 'HEAD'), head);
+});
+
+test('trusted finalization refuses to move HEAD without coverage and signed verification evidence', () => {
+  const { repo, head, options } = makeRepo();
+  fs.writeFileSync(path.join(repo, 'src', 'owned.txt'), 'missing finalization evidence\n');
+  assert.throws(() => finalizeDeliveryCommit({ ...options, coverage: undefined,
+    verificationEvidenceDigest: undefined }), (error) => error.code === 'COVERAGE_EVIDENCE_REQUIRED');
+  assert.equal(git(repo, 'rev-parse', 'HEAD'), head);
+});
+
+test('verified finalization refuses a digest different from the signed evidence before moving HEAD', () => {
+  const { repo, head, options } = makeRepo();
+  const signedDigest = 'e'.repeat(64);
+  fs.writeFileSync(path.join(repo, 'src', 'owned.txt'), 'verification digest mismatch\n');
+  const receipt = testReceipt(options.ticket);
+  assert.throws(() => finalizeDeliveryCommit({ ...options, verificationEvidenceDigest: signedDigest,
+    coverage: { ...receipt, kind: 'executor', verification_digest: 'f'.repeat(64) } }),
+  (error) => error.code === 'COVERAGE_EVIDENCE_INVALID');
+  assert.equal(git(repo, 'rev-parse', 'HEAD'), head);
+});
+
+test('rejects a malformed verification evidence digest before finalizing', () => {
+  const { repo, head, options } = makeRepo();
+  fs.writeFileSync(path.join(repo, 'src', 'owned.txt'), 'changed\n');
+  assert.throws(() => finalizeDeliveryCommit({ ...options, verificationEvidenceDigest: 'not-a-digest' }),
+    /verificationEvidenceDigest must be a SHA-256 digest/);
+  assert.equal(git(repo, 'rev-parse', 'HEAD'), head);
 });
 
 test('rejects stale branch or HEAD before changing the branch', () => {
@@ -209,15 +338,17 @@ test('rejects an index-only edit that the private index cannot faithfully stage'
   assert.deepEqual(indexBytes(repo), beforeIndex);
 });
 
-test('excludes only the two fixed regular untracked scratch documents', () => {
+test('excludes every declared scratch file and archive content from the finalized tree', () => {
   const { repo, options } = makeRepo();
   fs.writeFileSync(path.join(repo, 'src', 'owned.txt'), 'changed\n');
-  fs.writeFileSync(path.join(repo, '.shipyard-pr-body.md'), 'body\n');
-  fs.writeFileSync(path.join(repo, '.shipyard-evidence.md'), 'evidence\n');
+  for (const name of SCRATCH_FILES) fs.writeFileSync(path.join(repo, name), 'scratch\n');
+  fs.mkdirSync(path.join(repo, '.shipyard-role-artifacts'));
+  fs.writeFileSync(path.join(repo, '.shipyard-role-artifacts', 'result.json'), '{}\n');
   const result = finalizeDeliveryCommit(options);
   assert.deepEqual(result.changed, ['src/owned.txt']);
-  assert.equal(git(repo, 'ls-tree', '--name-only', 'HEAD', '.shipyard-pr-body.md', '.shipyard-evidence.md'), '');
-  assert.equal(git(repo, 'status', '--porcelain'), '?? .shipyard-evidence.md\n?? .shipyard-pr-body.md');
+  assert.equal(git(repo, 'ls-tree', '--name-only', 'HEAD', ...SCRATCH_FILES, '.shipyard-role-artifacts'), '');
+  assert.equal(git(repo, 'status', '--porcelain', '--untracked-files=all').split('\n').length,
+    SCRATCH_FILES.length + 1);
 });
 
 test('rejects a symlinked scratch document and other untracked host artifacts', () => {

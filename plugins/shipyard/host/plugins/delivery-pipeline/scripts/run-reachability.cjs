@@ -4,7 +4,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
-const { parse, owns, GRAMMAR } = require('./path-owner.cjs');
+const { parse, owns, literalPrefix, segMatch, GRAMMAR } = require('./path-owner.cjs');
 
 const SCHEMA = 'shipyard.run-reachability.v1';
 const VERSION = 1;
@@ -56,7 +56,7 @@ function repoPath(value) {
 }
 
 function git(repo, args, { allowFailure = false } = {}) {
-  const result = spawnSync('git', ['-C', repo, ...args], { encoding: 'utf8' });
+  const result = spawnSync('git', ['-C', repo, ...args], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
   const value = {
     status: result.status === null ? 1 : result.status,
     stdout: String(result.stdout || '').trim(),
@@ -147,7 +147,40 @@ function normalizeDeclaration(value) {
 function declaredFiles(repo, baseSha, declared = []) {
   if (!Array.isArray(declared)) throw reachabilityError('INVALID_INPUT', 'declared must be an array');
   const declarations = declared.map(normalizeDeclaration);
-  const result = git(repo, ['ls-tree', '-r', '--name-only', baseSha]);
+  const pathspecs = new Set();
+  const rootGlobs = [];
+  for (const declaration of declarations) {
+    const parsed = parse(declaration);
+    if (parsed.kind === 'glob') {
+      const prefix = literalPrefix(declaration);
+      if (prefix) pathspecs.add(`:(literal)${prefix}`);
+      else rootGlobs.push(declaration);
+    } else {
+      pathspecs.add(`:(literal)${declaration.replace(/\/\*\*$/, '').replace(/\/+$/, '')}`);
+    }
+  }
+  if (rootGlobs.length) {
+    const root = git(repo, ['ls-tree', '-z', baseSha]);
+    for (const record of root.stdout.split('\0')) {
+      if (!record) continue;
+      const tab = record.indexOf('\t');
+      if (tab === -1) throw reachabilityError('GIT_FAILED', 'git ls-tree answered malformed root output');
+      const [, type] = record.slice(0, tab).split(' ');
+      const entry = record.slice(tab + 1);
+      for (const declaration of rootGlobs) {
+        const parsed = parse(declaration);
+        if (parsed.segs.length === 1 && type === 'blob' && owns(declaration, entry)) {
+          pathspecs.add(`:(literal)${entry}`);
+        } else if (parsed.segs.length > 1 && type === 'tree' && segMatch(parsed.segs[0], entry)) {
+          pathspecs.add(`:(literal)${entry}`);
+        }
+      }
+    }
+  }
+  if (!pathspecs.size) {
+    return { declarations, matched_files: [], matches: [], missing_declarations: [] };
+  }
+  const result = git(repo, ['ls-tree', '-r', '--name-only', baseSha, '--', ...pathspecs]);
   const files = result.stdout ? result.stdout.split('\n').filter(Boolean) : [];
   const matches = declarations.map((declaration) => ({
     declaration,

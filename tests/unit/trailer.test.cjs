@@ -33,6 +33,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const crypto = require('crypto');
 const { spawnSync } = require('child_process');
 const { suite, test, done, assert } = require(path.join(__dirname, 'assert-harness.cjs'));
 
@@ -150,6 +151,9 @@ function project(gate) {
     path.join(graph, 'delivery-state.json'),
     JSON.stringify({ 'T-01-01': gate === undefined ? { ...GREEN_STATE } : { ...GREEN_STATE, gate } })
   );
+  const coverageRoot = path.join(root, 'coverage-state');
+  fs.mkdirSync(coverageRoot, { mode: 0o700 });
+  fs.writeFileSync(path.join(coverageRoot, 'coverage.key'), crypto.randomBytes(32), { mode: 0o600 });
   fs.writeFileSync(path.join(root, '.planning', 'config.json'), JSON.stringify({ pipeline: {} }));
   return root;
 }
@@ -158,7 +162,8 @@ function run(root, args) {
   const r = spawnSync(process.execPath, [SENTINEL, ...args], {
     cwd: root,
     encoding: 'utf8',
-    env: { ...process.env, PATH: `${BIN}${path.delimiter}${process.env.PATH}`, SHIPYARD_TRAILER_PRVIEW: PRVIEW },
+    env: { ...process.env, PATH: `${BIN}${path.delimiter}${process.env.PATH}`, SHIPYARD_TRAILER_PRVIEW: PRVIEW,
+      SHIPYARD_COVERAGE_ROOT: path.join(root, 'coverage-state') },
   });
   assert.strictEqual(r.status, 0, `sentinel ${args.join(' ')} exited ${r.status}\n${r.stderr}`);
   try {
@@ -1240,6 +1245,22 @@ test('the same tree under a new sha carries the verdict onto the new head', () =
   assert.strictEqual(gate['drift-check'], 'fresh', 'every other recorded key survives');
   assert.strictEqual(gate.carried_from, fx.from.slice(0, 7), 'the head a judge actually read is recorded');
   assert.strictEqual(JSON.parse(r.stdout).carried, true, r.stdout);
+});
+
+test('a carried status keeps the verdict grammar within 140 characters at its longest values', () => {
+  const fx = carryRepo();
+  const body = `gate_status: arch-review=conform, drift-check=skipped, `
+    + `degenerate-green=skipped, base_tree=${fx.judgedBaseTree}, head=${fx.from}`;
+  const r = carry(fx, { body });
+  assert.strictEqual(r.status, 0, `${r.stdout}\n${r.stderr}`);
+  assert.ok(r.description.length <= STATUS_MAX, `${r.description.length}: ${r.description}`);
+  assert.strictEqual(r.posted[0].context, 'merge-gate');
+  const parsed = parseGate(`gate_status: ${r.description}`);
+  assert.strictEqual(parsed['arch-review'], 'conform');
+  assert.strictEqual(parsed['drift-check'], 'skipped');
+  assert.strictEqual(parsed['degenerate-green'], 'skipped');
+  assert.strictEqual(parsed.base_tree || parsed.base, fx.judgedBaseTree);
+  assert.strictEqual(parsed.carried_from || parsed.from, fx.from.slice(0, 7));
 });
 
 test('carry runs both gh calls with cwd: <worktree>, not the caller\'s own cwd', () => {

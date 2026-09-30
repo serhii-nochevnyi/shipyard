@@ -7050,7 +7050,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
-      "missing_paths": true,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/scripts/publish-gate.cjs",
         "scripts/shipyard-pre-push-gate.sh",
@@ -7080,7 +7080,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
-      "missing_paths": true,
+      "missing_paths": false,
       "files": [
         "plugins/delivery-pipeline/scripts/comment-policy.cjs",
         "tests/unit/comment-policy.test.cjs",
@@ -7220,14 +7220,49 @@
       "pr_base": "epic/43-target-project-delivery-at-scale",
       "jira": null
     },
+    "T-43-09": {
+      "title": "state-sync lists PRs by ticket head and open state and skips tickets whose merge into a landed epic is recorded; --full re-derives",
+      "plan": ".planning/phases/43-target-project-delivery-at-scale/43-09-PLAN.md",
+      "phase": "43",
+      "repo": null,
+      "wave": 11,
+      "depends_on": [
+        "T-40-03",
+        "T-40-19",
+        "T-40-27"
+      ],
+      "cross_phase_deps": [
+        "T-40-03",
+        "T-40-19",
+        "T-40-27"
+      ],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": true,
+      "files": [
+        "plugins/delivery-pipeline/scripts/state-sync.cjs",
+        "tests/unit/state-sync-listing.test.cjs",
+        "tests/smoke/sentinel-smoke.sh"
+      ],
+      "risk": "medium",
+      "type": "implementation",
+      "human_checkpoint": false,
+      "preauthorized": false,
+      "branch": "ticket/T-43-09-state-sync-lists-prs-by-ticket-head-and",
+      "epic": "epic/43-target-project-delivery-at-scale",
+      "primary_parent": null,
+      "pr_base": "epic/43-target-project-delivery-at-scale",
+      "jira": null
+    },
     "T-43-04": {
       "title": "Bounded reachability: O(1) git forms, a large buffer, and a declared-path epic check with a path-scoped fallback",
       "plan": ".planning/phases/43-target-project-delivery-at-scale/43-04-PLAN.md",
       "phase": "43",
       "repo": null,
-      "wave": 11,
+      "wave": 12,
       "depends_on": [
         "T-43-07",
+        "T-43-09",
         "T-40-19",
         "T-40-22"
       ],
@@ -7242,7 +7277,8 @@
         "plugins/delivery-pipeline/scripts/run-reachability.cjs",
         "tests/unit/run-reachability.test.cjs",
         "plugins/delivery-pipeline/scripts/sentinel.cjs",
-        "tests/unit/sentinel.test.cjs"
+        "tests/unit/sentinel.test.cjs",
+        "tests/smoke/sentinel-smoke.sh"
       ],
       "risk": "medium",
       "type": "implementation",
@@ -7250,8 +7286,8 @@
       "preauthorized": false,
       "branch": "ticket/T-43-04-bounded-reachability-o-1-git-forms-a-lar",
       "epic": "epic/43-target-project-delivery-at-scale",
-      "primary_parent": "T-43-07",
-      "pr_base": "ticket/T-43-07-cancelled-checks-ignore-superseded-runs",
+      "primary_parent": "T-43-09",
+      "pr_base": "ticket/T-43-09-state-sync-lists-prs-by-ticket-head-and",
       "jira": null
     },
     "T-43-08": {
@@ -7259,7 +7295,7 @@
       "plan": ".planning/phases/43-target-project-delivery-at-scale/43-08-PLAN.md",
       "phase": "43",
       "repo": null,
-      "wave": 12,
+      "wave": 13,
       "depends_on": [
         "T-43-04",
         "T-43-01",
@@ -7290,39 +7326,6 @@
       "epic": "epic/43-target-project-delivery-at-scale",
       "primary_parent": "T-43-04",
       "pr_base": "ticket/T-43-04-bounded-reachability-o-1-git-forms-a-lar",
-      "jira": null
-    },
-    "T-43-09": {
-      "title": "state-sync lists PRs by ticket head and open state and skips tickets whose merge into a landed epic is recorded; --full re-derives",
-      "plan": ".planning/phases/43-target-project-delivery-at-scale/43-09-PLAN.md",
-      "phase": "43",
-      "repo": null,
-      "wave": 11,
-      "depends_on": [
-        "T-40-03",
-        "T-40-19",
-        "T-40-27"
-      ],
-      "cross_phase_deps": [
-        "T-40-03",
-        "T-40-19",
-        "T-40-27"
-      ],
-      "cross_repo_deps": [],
-      "unreachable_paths": false,
-      "missing_paths": true,
-      "files": [
-        "plugins/delivery-pipeline/scripts/state-sync.cjs",
-        "tests/unit/state-sync-listing.test.cjs"
-      ],
-      "risk": "medium",
-      "type": "implementation",
-      "human_checkpoint": false,
-      "preauthorized": false,
-      "branch": "ticket/T-43-09-state-sync-lists-prs-by-ticket-head-and",
-      "epic": "epic/43-target-project-delivery-at-scale",
-      "primary_parent": null,
-      "pr_base": "epic/43-target-project-delivery-at-scale",
       "jira": null
     },
     "T-43-10": {
@@ -7388,7 +7391,8 @@
         "plugins/delivery-pipeline/scripts/jira-export.cjs",
         "tests/unit/jira-export.test.cjs",
         "plugins/delivery-pipeline/commands/decompose.md",
-        "tests/unit/jira-binding-contract.test.cjs"
+        "tests/unit/jira-binding-contract.test.cjs",
+        "tests/smoke/docs-smoke.sh"
       ],
       "risk": "medium",
       "type": "implementation",
@@ -7405,7 +7409,7 @@
       "plan": ".planning/phases/43-target-project-delivery-at-scale/43-12-PLAN.md",
       "phase": "43",
       "repo": null,
-      "wave": 13,
+      "wave": 14,
       "depends_on": [
         "T-43-08",
         "T-43-11",
@@ -7518,7 +7522,7 @@
       "plan": ".planning/phases/43-target-project-delivery-at-scale/43-15-PLAN.md",
       "phase": "43",
       "repo": null,
-      "wave": 14,
+      "wave": 15,
       "depends_on": [
         "T-43-12",
         "T-43-14",

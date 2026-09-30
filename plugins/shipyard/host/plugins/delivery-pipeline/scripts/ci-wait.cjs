@@ -83,7 +83,20 @@ const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
 const { diagnostic, runBounded, timeoutFromEnv } = require(path.join(__dirname, 'command-runner.cjs'));
-const { withLock, lockDirFor, writeAtomic } = require(path.join(__dirname, 'lock.cjs'));
+let activeSharedLockDeadline = Number.POSITIVE_INFINITY;
+const lockModule = require(path.join(__dirname, 'lock.cjs'));
+const { withLock, lockDirFor, writeAtomic } = lockModule;
+const sharedWithLock = lockModule.withLock;
+lockModule.withLock = (dir, name, fn, options = {}) => {
+  if (!['wait-events', 'state', 'orchestration-overhead', 'run-waker-events'].includes(name)
+      || !Number.isFinite(activeSharedLockDeadline)) {
+    return sharedWithLock(dir, name, fn, options);
+  }
+  const remaining = remainingTimeoutMs(DEFAULT_LOCK_WAIT_MS, activeSharedLockDeadline, LOCK_TAIL_RESERVE_MS);
+  if (remaining <= 0) throw new Error('wait call deadline reached before shared lock');
+  const waitMs = Number.isFinite(options.waitMs) ? Math.min(options.waitMs, remaining) : remaining;
+  return sharedWithLock(dir, name, fn, { ...options, waitMs });
+};
 // The state-moved rule, taken from the store that already owns it. Never
 // reimplemented: two stores that expire against the same subject must not come to
 // disagree about what "the PR moved" means.
@@ -95,7 +108,10 @@ const runWaker = require(path.join(__dirname, 'run-waker.cjs'));
 
 const GH_TIMEOUT_MS = timeoutFromEnv('SHIPYARD_GH_TIMEOUT_MS', 60_000, 5 * 60_000);
 const INTERNAL_COMMAND_TIMEOUT_MS = timeoutFromEnv('SHIPYARD_INTERNAL_COMMAND_TIMEOUT_MS', 30_000, 5 * 60_000);
+const DEFAULT_LOCK_WAIT_MS = 60_000;
+const LOCK_TAIL_RESERVE_MS = 500;
 
+const callStartedAt = Date.now();
 const argv = process.argv.slice(2);
 const JSON_OUT = argv.includes('--json');
 
@@ -123,6 +139,10 @@ const TIMEOUT_S_EXPLICIT = argv.includes('--timeout');
 let TIMEOUT_S = flag('--timeout', 15 * 60);
 const WINDOW_FLOOR_S = 15 * 60;
 const WINDOW_CEIL_S = 60 * 60;
+// @contract: Claude's Bash tool kills a call at 600 s, so one default ci-wait call there returns within 540 s.
+const CLAUDE_WINDOW_CAP_S = 540;
+const ON_CLAUDE = !['CODEX_SANDBOX', 'CODEX_SANDBOX_NETWORK_DISABLED'].some((k) => process.env[k])
+  && ['CLAUDE_PLUGIN_ROOT', 'CLAUDE_CODE_ENTRYPOINT'].some((k) => process.env[k]);
 // Same "positive number or ignore it" rule as SHIPYARD_CI_WAIT_MAX_EMPTY below —
 // a garbage env value must fall back, not disable the sizing it was meant to tune.
 const ENV_TIMEOUT_S = (() => {
@@ -377,7 +397,9 @@ if (!watch.length) {
 function checksOf({ pr, repo }) {
   const args = ['pr', 'checks', String(pr), '--json', CHECK_FIELDS];
   if (repo) args.push('--repo', repo);
-  const r = runBounded('gh', args, { timeoutMs: GH_TIMEOUT_MS });
+  const timeoutMs = remainingTimeoutMs(GH_TIMEOUT_MS, deadline);
+  if (timeoutMs <= 0) return null;
+  const r = runBounded('gh', args, { timeoutMs });
   const stdout = (r.stdout || '').trim();
   let rows;
   if (stdout) {
@@ -403,21 +425,24 @@ function checksOf({ pr, repo }) {
   // list, and it was the only one of three that called ACTION_REQUIRED failing —
   // three copies, three answers. The SHAPE stays {total, pending, failing}: it is
   // what `--json` reports and what the settle test below reads. Keep the raw
-  // rows too: semantic observation compares check identity/state, while these
-  // tallies are only enough to decide whether the PR settled.
   const c = classify(rows);
-  return { total: c.total, pending: c.pending, failing: c.failing, rows };
+  return { total: c.total, pending: c.pending, failing: c.failing, cancelled: c.cancelled,
+    cancelled_runs: c.cancelled_runs, rows };
 }
 
 // HOW MANY EMPTY WINDOWS BEFORE A PERSON IS ASKED. Three at the default 15m is
 // 45 minutes in which that ticket's OWN pipeline did not move — not a slow
 // pipeline, a stuck one. Bound to escalation-record's own fingerprint, so ANY
 // real change (a check finishing, a push, a draft lifting, a review landing)
-// resets the count rather than accumulating toward a park nobody has earned.
 const MAX_EMPTY_RAW = Number(process.env.SHIPYARD_CI_WAIT_MAX_EMPTY || 3);
 const MAX_EMPTY = Number.isFinite(MAX_EMPTY_RAW) && MAX_EMPTY_RAW > 0 ? Math.floor(MAX_EMPTY_RAW) : 3;
+const BUDGET_ENV_S = (() => {
+  const v = Number(process.env.SHIPYARD_CI_WAIT_BUDGET_S);
+  return Number.isFinite(v) && v > 0 ? v : null;
+})();
 
 const WAITS = path.join(GRAPH, 'ci-waits.json');
+const JOURNAL = path.join(GRAPH, 'delivery-log.jsonl');
 // The lock lives beside the store, exactly as drift-record.cjs derives it: a lock
 // taken at some other cwd serializes nothing, which is how six concurrent marks
 // once produced five records.
@@ -479,10 +504,10 @@ function recordOutcome(settledId, watched, goodEver) {
 
 function recordOutcomeInner(settledId, watched, goodEver) {
   const escalations = [];
+  const timeoutMs = remainingTimeoutMs(INTERNAL_COMMAND_TIMEOUT_MS, waitWallDeadline(), LOCK_TAIL_RESERVE_MS);
+  if (timeoutMs <= 0) throw new Error('wait call deadline reached before wait-record lock');
   withLock(lockDirFor(LOCK_ROOT), 'ci-wait', () => {
-    let store = { tickets: {} };
-    try { store = JSON.parse(fs.readFileSync(WAITS, 'utf8')) || { tickets: {} }; } catch { /* first wait */ }
-    if (!store.tickets || typeof store.tickets !== 'object') store.tickets = {};
+    const store = readWaitStore();
     const now = new Date().toISOString();
 
     for (const w of watched) {
@@ -497,20 +522,26 @@ function recordOutcomeInner(settledId, watched, goodEver) {
       // Never got a readable answer this window (gh unreachable throughout) —
       // see the doc comment on `recordOutcome` above. Leave it untouched.
       if (goodEver && !goodEver.has(w.id)) continue;
-      const fp = fingerprint(state[w.id] || {});
+      const subject = state[w.id] || {};
+      const fp = fingerprint(subject);
+      const headSha = subject.head_sha || null;
       const prev = store.tickets[w.id];
-      const empties = prev && prev.fingerprint === fp ? Number(prev.empty_windows || 0) + 1 : 1;
+      const same = prev && prev.fingerprint === fp && prev.head_sha === headSha;
+      const empties = same ? Number(prev.empty_windows || 0) + 1 : 1;
+      const waitedS = (same ? Number(prev.waited_s || 0) : 0) + (Date.now() - startedAt) / 1000;
       store.tickets[w.id] = {
         fingerprint: fp,
+        head_sha: headSha,
         empty_windows: empties,
-        first_at: (prev && prev.fingerprint === fp && prev.first_at) || now,
+        waited_s: Math.round(waitedS * 1000) / 1000,
+        first_at: (same && prev.first_at) || now,
         last_at: now,
         pr: w.pr,
       };
-      if (empties >= MAX_EMPTY) escalations.push({ id: w.id, pr: w.pr, empties });
+      if (waitedS >= BUDGET_S) escalations.push({ id: w.id, pr: w.pr, empties, waitedS });
     }
     writeAtomic(WAITS, JSON.stringify(store, null, 2) + '\n');
-  });
+  }, { waitMs: timeoutMs });
 
   // Park OUTSIDE the lock: escalation-record takes its own, beside its own store.
   const parked = [];
@@ -523,16 +554,22 @@ function recordOutcomeInner(settledId, watched, goodEver) {
       continue;
     }
     const reason =
-      `CI has not moved for ${e.empties} consecutive ci-wait windows (~${Math.round(e.empties * TIMEOUT_S / 60)}m) ` +
+      `CI has not moved for ${e.empties} consecutive ci-wait windows (~${Math.round(e.waitedS / 60)}m) ` +
       `on PR #${e.pr}, with no change to any delivery-state fact a check would touch. ` +
       'That is a pipeline that is not going to settle on its own, so waiting longer buys nothing. ' +
       'UNBLOCK: look at the run itself (a queued-forever job, a required check that never reports, a ' +
       'self-hosted runner that is down are the usual three), then `escalation-record.cjs clear ' +
       `${e.id}` + '` — or simply answer the PR, since this park lifts by itself once the delivery ' +
       'facts change.';
+    const timeoutMs = remainingTimeoutMs(INTERNAL_COMMAND_TIMEOUT_MS, callDeadline);
+    if (timeoutMs <= 0) {
+      parked.push({ id: e.id, pr: e.pr, empty_windows: e.empties, ok: false,
+        error: 'wait call deadline reached before escalation could be recorded' });
+      continue;
+    }
     const r = runBounded(process.execPath,
       [path.join(__dirname, 'escalation-record.cjs'), 'mark', e.id, reason, '--graph', GRAPH],
-      { timeoutMs: INTERNAL_COMMAND_TIMEOUT_MS });
+      { timeoutMs });
     parked.push({ id: e.id, pr: e.pr, empty_windows: e.empties, ok: r.status === 0,
       error: r.status === 0 ? null : diagnostic(r) });
   }
@@ -558,9 +595,6 @@ if (TIMEOUT_S_EXPLICIT) {
     .map((w) => Number((front.ci_estimates || {})[w.id] || 0))
     .filter((v) => Number.isFinite(v) && v > 0);
   if (estimates.length) {
-    // The MAX across watched tickets, not one arbitrarily picked: the window is
-    // shared by the whole round, so it must not undersize the slowest pipeline
-    // it is also watching.
     const maxEst = Math.max(...estimates);
     const derived = maxEst / 3;
     TIMEOUT_S = Math.min(WINDOW_CEIL_S, Math.max(WINDOW_FLOOR_S, derived));
@@ -569,8 +603,348 @@ if (TIMEOUT_S_EXPLICIT) {
   }
 }
 
+const BUDGET_S = BUDGET_ENV_S !== null ? BUDGET_ENV_S : MAX_EMPTY * TIMEOUT_S;
+if (ON_CLAUDE && !TIMEOUT_S_EXPLICIT && TIMEOUT_S > CLAUDE_WINDOW_CAP_S) {
+  TIMEOUT_S = CLAUDE_WINDOW_CAP_S;
+  windowSource += `, capped at ${CLAUDE_WINDOW_CAP_S}s on Claude`;
+}
+
+function rerunKey(id, head) {
+  return `${id}:${head}`;
+}
+
+function isRecord(value) {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function readWaitStore() {
+  let store;
+  try {
+    store = JSON.parse(fs.readFileSync(WAITS, 'utf8'));
+  } catch (e) {
+    if (e.code === 'ENOENT') return { tickets: {}, reruns: {} };
+    throw new Error(`could not read ci-waits.json (${e.message})`);
+  }
+  if (!isRecord(store)) {
+    throw new Error('ci-waits.json must contain a JSON object');
+  }
+  if (store.tickets !== undefined && !isRecord(store.tickets)) {
+    throw new Error('ci-waits.json tickets must be an object');
+  }
+  if (store.reruns !== undefined && !isRecord(store.reruns)) {
+    throw new Error('ci-waits.json reruns must be an object');
+  }
+  if (store.tickets === undefined) store.tickets = {};
+  if (store.reruns === undefined) store.reruns = {};
+  for (const [ticket, entry] of Object.entries(store.tickets)) {
+    if (!isRecord(entry)) throw new Error(`ci-waits.json ticket record ${ticket} must be an object`);
+    if (entry.fingerprint !== undefined && typeof entry.fingerprint !== 'string') {
+      throw new Error(`ci-waits.json ticket record ${ticket} has an invalid fingerprint`);
+    }
+    if (entry.head_sha !== undefined && entry.head_sha !== null && typeof entry.head_sha !== 'string') {
+      throw new Error(`ci-waits.json ticket record ${ticket} has an invalid head_sha`);
+    }
+    for (const field of ['empty_windows', 'waited_s']) {
+      if (entry[field] !== undefined && (typeof entry[field] !== 'number' || !Number.isFinite(entry[field]) || entry[field] < 0)) {
+        throw new Error(`ci-waits.json ticket record ${ticket} has an invalid ${field}`);
+      }
+    }
+  }
+  for (const [key, entry] of Object.entries(store.reruns)) {
+    if (!isRecord(entry)
+        || typeof entry.head !== 'string' || !/^[0-9a-f]{40}$/i.test(entry.head)
+        || !['string', 'number'].includes(typeof entry.run_id) || String(entry.run_id) === ''
+        || typeof entry.at !== 'string' || !Number.isFinite(Date.parse(entry.at))
+        || (entry.journalled !== undefined && typeof entry.journalled !== 'boolean')
+        || (entry.status !== undefined && !['claimed', 'applied'].includes(entry.status))
+        || (entry.unknown_time !== undefined && typeof entry.unknown_time !== 'boolean')
+        || (entry.applied_at !== undefined && (typeof entry.applied_at !== 'string' || !Number.isFinite(Date.parse(entry.applied_at))))
+        || (entry.journalled_at !== undefined && (typeof entry.journalled_at !== 'string' || !Number.isFinite(Date.parse(entry.journalled_at))))) {
+      throw new Error(`ci-waits.json rerun record ${key} is invalid`);
+    }
+  }
+  return store;
+}
+
+function rerunFrom(store, id, head) {
+  const records = store && store.reruns;
+  if (!records || typeof records !== 'object') return null;
+  const keyed = records[rerunKey(id, head)];
+  if (keyed && keyed.head === head) return keyed;
+  const legacy = records[id];
+  return legacy && legacy.head === head ? legacy : null;
+}
+
+function readRerun(id, head) {
+  return rerunFrom(readWaitStore(), id, head);
+}
+
+function rerunEntryFor(store, id, head) {
+  const key = rerunKey(id, head);
+  if (store.reruns[key] && store.reruns[key].head === head) return store.reruns[key];
+  if (store.reruns[id] && store.reruns[id].head === head) return store.reruns[id];
+  return null;
+}
+
+function readRerunJournal(w, head) {
+  let journalText = '';
+  try {
+    journalText = fs.readFileSync(JOURNAL, 'utf8');
+  } catch (e) {
+    if (e.code !== 'ENOENT') throw new Error(`could not read delivery-log.jsonl (${e.message})`);
+  }
+  const events = journalText.split('\n').filter(Boolean).map((line) => {
+    try { return JSON.parse(line); } catch (e) { throw new Error(`delivery-log.jsonl contains malformed JSON (${e.message})`); }
+  });
+  const reruns = events.filter((event) => isRecord(event) && event.event === 'ci_rerun');
+  for (const event of reruns) {
+    if (typeof event.ticket !== 'string' || event.ticket === ''
+        || !['string', 'number'].includes(typeof event.pr) || String(event.pr) === ''
+        || typeof event.head !== 'string' || !/^[0-9a-f]{40}$/i.test(event.head)
+        || !['string', 'number'].includes(typeof event.run_id) || String(event.run_id) === ''
+        || typeof event.ts !== 'string' || !Number.isFinite(Date.parse(event.ts))
+        || (event.claim_at !== undefined && (typeof event.claim_at !== 'string' || !Number.isFinite(Date.parse(event.claim_at))))) {
+      throw new Error('delivery-log.jsonl contains a malformed ci_rerun row');
+    }
+  }
+  const priorRows = reruns.filter((event) => event.ticket === w.id && event.head === head);
+  if (priorRows.length > 1) throw new Error(`multiple ci_rerun rows already exist for ${w.id} at ${head}`);
+  if (priorRows.length === 1 && String(priorRows[0].pr) !== String(w.pr)) {
+    throw new Error(`ci_rerun row for ${w.id} at ${head} conflicts with the recorded PR`);
+  }
+  return { journalText, priorRows };
+}
+
+function claimRerun(w, head, runId) {
+  const { id } = w;
+  const timeoutMs = remainingTimeoutMs(INTERNAL_COMMAND_TIMEOUT_MS, deadline, LOCK_TAIL_RESERVE_MS);
+  if (timeoutMs <= 0) throw new Error('wait call deadline reached before rerun claim');
+  let result;
+  withLock(lockDirFor(LOCK_ROOT), 'ci-wait', () => {
+    const { priorRows } = readRerunJournal(w, head);
+    const store = readWaitStore();
+    const prior = rerunFrom(store, id, head);
+    if (priorRows.length === 1) {
+      const applied = priorRows[0];
+      if (prior && String(prior.run_id) !== String(applied.run_id)) {
+        throw new Error(`ci_rerun row for ${id} at ${head} conflicts with the durable claim`);
+      }
+      if (prior) {
+        result = { claimed: false, prior };
+        return;
+      }
+      const recovered = {
+        head, run_id: String(applied.run_id), at: applied.claim_at === undefined ? applied.ts : applied.claim_at,
+        ...(applied.claim_at === undefined ? { unknown_time: true } : {}),
+        status: 'applied', applied_at: applied.ts,
+        journalled: true, journalled_at: applied.ts,
+      };
+      store.reruns[rerunKey(id, head)] = recovered;
+      writeAtomic(WAITS, JSON.stringify(store, null, 2) + '\n');
+      result = { claimed: false, prior: recovered };
+      return;
+    }
+    if (prior) {
+      result = { claimed: false, prior };
+      return;
+    }
+    const entry = { head, run_id: String(runId), at: new Date().toISOString(), status: 'claimed', journalled: false };
+    store.reruns[rerunKey(id, head)] = entry;
+    writeAtomic(WAITS, JSON.stringify(store, null, 2) + '\n');
+    result = { claimed: true, entry };
+  }, { waitMs: timeoutMs });
+  return result;
+}
+
+function updateRerun(id, head, runId, update) {
+  const timeoutMs = remainingTimeoutMs(INTERNAL_COMMAND_TIMEOUT_MS, waitWallDeadline(), LOCK_TAIL_RESERVE_MS);
+  if (timeoutMs <= 0) throw new Error('wait call deadline reached before rerun status update');
+  withLock(lockDirFor(LOCK_ROOT), 'ci-wait', () => {
+    const store = readWaitStore();
+    const entry = rerunEntryFor(store, id, head);
+    if (!entry || String(entry.run_id) !== String(runId)) {
+      throw new Error(`rerun claim for ${id} at ${head} is missing`);
+    }
+    update(entry);
+    writeAtomic(WAITS, JSON.stringify(store, null, 2) + '\n');
+  }, { waitMs: timeoutMs });
+}
+
+function markRerunApplied(id, head, runId) {
+  updateRerun(id, head, runId, (entry) => {
+    entry.status = 'applied';
+    entry.applied_at = entry.applied_at || new Date().toISOString();
+  });
+}
+
+function markRerunJournalled(id, head, runId) {
+  updateRerun(id, head, runId, (entry) => {
+    entry.status = 'applied';
+    entry.applied_at = entry.applied_at || new Date().toISOString();
+    entry.journalled = true;
+    entry.journalled_at = entry.journalled_at || new Date().toISOString();
+  });
+}
+
+function reconcileRerunJournal(w, head, entry, verifiedApplied = false) {
+  const timeoutMs = remainingTimeoutMs(INTERNAL_COMMAND_TIMEOUT_MS, waitWallDeadline(), LOCK_TAIL_RESERVE_MS);
+  if (timeoutMs <= 0) throw new Error('wait call deadline reached before rerun journal');
+  let recorded = false;
+  withLock(lockDirFor(LOCK_ROOT), 'ci-wait', () => {
+    const { journalText, priorRows } = readRerunJournal(w, head);
+    if (priorRows.length === 1) {
+      const prior = priorRows[0];
+      if (String(prior.run_id) !== String(entry.run_id) || String(prior.pr) !== String(w.pr)) {
+        throw new Error(`ci_rerun row for ${w.id} at ${head} conflicts with the durable claim`);
+      }
+      recorded = true;
+      return;
+    }
+    if (!(verifiedApplied || entry.status === 'applied')) return;
+    const numericRunId = Number(entry.run_id);
+    const runId = /^\d+$/.test(String(entry.run_id)) && Number.isSafeInteger(numericRunId)
+      ? numericRunId : String(entry.run_id);
+    const event = {
+      ts: new Date().toISOString(), event: 'ci_rerun', ticket: w.id,
+      pr: Number(w.pr), head, run_id: runId, claim_at: entry.at,
+    };
+    fs.mkdirSync(path.dirname(JOURNAL), { recursive: true });
+    fs.appendFileSync(JOURNAL, `${journalText && !journalText.endsWith('\n') ? '\n' : ''}${JSON.stringify(event)}\n`);
+    recorded = true;
+  }, { waitMs: timeoutMs });
+  return recorded;
+}
+
+// @invariant: one rerun per head; only a journalled second cancel on that head is failing.
+function handleCancelled(w, c) {
+  if (!c || !c.cancelled) return null;
+  const head = (state[w.id] || {}).head_sha || null;
+  const runId = (c.cancelled_runs.find((r) => r.run_id) || {}).run_id || null;
+  if (!head) return { rerun: false, run_id: runId, error: 'no head sha on record' };
+  if (!CONFIG.valid) {
+    return holdCancelled(c, { rerun: false, run_id: runId === null ? null : String(runId), error: CONFIG_REASON });
+  }
+  if (!runId) {
+    return priorOrReason(c, w, head, runId, 'no run id for the cancelled check');
+  }
+
+  let claim;
+  try {
+    claim = claimRerun(w, head, runId);
+  } catch (e) {
+    return holdCancelled(c, { rerun: false, run_id: String(runId), error: `rerun not claimed (${e.message})` });
+  }
+  if (!claim.claimed) return priorRerunOutcome(c, w, claim.prior, head, runId);
+
+  const timeoutMs = remainingTimeoutMs(GH_TIMEOUT_MS, deadline);
+  if (timeoutMs <= 0) {
+    return holdCancelled(c, { rerun: false, run_id: String(runId), awaiting_rerun: String(runId),
+      error: 'wait call deadline reached after rerun claim' });
+  }
+  const args = ['run', 'rerun', String(runId)];
+  if (w.repo) args.push('--repo', w.repo);
+  const r = runBounded('gh', args, { timeoutMs });
+  if (r.status !== 0) {
+    return holdCancelled(c, { rerun: false, run_id: String(runId), awaiting_rerun: String(runId),
+      error: diagnostic(r) });
+  }
+
+  let statusError = null;
+  try {
+    markRerunApplied(w.id, head, runId);
+  } catch (e) {
+    statusError = `applied rerun status not recorded (${e.message})`;
+  }
+  let journalled = false;
+  let journalError = statusError;
+  try {
+    journalled = reconcileRerunJournal(w, head,
+      { run_id: String(runId), at: claim.entry.at, status: 'applied', journalled: false }, true);
+    if (!journalled) throw new Error('the applied rerun was not added to the journal');
+    try {
+      markRerunJournalled(w.id, head, runId);
+    } catch (e) {
+      journalled = false;
+      journalError = `rerun journal status not recorded (${e.message})`;
+    }
+  } catch (e) {
+    journalError = `rerun journal not recorded (${e.message})`;
+  }
+  return holdCancelled(c, {
+    rerun: true, run_id: String(runId), journalled,
+    ...(!journalled && journalError ? { error: journalError } : {}),
+  });
+}
+
+function priorOrReason(c, w, head, runId, reason) {
+  let prior;
+  try {
+    prior = readRerun(w.id, head);
+  } catch (e) {
+    return holdCancelled(c, { rerun: false, run_id: runId, error: `rerun state unavailable (${e.message})` });
+  }
+  return prior ? priorRerunOutcome(c, w, prior, head, runId)
+    : holdCancelled(c, { rerun: false, run_id: runId, error: reason });
+}
+
+function priorRerunOutcome(c, w, prior, head, runId) {
+  if (prior && head && prior.head === head) {
+    let journalled = false;
+    try {
+      journalled = reconcileRerunJournal(w, head, prior);
+      if (journalled && prior.journalled !== true) markRerunJournalled(w.id, head, prior.run_id);
+    } catch (e) {
+      return holdCancelled(c, { rerun: false, run_id: runId, awaiting_journal: prior.run_id,
+        error: `rerun journal recovery failed (${e.message})` });
+    }
+    if (prior.unknown_time === true) {
+      return holdCancelled(c, { rerun: false, run_id: runId, awaiting_rerun: prior.run_id,
+        unknown_time: true, reason: 'ci_rerun journal row is missing claim_at; time is unknown' });
+    }
+    const rerunAt = Date.parse(prior.at || '');
+    const stale = c.cancelled_runs.every((r) => Number.isFinite(rerunAt) && !(Date.parse(r.started_at || '') > rerunAt));
+    if (stale) return holdCancelled(c, { rerun: false, run_id: runId, awaiting_rerun: prior.run_id });
+    if (journalled) {
+      return failCancelled(c, { rerun: false, run_id: runId, already_rerun: prior.run_id });
+    }
+    return holdCancelled(c, { rerun: false, run_id: runId, awaiting_journal: prior.run_id });
+  }
+  return holdCancelled(c, { rerun: false, run_id: runId, error: 'rerun claim changed while handling cancellation' });
+}
+
+// @invariant: check-state already counts a first cancel as pending; promote it only after a journalled rerun.
+function holdCancelled(c, outcome) {
+  c.pending = Math.max(c.pending, c.cancelled);
+  return outcome;
+}
+
+function failCancelled(c, outcome) {
+  c.pending = Math.max(0, c.pending - c.cancelled);
+  c.failing += c.cancelled;
+  return outcome;
+}
+
 const startedAt = Date.now();
-let deadline = startedAt + TIMEOUT_S * 1000;
+const callDeadline = TIMEOUT_S_EXPLICIT ? Number.POSITIVE_INFINITY : callStartedAt + TIMEOUT_S * 1000;
+const finalizeReserveMs = TIMEOUT_S_EXPLICIT ? 0 : Math.min(Math.floor(TIMEOUT_S * 1000 / 4),
+  Math.max(100, Math.min(1000, Math.ceil(TIMEOUT_S * 100))));
+let deadline = TIMEOUT_S_EXPLICIT ? startedAt + TIMEOUT_S * 1000 : callDeadline - finalizeReserveMs;
+function remainingTimeoutMs(limit, deadlineAt, marginMs = 25) {
+  const remaining = Math.floor(deadlineAt - Date.now() - marginMs);
+  return remaining > 0 ? Math.min(limit, remaining) : 0;
+}
+
+function waitWallDeadline() {
+  return TIMEOUT_S_EXPLICIT
+    ? startedAt + TIMEOUT_S * 1000 + INTERNAL_COMMAND_TIMEOUT_MS + LOCK_TAIL_RESERVE_MS
+    : callDeadline;
+}
+
+function withSharedLockDeadline(deadlineAt, fn) {
+  const previous = activeSharedLockDeadline;
+  activeSharedLockDeadline = deadlineAt;
+  try { return fn(); } finally { activeSharedLockDeadline = previous; }
+}
 let nextWakeAt = null;
 let lastWaitEvent = null;
 const WAIT_WINDOW_ID = process.env.SHIPYARD_WAIT_WINDOW_ID
@@ -608,10 +982,13 @@ if (!JSON_OUT) {
 // first place (see the header). Found by phase 26's integrator, 2026-09-08.
 const sleep = (s) => {
   const ms = Math.round(s * 1000);
-  return spawnSync(process.execPath, ['-e', `setTimeout(()=>{}, ${ms})`], { timeout: ms + 5000 });
+  const timeout = remainingTimeoutMs(ms + 5000, callDeadline);
+  if (timeout <= 0) return null;
+  return spawnSync(process.execPath, ['-e', `setTimeout(()=>{}, ${ms})`], { timeout });
 };
 
 let rounds = 0;
+const lastSeen = new Map();
 // A ticket earns an entry here the first time `checksOf` returns a READABLE
 // answer this window (settled, moved or unchanged — anything but `null`). A
 // ticket that never appears here taught this window nothing: `gh` was
@@ -633,16 +1010,17 @@ function refreshPublishedState() {
   const current = readJson(path.join(GRAPH, 'delivery-front.json')) || {};
   const parked = Array.isArray(current.parked_by_run) ? current.parked_by_run : [];
   const args = parked.length ? [STATE_SYNC, '--parked', parked.join(',')] : [STATE_SYNC];
-  const remainingMs = Math.max(1, deadline - Date.now());
+  const timeoutMs = remainingTimeoutMs(60000, deadline);
+  if (timeoutMs <= 0) return { enabled: true, ok: false, reason: 'wait call deadline reached before state refresh' };
   const sync = runBounded(process.execPath, args, {
     cwd: LOCK_ROOT,
-    timeoutMs: Math.max(1, Math.min(60000, Math.ceil(remainingMs))),
+    timeoutMs,
   });
   if (sync.error || sync.status !== 0) {
     publisherHealthy = false;
     return { enabled: true, ok: false, reason: `state-sync did not publish (${diagnostic(sync)})` };
   }
-  const published = waitEvents.readPublished({ graphDir: GRAPH });
+  const published = withSharedLockDeadline(deadline, () => waitEvents.readPublished({ graphDir: GRAPH }));
   if (!published || !published.ok) {
     publisherHealthy = false;
     return { enabled: true, ok: false, reason: published && published.reason ? published.reason : 'published state binding is unavailable' };
@@ -673,7 +1051,7 @@ function observeWait(w, checks) {
   } else if (publisherEnabled) {
     observation.reviews = { unavailable: true };
   }
-  const result = waitEvents.observe({
+  const result = withSharedLockDeadline(deadline, () => waitEvents.observe({
     graphDir: GRAPH,
     run_id: RUN_ID,
     ticket: w.id,
@@ -683,7 +1061,7 @@ function observeWait(w, checks) {
     observation,
     eligibility: readJson(path.join(GRAPH, 'delivery-front.json')),
     window_id: WAIT_WINDOW_ID,
-  }, { interval_ms: INTERVAL_S * 1000, timeout_ms: TIMEOUT_S * 1000 });
+  }, { interval_ms: INTERVAL_S * 1000, deadline: new Date(deadline).toISOString() }));
   if (result && result.ok) {
     const wake = result.pending_action || result.action || null;
     if (wake) lastWaitEvent = wake;
@@ -698,14 +1076,17 @@ function observeWait(w, checks) {
 
 function recordWake(w, kind, reason) {
   if (!SCOPED_RUN || !STORE_DIR) return null;
+  if (remainingTimeoutMs(DEFAULT_LOCK_WAIT_MS, waitWallDeadline(), LOCK_TAIL_RESERVE_MS) <= 0) {
+    return { recorded: false, error: 'wait call deadline reached before the wake-event lock' };
+  }
   try {
-    return runWaker.recordWakeEvent({
+    return withSharedLockDeadline(waitWallDeadline(), () => runWaker.recordWakeEvent({
       store_dir: STORE_DIR,
       run_id: RUN_ID,
       kind,
       event_id: `ci-wait:${RUN_ID}:${WAIT_WINDOW_ID}:${w.id}:${kind}`,
       reason,
-    });
+    }));
   } catch (cause) {
     return { recorded: false, error: cause.message };
   }
@@ -750,9 +1131,13 @@ for (;;) {
   for (const w of watch) {
     const c = checksOf(w);
     if (c) goodEver.add(w.id);
+    const rerun = handleCancelled(w, c);
+    if (rerun && c) c.rerun = rerun;
     const event = observeWait(w, c);
     const eventAction = event && (event.pending_action || event.action);
-    seen.push({ ...w, checks: c, wait_event: eventAction || null });
+    const observation = { ...w, checks: c, wait_event: eventAction || null };
+    seen.push(observation);
+    if (c) lastSeen.set(w.id, observation);
     if (event && event.interrupted) {
       finish(
         { settled: null, interrupted: true, reason: 'actionable work appeared while waiting', rounds,
@@ -805,10 +1190,11 @@ for (;;) {
     // so nothing is recorded.
     const outage = watch.length > 0 && goodEver.size === 0;
     const parked = outage ? [] : recordOutcome(null, watch, goodEver);
+    const reportSeen = lastSeen.size ? [...lastSeen.values()] : seen;
     const lines = parkLines(parked);
     finish(
       { settled: null, timed_out: true, rounds, waited_s: Math.round((Date.now() - startedAt) / 1000),
-        watched: seen, escalated: parked, wait_event: lastWaitEvent,
+        watched: reportSeen, escalated: parked, wait_event: lastWaitEvent,
         window_s: Math.round(TIMEOUT_S), window_source: windowSource,
         outage, ...CONFIG_FIELDS },
       (outage

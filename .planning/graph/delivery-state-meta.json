@@ -1,13 +1,13 @@
 {
   "schema_version": 1,
-  "generation": 396,
-  "generation_identity": "9f96ae8a-5dca-4233-bb6d-14ab94ee1cdd",
-  "previous_generation_identity": "16777245:12934260860:1790611713162323200:cfd3c3157dbab19d0b853b9e7cd500820b23ea16b99c3962c3a1390f6fcf760b",
-  "observed_at": "2026-09-28T16:14:24.960Z",
-  "generated_at": "2026-09-28T16:14:24.960Z",
+  "generation": 398,
+  "generation_identity": "e35fa521-9e1b-489d-b312-2e0d89f7f161",
+  "previous_generation_identity": "16777245:12934676491:1790632650121419500:1bf8a56c3c37e6edcd664ebcd95c479395a7cf243813602808fda3f371be4c3e",
+  "observed_at": "2026-09-28T21:57:30.563Z",
+  "generated_at": "2026-09-28T21:57:30.563Z",
   "by": "state-sync",
-  "pid": 13602,
-  "observation_generation": 396,
+  "pid": 10722,
+  "observation_generation": 398,
   "observation_projection": {
     "tickets": {
       "T-20-01": {
@@ -2266,21 +2266,15 @@
         "checks": null
       },
       "T-43-04": {
-        "status": "pr-open",
+        "status": "merged",
         "repository": null,
         "pr": 319,
-        "head": "6e467fa671521381deb4c51910ffb3de35e7b5fb",
+        "head": null,
         "draft": false,
-        "base": "ticket/T-43-07-cancelled-checks-ignore-superseded-runs",
-        "merge_state": "CLEAN",
+        "base": "epic/43-target-project-delivery-at-scale",
+        "merge_state": null,
         "review_decision": null,
-        "checks": {
-          "total": 1,
-          "pending": 0,
-          "failing": 0,
-          "none_reported": false,
-          "unavailable": false
-        }
+        "checks": null
       },
       "T-43-05": {
         "status": "merged",
@@ -2294,9 +2288,9 @@
         "checks": null
       },
       "T-43-06": {
-        "status": "pending",
+        "status": "merged",
         "repository": null,
-        "pr": null,
+        "pr": 371,
         "head": null,
         "draft": false,
         "base": "epic/43-target-project-delivery-at-scale",
@@ -2305,29 +2299,23 @@
         "checks": null
       },
       "T-43-07": {
-        "status": "pr-open",
+        "status": "merged",
         "repository": null,
         "pr": 266,
-        "head": "fef7d105eaf6614575117c88a4224932a3253911",
-        "draft": true,
-        "base": "epic/43-target-project-delivery-at-scale",
-        "merge_state": "CLEAN",
-        "review_decision": null,
-        "checks": {
-          "total": 1,
-          "pending": 0,
-          "failing": 0,
-          "none_reported": false,
-          "unavailable": false
-        }
-      },
-      "T-43-08": {
-        "status": "pending",
-        "repository": null,
-        "pr": null,
         "head": null,
         "draft": false,
-        "base": "ticket/T-43-04-bounded-reachability-o-1-git-forms-a-lar",
+        "base": "epic/43-target-project-delivery-at-scale",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-43-08": {
+        "status": "merged",
+        "repository": null,
+        "pr": 370,
+        "head": null,
+        "draft": false,
+        "base": "epic/43-target-project-delivery-at-scale",
         "merge_state": null,
         "review_decision": null,
         "checks": null
@@ -2344,38 +2332,26 @@
         "checks": null
       },
       "T-43-10": {
-        "status": "pr-open",
+        "status": "merged",
         "repository": null,
         "pr": 346,
-        "head": "244c3351843e40822bef4349acc140cc9ce19c1d",
-        "draft": true,
+        "head": null,
+        "draft": false,
         "base": "epic/43-target-project-delivery-at-scale",
-        "merge_state": "CLEAN",
+        "merge_state": null,
         "review_decision": null,
-        "checks": {
-          "total": 1,
-          "pending": 0,
-          "failing": 0,
-          "none_reported": false,
-          "unavailable": false
-        }
+        "checks": null
       },
       "T-43-11": {
-        "status": "pr-open",
+        "status": "merged",
         "repository": null,
         "pr": 334,
-        "head": "105759c579945cff51ba111023132fc24126a592",
-        "draft": true,
+        "head": null,
+        "draft": false,
         "base": "epic/43-target-project-delivery-at-scale",
-        "merge_state": "UNKNOWN",
+        "merge_state": null,
         "review_decision": null,
-        "checks": {
-          "total": 1,
-          "pending": 0,
-          "failing": 0,
-          "none_reported": false,
-          "unavailable": false
-        }
+        "checks": null
       },
       "T-43-12": {
         "status": "pending",
@@ -2554,9 +2530,9 @@
         "checks": null
       },
       "T-45-01": {
-        "status": "pending",
+        "status": "merged",
         "repository": null,
-        "pr": null,
+        "pr": 361,
         "head": null,
         "draft": false,
         "base": "epic/45-close-residual-pipeline-efficiency-gaps",
@@ -2565,9 +2541,9 @@
         "checks": null
       },
       "T-45-02": {
-        "status": "pending",
+        "status": "merged",
         "repository": null,
-        "pr": null,
+        "pr": 359,
         "head": null,
         "draft": false,
         "base": "epic/45-close-residual-pipeline-efficiency-gaps",
@@ -2576,9 +2552,9 @@
         "checks": null
       },
       "T-45-03": {
-        "status": "pending",
+        "status": "merged",
         "repository": null,
-        "pr": null,
+        "pr": 367,
         "head": null,
         "draft": false,
         "base": "epic/45-close-residual-pipeline-efficiency-gaps",
@@ -2587,9 +2563,9 @@
         "checks": null
       },
       "T-45-04": {
-        "status": "pending",
+        "status": "merged",
         "repository": null,
-        "pr": null,
+        "pr": 360,
         "head": null,
         "draft": false,
         "base": "epic/45-close-residual-pipeline-efficiency-gaps",
@@ -2598,9 +2574,9 @@
         "checks": null
       },
       "T-45-05": {
-        "status": "pending",
+        "status": "merged",
         "repository": null,
-        "pr": null,
+        "pr": 363,
         "head": null,
         "draft": false,
         "base": "epic/45-close-residual-pipeline-efficiency-gaps",
@@ -2609,9 +2585,9 @@
         "checks": null
       },
       "T-45-06": {
-        "status": "pending",
+        "status": "merged",
         "repository": null,
-        "pr": null,
+        "pr": 362,
         "head": null,
         "draft": false,
         "base": "epic/45-close-residual-pipeline-efficiency-gaps",
@@ -2620,9 +2596,9 @@
         "checks": null
       },
       "T-45-07": {
-        "status": "pending",
+        "status": "merged",
         "repository": null,
-        "pr": null,
+        "pr": 357,
         "head": null,
         "draft": false,
         "base": "epic/45-close-residual-pipeline-efficiency-gaps",
@@ -2631,9 +2607,9 @@
         "checks": null
       },
       "T-45-08": {
-        "status": "pending",
+        "status": "merged",
         "repository": null,
-        "pr": null,
+        "pr": 366,
         "head": null,
         "draft": false,
         "base": "epic/45-close-residual-pipeline-efficiency-gaps",
@@ -2642,15 +2618,21 @@
         "checks": null
       },
       "T-45-09": {
-        "status": "pending",
+        "status": "pr-open",
         "repository": null,
-        "pr": null,
-        "head": null,
+        "pr": 369,
+        "head": "b43752383d5d30bcb8261659b8b73358cc624fbe",
         "draft": false,
         "base": "epic/45-close-residual-pipeline-efficiency-gaps",
-        "merge_state": null,
+        "merge_state": "CLEAN",
         "review_decision": null,
-        "checks": null
+        "checks": {
+          "total": 1,
+          "pending": 0,
+          "failing": 0,
+          "none_reported": false,
+          "unavailable": false
+        }
       },
       "T-45-10": {
         "status": "pending",
@@ -2658,7 +2640,7 @@
         "pr": null,
         "head": null,
         "draft": false,
-        "base": "epic/45-close-residual-pipeline-efficiency-gaps",
+        "base": "ticket/T-45-09-codex-decompose-host-recovers-a-complete",
         "merge_state": null,
         "review_decision": null,
         "checks": null
@@ -2669,15 +2651,15 @@
         "pr": null,
         "head": null,
         "draft": false,
-        "base": "epic/45-close-residual-pipeline-efficiency-gaps",
+        "base": "ticket/T-45-09-codex-decompose-host-recovers-a-complete",
         "merge_state": null,
         "review_decision": null,
         "checks": null
       },
       "T-45-12": {
-        "status": "pending",
+        "status": "merged",
         "repository": null,
-        "pr": null,
+        "pr": 364,
         "head": null,
         "draft": false,
         "base": "epic/45-close-residual-pipeline-efficiency-gaps",
@@ -2686,9 +2668,9 @@
         "checks": null
       },
       "T-45-13": {
-        "status": "pending",
+        "status": "merged",
         "repository": null,
-        "pr": null,
+        "pr": 368,
         "head": null,
         "draft": false,
         "base": "epic/45-close-residual-pipeline-efficiency-gaps",
@@ -2697,23 +2679,29 @@
         "checks": null
       },
       "T-45-14": {
-        "status": "pending",
+        "status": "pr-open",
         "repository": null,
-        "pr": null,
-        "head": null,
-        "draft": false,
+        "pr": 365,
+        "head": "5896bc797df267fb2b75de51904903085a42b04c",
+        "draft": true,
         "base": "epic/45-close-residual-pipeline-efficiency-gaps",
-        "merge_state": null,
+        "merge_state": "UNSTABLE",
         "review_decision": null,
-        "checks": null
+        "checks": {
+          "total": 1,
+          "pending": 0,
+          "failing": 1,
+          "none_reported": false,
+          "unavailable": false
+        }
       }
     }
   },
   "binding": {
     "schema_version": 1,
-    "state_digest": "6fdda69e7f189d22f293676f7afc89d2ac39c508da385f5b3ed14e782e0c2386",
-    "front_digest": "75736593daa3115cdfb9f647eba8303a31d1d5dbcef7a61c33ec5d5f31179fd2",
-    "observation_digest": "9070fd5b03927f5249e38ca8ce46d5dddbd12e713825cba84dc845ba6997ed79",
-    "observation_generation": 396
+    "state_digest": "58c0ef3911432c66f3f07374c42648f192eb6cc0b24a1a943c674b68c29d03d7",
+    "front_digest": "5ad50d1d0902bb74e88f7858c41712d8c5c68368e228a1adf7ba1a666fcf045b",
+    "observation_digest": "1d7e450ebe36bd9e93689228259b58bd2ea047b8e371428478e01d2938622b13",
+    "observation_generation": 398
   }
 }
