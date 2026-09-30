@@ -4286,7 +4286,7 @@ tickets:
     repo: null
     wave: 6
     depends_on: [T-45-07, T-45-08, T-45-09, T-45-10, T-45-15]
-    files: [plugins/delivery-pipeline/scripts/codex-decompose-host.cjs, plugins/delivery-pipeline/scripts/claude-decompose-host.cjs, plugins/delivery-pipeline/scripts/codex-runtime-host.cjs, plugins/delivery-pipeline/scripts/dispatch-boundary.cjs, plugins/delivery-pipeline/scripts/planning-writer-lease.cjs, tests/unit/codex-decompose-host.test.cjs, tests/unit/claude-decompose-host.test.cjs, tests/unit/codex-runtime-host.test.cjs, tests/unit/dispatch-boundary.test.cjs, tests/unit/planning-writer-lease.test.cjs]
+    files: [plugins/delivery-pipeline/scripts/codex-decompose-host.cjs, plugins/delivery-pipeline/scripts/claude-decompose-host.cjs, plugins/delivery-pipeline/scripts/codex-runtime-host.cjs, plugins/delivery-pipeline/scripts/dispatch-boundary.cjs, plugins/delivery-pipeline/scripts/planning-writer-lease.cjs, plugins/delivery-pipeline/scripts/claude-workflow-host.cjs, plugins/delivery-pipeline/scripts/codex-delivery-host.cjs, tests/unit/codex-decompose-host.test.cjs, tests/unit/claude-decompose-host.test.cjs, tests/unit/codex-runtime-host.test.cjs, tests/unit/dispatch-boundary.test.cjs, tests/unit/planning-writer-lease.test.cjs, tests/unit/claude-workflow-host.test.cjs, tests/unit/codex-delivery-host.test.cjs, tests/unit/codex-dispatch-adapter.test.cjs, tests/unit/planning-artifacts.test.cjs, tests/unit/source-contract.test.cjs]
     risk: high
     human_checkpoint: true
     checkpoint: review
