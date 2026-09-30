@@ -2,7 +2,7 @@
 
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { installClaudeMarketplace, installCodexMarketplace } =
+const { main, installClaudeMarketplace, installCodexMarketplace } =
   require('../../scripts/install-shipyard-marketplace.cjs');
 
 function fixture({ pinned = true, failInstall = false } = {}) {
@@ -218,4 +218,110 @@ test('a release Codex install is not redirected, even with CODEX_HOME unset', ()
   const env = codexSetup('serhii-nochevnyi/shipyard', () => { throw new Error('must not inspect'); });
   assert.equal(env.SHIPYARD_INSTALL_KIND, 'release');
   assert.equal('CODEX_HOME' in env, false);
+});
+
+function mainCodexHarness(source, { sandbox, codexHomeEnv, inspect: inspectSource,
+  marketplaceList = [] } = {}) {
+  const home = sandbox || fs.mkdtempSync(path.join(os.tmpdir(), 'marketplace-main-home-'));
+  const version = '0.66.0+codex.0123456789abcdef';
+  const env = { ...process.env, HOME: home, XDG_STATE_HOME: path.join(home, 'xdg-state'),
+    CODEX_HOME: codexHomeEnv };
+  const events = [];
+  const inspect = inspectSource || (() => ({ version: '0.66.0', sha: 'dirty', tagSha: 'release', dirty: true }));
+  const copyEnv = (value) => ({ ...value });
+  const read = (command, args, selectedEnv) => {
+    events.push({ type: 'read', command, args: [...args], env: copyEnv(selectedEnv) });
+    if (args[1] === 'marketplace') return { marketplaces: marketplaceList };
+    return { installed: [{ pluginId: 'shipyard@shipyard', enabled: true, version }] };
+  };
+  const execute = (command, args, selectedEnv) => {
+    events.push({ type: 'execute', command, args: [...args], env: copyEnv(selectedEnv) });
+    if (args[1] === 'add' && args[0] === 'plugin') {
+      const cache = path.join(selectedEnv.CODEX_HOME, 'plugins/cache/shipyard/shipyard', version);
+      fs.mkdirSync(cache, { recursive: true });
+      fs.writeFileSync(path.join(cache, 'package-build.json'), '{}\n');
+    }
+  };
+  const runCommand = (command, args, selectedEnv) => {
+    events.push({ type: 'ensure', command, args: [...args], env: copyEnv(selectedEnv) });
+  };
+  let error = null;
+  const args = source === undefined ? ['codex'] : ['codex', '--source', source];
+  try { main(args, { env, inspect, run: runCommand, execute, read }); }
+  catch (caught) { error = caught; }
+  return { home, env, events, error };
+}
+
+test('main selects each checkout home before ensure and carries it through marketplace and bootstrap', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'marketplace-main-roots-'));
+  const sources = [localSource(), localSource()];
+  const results = sources.map((source, index) => mainCodexHarness(source, {
+    sandbox: home,
+    ...(index === 1 ? { marketplaceList: [{ name: 'shipyard', marketplaceSource: {
+      sourceType: 'git', source: 'https://previous.example/shipyard.git',
+    } }] } : {}),
+  }));
+  const selectedHomes = results.map((result, index) => dogfoodHome('codex',
+    fs.realpathSync(sources[index]), results[index].env));
+
+  assert.notEqual(selectedHomes[0], selectedHomes[1]);
+  for (const [index, result] of results.entries()) {
+    assert.equal(result.error, null, result.error?.message);
+    const codexEvents = result.events.filter(event => event.type === 'ensure'
+      || event.type === 'read' || event.type === 'execute');
+    assert.ok(codexEvents.length >= 5, 'ensure, marketplace, plugin inspection and bootstrap all ran');
+    assert.equal(codexEvents[0].type, 'ensure', 'target selection precedes the first Codex operation');
+    assert.equal(codexEvents[0].command, process.execPath);
+    assert.match(codexEvents[0].args[0], /ensure-gsd-plugin\.cjs$/);
+    assert.equal(codexEvents[0].args[1], 'codex');
+    assert.ok(codexEvents.every(event => event.env.CODEX_HOME === selectedHomes[index]),
+      `every Codex operation should use ${selectedHomes[index]}`);
+    assert.ok(codexEvents.some(event => event.type === 'execute'
+      && event.command === process.execPath && /bootstrap-shipyard-plugin\.cjs$/.test(event.args[0])),
+    'bootstrap receives the selected environment');
+    assert.ok(codexEvents.some(event => event.type === 'execute'
+      && event.args[0] === 'plugin' && event.args[1] === 'marketplace' && event.args[2] === 'add'),
+    'marketplace add receives the selected environment');
+    assert.ok(fs.existsSync(selectedHomes[index]));
+  }
+  assert.ok(results[1].events.some(event => event.type === 'execute'
+    && event.args.join(' ') === 'plugin marketplace remove shipyard'),
+  'replacement removes the prior marketplace under the selected environment');
+  assert.equal(fs.existsSync(path.join(home, '.codex')), false, 'the shared default remains untouched');
+});
+
+test('main keeps tagged releases on the default home and honors a safe explicit dogfood home', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'marketplace-main-release-custom-'));
+  const release = mainCodexHarness('serhii-nochevnyi/shipyard', {
+    sandbox: home,
+    marketplaceList: [{ name: 'shipyard', marketplaceSource: {
+      sourceType: 'git', source: 'https://github.com/serhii-nochevnyi/shipyard.git',
+    } }],
+  });
+  const defaultHome = path.join(home, '.codex');
+  assert.equal(release.error, null, release.error?.message);
+  assert.ok(release.events.every(event => event.env.CODEX_HOME === defaultHome));
+  assert.ok(release.events.some(event => event.type === 'execute'
+    && event.args.join(' ') === 'plugin marketplace upgrade shipyard'),
+  'tagged release upgrade keeps its established default target');
+
+  const customHome = path.join(home, 'custom-codex-home');
+  const custom = mainCodexHarness(localSource(), { sandbox: home, codexHomeEnv: customHome });
+  assert.equal(custom.error, null, custom.error?.message);
+  assert.ok(custom.events.every(event => event.env.CODEX_HOME === customHome),
+    'an explicit safe custom home is used by ensure, marketplace operations and bootstrap');
+});
+
+test('main refuses an explicit shared default before ensure, Codex calls or filesystem writes', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'marketplace-main-refusal-'));
+  const source = localSource();
+  const defaultHome = path.join(home, '.codex');
+  const stateRoot = path.join(home, 'xdg-state');
+  const before = fs.readdirSync(home).sort();
+  const result = mainCodexHarness(source, { sandbox: home, codexHomeEnv: defaultHome });
+  assert.match(result.error?.message || '', /Refusing dogfood Codex source.*shared default/s);
+  assert.deepEqual(result.events, [], 'refusal happens before the first Codex operation');
+  assert.deepEqual(fs.readdirSync(home).sort(), before, 'refusal creates no target or state directories');
+  assert.equal(fs.existsSync(defaultHome), false);
+  assert.equal(fs.existsSync(stateRoot), false);
 });
