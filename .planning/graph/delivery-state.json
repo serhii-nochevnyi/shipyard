@@ -2895,37 +2895,15 @@
   "T-45-10": {
     "branch": "ticket/T-45-10-claude-decompose-host-recovers-a-complet",
     "pr": 383,
-    "status": "pr-open",
+    "status": "merged",
     "recorded_pr": 383,
-    "draft": false,
-    "review_decision": null,
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/383",
-    "pr_base": "epic/45-close-residual-pipeline-efficiency-gaps",
-    "pr_created_at": "2026-09-30T14:18:28Z",
-    "head_sha": "e0008a94246b41e7a172895bde05fa3b2fcba505",
-    "merge_state": "CLEAN",
-    "behind_by": 1,
-    "gate": {
-      "arch-review": "conform",
-      "drift-check": "skipped",
-      "degenerate-green": "4",
-      "checks": "green",
-      "base_tree": "8c7ef7d833a68b0050211e0be80a165f364ba8ef",
-      "head": "e0008a94246b41e7a172895bde05fa3b2fcba505"
-    },
-    "checks": {
-      "total": 2,
-      "failing": 0,
-      "pending": 0,
-      "none_reported": false,
-      "unavailable": false
-    },
+    "merged_into": "epic/45-close-residual-pipeline-efficiency-gaps",
     "base": "epic/45-close-residual-pipeline-efficiency-gaps",
     "base_reason": "T-45-09 is MERGED, so its branch is no longer where work lands — the base is epic/45-close-residual-pipeline-efficiency-gaps (base-merge it in first to keep the review diff one slice)",
     "epic": "epic/45-close-residual-pipeline-efficiency-gaps",
-    "merge_scope": "stacked",
-    "reapable": false,
-    "since": "2026-09-30T16:41:49.180Z"
+    "reapable": true,
+    "since": "2026-09-30T17:35:20.352Z"
   },
   "T-45-11": {
     "branch": "ticket/T-45-11-codex-decomposition-runs-detached-so-the",
@@ -2983,8 +2961,8 @@
     "branch": "ticket/T-45-15-prepare-the-0-69-0-release-from-the-full",
     "pr": null,
     "status": "pending",
-    "base": "ticket/T-45-10-claude-decompose-host-recovers-a-complet",
-    "base_reason": "T-45-10 is pr-open — cascade off ticket/T-45-10-claude-decompose-host-recovers-a-complet; the sentinel retargets this PR onto epic/45-close-residual-pipeline-efficiency-gaps when T-45-10 lands; ticket-worktree.sh create merges epic/45-close-residual-pipeline-efficiency-gaps in for non-primary parent(s) T-45-01, T-45-02, T-45-03, T-45-04, T-45-05, T-45-06, T-45-07, T-45-08, T-45-09, T-45-11, T-45-12, T-45-13, T-45-14",
+    "base": "epic/45-close-residual-pipeline-efficiency-gaps",
+    "base_reason": "T-45-10 is MERGED, so its branch is no longer where work lands — the base is epic/45-close-residual-pipeline-efficiency-gaps (base-merge it in first to keep the review diff one slice); ticket-worktree.sh create merges epic/45-close-residual-pipeline-efficiency-gaps in for non-primary parent(s) T-45-01, T-45-02, T-45-03, T-45-04, T-45-05, T-45-06, T-45-07, T-45-08, T-45-09, T-45-11, T-45-12, T-45-13, T-45-14",
     "epic": "epic/45-close-residual-pipeline-efficiency-gaps",
     "base_merge": "epic/45-close-residual-pipeline-efficiency-gaps",
     "ready": true,

@@ -1,8 +1,8 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 4ff98e1fa3242f1732536e81136a60029bff549fed9f2861ab3b298e956cf5c3
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: c46be5f913986f5411454ac5a76eb31ec8efc52afea58e9625143a12771ad9e0
 phase: 45
 status: human_needed
-shipyard_source_fingerprint: 4ff98e1fa3242f1732536e81136a60029bff549fed9f2861ab3b298e956cf5c3
+shipyard_source_fingerprint: c46be5f913986f5411454ac5a76eb31ec8efc52afea58e9625143a12771ad9e0
 ---
 
 # Phase 45: Close residual pipeline efficiency gaps — Verification Projection
@@ -13,7 +13,7 @@ shipyard_source_fingerprint: 4ff98e1fa3242f1732536e81136a60029bff549fed9f2861ab3
 
 | Truth | Evidence | Status |
 |---|---|---|
-| Every phase plan is accounted for | 13/15 delivery records are merged | ? UNCERTAIN |
+| Every phase plan is accounted for | 14/15 delivery records are merged | ? UNCERTAIN |
 | Integration is coherent | INTEGRATION.md is missing | ? UNCERTAIN |
 | Verification evidence is present | INTEGRATION.md is missing | ? UNCERTAIN |
 
@@ -30,7 +30,7 @@ shipyard_source_fingerprint: 4ff98e1fa3242f1732536e81136a60029bff549fed9f2861ab3
 | T-45-07 | merged | ✓ VERIFIED |
 | T-45-08 | merged | ✓ VERIFIED |
 | T-45-09 | merged | ✓ VERIFIED |
-| T-45-10 | pr-open | ? UNCERTAIN |
+| T-45-10 | merged | ✓ VERIFIED |
 | T-45-11 | merged | ✓ VERIFIED |
 | T-45-12 | merged | ✓ VERIFIED |
 | T-45-13 | merged | ✓ VERIFIED |
@@ -44,4 +44,4 @@ shipyard_source_fingerprint: 4ff98e1fa3242f1732536e81136a60029bff549fed9f2861ab3
 
 ## Gaps Summary
 
-**Not green:** 2 plan(s) are not merged.
+**Not green:** 1 plan(s) are not merged.

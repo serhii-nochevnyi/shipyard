@@ -913,8 +913,8 @@ REQ-193 has an approved first-pass contribution here; its full completion belong
 <!-- shipyard:gsd-sync:begin -->
 ## Shipyard synchronization (generated)
 
-- Source fingerprint: `7f5ea56c21d6da6aff2b4f5273275d4cd8221ad0060885226d1f836291166fcf`
-- Plans merged: 242/244
+- Source fingerprint: `3182255582106ec04d0f07a0e997ec62c146e790c2a192091c854e9e6c1f495f`
+- Plans merged: 243/244
 - Phases verified: 10/27
 - Current phase: 20
 
@@ -945,7 +945,7 @@ REQ-193 has an approved first-pass contribution here; its full completion belong
 | 42 — Resume trusted finalization without executor replay | 3 | 3 | gaps_found |
 | 43 — Target-project delivery at scale | 19 | 19 | pending |
 | 44 — Optimize subscription efficiency per runtime | 8 | 8 | pending |
-| 45 — Close residual pipeline efficiency gaps | 15 | 13 | pending |
+| 45 — Close residual pipeline efficiency gaps | 15 | 14 | pending |
 | 47 — Complete deferred decomposition wait attribution | 0 | 0 | pending |
 
 <!-- shipyard:gsd-sync:end -->

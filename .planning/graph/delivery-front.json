@@ -1,18 +1,16 @@
 {
-  "generated_at": "2026-09-30T17:09:30.414Z",
-  "observed_at": "2026-09-30T17:09:30.414Z",
-  "generation": 403,
+  "generated_at": "2026-09-30T17:35:20.352Z",
+  "observed_at": "2026-09-30T17:35:20.352Z",
+  "generation": 404,
   "parked_by_run": [],
   "auto_merge": "epic",
-  "dispatches_applied_at": "2026-09-30T17:09:30.414Z",
+  "dispatches_applied_at": "2026-09-30T17:35:20.352Z",
   "actionable": {
     "execute": [
       "T-45-15"
     ],
     "publish": [],
-    "fix": [
-      "T-45-10"
-    ],
+    "fix": [],
     "finalize": [],
     "merge": []
   },
@@ -264,6 +262,7 @@
       "T-45-07",
       "T-45-08",
       "T-45-09",
+      "T-45-10",
       "T-45-11",
       "T-45-12",
       "T-45-13",
@@ -271,13 +270,12 @@
     ]
   },
   "why": {
-    "T-45-10": "PR #383: the base moved: `epic/45-close-residual-pipeline-efficiency-gaps` is 1 commit(s) ahead of this branch, so any green here was measured against a merge base that no longer exists. In the ticket worktree: `base-merge.cjs <ticket> --worktree <path> --base <base ref>` (or `git fetch origin && git merge origin/<base>`) — NEVER rebase: the PR is pushed, so a rebase is a force-push that dismisses approvals and re-anchors resolved threads.",
     "T-45-15": "ready — worktree + executor"
   },
   "counts": {
     "execute": 1,
     "publish": 0,
-    "fix": 1,
+    "fix": 0,
     "finalize": 0,
     "merge": 0,
     "ci": 0,
@@ -286,10 +284,10 @@
     "merge_human": 0,
     "human": 0,
     "blocked": 0,
-    "done": 242
+    "done": 243
   },
   "parent_of": {},
-  "actionable_count": 2,
+  "actionable_count": 1,
   "tracker_blocked_count": 0,
   "left_behind_count": 0,
   "fixpoint": false,
@@ -299,13 +297,11 @@
     "free": 4
   },
   "sentinel": {
-    "duty": [
-      "T-45-10"
-    ],
+    "duty": [],
     "waiting_ci": [],
     "waiting_parent": [],
     "dispatched": [],
-    "clear": false
+    "clear": true
   },
   "roles": {
     "execute": [

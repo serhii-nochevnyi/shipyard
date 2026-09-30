@@ -1,12 +1,12 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 7dd2fcb4c32ee54fcb90ceb94331be0d8479ecdf45c8c4ec2384b18720070d71
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 81b9d7afc40a0c720dd1b725ce23b068e23eef129bc2d65784349ad87d34b5e6
 gsd_state_version: '1.0'
 status: planning
 progress:
   total_phases: 27
   completed_phases: 10
   total_plans: 244
-  completed_plans: 242
+  completed_plans: 243
   percent: 99
 ---
 
@@ -30,7 +30,7 @@ Progress: [█████████░] 99%
 
 ## Performance Metrics
 
-- Total plans completed: 242
+- Total plans completed: 243
 - Average duration: not measured by the projection
 - Total execution time: not measured by the projection
 
@@ -63,7 +63,7 @@ Progress: [█████████░] 99%
 | 42 | 3 | 3 | gaps_found |
 | 43 | 19 | 19 | pending |
 | 44 | 8 | 8 | pending |
-| 45 | 15 | 13 | pending |
+| 45 | 15 | 14 | pending |
 | 47 | 0 | 0 | pending |
 
 ## Accumulated Context
@@ -79,7 +79,6 @@ Review and resolve phase integration findings shown in the phase artifacts.
 
 ### Blockers/Concerns
 
-- T-45-10: delivery status is pr-open
 - T-45-15: delivery status is pending
 - Phase 20: INTEGRATION.md is missing
 - Phase 21: INTEGRATION.md is missing
@@ -87,6 +86,7 @@ Review and resolve phase integration findings shown in the phase artifacts.
 - Phase 23: INTEGRATION.md is missing
 - Phase 24: integration evidence records a finding or failed verdict
 - Phase 26: verification evidence records a failed check
+- Phase 27: integration evidence records a finding or failed verdict
 
 ## Deferred Items
 
@@ -96,6 +96,6 @@ Review and resolve phase integration findings shown in the phase artifacts.
 
 ## Session Continuity
 
-Last session: 2026-09-30 17:09
+Last session: 2026-09-30 17:35
 Stopped at: Shipyard GSD projection synchronized from the delivery graph.
 Resume file: None
