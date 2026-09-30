@@ -20,6 +20,11 @@ const {
   ESTIMATOR_VERSION,
 } = require('./orchestration-overhead.cjs');
 const prHygiene = require('./pr-hygiene.cjs');
+const {
+  MANIFEST_NAME, PR_BODY_NAME, EVIDENCE_NAME, REPAIR_EVIDENCE_NAME,
+  DRIFT_EVIDENCE_NAME, ARCH_REVIEW_EVIDENCE_NAME, SENTINEL_EVIDENCE_NAME,
+  ARTIFACT_ARCHIVE_DIR,
+} = require('./conveyor-scratch.cjs');
 
 const ROLE_ARTIFACT_SCHEMA = 'shipyard.role-artifact.v1';
 const ENVELOPE_SCHEMA = 'shipyard.executor-result.v1';
@@ -27,12 +32,6 @@ const ENVELOPE_VERSION = 1;
 const SUMMARY_MAX_CHARS = 500;
 const ENVELOPE_MAX_BYTES = 8192;
 const EVIDENCE_RANGE_MAX_CHARS = 4096;
-const MANIFEST_NAME = '.shipyard-role-artifact.json';
-const PR_BODY_NAME = '.shipyard-pr-body.md';
-const EVIDENCE_NAME = '.shipyard-evidence.md';
-const REPAIR_EVIDENCE_NAME = '.shipyard-repair-evidence.md';
-const DRIFT_EVIDENCE_NAME = '.shipyard-drift-evidence.md';
-const ARTIFACT_ARCHIVE_DIR = '.shipyard-role-artifacts';
 const FINDINGS_NAME = 'findings.json';
 const REPAIR_ENVELOPE_SCHEMA = 'shipyard.repair-result.v1';
 const DRIFT_ENVELOPE_SCHEMA = 'shipyard.drift-result.v1';
@@ -40,12 +39,13 @@ const JUDGMENT_ENVELOPE_SCHEMA = 'shipyard.judgment-result.v1';
 const REPAIR_ROLES = new Set(['ci-fix', 'review-fix']);
 const JUDGMENT_ROLES = new Set(['arch-review', 'pr-sentinel', 'integrator']);
 const JUDGMENT_EVIDENCE_NAMES = Object.freeze({
-  'arch-review': '.shipyard-arch-review-evidence.md',
-  'pr-sentinel': '.shipyard-sentinel-evidence.md',
+  'arch-review': ARCH_REVIEW_EVIDENCE_NAME,
+  'pr-sentinel': SENTINEL_EVIDENCE_NAME,
   integrator: 'INTEGRATION.md',
 });
 const SENTINEL_PERFORMED_STATUSES = new Set(['complete', 'handed-back']);
 const SENTINEL_REFUSED_STATUSES = new Set(['refused']);
+const NORMALIZED_UNKNOWN_ARCH_FINDINGS = new WeakSet();
 
 function fail(code, message, details = {}) {
   throw boundaryError(code, message, details);
@@ -1292,7 +1292,20 @@ function completeFinding(finding, index, role) {
     } else if (type === 'note' || type === 'informational') {
       findingText(finding, ['summary', 'reason'], `${role} finding ${index}.summary`);
     } else {
-      fail('INCOMPLETE_FINDING', `${role} finding ${index} has unsupported type ${JSON.stringify(rawType)}`);
+      if (finding.blocking === true) {
+        fail('INCOMPLETE_FINDING', `${role} finding ${index} has blocking unsupported type ${JSON.stringify(rawType)}`);
+      }
+      const summary = findingText(finding, ['summary', 'reason'], `${role} finding ${index}.summary`);
+      const normalized = {
+        ...finding,
+        id,
+        type: 'informational',
+        original_type: rawType,
+        summary,
+        blocking: false,
+      };
+      NORMALIZED_UNKNOWN_ARCH_FINDINGS.add(normalized);
+      return normalized;
     }
   } else if (role === 'integrator') {
     if (type === 'fix-ticket' || type === 'fix') {
@@ -1609,7 +1622,12 @@ function judgmentResultData(result, metadata, input, identity) {
       fail('INVALID_RESULT', 'architecture judgment verdict must be conform, violation, or adr-outdated', { verdict });
     }
     const findings = completeFindingIndex(result, role);
-    if (verdict === 'conform' && findings.finding_count !== 0) {
+    const conformRetainsOnlyUnknownNotes = findings.findings.every((finding) => (
+      NORMALIZED_UNKNOWN_ARCH_FINDINGS.has(finding)
+      && finding.type === 'informational'
+      && finding.blocking === false
+    ));
+    if (verdict === 'conform' && findings.finding_count !== 0 && !conformRetainsOnlyUnknownNotes) {
       fail('JUDGMENT_OUTCOME_MISMATCH', 'conform architecture judgment must retain an empty finding index');
     }
     if (verdict !== 'conform' && findings.blocking_count === 0) {
@@ -2038,7 +2056,7 @@ function validateJudgmentManifest(value, options) {
       }),
     }),
     evidence: evidence.content.toString('utf8'),
-    findings: result,
+    findings: role === 'arch-review' ? { ...result, findings: data.findings } : result,
     evidencePath: evidence.path,
     findingsPath: findings.path,
     role,

@@ -134,12 +134,36 @@ function classifySourceOfTruth(description, repo, planPath) {
   return 'foreign';
 }
 
-// @contract: fail-closed — only primary or this-repo/unprefixed hits update/migrate; ambiguous/foreign never do.
+// @contract: recorded keys never create; unknown keys refuse; unlabelled issues only transition and comment.
 function resolveLookup(step, hits) {
   for (const entry of step.lookup) {
-    const list = (hits && hits[entry.order]) || [];
+    let result = hits && hits[entry.order];
+    if (entry.kind === 'key') {
+      if (Array.isArray(hits) || (hits && typeof hits === 'object' && typeof hits.key === 'string')) {
+        result = hits;
+      } else if (hits && Object.prototype.hasOwnProperty.call(hits, entry.key)) {
+        result = hits[entry.key];
+      } else if (hits && Object.prototype.hasOwnProperty.call(hits, 'issues')) {
+        result = hits.issues;
+      }
+    }
+    const list = Array.isArray(result) ? result : result == null ? [] : [result];
     if (list.length > 1) {
       return { action: 'ambiguous', order: entry.order, keys: list.map((h) => h.key) };
+    }
+    if (entry.kind === 'key') {
+      const hit = list[0];
+      if (!hit || hit.key !== entry.key) {
+        return { action: 'refuse', reason: `unknown key ${entry.key}` };
+      }
+      const labels = [
+        ...(Array.isArray(hit.labels) ? hit.labels : []),
+        ...(hit.fields && Array.isArray(hit.fields.labels) ? hit.fields.labels : []),
+      ];
+      const expectedLabel = (step.labels || [])[0];
+      const labelled = Array.isArray(labels) && labels.some((label) =>
+        (typeof label === 'string' ? label : label && label.name) === expectedLabel);
+      return labelled ? { action: 'update', key: hit.key } : { action: 'transition-comment' };
     }
     if (list.length !== 1) continue;
     const hit = list[0];
@@ -237,6 +261,10 @@ function planExport(graphDir, opts = {}) {
       'Acceptance criteria:', secs['Acceptance criteria'] || '', '',
       pointer,
     ].join('\n');
+    const hasRecordedKey = t.jira !== null && t.jira !== undefined && t.jira !== '';
+    if (hasRecordedKey && (typeof t.jira !== 'string' || !JIRA_KEY_RE.test(t.jira))) {
+      throw new Error(`${id} has invalid recorded Jira key "${String(t.jira)}" — refusing Jira export`);
+    }
     steps.push({
       step: 'issue',
       ticket: id,
@@ -245,11 +273,17 @@ function planExport(graphDir, opts = {}) {
       description,
       labels: [labels.primary],
       epic: skipEpics ? null : t.phase,
-      lookup: buildLookup(project, labels.primary, `${owner}/${repo}`, t.plan, pointer, [
-        { kind: 'adr-004', label: labels.adr004 },
-        { kind: 'legacy', label: labels.legacy },
-      ]),
-      on_no_match: 'create',
+      lookup: hasRecordedKey ? [{ kind: 'key', key: t.jira }] : buildLookup(
+        project, labels.primary, `${owner}/${repo}`, t.plan, pointer, [
+          { kind: 'adr-004', label: labels.adr004 },
+          { kind: 'legacy', label: labels.legacy },
+        ],
+      ),
+      on_no_match: hasRecordedKey ? 'refuse' : 'create',
+      ...(hasRecordedKey ? {
+        labelled_only_fields: ['summary', 'description'],
+        unlabelled: 'transition-and-comment-only',
+      } : {}),
     });
   }
 

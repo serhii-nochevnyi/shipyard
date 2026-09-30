@@ -43,11 +43,6 @@
 // T-25-05, a merge whose whole tree was byte-identical cost a full re-judgement
 // at ~150k tokens, 42% of that ticket's cost, once per cascade step per ticket.
 // So after a merge it completed, this script hands the pre-merge and post-merge
-// heads to `gate-trailer.cjs carry`, which re-derives both object identities
-// itself and refuses otherwise. A merge that changed content resolves to a
-// different tree and is refused BY CONSTRUCTION, so this caller needs no
-// judgement of its own — and a refusal is not a failure here: the verdict is
-// simply owed again, exactly as before.
 //
 // One consequence worth naming: the carry runs BEFORE the push (this script does
 // not push), so between the two the trailer names a head origin has not seen and
@@ -58,6 +53,8 @@
 const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
+const { statusIgnoringScratch } = require('./conveyor-scratch.cjs');
+const { createCoverageWriter, repoSlug } = require('./conveyor-coverage.cjs');
 
 const argv = process.argv.slice(2);
 const asJson = argv.includes('--json');
@@ -140,7 +137,7 @@ const git = (args, { tolerate = false } = {}) => {
 
 // THE QUESTION IS ABOUT UNSAVED WORK, AND THAT MEANS TRACKED CONTENT.
 // `--porcelain` alone prints `?? path` for untracked files, and the executor
-// contract writes `.shipyard-pr-body.md` and `.shipyard-evidence.md` into EVERY
+// contract writes the files named by conveyor-scratch.cjs into EVERY
 // executor worktree as untracked scratch (T-26-14, on the reasoning that the
 // scope gate reads `git diff` and never sees them — right about the scope gate,
 // wrong about every other reader of `git status`). So this script refused in the
@@ -151,9 +148,8 @@ const git = (args, { tolerate = false } = {}) => {
 // references/pr-sentinel.md, three of them read by dispatched agents, none of
 // which is told what to do about the refusal.
 //
-// Deliberately NOT fixed by exempting the two known filenames: a list of names
-// is the same shape as the pin's list of homes that T-27-07 replaced with a
-// sweep, and the next scratch file added would silently re-open it.
+// The shared scratch definition is used here while the tracked-only question
+// stays unchanged.
 //
 // What the relaxed check stops covering is an untracked path the incoming BASE
 // ADDS at the same path — and that is still refused, by `git merge` itself,
@@ -164,11 +160,14 @@ const git = (args, { tolerate = false } = {}) => {
 // A `git status` that FAILS prints nothing, and reading that silence as "clean"
 // is the same bug ticket-worktree.sh's GC checks went fail-closed for: a status
 // this script could not establish is never treated as a status of "no changes".
-const dirtyCheck = git(['status', '--porcelain', '--untracked-files=no'], { tolerate: true });
-if (dirtyCheck.status !== 0) {
-  fail(`git status failed — cannot confirm the worktree is clean: ${dirtyCheck.err || 'unknown error'}`);
+let dirtyCheck;
+try {
+  dirtyCheck = statusIgnoringScratch(worktree, { untracked: 'no' });
+} catch (error) {
+  fail(`git status failed — cannot confirm the worktree is clean: ${String(error.stderr || error.message).trim() || 'unknown error'}`);
 }
-if (dirtyCheck.out) {
+if (!dirtyCheck.ok) fail(`git status failed — cannot confirm the worktree is clean: ${dirtyCheck.code}`);
+if (dirtyCheck.entries.length) {
   fail('the worktree has uncommitted changes to tracked files — commit or stash before merging the base in');
 }
 
@@ -184,6 +183,8 @@ const baseRef = resolveBaseRef(worktree, base);
 // The head the architecture verdict was rendered against, read before anything
 // moves it. Everything the carry proves is about this sha and the one after.
 const preMergeHead = git(['rev-parse', 'HEAD'], { tolerate: true }).out;
+const preMergeBase = preMergeHead
+  ? git(['merge-base', baseRef, preMergeHead], { tolerate: true }).out : null;
 
 // WHICH PR, from the BOARD rather than from a flag. No prompt has to learn a new
 // argument for the carry to happen — this script is named in ci-fix.md,
@@ -209,10 +210,14 @@ function carryVerdict() {
   if (!preMergeHead || !postMergeHead || preMergeHead === postMergeHead) return null;
   const pr = boardPr(ticket);
   if (!pr) return null;
+  const postMergeBase = git(['merge-base', baseRef, postMergeHead], { tolerate: true }).out;
   const r = spawnSync('node', [
     path.join(__dirname, 'gate-trailer.cjs'), 'carry', ticket, '--pr', String(pr),
     ...(t.repo ? ['--repo', t.repo] : []),
-    '--from', preMergeHead, '--to', postMergeHead, '--worktree', worktree, '--json',
+    '--from', preMergeHead, '--to', postMergeHead,
+    ...(preMergeBase ? ['--from-base', preMergeBase] : []),
+    ...(postMergeBase ? ['--to-base', postMergeBase] : []),
+    '--graph', graphDir, '--worktree', worktree, '--json',
   ], { encoding: 'utf8' });
   try {
     const out = JSON.parse(r.stdout);
@@ -222,19 +227,34 @@ function carryVerdict() {
     ticket,
     pr,
     carried: false,
+    carry: 're-owed',
     reason: (r.stderr || '').trim().split('\n').pop()
       || `gate-trailer.cjs carry exited ${r.status} without a verdict`,
   };
 }
 
 const carryLine = (c) => (c.carried
-  ? `The architecture verdict CARRIED onto ${c.to.slice(0, 7)}: the head tree and the base tree are `
-    + 'the same objects the judge measured. CI still re-runs — a green is measured against a base.'
+  ? `The architecture verdict CARRIED onto ${c.to.slice(0, 7)} (${c.carry}). `
+    + 'CI still re-runs — a green is measured against a base.'
   : `No verdict carried — ${c.reason}. arch-review is owed against the new head.`);
+
+// @security: a merge is covered only when this script committed it itself.
+function recordMerge(taken) {
+  const commit = git(['rev-parse', 'HEAD']).out;
+  const parents = git(['show', '-s', '--format=%P', commit]).out.split(' ').filter(Boolean);
+  const tree = git(['show', '-s', '--format=%T', commit]).out;
+  if (parents.length < 2) return;
+  try {
+    createCoverageWriter().record({ commit, parents, tree, ticket, repo: repoSlug(worktree, t.repo),
+      worktree, kind: 'base-merge',
+      base_merge: { base: baseRef, requested_base: base, taken_from_base: taken } });
+  } catch (error) { fail(`merge commit ${commit} exists but coverage recording failed: ${error.message}`); }
+}
 
 const merge = git(['merge', '--no-edit', baseRef], { tolerate: true });
 if (merge.status === 0) {
   const msg = /Already up to date/i.test(merge.out) ? 'already up to date' : 'merged cleanly';
+  if (git(['rev-parse', 'HEAD']).out !== preMergeHead) recordMerge([]);
   const carry = carryVerdict();
   if (asJson) console.log(JSON.stringify({ ticket, base: baseRef, requested_base: base, result: msg, taken_from_base: [], unresolved: [], contested: [], carry }, null, 2));
   else {
@@ -295,6 +315,7 @@ if (real.length) {
 }
 
 git(['commit', '--no-edit']);
+recordMerge(taken);
 const carry = carryVerdict();
 const payload = { ticket, base: baseRef, requested_base: base, result: 'resolved mechanically', taken_from_base: taken, unresolved: [], contested: [], carry };
 if (asJson) console.log(JSON.stringify(payload, null, 2));
