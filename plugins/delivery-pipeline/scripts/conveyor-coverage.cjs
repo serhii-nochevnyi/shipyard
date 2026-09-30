@@ -13,6 +13,7 @@ const OID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 const DIGEST = /^[0-9a-f]{64}$/;
 const KINDS = new Set(['executor', 'fixer', 'base-merge', 'remedy']);
 const DISPATCH_FORMAT = 'adr-014.durable-boundary.v1';
+const CHAIN_COMMIT_CAP = 500;
 const hash = (value) => crypto.createHash('sha256').update(value).digest('hex');
 
 function gitEnv() {
@@ -141,7 +142,8 @@ function markerFile(root, repo) {
 function rolloutMarker({ repo, repository_id, worktree, keyPath, root = coverageRoot() } = {}) {
   if (repo === undefined) return null;
   const file = markerFile(root, repo);
-  if (!fs.existsSync(file)) return null;
+  try { fs.lstatSync(file); }
+  catch (error) { if (error.code === 'ENOENT') return null; throw error; }
   const marker = read(file, readKey(keyFile(root, keyPath)));
   if (!marker || marker.repo !== repo || typeof marker.recorded_at !== 'string'
       || !Number.isFinite(Date.parse(marker.recorded_at))
@@ -153,6 +155,26 @@ function rolloutMarker({ repo, repository_id, worktree, keyPath, root = coverage
     throw new Error('rollout marker repository identity mismatch');
   }
   return marker;
+}
+
+// @security: marker absence is accepted only when the private store and key are readable.
+function rolloutState({ repo, worktree, keyPath, root = coverageRoot() } = {}) {
+  const stat = fs.lstatSync(root);
+  if (!stat.isDirectory() || stat.isSymbolicLink() || (stat.mode & 0o077)) {
+    throw new Error('coverage root is not a private directory');
+  }
+  readKey(keyFile(root, keyPath));
+  if (repo === undefined) {
+    const directory = path.join(root, 'rollout-markers');
+    let entries;
+    try { entries = fs.readdirSync(directory); }
+    catch (error) { if (error.code !== 'ENOENT') throw error; entries = []; }
+    if (entries.length) {
+      throw new Error('rollout marker exists but repository identity is unavailable');
+    }
+    return null;
+  }
+  return rolloutMarker({ repo, worktree, keyPath, root });
 }
 
 function ensureRolloutMarker({ recorded_at, repo, repository_id, keyPath, root = coverageRoot() }) {
@@ -296,8 +318,40 @@ function verify({ commit, repo, worktree = process.cwd(), keyPath, root = covera
   } catch (error) { return { covered: false, reason: error.message }; }
 }
 
+// @contract: the live PR base ref bounds the chain, so commits already on the base are excluded.
+function chain({ repo, worktreeOrCheckout, base, head, commitCap = CHAIN_COMMIT_CAP,
+  keyPath, root = coverageRoot() } = {}) {
+  const worktree = worktreeOrCheckout;
+  if (!worktree) return { covered: false, reason: 'local checkout unavailable' };
+  if (!Number.isSafeInteger(commitCap) || commitCap < 1 || commitCap > CHAIN_COMMIT_CAP) {
+    return { covered: false, reason: 'invalid commit cap' };
+  }
+  try {
+    const commits = execFileSync('git', ['-C', worktree, 'rev-list', '--reverse',
+      `--max-count=${commitCap + 1}`, `${base}..${head}`], {
+      encoding: 'utf8', env: gitEnv(), stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 64 * 1024,
+    }).trim().split('\n').filter(Boolean);
+    if (commits.length > commitCap) return { covered: false, reason: 'chain too long' };
+    const links = [];
+    for (const commit of commits) {
+      const result = verify({ commit, repo, worktree, keyPath, root });
+      if (!result.covered) {
+        const [subject, author] = execFileSync('git', ['-C', worktree, 'show', '-s',
+          '--format=%s%n%an <%ae>', commit], {
+          encoding: 'utf8', env: gitEnv(), stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 4096,
+        }).trimEnd().split('\n');
+        return { covered: false, commit, subject, author, reason: result.reason };
+      }
+      links.push(result.record.kind);
+    }
+    return { covered: true, links };
+  } catch (error) {
+    return { covered: false, reason: `chain unreadable: ${error.message}` };
+  }
+}
+
 module.exports = Object.freeze({ coverageRoot, repositoryIdentity, repoSlug, createCoverageWriter,
-  validateFinalizationEvidence, verify, rolloutMarker, ensureRolloutMarker });
+  validateFinalizationEvidence, verify, chain, rolloutMarker, rolloutState, ensureRolloutMarker });
 
 if (require.main === module) {
   const [command, commit, ...rest] = process.argv.slice(2);

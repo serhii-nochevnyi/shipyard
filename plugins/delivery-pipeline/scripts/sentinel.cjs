@@ -35,6 +35,7 @@ const { reviewFreshness } = require(path.join(__dirname, 'reviewers.cjs'));
 const { withLock, lockDirFor, writeAtomic } = require(path.join(__dirname, 'lock.cjs'));
 const reviewSignatures = require(path.join(__dirname, 'review-signature.cjs'));
 const { classify, unavailableNote, CHECK_FIELDS } = require(path.join(__dirname, 'check-state.cjs'));
+const coverage = require(path.join(__dirname, 'conveyor-coverage.cjs'));
 // The checkpoint predicates live in front.cjs and are imported, not copied.
 // A `checkpointParentOf` used to exist here AND there, and the standing rule — the
 // board must never offer what the guard refuses — was held by nothing but the
@@ -644,6 +645,20 @@ function journal(rec) {
   }, { label: 'sentinel journal' });
 }
 
+function journalLegacyOnce(ticket, pr, head) {
+  withLock(lockDirFor(ROOT), 'state', () => {
+    const lines = fs.existsSync(JOURNAL) ? fs.readFileSync(JOURNAL, 'utf8').split('\n').filter(Boolean) : [];
+    const prior = lines.some((line) => {
+      try {
+        const row = JSON.parse(line);
+        return row.event === 'merge_gate_legacy' && row.ticket === ticket && row.pr === pr;
+      } catch { return false; }
+    });
+    if (!prior) fs.appendFileSync(JOURNAL, JSON.stringify({ ts: new Date().toISOString(),
+      event: 'merge_gate_legacy', ticket, pr, head }) + '\n');
+  }, { label: 'sentinel legacy journal' });
+}
+
 // @contract: the state lock permits one request attempt per PR head.
 function rerequestReviewOnce(ticket, pr, head, repo) {
   return withLock(lockDirFor(ROOT), 'state', () => {
@@ -1228,7 +1243,7 @@ function mergeOne(id) {
 
   const repo = s.repo || null;
   const view = gh(['pr', 'view', String(s.pr), ...repoArg(repo), '--json',
-    'number,state,isDraft,baseRefName,headRefName,headRefOid,mergeStateStatus,reviewDecision,author,body'], { tolerate: true });
+    'number,state,isDraft,baseRefName,headRefName,headRefOid,createdAt,mergeStateStatus,reviewDecision,author,body'], { tolerate: true });
   if (typeof view !== 'string') return block(`gh pr view failed: ${view.error}`);
   let pr;
   try { pr = JSON.parse(view); } catch (e) { return block(`gh pr view returned unparseable JSON (${e.message})`); }
@@ -1327,6 +1342,62 @@ function mergeOne(id) {
       : `${gateWhy(gate, pr.headRefOid)} — arch-review is owed again on this head before it can land`);
   }
   res.gate = gate;
+
+  // @security: a missing marker is accepted only after reading the private store.
+  const ownCheckout = repo ? null : localCheckout(null, id);
+  const coverageRepo = repo || (ownCheckout ? coverage.repoSlug(ownCheckout) : undefined);
+  let marker;
+  try { marker = coverage.rolloutState({ repo: coverageRepo }); }
+  catch (error) {
+    return block(`coverage state root or rollout marker unreadable: ${error.message}; configure a readable checkout and state root`);
+  }
+  if (!marker || (typeof pr.createdAt === 'string' && Number.isFinite(Date.parse(pr.createdAt))
+      && Date.parse(pr.createdAt) <= Date.parse(marker.recorded_at))) {
+    res.coverage = 'legacy';
+  } else {
+    const remedy = `re-run the work through the conveyor: deliver-dispatch.cjs build ci-fix|review-fix ${id} ` +
+      'or the executor entry point, or remove the hand commit, then re-verify';
+    const checkout = ownCheckout || localCheckout(repo, id);
+    if (!checkout) return block(`coverage chain unavailable: configure a local checkout and state root; ${remedy}`);
+    try {
+      const checkedMarker = coverage.rolloutMarker({ repo: coverageRepo, worktree: checkout });
+      if (!checkedMarker || checkedMarker.recorded_at !== marker.recorded_at) {
+        throw new Error('rollout marker changed during the gate');
+      }
+    } catch (error) { return block(`coverage marker repository mismatch: ${error.message}; ${remedy}`); }
+    if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(pr.headRefOid || '')) {
+      return block(`coverage chain unreadable: the live PR head is invalid; ${remedy}`);
+    }
+    if (typeof pr.createdAt !== 'string' || !Number.isFinite(Date.parse(pr.createdAt))) {
+      return block(`coverage rollout cannot compare the PR createdAt; ${remedy}`);
+    }
+    const baseRef = `refs/heads/${pr.baseRefName}`;
+    const refCheck = gitResult(checkout, ['check-ref-format', baseRef]);
+    if (refCheck.error || refCheck.status !== 0) return block(`coverage base ref invalid; ${remedy}`);
+    const fetchedBase = gitResult(checkout, ['fetch', '--quiet', '--no-tags', 'origin',
+      `+${baseRef}:refs/remotes/origin/${pr.baseRefName}`]);
+    if (fetchedBase.error || fetchedBase.status !== 0) {
+      return block(`coverage base could not be fetched: ${diagnostic(fetchedBase)}; verify the local checkout and state root; ${remedy}`);
+    }
+    const headPresent = gitResult(checkout, ['cat-file', '-e', `${pr.headRefOid}^{commit}`]);
+    if (headPresent.error || headPresent.status !== 0) {
+      const fetchedHead = gitResult(checkout, ['fetch', '--quiet', '--no-tags', 'origin', pr.headRefOid]);
+      if (fetchedHead.error || fetchedHead.status !== 0) {
+        return block(`coverage head could not be fetched: ${diagnostic(fetchedHead)}; verify the local checkout and state root; ${remedy}`);
+      }
+    }
+    const chain = coverage.chain({ repo: coverageRepo, worktreeOrCheckout: checkout,
+      base: `origin/${pr.baseRefName}`, head: pr.headRefOid });
+    if (!chain.covered) {
+      if (!dryRun && chain.commit) journal({ event: 'merge_gate_uncovered', ticket: id, pr: s.pr,
+        head: pr.headRefOid, commit: chain.commit });
+      const detail = chain.commit ? `${chain.commit} (${chain.subject}; ${chain.author})`
+        : `${chain.reason}; verify the local checkout and coverage state root`;
+      return block(`coverage chain refused at ${detail}; ${remedy}`);
+    }
+    res.coverage = 'chain';
+    res.coverage_links = chain.links;
+  }
 
   const checks = ghChecks(s.pr, repo);
   res.checks = checks;
@@ -1467,8 +1538,10 @@ function mergeOne(id) {
   // reader can count design-time approvals without re-deriving them from the
   // graph — and an ordinary merge never claims one.
   journal({ event: 'merge', ticket: id, pr: s.pr, base: pr.baseRefName, repo, by: 'sentinel',
+    coverage: res.coverage,
     ...(res.preauthorized ? { preauthorized: true } : {}),
     ...(res.checkpoint ? { checkpoint: res.checkpoint } : {}) });
+  if (res.coverage === 'legacy') journalLegacyOnce(id, s.pr, pr.headRefOid);
 
   // Cascade children based on THIS branch now have to move onto the epic —
   // GitHub does it by itself when the head branch is deleted, and we do not

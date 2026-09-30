@@ -76,6 +76,31 @@ test('records and verifies a mechanical merge, refusing tampering and wrong keys
   } finally { f.close(); }
 });
 
+test('chain reports the first uncovered commit in oldest-first order and refuses an oversized chain', () => {
+  const f = fixture();
+  try {
+    const base = f.commit;
+    const commits = [];
+    for (const subject of ['covered change', 'hand change', 'later change']) {
+      fs.appendFileSync(path.join(f.repo, 'file'), subject + '\n');
+      f.git('commit', '-qam', subject);
+      commits.push(f.git('rev-parse', 'HEAD'));
+    }
+    const writer = coverage.createCoverageWriter();
+    const commit = commits[0];
+    writer.record({ commit, parents: [base], tree: f.git('show', '-s', '--format=%T', commit),
+      ticket: 'T-43-19', repo: 'owner/repo', kind: 'base-merge', worktree: f.repo,
+      base_merge: { base: 'main', requested_base: 'main', taken_from_base: [] } });
+    const result = coverage.chain({ repo: 'owner/repo', worktreeOrCheckout: f.repo, base, head: commits[2] });
+    assert.equal(result.covered, false);
+    assert.equal(result.commit, commits[1]);
+    assert.match(result.subject, /hand change/);
+    assert.match(result.author, /Coverage Test/);
+    assert.deepEqual(coverage.chain({ repo: 'owner/repo', worktreeOrCheckout: f.repo,
+      base, head: commits[2], commitCap: 2 }), { covered: false, reason: 'chain too long' });
+  } finally { f.close(); }
+});
+
 test('remedy coverage requires declared workflow, run id and dispatch head on write and read', () => {
   const f = fixture();
   try {

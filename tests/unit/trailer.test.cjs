@@ -33,6 +33,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const crypto = require('crypto');
 const { spawnSync } = require('child_process');
 const { suite, test, done, assert } = require(path.join(__dirname, 'assert-harness.cjs'));
 
@@ -150,6 +151,9 @@ function project(gate) {
     path.join(graph, 'delivery-state.json'),
     JSON.stringify({ 'T-01-01': gate === undefined ? { ...GREEN_STATE } : { ...GREEN_STATE, gate } })
   );
+  const coverageRoot = path.join(root, 'coverage-state');
+  fs.mkdirSync(coverageRoot, { mode: 0o700 });
+  fs.writeFileSync(path.join(coverageRoot, 'coverage.key'), crypto.randomBytes(32), { mode: 0o600 });
   fs.writeFileSync(path.join(root, '.planning', 'config.json'), JSON.stringify({ pipeline: {} }));
   return root;
 }
@@ -158,7 +162,8 @@ function run(root, args) {
   const r = spawnSync(process.execPath, [SENTINEL, ...args], {
     cwd: root,
     encoding: 'utf8',
-    env: { ...process.env, PATH: `${BIN}${path.delimiter}${process.env.PATH}`, SHIPYARD_TRAILER_PRVIEW: PRVIEW },
+    env: { ...process.env, PATH: `${BIN}${path.delimiter}${process.env.PATH}`, SHIPYARD_TRAILER_PRVIEW: PRVIEW,
+      SHIPYARD_COVERAGE_ROOT: path.join(root, 'coverage-state') },
   });
   assert.strictEqual(r.status, 0, `sentinel ${args.join(' ')} exited ${r.status}\n${r.stderr}`);
   try {
