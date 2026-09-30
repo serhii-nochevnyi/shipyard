@@ -51,21 +51,6 @@ printf '%s\n' \
   '  '"'"' {"number":102,"state":"OPEN","isDraft":false,"headRefName":"ticket/T-01-02-child","headRefOid":"3333333333333333333333333333333333333333","baseRefName":"ticket/T-01-01-root","mergedAt":null,"createdAt":"2026-01-01T00:00:00Z","url":"https://example/102","title":"T-01-02: child"}]'"'"'' \
   '    ;;' \
   '  "pr list --state open"*"--json number,reviewDecision,body,mergeStateStatus"*)' \
-  '    # the open-only pass: reviewDecision + body (the gate_status trailer) + the' \
-  '    # merge state. PR 101'"'"'s trailer names the SAME head the row below reports,' \
-  '    # which is the ordinary path — the mismatch has its own fixture at the end of' \
-  '    # this file.' \
-  '    #' \
-  '    # `mergeStateStatus` is answered HERE and NOWHERE ELSE, deliberately: the bulk' \
-  '    # `pr list --state all` row below does not carry it, so a `merge_state` in the' \
-  '    # written board can only have come from this open-only pass — which is the' \
-  '    # rule ADR-002 imposes (never a new field in the bulk window) expressed as a' \
-  '    # fixture rather than as a comment.' \
-  '    #' \
-  '    # UNQUOTED heredoc: SENTINEL_SMOKE_MERGE_STATE has to reach the SYNC and not' \
-  '    # only `pr view 101` below, because one fact read two ways — by the board and' \
-  '    # by the guard — is what this whole file is about. (`\n` survives an unquoted' \
-  '    # heredoc; the %s format keeps the backslash literal for JSON parsing.)' \
   '    printf '"'"'%s\n'"'"' \' \
   '  "[{\"number\":101,\"reviewDecision\":null,\"mergeStateStatus\":\"${SENTINEL_SMOKE_MERGE_STATE:-CLEAN}\",\"body\":\"Ticket: T-01-01\n\nProblem: x\n\ngate_status: arch-review=conform, drift-check=fresh, checks=green, head=1111111111111111111111111111111111111111\"}," \' \
   '  " {\"number\":102,\"reviewDecision\":\"CHANGES_REQUESTED\",\"mergeStateStatus\":\"CLEAN\",\"body\":\"Ticket: T-01-02\n\"}]"' \
@@ -77,57 +62,20 @@ printf '%s\n' \
   '    ;;' \
   '  "api repos/{owner}/{repo}/branches"*) printf '"'"'main\nepic/01-demo\nticket/T-01-01-root\nticket/T-01-02-child\n'"'"' ;;' \
   '' \
-  '  # gate'"'"'s probe is head...base, so a non-zero answer means "the base moved".' \
-  '  # reviewers.cjs `unresolved` asks GraphQL for the review threads, and the merge' \
-  '  # gate refuses to merge blind when it cannot read them — so every assertion' \
-  '  # PAST that point needs this answered. Zero open threads is the clean case.' \
-  '  # reviewers.cjs resolves the repo slug before anything else; without this every' \
-  '  # thread read fails and the merge gate refuses "blind" long before the rules' \
-  '  # under test are reached.' \
   '  "repo view --json owner,name"*) echo '"'"'{"owner":{"login":"acme"},"name":"demo"}'"'"' ;;' \
   '  "api graphql"*)' \
   '    echo '"'"'{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}'"'"' ;;' \
-  '  # Any base the child is measured against: the cascade parent'"'"'s branch while' \
-  '  # that parent'"'"'s PR is open, or the EPIC once it has landed and the child has' \
-  '  # been retargeted (ADR-006 D3 — a merged parent'"'"'s branch is no longer a legal' \
-  '  # base, so the post-merge staleness case is measured against the epic).' \
   '  "api repos/{owner}/{repo}/compare/ticket/T-01-02-child..."*)' \
   '    echo "${SENTINEL_SMOKE_BEHIND:-0}" ;;' \
   '  "api repos/{owner}/{repo}/compare"*) echo 0 ;;' \
-  '  # Every row carries gh'"'"'s own `bucket` beside its `state`. check-state.cjs reads' \
-  '  # the bucket and a row WITHOUT one is PENDING by its fail-closed rule, so a' \
-  '  # bucket-less fixture would park this whole smoke on "checks still running".' \
   '  "pr checks 101"*) echo '"'"'[{"name":"build","state":"SUCCESS","bucket":"pass"}]'"'"' ;;' \
-  '  # The checkpoint-parent case drives PR 102 to green; the earlier duty cases' \
-  '  # rely on it being red. Both are served: SENTINEL_SMOKE_GREEN_102 flips it.' \
   '  "pr checks 102"*)' \
   '    if [ -n "${SENTINEL_SMOKE_GREEN_102:-}" ]; then echo '"'"'[{"name":"build","state":"SUCCESS","bucket":"pass"}]'"'"';' \
-  '    # ACTION_REQUIRED on purpose: gh buckets it `fail`, and it was in NO' \
-  '    # hand-written list on the state-sync/sentinel side — it fell through both' \
-  '    # filters and the board read the PR as GREEN. This fixture pins the third' \
-  '    # consumer on that exact row, end to end (tally → ci-fix duty → refusal).' \
   '    else echo '"'"'[{"name":"build","state":"ACTION_REQUIRED","bucket":"fail"}]'"'"'; exit 1; fi ;;' \
-  '  # The merge gate re-reads the PR from live GitHub by design, so the stub has to' \
-  '  # answer it for any merge-path assertion. This one reports NO headRefOid and' \
-  '  # its trailer names no head — deliberately, because that pair is the' \
-  '  # backwards-compatibility case (a PR verdicted by the previous release on a' \
-  '  # board synced by it): with nothing to compare, the verdict still stands, and' \
-  '  # every merge-path assertion below therefore measures its own rule and not the' \
-  '  # head binding.' \
-  '  # SENTINEL_SMOKE_BASE_102 is where the child'"'"'s PR POINTS: the parent'"'"'s branch' \
-  '  # while that PR is open (the default, the cascade as designed), or the epic once' \
-  '  # the parent has landed and the retarget has happened.' \
   '  "pr view 102 --json"*)' \
   '    printf '"'"'{"number":102,"state":"OPEN","isDraft":false,"baseRefName":"%s","headRefName":"ticket/T-01-02-child","mergeStateStatus":"CLEAN","reviewDecision":null,"body":"Ticket: T-01-02\\n\\ngate_status: arch-review=conform, drift-check=fresh, checks=green"}\n'"'"' "${SENTINEL_SMOKE_BASE_102:-ticket/T-01-01-root}" ;;' \
-  '  # `reviewers.cjs unresolved` reads the review decision AND the merge state off' \
-  '  # one PR view — which is how `duty` learns the base moved without a second call' \
-  '  # per PR per round. SENTINEL_SMOKE_MERGE_STATE is the moved-base fixture.' \
   '  "pr view 101 --json"*)' \
   '    printf '"'"'{"number":101,"state":"OPEN","isDraft":false,"baseRefName":"epic/01-demo","headRefName":"ticket/T-01-01-root","mergeStateStatus":"%s","reviewDecision":null,"body":"Ticket: T-01-01"}\n'"'"' "${SENTINEL_SMOKE_MERGE_STATE:-CLEAN}" ;;' \
-  '  # The merge path'"'"'s own three calls. The retarget asks GitHub which open PRs' \
-  '  # each graph child has RIGHT NOW instead of trusting the last sync — a child' \
-  '  # whose PR opened after it used to be left pointing at a branch that had just' \
-  '  # been squashed away. One call per child, on the merge path only.' \
   '  "pr list --head "*) echo "${SENTINEL_SMOKE_CHILD_PRS:-[]}" ;;' \
   '  "pr merge "*) echo "squash-merged" ;;' \
   '  "pr edit "*) echo "retargeted" ;;' \
@@ -1323,10 +1271,6 @@ printf '%s\n' \
   '    ;;' \
   '  "api repos/{owner}/{repo}/branches"*) printf '"'"'main\nepic/04-demo\nticket/T-04-01-x\n'"'"' ;;' \
   '  "api repos/{owner}/{repo}/compare"*) echo 0 ;;' \
-  '  # ZERO review threads: every thread the reviewer filed is resolved and the' \
-  '  # verdict still stands. This is the state a fixer cannot service — the threads' \
-  '  # are closed, and the verdict is lifted neither by resolving them nor by' \
-  '  # pushing.' \
   '  "api graphql"*)' \
   '    echo '"'"'{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}'"'"' ;;' \
   '  "pr checks 501"*) echo '"'"'[{"name":"build","state":"SUCCESS","bucket":"pass"}]'"'"' ;;' \
