@@ -251,7 +251,7 @@ function scopeIdentity(scope) {
   return identity;
 }
 
-function launchBinding(scope, request, dispatchId, resolution, agent) {
+function launchBinding(scope, request, dispatchId, resolution, agent, generatedAgent) {
   const identity = scopeIdentity(scope);
   return Object.freeze({
     scope: identity,
@@ -277,7 +277,16 @@ function launchBinding(scope, request, dispatchId, resolution, agent) {
       sha256: agent.sha256,
       instructions_sha256: agent.instructions_sha256,
     },
+    ...(generatedAgent ? {
+      generated_agent: { file: generatedAgent.file, sha256: generatedAgent.sha256 },
+    } : {}),
   });
+}
+
+function validTaskRelay(value) {
+  return object(value) && typeof value.path === 'string' && path.isAbsolute(value.path)
+    && path.normalize(value.path) === value.path && Number.isSafeInteger(value.bytes) && value.bytes >= 0
+    && /^[a-f0-9]{64}$/.test(value.sha256 || '');
 }
 
 function completionInstructions(prompt, gsdRole) {
@@ -363,6 +372,10 @@ function verifyRuntimeEvidence(record, scope, binding, transcriptDir) {
   const evidence = completed && completed.runtime_evidence;
   const sessionId = started && started.session_id;
   const runtimeLaunch = started && started.runtime_launch;
+  if (object(evidence) && object(evidence.native_child_evidence) && validTaskRelay(runtimeLaunch && runtimeLaunch.task_relay)
+      && canonicalJson(evidence.native_child_evidence.task_relay) !== canonicalJson(runtimeLaunch.task_relay)) {
+    fail('RECOVERY_ARTIFACT_ALTERED', 'completed task relay differs from the bound session-start task file');
+  }
   if (!object(completed) || !object(evidence) || !object(runtimeLaunch) || !sessionId
       || completed.parent_session_id !== sessionId || evidence.session_id !== sessionId
       || evidence.run_id !== scope.run_id || evidence.ticket !== scope.ticket || evidence.phase !== scope.phase
@@ -388,6 +401,8 @@ function verifyRuntimeEvidence(record, scope, binding, transcriptDir) {
       || completed.pid !== started.process_id
       || typeof completed.parent_wait_timed_out !== 'boolean'
       || !object(evidence.native_session_evidence) || !object(evidence.native_child_evidence)
+      || !validTaskRelay(runtimeLaunch.task_relay)
+      || !validTaskRelay(evidence.native_child_evidence.task_relay)
       || evidence.native_session_evidence.session_id !== sessionId
       || evidence.native_child_evidence.parent_thread_id !== sessionId
       || evidence.native_child_evidence.agent_role !== binding.gsd_role
@@ -421,6 +436,65 @@ function verifyRuntimeEvidence(record, scope, binding, transcriptDir) {
       || completed.child_session_id !== evidence.native_child_evidence.session_id) {
     fail('RECOVERY_ARTIFACT_ALTERED', 'completed runtime evidence does not match the host and native transcripts');
   }
+}
+
+function runtimeEvidenceFromSessionStart(sessionStarted, scope, binding, transcriptDir, verified) {
+  const sessionId = sessionStarted.session_id;
+  const expectedTranscript = runtimeTranscriptPath(transcriptDir, scope, sessionId);
+  let stat;
+  try { stat = fs.lstatSync(expectedTranscript); }
+  catch (_) { fail('RECOVERY_EVIDENCE_MISSING', 'the host transcript is missing for the session-start record'); }
+  if (!stat.isFile() || stat.isSymbolicLink() || (stat.mode & 0o077) !== 0) {
+    fail('RECOVERY_EVIDENCE_MISSING', 'the host transcript is not a private regular file');
+  }
+  let raw;
+  try { raw = fs.readFileSync(expectedTranscript, 'utf8'); }
+  catch (_) { fail('RECOVERY_EVIDENCE_MISSING', 'the host transcript cannot be read for the session-start record'); }
+  const after = fs.lstatSync(expectedTranscript);
+  if (after.size !== stat.size || after.mtimeMs !== stat.mtimeMs || Buffer.byteLength(raw, 'utf8') !== after.size) {
+    fail('RECOVERY_ARTIFACT_ALTERED', 'the host transcript changed while recovery was reading it');
+  }
+  let stream;
+  try { stream = parseCodexStream(raw); }
+  catch (error) { fail('RECOVERY_EVIDENCE_INCOMPLETE', 'the host transcript cannot be parsed: ' + error.message); }
+  if (stream.session_id !== sessionId) {
+    fail('RECOVERY_ARTIFACT_ALTERED', 'the host transcript does not belong to the recorded session');
+  }
+  const runtimeLaunch = sessionStarted.runtime_launch;
+  return {
+    schema: 'shipyard.codex-runtime-evidence.v1',
+    version: 1,
+    runtime: 'codex',
+    provider: 'openai',
+    run_id: scope.run_id,
+    ticket: scope.ticket,
+    phase: scope.phase,
+    worktree: scope.worktree,
+    dispatch_id: binding.dispatch_id,
+    session_id: sessionId,
+    ...(Number.isSafeInteger(sessionStarted.process_id) ? { process_id: sessionStarted.process_id } : {}),
+    command_digest: runtimeLaunch.command_digest,
+    command: runtimeLaunch.command,
+    sandbox_evidence: runtimeLaunch.sandbox_evidence,
+    selection_source: runtimeLaunch.selection_source,
+    applied_model: runtimeLaunch.applied_model,
+    applied_effort: runtimeLaunch.applied_effort,
+    observed_model: runtimeLaunch.observed_model,
+    observed_effort: runtimeLaunch.observed_effort,
+    native_session_evidence: verified.native_session_evidence,
+    native_child_evidence: verified.native_child_evidence,
+    stream_evidence: {
+      format: 'jsonl',
+      records: stream.records.length,
+      turns: stream.turns,
+      usage_records: stream.usage_records,
+    },
+    transcript: {
+      path: expectedTranscript,
+      bytes: after.size,
+      sha256: sha256Text(raw),
+    },
+  };
 }
 
 function pidAlive(pid) {
@@ -490,34 +564,40 @@ function createCodexDecomposeHost(options = {}) {
       const request = requestValue(rawRequest);
       const recovering = object(runOptions.recovered);
       const leaseCtx = recovering ? runOptions.lease : options.lease || null;
-      const chosen = ROLES[request.gsd_role];
-      const agent = installedGsdAgent(request.gsd_role, env);
-      let launched = false;
-      const host = Object.freeze({
+          const chosen = ROLES[request.gsd_role];
+          const agent = installedGsdAgent(request.gsd_role, env);
+          let launched = false;
+          const host = Object.freeze({
         ...runtimeHost,
         async launchTypedGsd(selection, context) {
           if (launched) fail('DUPLICATE_LAUNCH', 'typed callback may launch only once');
           launched = true;
-          if (context.gsd_role !== request.gsd_role || context.gsd_launch_mechanism !== 'typed-gsd-callback') {
-            fail('SCOPE_MISMATCH', 'typed callback role differs from the requested GSD role');
-          }
-          let prompt = context.prompt;
+            if (context.gsd_role !== request.gsd_role || context.gsd_launch_mechanism !== 'typed-gsd-callback') {
+              fail('SCOPE_MISMATCH', 'typed callback role differs from the requested GSD role');
+            }
+            const resolution = policy.resolveDispatch({
+              runtime: 'codex', role: chosen.role, signals: request.signals, dispatch_id: context.dispatch_id,
+            });
+            let prompt = context.prompt;
           let selected = {
             model: selection.model,
             reasoning_effort: selection.reasoning_effort,
             sandbox_mode: chosen.sandbox,
           };
           if (chosen.role === 'research') {
-            if (selection.agent_file_digest !== crypto.createHash('sha256')
-              .update(selection.agent_file_content || '').digest('hex')) {
+            if (selection.agent_file !== resolution.agent_file
+                || selection.agent_file_digest !== crypto.createHash('sha256')
+                  .update(selection.agent_file_content || '').digest('hex')) {
               fail('STALE_GENERATED_AGENT', 'research handoff digest changed');
             }
             prompt = researchInstructions(selection.agent_file_content) + '\n\n' + prompt;
           }
-          const resolution = policy.resolveDispatch({
-            runtime: 'codex', role: chosen.role, signals: request.signals, dispatch_id: context.dispatch_id,
-          });
-          const binding = launchBinding(scope, request, context.dispatch_id, resolution, agent);
+          const generatedAgent = chosen.role === 'research'
+            ? { file: selection.agent_file, sha256: selection.agent_file_digest } : null;
+          const binding = launchBinding(scope, request, context.dispatch_id, resolution, agent, generatedAgent);
+          if (recovering && canonicalJson(binding) !== canonicalJson(runOptions.recovered.binding)) {
+            fail('RECOVERY_EVIDENCE_INCOMPLETE', 'recovery generated agent selection differs from the original launch');
+          }
           const reservation = options.launchDir && leaseCtx && !recovering
             && typeof runtimeHost.recorder.getReservation === 'function'
             ? runtimeHost.recorder.getReservation(context.dispatch_id) : null;
@@ -548,7 +628,8 @@ function createCodexDecomposeHost(options = {}) {
                 || runtimeLaunch.dispatch_id !== context.dispatch_id
                 || runtimeLaunch.gsd_role !== request.gsd_role
                 || runtimeLaunch.applied_model !== binding.model || runtimeLaunch.applied_effort !== binding.effort
-                || runtimeLaunch.agent_file !== agent.file || runtimeLaunch.agent_file_digest !== agent.sha256) {
+                || runtimeLaunch.agent_file !== agent.file || runtimeLaunch.agent_file_digest !== agent.sha256
+                || !validTaskRelay(runtimeLaunch.task_relay)) {
               fail('RUNTIME_EVIDENCE_MISMATCH', 'native session start does not bind the original typed launch');
             }
             if (startedSession && (startedSession.session_id !== started.session_id
@@ -578,6 +659,8 @@ function createCodexDecomposeHost(options = {}) {
                 || runtimeEvidence.native_child_evidence.parent_thread_id !== startedSession.session_id
                 || runtimeEvidence.native_child_evidence.agent_role !== request.gsd_role
                 || runtimeEvidence.native_child_evidence.agent_file_digest !== agent.sha256
+                || canonicalJson(runtimeEvidence.native_child_evidence.task_relay)
+                  !== canonicalJson(startedSession.runtime_launch.task_relay)
                 || typeof completed.last_agent_message !== 'string'
                 || !object(completed.spawn_evidence)
                 || completed.spawn_evidence.parent_thread_id !== startedSession.session_id
@@ -777,7 +860,14 @@ async function recoverCli(argv, stdout, options) {
     });
     const agent = installedGsdAgent(request.gsd_role, env);
     const binding = launchBinding(scope, request, dispatchId, resolution, agent);
-    if (!object(record.binding) || canonicalJson(record.binding) !== canonicalJson(binding)) {
+    const originalBinding = object(record.binding) ? { ...record.binding } : null;
+    if (originalBinding) delete originalBinding.generated_agent;
+    const generatedAgentValid = request.gsd_role === 'gsd-phase-researcher'
+      ? object(record.binding && record.binding.generated_agent)
+        && typeof record.binding.generated_agent.file === 'string'
+        && /^[a-f0-9]{64}$/.test(record.binding.generated_agent.sha256 || '')
+      : !record.binding || record.binding.generated_agent === undefined;
+    if (!object(record.binding) || !generatedAgentValid || canonicalJson(originalBinding) !== canonicalJson(binding)) {
       fail('RECOVERY_EVIDENCE_INCOMPLETE', 'recovery request, run scope, policy, or installed role differs from the original launch');
     }
     if (!Number.isSafeInteger(record.lease_epoch) || leaseHandle.epoch !== record.lease_epoch + 1) {
@@ -786,25 +876,31 @@ async function recoverCli(argv, stdout, options) {
     writerLease.assertFence({ token: leaseHandle.token, epoch: leaseHandle.epoch,
       base_revision: sourceRevision(scope.worktree) });
     const sessionStarted = record.session_started;
-    const completed = record.completed;
+    let completed = record.completed;
     if (!object(sessionStarted) || typeof sessionStarted.session_id !== 'string'
-        || !object(completed) || typeof completed.parent_session_id !== 'string' || !object(completed.runtime_evidence)
-        || !object(completed.artifact_digests)) {
-      fail('RECOVERY_EVIDENCE_INCOMPLETE', 'dispatch ' + dispatchId + ' has no completed native launch to recover');
+        || !object(sessionStarted.runtime_launch) || !validTaskRelay(sessionStarted.runtime_launch.task_relay)) {
+      fail('RECOVERY_EVIDENCE_INCOMPLETE', 'dispatch ' + dispatchId + ' has no bound native session-start record');
     }
-    if (sessionStarted.session_id !== completed.parent_session_id
-        || (Number.isSafeInteger(completed.pid) && pidAlive(completed.pid))) {
-      fail('RECOVERY_UNKNOWN_LIVE', 'recorded Codex process is still alive or session identity is inconsistent');
+    if (completed !== undefined && (!object(completed) || typeof completed.parent_session_id !== 'string'
+        || !object(completed.runtime_evidence) || !object(completed.artifact_digests))) {
+      fail('RECOVERY_EVIDENCE_INCOMPLETE', 'dispatch ' + dispatchId + ' has malformed completion evidence');
+    }
+    if ((Number.isSafeInteger(sessionStarted.process_id) && pidAlive(sessionStarted.process_id))
+        || (completed && Number.isSafeInteger(completed.pid) && pidAlive(completed.pid))) {
+      fail('RECOVERY_UNKNOWN_LIVE', 'recorded Codex process is still alive');
+    }
+    if (completed && sessionStarted.session_id !== completed.parent_session_id) {
+      fail('RECOVERY_EVIDENCE_INCOMPLETE', 'completed record does not bind the original native session');
     }
     const transcriptDir = options.transcriptDir || path.join(hostStateDir, 'transcripts');
-    verifyRuntimeEvidence(record, scope, binding, transcriptDir);
-    const outputDigest = completed.completion_message_sha256;
+    if (completed) verifyRuntimeEvidence(record, scope, binding, transcriptDir);
     const repository = scope.repository;
     let verified;
     try {
       verified = await verifyCompletedNativeLaunch({
         session_id: sessionStarted.session_id, selection: { model: resolution.model, effort: resolution.effort },
         agent, env, allowTimedOutWait: true, waitMs: 0, startedAt: 0, now: new Date(record.launched_at),
+        task: sessionStarted.runtime_launch.task_relay, allowMissingTaskFile: Boolean(completed),
       });
     } catch (error) {
       fail(recoveryCode(error), 'native launch evidence cannot be re-verified: ' + error.message);
@@ -812,7 +908,22 @@ async function recoverCli(argv, stdout, options) {
     const session = verified.native_session_evidence;
     const child = verified.native_child_evidence;
     const output = verified.last_agent_message;
-    if (typeof output !== 'string' || sha256Text(output) !== outputDigest
+    if (!completed) {
+      const runtimeEvidence = runtimeEvidenceFromSessionStart(sessionStarted, scope, binding, transcriptDir, verified);
+      completed = {
+        launch_id: 'codex-' + sessionStarted.session_id,
+        parent_session_id: sessionStarted.session_id,
+        pid: sessionStarted.process_id,
+        parent_sha256: session.sha256,
+        child_session_id: child.session_id,
+        child_sha256: child.sha256,
+        completion_message_sha256: sha256Text(output),
+        parent_wait_timed_out: verified.spawn_evidence.timed_out,
+        artifact_digests: {},
+        runtime_evidence: runtimeEvidence,
+      };
+    }
+    if (typeof output !== 'string' || sha256Text(output) !== completed.completion_message_sha256
         || session.sha256 !== completed.parent_sha256 || child.sha256 !== completed.child_sha256
         || child.session_id !== completed.child_session_id
         || verified.spawn_evidence.timed_out !== completed.parent_wait_timed_out) {
@@ -821,8 +932,12 @@ async function recoverCli(argv, stdout, options) {
     const declared = declaredArtifactPaths(output, scope, request.gsd_role);
     const currentDigests = artifactDigests(scope, writerLease, record.tree_snapshot, declared,
       'RECOVERY_ARTIFACT_ALTERED');
-    if (canonicalJson(currentDigests) !== canonicalJson(completed.artifact_digests)) {
+    if (record.completed && canonicalJson(currentDigests) !== canonicalJson(completed.artifact_digests)) {
       fail('RECOVERY_ARTIFACT_ALTERED', 'phase artifacts differ from the digests recorded when the child completed');
+    }
+    if (!record.completed) {
+      completed.artifact_digests = currentDigests;
+      verifyRuntimeEvidence({ ...record, completed }, scope, binding, transcriptDir);
     }
     controller.begin(createRunScope({
       run_id: scope.run_id,
@@ -859,7 +974,7 @@ async function recoverCli(argv, stdout, options) {
       sealRoot: path.join(hostStateDir, 'sealed'),
     });
     const result = await host.run(request, {
-      recovered: { applied, output },
+      recovered: { applied, output, binding: record.binding },
       lease: { writerLease, token: leaseHandle.token, epoch: leaseHandle.epoch, snapshot: record.tree_snapshot },
     });
     controller.complete(scope.run_id, { reason: 'recovered typed GSD receipt ' + dispatchId });
