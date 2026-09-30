@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 8b1dc5c37d96cff2d05a2de677ca27d8ebbf6c8919818c9951c4c9bc37e064a3
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 23617c6d96d4504c453c2ed5ac9a4b1ee630a3407bcbca0c45763ad2f3ac634f
 phase: 46-refresh-native-runtime-model-ladder
 plan: 01
 subsystem: shipyard delivery
@@ -22,7 +22,7 @@ key-decisions:
 duration: 0min
 status: halted
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 8b1dc5c37d96cff2d05a2de677ca27d8ebbf6c8919818c9951c4c9bc37e064a3
+shipyard_source_fingerprint: 23617c6d96d4504c453c2ed5ac9a4b1ee630a3407bcbca0c45763ad2f3ac634f
 ---
 
 # Phase 46: Version the canonical Codex and Claude native ladder — Delivery Projection

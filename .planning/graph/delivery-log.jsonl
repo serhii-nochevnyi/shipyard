@@ -1528,3 +1528,6 @@
 {"ts":"2026-09-30T12:36:40.389Z","event":"status_change","ticket":"T-46-05","from":null,"to":"pending","pr":null}
 {"ts":"2026-09-30T12:36:40.389Z","event":"status_change","ticket":"T-46-06","from":null,"to":"pending","pr":null}
 {"ts":"2026-09-30T14:07:00.197Z","event":"reuse_scan","ticket":"T-46-01","hits":2,"verdict":"fresh"}
+{"ts":"2026-09-30T14:22:50.452Z","event":"status_change","ticket":"T-43-19","from":"pr-open","to":"merged","pr":380}
+{"ts":"2026-09-30T14:22:50.452Z","event":"status_change","ticket":"T-45-10","from":"pending","to":"pr-open","pr":383}
+{"ts":"2026-09-30T14:22:50.452Z","event":"status_change","ticket":"T-45-11","from":"pending","to":"pr-open","pr":382}

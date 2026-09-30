@@ -1,24 +1,26 @@
 {
-  "generated_at": "2026-09-30T13:39:53.960Z",
+  "generated_at": "2026-09-30T14:22:50.452Z",
+  "observed_at": "2026-09-30T14:22:50.452Z",
+  "generation": 401,
   "parked_by_run": [],
   "auto_merge": "epic",
-  "dispatches_applied_at": "2026-09-30T14:08:41.402Z",
+  "dispatches_applied_at": "2026-09-30T14:22:50.452Z",
   "actionable": {
     "execute": [
-      "T-46-01",
-      "T-45-10",
-      "T-45-11"
+      "T-46-01"
     ],
     "publish": [],
     "fix": [],
     "finalize": [
-      "T-43-19",
-      "T-45-09"
+      "T-45-09",
+      "T-45-11"
     ],
     "merge": []
   },
   "waiting": {
-    "ci": [],
+    "ci": [
+      "T-45-10"
+    ],
     "dispatched": [],
     "parent": [],
     "merge_human": [],
@@ -253,6 +255,7 @@
       "T-43-16",
       "T-43-17",
       "T-43-18",
+      "T-43-19",
       "T-44-01",
       "T-44-02",
       "T-44-03",
@@ -275,33 +278,32 @@
     ]
   },
   "why": {
-    "T-43-19": "PR #380: green and still a draft — threads, arch-review, conform gate",
     "T-45-09": "PR #369: green, no `gate_status: arch-review=conform` trailer — threads + arch-review still owed",
-    "T-45-10": "ready — worktree + executor",
-    "T-45-11": "ready — worktree + executor",
+    "T-45-10": "PR #383: 1 check(s) still running",
+    "T-45-11": "PR #382: green and still a draft — threads, arch-review, conform gate",
     "T-46-01": "ready — worktree + executor",
     "T-46-02": "T-46-01 (parent has no branch yet (nothing to cascade from))",
     "T-46-03": "T-46-01 (parent has no branch yet (nothing to cascade from))",
-    "T-46-04": "T-43-14 (cross-phase parent must land on main first (phase 43 epic still ahead)); T-43-15 (cross-phase parent must land on main first (phase 43 epic still ahead)); T-43-19 (cross-phase parent must be MERGED and its phase 43 epic landed on main first (parent is pr-open))",
+    "T-46-04": "T-43-14 (cross-phase parent must land on main first (phase 43 epic still ahead)); T-43-15 (cross-phase parent must land on main first (phase 43 epic still ahead)); T-43-19 (cross-phase parent must land on main first (phase 43 epic still ahead))",
     "T-46-05": "T-46-02 (parent has no branch yet (nothing to cascade from)); T-46-03 (parent has no branch yet (nothing to cascade from)); T-46-04 (parent has no branch yet (nothing to cascade from))",
     "T-46-06": "T-46-05 (parent has no branch yet (nothing to cascade from))"
   },
   "counts": {
-    "execute": 3,
+    "execute": 1,
     "publish": 0,
     "fix": 0,
     "finalize": 2,
     "merge": 0,
-    "ci": 0,
+    "ci": 1,
     "dispatched": 0,
     "parent": 0,
     "merge_human": 0,
     "human": 0,
     "blocked": 5,
-    "done": 239
+    "done": 240
   },
   "parent_of": {},
-  "actionable_count": 5,
+  "actionable_count": 3,
   "tracker_blocked_count": 0,
   "left_behind_count": 0,
   "fixpoint": false,
@@ -312,10 +314,12 @@
   },
   "sentinel": {
     "duty": [
-      "T-43-19",
-      "T-45-09"
+      "T-45-09",
+      "T-45-11"
     ],
-    "waiting_ci": [],
+    "waiting_ci": [
+      "T-45-10"
+    ],
     "waiting_parent": [],
     "dispatched": [],
     "clear": false

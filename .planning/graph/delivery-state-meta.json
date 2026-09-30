@@ -1,13 +1,13 @@
 {
   "schema_version": 1,
-  "generation": 400,
-  "generation_identity": "0f6dbe0f-05a5-4b45-8cb5-4ac4dc6a3f03",
-  "previous_generation_identity": "16777245:12938907459:1790774313709381600:370ed892740809077efe1dbf287b49c2cab0d29fc57a41361824adc09f269e71",
-  "observed_at": "2026-09-30T13:39:53.960Z",
-  "generated_at": "2026-09-30T13:39:53.960Z",
+  "generation": 401,
+  "generation_identity": "610b3719-225c-4dc1-870c-ae49f8b08def",
+  "previous_generation_identity": "16777245:12938933908:1790775610057919000:20100ba0d7fda349f4227509f7b26afd17f05e81ee2316fffb112f0e2efac95d",
+  "observed_at": "2026-09-30T14:22:50.452Z",
+  "generated_at": "2026-09-30T14:22:50.452Z",
   "by": "state-sync",
-  "pid": 50109,
-  "observation_generation": 400,
+  "pid": 73243,
+  "observation_generation": 401,
   "observation_projection": {
     "tickets": {
       "T-20-01": {
@@ -2431,21 +2431,15 @@
         "checks": null
       },
       "T-43-19": {
-        "status": "pr-open",
+        "status": "merged",
         "repository": null,
         "pr": 380,
-        "head": "78e03f6cced0f48f89e6279c156b4164e0be7a58",
-        "draft": true,
+        "head": null,
+        "draft": false,
         "base": "epic/43-target-project-delivery-at-scale",
-        "merge_state": "CLEAN",
+        "merge_state": null,
         "review_decision": null,
-        "checks": {
-          "total": 1,
-          "pending": 0,
-          "failing": 0,
-          "none_reported": false,
-          "unavailable": false
-        }
+        "checks": null
       },
       "T-44-01": {
         "status": "merged",
@@ -2641,26 +2635,38 @@
         }
       },
       "T-45-10": {
-        "status": "pending",
+        "status": "pr-open",
         "repository": null,
-        "pr": null,
-        "head": null,
-        "draft": false,
+        "pr": 383,
+        "head": "341fdad796e0262434404e1810d933eef34b0151",
+        "draft": true,
         "base": "ticket/T-45-09-codex-decompose-host-recovers-a-complete",
-        "merge_state": null,
+        "merge_state": "UNSTABLE",
         "review_decision": null,
-        "checks": null
+        "checks": {
+          "total": 1,
+          "pending": 1,
+          "failing": 0,
+          "none_reported": false,
+          "unavailable": false
+        }
       },
       "T-45-11": {
-        "status": "pending",
+        "status": "pr-open",
         "repository": null,
-        "pr": null,
-        "head": null,
-        "draft": false,
+        "pr": 382,
+        "head": "1a912db6617096c713f8c5e79130500c735a6f42",
+        "draft": true,
         "base": "ticket/T-45-09-codex-decompose-host-recovers-a-complete",
-        "merge_state": null,
+        "merge_state": "CLEAN",
         "review_decision": null,
-        "checks": null
+        "checks": {
+          "total": 1,
+          "pending": 0,
+          "failing": 0,
+          "none_reported": false,
+          "unavailable": false
+        }
       },
       "T-45-12": {
         "status": "merged",
@@ -2765,9 +2771,9 @@
   },
   "binding": {
     "schema_version": 1,
-    "state_digest": "a520698c19396c24049a23e7cfcfe46959b13e5ea4d9b458d6ff270f4d110b37",
-    "front_digest": "9b450ef9e5c686696cb7d3be9a8070470cbf1ae616e086f8e88926d7bce16472",
-    "observation_digest": "9b630fcabb702b62ba7352c8badd575d4bddc662d28f526521724eed1cba5144",
-    "observation_generation": 400
+    "state_digest": "1d5c5c63f2970daa348a213f0d9b5772764c92e4393009e96a047cfdeb49a0f0",
+    "front_digest": "5eca56d440282018a03f342cf4013cb369db976656b41758cdb5b61f6bd6db60",
+    "observation_digest": "38a45fc16f65d22a0a51bac7cf2fedb9fb407db17fa12b56dce3e8d23da95d67",
+    "observation_generation": 401
   }
 }
