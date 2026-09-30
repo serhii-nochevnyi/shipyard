@@ -502,13 +502,26 @@ async function readNativeCodexChild(parentId, role, model, effort, agent, spawnE
   fail('RUNTIME_EVIDENCE_MISSING', 'native typed GSD child transcript was not found');
 }
 
-function writeTranscript(directory, scope, sessionId, stdout) {
+function transcriptEvidence(directory, scope, sessionId, stdout) {
   if (directory === undefined || directory === null) return null;
   const root = path.resolve(text(directory, 'transcriptDir', 4096));
-  fs.mkdirSync(root, { recursive: true, mode: 0o700 });
   const safeRun = scope.run_id.replace(/[^A-Za-z0-9._-]/g, '_');
   const safeSession = sessionId.replace(/[^A-Za-z0-9._-]/g, '_');
   const file = path.join(root, safeRun + '-' + safeSession + '.jsonl');
+  const bytes = Buffer.from(stdout, 'utf8');
+  return Object.freeze({
+    path: file,
+    bytes: bytes.length,
+    sha256: crypto.createHash('sha256').update(bytes).digest('hex'),
+  });
+}
+
+function writeTranscript(directory, scope, sessionId, stdout) {
+  const evidence = transcriptEvidence(directory, scope, sessionId, stdout);
+  if (!evidence) return null;
+  const root = path.dirname(evidence.path);
+  const file = evidence.path;
+  fs.mkdirSync(root, { recursive: true, mode: 0o700 });
   const temporary = file + '.' + process.pid + '.' + crypto.randomBytes(8).toString('hex') + '.tmp';
   const bytes = Buffer.from(stdout, 'utf8');
   try {
@@ -517,11 +530,7 @@ function writeTranscript(directory, scope, sessionId, stdout) {
   } finally {
     try { fs.unlinkSync(temporary); } catch (_) {}
   }
-  return Object.freeze({
-    path: file,
-    bytes: bytes.length,
-    sha256: crypto.createHash('sha256').update(bytes).digest('hex'),
-  });
+  return evidence;
 }
 
 function pathInside(root, candidate) {
@@ -1254,7 +1263,7 @@ function createCodexCliLauncher(options = {}) {
           fail('STALE_GSD_AGENT', 'installed GSD role changed during native launch');
         }
       }
-      const transcript = writeTranscript(transcriptDir, scope, parsed.session_id, rawStdout);
+      const expectedTranscript = transcriptEvidence(transcriptDir, scope, parsed.session_id, rawStdout);
       const runtimeEvidence = {
         schema: 'shipyard.codex-runtime-evidence.v1',
         version: 1,
@@ -1288,7 +1297,7 @@ function createCodexCliLauncher(options = {}) {
           turns: parsed.turns,
           usage_records: parsed.usage_records,
         },
-        ...(transcript ? { transcript } : {}),
+        ...(expectedTranscript ? { transcript: expectedTranscript } : {}),
       };
       const evidence = {
         launch_id: 'codex-' + parsed.session_id,
@@ -1310,6 +1319,25 @@ function createCodexCliLauncher(options = {}) {
           agent_file_digest: agent.sha256,
         } : {}),
       };
+      if (typeof launchOptions.onNativeCompleted === 'function') {
+        launchOptions.onNativeCompleted(freeze({
+          launch_id: evidence.launch_id,
+          session_id: evidence.session_id,
+          process_id: Number.isInteger(evidence.process_id) ? evidence.process_id : null,
+          runtime_evidence: evidence.runtime_evidence,
+          last_agent_message: verified.last_agent_message,
+          spawn_evidence: verified.spawn_evidence,
+        }));
+      }
+      const transcript = writeTranscript(transcriptDir, scope, parsed.session_id, rawStdout);
+      if ((transcript === null) !== (expectedTranscript === null)
+          || (transcript && (transcript.path !== expectedTranscript.path
+            || transcript.bytes !== expectedTranscript.bytes || transcript.sha256 !== expectedTranscript.sha256))) {
+        fail('RUNTIME_EVIDENCE_INVALID', 'saved host transcript differs from the verified launch stream');
+      }
+      if (typeof launchOptions.onTranscriptWritten === 'function') {
+        launchOptions.onTranscriptWritten(freeze({ session_id: parsed.session_id, transcript }));
+      }
       if (typeof launchOptions.onCompleted === 'function') {
         launchOptions.onCompleted(freeze({
           launch_id: evidence.launch_id,
@@ -1407,6 +1435,8 @@ function createCodexRuntimeHost(options = {}) {
         sandbox_mode: selection.sandbox_mode || input.sandbox_mode,
         gsd_role: input.gsd_role,
         onSessionStarted: input.onSessionStarted,
+        onNativeCompleted: input.onNativeCompleted,
+        onTranscriptWritten: input.onTranscriptWritten,
         onCompleted: input.onCompleted,
       });
       assertOwner();

@@ -709,7 +709,9 @@ function timedOutWaits(raw) {
   }).join('\n') + '\n';
 }
 
-async function recoverySetup(gsdRole, { complete = true, crashBeforeCompletionCallback = false } = {}) {
+async function recoverySetup(gsdRole, {
+  complete = true, crashBeforeCompletionCallback = false, crashBeforeTranscriptWrite = false,
+} = {}) {
   const f = fixture();
   const fixtureData = buildNativeChildFixture(gsdRole);
   fixtureData.parentRaw = timedOutWaits(fixtureData.parentRaw);
@@ -735,7 +737,7 @@ async function recoverySetup(gsdRole, { complete = true, crashBeforeCompletionCa
   if (!complete) {
     fixtureData.childRaw = fixtureData.childRaw.split('\n').filter((line) => !line.includes('"task_complete"')).join('\n') + '\n';
   }
-  const { spawn } = attachFakeSpawn(f, gsdRole, fixtureData, undefined, complete ? 0 : 1);
+  const { spawn, calls: runtimeSpawnCalls } = attachFakeSpawn(f, gsdRole, fixtureData, undefined, complete ? 0 : 1);
   const nativeHost = createCodexRuntimeHost({
     scope: f.scope, capabilities, recorder, env, transcriptDir, spawn,
     probe: { status: 'available', executable: 'codex', runtime_version: '0.157.1', capabilities },
@@ -743,6 +745,41 @@ async function recoverySetup(gsdRole, { complete = true, crashBeforeCompletionCa
   const runtimeHost = Object.freeze({
     ...nativeHost,
     async launchTypedGsd(selection, context) {
+      if (crashBeforeTranscriptWrite) {
+        let relay = null;
+        let taskBytes = null;
+        const safeRun = f.scope.run_id.replace(/[^A-Za-z0-9._-]/g, '_');
+        const safeSession = fixtureData.parent.replace(/[^A-Za-z0-9._-]/g, '_');
+        const transcript = path.join(transcriptDir, safeRun + '-' + safeSession + '.jsonl');
+        const originalWriteFileSync = fs.writeFileSync;
+        let intercepted = false;
+        fs.writeFileSync = function writeBeforeHostTranscript(filePath, ...args) {
+          if (path.resolve(String(filePath)).startsWith(transcript + '.')) {
+            intercepted = true;
+            throw Object.assign(new Error('simulated host death immediately before writeTranscript'), {
+              name: 'CodexRuntimeHostError', code: 'SIMULATED_HOST_DEATH',
+            });
+          }
+          return originalWriteFileSync.call(this, filePath, ...args);
+        };
+        try {
+          await nativeHost.launchTypedGsd(selection, {
+            ...context,
+            onSessionStarted(started) {
+              context.onSessionStarted(started);
+              relay = started.runtime_launch.task_relay;
+              taskBytes = fs.readFileSync(relay.path);
+            },
+          });
+          if (!intercepted) throw new Error('pre-transcript crash failpoint was not reached');
+        } catch (error) {
+          if (relay && taskBytes) fs.writeFileSync(relay.path, taskBytes, { mode: 0o600 });
+          if (!intercepted) throw new Error('pre-transcript crash failpoint was not reached');
+          throw error;
+        } finally {
+          fs.writeFileSync = originalWriteFileSync;
+        }
+      }
       if (crashBeforeCompletionCallback) {
         let relay = null;
         let taskBytes = null;
@@ -796,7 +833,7 @@ async function recoverySetup(gsdRole, { complete = true, crashBeforeCompletionCa
     fs.writeFileSync(writerLeaseFile, JSON.stringify(current), { mode: 0o600 });
   };
   return {
-    f, fixtureData, dispatchId, crashError, expectedSessionId: fixtureData.parent,
+    f, fixtureData, dispatchId, crashError, expectedSessionId: fixtureData.parent, runtimeSpawnCalls,
     recorder, receipts, recordFile, hostState, spawned, recover, file, writerLeaseFile, setLeasePid,
   };
 }
@@ -855,7 +892,8 @@ test('recover rebuilds a completed dispatch when the host dies before its comple
     assert.equal(setup.crashError.code, 'SIMULATED_HOST_DEATH');
     const launchFile = path.join(setup.hostState, 'launches', fs.readdirSync(path.join(setup.hostState, 'launches'))[0]);
     const record = JSON.parse(fs.readFileSync(launchFile, 'utf8'));
-    assert.equal(record.completed, undefined);
+    assert.equal(record.completed.transcript_saved, true);
+    assert.equal(fs.existsSync(record.completed.runtime_evidence.transcript.path), true);
     assert.ok(fs.existsSync(record.session_started.runtime_launch.task_relay.path));
     assert.equal(setup.recorder.getReservation(setup.dispatchId).recorded, false);
     setup.setLeasePid(2147483647);
@@ -866,6 +904,60 @@ test('recover rebuilds a completed dispatch when the host dies before its comple
       record.session_started.runtime_launch.task_relay);
     assert.equal(setup.spawned.length, 0);
     assert.equal(setup.recorder.getReservation(setup.dispatchId).recorded, true);
+  } finally { setup.f.clean(); }
+});
+
+test('recover rebuilds a completed dispatch after native verification but before writeTranscript', async () => {
+  const setup = await recoverySetup('gsd-planner', { crashBeforeTranscriptWrite: true });
+  try {
+    assert.equal(setup.crashError.code, 'SIMULATED_HOST_DEATH');
+    const launchDir = path.join(setup.hostState, 'launches');
+    const launchFile = path.join(launchDir, fs.readdirSync(launchDir)[0]);
+    const record = JSON.parse(fs.readFileSync(launchFile, 'utf8'));
+    assert.equal(record.completed.transcript_saved, false);
+    assert.match(fs.readFileSync(sessionFiles(setup.f).find((file) => file.includes(setup.fixtureData.childId)), 'utf8'),
+      /"task_complete"/);
+    assert.equal(fs.existsSync(record.completed.runtime_evidence.transcript.path), false);
+    assert.equal(setup.recorder.getReservation(setup.dispatchId).recorded, false);
+    setup.setLeasePid(2147483647);
+    const recovered = await setup.recover();
+    assert.equal(recovered.recovered, true);
+    assert.equal(recovered.receipt.dispatch_id, setup.dispatchId);
+    assert.equal(recovered.receipt.runtime_evidence.transcript, undefined);
+    assert.equal(recovered.receipt.runtime_evidence.stream_evidence.source, 'native-session-transcript');
+    assert.equal(setup.runtimeSpawnCalls.length, 1);
+    assert.equal(setup.spawned.length, 0);
+    assert.equal(setup.recorder.getReservation(setup.dispatchId).recorded, true);
+    assert.equal(setup.recorder.getVerifiedRecord(setup.dispatchId).receipt.dispatch_id, setup.dispatchId);
+  } finally { setup.f.clean(); }
+});
+
+test('recover refuses artifact changes after pre-write completion binding', async () => {
+  const setup = await recoverySetup('gsd-planner', { crashBeforeTranscriptWrite: true });
+  try {
+    assert.equal(setup.crashError.code, 'SIMULATED_HOST_DEATH');
+    setup.setLeasePid(2147483647);
+    fs.appendFileSync(path.join(setup.f.root, '.planning', 'phases', '38-codex-decompose', '38-01-PLAN.md'), 'tampered\n');
+    await assert.rejects(setup.recover(), (error) => error.code === 'RECOVERY_ARTIFACT_ALTERED');
+    assert.equal(fs.existsSync(setup.recordFile), false);
+    assert.equal(setup.recorder.getReservation(setup.dispatchId).recorded, false);
+    assert.equal(setup.spawned.length, 0);
+  } finally { setup.f.clean(); }
+});
+
+test('recover refuses a missing host transcript when the durable completion says it was saved', async () => {
+  const setup = await recoverySetup('gsd-planner', { crashBeforeTranscriptWrite: true });
+  try {
+    setup.setLeasePid(2147483647);
+    const launchDir = path.join(setup.hostState, 'launches');
+    const launchFile = path.join(launchDir, fs.readdirSync(launchDir)[0]);
+    const record = JSON.parse(fs.readFileSync(launchFile, 'utf8'));
+    record.completed.transcript_saved = true;
+    fs.writeFileSync(launchFile, JSON.stringify(record), { mode: 0o600 });
+    await assert.rejects(setup.recover(), (error) => error.code === 'RECOVERY_EVIDENCE_MISSING');
+    assert.equal(fs.existsSync(setup.recordFile), false);
+    assert.equal(setup.recorder.getReservation(setup.dispatchId).recorded, false);
+    assert.equal(setup.spawned.length, 0);
   } finally { setup.f.clean(); }
 });
 
