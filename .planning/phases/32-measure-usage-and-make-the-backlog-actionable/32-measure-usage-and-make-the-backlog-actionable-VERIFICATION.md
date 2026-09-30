@@ -1,19 +1,19 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 14e54e6b3741386f99000c9c429d81859cd7be251ae1c36776dc65557fc683c7
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 7f4129498963fdd5cb146ba1e4e1a04ace6646f99afad7d234ab8b7e154a7bd2
 phase: 32
-status: human_needed
-shipyard_source_fingerprint: 14e54e6b3741386f99000c9c429d81859cd7be251ae1c36776dc65557fc683c7
+status: passed
+shipyard_source_fingerprint: 7f4129498963fdd5cb146ba1e4e1a04ace6646f99afad7d234ab8b7e154a7bd2
 ---
 
 # Phase 32: Measure usage and make the backlog actionable — Verification Projection
 
-**Status:** human_needed
+**Status:** passed
 
 ## Observable Truths
 
 | Truth | Evidence | Status |
 |---|---|---|
-| Every phase plan is accounted for | 6/7 delivery records are merged | ? UNCERTAIN |
+| Every phase plan is accounted for | 7/7 delivery records are merged | ✓ VERIFIED |
 | Integration is coherent | integration evidence records passed | ✓ VERIFIED |
 | Verification evidence is present | integration evidence records repository-local verification facts | ✓ VERIFIED |
 
@@ -27,7 +27,7 @@ shipyard_source_fingerprint: 14e54e6b3741386f99000c9c429d81859cd7be251ae1c36776d
 | T-32-04 | merged | ✓ VERIFIED |
 | T-32-05 | merged | ✓ VERIFIED |
 | T-32-06 | merged | ✓ VERIFIED |
-| T-32-07 | pending | ? UNCERTAIN |
+| T-32-07 | merged | ✓ VERIFIED |
 
 ## Verification Commands
 
@@ -36,4 +36,4 @@ shipyard_source_fingerprint: 14e54e6b3741386f99000c9c429d81859cd7be251ae1c36776d
 
 ## Gaps Summary
 
-**Not green:** 1 plan(s) are not merged.
+**No gaps found in the available repository evidence.**

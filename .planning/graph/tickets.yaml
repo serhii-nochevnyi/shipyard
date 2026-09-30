@@ -4279,3 +4279,54 @@ tickets:
     primary_parent: T-45-10
     pr_base: ticket/T-45-10-claude-decompose-host-recovers-a-complet
     jira: null
+  T-45-16:
+    title: 'Close judgment recovery, native process proof, and pre-receipt writer fences'
+    plan: '.planning/phases/45-close-residual-pipeline-efficiency-gaps/45-16-PLAN.md'
+    phase: '45'
+    repo: null
+    wave: 6
+    depends_on: [T-45-07, T-45-08, T-45-09, T-45-10, T-45-15]
+    files: [plugins/delivery-pipeline/scripts/codex-decompose-host.cjs, plugins/delivery-pipeline/scripts/claude-decompose-host.cjs, plugins/delivery-pipeline/scripts/codex-runtime-host.cjs, plugins/delivery-pipeline/scripts/dispatch-boundary.cjs, plugins/delivery-pipeline/scripts/planning-writer-lease.cjs, tests/unit/codex-decompose-host.test.cjs, tests/unit/claude-decompose-host.test.cjs, tests/unit/codex-runtime-host.test.cjs, tests/unit/dispatch-boundary.test.cjs, tests/unit/planning-writer-lease.test.cjs]
+    risk: high
+    human_checkpoint: true
+    checkpoint: merge
+    preauthorized: false
+    branch: ticket/T-45-16-close-judgment-recovery-native-process-p
+    epic: epic/45-close-residual-pipeline-efficiency-gaps
+    primary_parent: T-45-15
+    pr_base: ticket/T-45-15-prepare-the-0-70-0-release-from-the-full
+    jira: null
+  T-45-17:
+    title: Select and validate an isolated Codex dogfood home before marketplace activity
+    plan: '.planning/phases/45-close-residual-pipeline-efficiency-gaps/45-17-PLAN.md'
+    phase: '45'
+    repo: null
+    wave: 6
+    depends_on: [T-45-03, T-45-15]
+    files: [scripts/install-shipyard-marketplace.cjs, plugins/delivery-pipeline/scripts/gsd-tune.cjs, tests/unit/marketplace-installer.test.cjs, tests/unit/gsd-tune.test.cjs, tests/unit/gen-codex-shipyard.test.cjs]
+    risk: medium
+    human_checkpoint: false
+    checkpoint: null
+    preauthorized: false
+    branch: ticket/T-45-17-select-and-validate-an-isolated-codex-do
+    epic: epic/45-close-residual-pipeline-efficiency-gaps
+    primary_parent: T-45-15
+    pr_base: ticket/T-45-15-prepare-the-0-70-0-release-from-the-full
+    jira: null
+  T-45-18:
+    title: Refresh the 0.70.0 Codex package after both integration repairs merge
+    plan: '.planning/phases/45-close-residual-pipeline-efficiency-gaps/45-18-PLAN.md'
+    phase: '45'
+    repo: null
+    wave: 7
+    depends_on: [T-45-15, T-45-16, T-45-17]
+    files: ['plugins/shipyard/**']
+    risk: high
+    human_checkpoint: true
+    checkpoint: merge
+    preauthorized: false
+    branch: ticket/T-45-18-refresh-the-0-70-0-codex-package-after-b
+    epic: epic/45-close-residual-pipeline-efficiency-gaps
+    primary_parent: T-45-16
+    pr_base: ticket/T-45-16-close-judgment-recovery-native-process-p
+    jira: null

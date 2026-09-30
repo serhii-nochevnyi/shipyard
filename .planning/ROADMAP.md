@@ -913,9 +913,9 @@ REQ-193 has an approved first-pass contribution here; its full completion belong
 <!-- shipyard:gsd-sync:begin -->
 ## Shipyard synchronization (generated)
 
-- Source fingerprint: `dbadfaff6e5479b1d17b4ce202609fc8f03385bc372a758ee12ac669d09ad9ed`
-- Plans merged: 221/244
-- Phases verified: 4/27
+- Source fingerprint: `e4b0d663bd0867924b7115398376f8fd62e3ea9a5474ef971c1a3cdc8097215d`
+- Plans merged: 244/247
+- Phases verified: 10/27
 - Current phase: 20
 
 | Phase | Plans | Merged | Verification |
@@ -930,22 +930,22 @@ REQ-193 has an approved first-pass contribution here; its full completion belong
 | 27 — The conveyor measures its own state | 9 | 9 | gaps_found |
 | 28 — A mechanism nobody connected is not a mechanism | 9 | 9 | gaps_found |
 | 29 — The tracker is a projection, and a projection is driven | 8 | 8 | passed |
-| 30 — A ticket you cannot reach is not deliverable | 10 | 5 | pending |
-| 31 — Not every ticket is available work | 7 | 6 | pending |
-| 32 — Measure usage and make the backlog actionable | 7 | 6 | pending |
+| 30 — A ticket you cannot reach is not deliverable | 10 | 10 | passed |
+| 31 — Not every ticket is available work | 7 | 7 | passed |
+| 32 — Measure usage and make the backlog actionable | 7 | 7 | passed |
 | 33 — Reduce orchestration context and transfer sessions safely | 9 | 9 | passed |
-| 34 — Improve convergence and tune from measured outcomes | 5 | 1 | pending |
+| 34 — Improve convergence and tune from measured outcomes | 5 | 5 | passed |
 | 35 — Close the GSD and Shipyard workflow loop | 3 | 3 | passed |
-| 36 — Enforce the runtime model ladder | 12 | 7 | pending |
-| 37 — Run the autonomous dual-runtime control plane | 8 | 5 | pending |
-| 38 — Restore the native model ladder in delivery | 8 | 6 | pending |
+| 36 — Enforce the runtime model ladder | 12 | 12 | passed |
+| 37 — Run the autonomous dual-runtime control plane | 8 | 8 | pending |
+| 38 — Restore the native model ladder in delivery | 8 | 8 | passed |
 | 39 — Remove conveyor session friction | 17 | 17 | gaps_found |
 | 40 — Build delivery seams and clean target-project PRs | 27 | 27 | pending |
-| 41 — Reduce pipeline subscription overhead | 9 | 8 | gaps_found |
+| 41 — Reduce pipeline subscription overhead | 9 | 9 | gaps_found |
 | 42 — Resume trusted finalization without executor replay | 3 | 3 | gaps_found |
 | 43 — Target-project delivery at scale | 19 | 19 | pending |
 | 44 — Optimize subscription efficiency per runtime | 8 | 8 | pending |
-| 45 — Close residual pipeline efficiency gaps | 15 | 14 | pending |
+| 45 — Close residual pipeline efficiency gaps | 18 | 15 | gaps_found |
 | 47 — Complete deferred decomposition wait attribution | 0 | 0 | pending |
 
 <!-- shipyard:gsd-sync:end -->
