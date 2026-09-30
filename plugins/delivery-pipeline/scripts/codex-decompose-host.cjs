@@ -826,11 +826,11 @@ function recordChildModelEvidence(scope, dispatchId, result, resolution, options
   const receipt = result && result.receipt;
   const child = receipt && receipt.runtime_evidence && receipt.runtime_evidence.native_child_evidence;
   if (!child) return;
-  const env = options.env || process.env;
-  const graphDir = options.graphDir || env.SHIPYARD_GRAPH_DIR;
-  const recorder = options.overheadRecorder || (graphDir ? orchestrationOverhead.createRecorder(graphDir) : null);
-  if (!recorder) return;
   try {
+    const env = options.env || process.env;
+    const graphDir = options.graphDir || env.SHIPYARD_GRAPH_DIR;
+    const recorder = options.overheadRecorder || (graphDir ? orchestrationOverhead.createRecorder(graphDir) : null);
+    if (!recorder) return;
     orchestrationOverhead.recordModelEvidence(recorder, {
       observation_id: `codex-decompose:${dispatchId}:child`,
       run_id: scope.run_id,
@@ -853,7 +853,9 @@ function recordChildModelEvidence(scope, dispatchId, result, resolution, options
       bytes: 0,
       estimated_tokens: null,
     });
-  } catch { /* @invariant: optional efficiency accounting cannot invalidate a verified receipt */ }
+  } catch {
+    (options.stderr || process.stderr).write('codex-decompose-host: child model telemetry collection failed\n');
+  }
 }
 
 async function recoverCli(argv, stdout, options) {

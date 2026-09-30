@@ -319,6 +319,49 @@ test('default run controller state is outside the model worktree and keyed to it
   } finally { f.clean(); }
 });
 
+test('child telemetry collector failure warns without leaking collector details or changing the verified result', async () => {
+  const f = fixture();
+  const gsdRole = 'gsd-planner';
+  const fixtureData = buildNativeChildFixture(gsdRole);
+  const clock = manualClock(Date.now());
+  const heartbeat = manualHeartbeat();
+  try {
+    fs.writeFileSync(path.join(f.agentDir, 'gsd-planner.toml'),
+      gsdAgentToml(gsdRole, fixtureData.instructions.replace(/\n$/, '')));
+    const file = path.join(f.root, 'telemetry-failure-request.json');
+    fs.writeFileSync(file, JSON.stringify({
+      scope: f.scope, gsd_role: gsdRole, prompt: 'Check this phase plan.',
+    }));
+    const stdout = [];
+    const stderr = [];
+    const secret = 'api_key=collector-secret';
+    const { spawn } = attachFakeSpawn(f, gsdRole, fixtureData, () => {
+      clock.advance(50);
+      heartbeat.fire();
+    });
+    const result = await runCli(['--args-file', file], { write(value) { stdout.push(value); } }, {
+      env: { CODEX_HOME: f.codexHome },
+      agentDir: f.agentDir,
+      agentManifest: path.join(f.agentDir, '.shipyard-manifest.json'),
+      testStateRoot: f.stateRoot,
+      leaseTtlMs: 1000,
+      now: clock,
+      heartbeat: heartbeat.scheduler,
+      probe: { status: 'available', executable: 'codex', runtime_version: '0.157.1', capabilities },
+      spawn,
+      overheadRecorder: { record() { throw new Error(secret); } },
+      stderr: { write(value) { stderr.push(value); } },
+    });
+    assert.equal(result.receipt.compliance, 'verified');
+    assert.deepEqual(JSON.parse(stdout.join('')), result);
+    assert.deepEqual(stderr, ['codex-decompose-host: child model telemetry collection failed\n']);
+    assert.equal(JSON.stringify({ result, stdout, stderr }).includes(secret), false);
+    const storeDir = defaultRunStoreDir(f.scope, f.stateRoot);
+    const receipts = createDurableRecorder(path.join(path.dirname(storeDir), 'receipts'));
+    assert.deepEqual(receipts.getVerifiedRecord(result.receipt.dispatch_id).receipt, result.receipt);
+  } finally { f.clean(); }
+});
+
 const CAPTURED_SHA256 = 'de94a486861cedd3587db16ba051e5c5bf80e0ab05fa44ed50ad48688e6f8b4c';
 
 function captured(rel, values = {}) {
