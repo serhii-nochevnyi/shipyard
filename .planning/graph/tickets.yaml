@@ -141,6 +141,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/failure-signature.cjs, tests/unit/failure-signature.test.cjs]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-20-01-failure-signature-normalize-history-verd
     epic: epic/20-autonomy-of-the-drive-to-green-loop
@@ -157,6 +158,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/pipeline-config.cjs, tests/unit/pipeline-config.test.cjs]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-20-02-model-ladder-reads-signature-state-not-a
     epic: epic/20-autonomy-of-the-drive-to-green-loop
@@ -173,6 +175,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/escalation-record.cjs, plugins/delivery-pipeline/scripts/log-event.cjs, tests/unit/escalation-record.test.cjs, tests/unit/log-event.test.cjs]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-20-03-plan-defect-the-third-terminal-outcome-i
     epic: epic/20-autonomy-of-the-drive-to-green-loop
@@ -189,6 +192,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/front.cjs, plugins/delivery-pipeline/scripts/state-sync.cjs, tests/unit/front.test.cjs]
     risk: low
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-20-04-order-the-actionable-front-by-unblocking
     epic: epic/20-autonomy-of-the-drive-to-green-loop
@@ -205,6 +209,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/attempt-history.cjs, tests/unit/attempt-history.test.cjs, plugins/delivery-pipeline/workflows/fix-round.mjs, plugins/delivery-pipeline/references/ci-fix.md, plugins/delivery-pipeline/references/review-fix.md]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-20-05-attempt-history-handed-to-fixers-as-inpu
     epic: epic/20-autonomy-of-the-drive-to-green-loop
@@ -221,6 +226,7 @@ tickets:
     files: [plugins/delivery-pipeline/commands/deliver.md, plugins/delivery-pipeline/references/pr-sentinel.md, plugins/delivery-pipeline/.claude-plugin/plugin.json, capabilities/delivery-pipeline/capability.json]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-20-06-wire-the-babysit-loop-to-signature-verdi
     epic: epic/20-autonomy-of-the-drive-to-green-loop
@@ -237,6 +243,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/validate-graph.cjs, tests/smoke/graph-validator-smoke.sh]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-21-01-pre-authorization-is-recorded-in-the-pla
     epic: epic/21-verdicts-a-human-would-have-made-anyway
@@ -253,6 +260,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/sentinel.cjs, plugins/delivery-pipeline/scripts/front.cjs, tests/unit/sentinel.test.cjs, tests/unit/front.test.cjs]
     risk: high
     human_checkpoint: true
+    checkpoint: merge
     preauthorized: false
     branch: ticket/T-21-02-one-predicate-decides-whether-a-checkpoi
     epic: epic/21-verdicts-a-human-would-have-made-anyway
@@ -269,6 +277,7 @@ tickets:
     files: [plugins/delivery-pipeline/commands/decompose.md]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-21-03-decomposition-asks-for-the-approval-the
     epic: epic/21-verdicts-a-human-would-have-made-anyway
@@ -285,6 +294,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/degenerate-green.cjs, tests/unit/degenerate-green.test.cjs]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-21-04-degenerate-green-is-detected-on-the-diff
     epic: epic/21-verdicts-a-human-would-have-made-anyway
@@ -301,6 +311,7 @@ tickets:
     files: [plugins/delivery-pipeline/commands/deliver.md, plugins/delivery-pipeline/references/pr-sentinel.md, plugins/delivery-pipeline/.claude-plugin/plugin.json, capabilities/delivery-pipeline/capability.json, tests/unit/trailer.test.cjs]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-21-05-the-degenerate-green-verdict-rides-the-t
     epic: epic/21-verdicts-a-human-would-have-made-anyway
@@ -317,6 +328,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/escalation-record.cjs, plugins/delivery-pipeline/scripts/front.cjs, plugins/delivery-pipeline/scripts/sentinel.cjs, tests/unit/front.test.cjs, tests/unit/escalation-record.test.cjs]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-22-01-a-park-is-described-by-the-store-that-ow
     epic: epic/22-close-what-phase-20-left-open
@@ -333,6 +345,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/escalation-record.cjs, tests/unit/escalation-record.test.cjs]
     risk: low
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-22-02-a-reason-guard-checks-the-value-not-the
     epic: epic/22-close-what-phase-20-left-open
@@ -349,6 +362,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/drift-record.cjs, plugins/delivery-pipeline/scripts/log-event.cjs, tests/unit/record-stores.test.cjs]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-22-03-one-graph-spelling-means-one-graph-parse
     epic: epic/22-close-what-phase-20-left-open
@@ -365,6 +379,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/lock.cjs, tests/unit/lock.test.cjs]
     risk: high
     human_checkpoint: true
+    checkpoint: merge
     preauthorized: false
     branch: ticket/T-22-04-a-lock-is-held-from-the-instant-it-exist
     epic: epic/22-close-what-phase-20-left-open
@@ -381,6 +396,7 @@ tickets:
     files: [tests/unit/assert-harness.cjs, tests/unit/harness.test.cjs]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-22-05-the-harness-must-be-able-to-fail-an-asyn
     epic: epic/22-close-what-phase-20-left-open
@@ -397,6 +413,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/dispatch-record.cjs, plugins/delivery-pipeline/scripts/front.cjs, plugins/delivery-pipeline/commands/deliver.md, plugins/delivery-pipeline/references/pr-sentinel.md, plugins/delivery-pipeline/.claude-plugin/plugin.json, capabilities/delivery-pipeline/capability.json, tests/unit/dispatch-record.test.cjs, tests/unit/front.test.cjs]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-23-01-a-dispatched-ticket-is-visible-as-dispat
     epic: epic/23-the-board-tells-the-truth-about-itself
@@ -413,6 +430,7 @@ tickets:
     files: ['.planning/backlog/no-ci-in-the-conveyors-own-repo.md', '.planning/backlog/phase-20-followups.md', '.planning/backlog/phase-22-followups.md', '.planning/backlog/epic-cut-silently-behind-origin.md']
     risk: low
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-23-02-the-backlog-states-what-is-true-now
     epic: epic/23-the-board-tells-the-truth-about-itself
@@ -429,6 +447,7 @@ tickets:
     files: [tests/unit/failure-signature.test.cjs, tests/unit/degenerate-green.test.cjs]
     risk: low
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-23-03-two-test-files-stop-lying-about-the-code
     epic: epic/23-the-board-tells-the-truth-about-itself
@@ -445,6 +464,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/failure-signature.cjs, plugins/delivery-pipeline/scripts/attempt-history.cjs, plugins/delivery-pipeline/commands/deliver.md, tests/unit/failure-signature.test.cjs, tests/unit/attempt-history.test.cjs]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-24-01-a-plan-defect-needs-no-green-between-its
     epic: epic/24-the-conveyor-stops-interrupting-itself
@@ -461,6 +481,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/check-state.cjs, plugins/delivery-pipeline/scripts/state-sync.cjs, plugins/delivery-pipeline/scripts/sentinel.cjs, plugins/delivery-pipeline/scripts/ci-wait.cjs, tests/unit/check-state.test.cjs, tests/unit/sentinel.test.cjs, tests/unit/ci-wait.test.cjs, tests/unit/trailer.test.cjs, tests/smoke/sentinel-smoke.sh]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-24-02-check-state-has-one-vocabulary
     epic: epic/24-the-conveyor-stops-interrupting-itself
@@ -477,6 +498,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/parent-moving.cjs, plugins/delivery-pipeline/scripts/sentinel.cjs, plugins/delivery-pipeline/scripts/front.cjs, plugins/delivery-pipeline/scripts/ci-wait.cjs, tests/unit/parent-moving.test.cjs, tests/unit/front.test.cjs, tests/unit/sentinel.test.cjs, tests/unit/ci-wait.test.cjs, tests/smoke/sentinel-smoke.sh]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-24-03-a-wait-on-the-parent-is-a-bucket-the-fro
     epic: epic/24-the-conveyor-stops-interrupting-itself
@@ -493,6 +515,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/gate-trailer.cjs, plugins/delivery-pipeline/scripts/state-sync.cjs, plugins/delivery-pipeline/scripts/sentinel.cjs, plugins/delivery-pipeline/scripts/front.cjs, plugins/delivery-pipeline/commands/deliver.md, plugins/delivery-pipeline/references/pr-sentinel.md, tests/unit/trailer.test.cjs, tests/unit/sentinel.test.cjs, tests/unit/front.test.cjs, tests/smoke/sentinel-smoke.sh]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-24-04-a-conform-verdict-is-bound-to-the-head-i
     epic: epic/24-the-conveyor-stops-interrupting-itself
@@ -509,6 +532,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/sentinel.cjs, plugins/delivery-pipeline/scripts/front.cjs, plugins/delivery-pipeline/scripts/pipeline-config.cjs, capabilities/delivery-pipeline/capability.json, tests/unit/sentinel.test.cjs, tests/unit/front.test.cjs, tests/unit/pipeline-config.test.cjs, tests/smoke/sentinel-smoke.sh]
     risk: high
     human_checkpoint: true
+    checkpoint: merge
     preauthorized: true
     branch: ticket/T-24-05-merge-verifies-what-the-cache-cannot-kno
     epic: epic/24-the-conveyor-stops-interrupting-itself
@@ -525,6 +549,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/sentinel.cjs, plugins/delivery-pipeline/scripts/front.cjs, plugins/delivery-pipeline/scripts/reviewers.cjs, plugins/delivery-pipeline/workflows/fix-round.mjs, plugins/delivery-pipeline/scripts/log-event.cjs, tests/smoke/docs-smoke.sh, tests/unit/log-event.test.cjs, plugins/delivery-pipeline/references/ci-fix.md, plugins/delivery-pipeline/references/review-fix.md, tests/unit/sentinel.test.cjs, tests/unit/front.test.cjs, tests/unit/reviewers.test.cjs, tests/smoke/sentinel-smoke.sh]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-24-06-the-guard-names-a-remedy-that-exists
     epic: epic/24-the-conveyor-stops-interrupting-itself
@@ -541,6 +566,7 @@ tickets:
     files: [plugins/delivery-pipeline/commands/deliver.md, plugins/delivery-pipeline/references/pr-sentinel.md, plugins/delivery-pipeline/.claude-plugin/plugin.json, capabilities/delivery-pipeline/capability.json, CLAUDE.md, README.md, tests/unit/files-contract.test.cjs, tests/smoke/docs-smoke.sh]
     risk: low
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-24-07-the-prose-names-only-what-the-scripts-im
     epic: epic/24-the-conveyor-stops-interrupting-itself
@@ -557,6 +583,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/escalation-record.cjs, plugins/delivery-pipeline/scripts/dispatch-record.cjs, tests/unit/escalation-record.test.cjs, tests/unit/dispatch-record.test.cjs, tests/unit/record-stores.test.cjs]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-24-08-a-record-is-lifted-only-by-a-fact-its-ow
     epic: epic/24-the-conveyor-stops-interrupting-itself
@@ -573,6 +600,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/stop-gate.cjs, tests/unit/stop-gate.test.cjs, '.gitignore']
     risk: high
     human_checkpoint: true
+    checkpoint: merge
     preauthorized: true
     branch: ticket/T-24-09-the-stop-gate-blocks-as-often-as-the-cas
     epic: epic/24-the-conveyor-stops-interrupting-itself
@@ -589,6 +617,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/ci-wait.cjs, tests/unit/ci-wait.test.cjs]
     risk: low
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-24-10-the-ci-waiter-tells-a-stall-from-an-outa
     epic: epic/24-the-conveyor-stops-interrupting-itself
@@ -605,6 +634,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/state-sync.cjs, tests/smoke/sentinel-smoke.sh]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-24-11-a-resync-writes-the-front-it-means
     epic: epic/24-the-conveyor-stops-interrupting-itself
@@ -621,6 +651,7 @@ tickets:
     files: [Dockerfile.base, Dockerfile, Makefile, tests/smoke/codex-shipyard-smoke.sh, tests/smoke/base-image-smoke.sh]
     risk: medium
     human_checkpoint: true
+    checkpoint: merge
     preauthorized: true
     branch: ticket/T-25-01-the-image-pins-the-runtimes-the-conveyor
     epic: epic/25-the-conveyor-follows-the-models-it-runs-on
@@ -637,6 +668,7 @@ tickets:
     files: [scripts/gen-codex-shipyard.cjs, plugins/delivery-pipeline/scripts/pipeline-config.cjs, capabilities/delivery-pipeline/capability.json, plugins/delivery-pipeline/commands/deliver.md, plugins/delivery-pipeline/references/pr-sentinel.md, tests/smoke/codex-shipyard-smoke.sh, tests/unit/gen-codex-shipyard.test.cjs, tests/unit/pipeline-config.test.cjs, CLAUDE.md, README.md]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-25-02-a-codex-agent-carries-the-model-its-effo
     epic: epic/25-the-conveyor-follows-the-models-it-runs-on
@@ -653,6 +685,7 @@ tickets:
     files: [CLAUDE.md, README.md, plugins/delivery-pipeline/commands/deliver.md, plugins/delivery-pipeline/commands/investigate.md, docs/gsd_multilevel_delivery_pipeline.md, plugins/delivery-pipeline/scripts/pipeline-config.cjs, tests/unit/pipeline-config.test.cjs]
     risk: low
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-25-03-the-prose-names-the-models-the-runtimes
     epic: epic/25-the-conveyor-follows-the-models-it-runs-on
@@ -669,6 +702,7 @@ tickets:
     files: ['.env.example', docker-compose.yml, k8s/configmap.yaml, plugins/delivery-pipeline/scripts/pipeline-config.cjs, plugins/delivery-pipeline/scripts/failure-signature.cjs, plugins/delivery-pipeline/scripts/gsd-tune.cjs, plugins/delivery-pipeline/commands/deliver.md, capabilities/delivery-pipeline/capability.json, CLAUDE.md, README.md, tests/unit/pipeline-config.test.cjs, tests/unit/failure-signature.test.cjs, tests/unit/gsd-tune.test.cjs]
     risk: high
     human_checkpoint: true
+    checkpoint: merge
     preauthorized: false
     branch: ticket/T-25-04-the-floor-is-opus-the-depth-is-effort-an
     epic: epic/25-the-conveyor-follows-the-models-it-runs-on
@@ -685,6 +719,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/dispatch-record.cjs, plugins/delivery-pipeline/commands/deliver.md, plugins/delivery-pipeline/references/pr-sentinel.md, tests/unit/dispatch-record.test.cjs]
     risk: low
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-25-05-a-dispatch-records-what-it-dispatched
     epic: epic/25-the-conveyor-follows-the-models-it-runs-on
@@ -701,6 +736,7 @@ tickets:
     files: [docs/gsd_multilevel_delivery_pipeline.md, plugins/delivery-pipeline/commands/investigate.md, docker-compose.yml, '.env.example', tests/smoke/docs-smoke.sh]
     risk: low
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-25-06-every-home-of-a-pinned-fact-agrees-with
     epic: epic/25-the-conveyor-follows-the-models-it-runs-on
@@ -717,6 +753,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/path-owner.cjs, plugins/delivery-pipeline/scripts/validate-graph.cjs, plugins/delivery-pipeline/scripts/scope-gate.cjs, plugins/delivery-pipeline/scripts/base-merge.cjs, tests/unit/path-owner.test.cjs, tests/smoke/graph-validator-smoke.sh, tests/smoke/worktree-gates-smoke.sh, tests/fixtures]
     risk: high
     human_checkpoint: true
+    checkpoint: merge
     preauthorized: true
     branch: ticket/T-26-01-one-ownership-matcher-exact-by-construct
     epic: epic/26-positive-evidence-before-a-mutation
@@ -733,6 +770,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/ticket-worktree.sh, tests/smoke/worktree-smoke.sh]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-26-04-gc-removes-only-what-is-proven-landed
     epic: epic/26-positive-evidence-before-a-mutation
@@ -749,6 +787,7 @@ tickets:
     files: [scripts/merge-codex-config.cjs, tests/unit/merge-codex-config.test.cjs]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-26-06-the-codex-config-merge-writes-toml-the-r
     epic: epic/26-positive-evidence-before-a-mutation
@@ -765,6 +804,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/gsd-tune.cjs, tests/unit/gsd-tune.test.cjs]
     risk: low
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-26-07-tuning-merges-another-owner-s-list-never
     epic: epic/26-positive-evidence-before-a-mutation
@@ -781,6 +821,7 @@ tickets:
     files: [plugins/delivery-pipeline/commands/decompose.md]
     risk: low
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-26-08-jira-identity-is-namespaced-by-repositor
     epic: epic/26-positive-evidence-before-a-mutation
@@ -797,6 +838,7 @@ tickets:
     files: [plugins/delivery-pipeline/workflows/executors.mjs, plugins/delivery-pipeline/workflows/drift-gate.mjs, tests/unit/workflows-args.test.cjs]
     risk: low
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-26-09-workflow-input-is-validated-before-any-d
     epic: epic/26-positive-evidence-before-a-mutation
@@ -813,6 +855,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/drift-needed.cjs, tests/unit/drift-needed.test.cjs]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-26-13-drift-is-judged-against-the-base-the-tic
     epic: epic/26-positive-evidence-before-a-mutation
@@ -829,6 +872,7 @@ tickets:
     files: [plugins/delivery-pipeline/workflows/executors.mjs, tests/unit/workflows-args.test.cjs]
     risk: low
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-26-14-a-workflow-returns-a-reference-not-a-doc
     epic: epic/26-positive-evidence-before-a-mutation
@@ -845,6 +889,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/state-sync.cjs, plugins/delivery-pipeline/scripts/front.cjs, tests/smoke/sentinel-smoke.sh]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-26-15-the-board-is-given-the-facts-its-predica
     epic: epic/26-positive-evidence-before-a-mutation
@@ -861,6 +906,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/state-sync.cjs, plugins/delivery-pipeline/scripts/front.cjs, tests/unit/front.test.cjs, tests/smoke/sentinel-smoke.sh]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-26-03-readiness-needs-positive-evidence
     epic: epic/26-positive-evidence-before-a-mutation
@@ -877,6 +923,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/lock.cjs, plugins/delivery-pipeline/scripts/state-sync.cjs, tests/unit/lock.test.cjs, tests/smoke/sentinel-smoke.sh]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-26-05-locks-prove-ownership-snapshots-carry-a
     epic: epic/26-positive-evidence-before-a-mutation
@@ -893,6 +940,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/front.cjs, plugins/delivery-pipeline/scripts/stop-gate.cjs, plugins/delivery-pipeline/scripts/ci-wait.cjs, plugins/delivery-pipeline/scripts/state-sync.cjs, tests/unit/front.test.cjs, tests/unit/stop-gate.test.cjs, tests/unit/ci-wait.test.cjs]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-26-10-left-behind-is-evidence-not-arithmetic
     epic: epic/26-positive-evidence-before-a-mutation
@@ -909,6 +957,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/check-state.cjs, plugins/delivery-pipeline/scripts/state-sync.cjs, plugins/delivery-pipeline/scripts/front.cjs, plugins/delivery-pipeline/scripts/sentinel.cjs, tests/unit/check-state.test.cjs, tests/unit/front.test.cjs, tests/unit/sentinel.test.cjs, tests/smoke/sentinel-smoke.sh]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-26-11-unavailable-is-not-empty
     epic: epic/26-positive-evidence-before-a-mutation
@@ -925,6 +974,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/pipeline-config.cjs, plugins/delivery-pipeline/scripts/sentinel.cjs, plugins/delivery-pipeline/scripts/ci-wait.cjs, plugins/delivery-pipeline/scripts/state-sync.cjs, tests/unit/pipeline-config.test.cjs, tests/unit/sentinel.test.cjs, tests/unit/ci-wait.test.cjs, tests/smoke/sentinel-smoke.sh]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-26-02-a-corrupt-configuration-permits-no-mutat
     epic: epic/26-positive-evidence-before-a-mutation
@@ -941,6 +991,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/pipeline-config.cjs, plugins/delivery-pipeline/scripts/front.cjs, plugins/delivery-pipeline/commands/deliver.md, capabilities/delivery-pipeline/capability.json, tests/unit/pipeline-config.test.cjs, tests/unit/front.test.cjs]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-26-12-a-wave-is-cut-to-a-concurrency-the-sessi
     epic: epic/26-positive-evidence-before-a-mutation
@@ -957,6 +1008,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/front.cjs, plugins/delivery-pipeline/scripts/ci-wait.cjs, plugins/delivery-pipeline/scripts/stop-gate.cjs, plugins/delivery-pipeline/workflows/drift-gate.mjs, capabilities/delivery-pipeline/capability.json, tests/unit/front.test.cjs, tests/unit/ci-wait.test.cjs, tests/unit/stop-gate.test.cjs, tests/unit/workflows-args.test.cjs]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-27-01-the-cap-counts-agents-and-the-three-capa
     epic: epic/27-the-conveyor-measures-its-own-state
@@ -973,6 +1025,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/gate-trailer.cjs, plugins/delivery-pipeline/scripts/base-merge.cjs, plugins/delivery-pipeline/references/arch-review.md, tests/unit/trailer.test.cjs, tests/unit/files-contract.test.cjs]
     risk: high
     human_checkpoint: true
+    checkpoint: merge
     preauthorized: true
     branch: ticket/T-27-02-a-verdict-survives-a-head-move-it-provab
     epic: epic/27-the-conveyor-measures-its-own-state
@@ -989,6 +1042,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/state-sync.cjs, plugins/delivery-pipeline/scripts/sentinel.cjs, plugins/delivery-pipeline/scripts/parent-moving.cjs, plugins/delivery-pipeline/scripts/front.cjs, plugins/delivery-pipeline/commands/deliver.md, tests/unit/sentinel.test.cjs, tests/unit/parent-moving.test.cjs, tests/unit/front.test.cjs, tests/smoke/sentinel-smoke.sh]
     risk: high
     human_checkpoint: true
+    checkpoint: merge
     preauthorized: true
     branch: ticket/T-27-03-a-base-is-chosen-for-where-the-merge-lan
     epic: epic/27-the-conveyor-measures-its-own-state
@@ -1005,6 +1059,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/epic-branch.sh, plugins/delivery-pipeline/scripts/ticket-worktree.sh, plugins/delivery-pipeline/commands/deliver.md, tests/smoke/worktree-smoke.sh]
     risk: high
     human_checkpoint: true
+    checkpoint: merge
     preauthorized: true
     branch: ticket/T-27-04-an-epic-learns-what-landed-under-it-and
     epic: epic/27-the-conveyor-measures-its-own-state
@@ -1021,6 +1076,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/log-event.cjs, plugins/delivery-pipeline/scripts/dispatch-record.cjs, plugins/delivery-pipeline/scripts/pipeline-config.cjs, plugins/delivery-pipeline/commands/deliver.md, plugins/delivery-pipeline/references/pr-sentinel.md, tests/unit/log-event.test.cjs, tests/unit/dispatch-record.test.cjs, tests/unit/pipeline-config.test.cjs]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-27-05-a-journal-records-what-was-applied-and-r
     epic: epic/27-the-conveyor-measures-its-own-state
@@ -1037,6 +1093,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/front.cjs, plugins/delivery-pipeline/commands/deliver.md, plugins/delivery-pipeline/workflows/drift-gate.mjs, tests/unit/front.test.cjs, tests/unit/workflows-args.test.cjs]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-27-06-the-front-says-when-it-is-behind-and-one
     epic: epic/27-the-conveyor-measures-its-own-state
@@ -1053,6 +1110,7 @@ tickets:
     files: [tests/smoke/docs-smoke.sh, scripts/install-shipyard-capability.sh, tests/unit/source-contract.test.cjs]
     risk: low
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-27-07-a-guard-asserts-a-sweep-not-a-list-of-kn
     epic: epic/27-the-conveyor-measures-its-own-state
@@ -1069,6 +1127,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/front.cjs, plugins/delivery-pipeline/scripts/pipeline-config.cjs, plugins/delivery-pipeline/scripts/gsd-tune.cjs, scripts/gen-codex-shipyard.cjs, plugins/delivery-pipeline/commands/deliver.md, docs/gsd_multilevel_delivery_pipeline.md, '.planning/architecture/ADR-003-the-conveyor-follows-the-models-it-runs-on.md', '.planning/architecture/ADR-005-the-floor-is-opus-and-fable-is-earned.md', tests/unit/front.test.cjs, tests/unit/pipeline-config.test.cjs, tests/unit/gsd-tune.test.cjs, tests/unit/gen-codex-shipyard.test.cjs]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-27-08-the-remaining-adr-004-d2-gaps-and-the-r
     epic: epic/27-the-conveyor-measures-its-own-state
@@ -1085,6 +1144,7 @@ tickets:
     files: [plugins/delivery-pipeline/commands/deliver.md, plugins/delivery-pipeline/references/pr-sentinel.md, tests/unit/trailer.test.cjs]
     risk: low
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-27-09-the-judge-s-base-tree-reaches-the-traile
     epic: epic/27-the-conveyor-measures-its-own-state
@@ -1101,6 +1161,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/dispatch-record.cjs, plugins/delivery-pipeline/scripts/front.cjs, plugins/delivery-pipeline/commands/deliver.md, tests/unit/dispatch-record.test.cjs, tests/unit/front.test.cjs, tests/unit/stop-gate.test.cjs]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-28-01-the-cap-counts-distinct-agents-not-disti
     epic: epic/28-a-mechanism-nobody-connected-is-not-a-mechanism
@@ -1117,6 +1178,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/failure-signature.cjs, plugins/delivery-pipeline/scripts/log-event.cjs, plugins/delivery-pipeline/scripts/attempt-history.cjs, tests/unit/failure-signature.test.cjs, tests/unit/log-event.test.cjs, tests/unit/attempt-history.test.cjs]
     risk: high
     human_checkpoint: true
+    checkpoint: merge
     preauthorized: true
     branch: ticket/T-28-02-a-signature-s-history-is-a-set-with-adja
     epic: epic/28-a-mechanism-nobody-connected-is-not-a-mechanism
@@ -1133,6 +1195,7 @@ tickets:
     files: [plugins/delivery-pipeline/references/pr-sentinel.md, plugins/delivery-pipeline/commands/deliver.md, tests/unit/judgment-contract.test.cjs]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-28-03-one-procedure-for-judgment-on-both-paths
     epic: epic/28-a-mechanism-nobody-connected-is-not-a-mechanism
@@ -1149,6 +1212,7 @@ tickets:
     files: [scripts/gen-codex-shipyard.cjs, plugins/delivery-pipeline/scripts/gsd-tune.cjs, tests/unit/gen-codex-shipyard.test.cjs, tests/unit/gsd-tune.test.cjs]
     risk: high
     human_checkpoint: true
+    checkpoint: merge
     preauthorized: true
     branch: ticket/T-28-04-a-floor-is-measured-against-what-is-effe
     epic: epic/28-a-mechanism-nobody-connected-is-not-a-mechanism
@@ -1165,6 +1229,7 @@ tickets:
     files: [scripts/install-shipyard-codex.sh, scripts/gen-codex-shipyard.cjs, tests/smoke/codex-shipyard-smoke.sh]
     risk: high
     human_checkpoint: true
+    checkpoint: merge
     preauthorized: true
     branch: ticket/T-28-05-an-installer-owns-what-it-wrote
     epic: epic/28-a-mechanism-nobody-connected-is-not-a-mechanism
@@ -1181,6 +1246,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/state-sync.cjs, plugins/delivery-pipeline/scripts/front.cjs, plugins/delivery-pipeline/commands/deliver.md, tests/unit/front.test.cjs, tests/unit/judgment-contract.test.cjs]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-28-06-every-reader-has-a-writer-or-a-recorded
     epic: epic/28-a-mechanism-nobody-connected-is-not-a-mechanism
@@ -1197,6 +1263,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/base-merge.cjs, plugins/delivery-pipeline/scripts/ticket-worktree.sh, plugins/delivery-pipeline/scripts/validate-graph.cjs, tests/unit/files-contract.test.cjs, tests/smoke/worktree-smoke.sh, tests/smoke/graph-validator-smoke.sh]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-28-07-dirty-means-tracked-and-a-declared-path
     epic: epic/28-a-mechanism-nobody-connected-is-not-a-mechanism
@@ -1213,6 +1280,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/pipeline-stats.cjs, tests/unit/source-contract.test.cjs, tests/unit/pipeline-stats.test.cjs]
     risk: low
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-28-08-a-clean-exit-is-not-evidence-of-a-cohere
     epic: epic/28-a-mechanism-nobody-connected-is-not-a-mechanism
@@ -1229,6 +1297,7 @@ tickets:
     files: [tests/unit/judgment-contract.test.cjs, plugins/delivery-pipeline/references/pr-sentinel.md]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-28-09-the-wired-mechanism-pin-must-fail-when-t
     epic: epic/28-a-mechanism-nobody-connected-is-not-a-mechanism
@@ -1245,6 +1314,7 @@ tickets:
     files: [tests/unit/source-contract.test.cjs]
     risk: low
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-29-01-the-negative-pin-a-transition-name-is-ne
     epic: epic/29-the-tracker-is-a-projection-and-a-projection-is-driven
@@ -1261,6 +1331,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/pipeline-config.cjs, capabilities/delivery-pipeline/capability.json, tests/unit/pipeline-config.test.cjs]
     risk: low
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-29-02-the-status-map-is-a-declared-knob-and-it
     epic: epic/29-the-tracker-is-a-projection-and-a-projection-is-driven
@@ -1277,6 +1348,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/jira-project.cjs, tests/unit/record-stores.test.cjs]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-29-03-the-watermark-store-exactly-once-and-onl
     epic: epic/29-the-tracker-is-a-projection-and-a-projection-is-driven
@@ -1293,6 +1365,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/jira-project.cjs, tests/unit/jira-project.test.cjs]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-29-04-the-planner-three-local-files-in-a-work
     epic: epic/29-the-tracker-is-a-projection-and-a-projection-is-driven
@@ -1309,6 +1382,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/jira-project.cjs, plugins/delivery-pipeline/scripts/log-event.cjs, tests/unit/jira-project.test.cjs, tests/unit/log-event.test.cjs]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-29-05-the-recorder-refuses-a-bare-done-and-the
     epic: epic/29-the-tracker-is-a-projection-and-a-projection-is-driven
@@ -1325,6 +1399,7 @@ tickets:
     files: [plugins/delivery-pipeline/commands/deliver.md]
     risk: high
     human_checkpoint: true
+    checkpoint: merge
     preauthorized: true
     branch: ticket/T-29-06-the-acting-half-resolve-by-target-status
     epic: epic/29-the-tracker-is-a-projection-and-a-projection-is-driven
@@ -1341,6 +1416,7 @@ tickets:
     files: [plugins/delivery-pipeline/commands/deliver.md, README.md, tests/unit/judgment-contract.test.cjs]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-29-07-wire-it-pin-the-wiring-and-keep-it-out-o
     epic: epic/29-the-tracker-is-a-projection-and-a-projection-is-driven
@@ -1357,6 +1433,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/jira-project.cjs, plugins/delivery-pipeline/commands/deliver.md, tests/unit/jira-project.test.cjs, plugins/delivery-pipeline/scripts/log-event.cjs, tests/unit/log-event.test.cjs]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-29-08-bind-projection-evidence-to-the-item-act
     epic: epic/29-the-tracker-is-a-projection-and-a-projection-is-driven
@@ -1373,6 +1450,7 @@ tickets:
     files: [plugins/delivery-pipeline/skills/delivery-rules/SKILL.md, plugins/delivery-pipeline/references/arch-review.md, plugins/delivery-pipeline/references/ci-fix.md, plugins/delivery-pipeline/references/drift-check.md, plugins/delivery-pipeline/references/integrator.md, plugins/delivery-pipeline/references/inv-research.md, plugins/delivery-pipeline/references/pr-sentinel.md, plugins/delivery-pipeline/references/review-fix.md, plugins/delivery-pipeline/workflows/executors.mjs, plugins/delivery-pipeline/workflows/drift-gate.mjs, plugins/delivery-pipeline/workflows/fix-round.mjs, tests/unit/source-contract.test.cjs]
     risk: low
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-30-01-make-verification-claims-executable-acro
     epic: epic/30-a-ticket-you-cannot-reach-is-not-deliverable
@@ -1389,6 +1467,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/repo-resolve.cjs, plugins/delivery-pipeline/scripts/state-sync.cjs, plugins/delivery-pipeline/commands/deliver.md, tests/unit/repo-resolve.test.cjs]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-30-02-resolve-configured-repositories-before-f
     epic: epic/30-a-ticket-you-cannot-reach-is-not-deliverable
@@ -1405,6 +1484,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/repo-resolve.cjs, plugins/delivery-pipeline/commands/deliver.md, tests/unit/repo-resolve.test.cjs]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-30-03-discover-repository-checkouts-by-declare
     epic: epic/30-a-ticket-you-cannot-reach-is-not-deliverable
@@ -1421,8 +1501,9 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/repo-resolve.cjs, plugins/delivery-pipeline/commands/deliver.md, tests/unit/repo-resolve.test.cjs, tests/smoke/repo-resolve-smoke.sh]
     risk: high
     human_checkpoint: true
+    checkpoint: merge
     preauthorized: false
-    branch: ticket/T-30-04-require-an-explicit-operator-choice-before-cloning
+    branch: ticket/T-30-04-require-an-explicit-operator-choice-befo
     epic: epic/30-a-ticket-you-cannot-reach-is-not-deliverable
     primary_parent: T-30-03
     pr_base: ticket/T-30-03-discover-repository-checkouts-by-declare
@@ -1437,11 +1518,12 @@ tickets:
     files: [capabilities/delivery-pipeline/capability.json, plugins/delivery-pipeline/scripts/pipeline-config.cjs, plugins/delivery-pipeline/scripts/repo-resolve.cjs, tests/unit/pipeline-config.test.cjs, tests/unit/repo-resolve.test.cjs]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
-    branch: ticket/T-30-05-validate-repository-destinations-with-existing-nesting-rule
+    branch: ticket/T-30-05-validate-repository-destinations-with-th
     epic: epic/30-a-ticket-you-cannot-reach-is-not-deliverable
     primary_parent: T-30-04
-    pr_base: ticket/T-30-04-require-an-explicit-operator-choice-before-cloning
+    pr_base: ticket/T-30-04-require-an-explicit-operator-choice-befo
     jira: null
   T-30-06:
     title: Mirror the project origin protocol for repository clones
@@ -1453,11 +1535,12 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/repo-resolve.cjs, plugins/delivery-pipeline/commands/deliver.md, tests/unit/repo-resolve.test.cjs]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
-    branch: ticket/T-30-06-mirror-project-origin-protocol-for-repository-clones
+    branch: ticket/T-30-06-mirror-the-project-origin-protocol-for-r
     epic: epic/30-a-ticket-you-cannot-reach-is-not-deliverable
     primary_parent: T-30-05
-    pr_base: ticket/T-30-05-validate-repository-destinations-with-existing-nesting-rule
+    pr_base: ticket/T-30-05-validate-repository-destinations-with-th
     jira: null
   T-30-07:
     title: Use a full clone with all refs required for base resolution
@@ -1469,11 +1552,12 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/repo-resolve.cjs, plugins/delivery-pipeline/scripts/graph-dir.cjs, tests/unit/repo-resolve.test.cjs, tests/smoke/repo-resolve-smoke.sh]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-30-07-use-a-full-clone-with-all-refs-required
     epic: epic/30-a-ticket-you-cannot-reach-is-not-deliverable
     primary_parent: T-30-06
-    pr_base: ticket/T-30-06-mirror-project-origin-protocol-for-repository-clones
+    pr_base: ticket/T-30-06-mirror-the-project-origin-protocol-for-r
     jira: null
   T-30-08:
     title: Adopt matching checkouts and refuse to clobber other paths
@@ -1485,8 +1569,9 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/repo-resolve.cjs, plugins/delivery-pipeline/scripts/state-sync.cjs, plugins/delivery-pipeline/commands/deliver.md, tests/unit/repo-resolve.test.cjs, tests/unit/record-stores.test.cjs]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
-    branch: ticket/T-30-08-adopt-matching-checkouts-and-refuse-to-clobber
+    branch: ticket/T-30-08-adopt-matching-checkouts-and-refuse-to-c
     epic: epic/30-a-ticket-you-cannot-reach-is-not-deliverable
     primary_parent: T-30-07
     pr_base: ticket/T-30-07-use-a-full-clone-with-all-refs-required
@@ -1501,11 +1586,12 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/repo-resolve.cjs, plugins/delivery-pipeline/scripts/state-sync.cjs, plugins/delivery-pipeline/commands/deliver.md, tests/unit/repo-resolve.test.cjs, tests/unit/pipeline-config.test.cjs, docs/gsd_multilevel_delivery_pipeline.md]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
-    branch: ticket/T-30-09-persist-resolved-checkouts-and-park-unreachable
+    branch: ticket/T-30-09-persist-resolved-checkouts-and-park-unre
     epic: epic/30-a-ticket-you-cannot-reach-is-not-deliverable
     primary_parent: T-30-08
-    pr_base: ticket/T-30-08-adopt-matching-checkouts-and-refuse-to-clobber
+    pr_base: ticket/T-30-08-adopt-matching-checkouts-and-refuse-to-c
     jira: null
   T-30-10:
     title: Make the sentinel honor observed ticket branches
@@ -1517,6 +1603,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/sentinel.cjs, tests/unit/sentinel.test.cjs]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-30-10-make-the-sentinel-honor-observed-ticket
     epic: epic/30-a-ticket-you-cannot-reach-is-not-deliverable
@@ -1533,6 +1620,7 @@ tickets:
     files: [plugins/delivery-pipeline/commands/deliver.md, tests/unit/delivery-cold-start-contract.test.cjs]
     risk: low
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-31-01-remove-the-external-ticket-import-shortc
     epic: epic/31-not-every-ticket-is-available-work
@@ -1549,6 +1637,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/pipeline-config.cjs, capabilities/delivery-pipeline/capability.json, plugins/delivery-pipeline/commands/deliver.md, README.md, tests/unit/pipeline-config.test.cjs]
     risk: low
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-31-02-declare-opt-in-jira-to-do-statuses
     epic: epic/31-not-every-ticket-is-available-work
@@ -1565,6 +1654,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/tracker-eligibility.cjs, tests/unit/tracker-eligibility.test.cjs]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-31-03-define-status-and-assignee-eligibility-w
     epic: epic/31-not-every-ticket-is-available-work
@@ -1581,6 +1671,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/tracker-record.cjs, tests/unit/tracker-record.test.cjs, tests/unit/record-stores.test.cjs]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-31-04-persist-tracker-verdicts-and-fail-closed
     epic: epic/31-not-every-ticket-is-available-work
@@ -1597,6 +1688,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/front.cjs, tests/unit/front.test.cjs]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-31-05-gate-only-the-execute-transition-on-trac
     epic: epic/31-not-every-ticket-is-available-work
@@ -1613,6 +1705,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/tracker-record.cjs, plugins/delivery-pipeline/scripts/log-event.cjs, plugins/delivery-pipeline/commands/deliver.md, tests/unit/tracker-record.test.cjs, tests/unit/log-event.test.cjs, tests/unit/judgment-contract.test.cjs]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-31-06-journal-direct-ticket-overrides
     epic: epic/31-not-every-ticket-is-available-work
@@ -1629,8 +1722,9 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/state-sync.cjs, plugins/delivery-pipeline/scripts/front.cjs, plugins/delivery-pipeline/scripts/dispatch-record.cjs, plugins/delivery-pipeline/commands/deliver.md, tests/unit/front.test.cjs, tests/unit/tracker-wiring-contract.test.cjs, tests/smoke/sentinel-smoke.sh]
     risk: high
     human_checkpoint: true
+    checkpoint: merge
     preauthorized: false
-    branch: ticket/T-31-07-read-tracker-eligibility-at-cold-start
+    branch: ticket/T-31-07-read-tracker-eligibility-at-cold-start-a
     epic: epic/31-not-every-ticket-is-available-work
     primary_parent: T-31-06
     pr_base: ticket/T-31-06-journal-direct-ticket-overrides
@@ -1645,6 +1739,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/usage-report.cjs, tests/unit/usage-report.test.cjs, docs/usage-report.md]
     risk: low
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-32-01-collect-deduplicated-usage-from-explicit
     epic: epic/32-measure-usage-and-make-the-backlog-actionable
@@ -1661,6 +1756,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/backlog-index.cjs, tests/unit/backlog-index.test.cjs, docs/backlog-index.md]
     risk: low
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-32-02-index-backlog-sources-with-stable-item-i
     epic: epic/32-measure-usage-and-make-the-backlog-actionable
@@ -1677,6 +1773,7 @@ tickets:
     files: ['.planning/architecture/ADR-011-ROLLOUT.md', '.planning/architecture/ADR-012-task-level-model-ladder.md', '.planning/config.json', '.planning/graph/tickets.json', '.planning/graph/tickets.yaml', '.planning/graph/delivery-front.json', '.planning/graph/delivery-log.jsonl', '.planning/graph/delivery-state-meta.json', '.planning/graph/delivery-state.json', '.planning/graph/delivery-state.yaml', '.planning/graph/dispatches.json', '.planning/phases/32-measure-usage-and-make-the-backlog-actionable/32-06-PLAN.md', '.planning/phases/32-measure-usage-and-make-the-backlog-actionable/WAVE-0-PROGRESS.md', CLAUDE.md, README.md, capabilities/delivery-pipeline/capability.json, docs/gsd_multilevel_delivery_pipeline.md, plugins/delivery-pipeline/commands/deliver.md, plugins/delivery-pipeline/references/pr-sentinel.md, plugins/delivery-pipeline/scripts/attempt-history.cjs, plugins/delivery-pipeline/scripts/codex-agent.cjs, plugins/delivery-pipeline/scripts/dispatch-record.cjs, plugins/delivery-pipeline/scripts/failure-signature.cjs, plugins/delivery-pipeline/scripts/log-event.cjs, plugins/delivery-pipeline/scripts/pipeline-config.cjs, plugins/delivery-pipeline/scripts/pipeline-stats.cjs, scripts/gen-codex-shipyard.cjs, scripts/install-shipyard-codex.sh, tests/smoke/codex-shipyard-smoke.sh, tests/unit/attempt-history.test.cjs, tests/unit/codex-agent.test.cjs, tests/unit/dispatch-record.test.cjs, tests/unit/failure-signature.test.cjs, tests/unit/gen-codex-shipyard.test.cjs, tests/unit/log-event.test.cjs, tests/unit/pipeline-config.test.cjs, tests/unit/pipeline-stats.test.cjs]
     risk: high
     human_checkpoint: true
+    checkpoint: merge
     preauthorized: true
     branch: ticket/T-32-06-deliver-the-accepted-task-level-model-la
     epic: epic/32-measure-usage-and-make-the-backlog-actionable
@@ -1693,6 +1790,7 @@ tickets:
     files: ['.planning/graph/tickets.json', '.planning/graph/tickets.yaml', '.planning/phases/32-measure-usage-and-make-the-backlog-actionable/32-03-PLAN.md', plugins/delivery-pipeline/scripts/pipeline-stats.cjs, tests/unit/pipeline-stats.test.cjs, docs/pipeline-stats.md]
     risk: low
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-32-03-expose-routing-attribution-eligibility-i
     epic: epic/32-measure-usage-and-make-the-backlog-actionable
@@ -1709,6 +1807,7 @@ tickets:
     files: ['.planning/graph/tickets.json', '.planning/graph/tickets.yaml', '.planning/phases/32-measure-usage-and-make-the-backlog-actionable/32-04-PLAN.md', plugins/delivery-pipeline/scripts/dispatch-record.cjs, tests/unit/dispatch-record.test.cjs, docs/dispatch-record.md]
     risk: low
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-32-04-batch-dispatch-attribution-atomically
     epic: epic/32-measure-usage-and-make-the-backlog-actionable
@@ -1725,6 +1824,7 @@ tickets:
     files: ['.planning/graph/tickets.json', '.planning/graph/tickets.yaml', '.planning/phases/32-measure-usage-and-make-the-backlog-actionable/32-05-PLAN.md', plugins/delivery-pipeline/scripts/dispatch-record.cjs, tests/unit/dispatch-record.test.cjs, docs/dispatch-record.md, plugins/delivery-pipeline/references/pr-sentinel.md]
     risk: low
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-32-05-wire-batched-dispatch-lifecycle-into-the
     epic: epic/32-measure-usage-and-make-the-backlog-actionable
@@ -1741,8 +1841,9 @@ tickets:
     files: ['.planning/graph/tickets.json', '.planning/graph/tickets.yaml', '.planning/phases/32-measure-usage-and-make-the-backlog-actionable/32-07-PLAN.md', plugins/delivery-pipeline/scripts/usage-attribution.cjs, plugins/delivery-pipeline/scripts/usage-report.cjs, plugins/delivery-pipeline/scripts/pipeline-stats.cjs, plugins/delivery-pipeline/scripts/dispatch-record.cjs, tests/unit/usage-attribution.test.cjs, tests/unit/pipeline-stats.test.cjs, tests/unit/dispatch-record.test.cjs, docs/usage-report.md, docs/dispatch-record.md, docs/pipeline-stats.md, plugins/delivery-pipeline/commands/deliver.md, plugins/delivery-pipeline/references/pr-sentinel.md, tests/smoke/codex-shipyard-smoke.sh, tests/smoke/overlay-image-smoke.sh]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
-    branch: ticket/T-32-07-join-transcripts-to-dispatches
+    branch: ticket/T-32-07-join-transcript-usage-to-dispatches-with
     epic: epic/32-measure-usage-and-make-the-backlog-actionable
     primary_parent: T-32-05
     pr_base: ticket/T-32-05-wire-batched-dispatch-lifecycle-into-the
@@ -1757,6 +1858,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/wait-events.cjs, plugins/delivery-pipeline/scripts/ci-wait.cjs, plugins/delivery-pipeline/commands/deliver.md, plugins/delivery-pipeline/scripts/stop-gate.cjs, tests/unit/wait-events.test.cjs, tests/unit/ci-wait.test.cjs, tests/unit/stop-gate.test.cjs, plugins/delivery-pipeline/scripts/state-sync.cjs]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-33-01-deliver-durable-ci-and-review-transition
     epic: epic/33-reduce-orchestration-context-and-transfer-sessions-safely
@@ -1773,6 +1875,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/role-artifact.cjs, plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs, plugins/delivery-pipeline/scripts/claude-workflow-host.cjs, plugins/delivery-pipeline/workflows/executors.mjs, tests/unit/role-artifact.test.cjs, plugins/delivery-pipeline/commands/deliver.md, tests/unit/gen-codex-shipyard.test.cjs, tests/unit/workflows-args.test.cjs, tests/unit/source-contract.test.cjs]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-33-02-validate-bounded-executor-evidence-at-ac
     epic: epic/33-reduce-orchestration-context-and-transfer-sessions-safely
@@ -1789,6 +1892,7 @@ tickets:
     files: [plugins/delivery-pipeline/workflows/fix-round.mjs, plugins/delivery-pipeline/scripts/role-artifact.cjs, plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs, tests/unit/workflows-args.test.cjs, tests/unit/source-contract.test.cjs, tests/unit/sentinel.test.cjs, plugins/delivery-pipeline/commands/deliver.md, plugins/delivery-pipeline/scripts/attempt-history.cjs, tests/unit/repair-artifacts.test.cjs, plugins/delivery-pipeline/workflows/drift-gate.mjs, plugins/delivery-pipeline/references/drift-check.md, plugins/delivery-pipeline/references/ci-fix.md, plugins/delivery-pipeline/references/review-fix.md]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-33-03-bound-repair-and-drift-results-without-l
     epic: epic/33-reduce-orchestration-context-and-transfer-sessions-safely
@@ -1805,6 +1909,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/role-artifact.cjs, plugins/delivery-pipeline/references/arch-review.md, plugins/delivery-pipeline/references/pr-sentinel.md, plugins/delivery-pipeline/commands/deliver.md, tests/unit/judgment-artifacts.test.cjs, plugins/delivery-pipeline/references/integrator.md]
     risk: high
     human_checkpoint: true
+    checkpoint: merge
     preauthorized: false
     branch: ticket/T-33-04-preserve-complete-architecture-and-integ
     epic: epic/33-reduce-orchestration-context-and-transfer-sessions-safely
@@ -1821,6 +1926,7 @@ tickets:
     files: [plugins/delivery-pipeline/workflows/investigation-research.mjs, plugins/delivery-pipeline/references/inv-research.md, plugins/delivery-pipeline/commands/investigate.md, tests/unit/investigation-research.test.cjs, tests/unit/planning-artifacts.test.cjs, plugins/delivery-pipeline/commands/decompose.md, plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs, tests/unit/gen-codex-shipyard.test.cjs, tests/unit/source-contract.test.cjs]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-33-05-bound-research-and-decomposition-handbac
     epic: epic/33-reduce-orchestration-context-and-transfer-sessions-safely
@@ -1837,6 +1943,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/context-packet.cjs, plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs, plugins/delivery-pipeline/scripts/codex-dispatch-adapter.cjs, plugins/delivery-pipeline/workflows/executors.mjs, plugins/delivery-pipeline/workflows/investigation-research.mjs, tests/unit/context-packet.test.cjs, tests/unit/source-contract.test.cjs, plugins/delivery-pipeline/commands/deliver.md, plugins/delivery-pipeline/commands/investigate.md, plugins/delivery-pipeline/commands/decompose.md]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-33-06-build-targeted-launch-packets-with-requi
     epic: epic/33-reduce-orchestration-context-and-transfer-sessions-safely
@@ -1853,6 +1960,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/orchestration-overhead.cjs, plugins/delivery-pipeline/scripts/context-packet.cjs, plugins/delivery-pipeline/scripts/role-artifact.cjs, tests/unit/orchestration-overhead.test.cjs, plugins/delivery-pipeline/scripts/wait-events.cjs, plugins/delivery-pipeline/commands/deliver.md, docs/audits/optimization/phase-33-protocol.md]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-33-07-measure-waiting-and-context-treatments-i
     epic: epic/33-reduce-orchestration-context-and-transfer-sessions-safely
@@ -1869,6 +1977,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/session-handoff.cjs, plugins/delivery-pipeline/scripts/dispatch-boundary.cjs, tests/unit/session-handoff.test.cjs, plugins/delivery-pipeline/commands/deliver.md, plugins/delivery-pipeline/scripts/dispatch-record.cjs, plugins/delivery-pipeline/scripts/claude-workflow-host.cjs, plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs, plugins/delivery-pipeline/scripts/codex-dispatch-adapter.cjs, tests/unit/delivery-cold-start-contract.test.cjs]
     risk: high
     human_checkpoint: true
+    checkpoint: merge
     preauthorized: false
     branch: ticket/T-33-08-resume-a-checkpoint-with-one-fenced-ackn
     epic: epic/33-reduce-orchestration-context-and-transfer-sessions-safely
@@ -1885,6 +1994,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/session-handoff.cjs, plugins/delivery-pipeline/scripts/orchestration-overhead.cjs, plugins/delivery-pipeline/commands/deliver.md, tests/unit/rotation-recommendation.test.cjs, plugins/delivery-pipeline/scripts/runtime-context.cjs, tests/unit/gen-codex-shipyard.test.cjs, docs/audits/optimization/phase-33-handoff.md, docs/audits/optimization/phase-33-protocol.md]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-33-09-recommend-safe-rotation-and-refuse-unpro
     epic: epic/33-reduce-orchestration-context-and-transfer-sessions-safely
@@ -1901,8 +2011,9 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/review-signature.cjs, plugins/delivery-pipeline/scripts/reviewers.cjs, plugins/delivery-pipeline/scripts/sentinel.cjs, plugins/delivery-pipeline/scripts/failure-signature.cjs, plugins/delivery-pipeline/scripts/attempt-history.cjs, tests/unit/review-signature.test.cjs, tests/unit/failure-signature.test.cjs, tests/unit/attempt-history.test.cjs]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
-    branch: ticket/T-34-01-review-progress-and-resource-budgets
+    branch: ticket/T-34-01-make-review-progress-and-resource-budget
     epic: epic/34-improve-convergence-and-tune-from-measured-outcomes
     primary_parent: null
     pr_base: epic/34-improve-convergence-and-tune-from-measured-outcomes
@@ -1917,11 +2028,12 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/model-capability.cjs, tests/unit/model-capability.test.cjs]
     risk: high
     human_checkpoint: true
+    checkpoint: merge
     preauthorized: true
-    branch: ticket/T-34-02-runtime-capability-evidence
+    branch: ticket/T-34-02-require-runtime-capability-evidence-for
     epic: epic/34-improve-convergence-and-tune-from-measured-outcomes
     primary_parent: T-34-01
-    pr_base: ticket/T-34-01-review-progress-and-resource-budgets
+    pr_base: ticket/T-34-01-make-review-progress-and-resource-budget
     jira: null
   T-34-03:
     title: Strengthen manual merge verdict carry
@@ -1933,8 +2045,9 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/gate-trailer.cjs, tests/unit/trailer.test.cjs]
     risk: high
     human_checkpoint: true
+    checkpoint: merge
     preauthorized: true
-    branch: ticket/T-34-03-merge-verdict-carry
+    branch: ticket/T-34-03-strengthen-manual-merge-verdict-carry
     epic: epic/34-improve-convergence-and-tune-from-measured-outcomes
     primary_parent: null
     pr_base: epic/34-improve-convergence-and-tune-from-measured-outcomes
@@ -1949,11 +2062,12 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/capacity-lease.cjs, plugins/delivery-pipeline/scripts/dispatch-boundary.cjs, plugins/delivery-pipeline/scripts/codex-dispatch-adapter.cjs, plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs, plugins/delivery-pipeline/scripts/claude-workflow-host.cjs, plugins/delivery-pipeline/scripts/front.cjs, plugins/delivery-pipeline/scripts/state-sync.cjs, plugins/delivery-pipeline/scripts/lock.cjs, tests/unit/capacity-lease.test.cjs, tests/unit/dispatch-boundary.test.cjs, tests/unit/front.test.cjs]
     risk: high
     human_checkpoint: true
+    checkpoint: merge
     preauthorized: true
-    branch: ticket/T-34-04-shared-capacity-and-dispatch-boundary
+    branch: ticket/T-34-04-admit-distinct-agents-through-shared-acc
     epic: epic/34-improve-convergence-and-tune-from-measured-outcomes
     primary_parent: T-34-02
-    pr_base: ticket/T-34-02-runtime-capability-evidence
+    pr_base: ticket/T-34-02-require-runtime-capability-evidence-for
     jira: null
   T-34-05:
     title: Publish versioned optimization evidence and backlog candidates
@@ -1965,11 +2079,12 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/optimization-report.cjs, plugins/delivery-pipeline/scripts/pipeline-stats.cjs, plugins/delivery-pipeline/scripts/usage-attribution.cjs, plugins/delivery-pipeline/scripts/backlog-index.cjs, plugins/delivery-pipeline/commands/deliver.md, plugins/delivery-pipeline/commands/decompose.md, '.planning/architecture/ADR-011-ROLLOUT.md', tests/unit/optimization-report.test.cjs, tests/unit/pipeline-stats.test.cjs, tests/unit/backlog-index.test.cjs]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-34-05-publish-versioned-optimization-evidence
     epic: epic/34-improve-convergence-and-tune-from-measured-outcomes
     primary_parent: T-34-04
-    pr_base: ticket/T-34-04-shared-capacity-and-dispatch-boundary
+    pr_base: ticket/T-34-04-admit-distinct-agents-through-shared-acc
     jira: null
   T-35-01:
     title: Deterministic native-GSD projection
@@ -1981,6 +2096,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/gsd-sync.cjs, tests/unit/gsd-sync.test.cjs]
     risk: high
     human_checkpoint: true
+    checkpoint: merge
     preauthorized: true
     branch: ticket/T-35-01-deterministic-native-gsd-projection
     epic: epic/35-gsd-and-shipyard-workflow-loop
@@ -1997,6 +2113,7 @@ tickets:
     files: [capabilities/delivery-pipeline/checks/gsd-sync-gate.cjs, capabilities/delivery-pipeline/capability.json, tests/unit/gsd-sync-gate.test.cjs, tests/smoke/codex-shipyard-smoke.sh, README.md, plugins/delivery-pipeline/scripts/pipeline-config.cjs, tests/unit/pipeline-config.test.cjs]
     risk: high
     human_checkpoint: true
+    checkpoint: merge
     preauthorized: true
     branch: ticket/T-35-02-wire-synchronization-into-both-gsd-runti
     epic: epic/35-gsd-and-shipyard-workflow-loop
@@ -2013,6 +2130,7 @@ tickets:
     files: ['.planning/phases/35-gsd-and-shipyard-workflow-loop/35-03-PLAN.md', '.planning/PROJECT.md', '.planning/ROADMAP.md', '.planning/config.json', '.planning/REQUIREMENTS.md', '.planning/STATE.md', '.planning/graph/tickets.json', '.planning/graph/tickets.yaml', '.planning/graph/escalations.json', '.planning/graph/delivery-front.json', '.planning/graph/delivery-log.jsonl', '.planning/graph/delivery-state-meta.json', '.planning/graph/delivery-state.json', '.planning/graph/delivery-state.yaml', '.planning/architecture/**', '.planning/investigations/**', '.planning/phases/**', plugins/delivery-pipeline/scripts/gsd-sync.cjs, tests/unit/gsd-sync.test.cjs, docs/gsd_multilevel_delivery_pipeline.md]
     risk: medium
     human_checkpoint: true
+    checkpoint: merge
     preauthorized: false
     branch: ticket/T-35-03-document-normalize-and-bootstrap-the-syn
     epic: epic/35-gsd-and-shipyard-workflow-loop
@@ -2029,6 +2147,7 @@ tickets:
     files: ['.planning/architecture/ADR-014-mandatory-runtime-model-ladder.md', '.planning/phases/36-enforce-the-runtime-model-ladder/36-01-PLAN.md', '.planning/graph/tickets.json', '.planning/graph/tickets.yaml', plugins/delivery-pipeline/scripts/runtime-adapters.cjs, plugins/delivery-pipeline/scripts/model-policy.cjs, plugins/delivery-pipeline/scripts/model-policy-internal.cjs, plugins/delivery-pipeline/scripts/dispatch-boundary.cjs, tests/unit/model-policy.test.cjs, tests/unit/dispatch-boundary.test.cjs, tests/unit/gen-codex-shipyard.test.cjs, '.planning/STATE.md', '.planning/REQUIREMENTS.md', '.planning/ROADMAP.md', '.planning/phases/20-autonomy-of-the-drive-to-green-loop/20-01-SUMMARY.md', '.planning/phases/20-autonomy-of-the-drive-to-green-loop/20-02-SUMMARY.md', '.planning/phases/20-autonomy-of-the-drive-to-green-loop/20-03-SUMMARY.md', '.planning/phases/20-autonomy-of-the-drive-to-green-loop/20-04-SUMMARY.md', '.planning/phases/20-autonomy-of-the-drive-to-green-loop/20-05-SUMMARY.md', '.planning/phases/20-autonomy-of-the-drive-to-green-loop/20-06-SUMMARY.md', '.planning/phases/21-verdicts-a-human-would-have-made-anyway/21-01-SUMMARY.md', '.planning/phases/21-verdicts-a-human-would-have-made-anyway/21-02-SUMMARY.md', '.planning/phases/21-verdicts-a-human-would-have-made-anyway/21-03-SUMMARY.md', '.planning/phases/21-verdicts-a-human-would-have-made-anyway/21-04-SUMMARY.md', '.planning/phases/21-verdicts-a-human-would-have-made-anyway/21-05-SUMMARY.md', '.planning/phases/22-close-what-phase-20-left-open/22-01-SUMMARY.md', '.planning/phases/22-close-what-phase-20-left-open/22-02-SUMMARY.md', '.planning/phases/22-close-what-phase-20-left-open/22-03-SUMMARY.md', '.planning/phases/22-close-what-phase-20-left-open/22-04-SUMMARY.md', '.planning/phases/22-close-what-phase-20-left-open/22-05-SUMMARY.md', '.planning/phases/23-the-board-tells-the-truth-about-itself/23-01-SUMMARY.md', '.planning/phases/23-the-board-tells-the-truth-about-itself/23-02-SUMMARY.md', '.planning/phases/23-the-board-tells-the-truth-about-itself/23-03-SUMMARY.md', '.planning/phases/24-the-conveyor-stops-interrupting-itself/24-01-SUMMARY.md', '.planning/phases/24-the-conveyor-stops-interrupting-itself/24-02-SUMMARY.md', '.planning/phases/24-the-conveyor-stops-interrupting-itself/24-03-SUMMARY.md', '.planning/phases/24-the-conveyor-stops-interrupting-itself/24-04-SUMMARY.md', '.planning/phases/24-the-conveyor-stops-interrupting-itself/24-05-SUMMARY.md', '.planning/phases/24-the-conveyor-stops-interrupting-itself/24-06-SUMMARY.md', '.planning/phases/24-the-conveyor-stops-interrupting-itself/24-07-SUMMARY.md', '.planning/phases/24-the-conveyor-stops-interrupting-itself/24-08-SUMMARY.md', '.planning/phases/24-the-conveyor-stops-interrupting-itself/24-09-SUMMARY.md', '.planning/phases/24-the-conveyor-stops-interrupting-itself/24-10-SUMMARY.md', '.planning/phases/24-the-conveyor-stops-interrupting-itself/24-11-SUMMARY.md', '.planning/phases/25-the-conveyor-follows-the-models-it-runs-on/25-01-SUMMARY.md', '.planning/phases/25-the-conveyor-follows-the-models-it-runs-on/25-02-SUMMARY.md', '.planning/phases/25-the-conveyor-follows-the-models-it-runs-on/25-03-SUMMARY.md', '.planning/phases/25-the-conveyor-follows-the-models-it-runs-on/25-04-SUMMARY.md', '.planning/phases/25-the-conveyor-follows-the-models-it-runs-on/25-05-SUMMARY.md', '.planning/phases/25-the-conveyor-follows-the-models-it-runs-on/25-06-SUMMARY.md', '.planning/phases/26-positive-evidence-before-a-mutation/26-01-SUMMARY.md', '.planning/phases/26-positive-evidence-before-a-mutation/26-02-SUMMARY.md', '.planning/phases/26-positive-evidence-before-a-mutation/26-03-SUMMARY.md', '.planning/phases/26-positive-evidence-before-a-mutation/26-04-SUMMARY.md', '.planning/phases/26-positive-evidence-before-a-mutation/26-05-SUMMARY.md', '.planning/phases/26-positive-evidence-before-a-mutation/26-06-SUMMARY.md', '.planning/phases/26-positive-evidence-before-a-mutation/26-07-SUMMARY.md', '.planning/phases/26-positive-evidence-before-a-mutation/26-08-SUMMARY.md', '.planning/phases/26-positive-evidence-before-a-mutation/26-09-SUMMARY.md', '.planning/phases/26-positive-evidence-before-a-mutation/26-10-SUMMARY.md', '.planning/phases/26-positive-evidence-before-a-mutation/26-11-SUMMARY.md', '.planning/phases/26-positive-evidence-before-a-mutation/26-12-SUMMARY.md', '.planning/phases/26-positive-evidence-before-a-mutation/26-13-SUMMARY.md', '.planning/phases/26-positive-evidence-before-a-mutation/26-14-SUMMARY.md', '.planning/phases/26-positive-evidence-before-a-mutation/26-15-SUMMARY.md', '.planning/phases/27-the-conveyor-measures-its-own-state/27-01-SUMMARY.md', '.planning/phases/27-the-conveyor-measures-its-own-state/27-02-SUMMARY.md', '.planning/phases/27-the-conveyor-measures-its-own-state/27-03-SUMMARY.md', '.planning/phases/27-the-conveyor-measures-its-own-state/27-04-SUMMARY.md', '.planning/phases/27-the-conveyor-measures-its-own-state/27-05-SUMMARY.md', '.planning/phases/27-the-conveyor-measures-its-own-state/27-06-SUMMARY.md', '.planning/phases/27-the-conveyor-measures-its-own-state/27-07-SUMMARY.md', '.planning/phases/27-the-conveyor-measures-its-own-state/27-08-SUMMARY.md', '.planning/phases/27-the-conveyor-measures-its-own-state/27-09-SUMMARY.md', '.planning/phases/28-a-mechanism-nobody-connected-is-not-a-mechanism/28-01-SUMMARY.md', '.planning/phases/28-a-mechanism-nobody-connected-is-not-a-mechanism/28-02-SUMMARY.md', '.planning/phases/28-a-mechanism-nobody-connected-is-not-a-mechanism/28-03-SUMMARY.md', '.planning/phases/28-a-mechanism-nobody-connected-is-not-a-mechanism/28-04-SUMMARY.md', '.planning/phases/28-a-mechanism-nobody-connected-is-not-a-mechanism/28-05-SUMMARY.md', '.planning/phases/28-a-mechanism-nobody-connected-is-not-a-mechanism/28-06-SUMMARY.md', '.planning/phases/28-a-mechanism-nobody-connected-is-not-a-mechanism/28-07-SUMMARY.md', '.planning/phases/28-a-mechanism-nobody-connected-is-not-a-mechanism/28-08-SUMMARY.md', '.planning/phases/28-a-mechanism-nobody-connected-is-not-a-mechanism/28-09-SUMMARY.md', '.planning/phases/29-the-tracker-is-a-projection-and-a-projection-is-driven/29-01-SUMMARY.md', '.planning/phases/29-the-tracker-is-a-projection-and-a-projection-is-driven/29-02-SUMMARY.md', '.planning/phases/29-the-tracker-is-a-projection-and-a-projection-is-driven/29-03-SUMMARY.md', '.planning/phases/29-the-tracker-is-a-projection-and-a-projection-is-driven/29-04-SUMMARY.md', '.planning/phases/29-the-tracker-is-a-projection-and-a-projection-is-driven/29-05-SUMMARY.md', '.planning/phases/29-the-tracker-is-a-projection-and-a-projection-is-driven/29-06-SUMMARY.md', '.planning/phases/29-the-tracker-is-a-projection-and-a-projection-is-driven/29-07-SUMMARY.md', '.planning/phases/29-the-tracker-is-a-projection-and-a-projection-is-driven/29-08-SUMMARY.md', '.planning/phases/30-a-ticket-you-cannot-reach-is-not-deliverable/30-01-SUMMARY.md', '.planning/phases/30-a-ticket-you-cannot-reach-is-not-deliverable/30-02-SUMMARY.md', '.planning/phases/30-a-ticket-you-cannot-reach-is-not-deliverable/30-03-SUMMARY.md', '.planning/phases/30-a-ticket-you-cannot-reach-is-not-deliverable/30-04-SUMMARY.md', '.planning/phases/30-a-ticket-you-cannot-reach-is-not-deliverable/30-05-SUMMARY.md', '.planning/phases/30-a-ticket-you-cannot-reach-is-not-deliverable/30-06-SUMMARY.md', '.planning/phases/30-a-ticket-you-cannot-reach-is-not-deliverable/30-07-SUMMARY.md', '.planning/phases/30-a-ticket-you-cannot-reach-is-not-deliverable/30-08-SUMMARY.md', '.planning/phases/30-a-ticket-you-cannot-reach-is-not-deliverable/30-09-SUMMARY.md', '.planning/phases/30-a-ticket-you-cannot-reach-is-not-deliverable/30-10-SUMMARY.md', '.planning/phases/31-not-every-ticket-is-available-work/31-01-SUMMARY.md', '.planning/phases/31-not-every-ticket-is-available-work/31-02-SUMMARY.md', '.planning/phases/31-not-every-ticket-is-available-work/31-03-SUMMARY.md', '.planning/phases/31-not-every-ticket-is-available-work/31-04-SUMMARY.md', '.planning/phases/31-not-every-ticket-is-available-work/31-05-SUMMARY.md', '.planning/phases/31-not-every-ticket-is-available-work/31-06-SUMMARY.md', '.planning/phases/31-not-every-ticket-is-available-work/31-07-SUMMARY.md', '.planning/phases/32-measure-usage-and-make-the-backlog-actionable/32-01-SUMMARY.md', '.planning/phases/32-measure-usage-and-make-the-backlog-actionable/32-02-SUMMARY.md', '.planning/phases/32-measure-usage-and-make-the-backlog-actionable/32-03-SUMMARY.md', '.planning/phases/32-measure-usage-and-make-the-backlog-actionable/32-04-SUMMARY.md', '.planning/phases/32-measure-usage-and-make-the-backlog-actionable/32-05-SUMMARY.md', '.planning/phases/32-measure-usage-and-make-the-backlog-actionable/32-06-SUMMARY.md', '.planning/phases/32-measure-usage-and-make-the-backlog-actionable/32-07-SUMMARY.md', '.planning/phases/35-gsd-and-shipyard-workflow-loop/35-01-SUMMARY.md', '.planning/phases/35-gsd-and-shipyard-workflow-loop/35-02-SUMMARY.md', '.planning/phases/35-gsd-and-shipyard-workflow-loop/35-03-SUMMARY.md', '.planning/phases/36-enforce-the-runtime-model-ladder/36-01-SUMMARY.md', '.planning/phases/36-enforce-the-runtime-model-ladder/36-02-SUMMARY.md', '.planning/phases/36-enforce-the-runtime-model-ladder/36-03-SUMMARY.md', '.planning/phases/36-enforce-the-runtime-model-ladder/36-04-SUMMARY.md', '.planning/phases/36-enforce-the-runtime-model-ladder/36-05-SUMMARY.md', '.planning/phases/36-enforce-the-runtime-model-ladder/36-06-SUMMARY.md', '.planning/phases/36-enforce-the-runtime-model-ladder/36-07-SUMMARY.md', '.planning/phases/36-enforce-the-runtime-model-ladder/36-08-SUMMARY.md', '.planning/phases/36-enforce-the-runtime-model-ladder/36-09-SUMMARY.md', '.planning/phases/36-enforce-the-runtime-model-ladder/36-10-SUMMARY.md', '.planning/phases/36-enforce-the-runtime-model-ladder/36-11-SUMMARY.md', '.planning/phases/36-enforce-the-runtime-model-ladder/36-12-SUMMARY.md', '.planning/phases/20-autonomy-of-the-drive-to-green-loop/20-autonomy-of-the-drive-to-green-loop-UAT.md', '.planning/phases/20-autonomy-of-the-drive-to-green-loop/20-autonomy-of-the-drive-to-green-loop-VERIFICATION.md', '.planning/phases/21-verdicts-a-human-would-have-made-anyway/21-verdicts-a-human-would-have-made-anyway-UAT.md', '.planning/phases/21-verdicts-a-human-would-have-made-anyway/21-verdicts-a-human-would-have-made-anyway-VERIFICATION.md', '.planning/phases/22-close-what-phase-20-left-open/22-close-what-phase-20-left-open-UAT.md', '.planning/phases/22-close-what-phase-20-left-open/22-close-what-phase-20-left-open-VERIFICATION.md', '.planning/phases/23-the-board-tells-the-truth-about-itself/23-the-board-tells-the-truth-about-itself-UAT.md', '.planning/phases/23-the-board-tells-the-truth-about-itself/23-the-board-tells-the-truth-about-itself-VERIFICATION.md', '.planning/phases/24-the-conveyor-stops-interrupting-itself/24-the-conveyor-stops-interrupting-itself-UAT.md', '.planning/phases/24-the-conveyor-stops-interrupting-itself/24-the-conveyor-stops-interrupting-itself-VERIFICATION.md', '.planning/phases/25-the-conveyor-follows-the-models-it-runs-on/25-the-conveyor-follows-the-models-it-runs-on-UAT.md', '.planning/phases/25-the-conveyor-follows-the-models-it-runs-on/25-the-conveyor-follows-the-models-it-runs-on-VERIFICATION.md', '.planning/phases/26-positive-evidence-before-a-mutation/26-positive-evidence-before-a-mutation-UAT.md', '.planning/phases/26-positive-evidence-before-a-mutation/26-positive-evidence-before-a-mutation-VERIFICATION.md', '.planning/phases/27-the-conveyor-measures-its-own-state/27-the-conveyor-measures-its-own-state-UAT.md', '.planning/phases/27-the-conveyor-measures-its-own-state/27-the-conveyor-measures-its-own-state-VERIFICATION.md', '.planning/phases/28-a-mechanism-nobody-connected-is-not-a-mechanism/28-a-mechanism-nobody-connected-is-not-a-mechanism-UAT.md', '.planning/phases/28-a-mechanism-nobody-connected-is-not-a-mechanism/28-a-mechanism-nobody-connected-is-not-a-mechanism-VERIFICATION.md', '.planning/phases/29-the-tracker-is-a-projection-and-a-projection-is-driven/29-the-tracker-is-a-projection-and-a-projection-is-driven-UAT.md', '.planning/phases/29-the-tracker-is-a-projection-and-a-projection-is-driven/29-the-tracker-is-a-projection-and-a-projection-is-driven-VERIFICATION.md', '.planning/phases/30-a-ticket-you-cannot-reach-is-not-deliverable/30-a-ticket-you-cannot-reach-is-not-deliverable-UAT.md', '.planning/phases/30-a-ticket-you-cannot-reach-is-not-deliverable/30-a-ticket-you-cannot-reach-is-not-deliverable-VERIFICATION.md', '.planning/phases/31-not-every-ticket-is-available-work/31-not-every-ticket-is-available-work-UAT.md', '.planning/phases/31-not-every-ticket-is-available-work/31-not-every-ticket-is-available-work-VERIFICATION.md', '.planning/phases/32-measure-usage-and-make-the-backlog-actionable/32-measure-usage-and-make-the-backlog-actionable-UAT.md', '.planning/phases/32-measure-usage-and-make-the-backlog-actionable/32-measure-usage-and-make-the-backlog-actionable-VERIFICATION.md', '.planning/phases/33-reduce-orchestration-context-and-transfer-sessions-safely/33-reduce-orchestration-context-and-transfer-sessions-safely-UAT.md', '.planning/phases/33-reduce-orchestration-context-and-transfer-sessions-safely/33-reduce-orchestration-context-and-transfer-sessions-safely-VERIFICATION.md', '.planning/phases/34-improve-convergence-and-tune-from-measured-outcomes/34-improve-convergence-and-tune-from-measured-outcomes-UAT.md', '.planning/phases/34-improve-convergence-and-tune-from-measured-outcomes/34-improve-convergence-and-tune-from-measured-outcomes-VERIFICATION.md', '.planning/phases/35-gsd-and-shipyard-workflow-loop/35-gsd-and-shipyard-workflow-loop-UAT.md', '.planning/phases/35-gsd-and-shipyard-workflow-loop/35-gsd-and-shipyard-workflow-loop-VERIFICATION.md', '.planning/phases/36-enforce-the-runtime-model-ladder/36-enforce-the-runtime-model-ladder-UAT.md', '.planning/phases/36-enforce-the-runtime-model-ladder/36-enforce-the-runtime-model-ladder-VERIFICATION.md']
     risk: high
     human_checkpoint: true
+    checkpoint: merge
     preauthorized: true
     branch: ticket/T-36-01-canonical-runtime-neutral-policy-and-res
     epic: epic/36-enforce-the-runtime-model-ladder
@@ -2045,6 +2164,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/pipeline-config.cjs, plugins/delivery-pipeline/scripts/runtime-context.cjs, tests/unit/pipeline-config.test.cjs, tests/unit/runtime-context.test.cjs]
     risk: high
     human_checkpoint: true
+    checkpoint: merge
     preauthorized: true
     branch: ticket/T-36-02-authoritative-configuration-bridge-and-o
     epic: epic/36-enforce-the-runtime-model-ladder
@@ -2061,6 +2181,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/codex-dispatch-adapter.cjs, plugins/delivery-pipeline/scripts/dispatch-boundary.cjs, plugins/delivery-pipeline/scripts/codex-agent.cjs, plugins/delivery-pipeline/scripts/codex-model-remap.cjs, tests/unit/codex-dispatch-adapter.test.cjs, tests/unit/codex-agent.test.cjs]
     risk: high
     human_checkpoint: true
+    checkpoint: merge
     preauthorized: true
     branch: ticket/T-36-03-strict-codex-adapter-and-named-model-pal
     epic: epic/36-enforce-the-runtime-model-ladder
@@ -2077,8 +2198,9 @@ tickets:
     files: [CLAUDE.md, '.planning/architecture/ADR-014-DATA-MODEL.md', '.planning/architecture/ADR-014-mandatory-runtime-model-ladder.md', capabilities/delivery-pipeline/capability.json, docs/gsd_multilevel_delivery_pipeline.md, plugins/delivery-pipeline/scripts/model-policy-internal.cjs, plugins/delivery-pipeline/scripts/runtime-adapters.cjs, plugins/delivery-pipeline/scripts/pipeline-config.cjs, plugins/delivery-pipeline/scripts/codex-model-remap.cjs, scripts/gen-codex-shipyard.cjs, scripts/install-shipyard-codex.sh, plugins/delivery-pipeline/scripts/gsd-tune.cjs, plugins/delivery-pipeline/scripts/dispatch-record.cjs, README.md, plugins/delivery-pipeline/commands/deliver.md, plugins/delivery-pipeline/references/pr-sentinel.md, docs/audits/2026-09-08-models-autonomy-probes.cjs, tests/unit/gsd-tune.test.cjs, tests/unit/gen-codex-shipyard.test.cjs, tests/unit/dispatch-record.test.cjs, tests/unit/codex-agent.test.cjs, tests/unit/codex-dispatch-adapter.test.cjs, tests/unit/dispatch-boundary.test.cjs, tests/unit/model-policy.test.cjs, tests/unit/pipeline-config.test.cjs, tests/smoke/codex-shipyard-smoke.sh, '.planning/phases/36-enforce-the-runtime-model-ladder/36-06-PLAN.md', '.planning/phases/36-enforce-the-runtime-model-ladder/36-07-PLAN.md', '.planning/phases/36-enforce-the-runtime-model-ladder/36-04-PLAN.md', '.planning/graph/tickets.json', '.planning/graph/tickets.yaml', '.planning/STATE.md', '.planning/REQUIREMENTS.md', '.planning/ROADMAP.md', '.planning/phases/20-autonomy-of-the-drive-to-green-loop/20-01-SUMMARY.md', '.planning/phases/20-autonomy-of-the-drive-to-green-loop/20-02-SUMMARY.md', '.planning/phases/20-autonomy-of-the-drive-to-green-loop/20-03-SUMMARY.md', '.planning/phases/20-autonomy-of-the-drive-to-green-loop/20-04-SUMMARY.md', '.planning/phases/20-autonomy-of-the-drive-to-green-loop/20-05-SUMMARY.md', '.planning/phases/20-autonomy-of-the-drive-to-green-loop/20-06-SUMMARY.md', '.planning/phases/21-verdicts-a-human-would-have-made-anyway/21-01-SUMMARY.md', '.planning/phases/21-verdicts-a-human-would-have-made-anyway/21-02-SUMMARY.md', '.planning/phases/21-verdicts-a-human-would-have-made-anyway/21-03-SUMMARY.md', '.planning/phases/21-verdicts-a-human-would-have-made-anyway/21-04-SUMMARY.md', '.planning/phases/21-verdicts-a-human-would-have-made-anyway/21-05-SUMMARY.md', '.planning/phases/22-close-what-phase-20-left-open/22-01-SUMMARY.md', '.planning/phases/22-close-what-phase-20-left-open/22-02-SUMMARY.md', '.planning/phases/22-close-what-phase-20-left-open/22-03-SUMMARY.md', '.planning/phases/22-close-what-phase-20-left-open/22-04-SUMMARY.md', '.planning/phases/22-close-what-phase-20-left-open/22-05-SUMMARY.md', '.planning/phases/23-the-board-tells-the-truth-about-itself/23-01-SUMMARY.md', '.planning/phases/23-the-board-tells-the-truth-about-itself/23-02-SUMMARY.md', '.planning/phases/23-the-board-tells-the-truth-about-itself/23-03-SUMMARY.md', '.planning/phases/24-the-conveyor-stops-interrupting-itself/24-01-SUMMARY.md', '.planning/phases/24-the-conveyor-stops-interrupting-itself/24-02-SUMMARY.md', '.planning/phases/24-the-conveyor-stops-interrupting-itself/24-03-SUMMARY.md', '.planning/phases/24-the-conveyor-stops-interrupting-itself/24-04-SUMMARY.md', '.planning/phases/24-the-conveyor-stops-interrupting-itself/24-05-SUMMARY.md', '.planning/phases/24-the-conveyor-stops-interrupting-itself/24-06-SUMMARY.md', '.planning/phases/24-the-conveyor-stops-interrupting-itself/24-07-SUMMARY.md', '.planning/phases/24-the-conveyor-stops-interrupting-itself/24-08-SUMMARY.md', '.planning/phases/24-the-conveyor-stops-interrupting-itself/24-09-SUMMARY.md', '.planning/phases/24-the-conveyor-stops-interrupting-itself/24-10-SUMMARY.md', '.planning/phases/24-the-conveyor-stops-interrupting-itself/24-11-SUMMARY.md', '.planning/phases/25-the-conveyor-follows-the-models-it-runs-on/25-01-SUMMARY.md', '.planning/phases/25-the-conveyor-follows-the-models-it-runs-on/25-02-SUMMARY.md', '.planning/phases/25-the-conveyor-follows-the-models-it-runs-on/25-03-SUMMARY.md', '.planning/phases/25-the-conveyor-follows-the-models-it-runs-on/25-04-SUMMARY.md', '.planning/phases/25-the-conveyor-follows-the-models-it-runs-on/25-05-SUMMARY.md', '.planning/phases/25-the-conveyor-follows-the-models-it-runs-on/25-06-SUMMARY.md', '.planning/phases/26-positive-evidence-before-a-mutation/26-01-SUMMARY.md', '.planning/phases/26-positive-evidence-before-a-mutation/26-02-SUMMARY.md', '.planning/phases/26-positive-evidence-before-a-mutation/26-03-SUMMARY.md', '.planning/phases/26-positive-evidence-before-a-mutation/26-04-SUMMARY.md', '.planning/phases/26-positive-evidence-before-a-mutation/26-05-SUMMARY.md', '.planning/phases/26-positive-evidence-before-a-mutation/26-06-SUMMARY.md', '.planning/phases/26-positive-evidence-before-a-mutation/26-07-SUMMARY.md', '.planning/phases/26-positive-evidence-before-a-mutation/26-08-SUMMARY.md', '.planning/phases/26-positive-evidence-before-a-mutation/26-09-SUMMARY.md', '.planning/phases/26-positive-evidence-before-a-mutation/26-10-SUMMARY.md', '.planning/phases/26-positive-evidence-before-a-mutation/26-11-SUMMARY.md', '.planning/phases/26-positive-evidence-before-a-mutation/26-12-SUMMARY.md', '.planning/phases/26-positive-evidence-before-a-mutation/26-13-SUMMARY.md', '.planning/phases/26-positive-evidence-before-a-mutation/26-14-SUMMARY.md', '.planning/phases/26-positive-evidence-before-a-mutation/26-15-SUMMARY.md', '.planning/phases/27-the-conveyor-measures-its-own-state/27-01-SUMMARY.md', '.planning/phases/27-the-conveyor-measures-its-own-state/27-02-SUMMARY.md', '.planning/phases/27-the-conveyor-measures-its-own-state/27-03-SUMMARY.md', '.planning/phases/27-the-conveyor-measures-its-own-state/27-04-SUMMARY.md', '.planning/phases/27-the-conveyor-measures-its-own-state/27-05-SUMMARY.md', '.planning/phases/27-the-conveyor-measures-its-own-state/27-06-SUMMARY.md', '.planning/phases/27-the-conveyor-measures-its-own-state/27-07-SUMMARY.md', '.planning/phases/27-the-conveyor-measures-its-own-state/27-08-SUMMARY.md', '.planning/phases/27-the-conveyor-measures-its-own-state/27-09-SUMMARY.md', '.planning/phases/28-a-mechanism-nobody-connected-is-not-a-mechanism/28-01-SUMMARY.md', '.planning/phases/28-a-mechanism-nobody-connected-is-not-a-mechanism/28-02-SUMMARY.md', '.planning/phases/28-a-mechanism-nobody-connected-is-not-a-mechanism/28-03-SUMMARY.md', '.planning/phases/28-a-mechanism-nobody-connected-is-not-a-mechanism/28-04-SUMMARY.md', '.planning/phases/28-a-mechanism-nobody-connected-is-not-a-mechanism/28-05-SUMMARY.md', '.planning/phases/28-a-mechanism-nobody-connected-is-not-a-mechanism/28-06-SUMMARY.md', '.planning/phases/28-a-mechanism-nobody-connected-is-not-a-mechanism/28-07-SUMMARY.md', '.planning/phases/28-a-mechanism-nobody-connected-is-not-a-mechanism/28-08-SUMMARY.md', '.planning/phases/28-a-mechanism-nobody-connected-is-not-a-mechanism/28-09-SUMMARY.md', '.planning/phases/29-the-tracker-is-a-projection-and-a-projection-is-driven/29-01-SUMMARY.md', '.planning/phases/29-the-tracker-is-a-projection-and-a-projection-is-driven/29-02-SUMMARY.md', '.planning/phases/29-the-tracker-is-a-projection-and-a-projection-is-driven/29-03-SUMMARY.md', '.planning/phases/29-the-tracker-is-a-projection-and-a-projection-is-driven/29-04-SUMMARY.md', '.planning/phases/29-the-tracker-is-a-projection-and-a-projection-is-driven/29-05-SUMMARY.md', '.planning/phases/29-the-tracker-is-a-projection-and-a-projection-is-driven/29-06-SUMMARY.md', '.planning/phases/29-the-tracker-is-a-projection-and-a-projection-is-driven/29-07-SUMMARY.md', '.planning/phases/29-the-tracker-is-a-projection-and-a-projection-is-driven/29-08-SUMMARY.md', '.planning/phases/30-a-ticket-you-cannot-reach-is-not-deliverable/30-01-SUMMARY.md', '.planning/phases/30-a-ticket-you-cannot-reach-is-not-deliverable/30-02-SUMMARY.md', '.planning/phases/30-a-ticket-you-cannot-reach-is-not-deliverable/30-03-SUMMARY.md', '.planning/phases/30-a-ticket-you-cannot-reach-is-not-deliverable/30-04-SUMMARY.md', '.planning/phases/30-a-ticket-you-cannot-reach-is-not-deliverable/30-05-SUMMARY.md', '.planning/phases/30-a-ticket-you-cannot-reach-is-not-deliverable/30-06-SUMMARY.md', '.planning/phases/30-a-ticket-you-cannot-reach-is-not-deliverable/30-07-SUMMARY.md', '.planning/phases/30-a-ticket-you-cannot-reach-is-not-deliverable/30-08-SUMMARY.md', '.planning/phases/30-a-ticket-you-cannot-reach-is-not-deliverable/30-09-SUMMARY.md', '.planning/phases/30-a-ticket-you-cannot-reach-is-not-deliverable/30-10-SUMMARY.md', '.planning/phases/31-not-every-ticket-is-available-work/31-01-SUMMARY.md', '.planning/phases/31-not-every-ticket-is-available-work/31-02-SUMMARY.md', '.planning/phases/31-not-every-ticket-is-available-work/31-03-SUMMARY.md', '.planning/phases/31-not-every-ticket-is-available-work/31-04-SUMMARY.md', '.planning/phases/31-not-every-ticket-is-available-work/31-05-SUMMARY.md', '.planning/phases/31-not-every-ticket-is-available-work/31-06-SUMMARY.md', '.planning/phases/31-not-every-ticket-is-available-work/31-07-SUMMARY.md', '.planning/phases/32-measure-usage-and-make-the-backlog-actionable/32-01-SUMMARY.md', '.planning/phases/32-measure-usage-and-make-the-backlog-actionable/32-02-SUMMARY.md', '.planning/phases/32-measure-usage-and-make-the-backlog-actionable/32-03-SUMMARY.md', '.planning/phases/32-measure-usage-and-make-the-backlog-actionable/32-04-SUMMARY.md', '.planning/phases/32-measure-usage-and-make-the-backlog-actionable/32-05-SUMMARY.md', '.planning/phases/32-measure-usage-and-make-the-backlog-actionable/32-06-SUMMARY.md', '.planning/phases/32-measure-usage-and-make-the-backlog-actionable/32-07-SUMMARY.md', '.planning/phases/35-gsd-and-shipyard-workflow-loop/35-01-SUMMARY.md', '.planning/phases/35-gsd-and-shipyard-workflow-loop/35-02-SUMMARY.md', '.planning/phases/35-gsd-and-shipyard-workflow-loop/35-03-SUMMARY.md', '.planning/phases/36-enforce-the-runtime-model-ladder/36-01-SUMMARY.md', '.planning/phases/36-enforce-the-runtime-model-ladder/36-02-SUMMARY.md', '.planning/phases/36-enforce-the-runtime-model-ladder/36-03-SUMMARY.md', '.planning/phases/36-enforce-the-runtime-model-ladder/36-04-SUMMARY.md', '.planning/phases/36-enforce-the-runtime-model-ladder/36-05-SUMMARY.md', '.planning/phases/36-enforce-the-runtime-model-ladder/36-06-SUMMARY.md', '.planning/phases/36-enforce-the-runtime-model-ladder/36-07-SUMMARY.md', '.planning/phases/36-enforce-the-runtime-model-ladder/36-08-SUMMARY.md', '.planning/phases/36-enforce-the-runtime-model-ladder/36-09-SUMMARY.md', '.planning/phases/36-enforce-the-runtime-model-ladder/36-10-SUMMARY.md', '.planning/phases/36-enforce-the-runtime-model-ladder/36-11-SUMMARY.md', '.planning/phases/36-enforce-the-runtime-model-ladder/36-12-SUMMARY.md', '.planning/phases/20-autonomy-of-the-drive-to-green-loop/20-autonomy-of-the-drive-to-green-loop-UAT.md', '.planning/phases/20-autonomy-of-the-drive-to-green-loop/20-autonomy-of-the-drive-to-green-loop-VERIFICATION.md', '.planning/phases/21-verdicts-a-human-would-have-made-anyway/21-verdicts-a-human-would-have-made-anyway-UAT.md', '.planning/phases/21-verdicts-a-human-would-have-made-anyway/21-verdicts-a-human-would-have-made-anyway-VERIFICATION.md', '.planning/phases/22-close-what-phase-20-left-open/22-close-what-phase-20-left-open-UAT.md', '.planning/phases/22-close-what-phase-20-left-open/22-close-what-phase-20-left-open-VERIFICATION.md', '.planning/phases/23-the-board-tells-the-truth-about-itself/23-the-board-tells-the-truth-about-itself-UAT.md', '.planning/phases/23-the-board-tells-the-truth-about-itself/23-the-board-tells-the-truth-about-itself-VERIFICATION.md', '.planning/phases/24-the-conveyor-stops-interrupting-itself/24-the-conveyor-stops-interrupting-itself-UAT.md', '.planning/phases/24-the-conveyor-stops-interrupting-itself/24-the-conveyor-stops-interrupting-itself-VERIFICATION.md', '.planning/phases/25-the-conveyor-follows-the-models-it-runs-on/25-the-conveyor-follows-the-models-it-runs-on-UAT.md', '.planning/phases/25-the-conveyor-follows-the-models-it-runs-on/25-the-conveyor-follows-the-models-it-runs-on-VERIFICATION.md', '.planning/phases/26-positive-evidence-before-a-mutation/26-positive-evidence-before-a-mutation-UAT.md', '.planning/phases/26-positive-evidence-before-a-mutation/26-positive-evidence-before-a-mutation-VERIFICATION.md', '.planning/phases/27-the-conveyor-measures-its-own-state/27-the-conveyor-measures-its-own-state-UAT.md', '.planning/phases/27-the-conveyor-measures-its-own-state/27-the-conveyor-measures-its-own-state-VERIFICATION.md', '.planning/phases/28-a-mechanism-nobody-connected-is-not-a-mechanism/28-a-mechanism-nobody-connected-is-not-a-mechanism-UAT.md', '.planning/phases/28-a-mechanism-nobody-connected-is-not-a-mechanism/28-a-mechanism-nobody-connected-is-not-a-mechanism-VERIFICATION.md', '.planning/phases/29-the-tracker-is-a-projection-and-a-projection-is-driven/29-the-tracker-is-a-projection-and-a-projection-is-driven-UAT.md', '.planning/phases/29-the-tracker-is-a-projection-and-a-projection-is-driven/29-the-tracker-is-a-projection-and-a-projection-is-driven-VERIFICATION.md', '.planning/phases/30-a-ticket-you-cannot-reach-is-not-deliverable/30-a-ticket-you-cannot-reach-is-not-deliverable-UAT.md', '.planning/phases/30-a-ticket-you-cannot-reach-is-not-deliverable/30-a-ticket-you-cannot-reach-is-not-deliverable-VERIFICATION.md', '.planning/phases/31-not-every-ticket-is-available-work/31-not-every-ticket-is-available-work-UAT.md', '.planning/phases/31-not-every-ticket-is-available-work/31-not-every-ticket-is-available-work-VERIFICATION.md', '.planning/phases/32-measure-usage-and-make-the-backlog-actionable/32-measure-usage-and-make-the-backlog-actionable-UAT.md', '.planning/phases/32-measure-usage-and-make-the-backlog-actionable/32-measure-usage-and-make-the-backlog-actionable-VERIFICATION.md', '.planning/phases/33-reduce-orchestration-context-and-transfer-sessions-safely/33-reduce-orchestration-context-and-transfer-sessions-safely-UAT.md', '.planning/phases/33-reduce-orchestration-context-and-transfer-sessions-safely/33-reduce-orchestration-context-and-transfer-sessions-safely-VERIFICATION.md', '.planning/phases/34-improve-convergence-and-tune-from-measured-outcomes/34-improve-convergence-and-tune-from-measured-outcomes-UAT.md', '.planning/phases/34-improve-convergence-and-tune-from-measured-outcomes/34-improve-convergence-and-tune-from-measured-outcomes-VERIFICATION.md', '.planning/phases/35-gsd-and-shipyard-workflow-loop/35-gsd-and-shipyard-workflow-loop-UAT.md', '.planning/phases/35-gsd-and-shipyard-workflow-loop/35-gsd-and-shipyard-workflow-loop-VERIFICATION.md', '.planning/phases/36-enforce-the-runtime-model-ladder/36-enforce-the-runtime-model-ladder-UAT.md', '.planning/phases/36-enforce-the-runtime-model-ladder/36-enforce-the-runtime-model-ladder-VERIFICATION.md']
     risk: high
     human_checkpoint: true
+    checkpoint: merge
     preauthorized: true
-    branch: ticket/T-36-04-generate-and-validate-the-complete-codex
+    branch: ticket/T-36-04-generate-and-validate-the-codex-bundle-w
     epic: epic/36-enforce-the-runtime-model-ladder
     primary_parent: T-36-03
     pr_base: ticket/T-36-03-strict-codex-adapter-and-named-model-pal
@@ -2093,11 +2215,12 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs, plugins/delivery-pipeline/workflows/executors.mjs, plugins/delivery-pipeline/workflows/fix-round.mjs, plugins/delivery-pipeline/workflows/drift-gate.mjs, tests/unit/workflows-args.test.cjs, tests/unit/sentinel.test.cjs, tests/unit/source-contract.test.cjs]
     risk: high
     human_checkpoint: true
+    checkpoint: merge
     preauthorized: true
     branch: ticket/T-36-05-claude-adapter-and-explicit-workflow-lau
     epic: epic/36-enforce-the-runtime-model-ladder
     primary_parent: T-36-04
-    pr_base: ticket/T-36-04-generate-and-validate-the-complete-codex
+    pr_base: ticket/T-36-04-generate-and-validate-the-codex-bundle-w
     jira: null
   T-36-06:
     title: Route GSD decomposition through the mandatory boundary
@@ -2109,6 +2232,7 @@ tickets:
     files: [plugins/delivery-pipeline/commands/decompose.md, plugins/delivery-pipeline/scripts/dispatch-boundary.cjs, plugins/delivery-pipeline/scripts/codex-dispatch-adapter.cjs, plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs, plugins/delivery-pipeline/scripts/pipeline-config.cjs, '.planning/graph/tickets.json', '.planning/graph/tickets.yaml', '.planning/STATE.md', '.planning/REQUIREMENTS.md', '.planning/ROADMAP.md', '.planning/phases/36-enforce-the-runtime-model-ladder/36-01-SUMMARY.md', '.planning/phases/36-enforce-the-runtime-model-ladder/36-02-SUMMARY.md', '.planning/phases/36-enforce-the-runtime-model-ladder/36-03-SUMMARY.md', '.planning/phases/36-enforce-the-runtime-model-ladder/36-04-SUMMARY.md', '.planning/phases/36-enforce-the-runtime-model-ladder/36-05-SUMMARY.md', '.planning/phases/36-enforce-the-runtime-model-ladder/36-06-SUMMARY.md', '.planning/phases/36-enforce-the-runtime-model-ladder/36-07-SUMMARY.md', '.planning/phases/36-enforce-the-runtime-model-ladder/36-08-SUMMARY.md', '.planning/phases/36-enforce-the-runtime-model-ladder/36-09-SUMMARY.md', '.planning/phases/36-enforce-the-runtime-model-ladder/36-10-SUMMARY.md', '.planning/phases/36-enforce-the-runtime-model-ladder/36-11-SUMMARY.md', '.planning/phases/36-enforce-the-runtime-model-ladder/36-12-SUMMARY.md', '.planning/phases/36-enforce-the-runtime-model-ladder/36-enforce-the-runtime-model-ladder-UAT.md', '.planning/phases/36-enforce-the-runtime-model-ladder/36-enforce-the-runtime-model-ladder-VERIFICATION.md', '.planning/phases/20-autonomy-of-the-drive-to-green-loop/20-01-SUMMARY.md', '.planning/phases/20-autonomy-of-the-drive-to-green-loop/20-02-SUMMARY.md', '.planning/phases/20-autonomy-of-the-drive-to-green-loop/20-03-SUMMARY.md', '.planning/phases/20-autonomy-of-the-drive-to-green-loop/20-04-SUMMARY.md', '.planning/phases/20-autonomy-of-the-drive-to-green-loop/20-05-SUMMARY.md', '.planning/phases/20-autonomy-of-the-drive-to-green-loop/20-06-SUMMARY.md', '.planning/phases/20-autonomy-of-the-drive-to-green-loop/20-autonomy-of-the-drive-to-green-loop-UAT.md', '.planning/phases/20-autonomy-of-the-drive-to-green-loop/20-autonomy-of-the-drive-to-green-loop-VERIFICATION.md', '.planning/phases/21-verdicts-a-human-would-have-made-anyway/21-01-SUMMARY.md', '.planning/phases/21-verdicts-a-human-would-have-made-anyway/21-02-SUMMARY.md', '.planning/phases/21-verdicts-a-human-would-have-made-anyway/21-03-SUMMARY.md', '.planning/phases/21-verdicts-a-human-would-have-made-anyway/21-04-SUMMARY.md', '.planning/phases/21-verdicts-a-human-would-have-made-anyway/21-05-SUMMARY.md', '.planning/phases/21-verdicts-a-human-would-have-made-anyway/21-verdicts-a-human-would-have-made-anyway-UAT.md', '.planning/phases/21-verdicts-a-human-would-have-made-anyway/21-verdicts-a-human-would-have-made-anyway-VERIFICATION.md', '.planning/phases/22-close-what-phase-20-left-open/22-01-SUMMARY.md', '.planning/phases/22-close-what-phase-20-left-open/22-02-SUMMARY.md', '.planning/phases/22-close-what-phase-20-left-open/22-03-SUMMARY.md', '.planning/phases/22-close-what-phase-20-left-open/22-04-SUMMARY.md', '.planning/phases/22-close-what-phase-20-left-open/22-05-SUMMARY.md', '.planning/phases/22-close-what-phase-20-left-open/22-close-what-phase-20-left-open-UAT.md', '.planning/phases/22-close-what-phase-20-left-open/22-close-what-phase-20-left-open-VERIFICATION.md', '.planning/phases/23-the-board-tells-the-truth-about-itself/23-01-SUMMARY.md', '.planning/phases/23-the-board-tells-the-truth-about-itself/23-02-SUMMARY.md', '.planning/phases/23-the-board-tells-the-truth-about-itself/23-03-SUMMARY.md', '.planning/phases/23-the-board-tells-the-truth-about-itself/23-the-board-tells-the-truth-about-itself-UAT.md', '.planning/phases/23-the-board-tells-the-truth-about-itself/23-the-board-tells-the-truth-about-itself-VERIFICATION.md', '.planning/phases/24-the-conveyor-stops-interrupting-itself/24-01-SUMMARY.md', '.planning/phases/24-the-conveyor-stops-interrupting-itself/24-02-SUMMARY.md', '.planning/phases/24-the-conveyor-stops-interrupting-itself/24-03-SUMMARY.md', '.planning/phases/24-the-conveyor-stops-interrupting-itself/24-04-SUMMARY.md', '.planning/phases/24-the-conveyor-stops-interrupting-itself/24-05-SUMMARY.md', '.planning/phases/24-the-conveyor-stops-interrupting-itself/24-06-SUMMARY.md', '.planning/phases/24-the-conveyor-stops-interrupting-itself/24-07-SUMMARY.md', '.planning/phases/24-the-conveyor-stops-interrupting-itself/24-08-SUMMARY.md', '.planning/phases/24-the-conveyor-stops-interrupting-itself/24-09-SUMMARY.md', '.planning/phases/24-the-conveyor-stops-interrupting-itself/24-10-SUMMARY.md', '.planning/phases/24-the-conveyor-stops-interrupting-itself/24-11-SUMMARY.md', '.planning/phases/24-the-conveyor-stops-interrupting-itself/24-the-conveyor-stops-interrupting-itself-UAT.md', '.planning/phases/24-the-conveyor-stops-interrupting-itself/24-the-conveyor-stops-interrupting-itself-VERIFICATION.md', '.planning/phases/25-the-conveyor-follows-the-models-it-runs-on/25-01-SUMMARY.md', '.planning/phases/25-the-conveyor-follows-the-models-it-runs-on/25-02-SUMMARY.md', '.planning/phases/25-the-conveyor-follows-the-models-it-runs-on/25-03-SUMMARY.md', '.planning/phases/25-the-conveyor-follows-the-models-it-runs-on/25-04-SUMMARY.md', '.planning/phases/25-the-conveyor-follows-the-models-it-runs-on/25-05-SUMMARY.md', '.planning/phases/25-the-conveyor-follows-the-models-it-runs-on/25-06-SUMMARY.md', '.planning/phases/25-the-conveyor-follows-the-models-it-runs-on/25-the-conveyor-follows-the-models-it-runs-on-UAT.md', '.planning/phases/25-the-conveyor-follows-the-models-it-runs-on/25-the-conveyor-follows-the-models-it-runs-on-VERIFICATION.md', '.planning/phases/26-positive-evidence-before-a-mutation/26-01-SUMMARY.md', '.planning/phases/26-positive-evidence-before-a-mutation/26-02-SUMMARY.md', '.planning/phases/26-positive-evidence-before-a-mutation/26-03-SUMMARY.md', '.planning/phases/26-positive-evidence-before-a-mutation/26-04-SUMMARY.md', '.planning/phases/26-positive-evidence-before-a-mutation/26-05-SUMMARY.md', '.planning/phases/26-positive-evidence-before-a-mutation/26-06-SUMMARY.md', '.planning/phases/26-positive-evidence-before-a-mutation/26-07-SUMMARY.md', '.planning/phases/26-positive-evidence-before-a-mutation/26-08-SUMMARY.md', '.planning/phases/26-positive-evidence-before-a-mutation/26-09-SUMMARY.md', '.planning/phases/26-positive-evidence-before-a-mutation/26-10-SUMMARY.md', '.planning/phases/26-positive-evidence-before-a-mutation/26-11-SUMMARY.md', '.planning/phases/26-positive-evidence-before-a-mutation/26-12-SUMMARY.md', '.planning/phases/26-positive-evidence-before-a-mutation/26-13-SUMMARY.md', '.planning/phases/26-positive-evidence-before-a-mutation/26-14-SUMMARY.md', '.planning/phases/26-positive-evidence-before-a-mutation/26-15-SUMMARY.md', '.planning/phases/26-positive-evidence-before-a-mutation/26-positive-evidence-before-a-mutation-UAT.md', '.planning/phases/26-positive-evidence-before-a-mutation/26-positive-evidence-before-a-mutation-VERIFICATION.md', '.planning/phases/27-the-conveyor-measures-its-own-state/27-01-SUMMARY.md', '.planning/phases/27-the-conveyor-measures-its-own-state/27-02-SUMMARY.md', '.planning/phases/27-the-conveyor-measures-its-own-state/27-03-SUMMARY.md', '.planning/phases/27-the-conveyor-measures-its-own-state/27-04-SUMMARY.md', '.planning/phases/27-the-conveyor-measures-its-own-state/27-05-SUMMARY.md', '.planning/phases/27-the-conveyor-measures-its-own-state/27-06-SUMMARY.md', '.planning/phases/27-the-conveyor-measures-its-own-state/27-07-SUMMARY.md', '.planning/phases/27-the-conveyor-measures-its-own-state/27-08-SUMMARY.md', '.planning/phases/27-the-conveyor-measures-its-own-state/27-09-SUMMARY.md', '.planning/phases/27-the-conveyor-measures-its-own-state/27-the-conveyor-measures-its-own-state-UAT.md', '.planning/phases/27-the-conveyor-measures-its-own-state/27-the-conveyor-measures-its-own-state-VERIFICATION.md', '.planning/phases/28-a-mechanism-nobody-connected-is-not-a-mechanism/28-01-SUMMARY.md', '.planning/phases/28-a-mechanism-nobody-connected-is-not-a-mechanism/28-02-SUMMARY.md', '.planning/phases/28-a-mechanism-nobody-connected-is-not-a-mechanism/28-03-SUMMARY.md', '.planning/phases/28-a-mechanism-nobody-connected-is-not-a-mechanism/28-04-SUMMARY.md', '.planning/phases/28-a-mechanism-nobody-connected-is-not-a-mechanism/28-05-SUMMARY.md', '.planning/phases/28-a-mechanism-nobody-connected-is-not-a-mechanism/28-06-SUMMARY.md', '.planning/phases/28-a-mechanism-nobody-connected-is-not-a-mechanism/28-07-SUMMARY.md', '.planning/phases/28-a-mechanism-nobody-connected-is-not-a-mechanism/28-08-SUMMARY.md', '.planning/phases/28-a-mechanism-nobody-connected-is-not-a-mechanism/28-09-SUMMARY.md', '.planning/phases/28-a-mechanism-nobody-connected-is-not-a-mechanism/28-a-mechanism-nobody-connected-is-not-a-mechanism-UAT.md', '.planning/phases/28-a-mechanism-nobody-connected-is-not-a-mechanism/28-a-mechanism-nobody-connected-is-not-a-mechanism-VERIFICATION.md', '.planning/phases/29-the-tracker-is-a-projection-and-a-projection-is-driven/29-01-SUMMARY.md', '.planning/phases/29-the-tracker-is-a-projection-and-a-projection-is-driven/29-02-SUMMARY.md', '.planning/phases/29-the-tracker-is-a-projection-and-a-projection-is-driven/29-03-SUMMARY.md', '.planning/phases/29-the-tracker-is-a-projection-and-a-projection-is-driven/29-04-SUMMARY.md', '.planning/phases/29-the-tracker-is-a-projection-and-a-projection-is-driven/29-05-SUMMARY.md', '.planning/phases/29-the-tracker-is-a-projection-and-a-projection-is-driven/29-06-SUMMARY.md', '.planning/phases/29-the-tracker-is-a-projection-and-a-projection-is-driven/29-07-SUMMARY.md', '.planning/phases/29-the-tracker-is-a-projection-and-a-projection-is-driven/29-08-SUMMARY.md', '.planning/phases/29-the-tracker-is-a-projection-and-a-projection-is-driven/29-the-tracker-is-a-projection-and-a-projection-is-driven-UAT.md', '.planning/phases/29-the-tracker-is-a-projection-and-a-projection-is-driven/29-the-tracker-is-a-projection-and-a-projection-is-driven-VERIFICATION.md', '.planning/phases/30-a-ticket-you-cannot-reach-is-not-deliverable/30-01-SUMMARY.md', '.planning/phases/30-a-ticket-you-cannot-reach-is-not-deliverable/30-02-SUMMARY.md', '.planning/phases/30-a-ticket-you-cannot-reach-is-not-deliverable/30-03-SUMMARY.md', '.planning/phases/30-a-ticket-you-cannot-reach-is-not-deliverable/30-04-SUMMARY.md', '.planning/phases/30-a-ticket-you-cannot-reach-is-not-deliverable/30-05-SUMMARY.md', '.planning/phases/30-a-ticket-you-cannot-reach-is-not-deliverable/30-06-SUMMARY.md', '.planning/phases/30-a-ticket-you-cannot-reach-is-not-deliverable/30-07-SUMMARY.md', '.planning/phases/30-a-ticket-you-cannot-reach-is-not-deliverable/30-08-SUMMARY.md', '.planning/phases/30-a-ticket-you-cannot-reach-is-not-deliverable/30-09-SUMMARY.md', '.planning/phases/30-a-ticket-you-cannot-reach-is-not-deliverable/30-10-SUMMARY.md', '.planning/phases/30-a-ticket-you-cannot-reach-is-not-deliverable/30-a-ticket-you-cannot-reach-is-not-deliverable-UAT.md', '.planning/phases/30-a-ticket-you-cannot-reach-is-not-deliverable/30-a-ticket-you-cannot-reach-is-not-deliverable-VERIFICATION.md', '.planning/phases/31-not-every-ticket-is-available-work/31-01-SUMMARY.md', '.planning/phases/31-not-every-ticket-is-available-work/31-02-SUMMARY.md', '.planning/phases/31-not-every-ticket-is-available-work/31-03-SUMMARY.md', '.planning/phases/31-not-every-ticket-is-available-work/31-04-SUMMARY.md', '.planning/phases/31-not-every-ticket-is-available-work/31-05-SUMMARY.md', '.planning/phases/31-not-every-ticket-is-available-work/31-06-SUMMARY.md', '.planning/phases/31-not-every-ticket-is-available-work/31-07-SUMMARY.md', '.planning/phases/31-not-every-ticket-is-available-work/31-not-every-ticket-is-available-work-UAT.md', '.planning/phases/31-not-every-ticket-is-available-work/31-not-every-ticket-is-available-work-VERIFICATION.md', '.planning/phases/32-measure-usage-and-make-the-backlog-actionable/32-01-SUMMARY.md', '.planning/phases/32-measure-usage-and-make-the-backlog-actionable/32-02-SUMMARY.md', '.planning/phases/32-measure-usage-and-make-the-backlog-actionable/32-03-SUMMARY.md', '.planning/phases/32-measure-usage-and-make-the-backlog-actionable/32-04-SUMMARY.md', '.planning/phases/32-measure-usage-and-make-the-backlog-actionable/32-05-SUMMARY.md', '.planning/phases/32-measure-usage-and-make-the-backlog-actionable/32-06-SUMMARY.md', '.planning/phases/32-measure-usage-and-make-the-backlog-actionable/32-07-SUMMARY.md', '.planning/phases/32-measure-usage-and-make-the-backlog-actionable/32-measure-usage-and-make-the-backlog-actionable-UAT.md', '.planning/phases/32-measure-usage-and-make-the-backlog-actionable/32-measure-usage-and-make-the-backlog-actionable-VERIFICATION.md', '.planning/phases/33-reduce-orchestration-context-and-transfer-sessions-safely/33-reduce-orchestration-context-and-transfer-sessions-safely-UAT.md', '.planning/phases/33-reduce-orchestration-context-and-transfer-sessions-safely/33-reduce-orchestration-context-and-transfer-sessions-safely-VERIFICATION.md', '.planning/phases/34-improve-convergence-and-tune-from-measured-outcomes/34-improve-convergence-and-tune-from-measured-outcomes-UAT.md', '.planning/phases/34-improve-convergence-and-tune-from-measured-outcomes/34-improve-convergence-and-tune-from-measured-outcomes-VERIFICATION.md', '.planning/phases/35-gsd-and-shipyard-workflow-loop/35-01-SUMMARY.md', '.planning/phases/35-gsd-and-shipyard-workflow-loop/35-02-SUMMARY.md', '.planning/phases/35-gsd-and-shipyard-workflow-loop/35-03-SUMMARY.md', '.planning/phases/35-gsd-and-shipyard-workflow-loop/35-gsd-and-shipyard-workflow-loop-UAT.md', '.planning/phases/35-gsd-and-shipyard-workflow-loop/35-gsd-and-shipyard-workflow-loop-VERIFICATION.md', '.planning/phases/36-enforce-the-runtime-model-ladder/36-06-PLAN.md', tests/unit/source-contract.test.cjs, tests/unit/pipeline-config.test.cjs]
     risk: high
     human_checkpoint: true
+    checkpoint: merge
     preauthorized: true
     branch: ticket/T-36-06-route-gsd-decomposition-through-the-mand
     epic: epic/36-enforce-the-runtime-model-ladder
@@ -2125,8 +2249,9 @@ tickets:
     files: [plugins/delivery-pipeline/commands/deliver.md, plugins/delivery-pipeline/references/pr-sentinel.md, tests/unit/files-contract.test.cjs, tests/unit/source-contract.test.cjs]
     risk: high
     human_checkpoint: true
+    checkpoint: merge
     preauthorized: true
-    branch: ticket/T-36-07-enforce-the-boundary-across-shipyard-delivery-launches
+    branch: ticket/T-36-07-enforce-the-boundary-across-shipyard-del
     epic: epic/36-enforce-the-runtime-model-ladder
     primary_parent: T-36-06
     pr_base: ticket/T-36-06-route-gsd-decomposition-through-the-mand
@@ -2141,11 +2266,12 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/dispatch-boundary.cjs, plugins/delivery-pipeline/scripts/dispatch-record.cjs, tests/unit/dispatch-boundary.test.cjs, tests/unit/dispatch-record.test.cjs]
     risk: high
     human_checkpoint: true
+    checkpoint: merge
     preauthorized: true
     branch: ticket/T-36-08-application-receipts-and-dispatch-record
     epic: epic/36-enforce-the-runtime-model-ladder
     primary_parent: T-36-07
-    pr_base: ticket/T-36-07-enforce-the-boundary-across-shipyard-delivery-launches
+    pr_base: ticket/T-36-07-enforce-the-boundary-across-shipyard-del
     jira: null
   T-36-09:
     title: Policy-aware telemetry and reconciliation reporting
@@ -2157,8 +2283,9 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/pipeline-stats.cjs, plugins/delivery-pipeline/scripts/usage-attribution.cjs, tests/unit/pipeline-stats.test.cjs, tests/unit/usage-attribution.test.cjs]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
-    branch: ticket/T-36-09-policy-aware-telemetry-and-reconciliation-reporting
+    branch: ticket/T-36-09-policy-aware-telemetry-and-reconciliatio
     epic: epic/36-enforce-the-runtime-model-ladder
     primary_parent: T-36-08
     pr_base: ticket/T-36-08-application-receipts-and-dispatch-record
@@ -2173,11 +2300,12 @@ tickets:
     files: [tests/unit/model-policy.test.cjs, tests/unit/dispatch-boundary.test.cjs, tests/unit/workflows-args.test.cjs, tests/unit/source-contract.test.cjs, tests/unit/dispatch-record.test.cjs]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
-    branch: ticket/T-36-10-exhaustive-signal-matrix-and-negative-bypass-suite
+    branch: ticket/T-36-10-exhaustive-signal-matrix-and-negative-by
     epic: epic/36-enforce-the-runtime-model-ladder
     primary_parent: T-36-09
-    pr_base: ticket/T-36-09-policy-aware-telemetry-and-reconciliation-reporting
+    pr_base: ticket/T-36-09-policy-aware-telemetry-and-reconciliatio
     jira: null
   T-36-11:
     title: Cross-runtime generated-install smoke verification
@@ -2189,11 +2317,12 @@ tickets:
     files: [tests/smoke/model-ladder-runtime-smoke.sh, tests/smoke/codex-shipyard-smoke.sh, tests/smoke/runtime-smoke.sh, tests/smoke/overlay-image-smoke.sh]
     risk: high
     human_checkpoint: true
+    checkpoint: merge
     preauthorized: true
-    branch: ticket/T-36-11-cross-runtime-generated-install-smoke-verification
+    branch: ticket/T-36-11-cross-runtime-generated-install-smoke-ve
     epic: epic/36-enforce-the-runtime-model-ladder
     primary_parent: T-36-10
-    pr_base: ticket/T-36-10-exhaustive-signal-matrix-and-negative-bypass-suite
+    pr_base: ticket/T-36-10-exhaustive-signal-matrix-and-negative-by
     jira: null
   T-36-12:
     title: Supersede obsolete ladder documentation
@@ -2205,11 +2334,12 @@ tickets:
     files: ['.planning/architecture/ADR-005-the-floor-is-opus-and-fable-is-earned.md', '.planning/architecture/ADR-012-task-level-model-ladder.md', README.md, docs/gsd_multilevel_delivery_pipeline.md]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-36-12-supersede-obsolete-ladder-documentation
     epic: epic/36-enforce-the-runtime-model-ladder
     primary_parent: T-36-10
-    pr_base: ticket/T-36-10-exhaustive-signal-matrix-and-negative-bypass-suite
+    pr_base: ticket/T-36-10-exhaustive-signal-matrix-and-negative-by
     jira: null
   T-37-01:
     title: Define the scoped autonomous run contract
@@ -2221,6 +2351,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/run-contract.cjs, plugins/delivery-pipeline/scripts/run-scope.cjs, tests/unit/run-contract.test.cjs, tests/unit/run-scope.test.cjs]
     risk: high
     human_checkpoint: true
+    checkpoint: merge
     preauthorized: false
     branch: ticket/T-37-01-define-the-scoped-autonomous-run-contrac
     epic: epic/37-autonomous-dual-runtime-control-plane
@@ -2237,6 +2368,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/run-store.cjs, plugins/delivery-pipeline/scripts/run-controller.cjs, tests/unit/run-store.test.cjs, tests/unit/run-controller.test.cjs]
     risk: high
     human_checkpoint: true
+    checkpoint: merge
     preauthorized: false
     branch: ticket/T-37-02-persist-controller-leases-and-autonomous
     epic: epic/37-autonomous-dual-runtime-control-plane
@@ -2253,8 +2385,9 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/claude-runtime-host.cjs, plugins/delivery-pipeline/scripts/claude-workflow-host.cjs, plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs, tests/unit/claude-runtime-host.test.cjs, tests/unit/claude-dispatch-adapter.test.cjs, tests/smoke/claude-runtime-smoke.sh]
     risk: high
     human_checkpoint: true
+    checkpoint: merge
     preauthorized: false
-    branch: ticket/T-37-03-connect-claude-to-scoped-runtime-controller
+    branch: ticket/T-37-03-connect-claude-code-to-the-scoped-runtim
     epic: epic/37-autonomous-dual-runtime-control-plane
     primary_parent: T-37-02
     pr_base: ticket/T-37-02-persist-controller-leases-and-autonomous
@@ -2269,8 +2402,9 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/codex-runtime-host.cjs, plugins/delivery-pipeline/scripts/codex-dispatch-adapter.cjs, plugins/delivery-pipeline/scripts/codex-agent.cjs, tests/unit/codex-runtime-host.test.cjs, tests/smoke/codex-runtime-smoke.sh]
     risk: high
     human_checkpoint: true
+    checkpoint: merge
     preauthorized: false
-    branch: ticket/T-37-04-connect-codex-to-scoped-runtime-controller
+    branch: ticket/T-37-04-connect-codex-to-the-scoped-runtime-cont
     epic: epic/37-autonomous-dual-runtime-control-plane
     primary_parent: T-37-02
     pr_base: ticket/T-37-02-persist-controller-leases-and-autonomous
@@ -2285,8 +2419,9 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/run-reachability.cjs, plugins/delivery-pipeline/scripts/epic-branch.sh, plugins/delivery-pipeline/scripts/ticket-worktree.sh, tests/unit/run-reachability.test.cjs, tests/smoke/reachability-smoke.sh]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
-    branch: ticket/T-37-05-prove-graph-reachability-before-autonomous-run
+    branch: ticket/T-37-05-prove-graph-reachability-before-autonomo
     epic: epic/37-autonomous-dual-runtime-control-plane
     primary_parent: T-37-02
     pr_base: ticket/T-37-02-persist-controller-leases-and-autonomous
@@ -2301,11 +2436,12 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/stop-gate.cjs, plugins/delivery-pipeline/scripts/run-waker.cjs, plugins/delivery-pipeline/scripts/ci-wait.cjs, tests/unit/stop-gate.test.cjs, tests/unit/run-waker.test.cjs]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-37-06-make-stop-and-wait-decisions-run-scoped
     epic: epic/37-autonomous-dual-runtime-control-plane
     primary_parent: T-37-05
-    pr_base: ticket/T-37-05-prove-graph-reachability-before-autonomous-run
+    pr_base: ticket/T-37-05-prove-graph-reachability-before-autonomo
     jira: null
   T-37-07:
     title: Join runtime receipts with usage and outcome evidence
@@ -2317,11 +2453,12 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/run-telemetry.cjs, plugins/delivery-pipeline/scripts/dispatch-record.cjs, plugins/delivery-pipeline/scripts/usage-attribution.cjs, plugins/delivery-pipeline/scripts/pipeline-stats.cjs, tests/unit/run-telemetry.test.cjs, tests/unit/dispatch-record.test.cjs, tests/unit/usage-attribution.test.cjs]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-37-07-join-runtime-receipts-with-usage-and-out
     epic: epic/37-autonomous-dual-runtime-control-plane
     primary_parent: T-37-03
-    pr_base: ticket/T-37-03-connect-claude-to-scoped-runtime-controller
+    pr_base: ticket/T-37-03-connect-claude-code-to-the-scoped-runtim
     jira: null
   T-37-08:
     title: Roll out and verify the autonomous control plane
@@ -2333,6 +2470,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/run-rollout.cjs, plugins/delivery-pipeline/scripts/gsd-sync.cjs, plugins/delivery-pipeline/commands/deliver.md, docs/gsd_multilevel_delivery_pipeline.md, tests/unit/run-rollout.test.cjs, tests/unit/source-contract.test.cjs, tests/smoke/runtime-control-plane-smoke.sh]
     risk: high
     human_checkpoint: true
+    checkpoint: merge
     preauthorized: false
     branch: ticket/T-37-08-roll-out-and-verify-the-autonomous-contr
     epic: epic/37-autonomous-dual-runtime-control-plane
@@ -2349,6 +2487,7 @@ tickets:
     files: ['.planning/architecture/ADR-014-mandatory-runtime-model-ladder.md', '.planning/architecture/ADR-014-ROLLOUT.md', CLAUDE.md, README.md, docs/gsd_multilevel_delivery_pipeline.md, docs/usage-report.md, plugins/delivery-pipeline/scripts/runtime-adapters.cjs, plugins/delivery-pipeline/scripts/model-policy-internal.cjs, plugins/delivery-pipeline/scripts/pipeline-config.cjs, capabilities/delivery-pipeline/capability.json, plugins/delivery-pipeline/.claude-plugin/plugin.json, scripts/gen-codex-shipyard.cjs, tests/smoke/codex-runtime-smoke.sh, tests/smoke/model-ladder-runtime-smoke.sh, tests/unit/claude-instructions.test.cjs, tests/unit/claude-workflow-host.test.cjs, tests/unit/sentinel.test.cjs, tests/unit/codex-agent.test.cjs, tests/unit/codex-dispatch-adapter.test.cjs, tests/unit/codex-runtime-host.test.cjs, tests/unit/dispatch-boundary.test.cjs, tests/unit/gsd-tune.test.cjs, tests/unit/investigation-research.test.cjs, tests/unit/model-policy.test.cjs, tests/unit/pipeline-config.test.cjs, tests/unit/model-capability.test.cjs, tests/unit/gen-codex-shipyard.test.cjs, tests/unit/pipeline-stats.test.cjs, tests/unit/planning-artifacts.test.cjs, tests/unit/repair-artifacts.test.cjs, tests/unit/run-contract.test.cjs, tests/unit/run-rollout.test.cjs, tests/unit/source-contract.test.cjs, tests/unit/usage-attribution.test.cjs, tests/unit/workflows-args.test.cjs]
     risk: high
     human_checkpoint: true
+    checkpoint: merge
     preauthorized: false
     branch: ticket/T-38-01-pin-the-current-runtime-model-identifier
     epic: epic/38-runtime-model-ladder-recovery
@@ -2365,6 +2504,7 @@ tickets:
     files: ['.planning/phases/38-runtime-model-ladder-recovery/38-02-PLAN.md', plugins/delivery-pipeline/scripts/claude-agent-start-hook.cjs, plugins/delivery-pipeline/scripts/claude-runtime-host.cjs, plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs, plugins/delivery-pipeline/scripts/claude-workflow-host.cjs, plugins/delivery-pipeline/scripts/dispatch-boundary.cjs, plugins/delivery-pipeline/scripts/runtime-adapters.cjs, tests/unit/claude-agent-start-hook.test.cjs, tests/unit/claude-runtime-host.test.cjs, tests/unit/claude-workflow-host.test.cjs, tests/unit/claude-dispatch-adapter.test.cjs, tests/unit/claude-test-evidence.cjs, tests/unit/dispatch-boundary.test.cjs, tests/unit/context-packet.test.cjs, tests/unit/investigation-research.test.cjs, tests/unit/orchestration-overhead.test.cjs, tests/unit/planning-artifacts.test.cjs, tests/unit/repair-artifacts.test.cjs, tests/unit/role-artifact.test.cjs, tests/unit/session-handoff.test.cjs, tests/unit/sentinel.test.cjs, tests/unit/source-contract.test.cjs, tests/unit/workflows-args.test.cjs, tests/smoke/claude-runtime-smoke.sh, tests/smoke/model-ladder-runtime-smoke.sh, tests/fixtures/claude-assistant-session.jsonl]
     risk: high
     human_checkpoint: true
+    checkpoint: merge
     preauthorized: false
     branch: ticket/T-38-02-prove-claude-model-and-effort-from-the-l
     epic: epic/38-runtime-model-ladder-recovery
@@ -2381,6 +2521,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/claude-delivery-host.cjs, plugins/delivery-pipeline/scripts/claude-investigation-host.cjs, plugins/delivery-pipeline/scripts/claude-workflow-host.cjs, plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs, plugins/delivery-pipeline/scripts/claude-reference-content.cjs, plugins/delivery-pipeline/scripts/delivery-commit-finalizer.cjs, plugins/delivery-pipeline/workflows/executors.mjs, plugins/delivery-pipeline/workflows/fix-round.mjs, plugins/delivery-pipeline/workflows/drift-gate.mjs, plugins/delivery-pipeline/workflows/investigation-research.mjs, tests/unit/claude-delivery-host.test.cjs, tests/unit/claude-reference-content.test.cjs, tests/unit/claude-workflow-host.test.cjs, tests/unit/investigation-research.test.cjs, tests/unit/delivery-commit-finalizer.test.cjs, tests/unit/repair-artifacts.test.cjs, tests/unit/source-contract.test.cjs, tests/unit/workflows-args.test.cjs, tests/smoke/claude-runtime-smoke.sh]
     risk: high
     human_checkpoint: true
+    checkpoint: merge
     preauthorized: false
     branch: ticket/T-38-03-connect-claude-delivery-and-investigatio
     epic: epic/38-runtime-model-ladder-recovery
@@ -2397,8 +2538,9 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/codex-delivery-host.cjs, plugins/delivery-pipeline/scripts/codex-decompose-host.cjs, plugins/delivery-pipeline/scripts/codex-dispatch-adapter.cjs, plugins/delivery-pipeline/scripts/codex-runtime-host.cjs, scripts/gen-codex-shipyard.cjs, tests/unit/codex-delivery-host.test.cjs, tests/unit/codex-decompose-host.test.cjs, tests/unit/codex-agent.test.cjs, tests/unit/codex-dispatch-adapter.test.cjs, tests/unit/codex-runtime-host.test.cjs, tests/unit/gen-codex-shipyard.test.cjs, tests/fixtures/codex-agent-parent-0.155.1.jsonl, tests/fixtures/codex-agent-child-0.155.1.jsonl, tests/unit/source-contract.test.cjs, tests/smoke/codex-runtime-smoke.sh]
     risk: high
     human_checkpoint: true
+    checkpoint: merge
     preauthorized: false
-    branch: ticket/T-38-04-connect-codex-launches-to-delivery
+    branch: ticket/T-38-04-connect-codex-delivery-and-typed-gsd-dec
     epic: epic/38-runtime-model-ladder-recovery
     primary_parent: T-38-03
     pr_base: ticket/T-38-03-connect-claude-delivery-and-investigatio
@@ -2413,6 +2555,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/claude-decompose-host.cjs, tests/unit/claude-decompose-host.test.cjs, tests/smoke/claude-gsd-agent-smoke.sh]
     risk: high
     human_checkpoint: true
+    checkpoint: merge
     preauthorized: false
     branch: ticket/T-38-06-apply-typed-claude-gsd-agents-to-decompo
     epic: epic/38-runtime-model-ladder-recovery
@@ -2429,11 +2572,12 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/claude-role-host.cjs, tests/unit/claude-role-host.test.cjs, tests/smoke/claude-delivery-roles-smoke.sh]
     risk: high
     human_checkpoint: true
+    checkpoint: merge
     preauthorized: false
     branch: ticket/T-38-07-connect-claude-judgement-roles-through-t
     epic: epic/38-runtime-model-ladder-recovery
     primary_parent: T-38-04
-    pr_base: ticket/T-38-04-connect-codex-launches-to-delivery
+    pr_base: ticket/T-38-04-connect-codex-delivery-and-typed-gsd-dec
     jira: null
   T-38-08:
     title: Connect Claude sentinel through authenticated round dispatch
@@ -2445,6 +2589,7 @@ tickets:
     files: ['.planning/STATE.md', '.planning/REQUIREMENTS.md', '.planning/ROADMAP.md', '.planning/graph/tickets.json', '.planning/graph/tickets.yaml', '.planning/phases/**', plugins/delivery-pipeline/scripts/claude-role-host.cjs, plugins/delivery-pipeline/scripts/dispatch-boundary.cjs, plugins/delivery-pipeline/scripts/dispatch-record.cjs, plugins/delivery-pipeline/scripts/claude-runtime-host.cjs, plugins/delivery-pipeline/scripts/front.cjs, plugins/delivery-pipeline/commands/deliver.md, plugins/delivery-pipeline/references/pr-sentinel.md, docs/dispatch-record.md, tests/unit/dispatch-boundary.test.cjs, tests/unit/claude-role-host.test.cjs, tests/unit/dispatch-record.test.cjs, tests/unit/claude-runtime-host.test.cjs, tests/unit/judgment-artifacts.test.cjs, tests/unit/front.test.cjs, tests/smoke/claude-delivery-roles-smoke.sh]
     risk: high
     human_checkpoint: true
+    checkpoint: merge
     preauthorized: false
     branch: ticket/T-38-08-connect-claude-sentinel-through-authenti
     epic: epic/38-runtime-model-ladder-recovery
@@ -2461,8 +2606,9 @@ tickets:
     files: ['.planning/graph/tickets.json', '.planning/graph/tickets.yaml', plugins/delivery-pipeline/scripts/run-rollout.cjs, plugins/delivery-pipeline/commands/deliver.md, plugins/delivery-pipeline/commands/investigate.md, plugins/delivery-pipeline/commands/decompose.md, docs/gsd_multilevel_delivery_pipeline.md, tests/unit/run-rollout.test.cjs, tests/unit/source-contract.test.cjs, tests/unit/dispatch-record.test.cjs, tests/smoke/runtime-control-plane-smoke.sh]
     risk: high
     human_checkpoint: true
+    checkpoint: merge
     preauthorized: false
-    branch: ticket/T-38-05-route-independent-runtime-rollouts
+    branch: ticket/T-38-05-route-delivery-through-independent-runti
     epic: epic/38-runtime-model-ladder-recovery
     primary_parent: T-38-08
     pr_base: ticket/T-38-08-connect-claude-sentinel-through-authenti
@@ -2477,6 +2623,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/refusal-hints.cjs, plugins/delivery-pipeline/scripts/claude-decompose-host.cjs, plugins/delivery-pipeline/scripts/claude-investigation-host.cjs, plugins/delivery-pipeline/scripts/codex-decompose-host.cjs, plugins/delivery-pipeline/scripts/codex-delivery-host.cjs, tests/unit/refusal-hints.test.cjs, tests/unit/claude-decompose-host.test.cjs, tests/unit/claude-investigation-host.test.cjs, tests/unit/codex-decompose-host.test.cjs, tests/unit/codex-delivery-host.test.cjs]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-39-01-add-shared-refusal-hints-to-claude-and-c
     epic: epic/39-remove-conveyor-session-friction
@@ -2493,6 +2640,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/adr-ingest.cjs, plugins/delivery-pipeline/templates/adr/ADR.md, tests/unit/adr-ingest.test.cjs]
     risk: low
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-39-02-ship-the-adr-template-and-a-no-write-adr
     epic: epic/39-remove-conveyor-session-friction
@@ -2509,6 +2657,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/stop-gate.cjs, plugins/delivery-pipeline/scripts/stop-gate-arm.cjs, plugins/delivery-pipeline/commands/deliver.md, tests/unit/stop-gate.test.cjs, tests/unit/stop-gate-arm.test.cjs, tests/unit/dispatch-record.test.cjs, '.gitignore']
     risk: high
     human_checkpoint: true
+    checkpoint: merge
     preauthorized: true
     branch: ticket/T-39-03-enforce-the-stop-gate-only-in-deliver-ar
     epic: epic/39-remove-conveyor-session-friction
@@ -2525,6 +2674,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/auto-route.cjs, scripts/install-shipyard-claude-hook.sh, scripts/install-shipyard-codex.sh, scripts/shipyard-doctor.cjs, tests/unit/auto-route.test.cjs, tests/smoke/claude-hook-smoke.sh, tests/smoke/codex-shipyard-smoke.sh, README.md]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-39-04-make-the-auto-route-hook-stdin-aware-wit
     epic: epic/39-remove-conveyor-session-friction
@@ -2541,6 +2691,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/jira-export.cjs, tests/unit/jira-export.test.cjs]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-39-05-build-a-deterministic-jira-export-plan-a
     epic: epic/39-remove-conveyor-session-friction
@@ -2557,6 +2708,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/validate-graph.cjs, tests/smoke/graph-validator-smoke.sh, plugins/delivery-pipeline/skills/delivery-rules/SKILL.md, '.shipyard/generated/gsd-delivery-rules/SKILL.md']
     risk: low
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-39-06-warn-on-order-only-same-phase-dependenci
     epic: epic/39-remove-conveyor-session-friction
@@ -2573,6 +2725,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/gsd-tune.cjs, tests/unit/gsd-tune.test.cjs]
     risk: low
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-39-07-name-the-missing-config-and-its-creating
     epic: epic/39-remove-conveyor-session-friction
@@ -2589,6 +2742,7 @@ tickets:
     files: [plugins/delivery-pipeline/workflows/investigation-research.mjs, plugins/delivery-pipeline/scripts/claude-delivery-host.cjs, plugins/delivery-pipeline/references/inv-research.md, tests/unit/planning-artifacts.test.cjs, tests/unit/investigation-research.test.cjs]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-39-08-state-and-enforce-the-research-handback
     epic: epic/39-remove-conveyor-session-friction
@@ -2605,6 +2759,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/adr-bootstrap.cjs, tests/unit/adr-bootstrap.test.cjs]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-39-09-bootstrap-a-minimal-gsd-project-from-an
     epic: epic/39-remove-conveyor-session-friction
@@ -2621,6 +2776,7 @@ tickets:
     files: [plugins/delivery-pipeline/commands/decompose.md, tests/unit/decompose-friction-contract.test.cjs]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-39-10-update-decompose-prose-for-bootstrap-hin
     epic: epic/39-remove-conveyor-session-friction
@@ -2637,6 +2793,7 @@ tickets:
     files: [plugins/delivery-pipeline/commands/investigate.md, docs/gsd_multilevel_delivery_pipeline.md, tests/unit/investigate-friction-contract.test.cjs]
     risk: low
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-39-11-update-investigate-prose-for-gate-1-adr
     epic: epic/39-remove-conveyor-session-friction
@@ -2653,6 +2810,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/claude-runtime-host.cjs, tests/unit/claude-runtime-host.test.cjs, plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs, tests/unit/claude-workflow-host.test.cjs, tests/unit/source-contract.test.cjs, plugins/delivery-pipeline/scripts/claude-role-host.cjs, tests/unit/claude-role-host.test.cjs]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-39-12-forward-the-declared-output-schema-to-ev
     epic: epic/39-remove-conveyor-session-friction
@@ -2669,6 +2827,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/jira-export.cjs, tests/unit/jira-export.test.cjs, plugins/delivery-pipeline/commands/decompose.md, tests/unit/decompose-friction-contract.test.cjs]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-39-13-carry-the-adr-004-d8-legacy-lookup-and-f
     epic: epic/39-remove-conveyor-session-friction
@@ -2685,6 +2844,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/claude-role-host.cjs, tests/unit/claude-role-host.test.cjs, plugins/delivery-pipeline/references/integrator.md]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-39-14-make-the-integrator-and-sentinel-result
     epic: epic/39-remove-conveyor-session-friction
@@ -2701,6 +2861,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/adr-bootstrap.cjs, tests/unit/adr-bootstrap.test.cjs, plugins/delivery-pipeline/scripts/gsd-sync.cjs]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-39-15-make-the-adr-bootstrap-produce-a-project
     epic: epic/39-remove-conveyor-session-friction
@@ -2717,6 +2878,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/role-artifact.cjs, tests/unit/judgment-artifacts.test.cjs, plugins/delivery-pipeline/scripts/claude-role-host.cjs, tests/unit/claude-role-host.test.cjs, plugins/delivery-pipeline/references/integrator.md]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-39-16-make-the-role-result-finding-contract-un
     epic: epic/39-remove-conveyor-session-friction
@@ -2733,6 +2895,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/claude-role-host.cjs, tests/unit/claude-role-host.test.cjs, plugins/delivery-pipeline/scripts/context-packet.cjs, tests/unit/context-packet.test.cjs]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-39-17-bound-role-packets-to-the-adrs-and-backl
     epic: epic/39-remove-conveyor-session-friction
@@ -2749,6 +2912,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/gsd-tune.cjs, tests/unit/gsd-tune.test.cjs, scripts/shipyard-doctor.cjs, tests/smoke/claude-hook-smoke.sh]
     risk: low
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-40-05-codex-tuning-writes-no-claude-only-keys
     epic: epic/40-build-delivery-seams-and-clean-target-project-prs
@@ -2765,6 +2929,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/codex-agent.cjs, plugins/delivery-pipeline/scripts/codex-model-remap.cjs, plugins/delivery-pipeline/scripts/codex-dispatch-adapter.cjs, plugins/delivery-pipeline/scripts/refusal-hints.cjs, tests/unit/codex-agent.test.cjs, tests/unit/refusal-hints.test.cjs, tests/unit/codex-dispatch-adapter.test.cjs]
     risk: low
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-40-04-name-the-config-fix-not-a-reinstall-when
     epic: epic/40-build-delivery-seams-and-clean-target-project-prs
@@ -2781,6 +2946,7 @@ tickets:
     files: [scripts/capture-boundary-fixtures.cjs, tests/fixtures/captured/boundaries/codex-agent-stream.json, tests/unit/boundary-fixtures.test.cjs]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-40-07-add-the-scrubbed-boundary-fixture-captur
     epic: epic/40-build-delivery-seams-and-clean-target-project-prs
@@ -2797,6 +2963,7 @@ tickets:
     files: [scripts/capture-boundary-fixtures.cjs, tests/fixtures/captured/boundaries/claude-stream.json, tests/fixtures/captured/claude-stream-executor.jsonl, tests/fixtures/captured/claude-stream-research.jsonl, tests/fixtures/claude-assistant-session.jsonl, tests/unit/claude-runtime-host.test.cjs, tests/unit/claude-workflow-host.test.cjs]
     risk: high
     human_checkpoint: true
+    checkpoint: merge
     preauthorized: true
     branch: ticket/T-40-08-capture-the-real-claude-stream-and-make
     epic: epic/40-build-delivery-seams-and-clean-target-project-prs
@@ -2813,6 +2980,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/host-provenance.cjs, tests/unit/host-provenance.test.cjs, scripts/install-shipyard-claude-hook.sh, scripts/install-shipyard-codex.sh, scripts/shipyard-doctor.cjs, tests/smoke/claude-hook-smoke.sh, scripts/install-shipyard-marketplace.cjs, tests/unit/marketplace-installer.test.cjs]
     risk: high
     human_checkpoint: true
+    checkpoint: merge
     preauthorized: true
     branch: ticket/T-40-21-support-a-dogfood-install-root-with-reco
     epic: epic/40-build-delivery-seams-and-clean-target-project-prs
@@ -2829,6 +2997,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/claude-role-host.cjs, tests/unit/claude-role-host.test.cjs]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-41-01-measure-bounded-judgment-launches-and-pr
     epic: epic/41-reduce-pipeline-subscription-overhead
@@ -2845,6 +3014,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/session-handoff.cjs, tests/unit/session-handoff.test.cjs, tests/unit/rotation-recommendation.test.cjs]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-41-02-carry-bounded-durable-handoff-evidence-a
     epic: epic/41-reduce-pipeline-subscription-overhead
@@ -2861,6 +3031,7 @@ tickets:
     files: [tests/unit/phase41-stop-wake.test.cjs]
     risk: low
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-41-03-prove-installed-owner-scoped-stop-and-wa
     epic: epic/41-reduce-pipeline-subscription-overhead
@@ -2877,8 +3048,9 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/codex-runtime-host.cjs, tests/unit/codex-runtime-host.test.cjs]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
-    branch: ticket/T-41-04-resume-authenticated-completed-execution
+    branch: ticket/T-41-04-accept-asynchronous-native-child-complet
     epic: epic/41-reduce-pipeline-subscription-overhead
     primary_parent: null
     pr_base: epic/41-reduce-pipeline-subscription-overhead
@@ -2893,6 +3065,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/gsd-sync.cjs, tests/unit/gsd-sync.test.cjs, tests/unit/gsd-sync-gate.test.cjs, '.planning/STATE.md', '.planning/REQUIREMENTS.md', '.planning/ROADMAP.md', '.planning/phases/']
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-41-05-fingerprint-each-gsd-projection-from-its
     epic: epic/41-reduce-pipeline-subscription-overhead
@@ -2909,6 +3082,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/usage-report.cjs, plugins/delivery-pipeline/scripts/orchestration-overhead.cjs, tests/unit/usage-report.test.cjs, tests/unit/orchestration-overhead.test.cjs]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-41-06-join-deduplicated-usage-and-recovery-cos
     epic: epic/41-reduce-pipeline-subscription-overhead
@@ -2925,6 +3099,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/phase-integrator-preflight.cjs, tests/unit/phase-integrator-preflight.test.cjs, plugins/delivery-pipeline/commands/deliver.md, tests/unit/deliver-phase41-preflight-contract.test.cjs]
     risk: high
     human_checkpoint: true
+    checkpoint: merge
     preauthorized: false
     branch: ticket/T-41-07-gate-phase-integration-on-the-complete-m
     epic: epic/41-reduce-pipeline-subscription-overhead
@@ -2941,6 +3116,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/state-sync.cjs, tests/unit/state-sync-yaml.test.cjs, '.planning/backlog/generated-state-yaml-header-blocks-push-from-the-project.md', scripts/shipyard-pre-push-gate.sh, tests/unit/pre-push-gate.test.cjs]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-41-08-unblock-pushes-header-free-state-yaml-an
     epic: epic/41-reduce-pipeline-subscription-overhead
@@ -2957,6 +3133,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/pr-ledger.cjs, tests/unit/pr-ledger.test.cjs, plugins/delivery-pipeline/scripts/ticket-pr-match.cjs, tests/unit/ticket-pr-match.test.cjs, plugins/delivery-pipeline/scripts/state-sync.cjs, plugins/delivery-pipeline/scripts/pipeline-stats.cjs]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-40-03-match-tickets-to-prs-by-the-pr-number-re
     epic: epic/40-build-delivery-seams-and-clean-target-project-prs
@@ -2973,6 +3150,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/gate-trailer.cjs, tests/unit/trailer.test.cjs, plugins/delivery-pipeline/scripts/state-sync.cjs, plugins/delivery-pipeline/scripts/sentinel.cjs, tests/smoke/sentinel-smoke.sh, tests/unit/files-contract.test.cjs]
     risk: high
     human_checkpoint: true
+    checkpoint: merge
     preauthorized: true
     branch: ticket/T-40-19-record-gate-verdicts-as-a-commit-status
     epic: epic/40-build-delivery-seams-and-clean-target-project-prs
@@ -2989,6 +3167,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/pr-hygiene.cjs, tests/unit/pr-hygiene.test.cjs, plugins/delivery-pipeline/scripts/planning-untrack.cjs, tests/unit/planning-untrack.test.cjs, plugins/delivery-pipeline/scripts/pipeline-config.cjs, tests/unit/pipeline-config.test.cjs]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-40-17-add-the-publish-time-pr-hygiene-gate-and
     epic: epic/40-build-delivery-seams-and-clean-target-project-prs
@@ -3005,6 +3184,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/validate-graph.cjs, tests/smoke/graph-validator-smoke.sh, plugins/delivery-pipeline/skills/delivery-rules/SKILL.md, '.shipyard/generated/gsd-delivery-rules/SKILL.md', plugins/delivery-pipeline/scripts/epic-branch.sh, tests/smoke/worktree-smoke.sh]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-40-20-generate-neutral-ticket-and-epic-branch
     epic: epic/40-build-delivery-seams-and-clean-target-project-prs
@@ -3021,6 +3201,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/claude-role-host.cjs, tests/unit/claude-role-host.test.cjs]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-41-09-align-first-response-usage-with-the-usag
     epic: epic/41-reduce-pipeline-subscription-overhead
@@ -3037,6 +3218,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/codex-delivery-host.cjs, plugins/delivery-pipeline/scripts/delivery-commit-finalizer.cjs, plugins/delivery-pipeline/scripts/command-runner.cjs, tests/unit/codex-delivery-host.test.cjs, tests/unit/delivery-commit-finalizer.test.cjs, tests/unit/command-runner.test.cjs, '.github/workflows/test.yml', plugins/shipyard/]
     risk: high
     human_checkpoint: true
+    checkpoint: merge
     preauthorized: false
     branch: ticket/T-42-01-resume-authenticated-completed-execution
     epic: epic/42-resume-trusted-finalization-without-executor-replay
@@ -3053,6 +3235,7 @@ tickets:
     files: [tests/unit/source-contract.test.cjs, tests/unit/runtime-file-digests.json, scripts/refresh-runtime-digests.cjs, scripts/check-runtime-digest-trailer.cjs, tests/unit/runtime-digests.test.cjs, '.github/workflows/test.yml']
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-40-06-refresh-the-runtime-file-digest-pin-only
     epic: epic/40-build-delivery-seams-and-clean-target-project-prs
@@ -3069,6 +3252,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/codex-runtime-host.cjs, plugins/delivery-pipeline/scripts/codex-delivery-host.cjs, tests/unit/codex-runtime-host.test.cjs, tests/unit/codex-delivery-host.test.cjs, plugins/shipyard/]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-42-02-deny-the-host-state-root-and-finalizatio
     epic: epic/42-resume-trusted-finalization-without-executor-replay
@@ -3085,6 +3269,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/codex-delivery-host.cjs, tests/unit/codex-delivery-host.test.cjs, plugins/shipyard/]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-42-03-accept-bash-and-make-in-plan-pinned-veri
     epic: epic/42-resume-trusted-finalization-without-executor-replay
@@ -3101,6 +3286,7 @@ tickets:
     files: [tests/unit/run.sh, tests/unit/assert-harness.cjs, tests/unit/claude-delivery-host.test.cjs, tests/unit/codex-delivery-host.test.cjs, tests/unit/test-hermeticity.test.cjs]
     risk: low
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-40-01-make-git-creating-unit-fixtures-hermetic
     epic: epic/40-build-delivery-seams-and-clean-target-project-prs
@@ -3117,6 +3303,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/planning-result-sealer.cjs, tests/unit/planning-result-sealer.test.cjs, plugins/delivery-pipeline/scripts/claude-delivery-host.cjs, plugins/delivery-pipeline/scripts/claude-decompose-host.cjs, tests/unit/claude-decompose-host.test.cjs, tests/unit/planning-artifacts.test.cjs, '.planning/backlog/decompose-host-returns-no-artifact-index.md']
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-40-10-extract-one-shared-sealer-for-research-r
     epic: epic/40-build-delivery-seams-and-clean-target-project-prs
@@ -3133,6 +3320,7 @@ tickets:
     files: [plugins/delivery-pipeline/workflows/investigation-research.mjs, plugins/delivery-pipeline/scripts/claude-delivery-host.cjs, plugins/delivery-pipeline/scripts/planning-result-sealer.cjs, tests/unit/investigation-research.test.cjs, tests/unit/claude-delivery-host.test.cjs, tests/unit/planning-result-sealer.test.cjs]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-40-13-keep-sealed-research-lines-name-the-fail
     epic: epic/40-build-delivery-seams-and-clean-target-project-prs
@@ -3149,6 +3337,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/codex-delivery-host.cjs, tests/unit/codex-delivery-host.test.cjs]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-40-12-add-the-codex-research-consumer-that-sea
     epic: epic/40-build-delivery-seams-and-clean-target-project-prs
@@ -3165,6 +3354,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/dispatch-record.cjs, tests/unit/dispatch-record.test.cjs, tests/unit/stop-gate.test.cjs, plugins/delivery-pipeline/scripts/claude-delivery-host.cjs, plugins/delivery-pipeline/scripts/codex-delivery-host.cjs, tests/unit/claude-delivery-host.test.cjs, tests/unit/codex-delivery-host.test.cjs]
     risk: high
     human_checkpoint: true
+    checkpoint: merge
     preauthorized: true
     branch: ticket/T-40-14-hosts-write-a-pid-ttl-in-flight-record-a
     epic: epic/40-build-delivery-seams-and-clean-target-project-prs
@@ -3181,6 +3371,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/codex-decompose-host.cjs, plugins/delivery-pipeline/scripts/codex-dispatch-adapter.cjs, plugins/delivery-pipeline/scripts/gsd-tune.cjs, tests/unit/codex-decompose-host.test.cjs, tests/unit/codex-dispatch-adapter.test.cjs, tests/unit/gsd-tune.test.cjs, tests/unit/gen-codex-shipyard.test.cjs]
     risk: high
     human_checkpoint: true
+    checkpoint: merge
     preauthorized: true
     branch: ticket/T-40-11-let-the-codex-gsd-researcher-write-only
     epic: epic/40-build-delivery-seams-and-clean-target-project-prs
@@ -3197,6 +3388,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/sentinel-preflight.cjs, tests/unit/sentinel-preflight.test.cjs, plugins/delivery-pipeline/scripts/claude-role-host.cjs, tests/unit/claude-role-host.test.cjs]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-40-16-add-the-sentinel-preflight-that-establis
     epic: epic/40-build-delivery-seams-and-clean-target-project-prs
@@ -3213,6 +3405,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/role-artifact.cjs, tests/unit/role-artifact.test.cjs, plugins/delivery-pipeline/scripts/delivery-commit-finalizer.cjs, tests/unit/delivery-commit-finalizer.test.cjs, tests/unit/claude-delivery-host.test.cjs, tests/unit/codex-delivery-host.test.cjs, tests/unit/orchestration-overhead.test.cjs]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-40-18-produce-clean-executor-pr-bodies-and-con
     epic: epic/40-build-delivery-seams-and-clean-target-project-prs
@@ -3229,6 +3422,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/dispatch-record.cjs, tests/unit/dispatch-record.test.cjs, plugins/delivery-pipeline/scripts/claude-role-host.cjs, tests/unit/claude-role-host.test.cjs, tests/unit/sentinel.test.cjs]
     risk: high
     human_checkpoint: true
+    checkpoint: merge
     preauthorized: true
     branch: ticket/T-40-22-stamp-every-dispatch-with-a-provenance-s
     epic: epic/40-build-delivery-seams-and-clean-target-project-prs
@@ -3245,6 +3439,7 @@ tickets:
     files: [plugins/delivery-pipeline/commands/investigate.md, plugins/delivery-pipeline/commands/decompose.md, tests/unit/host-state-prose-contract.test.cjs]
     risk: low
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-40-25-update-investigate-and-decompose-prose-f
     epic: epic/40-build-delivery-seams-and-clean-target-project-prs
@@ -3261,6 +3456,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/diamond-parents.cjs, plugins/delivery-pipeline/scripts/state-sync.cjs, plugins/delivery-pipeline/scripts/ticket-worktree.sh, plugins/delivery-pipeline/scripts/scope-gate.cjs, plugins/delivery-pipeline/scripts/delivery-commit-finalizer.cjs, tests/unit/diamond-readiness.test.cjs, tests/unit/diamond-worktree.test.cjs, '.planning/backlog/diamond-child-base-is-materially-incomplete.md']
     risk: high
     human_checkpoint: true
+    checkpoint: merge
     preauthorized: true
     branch: ticket/T-40-27-a-diamond-child-is-ready-only-when-its-n
     epic: epic/40-build-delivery-seams-and-clean-target-project-prs
@@ -3277,6 +3473,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/plan-delivery.cjs, tests/unit/plan-delivery.test.cjs, plugins/delivery-pipeline/scripts/claude-delivery-host.cjs, tests/unit/claude-delivery-host.test.cjs, plugins/delivery-pipeline/scripts/codex-delivery-host.cjs, tests/unit/codex-delivery-host.test.cjs, plugins/delivery-pipeline/workflows/executors.mjs, plugins/delivery-pipeline/workflows/drift-gate.mjs, plugins/delivery-pipeline/workflows/fix-round.mjs, tests/unit/workflows-args.test.cjs]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-40-28-deliver-the-canonical-plan-to-sandboxed
     epic: epic/40-build-delivery-seams-and-clean-target-project-prs
@@ -3293,6 +3490,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/codex-runtime-host.cjs, tests/unit/codex-runtime-host.test.cjs, tests/fixtures/captured/codex-agent-stream-parent.jsonl, tests/fixtures/captured/codex-agent-stream-child.jsonl, tests/fixtures/captured/boundaries/codex-agent-stream.json, tests/fixtures/captured/codex-agent-stream-exec.jsonl, tests/unit/codex-decompose-host.test.cjs, tests/unit/codex-delivery-host.test.cjs, '.planning/backlog/codex-usage-tests-write-session-meta-inline.md']
     risk: high
     human_checkpoint: true
+    checkpoint: merge
     preauthorized: true
     branch: ticket/T-40-09-pass-codex-child-tasks-by-host-owned-fil
     epic: epic/40-build-delivery-seams-and-clean-target-project-prs
@@ -3309,6 +3507,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/deliver-dispatch.cjs, tests/unit/deliver-dispatch.test.cjs, plugins/delivery-pipeline/scripts/run-waker.cjs, tests/unit/run-waker.test.cjs]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-40-15-add-deliver-dispatch-build-host-requests
     epic: epic/40-build-delivery-seams-and-clean-target-project-prs
@@ -3325,6 +3524,7 @@ tickets:
     files: [tests/fixtures/live-project/README.md, tests/fixtures/live-project/Makefile, tests/fixtures/live-project/src/greeting.cjs, tests/fixtures/live-project/tests/greeting.test.cjs, tests/fixtures/live-project/planning/architecture/ADR-001-greeting-formats.md, tests/live/live-round.sh, plugins/delivery-pipeline/scripts/live-receipt.cjs, tests/unit/release-gate.test.cjs, scripts/release.sh]
     risk: high
     human_checkpoint: true
+    checkpoint: merge
     preauthorized: true
     branch: ticket/T-40-23-run-one-live-round-per-runtime-on-an-in
     epic: epic/40-build-delivery-seams-and-clean-target-project-prs
@@ -3341,6 +3541,7 @@ tickets:
     files: [plugins/delivery-pipeline/commands/deliver.md, tests/unit/deliver-seams-contract.test.cjs]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-40-24-rewrite-deliver-md-around-the-dispatch-e
     epic: epic/40-build-delivery-seams-and-clean-target-project-prs
@@ -3357,6 +3558,7 @@ tickets:
     files: [Makefile, README.md, CLAUDE.md]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-40-26-expose-capture-live-release-digest-refre
     epic: epic/40-build-delivery-seams-and-clean-target-project-prs
@@ -3373,6 +3575,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/pipeline-config.cjs, tests/unit/pipeline-config.test.cjs]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-43-01-register-per-repository-config-keys-for
     epic: epic/43-target-project-delivery-at-scale
@@ -3389,6 +3592,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/publish-gate.cjs, scripts/shipyard-pre-push-gate.sh, tests/unit/publish-gate.test.cjs, tests/unit/pre-push-gate.test.cjs]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-43-02-resolve-the-publish-gate-base-from-the-r
     epic: epic/43-target-project-delivery-at-scale
@@ -3405,6 +3609,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/comment-policy.cjs, tests/unit/comment-policy.test.cjs, plugins/delivery-pipeline/scripts/publish-gate.cjs, tests/unit/publish-gate.test.cjs]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-43-03-allow-configured-per-repository-comment
     epic: epic/43-target-project-delivery-at-scale
@@ -3421,6 +3626,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/role-artifact.cjs, tests/unit/role-artifact.test.cjs, tests/unit/judgment-artifacts.test.cjs]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-43-05-keep-an-arch-review-finding-of-unknown-t
     epic: epic/43-target-project-delivery-at-scale
@@ -3437,6 +3643,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/conveyor-scratch.cjs, tests/unit/conveyor-scratch.test.cjs, plugins/delivery-pipeline/scripts/claude-role-host.cjs, tests/unit/claude-role-host.test.cjs, plugins/delivery-pipeline/scripts/delivery-commit-finalizer.cjs, tests/unit/delivery-commit-finalizer.test.cjs, plugins/delivery-pipeline/scripts/codex-delivery-host.cjs, tests/unit/codex-delivery-host.test.cjs, plugins/delivery-pipeline/scripts/base-merge.cjs, plugins/delivery-pipeline/scripts/ticket-worktree.sh, plugins/delivery-pipeline/scripts/role-artifact.cjs]
     risk: high
     human_checkpoint: true
+    checkpoint: merge
     preauthorized: true
     branch: ticket/T-43-06-one-exported-conveyor-scratch-set-for-th
     epic: epic/43-target-project-delivery-at-scale
@@ -3453,8 +3660,26 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/check-state.cjs, tests/unit/check-state.test.cjs, plugins/delivery-pipeline/scripts/ci-wait.cjs, tests/unit/ci-wait.test.cjs, plugins/delivery-pipeline/scripts/log-event.cjs, tests/unit/log-event.test.cjs, tests/unit/sentinel.test.cjs]
     risk: high
     human_checkpoint: true
+    checkpoint: merge
     preauthorized: true
     branch: ticket/T-43-07-cancelled-checks-ignore-superseded-runs
+    epic: epic/43-target-project-delivery-at-scale
+    primary_parent: null
+    pr_base: epic/43-target-project-delivery-at-scale
+    jira: null
+  T-43-09:
+    title: 'state-sync lists PRs by ticket head and open state and skips tickets whose merge into a landed epic is recorded; --full re-derives'
+    plan: '.planning/phases/43-target-project-delivery-at-scale/43-09-PLAN.md'
+    phase: '43'
+    repo: null
+    wave: 11
+    depends_on: [T-40-03, T-40-19, T-40-27]
+    files: [plugins/delivery-pipeline/scripts/state-sync.cjs, tests/unit/state-sync-listing.test.cjs, tests/smoke/sentinel-smoke.sh]
+    risk: medium
+    human_checkpoint: false
+    checkpoint: null
+    preauthorized: false
+    branch: ticket/T-43-09-state-sync-lists-prs-by-ticket-head-and
     epic: epic/43-target-project-delivery-at-scale
     primary_parent: null
     pr_base: epic/43-target-project-delivery-at-scale
@@ -3464,48 +3689,34 @@ tickets:
     plan: '.planning/phases/43-target-project-delivery-at-scale/43-04-PLAN.md'
     phase: '43'
     repo: null
-    wave: 11
-    depends_on: [T-43-07, T-40-19, T-40-22]
-    files: [plugins/delivery-pipeline/scripts/run-reachability.cjs, tests/unit/run-reachability.test.cjs, plugins/delivery-pipeline/scripts/sentinel.cjs, tests/unit/sentinel.test.cjs]
+    wave: 12
+    depends_on: [T-43-07, T-43-09, T-40-19, T-40-22]
+    files: [plugins/delivery-pipeline/scripts/run-reachability.cjs, tests/unit/run-reachability.test.cjs, plugins/delivery-pipeline/scripts/sentinel.cjs, tests/unit/sentinel.test.cjs, tests/smoke/sentinel-smoke.sh]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-43-04-bounded-reachability-o-1-git-forms-a-lar
     epic: epic/43-target-project-delivery-at-scale
-    primary_parent: T-43-07
-    pr_base: ticket/T-43-07-cancelled-checks-ignore-superseded-runs
+    primary_parent: T-43-09
+    pr_base: ticket/T-43-09-state-sync-lists-prs-by-ticket-head-and
     jira: null
   T-43-08:
     title: 'A stale approval from a declared bot does not block the merge; re-request once, then escalate with the command'
     plan: '.planning/phases/43-target-project-delivery-at-scale/43-08-PLAN.md'
     phase: '43'
     repo: null
-    wave: 12
+    wave: 13
     depends_on: [T-43-04, T-43-01, T-43-07, T-40-19, T-40-22]
     files: [plugins/delivery-pipeline/scripts/reviewers.cjs, tests/unit/reviewers.test.cjs, plugins/delivery-pipeline/scripts/sentinel.cjs, tests/unit/sentinel.test.cjs, plugins/delivery-pipeline/scripts/log-event.cjs, tests/unit/log-event.test.cjs]
     risk: high
     human_checkpoint: true
+    checkpoint: merge
     preauthorized: true
     branch: ticket/T-43-08-a-stale-approval-from-a-declared-bot-doe
     epic: epic/43-target-project-delivery-at-scale
     primary_parent: T-43-04
     pr_base: ticket/T-43-04-bounded-reachability-o-1-git-forms-a-lar
-    jira: null
-  T-43-09:
-    title: 'state-sync lists PRs by ticket head and open state and skips tickets whose merge into a landed epic is recorded; --full re-derives'
-    plan: '.planning/phases/43-target-project-delivery-at-scale/43-09-PLAN.md'
-    phase: '43'
-    repo: null
-    wave: 11
-    depends_on: [T-40-03, T-40-19, T-40-27]
-    files: [plugins/delivery-pipeline/scripts/state-sync.cjs, tests/unit/state-sync-listing.test.cjs]
-    risk: medium
-    human_checkpoint: false
-    preauthorized: false
-    branch: ticket/T-43-09-state-sync-lists-prs-by-ticket-head-and
-    epic: epic/43-target-project-delivery-at-scale
-    primary_parent: null
-    pr_base: epic/43-target-project-delivery-at-scale
     jira: null
   T-43-10:
     title: 'Honour pipeline.gsd_sync as a deprecated alias on the summary line; decompose phases reach ROADMAP; one summarised warning'
@@ -3517,6 +3728,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/pipeline-config.cjs, tests/unit/pipeline-config.test.cjs, capabilities/delivery-pipeline/checks/gsd-sync-gate.cjs, tests/unit/gsd-sync-gate.test.cjs, plugins/delivery-pipeline/scripts/gsd-sync.cjs, tests/unit/gsd-sync.test.cjs, plugins/delivery-pipeline/scripts/state-sync.cjs, plugins/delivery-pipeline/scripts/adr-bootstrap.cjs, tests/unit/adr-bootstrap.test.cjs]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-43-10-honour-pipeline-gsd-sync-as-a-deprecated
     epic: epic/43-target-project-delivery-at-scale
@@ -3530,9 +3742,10 @@ tickets:
     repo: null
     wave: 9
     depends_on: [T-40-25]
-    files: [plugins/delivery-pipeline/scripts/jira-export.cjs, tests/unit/jira-export.test.cjs, plugins/delivery-pipeline/commands/decompose.md, tests/unit/jira-binding-contract.test.cjs]
+    files: [plugins/delivery-pipeline/scripts/jira-export.cjs, tests/unit/jira-export.test.cjs, plugins/delivery-pipeline/commands/decompose.md, tests/unit/jira-binding-contract.test.cjs, tests/smoke/docs-smoke.sh]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-43-11-bind-pre-existing-jira-issues-by-recorde
     epic: epic/43-target-project-delivery-at-scale
@@ -3544,11 +3757,12 @@ tickets:
     plan: '.planning/phases/43-target-project-delivery-at-scale/43-12-PLAN.md'
     phase: '43'
     repo: null
-    wave: 13
+    wave: 14
     depends_on: [T-43-08, T-43-11, T-40-19, T-40-22, T-40-20, T-40-03, T-40-25]
-    files: [plugins/delivery-pipeline/scripts/validate-graph.cjs, tests/smoke/graph-validator-smoke.sh, plugins/delivery-pipeline/scripts/front.cjs, tests/unit/front.test.cjs, plugins/delivery-pipeline/scripts/sentinel.cjs, tests/unit/sentinel.test.cjs, plugins/delivery-pipeline/scripts/pipeline-stats.cjs, tests/unit/pipeline-stats.test.cjs, plugins/delivery-pipeline/commands/decompose.md, plugins/delivery-pipeline/skills/delivery-rules/SKILL.md, '.shipyard/generated/gsd-delivery-rules/SKILL.md']
+    files: [plugins/delivery-pipeline/scripts/validate-graph.cjs, tests/smoke/graph-validator-smoke.sh, plugins/delivery-pipeline/scripts/front.cjs, tests/unit/front.test.cjs, plugins/delivery-pipeline/scripts/sentinel.cjs, tests/unit/sentinel.test.cjs, plugins/delivery-pipeline/scripts/state-sync.cjs, tests/unit/state-sync-listing.test.cjs, plugins/delivery-pipeline/scripts/reviewers.cjs, tests/unit/reviewers.test.cjs, plugins/delivery-pipeline/scripts/pipeline-stats.cjs, tests/unit/pipeline-stats.test.cjs, plugins/delivery-pipeline/commands/decompose.md, plugins/delivery-pipeline/commands/deliver.md, plugins/delivery-pipeline/references/pr-sentinel.md, plugins/delivery-pipeline/skills/delivery-rules/SKILL.md, '.shipyard/generated/gsd-delivery-rules/SKILL.md']
     risk: high
     human_checkpoint: true
+    checkpoint: merge
     preauthorized: false
     branch: ticket/T-43-12-human-checkpoint-takes-review-or-merge-t
     epic: epic/43-target-project-delivery-at-scale
@@ -3565,6 +3779,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/gate-trailer.cjs, tests/unit/trailer.test.cjs, plugins/delivery-pipeline/scripts/base-merge.cjs, tests/unit/verdict-carry.test.cjs]
     risk: high
     human_checkpoint: true
+    checkpoint: merge
     preauthorized: true
     branch: ticket/T-43-13-carry-a-conform-verdict-across-a-base-me
     epic: epic/43-target-project-delivery-at-scale
@@ -3581,6 +3796,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/deliver-dispatch.cjs, tests/unit/deliver-dispatch.test.cjs, plugins/delivery-pipeline/commands/deliver.md, tests/unit/deliver-builders-contract.test.cjs]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-43-14-deliver-dispatch-builds-arch-review-ci-f
     epic: epic/43-target-project-delivery-at-scale
@@ -3592,11 +3808,12 @@ tickets:
     plan: '.planning/phases/43-target-project-delivery-at-scale/43-15-PLAN.md'
     phase: '43'
     repo: null
-    wave: 14
+    wave: 15
     depends_on: [T-43-12, T-43-14, T-40-15, T-40-25]
-    files: [plugins/delivery-pipeline/scripts/deliver-dispatch.cjs, tests/unit/deliver-dispatch.test.cjs, plugins/delivery-pipeline/commands/investigate.md, plugins/delivery-pipeline/commands/decompose.md, tests/unit/planning-builders-contract.test.cjs]
+    files: [plugins/delivery-pipeline/scripts/deliver-dispatch.cjs, plugins/delivery-pipeline/scripts/claude-investigation-host.cjs, plugins/delivery-pipeline/scripts/codex-planning-context-host.cjs, plugins/delivery-pipeline/scripts/context-packet.cjs, plugins/delivery-pipeline/scripts/state-sync.cjs, tests/unit/deliver-dispatch.test.cjs, tests/unit/claude-investigation-host.test.cjs, tests/unit/codex-planning-context-host.test.cjs, tests/unit/context-packet.test.cjs, tests/unit/state-sync-listing.test.cjs, plugins/delivery-pipeline/commands/investigate.md, plugins/delivery-pipeline/commands/decompose.md, tests/unit/planning-builders-contract.test.cjs, '.planning/phases/43-target-project-delivery-at-scale/43-18-PLAN.md']
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-43-15-deliver-dispatch-builds-research-and-dec
     epic: epic/43-target-project-delivery-at-scale
@@ -3610,9 +3827,10 @@ tickets:
     repo: null
     wave: 13
     depends_on: [T-43-06, T-43-01, T-42-01, T-40-10, T-40-13, T-40-14, T-40-28, T-40-12, T-40-01, T-40-09, T-42-03]
-    files: [plugins/delivery-pipeline/scripts/host-verification.cjs, tests/unit/host-verification.test.cjs, plugins/delivery-pipeline/scripts/claude-delivery-host.cjs, tests/unit/claude-delivery-host.test.cjs, plugins/delivery-pipeline/scripts/codex-delivery-host.cjs, tests/unit/codex-delivery-host.test.cjs, plugins/delivery-pipeline/scripts/command-runner.cjs, tests/unit/command-runner.test.cjs]
+    files: [plugins/delivery-pipeline/scripts/host-verification.cjs, tests/unit/host-verification.test.cjs, plugins/delivery-pipeline/scripts/delivery-commit-finalizer.cjs, tests/unit/delivery-commit-finalizer.test.cjs, plugins/delivery-pipeline/scripts/claude-delivery-host.cjs, tests/unit/claude-delivery-host.test.cjs, plugins/delivery-pipeline/scripts/codex-delivery-host.cjs, tests/unit/codex-delivery-host.test.cjs, plugins/delivery-pipeline/scripts/ticket-base.cjs, plugins/delivery-pipeline/scripts/ticket-worktree.sh, tests/unit/ticket-base.test.cjs, tests/smoke/worktree-gates-smoke.sh, plugins/delivery-pipeline/scripts/command-runner.cjs, tests/unit/command-runner.test.cjs, plugins/delivery-pipeline/workflows/executors.mjs]
     risk: high
     human_checkpoint: true
+    checkpoint: merge
     preauthorized: true
     branch: ticket/T-43-16-host-side-verification-of-plan-declared
     epic: epic/43-target-project-delivery-at-scale
@@ -3629,6 +3847,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/conveyor-coverage.cjs, tests/unit/conveyor-coverage.test.cjs, plugins/delivery-pipeline/scripts/delivery-commit-finalizer.cjs, tests/unit/delivery-commit-finalizer.test.cjs, plugins/delivery-pipeline/scripts/base-merge.cjs, plugins/delivery-pipeline/scripts/claude-delivery-host.cjs, tests/unit/claude-delivery-host.test.cjs, plugins/delivery-pipeline/scripts/codex-delivery-host.cjs, tests/unit/codex-delivery-host.test.cjs]
     risk: high
     human_checkpoint: true
+    checkpoint: merge
     preauthorized: true
     branch: ticket/T-43-17-record-a-sealed-coverage-entry-for-every
     epic: epic/43-target-project-delivery-at-scale
@@ -3641,15 +3860,16 @@ tickets:
     phase: '43'
     repo: null
     wave: 15
-    depends_on: [T-43-17, T-43-08]
-    files: [plugins/delivery-pipeline/scripts/repo-remedy.cjs, tests/unit/repo-remedy.test.cjs, plugins/delivery-pipeline/scripts/escalation-record.cjs, tests/unit/escalation-record.test.cjs, plugins/delivery-pipeline/scripts/log-event.cjs, tests/unit/log-event.test.cjs, plugins/delivery-pipeline/scripts/conveyor-coverage.cjs, tests/unit/conveyor-coverage.test.cjs, plugins/delivery-pipeline/references/ci-fix.md, plugins/delivery-pipeline/references/pr-sentinel.md]
+    depends_on: [T-43-17, T-43-08, T-43-12]
+    files: [plugins/delivery-pipeline/scripts/repo-remedy.cjs, tests/unit/repo-remedy.test.cjs, plugins/delivery-pipeline/scripts/escalation-record.cjs, tests/unit/escalation-record.test.cjs, plugins/delivery-pipeline/scripts/log-event.cjs, tests/unit/log-event.test.cjs, plugins/delivery-pipeline/scripts/conveyor-coverage.cjs, tests/unit/conveyor-coverage.test.cjs, plugins/delivery-pipeline/scripts/attempt-history.cjs, tests/unit/attempt-history.test.cjs, plugins/delivery-pipeline/scripts/pipeline-config.cjs, tests/unit/pipeline-config.test.cjs, plugins/delivery-pipeline/references/ci-fix.md, plugins/delivery-pipeline/references/pr-sentinel.md]
     risk: high
     human_checkpoint: true
+    checkpoint: merge
     preauthorized: true
     branch: ticket/T-43-18-run-only-declared-repository-remedy-work
     epic: epic/43-target-project-delivery-at-scale
-    primary_parent: T-43-17
-    pr_base: ticket/T-43-17-record-a-sealed-coverage-entry-for-every
+    primary_parent: T-43-12
+    pr_base: ticket/T-43-12-human-checkpoint-takes-review-or-merge-t
     jira: null
   T-43-19:
     title: 'The merge gate refuses heads the conveyor does not cover; PRs opened before release are journalled as legacy'
@@ -3661,6 +3881,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/sentinel.cjs, tests/unit/sentinel.test.cjs, plugins/delivery-pipeline/scripts/conveyor-coverage.cjs, tests/unit/conveyor-coverage.test.cjs, plugins/delivery-pipeline/scripts/log-event.cjs, tests/unit/log-event.test.cjs, plugins/delivery-pipeline/references/pr-sentinel.md]
     risk: high
     human_checkpoint: true
+    checkpoint: merge
     preauthorized: true
     branch: ticket/T-43-19-the-merge-gate-refuses-heads-the-conveyo
     epic: epic/43-target-project-delivery-at-scale
@@ -3677,6 +3898,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/subscription-observation.cjs, tests/unit/subscription-observation.test.cjs, tests/fixtures/captured/boundaries/claude-stream.json, tests/fixtures/captured/boundaries/codex-agent-stream.json]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-44-01-parse-saved-claude-and-codex-quota-recor
     epic: epic/44-optimize-subscription-efficiency-per-runtime
@@ -3693,6 +3915,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/usage-report.cjs, tests/unit/usage-report.test.cjs, docs/usage-report.md]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-44-02-usage-report-fills-subscription-usage-fr
     epic: epic/44-optimize-subscription-efficiency-per-runtime
@@ -3709,6 +3932,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/subscription-store.cjs, tests/unit/subscription-store.test.cjs]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-44-03-private-per-account-subscription-sample
     epic: epic/44-optimize-subscription-efficiency-per-runtime
@@ -3725,6 +3949,7 @@ tickets:
     files: [scripts/capture-boundary-fixtures.cjs, tests/fixtures/captured/claude-statusline.jsonl, tests/fixtures/captured/boundaries/claude-statusline.json, plugins/delivery-pipeline/scripts/statusline-collector.cjs, tests/unit/statusline-collector.test.cjs]
     risk: medium
     human_checkpoint: true
+    checkpoint: merge
     preauthorized: true
     branch: ticket/T-44-04-capture-the-claude-statusline-input-and
     epic: epic/44-optimize-subscription-efficiency-per-runtime
@@ -3741,6 +3966,7 @@ tickets:
     files: [scripts/install-shipyard-claude-statusline.sh, tests/smoke/claude-statusline-smoke.sh, Makefile, README.md]
     risk: high
     human_checkpoint: true
+    checkpoint: merge
     preauthorized: true
     branch: ticket/T-44-05-reversible-installer-for-the-claude-stat
     epic: epic/44-optimize-subscription-efficiency-per-runtime
@@ -3757,6 +3983,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/session-handoff.cjs, plugins/delivery-pipeline/scripts/orchestration-overhead.cjs, tests/unit/rotation-recommendation.test.cjs, tests/unit/session-handoff.test.cjs, tests/unit/orchestration-overhead.test.cjs]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-44-06-rotation-advice-compares-model-effort-po
     epic: epic/44-optimize-subscription-efficiency-per-runtime
@@ -3773,6 +4000,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/effort-experiment.cjs, tests/unit/effort-experiment.test.cjs]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-44-07-versioned-effort-experiment-schema-and-r
     epic: epic/44-optimize-subscription-efficiency-per-runtime
@@ -3789,6 +4017,7 @@ tickets:
     files: [README.md]
     risk: low
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-44-08-name-the-test-statusline-make-target-in
     epic: epic/44-optimize-subscription-efficiency-per-runtime
@@ -3805,6 +4034,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/stop-gate.cjs, plugins/delivery-pipeline/scripts/stop-gate-arm.cjs, tests/unit/stop-gate.test.cjs, tests/unit/stop-gate-arm.test.cjs, tests/unit/stop-gate-installed.test.cjs]
     risk: high
     human_checkpoint: true
+    checkpoint: merge
     preauthorized: true
     branch: ticket/T-45-01-armed-stop-gate-binds-the-realpath-of-it
     epic: epic/45-close-residual-pipeline-efficiency-gaps
@@ -3821,6 +4051,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/host-provenance.cjs, tests/unit/host-provenance.test.cjs, scripts/shipyard-doctor.cjs, tests/smoke/claude-hook-smoke.sh]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-45-02-doctor-classifies-another-checkout-s-dog
     epic: epic/45-close-residual-pipeline-efficiency-gaps
@@ -3837,6 +4068,7 @@ tickets:
     files: [scripts/install-shipyard-marketplace.cjs, tests/unit/marketplace-installer.test.cjs, scripts/install-shipyard-codex.sh, Makefile, README.md, CLAUDE.md]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-45-03-dogfood-installs-default-to-a-dedicated
     epic: epic/45-close-residual-pipeline-efficiency-gaps
@@ -3853,6 +4085,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/codex-decompose-host.cjs, tests/unit/codex-decompose-host.test.cjs]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-45-04-codex-decompose-host-run-lease-uses-an-i
     epic: epic/45-close-residual-pipeline-efficiency-gaps
@@ -3869,6 +4102,7 @@ tickets:
     files: [tests/unit/session-handoff.test.cjs, tests/unit/dispatch-boundary.test.cjs, plugins/delivery-pipeline/scripts/session-handoff.cjs, plugins/delivery-pipeline/scripts/dispatch-boundary.cjs]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-45-05-session-handoff-successor-race-and-dispa
     epic: epic/45-close-residual-pipeline-efficiency-gaps
@@ -3885,6 +4119,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/usage-report.cjs, tests/unit/usage-report.test.cjs]
     risk: low
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-45-06-usage-report-counts-codex-host-stream-tu
     epic: epic/45-close-residual-pipeline-efficiency-gaps
@@ -3901,6 +4136,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/planning-writer-lease.cjs, tests/unit/planning-writer-lease.test.cjs]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-45-07-planning-tree-writer-lease-with-owner-ba
     epic: epic/45-close-residual-pipeline-efficiency-gaps
@@ -3917,6 +4153,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/claude-decompose-host.cjs, tests/unit/claude-decompose-host.test.cjs, plugins/delivery-pipeline/scripts/codex-decompose-host.cjs, tests/unit/codex-decompose-host.test.cjs]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-45-08-both-decompose-hosts-hold-the-planning-w
     epic: epic/45-close-residual-pipeline-efficiency-gaps
@@ -3933,6 +4170,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/dispatch-boundary.cjs, tests/unit/dispatch-boundary.test.cjs, plugins/delivery-pipeline/scripts/codex-runtime-host.cjs, plugins/delivery-pipeline/scripts/codex-decompose-host.cjs, tests/unit/codex-decompose-host.test.cjs]
     risk: high
     human_checkpoint: true
+    checkpoint: merge
     preauthorized: true
     branch: ticket/T-45-09-codex-decompose-host-recovers-a-complete
     epic: epic/45-close-residual-pipeline-efficiency-gaps
@@ -3949,6 +4187,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/claude-runtime-host.cjs, plugins/delivery-pipeline/scripts/claude-decompose-host.cjs, tests/unit/claude-decompose-host.test.cjs]
     risk: high
     human_checkpoint: true
+    checkpoint: merge
     preauthorized: true
     branch: ticket/T-45-10-claude-decompose-host-recovers-a-complet
     epic: epic/45-close-residual-pipeline-efficiency-gaps
@@ -3965,6 +4204,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/codex-decompose-host.cjs, tests/unit/codex-decompose-host.test.cjs, plugins/delivery-pipeline/scripts/orchestration-overhead.cjs, tests/unit/orchestration-overhead.test.cjs, tests/unit/decompose-dispatch-wait-contract.test.cjs]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-45-11-codex-decomposition-runs-detached-so-the
     epic: epic/45-close-residual-pipeline-efficiency-gaps
@@ -3981,6 +4221,7 @@ tickets:
     files: [plugins/delivery-pipeline/scripts/capacity-lease.cjs, tests/unit/capacity-lease.test.cjs]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-45-12-advisory-run-phase-aggregate-admission-l
     epic: epic/45-close-residual-pipeline-efficiency-gaps
@@ -3997,6 +4238,7 @@ tickets:
     files: [plugins/delivery-pipeline/workflows/drift-gate.mjs, tests/unit/workflows-args.test.cjs]
     risk: medium
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-45-13-drift-gate-re-asks-a-self-contradictory
     epic: epic/45-close-residual-pipeline-efficiency-gaps
@@ -4013,6 +4255,7 @@ tickets:
     files: [scripts/capture-boundary-fixtures.cjs, tests/unit/boundary-fixtures.test.cjs]
     risk: low
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
     branch: ticket/T-45-14-capture-scrubber-replaces-codex-account
     epic: epic/45-close-residual-pipeline-efficiency-gaps
@@ -4020,17 +4263,18 @@ tickets:
     pr_base: epic/45-close-residual-pipeline-efficiency-gaps
     jira: null
   T-45-15:
-    title: Prepare the 0.69.0 release from the fully merged phase-45 epic
+    title: Prepare the 0.70.0 release from the fully merged phase-45 epic
     plan: '.planning/phases/45-close-residual-pipeline-efficiency-gaps/45-15-PLAN.md'
     phase: '45'
     repo: null
     wave: 5
     depends_on: [T-45-01, T-45-02, T-45-03, T-45-04, T-45-05, T-45-06, T-45-07, T-45-08, T-45-09, T-45-10, T-45-11, T-45-12, T-45-13, T-45-14]
-    files: [plugins/delivery-pipeline/.claude-plugin/plugin.json, capabilities/delivery-pipeline/capability.json, 'plugins/shipyard/**', docs/releases/v0.69.0.md]
+    files: [plugins/delivery-pipeline/.claude-plugin/plugin.json, capabilities/delivery-pipeline/capability.json, 'plugins/shipyard/**', docs/releases/v0.70.0.md]
     risk: low
     human_checkpoint: false
+    checkpoint: null
     preauthorized: false
-    branch: ticket/T-45-15-prepare-the-0-69-0-release-from-the-full
+    branch: ticket/T-45-15-prepare-the-0-70-0-release-from-the-full
     epic: epic/45-close-residual-pipeline-efficiency-gaps
     primary_parent: T-45-10
     pr_base: ticket/T-45-10-claude-decompose-host-recovers-a-complet

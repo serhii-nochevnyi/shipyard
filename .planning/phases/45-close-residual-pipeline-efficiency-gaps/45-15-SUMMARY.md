@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 90930bf4970b989410136a119843c3b2424156ee8aaa87e550c694f4fade1fac
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 1690c27904d70a56038a1fce28267dd8102a004eeb22fb85c0a5d8e17b8108bf
 phase: 45-close-residual-pipeline-efficiency-gaps
 plan: 15
 subsystem: shipyard delivery
@@ -22,10 +22,10 @@ key-decisions:
 duration: 0min
 status: halted
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 90930bf4970b989410136a119843c3b2424156ee8aaa87e550c694f4fade1fac
+shipyard_source_fingerprint: 1690c27904d70a56038a1fce28267dd8102a004eeb22fb85c0a5d8e17b8108bf
 ---
 
-# Phase 45: Prepare the 0.69.0 release from the fully merged phase-45 epic — Delivery Projection
+# Phase 45: Prepare the 0.70.0 release from the fully merged phase-45 epic — Delivery Projection
 
 **Plan delivery is not complete; the projection preserves the current state.**
 

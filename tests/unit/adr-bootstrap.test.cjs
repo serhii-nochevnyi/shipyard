@@ -9,6 +9,7 @@ const { suite, test, done, assert } = require(path.join(__dirname, 'assert-harne
 const SCRIPT = path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'adr-bootstrap.cjs');
 const GSD_TUNE = path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'gsd-tune.cjs');
 const GSD_SYNC = path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'gsd-sync.cjs');
+const gsdSync = require(GSD_SYNC);
 const VALIDATE_GRAPH = path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'validate-graph.cjs');
 
 const FLAT_ADR = `# ADR-900 — bootstrap flat decisions
@@ -170,23 +171,31 @@ test('--phase defaults to 1 and an explicit --phase is honoured', () => {
 
 suite('adr-bootstrap — a partial project');
 
-test('a pre-existing ROADMAP.md stays byte-identical and is reported under skipped_existing', () => {
+test('a pre-existing ROADMAP.md gains one parseable phase while its existing content stays byte-identical', () => {
   const dir = project();
   const adr = writeAdr(dir, 'ADR-900.md', FLAT_ADR);
   fs.mkdirSync(path.join(dir, '.planning'), { recursive: true });
-  const existing = '# A hand-written roadmap\n';
+  const existing = '# A hand-written roadmap\n\nExisting detail remains exactly here.\n';
   fs.writeFileSync(path.join(dir, '.planning', 'ROADMAP.md'), existing);
 
-  const result = run(dir, ['--adr', adr, '--json']);
+  const result = run(dir, ['--adr', adr, '--phase', '2', '--json']);
   assert.strictEqual(result.status, 0, result.stderr);
   const report = JSON.parse(result.stdout);
-  assert.deepStrictEqual(report.skipped_existing, [path.join('.planning', 'ROADMAP.md')]);
+  assert.deepStrictEqual(report.appended, [path.join('.planning', 'ROADMAP.md')]);
   assert.deepStrictEqual([...report.created].sort(), [
     path.join('.planning', 'PROJECT.md'),
     path.join('.planning', 'REQUIREMENTS.md'),
     path.join('.planning', 'config.json'),
   ]);
-  assert.strictEqual(fs.readFileSync(path.join(dir, '.planning', 'ROADMAP.md'), 'utf8'), existing);
+  const roadmapFile = path.join(dir, '.planning', 'ROADMAP.md');
+  const roadmap = fs.readFileSync(roadmapFile, 'utf8');
+  assert.ok(roadmap.startsWith(existing));
+  assert.equal(gsdSync.parseRoadmap(roadmap).phases.filter((phase) => phase.number === 2).length, 1);
+  assert.equal((roadmap.match(/^### Phase 2:/gm) || []).length, 1);
+
+  const repeated = run(dir, ['--adr', adr, '--phase', '2', '--json']);
+  assert.strictEqual(repeated.status, 0, repeated.stderr);
+  assert.strictEqual(fs.readFileSync(roadmapFile, 'utf8'), roadmap);
   assert.ok(fs.existsSync(path.join(dir, '.planning', 'config.json')));
   assert.ok(fs.existsSync(path.join(dir, '.planning', 'REQUIREMENTS.md')));
 });

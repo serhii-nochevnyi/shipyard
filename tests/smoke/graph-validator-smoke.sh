@@ -306,6 +306,35 @@ mkdir -p "$WORK/risky/.planning/phases/01-x"
 plan risky '01-x/01-PLAN.md' T-01-01 '' 'src/a.ts' REQ-1 high false
 rejects risky 'human_checkpoint' "high risk without human_checkpoint blocks Gate 2"
 
+# @contract: review remains a high-risk stop, while true retains merge mode.
+for mode in review true merge; do
+  mkproj "checkpoint-$mode"
+  mkdir -p "$WORK/checkpoint-$mode/.planning/phases/01-x"
+  plan "checkpoint-$mode" '01-x/01-PLAN.md' T-01-01 '' 'src/a.ts' REQ-1 high "$mode"
+  if out="$(run_validator "checkpoint-$mode")"; then
+    expected="$mode"
+    [[ "$mode" == true ]] && expected=merge
+    node - "$WORK/checkpoint-$mode/.planning/graph/tickets.json" "$expected" <<'NODE' \
+      && ok "$mode checkpoint validates and carries $expected in tickets.json" \
+      || bad "$mode checkpoint carries $expected in tickets.json"
+const t = require(process.argv[2]).tickets['T-01-01'];
+if (t.human_checkpoint !== true || t.checkpoint !== process.argv[3]) process.exit(1);
+NODE
+    if grep -q "^    checkpoint: $expected$" "$WORK/checkpoint-$mode/.planning/graph/tickets.yaml"; then
+      ok "$mode checkpoint carries $expected in tickets.yaml"
+    else
+      bad "$mode checkpoint carries $expected in tickets.yaml"
+    fi
+  else
+    bad "$mode checkpoint validates" "$out"
+  fi
+done
+
+mkproj checkpoint-yes
+mkdir -p "$WORK/checkpoint-yes/.planning/phases/01-x"
+plan checkpoint-yes '01-x/01-PLAN.md' T-01-01 '' 'src/a.ts' REQ-1 high yes
+rejects checkpoint-yes 'true, false, review or merge' "unknown checkpoint value blocks Gate 2"
+
 mkproj badrisk
 mkdir -p "$WORK/badrisk/.planning/phases/01-x"
 plan badrisk '01-x/01-PLAN.md' T-01-01 '' 'src/a.ts' REQ-1 critical false

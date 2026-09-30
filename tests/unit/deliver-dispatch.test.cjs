@@ -4,12 +4,28 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
-const { execFileSync } = require('node:child_process');
+const { execFileSync, spawnSync } = require('node:child_process');
 const { suite, test, done, assert } = require('./assert-harness.cjs');
 
+const codexSessionEnv = Object.fromEntries(['CODEX_SANDBOX', 'CODEX_SANDBOX_NETWORK_DISABLED']
+  .map((name) => [name, process.env[name]]));
+for (const name of Object.keys(codexSessionEnv)) delete process.env[name];
+process.on('exit', () => {
+  for (const [name, value] of Object.entries(codexSessionEnv)) {
+    if (value === undefined) delete process.env[name];
+    else process.env[name] = value;
+  }
+});
+
 const deliverDispatch = require('../../plugins/delivery-pipeline/scripts/deliver-dispatch.cjs');
-const { validateRequest, REQUEST_SCHEMA } = require('../../plugins/delivery-pipeline/scripts/claude-delivery-host.cjs');
-const { validateArgs } = require('../../plugins/delivery-pipeline/scripts/codex-delivery-host.cjs');
+const claudeHost = require('../../plugins/delivery-pipeline/scripts/claude-delivery-host.cjs');
+const claudeInvestigationHost = require('../../plugins/delivery-pipeline/scripts/claude-investigation-host.cjs');
+const { validateRequest } = claudeHost;
+const claudeDecomposeHost = require('../../plugins/delivery-pipeline/scripts/claude-decompose-host.cjs');
+const codexPlanningContextHost = require('../../plugins/delivery-pipeline/scripts/codex-planning-context-host.cjs');
+const codexDeliveryHost = require('../../plugins/delivery-pipeline/scripts/codex-delivery-host.cjs');
+const { validateArgs } = codexDeliveryHost;
+const { parseRequest, REQUEST_SCHEMA: ROLE_REQUEST_SCHEMA } = require('../../plugins/delivery-pipeline/scripts/claude-role-host.cjs');
 const { validateContextPacket } = require('../../plugins/delivery-pipeline/scripts/context-packet.cjs');
 const modelPolicy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
 const prHygiene = require('../../plugins/delivery-pipeline/scripts/pr-hygiene.cjs');
@@ -96,6 +112,32 @@ function shipyardFixture(id = 'T-01-01') {
   return { root, id, graphDir: path.join(root, '.planning', 'graph') };
 }
 
+function builderFixture(id = 'T-11-11') {
+  const fixture = shipyardFixture(id);
+  git(fixture.root, 'checkout', '-q', '-b', ticketRow().branch);
+  writeJson(path.join(fixture.graphDir, 'delivery-state.json'), {
+    [id]: { ready: true, status: 'pr-open', pr: 501, branch: ticketRow().branch, base: 'main' },
+  });
+  return fixture;
+}
+
+function planningBuilderFixture(invId = 'INV-43-15') {
+  const fixture = shipyardFixture('T-43-15');
+  const invPath = path.join(fixture.root, '.planning', 'investigations', invId);
+  fs.mkdirSync(path.join(invPath, 'research'), { recursive: true });
+  fs.mkdirSync(path.join(fixture.root, '.planning', 'architecture'), { recursive: true });
+  fs.writeFileSync(path.join(invPath, 'PROBLEM.md'), '---\nadr: .planning/architecture/ADR-TEST.md\n---\n\n# Problem\n');
+  fs.writeFileSync(path.join(invPath, 'RESEARCH-CONTRACT.md'), '# Research contract\n');
+  fs.writeFileSync(path.join(invPath, 'DECISIONS.md'), '# Decisions\n');
+  fs.writeFileSync(path.join(fixture.root, '.planning', 'architecture', 'ADR-TEST.md'), '# Planning ADR\n');
+  fs.writeFileSync(path.join(fixture.root, '.planning', 'REQUIREMENTS.md'), '# Requirements\n');
+  fs.writeFileSync(path.join(fixture.root, '.planning', 'ROADMAP.md'), '# Roadmap\n');
+  writeJson(path.join(fixture.graphDir, 'tickets.json'), {
+    tickets: { 'T-43-15': ticketRow({ phase: 43 }) },
+  });
+  return { ...fixture, invId, invPath };
+}
+
 function targetProjectFixture(id = 'T-02-02') {
   const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-deliver-dispatch-tp-'));
   initRepo(projectRoot);
@@ -131,6 +173,247 @@ test('Pitfall 1: ticket type never enters signals, and the row shape is accepted
   assert.equal(Object.prototype.hasOwnProperty.call(signals, 'type'), false);
   assert.deepEqual(signals, { risk: 'low' });
   assert.deepEqual(modelPolicy.normalizeSignals(signals), { risk: 'low' });
+});
+
+test('build emits an arch-review request accepted by the Claude role host', async () => {
+  const fixture = builderFixture();
+  try {
+    let output = '';
+    const code = await deliverDispatch.main([
+      'build', 'arch-review', fixture.id, '--runtime', 'claude', '--pr', '501',
+    ], { write(value) { output += value; } }, { cwd: fixture.root, graphDir: fixture.graphDir });
+    assert.equal(code, 0);
+    const request = JSON.parse(output);
+    const accepted = parseRequest(request);
+    assert.equal(request.schema, ROLE_REQUEST_SCHEMA);
+    assert.equal(accepted.role, 'arch-review');
+    assert.equal(accepted.ticket, fixture.id);
+    assert.equal(accepted.pr, 501);
+    assert.equal(accepted.worktree, fs.realpathSync(fixture.root));
+    assert.equal(Object.prototype.hasOwnProperty.call(request.signals || {}, 'type'), false);
+    assert.equal(Object.prototype.hasOwnProperty.call(request.signals || {}, 'model'), false);
+    assert.equal(Object.prototype.hasOwnProperty.call(request.signals || {}, 'effort'), false);
+  } finally {
+    cleanup(fixture.root);
+  }
+});
+
+test('research and decomposition builders round-trip through both runtimes’ real validators', () => {
+  const fixture = planningBuilderFixture();
+  const graphFile = path.join(fixture.graphDir, 'tickets.json');
+  const graph = JSON.parse(fs.readFileSync(graphFile, 'utf8'));
+  graph.unrelated_large_metadata = 'bounded packet fixture '.repeat(4000);
+  writeJson(graphFile, graph);
+  const basePaths = ['PROBLEM.md', 'RESEARCH-CONTRACT.md', 'DECISIONS.md']
+    .map((name) => fs.realpathSync(path.join(fixture.invPath, name)));
+  basePaths.push(fs.realpathSync(path.join(fixture.graphDir, 'tickets.json')));
+  const sourceRef = (file) => ({
+    path: file,
+    sha256: crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex'),
+  });
+  const sourceRefs = basePaths.map(sourceRef);
+  const decompositionRefs = [
+    ...sourceRefs,
+    sourceRef(fs.realpathSync(path.join(fixture.root, '.planning', 'architecture', 'ADR-TEST.md'))),
+    sourceRef(fs.realpathSync(path.join(fixture.root, '.planning', 'REQUIREMENTS.md'))),
+    sourceRef(fs.realpathSync(path.join(fixture.root, '.planning', 'ROADMAP.md'))),
+  ];
+  try {
+    for (const [role, argv] of [
+      ['research', ['research', fixture.invId]],
+      ['decomposition', ['decomposition', fixture.invId, '--phase', '44']],
+    ]) {
+      for (const runtime of ['claude', 'codex']) {
+        const request = deliverDispatch.build([...argv, '--runtime', runtime], {
+          cwd: fixture.root,
+          graphDir: fixture.graphDir,
+        });
+        let accepted;
+        if (role === 'research' && runtime === 'claude') {
+          accepted = validateRequest('investigation-research', request);
+          assert.equal(accepted.workflow, 'investigation-research');
+          assert.equal(request.scope.ticket, fixture.invId);
+          assert.equal(request.scope.phase, 43);
+          assert.deepEqual(request.args.lines.map((line) => line.id), ['system-state', 'alternatives', 'constraints', 'risks']);
+          assert.equal(request.args.sourceRefs.length, 4);
+          assert.deepEqual(request.args.sourceRefs, sourceRefs);
+          assert.equal(request.args.contextPacketRequired, true);
+          for (const line of request.args.lines) {
+            assert.equal(Object.hasOwn(line, 'model'), false);
+            assert.equal(Object.hasOwn(line, 'effort'), false);
+            assert.equal(line.contextPacket.backlog.empty, true);
+            assert.deepEqual(line.contextPacket.backlog.selected_ids, []);
+            assert.ok(line.contextPacket.accounting.estimated_tokens <= line.contextPacket.accounting.soft_ceiling);
+            assert.ok(line.contextPacket.optional_refs.some((ref) =>
+              ref.path === '.planning/graph/tickets.json' && ref.content_omitted));
+            validateContextPacket(line.contextPacket, {
+              role: 'research', subject: `${fixture.invId}:${line.id}`,
+              root: fixture.root, sourceRevision: git(fixture.root, 'rev-parse', 'HEAD'),
+              policyHash: modelPolicy.POLICY_HASH,
+            });
+          }
+          const cliArgs = claudeInvestigationHost.resolveResearchSelections(request.args, fixture.root);
+          assert.equal(cliArgs.lines.length, 4);
+          assert.ok(cliArgs.lines.every((line) => typeof line.model === 'string' && typeof line.effort === 'string'));
+        } else if (role === 'decomposition' && runtime === 'claude') {
+          accepted = claudeDecomposeHost.canonicalRequest(request);
+          assert.equal(accepted.role, 'gsd-planner');
+          assert.equal(accepted.phase, 44);
+          assert.equal(accepted.worktree, fs.realpathSync(fixture.root));
+          for (const source of decompositionRefs) {
+            assert.ok(request.prompt.includes(source.path));
+            assert.ok(request.prompt.includes(source.sha256));
+          }
+        } else if (role === 'research') {
+          accepted = codexDeliveryHost.validateArgs(request);
+          assert.equal(accepted.request.role, 'research');
+          assert.deepEqual(request.context.investigation.lines.map((line) => line.id),
+            ['system-state', 'alternatives', 'constraints', 'risks']);
+          assert.equal(request.context.contextPacketRequired, true);
+          validateContextPacket(request.context.contextPacket, {
+            role: 'research', subject: fixture.invId, root: fixture.root,
+            sourceRevision: git(fixture.root, 'rev-parse', 'HEAD'), policyHash: modelPolicy.POLICY_HASH,
+          });
+          fs.appendFileSync(path.join(fixture.invPath, 'PROBLEM.md'), 'Changed after build.\n');
+          assert.throws(() => validateContextPacket(request.context.contextPacket), /changed after packet construction/);
+          fs.writeFileSync(path.join(fixture.invPath, 'PROBLEM.md'), '---\nadr: .planning/architecture/ADR-TEST.md\n---\n\n# Problem\n');
+        } else {
+          accepted = codexPlanningContextHost.requestValue(request, { worktreePath: fixture.root });
+          assert.equal(accepted.gsd_role, 'gsd-planner');
+          assert.equal(accepted.contextPacketRequired, true);
+          assert.equal(accepted.sourceRevision, git(fixture.root, 'rev-parse', 'HEAD'));
+          assert.ok(accepted.contextPacket.required_refs.some((ref) => ref.path === '.planning/architecture/ADR-TEST.md'));
+          assert.equal(accepted.contextPacket.backlog.empty, true);
+          assert.ok(accepted.contextPacket.accounting.estimated_tokens <= accepted.contextPacket.accounting.soft_ceiling);
+          assert.ok(accepted.contextPacket.optional_refs.some((ref) =>
+            ref.path === '.planning/graph/tickets.json' && ref.content_omitted));
+          validateContextPacket(accepted.contextPacket, {
+            role: 'decomposition', subject: accepted.subject, root: fixture.root,
+            sourceRevision: accepted.sourceRevision, policyHash: modelPolicy.POLICY_HASH,
+          });
+          fs.appendFileSync(path.join(fixture.root, '.planning', 'architecture', 'ADR-TEST.md'), 'Changed after build.\n');
+          assert.throws(() => codexPlanningContextHost.requestValue(request, { worktreePath: fixture.root }),
+            /changed after packet construction/);
+          fs.writeFileSync(path.join(fixture.root, '.planning', 'architecture', 'ADR-TEST.md'), '# Planning ADR\n');
+          for (const source of decompositionRefs) {
+            assert.ok(request.prompt.includes(source.path));
+            assert.ok(request.prompt.includes(source.sha256));
+          }
+        }
+        assert.ok(accepted);
+        if (role === 'research' && runtime === 'codex') {
+          assert.equal(Object.hasOwn(request, 'model'), false);
+          assert.equal(Object.hasOwn(request, 'effort'), false);
+        }
+      }
+    }
+  } finally {
+    cleanup(fixture.root);
+  }
+});
+
+test('planning builders are deterministic and missing PROBLEM.md exits 2 naming that input', () => {
+  const fixture = planningBuilderFixture('INV-43-16');
+  const args = ['research', fixture.invId, '--runtime', 'codex'];
+  try {
+    const first = deliverDispatch.build(args, { cwd: fixture.root, graphDir: fixture.graphDir });
+    const second = deliverDispatch.build(args, { cwd: fixture.root, graphDir: fixture.graphDir });
+    assert.deepEqual(second, first);
+    fs.rmSync(path.join(fixture.invPath, 'PROBLEM.md'));
+    const result = spawnSync(process.execPath, [
+      path.resolve(__dirname, '../../plugins/delivery-pipeline/scripts/deliver-dispatch.cjs'),
+      'build', ...args,
+    ], {
+      cwd: fixture.root,
+      encoding: 'utf8',
+      env: { ...process.env, SHIPYARD_GRAPH_DIR: fixture.graphDir },
+    });
+    assert.equal(result.status, 2);
+    assert.match(result.stderr, /PROBLEM\.md/);
+    const invalid = spawnSync(process.execPath, [
+      path.resolve(__dirname, '../../plugins/delivery-pipeline/scripts/deliver-dispatch.cjs'),
+      'build', 'research', 'not-an-investigation',
+    ], {
+      cwd: fixture.root,
+      encoding: 'utf8',
+      env: { ...process.env, SHIPYARD_GRAPH_DIR: fixture.graphDir },
+    });
+    assert.equal(invalid.status, 2);
+    assert.match(invalid.stderr, /not-an-investigation/);
+  } finally {
+    cleanup(fixture.root);
+  }
+});
+
+test('Codex arch-review shape acceptance is not evidence-bound host parity', () => {
+  const fixture = builderFixture('T-12-12');
+  try {
+    const shape = validateArgs({ role: 'arch-review', signals: {}, context: {} });
+    assert.equal(shape.request.role, 'arch-review');
+    assert.equal(shape.request.context.prompt, undefined);
+    assert.throws(
+      () => deliverDispatch.build(['arch-review', fixture.id, '--runtime', 'codex', '--pr', '501'], {
+        cwd: fixture.root, graphDir: fixture.graphDir,
+      }),
+      (error) => error.exitCode === 2 && /codex arch-review host contract missing/.test(error.message)
+        && /caller-built prompt/.test(error.message),
+    );
+  } finally {
+    cleanup(fixture.root);
+  }
+});
+
+test('fix builders refuse shape-only hosts after checking evidence paths and digests', () => {
+  const fixture = builderFixture('T-13-13');
+  const failureFile = path.join(fixture.root, 'failure.log');
+  const reviewFile = path.join(fixture.root, 'review.md');
+  fs.writeFileSync(failureFile, 'failing test output\n');
+  fs.writeFileSync(reviewFile, 'review thread evidence\n');
+  try {
+    for (const runtime of ['claude', 'codex']) {
+      for (const [role, flag, evidence, hostName] of [
+        ['ci-fix', '--failure-file', failureFile, 'failure evidence'],
+        ['review-fix', '--review-file', reviewFile, 'review evidence'],
+      ]) {
+        if (runtime === 'codex') {
+          const shape = validateArgs({ role, signals: {}, context: { evidence_path: evidence,
+            evidence_sha256: crypto.createHash('sha256').update(fs.readFileSync(evidence)).digest('hex') } });
+          assert.equal(shape.request.role, role);
+        }
+        assert.throws(
+          () => deliverDispatch.build([role, fixture.id, '--runtime', runtime, '--pr', '501', flag, evidence], {
+            cwd: fixture.root, graphDir: fixture.graphDir,
+          }),
+          (error) => error.exitCode === 2 && new RegExp(`${runtime} ${role} host contract missing`).test(error.message)
+            && new RegExp(hostName).test(error.message),
+        );
+      }
+    }
+  } finally {
+    cleanup(fixture.root);
+  }
+});
+
+test('build exits 2 and names --failure-file when CI evidence is missing', () => {
+  const fixture = builderFixture('T-14-14');
+  try {
+    const script = path.resolve(__dirname, '../../plugins/delivery-pipeline/scripts/deliver-dispatch.cjs');
+    const options = {
+      cwd: fixture.root,
+      encoding: 'utf8',
+      env: { ...process.env, SHIPYARD_GRAPH_DIR: fixture.graphDir },
+    };
+    const absentFlag = spawnSync(process.execPath, [script, 'build', 'ci-fix', fixture.id,
+      '--runtime', 'claude', '--pr', '501'], options);
+    const missingFile = spawnSync(process.execPath, [script, 'build', 'ci-fix', fixture.id,
+      '--runtime', 'claude', '--pr', '501', '--failure-file', 'missing.log'], options);
+    assert.equal(absentFlag.status, 2);
+    assert.match(absentFlag.stderr, /--failure-file/);
+    assert.equal(missingFile.status, 2);
+    assert.match(missingFile.stderr, /--failure-file file is unavailable/);
+  } finally {
+    cleanup(fixture.root);
+  }
 });
 
 test('Pitfall 2: planPath satisfies the canonical-plan formula regardless of process.cwd()', async () => {

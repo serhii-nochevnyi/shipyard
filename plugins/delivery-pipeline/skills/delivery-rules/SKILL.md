@@ -50,10 +50,16 @@ installed Claude `PreToolUse` hook invokes it for every `git push`.
    ```yaml
    delivery:
      ticket: T-<phase>-<plan>
-     risk: low|medium|high        # high REQUIRES human_checkpoint: true
-     human_checkpoint: false
+     risk: low|medium|high        # high REQUIRES review, merge, or true
+     human_checkpoint: false|review|merge|true
      repo: owner/name             # ONLY when the work lives in another repository
    ```
+
+   `review` waits for a human APPROVED review on the current PR head, then the
+   guard merges into the epic. `merge` waits for the human to perform the merge
+   and is used for external-dependency holds. Legacy `true` means `merge`.
+   `false` declares no checkpoint. Gate 2 must state this consequence for each
+   ticket; a child of an open `review` parent still waits for that parent to land.
 
    **`repo` is mandatory for any ticket that does not touch this repo.** Omit it
    and the conveyor tracks the ticket against the wrong repository: its PR can be

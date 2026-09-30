@@ -232,7 +232,26 @@ const UNAUTHORIZED = {
   prs: [mergedPr('T-27-10', 72)],
 };
 
+const REVIEW_MERGE = {
+  tickets: { ...ticket('T-27-11', { checkpoint: 'review' }) },
+  journal: [JSON.stringify({ ts: recently, event: 'merge', ticket: 'T-27-11', pr: 73,
+    base: 'epic/27-x', by: 'sentinel', checkpoint: 'review' })],
+  prs: [mergedPr('T-27-11', 73)],
+};
+
 suite('pipeline-stats — a checkpoint merge is attributed to whoever made it');
+
+test('a review checkpoint guard merge has its own attribution', () => {
+  const { code, json } = asJson(REVIEW_MERGE);
+  assert.strictEqual(code, 0);
+  const row = json.tickets.find((r) => r.ticket === 'T-27-11');
+  assert.strictEqual(row.checkpoint_review_merge, true);
+  assert.strictEqual(row.checkpoint_preauthorized_merge, false);
+  assert.strictEqual(row.checkpoint_unauthorized_merge, false);
+  const { out } = run(REVIEW_MERGE);
+  assert.ok(out.includes('after human review: T-27-11#73'), out);
+  assert.strictEqual(lineWith(out, /^⚠/).length, 0);
+});
 
 test('the guard\'s pre-authorized merges are counted apart from the human ones', () => {
   const { code, out } = run(THREE_AND_ONE);

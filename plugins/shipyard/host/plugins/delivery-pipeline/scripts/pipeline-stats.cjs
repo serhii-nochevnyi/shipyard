@@ -223,15 +223,14 @@ for (const [id, t] of Object.entries(tickets)) {
     // event: journals in the wild carry records a run wrote by hand (see the
     // dedupe below), and such a record proves a merge happened, not who made it.
     //
-    // Two legitimate cases, counted SEPARATELY because the pre-authorized one is
-    // the only measurement of what asking that question at plan time actually
-    // saved — the sole evidence that asking it was worth the operator's
-    // attention. The third is neither: a guard merge with NO pre-authorization
-    // recorded means the guard merged a checkpoint nobody authorized, so it is a
-    // WARNING. Folded into the neutral line, it was invisible.
+    // @contract: human, preauthorized guard, and review guard merges are distinct.
+    // @contract: preauthorization measures waits saved by a plan-time approval.
+    // @contract: a guard merge without either authorization remains a warning.
     checkpoint_human_merge: checkpointMerged && !guardMerge,
     checkpoint_preauthorized_merge: checkpointMerged && !!guardMerge && guardMerge.preauthorized === true,
-    checkpoint_unauthorized_merge: checkpointMerged && !!guardMerge && guardMerge.preauthorized !== true,
+    checkpoint_review_merge: checkpointMerged && !!guardMerge && guardMerge.checkpoint === 'review',
+    checkpoint_unauthorized_merge: checkpointMerged && !!guardMerge && guardMerge.preauthorized !== true
+      && guardMerge.checkpoint !== 'review',
   };
   rows.push(row);
 }
@@ -908,6 +907,10 @@ if (preauthorizedMerges.length) {
     `[${windowLabel}] ${preauthorizedMerges.length} human_checkpoint ticket PR(s) were merged by the guard under ` +
     `pre-authorization — a plan-time approval that saved that many waits: ${label8(preauthorizedMerges)}`
   );
+}
+const reviewMerges = rows.filter((r) => r.checkpoint_review_merge);
+if (reviewMerges.length) {
+  console.log(`[${windowLabel}] ${reviewMerges.length} human_checkpoint ticket PR(s) were merged by the guard after human review: ${label8(reviewMerges)}`);
 }
 const unauthorizedCheckpointMerges = rows.filter((r) => r.checkpoint_unauthorized_merge);
 if (unauthorizedCheckpointMerges.length) {

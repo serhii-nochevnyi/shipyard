@@ -52,14 +52,6 @@
 // same tree object and the same diff against the new base, re-judged at ~150k
 // tokens — 42% of that ticket's cost, once per cascade step per ticket.
 //
-// The exception is a PROOF and not a tolerance. It is two object identities: the
-// two heads resolve to the SAME tree, and the tree of the new merge base equals
-// the tree the verdict was rendered against. Together those entail that the
-// judged diff and the candidate diff are the same diff (for paths inside the
-// diff, base = head minus the identical diff; for paths outside it, base = head,
-// and the head trees are equal). Compared as OBJECTS rather than as diffs
-// deliberately: a diff is a rendering that depends on rename detection, context
-// size, whitespace and `diff.algorithm`, and two shas have no such surface.
 //
 // So the trailer records `base_tree=` beside `head=`. A TREE, never a branch
 // name: the old base branch gets reaped, and a rule that recomputes
@@ -69,6 +61,7 @@
 // relax.
 
 const path = require('path');
+const fs = require('fs');
 const { execFileSync, spawnSync } = require('child_process');
 
 // The invocation the two command docs name. Exported so a test can pin the docs
@@ -80,7 +73,8 @@ const USAGE = 'gate-trailer.cjs write <pr> [--repo owner/name] --arch-review con
 // which is the only thing in the conveyor that moves a head WITHOUT adding
 // content and therefore the only place a carry can be proved.
 const CARRY_USAGE = 'gate-trailer.cjs carry <ticket> --pr <n> [--repo owner/name] '
-  + '--from <judged-head> --to <new-head> [--worktree <path>] [--json]';
+  + '--from <judged-head> --to <new-head> [--from-base <ref>] [--to-base <ref>] '
+  + '[--graph <dir>] [--worktree <path>] [--json]';
 
 // A tree object, in full. Both directions of the proof compare object
 // identities, so an abbreviation is not a weaker proof — it is no proof at all,
@@ -425,8 +419,6 @@ if (require.main === module) {
 
   // ── carry: the only writer of a CARRIED verdict ────────────────────────────
   //
-  // Re-stamps the verdict the PR already carries onto a new head, IF AND ONLY IF
-  // the two object identities at the top of this file both hold. Anything else —
   // a missing `base_tree`, a sha this repository does not have, either tree
   // moved — is a REFUSAL, and a refusal is not an error: the verdict is simply
   // owed again, which is what the conveyor did before this verb existed. Hence
@@ -449,7 +441,7 @@ if (require.main === module) {
     if (!ticket || String(ticket).startsWith('--')) {
       die(`carry needs a ticket id\nusage: ${CARRY_USAGE}`, 2);
     }
-    const given = parseFlags(2, ['repo', 'pr', 'from', 'to', 'worktree'], CARRY_USAGE, ['json']);
+    const given = parseFlags(2, ['repo', 'pr', 'from', 'to', 'from-base', 'to-base', 'graph', 'worktree'], CARRY_USAGE, ['json']);
     const asJson = given.has('json');
     const pr = Number(given.get('pr'));
     if (!Number.isInteger(pr) || pr <= 0) die(`carry needs --pr <n>\nusage: ${CARRY_USAGE}`, 2);
@@ -469,14 +461,11 @@ if (require.main === module) {
       return { status: r.status, out: (r.stdout || '').trim(), err: (r.stderr || '').trim() };
     };
     const refuse = (reason, extra = {}) => {
-      if (asJson) console.log(JSON.stringify({ ticket, pr, carried: false, reason, ...extra }, null, 2));
+      if (asJson) console.log(JSON.stringify({ ticket, pr, carried: false, carry: 're-owed', reason, ...extra }, null, 2));
       console.error(`gate-trailer: carry refused for ${ticket} — ${reason}`);
       process.exit(1);
     };
 
-    // ── condition 1: the head tree did not move ───────────────────────────────
-    // Local, and FIRST: the commonest refusal (the merge brought content) then
-    // costs no network round trip at all.
     const treeOf = (sha) => {
       const r = git(['rev-parse', '--verify', '-q', `${sha}^{tree}`]);
       return r.status === 0 && TREE_SHA.test(r.out) ? r.out : null;
@@ -491,11 +480,7 @@ if (require.main === module) {
       refuse(`--to ${to} does not resolve to a tree in ${worktree} — nothing can be proved `
         + 'about a head this repository does not have');
     }
-    if (fromTree !== toTree) {
-      refuse(`the head tree MOVED — ${shortSha(from)} is tree ${fromTree}, ${shortSha(to)} is tree `
-        + `${toTree}: the merge brought content, and content nobody has judged is not covered by `
-        + 'the verdict', { from_tree: fromTree, to_tree: toTree });
-    }
+    const treeEqual = fromTree === toTree;
     const ancestry = git(['merge-base', '--is-ancestor', from, to]);
     if (ancestry.status !== 0) {
       refuse(`the candidate head ${shortSha(to)} is not a descendant of the judged head ${shortSha(from)} — `
@@ -533,7 +518,7 @@ if (require.main === module) {
       refuse(`PR #${pr} is at ${shortSha(liveHead)}, not at the judged head ${shortSha(from)} — `
         + 'something was pushed, so the verdict is owed against that instead');
     }
-    const judgedBaseTree = normSha(gate.base_tree);
+    const judgedBaseTree = normSha(gate.base_tree || gate.base);
     if (!judgedBaseTree) {
       refuse('the trailer records no `base_tree=` — absent proof is not proof: nothing can say '
         + 'which base the verdict was rendered against, so nothing can show it covers this one '
@@ -543,8 +528,13 @@ if (require.main === module) {
       refuse(`the trailer records base_tree=${judgedBaseTree}, which is not the full forty `
         + 'characters of a tree object — a reader cannot lengthen an abbreviation');
     }
+    if (!treeOf(judgedBaseTree)) {
+      refuse(`the judged base tree ${judgedBaseTree} is unreadable — the judged patch cannot be proved`);
+    }
+    if (!treeEqual && given.has('from-base') && treeOf(given.get('from-base')) !== judgedBaseTree) {
+      refuse(`--from-base does not resolve to the recorded judged base tree ${judgedBaseTree}`);
+    }
 
-    // ── condition 2: the base tree did not move ───────────────────────────────
     // `origin/<base>` when it exists, for the same reason base-merge measures
     // against it: after the sentinel squash-merges a parent through the API the
     // local branch does not move (see resolveBaseRef). No fetch — the caller has
@@ -560,11 +550,74 @@ if (require.main === module) {
     }
     const newBaseTree = treeOf(mergeBase.out);
     if (!newBaseTree) refuse(`the merge base ${shortSha(mergeBase.out)} does not resolve to a tree`);
-    if (newBaseTree !== judgedBaseTree) {
+    if (given.has('to-base') && treeOf(given.get('to-base')) !== newBaseTree) {
+      refuse(`--to-base does not resolve to the new merge base tree ${newBaseTree}`);
+    }
+    let carryKind = 'tree-equal';
+    if (treeEqual && newBaseTree !== judgedBaseTree) {
       refuse(`the BASE tree MOVED — the verdict was rendered against tree ${judgedBaseTree}, the `
         + `merge base with ${baseRef} (${shortSha(mergeBase.out)}) is tree ${newBaseTree}: the same `
         + 'code against a different base is a different diff',
       { judged_base_tree: judgedBaseTree, new_base_tree: newBaseTree, base_ref: baseRef });
+    }
+    if (!treeEqual) {
+      // @invariant: candidate paths are owned and their blobs equal the judged head.
+      const { parse: parseDecl, owns } = require(path.join(__dirname, 'path-owner.cjs'));
+      const { resolveGraphDir } = require(path.join(__dirname, 'graph-dir.cjs'));
+      const graph = given.get('graph') || resolveGraphDir([], worktree).dir;
+      let declared;
+      try {
+        const rows = JSON.parse(fs.readFileSync(path.join(graph, 'tickets.json'), 'utf8')).tickets;
+        declared = rows && rows[ticket] && rows[ticket].files;
+      } catch {}
+      if (!Array.isArray(declared) || !declared.length || declared.some((d) => parseDecl(d).error)) {
+        refuse(`the head tree MOVED — ${shortSha(from)} is tree ${fromTree}, ${shortSha(to)} is tree ${toTree}; `
+          + 'ticket files_modified is unreadable or invalid — path ownership cannot be proved');
+      }
+      const names = (baseTree, headTree) => {
+        const r = git(['diff', '--no-ext-diff', '--no-renames', '--name-only', '-z', baseTree, headTree]);
+        if (r.status !== 0) return null;
+        return r.out ? r.out.split('\0').filter(Boolean) : [];
+      };
+      const judgedPaths = names(judgedBaseTree, fromTree);
+      const newPaths = names(newBaseTree, toTree);
+      const headChangedPaths = names(fromTree, toTree);
+      if (!judgedPaths || !newPaths || !headChangedPaths) refuse('a patch path list is unreadable');
+      const isOwned = (p) => declared.some((d) => owns(d, p));
+      const outside = newPaths.find((p) => !isOwned(p));
+      if (outside) refuse(`candidate diff changes non-owned path ${outside} — another path differs from the new base`);
+      const judgedOutside = judgedPaths.find((p) => !isOwned(p));
+      if (judgedOutside) refuse(`judged diff changes non-owned path ${judgedOutside} — the ticket patch cannot be isolated`);
+      const blob = (tree, name) => {
+        const r = git(['ls-tree', '-z', tree, '--', `:(literal)${name}`]);
+        if (r.status !== 0) return undefined;
+        if (!r.out) return null;
+        const entry = r.out.split('\0').find((line) => line.endsWith(`\t${name}`));
+        return entry && /^\d+ blob [0-9a-f]{40}\t/.test(entry) ? entry.split('\t')[0].split(' ')[2] : undefined;
+      };
+      for (const name of new Set([...judgedPaths, ...newPaths, ...headChangedPaths.filter(isOwned)])) {
+        const before = blob(fromTree, name);
+        const after = blob(toTree, name);
+        if (before === undefined || after === undefined || before !== after) {
+          refuse(`owned blob differs or is unreadable at ${name}`);
+        }
+        if (blob(judgedBaseTree, name) !== blob(newBaseTree, name)) {
+          refuse(`owned base blob changed at ${name}`);
+        }
+      }
+      const patchId = (baseTree, headTree) => {
+        const diff = git(['diff', '--no-ext-diff', '--no-renames', '--binary', '--full-index', baseTree, headTree]);
+        if (diff.status !== 0) return null;
+        const id = spawnSync('git', ['patch-id', '--stable'], { input: diff.out, encoding: 'utf8', cwd: worktree });
+        const match = id.status === 0 && (id.stdout || '').match(/^([0-9a-f]{40})\s/);
+        return match ? match[1] : null;
+      };
+      const judgedPatch = patchId(judgedBaseTree, fromTree);
+      const newPatch = patchId(newBaseTree, toTree);
+      if (!judgedPatch || !newPatch || judgedPatch !== newPatch) {
+        refuse('patch-id is unreadable or differs — the ticket patch changed');
+      }
+      carryKind = 'patch-id';
     }
 
     const latestView = spawnSync('gh', ['pr', 'view', String(pr), ...repoArg, '--json', 'body,headRefOid,baseRefName,number'], { encoding: 'utf8', cwd: worktree });
@@ -598,16 +651,23 @@ if (require.main === module) {
     //   trail cannot answer which head a human or an agent actually looked at.
     const parts = [];
     for (const [k, v] of Object.entries(gate)) {
-      if (k === 'head' || k === 'checks' || k === 'carried_from') continue;
+      if (['head', 'checks', 'carried_from', 'carried', 'base_tree', 'base', 'from'].includes(k)) continue;
       parts.push(`${k}=${v}`);
     }
-    parts.push(`carried_from=${normSha(gate.carried_from) || shortSha(from)}`);
-    const description = parts.join(', ');
+    const originalJudge = shortSha(gate.carried_from || gate.from || from);
+    const meta = [`base_tree=${newBaseTree}`, `carried_from=${originalJudge}`];
+    if (carryKind === 'patch-id') meta.push('carried=patch-id');
+    let description = [...parts, ...meta].join(', ');
+    if (description.length > STATUS_MAX) {
+      const compact = [`base=${newBaseTree}`, `from=${originalJudge}`];
+      if (carryKind === 'patch-id') compact.push('carried=patch-id');
+      description = [...parts, ...compact].join(',');
+    }
     const posted = postGate({ repo, sha: to, description, cwd: worktree });
     if (!posted.ok) die(`could not record the ${STATUS_CONTEXT} status on ${shortSha(to)}: ${posted.why}`);
     console.log(JSON.stringify({
-      ticket, pr, carried: true, from, to, head_tree: toTree, base_ref: baseRef,
-      base_tree: judgedBaseTree, context: STATUS_CONTEXT, description,
+      ticket, pr, carried: true, carry: carryKind, from, to, head_tree: toTree, base_ref: baseRef,
+      base_tree: newBaseTree, context: STATUS_CONTEXT, description,
     }, null, 2));
     process.exit(0);
   }

@@ -28,11 +28,14 @@
 
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const { diagnostic, runBounded, timeoutFromEnv } = require(path.join(__dirname, 'command-runner.cjs'));
-const { loadConfig } = require(path.join(__dirname, 'pipeline-config.cjs'));
+const { loadConfig, repoValue } = require(path.join(__dirname, 'pipeline-config.cjs'));
+const { reviewFreshness, effectiveBotPolicy, isHumanHeadApproval } = require(path.join(__dirname, 'reviewers.cjs'));
 const { withLock, lockDirFor, writeAtomic } = require(path.join(__dirname, 'lock.cjs'));
 const reviewSignatures = require(path.join(__dirname, 'review-signature.cjs'));
 const { classify, unavailableNote, CHECK_FIELDS } = require(path.join(__dirname, 'check-state.cjs'));
+const coverage = require(path.join(__dirname, 'conveyor-coverage.cjs'));
 // The checkpoint predicates live in front.cjs and are imported, not copied.
 // A `checkpointParentOf` used to exist here AND there, and the standing rule — the
 // board must never offer what the guard refuses — was held by nothing but the
@@ -153,6 +156,47 @@ const repoArg = (repo) => (repo ? ['--repo', repo] : []);
 // `gh api <path>` in this file goes through here.
 const apiBase = (repo) => (repo ? `repos/${repo}` : 'repos/{owner}/{repo}');
 
+function reviewCheckpointApproval(pr, repo) {
+  if (!pr.headRefOid || !pr.author || !pr.author.login) return false;
+  const out = gh(['api', `${apiBase(repo)}/pulls/${pr.number}/reviews`, '--paginate'], { tolerate: true });
+  if (typeof out !== 'string') return false;
+  let reviews;
+  try { reviews = JSON.parse(out); } catch { return false; }
+  if (!Array.isArray(reviews)) return false;
+  let slug = repo;
+  if (!slug) {
+    const repoOut = gh(['repo', 'view', '--json', 'owner,name'], { tolerate: true });
+    if (typeof repoOut === 'string') {
+      try {
+        const value = JSON.parse(repoOut);
+        if (value.owner && value.owner.login && value.name) slug = `${value.owner.login}/${value.name}`;
+      } catch { /* @contract: an unreadable repo identity cannot match a repo-specific bot list. */ }
+    }
+  }
+  if (!slug) return false;
+  const bots = effectiveBotPolicy(slug, undefined, ROOT);
+  for (const review of reviews) {
+    if (!review || !['APPROVED', 'CHANGES_REQUESTED', 'DISMISSED'].includes(review.state)) continue;
+    if (!Number.isFinite(Date.parse(review.submitted_at || ''))) return false;
+  }
+  // @contract: freshness is a separate refusal; positive human identity and head binding are required as well.
+  const freshness = reviewFreshness({ ...pr, reviewDecision: 'APPROVED' }, reviews, true, bots, slug);
+  return freshness.fresh && freshness.approved_reviews.some((review) =>
+    isHumanHeadApproval(review, pr.headRefOid, pr.author, bots));
+}
+
+function reviewCheckpointReady(s) {
+  if (!s.pr) return false;
+  const repo = s.repo || null;
+  const out = gh(['pr', 'view', String(s.pr), ...repoArg(repo), '--json',
+    'number,state,headRefOid,reviewDecision,author'], { tolerate: true });
+  if (typeof out !== 'string') return false;
+  try {
+    const pr = JSON.parse(out);
+    return pr.state === 'OPEN' && reviewCheckpointApproval(pr, repo);
+  } catch { return false; }
+}
+
 // `gh pr checks` reports CI state through its EXIT CODE while still printing the
 // JSON (8 = pending, 1 = failing or no checks at all) — see state-sync.cjs.
 // Commits on <base> that <head> does not have yet — i.e. how stale this branch is.
@@ -187,60 +231,282 @@ function behindBy(base, head, repo) {
 // nothing was ever going to notice — the detection for the whole class is one
 // question asked after every squash.
 //
-// TREES, not a diff, and for the same reason ADR-006 D2 gives: a diff is a
-// rendering that depends on rename detection, context size, whitespace and
-// `diff.algorithm`, while two blob identities have no such surface. `owns` is
-// the ownership matcher Gate 2 and the scope gate already share (path-owner.cjs),
-// evaluated here against the epic's tree listing rather than against a diff.
-//
-// One `git/trees/<ref>?recursive=1` per ref, on the MERGE path only — never on
-// the tick. A truncated listing or an unreadable ref is an UNKNOWN that says so:
-// an unknown is not a pass, but it is not an alarm either, because this runs
-// AFTER an irreversible squash and a cried-wolf alarm on the merge line is how
-// an alarm stops being read.
-const { owns } = require(path.join(__dirname, 'path-owner.cjs'));
-function treeBlobs(ref, repo) {
-  const out = gh(['api', `${apiBase(repo)}/git/trees/${ref}?recursive=1`], { tolerate: true });
-  if (typeof out !== 'string') return { error: (out && out.error) || 'gh api git/trees failed' };
-  let j;
-  try { j = JSON.parse(out); } catch (e) { return { error: `git/trees answered unparseable JSON (${e.message})` }; }
-  if (!j || !Array.isArray(j.tree)) return { error: 'git/trees answered no `tree` array' };
-  // A partial tree can only produce a false alarm: every path it happens not to
-  // list would read as "absent from the epic".
-  if (j.truncated) return { error: `GitHub truncated the recursive listing of ${ref} — a partial tree cannot answer this` };
+const { owns, parse, literalPrefix, segMatch } = require(path.join(__dirname, 'path-owner.cjs'));
+const repoResolver = require(path.join(__dirname, 'repo-resolve.cjs'));
+const REACHABILITY_MAX_BUFFER = 64 * 1024 * 1024;
+
+function gitResult(repo, args) {
+  return runBounded('git', ['-C', repo, ...args], {
+    timeoutMs: GH_TIMEOUT_MS,
+    maxBuffer: REACHABILITY_MAX_BUFFER,
+    env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+  });
+}
+
+function gitRoot(candidate) {
+  const result = gitResult(candidate, ['rev-parse', '--show-toplevel']);
+  if (result.error || result.status !== 0 || !result.stdout.trim()) return null;
+  return path.resolve(result.stdout.trim());
+}
+
+function localCheckout(repo, ticket) {
+  if (!repo) return gitRoot(ROOT);
+  let resolved = null;
+  try {
+    resolved = repoResolver.resolveRepository({ repo, ticket, config: cfg, projectRoot: ROOT });
+  } catch { return null; }
+  if (resolved.executable) return resolved.repository_root;
+  if (cfg.repos && Object.prototype.hasOwnProperty.call(cfg.repos, repo)) return null;
+  const root = gitRoot(ROOT);
+  if (!root) return null;
+  const origin = gitResult(root, ['remote', 'get-url', 'origin']);
+  return !origin.error && origin.status === 0
+    && repoResolver.normalizeOrigin(origin.stdout.trim()) === repo.toLowerCase()
+    ? root
+    : null;
+}
+
+function pathspecsForDeclared(declared) {
+  const pathspecs = new Set();
+  const rootGlobs = [];
+  for (const declaration of declared) {
+    if (declaration.startsWith('/') || declaration.split('/').includes('..')) {
+      return { error: `unsafe declared path ${JSON.stringify(declaration)}` };
+    }
+    const parsed = parse(declaration);
+    if (parsed.error) return { error: `${declaration}: ${parsed.error}` };
+    if (parsed.kind === 'glob') {
+      const prefix = literalPrefix(declaration);
+      if (prefix) pathspecs.add(`:(literal)${prefix}`);
+      else rootGlobs.push(declaration);
+    } else {
+      pathspecs.add(`:(literal)${declaration.replace(/\/\*\*$/, '').replace(/\/+$/, '')}`);
+    }
+  }
+  return { pathspecs: [...pathspecs], rootGlobs };
+}
+
+function gitTreeBlobs(repo, ref, declared) {
+  const scoped = pathspecsForDeclared(declared);
+  if (scoped.error) return scoped;
+  const pathspecs = new Set(scoped.pathspecs);
+  if (scoped.rootGlobs.length) {
+    const root = gitResult(repo, ['ls-tree', '-z', ref]);
+    if (root.error || root.status !== 0) return { error: `git ls-tree root failed: ${diagnostic(root)}` };
+    for (const record of root.stdout.split('\0')) {
+      if (!record) continue;
+      const tab = record.indexOf('\t');
+      if (tab === -1) return { error: 'git ls-tree answered malformed root output' };
+      const [, type] = record.slice(0, tab).split(' ');
+      const entry = record.slice(tab + 1);
+      for (const declaration of scoped.rootGlobs) {
+        const parsed = parse(declaration);
+        if (parsed.segs.length === 1 && type === 'blob' && owns(declaration, entry)) {
+          pathspecs.add(`:(literal)${entry}`);
+        } else if (parsed.segs.length > 1 && type === 'tree' && segMatch(parsed.segs[0], entry)) {
+          pathspecs.add(`:(literal)${entry}`);
+        }
+      }
+    }
+  }
+  if (!pathspecs.size) return { blobs: new Map() };
+  const result = gitResult(repo, ['ls-tree', '-r', '-z', ref, '--', ...pathspecs]);
+  if (result.error || result.status !== 0) return { error: `git ls-tree failed: ${diagnostic(result)}` };
   const blobs = new Map();
-  for (const e of j.tree) {
-    if (e && e.type === 'blob' && typeof e.path === 'string') blobs.set(e.path, e.sha);
+  for (const record of result.stdout.split('\0')) {
+    if (!record) continue;
+    const tab = record.indexOf('\t');
+    if (tab === -1) return { error: 'git ls-tree answered malformed output' };
+    const [, type, sha] = record.slice(0, tab).split(' ');
+    const file = record.slice(tab + 1);
+    if (type === 'blob' && sha && declared.some((declaration) => owns(declaration, file))) blobs.set(file, sha);
   }
   return { blobs };
+}
+
+function apiJson(endpoint) {
+  const out = gh(['api', endpoint], { tolerate: true });
+  if (typeof out !== 'string') {
+    const error = (out && out.error) || 'gh api did not answer';
+    return /\b404\b|not found/i.test(error) ? { absent: true } : { error };
+  }
+  let json;
+  try { json = JSON.parse(out); } catch (error) { return { error: `API answered unparseable JSON (${error.message})` }; }
+  if (json && json.truncated === true) return { error: 'truncated listing' };
+  return { json };
+}
+
+function apiContents(ref, itemPath, repo) {
+  const suffix = itemPath
+    ? `/${itemPath.split('/').map((segment) => encodeURIComponent(segment)).join('/')}`
+    : '';
+  return apiJson(`${apiBase(repo)}/contents${suffix}?ref=${encodeURIComponent(ref)}`);
+}
+
+function apiTreeBlobs(treeSha, rootPath, repo, blobs, seen = new Set()) {
+  if (seen.has(treeSha)) return { error: 'tree response contains a repeated directory' };
+  seen.add(treeSha);
+  const result = apiJson(`${apiBase(repo)}/git/trees/${encodeURIComponent(treeSha)}`);
+  if (result.error) return result;
+  if (result.absent) return { error: 'directory tree could not be read' };
+  if (!result.json || !Array.isArray(result.json.tree)) return { error: 'git/trees answered no `tree` array' };
+  for (const entry of result.json.tree) {
+    if (!entry || typeof entry.path !== 'string') return { error: 'git/trees answered a malformed entry' };
+    const file = path.posix.join(rootPath, entry.path);
+    if (entry.type === 'blob') {
+      if (typeof entry.sha !== 'string') return { error: 'git/trees answered a blob with no sha' };
+      blobs.set(file, entry.sha);
+    } else if (entry.type === 'tree') {
+      if (typeof entry.sha !== 'string') return { error: 'git/trees answered a directory with no sha' };
+      const nested = apiTreeBlobs(entry.sha, file, repo, blobs, seen);
+      if (nested.error) return nested;
+    }
+  }
+  return { blobs };
+}
+
+function apiDirectoryBlobs(ref, entries, repo, blobs) {
+  if (entries.length >= 1000) return { error: 'truncated listing' };
+  for (const entry of entries) {
+    if (!entry || typeof entry.path !== 'string') return { error: 'contents answered a malformed directory entry' };
+    if (entry.type === 'file') {
+      if (!entry.submodule_git_url) {
+        if (typeof entry.sha !== 'string') return { error: 'contents answered a file with no sha' };
+        blobs.set(entry.path, entry.sha);
+      }
+    } else if (entry.type === 'dir') {
+      if (typeof entry.sha !== 'string') return { error: 'contents answered a directory with no sha' };
+      const nested = apiTreeBlobs(entry.sha, entry.path, repo, blobs);
+      if (nested.error) return nested;
+    }
+  }
+  return { blobs };
+}
+
+function apiPathBlobs(ref, declared, repo) {
+  const blobs = new Map();
+  for (const declaration of declared) {
+    if (declaration.startsWith('/') || declaration.split('/').includes('..')) {
+      return { error: `unsafe declared path ${JSON.stringify(declaration)}` };
+    }
+    const parsed = parse(declaration);
+    if (parsed.error) return { error: `${declaration}: ${parsed.error}` };
+    if (parsed.kind !== 'glob') {
+      const itemPath = declaration.replace(/\/\*\*$/, '').replace(/\/+$/, '');
+      const result = apiContents(ref, itemPath, repo);
+      if (result.error) return result;
+      if (result.absent) continue;
+      if (Array.isArray(result.json)) {
+        const nested = apiDirectoryBlobs(ref, result.json, repo, blobs);
+        if (nested.error) return nested;
+      } else if (result.json && ['file', 'symlink'].includes(result.json.type)) {
+        if (!result.json.submodule_git_url) {
+          if (typeof result.json.sha !== 'string' || typeof result.json.path !== 'string') {
+            return { error: 'contents answered a file with no path or sha' };
+          }
+          blobs.set(result.json.path, result.json.sha);
+        }
+      } else {
+        return { error: 'contents answered neither a file nor a directory' };
+      }
+      continue;
+    }
+
+    const starIndex = parsed.segs.findIndex((segment) => segment.includes('*'));
+    const parent = parsed.segs.slice(0, starIndex).join('/');
+    const listing = apiContents(ref, parent, repo);
+    if (listing.error) return listing;
+    if (listing.absent) {
+      if (!parent) return { error: 'repository root listing could not be read' };
+      continue;
+    }
+    if (!Array.isArray(listing.json)) return { error: 'contents answered no directory listing' };
+    if (listing.json.length >= 1000) return { error: 'truncated listing' };
+    for (const entry of listing.json) {
+      if (!entry || typeof entry.path !== 'string' || typeof entry.name !== 'string') {
+        return { error: 'contents answered a malformed directory entry' };
+      }
+      if (!segMatch(parsed.segs[starIndex], entry.name)) continue;
+      if (starIndex === parsed.segs.length - 1) {
+        if (entry.type === 'file' && !entry.submodule_git_url && typeof entry.sha === 'string'
+            && owns(declaration, entry.path)) blobs.set(entry.path, entry.sha);
+        continue;
+      }
+      if (entry.type !== 'dir') continue;
+      const itemPath = path.posix.join(entry.path, ...parsed.segs.slice(starIndex + 1));
+      const item = apiContents(ref, itemPath, repo);
+      if (item.error) return item;
+      if (item.absent) continue;
+      if (item.json && item.json.type === 'file' && !item.json.submodule_git_url
+          && typeof item.json.sha === 'string' && owns(declaration, item.json.path)) {
+        blobs.set(item.json.path, item.json.sha);
+      }
+    }
+  }
+  return { blobs };
+}
+
+function localTreeBlobs(repo, headSha, epic, declared) {
+  if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(headSha)) return { error: 'the PR head sha is invalid' };
+  const scoped = pathspecsForDeclared(declared);
+  if (scoped.error) return scoped;
+  const nonce = `${process.pid}/${crypto.randomUUID()}`;
+  const headRef = `refs/shipyard/reachability/${nonce}/head`;
+  const epicRef = `refs/shipyard/reachability/${nonce}/epic`;
+  const runGit = (args) => gitResult(repo, args);
+  try {
+    const branchRef = `refs/heads/${epic}`;
+    const validEpic = runGit(['check-ref-format', branchRef]);
+    if (validEpic.error || validEpic.status !== 0) return { error: `the epic ref ${epic} is invalid` };
+    const fetchedHead = runGit(['fetch', '--quiet', '--no-tags', 'origin', `${headSha}:${headRef}`]);
+    if (fetchedHead.error || fetchedHead.status !== 0) return { error: `the PR head could not be fetched: ${diagnostic(fetchedHead)}` };
+    const fetchedEpic = runGit(['fetch', '--quiet', '--no-tags', 'origin', `+${branchRef}:${epicRef}`]);
+    if (fetchedEpic.error || fetchedEpic.status !== 0) return { error: `the epic ref could not be fetched: ${diagnostic(fetchedEpic)}` };
+    const head = gitTreeBlobs(repo, headRef, declared);
+    if (head.error) return { error: `the PR head declared paths could not be read: ${head.error}` };
+    const epicTree = gitTreeBlobs(repo, epicRef, declared);
+    if (epicTree.error) return { error: `the epic declared paths could not be read: ${epicTree.error}` };
+    return { head, epic: epicTree };
+  } finally {
+    runGit(['update-ref', '-d', headRef]);
+    runGit(['update-ref', '-d', epicRef]);
+  }
 }
 
 // `{ ok: true|false|null }` — reachable, an alarm, or an honest unknown — plus
 // the paths and the reason. Never a refusal: the squash cannot be undone, so the
 // value here is that the operator hears about it in the same breath.
-function epicReceived({ t, pr, repo, epic }) {
+function epicReceived({ t, pr, repo, epic, ticket }) {
   const declared = (t.files || []).filter((f) => typeof f === 'string' && f.trim());
   if (!epic) return { ok: null, why: 'the ticket carries no epic (direct-to-main) — there is no epic that could have received it' };
   if (!declared.length) return { ok: null, epic, why: 'the ticket declares no files_modified — there is nothing to assert' };
   if (!pr.headRefOid) return { ok: null, epic, why: 'the live PR view reported no head sha, so the merged tree cannot be identified' };
-  const head = treeBlobs(pr.headRefOid, repo);
-  if (head.error) return { ok: null, epic, why: `the merged head tree could not be read: ${head.error}` };
-  const ep = treeBlobs(epic, repo);
-  if (ep.error) return { ok: null, epic, why: `the ${epic} tree could not be read: ${ep.error}` };
+  const checkout = localCheckout(repo, ticket);
+  let head;
+  let ep;
+  if (checkout) {
+    const local = localTreeBlobs(checkout, pr.headRefOid, epic, declared);
+    if (local.error) return { ok: null, epic, why: `local declared paths could not be read: ${local.error}` };
+    head = local.head;
+    ep = local.epic;
+  } else {
+    head = apiPathBlobs(pr.headRefOid, declared, repo);
+    if (head.error) return { ok: null, epic, why: `the merged head declared paths could not be read: ${head.error}` };
+    ep = apiPathBlobs(epic, declared, repo);
+    if (ep.error) return { ok: null, epic, why: `the ${epic} declared paths could not be read: ${ep.error}` };
+  }
 
-  // Every path in the MERGED head that a declaration owns must be in the epic
-  // with the same blob. A path the ticket DELETED owns nothing in the head and is
-  // therefore not asserted — the assertion fails safe rather than reading a
-  // deletion as an absence.
   const unreachable = [];
   let checked = 0;
   for (const decl of declared) {
-    for (const [p, sha] of head.blobs) {
-      if (!owns(decl, p)) continue;
+    const paths = new Set([...head.blobs.keys(), ...ep.blobs.keys()].filter((p) => owns(decl, p)));
+    for (const p of paths) {
       checked += 1;
+      const headSha = head.blobs.get(p);
       const epicSha = ep.blobs.get(p);
-      if (!epicSha) unreachable.push({ path: p, declared_by: decl, why: 'absent from the epic' });
-      else if (epicSha !== sha) unreachable.push({ path: p, declared_by: decl, why: `a different blob in the epic (${epicSha.slice(0, 7)} ≠ ${String(sha).slice(0, 7)})` });
+      if (!headSha) unreachable.push({ path: p, declared_by: decl, why: 'absent from the merged head' });
+      else if (!epicSha) unreachable.push({ path: p, declared_by: decl, why: 'absent from the epic' });
+      else if (epicSha !== headSha) unreachable.push({ path: p, declared_by: decl, why: `a different blob in the epic (${epicSha.slice(0, 7)} ≠ ${String(headSha).slice(0, 7)})` });
     }
   }
   if (!checked) return { ok: null, epic, why: `no path in the merged tree is owned by any of the ${declared.length} declared entr${declared.length === 1 ? 'y' : 'ies'} — nothing was asserted` };
@@ -360,6 +626,51 @@ function journal(rec) {
   withLock(lockDirFor(ROOT), 'state', () => {
     fs.appendFileSync(JOURNAL, JSON.stringify({ ts: new Date().toISOString(), ...rec }) + '\n');
   }, { label: 'sentinel journal' });
+}
+
+function journalLegacyOnce(ticket, pr, head) {
+  withLock(lockDirFor(ROOT), 'state', () => {
+    const lines = fs.existsSync(JOURNAL) ? fs.readFileSync(JOURNAL, 'utf8').split('\n').filter(Boolean) : [];
+    const prior = lines.some((line) => {
+      try {
+        const row = JSON.parse(line);
+        return row.event === 'merge_gate_legacy' && row.ticket === ticket && row.pr === pr;
+      } catch { return false; }
+    });
+    if (!prior) fs.appendFileSync(JOURNAL, JSON.stringify({ ts: new Date().toISOString(),
+      event: 'merge_gate_legacy', ticket, pr, head }) + '\n');
+  }, { label: 'sentinel legacy journal' });
+}
+
+// @contract: the state lock permits one request attempt per PR head.
+function rerequestReviewOnce(ticket, pr, head, repo) {
+  return withLock(lockDirFor(ROOT), 'state', () => {
+    const rows = fs.existsSync(JOURNAL) ? fs.readFileSync(JOURNAL, 'utf8').split('\n') : [];
+    const prior = rows.some((line) => {
+      try {
+        const row = JSON.parse(line);
+        return row.event === 'review_rerequest' && row.ticket === ticket && row.pr === pr && row.head === head;
+      } catch { return false; }
+    });
+    if (prior) return { already: true };
+    const call = runBounded('node', [path.join(__dirname, 'reviewers.cjs'), 'reinit', String(pr), '--force', '--json', ...repoArg(repo)], {
+      timeoutMs: REVIEWER_TIMEOUT_MS,
+    });
+    let result = null;
+    let error = call.status !== 0 ? diagnostic(call) : null;
+    if (!error) {
+      try { result = JSON.parse(call.stdout); } catch { error = 'reinit returned unreadable JSON'; }
+    }
+    const reviewers = result
+      ? [result.coderabbit?.requested && 'coderabbitai', result.copilot?.requested && 'copilot'].filter(Boolean)
+      : [];
+    if (!error && !reviewers.length) error = 'reinit did not request any reviewer';
+    fs.appendFileSync(JOURNAL, JSON.stringify({
+      ts: new Date().toISOString(), event: 'review_rerequest', ticket, pr, head, reviewers,
+      ...(error ? { error } : {}),
+    }) + '\n');
+    return error ? { error } : { reviewers };
+  }, { label: 'sentinel review rerequest' });
 }
 
 // ── duty: who owns each open PR right now ───────────────────────────────────
@@ -691,7 +1002,10 @@ function dutyItems() {
     } else if (s.draft) {
       item.action = 'undraft';
       item.why = 'green + conform, still a draft — ready it (`gh pr ready`); nothing else is owed';
-    } else if (needsHuman(t)) {
+    } else if (t.checkpoint === 'review' && !reviewCheckpointReady(s)) {
+      item.action = 'human';
+      item.why = 'awaiting human review';
+    } else if (needsHuman(t) && t.checkpoint !== 'review') {
       // Only an UNANSWERED checkpoint is the human's. A pre-authorized one
       // (ADR-001 D6) falls through to the ordinary chain below: the person
       // supplied that judgement while approving the ticket set, so what is left
@@ -902,17 +1216,17 @@ function mergeOne(id) {
   if (!AUTO_MERGE) return block(`auto-merge refused: ${AUTO_MERGE_WHY}`);
   if (s.status !== 'pr-open') return block(`status is ${s.status}, not pr-open`);
   if (!s.pr) return block('no PR recorded for the ticket');
-  if (needsHuman(t)) return block('human_checkpoint ticket — the merge is the human\'s by contract');
+  if (needsHuman(t) && t.checkpoint !== 'review') return block('human_checkpoint ticket — the merge is the human\'s by contract');
   // WHY this checkpoint was passable, recorded on the result and, below, on the
   // journal line. Design-time authorization is only defensible if it is auditable
   // afterwards: without this the board cannot tell "a human approved this in
   // advance" from "the guard merged a checkpoint it should have refused".
   // Set here rather than at the merge call so a `--dry-run` reports it too.
-  if (t.human_checkpoint && t.preauthorized === true) res.preauthorized = true;
+  if (t.human_checkpoint && t.checkpoint !== 'review' && t.preauthorized === true) res.preauthorized = true;
 
   const repo = s.repo || null;
   const view = gh(['pr', 'view', String(s.pr), ...repoArg(repo), '--json',
-    'number,state,isDraft,baseRefName,headRefName,headRefOid,mergeStateStatus,reviewDecision,body'], { tolerate: true });
+    'number,state,isDraft,baseRefName,headRefName,headRefOid,createdAt,mergeStateStatus,reviewDecision,author,body'], { tolerate: true });
   if (typeof view !== 'string') return block(`gh pr view failed: ${view.error}`);
   let pr;
   try { pr = JSON.parse(view); } catch (e) { return block(`gh pr view returned unparseable JSON (${e.message})`); }
@@ -920,6 +1234,10 @@ function mergeOne(id) {
   res.base = pr.baseRefName;
   if (pr.state !== 'OPEN') return block(`PR is ${pr.state}, not OPEN`);
   if (pr.isDraft) return block('PR is still a draft — the conform gate has not been passed');
+  if (t.checkpoint === 'review') {
+    if (!reviewCheckpointApproval(pr, repo)) return block('awaiting human review');
+    res.checkpoint = 'review';
+  }
 
   // The stack boundary. A ticket PR may only land on the phase epic or on a
   // parent ticket's branch, both inside its own repo AND inside its own PHASE.
@@ -1008,6 +1326,62 @@ function mergeOne(id) {
   }
   res.gate = gate;
 
+  // @security: a missing marker is accepted only after reading the private store.
+  const ownCheckout = repo ? null : localCheckout(null, id);
+  const coverageRepo = repo || (ownCheckout ? coverage.repoSlug(ownCheckout) : undefined);
+  let marker;
+  try { marker = coverage.rolloutState({ repo: coverageRepo }); }
+  catch (error) {
+    return block(`coverage state root or rollout marker unreadable: ${error.message}; configure a readable checkout and state root`);
+  }
+  if (!marker || (typeof pr.createdAt === 'string' && Number.isFinite(Date.parse(pr.createdAt))
+      && Date.parse(pr.createdAt) <= Date.parse(marker.recorded_at))) {
+    res.coverage = 'legacy';
+  } else {
+    const remedy = `re-run the work through the conveyor: deliver-dispatch.cjs build ci-fix|review-fix ${id} ` +
+      'or the executor entry point, or remove the hand commit, then re-verify';
+    const checkout = ownCheckout || localCheckout(repo, id);
+    if (!checkout) return block(`coverage chain unavailable: configure a local checkout and state root; ${remedy}`);
+    try {
+      const checkedMarker = coverage.rolloutMarker({ repo: coverageRepo, worktree: checkout });
+      if (!checkedMarker || checkedMarker.recorded_at !== marker.recorded_at) {
+        throw new Error('rollout marker changed during the gate');
+      }
+    } catch (error) { return block(`coverage marker repository mismatch: ${error.message}; ${remedy}`); }
+    if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(pr.headRefOid || '')) {
+      return block(`coverage chain unreadable: the live PR head is invalid; ${remedy}`);
+    }
+    if (typeof pr.createdAt !== 'string' || !Number.isFinite(Date.parse(pr.createdAt))) {
+      return block(`coverage rollout cannot compare the PR createdAt; ${remedy}`);
+    }
+    const baseRef = `refs/heads/${pr.baseRefName}`;
+    const refCheck = gitResult(checkout, ['check-ref-format', baseRef]);
+    if (refCheck.error || refCheck.status !== 0) return block(`coverage base ref invalid; ${remedy}`);
+    const fetchedBase = gitResult(checkout, ['fetch', '--quiet', '--no-tags', 'origin',
+      `+${baseRef}:refs/remotes/origin/${pr.baseRefName}`]);
+    if (fetchedBase.error || fetchedBase.status !== 0) {
+      return block(`coverage base could not be fetched: ${diagnostic(fetchedBase)}; verify the local checkout and state root; ${remedy}`);
+    }
+    const headPresent = gitResult(checkout, ['cat-file', '-e', `${pr.headRefOid}^{commit}`]);
+    if (headPresent.error || headPresent.status !== 0) {
+      const fetchedHead = gitResult(checkout, ['fetch', '--quiet', '--no-tags', 'origin', pr.headRefOid]);
+      if (fetchedHead.error || fetchedHead.status !== 0) {
+        return block(`coverage head could not be fetched: ${diagnostic(fetchedHead)}; verify the local checkout and state root; ${remedy}`);
+      }
+    }
+    const chain = coverage.chain({ repo: coverageRepo, worktreeOrCheckout: checkout,
+      base: `origin/${pr.baseRefName}`, head: pr.headRefOid });
+    if (!chain.covered) {
+      if (!dryRun && chain.commit) journal({ event: 'merge_gate_uncovered', ticket: id, pr: s.pr,
+        head: pr.headRefOid, commit: chain.commit });
+      const detail = chain.commit ? `${chain.commit} (${chain.subject}; ${chain.author})`
+        : `${chain.reason}; verify the local checkout and coverage state root`;
+      return block(`coverage chain refused at ${detail}; ${remedy}`);
+    }
+    res.coverage = 'chain';
+    res.coverage_links = chain.links;
+  }
+
   const checks = ghChecks(s.pr, repo);
   res.checks = checks;
   // ASKED FIRST, ahead of the tallies, because an `unavailable` answer has all of
@@ -1049,7 +1423,24 @@ function mergeOne(id) {
     unresolved = reviewState.unresolved_count;
   } catch { unresolved = null; }
   if (typeof unresolved !== 'number') return block('review threads unreadable — refusing to merge blind');
+  if (pr.mergeStateStatus === 'BLOCKED') return block('GitHub reports the merge as BLOCKED (branch protection: a required review or check is missing)');
   if (reviewState.review_fresh === false) {
+    if (reviewState.stale_bot_only && pr.headRefOid) {
+      const remedy = reviewState.remedy || `reviewers.cjs reinit ${s.pr} --force`;
+      if (dryRun) return block(`stale bot approval — would re-request review once; if still stale, run ${remedy}`);
+      const request = rerequestReviewOnce(id, s.pr, pr.headRefOid, repo);
+      if (request.already) {
+        const reason = `stale bot approval remains after one re-request on this head — ${remedy}`;
+        if (!ESCALATED[id]) {
+          const marked = runBounded('node', [path.join(__dirname, 'escalation-record.cjs'),
+            'mark', id, reason, '--graph', GRAPH_DIR], { timeoutMs: REVIEWER_TIMEOUT_MS });
+          if (marked.status !== 0) return block(`${reason}; escalation record failed (${diagnostic(marked)})`);
+        }
+        return block(`escalated: ${reason}`);
+      }
+      if (request.error) return block(`stale bot approval; re-request failed (${request.error}) — escalate: ${remedy}`);
+      return block(`stale bot approval — re-requested ${request.reviewers.join(', ')} on this head; waiting for review`);
+    }
     return block(`${reviewState.review_freshness_reason || 'the approved review is stale'} — review approval must cover the current head`);
   }
   if (unresolved > 0) return block(`${unresolved} unresolved review thread(s)`);
@@ -1069,7 +1460,6 @@ function mergeOne(id) {
       'resolve, commit, push (NO force). Do not rebase a branch that already has a PR.'
     );
   }
-  if (pr.mergeStateStatus === 'BLOCKED') return block('GitHub reports the merge as BLOCKED (branch protection: a required review or check is missing)');
 
   // The green that is the most expensive to trust: CI passed against a base that
   // has since moved. Retargeting a cascade child updates WHERE it points; it does
@@ -1131,7 +1521,10 @@ function mergeOne(id) {
   // reader can count design-time approvals without re-deriving them from the
   // graph — and an ordinary merge never claims one.
   journal({ event: 'merge', ticket: id, pr: s.pr, base: pr.baseRefName, repo, by: 'sentinel',
-    ...(res.preauthorized ? { preauthorized: true } : {}) });
+    coverage: res.coverage,
+    ...(res.preauthorized ? { preauthorized: true } : {}),
+    ...(res.checkpoint ? { checkpoint: res.checkpoint } : {}) });
+  if (res.coverage === 'legacy') journalLegacyOnce(id, s.pr, pr.headRefOid);
 
   // Cascade children based on THIS branch now have to move onto the epic —
   // GitHub does it by itself when the head branch is deleted, and we do not
@@ -1223,7 +1616,7 @@ function mergeOne(id) {
   // result carries the verdict, the merge line prints it, and an ALARM is
   // journalled by the same writer that owns the `merge` event above, so a run
   // that ends before anyone reads stdout has still recorded it.
-  res.reachability = epicReceived({ t, pr, repo, epic });
+  res.reachability = epicReceived({ t, pr, repo, epic, ticket: id });
   if (res.reachability.ok === false) {
     res.epic_unreachable = res.reachability.unreachable.map((u) => u.path);
     journal({

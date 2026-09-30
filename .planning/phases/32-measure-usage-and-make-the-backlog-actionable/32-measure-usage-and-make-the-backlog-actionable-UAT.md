@@ -1,10 +1,10 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 7f4129498963fdd5cb146ba1e4e1a04ace6646f99afad7d234ab8b7e154a7bd2
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 14e54e6b3741386f99000c9c429d81859cd7be251ae1c36776dc65557fc683c7
 phase: 32
-status: passed
-result: passed
+status: pending
+result: pending
 shipyard_sync: evidence-projection
-shipyard_source_fingerprint: 7f4129498963fdd5cb146ba1e4e1a04ace6646f99afad7d234ab8b7e154a7bd2
+shipyard_source_fingerprint: 14e54e6b3741386f99000c9c429d81859cd7be251ae1c36776dc65557fc683c7
 ---
 
 # Phase 32: Measure usage and make the backlog actionable — UAT Projection
@@ -12,9 +12,9 @@ shipyard_source_fingerprint: 7f4129498963fdd5cb146ba1e4e1a04ace6646f99afad7d234a
 This file is generated from the delivery graph and phase integration evidence.
 
 ### 1. Delivery plans are accounted for
-result: passed
+result: pending
 expected: all 7 phase plan(s) are merged
-actual: 7 merged
+actual: 6 merged
 
 ### 2. Integration evidence is explicit
 result: passed
