@@ -697,6 +697,16 @@ function createDurableRecorder(storeDir) {
         throw boundaryError('RECORD_FAILED', `durable dispatch finalization failed: ${error.message}`, { dispatch_id: dispatchId });
       }
     },
+    getReservation(dispatchId) {
+      if (typeof dispatchId !== 'string' || dispatchId.trim() === '') return null;
+      const stored = readJsonFile(reservationFile(dispatchId));
+      if (!isObject(stored) || stored.dispatch_id !== dispatchId) return null;
+      return Object.freeze({
+        dispatch_id: dispatchId,
+        reserved_at: typeof stored.reserved_at === 'string' ? stored.reserved_at : null,
+        recorded: fs.existsSync(recordFile(dispatchId)),
+      });
+    },
     getReceipt(dispatchId) {
       const stored = readStored(recordFile(dispatchId));
       return stored ? stored.payload : null;
@@ -1719,6 +1729,7 @@ function createDispatchBoundary(options = {}) {
     refuse('INVALID_CAPACITY', 'dispatch capacity must expose synchronous acquire and release methods');
   }
   const requireGsdRole = options.requireGsdRole === true;
+  const recoverReserved = options.recoverReserved === true;
   const adapterHandoff = Object.values(adapters).find((adapter) => adapter && adapter.handoff)?.handoff;
   const handoffInput = options.handoff
     || options.sessionHandoff
@@ -1946,6 +1957,19 @@ function createDispatchBoundary(options = {}) {
   }
 
   function reserveDispatchId(dispatchId, recorder, resolution) {
+    if (recoverReserved) {
+      // @security: recovery never mints an id; it may only finish a durable reservation nobody recorded.
+      if (!DURABLE_RECORDERS.has(recorder) || typeof recorder.getReservation !== 'function') {
+        refuse('RECOVERY_NO_RESERVATION', 'recovery requires the durable dispatch recorder', { dispatch_id: dispatchId });
+      }
+      const reservation = recorder.getReservation(dispatchId);
+      if (!reservation) refuse('RECOVERY_NO_RESERVATION', 'dispatch id has no durable reservation to recover', { dispatch_id: dispatchId });
+      if (reservation.recorded || reservedDispatchIds.has(dispatchId) || trustedReceipts.has(dispatchId)) {
+        refuse('RECOVERY_ALREADY_RECORDED', 'dispatch id already has a durable record; recovery cannot record twice', { dispatch_id: dispatchId });
+      }
+      reservedDispatchIds.add(dispatchId);
+      return;
+    }
     if (reservedDispatchIds.has(dispatchId) || trustedReceipts.has(dispatchId)) {
       refuse('DUPLICATE_DISPATCH_ID', 'dispatch id was already reserved or recorded; replay cannot launch', { dispatch_id: dispatchId });
     }
