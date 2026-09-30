@@ -1,7 +1,7 @@
 ---
-status: open
-closed:
-adr:
+status: closed
+closed: 2026-09-30
+adr: .planning/architecture/ADR-024-model-ladder-refresh.md
 ---
 # Problem
 
