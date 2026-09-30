@@ -2456,7 +2456,7 @@ function createDispatchBoundary(options = {}) {
         try {
           handoffController.completeLaunch(handoffReservation, { recorded: false,
             reason: error && error.message ? error.message : 'launch failed' });
-        } catch (_) { /* the durable ambiguous marker is safer than a retry */ }
+        } catch (_) { /* @invariant: retain the durable ambiguous marker rather than retrying. */ }
       }
       if (priorLease) priorLease.stop();
       if (priorClaim) recorderRelease(record, prior.dispatch_id, claimConsumerId, priorClaim);
