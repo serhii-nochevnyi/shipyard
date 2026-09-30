@@ -1,13 +1,13 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 5d07d6e172f76c35a651ec69e0132627c83e59b98fcbbd981f371f5c2b0c7b98
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 1b132317763e532fdaf4da9d153c5fa2791db63e07e2643981019aa86860751f
 gsd_state_version: '1.0'
 status: planning
 progress:
   total_phases: 27
   completed_phases: 10
-  total_plans: 249
-  completed_plans: 240
-  percent: 96
+  total_plans: 247
+  completed_plans: 243
+  percent: 98
 ---
 
 # Project State
@@ -26,11 +26,11 @@ Plan: 6 of 6 merged
 Status: pending
 Last activity: 2026-09-30 — Shipyard projection synchronized
 
-Progress: [█████████░] 96%
+Progress: [█████████░] 98%
 
 ## Performance Metrics
 
-- Total plans completed: 240
+- Total plans completed: 243
 - Average duration: not measured by the projection
 - Total execution time: not measured by the projection
 
@@ -63,8 +63,8 @@ Progress: [█████████░] 96%
 | 42 | 3 | 3 | gaps_found |
 | 43 | 19 | 19 | pending |
 | 44 | 8 | 8 | pending |
-| 45 | 14 | 11 | pending |
-| 46 | 6 | 0 | pending |
+| 45 | 14 | 14 | pending |
+| 46 | 4 | 0 | pending |
 
 ## Accumulated Context
 
@@ -79,14 +79,14 @@ Review and resolve phase integration findings shown in the phase artifacts.
 
 ### Blockers/Concerns
 
-- T-45-09: delivery status is pr-open
-- T-45-10: delivery status is pr-open
-- T-45-11: delivery status is pr-open
 - T-46-01: delivery status is pending
-- T-46-02: delivery status is pending
-- T-46-03: delivery status is pending
 - T-46-04: delivery status is pending
 - T-46-05: delivery status is pending
+- T-46-06: delivery status is pending
+- Phase 20: INTEGRATION.md is missing
+- Phase 21: INTEGRATION.md is missing
+- Phase 22: INTEGRATION.md is missing
+- Phase 23: INTEGRATION.md is missing
 
 ## Deferred Items
 
@@ -96,6 +96,6 @@ Review and resolve phase integration findings shown in the phase artifacts.
 
 ## Session Continuity
 
-Last session: 2026-09-30 14:22
+Last session: 2026-09-30 18:52
 Stopped at: Shipyard GSD projection synchronized from the delivery graph.
 Resume file: None

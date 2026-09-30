@@ -1,21 +1,15 @@
 {
-  "generated_at": "2026-09-30T15:42:58.109Z",
-  "observed_at": "2026-09-30T15:42:58.109Z",
-  "generation": 402,
+  "generated_at": "2026-09-30T18:53:31.443Z",
+  "observed_at": "2026-09-30T18:53:31.443Z",
+  "generation": 404,
   "parked_by_run": [],
   "auto_merge": "epic",
-  "dispatches_applied_at": "2026-09-30T15:42:58.109Z",
+  "dispatches_applied_at": "2026-09-30T18:53:31.443Z",
   "actionable": {
-    "execute": [
-      "T-46-01"
-    ],
+    "execute": [],
     "publish": [],
     "fix": [],
-    "finalize": [
-      "T-45-09",
-      "T-45-10",
-      "T-45-11"
-    ],
+    "finalize": [],
     "merge": []
   },
   "waiting": {
@@ -27,8 +21,7 @@
   },
   "parked": {
     "blocked": [
-      "T-46-02",
-      "T-46-03",
+      "T-46-01",
       "T-46-04",
       "T-46-05",
       "T-46-06"
@@ -271,56 +264,50 @@
       "T-45-06",
       "T-45-07",
       "T-45-08",
+      "T-45-09",
+      "T-45-10",
+      "T-45-11",
       "T-45-12",
       "T-45-13",
       "T-45-14"
     ]
   },
   "why": {
-    "T-45-09": "PR #369: green, no `gate_status: arch-review=conform` trailer — threads + arch-review still owed",
-    "T-45-10": "PR #383: green and still a draft — threads, arch-review, conform gate",
-    "T-45-11": "PR #382: green and still a draft — threads, arch-review, conform gate",
-    "T-46-01": "ready — worktree + executor",
-    "T-46-02": "T-46-01 (parent has no branch yet (nothing to cascade from))",
-    "T-46-03": "T-46-01 (parent has no branch yet (nothing to cascade from))",
-    "T-46-04": "T-43-14 (cross-phase parent must land on main first (phase 43 epic still ahead)); T-43-15 (cross-phase parent must land on main first (phase 43 epic still ahead)); T-43-19 (cross-phase parent must land on main first (phase 43 epic still ahead))",
-    "T-46-05": "T-46-02 (parent has no branch yet (nothing to cascade from)); T-46-03 (parent has no branch yet (nothing to cascade from)); T-46-04 (parent has no branch yet (nothing to cascade from))",
+    "T-46-01": "escalated — Phase 46 atomic core is held: mechanical Gate2 rejects active cross-phase ownership of dispatch-boundary.test.cjs (T-45-09), codex-decompose-host.test.cjs (T-45-09/T-45-11), and claude-decompose-host.test.cjs (T-45-10). Require actual owner landing or supported approved handoff and fresh successful graph validation before resuming native executor. Authenticated partial core commit 1ca29f3658717efc8c212f6a5e81d33cfb2557f5 is reusable; private proposals are not accepted implementation.. It lifts by itself once the PR moves (a push, a review answer, undrafting); `escalation-record.cjs clear T-46-01` to take it back.",
+    "T-46-04": "T-46-01 (parent has no branch yet (nothing to cascade from))",
+    "T-46-05": "T-46-04 (parent has no branch yet (nothing to cascade from))",
     "T-46-06": "T-46-05 (parent has no branch yet (nothing to cascade from))"
   },
   "counts": {
-    "execute": 1,
+    "execute": 0,
     "publish": 0,
     "fix": 0,
-    "finalize": 3,
+    "finalize": 0,
     "merge": 0,
     "ci": 0,
     "dispatched": 0,
     "parent": 0,
     "merge_human": 0,
     "human": 0,
-    "blocked": 5,
-    "done": 240
+    "blocked": 4,
+    "done": 243
   },
   "parent_of": {},
-  "actionable_count": 4,
+  "actionable_count": 0,
   "tracker_blocked_count": 0,
   "left_behind_count": 0,
-  "fixpoint": false,
+  "fixpoint": true,
   "capacity": {
     "max": 4,
     "in_flight": 0,
     "free": 4
   },
   "sentinel": {
-    "duty": [
-      "T-45-09",
-      "T-45-10",
-      "T-45-11"
-    ],
+    "duty": [],
     "waiting_ci": [],
     "waiting_parent": [],
     "dispatched": [],
-    "clear": false
+    "clear": true
   },
   "roles": {
     "execute": [

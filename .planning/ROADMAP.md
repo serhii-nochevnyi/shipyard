@@ -898,8 +898,8 @@ Native-role policy changes are authorized for investigation and implementation a
 <!-- shipyard:gsd-sync:begin -->
 ## Shipyard synchronization (generated)
 
-- Source fingerprint: `4d79eca35ff490e3c86e0da90cfb5fa81330950c46255b3228f577c3c9b06d8f`
-- Plans merged: 240/249
+- Source fingerprint: `ac28b0b3eff636ae634fdb6dc5709a51575532d1824a5851645ac3b983215e4e`
+- Plans merged: 243/247
 - Phases verified: 10/27
 - Current phase: 20
 
@@ -930,7 +930,7 @@ Native-role policy changes are authorized for investigation and implementation a
 | 42 — Resume trusted finalization without executor replay | 3 | 3 | gaps_found |
 | 43 — Target-project delivery at scale | 19 | 19 | pending |
 | 44 — Optimize subscription efficiency per runtime | 8 | 8 | pending |
-| 45 — Close residual pipeline efficiency gaps | 14 | 11 | pending |
-| 46 — Refresh the native runtime model ladder | 6 | 0 | pending |
+| 45 — Close residual pipeline efficiency gaps | 14 | 14 | pending |
+| 46 — Refresh the native runtime model ladder | 4 | 0 | pending |
 
 <!-- shipyard:gsd-sync:end -->

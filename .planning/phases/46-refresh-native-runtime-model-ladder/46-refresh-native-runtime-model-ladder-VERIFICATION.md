@@ -1,8 +1,8 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: ff19780a65370309f896723421002dedb132445fed751ea450ba8aaa47612027
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: b4035723a80c02c5b6d8dd26b650a192202201448fe63474b41e27ab15a1721e
 phase: 46
 status: human_needed
-shipyard_source_fingerprint: ff19780a65370309f896723421002dedb132445fed751ea450ba8aaa47612027
+shipyard_source_fingerprint: b4035723a80c02c5b6d8dd26b650a192202201448fe63474b41e27ab15a1721e
 ---
 
 # Phase 46: Refresh the native runtime model ladder — Verification Projection
@@ -13,7 +13,7 @@ shipyard_source_fingerprint: ff19780a65370309f896723421002dedb132445fed751ea450b
 
 | Truth | Evidence | Status |
 |---|---|---|
-| Every phase plan is accounted for | 0/6 delivery records are merged | ? UNCERTAIN |
+| Every phase plan is accounted for | 0/4 delivery records are merged | ? UNCERTAIN |
 | Integration is coherent | INTEGRATION.md is missing | ? UNCERTAIN |
 | Verification evidence is present | INTEGRATION.md is missing | ? UNCERTAIN |
 
@@ -22,8 +22,6 @@ shipyard_source_fingerprint: ff19780a65370309f896723421002dedb132445fed751ea450b
 | Ticket | Delivery | Plan status |
 |---|---|---|
 | T-46-01 | pending | ? UNCERTAIN |
-| T-46-02 | pending | ? UNCERTAIN |
-| T-46-03 | pending | ? UNCERTAIN |
 | T-46-04 | pending | ? UNCERTAIN |
 | T-46-05 | pending | ? UNCERTAIN |
 | T-46-06 | pending | ? UNCERTAIN |
@@ -35,4 +33,4 @@ shipyard_source_fingerprint: ff19780a65370309f896723421002dedb132445fed751ea450b
 
 ## Gaps Summary
 
-**Not green:** 6 plan(s) are not merged.
+**Not green:** 4 plan(s) are not merged.
