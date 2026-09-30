@@ -47,11 +47,14 @@ function graphData(graph) {
   if (!fs.existsSync(file)) fail(`no ticket graph at ${graph}`);
   return JSON.parse(fs.readFileSync(file, 'utf8')).tickets || {};
 }
-function declarations(graph, repo) {
+function declarationConfig(graph, repo) {
   if (!REPO.test(repo || '')) fail('invalid repository slug');
   const loaded = loadConfig(project(graph));
   if (!loaded.valid) fail(`invalid pipeline config: ${loaded.error && loaded.error.message}`);
-  return repoValue(loaded, 'repo_remedies', repo) || [];
+  return loaded;
+}
+function declarations(graph, repo) {
+  return repoValue(declarationConfig(graph, repo), 'repo_remedies', repo) || [];
 }
 function signatureFromFile(file) {
   const raw = fs.readFileSync(file, 'utf8');
@@ -63,6 +66,18 @@ function signatureFromFile(file) {
   } catch {}
   if (/^(?:unknown-)?[0-9a-f]{16}$/.test(trimmed)) return trimmed;
   return computeSignature(raw).signature;
+}
+function signatureEvidenceFromFile(file) {
+  if (!file) fail('run needs --signature-file with signature and head evidence');
+  let evidence;
+  try { evidence = JSON.parse(fs.readFileSync(file, 'utf8')); }
+  catch { fail('signature evidence must be JSON with signature and head'); }
+  if (!evidence || typeof evidence !== 'object' || Array.isArray(evidence)
+      || !/^(?:unknown-)?[0-9a-f]{16}$/.test(evidence.signature || '')
+      || !OID.test(evidence.head || '')) {
+    fail('signature evidence must contain a normalized signature and failure head');
+  }
+  return evidence;
 }
 function match({ repo, signatureFile, signature, graph = graphDir() }) {
   if (!signature && !signatureFile) fail('match needs a signature file');
@@ -105,18 +120,22 @@ function journal(graph) {
     try { return [JSON.parse(line)]; } catch { return []; }
   });
 }
-function run({ ticket, repo, pr, index, graph = graphDir() }) {
+function run({ ticket, repo, pr, index, signatureFile, graph = graphDir() }) {
   if (!/^[A-Za-z0-9][A-Za-z0-9-]*$/.test(ticket || '')) fail('invalid ticket');
   const branch = ticketState(graph, ticket, repo, pr);
   return withLock(lockDirFor(project(graph)), 'repo-remedy', () => {
-    const entries = declarations(graph, repo);
+    const loaded = declarationConfig(graph, repo);
+    const entries = repoValue(loaded, 'repo_remedies', repo) || [];
     if (!Number.isSafeInteger(index) || index < 0 || index >= entries.length) fail('absent or invalid remedy entry');
     const entry = entries[index];
     if (!entry || !entry.signature || !entry.workflow || !entry.bot) fail('malformed remedy entry');
-    const budget = loadConfig(project(graph)).config.max_attempts;
+    const evidence = signatureEvidenceFromFile(signatureFile);
+    if (evidence.signature !== entry.signature) fail('current failure signature does not match remedy entry');
+    const budget = loaded.config.max_attempts;
     if (history(graph, ticket).attempts >= budget) fail(`remedy attempt budget exhausted (${budget})`);
     const view = prView(repo, pr);
     if (view.headRefName !== branch) fail('GitHub PR branch mismatch');
+    if (evidence.head !== view.headRefOid) fail('signature evidence is stale for the current PR head');
     const head = view.headRefOid;
     const ref = entry.ref || branch;
     const args = ['workflow', 'run', entry.workflow, '--repo', repo, '--ref', ref];
@@ -211,11 +230,12 @@ if (require.main === module) {
       result = match({ repo: flags.repo, signatureFile: flags.signature_file, graph });
     } else if (action === 'run' && positional.length === 1 && flags.repo && flags.pr && flags.entry !== undefined) {
       if (!/^(?:0|[1-9]\d*)$/.test(flags.entry)) fail('invalid remedy entry index');
-      result = run({ ticket: positional[0], repo: flags.repo, pr: flags.pr, index: Number(flags.entry), graph });
+      result = run({ ticket: positional[0], repo: flags.repo, pr: flags.pr, index: Number(flags.entry),
+        signatureFile: flags.signature_file, graph });
     } else if (action === 'attribute' && positional.length === 1 && flags.repo && flags.run) {
       result = attribute({ ticket: positional[0], repo: flags.repo, runId: flags.run, graph,
         worktree: flags.worktree || process.cwd() });
-    } else fail('usage: repo-remedy.cjs match --repo <slug> --signature-file <file> | run <ticket> --repo <slug> --pr <n> --entry <index> | attribute <ticket> --repo <slug> --run <id>');
+    } else fail('usage: repo-remedy.cjs match --repo <slug> --signature-file <file> | run <ticket> --repo <slug> --pr <n> --entry <index> --signature-file <evidence.json> | attribute <ticket> --repo <slug> --run <id>');
     console.log(flags.json ? JSON.stringify(result) : JSON.stringify(result, null, 2));
     if (result.result === 'unattributed') process.exitCode = 1;
   } catch (error) {

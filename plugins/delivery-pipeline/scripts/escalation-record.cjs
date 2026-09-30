@@ -423,7 +423,7 @@ if (require.main === module) {
         const budget = loaded.config.max_attempts;
         candidate = found.match.workflow;
         if (attempts < budget) {
-          fail(`declared remedy must run before escalation: repo-remedy.cjs run ${ticket} --repo ${repo} --pr ${s.pr} --entry ${found.match.entry_index}`);
+          fail(`declared remedy must run before escalation: repo-remedy.cjs run ${ticket} --repo ${repo} --pr ${s.pr} --entry ${found.match.entry_index} --signature-file <signature-and-head-evidence.json>`);
         }
       }
     }

@@ -73,6 +73,7 @@ test('mark requires a matching declared remedy while budget remains', () => {
   const blocked = run(dir, args);
   assert.strictEqual(blocked.status, 1);
   assert.ok(/repo-remedy\.cjs run T-16-05 --repo owner\/repo --pr 606 --entry 0/.test(blocked.stderr), blocked.stderr);
+  assert.ok(/--signature-file <signature-and-head-evidence\.json>/.test(blocked.stderr), blocked.stderr);
   assert.ok(!fs.existsSync(path.join(graph, 'escalations.json')));
   fs.writeFileSync(path.join(graph, 'delivery-log.jsonl'), JSON.stringify({ event: 'remedy_dispatch',
     ticket: 'T-16-05', ts: new Date().toISOString(), pr: 606, repo: 'owner/repo',

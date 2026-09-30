@@ -548,7 +548,7 @@ function normalizeReviewerBots(value, warnings) {
 }
 
 function normalizeRepositoryRemedies(value, warnings) {
-  return normalizeRepositoryArrayMap(value, warnings, 'repo_remedies', true, (remedy) => {
+  return normalizeRepositoryArrayMap(value, warnings, 'repo_remedies', false, (remedy) => {
     if (!remedy || typeof remedy !== 'object' || Array.isArray(remedy)) {
       return { ok: false, error: `entry ${JSON.stringify(remedy)} must be an object` };
     }
@@ -622,6 +622,7 @@ function repoValue(cfg, key, repo) {
   const map = source && source[key];
   if (!map || typeof map !== 'object' || Array.isArray(map)) return null;
   if (Object.prototype.hasOwnProperty.call(map, repo) && map[repo] !== undefined) return map[repo] ?? null;
+  if (key === 'repo_remedies') return null;
   if (Object.prototype.hasOwnProperty.call(map, 'default')) return map.default ?? null;
   return null;
 }
