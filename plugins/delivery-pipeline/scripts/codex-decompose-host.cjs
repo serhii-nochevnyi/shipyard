@@ -345,6 +345,24 @@ function artifactDigests(scope, writerLease, snapshot, declared, code) {
     fail(code, 'planning tree delta differs from the authenticated child artifact declaration');
   }
   const directory = phaseDirectory(scope.worktree, scope.phase);
+  try {
+    assertContained({ worktree: scope.worktree, allowed: [path.relative(scope.worktree, directory)] });
+  } catch (_) {
+    fail(code, 'planning tree changed outside the current phase directory');
+  }
+  let worktreeReal;
+  let directoryReal;
+  try {
+    worktreeReal = fs.realpathSync(scope.worktree);
+    directoryReal = fs.realpathSync(directory);
+  } catch (_) {
+    fail(code, 'planning phase directory does not resolve within the current worktree');
+  }
+  const directoryFromWorktree = path.relative(worktreeReal, directoryReal);
+  if (directoryFromWorktree === '..' || directoryFromWorktree.startsWith('..' + path.sep)
+      || path.isAbsolute(directoryFromWorktree)) {
+    fail(code, 'planning phase directory resolves outside the current worktree');
+  }
   const digests = {};
   for (const relative of declared) {
     const full = path.join(directory, ...relative.split('/'));
@@ -352,9 +370,18 @@ function artifactDigests(scope, writerLease, snapshot, declared, code) {
     try { stat = fs.lstatSync(full); }
     catch (_) { fail(code, 'declared artifact is missing: ' + relative); }
     if (stat.isSymbolicLink() || !stat.isFile()) fail(code, 'declared artifact is not a regular file: ' + relative);
+    let real;
     try {
-      assertContained({ worktree: scope.worktree, allowed: [path.relative(scope.worktree, full)] });
-    } catch (_) { fail(code, 'declared artifact resolves outside the current worktree: ' + relative); }
+      real = fs.realpathSync(full);
+    } catch (_) { fail(code, 'declared artifact cannot be resolved within the current worktree: ' + relative); }
+    const artifactFromWorktree = path.relative(worktreeReal, real);
+    const artifactFromDirectory = path.relative(directoryReal, real);
+    if (artifactFromWorktree === '..' || artifactFromWorktree.startsWith('..' + path.sep)
+        || path.isAbsolute(artifactFromWorktree)
+        || artifactFromDirectory === '..' || artifactFromDirectory.startsWith('..' + path.sep)
+        || path.isAbsolute(artifactFromDirectory)) {
+      fail(code, 'declared artifact resolves outside the current worktree phase: ' + relative);
+    }
     const digest = sha256File(full);
     if (!digest) fail(code, 'declared artifact cannot be digested: ' + relative);
     digests[relative] = digest;
@@ -409,19 +436,34 @@ function verifyRuntimeEvidence(record, scope, binding, transcriptDir) {
       || evidence.native_child_evidence.parent_thread_id !== sessionId
       || evidence.native_child_evidence.agent_role !== binding.gsd_role
       || evidence.native_child_evidence.agent_file_digest !== binding.agent.sha256
-      || !object(evidence.stream_evidence) || !object(evidence.transcript)) {
+      || !object(evidence.stream_evidence) || evidence.stream_evidence.format !== 'jsonl'
+      || !Number.isSafeInteger(evidence.stream_evidence.records) || evidence.stream_evidence.records < 1
+      || !Number.isSafeInteger(evidence.stream_evidence.turns) || evidence.stream_evidence.turns < 1
+      || !object(evidence.transcript) || !Number.isSafeInteger(evidence.transcript.bytes)
+      || evidence.transcript.bytes < 1 || !/^[a-f0-9]{64}$/.test(evidence.transcript.sha256 || '')
+      || (completed.transcript_saved !== undefined && typeof completed.transcript_saved !== 'boolean')) {
     fail('RECOVERY_EVIDENCE_INCOMPLETE', 'completed runtime evidence does not bind the original scope and selection');
   }
   const expectedTranscript = runtimeTranscriptPath(transcriptDir, scope, sessionId);
   if (path.resolve(evidence.transcript.path || '') !== expectedTranscript) {
     fail('RECOVERY_EVIDENCE_MISSING', 'the host transcript path does not match this dispatch session');
   }
-  let stat;
+  let stat = null;
   try { stat = fs.lstatSync(expectedTranscript); }
-  catch (_) { fail('RECOVERY_EVIDENCE_MISSING', 'the host transcript is missing for the completed launch'); }
-  if (!stat.isFile() || stat.isSymbolicLink() || (stat.mode & 0o077) !== 0) {
+  catch (error) {
+    if (!error || error.code !== 'ENOENT' || completed.transcript_saved !== false) {
+      fail('RECOVERY_EVIDENCE_MISSING', 'the host transcript is missing for the completed launch');
+    }
+  }
+  if (stat && (!stat.isFile() || stat.isSymbolicLink() || (stat.mode & 0o077) !== 0)) {
     fail('RECOVERY_EVIDENCE_MISSING', 'the host transcript is not a private regular file');
   }
+  if (completed.parent_sha256 !== evidence.native_session_evidence.sha256
+      || completed.child_sha256 !== evidence.native_child_evidence.sha256
+      || completed.child_session_id !== evidence.native_child_evidence.session_id) {
+    fail('RECOVERY_ARTIFACT_ALTERED', 'completed runtime evidence does not match the native transcripts');
+  }
+  if (!stat) return;
   const raw = fs.readFileSync(expectedTranscript, 'utf8');
   const digest = sha256Text(raw);
   if (stat.size !== evidence.transcript.bytes || digest !== evidence.transcript.sha256) {
@@ -432,11 +474,8 @@ function verifyRuntimeEvidence(record, scope, binding, transcriptDir) {
   catch (error) { fail('RECOVERY_EVIDENCE_INCOMPLETE', 'the host transcript cannot be re-verified: ' + error.message); }
   if (stream.session_id !== sessionId || stream.records.length !== evidence.stream_evidence.records
       || stream.turns !== evidence.stream_evidence.turns
-      || stream.usage_records !== evidence.stream_evidence.usage_records
-      || completed.parent_sha256 !== evidence.native_session_evidence.sha256
-      || completed.child_sha256 !== evidence.native_child_evidence.sha256
-      || completed.child_session_id !== evidence.native_child_evidence.session_id) {
-    fail('RECOVERY_ARTIFACT_ALTERED', 'completed runtime evidence does not match the host and native transcripts');
+      || stream.usage_records !== evidence.stream_evidence.usage_records) {
+    fail('RECOVERY_ARTIFACT_ALTERED', 'completed runtime evidence does not match the host transcript');
   }
 }
 
@@ -641,7 +680,7 @@ function createCodexDecomposeHost(options = {}) {
             startedSession = { session_id: started.session_id, process_id: started.process_id, runtime_launch: runtimeLaunch };
             writeLaunchRecord(options.launchDir, { ...launchRecord, session_started: startedSession });
           } : undefined;
-          const captureCompleted = launchRecord ? (completed) => {
+          const completedRecordFrom = (completed) => {
             const runtimeEvidence = completed && completed.runtime_evidence;
             if (!startedSession || !object(completed) || completed.session_id !== startedSession.session_id
                 || (completed.process_id !== null && !Number.isSafeInteger(completed.process_id))
@@ -685,11 +724,42 @@ function createCodexDecomposeHost(options = {}) {
               artifact_digests: digests,
               runtime_evidence: runtimeEvidence,
             };
+            return completedRecord;
+          };
+          const captureNativeCompleted = launchRecord ? (completed) => {
+            const completedRecord = completedRecordFrom(completed);
             writeLaunchRecord(options.launchDir, {
               ...launchRecord,
               session_started: startedSession,
-              completed: completedRecord,
+              completed: { ...completedRecord, transcript_saved: false },
             });
+          } : undefined;
+          const captureTranscriptWritten = launchRecord ? (saved) => {
+            const durable = readLaunchRecord(options.launchDir, context.dispatch_id);
+            const expected = durable.completed && durable.completed.runtime_evidence
+              && durable.completed.runtime_evidence.transcript;
+            if (!object(saved) || saved.session_id !== startedSession.session_id
+                || !object(saved.transcript) || !object(expected)
+                || canonicalJson(saved.transcript) !== canonicalJson(expected)
+                || !object(durable.completed) || durable.completed.transcript_saved !== false) {
+              fail('RUNTIME_EVIDENCE_MISMATCH', 'saved host transcript does not match pending native completion evidence');
+            }
+            writeLaunchRecord(options.launchDir, {
+              ...durable,
+              completed: { ...durable.completed, transcript_saved: true },
+            });
+          } : undefined;
+          const captureCompleted = launchRecord ? (completed) => {
+            const completedRecord = completedRecordFrom(completed);
+            const durable = readLaunchRecord(options.launchDir, context.dispatch_id);
+            if (!object(durable.completed) || durable.completed.transcript_saved !== true) {
+              fail('RUNTIME_EVIDENCE_MISSING', 'native completion or transcript evidence was not durable before launch completion');
+            }
+            const prepared = { ...durable.completed };
+            delete prepared.transcript_saved;
+            if (canonicalJson(prepared) !== canonicalJson(completedRecord)) {
+              fail('RUNTIME_EVIDENCE_MISMATCH', 'saved host transcript does not match the native completion evidence');
+            }
           } : undefined;
           const applied = recovering
             ? runOptions.recovered.applied
@@ -697,13 +767,16 @@ function createCodexDecomposeHost(options = {}) {
               ...context,
               prompt: launchRecord ? completionInstructions(prompt, request.gsd_role) : prompt,
               ...(captureSessionStarted ? { onSessionStarted: captureSessionStarted } : {}),
+              ...(captureNativeCompleted ? { onNativeCompleted: captureNativeCompleted } : {}),
+              ...(captureTranscriptWritten ? { onTranscriptWritten: captureTranscriptWritten } : {}),
               ...(captureCompleted ? { onCompleted: captureCompleted } : {}),
             });
           const evidence = applied && applied.runtime_evidence;
           if (launchRecord) {
             const durable = readLaunchRecord(options.launchDir, context.dispatch_id);
             if (!durable.completed || durable.completed.launch_id !== applied.launch_id
-                || durable.completed.parent_session_id !== applied.session_id) {
+                || durable.completed.parent_session_id !== applied.session_id
+                || durable.completed.transcript_saved !== true) {
               fail('RUNTIME_EVIDENCE_MISSING', 'typed launch completion was not durable before its callback returned');
             }
           }
@@ -1080,13 +1153,28 @@ async function recoverCli(argv, stdout, options) {
     }));
     runBegun = true;
     const stored = completed.runtime_evidence;
+    let recoveredRuntimeEvidence = stored;
+    if (completed.transcript_saved === false && !fs.existsSync(stored.transcript.path)) {
+      const nativeEvidence = { ...stored };
+      delete nativeEvidence.transcript;
+      delete nativeEvidence.stream_evidence;
+      recoveredRuntimeEvidence = {
+        ...nativeEvidence,
+        stream_evidence: {
+          format: 'jsonl', records: session.records, turns: session.turn_contexts,
+          source: 'native-session-transcript',
+        },
+      };
+    }
     const applied = Object.freeze({
       launch_id: completed.launch_id,
       session_id: completed.parent_session_id,
       ...(Number.isInteger(completed.pid) ? { process_id: completed.pid } : {}),
       applied_model: resolution.model, applied_effort: resolution.effort,
       observed_model: resolution.model, observed_effort: resolution.effort,
-      runtime_evidence: Object.freeze({ ...stored, native_session_evidence: session, native_child_evidence: Object.freeze(child) }),
+      runtime_evidence: Object.freeze({
+        ...recoveredRuntimeEvidence, native_session_evidence: session, native_child_evidence: Object.freeze(child),
+      }),
       gsd_role: request.gsd_role, gsd_launch_mechanism: 'typed-gsd-callback',
       agent_file: agent.file, agent_file_digest: agent.sha256,
     });
