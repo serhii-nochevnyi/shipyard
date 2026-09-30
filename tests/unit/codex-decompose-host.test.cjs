@@ -14,6 +14,7 @@ const { createDurableRecorder } = require('../../plugins/delivery-pipeline/scrip
 const { createRunController } = require('../../plugins/delivery-pipeline/scripts/run-controller.cjs');
 const { createPlanningWriterLease } = require('../../plugins/delivery-pipeline/scripts/planning-writer-lease.cjs');
 const { createCodexRuntimeHost } = require('../../plugins/delivery-pipeline/scripts/codex-runtime-host.cjs');
+const orchestrationOverhead = require('../../plugins/delivery-pipeline/scripts/orchestration-overhead.cjs');
 const {
   createCodexDecomposeHost, defaultRunStoreDir, parseCliArguments, parseRecoverArguments, readRequestFile, requestValue, runCli,
 } = require('../../plugins/delivery-pipeline/scripts/codex-decompose-host.cjs');
@@ -326,6 +327,122 @@ test('default run controller state is outside the model worktree and keyed to it
   } finally { f.clean(); }
 });
 
+test('child telemetry collector failure warns without leaking collector details or changing the verified result', async () => {
+  const f = fixture();
+  const gsdRole = 'gsd-planner';
+  const fixtureData = buildNativeChildFixture(gsdRole);
+  const clock = manualClock(Date.now());
+  const heartbeat = manualHeartbeat();
+  try {
+    fs.writeFileSync(path.join(f.agentDir, 'gsd-planner.toml'),
+      gsdAgentToml(gsdRole, fixtureData.instructions.replace(/\n$/, '')));
+    const file = path.join(f.root, 'telemetry-failure-request.json');
+    fs.writeFileSync(file, JSON.stringify({
+      scope: f.scope, gsd_role: gsdRole, prompt: 'Check this phase plan.',
+    }));
+    const stdout = [];
+    const stderr = [];
+    const secret = 'api_key=collector-secret';
+    const { spawn } = attachFakeSpawn(f, gsdRole, fixtureData, () => {
+      clock.advance(50);
+      heartbeat.fire();
+    });
+    const result = await runCli(['--args-file', file], { write(value) { stdout.push(value); } }, {
+      env: { CODEX_HOME: f.codexHome },
+      agentDir: f.agentDir,
+      agentManifest: path.join(f.agentDir, '.shipyard-manifest.json'),
+      testStateRoot: f.stateRoot,
+      leaseTtlMs: 1000,
+      now: clock,
+      heartbeat: heartbeat.scheduler,
+      probe: { status: 'available', executable: 'codex', runtime_version: '0.157.1', capabilities },
+      spawn,
+      overheadRecorder: { record() { throw new Error(secret); } },
+      stderr: { write(value) { stderr.push(value); } },
+    });
+    assert.equal(result.receipt.compliance, 'verified');
+    assert.deepEqual(JSON.parse(stdout.join('')), result);
+    assert.deepEqual(stderr, ['codex-decompose-host: child model telemetry collection failed\n']);
+    assert.equal(JSON.stringify({ result, stdout, stderr }).includes(secret), false);
+    const storeDir = defaultRunStoreDir(f.scope, f.stateRoot);
+    const receipts = createDurableRecorder(path.join(path.dirname(storeDir), 'receipts'));
+    assert.deepEqual(receipts.getVerifiedRecord(result.receipt.dispatch_id).receipt, result.receipt);
+  } finally { f.clean(); }
+});
+
+test('multi-turn child telemetry keeps turn totals unknown and separated by actor', async () => {
+  const f = fixture();
+  const gsdRole = 'gsd-planner';
+  const fixtureData = buildNativeChildFixture(gsdRole, { childTurnContexts: 2 });
+  const clock = manualClock(Date.now());
+  const heartbeat = manualHeartbeat();
+  try {
+    fs.writeFileSync(path.join(f.agentDir, 'gsd-planner.toml'),
+      gsdAgentToml(gsdRole, fixtureData.instructions.replace(/\n$/, '')));
+    const file = path.join(f.root, 'multi-turn-request.json');
+    fs.writeFileSync(file, JSON.stringify({
+      scope: f.scope, gsd_role: gsdRole, prompt: 'Check this phase plan.',
+    }));
+    const output = [];
+    const graphDir = path.join(f.root, '.planning', 'graph');
+    const overheadRecorder = orchestrationOverhead.createRecorder(graphDir);
+    const { spawn } = attachFakeSpawn(f, gsdRole, fixtureData, () => {
+      clock.advance(50);
+      heartbeat.fire();
+    });
+    const result = await runCli(['--args-file', file], { write(value) { output.push(value); } }, {
+      env: { CODEX_HOME: f.codexHome },
+      agentDir: f.agentDir,
+      agentManifest: path.join(f.agentDir, '.shipyard-manifest.json'),
+      testStateRoot: f.stateRoot,
+      leaseTtlMs: 1000,
+      now: clock,
+      heartbeat: heartbeat.scheduler,
+      probe: { status: 'available', executable: 'codex', runtime_version: '0.157.1', capabilities },
+      spawn,
+      overheadRecorder,
+    });
+
+    const now = new Date();
+    const transcriptPath = path.join(f.codexHome, 'sessions', String(now.getFullYear()),
+      String(now.getMonth() + 1).padStart(2, '0'), String(now.getDate()).padStart(2, '0'),
+      'rollout-' + fixtureData.childId + '.jsonl');
+    const childTranscript = fs.readFileSync(transcriptPath, 'utf8').split('\n')
+      .filter(Boolean).map((line) => JSON.parse(line));
+    assert.equal(childTranscript.filter((record) => record.type === 'turn_context').length, 2);
+    const childEvidence = result.receipt.runtime_evidence.native_child_evidence;
+    assert.equal(Object.hasOwn(childEvidence, 'turn_contexts'), false);
+
+    orchestrationOverhead.recordWaitPoll(overheadRecorder, {
+      observation_id: 'multi-turn-parent-wait',
+      run_id: f.scope.run_id,
+      dispatch_id: result.receipt.dispatch_id,
+      role: 'decomposition',
+      runtime: 'codex',
+      backend: 'codex-decompose',
+    });
+    const rows = overheadRecorder.latest();
+    const child = rows.find((row) => row.actor === 'child');
+    const parent = rows.find((row) => row.actor === 'parent');
+    assert.equal(child.evidence, 'none');
+    assert.equal(child.counts.model_turns, null);
+    assert.equal(child.model, result.receipt.observed_model);
+    assert.equal(child.effort, result.receipt.observed_effort);
+    assert.equal(parent.counts.polls, 1);
+
+    const report = overheadRecorder.report({ experiment_id: 'exp-multi-turn-child' });
+    const byActor = new Map(report.by_actor.map((entry) => [entry.actor, entry.metrics]));
+    assert.equal(byActor.get('parent').wait_polls.value, 1);
+    assert.equal(byActor.get('parent').model_turns.value, null);
+    assert.equal(byActor.get('child').wait_polls.value, null);
+    assert.equal(byActor.get('child').model_turns.value, null);
+    assert.equal(report.metrics.model_turns.value, null);
+    assert.ok(report.missing_coverage.includes('supported transcript/usage evidence for model turns'));
+    assert.equal(report.verdict, 'inconclusive');
+    assert.equal(Object.keys(report).some((key) => /percent/i.test(key)), false);
+  } finally { f.clean(); }
+});
+
 const CAPTURED_SHA256 = 'de94a486861cedd3587db16ba051e5c5bf80e0ab05fa44ed50ad48688e6f8b4c';
 
 function captured(rel, values = {}) {
@@ -358,7 +475,9 @@ function manualHeartbeat() {
   };
 }
 
-function buildNativeChildFixture(gsdRole, artifactPaths) {
+function buildNativeChildFixture(gsdRole, artifactPathsOrOptions = {}) {
+  const artifactPaths = Array.isArray(artifactPathsOrOptions) ? artifactPathsOrOptions : undefined;
+  const { childTurnContexts } = Array.isArray(artifactPathsOrOptions) ? {} : artifactPathsOrOptions;
   const parent = '01a0e224-6642-7f20-b2a3-68b283d429b9';
   const childId = '01a0e224-80bb-7d33-b57d-8c44061ac85d';
   const declaredArtifactPaths = artifactPaths || (gsdRole === 'gsd-phase-researcher'
@@ -372,7 +491,17 @@ function buildNativeChildFixture(gsdRole, artifactPaths) {
   const elided = records.find((record) => record.type === 'response_item'
     && record.payload.role === 'developer').payload.content[0].text;
   const instructions = elided + '\n';
-  const childRaw = recorded.replace(JSON.stringify(elided), JSON.stringify(instructions));
+  let childRaw = recorded.replace(JSON.stringify(elided), JSON.stringify(instructions));
+  if (childTurnContexts !== undefined) {
+    assert.ok(Number.isSafeInteger(childTurnContexts) && childTurnContexts > 0);
+    const records = childRaw.split('\n').filter(Boolean).map((line) => JSON.parse(line));
+    const context = records.find((record) => record.type === 'turn_context');
+    assert.ok(context);
+    const withoutContexts = records.filter((record) => record.type !== 'turn_context');
+    const sessionIndex = withoutContexts.findIndex((record) => record.type === 'session_meta');
+    withoutContexts.splice(sessionIndex + 1, 0, ...Array.from({ length: childTurnContexts }, () => context));
+    childRaw = withoutContexts.map((record) => JSON.stringify(record)).join('\n') + '\n';
+  }
   const transform = (raw) => raw.split('\n').filter(Boolean).map((line) => {
     const record = JSON.parse(line);
     if (record.type === 'turn_context') {
@@ -497,6 +626,89 @@ test('production ' + gsdRole + ' reaches its native child and records session ev
       assert.ok(calls[0].args.includes('permissions.shipyard-runtime.extends=":read-only"'));
       assert.match(fs.readFileSync(path.join(f.agentDir, gsdRole + '.toml'), 'utf8'),
         /sandbox_mode = "read-only"/);
+    }
+  } finally { f.clean(); }
+});
+}
+
+for (const includeDispatchId of [true, false]) {
+test(`detached ${includeDispatchId ? 'explicit' : 'omitted'} dispatch ID reaches its validated child request and verified receipt`, async () => {
+  const f = fixture();
+  const gsdRole = 'gsd-planner';
+  const fixtureData = buildNativeChildFixture(gsdRole);
+  try {
+    fs.writeFileSync(path.join(f.agentDir, 'gsd-planner.toml'),
+      gsdAgentToml(gsdRole, fixtureData.instructions.replace(/\n$/, '')));
+    const requestedDispatchId = includeDispatchId ? 'explicit-decompose-' + crypto.randomBytes(5).toString('hex') : null;
+    const requestBody = { scope: f.scope, gsd_role: gsdRole, prompt: 'Check this phase plan.' };
+    if (requestedDispatchId !== null) requestBody.dispatch_id = requestedDispatchId;
+    const requestFile = path.join(f.root, 'detached-request.json');
+    fs.writeFileSync(requestFile, JSON.stringify(requestBody));
+
+    const dispatchDir = path.join(f.stateRoot, 'dispatch');
+    let childRequestFile;
+    const detachedProcess = new EventEmitter();
+    detachedProcess.pid = 1_000_000_000;
+    detachedProcess.unref = () => {};
+    const handoffOutput = [];
+    const handoff = await runCli(['--detach', '--args-file', requestFile], {
+      write(value) { handoffOutput.push(value); },
+    }, {
+      env: { CODEX_HOME: f.codexHome },
+      stateDir: dispatchDir,
+      spawn(executable, args, options) {
+        assert.equal(executable, process.execPath);
+        assert.equal(args[0], path.resolve(__dirname, '../../plugins/delivery-pipeline/scripts/codex-decompose-host.cjs'));
+        assert.deepEqual(args.slice(1, 2), ['--args-file']);
+        assert.equal(options.detached, true);
+        childRequestFile = args[2];
+        return detachedProcess;
+      },
+    });
+    assert.deepEqual(JSON.parse(handoffOutput.join('')), handoff);
+    const dispatchId = handoff.dispatch_id;
+    if (requestedDispatchId !== null) assert.equal(dispatchId, requestedDispatchId);
+    const record = JSON.parse(fs.readFileSync(path.join(dispatchDir, dispatchId, 'record.json'), 'utf8'));
+    assert.equal(record.dispatch_id, dispatchId);
+    const validatedChildRequest = readRequestFile(childRequestFile);
+    assert.equal(validatedChildRequest.launch.dispatch_id, dispatchId);
+
+    const makeOptions = (testStateRoot, spawn) => ({
+      env: { CODEX_HOME: f.codexHome },
+      agentDir: f.agentDir,
+      agentManifest: path.join(f.agentDir, '.shipyard-manifest.json'),
+      testStateRoot,
+      leaseTtlMs: 1000,
+      probe: { status: 'available', executable: 'codex', runtime_version: '0.157.1', capabilities },
+      spawn,
+    });
+    const detachedChildState = path.join(f.stateRoot, 'detached-child');
+    const detachedSpawn = attachFakeSpawn(f, gsdRole, fixtureData).spawn;
+    const detachedResult = await runCli(['--args-file', childRequestFile], { write() {} },
+      makeOptions(detachedChildState, detachedSpawn));
+    const detachedStoreDir = defaultRunStoreDir(f.scope, detachedChildState);
+    const detachedRecorder = createDurableRecorder(path.join(path.dirname(detachedStoreDir), 'receipts'));
+    const detachedReservation = detachedRecorder.getReservation(dispatchId);
+    assert.equal(detachedReservation.dispatch_id, record.dispatch_id);
+    assert.equal(detachedReservation.recorded, true);
+    assert.equal(detachedRecorder.getVerifiedRecord(dispatchId).receipt.dispatch_id, dispatchId);
+
+    const foregroundState = path.join(f.stateRoot, 'foreground');
+    const foregroundFile = path.join(f.root, 'foreground-request.json');
+    fs.rmSync(path.join(f.root, '.planning', 'phases', '38-codex-decompose', '38-01-PLAN.md'));
+    fs.writeFileSync(foregroundFile, JSON.stringify({ ...requestBody, dispatch_id: dispatchId }));
+    const foregroundSpawn = attachFakeSpawn(f, gsdRole, fixtureData).spawn;
+    const foregroundResult = await runCli(['--args-file', foregroundFile], { write() {} },
+      makeOptions(foregroundState, foregroundSpawn));
+    const foregroundStoreDir = defaultRunStoreDir(f.scope, foregroundState);
+    const foregroundRecorder = createDurableRecorder(path.join(path.dirname(foregroundStoreDir), 'receipts'));
+    assert.equal(foregroundRecorder.getReservation(dispatchId).dispatch_id, dispatchId);
+    assert.equal(foregroundRecorder.getVerifiedRecord(dispatchId).receipt.dispatch_id, dispatchId);
+    for (const field of ['dispatch_id', 'role', 'gsd_role', 'compliance', 'policy_hash',
+      'requested_model', 'requested_effort', 'applied_model', 'applied_effort',
+      'observed_model', 'observed_effort']) {
+      assert.equal(detachedResult.receipt[field], foregroundResult.receipt[field],
+        `detached and foreground receipts agree on ${field}`);
     }
   } finally { f.clean(); }
 });

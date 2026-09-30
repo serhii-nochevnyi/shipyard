@@ -201,6 +201,63 @@ test('supported transcript evidence counts model responses and tools separately 
   }
 });
 
+test('parent wait polls and child model evidence remain separated by actor', () => {
+  const f = fixture();
+  try {
+    const recorder = overhead.createRecorder(f.graph);
+    const common = {
+      run_id: 'run-actors', dispatch_id: 'dispatch-actors', role: 'decomposition', runtime: 'codex',
+      backend: 'codex-decompose', policy_hash: 'a'.repeat(64), treatment: { wait_events: 'baseline' },
+    };
+    overhead.recordWaitPoll(recorder, { ...common, observation_id: 'parent-wait' });
+    overhead.recordModelEvidence(recorder, {
+      ...common,
+      observation_id: 'child-turn',
+      actor: 'child',
+      model: 'gpt-6-sol', effort: 'high',
+      requested_model: 'gpt-6-sol', requested_effort: 'high',
+      observed_model: 'gpt-6-sol', observed_effort: 'high',
+      bytes: 0, estimated_tokens: null, provider_tokens: null,
+      evidence: 'transcript', count: 1,
+    });
+
+    const rows = recorder.latest();
+    const parent = rows.find((row) => row.actor === 'parent');
+    const child = rows.find((row) => row.actor === 'child');
+    assert.equal(parent.stage, 'wait_poll');
+    assert.equal(parent.counts.polls, 1);
+    assert.equal(parent.model, null);
+    assert.equal(child.stage, 'model_turn');
+    assert.equal(child.counts.model_turns, 1);
+    assert.equal(child.model, 'gpt-6-sol');
+    assert.equal(child.effort, 'high');
+    assert.equal(child.requested_model, 'gpt-6-sol');
+    assert.equal(child.requested_effort, 'high');
+    assert.equal(child.observed_model, 'gpt-6-sol');
+    assert.equal(child.observed_effort, 'high');
+
+    const report = recorder.report({ experiment_id: 'exp-actors' });
+    const byActor = new Map(report.by_actor.map((entry) => [entry.actor, entry.metrics]));
+    assert.equal(byActor.get('parent').wait_polls.value, 1);
+    assert.equal(byActor.get('parent').model_turns.value, null);
+    assert.equal(byActor.get('child').model_turns.value, 1);
+    assert.equal(byActor.get('child').wait_polls.value, null);
+    assert.equal(report.verdict, 'inconclusive');
+    assert.equal(Object.keys(report).some((key) => /percent/i.test(key)), false);
+  } finally {
+    fs.rmSync(f.root, { recursive: true, force: true });
+  }
+});
+
+test('actor defaults to null, rejects unknown values, and preserves legacy observation identity', () => {
+  const normalized = overhead.normalizeObservation(identity());
+  assert.equal(normalized.actor, null);
+  assert.throws(() => overhead.normalizeObservation(identity({ actor: 'worker' })),
+    (error) => error && error.code === 'INVALID_OBSERVATION' && /actor/.test(error.message));
+  assert.equal(overhead.normalizeObservation(identity()).observation_id,
+    overhead.normalizeObservation({ ...identity(), actor: null }).observation_id);
+});
+
 test('targeted role-artifact consumption records selected bytes separately from the full evidence file', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-overhead-artifact-'));
   const ticket = 'T-33-07-artifact';
