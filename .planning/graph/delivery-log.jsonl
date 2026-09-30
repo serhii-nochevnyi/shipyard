@@ -1531,3 +1531,4 @@
 {"ts":"2026-09-30T14:22:50.452Z","event":"status_change","ticket":"T-43-19","from":"pr-open","to":"merged","pr":380}
 {"ts":"2026-09-30T14:22:50.452Z","event":"status_change","ticket":"T-45-10","from":"pending","to":"pr-open","pr":383}
 {"ts":"2026-09-30T14:22:50.452Z","event":"status_change","ticket":"T-45-11","from":"pending","to":"pr-open","pr":382}
+{"ts":"2026-09-30T15:50:09.593Z","event":"escalation","ticket":"T-46-01","pr":null,"reason":"Phase 46 atomic core is held: mechanical Gate2 rejects active cross-phase ownership of dispatch-boundary.test.cjs (T-45-09), codex-decompose-host.test.cjs (T-45-09/T-45-11), and claude-decompose-host.test.cjs (T-45-10). Require actual owner landing or supported approved handoff and fresh successful graph validation before resuming native executor. Authenticated partial core commit 1ca29f3658717efc8c212f6a5e81d33cfb2557f5 is reusable; private proposals are not accepted implementation.","by":"escalation-record"}

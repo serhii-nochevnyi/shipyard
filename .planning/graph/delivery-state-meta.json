@@ -1,13 +1,13 @@
 {
   "schema_version": 1,
-  "generation": 401,
-  "generation_identity": "610b3719-225c-4dc1-870c-ae49f8b08def",
-  "previous_generation_identity": "16777245:12938933908:1790775610057919000:20100ba0d7fda349f4227509f7b26afd17f05e81ee2316fffb112f0e2efac95d",
-  "observed_at": "2026-09-30T14:22:50.452Z",
-  "generated_at": "2026-09-30T14:22:50.452Z",
+  "generation": 402,
+  "generation_identity": "8c65907b-cebc-45e5-a445-d97fd7f93520",
+  "previous_generation_identity": "16777245:12938990193:1790778191479226400:fcdc0e299da918ba32d646ed84cca08fbb0b21f52f0a1495fb8033bd07b5b66f",
+  "observed_at": "2026-09-30T15:42:58.109Z",
+  "generated_at": "2026-09-30T15:42:58.109Z",
   "by": "state-sync",
-  "pid": 73243,
-  "observation_generation": 401,
+  "pid": 69379,
+  "observation_generation": 402,
   "observation_projection": {
     "tickets": {
       "T-20-01": {
@@ -2621,7 +2621,7 @@
         "status": "pr-open",
         "repository": null,
         "pr": 369,
-        "head": "1611e10565f8661569b9aa78f712be4a26afedda",
+        "head": "5d47d937e950c8ae23b47207ae7397ba99582156",
         "draft": false,
         "base": "epic/45-close-residual-pipeline-efficiency-gaps",
         "merge_state": "CLEAN",
@@ -2638,14 +2638,14 @@
         "status": "pr-open",
         "repository": null,
         "pr": 383,
-        "head": "341fdad796e0262434404e1810d933eef34b0151",
+        "head": "55ca21b4dbb368bbafb1ebcfb47d0359c8ffff22",
         "draft": true,
         "base": "ticket/T-45-09-codex-decompose-host-recovers-a-complete",
-        "merge_state": "UNSTABLE",
+        "merge_state": "CLEAN",
         "review_decision": null,
         "checks": {
           "total": 1,
-          "pending": 1,
+          "pending": 0,
           "failing": 0,
           "none_reported": false,
           "unavailable": false
@@ -2655,7 +2655,7 @@
         "status": "pr-open",
         "repository": null,
         "pr": 382,
-        "head": "1a912db6617096c713f8c5e79130500c735a6f42",
+        "head": "7d770f7e6991eabf617f069c633a1661afea59ac",
         "draft": true,
         "base": "ticket/T-45-09-codex-decompose-host-recovers-a-complete",
         "merge_state": "CLEAN",
@@ -2771,9 +2771,9 @@
   },
   "binding": {
     "schema_version": 1,
-    "state_digest": "1d5c5c63f2970daa348a213f0d9b5772764c92e4393009e96a047cfdeb49a0f0",
-    "front_digest": "5eca56d440282018a03f342cf4013cb369db976656b41758cdb5b61f6bd6db60",
-    "observation_digest": "38a45fc16f65d22a0a51bac7cf2fedb9fb407db17fa12b56dce3e8d23da95d67",
-    "observation_generation": 401
+    "state_digest": "fa53e1d7398cdc5facea01a7a6bfb02464c9d944b6b96dd9290e279c34bd2ffd",
+    "front_digest": "ec572caf1082c8be6e0ac2886a14673c06140655a77d5bab51214b42dd8ef6fe",
+    "observation_digest": "352043a455692ef2402c3405c76c7f455a8409a90107536c9286b8595c891c4e",
+    "observation_generation": 402
   }
 }
