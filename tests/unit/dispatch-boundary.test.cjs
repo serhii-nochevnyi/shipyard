@@ -207,7 +207,6 @@ test('typed judgment checks ownership again after record and aborts only its pro
         assert.equal(fs.readdirSync(store).filter((name) => name.startsWith('record-')).length, 0);
         if (mode === 'foreign') { fs.rmSync(path.join(phaseDir, 'stray.md')); lease.release(handle); }
         else {
-          // The new owner belongs to this fixture; release it for the next case.
           const current = JSON.parse(fs.readFileSync(path.join(root, 'writer', lease.key, 'lease.json')));
           lease.release({ token: current.token, epoch: current.epoch });
         }

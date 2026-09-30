@@ -722,8 +722,6 @@ function createDurableRecorder(storeDir) {
           || !isObject(markerStored.payload)
           || markerStored.payload.successor_dispatch_id !== dispatchId
           || canonicalStableStringify(markerStored.payload.record_input) !== expected)) return { aborted: false };
-      // A newer dispatch may already own the latest pointer. Leave it and all
-      // unrelated history alone; only remove bytes authenticated for this call.
       if (matches(latest)) {
         const previous = provisionalPreviousLatest.get(dispatchId);
         if (previous) atomicReplaceJson(latest, seal(previous));
