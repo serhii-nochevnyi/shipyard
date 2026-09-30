@@ -339,6 +339,43 @@ test('unreadable approval history leaves a review checkpoint waiting for a perso
   assert.equal(needsHuman(ticket({ human_checkpoint: true, checkpoint: 'review' }), row), true);
 });
 
+test('an explicit empty bot list still recognizes built-ins and a current human', () => {
+  const approved = { ...pr(335, 'OPEN'), reviewDecision: 'APPROVED' };
+  const reviewRows = [
+    { user: { login: 'coderabbitai[bot]', type: 'Bot' }, state: 'APPROVED',
+      commit_id: 'old-head', submitted_at: '2026-09-01T00:00:00Z' },
+    { user: { login: 'alice', type: 'User' }, state: 'APPROVED',
+      commit_id: approved.headRefOid, submitted_at: '2026-09-02T00:00:00Z' },
+  ];
+  const f = fixture({
+    ticket: { human_checkpoint: true, checkpoint: 'review' },
+    pipeline: { reviewer_bots: { 'acme/demo': [] } },
+    responses: { open: [approved], review: [approved], pullReviews: { 335: reviewRows } },
+  });
+  assert.equal(run(f).status, 0);
+  const row = state(f)[TICKET];
+  assert.deepEqual(row.reviewer_bots, []);
+  assert.equal(row.review_fresh, true);
+  assert.equal(needsHuman(ticket({ human_checkpoint: true, checkpoint: 'review' }), row), false);
+});
+
+test('stale built-in bot alone cannot use unreadable branch rules as a waiver', () => {
+  const approved = { ...pr(336, 'OPEN'), reviewDecision: 'APPROVED' };
+  const f = fixture({
+    ticket: { human_checkpoint: true, checkpoint: 'review' },
+    responses: { open: [approved], review: [approved], pullReviews: { 336: [
+      { user: { login: 'coderabbitai[bot]', type: 'Bot' }, state: 'APPROVED',
+        commit_id: 'old-head', submitted_at: '2026-09-01T00:00:00Z' },
+    ] } },
+  });
+  assert.equal(run(f).status, 0);
+  const row = state(f)[TICKET];
+  assert.equal(row.review_fresh, false);
+  assert.equal(needsHuman(ticket({ human_checkpoint: true, checkpoint: 'review' }), row), true);
+  assert.ok(calls(f).some((args) => args[0] === 'api'
+    && args[1].startsWith('repos/acme/demo/rules/branches/')));
+});
+
 test('a stale human verdict keeps the board aligned with the live guard', () => {
   const approved = { ...pr(334, 'OPEN'), reviewDecision: 'APPROVED' };
   const reviews = [

@@ -1550,6 +1550,26 @@ test('review checkpoint waits until the board records a human approval on its he
   assert.deepStrictEqual(approved.waiting.human, []);
 });
 
+test('review checkpoint uses configured and built-in bots without trusting a claimed User type', () => {
+  const ticket = { human_checkpoint: true, checkpoint: 'review' };
+  const row = { ...landed, repo: 'foreign/target', head_sha: 'head-1',
+    author: { login: 'author' }, review_decision: 'APPROVED', review_fresh: true,
+    reviewer_bots: ['review-helper*'] };
+  for (const login of ['coderabbitai[bot]', 'copilot-pull-request-reviewer[bot]', 'review-helper-1']) {
+    assert.strictEqual(needsHuman(ticket, { ...row, approved_reviews: [
+      { state: 'APPROVED', commit_id: 'head-1', user: { login, type: 'User' } },
+    ] }), true, login);
+  }
+  for (const user of [{ login: 'alice', type: null }, { login: 'author', type: 'User' }]) {
+    assert.strictEqual(needsHuman(ticket, { ...row, approved_reviews: [
+      { state: 'APPROVED', commit_id: 'head-1', user },
+    ] }), true, JSON.stringify(user));
+  }
+  assert.strictEqual(needsHuman(ticket, { ...row, reviewer_bots: [], approved_reviews: [
+    { state: 'APPROVED', commit_id: 'head-1', user: { login: 'alice', type: 'User' } },
+  ] }), false);
+});
+
 test('a pre-authorized checkpoint, green + conform + stacked, is an actionable merge', () => {
   const f = computeFront(
     { T: { human_checkpoint: true, preauthorized: true } },

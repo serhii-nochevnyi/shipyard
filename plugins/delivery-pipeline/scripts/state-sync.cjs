@@ -530,7 +530,7 @@ function reviewCheckpointObservation(pr, repo) {
       }
     } catch { /* @contract: A parse failure cannot count as a human approval. */ }
   }
-  const freshness = reviewFreshness(pr, reviews, readable, entry.reviewer_bots);
+  const freshness = reviewFreshness(pr, reviews, readable, entry.reviewer_bots, slug);
   entry.approved_reviews = Array.isArray(freshness.approved_reviews) ? freshness.approved_reviews : [];
   entry.review_fresh = freshness.review_fresh === true;
   entry.review_freshness_reason = freshness.review_freshness_reason || null;

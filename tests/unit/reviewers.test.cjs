@@ -255,6 +255,34 @@ test('freshness and branch probes are exported without running the CLI', () => {
   const exported = require(REVIEWERS);
   assert.strictEqual(typeof exported.reviewFreshness, 'function');
   assert.strictEqual(typeof exported.branchRequiresNoReview, 'function');
+  assert.strictEqual(typeof exported.effectiveBotPolicy, 'function');
+  assert.strictEqual(typeof exported.isHumanHeadApproval, 'function');
+});
+
+test('effective bots use the target repository and keep built-ins with an explicit empty list', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-reviewer-target-'));
+  dirs.push(root);
+  fs.mkdirSync(path.join(root, '.planning'));
+  fs.writeFileSync(path.join(root, '.planning', 'config.json'), JSON.stringify({
+    pipeline: { reviewer_bots: { 'acme/demo': ['alice'], 'foreign/target': [] } },
+  }));
+  const { effectiveBotPolicy, isHumanHeadApproval } = require(REVIEWERS);
+  const bots = effectiveBotPolicy('foreign/target', undefined, root);
+  assert.ok(bots.includes('coderabbitai*') && bots.includes('copilot*'));
+  assert.ok(!bots.includes('alice'), JSON.stringify(bots));
+  assert.strictEqual(isHumanHeadApproval(headReview('alice'), HEAD_OID, 'author', bots), true);
+  assert.strictEqual(isHumanHeadApproval(headReview('coderabbitai[bot]', 'User'), HEAD_OID, 'author', bots), false);
+  assert.strictEqual(isHumanHeadApproval(headReview('alice'), HEAD_OID, 'alice', bots), false);
+  assert.strictEqual(isHumanHeadApproval(headReview('alice', null), HEAD_OID, 'author', bots), false);
+});
+
+test('unknown target cannot establish a no-review waiver but a verified human head approval can', () => {
+  const { reviewFreshness } = require(REVIEWERS);
+  const view = JSON.parse(prView({ reviewDecision: 'APPROVED', author: { login: 'author' } }));
+  assert.strictEqual(reviewFreshness(view, [stale('coderabbitai[bot]')], true, [], null).review_fresh, false);
+  assert.strictEqual(reviewFreshness(view, [stale('coderabbitai[bot]'), headReview('alice')], true, [], null).review_fresh, true);
+  assert.strictEqual(reviewFreshness(view, [stale('alice', 'User'), headReview('bob')], true, [], null).review_fresh, false);
+  assert.strictEqual(reviewFreshness(view, [{ ...headReview('alice'), submitted_at: 'unreadable' }], true, [], null).review_fresh, false);
 });
 
 test('a head approval with user.type Bot is not human evidence', () => {
