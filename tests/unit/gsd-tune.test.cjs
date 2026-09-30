@@ -64,6 +64,12 @@ const hermetic = (extra = {}) => {
   const env = {
     ...process.env, CODEX_HOME: EMPTY_CODEX, PATH: path.join(EMPTY_CODEX, 'bin'), ...extra,
   };
+  // @contract: Isolate these tests from ambient runtime and session markers.
+  for (const key of ['SHIPYARD_RUNTIME', 'GSD_RUNTIME', 'CODEX_SANDBOX',
+    'CODEX_SANDBOX_NETWORK_DISABLED', 'CLAUDE_PLUGIN_ROOT', 'CLAUDE_CODE_ENTRYPOINT',
+    'GSD_DEFAULTS_PATH']) {
+    if (!(key in extra)) delete env[key];
+  }
   if (!('ANTHROPIC_DEFAULT_FABLE_MODEL' in extra)) delete env.ANTHROPIC_DEFAULT_FABLE_MODEL;
   return env;
 };
@@ -558,8 +564,10 @@ function home(defaults) {
   }
   return dir;
 }
-const runGlobal = (h, args = []) =>
-  spawnSync(process.execPath, [SCRIPT, '--global', ...args], { cwd: h, encoding: 'utf8', env: hermetic({ HOME: h }) });
+const runGlobal = (h, args = [], extraEnv = {}) =>
+  spawnSync(process.execPath, [SCRIPT, '--global', ...args], {
+    cwd: h, encoding: 'utf8', env: hermetic({ HOME: h, ...extraEnv }),
+  });
 const globalCfg = (h) => JSON.parse(fs.readFileSync(path.join(h, '.gsd', 'defaults.json'), 'utf8'));
 
 test('nothing conveyor-shaped is ever written machine-wide', () => {
@@ -601,6 +609,33 @@ test('the global file is created when absent — unlike a project config', () =>
   const h = home(undefined);
   assert.equal(runGlobal(h, ['--runtime', 'codex', '--apply']).status, 0);
   assert.equal(globalCfg(h).runtime, undefined);
+});
+
+test('--global writes a validated GSD_DEFAULTS_PATH and preserves HOME defaults bytes', () => {
+  const h = home({ runtime: 'codex', preserve: 'ambient' });
+  const shared = path.join(h, '.gsd', 'defaults.json');
+  const before = fs.readFileSync(shared);
+  const selected = path.join(h, 'dogfood-state', '.gsd', 'defaults.json');
+  const result = runGlobal(h, ['--runtime', 'codex', '--apply'], { GSD_DEFAULTS_PATH: selected });
+
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  assert.ok(fs.existsSync(selected), 'the installer-selected target is the actual write destination');
+  assert.equal(fs.readFileSync(shared).toString(), before.toString(), 'ambient bytes are unchanged');
+  assert.equal(JSON.parse(fs.readFileSync(selected, 'utf8')).runtime, undefined);
+});
+
+test('--global rejects an invalid defaults override before writing shared defaults', () => {
+  const h = home({ runtime: 'codex', preserve: 'ambient' });
+  const shared = path.join(h, '.gsd', 'defaults.json');
+  const before = fs.readFileSync(shared);
+  const result = runGlobal(h, ['--runtime', 'codex', '--apply'], {
+    GSD_DEFAULTS_PATH: 'relative-defaults.json',
+  });
+
+  assert.notEqual(result.status, 0, result.stdout);
+  assert.match(result.stderr, /GSD_DEFAULTS_PATH.*absolute/i);
+  assert.equal(fs.readFileSync(shared).toString(), before.toString(), 'invalid override cannot fall through');
+  assert.equal(fs.existsSync(path.join(h, 'relative-defaults.json')), false);
 });
 
 test('an override this script wrote machine-wide earlier is withdrawn', () => {
