@@ -145,18 +145,11 @@ function needsHuman(ticket, row) {
     const s = row || {};
     const author = String((s.author && s.author.login) || s.author || '').toLowerCase();
     const approved = Array.isArray(s.approved_reviews) ? s.approved_reviews : [];
-    const configured = Array.isArray(s.reviewer_bots) ? s.reviewer_bots : [];
+    const { effectiveBotPolicy, isHumanHeadApproval } = require(path.join(__dirname, 'reviewers.cjs'));
+    const bots = effectiveBotPolicy(s.repo, s.reviewer_bots);
     // @contract: only a positively human, current-head review answers a review checkpoint.
-    return !Boolean(author && s.head_sha && s.review_decision === 'APPROVED' && s.review_fresh === true && approved.some((r) => {
-      const login = String((r.user && r.user.login) || '').toLowerCase();
-      const bot = configured.some((entry) => {
-        const value = String(entry).toLowerCase();
-        return value.endsWith('*') ? login.startsWith(value.slice(0, -1)) : login === value;
-      });
-      return r.state === 'APPROVED' && r.commit_id === s.head_sha && r.user && r.user.type === 'User'
-        && login && login !== author && !login.endsWith('[bot]')
-        && !login.startsWith('coderabbitai') && !login.startsWith('copilot') && !bot;
-    }));
+    return !Boolean(author && s.head_sha && s.review_decision === 'APPROVED' && s.review_fresh === true
+      && approved.some((r) => isHumanHeadApproval(r, s.head_sha, author, bots)));
   }
   return t.preauthorized !== true;
 }

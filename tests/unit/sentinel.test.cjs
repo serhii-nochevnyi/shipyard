@@ -725,6 +725,36 @@ test('a stale built-in bot review does not hide a human approval on the head', (
   assert.strictEqual(result.merged, true, result.blockers.join('; '));
 });
 
+test('foreign checkpoint uses its own empty bot config and keeps live human-head approval', () => {
+  const repo = 'foreign/target';
+  const root = project({
+    tickets: { A: { human_checkpoint: true, checkpoint: 'review', repo,
+      branch: 'ticket/A', epic: 'epic/21-x' } },
+    state: { A: { ...openGreen(9, 'ticket/A', 'epic/21-x'), repo } },
+    config: { ...epicConfig, delivery_pipeline: { reviewer_bots: {
+      'acme/demo': ['alice'], [repo]: [],
+    } } },
+  });
+  const log = path.join(root, 'gh-calls.log');
+  const staleBot = { ...approval('coderabbitai[bot]', 'Bot'), commit_id: 'old-head',
+    submitted_at: '2026-09-28T01:00:00Z' };
+  const base = { STUB_BASE: 'epic/21-x', STUB_HEAD: 'ticket/A', STUB_HEAD_OID: 'head-1',
+    STUB_PR: '9', STUB_REVIEW_DECISION: '"APPROVED"', STUB_LOG: log, STUB_RULES_FAIL: '1' };
+  const approvedEnv = onPath(stubGh(), { ...base, STUB_REVIEWS: JSON.stringify([staleBot, approval('alice')]) });
+  const approved = JSON.parse(run(root, ['duty', '--json'], { env: approvedEnv }).stdout).items[0];
+  assert.strictEqual(approved.action, 'merge', approved.why);
+  const staleEnv = onPath(stubGh(), { ...base, STUB_REVIEWS: JSON.stringify([staleBot]) });
+  const stale = JSON.parse(run(root, ['duty', '--json'], { env: staleEnv }).stdout).items[0];
+  assert.strictEqual(stale.action, 'human', stale.why);
+  assert.ok(fs.readFileSync(log, 'utf8').includes(`api repos/${repo}/rules/branches/`));
+});
+
+test('unreadable live review history never authorizes checkpoint merge', () => {
+  const { result } = reviewMerge([], { STUB_REVIEWS: 'not-json' });
+  assert.strictEqual(result.merged, false);
+  assert.ok(result.blockers.includes('awaiting human review'), result.blockers.join('; '));
+});
+
 test('preauthorization does not replace the PR approval in review mode', () => {
   const root = project({
     tickets: { A: { human_checkpoint: true, checkpoint: 'review', preauthorized: true,
@@ -767,6 +797,10 @@ for (const [label, reviews, overrides] of [
   ['unknown user type', [approval('alice', null)], {}],
   ['PR author', [approval('owner')], {}],
   ['stale human', [{ ...approval('alice'), commit_id: 'old-head' }], {}],
+  ['stale human beside another head approval', [
+    { ...approval('alice'), commit_id: 'old-head', submitted_at: '2026-09-28T01:00:00Z' },
+    approval('bob'),
+  ], {}],
 ]) {
   test(`a ${label} approval does not authorize review checkpoint merge`, () => {
     const { result } = reviewMerge(reviews, overrides);

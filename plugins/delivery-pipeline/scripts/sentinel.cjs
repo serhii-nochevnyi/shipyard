@@ -31,7 +31,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { diagnostic, runBounded, timeoutFromEnv } = require(path.join(__dirname, 'command-runner.cjs'));
 const { loadConfig, repoValue } = require(path.join(__dirname, 'pipeline-config.cjs'));
-const { reviewFreshness } = require(path.join(__dirname, 'reviewers.cjs'));
+const { reviewFreshness, effectiveBotPolicy, isHumanHeadApproval } = require(path.join(__dirname, 'reviewers.cjs'));
 const { withLock, lockDirFor, writeAtomic } = require(path.join(__dirname, 'lock.cjs'));
 const reviewSignatures = require(path.join(__dirname, 'review-signature.cjs'));
 const { classify, unavailableNote, CHECK_FIELDS } = require(path.join(__dirname, 'check-state.cjs'));
@@ -174,32 +174,15 @@ function reviewCheckpointApproval(pr, repo) {
     }
   }
   if (!slug) return false;
-  const configured = repoValue(cfg, 'reviewer_bots', slug);
-  const bots = [...(Array.isArray(configured) ? configured : []), 'coderabbitai*', 'copilot*'];
-  const author = String(pr.author.login).toLowerCase();
-  const bot = (login) => {
-    const name = String(login || '').toLowerCase();
-    return name.endsWith('[bot]') || name.startsWith('coderabbitai') || name.startsWith('copilot')
-      || bots.some((entry) => {
-        const value = String(entry).toLowerCase();
-        return value.endsWith('*') ? name.startsWith(value.slice(0, -1)) : name === value;
-      });
-  };
-  const latest = new Map();
+  const bots = effectiveBotPolicy(slug, undefined, ROOT);
   for (const review of reviews) {
-    if (!review || !review.user || !review.user.login || !['APPROVED', 'CHANGES_REQUESTED', 'DISMISSED'].includes(review.state)) continue;
+    if (!review || !['APPROVED', 'CHANGES_REQUESTED', 'DISMISSED'].includes(review.state)) continue;
     if (!Number.isFinite(Date.parse(review.submitted_at || ''))) return false;
-    const login = String(review.user.login).toLowerCase();
-    const prev = latest.get(login);
-    if (!prev || Date.parse(review.submitted_at || '') >= Date.parse(prev.submitted_at || '')) latest.set(login, review);
   }
   // @contract: freshness is a separate refusal; positive human identity and head binding are required as well.
-  const freshness = reviewFreshness({ ...pr, reviewDecision: 'APPROVED' }, reviews, true, bots);
-  return freshness.fresh && [...latest.values()].some((review) => {
-    const login = String(review.user.login).toLowerCase();
-    return review.state === 'APPROVED' && review.commit_id === pr.headRefOid
-      && review.user.type === 'User' && login !== author && !bot(login);
-  });
+  const freshness = reviewFreshness({ ...pr, reviewDecision: 'APPROVED' }, reviews, true, bots, slug);
+  return freshness.fresh && freshness.approved_reviews.some((review) =>
+    isHumanHeadApproval(review, pr.headRefOid, pr.author, bots));
 }
 
 function reviewCheckpointReady(s) {
