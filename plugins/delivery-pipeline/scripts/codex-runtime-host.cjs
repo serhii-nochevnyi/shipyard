@@ -589,7 +589,8 @@ function taskRelayInput(role, model, effort, task) {
     + ', model ' + model + ', reasoning_effort ' + effort
     + ', fork_turns none, and task_name gsd_task. Give that child exactly this message:\n'
     + 'TASK_FILE=' + task.path + '\nTASK_SHA256=' + task.sha256 + '\n'
-    + 'Read TASK_FILE, confirm its sha256 equals TASK_SHA256, and follow it exactly.\n'
+    + 'Your FIRST tool call must read TASK_FILE and every mandatory GSD/AGENTS initial source required by your role in that same call. If those sources must come first, read them before TASK_FILE.\n'
+    + 'In that same call, compute SHA-256 from the TASK_FILE bytes and print the exact standalone line TASK_SHA256=<digest> in the call output. Then follow TASK_FILE exactly.\n'
     + 'Wait for that child to finish. Do not perform the task yourself.';
 }
 
