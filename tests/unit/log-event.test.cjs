@@ -45,6 +45,22 @@ const FULL = 'a'.repeat(39) + '1';
 
 suite('log-event — the journal lands beside its graph');
 
+test('manual remedy dispatch is refused even with complete metadata', () => {
+  const { project, graph } = scratch();
+  const fields = ['ticket=T-43-18', 'pr=43', 'repo=owner/repo', 'entry_index=0',
+    'signature=abc123', 'workflow=repair.yml', 'ref=ticket/T-43-18',
+    'bot=github-actions[bot]', `inputs_digest=${'b'.repeat(64)}`, `head=${FULL}`];
+  for (const missing of ['workflow=', 'bot=', 'inputs_digest=', 'head=']) {
+    const args = fields.filter((field) => !field.startsWith(missing));
+    assert.notStrictEqual(run(project, ['remedy_dispatch', ...args]).status, 0, missing);
+  }
+  assert.strictEqual(lines(graph).length, 0);
+  const result = run(project, ['remedy_dispatch', ...fields]);
+  assert.notStrictEqual(result.status, 0, 'only repo-remedy run can record a dispatch');
+  assert.match(result.stderr, /repo-remedy\.cjs run/);
+  assert.strictEqual(lines(graph).length, 0);
+});
+
 test('logging from a checkout with no graph refuses, and creates nothing', () => {
   const { borrowed } = scratch();
   const r = run(borrowed, ['attempt', 'ticket=T-12-03', 'role=ci-fix']);

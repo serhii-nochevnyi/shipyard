@@ -76,6 +76,34 @@ test('records and verifies a mechanical merge, refusing tampering and wrong keys
   } finally { f.close(); }
 });
 
+test('remedy coverage requires declared workflow, run id and dispatch head on write and read', () => {
+  const f = fixture();
+  try {
+    const input = { commit: f.commit, parents: [], tree: f.tree, ticket: 'T-43-18',
+      repo: 'owner/repo', kind: 'remedy', worktree: f.repo,
+      remedy: { workflow: 'repair.yml', run_id: '72', dispatch_head: f.commit } };
+    const writer = coverage.createCoverageWriter();
+    for (const invalid of [{ run_id: '' }, { run_id: 'invalid' }, { workflow: '' },
+      { workflow: '../undeclared.yml' }, { dispatch_head: 'short' }]) {
+      assert.throws(() => writer.record({ ...input, remedy: { ...input.remedy, ...invalid } }), /remedy coverage/);
+    }
+    writer.record(input);
+    assert.equal(coverage.verify({ commit: f.commit, repo: 'owner/repo', worktree: f.repo }).covered, true);
+    const file = path.join(coverage.coverageRoot(), 'coverage', 'owner%2Frepo', `${f.commit}.json`);
+    const original = JSON.parse(fs.readFileSync(file, 'utf8'));
+    const key = fs.readFileSync(path.join(coverage.coverageRoot(), 'coverage.key'));
+    for (const invalid of [{ run_id: '' }, { workflow: '../unsafe.yml' }, { dispatch_head: 'short' }]) {
+      const raw = JSON.parse(JSON.stringify(original));
+      Object.assign(raw.payload.remedy, invalid);
+      raw.integrity.mac = crypto.createHmac('sha256', key)
+        .update(stableStringify(raw.payload)).digest('hex');
+      fs.writeFileSync(file, JSON.stringify(raw));
+      assert.equal(coverage.verify({ commit: f.commit, repo: 'owner/repo', worktree: f.repo }).covered,
+        false, JSON.stringify(invalid));
+    }
+  } finally { f.close(); }
+});
+
 test('executor and fixer reopen separate runtime receipt stores and keep one rollout marker', () => {
   const f = fixture();
   try {

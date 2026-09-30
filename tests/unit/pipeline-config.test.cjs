@@ -1082,7 +1082,8 @@ test('all four keys are registered and accept their declared shapes without unkn
   });
   assert.deepStrictEqual(config.reviewer_bots, { 'acme/widgets': ['coderabbitai[bot]', 'copilot-*'] });
   assert.deepStrictEqual(config.repo_remedies, {
-    'acme/widgets': [{ signature: 'ci:failed', workflow: 'repair-ci.yml', inputs: { issue: '123' }, ref: 'main' }],
+    'acme/widgets': [{ signature: 'ci:failed', workflow: 'repair-ci.yml', bot: 'github-actions[bot]',
+      inputs: { issue: '123' }, ref: 'main' }],
   });
   assert.deepStrictEqual(config.verification_commands, {
     'acme/widgets': [
@@ -1144,12 +1145,31 @@ test('repository remedies drop invalid slugs and entries with a warning naming t
     },
   });
   assert.deepStrictEqual(config.repo_remedies, {
-    'acme/widgets': [{ signature: 'ci:failed', workflow: 'repair-ci.yml', inputs: { issue: '123' } }],
+    'acme/widgets': [{ signature: 'ci:failed', workflow: 'repair-ci.yml', bot: 'github-actions[bot]',
+      inputs: { issue: '123' } }],
   });
   assert.ok(warnings.some((warning) => /repo_remedies.*default/.test(warning)), warnings.join('; '));
   assert.ok(warnings.some((warning) => /repo_remedies.*other\/repo/.test(warning)), warnings.join('; '));
   assert.ok(warnings.filter((warning) => /repo_remedies.*acme\/widgets/.test(warning)).length >= 4,
     warnings.join('; '));
+});
+
+test('repository remedies use exact bot logins and require an explicit repository', () => {
+  const { config, warnings } = withConfig({ repo_remedies: {
+    default: [{ signature: 'fallback', workflow: 'fallback.yml' }],
+    'acme/widgets': [
+      { signature: 'explicit', workflow: 'repair.yml', bot: 'repair-bot[bot]' },
+      { signature: 'bad', workflow: 'repair.yml', bot: 'repair-*' },
+      { signature: 'bad', workflow: 'repair.yml', bot: 'two words' },
+    ],
+  } });
+  assert.strictEqual(repoValue(config, 'repo_remedies', 'acme/widgets')[0].bot, 'repair-bot[bot]');
+  assert.strictEqual(repoValue(config, 'repo_remedies', 'other/repo'), null);
+  assert.strictEqual(repoValue({ repo_remedies: { default: [{ signature: 'x', workflow: 'fallback.yml' }] } },
+    'repo_remedies', 'other/repo'), null);
+  assert.strictEqual(config.repo_remedies['acme/widgets'].length, 1);
+  assert.ok(warnings.some((warning) => /repo_remedies.*default/.test(warning)), warnings.join('; '));
+  assert.ok(warnings.filter((warning) => /repo_remedies.*bot/.test(warning)).length >= 2, warnings.join('; '));
 });
 
 test('verification command maps validate argv arrays, profile, and timeout', () => {
@@ -1210,7 +1230,7 @@ test('delivery_pipeline values win over pipeline values for all four maps', () =
   });
   assert.deepStrictEqual(config.comment_markers, declared);
   assert.deepStrictEqual(config.reviewer_bots, declared);
-  assert.deepStrictEqual(config.repo_remedies, { 'acme/widgets': [{ signature: 'new', workflow: 'new.yml' }] });
+  assert.deepStrictEqual(config.repo_remedies, { 'acme/widgets': [{ signature: 'new', workflow: 'new.yml', bot: 'github-actions[bot]' }] });
   assert.deepStrictEqual(config.verification_commands, { 'acme/widgets': [{ argv: ['new'], profile: 'sandbox' }] });
   assert.deepStrictEqual(warnings, []);
 });

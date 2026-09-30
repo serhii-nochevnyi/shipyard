@@ -212,6 +212,21 @@ the check again. Push only after it passes. A fix that needs out-of-scope change
 `escalate: out-of-scope` — park the PR, keep the others moving. Follow
 `references/ci-fix.md` — it is the same contract.
 
+Before `escalation-record.cjs mark`, run
+`node $SHIPYARD_ROOT/scripts/repo-remedy.cjs match --repo <owner/repo> --signature-file <current-signature-file> --json`.
+Use JSON evidence containing the normalized `signature` from
+`failure-signature.cjs compute` and the PR `head` where the failure occurred;
+refresh it after any head change.
+For a matching declaration within the attempt budget, run the returned
+`entry_index` with `repo-remedy.cjs run <ticket> --repo <owner/repo> --pr <number> --entry <index> --signature-file <current-signature-evidence.json>`.
+The command rechecks both the selected signature and current PR head before dispatch.
+Then use `repo-remedy.cjs attribute <ticket> --repo <owner/repo> --run <id>` on
+the successful run. That commit is a coverage link and still needs arch-review
+and CI before merge. If there is no declared match, include the candidate
+workflow name in the escalation reason; no discovered workflow may run.
+Pass the same signature file to `escalation-record.cjs mark` when repository
+remedy declarations exist.
+
 **`base-merge`** — the base moved under the branch. TWO different facts with one
 remedy, and the duty does not blur them: `mergeStateStatus: BEHIND`, or
 `behind_by` above zero, is STALENESS — the branch is simply behind its base;

@@ -552,7 +552,7 @@ function normalizeRepositoryRemedies(value, warnings) {
     if (!remedy || typeof remedy !== 'object' || Array.isArray(remedy)) {
       return { ok: false, error: `entry ${JSON.stringify(remedy)} must be an object` };
     }
-    const allowed = new Set(['signature', 'workflow', 'inputs', 'ref']);
+    const allowed = new Set(['signature', 'workflow', 'inputs', 'ref', 'bot']);
     const extra = Object.keys(remedy).find((field) => !allowed.has(field));
     if (extra) return { ok: false, error: `entry has unknown field "${extra}"` };
     if (typeof remedy.signature !== 'string' || !remedy.signature.trim()) {
@@ -570,7 +570,14 @@ function normalizeRepositoryRemedies(value, warnings) {
         && (typeof remedy.ref !== 'string' || !remedy.ref)) {
       return { ok: false, error: 'entry ref must be a non-empty string' };
     }
-    const normalized = { signature: remedy.signature, workflow: remedy.workflow };
+    const bot = remedy.bot === undefined ? 'github-actions[bot]' : remedy.bot;
+    const login = typeof bot === 'string' && bot.endsWith('[bot]') ? bot.slice(0, -5) : bot;
+    if (typeof bot !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9-]*$/.test(login)
+        || login.length > 39 || login.endsWith('-') || login.includes('--')
+        || bot.includes('*') || /\s/.test(bot)) {
+      return { ok: false, error: `entry bot ${JSON.stringify(bot)} must be one exact GitHub login` };
+    }
+    const normalized = { signature: remedy.signature, workflow: remedy.workflow, bot };
     if (Object.prototype.hasOwnProperty.call(remedy, 'inputs')) {
       normalized.inputs = Object.fromEntries(Object.entries(remedy.inputs));
     }
@@ -615,6 +622,7 @@ function repoValue(cfg, key, repo) {
   const map = source && source[key];
   if (!map || typeof map !== 'object' || Array.isArray(map)) return null;
   if (Object.prototype.hasOwnProperty.call(map, repo) && map[repo] !== undefined) return map[repo] ?? null;
+  if (key === 'repo_remedies') return null;
   if (Object.prototype.hasOwnProperty.call(map, 'default')) return map.default ?? null;
   return null;
 }

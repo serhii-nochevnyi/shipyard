@@ -76,6 +76,31 @@ const eventLines = (out) => textLines(out).slice(1);
 
 suite('attempt-history — prior attempts are an input, not a memory');
 
+test('remedy dispatches charge every attempt even when the display is limited; flake attempts do not', () => {
+  const dispatch = (ticket, ts) => ({ ts, event: 'remedy_dispatch', ticket, pr: 11,
+    repo: 'owner/repo', entry_index: 0, signature: 'abc123', workflow: 'repair.yml',
+    ref: 'ticket/T-01-01', bot: 'github-actions[bot]', inputs_digest: 'b'.repeat(64), head: 'a'.repeat(40) });
+  const { project } = scratch({ journal: [
+    { ts: '2026-08-01T10:00:00Z', event: 'attempt', ticket: 'T-01-01', outcome: 'flake' },
+    dispatch('T-01-01', '2026-08-01T10:01:00Z'),
+    dispatch('T-99-99', '2026-08-01T10:02:00Z'),
+    dispatch('T-01-01', '2026-08-01T10:03:00Z'),
+    { ts: '2026-08-01T10:04:00Z', event: 'attempt', ticket: 'T-01-01', outcome: 'pushed' },
+  ], malformed: false });
+  const got = JSON.parse(run(project, ['T-01-01', '--json', '--limit', '1']).stdout);
+  assert.strictEqual(got.attempts, 3);
+  assert.strictEqual(got.next_n, 4);
+  assert.strictEqual(got.events.length, 1);
+  const rendered = run(project, ['T-01-01']).stdout;
+  assert.strictEqual((rendered.match(/^remedy_dispatch /gm) || []).length, 2);
+});
+
+test('an incomplete remedy dispatch is not a charged attempt', () => {
+  const { project } = scratch({ journal: [{ ts: '2026-08-01T10:00:00Z', event: 'remedy_dispatch',
+    ticket: 'T-01-01', workflow: 'repair.yml' }], malformed: false });
+  assert.strictEqual(JSON.parse(run(project, ['T-01-01', '--json']).stdout).attempts, 0);
+});
+
 test('renders only this ticket\'s repair events, oldest first', () => {
   const { project } = scratch();
   const r = run(project, ['T-01-01']);

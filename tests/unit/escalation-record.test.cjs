@@ -21,6 +21,7 @@ const { suite, test, done, assert } = require(path.join(__dirname, 'assert-harne
 const SCRIPTS = path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts');
 const SCRIPT = path.join(SCRIPTS, 'escalation-record.cjs');
 const { activeParks, activeEscalations, fingerprint, parkFingerprint } = require(SCRIPT);
+const { computeSignature } = require(path.join(SCRIPTS, 'failure-signature.cjs'));
 
 // A ticket mid-flight: PR open, green, still a draft — the front calls this
 // `finalize`, i.e. actionable, which is exactly what must NOT happen once parked.
@@ -52,6 +53,49 @@ const setState = (dir, t) =>
   fs.writeFileSync(path.join(dir, '.planning', 'graph', 'delivery-state.json'), JSON.stringify(t));
 
 suite('escalation-record — the park outlives the session');
+
+test('mark requires a matching declared remedy while budget remains', () => {
+  const dir = project();
+  const graph = path.join(dir, '.planning', 'graph');
+  fs.writeFileSync(path.join(graph, 'tickets.json'), JSON.stringify({ tickets: {
+    'T-16-05': { repo: 'owner/repo', branch: OPEN_PR.branch },
+  } }));
+  const log = path.join(dir, 'failure.log');
+  fs.writeFileSync(log, 'FAIL tests/screenshot.test.js\nAssertionError: screenshot differs\n');
+  const signature = computeSignature(fs.readFileSync(log, 'utf8')).signature;
+  fs.writeFileSync(path.join(dir, '.planning', 'config.json'), JSON.stringify({ pipeline: {
+    max_attempts: 1, repo_remedies: { 'owner/repo': [{ signature, workflow: 'repair.yml' }] },
+  } }));
+  const missingSignature = run(dir, ['mark', 'T-16-05', 'screenshot', 'baseline']);
+  assert.strictEqual(missingSignature.status, 1);
+  assert.ok(/--signature-file/.test(missingSignature.stderr));
+  const args = ['mark', 'T-16-05', 'screenshot', 'baseline', '--signature-file', log];
+  const blocked = run(dir, args);
+  assert.strictEqual(blocked.status, 1);
+  assert.ok(/repo-remedy\.cjs run T-16-05 --repo owner\/repo --pr 606 --entry 0/.test(blocked.stderr), blocked.stderr);
+  assert.ok(/--signature-file <signature-and-head-evidence\.json>/.test(blocked.stderr), blocked.stderr);
+  assert.ok(!fs.existsSync(path.join(graph, 'escalations.json')));
+  fs.writeFileSync(path.join(graph, 'delivery-log.jsonl'), JSON.stringify({ event: 'remedy_dispatch',
+    ticket: 'T-16-05', ts: new Date().toISOString(), pr: 606, repo: 'owner/repo',
+    entry_index: 0, signature, workflow: 'repair.yml', ref: OPEN_PR.branch,
+    bot: 'github-actions[bot]', inputs_digest: 'b'.repeat(64), head: 'a'.repeat(40) }) + '\n');
+  const exhausted = run(dir, args);
+  assert.strictEqual(exhausted.status, 0, exhausted.stderr);
+  assert.ok(/Candidate remedy: repair.yml/.test(activeEscalations(dir)['T-16-05']));
+});
+
+test('an undeclared workflow in the reason is a candidate note, never a dispatch', () => {
+  const dir = project();
+  const graph = path.join(dir, '.planning', 'graph');
+  fs.writeFileSync(path.join(graph, 'tickets.json'), JSON.stringify({ tickets: {
+    'T-16-05': { repo: 'owner/repo', branch: OPEN_PR.branch },
+  } }));
+  const marked = run(dir, ['mark', 'T-16-05', 'try', 'pw-debug-tests.yml', 'for', 'the', 'baseline']);
+  assert.strictEqual(marked.status, 0, marked.stderr);
+  assert.ok(/Candidate remedy: pw-debug-tests.yml/.test(activeEscalations(dir)['T-16-05']));
+  assert.strictEqual(fs.existsSync(path.join(graph, 'delivery-log.jsonl')),
+    true, 'only the escalation journal is written');
+});
 
 test('a marked escalation is in force in a later run, with its reason', () => {
   const dir = project();
