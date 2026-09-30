@@ -1,0 +1,12 @@
+# INV-011 canonical research contract
+
+Produce four complete reports through the fixed Codex host at the pinned source revision. Use existing vendor facts from the advisory audit; inspect exact source files and tests for compatibility. Every codebase finding cites path/line; distinguish inspected fact, proposed change and unresolved live model access. Do not edit product code, run competing controllers, create PRs or change runtime settings. Bound each report to actionable findings (target 1200 words; maximum 1 MiB), with source index and concrete scoped verification commands.
+
+- system-state: map current model-policy, adapters, repair prerequisites, generated agents, runtime validation and installed identity; identify all required changes for the operator's exact grid.
+- alternatives: compare minimal coherent policy version migration with larger host/outer-coordinator redesign; propose fastest self-contained delivery slices and dependencies, and preserve caller/receipt contracts.
+- constraints: inspect configuration/projection/refusal paths, account/model capability checks, signing/installation and active phase-43/45 owner overlaps. Identify host limitations and required explicit decisions, not generic warnings.
+- risks: enumerate adversarial matrix/negative tests, known review finding replay, escalation predecessor requirements and safe rollout/rollback. Separate adoption correctness from quota/non-inferiority measurement.
+
+Approved input matrix is in docs/audits/2026-09-30-model-ladder-refresh.md, native ladder sections. No proposal reinterpretation: research/decomposition/review/integrator Claude base Sonnet/xhigh; executor Sonnet/medium -> high, critical/checkpoint Sonnet/xhigh, proven harder Opus/high; repair Sonnet/high -> xhigh -> Opus/high; sentinel Sonnet/low; drift Sonnet/medium. Codex executor/initial repair/drift Sol6.1/low, fixed sentinel Luna/medium, research/decomposition/review/integrator Sol6.1/high -> xhigh, repair low -> high -> xhigh. Leave Fable window rule unchanged in expedited slice unless the report proves a necessary compatibility blocker.
+
+Application proof must be host-owned and durable. Do not fabricate schemas or receipts. Host runs under current ADR-014 until reviewed new-version activation. Four research workers may complete serially if that is the shipped host protocol; independent preflight/plan preparation can proceed in parallel, but no execution against unaccepted/unvalidated plans.
