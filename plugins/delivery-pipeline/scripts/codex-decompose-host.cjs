@@ -7,7 +7,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const {
-  createCodexRuntimeHost, installedGsdAgent, normalizeScope, verifyCompletedNativeLaunch,
+  createCodexRuntimeHost, installedGsdAgent, normalizeScope, parseCodexStream, verifyCompletedNativeLaunch,
 } = require('./codex-runtime-host.cjs');
 const { launchAgent, selectAgent } = require('./codex-agent.cjs');
 const { createCodexDispatchAdapter } = require('./codex-dispatch-adapter.cjs');
@@ -21,6 +21,7 @@ const { createPlanningWriterLease } = require('./planning-writer-lease.cjs');
 
 const SCHEMA = 'shipyard.codex-decompose-host.v1';
 const LAUNCH_SCHEMA = 'shipyard.codex-decompose-launch.v1';
+const OUTPUT_SCHEMA = 'shipyard.codex-decompose-output.v1';
 const MAX_ARGS_BYTES = 4 * 1024 * 1024;
 const ROLES = Object.freeze({
   'gsd-phase-researcher': Object.freeze({ role: 'research', sandbox: 'workspace-write' }),
@@ -229,6 +230,199 @@ function sha256File(file) {
   catch (_) { return null; }
 }
 
+function canonicalJson(value) {
+  if (Array.isArray(value)) return '[' + value.map(canonicalJson).join(',') + ']';
+  if (object(value)) {
+    return '{' + Object.keys(value).filter((key) => value[key] !== undefined).sort()
+      .map((key) => JSON.stringify(key) + ':' + canonicalJson(value[key])).join(',') + '}';
+  }
+  return JSON.stringify(value);
+}
+
+function sha256Text(value) {
+  return crypto.createHash('sha256').update(value).digest('hex');
+}
+
+function scopeIdentity(scope) {
+  const identity = {};
+  for (const key of ['run_id', 'ticket', 'phase', 'worktree', 'runtime', 'provider', 'repository']) {
+    if (scope[key] !== undefined) identity[key] = scope[key];
+  }
+  return identity;
+}
+
+function launchBinding(scope, request, dispatchId, resolution, agent) {
+  const identity = scopeIdentity(scope);
+  return Object.freeze({
+    scope: identity,
+    request_sha256: sha256Text(canonicalJson({
+      scope: identity,
+      request: {
+        dispatch_id: dispatchId,
+        gsd_role: request.gsd_role,
+        prompt: request.prompt,
+        signals: request.signals,
+      },
+    })),
+    dispatch_id: dispatchId,
+    gsd_role: request.gsd_role,
+    role: resolution.role,
+    model: resolution.model,
+    effort: resolution.effort,
+    policy_version: resolution.policy_version,
+    policy_hash: resolution.policy_hash,
+    rung: resolution.rung,
+    agent: {
+      file: agent.file,
+      sha256: agent.sha256,
+      instructions_sha256: agent.instructions_sha256,
+    },
+  });
+}
+
+function completionInstructions(prompt, gsdRole) {
+  const artifactRule = gsdRole === 'gsd-plan-checker'
+    ? 'Use an empty artifact_paths array.'
+    : 'List every worktree-relative file you created or changed inside the current phase directory.';
+  return prompt + '\n\nShipyard recovery completion format: finish with exactly one JSON object as your final message, '
+    + 'using schema "' + OUTPUT_SCHEMA + '" and an artifact_paths array. ' + artifactRule;
+}
+
+function declaredArtifactPaths(message, scope, gsdRole, code = 'RECOVERY_EVIDENCE_INCOMPLETE') {
+  let output;
+  try { output = JSON.parse(message); }
+  catch (_) { fail(code, 'authenticated child completion does not contain the required artifact declaration'); }
+  if (!object(output) || output.schema !== OUTPUT_SCHEMA || !Array.isArray(output.artifact_paths)
+      || output.artifact_paths.length > 256) {
+    fail(code, 'authenticated child completion has an invalid artifact declaration');
+  }
+  const directory = phaseDirectory(scope.worktree, scope.phase);
+  const declared = output.artifact_paths.map((value) => {
+    if (typeof value !== 'string' || !value || path.isAbsolute(value) || value.includes('\\')
+        || path.posix.normalize(value) !== value || value.split('/').includes('..')) {
+      fail(code, 'authenticated child declared an invalid artifact path');
+    }
+    const full = path.resolve(scope.worktree, ...value.split('/'));
+    const relativeToWorktree = path.relative(scope.worktree, full);
+    const relativeToPhase = path.relative(directory, full);
+    if (!relativeToWorktree || relativeToWorktree.startsWith('..') || path.isAbsolute(relativeToWorktree)
+        || relativeToPhase.startsWith('..') || path.isAbsolute(relativeToPhase)) {
+      fail(code, 'authenticated child declared an artifact outside the current phase directory');
+    }
+    const phaseRelative = relativeToPhase.split(path.sep).join('/');
+    if (gsdRole === 'gsd-planner' && phaseRelative !== 'CONTEXT.md' && !/^\d+-\d+-PLAN\.md$/.test(phaseRelative)) {
+      fail(code, 'planner declared a path that the decomposition sealer will not seal');
+    }
+    return phaseRelative;
+  }).sort();
+  if (new Set(declared).size !== declared.length) fail(code, 'authenticated child declared duplicate artifact paths');
+  if (gsdRole === 'gsd-phase-researcher') {
+    const expected = path.relative(directory, researchArtifact(scope.worktree, scope.phase)).split(path.sep).join('/');
+    if (declared.length !== 1 || declared[0] !== expected) {
+      fail(code, 'researcher must declare the phase research artifact it wrote');
+    }
+  }
+  if (gsdRole === 'gsd-plan-checker' && declared.length !== 0) {
+    fail(code, 'read-only plan checker cannot declare modified artifacts');
+  }
+  return declared;
+}
+
+function artifactDigests(scope, writerLease, snapshot, declared, code) {
+  const changed = writerLease.changedSince(snapshot).changed;
+  if (changed.length !== declared.length || changed.some((relPath, index) => relPath !== declared[index])) {
+    fail(code, 'planning tree delta differs from the authenticated child artifact declaration');
+  }
+  const directory = phaseDirectory(scope.worktree, scope.phase);
+  const digests = {};
+  for (const relative of declared) {
+    const full = path.join(directory, ...relative.split('/'));
+    let stat;
+    try { stat = fs.lstatSync(full); }
+    catch (_) { fail(code, 'declared artifact is missing: ' + relative); }
+    if (stat.isSymbolicLink() || !stat.isFile()) fail(code, 'declared artifact is not a regular file: ' + relative);
+    try {
+      assertContained({ worktree: scope.worktree, allowed: [path.relative(scope.worktree, full)] });
+    } catch (_) { fail(code, 'declared artifact resolves outside the current worktree: ' + relative); }
+    const digest = sha256File(full);
+    if (!digest) fail(code, 'declared artifact cannot be digested: ' + relative);
+    digests[relative] = digest;
+  }
+  return digests;
+}
+
+function runtimeTranscriptPath(directory, scope, sessionId) {
+  const safeRun = scope.run_id.replace(/[^A-Za-z0-9._-]/g, '_');
+  const safeSession = sessionId.replace(/[^A-Za-z0-9._-]/g, '_');
+  return path.join(path.resolve(directory), safeRun + '-' + safeSession + '.jsonl');
+}
+
+function verifyRuntimeEvidence(record, scope, binding, transcriptDir) {
+  const completed = record.completed;
+  const started = record.session_started;
+  const evidence = completed && completed.runtime_evidence;
+  const sessionId = started && started.session_id;
+  const runtimeLaunch = started && started.runtime_launch;
+  if (!object(completed) || !object(evidence) || !object(runtimeLaunch) || !sessionId
+      || completed.parent_session_id !== sessionId || evidence.session_id !== sessionId
+      || evidence.run_id !== scope.run_id || evidence.ticket !== scope.ticket || evidence.phase !== scope.phase
+      || evidence.worktree !== scope.worktree || evidence.dispatch_id !== binding.dispatch_id
+      || evidence.runtime !== 'codex' || evidence.provider !== 'openai'
+      || evidence.applied_model !== binding.model || evidence.observed_model !== binding.model
+      || evidence.applied_effort !== binding.effort || evidence.observed_effort !== binding.effort
+      || runtimeLaunch.run_id !== scope.run_id || runtimeLaunch.ticket !== scope.ticket
+      || runtimeLaunch.phase !== scope.phase || runtimeLaunch.worktree !== scope.worktree
+      || runtimeLaunch.dispatch_id !== binding.dispatch_id || runtimeLaunch.gsd_role !== binding.gsd_role
+      || runtimeLaunch.applied_model !== binding.model || runtimeLaunch.applied_effort !== binding.effort
+      || runtimeLaunch.observed_model !== binding.model || runtimeLaunch.observed_effort !== binding.effort
+      || runtimeLaunch.agent_file !== binding.agent.file
+      || runtimeLaunch.agent_file_digest !== binding.agent.sha256
+      || runtimeLaunch.agent_instructions_digest !== binding.agent.instructions_sha256
+      || completed.launch_id !== 'codex-' + sessionId
+      || !/^[a-f0-9]{64}$/.test(completed.completion_message_sha256 || '')
+      || !/^[a-f0-9]{64}$/.test(runtimeLaunch.command_digest || '')
+      || evidence.command_digest !== runtimeLaunch.command_digest
+      || canonicalJson(evidence.command) !== canonicalJson(runtimeLaunch.command)
+      || canonicalJson(evidence.sandbox_evidence) !== canonicalJson(runtimeLaunch.sandbox_evidence)
+      || evidence.selection_source !== runtimeLaunch.selection_source
+      || completed.pid !== started.process_id
+      || typeof completed.parent_wait_timed_out !== 'boolean'
+      || !object(evidence.native_session_evidence) || !object(evidence.native_child_evidence)
+      || evidence.native_session_evidence.session_id !== sessionId
+      || evidence.native_child_evidence.parent_thread_id !== sessionId
+      || evidence.native_child_evidence.agent_role !== binding.gsd_role
+      || evidence.native_child_evidence.agent_file_digest !== binding.agent.sha256
+      || !object(evidence.stream_evidence) || !object(evidence.transcript)) {
+    fail('RECOVERY_EVIDENCE_INCOMPLETE', 'completed runtime evidence does not bind the original scope and selection');
+  }
+  const expectedTranscript = runtimeTranscriptPath(transcriptDir, scope, sessionId);
+  if (path.resolve(evidence.transcript.path || '') !== expectedTranscript) {
+    fail('RECOVERY_EVIDENCE_MISSING', 'the host transcript path does not match this dispatch session');
+  }
+  let stat;
+  try { stat = fs.lstatSync(expectedTranscript); }
+  catch (_) { fail('RECOVERY_EVIDENCE_MISSING', 'the host transcript is missing for the completed launch'); }
+  if (!stat.isFile() || stat.isSymbolicLink() || (stat.mode & 0o077) !== 0) {
+    fail('RECOVERY_EVIDENCE_MISSING', 'the host transcript is not a private regular file');
+  }
+  const raw = fs.readFileSync(expectedTranscript, 'utf8');
+  const digest = sha256Text(raw);
+  if (stat.size !== evidence.transcript.bytes || digest !== evidence.transcript.sha256) {
+    fail('RECOVERY_ARTIFACT_ALTERED', 'the host transcript differs from its completed launch digest');
+  }
+  let stream;
+  try { stream = parseCodexStream(raw); }
+  catch (error) { fail('RECOVERY_EVIDENCE_INCOMPLETE', 'the host transcript cannot be re-verified: ' + error.message); }
+  if (stream.session_id !== sessionId || stream.records.length !== evidence.stream_evidence.records
+      || stream.turns !== evidence.stream_evidence.turns
+      || stream.usage_records !== evidence.stream_evidence.usage_records
+      || completed.parent_sha256 !== evidence.native_session_evidence.sha256
+      || completed.child_sha256 !== evidence.native_child_evidence.sha256
+      || completed.child_session_id !== evidence.native_child_evidence.session_id) {
+    fail('RECOVERY_ARTIFACT_ALTERED', 'completed runtime evidence does not match the host and native transcripts');
+  }
+}
+
 function pidAlive(pid) {
   if (!Number.isSafeInteger(pid) || pid <= 0) return false;
   try { process.kill(pid, 0); return true; }
@@ -320,31 +514,113 @@ function createCodexDecomposeHost(options = {}) {
             }
             prompt = researchInstructions(selection.agent_file_content) + '\n\n' + prompt;
           }
+          const resolution = policy.resolveDispatch({
+            runtime: 'codex', role: chosen.role, signals: request.signals, dispatch_id: context.dispatch_id,
+          });
+          const binding = launchBinding(scope, request, context.dispatch_id, resolution, agent);
+          const reservation = options.launchDir && leaseCtx && !recovering
+            && typeof runtimeHost.recorder.getReservation === 'function'
+            ? runtimeHost.recorder.getReservation(context.dispatch_id) : null;
+          if (options.launchDir && leaseCtx && !recovering) {
+            if (!reservation || typeof reservation.reserved_at !== 'string' || !reservation.reserved_at.trim()) {
+              fail('RECOVERY_NO_RESERVATION', 'typed launch has no durable reservation to bind');
+            }
+            if (reservation.recorded) fail('RECOVERY_ALREADY_RECORDED', 'typed launch reservation is already recorded');
+          }
           const launchRecord = options.launchDir && leaseCtx && !recovering ? {
-            dispatch_id: context.dispatch_id, gsd_role: request.gsd_role, lease_epoch: leaseCtx.epoch,
-            tree_snapshot: leaseCtx.snapshot, launched_at: new Date().toISOString(),
+            dispatch_id: context.dispatch_id,
+            gsd_role: request.gsd_role,
+            binding,
+            reservation: { dispatch_id: reservation.dispatch_id, reserved_at: reservation.reserved_at },
+            lease_epoch: leaseCtx.epoch,
+            tree_snapshot: leaseCtx.snapshot,
+            launched_at: new Date().toISOString(),
           } : null;
           if (launchRecord) writeLaunchRecord(options.launchDir, launchRecord);
-          const applied = recovering
-            ? runOptions.recovered.applied
-            : await runtimeHost.launchTypedGsd(selected, { ...context, prompt });
-          const evidence = applied && applied.runtime_evidence;
-          if (launchRecord && evidence && evidence.native_child_evidence && evidence.native_session_evidence) {
-            const completed = leaseCtx.writerLease.changedSince(leaseCtx.snapshot).changed;
-            const directory = phaseDirectory(scope.worktree, scope.phase);
+          let startedSession = null;
+          const captureSessionStarted = launchRecord ? (started) => {
+            const runtimeLaunch = started && started.runtime_launch;
+            if (!object(started) || typeof started.session_id !== 'string' || !started.session_id
+                || (started.process_id !== null && !Number.isSafeInteger(started.process_id))
+                || !object(runtimeLaunch) || runtimeLaunch.run_id !== scope.run_id
+                || runtimeLaunch.ticket !== scope.ticket || runtimeLaunch.phase !== scope.phase
+                || runtimeLaunch.worktree !== scope.worktree
+                || runtimeLaunch.dispatch_id !== context.dispatch_id
+                || runtimeLaunch.gsd_role !== request.gsd_role
+                || runtimeLaunch.applied_model !== binding.model || runtimeLaunch.applied_effort !== binding.effort
+                || runtimeLaunch.agent_file !== agent.file || runtimeLaunch.agent_file_digest !== agent.sha256) {
+              fail('RUNTIME_EVIDENCE_MISMATCH', 'native session start does not bind the original typed launch');
+            }
+            if (startedSession && (startedSession.session_id !== started.session_id
+                || startedSession.process_id !== started.process_id)) {
+              fail('RUNTIME_EVIDENCE_INVALID', 'native session start reported conflicting identities');
+            }
+            startedSession = { session_id: started.session_id, process_id: started.process_id, runtime_launch: runtimeLaunch };
+            writeLaunchRecord(options.launchDir, { ...launchRecord, session_started: startedSession });
+          } : undefined;
+          const captureCompleted = launchRecord ? (completed) => {
+            const runtimeEvidence = completed && completed.runtime_evidence;
+            if (!startedSession || !object(completed) || completed.session_id !== startedSession.session_id
+                || (completed.process_id !== null && !Number.isSafeInteger(completed.process_id))
+                || completed.process_id !== startedSession.process_id || !object(runtimeEvidence)
+                || runtimeEvidence.session_id !== startedSession.session_id
+                || runtimeEvidence.run_id !== scope.run_id || runtimeEvidence.ticket !== scope.ticket
+                || runtimeEvidence.phase !== scope.phase || runtimeEvidence.worktree !== scope.worktree
+                || runtimeEvidence.dispatch_id !== context.dispatch_id
+                || runtimeEvidence.command_digest !== startedSession.runtime_launch.command_digest
+                || canonicalJson(runtimeEvidence.command) !== canonicalJson(startedSession.runtime_launch.command)
+                || canonicalJson(runtimeEvidence.sandbox_evidence) !== canonicalJson(startedSession.runtime_launch.sandbox_evidence)
+                || runtimeEvidence.selection_source !== startedSession.runtime_launch.selection_source
+                || runtimeEvidence.applied_model !== binding.model || runtimeEvidence.observed_model !== binding.model
+                || runtimeEvidence.applied_effort !== binding.effort || runtimeEvidence.observed_effort !== binding.effort
+                || !object(runtimeEvidence.native_session_evidence) || !object(runtimeEvidence.native_child_evidence)
+                || runtimeEvidence.native_session_evidence.session_id !== startedSession.session_id
+                || runtimeEvidence.native_child_evidence.parent_thread_id !== startedSession.session_id
+                || runtimeEvidence.native_child_evidence.agent_role !== request.gsd_role
+                || runtimeEvidence.native_child_evidence.agent_file_digest !== agent.sha256
+                || typeof completed.last_agent_message !== 'string'
+                || !object(completed.spawn_evidence)
+                || completed.spawn_evidence.parent_thread_id !== startedSession.session_id
+                || typeof completed.spawn_evidence.timed_out !== 'boolean') {
+              fail('RUNTIME_EVIDENCE_MISMATCH', 'completed native launch does not match its durable session start');
+            }
+            const declared = declaredArtifactPaths(completed.last_agent_message, scope, request.gsd_role,
+              'ARTIFACT_DECLARATION_INVALID');
+            const digests = artifactDigests(scope, leaseCtx.writerLease, leaseCtx.snapshot, declared,
+              'ARTIFACT_DECLARATION_INVALID');
+            const completedRecord = {
+              launch_id: completed.launch_id,
+              parent_session_id: completed.session_id,
+              pid: completed.process_id,
+              parent_sha256: runtimeEvidence.native_session_evidence.sha256,
+              child_session_id: runtimeEvidence.native_child_evidence.session_id,
+              child_sha256: runtimeEvidence.native_child_evidence.sha256,
+              completion_message_sha256: sha256Text(completed.last_agent_message),
+              parent_wait_timed_out: completed.spawn_evidence.timed_out,
+              artifact_digests: digests,
+              runtime_evidence: runtimeEvidence,
+            };
             writeLaunchRecord(options.launchDir, {
               ...launchRecord,
-              completed: {
-                launch_id: applied.launch_id,
-                parent_session_id: applied.session_id,
-                pid: Number.isInteger(applied.process_id) ? applied.process_id : null,
-                parent_sha256: evidence.native_session_evidence.sha256,
-                child_session_id: evidence.native_child_evidence.session_id,
-                child_sha256: evidence.native_child_evidence.sha256,
-                artifact_digests: Object.fromEntries(completed.map((rel) => [rel, sha256File(path.join(directory, rel))])),
-                runtime_evidence: evidence,
-              },
+              session_started: startedSession,
+              completed: completedRecord,
             });
+          } : undefined;
+          const applied = recovering
+            ? runOptions.recovered.applied
+            : await runtimeHost.launchTypedGsd(selected, {
+              ...context,
+              prompt: launchRecord ? completionInstructions(prompt, request.gsd_role) : prompt,
+              ...(captureSessionStarted ? { onSessionStarted: captureSessionStarted } : {}),
+              ...(captureCompleted ? { onCompleted: captureCompleted } : {}),
+            });
+          const evidence = applied && applied.runtime_evidence;
+          if (launchRecord) {
+            const durable = readLaunchRecord(options.launchDir, context.dispatch_id);
+            if (!durable.completed || durable.completed.launch_id !== applied.launch_id
+                || durable.completed.parent_session_id !== applied.session_id) {
+              fail('RUNTIME_EVIDENCE_MISSING', 'typed launch completion was not durable before its callback returned');
+            }
           }
           if (runtimeHost.requireRuntimeEvidence === true) {
             const child = applied && applied.runtime_evidence && applied.runtime_evidence.native_child_evidence;
@@ -476,30 +752,78 @@ async function recoverCli(argv, stdout, options) {
     worktree: scope.worktree, phaseDir, stateRoot: path.join(hostStateDir, 'writer'),
     ...(options.now === undefined ? {} : { now: options.now }),
   });
-  const leaseHandle = writerLease.acquire({
+  const leaseHandle = writerLease.recover({
     owner: JSON.stringify({ run_id: scope.run_id, owner_id: controller.owner_id, recovery: dispatchId }),
-    base_revision: sourceRevision(scope.worktree),
+    reason: 'recover completed typed GSD dispatch ' + dispatchId,
   });
   let runBegun = false;
   try {
     const recorder = createDurableRecorder(options.recorderDir || path.join(hostStateDir, 'receipts'));
     const reservation = recorder.getReservation(dispatchId);
     if (!reservation) fail('RECOVERY_NO_RESERVATION', 'dispatch ' + dispatchId + ' has no durable reservation');
+    if (typeof reservation.reserved_at !== 'string' || !reservation.reserved_at.trim()) {
+      fail('RECOVERY_EVIDENCE_INCOMPLETE', 'dispatch reservation has no original timestamp');
+    }
     if (reservation.recorded) fail('RECOVERY_ALREADY_RECORDED', 'dispatch ' + dispatchId + ' already has a durable record');
     const launchDir = options.launchDir || path.join(hostStateDir, 'launches');
     const record = readLaunchRecord(launchDir, dispatchId);
-    if (record.gsd_role !== request.gsd_role) fail('RECOVERY_EVIDENCE_MISSING', 'launch record belongs to another GSD role');
-    const completed = record.completed;
-    if (!object(completed) || typeof completed.parent_session_id !== 'string' || !object(completed.runtime_evidence)
-        || !object(completed.artifact_digests)) {
-      fail('RECOVERY_EVIDENCE_INCOMPLETE', 'dispatch ' + dispatchId + ' has no completed native launch to recover');
+    if (record.gsd_role !== request.gsd_role || !object(record.reservation)
+        || record.reservation.dispatch_id !== dispatchId
+        || record.reservation.reserved_at !== reservation.reserved_at) {
+      fail('RECOVERY_EVIDENCE_INCOMPLETE', 'launch record does not bind the original durable reservation and GSD role');
     }
-    if (pidAlive(completed.pid)) fail('RECOVERY_UNKNOWN_LIVE', 'recorded launch pid ' + completed.pid + ' is still alive');
     const resolution = policy.resolveDispatch({
       runtime: 'codex', role: ROLES[request.gsd_role].role, signals: request.signals, dispatch_id: dispatchId,
     });
     const agent = installedGsdAgent(request.gsd_role, env);
+    const binding = launchBinding(scope, request, dispatchId, resolution, agent);
+    if (!object(record.binding) || canonicalJson(record.binding) !== canonicalJson(binding)) {
+      fail('RECOVERY_EVIDENCE_INCOMPLETE', 'recovery request, run scope, policy, or installed role differs from the original launch');
+    }
+    if (!Number.isSafeInteger(record.lease_epoch) || leaseHandle.epoch !== record.lease_epoch + 1) {
+      fail('RECOVERY_EVIDENCE_INCOMPLETE', 'writer lease recovery did not fence the original launch epoch');
+    }
+    writerLease.assertFence({ token: leaseHandle.token, epoch: leaseHandle.epoch,
+      base_revision: sourceRevision(scope.worktree) });
+    const sessionStarted = record.session_started;
+    const completed = record.completed;
+    if (!object(sessionStarted) || typeof sessionStarted.session_id !== 'string'
+        || !object(completed) || typeof completed.parent_session_id !== 'string' || !object(completed.runtime_evidence)
+        || !object(completed.artifact_digests)) {
+      fail('RECOVERY_EVIDENCE_INCOMPLETE', 'dispatch ' + dispatchId + ' has no completed native launch to recover');
+    }
+    if (sessionStarted.session_id !== completed.parent_session_id
+        || (Number.isSafeInteger(completed.pid) && pidAlive(completed.pid))) {
+      fail('RECOVERY_UNKNOWN_LIVE', 'recorded Codex process is still alive or session identity is inconsistent');
+    }
+    const transcriptDir = options.transcriptDir || path.join(hostStateDir, 'transcripts');
+    verifyRuntimeEvidence(record, scope, binding, transcriptDir);
+    const outputDigest = completed.completion_message_sha256;
     const repository = scope.repository;
+    let verified;
+    try {
+      verified = await verifyCompletedNativeLaunch({
+        session_id: sessionStarted.session_id, selection: { model: resolution.model, effort: resolution.effort },
+        agent, env, allowTimedOutWait: true, waitMs: 0, startedAt: 0, now: new Date(record.launched_at),
+      });
+    } catch (error) {
+      fail(recoveryCode(error), 'native launch evidence cannot be re-verified: ' + error.message);
+    }
+    const session = verified.native_session_evidence;
+    const child = verified.native_child_evidence;
+    const output = verified.last_agent_message;
+    if (typeof output !== 'string' || sha256Text(output) !== outputDigest
+        || session.sha256 !== completed.parent_sha256 || child.sha256 !== completed.child_sha256
+        || child.session_id !== completed.child_session_id
+        || verified.spawn_evidence.timed_out !== completed.parent_wait_timed_out) {
+      fail('RECOVERY_ARTIFACT_ALTERED', 'native transcripts differ from the digests recorded at launch');
+    }
+    const declared = declaredArtifactPaths(output, scope, request.gsd_role);
+    const currentDigests = artifactDigests(scope, writerLease, record.tree_snapshot, declared,
+      'RECOVERY_ARTIFACT_ALTERED');
+    if (canonicalJson(currentDigests) !== canonicalJson(completed.artifact_digests)) {
+      fail('RECOVERY_ARTIFACT_ALTERED', 'phase artifacts differ from the digests recorded when the child completed');
+    }
     controller.begin(createRunScope({
       run_id: scope.run_id,
       repository_id: typeof repository === 'string' ? repository
@@ -512,26 +836,6 @@ async function recoverCli(argv, stdout, options) {
       },
     }));
     runBegun = true;
-    let verified;
-    try {
-      verified = await verifyCompletedNativeLaunch({
-        session_id: completed.parent_session_id, selection: { model: resolution.model, effort: resolution.effort },
-        agent, env, allowTimedOutWait: true, waitMs: 0, startedAt: 0, now: new Date(record.launched_at),
-      });
-    } catch (error) {
-      fail(recoveryCode(error), 'native launch evidence cannot be re-verified: ' + error.message);
-    }
-    const session = verified.native_session_evidence;
-    const { last_agent_message: output, ...child } = verified.native_child_evidence;
-    if (session.sha256 !== completed.parent_sha256 || child.sha256 !== completed.child_sha256
-        || child.session_id !== completed.child_session_id) {
-      fail('RECOVERY_ARTIFACT_ALTERED', 'native transcripts differ from the digests recorded at launch');
-    }
-    const changed = writerLease.changedSince(record.tree_snapshot).changed;
-    const declared = Object.keys(completed.artifact_digests).sort();
-    const altered = changed.length !== declared.length || changed.some((rel, index) => rel !== declared[index])
-      || declared.some((rel) => sha256File(path.join(phaseDir, rel)) !== completed.artifact_digests[rel]);
-    if (altered) fail('RECOVERY_ARTIFACT_ALTERED', 'phase artifacts differ from the digests recorded when the child completed');
     const stored = completed.runtime_evidence;
     const applied = Object.freeze({
       launch_id: completed.launch_id,
@@ -548,7 +852,7 @@ async function recoverCli(argv, stdout, options) {
       capabilities: options.capabilities, capabilitiesFile: options.capabilitiesFile,
       executable: options.executable, probe: options.probe,
       recorder,
-      transcriptDir: options.transcriptDir || path.join(hostStateDir, 'transcripts'),
+      transcriptDir,
       env,
       spawn: () => fail('RECOVERY_SPAWN_FORBIDDEN', 'recovery never launches a runtime process'),
       agentDir: options.agentDir, agentManifest: options.agentManifest,

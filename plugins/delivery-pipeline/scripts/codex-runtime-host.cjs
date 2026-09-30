@@ -487,7 +487,11 @@ async function readNativeCodexChild(parentId, role, model, effort, agent, spawnE
       }
       const evidence = parseNativeChildTranscript(raw, child.id, parentId, role, model, effort, agent, spawnEvidence);
       if (options.includeCompletion === true) {
-        return freeze({ ...evidence, last_agent_message: completionMessage(raw) });
+        return freeze({
+          ...evidence,
+          last_agent_message: completionMessage(raw),
+          ...(options.task ? { task_relay: verifyTaskRelay(raw, options.task, spawnEvidence) } : {}),
+        });
       }
       return options.task ? freeze({ ...evidence, task_relay: verifyTaskRelay(raw, options.task, spawnEvidence) }) : evidence;
     }
@@ -821,6 +825,7 @@ function parseNativeParentSpawn(raw, parentId, role, model, effort) {
   return freeze({
     parent_thread_id: parentId, call_id: call.call_id,
     task_name: args.task_name, task_path: output.task_name,
+    timed_out: waitResults.some((waited) => waited.timed_out),
   });
 }
 
@@ -927,17 +932,20 @@ async function verifyCompletedNativeLaunch(input = {}) {
   const spawnEvidence = parseNativeParentSpawn(parentRaw, input.session_id, agent.role, model, effort);
   const child = await readNativeCodexChild(input.session_id, agent.role, model, effort, agent, spawnEvidence, {
     env, ...timing, startedAt: input.startedAt,
-    ...(recovery ? { includeCompletion: true } : { task: input.task }),
+    includeCompletion: true,
+    ...(!recovery && input.task ? { task: input.task } : {}),
   });
-  // @invariant: recovery accepts a timed-out parent wait only with one task_complete bound to parent and role.
-  if (recovery && (child.parent_thread_id !== input.session_id || child.agent_role !== agent.role
-      || typeof child.last_agent_message !== 'string')) {
-    fail('RUNTIME_EVIDENCE_INVALID', 'recovered native child did not complete for this parent and role');
+  // @invariant: timed_out describes the parent wait; only the child's bound task_complete proves completion.
+  if (child.parent_thread_id !== input.session_id || child.agent_role !== agent.role
+      || typeof child.last_agent_message !== 'string') {
+    fail('RUNTIME_EVIDENCE_INVALID', 'native child did not complete for this parent and role');
   }
+  const { last_agent_message: lastAgentMessage, ...childEvidence } = child;
   return freeze({
     native_session_evidence: nativeEvidence,
-    native_child_evidence: child,
+    native_child_evidence: freeze(childEvidence),
     spawn_evidence: spawnEvidence,
+    last_agent_message: lastAgentMessage,
   });
 }
 
@@ -1089,6 +1097,28 @@ function createCodexCliLauncher(options = {}) {
     if (options.approveForMe === true || launchOptions.approve_for_me === true) args.push('--approve-for-me');
     args.push('-');
     const startedAt = Date.now();
+    const commandDigest = crypto.createHash('sha256').update(JSON.stringify(args)).digest('hex');
+    const runtimeLaunch = freeze({
+      runtime: 'codex', provider: 'openai', run_id: scope.run_id,
+      ticket: scope.ticket, phase: scope.phase, worktree: scope.worktree,
+      dispatch_id: launchOptions.dispatch_id,
+      ...(typedRole ? {
+        gsd_role: typedRole,
+        agent_file: agent.file,
+        agent_file_digest: agent.sha256,
+        agent_instructions_digest: agent.instructions_sha256,
+      } : {}),
+      command_digest: commandDigest, command: { executable, args: [...args] },
+      sandbox_evidence: {
+        profile: PERMISSION_PROFILE,
+        base_profile: sandbox === 'read-only' ? ':read-only' : ':workspace',
+        protected_paths: protectedPaths,
+        ...(evidenceWritePath ? { evidence_write_path: evidenceWritePath } : {}),
+      },
+      selection_source: 'codex-native-session-transcript',
+      applied_model: model, applied_effort: effort,
+      observed_model: model, observed_effort: effort,
+    });
     let child;
     try {
       child = spawnImpl(executable, args, {
@@ -1104,7 +1134,53 @@ function createCodexCliLauncher(options = {}) {
     }
     const stdout = [];
     const stderr = [];
-    child.stdout.on('data', (chunk) => stdout.push(Buffer.from(chunk)));
+    let sessionLineBuffer = '';
+    let announcedSessionId = null;
+    let sessionCallbackError = null;
+    const announceSession = (record) => {
+      if (!object(record) || record.type !== 'thread.started'
+          || typeof record.thread_id !== 'string' || !record.thread_id.trim()) return;
+      const sessionId = record.thread_id.trim();
+      if (announcedSessionId && announcedSessionId !== sessionId) {
+        sessionCallbackError = hostError('RUNTIME_EVIDENCE_INVALID', 'Codex output reported conflicting thread identities');
+        try { child.kill(); } catch (_) {}
+        return;
+      }
+      if (announcedSessionId) return;
+      announcedSessionId = sessionId;
+      if (typeof launchOptions.onSessionStarted === 'function') {
+        try {
+          launchOptions.onSessionStarted(freeze({
+            session_id: sessionId,
+            process_id: Number.isInteger(child.pid) ? child.pid : null,
+            runtime_launch: runtimeLaunch,
+          }));
+        } catch (error) {
+          sessionCallbackError = error;
+          try { child.kill(); } catch (_) {}
+        }
+      }
+    };
+    const inspectSessionRecords = (chunk, flush = false) => {
+      if (typeof launchOptions.onSessionStarted !== 'function') return;
+      sessionLineBuffer += chunk.toString('utf8');
+      const lines = sessionLineBuffer.split(/\r?\n/);
+      sessionLineBuffer = lines.pop() || '';
+      if (flush && sessionLineBuffer.trim()) {
+        lines.push(sessionLineBuffer);
+        sessionLineBuffer = '';
+      }
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        try { announceSession(JSON.parse(line)); }
+        catch (_) {}
+      }
+    };
+    child.stdout.on('data', (chunk) => {
+      const bytes = Buffer.from(chunk);
+      stdout.push(bytes);
+      inspectSessionRecords(bytes);
+    });
     child.stderr.on('data', (chunk) => stderr.push(Buffer.from(chunk)));
     try {
       const input = agent ? taskRelayInput(agent.role, model, effort, task) : launchPrompt(prompt, content);
@@ -1125,6 +1201,8 @@ function createCodexCliLauncher(options = {}) {
       child.on('close', (code, signal) => finish({ code, signal }));
       child.on('exit', (code, signal) => finish({ code, signal }));
     });
+    inspectSessionRecords(Buffer.alloc(0), true);
+    if (sessionCallbackError) throw sessionCallbackError;
     const rawStdout = Buffer.concat(stdout).toString('utf8');
     const rawStderr = Buffer.concat(stderr).toString('utf8');
     if (exit.error) fail('RUNTIME_UNAVAILABLE', 'Codex process failed: ' + exit.error.message);
@@ -1136,6 +1214,9 @@ function createCodexCliLauncher(options = {}) {
     let parsed;
     try {
       parsed = parseCodexStream(rawStdout);
+      if (typeof launchOptions.onSessionStarted === 'function' && announcedSessionId !== parsed.session_id) {
+        fail('RUNTIME_EVIDENCE_MISSING', 'Codex session identity was not durably announced while the process ran');
+      }
       const verified = await verifyCompletedNativeLaunch({
         session_id: parsed.session_id, selection: { model, effort }, agent, env,
         allowTimedOutWait: false, startedAt, task,
@@ -1153,7 +1234,6 @@ function createCodexCliLauncher(options = {}) {
         }
       }
       const transcript = writeTranscript(transcriptDir, scope, parsed.session_id, rawStdout);
-      const commandDigest = crypto.createHash('sha256').update(JSON.stringify(args)).digest('hex');
       const runtimeEvidence = {
         schema: 'shipyard.codex-runtime-evidence.v1',
         version: 1,
@@ -1209,6 +1289,16 @@ function createCodexCliLauncher(options = {}) {
           agent_file_digest: agent.sha256,
         } : {}),
       };
+      if (typeof launchOptions.onCompleted === 'function') {
+        launchOptions.onCompleted(freeze({
+          launch_id: evidence.launch_id,
+          session_id: evidence.session_id,
+          process_id: Number.isInteger(evidence.process_id) ? evidence.process_id : null,
+          runtime_evidence: evidence.runtime_evidence,
+          last_agent_message: verified.last_agent_message,
+          spawn_evidence: verified.spawn_evidence,
+        }));
+      }
       return freeze(evidence);
     } catch (error) {
       if (error && error.name === 'CodexRuntimeHostError') throw error;
@@ -1295,6 +1385,8 @@ function createCodexRuntimeHost(options = {}) {
         dispatch_id: input.dispatch_id,
         sandbox_mode: selection.sandbox_mode || input.sandbox_mode,
         gsd_role: input.gsd_role,
+        onSessionStarted: input.onSessionStarted,
+        onCompleted: input.onCompleted,
       });
       assertOwner();
       return result;

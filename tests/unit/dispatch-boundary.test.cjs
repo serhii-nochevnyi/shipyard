@@ -2432,7 +2432,7 @@ test('getReservation reports a durable reservation read-only and whether it was 
 test('recoverReserved records only an existing, unrecorded durable reservation', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'boundary-recover-'));
   try {
-    const recorder = boundaryModule.createDurableRecorder(path.join(dir, 'receipts'));
+    let recorder = boundaryModule.createDurableRecorder(path.join(dir, 'receipts'));
     const recovering = () => boundaryModule.createDispatchBoundary({
       recorder, adapters: { codex: fakeAdapter() }, recoverReserved: true,
     });
@@ -2440,6 +2440,8 @@ test('recoverReserved records only an existing, unrecorded durable reservation',
       { ticket: 'T-45-09' }), (error) => error.code === 'RECOVERY_NO_RESERVATION');
     assert.equal(recorder.getReservation('dispatch-none'), null);
     recorder.reserve('dispatch-orphan');
+    recorder = boundaryModule.createDurableRecorder(path.join(dir, 'receipts'));
+    assert.equal(recorder.getReservation('dispatch-orphan').recorded, false);
     const recovered = recovering().dispatch({ runtime: 'codex', role: 'executor', dispatch_id: 'dispatch-orphan' },
       { ticket: 'T-45-09' });
     assert.equal(recovered.receipt.dispatch_id, 'dispatch-orphan');
