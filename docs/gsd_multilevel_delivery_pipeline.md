@@ -809,8 +809,9 @@ and `previous_dispatch_id`. Fixed Luna roles are not globally promoted, and
 `contested` evidence only promotes the judgement roles (`integrator` and
 `arch-review`). Claude's Fable rung is selected only by the declared measured
 window signal and existing routed consent (`pipeline.fable: auto`); missing
-consent is a refusal. With consent, an unsupported or unknown host capability
-for the Fable ceiling permits the bounded preceding-rung fallback described below.
+consent is a refusal. An unsupported or unknown host capability assessment
+for a model-axis escalation permits the bounded preceding-rung fallback described
+below, including Claude Sonnet→Opus escalations as well as Opus→Fable.
 
 A model list, runtime capability declaration, account picker, or vendor release
 announcement establishes discoverability only. Application is proven by the
@@ -866,17 +867,24 @@ unsupported final model/effort pair, stale or missing generated agent, missing
 adapter, omitted or conflicting effort, inline or parent-session-inherited
 selection, conflicting GSD/per-role override, undocumented escalation, or
 missing/phantom/unverified receipt. There is no session or compatibility
-fallback for routed delivery. The bounded capability exception is a consented
-Claude Fable ceiling whose host capability assessment is unsupported or unknown:
-`fallbackInput` selects the immediately preceding Opus/high (`critical`) rung
-within the same runtime policy. The boundary resolves that rung and performs a
-fresh launch with pair validation and verified application evidence; it does not
-reuse an earlier Opus receipt as proof of this dispatch. The receipt retains the
-capability assessment and requested ceiling versus fallback selection. Missing
-Fable consent still refuses before this exception applies. Repair fallback to a
-`repeat` or `repeat_exhausted` rung is refused: the immediate receipt authorizes
-only the requested rung, not the fallback rung's authenticated predecessor. A process exit or a model claimed by the prompt is
-not application evidence.
+fallback for routed delivery. When the adapter exposes `capabilitySnapshot`,
+the boundary assesses model-axis escalations against host capability evidence.
+An unsupported or unknown assessment permits only the immediately preceding
+policy rung in the same runtime, including Claude Sonnet→Opus and Opus→Fable
+escalations. For example, research Opus/high (`very-complex`) falls back to
+Sonnet/xhigh (`base`); the consented Fable/medium ceiling falls back to
+Opus/high (`critical`). `fallbackInput` resolves that preceding rung, then the
+boundary validates the final model/effort pair and performs a fresh dispatch
+with verified application evidence. It does not recursively search lower rungs
+or reuse an earlier receipt as proof of the new dispatch. The resolution retains
+the capability assessment and requested escalation versus fallback selection.
+Missing Fable consent still refuses before this exception applies. Repair
+fallback to a `repeat` or `repeat_exhausted` rung requires that rung's own
+authenticated predecessor: the immediate receipt authorizes only the requested
+rung. The current boundary refuses such fallback with
+`UNSUPPORTED_REPAIR_FALLBACK` instead of manufacturing predecessor authority.
+Ordinary unsupported final pairs still refuse. A process exit or a model
+claimed by the prompt is not application evidence.
 
 Each durable dispatch receipt records the runtime, role, runtime-native model
 key, logical rung, concrete requested and applied model/effort, all fired
@@ -894,8 +902,10 @@ semantics, Terra/Astra-only assumptions, version-filtered behavior, and
 one-entry or empty-palette fallbacks are superseded for routed delivery. The
 Codex generator reads the ADR-014 policy and emits the complete required bundle;
 it does not derive canonical agents from that list, a GSD remap, or a parent
-session. Missing host capability evidence, stale artifacts, or unsupported
-selections fail closed.
+session. Stale artifacts and unsupported final selections fail closed. An
+unsupported or unknown model-axis capability assessment has only the bounded
+preceding-rung path in section 7.5.2; final validation and receipt requirements
+still apply.
 
 Claude's palette/provider configuration is unchanged. ADR-014 references the
 logical `sonnet`, `opus`, and `fable` policy keys, with concrete launch IDs
@@ -1141,6 +1151,12 @@ so the two runtimes do not diverge (zero drift).
   Each host owns model selection, explicit effort, runtime launch, and the
   durable receipt. Native Agent or Workflow calls outside those hosts are not a
   delivery path.
+
+For isolated candidate installation and rollback, follow
+[the ADR-024 rollout procedure](../.planning/architecture/ADR-024-ROLLOUT.md),
+including its absolute target project guard and mandatory readable actual host
+capability evidence file. The following is the host installation entry point,
+not the isolated validation procedure.
 
 Installation: `make install-shipyard-codex` (requires gsd-core for Codex:
 `npx --yes @opengsd/gsd-core@latest --codex --global`). `SHIPYARD_CODEX_PHASE=1` —

@@ -52,6 +52,17 @@ reuse a release cache, wire global hooks, change shared runtime defaults, or
 install both runtime variants into one home. Authenticate the isolated host
 separately when native application evidence is ready.
 
+Before either runtime setup, run from the pinned Shipyard source checkout and
+set `PROJECT_DIR` to the existing project to validate. That project may be a
+separate checkout; the Shipyard source repository is not necessarily the target.
+Use an absolute path and stop if it is absent or not a directory:
+
+```bash
+SOURCE_ROOT="$(pwd -P)"
+: "${PROJECT_DIR:?Set this to the existing absolute target project directory}"
+[[ "$PROJECT_DIR" = /* && -d "$PROJECT_DIR" ]] || exit 1
+```
+
 ### Codex
 
 For the marketplace package path, select an explicit source-scoped Codex home
@@ -172,8 +183,20 @@ entry, model list, prompt statement, or process exit is not a substitute.
 Review the selected pair and signal against the current table in
 `docs/gsd_multilevel_delivery_pipeline.md` and the accepted model ADR. A repair
 promotion needs the immediately preceding rung's boundary-verified receipt and
-`previous_dispatch_id`. A Claude Fable selection needs the measured-window
-signal and existing `pipeline.fable: auto` consent. An independent reviewer
+`previous_dispatch_id`. When a model-axis escalation's host capability
+assessment is unsupported or unknown, the boundary may select only the
+immediately preceding policy rung in the same runtime. This also covers Claude
+Sonnet→Opus escalations, not only Opus→Fable: for example, research
+Opus/high (`very-complex`) falls back to Sonnet/xhigh (`base`). The selected
+fallback must pass final pair validation and a fresh dispatch's application
+verification; an earlier receipt cannot prove the new dispatch. The resolution
+records the capability assessment and requested versus fallback pairs. A repair
+fallback to `repeat` or `repeat_exhausted` requires that fallback rung's own
+authenticated predecessor; the current boundary refuses it with
+`UNSUPPORTED_REPAIR_FALLBACK` rather than manufacturing or reusing that authority.
+Ordinary unsupported final pairs still refuse. A Claude Fable selection needs the measured-window
+signal and existing `pipeline.fable: auto` consent; fallback never bypasses
+that consent check. An independent reviewer
 who did not prepare the package must compare the source, package, installed
 identity, matrix, and same-session receipt before any operator decision.
 
@@ -214,7 +237,8 @@ untouched until those sessions finish. Use the retained source/package and
 that runtime's existing installer against the chosen quiescent or fresh target. For Codex, run the prior source's
 `install-shipyard-marketplace.cjs codex --source <prior-source>` with the chosen
 dedicated `CODEX_HOME`, or run its `install-shipyard-codex.sh` against the
-dedicated `--dogfood-root` and a readable actual host
+dedicated `--dogfood-root`, the guarded absolute `--project-dir "$PROJECT_DIR"`
+from section 2, and a readable actual host
 `SHIPYARD_CODEX_CAPABILITIES_FILE`. For Claude, prepare a new versioned `--dogfood-root`
 from the prior reviewed source with `CLAUDE_HOME` and `CLAUDE_CONFIG_DIR` still
 pointing at the chosen isolated config directory. For a fresh config, run the
