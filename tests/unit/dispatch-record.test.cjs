@@ -289,7 +289,7 @@ test('boundary receipts reconcile into the existing store and journal without re
     assert.notEqual(batch.status, 0);
     assert.equal(store(graph)['T-01-01'], undefined);
     assert.deepStrictEqual(store(graph)['T-01-02'], legacy);
-    for (const extra of [['--effort-applied', 'low'], ['--runtime', 'claude'], ['--agent-id', 'wrong']]) {
+    for (const extra of [['--effort-applied', 'high'], ['--runtime', 'claude'], ['--agent-id', 'wrong']]) {
       const refused = run([...args, ...extra], project);
       assert.notEqual(refused.status, 0);
       assert.match(refused.stderr, /reconciliation failed/);

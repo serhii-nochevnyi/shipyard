@@ -295,7 +295,7 @@ test('targeted role-artifact consumption records selected bytes separately from 
     },
     parallel: async (thunks) => Promise.all(thunks.map((thunk) => thunk())),
     capabilities: {
-      supportedModels: [CLAUDE_MODEL_ALIASES.sonnet], supportedEfforts: ['max'],
+      supportedModels: [CLAUDE_MODEL_ALIASES.sonnet], supportedEfforts: ['medium'],
       observedModel: true, observedEffort: true,
     },
     recorder,
@@ -304,7 +304,7 @@ test('targeted role-artifact consumption records selected bytes separately from 
   try {
     const [artifact] = await host.run('executors', { args: { tickets: [{
       id: ticket, title: 'artifact', planPath: path.join(root, 'PLAN.md'),
-      branch: `ticket/${ticket}`, worktreePath: root, prBase: 'main', model: 'sonnet', effort: 'max',
+      branch: `ticket/${ticket}`, worktreePath: root, prBase: 'main', model: 'claude-sonnet-5-5', effort: 'medium',
     }] } });
     const fullEvidence = fs.readFileSync(path.join(root, '.shipyard-evidence.md'), 'utf8');
     const selected = roleArtifact.read({

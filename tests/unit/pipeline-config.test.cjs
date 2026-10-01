@@ -2813,10 +2813,7 @@ test('GSD tuning tiers and defaults defer to both runtime ladders for every role
         }
       }
     }
-    // gsd-tune also writes these concrete Claude overrides when Fable is off.
-    const raw = { ...tuning, model_profile: 'balanced', ...(runtime === 'claude' ? {
-      model_overrides: { 'gsd-planner': 'sonnet', 'gsd-code-reviewer': 'sonnet' },
-    } : {}) };
+    const raw = { ...tuning, model_profile: 'balanced' };
     const { config } = routedConfig(raw, runtime);
     for (const role of ROUTED_ROLES) {
       assert.deepStrictEqual(resolveDispatch({ config, role }),

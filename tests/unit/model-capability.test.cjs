@@ -75,21 +75,17 @@ test('repair model escalation needs a completed predecessor identity', () => {
   assert.equal(capability.evaluate({ ...snapshot, completed_attempt: false }, resolution).state, 'unknown');
 });
 
-test('bounded fallback keeps the predecessor identity when falling from a deep repair rung', () => {
-  const resolution = {
-    runtime: 'codex', role: 'ci-fix', rung: 'repeat_exhausted', rung_index: 2,
-    dispatch_id: 'deep-repair',
-    signals: {
-      signatureState: 'repeat_exhausted',
-      priorApplied: { dispatch_id: 'repeat-repair', compliance: 'verified' },
-    },
-  };
-  const input = capability.fallbackInput({}, resolution);
-  assert.equal(input.previous_dispatch_id, 'repeat-repair');
-  assert.equal(input.signals.signatureState, 'repeat');
-  const previous = capability.previousRung(resolution);
-  assert.deepEqual(
-    [policy.CODEX_MODEL_IDS[previous.model_key], previous.effort],
-    [policy.CODEX_MODEL_IDS.sol, 'high'],
-  );
+test('deep repair fallback refuses without the fallback rung authenticated predecessor', () => {
+  for (const runtime of ['codex', 'claude']) {
+    const resolution = {
+      runtime, role: 'ci-fix', rung: 'repeat_exhausted', rung_index: 2,
+      dispatch_id: 'deep-repair',
+      signals: {
+        signatureState: 'repeat_exhausted',
+        priorApplied: { dispatch_id: 'repeat-repair', compliance: 'verified' },
+      },
+    };
+    assert.throws(() => capability.fallbackInput({}, resolution),
+      (error) => error.code === 'UNSUPPORTED_REPAIR_FALLBACK');
+  }
 });

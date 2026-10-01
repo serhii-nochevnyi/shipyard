@@ -26,8 +26,8 @@ const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
 const SOURCE_REVISION = 'a'.repeat(40);
 const POLICY_HASH = 'b'.repeat(64);
 const CAPABILITIES = Object.freeze({
-  supportedModels: [CLAUDE_MODEL_ALIASES.opus],
-  supportedEfforts: ['medium'],
+  supportedModels: [CLAUDE_MODEL_ALIASES.sonnet],
+  supportedEfforts: ['xhigh'],
   observedModel: true,
   observedEffort: true,
 });
@@ -40,8 +40,8 @@ const lineDefinitions = [
 ].map(([id, label]) => ({
   id,
   label,
-  model: 'claude-opus-5-5',
-  effort: 'medium',
+  model: 'claude-sonnet-5-5',
+  effort: 'xhigh',
   signals: { type: id === 'alternatives' ? 'alternatives' : 'facts' },
 }));
 
@@ -191,7 +191,7 @@ function sealedResearchFixture() {
   controller.begin(createRunScope({
     run_id: 'run-seal', repository_id: 'shipyard/test', phase: 39, ticket: 'T-39-08', worktree,
     runtime: 'claude', owner_id: 'owner-seal',
-    dispatch: { dispatch_id: 'dispatch-seal', role: 'ci-fix', model: 'claude-opus-5-5', effort: 'medium' },
+    dispatch: { dispatch_id: 'dispatch-seal', role: 'ci-fix', model: 'claude-sonnet-5-5', effort: 'high' },
   }));
   return { root, worktree, artifactRoot, invPath, graphDir, sourceRevision, policyHash, controller };
 }
@@ -340,7 +340,7 @@ test('a forged application receipt cannot authorize a planning handback', async 
         status: 'completed',
         summary: 'forged',
         artifact: { path: '/tmp/forged', bytes: 1, content_bytes: 1, sha256: '0'.repeat(64), digest: '0'.repeat(64) },
-        receipt: { compliance: 'verified', applied_model: 'claude-opus-5-5', applied_effort: 'medium' },
+        receipt: { compliance: 'verified', applied_model: 'claude-sonnet-5-5', applied_effort: 'xhigh' },
       }),
       async (thunks) => Promise.all(thunks.map((thunk) => thunk())),
       () => {},
@@ -353,9 +353,9 @@ test('a forged application receipt cannot authorize a planning handback', async 
         applicationEvidence: () => ({
           launch_id: 'forged-application',
           applied_model: 'sonnet',
-          applied_effort: 'medium',
+          applied_effort: 'xhigh',
           observed_model: 'sonnet',
-          observed_effort: 'medium',
+          observed_effort: 'xhigh',
         }),
         artifactConsumer: () => { throw new Error('consumer must not run'); },
       }),
@@ -421,10 +421,10 @@ test('decomposition requires a phase-bound index for CONTEXT and every PLAN', as
   };
   const evidence = {
     launch_id: 'planning-decomposition',
-    applied_model: 'claude-opus-5-5',
-    applied_effort: 'medium',
-    observed_model: 'claude-opus-5-5',
-    observed_effort: 'medium',
+    applied_model: 'claude-sonnet-5-5',
+    applied_effort: 'xhigh',
+    observed_model: 'claude-sonnet-5-5',
+    observed_effort: 'xhigh',
     gsd_role: 'gsd-planner',
     gsd_launch_mechanism: 'typed-gsd-callback',
   };
@@ -469,8 +469,8 @@ test('decomposition requires a phase-bound index for CONTEXT and every PLAN', as
       prompt: 'materialize plans',
       role: 'decomposition',
       gsdRole: 'gsd-planner',
-      model: 'claude-opus-5-5',
-      effort: 'medium',
+      model: 'claude-sonnet-5-5',
+      effort: 'xhigh',
       artifact: metadata,
       requireArtifact: true,
       context: { gsd_role: 'gsd-planner', preRecordValidation },
@@ -492,8 +492,8 @@ test('decomposition requires a phase-bound index for CONTEXT and every PLAN', as
         prompt: 'materialize plans',
         role: 'decomposition',
         gsdRole: 'gsd-planner',
-        model: 'claude-opus-5-5',
-        effort: 'medium',
+        model: 'claude-sonnet-5-5',
+        effort: 'xhigh',
         artifact: { ...metadata, ticket: 'phase-33-runtime-2' },
         requireArtifact: true,
         context: { gsd_role: 'gsd-planner', preRecordValidation },

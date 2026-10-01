@@ -659,6 +659,45 @@ test('Claude repair receipts authorize only the Claude-native predecessor rung',
   assert.equal(exhausted.applied_effort, 'high');
 });
 
+test('unsupported Claude Opus repair refuses fallback without manufacturing a base predecessor', () => {
+  for (const role of ['ci-fix', 'review-fix']) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'repair-capability-'));
+    try {
+      const recorder = boundaryModule.createDurableRecorder(dir);
+      let launches = 0;
+      const boundary = boundaryModule.createDispatchBoundary({
+        recorder,
+        adapters: { claude: fakeAdapter({
+          onLaunch: () => { launches++; },
+          capabilitySnapshot: (resolution) => ({
+            schema_version: 'shipyard.model-capability.v1', runtime: 'claude',
+            launch_id: `host-${resolution.dispatch_id}`,
+            completed_attempt: true, completed_attempt_id: resolution.signals.priorApplied.launch_id,
+            supported_models: ['claude-sonnet-5-5'], supported_efforts: ['high', 'xhigh'],
+            supported_selections: [{ model: 'claude-sonnet-5-5', effort: 'xhigh' }],
+          }),
+        }) },
+      });
+      const ticket = 'T-repair-capability';
+      const base = boundary.dispatch({ runtime: 'claude', role }, { ticket });
+      const repeat = boundary.dispatch({ runtime: 'claude', role,
+        signals: { signatureState: 'repeat', priorApplied: base.receipt },
+        previous_dispatch_id: base.dispatch_id }, { ticket });
+      assert.equal(repeat.applied_effort, 'xhigh');
+      const dispatch_id = `unsupported-${role}`;
+      assert.throws(() => boundary.dispatch({ runtime: 'claude', role, dispatch_id,
+        signals: { signatureState: 'repeat_exhausted', priorApplied: repeat.receipt },
+        previous_dispatch_id: repeat.dispatch_id }, { ticket }),
+      (error) => error.code === 'UNSUPPORTED_REPAIR_FALLBACK');
+      assert.equal(launches, 2);
+      assert.equal(recorder.getVerifiedRecord(dispatch_id), null);
+      assert.equal(recorder.getLatestReceipt('claude', role).dispatch_id, repeat.dispatch_id);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }
+});
+
 test('validation hooks can reject an unsupported selection before launch', () => {
   let launched = false;
   const boundary = boundaryModule.createDispatchBoundary({

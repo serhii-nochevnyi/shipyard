@@ -572,35 +572,6 @@ function cliVersion(bin) {
   return m ? m[1] : null;
 }
 
-// The 1M-context tier for GSD's OWN agents, on Claude only.
-//
-// NOT via the tier keys, and that is the whole subtlety. `model_profile_overrides
-// .claude.*` and `model_policy.runtime_tiers.claude.*` look like the right lever
-// and are INERT here: the resolver's runtime-tier step is guarded by
-// `configRuntime !== 'claude'`, and on Claude it returns the bare tier ALIAS,
-// which Claude Code's Agent tool resolves itself. The catalog's `claude-opus-4-8`
-// is a label for that alias, not a model anyone launches — so remapping it
-// changes nothing.
-//
-// `model_overrides.<agent-id>` is step 1 of the resolver, ahead of all tier
-// logic, and it accepts a bare Agent-tool alias (`CLAUDE_AGENT_ALIASES` includes
-// `fable`). That is the working lever.
-//
-// Only the two agents whose work is genuinely context-bound: the planner holds
-// RESEARCH + roadmap + codebase maps at once, the reviewer holds the whole diff.
-// The executor and the fixer work inside one ticket's narrow scope, where a 1M
-// window buys nothing and costs money — they keep their profile tiers.
-//
-// And they take `fable` on the SAME TERMS as the conveyor's own roles, which is
-// the correction ADR-005 makes here: the 1M-window argument was retired for
-// `arch-review` on a measurement (the largest input in the system is the phase
-// epic diff at ~52k tokens), and it cannot survive for these two on the strength
-// of the same sentence. So the want is `opus` unless `pipeline.fable` is `auto` —
-// a person's consent — exactly as the conveyor's ceiling works. Neither agent
-// fires on the conveyor's own path (measured over a full three-phase session:
-// zero runs each), so this governs what a `/gsd-*` command costs OUTSIDE the
-// conveyor rather than a delivery session's bill.
-const CLAUDE_1M_AGENTS = ['gsd-planner', 'gsd-code-reviewer'];
 
 // Machine-wide settings must be about MODELS, never about the conveyor. The
 // global file is inherited by every unconfigured directory, so anything
@@ -632,17 +603,6 @@ const TUNING_ALL = [
     'GSD\'s own default; no conveyor path creates a nested worktree, so this is not ours to force'],
   ['model_profile', PROFILE_FOR_POLICY[pipeline.model_policy] || 'balanced',
     `mirrors pipeline.model_policy = "${pipeline.model_policy}"`],
-  ...(runtime === 'claude'
-    ? CLAUDE_1M_AGENTS.map((agent) => [
-      `model_overrides.${agent}`, pipeline.fable === 'auto' ? 'fable' : 'opus',
-      pipeline.fable === 'auto'
-        ? 'context-bound on Claude, and pipeline.fable is "auto" — a person has consented to the paid ' +
-          '1M tier. Set here rather than via model_profile_overrides.claude.*, which the resolver skips on Claude'
-        : 'context-bound, but the 1M window is not a measured need (the largest input in the system is ' +
-          'the phase epic diff, ~52k tokens): `opus` until pipeline.fable is "auto", exactly as the ' +
-          'conveyor\'s own judges work. Set here because model_profile_overrides.claude.* is inert',
-    ])
-    : []),
   // GSD's own stage agents. Its vocabulary is opus|sonnet|haiku — `fable` is ours
   // and is not valid here.
   ...(runtime === 'claude'
@@ -673,7 +633,6 @@ const TUNING_ALL = [
 // listed would be reported off the defaults again, which is the whole defect.
 const PIPELINE_DERIVED = new Set([
   'model_profile',                       // mirrors pipeline.model_policy
-  ...CLAUDE_1M_AGENTS.map((a) => `model_overrides.${a}`), // reads pipeline.fable
 ]);
 
 const TUNING = TUNING_ALL
