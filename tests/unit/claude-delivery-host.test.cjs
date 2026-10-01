@@ -15,6 +15,19 @@ const { createRunController } = require('../../plugins/delivery-pipeline/scripts
 const { transcriptEvidence } = require('./claude-test-evidence.cjs');
 const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
 const { CLAUDE_MODEL_ALIASES } = require('../../plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs');
+const claudeBase = (role, signals = {}) => policy.resolveDispatch({ runtime: 'claude', role, signals });
+const CLAUDE_REPAIR = claudeBase('ci-fix');
+const CLAUDE_EXECUTOR = claudeBase('executor');
+const CLAUDE_DRIFT = claudeBase('drift-check');
+const CLAUDE_RESEARCH = claudeBase('research', { type: 'facts' });
+const CLAUDE_CAPABILITIES = Object.freeze({
+  supportedModels: Object.values(CLAUDE_MODEL_ALIASES),
+  supportedEfforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+  supportedSelections: Object.values(policy.RUNTIME_ROLE_RUNG_DEFINITIONS.claude).flat()
+    .map((rung) => ({ model: CLAUDE_MODEL_ALIASES[rung.model_key], effort: rung.effort })),
+  observedModel: true,
+  observedEffort: true,
+});
 
 suite('claude-delivery-host — registered runtime workflows');
 
@@ -40,7 +53,7 @@ function owner(root, worktree, ticket = 'T-38-03', runId = 'run-38-03') {
     worktree,
     runtime: 'claude',
     owner_id: `owner-${runId}`,
-    dispatch: { dispatch_id: `dispatch-${runId}`, role: 'ci-fix', model: 'claude-opus-5-5', effort: 'medium' },
+    dispatch: { dispatch_id: `dispatch-${runId}`, role: 'ci-fix', model: CLAUDE_REPAIR.model, effort: CLAUDE_REPAIR.effort },
   }));
   return controller;
 }
@@ -110,7 +123,7 @@ function repairFixture(config = {}) {
       return result;
     },
     applicationEvidence: ({ result }) => evidence.get(result),
-    capabilities: Object.freeze({ supportedModels: ['claude-opus-5-5'], supportedEfforts: ['medium'], observedModel: true, observedEffort: true }),
+    capabilities: CLAUDE_CAPABILITIES,
     recorder: createDurableRecorder(path.join(root, 'receipts')),
   };
   const args = {
@@ -118,7 +131,7 @@ function repairFixture(config = {}) {
       id: 'T-38-03', pr: 303, branch: 'ticket/T-38-03',
       worktreePath: worktree, planPath,
       base: 'main', needsCiFix: true, needsReviewFix: config.needsReviewFix === true,
-      model: 'claude-opus-5-5', effort: 'medium',
+      model: CLAUDE_REPAIR.model, effort: CLAUDE_REPAIR.effort,
     }],
   };
   const host = createClaudeDeliveryHost({
@@ -520,7 +533,7 @@ test('drift preflight rejects a base that differs from the canonical ticket grap
       tickets: [{
         id: 'T-38-03', worktreePath: fixture.worktree,
         planPath: fixture.planPath, baseRef: 'other',
-        model: 'claude-opus-5-5', effort: 'medium',
+        model: CLAUDE_DRIFT.model, effort: CLAUDE_DRIFT.effort,
       }],
       driftRefPath: REFERENCE_PATHS['drift-check'],
     }), /base differs from the canonical graph/);
@@ -680,7 +693,7 @@ test('runs a shipped empty delivery workflow with host-owned resources', async (
           runtime: 'claude', provider: 'anthropic', phase: 38 },
         agent() { throw new Error('empty workflow must not launch a model'); },
         applicationEvidence() { throw new Error('empty workflow has no evidence'); },
-        capabilities: Object.freeze({ supportedModels: ['claude-opus-5-5'], supportedEfforts: ['low'], observedModel: true, observedEffort: true }),
+        capabilities: CLAUDE_CAPABILITIES,
         recorder: createDurableRecorder(path.join(root, 'receipts')),
       },
     });
@@ -729,7 +742,7 @@ test('keeps signing sockets and receipt files outside the launched worktree', as
           scope: options.scope,
           agent() { throw new Error('empty workflow must not launch'); },
           applicationEvidence() { throw new Error('empty workflow has no evidence'); },
-          capabilities: Object.freeze({ supportedModels: ['claude-opus-5-5'], supportedEfforts: ['low'], observedModel: true, observedEffort: true }),
+          capabilities: CLAUDE_CAPABILITIES,
           recorder: createDurableRecorder(options.recorderDir),
         };
       },
@@ -765,7 +778,7 @@ test('refuses a ticket whose live branch contradicts the canonical graph before 
         scope: { run_id: 'run-38-03', ticket: 'T-38-03', worktree },
         agent() { throw new Error('preflight must refuse before launch'); },
         applicationEvidence() { throw new Error('preflight has no evidence'); },
-        capabilities: Object.freeze({ supportedModels: ['claude-opus-5-5'], supportedEfforts: ['low'], observedModel: true, observedEffort: true }),
+        capabilities: CLAUDE_CAPABILITIES,
         recorder: createDurableRecorder(path.join(root, 'receipts')),
       },
     });
@@ -785,7 +798,7 @@ test('executor refuses a substituted plan before dispatch', () => {
     assert.throws(() => fixture.host.run('executors', { tickets: [{
       id: 'T-38-03', branch: 'ticket/T-38-03', prBase: 'main',
       worktreePath: fixture.worktree, planPath: other,
-      model: 'claude-opus-5-5', effort: 'medium',
+      model: CLAUDE_EXECUTOR.model, effort: CLAUDE_EXECUTOR.effort,
     }] }), /workflow plan differs from the canonical graph/);
     assert.equal(fixture.launches(), 0);
   } finally {
@@ -844,7 +857,7 @@ test('investigation inlines its approved contract without exposing the plugin pa
           return result;
         },
         applicationEvidence: ({ result }) => evidence.get(result),
-        capabilities: Object.freeze({ supportedModels: ['claude-opus-5-5'], supportedEfforts: ['medium'], observedModel: true, observedEffort: true }),
+        capabilities: CLAUDE_CAPABILITIES,
         recorder: createDurableRecorder(path.join(root, 'receipts')),
       },
     });
@@ -860,7 +873,7 @@ test('investigation inlines its approved contract without exposing the plugin pa
       policyHash,
       problemStatement: 'Inspect the runtime boundary',
       referencePath: REFERENCE_PATHS['inv-research'],
-      lines: Object.entries(labels).map(([id, label]) => ({ id, label, model: 'claude-opus-5-5', effort: 'medium', signals: { type: 'facts' } })),
+      lines: Object.entries(labels).map(([id, label]) => ({ id, label, model: CLAUDE_RESEARCH.model, effort: CLAUDE_RESEARCH.effort, signals: { type: 'facts' } })),
     });
     assert.equal(result.length, 4);
     assert.equal(prompts.length, 4);
@@ -936,7 +949,7 @@ test('the host accepts a single-line re-dispatch only once its three siblings ve
           return result;
         },
         applicationEvidence: ({ result }) => evidence.get(result),
-        capabilities: Object.freeze({ supportedModels: ['claude-opus-5-5'], supportedEfforts: ['medium'], observedModel: true, observedEffort: true }),
+        capabilities: CLAUDE_CAPABILITIES,
         recorder: createDurableRecorder(path.join(root, 'receipts')),
       },
     });
@@ -950,7 +963,7 @@ test('the host accepts a single-line re-dispatch only once its three siblings ve
     };
     const first = await host.run('investigation-research', {
       ...baseArgs,
-      lines: Object.entries(labels).map(([id, label]) => ({ id, label, model: 'claude-opus-5-5', effort: 'medium', signals: { type: 'facts' } })),
+      lines: Object.entries(labels).map(([id, label]) => ({ id, label, model: CLAUDE_RESEARCH.model, effort: CLAUDE_RESEARCH.effort, signals: { type: 'facts' } })),
     });
     assert.equal(first.length, 4);
     const siblings = first.filter((line) => line.id !== 'alternatives')
@@ -963,7 +976,7 @@ test('the host accepts a single-line re-dispatch only once its three siblings ve
     try {
       await host.run('investigation-research', {
         ...baseArgs,
-        lines: [{ id: 'alternatives', label: labels.alternatives, model: 'claude-opus-5-5', effort: 'medium', signals: { type: 'facts' } }],
+        lines: [{ id: 'alternatives', label: labels.alternatives, model: CLAUDE_RESEARCH.model, effort: CLAUDE_RESEARCH.effort, signals: { type: 'facts' } }],
         sealedLines: tampered,
       });
     } catch (e) {
@@ -975,7 +988,7 @@ test('the host accepts a single-line re-dispatch only once its three siblings ve
     note = 'redispatch';
     const second = await host.run('investigation-research', {
       ...baseArgs,
-      lines: [{ id: 'alternatives', label: labels.alternatives, model: 'claude-opus-5-5', effort: 'medium', signals: { type: 'facts' } }],
+      lines: [{ id: 'alternatives', label: labels.alternatives, model: CLAUDE_RESEARCH.model, effort: CLAUDE_RESEARCH.effort, signals: { type: 'facts' } }],
       sealedLines: siblings,
     });
     assert.equal(second.length, 4);
@@ -1021,7 +1034,7 @@ test('production investigation CLI owns a T-scoped run while sealing INV researc
         policyHash: policy.resolveDispatch({ runtime: 'claude', role: 'research', signals: { type: 'facts' } }).policy_hash,
         problemStatement: 'Inspect the owned runtime path', referencePath: REFERENCE_PATHS['inv-research'],
         lines: Object.entries(labels).map(([id, label]) => ({ id, label,
-          model: 'claude-opus-5-5', effort: 'medium', signals: { type: 'facts' } })) } }));
+          model: CLAUDE_RESEARCH.model, effort: CLAUDE_RESEARCH.effort, signals: { type: 'facts' } })) } }));
     const validRequest = fs.readFileSync(requestFile, 'utf8');
     const mismatchedRequest = JSON.parse(validRequest);
     mismatchedRequest.scope.ticket = 'T-38-03';
@@ -1040,8 +1053,7 @@ test('production investigation CLI owns a T-scoped run while sealing INV researc
         createRuntimeHost(options) {
           scopedTicket = options.scope.ticket;
           return { scope: options.scope, runScope: options.scope,
-            capabilities: Object.freeze({ supportedModels: ['claude-opus-5-5'], supportedEfforts: ['medium'],
-              observedModel: true, observedEffort: true }),
+            capabilities: CLAUDE_CAPABILITIES,
             recorder: createDurableRecorder(options.recorderDir),
             agent(_prompt, launch) {
               const id = launch.label.split(':').pop();
@@ -1203,12 +1215,12 @@ test('executor uses the live base after its primary parent merges and refuses a 
         return result;
       },
       applicationEvidence: ({ result }) => evidence.get(result),
-      capabilities: Object.freeze({ supportedModels: [CLAUDE_MODEL_ALIASES.sonnet], supportedEfforts: ['max'], observedModel: true, observedEffort: true }),
+      capabilities: CLAUDE_CAPABILITIES,
     },
   });
   const ticket = () => ({ tickets: [{
     id: 'T-38-03', title: 'Retry the flaky upload', planPath: fixture.planPath, branch: 'ticket/T-38-03',
-    worktreePath: fixture.worktree, prBase: parentBranch, model: 'sonnet', effort: 'max',
+    worktreePath: fixture.worktree, prBase: parentBranch, model: CLAUDE_EXECUTOR.model, effort: CLAUDE_EXECUTOR.effort,
   }] });
   try {
     process.env.GNUPGHOME = gnupgHome;
@@ -1266,7 +1278,7 @@ test('executor and drift-check prompts carry the delivered plan contract; a call
         return result;
       },
       applicationEvidence: ({ result }) => evidence.get(result),
-      capabilities: Object.freeze({ supportedModels: [CLAUDE_MODEL_ALIASES.sonnet], supportedEfforts: ['max'], observedModel: true, observedEffort: true }),
+      capabilities: CLAUDE_CAPABILITIES,
     },
   });
   const gnupgHome = fs.mkdtempSync(path.join(os.tmpdir(), 'g6-'));
@@ -1284,7 +1296,7 @@ test('executor and drift-check prompts carry the delivered plan contract; a call
       tickets: [{
         id: 'T-38-03', branch: 'ticket/T-38-03', prBase: 'main',
         worktreePath: fixture.worktree, planPath: fixture.planPath,
-        model: 'sonnet', effort: 'max',
+        model: CLAUDE_EXECUTOR.model, effort: CLAUDE_EXECUTOR.effort,
       }],
       deliveryRulesHint: 'CUSTOM RULES HINT FROM THE CALLER',
     });
@@ -1338,8 +1350,7 @@ test('executor retries one failed host verification with its sealed diagnostic',
         return result;
       },
       applicationEvidence: ({ result }) => evidence.get(result),
-      capabilities: Object.freeze({ supportedModels: [CLAUDE_MODEL_ALIASES.sonnet],
-        supportedEfforts: ['max'], observedModel: true, observedEffort: true }),
+      capabilities: CLAUDE_CAPABILITIES,
     };
     const host = createClaudeDeliveryHost({
       graphDir: fixture.graphDir, controller, runtimeHost, storageRoot: path.join(fixture.root, 'retry-storage'),
@@ -1351,7 +1362,7 @@ test('executor retries one failed host verification with its sealed diagnostic',
     });
     const result = await host.run('executors', { tickets: [{
       id: 'T-38-03', title: 'Retry verification', planPath: fixture.planPath,
-      branch: 'ticket/T-38-03', worktreePath: fixture.worktree, prBase: 'main', model: 'sonnet', effort: 'max',
+      branch: 'ticket/T-38-03', worktreePath: fixture.worktree, prBase: 'main', model: CLAUDE_EXECUTOR.model, effort: CLAUDE_EXECUTOR.effort,
     }] });
     assert.equal(checks, 2, 'the second executor should receive another host verification');
     assert.equal(launches, 2, 'the one bounded retry should dispatch a second executor');
@@ -1399,10 +1410,10 @@ function driftCapableHost(fixture) {
         return result;
       },
       applicationEvidence: () => transcriptEvidence({
-        launch_id: `drift-${crypto.randomUUID()}`, applied_model: 'claude-opus-5-5', applied_effort: 'high',
-        observed_model: 'claude-opus-5-5', observed_effort: 'high',
+        launch_id: `drift-${crypto.randomUUID()}`, applied_model: CLAUDE_DRIFT.model, applied_effort: CLAUDE_DRIFT.effort,
+        observed_model: CLAUDE_DRIFT.model, observed_effort: CLAUDE_DRIFT.effort,
       }),
-      capabilities: Object.freeze({ supportedModels: ['claude-opus-5-5'], supportedEfforts: ['high'], observedModel: true, observedEffort: true }),
+      capabilities: CLAUDE_CAPABILITIES,
       recorder: createDurableRecorder(path.join(fixture.root, 'drift-receipts')),
     },
   });
@@ -1416,7 +1427,7 @@ test('drift-check and repair prompts carry the delivered plan contract when the 
     await host.run('drift-gate', {
       tickets: [{
         id: 'T-38-03', worktreePath: fixture.worktree, planPath: fixture.planPath, baseRef: 'main',
-        model: 'claude-opus-5-5', effort: 'high',
+        model: CLAUDE_DRIFT.model, effort: CLAUDE_DRIFT.effort,
       }],
       driftRefPath: REFERENCE_PATHS['drift-check'],
     });
@@ -1444,7 +1455,7 @@ test('a Shipyard-shaped fixture (plan inside the worktree) leaves the drift-chec
     await host.run('drift-gate', {
       tickets: [{
         id: 'T-38-03', worktreePath: fixture.worktree, planPath: inWorktreePlanPath, baseRef: 'main',
-        model: 'claude-opus-5-5', effort: 'high',
+        model: CLAUDE_DRIFT.model, effort: CLAUDE_DRIFT.effort,
       }],
       driftRefPath: REFERENCE_PATHS['drift-check'],
     });
@@ -1483,7 +1494,7 @@ test('SHIPYARD_GRAPH_DIR pointing at an untracked graph copy in a non-main workt
         scope: { run_id: 'run-38-03', ticket: 'T-38-03', worktree: linked },
         agent() { throw new Error('preflight must refuse before launch'); },
         applicationEvidence() { throw new Error('preflight has no evidence'); },
-        capabilities: Object.freeze({ supportedModels: ['claude-opus-5-5'], supportedEfforts: ['low'], observedModel: true, observedEffort: true }),
+        capabilities: CLAUDE_CAPABILITIES,
         recorder: createDurableRecorder(path.join(root, 'receipts')),
       },
     });

@@ -10,23 +10,23 @@ suite('active Claude instructions — ADR-014 dispatch boundary');
 
 test('states the current independent runtime grids and their native ladders', () => {
   for (const phrase of [
-    'Active routed dispatch policy (ADR-014, accepted)',
+    'Active routed dispatch policy (ADR-014 v7, accepted)',
     'ADR-014 supersedes ADR-005 and ADR-012 for model and effort selection',
     'two independent native grids',
-    'Codex uses Luna/Sol (`gpt-6-luna`/`gpt-6-sol`)',
-    'Claude uses Sonnet/Opus/Fable (`sonnet`/`claude-opus-5-5`/`fable`)',
-    'Claude launches use the runtime-native model ID, including `claude-opus-5-5`',
+    'Codex Sol is `gpt-6.1-sol`, Luna is `gpt-6-luna`',
+    'Claude Sonnet is `claude-sonnet-5-5`, Opus is `claude-opus-5-5`',
+    'Claude launches use the runtime-native model ID, including',
     'Codex grid:',
-    'executor Luna/max → Sol/high only for explicit `critical`/`checkpoint`',
+    'executor Sol/low → Sol/high only for explicit `critical`/`checkpoint`',
     'Claude grid:',
-    'research Opus/medium → Opus/high only for explicit `very-complex`',
-    'decomposition Opus/medium → Opus/high only for explicit `critical`/`checkpoint`',
-    'executor Sonnet/max → Opus/low only for explicit `critical`/`checkpoint`',
-    'pr-sentinel Sonnet/high',
-    'integrator Opus/medium → Opus/high only for `contested`, explicit `critical`/`checkpoint`, or a measured window',
-    'drift-check Opus/high',
-    'arch-review Opus/medium → Opus/high for `critical`/`checkpoint`/`contested` → Fable/medium for a measured window',
-    'ci-fix and review-fix Opus/medium → Opus/high for verified `repeat` or `repeat_exhausted`',
+    'research Sonnet/xhigh → Opus/high only for explicit `very-complex`',
+    'decomposition Sonnet/xhigh → Opus/high only for explicit `critical`/`checkpoint`',
+    'executor Sonnet/medium → Sonnet/xhigh only for explicit `critical`/`checkpoint`',
+    'pr-sentinel Sonnet/low',
+    'integrator Sonnet/xhigh → Opus/high only for `contested`, explicit `critical`/`checkpoint`, or a measured window',
+    'drift-check Sonnet/medium',
+    'arch-review Sonnet/xhigh → Opus/high for `critical`/`checkpoint`/`contested` → Fable/medium for a measured window',
+    'ci-fix and review-fix Sonnet/high → Sonnet/xhigh for verified `repeat` → Opus/high for verified `repeat_exhausted`',
   ]) {
     assert.ok(instructions.includes(phrase), `CLAUDE.md must state: ${phrase}`);
   }

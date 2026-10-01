@@ -188,6 +188,10 @@ test('a model id is DATA — the palette default, or a comment that quotes a mea
   const palette = new Set(pc.DEFAULT_CODEX_MODELS.map((e) => e.model));
   const PALETTE_FILE = path.join(PLUGIN, 'scripts', 'pipeline-config.cjs');
   const RUNTIME_ADAPTER_FILE = path.join(PLUGIN, 'scripts', 'runtime-adapters.cjs');
+  const ACTIVE_POLICY_GUIDANCE = new Set([
+    path.join(PLUGIN, 'commands', 'deliver.md'),
+    path.join(PLUGIN, 'scripts', 'auto-route.cjs'),
+  ]);
   const runtimeAdapterModels = new Set(Object.values(require(RUNTIME_ADAPTER_FILE).CODEX_MODEL_IDS));
   const ID = /gpt-[0-9][A-Za-z0-9._-]*/;
   const COMMENT = /^\s*(\/\/|#|\*|\/\*|>)/;
@@ -208,6 +212,7 @@ test('a model id is DATA — the palette default, or a comment that quotes a mea
       if (COMMENT.test(line)) return;
       if (file === PALETTE_FILE && palette.has(hit[0])) return;
       if (file === RUNTIME_ADAPTER_FILE && runtimeAdapterModels.has(hit[0])) return;
+      if (ACTIVE_POLICY_GUIDANCE.has(file) && runtimeAdapterModels.has(hit[0])) return;
       offenders.push(`${path.relative(ROOT, file)}:${i + 1}: ${hit[0]}`);
     });
   }
