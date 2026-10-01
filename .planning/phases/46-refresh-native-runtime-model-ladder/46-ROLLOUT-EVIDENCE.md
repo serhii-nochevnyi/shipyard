@@ -4,7 +4,7 @@ Date: 2026-10-01. Automatic evidence report is source-complete for a DRAFT PR; d
 
 ## Contract and source boundary
 
-The supplied 46-06-PLAN contract was read in the dispatch, SHA-256 `85b33ebfefc3cda34487ff52017ec6bf6a14a374d156b3de82bd9b4620ef1bb4`; its absent disk path was not opened. Supplied research context SHA-256 `2df970596ccb249822d6f56addcc5807800f7c676273223b67413e2a4a611f6d` provides context only. INV-011 sealed manifest/digest chain is unavailable in this bounded proof set and remains **unverified**, not accepted research evidence and not a blocker to documenting HOLD. No replacement research attestation is inferred.
+The supplied 46-06-PLAN contract was read in the dispatch, SHA-256 `85b33ebfefc3cda34487ff52017ec6bf6a14a374d156b3de82bd9b4620ef1bb4`. The same PLAN also exists in the ticket worktree. Supplied research context SHA-256 `2df970596ccb249822d6f56addcc5807800f7c676273223b67413e2a4a611f6d` provides context only. INV-011 sealed manifest/digest chain is unavailable in this bounded proof set and remains **unverified**, not accepted research evidence and not a blocker to documenting HOLD. No replacement research attestation is inferred.
 
 Parent PR408 squash merge is `6bf4a496d84f7716da0655aaaf976c6502c88adc`, verified as an ancestor of this worktree HEAD. Its tree `7d5f0f59457c11dabc9ba3fbcfbc82da7ae7fc80` equals the independent reviewed head `992fd1fca755ce812ef04d3714f12e108378c090` tree. The premerge head is not asserted to be an ancestor. Parent proof and artifact hashes are below.
 
