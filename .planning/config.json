@@ -103,7 +103,156 @@
   "delivery_pipeline": {
     "max_concurrent_agents": 4,
     "model_ladder": "adaptive",
-    "gsd_sync": true
+    "gsd_sync": true,
+    "verification_commands": {
+      "default": [
+        {
+          "argv": [
+            "node",
+            "--test",
+            "tests/unit/model-policy.test.cjs",
+            "tests/unit/model-capability.test.cjs",
+            "tests/unit/codex-agent.test.cjs",
+            "tests/unit/codex-dispatch-adapter.test.cjs",
+            "tests/unit/gen-codex-shipyard.test.cjs"
+          ],
+          "profile": "sandbox",
+          "timeout_s": 600
+        },
+        {
+          "argv": [
+            "node",
+            "--test",
+            "tests/unit/codex-decompose-host.test.cjs",
+            "tests/unit/codex-runtime-host.test.cjs",
+            "tests/unit/codex-delivery-host.test.cjs",
+            "tests/unit/dispatch-boundary.test.cjs",
+            "tests/unit/pipeline-config.test.cjs"
+          ],
+          "profile": "host",
+          "timeout_s": 600
+        },
+        {
+          "argv": [
+            "node",
+            "--test",
+            "tests/unit/claude-dispatch-adapter.test.cjs",
+            "tests/unit/claude-runtime-host.test.cjs",
+            "tests/unit/claude-decompose-host.test.cjs",
+            "tests/unit/claude-delivery-host.test.cjs",
+            "tests/unit/investigation-research.test.cjs"
+          ],
+          "profile": "host",
+          "timeout_s": 600
+        },
+        {
+          "argv": [
+            "node",
+            "--test",
+            "tests/unit/source-contract.test.cjs",
+            "tests/unit/workflows-args.test.cjs",
+            "tests/unit/claude-instructions.test.cjs",
+            "tests/unit/auto-route.test.cjs"
+          ],
+          "profile": "sandbox",
+          "timeout_s": 600
+        },
+        {
+          "argv": [
+            "bash",
+            "tests/smoke/model-ladder-runtime-smoke.sh"
+          ],
+          "profile": "sandbox",
+          "timeout_s": 600
+        },
+        {
+          "argv": [
+            "bash",
+            "tests/smoke/docs-smoke.sh"
+          ],
+          "profile": "sandbox",
+          "timeout_s": 600
+        },
+        {
+          "argv": [
+            "node",
+            "--test",
+            "tests/unit/source-contract.test.cjs"
+          ],
+          "profile": "sandbox",
+          "timeout_s": 600
+        },
+        {
+          "argv": [
+            "node",
+            "--test",
+            "tests/unit/marketplace-install.test.cjs",
+            "tests/unit/usage-attribution.test.cjs"
+          ],
+          "profile": "sandbox",
+          "timeout_s": 600
+        },
+        {
+          "argv": [
+            "node",
+            "--test",
+            "tests/unit/model-policy.test.cjs",
+            "tests/unit/model-capability.test.cjs",
+            "tests/unit/codex-dispatch-adapter.test.cjs",
+            "tests/unit/claude-dispatch-adapter.test.cjs",
+            "tests/unit/marketplace-install.test.cjs"
+          ],
+          "profile": "sandbox",
+          "timeout_s": 600
+        },
+        {
+          "argv": [
+            "node",
+            "--test",
+            "tests/unit/claude-role-host.test.cjs",
+            "tests/unit/decompose-dispatch-wait-contract.test.cjs",
+            "tests/unit/run-contract.test.cjs",
+            "tests/unit/run-controller.test.cjs",
+            "tests/unit/run-scope.test.cjs",
+            "tests/unit/usage-attribution.test.cjs"
+          ],
+          "profile": "host",
+          "timeout_s": 600
+        },
+        {
+          "argv": [
+            "node",
+            "--test",
+            "tests/unit/claude-workflow-host.test.cjs",
+            "tests/unit/context-packet.test.cjs",
+            "tests/unit/dispatch-record.test.cjs",
+            "tests/unit/effort-experiment.test.cjs",
+            "tests/unit/harness.test.cjs",
+            "tests/unit/orchestration-overhead.test.cjs",
+            "tests/unit/pipeline-stats.test.cjs",
+            "tests/unit/planning-artifacts.test.cjs",
+            "tests/unit/repair-artifacts.test.cjs",
+            "tests/unit/role-artifact.test.cjs",
+            "tests/unit/sentinel.test.cjs",
+            "tests/unit/session-handoff.test.cjs"
+          ],
+          "profile": "host",
+          "timeout_s": 600
+        },
+        {
+          "argv": [
+            "node",
+            "--test",
+            "tests/unit/gsd-tune.test.cjs",
+            "tests/unit/model-capability.test.cjs",
+            "tests/unit/dispatch-boundary.test.cjs",
+            "tests/unit/pipeline-config.test.cjs"
+          ],
+          "profile": "host",
+          "timeout_s": 600
+        }
+      ]
+    }
   },
   "pipeline": {
     "jira": {
