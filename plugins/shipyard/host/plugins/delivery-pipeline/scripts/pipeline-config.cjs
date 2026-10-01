@@ -270,8 +270,8 @@ function taskLevelRoute(role, signals = {}, cfg = {}) {
 // Codex palette. Routed Codex dispatch reads ADR-014 directly; this palette
 // remains a compatibility input for callers that do not request a routed decision.
 const DEFAULT_CODEX_MODELS = [
-  { model: 'gpt-6-sol', effort: 'high', min_cli: '0.155.1' },
-  { model: 'gpt-6-sol', effort: 'xhigh', min_cli: '0.155.1' },
+  { model: 'gpt-6.1-sol', effort: 'high', min_cli: '0.155.1' },
+  { model: 'gpt-6.1-sol', effort: 'xhigh', min_cli: '0.155.1' },
 ];
 const CODEX_MODEL_KEYS = new Set(['model', 'effort', 'min_cli']);
 
@@ -1594,9 +1594,11 @@ function configurationSelections(raw, role, runtime, modelKey) {
         addSelection(`config.${source}`, { model: values });
         continue;
       }
-      const tier = { luna: 'sonnet', astra: 'opus' }[modelKey];
-      if (tier && Object.prototype.hasOwnProperty.call(values, tier)) {
-        addSelection(`config.${source}.${tier}`, codexRemapSelection(values[tier]));
+      const alias = { luna: 'sonnet', astra: 'opus' }[modelKey];
+      for (const tier of new Set([modelKey, alias].filter(Boolean))) {
+        if (Object.prototype.hasOwnProperty.call(values, tier)) {
+          addSelection(`config.${source}.${tier}`, codexRemapSelection(values[tier]));
+        }
       }
     }
   }
