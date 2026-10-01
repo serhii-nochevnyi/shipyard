@@ -4,6 +4,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
+delete process.env.SHIPYARD_GRAPH_DIR;
 const { suite, test, done, assert } = require(path.join(__dirname, 'assert-harness.cjs'));
 
 const SCRIPTS = path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts');
@@ -164,6 +165,63 @@ test('deliver.md Step 0 runs stop-gate-arm.cjs arm and the self-check pipes a se
   assert.ok(/stop-gate\.cjs/.test(bullet), 'the bullet names the gate');
   assert.ok(/"session_id"/.test(bullet), 'the self-check pipes a session_id payload');
   assert.equal(/pipe it\s+`\{\}`/.test(bullet), false, 'the self-check does not pipe an empty payload');
+});
+
+suite('stop-gate-arm — readMarker and disarm');
+
+test('readMarker returns the owner body and null for anything else', () => {
+  const dir = tmp('readmarker');
+  fs.mkdirSync(path.join(dir, '.planning', 'graph'), { recursive: true });
+  fs.writeFileSync(path.join(dir, '.planning', 'graph', 'delivery-front.json'), '{}');
+  armer.arm(dir, 'reader-session-01');
+  const body = armer.readMarker(dir, 'reader-session-01');
+  assert.equal(body.session_id, 'reader-session-01');
+  assert.equal(body.board, path.join(dir, '.planning', 'graph'), 'an unambiguous cwd board binds');
+  assert.equal(armer.readMarker(dir, 'absent-session-01'), null);
+  fs.writeFileSync(armer.markerPath(dir, 'foreign-reader-1'), JSON.stringify({ session_id: 'reader-session-01' }));
+  assert.equal(armer.readMarker(dir, 'foreign-reader-1'), null);
+});
+
+test('a directory without a board arms unbound', () => {
+  const dir = tmp('unbound');
+  armer.arm(dir, 'unbound-session1');
+  assert.equal(armer.readMarker(dir, 'unbound-session1').board, undefined);
+});
+
+test('disarm removes only the caller\'s own marker and is idempotent', () => {
+  const dir = tmp('disarm');
+  armer.arm(dir, 'disarm-session-1');
+  assert.equal(armer.disarm(dir, 'disarm-session-1').removed, true);
+  assert.equal(armer.isArmed(dir, 'disarm-session-1'), false);
+  assert.equal(armer.disarm(dir, 'disarm-session-1').removed, false, 'absent is fine');
+  const r = cli(dir, 'disarm', '--session-id', 'disarm-session-1');
+  assert.equal(r.status, 0, r.stderr);
+});
+
+test('disarm refuses a foreign or malformed marker and keeps it', () => {
+  const dir = tmp('disarm-foreign');
+  armer.arm(dir, 'owner-session-01');
+  const foreign = armer.markerPath(dir, 'victim-session-1');
+  fs.writeFileSync(foreign, JSON.stringify({ session_id: 'owner-session-01' }));
+  assert.throws(() => armer.disarm(dir, 'victim-session-1'));
+  assert.ok(fs.existsSync(foreign));
+  const r = cli(dir, 'disarm', '--session-id', 'victim-session-1');
+  assert.notEqual(r.status, 0);
+  assert.ok(fs.existsSync(foreign));
+  const bad = armer.markerPath(dir, 'garbled-session1');
+  fs.writeFileSync(bad, '{not json');
+  assert.equal(cli(dir, 'disarm', '--session-id', 'garbled-session1').status === 0, false);
+  assert.ok(fs.existsSync(bad));
+  assert.equal(cli(dir, 'disarm', '--session-id', '../x').status, 1);
+});
+
+test('the CLI reports the board it bound', () => {
+  const dir = tmp('cli-bound');
+  fs.mkdirSync(path.join(dir, '.planning', 'graph'), { recursive: true });
+  fs.writeFileSync(path.join(dir, '.planning', 'graph', 'tickets.json'), '{}');
+  const r = cli(dir, 'arm', '--session-id', 'cli-bound-sess1');
+  assert.equal(r.status, 0, r.stderr);
+  assert.ok(r.stdout.includes(`bound to board ${path.join(dir, '.planning', 'graph')}`), r.stdout);
 });
 
 done();

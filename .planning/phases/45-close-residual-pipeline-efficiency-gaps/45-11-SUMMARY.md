@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: ab32105549442e53a83166a725573782b5bc39478cc7f9f86a86802d79fec88c
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: f6b7c08a6192d72e54ce674d81d430d7a5640586edb663e8e876a7266e081934
 phase: 45-close-residual-pipeline-efficiency-gaps
 plan: 11
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-30
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: ab32105549442e53a83166a725573782b5bc39478cc7f9f86a86802d79fec88c
+shipyard_source_fingerprint: f6b7c08a6192d72e54ce674d81d430d7a5640586edb663e8e876a7266e081934
 ---
 
 # Phase 45: Codex decomposition runs detached so the parent blocks in deliver-dispatch wait with parent and child usage attributed separately — Delivery Projection

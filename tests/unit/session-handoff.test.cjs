@@ -142,6 +142,29 @@ function runChild(script, args, env = {}) {
   });
 }
 
+// @contract: release every racer together via ready/go; spawn-time variance elects the winner otherwise.
+function raceChild(script, args, env = {}) {
+  const child = spawn(process.execPath, [script, ...args], {
+    cwd: env.REPO_ROOT,
+    env: { ...process.env, ...env },
+    stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
+  });
+  let stdout = '';
+  let stderr = '';
+  child.stdout.on('data', (chunk) => { stdout += chunk; });
+  child.stderr.on('data', (chunk) => { stderr += chunk; });
+  const ready = new Promise((resolve, reject) => {
+    child.once('message', resolve);
+    child.once('error', reject);
+    child.once('exit', () => reject(new Error('child exited before ready')));
+  });
+  const result = new Promise((resolve, reject) => {
+    child.once('error', reject);
+    child.once('exit', (status, signal) => resolve({ status, signal, stdout, stderr }));
+  });
+  return { child, ready, result };
+}
+
 suite('session handoff — durable owner fencing and dispatch boundary');
 
 test('checkpoint, competing resumes, and one atomic acknowledgement fence the predecessor', () => {
@@ -180,115 +203,6 @@ test('checkpoint, competing resumes, and one atomic acknowledgement fence the pr
     assert.throws(() => handoff.acknowledge(successorB), (error) => error.code === 'HANDOFF_LOST');
     assert.throws(() => handoff.assertOwner(predecessor), (error) => error.code === 'SESSION_FENCED');
     assert.doesNotThrow(() => handoff.assertOwner(acknowledged));
-  } finally {
-    clean(root);
-  }
-});
-
-test('two successor processes race through acknowledgement, then the winner dispatches at the real boundary', async () => {
-  const root = repoFixture();
-  const script = path.join(root, 'handoff-child.cjs');
-  const childSource = `'use strict';
-const { createSessionHandoff } = require(process.env.SESSION_HANDOFF_MODULE);
-const { createDispatchBoundary, createDurableRecorder } = require(process.env.DISPATCH_BOUNDARY_MODULE);
-function output(value) { process.stdout.write(JSON.stringify(value) + '\\n'); }
-try {
-  const [mode, scopeId, runId, sessionOrToken, receiptsDir] = process.argv.slice(2);
-  const handoff = createSessionHandoff({ cwd: process.env.REPO_ROOT });
-  if (mode === 'resume') {
-    const value = handoff.resume({ scopeId, runId, sessionId: sessionOrToken, runtime: 'codex' });
-    output({ ...value, token: value.token });
-  } else if (mode === 'ack') {
-    const candidate = handoff.attach({ scope_id: scopeId, candidate_id: runId, token: sessionOrToken }, 'candidate');
-    const value = handoff.acknowledge(candidate, { revalidate: () => ({ valid: true, clean: true, children: [] }) });
-    output({ ...value, token: value.token });
-  } else if (mode === 'dispatch') {
-    const owner = handoff.attach({ scope_id: scopeId, run_id: runId, token: sessionOrToken }, 'owner');
-    const recorder = createDurableRecorder(receiptsDir);
-    const adapter = {
-      runtime: 'codex',
-      capabilities: { observedModel: true, observedEffort: true },
-      supports: () => true,
-      validate: () => true,
-      launch(resolution) {
-        return {
-          receipt_type: 'adr-014.application', runtime: resolution.runtime, role: resolution.role,
-          dispatch_id: resolution.dispatch_id, launch_id: 'child-launch-' + resolution.dispatch_id,
-          requested_model: resolution.requested_model, requested_effort: resolution.requested_effort,
-          applied_model: resolution.requested_model, applied_effort: resolution.requested_effort,
-          observed_model: resolution.requested_model, observed_effort: resolution.requested_effort,
-          policy_hash: resolution.policy_hash, backend: resolution.backend, mechanism: resolution.mechanism,
-          compliance: 'verified', compliance_proof: { status: 'verified', boundary: 'adr-014.dispatch-boundary',
-            policy_hash: resolution.policy_hash, dispatch_id: resolution.dispatch_id,
-            launch_id: 'child-launch-' + resolution.dispatch_id },
-        };
-      },
-    };
-    const boundary = createDispatchBoundary({ adapters: { codex: adapter }, recorder, handoff: owner });
-    const result = boundary.dispatch({ runtime: 'codex', role: 'executor' }, { ticket: 'T-33-08' });
-    output({ dispatch_id: result.dispatch_id, session_handoff: result.session_handoff, receipt: result.receipt });
-  } else {
-    throw Object.assign(new Error('unknown mode'), { code: 'INVALID_INPUT' });
-  }
-} catch (error) {
-  output({ error: { code: error.code || 'ERROR', message: error.message } });
-  process.exitCode = 1;
-}`;
-  fs.writeFileSync(script, childSource);
-  try {
-    const handoff = createSessionHandoff({ cwd: root });
-    const predecessor = handoff.begin({
-      runId: 'run-multiprocess-predecessor', sessionId: 'session-multiprocess-predecessor',
-      phase: '33', tickets: ['T-33-08'], runtime: 'codex',
-    });
-    handoff.checkpoint(predecessor, checkpointPayload(root));
-    const env = {
-      REPO_ROOT: root,
-      SESSION_HANDOFF_MODULE: path.resolve(__dirname, '../../plugins/delivery-pipeline/scripts/session-handoff.cjs'),
-      DISPATCH_BOUNDARY_MODULE: path.resolve(__dirname, '../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs'),
-    };
-    const resumeArgs = [
-      ['resume', 'phase=33;tickets=T-33-08', 'run-process-a', 'session-process-a'],
-      ['resume', 'phase=33;tickets=T-33-08', 'run-process-b', 'session-process-b'],
-    ];
-    const resumes = [];
-    for (const args of resumeArgs) resumes.push(await runChild(script, args, env));
-    assert.equal(resumes[0].status, 0, `${resumes[0].stdout}${resumes[0].stderr}`);
-    assert.equal(resumes[1].status, 0, `${resumes[1].stdout}${resumes[1].stderr}`);
-    const candidates = resumes.map((result) => JSON.parse(result.stdout));
-    assert.notEqual(candidates[0].candidate_id, candidates[1].candidate_id);
-
-    const acknowledgements = await Promise.all(candidates.map((candidate) => runChild(
-      script,
-      ['ack', 'phase=33;tickets=T-33-08', candidate.candidate_id, candidate.token],
-      env,
-    )));
-    const winners = acknowledgements.filter((result) => result.status === 0);
-    const losers = acknowledgements.filter((result) => result.status !== 0);
-    assert.equal(winners.length, 1);
-    assert.equal(losers.length, 1);
-    const loserIndex = acknowledgements.findIndex((result) => result.status !== 0);
-    const loserError = JSON.parse(losers[0].stdout).error.code;
-    assert.ok(['HANDOFF_LOST', 'OWNERSHIP_LOCKED'].includes(loserError));
-    const loserRetry = await runChild(
-      script,
-      ['ack', 'phase=33;tickets=T-33-08', candidates[loserIndex].candidate_id, candidates[loserIndex].token],
-      env,
-    );
-    assert.notEqual(loserRetry.status, 0);
-    assert.equal(JSON.parse(loserRetry.stdout).error.code, 'HANDOFF_LOST');
-    const winner = JSON.parse(winners[0].stdout);
-    const dispatch = await runChild(
-      script,
-      ['dispatch', 'phase=33;tickets=T-33-08', winner.run_id, winner.token, path.join(root, 'receipts')],
-      { ...env, RECEIPTS_DIR: path.join(root, 'receipts') },
-    );
-    assert.equal(dispatch.status, 0);
-    const result = JSON.parse(dispatch.stdout);
-    assert.equal(result.session_handoff.scope_id, 'phase=33;tickets=T-33-08');
-    assert.equal(result.session_handoff.run_id, winner.run_id);
-    assert.ok(result.session_handoff.epoch > predecessor.epoch);
-    assert.equal(handoff.inspect().pending_launch, null);
   } finally {
     clean(root);
   }
@@ -731,6 +645,226 @@ test('corrupt ownership state refuses inspection and does not guess a new owner'
       (error) => error.code === 'CORRUPT_STATE');
     assert.ok(owner);
   } finally {
+    clean(root);
+  }
+});
+
+// @invariant: kept last — assert-harness runs later sync tests before this async body settles.
+test('two successor processes race through acknowledgement, then the winner dispatches at the real boundary', async () => {
+  const root = repoFixture();
+  const script = path.join(root, 'handoff-child.cjs');
+  const childSource = `'use strict';
+const { createSessionHandoff } = require(process.env.SESSION_HANDOFF_MODULE);
+const { createDispatchBoundary, createDurableRecorder } = require(process.env.DISPATCH_BOUNDARY_MODULE);
+function output(value) { process.stdout.write(JSON.stringify(value) + '\\n'); }
+function run() {
+  const [mode, scopeId, runId, sessionOrToken, receiptsDir] = process.argv.slice(2);
+  const handoff = createSessionHandoff({ cwd: process.env.REPO_ROOT });
+  if (mode === 'resume') {
+    const value = handoff.resume({ scopeId, runId, sessionId: sessionOrToken, runtime: 'codex' });
+    output({ ...value, token: value.token });
+  } else if (mode === 'ack') {
+    const candidate = handoff.attach({ scope_id: scopeId, candidate_id: runId, token: sessionOrToken }, 'candidate');
+    const value = handoff.acknowledge(candidate, { revalidate: () => ({ valid: true, clean: true, children: [] }) });
+    output({ ...value, token: value.token });
+  } else if (mode === 'dispatch') {
+    const owner = handoff.attach({ scope_id: scopeId, run_id: runId, token: sessionOrToken }, 'owner');
+    const recorder = createDurableRecorder(receiptsDir);
+    const adapter = {
+      runtime: 'codex',
+      capabilities: { observedModel: true, observedEffort: true },
+      supports: () => true,
+      validate: () => true,
+      launch(resolution) {
+        return {
+          receipt_type: 'adr-014.application', runtime: resolution.runtime, role: resolution.role,
+          dispatch_id: resolution.dispatch_id, launch_id: 'child-launch-' + resolution.dispatch_id,
+          requested_model: resolution.requested_model, requested_effort: resolution.requested_effort,
+          applied_model: resolution.requested_model, applied_effort: resolution.requested_effort,
+          observed_model: resolution.requested_model, observed_effort: resolution.requested_effort,
+          policy_hash: resolution.policy_hash, backend: resolution.backend, mechanism: resolution.mechanism,
+          compliance: 'verified', compliance_proof: { status: 'verified', boundary: 'adr-014.dispatch-boundary',
+            policy_hash: resolution.policy_hash, dispatch_id: resolution.dispatch_id,
+            launch_id: 'child-launch-' + resolution.dispatch_id },
+        };
+      },
+    };
+    const boundary = createDispatchBoundary({ adapters: { codex: adapter }, recorder, handoff: owner });
+    const result = boundary.dispatch({ runtime: 'codex', role: 'executor' }, { ticket: 'T-33-08' });
+    output({ dispatch_id: result.dispatch_id, session_handoff: result.session_handoff, receipt: result.receipt });
+  } else {
+    throw Object.assign(new Error('unknown mode'), { code: 'INVALID_INPUT' });
+  }
+}
+if (process.argv[2] === 'ack' && typeof process.send === 'function') {
+  process.send('ready');
+  process.once('message', () => {
+    try { run(); } catch (error) { output({ error: { code: error.code || 'ERROR', message: error.message } }); process.exitCode = 1; }
+  });
+} else {
+  try { run(); } catch (error) { output({ error: { code: error.code || 'ERROR', message: error.message } }); process.exitCode = 1; }
+}`;
+  fs.writeFileSync(script, childSource);
+  try {
+    const handoff = createSessionHandoff({ cwd: root });
+    const predecessor = handoff.begin({
+      runId: 'run-multiprocess-predecessor', sessionId: 'session-multiprocess-predecessor',
+      phase: '33', tickets: ['T-33-08'], runtime: 'codex',
+    });
+    handoff.checkpoint(predecessor, checkpointPayload(root));
+    const env = {
+      REPO_ROOT: root,
+      SESSION_HANDOFF_MODULE: path.resolve(__dirname, '../../plugins/delivery-pipeline/scripts/session-handoff.cjs'),
+      DISPATCH_BOUNDARY_MODULE: path.resolve(__dirname, '../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs'),
+    };
+    const resumeArgs = [
+      ['resume', 'phase=33;tickets=T-33-08', 'run-process-a', 'session-process-a'],
+      ['resume', 'phase=33;tickets=T-33-08', 'run-process-b', 'session-process-b'],
+    ];
+    const resumes = [];
+    for (const args of resumeArgs) resumes.push(await runChild(script, args, env));
+    assert.equal(resumes[0].status, 0, `${resumes[0].stdout}${resumes[0].stderr}`);
+    assert.equal(resumes[1].status, 0, `${resumes[1].stdout}${resumes[1].stderr}`);
+    const candidates = resumes.map((result) => JSON.parse(result.stdout));
+    assert.notEqual(candidates[0].candidate_id, candidates[1].candidate_id);
+
+    const ackChildren = candidates.map((candidate) => raceChild(
+      script,
+      ['ack', 'phase=33;tickets=T-33-08', candidate.candidate_id, candidate.token],
+      env,
+    ));
+    await Promise.all(ackChildren.map(({ ready }) => ready));
+    ackChildren.forEach(({ child }) => child.send('go'));
+    const acknowledgements = await Promise.all(ackChildren.map(({ result }) => result));
+    const winners = acknowledgements.filter((result) => result.status === 0);
+    const losers = acknowledgements.filter((result) => result.status !== 0);
+    assert.equal(winners.length, 1);
+    assert.equal(losers.length, 1);
+    const loserIndex = acknowledgements.findIndex((result) => result.status !== 0);
+    const loserError = JSON.parse(losers[0].stdout).error.code;
+    assert.ok(['HANDOFF_LOST', 'OWNERSHIP_LOCKED'].includes(loserError));
+    const loserRetry = await runChild(
+      script,
+      ['ack', 'phase=33;tickets=T-33-08', candidates[loserIndex].candidate_id, candidates[loserIndex].token],
+      env,
+    );
+    assert.notEqual(loserRetry.status, 0);
+    assert.equal(JSON.parse(loserRetry.stdout).error.code, 'HANDOFF_LOST');
+    const winner = JSON.parse(winners[0].stdout);
+    const dispatch = await runChild(
+      script,
+      ['dispatch', 'phase=33;tickets=T-33-08', winner.run_id, winner.token, path.join(root, 'receipts')],
+      { ...env, RECEIPTS_DIR: path.join(root, 'receipts') },
+    );
+    assert.equal(dispatch.status, 0);
+    const result = JSON.parse(dispatch.stdout);
+    assert.equal(result.session_handoff.scope_id, 'phase=33;tickets=T-33-08');
+    assert.equal(result.session_handoff.run_id, winner.run_id);
+    assert.ok(result.session_handoff.epoch > predecessor.epoch);
+    assert.equal(handoff.inspect().pending_launch, null);
+  } finally {
+    clean(root);
+  }
+});
+
+// @contract: test-only fs monkeypatch (never a production seam) proves the race test above still detects the defect.
+test('a non-atomic ownership lock replacement lets more than one successor win acknowledgement', async () => {
+  const root = repoFixture();
+  const barrierDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-session-handoff-barrier-'));
+  const script = path.join(root, 'handoff-guard-removed-child.cjs');
+  const childSource = `'use strict';
+const fs = require('fs');
+const path = require('path');
+const barrierDir = process.argv[5];
+const myId = process.argv[6];
+function waitFor(name, deadline) {
+  const flag = new Int32Array(new SharedArrayBuffer(4));
+  while (!fs.existsSync(path.join(barrierDir, name))) {
+    if (Date.now() > deadline) throw new Error('guard-removal barrier timeout: ' + name);
+    Atomics.wait(flag, 0, 0, 5);
+  }
+}
+const originalMkdirSync = fs.mkdirSync.bind(fs);
+fs.mkdirSync = function (target, options) {
+  if (!options || options.recursive !== false) return originalMkdirSync(target, options);
+  const existed = fs.existsSync(target);
+  fs.writeFileSync(path.join(barrierDir, 'checked-' + myId), '');
+  waitFor('go', Date.now() + 10000);
+  if (existed) { const err = new Error('EEXIST'); err.code = 'EEXIST'; throw err; }
+  return originalMkdirSync(target, { recursive: true, mode: options.mode });
+};
+const originalRenameSync = fs.renameSync.bind(fs);
+fs.renameSync = function (src, dest) {
+  if (typeof dest === 'string' && dest.endsWith('state.json')) {
+    fs.writeFileSync(path.join(barrierDir, 'committing-' + myId), '');
+    waitFor('go2', Date.now() + 10000);
+  }
+  return originalRenameSync(src, dest);
+};
+const { createSessionHandoff } = require(process.env.SESSION_HANDOFF_MODULE);
+function output(value) { process.stdout.write(JSON.stringify(value) + '\\n'); }
+try {
+  const [scopeId, runId, sessionOrToken] = process.argv.slice(2, 5);
+  const handoff = createSessionHandoff({ cwd: process.env.REPO_ROOT });
+  const candidate = handoff.attach({ scope_id: scopeId, candidate_id: runId, token: sessionOrToken }, 'candidate');
+  const value = handoff.acknowledge(candidate, { revalidate: () => ({ valid: true, clean: true, children: [] }) });
+  output({ ...value, token: value.token });
+} catch (error) {
+  output({ error: { code: error.code || 'ERROR', message: error.message } });
+  process.exitCode = 1;
+}`;
+  fs.writeFileSync(script, childSource);
+  try {
+    const handoff = createSessionHandoff({ cwd: root });
+    const predecessor = handoff.begin({
+      runId: 'run-guard-removed-predecessor', sessionId: 'session-guard-removed-predecessor',
+      phase: '33', tickets: ['T-33-08'], runtime: 'codex',
+    });
+    handoff.checkpoint(predecessor, checkpointPayload(root));
+    const scopeId = 'phase=33;tickets=T-33-08';
+    const candidates = [
+      handoff.resume({ runId: 'run-guard-removed-a', sessionId: 'session-guard-removed-a', phase: '33', tickets: ['T-33-08'], runtime: 'codex' }),
+      handoff.resume({ runId: 'run-guard-removed-b', sessionId: 'session-guard-removed-b', phase: '33', tickets: ['T-33-08'], runtime: 'codex' }),
+    ];
+    const childEnv = {
+      REPO_ROOT: root,
+      SESSION_HANDOFF_MODULE: path.resolve(__dirname, '../../plugins/delivery-pipeline/scripts/session-handoff.cjs'),
+    };
+    const children = candidates.map((candidate, index) => {
+      const child = spawn(process.execPath, [script, scopeId, candidate.candidate_id, candidate.token, barrierDir, String(index)], {
+        cwd: root,
+        env: { ...process.env, ...childEnv },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      let stdout = '';
+      let stderr = '';
+      child.stdout.on('data', (chunk) => { stdout += chunk; });
+      child.stderr.on('data', (chunk) => { stderr += chunk; });
+      return new Promise((resolve, reject) => {
+        child.once('error', reject);
+        child.once('exit', () => resolve({ stdout, stderr }));
+      });
+    });
+    const checkDeadline = Date.now() + 10000;
+    while (fs.readdirSync(barrierDir).filter((name) => name.startsWith('checked-')).length < candidates.length) {
+      if (Date.now() > checkDeadline) throw new Error('guard-removal parent timed out waiting for children to check in');
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    fs.writeFileSync(path.join(barrierDir, 'go'), '');
+    const commitDeadline = Date.now() + 10000;
+    while (fs.readdirSync(barrierDir).filter((name) => name.startsWith('committing-')).length < candidates.length) {
+      if (Date.now() > commitDeadline) throw new Error('guard-removal parent timed out waiting for children to commit');
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    fs.writeFileSync(path.join(barrierDir, 'go2'), '');
+    const outputs = await Promise.all(children);
+    const results = outputs.map(({ stdout, stderr }) => {
+      try { return JSON.parse(stdout); } catch (error) { throw new Error(`${error.message}: ${stdout}${stderr}`); }
+    });
+    const winners = results.filter((result) => !result.error);
+    assert.ok(winners.length > 1, `the non-atomic replacement must let more than one successor win acknowledgement (${JSON.stringify(results)})`);
+  } finally {
+    fs.rmSync(barrierDir, { recursive: true, force: true });
     clean(root);
   }
 });

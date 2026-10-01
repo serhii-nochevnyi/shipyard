@@ -80,6 +80,7 @@ const pipelineConfig = require('../../plugins/delivery-pipeline/scripts/pipeline
 const rollout = require('../../plugins/delivery-pipeline/scripts/run-rollout.cjs');
 const boundaryModule = require('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs');
 const { createDurableRecorder } = boundaryModule;
+const { createPlanningWriterLease } = require('../../plugins/delivery-pipeline/scripts/planning-writer-lease.cjs');
 const { createCodexDispatchAdapter } = require('../../plugins/delivery-pipeline/scripts/codex-dispatch-adapter.cjs');
 const {
   CLAUDE_MODEL_ALIASES,
@@ -88,6 +89,19 @@ const {
 } = require('../../plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs');
 
 const REPO = path.join(__dirname, '..', '..');
+const writerRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-source-writer-'));
+const writerWorktree = path.join(writerRoot, 'worktree');
+fs.mkdirSync(writerWorktree);
+const directWriterLease = createPlanningWriterLease({ worktree: writerWorktree,
+  phaseDir: writerWorktree, stateRoot: path.join(writerRoot, 'state') });
+const directWriterHandle = directWriterLease.acquire({ owner: 'source-contract', base_revision: 'fixture-base' });
+const directWriterSnapshot = directWriterLease.snapshotTree();
+const directWriterValidation = () => {
+  directWriterLease.assertFence({ ...directWriterHandle, base_revision: 'fixture-base' });
+  const foreign = directWriterLease.changedSince(directWriterSnapshot).changed;
+  if (foreign.length) throw Object.assign(new Error(foreign.join(', ')), { code: 'FOREIGN_EDIT' });
+};
+process.on('exit', () => fs.rmSync(writerRoot, { recursive: true, force: true }));
 const readRepo = (rel) => fs.readFileSync(path.join(REPO, rel), 'utf8');
 
 // Tracked files only, and enumerated by git rather than by a directory walk: an
@@ -860,7 +874,7 @@ test('the documented GSD boundary call selects typed callbacks and refuses a mis
         dispatch_id: `documented-${item.runtime}`,
         model: resolution.model,
         effort: resolution.effort,
-      }, {});
+      }, { preRecordValidation: directWriterValidation });
       assert.equal(result.receipt.gsd_role, item.gsd_role);
       assert.equal(result.receipt.gsd_launch_mechanism, boundaryModule.GSD_LAUNCH_MECHANISM);
       assert.deepStrictEqual(calls, [item.gsd_role]);
@@ -1263,7 +1277,7 @@ test('Codex GSD researcher, planner, and checker use runtime selections and dura
       const result = boundary.dispatch({
         runtime: 'codex', role: item.role, signals: item.signals,
         gsd_role: item.gsdRole, dispatch_id: item.id,
-      }, {});
+      }, { preRecordValidation: directWriterValidation });
       assert.equal(result.receipt.compliance, 'verified');
       assert.equal(result.receipt.dispatch_id, item.id);
       assert.equal(result.receipt.role, item.role);
@@ -1355,7 +1369,7 @@ test('Claude GSD researcher, planner, and checker use explicit native selections
       model: resolution.model,
       effort: resolution.effort,
       gsd_role: item.gsdRole,
-    }, {});
+    }, { preRecordValidation: directWriterValidation });
   };
 
   try {
@@ -1410,6 +1424,7 @@ test('Claude workflow coordinator selects the typed callback and refuses its abs
     effort: 'medium',
     gsdRole: 'gsd-planner',
     dispatchId: 'claude-gsd-workflow-coordinator',
+    context: { preRecordValidation: directWriterValidation },
   });
   assert.equal(typedCalls, 1);
   assert.equal(genericCalls, 0);
@@ -1467,6 +1482,7 @@ test('Claude workflow coordinator accepts an explicit typed-only host and prefli
       effort: 'medium',
       gsdRole: 'gsd-planner',
       dispatchId: 'claude-host-typed-only',
+      context: { preRecordValidation: directWriterValidation },
     });
     assert.equal(result.receipt.gsd_role, 'gsd-planner');
     assert.equal(result.receipt.gsd_launch_mechanism, boundaryModule.GSD_LAUNCH_MECHANISM);

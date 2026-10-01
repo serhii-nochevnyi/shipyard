@@ -29,6 +29,7 @@ const LIFECYCLE_CLASS_VALUES = Object.freeze(['resume', 'fork', 'compaction', 'f
 const PASS_KINDS = new Set(['ordinary', 'advisor']);
 const EVIDENCE = new Set(['usage', 'transcript', 'wait-event', 'controller', 'none']);
 const COUNT_KEYS = Object.freeze(['polls', 'model_turns', 'tool_calls', 'retries']);
+const ACTORS = new Set(['parent', 'child', 'host']);
 const QUALITY_KEYS = Object.freeze([
   'false_green', 'invalid_carry', 'skipped_gate', 'recovery_loss',
   'duplicate_dispatch', 'orphaned_work', 'lost_constraints', 'escaped_defects',
@@ -175,6 +176,8 @@ function normalizeObservation(raw, now = new Date().toISOString()) {
   const counts = normalizeCounts(raw.counts, stage);
   const evidence = raw.evidence === undefined ? 'none' : text(raw.evidence, 'evidence');
   if (!EVIDENCE.has(evidence)) fail('INVALID_OBSERVATION', `unsupported evidence kind ${evidence}`);
+  const actor = raw.actor === undefined || raw.actor === null ? null : text(raw.actor, 'actor');
+  if (actor !== null && !ACTORS.has(actor)) fail('INVALID_OBSERVATION', `unsupported actor ${actor}`);
   if (counts.model_turns !== null && counts.model_turns > 0 && !['usage', 'transcript'].includes(evidence)) {
     fail('UNSUPPORTED_TURN_EVIDENCE', 'model turns require supported usage or transcript evidence');
   }
@@ -209,6 +212,15 @@ function normalizeObservation(raw, now = new Date().toISOString()) {
     backend: raw.backend === undefined || raw.backend === null ? 'unknown' : text(raw.backend, 'backend'),
     model: raw.model === undefined || raw.model === null ? null : text(raw.model, 'model'),
     effort: raw.effort === undefined || raw.effort === null ? null : text(raw.effort, 'effort'),
+    actor,
+    ...(raw.requested_model !== undefined && raw.requested_model !== null
+      ? { requested_model: text(raw.requested_model, 'requested_model') } : {}),
+    ...(raw.requested_effort !== undefined && raw.requested_effort !== null
+      ? { requested_effort: text(raw.requested_effort, 'requested_effort') } : {}),
+    ...(raw.observed_model !== undefined && raw.observed_model !== null
+      ? { observed_model: text(raw.observed_model, 'observed_model') } : {}),
+    ...(raw.observed_effort !== undefined && raw.observed_effort !== null
+      ? { observed_effort: text(raw.observed_effort, 'observed_effort') } : {}),
     account_scope: raw.account_scope === undefined || raw.account_scope === null
       ? null : text(raw.account_scope, 'account_scope'),
     policy_id: policyId,
@@ -235,8 +247,10 @@ function normalizeObservation(raw, now = new Date().toISOString()) {
     ...(instructionDigest !== null ? { instruction_digest: instructionDigest } : {}),
     ...(lifecycleClass !== null ? { lifecycle_class: lifecycleClass } : {}),
   };
+  const identityDimensions = { ...dimensions };
+  if (actor === null) delete identityDimensions.actor;
   const observationId = raw.observation_id === undefined || raw.observation_id === null
-    ? digest({ ...dimensions, sequence: raw.poll_sequence === undefined ? null : safeInteger(raw.poll_sequence, 'poll_sequence') }).slice(0, 48)
+    ? digest({ ...identityDimensions, sequence: raw.poll_sequence === undefined ? null : safeInteger(raw.poll_sequence, 'poll_sequence') }).slice(0, 48)
     : text(raw.observation_id, 'observation_id');
   const revision = raw.revision === undefined ? 1 : safeInteger(raw.revision, 'revision');
   return {
@@ -280,13 +294,18 @@ function latestRows(rows) {
 }
 
 function sameObservation(a, b) {
-  const clean = (value) => { const copy = clone(value); delete copy.revision; delete copy.observed_at; return copy; };
+  const clean = (value) => {
+    const copy = clone(value);
+    delete copy.revision; delete copy.observed_at;
+    if (!Object.hasOwn(copy, 'actor')) copy.actor = null;
+    return copy;
+  };
   return stable(clean(a)) === stable(clean(b));
 }
 
 function identityShape(row) {
   return stable({ run_id: row.run_id, dispatch_id: row.dispatch_id, role: row.role,
-    runtime: row.runtime, policy_id: row.policy_id, policy_version: row.policy_version,
+    runtime: row.runtime, actor: row.actor || null, policy_id: row.policy_id, policy_version: row.policy_version,
     policy_hash: row.policy_hash, treatment_id: row.treatment_id });
 }
 
@@ -326,6 +345,16 @@ function recordMeasurement(recorder, value) {
   if (typeof recorder === 'function') return recorder(value);
   if (!recorder || typeof recorder.record !== 'function') fail('RECORDER_INVALID', 'overheadRecorder must expose record(observation)');
   return recorder.record(value);
+}
+
+function recordWaitPoll(recorder, value = {}) {
+  if (!object(value)) fail('INVALID_OBSERVATION', 'wait poll must be an object');
+  return recordMeasurement(recorder, {
+    ...value,
+    actor: 'parent',
+    stage: 'wait_poll',
+    evidence: 'wait-event',
+  });
 }
 
 function recordHandoffCost(recorder, value = {}) {
@@ -595,6 +624,9 @@ function report(input = {}, options = {}) {
     .map(([id, treatment]) => ({ id, treatment, metrics: metricSet(rows.filter((row) => row.treatment_id === id)) }));
   const byCategory = [...new Set(rows.map((row) => row.cost_category || 'orchestration'))]
     .sort().map((category) => ({ category, metrics: metricSet(rows.filter((row) => (row.cost_category || 'orchestration') === category)) }));
+  const actors = [...new Set(rows.map((row) => row.actor === undefined ? null : row.actor))]
+    .sort((a, b) => String(a || '').localeCompare(String(b || '')))
+    .map((actor) => ({ actor, metrics: metricSet(rows.filter((row) => (row.actor === undefined ? null : row.actor) === actor)) }));
   // @invariant: behaviorally_verified is independent of the savings verdict (efficiency_measured).
   const status = {
     implemented: true,
@@ -604,7 +636,7 @@ function report(input = {}, options = {}) {
   };
   return {
     schema: REPORT_SCHEMA, version: SCHEMA_VERSION, experiment_id: opts.experiment_id || null,
-    rows: rows.length, treatments, by_treatment: byTreatment, by_category: byCategory, metrics,
+    rows: rows.length, treatments, by_treatment: byTreatment, by_category: byCategory, by_actor: actors, metrics,
     matched_cohorts: cohorts, metrics_per_completion: perCompletion,
     coverage: { provider_tokens: providerCoverage, attribution: attributionCoverage,
       attributed_rows: attributed, dispatch_rows: attributionRows.length,
@@ -666,7 +698,7 @@ module.exports = Object.freeze({
   SCHEMA_VERSION, STREAM_NAME, REPORT_SCHEMA, ESTIMATOR_VERSION, STAGES,
   HANDOFF_COST_STAGES, LIFECYCLE_CLASS_VALUES, PASS_KINDS,
   TREATMENT_KEYS, TREATMENT_VALUES, OverheadError, normalizeTreatment, treatmentId,
-  normalizeObservation, recordBatch, recordMeasurement, recordHandoffCost, recordModelEvidence,
+  normalizeObservation, recordBatch, recordMeasurement, recordHandoffCost, recordModelEvidence, recordWaitPoll,
   handoffCostSummary, readStream, latestRows, report, createRecorder,
 });
 

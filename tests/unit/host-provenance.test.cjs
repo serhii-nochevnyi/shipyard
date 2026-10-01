@@ -33,7 +33,7 @@ test('a clean checkout derives dogfood with its sha and dirty false', () => {
   const root = checkout();
   const p = provenance.current({ pluginRoot: root });
   assert.deepEqual({ ...p }, { schema: provenance.SCHEMA, install_kind: 'dogfood', version: '9.9.9',
-    source_sha: git(root, 'rev-parse', 'HEAD'), dirty: false });
+    source_sha: git(root, 'rev-parse', 'HEAD'), dirty: false, source_root: fs.realpathSync(root) });
   assert.ok(Object.isFrozen(p));
   assert.ok(provenance.isDogfood(p));
 });
@@ -69,4 +69,51 @@ test('the environment sets the kind, sha and dirty flag', () => {
   assert.deepEqual({ ...p }, { schema: provenance.SCHEMA, install_kind: 'dogfood',
     version: '1.2.3+codex.abc', source_sha: 'abc', dirty: true });
   assert.throws(() => provenance.fromEnv({ pluginRoot: root, env: { SHIPYARD_INSTALL_KIND: 'bogus' } }));
+});
+
+test('derive on a checkout records its own toplevel as source_root', () => {
+  const root = checkout();
+  const p = provenance.derive({ pluginRoot: root });
+  assert.equal(p.source_root, fs.realpathSync(root));
+});
+
+test('a non-git root derives release with no source_root', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'host-provenance-plain2-'));
+  plugin(root);
+  assert.equal('source_root' in provenance.derive({ pluginRoot: root }), false);
+});
+
+test('fromEnv with SHIPYARD_SOURCE_ROOT records it realpathed', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'host-provenance-envroot-'));
+  plugin(root);
+  const sourceDir = fs.mkdtempSync(path.join(os.tmpdir(), 'host-provenance-envsrc-'));
+  const p = provenance.fromEnv({ pluginRoot: root, version: '1.0.0',
+    env: { SHIPYARD_INSTALL_KIND: 'dogfood', SHIPYARD_SOURCE_SHA: 'abc', SHIPYARD_SOURCE_DIRTY: '0',
+      SHIPYARD_SOURCE_ROOT: sourceDir } });
+  assert.equal(p.source_root, fs.realpathSync(sourceDir));
+});
+
+test('fromEnv without SHIPYARD_SOURCE_ROOT records no source_root', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'host-provenance-envnoroot-'));
+  plugin(root);
+  const p = provenance.fromEnv({ pluginRoot: root, version: '1.0.0',
+    env: { SHIPYARD_INSTALL_KIND: 'dogfood', SHIPYARD_SOURCE_SHA: 'abc', SHIPYARD_SOURCE_DIRTY: '0' } });
+  assert.equal('source_root' in p, false);
+});
+
+test('an install record round-trips a valid source_root and drops an invalid one', () => {
+  const root = checkout();
+  const validRoot = fs.realpathSync(root);
+  const file = provenance.writeInstallRecord(root, { install_kind: 'dogfood', version: '1.0.0',
+    source_sha: 'abc', dirty: false, source_root: validRoot });
+  assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).source_root, validRoot);
+  assert.equal(provenance.readRecord(root).source_root, validRoot);
+
+  provenance.writeInstallRecord(root, { install_kind: 'dogfood', version: '1.0.0',
+    source_sha: 'abc', dirty: false, source_root: 'relative/path' });
+  assert.equal('source_root' in JSON.parse(fs.readFileSync(file, 'utf8')), false);
+
+  provenance.writeInstallRecord(root, { install_kind: 'dogfood', version: '1.0.0',
+    source_sha: 'abc', dirty: false, source_root: 123 });
+  assert.equal('source_root' in JSON.parse(fs.readFileSync(file, 'utf8')), false);
 });

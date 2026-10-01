@@ -433,6 +433,7 @@ script — not in a prompt.** Every requirement below is an instance of it.
 ## Phases
 
 ### Phase 20: Autonomy of the drive-to-green loop
+
 **Requirements**: REQ-01, REQ-02, REQ-03, REQ-04, REQ-05
 
 The night-survival core. REQ-01 and REQ-02 are one unit — a signature without a
@@ -442,6 +443,7 @@ budget on someone else's instability. REQ-04 and REQ-05 are independent and
 cheap.
 
 ### Phase 21: Verdicts a human would have made anyway
+
 **Requirements**: REQ-06, REQ-07
 
 Deferred deliberately. REQ-07 is the largest value in the programme and the only
@@ -450,6 +452,7 @@ blocking status with evidence. REQ-06 needs phase 20 first: pre-authorization is
 only worth having once the night reliably reaches morning.
 
 ### Phase 22: Close what phase 20 left open
+
 **Requirements**: REQ-08, REQ-09, REQ-10, REQ-11, REQ-12
 
 Repair debt surfaced BY delivering phase 20 — five defects the run found in
@@ -468,6 +471,7 @@ print a tick. Today that hides exactly two cases, and both pass once made to run
 the value is closing the class before the next async test is written.
 
 ### Phase 23: The board tells the truth about itself
+
 **Requirements**: REQ-13, REQ-14
 
 Housekeeping with one real defect in it. The conveyor's own board has been
@@ -487,6 +491,7 @@ work — and the entry claiming this repository has no CI is now read by a
 repository that gained CI two releases ago.
 
 ### Phase 24: The conveyor stops interrupting itself
+
 **Requirements**: REQ-15, REQ-16, REQ-17, REQ-18, REQ-19, REQ-20, REQ-21, REQ-22, REQ-23, REQ-24, REQ-25
 
 Decomposed from ADR-002. Phases 20–23 added the mechanisms a night needs; a
@@ -514,6 +519,7 @@ the board back into `execute: …, finalize: …` until the next `mark` rewrites
 — measured on the first wave of this very phase, with four tickets out.
 
 ### Phase 25: The conveyor follows the models it runs on
+
 **Requirements**: REQ-26, REQ-27, REQ-28, REQ-40, REQ-41, REQ-42, REQ-45
 
 Decomposed from ADR-003. Three things moved under the conveyor within a
@@ -533,6 +539,7 @@ higher effort falls short. The decision taken was to raise the floor to `opus`,
 express depth as effort, and make `fable` something the conveyor earns.
 
 ### Phase 26: Positive evidence before a mutation
+
 **Requirements**: REQ-29, REQ-30, REQ-31, REQ-32, REQ-33, REQ-34, REQ-35, REQ-36, REQ-37, REQ-38, REQ-39
 
 Decomposed from ADR-004, the external audit of 2026-09-07. Eleven of its
@@ -549,6 +556,7 @@ phase arithmetic. Six tickets touch nothing phases 24/25 own and run at once;
 five wait for phase 24's epic as one chain.
 
 ### Phase 27: The conveyor measures its own state
+
 **Requirements**: REQ-46, REQ-47, REQ-48, REQ-49, REQ-50, REQ-51, REQ-52, REQ-53
 
 Decomposed from ADR-006, which extends ADR-004's principle from the work the
@@ -569,6 +577,7 @@ complete. T-27-02 and T-27-07 share no file with that chain and run as their own
 roots beside T-27-01, which puts the phase's largest saving in the first wave.
 
 ### Phase 28: A mechanism nobody connected is not a mechanism
+
 **Requirements**: REQ-54, REQ-55, REQ-56, REQ-57, REQ-58, REQ-59, REQ-60, REQ-61
 
 Decomposed from ADR-007, which extends ADR-006 one layer inward: from facts the
@@ -588,6 +597,7 @@ that follows the phase. Five run as roots — the contested-path rule forces onl
 two short chains, not phase 27's spine.
 
 ### Phase 29: The tracker is a projection, and a projection is driven
+
 **Requirements**: REQ-62, REQ-63, REQ-64, REQ-65, REQ-66, REQ-67, REQ-68
 
 Decomposed from ADR-008, which turns `delivery-rules` §11 from a rule about
@@ -618,6 +628,7 @@ so this repository ships a mechanism it cannot run, and the witnessed mutation
 is owed by the proving ground.
 
 ### Phase 30: A ticket you cannot reach is not deliverable
+
 **Requirements**: REQ-76, REQ-77, REQ-78, REQ-79, REQ-80, REQ-81, REQ-82, REQ-83, REQ-84, REQ-104
 
 Decomposed from ADR-010. Today a ticket whose files live in a sibling
@@ -657,6 +668,7 @@ the phase cannot start until phase 29's epic lands, and it
 contests less than phase 31 does.
 
 ### Phase 31: Not every ticket is available work
+
 **Requirements**: REQ-69, REQ-70, REQ-71, REQ-72, REQ-73, REQ-74, REQ-75
 
 Decomposed from ADR-009, which answers two operator rules that are one subject
@@ -683,8 +695,8 @@ rather than before it, and the reason is an argument rather than a preference:
 a ticket that passes this eligibility gate but has no local checkout is parked
 either way, so the gate cannot be exercised until reachability is solved.
 
-
 ### Phase 32: Measure usage and make the backlog actionable
+
 **Status**: initial tooling slice in progress (ADR-011)
 **Requirements**: REQ-85, REQ-86, REQ-87, REQ-88, REQ-89
 
@@ -697,11 +709,13 @@ not executable tickets. The phase exits with coverage and unknowns reported,
 not with an invented subscription-savings percentage.
 
 ### Phase 33: Reduce orchestration context and transfer sessions safely
+
 **Status**: planned (ADR-011)
 **Requirements**: REQ-90, REQ-91, REQ-92
 **Plans:** 9 plans
 
 Plans (serialized T-33-01 through T-33-09):
+
 - [ ] 33-01-PLAN.md — Durable CI/review transition delivery
 - [ ] 33-02-PLAN.md — Validated bounded executor evidence
 - [ ] 33-03-PLAN.md — Complete repair and drift artifacts
@@ -720,12 +734,14 @@ Workflow and mandatory quality gates remain. Unsupported automatic transfer
 stays in recommendation mode rather than interrupting a live session.
 
 ### Phase 34: Improve convergence and tune from measured outcomes
+
 **Status**: complete (ADR-011)
 **Requirements**: REQ-93, REQ-94, REQ-95, REQ-96, REQ-97
 
 **Plans:** 5 plans
 
 Plans (serialized T-34-01 through T-34-05):
+
 - [x] 34-01-PLAN.md — Review progress and resource budgets
 - [x] 34-02-PLAN.md — Capability-aware model-axis escalation
 - [x] 34-03-PLAN.md — Proven verdict carry
@@ -740,6 +756,7 @@ accounting. Quality regressions roll back the affected treatment and create a
 linked backlog item. Model-floor changes require a separate ADR amendment.
 
 ### Phase 35: Close the GSD and Shipyard workflow loop
+
 **Status**: planned (ADR-013)
 **Requirements**: REQ-98, REQ-99, REQ-100, REQ-101, REQ-102, REQ-103
 
@@ -750,6 +767,7 @@ this repository's missing GSD state. It must not rewrite historical integration
 findings or turn a merged ticket count into a false phase pass.
 
 ### Phase 36: Enforce the runtime model ladder
+
 **Status**: planned (ADR-014)
 **Requirements**: REQ-105, REQ-106, REQ-107, REQ-108, REQ-109, REQ-110
 
@@ -761,6 +779,7 @@ order so the resolver exists before generators and callers consume it; the
 existing Claude palette is a read-only compatibility surface.
 
 ### Phase 37: Run the autonomous dual-runtime control plane
+
 **Status**: implementation merged; runtime delivery follow-up planned (ADR-015)
 **Requirements**: REQ-111, REQ-112, REQ-113, REQ-114, REQ-115, REQ-116, REQ-117, REQ-118, REQ-119, REQ-120
 
@@ -772,6 +791,7 @@ review found that the model IDs and production delivery hosts still need to be
 connected; those corrections remain open and are tracked separately in Phase 38.
 
 ### Phase 38: Restore the native model ladder in delivery
+
 **Status**: in progress (ADR-014, ADR-015)
 **Requirements**: REQ-106, REQ-107, REQ-113, REQ-114, REQ-115, REQ-116, REQ-120, REQ-121, REQ-122, REQ-123, REQ-124
 
@@ -784,6 +804,7 @@ independent per provider. Preserve the Luna/max Codex baseline, effort tiers,
 promotion signals, and historical receipts.
 
 ### Phase 39: Remove conveyor session friction
+
 **Status**: planned (ADR-016)
 **Requirements**: REQ-125, REQ-126, REQ-127, REQ-128, REQ-129, REQ-130, REQ-131, REQ-132, REQ-133, REQ-134, REQ-135
 
@@ -795,6 +816,7 @@ skip the UI gate on an explicit ADR marker, warn on untracked planning, clarify
 gsd-tune, and bound research handbacks at launch.
 
 ### Phase 40: Build delivery seams and clean target-project PRs
+
 **Status**: planned (ADR-017)
 **Requirements**: REQ-136, REQ-137, REQ-138, REQ-139, REQ-140, REQ-141, REQ-142, REQ-143, REQ-144, REQ-145, REQ-146, REQ-147, REQ-148, REQ-149, REQ-150
 
@@ -806,6 +828,7 @@ support a provenance-stamped dogfood mode, and keep conveyor internals out of
 target-project PRs.
 
 ### Phase 41: Reduce pipeline subscription overhead
+
 **Status**: eight ticket plans (T-41-01–08) are materialized locally; structural checks, Gate 2, GSD projections and final independent plan checker pass. Final integration uses the standard post-merge epic gate; see [planning result](phases/41-reduce-pipeline-subscription-overhead/PLANNING-RESULT.md).
 **Goal**: reduce avoidable context processing and repeated model work while preserving verified outcomes.
 **Depends on**: Phase 39
@@ -822,6 +845,7 @@ policy. Reconcile shared-file ownership with phase 40 before materializing
 tickets; do not repeat its provenance/schema work or phase 39 packet fixes.
 
 ### Phase 42: Resume trusted finalization without executor replay
+
 **Status**: one ticket plan (T-42-01), split from T-41-04 on 2026-09-25 by operator decision; plan text inherited from the checker-approved phase-41 plan.
 **Goal**: completed executor work survives finalization failure and resumes through an authenticated candidate without a second executor launch.
 **Depends on**: Phase 41
@@ -831,6 +855,7 @@ tickets; do not repeat its provenance/schema work or phase 39 packet fixes.
 The OS-sandboxed trusted verification runner needs a host where real sandbox denial tests run; a sandboxed executor cannot exercise them.
 
 ### Phase 43: Target-project delivery at scale
+
 **Status**: planned (ADR-020)
 **Requirements**: REQ-159, REQ-160, REQ-161, REQ-162, REQ-163, REQ-164, REQ-165, REQ-166, REQ-167, REQ-168, REQ-169, REQ-170, REQ-171, REQ-172, REQ-173, REQ-174, REQ-175
 **Depends on**: Phase 41 (released); per-ticket cross-phase dependencies on phases 40 and 42
@@ -843,6 +868,7 @@ repository-declared comment markers, Jira binding by key, declared remedy workfl
 scratch set, and the point fixes found on the pdffiller proving ground.
 
 ### Phase 44: Optimize subscription efficiency per runtime
+
 **Status**: delivered (first pass, T-44-01..08, #342, released in 0.68.0). The second-pass items P44-B, P44-C, P44-E and P44-F moved to phase 45 (workstream C) on 2026-09-28
 **Goal**: reduce avoidable subscription consumption per verified completion on Claude Code and Codex through provider-specific observation, exact-input reuse, required-instruction coverage, measured rotation advice, research fact indexing, typed checkpoint reasons, and separately gated effort experiments.
 **Depends on**: Phases 40, 41 and 42 (merged)
@@ -855,13 +881,15 @@ advice with shadow decisions, and a versioned effort-experiment protocol. No pro
 change, experiment or provider scheduler is activated.
 
 ### Phase 45: Close residual pipeline efficiency gaps
+
 **Status**: INV-008 closed with ADR-023 (plus ADR-021 for C1–C4 and ADR-022 for review timing); typed decomposition pending
 **Goal**: correct armed Stop-gate session/board ownership, make stacked delivery reliable on target projects, and remove repeated planning-role launches and routine delivery model work left outside phase 44, with native receipts and independent gates intact.
 **Depends on**: package-specific — S1 uses phase-39 arming and phase-41 scoped-run contracts; R packages build on the phase-40 delivery seams and ADR-020 (phase 43); C packages are planned after the phase-43 epic merges (ADR-021); P/D packages use phase-40/42/44 contracts where their own work packages require them.
 **Requirements**: REQ-185, REQ-186, REQ-187, REQ-188, REQ-189, REQ-190, REQ-191, REQ-192, REQ-193, REQ-194, REQ-195, REQ-196 (first pass); the remaining phase-local packages (R1–R8 and R10–R18 parts, P3, P5, D1–D4, D6, C1–C4) get global IDs in the second pass
-**Plans**: 14 plans (first pass: 45-01 … 45-14, T-45-01 … T-45-14); see [phase context](phases/45-close-residual-pipeline-efficiency-gaps/CONTEXT.md), [work packages](phases/45-close-residual-pipeline-efficiency-gaps/WORK-PACKAGES.md) and the [phase-40 delivery findings](investigations/INV-008-residual-pipeline-efficiency/intake/phase40-delivery-findings.md)
+**Plans**: 15 plans (14 first-pass implementation plans plus release preparation 45-15); see [phase context](phases/45-close-residual-pipeline-efficiency-gaps/CONTEXT.md), [work packages](phases/45-close-residual-pipeline-efficiency-gaps/WORK-PACKAGES.md) and the [phase-40 delivery findings](investigations/INV-008-residual-pipeline-efficiency/intake/phase40-delivery-findings.md)
 
 First-pass plans (correctness-first under ADR-023; no file overlaps any phase-43 `files_modified`):
+
 - [ ] 45-01-PLAN.md — S1 armed Stop gate binds its board, legacy bound, disarm, installed hook (high risk, human checkpoint)
 - [ ] 45-02-PLAN.md — R16 doctor reports a foreign dogfood cache as foreign
 - [ ] 45-03-PLAN.md — R16 dedicated dogfood runtime home by default
@@ -876,8 +904,11 @@ First-pass plans (correctness-first under ADR-023; no file overlaps any phase-43
 - [ ] 45-12-PLAN.md — D5 advisory admission ledger
 - [ ] 45-13-PLAN.md — R6 one bounded drift-check repair
 - [ ] 45-14-PLAN.md — R8 capture scrubber for account ids
+- [ ] 45-15-PLAN.md — Package the first-pass release after all 14 implementation tickets merge
 
 S1 is a separate high-risk correctness fix with its own ticket and human checkpoint. This is a queued scope, not an executable ticket graph or approval to activate model-policy experiments.
+
+REQ-193 has an approved first-pass contribution here; its full completion belongs to queued Phase 47 after phase-43 caller ownership clears. Retain its unchecked status until production caller attribution is verified.
 
 ### Phase 46: Refresh the native runtime model ladder
 
@@ -895,12 +926,13 @@ S1 is a separate high-risk correctness fix with its own ticket and human checkpo
 
 Native-role policy changes are authorized for investigation and implementation after their gates. Preserve active phase-43/45 work. Outer coordination activation stays with its existing ADR-023 D6 owner seam.
 
+
 <!-- shipyard:gsd-sync:begin -->
 ## Shipyard synchronization (generated)
 
-- Source fingerprint: `d555fba423576459dbbdd713534c00e306eabf554ea30e1d0aa46234c78d3810`
-- Plans merged: 221/247
-- Phases verified: 4/27
+- Source fingerprint: `b05ee2d99d30999a84c9f6f636abdb5fb70c57d86e7ec5baa0db6c875f3620e9`
+- Plans merged: 247/251
+- Phases verified: 10/28
 - Current phase: 20
 
 | Phase | Plans | Merged | Verification |
@@ -915,22 +947,37 @@ Native-role policy changes are authorized for investigation and implementation a
 | 27 — The conveyor measures its own state | 9 | 9 | gaps_found |
 | 28 — A mechanism nobody connected is not a mechanism | 9 | 9 | gaps_found |
 | 29 — The tracker is a projection, and a projection is driven | 8 | 8 | passed |
-| 30 — A ticket you cannot reach is not deliverable | 10 | 5 | pending |
-| 31 — Not every ticket is available work | 7 | 6 | pending |
-| 32 — Measure usage and make the backlog actionable | 7 | 6 | pending |
+| 30 — A ticket you cannot reach is not deliverable | 10 | 10 | passed |
+| 31 — Not every ticket is available work | 7 | 7 | passed |
+| 32 — Measure usage and make the backlog actionable | 7 | 7 | passed |
 | 33 — Reduce orchestration context and transfer sessions safely | 9 | 9 | passed |
-| 34 — Improve convergence and tune from measured outcomes | 5 | 1 | pending |
+| 34 — Improve convergence and tune from measured outcomes | 5 | 5 | passed |
 | 35 — Close the GSD and Shipyard workflow loop | 3 | 3 | passed |
-| 36 — Enforce the runtime model ladder | 12 | 7 | pending |
-| 37 — Run the autonomous dual-runtime control plane | 8 | 5 | pending |
-| 38 — Restore the native model ladder in delivery | 8 | 6 | pending |
+| 36 — Enforce the runtime model ladder | 12 | 12 | passed |
+| 37 — Run the autonomous dual-runtime control plane | 8 | 8 | pending |
+| 38 — Restore the native model ladder in delivery | 8 | 8 | passed |
 | 39 — Remove conveyor session friction | 17 | 17 | gaps_found |
 | 40 — Build delivery seams and clean target-project PRs | 27 | 27 | pending |
-| 41 — Reduce pipeline subscription overhead | 9 | 8 | gaps_found |
+| 41 — Reduce pipeline subscription overhead | 9 | 9 | gaps_found |
 | 42 — Resume trusted finalization without executor replay | 3 | 3 | gaps_found |
 | 43 — Target-project delivery at scale | 19 | 19 | pending |
 | 44 — Optimize subscription efficiency per runtime | 8 | 8 | pending |
-| 45 — Close residual pipeline efficiency gaps | 14 | 14 | pending |
+| 45 — Close residual pipeline efficiency gaps | 18 | 18 | gaps_found |
 | 46 — Refresh the native runtime model ladder | 4 | 0 | pending |
+| 47 — Complete deferred decomposition wait attribution | 0 | 0 | pending |
 
 <!-- shipyard:gsd-sync:end -->
+
+### Phase 47: Complete deferred decomposition wait attribution
+
+**Status**: queued; no executable plans or implementation authorized by this entry
+**Goal**: close the production-caller portion of REQ-193 deferred by phase 45 CONTEXT.md D-01, with real parent wait and child model attribution and unchanged receipt/review quality gates.
+**Requirements**: REQ-193 (full completion ownership; phase 45 contributes the approved first-pass host mechanism)
+**Depends on**: phase 43 caller ownership cleared and phase 45 source merged; establish exact ticket dependencies during decomposition
+**Plans**: 0; plan against the then-current source before execution
+
+Plans:
+
+- [ ] TBD — integrate the actual decomposition parent with blocking wait and measured parent wait_poll evidence; verify both actor rows in a real detached run.
+
+The original REQ-193 definition is unchanged and remains open until this phase verifies it. Phase-45 first-pass delivery and release preparation do not constitute full REQ-193 acceptance. Phase 46 already belongs to the independent native model-ladder workstream; this queued phase does not activate or alter that work.

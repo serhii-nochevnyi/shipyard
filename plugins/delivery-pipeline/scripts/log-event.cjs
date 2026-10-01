@@ -142,6 +142,12 @@ const forgedState = (e) =>
 const OWNED_BY_SCRIPTS = {
   merge: { by: 'sentinel.cjs merge', why: duplicate },
   status_change: { by: 'state-sync.cjs', why: duplicate },
+  // @contract: only the successful repository remedy run may charge this attempt budget.
+  remedy_dispatch: {
+    by: 'repo-remedy.cjs run',
+    why: () => 'refusing an unverified workflow dispatch. A hand-written row spends an attempt ' +
+      'without running the declared workflow; use repo-remedy.cjs run with matching failure evidence.',
+  },
   escalation: {
     by: 'escalation-record.cjs mark', kind: 'escalation', why: halfAct,
     fix: 'escalation-record.cjs mark <ticket> <reason...>',
@@ -292,6 +298,30 @@ for (const pair of pairs) {
 const DECLARED_FIELDS = {
   base_merge: ['ticket', 'pr', 'base', 'head'],
 };
+// @contract: a ci_rerun row names the rerun it records; without every field it is refused, not logged.
+const REQUIRED_FIELDS = {
+  merge_gate_legacy: ['ticket', 'pr', 'head'],
+  merge_gate_uncovered: ['ticket', 'pr', 'head', 'commit'],
+  remedy_dispatch: ['ticket', 'pr', 'repo', 'entry_index', 'signature', 'workflow', 'ref', 'bot', 'inputs_digest', 'head'],
+  ci_rerun: ['ticket', 'pr', 'head', 'run_id'],
+  // @contract: a review request can be retried only against the head recorded with it.
+  review_rerequest: ['ticket', 'pr', 'head'],
+};
+const required = REQUIRED_FIELDS[event];
+if (required) {
+  const missing = required.filter((k) => rec[k] === undefined || rec[k] === '');
+  if (missing.length) {
+    console.error(`log-event: ${event} requires ${required.join(', ')}; missing ${missing.join(', ')}`);
+    process.exit(2);
+  }
+}
+if (event === 'ci_rerun') {
+  console.error(
+    'log-event: refusing an unverified ci_rerun. Only ci-wait.cjs may append this event after ' +
+    '`gh run rerun` succeeds; a hand-written line would claim an action that may not have happened.'
+  );
+  process.exit(1);
+}
 const declared = DECLARED_FIELDS[event];
 if (declared) {
   const missing = declared.filter((k) => rec[k] === undefined || rec[k] === '');

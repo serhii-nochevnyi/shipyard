@@ -6,6 +6,144 @@
       "head": "prep/T-38-03-impl",
       "repo": null,
       "created_at": "2026-09-27T18:11:56.954Z"
+    },
+    "T-30-04": {
+      "number": 113,
+      "head": "ticket/T-30-04-require-an-explicit-operator-choice-before-cloning",
+      "repo": null,
+      "created_at": "2026-09-30T20:45:27.770Z"
+    },
+    "T-30-05": {
+      "number": 114,
+      "head": "ticket/T-30-05-validate-repository-destinations-with-existing-nesting-rule",
+      "repo": null,
+      "created_at": "2026-09-30T20:45:27.775Z"
+    },
+    "T-30-06": {
+      "number": 115,
+      "head": "ticket/T-30-06-mirror-project-origin-protocol-for-repository-clones",
+      "repo": null,
+      "created_at": "2026-09-30T20:45:27.776Z"
+    },
+    "T-30-08": {
+      "number": 117,
+      "head": "ticket/T-30-08-adopt-matching-checkouts-and-refuse-to-clobber",
+      "repo": null,
+      "created_at": "2026-09-30T20:45:27.776Z"
+    },
+    "T-30-09": {
+      "number": 118,
+      "head": "ticket/T-30-09-persist-resolved-checkouts-and-park-unreachable",
+      "repo": null,
+      "created_at": "2026-09-30T20:45:27.776Z"
+    },
+    "T-31-07": {
+      "number": 135,
+      "head": "ticket/T-31-07-read-tracker-eligibility-at-cold-start",
+      "repo": null,
+      "created_at": "2026-09-30T20:45:27.777Z"
+    },
+    "T-32-07": {
+      "number": 102,
+      "head": "ticket/T-32-07-join-transcripts-to-dispatches",
+      "repo": null,
+      "created_at": "2026-09-30T20:45:27.780Z"
+    },
+    "T-34-01": {
+      "number": 167,
+      "head": "ticket/T-34-01-review-progress-and-resource-budgets",
+      "repo": null,
+      "created_at": "2026-09-30T20:45:27.780Z"
+    },
+    "T-34-02": {
+      "number": 168,
+      "head": "ticket/T-34-02-runtime-capability-evidence",
+      "repo": null,
+      "created_at": "2026-09-30T20:45:27.781Z"
+    },
+    "T-34-03": {
+      "number": 169,
+      "head": "ticket/T-34-03-merge-verdict-carry",
+      "repo": null,
+      "created_at": "2026-09-30T20:45:27.784Z"
+    },
+    "T-34-04": {
+      "number": 170,
+      "head": "ticket/T-34-04-shared-capacity-and-dispatch-boundary",
+      "repo": null,
+      "created_at": "2026-09-30T20:45:27.784Z"
+    },
+    "T-36-04": {
+      "number": 139,
+      "head": "ticket/T-36-04-generate-and-validate-the-complete-codex",
+      "repo": null,
+      "created_at": "2026-09-30T20:45:27.785Z"
+    },
+    "T-36-07": {
+      "number": 142,
+      "head": "ticket/T-36-07-enforce-the-boundary-across-shipyard-delivery-launches",
+      "repo": null,
+      "created_at": "2026-09-30T20:45:27.785Z"
+    },
+    "T-36-09": {
+      "number": 144,
+      "head": "ticket/T-36-09-policy-aware-telemetry-and-reconciliation-reporting",
+      "repo": null,
+      "created_at": "2026-09-30T20:45:27.785Z"
+    },
+    "T-36-10": {
+      "number": 145,
+      "head": "ticket/T-36-10-exhaustive-signal-matrix-and-negative-bypass-suite",
+      "repo": null,
+      "created_at": "2026-09-30T20:45:27.786Z"
+    },
+    "T-36-11": {
+      "number": 146,
+      "head": "ticket/T-36-11-cross-runtime-generated-install-smoke-verification",
+      "repo": null,
+      "created_at": "2026-09-30T20:45:27.786Z"
+    },
+    "T-37-03": {
+      "number": 180,
+      "head": "ticket/T-37-03-connect-claude-to-scoped-runtime-controller",
+      "repo": null,
+      "created_at": "2026-09-30T20:45:27.787Z"
+    },
+    "T-37-04": {
+      "number": 182,
+      "head": "ticket/T-37-04-connect-codex-to-scoped-runtime-controller",
+      "repo": null,
+      "created_at": "2026-09-30T20:45:27.787Z"
+    },
+    "T-37-05": {
+      "number": 181,
+      "head": "ticket/T-37-05-prove-graph-reachability-before-autonomous-run",
+      "repo": null,
+      "created_at": "2026-09-30T20:45:27.790Z"
+    },
+    "T-38-04": {
+      "number": 192,
+      "head": "ticket/T-38-04-connect-codex-launches-to-delivery",
+      "repo": null,
+      "created_at": "2026-09-30T20:45:27.793Z"
+    },
+    "T-38-05": {
+      "number": 199,
+      "head": "ticket/T-38-05-route-independent-runtime-rollouts",
+      "repo": null,
+      "created_at": "2026-09-30T20:45:27.794Z"
+    },
+    "T-41-04": {
+      "number": 246,
+      "head": "ticket/T-41-04-resume-authenticated-completed-execution",
+      "repo": null,
+      "created_at": "2026-09-30T20:45:27.794Z"
+    },
+    "T-45-15": {
+      "number": 390,
+      "head": "ticket/T-45-15-prepare-the-0-70-0-release-from-the-full",
+      "repo": null,
+      "created_at": "2026-09-30T20:45:27.795Z"
     }
   }
 }

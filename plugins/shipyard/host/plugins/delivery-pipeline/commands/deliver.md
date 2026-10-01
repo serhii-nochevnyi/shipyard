@@ -2248,31 +2248,23 @@ loop:
          PLAN — a push or an answered review does NOT lift it; re-decomposing the
          plan file does.
 
-       first | progress | repeat | repeat_exhausted — submit `ci-fix` to the
-         selected runtime host for the ticket's worktree. The host crosses the
-         mandatory boundary. Pass the complete
-         failure log, signature, the failure-verdict `strategy`, risk/checkpoint evidence,
-         attempt history, and, for an escalation, the immediately preceding
-         `previous_dispatch_id` plus its boundary-verified `signals.priorApplied`
-         receipt:
+       first | progress | repeat | repeat_exhausted — build the role request
+         from the canonical ticket graph and failure evidence file:
 
          ```text
-         boundary.dispatch(
-           { runtime, role: "ci-fix",
-             signals: { risk, critical, checkpoint, signatureState,
-                        priorApplied },
-             dispatch_id, previous_dispatch_id },
-           { ticket, worktreePath, failureLog, signature, strategy,
-             attemptHistory, planPath, artifactLanguage,
-             repairEvidencePath: "<worktree>/.shipyard-repair-evidence.md" }
-         )
+         node ${CLAUDE_PLUGIN_ROOT}/scripts/deliver-dispatch.cjs build ci-fix <T> \
+           --runtime <r> --pr <p.pr> --failure-file <failure-evidence-path>
          ```
 
+         The builder accepts the evidence path and computes its SHA-256 without
+         inlining file content. It prints a request only when the selected host
+         authenticates that evidence at launch. Exit 2 prints a named host-contract refusal and
+         produces no request; preserve it and do not hand-build a boundary input.
          `failure-signature.cjs verdict` supplies only verdict/history facts.
-         Before this call, derive the caller-owned fixer strategy as `first` →
-         `fix`, `progress` → `continue`, and `repeat`/`repeat_exhausted` →
-         `rethink`; pass that value as prompt context, never as a claimed
-         boundary result. The boundary validates the ordered receipt chain. Codex uses the generated
+         Derive the caller-owned fixer strategy as `first` → `fix`, `progress`
+         → `continue`, and `repeat`/`repeat_exhausted` → `rethink`; strategy and
+         receipt-chain facts remain host inputs, never claimed boundary results.
+         The boundary validates the ordered receipt chain. Codex uses the generated
          `shipyard-ci-fix.toml` → `shipyard-ci-fix-repeat.toml` →
          `shipyard-ci-fix-deep.toml` files for base → verified `repeat` →
          verified `repeat_exhausted`; Claude uses Opus/medium → Opus/high with
@@ -2284,7 +2276,10 @@ loop:
          Require a typed boundary adapter that explicitly applies the resolved
          model and effort and returns a concrete application receipt. Otherwise hard-refuse
          before constructing a prompt, spawning, or recording. Absent, `unsupported`, or `unknown` evidence
-         cannot authorize ci-fix. On rethink, re-read the plan and use a different
+         cannot authorize ci-fix. The released Claude fix-round and Codex delivery
+         paths do not authenticate the builder's supplied failure-file digest, so
+         they return the named refusal until that host contract exists. On rethink,
+         re-read the plan and use a different
          hypothesis; provide references/ci-fix.md and the full ticket contract.
          The full hypothesis, notes, and command evidence are read from the
          validated repair artifact before `log-event.cjs attempt`; a bounded
@@ -2306,23 +2301,21 @@ loop:
      verdicts + engagement — `unresolved` alone is only half of what CodeRabbit
      and Copilot actually said, and the half they file as issue comments is the
      half that silently went unaddressed)
-     there is feedback → submit `review-fix` to the selected runtime host for
-       that worktree. The host crosses the boundary. Pass
-       `code-change`/`no-code-change`, every thread and bot
-       comment, the prior-attempt record, signed `signatureState`, and the
-       immediately preceding verified receipt when this is a repeat:
+     there is feedback → submit `review-fix` by building the role request from
+       the canonical ticket graph and review evidence file:
 
        ```text
-       boundary.dispatch(
-         { runtime, role: "review-fix",
-           signals: { risk, critical, checkpoint, signatureState,
-                      priorApplied },
-           dispatch_id, previous_dispatch_id },
-           { ticket, worktreePath, reviewEvidence, codeChange, attemptHistory,
-           planPath, artifactLanguage,
-           repairEvidencePath: "<worktree>/.shipyard-repair-evidence.md" }
-       )
+       node ${CLAUDE_PLUGIN_ROOT}/scripts/deliver-dispatch.cjs build review-fix <T> \
+         --runtime <r> --pr <p.pr> --review-file <review-evidence-path>
        ```
+
+       The builder accepts the evidence path and computes its SHA-256 without
+       inlining file content. It prints a request only when the selected host
+       authenticates that evidence at launch. Exit 2 prints a named host-contract refusal and
+       produces no request; preserve it and do not hand-build a boundary input.
+       `code-change`/`no-code-change`, every thread and bot comment, the
+       prior-attempt record, signed `signatureState`, and a verified prior
+       receipt are all evidence that the selected host must bind before launch.
 
        Codex uses `shipyard-review-fix.toml` →
        `shipyard-review-fix-repeat.toml` → `shipyard-review-fix-deep.toml`
@@ -2332,7 +2325,10 @@ loop:
        literal-model, or omitted-effort fallback is refused. Require a typed
        boundary adapter that explicitly applies the resolved model and effort
        and returns a concrete application receipt. Otherwise hard-refuse
-       before constructing a prompt, spawning, or recording. Then
+       before constructing a prompt, spawning, or recording. The released
+       Claude fix-round and Codex delivery paths do not authenticate the builder's
+       supplied review-file digest, so they return the named refusal until that
+       host contract exists. Then
        the agent either fixes (push → step d), or replies to invalid feedback (no push → mark the
        threads processed, b again).
 
@@ -2343,9 +2339,9 @@ loop:
      and records the receipt before the verdict is accepted.
      Then measure that complete input (bytes ÷ 4), whether the journal proves
      `contested`, and any
-     `critical`/`checkpoint` evidence. The following pseudo-call describes the
-     host's internal boundary input; the command sends its equivalent bounded
-     role request to the selected host:
+     `critical`/`checkpoint` evidence. Build the bounded request from the
+     canonical ticket graph and ask the selected role host to bind the live PR,
+     reviewed diff, and architecture corpus:
 
      Before constructing the judge prompt, clear its role-owned evidence
      scratch file in the reviewed worktree:
@@ -2356,21 +2352,20 @@ loop:
      ```
 
      ```text
-     boundary.dispatch(
-       { runtime, role: "arch-review",
-         signals: { risk, critical, checkpoint, contested, inputTokens },
-         dispatch_id },
-       { promptPath: "${CLAUDE_PLUGIN_ROOT}/references/arch-review.md",
-         ticket, pr, head, diff, architecturePath, measuredInputTokens,
-         contestedEvidence, worktreePath }
-     )
+     node ${CLAUDE_PLUGIN_ROOT}/scripts/deliver-dispatch.cjs build arch-review <T> \
+       --runtime <r> --pr <N>
      ```
 
-     Codex's host resolves Sol/high or, only for measured/contested/critical/
-     checkpoint evidence, Sol/xhigh and validates the generated
-     `shipyard-arch-review.toml` or `shipyard-arch-review-critical.toml`.
-     Its read-only profile grants write access only to
+     Codex `requestValue` and `validateArgs` accept `arch-review` without a
+     prompt, but that is shape validation only. The released host still requires
+     a caller-built prompt and does not derive the graph-bound PR diff and ADR
+     corpus, so the builder exits 2 with the named missing host contract.
+     Claude's role host derives those inputs at launch and validates the request.
+     The Claude role host's read-only profile grants write access only to
      `.shipyard-arch-review-evidence.md` for the complete judgment artifact.
+     Codex's generated `shipyard-arch-review.toml` and
+     `shipyard-arch-review-critical.toml` files do not establish this evidence
+     contract.
      Claude's host independently resolves Opus/medium, Opus/high for critical evidence,
      or Fable/medium for the measured ceiling, always with explicit effort.
      Record the verdict only after the boundary receipt is verified; a missing
@@ -2438,9 +2433,13 @@ loop:
          says `finalize` and the guard refuses the merge, naming both SHAs.
        → gh pr ready <pr> (remove draft)
        → then split on the checkpoint:
-           human_checkpoint: true  → mark `awaiting-human` (green, but the
-             merge/approval is a human's), notify, and CONTINUE the front —
-             do NOT block the cycle while waiting
+           human_checkpoint: review → mark `awaiting-human` until the board shows
+             a fresh human approval on this head; then the guard rechecks the
+             approval live and, once other merge gates pass, merges into the epic. Notify and CONTINUE the
+             front while the review is outstanding — do NOT block the cycle.
+           human_checkpoint: merge or true → mark `awaiting-human` (the human
+             owns the merge), notify, and CONTINUE the front — do NOT block the
+             cycle while waiting
            human_checkpoint: false → status green → LAND IT:
              node ${CLAUDE_PLUGIN_ROOT}/scripts/sentinel.cjs merge <T>
                merged  → the ticket is IN THE EPIC; the script retargets cascade
@@ -2973,7 +2972,7 @@ driving PRs hands the user a half-truth.
   `STATE.md`, `REQUIREMENTS.md`, `*-SUMMARY.md`, `*-UAT.md`, or
   `*-VERIFICATION.md` files. Use `--check` to diagnose drift and rerun the
   write command to repair it.
-- A `human_checkpoint` ticket is never auto-merged, however green it is.
+- A `human_checkpoint: review` ticket may be merged by the guard only after a fresh human approval on the current head, which the guard rechecks live. `merge` and legacy `true` remain human-merged, however green they are.
 - Never force-push. Never commit directly into the default branch/epic (only
   via a ticket-PR into the base). The epic branch is moved only by ticket-PR merges.
 - **When the base moves under an OPEN PR, merge it in — never rebase.**

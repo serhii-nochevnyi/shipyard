@@ -53,6 +53,11 @@ function withFixture(opts, check) {
   try {
     const home = path.join(dir, 'home');
     const codexHome = path.join(home, '.codex');
+    const sharedDefaultsPath = path.join(home, '.gsd/defaults.json');
+    const isolatedDefaultsPath = path.join(home, '.local/state/shipyard/dogfood/codex/defaults.json');
+    const sharedDefaultsBytes = opts.defaults === undefined
+      ? '{"runtime":"claude","operator_owned":"preserve exactly"}\n'
+      : JSON.stringify(opts.defaults, null, 2) + '\n';
     const proj = path.join(dir, 'proj');
     const out = path.join(dir, 'out');
     const bin = path.join(dir, 'bin');
@@ -62,6 +67,7 @@ function withFixture(opts, check) {
     const capabilitiesFile = path.join(dir, 'capabilities.json');
     fs.mkdirSync(proj, { recursive: true });
     fs.mkdirSync(bin);
+    write(sharedDefaultsPath, sharedDefaultsBytes);
     fs.symlinkSync(process.execPath, path.join(bin, 'node'));
     // No ambient CLI or package manager is allowed to influence these tests.
     write(codexFile, '#!/bin/sh\necho "unexpected CLI probe" >&2\nexit 99\n');
@@ -72,14 +78,13 @@ function withFixture(opts, check) {
     writeJson(capabilitiesFile, CAPABILITIES);
     if (opts.projectRaw !== undefined) write(path.join(proj, '.planning/config.json'), opts.projectRaw);
     else if (opts.project) writeJson(path.join(proj, '.planning/config.json'), opts.project);
-    if (opts.defaults) writeJson(path.join(home, '.gsd/defaults.json'), opts.defaults);
     const env = {
       HOME: home, GSD_HOME: home, CODEX_HOME: codexHome,
       PATH: [bin, '/usr/bin', '/bin', '/usr/sbin', '/sbin'].join(path.delimiter),
       TMPDIR: dir, LANG: 'C', SHIPYARD_GSD_AUTO_INSTALL: '0',
       AGENTS_SKILLS_DIR: path.join(home, '.agents/skills'),
       GSD_CAPABILITIES_DIR: path.join(home, '.gsd/capabilities'),
-      GSD_DEFAULTS_PATH: path.join(home, '.gsd/defaults.json'),
+      GSD_DEFAULTS_PATH: isolatedDefaultsPath,
       CODEX_AGENTS_MD: path.join(codexHome, 'AGENTS.md'),
     };
     const phase = opts.phase === undefined ? 2 : opts.phase;
@@ -90,7 +95,8 @@ function withFixture(opts, check) {
         cwd: dir, encoding: 'utf8', env: { ...env, ...overrides },
       });
     const options = { codexHome, phase, capabilities: CAPABILITIES };
-    check({ dir, home, codexHome, proj, out, converter, capabilitiesFile, catalogFile, codexFile, env, run, options });
+    check({ dir, home, codexHome, sharedDefaultsPath, sharedDefaultsBytes, isolatedDefaultsPath,
+      proj, out, converter, capabilitiesFile, catalogFile, codexFile, env, run, options });
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -890,6 +896,8 @@ test('installer global tuning reads policy from the selected project directory',
     const result = install(f);
     assert.strictEqual(result.status, 0, result.stderr + result.stdout);
     assert.strictEqual(json(f.env.GSD_DEFAULTS_PATH).model_profile, 'quality');
+    assert.strictEqual(read(f.sharedDefaultsPath), f.sharedDefaultsBytes,
+      'the selected dogfood defaults target changes while ambient HOME defaults stay byte-identical');
   });
 });
 

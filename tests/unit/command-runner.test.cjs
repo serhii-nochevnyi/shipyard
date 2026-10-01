@@ -46,6 +46,7 @@ const os = require('node:os');
 const path = require('node:path');
 const {
   createVerificationRunner,
+  createHostProfileRunner,
   selectSandboxBackend,
 } = require('../../plugins/delivery-pipeline/scripts/command-runner.cjs');
 
@@ -145,4 +146,48 @@ test('real OS sandbox reports actual nonzero status and timeout', (t) => {
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
+});
+
+test('host profile runs argv without a shell and bounds time and output', () => {
+  const runner = createHostProfileRunner({ timeoutMs: 500, maxOutput: 128,
+    envAllowList: ['LANG'], env: { LANG: 'C', SECRET: 'excluded' } });
+  const quoted = runner.run({ id: 'argv', executable: process.execPath,
+    argv: ['-e', 'process.stdout.write(JSON.stringify(process.argv.slice(1))+"\\n"+String(process.env.SECRET))',
+      'x; touch /tmp/should-not-exist'], cwd: os.tmpdir() });
+  assert.equal(quoted.status, 0);
+  assert.match(quoted.stdout, /x; touch/);
+  assert.match(quoted.stdout, /undefined/);
+  assert.equal(quoted.backend.kind, 'host');
+  const smallRunner = createHostProfileRunner({ timeoutMs: 500, maxOutput: 32 });
+  const output = smallRunner.run({ id: 'output', executable: process.execPath,
+    argv: ['-e', 'process.stdout.write("x".repeat(500))'], cwd: os.tmpdir() });
+  assert.ok(Buffer.byteLength(output.stdout) <= 32);
+  assert.equal(output.stdout_sha256,
+    require('node:crypto').createHash('sha256').update(output.stdout).digest('hex'));
+  const timeout = smallRunner.run({ id: 'timeout', executable: process.execPath,
+    argv: ['-e', 'setTimeout(()=>{},5000)'], cwd: os.tmpdir(), timeoutMs: 50 });
+  assert.equal(timeout.timed_out, true);
+});
+
+test('macOS sandbox permits mktemp and Bash here-doc while denying worktree and state writes', (t) => {
+  if (process.platform !== 'darwin') { t.skip('macOS sandbox only'); return; }
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-mac-temp-')));
+  try {
+    const worktree = path.join(root, 'worktree');
+    const state = path.join(root, 'state');
+    fs.mkdirSync(worktree);
+    fs.mkdirSync(state);
+    const runner = usableRunner({ readOnlyPaths: [worktree], deniedPaths: [state], tempRoot: root });
+    if (runner.unavailable) { t.skip(runner.unavailable); return; }
+    const body = 'x'.repeat(16384);
+    const script = `tmp=$(mktemp "$TMPDIR/shipyard-heredoc.XXXXXX") || exit 11; cat <<EOF > "$tmp"\n${body}\nEOF\n`
+      + 'test "$(wc -c < "$tmp" | tr -d " ")" = 16385 || exit 12; '
+      + `if touch '${path.join(worktree, 'no')}' 2>/dev/null; then exit 13; fi; `
+      + `if touch '${path.join(state, 'no')}' 2>/dev/null; then exit 14; fi`;
+    const result = runner.run({ id: 'mac-temp', executable: '/bin/bash', argv: ['-c', script],
+      cwd: worktree, timeoutMs: 10000, maxOutputBytes: 4096 });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(fs.existsSync(path.join(worktree, 'no')), false);
+    assert.equal(fs.existsSync(path.join(state, 'no')), false);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });

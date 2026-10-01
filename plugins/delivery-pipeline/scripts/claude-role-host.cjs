@@ -15,6 +15,11 @@ const { loadClaudeReferenceContent } = require('./claude-reference-content.cjs')
 const { createRunController } = require('./run-controller.cjs');
 const { createRunScope } = require('./run-scope.cjs');
 const roleArtifact = require('./role-artifact.cjs');
+const {
+  ARCH_REVIEW_EVIDENCE_NAME: ARCH_EVIDENCE,
+  SENTINEL_EVIDENCE_NAME: SENTINEL_EVIDENCE,
+  SCRATCH_FILES, statusIgnoringScratch,
+} = require('./conveyor-scratch.cjs');
 const { preflightRound } = require('./sentinel-preflight.cjs');
 
 const REQUEST_SCHEMA = 'shipyard.claude-role-request.v1';
@@ -33,8 +38,6 @@ const ADR_ID_RE = /\bADR-(\d{3})\b/g;
 const ADR_COMPANION_SUFFIX_RE = /^[A-Z][A-Z0-9-]*\.md$/;
 const ADR_SUPERSEDED_STATUS_RE = /^\s*(?:[-*]\s+)?(?:\*\*)?Status(?:\*\*)?\s*:(?:\*\*)?\s*superseded\b/im;
 const DECISIONS_PATH_RE = /\.planning\/investigations\/[A-Za-z0-9._/-]+\/DECISIONS\.md/g;
-const ARCH_EVIDENCE = '.shipyard-arch-review-evidence.md';
-const SENTINEL_EVIDENCE = '.shipyard-sentinel-evidence.md';
 const HEX64_RE = /^[a-f0-9]{64}$/i;
 const TRANSCRIPT_MAX_BYTES = 4 * 1024 * 1024;
 const USAGE_FIELDS = Object.freeze(['input_tokens', 'cache_read_input_tokens', 'cache_creation_input_tokens', 'output_tokens']);
@@ -142,15 +145,32 @@ function canonicalWorktree(options, value) {
   if (git(options, worktree, ['rev-parse', '--show-toplevel']) !== worktree) {
     reject('worktree must be the canonical repository root');
   }
-  const status = git(options, worktree, ['status', '--porcelain=v1', '--untracked-files=all'], 256 * 1024);
-  if (status) reject('worktree has local changes before role dispatch');
+  let status;
+  try {
+    status = statusIgnoringScratch(worktree, { untracked: 'all', forJudge: true });
+  } catch (error) {
+    reject(`git preflight failed: ${String(error.stderr || error.message).trim().slice(0, 800)}`, 'PREFLIGHT_FAILED');
+  }
+  if (!status.ok) reject('worktree status exceeded the 64 MiB limit', status.code);
+  if (status.entries.length) reject('worktree has local changes before role dispatch');
+  const scratchDigests = new Map();
+  for (const name of SCRATCH_FILES) {
+    const file = path.join(worktree, name);
+    let stat;
+    try { stat = fs.lstatSync(file); } catch (error) {
+      if (error.code === 'ENOENT') continue;
+      reject(`scratch file could not be inspected: ${name}`, 'PREFLIGHT_FAILED');
+    }
+    if (!stat.isFile() || stat.isSymbolicLink()) reject(`scratch file must be a regular file: ${name}`);
+    scratchDigests.set(name, sha(fs.readFileSync(file)));
+  }
   const common = git(options, worktree, ['rev-parse', '--git-common-dir']);
   const commonPath = fs.realpathSync(path.isAbsolute(common) ? common : path.resolve(worktree, common));
   const projectRoot = worktree;
   const head = git(options, worktree, ['rev-parse', '--verify', 'HEAD^{commit}']);
   const headTree = git(options, worktree, ['rev-parse', '--verify', 'HEAD^{tree}']);
   const branch = git(options, worktree, ['symbolic-ref', '--quiet', '--short', 'HEAD']);
-  return Object.freeze({ worktree, projectRoot, commonPath, head, headTree, branch });
+  return Object.freeze({ worktree, projectRoot, commonPath, head, headTree, branch, scratchDigests });
 }
 
 function graphDirectory(options, projectRoot) {
@@ -1028,6 +1048,14 @@ function assertEvidenceOnlyChanges(options, prepared, hostOwnedFiles = new Map()
     .split('\0').filter(Boolean);
   const unexpected = [...new Set([...changed, ...untracked])].filter((file) => {
     if (file === prepared.evidencePath) return false;
+    const scratchDigest = prepared.canonical.scratchDigests.get(file);
+    if (scratchDigest !== undefined) {
+      try {
+        const stat = fs.lstatSync(path.join(prepared.canonical.worktree, file));
+        return !stat.isFile() || stat.isSymbolicLink()
+          || sha(fs.readFileSync(path.join(prepared.canonical.worktree, file))) !== scratchDigest;
+      } catch { return true; }
+    }
     const digest = hostOwnedFiles.get(file);
     if (digest === undefined) return true;
     const absolute = path.join(prepared.canonical.worktree, file);

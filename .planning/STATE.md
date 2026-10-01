@@ -1,13 +1,13 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 5f7ce9b58c2b3d32dcd0a9a99b8027da64c176536e3c9e20bb86f625203b3cf9
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 5f5d807642c656d02645f61166447ae6ea65184ec3920db17214450b3718831f
 gsd_state_version: '1.0'
 status: planning
 progress:
-  total_phases: 27
-  completed_phases: 4
-  total_plans: 247
-  completed_plans: 221
-  percent: 89
+  total_phases: 28
+  completed_phases: 10
+  total_plans: 251
+  completed_plans: 247
+  percent: 98
 ---
 
 # Project State
@@ -21,16 +21,16 @@ See: .planning/PROJECT.md (updated by Shipyard GSD synchronization)
 
 ## Current Position
 
-Phase: 1 of 27 (Phase 20: Autonomy of the drive-to-green loop)
+Phase: 1 of 28 (Phase 20: Autonomy of the drive-to-green loop)
 Plan: 6 of 6 merged
 Status: pending
 Last activity: 2026-10-01 — Shipyard projection synchronized
 
-Progress: [████████░░] 89%
+Progress: [█████████░] 98%
 
 ## Performance Metrics
 
-- Total plans completed: 221
+- Total plans completed: 247
 - Average duration: not measured by the projection
 - Total execution time: not measured by the projection
 
@@ -48,23 +48,24 @@ Progress: [████████░░] 89%
 | 27 | 9 | 9 | gaps_found |
 | 28 | 9 | 9 | gaps_found |
 | 29 | 8 | 8 | passed |
-| 30 | 10 | 5 | pending |
-| 31 | 7 | 6 | pending |
-| 32 | 7 | 6 | pending |
+| 30 | 10 | 10 | passed |
+| 31 | 7 | 7 | passed |
+| 32 | 7 | 7 | passed |
 | 33 | 9 | 9 | passed |
-| 34 | 5 | 1 | pending |
+| 34 | 5 | 5 | passed |
 | 35 | 3 | 3 | passed |
-| 36 | 12 | 7 | pending |
-| 37 | 8 | 5 | pending |
-| 38 | 8 | 6 | pending |
+| 36 | 12 | 12 | passed |
+| 37 | 8 | 8 | pending |
+| 38 | 8 | 8 | passed |
 | 39 | 17 | 17 | gaps_found |
 | 40 | 27 | 27 | pending |
-| 41 | 9 | 8 | gaps_found |
+| 41 | 9 | 9 | gaps_found |
 | 42 | 3 | 3 | gaps_found |
 | 43 | 19 | 19 | pending |
 | 44 | 8 | 8 | pending |
-| 45 | 14 | 14 | pending |
+| 45 | 18 | 18 | gaps_found |
 | 46 | 4 | 0 | pending |
+| 47 | 0 | 0 | pending |
 
 ## Accumulated Context
 
@@ -79,14 +80,14 @@ Review and resolve phase integration findings shown in the phase artifacts.
 
 ### Blockers/Concerns
 
-- T-30-04: delivery status is pending
-- T-30-05: delivery status is pending
-- T-30-06: delivery status is pending
-- T-30-08: delivery status is pending
-- T-30-09: delivery status is pending
-- T-31-07: delivery status is pending
-- T-32-07: delivery status is pending
-- T-34-01: delivery status is pending
+- T-46-01: delivery status is pending
+- T-46-04: delivery status is pending
+- T-46-05: delivery status is pending
+- T-46-06: delivery status is pending
+- Phase 20: INTEGRATION.md is missing
+- Phase 21: INTEGRATION.md is missing
+- Phase 22: INTEGRATION.md is missing
+- Phase 23: INTEGRATION.md is missing
 
 ## Deferred Items
 
@@ -96,6 +97,6 @@ Review and resolve phase integration findings shown in the phase artifacts.
 
 ## Session Continuity
 
-Last session: 2026-10-01 11:55
+Last session: 2026-10-01 12:14
 Stopped at: Shipyard GSD projection synchronized from the delivery graph.
 Resume file: None

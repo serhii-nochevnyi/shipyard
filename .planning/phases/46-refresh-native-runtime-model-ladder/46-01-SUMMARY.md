@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: cbf41a53f53dc68893eaf942539490e35af1227af2857e6c7d5a73995f46ec2e
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 85d089dd9ea67d35bd96c2ffc73d0a1e63bd5b7856db89c3524ffcdbfeb44541
 phase: 46-refresh-native-runtime-model-ladder
 plan: 01
 subsystem: shipyard delivery
@@ -22,7 +22,7 @@ key-decisions:
 duration: 0min
 status: halted
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: cbf41a53f53dc68893eaf942539490e35af1227af2857e6c7d5a73995f46ec2e
+shipyard_source_fingerprint: 85d089dd9ea67d35bd96c2ffc73d0a1e63bd5b7856db89c3524ffcdbfeb44541
 ---
 
 # Phase 46: Migrate native ladder and coupled CI contracts atomically — Delivery Projection

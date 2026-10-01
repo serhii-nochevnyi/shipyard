@@ -48,8 +48,8 @@ make capture-fixtures    # manual, scrubbed boundary-fixture capture; needs BOUN
 make test-live           # one live round per runtime; needs gh auth and SHIPYARD_LIVE_REPO
 make release             # tag once both runtimes have a fresh live receipt; needs VERSION=
 make refresh-runtime-digests         # the only way to change the runtime-file digest pin
-make install-shipyard-dogfood-claude # separate install root; needs DOGFOOD_ROOT=
-make install-shipyard-dogfood-codex  # separate install root; needs DOGFOOD_ROOT=
+make install-shipyard-dogfood-claude # separate install root; DOGFOOD_ROOT= optional, defaults to a dedicated per-checkout home
+make install-shipyard-dogfood-codex  # separate install root; DOGFOOD_ROOT= optional, defaults to a dedicated per-checkout home
 make untrack-planning    # dry run; apply needs CONFIRM=untrack-planning
 ```
 

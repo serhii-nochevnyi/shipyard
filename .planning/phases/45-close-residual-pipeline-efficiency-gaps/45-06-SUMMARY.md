@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 09ee6b1f6a9a5d762eccccfc174f08b50dfae78820718c6f2d43e07d830dc104
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: d5dcb4f7eba9e62be90b5b0862a503e3302de27d138dfaa7c24c50a47459d88d
 phase: 45-close-residual-pipeline-efficiency-gaps
 plan: 06
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-30
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 09ee6b1f6a9a5d762eccccfc174f08b50dfae78820718c6f2d43e07d830dc104
+shipyard_source_fingerprint: d5dcb4f7eba9e62be90b5b0862a503e3302de27d138dfaa7c24c50a47459d88d
 ---
 
 # Phase 45: usage-report counts Codex host-stream turn.completed.usage records — Delivery Projection

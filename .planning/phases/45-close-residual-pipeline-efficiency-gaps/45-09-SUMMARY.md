@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 6a74db58c9dd40fbe66dc2431f1b4691e5b5882569c5e09cc646963552d2b4b7
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 7228931b8757435fb2309f1492e13f6d668dc2289a1a639547acfb55dfb4ca4c
 phase: 45-close-residual-pipeline-efficiency-gaps
 plan: 09
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-30
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 6a74db58c9dd40fbe66dc2431f1b4691e5b5882569c5e09cc646963552d2b4b7
+shipyard_source_fingerprint: 7228931b8757435fb2309f1492e13f6d668dc2289a1a639547acfb55dfb4ca4c
 ---
 
 # Phase 45: Codex decompose host recovers a completed judgment role from its reservation, native transcripts and artifact digest without relaunch — Delivery Projection

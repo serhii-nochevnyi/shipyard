@@ -3672,29 +3672,46 @@ tickets:
     primary_parent: null
     pr_base: epic/43-target-project-delivery-at-scale
     jira: null
+  T-43-09:
+    title: 'state-sync lists PRs by ticket head and open state and skips tickets whose merge into a landed epic is recorded; --full re-derives'
+    plan: '.planning/phases/43-target-project-delivery-at-scale/43-09-PLAN.md'
+    phase: '43'
+    repo: null
+    wave: 11
+    depends_on: [T-40-03, T-40-19, T-40-27]
+    files: [plugins/delivery-pipeline/scripts/state-sync.cjs, tests/unit/state-sync-listing.test.cjs, tests/smoke/sentinel-smoke.sh]
+    risk: medium
+    human_checkpoint: false
+    checkpoint: null
+    preauthorized: false
+    branch: ticket/T-43-09-state-sync-lists-prs-by-ticket-head-and
+    epic: epic/43-target-project-delivery-at-scale
+    primary_parent: null
+    pr_base: epic/43-target-project-delivery-at-scale
+    jira: null
   T-43-04:
     title: 'Bounded reachability: O(1) git forms, a large buffer, and a declared-path epic check with a path-scoped fallback'
     plan: '.planning/phases/43-target-project-delivery-at-scale/43-04-PLAN.md'
     phase: '43'
     repo: null
-    wave: 11
-    depends_on: [T-43-07, T-40-19, T-40-22]
-    files: [plugins/delivery-pipeline/scripts/run-reachability.cjs, tests/unit/run-reachability.test.cjs, plugins/delivery-pipeline/scripts/sentinel.cjs, tests/unit/sentinel.test.cjs]
+    wave: 12
+    depends_on: [T-43-07, T-43-09, T-40-19, T-40-22]
+    files: [plugins/delivery-pipeline/scripts/run-reachability.cjs, tests/unit/run-reachability.test.cjs, plugins/delivery-pipeline/scripts/sentinel.cjs, tests/unit/sentinel.test.cjs, tests/smoke/sentinel-smoke.sh]
     risk: medium
     human_checkpoint: false
     checkpoint: null
     preauthorized: false
     branch: ticket/T-43-04-bounded-reachability-o-1-git-forms-a-lar
     epic: epic/43-target-project-delivery-at-scale
-    primary_parent: T-43-07
-    pr_base: ticket/T-43-07-cancelled-checks-ignore-superseded-runs
+    primary_parent: T-43-09
+    pr_base: ticket/T-43-09-state-sync-lists-prs-by-ticket-head-and
     jira: null
   T-43-08:
     title: 'A stale approval from a declared bot does not block the merge; re-request once, then escalate with the command'
     plan: '.planning/phases/43-target-project-delivery-at-scale/43-08-PLAN.md'
     phase: '43'
     repo: null
-    wave: 12
+    wave: 13
     depends_on: [T-43-04, T-43-01, T-43-07, T-40-19, T-40-22]
     files: [plugins/delivery-pipeline/scripts/reviewers.cjs, tests/unit/reviewers.test.cjs, plugins/delivery-pipeline/scripts/sentinel.cjs, tests/unit/sentinel.test.cjs, plugins/delivery-pipeline/scripts/log-event.cjs, tests/unit/log-event.test.cjs]
     risk: high
@@ -3705,23 +3722,6 @@ tickets:
     epic: epic/43-target-project-delivery-at-scale
     primary_parent: T-43-04
     pr_base: ticket/T-43-04-bounded-reachability-o-1-git-forms-a-lar
-    jira: null
-  T-43-09:
-    title: 'state-sync lists PRs by ticket head and open state and skips tickets whose merge into a landed epic is recorded; --full re-derives'
-    plan: '.planning/phases/43-target-project-delivery-at-scale/43-09-PLAN.md'
-    phase: '43'
-    repo: null
-    wave: 11
-    depends_on: [T-40-03, T-40-19, T-40-27]
-    files: [plugins/delivery-pipeline/scripts/state-sync.cjs, tests/unit/state-sync-listing.test.cjs]
-    risk: medium
-    human_checkpoint: false
-    checkpoint: null
-    preauthorized: false
-    branch: ticket/T-43-09-state-sync-lists-prs-by-ticket-head-and
-    epic: epic/43-target-project-delivery-at-scale
-    primary_parent: null
-    pr_base: epic/43-target-project-delivery-at-scale
     jira: null
   T-43-10:
     title: 'Honour pipeline.gsd_sync as a deprecated alias on the summary line; decompose phases reach ROADMAP; one summarised warning'
@@ -3747,7 +3747,7 @@ tickets:
     repo: null
     wave: 9
     depends_on: [T-40-25]
-    files: [plugins/delivery-pipeline/scripts/jira-export.cjs, tests/unit/jira-export.test.cjs, plugins/delivery-pipeline/commands/decompose.md, tests/unit/jira-binding-contract.test.cjs]
+    files: [plugins/delivery-pipeline/scripts/jira-export.cjs, tests/unit/jira-export.test.cjs, plugins/delivery-pipeline/commands/decompose.md, tests/unit/jira-binding-contract.test.cjs, tests/smoke/docs-smoke.sh]
     risk: medium
     human_checkpoint: false
     checkpoint: null
@@ -3762,9 +3762,9 @@ tickets:
     plan: '.planning/phases/43-target-project-delivery-at-scale/43-12-PLAN.md'
     phase: '43'
     repo: null
-    wave: 13
+    wave: 14
     depends_on: [T-43-08, T-43-11, T-40-19, T-40-22, T-40-20, T-40-03, T-40-25]
-    files: [plugins/delivery-pipeline/scripts/validate-graph.cjs, tests/smoke/graph-validator-smoke.sh, plugins/delivery-pipeline/scripts/front.cjs, tests/unit/front.test.cjs, plugins/delivery-pipeline/scripts/sentinel.cjs, tests/unit/sentinel.test.cjs, plugins/delivery-pipeline/scripts/pipeline-stats.cjs, tests/unit/pipeline-stats.test.cjs, plugins/delivery-pipeline/commands/decompose.md, plugins/delivery-pipeline/skills/delivery-rules/SKILL.md, '.shipyard/generated/gsd-delivery-rules/SKILL.md']
+    files: [plugins/delivery-pipeline/scripts/validate-graph.cjs, tests/smoke/graph-validator-smoke.sh, plugins/delivery-pipeline/scripts/front.cjs, tests/unit/front.test.cjs, plugins/delivery-pipeline/scripts/sentinel.cjs, tests/unit/sentinel.test.cjs, plugins/delivery-pipeline/scripts/state-sync.cjs, tests/unit/state-sync-listing.test.cjs, plugins/delivery-pipeline/scripts/reviewers.cjs, tests/unit/reviewers.test.cjs, plugins/delivery-pipeline/scripts/pipeline-stats.cjs, tests/unit/pipeline-stats.test.cjs, plugins/delivery-pipeline/commands/decompose.md, plugins/delivery-pipeline/commands/deliver.md, plugins/delivery-pipeline/references/pr-sentinel.md, plugins/delivery-pipeline/skills/delivery-rules/SKILL.md, '.shipyard/generated/gsd-delivery-rules/SKILL.md']
     risk: high
     human_checkpoint: true
     checkpoint: merge
@@ -3813,9 +3813,9 @@ tickets:
     plan: '.planning/phases/43-target-project-delivery-at-scale/43-15-PLAN.md'
     phase: '43'
     repo: null
-    wave: 14
+    wave: 15
     depends_on: [T-43-12, T-43-14, T-40-15, T-40-25]
-    files: [plugins/delivery-pipeline/scripts/deliver-dispatch.cjs, tests/unit/deliver-dispatch.test.cjs, plugins/delivery-pipeline/commands/investigate.md, plugins/delivery-pipeline/commands/decompose.md, tests/unit/planning-builders-contract.test.cjs]
+    files: [plugins/delivery-pipeline/scripts/deliver-dispatch.cjs, plugins/delivery-pipeline/scripts/claude-investigation-host.cjs, plugins/delivery-pipeline/scripts/codex-planning-context-host.cjs, plugins/delivery-pipeline/scripts/context-packet.cjs, plugins/delivery-pipeline/scripts/state-sync.cjs, tests/unit/deliver-dispatch.test.cjs, tests/unit/claude-investigation-host.test.cjs, tests/unit/codex-planning-context-host.test.cjs, tests/unit/context-packet.test.cjs, tests/unit/state-sync-listing.test.cjs, plugins/delivery-pipeline/commands/investigate.md, plugins/delivery-pipeline/commands/decompose.md, tests/unit/planning-builders-contract.test.cjs, '.planning/phases/43-target-project-delivery-at-scale/43-18-PLAN.md']
     risk: medium
     human_checkpoint: false
     checkpoint: null
@@ -3832,7 +3832,7 @@ tickets:
     repo: null
     wave: 13
     depends_on: [T-43-06, T-43-01, T-42-01, T-40-10, T-40-13, T-40-14, T-40-28, T-40-12, T-40-01, T-40-09, T-42-03]
-    files: [plugins/delivery-pipeline/scripts/host-verification.cjs, tests/unit/host-verification.test.cjs, plugins/delivery-pipeline/scripts/claude-delivery-host.cjs, tests/unit/claude-delivery-host.test.cjs, plugins/delivery-pipeline/scripts/codex-delivery-host.cjs, tests/unit/codex-delivery-host.test.cjs, plugins/delivery-pipeline/scripts/command-runner.cjs, tests/unit/command-runner.test.cjs]
+    files: [plugins/delivery-pipeline/scripts/host-verification.cjs, tests/unit/host-verification.test.cjs, plugins/delivery-pipeline/scripts/delivery-commit-finalizer.cjs, tests/unit/delivery-commit-finalizer.test.cjs, plugins/delivery-pipeline/scripts/claude-delivery-host.cjs, tests/unit/claude-delivery-host.test.cjs, plugins/delivery-pipeline/scripts/codex-delivery-host.cjs, tests/unit/codex-delivery-host.test.cjs, plugins/delivery-pipeline/scripts/ticket-base.cjs, plugins/delivery-pipeline/scripts/ticket-worktree.sh, tests/unit/ticket-base.test.cjs, tests/smoke/worktree-gates-smoke.sh, plugins/delivery-pipeline/scripts/command-runner.cjs, tests/unit/command-runner.test.cjs, plugins/delivery-pipeline/workflows/executors.mjs]
     risk: high
     human_checkpoint: true
     checkpoint: merge
@@ -3865,16 +3865,16 @@ tickets:
     phase: '43'
     repo: null
     wave: 15
-    depends_on: [T-43-17, T-43-08]
-    files: [plugins/delivery-pipeline/scripts/repo-remedy.cjs, tests/unit/repo-remedy.test.cjs, plugins/delivery-pipeline/scripts/escalation-record.cjs, tests/unit/escalation-record.test.cjs, plugins/delivery-pipeline/scripts/log-event.cjs, tests/unit/log-event.test.cjs, plugins/delivery-pipeline/scripts/conveyor-coverage.cjs, tests/unit/conveyor-coverage.test.cjs, plugins/delivery-pipeline/references/ci-fix.md, plugins/delivery-pipeline/references/pr-sentinel.md]
+    depends_on: [T-43-17, T-43-08, T-43-12]
+    files: [plugins/delivery-pipeline/scripts/repo-remedy.cjs, tests/unit/repo-remedy.test.cjs, plugins/delivery-pipeline/scripts/escalation-record.cjs, tests/unit/escalation-record.test.cjs, plugins/delivery-pipeline/scripts/log-event.cjs, tests/unit/log-event.test.cjs, plugins/delivery-pipeline/scripts/conveyor-coverage.cjs, tests/unit/conveyor-coverage.test.cjs, plugins/delivery-pipeline/scripts/attempt-history.cjs, tests/unit/attempt-history.test.cjs, plugins/delivery-pipeline/scripts/pipeline-config.cjs, tests/unit/pipeline-config.test.cjs, plugins/delivery-pipeline/references/ci-fix.md, plugins/delivery-pipeline/references/pr-sentinel.md]
     risk: high
     human_checkpoint: true
     checkpoint: merge
     preauthorized: true
     branch: ticket/T-43-18-run-only-declared-repository-remedy-work
     epic: epic/43-target-project-delivery-at-scale
-    primary_parent: T-43-17
-    pr_base: ticket/T-43-17-record-a-sealed-coverage-entry-for-every
+    primary_parent: T-43-12
+    pr_base: ticket/T-43-12-human-checkpoint-takes-review-or-merge-t
     jira: null
   T-43-19:
     title: 'The merge gate refuses heads the conveyor does not cover; PRs opened before release are journalled as legacy'
@@ -4266,6 +4266,74 @@ tickets:
     epic: epic/45-close-residual-pipeline-efficiency-gaps
     primary_parent: null
     pr_base: epic/45-close-residual-pipeline-efficiency-gaps
+    jira: null
+  T-45-15:
+    title: Prepare the 0.70.0 release from the fully merged phase-45 epic
+    plan: '.planning/phases/45-close-residual-pipeline-efficiency-gaps/45-15-PLAN.md'
+    phase: '45'
+    repo: null
+    wave: 5
+    depends_on: [T-45-01, T-45-02, T-45-03, T-45-04, T-45-05, T-45-06, T-45-07, T-45-08, T-45-09, T-45-10, T-45-11, T-45-12, T-45-13, T-45-14]
+    files: [plugins/delivery-pipeline/.claude-plugin/plugin.json, capabilities/delivery-pipeline/capability.json, 'plugins/shipyard/**', docs/releases/v0.70.0.md]
+    risk: low
+    human_checkpoint: false
+    checkpoint: null
+    preauthorized: false
+    branch: ticket/T-45-15-prepare-the-0-70-0-release-from-the-full
+    epic: epic/45-close-residual-pipeline-efficiency-gaps
+    primary_parent: T-45-10
+    pr_base: ticket/T-45-10-claude-decompose-host-recovers-a-complet
+    jira: null
+  T-45-16:
+    title: 'Close judgment recovery, native process proof, and pre-receipt writer fences'
+    plan: '.planning/phases/45-close-residual-pipeline-efficiency-gaps/45-16-PLAN.md'
+    phase: '45'
+    repo: null
+    wave: 6
+    depends_on: [T-45-07, T-45-08, T-45-09, T-45-10, T-45-15]
+    files: [plugins/delivery-pipeline/scripts/codex-decompose-host.cjs, plugins/delivery-pipeline/scripts/claude-decompose-host.cjs, plugins/delivery-pipeline/scripts/codex-runtime-host.cjs, plugins/delivery-pipeline/scripts/dispatch-boundary.cjs, plugins/delivery-pipeline/scripts/planning-writer-lease.cjs, plugins/delivery-pipeline/scripts/claude-runtime-host.cjs, plugins/delivery-pipeline/scripts/claude-workflow-host.cjs, plugins/delivery-pipeline/scripts/codex-delivery-host.cjs, tests/unit/codex-decompose-host.test.cjs, tests/unit/claude-decompose-host.test.cjs, tests/unit/codex-runtime-host.test.cjs, tests/unit/dispatch-boundary.test.cjs, tests/unit/planning-writer-lease.test.cjs, tests/unit/claude-runtime-host.test.cjs, tests/unit/claude-workflow-host.test.cjs, tests/unit/codex-delivery-host.test.cjs, tests/unit/codex-dispatch-adapter.test.cjs, tests/unit/planning-artifacts.test.cjs, tests/unit/source-contract.test.cjs]
+    risk: high
+    human_checkpoint: true
+    checkpoint: review
+    preauthorized: false
+    branch: ticket/T-45-16-close-judgment-recovery-native-process-p
+    epic: epic/45-close-residual-pipeline-efficiency-gaps
+    primary_parent: T-45-15
+    pr_base: ticket/T-45-15-prepare-the-0-70-0-release-from-the-full
+    jira: null
+  T-45-17:
+    title: Select and validate an isolated Codex dogfood home before marketplace activity
+    plan: '.planning/phases/45-close-residual-pipeline-efficiency-gaps/45-17-PLAN.md'
+    phase: '45'
+    repo: null
+    wave: 6
+    depends_on: [T-45-03, T-45-15]
+    files: [scripts/install-shipyard-marketplace.cjs, plugins/delivery-pipeline/scripts/gsd-tune.cjs, tests/unit/marketplace-installer.test.cjs, tests/unit/gsd-tune.test.cjs, tests/unit/gen-codex-shipyard.test.cjs]
+    risk: medium
+    human_checkpoint: false
+    checkpoint: null
+    preauthorized: false
+    branch: ticket/T-45-17-select-and-validate-an-isolated-codex-do
+    epic: epic/45-close-residual-pipeline-efficiency-gaps
+    primary_parent: T-45-15
+    pr_base: ticket/T-45-15-prepare-the-0-70-0-release-from-the-full
+    jira: null
+  T-45-18:
+    title: Fence durable receipt rollback and refresh the 0.70.0 Codex package
+    plan: '.planning/phases/45-close-residual-pipeline-efficiency-gaps/45-18-PLAN.md'
+    phase: '45'
+    repo: null
+    wave: 7
+    depends_on: [T-45-15, T-45-16, T-45-17]
+    files: [plugins/delivery-pipeline/scripts/dispatch-boundary.cjs, tests/unit/dispatch-boundary.test.cjs, plugins/delivery-pipeline/scripts/claude-workflow-host.cjs, tests/unit/claude-workflow-host.test.cjs, plugins/delivery-pipeline/scripts/gsd-tune.cjs, tests/unit/gsd-tune.test.cjs, 'plugins/shipyard/**']
+    risk: medium
+    human_checkpoint: false
+    checkpoint: null
+    preauthorized: false
+    branch: ticket/T-45-18-refresh-the-0-70-0-codex-package-after-b
+    epic: epic/45-close-residual-pipeline-efficiency-gaps
+    primary_parent: T-45-16
+    pr_base: ticket/T-45-16-close-judgment-recovery-native-process-p
     jira: null
   T-46-01:
     title: Migrate native ladder and coupled CI contracts atomically
