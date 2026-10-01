@@ -753,8 +753,9 @@ fixed routed `pr-sentinel` role for either signal.
 
 ### 7.5.1. Runtime-native model grids
 
-The compatibility examples above are historical behavior only. This section is
-the current ADR-024 routed grid. Codex uses its own logical keys and resolves
+The compatibility examples above describe current legacy compatibility-only
+reader behavior, not routed launch authority. This section is the current
+ADR-024 routed grid. Codex uses its own logical keys and resolves
 them to concrete IDs in the Codex adapter; Claude uses native Claude selections
 and never translates Luna or Sol into a Claude model.
 

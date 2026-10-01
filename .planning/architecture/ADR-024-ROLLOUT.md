@@ -72,12 +72,16 @@ the host. If validating the direct generated-bundle path instead, use the
 installer that owns that layout:
 
 ```bash
-bash "$SOURCE_ROOT/scripts/install-shipyard-codex.sh" \
+: "${SHIPYARD_CODEX_CAPABILITIES_FILE:?Set this to the actual host capability evidence file}"
+[[ -f "$SHIPYARD_CODEX_CAPABILITIES_FILE" && -r "$SHIPYARD_CODEX_CAPABILITIES_FILE" ]] || exit 1
+SHIPYARD_CODEX_CAPABILITIES_FILE="$SHIPYARD_CODEX_CAPABILITIES_FILE" \
+  bash "$SOURCE_ROOT/scripts/install-shipyard-codex.sh" \
   --dogfood-root "$CODEX_DOGFOOD_HOME" --project-dir "$PROJECT_DIR"
 ```
 
 Do not point `CODEX_HOME` at the shared default. Supply the host's actual
-capability evidence to the installer when required; never synthesize supported
+capability evidence through `SHIPYARD_CODEX_CAPABILITIES_FILE` before running
+the direct command; this readable file is mandatory. Never synthesize supported
 models or efforts from ADR-024.
 
 ### Claude Code
@@ -92,12 +96,23 @@ CLAUDE_DOGFOOD_HOME="${XDG_STATE_HOME:-$HOME/.local/state}/shipyard/dogfood/clau
 CLAUDE_PLUGIN_ROOT="$CLAUDE_DOGFOOD_HOME/plugins/shipyard/<package-id>"
 CLAUDE_CONFIG_DIR="$CLAUDE_DOGFOOD_HOME/config" \
 CLAUDE_HOME="$CLAUDE_DOGFOOD_HOME/config" \
+  bash "$SOURCE_ROOT/scripts/ensure-gsd-core.sh" claude || exit 1
+CLAUDE_CONFIG_DIR="$CLAUDE_DOGFOOD_HOME/config" \
+CLAUDE_HOME="$CLAUDE_DOGFOOD_HOME/config" \
 SHIPYARD_GSD_AUTO_INSTALL=0 \
   bash "$SOURCE_ROOT/scripts/install-shipyard-claude-hook.sh" \
     --dogfood-root "$CLAUDE_PLUGIN_ROOT"
 CLAUDE_CONFIG_DIR="$CLAUDE_DOGFOOD_HOME/config" \
   claude --plugin-dir "$CLAUDE_PLUGIN_ROOT"
 ```
+
+The explicit `ensure-gsd-core.sh claude` step installs the GSD payload and
+runs `ensure-gsd-plugin.cjs` in the fresh isolated config: it registers
+`open-gsd/gsd-core`, installs `gsd-core@gsd-core`, and verifies that dependency
+is enabled before launch. Stop if setup fails. The dogfood hook installer
+returns before its GSD setup without `--wire-hooks`, and
+`SHIPYARD_GSD_AUTO_INSTALL=0` disables its automatic setup; neither replaces
+this explicit dependency step.
 
 Claude Code supports loading a development plugin directly from a folder with
 `--plugin-dir`; see the [official plugin documentation](https://code.claude.com/docs/en/plugins).
@@ -190,14 +205,21 @@ package SHA-256/build digest, installed manifest identity, and isolated target
 path. Keep that package available while the candidate is under review.
 
 On HOLD, stop admitting new candidate dispatches. Leave in-flight work with its
-original owner and policy. Restore the prior reviewed version into the same
-isolated runtime home using its retained source/package and that runtime's
-existing installer. For Codex, run the prior source's
-`install-shipyard-marketplace.cjs codex --source <prior-source>` with the same
+original owner, home, package, and policy. Restore into the same isolated
+runtime home only after it is quiescent: all sessions and dispatches using that
+home have finished, and no controller can admit new work there. If work is
+still in flight, install the prior reviewed version into a separate fresh
+isolated runtime home for future work; leave the original home and package
+untouched until those sessions finish. Use the retained source/package and
+that runtime's existing installer against the chosen quiescent or fresh target. For Codex, run the prior source's
+`install-shipyard-marketplace.cjs codex --source <prior-source>` with the chosen
 dedicated `CODEX_HOME`, or run its `install-shipyard-codex.sh` against the
-dedicated `--dogfood-root`. For Claude, prepare a new versioned `--dogfood-root`
+dedicated `--dogfood-root` and a readable actual host
+`SHIPYARD_CODEX_CAPABILITIES_FILE`. For Claude, prepare a new versioned `--dogfood-root`
 from the prior reviewed source with `CLAUDE_HOME` and `CLAUDE_CONFIG_DIR` still
-pointing at the isolated config directory, then launch that exact root with
+pointing at the chosen isolated config directory. For a fresh config, run the
+prior source's `ensure-gsd-core.sh claude` with both overrides as in section 2
+and stop on failure before launch. Then launch that exact root with
 `claude --plugin-dir`. Confirm the prior installed identity and package digest
 before allowing new work.
 
