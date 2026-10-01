@@ -8756,6 +8756,8 @@
         "tests/unit/dispatch-boundary.test.cjs",
         "plugins/delivery-pipeline/scripts/claude-workflow-host.cjs",
         "tests/unit/claude-workflow-host.test.cjs",
+        "plugins/delivery-pipeline/scripts/gsd-tune.cjs",
+        "tests/unit/gsd-tune.test.cjs",
         "plugins/shipyard/**"
       ],
       "risk": "medium",
