@@ -7,6 +7,122 @@ const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs
 const canonicalInternalPolicy = require('../../plugins/delivery-pipeline/scripts/model-policy-internal.cjs');
 const runtimeAdapters = require('../../plugins/delivery-pipeline/scripts/runtime-adapters.cjs');
 
+const PRE_EDIT_PLANNING_CONFIG = JSON.parse(String.raw`
+{
+  "model_profile": "balanced",
+  "commit_docs": true,
+  "parallelization": true,
+  "search_gitignored": false,
+  "brave_search": false,
+  "firecrawl": false,
+  "exa_search": false,
+  "tavily_search": false,
+  "ref_search": false,
+  "perplexity": false,
+  "jina": false,
+  "git": {
+    "branching_strategy": "none",
+    "create_tag": true,
+    "phase_branch_template": "gsd/phase-{phase}-{slug}",
+    "milestone_branch_template": "gsd/{milestone}-{slug}",
+    "quick_branch_template": null
+  },
+  "workflow": {
+    "research": true,
+    "plan_check": true,
+    "verifier": true,
+    "nyquist_validation": true,
+    "auto_advance": true,
+    "node_repair": true,
+    "node_repair_budget": 2,
+    "ui_phase": true,
+    "ui_safety_gate": true,
+    "ai_integration_phase": true,
+    "api_coverage_gate": true,
+    "human_verify_mode": "end-of-phase",
+    "context_guard_mode": "warn",
+    "text_mode": false,
+    "research_before_questions": false,
+    "discuss_mode": "discuss",
+    "skip_discuss": false,
+    "code_review": true,
+    "code_review_depth": "deep",
+    "code_review_command": null,
+    "pattern_mapper": true,
+    "plan_bounce": false,
+    "plan_bounce_script": null,
+    "plan_bounce_passes": 2,
+    "auto_prune_state": false,
+    "post_planning_gaps": true,
+    "security_enforcement": true,
+    "security_asvs_level": 1,
+    "security_block_on": "high",
+    "tdd_mode": true,
+    "ui_review": true,
+    "use_worktrees": true
+  },
+  "ship": {
+    "pr_body_sections": []
+  },
+  "hooks": {
+    "context_warnings": true
+  },
+  "project_code": null,
+  "phase_naming": "sequential",
+  "agent_skills": {
+    "gsd-executor": [
+      ".shipyard/generated/gsd-delivery-rules"
+    ],
+    "gsd-planner": [
+      ".shipyard/generated/gsd-delivery-rules"
+    ]
+  },
+  "claude_md_path": "./.claude/CLAUDE.md",
+  "plan_review": {
+    "source_grounding": true,
+    "source_grounding_authority": "grep"
+  },
+  "mode": "standard",
+  "granularity": "standard",
+  "intel": {
+    "enabled": false
+  },
+  "graphify": {
+    "enabled": false
+  },
+  "resolve_model_ids": "omit",
+  "models": {
+    "planning": "opus",
+    "execution": "opus",
+    "research": "sonnet",
+    "verification": "sonnet"
+  },
+  "effort": {
+    "routing_tier_defaults": {
+      "light": "low",
+      "standard": "high",
+      "heavy": "xhigh"
+    },
+    "agent_overrides": {
+      "gsd-code-reviewer": "xhigh"
+    }
+  },
+  "model_overrides": {
+    "gsd-code-reviewer": "opus"
+  },
+  "delivery_pipeline": {
+    "max_concurrent_agents": 4,
+    "model_ladder": "adaptive",
+    "gsd_sync": true
+  },
+  "pipeline": {
+    "jira": {
+      "enabled": false
+    }
+  }
+}
+`);
+
 const codex = (role, signals = {}, extra = {}) =>
   policy.resolveDispatch({ runtime: 'codex', role, signals, ...extra });
 const claude = (role, signals = {}, extra = {}) =>
@@ -39,15 +155,15 @@ function priorReceipt(role, model, effort, dispatchId) {
 }
 
 const CODEx_BASE = {
-  research: ['sol', 'gpt-6-sol', 'high'],
-  decomposition: ['sol', 'gpt-6-sol', 'high'],
-  executor: ['luna', 'gpt-6-luna', 'max'],
+  research: ['sol', 'gpt-6.1-sol', 'high'],
+  decomposition: ['sol', 'gpt-6.1-sol', 'high'],
+  executor: ['sol', 'gpt-6.1-sol', 'low'],
   'pr-sentinel': ['luna', 'gpt-6-luna', 'medium'],
-  integrator: ['sol', 'gpt-6-sol', 'high'],
-  'drift-check': ['luna', 'gpt-6-luna', 'max'],
-  'arch-review': ['sol', 'gpt-6-sol', 'high'],
-  'ci-fix': ['luna', 'gpt-6-luna', 'max'],
-  'review-fix': ['luna', 'gpt-6-luna', 'max'],
+  integrator: ['sol', 'gpt-6.1-sol', 'high'],
+  'drift-check': ['sol', 'gpt-6.1-sol', 'low'],
+  'arch-review': ['sol', 'gpt-6.1-sol', 'high'],
+  'ci-fix': ['sol', 'gpt-6.1-sol', 'low'],
+  'review-fix': ['sol', 'gpt-6.1-sol', 'low'],
 };
 
 suite('ADR-014 canonical policy');
@@ -57,7 +173,12 @@ test('exposes exactly the nine routed roles and the concrete Codex palette', () 
   assert.deepStrictEqual(policy.CODEX_MODEL_IDS, {
     luna: 'gpt-6-luna',
     astra: 'gpt-6-astra',
-    sol: 'gpt-6-sol',
+    sol: 'gpt-6.1-sol',
+  });
+  assert.deepStrictEqual(policy.CLAUDE_MODEL_ALIASES, {
+    sonnet: 'claude-sonnet-5-5',
+    opus: 'claude-opus-5-5',
+    fable: 'fable',
   });
   assert.equal(policy.POLICY.version, policy.POLICY_VERSION);
   assert.equal(policy.POLICY_HASH, policy.fingerprintPolicy(policy.POLICY));
@@ -71,6 +192,43 @@ test('fingerprint covers escalation rules and repair prerequisites', () => {
   const alteredRepair = JSON.parse(JSON.stringify(policy.POLICY));
   alteredRepair.repair_prerequisites['ci-fix'].repeat.effort = 'medium';
   assert.notEqual(policy.fingerprintPolicy(alteredRepair), policy.POLICY_HASH);
+  const alteredClaudeRung = JSON.parse(JSON.stringify(policy.POLICY));
+  alteredClaudeRung.role_rungs.claude.executor[0].effort = 'low';
+  assert.notEqual(policy.fingerprintPolicy(alteredClaudeRung), policy.POLICY_HASH);
+  const alteredClaudeSignal = JSON.parse(JSON.stringify(policy.POLICY));
+  alteredClaudeSignal.runtime_signal_rules.claude.executor.critical.any.push({ contested: true });
+  assert.notEqual(policy.fingerprintPolicy(alteredClaudeSignal), policy.POLICY_HASH);
+  const alteredClaudePredecessor = JSON.parse(JSON.stringify(policy.POLICY));
+  alteredClaudePredecessor.runtime_repair_prerequisites.claude['ci-fix'].repeat.model = 'wrong-predecessor';
+  assert.notEqual(policy.fingerprintPolicy(alteredClaudePredecessor), policy.POLICY_HASH);
+  assert.notEqual(policy.POLICY_HASH, '30e71fb4066fee5b67df14120532c0b4f8aedde169907bc16f70dd2569744968');
+});
+
+test('ordinary executor requests resolve through the canonical resolver with fresh native identities', () => {
+  for (const [runtime, resolve, model, effort] of [
+    ['codex', codex, 'gpt-6.1-sol', 'low'],
+    ['claude', claude, 'claude-sonnet-5-5', 'medium'],
+  ]) {
+    const result = resolve('executor');
+    assert.deepStrictEqual(
+      [result.runtime, result.logical_rung, result.model, result.requested_model, result.effort, result.requested_effort],
+      [runtime, 'base', model, model, effort, effort],
+    );
+    assert.equal(result.policy_version, 'adr-014.v7');
+    assert.equal(result.policy_hash, policy.fingerprintPolicy(policy.POLICY));
+    assert.notEqual(result.policy_hash, '30e71fb4066fee5b67df14120532c0b4f8aedde169907bc16f70dd2569744968');
+  }
+});
+
+test('reviewer compatibility config removes only the two copied reviewer overrides, excluding independently owned verification profiles', () => {
+  const expected = JSON.parse(JSON.stringify(PRE_EDIT_PLANNING_CONFIG));
+  delete expected.model_overrides['gsd-code-reviewer'];
+  delete expected.effort.agent_overrides['gsd-code-reviewer'];
+  const actual = JSON.parse(JSON.stringify(require('../../.planning/config.json')));
+  assert.equal(Object.hasOwn(actual.model_overrides, 'gsd-code-reviewer'), false);
+  assert.equal(Object.hasOwn(actual.effort.agent_overrides, 'gsd-code-reviewer'), false);
+  delete actual.delivery_pipeline.verification_commands;
+  assert.deepStrictEqual(actual, expected);
 });
 
 test('resolves every base role to the ADR-014 logical and concrete tuple on Codex', () => {
@@ -97,24 +255,24 @@ test('resolves every base role to the ADR-014 logical and concrete tuple on Code
   }
 });
 
-test('resolves Claude through its independent native grid without changing Codex ids', () => {
+test('resolves Claude through its pinned native grid while preserving Fable window routing', () => {
   const cases = [
-    ['research', {}, 'base', 'opus', 'claude-opus-5-5', 'medium'],
-    ['research', { type: 'alternatives' }, 'base', 'opus', 'claude-opus-5-5', 'medium'],
+    ['research', {}, 'base', 'sonnet', 'claude-sonnet-5-5', 'xhigh'],
+    ['research', { type: 'alternatives' }, 'base', 'sonnet', 'claude-sonnet-5-5', 'xhigh'],
     ['research', { complexity: 'very-complex' }, 'very-complex', 'opus', 'claude-opus-5-5', 'high'],
     ['decomposition', { checkpoint: true }, 'critical', 'opus', 'claude-opus-5-5', 'high'],
     ['decomposition', { critical: true }, 'critical', 'opus', 'claude-opus-5-5', 'high'],
-    ['executor', {}, 'base', 'sonnet', 'sonnet', 'max'],
-    ['executor', { critical: true }, 'critical', 'opus', 'claude-opus-5-5', 'low'],
-    ['pr-sentinel', {}, 'base', 'sonnet', 'sonnet', 'high'],
-    ['integrator', {}, 'base', 'opus', 'claude-opus-5-5', 'medium'],
+    ['executor', {}, 'base', 'sonnet', 'claude-sonnet-5-5', 'medium'],
+    ['executor', { critical: true }, 'critical', 'sonnet', 'claude-sonnet-5-5', 'xhigh'],
+    ['pr-sentinel', {}, 'base', 'sonnet', 'claude-sonnet-5-5', 'low'],
+    ['integrator', {}, 'base', 'sonnet', 'claude-sonnet-5-5', 'xhigh'],
     ['integrator', { contested: true }, 'critical', 'opus', 'claude-opus-5-5', 'high'],
-    ['drift-check', {}, 'base', 'opus', 'claude-opus-5-5', 'high'],
-    ['arch-review', {}, 'base', 'opus', 'claude-opus-5-5', 'medium'],
+    ['drift-check', {}, 'base', 'sonnet', 'claude-sonnet-5-5', 'medium'],
+    ['arch-review', {}, 'base', 'sonnet', 'claude-sonnet-5-5', 'xhigh'],
     ['arch-review', { contested: true }, 'critical', 'opus', 'claude-opus-5-5', 'high'],
     ['arch-review', { inputTokens: policy.WINDOW_THRESHOLD_TOKENS + 1 }, 'ceiling', 'fable', 'fable', 'medium'],
-    ['ci-fix', {}, 'base', 'opus', 'claude-opus-5-5', 'medium'],
-    ['review-fix', {}, 'base', 'opus', 'claude-opus-5-5', 'medium'],
+    ['ci-fix', {}, 'base', 'sonnet', 'claude-sonnet-5-5', 'high'],
+    ['review-fix', {}, 'base', 'sonnet', 'claude-sonnet-5-5', 'high'],
   ];
   for (const [role, signals, rung, modelKey, model, effort] of cases) {
     const result = claude(role, signals);
@@ -128,28 +286,78 @@ test('resolves Claude through its independent native grid without changing Codex
     assert.deepStrictEqual(result.launch_arguments, { model, effort });
   }
   assert.deepStrictEqual(policy.CLAUDE_MODEL_ALIASES, {
-    sonnet: 'sonnet',
+    sonnet: 'claude-sonnet-5-5',
     opus: 'claude-opus-5-5',
     fable: 'fable',
   });
   assert.equal(runtimeAdapters.modelFor('codex', 'sonnet'), undefined);
+  assert.equal(runtimeAdapters.modelFor('claude', 'sonnet'), 'claude-sonnet-5-5');
   assert.equal(runtimeAdapters.modelFor('claude', 'terra'), undefined);
   assert.equal(runtimeAdapters.modelFor('claude', 'sol'), undefined);
   assert.equal(runtimeAdapters.modelFor('claude', 'luna'), undefined);
   assert.equal(runtimeAdapters.modelFor('claude', 'astra'), undefined);
+  assert.equal(runtimeAdapters.matchesModelObservation('claude', 'claude-sonnet-5-5', 'claude-sonnet-5-5'), true);
+  assert.equal(runtimeAdapters.matchesModelObservation('claude', 'claude-sonnet-5-4', 'claude-sonnet-5-5'), false);
   assert.deepStrictEqual(policy.RUNTIME_ROLE_RUNG_DEFINITIONS.codex.executor[0], {
-    name: 'base', model_key: 'luna', logical_model: 'luna', effort: 'max',
+    name: 'base', model_key: 'sol', logical_model: 'sol', effort: 'low',
   });
   assert.deepStrictEqual(policy.RUNTIME_ROLE_RUNG_DEFINITIONS.claude.executor[0], {
-    name: 'base', model_key: 'sonnet', effort: 'max',
+    name: 'base', model_key: 'sonnet', effort: 'medium',
   });
   assert.deepStrictEqual(policy.RUNTIME_ROLE_RUNG_DEFINITIONS.claude.research, [
-    { name: 'base', model_key: 'opus', effort: 'medium' },
+    { name: 'base', model_key: 'sonnet', effort: 'xhigh' },
     { name: 'very-complex', model_key: 'opus', effort: 'high' },
   ]);
   assert.deepStrictEqual(policy.RUNTIME_ROLE_RUNG_DEFINITIONS.claude.decomposition[1], {
     name: 'critical', model_key: 'opus', effort: 'high',
   });
+});
+
+test('repair prerequisites bind every repair rung to its immediately preceding native pair', () => {
+  for (const [runtime, expected] of [
+    ['codex', {
+      rungs: [
+        ['base', 'sol', 'gpt-6.1-sol', 'low'],
+        ['repeat', 'sol', 'gpt-6.1-sol', 'high'],
+        ['repeat_exhausted', 'sol', 'gpt-6.1-sol', 'xhigh'],
+      ],
+    }],
+    ['claude', {
+      rungs: [
+        ['base', 'sonnet', 'claude-sonnet-5-5', 'high'],
+        ['repeat', 'sonnet', 'claude-sonnet-5-5', 'xhigh'],
+        ['repeat_exhausted', 'opus', 'claude-opus-5-5', 'high'],
+      ],
+    }],
+  ]) {
+    for (const role of ['ci-fix', 'review-fix']) {
+      const rungs = policy.RUNTIME_ROLE_RUNG_DEFINITIONS[runtime][role];
+      assert.deepStrictEqual(
+        rungs.map(({ name, model_key, effort }) => [name, model_key, policy[runtime === 'codex' ? 'CODEX_MODEL_IDS' : 'CLAUDE_MODEL_ALIASES'][model_key], effort]),
+        expected.rungs,
+        `${runtime}/${role} rung grid`,
+      );
+      for (const [index, [rung]] of expected.rungs.entries()) {
+        if (index === 0) continue;
+        const predecessor = policy.RUNTIME_REPAIR_PREREQUISITES[runtime][role][rung];
+        assert.deepStrictEqual(
+          [predecessor.model_key, predecessor.model, predecessor.effort],
+          expected.rungs[index - 1].slice(1),
+          `${runtime}/${role}/${rung}`,
+        );
+        assert.equal(
+          policy.RUNTIME_ROLE_SIGNAL_RULES[runtime][role][rung].rung,
+          rung,
+          `${runtime}/${role}/${rung} remains signal-reachable`,
+        );
+        assert.deepStrictEqual(
+          policy.RUNTIME_ROLE_SIGNAL_RULES[runtime][role][rung].any,
+          [{ signatureState: rung }],
+          `${runtime}/${role}/${rung} keeps its authenticated repair signal`,
+        );
+      }
+    }
+  }
 });
 
 test('Codex research promotes only explicit very-complex and retains inert alternatives evidence', () => {
@@ -158,7 +366,7 @@ test('Codex research promotes only explicit very-complex and retains inert alter
     complexity: 'very-complex',
   });
   assert.equal(result.logical_rung, 'very-complex');
-  assert.equal(result.model, 'gpt-6-sol');
+  assert.equal(result.model, 'gpt-6.1-sol');
   assert.deepStrictEqual(result.signals_fired, ['type', 'very-complex']);
   assert.deepStrictEqual(result.selected_signals.map((item) => item.signal), ['very-complex']);
   assert.equal(result.signal_reasons.length, 2);
@@ -187,12 +395,12 @@ test('judgement roles promote only on ADR-014 scoped signals and preserve all fi
     ]) {
       const result = codex(role, signals);
       assert.equal(result.logical_rung, 'critical', `${role}/${JSON.stringify(signals)}`);
-      assert.equal(result.model, 'gpt-6-sol');
+      assert.equal(result.model, 'gpt-6.1-sol');
       assert.equal(result.effort, 'xhigh');
     }
     const riskOnly = codex(role, { risk: 'high' });
     assert.equal(riskOnly.logical_rung, 'base', `${role}/risk`);
-    assert.equal(riskOnly.model, 'gpt-6-sol');
+    assert.equal(riskOnly.model, 'gpt-6.1-sol');
     assert.ok(riskOnly.signal_reasons.some((item) => item.signal === 'risk' && item.applies === false));
     const combined = codex(role, {
       risk: 'high',
@@ -241,12 +449,12 @@ test('window escalation uses only measured input against the fingerprinted thres
   );
 });
 
-test('executor keeps Luna/max by default and escalates to Sol/high on explicit critical evidence', () => {
+test('executor uses Sol/low by default and escalates to Sol/high on explicit critical evidence', () => {
   const base = codex('executor', { risk: 'high', inputTokens: policy.WINDOW_THRESHOLD_TOKENS + 1 });
   assert.equal(base.logical_rung, 'base');
-  assert.equal(base.logical_model, 'luna');
-  assert.equal(base.model, 'gpt-6-luna');
-  assert.equal(base.effort, 'max');
+  assert.equal(base.logical_model, 'sol');
+  assert.equal(base.model, 'gpt-6.1-sol');
+  assert.equal(base.effort, 'low');
   assert.ok(base.signal_reasons.some((item) => item.signal === 'risk' && item.applies === false));
   assert.ok(base.signal_reasons.some((item) => item.signal === 'window' && item.applies === false));
 
@@ -254,18 +462,18 @@ test('executor keeps Luna/max by default and escalates to Sol/high on explicit c
     const result = codex('executor', { [signal]: true });
     assert.equal(result.logical_rung, 'critical', signal);
     assert.equal(result.logical_model, 'sol', signal);
-    assert.equal(result.model, 'gpt-6-sol', signal);
+    assert.equal(result.model, 'gpt-6.1-sol', signal);
     assert.equal(result.effort, 'high', signal);
     assert.ok(result.signal_reasons.some((item) => item.signal === signal && item.applies === true));
   }
 });
 
-test('fixed Luna roles ignore global risk, critical, checkpoint, and window promotion', () => {
+test('fixed roles ignore global risk, critical, checkpoint, and window promotion', () => {
   const expected = {
-    'pr-sentinel': ['luna', 'gpt-6-luna'],
-    'drift-check': ['luna', 'gpt-6-luna'],
+    'pr-sentinel': ['luna', 'gpt-6-luna', 'medium'],
+    'drift-check': ['sol', 'gpt-6.1-sol', 'low'],
   };
-  for (const [role, [logicalModel, concreteModel]] of Object.entries(expected)) {
+  for (const [role, [logicalModel, concreteModel, effort]] of Object.entries(expected)) {
     const result = codex(role, {
       risk: 'high',
       critical: true,
@@ -275,6 +483,7 @@ test('fixed Luna roles ignore global risk, critical, checkpoint, and window prom
     assert.equal(result.logical_rung, 'base', role);
     assert.equal(result.logical_model, logicalModel, role);
     assert.equal(result.model, concreteModel, role);
+    assert.equal(result.effort, effort, role);
     assert.ok(result.signals_fired.includes('risk'), `${role} retains risk`);
     assert.ok(result.signals_fired.includes('critical'), `${role} retains critical`);
     assert.ok(result.signals_fired.includes('checkpoint'), `${role} retains checkpoint`);
@@ -286,12 +495,12 @@ test('fixed Luna roles ignore global risk, critical, checkpoint, and window prom
 test('direct policy repair resolution fails closed without boundary provenance', () => {
   assert.equal(codex('ci-fix', { signatureState: 'first' }).logical_rung, 'base');
   assert.equal(codex('review-fix', { signatureState: 'progress' }).logical_rung, 'base');
-  const luna = priorReceipt('ci-fix', 'gpt-6-luna', 'max', 'luna-1');
+  const prior = priorReceipt('ci-fix', 'gpt-6.1-sol', 'low', 'sol-low-1');
   assert.throws(
     () => codex('ci-fix', {
       signatureState: 'repeat',
-      priorApplied: luna,
-    }, { previous_dispatch_id: 'luna-1' }),
+      priorApplied: prior,
+    }, { previous_dispatch_id: 'sol-low-1' }),
     (error) => error.code === 'UNVERIFIED_RECEIPT',
   );
   assert.equal(codex('review-fix', { signatureState: 'flake' }).logical_rung, 'base');
@@ -306,14 +515,14 @@ test('direct policy repair resolution fails closed without boundary provenance',
   assert.throws(
     () => codex('ci-fix', {
       signatureState: 'repeat_exhausted',
-      priorApplied: luna,
-    }, { previous_dispatch_id: 'luna-1' }),
+      priorApplied: prior,
+    }, { previous_dispatch_id: 'sol-low-1' }),
     (error) => error.code === 'UNVERIFIED_RECEIPT',
   );
   assert.throws(
     () => codex('ci-fix', {
       signatureState: 'repeat',
-      priorApplied: { model: 'gpt-6-luna', effort: 'max', dispatchId: 'forged' },
+      priorApplied: { model: 'gpt-6.1-sol', effort: 'low', dispatchId: 'forged' },
     }, { previous_dispatch_id: 'forged' }),
     (error) => error.code === 'MISSING_RECEIPT' || error.code === 'UNVERIFIED_RECEIPT',
   );
@@ -323,9 +532,9 @@ test('matching overrides are harmless but conflicting or unsupported selections 
   const matching = codex('executor', {
     risk: 'high',
   }, {
-    override: { model: 'gpt-6-luna', effort: 'max', runtime: 'codex' },
+    override: { model: 'gpt-6.1-sol', effort: 'low', runtime: 'codex' },
   });
-  assert.equal(matching.model, 'gpt-6-luna');
+  assert.deepStrictEqual([matching.model, matching.effort], ['gpt-6.1-sol', 'low']);
   assert.throws(
     () => codex('executor', {}, { override: { model: 'gpt-5.6-luna' } }),
     (error) => error.code === 'CONFLICTING_OVERRIDE',
@@ -335,7 +544,7 @@ test('matching overrides are harmless but conflicting or unsupported selections 
     (error) => error.code === 'CONFLICTING_OVERRIDE',
   );
   assert.throws(
-    () => codex('executor', {}, { override: { effort: 'low' } }),
+    () => codex('executor', {}, { override: { effort: 'high' } }),
     (error) => error.code === 'CONFLICTING_OVERRIDE',
   );
   assert.throws(
@@ -363,7 +572,7 @@ test('matching overrides are harmless but conflicting or unsupported selections 
     () => policy.resolveDispatch({
       runtime: 'codex',
       role: 'executor',
-      model: 'gpt-6-luna',
+      model: 'gpt-6.1-sol',
       requested_model: 'gpt-6-astra',
     }),
     (error) => error.code === 'CONFLICTING_OVERRIDE',
@@ -372,8 +581,8 @@ test('matching overrides are harmless but conflicting or unsupported selections 
     () => policy.resolveDispatch({
       runtime: 'codex',
       role: 'executor',
-      effort: 'max',
-      requested_effort: 'low',
+      effort: 'low',
+      requested_effort: 'high',
     }),
     (error) => error.code === 'CONFLICTING_OVERRIDE',
   );
@@ -450,16 +659,16 @@ test('resolution validation covers rung index and every signal-reason field', ()
 });
 
 test('direct repair resolution does not accept caller-owned receipt evidence', () => {
-  const priorApplied = priorReceipt('ci-fix', 'gpt-6-luna', 'max', 'luna-owned-by-caller');
+  const priorApplied = priorReceipt('ci-fix', 'gpt-6.1-sol', 'low', 'sol-low-owned-by-caller');
   assert.equal(Object.isFrozen(priorApplied), false);
   assert.throws(
-    () => codex('ci-fix', { signatureState: 'repeat', priorApplied }, { previous_dispatch_id: 'luna-owned-by-caller' }),
+    () => codex('ci-fix', { signatureState: 'repeat', priorApplied }, { previous_dispatch_id: 'sol-low-owned-by-caller' }),
     (error) => error.code === 'UNVERIFIED_RECEIPT',
   );
 });
 
 test('internal resolver rejects a receipt-shaped copy without durable boundary identity', () => {
-  const priorApplied = priorReceipt('ci-fix', 'gpt-6-luna', 'max', 'forged-internal-receipt');
+  const priorApplied = priorReceipt('ci-fix', 'gpt-6.1-sol', 'low', 'forged-internal-receipt');
   assert.throws(
     () => canonicalInternalPolicy.resolveDispatch({
       runtime: 'codex',
@@ -473,7 +682,7 @@ test('internal resolver rejects a receipt-shaped copy without durable boundary i
 
 test('public resolver rejects caller-supplied receipt verifiers', () => {
   let verifierCalled = false;
-  const priorApplied = priorReceipt('ci-fix', 'gpt-6-luna', 'max', 'caller-forged');
+  const priorApplied = priorReceipt('ci-fix', 'gpt-6.1-sol', 'low', 'caller-forged');
   assert.throws(
     () => policy.resolveDispatch(
       {
@@ -514,65 +723,65 @@ test('runtime catalog and internal CLI reject inherited or receipt-free selectio
 
 test('canonical policy ignores caller mutation attempts against runtime adapter exports', () => {
   const originalAdapterForRuntime = runtimeAdapters.adapterForRuntime;
-  const originalCodexLuna = runtimeAdapters.CODEX_MODEL_IDS.luna;
+  const originalCodexSol = runtimeAdapters.CODEX_MODEL_IDS.sol;
   try {
     runtimeAdapters.adapterForRuntime = () => ({ modelFor: () => 'caller-controlled-model' });
-    runtimeAdapters.CODEX_MODEL_IDS.luna = 'caller-controlled-model';
+    runtimeAdapters.CODEX_MODEL_IDS.sol = 'caller-controlled-model';
   } catch (error) {
     // Frozen compatibility exports are the expected protection.
   }
   const result = codex('executor');
-  assert.equal(result.model, 'gpt-6-luna');
+  assert.equal(result.model, 'gpt-6.1-sol');
   assert.equal(runtimeAdapters.adapterForRuntime, originalAdapterForRuntime);
-  assert.equal(runtimeAdapters.CODEX_MODEL_IDS.luna, originalCodexLuna);
+  assert.equal(runtimeAdapters.CODEX_MODEL_IDS.sol, originalCodexSol);
 });
 
 test('exhaustive runtime matrix covers every native base tuple and scoped escalation rung', () => {
   const base = {
     codex: {
-      research: ['gpt-6-sol', 'high'],
-      decomposition: ['gpt-6-sol', 'high'],
-      executor: ['gpt-6-luna', 'max'],
+      research: ['gpt-6.1-sol', 'high'],
+      decomposition: ['gpt-6.1-sol', 'high'],
+      executor: ['gpt-6.1-sol', 'low'],
       'pr-sentinel': ['gpt-6-luna', 'medium'],
-      integrator: ['gpt-6-sol', 'high'],
-      'drift-check': ['gpt-6-luna', 'max'],
-      'arch-review': ['gpt-6-sol', 'high'],
-      'ci-fix': ['gpt-6-luna', 'max'],
-      'review-fix': ['gpt-6-luna', 'max'],
+      integrator: ['gpt-6.1-sol', 'high'],
+      'drift-check': ['gpt-6.1-sol', 'low'],
+      'arch-review': ['gpt-6.1-sol', 'high'],
+      'ci-fix': ['gpt-6.1-sol', 'low'],
+      'review-fix': ['gpt-6.1-sol', 'low'],
     },
     claude: {
-      research: ['claude-opus-5-5', 'medium'],
-      decomposition: ['claude-opus-5-5', 'medium'],
-      executor: ['sonnet', 'max'],
-      'pr-sentinel': ['sonnet', 'high'],
-      integrator: ['claude-opus-5-5', 'medium'],
-      'drift-check': ['claude-opus-5-5', 'high'],
-      'arch-review': ['claude-opus-5-5', 'medium'],
-      'ci-fix': ['claude-opus-5-5', 'medium'],
-      'review-fix': ['claude-opus-5-5', 'medium'],
+      research: ['claude-sonnet-5-5', 'xhigh'],
+      decomposition: ['claude-sonnet-5-5', 'xhigh'],
+      executor: ['claude-sonnet-5-5', 'medium'],
+      'pr-sentinel': ['claude-sonnet-5-5', 'low'],
+      integrator: ['claude-sonnet-5-5', 'xhigh'],
+      'drift-check': ['claude-sonnet-5-5', 'medium'],
+      'arch-review': ['claude-sonnet-5-5', 'xhigh'],
+      'ci-fix': ['claude-sonnet-5-5', 'high'],
+      'review-fix': ['claude-sonnet-5-5', 'high'],
     },
   };
   const escalations = [
-    ['codex', 'research', { type: 'alternatives' }, 'base', 'gpt-6-sol', 'high'],
-    ['codex', 'research', { complexity: 'very-complex' }, 'very-complex', 'gpt-6-sol', 'xhigh'],
-    ['codex', 'decomposition', { critical: true }, 'critical', 'gpt-6-sol', 'xhigh'],
-    ['codex', 'decomposition', { checkpoint: true }, 'critical', 'gpt-6-sol', 'xhigh'],
-    ['codex', 'executor', { critical: true }, 'critical', 'gpt-6-sol', 'high'],
-    ['codex', 'executor', { checkpoint: true }, 'critical', 'gpt-6-sol', 'high'],
-    ['codex', 'integrator', { critical: true }, 'critical', 'gpt-6-sol', 'xhigh'],
-    ['codex', 'integrator', { checkpoint: true }, 'critical', 'gpt-6-sol', 'xhigh'],
-    ['codex', 'integrator', { contested: true }, 'critical', 'gpt-6-sol', 'xhigh'],
-    ['codex', 'integrator', { inputTokens: policy.WINDOW_THRESHOLD_TOKENS + 1 }, 'critical', 'gpt-6-sol', 'xhigh'],
-    ['codex', 'arch-review', { critical: true }, 'critical', 'gpt-6-sol', 'xhigh'],
-    ['codex', 'arch-review', { checkpoint: true }, 'critical', 'gpt-6-sol', 'xhigh'],
-    ['codex', 'arch-review', { contested: true }, 'critical', 'gpt-6-sol', 'xhigh'],
-    ['codex', 'arch-review', { inputTokens: policy.WINDOW_THRESHOLD_TOKENS + 1 }, 'critical', 'gpt-6-sol', 'xhigh'],
-    ['claude', 'research', { type: 'alternatives' }, 'base', 'claude-opus-5-5', 'medium'],
+    ['codex', 'research', { type: 'alternatives' }, 'base', 'gpt-6.1-sol', 'high'],
+    ['codex', 'research', { complexity: 'very-complex' }, 'very-complex', 'gpt-6.1-sol', 'xhigh'],
+    ['codex', 'decomposition', { critical: true }, 'critical', 'gpt-6.1-sol', 'xhigh'],
+    ['codex', 'decomposition', { checkpoint: true }, 'critical', 'gpt-6.1-sol', 'xhigh'],
+    ['codex', 'executor', { critical: true }, 'critical', 'gpt-6.1-sol', 'high'],
+    ['codex', 'executor', { checkpoint: true }, 'critical', 'gpt-6.1-sol', 'high'],
+    ['codex', 'integrator', { critical: true }, 'critical', 'gpt-6.1-sol', 'xhigh'],
+    ['codex', 'integrator', { checkpoint: true }, 'critical', 'gpt-6.1-sol', 'xhigh'],
+    ['codex', 'integrator', { contested: true }, 'critical', 'gpt-6.1-sol', 'xhigh'],
+    ['codex', 'integrator', { inputTokens: policy.WINDOW_THRESHOLD_TOKENS + 1 }, 'critical', 'gpt-6.1-sol', 'xhigh'],
+    ['codex', 'arch-review', { critical: true }, 'critical', 'gpt-6.1-sol', 'xhigh'],
+    ['codex', 'arch-review', { checkpoint: true }, 'critical', 'gpt-6.1-sol', 'xhigh'],
+    ['codex', 'arch-review', { contested: true }, 'critical', 'gpt-6.1-sol', 'xhigh'],
+    ['codex', 'arch-review', { inputTokens: policy.WINDOW_THRESHOLD_TOKENS + 1 }, 'critical', 'gpt-6.1-sol', 'xhigh'],
+    ['claude', 'research', { type: 'alternatives' }, 'base', 'claude-sonnet-5-5', 'xhigh'],
     ['claude', 'research', { complexity: 'very-complex' }, 'very-complex', 'claude-opus-5-5', 'high'],
     ['claude', 'decomposition', { critical: true }, 'critical', 'claude-opus-5-5', 'high'],
     ['claude', 'decomposition', { checkpoint: true }, 'critical', 'claude-opus-5-5', 'high'],
-    ['claude', 'executor', { critical: true }, 'critical', 'claude-opus-5-5', 'low'],
-    ['claude', 'executor', { checkpoint: true }, 'critical', 'claude-opus-5-5', 'low'],
+    ['claude', 'executor', { critical: true }, 'critical', 'claude-sonnet-5-5', 'xhigh'],
+    ['claude', 'executor', { checkpoint: true }, 'critical', 'claude-sonnet-5-5', 'xhigh'],
     ['claude', 'integrator', { critical: true }, 'critical', 'claude-opus-5-5', 'high'],
     ['claude', 'integrator', { checkpoint: true }, 'critical', 'claude-opus-5-5', 'high'],
     ['claude', 'integrator', { contested: true }, 'critical', 'claude-opus-5-5', 'high'],
@@ -695,8 +904,8 @@ test('global promotion cannot move fixed native roles off their base tuple', () 
     inputTokens: policy.WINDOW_THRESHOLD_TOKENS + 1,
   };
   for (const [runtime, expected] of [
-    ['codex', { 'pr-sentinel': ['gpt-6-luna', 'medium'], 'drift-check': ['gpt-6-luna', 'max'] }],
-    ['claude', { 'pr-sentinel': ['sonnet', 'high'], 'drift-check': ['claude-opus-5-5', 'high'] }],
+    ['codex', { 'pr-sentinel': ['gpt-6-luna', 'medium'], 'drift-check': ['gpt-6.1-sol', 'low'] }],
+    ['claude', { 'pr-sentinel': ['claude-sonnet-5-5', 'low'], 'drift-check': ['claude-sonnet-5-5', 'medium'] }],
   ]) {
     for (const [role, [model, effort]] of Object.entries(expected)) {
       const result = policy.resolveDispatch({ runtime, role, signals });
@@ -710,8 +919,8 @@ test('global promotion cannot move fixed native roles off their base tuple', () 
 
 test('all override sources reject conflicting, unsupported, inline, and inherited selections', () => {
   for (const [runtime, expected] of [
-    ['codex', { model: 'gpt-6-luna', otherModel: 'gpt-6-astra', effort: 'max', otherEffort: 'low' }],
-    ['claude', { model: 'sonnet', otherModel: 'claude-opus-5-5', effort: 'max', otherEffort: 'high' }],
+    ['codex', { model: 'gpt-6.1-sol', otherModel: 'gpt-6-astra', effort: 'low', otherEffort: 'high' }],
+    ['claude', { model: 'claude-sonnet-5-5', otherModel: 'claude-opus-5-5', effort: 'medium', otherEffort: 'xhigh' }],
   ]) {
     const base = { runtime, role: 'executor', signals: {} };
     for (const [source, value] of [

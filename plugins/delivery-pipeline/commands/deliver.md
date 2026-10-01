@@ -294,7 +294,7 @@ SENTINEL    ci-fix / base-merge / review-fix / arch-review / undraft / merge
   The entry point runs the sentinel preflight first and then starts the selected
   runtime's host itself. For Claude that is one phase-scoped
   `claude-role-host.cjs` round; the host derives the live PR set from the
-  canonical graph and GitHub, resolves Sonnet/high through ADR-014, and reserves
+  canonical graph and GitHub, resolves Sonnet/low through ADR-014, and reserves
   one authenticated round before starting the model. Do not construct a
   caller-owned member list, write a request file, or call native Workflow for
   this shared role. The boundary receipt and complete transcript are validated
@@ -412,7 +412,9 @@ undocumented escalation.
 
 ### Codex policy and generated files
 
-Codex uses the logical model ladder below. The concrete model and effort come
+Codex uses the logical model ladder below: Sol is `gpt-6.1-sol` and Luna is
+`gpt-6-luna`. Claude Sonnet is `claude-sonnet-5-5` and Opus is
+`claude-opus-5-5`. The concrete model and effort come
 from the selector; do not paste fallback values into a launch. `codex-agent.cjs
 select <role> --json --capabilities-file <current-host-capabilities.json>
 --project-dir <project>` requires current host capabilities and returns the
@@ -425,13 +427,13 @@ to bypass the boundary or to launch a different file.
 | --- | --- | --- | --- |
 | `research` | Sol/high | `complexity: very-complex` → Sol/xhigh; `type: alternatives` alone stays at base | generated `shipyard-inv-research.toml`, `shipyard-inv-research-critical.toml` |
 | `decomposition` | Sol/high | `critical` or `checkpoint` → Sol/xhigh | explicit model + `reasoning_effort` |
-| `executor` | Luna/max | `critical` or `checkpoint` → Sol/high | explicit model + `reasoning_effort` |
+| `executor` | Sol/low | `critical` or `checkpoint` → Sol/high | explicit model + `reasoning_effort` |
 | `pr-sentinel` | Luna/medium | none; gate strategy only | generated `shipyard-pr-sentinel.toml` |
-| `drift-check` | Luna/max | none; gate strategy only | generated `shipyard-drift-check.toml` |
+| `drift-check` | Sol/low | none; gate strategy only | generated `shipyard-drift-check.toml` |
 | `integrator` | Sol/high | measured window, `contested`, `critical`, or `checkpoint` → Sol/xhigh | generated `shipyard-integrator.toml` or `shipyard-integrator-critical.toml` |
 | `arch-review` | Sol/high | measured window, `contested`, `critical`, or `checkpoint` → Sol/xhigh | generated `shipyard-arch-review.toml` or `shipyard-arch-review-critical.toml` |
-| `ci-fix` | Luna/max | verified `repeat` → Sol/high → verified `repeat_exhausted` → Sol/xhigh | generated `shipyard-ci-fix.toml`, `shipyard-ci-fix-repeat.toml`, `shipyard-ci-fix-deep.toml` |
-| `review-fix` | Luna/max | verified `repeat` → Sol/high → verified `repeat_exhausted` → Sol/xhigh | generated `shipyard-review-fix.toml`, `shipyard-review-fix-repeat.toml`, `shipyard-review-fix-deep.toml` |
+| `ci-fix` | Sol/low | verified `repeat` → Sol/high → verified `repeat_exhausted` → Sol/xhigh | generated `shipyard-ci-fix.toml`, `shipyard-ci-fix-repeat.toml`, `shipyard-ci-fix-deep.toml` |
+| `review-fix` | Sol/low | verified `repeat` → Sol/high → verified `repeat_exhausted` → Sol/xhigh | generated `shipyard-review-fix.toml`, `shipyard-review-fix-repeat.toml`, `shipyard-review-fix-deep.toml` |
 
 The Codex dynamic roles are `decomposition` and `executor`; both have
 `agent_file: null` and receive their selected concrete `model` and `effort`
@@ -453,14 +455,14 @@ for that exact pair:
 
 | Role | Base | Evidence-based escalation |
 | --- | --- | --- |
-| `research` | Opus/medium | `very-complex` → Opus/high; `alternatives` is inert |
-| `decomposition` | Opus/medium | `critical` or `checkpoint` → Opus/high |
-| `executor` | Sonnet/max | `critical` or `checkpoint` → Opus/low |
-| `pr-sentinel` | Sonnet/high | none |
-| `drift-check` | Opus/high | none |
-| `integrator` | Opus/medium | measured window, `contested`, `critical`, or `checkpoint` → Opus/high |
-| `arch-review` | Opus/medium | critical/contested/checkpoint → Opus/high; measured window → Fable/medium |
-| `ci-fix` / `review-fix` | Opus/medium | verified `repeat` or `repeat_exhausted` → Opus/high |
+| `research` | Sonnet/xhigh | `very-complex` → Opus/high; `alternatives` is inert |
+| `decomposition` | Sonnet/xhigh | `critical` or `checkpoint` → Opus/high |
+| `executor` | Sonnet/medium | `critical` or `checkpoint` → Sonnet/xhigh |
+| `pr-sentinel` | Sonnet/low | none |
+| `drift-check` | Sonnet/medium | none |
+| `integrator` | Sonnet/xhigh | measured window, `contested`, `critical`, or `checkpoint` → Opus/high |
+| `arch-review` | Sonnet/xhigh | critical/contested/checkpoint → Opus/high; measured window → Fable/medium |
+| `ci-fix` / `review-fix` | Sonnet/high | verified `repeat` → Sonnet/xhigh → verified `repeat_exhausted` → Opus/high |
 
 Only the selected runtime host may launch a model. Claude's host applies its
 resolved Anthropic alias and effort; Codex's host applies the generated static
@@ -1556,7 +1558,7 @@ host-owned. Codex uses `codex-delivery-host.cjs --args-file` with role
 `drift-check`; its adapter selects and validates the generated
 `shipyard-drift-check.toml` through the same boundary.
 
-`drift-check` is fixed at Codex Luna/max and Claude Opus/high; risk, checkpoint,
+`drift-check` is fixed at Codex Sol/low and Claude Sonnet/medium; risk, checkpoint,
 window size, and other global context are retained as evidence but cannot
 promote it. The returned receipt must be `verified` before the drift result is
 accepted. On Codex the boundary validates the generated
@@ -1759,9 +1761,9 @@ may be dispatched at all: fix the file.
    delivers the verified plan content (and any named `.planning/` file, under
    that same digest) to the executor itself (D-43). There is nothing left here
    to tell the orchestrator to copy `.planning/` into the worktree for. The
-   executor resolves to Codex Luna/max or, only for explicit
+   executor resolves to Codex Sol/low or, only for explicit
    `critical`/`checkpoint` evidence, Sol/high. Claude uses its independent
-   Sonnet/max or evidence-based Opus/low native selection.
+   Sonnet/medium or evidence-based Sonnet/xhigh native selection.
 
    The packet builder reads each required source completely, stores SHA-256 identity
    and selected backlog source hashes, and records the `ceil(UTF-8 bytes / 4)`
@@ -2110,7 +2112,7 @@ File conflicts between parallel tickets are ruled out by Gate 2.
 As soon as Phase C has opened PRs, launch the guard and return to Step 3 for
 the cascade (see "The PR sentinel" above). Claude's `pr-sentinel` request is
 host-owned: `claude-role-host.cjs` derives the phase's exact open PR set, creates
-the `round:<digest>` subject, resolves the fixed Sonnet/high selection, and
+the `round:<digest>` subject, resolves the fixed Sonnet/low selection, and
 crosses resolve → validate → launch → receipt. It reserves one shared identity
 before launch so `front` and the stop gate see the guard while it runs. On
 successful completion the host replaces that reservation with one authenticated
@@ -2267,7 +2269,7 @@ loop:
          The boundary validates the ordered receipt chain. Codex uses the generated
          `shipyard-ci-fix.toml` → `shipyard-ci-fix-repeat.toml` →
          `shipyard-ci-fix-deep.toml` files for base → verified `repeat` →
-         verified `repeat_exhausted`; Claude uses Opus/medium → Opus/high with
+         verified `repeat_exhausted`; Claude uses Sonnet/high → Sonnet/xhigh → Opus/high with
          explicit native effort. A repeat is refused without the prior receipt,
          and another failure after the ceiling is a human escalation, not an
          undocumented third launch. The host must carry the resolved selection;
@@ -2319,7 +2321,7 @@ loop:
 
        Codex uses `shipyard-review-fix.toml` →
        `shipyard-review-fix-repeat.toml` → `shipyard-review-fix-deep.toml`
-       for the verified repair chain; Claude uses Opus/medium → Opus/high with
+       for the verified repair chain; Claude uses Sonnet/high → Sonnet/xhigh → Opus/high with
        explicit native effort. The boundary receipt is required before the
        fixer may push or the attempt may be recorded. An inline, inherited,
        literal-model, or omitted-effort fallback is refused. Require a typed
@@ -2366,7 +2368,7 @@ loop:
      Codex's generated `shipyard-arch-review.toml` and
      `shipyard-arch-review-critical.toml` files do not establish this evidence
      contract.
-     Claude's host independently resolves Opus/medium, Opus/high for critical evidence,
+     Claude's host independently resolves Sonnet/xhigh, Opus/high for critical evidence,
      or Fable/medium for the measured ceiling, always with explicit effort.
      Record the verdict only after the boundary receipt is verified; a missing
      measurement, typed host, or documented escalation is a
@@ -2906,7 +2908,7 @@ driving PRs hands the user a half-truth.
      Codex's host resolves Sol/high and escalates to Sol/xhigh only for the
      measured-window, contested, critical, or checkpoint evidence, validating
      `shipyard-integrator.toml` or `shipyard-integrator-critical.toml`.
-     Claude's host independently resolves Opus/medium or Opus/high with explicit
+     Claude's host independently resolves Sonnet/xhigh or Opus/high with explicit
      effort. The receipt must be verified before accepting
      `.planning/phases/<phase>/INTEGRATION.md` or
      `passed`/`needs-fix`; no literal model, omitted effort, inherited session,

@@ -689,7 +689,8 @@ test('reconciliation compares outer and joined observations with an unknown-obse
             values.observed_model = 'unknown';
             values.observed_effort = 'unknown';
           } else if (state.endsWith('contradictory')) {
-            values[field] = field === 'observed_model' ? 'different-provider-model' : 'low';
+            values[field] = field === 'observed_model' ? 'different-provider-model'
+              : receipt.applied_effort === 'low' ? 'high' : 'low';
             if (state === 'partial-contradictory') {
               values[field === 'observed_model' ? 'observed_effort' : 'observed_model'] = 'unknown';
             }
@@ -1529,9 +1530,9 @@ test('Codex and Claude retain separate concrete model palettes in policy dimensi
   ]);
   assert.deepEqual(summary.by_runtime, { claude: 1, codex: 1 });
   assert.deepEqual(summary.by_rung, { 'very-complex': 1, critical: 1 });
-  assert.equal(summary.by_concrete_model['gpt-6-sol'], 1);
+  assert.equal(summary.by_concrete_model['gpt-6.1-sol'], 1);
   assert.equal(summary.by_concrete_model['claude-opus-5-5'], 1);
   assert.equal(summary.by_concrete_model.astra, undefined);
   assert.equal(claude.requested_model, 'claude-opus-5-5', 'Claude keeps its native Opus ID');
-  assert.equal(codex.requested_model, 'gpt-6-sol', 'Codex uses its concrete Sol id');
+  assert.equal(codex.requested_model, 'gpt-6.1-sol', 'Codex uses its concrete Sol id');
 });

@@ -68,7 +68,7 @@ test('wait, wake, retry and complete replay idempotently', () => {
     assert.equal(unavailable.state, 'runtime_unavailable');
     assert.equal(unavailable.run.runtime.runtime, 'claude');
     assert.equal(unavailable.run.runtime.provider, 'anthropic');
-    assert.equal(unavailable.run.dispatch.model, 'sonnet');
+    assert.equal(unavailable.run.dispatch.model, 'claude-sonnet-5-5');
     assert.equal(runController.retry(run.run_id, { event_id: 'retry-1', target_state: 'runtime_unavailable', reason: 'Claude host unavailable', delay_ms: 10 }).idempotent, true);
     assert.throws(() => runController.wake(run.run_id, { event_id: 'wake-2' }), (error) => error.code === 'RETRY_NOT_DUE');
     now = 1010;
@@ -94,7 +94,7 @@ test('runtime unavailability records a bounded machine retry without switching r
     assert.match(parked.status.retry.condition, /^retry-at:/);
     assert.equal(parked.run.runtime.runtime, 'claude');
     assert.equal(parked.run.runtime.provider, 'anthropic');
-    assert.equal(parked.run.dispatch.model, 'sonnet');
+    assert.equal(parked.run.dispatch.model, 'claude-sonnet-5-5');
     assert.equal(parked.run.dispatch.effort, 'max');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });

@@ -33,7 +33,7 @@ const SCOPE = {
 };
 
 const capabilities = {
-  supportedModels: ['gpt-6-luna', 'gpt-6-sol', 'gpt-6-astra'],
+  supportedModels: ['gpt-6-luna', 'gpt-6.1-sol', 'gpt-6-sol', 'gpt-6-astra'],
   supportedEfforts: EFFORTS,
   observedModel: true,
   observedEffort: true,
@@ -104,7 +104,7 @@ function probe() {
   };
 }
 
-function staticContent(resolution = { model: 'gpt-6-sol', effort: 'high' }) {
+function staticContent(resolution = { model: 'gpt-6.1-sol', effort: 'high' }) {
   return [
     '# shipyard-policy-id = "' + policy.POLICY.id + '"',
     '# shipyard-policy-version = "' + policy.POLICY_VERSION + '"',
@@ -365,14 +365,14 @@ test('static launcher consumes the immutable generated instructions', async () =
       env: { CODEX_HOME: codeHome },
       spawn: (_executable, args, options) => {
         assert.ok(args.includes('--model'));
-        writeSession(options.env.CODEX_HOME, '33333333-3333-4333-8333-333333333333', 'gpt-6-sol', 'high');
+        writeSession(options.env.CODEX_HOME, '33333333-3333-4333-8333-333333333333', 'gpt-6.1-sol', 'high');
         return childFor(stream('33333333-3333-4333-8333-333333333333'), 0, 24039, input);
       },
     });
     const content = staticContent();
     const digest = crypto.createHash('sha256').update(content).digest('hex');
     await launch('ticket contract', {
-      model: 'gpt-6-sol',
+      model: 'gpt-6.1-sol',
       effort: 'high',
       sandbox_mode: 'read-only',
       agent_file: 'shipyard-inv-research.toml',
@@ -383,7 +383,7 @@ test('static launcher consumes the immutable generated instructions', async () =
     assert.ok(input.join('').startsWith('Follow the scoped research contract.'));
     await assert.rejects(
       () => launch('ticket contract', {
-        model: 'gpt-6-sol',
+        model: 'gpt-6.1-sol',
         effort: 'high',
         sandbox_mode: 'read-only',
         agent_file: 'shipyard-inv-research.toml',
@@ -415,7 +415,7 @@ test('read-only judgment roles can write only their evidence file', async () => 
         const session = count++ === 0
           ? '44444444-4444-4444-8444-444444444444'
           : '55555555-5555-4555-8555-555555555555';
-        writeSession(options.env.CODEX_HOME, session, 'gpt-6-sol', 'high');
+        writeSession(options.env.CODEX_HOME, session, 'gpt-6.1-sol', 'high');
         return childFor(stream(session), 0, 24040 + count, []);
       },
     });
@@ -424,7 +424,7 @@ test('read-only judgment roles can write only their evidence file', async () => 
       ['shipyard-arch-review-critical.toml', '.shipyard-arch-review-evidence.md'],
     ]) {
       const result = await launch('judge', {
-        model: 'gpt-6-sol', effort: 'high', sandbox_mode: 'read-only',
+        model: 'gpt-6.1-sol', effort: 'high', sandbox_mode: 'read-only',
         agent_file: agentFile, agent_file_digest: digest, agent_file_content: content,
         dispatch_id: 'dispatch-evidence-' + count,
       });
@@ -435,7 +435,7 @@ test('read-only judgment roles can write only their evidence file', async () => 
     }
     fs.symlinkSync(path.join(root, 'outside'), path.join(root, '.shipyard-drift-evidence.md'));
     await assert.rejects(() => launch('judge', {
-      model: 'gpt-6-sol', effort: 'high', sandbox_mode: 'read-only',
+      model: 'gpt-6.1-sol', effort: 'high', sandbox_mode: 'read-only',
       agent_file: 'shipyard-drift-check.toml', agent_file_digest: digest,
       agent_file_content: content, dispatch_id: 'dispatch-evidence-symlink',
     }), (error) => error.code === 'INVALID_INPUT');
@@ -504,6 +504,7 @@ test('probe requires the real CLI surface and explicit host capability evidence'
   assert.equal(result.runtime_version, 'codex-cli 0.155.1');
   assert.deepEqual(calls, [['codex', ['--version']], ['codex', ['exec', '--help']]]);
   const missing = probeCodexRuntime({
+    capabilities: null,
     spawnSync: () => ({ status: 1, stdout: '', stderr: 'not found' }),
   });
   assert.equal(missing.status, 'unavailable');
@@ -537,8 +538,8 @@ test('launchAgent sends dynamic selection through the adapter boundary', () => {
       context: { prompt: 'execute the scoped ticket' },
     });
     assert.equal(result.receipt.compliance, 'verified');
-    assert.equal(result.receipt.applied_model, 'gpt-6-luna');
-    assert.equal(result.receipt.applied_effort, 'max');
+    assert.equal(result.receipt.applied_model, 'gpt-6.1-sol');
+    assert.equal(result.receipt.applied_effort, 'low');
     assert.equal(result.receipt.launch_id, 'host-launch-1');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });

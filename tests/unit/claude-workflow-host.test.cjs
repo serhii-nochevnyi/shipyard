@@ -28,14 +28,14 @@ const {
 
 const CAPABILITIES = Object.freeze({
   supportedModels: [CLAUDE_MODEL_ALIASES.sonnet],
-  supportedEfforts: ['max'],
+  supportedEfforts: ['medium'],
   observedModel: true,
   observedEffort: true,
 });
 
-const OPUS_CAPABILITIES = Object.freeze({
-  supportedModels: [CLAUDE_MODEL_ALIASES.opus],
-  supportedEfforts: ['medium'],
+const PLANNING_CAPABILITIES = Object.freeze({
+  supportedModels: [CLAUDE_MODEL_ALIASES.sonnet],
+  supportedEfforts: ['xhigh'],
   observedModel: true,
   observedEffort: true,
 });
@@ -54,8 +54,7 @@ function capturedLines(rel) {
   return lines.slice(1);
 }
 
-function replayChild(rel, transform) {
-  const lines = capturedLines(rel);
+function replayChild(lines, transform) {
   const placeholder = JSON.parse(lines[0]).session_id;
   const child = new EventEmitter();
   child.stdout = new EventEmitter();
@@ -78,14 +77,36 @@ function withoutStructuredOutput(record) {
   return rest;
 }
 
+function syntheticCurrentPolicyReplay(options) {
+  return capturedLines(EXECUTOR_STREAM).map((line) => {
+    const record = JSON.parse(line);
+    if (record.type === 'system' && record.subtype === 'init') {
+      record.model = options.model;
+      record.effort = options.effort;
+    }
+    if (record.type === 'assistant') {
+      record.message.model = options.model;
+      record.effort = options.effort;
+    }
+    if (record.modelUsage) {
+      record.modelUsage = Object.fromEntries(Object.values(record.modelUsage).map((usage) => [
+        options.model, { ...usage, canonicalModel: options.model },
+      ]));
+    }
+    return JSON.stringify(record);
+  });
+}
+
 async function replayedHostResult(options, transform = (record) => record) {
+  const capturedBytes = fs.readFileSync(path.join(ROOT, EXECUTOR_STREAM));
+  const syntheticReplay = syntheticCurrentPolicyReplay(options);
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-claude-workflow-replay-'));
   const projects = path.join(root, 'projects');
   const transcript = path.join(projects, 'project-a', `${REPLAY_SESSION}.jsonl`);
   fs.mkdirSync(path.dirname(transcript), { recursive: true });
   fs.writeFileSync(transcript, `${JSON.stringify({
     type: 'assistant', sessionId: REPLAY_SESSION, effort: options.effort,
-    message: { role: 'assistant', model: 'claude-sonnet-5' },
+    message: { role: 'assistant', model: options.model },
   })}\n`);
   try {
     const launch = createClaudeCliLauncher({
@@ -102,13 +123,14 @@ async function replayedHostResult(options, transform = (record) => record) {
           hook_event_name: 'SessionStart', source: 'startup', session_id: value('--expected-session'),
           transcript_path: transcript, cwd: settings.sandbox.filesystem.allowWrite[0],
         }, { evidenceFile: value('--evidence-file'), expectedSession: value('--expected-session') });
-        return replayChild(EXECUTOR_STREAM, transform);
+        return replayChild(syntheticReplay, transform);
       },
     });
     const { applicationEvidence: _evidence, ...result } = await launch('host-bound prompt', { model: options.model, effort: options.effort });
     return result;
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
+    assert.deepEqual(fs.readFileSync(path.join(ROOT, EXECUTOR_STREAM)), capturedBytes);
   }
 }
 
@@ -124,7 +146,7 @@ test('fixed delivery and registered workflow names exclude named GSD dispatch', 
       agent: async () => { throw new Error('generic launch is unreachable'); },
       parallel: async (thunks) => Promise.all(thunks.map((thunk) => thunk())),
       typedGsdCallback: async () => { typedCalls++; throw new Error('typed launch is unreachable'); },
-      capabilities: OPUS_CAPABILITIES,
+      capabilities: PLANNING_CAPABILITIES,
       recorder: createDurableRecorder(path.join(root, 'receipts')),
       applicationEvidence: ({ result }) => result,
     });
@@ -146,8 +168,8 @@ return await parallel([async () => {
     agent,
     prompt: 'host-bound prompt',
     role: 'executor',
-    model: 'sonnet',
-    effort: 'max',
+    model: 'claude-sonnet-5-5',
+    effort: 'medium',
     context: { ticket: 'T-36-host-test' },
   })
   return { id: 'T-36-host-test', receipt: dispatched.receipt }
@@ -177,8 +199,8 @@ return await parallel([async () => {
     });
     assert.equal(calls, 1);
     assert.equal(value[0].receipt.compliance, 'verified');
-    assert.equal(value[0].receipt.applied_model, 'sonnet');
-    assert.equal(value[0].receipt.applied_effort, 'max');
+    assert.equal(value[0].receipt.applied_model, 'claude-sonnet-5-5');
+    assert.equal(value[0].receipt.applied_effort, 'medium');
     assert.ok(recorder.getVerifiedRecord(value[0].receipt.dispatch_id));
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
@@ -196,8 +218,8 @@ const dispatched = await __createClaudeWorkflowDispatch({
   agent,
   prompt: 'host-bound prompt',
   role: 'executor',
-  model: 'sonnet',
-  effort: 'max',
+  model: 'claude-sonnet-5-5',
+  effort: 'medium',
   context: { ticket: 'T-39-12' },
 })
 return dispatched.result
@@ -227,14 +249,14 @@ return dispatched.result
   }
 }
 
-test('a structured host output reaches the workflow as the agent result', async () => {
+test('a synthetic current-policy structured host output reaches the workflow as the agent result', async () => {
   const captured = JSON.parse(capturedLines(EXECUTOR_STREAM).at(-1)).structured_output;
   const result = await workflowResultFor((options) => replayedHostResult(options));
   assert.deepEqual(result, captured);
   assert.equal(result.status, 'committed');
 });
 
-test('a text host output keeps the host result unchanged', async () => {
+test('a synthetic current-policy text host output keeps the host result unchanged', async () => {
   const captured = JSON.parse(capturedLines(EXECUTOR_STREAM).at(-1)).result;
   const result = await workflowResultFor((options) => replayedHostResult(options, withoutStructuredOutput));
   assert.equal(result.status, 'completed');
@@ -255,8 +277,8 @@ test('production investigation entry point pins the research workflow and runs a
       constraints: 'constraints',
       risks: 'risks and unknowns',
     }[id],
-    model: 'claude-opus-5-5',
-    effort: 'medium',
+    model: 'claude-sonnet-5-5',
+    effort: 'xhigh',
     signals: id === 'alternatives' ? { type: 'alternatives' } : { type: 'facts' },
   }));
   try {
@@ -288,7 +310,7 @@ test('production investigation entry point pins the research workflow and runs a
       },
       parallel: async (thunks) => Promise.all(thunks.map((thunk) => thunk())),
       typedGsdCallback: async () => { typedCalls++; throw new Error('investigation cannot launch named GSD'); },
-      capabilities: OPUS_CAPABILITIES,
+      capabilities: PLANNING_CAPABILITIES,
       recorder,
       applicationEvidence: ({ result }) => evidence.get(result),
     }).run(args);
@@ -298,8 +320,8 @@ test('production investigation entry point pins the research workflow and runs a
     assert.equal(typedCalls, 0);
     for (const item of value) {
       assert.equal(item.receipt.compliance, 'verified');
-      assert.equal(item.receipt.applied_model, 'claude-opus-5-5');
-      assert.equal(item.receipt.applied_effort, 'medium');
+      assert.equal(item.receipt.applied_model, 'claude-sonnet-5-5');
+      assert.equal(item.receipt.applied_effort, 'xhigh');
       assert.ok(recorder.getVerifiedRecord(item.receipt.dispatch_id));
     }
   } finally {
@@ -360,8 +382,8 @@ return await __createClaudeWorkflowDispatch({
   agent,
   prompt: 'typed GSD prompt',
   role: 'decomposition',
-  model: 'claude-opus-5-5',
-  effort: 'medium',
+  model: 'claude-sonnet-5-5',
+  effort: 'xhigh',
   gsdRole: 'gsd-planner',
   context: { ticket: 'T-36-typed-host-test' },
 })
@@ -390,7 +412,7 @@ return await __createClaudeWorkflowDispatch({
         });
       },
       parallel: async (thunks) => Promise.all(thunks.map((thunk) => thunk())),
-      capabilities: OPUS_CAPABILITIES,
+      capabilities: PLANNING_CAPABILITIES,
       recorder,
       writerSession,
       runScope: { worktree, phase: 36 },
@@ -400,8 +422,8 @@ return await __createClaudeWorkflowDispatch({
     assert.equal(genericCalls, 0);
     assert.equal(value.receipt.gsd_role, 'gsd-planner');
     assert.equal(value.receipt.gsd_launch_mechanism, 'typed-gsd-callback');
-    assert.equal(value.receipt.applied_model, 'claude-opus-5-5');
-    assert.equal(value.receipt.applied_effort, 'medium');
+    assert.equal(value.receipt.applied_model, 'claude-sonnet-5-5');
+    assert.equal(value.receipt.applied_effort, 'xhigh');
     assert.ok(recorder.getVerifiedRecord(value.receipt.dispatch_id));
     lease.release(handle);
   } finally {
@@ -415,7 +437,7 @@ test('typed workflow refuses missing and script-supplied writer authority withou
   const recorder = createDurableRecorder(recorderDir);
   const scriptPath = path.join(root, 'workflow.mjs');
   const dispatch = (context) => `return await __createClaudeWorkflowDispatch({ agent, prompt: 'plan',
-    role: 'decomposition', model: 'claude-opus-5-5', effort: 'medium',
+    role: 'decomposition', model: 'claude-sonnet-5-5', effort: 'xhigh',
     gsdRole: 'gsd-planner', context: ${context} })\n`;
   const options = { scriptPath, agent: async () => { throw new Error('generic callback'); },
     parallel: async (thunks) => Promise.all(thunks.map((thunk) => thunk())),
@@ -423,7 +445,7 @@ test('typed workflow refuses missing and script-supplied writer authority withou
       launch_id: 'typed-authority', applied_model: selection.model, applied_effort: selection.effort,
       observed_model: selection.model, observed_effort: selection.effort,
       gsd_role: gsdRole, gsd_launch_mechanism: selection.gsd_launch_mechanism,
-    }), capabilities: OPUS_CAPABILITIES, recorder, applicationEvidence: ({ result }) => result };
+    }), capabilities: PLANNING_CAPABILITIES, recorder, applicationEvidence: ({ result }) => result };
   try {
     fs.writeFileSync(scriptPath, dispatch('{ ticket: "T-45-16" }'));
     await assert.rejects(runClaudeWorkflow(options), { code: 'WRITER_FENCED' });
@@ -452,7 +474,7 @@ test('typed workflow checks host lease takeover and foreign edits before recordi
       const recorderDir = path.join(root, 'receipts');
       const scriptPath = path.join(root, 'workflow.mjs');
       fs.writeFileSync(scriptPath, `return await __createClaudeWorkflowDispatch({ agent,
-        prompt: 'plan', role: 'decomposition', model: 'claude-opus-5-5', effort: 'medium',
+        prompt: 'plan', role: 'decomposition', model: 'claude-sonnet-5-5', effort: 'xhigh',
         gsdRole: 'gsd-planner', context: { ticket: 'T-45-16' } })\n`);
       await assert.rejects(runClaudeWorkflow({ scriptPath,
         agent: async () => { throw new Error('generic callback'); },
@@ -465,7 +487,7 @@ test('typed workflow checks host lease takeover and foreign edits before recordi
             observed_effort: selection.effort, gsd_role: gsdRole,
             gsd_launch_mechanism: selection.gsd_launch_mechanism,
             output: { changed_paths: [] } });
-        }, capabilities: OPUS_CAPABILITIES, recorder: createDurableRecorder(recorderDir),
+        }, capabilities: PLANNING_CAPABILITIES, recorder: createDurableRecorder(recorderDir),
         writerSession, runScope: { worktree, phase: 45 }, applicationEvidence: ({ result }) => result,
       }), { code: mode === 'takeover' ? 'WRITER_FENCED' : 'FOREIGN_EDIT' });
       assert.equal(fs.readdirSync(recorderDir).filter((name) => name.startsWith('record-')).length, 0);
@@ -490,7 +512,7 @@ test('typed workflow refuses a phase symlink escaping the scoped worktree', asyn
     const recorderDir = path.join(root, 'receipts');
     const scriptPath = path.join(root, 'workflow.mjs');
     fs.writeFileSync(scriptPath, `return await __createClaudeWorkflowDispatch({ agent,
-      prompt: 'plan', role: 'decomposition', model: 'claude-opus-5-5', effort: 'medium',
+      prompt: 'plan', role: 'decomposition', model: 'claude-sonnet-5-5', effort: 'xhigh',
       gsdRole: 'gsd-planner', context: { ticket: 'T-45-16' } })\n`);
     await assert.rejects(runClaudeWorkflow({ scriptPath,
       agent: async () => { throw new Error('generic callback'); },
@@ -500,7 +522,7 @@ test('typed workflow refuses a phase symlink escaping the scoped worktree', asyn
         applied_effort: selection.effort, observed_model: selection.model,
         observed_effort: selection.effort, gsd_role: gsdRole,
         gsd_launch_mechanism: selection.gsd_launch_mechanism,
-      }), capabilities: OPUS_CAPABILITIES, recorder: createDurableRecorder(recorderDir),
+      }), capabilities: PLANNING_CAPABILITIES, recorder: createDurableRecorder(recorderDir),
       runScope: { worktree }, writerSession, applicationEvidence: ({ result }) => result,
     }), { code: 'INVALID_HOST' });
     assert.equal(fs.readdirSync(recorderDir).filter((name) => name.startsWith('record-')).length, 0);
@@ -529,7 +551,7 @@ test('typed workflow refuses another in-tree phase and a mismatched typed declar
       const recorderDir = path.join(root, 'receipts');
       const scriptPath = path.join(root, 'workflow.mjs');
       fs.writeFileSync(scriptPath, `return await __createClaudeWorkflowDispatch({ agent,
-        prompt: 'plan', role: 'decomposition', model: 'claude-opus-5-5', effort: 'medium',
+        prompt: 'plan', role: 'decomposition', model: 'claude-sonnet-5-5', effort: 'xhigh',
         gsdRole: 'gsd-planner', context: { ticket: 'T-45-16' } })\n`);
       await assert.rejects(runClaudeWorkflow({ scriptPath,
         agent: async () => { throw new Error('generic callback'); },
@@ -539,7 +561,7 @@ test('typed workflow refuses another in-tree phase and a mismatched typed declar
           observed_model: selection.model, observed_effort: selection.effort,
           gsd_role: gsdRole, gsd_launch_mechanism: selection.gsd_launch_mechanism,
           output: { changed_paths: mode === 'output-mismatch' ? ['CONTEXT.md'] : [] },
-        }), capabilities: OPUS_CAPABILITIES, recorder: createDurableRecorder(recorderDir),
+        }), capabilities: PLANNING_CAPABILITIES, recorder: createDurableRecorder(recorderDir),
         runScope: { worktree, phase: 45 }, writerSession,
         applicationEvidence: ({ result }) => result,
       }), { code: mode === 'output-mismatch' ? 'FOREIGN_EDIT' : 'INVALID_HOST' });
@@ -559,8 +581,8 @@ return await __createClaudeWorkflowDispatch({
   agent,
   prompt: 'typed GSD prompt',
   role: 'decomposition',
-  model: 'claude-opus-5-5',
-  effort: 'medium',
+  model: 'claude-sonnet-5-5',
+  effort: 'xhigh',
   gsdRole: 'gsd-planner',
   context: { ticket: 'T-36-typed-evidence-test' },
 })
@@ -587,7 +609,7 @@ return await __createClaudeWorkflowDispatch({
           return evidence;
         },
         parallel: async (thunks) => Promise.all(thunks.map((thunk) => thunk())),
-        capabilities: OPUS_CAPABILITIES,
+        capabilities: PLANNING_CAPABILITIES,
         recorder,
         applicationEvidence: ({ result }) => result,
       }),
@@ -639,7 +661,7 @@ test(`typed completion rejects foreign phase entries and bytes: ${change}`, asyn
   const writerSession = { lease, handle, base_revision: 'fixture-base', phaseDir,
     snapshot: lease.snapshotTree(), declaredPaths: ['45-01-PLAN.md'] };
   const scriptPath = path.join(root, 'workflow.mjs');
-  fs.writeFileSync(scriptPath, "export const meta={name:'same-path-probe'}\nreturn await __createClaudeWorkflowDispatch({agent,prompt:'fixture-only',role:'decomposition',model:'claude-opus-5-5',effort:'medium',gsdRole:'gsd-planner',context:{ticket:'T-45-18'}})\n");
+  fs.writeFileSync(scriptPath, "export const meta={name:'same-path-probe'}\nreturn await __createClaudeWorkflowDispatch({agent,prompt:'fixture-only',role:'decomposition',model:'claude-sonnet-5-5',effort:'xhigh',gsdRole:'gsd-planner',context:{ticket:'T-45-18'}})\n");
   const recorder = createDurableRecorder(path.join(root, 'receipts'));
   let injected = false;
   try {
@@ -664,7 +686,7 @@ test(`typed completion rejects foreign phase entries and bytes: ${change}`, asyn
         });
       },
       parallel: async (thunks) => Promise.all(thunks.map((thunk) => thunk())),
-      capabilities: OPUS_CAPABILITIES, recorder, writerSession, runScope: { worktree, phase: 45 },
+      capabilities: PLANNING_CAPABILITIES, recorder, writerSession, runScope: { worktree, phase: 45 },
       applicationEvidence: ({ result }) => {
         injected = true;
         if (change === 'bytes') fs.writeFileSync(plan, 'foreign-output\n');
