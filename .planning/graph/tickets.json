@@ -8794,6 +8794,7 @@
       "files": [
         "plugins/delivery-pipeline/scripts/model-policy-internal.cjs",
         "plugins/delivery-pipeline/scripts/runtime-adapters.cjs",
+        "plugins/delivery-pipeline/scripts/pipeline-config.cjs",
         "plugins/delivery-pipeline/scripts/auto-route.cjs",
         "plugins/delivery-pipeline/scripts/gsd-tune.cjs",
         "plugins/delivery-pipeline/scripts/model-capability.cjs",
@@ -8802,6 +8803,9 @@
         "plugins/delivery-pipeline/commands/decompose.md",
         "plugins/delivery-pipeline/commands/deliver.md",
         "plugins/delivery-pipeline/references/pr-sentinel.md",
+        "capabilities/delivery-pipeline/capability.json",
+        "README.md",
+        "docs/gsd_multilevel_delivery_pipeline.md",
         "tests/unit/model-policy.test.cjs",
         "tests/unit/model-capability.test.cjs",
         "tests/unit/codex-agent.test.cjs",
