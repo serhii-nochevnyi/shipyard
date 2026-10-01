@@ -2485,10 +2485,6 @@ function createDispatchBoundary(options = {}) {
         if (!affirmative(recordResult, 'recorded')) {
           refuse('RECORD_FAILED', 'durable dispatch recording did not return affirmative acknowledgement; the launch is not compliant', { dispatch_id: resolution.dispatch_id });
         }
-        if (priorLease) priorLease.assertHealthy();
-        stages.push({ stage: 'record', status: 'passed' });
-        stages.push({ stage: 'receipt', status: 'passed', launch_id: applicationReceipt.launch_id });
-        finalizedRecord = deepFreeze(snapshot({ ...baseTrace, trace: stages }));
         const afterRecord = () => {
           if (priorLease) priorLease.assertHealthy();
           return finishRecord();
@@ -2501,6 +2497,10 @@ function createDispatchBoundary(options = {}) {
           throw error;
         };
         try {
+          if (priorLease) priorLease.assertHealthy();
+          stages.push({ stage: 'record', status: 'passed' });
+          stages.push({ stage: 'receipt', status: 'passed', launch_id: applicationReceipt.launch_id });
+          finalizedRecord = deepFreeze(snapshot({ ...baseTrace, trace: stages }));
           const secondValidation = validateBeforeMutation();
           return secondValidation && typeof secondValidation.then === 'function'
             ? secondValidation.then(afterRecord).catch(abortOwnRecord)

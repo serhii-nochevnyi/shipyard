@@ -168,6 +168,8 @@ function fixture(config = {}) {
     },
     launchTypedGsd(selection, context) {
       calls.push({ method: 'typed', selection, context });
+      context.onCompleted({ launch_id: 'codex-delivery-test', session_id: 'typed-fixture-session',
+        last_agent_message: JSON.stringify({ schema: 'shipyard.codex-decompose-output.v1', artifact_paths: [] }) });
       return application(selection, context);
     },
   };
@@ -213,7 +215,8 @@ function application(selection, context) {
     observed_model: selection.model,
     observed_effort: selection.reasoning_effort,
     ...(selection.agent_file ? { agent_file_digest: selection.agent_file_digest } : {}),
-    ...(context.gsd_role ? { gsd_role: context.gsd_role, gsd_launch_mechanism: 'typed-gsd-callback' } : {}),
+    ...(context.gsd_role ? { gsd_role: context.gsd_role, gsd_launch_mechanism: 'typed-gsd-callback',
+      runtime_evidence: { native_session_evidence: { session_id: 'typed-fixture-session' } } } : {}),
   };
 }
 
@@ -428,7 +431,7 @@ test('generated static role uses its immutable file and declared read-only sandb
 test('typed GSD delivery goes through the host-owned typed callback', async () => {
   const f = fixture();
   try {
-    const actualPhaseDir = path.join(f.root, '.planning', 'phases', '38');
+    const actualPhaseDir = path.join(f.root, '.planning', 'phases', '38-typed-delivery');
     fs.mkdirSync(actualPhaseDir, { recursive: true });
     fs.mkdirSync(f.storageRoot, { recursive: true });
     const phaseDir = path.join(f.storageRoot, 'phase-alias');
@@ -472,6 +475,84 @@ test('typed GSD delivery refuses a phase symlink escaping the scoped worktree', 
   } finally { clean(f); }
 });
 
+test('typed GSD delivery refuses a different phase lease before recording', async () => {
+  const f = fixture();
+  try {
+    const phaseDir = path.join(f.root, '.planning', 'phases', '39-foreign');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    const lease = createPlanningWriterLease({ worktree: f.root, phaseDir,
+      stateRoot: path.join(f.storageRoot, 'writer') });
+    const handle = lease.acquire({ owner: 'foreign-phase', base_revision: f.base });
+    const writerSession = { lease, handle, base_revision: f.base, phaseDir,
+      snapshot: lease.snapshotTree(), declaredPaths: [] };
+    await assert.rejects(delivery(f, { writerSession }).run({ role: 'decomposition',
+      gsd_role: 'gsd-planner', context: { prompt: 'Plan.' } }), { code: 'WRITER_FENCED' });
+    assert.equal(fs.readdirSync(f.host.recorder.storeDir).filter((name) => name.startsWith('record-')).length, 0);
+    lease.release(handle);
+  } finally { clean(f); }
+});
+
+test('typed GSD delivery refuses a lease keyed to a foreign directory', async () => {
+  const f = fixture();
+  try {
+    const phaseDir = path.join(f.root, '.planning', 'phases', '38-current');
+    const foreignDir = path.join(f.root, '.planning', 'phases', '39-foreign');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    fs.mkdirSync(foreignDir, { recursive: true });
+    const lease = createPlanningWriterLease({ worktree: f.root, phaseDir: foreignDir,
+      stateRoot: path.join(f.storageRoot, 'writer') });
+    const handle = lease.acquire({ owner: 'foreign-lease', base_revision: f.base });
+    const writerSession = { lease, handle, base_revision: f.base, phaseDir,
+      snapshot: lease.snapshotTree(), declaredPaths: [] };
+    await assert.rejects(delivery(f, { writerSession }).run({ role: 'decomposition',
+      gsd_role: 'gsd-planner', context: { prompt: 'Plan.' } }), { code: 'WRITER_FENCED' });
+    assert.equal(fs.readdirSync(f.host.recorder.storeDir).filter((name) => name.startsWith('record-')).length, 0);
+    lease.release(handle);
+  } finally { clean(f); }
+});
+
+test('typed GSD delivery refuses a declaration unlike its completed native output', async () => {
+  const f = fixture();
+  try {
+    const phaseDir = path.join(f.root, '.planning', 'phases', '38-current');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    const lease = createPlanningWriterLease({ worktree: f.root, phaseDir,
+      stateRoot: path.join(f.storageRoot, 'writer') });
+    const handle = lease.acquire({ owner: 'typed-output', base_revision: f.base });
+    const writerSession = { lease, handle, base_revision: f.base, phaseDir,
+      snapshot: lease.snapshotTree(), declaredPaths: [] };
+    f.host.launchTypedGsd = (selection, context) => {
+      context.onCompleted({ launch_id: 'codex-delivery-test', session_id: 'typed-fixture-session',
+        last_agent_message: JSON.stringify({ schema: 'shipyard.codex-decompose-output.v1',
+          artifact_paths: ['.planning/phases/38-current/CONTEXT.md'] }) });
+      return application(selection, context);
+    };
+    await assert.rejects(delivery(f, { writerSession }).run({ role: 'decomposition',
+      gsd_role: 'gsd-planner', context: { prompt: 'Plan.' } }), { code: 'FOREIGN_EDIT' });
+    assert.equal(fs.readdirSync(f.host.recorder.storeDir).filter((name) => name.startsWith('record-')).length, 0);
+    lease.release(handle);
+  } finally { clean(f); }
+});
+
+test('typed GSD delivery refuses a snapshot from another phase', async () => {
+  const f = fixture();
+  try {
+    const phaseDir = path.join(f.root, '.planning', 'phases', '38-current');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    const lease = createPlanningWriterLease({ worktree: f.root, phaseDir,
+      stateRoot: path.join(f.storageRoot, 'writer') });
+    const handle = lease.acquire({ owner: 'foreign-snapshot', base_revision: f.base });
+    const writerSession = { lease, handle, base_revision: f.base, phaseDir,
+      snapshot: { ...lease.snapshotTree(), digests: { 'foreign.md': 'a'.repeat(64) } },
+      declaredPaths: [] };
+    await assert.rejects(Promise.resolve().then(() => delivery(f, { writerSession }).run({
+      role: 'decomposition', gsd_role: 'gsd-planner', context: { prompt: 'Plan.' },
+    })), { code: 'WRITER_FENCED' });
+    assert.equal(fs.readdirSync(f.host.recorder.storeDir).filter((name) => name.startsWith('record-')).length, 0);
+    lease.release(handle);
+  } finally { clean(f); }
+});
+
 test('typed GSD delivery rejects request writer authority and a missing host lease', async () => {
   const f = fixture();
   try {
@@ -488,7 +569,7 @@ test('typed GSD delivery checks host lease takeover and foreign edits before rec
   for (const mode of ['takeover', 'foreign']) {
     const f = fixture();
     try {
-      const phaseDir = path.join(f.root, '.planning', 'phases', '38');
+      const phaseDir = path.join(f.root, '.planning', 'phases', '38-typed-delivery');
       fs.mkdirSync(phaseDir, { recursive: true });
       const lease = createPlanningWriterLease({ worktree: f.root, phaseDir,
         stateRoot: path.join(f.storageRoot, 'writer') });
@@ -497,6 +578,8 @@ test('typed GSD delivery checks host lease takeover and foreign edits before rec
         snapshot: lease.snapshotTree(), declaredPaths: [] };
       f.host.launchTypedGsd = (selection, context) => {
         f.calls.push({ method: 'typed', selection, context });
+        context.onCompleted({ launch_id: 'codex-delivery-test', session_id: 'typed-fixture-session',
+          last_agent_message: JSON.stringify({ schema: 'shipyard.codex-decompose-output.v1', artifact_paths: [] }) });
         if (mode === 'takeover') { lease.release(handle); lease.acquire({ owner: 'new-owner', base_revision: f.base }); }
         else fs.writeFileSync(path.join(phaseDir, 'stray.md'), 'foreign');
         return application(selection, context);

@@ -254,6 +254,60 @@ test('provisional rollback restores the prior authenticated latest receipt', asy
   } finally { fs.rmSync(store, { recursive: true, force: true }); }
 });
 
+test('prior claim health failure after an affirmative record aborts only the new record', () => {
+  const store = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-prior-claim-abort-'));
+  const recorder = boundaryModule.createDurableRecorder(store);
+  const boundary = boundaryModule.createDispatchBoundary({
+    adapters: { codex: fakeAdapter() }, recorder,
+  });
+  const ticket = 'T-45-16';
+  const prior = boundary.dispatch({ runtime: 'codex', role: 'ci-fix',
+    signals: { signatureState: 'first' }, dispatch_id: 'claim-history' }, { ticket });
+  const other = boundary.dispatch({ runtime: 'codex', role: 'executor',
+    dispatch_id: 'claim-unrelated' }, { ticket });
+  const originalInterval = global.setInterval;
+  const originalRename = fs.renameSync;
+  const originalRead = fs.readFileSync;
+  let claimHeartbeat;
+  let corruptClaimRead = false;
+  let injected = false;
+  try {
+    global.setInterval = (callback, delay, ...args) => {
+      claimHeartbeat = callback;
+      return originalInterval(callback, delay, ...args);
+    };
+    fs.readFileSync = (file, ...args) => {
+      if (corruptClaimRead && path.basename(String(file)).startsWith('claim-')) return '';
+      return originalRead(file, ...args);
+    };
+    fs.renameSync = (source, destination) => {
+      const result = originalRename(source, destination);
+      if (!injected && path.basename(String(destination)).startsWith('latest-')
+          && fs.existsSync(path.join(store, `record-${crypto.createHash('sha256').update('claim-refused').digest('hex')}.json`))) {
+        injected = true;
+        corruptClaimRead = true;
+        try { claimHeartbeat(); } finally { corruptClaimRead = false; }
+      }
+      return result;
+    };
+    assert.throws(() => boundary.dispatch({ runtime: 'codex', role: 'ci-fix',
+      signals: { signatureState: 'repeat', priorApplied: prior.receipt },
+      previous_dispatch_id: prior.dispatch_id, dispatch_id: 'claim-refused' }, { ticket }),
+    { code: 'RECORD_FAILED' });
+    assert.equal(injected, true);
+    assert.equal(recorder.getVerifiedRecord('claim-refused'), null);
+    assert.deepEqual(recorder.getVerifiedRecord(prior.dispatch_id).receipt, prior.receipt);
+    assert.deepEqual(recorder.getVerifiedRecord(other.dispatch_id).receipt, other.receipt);
+    assert.equal(recorder.getLatestReceipt('codex', 'ci-fix').dispatch_id, prior.dispatch_id);
+    assert.equal(fs.readdirSync(store).filter((name) => name.startsWith('record-')).length, 2);
+  } finally {
+    global.setInterval = originalInterval;
+    fs.renameSync = originalRename;
+    fs.readFileSync = originalRead;
+    fs.rmSync(store, { recursive: true, force: true });
+  }
+});
+
 test('capacity admission fences an in-flight launch and releases after its receipt', async () => {
   let nextLease = 0;
   const leases = new Set();
