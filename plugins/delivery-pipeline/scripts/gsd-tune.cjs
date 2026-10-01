@@ -333,6 +333,32 @@ function globalDefaultsPath() {
   } catch (error) {
     if (error.code !== 'ENOENT') fail(`cannot validate GSD_DEFAULTS_PATH ${target}: ${error.message}`);
   }
+  const ambient = path.resolve(process.env.HOME || '', '.gsd', 'defaults.json');
+  const physicalPath = (file) => {
+    let current = file;
+    const missing = [];
+    for (;;) {
+      try { return path.join(fs.realpathSync(current), ...missing); }
+      catch (error) {
+        if (error.code !== 'ENOENT' || path.dirname(current) === current) throw error;
+        missing.unshift(path.basename(current));
+        current = path.dirname(current);
+      }
+    }
+  };
+  try {
+    if (physicalPath(target) === physicalPath(ambient)) {
+      fail('GSD_DEFAULTS_PATH must not resolve to ambient HOME defaults');
+    }
+    if (fs.existsSync(target) && fs.existsSync(ambient)) {
+      const selectedStat = fs.statSync(target), ambientStat = fs.statSync(ambient);
+      if (selectedStat.dev === ambientStat.dev && selectedStat.ino === ambientStat.ino) {
+        fail('GSD_DEFAULTS_PATH must not alias ambient HOME defaults');
+      }
+    }
+  } catch (error) {
+    fail(`cannot resolve GSD_DEFAULTS_PATH ${target}: ${error.message}`);
+  }
   return target;
 }
 

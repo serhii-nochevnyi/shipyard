@@ -626,4 +626,62 @@ test('rejects a frozen structural recorder lookalike before workflow evaluation'
   }
 });
 
+for (const change of ['bytes', 'symlink-at-completion', 'symlink-after-completion', 'empty-directory-after-completion', 'empty-directory-at-completion']) {
+test(`typed completion rejects foreign phase entries and bytes: ${change}`, async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-claude-same-path-'));
+  const worktree = path.join(root, 'worktree');
+  const phaseDir = path.join(worktree, '.planning', 'phases', '45-byte-binding-probe');
+  fs.mkdirSync(phaseDir, { recursive: true });
+  const plan = path.join(phaseDir, '45-01-PLAN.md');
+  fs.writeFileSync(plan, 'baseline\n');
+  const lease = createPlanningWriterLease({ worktree, phaseDir, stateRoot: path.join(root, 'writer') });
+  const handle = lease.acquire({ owner: 'same-path-unit-fixture', base_revision: 'fixture-base' });
+  const writerSession = { lease, handle, base_revision: 'fixture-base', phaseDir,
+    snapshot: lease.snapshotTree(), declaredPaths: ['45-01-PLAN.md'] };
+  const scriptPath = path.join(root, 'workflow.mjs');
+  fs.writeFileSync(scriptPath, "export const meta={name:'same-path-probe'}\nreturn await __createClaudeWorkflowDispatch({agent,prompt:'fixture-only',role:'decomposition',model:'claude-opus-5-5',effort:'medium',gsdRole:'gsd-planner',context:{ticket:'T-45-18'}})\n");
+  const recorder = createDurableRecorder(path.join(root, 'receipts'));
+  let injected = false;
+  try {
+    await assert.rejects(() => runClaudeWorkflow({
+      scriptPath,
+      agent: async () => { throw new Error('generic model launch forbidden in fixture'); },
+      typedGsdCallback: async (_prompt, selection, role) => {
+        fs.writeFileSync(plan, 'native-output\n');
+        if (change === 'empty-directory-at-completion') {
+          injected = true;
+          fs.mkdirSync(path.join(phaseDir, 'undeclared-directory'));
+        }
+        if (change === 'symlink-at-completion') {
+          injected = true;
+          fs.symlinkSync(path.join(root, 'outside'), path.join(phaseDir, 'undeclared-link'));
+        }
+        return transcriptEvidence({
+          launch_id: 'same-path-fixture', applied_model: selection.model, applied_effort: selection.effort,
+          observed_model: selection.model, observed_effort: selection.effort,
+          output: { changed_paths: ['45-01-PLAN.md'] }, gsd_role: role,
+          gsd_launch_mechanism: selection.gsd_launch_mechanism,
+        });
+      },
+      parallel: async (thunks) => Promise.all(thunks.map((thunk) => thunk())),
+      capabilities: OPUS_CAPABILITIES, recorder, writerSession, runScope: { worktree, phase: 45 },
+      applicationEvidence: ({ result }) => {
+        injected = true;
+        if (change === 'bytes') fs.writeFileSync(plan, 'foreign-output\n');
+        if (change === 'symlink-after-completion') {
+          fs.symlinkSync(path.join(root, 'outside'), path.join(phaseDir, 'undeclared-link'));
+        }
+        if (change === 'empty-directory-after-completion') fs.mkdirSync(path.join(phaseDir, 'undeclared-directory'));
+        return result;
+      },
+    }), (error) => error.code === 'FOREIGN_EDIT');
+    assert.equal(injected, true);
+    assert.equal(recorder.getLatestReceipt('claude', 'decomposition'), null);
+  } finally {
+    lease.release(handle);
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+}
+
 done();

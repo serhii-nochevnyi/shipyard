@@ -638,6 +638,31 @@ test('--global rejects an invalid defaults override before writing shared defaul
   assert.equal(fs.existsSync(path.join(h, 'relative-defaults.json')), false);
 });
 
+test('--global rejects ancestor symlink and hard-link aliases without changing ambient defaults', () => {
+  for (const kind of ['existing-ancestor-symlink', 'missing-ancestor-symlink', 'hard-link']) {
+    const h = home(kind === 'missing-ancestor-symlink' ? undefined : { runtime: 'codex', preserve: 'ambient' });
+    const shared = path.join(h, '.gsd', 'defaults.json');
+    const before = fs.existsSync(shared) ? fs.readFileSync(shared) : null;
+    try {
+      let selected;
+      if (kind === 'hard-link') {
+        selected = path.join(h, 'private-defaults.json');
+        fs.linkSync(shared, selected);
+      } else {
+        fs.symlinkSync(h, path.join(h, 'dogfood-state'), 'dir');
+        selected = path.join(h, 'dogfood-state', '.gsd', 'defaults.json');
+      }
+      const result = runGlobal(h, ['--runtime', 'codex', '--apply'], { GSD_DEFAULTS_PATH: selected });
+      assert.notEqual(result.status, 0, kind);
+      assert.match(result.stderr, /GSD_DEFAULTS_PATH.*ambient HOME defaults/);
+      if (before) assert.deepStrictEqual(fs.readFileSync(shared), before, kind);
+      else assert.equal(fs.existsSync(shared), false, kind);
+    } finally {
+      fs.rmSync(h, { recursive: true, force: true });
+    }
+  }
+});
+
 test('an override this script wrote machine-wide earlier is withdrawn', () => {
   // Not a general remover: only our exact agent/value pairs. GSD warned about
   // these on every Codex install, and we are the ones who wrote them.
