@@ -1536,3 +1536,25 @@ test('Codex and Claude retain separate concrete model palettes in policy dimensi
   assert.equal(claude.requested_model, 'claude-opus-5-5', 'Claude keeps its native Opus ID');
   assert.equal(codex.requested_model, 'gpt-6.1-sol', 'Codex uses its concrete Sol id');
 });
+
+// Fixed v6 resolution captured from the prior checked-in package, not current policy.
+test('fixed v6 historical attribution stays stale without changing its source bytes', () => {
+  const historicalBytes = '{"policy_version":"adr-014.v6","policy_hash":"30e71fb4066fee5b67df14120532c0b4f8aedde169907bc16f70dd2569744968","runtime":"codex","role":"executor","model_key":"luna","logical_model":"luna","logical_rung":"base","rung":"base","rung_index":0,"model":"gpt-6-luna","effort":"max","requested_model":"gpt-6-luna","requested_effort":"max","route":"role=executor rung=base model=luna signals=base","backend":"agent","mechanism":"explicit-launch-arguments","signals_fired":[],"signal_reasons":[],"selected_signals":[],"signals":{},"agent_file":null,"launch_arguments":{"model":"gpt-6-luna","reasoning_effort":"max"},"dispatch_id":"fixed-v6-history"}';
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-v6-history-'));
+  const file = path.join(dir, 'historical.json');
+  try {
+    fs.writeFileSync(file, historicalBytes, { mode: 0o444 });
+    const before = crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+    const historical = JSON.parse(fs.readFileSync(file, 'utf8'));
+    assert.equal(historical.policy_version, 'adr-014.v6');
+    assert.notEqual(historical.policy_hash, POLICY_HASH);
+    const facts = reconcileTelemetry(historical);
+    assert.equal(facts.resolution_status, 'stale');
+    assert.equal(facts.compliant, false);
+    assert.equal(facts.comparison_ready, false);
+    assert.ok(facts.findings.includes('stale_policy'));
+    assert.equal(JSON.stringify(historical), historicalBytes);
+    assert.equal(fs.readFileSync(file, 'utf8'), historicalBytes);
+    assert.equal(crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex'), before);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});

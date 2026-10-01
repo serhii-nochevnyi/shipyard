@@ -23,7 +23,7 @@ const CANONICAL_MODEL_MAPPINGS = Object.freeze({
   claude: CLAUDE_MODEL_ALIASES,
 });
 
-const POLICY_VERSION = 'adr-014.v6';
+const POLICY_VERSION = 'adr-014.v7';
 const SUPPORTED_RUNTIMES = Object.freeze(['codex', 'claude']);
 const EFFORTS = Object.freeze(['low', 'medium', 'high', 'xhigh', 'max']);
 const SIGNATURE_STATES = Object.freeze([
@@ -75,7 +75,7 @@ const CODEX_ROLE_RUNG_DEFINITIONS = Object.freeze({
     Object.freeze({ name: 'critical', model_key: 'sol', logical_model: 'sol', effort: 'xhigh' }),
   ]),
   executor: Object.freeze([
-    Object.freeze({ name: 'base', model_key: 'luna', logical_model: 'luna', effort: 'max' }),
+    Object.freeze({ name: 'base', model_key: 'sol', logical_model: 'sol', effort: 'low' }),
     Object.freeze({ name: 'critical', model_key: 'sol', logical_model: 'sol', effort: 'high' }),
   ]),
   'pr-sentinel': Object.freeze([
@@ -86,19 +86,19 @@ const CODEX_ROLE_RUNG_DEFINITIONS = Object.freeze({
     Object.freeze({ name: 'critical', model_key: 'sol', logical_model: 'sol', effort: 'xhigh' }),
   ]),
   'drift-check': Object.freeze([
-    Object.freeze({ name: 'base', model_key: 'luna', logical_model: 'luna', effort: 'max' }),
+    Object.freeze({ name: 'base', model_key: 'sol', logical_model: 'sol', effort: 'low' }),
   ]),
   'arch-review': Object.freeze([
     Object.freeze({ name: 'base', model_key: 'sol', logical_model: 'sol', effort: 'high' }),
     Object.freeze({ name: 'critical', model_key: 'sol', logical_model: 'sol', effort: 'xhigh' }),
   ]),
   'ci-fix': Object.freeze([
-    Object.freeze({ name: 'base', model_key: 'luna', logical_model: 'luna', effort: 'max' }),
+    Object.freeze({ name: 'base', model_key: 'sol', logical_model: 'sol', effort: 'low' }),
     Object.freeze({ name: 'repeat', model_key: 'sol', logical_model: 'sol', effort: 'high' }),
     Object.freeze({ name: 'repeat_exhausted', model_key: 'sol', logical_model: 'sol', effort: 'xhigh' }),
   ]),
   'review-fix': Object.freeze([
-    Object.freeze({ name: 'base', model_key: 'luna', logical_model: 'luna', effort: 'max' }),
+    Object.freeze({ name: 'base', model_key: 'sol', logical_model: 'sol', effort: 'low' }),
     Object.freeze({ name: 'repeat', model_key: 'sol', logical_model: 'sol', effort: 'high' }),
     Object.freeze({ name: 'repeat_exhausted', model_key: 'sol', logical_model: 'sol', effort: 'xhigh' }),
   ]),
@@ -109,40 +109,40 @@ const CODEX_ROLE_RUNG_DEFINITIONS = Object.freeze({
 // is consumed only as a set of supported concrete Claude selections.
 const CLAUDE_ROLE_RUNG_DEFINITIONS = Object.freeze({
   research: Object.freeze([
-    Object.freeze({ name: 'base', model_key: 'opus', effort: 'medium' }),
+    Object.freeze({ name: 'base', model_key: 'sonnet', effort: 'xhigh' }),
     Object.freeze({ name: 'very-complex', model_key: 'opus', effort: 'high' }),
   ]),
   decomposition: Object.freeze([
-    Object.freeze({ name: 'base', model_key: 'opus', effort: 'medium' }),
+    Object.freeze({ name: 'base', model_key: 'sonnet', effort: 'xhigh' }),
     Object.freeze({ name: 'critical', model_key: 'opus', effort: 'high' }),
   ]),
   executor: Object.freeze([
-    Object.freeze({ name: 'base', model_key: 'sonnet', effort: 'max' }),
-    Object.freeze({ name: 'critical', model_key: 'opus', effort: 'low' }),
+    Object.freeze({ name: 'base', model_key: 'sonnet', effort: 'medium' }),
+    Object.freeze({ name: 'critical', model_key: 'sonnet', effort: 'xhigh' }),
   ]),
   'pr-sentinel': Object.freeze([
-    Object.freeze({ name: 'base', model_key: 'sonnet', effort: 'high' }),
+    Object.freeze({ name: 'base', model_key: 'sonnet', effort: 'low' }),
   ]),
   integrator: Object.freeze([
-    Object.freeze({ name: 'base', model_key: 'opus', effort: 'medium' }),
+    Object.freeze({ name: 'base', model_key: 'sonnet', effort: 'xhigh' }),
     Object.freeze({ name: 'critical', model_key: 'opus', effort: 'high' }),
   ]),
   'drift-check': Object.freeze([
-    Object.freeze({ name: 'base', model_key: 'opus', effort: 'high' }),
+    Object.freeze({ name: 'base', model_key: 'sonnet', effort: 'medium' }),
   ]),
   'arch-review': Object.freeze([
-    Object.freeze({ name: 'base', model_key: 'opus', effort: 'medium' }),
+    Object.freeze({ name: 'base', model_key: 'sonnet', effort: 'xhigh' }),
     Object.freeze({ name: 'critical', model_key: 'opus', effort: 'high' }),
     Object.freeze({ name: 'ceiling', model_key: 'fable', effort: 'medium' }),
   ]),
   'ci-fix': Object.freeze([
-    Object.freeze({ name: 'base', model_key: 'opus', effort: 'medium' }),
-    Object.freeze({ name: 'repeat', model_key: 'opus', effort: 'high' }),
+    Object.freeze({ name: 'base', model_key: 'sonnet', effort: 'high' }),
+    Object.freeze({ name: 'repeat', model_key: 'sonnet', effort: 'xhigh' }),
     Object.freeze({ name: 'repeat_exhausted', model_key: 'opus', effort: 'high' }),
   ]),
   'review-fix': Object.freeze([
-    Object.freeze({ name: 'base', model_key: 'opus', effort: 'medium' }),
-    Object.freeze({ name: 'repeat', model_key: 'opus', effort: 'high' }),
+    Object.freeze({ name: 'base', model_key: 'sonnet', effort: 'high' }),
+    Object.freeze({ name: 'repeat', model_key: 'sonnet', effort: 'xhigh' }),
     Object.freeze({ name: 'repeat_exhausted', model_key: 'opus', effort: 'high' }),
   ]),
 });

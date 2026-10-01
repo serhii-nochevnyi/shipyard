@@ -1,19 +1,18 @@
 'use strict';
 
 // Runtime-owned concrete palettes. The canonical policy owns the role grids and
-// evidence rules; each runtime names its own native model keys. Claude's keys
-// are the existing aliases themselves and are intentionally not translations of
-// Codex's Luna/Sol vocabulary. Astra remains registered for compatibility with
-// older explicit configurations, but is not selected by the current grid.
+// evidence rules; each runtime names its own pinned native model keys. Claude's
+// keys are intentionally not translations of Codex's Luna/Sol vocabulary.
+// Astra remains registered for compatibility, but is not selected by the grid.
 
 const CODEX_MODEL_IDS = Object.freeze({
   luna: 'gpt-6-luna',
   astra: 'gpt-6-astra',
-  sol: 'gpt-6-sol',
+  sol: 'gpt-6.1-sol',
 });
 
 const CLAUDE_MODEL_ALIASES = Object.freeze({
-  sonnet: 'sonnet',
+  sonnet: 'claude-sonnet-5-5',
   opus: 'claude-opus-5-5',
   fable: 'fable',
 });
@@ -25,7 +24,6 @@ function modelFor(runtime, modelKey) {
 
 function matchesModelObservation(runtime, observed, applied) {
   if (typeof observed !== 'string' || typeof applied !== 'string') return false;
-  if (runtime === 'claude' && applied === 'sonnet') return /^claude-sonnet-\d+(?:-[A-Za-z0-9.]+)*$/.test(observed);
   if (runtime === 'claude' && applied === 'fable') return /^claude-fable-[A-Za-z0-9]+(?:[-.][A-Za-z0-9]+)*$/.test(observed);
   return observed === applied;
 }
