@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 985727ba808284a36153b9de1e4ff4710ec3aebf3c8073f719226c6e1bd3e7e0
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: c67a7967b3e65c83dd3d5e0b5e36bf7eff328f6632318824429f0fb371f07e70
 phase: 43-target-project-delivery-at-scale
 plan: 10
 subsystem: shipyard delivery
@@ -20,10 +20,10 @@ key-files:
 key-decisions:
   - "Shipyard delivery state is projected; no native executor claim is invented."
 duration: 0min
-completed: 2026-09-28
+completed: 2026-09-30
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 985727ba808284a36153b9de1e4ff4710ec3aebf3c8073f719226c6e1bd3e7e0
+shipyard_source_fingerprint: c67a7967b3e65c83dd3d5e0b5e36bf7eff328f6632318824429f0fb371f07e70
 ---
 
 # Phase 43: Honour pipeline.gsd_sync as a deprecated alias on the summary line; decompose phases reach ROADMAP; one summarised warning — Delivery Projection

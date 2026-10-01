@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: a0e5bbc0b15428337fcee919bfc99ee73a730756206b2aee20fc1bfe43207e43
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 610549cb83cba93229ada7cf9520603511c39dc5d4ad10a0392df3321cf19378
 phase: 45-close-residual-pipeline-efficiency-gaps
 plan: 13
 subsystem: shipyard delivery
@@ -20,10 +20,10 @@ key-files:
 key-decisions:
   - "Shipyard delivery state is projected; no native executor claim is invented."
 duration: 0min
-completed: 2026-09-28
+completed: 2026-09-30
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: a0e5bbc0b15428337fcee919bfc99ee73a730756206b2aee20fc1bfe43207e43
+shipyard_source_fingerprint: 610549cb83cba93229ada7cf9520603511c39dc5d4ad10a0392df3321cf19378
 ---
 
 # Phase 45: drift-gate re-asks a self-contradictory drift-check verdict once, then refuses with both errors — Delivery Projection

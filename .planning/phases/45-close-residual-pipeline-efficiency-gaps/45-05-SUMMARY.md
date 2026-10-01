@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 0c056488264ed9eb230bb9857e5056835355ebfec7f4de1a70c425c3fee4c287
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 877f317a54e11e48d841232a2d64bab847b8fce87391f1d684b735d37f4c1a88
 phase: 45-close-residual-pipeline-efficiency-gaps
 plan: 05
 subsystem: shipyard delivery
@@ -20,10 +20,10 @@ key-files:
 key-decisions:
   - "Shipyard delivery state is projected; no native executor claim is invented."
 duration: 0min
-completed: 2026-09-28
+completed: 2026-09-30
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 0c056488264ed9eb230bb9857e5056835355ebfec7f4de1a70c425c3fee4c287
+shipyard_source_fingerprint: 877f317a54e11e48d841232a2d64bab847b8fce87391f1d684b735d37f4c1a88
 ---
 
 # Phase 45: session-handoff successor race and dispatch-boundary cross-process reservation tests use explicit barriers — Delivery Projection

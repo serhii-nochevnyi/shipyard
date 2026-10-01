@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 966572d1396f9f691f2dc65379f42c31b938dc4a2831f7434e6efbbdc59fe8d8
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: d5dcb4f7eba9e62be90b5b0862a503e3302de27d138dfaa7c24c50a47459d88d
 phase: 45-close-residual-pipeline-efficiency-gaps
 plan: 06
 subsystem: shipyard delivery
@@ -20,10 +20,10 @@ key-files:
 key-decisions:
   - "Shipyard delivery state is projected; no native executor claim is invented."
 duration: 0min
-completed: 2026-09-28
+completed: 2026-09-30
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 966572d1396f9f691f2dc65379f42c31b938dc4a2831f7434e6efbbdc59fe8d8
+shipyard_source_fingerprint: d5dcb4f7eba9e62be90b5b0862a503e3302de27d138dfaa7c24c50a47459d88d
 ---
 
 # Phase 45: usage-report counts Codex host-stream turn.completed.usage records — Delivery Projection

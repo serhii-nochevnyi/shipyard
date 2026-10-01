@@ -8,6 +8,7 @@ const { execFileSync } = require('node:child_process');
 const { suite, test, done, assert } = require('./assert-harness.cjs');
 const { transcriptEvidence: testTranscriptEvidence } = require('./claude-test-evidence.cjs');
 const { createDurableRecorder } = require('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs');
+const { createPlanningWriterLease } = require('../../plugins/delivery-pipeline/scripts/planning-writer-lease.cjs');
 const {
   CLAUDE_MODEL_ALIASES,
   createClaudeWorkflowDispatch,
@@ -404,7 +405,7 @@ test('a 500-character research summary is sealed unchanged with no bound notice'
 
 test('decomposition requires a phase-bound index for CONTEXT and every PLAN', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-planning-decompose-'));
-  const receipts = createDurableRecorder(path.join(root, 'receipts'));
+  const receipts = createDurableRecorder(root + '-receipts');
   const contextPath = path.join(root, 'CONTEXT.md');
   const planPath = path.join(root, '33-01-PLAN.md');
   const indexPath = path.join(root, 'planning-index.json');
@@ -453,6 +454,14 @@ test('decomposition requires a phase-bound index for CONTEXT and every PLAN', as
       schema: 'shipyard.decomposition-result.v1',
     });
   };
+  const lease = createPlanningWriterLease({ worktree: root, phaseDir: root, stateRoot: root + '-writer' });
+  const handle = lease.acquire({ owner: 'planning-artifact-fixture', base_revision: SOURCE_REVISION });
+  const snapshot = lease.snapshotTree();
+  const preRecordValidation = () => {
+    lease.assertFence({ ...handle, base_revision: SOURCE_REVISION });
+    const foreign = lease.changedSince(snapshot).changed.filter((item) => item !== path.basename(planPath));
+    if (foreign.length) throw Object.assign(new Error(foreign.join(', ')), { code: 'FOREIGN_EDIT' });
+  };
   try {
     const accepted = await createClaudeWorkflowDispatch({
       agent: async () => { throw new Error('typed callback must own this launch'); },
@@ -464,7 +473,7 @@ test('decomposition requires a phase-bound index for CONTEXT and every PLAN', as
       effort: 'medium',
       artifact: metadata,
       requireArtifact: true,
-      context: { gsd_role: 'gsd-planner' },
+      context: { gsd_role: 'gsd-planner', preRecordValidation },
       capabilities: CAPABILITIES,
       recorder: receipts,
         applicationEvidence: () => transcriptEvidence(evidence),
@@ -487,7 +496,7 @@ test('decomposition requires a phase-bound index for CONTEXT and every PLAN', as
         effort: 'medium',
         artifact: { ...metadata, ticket: 'phase-33-runtime-2' },
         requireArtifact: true,
-        context: { gsd_role: 'gsd-planner' },
+        context: { gsd_role: 'gsd-planner', preRecordValidation },
         capabilities: CAPABILITIES,
         recorder: receipts,
         applicationEvidence: () => transcriptEvidence({ ...evidence, launch_id: 'planning-decomposition-2' }),
@@ -496,7 +505,10 @@ test('decomposition requires a phase-bound index for CONTEXT and every PLAN', as
       /digest|altered|stale|artifact/i,
     );
   } finally {
+    lease.release(handle);
     fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(root + '-receipts', { recursive: true, force: true });
+    fs.rmSync(root + '-writer', { recursive: true, force: true });
   }
 });
 

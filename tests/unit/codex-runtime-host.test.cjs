@@ -289,6 +289,30 @@ test('Codex launcher passes explicit model and reasoning effort to exec', async 
   }
 });
 
+test('Codex native pid persistence precedes stdin and failed persistence kills the child', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-codex-pid-'));
+  const input = [];
+  let killed = false;
+  try {
+    const launch = createCodexCliLauncher({ scope: { ...SCOPE, worktree: root }, capabilities,
+      env: { CODEX_HOME: path.join(root, 'codex-home') },
+      spawn: () => {
+        const child = childFor('', 0, 24038, input);
+        child.kill = () => { killed = true; };
+        return child;
+      } });
+    await assert.rejects(launch('task', { model: 'gpt-6-luna', effort: 'max',
+      sandbox_mode: 'workspace-write', dispatch_id: 'dispatch-pid-failure',
+      onProcessSpawned(pid) {
+        assert.equal(pid, 24038);
+        assert.deepEqual(input, []);
+        throw Object.assign(new Error('private pid checkpoint failed'), { code: 'CHECKPOINT_FAILED' });
+      } }), { code: 'CHECKPOINT_FAILED' });
+    assert.equal(killed, true);
+    assert.deepEqual(input, []);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
 test('host-owned additional protected paths deny the finalization state root and cannot be overridden by a launch request', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-codex-state-deny-'));
   const calls = [];

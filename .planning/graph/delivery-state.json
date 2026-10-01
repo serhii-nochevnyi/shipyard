@@ -1594,9 +1594,10 @@
     "since": "2026-09-12T00:07:42.789Z"
   },
   "T-30-04": {
-    "branch": "ticket/T-30-04-require-an-explicit-operator-choice-before-cloning",
+    "branch": "ticket/T-30-04-require-an-explicit-operator-choice-befo",
     "pr": 113,
     "status": "merged",
+    "recorded_pr": 113,
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/113",
     "merge_sha": "0ab15dd81fb008fefb3f0e0c7acc7a42c913a4ca",
     "merged_into": "epic/30-a-ticket-you-cannot-reach-is-not-deliverable",
@@ -1611,12 +1612,13 @@
     "base_reason": "T-30-03 is MERGED, so its branch is no longer where work lands — the base is epic/30-a-ticket-you-cannot-reach-is-not-deliverable (base-merge it in first to keep the review diff one slice)",
     "epic": "epic/30-a-ticket-you-cannot-reach-is-not-deliverable",
     "reapable": true,
-    "since": "2026-09-12T19:57:33.322Z"
+    "since": "2026-09-30T20:45:27.864Z"
   },
   "T-30-05": {
-    "branch": "ticket/T-30-05-validate-repository-destinations-with-existing-nesting-rule",
+    "branch": "ticket/T-30-05-validate-repository-destinations-with-th",
     "pr": 114,
     "status": "merged",
+    "recorded_pr": 114,
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/114",
     "merge_sha": "b1c8c6bfd9f8e85dc9d9bdb9849a8c592cec073e",
     "merged_into": "epic/30-a-ticket-you-cannot-reach-is-not-deliverable",
@@ -1631,12 +1633,13 @@
     "base_reason": "T-30-04 is MERGED, so its branch is no longer where work lands — the base is epic/30-a-ticket-you-cannot-reach-is-not-deliverable (base-merge it in first to keep the review diff one slice)",
     "epic": "epic/30-a-ticket-you-cannot-reach-is-not-deliverable",
     "reapable": true,
-    "since": "2026-09-12T19:57:33.322Z"
+    "since": "2026-09-30T20:45:27.864Z"
   },
   "T-30-06": {
-    "branch": "ticket/T-30-06-mirror-project-origin-protocol-for-repository-clones",
+    "branch": "ticket/T-30-06-mirror-the-project-origin-protocol-for-r",
     "pr": 115,
     "status": "merged",
+    "recorded_pr": 115,
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/115",
     "merge_sha": "0090d7e955c5d825f8fa4309da9e2c191c6eabd4",
     "merged_into": "epic/30-a-ticket-you-cannot-reach-is-not-deliverable",
@@ -1651,7 +1654,7 @@
     "base_reason": "T-30-05 is MERGED, so its branch is no longer where work lands — the base is epic/30-a-ticket-you-cannot-reach-is-not-deliverable (base-merge it in first to keep the review diff one slice)",
     "epic": "epic/30-a-ticket-you-cannot-reach-is-not-deliverable",
     "reapable": true,
-    "since": "2026-09-12T19:57:33.322Z"
+    "since": "2026-09-30T20:45:27.864Z"
   },
   "T-30-07": {
     "branch": "ticket/T-30-07-use-a-full-clone-with-all-refs-required",
@@ -1674,9 +1677,10 @@
     "since": "2026-09-12T19:57:33.322Z"
   },
   "T-30-08": {
-    "branch": "ticket/T-30-08-adopt-matching-checkouts-and-refuse-to-clobber",
+    "branch": "ticket/T-30-08-adopt-matching-checkouts-and-refuse-to-c",
     "pr": 117,
     "status": "merged",
+    "recorded_pr": 117,
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/117",
     "merge_sha": "4ceabc1e4ca66e76b1add912838c359795c26741",
     "merged_into": "epic/30-a-ticket-you-cannot-reach-is-not-deliverable",
@@ -1691,12 +1695,13 @@
     "base_reason": "T-30-07 is MERGED, so its branch is no longer where work lands — the base is epic/30-a-ticket-you-cannot-reach-is-not-deliverable (base-merge it in first to keep the review diff one slice)",
     "epic": "epic/30-a-ticket-you-cannot-reach-is-not-deliverable",
     "reapable": true,
-    "since": "2026-09-12T19:57:33.322Z"
+    "since": "2026-09-30T20:45:27.864Z"
   },
   "T-30-09": {
-    "branch": "ticket/T-30-09-persist-resolved-checkouts-and-park-unreachable",
+    "branch": "ticket/T-30-09-persist-resolved-checkouts-and-park-unre",
     "pr": 118,
     "status": "merged",
+    "recorded_pr": 118,
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/118",
     "merge_sha": "337fd168138f52333fa9825f5fd5c1be5ae36bbd",
     "merged_into": "epic/30-a-ticket-you-cannot-reach-is-not-deliverable",
@@ -1711,7 +1716,7 @@
     "base_reason": "T-30-08 is MERGED, so its branch is no longer where work lands — the base is epic/30-a-ticket-you-cannot-reach-is-not-deliverable (base-merge it in first to keep the review diff one slice)",
     "epic": "epic/30-a-ticket-you-cannot-reach-is-not-deliverable",
     "reapable": true,
-    "since": "2026-09-12T20:26:45.234Z"
+    "since": "2026-09-30T20:45:27.864Z"
   },
   "T-30-10": {
     "branch": "ticket/T-30-10-make-the-sentinel-honor-observed-ticket",
@@ -1847,9 +1852,10 @@
     "since": "2026-09-14T19:18:25.449Z"
   },
   "T-31-07": {
-    "branch": "ticket/T-31-07-read-tracker-eligibility-at-cold-start",
+    "branch": "ticket/T-31-07-read-tracker-eligibility-at-cold-start-a",
     "pr": 135,
     "status": "merged",
+    "recorded_pr": 135,
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/135",
     "merge_sha": "eb86b20c1ea8460fdbd670aa39513f9338334cb0",
     "merged_into": "epic/31-not-every-ticket-is-available-work",
@@ -1864,7 +1870,7 @@
     "base_reason": "T-31-06 is MERGED, so its branch is no longer where work lands — the base is epic/31-not-every-ticket-is-available-work (base-merge it in first to keep the review diff one slice)",
     "epic": "epic/31-not-every-ticket-is-available-work",
     "reapable": true,
-    "since": "2026-09-14T19:18:25.449Z"
+    "since": "2026-09-30T20:45:27.864Z"
   },
   "T-32-01": {
     "branch": "ticket/T-32-01-collect-deduplicated-usage-from-explicit",
@@ -1988,9 +1994,10 @@
     "since": "2026-09-11T18:59:59.751Z"
   },
   "T-32-07": {
-    "branch": "ticket/T-32-07-join-transcripts-to-dispatches",
+    "branch": "ticket/T-32-07-join-transcript-usage-to-dispatches-with",
     "pr": 102,
     "status": "merged",
+    "recorded_pr": 102,
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/102",
     "merge_sha": "a921ee25bfb4b67038be25d9f7571a4014f24854",
     "merged_into": "epic/32-measure-usage-and-make-the-backlog-actionable",
@@ -2005,7 +2012,7 @@
     "base_reason": "T-32-05 is MERGED, so its branch is no longer where work lands — the base is epic/32-measure-usage-and-make-the-backlog-actionable (base-merge it in first to keep the review diff one slice)",
     "epic": "epic/32-measure-usage-and-make-the-backlog-actionable",
     "reapable": true,
-    "since": "2026-09-11T18:59:59.751Z"
+    "since": "2026-09-30T20:45:27.864Z"
   },
   "T-33-01": {
     "branch": "ticket/T-33-01-deliver-durable-ci-and-review-transition",
@@ -2188,9 +2195,10 @@
     "since": "2026-09-17T09:36:22.933Z"
   },
   "T-34-01": {
-    "branch": "ticket/T-34-01-review-progress-and-resource-budgets",
+    "branch": "ticket/T-34-01-make-review-progress-and-resource-budget",
     "pr": 167,
     "status": "merged",
+    "recorded_pr": 167,
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/167",
     "merge_sha": "de47023cebe9c4ae048f179ce1abe629629824d8",
     "merged_into": "epic/34-improve-convergence-and-tune-from-measured-outcomes",
@@ -2205,12 +2213,13 @@
     "base_reason": "no primary parent — a root ticket PRs into epic/34-improve-convergence-and-tune-from-measured-outcomes",
     "epic": "epic/34-improve-convergence-and-tune-from-measured-outcomes",
     "reapable": true,
-    "since": "2026-09-17T16:19:24.785Z"
+    "since": "2026-09-30T20:45:27.864Z"
   },
   "T-34-02": {
-    "branch": "ticket/T-34-02-runtime-capability-evidence",
+    "branch": "ticket/T-34-02-require-runtime-capability-evidence-for",
     "pr": 168,
     "status": "merged",
+    "recorded_pr": 168,
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/168",
     "merge_sha": "9d2551b4f61fac2247569138302859f5fedb777b",
     "merged_into": "epic/34-improve-convergence-and-tune-from-measured-outcomes",
@@ -2225,12 +2234,13 @@
     "base_reason": "T-34-01 is MERGED, so its branch is no longer where work lands — the base is epic/34-improve-convergence-and-tune-from-measured-outcomes (base-merge it in first to keep the review diff one slice)",
     "epic": "epic/34-improve-convergence-and-tune-from-measured-outcomes",
     "reapable": true,
-    "since": "2026-09-17T16:20:00.050Z"
+    "since": "2026-09-30T20:45:27.864Z"
   },
   "T-34-03": {
-    "branch": "ticket/T-34-03-merge-verdict-carry",
+    "branch": "ticket/T-34-03-strengthen-manual-merge-verdict-carry",
     "pr": 169,
     "status": "merged",
+    "recorded_pr": 169,
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/169",
     "merge_sha": "679c2914628c5ee77a143e9ce08abd277f812281",
     "merged_into": "epic/34-improve-convergence-and-tune-from-measured-outcomes",
@@ -2245,12 +2255,13 @@
     "base_reason": "no primary parent — a root ticket PRs into epic/34-improve-convergence-and-tune-from-measured-outcomes",
     "epic": "epic/34-improve-convergence-and-tune-from-measured-outcomes",
     "reapable": true,
-    "since": "2026-09-17T16:19:24.785Z"
+    "since": "2026-09-30T20:45:27.864Z"
   },
   "T-34-04": {
-    "branch": "ticket/T-34-04-shared-capacity-and-dispatch-boundary",
+    "branch": "ticket/T-34-04-admit-distinct-agents-through-shared-acc",
     "pr": 170,
     "status": "merged",
+    "recorded_pr": 170,
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/170",
     "merge_sha": "bee6bff3d9f74197690a93125dfdfe0d719c12fb",
     "merged_into": "epic/34-improve-convergence-and-tune-from-measured-outcomes",
@@ -2265,7 +2276,7 @@
     "base_reason": "T-34-02 is MERGED, so its branch is no longer where work lands — the base is epic/34-improve-convergence-and-tune-from-measured-outcomes (base-merge it in first to keep the review diff one slice)",
     "epic": "epic/34-improve-convergence-and-tune-from-measured-outcomes",
     "reapable": true,
-    "since": "2026-09-17T16:20:00.050Z"
+    "since": "2026-09-30T20:45:27.864Z"
   },
   "T-34-05": {
     "branch": "ticket/T-34-05-publish-versioned-optimization-evidence",
@@ -2409,9 +2420,10 @@
     "since": "2026-09-15T07:39:31.619Z"
   },
   "T-36-04": {
-    "branch": "ticket/T-36-04-generate-and-validate-the-complete-codex",
+    "branch": "ticket/T-36-04-generate-and-validate-the-codex-bundle-w",
     "pr": 139,
     "status": "merged",
+    "recorded_pr": 139,
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/139",
     "merge_sha": "e24a08bded8a81183296c95e608a881481f50393",
     "merged_into": "epic/36-enforce-the-runtime-model-ladder",
@@ -2426,7 +2438,7 @@
     "base_reason": "T-36-03 is MERGED, so its branch is no longer where work lands — the base is epic/36-enforce-the-runtime-model-ladder (base-merge it in first to keep the review diff one slice)",
     "epic": "epic/36-enforce-the-runtime-model-ladder",
     "reapable": true,
-    "since": "2026-09-15T14:07:06.774Z"
+    "since": "2026-09-30T20:45:27.864Z"
   },
   "T-36-05": {
     "branch": "ticket/T-36-05-claude-adapter-and-explicit-workflow-lau",
@@ -2469,9 +2481,10 @@
     "since": "2026-09-16T17:20:49.458Z"
   },
   "T-36-07": {
-    "branch": "ticket/T-36-07-enforce-the-boundary-across-shipyard-delivery-launches",
+    "branch": "ticket/T-36-07-enforce-the-boundary-across-shipyard-del",
     "pr": 142,
     "status": "merged",
+    "recorded_pr": 142,
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/142",
     "merge_sha": "42884bbc5a1d062299ca64f3c9a738e4142be938",
     "merged_into": "epic/36-enforce-the-runtime-model-ladder",
@@ -2486,7 +2499,7 @@
     "base_reason": "T-36-06 is MERGED, so its branch is no longer where work lands — the base is epic/36-enforce-the-runtime-model-ladder (base-merge it in first to keep the review diff one slice)",
     "epic": "epic/36-enforce-the-runtime-model-ladder",
     "reapable": true,
-    "since": "2026-09-16T17:20:49.458Z"
+    "since": "2026-09-30T20:45:27.864Z"
   },
   "T-36-08": {
     "branch": "ticket/T-36-08-application-receipts-and-dispatch-record",
@@ -2509,9 +2522,10 @@
     "since": "2026-09-16T17:20:49.458Z"
   },
   "T-36-09": {
-    "branch": "ticket/T-36-09-policy-aware-telemetry-and-reconciliation-reporting",
+    "branch": "ticket/T-36-09-policy-aware-telemetry-and-reconciliatio",
     "pr": 144,
     "status": "merged",
+    "recorded_pr": 144,
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/144",
     "merge_sha": "934749416d14b8b714d9d3dffa89f6375b6dd224",
     "merged_into": "epic/36-enforce-the-runtime-model-ladder",
@@ -2526,12 +2540,13 @@
     "base_reason": "T-36-08 is MERGED, so its branch is no longer where work lands — the base is epic/36-enforce-the-runtime-model-ladder (base-merge it in first to keep the review diff one slice)",
     "epic": "epic/36-enforce-the-runtime-model-ladder",
     "reapable": true,
-    "since": "2026-09-16T17:20:49.458Z"
+    "since": "2026-09-30T20:45:27.864Z"
   },
   "T-36-10": {
-    "branch": "ticket/T-36-10-exhaustive-signal-matrix-and-negative-bypass-suite",
+    "branch": "ticket/T-36-10-exhaustive-signal-matrix-and-negative-by",
     "pr": 145,
     "status": "merged",
+    "recorded_pr": 145,
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/145",
     "merge_sha": "ae44fd37d0201d67de93fe28ff560841b75feb78",
     "merged_into": "epic/36-enforce-the-runtime-model-ladder",
@@ -2546,12 +2561,13 @@
     "base_reason": "T-36-09 is MERGED, so its branch is no longer where work lands — the base is epic/36-enforce-the-runtime-model-ladder (base-merge it in first to keep the review diff one slice)",
     "epic": "epic/36-enforce-the-runtime-model-ladder",
     "reapable": true,
-    "since": "2026-09-16T17:20:49.458Z"
+    "since": "2026-09-30T20:45:27.864Z"
   },
   "T-36-11": {
-    "branch": "ticket/T-36-11-cross-runtime-generated-install-smoke-verification",
+    "branch": "ticket/T-36-11-cross-runtime-generated-install-smoke-ve",
     "pr": 146,
     "status": "merged",
+    "recorded_pr": 146,
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/146",
     "merge_sha": "f691d6a872ae0a97f5811ca7e9ebad2c2e09b8c2",
     "merged_into": "epic/36-enforce-the-runtime-model-ladder",
@@ -2566,7 +2582,7 @@
     "base_reason": "T-36-10 is MERGED, so its branch is no longer where work lands — the base is epic/36-enforce-the-runtime-model-ladder (base-merge it in first to keep the review diff one slice)",
     "epic": "epic/36-enforce-the-runtime-model-ladder",
     "reapable": true,
-    "since": "2026-09-16T17:20:49.458Z"
+    "since": "2026-09-30T20:45:27.864Z"
   },
   "T-36-12": {
     "branch": "ticket/T-36-12-supersede-obsolete-ladder-documentation",
@@ -2622,9 +2638,10 @@
     "since": "2026-09-22T19:26:00.502Z"
   },
   "T-37-03": {
-    "branch": "ticket/T-37-03-connect-claude-to-scoped-runtime-controller",
+    "branch": "ticket/T-37-03-connect-claude-code-to-the-scoped-runtim",
     "pr": 180,
     "status": "merged",
+    "recorded_pr": 180,
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/180",
     "merge_sha": "dfeaeea5ab9373bf08bc408efbcd573f1ec33327",
     "merged_into": "ticket/T-37-02-persist-controller-leases-and-autonomous",
@@ -2632,12 +2649,13 @@
     "base_reason": "T-37-02 is MERGED, so its branch is no longer where work lands — the base is epic/37-autonomous-dual-runtime-control-plane (base-merge it in first to keep the review diff one slice)",
     "epic": "epic/37-autonomous-dual-runtime-control-plane",
     "reapable": true,
-    "since": "2026-09-22T19:26:00.502Z"
+    "since": "2026-09-30T20:45:27.864Z"
   },
   "T-37-04": {
-    "branch": "ticket/T-37-04-connect-codex-to-scoped-runtime-controller",
+    "branch": "ticket/T-37-04-connect-codex-to-the-scoped-runtime-cont",
     "pr": 182,
     "status": "merged",
+    "recorded_pr": 182,
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/182",
     "merge_sha": "b1ddf600bf2e17aa64f64a9fa54211fe095d2bbe",
     "merged_into": "ticket/T-37-02-persist-controller-leases-and-autonomous",
@@ -2645,12 +2663,13 @@
     "base_reason": "T-37-02 is MERGED, so its branch is no longer where work lands — the base is epic/37-autonomous-dual-runtime-control-plane (base-merge it in first to keep the review diff one slice)",
     "epic": "epic/37-autonomous-dual-runtime-control-plane",
     "reapable": true,
-    "since": "2026-09-22T19:26:00.502Z"
+    "since": "2026-09-30T20:45:27.864Z"
   },
   "T-37-05": {
-    "branch": "ticket/T-37-05-prove-graph-reachability-before-autonomous-run",
+    "branch": "ticket/T-37-05-prove-graph-reachability-before-autonomo",
     "pr": 181,
     "status": "merged",
+    "recorded_pr": 181,
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/181",
     "merge_sha": "e8a621857d5bf9fc1570c74d7fdf89add72d781b",
     "merged_into": "ticket/T-37-02-persist-controller-leases-and-autonomous",
@@ -2658,7 +2677,7 @@
     "base_reason": "T-37-02 is MERGED, so its branch is no longer where work lands — the base is epic/37-autonomous-dual-runtime-control-plane (base-merge it in first to keep the review diff one slice)",
     "epic": "epic/37-autonomous-dual-runtime-control-plane",
     "reapable": true,
-    "since": "2026-09-22T19:26:00.502Z"
+    "since": "2026-09-30T20:45:27.864Z"
   },
   "T-37-06": {
     "branch": "ticket/T-37-06-make-stop-and-wait-decisions-run-scoped",
@@ -2695,9 +2714,8 @@
     "merge_sha": "c7125cea9db4696f05a8017829e099e26f05c80d",
     "merged_into": "ticket/T-37-05-prove-graph-reachability-before-autonomous-run",
     "base": "epic/37-autonomous-dual-runtime-control-plane",
-    "base_reason": "T-37-06 is MERGED, so its branch is no longer where work lands — the base is epic/37-autonomous-dual-runtime-control-plane (base-merge it in first to keep the review diff one slice); ticket-worktree.sh create merges epic/37-autonomous-dual-runtime-control-plane in for non-primary parent(s) T-37-07",
+    "base_reason": "T-37-06 is MERGED, so its branch is no longer where work lands — the base is epic/37-autonomous-dual-runtime-control-plane (base-merge it in first to keep the review diff one slice)",
     "epic": "epic/37-autonomous-dual-runtime-control-plane",
-    "base_merge": "epic/37-autonomous-dual-runtime-control-plane",
     "reapable": true,
     "since": "2026-09-22T19:26:00.502Z"
   },
@@ -2742,9 +2760,10 @@
     "since": "2026-09-27T18:11:57.006Z"
   },
   "T-38-04": {
-    "branch": "ticket/T-38-04-connect-codex-launches-to-delivery",
+    "branch": "ticket/T-38-04-connect-codex-delivery-and-typed-gsd-dec",
     "pr": 192,
     "status": "merged",
+    "recorded_pr": 192,
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/192",
     "merge_sha": "6995da518d09790536c09a1a8664cbfa393743fa",
     "merged_into": "epic/38-runtime-model-ladder-recovery",
@@ -2752,7 +2771,7 @@
     "base_reason": "T-38-03 is MERGED, so its branch is no longer where work lands — the base is epic/38-runtime-model-ladder-recovery (base-merge it in first to keep the review diff one slice)",
     "epic": "epic/38-runtime-model-ladder-recovery",
     "reapable": true,
-    "since": "2026-09-23T17:54:56.642Z"
+    "since": "2026-09-30T20:45:27.864Z"
   },
   "T-38-06": {
     "branch": "ticket/T-38-06-apply-typed-claude-gsd-agents-to-decompo",
@@ -2794,9 +2813,10 @@
     "since": "2026-09-24T07:16:23.997Z"
   },
   "T-38-05": {
-    "branch": "ticket/T-38-05-route-independent-runtime-rollouts",
+    "branch": "ticket/T-38-05-route-delivery-through-independent-runti",
     "pr": 199,
     "status": "merged",
+    "recorded_pr": 199,
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/199",
     "merge_sha": "f524a28b1f4554efa358ead966a49c49165acd3d",
     "merged_into": "epic/38-runtime-model-ladder-recovery",
@@ -2805,7 +2825,7 @@
     "epic": "epic/38-runtime-model-ladder-recovery",
     "base_merge": "epic/38-runtime-model-ladder-recovery",
     "reapable": true,
-    "since": "2026-09-24T07:16:23.997Z"
+    "since": "2026-09-30T20:45:27.864Z"
   },
   "T-39-01": {
     "branch": "ticket/T-39-01-add-shared-refusal-hints-to-claude-and-c",
@@ -3301,9 +3321,10 @@
     "since": "2026-09-25T20:24:22.890Z"
   },
   "T-41-04": {
-    "branch": "ticket/T-41-04-resume-authenticated-completed-execution",
+    "branch": "ticket/T-41-04-accept-asynchronous-native-child-complet",
     "pr": 246,
     "status": "merged",
+    "recorded_pr": 246,
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/246",
     "merge_sha": "79c0aba97dec3440c60a585538628e591b051aa9",
     "merged_into": "epic/41-reduce-pipeline-subscription-overhead",
@@ -3318,7 +3339,7 @@
     "base_reason": "no primary parent — a root ticket PRs into epic/41-reduce-pipeline-subscription-overhead",
     "epic": "epic/41-reduce-pipeline-subscription-overhead",
     "reapable": true,
-    "since": "2026-09-26T07:25:48.298Z"
+    "since": "2026-09-30T20:45:27.864Z"
   },
   "T-41-05": {
     "branch": "ticket/T-41-05-fingerprint-each-gsd-projection-from-its",
@@ -3940,9 +3961,9 @@
     "epic_pr": {
       "number": 320,
       "branch": "epic/43-target-project-delivery-at-scale",
-      "state": "OPEN",
+      "state": "MERGED",
       "base": "main",
-      "landed": false
+      "landed": true
     },
     "base": "epic/43-target-project-delivery-at-scale",
     "base_reason": "no primary parent — a root ticket PRs into epic/43-target-project-delivery-at-scale",
@@ -3960,9 +3981,9 @@
     "epic_pr": {
       "number": 320,
       "branch": "epic/43-target-project-delivery-at-scale",
-      "state": "OPEN",
+      "state": "MERGED",
       "base": "main",
-      "landed": false
+      "landed": true
     },
     "base": "epic/43-target-project-delivery-at-scale",
     "base_reason": "no primary parent — a root ticket PRs into epic/43-target-project-delivery-at-scale",
@@ -3980,9 +4001,9 @@
     "epic_pr": {
       "number": 320,
       "branch": "epic/43-target-project-delivery-at-scale",
-      "state": "OPEN",
+      "state": "MERGED",
       "base": "main",
-      "landed": false
+      "landed": true
     },
     "base": "epic/43-target-project-delivery-at-scale",
     "base_reason": "T-43-01 is MERGED, so its branch is no longer where work lands — the base is epic/43-target-project-delivery-at-scale (base-merge it in first to keep the review diff one slice); ticket-worktree.sh create merges epic/43-target-project-delivery-at-scale in for non-primary parent(s) T-43-02",
@@ -4001,9 +4022,9 @@
     "epic_pr": {
       "number": 320,
       "branch": "epic/43-target-project-delivery-at-scale",
-      "state": "OPEN",
+      "state": "MERGED",
       "base": "main",
-      "landed": false
+      "landed": true
     },
     "base": "epic/43-target-project-delivery-at-scale",
     "base_reason": "no primary parent — a root ticket PRs into epic/43-target-project-delivery-at-scale",
@@ -4021,15 +4042,15 @@
     "epic_pr": {
       "number": 320,
       "branch": "epic/43-target-project-delivery-at-scale",
-      "state": "OPEN",
+      "state": "MERGED",
       "base": "main",
-      "landed": false
+      "landed": true
     },
     "base": "epic/43-target-project-delivery-at-scale",
     "base_reason": "T-43-05 is MERGED, so its branch is no longer where work lands — the base is epic/43-target-project-delivery-at-scale (base-merge it in first to keep the review diff one slice)",
     "epic": "epic/43-target-project-delivery-at-scale",
     "reapable": true,
-    "since": "2026-09-28T21:57:30.563Z"
+    "since": "2026-09-30T09:49:09.842Z"
   },
   "T-43-07": {
     "branch": "ticket/T-43-07-cancelled-checks-ignore-superseded-runs",
@@ -4041,15 +4062,15 @@
     "epic_pr": {
       "number": 320,
       "branch": "epic/43-target-project-delivery-at-scale",
-      "state": "OPEN",
+      "state": "MERGED",
       "base": "main",
-      "landed": false
+      "landed": true
     },
     "base": "epic/43-target-project-delivery-at-scale",
     "base_reason": "no primary parent — a root ticket PRs into epic/43-target-project-delivery-at-scale",
     "epic": "epic/43-target-project-delivery-at-scale",
     "reapable": true,
-    "since": "2026-09-28T21:24:56.496Z"
+    "since": "2026-09-30T09:49:09.842Z"
   },
   "T-43-09": {
     "branch": "ticket/T-43-09-state-sync-lists-prs-by-ticket-head-and",
@@ -4061,9 +4082,9 @@
     "epic_pr": {
       "number": 320,
       "branch": "epic/43-target-project-delivery-at-scale",
-      "state": "OPEN",
+      "state": "MERGED",
       "base": "main",
-      "landed": false
+      "landed": true
     },
     "base": "epic/43-target-project-delivery-at-scale",
     "base_reason": "no primary parent — a root ticket PRs into epic/43-target-project-delivery-at-scale",
@@ -4081,16 +4102,16 @@
     "epic_pr": {
       "number": 320,
       "branch": "epic/43-target-project-delivery-at-scale",
-      "state": "OPEN",
+      "state": "MERGED",
       "base": "main",
-      "landed": false
+      "landed": true
     },
     "base": "epic/43-target-project-delivery-at-scale",
     "base_reason": "T-43-09 is MERGED, so its branch is no longer where work lands — the base is epic/43-target-project-delivery-at-scale (base-merge it in first to keep the review diff one slice); ticket-worktree.sh create merges epic/43-target-project-delivery-at-scale in for non-primary parent(s) T-43-07",
     "epic": "epic/43-target-project-delivery-at-scale",
     "base_merge": "epic/43-target-project-delivery-at-scale",
     "reapable": true,
-    "since": "2026-09-28T21:24:56.496Z"
+    "since": "2026-09-30T09:49:09.842Z"
   },
   "T-43-08": {
     "branch": "ticket/T-43-08-a-stale-approval-from-a-declared-bot-doe",
@@ -4102,16 +4123,16 @@
     "epic_pr": {
       "number": 320,
       "branch": "epic/43-target-project-delivery-at-scale",
-      "state": "OPEN",
+      "state": "MERGED",
       "base": "main",
-      "landed": false
+      "landed": true
     },
     "base": "epic/43-target-project-delivery-at-scale",
     "base_reason": "T-43-04 is MERGED, so its branch is no longer where work lands — the base is epic/43-target-project-delivery-at-scale (base-merge it in first to keep the review diff one slice); ticket-worktree.sh create merges epic/43-target-project-delivery-at-scale in for non-primary parent(s) T-43-01, T-43-07",
     "epic": "epic/43-target-project-delivery-at-scale",
     "base_merge": "epic/43-target-project-delivery-at-scale",
     "reapable": true,
-    "since": "2026-09-28T21:57:30.563Z"
+    "since": "2026-09-30T09:49:09.842Z"
   },
   "T-43-10": {
     "branch": "ticket/T-43-10-honour-pipeline-gsd-sync-as-a-deprecated",
@@ -4123,16 +4144,16 @@
     "epic_pr": {
       "number": 320,
       "branch": "epic/43-target-project-delivery-at-scale",
-      "state": "OPEN",
+      "state": "MERGED",
       "base": "main",
-      "landed": false
+      "landed": true
     },
     "base": "epic/43-target-project-delivery-at-scale",
     "base_reason": "T-43-09 is MERGED, so its branch is no longer where work lands — the base is epic/43-target-project-delivery-at-scale (base-merge it in first to keep the review diff one slice); ticket-worktree.sh create merges epic/43-target-project-delivery-at-scale in for non-primary parent(s) T-43-01",
     "epic": "epic/43-target-project-delivery-at-scale",
     "base_merge": "epic/43-target-project-delivery-at-scale",
     "reapable": true,
-    "since": "2026-09-28T21:24:56.496Z"
+    "since": "2026-09-30T09:49:09.842Z"
   },
   "T-43-11": {
     "branch": "ticket/T-43-11-bind-pre-existing-jira-issues-by-recorde",
@@ -4144,38 +4165,56 @@
     "epic_pr": {
       "number": 320,
       "branch": "epic/43-target-project-delivery-at-scale",
-      "state": "OPEN",
+      "state": "MERGED",
       "base": "main",
-      "landed": false
+      "landed": true
     },
     "base": "epic/43-target-project-delivery-at-scale",
     "base_reason": "no primary parent — a root ticket PRs into epic/43-target-project-delivery-at-scale",
     "epic": "epic/43-target-project-delivery-at-scale",
     "reapable": true,
-    "since": "2026-09-28T21:24:56.496Z"
+    "since": "2026-09-30T09:49:09.842Z"
   },
   "T-43-12": {
     "branch": "ticket/T-43-12-human-checkpoint-takes-review-or-merge-t",
-    "pr": null,
-    "status": "pending",
+    "pr": 375,
+    "status": "merged",
+    "url": "https://github.com/serhii-nochevnyi/shipyard/pull/375",
+    "merge_sha": "28fbafb3039a157733702fc0678680e690419597",
+    "merged_into": "epic/43-target-project-delivery-at-scale",
+    "epic_pr": {
+      "number": 320,
+      "branch": "epic/43-target-project-delivery-at-scale",
+      "state": "MERGED",
+      "base": "main",
+      "landed": true
+    },
     "base": "epic/43-target-project-delivery-at-scale",
     "base_reason": "T-43-08 is MERGED, so its branch is no longer where work lands — the base is epic/43-target-project-delivery-at-scale (base-merge it in first to keep the review diff one slice); ticket-worktree.sh create merges epic/43-target-project-delivery-at-scale in for non-primary parent(s) T-43-11",
     "epic": "epic/43-target-project-delivery-at-scale",
     "base_merge": "epic/43-target-project-delivery-at-scale",
-    "ready": true,
-    "reapable": false,
-    "since": "2026-09-26T10:54:56.735Z"
+    "reapable": true,
+    "since": "2026-09-30T09:49:09.842Z"
   },
   "T-43-13": {
     "branch": "ticket/T-43-13-carry-a-conform-verdict-across-a-base-me",
-    "pr": null,
-    "status": "pending",
+    "pr": 376,
+    "status": "merged",
+    "url": "https://github.com/serhii-nochevnyi/shipyard/pull/376",
+    "merge_sha": "2411f47b17d3646fa475653f8434e612f6cb9760",
+    "merged_into": "epic/43-target-project-delivery-at-scale",
+    "epic_pr": {
+      "number": 320,
+      "branch": "epic/43-target-project-delivery-at-scale",
+      "state": "MERGED",
+      "base": "main",
+      "landed": true
+    },
     "base": "epic/43-target-project-delivery-at-scale",
     "base_reason": "T-43-06 is MERGED, so its branch is no longer where work lands — the base is epic/43-target-project-delivery-at-scale (base-merge it in first to keep the review diff one slice)",
     "epic": "epic/43-target-project-delivery-at-scale",
-    "ready": true,
-    "reapable": false,
-    "since": "2026-09-26T10:54:56.735Z"
+    "reapable": true,
+    "since": "2026-09-30T09:49:09.842Z"
   },
   "T-43-14": {
     "branch": "ticket/T-43-14-deliver-dispatch-builds-arch-review-ci-f",
@@ -4187,9 +4226,9 @@
     "epic_pr": {
       "number": 320,
       "branch": "epic/43-target-project-delivery-at-scale",
-      "state": "OPEN",
+      "state": "MERGED",
       "base": "main",
-      "landed": false
+      "landed": true
     },
     "base": "epic/43-target-project-delivery-at-scale",
     "base_reason": "no primary parent — a root ticket PRs into epic/43-target-project-delivery-at-scale",
@@ -4199,87 +4238,108 @@
   },
   "T-43-15": {
     "branch": "ticket/T-43-15-deliver-dispatch-builds-research-and-dec",
-    "pr": null,
-    "status": "pending",
-    "base": "epic/43-target-project-delivery-at-scale",
-    "base_reason": "T-43-12 has no branch on the remote yet (status pending) — ticket/T-43-12-human-checkpoint-takes-review-or-merge-t is not a base that exists, so the base is epic/43-target-project-delivery-at-scale",
-    "epic": "epic/43-target-project-delivery-at-scale",
-    "ready": false,
-    "blocked_by": [
-      "T-43-12"
-    ],
-    "blocked_reasons": {
-      "T-43-12": "parent has no branch yet (nothing to cascade from)"
+    "pr": 377,
+    "status": "merged",
+    "url": "https://github.com/serhii-nochevnyi/shipyard/pull/377",
+    "merge_sha": "dc6ddcc18e9219a76d960a3bd3f0a2f59e036f72",
+    "merged_into": "epic/43-target-project-delivery-at-scale",
+    "epic_pr": {
+      "number": 320,
+      "branch": "epic/43-target-project-delivery-at-scale",
+      "state": "MERGED",
+      "base": "main",
+      "landed": true
     },
-    "reapable": false,
-    "since": "2026-09-26T10:54:56.735Z"
+    "base": "epic/43-target-project-delivery-at-scale",
+    "base_reason": "T-43-12 is MERGED, so its branch is no longer where work lands — the base is epic/43-target-project-delivery-at-scale (base-merge it in first to keep the review diff one slice); ticket-worktree.sh create merges epic/43-target-project-delivery-at-scale in for non-primary parent(s) T-43-14",
+    "epic": "epic/43-target-project-delivery-at-scale",
+    "base_merge": "epic/43-target-project-delivery-at-scale",
+    "reapable": true,
+    "since": "2026-09-30T09:49:09.842Z"
   },
   "T-43-16": {
     "branch": "ticket/T-43-16-host-side-verification-of-plan-declared",
-    "pr": null,
-    "status": "pending",
+    "pr": 374,
+    "status": "merged",
+    "url": "https://github.com/serhii-nochevnyi/shipyard/pull/374",
+    "merge_sha": "07c15d565cde91ef2f53f123cd21050fdb95f62c",
+    "merged_into": "epic/43-target-project-delivery-at-scale",
+    "epic_pr": {
+      "number": 320,
+      "branch": "epic/43-target-project-delivery-at-scale",
+      "state": "MERGED",
+      "base": "main",
+      "landed": true
+    },
     "base": "epic/43-target-project-delivery-at-scale",
     "base_reason": "T-43-06 is MERGED, so its branch is no longer where work lands — the base is epic/43-target-project-delivery-at-scale (base-merge it in first to keep the review diff one slice); ticket-worktree.sh create merges epic/43-target-project-delivery-at-scale in for non-primary parent(s) T-43-01",
     "epic": "epic/43-target-project-delivery-at-scale",
     "base_merge": "epic/43-target-project-delivery-at-scale",
-    "ready": true,
-    "reapable": false,
-    "since": "2026-09-26T10:54:56.735Z"
+    "reapable": true,
+    "since": "2026-09-30T09:49:09.842Z"
   },
   "T-43-17": {
     "branch": "ticket/T-43-17-record-a-sealed-coverage-entry-for-every",
-    "pr": null,
-    "status": "pending",
-    "base": "epic/43-target-project-delivery-at-scale",
-    "base_reason": "T-43-13 has no branch on the remote yet (status pending) — ticket/T-43-13-carry-a-conform-verdict-across-a-base-me is not a base that exists, so the base is epic/43-target-project-delivery-at-scale",
-    "epic": "epic/43-target-project-delivery-at-scale",
-    "ready": false,
-    "blocked_by": [
-      "T-43-13",
-      "T-43-16"
-    ],
-    "blocked_reasons": {
-      "T-43-13": "parent has no branch yet (nothing to cascade from)",
-      "T-43-16": "parent has no branch yet (nothing to cascade from)"
+    "pr": 378,
+    "status": "merged",
+    "url": "https://github.com/serhii-nochevnyi/shipyard/pull/378",
+    "merge_sha": "1c1d254b581e75b41a3c20cf13577761c5537246",
+    "merged_into": "epic/43-target-project-delivery-at-scale",
+    "epic_pr": {
+      "number": 320,
+      "branch": "epic/43-target-project-delivery-at-scale",
+      "state": "MERGED",
+      "base": "main",
+      "landed": true
     },
-    "reapable": false,
-    "since": "2026-09-26T10:54:56.735Z"
+    "base": "epic/43-target-project-delivery-at-scale",
+    "base_reason": "T-43-13 is MERGED, so its branch is no longer where work lands — the base is epic/43-target-project-delivery-at-scale (base-merge it in first to keep the review diff one slice); ticket-worktree.sh create merges epic/43-target-project-delivery-at-scale in for non-primary parent(s) T-43-16",
+    "epic": "epic/43-target-project-delivery-at-scale",
+    "base_merge": "epic/43-target-project-delivery-at-scale",
+    "reapable": true,
+    "since": "2026-09-30T09:49:09.842Z"
   },
   "T-43-18": {
     "branch": "ticket/T-43-18-run-only-declared-repository-remedy-work",
-    "pr": null,
-    "status": "pending",
-    "base": "epic/43-target-project-delivery-at-scale",
-    "base_reason": "T-43-17 has no branch on the remote yet (status pending) — ticket/T-43-17-record-a-sealed-coverage-entry-for-every is not a base that exists, so the base is epic/43-target-project-delivery-at-scale",
-    "epic": "epic/43-target-project-delivery-at-scale",
-    "ready": false,
-    "blocked_by": [
-      "T-43-17"
-    ],
-    "blocked_reasons": {
-      "T-43-17": "parent has no branch yet (nothing to cascade from)"
+    "pr": 379,
+    "status": "merged",
+    "url": "https://github.com/serhii-nochevnyi/shipyard/pull/379",
+    "merge_sha": "5f62160c21e8824d9efb6afa5636b3b534ad576b",
+    "merged_into": "epic/43-target-project-delivery-at-scale",
+    "epic_pr": {
+      "number": 320,
+      "branch": "epic/43-target-project-delivery-at-scale",
+      "state": "MERGED",
+      "base": "main",
+      "landed": true
     },
-    "reapable": false,
-    "since": "2026-09-26T10:54:56.735Z"
+    "base": "epic/43-target-project-delivery-at-scale",
+    "base_reason": "T-43-12 is MERGED, so its branch is no longer where work lands — the base is epic/43-target-project-delivery-at-scale (base-merge it in first to keep the review diff one slice); ticket-worktree.sh create merges epic/43-target-project-delivery-at-scale in for non-primary parent(s) T-43-17, T-43-08",
+    "epic": "epic/43-target-project-delivery-at-scale",
+    "base_merge": "epic/43-target-project-delivery-at-scale",
+    "reapable": true,
+    "since": "2026-09-30T14:16:40.069Z"
   },
   "T-43-19": {
     "branch": "ticket/T-43-19-the-merge-gate-refuses-heads-the-conveyo",
-    "pr": null,
-    "status": "pending",
-    "base": "epic/43-target-project-delivery-at-scale",
-    "base_reason": "T-43-18 has no branch on the remote yet (status pending) — ticket/T-43-18-run-only-declared-repository-remedy-work is not a base that exists, so the base is epic/43-target-project-delivery-at-scale",
-    "epic": "epic/43-target-project-delivery-at-scale",
-    "ready": false,
-    "blocked_by": [
-      "T-43-18",
-      "T-43-12"
-    ],
-    "blocked_reasons": {
-      "T-43-18": "parent has no branch yet (nothing to cascade from)",
-      "T-43-12": "parent has no branch yet (nothing to cascade from)"
+    "pr": 380,
+    "status": "merged",
+    "url": "https://github.com/serhii-nochevnyi/shipyard/pull/380",
+    "merge_sha": "bb83858fa4cca43acedd23ad56c873558c6d31a8",
+    "merged_into": "epic/43-target-project-delivery-at-scale",
+    "epic_pr": {
+      "number": 320,
+      "branch": "epic/43-target-project-delivery-at-scale",
+      "state": "MERGED",
+      "base": "main",
+      "landed": true
     },
-    "reapable": false,
-    "since": "2026-09-26T10:54:56.735Z"
+    "base": "epic/43-target-project-delivery-at-scale",
+    "base_reason": "T-43-18 is MERGED, so its branch is no longer where work lands — the base is epic/43-target-project-delivery-at-scale (base-merge it in first to keep the review diff one slice); ticket-worktree.sh create merges epic/43-target-project-delivery-at-scale in for non-primary parent(s) T-43-12",
+    "epic": "epic/43-target-project-delivery-at-scale",
+    "base_merge": "epic/43-target-project-delivery-at-scale",
+    "reapable": true,
+    "since": "2026-09-30T14:16:40.069Z"
   },
   "T-44-01": {
     "branch": "ticket/T-44-01-parse-saved-claude-and-codex-quota-recor",
@@ -4448,11 +4508,18 @@
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/361",
     "merge_sha": "9e7870d9c8c699f89979f3f035467a524677b24b",
     "merged_into": "epic/45-close-residual-pipeline-efficiency-gaps",
+    "epic_pr": {
+      "number": 381,
+      "branch": "epic/45-close-residual-pipeline-efficiency-gaps",
+      "state": "OPEN",
+      "base": "main",
+      "landed": false
+    },
     "base": "epic/45-close-residual-pipeline-efficiency-gaps",
     "base_reason": "no primary parent — a root ticket PRs into epic/45-close-residual-pipeline-efficiency-gaps",
     "epic": "epic/45-close-residual-pipeline-efficiency-gaps",
     "reapable": true,
-    "since": "2026-09-28T21:24:56.496Z"
+    "since": "2026-09-30T09:49:09.842Z"
   },
   "T-45-02": {
     "branch": "ticket/T-45-02-doctor-classifies-another-checkout-s-dog",
@@ -4461,11 +4528,18 @@
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/359",
     "merge_sha": "9e4c02904937d52cfe91f47aee0283e137973bd7",
     "merged_into": "epic/45-close-residual-pipeline-efficiency-gaps",
+    "epic_pr": {
+      "number": 381,
+      "branch": "epic/45-close-residual-pipeline-efficiency-gaps",
+      "state": "OPEN",
+      "base": "main",
+      "landed": false
+    },
     "base": "epic/45-close-residual-pipeline-efficiency-gaps",
     "base_reason": "no primary parent — a root ticket PRs into epic/45-close-residual-pipeline-efficiency-gaps",
     "epic": "epic/45-close-residual-pipeline-efficiency-gaps",
     "reapable": true,
-    "since": "2026-09-28T21:24:56.496Z"
+    "since": "2026-09-30T09:49:09.842Z"
   },
   "T-45-03": {
     "branch": "ticket/T-45-03-dogfood-installs-default-to-a-dedicated",
@@ -4474,11 +4548,18 @@
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/367",
     "merge_sha": "11136adf67849d6bfad3f0d31dc2a4fd0a62f515",
     "merged_into": "epic/45-close-residual-pipeline-efficiency-gaps",
+    "epic_pr": {
+      "number": 381,
+      "branch": "epic/45-close-residual-pipeline-efficiency-gaps",
+      "state": "OPEN",
+      "base": "main",
+      "landed": false
+    },
     "base": "epic/45-close-residual-pipeline-efficiency-gaps",
     "base_reason": "T-45-02 is MERGED, so its branch is no longer where work lands — the base is epic/45-close-residual-pipeline-efficiency-gaps (base-merge it in first to keep the review diff one slice)",
     "epic": "epic/45-close-residual-pipeline-efficiency-gaps",
     "reapable": true,
-    "since": "2026-09-28T21:24:56.496Z"
+    "since": "2026-09-30T09:49:09.842Z"
   },
   "T-45-04": {
     "branch": "ticket/T-45-04-codex-decompose-host-run-lease-uses-an-i",
@@ -4487,11 +4568,18 @@
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/360",
     "merge_sha": "516a589869875de524fd226a806ce98c7bcf2d8e",
     "merged_into": "epic/45-close-residual-pipeline-efficiency-gaps",
+    "epic_pr": {
+      "number": 381,
+      "branch": "epic/45-close-residual-pipeline-efficiency-gaps",
+      "state": "OPEN",
+      "base": "main",
+      "landed": false
+    },
     "base": "epic/45-close-residual-pipeline-efficiency-gaps",
     "base_reason": "no primary parent — a root ticket PRs into epic/45-close-residual-pipeline-efficiency-gaps",
     "epic": "epic/45-close-residual-pipeline-efficiency-gaps",
     "reapable": true,
-    "since": "2026-09-28T21:24:56.496Z"
+    "since": "2026-09-30T09:49:09.842Z"
   },
   "T-45-05": {
     "branch": "ticket/T-45-05-session-handoff-successor-race-and-dispa",
@@ -4500,11 +4588,18 @@
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/363",
     "merge_sha": "4ce67eb1258e5a0970f1658beb22ac03e56634d2",
     "merged_into": "epic/45-close-residual-pipeline-efficiency-gaps",
+    "epic_pr": {
+      "number": 381,
+      "branch": "epic/45-close-residual-pipeline-efficiency-gaps",
+      "state": "OPEN",
+      "base": "main",
+      "landed": false
+    },
     "base": "epic/45-close-residual-pipeline-efficiency-gaps",
     "base_reason": "no primary parent — a root ticket PRs into epic/45-close-residual-pipeline-efficiency-gaps",
     "epic": "epic/45-close-residual-pipeline-efficiency-gaps",
     "reapable": true,
-    "since": "2026-09-28T21:24:56.496Z"
+    "since": "2026-09-30T09:49:09.842Z"
   },
   "T-45-06": {
     "branch": "ticket/T-45-06-usage-report-counts-codex-host-stream-tu",
@@ -4513,11 +4608,18 @@
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/362",
     "merge_sha": "de6286640fed266ba15ffe86f225d1268897e172",
     "merged_into": "epic/45-close-residual-pipeline-efficiency-gaps",
+    "epic_pr": {
+      "number": 381,
+      "branch": "epic/45-close-residual-pipeline-efficiency-gaps",
+      "state": "OPEN",
+      "base": "main",
+      "landed": false
+    },
     "base": "epic/45-close-residual-pipeline-efficiency-gaps",
     "base_reason": "no primary parent — a root ticket PRs into epic/45-close-residual-pipeline-efficiency-gaps",
     "epic": "epic/45-close-residual-pipeline-efficiency-gaps",
     "reapable": true,
-    "since": "2026-09-28T21:24:56.496Z"
+    "since": "2026-09-30T09:49:09.842Z"
   },
   "T-45-07": {
     "branch": "ticket/T-45-07-planning-tree-writer-lease-with-owner-ba",
@@ -4526,11 +4628,18 @@
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/357",
     "merge_sha": "f6ab3e1b0fba50a66bf3ea36440fb19d0f0b01a8",
     "merged_into": "epic/45-close-residual-pipeline-efficiency-gaps",
+    "epic_pr": {
+      "number": 381,
+      "branch": "epic/45-close-residual-pipeline-efficiency-gaps",
+      "state": "OPEN",
+      "base": "main",
+      "landed": false
+    },
     "base": "epic/45-close-residual-pipeline-efficiency-gaps",
     "base_reason": "no primary parent — a root ticket PRs into epic/45-close-residual-pipeline-efficiency-gaps",
     "epic": "epic/45-close-residual-pipeline-efficiency-gaps",
     "reapable": true,
-    "since": "2026-09-28T21:24:56.496Z"
+    "since": "2026-09-30T09:49:09.842Z"
   },
   "T-45-08": {
     "branch": "ticket/T-45-08-both-decompose-hosts-hold-the-planning-w",
@@ -4539,61 +4648,80 @@
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/366",
     "merge_sha": "58432e1784226e8ec7a8d5034ed85d23fbb3ca26",
     "merged_into": "epic/45-close-residual-pipeline-efficiency-gaps",
+    "epic_pr": {
+      "number": 381,
+      "branch": "epic/45-close-residual-pipeline-efficiency-gaps",
+      "state": "OPEN",
+      "base": "main",
+      "landed": false
+    },
     "base": "epic/45-close-residual-pipeline-efficiency-gaps",
     "base_reason": "T-45-04 is MERGED, so its branch is no longer where work lands — the base is epic/45-close-residual-pipeline-efficiency-gaps (base-merge it in first to keep the review diff one slice); ticket-worktree.sh create merges epic/45-close-residual-pipeline-efficiency-gaps in for non-primary parent(s) T-45-07",
     "epic": "epic/45-close-residual-pipeline-efficiency-gaps",
     "base_merge": "epic/45-close-residual-pipeline-efficiency-gaps",
     "reapable": true,
-    "since": "2026-09-28T21:24:56.496Z"
+    "since": "2026-09-30T09:49:09.842Z"
   },
   "T-45-09": {
     "branch": "ticket/T-45-09-codex-decompose-host-recovers-a-complete",
     "pr": 369,
-    "status": "pr-open",
-    "draft": false,
-    "review_decision": null,
+    "status": "merged",
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/369",
-    "pr_base": "epic/45-close-residual-pipeline-efficiency-gaps",
-    "pr_created_at": "2026-09-28T18:05:59Z",
-    "head_sha": "b43752383d5d30bcb8261659b8b73358cc624fbe",
-    "merge_state": "CLEAN",
-    "behind_by": 0,
-    "checks": {
-      "total": 1,
-      "failing": 0,
-      "pending": 0,
-      "none_reported": false,
-      "unavailable": false
+    "merge_sha": "a109ce224bf28c7b185f0b336731d6269802ab7f",
+    "merged_into": "epic/45-close-residual-pipeline-efficiency-gaps",
+    "epic_pr": {
+      "number": 381,
+      "branch": "epic/45-close-residual-pipeline-efficiency-gaps",
+      "state": "OPEN",
+      "base": "main",
+      "landed": false
     },
     "base": "epic/45-close-residual-pipeline-efficiency-gaps",
     "base_reason": "T-45-08 is MERGED, so its branch is no longer where work lands — the base is epic/45-close-residual-pipeline-efficiency-gaps (base-merge it in first to keep the review diff one slice); ticket-worktree.sh create merges epic/45-close-residual-pipeline-efficiency-gaps in for non-primary parent(s) T-45-05",
     "epic": "epic/45-close-residual-pipeline-efficiency-gaps",
     "base_merge": "epic/45-close-residual-pipeline-efficiency-gaps",
-    "merge_scope": "stacked",
-    "reapable": false,
-    "since": "2026-09-28T21:24:56.496Z"
+    "reapable": true,
+    "since": "2026-09-30T16:41:49.180Z"
   },
   "T-45-10": {
     "branch": "ticket/T-45-10-claude-decompose-host-recovers-a-complet",
-    "pr": null,
-    "status": "pending",
-    "base": "ticket/T-45-09-codex-decompose-host-recovers-a-complete",
-    "base_reason": "T-45-09 is pr-open — cascade off ticket/T-45-09-codex-decompose-host-recovers-a-complete; the sentinel retargets this PR onto epic/45-close-residual-pipeline-efficiency-gaps when T-45-09 lands",
+    "pr": 383,
+    "status": "merged",
+    "url": "https://github.com/serhii-nochevnyi/shipyard/pull/383",
+    "merge_sha": "aa93fee225d9b86a0048566784ddd53e0fb94c26",
+    "merged_into": "epic/45-close-residual-pipeline-efficiency-gaps",
+    "epic_pr": {
+      "number": 381,
+      "branch": "epic/45-close-residual-pipeline-efficiency-gaps",
+      "state": "OPEN",
+      "base": "main",
+      "landed": false
+    },
+    "base": "epic/45-close-residual-pipeline-efficiency-gaps",
+    "base_reason": "T-45-09 is MERGED, so its branch is no longer where work lands — the base is epic/45-close-residual-pipeline-efficiency-gaps (base-merge it in first to keep the review diff one slice)",
     "epic": "epic/45-close-residual-pipeline-efficiency-gaps",
-    "ready": true,
-    "reapable": false,
-    "since": "2026-09-28T16:08:11.338Z"
+    "reapable": true,
+    "since": "2026-09-30T17:35:20.352Z"
   },
   "T-45-11": {
     "branch": "ticket/T-45-11-codex-decomposition-runs-detached-so-the",
-    "pr": null,
-    "status": "pending",
-    "base": "ticket/T-45-09-codex-decompose-host-recovers-a-complete",
-    "base_reason": "T-45-09 is pr-open — cascade off ticket/T-45-09-codex-decompose-host-recovers-a-complete; the sentinel retargets this PR onto epic/45-close-residual-pipeline-efficiency-gaps when T-45-09 lands",
+    "pr": 382,
+    "status": "merged",
+    "url": "https://github.com/serhii-nochevnyi/shipyard/pull/382",
+    "merge_sha": "30b82862f0c3e12d2095ce64baa13cc02bed8af1",
+    "merged_into": "epic/45-close-residual-pipeline-efficiency-gaps",
+    "epic_pr": {
+      "number": 381,
+      "branch": "epic/45-close-residual-pipeline-efficiency-gaps",
+      "state": "OPEN",
+      "base": "main",
+      "landed": false
+    },
+    "base": "epic/45-close-residual-pipeline-efficiency-gaps",
+    "base_reason": "T-45-09 is MERGED, so its branch is no longer where work lands — the base is epic/45-close-residual-pipeline-efficiency-gaps (base-merge it in first to keep the review diff one slice)",
     "epic": "epic/45-close-residual-pipeline-efficiency-gaps",
-    "ready": true,
-    "reapable": false,
-    "since": "2026-09-28T16:08:11.338Z"
+    "reapable": true,
+    "since": "2026-09-30T17:09:30.414Z"
   },
   "T-45-12": {
     "branch": "ticket/T-45-12-advisory-run-phase-aggregate-admission-l",
@@ -4602,11 +4730,18 @@
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/364",
     "merge_sha": "b028975cc62d729acfaeb86dd6dfe8ca24ebd2f3",
     "merged_into": "epic/45-close-residual-pipeline-efficiency-gaps",
+    "epic_pr": {
+      "number": 381,
+      "branch": "epic/45-close-residual-pipeline-efficiency-gaps",
+      "state": "OPEN",
+      "base": "main",
+      "landed": false
+    },
     "base": "epic/45-close-residual-pipeline-efficiency-gaps",
     "base_reason": "no primary parent — a root ticket PRs into epic/45-close-residual-pipeline-efficiency-gaps",
     "epic": "epic/45-close-residual-pipeline-efficiency-gaps",
     "reapable": true,
-    "since": "2026-09-28T21:24:56.496Z"
+    "since": "2026-09-30T09:49:09.842Z"
   },
   "T-45-13": {
     "branch": "ticket/T-45-13-drift-gate-re-asks-a-self-contradictory",
@@ -4615,36 +4750,102 @@
     "url": "https://github.com/serhii-nochevnyi/shipyard/pull/368",
     "merge_sha": "0fbbf553b0a321ef09e1eddf55fb87411999d63c",
     "merged_into": "epic/45-close-residual-pipeline-efficiency-gaps",
-    "base": "epic/45-close-residual-pipeline-efficiency-gaps",
-    "base_reason": "no primary parent — a root ticket PRs into epic/45-close-residual-pipeline-efficiency-gaps",
-    "epic": "epic/45-close-residual-pipeline-efficiency-gaps",
-    "reapable": true,
-    "since": "2026-09-28T21:24:56.496Z"
-  },
-  "T-45-14": {
-    "branch": "ticket/T-45-14-capture-scrubber-replaces-codex-account",
-    "pr": 365,
-    "status": "pr-open",
-    "draft": true,
-    "review_decision": null,
-    "url": "https://github.com/serhii-nochevnyi/shipyard/pull/365",
-    "pr_base": "epic/45-close-residual-pipeline-efficiency-gaps",
-    "pr_created_at": "2026-09-28T17:34:43Z",
-    "head_sha": "5896bc797df267fb2b75de51904903085a42b04c",
-    "merge_state": "UNSTABLE",
-    "behind_by": 6,
-    "checks": {
-      "total": 1,
-      "failing": 1,
-      "pending": 0,
-      "none_reported": false,
-      "unavailable": false
+    "epic_pr": {
+      "number": 381,
+      "branch": "epic/45-close-residual-pipeline-efficiency-gaps",
+      "state": "OPEN",
+      "base": "main",
+      "landed": false
     },
     "base": "epic/45-close-residual-pipeline-efficiency-gaps",
     "base_reason": "no primary parent — a root ticket PRs into epic/45-close-residual-pipeline-efficiency-gaps",
     "epic": "epic/45-close-residual-pipeline-efficiency-gaps",
-    "merge_scope": "stacked",
+    "reapable": true,
+    "since": "2026-09-30T09:49:09.842Z"
+  },
+  "T-45-14": {
+    "branch": "ticket/T-45-14-capture-scrubber-replaces-codex-account",
+    "pr": 365,
+    "status": "merged",
+    "url": "https://github.com/serhii-nochevnyi/shipyard/pull/365",
+    "merge_sha": "fe881132690ef8704428cabed69bc3afa2c25bff",
+    "merged_into": "epic/45-close-residual-pipeline-efficiency-gaps",
+    "epic_pr": {
+      "number": 381,
+      "branch": "epic/45-close-residual-pipeline-efficiency-gaps",
+      "state": "OPEN",
+      "base": "main",
+      "landed": false
+    },
+    "base": "epic/45-close-residual-pipeline-efficiency-gaps",
+    "base_reason": "no primary parent — a root ticket PRs into epic/45-close-residual-pipeline-efficiency-gaps",
+    "epic": "epic/45-close-residual-pipeline-efficiency-gaps",
+    "reapable": true,
+    "since": "2026-09-30T11:08:53.294Z"
+  },
+  "T-45-15": {
+    "branch": "ticket/T-45-15-prepare-the-0-70-0-release-from-the-full",
+    "pr": 390,
+    "status": "merged",
+    "recorded_pr": 390,
+    "url": "https://github.com/serhii-nochevnyi/shipyard/pull/390",
+    "merge_sha": "e6d1393c173d18d7085a25651e41cd1849d8360b",
+    "merged_into": "epic/45-close-residual-pipeline-efficiency-gaps",
+    "epic_pr": {
+      "number": 381,
+      "branch": "epic/45-close-residual-pipeline-efficiency-gaps",
+      "state": "OPEN",
+      "base": "main",
+      "landed": false
+    },
+    "base": "epic/45-close-residual-pipeline-efficiency-gaps",
+    "base_reason": "T-45-10 is MERGED, so its branch is no longer where work lands — the base is epic/45-close-residual-pipeline-efficiency-gaps (base-merge it in first to keep the review diff one slice); ticket-worktree.sh create merges epic/45-close-residual-pipeline-efficiency-gaps in for non-primary parent(s) T-45-01, T-45-02, T-45-03, T-45-04, T-45-05, T-45-06, T-45-07, T-45-08, T-45-09, T-45-11, T-45-12, T-45-13, T-45-14",
+    "epic": "epic/45-close-residual-pipeline-efficiency-gaps",
+    "base_merge": "epic/45-close-residual-pipeline-efficiency-gaps",
+    "reapable": true,
+    "since": "2026-09-30T20:45:27.864Z"
+  },
+  "T-45-16": {
+    "branch": "ticket/T-45-16-close-judgment-recovery-native-process-p",
+    "pr": null,
+    "status": "pending",
+    "base": "epic/45-close-residual-pipeline-efficiency-gaps",
+    "base_reason": "T-45-15 is MERGED, so its branch is no longer where work lands — the base is epic/45-close-residual-pipeline-efficiency-gaps (base-merge it in first to keep the review diff one slice); ticket-worktree.sh create merges epic/45-close-residual-pipeline-efficiency-gaps in for non-primary parent(s) T-45-07, T-45-08, T-45-09, T-45-10",
+    "epic": "epic/45-close-residual-pipeline-efficiency-gaps",
+    "base_merge": "epic/45-close-residual-pipeline-efficiency-gaps",
+    "ready": true,
     "reapable": false,
-    "since": "2026-09-28T21:24:56.496Z"
+    "since": "2026-09-30T20:48:56.850Z"
+  },
+  "T-45-17": {
+    "branch": "ticket/T-45-17-select-and-validate-an-isolated-codex-do",
+    "pr": null,
+    "status": "pending",
+    "base": "epic/45-close-residual-pipeline-efficiency-gaps",
+    "base_reason": "T-45-15 is MERGED, so its branch is no longer where work lands — the base is epic/45-close-residual-pipeline-efficiency-gaps (base-merge it in first to keep the review diff one slice); ticket-worktree.sh create merges epic/45-close-residual-pipeline-efficiency-gaps in for non-primary parent(s) T-45-03",
+    "epic": "epic/45-close-residual-pipeline-efficiency-gaps",
+    "base_merge": "epic/45-close-residual-pipeline-efficiency-gaps",
+    "ready": true,
+    "reapable": false,
+    "since": "2026-09-30T20:48:56.850Z"
+  },
+  "T-45-18": {
+    "branch": "ticket/T-45-18-refresh-the-0-70-0-codex-package-after-b",
+    "pr": null,
+    "status": "pending",
+    "base": "epic/45-close-residual-pipeline-efficiency-gaps",
+    "base_reason": "T-45-16 has no branch on the remote yet (status pending) — ticket/T-45-16-close-judgment-recovery-native-process-p is not a base that exists, so the base is epic/45-close-residual-pipeline-efficiency-gaps",
+    "epic": "epic/45-close-residual-pipeline-efficiency-gaps",
+    "ready": false,
+    "blocked_by": [
+      "T-45-16",
+      "T-45-17"
+    ],
+    "blocked_reasons": {
+      "T-45-16": "parent has no branch yet (nothing to cascade from)",
+      "T-45-17": "parent has no branch yet (nothing to cascade from)"
+    },
+    "reapable": false,
+    "since": "2026-09-30T20:48:56.850Z"
   }
 }

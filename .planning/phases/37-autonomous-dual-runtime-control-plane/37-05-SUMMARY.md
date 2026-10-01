@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 663fc768bb697a7bd254ba7bb143d15d64fab7ca3fd48ffe954e3ad353d9217e
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 0209197921fd3f379321c0824607c07fd59a9bcbd9aa69a3a394478790263a20
 phase: 37-autonomous-dual-runtime-control-plane
 plan: 05
 subsystem: shipyard delivery
@@ -20,10 +20,10 @@ key-files:
 key-decisions:
   - "Shipyard delivery state is projected; no native executor claim is invented."
 duration: 0min
-completed: 2026-09-22
+completed: 2026-09-30
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 663fc768bb697a7bd254ba7bb143d15d64fab7ca3fd48ffe954e3ad353d9217e
+shipyard_source_fingerprint: 0209197921fd3f379321c0824607c07fd59a9bcbd9aa69a3a394478790263a20
 ---
 
 # Phase 37: Prove graph reachability before autonomous dispatch — Delivery Projection

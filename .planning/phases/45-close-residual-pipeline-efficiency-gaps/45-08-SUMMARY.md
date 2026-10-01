@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: e43fe2c673d799de2598a268283d138b3cc5ec18ec95e9c31a18cb3fedd49da7
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 333dc2a65a725f7f5c0ad77df73f01451432ee925fcf33629948261158d04eb3
 phase: 45-close-residual-pipeline-efficiency-gaps
 plan: 08
 subsystem: shipyard delivery
@@ -20,10 +20,10 @@ key-files:
 key-decisions:
   - "Shipyard delivery state is projected; no native executor claim is invented."
 duration: 0min
-completed: 2026-09-28
+completed: 2026-09-30
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: e43fe2c673d799de2598a268283d138b3cc5ec18ec95e9c31a18cb3fedd49da7
+shipyard_source_fingerprint: 333dc2a65a725f7f5c0ad77df73f01451432ee925fcf33629948261158d04eb3
 ---
 
 # Phase 45: Both decompose hosts hold the planning writer lease from launch to seal and refuse fenced or foreign-edited seals — Delivery Projection

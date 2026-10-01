@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 12db7538de55c9816ca8860369005bb17f8f69fb321f045ad2c0c06d015735d7
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: b30228febc81825674df61e9c0d7c108ef46404b7045c59c8ef3ebafca39ab3e
 phase: 43-target-project-delivery-at-scale
 plan: 06
 subsystem: shipyard delivery
@@ -20,10 +20,10 @@ key-files:
 key-decisions:
   - "Shipyard delivery state is projected; no native executor claim is invented."
 duration: 0min
-completed: 2026-09-28
+completed: 2026-09-30
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 12db7538de55c9816ca8860369005bb17f8f69fb321f045ad2c0c06d015735d7
+shipyard_source_fingerprint: b30228febc81825674df61e9c0d7c108ef46404b7045c59c8ef3ebafca39ab3e
 ---
 
 # Phase 43: One exported conveyor scratch set for the role host, finalizer, Codex host, base-merge and gc — Delivery Projection

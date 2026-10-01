@@ -1,13 +1,13 @@
 {
   "schema_version": 1,
-  "generation": 398,
-  "generation_identity": "e35fa521-9e1b-489d-b312-2e0d89f7f161",
-  "previous_generation_identity": "16777245:12934676491:1790632650121419500:1bf8a56c3c37e6edcd664ebcd95c479395a7cf243813602808fda3f371be4c3e",
-  "observed_at": "2026-09-28T21:57:30.563Z",
-  "generated_at": "2026-09-28T21:57:30.563Z",
+  "generation": 401,
+  "generation_identity": "ecf9a4ce-f489-4f06-86a5-e2578f3d0599",
+  "previous_generation_identity": "16777245:12939493840:1790801322360196600:e1ef5465b616b446391fb8f7e0ad99b15695be41f1508fc51f56f4f63987db8a",
+  "observed_at": "2026-09-30T20:48:56.850Z",
+  "generated_at": "2026-09-30T20:48:56.850Z",
   "by": "state-sync",
-  "pid": 10722,
-  "observation_generation": 398,
+  "pid": 20308,
+  "observation_generation": 401,
   "observation_projection": {
     "tickets": {
       "T-20-01": {
@@ -2354,9 +2354,9 @@
         "checks": null
       },
       "T-43-12": {
-        "status": "pending",
+        "status": "merged",
         "repository": null,
-        "pr": null,
+        "pr": 375,
         "head": null,
         "draft": false,
         "base": "epic/43-target-project-delivery-at-scale",
@@ -2365,9 +2365,9 @@
         "checks": null
       },
       "T-43-13": {
-        "status": "pending",
+        "status": "merged",
         "repository": null,
-        "pr": null,
+        "pr": 376,
         "head": null,
         "draft": false,
         "base": "epic/43-target-project-delivery-at-scale",
@@ -2387,9 +2387,9 @@
         "checks": null
       },
       "T-43-15": {
-        "status": "pending",
+        "status": "merged",
         "repository": null,
-        "pr": null,
+        "pr": 377,
         "head": null,
         "draft": false,
         "base": "epic/43-target-project-delivery-at-scale",
@@ -2398,9 +2398,9 @@
         "checks": null
       },
       "T-43-16": {
-        "status": "pending",
+        "status": "merged",
         "repository": null,
-        "pr": null,
+        "pr": 374,
         "head": null,
         "draft": false,
         "base": "epic/43-target-project-delivery-at-scale",
@@ -2409,9 +2409,9 @@
         "checks": null
       },
       "T-43-17": {
-        "status": "pending",
+        "status": "merged",
         "repository": null,
-        "pr": null,
+        "pr": 378,
         "head": null,
         "draft": false,
         "base": "epic/43-target-project-delivery-at-scale",
@@ -2420,9 +2420,9 @@
         "checks": null
       },
       "T-43-18": {
-        "status": "pending",
+        "status": "merged",
         "repository": null,
-        "pr": null,
+        "pr": 379,
         "head": null,
         "draft": false,
         "base": "epic/43-target-project-delivery-at-scale",
@@ -2431,9 +2431,9 @@
         "checks": null
       },
       "T-43-19": {
-        "status": "pending",
+        "status": "merged",
         "repository": null,
-        "pr": null,
+        "pr": 380,
         "head": null,
         "draft": false,
         "base": "epic/43-target-project-delivery-at-scale",
@@ -2618,40 +2618,34 @@
         "checks": null
       },
       "T-45-09": {
-        "status": "pr-open",
+        "status": "merged",
         "repository": null,
         "pr": 369,
-        "head": "b43752383d5d30bcb8261659b8b73358cc624fbe",
-        "draft": false,
-        "base": "epic/45-close-residual-pipeline-efficiency-gaps",
-        "merge_state": "CLEAN",
-        "review_decision": null,
-        "checks": {
-          "total": 1,
-          "pending": 0,
-          "failing": 0,
-          "none_reported": false,
-          "unavailable": false
-        }
-      },
-      "T-45-10": {
-        "status": "pending",
-        "repository": null,
-        "pr": null,
         "head": null,
         "draft": false,
-        "base": "ticket/T-45-09-codex-decompose-host-recovers-a-complete",
+        "base": "epic/45-close-residual-pipeline-efficiency-gaps",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-45-10": {
+        "status": "merged",
+        "repository": null,
+        "pr": 383,
+        "head": null,
+        "draft": false,
+        "base": "epic/45-close-residual-pipeline-efficiency-gaps",
         "merge_state": null,
         "review_decision": null,
         "checks": null
       },
       "T-45-11": {
-        "status": "pending",
+        "status": "merged",
         "repository": null,
-        "pr": null,
+        "pr": 382,
         "head": null,
         "draft": false,
-        "base": "ticket/T-45-09-codex-decompose-host-recovers-a-complete",
+        "base": "epic/45-close-residual-pipeline-efficiency-gaps",
         "merge_state": null,
         "review_decision": null,
         "checks": null
@@ -2679,29 +2673,67 @@
         "checks": null
       },
       "T-45-14": {
-        "status": "pr-open",
+        "status": "merged",
         "repository": null,
         "pr": 365,
-        "head": "5896bc797df267fb2b75de51904903085a42b04c",
-        "draft": true,
+        "head": null,
+        "draft": false,
         "base": "epic/45-close-residual-pipeline-efficiency-gaps",
-        "merge_state": "UNSTABLE",
+        "merge_state": null,
         "review_decision": null,
-        "checks": {
-          "total": 1,
-          "pending": 0,
-          "failing": 1,
-          "none_reported": false,
-          "unavailable": false
-        }
+        "checks": null
+      },
+      "T-45-15": {
+        "status": "merged",
+        "repository": null,
+        "pr": 390,
+        "head": null,
+        "draft": false,
+        "base": "epic/45-close-residual-pipeline-efficiency-gaps",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-45-16": {
+        "status": "pending",
+        "repository": null,
+        "pr": null,
+        "head": null,
+        "draft": false,
+        "base": "epic/45-close-residual-pipeline-efficiency-gaps",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-45-17": {
+        "status": "pending",
+        "repository": null,
+        "pr": null,
+        "head": null,
+        "draft": false,
+        "base": "epic/45-close-residual-pipeline-efficiency-gaps",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-45-18": {
+        "status": "pending",
+        "repository": null,
+        "pr": null,
+        "head": null,
+        "draft": false,
+        "base": "epic/45-close-residual-pipeline-efficiency-gaps",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
       }
     }
   },
   "binding": {
     "schema_version": 1,
-    "state_digest": "58c0ef3911432c66f3f07374c42648f192eb6cc0b24a1a943c674b68c29d03d7",
-    "front_digest": "5ad50d1d0902bb74e88f7858c41712d8c5c68368e228a1adf7ba1a666fcf045b",
-    "observation_digest": "1d7e450ebe36bd9e93689228259b58bd2ea047b8e371428478e01d2938622b13",
-    "observation_generation": 398
+    "state_digest": "f1792aecd4f9008ad0c749b534bdbf064bd9fd86429e6d7039938c980a7d9525",
+    "front_digest": "3fd8bd0d88e079cc4eb2d940b05619f707e1dc82742677c4eb2f2e7ecddaec54",
+    "observation_digest": "dd1dd6e49dea00fb795c56287f8a982bd5b960c6e32133dac3a9ddb3236dac3e",
+    "observation_generation": 401
   }
 }

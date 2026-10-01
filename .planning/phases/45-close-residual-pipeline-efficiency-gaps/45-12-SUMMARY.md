@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 6c4198c4ceed863d0fd4a14fcb7e6a4f1f31c9f2ebd6b74bf49aafa139fbffab
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 605e8d23a21817a83b6e60f7d0da8b7e3c83e72d20f960e3f3303364d4765cb9
 phase: 45-close-residual-pipeline-efficiency-gaps
 plan: 12
 subsystem: shipyard delivery
@@ -20,10 +20,10 @@ key-files:
 key-decisions:
   - "Shipyard delivery state is projected; no native executor claim is invented."
 duration: 0min
-completed: 2026-09-28
+completed: 2026-09-30
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 6c4198c4ceed863d0fd4a14fcb7e6a4f1f31c9f2ebd6b74bf49aafa139fbffab
+shipyard_source_fingerprint: 605e8d23a21817a83b6e60f7d0da8b7e3c83e72d20f960e3f3303364d4765cb9
 ---
 
 # Phase 45: Advisory run/phase aggregate admission ledger on capacity-lease with reserved verification and checkpoint capacity — Delivery Projection

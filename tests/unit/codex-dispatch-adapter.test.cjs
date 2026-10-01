@@ -7,6 +7,7 @@ const crypto = require('crypto');
 const { suite, test, done, assert } = require('./assert-harness.cjs');
 const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
 const { createDispatchBoundary } = require('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs');
+const { createPlanningWriterLease } = require('../../plugins/delivery-pipeline/scripts/planning-writer-lease.cjs');
 const { createCodexDispatchAdapter, CODEX_MODEL_IDS, REPAIR, repairFor } = require('../../plugins/delivery-pipeline/scripts/codex-dispatch-adapter.cjs');
 
 const capabilities = {
@@ -51,6 +52,15 @@ function applied(selection, extra = {}) {
 }
 function setup(extra = {}) {
   const f = fixture();
+  const lease = createPlanningWriterLease({ worktree: f.root, phaseDir: f.root,
+    stateRoot: f.root + '-writer' });
+  const handle = lease.acquire({ owner: 'adapter-fixture', base_revision: 'fixture-base' });
+  const snapshot = lease.snapshotTree();
+  const preRecordValidation = () => {
+    lease.assertFence({ ...handle, base_revision: 'fixture-base' });
+    const changed = lease.changedSince(snapshot).changed;
+    if (changed.length) throw Object.assign(new Error(changed.join(', ')), { code: 'FOREIGN_EDIT' });
+  };
   const calls = [];
   const host = {
     capabilities,
@@ -60,9 +70,13 @@ function setup(extra = {}) {
   };
   const adapter = createCodexDispatchAdapter({ agentsDir: f.root, ...extra, host });
   const boundary = createDispatchBoundary({ adapters: { codex: adapter }, recorder: () => true });
-  return { ...f, calls, adapter, boundary };
+  return { ...f, calls, adapter, boundary, lease, handle, preRecordValidation };
 }
-function clean(f) { fs.rmSync(f.root, { recursive: true, force: true }); }
+function clean(f) {
+  if (f.lease) f.lease.release(f.handle);
+  fs.rmSync(f.root, { recursive: true, force: true });
+  fs.rmSync(f.root + '-writer', { recursive: true, force: true });
+}
 function rejected(fn, code) {
   assert.throws(fn, (error) => error.code === code && /install-shipyard-codex/.test(error.message));
 }
@@ -297,7 +311,8 @@ test('default sandbox per role: researchers write, the plan-checker stays read-o
     const f = setup({ host: { requireRuntimeEvidence: true, launch, launchStatic: launch,
       launchTypedGsd: launch } });
     try {
-      const run = () => f.boundary.dispatch({ runtime: 'codex', ...request });
+      const run = () => f.boundary.dispatch({ runtime: 'codex', ...request },
+        { preRecordValidation: f.preRecordValidation });
       if (accepted) assert.equal(run().receipt.compliance, 'verified');
       else assert.throws(run, (error) => error.code === 'MISSING_RECEIPT');
     } finally { clean(f); }

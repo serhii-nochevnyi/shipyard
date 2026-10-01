@@ -1,6 +1,6 @@
 # Requirements: shipyard
 
-<!-- shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 3a5126c3a892f98dace9b1129623116202ae3ab4474910736943b3f86370ace3 -->
+<!-- shipyard:gsd-sync generated; sync-version: 1; source fingerprint: a02c8e0b84c0132b7962a0bf5c8d698c23197239093b7ac0ab1d220672068c28 -->
 
 **Defined:** 2026-09-10
 **Core Value:** Keep delivery decisions truthful, resumable, and synchronized between the Shipyard conveyor and native GSD workflows.
@@ -396,18 +396,18 @@
 | REQ-182 | Phase 44 | In Progress |
 | REQ-183 | Phase 44 | In Progress |
 | REQ-184 | Phase 44 | In Progress |
-| REQ-185 | Phase 45 | In Progress |
-| REQ-186 | Phase 45 | In Progress |
-| REQ-187 | Phase 45 | In Progress |
-| REQ-188 | Phase 45 | In Progress |
-| REQ-189 | Phase 45 | In Progress |
-| REQ-190 | Phase 45 | In Progress |
-| REQ-191 | Phase 45 | In Progress |
-| REQ-192 | Phase 45 | In Progress |
-| REQ-193 | Phase 45 | In Progress |
-| REQ-194 | Phase 45 | In Progress |
-| REQ-195 | Phase 45 | In Progress |
-| REQ-196 | Phase 45 | In Progress |
+| REQ-185 | Phase 45 | Blocked |
+| REQ-186 | Phase 45 | Blocked |
+| REQ-187 | Phase 45 | Blocked |
+| REQ-188 | Phase 45 | Blocked |
+| REQ-189 | Phase 45 | Blocked |
+| REQ-190 | Phase 45 | Blocked |
+| REQ-191 | Phase 45 | Blocked |
+| REQ-192 | Phase 45 | Blocked |
+| REQ-193 | Phase 47 | In Progress |
+| REQ-194 | Phase 45 | Blocked |
+| REQ-195 | Phase 45 | Blocked |
+| REQ-196 | Phase 45 | Blocked |
 
 **Coverage:**
 - v1 requirements: 194 total

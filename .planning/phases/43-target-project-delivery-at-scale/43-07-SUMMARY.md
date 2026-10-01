@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 14efd46239b4239659e5efd61abc1a4c8b41badee9b541b4ca4b5132fc3f6999
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 87f0a27b7e96031cbd69e70ed267539b33e2beb858906189007305828bd186e0
 phase: 43-target-project-delivery-at-scale
 plan: 07
 subsystem: shipyard delivery
@@ -20,10 +20,10 @@ key-files:
 key-decisions:
   - "Shipyard delivery state is projected; no native executor claim is invented."
 duration: 0min
-completed: 2026-09-28
+completed: 2026-09-30
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 14efd46239b4239659e5efd61abc1a4c8b41badee9b541b4ca4b5132fc3f6999
+shipyard_source_fingerprint: 87f0a27b7e96031cbd69e70ed267539b33e2beb858906189007305828bd186e0
 ---
 
 # Phase 43: Cancelled checks: ignore superseded runs, one journalled rerun that is never green; ci-wait returns within 540 s on Claude — Delivery Projection

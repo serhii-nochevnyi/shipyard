@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 1a75e3afedcc41ea934b0eccc0824a55be660e7998981761b9d2d71bd78bd540
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 925c62cde534257e6ed92219d2fedcbf64c2b169ee3abdd491267592bfe6928e
 phase: 36-enforce-the-runtime-model-ladder
 plan: 11
 subsystem: shipyard delivery
@@ -20,10 +20,10 @@ key-files:
 key-decisions:
   - "Shipyard delivery state is projected; no native executor claim is invented."
 duration: 0min
-completed: 2026-09-16
+completed: 2026-09-30
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 1a75e3afedcc41ea934b0eccc0824a55be660e7998981761b9d2d71bd78bd540
+shipyard_source_fingerprint: 925c62cde534257e6ed92219d2fedcbf64c2b169ee3abdd491267592bfe6928e
 ---
 
 # Phase 36: Cross-runtime generated-install smoke verification — Delivery Projection

@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: cccd911bb40408bc01621d893e6b16352c173d85b35d7e2fa80c7ad4477c2451
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: ca4a10c17a03cb55c9447f184e64d36b0c8091fc1f95d63fca94bfbba8767ecd
 phase: 45-close-residual-pipeline-efficiency-gaps
 plan: 02
 subsystem: shipyard delivery
@@ -20,10 +20,10 @@ key-files:
 key-decisions:
   - "Shipyard delivery state is projected; no native executor claim is invented."
 duration: 0min
-completed: 2026-09-28
+completed: 2026-09-30
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: cccd911bb40408bc01621d893e6b16352c173d85b35d7e2fa80c7ad4477c2451
+shipyard_source_fingerprint: ca4a10c17a03cb55c9447f184e64d36b0c8091fc1f95d63fca94bfbba8767ecd
 ---
 
 # Phase 45: Doctor classifies another checkout's dogfood cache as foreign instead of a release error — Delivery Projection

@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: b3edd68dea000871ae31aa0bd082f89f9e7be67e4fa9a788ebc0ca2bf5470038
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 6df8f0f8eb9f76790e105d5293e3b3204fefd19e64e0c39d1ce1eb253d4045e0
 phase: 43-target-project-delivery-at-scale
 plan: 04
 subsystem: shipyard delivery
@@ -20,10 +20,10 @@ key-files:
 key-decisions:
   - "Shipyard delivery state is projected; no native executor claim is invented."
 duration: 0min
-completed: 2026-09-28
+completed: 2026-09-30
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: b3edd68dea000871ae31aa0bd082f89f9e7be67e4fa9a788ebc0ca2bf5470038
+shipyard_source_fingerprint: 6df8f0f8eb9f76790e105d5293e3b3204fefd19e64e0c39d1ce1eb253d4045e0
 ---
 
 # Phase 43: Bounded reachability: O(1) git forms, a large buffer, and a declared-path epic check with a path-scoped fallback — Delivery Projection

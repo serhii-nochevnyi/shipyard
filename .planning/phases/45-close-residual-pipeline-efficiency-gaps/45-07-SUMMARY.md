@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: a33384397a3369bde60a095317e27ca85770a073dac2327d9d86a666d18d42ab
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 974ee244151acecd3ab65ef32ee5d805ff0061d86ebd1c2c11f813c19bb24e97
 phase: 45-close-residual-pipeline-efficiency-gaps
 plan: 07
 subsystem: shipyard delivery
@@ -20,10 +20,10 @@ key-files:
 key-decisions:
   - "Shipyard delivery state is projected; no native executor claim is invented."
 duration: 0min
-completed: 2026-09-28
+completed: 2026-09-30
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: a33384397a3369bde60a095317e27ca85770a073dac2327d9d86a666d18d42ab
+shipyard_source_fingerprint: 974ee244151acecd3ab65ef32ee5d805ff0061d86ebd1c2c11f813c19bb24e97
 ---
 
 # Phase 45: Planning-tree writer lease with owner, base revision and a monotonic fencing token — Delivery Projection

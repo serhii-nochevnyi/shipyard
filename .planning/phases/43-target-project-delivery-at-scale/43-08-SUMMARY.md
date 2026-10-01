@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: fd458b6380d9619e291aff8cfab81e59e2ec42e8fe102be08e024f4d31b8b7a7
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 0170d51a0fba1304815c93a61fb879f8ed36c19565cf91621a4dca9c3c03d302
 phase: 43-target-project-delivery-at-scale
 plan: 08
 subsystem: shipyard delivery
@@ -20,10 +20,10 @@ key-files:
 key-decisions:
   - "Shipyard delivery state is projected; no native executor claim is invented."
 duration: 0min
-completed: 2026-09-28
+completed: 2026-09-30
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: fd458b6380d9619e291aff8cfab81e59e2ec42e8fe102be08e024f4d31b8b7a7
+shipyard_source_fingerprint: 0170d51a0fba1304815c93a61fb879f8ed36c19565cf91621a4dca9c3c03d302
 ---
 
 # Phase 43: A stale approval from a declared bot does not block the merge; re-request once, then escalate with the command — Delivery Projection

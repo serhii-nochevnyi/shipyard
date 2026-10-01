@@ -180,7 +180,7 @@ test('macOS sandbox permits mktemp and Bash here-doc while denying worktree and 
     const runner = usableRunner({ readOnlyPaths: [worktree], deniedPaths: [state], tempRoot: root });
     if (runner.unavailable) { t.skip(runner.unavailable); return; }
     const body = 'x'.repeat(16384);
-    const script = `tmp=$(mktemp) || exit 11; cat <<EOF > "$tmp"\n${body}\nEOF\n`
+    const script = `tmp=$(mktemp "$TMPDIR/shipyard-heredoc.XXXXXX") || exit 11; cat <<EOF > "$tmp"\n${body}\nEOF\n`
       + 'test "$(wc -c < "$tmp" | tr -d " ")" = 16385 || exit 12; '
       + `if touch '${path.join(worktree, 'no')}' 2>/dev/null; then exit 13; fi; `
       + `if touch '${path.join(state, 'no')}' 2>/dev/null; then exit 14; fi`;

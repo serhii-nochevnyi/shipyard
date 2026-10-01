@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 6e09f3183f75b579f83ef52ae79fdc6681a24a5c22bcce253acd1aa89bf5e892
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 7d5687b44348c77361830be2830eb67f24627543fa7de26053ca0c087cc13d98
 phase: 45-close-residual-pipeline-efficiency-gaps
 plan: 04
 subsystem: shipyard delivery
@@ -20,10 +20,10 @@ key-files:
 key-decisions:
   - "Shipyard delivery state is projected; no native executor claim is invented."
 duration: 0min
-completed: 2026-09-28
+completed: 2026-09-30
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 6e09f3183f75b579f83ef52ae79fdc6681a24a5c22bcce253acd1aa89bf5e892
+shipyard_source_fingerprint: 7d5687b44348c77361830be2830eb67f24627543fa7de26053ca0c087cc13d98
 ---
 
 # Phase 45: codex-decompose-host run lease uses an injected clock and heartbeat so the native-child test is deterministic — Delivery Projection

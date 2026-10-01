@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 5e41b58fe937defc9c5035b20e152f8083c17ccb2ae0d4dbc58dfb237863194e
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 8e3abd2a0fac9c0ac46d9de0a4741e9448469aaf9421acc7addb5be52ac4f75d
 phase: 45-close-residual-pipeline-efficiency-gaps
 plan: 03
 subsystem: shipyard delivery
@@ -20,10 +20,10 @@ key-files:
 key-decisions:
   - "Shipyard delivery state is projected; no native executor claim is invented."
 duration: 0min
-completed: 2026-09-28
+completed: 2026-09-30
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 5e41b58fe937defc9c5035b20e152f8083c17ccb2ae0d4dbc58dfb237863194e
+shipyard_source_fingerprint: 8e3abd2a0fac9c0ac46d9de0a4741e9448469aaf9421acc7addb5be52ac4f75d
 ---
 
 # Phase 45: Dogfood installs default to a dedicated per-checkout runtime home — Delivery Projection
