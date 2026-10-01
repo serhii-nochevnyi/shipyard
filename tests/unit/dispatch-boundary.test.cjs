@@ -2502,7 +2502,7 @@ test('file-backed reservation is atomic across concurrent Node processes', async
     });
     const result = new Promise((resolve, reject) => {
       child.once('error', reject);
-      child.once('exit', (code) => {
+      child.once('close', (code) => {
         if (code !== 0) return reject(new Error(stderr || `child exited ${code}`));
         try { resolve(JSON.parse(stdout)); } catch (error) { reject(error); }
       });
@@ -2561,7 +2561,7 @@ test('a non-atomic reservation replacement lets more than one process win the sa
     child.stderr.on('data', (chunk) => { stderr += chunk; });
     return new Promise((resolve, reject) => {
       child.once('error', reject);
-      child.once('exit', (code) => {
+      child.once('close', (code) => {
         if (code !== 0) return reject(new Error(stderr || `child exited ${code}`));
         try { resolve(JSON.parse(stdout)); } catch (error) { reject(error); }
       });
