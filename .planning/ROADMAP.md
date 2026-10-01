@@ -898,9 +898,9 @@ Native-role policy changes are authorized for investigation and implementation a
 <!-- shipyard:gsd-sync:begin -->
 ## Shipyard synchronization (generated)
 
-- Source fingerprint: `ac28b0b3eff636ae634fdb6dc5709a51575532d1824a5851645ac3b983215e4e`
-- Plans merged: 243/247
-- Phases verified: 10/27
+- Source fingerprint: `d555fba423576459dbbdd713534c00e306eabf554ea30e1d0aa46234c78d3810`
+- Plans merged: 221/247
+- Phases verified: 4/27
 - Current phase: 20
 
 | Phase | Plans | Merged | Verification |
@@ -915,18 +915,18 @@ Native-role policy changes are authorized for investigation and implementation a
 | 27 — The conveyor measures its own state | 9 | 9 | gaps_found |
 | 28 — A mechanism nobody connected is not a mechanism | 9 | 9 | gaps_found |
 | 29 — The tracker is a projection, and a projection is driven | 8 | 8 | passed |
-| 30 — A ticket you cannot reach is not deliverable | 10 | 10 | passed |
-| 31 — Not every ticket is available work | 7 | 7 | passed |
-| 32 — Measure usage and make the backlog actionable | 7 | 7 | passed |
+| 30 — A ticket you cannot reach is not deliverable | 10 | 5 | pending |
+| 31 — Not every ticket is available work | 7 | 6 | pending |
+| 32 — Measure usage and make the backlog actionable | 7 | 6 | pending |
 | 33 — Reduce orchestration context and transfer sessions safely | 9 | 9 | passed |
-| 34 — Improve convergence and tune from measured outcomes | 5 | 5 | passed |
+| 34 — Improve convergence and tune from measured outcomes | 5 | 1 | pending |
 | 35 — Close the GSD and Shipyard workflow loop | 3 | 3 | passed |
-| 36 — Enforce the runtime model ladder | 12 | 12 | passed |
-| 37 — Run the autonomous dual-runtime control plane | 8 | 8 | pending |
-| 38 — Restore the native model ladder in delivery | 8 | 8 | passed |
+| 36 — Enforce the runtime model ladder | 12 | 7 | pending |
+| 37 — Run the autonomous dual-runtime control plane | 8 | 5 | pending |
+| 38 — Restore the native model ladder in delivery | 8 | 6 | pending |
 | 39 — Remove conveyor session friction | 17 | 17 | gaps_found |
 | 40 — Build delivery seams and clean target-project PRs | 27 | 27 | pending |
-| 41 — Reduce pipeline subscription overhead | 9 | 9 | gaps_found |
+| 41 — Reduce pipeline subscription overhead | 9 | 8 | gaps_found |
 | 42 — Resume trusted finalization without executor replay | 3 | 3 | gaps_found |
 | 43 — Target-project delivery at scale | 19 | 19 | pending |
 | 44 — Optimize subscription efficiency per runtime | 8 | 8 | pending |

@@ -1,13 +1,13 @@
 {
   "schema_version": 1,
-  "generation": 404,
-  "generation_identity": "2129fefa-4553-43d6-a7d2-3196a2ffe739",
-  "previous_generation_identity": "16777245:12939331867:1790794378900246500:88c9e88b693f3ea0184d5ab232d25f5903be1783042ad631bda0da5b023c03c8",
-  "observed_at": "2026-09-30T18:53:31.443Z",
-  "generated_at": "2026-09-30T18:53:31.443Z",
+  "generation": 405,
+  "generation_identity": "c59f2ec2-c539-4ee2-84a2-74a81c4a077b",
+  "previous_generation_identity": "16777245:12939332707:1790794420211083300:ce3a58d7ae4014e000f4ec84c7da9e1c796e8cac4685486d049b68ae6f1ba36d",
+  "observed_at": "2026-10-01T11:55:41.229Z",
+  "generated_at": "2026-10-01T11:55:41.229Z",
   "by": "state-sync",
-  "pid": 35947,
-  "observation_generation": 404,
+  "pid": 98189,
+  "observation_generation": 405,
   "observation_projection": {
     "tickets": {
       "T-20-01": {
@@ -891,9 +891,9 @@
         "checks": null
       },
       "T-30-04": {
-        "status": "merged",
+        "status": "pending",
         "repository": null,
-        "pr": 113,
+        "pr": null,
         "head": null,
         "draft": false,
         "base": "epic/30-a-ticket-you-cannot-reach-is-not-deliverable",
@@ -902,9 +902,9 @@
         "checks": null
       },
       "T-30-05": {
-        "status": "merged",
+        "status": "pending",
         "repository": null,
-        "pr": 114,
+        "pr": null,
         "head": null,
         "draft": false,
         "base": "epic/30-a-ticket-you-cannot-reach-is-not-deliverable",
@@ -913,9 +913,9 @@
         "checks": null
       },
       "T-30-06": {
-        "status": "merged",
+        "status": "pending",
         "repository": null,
-        "pr": 115,
+        "pr": null,
         "head": null,
         "draft": false,
         "base": "epic/30-a-ticket-you-cannot-reach-is-not-deliverable",
@@ -935,9 +935,9 @@
         "checks": null
       },
       "T-30-08": {
-        "status": "merged",
+        "status": "pending",
         "repository": null,
-        "pr": 117,
+        "pr": null,
         "head": null,
         "draft": false,
         "base": "epic/30-a-ticket-you-cannot-reach-is-not-deliverable",
@@ -946,9 +946,9 @@
         "checks": null
       },
       "T-30-09": {
-        "status": "merged",
+        "status": "pending",
         "repository": null,
-        "pr": 118,
+        "pr": null,
         "head": null,
         "draft": false,
         "base": "epic/30-a-ticket-you-cannot-reach-is-not-deliverable",
@@ -1034,9 +1034,9 @@
         "checks": null
       },
       "T-31-07": {
-        "status": "merged",
+        "status": "pending",
         "repository": null,
-        "pr": 135,
+        "pr": null,
         "head": null,
         "draft": false,
         "base": "epic/31-not-every-ticket-is-available-work",
@@ -1111,9 +1111,9 @@
         "checks": null
       },
       "T-32-07": {
-        "status": "merged",
+        "status": "pending",
         "repository": null,
-        "pr": 102,
+        "pr": null,
         "head": null,
         "draft": false,
         "base": "epic/32-measure-usage-and-make-the-backlog-actionable",
@@ -1221,9 +1221,9 @@
         "checks": null
       },
       "T-34-01": {
-        "status": "merged",
+        "status": "pending",
         "repository": null,
-        "pr": 167,
+        "pr": null,
         "head": null,
         "draft": false,
         "base": "epic/34-improve-convergence-and-tune-from-measured-outcomes",
@@ -1232,9 +1232,9 @@
         "checks": null
       },
       "T-34-02": {
-        "status": "merged",
+        "status": "pending",
         "repository": null,
-        "pr": 168,
+        "pr": null,
         "head": null,
         "draft": false,
         "base": "epic/34-improve-convergence-and-tune-from-measured-outcomes",
@@ -1243,9 +1243,9 @@
         "checks": null
       },
       "T-34-03": {
-        "status": "merged",
+        "status": "pending",
         "repository": null,
-        "pr": 169,
+        "pr": null,
         "head": null,
         "draft": false,
         "base": "epic/34-improve-convergence-and-tune-from-measured-outcomes",
@@ -1254,9 +1254,9 @@
         "checks": null
       },
       "T-34-04": {
-        "status": "merged",
+        "status": "pending",
         "repository": null,
-        "pr": 170,
+        "pr": null,
         "head": null,
         "draft": false,
         "base": "epic/34-improve-convergence-and-tune-from-measured-outcomes",
@@ -1342,9 +1342,9 @@
         "checks": null
       },
       "T-36-04": {
-        "status": "merged",
+        "status": "pending",
         "repository": null,
-        "pr": 139,
+        "pr": null,
         "head": null,
         "draft": false,
         "base": "epic/36-enforce-the-runtime-model-ladder",
@@ -1375,9 +1375,9 @@
         "checks": null
       },
       "T-36-07": {
-        "status": "merged",
+        "status": "pending",
         "repository": null,
-        "pr": 142,
+        "pr": null,
         "head": null,
         "draft": false,
         "base": "epic/36-enforce-the-runtime-model-ladder",
@@ -1397,9 +1397,9 @@
         "checks": null
       },
       "T-36-09": {
-        "status": "merged",
+        "status": "pending",
         "repository": null,
-        "pr": 144,
+        "pr": null,
         "head": null,
         "draft": false,
         "base": "epic/36-enforce-the-runtime-model-ladder",
@@ -1408,9 +1408,9 @@
         "checks": null
       },
       "T-36-10": {
-        "status": "merged",
+        "status": "pending",
         "repository": null,
-        "pr": 145,
+        "pr": null,
         "head": null,
         "draft": false,
         "base": "epic/36-enforce-the-runtime-model-ladder",
@@ -1419,9 +1419,9 @@
         "checks": null
       },
       "T-36-11": {
-        "status": "merged",
+        "status": "pending",
         "repository": null,
-        "pr": 146,
+        "pr": null,
         "head": null,
         "draft": false,
         "base": "epic/36-enforce-the-runtime-model-ladder",
@@ -1463,9 +1463,9 @@
         "checks": null
       },
       "T-37-03": {
-        "status": "merged",
+        "status": "pending",
         "repository": null,
-        "pr": 180,
+        "pr": null,
         "head": null,
         "draft": false,
         "base": "epic/37-autonomous-dual-runtime-control-plane",
@@ -1474,9 +1474,9 @@
         "checks": null
       },
       "T-37-04": {
-        "status": "merged",
+        "status": "pending",
         "repository": null,
-        "pr": 182,
+        "pr": null,
         "head": null,
         "draft": false,
         "base": "epic/37-autonomous-dual-runtime-control-plane",
@@ -1485,9 +1485,9 @@
         "checks": null
       },
       "T-37-05": {
-        "status": "merged",
+        "status": "pending",
         "repository": null,
-        "pr": 181,
+        "pr": null,
         "head": null,
         "draft": false,
         "base": "epic/37-autonomous-dual-runtime-control-plane",
@@ -1562,9 +1562,9 @@
         "checks": null
       },
       "T-38-04": {
-        "status": "merged",
+        "status": "pending",
         "repository": null,
-        "pr": 192,
+        "pr": null,
         "head": null,
         "draft": false,
         "base": "epic/38-runtime-model-ladder-recovery",
@@ -1573,9 +1573,9 @@
         "checks": null
       },
       "T-38-05": {
-        "status": "merged",
+        "status": "pending",
         "repository": null,
-        "pr": 199,
+        "pr": null,
         "head": null,
         "draft": false,
         "base": "epic/38-runtime-model-ladder-recovery",
@@ -2134,9 +2134,9 @@
         "checks": null
       },
       "T-41-04": {
-        "status": "merged",
+        "status": "pending",
         "repository": null,
-        "pr": 246,
+        "pr": null,
         "head": null,
         "draft": false,
         "base": "epic/41-reduce-pipeline-subscription-overhead",
@@ -2731,9 +2731,9 @@
   },
   "binding": {
     "schema_version": 1,
-    "state_digest": "aff3f726de02b193d10af411d5b22d02a21b9a825b919540d68e956e6e02260b",
-    "front_digest": "c63d52b6c1474f48ce2cd9d76c6d1756fbb6eaf189746bb765d1cf85dbcd51e9",
-    "observation_digest": "c9a81617892a7b3a7428a101e4430370bd6fd71429bc5baba50bfd57597b5a0f",
-    "observation_generation": 404
+    "state_digest": "d53d92fc20510fe022ceabe688478ea86825b3c7d0c5a8319d02e337a0ced6e2",
+    "front_digest": "0531df5639d5d1b75c066ef79c1da43213d149d11cf808cee8b9551b98e68d78",
+    "observation_digest": "6e0beb5c8c9bb1fb2ab1e676f3bd5d11beeb8dad7d6157f0db712c622b1ddbb1",
+    "observation_generation": 405
   }
 }

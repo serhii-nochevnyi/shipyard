@@ -1,10 +1,10 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: d7a0fd17f8dd0b65eb9e61b7034e9a61eeea61e863266ba7e67c821f0b587df2
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 6467d4fef09379a1d51c98790256c6165409ca8048ac0cd4035afcdb9c87fec6
 phase: 37
 status: pending
 result: pending
 shipyard_sync: evidence-projection
-shipyard_source_fingerprint: d7a0fd17f8dd0b65eb9e61b7034e9a61eeea61e863266ba7e67c821f0b587df2
+shipyard_source_fingerprint: 6467d4fef09379a1d51c98790256c6165409ca8048ac0cd4035afcdb9c87fec6
 ---
 
 # Phase 37: Run the autonomous dual-runtime control plane — UAT Projection
@@ -12,9 +12,9 @@ shipyard_source_fingerprint: d7a0fd17f8dd0b65eb9e61b7034e9a61eeea61e863266ba7e67
 This file is generated from the delivery graph and phase integration evidence.
 
 ### 1. Delivery plans are accounted for
-result: passed
+result: pending
 expected: all 8 phase plan(s) are merged
-actual: 8 merged
+actual: 5 merged
 
 ### 2. Integration evidence is explicit
 result: pending

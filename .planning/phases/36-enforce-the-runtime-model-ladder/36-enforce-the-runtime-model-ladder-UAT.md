@@ -1,10 +1,10 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 80b7c9c6fbf71f518a9fd92e1bb8af48defa88e66bf78b6c6b5d96ef52dc2a3e
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 0357504b4a1fdcee313f465e254461a8d16fd56618fcc2cbd4d4c83dae0fb79e
 phase: 36
-status: passed
-result: passed
+status: pending
+result: pending
 shipyard_sync: evidence-projection
-shipyard_source_fingerprint: 80b7c9c6fbf71f518a9fd92e1bb8af48defa88e66bf78b6c6b5d96ef52dc2a3e
+shipyard_source_fingerprint: 0357504b4a1fdcee313f465e254461a8d16fd56618fcc2cbd4d4c83dae0fb79e
 ---
 
 # Phase 36: Enforce the runtime model ladder — UAT Projection
@@ -12,9 +12,9 @@ shipyard_source_fingerprint: 80b7c9c6fbf71f518a9fd92e1bb8af48defa88e66bf78b6c6b5
 This file is generated from the delivery graph and phase integration evidence.
 
 ### 1. Delivery plans are accounted for
-result: passed
+result: pending
 expected: all 12 phase plan(s) are merged
-actual: 12 merged
+actual: 7 merged
 
 ### 2. Integration evidence is explicit
 result: passed

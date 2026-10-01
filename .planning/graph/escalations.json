@@ -82,11 +82,11 @@
       "at": "2026-09-26T12:46:05.661Z"
     },
     "T-46-01": {
-      "reason": "User confirmed resume ladder after phase45. Gate2 now passes and native state-sync finalization succeeds; owner PR369/382/383 are merged into phase45 epic, but those changes are not ancestors of origin/main or the phase46 effective base. Phase45 integration PR381 is open draft at 56e6479ddc31940014bfceff1bf73e37fa13b4b4 with failed test-fast. Resume only after phase45 default-branch landing, refresh actual phase46 base, verify owner ancestry, and revalidate native drift before executor.",
+      "reason": "Native epic refresh refused: 39 planning/state/journal conflicts merging origin/main after PR381. Epic remains dcf19566b304b2ecf69be536dd5741ab15ced7c1; effective base is not validated. Requires owner-reviewed conflict reconciliation preserving receipt history before hold clear, fresh drift and native executor.",
       "fingerprint": "d19613ae411a954c",
       "fingerprint_kind": "park",
       "pr": null,
-      "at": "2026-09-30T18:54:45.879Z"
+      "at": "2026-10-01T11:57:09.299Z"
     }
   }
 }
