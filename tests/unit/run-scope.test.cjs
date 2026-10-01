@@ -24,7 +24,7 @@ test('constructs the scoped identity components with stable schemas', () => {
   assert.equal(ticket.ticket, 'T-37-01');
   assert.equal(worktree.path, '/tmp/worktree');
   assert.deepEqual(runtime, { schema: 'shipyard.runtime.v1', version: 1, runtime: 'claude', provider: 'anthropic' });
-  assert.equal(dispatch.model, 'sonnet');
+  assert.equal(dispatch.model, 'claude-sonnet-5-5');
   assert.equal(lease.run_id, 'r');
   assert.equal(revision.value, 0);
   assert.equal(checkpoint.run_id, 'r');
