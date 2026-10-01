@@ -950,7 +950,7 @@ test('decompose selects runtime before tuning and establishes context before thr
   );
 });
 
-test('delivery launch docs route every role through the boundary and the generated Codex names', () => {
+test('delivery launch docs and operator guide preserve the routed native ladder', () => {
   const deliver = readRepo('plugins/delivery-pipeline/commands/deliver.md');
   const sentinel = readRepo('plugins/delivery-pipeline/references/pr-sentinel.md');
   const source = `${deliver}\n${sentinel}`;
@@ -989,6 +989,36 @@ test('delivery launch docs route every role through the boundary and the generat
   ]) {
     assert.ok(source.includes(pair), `delivery docs must preserve the native ladder pair ${pair}`);
   }
+
+  const guide = readRepo('docs/gsd_multilevel_delivery_pipeline.md');
+  const sectionStart = guide.indexOf('### 7.5.1. Runtime-native model grids');
+  const assertionStart = guide.indexOf('\n**Canonical-table assertion.**', sectionStart);
+  assert.ok(sectionStart >= 0 && assertionStart > sectionStart,
+    'the active native grid and its canonical assertion must remain in the operator guide');
+
+  const activeGrid = guide.slice(sectionStart, assertionStart);
+  const tableRows = activeGrid.split('\n').filter((line) => line.startsWith('|'));
+  assert.deepStrictEqual(tableRows, [
+    '| Logical key | Codex concrete model | Claude Code selection |',
+    '|---|---|---|',
+    '| Luna | `gpt-6-luna` | — |',
+    '| Sol | `gpt-6.1-sol` | — |',
+    '| Sonnet | — | `claude-sonnet-5-5` |',
+    '| Opus | — | `claude-opus-5-5` |',
+    '| Fable | — | `fable` |',
+    '| Role | Codex base and evidence-based escalation | Claude Code base and evidence-based escalation |',
+    '|---|---|---|',
+    '| `research` | Sol/high → Sol/xhigh only on `complexity: very-complex`; `type: alternatives` alone stays at base | Sonnet/xhigh → Opus/high only on `complexity: very-complex`; `type: alternatives` alone stays at base |',
+    '| `decomposition` | Sol/high → Sol/xhigh on `critical: true` or `checkpoint: true` | Sonnet/xhigh → Opus/high on `critical: true` or `checkpoint: true` |',
+    '| `executor` | Sol/low → Sol/high on `critical: true` or `checkpoint: true` | Sonnet/medium → Sonnet/xhigh on `critical: true` or `checkpoint: true`; no failure-driven promotion in this slice |',
+    '| `pr-sentinel` | Luna/medium, fixed; no automatic tier promotion | Sonnet/low for bounded actionable duty; return to host classification outside scope |',
+    '| `integrator` | Sol/high → Sol/xhigh on `critical: true`, `checkpoint: true`, `contested: true`, or measured `inputTokens > 250000` | Sonnet/xhigh → Opus/high on `critical: true`, `checkpoint: true`, `contested: true`, or measured `inputTokens > 250000` |',
+    '| `drift-check` | Sol/low, fixed; no automatic tier promotion | Sonnet/medium, fixed; reroute uncertain scope through a policy amendment |',
+    '| `arch-review` | Sol/high → Sol/xhigh on `critical: true`, `checkpoint: true`, `contested: true`, or measured `inputTokens > 250000` | Sonnet/xhigh → Opus/high on `critical: true`, `checkpoint: true`, or `contested: true`; Fable/medium on measured `inputTokens > 250000` with `pipeline.fable: auto` consent |',
+    '| `ci-fix` | Sol/low → Sol/high on verified `signatureState: repeat` → Sol/xhigh on verified `signatureState: repeat_exhausted` | Sonnet/high → Sonnet/xhigh on verified `signatureState: repeat` → Opus/high on verified `signatureState: repeat_exhausted` |',
+    '| `review-fix` | Sol/low → Sol/high on verified `signatureState: repeat` → Sol/xhigh on verified `signatureState: repeat_exhausted` | Sonnet/high → Sonnet/xhigh on verified `signatureState: repeat` → Opus/high on verified `signatureState: repeat_exhausted` |',
+  ]);
+
   const investigate = readRepo('plugins/delivery-pipeline/commands/investigate.md');
   assert.ok(deliver.includes('config.gsd.runtime')
     && deliver.includes('claude-delivery-host.cjs')
