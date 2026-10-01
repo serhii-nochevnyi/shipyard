@@ -697,6 +697,22 @@ const projectionNeedsAction = !GLOBAL && skillProjection.status !== 'managed';
 // so a project that never consented to Fable never sees the Fable floor, and a
 // machine with no Codex install never sees Astra's.
 const blockers = [];
+const legacyProjectOverrideBlockers = !GLOBAL
+  ? ['gsd-planner', 'gsd-code-reviewer']
+    .filter((agent) => ['opus', 'fable'].includes(raw.model_overrides?.[agent]))
+    .map((agent) => ({
+      what: 'legacy-project-model-override',
+      key: `model_overrides.${agent}`,
+      have: raw.model_overrides[agent],
+      head: `model_overrides.${agent} = ${JSON.stringify(raw.model_overrides[agent])} needs operator review`,
+      why: `The previous tuner could generate this override, but its value does not prove ownership. ` +
+        `Review ${CONFIG} and explicitly remove model_overrides.${agent} if it was tuner-generated ` +
+        'to let the v7 routed policy select the model. If it is operator-owned, reconcile it with ' +
+        'the routed policy before retrying. --apply writes nothing while this blocker remains; ' +
+        'pipeline.fable and independent reviewer settings are preserved.',
+    }))
+  : [];
+blockers.push(...legacyProjectOverrideBlockers);
 
 // A floor keyed on a value the file does not say is a finding invented from a
 // default. Under a refusal `pipeline.fable` is the shipped `off`, so the check
@@ -1000,7 +1016,7 @@ if (AS_JSON) {
     // registration that does not read are the same class (no key fixes them, and
     // `--apply` has nothing to write) with a different subject, so each states its
     // own headline rather than being forced through "have/floor".
-    console.log('\n  REQUIRED — no config key can fix these:');
+    console.log('\n  REQUIRED — operator action needed:');
     for (const b of blockers) {
       console.log(`    ${b.what}: ${b.head}`);
       console.log(`        ${b.why}`);
@@ -1064,6 +1080,12 @@ if (CONFIG_REFUSAL) {
     console.log('  Fix the project config and run this again — from a directory whose'
       + ' .planning/config.json parses,\n  since that is the file these values mirror.');
   }
+  process.exit(1);
+}
+
+if (APPLY && legacyProjectOverrideBlockers.length) {
+  process.stderr.write('gsd-tune: refusing --apply because legacy project model override ownership is unknown; '
+    + legacyProjectOverrideBlockers.map((blocker) => blocker.why).join(' ') + '\n');
   process.exit(1);
 }
 

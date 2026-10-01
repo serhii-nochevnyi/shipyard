@@ -156,8 +156,8 @@ test('the capability declares the same palette the reader defaults to', () => {
   assert.ok(declared, 'capability.json must declare delivery_pipeline.codex_models');
   assert.strictEqual(declared.type, 'string', 'GSD accepts no array-typed config slice');
   assert.deepStrictEqual(pc.DEFAULT_CODEX_MODELS, [
-    { model: 'gpt-6-sol', effort: 'high', min_cli: '0.155.1' },
-    { model: 'gpt-6-sol', effort: 'xhigh', min_cli: '0.155.1' },
+    { model: 'gpt-6.1-sol', effort: 'high', min_cli: '0.155.1' },
+    { model: 'gpt-6.1-sol', effort: 'xhigh', min_cli: '0.155.1' },
   ]);
   const warnings = [];
   assert.deepStrictEqual(

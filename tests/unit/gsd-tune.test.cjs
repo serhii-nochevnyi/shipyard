@@ -186,6 +186,47 @@ test('tuner leaves native planner and reviewer selection to routed policy', () =
   }
 });
 
+test('old tuner project overrides block apply without claiming ownership or writing files', () => {
+  for (const runtime of ['claude', 'codex']) {
+    for (const value of ['opus', 'fable']) {
+      const dir = project({
+        pipeline: { fable: 'auto', reviewer: 'copilot' },
+        model_overrides: { 'gsd-planner': value, 'gsd-code-reviewer': value, 'gsd-verifier': 'sonnet' },
+        agent_skills: { 'gsd-executor': ['operator-skill'] },
+      });
+      const file = path.join(dir, '.planning', 'config.json');
+      const before = fs.readFileSync(file, 'utf8');
+      const report = run(dir, ['--runtime', runtime, '--json']);
+      assert.equal(report.status, 1);
+      const blockers = JSON.parse(report.stdout).blockers;
+      assert.deepEqual(blockers.map((blocker) => blocker.key),
+        ['model_overrides.gsd-planner', 'model_overrides.gsd-code-reviewer']);
+      for (const blocker of blockers) {
+        assert.equal(blocker.have, value);
+        assert.ok(/does not prove ownership/.test(blocker.why), blocker.why);
+        assert.ok(blocker.why.includes(`explicitly remove ${blocker.key}`), blocker.why);
+      }
+      for (const args of [[], ['--json']]) {
+        const applied = run(dir, ['--runtime', runtime, '--apply', ...args]);
+        assert.equal(applied.status, 1);
+        assert.ok(/refusing --apply/.test(applied.stderr), applied.stderr);
+        assert.equal(fs.readFileSync(file, 'utf8'), before);
+        assert.equal(fs.existsSync(path.join(dir, PROJECT_DELIVERY_RULES)), false);
+        assert.equal(fs.existsSync(`${file}.gsd-tune.tmp`), false);
+      }
+    }
+  }
+});
+
+test('compatible operator planner and reviewer overrides survive apply', () => {
+  const overrides = { 'gsd-planner': 'sonnet', 'gsd-code-reviewer': 'sonnet', 'gsd-verifier': 'sonnet' };
+  const dir = project({ pipeline: { fable: 'off', reviewer: 'copilot' }, model_overrides: overrides });
+  const applied = run(dir, ['--runtime', 'claude', '--apply']);
+  assert.equal(applied.status, 0, applied.stderr);
+  assert.deepEqual(readCfg(dir).model_overrides, overrides);
+  assert.deepEqual(readCfg(dir).pipeline, { fable: 'off', reviewer: 'copilot' });
+});
+
 test('models.* is Claude-only (D-24): Codex proposes none of it, Claude still proposes all four', () => {
   const claude = keyed(driftOf(project({}), ['--runtime', 'claude']));
   for (const key of ['models.planning', 'models.execution', 'models.research', 'models.verification']) {

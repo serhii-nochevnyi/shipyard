@@ -769,6 +769,7 @@ suite('codex_models — the palette a static agent file is written from');
 test('no config → the shipped palette, floor first and ceiling last', () => {
   const { config, warnings } = withConfig(undefined);
   assert.deepStrictEqual(config.codex_models, DEFAULT_CODEX_MODELS);
+  assert.deepStrictEqual(config.codex_models.map(({ model }) => model), ['gpt-6.1-sol', 'gpt-6.1-sol']);
   assert.deepStrictEqual(warnings, []);
   // The order IS the policy: first entry is the workhorse every role gets, last
   // is the ceiling only the integrator and the `-deep` agents reach.
@@ -3243,6 +3244,35 @@ test('Codex remaps validate the selected tier without rejecting unrelated tiers'
     assert.equal(resolveDispatch({ config, role: 'executor' }).model, 'gpt-6.1-sol');
     assert.equal(resolveDispatch({ config, role: 'executor', signals: { critical: true } }).model, 'gpt-6.1-sol');
     assert.doesNotThrow(() => resolveDispatch({ config, role: 'research' }));
+  }
+});
+
+test('native Codex remaps validate model and compound effort assertions', () => {
+  for (const namespace of ['model_policy', 'model_profile_overrides']) {
+    const wrap = (tiers) => namespace === 'model_policy'
+      ? { model_policy: { runtime_tiers: { codex: tiers } } }
+      : { model_profile_overrides: { codex: tiers } };
+    const prefix = namespace === 'model_policy'
+      ? 'config.model_policy.runtime_tiers.codex' : 'config.model_profile_overrides.codex';
+    for (const role of ['executor', 'pr-sentinel', 'research']) {
+      const expected = canonicalPolicy.resolveDispatch({ runtime: 'codex', role });
+      const key = expected.model_key;
+      for (const entry of ['remapped-agent', { model: expected.model, effort: 'ultra' }]) {
+        const { config } = routedConfig(wrap({ [key]: entry }));
+        refusesSource(() => resolveDispatch({ config, role }), `${prefix}.${key}`);
+      }
+      const { config } = routedConfig(wrap({ [key]: { model: expected.model, effort: expected.effort } }));
+      assert.deepStrictEqual(resolveDispatch({ config, role }), expected);
+    }
+  }
+});
+
+test('obsolete compatibility palettes fail closed at the routed boundary', () => {
+  for (const namespace of ['pipeline', 'delivery_pipeline']) {
+    const { config } = routedConfig({ [namespace]: {
+      codex_models: [{ model: 'gpt-6-sol', effort: 'high' }, { model: 'gpt-6-sol', effort: 'xhigh' }],
+    } });
+    refusesSource(() => resolveDispatch({ config, role: 'executor' }), `${namespace}.codex_models`);
   }
 });
 

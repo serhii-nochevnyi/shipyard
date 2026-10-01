@@ -753,15 +753,16 @@ fixed routed `pr-sentinel` role for either signal.
 
 ### 7.5.1. Runtime-native model grids
 
-The logical Codex keys resolve to concrete IDs only in the Codex adapter. Claude
-keeps the Sonnet and Fable aliases and pins Opus to its concrete runtime ID; its
-grid never translates Luna or Sol into a Claude selection.
+The compatibility examples above are historical behavior only. This section is
+the current ADR-024 routed grid. Codex uses its own logical keys and resolves
+them to concrete IDs in the Codex adapter; Claude uses native Claude selections
+and never translates Luna or Sol into a Claude model.
 
 | Logical key | Codex concrete model | Claude Code selection |
 |---|---|---|
 | Luna | `gpt-6-luna` | — |
-| Sol | `gpt-6-sol` | — |
-| Sonnet | — | `sonnet` |
+| Sol | `gpt-6.1-sol` | — |
+| Sonnet | — | `claude-sonnet-5-5` |
 | Opus | — | `claude-opus-5-5` |
 | Fable | — | `fable` |
 
@@ -769,15 +770,15 @@ The canonical role/rung/signal ladder is:
 
 | Role | Codex base and evidence-based escalation | Claude Code base and evidence-based escalation |
 |---|---|---|
-| `research` | Sol/high → Sol/xhigh on explicit `complexity: very-complex`; `type: alternatives` alone stays at base | Opus/medium → Opus/high on explicit `complexity: very-complex`; `type: alternatives` stays at base |
-| `decomposition` | Sol/high → Sol/xhigh on `critical` or `checkpoint` | Opus/medium → Opus/high on `critical` or `checkpoint` |
-| `executor` | Luna/max → Sol/high on explicit `critical` or `checkpoint` | Sonnet/max → Opus/low on explicit `critical` or `checkpoint` |
-| `pr-sentinel` | Luna/medium, fixed; gate strategy only | Sonnet/high, fixed; gate strategy only |
-| `integrator` | Sol/high → Sol/xhigh on measured window, `contested`, `critical`, or `checkpoint` | Opus/medium → Opus/high on the same evidence |
-| `drift-check` | Luna/max, fixed; gate strategy only | Opus/high, fixed; gate strategy only |
-| `arch-review` | Sol/high → Sol/xhigh on measured window, `contested`, `critical`, or `checkpoint` | Opus/medium → Opus/high on `contested`, `critical`, or `checkpoint` → Fable/medium on measured window |
-| `ci-fix` | Luna/max → Sol/high on verified `signatureState: repeat` → Sol/xhigh on verified `repeat_exhausted` | Opus/medium → Opus/high on verified `repeat` or `repeat_exhausted` |
-| `review-fix` | Luna/max → Sol/high on verified `signatureState: repeat` → Sol/xhigh on verified `repeat_exhausted` | Opus/medium → Opus/high on verified `repeat` or `repeat_exhausted` |
+| `research` | Sol/high → Sol/xhigh only on `complexity: very-complex`; `type: alternatives` alone stays at base | Sonnet/xhigh → Opus/high only on `complexity: very-complex`; `type: alternatives` alone stays at base |
+| `decomposition` | Sol/high → Sol/xhigh on `critical: true` or `checkpoint: true` | Sonnet/xhigh → Opus/high on `critical: true` or `checkpoint: true` |
+| `executor` | Sol/low → Sol/high on `critical: true` or `checkpoint: true` | Sonnet/medium → Sonnet/xhigh on `critical: true` or `checkpoint: true`; no failure-driven promotion in this slice |
+| `pr-sentinel` | Luna/medium, fixed; no automatic tier promotion | Sonnet/low for bounded actionable duty; return to host classification outside scope |
+| `integrator` | Sol/high → Sol/xhigh on `critical: true`, `checkpoint: true`, `contested: true`, or measured `inputTokens > 250000` | Sonnet/xhigh → Opus/high on `critical: true`, `checkpoint: true`, `contested: true`, or measured `inputTokens > 250000` |
+| `drift-check` | Sol/low, fixed; no automatic tier promotion | Sonnet/medium, fixed; reroute uncertain scope through a policy amendment |
+| `arch-review` | Sol/high → Sol/xhigh on `critical: true`, `checkpoint: true`, `contested: true`, or measured `inputTokens > 250000` | Sonnet/xhigh → Opus/high on `critical: true`, `checkpoint: true`, or `contested: true`; Fable/medium on measured `inputTokens > 250000` with `pipeline.fable: auto` consent |
+| `ci-fix` | Sol/low → Sol/high on verified `signatureState: repeat` → Sol/xhigh on verified `signatureState: repeat_exhausted` | Sonnet/high → Sonnet/xhigh on verified `signatureState: repeat` → Opus/high on verified `signatureState: repeat_exhausted` |
+| `review-fix` | Sol/low → Sol/high on verified `signatureState: repeat` → Sol/xhigh on verified `signatureState: repeat_exhausted` | Sonnet/high → Sonnet/xhigh on verified `signatureState: repeat` → Opus/high on verified `signatureState: repeat_exhausted` |
 
 **Canonical-table assertion.** This table is a normative transcription of
 `plugins/delivery-pipeline/scripts/model-policy.cjs`, not of the compatibility
@@ -792,19 +793,28 @@ The canonical signal vocabulary is `type`, `complexity`, `risk`, `critical`,
 `checkpoint`, `contested`, measured `inputTokens`, `signatureState`, and the
 boundary-issued `priorApplied` receipt. Signals are role-scoped: `risk` is
 retained context, not a global promotion, and a missing signal never promotes a
-role. The measured-window route is `inputTokens` above the ADR-014 policy
-threshold (250000 tokens). When several allowed signals fire, the resolver
-retains every signal reason and selects the highest permitted rung. `flake` and
-`plan_defect` are terminal gate/strategy outcomes, not model promotions.
+role. The measured-window route is strictly `inputTokens > 250000` under the
+ADR-014 policy threshold. A `critical` or `checkpoint` escalation must come
+from the authenticated routed context; repair `repeat` and `repeat_exhausted`
+are signature states verified by the delivery boundary, not caller-written
+labels. When several allowed signals fire, the resolver retains every signal
+reason and selects the highest permitted rung. `flake` and `plan_defect` are
+terminal gate/strategy outcomes, not model promotions.
 
 Repair escalation is evidence-backed. `ci-fix` and `review-fix` may move only
 from the base rung to `repeat`, then to `repeat_exhausted`, and each promotion
 requires the immediately preceding rung's boundary-verified application receipt
 and `previous_dispatch_id`. Fixed Luna roles are not globally promoted, and
-contested evidence only promotes the judgement roles (`integrator` and
-`arch-review`). Claude's Fable rung is selected only by its declared policy
-signals and existing routed consent (`pipeline.fable: auto`); missing consent or
-host support is a refusal, never an implicit downgrade.
+`contested` evidence only promotes the judgement roles (`integrator` and
+`arch-review`). Claude's Fable rung is selected only by the declared measured
+window signal and existing routed consent (`pipeline.fable: auto`); missing
+consent or host support is a refusal, never an implicit downgrade.
+
+A model list, runtime capability declaration, account picker, or vendor release
+announcement establishes discoverability only. Application is proven by the
+same-session native dispatch receipt, with distinct requested, applied, and
+observed model/effort values and its application evidence. A claimed request or
+a process exit is not proof that the runtime applied it.
 
 ### 7.5.2. Adapters, boundary, and receipts
 
