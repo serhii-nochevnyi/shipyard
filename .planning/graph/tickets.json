@@ -8737,7 +8737,7 @@
       "jira": null
     },
     "T-45-18": {
-      "title": "Refresh the 0.70.0 Codex package after both integration repairs merge",
+      "title": "Fence durable receipt rollback and refresh the 0.70.0 Codex package",
       "plan": ".planning/phases/45-close-residual-pipeline-efficiency-gaps/45-18-PLAN.md",
       "phase": "45",
       "repo": null,
@@ -8752,9 +8752,11 @@
       "unreachable_paths": false,
       "missing_paths": false,
       "files": [
+        "plugins/delivery-pipeline/scripts/dispatch-boundary.cjs",
+        "tests/unit/dispatch-boundary.test.cjs",
         "plugins/shipyard/**"
       ],
-      "risk": "low",
+      "risk": "medium",
       "type": "implementation",
       "human_checkpoint": false,
       "checkpoint": null,

@@ -4314,14 +4314,14 @@ tickets:
     pr_base: ticket/T-45-15-prepare-the-0-70-0-release-from-the-full
     jira: null
   T-45-18:
-    title: Refresh the 0.70.0 Codex package after both integration repairs merge
+    title: Fence durable receipt rollback and refresh the 0.70.0 Codex package
     plan: '.planning/phases/45-close-residual-pipeline-efficiency-gaps/45-18-PLAN.md'
     phase: '45'
     repo: null
     wave: 7
     depends_on: [T-45-15, T-45-16, T-45-17]
-    files: ['plugins/shipyard/**']
-    risk: low
+    files: [plugins/delivery-pipeline/scripts/dispatch-boundary.cjs, tests/unit/dispatch-boundary.test.cjs, 'plugins/shipyard/**']
+    risk: medium
     human_checkpoint: false
     checkpoint: null
     preauthorized: false
