@@ -1162,6 +1162,17 @@ function createCodexCliLauncher(options = {}) {
     if (!child || !child.stdout || !child.stderr || !child.stdin || typeof child.on !== 'function') {
       fail('RUNTIME_UNAVAILABLE', 'Codex launcher returned an invalid child process');
     }
+    if (typeof launchOptions.onProcessSpawned === 'function') {
+      try {
+        if (!Number.isSafeInteger(child.pid) || child.pid <= 0) {
+          fail('RUNTIME_EVIDENCE_MISSING', 'Codex native process has no positive original pid');
+        }
+        launchOptions.onProcessSpawned(child.pid);
+      } catch (error) {
+        try { child.kill(); } catch (_) {}
+        throw error;
+      }
+    }
     const stdout = [];
     const stderr = [];
     let sessionLineBuffer = '';
@@ -1434,6 +1445,7 @@ function createCodexRuntimeHost(options = {}) {
         dispatch_id: input.dispatch_id,
         sandbox_mode: selection.sandbox_mode || input.sandbox_mode,
         gsd_role: input.gsd_role,
+        onProcessSpawned: input.onProcessSpawned,
         onSessionStarted: input.onSessionStarted,
         onNativeCompleted: input.onNativeCompleted,
         onTranscriptWritten: input.onTranscriptWritten,
