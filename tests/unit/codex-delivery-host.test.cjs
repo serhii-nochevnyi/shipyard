@@ -29,11 +29,11 @@ const { createRunScope } = require('../../plugins/delivery-pipeline/scripts/run-
 const { SCRATCH_FILES } = require('../../plugins/delivery-pipeline/scripts/conveyor-scratch.cjs');
 
 const capabilities = {
-  supportedModels: ['gpt-6-luna', 'gpt-6-sol'],
+  supportedModels: ['gpt-6-luna', 'gpt-6.1-sol'],
   supportedEfforts: ['low', 'medium', 'high', 'xhigh', 'max'],
   supportedSelections: [
-    { model: 'gpt-6-luna', effort: 'max' },
-    { model: 'gpt-6-sol', effort: 'high' },
+    { model: 'gpt-6.1-sol', effort: 'low' },
+    { model: 'gpt-6.1-sol', effort: 'high' },
   ],
 };
 const finalizerFile = path.join(__dirname, '../../plugins/delivery-pipeline/scripts/delivery-commit-finalizer.cjs');
@@ -288,7 +288,7 @@ test('executor refuses an untracked file outside the shared scratch set', async 
   } finally { clean(f); }
 });
 
-test('dynamic executor resolves Luna/max through the boundary with worktree write access', async () => {
+test('dynamic executor resolves Sol/low through the boundary with worktree write access', async () => {
   const f = fixture();
   try {
     const result = await delivery(f).run({
@@ -298,8 +298,8 @@ test('dynamic executor resolves Luna/max through the boundary with worktree writ
     });
     const call = f.calls[0];
     assert.equal(call.method, 'dynamic');
-    assert.equal(call.selection.model, 'gpt-6-luna');
-    assert.equal(call.selection.reasoning_effort, 'max');
+    assert.equal(call.selection.model, 'gpt-6.1-sol');
+    assert.equal(call.selection.reasoning_effort, 'low');
     assert.equal(call.context.sandbox_mode, 'workspace-write');
     assert.equal(call.context.run_id, f.scope.run_id);
     assert.equal(call.context.worktreePath, f.scope.worktree);
@@ -308,8 +308,8 @@ test('dynamic executor resolves Luna/max through the boundary with worktree writ
       /Leave changes uncommitted\. The trusted host will stage, sign, and verify the commit\.\n\n<TICKET-CONTRACT path="\.planning\/PLAN\.md"/);
     assert.match(call.context.prompt, /# approved plan/);
     assert.equal(result.receipt.compliance, 'verified');
-    assert.equal(result.receipt.applied_model, 'gpt-6-luna');
-    assert.equal(result.receipt.applied_effort, 'max');
+    assert.equal(result.receipt.applied_model, 'gpt-6.1-sol');
+    assert.equal(result.receipt.applied_effort, 'low');
     assert.equal(result.artifact.status, 'committed');
     assert.equal(result.artifact.commit, git(f.root, 'rev-parse', 'HEAD'));
     assert.equal(result.artifact.signer, signer);
@@ -359,7 +359,7 @@ test('production runtime host receives the scoped prompt and records native mode
   const transcript = captured('tests/fixtures/captured/codex-agent-stream-parent.jsonl', { '<SESSION-2>': session })
     .split('\n').filter(Boolean).map((line) => {
       const record = JSON.parse(line);
-      if (record.type === 'turn_context') Object.assign(record.payload, { model: 'gpt-6-luna', effort: 'max' });
+      if (record.type === 'turn_context') Object.assign(record.payload, { model: 'gpt-6.1-sol', effort: 'low' });
       return JSON.stringify(record);
     }).join('\n') + '\n';
   const output = captured('tests/fixtures/captured/codex-agent-stream-exec.jsonl', { '<SESSION-1>': session });
@@ -402,8 +402,8 @@ test('production runtime host receives the scoped prompt and records native mode
       },
     }).run({ role: 'executor', context: { prompt: 'Edit the scoped file.' } });
     assert.ok(received.join('').includes('Edit the scoped file.'));
-    assert.equal(result.receipt.applied_model, 'gpt-6-luna');
-    assert.equal(result.receipt.applied_effort, 'max');
+    assert.equal(result.receipt.applied_model, 'gpt-6.1-sol');
+    assert.equal(result.receipt.applied_effort, 'low');
     assert.equal(result.receipt.runtime_evidence.native_session_evidence.session_id, session);
     assert.equal(result.artifact.status, 'committed');
     assert.ok(result.receipt.runtime_evidence.transcript.path.startsWith(fs.realpathSync(f.storageRoot)));
@@ -420,7 +420,7 @@ test('generated static role uses its immutable file and declared read-only sandb
     const call = f.calls[0];
     assert.equal(call.method, 'static');
     assert.equal(call.selection.agent_file, f.file);
-    assert.equal(call.selection.model, 'gpt-6-sol');
+    assert.equal(call.selection.model, 'gpt-6.1-sol');
     assert.equal(call.selection.reasoning_effort, 'high');
     assert.equal(call.selection.sandbox_mode, 'read-only');
     assert.equal(result.receipt.agent_file_digest, f.fileDigest);
@@ -449,7 +449,7 @@ test('typed GSD delivery goes through the host-owned typed callback', async () =
       context: { prompt: 'Create the approved phase plan.' },
     });
     assert.equal(f.calls[0].method, 'typed');
-    assert.equal(f.calls[0].selection.model, 'gpt-6-sol');
+    assert.equal(f.calls[0].selection.model, 'gpt-6.1-sol');
     assert.equal(f.calls[0].selection.reasoning_effort, 'high');
     assert.equal(result.receipt.gsd_launch_mechanism, 'typed-gsd-callback');
     assert.ok(f.host.recorder.getVerifiedRecord(result.receipt.dispatch_id));
@@ -1119,7 +1119,7 @@ test('Codex retries one failed plan command with sealed diagnostics and binds th
     run_id: f.scope.run_id, repository_id: 'shipyard/test', phase: f.scope.phase,
     ticket: f.scope.ticket, worktree: f.root, runtime: 'codex', provider: 'openai',
     owner_id: controllerOwner,
-    dispatch: { dispatch_id: 'verification-retry-initial', role: 'executor', model: 'gpt-6-luna', effort: 'max' },
+    dispatch: { dispatch_id: 'verification-retry-initial', role: 'executor', model: 'gpt-6.1-sol', effort: 'low' },
   }));
   let checks = 0;
   try {

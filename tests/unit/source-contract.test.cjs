@@ -506,7 +506,7 @@ const sourceDispatchStore = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-sour
 const sourceDispatchRecorder = createDurableRecorder(sourceDispatchStore);
 const sourceDispatchCapabilities = Object.freeze({
   supportedModels: Object.values(CLAUDE_MODEL_ALIASES),
-  supportedEfforts: ['high', 'medium', 'max'],
+  supportedEfforts: ['low', 'medium', 'high', 'xhigh', 'max'],
   observedModel: true,
   observedEffort: true,
 });
@@ -596,14 +596,14 @@ process.on('exit', () => {
 });
 const workflowArgs = {
   executors: {
-    tickets: [{ id: 'T-30-01', planPath: '/p/30-01-PLAN.md', branch: 'ticket/T-30-01', prBase: 'epic/30', worktreePath: '/w/T-30-01', model: 'sonnet', effort: 'max' }],
+    tickets: [{ id: 'T-30-01', planPath: '/p/30-01-PLAN.md', branch: 'ticket/T-30-01', prBase: 'epic/30', worktreePath: '/w/T-30-01', model: 'claude-sonnet-5-5', effort: 'medium' }],
   },
   'drift-gate': {
-    tickets: [{ id: 'T-30-01', planPath: '/p/30-01-PLAN.md', baseRef: 'origin/epic/30', worktreePath: '/w/T-30-01', model: 'claude-opus-5-5', effort: 'high' }],
+    tickets: [{ id: 'T-30-01', planPath: '/p/30-01-PLAN.md', baseRef: 'origin/epic/30', worktreePath: '/w/T-30-01', model: 'claude-sonnet-5-5', effort: 'medium' }],
     driftRefPath: '/p/drift-check.md',
   },
   'fix-round': {
-    prs: [{ id: 'T-30-01', pr: 109, branch: 'ticket/T-30-01', base: 'epic/30', worktreePath: '/w/T-30-01', planPath: '/p/30-01-PLAN.md', needsCiFix: true, needsReviewFix: false, model: 'claude-opus-5-5', effort: 'medium' }],
+    prs: [{ id: 'T-30-01', pr: 109, branch: 'ticket/T-30-01', base: 'epic/30', worktreePath: '/w/T-30-01', planPath: '/p/30-01-PLAN.md', needsCiFix: true, needsReviewFix: false, model: 'claude-sonnet-5-5', effort: 'high' }],
     ciFixRefPath: '/p/ci-fix.md',
     reviewFixRefPath: '/p/review-fix.md',
     reinitScript: '/p/reviewers.cjs',
@@ -636,9 +636,9 @@ async function renderedPrompt(name) {
   )(agent, parallel, () => {}, () => {}, workflowArgs[name], sourceDispatchFactory);
   assert.strictEqual(calls.length, 1, `${name} must dispatch one prompt in the rendered-contract fixture`);
   const expectedSelection = {
-    executors: { model: 'sonnet', effort: 'max' },
-    'drift-gate': { model: 'claude-opus-5-5', effort: 'high' },
-    'fix-round': { model: 'claude-opus-5-5', effort: 'medium' },
+    executors: { model: 'claude-sonnet-5-5', effort: 'medium' },
+    'drift-gate': { model: 'claude-sonnet-5-5', effort: 'medium' },
+    'fix-round': { model: 'claude-sonnet-5-5', effort: 'high' },
   }[name];
   assert.deepStrictEqual(
     { model: calls[0].opts.model, effort: calls[0].opts.effort },
@@ -809,7 +809,7 @@ test('decompose documents the three explicit boundary dispatches and refusal rul
   for (const phrase of [
     '**Codex runtime — logical model ladder**',
     '**Claude runtime — Anthropic alias ladder**',
-    'opus/medium',
+    'sonnet/xhigh',
     'opus/high',
   ]) {
     assert.ok(source.includes(phrase), `decompose.md must state the runtime-specific ladder: ${phrase}`);
@@ -983,8 +983,8 @@ test('delivery launch docs route every role through the boundary and the generat
   }
 
   for (const pair of [
-    'Luna/max', 'Luna/medium', 'Sol/high', 'Sol/xhigh',
-    'Sonnet/max', 'Sonnet/high', 'Opus/medium', 'Opus/high',
+    'Luna/medium', 'Sol/low', 'Sol/high', 'Sol/xhigh',
+    'Sonnet/low', 'Sonnet/medium', 'Sonnet/high', 'Sonnet/xhigh', 'Opus/high',
     'Fable/medium',
   ]) {
     assert.ok(source.includes(pair), `delivery docs must preserve the native ladder pair ${pair}`);
@@ -1106,7 +1106,7 @@ test('every GSD callback requires routed configuration validation on both runtim
 
       const conflicting = runtime === 'codex'
         ? { pipeline: { models: { research: 'sonnet' } } }
-        : { pipeline: { fable: 'auto', models: { research: 'sonnet' } } };
+        : { pipeline: { fable: 'auto', models: { research: 'opus' } } };
       const badConfig = writeConfig(runtime, conflicting);
       assert.throws(
         () => pipelineConfig.resolveDispatch({
@@ -1138,7 +1138,7 @@ test('research and decomposition use the canonical runtime ladders and only decl
   );
   assert.deepStrictEqual(
     [claudeResearch.model, claudeResearch.effort, claudeResearch.rung],
-    [CLAUDE_MODEL_ALIASES.opus, 'medium', 'base']
+    [CLAUDE_MODEL_ALIASES.sonnet, 'xhigh', 'base']
   );
   assert.deepStrictEqual(
     [codexDecomposition.model, codexDecomposition.effort, codexDecomposition.rung],
@@ -1146,7 +1146,7 @@ test('research and decomposition use the canonical runtime ladders and only decl
   );
   assert.deepStrictEqual(
     [claudeDecomposition.model, claudeDecomposition.effort, claudeDecomposition.rung],
-    [CLAUDE_MODEL_ALIASES.opus, 'medium', 'base']
+    [CLAUDE_MODEL_ALIASES.sonnet, 'xhigh', 'base']
   );
 
   assert.equal(
@@ -1175,7 +1175,7 @@ test('research and decomposition use the canonical runtime ladders and only decl
   for (const [role, signals, model, effort, rung] of [
     ['research', { complexity: 'very-complex' }, policy.CODEX_MODEL_IDS.sol, 'xhigh', 'very-complex'],
     ['decomposition', { critical: true }, policy.CODEX_MODEL_IDS.sol, 'xhigh', 'critical'],
-    ['executor', {}, policy.CODEX_MODEL_IDS.luna, 'max', 'base'],
+    ['executor', {}, policy.CODEX_MODEL_IDS.sol, 'low', 'base'],
     ['executor', { critical: true }, policy.CODEX_MODEL_IDS.sol, 'high', 'critical'],
     ['executor', { checkpoint: true }, policy.CODEX_MODEL_IDS.sol, 'high', 'critical'],
   ]) {
@@ -1383,8 +1383,8 @@ test('Claude GSD researcher, planner, and checker use explicit native selections
       assert.deepStrictEqual(calls[index].selection, resolutions[index].launch_arguments);
       assert.deepStrictEqual(recorder.getVerifiedRecord(item.id).receipt, result.receipt);
     }
-    assert.equal(calls[0].selection.model, CLAUDE_MODEL_ALIASES.opus);
-    assert.equal(calls[1].selection.model, CLAUDE_MODEL_ALIASES.opus);
+    assert.equal(calls[0].selection.model, CLAUDE_MODEL_ALIASES.sonnet);
+    assert.equal(calls[1].selection.model, CLAUDE_MODEL_ALIASES.sonnet);
     assert.equal(calls[2].selection.model, CLAUDE_MODEL_ALIASES.opus);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
@@ -1420,8 +1420,8 @@ test('Claude workflow coordinator selects the typed callback and refuses its abs
     recorder: sourceDispatchRecorder,
     prompt: 'typed GSD coordinator prompt',
     role: 'decomposition',
-    model: 'claude-opus-5-5',
-    effort: 'medium',
+    model: 'claude-sonnet-5-5',
+    effort: 'xhigh',
     gsdRole: 'gsd-planner',
     dispatchId: 'claude-gsd-workflow-coordinator',
     context: { preRecordValidation: directWriterValidation },
@@ -1438,8 +1438,8 @@ test('Claude workflow coordinator selects the typed callback and refuses its abs
       recorder: sourceDispatchRecorder,
       prompt: 'missing typed callback',
       role: 'decomposition',
-      model: 'claude-opus-5-5',
-      effort: 'medium',
+      model: 'claude-sonnet-5-5',
+      effort: 'xhigh',
       gsdRole: 'gsd-planner',
       dispatchId: 'claude-gsd-workflow-missing-typed',
     }),
@@ -1478,8 +1478,8 @@ test('Claude workflow coordinator accepts an explicit typed-only host and prefli
       host,
       prompt: 'typed-only host prompt',
       role: 'decomposition',
-      model: 'claude-opus-5-5',
-      effort: 'medium',
+      model: 'claude-sonnet-5-5',
+      effort: 'xhigh',
       gsdRole: 'gsd-planner',
       dispatchId: 'claude-host-typed-only',
       context: { preRecordValidation: directWriterValidation },
@@ -1493,8 +1493,8 @@ test('Claude workflow coordinator accepts an explicit typed-only host and prefli
         host,
         prompt: 'typed-only host without role',
         role: 'decomposition',
-        model: 'claude-opus-5-5',
-        effort: 'medium',
+        model: 'claude-sonnet-5-5',
+        effort: 'xhigh',
         dispatchId: 'claude-host-typed-only-missing-role',
       }),
       (error) => error && error.code === 'INVALID_INPUT',
@@ -2009,7 +2009,9 @@ test('Claude palette and provider adapter sources match their checked-in baselin
     assert.equal(actualDigest, expectedDigest, `${rel} no longer matches tests/unit/runtime-file-digests.json — run `
       + '`node scripts/refresh-runtime-digests.cjs` and add the printed Runtime-Digest-Refresh trailer');
   }
-  assert.deepStrictEqual(CLAUDE_MODEL_ALIASES, { sonnet: 'sonnet', opus: 'claude-opus-5-5', fable: 'fable' });
+  assert.deepStrictEqual(CLAUDE_MODEL_ALIASES, {
+    sonnet: 'claude-sonnet-5-5', opus: 'claude-opus-5-5', fable: 'fable',
+  });
   assert.equal(readRepo('plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs').includes('runtime: \'claude\''), true);
   assert.equal(readRepo('plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs').includes('gpt-5.6-luna'), false);
   assert.equal(readRepo('plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs').includes('gpt-6-astra'), false);

@@ -91,10 +91,10 @@ boundary is called.
 
 | Duty | Codex | Workflow runtime |
 | --- | --- | --- |
-| sentinel | Luna/medium, fixed | Sonnet/high, fixed |
-| ci-fix / review-fix | Luna/max → Sol/high on verified `repeat` → Sol/xhigh on verified `repeat_exhausted` | Opus/medium → Opus/high on verified `repeat` or `repeat_exhausted` |
-| arch-review | Sol/high → Sol/xhigh for measured-window, contested, critical, or checkpoint evidence | Opus/medium → Opus/high for critical/contested/checkpoint evidence → Fable/medium for a measured window |
-| integrator | Sol/high → Sol/xhigh for measured-window, contested, critical, or checkpoint evidence | Opus/medium → Opus/high for the same evidence |
+| sentinel | Luna/medium, fixed | Sonnet/low, fixed |
+| ci-fix / review-fix | Sol/low → Sol/high on verified `repeat` → Sol/xhigh on verified `repeat_exhausted` | Sonnet/high → Sonnet/xhigh on verified `repeat` → Opus/high on verified `repeat_exhausted` |
+| arch-review | Sol/high → Sol/xhigh for measured-window, contested, critical, or checkpoint evidence | Sonnet/xhigh → Opus/high for critical/contested/checkpoint evidence → Fable/medium for a measured window |
+| integrator | Sol/high → Sol/xhigh for measured-window, contested, critical, or checkpoint evidence | Sonnet/xhigh → Opus/high for the same evidence |
 
 When a host boundary dispatches a Codex static duty, it uses the generated files named by the selector:
 `shipyard-pr-sentinel.toml`, `shipyard-ci-fix.toml`,
@@ -191,7 +191,7 @@ node $SHIPYARD_ROOT/scripts/failure-signature.cjs verdict <T> --signature <sig> 
   rung is allowed; one more failure is a human escalation, not another launch.
   Codex resolves and validates `shipyard-ci-fix.toml` →
   `shipyard-ci-fix-repeat.toml` → `shipyard-ci-fix-deep.toml`; the Workflow runtime resolves
-  Opus/medium → Opus/high with explicit native effort. The boundary refuses a
+  Sonnet/high → Sonnet/xhigh → Opus/high with explicit native effort. The boundary refuses a
   missing predecessor receipt, undocumented escalation, literal model, omitted
   effort, inline callback, or inherited session.
 
@@ -292,7 +292,7 @@ boundary.dispatch(
 ```
 
 Codex uses `shipyard-review-fix.toml` → `shipyard-review-fix-repeat.toml` →
-`shipyard-review-fix-deep.toml`; the Workflow runtime uses Opus/medium → Opus/high with
+`shipyard-review-fix-deep.toml`; the Workflow runtime uses Sonnet/high → Sonnet/xhigh → Opus/high with
 explicit native effort. No fixer may launch or record an attempt until the
 boundary returns a verified receipt.
 
@@ -416,7 +416,7 @@ points here instead of creating a second launch protocol.
    Codex resolves Sol/high → Sol/xhigh for measured-window, contested,
    critical, or checkpoint evidence and validates the generated
    `shipyard-arch-review.toml` or `shipyard-arch-review-critical.toml`.
-   The Workflow runtime resolves Opus/medium → Opus/high for
+   The Workflow runtime resolves Sonnet/xhigh → Opus/high for
    critical/contested/checkpoint evidence → Fable/medium for a measured window,
    with explicit native effort and routed Fable consent. The judge's measured
    input is the diff plus the architecture corpus, not the diff alone.

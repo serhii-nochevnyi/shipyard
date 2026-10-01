@@ -46,11 +46,19 @@ const WORKFLOWS = path.join(
   __dirname, '..', '..', 'plugins', 'delivery-pipeline', 'workflows'
 );
 
+const selectionFor = (role, signals = {}) => policy.resolveDispatch({ runtime: 'claude', role, signals });
+const CLAUDE_EXECUTOR_BASE = selectionFor('executor');
+const CLAUDE_EXECUTOR_CRITICAL = selectionFor('executor', { critical: true });
+const CLAUDE_DRIFT_BASE = selectionFor('drift-check');
+const CLAUDE_REPAIR_BASE = selectionFor('ci-fix');
+const CLAUDE_REPAIR_REPEAT = { model: CLAUDE_MODEL_ALIASES.sonnet, effort: 'xhigh' };
+const CLAUDE_REPAIR_EXHAUSTED = { model: CLAUDE_MODEL_ALIASES.opus, effort: 'high' };
+
 const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
 
 const WORKFLOW_CAPABILITIES = Object.freeze({
   supportedModels: Object.values(CLAUDE_MODEL_ALIASES),
-  supportedEfforts: ['low', 'high', 'medium', 'max'],
+  supportedEfforts: ['low', 'medium', 'high', 'xhigh', 'max'],
   observedModel: true,
   observedEffort: true,
 });
@@ -236,15 +244,15 @@ const parseErrorOf = (s) => {
 };
 
 const TICKETS = [
-  { id: 'T-99-01', planPath: '/p/99-01-PLAN.md', branch: 'ticket/T-99-01', prBase: 'epic/99', worktreePath: '/w/T-99-01', model: 'sonnet', effort: 'max' },
-  { id: 'T-99-02', planPath: '/p/99-02-PLAN.md', branch: 'ticket/T-99-02', prBase: 'epic/99', worktreePath: '/w/T-99-02', model: 'sonnet', effort: 'max' },
-  { id: 'T-99-03', planPath: '/p/99-03-PLAN.md', branch: 'ticket/T-99-03', prBase: 'epic/99', worktreePath: '/w/T-99-03', model: 'sonnet', effort: 'max' },
+  { id: 'T-99-01', planPath: '/p/99-01-PLAN.md', branch: 'ticket/T-99-01', prBase: 'epic/99', worktreePath: '/w/T-99-01', model: CLAUDE_EXECUTOR_BASE.model, effort: CLAUDE_EXECUTOR_BASE.effort },
+  { id: 'T-99-02', planPath: '/p/99-02-PLAN.md', branch: 'ticket/T-99-02', prBase: 'epic/99', worktreePath: '/w/T-99-02', model: CLAUDE_EXECUTOR_BASE.model, effort: CLAUDE_EXECUTOR_BASE.effort },
+  { id: 'T-99-03', planPath: '/p/99-03-PLAN.md', branch: 'ticket/T-99-03', prBase: 'epic/99', worktreePath: '/w/T-99-03', model: CLAUDE_EXECUTOR_BASE.model, effort: CLAUDE_EXECUTOR_BASE.effort },
 ];
 
 const driftTickets = (tickets) => tickets.map((ticket) => ({
   ...ticket,
-  model: 'claude-opus-5-5',
-  effort: 'high',
+  model: CLAUDE_DRIFT_BASE.model,
+  effort: CLAUDE_DRIFT_BASE.effort,
 }));
 
 // Each script's own required args, beside `tickets`. drift-gate refuses
@@ -405,8 +413,8 @@ test('a fresh verdict with moved findings rejects with an unwrapped DispatchBoun
         }),
         prompt: 'pin test',
         role: 'drift-check',
-        model: 'claude-opus-5-5',
-        effort: 'high',
+        model: CLAUDE_DRIFT_BASE.model,
+        effort: CLAUDE_DRIFT_BASE.effort,
         requireArtifact: true,
         artifact: { role: 'drift-check', ticket, worktreePath: fixture.root, base: 'main' },
         context: { ticket },
@@ -414,10 +422,10 @@ test('a fresh verdict with moved findings rejects with an unwrapped DispatchBoun
         recorder: fixture.recorder,
         applicationEvidence: () => testTranscriptEvidence({
           launch_id: 'drift-contradiction-pin',
-          applied_model: 'claude-opus-5-5',
-          applied_effort: 'high',
-          observed_model: nativeModel('claude-opus-5-5'),
-          observed_effort: 'high',
+          applied_model: CLAUDE_DRIFT_BASE.model,
+          applied_effort: CLAUDE_DRIFT_BASE.effort,
+          observed_model: nativeModel(CLAUDE_DRIFT_BASE.model),
+          observed_effort: CLAUDE_DRIFT_BASE.effort,
         }),
         artifactConsumer: (input) => roleArtifact.seal({
           ...input.artifact,
@@ -474,7 +482,7 @@ function driftRepairDispatchFactory(captured) {
 
 const DRIFT_REPAIR_TICKET = {
   id: 'T-99-DRIFT-01', planPath: '/p/drift-01.md', worktreePath: '/w/drift-01',
-  baseRef: 'origin/main', model: 'claude-opus-5-5', effort: 'high',
+  baseRef: 'origin/main', model: CLAUDE_DRIFT_BASE.model, effort: CLAUDE_DRIFT_BASE.effort,
   signals: { risk: 'low' }, risk: 'low',
 };
 
@@ -601,7 +609,7 @@ test('a committed ticket returns paths and a short summary, never the documents,
     const longPrBody = `Ticket: T-99-01\n${'x'.repeat(11000)}`;
     const longEvidence = `$ node tests/unit/x.test.cjs\n${'y'.repeat(9000)}`;
     const longSummary = 'z'.repeat(900);
-  const ticket = { id: 'T-99-01', planPath: '/p/99-01-PLAN.md', branch: 'ticket/T-99-01', prBase: 'epic/99', worktreePath, model: 'sonnet', effort: 'max' };
+  const ticket = { id: 'T-99-01', planPath: '/p/99-01-PLAN.md', branch: 'ticket/T-99-01', prBase: 'epic/99', worktreePath, model: CLAUDE_EXECUTOR_BASE.model, effort: CLAUDE_EXECUTOR_BASE.effort };
     const stubAgent = async (prompt) => {
       // The real agent is told exactly where to write — assert the prompt
       // actually names both paths, so a future edit can't drop the instruction
@@ -644,7 +652,7 @@ test('a committed ticket returns paths and a short summary, never the documents,
 });
 
 test('a blocked ticket returns its reason inline — no file, no path, the loop acts without a file read', async () => {
-  const ticket = { id: 'T-99-02', planPath: '/p/99-02-PLAN.md', branch: 'ticket/T-99-02', prBase: 'epic/99', worktreePath: '/does/not/exist', model: 'sonnet', effort: 'max' };
+  const ticket = { id: 'T-99-02', planPath: '/p/99-02-PLAN.md', branch: 'ticket/T-99-02', prBase: 'epic/99', worktreePath: '/does/not/exist', model: CLAUDE_EXECUTOR_BASE.model, effort: CLAUDE_EXECUTOR_BASE.effort };
   const reason = 'the plan requires editing deliver.md, which is out of files_modified';
   const { value } = await run('executors', { tickets: [ticket] }, {
     agent: async () => ({ id: ticket.id, status: 'blocked', summary: reason }),
@@ -660,7 +668,7 @@ test('a blocked ticket returns its reason inline — no file, no path, the loop 
 });
 
 test('a committed result without a trusted artifact consumer cannot report committed', async () => {
-  const ticket = { id: 'T-99-04', planPath: '/p/99-04-PLAN.md', branch: 'ticket/T-99-04', prBase: 'epic/99', worktreePath: '/w/T-99-04', model: 'sonnet', effort: 'max' };
+  const ticket = { id: 'T-99-04', planPath: '/p/99-04-PLAN.md', branch: 'ticket/T-99-04', prBase: 'epic/99', worktreePath: '/w/T-99-04', model: CLAUDE_EXECUTOR_BASE.model, effort: CLAUDE_EXECUTOR_BASE.effort };
   const dispatchFactory = (dispatchOptions) => createClaudeWorkflowDispatch({
     ...dispatchOptions,
     capabilities: WORKFLOW_CAPABILITIES,
@@ -676,7 +684,7 @@ test('a committed result without a trusted artifact consumer cannot report commi
 });
 
 test('blocked results with oversized summaries stay explicit and bounded', async () => {
-  const ticket = { id: 'T-99-05', planPath: '/p/99-05-PLAN.md', branch: 'ticket/T-99-05', prBase: 'epic/99', worktreePath: '/does/not/exist', model: 'sonnet', effort: 'max' };
+  const ticket = { id: 'T-99-05', planPath: '/p/99-05-PLAN.md', branch: 'ticket/T-99-05', prBase: 'epic/99', worktreePath: '/does/not/exist', model: CLAUDE_EXECUTOR_BASE.model, effort: CLAUDE_EXECUTOR_BASE.effort };
   const { value } = await run('executors', { tickets: [ticket] }, {
     agent: async () => ({ id: ticket.id, status: 'blocked', summary: 'b'.repeat(900), blocking_count: 2 }),
   });
@@ -688,7 +696,7 @@ test('blocked results with oversized summaries stay explicit and bounded', async
 });
 
 test('an artifact-required executor failure is a failed dispatch, not an unsealed blocked result', async () => {
-  const ticket = { id: 'T-99-03', planPath: '/p/99-03-PLAN.md', branch: 'ticket/T-99-03', prBase: 'epic/99', worktreePath: '/does/not/exist', model: 'sonnet', effort: 'max' };
+  const ticket = { id: 'T-99-03', planPath: '/p/99-03-PLAN.md', branch: 'ticket/T-99-03', prBase: 'epic/99', worktreePath: '/does/not/exist', model: CLAUDE_EXECUTOR_BASE.model, effort: CLAUDE_EXECUTOR_BASE.effort };
   const dead = await rejects('executors', { tickets: [ticket] }, { agent: async () => null });
   assert.ok(['DispatchPolicyError', 'DispatchBoundaryError'].includes(dead.name));
   assert.strictEqual(dead.code, 'MISSING_RECEIPT');
@@ -711,30 +719,30 @@ const PR = {
   id: 'T-99-01', pr: 7, branch: 'ticket/T-99-01', worktreePath: '/w/T-99-01',
   base: 'epic/99',
   planPath: '/p/99-01-PLAN.md', needsCiFix: true, needsReviewFix: true,
-  model: 'claude-opus-5-5', effort: 'medium',
+  model: CLAUDE_REPAIR_BASE.model, effort: CLAUDE_REPAIR_BASE.effort,
 };
 const DISPATCH = [
   {
     name: 'executors',
-    args: (over = {}) => ({ tickets: [{ ...TICKETS[0], model: 'sonnet', effort: 'max', ...over }] }),
-    resolved: { model: 'sonnet', effort: 'max' },
+    args: (over = {}) => ({ tickets: [{ ...TICKETS[0], model: CLAUDE_EXECUTOR_BASE.model, effort: CLAUDE_EXECUTOR_BASE.effort, ...over }] }),
+    resolved: { model: CLAUDE_EXECUTOR_BASE.model, effort: CLAUDE_EXECUTOR_BASE.effort },
   },
   {
     name: 'fix-round',
     args: (over = {}) => ({
-      prs: [{ ...PR, model: 'claude-opus-5-5', effort: 'medium', ...over }],
+      prs: [{ ...PR, model: CLAUDE_REPAIR_BASE.model, effort: CLAUDE_REPAIR_BASE.effort, ...over }],
       ciFixRefPath: '/x/ci-fix.md', reviewFixRefPath: '/x/review-fix.md',
       reinitScript: '/x/scripts/reviewers.cjs',
     }),
-    resolved: { model: 'claude-opus-5-5', effort: 'medium' },
+    resolved: { model: CLAUDE_REPAIR_BASE.model, effort: CLAUDE_REPAIR_BASE.effort },
   },
   {
     name: 'drift-gate',
     args: (over = {}) => ({
-      tickets: [{ ...TICKETS[0], model: 'claude-opus-5-5', effort: 'high', ...over }],
+      tickets: [{ ...TICKETS[0], model: CLAUDE_DRIFT_BASE.model, effort: CLAUDE_DRIFT_BASE.effort, ...over }],
       driftRefPath: '/x/drift-check.md', baseRef: 'origin/main',
     }),
-    resolved: { model: 'claude-opus-5-5', effort: 'high' },
+    resolved: { model: CLAUDE_DRIFT_BASE.model, effort: CLAUDE_DRIFT_BASE.effort },
   },
 ];
 
@@ -791,13 +799,14 @@ test('fix-round prompt requires the comment gate before a repair push', async ()
   assert.match(calls[0].prompt, /amend the commit/);
 });
 
-test('executor critical selection is resolved by signals and preserves Claude Sonnet/max → Opus/low', async () => {
+test('executor critical selection is resolved by signals and preserves Claude Sonnet/xhigh', async () => {
   const { calls } = await run('executors', {
-    tickets: [{ ...TICKETS[0], model: 'claude-opus-5-5', effort: 'low', signals: { critical: true } }],
+    tickets: [{ ...TICKETS[0], model: CLAUDE_EXECUTOR_CRITICAL.model,
+      effort: CLAUDE_EXECUTOR_CRITICAL.effort, signals: { critical: true } }],
   });
   assert.strictEqual(calls.length, 1);
-  assert.strictEqual(calls[0].opts.model, 'claude-opus-5-5');
-  assert.strictEqual(calls[0].opts.effort, 'low');
+  assert.strictEqual(calls[0].opts.model, CLAUDE_EXECUTOR_CRITICAL.model);
+  assert.strictEqual(calls[0].opts.effort, CLAUDE_EXECUTOR_CRITICAL.effort);
 });
 
 test('workflow fan-outs retain combined signal evidence and never infer an omitted promotion signal', async () => {
@@ -811,15 +820,15 @@ test('workflow fan-outs retain combined signal evidence and never infer an omitt
   const executor = await run('executors', {
     tickets: [{
       ...TICKETS[0],
-      model: 'claude-opus-5-5',
-      effort: 'low',
+      model: CLAUDE_EXECUTOR_CRITICAL.model,
+      effort: CLAUDE_EXECUTOR_CRITICAL.effort,
       signals: combinedSignals,
     }],
   });
   assert.strictEqual(executor.calls.length, 1);
   assert.deepStrictEqual(
     [executor.calls[0].opts.model, executor.calls[0].opts.effort],
-    ['claude-opus-5-5', 'low'],
+    [CLAUDE_EXECUTOR_CRITICAL.model, CLAUDE_EXECUTOR_CRITICAL.effort],
   );
   const executorRecord = WORKFLOW_RECORDER.getVerifiedRecord(executor.value[0].receipt.dispatch_id);
   assert.equal(executorRecord.resolution.logical_rung, 'critical');
@@ -832,15 +841,15 @@ test('workflow fan-outs retain combined signal evidence and never infer an omitt
   const omitted = await run('executors', {
     tickets: [{
       ...TICKETS[0],
-      model: 'sonnet',
-      effort: 'max',
+      model: CLAUDE_EXECUTOR_BASE.model,
+      effort: CLAUDE_EXECUTOR_BASE.effort,
       signals: { risk: 'high', contested: true, inputTokens: policy.WINDOW_THRESHOLD_TOKENS + 1 },
     }],
   });
   assert.strictEqual(omitted.calls.length, 1, 'global context without executor evidence remains a base launch');
   assert.deepStrictEqual(
     [omitted.calls[0].opts.model, omitted.calls[0].opts.effort],
-    ['sonnet', 'max'],
+    [CLAUDE_EXECUTOR_BASE.model, CLAUDE_EXECUTOR_BASE.effort],
   );
   const omittedRecord = WORKFLOW_RECORDER.getVerifiedRecord(omitted.value[0].receipt.dispatch_id);
   assert.equal(omittedRecord.resolution.logical_rung, 'base');
@@ -860,7 +869,7 @@ test('workflow fan-outs retain combined signal evidence and never infer an omitt
   assert.strictEqual(fixed.calls.length, 1);
   assert.deepStrictEqual(
     [fixed.calls[0].opts.model, fixed.calls[0].opts.effort],
-    ['claude-opus-5-5', 'high'],
+    [CLAUDE_DRIFT_BASE.model, CLAUDE_DRIFT_BASE.effort],
     'fixed drift-check remains on its native base tuple',
   );
   const fixedRecord = WORKFLOW_RECORDER.getVerifiedRecord(fixed.value[0].receipt.dispatch_id);
@@ -890,7 +899,7 @@ test('executor preserves canonical risk/checkpoint facts and rejects contradicto
     { signals: { risk: 'high', checkpoint: true }, risk: 'high', checkpoint: true },
   ]) {
     const { calls, value } = await run('executors', DISPATCH[0].args({
-      ...facts, model: 'claude-opus-5-5', effort: 'low',
+      ...facts, model: CLAUDE_EXECUTOR_CRITICAL.model, effort: CLAUDE_EXECUTOR_CRITICAL.effort,
     }));
     assert.strictEqual(calls.length, 1);
     const record = WORKFLOW_RECORDER.getVerifiedRecord(value[0].receipt.dispatch_id);
@@ -921,10 +930,12 @@ for (const role of ['ci-fix', 'review-fix']) {
     for (const state of ['first', 'repeat', 'repeat_exhausted']) {
       // Reopen the durable store for each invocation, as the next host would.
       const recorder = createDurableRecorder(storeDir);
+      const selection = state === 'first' ? CLAUDE_REPAIR_BASE
+        : state === 'repeat' ? CLAUDE_REPAIR_REPEAT : CLAUDE_REPAIR_EXHAUSTED;
       const args = DISPATCH[1].args({
         needsCiFix: role === 'ci-fix', needsReviewFix: role === 'review-fix',
         signatureState: state, signals: { signatureState: state },
-        model: 'claude-opus-5-5', effort: state === 'first' ? 'medium' : 'high',
+        model: selection.model, effort: selection.effort,
         ...(prior ? {
           priorReceipt: JSON.parse(JSON.stringify(prior)),
           previous_dispatch_id: prior.dispatch_id,
@@ -936,7 +947,8 @@ for (const role of ['ci-fix', 'review-fix']) {
       const record = recorder.getVerifiedRecord(receipt.dispatch_id);
       assert.strictEqual(record.resolution.signals.signatureState, state);
       assert.strictEqual(record.resolution.role, role);
-      assert.strictEqual(record.receipt.applied_effort, state === 'first' ? 'medium' : 'high');
+      assert.strictEqual(record.receipt.applied_model, selection.model);
+      assert.strictEqual(record.receipt.applied_effort, selection.effort);
       if (prior) assert.strictEqual(record.predecessor_dispatch_id, prior.dispatch_id);
       prior = receipt;
     }
@@ -951,7 +963,7 @@ test('repair refuses absent, invented or contradictory predecessor inputs before
     { signatureState: 'repeat', priorReceipt: {}, priorApplied: { dispatch_id: 'different' } },
   ]) {
     const error = await rejects('fix-round', DISPATCH[1].args({
-      model: 'claude-opus-5-5', effort: 'high', ...over,
+      model: CLAUDE_REPAIR_REPEAT.model, effort: CLAUDE_REPAIR_REPEAT.effort, ...over,
     }));
     assert.ok(['DispatchPolicyError', 'DispatchBoundaryError'].includes(error.name));
   }
@@ -961,7 +973,7 @@ test('workflow agent options and context cannot bypass selection checks or reser
   for (const invalid of [
     { inherit: true }, { inline: true }, { session_inherited: true }, { session: { inherit: true } },
     { requested_effort: 'high' }, { applied_effort: 'high' },
-    { model: 'claude-opus-5-5' }, { effort: 'high' }, [],
+    { model: 'claude-opus-5-5' }, { effort: 'xhigh' }, [],
   ]) {
     for (const field of ['agentOptions', 'context']) {
       const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-workflow-options-'));
@@ -970,7 +982,8 @@ test('workflow agent options and context cannot bypass selection checks or reser
       let launched = false;
       assert.throws(() => createClaudeWorkflowDispatch({
         agent: () => { launched = true; }, prompt: 'test', role: 'executor',
-        model: 'sonnet', effort: 'max', dispatchId: 'refused-options',
+        model: CLAUDE_EXECUTOR_BASE.model, effort: CLAUDE_EXECUTOR_BASE.effort,
+        dispatchId: 'refused-options',
         capabilities: WORKFLOW_CAPABILITIES, recorder,
         applicationEvidence: workflowApplicationEvidence, [field]: invalid,
       }));
@@ -1022,15 +1035,15 @@ test('workflow-native dispatch rejects unsupported runtime tuples and copied app
       agent: () => { launches += 1; return {}; },
       prompt: 'test',
       role: 'executor',
-      model: 'sonnet',
-      effort: 'max',
+      model: CLAUDE_EXECUTOR_BASE.model,
+      effort: CLAUDE_EXECUTOR_BASE.effort,
       dispatchId: 'workflow-copied-evidence',
       capabilities: WORKFLOW_CAPABILITIES,
       recorder,
       applicationEvidence: () => ({
         launch_id: 'copied-evidence',
-        requested_model: 'sonnet',
-        requested_effort: 'max',
+        requested_model: CLAUDE_EXECUTOR_BASE.model,
+        requested_effort: CLAUDE_EXECUTOR_BASE.effort,
       }),
     }),
     (error) => error.code === 'MISSING_RECEIPT',
@@ -1118,8 +1131,8 @@ test('workflow dispatch has no implicit host resources and rejects self-attested
     agent: () => ({}),
     prompt: 'test prompt',
     role: 'executor',
-    model: 'sonnet',
-    effort: 'max',
+    model: CLAUDE_EXECUTOR_BASE.model,
+    effort: CLAUDE_EXECUTOR_BASE.effort,
     capabilities: WORKFLOW_CAPABILITIES,
   };
   assert.throws(
@@ -1176,8 +1189,8 @@ test('explicit Claude host owns workflow capabilities and receipt services', asy
     },
     prompt: 'host-owned prompt',
     role: 'executor',
-    model: 'sonnet',
-    effort: 'max',
+    model: CLAUDE_EXECUTOR_BASE.model,
+    effort: CLAUDE_EXECUTOR_BASE.effort,
     host,
     // Contradictory caller values must not override the explicit host.
     capabilities: { supportedModels: ['fable'], supportedEfforts: ['ultra'] },
@@ -1186,8 +1199,8 @@ test('explicit Claude host owns workflow capabilities and receipt services', asy
       launch_id: 'spoofed-launch', applied_model: 'fable', applied_effort: 'ultra',
     }),
   });
-  assert.strictEqual(calls[0].model, 'sonnet');
-  assert.strictEqual(calls[0].effort, 'max');
+  assert.strictEqual(calls[0].model, CLAUDE_EXECUTOR_BASE.model);
+  assert.strictEqual(calls[0].effort, CLAUDE_EXECUTOR_BASE.effort);
   assert.strictEqual(result.receipt.launch_id, 'host-owned-launch');
 });
 
@@ -1195,7 +1208,7 @@ suite('strict Claude adapter — native aliases and explicit application evidenc
 
 const CLAUDE_CAPABILITIES = {
   supportedModels: Object.values(CLAUDE_MODEL_ALIASES),
-  supportedEfforts: ['high', 'medium', 'max'],
+  supportedEfforts: ['low', 'medium', 'high', 'xhigh', 'max'],
   observedModel: true,
   observedEffort: true,
 };
@@ -1248,12 +1261,12 @@ test('Claude repair launches consume the preceding boundary receipt and preserve
     signals: { signatureState: 'repeat', priorApplied: base.receipt },
   });
   assert.deepStrictEqual(f.calls.map((selection) => [selection.model, selection.effort]), [
-    ['claude-opus-5-5', 'medium'],
-    ['claude-opus-5-5', 'high'],
+    [CLAUDE_REPAIR_BASE.model, CLAUDE_REPAIR_BASE.effort],
+    [CLAUDE_REPAIR_REPEAT.model, CLAUDE_REPAIR_REPEAT.effort],
   ]);
   assert.strictEqual(repeat.receipt.compliance, 'verified');
-  assert.strictEqual(repeat.receipt.applied_model, 'claude-opus-5-5');
-  assert.strictEqual(repeat.receipt.applied_effort, 'high');
+  assert.strictEqual(repeat.receipt.applied_model, CLAUDE_REPAIR_REPEAT.model);
+  assert.strictEqual(repeat.receipt.applied_effort, CLAUDE_REPAIR_REPEAT.effort);
 });
 
 test('missing capabilities, launch methods, and application evidence fail closed before dispatch', () => {
@@ -1302,7 +1315,7 @@ test('Claude rejects contradictory, inherited, and stale launch selections', () 
   const f = claudeFixture();
   for (const context of [
     { model: 'claude-opus-5-5' },
-    { effort: 'medium' },
+    { effort: 'xhigh' },
     { launch_arguments: { model: 'fable' } },
     { session: { inherit: true } },
   ]) {

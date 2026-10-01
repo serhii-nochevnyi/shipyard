@@ -20,7 +20,8 @@ test('native Fable model IDs remain comparable to the rolling alias', () => {
   const adapter = createClaudeDispatchAdapter({ capabilities, host: {} });
   assert.equal(adapter.matchesObservation('observed_model', 'claude-fable-5-1', 'fable'), true);
   assert.equal(adapter.matchesObservation('observed_model', 'fable', 'fable'), false);
-  assert.equal(adapter.matchesObservation('observed_model', 'sonnet', 'sonnet'), false);
+  assert.equal(adapter.matchesObservation('observed_model', 'claude-sonnet-5-5', 'claude-sonnet-5-5'), true);
+  assert.equal(adapter.matchesObservation('observed_model', 'claude-sonnet-5', 'claude-sonnet-5-5'), false);
 });
 
 test('preserves applied selection and exact-session model evidence in the durable receipt', () => {
@@ -36,14 +37,14 @@ test('preserves applied selection and exact-session model evidence in the durabl
         runtime_version: '2.1.277',
         applied_model: selection.model,
         applied_effort: selection.effort,
-        observed_model: 'claude-sonnet-5',
+        observed_model: 'claude-sonnet-5-5',
         observed_effort: selection.effort,
         transcript: { path: '/tmp/claude-transcript.jsonl', bytes: 81, sha256: 'a'.repeat(64) },
         selection_evidence: {
           source: 'claude-session-assistant-transcript',
           session_id: sessionId,
           assistant_records: 2,
-          model: 'claude-sonnet-5',
+          model: 'claude-sonnet-5-5',
           effort: selection.effort,
           transcript,
         },
@@ -61,8 +62,8 @@ test('preserves applied selection and exact-session model evidence in the durabl
   assert.equal(result.receipt.runtime_version, '2.1.277');
   assert.equal(result.receipt.stream_evidence.format, 'stream-json');
   assert.equal(result.receipt.transcript.sha256, 'a'.repeat(64));
-  assert.equal(result.receipt.applied_model, 'sonnet');
-  assert.equal(result.receipt.observed_model, 'claude-sonnet-5');
+  assert.equal(result.receipt.applied_model, 'claude-sonnet-5-5');
+  assert.equal(result.receipt.observed_model, 'claude-sonnet-5-5');
   assert.equal(result.receipt.selection_evidence.assistant_records, 2);
   assert.equal(result.receipt.selection_evidence.transcript.sha256, 'b'.repeat(64));
   assert.equal(result.receipt.compliance, 'verified');
@@ -77,7 +78,7 @@ test('rejects malformed independent stream evidence before recording a compliant
       launch(selection) {
         calls.push(selection);
         const sessionId = '55555555-5555-4555-8555-555555555555';
-        const observedModel = 'claude-sonnet-5';
+        const observedModel = selection.model;
         return {
           launch_id: 'claude-launch-bad-stream',
           session_id: sessionId,
@@ -163,7 +164,7 @@ test('a transcript evidence reference cannot attest another model or session', (
           session_id: sessionId,
           applied_model: selection.model,
           applied_effort: selection.effort,
-          observed_model: 'claude-sonnet-5',
+          observed_model: selection.model,
           observed_effort: selection.effort,
           selection_evidence: {
             source: 'claude-session-assistant-transcript',
@@ -184,7 +185,7 @@ test('a transcript evidence reference cannot attest another model or session', (
   );
 });
 
-test('the pinned Opus 5.5 selection refuses an older transcript model ID', () => {
+test('the pinned Sonnet 5.5 selection refuses an older transcript model ID', () => {
   const sessionId = '77777777-7777-4777-8777-777777777777';
   const adapter = createClaudeDispatchAdapter({
     capabilities,
@@ -196,13 +197,13 @@ test('the pinned Opus 5.5 selection refuses an older transcript model ID', () =>
           session_id: sessionId,
           applied_model: selection.model,
           applied_effort: selection.effort,
-          observed_model: 'claude-opus-5',
+          observed_model: 'claude-sonnet-5',
           observed_effort: selection.effort,
           selection_evidence: {
             source: 'claude-session-assistant-transcript',
             session_id: sessionId,
             assistant_records: 1,
-            model: 'claude-opus-5',
+            model: 'claude-sonnet-5',
             effort: selection.effort,
             transcript: { path: '/tmp/claude-session.jsonl', bytes: 1, sha256: 'e'.repeat(64) },
           },
