@@ -67,4 +67,5 @@ jobs:
       - name: make test-fast
         env:
           SHIPYARD_REQUIRE_OS_SANDBOX: "1"
+          COMMENT_POLICY_BASE: origin/${{ github.base_ref || 'main' }}
         run: make test-fast
