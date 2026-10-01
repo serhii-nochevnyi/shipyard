@@ -37,7 +37,7 @@ test('integrator accepts only the canonical phase subject as its run ticket', ()
   const run = makeScope({
     phase: 38,
     ticket: subject,
-    dispatch: { dispatch_id: 'dispatch-integrator', role: 'integrator', model: 'gpt-6-sol', effort: 'high' },
+    dispatch: { dispatch_id: 'dispatch-integrator', role: 'integrator', model: 'gpt-6.1-sol', effort: 'high' },
   });
   assert.equal(run.ticket.ticket, subject);
   assert.equal(contract.normalizeRunContract(run).ticket.ticket, subject);
@@ -48,12 +48,12 @@ test('integrator accepts only the canonical phase subject as its run ticket', ()
   assert.throws(() => makeScope({
     phase: 37,
     ticket: subject,
-    dispatch: { dispatch_id: 'dispatch-integrator', role: 'integrator', model: 'gpt-6-sol', effort: 'high' },
+    dispatch: { dispatch_id: 'dispatch-integrator', role: 'integrator', model: 'gpt-6.1-sol', effort: 'high' },
   }), (error) => error.code === 'INVALID_INPUT');
   assert.throws(() => makeScope({
     phase: 38,
     ticket: 'phase=38-runtime-model-ladder-recovery;repository=/tmp/shipyard/.git;tickets=bad',
-    dispatch: { dispatch_id: 'dispatch-integrator', role: 'integrator', model: 'gpt-6-sol', effort: 'high' },
+    dispatch: { dispatch_id: 'dispatch-integrator', role: 'integrator', model: 'gpt-6.1-sol', effort: 'high' },
   }), (error) => error.code === 'INVALID_INPUT');
 });
 

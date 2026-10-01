@@ -43,13 +43,13 @@ function fixtureData(gsdRole) {
   const transform = (source) => source.split('\n').filter(Boolean).map((line) => {
     const record = JSON.parse(line);
     if (record.type === 'turn_context') {
-      record.payload.model = 'gpt-6-sol';
+      record.payload.model = 'gpt-6.1-sol';
       record.payload.effort = 'high';
     }
     if (record.type === 'response_item' && record.payload.name === 'spawn_agent') {
       const args = JSON.parse(record.payload.arguments);
       args.agent_type = gsdRole;
-      args.model = 'gpt-6-sol';
+      args.model = 'gpt-6.1-sol';
       args.reasoning_effort = 'high';
       record.payload.arguments = JSON.stringify(args);
     }
@@ -146,9 +146,9 @@ function createFixture({ installPlanner = true, includeDispatchId = true } = {})
 
   const capabilityFile = path.join(codexHome, 'shipyard', 'codex-capabilities.json');
   fs.writeFileSync(capabilityFile, JSON.stringify({
-    supportedModels: ['gpt-6-luna', 'gpt-6-sol'],
+    supportedModels: ['gpt-6-luna', 'gpt-6.1-sol'],
     supportedEfforts: ['low', 'medium', 'high', 'xhigh', 'max'],
-    supportedSelections: [{ model: 'gpt-6-sol', effort: 'high' }],
+    supportedSelections: [{ model: 'gpt-6.1-sol', effort: 'high' }],
   }));
   if (installPlanner) {
     fs.writeFileSync(path.join(codexHome, 'agents', 'gsd-planner.toml'),
@@ -241,9 +241,9 @@ test(`detached decomposition preserves ${includeDispatchId ? 'explicit' : 'omitt
     assert.equal(waited.result.receipt.compliance, 'verified');
     assert.equal(waited.result.receipt.gsd_role, 'gsd-planner');
     assert.equal(waited.result.receipt.dispatch_id, f.dispatchId);
-    assert.equal(waited.result.receipt.requested_model, 'gpt-6-sol');
+    assert.equal(waited.result.receipt.requested_model, 'gpt-6.1-sol');
     assert.equal(waited.result.receipt.requested_effort, 'high');
-    assert.equal(waited.result.receipt.observed_model, 'gpt-6-sol');
+    assert.equal(waited.result.receipt.observed_model, 'gpt-6.1-sol');
     assert.equal(waited.result.receipt.observed_effort, 'high');
     const childStoreDir = defaultRunStoreDir(f.scope,
       path.join(f.home, '.local', 'state', 'shipyard', 'codex-decompose'));
