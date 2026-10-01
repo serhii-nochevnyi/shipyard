@@ -1061,7 +1061,7 @@ test('the four keys default to null and do not change Shipyard config warnings',
   const own = loadConfig(path.join(__dirname, '..', '..'));
   assert.deepStrictEqual(own.warnings, []);
   for (const key of ['comment_markers', 'reviewer_bots', 'repo_remedies', 'verification_commands']) {
-    assert.strictEqual(own.config[key], null, `${key} should stay unset`);
+    assert.strictEqual(withConfig({}).config[key], null, `${key} should default to unset`);
   }
 });
 
