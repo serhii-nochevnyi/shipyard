@@ -4342,12 +4342,12 @@ tickets:
     repo: null
     wave: 1
     depends_on: []
-    files: [plugins/delivery-pipeline/scripts/model-policy-internal.cjs, plugins/delivery-pipeline/scripts/runtime-adapters.cjs, plugins/delivery-pipeline/scripts/auto-route.cjs, '.planning/config.json', CLAUDE.md, plugins/delivery-pipeline/commands/decompose.md, plugins/delivery-pipeline/commands/deliver.md, plugins/delivery-pipeline/references/pr-sentinel.md, tests/unit/model-policy.test.cjs, tests/unit/model-capability.test.cjs, tests/unit/codex-agent.test.cjs, tests/unit/codex-dispatch-adapter.test.cjs, tests/unit/gen-codex-shipyard.test.cjs, tests/unit/codex-decompose-host.test.cjs, tests/unit/codex-runtime-host.test.cjs, tests/unit/codex-delivery-host.test.cjs, tests/unit/claude-dispatch-adapter.test.cjs, tests/unit/claude-runtime-host.test.cjs, tests/unit/claude-decompose-host.test.cjs, tests/unit/claude-delivery-host.test.cjs, tests/unit/investigation-research.test.cjs, tests/unit/dispatch-boundary.test.cjs, tests/unit/pipeline-config.test.cjs, tests/unit/source-contract.test.cjs, tests/unit/workflows-args.test.cjs, tests/unit/claude-instructions.test.cjs, tests/unit/auto-route.test.cjs, tests/unit/runtime-file-digests.json, tests/smoke/model-ladder-runtime-smoke.sh, '.shipyard-pr-body.md', '.shipyard-evidence.md']
+    files: [plugins/delivery-pipeline/scripts/model-policy-internal.cjs, plugins/delivery-pipeline/scripts/runtime-adapters.cjs, plugins/delivery-pipeline/scripts/auto-route.cjs, plugins/delivery-pipeline/scripts/gsd-tune.cjs, plugins/delivery-pipeline/scripts/model-capability.cjs, '.planning/config.json', CLAUDE.md, plugins/delivery-pipeline/commands/decompose.md, plugins/delivery-pipeline/commands/deliver.md, plugins/delivery-pipeline/references/pr-sentinel.md, tests/unit/model-policy.test.cjs, tests/unit/model-capability.test.cjs, tests/unit/codex-agent.test.cjs, tests/unit/codex-dispatch-adapter.test.cjs, tests/unit/gen-codex-shipyard.test.cjs, tests/unit/codex-decompose-host.test.cjs, tests/unit/codex-runtime-host.test.cjs, tests/unit/codex-delivery-host.test.cjs, tests/unit/claude-dispatch-adapter.test.cjs, tests/unit/claude-runtime-host.test.cjs, tests/unit/claude-decompose-host.test.cjs, tests/unit/claude-delivery-host.test.cjs, tests/unit/investigation-research.test.cjs, tests/unit/dispatch-boundary.test.cjs, tests/unit/pipeline-config.test.cjs, tests/unit/source-contract.test.cjs, tests/unit/workflows-args.test.cjs, tests/unit/claude-instructions.test.cjs, tests/unit/auto-route.test.cjs, tests/unit/claude-role-host.test.cjs, tests/unit/decompose-dispatch-wait-contract.test.cjs, tests/unit/run-contract.test.cjs, tests/unit/run-controller.test.cjs, tests/unit/run-scope.test.cjs, tests/unit/usage-attribution.test.cjs, tests/unit/claude-workflow-host.test.cjs, tests/unit/context-packet.test.cjs, tests/unit/dispatch-record.test.cjs, tests/unit/effort-experiment.test.cjs, tests/unit/harness.test.cjs, tests/unit/orchestration-overhead.test.cjs, tests/unit/pipeline-stats.test.cjs, tests/unit/planning-artifacts.test.cjs, tests/unit/repair-artifacts.test.cjs, tests/unit/role-artifact.test.cjs, tests/unit/sentinel.test.cjs, tests/unit/session-handoff.test.cjs, tests/unit/gsd-tune.test.cjs, tests/unit/runtime-file-digests.json, tests/smoke/model-ladder-runtime-smoke.sh, '.shipyard-pr-body.md', '.shipyard-evidence.md']
     risk: medium
     human_checkpoint: false
     checkpoint: null
     preauthorized: false
-    branch: ticket/T-46-01-migrate-native-ladder-and-coupled-ci-con
+    branch: ticket/T-46-01-migrate-native-ladder-runtime-trailer
     epic: epic/46-refresh-native-runtime-model-ladder
     primary_parent: null
     pr_base: epic/46-refresh-native-runtime-model-ladder
@@ -4367,7 +4367,7 @@ tickets:
     branch: ticket/T-46-04-publish-supported-grid-and-isolated-roll
     epic: epic/46-refresh-native-runtime-model-ladder
     primary_parent: T-46-01
-    pr_base: ticket/T-46-01-migrate-native-ladder-and-coupled-ci-con
+    pr_base: ticket/T-46-01-migrate-native-ladder-runtime-trailer
     jira: null
   T-46-05:
     title: Regenerate the reviewed package and verify isolated installation and old evidence
