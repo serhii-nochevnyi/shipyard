@@ -4320,7 +4320,7 @@ tickets:
     repo: null
     wave: 7
     depends_on: [T-45-15, T-45-16, T-45-17]
-    files: [plugins/delivery-pipeline/scripts/dispatch-boundary.cjs, tests/unit/dispatch-boundary.test.cjs, plugins/delivery-pipeline/scripts/claude-workflow-host.cjs, tests/unit/claude-workflow-host.test.cjs, 'plugins/shipyard/**']
+    files: [plugins/delivery-pipeline/scripts/dispatch-boundary.cjs, tests/unit/dispatch-boundary.test.cjs, plugins/delivery-pipeline/scripts/claude-workflow-host.cjs, tests/unit/claude-workflow-host.test.cjs, plugins/delivery-pipeline/scripts/gsd-tune.cjs, tests/unit/gsd-tune.test.cjs, 'plugins/shipyard/**']
     risk: medium
     human_checkpoint: false
     checkpoint: null
