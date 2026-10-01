@@ -9,10 +9,18 @@ const { execFileSync } = require('node:child_process');
 const { EventEmitter } = require('node:events');
 const test = require('node:test');
 const { transcriptEvidence } = require('./claude-test-evidence.cjs');
-const { ROLES, canonicalRequest, inlineReferences, trustedAgent, parseArguments, runDecomposition, recoverDecomposition } = require('../../plugins/delivery-pipeline/scripts/claude-decompose-host.cjs');
-const { createPlanningWriterLease } = require('../../plugins/delivery-pipeline/scripts/planning-writer-lease.cjs');
+const { ROLES, canonicalRequest, inlineReferences, trustedAgent, parseArguments,
+  runDecomposition: nativeRunDecomposition, recoverDecomposition } = require('../../plugins/delivery-pipeline/scripts/claude-decompose-host.cjs');
+const { createPlanningWriterLease, captureSealManifest } = require('../../plugins/delivery-pipeline/scripts/planning-writer-lease.cjs');
 const { createDurableRecorder } = require('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs');
 const { createClaudeCliLauncher, createClaudeRuntimeHost, verifyCompletedClaudeLaunch } = require('../../plugins/delivery-pipeline/scripts/claude-runtime-host.cjs');
+const { runCli: runCodexDecomposeCli, defaultRunStoreDir } = require('../../plugins/delivery-pipeline/scripts/codex-decompose-host.cjs');
+const { runCli: runCodexDeliveryCli } = require('../../plugins/delivery-pipeline/scripts/codex-delivery-host.cjs');
+
+function runDecomposition(request, dependencies = {}) {
+  return nativeRunDecomposition(request, { testWriterStateRoot: path.join(path.dirname(request.worktree), 'shared-writer'),
+    ...dependencies });
+}
 
 function fixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-decompose-host-'));
@@ -335,6 +343,79 @@ test('a second session planning the same worktree and phase is refused with WRIT
   } finally { f.clean(); }
 });
 
+test('Claude decomposition refuses a Codex-owned shared physical writer before typed launch', async () => {
+  const f = preparedPhaseFixture();
+  const sharedRoot = path.join(f.root, 'shared-writer');
+  const lease = createPlanningWriterLease({ stateRoot: sharedRoot, worktree: f.worktree,
+    phaseDir: f.phaseDir });
+  const base = execFileSync('git', ['-C', f.worktree, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+  const owner = lease.acquire({ owner: 'codex-decompose', base_revision: base });
+  const original = fs.readFileSync(lease.file, 'utf8');
+  try {
+    const { calls, deps } = successDependencies(f, { store: path.join(f.root, 'claude-attempt') });
+    await assert.rejects(runDecomposition(request(f.worktree, 'gsd-plan-checker'), deps),
+      { code: 'WRITER_LEASED' });
+    assert.equal(calls.length, 0);
+    assert.equal(fs.readFileSync(lease.file, 'utf8'), original);
+    lease.release(owner);
+    const next = lease.acquire({ owner: 'claude-decompose', base_revision: base });
+    assert.ok(next.epoch > owner.epoch);
+    lease.release(next);
+  } finally { f.clean(); }
+});
+
+test('a live Claude decomposition blocks both genuine Codex typed CLIs before a paid child', async () => {
+  const f = preparedPhaseFixture();
+  const sharedRoot = path.join(f.root, 'shared-writer');
+  let entered;
+  let unblock;
+  const launched = new Promise((resolve) => { entered = resolve; });
+  const held = new Promise((resolve) => { unblock = resolve; });
+  const { deps } = successDependencies(f, { store: path.join(f.root, 'claude-owner'),
+    onLaunch: async () => { entered(); await held; } });
+  const codexScope = { run_id: 'run-t4516-overlap', ticket: 'T-38-DECOMPOSE', phase: 38,
+    worktree: f.worktree, runtime: 'codex', provider: 'openai' };
+  const decomposeRequest = path.join(f.root, 'codex-decompose-request.json');
+  const deliveryRequest = path.join(f.root, 'codex-delivery-request.json');
+  fs.writeFileSync(decomposeRequest, JSON.stringify({ scope: codexScope,
+    gsd_role: 'gsd-plan-checker', prompt: 'Check.' }));
+  fs.writeFileSync(deliveryRequest, JSON.stringify({ scope: { ...codexScope, run_id: 'run-t4516-delivery' },
+    role: 'decomposition', gsd_role: 'gsd-planner', context: { prompt: 'Plan.' } }));
+  const owner = runDecomposition(request(f.worktree, 'gsd-plan-checker'), deps);
+  let childCalls = 0;
+  try {
+    await launched;
+    const lease = createPlanningWriterLease({ stateRoot: sharedRoot, worktree: f.worktree,
+      phaseDir: f.phaseDir });
+    const original = fs.readFileSync(lease.file, 'utf8');
+    await assert.rejects(runCodexDecomposeCli(['--args-file', decomposeRequest], { write() {} }, {
+      testStateRoot: path.join(f.root, 'codex-private'), testWriterStateRoot: sharedRoot,
+      spawn: () => { childCalls++; throw new Error('second paid child'); },
+    }), { code: 'WRITER_LEASED' });
+    await assert.rejects(runCodexDeliveryCli(['--args-file', deliveryRequest], { write() {} }, {
+      testWriterStateRoot: sharedRoot, storageRoot: path.join(f.root, 'delivery-private'),
+      spawn: () => { childCalls++; throw new Error('second paid child'); },
+    }), { code: 'WRITER_LEASED' });
+    assert.equal(childCalls, 0);
+    assert.equal(fs.readFileSync(lease.file, 'utf8'), original);
+    const codexReceipts = path.join(path.dirname(defaultRunStoreDir(codexScope,
+      path.join(f.root, 'codex-private'))), 'receipts');
+    const deliveryPrivate = path.join(f.root, 'delivery-private');
+    assert.equal(fs.existsSync(codexReceipts), false);
+    assert.equal(fs.existsSync(deliveryPrivate), false);
+    unblock();
+    const result = await owner;
+    assert.equal(result.receipt.compliance, 'verified');
+    const next = lease.acquire({ owner: 'next-typed-owner', base_revision: execFileSync('git',
+      ['-C', f.worktree, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim() });
+    lease.release(next);
+  } finally {
+    unblock();
+    await owner.catch(() => {});
+    f.clean();
+  }
+});
+
 test('different phases in the same worktree do not contend for the planning writer lease', async () => {
   const f = preparedPhaseFixture();
   try {
@@ -432,8 +513,9 @@ test('the planning writer lease releases on success and on failure so a followin
   } finally { f.clean(); }
 });
 
-function recoveryFixture(role, { cli = false } = {}) {
+function recoveryFixture(role, { cli = false, extraPlannerBaseline = false } = {}) {
   const f = preparedPhaseFixture();
+  if (extraPlannerBaseline) fs.writeFileSync(path.join(f.phaseDir, '38-02-PLAN.md'), '# Unchanged plan\n');
   const worktree = fs.realpathSync(f.worktree);
   const repository = fs.realpathSync(path.resolve(worktree, execFileSync('git',
     ['-C', worktree, 'rev-parse', '--git-common-dir'], { encoding: 'utf8' }).trim()));
@@ -446,12 +528,14 @@ function recoveryFixture(role, { cli = false } = {}) {
     ...(cli ? { policy_hash: require('../../plugins/delivery-pipeline/scripts/model-policy.cjs').POLICY_HASH,
       policy_version: 'adr-014.v6', rung: 'base' } : {}) };
   const writerLease = createPlanningWriterLease({ worktree: fs.realpathSync(f.worktree), phaseDir: f.phaseDir,
-    stateRoot: path.join(store, 'writer') });
+    stateRoot: path.join(f.root, 'shared-writer') });
   const head = execFileSync('git', ['-C', f.worktree, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
   const handle = writerLease.acquire({ owner: 'completed-host', base_revision: head });
   const snapshot = writerLease.snapshotTree();
   writerLease.release({ token: handle.token, epoch: handle.epoch });
-  fs.writeFileSync(path.join(f.phaseDir, '38-01-PLAN.md'), '# Completed plan\n');
+  const changedPaths = role === 'gsd-plan-checker' ? []
+    : [role === 'gsd-phase-researcher' ? '38-RESEARCH.md' : '38-01-PLAN.md'];
+  for (const name of changedPaths) fs.writeFileSync(path.join(f.phaseDir, name), '# Completed artifact\n');
   const transcripts = path.join(store, 'transcripts');
   const nativeProject = path.join(f.config, 'projects', 'project-a');
   fs.mkdirSync(transcripts, { recursive: true, mode: 0o700 });
@@ -475,11 +559,12 @@ function recoveryFixture(role, { cli = false } = {}) {
   fs.writeFileSync(streamFile, [
     { type: 'assistant', session_id: sessionId, message: { role: 'assistant', content: 'completed' } },
     { type: 'result', session_id: sessionId, result: 'completed',
-      structured_output: { changed_paths: ['38-01-PLAN.md'] } },
+      structured_output: { changed_paths: changedPaths } },
   ].map((item) => JSON.stringify(item)).join('\n') + '\n', { mode: 0o600 });
   const digest = (file) => crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
   const record = { dispatch_id: dispatchId, run_id: runId, session_id: sessionId,
-    lease_epoch: handle.epoch, tree_snapshot: snapshot, request: request(f.worktree, role),
+    lease_epoch: handle.epoch, writer_lease_file: writerLease.file,
+    tree_snapshot: snapshot, request: request(f.worktree, role),
     resolution, child_pid: 99999999, start_evidence_file: startFile, transcript_path: streamFile,
     native_transcript_path: nativeFile, saved_native_transcript: savedNativeFile,
     saved_native_transcript_sha256: digest(savedNativeFile),
@@ -492,8 +577,10 @@ function recoveryFixture(role, { cli = false } = {}) {
       policy_version: cli ? 'adr-014.v6' : null, policy_id: null,
       policy_rung: cli ? 'base' : null },
     completed: { stream_sha256: digest(streamFile), selection_sha256: digest(savedNativeFile),
-      start_sha256: digest(startFile), declared_paths: ['38-01-PLAN.md'], changed_paths: ['38-01-PLAN.md'],
-      artifact_digests: { '38-01-PLAN.md': digest(path.join(f.phaseDir, '38-01-PLAN.md')) } } };
+      start_sha256: digest(startFile), declared_paths: changedPaths, changed_paths: changedPaths,
+      artifact_digests: Object.fromEntries(changedPaths.map((name) => [name, digest(path.join(f.phaseDir, name))])),
+      full_output_manifest: captureSealManifest({ role, phaseDir: f.phaseDir, snapshot,
+        declared: changedPaths, changed: changedPaths }) } };
   const launchFile = path.join(store, 'launches', `${digestValue(dispatchId)}.launch.json`);
   fs.mkdirSync(path.dirname(launchFile), { recursive: true, mode: 0o700 });
   const save = () => fs.writeFileSync(launchFile, `${JSON.stringify(record)}\n`, { mode: 0o600 });
@@ -504,7 +591,7 @@ function recoveryFixture(role, { cli = false } = {}) {
   save();
   const priorConfig = process.env.CLAUDE_CONFIG_DIR;
   process.env.CLAUDE_CONFIG_DIR = f.config;
-  const deps = { store, writerLease,
+  const deps = { store, writerLease, testWriterStateRoot: path.join(f.root, 'shared-writer'),
     resolveDispatch: ({ runtime, role: boundaryRole, dispatch_id }) => ({
       runtime, role: boundaryRole, dispatch_id, ...resolution,
     }),
@@ -597,7 +684,7 @@ test('fixture launcher and no-relaunch recovery produce identical authenticated 
   let originalNativeFile;
   try {
     const deps = {
-      configRoot: f.config, store,
+      configRoot: f.config, store, testWriterStateRoot: path.join(f.root, 'shared-writer'),
       resolveDispatch: ({ runtime, role: boundaryRole, dispatch_id }) => ({
         runtime, role: boundaryRole, dispatch_id, model: 'claude-opus-5-5', effort: 'medium',
       }),
@@ -727,7 +814,8 @@ test('a completed saved Claude launch recovers one receipt per judgment role wit
       assert.equal(output.receipt.dispatch_id, f.dispatchId);
       assert.equal(output.receipt.compliance, 'verified');
       assert.equal(output.receipt.gsd_role, role);
-      assert.deepEqual(output.result.output.changed_paths, ['38-01-PLAN.md']);
+      assert.deepEqual(output.result.output.changed_paths,
+        role === 'gsd-plan-checker' ? [] : [role === 'gsd-phase-researcher' ? '38-RESEARCH.md' : '38-01-PLAN.md']);
       assert.equal(f.recorder.getReservation(f.dispatchId).recorded, true);
       assert.equal(ROLES[role] === 'decomposition', Boolean(output.envelope));
       await assert.rejects(recoverDecomposition(f.dispatchId, f.deps), { code: 'RECOVERY_ALREADY_RECORDED' });
@@ -735,14 +823,64 @@ test('a completed saved Claude launch recovers one receipt per judgment role wit
   }
 });
 
-test('recover --dispatch finds the private reservation and prints the recovered receipt', () => {
+test('Claude planner recovery retains original digests for unchanged PLAN and CONTEXT', async () => {
+  const f = recoveryFixture('gsd-planner', { extraPlannerBaseline: true });
+  try {
+    assert.deepEqual(Object.keys(f.record.completed.full_output_manifest).sort(),
+      ['38-01-PLAN.md', '38-02-PLAN.md', 'CONTEXT.md']);
+    assert.equal(f.record.completed.full_output_manifest['38-02-PLAN.md'].origin, 'unchanged-baseline');
+    const output = await recoverDecomposition(f.dispatchId, f.deps);
+    assert.equal(output.receipt.compliance, 'verified');
+    assert.equal(f.recorder.getReservation(f.dispatchId).recorded, true);
+  } finally { f.finish(); }
+});
+
+test('Claude planner recovery refuses altered unchanged PLAN with no durable record', async () => {
+  const f = recoveryFixture('gsd-planner', { extraPlannerBaseline: true });
+  try {
+    fs.writeFileSync(path.join(f.phaseDir, '38-02-PLAN.md'), '# Tampered after completion\n');
+    await assert.rejects(recoverDecomposition(f.dispatchId, f.deps), { code: 'FOREIGN_EDIT' });
+    assert.equal(fs.readdirSync(path.join(f.store, 'receipts')).filter((name) => name.startsWith('record-')).length, 0);
+  } finally { f.finish(); }
+});
+
+test('legacy Claude recovery refuses a different original writer namespace before takeover', async () => {
+  const f = recoveryFixture('gsd-planner');
+  try {
+    f.record.writer_lease_file = path.join(f.store, 'writer', 'legacy', 'lease.json');
+    f.save();
+    const currentLease = f.deps.writerLease.file;
+    const original = fs.readFileSync(currentLease);
+    await assert.rejects(recoverDecomposition(f.dispatchId, f.deps), { code: 'LEGACY_WRITER_STATE' });
+    assert.deepEqual(fs.readFileSync(currentLease), original);
+    assert.equal(fs.readdirSync(path.join(f.store, 'receipts')).filter((name) => name.startsWith('record-')).length, 0);
+  } finally { f.finish(); }
+});
+
+test('Claude recovery refuses a missing original full seal manifest with no recorder mutation', async () => {
+  const f = recoveryFixture('gsd-planner', { extraPlannerBaseline: true });
+  try {
+    delete f.record.completed.full_output_manifest;
+    f.save();
+    await assert.rejects(recoverDecomposition(f.dispatchId, f.deps),
+      { code: 'RECOVERY_EVIDENCE_INCOMPLETE' });
+    assert.equal(fs.readdirSync(path.join(f.store, 'receipts')).filter((name) => name.startsWith('record-')).length, 0);
+  } finally { f.finish(); }
+});
+
+test('a separate native process recovers the private reservation through the shared writer gate', () => {
   const f = recoveryFixture('gsd-planner', { cli: true });
   try {
-    const env = { ...process.env, HOME: f.root, CLAUDE_CONFIG_DIR: f.config, SHIPYARD_RUNTIME: 'claude' };
+    const env = { ...process.env, CLAUDE_CONFIG_DIR: f.config, SHIPYARD_RUNTIME: 'claude' };
     for (const key of ['CODEX_SANDBOX', 'CODEX_SANDBOX_NETWORK_DISABLED', 'GSD_RUNTIME',
       'SHIPYARD_GSD_TOOLS', 'GSD_TOOLS', 'GSD_CORE_HOME']) delete env[key];
+    const hostFile = path.resolve(__dirname, '../../plugins/delivery-pipeline/scripts/claude-decompose-host.cjs');
+    const script = `require(${JSON.stringify(hostFile)}).recoverDecomposition(${JSON.stringify(f.dispatchId)}, `
+      + `{ store: ${JSON.stringify(f.store)}, testWriterStateRoot: ${JSON.stringify(path.join(f.root, 'shared-writer'))}, `
+      + `configRoot: ${JSON.stringify(f.config)} }).then(value => process.stdout.write(JSON.stringify(value)), `
+      + `error => { process.stderr.write(String(error.stack || error)); process.exitCode = 1; });`;
     const result = require('node:child_process').spawnSync(process.execPath,
-      ['plugins/delivery-pipeline/scripts/claude-decompose-host.cjs', 'recover', '--dispatch', f.dispatchId],
+      ['-e', script],
       { cwd: path.resolve(__dirname, '../..'), encoding: 'utf8', timeout: 10000, env });
     assert.equal(result.status, 0, result.stderr);
     const output = JSON.parse(result.stdout);

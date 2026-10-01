@@ -14,6 +14,7 @@ const { createDurableRecorder } = require('../../plugins/delivery-pipeline/scrip
 const { createRunController } = require('../../plugins/delivery-pipeline/scripts/run-controller.cjs');
 const { createPlanningWriterLease } = require('../../plugins/delivery-pipeline/scripts/planning-writer-lease.cjs');
 const { createCodexRuntimeHost } = require('../../plugins/delivery-pipeline/scripts/codex-runtime-host.cjs');
+const { runDecomposition: runClaudeDecomposition } = require('../../plugins/delivery-pipeline/scripts/claude-decompose-host.cjs');
 const orchestrationOverhead = require('../../plugins/delivery-pipeline/scripts/orchestration-overhead.cjs');
 const {
   createCodexDecomposeHost, defaultRunStoreDir, parseCliArguments, parseRecoverArguments, readRequestFile, requestValue, runCli,
@@ -344,6 +345,32 @@ test('default run controller state is outside the model worktree and keyed to it
   } finally { f.clean(); }
 });
 
+for (const mode of ['active', 'corrupt']) {
+  test(`Codex CLI refuses ${mode} private legacy writer state before paid launch`, async () => {
+    const f = fixture();
+    try {
+      const phaseDir = path.join(f.root, '.planning', 'phases', '38-codex-decompose');
+      const privateRoot = path.join(path.dirname(defaultRunStoreDir(f.scope, f.stateRoot)), 'writer');
+      const oldLease = createPlanningWriterLease({ stateRoot: privateRoot, worktree: f.root, phaseDir });
+      oldLease.acquire({ owner: 'private-legacy', base_revision: headRevision(f.root) });
+      if (mode === 'corrupt') fs.writeFileSync(oldLease.file, '{invalid', { mode: 0o600 });
+      const original = fs.readFileSync(oldLease.file);
+      const file = path.join(f.root, 'legacy-request.json');
+      fs.writeFileSync(file, JSON.stringify({ scope: f.scope, gsd_role: 'gsd-planner', prompt: 'Plan.' }));
+      let launches = 0;
+      await assert.rejects(runCli(['--args-file', file], { write() {} }, {
+        testStateRoot: f.stateRoot, testWriterStateRoot: path.join(f.stateRoot, 'shared-writer'),
+        spawn: () => { launches++; throw new Error('paid launch was forbidden'); },
+      }), { code: 'LEGACY_WRITER_STATE' });
+      assert.equal(launches, 0);
+      assert.deepEqual(fs.readFileSync(oldLease.file), original);
+      const shared = createPlanningWriterLease({ stateRoot: path.join(f.stateRoot, 'shared-writer'),
+        worktree: f.root, phaseDir });
+      assert.equal(fs.existsSync(shared.file), false);
+    } finally { f.clean(); }
+  });
+}
+
 test('child telemetry collector failure warns without leaking collector details or changing the verified result', async () => {
   const f = fixture();
   const gsdRole = 'gsd-planner';
@@ -368,7 +395,7 @@ test('child telemetry collector failure warns without leaking collector details 
       env: { CODEX_HOME: f.codexHome },
       agentDir: f.agentDir,
       agentManifest: path.join(f.agentDir, '.shipyard-manifest.json'),
-      testStateRoot: f.stateRoot,
+      testStateRoot: f.stateRoot, testWriterStateRoot: path.join(f.stateRoot, 'shared-writer'),
       leaseTtlMs: 1000,
       now: clock,
       heartbeat: heartbeat.scheduler,
@@ -411,7 +438,7 @@ test('multi-turn child telemetry keeps turn totals unknown and separated by acto
       env: { CODEX_HOME: f.codexHome },
       agentDir: f.agentDir,
       agentManifest: path.join(f.agentDir, '.shipyard-manifest.json'),
-      testStateRoot: f.stateRoot,
+      testStateRoot: f.stateRoot, testWriterStateRoot: path.join(f.stateRoot, 'shared-writer'),
       leaseTtlMs: 1000,
       now: clock,
       heartbeat: heartbeat.scheduler,
@@ -547,7 +574,7 @@ function buildNativeChildFixture(gsdRole, artifactPathsOrOptions = {}) {
     artifactPaths: declaredArtifactPaths, writeArtifactPaths: declaredArtifactPaths };
 }
 
-function attachFakeSpawn(f, gsdRole, fixtureData, onSpawn, exitCode = 0, pid = 38004) {
+function attachFakeSpawn(f, gsdRole, fixtureData, onSpawn, exitCode = 0, pid = 38004, closeDelayMs = 170) {
   const { parent, childId, parentRaw, childRaw, execRaw, transform } = fixtureData;
   const calls = [];
   const spawn = (_executable, args, options) => {
@@ -576,7 +603,7 @@ function attachFakeSpawn(f, gsdRole, fixtureData, onSpawn, exitCode = 0, pid = 3
     setTimeout(() => {
       process.stdout.emit('data', Buffer.from(execRaw));
       process.emit('close', exitCode, null);
-    }, 170);
+    }, closeDelayMs);
     return process;
   };
   return { spawn, calls };
@@ -602,7 +629,7 @@ test('production ' + gsdRole + ' reaches its native child and records session ev
       env: { CODEX_HOME: f.codexHome },
       agentDir: f.agentDir,
       agentManifest: path.join(f.agentDir, '.shipyard-manifest.json'),
-      testStateRoot: f.stateRoot,
+      testStateRoot: f.stateRoot, testWriterStateRoot: path.join(f.stateRoot, 'shared-writer'),
       leaseTtlMs: 1000,
       now: clock,
       heartbeat: heartbeat.scheduler,
@@ -694,7 +721,7 @@ test(`detached ${includeDispatchId ? 'explicit' : 'omitted'} dispatch ID reaches
       env: { CODEX_HOME: f.codexHome },
       agentDir: f.agentDir,
       agentManifest: path.join(f.agentDir, '.shipyard-manifest.json'),
-      testStateRoot,
+      testStateRoot, testWriterStateRoot: path.join(f.stateRoot, 'shared-writer'),
       leaseTtlMs: 1000,
       probe: { status: 'available', executable: 'codex', runtime_version: '0.157.1', capabilities },
       spawn,
@@ -731,6 +758,50 @@ test(`detached ${includeDispatchId ? 'explicit' : 'omitted'} dispatch ID reaches
 });
 }
 
+test('a live Codex CLI writer blocks Claude decomposition before its typed launch', async () => {
+  const f = fixture();
+  const gsdRole = 'gsd-plan-checker';
+  const fixtureData = buildNativeChildFixture(gsdRole);
+  const sharedRoot = path.join(f.stateRoot, 'shared-writer');
+  const file = path.join(f.root, 'codex-owner-request.json');
+  fs.writeFileSync(file, JSON.stringify({ scope: f.scope, gsd_role: gsdRole, prompt: 'Check.' }));
+  fs.writeFileSync(path.join(f.agentDir, `${gsdRole}.toml`),
+    gsdAgentToml(gsdRole, fixtureData.instructions.replace(/\n$/, '')));
+  let entered;
+  const launched = new Promise((resolve) => { entered = resolve; });
+  const { spawn, calls } = attachFakeSpawn(f, gsdRole, fixtureData, () => entered(), 0, 38004, 1000);
+  const owner = runCli(['--args-file', file], { write() {} }, {
+    env: { CODEX_HOME: f.codexHome }, agentDir: f.agentDir,
+    agentManifest: path.join(f.agentDir, '.shipyard-manifest.json'),
+    testStateRoot: f.stateRoot, testWriterStateRoot: sharedRoot,
+    probe: { status: 'available', executable: 'codex', runtime_version: '0.157.1', capabilities },
+    spawn,
+  });
+  try {
+    await launched;
+    const phaseDir = path.join(f.root, '.planning', 'phases', '38-codex-decompose');
+    const lease = createPlanningWriterLease({ stateRoot: sharedRoot, worktree: f.root, phaseDir });
+    const original = fs.readFileSync(lease.file, 'utf8');
+    let claudeLaunches = 0;
+    await assert.rejects(runClaudeDecomposition({ phase: 38, worktree: f.root,
+      role: 'gsd-plan-checker', prompt: 'Check.' }, {
+      store: path.join(f.stateRoot, 'claude-private'), testWriterStateRoot: sharedRoot,
+      runtimeHostFactory: () => { claudeLaunches++; throw new Error('second paid child'); },
+    }), { code: 'WRITER_LEASED' });
+    assert.equal(claudeLaunches, 0);
+    assert.equal(fs.readFileSync(lease.file, 'utf8'), original);
+    assert.equal(fs.existsSync(path.join(f.stateRoot, 'claude-private', 'receipts')), false);
+    const result = await owner;
+    assert.equal(result.receipt.compliance, 'verified');
+    assert.equal(calls.length, 1);
+    const next = lease.acquire({ owner: 'claude-after-release', base_revision: headRevision(f.root) });
+    lease.release(next);
+  } finally {
+    await owner.catch(() => {});
+    f.clean();
+  }
+});
+
 test('advancing the injected clock past the lease TTL with no heartbeat still refuses with LEASE_EXPIRED', async () => {
   const f = fixture();
   const gsdRole = 'gsd-planner';
@@ -749,7 +820,7 @@ test('advancing the injected clock past the lease TTL with no heartbeat still re
       env: { CODEX_HOME: f.codexHome },
       agentDir: f.agentDir,
       agentManifest: path.join(f.agentDir, '.shipyard-manifest.json'),
-      testStateRoot: f.stateRoot,
+      testStateRoot: f.stateRoot, testWriterStateRoot: path.join(f.stateRoot, 'shared-writer'),
       leaseTtlMs: 1000,
       now: clock,
       heartbeat: heartbeat.scheduler,
@@ -773,7 +844,7 @@ test('standalone CLI records a failed owned run after launch preflight refusal',
     await assert.rejects(() => runCli(['--args-file', file], { write(value) { output.push(value); } }, {
       env: { CODEX_HOME: f.codexHome },
       agentDir: f.agentDir,
-      testStateRoot: f.stateRoot,
+      testStateRoot: f.stateRoot, testWriterStateRoot: path.join(f.stateRoot, 'shared-writer'),
       probe: { status: 'available', executable: 'codex', runtime_version: '0.157.1', capabilities },
     }), (error) => error.code === 'CONFLICTING_OVERRIDE');
     const status = createRunController({ storeDir: defaultRunStoreDir(f.scope, f.stateRoot) })
@@ -791,7 +862,7 @@ test('standalone CLI owns runtime unavailability and fails the run', async () =>
     fs.writeFileSync(file, JSON.stringify({ scope: f.scope, gsd_role: 'gsd-planner', prompt: 'Plan.' }));
     await assert.rejects(() => runCli(['--args-file', file], { write() {} }, {
       env: { CODEX_HOME: f.codexHome },
-      testStateRoot: f.stateRoot,
+      testStateRoot: f.stateRoot, testWriterStateRoot: path.join(f.stateRoot, 'shared-writer'),
       probe: { status: 'unavailable', reason: 'runtime_missing' },
     }), (error) => error.code === 'RUNTIME_UNAVAILABLE');
     const status = createRunController({ storeDir: defaultRunStoreDir(f.scope, f.stateRoot) })
@@ -814,7 +885,7 @@ test('a second session planning the same worktree and phase is refused with WRIT
     let spawnCalls = 0;
     await assert.rejects(() => runCli(['--args-file', file], { write() {} }, {
       env: { CODEX_HOME: f.codexHome },
-      testStateRoot: f.stateRoot,
+      testStateRoot: f.stateRoot, testWriterStateRoot: path.join(f.stateRoot, 'shared-writer'),
       writerLease,
       probe: { status: 'available', executable: 'codex', runtime_version: '0.157.1', capabilities },
       spawn: () => { spawnCalls += 1; throw new Error('spawn should not be called'); },
@@ -838,7 +909,7 @@ test('different phases in the same worktree do not contend for the planning writ
     });
     await assert.rejects(() => runCli(['--args-file', file], { write() {} }, {
       env: { CODEX_HOME: f.codexHome },
-      testStateRoot: f.stateRoot,
+      testStateRoot: f.stateRoot, testWriterStateRoot: path.join(f.stateRoot, 'shared-writer'),
       writerLease: phase38Lease,
       probe: { status: 'unavailable', reason: 'runtime_missing' },
     }), (error) => error.code === 'RUNTIME_UNAVAILABLE');
@@ -934,7 +1005,7 @@ test('the planning writer lease releases on success and on failure so a followin
       env: { CODEX_HOME: f.codexHome },
       agentDir: f.agentDir,
       agentManifest: path.join(f.agentDir, '.shipyard-manifest.json'),
-      testStateRoot: f.stateRoot,
+      testStateRoot: f.stateRoot, testWriterStateRoot: path.join(f.stateRoot, 'shared-writer'),
       writerLease: successLease,
       leaseTtlMs: 1000,
       now: clock,
@@ -954,7 +1025,7 @@ test('the planning writer lease releases on success and on failure so a followin
     await assert.rejects(() => runCli(['--args-file', failureFile], { write() {} }, {
       env: { CODEX_HOME: f.codexHome },
       agentDir: f.agentDir,
-      testStateRoot: f.stateRoot,
+      testStateRoot: f.stateRoot, testWriterStateRoot: path.join(f.stateRoot, 'shared-writer'),
       writerLease: failureLease,
       probe: { status: 'available', executable: 'codex', runtime_version: '0.157.1', capabilities },
     }), (error) => error.code === 'CONFLICTING_OVERRIDE');
@@ -977,7 +1048,7 @@ test('post-acquire snapshot and heartbeat setup failures release the original wr
           : realLease.snapshotTree,
       };
       await assert.rejects(runCli(['--args-file', file], { write() {} }, {
-        testStateRoot: f.stateRoot, env: { CODEX_HOME: f.codexHome }, writerLease,
+        testStateRoot: f.stateRoot, testWriterStateRoot: path.join(f.stateRoot, 'shared-writer'), env: { CODEX_HOME: f.codexHome }, writerLease,
         heartbeat: failure === 'heartbeat'
           ? { start() { throw Object.assign(new Error('heartbeat failed'), { code: 'HEARTBEAT_FAILED' }); } }
           : undefined,
@@ -1003,11 +1074,16 @@ async function recoverySetup(gsdRole, {
   complete = true, crashBeforeCompletionCallback = false, crashBeforeNativeCheckpoint = false,
   crashBeforeTranscriptWrite = false,
   artifactPaths, writeArtifactPaths, preexistingResearchBaseline = false,
+  extraPlannerBaseline = false,
 } = {}) {
   const f = fixture();
   if (preexistingResearchBaseline) {
     fs.writeFileSync(path.join(f.root, '.planning', 'phases', '38-codex-decompose', '38-RESEARCH.md'),
       '# Authorized research baseline\n');
+  }
+  if (extraPlannerBaseline) {
+    fs.writeFileSync(path.join(f.root, '.planning', 'phases', '38-codex-decompose', '38-02-PLAN.md'),
+      '# Unchanged second plan\n');
   }
   const fixtureData = buildNativeChildFixture(gsdRole, artifactPaths);
   if (writeArtifactPaths) fixtureData.writeArtifactPaths = writeArtifactPaths;
@@ -1026,7 +1102,7 @@ async function recoverySetup(gsdRole, {
   const recordFile = path.join(receipts, 'record-' + crypto.createHash('sha256').update(dispatchId).digest('hex') + '.json');
   const recorder = createDurableRecorder(receipts);
   const phaseDir = path.join(f.root, '.planning', 'phases', '38-codex-decompose');
-  const writerStateRoot = path.join(hostState, 'writer');
+  const writerStateRoot = path.join(f.stateRoot, 'shared-writer');
   const writerLease = createPlanningWriterLease({ worktree: f.root, phaseDir, stateRoot: writerStateRoot });
   const leaseHandle = writerLease.acquire({ owner: 'killed-parent-' + dispatchId, base_revision: headRevision(f.root) });
   const leaseSnapshot = writerLease.snapshotTree();
@@ -1134,7 +1210,7 @@ async function recoverySetup(gsdRole, {
   } catch (error) { crashError = error; }
   const base = {
     env, agentDir: f.agentDir, agentManifest: path.join(f.agentDir, '.shipyard-manifest.json'),
-    testStateRoot: f.stateRoot,
+    testStateRoot: f.stateRoot, testWriterStateRoot: path.join(f.stateRoot, 'shared-writer'),
     probe: { status: 'available', executable: 'codex', runtime_version: '0.157.1', capabilities },
   };
   const spawned = [];
@@ -1200,6 +1276,63 @@ test('recover rebuilds the original ' + gsdRole + ' receipt after completion was
   } finally { setup.f.clean(); }
 });
 }
+
+test('planner recovery seals an unchanged extra PLAN and CONTEXT from its original manifest', async () => {
+  const setup = await recoverySetup('gsd-planner', { extraPlannerBaseline: true });
+  try {
+    assert.equal(setup.crashError.code, 'SIMULATED_HOST_DEATH');
+    const launchDir = path.join(setup.hostState, 'launches');
+    const launch = JSON.parse(fs.readFileSync(path.join(launchDir, fs.readdirSync(launchDir)[0]), 'utf8'));
+    assert.deepEqual(launch.completed.declared_paths, ['38-01-PLAN.md']);
+    assert.deepEqual(launch.completed.changed_paths, ['38-01-PLAN.md']);
+    assert.deepEqual(Object.keys(launch.completed.full_output_manifest).sort(),
+      ['38-01-PLAN.md', '38-02-PLAN.md', 'CONTEXT.md']);
+    assert.equal(launch.completed.full_output_manifest['38-02-PLAN.md'].origin, 'unchanged-baseline');
+    assert.equal(launch.completed.full_output_manifest['CONTEXT.md'].origin, 'unchanged-baseline');
+    setup.setLeasePid(2147483647);
+    const result = await setup.recover();
+    assert.equal(result.receipt.compliance, 'verified');
+    assert.ok(fs.existsSync(setup.recordFile));
+    assert.equal(setup.spawned.length, 0);
+  } finally { setup.f.clean(); }
+});
+
+for (const mode of ['missing-manifest', 'saved-digest', 'old-plan-tamper']) {
+  test(`planner recovery refuses ${mode} with no durable recorder record`, async () => {
+    const setup = await recoverySetup('gsd-planner', { extraPlannerBaseline: true });
+    try {
+      const launchDir = path.join(setup.hostState, 'launches');
+      const launchFile = path.join(launchDir, fs.readdirSync(launchDir)[0]);
+      const launch = JSON.parse(fs.readFileSync(launchFile, 'utf8'));
+      if (mode === 'missing-manifest') delete launch.completed.full_output_manifest;
+      if (mode === 'saved-digest') launch.completed.full_output_manifest['38-02-PLAN.md'].sha256 = 'a'.repeat(64);
+      if (mode !== 'old-plan-tamper') fs.writeFileSync(launchFile, JSON.stringify(launch), { mode: 0o600 });
+      else fs.writeFileSync(path.join(setup.f.root, '.planning', 'phases', '38-codex-decompose', '38-02-PLAN.md'),
+        '# Edited after completion\n');
+      setup.setLeasePid(2147483647);
+      await assert.rejects(setup.recover(), (error) => ['RECOVERY_EVIDENCE_INCOMPLETE',
+        'RECOVERY_ARTIFACT_ALTERED', 'FOREIGN_EDIT'].includes(error.code));
+      assert.equal(fs.existsSync(setup.recordFile), false);
+      assert.equal(setup.spawned.length, 0);
+    } finally { setup.f.clean(); }
+  });
+}
+
+test('legacy Codex recovery refuses a different original writer namespace before shared takeover', async () => {
+  const setup = await recoverySetup('gsd-planner');
+  try {
+    const launchDir = path.join(setup.hostState, 'launches');
+    const launchFile = path.join(launchDir, fs.readdirSync(launchDir)[0]);
+    const launch = JSON.parse(fs.readFileSync(launchFile, 'utf8'));
+    launch.writer_lease_file = path.join(setup.hostState, 'writer', setup.writerLease.key, 'lease.json');
+    fs.writeFileSync(launchFile, JSON.stringify(launch), { mode: 0o600 });
+    const original = fs.readFileSync(setup.writerLeaseFile);
+    await assert.rejects(setup.recover(), { code: 'LEGACY_WRITER_STATE' });
+    assert.deepEqual(fs.readFileSync(setup.writerLeaseFile), original);
+    assert.equal(fs.existsSync(setup.recordFile), false);
+    assert.equal(setup.spawned.length, 0);
+  } finally { setup.f.clean(); }
+});
 
 test('planner accepts multiple declared plans with a preexisting phase research baseline', async () => {
   const artifactPaths = [

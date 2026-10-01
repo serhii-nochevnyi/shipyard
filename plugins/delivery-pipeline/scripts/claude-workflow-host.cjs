@@ -280,7 +280,7 @@ function createClaudeWorkflowDispatchBridge(options = {}) {
     if (matches.length !== 1) reject('scoped phase directory is unavailable or ambiguous');
     const expectedPhase = fs.realpathSync(path.join(phasesRoot, matches[0]));
     if (fs.realpathSync(phaseDir) !== expectedPhase
-        || lease.key !== crypto.createHash('sha256').update(`${worktree}\n${phaseDir}`).digest('hex')) {
+        || lease.key !== crypto.createHash('sha256').update(`${worktree}\n${expectedPhase}`).digest('hex')) {
       reject('host writer lease is not bound to the scoped phase');
     }
     const completed = completedTyped.get(receipt.launch_id);

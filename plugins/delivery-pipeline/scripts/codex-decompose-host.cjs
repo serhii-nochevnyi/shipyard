@@ -17,7 +17,8 @@ const { createRunScope } = require('./run-scope.cjs');
 const { createRunController, DEFAULT_LEASE_TTL_MS } = require('./run-controller.cjs');
 const { formatHint } = require('./refusal-hints.cjs');
 const { sealDecomposition, assertContained } = require('./planning-result-sealer.cjs');
-const { createPlanningWriterLease } = require('./planning-writer-lease.cjs');
+const { createPlanningWriterLease, sharedPlanningWriterRoot, legacyPlanningWriterRoots,
+  assertNoLegacyPlanningWriter, captureSealManifest, assertSealManifest } = require('./planning-writer-lease.cjs');
 const { dispatchStateDir } = require('./deliver-dispatch.cjs');
 const orchestrationOverhead = require('./orchestration-overhead.cjs');
 
@@ -100,16 +101,19 @@ function defaultRunStoreDir(scope, stateRoot = path.join(os.homedir(), '.local',
 }
 
 function phaseDirectory(worktree, phase) {
-  const root = path.join(worktree, '.planning', 'phases');
+  const root = path.join(fs.realpathSync(worktree), '.planning', 'phases');
   let names;
   try { names = fs.readdirSync(root); }
   catch (error) { fail('PHASE_DIRECTORY_MISSING', 'phase directory root is unavailable: ' + error.message); }
+  if (fs.realpathSync(root) !== root) fail('PHASE_DIRECTORY_MISSING', 'phase directory root is not canonical');
   const matches = names.filter((name) => /^\d+-/.test(name) && Number(name.split('-')[0]) === Number(phase)
     && fs.lstatSync(path.join(root, name)).isDirectory());
   if (matches.length !== 1) {
     fail('PHASE_DIRECTORY_MISSING', 'expected exactly one phase directory for phase ' + phase + ', found ' + matches.length);
   }
-  return path.join(root, matches[0]);
+  const directory = path.join(root, matches[0]);
+  if (fs.realpathSync(directory) !== directory) fail('PHASE_DIRECTORY_MISSING', 'phase directory is not canonical');
+  return directory;
 }
 
 function researchArtifact(worktree, phase) {
@@ -179,7 +183,7 @@ function sealResearchArtifact(scope, root, output, leaseCtx) {
 function sealPlans(scope, root, output, leaseCtx) {
   const directory = phaseDirectory(scope.worktree, scope.phase);
   assertContained({ worktree: scope.worktree, allowed: [path.relative(scope.worktree, directory)] });
-  const names = fs.readdirSync(directory).filter((name) => /^\d+-\d+-PLAN\.md$/.test(name)).sort();
+  const names = fs.readdirSync(directory).filter((name) => new RegExp(`^${scope.phase}-[0-9]+-PLAN\\.md$`).test(name)).sort();
   if (!names.length) fail('MISSING_ARTIFACT', 'no materialized PLAN.md files were found in ' + directory);
   const plans = [...(fs.existsSync(path.join(directory, 'CONTEXT.md')) ? ['CONTEXT.md'] : []), ...names]
     .map((name) => path.join(directory, name));
@@ -333,8 +337,8 @@ function declaredArtifactPaths(message, scope, gsdRole, code = 'RECOVERY_EVIDENC
   if (new Set(declared).size !== declared.length) fail(code, 'authenticated child declared duplicate artifact paths');
   if (gsdRole === 'gsd-phase-researcher') {
     const expected = path.relative(directory, researchArtifact(scope.worktree, scope.phase)).split(path.sep).join('/');
-    if (declared.length !== 1 || declared[0] !== expected) {
-      fail(code, 'researcher must declare the phase research artifact it wrote');
+    if (declared.length > 1 || (declared.length === 1 && declared[0] !== expected)) {
+      fail(code, 'researcher may declare only the phase research artifact it wrote');
     }
   }
   if (gsdRole === 'gsd-plan-checker' && declared.length !== 0) {
@@ -599,6 +603,7 @@ function createCodexDecomposeHost(options = {}) {
             binding,
             reservation: { dispatch_id: reservation.dispatch_id, reserved_at: reservation.reserved_at },
             lease_epoch: leaseCtx.epoch,
+            writer_lease_file: leaseCtx.writerLease.file,
             tree_snapshot: leaseCtx.snapshot,
             launched_at: new Date().toISOString(),
           } : null;
@@ -666,6 +671,9 @@ function createCodexDecomposeHost(options = {}) {
               'ARTIFACT_DECLARATION_INVALID');
             const digests = artifactDigests(scope, leaseCtx.writerLease, leaseCtx.snapshot, declared,
               'ARTIFACT_DECLARATION_INVALID');
+            const fullOutputManifest = captureSealManifest({ role: request.gsd_role,
+              phaseDir: phaseDirectory(scope.worktree, scope.phase), snapshot: leaseCtx.snapshot,
+              declared, changed: Object.keys(digests).sort() });
             const completedRecord = {
               launch_id: completed.launch_id,
               parent_session_id: completed.session_id,
@@ -678,6 +686,7 @@ function createCodexDecomposeHost(options = {}) {
               declared_paths: declared,
               changed_paths: Object.keys(digests).sort(),
               artifact_digests: digests,
+              full_output_manifest: fullOutputManifest,
               runtime_evidence: runtimeEvidence,
             };
             return completedRecord;
@@ -788,6 +797,7 @@ function createCodexDecomposeHost(options = {}) {
             const durable = readLaunchRecord(options.launchDir, recordedDispatchId);
             const completed = durable.completed;
             if (!object(completed) || !object(completed.artifact_digests)
+                || !object(completed.full_output_manifest)
                 || !Array.isArray(completed.declared_paths) || !Array.isArray(completed.changed_paths)
                 || !object(durable.process_spawned)
                 || durable.process_spawned.pid !== durable.session_started?.process_id
@@ -807,10 +817,21 @@ function createCodexDecomposeHost(options = {}) {
             if (canonicalJson(current) !== canonicalJson(completed.artifact_digests)) {
               fail('RECOVERY_ARTIFACT_ALTERED', 'completed artifact bytes changed before recorder mutation');
             }
+            assertSealManifest({ role: request.gsd_role, phaseDir: directory,
+              snapshot: leaseCtx.snapshot, declared: completed.declared_paths,
+              changed: completed.changed_paths, outputs: completed.full_output_manifest,
+              lease: leaseCtx.writerLease });
           },
         },
       });
       const recoveredFields = recovering ? { recovered: true, recovered_output: runOptions.recovered.output } : null;
+      if (leaseCtx && options.launchDir) {
+        const completed = readLaunchRecord(options.launchDir, output.receipt.dispatch_id).completed;
+        assertSealManifest({ role: request.gsd_role,
+          phaseDir: phaseDirectory(scope.worktree, scope.phase), snapshot: leaseCtx.snapshot,
+          declared: completed.declared_paths, changed: completed.changed_paths,
+          outputs: completed.full_output_manifest, lease: leaseCtx.writerLease });
+      }
       if (request.gsd_role === 'gsd-phase-researcher') {
         const sealed = sealResearchArtifact(scope, sealRoot, output, leaseCtx);
         return recoveredFields ? Object.freeze({ ...sealed, ...recoveredFields }) : sealed;
@@ -1018,10 +1039,21 @@ async function recoverCli(argv, stdout, options) {
     ...(options.leaseTtlMs === undefined ? {} : { leaseTtlMs: options.leaseTtlMs }),
     ...(options.now === undefined ? {} : { now: options.now }),
   });
+  assertNoLegacyPlanningWriter({ worktree: scope.worktree, phaseDir,
+    roots: legacyPlanningWriterRoots({ worktree: scope.worktree, phase: scope.phase,
+      repository: scope.repository, privateRoots: [path.join(hostStateDir, 'writer')] }) });
   const writerLease = options.writerLease || createPlanningWriterLease({
-    worktree: scope.worktree, phaseDir, stateRoot: path.join(hostStateDir, 'writer'),
+    worktree: scope.worktree, phaseDir, stateRoot: sharedPlanningWriterRoot(options.testWriterStateRoot),
     ...(options.now === undefined ? {} : { now: options.now }),
   });
+  const priorReservation = createDurableRecorder(options.recorderDir || path.join(hostStateDir, 'receipts'))
+    .getReservation(dispatchId);
+  if (!priorReservation) fail('RECOVERY_NO_RESERVATION', 'dispatch ' + dispatchId + ' has no durable reservation');
+  if (priorReservation.recorded) fail('RECOVERY_ALREADY_RECORDED', 'dispatch ' + dispatchId + ' already has a durable record');
+  const originalLaunch = readLaunchRecord(options.launchDir || path.join(hostStateDir, 'launches'), dispatchId);
+  if (typeof writerLease.file !== 'string' || originalLaunch.writer_lease_file !== writerLease.file) {
+    fail('LEGACY_WRITER_STATE', 'original dispatch used another writer namespace');
+  }
   const leaseHandle = writerLease.recover({
     owner: JSON.stringify({ run_id: scope.run_id, owner_id: controller.owner_id, recovery: dispatchId }),
     reason: 'recover completed typed GSD dispatch ' + dispatchId,
@@ -1070,6 +1102,7 @@ async function recoverCli(argv, stdout, options) {
     }
     if (!object(completed) || typeof completed.parent_session_id !== 'string'
         || !object(completed.runtime_evidence) || !object(completed.artifact_digests)
+        || !object(completed.full_output_manifest)
         || !Array.isArray(completed.declared_paths) || !Array.isArray(completed.changed_paths)) {
       fail('RECOVERY_EVIDENCE_INCOMPLETE', 'dispatch ' + dispatchId + ' has no original completed checkpoint');
     }
@@ -1119,6 +1152,9 @@ async function recoverCli(argv, stdout, options) {
     if (canonicalJson(currentDigests) !== canonicalJson(completed.artifact_digests)) {
       fail('RECOVERY_ARTIFACT_ALTERED', 'phase artifacts differ from the digests recorded when the child completed');
     }
+    assertSealManifest({ role: request.gsd_role, phaseDir: phaseDirectory(scope.worktree, scope.phase),
+      snapshot: record.tree_snapshot, declared: completed.declared_paths,
+      changed: completed.changed_paths, outputs: completed.full_output_manifest, lease: writerLease });
     controller.begin(createRunScope({
       run_id: scope.run_id,
       repository_id: typeof repository === 'string' ? repository
@@ -1209,8 +1245,11 @@ async function runCli(argv = process.argv.slice(2), stdout = process.stdout, opt
     ...(options.now === undefined ? {} : { now: options.now }),
   });
   const phaseDir = phaseDirectory(scope.worktree, scope.phase);
+  assertNoLegacyPlanningWriter({ worktree: scope.worktree, phaseDir,
+    roots: legacyPlanningWriterRoots({ worktree: scope.worktree, phase: scope.phase,
+      repository: scope.repository, privateRoots: [path.join(hostStateDir, 'writer')] }) });
   const writerLease = options.writerLease || createPlanningWriterLease({
-    worktree: scope.worktree, phaseDir, stateRoot: path.join(hostStateDir, 'writer'),
+    worktree: scope.worktree, phaseDir, stateRoot: sharedPlanningWriterRoot(options.testWriterStateRoot),
     ...(options.now === undefined ? {} : { now: options.now }),
   });
   const leaseHandle = writerLease.acquire({

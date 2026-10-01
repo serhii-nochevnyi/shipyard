@@ -16,7 +16,8 @@ const { matchesModelObservation } = require('./runtime-adapters.cjs');
 const pipelineConfig = require('./pipeline-config.cjs');
 const { formatHint } = require('./refusal-hints.cjs');
 const { sealDecomposition } = require('./planning-result-sealer.cjs');
-const { createPlanningWriterLease } = require('./planning-writer-lease.cjs');
+const { createPlanningWriterLease, sharedPlanningWriterRoot, legacyPlanningWriterRoots,
+  assertNoLegacyPlanningWriter, captureSealManifest, assertSealManifest } = require('./planning-writer-lease.cjs');
 
 const ROLES = Object.freeze({
   'gsd-phase-researcher': 'research',
@@ -138,18 +139,26 @@ function phaseDirectory(worktree, phase) {
   } catch (error) {
     refuse('PHASE_DIRECTORY_MISSING', `phase directory root is unavailable: ${error.message}`);
   }
+  if (fs.realpathSync(phasesRoot) !== phasesRoot) {
+    refuse('PHASE_DIRECTORY_MISSING', 'phase directory root is not canonical');
+  }
   const matches = names.filter((name) => /^\d+-/.test(name) && Number(name.split('-')[0]) === Number(phase)
     && fs.lstatSync(path.join(phasesRoot, name)).isDirectory());
   if (matches.length !== 1) {
     refuse('PHASE_DIRECTORY_MISSING', `expected exactly one phase directory for phase ${phase}, found ${matches.length}`);
   }
-  return path.join(phasesRoot, matches[0]);
+  const directory = path.join(phasesRoot, matches[0]);
+  if (fs.realpathSync(directory) !== directory) {
+    refuse('PHASE_DIRECTORY_MISSING', 'phase directory is not canonical');
+  }
+  return directory;
 }
 
 function decompositionPlans(directory) {
   const contextPath = path.join(directory, 'CONTEXT.md');
   if (!fs.existsSync(contextPath)) refuse('MISSING_ARTIFACT', `phase CONTEXT.md is missing: ${contextPath}`);
-  const planNames = fs.readdirSync(directory).filter((name) => /^\d+-\d+-PLAN\.md$/.test(name)).sort();
+  const phase = Number(path.basename(directory).split('-')[0]);
+  const planNames = fs.readdirSync(directory).filter((name) => new RegExp(`^${phase}-[0-9]+-PLAN\\.md$`).test(name)).sort();
   if (!planNames.length) refuse('MISSING_ARTIFACT', `no materialized PLAN.md files were found in ${directory}`);
   return [contextPath, ...planNames.map((name) => path.join(directory, name))];
 }
@@ -287,7 +296,8 @@ function validateJudgmentWriter(scope, directory, writerLease, leaseHandle, snap
     base_revision: git(scope.worktree, 'rev-parse', 'HEAD') });
   const completed = launch.completed;
   if (!object(completed) || !Array.isArray(completed.declared_paths)
-      || !Array.isArray(completed.changed_paths) || !object(completed.artifact_digests)) {
+      || !Array.isArray(completed.changed_paths) || !object(completed.artifact_digests)
+      || !object(completed.full_output_manifest)) {
     refuse('RECOVERY_EVIDENCE_INCOMPLETE', 'typed Claude dispatch lacks its original completed checkpoint');
   }
   const declared = completed.declared_paths;
@@ -302,6 +312,9 @@ function validateJudgmentWriter(scope, directory, writerLease, leaseHandle, snap
       || declared.some((item) => fileDigest(path.join(directory, item)) !== completed.artifact_digests[item])) {
     refuse('RECOVERY_ARTIFACT_ALTERED', 'completed Claude artifact bytes changed before recorder mutation');
   }
+  assertSealManifest({ role: scope.role, phaseDir: directory, snapshot,
+    declared, changed: completed.changed_paths, outputs: completed.full_output_manifest,
+    lease: writerLease });
 }
 
 async function runDecomposition(request, dependencies = {}) {
@@ -312,8 +325,11 @@ async function runDecomposition(request, dependencies = {}) {
   const controller = (dependencies.controllerFactory || createRunController)({ storeDir: path.join(store, 'runs') });
   const runId = `decompose-${crypto.randomUUID()}`;
   const dispatchId = `decompose-${crypto.randomUUID()}`;
+  assertNoLegacyPlanningWriter({ worktree: scope.worktree, phaseDir,
+    roots: legacyPlanningWriterRoots({ worktree: scope.worktree, phase: scope.phase,
+      repository: scope.repository, privateRoots: [path.join(store, 'writer')] }) });
   const writerLease = dependencies.writerLease || createPlanningWriterLease({
-    worktree: scope.worktree, phaseDir, stateRoot: path.join(store, 'writer'),
+    worktree: scope.worktree, phaseDir, stateRoot: sharedPlanningWriterRoot(dependencies.testWriterStateRoot),
   });
   let leaseHandle;
   try {
@@ -350,6 +366,7 @@ async function runDecomposition(request, dependencies = {}) {
       const launchRecord = {
         dispatch_id: dispatchId, run_id: runId, session_id: sessionId,
         lease_epoch: leaseHandle.epoch, tree_snapshot: preLaunchSnapshot,
+        writer_lease_file: writerLease.file,
         request, resolution: { model: resolution.model, effort: resolution.effort,
           policy_hash: resolution.policy_hash ?? null, policy_version: resolution.policy_version ?? null,
           policy_id: resolution.policy_id ?? null, rung: resolution.rung ?? resolution.policy_rung ?? null },
@@ -381,6 +398,7 @@ async function runDecomposition(request, dependencies = {}) {
             writeLaunch(store, launchRecord);
           },
           onCompleted: (completed) => {
+            if (scope.role === 'gsd-planner') decompositionPlans(phaseDir);
             const changed = writerLease.changedSince(preLaunchSnapshot).changed;
             const declared = declaredChanges({ output: completed.output }, phaseDir);
             if (!sameValue(changed, declared)) refuse('RECOVERY_ARTIFACT_ALTERED', 'final assistant declaration differs from completed phase changes');
@@ -388,6 +406,8 @@ async function runDecomposition(request, dependencies = {}) {
             if (Object.values(artifactDigests).some((digest) => digest === null)) {
               refuse('RECOVERY_ARTIFACT_ALTERED', 'completed artifact is missing');
             }
+            const fullOutputManifest = captureSealManifest({ role: scope.role, phaseDir,
+              snapshot: preLaunchSnapshot, declared, changed });
             const reservation = recorder.getReservation(dispatchId);
             if (!reservation || reservation.recorded || !reservation.reserved_at) {
               refuse('RECOVERY_NO_RESERVATION', 'completed Claude launch has no original reservation');
@@ -400,6 +420,7 @@ async function runDecomposition(request, dependencies = {}) {
               selection_sha256: completed.applicationEvidence.selection_evidence.transcript.sha256,
               start_sha256: fileDigest(startEvidenceFile),
               declared_paths: declared, changed_paths: changed, artifact_digests: artifactDigests,
+              full_output_manifest: fullOutputManifest,
             };
             launchRecord.saved_native_transcript = selectionPath;
             launchRecord.saved_native_transcript_sha256 = launchRecord.completed.selection_sha256;
@@ -427,6 +448,8 @@ async function runDecomposition(request, dependencies = {}) {
         }
         if (heartbeatFailure) throw heartbeatFailure;
         controller.assertOwner(runId);
+        if (launchRecord.completed) validateJudgmentWriter(
+          scope, phaseDir, writerLease, leaseHandle, preLaunchSnapshot, launchRecord);
         let envelope = null;
         if (ROLES[scope.role] === 'decomposition') {
           writerLease.assertFence({ token: leaseHandle.token, epoch: leaseHandle.epoch,
@@ -511,9 +534,15 @@ async function recoverDecomposition(dispatchId, dependencies = {}) {
   if (!dependencies.store && privateStore(scope) !== store) refuse('RECOVERY_EVIDENCE_MISSING', 'launch record belongs to another scope');
   const phaseDir = phaseDirectory(scope.worktree, scope.phase);
   const controller = (dependencies.controllerFactory || createRunController)({ storeDir: path.join(store, 'recovery-runs') });
+  assertNoLegacyPlanningWriter({ worktree: scope.worktree, phaseDir,
+    roots: legacyPlanningWriterRoots({ worktree: scope.worktree, phase: scope.phase,
+      repository: scope.repository, privateRoots: [path.join(store, 'writer')] }) });
   const writerLease = dependencies.writerLease || createPlanningWriterLease({
-    worktree: scope.worktree, phaseDir, stateRoot: path.join(store, 'writer'),
+    worktree: scope.worktree, phaseDir, stateRoot: sharedPlanningWriterRoot(dependencies.testWriterStateRoot),
   });
+  if (typeof writerLease.file !== 'string' || launch.writer_lease_file !== writerLease.file) {
+    refuse('LEGACY_WRITER_STATE', 'original Claude dispatch used another writer namespace');
+  }
   const leaseHandle = writerLease.recover({
     owner: JSON.stringify({ run_id: launch.run_id, owner_id: controller.owner_id, recovery: dispatchId }),
     reason: `recover completed Claude dispatch ${dispatchId}`,
@@ -537,6 +566,7 @@ async function recoverDecomposition(dispatchId, dependencies = {}) {
         || typeof launch.completed.start_sha256 !== 'string'
         || !object(launch.completed.artifact_digests) || !Array.isArray(launch.completed.declared_paths)
         || !Array.isArray(launch.completed.changed_paths)
+        || !object(launch.completed.full_output_manifest)
         || typeof launch.saved_native_transcript !== 'string'
         || !Number.isSafeInteger(launch.saved_native_transcript_bytes)
         || launch.saved_native_transcript_bytes <= 0
@@ -613,6 +643,7 @@ async function recoverDecomposition(dispatchId, dependencies = {}) {
         scope, phaseDir, writerLease, leaseHandle, launch.tree_snapshot, launch),
     });
     const output = { result: verified.result, receipt: record.receipt };
+    validateJudgmentWriter(scope, phaseDir, writerLease, leaseHandle, launch.tree_snapshot, launch);
     if (!receiptCompliant(output, scope, resolution)) {
       refuse('NONCOMPLIANT_RECEIPT', 'typed GSD dispatch has no compliant exact-role receipt');
     }

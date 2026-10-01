@@ -17,8 +17,9 @@ const {
 const { createClaudeCliLauncher } = require('../../plugins/delivery-pipeline/scripts/claude-runtime-host.cjs');
 const { capture: captureSessionStart } = require('../../plugins/delivery-pipeline/scripts/claude-agent-start-hook.cjs');
 const {
-  runClaudeWorkflow,
+  runClaudeWorkflow, registerClaudeWorkflowHost, WORKFLOW_SCRIPTS,
 } = require('../../plugins/delivery-pipeline/scripts/claude-workflow-host.cjs');
+const { WORKFLOWS } = require('../../plugins/delivery-pipeline/scripts/claude-delivery-host.cjs');
 const {
   INVESTIGATION_RESEARCH_SCRIPT,
   registerInvestigationWorkflowHost,
@@ -112,6 +113,25 @@ async function replayedHostResult(options, transform = (record) => record) {
 }
 
 suite('claude-workflow-host — production sixth binding');
+
+test('fixed delivery and registered workflow names exclude named GSD dispatch', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-workflow-reachability-'));
+  let typedCalls = 0;
+  try {
+    assert.deepEqual([...WORKFLOWS].sort(), Object.keys(WORKFLOW_SCRIPTS).sort());
+    assert.deepEqual([...WORKFLOWS].sort(), ['drift-gate', 'executors', 'fix-round', 'investigation-research']);
+    const registered = registerClaudeWorkflowHost({
+      agent: async () => { throw new Error('generic launch is unreachable'); },
+      parallel: async (thunks) => Promise.all(thunks.map((thunk) => thunk())),
+      typedGsdCallback: async () => { typedCalls++; throw new Error('typed launch is unreachable'); },
+      capabilities: OPUS_CAPABILITIES,
+      recorder: createDurableRecorder(path.join(root, 'receipts')),
+      applicationEvidence: ({ result }) => result,
+    });
+    assert.throws(() => registered.run('gsd-planner', { args: {} }), { code: 'INVALID_HOST' });
+    assert.equal(typedCalls, 0);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
 
 test('binds the real workflow bridge with host-owned receipt services', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-claude-workflow-host-'));
@@ -226,6 +246,7 @@ test('production investigation entry point pins the research workflow and runs a
   const recorder = createDurableRecorder(path.join(root, 'receipts'));
   const evidence = new WeakMap();
   const calls = [];
+  let typedCalls = 0;
   const lines = ['system-state', 'alternatives', 'constraints', 'risks'].map((id) => ({
     id,
     label: {
@@ -266,6 +287,7 @@ test('production investigation entry point pins the research workflow and runs a
         return result;
       },
       parallel: async (thunks) => Promise.all(thunks.map((thunk) => thunk())),
+      typedGsdCallback: async () => { typedCalls++; throw new Error('investigation cannot launch named GSD'); },
       capabilities: OPUS_CAPABILITIES,
       recorder,
       applicationEvidence: ({ result }) => evidence.get(result),
@@ -273,6 +295,7 @@ test('production investigation entry point pins the research workflow and runs a
     assert.match(INVESTIGATION_RESEARCH_SCRIPT, /workflows[\\/]investigation-research\.mjs$/);
     assert.equal(value.length, 4);
     assert.equal(calls.length, 4);
+    assert.equal(typedCalls, 0);
     for (const item of value) {
       assert.equal(item.receipt.compliance, 'verified');
       assert.equal(item.receipt.applied_model, 'claude-opus-5-5');

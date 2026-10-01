@@ -6,7 +6,8 @@ const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 const { spawn, spawnSync } = require('node:child_process');
-const { createPlanningWriterLease } = require('../../plugins/delivery-pipeline/scripts/planning-writer-lease.cjs');
+const { createPlanningWriterLease, sharedPlanningWriterRoot, assertNoLegacyPlanningWriter,
+  captureSealManifest, assertSealManifest } = require('../../plugins/delivery-pipeline/scripts/planning-writer-lease.cjs');
 
 const MODULE_PATH = path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'planning-writer-lease.cjs');
 
@@ -26,6 +27,64 @@ function deferred() {
   const promise = new Promise((res, rej) => { resolve = res; reject = rej; });
   return { promise, resolve, reject };
 }
+
+test('canonical aliases address one shared physical writer and release permits reacquisition', () => fixture(({ stateRoot, worktree }) => {
+  const phaseDir = path.join(worktree, '.planning', 'phases', '38-phase');
+  fs.mkdirSync(phaseDir, { recursive: true });
+  const alias = path.join(stateRoot, 'phase-alias');
+  fs.symlinkSync(phaseDir, alias);
+  const shared = sharedPlanningWriterRoot(path.join(stateRoot, 'shared'));
+  const claude = createPlanningWriterLease({ stateRoot: shared, worktree, phaseDir });
+  const codex = createPlanningWriterLease({ stateRoot: shared, worktree, phaseDir: alias });
+  assert.equal(claude.file, codex.file);
+  const first = claude.acquire({ owner: 'claude', base_revision: 'rev' });
+  const original = fs.readFileSync(claude.file, 'utf8');
+  assert.throws(() => codex.acquire({ owner: 'codex', base_revision: 'rev' }), { code: 'WRITER_LEASED' });
+  assert.equal(fs.readFileSync(claude.file, 'utf8'), original);
+  claude.release(first);
+  const next = codex.acquire({ owner: 'codex', base_revision: 'rev' });
+  assert.ok(next.epoch > first.epoch);
+  codex.release(next);
+}));
+
+test('full completion manifest binds unchanged PLAN and CONTEXT bytes alongside a changed PLAN', () => fixture(({ stateRoot, worktree }) => {
+  const phaseDir = path.join(worktree, '38-phase');
+  fs.mkdirSync(phaseDir);
+  fs.writeFileSync(path.join(phaseDir, 'CONTEXT.md'), '# Context\n');
+  fs.writeFileSync(path.join(phaseDir, '38-01-PLAN.md'), '# First\n');
+  fs.writeFileSync(path.join(phaseDir, '38-02-PLAN.md'), '# Second\n');
+  const lease = createPlanningWriterLease({ stateRoot, worktree, phaseDir });
+  const snapshot = lease.snapshotTree();
+  fs.writeFileSync(path.join(phaseDir, '38-01-PLAN.md'), '# Edited\n');
+  const declared = ['38-01-PLAN.md'];
+  const outputs = captureSealManifest({ role: 'gsd-planner', phaseDir, snapshot,
+    declared, changed: lease.changedSince(snapshot).changed });
+  assert.deepEqual(Object.keys(outputs).sort(), ['38-01-PLAN.md', '38-02-PLAN.md', 'CONTEXT.md']);
+  assert.equal(outputs['38-02-PLAN.md'].origin, 'unchanged-baseline');
+  assert.equal(outputs['CONTEXT.md'].origin, 'unchanged-baseline');
+  assertSealManifest({ role: 'gsd-planner', phaseDir, snapshot, declared,
+    changed: declared, outputs, lease });
+  fs.writeFileSync(path.join(phaseDir, 'CONTEXT.md'), '# Tampered\n');
+  assert.throws(() => assertSealManifest({ role: 'gsd-planner', phaseDir, snapshot,
+    declared, changed: declared, outputs, lease }), { code: 'FOREIGN_EDIT' });
+}));
+
+test('legacy private active and corrupt leases refuse without changing their bytes', () => fixture(({ stateRoot, worktree }) => {
+  const phaseDir = path.join(worktree, '38-phase');
+  fs.mkdirSync(phaseDir);
+  const privateRoot = path.join(stateRoot, 'private');
+  const lease = createPlanningWriterLease({ stateRoot: privateRoot, worktree, phaseDir });
+  lease.acquire({ owner: 'legacy', base_revision: 'rev' });
+  const before = fs.readFileSync(lease.file);
+  assert.throws(() => assertNoLegacyPlanningWriter({ worktree, phaseDir, roots: [privateRoot] }),
+    { code: 'LEGACY_WRITER_STATE' });
+  assert.deepEqual(fs.readFileSync(lease.file), before);
+  fs.writeFileSync(lease.file, '{invalid');
+  const corrupt = fs.readFileSync(lease.file);
+  assert.throws(() => assertNoLegacyPlanningWriter({ worktree, phaseDir, roots: [privateRoot] }),
+    { code: 'LEGACY_WRITER_STATE' });
+  assert.deepEqual(fs.readFileSync(lease.file), corrupt);
+}));
 
 test('a stateRoot inside the worktree is refused', () => fixture(({ worktree }) => {
   assert.throws(() => createPlanningWriterLease({ stateRoot: worktree, worktree, phaseDir: 'phase' }),

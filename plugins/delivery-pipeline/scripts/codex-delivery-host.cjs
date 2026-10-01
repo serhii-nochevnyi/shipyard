@@ -22,6 +22,8 @@ const { recordInflight, clearInflight } = require('./dispatch-record.cjs');
 const { acquire: acquireLock, DEFAULT_TTL_MS: LOCK_TTL_MS } = require('./lock.cjs');
 const { assertCanonicalGraph, deliverPlan } = require('./plan-delivery.cjs');
 const { isScratch } = require('./conveyor-scratch.cjs');
+const { createPlanningWriterLease, sharedPlanningWriterRoot, legacyPlanningWriterRoots,
+  assertNoLegacyPlanningWriter, captureSealManifest, assertSealManifest } = require('./planning-writer-lease.cjs');
 
 const SCHEMA = 'shipyard.codex-delivery-host.v1';
 const MAX_ARGS_BYTES = 4 * 1024 * 1024;
@@ -42,6 +44,26 @@ const PLAN_EXECUTABLE_ALLOWLIST = Object.freeze({
   bash: Object.freeze(['/bin/bash', '/usr/bin/bash']),
   make: Object.freeze(['/usr/bin/make', '/bin/make']),
 });
+const GSD_DELIVERY_ROLES = Object.freeze({
+  'gsd-phase-researcher': 'research',
+  'gsd-planner': 'decomposition',
+  'gsd-plan-checker': 'decomposition',
+});
+
+function typedPhaseDirectory(worktree, phase) {
+  const root = path.join(fs.realpathSync(worktree), '.planning', 'phases');
+  let entries;
+  try { entries = fs.readdirSync(root); }
+  catch { fail('WRITER_FENCED', 'scoped phase directory is unavailable'); }
+  const names = entries.filter((name) => /^\d+-/.test(name)
+    && Number(name.split('-')[0]) === Number(phase)
+    && fs.lstatSync(path.join(root, name)).isDirectory());
+  if (names.length !== 1) fail('WRITER_FENCED', 'scoped phase directory is unavailable or ambiguous');
+  const directory = path.join(root, names[0]);
+  const real = fs.realpathSync(directory);
+  if (real !== directory) fail('WRITER_FENCED', 'scoped phase directory is not canonical');
+  return real;
+}
 
 function object(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -1216,30 +1238,29 @@ function createCodexDeliveryHost(options = {}) {
         !== JSON.stringify(Object.entries(writerSession.lease.snapshotTree().digests).sort()))) {
     fail('WRITER_FENCED', 'host writer snapshot is not bound to the acquired phase');
   }
+  if (writerSession) {
+    const phaseDir = typedPhaseDirectory(scope.worktree, scope.phase);
+    const worktreeReal = fs.realpathSync(scope.worktree);
+    if (typeof writerSession.phaseDir !== 'string' || fs.realpathSync(writerSession.phaseDir) !== phaseDir
+        || writerSession.lease.key !== crypto.createHash('sha256')
+          .update(`${worktreeReal}\n${phaseDir}`).digest('hex')) {
+      fail('WRITER_FENCED', 'host writer lease is not bound to the scoped phase');
+    }
+  }
   const completedTyped = new Map();
   const preRecordValidation = writerSession && function validateHostWriter({ dispatch_id: dispatchId, gsd_role: gsdRole, receipt }) {
-    const { lease, handle, base_revision: baseRevision, snapshot, phaseDir, declaredPaths } = writerSession;
+    const { lease, handle, base_revision: baseRevision, snapshot, phaseDir } = writerSession;
     if (!lease || lease.schema !== 'shipyard.planning-writer-lease.v1'
         || typeof lease.assertFence !== 'function' || typeof lease.changedSince !== 'function'
         || !object(handle) || typeof handle.token !== 'string' || !Number.isSafeInteger(handle.epoch)
         || typeof baseRevision !== 'string' || snapshot?.schema !== 'shipyard.planning-writer-lease.snapshot.v1'
-        || typeof phaseDir !== 'string' || !path.isAbsolute(phaseDir) || !Array.isArray(declaredPaths)
-        || declaredPaths.some((item) => typeof item !== 'string' || !item.trim()
-          || path.isAbsolute(item) || item.split(/[\\/]/).includes('..'))) {
+        || typeof phaseDir !== 'string' || !path.isAbsolute(phaseDir)) {
       fail('WRITER_FENCED', 'host writer session is incomplete');
     }
     const worktree = fs.realpathSync(scope.worktree);
-    const phasesRoot = path.join(worktree, '.planning', 'phases');
-    let names;
-    try { names = fs.readdirSync(phasesRoot); }
-    catch (_) { fail('WRITER_FENCED', 'scoped phase directory is unavailable'); }
-    const matches = names.filter((name) => /^\d+-/.test(name)
-      && Number(name.split('-')[0]) === Number(scope.phase)
-      && fs.lstatSync(path.join(phasesRoot, name)).isDirectory());
-    if (matches.length !== 1) fail('WRITER_FENCED', 'scoped phase directory is unavailable or ambiguous');
-    const expectedPhase = fs.realpathSync(path.join(phasesRoot, matches[0]));
+    const expectedPhase = typedPhaseDirectory(worktree, scope.phase);
     if (fs.realpathSync(phaseDir) !== expectedPhase
-        || lease.key !== crypto.createHash('sha256').update(`${worktree}\n${phaseDir}`).digest('hex')) {
+        || lease.key !== crypto.createHash('sha256').update(`${worktree}\n${expectedPhase}`).digest('hex')) {
       fail('WRITER_FENCED', 'host writer lease is not bound to the scoped phase');
     }
     const completed = completedTyped.get(dispatchId);
@@ -1266,16 +1287,14 @@ function createCodexDeliveryHost(options = {}) {
       return relative;
     }).sort();
     if (new Set(outputPaths).size !== outputPaths.length
-        || JSON.stringify(outputPaths) !== JSON.stringify([...declaredPaths].sort())) {
+        || JSON.stringify(outputPaths) !== JSON.stringify(completed.declared_paths)) {
       fail('FOREIGN_EDIT', 'host declaration differs from authenticated typed output');
     }
-    lease.assertFence({ token: handle.token, epoch: handle.epoch, base_revision: baseRevision });
-    const allowed = new Set(declaredPaths.map((item) => item.replace(/\\/g, '/')));
-    const { changed } = lease.changedSince(snapshot);
-    const foreign = changed.filter((item) => !allowed.has(item));
-    if (foreign.length || changed.length !== allowed.size || allowed.size !== declaredPaths.length) {
-      fail('FOREIGN_EDIT', `foreign phase edit or declared path mismatch: ${foreign.join(', ')}`);
-    }
+    lease.assertFence({ token: handle.token, epoch: handle.epoch,
+      base_revision: git(worktree, ['rev-parse', 'HEAD']) });
+    assertSealManifest({ role: gsdRole, phaseDir: expectedPhase, snapshot,
+      declared: completed.declared_paths, changed: completed.changed_paths,
+      outputs: completed.full_output_manifest, lease });
   };
   if (!runtimeHost || !object(runtimeHost.capabilities) || !runtimeHost.recorder) {
     fail('MISSING_ADAPTER', 'scoped Codex runtime host lacks capabilities or durable recorder');
@@ -1294,6 +1313,9 @@ function createCodexDeliveryHost(options = {}) {
     resumeFinalization: (candidateId, liveScope) => resumeFinalization(options, candidateId, liveScope),
     async run(rawRequest) {
       const request = requestValue(rawRequest);
+      if (request.gsd_role !== undefined && GSD_DELIVERY_ROLES[request.gsd_role] !== request.role) {
+        fail('UNSUPPORTED_ROLE', 'typed GSD role does not match the delivery role');
+      }
       options.controller?.assertOwner(scope.run_id);
       const context = request.context;
       const prompt = context.prompt || context.task_prompt || context.input;
@@ -1340,8 +1362,45 @@ function createCodexDeliveryHost(options = {}) {
             return runtimeHost.launchTypedGsd(selection, {
               ...launchContext,
               onCompleted(completed) {
+                if (!writerSession) fail('WRITER_FENCED', 'typed delivery has no acquired writer session');
+                if (completedTyped.has(launchContext.dispatch_id)) {
+                  fail('RUNTIME_EVIDENCE_MISMATCH', 'typed delivery completed more than once');
+                }
+                if (typeof completed.launch_id !== 'string' || !completed.launch_id
+                    || typeof completed.session_id !== 'string' || !completed.session_id
+                    || typeof completed.last_agent_message !== 'string') {
+                  fail('RUNTIME_EVIDENCE_MISMATCH', 'typed delivery has no bound native completion');
+                }
+                const phaseDir = typedPhaseDirectory(scope.worktree, scope.phase);
+                let declaration;
+                try { declaration = JSON.parse(completed.last_agent_message); }
+                catch { fail('ARTIFACT_DECLARATION_INVALID', 'native typed completion has invalid JSON'); }
+                if (!object(declaration) || declaration.schema !== 'shipyard.codex-decompose-output.v1'
+                    || !Array.isArray(declaration.artifact_paths)) {
+                  fail('ARTIFACT_DECLARATION_INVALID', 'native typed completion has no artifact declaration');
+                }
+                const declared = declaration.artifact_paths.map((item) => {
+                  if (typeof item !== 'string' || !item || path.isAbsolute(item) || item.includes('\\')
+                      || path.posix.normalize(item) !== item || item.split('/').includes('..')) {
+                    fail('ARTIFACT_DECLARATION_INVALID', 'native typed completion declared an invalid path');
+                  }
+                  const rel = path.relative(phaseDir, path.resolve(fs.realpathSync(scope.worktree), item))
+                    .split(path.sep).join('/');
+                  if (!rel || rel === '..' || rel.startsWith('../') || path.isAbsolute(rel)) {
+                    fail('ARTIFACT_DECLARATION_INVALID', 'native typed completion declared a foreign phase path');
+                  }
+                  return rel;
+                }).sort();
+                const changed = writerSession.lease.changedSince(writerSession.snapshot).changed;
+                const fullOutputManifest = captureSealManifest({ role: launchContext.gsd_role,
+                  phaseDir, snapshot: writerSession.snapshot, declared, changed });
                 completedTyped.set(launchContext.dispatch_id, {
                   ...completed, gsd_role: launchContext.gsd_role,
+                  raw_child_paths: [...declaration.artifact_paths],
+                  declared_paths: declared, changed_paths: changed,
+                  full_output_manifest: fullOutputManifest,
+                  completion_message_sha256: crypto.createHash('sha256')
+                    .update(completed.last_agent_message).digest('hex'),
                 });
               },
             });
@@ -1486,11 +1545,32 @@ async function runCli(argv = process.argv.slice(2), stdout = process.stdout, opt
   const parsed = readRequestFile(parseCliArguments(argv));
   const scope = canonicalCliScope(parsed.scope);
   const request = parsed.launch;
+  if (request.gsd_role !== undefined && GSD_DELIVERY_ROLES[request.gsd_role] !== request.role) {
+    fail('UNSUPPORTED_ROLE', 'typed GSD role does not match the delivery role');
+  }
   const dispatchId = request.dispatch_id || newDispatchId();
   const resolution = policy.resolveDispatch({
     runtime: 'codex', role: request.role,
     signals: request.signals, dispatch_id: dispatchId,
   });
+  let writerLease;
+  let writerHandle;
+  let writerSession;
+  let primaryError;
+  try {
+  if (request.gsd_role !== undefined) {
+    const phaseDir = typedPhaseDirectory(scope.worktree, scope.phase);
+    assertNoLegacyPlanningWriter({ worktree: scope.worktree, phaseDir,
+      roots: legacyPlanningWriterRoots({ worktree: scope.worktree, phase: scope.phase,
+        repository: scope.repository }) });
+    writerLease = createPlanningWriterLease({ worktree: scope.worktree, phaseDir,
+      stateRoot: sharedPlanningWriterRoot(options.testWriterStateRoot) });
+    const baseRevision = git(scope.worktree, ['rev-parse', 'HEAD']);
+    writerHandle = writerLease.acquire({ owner: JSON.stringify({ run_id: scope.run_id,
+      dispatch_id: dispatchId, pid: process.pid }), base_revision: baseRevision });
+    writerSession = { lease: writerLease, handle: writerHandle, base_revision: baseRevision,
+      phaseDir, snapshot: writerLease.snapshotTree() };
+  }
   const stateDir = storageDirectory(options, scope);
   const controller = createRunController({
     storeDir: path.join(stateDir, 'runs'),
@@ -1519,7 +1599,10 @@ async function runCli(argv = process.argv.slice(2), stdout = process.stdout, opt
     Math.max(1_000, Math.floor((options.leaseTtlMs || DEFAULT_LEASE_TTL_MS) / 3)));
   let heartbeatError = null;
   const heartbeat = setInterval(() => {
-    try { controller.heartbeat(scope.run_id); }
+    try {
+      controller.heartbeat(scope.run_id);
+      if (writerHandle) writerLease.heartbeat(writerHandle);
+    }
     catch (error) { heartbeatError = error; clearInterval(heartbeat); }
   }, heartbeatMs);
   heartbeat.unref?.();
@@ -1555,6 +1638,7 @@ async function runCli(argv = process.argv.slice(2), stdout = process.stdout, opt
       hostVerificationRunner: options.hostVerificationRunner,
       scopedTree: options.scopedTree,
       host: options.host,
+      writerSession,
     });
     result = await host.run({ ...request, dispatch_id: dispatchId });
     clearInterval(heartbeat);
@@ -1592,6 +1676,18 @@ async function runCli(argv = process.argv.slice(2), stdout = process.stdout, opt
   }
   stdout.write(JSON.stringify(result) + '\n');
   return result;
+  } catch (error) {
+    primaryError = error;
+    throw error;
+  } finally {
+    if (writerHandle) {
+      try { writerLease.release({ token: writerHandle.token, epoch: writerHandle.epoch }); }
+      catch (releaseError) {
+        if (primaryError) primaryError.message += '; writer release failed: ' + releaseError.message;
+        else throw releaseError;
+      }
+    }
+  }
 }
 
 module.exports = Object.freeze({

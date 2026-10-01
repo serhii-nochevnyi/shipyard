@@ -3,6 +3,8 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const os = require('node:os');
+const { execFileSync } = require('node:child_process');
 const { withLock, writeAtomic } = require('./lock.cjs');
 
 const SCHEMA = 'shipyard.planning-writer-lease.v1';
@@ -80,13 +82,139 @@ function digestFile(file) {
   return crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
 }
 
+function sharedPlanningWriterRoot(testWriterStateRoot) {
+  return realpathClosest(testWriterStateRoot || path.join(os.userInfo().homedir,
+    '.local', 'state', 'shipyard', 'planning-writers', 'shared'));
+}
+
+function legacyPlanningWriterRoots({ worktree, phase, repository, privateRoots = [] }) {
+  const real = fs.realpathSync(worktree);
+  const homes = [...new Set([os.userInfo().homedir, os.homedir(), process.env.HOME]
+    .filter((item) => typeof item === 'string' && path.isAbsolute(item)))];
+  const codex = homes.map((home) => path.join(home, '.local', 'state', 'shipyard', 'codex-decompose',
+    crypto.createHash('sha256').update(real).digest('hex'), 'writer'));
+  const gitCommon = fs.realpathSync(path.resolve(real, execFileSync('git',
+    ['-C', real, 'rev-parse', '--git-common-dir'], { encoding: 'utf8', timeout: 10000 }).trim()));
+  const claude = [];
+  for (const home of homes) {
+    const claudeBase = path.join(home, '.local', 'state', 'shipyard', 'claude-decompose');
+    claude.push(...[repository, gitCommon].map((identity) => path.join(claudeBase,
+      crypto.createHash('sha256').update(`${identity}\n${real}\n${phase}`).digest('hex'), 'writer')));
+    try {
+      const entries = fs.readdirSync(claudeBase, { withFileTypes: true });
+      if (entries.length > 4096) fail('LEGACY_WRITER_STATE', 'private Claude writer root exceeds inspection bound');
+      for (const entry of entries) {
+        if (entry.isSymbolicLink()) fail('LEGACY_WRITER_STATE', 'private Claude writer root has a symbolic link');
+        if (entry.isDirectory()) claude.push(path.join(claudeBase, entry.name, 'writer'));
+      }
+    } catch (error) {
+      if (error.code !== 'ENOENT') {
+        if (error.code === 'LEGACY_WRITER_STATE') throw error;
+        fail('LEGACY_WRITER_STATE', 'private Claude writer root cannot be inspected');
+      }
+    }
+  }
+  return [...new Set([...codex, ...claude, ...privateRoots])];
+}
+
+function assertNoLegacyPlanningWriter({ worktree, phaseDir, roots = [] }) {
+  const key = crypto.createHash('sha256').update(`${fs.realpathSync(worktree)}\n${fs.realpathSync(phaseDir)}`).digest('hex');
+  for (const root of roots) {
+    const file = path.join(root, key, 'lease.json');
+    let raw;
+    try {
+      const stat = fs.lstatSync(file);
+      if (!stat.isFile() || stat.isSymbolicLink()) {
+        fail('LEGACY_WRITER_STATE', `private writer state is not a regular file at ${file}`);
+      }
+      raw = fs.readFileSync(file, 'utf8');
+    }
+    catch (error) {
+      if (error.code === 'ENOENT') continue;
+      fail('LEGACY_WRITER_STATE', `cannot inspect private writer state at ${file}`);
+    }
+    let record;
+    try { record = JSON.parse(raw); }
+    catch { fail('LEGACY_WRITER_STATE', `private writer state is corrupt at ${file}`); }
+    if (!object(record) || record.schema !== SCHEMA || record.status !== 'released'
+        || !Number.isSafeInteger(record.epoch) || record.epoch < 0
+        || typeof record.token !== 'string' || !/^[a-f0-9]{64}$/.test(record.token)
+        || typeof record.owner !== 'string' || !record.owner
+        || !Number.isSafeInteger(record.pid) || record.pid <= 0) {
+      fail('LEGACY_WRITER_STATE', `private writer ownership requires original recovery at ${file}`);
+    }
+  }
+}
+
+function sealOutputPaths(role, phaseDir) {
+  const phase = Number(path.basename(phaseDir).split('-')[0]);
+  if (!Number.isSafeInteger(phase) || phase <= 0) fail('INVALID_INPUT', 'invalid canonical phase directory');
+  if (role === 'gsd-plan-checker') return [];
+  if (role === 'gsd-phase-researcher') return [`${phase}-RESEARCH.md`];
+  if (role !== 'gsd-planner') fail('INVALID_INPUT', 'invalid typed GSD role');
+  const plans = fs.readdirSync(phaseDir).filter((name) => new RegExp(`^${phase}-[0-9]+-PLAN\\.md$`).test(name)).sort();
+  if (!plans.length) fail('MISSING_ARTIFACT', 'planner has no phase PLAN.md output');
+  return [...(fs.existsSync(path.join(phaseDir, 'CONTEXT.md')) ? ['CONTEXT.md'] : []), ...plans].sort();
+}
+
+function captureSealManifest({ role, phaseDir, snapshot, declared, changed }) {
+  const paths = sealOutputPaths(role, phaseDir);
+  const sortedDeclared = [...declared].sort();
+  const sortedChanged = [...changed].sort();
+  if (new Set(sortedDeclared).size !== sortedDeclared.length || JSON.stringify(sortedDeclared) !== JSON.stringify(sortedChanged)) {
+    fail('ARTIFACT_DECLARATION_INVALID', 'native declaration differs from independent phase delta');
+  }
+  const outputs = {};
+  for (const rel of paths) {
+    const full = path.join(phaseDir, rel);
+    let stat;
+    try { stat = fs.lstatSync(full); }
+    catch { fail('ARTIFACT_DECLARATION_INVALID', `sealed output is missing: ${rel}`); }
+    if (!stat.isFile() || stat.isSymbolicLink() || fs.realpathSync(full) !== path.join(fs.realpathSync(phaseDir), rel)) {
+      fail('ARTIFACT_DECLARATION_INVALID', 'sealed output is not a contained regular file');
+    }
+    const sha256 = digestFile(full);
+    const changedOutput = sortedChanged.includes(rel);
+    if (!changedOutput && snapshot.digests[rel] !== sha256) {
+      fail('ARTIFACT_DECLARATION_INVALID', 'unchanged sealed output has no matching baseline');
+    }
+    outputs[rel] = { sha256, origin: changedOutput ? 'child-change' : 'unchanged-baseline' };
+  }
+  if (sortedChanged.some((rel) => !Object.hasOwn(outputs, rel))) {
+    fail('ARTIFACT_DECLARATION_INVALID', 'native change is outside the role seal outputs');
+  }
+  return outputs;
+}
+
+function assertSealManifest({ role, phaseDir, snapshot, declared, changed, outputs, lease }) {
+  if (!object(outputs) || JSON.stringify(Object.keys(outputs).sort()) !== JSON.stringify(sealOutputPaths(role, phaseDir))) {
+    fail('RECOVERY_EVIDENCE_INCOMPLETE', 'original full seal-output manifest is missing or incomplete');
+  }
+  const current = lease.changedSince(snapshot).changed;
+  if (JSON.stringify(current) !== JSON.stringify([...changed].sort())
+      || JSON.stringify([...declared].sort()) !== JSON.stringify([...changed].sort())) {
+    fail('FOREIGN_EDIT', 'phase delta differs from original native change declaration');
+  }
+  let actual;
+  try { actual = captureSealManifest({ role, phaseDir, snapshot, declared, changed }); }
+  catch (error) {
+    if (error.code === 'ARTIFACT_DECLARATION_INVALID' || error.code === 'MISSING_ARTIFACT') {
+      fail('RECOVERY_ARTIFACT_ALTERED', 'current seal outputs differ from original completion');
+    }
+    throw error;
+  }
+  if (JSON.stringify(actual) !== JSON.stringify(outputs)) {
+    fail('RECOVERY_ARTIFACT_ALTERED', 'sealed output bytes differ from original completion manifest');
+  }
+}
+
 function createPlanningWriterLease(options = {}) {
   if (!object(options)) fail('INVALID_INPUT', 'options must be an object');
   const worktree = safeString(options.worktree, 'worktree');
   if (!path.isAbsolute(worktree)) fail('INVALID_INPUT', 'worktree must be an absolute path');
   const worktreeReal = fs.realpathSync(worktree);
   const phaseDir = safeString(options.phaseDir, 'phaseDir');
-  const phaseDirAbs = path.isAbsolute(phaseDir) ? phaseDir : path.join(worktreeReal, phaseDir);
+  const phaseDirAbs = realpathClosest(path.isAbsolute(phaseDir) ? phaseDir : path.join(worktreeReal, phaseDir));
   const stateRootRaw = safeString(options.stateRoot, 'stateRoot');
   const stateRootResolved = realpathClosest(stateRootRaw);
   const relativeToWorktree = path.relative(worktreeReal, stateRootResolved);
@@ -96,7 +224,7 @@ function createPlanningWriterLease(options = {}) {
   const ttlMs = Number.isFinite(options.ttlMs) && options.ttlMs > 0 ? options.ttlMs : DEFAULT_TTL_MS;
   const clock = typeof options.now === 'function' ? options.now : null;
 
-  const key = crypto.createHash('sha256').update(`${worktreeReal}\n${phaseDir}`).digest('hex');
+  const key = crypto.createHash('sha256').update(`${worktreeReal}\n${phaseDirAbs}`).digest('hex');
   const dir = path.join(stateRootResolved, key);
   const file = path.join(dir, 'lease.json');
   const lockDir = path.join(dir, '.locks');
@@ -255,9 +383,11 @@ function createPlanningWriterLease(options = {}) {
   }
 
   return Object.freeze({
-    schema: SCHEMA, version: 1, ttl_ms: ttlMs, key,
+    schema: SCHEMA, version: 1, ttl_ms: ttlMs, key, file,
     acquire, heartbeat, assertFence, release, recover, snapshotTree, changedSince,
   });
 }
 
-module.exports = Object.freeze({ SCHEMA, DEFAULT_TTL_MS, createPlanningWriterLease });
+module.exports = Object.freeze({ SCHEMA, DEFAULT_TTL_MS, createPlanningWriterLease,
+  sharedPlanningWriterRoot, legacyPlanningWriterRoots, assertNoLegacyPlanningWriter,
+  sealOutputPaths, captureSealManifest, assertSealManifest });
