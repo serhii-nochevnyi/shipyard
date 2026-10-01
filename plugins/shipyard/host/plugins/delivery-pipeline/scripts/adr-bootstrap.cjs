@@ -3,7 +3,7 @@
 const fs = require('fs');
 const path = require('path');
 const { decisionEntries } = require('./adr-ingest.cjs');
-const { marker } = require('./gsd-sync.cjs');
+const { marker, parseRoadmap } = require('./gsd-sync.cjs');
 
 function parseArgs(argv) {
   const args = { adr: null, phase: 1, json: false };
@@ -89,6 +89,24 @@ function writeIfMissing(file, data) {
   }
 }
 
+function appendRoadmapPhase(file, data, phase) {
+  let existing;
+  try {
+    existing = fs.readFileSync(file, 'utf8');
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+    if (writeIfMissing(file, data)) return 'created';
+    existing = fs.readFileSync(file, 'utf8');
+  }
+  if (parseRoadmap(existing).phases.some((entry) => entry.number === phase)) return 'skipped_existing';
+  const lineEnding = existing.includes('\r\n') ? '\r\n' : '\n';
+  const separator = existing.length === 0 || existing.endsWith(`${lineEnding}${lineEnding}`)
+    ? ''
+    : existing.endsWith(lineEnding) ? lineEnding : `${lineEnding}${lineEnding}`;
+  fs.appendFileSync(file, `${separator}${data.replace(/\n/g, lineEnding)}`);
+  return 'appended';
+}
+
 function bootstrap(args) {
   const markdown = fs.readFileSync(args.adr, 'utf8');
   const decisions = decisionEntries(markdown);
@@ -109,17 +127,25 @@ function bootstrap(args) {
   ];
 
   const created = [];
+  const appended = [];
   const skippedExisting = [];
   for (const target of targets) {
-    if (writeIfMissing(path.join(root, target.rel), target.data)) created.push(target.rel);
+    const file = path.join(root, target.rel);
+    if (target.rel === path.join('.planning', 'ROADMAP.md')) {
+      const result = appendRoadmapPhase(file, target.data, args.phase);
+      if (result === 'created') created.push(target.rel);
+      else if (result === 'appended') appended.push(target.rel);
+      else skippedExisting.push(target.rel);
+    } else if (writeIfMissing(file, target.data)) created.push(target.rel);
     else skippedExisting.push(target.rel);
   }
 
-  return { created, skipped_existing: skippedExisting, requirements };
+  return { created, appended, skipped_existing: skippedExisting, requirements };
 }
 
 function printReport(report) {
   for (const item of report.created) process.stdout.write(`created: ${item}\n`);
+  for (const item of report.appended) process.stdout.write(`appended: ${item}\n`);
   for (const item of report.skipped_existing) process.stdout.write(`skipped_existing: ${item}\n`);
   for (const entry of report.requirements) process.stdout.write(`requirement: ${entry.id}: ${entry.decision}\n`);
 }

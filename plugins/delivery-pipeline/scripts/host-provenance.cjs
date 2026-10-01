@@ -29,10 +29,20 @@ function pluginVersion(pluginRoot) {
   }
 }
 
-function freeze({ install_kind, version, source_sha, dirty }) {
+function freeze({ install_kind, version, source_sha, dirty, source_root }) {
   if (!KINDS.has(install_kind)) throw new Error(`install_kind must be release or dogfood, got ${install_kind}`);
-  return Object.freeze({ schema: SCHEMA, install_kind, version: version || null,
-    source_sha: source_sha || null, dirty: dirty === true });
+  const record = { schema: SCHEMA, install_kind, version: version || null,
+    source_sha: source_sha || null, dirty: dirty === true };
+  if (typeof source_root === 'string' && path.isAbsolute(source_root)) record.source_root = source_root;
+  return Object.freeze(record);
+}
+
+function realpathOrNull(dir) {
+  try {
+    return fs.realpathSync(dir);
+  } catch {
+    return null;
+  }
 }
 
 function derive({ pluginRoot, version }) {
@@ -41,7 +51,8 @@ function derive({ pluginRoot, version }) {
   if (!top) return freeze({ install_kind: 'release', version: ver, source_sha: null, dirty: false });
   const sha = (git(top, ['rev-parse', 'HEAD']) || '').trim() || null;
   const status = git(top, ['status', '--porcelain']);
-  return freeze({ install_kind: 'dogfood', version: ver, source_sha: sha, dirty: status === null || status.trim() !== '' });
+  return freeze({ install_kind: 'dogfood', version: ver, source_sha: sha,
+    dirty: status === null || status.trim() !== '', source_root: realpathOrNull(top) });
 }
 
 function readRecord(dir) {
@@ -60,7 +71,8 @@ function current({ pluginRoot }) {
 function fromEnv({ pluginRoot, version, env = process.env }) {
   if (env.SHIPYARD_INSTALL_KIND) {
     return freeze({ install_kind: env.SHIPYARD_INSTALL_KIND, version: version || pluginVersion(pluginRoot),
-      source_sha: env.SHIPYARD_SOURCE_SHA || null, dirty: env.SHIPYARD_SOURCE_DIRTY === '1' });
+      source_sha: env.SHIPYARD_SOURCE_SHA || null, dirty: env.SHIPYARD_SOURCE_DIRTY === '1',
+      source_root: env.SHIPYARD_SOURCE_ROOT ? realpathOrNull(env.SHIPYARD_SOURCE_ROOT) : null });
   }
   return derive({ pluginRoot, version });
 }

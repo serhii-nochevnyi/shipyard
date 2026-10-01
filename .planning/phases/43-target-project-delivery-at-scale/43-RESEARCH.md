@@ -393,7 +393,8 @@ Critical paths are 06 → 13 → 17 → 18 → 19 and 04 → 08 → 12 → 19. T
 - **T-43-16.** Move T-42-01's `collectVerificationEvidence` into `host-verification.cjs`. Both hosts call it after a verified executor completion and before finalization. The command set is the intersection of the pinned plan `## Verification commands` and the `verification_commands` allow-list for the repository, matched as argv arrays (no shell). On failure, the host returns a structured result that routes to the existing bounded fixer round; it never finalizes. The evidence digest travels as finalization evidence or a sealed artifact; the receipt stays untouched. **Blocking decision:** the sandbox profile for allow-listed commands (Q1).
 - **T-43-17.** `conveyor-coverage.cjs` writes a sealed record for each conveyor commit. Record contents:
   - `{schema, commit, parents, tree, ticket, repo, kind: 'executor'|'fixer'|'base-merge'|'remedy'}`;
-  - `{dispatch_id, receipt_digest, verification_digest}` for executor and fixer commits;
+  - `{dispatch_id, receipt_digest, verification_digest, receipt_store}` for executor and fixer commits; `receipt_store` is the absolute directory used by that runtime and is HMAC-sealed into the coverage entry;
+  - the common coverage root is `~/.local/state/shipyard/coverage`, independent of the Claude and Codex receipt roots; `conveyor-coverage.cjs` reads the recorded durable receipt store directly and verifies its existing HMAC envelope without creating or repairing state. T43-17 avoids editing `dispatch-boundary.cjs` because T45-09 owns that shared file.
   - `recorded_at`.
 
   Sealing reuses the durable-envelope/HMAC pattern (`dispatch-boundary.cjs:208-252`) with a host-owned key outside the worktree.
@@ -518,7 +519,7 @@ Everything else is fixture-reproducible with a stub `gh` on `PATH`, hermetic git
 | A3 | `git diff`/`patch-id` over the recorded base **tree** reproduce the judged patch | T-43-13 | The carry would need the judged base commit, which means extending the status grammar |
 | A4 | Remedy commit attribution by parent, author and run id is reliable | T-43-18 | Remedy commits are refused by T-43-19 (fail closed) |
 | A5 | Config key names (`comment_markers`, `reviewer_bots`, `repo_remedies`, `verification_commands`) | T-43-01 | Naming only |
-| A6 | The coverage record lives in host state with a host HMAC key, reusable by sentinel running as the same user | T-43-17/19 | Location and key sharing may need a different root per runtime |
+| A6 | Runtime receipt stores remain separate; coverage lives under the common `~/.local/state/shipyard/coverage` root and seals the exact receipt-store path for read-only verification | T-43-17/19 | Missing or moved receipt state fails closed; no runtime-root sharing or directory scan is assumed |
 
 ## Open Questions (RESOLVED)
 

@@ -5,6 +5,7 @@
 // a sixth binding. The serializable `args` object is data only; capabilities,
 // the durable recorder, and application evidence stay in this closure.
 const fs = require('node:fs');
+const crypto = require('node:crypto');
 const path = require('node:path');
 const { createClaudeWorkflowDispatch } = require('./claude-dispatch-adapter.cjs');
 const { GSD_LAUNCH_MECHANISM, isDurableRecorder } = require('./dispatch-boundary.cjs');
@@ -95,6 +96,7 @@ function registeredHostOptions(options) {
     runScope: hostResource(options, 'runScope'),
     controller: hostResource(options, 'controller'),
     runId: hostResource(options, 'runId') || hostResource(options, 'run_id'),
+    writerSession: hostResource(options, 'writerSession'),
   });
 }
 
@@ -127,10 +129,16 @@ function registerClaudeWorkflowHost(options = {}) {
         'artifactConsumer', 'artifactPreparer', 'handoff', 'sessionHandoff',
         'ownerCapability', 'owner', 'capacity', 'runScope', 'run_scope', 'controller',
         'runId', 'run_id',
+        'writerSession', 'preRecordValidation',
       ]) {
         if (Object.prototype.hasOwnProperty.call(runOptions, key)) {
           reject(`registered host owns ${key}`);
         }
+      }
+      if (object(runOptions.args)
+          && (Object.hasOwn(runOptions.args, 'preRecordValidation')
+            || Object.hasOwn(runOptions.args, 'writerSession'))) {
+        reject('workflow args cannot carry writer authority');
       }
       return runClaudeWorkflow({
         ...hostOptions,
@@ -235,6 +243,117 @@ function createClaudeWorkflowDispatchBridge(options = {}) {
   const controller = hostResource(options, 'controller');
   const runId = hostResource(options, 'runId') || hostResource(options, 'run_id')
     || (runScope && runScope.run_id);
+  const writerSession = hostResource(options, 'writerSession');
+  if (writerSession && (typeof writerSession.lease?.snapshotTree !== 'function'
+      || writerSession.snapshot?.schema !== 'shipyard.planning-writer-lease.snapshot.v1'
+      || !object(writerSession.snapshot.digests)
+      || JSON.stringify(Object.entries(writerSession.snapshot.digests).sort())
+        !== JSON.stringify(Object.entries(writerSession.lease.snapshotTree().digests).sort()))) {
+    reject('host writer snapshot is not bound to the acquired phase');
+  }
+  const completedTyped = new Map();
+  const completionSnapshot = () => {
+    const entries = {};
+    const root = fs.realpathSync(writerSession.phaseDir);
+    const visit = (directory) => {
+      for (const name of fs.readdirSync(directory).sort()) {
+        const full = path.join(directory, name);
+        const stat = fs.lstatSync(full);
+        const relative = path.relative(root, full).split(path.sep).join('/');
+        if (!stat.isFile() && !stat.isDirectory()) {
+          const error = new Error(`non-regular phase entry: ${relative}`);
+          error.code = 'FOREIGN_EDIT';
+          throw error;
+        }
+        entries[relative] = stat.isDirectory() ? 'directory' : 'file';
+        if (stat.isDirectory()) visit(full);
+      }
+    };
+    visit(root);
+    return Object.freeze({
+      digests: Object.freeze(Object.fromEntries(Object.entries(writerSession.lease.snapshotTree().digests).sort())),
+      entries: Object.freeze(Object.fromEntries(Object.entries(entries).sort())),
+    });
+  };
+  const initialEntries = writerSession ? completionSnapshot().entries : null;
+  const preRecordValidation = writerSession && function validateHostWriter({ dispatch_id: dispatchId, gsd_role: gsdRole, receipt }) {
+    const { lease, handle, base_revision: baseRevision, snapshot, phaseDir, declaredPaths } = writerSession;
+    if (!lease || lease.schema !== 'shipyard.planning-writer-lease.v1'
+        || typeof lease.assertFence !== 'function' || typeof lease.changedSince !== 'function'
+        || !object(handle) || typeof handle.token !== 'string' || !Number.isSafeInteger(handle.epoch)
+        || typeof baseRevision !== 'string' || snapshot?.schema !== 'shipyard.planning-writer-lease.snapshot.v1'
+        || typeof phaseDir !== 'string' || !path.isAbsolute(phaseDir) || !Array.isArray(declaredPaths)
+        || declaredPaths.some((item) => typeof item !== 'string' || !item.trim()
+          || path.isAbsolute(item) || item.split(/[\\/]/).includes('..'))) {
+      reject('host writer session is incomplete');
+    }
+    const scopedWorktree = runScope && (object(runScope.worktree)
+      ? runScope.worktree.path || runScope.worktree.worktree : runScope.worktree);
+    const scopedPhase = runScope && (object(runScope.phase)
+      ? runScope.phase.phase : runScope.phase);
+    if (typeof scopedWorktree !== 'string' || !Number.isSafeInteger(Number(scopedPhase))
+        || Number(scopedPhase) < 1) reject('typed writer requires a scoped worktree and phase');
+    const worktree = fs.realpathSync(scopedWorktree);
+    const phasesRoot = path.join(worktree, '.planning', 'phases');
+    let names;
+    try { names = fs.readdirSync(phasesRoot); }
+    catch (_) { reject('scoped phase directory is unavailable'); }
+    const matches = names.filter((name) => /^\d+-/.test(name)
+      && Number(name.split('-')[0]) === Number(scopedPhase)
+      && fs.lstatSync(path.join(phasesRoot, name)).isDirectory());
+    if (matches.length !== 1) reject('scoped phase directory is unavailable or ambiguous');
+    const expectedPhase = fs.realpathSync(path.join(phasesRoot, matches[0]));
+    if (fs.realpathSync(phaseDir) !== expectedPhase
+        || lease.key !== crypto.createHash('sha256').update(`${worktree}\n${expectedPhase}`).digest('hex')) {
+      reject('host writer lease is not bound to the scoped phase');
+    }
+    const completed = completedTyped.get(receipt.launch_id);
+    if (!completed || completed.gsd_role !== gsdRole || completed.launch_id !== receipt.launch_id
+        || completed.session_id !== receipt.session_id) reject('typed completion is not bound to the application receipt');
+    const output = object(completed.output) ? completed.output : completed;
+    const paths = output.changed_paths ?? output.files_modified;
+    if (!Array.isArray(paths)) reject('typed completion has no changed-path declaration');
+    const outputPaths = paths.map((item) => {
+      if (typeof item !== 'string' || !item || path.isAbsolute(item) || item.includes('\\')
+          || path.posix.normalize(item) !== item || item.split('/').includes('..')) {
+        reject('typed completion declared an invalid path');
+      }
+      const relative = path.relative(expectedPhase, path.resolve(expectedPhase, item)).split(path.sep).join('/');
+      if (!relative || relative === '..' || relative.startsWith('../') || path.isAbsolute(relative)) {
+        reject('typed completion declared a path outside the scoped phase');
+      }
+      return relative;
+    }).sort();
+    if (new Set(outputPaths).size !== outputPaths.length
+        || JSON.stringify(outputPaths) !== JSON.stringify([...declaredPaths].sort())) {
+      const error = new Error('host declaration differs from authenticated typed output');
+      error.code = 'FOREIGN_EDIT';
+      throw error;
+    }
+    lease.assertFence({ token: handle.token, epoch: handle.epoch, base_revision: baseRevision });
+    if (JSON.stringify(completed.completion_snapshot) !== JSON.stringify(completionSnapshot())) {
+      const error = new Error('phase bytes changed after typed completion');
+      error.code = 'FOREIGN_EDIT';
+      throw error;
+    }
+    const allowed = new Set(declaredPaths.map((item) => item.replace(/\\/g, '/')));
+    const completedEntries = completed.completion_snapshot.entries;
+    const changedDirectories = [...new Set([...Object.keys(initialEntries), ...Object.keys(completedEntries)])]
+      .filter((item) => (initialEntries[item] === 'directory' || completedEntries[item] === 'directory')
+        && initialEntries[item] !== completedEntries[item]);
+    if (changedDirectories.some((item) => !declaredPaths.some((declared) => declared === item || declared.startsWith(item + '/')))) {
+      const error = new Error('undeclared phase directory change');
+      error.code = 'FOREIGN_EDIT';
+      throw error;
+    }
+    const { changed } = lease.changedSince(snapshot);
+    const foreign = changed.filter((item) => !allowed.has(item));
+    if (foreign.length || changed.length !== allowed.size || allowed.size !== declaredPaths.length) {
+      const error = new Error(`foreign phase edit or declared path mismatch: ${foreign.join(', ')}`);
+      error.code = 'FOREIGN_EDIT';
+      throw error;
+    }
+  };
   if (!object(capabilities)) reject('explicit host capabilities are required');
   if (!durableRecorder(recorder)) reject('a frozen durable receipt recorder is required');
   if (handoff !== undefined && !isOwnerCapability(handoff)) {
@@ -244,6 +363,17 @@ function createClaudeWorkflowDispatchBridge(options = {}) {
   if (typedGsdCallback !== undefined && typeof typedGsdCallback !== 'function') {
     reject('typedGsdCallback must be a function when provided');
   }
+  const observedTypedCallback = typedGsdCallback && function observedTypedCallback(prompt, selection, gsdRole) {
+    const result = typedGsdCallback(prompt, selection, gsdRole);
+    const retain = (value) => {
+      if (object(value) && typeof value.launch_id === 'string') {
+        completedTyped.set(value.launch_id, { ...value, gsd_role: gsdRole,
+          completion_snapshot: writerSession ? completionSnapshot() : null });
+      }
+      return value;
+    };
+    return result && typeof result.then === 'function' ? result.then(retain) : retain(result);
+  };
   if (configuredArtifactConsumer !== undefined && typeof configuredArtifactConsumer !== 'function') {
     reject('artifactConsumer must be a function when provided');
   }
@@ -307,10 +437,17 @@ function createClaudeWorkflowDispatchBridge(options = {}) {
     applicationEvidence: verifiedApplicationEvidence,
     artifactConsumer,
     artifactPreparer,
-    ...(typedGsdCallback ? { typedGsdCallback } : {}),
+    ...(observedTypedCallback ? { typedGsdCallback: observedTypedCallback } : {}),
   });
   return Object.freeze((dispatchOptions = {}) => {
     if (!object(dispatchOptions)) reject('dispatch options must be an object');
+    if (Object.hasOwn(dispatchOptions, 'preRecordValidation')
+        || Object.hasOwn(dispatchOptions, 'writerSession')
+        || (object(dispatchOptions.context)
+          && (Object.hasOwn(dispatchOptions.context, 'preRecordValidation')
+            || Object.hasOwn(dispatchOptions.context, 'writerSession')))) {
+      reject('workflow dispatch cannot supply writer authority');
+    }
     if (controller && typeof controller.assertOwner === 'function') {
       if (typeof runId !== 'string' || !runId.trim()) reject('controller-owned host requires runId');
       controller.assertOwner(runId);
@@ -320,13 +457,18 @@ function createClaudeWorkflowDispatchBridge(options = {}) {
       ...dispatchOptions,
       agent: options.agent,
       host,
-      ...(context === undefined ? {} : { context }),
+      context: { ...(context || {}), ...(preRecordValidation ? { preRecordValidation } : {}) },
     });
   });
 }
 
 async function runClaudeWorkflow(options = {}) {
   if (!object(options)) reject('options must be an object');
+  if (object(options.args)
+      && (Object.hasOwn(options.args, 'preRecordValidation')
+        || Object.hasOwn(options.args, 'writerSession'))) {
+    reject('workflow args cannot carry writer authority');
+  }
   if (typeof options.scriptPath !== 'string' || !options.scriptPath.trim()) {
     reject('scriptPath is required');
   }

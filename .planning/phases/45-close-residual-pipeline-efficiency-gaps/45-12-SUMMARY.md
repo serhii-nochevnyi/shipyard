@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 37eec694130bedee74d37118e837fd0ac760d1a66b500f963d84afd695b0e848
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 605e8d23a21817a83b6e60f7d0da8b7e3c83e72d20f960e3f3303364d4765cb9
 phase: 45-close-residual-pipeline-efficiency-gaps
 plan: 12
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-30
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 37eec694130bedee74d37118e837fd0ac760d1a66b500f963d84afd695b0e848
+shipyard_source_fingerprint: 605e8d23a21817a83b6e60f7d0da8b7e3c83e72d20f960e3f3303364d4765cb9
 ---
 
 # Phase 45: Advisory run/phase aggregate admission ledger on capacity-lease with reserved verification and checkpoint capacity — Delivery Projection

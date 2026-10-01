@@ -53,6 +53,22 @@ done
 # ── preconditions ────────────────────────────────────────────────────────────
 command -v node >/dev/null 2>&1 || { echo "error: node not found on PATH" >&2; exit 1; }
 PROVENANCE="$PLUGIN_DIR/scripts/host-provenance.cjs"
+# @contract: Mirrors install-shipyard-marketplace.cjs's dogfoodHome formula for a direct dogfood invocation.
+if [[ -z "$DOGFOOD_ROOT" && "${SHIPYARD_INSTALL_KIND:-}" == dogfood && "$CODEX_HOME" == "$HOME/.codex" ]]; then
+  DOGFOOD_SOURCE="${SHIPYARD_SOURCE_ROOT:-$REPO_ROOT}"
+  [[ -e "$DOGFOOD_SOURCE" ]] || { echo "error: dogfood source root does not exist: $DOGFOOD_SOURCE" >&2; exit 2; }
+  DOGFOOD_ROOT="$(TARGET="$DOGFOOD_SOURCE" node - <<'NODE'
+const crypto = require('node:crypto');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const target = fs.realpathSync(process.env.TARGET);
+const digest = crypto.createHash('sha256').update(target).digest('hex').slice(0, 16);
+const base = process.env.XDG_STATE_HOME || path.join(os.homedir(), '.local', 'state');
+process.stdout.write(path.join(base, 'shipyard', 'dogfood', 'codex', digest));
+NODE
+)"
+fi
 if [[ -n "$DOGFOOD_ROOT" ]]; then
   [[ -f "$PROVENANCE" ]] || { echo "error: host-provenance.cjs not found under $PLUGIN_DIR" >&2; exit 1; }
   DOGFOOD_ROOT="$(TARGET="$DOGFOOD_ROOT" ACTIVE_HOME="$CODEX_HOME" DEFAULT_HOME="$HOME/.codex" node - <<'NODE'
@@ -82,7 +98,7 @@ NODE
   GSD_TOOLS="$CODEX_HOME/gsd-core/bin/gsd-tools.cjs"
   AGENTS_MD="${CODEX_AGENTS_MD:-$CODEX_HOME/AGENTS.md}"
   export CODEX_HOME GSD_CAPABILITIES_DIR="${GSD_CAPABILITIES_DIR:-$CODEX_HOME/.gsd/capabilities}"
-  mkdir -p "$CODEX_HOME"
+  mkdir -p -m 700 "$CODEX_HOME"
   echo "→ dogfood CODEX_HOME $CODEX_HOME"
 fi
 [[ -d "$PLUGIN_DIR" ]] || { echo "error: plugin dir missing: $PLUGIN_DIR" >&2; exit 1; }

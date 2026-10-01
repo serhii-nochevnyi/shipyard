@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 03af6df9cf98d82a5b2a904cb7816443a34a084f2bf321a6d3c069f88f47a0e5
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 974ee244151acecd3ab65ef32ee5d805ff0061d86ebd1c2c11f813c19bb24e97
 phase: 45-close-residual-pipeline-efficiency-gaps
 plan: 07
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-30
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 03af6df9cf98d82a5b2a904cb7816443a34a084f2bf321a6d3c069f88f47a0e5
+shipyard_source_fingerprint: 974ee244151acecd3ab65ef32ee5d805ff0061d86ebd1c2c11f813c19bb24e97
 ---
 
 # Phase 45: Planning-tree writer lease with owner, base revision and a monotonic fencing token — Delivery Projection

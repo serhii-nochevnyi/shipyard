@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 87951e8439f50deb141cc77b4016bdf1c49aa0fecb13e46f79b505b67cfeb410
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 7be29b0eafb6c6eda180600c755e4c25b93b666f5fe8429ea27b85622765bd91
 phase: 37-autonomous-dual-runtime-control-plane
 plan: 04
 subsystem: shipyard delivery
@@ -20,10 +20,10 @@ key-files:
 key-decisions:
   - "Shipyard delivery state is projected; no native executor claim is invented."
 duration: 0min
-completed: 2026-09-22
+completed: 2026-09-30
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 87951e8439f50deb141cc77b4016bdf1c49aa0fecb13e46f79b505b67cfeb410
+shipyard_source_fingerprint: 7be29b0eafb6c6eda180600c755e4c25b93b666f5fe8429ea27b85622765bd91
 ---
 
 # Phase 37: Connect Codex to the scoped runtime controller — Delivery Projection

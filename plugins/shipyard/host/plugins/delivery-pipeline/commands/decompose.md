@@ -41,7 +41,9 @@ take the active runtime from `config.gsd.runtime`; it must be exactly `claude`
 or `codex`. Keep it fixed for the complete GSD chain. Claude uses
 `${CLAUDE_PLUGIN_ROOT}/scripts/claude-decompose-host.cjs --request-file
 <json>`. Codex uses
-`${CLAUDE_PLUGIN_ROOT}/scripts/codex-decompose-host.cjs --args-file <json>`.
+`${CLAUDE_PLUGIN_ROOT}/scripts/codex-planning-context-host.cjs --args-file <json>`;
+that adapter verifies the structured packet against the live worktree, then
+delegates the typed launch and durable receipt to `codex-decompose-host.cjs`.
 Each host request carries one exact typed role (`gsd-phase-researcher`,
 `gsd-planner`, or `gsd-plan-checker`), declared signals, and scoped prompt
 data. Host request fields differ by runtime. The host resolves model and effort,
@@ -335,6 +337,27 @@ context first, then one callback set, then materialization verification.
 
 1. Pick the phase number: the next free one (or the user's argument), and
    gather the selected ADR path(s) and the mode/granularity chosen in Step 1.
+   Build the planner request from the selected investigation or ADR and the
+   canonical graph with `deliver-dispatch.cjs build decomposition
+   <INV-id|ADR-id> --phase <N>`. Pass the active runtime explicitly:
+
+   ```bash
+   node ${CLAUDE_PLUGIN_ROOT}/scripts/deliver-dispatch.cjs \
+     build decomposition "$planningInput" --phase "$phase" --runtime "$runtime"
+   ```
+
+   The builder attaches a verified context packet with required source content
+   and digest-bound references for the selected ADR or investigation,
+   requirements, roadmap, applicable research, phase context, and graph. It
+   never selects a model or effort. Optional file bodies are elided to fit the
+   token ceiling while their paths and hashes remain verifiable; the planner
+   reads only relevant omitted files and checks their hashes. It validates the
+   generated request with the selected runtime's exported host validator. Codex
+   decomposition passes the packet through `codex-planning-context-host.cjs`,
+   which checks the packet, source digests, policy hash, and source revision
+   against the live worktree immediately before launch. It includes the verified
+   packet as structured JSON data in the typed planner prompt and delegates
+   runtime selection and receipt creation to `codex-decompose-host.cjs`.
 2. Normalize every selected ADR before invoking GSD:
    `mkdir -p .planning/.adr-ingest && node ${CLAUDE_PLUGIN_ROOT}/scripts/adr-ingest.cjs
    --input <adr-path> [--input <another-adr-path>] --output-dir .planning/.adr-ingest --json`.
@@ -362,9 +385,9 @@ context first, then one callback set, then materialization verification.
    `policy_hash`, complete ADR/requirements/research/context references, and
    `roleContext: { adr_refs, requirements, research_refs, context }`. Select
    backlog items through `backlog-index.cjs`, carry their source hashes and
-   `whySelected` metadata, and set `contextPacketRequired: true`. Researcher,
-   planner and checker callbacks receive the packet in their boundary context;
-   their prompts fence it as DATA. A missing requested item, stale verification,
+   `whySelected` metadata, and set `contextPacketRequired: true`. Claude callbacks
+   receive the packet as boundary context; the Codex planning adapter validates
+   and fences it as DATA in the typed prompt. A missing requested item, stale verification,
    altered reference, symlink escape or forged model/capability/callback field
    refuses the callback before reservation. The packet keeps the full ADR,
    requirements and mandatory GSD policy even when the estimated UTF-8/4 size
@@ -451,7 +474,7 @@ delivery:
   ticket: T-<phase>-<plan>          # e.g. T-01-02
   branch: ticket/T-<phase>-<plan>-<slug-from-title>   # can be omitted — validate-graph will generate it
   risk: low|medium|high             # assess from the plan content
-  human_checkpoint: true|false      # true is MANDATORY if risk: high
+  human_checkpoint: false|review|merge|true  # high risk requires review, merge, or true
   # preauthorized: true|false       # do NOT set by hand — Step 4.3 writes it
   repo: owner/name                  # ONLY if the ticket's files live in ANOTHER repository
   # jira: <KEY>                     # do NOT set by hand — Step 5 writes it back after export
@@ -459,12 +482,22 @@ delivery:
 
 **`preauthorized` is a record of a decision, not a setting.** It says a person
 looked at THIS ticket while approving the set and accepted its risk in advance,
-so the merge no longer has to wake anyone. Only Step 4.3 writes it, and only onto
-a ticket that already carries `human_checkpoint: true` — authorizing a stop that
+so a `merge` checkpoint no longer has to wake anyone. A `review` checkpoint
+still requires a human approval on the current PR head. Only Step 4.3 writes
+it, and only onto
+a ticket that already declares a checkpoint — authorizing a stop that
 does not exist is a planning mistake, and Gate 2 rejects it. Absent means `false`:
 nothing is pre-authorized by default. Never set it while writing a plan to make
 your own phase run unattended; a later reader must be able to read it as a
 person's signature and nothing else.
+
+**Choose the checkpoint consequence at Gate 2.** `review` means a human approves
+the ticket PR on its current head, then the guard merges it into the epic.
+`merge` means the human performs the merge; use it for external-dependency
+holds. The legacy boolean `true` has exactly the `merge` consequence. `false`
+declares no checkpoint. Either `review` or `merge` satisfies the high-risk
+checkpoint requirement. A child of an open `review` checkpoint parent still
+waits for that parent to land before it can merge.
 
 **Multi-repo phases: `repo` is not optional.** If a ticket's files belong to a
 sibling repository (a frontend monorepo, an editor package), declare
@@ -526,6 +559,9 @@ freshly written. Do not report decomposition success without this.
    - the phase epic branch (`tickets.json.epics`) — where the whole phase integrates;
    - a table of tickets: id / title / wave / depends_on / pr_base (epic or parent
      branch) / risk;
+   - a proposed ticket → existing Jira issue mapping derived from keys named in
+     the investigation's `PROBLEM.md` or intake material. Show this mapping beside
+     the ticket set and ask the user to approve the mapping with that set;
    - who is high-risk and will wait for a human;
    - how many waves and what will run in parallel; any diamond warnings of the graph.
 
@@ -534,13 +570,19 @@ freshly written. Do not report decomposition success without this.
    the table already in front of the reader. Ask by CLASS, one question
    (AskUserQuestion, in the user's language), naming the tickets it covers —
    "medium-risk: T-03, T-07 — pre-authorize their merges?". Ask only about classes
-   that actually contain tickets with `human_checkpoint: true`: a ticket that
+   that actually contain tickets with `human_checkpoint: merge` or `true`: a ticket that
    would never stop has nothing to authorize, so asking about it is a question
    with no consequence.
 
-   Say plainly what a yes changes. Those tickets stop waiting for a person: the
-   guard merges them itself once they clear every other merge gate, and their
-   children cascade behind them instead of sitting behind an open checkpoint. It
+   State the chosen `human_checkpoint` value and its consequence beside each
+   ticket at Gate 2: `review` waits for a human head approval before the guard
+   merges into the epic; `merge` waits for a human merge and is the mode for
+   external-dependency holds; `true` means `merge`. Only then ask about
+   pre-authorization, which records the person's separate plan-time approval.
+
+   Say plainly what a yes changes. Those `merge` tickets stop waiting for a
+   person: the guard merges them itself once they clear every other merge gate,
+   and their children cascade behind them instead of sitting behind an open checkpoint. It
    does NOT reach the phase epic's own merge into the integration branch — that
    boundary is never crossed unattended, whatever is pre-authorized underneath it.
    A no changes nothing at all: those tickets reach green, they wait, and the
@@ -573,6 +615,13 @@ remain canonical, deliver never reads Jira, and Gate 2 never depends on it.
 **All Jira content — epic and issue summaries, descriptions, comments — is
 written in ENGLISH**, regardless of the conversation language (it is a shipped
 artifact, per delivery-rules).
+
+The ticket → existing Jira issue mapping proposed at Gate 2 comes from Jira keys
+named in the investigation's `PROBLEM.md` or intake material. After the user
+approves the mapping, record each approved key with
+`node ${CLAUDE_PLUGIN_ROOT}/scripts/jira-export.cjs record <T-NN-MM> <KEY>`.
+Then re-run `validate-graph.cjs` so `tickets.json` carries those authoritative
+keys before planning the export.
 
 **Export is automatic — no hand-written config required.** Run it by default on
 every decomposition, resolving everything yourself. It is skipped ONLY when:
@@ -641,16 +690,25 @@ per run:
    step instructs, resolving the link type whose inward description reads
    `is blocked by` (`getIssueLinkTypes`) before calling `createIssueLink`.
    Do not reinterpret, reorder, skip or add a step the plan did not emit.
-   For each epic or issue step, run its `lookup` entries' `jql` in order.
-   Apply an entry's `on_match` only when the hit's `Source of truth` line
-   names this repository (matching the entry's `requires_source_of_truth`)
-   or carries no prefix (matching `accepts_unprefixed`). On a `migrate`
-   match, add `add_label`, replace the pointer line with `pointer`, and
-   post the comment `label migrated`. Never update an issue whose
-   source-of-truth line names another repository, or has none — skip it
-   and move to the next entry. Create the issue when no entry claims a
-   hit. Stop and report to the user when one entry's `jql` returns more
-   than one issue.
+   Apply these recorded-key rules to an issue step whose lookup has
+   `kind: key`:
+   - A recorded key is looked up by key directly; accept only an issue whose
+     returned key exactly matches it.
+   - Never create an issue for a recorded key. An unknown key (missing or
+     mismatched) refuses that ticket: stop its export and report the refusal.
+   - If the issue has the step's shipyard label, update only the fields listed in
+     `labelled_only_fields` (`summary` and `description`).
+   - If the issue is unlabelled, only transition and comment; leave its summary
+     and description unchanged.
+   For steps without a recorded key, run each `lookup` entry's `jql` in order.
+   Apply an entry's `on_match` only when the hit's `Source of truth` line names
+   this repository (matching `requires_source_of_truth`) or carries no prefix
+   (matching `accepts_unprefixed`). On a `migrate` match, add `add_label`, replace
+   the pointer line with `pointer`, and post the comment `label migrated`. Never
+   update an issue whose source-of-truth line names another repository, or has
+   none — skip it and move to the next entry. Create an issue only when the step
+   says `on_no_match: create`. Stop and report to the user when one entry's
+   `jql` returns more than one issue.
 3. For each issue the plan created or found, run `node
    ${CLAUDE_PLUGIN_ROOT}/scripts/jira-export.cjs record <T-NN-MM> <KEY>` —
    this writes `delivery.jira: <KEY>` back into that ticket's plan

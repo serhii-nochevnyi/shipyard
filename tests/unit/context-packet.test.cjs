@@ -139,11 +139,13 @@ test('marks a packet that exceeds the soft ceiling instead of dropping constrain
   }
 });
 
-test('keeps optional source content complete when indexing it is enough to fit the ceiling', () => {
+test('omits optional source content to fit the ceiling while retaining its verified digest reference', () => {
   const f = fixture();
   try {
+    const optionalFile = path.join(f.root, 'OPTIONAL.md');
+    fs.writeFileSync(optionalFile, 'Optional reference detail. '.repeat(2000));
     const full = buildContextPacket(options(f, {
-      optionalRefs: [path.join(f.root, 'POLICY.md')],
+      optionalRefs: [optionalFile],
       tokenCeiling: 999999,
     }));
     const reduced = JSON.parse(JSON.stringify(full));
@@ -157,11 +159,12 @@ test('keeps optional source content complete when indexing it is enough to fit t
     };
     const reducedTokens = estimateTokens(reduced);
     const packet = buildContextPacket(options(f, {
-      optionalRefs: [path.join(f.root, 'POLICY.md')],
+      optionalRefs: [optionalFile],
       tokenCeiling: reducedTokens,
     }));
     assert.equal(packet.accounting.overflow, false);
-    assert.equal(packet.optional_refs[0].content_omitted, undefined);
+    assert.equal(packet.optional_refs[0].content_omitted, true);
+    assert.deepEqual(packet.accounting.omitted_optional_refs, [packet.optional_refs[0].path]);
     validateContextPacket(packet, { root: f.root, role: 'executor', subject: 'T-33-06' });
   } finally {
     fs.rmSync(f.root, { recursive: true, force: true });

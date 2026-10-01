@@ -9,6 +9,7 @@ const { EventEmitter } = require('node:events');
 const { suite, test, done, assert } = require('./assert-harness.cjs');
 const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
 const { createDurableRecorder } = require('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs');
+const { createPlanningWriterLease } = require('../../plugins/delivery-pipeline/scripts/planning-writer-lease.cjs');
 const { runBounded } = require('../../plugins/delivery-pipeline/scripts/command-runner.cjs');
 const {
   createCodexDeliveryHost,
@@ -20,8 +21,12 @@ const {
   requestValue,
   runCli,
   validateArgs,
+  verificationFailureContext,
+  verificationFailureReason,
 } = require('../../plugins/delivery-pipeline/scripts/codex-delivery-host.cjs');
 const { createRunController } = require('../../plugins/delivery-pipeline/scripts/run-controller.cjs');
+const { createRunScope } = require('../../plugins/delivery-pipeline/scripts/run-scope.cjs');
+const { SCRATCH_FILES } = require('../../plugins/delivery-pipeline/scripts/conveyor-scratch.cjs');
 
 const capabilities = {
   supportedModels: ['gpt-6-luna', 'gpt-6-sol'],
@@ -38,10 +43,12 @@ const previousEnv = {
   GNUPGHOME: process.env.GNUPGHOME,
   GIT_CONFIG_GLOBAL: process.env.GIT_CONFIG_GLOBAL,
   GIT_CONFIG_NOSYSTEM: process.env.GIT_CONFIG_NOSYSTEM,
+  SHIPYARD_COVERAGE_ROOT: process.env.SHIPYARD_COVERAGE_ROOT,
 };
 process.env.GNUPGHOME = path.join(temporary, 'gnupg');
 process.env.GIT_CONFIG_GLOBAL = path.join(temporary, 'empty-gitconfig');
 process.env.GIT_CONFIG_NOSYSTEM = '1';
+process.env.SHIPYARD_COVERAGE_ROOT = path.join(temporary, 'coverage');
 fs.mkdirSync(process.env.GNUPGHOME, { mode: 0o700 });
 process.on('exit', () => {
   for (const [key, value] of Object.entries(previousEnv)) {
@@ -111,6 +118,9 @@ function fixture(config = {}) {
   fs.writeFileSync(path.join(graphDir, 'tickets.json'), JSON.stringify({ tickets: {
     'T-38-04': { branch: 'ticket/T-38-04', pr_base: 'main', plan: '.planning/PLAN.md', files: ['src/owned.txt'] },
   } }));
+  fs.writeFileSync(path.join(graphDir, 'delivery-state.json'), JSON.stringify({
+    'T-38-04': { branch: 'ticket/T-38-04', base: 'main', status: 'pending' },
+  }));
   const resolution = policy.resolveDispatch({ runtime: 'codex', role: 'research' });
   const file = resolution.agent_file;
   const content = [
@@ -158,12 +168,30 @@ function fixture(config = {}) {
     },
     launchTypedGsd(selection, context) {
       calls.push({ method: 'typed', selection, context });
+      context.onCompleted({ launch_id: 'codex-delivery-test', session_id: 'typed-fixture-session',
+        last_agent_message: JSON.stringify({ schema: 'shipyard.codex-decompose-output.v1', artifact_paths: [] }) });
       return application(selection, context);
     },
   };
   const verification = { commands: [{ id: 'unit', executable: process.execPath, argv: ['-e', 'process.exit(0)'],
     timeoutMs: 5000, maxOutputBytes: 4096 }] };
   return { root, agentDir, project, graphDir, plan, storageRoot, scope, host, calls, file, fileDigest, base, verification };
+}
+
+function configureMergedParentBase(f) {
+  const parentBranch = 'ticket/T-38-03-merged-parent';
+  const graphFile = path.join(f.graphDir, 'tickets.json');
+  const graph = JSON.parse(fs.readFileSync(graphFile, 'utf8'));
+  Object.assign(graph.tickets['T-38-04'], {
+    pr_base: parentBranch, primary_parent: 'T-38-03', epic: 'main',
+  });
+  graph.tickets['T-38-03'] = { branch: parentBranch, pr_base: 'main', epic: 'main', files: ['src/owned.txt'] };
+  fs.writeFileSync(graphFile, JSON.stringify(graph));
+  const boardFile = path.join(f.graphDir, 'delivery-state.json');
+  const board = JSON.parse(fs.readFileSync(boardFile, 'utf8'));
+  Object.assign(board['T-38-04'], { base: 'main', epic: 'main' });
+  board['T-38-03'] = { branch: parentBranch, base: 'main', epic: 'main', status: 'merged', merged_into: 'main' };
+  fs.writeFileSync(boardFile, JSON.stringify(board));
 }
 
 function hostRunner(spy = []) {
@@ -187,7 +215,8 @@ function application(selection, context) {
     observed_model: selection.model,
     observed_effort: selection.reasoning_effort,
     ...(selection.agent_file ? { agent_file_digest: selection.agent_file_digest } : {}),
-    ...(context.gsd_role ? { gsd_role: context.gsd_role, gsd_launch_mechanism: 'typed-gsd-callback' } : {}),
+    ...(context.gsd_role ? { gsd_role: context.gsd_role, gsd_launch_mechanism: 'typed-gsd-callback',
+      runtime_evidence: { native_session_evidence: { session_id: 'typed-fixture-session' } } } : {}),
   };
 }
 
@@ -236,6 +265,28 @@ function cliOptions(f) {
 }
 
 suite('codex-delivery-host — scoped production dispatch');
+
+test('executor leaves every shared scratch file outside the signed tree', async () => {
+  const f = fixture();
+  try {
+    for (const name of SCRATCH_FILES) fs.writeFileSync(path.join(f.root, name), 'scratch\n');
+    const result = await delivery(f).run({ role: 'executor', dispatch_id: 'all-scratch',
+      context: { prompt: 'Implement the scoped ticket.' } });
+    assert.equal(result.artifact.status, 'committed');
+    assert.deepEqual(result.artifact.changed, ['src/owned.txt']);
+    assert.equal(git(f.root, 'ls-tree', '--name-only', 'HEAD', ...SCRATCH_FILES), '');
+  } finally { clean(f); }
+});
+
+test('executor refuses an untracked file outside the shared scratch set', async () => {
+  const f = fixture();
+  try {
+    fs.writeFileSync(path.join(f.root, '.shipyard-x.js'), 'agent content\n');
+    await assert.rejects(delivery(f).run({ role: 'executor', dispatch_id: 'other-untracked',
+      context: { prompt: 'Implement the scoped ticket.' } }),
+    (error) => error.code === 'WORKTREE_NOT_READY');
+  } finally { clean(f); }
+});
 
 test('dynamic executor resolves Luna/max through the boundary with worktree write access', async () => {
   const f = fixture();
@@ -380,7 +431,19 @@ test('generated static role uses its immutable file and declared read-only sandb
 test('typed GSD delivery goes through the host-owned typed callback', async () => {
   const f = fixture();
   try {
-    const result = await delivery(f).run({
+    const actualPhaseDir = path.join(f.root, '.planning', 'phases', '38-typed-delivery');
+    fs.mkdirSync(actualPhaseDir, { recursive: true });
+    fs.writeFileSync(path.join(actualPhaseDir, '38-01-PLAN.md'), '# baseline\n');
+    fs.mkdirSync(f.storageRoot, { recursive: true });
+    const phaseDir = path.join(f.storageRoot, 'phase-alias');
+    fs.symlinkSync(actualPhaseDir, phaseDir, 'dir');
+    assert.notEqual(path.resolve(phaseDir), fs.realpathSync(phaseDir));
+    const lease = createPlanningWriterLease({ worktree: f.root, phaseDir,
+      stateRoot: path.join(f.storageRoot, 'writer') });
+    const handle = lease.acquire({ owner: 'typed-delivery', base_revision: f.base });
+    const writerSession = { lease, handle, base_revision: f.base, phaseDir,
+      snapshot: lease.snapshotTree(), declaredPaths: [] };
+    const result = await delivery(f, { writerSession }).run({
       role: 'decomposition',
       gsd_role: 'gsd-planner',
       context: { prompt: 'Create the approved phase plan.' },
@@ -389,7 +452,259 @@ test('typed GSD delivery goes through the host-owned typed callback', async () =
     assert.equal(f.calls[0].selection.model, 'gpt-6-sol');
     assert.equal(f.calls[0].selection.reasoning_effort, 'high');
     assert.equal(result.receipt.gsd_launch_mechanism, 'typed-gsd-callback');
+    assert.ok(f.host.recorder.getVerifiedRecord(result.receipt.dispatch_id));
+    lease.release(handle);
   } finally { clean(f); }
+});
+
+for (const [role, gsdRole] of [
+  ['research', 'gsd-phase-researcher'],
+  ['decomposition', 'gsd-planner'],
+  ['decomposition', 'gsd-plan-checker'],
+]) {
+  test(`typed delivery CLI acquires and releases its own shared writer for ${gsdRole}`, async () => {
+    const f = fixture();
+    const phaseDir = path.join(f.root, '.planning', 'phases', '38-typed-delivery');
+    const writerRoot = path.join(f.storageRoot, 'shared-writer');
+    const requestFile = path.join(f.graphDir, `request-${gsdRole}.json`);
+    try {
+      fs.mkdirSync(phaseDir, { recursive: true });
+      fs.writeFileSync(path.join(phaseDir, '38-01-PLAN.md'), '# Existing plan\n');
+      fs.writeFileSync(path.join(phaseDir, 'CONTEXT.md'), '# Existing context\n');
+      if (gsdRole === 'gsd-phase-researcher') {
+        fs.writeFileSync(path.join(phaseDir, '38-RESEARCH.md'), '# Existing research\n');
+      }
+      fs.writeFileSync(requestFile, JSON.stringify({ scope: f.scope, role, gsd_role: gsdRole,
+        context: { prompt: 'Complete the typed phase role.' } }));
+      const result = await runCli(['--args-file', requestFile], { write() {} }, {
+        ...cliOptions(f), testWriterStateRoot: writerRoot,
+      });
+      assert.equal(result.receipt.compliance, 'verified');
+      assert.equal(result.receipt.gsd_role, gsdRole);
+      assert.equal(f.calls.filter((call) => call.method === 'typed').length, 1);
+      assert.ok(f.host.recorder.getVerifiedRecord(result.receipt.dispatch_id));
+      const lease = createPlanningWriterLease({ stateRoot: writerRoot, worktree: f.root, phaseDir });
+      assert.equal(JSON.parse(fs.readFileSync(lease.file, 'utf8')).status, 'released');
+    } finally { clean(f); }
+  });
+}
+
+for (const mode of ['valid-subset', 'omitted-old-plan', 'extra-edit', 'old-plan-tamper', 'missing-completion']) {
+  test(`typed delivery CLI planner completion ${mode}`, async () => {
+    const f = fixture();
+    const phaseDir = path.join(f.root, '.planning', 'phases', '38-typed-delivery');
+    const writerRoot = path.join(f.storageRoot, 'shared-writer');
+    const requestFile = path.join(f.graphDir, `planner-${mode}.json`);
+    try {
+      fs.mkdirSync(phaseDir, { recursive: true });
+      fs.writeFileSync(path.join(phaseDir, '38-01-PLAN.md'), '# Existing first plan\n');
+      fs.writeFileSync(path.join(phaseDir, '38-02-PLAN.md'), '# Existing second plan\n');
+      fs.writeFileSync(path.join(phaseDir, 'CONTEXT.md'), '# Existing context\n');
+      fs.writeFileSync(requestFile, JSON.stringify({ scope: f.scope, role: 'decomposition',
+        gsd_role: 'gsd-planner', context: { prompt: 'Plan.' } }));
+      f.host.launchTypedGsd = (selection, context) => {
+        f.calls.push({ method: 'typed', selection, context });
+        fs.writeFileSync(path.join(phaseDir, '38-01-PLAN.md'), '# Edited first plan\n');
+        if (mode === 'omitted-old-plan') fs.rmSync(path.join(phaseDir, '38-02-PLAN.md'));
+        if (mode === 'extra-edit') fs.writeFileSync(path.join(phaseDir, 'stray.md'), '# Unreported\n');
+        if (mode !== 'missing-completion') {
+          context.onCompleted({ launch_id: 'codex-delivery-test', session_id: 'typed-fixture-session',
+            last_agent_message: JSON.stringify({ schema: 'shipyard.codex-decompose-output.v1',
+              artifact_paths: ['.planning/phases/38-typed-delivery/38-01-PLAN.md'] }) });
+        }
+        if (mode === 'old-plan-tamper') fs.writeFileSync(path.join(phaseDir, '38-02-PLAN.md'), '# Late edit\n');
+        return application(selection, context);
+      };
+      const run = runCli(['--args-file', requestFile], { write() {} }, {
+        ...cliOptions(f), testWriterStateRoot: writerRoot,
+      });
+      if (mode === 'valid-subset') {
+        const result = await run;
+        assert.equal(result.receipt.compliance, 'verified');
+        assert.ok(f.host.recorder.getVerifiedRecord(result.receipt.dispatch_id));
+        assert.equal(fs.readdirSync(f.host.recorder.storeDir).filter((name) => name.startsWith('record-')).length, 1);
+      } else {
+        const code = mode === 'old-plan-tamper' ? 'FOREIGN_EDIT'
+          : mode === 'missing-completion' ? 'WRITER_FENCED' : 'ARTIFACT_DECLARATION_INVALID';
+        await assert.rejects(run, { code });
+        assert.equal(fs.readdirSync(f.host.recorder.storeDir).filter((name) => name.startsWith('record-')).length, 0);
+      }
+      assert.equal(f.calls.filter((call) => call.method === 'typed').length, 1);
+      const lease = createPlanningWriterLease({ stateRoot: writerRoot, worktree: f.root, phaseDir });
+      assert.equal(JSON.parse(fs.readFileSync(lease.file, 'utf8')).status, 'released');
+    } finally { clean(f); }
+  });
+}
+
+for (const ownerName of ['claude-decompose', 'codex-decompose']) {
+test(`typed delivery CLI refuses a ${ownerName} shared writer before launch and reacquires after release`, async () => {
+  const f = fixture();
+  const phaseDir = path.join(f.root, '.planning', 'phases', '38-typed-delivery');
+  const writerRoot = path.join(f.storageRoot, 'shared-writer');
+  const requestFile = path.join(f.graphDir, 'typed-overlap.json');
+  try {
+    fs.mkdirSync(phaseDir, { recursive: true });
+    fs.writeFileSync(path.join(phaseDir, '38-01-PLAN.md'), '# Existing plan\n');
+    fs.writeFileSync(requestFile, JSON.stringify({ scope: f.scope, role: 'decomposition',
+      gsd_role: 'gsd-planner', context: { prompt: 'Plan.' } }));
+    const lease = createPlanningWriterLease({ stateRoot: writerRoot, worktree: f.root, phaseDir });
+    const first = lease.acquire({ owner: ownerName, base_revision: f.base });
+    const original = fs.readFileSync(lease.file, 'utf8');
+    await assert.rejects(runCli(['--args-file', requestFile], { write() {} }, {
+      ...cliOptions(f), testWriterStateRoot: writerRoot,
+    }), { code: 'WRITER_LEASED' });
+    assert.equal(f.calls.length, 0);
+    assert.equal(fs.readFileSync(lease.file, 'utf8'), original);
+    assert.equal(fs.readdirSync(f.host.recorder.storeDir).filter((name) => name.startsWith('record-')).length, 0);
+    lease.release(first);
+    const result = await runCli(['--args-file', requestFile], { write() {} }, {
+      ...cliOptions(f), testWriterStateRoot: writerRoot,
+    });
+    assert.equal(result.receipt.compliance, 'verified');
+    assert.equal(JSON.parse(fs.readFileSync(lease.file, 'utf8')).status, 'released');
+  } finally { clean(f); }
+});
+}
+
+test('typed GSD delivery refuses a phase symlink escaping the scoped worktree', async () => {
+  const f = fixture();
+  try {
+    const outsidePhaseDir = path.join(f.storageRoot, 'outside-phase');
+    fs.mkdirSync(outsidePhaseDir, { recursive: true });
+    const phaseDir = path.join(f.root, '.planning', 'phase-link');
+    fs.symlinkSync(outsidePhaseDir, phaseDir, 'dir');
+    const lease = createPlanningWriterLease({ worktree: f.root, phaseDir,
+      stateRoot: path.join(f.storageRoot, 'writer') });
+    const handle = lease.acquire({ owner: 'typed-delivery', base_revision: f.base });
+    const writerSession = { lease, handle, base_revision: f.base, phaseDir,
+      snapshot: lease.snapshotTree(), declaredPaths: [] };
+    await assert.rejects(async () => delivery(f, { writerSession }).run({ role: 'decomposition',
+      gsd_role: 'gsd-planner', context: { prompt: 'Plan.' } }), { code: 'WRITER_FENCED' });
+    assert.equal(fs.readdirSync(f.host.recorder.storeDir).filter((name) => name.startsWith('record-')).length, 0);
+    lease.release(handle);
+  } finally { clean(f); }
+});
+
+test('typed GSD delivery refuses a different phase lease before recording', async () => {
+  const f = fixture();
+  try {
+    const phaseDir = path.join(f.root, '.planning', 'phases', '39-foreign');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    fs.writeFileSync(path.join(phaseDir, '38-01-PLAN.md'), '# baseline\n');
+    const lease = createPlanningWriterLease({ worktree: f.root, phaseDir,
+      stateRoot: path.join(f.storageRoot, 'writer') });
+    const handle = lease.acquire({ owner: 'foreign-phase', base_revision: f.base });
+    const writerSession = { lease, handle, base_revision: f.base, phaseDir,
+      snapshot: lease.snapshotTree(), declaredPaths: [] };
+    await assert.rejects(async () => delivery(f, { writerSession }).run({ role: 'decomposition',
+      gsd_role: 'gsd-planner', context: { prompt: 'Plan.' } }), { code: 'WRITER_FENCED' });
+    assert.equal(fs.readdirSync(f.host.recorder.storeDir).filter((name) => name.startsWith('record-')).length, 0);
+    lease.release(handle);
+  } finally { clean(f); }
+});
+
+test('typed GSD delivery refuses a lease keyed to a foreign directory', async () => {
+  const f = fixture();
+  try {
+    const phaseDir = path.join(f.root, '.planning', 'phases', '38-current');
+    const foreignDir = path.join(f.root, '.planning', 'phases', '39-foreign');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    fs.writeFileSync(path.join(phaseDir, '38-01-PLAN.md'), '# baseline\n');
+    fs.mkdirSync(foreignDir, { recursive: true });
+    const lease = createPlanningWriterLease({ worktree: f.root, phaseDir: foreignDir,
+      stateRoot: path.join(f.storageRoot, 'writer') });
+    const handle = lease.acquire({ owner: 'foreign-lease', base_revision: f.base });
+    const writerSession = { lease, handle, base_revision: f.base, phaseDir,
+      snapshot: lease.snapshotTree(), declaredPaths: [] };
+    await assert.rejects(async () => delivery(f, { writerSession }).run({ role: 'decomposition',
+      gsd_role: 'gsd-planner', context: { prompt: 'Plan.' } }), { code: 'WRITER_FENCED' });
+    assert.equal(fs.readdirSync(f.host.recorder.storeDir).filter((name) => name.startsWith('record-')).length, 0);
+    lease.release(handle);
+  } finally { clean(f); }
+});
+
+test('typed GSD delivery refuses a declaration unlike its completed native output', async () => {
+  const f = fixture();
+  try {
+    const phaseDir = path.join(f.root, '.planning', 'phases', '38-current');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    fs.writeFileSync(path.join(phaseDir, '38-01-PLAN.md'), '# baseline\n');
+    const lease = createPlanningWriterLease({ worktree: f.root, phaseDir,
+      stateRoot: path.join(f.storageRoot, 'writer') });
+    const handle = lease.acquire({ owner: 'typed-output', base_revision: f.base });
+    const writerSession = { lease, handle, base_revision: f.base, phaseDir,
+      snapshot: lease.snapshotTree(), declaredPaths: [] };
+    f.host.launchTypedGsd = (selection, context) => {
+      context.onCompleted({ launch_id: 'codex-delivery-test', session_id: 'typed-fixture-session',
+        last_agent_message: JSON.stringify({ schema: 'shipyard.codex-decompose-output.v1',
+          artifact_paths: ['.planning/phases/38-current/CONTEXT.md'] }) });
+      return application(selection, context);
+    };
+    await assert.rejects(delivery(f, { writerSession }).run({ role: 'decomposition',
+      gsd_role: 'gsd-planner', context: { prompt: 'Plan.' } }), { code: 'ARTIFACT_DECLARATION_INVALID' });
+    assert.equal(fs.readdirSync(f.host.recorder.storeDir).filter((name) => name.startsWith('record-')).length, 0);
+    lease.release(handle);
+  } finally { clean(f); }
+});
+
+test('typed GSD delivery refuses a snapshot from another phase', async () => {
+  const f = fixture();
+  try {
+    const phaseDir = path.join(f.root, '.planning', 'phases', '38-current');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    fs.writeFileSync(path.join(phaseDir, '38-01-PLAN.md'), '# baseline\n');
+    const lease = createPlanningWriterLease({ worktree: f.root, phaseDir,
+      stateRoot: path.join(f.storageRoot, 'writer') });
+    const handle = lease.acquire({ owner: 'foreign-snapshot', base_revision: f.base });
+    const writerSession = { lease, handle, base_revision: f.base, phaseDir,
+      snapshot: { ...lease.snapshotTree(), digests: { 'foreign.md': 'a'.repeat(64) } },
+      declaredPaths: [] };
+    await assert.rejects(Promise.resolve().then(() => delivery(f, { writerSession }).run({
+      role: 'decomposition', gsd_role: 'gsd-planner', context: { prompt: 'Plan.' },
+    })), { code: 'WRITER_FENCED' });
+    assert.equal(fs.readdirSync(f.host.recorder.storeDir).filter((name) => name.startsWith('record-')).length, 0);
+    lease.release(handle);
+  } finally { clean(f); }
+});
+
+test('typed GSD delivery rejects request writer authority and a missing host lease', async () => {
+  const f = fixture();
+  try {
+    await assert.rejects(delivery(f).run({ role: 'decomposition', gsd_role: 'gsd-planner',
+      context: { prompt: 'Plan.', preRecordValidation: () => true } }), { code: 'INVALID_INPUT' });
+    assert.equal(f.calls.length, 0);
+    await assert.rejects(delivery(f).run({ role: 'decomposition', gsd_role: 'gsd-planner',
+      context: { prompt: 'Plan.' } }), { code: 'WRITER_FENCED' });
+    assert.equal(fs.readdirSync(f.host.recorder.storeDir).filter((name) => name.startsWith('record-')).length, 0);
+  } finally { clean(f); }
+});
+
+test('typed GSD delivery checks host lease takeover and foreign edits before recording', async () => {
+  for (const mode of ['takeover', 'foreign']) {
+    const f = fixture();
+    try {
+      const phaseDir = path.join(f.root, '.planning', 'phases', '38-typed-delivery');
+      fs.mkdirSync(phaseDir, { recursive: true });
+    fs.writeFileSync(path.join(phaseDir, '38-01-PLAN.md'), '# baseline\n');
+      const lease = createPlanningWriterLease({ worktree: f.root, phaseDir,
+        stateRoot: path.join(f.storageRoot, 'writer') });
+      const handle = lease.acquire({ owner: 'typed-delivery', base_revision: f.base });
+      const writerSession = { lease, handle, base_revision: f.base, phaseDir,
+        snapshot: lease.snapshotTree(), declaredPaths: [] };
+      f.host.launchTypedGsd = (selection, context) => {
+        f.calls.push({ method: 'typed', selection, context });
+        context.onCompleted({ launch_id: 'codex-delivery-test', session_id: 'typed-fixture-session',
+          last_agent_message: JSON.stringify({ schema: 'shipyard.codex-decompose-output.v1', artifact_paths: [] }) });
+        if (mode === 'takeover') { lease.release(handle); lease.acquire({ owner: 'new-owner', base_revision: f.base }); }
+        else fs.writeFileSync(path.join(phaseDir, 'stray.md'), 'foreign');
+        return application(selection, context);
+      };
+      await assert.rejects(delivery(f, { writerSession }).run({ role: 'decomposition',
+        gsd_role: 'gsd-planner', context: { prompt: 'Plan.' } }),
+      { code: mode === 'takeover' ? 'WRITER_FENCED' : 'FOREIGN_EDIT' });
+      assert.equal(fs.readdirSync(f.host.recorder.storeDir).filter((name) => name.startsWith('record-')).length, 0);
+    } finally { clean(f); }
+  }
 });
 
 test('executor without a worktree delta fails closed before calling the signer', async () => {
@@ -467,6 +782,41 @@ test('CLI heartbeats its out-of-worktree lease while a launch remains active', a
     }));
     await runCli(['--args-file', file], { write() {} }, { ...cliOptions(f), heartbeatMs: 5 });
     assert.ok(during.owner.heartbeat_at > during.owner.acquired_at);
+    assert.equal(runStatus(f).state, 'completed');
+  } finally { clean(f); }
+});
+
+test('typed CLI renews its planning writer lease without changing ownership', async () => {
+  const f = fixture();
+  const phaseDir = path.join(f.root, '.planning', 'phases', '38-heartbeat');
+  const writerRoot = path.join(f.storageRoot, 'heartbeat-' + crypto.randomUUID());
+  const file = path.join(f.graphDir, 'request.json');
+  let before;
+  let after;
+  try {
+    fs.mkdirSync(phaseDir, { recursive: true });
+    const lease = createPlanningWriterLease({ stateRoot: writerRoot, worktree: f.root, phaseDir });
+    const launch = f.host.launchTypedGsd;
+    f.host.launchTypedGsd = async function (selection, context) {
+      before = JSON.parse(fs.readFileSync(lease.file, 'utf8'));
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      after = JSON.parse(fs.readFileSync(lease.file, 'utf8'));
+      return launch.call(this, selection, context);
+    };
+    fs.writeFileSync(file, JSON.stringify({
+      scope: f.scope, role: 'decomposition', gsd_role: 'gsd-plan-checker',
+      context: { prompt: 'Check the fixture plan.' },
+    }));
+    const result = await runCli(['--args-file', file], { write() {} }, {
+      ...cliOptions(f), heartbeatMs: 5, testWriterStateRoot: writerRoot,
+    });
+    assert.ok(after.heartbeat_at > before.heartbeat_at);
+    assert.ok(after.expires_at > before.expires_at);
+    assert.equal(after.token, before.token);
+    assert.equal(after.epoch, before.epoch);
+    assert.equal(after.pid, before.pid);
+    assert.equal(result.receipt.compliance, 'verified');
+    assert.equal(JSON.parse(fs.readFileSync(lease.file, 'utf8')).status, 'released');
     assert.equal(runStatus(f).state, 'completed');
   } finally { clean(f); }
 });
@@ -666,6 +1016,37 @@ test('recovery resumes the unchanged candidate without an executor launch and re
   } finally { clean(f); }
 });
 
+test('executor and recovery use the live board base after the recorded primary parent is merged', async () => {
+  const f = fixture();
+  try {
+    configureMergedParentBase(f);
+    assert.equal(spawnSync('git', ['-C', f.root, 'show-ref', '--verify', '--hash',
+      'refs/heads/ticket/T-38-03-merged-parent'], { encoding: 'utf8' }).status !== 0, true);
+    const error = await failedFinalization(f);
+    const candidate = JSON.parse(fs.readFileSync(candidatePath(f, error.candidate_id), 'utf8')).payload;
+    assert.equal(candidate.base_ref, 'main');
+    assert.equal(candidate.expected_base, f.base);
+    const result = await recovery(f).resumeFinalization(error.candidate_id, liveScope(f));
+    assert.equal(result.status, 'committed');
+    assert.equal(git(f.root, 'rev-parse', 'HEAD^'), f.base);
+  } finally { clean(f); }
+});
+
+test('executor refuses a changed live base that is not justified by a merged parent', async () => {
+  const f = fixture();
+  try {
+    configureMergedParentBase(f);
+    const boardFile = path.join(f.graphDir, 'delivery-state.json');
+    const board = JSON.parse(fs.readFileSync(boardFile, 'utf8'));
+    board['T-38-03'].status = 'pr-open';
+    fs.writeFileSync(boardFile, JSON.stringify(board));
+    await assert.rejects(() => delivery(f).run({ role: 'executor', dispatch_id: 'unproved-live-base',
+      context: { prompt: 'Implement the scoped ticket.' } }),
+    (error) => error.code === 'BASE_MISMATCH' && /neither its open primary parent nor its merged destination/.test(error.message));
+    assert.equal(f.calls.length, 0, 'the executor must not launch on an unproved base');
+  } finally { clean(f); }
+});
+
 test('verification failures, missing specs and tree-changing checks refuse before any candidate', async () => {
   const f = fixture();
   try {
@@ -687,6 +1068,83 @@ test('verification failures, missing specs and tree-changing checks refuse befor
     assert.equal(signed, 0);
     assert.equal(fs.existsSync(path.join(stateRoot(f), 'candidates'))
       ? fs.readdirSync(path.join(stateRoot(f), 'candidates')).length : 0, 0);
+  } finally { clean(f); }
+});
+
+test('Codex host verification refuses an admitted failure without finalizing', async () => {
+  const f = fixture();
+  let finalized = 0;
+  try {
+    approvedPlan(f, ['node check.cjs']);
+    const result = await delivery(f, { verification: undefined,
+      verificationAllowList: [{ argv: ['node', 'check.cjs'], profile: 'host' }],
+      hostVerificationRunner: { run() { return { status: 3, stdout: '', stderr: 'failed', backend: { kind: 'host' } }; } },
+      finalizeCommit() { finalized++; },
+    }).run({ role: 'executor', context: { prompt: 'Implement.' } });
+    assert.equal(result.status, 'verification_failed');
+    assert.deepEqual(result.command, ['node', 'check.cjs']);
+    assert.match(result.evidence_digest, /^[0-9a-f]{64}$/);
+    assert.equal(result.retryable, true);
+    assert.deepEqual(result.receipt, f.host.recorder.getVerifiedRecord(result.receipt.dispatch_id).receipt);
+    assert.equal(finalized, 0);
+  } finally { clean(f); }
+});
+
+test('Codex host verification passes sealed evidence digest to trusted finalizer', async () => {
+  const f = fixture();
+  let digest;
+  let coverage;
+  try {
+    approvedPlan(f, ['node check.cjs']);
+    await assert.rejects(() => delivery(f, { verification: undefined,
+      verificationAllowList: [{ argv: ['node', 'check.cjs'], profile: 'host' }],
+      hostVerificationRunner: { run() { return { status: 0, stdout: '', stderr: '', backend: { kind: 'host' } }; } },
+      finalizeCommit(input) { digest = input.verificationEvidenceDigest; coverage = input.coverage;
+        throw new Error('stop after evidence'); },
+    }).run({ role: 'executor', context: { prompt: 'Implement.' } }), /stop after evidence/);
+    assert.match(digest, /^[0-9a-f]{64}$/);
+    assert.equal(coverage.kind, 'executor');
+    assert.match(coverage.dispatch_id, /^dispatch-/);
+    assert.match(coverage.receipt_digest, /^[0-9a-f]{64}$/);
+    assert.equal(coverage.verification_digest, digest);
+    assert.equal(coverage.receipt_store, f.host.recorder.storeDir);
+  } finally { clean(f); }
+});
+
+test('Codex retries one failed plan command with sealed diagnostics and binds the passing digest', async () => {
+  const f = fixture();
+  const controllerOwner = 'verification-retry-owner';
+  const controller = createRunController({ storeDir: path.join(f.storageRoot, 'retry-controller'), ownerId: controllerOwner });
+  controller.begin(createRunScope({
+    run_id: f.scope.run_id, repository_id: 'shipyard/test', phase: f.scope.phase,
+    ticket: f.scope.ticket, worktree: f.root, runtime: 'codex', provider: 'openai',
+    owner_id: controllerOwner,
+    dispatch: { dispatch_id: 'verification-retry-initial', role: 'executor', model: 'gpt-6-luna', effort: 'max' },
+  }));
+  let checks = 0;
+  try {
+    approvedPlan(f, ['node check.cjs']);
+    const launch = f.host.launch.bind(f.host);
+    f.host.launch = (selection, context) => ({ ...launch(selection, context), launch_id: `codex-delivery-${f.calls.length}` });
+    const result = await delivery(f, {
+      controller,
+      verification: undefined,
+      verificationAllowList: [{ argv: ['node', 'check.cjs'], profile: 'host' }],
+      hostVerificationRunner: { run() {
+        checks++;
+        return { status: checks === 1 ? 7 : 0, stdout: '', stderr: checks === 1 ? 'failed' : '', backend: { kind: 'host' } };
+      } },
+    }).run({ role: 'executor', dispatch_id: 'verification-retry-initial', context: { prompt: 'Implement.' } });
+    assert.equal(result.artifact.status, 'committed');
+    assert.equal(checks, 2);
+    assert.equal(f.calls.length, 2);
+    assert.match(f.calls[1].context.prompt, /<HOST-VERIFICATION-FAILURE>/);
+    assert.match(f.calls[1].context.prompt, /"attempt":1/);
+    assert.equal(controller.status(f.scope.run_id).retry.attempts, 1);
+    const candidate = JSON.parse(fs.readFileSync(candidatePath(f, result.artifact.candidate_id), 'utf8')).payload;
+    assert.match(candidate.verification.allow_list_sha256, /^[0-9a-f]{64}$/);
+    assert.match(git(f.root, 'show', '-s', '--format=%B', 'HEAD'),
+      new RegExp(`Shipyard-Verification-Evidence: ${candidate.verification.evidence_digest}`));
   } finally { clean(f); }
 });
 
@@ -714,8 +1172,11 @@ test('changed tree, graph, base, plan, verification or receipt refuses and keeps
     fs.writeFileSync(f.plan, plan);
     await refused({ code: 'IDENTITY_CHANGED', names: ['verification-spec'],
     }, { verification: { commands: [{ ...f.verification.commands[0], argv: ['-e', '1'] }] } });
+    await refused({ code: 'IDENTITY_CHANGED', names: ['verification-allow-list'] },
+      { verificationAllowList: [] });
     const records = path.join(stateRoot(f), 'verification');
-    const recordFile = path.join(records, fs.readdirSync(records)[0]);
+    const pinned = JSON.parse(fs.readFileSync(candidatePath(f, id), 'utf8')).payload.verification.records[0];
+    const recordFile = path.join(records, pinned.record_sha256 + '.json');
     const original = fs.readFileSync(recordFile, 'utf8');
     fs.writeFileSync(recordFile, original.replace('"outcome":"passed"', '"outcome":"failed"'));
     await refused({ code: 'IDENTITY_CHANGED', names: ['verification:unit'] });
@@ -751,9 +1212,14 @@ test('tampered candidate and wrong scope refuse; commit without a finalization r
     await assert.rejects(() => recovery(f).resumeFinalization('f'.repeat(64), liveScope(f)),
       (refusal) => refusal.code === 'CANDIDATE_MISSING');
     const candidate = JSON.parse(original).payload;
+    const receiptStore = f.host.recorder.storeDir;
     finalizeCommit({ ticket: candidate.ticket, worktree: candidate.worktree, expectedBranch: candidate.branch,
       expectedBase: candidate.expected_base, expectedHead: candidate.expected_head, expectedSigner: signer,
-      files_modified: candidate.files_modified, expectedTree: candidate.scoped_tree });
+      files_modified: candidate.files_modified, expectedTree: candidate.scoped_tree,
+      verificationEvidenceDigest: candidate.verification.evidence_digest,
+      coverage: { kind: 'executor', repo: candidate.repo, dispatch_id: candidate.dispatch_id,
+        receipt_digest: candidate.receipt_sha256, verification_digest: candidate.verification.evidence_digest,
+        receipt_store: receiptStore } });
     const head = git(f.root, 'rev-parse', 'HEAD');
     await assert.rejects(() => recovery(f).resumeFinalization(id, liveScope(f)),
       (refusal) => refusal.code === 'RECONCILIATION_REQUIRED');
@@ -811,6 +1277,43 @@ test('CLI pins verification from the approved PLAN when no spec is injected', as
     const candidate = JSON.parse(fs.readFileSync(candidatePath(f, result.artifact.candidate_id), 'utf8')).payload;
     assert.deepEqual(candidate.verification.required, ['plan-1']);
   } finally { clean(f); }
+});
+
+test('CLI returns a PLAN command when the configured allow-list has no match and does not retry it', async () => {
+  const f = fixture();
+  const requestFile = path.join(f.graphDir, 'request-empty-allow-list.json');
+  const output = [];
+  try {
+    approvedPlan(f, ['node check.cjs']);
+    fs.writeFileSync(requestFile, JSON.stringify({
+      scope: f.scope, role: 'executor', context: { prompt: 'Implement scoped work.' },
+    }));
+    const result = await runCli(['--args-file', requestFile], { write(chunk) { output.push(chunk); } }, {
+      ...cliOptions(f), verification: undefined, verificationAllowList: [],
+      hostVerificationRunner: { run() { assert.fail('an empty allow-list must not launch a command'); } },
+    });
+    assert.equal(result.status, 'verification_failed');
+    assert.deepEqual(result.command, ['node', 'check.cjs']);
+    assert.match(result.evidence_digest, /^[0-9a-f]{64}$/);
+    assert.equal(result.retryable, false);
+    assert.equal(runStatus(f).state, 'failed');
+    assert.equal(f.calls.length, 1);
+    assert.equal(JSON.parse(output.join('')).status, 'verification_failed');
+  } finally { clean(f); }
+});
+
+test('verification failure reason safely handles an absent command', () => {
+  assert.match(verificationFailureReason({ command: null, summary: 'no command matched' }),
+    /no allow-listed verification command matched/);
+});
+
+test('Codex retry diagnostic remains within its byte limit for oversized Unicode evidence', () => {
+  const diagnostic = verificationFailureContext({
+    command: Array(64).fill('💥'.repeat(256)), evidence_digest: 'a'.repeat(64), summary: '⚠'.repeat(500),
+  });
+  assert.ok(Buffer.byteLength(JSON.stringify(diagnostic), 'utf8') <= 2048);
+  assert.equal(diagnostic.attempt, 1);
+  assert.equal(Object.isFrozen(diagnostic.command), true);
 });
 
 test('recovery-only CLI reuses the PLAN-pinned verification spec without an injected spec', async () => {

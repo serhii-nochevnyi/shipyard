@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: df1ec8ed5f4320ea6f88045d2eaf2c5877fc1db16f8d10db9ded48a76b59b9ed
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: a808a8d9af402d240b0929bd8468b91ca824839e4014f77a3917543e234ac9b8
 phase: 45-close-residual-pipeline-efficiency-gaps
 plan: 14
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-30
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: df1ec8ed5f4320ea6f88045d2eaf2c5877fc1db16f8d10db9ded48a76b59b9ed
+shipyard_source_fingerprint: a808a8d9af402d240b0929bd8468b91ca824839e4014f77a3917543e234ac9b8
 ---
 
 # Phase 45: Capture scrubber replaces Codex account identifiers, the scratch dir is a git repo, and the fixture scan rejects leaked account ids — Delivery Projection

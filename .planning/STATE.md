@@ -1,13 +1,13 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: de6e185c6d0faf358413980ecfe5e7331fb9d63f523a01c5a1b7fba9bb9be0b8
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 5f5d807642c656d02645f61166447ae6ea65184ec3920db17214450b3718831f
 gsd_state_version: '1.0'
 status: planning
 progress:
-  total_phases: 27
+  total_phases: 28
   completed_phases: 10
-  total_plans: 249
-  completed_plans: 239
-  percent: 95
+  total_plans: 251
+  completed_plans: 247
+  percent: 98
 ---
 
 # Project State
@@ -21,16 +21,16 @@ See: .planning/PROJECT.md (updated by Shipyard GSD synchronization)
 
 ## Current Position
 
-Phase: 1 of 27 (Phase 20: Autonomy of the drive-to-green loop)
+Phase: 1 of 28 (Phase 20: Autonomy of the drive-to-green loop)
 Plan: 6 of 6 merged
 Status: pending
-Last activity: 2026-09-30 — Shipyard projection synchronized
+Last activity: 2026-10-01 — Shipyard projection synchronized
 
-Progress: [█████████░] 95%
+Progress: [█████████░] 98%
 
 ## Performance Metrics
 
-- Total plans completed: 239
+- Total plans completed: 247
 - Average duration: not measured by the projection
 - Total execution time: not measured by the projection
 
@@ -61,10 +61,11 @@ Progress: [█████████░] 95%
 | 40 | 27 | 27 | pending |
 | 41 | 9 | 9 | gaps_found |
 | 42 | 3 | 3 | gaps_found |
-| 43 | 19 | 18 | pending |
+| 43 | 19 | 19 | pending |
 | 44 | 8 | 8 | pending |
-| 45 | 14 | 11 | pending |
-| 46 | 6 | 0 | pending |
+| 45 | 18 | 18 | gaps_found |
+| 46 | 4 | 0 | pending |
+| 47 | 0 | 0 | pending |
 
 ## Accumulated Context
 
@@ -79,14 +80,14 @@ Review and resolve phase integration findings shown in the phase artifacts.
 
 ### Blockers/Concerns
 
-- T-43-19: delivery status is pr-open
-- T-45-09: delivery status is pr-open
-- T-45-10: delivery status is pending
-- T-45-11: delivery status is pending
 - T-46-01: delivery status is pending
-- T-46-02: delivery status is pending
-- T-46-03: delivery status is pending
 - T-46-04: delivery status is pending
+- T-46-05: delivery status is pending
+- T-46-06: delivery status is pending
+- Phase 20: INTEGRATION.md is missing
+- Phase 21: INTEGRATION.md is missing
+- Phase 22: INTEGRATION.md is missing
+- Phase 23: INTEGRATION.md is missing
 
 ## Deferred Items
 
@@ -96,6 +97,6 @@ Review and resolve phase integration findings shown in the phase artifacts.
 
 ## Session Continuity
 
-Last session: 2026-09-30 12:36
+Last session: 2026-10-01 12:14
 Stopped at: Shipyard GSD projection synchronized from the delivery graph.
 Resume file: None

@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 90573b4046f7a4307ae8f9e7becdf62e3c2bc6a2a2d4e9019469fccf0e043135
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 877f317a54e11e48d841232a2d64bab847b8fce87391f1d684b735d37f4c1a88
 phase: 45-close-residual-pipeline-efficiency-gaps
 plan: 05
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-30
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 90573b4046f7a4307ae8f9e7becdf62e3c2bc6a2a2d4e9019469fccf0e043135
+shipyard_source_fingerprint: 877f317a54e11e48d841232a2d64bab847b8fce87391f1d684b735d37f4c1a88
 ---
 
 # Phase 45: session-handoff successor race and dispatch-boundary cross-process reservation tests use explicit barriers — Delivery Projection

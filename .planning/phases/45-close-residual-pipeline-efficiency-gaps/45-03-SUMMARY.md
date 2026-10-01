@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 47038df0f4e95144b478ae776f8dcb6150007ddb77b106a9148cf9cc03493eae
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 8e3abd2a0fac9c0ac46d9de0a4741e9448469aaf9421acc7addb5be52ac4f75d
 phase: 45-close-residual-pipeline-efficiency-gaps
 plan: 03
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-30
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 47038df0f4e95144b478ae776f8dcb6150007ddb77b106a9148cf9cc03493eae
+shipyard_source_fingerprint: 8e3abd2a0fac9c0ac46d9de0a4741e9448469aaf9421acc7addb5be52ac4f75d
 ---
 
 # Phase 45: Dogfood installs default to a dedicated per-checkout runtime home — Delivery Projection

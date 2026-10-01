@@ -38,6 +38,7 @@
 
 const { execFileSync } = require('child_process');
 const reviewSignatures = require('./review-signature.cjs');
+const { loadConfig, repoValue } = require('./pipeline-config.cjs');
 
 const argv = process.argv.slice(2);
 const cmd = argv[0];
@@ -71,7 +72,7 @@ const OWNER_REPO = REPO || '{owner}/{repo}';
 // a human reading the record rather than a round servicing it.
 const sinceHead = !argv.includes('--no-since-head');
 
-if (!['reinit', 'unresolved', 'status', 'feedback', 'resolve'].includes(cmd) || !Number.isInteger(pr) || pr <= 0) {
+if (require.main === module && (!['reinit', 'unresolved', 'status', 'feedback', 'resolve'].includes(cmd) || !Number.isInteger(pr) || pr <= 0)) {
   console.error('usage: reviewers.cjs <reinit|unresolved|feedback|status> <pr-number> [--json] [--force] [--repo owner/name]\n' +
                 '                        feedback [--no-since-head]   (default: only what was said since the head commit)\n' +
                 '       reviewers.cjs resolve <pr-number> <threadId> [<threadId> ...] [--repo owner/name]');
@@ -108,6 +109,47 @@ const REVIEW_MARKER = '@coderabbitai full review';
 
 const isCodeRabbit = (login) => String(login || '').toLowerCase().startsWith(CODERABBIT);
 const isCopilot = (login) => String(login || '').toLowerCase().startsWith('copilot');
+
+// @contract: built-in bot identities remain active even with an explicit empty list.
+function botIdentity(login, configured = []) {
+  const name = String(login || '').toLowerCase();
+  return configured.some((entry) => {
+    const value = String(entry).toLowerCase();
+    return value.endsWith('*') ? name.startsWith(value.slice(0, -1)) : name === value;
+  });
+}
+
+function targetRepository(repo = REPO) {
+  if (repo && /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/.test(repo)) return repo;
+  const view = ghJson(['repo', 'view', '--json', 'owner,name'], null);
+  return view && view.owner && view.owner.login && view.name
+    ? `${view.owner.login}/${view.name}` : null;
+}
+
+// @contract: classify against the target repository, never the process checkout.
+function effectiveBotPolicy(repo, configured = undefined, projectRoot = process.cwd()) {
+  const value = configured === undefined && repo
+    ? repoValue(loadConfig(projectRoot), 'reviewer_bots', repo) : configured;
+  return ['coderabbitai*', 'copilot*', ...(Array.isArray(value) ? value : [])];
+}
+
+function isHumanHeadApproval(row, headSha, prAuthor, bots) {
+  const login = String(row && row.user && row.user.login || '').toLowerCase();
+  const author = String(prAuthor && prAuthor.login || prAuthor || '').toLowerCase();
+  return Boolean(row && row.state === 'APPROVED' && headSha && row.commit_id === headSha
+    && row.user && row.user.type === 'User' && login && login !== author
+    && !login.endsWith('[bot]') && !botIdentity(login, bots));
+}
+
+// @contract: both readable rule surfaces must affirm no review requirement; unknown repo refuses.
+function branchRequiresNoReview(base, repo = null) {
+  if (!base || !repo || !/^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/.test(repo)) return false;
+  const encoded = encodeURIComponent(base);
+  const rules = ghJsonResult(['api', `repos/${repo}/rules/branches/${encoded}`]);
+  if (!rules.ok || !Array.isArray(rules.value) || rules.value.length !== 0) return false;
+  const branch = ghJsonResult(['api', `repos/${repo}/branches/${encoded}`]);
+  return Boolean(branch.ok && branch.value && branch.value.protected === false);
+}
 
 // Timestamps, in one place: `prActivity` reduces rows to their newest date and
 // the verdict reduction below reduces them to the newest ROW. Same comparison,
@@ -148,33 +190,61 @@ const verdictRow = (r) => ({
 function normalizedReviews(rows) {
   return (Array.isArray(rows) ? rows : [])
     .filter((r) => r && r.state && r.state !== 'PENDING')
-    .map((r) => ({ ...r, author: (r.author || (r.user && r.user.login) || 'unknown') }));
+    .map((r) => ({ ...r, author: ((r.user && r.user.login) || 'unknown') }));
 }
 
-function reviewFreshness(view, reviews, readable = true) {
+function reviewFreshness(view, reviews, readable = true, configured = undefined, repo = null) {
   if (!view || view.reviewDecision !== 'APPROVED') {
-    return { review_fresh: true, review_freshness_required: false, review_freshness_reason: null };
+    return { fresh: true, reason: null, stale_authors: [], remedy: null,
+      review_fresh: true, review_freshness_required: false, review_freshness_reason: null };
   }
   const headSha = view.headRefOid || null;
   const headDates = (Array.isArray(view.commits) ? view.commits : [])
     .map((commit) => at(commit.committedDate || commit.authoredDate))
     .filter((value) => value > 0);
   const headAt = headDates.length ? Math.max(...headDates) : 0;
-  const current = currentVerdicts(normalizedReviews(reviews));
+  const observed = normalizedReviews(reviews);
+  const validReviews = readable && observed.every((row) => !DECIDING.has(row.state)
+    || Number.isFinite(Date.parse(row.submitted_at || '')));
+  const current = currentVerdicts(observed);
   const approvals = current.filter((row) => row.state === 'APPROVED');
-  const fresh = readable && Boolean(headSha) && approvals.some((row) => row.commit_id === headSha);
+  const stale = approvals.filter((row) => row.commit_id !== headSha);
+  const onHead = approvals.filter((row) => row.commit_id === headSha);
+  const target = repo || (configured === undefined ? targetRepository() : null);
+  const bots = effectiveBotPolicy(target, configured);
+  const staleBotOnly = validReviews && Boolean(headSha) && stale.length > 0
+    && stale.every((row) => botIdentity(row.author, bots));
+  const humanOnHead = onHead.some((row) => isHumanHeadApproval(row, headSha, view.author, bots));
+  // @contract: a stale human remains a refusal even if another reviewer approved this head.
+  const ignored = staleBotOnly && (humanOnHead || branchRequiresNoReview(view.baseRefName, target));
+  const fresh = validReviews && Boolean(headSha) && (stale.length === 0 && onHead.length > 0 || ignored);
+  const reason = ignored ? 'stale-bot-ignored' : fresh ? null : 'the APPROVED review is not bound to the current head commit';
+  const remedy = fresh ? null : `reviewers.cjs reinit ${view.number || pr} --force`;
   return {
+    fresh, reason, stale_authors: stale.map((row) => row.author), remedy,
+    stale_bot_only: staleBotOnly,
     review_fresh: fresh,
     review_freshness_required: true,
-    review_freshness_reason: fresh ? null : 'the APPROVED review is not bound to the current head commit',
+    review_freshness_reason: reason,
     head_sha: headSha,
     head_committed_at: headAt ? new Date(headAt).toISOString() : null,
     approved_reviews: approvals.map((row) => ({
       author: row.author,
+      state: row.state,
       commit_id: row.commit_id || null,
       submitted_at: row.submitted_at || null,
+      user: row.user && typeof row.user === 'object' ? {
+        login: row.user.login || null,
+        type: row.user.type || null,
+      } : null,
     })),
   };
+}
+
+// @contract: importing these probes must never run the reviewers CLI or contact GitHub.
+if (require.main !== module) {
+  module.exports = { reviewFreshness, branchRequiresNoReview, effectiveBotPolicy, isHumanHeadApproval };
+  return;
 }
 
 function prActivity() {

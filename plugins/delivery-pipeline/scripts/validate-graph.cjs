@@ -208,7 +208,9 @@ for (const file of planFiles.sort()) {
     depends_on: deps.filter((d) => d !== id),
     files: Array.isArray(fm.files_modified) ? fm.files_modified.map(String) : [],
     risk: String(delivery.risk ?? 'medium'),
-    human_checkpoint: delivery.human_checkpoint === true,
+    human_checkpoint: delivery.human_checkpoint === true || delivery.human_checkpoint === 'merge' || delivery.human_checkpoint === 'review',
+    checkpoint: delivery.human_checkpoint === 'review' ? 'review'
+      : delivery.human_checkpoint === true || delivery.human_checkpoint === 'merge' ? 'merge' : null,
     // ADR-001 D6: the record that a person approved THIS ticket's risk while
     // approving the ticket set. It is NOT a synonym for human_checkpoint and
     // must never collapse into it: human_checkpoint says "a human must act on
@@ -239,6 +241,10 @@ for (const file of planFiles.sort()) {
   }
   if (!['low', 'medium', 'high'].includes(tickets[id].risk)) {
     errors.push(`${id}: delivery.risk "${tickets[id].risk}" is not one of low|medium|high`);
+  }
+  // @contract: reject unknown spellings before the boolean graph field could turn them into a false stop.
+  if (delivery.human_checkpoint !== undefined && ![true, false, 'review', 'merge'].includes(delivery.human_checkpoint)) {
+    errors.push(`${id}: delivery.human_checkpoint must be true, false, review or merge, got ${JSON.stringify(delivery.human_checkpoint)}`);
   }
   // frontmatter.cjs either represents a construct or reports an error, and this
   // is the field where that rule earns its keep: `preauthorized` authorizes a
@@ -656,6 +662,7 @@ for (const id of order) {
     risk: t.risk,
     type: t.type,
     human_checkpoint: t.human_checkpoint,
+    checkpoint: t.checkpoint,
     preauthorized: t.preauthorized,
     branch: t.branch,
     epic: t.epic,
@@ -700,6 +707,7 @@ for (const [id, t] of Object.entries(view.tickets)) {
   yaml.push(`    files: ${yamlList(t.files)}`);
   yaml.push(`    risk: ${yamlScalar(t.risk)}`);
   yaml.push(`    human_checkpoint: ${t.human_checkpoint}`);
+  yaml.push(`    checkpoint: ${yamlScalar(t.checkpoint)}`);
   yaml.push(`    preauthorized: ${t.preauthorized}`);
   yaml.push(`    branch: ${yamlScalar(t.branch)}`);
   yaml.push(`    epic: ${yamlScalar(t.epic)}`);

@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: bf88737cbbd9b226b2423545f45920d249011e8254d8ffbad36f5552b4eba4a0
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 5a3a53bb95b1b0aeb81956b0d88e7c80614841ffc25b9de5fdb909c6abb94232
 phase: 41-reduce-pipeline-subscription-overhead
 plan: 04
 subsystem: shipyard delivery
@@ -20,10 +20,10 @@ key-files:
 key-decisions:
   - "Shipyard delivery state is projected; no native executor claim is invented."
 duration: 0min
-completed: 2026-09-26
+completed: 2026-09-30
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: bf88737cbbd9b226b2423545f45920d249011e8254d8ffbad36f5552b4eba4a0
+shipyard_source_fingerprint: 5a3a53bb95b1b0aeb81956b0d88e7c80614841ffc25b9de5fdb909c6abb94232
 ---
 
 # Phase 41: Accept asynchronous native child completion after parent wait timeouts — Delivery Projection

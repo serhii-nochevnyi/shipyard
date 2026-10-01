@@ -8,7 +8,8 @@ const { parse, owns } = require('./path-owner.cjs');
 const prHygiene = require('./pr-hygiene.cjs');
 const { resolveGraphDir } = require('./graph-dir.cjs');
 const { scopeBase } = require('./diamond-parents.cjs');
-const SCRATCH = new Set(['.shipyard-pr-body.md', '.shipyard-evidence.md']);
+const { SCRATCH_FILES, isScratch } = require('./conveyor-scratch.cjs');
+const { createCoverageWriter, repoSlug, repositoryIdentity, validateFinalizationEvidence } = require('./conveyor-coverage.cjs');
 const MAX_GRAPH_BYTES = 8 * 1024 * 1024;
 
 function fail(message, code) {
@@ -88,7 +89,7 @@ function entriesFromStatus(buffer) {
 
 function scopedStatus(worktree, env) {
   const entries = entriesFromStatus(git(worktree, ['status', '--porcelain=v1', '-z', '--untracked-files=all'], env, { binary: true }));
-  for (const name of SCRATCH) {
+  for (const name of SCRATCH_FILES) {
     let file;
     try {
       file = fs.lstatSync(path.join(worktree, name));
@@ -100,7 +101,7 @@ function scopedStatus(worktree, env) {
   }
   const paths = new Set();
   for (const entry of entries) {
-    if (SCRATCH.has(entry.path) && entry.status === '??') {
+    if (entry.status === '??' && isScratch(entry.path, { forJudge: false })) {
       continue;
     } else {
       paths.add(entry.path);
@@ -180,6 +181,8 @@ function finalizeDeliveryCommit(options) {
     fail('files_modified must contain valid repository-relative declarations');
   }
   if (typeof expectedSigner !== 'string' || !expectedSigner.trim()) fail('expectedSigner is required');
+  const verificationEvidenceDigest = options.verificationEvidenceDigest === undefined
+    || options.verificationEvidenceDigest === null ? null : options.verificationEvidenceDigest;
 
   const root = fs.realpathSync(worktree);
   const env = { ...process.env, GIT_OPTIONAL_LOCKS: '0' };
@@ -211,6 +214,26 @@ function finalizeDeliveryCommit(options) {
   const outside = [...new Set([...committed, ...status].filter((file) => !covered(file)))];
   if (outside.length) fail(`out-of-scope paths: ${outside.join(', ')}`);
   if (!status.length) fail('no worktree changes to commit');
+
+  if (verificationEvidenceDigest !== null
+      && (typeof verificationEvidenceDigest !== 'string' || !/^[0-9a-f]{64}$/.test(verificationEvidenceDigest))) {
+    fail('verificationEvidenceDigest must be a SHA-256 digest');
+  }
+  if (!options.coverage || !verificationEvidenceDigest) {
+    fail('trusted finalization requires executor or fixer coverage evidence and its signed verification digest',
+      'COVERAGE_EVIDENCE_REQUIRED');
+  }
+  const coverage = options.coverage;
+  if (coverage.verification_digest !== verificationEvidenceDigest) {
+    fail('coverage verification digest differs from the signed verification evidence digest', 'COVERAGE_EVIDENCE_INVALID');
+  }
+  try {
+    validateFinalizationEvidence({ ...coverage, ticket,
+      repo: repoSlug(root, coverage.repo), repository_id: repositoryIdentity(root) });
+  } catch (error) {
+    fail(`invalid finalization coverage evidence: ${error.message}`, 'COVERAGE_EVIDENCE_INVALID');
+  }
+
   const indexPath = path.resolve(root, git(root, ['rev-parse', '--git-path', 'index'], env).trim());
   const originalIndex = indexSnapshot(indexPath);
 
@@ -248,13 +271,20 @@ function finalizeDeliveryCommit(options) {
     if (options.expectedTree !== undefined && tree !== requireOid(options.expectedTree, 'expectedTree')) {
       fail('scoped tree differs from expectedTree');
     }
+    const verificationTrailer = verificationEvidenceDigest
+      ? `\n\nShipyard-Verification-Evidence: ${verificationEvidenceDigest}` : '';
     const commit = git(root, ['commit-tree', '-S', tree, '-p', head], privateEnv, {
-      input: `${subject}\n`,
+      input: `${subject}${verificationTrailer}\n`,
     }).trim();
     git(root, ['verify-commit', commit], env);
     const signature = git(root, ['show', '-s', '--format=%G?%x00%GF', commit], env).trim().split('\0');
     if (!['G', 'U'].includes(signature[0]) || signature[1] !== expectedSigner.trim()) {
       fail('commit signature does not match expectedSigner');
+    }
+    const recordedEvidenceDigest = verificationEvidenceDigestFromMessage(
+      git(root, ['show', '-s', '--format=%B', commit], env));
+    if (recordedEvidenceDigest !== (verificationEvidenceDigest || undefined)) {
+      fail('signed commit does not bind the supplied verification evidence digest');
     }
     const lockPath = `${indexPath}.lock`;
     let lockFd;
@@ -288,10 +318,33 @@ function finalizeDeliveryCommit(options) {
       if (lockFd !== undefined) fs.closeSync(lockFd);
       if (ownsLock) fs.rmSync(lockPath, { force: true });
     }
-    return Object.freeze({ ticket, worktree: root, base, previousHead: head, commit, tree, signer: signature[1], changed: staged });
+    if (options.coverage) {
+      try {
+        const coverage = options.coverage;
+        createCoverageWriter(options.coverageWriterOptions).record({
+          commit, parents: [head], tree, ticket, worktree: root,
+          repo: repoSlug(root, coverage.repo), kind: coverage.kind,
+          dispatch_id: coverage.dispatch_id, receipt_digest: coverage.receipt_digest,
+          verification_digest: coverage.verification_digest, receipt_store: coverage.receipt_store,
+        });
+      } catch (error) {
+        fail(`commit ${commit} exists but coverage recording failed: ${error.message}`, 'COVERAGE_RECORD_FAILED');
+      }
+    }
+    return Object.freeze({ ticket, worktree: root, base, previousHead: head, commit, tree, signer: signature[1], changed: staged,
+      ...(verificationEvidenceDigest ? { verificationEvidenceDigest } : {}) });
   } finally {
     fs.rmSync(temporary, { recursive: true, force: true });
   }
+}
+
+function verificationEvidenceDigestFromMessage(message) {
+  if (typeof message !== 'string') return null;
+  const trailers = message.split(/\r?\n/).filter((line) => line.startsWith('Shipyard-Verification-Evidence:'));
+  if (!trailers.length) return undefined;
+  if (trailers.length !== 1) return null;
+  const match = /^Shipyard-Verification-Evidence: ([0-9a-f]{64})$/.exec(trailers[0]);
+  return match ? match[1] : null;
 }
 
 function scopedTree(options) {
@@ -322,4 +375,4 @@ function scopedTree(options) {
   }
 }
 
-module.exports = Object.freeze({ finalizeDeliveryCommit, scopedTree });
+module.exports = Object.freeze({ finalizeDeliveryCommit, scopedTree, verificationEvidenceDigestFromMessage });

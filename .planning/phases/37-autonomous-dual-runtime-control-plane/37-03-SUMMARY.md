@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: ad84e3c2662a522045be407c5aaae69692e3b1634cce8eda5f4e092da5bbb359
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 420dd7bcd31e745c6f90199eab730c70ec03783162d1d343259036180aec5131
 phase: 37-autonomous-dual-runtime-control-plane
 plan: 03
 subsystem: shipyard delivery
@@ -20,10 +20,10 @@ key-files:
 key-decisions:
   - "Shipyard delivery state is projected; no native executor claim is invented."
 duration: 0min
-completed: 2026-09-22
+completed: 2026-09-30
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: ad84e3c2662a522045be407c5aaae69692e3b1634cce8eda5f4e092da5bbb359
+shipyard_source_fingerprint: 420dd7bcd31e745c6f90199eab730c70ec03783162d1d343259036180aec5131
 ---
 
 # Phase 37: Connect Claude Code to the scoped runtime controller — Delivery Projection

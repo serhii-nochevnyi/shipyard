@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: f230df6d39aea99067be7d5f279fbeffee419039132cf0931f726ce8f2ef5eb9
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: c6800aa7e6019861cd4754371b01da5f3733a51c287eb36285862809d48fb570
 phase: 43-target-project-delivery-at-scale
 plan: 11
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-30
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: f230df6d39aea99067be7d5f279fbeffee419039132cf0931f726ce8f2ef5eb9
+shipyard_source_fingerprint: c6800aa7e6019861cd4754371b01da5f3733a51c287eb36285862809d48fb570
 ---
 
 # Phase 43: Bind pre-existing Jira issues by recorded key: never create, refuse an unknown key, unlabelled issues are transitioned and commented only — Delivery Projection

@@ -144,20 +144,34 @@ Run unreleased worktree code on purpose, through a separate install root that
 never overwrites the release cache:
 
 ```bash
-make install-shipyard-dogfood-claude DOGFOOD_ROOT=/path/to/dogfood
-make install-shipyard-dogfood-codex DOGFOOD_ROOT=/path/to/dogfood
+make install-shipyard-dogfood-claude
+make install-shipyard-dogfood-codex
+node scripts/install-shipyard-marketplace.cjs codex --source "$PWD"
 ```
+
+Each of these defaults to a home dedicated to this checkout when no override
+is given: `${XDG_STATE_HOME:-$HOME/.local/state}/shipyard/dogfood/<runtime>/<digest>`,
+where `<digest>` is the first 16 hex characters of the sha256 of the
+checkout's realpath. A second checkout of the same repository hashes to a
+different digest, so two dogfood sessions on the same machine never share a
+root. Both targets above accept `DOGFOOD_ROOT=/path/to/dogfood` to override
+it; the marketplace command instead honors an explicitly set `CODEX_HOME`. An
+explicit value always wins over the default. A Codex dogfood install
+explicitly aimed at the shared default `CODEX_HOME` (or `~/.codex`) is
+refused, and the message names the dedicated path instead.
 
 The Codex dogfood install still needs `SHIPYARD_CODEX_CAPABILITIES_FILE`, like
 any direct Codex host install. Each writes a `.shipyard-provenance.json` record
-(install kind, source sha, dirty flag, version) into the dogfood root instead
-of `$CLAUDE_HOME` / `$CODEX_HOME`'s release cache; the Claude installer prints
-the `claude --plugin-dir <dir>` launch line and leaves hooks untouched unless
-`--wire-hooks` is passed directly to the script. `make doctor` reports a
-release cache whose files match no release tag, and reports a dogfood root as
-a warning naming its source sha and dirty flag. A dogfood host is refused by
-the sentinel the same way every host is when a PR targets the repository's
-default integration branch, so dogfooding cannot reach a default-branch merge.
+(install kind, source sha, source root, dirty flag, version) into the dogfood
+root instead of `$CLAUDE_HOME` / `$CODEX_HOME`'s release cache; the Claude
+installer prints the `claude --plugin-dir <dir>` launch line and leaves hooks
+untouched unless `--wire-hooks` is passed directly to the script. `make doctor`
+reports a release cache whose files match no release tag, and reports a
+dogfood root as a warning naming its source sha and dirty flag: `own dogfood`
+when the recorded source root matches this checkout, `foreign dogfood` when it
+was installed from a different one. A dogfood host is refused by the sentinel
+the same way every host is when a PR targets the repository's default
+integration branch, so dogfooding cannot reach a default-branch merge.
 
 ## First run
 

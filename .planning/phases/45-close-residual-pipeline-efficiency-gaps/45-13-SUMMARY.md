@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: f31ea5cf425bbf9794dfd217ff52762f1894aeae78b7c67d109c73ab69f23650
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 610549cb83cba93229ada7cf9520603511c39dc5d4ad10a0392df3321cf19378
 phase: 45-close-residual-pipeline-efficiency-gaps
 plan: 13
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-30
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: f31ea5cf425bbf9794dfd217ff52762f1894aeae78b7c67d109c73ab69f23650
+shipyard_source_fingerprint: 610549cb83cba93229ada7cf9520603511c39dc5d4ad10a0392df3321cf19378
 ---
 
 # Phase 45: drift-gate re-asks a self-contradictory drift-check verdict once, then refuses with both errors — Delivery Projection
