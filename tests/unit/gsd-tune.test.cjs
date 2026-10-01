@@ -166,25 +166,23 @@ test('a foreign projection is reported and never overwritten', () => {
   assert.equal(fs.readFileSync(file, 'utf8'), before, 'foreign content is preserved');
 });
 
-test('GSD\'s two context-bound agents take the paid tier on the SAME terms as ours', () => {
-  // They had `fable` unconditionally, on the identical 1M-window argument that
-  // ADR-005 retired for `arch-review` on a measurement. So: `opus` by default,
-  // and `fable` only where a person has consented through pipeline.fable.
-  const shut = keyed(driftOf(project({}), ['--runtime', 'claude']));
-  assert.equal(shut['model_overrides.gsd-planner'].want, 'opus');
-  assert.equal(shut['model_overrides.gsd-code-reviewer'].want, 'opus');
-  const consented = keyed(driftOf(project({ pipeline: { fable: 'auto' } }), ['--runtime', 'claude']));
-  assert.equal(consented['model_overrides.gsd-planner'].want, 'fable');
-  assert.equal(consented['model_overrides.gsd-code-reviewer'].want, 'fable');
-  // And via model_overrides, NOT the tier keys: the resolver's runtime-tier step
-  // is guarded by `configRuntime !== 'claude'`, so model_profile_overrides.claude.*
-  // is inert — it looks like the lever and does nothing.
-  assert.equal(shut['model_profile_overrides.claude.opus'], undefined,
-    'the inert key must not be written — it would read as a working setting');
-
-  const codex = keyed(driftOf(project({ pipeline: { fable: 'auto' } }), ['--runtime', 'codex']));
-  for (const k of Object.keys(codex)) {
-    assert.ok(!k.startsWith('model_overrides.'), `${k}: fable does not exist off Claude`);
+test('tuner leaves native planner and reviewer selection to routed policy', () => {
+  for (const runtime of ['claude', 'codex']) {
+    for (const fable of ['off', 'auto']) {
+      const dir = project({ pipeline: { fable }, model_overrides: { 'gsd-verifier': 'sonnet' } });
+      const d = keyed(driftOf(dir, ['--runtime', runtime]));
+      for (const agent of ['gsd-planner', 'gsd-code-reviewer']) {
+        assert.equal(d[`model_overrides.${agent}`], undefined);
+      }
+      assert.equal(run(dir, ['--runtime', runtime, '--apply']).status, 0);
+      assert.deepEqual(readCfg(dir).model_overrides, { 'gsd-verifier': 'sonnet' });
+      assert.equal(readCfg(dir).pipeline.fable, fable);
+      const { config } = pc.loadConfig(dir, { runtime, env: {}, routed: true });
+      const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
+      for (const role of ['decomposition', 'arch-review']) {
+        assert.deepEqual(pc.resolveDispatch({ config, role }), policy.resolveDispatch({ runtime, role }));
+      }
+    }
   }
 });
 

@@ -309,8 +309,8 @@ test('the real executor prompt carries the packet and no unrelated transcript', 
   const evidence = new WeakMap();
   const recorder = createDurableRecorder(path.join(f.root, 'receipts'));
   const capabilities = {
-    supportedModels: ['sonnet'],
-    supportedEfforts: ['max'],
+    supportedModels: [CLAUDE_MODEL_ALIASES.sonnet],
+    supportedEfforts: ['medium'],
     observedModel: true,
     observedEffort: true,
   };
@@ -342,8 +342,8 @@ test('the real executor prompt carries the packet and no unrelated transcript', 
           branch: 'ticket/T-33-06',
           worktreePath: f.root,
           prBase: 'main',
-          model: 'sonnet',
-          effort: 'max',
+          model: 'claude-sonnet-5-5',
+          effort: 'medium',
           signals: {},
           contextPacket: packet,
           contextPacketRequired: true,

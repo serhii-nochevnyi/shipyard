@@ -28,7 +28,7 @@ const roleArtifact = require(ROLE_ARTIFACT);
 
 const CAPABILITIES = Object.freeze({
   supportedModels: [CLAUDE_MODEL_ALIASES.sonnet],
-  supportedEfforts: ['max'],
+  supportedEfforts: ['medium'],
   observedModel: true,
   observedEffort: true,
 });
@@ -111,8 +111,8 @@ function fixture(options = {}) {
       branch: `ticket/${ticket}`,
       worktreePath: root,
       prBase: 'main',
-      model: 'sonnet',
-      effort: 'max',
+      model: 'claude-sonnet-5-5',
+      effort: 'medium',
     }],
   };
   return {
