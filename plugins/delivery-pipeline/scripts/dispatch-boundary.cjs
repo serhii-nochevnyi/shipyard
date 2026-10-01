@@ -692,7 +692,14 @@ function createDurableRecorder(storeDir) {
             previous_dispatch_id: priorLatest && priorLatest.authenticated ? priorLatest.payload.dispatch_id : null };
           if (!atomicCreateJson(rollbackHistoryFile(dispatchId), seal(history))) {
             const existingHistory = readAuthenticated(rollbackHistoryFile(dispatchId));
-            if (!existingHistory || !sameRecord(existingHistory, history)) return { recorded: false };
+            const ownsLatest = priorLatest && priorLatest.authenticated
+              && priorLatest.payload.dispatch_id === dispatchId;
+            if (!existingHistory || existingHistory.dispatch_id !== dispatchId
+                || existingHistory.runtime !== receipt.runtime || existingHistory.role !== receipt.role
+                || (existingHistory.previous_dispatch_id !== null
+                  && (typeof existingHistory.previous_dispatch_id !== 'string'
+                    || existingHistory.previous_dispatch_id === dispatchId))
+                || (!ownsLatest && !sameRecord(existingHistory, history))) return { recorded: false };
           }
           if (predecessorDispatchId !== undefined || predecessorConsumerId !== undefined) {
             if (typeof predecessorDispatchId !== 'string' || typeof predecessorConsumerId !== 'string') return { recorded: false };

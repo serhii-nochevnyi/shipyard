@@ -2970,6 +2970,15 @@ test('recoverReserved records only an existing, unrecorded durable reservation',
     const live = boundaryModule.createDispatchBoundary({ recorder, adapters: { codex: fakeAdapter() } });
     assert.throws(() => live.dispatch({ runtime: 'codex', role: 'executor', dispatch_id: 'dispatch-orphan' },
       { ticket: 'T-45-09' }), (error) => error.code === 'DUPLICATE_DISPATCH_ID');
+    const digest = crypto.createHash('sha256').update('dispatch-orphan').digest('hex');
+    const historyFile = path.join(dir, 'receipts', `rollback-history-${digest}.json`);
+    const historyBytes = fs.readFileSync(historyFile, 'utf8');
+    fs.unlinkSync(path.join(dir, 'receipts', `record-${digest}.json`));
+    const recoveredAgain = recovering().dispatch({ runtime: 'codex', role: 'executor', dispatch_id: 'dispatch-orphan' },
+      { ticket: 'T-45-09' });
+    assert.deepStrictEqual(recoveredAgain.receipt, recovered.receipt);
+    assert.equal(fs.readFileSync(historyFile, 'utf8'), historyBytes);
+    assert.equal(recorder.getLatestReceipt('codex', 'executor').dispatch_id, 'dispatch-orphan');
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
