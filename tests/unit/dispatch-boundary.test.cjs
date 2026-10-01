@@ -2744,8 +2744,6 @@ test('an older provisional abort cannot roll back a newer cross-process latest r
     const progress = await Promise.race([lockAttempt, writerComplete]);
     assert.ok(progress, 'new receipt must either contend on the store fence or complete in the unfenced baseline');
 
-    // A fenced writer is blocked on the old abort and proceeds after this signal.
-    // An unfenced baseline completes first so the causal rollback is deterministic.
     fs.writeFileSync(path.join(barrierDir, 'release-abort'), 'go');
     const aborted = await waitForMessage(abortChild, 'old-aborted');
     assert.equal(aborted.code, 'WRITER_FENCED');

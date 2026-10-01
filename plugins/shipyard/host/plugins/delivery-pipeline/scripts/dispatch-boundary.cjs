@@ -370,8 +370,6 @@ function createDurableRecorder(storeDir) {
       process.kill(pid, 0);
       return false;
     } catch (error) {
-      // Only positive evidence of process exit permits takeover. A permission
-      // error or any other failed liveness probe leaves ownership unknown.
       return Boolean(error && error.code === 'ESRCH');
     }
   };
@@ -689,8 +687,6 @@ function createDurableRecorder(storeDir) {
                 const existingCommit = existingCommitStored && existingCommitStored.payload;
                 if (existingCommitStored && existingCommitStored.legacy) {
                   // A pre-envelope marker is readable history, not an
-                  // authority. Replace it only while holding the same fenced
-                  // predecessor lock that guards all new repair commits.
                   atomicReplaceJson(repairCommitFile(predecessorDispatchId), seal(repairCommit));
                 } else {
                   if (!existingCommit || !sameRecord(existingCommit, repairCommit)) return { recorded: false };
