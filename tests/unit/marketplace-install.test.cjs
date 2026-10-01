@@ -71,7 +71,6 @@ fs.writeFileSync(file,JSON.stringify(s));
   assert.equal(packageFreshnessRequired('main'),true);
   assert.equal(packageFreshnessRequired('epic/43-target-project-delivery-at-scale'),false);
   assert.equal(packageFreshnessRequired('ticket/T-40-17-add-the-publish-time-pr-hygiene-gate-and'),false);
-  // The final reviewed mirror must be coherent on ticket and epic branches too.
   const currentPolicy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
   assert.equal(currentPolicy.POLICY_VERSION, 'adr-014.v7');
   function assertCurrentPackage(dir) {

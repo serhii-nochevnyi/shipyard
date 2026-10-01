@@ -1537,7 +1537,6 @@ test('Codex and Claude retain separate concrete model palettes in policy dimensi
   assert.equal(codex.requested_model, 'gpt-6.1-sol', 'Codex uses its concrete Sol id');
 });
 
-// Fixed v6 resolution captured from the prior checked-in package, not current policy.
 test('fixed v6 historical attribution stays stale without changing its source bytes', () => {
   const historicalBytes = '{"policy_version":"adr-014.v6","policy_hash":"30e71fb4066fee5b67df14120532c0b4f8aedde169907bc16f70dd2569744968","runtime":"codex","role":"executor","model_key":"luna","logical_model":"luna","logical_rung":"base","rung":"base","rung_index":0,"model":"gpt-6-luna","effort":"max","requested_model":"gpt-6-luna","requested_effort":"max","route":"role=executor rung=base model=luna signals=base","backend":"agent","mechanism":"explicit-launch-arguments","signals_fired":[],"signal_reasons":[],"selected_signals":[],"signals":{},"agent_file":null,"launch_arguments":{"model":"gpt-6-luna","reasoning_effort":"max"},"dispatch_id":"fixed-v6-history"}';
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-v6-history-'));
