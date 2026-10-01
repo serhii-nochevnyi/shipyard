@@ -315,11 +315,31 @@ const flag = (n) => { const i = argv.indexOf(`--${n}`); return i === -1 ? null :
 // that old global key out instead of writing a new last-write-wins value.
 const GLOBAL = argv.includes('--global');
 const ROOT = process.cwd();
-const CONFIG = GLOBAL
-  ? path.join(process.env.HOME || '', '.gsd', 'defaults.json')
-  : path.join(ROOT, '.planning', 'config.json');
-
 function fail(msg, code = 2) { process.stderr.write(`gsd-tune: ${msg}\n`); process.exit(code); }
+
+function globalDefaultsPath() {
+  const override = process.env.GSD_DEFAULTS_PATH;
+  if (override === undefined) return path.join(process.env.HOME || '', '.gsd', 'defaults.json');
+  if (typeof override !== 'string' || !override.trim()) {
+    fail('GSD_DEFAULTS_PATH must be a non-empty absolute file path');
+  }
+  if (!path.isAbsolute(override)) fail('GSD_DEFAULTS_PATH must be absolute');
+  const target = path.resolve(override);
+  try {
+    const stat = fs.lstatSync(target);
+    if (!stat.isFile() || stat.isSymbolicLink()) {
+      fail(`GSD_DEFAULTS_PATH must name a regular file, not ${target}`);
+    }
+  } catch (error) {
+    if (error.code !== 'ENOENT') fail(`cannot validate GSD_DEFAULTS_PATH ${target}: ${error.message}`);
+  }
+  return target;
+}
+
+// @contract: --global writes the validated installer-selected defaults path when set.
+const CONFIG = GLOBAL
+  ? globalDefaultsPath()
+  : path.join(ROOT, '.planning', 'config.json');
 
 let raw;
 if (!fs.existsSync(CONFIG)) {

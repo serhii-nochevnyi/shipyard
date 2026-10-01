@@ -294,6 +294,7 @@ function createDurableRecorder(storeDir) {
   const repairCommitFile = (dispatchId) => file('repair-commit', dispatchId);
   const claimFile = (dispatchId) => file('claim', dispatchId);
   const claimLockFile = (dispatchId) => file('claim-recovery', dispatchId);
+  const provisionalPreviousLatest = new Map();
   const newFenceToken = () => typeof crypto.randomUUID === 'function'
     ? crypto.randomUUID()
     : crypto.randomBytes(16).toString('hex');
@@ -610,6 +611,7 @@ function createDurableRecorder(storeDir) {
         return { recorded: false };
       }
       if (!fs.existsSync(reservationFile(dispatchId))) return { recorded: false };
+      const priorLatest = readStored(latestFile(receipt.runtime, receipt.role));
       const predecessorDispatchId = recordInput.predecessor_dispatch_id;
       const predecessorConsumerId = recordInput.predecessor_consumer_id;
       try {
@@ -657,6 +659,7 @@ function createDurableRecorder(storeDir) {
           if (!existingStored.authenticated) atomicReplaceJson(recordFile(dispatchId), durableRecord);
         }
         atomicReplaceJson(latestFile(receipt.runtime, receipt.role), durableRecord);
+        provisionalPreviousLatest.set(dispatchId, priorLatest && priorLatest.authenticated ? priorLatest.payload : null);
       } catch (error) {
         throw boundaryError('RECORD_FAILED', `durable dispatch record failed: ${error.message}`, { dispatch_id: dispatchId });
       }
@@ -692,10 +695,42 @@ function createDurableRecorder(storeDir) {
         const durableRecord = seal(recordInput);
         atomicReplaceJson(recordFile(dispatchId), durableRecord);
         atomicReplaceJson(latestFile(receipt.runtime, receipt.role), durableRecord);
+        provisionalPreviousLatest.delete(dispatchId);
         return { finalized: true };
       } catch (error) {
         throw boundaryError('RECORD_FAILED', `durable dispatch finalization failed: ${error.message}`, { dispatch_id: dispatchId });
       }
+    },
+    abortProvisional(recordInput, authority) {
+      if (authority !== RECORDER_AUTHORITY) return { aborted: false };
+      const dispatchId = recordInput && recordInput.dispatch_id;
+      const receipt = recordInput && recordInput.receipt;
+      if (typeof dispatchId !== 'string' || !isObject(receipt) || receipt.dispatch_id !== dispatchId) return { aborted: false };
+      const expected = canonicalStableStringify(recordInput);
+      const matches = (filePath, payload = recordInput) => {
+        const stored = readStored(filePath);
+        return stored && stored.authenticated
+          && canonicalStableStringify(stored.payload) === canonicalStableStringify(payload);
+      };
+      const ownRecord = recordFile(dispatchId);
+      if (!matches(ownRecord)) return { aborted: false };
+      const latest = latestFile(receipt.runtime, receipt.role);
+      const predecessor = recordInput.predecessor_dispatch_id;
+      const marker = predecessor === undefined ? null : repairCommitFile(predecessor);
+      const markerStored = marker && readStored(marker);
+      if (markerStored && (!markerStored.authenticated
+          || !isObject(markerStored.payload)
+          || markerStored.payload.successor_dispatch_id !== dispatchId
+          || canonicalStableStringify(markerStored.payload.record_input) !== expected)) return { aborted: false };
+      if (matches(latest)) {
+        const previous = provisionalPreviousLatest.get(dispatchId);
+        if (previous) atomicReplaceJson(latest, seal(previous));
+        else fs.unlinkSync(latest);
+      }
+      if (markerStored) fs.unlinkSync(marker);
+      fs.unlinkSync(ownRecord);
+      provisionalPreviousLatest.delete(dispatchId);
+      return { aborted: true };
     },
     getReservation(dispatchId) {
       if (typeof dispatchId !== 'string' || dispatchId.trim() === '') return null;
@@ -1538,6 +1573,15 @@ function recorderFinalize(recorder, recordInput) {
   if (!affirmative(result, 'finalized')) {
     refuse('RECORD_FAILED', 'durable dispatch record could not be finalized after acknowledgement', { dispatch_id: recordInput.dispatch_id });
   }
+}
+
+function recorderAbortProvisional(recorder, recordInput) {
+  const target = recorderMethod(recorder, ['abortProvisional']);
+  if (!target) return false;
+  const args = DURABLE_RECORDERS.has(recorder)
+    ? [recordInput, RECORDER_AUTHORITY] : [recordInput];
+  const result = invokeSync(target.fn, target.receiver, args, 'provisional record abort');
+  return affirmative(result, 'aborted');
 }
 
 function recorderReserve(recorder, dispatchId, reservation) {
@@ -2414,25 +2458,71 @@ function createDispatchBoundary(options = {}) {
         // recorder's affirmative acknowledgement below.
         trace: [...stages],
       }));
-      const recordResult = recorderRecord(record, recordInput, priorClaim);
-      if (!affirmative(recordResult, 'recorded')) {
-        refuse('RECORD_FAILED', 'durable dispatch recording did not return affirmative acknowledgement; the launch is not compliant', { dispatch_id: resolution.dispatch_id });
+      const validateBeforeMutation = () => {
+        if (validatedResolution.gsd_role === undefined) return null;
+        if (typeof context.preRecordValidation !== 'function') {
+          refuse('WRITER_FENCED', 'typed judgment dispatch has no host-owned writer validation');
+        }
+        return context.preRecordValidation({
+          dispatch_id: validatedResolution.dispatch_id,
+          gsd_role: validatedResolution.gsd_role,
+          receipt: applicationReceipt,
+        });
+      };
+      const finishRecord = () => {
+        recorderFinalize(record, finalizedRecord);
+        consumePriorReceipt(prior, record, claimConsumerId, priorClaim);
+        registerReceipt(applicationReceipt, validatedResolution, record, finalizedRecord);
+        if (handoffReservation) handoffController.completeLaunch(handoffReservation, { recorded: true, receipt: applicationReceipt });
+        if (priorLease) priorLease.stop();
+        if (capacityHeartbeat) capacityHeartbeat.stop();
+        releaseCapacityBestEffort(capacityLease);
+        return finalizedRecord;
+      };
+      let finalizedRecord;
+      const recordAfterValidation = () => {
+        const recordResult = recorderRecord(record, recordInput, priorClaim);
+        if (!affirmative(recordResult, 'recorded')) {
+          refuse('RECORD_FAILED', 'durable dispatch recording did not return affirmative acknowledgement; the launch is not compliant', { dispatch_id: resolution.dispatch_id });
+        }
+        const afterRecord = () => {
+          if (priorLease) priorLease.assertHealthy();
+          return finishRecord();
+        };
+        const abortOwnRecord = (error) => {
+          if (DURABLE_RECORDERS.has(record) && !recorderAbortProvisional(record, recordInput)) {
+            refuse('RECORD_FAILED', 'provisional dispatch record ownership could not be proved for abort',
+              { dispatch_id: validatedResolution.dispatch_id, cause: error && error.code });
+          }
+          throw error;
+        };
+        try {
+          if (priorLease) priorLease.assertHealthy();
+          stages.push({ stage: 'record', status: 'passed' });
+          stages.push({ stage: 'receipt', status: 'passed', launch_id: applicationReceipt.launch_id });
+          finalizedRecord = deepFreeze(snapshot({ ...baseTrace, trace: stages }));
+          const secondValidation = validateBeforeMutation();
+          return secondValidation && typeof secondValidation.then === 'function'
+            ? secondValidation.then(afterRecord).catch(abortOwnRecord)
+            : afterRecord();
+        } catch (error) { return abortOwnRecord(error); }
+      };
+      const validation = validateBeforeMutation();
+      return validation && typeof validation.then === 'function'
+        ? validation.then(recordAfterValidation) : recordAfterValidation();
+    };
+    const abortAsync = (error) => {
+      if (handoffReservation) {
+        try {
+          handoffController.completeLaunch(handoffReservation, { recorded: false,
+            reason: error && error.message ? error.message : 'launch failed' });
+        } catch (_) { /* @invariant: retain the durable ambiguous marker rather than retrying. */ }
       }
-      if (priorLease) priorLease.assertHealthy();
-      stages.push({ stage: 'record', status: 'passed' });
-      stages.push({ stage: 'receipt', status: 'passed', launch_id: applicationReceipt.launch_id });
-      const finalizedRecord = deepFreeze(snapshot({
-        ...baseTrace,
-        trace: stages,
-      }));
-      recorderFinalize(record, finalizedRecord);
-      consumePriorReceipt(prior, record, claimConsumerId, priorClaim);
-      registerReceipt(applicationReceipt, validatedResolution, record, finalizedRecord);
-      if (handoffReservation) handoffController.completeLaunch(handoffReservation, { recorded: true, receipt: applicationReceipt });
       if (priorLease) priorLease.stop();
+      if (priorClaim) recorderRelease(record, prior.dispatch_id, claimConsumerId, priorClaim);
       if (capacityHeartbeat) capacityHeartbeat.stop();
       releaseCapacityBestEffort(capacityLease);
-      return finalizedRecord;
+      throw error;
     };
     try {
       // Static Codex artifacts are mutable files. Re-read and snapshot the
@@ -2452,20 +2542,11 @@ function createDispatchBoundary(options = {}) {
           : [validatedResolution, context],
       );
       if (launchResult && typeof launchResult.then === 'function') {
-        return launchResult.then(finish).catch((error) => {
-          if (handoffReservation) {
-            try {
-              handoffController.completeLaunch(handoffReservation, { recorded: false, reason: error && error.message ? error.message : 'launch failed' });
-            } catch (_) { /* the durable ambiguous marker is safer than a retry */ }
-          }
-          if (priorLease) priorLease.stop();
-          if (priorClaim) recorderRelease(record, prior.dispatch_id, claimConsumerId, priorClaim);
-          if (capacityHeartbeat) capacityHeartbeat.stop();
-          releaseCapacityBestEffort(capacityLease);
-          throw error;
-        });
+        return launchResult.then(finish).catch(abortAsync);
       }
-      return finish(launchResult);
+      const finished = finish(launchResult);
+      return finished && typeof finished.then === 'function'
+        ? finished.catch(abortAsync) : finished;
     } catch (error) {
       if (handoffReservation) {
         try {
