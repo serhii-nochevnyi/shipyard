@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: b70830895a84656b7d78b117a7514211e4643f176136456ade5e80f05a19381b
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 009c71feb8ea8c9be27febef572394d3f26e3c787efe7ef1a0a944873f40dcc2
 phase: 36-enforce-the-runtime-model-ladder
 plan: 04
 subsystem: shipyard delivery
@@ -20,10 +20,10 @@ key-files:
 key-decisions:
   - "Shipyard delivery state is projected; no native executor claim is invented."
 duration: 0min
-completed: 2026-09-15
+completed: 2026-09-30
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: b70830895a84656b7d78b117a7514211e4643f176136456ade5e80f05a19381b
+shipyard_source_fingerprint: 009c71feb8ea8c9be27febef572394d3f26e3c787efe7ef1a0a944873f40dcc2
 ---
 
 # Phase 36: Generate and validate the Codex bundle with the amended model ladder — Delivery Projection

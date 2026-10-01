@@ -1,13 +1,13 @@
 {
   "schema_version": 1,
-  "generation": 400,
-  "generation_identity": "0f6dbe0f-05a5-4b45-8cb5-4ac4dc6a3f03",
-  "previous_generation_identity": "16777245:12938907459:1790774313709381600:370ed892740809077efe1dbf287b49c2cab0d29fc57a41361824adc09f269e71",
-  "observed_at": "2026-09-30T13:39:53.960Z",
-  "generated_at": "2026-09-30T13:39:53.960Z",
+  "generation": 404,
+  "generation_identity": "71121b96-c5b7-4c60-81fc-f534658e7f11",
+  "previous_generation_identity": "16777245:12940684083:1790856962693285400:a43ebf507a151f98d98778509666d3be5ae890e006e4e20f2b2ceb16cb5249d7",
+  "observed_at": "2026-10-01T12:14:27.176Z",
+  "generated_at": "2026-10-01T12:14:27.176Z",
   "by": "state-sync",
-  "pid": 50109,
-  "observation_generation": 400,
+  "pid": 48680,
+  "observation_generation": 404,
   "observation_projection": {
     "tickets": {
       "T-20-01": {
@@ -2431,21 +2431,15 @@
         "checks": null
       },
       "T-43-19": {
-        "status": "pr-open",
+        "status": "merged",
         "repository": null,
         "pr": 380,
-        "head": "78e03f6cced0f48f89e6279c156b4164e0be7a58",
-        "draft": true,
+        "head": null,
+        "draft": false,
         "base": "epic/43-target-project-delivery-at-scale",
-        "merge_state": "CLEAN",
+        "merge_state": null,
         "review_decision": null,
-        "checks": {
-          "total": 1,
-          "pending": 0,
-          "failing": 0,
-          "none_reported": false,
-          "unavailable": false
-        }
+        "checks": null
       },
       "T-44-01": {
         "status": "merged",
@@ -2624,40 +2618,34 @@
         "checks": null
       },
       "T-45-09": {
-        "status": "pr-open",
+        "status": "merged",
         "repository": null,
         "pr": 369,
-        "head": "1611e10565f8661569b9aa78f712be4a26afedda",
-        "draft": false,
-        "base": "epic/45-close-residual-pipeline-efficiency-gaps",
-        "merge_state": "CLEAN",
-        "review_decision": null,
-        "checks": {
-          "total": 1,
-          "pending": 0,
-          "failing": 0,
-          "none_reported": false,
-          "unavailable": false
-        }
-      },
-      "T-45-10": {
-        "status": "pending",
-        "repository": null,
-        "pr": null,
         "head": null,
         "draft": false,
-        "base": "ticket/T-45-09-codex-decompose-host-recovers-a-complete",
+        "base": "epic/45-close-residual-pipeline-efficiency-gaps",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-45-10": {
+        "status": "merged",
+        "repository": null,
+        "pr": 383,
+        "head": null,
+        "draft": false,
+        "base": "epic/45-close-residual-pipeline-efficiency-gaps",
         "merge_state": null,
         "review_decision": null,
         "checks": null
       },
       "T-45-11": {
-        "status": "pending",
+        "status": "merged",
         "repository": null,
-        "pr": null,
+        "pr": 382,
         "head": null,
         "draft": false,
-        "base": "ticket/T-45-09-codex-decompose-host-recovers-a-complete",
+        "base": "epic/45-close-residual-pipeline-efficiency-gaps",
         "merge_state": null,
         "review_decision": null,
         "checks": null
@@ -2695,29 +2683,51 @@
         "review_decision": null,
         "checks": null
       },
+      "T-45-15": {
+        "status": "merged",
+        "repository": null,
+        "pr": 390,
+        "head": null,
+        "draft": false,
+        "base": "epic/45-close-residual-pipeline-efficiency-gaps",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-45-16": {
+        "status": "merged",
+        "repository": null,
+        "pr": 393,
+        "head": null,
+        "draft": false,
+        "base": "epic/45-close-residual-pipeline-efficiency-gaps",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-45-17": {
+        "status": "merged",
+        "repository": null,
+        "pr": 392,
+        "head": null,
+        "draft": false,
+        "base": "epic/45-close-residual-pipeline-efficiency-gaps",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-45-18": {
+        "status": "merged",
+        "repository": null,
+        "pr": 398,
+        "head": null,
+        "draft": false,
+        "base": "epic/45-close-residual-pipeline-efficiency-gaps",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
       "T-46-01": {
-        "status": "pending",
-        "repository": null,
-        "pr": null,
-        "head": null,
-        "draft": false,
-        "base": "epic/46-refresh-native-runtime-model-ladder",
-        "merge_state": null,
-        "review_decision": null,
-        "checks": null
-      },
-      "T-46-02": {
-        "status": "pending",
-        "repository": null,
-        "pr": null,
-        "head": null,
-        "draft": false,
-        "base": "epic/46-refresh-native-runtime-model-ladder",
-        "merge_state": null,
-        "review_decision": null,
-        "checks": null
-      },
-      "T-46-03": {
         "status": "pending",
         "repository": null,
         "pr": null,
@@ -2765,9 +2775,9 @@
   },
   "binding": {
     "schema_version": 1,
-    "state_digest": "a520698c19396c24049a23e7cfcfe46959b13e5ea4d9b458d6ff270f4d110b37",
-    "front_digest": "9b450ef9e5c686696cb7d3be9a8070470cbf1ae616e086f8e88926d7bce16472",
-    "observation_digest": "9b630fcabb702b62ba7352c8badd575d4bddc662d28f526521724eed1cba5144",
-    "observation_generation": 400
+    "state_digest": "951fef05c479eaa98f37883865d2ce96a335ec4bff47f09226c60d5882c60d85",
+    "front_digest": "539445082f3654a5e56844347c068c2232b27d7299bf63e9fe3a5bcee36bd9e5",
+    "observation_digest": "a7c6aa341fb3dcf6f6640f0993e3e1e878851351f23258d660b8ea78ff5dee20",
+    "observation_generation": 404
   }
 }

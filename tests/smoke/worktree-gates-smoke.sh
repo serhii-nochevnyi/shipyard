@@ -323,5 +323,47 @@ for gate in scope-gate base-merge; do
 done
 ok "both gates refuse a declaration the ownership matcher cannot answer"
 
+P6="$WORK/proj6"
+O6="$WORK/origin6.git"
+SEED6="$WORK/seed6"
+git init -q --bare "$O6"
+git init -q -b main "$SEED6"
+git -C "$SEED6" remote add origin "$O6"
+mkdir -p "$SEED6/src"
+printf '.planning/\n' > "$SEED6/.gitignore"
+printf 'initial\n' > "$SEED6/src/parent.txt"
+git -C "$SEED6" add -A && git -C "$SEED6" commit -qm init
+git -C "$SEED6" branch epic/06
+git -C "$SEED6" checkout -q -b ticket/T-06-01-parent epic/06
+printf 'merged parent work\n' > "$SEED6/src/parent.txt"
+git -C "$SEED6" commit -qam parent
+git -C "$SEED6" checkout -q epic/06
+git -C "$SEED6" merge --squash ticket/T-06-01-parent -q >/dev/null
+git -C "$SEED6" commit -qm "squash parent into epic"
+git -C "$SEED6" push -q origin main epic/06
+git clone -q "$O6" "$P6"
+mkdir -p "$P6/.planning/graph"
+cat > "$P6/.planning/graph/tickets.json" <<'JSON'
+{"tickets":{
+  "T-06-01":{"branch":"ticket/T-06-01-parent","pr_base":"epic/06","epic":"epic/06","phase":"6","files":["src/parent.txt"]},
+  "T-06-02":{"branch":"ticket/T-06-02-child","pr_base":"ticket/T-06-01-parent","primary_parent":"T-06-01","epic":"epic/06","phase":"6","files":["src/child.txt"]}}}
+JSON
+cat > "$P6/.planning/graph/delivery-state.json" <<'JSON'
+{"T-06-01":{"branch":"ticket/T-06-01-parent","status":"merged","merged_into":"epic/06"},
+ "T-06-02":{"branch":"ticket/T-06-02-child","status":"pending","base":"epic/06"}}
+JSON
+[[ -z "$(git -C "$P6" ls-remote --heads origin ticket/T-06-01-parent)" ]] \
+  || fail "fixture is wrong: the merged parent branch must be absent from origin"
+WT6="$WORK/worktrees6/T-06-02"
+out="$(cd "$P6" && SHIPYARD_WORKTREE_ROOT="$WORK/worktrees6" bash "$SCRIPTS/ticket-worktree.sh" \
+  create T-06-02 ticket/T-06-02-child ticket/T-06-01-parent 2>&1)" \
+  || fail "worktree creation must replace the stale parent base with the live board base: $out"
+[[ -d "$WT6" ]] || fail "the child worktree was not created: $out"
+[[ "$(git -C "$WT6" rev-parse HEAD)" == "$(git -C "$P6" rev-parse origin/epic/06)" ]] \
+  || fail "the child must start at origin/epic/06, got $(git -C "$WT6" rev-parse HEAD)"
+grep -q 'merged parent work' "$WT6/src/parent.txt" \
+  || fail "the live epic content must be present in the child worktree"
+ok "a merged, reaped parent resolves to the live epic before worktree creation"
+
 echo "$PASS passed, 0 failed"
 echo "worktree gates smoke passed"

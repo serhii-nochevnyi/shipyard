@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: f33743d1d2e45d02c69e26c1075699370ffe95a44eb26e3af71dfead3553bdb7
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 7d5687b44348c77361830be2830eb67f24627543fa7de26053ca0c087cc13d98
 phase: 45-close-residual-pipeline-efficiency-gaps
 plan: 04
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-30
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: f33743d1d2e45d02c69e26c1075699370ffe95a44eb26e3af71dfead3553bdb7
+shipyard_source_fingerprint: 7d5687b44348c77361830be2830eb67f24627543fa7de26053ca0c087cc13d98
 ---
 
 # Phase 45: codex-decompose-host run lease uses an injected clock and heartbeat so the native-child test is deterministic — Delivery Projection

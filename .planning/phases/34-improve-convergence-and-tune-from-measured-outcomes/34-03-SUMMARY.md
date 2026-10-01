@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 70d536e7164e50fd8a5c8b37eb420628ea2b51ce843f0390ab3e284e8cc8afdd
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 30dc222df4ec48cd27055d7beaf33d789e948aacbcbf5467054ec67fa58448f3
 phase: 34-improve-convergence-and-tune-from-measured-outcomes
 plan: 03
 subsystem: shipyard delivery
@@ -20,10 +20,10 @@ key-files:
 key-decisions:
   - "Shipyard delivery state is projected; no native executor claim is invented."
 duration: 0min
-completed: 2026-09-17
+completed: 2026-09-30
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 70d536e7164e50fd8a5c8b37eb420628ea2b51ce843f0390ab3e284e8cc8afdd
+shipyard_source_fingerprint: 30dc222df4ec48cd27055d7beaf33d789e948aacbcbf5467054ec67fa58448f3
 ---
 
 # Phase 34: Strengthen manual merge verdict carry — Delivery Projection

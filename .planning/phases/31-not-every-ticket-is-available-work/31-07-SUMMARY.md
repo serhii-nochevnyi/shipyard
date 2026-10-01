@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 51952ed8cfd2c5d66464e441290e39fe3fa8fe9b59c1650511e5b36142fa4eb2
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 8809883fa90048fac0e3f91d043ddec19eb1700f1b82518461adc049a1315ebe
 phase: 31-not-every-ticket-is-available-work
 plan: 07
 subsystem: shipyard delivery
@@ -20,10 +20,10 @@ key-files:
 key-decisions:
   - "Shipyard delivery state is projected; no native executor claim is invented."
 duration: 0min
-completed: 2026-09-14
+completed: 2026-09-30
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 51952ed8cfd2c5d66464e441290e39fe3fa8fe9b59c1650511e5b36142fa4eb2
+shipyard_source_fingerprint: 8809883fa90048fac0e3f91d043ddec19eb1700f1b82518461adc049a1315ebe
 ---
 
 # Phase 31: Read tracker eligibility at cold start and consume the cache — Delivery Projection

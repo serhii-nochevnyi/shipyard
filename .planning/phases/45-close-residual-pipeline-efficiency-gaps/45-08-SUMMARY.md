@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: bbb02211c499f1d92e212eac0a719946efb6902b2843143f5e02576ad5cdc145
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 333dc2a65a725f7f5c0ad77df73f01451432ee925fcf33629948261158d04eb3
 phase: 45-close-residual-pipeline-efficiency-gaps
 plan: 08
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-30
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: bbb02211c499f1d92e212eac0a719946efb6902b2843143f5e02576ad5cdc145
+shipyard_source_fingerprint: 333dc2a65a725f7f5c0ad77df73f01451432ee925fcf33629948261158d04eb3
 ---
 
 # Phase 45: Both decompose hosts hold the planning writer lease from launch to seal and refuse fenced or foreign-edited seals — Delivery Projection

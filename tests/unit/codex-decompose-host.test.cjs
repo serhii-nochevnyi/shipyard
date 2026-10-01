@@ -12,8 +12,12 @@ const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs
 const { codexStaticVariants } = require('../../plugins/delivery-pipeline/scripts/gsd-tune.cjs');
 const { createDurableRecorder } = require('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs');
 const { createRunController } = require('../../plugins/delivery-pipeline/scripts/run-controller.cjs');
+const { createPlanningWriterLease } = require('../../plugins/delivery-pipeline/scripts/planning-writer-lease.cjs');
+const { createCodexRuntimeHost } = require('../../plugins/delivery-pipeline/scripts/codex-runtime-host.cjs');
+const { runDecomposition: runClaudeDecomposition } = require('../../plugins/delivery-pipeline/scripts/claude-decompose-host.cjs');
+const orchestrationOverhead = require('../../plugins/delivery-pipeline/scripts/orchestration-overhead.cjs');
 const {
-  createCodexDecomposeHost, defaultRunStoreDir, parseCliArguments, readRequestFile, requestValue, runCli,
+  createCodexDecomposeHost, defaultRunStoreDir, parseCliArguments, parseRecoverArguments, readRequestFile, requestValue, runCli,
 } = require('../../plugins/delivery-pipeline/scripts/codex-decompose-host.cjs');
 
 const capabilities = {
@@ -28,6 +32,10 @@ function git(root, ...args) {
   assert.equal(result.status, 0, result.stderr);
 }
 
+function headRevision(root) {
+  return spawnSync('git', ['-C', root, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
+}
+
 function researchVariant(rung) {
   return codexStaticVariants(2).find((variant) => variant.role === 'research' && variant.rung === rung);
 }
@@ -40,10 +48,17 @@ function gsdAgentToml(role, instructions) {
     + "developer_instructions = '''\n" + instructions + "\n'''\n";
 }
 
-function writeArtifacts(root, gsdRole) {
+function writeArtifacts(root, gsdRole, artifactPaths = null) {
   const phaseDir = path.join(root, '.planning', 'phases', '38-codex-decompose');
   if (gsdRole === 'gsd-phase-researcher') fs.writeFileSync(path.join(phaseDir, '38-RESEARCH.md'), '# Research\n');
-  if (gsdRole === 'gsd-planner') fs.writeFileSync(path.join(phaseDir, '38-01-PLAN.md'), '# Plan\n');
+  if (gsdRole === 'gsd-planner') {
+    const paths = artifactPaths || ['.planning/phases/38-codex-decompose/38-01-PLAN.md'];
+    for (const relative of paths) {
+      const full = path.join(root, ...relative.split('/'));
+      fs.mkdirSync(path.dirname(full), { recursive: true });
+      fs.writeFileSync(full, '# Plan\n');
+    }
+  }
 }
 
 function fixture() {
@@ -117,10 +132,27 @@ function fixture() {
   };
   return {
     root, stateRoot, codexHome, agentDir, scope, host, calls, researchDigest, state,
-    create: (over = {}) => createCodexDecomposeHost({
-      scope, host, env: { CODEX_HOME: codexHome }, agentDir, sealRoot: path.join(stateRoot, 'sealed'),
-      agentManifest: path.join(agentDir, '.shipyard-manifest.json'), ...over,
-    }),
+    create: (over = {}) => {
+      const phaseDir = path.join(root, '.planning', 'phases', '38-codex-decompose');
+      const writerLease = over.lease?.writerLease || createPlanningWriterLease({
+        worktree: root, phaseDir, stateRoot: path.join(stateRoot, 'stub-writer'),
+      });
+      const handle = over.lease ? null : writerLease.acquire({ owner: 'stub-host', base_revision: headRevision(root) });
+      const lease = over.lease || { writerLease, token: handle.token, epoch: handle.epoch,
+        snapshot: writerLease.snapshotTree() };
+      const validateStubWriter = ({ role }) => {
+        writerLease.assertFence({ token: lease.token, epoch: lease.epoch, base_revision: headRevision(root) });
+        const own = role === 'gsd-phase-researcher' ? ['38-RESEARCH.md']
+          : role === 'gsd-planner' ? ['38-01-PLAN.md'] : [];
+        const foreign = writerLease.changedSince(lease.snapshot).changed.filter((item) => !own.includes(item));
+        if (foreign.length) throw Object.assign(new Error(`foreign phase edit: ${foreign.join(', ')}`), { code: 'FOREIGN_EDIT' });
+      };
+      return createCodexDecomposeHost({
+        scope, host, env: { CODEX_HOME: codexHome }, agentDir, sealRoot: path.join(stateRoot, 'sealed'),
+        agentManifest: path.join(agentDir, '.shipyard-manifest.json'), lease,
+        preRecordValidation: validateStubWriter, ...over,
+      });
+    },
     clean: () => {
       fs.rmSync(root, { recursive: true, force: true });
       fs.rmSync(stateRoot, { recursive: true, force: true });
@@ -313,6 +345,148 @@ test('default run controller state is outside the model worktree and keyed to it
   } finally { f.clean(); }
 });
 
+for (const mode of ['active', 'corrupt']) {
+  test(`Codex CLI refuses ${mode} private legacy writer state before paid launch`, async () => {
+    const f = fixture();
+    try {
+      const phaseDir = path.join(f.root, '.planning', 'phases', '38-codex-decompose');
+      const privateRoot = path.join(path.dirname(defaultRunStoreDir(f.scope, f.stateRoot)), 'writer');
+      const oldLease = createPlanningWriterLease({ stateRoot: privateRoot, worktree: f.root, phaseDir });
+      oldLease.acquire({ owner: 'private-legacy', base_revision: headRevision(f.root) });
+      if (mode === 'corrupt') fs.writeFileSync(oldLease.file, '{invalid', { mode: 0o600 });
+      const original = fs.readFileSync(oldLease.file);
+      const file = path.join(f.root, 'legacy-request.json');
+      fs.writeFileSync(file, JSON.stringify({ scope: f.scope, gsd_role: 'gsd-planner', prompt: 'Plan.' }));
+      let launches = 0;
+      await assert.rejects(runCli(['--args-file', file], { write() {} }, {
+        testStateRoot: f.stateRoot, testWriterStateRoot: path.join(f.stateRoot, 'shared-writer'),
+        spawn: () => { launches++; throw new Error('paid launch was forbidden'); },
+      }), { code: 'LEGACY_WRITER_STATE' });
+      assert.equal(launches, 0);
+      assert.deepEqual(fs.readFileSync(oldLease.file), original);
+      const shared = createPlanningWriterLease({ stateRoot: path.join(f.stateRoot, 'shared-writer'),
+        worktree: f.root, phaseDir });
+      assert.equal(fs.existsSync(shared.file), false);
+    } finally { f.clean(); }
+  });
+}
+
+test('child telemetry collector failure warns without leaking collector details or changing the verified result', async () => {
+  const f = fixture();
+  const gsdRole = 'gsd-planner';
+  const fixtureData = buildNativeChildFixture(gsdRole);
+  const clock = manualClock(Date.now());
+  const heartbeat = manualHeartbeat();
+  try {
+    fs.writeFileSync(path.join(f.agentDir, 'gsd-planner.toml'),
+      gsdAgentToml(gsdRole, fixtureData.instructions.replace(/\n$/, '')));
+    const file = path.join(f.root, 'telemetry-failure-request.json');
+    fs.writeFileSync(file, JSON.stringify({
+      scope: f.scope, gsd_role: gsdRole, prompt: 'Check this phase plan.',
+    }));
+    const stdout = [];
+    const stderr = [];
+    const secret = 'api_key=collector-secret';
+    const { spawn } = attachFakeSpawn(f, gsdRole, fixtureData, () => {
+      clock.advance(50);
+      heartbeat.fire();
+    });
+    const result = await runCli(['--args-file', file], { write(value) { stdout.push(value); } }, {
+      env: { CODEX_HOME: f.codexHome },
+      agentDir: f.agentDir,
+      agentManifest: path.join(f.agentDir, '.shipyard-manifest.json'),
+      testStateRoot: f.stateRoot, testWriterStateRoot: path.join(f.stateRoot, 'shared-writer'),
+      leaseTtlMs: 1000,
+      now: clock,
+      heartbeat: heartbeat.scheduler,
+      probe: { status: 'available', executable: 'codex', runtime_version: '0.157.1', capabilities },
+      spawn,
+      overheadRecorder: { record() { throw new Error(secret); } },
+      stderr: { write(value) { stderr.push(value); } },
+    });
+    assert.equal(result.receipt.compliance, 'verified');
+    assert.deepEqual(JSON.parse(stdout.join('')), result);
+    assert.deepEqual(stderr, ['codex-decompose-host: child model telemetry collection failed\n']);
+    assert.equal(JSON.stringify({ result, stdout, stderr }).includes(secret), false);
+    const storeDir = defaultRunStoreDir(f.scope, f.stateRoot);
+    const receipts = createDurableRecorder(path.join(path.dirname(storeDir), 'receipts'));
+    assert.deepEqual(receipts.getVerifiedRecord(result.receipt.dispatch_id).receipt, result.receipt);
+  } finally { f.clean(); }
+});
+
+test('multi-turn child telemetry keeps turn totals unknown and separated by actor', async () => {
+  const f = fixture();
+  const gsdRole = 'gsd-planner';
+  const fixtureData = buildNativeChildFixture(gsdRole, { childTurnContexts: 2 });
+  const clock = manualClock(Date.now());
+  const heartbeat = manualHeartbeat();
+  try {
+    fs.writeFileSync(path.join(f.agentDir, 'gsd-planner.toml'),
+      gsdAgentToml(gsdRole, fixtureData.instructions.replace(/\n$/, '')));
+    const file = path.join(f.root, 'multi-turn-request.json');
+    fs.writeFileSync(file, JSON.stringify({
+      scope: f.scope, gsd_role: gsdRole, prompt: 'Check this phase plan.',
+    }));
+    const output = [];
+    const graphDir = path.join(f.root, '.planning', 'graph');
+    const overheadRecorder = orchestrationOverhead.createRecorder(graphDir);
+    const { spawn } = attachFakeSpawn(f, gsdRole, fixtureData, () => {
+      clock.advance(50);
+      heartbeat.fire();
+    });
+    const result = await runCli(['--args-file', file], { write(value) { output.push(value); } }, {
+      env: { CODEX_HOME: f.codexHome },
+      agentDir: f.agentDir,
+      agentManifest: path.join(f.agentDir, '.shipyard-manifest.json'),
+      testStateRoot: f.stateRoot, testWriterStateRoot: path.join(f.stateRoot, 'shared-writer'),
+      leaseTtlMs: 1000,
+      now: clock,
+      heartbeat: heartbeat.scheduler,
+      probe: { status: 'available', executable: 'codex', runtime_version: '0.157.1', capabilities },
+      spawn,
+      overheadRecorder,
+    });
+
+    const now = new Date();
+    const transcriptPath = path.join(f.codexHome, 'sessions', String(now.getFullYear()),
+      String(now.getMonth() + 1).padStart(2, '0'), String(now.getDate()).padStart(2, '0'),
+      'rollout-' + fixtureData.childId + '.jsonl');
+    const childTranscript = fs.readFileSync(transcriptPath, 'utf8').split('\n')
+      .filter(Boolean).map((line) => JSON.parse(line));
+    assert.equal(childTranscript.filter((record) => record.type === 'turn_context').length, 2);
+    const childEvidence = result.receipt.runtime_evidence.native_child_evidence;
+    assert.equal(Object.hasOwn(childEvidence, 'turn_contexts'), false);
+
+    orchestrationOverhead.recordWaitPoll(overheadRecorder, {
+      observation_id: 'multi-turn-parent-wait',
+      run_id: f.scope.run_id,
+      dispatch_id: result.receipt.dispatch_id,
+      role: 'decomposition',
+      runtime: 'codex',
+      backend: 'codex-decompose',
+    });
+    const rows = overheadRecorder.latest();
+    const child = rows.find((row) => row.actor === 'child');
+    const parent = rows.find((row) => row.actor === 'parent');
+    assert.equal(child.evidence, 'none');
+    assert.equal(child.counts.model_turns, null);
+    assert.equal(child.model, result.receipt.observed_model);
+    assert.equal(child.effort, result.receipt.observed_effort);
+    assert.equal(parent.counts.polls, 1);
+
+    const report = overheadRecorder.report({ experiment_id: 'exp-multi-turn-child' });
+    const byActor = new Map(report.by_actor.map((entry) => [entry.actor, entry.metrics]));
+    assert.equal(byActor.get('parent').wait_polls.value, 1);
+    assert.equal(byActor.get('parent').model_turns.value, null);
+    assert.equal(byActor.get('child').wait_polls.value, null);
+    assert.equal(byActor.get('child').model_turns.value, null);
+    assert.equal(report.metrics.model_turns.value, null);
+    assert.ok(report.missing_coverage.includes('supported transcript/usage evidence for model turns'));
+    assert.equal(report.verdict, 'inconclusive');
+    assert.equal(Object.keys(report).some((key) => /percent/i.test(key)), false);
+  } finally { f.clean(); }
+});
+
 const CAPTURED_SHA256 = 'de94a486861cedd3587db16ba051e5c5bf80e0ab05fa44ed50ad48688e6f8b4c';
 
 function captured(rel, values = {}) {
@@ -322,11 +496,37 @@ function captured(rel, values = {}) {
     .join('\n') + '\n';
 }
 
-for (const gsdRole of ['gsd-phase-researcher', 'gsd-planner', 'gsd-plan-checker']) {
-test('production ' + gsdRole + ' reaches its native child and records session evidence', async () => {
-  const f = fixture();
+function manualClock(start) {
+  let value = start;
+  const clock = () => value;
+  clock.advance = (ms) => { value += ms; };
+  return clock;
+}
+
+function manualHeartbeat() {
+  let tick = null;
+  return {
+    scheduler: Object.freeze({
+      start(fn, _ms) {
+        tick = fn;
+        return () => { tick = null; };
+      },
+    }),
+    fire() {
+      assert.equal(typeof tick, 'function', 'heartbeat scheduler must be started before firing');
+      tick();
+    },
+  };
+}
+
+function buildNativeChildFixture(gsdRole, artifactPathsOrOptions = {}) {
+  const artifactPaths = Array.isArray(artifactPathsOrOptions) ? artifactPathsOrOptions : undefined;
+  const { childTurnContexts } = Array.isArray(artifactPathsOrOptions) ? {} : artifactPathsOrOptions;
   const parent = '01a0e224-6642-7f20-b2a3-68b283d429b9';
   const childId = '01a0e224-80bb-7d33-b57d-8c44061ac85d';
+  const declaredArtifactPaths = artifactPaths || (gsdRole === 'gsd-phase-researcher'
+    ? ['.planning/phases/38-codex-decompose/38-RESEARCH.md']
+    : gsdRole === 'gsd-planner' ? ['.planning/phases/38-codex-decompose/38-01-PLAN.md'] : []);
   const ids = { '<SESSION-2>': parent, '<SESSION-6>': childId };
   const recorded = captured('tests/fixtures/captured/codex-agent-stream-child.jsonl', ids);
   const parentRaw = captured('tests/fixtures/captured/codex-agent-stream-parent.jsonl', ids);
@@ -335,7 +535,17 @@ test('production ' + gsdRole + ' reaches its native child and records session ev
   const elided = records.find((record) => record.type === 'response_item'
     && record.payload.role === 'developer').payload.content[0].text;
   const instructions = elided + '\n';
-  const childRaw = recorded.replace(JSON.stringify(elided), JSON.stringify(instructions));
+  let childRaw = recorded.replace(JSON.stringify(elided), JSON.stringify(instructions));
+  if (childTurnContexts !== undefined) {
+    assert.ok(Number.isSafeInteger(childTurnContexts) && childTurnContexts > 0);
+    const records = childRaw.split('\n').filter(Boolean).map((line) => JSON.parse(line));
+    const context = records.find((record) => record.type === 'turn_context');
+    assert.ok(context);
+    const withoutContexts = records.filter((record) => record.type !== 'turn_context');
+    const sessionIndex = withoutContexts.findIndex((record) => record.type === 'session_meta');
+    withoutContexts.splice(sessionIndex + 1, 0, ...Array.from({ length: childTurnContexts }, () => context));
+    childRaw = withoutContexts.map((record) => JSON.stringify(record)).join('\n') + '\n';
+  }
   const transform = (raw) => raw.split('\n').filter(Boolean).map((line) => {
     const record = JSON.parse(line);
     if (record.type === 'turn_context') {
@@ -353,50 +563,78 @@ test('production ' + gsdRole + ' reaches its native child and records session ev
       record.payload.agent_role = gsdRole;
       record.payload.source.subagent.thread_spawn.agent_role = gsdRole;
     }
+    if (record.type === 'event_msg' && record.payload.type === 'task_complete') {
+      record.payload.last_agent_message = JSON.stringify({
+        schema: 'shipyard.codex-decompose-output.v1', artifact_paths: declaredArtifactPaths,
+      });
+    }
     return JSON.stringify(record);
   }).join('\n') + '\n';
+  return { parent, childId, instructions, parentRaw, childRaw, execRaw, transform,
+    artifactPaths: declaredArtifactPaths, writeArtifactPaths: declaredArtifactPaths };
+}
+
+function attachFakeSpawn(f, gsdRole, fixtureData, onSpawn, exitCode = 0, pid = 38004, closeDelayMs = 170) {
+  const { parent, childId, parentRaw, childRaw, execRaw, transform } = fixtureData;
   const calls = [];
+  const spawn = (_executable, args, options) => {
+    calls.push({ args, options });
+    writeArtifacts(f.root, gsdRole, fixtureData.writeArtifactPaths);
+    if (onSpawn) onSpawn();
+    const sent = [];
+    const process = new EventEmitter();
+    process.stdout = new EventEmitter();
+    process.stderr = new EventEmitter();
+    process.stdin = {
+      write(value) { sent.push(String(value)); },
+      end() {
+        const task = /^TASK_FILE=(.*)$/m.exec(sent.join(''))[1];
+        const sha256 = /^TASK_SHA256=(.*)$/m.exec(sent.join(''))[1];
+        const now = new Date();
+        const dir = path.join(f.codexHome, 'sessions', String(now.getFullYear()),
+          String(now.getMonth() + 1).padStart(2, '0'), String(now.getDate()).padStart(2, '0'));
+        fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(path.join(dir, 'rollout-' + parent + '.jsonl'), transform(parentRaw));
+        fs.writeFileSync(path.join(dir, 'rollout-' + childId + '.jsonl'), transform(childRaw)
+          .split('<TMP>').join(JSON.stringify(task).slice(1, -1)).split(CAPTURED_SHA256).join(sha256));
+      },
+    };
+    process.pid = pid;
+    setTimeout(() => {
+      process.stdout.emit('data', Buffer.from(execRaw));
+      process.emit('close', exitCode, null);
+    }, closeDelayMs);
+    return process;
+  };
+  return { spawn, calls };
+}
+
+for (const gsdRole of ['gsd-phase-researcher', 'gsd-planner', 'gsd-plan-checker']) {
+test('production ' + gsdRole + ' reaches its native child and records session evidence', async () => {
+  const f = fixture();
+  const fixtureData = buildNativeChildFixture(gsdRole);
+  const { parent, childId, instructions } = fixtureData;
+  const clock = manualClock(Date.now());
+  const heartbeat = manualHeartbeat();
   try {
     fs.writeFileSync(path.join(f.agentDir, gsdRole + '.toml'), gsdAgentToml(gsdRole, instructions.replace(/\n$/, '')));
     const file = path.join(f.root, 'cli-request.json');
     fs.writeFileSync(file, JSON.stringify({ scope: f.scope, gsd_role: gsdRole, prompt: 'Check this phase plan.' }));
     const output = [];
+    const { spawn, calls } = attachFakeSpawn(f, gsdRole, fixtureData, () => {
+      clock.advance(50);
+      heartbeat.fire();
+    });
     const result = await runCli(['--args-file', file], { write(value) { output.push(value); } }, {
       env: { CODEX_HOME: f.codexHome },
       agentDir: f.agentDir,
       agentManifest: path.join(f.agentDir, '.shipyard-manifest.json'),
-      testStateRoot: f.stateRoot,
-      leaseTtlMs: 2000,
-      heartbeatMs: 20,
+      testStateRoot: f.stateRoot, testWriterStateRoot: path.join(f.stateRoot, 'shared-writer'),
+      leaseTtlMs: 1000,
+      now: clock,
+      heartbeat: heartbeat.scheduler,
       probe: { status: 'available', executable: 'codex', runtime_version: '0.157.1', capabilities },
-      spawn: (_executable, args, options) => {
-        calls.push({ args, options });
-        writeArtifacts(f.root, gsdRole);
-        const sent = [];
-        const process = new EventEmitter();
-        process.stdout = new EventEmitter();
-        process.stderr = new EventEmitter();
-        process.stdin = {
-          write(value) { sent.push(String(value)); },
-          end() {
-            const task = /^TASK_FILE=(.*)$/m.exec(sent.join(''))[1];
-            const sha256 = /^TASK_SHA256=(.*)$/m.exec(sent.join(''))[1];
-            const now = new Date();
-            const dir = path.join(f.codexHome, 'sessions', String(now.getFullYear()),
-              String(now.getMonth() + 1).padStart(2, '0'), String(now.getDate()).padStart(2, '0'));
-            fs.mkdirSync(dir, { recursive: true });
-            fs.writeFileSync(path.join(dir, 'rollout-' + parent + '.jsonl'), transform(parentRaw));
-            fs.writeFileSync(path.join(dir, 'rollout-' + childId + '.jsonl'), transform(childRaw)
-              .split('<TMP>').join(JSON.stringify(task).slice(1, -1)).split(CAPTURED_SHA256).join(sha256));
-          },
-        };
-        process.pid = 38004;
-        setTimeout(() => {
-          process.stdout.emit('data', Buffer.from(execRaw));
-          process.emit('close', 0, null);
-        }, 170);
-        return process;
-      },
+      spawn,
     });
     const storeDir = defaultRunStoreDir(f.scope, f.stateRoot);
     const status = createRunController({ storeDir })
@@ -437,6 +675,165 @@ test('production ' + gsdRole + ' reaches its native child and records session ev
 });
 }
 
+for (const includeDispatchId of [true, false]) {
+test(`detached ${includeDispatchId ? 'explicit' : 'omitted'} dispatch ID reaches its validated child request and verified receipt`, async () => {
+  const f = fixture();
+  const gsdRole = 'gsd-planner';
+  const fixtureData = buildNativeChildFixture(gsdRole);
+  try {
+    fs.writeFileSync(path.join(f.agentDir, 'gsd-planner.toml'),
+      gsdAgentToml(gsdRole, fixtureData.instructions.replace(/\n$/, '')));
+    const requestedDispatchId = includeDispatchId ? 'explicit-decompose-' + crypto.randomBytes(5).toString('hex') : null;
+    const requestBody = { scope: f.scope, gsd_role: gsdRole, prompt: 'Check this phase plan.' };
+    if (requestedDispatchId !== null) requestBody.dispatch_id = requestedDispatchId;
+    const requestFile = path.join(f.root, 'detached-request.json');
+    fs.writeFileSync(requestFile, JSON.stringify(requestBody));
+
+    const dispatchDir = path.join(f.stateRoot, 'dispatch');
+    let childRequestFile;
+    const detachedProcess = new EventEmitter();
+    detachedProcess.pid = 1_000_000_000;
+    detachedProcess.unref = () => {};
+    const handoffOutput = [];
+    const handoff = await runCli(['--detach', '--args-file', requestFile], {
+      write(value) { handoffOutput.push(value); },
+    }, {
+      env: { CODEX_HOME: f.codexHome },
+      stateDir: dispatchDir,
+      spawn(executable, args, options) {
+        assert.equal(executable, process.execPath);
+        assert.equal(args[0], path.resolve(__dirname, '../../plugins/delivery-pipeline/scripts/codex-decompose-host.cjs'));
+        assert.deepEqual(args.slice(1, 2), ['--args-file']);
+        assert.equal(options.detached, true);
+        childRequestFile = args[2];
+        return detachedProcess;
+      },
+    });
+    assert.deepEqual(JSON.parse(handoffOutput.join('')), handoff);
+    const dispatchId = handoff.dispatch_id;
+    if (requestedDispatchId !== null) assert.equal(dispatchId, requestedDispatchId);
+    const record = JSON.parse(fs.readFileSync(path.join(dispatchDir, dispatchId, 'record.json'), 'utf8'));
+    assert.equal(record.dispatch_id, dispatchId);
+    const validatedChildRequest = readRequestFile(childRequestFile);
+    assert.equal(validatedChildRequest.launch.dispatch_id, dispatchId);
+
+    const makeOptions = (testStateRoot, spawn) => ({
+      env: { CODEX_HOME: f.codexHome },
+      agentDir: f.agentDir,
+      agentManifest: path.join(f.agentDir, '.shipyard-manifest.json'),
+      testStateRoot, testWriterStateRoot: path.join(f.stateRoot, 'shared-writer'),
+      leaseTtlMs: 1000,
+      probe: { status: 'available', executable: 'codex', runtime_version: '0.157.1', capabilities },
+      spawn,
+    });
+    const detachedChildState = path.join(f.stateRoot, 'detached-child');
+    const detachedSpawn = attachFakeSpawn(f, gsdRole, fixtureData).spawn;
+    const detachedResult = await runCli(['--args-file', childRequestFile], { write() {} },
+      makeOptions(detachedChildState, detachedSpawn));
+    const detachedStoreDir = defaultRunStoreDir(f.scope, detachedChildState);
+    const detachedRecorder = createDurableRecorder(path.join(path.dirname(detachedStoreDir), 'receipts'));
+    const detachedReservation = detachedRecorder.getReservation(dispatchId);
+    assert.equal(detachedReservation.dispatch_id, record.dispatch_id);
+    assert.equal(detachedReservation.recorded, true);
+    assert.equal(detachedRecorder.getVerifiedRecord(dispatchId).receipt.dispatch_id, dispatchId);
+
+    const foregroundState = path.join(f.stateRoot, 'foreground');
+    const foregroundFile = path.join(f.root, 'foreground-request.json');
+    fs.rmSync(path.join(f.root, '.planning', 'phases', '38-codex-decompose', '38-01-PLAN.md'));
+    fs.writeFileSync(foregroundFile, JSON.stringify({ ...requestBody, dispatch_id: dispatchId }));
+    const foregroundSpawn = attachFakeSpawn(f, gsdRole, fixtureData).spawn;
+    const foregroundResult = await runCli(['--args-file', foregroundFile], { write() {} },
+      makeOptions(foregroundState, foregroundSpawn));
+    const foregroundStoreDir = defaultRunStoreDir(f.scope, foregroundState);
+    const foregroundRecorder = createDurableRecorder(path.join(path.dirname(foregroundStoreDir), 'receipts'));
+    assert.equal(foregroundRecorder.getReservation(dispatchId).dispatch_id, dispatchId);
+    assert.equal(foregroundRecorder.getVerifiedRecord(dispatchId).receipt.dispatch_id, dispatchId);
+    for (const field of ['dispatch_id', 'role', 'gsd_role', 'compliance', 'policy_hash',
+      'requested_model', 'requested_effort', 'applied_model', 'applied_effort',
+      'observed_model', 'observed_effort']) {
+      assert.equal(detachedResult.receipt[field], foregroundResult.receipt[field],
+        `detached and foreground receipts agree on ${field}`);
+    }
+  } finally { f.clean(); }
+});
+}
+
+test('a live Codex CLI writer blocks Claude decomposition before its typed launch', async () => {
+  const f = fixture();
+  const gsdRole = 'gsd-plan-checker';
+  const fixtureData = buildNativeChildFixture(gsdRole);
+  const sharedRoot = path.join(f.stateRoot, 'shared-writer');
+  const file = path.join(f.root, 'codex-owner-request.json');
+  fs.writeFileSync(file, JSON.stringify({ scope: f.scope, gsd_role: gsdRole, prompt: 'Check.' }));
+  fs.writeFileSync(path.join(f.agentDir, `${gsdRole}.toml`),
+    gsdAgentToml(gsdRole, fixtureData.instructions.replace(/\n$/, '')));
+  let entered;
+  const launched = new Promise((resolve) => { entered = resolve; });
+  const { spawn, calls } = attachFakeSpawn(f, gsdRole, fixtureData, () => entered(), 0, 38004, 1000);
+  const owner = runCli(['--args-file', file], { write() {} }, {
+    env: { CODEX_HOME: f.codexHome }, agentDir: f.agentDir,
+    agentManifest: path.join(f.agentDir, '.shipyard-manifest.json'),
+    testStateRoot: f.stateRoot, testWriterStateRoot: sharedRoot,
+    probe: { status: 'available', executable: 'codex', runtime_version: '0.157.1', capabilities },
+    spawn,
+  });
+  try {
+    await launched;
+    const phaseDir = path.join(f.root, '.planning', 'phases', '38-codex-decompose');
+    const lease = createPlanningWriterLease({ stateRoot: sharedRoot, worktree: f.root, phaseDir });
+    const original = fs.readFileSync(lease.file, 'utf8');
+    let claudeLaunches = 0;
+    await assert.rejects(runClaudeDecomposition({ phase: 38, worktree: f.root,
+      role: 'gsd-plan-checker', prompt: 'Check.' }, {
+      store: path.join(f.stateRoot, 'claude-private'), testWriterStateRoot: sharedRoot,
+      runtimeHostFactory: () => { claudeLaunches++; throw new Error('second paid child'); },
+    }), { code: 'WRITER_LEASED' });
+    assert.equal(claudeLaunches, 0);
+    assert.equal(fs.readFileSync(lease.file, 'utf8'), original);
+    assert.equal(fs.existsSync(path.join(f.stateRoot, 'claude-private', 'receipts')), false);
+    const result = await owner;
+    assert.equal(result.receipt.compliance, 'verified');
+    assert.equal(calls.length, 1);
+    const next = lease.acquire({ owner: 'claude-after-release', base_revision: headRevision(f.root) });
+    lease.release(next);
+  } finally {
+    await owner.catch(() => {});
+    f.clean();
+  }
+});
+
+test('advancing the injected clock past the lease TTL with no heartbeat still refuses with LEASE_EXPIRED', async () => {
+  const f = fixture();
+  const gsdRole = 'gsd-planner';
+  const fixtureData = buildNativeChildFixture(gsdRole);
+  const clock = manualClock(Date.now());
+  const heartbeat = manualHeartbeat();
+  try {
+    fs.writeFileSync(path.join(f.agentDir, gsdRole + '.toml'),
+      gsdAgentToml(gsdRole, fixtureData.instructions.replace(/\n$/, '')));
+    const file = path.join(f.root, 'cli-request.json');
+    fs.writeFileSync(file, JSON.stringify({ scope: f.scope, gsd_role: gsdRole, prompt: 'Check this phase plan.' }));
+    const { spawn } = attachFakeSpawn(f, gsdRole, fixtureData, () => {
+      clock.advance(5000);
+    });
+    await assert.rejects(() => runCli(['--args-file', file], { write() {} }, {
+      env: { CODEX_HOME: f.codexHome },
+      agentDir: f.agentDir,
+      agentManifest: path.join(f.agentDir, '.shipyard-manifest.json'),
+      testStateRoot: f.stateRoot, testWriterStateRoot: path.join(f.stateRoot, 'shared-writer'),
+      leaseTtlMs: 1000,
+      now: clock,
+      heartbeat: heartbeat.scheduler,
+      probe: { status: 'available', executable: 'codex', runtime_version: '0.157.1', capabilities },
+      spawn,
+    }), (error) => error.code === 'LEASE_EXPIRED');
+    const storeDir = defaultRunStoreDir(f.scope, f.stateRoot);
+    const status = createRunController({ storeDir, now: clock }).status(f.scope.run_id);
+    assert.notEqual(status.state, 'completed');
+    assert.equal(status.owner.status, 'expired');
+  } finally { f.clean(); }
+});
+
 test('standalone CLI records a failed owned run after launch preflight refusal', async () => {
   const f = fixture();
   try {
@@ -447,7 +844,7 @@ test('standalone CLI records a failed owned run after launch preflight refusal',
     await assert.rejects(() => runCli(['--args-file', file], { write(value) { output.push(value); } }, {
       env: { CODEX_HOME: f.codexHome },
       agentDir: f.agentDir,
-      testStateRoot: f.stateRoot,
+      testStateRoot: f.stateRoot, testWriterStateRoot: path.join(f.stateRoot, 'shared-writer'),
       probe: { status: 'available', executable: 'codex', runtime_version: '0.157.1', capabilities },
     }), (error) => error.code === 'CONFLICTING_OVERRIDE');
     const status = createRunController({ storeDir: defaultRunStoreDir(f.scope, f.stateRoot) })
@@ -465,7 +862,7 @@ test('standalone CLI owns runtime unavailability and fails the run', async () =>
     fs.writeFileSync(file, JSON.stringify({ scope: f.scope, gsd_role: 'gsd-planner', prompt: 'Plan.' }));
     await assert.rejects(() => runCli(['--args-file', file], { write() {} }, {
       env: { CODEX_HOME: f.codexHome },
-      testStateRoot: f.stateRoot,
+      testStateRoot: f.stateRoot, testWriterStateRoot: path.join(f.stateRoot, 'shared-writer'),
       probe: { status: 'unavailable', reason: 'runtime_missing' },
     }), (error) => error.code === 'RUNTIME_UNAVAILABLE');
     const status = createRunController({ storeDir: defaultRunStoreDir(f.scope, f.stateRoot) })
@@ -474,4 +871,873 @@ test('standalone CLI owns runtime unavailability and fails the run', async () =>
     assert.equal(status.owner.status, 'failed');
     assert.equal(status.scope.runtime.provider, 'openai');
   } finally { f.clean(); }
+});
+
+test('a second session planning the same worktree and phase is refused with WRITER_LEASED before any model launch', async () => {
+  const f = fixture();
+  try {
+    const file = path.join(f.root, 'cli-request.json');
+    fs.writeFileSync(file, JSON.stringify({ scope: f.scope, gsd_role: 'gsd-planner', prompt: 'Plan.' }));
+    const leaseStateRoot = fs.mkdtempSync(path.join(f.stateRoot, 'lease-state-'));
+    const phaseDir = path.join(f.root, '.planning', 'phases', '38-codex-decompose');
+    const writerLease = createPlanningWriterLease({ worktree: f.root, phaseDir, stateRoot: leaseStateRoot });
+    writerLease.acquire({ owner: 'other-session', base_revision: headRevision(f.root) });
+    let spawnCalls = 0;
+    await assert.rejects(() => runCli(['--args-file', file], { write() {} }, {
+      env: { CODEX_HOME: f.codexHome },
+      testStateRoot: f.stateRoot, testWriterStateRoot: path.join(f.stateRoot, 'shared-writer'),
+      writerLease,
+      probe: { status: 'available', executable: 'codex', runtime_version: '0.157.1', capabilities },
+      spawn: () => { spawnCalls += 1; throw new Error('spawn should not be called'); },
+    }), (error) => error.code === 'WRITER_LEASED');
+    assert.equal(spawnCalls, 0);
+  } finally { f.clean(); }
+});
+
+test('different phases in the same worktree do not contend for the planning writer lease', async () => {
+  const f = fixture();
+  try {
+    const file = path.join(f.root, 'cli-request.json');
+    fs.writeFileSync(file, JSON.stringify({ scope: f.scope, gsd_role: 'gsd-planner', prompt: 'Plan.' }));
+    const leaseStateRoot = fs.mkdtempSync(path.join(f.stateRoot, 'lease-state-'));
+    const otherPhaseLease = createPlanningWriterLease({
+      worktree: f.root, phaseDir: path.join(f.root, '.planning', 'phases', '39-other-codex-decompose'), stateRoot: leaseStateRoot,
+    });
+    otherPhaseLease.acquire({ owner: 'holder-of-phase-39', base_revision: headRevision(f.root) });
+    const phase38Lease = createPlanningWriterLease({
+      worktree: f.root, phaseDir: path.join(f.root, '.planning', 'phases', '38-codex-decompose'), stateRoot: leaseStateRoot,
+    });
+    await assert.rejects(() => runCli(['--args-file', file], { write() {} }, {
+      env: { CODEX_HOME: f.codexHome },
+      testStateRoot: f.stateRoot, testWriterStateRoot: path.join(f.stateRoot, 'shared-writer'),
+      writerLease: phase38Lease,
+      probe: { status: 'unavailable', reason: 'runtime_missing' },
+    }), (error) => error.code === 'RUNTIME_UNAVAILABLE');
+  } finally { f.clean(); }
+});
+
+test('a lease takeover before sealing refuses with WRITER_FENCED and seals nothing', async () => {
+  const f = fixture();
+  try {
+    let clock = 1_000;
+    const leaseStateRoot = fs.mkdtempSync(path.join(f.stateRoot, 'lease-state-'));
+    const phaseDir = path.join(f.root, '.planning', 'phases', '38-codex-decompose');
+    const writerLease = createPlanningWriterLease({
+      worktree: f.root, phaseDir, stateRoot: leaseStateRoot, now: () => clock, ttlMs: 100,
+    });
+    const leaseHandle = writerLease.acquire({ owner: 'run-a', base_revision: headRevision(f.root) });
+    const snapshot = writerLease.snapshotTree();
+    const launch = f.host.launchTypedGsd;
+    f.host.launchTypedGsd = async (selection, context) => {
+      clock += 500;
+      writerLease.acquire({ owner: 'intruder', base_revision: headRevision(f.root) });
+      return launch(selection, context);
+    };
+    await assert.rejects(() => f.create({
+      lease: { writerLease, token: leaseHandle.token, epoch: leaseHandle.epoch, snapshot },
+    }).run({ gsd_role: 'gsd-planner', prompt: 'Plan.' }), (error) => error.code === 'WRITER_FENCED');
+    assert.equal(fs.existsSync(path.join(f.stateRoot, 'sealed', 'decomposition-index')), false);
+    assert.equal(fs.readdirSync(path.join(f.stateRoot, 'receipts')).filter((name) => name.startsWith('record-')).length, 0);
+  } finally { f.clean(); }
+});
+
+test('a foreign edit to the phase directory mid-run refuses with FOREIGN_EDIT, naming the path', async () => {
+  const f = fixture();
+  try {
+    const leaseStateRoot = fs.mkdtempSync(path.join(f.stateRoot, 'lease-state-'));
+    const phaseDir = path.join(f.root, '.planning', 'phases', '38-codex-decompose');
+    const writerLease = createPlanningWriterLease({ worktree: f.root, phaseDir, stateRoot: leaseStateRoot });
+    const leaseHandle = writerLease.acquire({ owner: 'run-a', base_revision: headRevision(f.root) });
+    const snapshot = writerLease.snapshotTree();
+    const launch = f.host.launchTypedGsd;
+    f.host.launchTypedGsd = async (selection, context) => {
+      fs.writeFileSync(path.join(phaseDir, 'stray.md'), 'stray\n');
+      return launch(selection, context);
+    };
+    await assert.rejects(() => f.create({
+      lease: { writerLease, token: leaseHandle.token, epoch: leaseHandle.epoch, snapshot },
+    }).run({ gsd_role: 'gsd-planner', prompt: 'Plan.' }),
+      (error) => error.code === 'FOREIGN_EDIT' && /stray\.md/.test(error.message));
+    assert.equal(fs.existsSync(path.join(f.stateRoot, 'sealed', 'decomposition-index')), false);
+    assert.equal(fs.readdirSync(path.join(f.stateRoot, 'receipts')).filter((name) => name.startsWith('record-')).length, 0);
+  } finally { f.clean(); }
+});
+
+test('Codex live judgment roles gate takeover and foreign edits before recorder files exist', async () => {
+  for (const role of ['gsd-phase-researcher', 'gsd-planner', 'gsd-plan-checker']) {
+    for (const refusal of ['WRITER_FENCED', 'FOREIGN_EDIT']) {
+      const f = fixture();
+      try {
+        const phaseDir = path.join(f.root, '.planning', 'phases', '38-codex-decompose');
+        const original = createPlanningWriterLease({ worktree: f.root, phaseDir,
+          stateRoot: path.join(f.stateRoot, `role-gate-${role}-${refusal}`) });
+        const handle = original.acquire({ owner: 'role-gate', base_revision: headRevision(f.root) });
+        const writerLease = refusal === 'WRITER_FENCED' ? { ...original,
+          assertFence() { throw Object.assign(new Error('writer taken over'), { code: 'WRITER_FENCED' }); },
+        } : original;
+        const launch = f.host.launchTypedGsd;
+        f.host.launchTypedGsd = async (selection, context) => {
+          if (refusal === 'FOREIGN_EDIT') fs.writeFileSync(path.join(phaseDir, 'stray.md'), 'foreign\n');
+          return launch(selection, context);
+        };
+        await assert.rejects(f.create({ lease: { writerLease, token: handle.token, epoch: handle.epoch,
+          snapshot: original.snapshotTree() } }).run({ gsd_role: role, prompt: 'Plan.' }), { code: refusal });
+        assert.equal(fs.readdirSync(path.join(f.stateRoot, 'receipts')).filter((name) => name.startsWith('record-')).length, 0);
+      } finally { f.clean(); }
+    }
+  }
+});
+
+test('the planning writer lease releases on success and on failure so a following run acquires immediately', async () => {
+  const f = fixture();
+  const fixtureData = buildNativeChildFixture('gsd-planner');
+  const clock = manualClock(Date.now());
+  const heartbeat = manualHeartbeat();
+  try {
+    fs.writeFileSync(path.join(f.agentDir, 'gsd-planner.toml'), gsdAgentToml('gsd-planner', fixtureData.instructions.replace(/\n$/, '')));
+    const file = path.join(f.root, 'cli-request.json');
+    fs.writeFileSync(file, JSON.stringify({ scope: f.scope, gsd_role: 'gsd-planner', prompt: 'Plan this phase.' }));
+    const phaseDir = path.join(f.root, '.planning', 'phases', '38-codex-decompose');
+    const successStateRoot = fs.mkdtempSync(path.join(f.stateRoot, 'lease-state-success-'));
+    const successLease = createPlanningWriterLease({ worktree: f.root, phaseDir, stateRoot: successStateRoot });
+    const { spawn } = attachFakeSpawn(f, 'gsd-planner', fixtureData, () => { clock.advance(50); heartbeat.fire(); });
+    const result = await runCli(['--args-file', file], { write() {} }, {
+      env: { CODEX_HOME: f.codexHome },
+      agentDir: f.agentDir,
+      agentManifest: path.join(f.agentDir, '.shipyard-manifest.json'),
+      testStateRoot: f.stateRoot, testWriterStateRoot: path.join(f.stateRoot, 'shared-writer'),
+      writerLease: successLease,
+      leaseTtlMs: 1000,
+      now: clock,
+      heartbeat: heartbeat.scheduler,
+      probe: { status: 'available', executable: 'codex', runtime_version: '0.157.1', capabilities },
+      spawn,
+    });
+    assert.equal(result.receipt.compliance, 'verified');
+    assert.doesNotThrow(() => successLease.acquire({ owner: 'a-following-run', base_revision: headRevision(f.root) }));
+
+    const failureStateRoot = fs.mkdtempSync(path.join(f.stateRoot, 'lease-state-failure-'));
+    const failureLease = createPlanningWriterLease({ worktree: f.root, phaseDir, stateRoot: failureStateRoot });
+    const failureScope = { ...f.scope, run_id: 'run-codex-decompose-test-failure' };
+    const failureFile = path.join(f.root, 'cli-request-failure.json');
+    fs.writeFileSync(failureFile, JSON.stringify({ scope: failureScope, gsd_role: 'gsd-planner', prompt: 'Plan.' }));
+    fs.appendFileSync(path.join(f.agentDir, 'gsd-planner.toml'), 'model = "gpt-6-luna"\n');
+    await assert.rejects(() => runCli(['--args-file', failureFile], { write() {} }, {
+      env: { CODEX_HOME: f.codexHome },
+      agentDir: f.agentDir,
+      testStateRoot: f.stateRoot, testWriterStateRoot: path.join(f.stateRoot, 'shared-writer'),
+      writerLease: failureLease,
+      probe: { status: 'available', executable: 'codex', runtime_version: '0.157.1', capabilities },
+    }), (error) => error.code === 'CONFLICTING_OVERRIDE');
+    assert.doesNotThrow(() => failureLease.acquire({ owner: 'a-following-run', base_revision: headRevision(f.root) }));
+  } finally { f.clean(); }
+});
+
+test('post-acquire snapshot and heartbeat setup failures release the original writer lease', async () => {
+  for (const failure of ['snapshot', 'heartbeat']) {
+    const f = fixture();
+    try {
+      const file = path.join(f.root, 'cli-request.json');
+      fs.writeFileSync(file, JSON.stringify({ scope: f.scope, gsd_role: 'gsd-planner', prompt: 'Plan.' }));
+      const phaseDir = path.join(f.root, '.planning', 'phases', '38-codex-decompose');
+      const realLease = createPlanningWriterLease({ worktree: f.root, phaseDir,
+        stateRoot: path.join(f.stateRoot, 'post-acquire-writer') });
+      const writerLease = { ...realLease,
+        snapshotTree: failure === 'snapshot'
+          ? () => { throw Object.assign(new Error('snapshot failed'), { code: 'SNAPSHOT_FAILED' }); }
+          : realLease.snapshotTree,
+      };
+      await assert.rejects(runCli(['--args-file', file], { write() {} }, {
+        testStateRoot: f.stateRoot, testWriterStateRoot: path.join(f.stateRoot, 'shared-writer'), env: { CODEX_HOME: f.codexHome }, writerLease,
+        heartbeat: failure === 'heartbeat'
+          ? { start() { throw Object.assign(new Error('heartbeat failed'), { code: 'HEARTBEAT_FAILED' }); } }
+          : undefined,
+      }), { code: failure === 'snapshot' ? 'SNAPSHOT_FAILED' : 'HEARTBEAT_FAILED' });
+      const next = realLease.acquire({ owner: 'next-run', base_revision: headRevision(f.root) });
+      assert.ok(next.token);
+    } finally { f.clean(); }
+  }
+});
+
+function timedOutWaits(raw) {
+  return raw.split('\n').filter(Boolean).map((line) => {
+    const record = JSON.parse(line);
+    if (record.type === 'response_item' && record.payload.type === 'function_call_output'
+        && /timed_out/.test(String(record.payload.output))) {
+      record.payload.output = '{"message":"Wait timed out.","timed_out":true}';
+    }
+    return JSON.stringify(record);
+  }).join('\n') + '\n';
+}
+
+async function recoverySetup(gsdRole, {
+  complete = true, crashBeforeCompletionCallback = false, crashBeforeNativeCheckpoint = false,
+  crashBeforeTranscriptWrite = false,
+  artifactPaths, writeArtifactPaths, preexistingResearchBaseline = false,
+  extraPlannerBaseline = false,
+} = {}) {
+  const f = fixture();
+  if (preexistingResearchBaseline) {
+    fs.writeFileSync(path.join(f.root, '.planning', 'phases', '38-codex-decompose', '38-RESEARCH.md'),
+      '# Authorized research baseline\n');
+  }
+  if (extraPlannerBaseline) {
+    fs.writeFileSync(path.join(f.root, '.planning', 'phases', '38-codex-decompose', '38-02-PLAN.md'),
+      '# Unchanged second plan\n');
+  }
+  const fixtureData = buildNativeChildFixture(gsdRole, artifactPaths);
+  if (writeArtifactPaths) fixtureData.writeArtifactPaths = writeArtifactPaths;
+  fixtureData.parentRaw = timedOutWaits(fixtureData.parentRaw);
+  fs.writeFileSync(path.join(f.agentDir, gsdRole + '.toml'),
+    gsdAgentToml(gsdRole, fixtureData.instructions.replace(/\n$/, '')));
+  const file = path.join(f.root, 'cli-request.json');
+  const dispatchId = 'dispatch-recover-' + crypto.randomBytes(6).toString('hex');
+  fs.writeFileSync(file, JSON.stringify({
+    scope: f.scope, gsd_role: gsdRole, prompt: 'Check this phase plan.', dispatch_id: dispatchId,
+  }));
+  const hostState = path.dirname(defaultRunStoreDir(f.scope, f.stateRoot));
+  const receipts = path.join(hostState, 'receipts');
+  const launchDir = path.join(hostState, 'launches');
+  const transcriptDir = path.join(hostState, 'transcripts');
+  const recordFile = path.join(receipts, 'record-' + crypto.createHash('sha256').update(dispatchId).digest('hex') + '.json');
+  const recorder = createDurableRecorder(receipts);
+  const phaseDir = path.join(f.root, '.planning', 'phases', '38-codex-decompose');
+  const writerStateRoot = path.join(f.stateRoot, 'shared-writer');
+  const writerLease = createPlanningWriterLease({ worktree: f.root, phaseDir, stateRoot: writerStateRoot });
+  const leaseHandle = writerLease.acquire({ owner: 'killed-parent-' + dispatchId, base_revision: headRevision(f.root) });
+  const leaseSnapshot = writerLease.snapshotTree();
+  const env = { CODEX_HOME: f.codexHome };
+  if (!complete) {
+    fixtureData.childRaw = fixtureData.childRaw.split('\n').filter((line) => !line.includes('"task_complete"')).join('\n') + '\n';
+  }
+  const stoppedProcess = spawnSync(process.execPath, ['-e', '']);
+  assert.equal(stoppedProcess.status, 0);
+  assert.ok(Number.isSafeInteger(stoppedProcess.pid) && stoppedProcess.pid > 0);
+  assert.throws(() => process.kill(stoppedProcess.pid, 0), { code: 'ESRCH' });
+  const { spawn, calls: runtimeSpawnCalls } = attachFakeSpawn(f, gsdRole, fixtureData,
+    undefined, complete ? 0 : 1, stoppedProcess.pid);
+  const nativeHost = createCodexRuntimeHost({
+    scope: f.scope, capabilities, recorder, env, transcriptDir, spawn,
+    probe: { status: 'available', executable: 'codex', runtime_version: '0.157.1', capabilities },
+  });
+  let checkpointFailpointReached = false;
+  const runtimeHost = Object.freeze({
+    ...nativeHost,
+    async launchTypedGsd(selection, context) {
+      if (crashBeforeNativeCheckpoint) {
+        return nativeHost.launchTypedGsd(selection, {
+          ...context,
+          onNativeCompleted() {
+            checkpointFailpointReached = true;
+            throw Object.assign(new Error('simulated host death before native completion checkpoint'), {
+              code: 'SIMULATED_HOST_DEATH',
+            });
+          },
+        });
+      }
+      if (crashBeforeTranscriptWrite) {
+        let relay = null;
+        let taskBytes = null;
+        const safeRun = f.scope.run_id.replace(/[^A-Za-z0-9._-]/g, '_');
+        const safeSession = fixtureData.parent.replace(/[^A-Za-z0-9._-]/g, '_');
+        const transcript = path.join(transcriptDir, safeRun + '-' + safeSession + '.jsonl');
+        const originalWriteFileSync = fs.writeFileSync;
+        let intercepted = false;
+        fs.writeFileSync = function writeBeforeHostTranscript(filePath, ...args) {
+          if (path.resolve(String(filePath)).startsWith(transcript + '.')) {
+            intercepted = true;
+            throw Object.assign(new Error('simulated host death immediately before writeTranscript'), {
+              name: 'CodexRuntimeHostError', code: 'SIMULATED_HOST_DEATH',
+            });
+          }
+          return originalWriteFileSync.call(this, filePath, ...args);
+        };
+        try {
+          await nativeHost.launchTypedGsd(selection, {
+            ...context,
+            onSessionStarted(started) {
+              context.onSessionStarted(started);
+              relay = started.runtime_launch.task_relay;
+              taskBytes = fs.readFileSync(relay.path);
+            },
+          });
+          if (!intercepted) throw new Error('pre-transcript crash failpoint was not reached');
+        } catch (error) {
+          if (relay && taskBytes) fs.writeFileSync(relay.path, taskBytes, { mode: 0o600 });
+          if (!intercepted) throw new Error('pre-transcript crash failpoint was not reached');
+          throw error;
+        } finally {
+          fs.writeFileSync = originalWriteFileSync;
+        }
+      }
+      if (crashBeforeCompletionCallback) {
+        let relay = null;
+        let taskBytes = null;
+        try {
+          await nativeHost.launchTypedGsd(selection, {
+            ...context,
+            onSessionStarted(started) {
+              context.onSessionStarted(started);
+              relay = started.runtime_launch.task_relay;
+              taskBytes = fs.readFileSync(relay.path);
+            },
+            onCompleted() {
+              throw Object.assign(new Error('simulated host death before the completion callback'), {
+                name: 'CodexRuntimeHostError', code: 'SIMULATED_HOST_DEATH',
+              });
+            },
+          });
+        } catch (error) {
+          if (relay && taskBytes) fs.writeFileSync(relay.path, taskBytes, { mode: 0o600 });
+          throw error;
+        }
+      }
+      await nativeHost.launchTypedGsd(selection, context);
+      throw Object.assign(new Error('simulated host death after durable child completion and before launch return'), {
+        code: 'SIMULATED_HOST_DEATH',
+      });
+    },
+  });
+  let crashError = null;
+  const liveHost = createCodexDecomposeHost({
+    scope: f.scope, host: runtimeHost, env, agentDir: f.agentDir,
+    agentManifest: path.join(f.agentDir, '.shipyard-manifest.json'),
+    sealRoot: path.join(hostState, 'sealed'), launchDir, transcriptDir,
+    lease: { writerLease, token: leaseHandle.token, epoch: leaseHandle.epoch, snapshot: leaseSnapshot },
+  });
+  try {
+    await liveHost.run({ gsd_role: gsdRole, prompt: 'Check this phase plan.', dispatch_id: dispatchId });
+  } catch (error) { crashError = error; }
+  const base = {
+    env, agentDir: f.agentDir, agentManifest: path.join(f.agentDir, '.shipyard-manifest.json'),
+    testStateRoot: f.stateRoot, testWriterStateRoot: path.join(f.stateRoot, 'shared-writer'),
+    probe: { status: 'available', executable: 'codex', runtime_version: '0.157.1', capabilities },
+  };
+  const spawned = [];
+  const recover = (id = dispatchId, overrides = {}) => runCli(['recover', '--dispatch', id, '--args-file', file], { write() {} },
+    { ...base, ...overrides, spawn: (...args) => { spawned.push(args); throw new Error('recovery must not spawn'); } });
+  const writerLeaseFile = path.join(writerStateRoot, writerLease.key, 'lease.json');
+  const setLeasePid = (pid) => {
+    const current = JSON.parse(fs.readFileSync(writerLeaseFile, 'utf8'));
+    current.pid = pid;
+    fs.writeFileSync(writerLeaseFile, JSON.stringify(current), { mode: 0o600 });
+  };
+  return {
+    f, fixtureData, dispatchId, crashError, expectedSessionId: fixtureData.parent, runtimeSpawnCalls,
+    recorder, receipts, recordFile, hostState, writerLease, spawned, recover, file, writerLeaseFile, setLeasePid,
+    checkpointFailpointReached,
+  };
+}
+
+function sessionFiles(f) {
+  const found = [];
+  const walk = (dir) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) walk(full); else found.push(full);
+    }
+  };
+  walk(path.join(f.codexHome, 'sessions'));
+  return found;
+}
+
+for (const gsdRole of ['gsd-phase-researcher', 'gsd-planner', 'gsd-plan-checker']) {
+test('recover rebuilds the original ' + gsdRole + ' receipt after completion was persisted before launch return', async () => {
+  const setup = await recoverySetup(gsdRole);
+  try {
+    assert.equal(setup.crashError.code, 'SIMULATED_HOST_DEATH');
+    assert.equal(setup.recorder.getReservation(setup.dispatchId).recorded, false);
+    assert.equal(fs.existsSync(setup.recordFile), false);
+    setup.setLeasePid(2147483647);
+    const result = await setup.recover();
+    assert.equal(setup.spawned.length, 0);
+    assert.equal(result.recovered, true);
+    assert.deepEqual(JSON.parse(result.recovered_output).artifact_paths,
+      gsdRole === 'gsd-phase-researcher'
+        ? ['.planning/phases/38-codex-decompose/38-RESEARCH.md']
+        : gsdRole === 'gsd-planner' ? ['.planning/phases/38-codex-decompose/38-01-PLAN.md'] : []);
+    assert.equal(result.receipt.dispatch_id, setup.dispatchId);
+    assert.equal(result.receipt.compliance, 'verified');
+    assert.equal(result.receipt.gsd_role, gsdRole);
+    assert.equal(result.receipt.launch_id, 'codex-' + setup.expectedSessionId);
+    assert.equal(result.receipt.runtime_evidence.native_child_evidence.session_id,
+      setup.fixtureData.childId);
+    const launchDir = path.join(setup.hostState, 'launches');
+    const launchRecord = JSON.parse(fs.readFileSync(path.join(launchDir, fs.readdirSync(launchDir)[0]), 'utf8'));
+    assert.deepEqual(result.receipt.runtime_evidence.native_child_evidence,
+      launchRecord.completed.runtime_evidence.native_child_evidence);
+    assert.deepEqual(result.receipt.runtime_evidence.native_session_evidence,
+      launchRecord.completed.runtime_evidence.native_session_evidence);
+    const recorder = createDurableRecorder(setup.receipts);
+    assert.equal(recorder.getReservation(setup.dispatchId).recorded, true);
+    assert.equal(recorder.getVerifiedRecord(setup.dispatchId).receipt.dispatch_id, setup.dispatchId);
+    await assert.rejects(setup.recover(), (error) => error.code === 'RECOVERY_ALREADY_RECORDED');
+    assert.equal(setup.spawned.length, 0);
+  } finally { setup.f.clean(); }
+});
+}
+
+test('planner recovery seals an unchanged extra PLAN and CONTEXT from its original manifest', async () => {
+  const setup = await recoverySetup('gsd-planner', { extraPlannerBaseline: true });
+  try {
+    assert.equal(setup.crashError.code, 'SIMULATED_HOST_DEATH');
+    const launchDir = path.join(setup.hostState, 'launches');
+    const launch = JSON.parse(fs.readFileSync(path.join(launchDir, fs.readdirSync(launchDir)[0]), 'utf8'));
+    assert.deepEqual(launch.completed.declared_paths, ['38-01-PLAN.md']);
+    assert.deepEqual(launch.completed.changed_paths, ['38-01-PLAN.md']);
+    assert.deepEqual(Object.keys(launch.completed.full_output_manifest).sort(),
+      ['38-01-PLAN.md', '38-02-PLAN.md', 'CONTEXT.md']);
+    assert.equal(launch.completed.full_output_manifest['38-02-PLAN.md'].origin, 'unchanged-baseline');
+    assert.equal(launch.completed.full_output_manifest['CONTEXT.md'].origin, 'unchanged-baseline');
+    setup.setLeasePid(2147483647);
+    const result = await setup.recover();
+    assert.equal(result.receipt.compliance, 'verified');
+    assert.ok(fs.existsSync(setup.recordFile));
+    assert.equal(setup.spawned.length, 0);
+  } finally { setup.f.clean(); }
+});
+
+for (const mode of ['missing-manifest', 'saved-digest', 'old-plan-tamper']) {
+  test(`planner recovery refuses ${mode} with no durable recorder record`, async () => {
+    const setup = await recoverySetup('gsd-planner', { extraPlannerBaseline: true });
+    try {
+      const launchDir = path.join(setup.hostState, 'launches');
+      const launchFile = path.join(launchDir, fs.readdirSync(launchDir)[0]);
+      const launch = JSON.parse(fs.readFileSync(launchFile, 'utf8'));
+      if (mode === 'missing-manifest') delete launch.completed.full_output_manifest;
+      if (mode === 'saved-digest') launch.completed.full_output_manifest['38-02-PLAN.md'].sha256 = 'a'.repeat(64);
+      if (mode !== 'old-plan-tamper') fs.writeFileSync(launchFile, JSON.stringify(launch), { mode: 0o600 });
+      else fs.writeFileSync(path.join(setup.f.root, '.planning', 'phases', '38-codex-decompose', '38-02-PLAN.md'),
+        '# Edited after completion\n');
+      setup.setLeasePid(2147483647);
+      await assert.rejects(setup.recover(), (error) => ['RECOVERY_EVIDENCE_INCOMPLETE',
+        'RECOVERY_ARTIFACT_ALTERED', 'FOREIGN_EDIT'].includes(error.code));
+      assert.equal(fs.existsSync(setup.recordFile), false);
+      assert.equal(setup.spawned.length, 0);
+    } finally { setup.f.clean(); }
+  });
+}
+
+test('legacy Codex recovery refuses a different original writer namespace before shared takeover', async () => {
+  const setup = await recoverySetup('gsd-planner');
+  try {
+    const launchDir = path.join(setup.hostState, 'launches');
+    const launchFile = path.join(launchDir, fs.readdirSync(launchDir)[0]);
+    const launch = JSON.parse(fs.readFileSync(launchFile, 'utf8'));
+    launch.writer_lease_file = path.join(setup.hostState, 'writer', setup.writerLease.key, 'lease.json');
+    fs.writeFileSync(launchFile, JSON.stringify(launch), { mode: 0o600 });
+    const original = fs.readFileSync(setup.writerLeaseFile);
+    await assert.rejects(setup.recover(), { code: 'LEGACY_WRITER_STATE' });
+    assert.deepEqual(fs.readFileSync(setup.writerLeaseFile), original);
+    assert.equal(fs.existsSync(setup.recordFile), false);
+    assert.equal(setup.spawned.length, 0);
+  } finally { setup.f.clean(); }
+});
+
+test('planner accepts multiple declared plans with a preexisting phase research baseline', async () => {
+  const artifactPaths = [
+    '.planning/phases/38-codex-decompose/38-01-PLAN.md',
+    '.planning/phases/38-codex-decompose/38-02-PLAN.md',
+  ];
+  const setup = await recoverySetup('gsd-planner', { artifactPaths, preexistingResearchBaseline: true });
+  try {
+    assert.equal(setup.crashError && setup.crashError.code, 'SIMULATED_HOST_DEATH',
+      setup.crashError && setup.crashError.message);
+    const launchDir = path.join(setup.hostState, 'launches');
+    const launchRecord = JSON.parse(fs.readFileSync(path.join(launchDir, fs.readdirSync(launchDir)[0]), 'utf8'));
+    assert.deepEqual(Object.keys(launchRecord.completed.artifact_digests).sort(), ['38-01-PLAN.md', '38-02-PLAN.md']);
+    assert.equal(fs.readFileSync(path.join(setup.f.root, '.planning', 'phases', '38-codex-decompose', '38-RESEARCH.md'), 'utf8'),
+      '# Authorized research baseline\n');
+
+    setup.setLeasePid(2147483647);
+    const recovered = await setup.recover();
+    assert.equal(recovered.receipt.dispatch_id, setup.dispatchId);
+    assert.equal(recovered.receipt.compliance, 'verified');
+    assert.deepEqual(JSON.parse(recovered.recovered_output).artifact_paths, artifactPaths);
+    assert.equal(setup.spawned.length, 0);
+  } finally { setup.f.clean(); }
+});
+
+test('planner refuses an undeclared planning delta when multiple plans are declared', async () => {
+  const declared = [
+    '.planning/phases/38-codex-decompose/38-01-PLAN.md',
+    '.planning/phases/38-codex-decompose/38-02-PLAN.md',
+  ];
+  const setup = await recoverySetup('gsd-planner', {
+    artifactPaths: declared,
+    writeArtifactPaths: [...declared, '.planning/phases/38-codex-decompose/38-03-PLAN.md'],
+  });
+  try {
+    assert.equal(setup.crashError && setup.crashError.code, 'RUNTIME_EVIDENCE_INVALID',
+      setup.crashError && setup.crashError.message);
+    assert.match(setup.crashError.message, /planning tree delta differs/);
+    assert.equal(setup.recorder.getReservation(setup.dispatchId).recorded, false);
+    assert.equal(fs.existsSync(setup.recordFile), false);
+  } finally { setup.f.clean(); }
+});
+
+test('planner refuses an artifact path that escapes its phase', async () => {
+  const setup = await recoverySetup('gsd-planner', {
+    artifactPaths: ['../../outside.md'],
+    writeArtifactPaths: ['.planning/phases/38-codex-decompose/38-01-PLAN.md'],
+  });
+  try {
+    assert.equal(setup.crashError && setup.crashError.code, 'RUNTIME_EVIDENCE_INVALID',
+      setup.crashError && setup.crashError.message);
+    assert.match(setup.crashError.message, /invalid artifact path/);
+    assert.equal(setup.recorder.getReservation(setup.dispatchId).recorded, false);
+    assert.equal(fs.existsSync(setup.recordFile), false);
+  } finally { setup.f.clean(); }
+});
+
+test('recover rebuilds a completed dispatch after the native checkpoint and before the final callback', async () => {
+  const setup = await recoverySetup('gsd-planner', { crashBeforeCompletionCallback: true });
+  try {
+    assert.equal(setup.crashError.code, 'SIMULATED_HOST_DEATH');
+    const launchFile = path.join(setup.hostState, 'launches', fs.readdirSync(path.join(setup.hostState, 'launches'))[0]);
+    const record = JSON.parse(fs.readFileSync(launchFile, 'utf8'));
+    assert.equal(record.completed.transcript_saved, true);
+    assert.equal(fs.existsSync(record.completed.runtime_evidence.transcript.path), true);
+    assert.ok(fs.existsSync(record.session_started.runtime_launch.task_relay.path));
+    assert.equal(setup.recorder.getReservation(setup.dispatchId).recorded, false);
+    setup.setLeasePid(2147483647);
+    const recovered = await setup.recover();
+    assert.equal(recovered.recovered, true);
+    assert.equal(recovered.receipt.dispatch_id, setup.dispatchId);
+    assert.deepEqual(recovered.receipt.runtime_evidence.native_child_evidence.task_relay,
+      record.session_started.runtime_launch.task_relay);
+    assert.equal(setup.spawned.length, 0);
+    assert.equal(setup.recorder.getReservation(setup.dispatchId).recorded, true);
+  } finally { setup.f.clean(); }
+});
+
+test('pre-checkpoint host death refuses recovery with zero durable recorder records', async () => {
+  const setup = await recoverySetup('gsd-planner', { crashBeforeNativeCheckpoint: true });
+  try {
+    assert.ok(setup.crashError);
+    assert.equal(setup.checkpointFailpointReached, true);
+    const launchDir = path.join(setup.hostState, 'launches');
+    const launch = JSON.parse(fs.readFileSync(path.join(launchDir, fs.readdirSync(launchDir)[0]), 'utf8'));
+    assert.equal(launch.completed, undefined);
+    setup.setLeasePid(2147483647);
+    await assert.rejects(setup.recover(), { code: 'RECOVERY_EVIDENCE_INCOMPLETE' });
+    assert.equal(fs.readdirSync(setup.receipts).filter((name) => name.startsWith('record-')).length, 0);
+    assert.equal(setup.recorder.getReservation(setup.dispatchId).recorded, false);
+    assert.equal(setup.spawned.length, 0);
+  } finally { setup.f.clean(); }
+});
+
+test('recover rebuilds a completed dispatch after native verification but before writeTranscript', async () => {
+  const setup = await recoverySetup('gsd-planner', { crashBeforeTranscriptWrite: true });
+  try {
+    assert.equal(setup.crashError.code, 'SIMULATED_HOST_DEATH');
+    const launchDir = path.join(setup.hostState, 'launches');
+    const launchFile = path.join(launchDir, fs.readdirSync(launchDir)[0]);
+    const record = JSON.parse(fs.readFileSync(launchFile, 'utf8'));
+    assert.equal(record.completed.transcript_saved, false);
+    assert.match(fs.readFileSync(sessionFiles(setup.f).find((file) => file.includes(setup.fixtureData.childId)), 'utf8'),
+      /"task_complete"/);
+    assert.equal(fs.existsSync(record.completed.runtime_evidence.transcript.path), false);
+    assert.equal(setup.recorder.getReservation(setup.dispatchId).recorded, false);
+    setup.setLeasePid(2147483647);
+    const recovered = await setup.recover();
+    assert.equal(recovered.recovered, true);
+    assert.equal(recovered.receipt.dispatch_id, setup.dispatchId);
+    assert.equal(recovered.receipt.runtime_evidence.transcript, undefined);
+    assert.equal(recovered.receipt.runtime_evidence.stream_evidence.source, 'native-session-transcript');
+    assert.equal(setup.runtimeSpawnCalls.length, 1);
+    assert.equal(setup.spawned.length, 0);
+    assert.equal(setup.recorder.getReservation(setup.dispatchId).recorded, true);
+    assert.equal(setup.recorder.getVerifiedRecord(setup.dispatchId).receipt.dispatch_id, setup.dispatchId);
+  } finally { setup.f.clean(); }
+});
+
+test('recover refuses artifact changes after pre-write completion binding', async () => {
+  const setup = await recoverySetup('gsd-planner', { crashBeforeTranscriptWrite: true });
+  try {
+    assert.equal(setup.crashError.code, 'SIMULATED_HOST_DEATH');
+    setup.setLeasePid(2147483647);
+    fs.appendFileSync(path.join(setup.f.root, '.planning', 'phases', '38-codex-decompose', '38-01-PLAN.md'), 'tampered\n');
+    await assert.rejects(setup.recover(), (error) => error.code === 'RECOVERY_ARTIFACT_ALTERED');
+    assert.equal(fs.existsSync(setup.recordFile), false);
+    assert.equal(setup.recorder.getReservation(setup.dispatchId).recorded, false);
+    assert.equal(setup.spawned.length, 0);
+  } finally { setup.f.clean(); }
+});
+
+test('recover refuses a missing host transcript when the durable completion says it was saved', async () => {
+  const setup = await recoverySetup('gsd-planner', { crashBeforeTranscriptWrite: true });
+  try {
+    setup.setLeasePid(2147483647);
+    const launchDir = path.join(setup.hostState, 'launches');
+    const launchFile = path.join(launchDir, fs.readdirSync(launchDir)[0]);
+    const record = JSON.parse(fs.readFileSync(launchFile, 'utf8'));
+    record.completed.transcript_saved = true;
+    fs.writeFileSync(launchFile, JSON.stringify(record), { mode: 0o600 });
+    await assert.rejects(setup.recover(), (error) => error.code === 'RECOVERY_EVIDENCE_MISSING');
+    assert.equal(fs.existsSync(setup.recordFile), false);
+    assert.equal(setup.recorder.getReservation(setup.dispatchId).recorded, false);
+    assert.equal(setup.spawned.length, 0);
+  } finally { setup.f.clean(); }
+});
+
+test('recover refuses a dispatch with no reservation and one already recorded', async () => {
+  const setup = await recoverySetup('gsd-planner');
+  try {
+    setup.setLeasePid(2147483647);
+    const recovered = await setup.recover();
+    assert.equal(recovered.receipt.dispatch_id, setup.dispatchId);
+    await assert.rejects(setup.recover(), (error) => error.code === 'RECOVERY_ALREADY_RECORDED');
+    setup.setLeasePid(2147483647);
+    fs.writeFileSync(setup.file, JSON.stringify({ scope: setup.f.scope, gsd_role: 'gsd-planner', prompt: 'x' }));
+    await assert.rejects(setup.recover('dispatch-never-reserved'), (error) => error.code === 'RECOVERY_NO_RESERVATION');
+    assert.equal(setup.spawned.length, 0);
+  } finally { setup.f.clean(); }
+});
+
+test('recover refuses a live writer owner and fences a dead owner before recording', async () => {
+  const setup = await recoverySetup('gsd-planner');
+  try {
+    assert.equal(setup.crashError.code, 'SIMULATED_HOST_DEATH');
+    await assert.rejects(setup.recover(), (error) => error.code === 'WRITER_LEASED');
+    assert.equal(setup.recorder.getReservation(setup.dispatchId).recorded, false);
+    setup.setLeasePid(2147483647);
+    const result = await setup.recover();
+    assert.equal(result.receipt.dispatch_id, setup.dispatchId);
+    assert.equal(setup.recorder.getReservation(setup.dispatchId).recorded, true);
+  } finally { setup.f.clean(); }
+});
+
+test('recover refuses a changed original request scope before recording', async () => {
+  const setup = await recoverySetup('gsd-planner');
+  try {
+    setup.setLeasePid(2147483647);
+    fs.writeFileSync(setup.file, JSON.stringify({
+      scope: { ...setup.f.scope, ticket: 'T-OTHER' }, gsd_role: 'gsd-planner',
+      prompt: 'Check this phase plan.', dispatch_id: setup.dispatchId,
+    }));
+    await assert.rejects(setup.recover(), (error) => error.code === 'RECOVERY_EVIDENCE_INCOMPLETE');
+    assert.equal(setup.recorder.getReservation(setup.dispatchId).recorded, false);
+  } finally { setup.f.clean(); }
+});
+
+test('recover refuses a changed original prompt and policy signals before recording', async () => {
+  const setup = await recoverySetup('gsd-planner');
+  try {
+    setup.setLeasePid(2147483647);
+    fs.writeFileSync(setup.file, JSON.stringify({
+      scope: setup.f.scope, gsd_role: 'gsd-planner', prompt: 'A different request.',
+      signals: { critical: true }, dispatch_id: setup.dispatchId,
+    }));
+    await assert.rejects(setup.recover(), (error) => error.code === 'RECOVERY_EVIDENCE_INCOMPLETE');
+    assert.equal(setup.recorder.getReservation(setup.dispatchId).recorded, false);
+  } finally { setup.f.clean(); }
+});
+
+test('recover refuses a tampered task_relay binding before recording', async () => {
+  const setup = await recoverySetup('gsd-planner');
+  try {
+    setup.setLeasePid(2147483647);
+    const launchDir = path.join(setup.hostState, 'launches');
+    const launchFile = path.join(launchDir, fs.readdirSync(launchDir)[0]);
+    const record = JSON.parse(fs.readFileSync(launchFile, 'utf8'));
+    record.completed.runtime_evidence.native_child_evidence.task_relay.sha256 = '0'.repeat(64);
+    fs.writeFileSync(launchFile, JSON.stringify(record), { mode: 0o600 });
+    await assert.rejects(setup.recover(), (error) => error.code === 'RECOVERY_ARTIFACT_ALTERED');
+    assert.equal(fs.existsSync(setup.recordFile), false);
+    assert.equal(setup.recorder.getReservation(setup.dispatchId).recorded, false);
+    assert.equal(setup.spawned.length, 0);
+  } finally { setup.f.clean(); }
+});
+
+test('recover refuses a changed original generated research agent digest before recording', async () => {
+  const setup = await recoverySetup('gsd-phase-researcher');
+  try {
+    setup.setLeasePid(2147483647);
+    const launchDir = path.join(setup.hostState, 'launches');
+    const launchFile = path.join(launchDir, fs.readdirSync(launchDir)[0]);
+    const record = JSON.parse(fs.readFileSync(launchFile, 'utf8'));
+    assert.equal(record.binding.generated_agent.sha256, setup.f.researchDigest);
+    const agentFile = path.join(setup.f.agentDir, record.binding.generated_agent.file);
+    const original = fs.readFileSync(agentFile, 'utf8');
+    const changed = original.replace('Follow the generated research policy.', 'Follow a changed generated research policy.');
+    assert.notEqual(changed, original);
+    const digest = crypto.createHash('sha256').update(changed).digest('hex');
+    fs.writeFileSync(agentFile, changed);
+    const manifestFile = path.join(setup.f.agentDir, '.shipyard-manifest.json');
+    const manifest = JSON.parse(fs.readFileSync(manifestFile, 'utf8'));
+    manifest.agent_digests[record.binding.generated_agent.file] = digest;
+    fs.writeFileSync(manifestFile, JSON.stringify(manifest));
+    await assert.rejects(setup.recover(), (error) => error.code === 'RECOVERY_EVIDENCE_INCOMPLETE');
+    assert.equal(fs.existsSync(setup.recordFile), false);
+    assert.equal(setup.recorder.getReservation(setup.dispatchId).recorded, false);
+    assert.equal(setup.spawned.length, 0);
+  } finally { setup.f.clean(); }
+});
+
+const refusals = [
+  ['missing child transcript', 'RECOVERY_EVIDENCE_MISSING', (s) => {
+    fs.rmSync(sessionFiles(s.f).find((file) => file.includes(s.fixtureData.childId)));
+  }],
+  ['child without task_complete', 'RECOVERY_EVIDENCE_INCOMPLETE', (s) => {
+    const child = sessionFiles(s.f).find((file) => file.includes(s.fixtureData.childId));
+    fs.writeFileSync(child, fs.readFileSync(child, 'utf8').split('\n').filter((line) => !line.includes('task_complete')).join('\n'));
+  }],
+  ['parent transcript digest changed', 'RECOVERY_ARTIFACT_ALTERED', (s) => {
+    const parent = sessionFiles(s.f).find((file) => file.includes(s.fixtureData.parent));
+    fs.appendFileSync(parent, '\n');
+  }],
+  ['artifact digest changed', 'RECOVERY_ARTIFACT_ALTERED', (s) => {
+    fs.appendFileSync(path.join(s.f.root, '.planning', 'phases', '38-codex-decompose', '38-01-PLAN.md'), 'tampered\n');
+  }],
+  ['undeclared phase path changed', 'FOREIGN_EDIT', (s) => {
+    fs.writeFileSync(path.join(s.f.root, '.planning', 'phases', '38-codex-decompose', 'stray.md'), 'not declared\n');
+  }],
+  ['live child pid', 'RECOVERY_UNKNOWN_LIVE', (s) => {
+    const dir = path.join(s.hostState, 'launches');
+    const file = path.join(dir, fs.readdirSync(dir)[0]);
+    const record = JSON.parse(fs.readFileSync(file, 'utf8'));
+    record.process_spawned.pid = process.pid;
+    record.session_started.process_id = process.pid;
+    record.completed.pid = process.pid;
+    fs.writeFileSync(file, JSON.stringify(record), { mode: 0o600 });
+  }],
+  ['missing original pid', 'RECOVERY_EVIDENCE_INCOMPLETE', (s) => {
+    const dir = path.join(s.hostState, 'launches');
+    const file = path.join(dir, fs.readdirSync(dir)[0]);
+    const record = JSON.parse(fs.readFileSync(file, 'utf8'));
+    delete record.process_spawned;
+    fs.writeFileSync(file, JSON.stringify(record), { mode: 0o600 });
+  }],
+  ['invalid original pid', 'RECOVERY_EVIDENCE_INCOMPLETE', (s) => {
+    const dir = path.join(s.hostState, 'launches');
+    const file = path.join(dir, fs.readdirSync(dir)[0]);
+    const record = JSON.parse(fs.readFileSync(file, 'utf8'));
+    record.process_spawned.pid = 0;
+    fs.writeFileSync(file, JSON.stringify(record), { mode: 0o600 });
+  }],
+  ['original reservation changed', 'RECOVERY_EVIDENCE_INCOMPLETE', (s) => {
+    const dir = path.join(s.hostState, 'launches');
+    const file = path.join(dir, fs.readdirSync(dir)[0]);
+    const record = JSON.parse(fs.readFileSync(file, 'utf8'));
+    record.reservation.reserved_at = 'changed-reservation';
+    fs.writeFileSync(file, JSON.stringify(record), { mode: 0o600 });
+  }],
+  ['missing launch record', 'RECOVERY_EVIDENCE_MISSING', (s) => {
+    fs.rmSync(path.join(s.hostState, 'launches'), { recursive: true, force: true });
+  }],
+];
+for (const [name, code, mutate] of refusals) {
+test('recover refuses ' + name + ' with ' + code + ' and records nothing', async () => {
+  const setup = await recoverySetup('gsd-planner');
+  try {
+    assert.equal(setup.crashError.code, 'SIMULATED_HOST_DEATH');
+    setup.setLeasePid(2147483647);
+    mutate(setup);
+    await assert.rejects(setup.recover(), (error) => error.code === code);
+    assert.equal(fs.existsSync(setup.recordFile), false);
+    assert.equal(fs.readdirSync(setup.receipts).filter((name) => name.startsWith('record-')).length, 0);
+    assert.equal(createDurableRecorder(setup.receipts).getReservation(setup.dispatchId).recorded, false);
+    assert.equal(setup.spawned.length, 0);
+  } finally { setup.f.clean(); }
+});
+}
+
+test('unknown native pid probe refuses recovery with zero durable recorder records', async () => {
+  const setup = await recoverySetup('gsd-planner');
+  const originalKill = process.kill;
+  try {
+    setup.setLeasePid(2147483647);
+    const dir = path.join(setup.hostState, 'launches');
+    const launch = JSON.parse(fs.readFileSync(path.join(dir, fs.readdirSync(dir)[0]), 'utf8'));
+    process.kill = (pid, signal) => {
+      if (pid === launch.process_spawned.pid) throw Object.assign(new Error('probe unavailable'), { code: 'EACCES' });
+      return originalKill(pid, signal);
+    };
+    await assert.rejects(setup.recover(), { code: 'RECOVERY_UNKNOWN_LIVE' });
+    assert.equal(fs.readdirSync(setup.receipts).filter((name) => name.startsWith('record-')).length, 0);
+    assert.equal(setup.recorder.getReservation(setup.dispatchId).recorded, false);
+  } finally {
+    process.kill = originalKill;
+    setup.f.clean();
+  }
+});
+
+test('Codex recovery gates every judgment role at the recorder boundary', async () => {
+  for (const role of ['gsd-phase-researcher', 'gsd-planner', 'gsd-plan-checker']) {
+    for (const refusal of ['WRITER_FENCED', 'FOREIGN_EDIT']) {
+      const setup = await recoverySetup(role);
+      try {
+        setup.setLeasePid(2147483647);
+        let fenceChecks = 0;
+        let changeChecks = 0;
+        const original = setup.writerLease;
+        const writerLease = { ...original,
+          assertFence(input) {
+            if (refusal === 'WRITER_FENCED' && ++fenceChecks === 2) {
+              throw Object.assign(new Error('writer taken over before record'), { code: 'WRITER_FENCED' });
+            }
+            return original.assertFence(input);
+          },
+          changedSince(snapshot) {
+            if (refusal === 'FOREIGN_EDIT' && ++changeChecks === 3) {
+              fs.writeFileSync(path.join(setup.f.root, '.planning', 'phases', '38-codex-decompose', 'stray.md'), 'foreign\n');
+            }
+            return original.changedSince(snapshot);
+          },
+        };
+        await assert.rejects(setup.recover(setup.dispatchId, { writerLease }), { code: refusal });
+        assert.equal(fs.readdirSync(setup.receipts).filter((name) => name.startsWith('record-')).length, 0);
+        assert.equal(setup.recorder.getReservation(setup.dispatchId).recorded, false);
+      } finally { setup.f.clean(); }
+    }
+  }
+});
+
+test('Codex recovery aborts a provisional role record when ownership changes before finalize', async () => {
+  for (const role of ['gsd-phase-researcher', 'gsd-planner', 'gsd-plan-checker']) {
+    for (const refusal of ['WRITER_FENCED', 'FOREIGN_EDIT']) {
+      const setup = await recoverySetup(role);
+      try {
+        setup.setLeasePid(2147483647);
+        const original = setup.writerLease;
+        let afterRecord = 0;
+        const writerLease = { ...original,
+          assertFence(input) {
+            if (setup.recorder.getReservation(setup.dispatchId).recorded) {
+              afterRecord++;
+              if (refusal === 'WRITER_FENCED') {
+                throw Object.assign(new Error('writer taken over after record'), { code: 'WRITER_FENCED' });
+              }
+              fs.writeFileSync(path.join(setup.f.root, '.planning', 'phases', '38-codex-decompose',
+                'stray.md'), 'foreign after record\n');
+            }
+            return original.assertFence(input);
+          },
+        };
+        await assert.rejects(setup.recover(setup.dispatchId, { writerLease }), { code: refusal });
+        assert.equal(afterRecord, 1);
+        assert.equal(fs.readdirSync(setup.receipts).filter((name) => name.startsWith('record-')).length, 0);
+        assert.equal(setup.recorder.getReservation(setup.dispatchId).recorded, false);
+      } finally { setup.f.clean(); }
+    }
+  }
+});
+
+test('a host killed before the child completes refuses recovery with RECOVERY_EVIDENCE_INCOMPLETE', async () => {
+  const setup = await recoverySetup('gsd-planner', { complete: false });
+  try {
+    assert.equal(setup.crashError.code, 'RUNTIME_UNAVAILABLE');
+    setup.setLeasePid(2147483647);
+    assert.equal(fs.existsSync(setup.recordFile), false);
+    assert.equal(createDurableRecorder(setup.receipts).getReservation(setup.dispatchId).recorded, false);
+    await assert.rejects(setup.recover(), (error) => error.code === 'RECOVERY_EVIDENCE_INCOMPLETE');
+    assert.equal(fs.existsSync(setup.recordFile), false);
+  } finally { setup.f.clean(); }
+});
+
+test('recover argv is exact', () => {
+  assert.deepEqual(parseRecoverArguments(['recover', '--dispatch', 'd-1', '--args-file', 'x.json']),
+    { dispatchId: 'd-1', file: path.resolve('x.json') });
+  assert.throws(() => parseRecoverArguments(['recover', '--dispatch', 'd-1']), (error) => error.code === 'INVALID_INPUT');
 });

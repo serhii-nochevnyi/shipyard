@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: d8f8c3d78c91b8ec4bc4d6094dcab3416e0a8ea32abb46265b11e924febf22ae
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 83cf396b9947114c574600f08e52f862d21005368f3ba5b3df60480cbf02e449
 phase: 46-refresh-native-runtime-model-ladder
 plan: 04
 subsystem: shipyard delivery
@@ -22,10 +22,10 @@ key-decisions:
 duration: 0min
 status: halted
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: d8f8c3d78c91b8ec4bc4d6094dcab3416e0a8ea32abb46265b11e924febf22ae
+shipyard_source_fingerprint: 83cf396b9947114c574600f08e52f862d21005368f3ba5b3df60480cbf02e449
 ---
 
-# Phase 46: Align supported native ladder instructions after active phase 43 owners — Delivery Projection
+# Phase 46: Publish supported grid and isolated rollout instructions — Delivery Projection
 
 **Plan delivery is not complete; the projection preserves the current state.**
 

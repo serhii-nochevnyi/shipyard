@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 8fccf170b5d475b26bf923296eb0e7e4b72f77b0861c962240f5ff7ba629c90a
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 9932b49f086953be93f592a70d53d16c18e7fd92a0d4f5e192a3bc40fdf3f507
 phase: 30-a-ticket-you-cannot-reach-is-not-deliverable
 plan: 09
 subsystem: shipyard delivery
@@ -20,10 +20,10 @@ key-files:
 key-decisions:
   - "Shipyard delivery state is projected; no native executor claim is invented."
 duration: 0min
-completed: 2026-09-12
+completed: 2026-09-30
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 8fccf170b5d475b26bf923296eb0e7e4b72f77b0861c962240f5ff7ba629c90a
+shipyard_source_fingerprint: 9932b49f086953be93f592a70d53d16c18e7fd92a0d4f5e192a3bc40fdf3f507
 ---
 
 # Phase 30: Persist resolved checkouts and park unreachable work — Delivery Projection

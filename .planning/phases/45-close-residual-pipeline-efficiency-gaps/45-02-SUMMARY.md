@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 246f86c74c5afec4f9b25f6b31396441f0b27c85f8c176fa37c3490862f540c0
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: ca4a10c17a03cb55c9447f184e64d36b0c8091fc1f95d63fca94bfbba8767ecd
 phase: 45-close-residual-pipeline-efficiency-gaps
 plan: 02
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-30
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 246f86c74c5afec4f9b25f6b31396441f0b27c85f8c176fa37c3490862f540c0
+shipyard_source_fingerprint: ca4a10c17a03cb55c9447f184e64d36b0c8091fc1f95d63fca94bfbba8767ecd
 ---
 
 # Phase 45: Doctor classifies another checkout's dogfood cache as foreign instead of a release error — Delivery Projection

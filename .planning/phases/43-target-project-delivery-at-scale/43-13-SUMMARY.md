@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: f3f950ec3a255459ccd415feed4e7f8c62d9266170b091619360179324ec7f84
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 34fdf10104070b0f2b76d7e410bbf37cd58c4de86a01e69b7f023db7aecda3cc
 phase: 43-target-project-delivery-at-scale
 plan: 13
 subsystem: shipyard delivery
@@ -23,7 +23,7 @@ duration: 0min
 completed: 2026-09-30
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: f3f950ec3a255459ccd415feed4e7f8c62d9266170b091619360179324ec7f84
+shipyard_source_fingerprint: 34fdf10104070b0f2b76d7e410bbf37cd58c4de86a01e69b7f023db7aecda3cc
 ---
 
 # Phase 43: Carry a conform verdict across a base-merge when the ticket's own patch is identical and every other path equals the new base — Delivery Projection

@@ -35,8 +35,13 @@ if (fs.existsSync(configFile)) {
     // must stay inert for an ordinary GSD project even when its config is
     // malformed; a conveyor project will still fail closed in gsd-sync.
   }
-  if (config && config.delivery_pipeline && config.delivery_pipeline.gsd_sync === false) {
+  const declared = config && config.delivery_pipeline;
+  if (declared && declared.gsd_sync === false) {
     pass('delivery_pipeline.gsd_sync is false in .planning/config.json');
+  }
+  if ((!declared || !Object.prototype.hasOwnProperty.call(declared, 'gsd_sync'))
+      && config && config.pipeline && config.pipeline.gsd_sync === false) {
+    pass('pipeline.gsd_sync is false in .planning/config.json');
   }
 }
 

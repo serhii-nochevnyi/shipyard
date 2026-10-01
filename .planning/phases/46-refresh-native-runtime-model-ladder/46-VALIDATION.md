@@ -9,73 +9,64 @@ created: "2026-09-30"
 
 # Phase 46 — Validation Strategy
 
-> Execution ledger only. All results below are pending; the v6 baseline run in research does not attest ADR-024. This file is outside the CONTEXT/PLAN seal and needs a separate operator SHA-256 check.
+All new-policy implementation, PR CI/review, package and native application results remain pending. Signed T-46-01 commit `1ca29f3658717efc8c212f6a5e81d33cfb2557f5` passed pre-commit under installed v6 Luna/max, but emitted no complete executor role files and has no PR, CI, review or new-model receipt. This ledger is outside the CONTEXT/PLAN seal and needs a separate operator SHA-256 check.
 
-## Test Infrastructure
+## Why the core must be atomic
 
-| Property | Value |
-|---|---|
-| Framework | Existing Node `node:test` unit files and Bash isolated-home smoke |
-| Config file | No new test config; existing `.planning/config.json` is an implementation input for T-46-01/02 |
-| Quick run command | Each task's scoped command in the map below |
-| Combined phase command | `node --test tests/unit/model-policy.test.cjs tests/unit/model-capability.test.cjs tests/unit/codex-agent.test.cjs tests/unit/codex-dispatch-adapter.test.cjs tests/unit/gen-codex-shipyard.test.cjs tests/unit/claude-dispatch-adapter.test.cjs tests/unit/claude-runtime-host.test.cjs tests/unit/auto-route.test.cjs tests/unit/marketplace-install.test.cjs tests/unit/usage-attribution.test.cjs` |
-| Isolated install command | `bash tests/smoke/model-ladder-runtime-smoke.sh` |
-| Estimated runtime | Measure during execution; no duration is claimed here |
+`.github/workflows/test.yml:70` runs `make test-fast`; `Makefile:72` reaches `tests/unit/run.sh`, which runs every `tests/unit/*.test.cjs`. Former policy-only T-46-01 could not pass while 02/03 current-policy fixtures remained old, and those tickets could not start before 01 merged. All known current-policy fixtures therefore belong to revised T-46-01. Former T-46-02/03 are retired as executable plans and their scopes are included in 01; they were not executed. `marketplace-install.test.cjs:70-75` skips source-package freshness on ticket/epic bases, so T-46-05 can remain separate. Full CI still gates T-46-01 PR merge; no local full suite is authorized.
 
-## Sampling Rate
+## Test infrastructure and scoped verification
 
-- After each task commit, run its scoped map command and record exit status and relevant assertions.
-- After policy/test wave, run the combined phase command on the integrated branch; after package wave, run the isolated install smoke.
-- Before verification, require the scoped tests, package provenance, independent review and automatic native evidence collection; HOLD any unavailable live pair.
-- Do not widen to `make test` or the whole repository suite for this phase ledger.
+Existing Node `node:test`, assert-harness and Bash isolated-home smoke are used. No dependency install or Wave 0 scaffold is needed. Commands below are ordinary plain argv. Run only the listed scoped commands locally; CI owns the full suite and review.
 
-## Per-Task Verification Map
+| Ticket | Focus | Automated command | Expected failing direction | Status |
+|---|---|---|---|---|
+| T-46-01 | Canonical matrix and capabilities | `node --test tests/unit/model-policy.test.cjs tests/unit/model-capability.test.cjs tests/unit/codex-agent.test.cjs tests/unit/codex-dispatch-adapter.test.cjs tests/unit/gen-codex-shipyard.test.cjs` | Old executor, fixer, research, reviewer or static role tuple and unsupported pair refuse | pending |
+| T-46-01 | Codex current host/boundary/config | `node --test tests/unit/codex-decompose-host.test.cjs tests/unit/codex-runtime-host.test.cjs tests/unit/codex-delivery-host.test.cjs tests/unit/dispatch-boundary.test.cjs tests/unit/pipeline-config.test.cjs` | Old current-policy tuple, forged predecessor and copied reviewer override refuse; historical parser cases remain | pending; T-45-09 ownership barrier |
+| T-46-01 | Claude current host/decomposition/research | `node --test tests/unit/claude-dispatch-adapter.test.cjs tests/unit/claude-runtime-host.test.cjs tests/unit/claude-decompose-host.test.cjs tests/unit/claude-delivery-host.test.cjs tests/unit/investigation-research.test.cjs` | Older pinned Sonnet, lower effort, foreign session and old current-role selection refuse | pending; T-45-10 ownership barrier |
+| T-46-01 | Current instructions/source contract | `node --test tests/unit/source-contract.test.cjs tests/unit/workflows-args.test.cjs tests/unit/claude-instructions.test.cjs tests/unit/auto-route.test.cjs` | Old active grid in CLAUDE, commands, sentinel or managed route fails; historical prose stays labeled | pending |
+| T-46-01 | Isolated source install | `bash tests/smoke/model-ladder-runtime-smoke.sh` | Old policy/manifest or altered agent refuses; fixture capabilities are not live proof | pending |
+| T-46-04 | Exact supported grid | `node --test tests/unit/source-contract.test.cjs` | Old active tuple in the supported table fails; historical examples remain valid | pending |
+| T-46-04 | Operator docs/runbook | `bash tests/smoke/docs-smoke.sh` | Broken documentation paths or missing required file fail | pending; independent matrix review required |
+| T-46-05 | Package mirror and v6 attribution | `node --test tests/unit/marketplace-install.test.cjs tests/unit/usage-attribution.test.cjs` | Stale mirror fails on ticket/epic base; v6 history remains stale | pending |
+| T-46-05 | Final isolated package install | `bash tests/smoke/model-ladder-runtime-smoke.sh` | New package/source/manifest mismatch or altered static agent refuses | pending |
+| T-46-06 | Independent regression review | `node --test tests/unit/model-policy.test.cjs tests/unit/model-capability.test.cjs tests/unit/codex-dispatch-adapter.test.cjs tests/unit/claude-dispatch-adapter.test.cjs tests/unit/marketplace-install.test.cjs` | Any old-grid, mismatch or package drift remains visible | pending |
+| T-46-06 | Authentic native evidence | `node --test tests/unit/codex-dispatch-adapter.test.cjs tests/unit/claude-dispatch-adapter.test.cjs` | Fixture passes cannot replace host-owned same-session receipt; missing real pair becomes HOLD | pending |
 
-| Task ID | Plan | Wave | Requirement | Threat Ref | Secure behavior and failing direction | Test type | Automated command | File exists | Status |
-|---|---:|---:|---|---|---|---|---|---|---|
-| 46-01-01 | 01 | 1 | P46-A/B/C | T-46-01/02 | Old Codex executor or rolling Claude base tuple must fail exact pair/hash assertions | unit | `node --test tests/unit/model-policy.test.cjs` | Yes | pending |
-| 46-01-02 | 01 | 1 | P46-A/B/C/E | T-46-01/02 | Wrong rung, stale fingerprint, unsupported pair and old repair predecessor refuse; copied reviewer overrides are absent | unit/source contract | `node --test tests/unit/model-policy.test.cjs tests/unit/model-capability.test.cjs` | Yes | pending |
-| 46-02-01 | 02 | 2 | P46-A/C/E | T-46-04 | Native model/effort mismatch, missing observation, forged predecessor and either reintroduced reviewer override refuse | unit | `node --test tests/unit/codex-agent.test.cjs tests/unit/codex-dispatch-adapter.test.cjs` | Yes | pending |
-| 46-02-02 | 02 | 2 | P46-A/C/E | T-46-03 | Stale manifest, old Sol ID or tampered generated agent fails | unit | `node --test tests/unit/gen-codex-shipyard.test.cjs` | Yes | pending |
-| 46-03-01 | 03 | 2 | P46-B/C/E | T-46-05/06 | Older Sonnet, lower effort, foreign session and absent transcript refuse | unit | `node --test tests/unit/claude-dispatch-adapter.test.cjs` | Yes | pending |
-| 46-03-02 | 03 | 2 | P46-B/C/E | T-46-05/06 | Pinned Sonnet must take exact host match; rolling alias must not attest pinned ID | unit | `node --test tests/unit/claude-runtime-host.test.cjs` | Yes | pending |
-| 46-04-01 | 04 | 17 | P46-A/B/C | T-46-07/08 | Managed route/decompose exact tuple test fails for old Sol ID or obsolete Luna/max | unit/source contract | `node --test tests/unit/auto-route.test.cjs` | Yes | pending |
-| 46-04-02 | 04 | 17 | P46-A/B/C/D/E | T-46-07/08 | Supported grid assertion fails for Claude old judgment tuple; docs paths remain valid | unit/docs smoke | `node --test tests/unit/auto-route.test.cjs` | Yes | pending |
-| 46-05-01 | 05 | 18 | P46-C/D/E | T-46-10/11 | v6 history stays stale; isolated installer rejects mismatched identity | unit/smoke | `node --test tests/unit/usage-attribution.test.cjs` | Yes | pending |
-| 46-05-02 | 05 | 18 | P46-C/D/E | T-46-09/11 | Stale mirror, missing parent merge ancestry or missing source blocks package; install remains isolated | unit/smoke | `node --test tests/unit/marketplace-install.test.cjs` | Yes | pending |
-| 46-06-01 | 06 | 19 | P46-A..E | T-46-12/14 | Independent review and package/hash checks reject unsupported native evidence | scoped unit | `node --test tests/unit/model-policy.test.cjs tests/unit/model-capability.test.cjs tests/unit/codex-dispatch-adapter.test.cjs tests/unit/claude-dispatch-adapter.test.cjs tests/unit/marketplace-install.test.cjs` | Yes | pending |
-| 46-06-02 | 06 | 19 | P46-A..E | T-46-12/13 | Host-owned exact pair receipt or explicit HOLD; older alias, effort downgrade and missing same-session proof refuse | scoped unit plus live host evidence | `node --test tests/unit/codex-dispatch-adapter.test.cjs tests/unit/claude-dispatch-adapter.test.cjs` | Yes | pending |
-| 46-06-03 | 06 | 19 | P46-A..E | T-46-13/14 | Operator decision follows collected proof and records approval or HOLD without active-home mutation | isolated smoke plus human checkpoint | `bash tests/smoke/model-ladder-runtime-smoke.sh` | Yes | pending |
+## Native integration barriers
 
-The source-contract tests and host observations are distinct: fixture-based unit tests cannot turn a missing live pair into a pass. T-46-05's coordinator prelaunch gate runs `node /Users/serhii/.codex/shipyard/scripts/state-sync.cjs`, `gh pr view <PR> --json state,baseRefName,mergeCommit`, and `git merge-base --is-ancestor <merge-oid> <effective-base-sha>` for each parent before package worktree preparation. Record the actual command outputs; current status is pending.
+1. Before T-46-01 resume, reconcile `dispatch-boundary.test.cjs` with active T-45-09/PR369 and `claude-decompose-host.test.cjs` with active T-45-10. The coordinator records owner approval and actual reviewed merge/base ancestry. `pr-open` alone fails the barrier. No active owner checkout/controller edit is authorized. Do not publish the private PR369 transport proposal.
+2. T-46-01 executor writes full `.shipyard-pr-body.md` and `.shipyard-evidence.md` itself with signed reuse, actual scoped command exits and downstream pending state; the trusted finalizer creates the receipt/commit and sealed artifact. Old missing files are not invented or retroactively attributed.
+3. Before T-46-05 worktree preparation, state-sync and fetch the phase epic. Require real merged T-46-01 and T-46-04 PRs and prove each merge SHA is an ancestor of the refreshed effective package base; check every required parent output there. Merely branched/actionable or locally merged parents fail. Record exact state generation, base/merge SHAs and command exit codes.
+4. Before epic/default acceptance, source and copied `plugins/shipyard/` bytes, package digest/version, isolated installed manifest and Claude plugin provenance must agree. Current T-46-01 PR may temporarily omit package projection because the ticket/epic test explicitly skips freshness; final acceptance may not.
 
-## Requirement and Threat Coverage
+## Native rollout proof and HOLD
 
-| Requirement | Main proof | Negative/failing direction |
-|---|---|---|
-| P46-A | 01/02 policy and Codex dynamic/static tests; 06 native Sol low/high/xhigh receipts | Old Sol ID, obsolete Luna/max baseline, unsupported pair, reviewer override |
-| P46-B | 01/03 Claude policy/host tests; 06 native Sonnet low/medium/high/xhigh and Opus/high receipts | Older Sonnet alias, effort downgrade, foreign session, absent entitlement |
-| P46-C | 01 new hash/predecessors, 02/03 receipt refusal, 05 old history | Forged predecessor, stale manifest, missing native observation |
-| P46-D | 04 exact guidance, 05 isolated package/smoke, 06 provenance/rollback | Package mirror drift, foreign installed plugin, active-home mutation |
-| P46-E | 01-05 focused regression, 06 independent review and operator decision | Fixture/model list or unsealed report presented as live proof |
+T-46-06's automatic task attempts each distinct new pair through an authorized canonical role with real ticket/PR/complexity evidence: Codex Sol 6.1 low/high/xhigh; Claude Sonnet 5.5 low/medium/high/xhigh and Opus 5.5/high. It records current policy hash, source/package/installed provenance, exact same-session requested/applied/observed model and effort, dispatch/session IDs and durable receipt reference. Unknown entitlement, missing authentic signal, alias/older model, effort downgrade, foreign session or missing Claude installed provenance is a specific HOLD. No synthetic repair predecessor, model list, fixture or unsealed report is accepted. The unchanged Luna/medium sentinel and Fable window are regression checks. Only after automatic collection and independent review does the single T-46-06 operator checkpoint decide activation or HOLD. Old-policy in-flight runs retain their original ownership and evidence; D6 outer coordination remains separate.
 
-## Wave 0 Requirements
+## Requirement/source audit
 
-Existing `node:test` and Bash smoke infrastructure and every named test file are present. No new framework, stub or Wave 0 task is required. New exact-grid and reviewer compatibility assertions are implementation work in their owning tickets.
-
-## Manual-Only Verifications
-
-| Behavior | Requirement | Why manual | Instructions |
+| Source | Item | Owner | Status |
 |---|---|---|---|
-| Final active rollout or HOLD | P46-D/E | Operator controls active installation | Review 46-ROLLOUT-EVIDENCE.md only after auto collection and independent review; check each real receipt or HOLD, installed provenance, old-policy in-flight ownership and rollback target. |
+| GOAL | Exact pinned native ladder, generation, installation and observed application | 01, 04-06 | COVERED |
+| REQ | P46-A Codex role matrix and identity | 01, 04, 06 | COVERED |
+| REQ | P46-B Claude role matrix and native pair compatibility | 01, 04, 06 | COVERED |
+| REQ | P46-C version/hash, adapters, generated roles, receipt and history | 01, 05, 06 | COVERED |
+| REQ | P46-D isolated install, provenance and rollback | 04-06 | COVERED |
+| REQ | P46-E scoped regression, independent review, honest outcome | 01, 04-06 | COVERED |
+| RESEARCH | Shared policy source, adjacent repair, pinned exact-match, source generator | 01 | COVERED |
+| RESEARCH | Package mirror, isolated installed identity, historical v6 classification | 05 | COVERED |
+| RESEARCH | Unknown account entitlement and installed Claude provenance | 06 | COVERED |
+| CONTEXT | Locked P46-A, P46-B, P46-C, P46-D, P46-E | 01, 04-06 | COVERED |
 
-## Validation Sign-Off
+Context-deferred executor failure promotions, D6 activation and economy cohorts remain excluded. Original 02/03 scopes are preserved privately as historical plans; no active canonical task depends on them.
 
-- [ ] Every task's scoped automated command has an execution result recorded.
-- [ ] Exact-grid/source-contract tests have a demonstrated failing old-tuple direction.
-- [ ] T-46-05 parent merge ancestry and effective base proof is recorded before package preparation.
-- [ ] Isolated native receipts or explicit HOLD exist for every distinct new pair; installed Claude provenance is checked.
-- [ ] Independent review and operator decision are recorded; no approval is presumed.
-- [ ] Operator separately verifies this file's SHA-256 outside the CONTEXT/PLAN seal.
+## Sign-off
+
+- [ ] T-45-09/10 owner barrier resolved and recorded before core edit.
+- [ ] T-46-01 scoped checks, authentic role files, CI and independent review pass before merge.
+- [ ] T-46-05 parent ancestry and complete package equality are recorded.
+- [ ] T-46-06 independently reviews actual source/package and records exact live receipts or explicit HOLD before operator decision.
+- [ ] Operator verifies this ledger's separate SHA-256 and decides active rollout or HOLD.
 
 **Approval:** pending

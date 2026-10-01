@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 090def7c0d8a04d5d611a784f85272e18dc5b3f8d5b7135c5668234b6c6b5d83
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: c98d4b9a9ae1b04f7df4cc04e2fc90792406789d2037302f3748f824231bd6f1
 phase: 38-runtime-model-ladder-recovery
 plan: 04
 subsystem: shipyard delivery
@@ -20,10 +20,10 @@ key-files:
 key-decisions:
   - "Shipyard delivery state is projected; no native executor claim is invented."
 duration: 0min
-completed: 2026-09-23
+completed: 2026-09-30
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 090def7c0d8a04d5d611a784f85272e18dc5b3f8d5b7135c5668234b6c6b5d83
+shipyard_source_fingerprint: c98d4b9a9ae1b04f7df4cc04e2fc90792406789d2037302f3748f824231bd6f1
 ---
 
 # Phase 38: Connect Codex delivery and typed GSD decomposition — Delivery Projection

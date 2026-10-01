@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 0b035b92a924f78c703db79cbcc4cd727805662768c69b861b141d81799b08b7
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 9f4dc93b6a12b9c4323705d5d36c6252280abd3fb1ec21c7363ddce01f16da09
 phase: 30-a-ticket-you-cannot-reach-is-not-deliverable
 plan: 06
 subsystem: shipyard delivery
@@ -20,10 +20,10 @@ key-files:
 key-decisions:
   - "Shipyard delivery state is projected; no native executor claim is invented."
 duration: 0min
-completed: 2026-09-12
+completed: 2026-09-30
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 0b035b92a924f78c703db79cbcc4cd727805662768c69b861b141d81799b08b7
+shipyard_source_fingerprint: 9f4dc93b6a12b9c4323705d5d36c6252280abd3fb1ec21c7363ddce01f16da09
 ---
 
 # Phase 30: Mirror the project origin protocol for repository clones — Delivery Projection

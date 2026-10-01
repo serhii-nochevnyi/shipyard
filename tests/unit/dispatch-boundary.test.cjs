@@ -8,6 +8,7 @@ const { spawn, spawnSync } = require('child_process');
 const { suite, test, done, assert } = require('./assert-harness.cjs');
 const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
 const boundaryModule = require('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs');
+const { createPlanningWriterLease } = require('../../plugins/delivery-pipeline/scripts/planning-writer-lease.cjs');
 
 function receiptFor(resolution, extra = {}) {
   return {
@@ -131,6 +132,180 @@ test('dynamic Codex execution receives explicit model and reasoning effort and r
   assert.ok(Object.isFrozen(result.resolution));
   assert.ok(Object.isFrozen(result.receipt));
   assert.ok(Object.isFrozen(result.trace));
+});
+
+test('typed judgment waits for host validation before any durable recorder mutation', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-judgment-gate-'));
+  try {
+    for (const gsdRole of ['gsd-planner', 'gsd-plan-checker']) {
+      const store = path.join(root, gsdRole);
+      const recorder = boundaryModule.createDurableRecorder(store);
+      const adapter = fakeAdapter({ receipt: (resolution) => receiptFor(resolution, {
+        gsd_role: gsdRole, gsd_launch_mechanism: 'typed-gsd-callback',
+      }) });
+      const boundary = boundaryModule.createDispatchBoundary({ adapters: { codex: adapter }, recorder,
+        requireGsdRole: true });
+      const input = { runtime: 'codex', role: 'decomposition', gsd_role: gsdRole,
+        dispatch_id: `gate-${gsdRole}` };
+      await assert.rejects(Promise.resolve().then(() => boundary.dispatch(input, { ticket: 'T-45-16' })),
+        { code: 'WRITER_FENCED' });
+      assert.equal(fs.readdirSync(store).filter((name) => name.startsWith('record-')).length, 0);
+      const refused = boundaryModule.createDispatchBoundary({ adapters: { codex: adapter },
+        recorder: boundaryModule.createDurableRecorder(path.join(root, `${gsdRole}-async`)),
+        requireGsdRole: true });
+      const asyncStore = path.join(root, `${gsdRole}-async`);
+      await assert.rejects(Promise.resolve().then(() => refused.dispatch({ ...input,
+        dispatch_id: `async-${gsdRole}` }, { ticket: 'T-45-16',
+        preRecordValidation: async () => { throw Object.assign(new Error('taken over'), { code: 'WRITER_FENCED' }); },
+      })), { code: 'WRITER_FENCED' });
+      assert.equal(fs.readdirSync(asyncStore).filter((name) => name.startsWith('record-')).length, 0);
+    }
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('typed judgment checks ownership again after record and aborts only its provisional record', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-second-writer-gate-'));
+  try {
+    const worktree = path.join(root, 'worktree');
+    const phaseDir = path.join(worktree, 'phase');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    const lease = createPlanningWriterLease({ worktree, phaseDir, stateRoot: path.join(root, 'writer') });
+    for (const mode of ['control', 'takeover', 'foreign']) {
+      const handle = lease.acquire({ owner: `owner-${mode}`, base_revision: 'base' });
+      const snapshot = lease.snapshotTree();
+      const store = path.join(root, `receipts-${mode}`);
+      const recorder = boundaryModule.createDurableRecorder(store);
+      const gsdRole = 'gsd-planner';
+      const boundary = boundaryModule.createDispatchBoundary({
+        adapters: { codex: fakeAdapter({ receipt: (resolution) => receiptFor(resolution, {
+          gsd_role: gsdRole, gsd_launch_mechanism: 'typed-gsd-callback',
+        }) }) }, recorder, requireGsdRole: true,
+      });
+      let checks = 0;
+      const validate = () => {
+        checks++;
+        if (checks === 2 && mode === 'takeover') {
+          lease.release(handle);
+          lease.acquire({ owner: 'new-owner', base_revision: 'base' });
+        }
+        if (checks === 2 && mode === 'foreign') fs.writeFileSync(path.join(phaseDir, 'stray.md'), 'foreign');
+        lease.assertFence({ ...handle, base_revision: 'base' });
+        const foreign = lease.changedSince(snapshot).changed;
+        if (foreign.length) throw Object.assign(new Error(foreign.join(', ')), { code: 'FOREIGN_EDIT' });
+      };
+      const dispatchId = `second-gate-${mode}`;
+      const call = () => boundary.dispatch({ runtime: 'codex', role: 'decomposition', gsd_role: gsdRole,
+        dispatch_id: dispatchId }, { ticket: 'T-45-16', preRecordValidation: validate });
+      if (mode === 'control') {
+        const record = await call();
+        assert.equal(record.receipt.dispatch_id, dispatchId);
+        assert.ok(recorder.getVerifiedRecord(dispatchId));
+        lease.release(handle);
+      } else {
+        await assert.rejects(Promise.resolve().then(call), { code: mode === 'takeover' ? 'WRITER_FENCED' : 'FOREIGN_EDIT' });
+        assert.equal(recorder.getVerifiedRecord(dispatchId), null);
+        assert.equal(fs.readdirSync(store).filter((name) => name.startsWith('record-')).length, 0);
+        if (mode === 'foreign') { fs.rmSync(path.join(phaseDir, 'stray.md')); lease.release(handle); }
+        else {
+          const current = JSON.parse(fs.readFileSync(path.join(root, 'writer', lease.key, 'lease.json')));
+          lease.release({ token: current.token, epoch: current.epoch });
+        }
+      }
+      assert.equal(checks, 2, 'both validation calls are required');
+    }
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('provisional rollback restores the prior authenticated latest receipt', async () => {
+  const store = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-rollback-history-'));
+  try {
+    const recorder = boundaryModule.createDurableRecorder(store);
+    const worktree = path.join(store, 'worktree');
+    fs.mkdirSync(worktree);
+    const lease = createPlanningWriterLease({ worktree, phaseDir: worktree,
+      stateRoot: path.join(store, 'writer') });
+    const handle = lease.acquire({ owner: 'history-control', base_revision: 'base' });
+    const snapshot = lease.snapshotTree();
+    const validateWriter = () => {
+      lease.assertFence({ ...handle, base_revision: 'base' });
+      const changed = lease.changedSince(snapshot).changed;
+      if (changed.length) throw Object.assign(new Error(changed.join(', ')), { code: 'FOREIGN_EDIT' });
+    };
+    const gsdRole = 'gsd-planner';
+    const boundary = boundaryModule.createDispatchBoundary({
+      adapters: { codex: fakeAdapter({ receipt: (resolution) => receiptFor(resolution, {
+        gsd_role: gsdRole, gsd_launch_mechanism: 'typed-gsd-callback',
+      }) }) }, recorder, requireGsdRole: true,
+    });
+    const dispatch = (id, validate) => boundary.dispatch({ runtime: 'codex', role: 'decomposition',
+      gsd_role: gsdRole, dispatch_id: id }, { ticket: 'T-45-16', preRecordValidation: validate });
+    const previous = await dispatch('history-control', validateWriter);
+    let checks = 0;
+    await assert.rejects(Promise.resolve().then(() => dispatch('history-refused', () => {
+      validateWriter();
+      if (++checks === 2) throw Object.assign(new Error('writer takeover'), { code: 'WRITER_FENCED' });
+    })), { code: 'WRITER_FENCED' });
+    assert.equal(checks, 2);
+    assert.equal(recorder.getVerifiedRecord('history-refused'), null);
+    assert.deepEqual(recorder.getVerifiedRecord('history-control').receipt, previous.receipt);
+    assert.equal(recorder.getLatestReceipt('codex', 'decomposition').dispatch_id, 'history-control');
+    assert.equal(fs.readdirSync(store).filter((name) => name.startsWith('record-')).length, 1);
+    lease.release(handle);
+  } finally { fs.rmSync(store, { recursive: true, force: true }); }
+});
+
+test('prior claim health failure after an affirmative record aborts only the new record', () => {
+  const store = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-prior-claim-abort-'));
+  const recorder = boundaryModule.createDurableRecorder(store);
+  const boundary = boundaryModule.createDispatchBoundary({
+    adapters: { codex: fakeAdapter() }, recorder,
+  });
+  const ticket = 'T-45-16';
+  const prior = boundary.dispatch({ runtime: 'codex', role: 'ci-fix',
+    signals: { signatureState: 'first' }, dispatch_id: 'claim-history' }, { ticket });
+  const other = boundary.dispatch({ runtime: 'codex', role: 'executor',
+    dispatch_id: 'claim-unrelated' }, { ticket });
+  const originalInterval = global.setInterval;
+  const originalRename = fs.renameSync;
+  const originalRead = fs.readFileSync;
+  let claimHeartbeat;
+  let corruptClaimRead = false;
+  let injected = false;
+  try {
+    global.setInterval = (callback, delay, ...args) => {
+      claimHeartbeat = callback;
+      return originalInterval(callback, delay, ...args);
+    };
+    fs.readFileSync = (file, ...args) => {
+      if (corruptClaimRead && path.basename(String(file)).startsWith('claim-')) return '';
+      return originalRead(file, ...args);
+    };
+    fs.renameSync = (source, destination) => {
+      const result = originalRename(source, destination);
+      if (!injected && path.basename(String(destination)).startsWith('latest-')
+          && fs.existsSync(path.join(store, `record-${crypto.createHash('sha256').update('claim-refused').digest('hex')}.json`))) {
+        injected = true;
+        corruptClaimRead = true;
+        try { claimHeartbeat(); } finally { corruptClaimRead = false; }
+      }
+      return result;
+    };
+    assert.throws(() => boundary.dispatch({ runtime: 'codex', role: 'ci-fix',
+      signals: { signatureState: 'repeat', priorApplied: prior.receipt },
+      previous_dispatch_id: prior.dispatch_id, dispatch_id: 'claim-refused' }, { ticket }),
+    { code: 'RECORD_FAILED' });
+    assert.equal(injected, true);
+    assert.equal(recorder.getVerifiedRecord('claim-refused'), null);
+    assert.deepEqual(recorder.getVerifiedRecord(prior.dispatch_id).receipt, prior.receipt);
+    assert.deepEqual(recorder.getVerifiedRecord(other.dispatch_id).receipt, other.receipt);
+    assert.equal(recorder.getLatestReceipt('codex', 'ci-fix').dispatch_id, prior.dispatch_id);
+    assert.equal(fs.readdirSync(store).filter((name) => name.startsWith('record-')).length, 2);
+  } finally {
+    global.setInterval = originalInterval;
+    fs.renameSync = originalRename;
+    fs.readFileSync = originalRead;
+    fs.rmSync(store, { recursive: true, force: true });
+  }
 });
 
 test('capacity admission fences an in-flight launch and releases after its receipt', async () => {
@@ -1868,47 +2043,6 @@ test('caller capability claims cannot relax stored observation requirements', ()
   (error) => error.code === 'UNVERIFIED_RECEIPT');
 });
 
-test('file-backed reservation is atomic across concurrent Node processes', async () => {
-  const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-boundary-race-'));
-  const modulePath = path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'dispatch-boundary.cjs');
-  const script = [
-    'const b = require(process.argv[1]);',
-    'const r = b.createDurableRecorder(process.argv[2]);',
-    'process.send("ready");',
-    'process.once("message", () => { process.stdout.write(JSON.stringify(r.reserve(process.argv[3]))); process.disconnect(); });',
-  ].join('\n');
-  const children = Array.from({ length: 8 }, () => {
-    const child = spawn(process.execPath, ['-e', script, modulePath, storeDir, 'atomic-id'], {
-      stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
-    });
-    let stdout = '';
-    let stderr = '';
-    child.stdout.on('data', (chunk) => { stdout += chunk; });
-    child.stderr.on('data', (chunk) => { stderr += chunk; });
-    const ready = new Promise((resolve, reject) => {
-      child.once('message', resolve);
-      child.once('error', reject);
-      child.once('exit', () => reject(new Error('child exited before ready')));
-    });
-    const result = new Promise((resolve, reject) => {
-      child.once('error', reject);
-      child.once('exit', (code) => {
-        if (code !== 0) return reject(new Error(stderr || `child exited ${code}`));
-        try { resolve(JSON.parse(stdout)); } catch (error) { reject(error); }
-      });
-    });
-    return { child, ready, result };
-  });
-  await Promise.all(children.map(({ ready }) => ready));
-  children.forEach(({ child }) => child.send('reserve'));
-  const results = await Promise.all(children.map(({ result }) => result));
-  assert.equal(results.filter((result) => result.reserved).length, 1);
-  assert.equal(results.filter((result) => !result.reserved).length, 7);
-  const files = fs.readdirSync(storeDir);
-  assert.equal(files.length, 1);
-  assert.equal(JSON.parse(fs.readFileSync(path.join(storeDir, files[0]), 'utf8')).dispatch_id, 'atomic-id');
-});
-
 test('the boundary launches every native base and escalation tuple for both runtimes', () => {
   const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-boundary-runtime-matrix-'));
   try {
@@ -2338,6 +2472,612 @@ test('repair promotion requires the immediately preceding boundary receipt on th
     assert.deepStrictEqual([claudeExhausted.applied_model, claudeExhausted.applied_effort], ['claude-opus-5-5', 'high']);
   } finally {
     fs.rmSync(storeDir, { recursive: true, force: true });
+  }
+});
+
+// @invariant: kept last — assert-harness runs later sync tests before this async body settles.
+test('file-backed reservation is atomic across concurrent Node processes', async () => {
+  const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-boundary-race-'));
+  const modulePath = path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'dispatch-boundary.cjs');
+  // @invariant: publish the authority key before children spawn so only reserve() races.
+  boundaryModule.createDurableRecorder(storeDir);
+  const script = [
+    'const b = require(process.argv[1]);',
+    'const r = b.createDurableRecorder(process.argv[2]);',
+    'process.send("ready");',
+    'process.once("message", () => { process.stdout.write(JSON.stringify(r.reserve(process.argv[3]))); process.disconnect(); });',
+  ].join('\n');
+  const children = Array.from({ length: 8 }, () => {
+    const child = spawn(process.execPath, ['-e', script, modulePath, storeDir, 'atomic-id'], {
+      stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
+    });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (chunk) => { stdout += chunk; });
+    child.stderr.on('data', (chunk) => { stderr += chunk; });
+    const ready = new Promise((resolve, reject) => {
+      child.once('message', resolve);
+      child.once('error', reject);
+      child.once('exit', () => reject(new Error('child exited before ready')));
+    });
+    const result = new Promise((resolve, reject) => {
+      child.once('error', reject);
+      child.once('close', (code) => {
+        if (code !== 0) return reject(new Error(stderr || `child exited ${code}`));
+        try { resolve(JSON.parse(stdout)); } catch (error) { reject(error); }
+      });
+    });
+    return { child, ready, result };
+  });
+  await Promise.all(children.map(({ ready }) => ready));
+  children.forEach(({ child }) => child.send('reserve'));
+  const results = await Promise.all(children.map(({ result }) => result));
+  assert.equal(results.filter((result) => result.reserved).length, 1);
+  assert.equal(results.filter((result) => !result.reserved).length, 7);
+  const files = fs.readdirSync(storeDir);
+  assert.equal(files.length, 1);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(storeDir, files[0]), 'utf8')).dispatch_id, 'atomic-id');
+});
+
+// @contract: test-only fs monkeypatch (never a production seam) proves the race test above still detects the defect.
+test('a non-atomic reservation replacement lets more than one process win the same reservation', async () => {
+  const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-boundary-race-removed-guard-'));
+  const barrierDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-boundary-race-barrier-'));
+  const modulePath = path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'dispatch-boundary.cjs');
+  boundaryModule.createDurableRecorder(storeDir);
+  const childCount = 4;
+  const script = [
+    'const fs = require("fs");',
+    'const path = require("path");',
+    'const barrierDir = process.argv[4];',
+    'const myId = process.argv[5];',
+    'const originalLinkSync = fs.linkSync.bind(fs);',
+    'fs.linkSync = function (src, dest) {',
+    '  if (!/reservation-/.test(dest)) return originalLinkSync(src, dest);',
+    '  const existed = fs.existsSync(dest);',
+    '  fs.writeFileSync(path.join(barrierDir, "checked-" + myId), "");',
+    '  const deadline = Date.now() + 10000;',
+    '  const flag = new Int32Array(new SharedArrayBuffer(4));',
+    '  while (!fs.existsSync(path.join(barrierDir, "go"))) {',
+    '    if (Date.now() > deadline) throw new Error("guard-removal barrier timeout");',
+    '    Atomics.wait(flag, 0, 0, 5);',
+    '  }',
+    '  if (existed) { const err = new Error("EEXIST"); err.code = "EEXIST"; throw err; }',
+    '  fs.copyFileSync(src, dest);',
+    '};',
+    'const b = require(process.argv[1]);',
+    'const r = b.createDurableRecorder(process.argv[2]);',
+    'process.stdout.write(JSON.stringify(r.reserve(process.argv[3])));',
+  ].join('\n');
+  let nextIndex = 0;
+  const children = Array.from({ length: childCount }, () => {
+    const index = nextIndex++;
+    const child = spawn(process.execPath, ['-e', script, modulePath, storeDir, 'removed-guard-id', barrierDir, String(index)], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (chunk) => { stdout += chunk; });
+    child.stderr.on('data', (chunk) => { stderr += chunk; });
+    return new Promise((resolve, reject) => {
+      child.once('error', reject);
+      child.once('close', (code) => {
+        if (code !== 0) return reject(new Error(stderr || `child exited ${code}`));
+        try { resolve(JSON.parse(stdout)); } catch (error) { reject(error); }
+      });
+    });
+  });
+  const deadline = Date.now() + 10000;
+  while (fs.readdirSync(barrierDir).filter((name) => name.startsWith('checked-')).length < childCount) {
+    if (Date.now() > deadline) throw new Error('guard-removal parent timed out waiting for children to check in');
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  fs.writeFileSync(path.join(barrierDir, 'go'), '');
+  const results = await Promise.all(children);
+  assert.ok(
+    results.filter((result) => result.reserved).length > 1,
+    `the non-atomic replacement must let more than one process win the same reservation (${JSON.stringify(results)})`,
+  );
+  fs.rmSync(barrierDir, { recursive: true, force: true });
+  fs.rmSync(storeDir, { recursive: true, force: true });
+});
+
+test('an older provisional abort cannot roll back a newer cross-process latest receipt', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-latest-rollback-race-'));
+  const storeDir = path.join(root, 'receipts');
+  const barrierDir = path.join(root, 'barrier');
+  fs.mkdirSync(barrierDir);
+  const sourceModulePath = path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'dispatch-boundary.cjs');
+  const modulePath = process.env.SHIPYARD_DISPATCH_BOUNDARY_MODULE || sourceModulePath;
+  const waitForMessage = (child, type) => new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      child.off('message', onMessage);
+      reject(new Error(`timed out waiting for child message ${type}`));
+    }, 15000);
+    const onMessage = (message) => {
+      if (!message || message.type !== type) return;
+      clearTimeout(timer);
+      child.off('message', onMessage);
+      resolve(message);
+    };
+    child.on('message', onMessage);
+  });
+  const watchChild = (child) => {
+    let stderr = '';
+    child.stderr.on('data', (chunk) => { stderr += chunk; });
+    return new Promise((resolve, reject) => child.once('close', (code) => {
+      if (code !== 0) return reject(new Error(stderr || `child exited ${code}`));
+      resolve();
+    }));
+  };
+  try {
+    const recorder = boundaryModule.createDurableRecorder(storeDir);
+    const makeTypedBoundary = (targetRecorder, onLaunch) => boundaryModule.createDispatchBoundary({
+      adapters: { codex: fakeAdapter({
+        receipt: (resolution) => receiptFor(resolution, {
+          gsd_role: 'gsd-planner',
+          gsd_launch_mechanism: 'typed-gsd-callback',
+        }),
+        ...(onLaunch ? { onLaunch } : {}),
+      }) },
+      recorder: targetRecorder,
+      requireGsdRole: true,
+    });
+    const dispatch = (targetRecorder, id, onLaunch, preRecordValidation = () => {}) => (
+      makeTypedBoundary(targetRecorder, onLaunch).dispatch({
+        runtime: 'codex', role: 'decomposition', gsd_role: 'gsd-planner', dispatch_id: id,
+      }, { ticket: 'T-45-18', preRecordValidation })
+    );
+    dispatch(recorder, 'race-previous');
+
+    const abortScript = [
+      'const fs = require("fs");',
+      'const path = require("path");',
+      'const modulePath = process.argv[1];',
+      'const storeDir = process.argv[2];',
+      'const barrierDir = process.argv[3];',
+      'const releasePath = path.join(barrierDir, "release-abort");',
+      'const originalReadFileSync = fs.readFileSync.bind(fs);',
+      'let pauseNextLatestRead = false;',
+      'let paused = false;',
+      'fs.readFileSync = function (file, ...args) {',
+      '  const value = originalReadFileSync(file, ...args);',
+      '  if (pauseNextLatestRead && !paused && path.basename(String(file)).startsWith("latest-")) {',
+      '    paused = true;',
+      '    process.send({ type: "old-latest-read" });',
+      '    const wait = new Int32Array(new SharedArrayBuffer(4));',
+      '    const deadline = Date.now() + 12000;',
+      '    while (!fs.existsSync(releasePath)) {',
+      '      if (Date.now() > deadline) throw new Error("abort barrier timed out");',
+      '      Atomics.wait(wait, 0, 0, 5);',
+      '    }',
+      '  }',
+      '  return value;',
+      '};',
+      'const b = require(modulePath);',
+      'const crypto = require("crypto");',
+      'const receipt = (r) => ({ receipt_type: "adr-014.application", runtime: r.runtime, role: r.role,',
+      '  dispatch_id: r.dispatch_id, launch_id: `launch-${r.dispatch_id}`, requested_model: r.requested_model,',
+      '  requested_effort: r.requested_effort, applied_model: r.model, applied_effort: r.effort,',
+      '  observed_model: r.model, observed_effort: r.effort, policy_hash: r.policy_hash, compliance: "verified",',
+      '  compliance_proof: { status: "verified", boundary: "adr-014.dispatch-boundary",',
+      '    policy_hash: r.policy_hash, dispatch_id: r.dispatch_id, launch_id: `launch-${r.dispatch_id}` },',
+      '  gsd_role: r.gsd_role, gsd_launch_mechanism: "typed-gsd-callback" });',
+      'const recorder = b.createDurableRecorder(storeDir);',
+      'const launch = (resolution) => receipt(resolution);',
+      'const adapter = { launch, launchStatic: launch, validateGeneratedAgent: (r) => ({ valid: true,',
+      '  exists: true, content_verified: true, policy_hash: r.policy_hash, agent_file: r.agent_file,',
+      '  agent_file_digest: crypto.createHash("sha256").update(`adapter-owned:${r.agent_file}`).digest("hex"),',
+      '  agent_file_content: `adapter-owned:${r.agent_file}` }) };',
+      'const boundary = b.createDispatchBoundary({ adapters: { codex: adapter }, recorder, requireGsdRole: true });',
+      'let validations = 0;',
+      'try {',
+      '  boundary.dispatch({ runtime: "codex", role: "decomposition", gsd_role: "gsd-planner", dispatch_id: "race-old" },',
+      '    { ticket: "T-45-18", preRecordValidation: () => {',
+      '      validations++;',
+      '      if (validations === 2) {',
+      '        pauseNextLatestRead = true;',
+      '        throw Object.assign(new Error("injected post-record refusal"), { code: "WRITER_FENCED" });',
+      '      }',
+      '    } });',
+      '  throw new Error("expected provisional dispatch refusal");',
+      '} catch (error) {',
+      '  if (error.code !== "WRITER_FENCED") throw error;',
+      '}',
+      'if (!paused) throw new Error("abort never read the authenticated latest pointer");',
+      'process.send({ type: "old-aborted", code: "WRITER_FENCED", record: recorder.getVerifiedRecord("race-old") });',
+      'process.disconnect();',
+    ].join('\n');
+    const abortChild = spawn(process.execPath, ['-e', abortScript, modulePath, storeDir, barrierDir], {
+      cwd: path.join(__dirname, '..', '..'),
+      stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
+    });
+    const abortExit = watchChild(abortChild);
+    const abortPaused = waitForMessage(abortChild, 'old-latest-read');
+    await abortPaused;
+
+    const writerScript = [
+      'const fs = require("fs");',
+      'const path = require("path");',
+      'const crypto = require("crypto");',
+      'const originalLinkSync = fs.linkSync.bind(fs);',
+      'let reportedLockAttempt = false;',
+      'fs.linkSync = function (source, destination) {',
+      '  if (!reportedLockAttempt && String(destination).endsWith("receipt-mutation.lock.json")) {',
+      '    reportedLockAttempt = true;',
+      '    process.send({ type: "receipt-lock-attempt" });',
+      '  }',
+      '  return originalLinkSync(source, destination);',
+      '};',
+      'const b = require(process.argv[1]);',
+      'const recorder = b.createDurableRecorder(process.argv[2]);',
+      'const receipt = (r) => ({ receipt_type: "adr-014.application", runtime: r.runtime, role: r.role,',
+      '  dispatch_id: r.dispatch_id, launch_id: `launch-${r.dispatch_id}`, requested_model: r.requested_model,',
+      '  requested_effort: r.requested_effort, applied_model: r.model, applied_effort: r.effort,',
+      '  observed_model: r.model, observed_effort: r.effort, policy_hash: r.policy_hash, compliance: "verified",',
+      '  compliance_proof: { status: "verified", boundary: "adr-014.dispatch-boundary",',
+      '    policy_hash: r.policy_hash, dispatch_id: r.dispatch_id, launch_id: `launch-${r.dispatch_id}` },',
+      '  gsd_role: r.gsd_role, gsd_launch_mechanism: "typed-gsd-callback" });',
+      'const launch = (resolution) => { process.send({ type: "new-launch" }); return receipt(resolution); };',
+      'const adapter = { launch, launchStatic: launch, validateGeneratedAgent: (r) => ({ valid: true,',
+      '  exists: true, content_verified: true, policy_hash: r.policy_hash, agent_file: r.agent_file,',
+      '  agent_file_digest: crypto.createHash("sha256").update(`adapter-owned:${r.agent_file}`).digest("hex"),',
+      '  agent_file_content: `adapter-owned:${r.agent_file}` }) };',
+      'const boundary = b.createDispatchBoundary({ adapters: { codex: adapter }, recorder, requireGsdRole: true });',
+      'try {',
+      '  boundary.dispatch({ runtime: "codex", role: "decomposition", gsd_role: "gsd-planner", dispatch_id: "race-new" },',
+      '    { ticket: "T-45-18", preRecordValidation: () => {} });',
+      '  process.send({ type: "new-completed", dispatch_id: "race-new" });',
+      '} catch (error) { process.send({ type: "new-failed", code: error.code, message: error.message }); process.exitCode = 1; }',
+      'process.disconnect();',
+    ].join('\n');
+    const writerChild = spawn(process.execPath, ['-e', writerScript, modulePath, storeDir], {
+      cwd: path.join(__dirname, '..', '..'),
+      stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
+    });
+    const writerExit = watchChild(writerChild);
+    const lockAttempt = waitForMessage(writerChild, 'receipt-lock-attempt')
+      .then(() => 'lock-attempt', () => null);
+    const writerComplete = waitForMessage(writerChild, 'new-completed')
+      .then(() => 'completed', () => null);
+    await waitForMessage(writerChild, 'new-launch');
+    const progress = await Promise.race([lockAttempt, writerComplete]);
+    assert.ok(progress, 'new receipt must either contend on the store fence or complete in the unfenced baseline');
+
+    fs.writeFileSync(path.join(barrierDir, 'release-abort'), 'go');
+    const aborted = await waitForMessage(abortChild, 'old-aborted');
+    assert.equal(aborted.code, 'WRITER_FENCED');
+    await Promise.all([abortExit, writerExit]);
+
+    assert.equal(recorder.getVerifiedRecord('race-old'), null, 'refused provisional receipt is removed');
+    assert.equal(recorder.getVerifiedRecord('race-new').dispatch_id, 'race-new');
+    assert.equal(recorder.getLatestReceipt('codex', 'decomposition').dispatch_id, 'race-new',
+      'newer authenticated latest pointer survives the older abort');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('receipt mutations share a strict store fence across record, finalize, abort, and recovery', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-receipt-mutation-fence-'));
+  const digest = (value) => crypto.createHash('sha256').update(String(value)).digest('hex');
+  const mutationLock = (store) => path.join(store, 'receipt-mutation.lock.json');
+  const lockRecord = (token, ownerPid) => ({
+    dispatch_id: 'receipt-store',
+    purpose: 'receipt-mutation',
+    fenced_until_release: true,
+    lock_token: token,
+    owner_pid: ownerPid,
+    acquired_at: '2000-01-01T00:00:00.000Z',
+    lease_expires_at: '2000-01-01T00:00:00.000Z',
+  });
+  const withFastClock = (callback) => {
+    const originalNow = Date.now;
+    let now = 1000;
+    Date.now = () => {
+      const current = now;
+      now += 5000;
+      return current;
+    };
+    try { return callback(); } finally { Date.now = originalNow; }
+  };
+  const simpleBoundary = (recorder) => boundaryModule.createDispatchBoundary({
+    adapters: { codex: fakeAdapter() }, recorder,
+  });
+  try {
+    const blockedStore = path.join(root, 'blocked-record');
+    const blockedRecorder = boundaryModule.createDurableRecorder(blockedStore);
+    const unknownLock = lockRecord('unknown-owner', 'pid-unavailable');
+    fs.writeFileSync(mutationLock(blockedStore), JSON.stringify(unknownLock));
+    const unknownLockBytes = fs.readFileSync(mutationLock(blockedStore), 'utf8');
+    withFastClock(() => assert.throws(() => simpleBoundary(blockedRecorder).dispatch({
+      runtime: 'codex', role: 'executor', dispatch_id: 'blocked-record',
+    }, { ticket: 'T-45-18' }), { code: 'RECORD_FAILED' }));
+    assert.equal(blockedRecorder.getVerifiedRecord('blocked-record'), null);
+    assert.equal(fs.readFileSync(mutationLock(blockedStore), 'utf8'), unknownLockBytes,
+      'an expired timestamp and unknown owner do not authorize takeover');
+
+    const independentStore = path.join(root, 'independent');
+    const independentRecorder = boundaryModule.createDurableRecorder(independentStore);
+    const independent = simpleBoundary(independentRecorder).dispatch({
+      runtime: 'codex', role: 'executor', dispatch_id: 'independent-store-progress',
+    }, { ticket: 'T-45-18' });
+    assert.equal(independent.receipt.dispatch_id, 'independent-store-progress');
+
+    const finalizeStore = path.join(root, 'blocked-finalize');
+    const finalizeRecorder = boundaryModule.createDurableRecorder(finalizeStore);
+    const originalLinkSync = fs.linkSync;
+    let mutationLockLinks = 0;
+    let injectedFinalizeOwner = false;
+    try {
+      fs.linkSync = (source, destination) => {
+        if (String(destination) === mutationLock(finalizeStore)) {
+          mutationLockLinks++;
+          if (mutationLockLinks === 2) {
+            injectedFinalizeOwner = true;
+            fs.writeFileSync(destination, JSON.stringify(lockRecord('finalize-owner', process.pid)));
+          }
+        }
+        return originalLinkSync.call(fs, source, destination);
+      };
+      withFastClock(() => assert.throws(() => simpleBoundary(finalizeRecorder).dispatch({
+        runtime: 'codex', role: 'executor', dispatch_id: 'finalize-blocked',
+      }, { ticket: 'T-45-18' }), { code: 'RECORD_FAILED' }));
+    } finally { fs.linkSync = originalLinkSync; }
+    assert.equal(injectedFinalizeOwner, true, 'the dispatch reached the separate finalize mutation');
+    assert.equal(finalizeRecorder.getVerifiedRecord('finalize-blocked').dispatch_id, 'finalize-blocked',
+      'the affirmative record remains discoverable after finalize contention');
+    assert.equal(JSON.parse(fs.readFileSync(mutationLock(finalizeStore), 'utf8')).lock_token, 'finalize-owner',
+      'finalize does not pass or remove another live token');
+
+    const abortStore = path.join(root, 'blocked-abort');
+    const abortRecorder = boundaryModule.createDurableRecorder(abortStore);
+    const typedBoundary = boundaryModule.createDispatchBoundary({
+      adapters: { codex: fakeAdapter({ receipt: (resolution) => receiptFor(resolution, {
+        gsd_role: 'gsd-planner', gsd_launch_mechanism: 'typed-gsd-callback',
+      }) }) },
+      recorder: abortRecorder,
+      requireGsdRole: true,
+    });
+    let validations = 0;
+    withFastClock(() => assert.throws(() => typedBoundary.dispatch({
+      runtime: 'codex', role: 'decomposition', gsd_role: 'gsd-planner', dispatch_id: 'abort-blocked',
+    }, { ticket: 'T-45-18', preRecordValidation: () => {
+      validations++;
+      if (validations === 2) {
+        fs.writeFileSync(mutationLock(abortStore), JSON.stringify(lockRecord('abort-owner', process.pid)));
+        throw Object.assign(new Error('injected refusal after durable record'), { code: 'WRITER_FENCED' });
+      }
+    } }), { code: 'RECORD_FAILED' }));
+    assert.equal(validations, 2);
+    assert.equal(abortRecorder.getVerifiedRecord('abort-blocked').dispatch_id, 'abort-blocked',
+      'abort refuses to remove a record without owning the mutation fence');
+    assert.equal(JSON.parse(fs.readFileSync(mutationLock(abortStore), 'utf8')).lock_token, 'abort-owner');
+
+    const recoveryStore = path.join(root, 'blocked-recovery');
+    const recoveryRecorder = boundaryModule.createDurableRecorder(recoveryStore);
+    const repairBoundary = simpleBoundary(recoveryRecorder);
+    const predecessor = repairBoundary.dispatch({ runtime: 'codex', role: 'ci-fix',
+      signals: { signatureState: 'first' }, dispatch_id: 'recovery-predecessor' }, { ticket: 'T-45-18' });
+    repairBoundary.dispatch({ runtime: 'codex', role: 'ci-fix',
+      signals: { signatureState: 'repeat', priorApplied: predecessor.receipt },
+      previous_dispatch_id: predecessor.dispatch_id, dispatch_id: 'recovery-successor' }, { ticket: 'T-45-18' });
+    fs.unlinkSync(path.join(recoveryStore, `record-${digest('recovery-successor')}.json`));
+    fs.unlinkSync(path.join(recoveryStore, `consumed-${digest('recovery-predecessor')}.json`));
+    fs.writeFileSync(mutationLock(recoveryStore), JSON.stringify(lockRecord('recovery-owner', process.pid)));
+    withFastClock(() => assert.throws(() => recoveryRecorder.isConsumed('recovery-predecessor'), { code: 'RECORD_FAILED' }));
+    assert.equal(recoveryRecorder.getVerifiedRecord('recovery-successor'), null,
+      'read-side repair recovery cannot write through an active store fence');
+    assert.equal(JSON.parse(fs.readFileSync(mutationLock(recoveryStore), 'utf8')).lock_token, 'recovery-owner');
+    fs.unlinkSync(mutationLock(recoveryStore));
+    assert.equal(recoveryRecorder.isConsumed('recovery-predecessor'), true);
+    assert.equal(recoveryRecorder.getVerifiedRecord('recovery-successor').dispatch_id, 'recovery-successor');
+
+    const deadStore = path.join(root, 'dead-owner');
+    const deadRecorder = boundaryModule.createDurableRecorder(deadStore);
+    const deadPid = 2147483647;
+    assert.throws(() => process.kill(deadPid, 0), { code: 'ESRCH' });
+    fs.writeFileSync(mutationLock(deadStore), JSON.stringify({
+      ...lockRecord('dead-owner', deadPid),
+      lease_expires_at: '2999-01-01T00:00:00.000Z',
+    }));
+    const recoveredOwner = simpleBoundary(deadRecorder).dispatch({
+      runtime: 'codex', role: 'executor', dispatch_id: 'dead-owner-recovered',
+    }, { ticket: 'T-45-18' });
+    assert.equal(recoveredOwner.receipt.dispatch_id, 'dead-owner-recovered');
+    assert.equal(fs.existsSync(mutationLock(deadStore)), false,
+      'a positively dead PID can be recovered even before its timestamp expires');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('receipt mutation finally preserves a replacement token after a write failure', () => {
+  const store = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-receipt-mutation-release-'));
+  const recorder = boundaryModule.createDurableRecorder(store);
+  const boundary = boundaryModule.createDispatchBoundary({ adapters: { codex: fakeAdapter() }, recorder });
+  const lockPath = path.join(store, 'receipt-mutation.lock.json');
+  const originalRenameSync = fs.renameSync;
+  let injected = false;
+  try {
+    const previous = boundary.dispatch({ runtime: 'codex', role: 'executor', dispatch_id: 'write-before-failure' },
+      { ticket: 'T-45-18' });
+    fs.renameSync = (source, destination) => {
+      if (!injected && path.basename(String(destination)).startsWith('latest-')) {
+        injected = true;
+        fs.writeFileSync(lockPath, JSON.stringify({ lock_token: 'replacement-owner', owner_pid: process.pid }));
+        const error = new Error('injected latest write failure');
+        error.code = 'EIO';
+        throw error;
+      }
+      return originalRenameSync.call(fs, source, destination);
+    };
+    assert.throws(() => boundary.dispatch({ runtime: 'codex', role: 'executor', dispatch_id: 'write-failed' },
+      { ticket: 'T-45-18' }), { code: 'RECORD_FAILED' });
+    assert.equal(injected, true);
+    assert.equal(recorder.getLatestReceipt('codex', 'executor').dispatch_id, previous.dispatch_id,
+      'failed latest replacement leaves the prior authenticated pointer readable');
+    assert.equal(JSON.parse(fs.readFileSync(lockPath, 'utf8')).lock_token, 'replacement-owner',
+      'finally releases only the token acquired by this call');
+  } finally {
+    fs.renameSync = originalRenameSync;
+    fs.rmSync(store, { recursive: true, force: true });
+  }
+});
+
+test('getReservation reports a durable reservation read-only and whether it was recorded', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'boundary-reservation-'));
+  try {
+    const recorder = boundaryModule.createDurableRecorder(path.join(dir, 'receipts'));
+    assert.equal(recorder.getReservation('dispatch-absent'), null);
+    assert.equal(recorder.getReservation(''), null);
+    const before = fs.readdirSync(path.join(dir, 'receipts')).sort();
+    assert.equal(recorder.getReservation('dispatch-absent'), null);
+    assert.deepStrictEqual(fs.readdirSync(path.join(dir, 'receipts')).sort(), before);
+    assert.deepStrictEqual(recorder.reserve('dispatch-held'), { reserved: true });
+    const held = recorder.getReservation('dispatch-held');
+    assert.equal(held.dispatch_id, 'dispatch-held');
+    assert.equal(typeof held.reserved_at, 'string');
+    assert.equal(held.recorded, false);
+    const writer = boundaryModule.createDispatchBoundary({ recorder, adapters: { codex: fakeAdapter() } });
+    const result = writer.dispatch({ runtime: 'codex', role: 'executor' }, { ticket: 'T-45-09' });
+    assert.equal(recorder.getReservation(result.dispatch_id).recorded, true);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('recoverReserved records only an existing, unrecorded durable reservation', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'boundary-recover-'));
+  try {
+    let recorder = boundaryModule.createDurableRecorder(path.join(dir, 'receipts'));
+    const recovering = () => boundaryModule.createDispatchBoundary({
+      recorder, adapters: { codex: fakeAdapter() }, recoverReserved: true,
+    });
+    assert.throws(() => recovering().dispatch({ runtime: 'codex', role: 'executor', dispatch_id: 'dispatch-none' },
+      { ticket: 'T-45-09' }), (error) => error.code === 'RECOVERY_NO_RESERVATION');
+    assert.equal(recorder.getReservation('dispatch-none'), null);
+    recorder.reserve('dispatch-orphan');
+    recorder = boundaryModule.createDurableRecorder(path.join(dir, 'receipts'));
+    assert.equal(recorder.getReservation('dispatch-orphan').recorded, false);
+    const recovered = recovering().dispatch({ runtime: 'codex', role: 'executor', dispatch_id: 'dispatch-orphan' },
+      { ticket: 'T-45-09' });
+    assert.equal(recovered.receipt.dispatch_id, 'dispatch-orphan');
+    assert.equal(recovered.receipt.compliance, 'verified');
+    assert.equal(recorder.getVerifiedRecord('dispatch-orphan').receipt.dispatch_id, 'dispatch-orphan');
+    assert.throws(() => recovering().dispatch({ runtime: 'codex', role: 'executor', dispatch_id: 'dispatch-orphan' },
+      { ticket: 'T-45-09' }), (error) => error.code === 'RECOVERY_ALREADY_RECORDED');
+    const live = boundaryModule.createDispatchBoundary({ recorder, adapters: { codex: fakeAdapter() } });
+    assert.throws(() => live.dispatch({ runtime: 'codex', role: 'executor', dispatch_id: 'dispatch-orphan' },
+      { ticket: 'T-45-09' }), (error) => error.code === 'DUPLICATE_DISPATCH_ID');
+    const digest = crypto.createHash('sha256').update('dispatch-orphan').digest('hex');
+    const historyFile = path.join(dir, 'receipts', `rollback-history-${digest}.json`);
+    const historyBytes = fs.readFileSync(historyFile, 'utf8');
+    fs.unlinkSync(path.join(dir, 'receipts', `record-${digest}.json`));
+    const recoveredAgain = recovering().dispatch({ runtime: 'codex', role: 'executor', dispatch_id: 'dispatch-orphan' },
+      { ticket: 'T-45-09' });
+    assert.deepStrictEqual(recoveredAgain.receipt, recovered.receipt);
+    assert.equal(fs.readFileSync(historyFile, 'utf8'), historyBytes);
+    assert.equal(recorder.getLatestReceipt('codex', 'executor').dispatch_id, 'dispatch-orphan');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('malformed numeric-string receipt owner remains fenced and double abort restores finalized history', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-rollback-history-'));
+  const recorder = boundaryModule.createDurableRecorder(root);
+  const create = () => boundaryModule.createDispatchBoundary({
+    adapters: { codex: fakeAdapter({ receipt: (r) => receiptFor(r, {
+      gsd_role: 'gsd-planner', gsd_launch_mechanism: 'typed-gsd-callback',
+    }) }) }, recorder: boundaryModule.createDurableRecorder(root), requireGsdRole: true,
+  });
+  const dispatch = (id, validate = () => {}) => create().dispatch({
+    runtime: 'codex', role: 'decomposition', gsd_role: 'gsd-planner', dispatch_id: id,
+  }, { ticket: 'T-45-18', preRecordValidation: validate });
+  try {
+    const lock = path.join(root, 'receipt-mutation.lock.json');
+    const malformed = JSON.stringify({ purpose: 'receipt-mutation', fenced_until_release: true,
+      lock_token: 'malformed-owner', owner_pid: '2147483647',
+      acquired_at: '2000-01-01T00:00:00.000Z', lease_expires_at: '2000-01-01T00:00:01.000Z' });
+    fs.writeFileSync(lock, malformed);
+    assert.throws(() => dispatch('malformed-owner'), (error) => error.code === 'RECORD_FAILED');
+    assert.equal(fs.readFileSync(lock, 'utf8'), malformed);
+    fs.unlinkSync(lock);
+    await dispatch('finalized-previous');
+    const pending = (id) => {
+      let reject, calls = 0;
+      const validation = new Promise((resolve, no) => { reject = no; });
+      const settled = Promise.resolve(dispatch(id, () => ++calls === 2 ? validation : undefined))
+        .then(() => { throw new Error('provisional dispatch unexpectedly completed'); }, (error) => error);
+      return { reject, settled };
+    };
+    const a = pending('provisional-a'), b = pending('provisional-b');
+    a.reject(Object.assign(new Error('A fenced'), { code: 'WRITER_FENCED' }));
+    assert.equal((await a.settled).code, 'WRITER_FENCED');
+    b.reject(Object.assign(new Error('B fenced'), { code: 'WRITER_FENCED' }));
+    assert.equal((await b.settled).code, 'WRITER_FENCED');
+    assert.equal(recorder.getVerifiedRecord('provisional-a'), null);
+    assert.equal(recorder.getVerifiedRecord('provisional-b'), null);
+    assert.equal(recorder.getLatestReceipt('codex', 'decomposition').dispatch_id, 'finalized-previous');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('rollback ancestry survives overlapping provisional dispatches in separate processes', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-process-ancestry-'));
+  const recorder = boundaryModule.createDurableRecorder(root);
+  const adapter = () => fakeAdapter({ receipt: (r) => receiptFor(r, {
+    gsd_role: 'gsd-planner', gsd_launch_mechanism: 'typed-gsd-callback',
+  }) });
+  const boundary = boundaryModule.createDispatchBoundary({ adapters: { codex: adapter() }, recorder, requireGsdRole: true });
+  const input = (id) => ({ runtime: 'codex', role: 'decomposition', gsd_role: 'gsd-planner', dispatch_id: id });
+  let child;
+  try {
+    await boundary.dispatch(input('process-previous'), { ticket: 'T-45-18', preRecordValidation: () => {} });
+    let rejectA, calls = 0;
+    const pendingA = new Promise((resolve, reject) => { rejectA = reject; });
+    const a = Promise.resolve(boundary.dispatch(input('process-a'), {
+      ticket: 'T-45-18', preRecordValidation: () => ++calls === 2 ? pendingA : undefined,
+    })).then(() => { throw new Error('A unexpectedly completed'); }, (error) => error);
+    const code = `
+      const boundaryModule = require(${JSON.stringify(require.resolve('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs'))});
+      const receiptFor = ${receiptFor.toString()};
+      const fakeAdapter = ${fakeAdapter.toString()};
+      const recorder = boundaryModule.createDurableRecorder(process.argv[1]);
+      const boundary = boundaryModule.createDispatchBoundary({ adapters: { codex: fakeAdapter({
+        receipt: (r) => receiptFor(r, { gsd_role: 'gsd-planner', gsd_launch_mechanism: 'typed-gsd-callback' }),
+      }) }, recorder, requireGsdRole: true });
+      let calls = 0, reject;
+      const pending = new Promise((resolve, no) => { reject = no; });
+      process.stdin.once('data', () => reject(Object.assign(new Error('B fenced'), { code: 'WRITER_FENCED' })));
+      Promise.resolve(boundary.dispatch({ runtime: 'codex', role: 'decomposition', gsd_role: 'gsd-planner', dispatch_id: 'process-b' }, {
+        ticket: 'T-45-18', preRecordValidation: () => { if (++calls === 2) { process.stdout.write('ready\\n'); return pending; } },
+      })).then(() => { process.exitCode = 1; }, error => { if (error.code !== 'WRITER_FENCED') process.exitCode = 1; }).finally(() => process.stdin.destroy());
+    `;
+    child = spawn(process.execPath, ['-e', code, root], { stdio: ['pipe', 'pipe', 'pipe'] });
+    let stderr = '';
+    child.stderr.on('data', (data) => { stderr += data; });
+    const exited = new Promise((resolve, reject) => {
+      child.once('error', reject);
+      child.once('exit', (code) => code === 0 ? resolve() : reject(new Error(stderr || `child exit ${code}`)));
+    });
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('child did not record provisional receipt')), 10000);
+      child.stdout.once('data', () => { clearTimeout(timer); resolve(); });
+      child.once('exit', () => { clearTimeout(timer); reject(new Error(stderr || 'child exited before ready')); });
+    });
+    rejectA(Object.assign(new Error('A fenced'), { code: 'WRITER_FENCED' }));
+    assert.equal((await a).code, 'WRITER_FENCED');
+    child.stdin.end('abort');
+    await exited;
+    assert.equal(recorder.getVerifiedRecord('process-a'), null);
+    assert.equal(recorder.getVerifiedRecord('process-b'), null);
+    assert.equal(recorder.getLatestReceipt('codex', 'decomposition').dispatch_id, 'process-previous');
+  } finally {
+    if (child && child.exitCode === null) child.kill();
+    fs.rmSync(root, { recursive: true, force: true });
   }
 });
 

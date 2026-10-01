@@ -135,6 +135,25 @@ test('honors the declared opt-out without touching artifacts', () => {
   assert.equal(fs.existsSync(path.join(root, '.planning', 'STATE.md')), false);
 });
 
+test('honors the legacy opt-out only when the declared key is absent', () => {
+  const legacy = project();
+  write(path.join(legacy, '.planning', 'config.json'), JSON.stringify({ pipeline: { gsd_sync: false } }));
+  const legacyResult = run(legacy, 'check');
+  assert.equal(legacyResult.status, 0, legacyResult.stderr);
+  assert.match(legacyResult.stdout, /gsd_sync is false/);
+  assert.equal(fs.existsSync(path.join(legacy, '.planning', 'STATE.md')), false);
+
+  const declared = project();
+  write(path.join(declared, '.planning', 'config.json'), JSON.stringify({
+    pipeline: { gsd_sync: false },
+    delivery_pipeline: { gsd_sync: true },
+  }));
+  const declaredResult = run(declared, 'write');
+  assert.equal(declaredResult.status, 0, declaredResult.stderr);
+  assert.match(declaredResult.stdout, /projection published/);
+  assert.doesNotMatch(declaredResult.stdout, /gsd_sync is false/);
+});
+
 test('selects complete bundles and preserves synchronizer exit codes', () => {
   const source = fs.readFileSync(GATE, 'utf8');
   assert.match(source, /requiredSiblings = \['frontmatter\.cjs', 'lock\.cjs', 'command-runner\.cjs'\]/);

@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 87630c389b011419a17aeb18c4cb15d4aca8ebe6846961d3435da4057f14334f
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: edcf0333c7bac448df1d63b52caf8323b716ef1fada763cc08854a7e00d9a58b
 phase: 32-measure-usage-and-make-the-backlog-actionable
 plan: 07
 subsystem: shipyard delivery
@@ -20,10 +20,10 @@ key-files:
 key-decisions:
   - "Shipyard delivery state is projected; no native executor claim is invented."
 duration: 0min
-completed: 2026-09-11
+completed: 2026-09-30
 status: complete
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 87630c389b011419a17aeb18c4cb15d4aca8ebe6846961d3435da4057f14334f
+shipyard_source_fingerprint: edcf0333c7bac448df1d63b52caf8323b716ef1fada763cc08854a7e00d9a58b
 ---
 
 # Phase 32: Join transcript usage to dispatches without guessing — Delivery Projection
