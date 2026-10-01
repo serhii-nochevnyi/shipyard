@@ -753,8 +753,9 @@ fixed routed `pr-sentinel` role for either signal.
 
 ### 7.5.1. Runtime-native model grids
 
-The compatibility examples above are historical behavior only. This section is
-the current ADR-024 routed grid. Codex uses its own logical keys and resolves
+The compatibility examples above describe current legacy compatibility-only
+reader behavior, not routed launch authority. This section is the current
+ADR-024 routed grid. Codex uses its own logical keys and resolves
 them to concrete IDs in the Codex adapter; Claude uses native Claude selections
 and never translates Luna or Sol into a Claude model.
 
@@ -808,7 +809,9 @@ and `previous_dispatch_id`. Fixed Luna roles are not globally promoted, and
 `contested` evidence only promotes the judgement roles (`integrator` and
 `arch-review`). Claude's Fable rung is selected only by the declared measured
 window signal and existing routed consent (`pipeline.fable: auto`); missing
-consent or host support is a refusal, never an implicit downgrade.
+consent is a refusal. An unsupported or unknown host capability assessment
+for a model-axis escalation permits the bounded preceding-rung fallback described
+below, including Claude Sonnet→Opus escalations as well as Opus→Fable.
 
 A model list, runtime capability declaration, account picker, or vendor release
 announcement establishes discoverability only. Application is proven by the
@@ -852,18 +855,36 @@ are:
 | `ci-fix` | `shipyard-ci-fix.toml`, `shipyard-ci-fix-repeat.toml`, `shipyard-ci-fix-deep.toml` |
 | `review-fix` | `shipyard-review-fix.toml`, `shipyard-review-fix-repeat.toml`, `shipyard-review-fix-deep.toml` |
 
-Claude is Workflow-native. Its adapter passes the selected native alias and
-explicit effort to the host and requires application evidence for that exact
-pair. Claude has no generated Codex agent file and never translates a Codex
-logical model name into an alias.
+Claude is Workflow-native. The logical policy keys `sonnet`, `opus`, and
+`fable` resolve to the concrete launch IDs `claude-sonnet-5-5`,
+`claude-opus-5-5`, and `fable`, respectively. Its adapter passes the concrete
+launch ID and explicit effort to the host and requires application evidence
+for that exact pair. Claude has no generated Codex agent file and never
+translates a Codex logical model name into an alias.
 
 The boundary hard-fails before launch on an unknown or ambiguous runtime,
-unsupported model/effort pair, stale or missing generated agent, missing
+unsupported final model/effort pair, stale or missing generated agent, missing
 adapter, omitted or conflicting effort, inline or parent-session-inherited
 selection, conflicting GSD/per-role override, undocumented escalation, or
-missing/phantom/unverified receipt. There is no session, lower-model, or
-compatibility fallback for routed delivery. A process exit or a model claimed by
-the prompt is not application evidence.
+missing/phantom/unverified receipt. There is no session or compatibility
+fallback for routed delivery. When the adapter exposes `capabilitySnapshot`,
+the boundary assesses model-axis escalations against host capability evidence.
+An unsupported or unknown assessment permits only the immediately preceding
+policy rung in the same runtime, including Claude Sonnet→Opus and Opus→Fable
+escalations. For example, research Opus/high (`very-complex`) falls back to
+Sonnet/xhigh (`base`); the consented Fable/medium ceiling falls back to
+Opus/high (`critical`). `fallbackInput` resolves that preceding rung, then the
+boundary validates the final model/effort pair and performs a fresh dispatch
+with verified application evidence. It does not recursively search lower rungs
+or reuse an earlier receipt as proof of the new dispatch. The resolution retains
+the capability assessment and requested escalation versus fallback selection.
+Missing Fable consent still refuses before this exception applies. Repair
+fallback to a `repeat` or `repeat_exhausted` rung requires that rung's own
+authenticated predecessor: the immediate receipt authorizes only the requested
+rung. The current boundary refuses such fallback with
+`UNSUPPORTED_REPAIR_FALLBACK` instead of manufacturing predecessor authority.
+Ordinary unsupported final pairs still refuse. A process exit or a model
+claimed by the prompt is not application evidence.
 
 Each durable dispatch receipt records the runtime, role, runtime-native model
 key, logical rung, concrete requested and applied model/effort, all fired
@@ -881,12 +902,15 @@ semantics, Terra/Astra-only assumptions, version-filtered behavior, and
 one-entry or empty-palette fallbacks are superseded for routed delivery. The
 Codex generator reads the ADR-014 policy and emits the complete required bundle;
 it does not derive canonical agents from that list, a GSD remap, or a parent
-session. Missing host capability evidence, stale artifacts, or unsupported
-selections fail closed.
+session. Stale artifacts and unsupported final selections fail closed. An
+unsupported or unknown model-axis capability assessment has only the bounded
+preceding-rung path in section 7.5.2; final validation and receipt requirements
+still apply.
 
 Claude's palette/provider configuration is unchanged. ADR-014 references the
-existing `sonnet`, `opus`, and `fable` aliases only; it does not change Claude
-model IDs, provider, credentials, environment pins, or palette files. Historical
+logical `sonnet`, `opus`, and `fable` policy keys, with concrete launch IDs
+`claude-sonnet-5-5`, `claude-opus-5-5`, and `fable` as listed above. This mapping
+does not change provider, credentials, environment pins, or palette files. Historical
 dispatches are not relabeled as having used ADR-014. The task-level experiment
 in ADR-012 may remain historical context or telemetry, but it is not a second
 launch authority.
@@ -1127,6 +1151,12 @@ so the two runtimes do not diverge (zero drift).
   Each host owns model selection, explicit effort, runtime launch, and the
   durable receipt. Native Agent or Workflow calls outside those hosts are not a
   delivery path.
+
+For isolated candidate installation and rollback, follow
+[the ADR-024 rollout procedure](../.planning/architecture/ADR-024-ROLLOUT.md),
+including its absolute target project guard and mandatory readable actual host
+capability evidence file. The following is the host installation entry point,
+not the isolated validation procedure.
 
 Installation: `make install-shipyard-codex` (requires gsd-core for Codex:
 `npx --yes @opengsd/gsd-core@latest --codex --global`). `SHIPYARD_CODEX_PHASE=1` —
