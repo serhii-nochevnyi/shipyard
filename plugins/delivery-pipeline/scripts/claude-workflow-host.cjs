@@ -252,6 +252,30 @@ function createClaudeWorkflowDispatchBridge(options = {}) {
     reject('host writer snapshot is not bound to the acquired phase');
   }
   const completedTyped = new Map();
+  const completionSnapshot = () => {
+    const entries = {};
+    const root = fs.realpathSync(writerSession.phaseDir);
+    const visit = (directory) => {
+      for (const name of fs.readdirSync(directory).sort()) {
+        const full = path.join(directory, name);
+        const stat = fs.lstatSync(full);
+        const relative = path.relative(root, full).split(path.sep).join('/');
+        if (!stat.isFile() && !stat.isDirectory()) {
+          const error = new Error(`non-regular phase entry: ${relative}`);
+          error.code = 'FOREIGN_EDIT';
+          throw error;
+        }
+        entries[relative] = stat.isDirectory() ? 'directory' : 'file';
+        if (stat.isDirectory()) visit(full);
+      }
+    };
+    visit(root);
+    return Object.freeze({
+      digests: Object.freeze(Object.fromEntries(Object.entries(writerSession.lease.snapshotTree().digests).sort())),
+      entries: Object.freeze(Object.fromEntries(Object.entries(entries).sort())),
+    });
+  };
+  const initialEntries = writerSession ? completionSnapshot().entries : null;
   const preRecordValidation = writerSession && function validateHostWriter({ dispatch_id: dispatchId, gsd_role: gsdRole, receipt }) {
     const { lease, handle, base_revision: baseRevision, snapshot, phaseDir, declaredPaths } = writerSession;
     if (!lease || lease.schema !== 'shipyard.planning-writer-lease.v1'
@@ -307,13 +331,21 @@ function createClaudeWorkflowDispatchBridge(options = {}) {
       throw error;
     }
     lease.assertFence({ token: handle.token, epoch: handle.epoch, base_revision: baseRevision });
-    if (JSON.stringify(Object.entries(completed.completion_snapshot.digests).sort())
-        !== JSON.stringify(Object.entries(lease.snapshotTree().digests).sort())) {
+    if (JSON.stringify(completed.completion_snapshot) !== JSON.stringify(completionSnapshot())) {
       const error = new Error('phase bytes changed after typed completion');
       error.code = 'FOREIGN_EDIT';
       throw error;
     }
     const allowed = new Set(declaredPaths.map((item) => item.replace(/\\/g, '/')));
+    const completedEntries = completed.completion_snapshot.entries;
+    const changedDirectories = [...new Set([...Object.keys(initialEntries), ...Object.keys(completedEntries)])]
+      .filter((item) => (initialEntries[item] === 'directory' || completedEntries[item] === 'directory')
+        && initialEntries[item] !== completedEntries[item]);
+    if (changedDirectories.some((item) => !declaredPaths.some((declared) => declared === item || declared.startsWith(item + '/')))) {
+      const error = new Error('undeclared phase directory change');
+      error.code = 'FOREIGN_EDIT';
+      throw error;
+    }
     const { changed } = lease.changedSince(snapshot);
     const foreign = changed.filter((item) => !allowed.has(item));
     if (foreign.length || changed.length !== allowed.size || allowed.size !== declaredPaths.length) {
@@ -336,9 +368,7 @@ function createClaudeWorkflowDispatchBridge(options = {}) {
     const retain = (value) => {
       if (object(value) && typeof value.launch_id === 'string') {
         completedTyped.set(value.launch_id, { ...value, gsd_role: gsdRole,
-          completion_snapshot: writerSession ? Object.freeze({
-            digests: Object.freeze({ ...writerSession.lease.snapshotTree().digests }),
-          }) : null });
+          completion_snapshot: writerSession ? completionSnapshot() : null });
       }
       return value;
     };
