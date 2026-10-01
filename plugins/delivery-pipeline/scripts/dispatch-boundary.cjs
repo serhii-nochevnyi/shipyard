@@ -28,6 +28,8 @@ const OBSERVATION_UNKNOWN = 'unknown';
 const CLAIM_TTL_MS = 60 * 60 * 1000;
 const CLAIM_HEARTBEAT_MS = Math.max(1000, Math.floor(CLAIM_TTL_MS / 3));
 const CLAIM_LOCK_TTL_MS = Math.max(1000, Math.floor(CLAIM_TTL_MS / 3));
+const RECEIPT_MUTATION_WAIT_MS = 2000;
+const RECEIPT_MUTATION_RETRY_MS = 10;
 const RECORDER_AUTHORITY = Symbol('adr-014-dispatch-boundary-recorder-authority');
 const DURABLE_RECORDERS = new WeakSet();
 const IN_PROCESS_RECORDERS = new WeakSet();
@@ -294,6 +296,7 @@ function createDurableRecorder(storeDir) {
   const repairCommitFile = (dispatchId) => file('repair-commit', dispatchId);
   const claimFile = (dispatchId) => file('claim', dispatchId);
   const claimLockFile = (dispatchId) => file('claim-recovery', dispatchId);
+  const receiptMutationLockFile = path.join(root, 'receipt-mutation.lock.json');
   const provisionalPreviousLatest = new Map();
   const newFenceToken = () => typeof crypto.randomUUID === 'function'
     ? crypto.randomUUID()
@@ -315,11 +318,10 @@ function createDurableRecorder(storeDir) {
     return {
       dispatch_id: dispatchId,
       purpose,
-      // Projection owns the fenced section through a synchronous graph+journal
-      // commit. That callback cannot run a heartbeat while the event loop is
-      // blocked, so a live owner must not be treated as stale merely because
-      // the recovery TTL elapsed. A dead process remains recoverable below.
-      fenced_until_release: purpose === 'projection',
+      // Projection and receipt mutation own their fenced sections through
+      // synchronous commits. Those callbacks cannot heartbeat while the event
+      // loop is blocked, so a live owner must not become stale at the TTL.
+      fenced_until_release: purpose === 'projection' || purpose === 'receipt-mutation',
       lock_token: newFenceToken(),
       owner_pid: process.pid,
       acquired_at: new Date(now).toISOString(),
@@ -359,6 +361,20 @@ function createDurableRecorder(storeDir) {
         : NaN;
     return !Number.isFinite(leaseExpiresAt) || Date.now() >= leaseExpiresAt;
   };
+  const receiptMutationLockIsStale = (lock) => {
+    if (!lock || lock.purpose !== 'receipt-mutation' || lock.fenced_until_release !== true
+        || typeof lock.lock_token !== 'string' || lock.lock_token === '') return false;
+    const pid = Number(lock.owner_pid);
+    if (!Number.isInteger(pid) || pid <= 0) return false;
+    try {
+      process.kill(pid, 0);
+      return false;
+    } catch (error) {
+      // Only positive evidence of process exit permits takeover. A permission
+      // error or any other failed liveness probe leaves ownership unknown.
+      return Boolean(error && error.code === 'ESRCH');
+    }
+  };
   const readLockRecord = (filePath) => {
     let raw;
     try {
@@ -368,13 +384,13 @@ function createDurableRecorder(storeDir) {
       throw error;
     }
     let value = null;
-    try { value = JSON.parse(raw); } catch (_) { /* malformed locks are stale */ }
+    try { value = JSON.parse(raw); } catch (_) { /* each lock namespace decides whether malformed state is recoverable */ }
     return { raw, value };
   };
   const lockIdentity = (record) => record && typeof record.raw === 'string'
     ? keyDigest(record.raw)
     : null;
-  const sweepTransitionMarkers = (lock) => {
+  const sweepTransitionMarkers = (lock, markerTtlMs = CLAIM_LOCK_TTL_MS) => {
     const prefix = `${path.basename(lock)}.stale-`;
     let entries = [];
     try { entries = fs.readdirSync(path.dirname(lock)); } catch (_) { return; }
@@ -382,7 +398,7 @@ function createDurableRecorder(storeDir) {
       if (!name.startsWith(prefix)) continue;
       const marker = path.join(path.dirname(lock), name);
       try {
-        if (Date.now() - fs.statSync(marker).mtimeMs < CLAIM_LOCK_TTL_MS) continue;
+        if (Date.now() - fs.statSync(marker).mtimeMs < markerTtlMs) continue;
         fs.rmSync(marker, { recursive: true, force: true });
       } catch (_) { /* raced with the claimant */ }
     }
@@ -422,15 +438,17 @@ function createDurableRecorder(storeDir) {
       if (fs.existsSync(retired) && fs.existsSync(claimPath)) releaseClaimFile(retired);
     }
   };
-  const acquireClaimLock = (dispatchId, purpose) => {
-    const lock = claimLockFile(dispatchId);
+  const acquireClaimLock = (dispatchId, purpose, options = {}) => {
+    const lock = options.lockPath || claimLockFile(dispatchId);
+    const isStale = options.isStale || lockIsStale;
+    const markerTtlMs = options.markerTtlMs || CLAIM_LOCK_TTL_MS;
     const candidate = claimLockPayload(dispatchId, purpose);
     if (atomicCreateJson(lock, candidate)) return candidate;
     const observed = readLockRecord(lock);
-    if (!observed || !lockIsStale(observed.value)) return null;
+    if (!observed || !isStale(observed.value)) return null;
     const identity = lockIdentity(observed);
     if (!identity) return null;
-    sweepTransitionMarkers(lock);
+    sweepTransitionMarkers(lock, markerTtlMs);
     const marker = `${lock}.stale-${identity}`;
     try {
       fs.mkdirSync(marker);
@@ -443,7 +461,7 @@ function createDurableRecorder(storeDir) {
     let acquired = false;
     try {
       const current = readLockRecord(lock);
-      if (!current || current.raw !== observed.raw || !lockIsStale(current.value)) return null;
+      if (!current || current.raw !== observed.raw || !isStale(current.value)) return null;
       fs.renameSync(lock, dead);
       moved = true;
       const displaced = readLockRecord(dead);
@@ -468,12 +486,13 @@ function createDurableRecorder(storeDir) {
       }
     }
   };
-  const releaseClaimLock = (dispatchId, lockOwner) => {
+  const releaseClaimLock = (dispatchId, lockOwner, options = {}) => {
     if (!lockOwner) return;
-    const lock = claimLockFile(dispatchId);
+    const lock = options.lockPath || claimLockFile(dispatchId);
+    const markerTtlMs = options.markerTtlMs || CLAIM_LOCK_TTL_MS;
     const observed = readLockRecord(lock);
     if (!observed || !observed.value || observed.value.lock_token !== lockOwner.lock_token) return;
-    sweepTransitionMarkers(lock);
+    sweepTransitionMarkers(lock, markerTtlMs);
     const identity = lockIdentity(observed);
     if (!identity) return;
     const marker = `${lock}.stale-${identity}`;
@@ -505,6 +524,36 @@ function createDurableRecorder(storeDir) {
       }
     }
   };
+  const acquireReceiptMutationLock = () => {
+    const deadline = Date.now() + RECEIPT_MUTATION_WAIT_MS;
+    const waitState = new Int32Array(new SharedArrayBuffer(4));
+    while (true) {
+      const owner = acquireClaimLock('receipt-store', 'receipt-mutation', {
+        lockPath: receiptMutationLockFile,
+        isStale: receiptMutationLockIsStale,
+      });
+      if (owner) return owner;
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) return null;
+      Atomics.wait(waitState, 0, 0, Math.min(RECEIPT_MUTATION_RETRY_MS, remaining));
+    }
+  };
+  const releaseReceiptMutationLock = (owner) => releaseClaimLock('receipt-store', owner, {
+    lockPath: receiptMutationLockFile,
+  });
+  const withReceiptMutationLock = (callback) => {
+    const owner = acquireReceiptMutationLock();
+    if (!owner) {
+      throw boundaryError('RECORD_FAILED', 'durable receipt mutation lock is busy or has an unknown owner', {
+        store_dir: root,
+      });
+    }
+    try {
+      return callback();
+    } finally {
+      releaseReceiptMutationLock(owner);
+    }
+  };
   const claimFence = (claim) => claim && ({
     dispatch_id: claim.dispatch_id,
     consumer_id: claim.consumer_id,
@@ -532,7 +581,7 @@ function createDurableRecorder(storeDir) {
     && (commit.claim_generation === undefined || Number.isInteger(commit.claim_generation))
     && (commit.claim_token === undefined || typeof commit.claim_token === 'string')
   );
-  const recoverRepairCommit = (predecessorDispatchId) => {
+  const recoverRepairCommitUnlocked = (predecessorDispatchId) => {
     const commitStored = readStored(repairCommitFile(predecessorDispatchId));
     if (!commitStored) return null;
     // A pre-envelope marker may still be useful to an operator inspecting the
@@ -588,6 +637,9 @@ function createDurableRecorder(storeDir) {
     }
     return commit;
   };
+  const recoverRepairCommit = (predecessorDispatchId) => withReceiptMutationLock(
+    () => recoverRepairCommitUnlocked(predecessorDispatchId),
+  );
 
   const recorder = Object.freeze({
     storeDir: root,
@@ -611,59 +663,61 @@ function createDurableRecorder(storeDir) {
         return { recorded: false };
       }
       if (!fs.existsSync(reservationFile(dispatchId))) return { recorded: false };
-      const priorLatest = readStored(latestFile(receipt.runtime, receipt.role));
       const predecessorDispatchId = recordInput.predecessor_dispatch_id;
       const predecessorConsumerId = recordInput.predecessor_consumer_id;
       try {
-        if (predecessorDispatchId !== undefined || predecessorConsumerId !== undefined) {
-          if (typeof predecessorDispatchId !== 'string' || typeof predecessorConsumerId !== 'string') return { recorded: false };
-          const lockOwner = acquireClaimLock(predecessorDispatchId, 'commit');
-          if (!lockOwner) return { recorded: false };
-          try {
-            const claim = readJsonFile(claimFile(predecessorDispatchId));
-            if (!sameClaimFence(claim, claimAuthority) || claimIsStale(claim)) return { recorded: false };
-            const repairCommit = {
-              predecessor_dispatch_id: predecessorDispatchId,
-              successor_dispatch_id: dispatchId,
-              consumer_id: predecessorConsumerId,
-              claim_generation: claim.generation,
-              claim_token: claim.claim_token,
-              record_input: recordInput,
-            };
-            const commitCreated = atomicCreateJson(repairCommitFile(predecessorDispatchId), seal(repairCommit));
-            if (!commitCreated) {
-              const existingCommitStored = readStored(repairCommitFile(predecessorDispatchId));
-              const existingCommit = existingCommitStored && existingCommitStored.payload;
-              if (existingCommitStored && existingCommitStored.legacy) {
-                // A pre-envelope marker is readable history, not an
-                // authority. Replace it only while holding the same fenced
-                // predecessor lock that guards all new repair commits.
-                atomicReplaceJson(repairCommitFile(predecessorDispatchId), seal(repairCommit));
-              } else {
-                if (!existingCommit || !sameRecord(existingCommit, repairCommit)) return { recorded: false };
-                if (!existingCommitStored.authenticated) {
-                  throw boundaryError('RECORD_FAILED', 'durable repair commit has invalid integrity evidence', { dispatch_id: predecessorDispatchId });
+        return withReceiptMutationLock(() => {
+          const priorLatest = readStored(latestFile(receipt.runtime, receipt.role));
+          if (predecessorDispatchId !== undefined || predecessorConsumerId !== undefined) {
+            if (typeof predecessorDispatchId !== 'string' || typeof predecessorConsumerId !== 'string') return { recorded: false };
+            const lockOwner = acquireClaimLock(predecessorDispatchId, 'commit');
+            if (!lockOwner) return { recorded: false };
+            try {
+              const claim = readJsonFile(claimFile(predecessorDispatchId));
+              if (!sameClaimFence(claim, claimAuthority) || claimIsStale(claim)) return { recorded: false };
+              const repairCommit = {
+                predecessor_dispatch_id: predecessorDispatchId,
+                successor_dispatch_id: dispatchId,
+                consumer_id: predecessorConsumerId,
+                claim_generation: claim.generation,
+                claim_token: claim.claim_token,
+                record_input: recordInput,
+              };
+              const commitCreated = atomicCreateJson(repairCommitFile(predecessorDispatchId), seal(repairCommit));
+              if (!commitCreated) {
+                const existingCommitStored = readStored(repairCommitFile(predecessorDispatchId));
+                const existingCommit = existingCommitStored && existingCommitStored.payload;
+                if (existingCommitStored && existingCommitStored.legacy) {
+                  // A pre-envelope marker is readable history, not an
+                  // authority. Replace it only while holding the same fenced
+                  // predecessor lock that guards all new repair commits.
+                  atomicReplaceJson(repairCommitFile(predecessorDispatchId), seal(repairCommit));
+                } else {
+                  if (!existingCommit || !sameRecord(existingCommit, repairCommit)) return { recorded: false };
+                  if (!existingCommitStored.authenticated) {
+                    throw boundaryError('RECORD_FAILED', 'durable repair commit has invalid integrity evidence', { dispatch_id: predecessorDispatchId });
+                  }
                 }
               }
+            } finally {
+              releaseClaimLock(predecessorDispatchId, lockOwner);
             }
-          } finally {
-            releaseClaimLock(predecessorDispatchId, lockOwner);
           }
-        }
-        const durableRecord = seal(recordInput);
-        const created = atomicCreateJson(recordFile(dispatchId), durableRecord);
-        if (!created) {
-          const existingStored = readStored(recordFile(dispatchId));
-          const existing = existingStored && existingStored.payload;
-          if (!existing || !sameRecord(existing, recordInput)) return { recorded: false };
-          if (!existingStored.authenticated) atomicReplaceJson(recordFile(dispatchId), durableRecord);
-        }
-        atomicReplaceJson(latestFile(receipt.runtime, receipt.role), durableRecord);
-        provisionalPreviousLatest.set(dispatchId, priorLatest && priorLatest.authenticated ? priorLatest.payload : null);
+          const durableRecord = seal(recordInput);
+          const created = atomicCreateJson(recordFile(dispatchId), durableRecord);
+          if (!created) {
+            const existingStored = readStored(recordFile(dispatchId));
+            const existing = existingStored && existingStored.payload;
+            if (!existing || !sameRecord(existing, recordInput)) return { recorded: false };
+            if (!existingStored.authenticated) atomicReplaceJson(recordFile(dispatchId), durableRecord);
+          }
+          atomicReplaceJson(latestFile(receipt.runtime, receipt.role), durableRecord);
+          provisionalPreviousLatest.set(dispatchId, priorLatest && priorLatest.authenticated ? priorLatest.payload : null);
+          return { recorded: true };
+        });
       } catch (error) {
         throw boundaryError('RECORD_FAILED', `durable dispatch record failed: ${error.message}`, { dispatch_id: dispatchId });
       }
-      return { recorded: true };
     },
     finalize(recordInput, authority) {
       if (authority !== RECORDER_AUTHORITY) return { finalized: false };
@@ -673,30 +727,32 @@ function createDurableRecorder(storeDir) {
         return { finalized: false };
       }
       try {
-        const existingStored = readStored(recordFile(dispatchId));
-        const existing = existingStored && existingStored.payload;
-        if (!existing || existing.dispatch_id !== dispatchId
-            || !existingStored.authenticated
-            || canonicalStableStringify(existing.receipt) !== canonicalStableStringify(receipt)) {
-          return { finalized: false };
-        }
-        const predecessorDispatchId = recordInput.predecessor_dispatch_id;
-        if (predecessorDispatchId !== undefined) {
-          const repairCommitStored = readStored(repairCommitFile(predecessorDispatchId));
-          const repairCommit = repairCommitStored && repairCommitStored.payload;
-          if (!repairCommitStored || !repairCommitStored.authenticated
-              || !validRepairCommit(repairCommit, predecessorDispatchId)
-              || repairCommit.successor_dispatch_id !== dispatchId) return { finalized: false };
-          atomicReplaceJson(repairCommitFile(predecessorDispatchId), seal({
-            ...repairCommit,
-            record_input: recordInput,
-          }));
-        }
-        const durableRecord = seal(recordInput);
-        atomicReplaceJson(recordFile(dispatchId), durableRecord);
-        atomicReplaceJson(latestFile(receipt.runtime, receipt.role), durableRecord);
-        provisionalPreviousLatest.delete(dispatchId);
-        return { finalized: true };
+        return withReceiptMutationLock(() => {
+          const existingStored = readStored(recordFile(dispatchId));
+          const existing = existingStored && existingStored.payload;
+          if (!existing || existing.dispatch_id !== dispatchId
+              || !existingStored.authenticated
+              || canonicalStableStringify(existing.receipt) !== canonicalStableStringify(receipt)) {
+            return { finalized: false };
+          }
+          const predecessorDispatchId = recordInput.predecessor_dispatch_id;
+          if (predecessorDispatchId !== undefined) {
+            const repairCommitStored = readStored(repairCommitFile(predecessorDispatchId));
+            const repairCommit = repairCommitStored && repairCommitStored.payload;
+            if (!repairCommitStored || !repairCommitStored.authenticated
+                || !validRepairCommit(repairCommit, predecessorDispatchId)
+                || repairCommit.successor_dispatch_id !== dispatchId) return { finalized: false };
+            atomicReplaceJson(repairCommitFile(predecessorDispatchId), seal({
+              ...repairCommit,
+              record_input: recordInput,
+            }));
+          }
+          const durableRecord = seal(recordInput);
+          atomicReplaceJson(recordFile(dispatchId), durableRecord);
+          atomicReplaceJson(latestFile(receipt.runtime, receipt.role), durableRecord);
+          provisionalPreviousLatest.delete(dispatchId);
+          return { finalized: true };
+        });
       } catch (error) {
         throw boundaryError('RECORD_FAILED', `durable dispatch finalization failed: ${error.message}`, { dispatch_id: dispatchId });
       }
@@ -706,31 +762,33 @@ function createDurableRecorder(storeDir) {
       const dispatchId = recordInput && recordInput.dispatch_id;
       const receipt = recordInput && recordInput.receipt;
       if (typeof dispatchId !== 'string' || !isObject(receipt) || receipt.dispatch_id !== dispatchId) return { aborted: false };
-      const expected = canonicalStableStringify(recordInput);
-      const matches = (filePath, payload = recordInput) => {
-        const stored = readStored(filePath);
-        return stored && stored.authenticated
-          && canonicalStableStringify(stored.payload) === canonicalStableStringify(payload);
-      };
-      const ownRecord = recordFile(dispatchId);
-      if (!matches(ownRecord)) return { aborted: false };
-      const latest = latestFile(receipt.runtime, receipt.role);
-      const predecessor = recordInput.predecessor_dispatch_id;
-      const marker = predecessor === undefined ? null : repairCommitFile(predecessor);
-      const markerStored = marker && readStored(marker);
-      if (markerStored && (!markerStored.authenticated
-          || !isObject(markerStored.payload)
-          || markerStored.payload.successor_dispatch_id !== dispatchId
-          || canonicalStableStringify(markerStored.payload.record_input) !== expected)) return { aborted: false };
-      if (matches(latest)) {
-        const previous = provisionalPreviousLatest.get(dispatchId);
-        if (previous) atomicReplaceJson(latest, seal(previous));
-        else fs.unlinkSync(latest);
-      }
-      if (markerStored) fs.unlinkSync(marker);
-      fs.unlinkSync(ownRecord);
-      provisionalPreviousLatest.delete(dispatchId);
-      return { aborted: true };
+      return withReceiptMutationLock(() => {
+        const expected = canonicalStableStringify(recordInput);
+        const matches = (filePath, payload = recordInput) => {
+          const stored = readStored(filePath);
+          return stored && stored.authenticated
+            && canonicalStableStringify(stored.payload) === canonicalStableStringify(payload);
+        };
+        const ownRecord = recordFile(dispatchId);
+        if (!matches(ownRecord)) return { aborted: false };
+        const latest = latestFile(receipt.runtime, receipt.role);
+        const predecessor = recordInput.predecessor_dispatch_id;
+        const marker = predecessor === undefined ? null : repairCommitFile(predecessor);
+        const markerStored = marker && readStored(marker);
+        if (markerStored && (!markerStored.authenticated
+            || !isObject(markerStored.payload)
+            || markerStored.payload.successor_dispatch_id !== dispatchId
+            || canonicalStableStringify(markerStored.payload.record_input) !== expected)) return { aborted: false };
+        if (matches(latest)) {
+          const previous = provisionalPreviousLatest.get(dispatchId);
+          if (previous) atomicReplaceJson(latest, seal(previous));
+          else fs.unlinkSync(latest);
+        }
+        if (markerStored) fs.unlinkSync(marker);
+        fs.unlinkSync(ownRecord);
+        provisionalPreviousLatest.delete(dispatchId);
+        return { aborted: true };
+      });
     },
     getReservation(dispatchId) {
       if (typeof dispatchId !== 'string' || dispatchId.trim() === '') return null;
