@@ -950,7 +950,7 @@ test('decompose selects runtime before tuning and establishes context before thr
   );
 });
 
-test('delivery launch docs and operator guide preserve the routed native ladder', () => {
+test('delivery launch docs route every role through the boundary and the generated Codex names', () => {
   const deliver = readRepo('plugins/delivery-pipeline/commands/deliver.md');
   const sentinel = readRepo('plugins/delivery-pipeline/references/pr-sentinel.md');
   const source = `${deliver}\n${sentinel}`;
@@ -989,7 +989,6 @@ test('delivery launch docs and operator guide preserve the routed native ladder'
   ]) {
     assert.ok(source.includes(pair), `delivery docs must preserve the native ladder pair ${pair}`);
   }
-
   const guide = readRepo('docs/gsd_multilevel_delivery_pipeline.md');
   const sectionStart = guide.indexOf('### 7.5.1. Runtime-native model grids');
   const assertionStart = guide.indexOf('\n**Canonical-table assertion.**', sectionStart);
@@ -2148,6 +2147,13 @@ test('Codex live smoke refuses the source checkout before probing or launching a
   ], { cwd: REPO, encoding: 'utf8' });
   assert.equal(result.status, 1, result.stderr);
   assert.equal(JSON.parse(result.stdout).reason, 'source_worktree_not_allowed');
+});
+
+test('shipped Codex compatibility palette and README advertise the native Sol default', () => {
+  const capability = JSON.parse(readRepo('capabilities/delivery-pipeline/capability.json'));
+  const expected = 'gpt-6.1-sol:high@0.155.1, gpt-6.1-sol:xhigh@0.155.1';
+  assert.strictEqual(capability.config['delivery_pipeline.codex_models'].default, expected);
+  assert.ok(readRepo('README.md').includes(`\"codex_models\": \"${expected}\"`));
 });
 
 done();

@@ -220,13 +220,14 @@ test('ordinary executor requests resolve through the canonical resolver with fre
   }
 });
 
-test('reviewer compatibility config removes only the two copied reviewer overrides', () => {
+test('reviewer compatibility config removes only the two copied reviewer overrides, excluding independently owned verification profiles', () => {
   const expected = JSON.parse(JSON.stringify(PRE_EDIT_PLANNING_CONFIG));
   delete expected.model_overrides['gsd-code-reviewer'];
   delete expected.effort.agent_overrides['gsd-code-reviewer'];
-  const actual = require('../../.planning/config.json');
+  const actual = JSON.parse(JSON.stringify(require('../../.planning/config.json')));
   assert.equal(Object.hasOwn(actual.model_overrides, 'gsd-code-reviewer'), false);
   assert.equal(Object.hasOwn(actual.effort.agent_overrides, 'gsd-code-reviewer'), false);
+  delete actual.delivery_pipeline.verification_commands;
   assert.deepStrictEqual(actual, expected);
 });
 
