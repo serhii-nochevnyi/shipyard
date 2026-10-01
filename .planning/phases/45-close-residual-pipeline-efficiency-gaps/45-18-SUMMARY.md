@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 39e7b04adcf1e01392fb5cf8ca999e1d2c68f7283839d5a59d8da6842b9bbf95
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 9f80a5d2a341c436f2f0254870395e28333c50b13b128b443221296b70fc1e3b
 phase: 45-close-residual-pipeline-efficiency-gaps
 plan: 18
 subsystem: shipyard delivery
@@ -22,7 +22,7 @@ key-decisions:
 duration: 0min
 status: halted
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 39e7b04adcf1e01392fb5cf8ca999e1d2c68f7283839d5a59d8da6842b9bbf95
+shipyard_source_fingerprint: 9f80a5d2a341c436f2f0254870395e28333c50b13b128b443221296b70fc1e3b
 ---
 
 # Phase 45: Fence durable receipt rollback and refresh the 0.70.0 Codex package — Delivery Projection
