@@ -2975,4 +2975,101 @@ test('recoverReserved records only an existing, unrecorded durable reservation',
   }
 });
 
+test('malformed numeric-string receipt owner remains fenced and double abort restores finalized history', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-rollback-history-'));
+  const recorder = boundaryModule.createDurableRecorder(root);
+  const create = () => boundaryModule.createDispatchBoundary({
+    adapters: { codex: fakeAdapter({ receipt: (r) => receiptFor(r, {
+      gsd_role: 'gsd-planner', gsd_launch_mechanism: 'typed-gsd-callback',
+    }) }) }, recorder: boundaryModule.createDurableRecorder(root), requireGsdRole: true,
+  });
+  const dispatch = (id, validate = () => {}) => create().dispatch({
+    runtime: 'codex', role: 'decomposition', gsd_role: 'gsd-planner', dispatch_id: id,
+  }, { ticket: 'T-45-18', preRecordValidation: validate });
+  try {
+    const lock = path.join(root, 'receipt-mutation.lock.json');
+    const malformed = JSON.stringify({ purpose: 'receipt-mutation', fenced_until_release: true,
+      lock_token: 'malformed-owner', owner_pid: '2147483647',
+      acquired_at: '2000-01-01T00:00:00.000Z', lease_expires_at: '2000-01-01T00:00:01.000Z' });
+    fs.writeFileSync(lock, malformed);
+    assert.throws(() => dispatch('malformed-owner'), (error) => error.code === 'RECORD_FAILED');
+    assert.equal(fs.readFileSync(lock, 'utf8'), malformed);
+    fs.unlinkSync(lock);
+    await dispatch('finalized-previous');
+    const pending = (id) => {
+      let reject, calls = 0;
+      const validation = new Promise((resolve, no) => { reject = no; });
+      const settled = Promise.resolve(dispatch(id, () => ++calls === 2 ? validation : undefined))
+        .then(() => { throw new Error('provisional dispatch unexpectedly completed'); }, (error) => error);
+      return { reject, settled };
+    };
+    const a = pending('provisional-a'), b = pending('provisional-b');
+    a.reject(Object.assign(new Error('A fenced'), { code: 'WRITER_FENCED' }));
+    assert.equal((await a.settled).code, 'WRITER_FENCED');
+    b.reject(Object.assign(new Error('B fenced'), { code: 'WRITER_FENCED' }));
+    assert.equal((await b.settled).code, 'WRITER_FENCED');
+    assert.equal(recorder.getVerifiedRecord('provisional-a'), null);
+    assert.equal(recorder.getVerifiedRecord('provisional-b'), null);
+    assert.equal(recorder.getLatestReceipt('codex', 'decomposition').dispatch_id, 'finalized-previous');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('rollback ancestry survives overlapping provisional dispatches in separate processes', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-process-ancestry-'));
+  const recorder = boundaryModule.createDurableRecorder(root);
+  const adapter = () => fakeAdapter({ receipt: (r) => receiptFor(r, {
+    gsd_role: 'gsd-planner', gsd_launch_mechanism: 'typed-gsd-callback',
+  }) });
+  const boundary = boundaryModule.createDispatchBoundary({ adapters: { codex: adapter() }, recorder, requireGsdRole: true });
+  const input = (id) => ({ runtime: 'codex', role: 'decomposition', gsd_role: 'gsd-planner', dispatch_id: id });
+  let child;
+  try {
+    await boundary.dispatch(input('process-previous'), { ticket: 'T-45-18', preRecordValidation: () => {} });
+    let rejectA, calls = 0;
+    const pendingA = new Promise((resolve, reject) => { rejectA = reject; });
+    const a = Promise.resolve(boundary.dispatch(input('process-a'), {
+      ticket: 'T-45-18', preRecordValidation: () => ++calls === 2 ? pendingA : undefined,
+    })).then(() => { throw new Error('A unexpectedly completed'); }, (error) => error);
+    const code = `
+      const boundaryModule = require(${JSON.stringify(require.resolve('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs'))});
+      const receiptFor = ${receiptFor.toString()};
+      const fakeAdapter = ${fakeAdapter.toString()};
+      const recorder = boundaryModule.createDurableRecorder(process.argv[1]);
+      const boundary = boundaryModule.createDispatchBoundary({ adapters: { codex: fakeAdapter({
+        receipt: (r) => receiptFor(r, { gsd_role: 'gsd-planner', gsd_launch_mechanism: 'typed-gsd-callback' }),
+      }) }, recorder, requireGsdRole: true });
+      let calls = 0, reject;
+      const pending = new Promise((resolve, no) => { reject = no; });
+      process.stdin.once('data', () => reject(Object.assign(new Error('B fenced'), { code: 'WRITER_FENCED' })));
+      Promise.resolve(boundary.dispatch({ runtime: 'codex', role: 'decomposition', gsd_role: 'gsd-planner', dispatch_id: 'process-b' }, {
+        ticket: 'T-45-18', preRecordValidation: () => { if (++calls === 2) { process.stdout.write('ready\\n'); return pending; } },
+      })).then(() => { process.exitCode = 1; }, error => { if (error.code !== 'WRITER_FENCED') process.exitCode = 1; }).finally(() => process.stdin.destroy());
+    `;
+    child = spawn(process.execPath, ['-e', code, root], { stdio: ['pipe', 'pipe', 'pipe'] });
+    let stderr = '';
+    child.stderr.on('data', (data) => { stderr += data; });
+    const exited = new Promise((resolve, reject) => {
+      child.once('error', reject);
+      child.once('exit', (code) => code === 0 ? resolve() : reject(new Error(stderr || `child exit ${code}`)));
+    });
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('child did not record provisional receipt')), 10000);
+      child.stdout.once('data', () => { clearTimeout(timer); resolve(); });
+      child.once('exit', () => { clearTimeout(timer); reject(new Error(stderr || 'child exited before ready')); });
+    });
+    rejectA(Object.assign(new Error('A fenced'), { code: 'WRITER_FENCED' }));
+    assert.equal((await a).code, 'WRITER_FENCED');
+    child.stdin.end('abort');
+    await exited;
+    assert.equal(recorder.getVerifiedRecord('process-a'), null);
+    assert.equal(recorder.getVerifiedRecord('process-b'), null);
+    assert.equal(recorder.getLatestReceipt('codex', 'decomposition').dispatch_id, 'process-previous');
+  } finally {
+    if (child && child.exitCode === null) child.kill();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 done();

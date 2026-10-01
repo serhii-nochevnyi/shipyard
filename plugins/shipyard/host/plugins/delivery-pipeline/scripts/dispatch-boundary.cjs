@@ -297,7 +297,29 @@ function createDurableRecorder(storeDir) {
   const claimFile = (dispatchId) => file('claim', dispatchId);
   const claimLockFile = (dispatchId) => file('claim-recovery', dispatchId);
   const receiptMutationLockFile = path.join(root, 'receipt-mutation.lock.json');
-  const provisionalPreviousLatest = new Map();
+  const rollbackHistoryFile = (dispatchId) => file('rollback-history', dispatchId);
+  const finalizedPredecessor = (dispatchId, receipt) => {
+    const visited = new Set();
+    let cursor = dispatchId;
+    while (cursor !== null) {
+      if (visited.has(cursor)) throw boundaryError('RECORD_FAILED', 'cyclic receipt rollback history');
+      visited.add(cursor);
+      const history = readAuthenticated(rollbackHistoryFile(cursor));
+      if (!history || history.dispatch_id !== cursor || history.runtime !== receipt.runtime
+          || history.role !== receipt.role
+          || (history.previous_dispatch_id !== null && typeof history.previous_dispatch_id !== 'string')) {
+        throw boundaryError('RECORD_FAILED', 'receipt rollback history is unavailable or invalid');
+      }
+      cursor = history.previous_dispatch_id;
+      if (cursor === null) return null;
+      const previous = readAuthenticated(recordFile(cursor));
+      if (previous && previous.dispatch_id === cursor
+          && previous.receipt?.runtime === receipt.runtime && previous.receipt?.role === receipt.role
+          && Array.isArray(previous.trace)
+          && previous.trace.some((stage) => stage.stage === 'receipt' && stage.status === 'passed')) return previous;
+    }
+    return null;
+  };
   const newFenceToken = () => typeof crypto.randomUUID === 'function'
     ? crypto.randomUUID()
     : crypto.randomBytes(16).toString('hex');
@@ -364,8 +386,8 @@ function createDurableRecorder(storeDir) {
   const receiptMutationLockIsStale = (lock) => {
     if (!lock || lock.purpose !== 'receipt-mutation' || lock.fenced_until_release !== true
         || typeof lock.lock_token !== 'string' || lock.lock_token === '') return false;
-    const pid = Number(lock.owner_pid);
-    if (!Number.isInteger(pid) || pid <= 0) return false;
+    const pid = lock.owner_pid;
+    if (!Number.isSafeInteger(pid) || pid <= 0) return false;
     try {
       process.kill(pid, 0);
       return false;
@@ -666,6 +688,12 @@ function createDurableRecorder(storeDir) {
       try {
         return withReceiptMutationLock(() => {
           const priorLatest = readStored(latestFile(receipt.runtime, receipt.role));
+          const history = { dispatch_id: dispatchId, runtime: receipt.runtime, role: receipt.role,
+            previous_dispatch_id: priorLatest && priorLatest.authenticated ? priorLatest.payload.dispatch_id : null };
+          if (!atomicCreateJson(rollbackHistoryFile(dispatchId), seal(history))) {
+            const existingHistory = readAuthenticated(rollbackHistoryFile(dispatchId));
+            if (!existingHistory || !sameRecord(existingHistory, history)) return { recorded: false };
+          }
           if (predecessorDispatchId !== undefined || predecessorConsumerId !== undefined) {
             if (typeof predecessorDispatchId !== 'string' || typeof predecessorConsumerId !== 'string') return { recorded: false };
             const lockOwner = acquireClaimLock(predecessorDispatchId, 'commit');
@@ -686,7 +714,6 @@ function createDurableRecorder(storeDir) {
                 const existingCommitStored = readStored(repairCommitFile(predecessorDispatchId));
                 const existingCommit = existingCommitStored && existingCommitStored.payload;
                 if (existingCommitStored && existingCommitStored.legacy) {
-                  // A pre-envelope marker is readable history, not an
                   atomicReplaceJson(repairCommitFile(predecessorDispatchId), seal(repairCommit));
                 } else {
                   if (!existingCommit || !sameRecord(existingCommit, repairCommit)) return { recorded: false };
@@ -708,7 +735,6 @@ function createDurableRecorder(storeDir) {
             if (!existingStored.authenticated) atomicReplaceJson(recordFile(dispatchId), durableRecord);
           }
           atomicReplaceJson(latestFile(receipt.runtime, receipt.role), durableRecord);
-          provisionalPreviousLatest.set(dispatchId, priorLatest && priorLatest.authenticated ? priorLatest.payload : null);
           return { recorded: true };
         });
       } catch (error) {
@@ -746,7 +772,6 @@ function createDurableRecorder(storeDir) {
           const durableRecord = seal(recordInput);
           atomicReplaceJson(recordFile(dispatchId), durableRecord);
           atomicReplaceJson(latestFile(receipt.runtime, receipt.role), durableRecord);
-          provisionalPreviousLatest.delete(dispatchId);
           return { finalized: true };
         });
       } catch (error) {
@@ -776,13 +801,12 @@ function createDurableRecorder(storeDir) {
             || markerStored.payload.successor_dispatch_id !== dispatchId
             || canonicalStableStringify(markerStored.payload.record_input) !== expected)) return { aborted: false };
         if (matches(latest)) {
-          const previous = provisionalPreviousLatest.get(dispatchId);
+          const previous = finalizedPredecessor(dispatchId, receipt);
           if (previous) atomicReplaceJson(latest, seal(previous));
           else fs.unlinkSync(latest);
         }
         if (markerStored) fs.unlinkSync(marker);
         fs.unlinkSync(ownRecord);
-        provisionalPreviousLatest.delete(dispatchId);
         return { aborted: true };
       });
     },

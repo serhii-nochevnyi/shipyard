@@ -307,6 +307,12 @@ function createClaudeWorkflowDispatchBridge(options = {}) {
       throw error;
     }
     lease.assertFence({ token: handle.token, epoch: handle.epoch, base_revision: baseRevision });
+    if (JSON.stringify(Object.entries(completed.completion_snapshot.digests).sort())
+        !== JSON.stringify(Object.entries(lease.snapshotTree().digests).sort())) {
+      const error = new Error('phase bytes changed after typed completion');
+      error.code = 'FOREIGN_EDIT';
+      throw error;
+    }
     const allowed = new Set(declaredPaths.map((item) => item.replace(/\\/g, '/')));
     const { changed } = lease.changedSince(snapshot);
     const foreign = changed.filter((item) => !allowed.has(item));
@@ -329,7 +335,10 @@ function createClaudeWorkflowDispatchBridge(options = {}) {
     const result = typedGsdCallback(prompt, selection, gsdRole);
     const retain = (value) => {
       if (object(value) && typeof value.launch_id === 'string') {
-        completedTyped.set(value.launch_id, { ...value, gsd_role: gsdRole });
+        completedTyped.set(value.launch_id, { ...value, gsd_role: gsdRole,
+          completion_snapshot: writerSession ? Object.freeze({
+            digests: Object.freeze({ ...writerSession.lease.snapshotTree().digests }),
+          }) : null });
       }
       return value;
     };
