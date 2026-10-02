@@ -1,10 +1,8 @@
 {
-  "generated_at": "2026-10-01T12:14:27.176Z",
-  "observed_at": "2026-10-01T12:14:27.176Z",
-  "generation": 404,
+  "generated_at": "2026-10-02T07:31:39.749Z",
   "parked_by_run": [],
   "auto_merge": "epic",
-  "dispatches_applied_at": "2026-10-01T12:14:27.176Z",
+  "dispatches_applied_at": "2026-10-02T07:38:23.388Z",
   "actionable": {
     "execute": [],
     "publish": [],
@@ -14,17 +12,16 @@
   },
   "waiting": {
     "ci": [],
-    "dispatched": [],
+    "dispatched": [
+      "T-46-07"
+    ],
     "parent": [],
     "merge_human": [],
     "human": []
   },
   "parked": {
     "blocked": [
-      "T-46-01",
-      "T-46-04",
-      "T-46-05",
-      "T-46-06"
+      "T-46-08"
     ],
     "done": [
       "T-20-01",
@@ -273,14 +270,16 @@
       "T-45-15",
       "T-45-16",
       "T-45-17",
-      "T-45-18"
+      "T-45-18",
+      "T-46-01",
+      "T-46-04",
+      "T-46-05",
+      "T-46-06"
     ]
   },
   "why": {
-    "T-46-01": "escalated — Native epic refresh refused: 39 planning/state/journal conflicts merging origin/main after PR381. Epic remains dcf19566b304b2ecf69be536dd5741ab15ced7c1; effective base is not validated. Requires owner-reviewed conflict reconciliation preserving receipt history before hold clear, fresh drift and native executor.. It lifts by itself once the PR moves (a push, a review answer, undrafting); `escalation-record.cjs clear T-46-01` to take it back.",
-    "T-46-04": "T-46-01 (parent has no branch yet (nothing to cascade from))",
-    "T-46-05": "T-46-04 (parent has no branch yet (nothing to cascade from))",
-    "T-46-06": "T-46-05 (parent has no branch yet (nothing to cascade from))"
+    "T-46-07": "dispatched to executor 0m ago — an agent holds it, so it is nobody else's to start. It returns to the board by itself when the delivery state moves in the way this role's own output moves it (a branch or a PR appears) or after 90m; `dispatch-record.cjs clear T-46-07 dispatch-muqnioed-86d5a7c2-1bb4-4858-a5e2-98224505a400` returns it now.",
+    "T-46-08": "T-46-07 (parent has no branch yet (nothing to cascade from))"
   },
   "counts": {
     "execute": 0,
@@ -289,22 +288,22 @@
     "finalize": 0,
     "merge": 0,
     "ci": 0,
-    "dispatched": 0,
+    "dispatched": 1,
     "parent": 0,
     "merge_human": 0,
     "human": 0,
-    "blocked": 4,
-    "done": 247
+    "blocked": 1,
+    "done": 251
   },
   "parent_of": {},
   "actionable_count": 0,
   "tracker_blocked_count": 0,
   "left_behind_count": 0,
-  "fixpoint": true,
+  "fixpoint": false,
   "capacity": {
     "max": 4,
-    "in_flight": 0,
-    "free": 4
+    "in_flight": 1,
+    "free": 3
   },
   "sentinel": {
     "duty": [],

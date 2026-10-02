@@ -1,13 +1,13 @@
 {
   "schema_version": 1,
-  "generation": 404,
-  "generation_identity": "71121b96-c5b7-4c60-81fc-f534658e7f11",
-  "previous_generation_identity": "16777245:12940684083:1790856962693285400:a43ebf507a151f98d98778509666d3be5ae890e006e4e20f2b2ceb16cb5249d7",
-  "observed_at": "2026-10-01T12:14:27.176Z",
-  "generated_at": "2026-10-01T12:14:27.176Z",
+  "generation": 418,
+  "generation_identity": "8843a7bc-856a-4937-8645-67c045f053e3",
+  "previous_generation_identity": "16777245:12940926188:1790925121551027000:8553723d53227a0ab6cc23e8452592fcf737691572e3dec8a9a13706a017e5ad",
+  "observed_at": "2026-10-02T07:31:39.749Z",
+  "generated_at": "2026-10-02T07:31:39.749Z",
   "by": "state-sync",
-  "pid": 48680,
-  "observation_generation": 404,
+  "pid": 15854,
+  "observation_generation": 418,
   "observation_projection": {
     "tickets": {
       "T-20-01": {
@@ -2728,9 +2728,9 @@
         "checks": null
       },
       "T-46-01": {
-        "status": "pending",
+        "status": "merged",
         "repository": null,
-        "pr": null,
+        "pr": 405,
         "head": null,
         "draft": false,
         "base": "epic/46-refresh-native-runtime-model-ladder",
@@ -2739,9 +2739,9 @@
         "checks": null
       },
       "T-46-04": {
-        "status": "pending",
+        "status": "merged",
         "repository": null,
-        "pr": null,
+        "pr": 406,
         "head": null,
         "draft": false,
         "base": "epic/46-refresh-native-runtime-model-ladder",
@@ -2750,6 +2750,28 @@
         "checks": null
       },
       "T-46-05": {
+        "status": "merged",
+        "repository": null,
+        "pr": 408,
+        "head": null,
+        "draft": false,
+        "base": "epic/46-refresh-native-runtime-model-ladder",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-46-06": {
+        "status": "merged",
+        "repository": null,
+        "pr": 409,
+        "head": null,
+        "draft": false,
+        "base": "epic/46-refresh-native-runtime-model-ladder",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-46-07": {
         "status": "pending",
         "repository": null,
         "pr": null,
@@ -2760,7 +2782,7 @@
         "review_decision": null,
         "checks": null
       },
-      "T-46-06": {
+      "T-46-08": {
         "status": "pending",
         "repository": null,
         "pr": null,
@@ -2775,9 +2797,9 @@
   },
   "binding": {
     "schema_version": 1,
-    "state_digest": "951fef05c479eaa98f37883865d2ce96a335ec4bff47f09226c60d5882c60d85",
-    "front_digest": "539445082f3654a5e56844347c068c2232b27d7299bf63e9fe3a5bcee36bd9e5",
-    "observation_digest": "a7c6aa341fb3dcf6f6640f0993e3e1e878851351f23258d660b8ea78ff5dee20",
-    "observation_generation": 404
+    "state_digest": "b81e6fe7ec6a6e6d597f83068dce16f19caafe3a2f55303496f39bf8d09e72ea",
+    "front_digest": "b9565daa5e21a091d8f4da4f52dacddf6568c5ea3c7a206421a66e59c99fb9d3",
+    "observation_digest": "2ce5d69d6fb277ef4eafe43243e142ef425bef2351cd2858f6787b1ff6985294",
+    "observation_generation": 418
   }
 }
