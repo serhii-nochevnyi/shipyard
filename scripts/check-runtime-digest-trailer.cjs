@@ -22,7 +22,7 @@ function parseBase(argv) {
   return argv[i + 1];
 }
 
-// @invariant: only the message's trailing paragraph is scanned as a trailer block.
+// @invariant: scan only the trailing paragraph of each message or preserved squash section.
 function trailerBlock(message) {
   const lines = String(message || '').replace(/\s+$/, '').split('\n');
   let end = lines.length;
@@ -36,8 +36,7 @@ function refreshedPaths(message) {
   const paths = new Set();
   const text = String(message || '').replace(/\r\n/g, '\n');
   const blocks = [trailerBlock(text)];
-  // GitHub's default squash message preserves each original commit as a
-  // '* subject' section. Its trailers remain at that section's end.
+  // @invariant: GitHub squash sections preserve original commit trailers at each section's end.
   if (/^[^\n]+ \(#\d+\)\n/.test(text)) {
     const sections = text.split(/\n\n(?=\* [^\n]+(?:\n|$))/);
     if (sections.length > 1) {
