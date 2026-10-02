@@ -396,12 +396,13 @@ async function readNativeCodexSession(sessionId, options = {}) {
   const sessionsRoot = path.join(path.resolve(codexHome), 'sessions');
   const deadline = Date.now() + (options.waitMs === undefined ? NATIVE_SESSION_WAIT_MS : options.waitMs);
   let file = null;
-  while (Date.now() <= deadline) {
+  do {
     const candidates = nativeSessionCandidates(sessionsRoot, sessionId, options.now || new Date());
     if (candidates.length > 1) fail('RUNTIME_EVIDENCE_INVALID', 'Codex session identity matched multiple native transcripts');
     if (candidates.length === 1) { file = candidates[0]; break; }
+    if (Date.now() >= deadline) break;
     await new Promise((resolve) => setTimeout(resolve, Math.min(100, Math.max(1, deadline - Date.now()))));
-  }
+  } while (Date.now() <= deadline);
   if (!file) fail('RUNTIME_EVIDENCE_MISSING', 'Codex native transcript was not found for the launched session');
   let before;
   try { before = fs.statSync(file); }
@@ -440,7 +441,7 @@ async function readNativeCodexChild(parentId, role, model, effort, agent, spawnE
   const home = path.resolve(env.CODEX_HOME || process.env.CODEX_HOME || path.join(os.homedir(), '.codex'));
   const root = path.join(home, 'sessions');
   const deadline = Date.now() + (options.waitMs === undefined ? NATIVE_SESSION_WAIT_MS : options.waitMs);
-  while (Date.now() <= deadline) {
+  do {
     const matches = [];
     const now = options.now || new Date();
     for (const offset of [-1, 0, 1]) {
@@ -497,8 +498,9 @@ async function readNativeCodexChild(parentId, role, model, effort, agent, spawnE
       return options.task ? freeze({ ...evidence, task_relay: verifyTaskRelay(raw, options.task, spawnEvidence,
         options.allowMissingTaskFile === true) }) : evidence;
     }
+    if (Date.now() >= deadline) break;
     await new Promise((resolve) => setTimeout(resolve, 100));
-  }
+  } while (Date.now() <= deadline);
   fail('RUNTIME_EVIDENCE_MISSING', 'native typed GSD child transcript was not found');
 }
 
