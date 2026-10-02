@@ -308,7 +308,7 @@ NODE
 
 prepare_isolation() {
   local RUNTIME="$1" RUNTIME_HOME="$2" ENVELOPE="${3:-}" ISOLATION_JSON
-  if [[ -n "${SHIPYARD_ISOLATION_ROOT+x}" || -n "${SHIPYARD_DOGFOOD_ROOT:-}" || "${SHIPYARD_INSTALL_KIND:-}" == dogfood || "$RUNTIME_HOME" != "$HOME/.$RUNTIME" ]]; then
+  if [[ -n "${SHIPYARD_ISOLATION_ROOT+x}" || -n "${SHIPYARD_DOGFOOD_ROOT:-}" || "${SHIPYARD_INSTALL_KIND:-}" == dogfood || ( "$RUNTIME" == codex && "$RUNTIME_HOME" != "$HOME/.$RUNTIME" ) ]]; then
     if [[ "$RUNTIME" == codex && -z "$ENVELOPE" && -z "${SHIPYARD_ISOLATION_ROOT+x}" ]]; then ENVELOPE="$RUNTIME_HOME"; fi
     ISOLATION_JSON="$(isolation_env "$RUNTIME" "$ENVELOPE")" || return $?
     eval "$(printf '%s' "$ISOLATION_JSON" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{for(const [k,v] of Object.entries(JSON.parse(s).environment)) console.log("export "+k+"="+"\x27"+v.replaceAll("\x27", "\x27\\\x27\x27")+"\x27");});')"

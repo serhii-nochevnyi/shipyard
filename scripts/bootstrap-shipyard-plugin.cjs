@@ -104,7 +104,10 @@ function bootstrap({ packageRoot = path.resolve(__dirname, '../..'), projectDir 
     const capabilities = process.env.SHIPYARD_CODEX_CAPABILITIES_FILE || path.join(stateDir, 'capabilities.json');
     if (!process.env.SHIPYARD_CODEX_CAPABILITIES_FILE) {
       const { readCodexCliCapabilities } = require(path.join(host, 'scripts/gen-codex-shipyard.cjs'));
-      fs.writeFileSync(capabilities, JSON.stringify(readCodexCliCapabilities(), null, 2) + '\n');
+      const probedCapabilities = readCodexCliCapabilities();
+      env = isolatedEnvironment('codex', process.env, home);
+      Object.assign(process.env, env);
+      fs.writeFileSync(capabilities, JSON.stringify(probedCapabilities, null, 2) + '\n');
     }
     const childEnv = { ...process.env, CODEX_HOME: home, AGENTS_SKILLS_DIR: nativeSkills,
       SHIPYARD_CODEX_MARKETPLACE: '1',

@@ -616,7 +616,7 @@ test('marketplace through generated installed bootstrap and idempotent early ret
 test('isolated Claude config without an envelope refuses before dependency and dogfood copy', t => {
   const f = processFixture(t), before = fullSnapshot(f.dir);
   for (const args of [['scripts/ensure-gsd-core.sh', 'claude'], ['scripts/install-shipyard-claude-hook.sh', '--dogfood-root', path.join(f.candidate, 'plugin'), '--wire-hooks']]) {
-    const result = f.run('/bin/bash', args, { SHIPYARD_ISOLATION_ROOT: undefined });
+    const result = f.run('/bin/bash', args, { SHIPYARD_ISOLATION_ROOT: undefined, SHIPYARD_INSTALL_KIND: 'dogfood' });
     assert.notEqual(result.status, 0); assert.match(result.stderr, /absolute bounded candidate root/);
     assert.deepEqual(fullSnapshot(f.dir), before);
   }
@@ -1294,4 +1294,52 @@ test('guarded Make package and published local route support ordinary safe start
     assert.ok(fs.existsSync(path.join(f.env.CODEX_HOME, 'shipyard-plugin/installed.json')));
     assert.deepEqual(fullSnapshot(f.ambient), before);
   }
+});
+
+for (const hazard of ['alias', 'capabilities']) {
+  test(`bootstrap capability probe refuses child-created ${hazard} before capability write`, t => {
+    const f = processFixture(t), before = fullSnapshot(f.ambient);
+    const packageRoot = path.join(f.dir, 'package');
+    require('../../scripts/package-shipyard-codex.cjs').build(packageRoot);
+    const sentinel = path.join(f.ambient, '.gsd/defaults.json');
+    const target = hazard === 'capabilities'
+      ? path.join(f.env.CODEX_HOME, 'shipyard-plugin/capabilities.json')
+      : path.join(f.candidate, 'probe-escape');
+    fs.writeFileSync(path.join(f.bin, 'codex'), `#!${process.execPath}
+const fs=require('node:fs');const a=process.argv.slice(2);
+if(a.join(' ')==='debug models'){fs.symlinkSync(${JSON.stringify(hazard === 'capabilities' ? sentinel : f.ambient)},${JSON.stringify(target)});console.log(JSON.stringify({models:[]}));}
+else if(a[1]==='marketplace')console.log(JSON.stringify({marketplaces:[{name:'gsd-core'}]}));
+else console.log(JSON.stringify({installed:[{pluginId:'gsd-core@gsd-core',enabled:true,version:'1.14.0'}]}));
+`);
+    const result = f.run('/bin/bash', ['-c', 'bash "$PLUGIN_ROOT/host/scripts/ensure-gsd-core.sh" --launch-bootstrap'],
+      { PLUGIN_ROOT: packageRoot, SHIPYARD_CODEX_CAPABILITIES_FILE: undefined });
+    assert.notEqual(result.status, 0, result.stdout + result.stderr);
+    assert.match(result.stderr, /isolation refusal/);
+    assert.ok(fs.lstatSync(target).isSymbolicLink(), 'probe actually introduced the hazard');
+    assert.deepEqual(fullSnapshot(f.ambient), before);
+    assert.equal(fs.existsSync(path.join(f.env.CODEX_HOME, 'agents')), false);
+    if(hazard === 'alias') assert.equal(fs.existsSync(path.join(f.env.CODEX_HOME, 'shipyard-plugin/capabilities.json')), false);
+  });
+}
+
+test('ordinary custom Claude home installs and removes while explicit invalid envelopes refuse', t => {
+  const f = processFixture(t), before = fullSnapshot(f.ambient);
+  const custom = path.join(f.dir, 'ordinary-claude');
+  const env = { SHIPYARD_ISOLATION_ROOT: undefined, CLAUDE_HOME: custom,
+    CLAUDE_CONFIG_DIR: custom, CODEX_HOME: undefined, SHIPYARD_GSD_AUTO_INSTALL: '0' };
+  for (const envelope of ['', 'relative-root']) {
+    const snapshot = fullSnapshot(f.dir);
+    const refused = f.run('/bin/bash', ['scripts/install-shipyard-claude-hook.sh'], { ...env, SHIPYARD_ISOLATION_ROOT: envelope });
+    assert.notEqual(refused.status, 0);
+    assert.match(refused.stderr, /isolation refusal/);
+    assert.deepEqual(fullSnapshot(f.dir), snapshot);
+  }
+  const installed = f.run('/bin/bash', ['scripts/install-shipyard-claude-hook.sh'], env);
+  assert.equal(installed.status, 0, installed.stdout + installed.stderr);
+  assert.ok(JSON.parse(fs.readFileSync(path.join(custom, 'settings.json'))).hooks.UserPromptSubmit.length);
+  assert.deepEqual(fullSnapshot(f.ambient), before);
+  const removed = f.run('/bin/bash', ['scripts/install-shipyard-claude-hook.sh', '--remove'], env);
+  assert.equal(removed.status, 0, removed.stdout + removed.stderr);
+  assert.equal(fs.existsSync(path.join(custom, 'hooks/shipyard-auto-route.sh')), false);
+  assert.deepEqual(fullSnapshot(f.ambient), before);
 });
