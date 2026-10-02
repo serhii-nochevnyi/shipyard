@@ -1,13 +1,13 @@
 {
   "schema_version": 1,
-  "generation": 418,
-  "generation_identity": "8843a7bc-856a-4937-8645-67c045f053e3",
-  "previous_generation_identity": "16777245:12940926188:1790925121551027000:8553723d53227a0ab6cc23e8452592fcf737691572e3dec8a9a13706a017e5ad",
-  "observed_at": "2026-10-02T07:31:39.749Z",
-  "generated_at": "2026-10-02T07:31:39.749Z",
+  "generation": 419,
+  "generation_identity": "4e7fc9c1-8eac-4256-a5d6-f5e7d5f6d0eb",
+  "previous_generation_identity": "16777245:12940927755:1790926487223954000:9cefa80ae36ee9c50f5d923b8b55d4a9b2f85496f727a81847921d3970dd78b8",
+  "observed_at": "2026-10-02T08:34:39.574Z",
+  "generated_at": "2026-10-02T08:34:39.574Z",
   "by": "state-sync",
-  "pid": 15854,
-  "observation_generation": 418,
+  "pid": 31889,
+  "observation_generation": 419,
   "observation_projection": {
     "tickets": {
       "T-20-01": {
@@ -2772,15 +2772,27 @@
         "checks": null
       },
       "T-46-07": {
-        "status": "pending",
+        "status": "pr-open",
         "repository": null,
-        "pr": null,
-        "head": null,
-        "draft": false,
+        "pr": 412,
+        "head": "fe8b1440f985acb5442bf767cb8a947c60dfe249",
+        "draft": true,
         "base": "epic/46-refresh-native-runtime-model-ladder",
-        "merge_state": null,
+        "merge_state": "UNSTABLE",
         "review_decision": null,
-        "checks": null
+        "checks": {
+          "total": 1,
+          "pending": 0,
+          "failing": 1,
+          "none_reported": false,
+          "unavailable": false
+        },
+        "author": {
+          "login": "serhii-nochevnyi"
+        },
+        "approved_reviews": [],
+        "reviewer_bots": [],
+        "review_fresh": false
       },
       "T-46-08": {
         "status": "pending",
@@ -2788,7 +2800,7 @@
         "pr": null,
         "head": null,
         "draft": false,
-        "base": "epic/46-refresh-native-runtime-model-ladder",
+        "base": "ticket/T-46-07-preserve-history-runtime-trailer",
         "merge_state": null,
         "review_decision": null,
         "checks": null
@@ -2797,9 +2809,9 @@
   },
   "binding": {
     "schema_version": 1,
-    "state_digest": "b81e6fe7ec6a6e6d597f83068dce16f19caafe3a2f55303496f39bf8d09e72ea",
-    "front_digest": "b9565daa5e21a091d8f4da4f52dacddf6568c5ea3c7a206421a66e59c99fb9d3",
-    "observation_digest": "2ce5d69d6fb277ef4eafe43243e142ef425bef2351cd2858f6787b1ff6985294",
-    "observation_generation": 418
+    "state_digest": "fdd6559e288379d8c5f04a7b7c3316fec500e79132d2650e95387851c4f7b4d6",
+    "front_digest": "ca9a71a2612e84ec116cc31c3c5e2d5bb3f52fece768748ea11609eb1c337efe",
+    "observation_digest": "b92c9c6c64072a7d161cd447e8865062a3b3f56fd0e44e3a3c1bd2c57a115500",
+    "observation_generation": 419
   }
 }

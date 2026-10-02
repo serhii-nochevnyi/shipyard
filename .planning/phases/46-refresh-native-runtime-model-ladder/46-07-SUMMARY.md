@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 88867d2714544cb9b53c25e16aa567f6ac4f98321b14e86f90cd2ea6a9603b2f
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: b5522fa0bfa52dce81eb09d5bfae7648fa245633c5f9d423210dc87cf2be40bc
 phase: 46-refresh-native-runtime-model-ladder
 plan: 07
 subsystem: shipyard delivery
@@ -22,7 +22,7 @@ key-decisions:
 duration: 0min
 status: halted
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 88867d2714544cb9b53c25e16aa567f6ac4f98321b14e86f90cd2ea6a9603b2f
+shipyard_source_fingerprint: b5522fa0bfa52dce81eb09d5bfae7648fa245633c5f9d423210dc87cf2be40bc
 ---
 
 # Phase 46: Preserve versioned native identities in persisted run contracts — Delivery Projection
@@ -32,8 +32,8 @@ shipyard_source_fingerprint: 88867d2714544cb9b53c25e16aa567f6ac4f98321b14e86f90c
 ## Delivery Evidence
 
 - Ticket: T-46-07
-- Delivery status: pending
-- PR: not observed
+- Delivery status: pr-open
+- PR: #412
 - Source plan: .planning/phases/46-refresh-native-runtime-model-ladder/46-07-PLAN.md
 - This summary is halted until the delivery state observes `merged`.
 

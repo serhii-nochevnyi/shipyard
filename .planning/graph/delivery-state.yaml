@@ -3052,22 +3052,36 @@
   status: "merged"
   url: "https://github.com/serhii-nochevnyi/shipyard/pull/409"
 "T-46-07":
+  approved_reviews: []
+  author: {"login":"serhii-nochevnyi"}
   base: "epic/46-refresh-native-runtime-model-ladder"
   base_reason: "T-46-06 is MERGED, so its branch is no longer where work lands — the base is epic/46-refresh-native-runtime-model-ladder (base-merge it in first to keep the review diff one slice)"
-  branch: "ticket/T-46-07-preserve-versioned-native-identities-in"
+  behind_by: 0
+  branch: "ticket/T-46-07-preserve-history-runtime-trailer"
+  checks: {"failing":1,"none_reported":false,"pending":0,"total":1,"unavailable":false}
+  draft: true
   epic: "epic/46-refresh-native-runtime-model-ladder"
-  pr: null
-  ready: true
+  head_sha: "fe8b1440f985acb5442bf767cb8a947c60dfe249"
+  merge_scope: "stacked"
+  merge_state: "UNSTABLE"
+  pr: 412
+  pr_base: "epic/46-refresh-native-runtime-model-ladder"
+  pr_created_at: "2026-10-02T08:24:27Z"
   reapable: false
-  status: "pending"
+  recorded_pr: 412
+  review_decision: null
+  review_fresh: false
+  review_freshness_reason: null
+  reviewer_bots: []
+  status: "pr-open"
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/412"
 "T-46-08":
-  base: "epic/46-refresh-native-runtime-model-ladder"
-  base_reason: "T-46-07 has no branch on the remote yet (status pending) — ticket/T-46-07-preserve-versioned-native-identities-in is not a base that exists, so the base is epic/46-refresh-native-runtime-model-ladder"
-  blocked_by: ["T-46-07"]
-  blocked_reasons: {"T-46-07":"parent has no branch yet (nothing to cascade from)"}
+  base: "ticket/T-46-07-preserve-history-runtime-trailer"
+  base_merge: "epic/46-refresh-native-runtime-model-ladder"
+  base_reason: "T-46-07 is pr-open — cascade off ticket/T-46-07-preserve-history-runtime-trailer; the sentinel retargets this PR onto epic/46-refresh-native-runtime-model-ladder when T-46-07 lands; ticket-worktree.sh create merges epic/46-refresh-native-runtime-model-ladder in for non-primary parent(s) T-46-06"
   branch: "ticket/T-46-08-confine-candidate-dependency-installatio"
   epic: "epic/46-refresh-native-runtime-model-ladder"
   pr: null
-  ready: false
+  ready: true
   reapable: false
   status: "pending"

@@ -1,28 +1,30 @@
 {
-  "generated_at": "2026-10-02T07:31:39.749Z",
+  "generated_at": "2026-10-02T08:34:39.574Z",
+  "observed_at": "2026-10-02T08:34:39.574Z",
+  "generation": 419,
   "parked_by_run": [],
   "auto_merge": "epic",
-  "dispatches_applied_at": "2026-10-02T07:38:23.388Z",
+  "dispatches_applied_at": "2026-10-02T08:34:39.574Z",
   "actionable": {
-    "execute": [],
+    "execute": [
+      "T-46-08"
+    ],
     "publish": [],
-    "fix": [],
+    "fix": [
+      "T-46-07"
+    ],
     "finalize": [],
     "merge": []
   },
   "waiting": {
     "ci": [],
-    "dispatched": [
-      "T-46-07"
-    ],
+    "dispatched": [],
     "parent": [],
     "merge_human": [],
     "human": []
   },
   "parked": {
-    "blocked": [
-      "T-46-08"
-    ],
+    "blocked": [],
     "done": [
       "T-20-01",
       "T-20-02",
@@ -278,39 +280,41 @@
     ]
   },
   "why": {
-    "T-46-07": "dispatched to executor 0m ago — an agent holds it, so it is nobody else's to start. It returns to the board by itself when the delivery state moves in the way this role's own output moves it (a branch or a PR appears) or after 90m; `dispatch-record.cjs clear T-46-07 dispatch-muqnioed-86d5a7c2-1bb4-4858-a5e2-98224505a400` returns it now.",
-    "T-46-08": "T-46-07 (parent has no branch yet (nothing to cascade from))"
+    "T-46-07": "PR #412: 1 failing check(s)",
+    "T-46-08": "ready — worktree + executor"
   },
   "counts": {
-    "execute": 0,
+    "execute": 1,
     "publish": 0,
-    "fix": 0,
+    "fix": 1,
     "finalize": 0,
     "merge": 0,
     "ci": 0,
-    "dispatched": 1,
+    "dispatched": 0,
     "parent": 0,
     "merge_human": 0,
     "human": 0,
-    "blocked": 1,
+    "blocked": 0,
     "done": 251
   },
   "parent_of": {},
-  "actionable_count": 0,
+  "actionable_count": 2,
   "tracker_blocked_count": 0,
   "left_behind_count": 0,
   "fixpoint": false,
   "capacity": {
     "max": 4,
-    "in_flight": 1,
-    "free": 3
+    "in_flight": 0,
+    "free": 4
   },
   "sentinel": {
-    "duty": [],
+    "duty": [
+      "T-46-07"
+    ],
     "waiting_ci": [],
     "waiting_parent": [],
     "dispatched": [],
-    "clear": true
+    "clear": false
   },
   "roles": {
     "execute": [

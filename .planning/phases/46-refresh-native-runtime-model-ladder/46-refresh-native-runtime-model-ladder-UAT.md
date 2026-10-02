@@ -1,10 +1,10 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 03e080a8d4bd47935f13f1086b647679bd070187d7a8d0681654dbd79e05b812
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 8df5cb6ad3859d1a9783a562e8f2fc51af303b399712e630ebc4f18acbb8ae8e
 phase: 46
 status: failed
 result: failed
 shipyard_sync: evidence-projection
-shipyard_source_fingerprint: 03e080a8d4bd47935f13f1086b647679bd070187d7a8d0681654dbd79e05b812
+shipyard_source_fingerprint: 8df5cb6ad3859d1a9783a562e8f2fc51af303b399712e630ebc4f18acbb8ae8e
 ---
 
 # Phase 46: Refresh the native runtime model ladder — UAT Projection

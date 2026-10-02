@@ -4953,30 +4953,48 @@
     "since": "2026-10-02T07:08:47.969Z"
   },
   "T-46-07": {
-    "branch": "ticket/T-46-07-preserve-versioned-native-identities-in",
-    "pr": null,
-    "status": "pending",
+    "branch": "ticket/T-46-07-preserve-history-runtime-trailer",
+    "pr": 412,
+    "status": "pr-open",
+    "recorded_pr": 412,
+    "draft": true,
+    "review_decision": null,
+    "url": "https://github.com/serhii-nochevnyi/shipyard/pull/412",
+    "pr_base": "epic/46-refresh-native-runtime-model-ladder",
+    "pr_created_at": "2026-10-02T08:24:27Z",
+    "head_sha": "fe8b1440f985acb5442bf767cb8a947c60dfe249",
+    "author": {
+      "login": "serhii-nochevnyi"
+    },
+    "approved_reviews": [],
+    "reviewer_bots": [],
+    "review_fresh": false,
+    "review_freshness_reason": null,
+    "merge_state": "UNSTABLE",
+    "behind_by": 0,
+    "checks": {
+      "total": 1,
+      "failing": 1,
+      "pending": 0,
+      "none_reported": false,
+      "unavailable": false
+    },
     "base": "epic/46-refresh-native-runtime-model-ladder",
     "base_reason": "T-46-06 is MERGED, so its branch is no longer where work lands — the base is epic/46-refresh-native-runtime-model-ladder (base-merge it in first to keep the review diff one slice)",
     "epic": "epic/46-refresh-native-runtime-model-ladder",
-    "ready": true,
+    "merge_scope": "stacked",
     "reapable": false,
-    "since": "2026-10-02T07:31:39.749Z"
+    "since": "2026-10-02T08:34:39.574Z"
   },
   "T-46-08": {
     "branch": "ticket/T-46-08-confine-candidate-dependency-installatio",
     "pr": null,
     "status": "pending",
-    "base": "epic/46-refresh-native-runtime-model-ladder",
-    "base_reason": "T-46-07 has no branch on the remote yet (status pending) — ticket/T-46-07-preserve-versioned-native-identities-in is not a base that exists, so the base is epic/46-refresh-native-runtime-model-ladder",
+    "base": "ticket/T-46-07-preserve-history-runtime-trailer",
+    "base_reason": "T-46-07 is pr-open — cascade off ticket/T-46-07-preserve-history-runtime-trailer; the sentinel retargets this PR onto epic/46-refresh-native-runtime-model-ladder when T-46-07 lands; ticket-worktree.sh create merges epic/46-refresh-native-runtime-model-ladder in for non-primary parent(s) T-46-06",
     "epic": "epic/46-refresh-native-runtime-model-ladder",
-    "ready": false,
-    "blocked_by": [
-      "T-46-07"
-    ],
-    "blocked_reasons": {
-      "T-46-07": "parent has no branch yet (nothing to cascade from)"
-    },
+    "base_merge": "epic/46-refresh-native-runtime-model-ladder",
+    "ready": true,
     "reapable": false,
     "since": "2026-10-02T07:31:39.749Z"
   }
