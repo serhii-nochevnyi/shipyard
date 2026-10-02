@@ -358,12 +358,13 @@ function normalizeReceiptIdentity(input) {
   const receipt_id = safeId(input.receipt_id || input.receiptId, 'receipt_id');
   const run_id = safeId(input.run_id || input.runId, 'receipt.run_id');
   const dispatch_id = safeId(input.dispatch_id || input.dispatchId, 'receipt.dispatch_id');
-  const identity = policyIdentity(input, input.schema !== undefined);
+  const recorded = input.schema !== undefined;
+  const identity = policyIdentity(input, recorded);
   const models = {};
   for (const field of ['requested_model', 'applied_model', 'observed_model']) {
     const value = input[field];
     if (value === undefined || value === null || value === 'unknown' || value === 'unsupported') models[field] = value === undefined ? null : value;
-    else models[field] = normalizeModel(runtime, value, `receipt.${field}`, identity.policy_version, false, field !== 'requested_model').model;
+    else models[field] = normalizeModel(runtime, value, `receipt.${field}`, identity.policy_version, false, recorded || field !== 'requested_model').model;
   }
   const efforts = {};
   for (const field of ['requested_effort', 'applied_effort', 'observed_effort']) {
