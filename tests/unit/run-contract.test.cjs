@@ -249,6 +249,29 @@ test('serialized concrete-only dispatch cannot silently turn a symbolic alias in
   }
   assert.equal(currentPolicy.POLICY_HASH, '3978b08721ef8f2381aa1f31355c9fef1dafd4058a2093b4a5f06ee90cd44570');
 });
+test('serialized requested models require recorded native values while fresh Sonnet aliases remain supported', () => {
+  const serialized = {
+    schema: 'shipyard.receipt.v1', version: 1,
+    receipt_id: 'serialized-sonnet', run_id: 'r', dispatch_id: 'd',
+    runtime: 'claude', provider: 'anthropic',
+    policy_version: currentPolicy.POLICY_VERSION, policy_hash: currentPolicy.POLICY_HASH,
+    requested_model: 'sonnet', applied_model: 'claude-sonnet-5-5', observed_model: 'claude-sonnet-5-5',
+    status: 'verified', usage_status: 'joined',
+  };
+  assert.throws(() => contract.normalizeReceiptIdentity(serialized), { code: 'RUNTIME_MODEL_MISMATCH' });
+  const fresh = { ...serialized }; delete fresh.schema;
+  assert.equal(scope.createReceiptIdentity(fresh).requested_model, 'claude-sonnet-5-5');
+  const historical = {
+    ...serialized, policy_version: 'adr-014.v6', policy_hash: historicalHash,
+    applied_model: 'sonnet', observed_model: 'sonnet',
+  };
+  const preserved = contract.normalizeReceiptIdentity(historical);
+  for (const field of ['requested_model', 'applied_model', 'observed_model', 'policy_version', 'policy_hash', 'status', 'usage_status']) {
+    assert.equal(preserved[field], historical[field]);
+  }
+  assert.deepEqual(contract.normalizeReceiptIdentity(preserved), preserved);
+});
+
 test('fresh receipt constructors default current identity and serialized receipts require it', () => {
   for (const runtime of ['codex', 'claude']) {
     const fresh = { receipt_id: 'fresh', run_id: 'r', dispatch_id: 'd', runtime, requested_model: runtime === 'codex' ? 'sol' : 'sonnet' };
