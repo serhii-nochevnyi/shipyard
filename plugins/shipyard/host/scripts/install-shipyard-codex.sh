@@ -51,6 +51,11 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+source "$REPO_ROOT/scripts/ensure-gsd-core.sh" --library
+if [[ -n "${SHIPYARD_ISOLATION_ROOT+x}" || -n "$DOGFOOD_ROOT" || "${SHIPYARD_INSTALL_KIND:-}" == dogfood || "$CODEX_HOME" != "$HOME/.codex" ]]; then
+  validate_isolated_node_options
+fi
+
 # ── preconditions ────────────────────────────────────────────────────────────
 command -v node >/dev/null 2>&1 || { echo "error: node not found on PATH" >&2; exit 1; }
 PROVENANCE="$PLUGIN_DIR/scripts/host-provenance.cjs"
@@ -326,6 +331,7 @@ prepare_isolation codex "$CODEX_HOME" "${SHIPYARD_ISOLATION_ROOT-$CODEX_HOME}"
 # before any destination replacement (including agents/config/capabilities).
 node "$PLUGIN_DIR/scripts/gsd-tune.cjs" --validate-codex-bundle "$OUT" \
   --codex-home "$CODEX_HOME" --phase "$PHASE" --capabilities "$CAPABILITIES_FILE"
+prepare_isolation codex "$CODEX_HOME" "${SHIPYARD_ISOLATION_ROOT-$CODEX_HOME}"
 
 # ── skills + bundle install LAST ───────────────────────────────────────────────
 # Keep both staged until agent/config/capability/AGENTS.md have succeeded, so a

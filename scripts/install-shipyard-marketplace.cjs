@@ -216,10 +216,11 @@ function installClaudeMarketplace(source, execute = run, read = capture, inspect
 function setupCodexHost(source, execute = run, read = capture, inspect = inspectCheckout,
   pluginHome, baseEnv = process.env, selection) {
   const target = selection || selectCodexTarget(source, baseEnv, inspect);
-  const env = target.env;
+  let env = target.env;
   const home = path.resolve(pluginHome || target.home);
   let listed;
   try { listed = read('codex', ['plugin', 'list', '--json'], env); } catch { throw new Error('Cannot verify installed Shipyard plugin'); }
+  env = isolatedEnvironment('codex', env, target.home);
   const plugin = listed.installed.find(p => p.pluginId === 'shipyard@shipyard' && p.enabled);
   if (!plugin) throw new Error('Shipyard plugin is not installed and enabled');
   const cache = path.join(home, 'plugins/cache/shipyard/shipyard');

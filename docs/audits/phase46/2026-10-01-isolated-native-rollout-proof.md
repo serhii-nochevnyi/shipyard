@@ -630,3 +630,22 @@ Latest retained controlled installation used source `6a33b2ae1a8cf8884c4336e0117
   "current_hook_change_actual_install": "pending coordinator verification; historical 6a33 installation does not test this change"
 }
 ```
+
+### Isolated child execution environment
+
+Isolated installation supports empty `NODE_OPTIONS`, `--no-warnings` and
+`--trace-warnings` only. Other options refuse explicitly before the shared
+preflight launches Node; they are never silently removed. In particular,
+`--require`, `--import` and loader options can run code during otherwise
+read-only validators, CLI lists, metadata readers and guard/parsing children.
+Their exit handlers can invalidate checked paths before parent writes or cache
+consumption. Ordinary active installation retains its inherited environment.
+Use a separate invocation with a supported environment to install a candidate.
+
+The installer also revalidates after bundle validation and after the marketplace
+plugin list, before consuming the installed cache bootstrap. This does not
+sandbox arbitrary malicious parent code or dependencies, or provide total race
+safety against concurrent filesystem replacement. Existing verified isolated
+CLI-version helpers, npm links and temporary templates retain their supported
+checks; preload refusal does not relax alias validation. Native authentication,
+application and operator rollout remain HOLD.

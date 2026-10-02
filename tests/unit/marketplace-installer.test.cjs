@@ -405,7 +405,7 @@ test('OS-home dependency negative control detects outside writes; every entry re
       const snapshot = fullSnapshot(dir);
       const result = spawnSync(command, args, { cwd: repository, env, encoding: 'utf8' });
       assert.notEqual(result.status, 0, `${args.join(' ')} must refuse`);
-      assert.match(result.stderr, /isolation.*(home|HOME)/i, `${args.join(' ')}: ${result.stderr}`);
+      assert.match(result.stderr, /isolation.*(home|HOME|NODE_OPTIONS)/i, `${args.join(' ')}: ${result.stderr}`);
       assert.deepEqual(fullSnapshot(dir), snapshot, `${args.join(' ')} has zero filesystem side effects`);
     }
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
@@ -908,16 +908,18 @@ for (const transition of ['marketplace-add', 'bootstrap-installer', 'npm-query',
   });
 }
 
-for (const transition of ['generator', 'capability', 'codex-tuner', 'claude-stop', 'claude-tuner', 'config-merge', 'notify']) {
+for (const transition of ['validator', 'generator', 'capability', 'codex-tuner', 'claude-stop', 'claude-tuner', 'config-merge', 'notify']) {
   test('installer continuation and cleanup refuse mutated candidate: ' + transition, t => {
     const f = processFixture(t), before = fullSnapshot(f.ambient);
     const preload = path.join(f.dir, 'mutating-child.cjs');
-    fs.writeFileSync(preload, `const path=require('node:path');const script=path.basename(process.argv[1]||'');const match=${JSON.stringify(transition)};if((match==='config-merge'&&script==='merge-codex-config.cjs')||(match==='notify'&&script==='configure-codex-notify.cjs')||(match==='generator'&&script==='gen-codex-shipyard.cjs')||(match==='capability'&&script==='gsd-tools.cjs')||(match.endsWith('-tuner')&&script==='gsd-tune.cjs'&&process.argv.includes('--apply'))||(match==='claude-stop'&&script==='stop-gate.cjs'))process.on('exit',()=>{const fs=require('node:fs');fs.symlinkSync(${JSON.stringify(f.ambient)},path.join(process.env.SHIPYARD_ISOLATION_ROOT,'child-escape'));});`);
+    fs.writeFileSync(preload, `const path=require('node:path');const script=path.basename(process.argv[1]||'');const match=${JSON.stringify(transition)};if((match==='validator'&&script==='gsd-tune.cjs'&&process.argv.includes('--validate-codex-bundle'))||(match==='config-merge'&&script==='merge-codex-config.cjs')||(match==='notify'&&script==='configure-codex-notify.cjs')||(match==='generator'&&script==='gen-codex-shipyard.cjs')||(match==='capability'&&script==='gsd-tools.cjs')||(match.endsWith('-tuner')&&script==='gsd-tune.cjs'&&process.argv.includes('--apply'))||(match==='claude-stop'&&script==='stop-gate.cjs'))process.on('exit',()=>{const fs=require('node:fs');fs.symlinkSync(${JSON.stringify(f.ambient)},path.join(process.env.SHIPYARD_ISOLATION_ROOT,'child-escape'));});`);
     const claude = transition.startsWith('claude');
+    const completeBefore = fullSnapshot(f.dir);
     const result = f.run('/bin/bash', [claude ? 'scripts/install-shipyard-claude-hook.sh' : 'scripts/install-shipyard-codex.sh'], { NODE_OPTIONS: '--require=' + preload });
     assert.notEqual(result.status, 0, result.stdout + result.stderr);
     assert.match(result.stderr, /isolation refusal/);
-    assert.ok(fs.existsSync(path.join(f.candidate, 'child-escape')), 'mutating child executed');
+    assert.match(result.stderr, /unsupported NODE_OPTIONS/);
+    assert.deepEqual(fullSnapshot(f.dir), completeBefore, 'preload refuses before any child or installer mutation');
     assert.deepEqual(fullSnapshot(f.ambient), before);
     if (!claude) assert.equal(fs.existsSync(path.join(f.env.CODEX_HOME, 'agents/.shipyard-provenance.json')), false);
     if (transition === 'generator') assert.equal(fs.existsSync(path.join(f.env.CODEX_HOME, 'agents')), false);
@@ -1058,4 +1060,33 @@ const dir=fs.mkdtempSync(template.slice(0,-6));console.log(dir);
     assert.ok(calls.some(row => row.args.some(arg => arg.startsWith(row.tmp + path.sep))));
     assert.deepEqual(fullSnapshot(f.ambient), before);
   }
+});
+
+test('Codex plugin list mutation refuses before cache inspection or bootstrap consumption', t => {
+  const f = processFixture(t), before = fullSnapshot(f.ambient);
+  const installer = require('../../scripts/install-shipyard-marketplace.cjs');
+  let executed = false;
+  const read = () => {
+    const cache = path.join(f.env.CODEX_HOME, 'plugins/cache');
+    fs.mkdirSync(path.dirname(cache), { recursive: true });
+    fs.symlinkSync(f.ambient, cache);
+    return { installed: [{ pluginId: 'shipyard@shipyard', enabled: true, version: 'local' }] };
+  };
+  assert.throws(() => installer.setupCodexHost('fixture', () => { executed = true; }, read,
+    undefined, undefined, f.env, { home: f.env.CODEX_HOME, env: f.env }), /isolation refusal/);
+  assert.equal(executed, false);
+  assert.deepEqual(fullSnapshot(f.ambient), before);
+});
+
+test('isolated preflight preserves supported diagnostics and explicitly refuses import options', t => {
+  const f = processFixture(t);
+  const before = fullSnapshot(f.dir);
+  const args = ['scripts/ensure-gsd-core.sh', '--isolation-env', 'codex', f.candidate];
+  const safe = f.run('/bin/bash', args, { NODE_OPTIONS: '--no-warnings --trace-warnings' });
+  assert.equal(safe.status, 0, safe.stderr);
+  assert.equal({ NODE_OPTIONS: '--no-warnings --trace-warnings', ...JSON.parse(safe.stdout).environment }.NODE_OPTIONS, '--no-warnings --trace-warnings');
+  const refused = f.run('/bin/bash', args, { NODE_OPTIONS: '--import=data:text/javascript,process.exit(0)' });
+  assert.equal(refused.status, 3, refused.stderr);
+  assert.match(refused.stderr, /unsupported NODE_OPTIONS/);
+  assert.deepEqual(fullSnapshot(f.dir), before);
 });

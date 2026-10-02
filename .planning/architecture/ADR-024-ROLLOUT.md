@@ -350,3 +350,22 @@ was read. The later corrected plugin-cache installation succeeded at source `6a3
 ## Latest retained successful installation and current review boundary
 
 Latest retained controlled installation used source `6a33b2ae1a8cf8884c4336e01170a1c6ed2ea158`: Codex installation, Claude dependency and Claude plugin preparation all exited 0, with shared defaults unchanged in all three records. Evidence: `/Volumes/KINGSTON/.wt-claude-shipyard/phase46-postfix-plugin-links-fresh-20261002/attempts.json` (1790 bytes, SHA-256 `ddb3b2aafa05cab7e6be472d81d3e79333f2f41514cbb0fe3278c0533873cb92`). The redacted durable index `/tmp/phase46-full-auth-success-install-durable.json` reports archive SHA-256 `cd3f525c362bda711e5a948b5d0dd4c2dfa568e5af0d5094201359675eb35de2`; the archive itself was not opened. Authentication and profile readiness are already true per retained operator evidence; they do not establish complete native-pair receipts. Installed Codex source `dad21495143a5b4e06fe1ecd5aa2e4eee56be9e3` is a separate later identity verified read-only from `/Volumes/KINGSTON/.wt-claude-shipyard/phase46-isolated-recheck-20261002/codex-candidate/agents/.shipyard-provenance.json` (`source_sha` matches and `dirty: false`), not the source of the historical three-stage result. The hook change in this review round has not undergone a fresh actual installation; that check is coordinator-owned. All eight complete native pairs, rollback rehearsal, live release round, release, operator checkpoint and activation remain HOLD.
+
+### Isolated child execution environment
+
+Isolated installation supports empty `NODE_OPTIONS`, `--no-warnings` and
+`--trace-warnings` only. Other options refuse explicitly before the shared
+preflight launches Node; they are never silently removed. In particular,
+`--require`, `--import` and loader options can run code during otherwise
+read-only validators, CLI lists, metadata readers and guard/parsing children.
+Their exit handlers can invalidate checked paths before parent writes or cache
+consumption. Ordinary active installation retains its inherited environment.
+Use a separate invocation with a supported environment to install a candidate.
+
+The installer also revalidates after bundle validation and after the marketplace
+plugin list, before consuming the installed cache bootstrap. This does not
+sandbox arbitrary malicious parent code or dependencies, or provide total race
+safety against concurrent filesystem replacement. Existing verified isolated
+CLI-version helpers, npm links and temporary templates retain their supported
+checks; preload refusal does not relax alias validation. Native authentication,
+application and operator rollout remain HOLD.

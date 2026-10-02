@@ -25,7 +25,18 @@ set -euo pipefail
 # This is a NETWORK operation that writes to the user's runtime home, so it says
 # what it is doing and what changed.
 
+validate_isolated_node_options() {
+  local option
+  for option in ${NODE_OPTIONS:-}; do
+    case "$option" in
+      --no-warnings|--trace-warnings) ;;
+      *) echo "isolation refusal: unsupported NODE_OPTIONS (child HOME preloads and execution options are not supported)" >&2; return 3 ;;
+    esac
+  done
+}
+
 isolation_env() {
+  validate_isolated_node_options || return $?
   node - "$1" "$2" <<'NODE'
 const fs = require('node:fs'), path = require('node:path'), os = require('node:os');
 const { spawnSync } = require('node:child_process');

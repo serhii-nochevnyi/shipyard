@@ -44,6 +44,9 @@ command -v node >/dev/null 2>&1 || { echo "error: node not found on PATH" >&2; e
 PROVENANCE="$ROOT/plugins/delivery-pipeline/scripts/host-provenance.cjs"
 
 source "$ROOT/scripts/ensure-gsd-core.sh" --library
+if [[ -n "${SHIPYARD_ISOLATION_ROOT+x}" || -n "$DOGFOOD_ROOT" || "${SHIPYARD_INSTALL_KIND:-}" == dogfood || "$CLAUDE_HOME" != "$HOME/.claude" ]]; then
+  validate_isolated_node_options
+fi
 [[ -z "$DOGFOOD_ROOT" ]] || export SHIPYARD_DOGFOOD_ROOT="$DOGFOOD_ROOT"
 export CLAUDE_HOME
 if [[ -z "$DOGFOOD_ROOT" || "$WIRE_HOOKS" == 1 || -n "${SHIPYARD_ISOLATION_ROOT+x}" ]]; then
