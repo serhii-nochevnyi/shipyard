@@ -693,6 +693,32 @@ test('empty explicit envelopes and relative selected runtime paths refuse before
 });
 
 
+test('copy-only Claude dogfood protects divergent active roots and physical aliases', t => {
+  for (const kind of ['config', 'config-alias', 'default-claude', 'codex']) {
+    const f = processFixture(t);
+    const hookHome = path.join(f.dir, 'hook-home'), config = path.join(f.dir, 'active-config');
+    const codex = path.join(f.dir, 'active-codex');
+    for (const root of [hookHome, config, codex]) fs.mkdirSync(root);
+    fs.writeFileSync(path.join(config, 'settings.json'), 'active config bytes\n', { mode: 0o640 });
+    const alias = path.join(f.dir, 'config-alias');
+    fs.symlinkSync(config, alias);
+    const active = kind === 'default-claude' ? path.join(f.ambient, '.claude') : kind === 'codex' ? codex : config;
+    const target = path.join(active, 'candidate');
+    fs.mkdirSync(target);
+    fs.writeFileSync(path.join(target, '.shipyard-provenance.json'), '{}\n');
+    fs.writeFileSync(path.join(target, 'sentinel'), 'existing active contents\n');
+    const env = { ...f.env, SHIPYARD_ISOLATION_ROOT: undefined, CLAUDE_HOME: hookHome,
+      CLAUDE_CONFIG_DIR: config, CODEX_HOME: codex };
+    const before = fullSnapshot(f.dir);
+    const destination = kind === 'config-alias' ? path.join(alias, 'candidate') : target;
+    const result = spawnSync('/bin/bash', ['scripts/install-shipyard-claude-hook.sh', '--dogfood-root', destination],
+      { cwd: repository, env, encoding: 'utf8' });
+    assert.notEqual(result.status, 0, kind + ': ' + result.stdout + result.stderr);
+    assert.match(result.stderr, /overlaps protected state/);
+    assert.deepEqual(fullSnapshot(f.dir), before, kind + ' preserves all fixture bytes and metadata');
+  }
+});
+
 test('root-only canonical and published bootstrap use guarded runtime home before state access', t => {
   for (const entry of ['canonical', 'published']) {
     const f = processFixture(t);

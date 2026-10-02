@@ -87,7 +87,8 @@ function contains(parent, child) {
 }
 const protectedPaths = [process.env.SOURCE, process.env.HOME,
   path.join(process.env.HOME, '.gsd'), path.join(process.env.HOME, '.codex'),
-  path.join(process.env.HOME, '.agents'), process.env.CLAUDE_HOME];
+  path.join(process.env.HOME, '.agents'), path.join(process.env.HOME, '.claude'),
+  process.env.CLAUDE_HOME, process.env.CLAUDE_CONFIG_DIR, process.env.CODEX_HOME].filter(Boolean);
 for (const item of protectedPaths) {
   const protectedPath = real(item);
   if (contains(target, protectedPath) || (item !== process.env.HOME && contains(protectedPath, target))) {
