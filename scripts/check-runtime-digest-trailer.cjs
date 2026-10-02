@@ -22,7 +22,7 @@ function parseBase(argv) {
   return argv[i + 1];
 }
 
-// @invariant: only the message's trailing paragraph is scanned as a trailer block.
+// @invariant: scan only the trailing paragraph of each message or preserved squash section.
 function trailerBlock(message) {
   const lines = String(message || '').replace(/\s+$/, '').split('\n');
   let end = lines.length;
@@ -34,7 +34,16 @@ function trailerBlock(message) {
 
 function refreshedPaths(message) {
   const paths = new Set();
-  for (const line of trailerBlock(message)) {
+  const text = String(message || '').replace(/\r\n/g, '\n');
+  const blocks = [trailerBlock(text)];
+  // @invariant: each preserved squash section must end with its own trailer paragraph.
+  if (/^[^\n]+ \(#\d+\)\n/.test(text)) {
+    const sections = text.split(/\n\n(?=\* [^\n]+(?:\n|$))/);
+    if (sections.length > 1) {
+      for (const section of sections.slice(1)) blocks.push(trailerBlock(section));
+    }
+  }
+  for (const line of blocks.flat()) {
     const m = TRAILER_KEY.exec(line);
     if (m) paths.add(m[1]);
   }
