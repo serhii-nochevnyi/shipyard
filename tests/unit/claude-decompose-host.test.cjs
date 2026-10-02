@@ -1027,3 +1027,13 @@ test('Claude recovery aborts a provisional role record when ownership changes be
     }
   }
 });
+
+test('decomposition seals plans whose phase prefix has leading zeros', async () => {
+  const f = preparedPhaseFixture();
+  try {
+    fs.renameSync(path.join(f.phaseDir, '38-01-PLAN.md'), path.join(f.phaseDir, '038-01-PLAN.md'));
+    const { deps } = successDependencies(f, { store: path.join(f.root, 'zero-padded-store') });
+    const output = await nativeRunDecomposition(request(f.worktree, 'gsd-planner'), deps);
+    assert.ok(output.envelope);
+  } finally { f.clean(); }
+});

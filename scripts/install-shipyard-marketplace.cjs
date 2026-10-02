@@ -13,7 +13,8 @@ function isolatedEnvironment(runtime, env, home) {
     if (env[key] !== undefined && (!env[key] || !path.isAbsolute(env[key]))) throw new Error(`isolation refusal: absolute ${key} required`);
   const defaultHome = path.join(env.HOME || os.homedir(), `.${runtime}`);
   if (!Object.hasOwn(env, 'SHIPYARD_ISOLATION_ROOT') && !env.SHIPYARD_DOGFOOD_ROOT
-    && env.SHIPYARD_INSTALL_KIND !== 'dogfood' && path.resolve(home) === path.resolve(defaultHome)) return env;
+    && env.SHIPYARD_INSTALL_KIND !== 'dogfood'
+    && (runtime === 'claude' || path.resolve(home) === path.resolve(defaultHome))) return env;
   const envelope = env.SHIPYARD_ISOLATION_ROOT ?? (runtime === 'codex' ? home : '');
   const result = spawnSync('bash', [path.join(__dirname, 'ensure-gsd-core.sh'), '--isolation-env', runtime, envelope],
     { env, encoding: 'utf8', timeout: 15000 });

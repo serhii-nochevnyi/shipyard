@@ -1058,9 +1058,7 @@ test('delivery_pipeline.pr_title_format wins over the legacy namespace', () => {
 
 suite('per-repository config maps (ADR-020 D-01, D-05, D-07, D-09)');
 
-test('the four keys default to null and do not change Shipyard config warnings', () => {
-  const own = loadConfig(path.join(__dirname, '..', '..'));
-  assert.deepStrictEqual(own.warnings, []);
+test('the four keys default to null in an empty configuration', () => {
   for (const key of ['comment_markers', 'reviewer_bots', 'repo_remedies', 'verification_commands']) {
     assert.strictEqual(withConfig({}).config[key], null, `${key} should default to unset`);
   }

@@ -158,7 +158,7 @@ function decompositionPlans(directory) {
   const contextPath = path.join(directory, 'CONTEXT.md');
   if (!fs.existsSync(contextPath)) refuse('MISSING_ARTIFACT', `phase CONTEXT.md is missing: ${contextPath}`);
   const phase = Number(path.basename(directory).split('-')[0]);
-  const planNames = fs.readdirSync(directory).filter((name) => new RegExp(`^${phase}-[0-9]+-PLAN\\.md$`).test(name)).sort();
+  const planNames = fs.readdirSync(directory).filter((name) => new RegExp(`^0*${phase}-[0-9]+-PLAN\\.md$`).test(name)).sort();
   if (!planNames.length) refuse('MISSING_ARTIFACT', `no materialized PLAN.md files were found in ${directory}`);
   return [contextPath, ...planNames.map((name) => path.join(directory, name))];
 }

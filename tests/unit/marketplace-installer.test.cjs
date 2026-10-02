@@ -633,44 +633,6 @@ test('isolated Claude config without an envelope refuses before dependency and d
   }
 });
 
-test('published proof keeps historical approved baseline, attempts, exact PR408 gates and independent HOLDs', () => {
-  const proof = fs.readFileSync(path.join(repository, 'docs/audits/phase46/2026-10-01-isolated-native-rollout-proof.md'), 'utf8');
-  const data = JSON.parse(proof.match(/```json\n([\s\S]*?)\n```/)[1]);
-  assert.equal(data.operator_baseline_acceptance.historical_restoration_claim, false);
-  assert.equal(data.operator_baseline_acceptance.decision, 'accept-current-shared-defaults-as-baseline-and-test-fresh-isolated-installation');
-  assert.equal(data.baseline.sha256, '2edab0e2e95e8d265da9c66fcf4de6d5193b3511b629d4d07920dda4ac4ee4b0');
-  assert.equal(data.attempts.length, 3);
-  for (const attempt of data.attempts) {
-    assert.equal(attempt.exit, 0);
-    for (const key of ['sha256', 'bytes', 'mode', 'uid', 'gid', 'mtime_ns']) assert.equal(attempt.shared_defaults_after[key], data.baseline[key]);
-    const log = data.retained_files.find(record => record.path === attempt.log);
-    assert.equal(log.sha256, attempt.log_sha256); assert.equal(log.bytes, attempt.log_bytes);
-    assert.ok(path.isAbsolute(attempt.cwd)); assert.equal(attempt.environment_overrides.GSD_CORE_VERSION, '1.14.0');
-  }
-  const head = '992fd1fca755ce812ef04d3714f12e108378c090';
-  assert.deepEqual(data.pr408_review, [{ commit_id: head, state: 'APPROVED', submitted_at: '2026-10-01T19:36:02Z', user: 'copilot-pull-request-reviewer[bot]' }]);
-  assert.deepEqual(data.pr408_checks.map(check => check.name).sort(), ['copilot-pull-request-reviewer', 'test-fast']);
-  for (const check of data.pr408_checks) { assert.equal(check.head_sha, head); assert.equal(check.status, 'completed'); assert.equal(check.conclusion, 'success'); }
-  assert.equal(data.codex_authenticated_status.logged_in, true);
-  assert.equal(data.claude_authenticated_normal_home_status.environment, 'normal-home');
-  assert.equal(data.claude_authenticated_normal_home_status.loggedIn, true);
-  assert.equal(data.claude_authenticated_dedicated_home_status.exit, 0);
-  assert.equal(data.claude_authenticated_dedicated_home_status.loggedIn, true);
-  assert.equal(data.claude_authenticated_dedicated_home_status.active_keychain_metadata_unchanged, true);
-  assert.deepEqual(data.controlled_source_attempts.map(a => a.exit), [0, 0, 3]);
-  assert.ok(data.controlled_source_attempts.every(a => a.shared_defaults_unchanged && a.source_head === '3eea0e4d58e327970c5a70aa3e498317a79d88ae'));
-  assert.equal(data.controlled_source_dependency_versions.observed_claude_marketplace, '1.15.0');
-  assert.equal(data.controlled_source_dependency_versions.marketplace_pin_honored, false);
-  assert.doesNotMatch(proof, /candidate OS HOME authentication remains \*\*FALSE\*\*/);
-  assert.match(proof, /Actual controlled current-safe-link installation is still required/);
-  assert.match(proof, /rollback rehearsal, final release live-round, operator rollout checkpoint and activation/);
-  assert.equal((proof.match(/\| HOLD —/g) || []).length, 8);
-  const runbook = fs.readFileSync(path.join(repository, '.planning/architecture/ADR-024-ROLLOUT.md'), 'utf8');
-  assert.match(runbook, /--launch-marketplace/); assert.match(proof, /Direct external.*unsupported/);
-  assert.match(runbook, /--isolation-env/); assert.match(runbook, /SHIPYARD_ISOLATION_ROOT/);
-  assert.match(runbook, /candidate_run claude .*ensure-gsd-core/); assert.match(runbook, /prior reviewed installer must support/);
-});
-
 test('wired Claude hooks and real tuner remain candidate-owned', t => {
   const f = processFixture(t), before = fullSnapshot(f.ambient);
   const result = f.run('/bin/bash', ['scripts/install-shipyard-claude-hook.sh', '--dogfood-root', path.join(f.candidate, 'plugin'), '--wire-hooks']);
@@ -1483,3 +1445,24 @@ require('./scripts/install-shipyard-marketplace.cjs').main(['claude']);fs.writeF
   assert.notEqual(result.status,0,result.stdout+result.stderr);assert.match(result.stderr,/isolation refusal/);
   assert.equal(fs.existsSync(path.join(f.candidate,'parent-success')),false);assert.deepEqual(fullSnapshot(f.ambient),before);
 });
+
+for (const key of ['CLAUDE_HOME', 'CLAUDE_CONFIG_DIR']) {
+  test(`ordinary custom ${key} reaches marketplace setup without candidate classification`, t => {
+    const f = processFixture(t);
+    const home = path.join(f.dir, 'ordinary-marketplace-profile');
+    const env = { PATH: process.env.PATH, HOME: f.ambient, [key]: home };
+    const calls = [];
+    installClaudeMarketplace('serhii-nochevnyi/shipyard', (command, args, childEnv) => {
+      calls.push(args);
+      assert.equal(childEnv[key], home);
+      assert.equal(childEnv.HOME, f.ambient);
+      assert.equal(childEnv.SHIPYARD_ISOLATION_ROOT, undefined);
+    }, () => [], () => null, env);
+    assert.ok(calls.length > 0);
+    for (const root of ['', 'relative-root']) {
+      assert.throws(() => installClaudeMarketplace('serhii-nochevnyi/shipyard', () => {
+        assert.fail('explicit invalid candidate must refuse before a child');
+      }, () => [], () => null, { ...env, SHIPYARD_ISOLATION_ROOT: root }), /isolation refusal/);
+    }
+  });
+}

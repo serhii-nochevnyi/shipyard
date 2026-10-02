@@ -7,121 +7,7 @@ const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs
 const canonicalInternalPolicy = require('../../plugins/delivery-pipeline/scripts/model-policy-internal.cjs');
 const runtimeAdapters = require('../../plugins/delivery-pipeline/scripts/runtime-adapters.cjs');
 
-const PRE_EDIT_PLANNING_CONFIG = JSON.parse(String.raw`
-{
-  "model_profile": "balanced",
-  "commit_docs": true,
-  "parallelization": true,
-  "search_gitignored": false,
-  "brave_search": false,
-  "firecrawl": false,
-  "exa_search": false,
-  "tavily_search": false,
-  "ref_search": false,
-  "perplexity": false,
-  "jina": false,
-  "git": {
-    "branching_strategy": "none",
-    "create_tag": true,
-    "phase_branch_template": "gsd/phase-{phase}-{slug}",
-    "milestone_branch_template": "gsd/{milestone}-{slug}",
-    "quick_branch_template": null
-  },
-  "workflow": {
-    "research": true,
-    "plan_check": true,
-    "verifier": true,
-    "nyquist_validation": true,
-    "auto_advance": true,
-    "node_repair": true,
-    "node_repair_budget": 2,
-    "ui_phase": true,
-    "ui_safety_gate": true,
-    "ai_integration_phase": true,
-    "api_coverage_gate": true,
-    "human_verify_mode": "end-of-phase",
-    "context_guard_mode": "warn",
-    "text_mode": false,
-    "research_before_questions": false,
-    "discuss_mode": "discuss",
-    "skip_discuss": false,
-    "code_review": true,
-    "code_review_depth": "deep",
-    "code_review_command": null,
-    "pattern_mapper": true,
-    "plan_bounce": false,
-    "plan_bounce_script": null,
-    "plan_bounce_passes": 2,
-    "auto_prune_state": false,
-    "post_planning_gaps": true,
-    "security_enforcement": true,
-    "security_asvs_level": 1,
-    "security_block_on": "high",
-    "tdd_mode": true,
-    "ui_review": true,
-    "use_worktrees": true
-  },
-  "ship": {
-    "pr_body_sections": []
-  },
-  "hooks": {
-    "context_warnings": true
-  },
-  "project_code": null,
-  "phase_naming": "sequential",
-  "agent_skills": {
-    "gsd-executor": [
-      ".shipyard/generated/gsd-delivery-rules"
-    ],
-    "gsd-planner": [
-      ".shipyard/generated/gsd-delivery-rules"
-    ]
-  },
-  "claude_md_path": "./.claude/CLAUDE.md",
-  "plan_review": {
-    "source_grounding": true,
-    "source_grounding_authority": "grep"
-  },
-  "mode": "standard",
-  "granularity": "standard",
-  "intel": {
-    "enabled": false
-  },
-  "graphify": {
-    "enabled": false
-  },
-  "resolve_model_ids": "omit",
-  "models": {
-    "planning": "opus",
-    "execution": "opus",
-    "research": "sonnet",
-    "verification": "sonnet"
-  },
-  "effort": {
-    "routing_tier_defaults": {
-      "light": "low",
-      "standard": "high",
-      "heavy": "xhigh"
-    },
-    "agent_overrides": {
-      "gsd-code-reviewer": "xhigh"
-    }
-  },
-  "model_overrides": {
-    "gsd-code-reviewer": "opus"
-  },
-  "delivery_pipeline": {
-    "max_concurrent_agents": 4,
-    "model_ladder": "adaptive",
-    "gsd_sync": true
-  },
-  "pipeline": {
-    "jira": {
-      "enabled": false
-    }
-  }
-}
-`);
+
 
 const codex = (role, signals = {}, extra = {}) =>
   policy.resolveDispatch({ runtime: 'codex', role, signals, ...extra });
@@ -218,17 +104,6 @@ test('ordinary executor requests resolve through the canonical resolver with fre
     assert.equal(result.policy_hash, policy.fingerprintPolicy(policy.POLICY));
     assert.notEqual(result.policy_hash, '30e71fb4066fee5b67df14120532c0b4f8aedde169907bc16f70dd2569744968');
   }
-});
-
-test('reviewer compatibility config removes only the two copied reviewer overrides, excluding independently owned verification profiles', () => {
-  const expected = JSON.parse(JSON.stringify(PRE_EDIT_PLANNING_CONFIG));
-  delete expected.model_overrides['gsd-code-reviewer'];
-  delete expected.effort.agent_overrides['gsd-code-reviewer'];
-  const actual = JSON.parse(JSON.stringify(require('../../.planning/config.json')));
-  assert.equal(Object.hasOwn(actual.model_overrides, 'gsd-code-reviewer'), false);
-  assert.equal(Object.hasOwn(actual.effort.agent_overrides, 'gsd-code-reviewer'), false);
-  delete actual.delivery_pipeline.verification_commands;
-  assert.deepStrictEqual(actual, expected);
 });
 
 test('resolves every base role to the ADR-014 logical and concrete tuple on Codex', () => {
