@@ -456,31 +456,38 @@ test('Claude explicit dependency and unwired dogfood preparation confine native 
 });
 
 test('two-stage npm executable links survive dependency then Claude hook and packaged bootstrap', t => {
-  for (const runtime of ['claude', 'codex']) {
+  for (const runtime of ['claude', 'codex', 'claude-plugin-cache']) {
+    const pluginCache = runtime === 'claude-plugin-cache';
+    const selectedRuntime = pluginCache ? 'claude' : runtime;
     const f = processFixture(t), before = fullSnapshot(f.ambient);
     const fake = path.join(f.bin, 'npx');
     fs.appendFileSync(fake, `
-const modules=path.join(process.env.npm_config_cache,'_npx','fixture','node_modules');
+const modules=${pluginCache ? "path.join(process.env.CLAUDE_CONFIG_DIR,'plugins/cache/gsd-core/gsd-core/1.15.0/node_modules')" : "path.join(process.env.npm_config_cache,'_npx','fixture','node_modules')"};
 fs.mkdirSync(path.join(modules,'.bin'),{recursive:true});
-fs.mkdirSync(path.join(modules,'anthropic-ai-sdk'),{recursive:true});
-fs.writeFileSync(path.join(modules,'anthropic-ai-sdk','cli.js'),'fixture executable');
-fs.symlinkSync('../anthropic-ai-sdk/cli.js',path.join(modules,'.bin','anthropic-ai-sdk'));
+const executable=${pluginCache ? "'acorn/bin/acorn'" : "'anthropic-ai-sdk/cli.js'"};
+fs.mkdirSync(path.dirname(path.join(modules,executable)),{recursive:true});
+fs.writeFileSync(path.join(modules,executable),'fixture executable');
+fs.symlinkSync('../'+executable,path.join(modules,'.bin',${pluginCache ? "'acorn'" : "'anthropic-ai-sdk'"}));
 `);
-    const dependency = f.run('/bin/bash', ['scripts/ensure-gsd-core.sh', runtime]);
+    const dependency = f.run('/bin/bash', ['scripts/ensure-gsd-core.sh', selectedRuntime]);
     assert.equal(dependency.status, 0, dependency.stdout + dependency.stderr);
-    const link = path.join(f.candidate, '.shipyard-home/.npm/_npx/fixture/node_modules/.bin/anthropic-ai-sdk');
+    const link = pluginCache
+      ? path.join(f.env.CLAUDE_CONFIG_DIR, 'plugins/cache/gsd-core/gsd-core/1.15.0/node_modules/.bin/acorn')
+      : path.join(f.candidate, '.shipyard-home/.npm/_npx/fixture/node_modules/.bin/anthropic-ai-sdk');
     assert.ok(fs.lstatSync(link).isSymbolicLink());
-    const continued = runtime === 'claude'
+    const continued = selectedRuntime === 'claude'
       ? f.run('/bin/bash', ['scripts/install-shipyard-claude-hook.sh', '--dogfood-root', path.join(f.candidate, 'plugin')], { SHIPYARD_GSD_AUTO_INSTALL: '0' })
       : f.run(process.execPath, ['plugins/shipyard/host/scripts/bootstrap-shipyard-plugin.cjs'], { SHIPYARD_GSD_AUTO_INSTALL: '0' });
     assert.equal(continued.status, 0, continued.stdout + continued.stderr);
-    assert.ok(fs.existsSync(runtime === 'claude' ? path.join(f.candidate, 'plugin/.shipyard-provenance.json') : path.join(f.env.CODEX_HOME, 'agents/.shipyard-manifest.json')));
+    assert.ok(fs.existsSync(selectedRuntime === 'claude' ? path.join(f.candidate, 'plugin/.shipyard-provenance.json') : path.join(f.env.CODEX_HOME, 'agents/.shipyard-manifest.json')));
     assert.deepEqual(fullSnapshot(f.ambient), before);
     const target = fs.realpathSync(link);
-    for (const hazard of ['outside', 'dangling', 'cyclic', 'directory', 'hardlink', 'non-npm']) {
+    for (const hazard of ['outside', 'sibling-subtree', 'external-shim', 'dangling', 'cyclic', 'directory', 'hardlink', 'non-npm']) {
       fs.unlinkSync(link);
       let destination = target;
       if (hazard === 'outside') destination = path.join(f.ambient, '.gsd/defaults.json');
+      if (hazard === 'sibling-subtree') destination = path.join(f.candidate, '.shipyard-home/.gsd/defaults.json');
+      if (hazard === 'external-shim') destination = path.join(f.ambient, '.codex/tmp/arg0/shim');
       if (hazard === 'dangling') destination = path.join(path.dirname(target), 'missing');
       if (hazard === 'cyclic') destination = link;
       if (hazard === 'directory') destination = path.dirname(target);
@@ -488,7 +495,7 @@ fs.symlinkSync('../anthropic-ai-sdk/cli.js',path.join(modules,'.bin','anthropic-
       if (hazard === 'non-npm') fs.symlinkSync(target, path.join(f.candidate, 'ordinary-link'));
       fs.symlinkSync(destination, link);
       const snapshot = fullSnapshot(f.dir);
-      const refused = f.run('/bin/bash', ['scripts/ensure-gsd-core.sh', '--isolation-env', runtime, f.candidate]);
+      const refused = f.run('/bin/bash', ['scripts/ensure-gsd-core.sh', '--isolation-env', selectedRuntime, f.candidate]);
       assert.equal(refused.status, 3, hazard + refused.stderr);
       assert.deepEqual(fullSnapshot(f.dir), snapshot, hazard + ' refuses before writes');
       if (hazard === 'hardlink') fs.unlinkSync(path.join(path.dirname(target), 'alias'));

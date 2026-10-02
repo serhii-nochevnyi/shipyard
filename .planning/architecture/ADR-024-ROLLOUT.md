@@ -176,7 +176,7 @@ The continuation permits only npm executable links in `node_modules/.bin` whose
 fully resolved regular file targets have one hardlink and stay physically within
 the same candidate npm cache/prefix (or candidate `npm`) subtree. Other symlinks
 and outside/dangling/cyclic/directory/active-state/hardlink hazards still refuse
-before writes. Current-safe-link controlled installation is pending coordinator
+before writes. The earlier npm-cache-only correction was subsequently tested as recorded below; corrected plugin-cache installation is pending coordinator
 execution; the earlier workaround and failed hook remain historical.
 Retain redacted-only status filenames `codex-authenticated-status.json`,
 `claude-authenticated-normal-home-status.json`, and
@@ -307,3 +307,17 @@ change ADR-023's D6 ownership.
 - **Operator and independent reviewer:** decide only after both dependency
   slices and the checklist above are complete. The ADR-023 D6 owner alone
   decides any outer activation.
+
+Latest actual controlled source `cbf11a60841a1a9228267ba01cb6b02e64fe856a`
+(signed by the trusted host, per operator report) ran a fresh full installation:
+Codex 0, Claude dependency 0, Claude hook 3 on
+`claude/config/plugins/cache/gsd-core/gsd-core/1.15.0/node_modules/.bin/acorn`.
+All three redacted attempts record shared defaults unchanged. The previous npm
+cache correction therefore did not complete the actual plugin-cache hook path.
+The current guard includes candidate runtime plugin caches and requires the fully
+resolved single-link regular executable to stay in its own physical dependency
+`node_modules` subtree. External Codex `tmp/arg0` shims remain forbidden.
+Only redacted `attempts.json` and `claude-install.log` were read for this latest
+observation; no other fresh installation, authentication or credential artifact
+was read. Corrected plugin-cache source installation remains pending coordinator
+execution; all eight native pairs and release remain HOLD.

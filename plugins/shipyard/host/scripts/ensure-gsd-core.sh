@@ -98,9 +98,11 @@ try {
   }
   function npmExecutable(value) {
     if (path.basename(path.dirname(value)) !== '.bin' || path.basename(path.dirname(path.dirname(value))) !== 'node_modules') return false;
-    const npmRoots = [env.npm_config_cache, env.npm_config_prefix, path.join(root, 'npm')].map(physical);
-    const subtree = npmRoots.find(base => inside(root, base) && inside(base, value));
-    if (!subtree) return false;
+    const dependencyRoot = path.dirname(path.dirname(value));
+    const dependencyRoots = [env.npm_config_cache, env.npm_config_prefix, path.join(root, 'npm'),
+      path.join(env.CLAUDE_CONFIG_DIR, 'plugins/cache'), path.join(env.CODEX_HOME, 'plugins/cache')].map(physical);
+    if (!dependencyRoots.some(base => inside(root, base) && inside(base, dependencyRoot))) return false;
+    const subtree = validate(dependencyRoot);
     const target = fs.realpathSync(value);
     if (!inside(subtree, target)) fail(`npm executable escapes npm subtree: ${value}`);
     validate(target);
