@@ -231,7 +231,11 @@ function setupCodexHost(source, execute = run, read = capture, inspect = inspect
   const candidates = [plugin.version, 'local'].filter(Boolean).map(v => path.join(cache, v));
   const installed = candidates.find(p => fs.existsSync(path.join(p, 'package-build.json')));
   if (!installed) throw new Error('Marketplace Shipyard lacks native Codex packaging; update the marketplace source before continuing');
-  execute('bash', [path.join(installed, 'host/scripts/ensure-gsd-core.sh'), '--launch-bootstrap'], env);
+try {
+    execute('bash', [path.join(installed, 'host/scripts/ensure-gsd-core.sh'), '--launch-bootstrap'], env);
+  } finally {
+    isolatedEnvironment('codex', env, target.home);
+  }
 }
 function ensureWithEnvironment(runtime, env, ensureRuntime, runCommand = run) {
   if (ensureRuntime === ensure) {
