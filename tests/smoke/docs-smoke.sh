@@ -10,7 +10,6 @@ fail() {
 }
 
 [[ -f README.md ]] || fail "README.md is missing"
-[[ -f CLAUDE.md ]] || fail "CLAUDE.md is missing"
 [[ -f Makefile ]] || fail "Makefile is missing"
 
 for word in docker container kubernetes k8s dockerfile compose image entrypoint; do
@@ -59,7 +58,7 @@ node <<'NODE'
 const fs = require('node:fs');
 const assert = require('node:assert/strict');
 const launcher = 'bash scripts/ensure-gsd-core.sh --launch-marketplace';
-for (const [file, count] of [['README.md', 2], ['CLAUDE.md', 1]]) {
+for (const [file, count] of [['README.md', 2]]) {
   const text = fs.readFileSync(file, 'utf8');
   const examples = [...text.matchAll(/```(?:bash|sh)\n([\s\S]*?)```/g)].flatMap(match => match[1].split('\n'));
   const routes = examples.filter(line => /install-shipyard-marketplace\.cjs|--launch-marketplace/.test(line));

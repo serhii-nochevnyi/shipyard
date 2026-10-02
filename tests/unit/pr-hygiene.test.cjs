@@ -324,13 +324,13 @@ test('a head with a Jira-key slug passes: <type>/<JIRA-KEY>-<slug>', () => {
   assert.deepStrictEqual(violationsFor('head', 'head-format', baseCheckInput({ head: 'feat/MYD-17864-fix-thing' })), []);
 });
 
-test('path rule: an added .planning/ path is rejected, a deleted one is allowed', () => {
+test('path rule: development artifacts are excluded for every change status', () => {
   const added = check(baseCheckInput({ paths: [{ status: 'A', path: '.planning/graph/tickets.json' }] }));
-  assert.ok(added.violations.some((v) => v.field === 'paths' && v.rule === 'internal-path'));
+  assert.strictEqual(added.exempt, true);
   const deleted = check(baseCheckInput({ paths: [{ status: 'D', path: '.planning/graph/tickets.json' }] }));
   assert.deepStrictEqual(deleted.violations.filter((v) => v.field === 'paths'), []);
   const modifiedShipyard = check(baseCheckInput({ paths: [{ status: 'M', path: '.shipyard/generated/x.md' }] }));
-  assert.ok(modifiedShipyard.violations.some((v) => v.field === 'paths' && v.rule === 'internal-path'));
+  assert.strictEqual(modifiedShipyard.exempt, true);
 });
 
 suite('check — the proving-ground shape (acceptance criterion 1)');
@@ -341,7 +341,7 @@ test('T-22-03 title, Ticket: body, ticket/ head, .planning/ path produce one vio
     body: 'Ticket: T-22-03\nJira: MYD-18127 · Phase 23 (ADR-024) · cascades off `ticket/T-22-02-…`',
     head: 'ticket/T-22-03-x',
     base: 'main',
-    paths: [{ status: 'A', path: '.planning/phases/22-x/22-06-DEVIATIONS.md' }],
+    paths: [{ status: 'A', path: '.planning/phases/22-x/22-06-DEVIATIONS.md' }, { status: 'M', path: 'src/product.js' }],
     commits: ['feat(T-40-03): x'],
     jiraKeys: [],
   });
@@ -349,7 +349,7 @@ test('T-22-03 title, Ticket: body, ticket/ head, .planning/ path produce one vio
   assert.ok(result.violations.some((v) => v.field === 'title' && v.rule === 'title-format'));
   assert.ok(result.violations.some((v) => v.field === 'body' && v.rule === 'ticket-marker'));
   assert.ok(result.violations.some((v) => v.field === 'head' && v.rule === 'head-format'));
-  assert.ok(result.violations.some((v) => v.field === 'paths' && v.rule === 'internal-path'));
+  assert.ok(!result.violations.some((v) => v.field === 'paths'));
   assert.ok(result.violations.some((v) => v.field.startsWith('commits[')));
 });
 
@@ -402,7 +402,7 @@ test('a Jira key in the body is allowed only when listed', () => {
 
 suite('check — the CLI over a hermetic git fixture');
 
-test('reports a commit subject T-40-03 and a .planning/ path', () => {
+test('process-only PR bypasses review of development metadata', () => {
   const { dir, env } = hermeticRepo();
   git(dir, ['remote', 'add', 'origin', 'git@github.com:acme/widgets.git'], env);
   fs.mkdirSync(path.join(dir, '.planning', 'graph'), { recursive: true });
@@ -421,11 +421,10 @@ test('reports a commit subject T-40-03 and a .planning/ path', () => {
 
   const cli = spawnSync('node', [MOD, 'check', '--project-root', dir, '--base', base, '--head', head,
     '--title', 'T-40-03: x', '--body-file', bodyFile, '--json'], { encoding: 'utf8', env });
-  assert.strictEqual(cli.status, 2, cli.stdout + cli.stderr);
+  assert.strictEqual(cli.status, 0, cli.stdout + cli.stderr);
   const result = JSON.parse(cli.stdout);
-  assert.strictEqual(result.ok, false);
-  assert.ok(result.violations.some((v) => v.field.startsWith('commits[') && v.rule === 'ticket-id'));
-  assert.ok(result.violations.some((v) => v.field === 'paths' && v.rule === 'internal-path'));
+  assert.strictEqual(result.ok, true);
+  assert.strictEqual(result.exempt, true);
 });
 
 test('the check CLI exits 0 and prints exempt for the Shipyard repository', () => {

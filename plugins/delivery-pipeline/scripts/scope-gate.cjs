@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 'use strict';
 
+const { isDevelopmentArtifact } = require('./development-artifacts.cjs');
+
 // scope-gate.cjs — does the branch's diff stay inside the ticket's declared
 // `files_modified`?
 //
@@ -113,7 +115,7 @@ try {
   const out = execFileSync('git', ['-C', worktree, 'diff', '--name-only', ...range], {
     encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
   });
-  changed = out.split('\n').map((s) => s.trim()).filter(Boolean);
+  changed = out.split('\n').map((s) => s.trim()).filter(Boolean).filter(file => !isDevelopmentArtifact(file));
 } catch (e) {
   fail(`git diff failed in ${worktree}: ${e.stderr ? String(e.stderr).trim() : e.message}`);
 }

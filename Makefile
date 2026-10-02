@@ -61,7 +61,7 @@ doctor:
 	node scripts/shipyard-doctor.cjs
 
 # Fast, deterministic checks for every local edit and every pull request.
-test-fast: test-unit test-graph test-worktree test-worktree-gates test-gsd-sync test-sentinel test-docs test-hooks test-comment-policy test-model-ladder-runtime test-statusline
+test-fast: test-unit test-graph test-worktree test-worktree-gates test-sentinel test-docs test-hooks test-comment-policy test-model-ladder-runtime test-statusline
 
 # The complete host-side suite. The Codex smoke additionally exercises the
 # network-backed gsd-core conversion and therefore stays out of test-fast.

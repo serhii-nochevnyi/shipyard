@@ -13,6 +13,18 @@ these rules keep them machine-consumable by the conveyor's deterministic layer.
 written in English. When addressing the user directly, reply in the user's
 language; English is for the artifacts, the user's language is for conversation.
 
+## Product verification scope
+
+Development artifacts are execution context, not review or verification targets.
+Exclude `.planning/**`, `.shipyard/**`, `.shipyard-*`, `docs/audits/**`,
+`AGENTS.md`, and `CLAUDE.md` from every review, test, approval and release gate.
+Use plans to select work and acceptance criteria; do not create findings or block
+shipping on their contents, projections, formatting or synchronization.
+For changes containing only these artifacts, skip product tests and review requests.
+For mixed changes, check only product files. Pipeline executable source, CI,
+user documentation and functional tests remain in scope. Use the shared
+`development-artifacts.cjs` classifier rather than a separate exclusion list.
+
 ## Rule zero: make claims executable
 
 Every checkable claim about the codebase, a test, delivery state, or a completed

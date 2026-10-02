@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 'use strict';
 
+const { isDevelopmentArtifact } = require('./development-artifacts.cjs');
+
 // Reviewer plumbing for the babysit loop.
 //
 //   reviewers.cjs reinit     <pr> [--json] [--force]
@@ -193,7 +195,16 @@ function normalizedReviews(rows) {
     .map((r) => ({ ...r, author: ((r.user && r.user.login) || 'unknown') }));
 }
 
+function processOnly(view) {
+  return Array.isArray(view?.files) && view.files.length > 0
+    && view.files.every(file => isDevelopmentArtifact(file.path));
+}
+
 function reviewFreshness(view, reviews, readable = true, configured = undefined, repo = null) {
+  if (processOnly(view)) {
+    return { fresh: true, reason: 'development-artifacts-only', stale_authors: [], remedy: null,
+      review_fresh: true, review_freshness_required: false, review_freshness_reason: null };
+  }
   if (!view || view.reviewDecision !== 'APPROVED') {
     return { fresh: true, reason: null, stale_authors: [], remedy: null,
       review_fresh: true, review_freshness_required: false, review_freshness_reason: null };
@@ -307,6 +318,13 @@ if (cmd === 'status') {
 }
 
 if (cmd === 'reinit') {
+  const changedFiles = ghJson(['pr', 'view', String(pr), ...REPO_ARG, '--json', 'files'], null);
+  if (changedFiles && Array.isArray(changedFiles.files) && changedFiles.files.length
+      && changedFiles.files.every(file => isDevelopmentArtifact(file.path))) {
+    report({ pr, coderabbit: { requested: false }, copilot: { requested: false },
+      lines: ['Development artifacts are excluded from review requests.'] });
+    process.exit(0);
+  }
   const a = prActivity();
   const lines = [];
   const result = { pr, coderabbit: {}, copilot: {}, lines };
@@ -421,7 +439,7 @@ for (;;) {
 }
 
 const unresolved = threads
-  .filter((t) => !t.isResolved)
+  .filter((t) => !t.isResolved && !isDevelopmentArtifact(t.path))
   .map((t) => ({
     // The GraphQL node id, and the ONLY way to resolve the thread
     // (`resolveReviewThread(input:{threadId:…})`). It was missing from both the
@@ -476,7 +494,7 @@ if (cmd === 'unresolved') {
   // and `mergeStateStatus` costs nothing extra on a single-PR view. A second
   // query per PR per tick would be paid on every tick of the conveyor.
   const view = ghJson(['pr', 'view', String(pr), ...REPO_ARG, '--json',
-    'reviewDecision,mergeStateStatus,baseRefName,headRefName,headRefOid,commits'], null);
+    'reviewDecision,mergeStateStatus,baseRefName,headRefName,headRefOid,commits,files'], null);
   const reviewResult = ghJsonResult(['api', `repos/${OWNER_REPO}/pulls/${pr}/reviews`, '--paginate']);
   const freshness = reviewFreshness(view, reviewResult.value, reviewResult.ok);
   console.log(JSON.stringify({
@@ -498,7 +516,7 @@ if (cmd === 'unresolved') {
     // means we do not KNOW the decision, which is not the same as knowing it is
     // benign. Unknown reads as not-clean, or this field would say `true` loudest
     // exactly when it has the least evidence.
-    clean: unresolved.length === 0 && view !== null && view.reviewDecision !== 'CHANGES_REQUESTED',
+    clean: unresolved.length === 0 && view !== null && (processOnly(view) || view.reviewDecision !== 'CHANGES_REQUESTED'),
   }, null, 2));
   process.exit(0);
 }

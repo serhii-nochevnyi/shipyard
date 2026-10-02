@@ -1285,13 +1285,13 @@ function publishedSequenceFixture(t) {
     fs.cpSync(path.join(repository, entry), path.join(checkout, entry), { recursive: true });
   }
   const sequences = [];
-  for (const file of ['README.md', 'CLAUDE.md']) {
+  for (const file of ['README.md']) {
     const text = fs.readFileSync(path.join(checkout, file), 'utf8');
     for (const match of text.matchAll(/```bash\n([\s\S]*?)```/g)) {
       if (match[1].includes('--launch-marketplace')) sequences.push([file, match[1]]);
     }
   }
-  assert.equal(sequences.length, 3);
+  assert.equal(sequences.length, 2);
   for (const target of ['package-shipyard-codex', 'install-shipyard-codex',
     'install-shipyard-marketplace-codex', 'install-shipyard-marketplace-claude']) {
     sequences.push([target, 'make ' + target]);
