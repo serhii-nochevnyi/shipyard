@@ -9022,7 +9022,9 @@
         "README.md",
         "CLAUDE.md",
         "Makefile",
-        "tests/smoke/docs-smoke.sh"
+        "tests/smoke/docs-smoke.sh",
+        "scripts/install-shipyard-capability.sh",
+        "plugins/shipyard/host/scripts/install-shipyard-capability.sh"
       ],
       "risk": "high",
       "type": "implementation",
