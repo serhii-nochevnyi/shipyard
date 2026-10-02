@@ -697,6 +697,11 @@ test('fixture launcher and no-relaunch recovery produce identical authenticated 
         ...options, env: { CLAUDE_CONFIG_DIR: f.config }, transcriptPollMs: 1,
         spawn: (_executable, args) => {
           launches++;
+          const schemaIndex = args.indexOf('--json-schema');
+          assert.ok(schemaIndex >= 0, 'native completion must declare its changed paths');
+          const outputSchema = JSON.parse(args[schemaIndex + 1]);
+          assert.deepEqual(outputSchema.required, ['changed_paths']);
+          assert.equal(outputSchema.properties.changed_paths.type, 'array');
           const sessionId = args[args.indexOf('--session-id') + 1];
           const settings = JSON.parse(args[args.indexOf('--settings') + 1]);
           const hookArgs = settings.hooks.SessionStart[0].hooks[0].args;

@@ -434,7 +434,14 @@ async function runDecomposition(request, dependencies = {}) {
           host, prompt: scope.prompt, role: ROLES[scope.role], gsdRole: scope.role,
           model: resolution.model, effort: resolution.effort, signals: scope.signals,
           dispatchId, requireGsdRole: true,
-          agentOptions: { session_id: sessionId },
+          agentOptions: { session_id: sessionId, schema: {
+            type: 'object', additionalProperties: false, required: ['changed_paths'],
+            properties: {
+              changed_paths: { type: 'array', items: { type: 'string', minLength: 1 },
+                description: 'Every file changed by this run, relative to the phase directory. Use an empty array when no files changed.' },
+              summary: { type: 'string' },
+            },
+          } },
           context: { ticket: scope.ticket, phase: scope.phase, run_id: runId,
             worktreePath: scope.worktree, runtime: 'claude', provider: 'anthropic',
             preRecordValidation: () => typeof dependencies.preRecordValidation === 'function'
