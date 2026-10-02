@@ -127,13 +127,23 @@ function withEnv(overrides, fn) {
   }
 }
 
+const fixtureDestinationDefaults = Object.fromEntries([
+  'SHIPYARD_ISOLATION_ROOT', 'SHIPYARD_ORIGINAL_HOME', 'SHIPYARD_DOGFOOD_ROOT',
+  'CLAUDE_HOME', 'CLAUDE_CONFIG_DIR', 'AGENTS_SKILLS_DIR', 'CODEX_AGENTS_MD',
+  'GSD_CAPABILITIES_DIR', 'GSD_CAPABILITIES_ROOT', 'GSD_DEFAULTS_PATH', 'GSD_HOME',
+  'XDG_STATE_HOME', 'XDG_CACHE_HOME', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME',
+  'TMPDIR', 'TMP', 'TEMP',
+  ...['cache', 'prefix', 'logs_dir', 'tmp', 'userconfig', 'globalconfig']
+    .flatMap(name => [`npm_config_${name}`, `NPM_CONFIG_${name.toUpperCase()}`]),
+].map(key => [key, undefined]));
+
 function codexSetup(source, inspect, { sandbox = fs.mkdtempSync(path.join(os.tmpdir(), 'marketplace-sandbox-')),
   codexHomeEnv } = {}) {
   const version = '0.66.0+codex.0123456789abcdef';
   const home = codexHome(version);
   const runs = [];
   const read = () => ({ installed: [{ pluginId: 'shipyard@shipyard', enabled: true, version }] });
-  return withEnv({ HOME: sandbox, XDG_STATE_HOME: undefined, TMPDIR: undefined, CODEX_HOME: codexHomeEnv }, () => {
+  return withEnv({ ...fixtureDestinationDefaults, HOME: sandbox, CODEX_HOME: codexHomeEnv }, () => {
     setupCodexHost(source, (command, args, env) => runs.push({ command, args, env }), read, inspect, home);
     assert.equal(runs.length, 1);
     assert.match(runs[0].args[0], /host\/scripts\/bootstrap-shipyard-plugin\.cjs$/);
@@ -169,7 +179,7 @@ test('installKindEnv omits SHIPYARD_SOURCE_ROOT for a tagged release checkout', 
 
 // @contract: Mirrors codexSetup's own env shape, so the expected path is computed under the same sandbox.
 function expectedDedicatedHome(sandbox, source) {
-  return withEnv({ HOME: sandbox, XDG_STATE_HOME: undefined, TMPDIR: undefined },
+  return withEnv({ ...fixtureDestinationDefaults, HOME: sandbox },
     () => dogfoodHome('codex', fs.realpathSync(source)));
 }
 
@@ -221,11 +231,12 @@ test('a release Codex install is not redirected, even with CODEX_HOME unset', ()
 });
 
 function mainCodexHarness(source, { sandbox, codexHomeEnv, inspect: inspectSource,
-  marketplaceList = [] } = {}) {
+  marketplaceList = [], envOverrides = {} } = {}) {
   const home = sandbox || fs.mkdtempSync(path.join(os.tmpdir(), 'marketplace-main-home-'));
   const version = '0.66.0+codex.0123456789abcdef';
-  const env = { ...process.env, HOME: home, XDG_STATE_HOME: undefined, TMPDIR: undefined,
-    CODEX_HOME: codexHomeEnv };
+  const env = { ...process.env, ...fixtureDestinationDefaults, HOME: home,
+    CODEX_HOME: codexHomeEnv, ...envOverrides };
+  for (const key of Object.keys(env)) if (env[key] === undefined) delete env[key];
   const events = [];
   const inspect = inspectSource || (() => ({ version: '0.66.0', sha: 'dirty', tagSha: 'release', dirty: true }));
   const copyEnv = (value) => ({ ...value });
@@ -251,6 +262,27 @@ function mainCodexHarness(source, { sandbox, codexHomeEnv, inspect: inspectSourc
   catch (caught) { error = caught; }
   return { home, env, events, error };
 }
+
+test('old Codex helpers isolate inherited runner config while explicit escaping config refuses', t => {
+  const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), 'marketplace-runner-env-'));
+  t.after(() => fs.rmSync(sandbox, { recursive: true, force: true }));
+  const source = localSource();
+  t.after(() => fs.rmSync(source, { recursive: true, force: true }));
+  const inspect = () => ({ version: '0.66.0', sha: 'runner', tagSha: 'release', dirty: true });
+  withEnv({ XDG_CONFIG_HOME: '/home/runner/.config' }, () => {
+    const selected = codexSetup(source, inspect, { sandbox });
+    assert.equal(selected.XDG_CONFIG_HOME, path.join(selected.HOME, '.config'));
+    const installed = mainCodexHarness(source, { sandbox, inspect });
+    assert.equal(installed.error, null);
+    assert.equal(process.env.XDG_CONFIG_HOME, '/home/runner/.config');
+    const before = fullSnapshot(sandbox);
+    const refused = mainCodexHarness(source, { sandbox, inspect,
+      envOverrides: { XDG_CONFIG_HOME: '/home/runner/.config' } });
+    assert.match(refused.error.message, /isolation refusal: destination escapes candidate HOME envelope/);
+    assert.equal(refused.events.length, 0);
+    assert.deepEqual(fullSnapshot(sandbox), before);
+  });
+});
 
 test('main selects each checkout home before ensure and carries it through marketplace and bootstrap', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'marketplace-main-roots-'));
