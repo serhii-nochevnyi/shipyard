@@ -1,30 +1,32 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: b4035723a80c02c5b6d8dd26b650a192202201448fe63474b41e27ab15a1721e
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 8df5cb6ad3859d1a9783a562e8f2fc51af303b399712e630ebc4f18acbb8ae8e
 phase: 46
-status: human_needed
-shipyard_source_fingerprint: b4035723a80c02c5b6d8dd26b650a192202201448fe63474b41e27ab15a1721e
+status: gaps_found
+shipyard_source_fingerprint: 8df5cb6ad3859d1a9783a562e8f2fc51af303b399712e630ebc4f18acbb8ae8e
 ---
 
 # Phase 46: Refresh the native runtime model ladder — Verification Projection
 
-**Status:** human_needed
+**Status:** gaps_found
 
 ## Observable Truths
 
 | Truth | Evidence | Status |
 |---|---|---|
-| Every phase plan is accounted for | 0/4 delivery records are merged | ? UNCERTAIN |
-| Integration is coherent | INTEGRATION.md is missing | ? UNCERTAIN |
-| Verification evidence is present | INTEGRATION.md is missing | ? UNCERTAIN |
+| Every phase plan is accounted for | 4/6 delivery records are merged | ? UNCERTAIN |
+| Integration is coherent | integration evidence records a finding or failed verdict | ✗ FAILED |
+| Verification evidence is present | integration evidence records a finding or failed verdict | ✗ FAILED |
 
 ## Plan Evidence
 
 | Ticket | Delivery | Plan status |
 |---|---|---|
-| T-46-01 | pending | ? UNCERTAIN |
-| T-46-04 | pending | ? UNCERTAIN |
-| T-46-05 | pending | ? UNCERTAIN |
-| T-46-06 | pending | ? UNCERTAIN |
+| T-46-01 | merged | ✓ VERIFIED |
+| T-46-04 | merged | ✓ VERIFIED |
+| T-46-05 | merged | ✓ VERIFIED |
+| T-46-06 | merged | ✓ VERIFIED |
+| T-46-07 | pr-open | ? UNCERTAIN |
+| T-46-08 | pending | ? UNCERTAIN |
 
 ## Verification Commands
 
@@ -33,4 +35,4 @@ shipyard_source_fingerprint: b4035723a80c02c5b6d8dd26b650a192202201448fe63474b41
 
 ## Gaps Summary
 
-**Not green:** 4 plan(s) are not merged.
+**Not green:** integration evidence records a finding or failed verdict.
