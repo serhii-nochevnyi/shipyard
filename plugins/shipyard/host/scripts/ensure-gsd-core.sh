@@ -66,7 +66,10 @@ try {
   }
   const declaredRoot = systemSpelling(supplied);
   if (physical(supplied) !== declaredRoot) fail('candidate root has an unsafe alias ancestor');
-  const root = physical(supplied), ambient = physical(process.env.SHIPYARD_ORIGINAL_HOME || process.env.HOME || os.homedir());
+  const root = physical(supplied), childHome = path.join(root, '.shipyard-home');
+  const incomingHome = process.env.HOME || os.homedir();
+  const rebased = systemSpelling(incomingHome) === childHome && physical(incomingHome) === childHome;
+  const ambient = physical((rebased && process.env.SHIPYARD_ORIGINAL_HOME) || incomingHome);
   const inside = (base, target) => target === base || target.startsWith(base + path.sep);
   const nativeHome = physical(os.userInfo().homedir);
   const protections = [ambient, nativeHome].flatMap(home => [

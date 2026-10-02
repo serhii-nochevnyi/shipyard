@@ -1117,3 +1117,61 @@ test('isolated preflight preserves supported diagnostics and explicitly refuses 
   assert.match(refused.stderr, /unsupported NODE_OPTIONS/);
   assert.deepEqual(fullSnapshot(f.dir), before);
 });
+
+
+test('original-home marker is trusted only for a generated rebased child', t => {
+  for (const entry of ['scripts/ensure-gsd-core.sh', 'plugins/shipyard/host/scripts/ensure-gsd-core.sh']) {
+    const f = processFixture(t);
+    assert.notEqual(f.ambient, os.userInfo().homedir);
+    const before = fullSnapshot(f.dir);
+    const forged = f.run('/bin/bash', [entry, 'codex'], {
+      SHIPYARD_ORIGINAL_HOME: path.join(f.dir, 'stale-home'),
+      SHIPYARD_ISOLATION_ROOT: f.ambient, CODEX_HOME: f.ambient,
+      CLAUDE_HOME: undefined, CLAUDE_CONFIG_DIR: undefined,
+    });
+    assert.notEqual(forged.status, 0, entry + ': forged marker must refuse');
+    assert.match(forged.stderr, /candidate aliases active state/, entry);
+    assert.deepEqual(fullSnapshot(f.dir), before, entry + ': no candidate or dependency mutation');
+    const first = f.run('/bin/bash', [entry, '--isolation-env', 'codex', f.candidate], {
+      SHIPYARD_ORIGINAL_HOME: path.join(f.dir, 'stale-home'),
+    });
+    assert.equal(first.status, 0, first.stderr);
+    const prepared = JSON.parse(first.stdout).environment;
+    assert.equal(prepared.SHIPYARD_ORIGINAL_HOME, f.ambient);
+    assert.equal(prepared.HOME, path.join(f.candidate, '.shipyard-home'));
+    const repeated = f.run('/bin/bash', [entry, '--isolation-env', 'codex', f.candidate], prepared);
+    assert.equal(repeated.status, 0, repeated.stderr);
+    assert.deepEqual(JSON.parse(repeated.stdout).environment, prepared);
+    const protectedRoot = path.join(f.ambient, '.codex');
+    const protectedChild = f.run('/bin/bash', [entry, '--isolation-env', 'codex', protectedRoot], {
+      ...prepared, HOME: path.join(protectedRoot, '.shipyard-home'),
+    });
+    assert.notEqual(protectedChild.status, 0);
+    assert.match(protectedChild.stderr, /candidate aliases active state/);
+    assert.deepEqual(fullSnapshot(f.dir), before, entry + ': repeated validation is read only');
+  }
+});
+
+
+test('original-home marker cannot turn an aliased child HOME into a generated rebase', t => {
+  const f = processFixture(t);
+  const childHome = path.join(f.candidate, '.shipyard-home');
+  fs.mkdirSync(childHome, { recursive: true });
+  const alias = path.join(f.dir, 'child-home-alias');
+  fs.symlinkSync(childHome, alias);
+  const before = fullSnapshot(f.dir);
+  for (const entry of ['scripts/ensure-gsd-core.sh', 'plugins/shipyard/host/scripts/ensure-gsd-core.sh']) {
+    const result = f.run('/bin/bash', [entry, '--isolation-env', 'codex', f.candidate], {
+      HOME: alias, SHIPYARD_ORIGINAL_HOME: f.ambient,
+    });
+    assert.notEqual(result.status, 0, entry);
+    assert.match(result.stderr, /candidate aliases active state/, entry);
+    assert.deepEqual(fullSnapshot(f.dir), before);
+    const legitimate = f.run('/bin/bash', [entry, '--isolation-env', 'codex', f.candidate], {
+      HOME: childHome, SHIPYARD_ORIGINAL_HOME: f.ambient,
+    });
+    assert.equal(legitimate.status, 0, legitimate.stderr);
+    assert.equal(JSON.parse(legitimate.stdout).environment.SHIPYARD_ORIGINAL_HOME, f.ambient);
+    assert.deepEqual(fullSnapshot(f.dir), before);
+  }
+});
