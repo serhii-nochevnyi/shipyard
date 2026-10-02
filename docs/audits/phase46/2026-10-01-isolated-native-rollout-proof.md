@@ -12,7 +12,7 @@ Fresh redacted status records establish both OS profiles authenticated. Claude d
 
 Chronology: the original violation at integration head `1ead39a290966aacc3cb37a0feb2acb851b58300` precedes the external workaround recorded below. Prior core work is retained at `6d1bfbc4`; the later controlled-source attempt records raw source head `3eea0e4d58e327970c5a70aa3e498317a79d88ae`, distinct from this continuation's starting head `b7b565d68d7f64bf9ace72d776b41a24280f3f62`. That attempt's Codex installation exited 0, Claude dependency exited 0, and Claude hook exited 3 on its dependency-created contained npm `node_modules/.bin/anthropic-ai-sdk` link. All three recorded shared defaults unchanged. Core VERSION was 1.14.0 as requested, but the actually discovered enabled Claude marketplace dependency was **1.15.0**; the marketplace pin 1.14.0 was not honored. This failed two-stage attempt is historical and does not prove installation of the current safe-link correction.
 
-The read-only guard now accepts only npm `.bin` executable links whose fully resolved regular, single-link file targets remain physically in the same candidate npm subtree. Outside, dangling, cyclic, directory, active-state, hardlink and other symlink hazards still refuse before any write. The later npm-cache-only source failed the hook as recorded below; corrected plugin-cache installation remains pending with the coordinator. Durable retention must contain redacted-only status filenames `codex-authenticated-status.json`, `claude-authenticated-normal-home-status.json`, and `claude-authenticated-dedicated-home-status.json`, plus attempts/log hashes; no credential or Keychain material belongs in published or durable proof. No new durable sealing is claimed here.
+The read-only guard now accepts only npm `.bin` executable links whose fully resolved regular, single-link file targets remain physically in the same candidate npm subtree. Outside, dangling, cyclic, directory, active-state, hardlink and other symlink hazards still refuse before any write. The later npm-cache-only source failed the hook as recorded below; the later plugin-cache installation succeeded at `6a33b2ae`; the current hook change awaits coordinator verification. Durable retention must contain redacted-only status filenames `codex-authenticated-status.json`, `claude-authenticated-normal-home-status.json`, and `claude-authenticated-dedicated-home-status.json`, plus attempts/log hashes; no credential or Keychain material belongs in published or durable proof. No new durable sealing is claimed here.
 
 PR408 was APPROVED by `copilot-pull-request-reviewer[bot]` at exact head `992fd1fca755ce812ef04d3714f12e108378c090`, with both retained checks completed/success at that head. This is historical merged PR408 evidence, not a current T-46-08 approval, current CI pass, human review or rollout decision.
 
@@ -481,7 +481,7 @@ owns staging, signing, finalization/sealing and current-head independent review.
 All eight native pairs, rollback rehearsal, final release live-round, operator
 checkpoint and activation remain HOLD under T-46-06 and ADR-023 D6 ownership.
 
-Latest actual controlled source `cbf11a60841a1a9228267ba01cb6b02e64fe856a`
+Earlier actual controlled source `cbf11a60841a1a9228267ba01cb6b02e64fe856a`
 (signed by the trusted host, per operator report) ran a fresh full installation:
 Codex 0, Claude dependency 0, Claude hook 3 on
 `claude/config/plugins/cache/gsd-core/gsd-core/1.15.0/node_modules/.bin/acorn`.
@@ -492,8 +492,7 @@ resolved single-link regular executable to stay in its own physical dependency
 `node_modules` subtree. External Codex `tmp/arg0` shims remain forbidden.
 Only redacted `attempts.json` and `claude-install.log` were read for this latest
 observation; no other fresh installation, authentication or credential artifact
-was read. Corrected plugin-cache source installation remains pending coordinator
-execution; all eight native pairs and release remain HOLD.
+was read. The later corrected plugin-cache installation succeeded at source `6a33b2ae`, as recorded below; this earlier failed attempt remains historical evidence.
 
 ```json
 {
@@ -547,6 +546,87 @@ execution; all eight native pairs and release remain HOLD.
     "sha256": "32cb9a9b403c422ba20e6ee420bbb328d85b5dcc51f1a6e857c48b616b8e55fc",
     "text": "isolation refusal: symlink destination: /Volumes/KINGSTON/.wt-claude-shipyard/phase46-postfix-safe-links-fresh-20261002/claude/config/plugins/cache/gsd-core/gsd-core/1.15.0/node_modules/.bin/acorn\n"
   },
-  "fixed_plugin_cache_controlled_install": "pending coordinator execution"
+  "fixed_plugin_cache_controlled_install": "later succeeded at 6a33b2ae; see latest retained result below"
+}
+```
+
+## Latest retained successful installation and current review boundary
+
+Latest retained controlled installation used source `6a33b2ae1a8cf8884c4336e01170a1c6ed2ea158`: Codex installation, Claude dependency and Claude plugin preparation all exited 0, with shared defaults unchanged in all three records. Evidence: `/Volumes/KINGSTON/.wt-claude-shipyard/phase46-postfix-plugin-links-fresh-20261002/attempts.json` (1790 bytes, SHA-256 `ddb3b2aafa05cab7e6be472d81d3e79333f2f41514cbb0fe3278c0533873cb92`). The redacted durable index `/tmp/phase46-full-auth-success-install-durable.json` reports archive SHA-256 `cd3f525c362bda711e5a948b5d0dd4c2dfa568e5af0d5094201359675eb35de2`; the archive itself was not opened. Authentication and profile readiness are already true per retained operator evidence; they do not establish complete native-pair receipts. Installed Codex source `dad21495143a5b4e06fe1ecd5aa2e4eee56be9e3` is a separate later identity verified read-only from `/Volumes/KINGSTON/.wt-claude-shipyard/phase46-isolated-recheck-20261002/codex-candidate/agents/.shipyard-provenance.json` (`source_sha` matches and `dirty: false`), not the source of the historical three-stage result. The hook change in this review round has not undergone a fresh actual installation; that check is coordinator-owned. All eight complete native pairs, rollback rehearsal, live release round, release, operator checkpoint and activation remain HOLD.
+
+```json
+{
+  "source_head": "6a33b2ae1a8cf8884c4336e01170a1c6ed2ea158",
+  "attempts_path": "/Volumes/KINGSTON/.wt-claude-shipyard/phase46-postfix-plugin-links-fresh-20261002/attempts.json",
+  "attempts_bytes": 1790,
+  "attempts_sha256": "ddb3b2aafa05cab7e6be472d81d3e79333f2f41514cbb0fe3278c0533873cb92",
+  "attempts": [
+    {
+      "stage": "codex-install",
+      "exit": 0,
+      "source_head": "6a33b2ae1a8cf8884c4336e01170a1c6ed2ea158",
+      "environment_overrides": {
+        "SHIPYARD_CODEX_CAPABILITIES_FILE": "/Users/serhii/.codex/shipyard/codex-capabilities.json"
+      },
+      "log_bytes": 8263,
+      "log_sha256": "9388957f75b7be1149f1b424415680a815ac905931b4baa68b42c822e52da139",
+      "shared_defaults_unchanged": true
+    },
+    {
+      "stage": "claude-dependency",
+      "exit": 0,
+      "source_head": "6a33b2ae1a8cf8884c4336e01170a1c6ed2ea158",
+      "environment_overrides": {
+        "SHIPYARD_ISOLATION_ROOT": "/Volumes/KINGSTON/.wt-claude-shipyard/phase46-postfix-plugin-links-fresh-20261002/claude",
+        "CLAUDE_CONFIG_DIR": "/Volumes/KINGSTON/.wt-claude-shipyard/phase46-postfix-plugin-links-fresh-20261002/claude/config",
+        "CLAUDE_HOME": "/Volumes/KINGSTON/.wt-claude-shipyard/phase46-postfix-plugin-links-fresh-20261002/claude/config"
+      },
+      "log_bytes": 4244,
+      "log_sha256": "ee964377f3e773629806998965329f434cf439b43164b44a3d5ccc8cd3354ca9",
+      "shared_defaults_unchanged": true
+    },
+    {
+      "stage": "claude-install",
+      "exit": 0,
+      "source_head": "6a33b2ae1a8cf8884c4336e01170a1c6ed2ea158",
+      "environment_overrides": {
+        "SHIPYARD_ISOLATION_ROOT": "/Volumes/KINGSTON/.wt-claude-shipyard/phase46-postfix-plugin-links-fresh-20261002/claude",
+        "CLAUDE_CONFIG_DIR": "/Volumes/KINGSTON/.wt-claude-shipyard/phase46-postfix-plugin-links-fresh-20261002/claude/config",
+        "CLAUDE_HOME": "/Volumes/KINGSTON/.wt-claude-shipyard/phase46-postfix-plugin-links-fresh-20261002/claude/config",
+        "SHIPYARD_GSD_AUTO_INSTALL": "0"
+      },
+      "log_bytes": 339,
+      "log_sha256": "22877ac0cc2999bfc06f066ae8a3907e1cee6931f6236b6e1f8e8238ab4ef50b",
+      "shared_defaults_unchanged": true
+    }
+  ],
+  "redacted_durable_record": {
+    "archive": "/Users/serhii/.local/state/shipyard/evidence/phase46/cd3f525c362bda711e5a948b5d0dd4c2dfa568e5af0d5094201359675eb35de2.tar",
+    "sha256": "cd3f525c362bda711e5a948b5d0dd4c2dfa568e5af0d5094201359675eb35de2",
+    "files": [
+      {
+        "path": "phase46-isolated-recheck-20261002/codex-authenticated-status.json",
+        "sha256": "f3b3875a9d6eedb87bc66980fc4f0a00104dfc1c4f1c0521b7f82eb3bdbe41c3",
+        "bytes": 197
+      },
+      {
+        "path": "phase46-isolated-recheck-20261002/claude-authenticated-dedicated-home-status.json",
+        "sha256": "07c9e8972517125b59f79be7b4c7bd6a0242afcb577be5f2a1b2811384c3905c",
+        "bytes": 343
+      },
+      {
+        "path": "phase46-isolated-recheck-20261002/authenticated-isolated-runtime-environments.json",
+        "sha256": "9f0086f08f72b3533efc79b09aa1ce74ab6895ffc3e60ce217eed0336def8f0d",
+        "bytes": 723
+      },
+      {
+        "path": "phase46-postfix-plugin-links-fresh-20261002/attempts.json",
+        "sha256": "ddb3b2aafa05cab7e6be472d81d3e79333f2f41514cbb0fe3278c0533873cb92",
+        "bytes": 1790
+      }
+    ],
+    "scope": "Explicit redacted JSON whitelist only; no credentials, profiles, password or Keychain bytes"
+  },
+  "current_hook_change_actual_install": "pending coordinator verification; historical 6a33 installation does not test this change"
 }
 ```

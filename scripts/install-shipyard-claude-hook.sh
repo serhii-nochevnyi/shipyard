@@ -46,7 +46,9 @@ PROVENANCE="$ROOT/plugins/delivery-pipeline/scripts/host-provenance.cjs"
 source "$ROOT/scripts/ensure-gsd-core.sh" --library
 [[ -z "$DOGFOOD_ROOT" ]] || export SHIPYARD_DOGFOOD_ROOT="$DOGFOOD_ROOT"
 export CLAUDE_HOME
-prepare_isolation claude "${CLAUDE_CONFIG_DIR:-$CLAUDE_HOME}" "${SHIPYARD_ISOLATION_ROOT:-}"
+if [[ -z "$DOGFOOD_ROOT" || "$WIRE_HOOKS" == 1 || -n "${SHIPYARD_ISOLATION_ROOT:-}" ]]; then
+  prepare_isolation claude "${CLAUDE_CONFIG_DIR:-$CLAUDE_HOME}" "${SHIPYARD_ISOLATION_ROOT:-}"
+fi
 SETTINGS="$CLAUDE_HOME/settings.json"
 
 ROUTE_HOOK="$CLAUDE_HOME/hooks/shipyard-auto-route.sh"
@@ -65,16 +67,34 @@ OLD_STOP_CMD="node \"$OLD_STOP_HOOK\""
 if [[ -n "$DOGFOOD_ROOT" ]]; then
   [[ "$REMOVE" == 0 ]] || { echo "error: --dogfood-root cannot be combined with --remove" >&2; exit 2; }
   [[ -f "$PROVENANCE" ]] || { echo "error: host-provenance.cjs not found under $ROOT/plugins/delivery-pipeline" >&2; exit 1; }
-  DOGFOOD_ROOT="$(TARGET="$DOGFOOD_ROOT" CACHE="$CLAUDE_HOME/plugins/cache" node - <<'NODE'
+  DOGFOOD_ROOT="$(TARGET="$DOGFOOD_ROOT" CACHE="$CLAUDE_HOME/plugins/cache" SOURCE="$ROOT" node - <<'NODE'
 const fs = require('node:fs');
 const path = require('node:path');
 function real(p) {
   const abs = path.resolve(p);
   let base = abs;
-  while (!fs.existsSync(base)) base = path.dirname(base);
+  while (!fs.existsSync(base)) {
+    if (fs.lstatSync(base, { throwIfNoEntry: false })) throw new Error(`isolation refusal: dangling destination: ${base}`);
+    base = path.dirname(base);
+  }
   return path.join(fs.realpathSync(base), path.relative(base, abs));
 }
+if (!path.isAbsolute(process.env.TARGET)) throw new Error('isolation refusal: dogfood root must be absolute');
 const target = real(process.env.TARGET);
+function contains(parent, child) {
+  const rel = path.relative(parent, child);
+  return rel === '' || (rel !== '..' && !rel.startsWith('..' + path.sep) && !path.isAbsolute(rel));
+}
+const protectedPaths = [process.env.SOURCE, process.env.HOME,
+  path.join(process.env.HOME, '.gsd'), path.join(process.env.HOME, '.codex'),
+  path.join(process.env.HOME, '.agents'), process.env.CLAUDE_HOME];
+for (const item of protectedPaths) {
+  const protectedPath = real(item);
+  if (contains(target, protectedPath) || (item !== process.env.HOME && contains(protectedPath, target))) {
+    throw new Error(`isolation refusal: dogfood destination overlaps protected state: ${target}`);
+  }
+}
+if (fs.existsSync(target) && !fs.statSync(target).isDirectory()) throw new Error('isolation refusal: dogfood root must be a directory');
 const cache = real(process.env.CACHE);
 const rel = path.relative(cache, target);
 if (rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel))) {

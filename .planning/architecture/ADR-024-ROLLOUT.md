@@ -176,7 +176,7 @@ The continuation permits only npm executable links in `node_modules/.bin` whose
 fully resolved regular file targets have one hardlink and stay physically within
 the same candidate npm cache/prefix (or candidate `npm`) subtree. Other symlinks
 and outside/dangling/cyclic/directory/active-state/hardlink hazards still refuse
-before writes. The earlier npm-cache-only correction was subsequently tested as recorded below; corrected plugin-cache installation is pending coordinator
+before writes. The earlier npm-cache-only correction was subsequently tested as recorded below; the later plugin-cache installation succeeded at `6a33b2ae`; the current hook change awaits coordinator
 execution; the earlier workaround and failed hook remain historical.
 Retain redacted-only status filenames `codex-authenticated-status.json`,
 `claude-authenticated-normal-home-status.json`, and
@@ -308,7 +308,7 @@ change ADR-023's D6 ownership.
   slices and the checklist above are complete. The ADR-023 D6 owner alone
   decides any outer activation.
 
-Latest actual controlled source `cbf11a60841a1a9228267ba01cb6b02e64fe856a`
+Earlier actual controlled source `cbf11a60841a1a9228267ba01cb6b02e64fe856a`
 (signed by the trusted host, per operator report) ran a fresh full installation:
 Codex 0, Claude dependency 0, Claude hook 3 on
 `claude/config/plugins/cache/gsd-core/gsd-core/1.15.0/node_modules/.bin/acorn`.
@@ -319,5 +319,8 @@ resolved single-link regular executable to stay in its own physical dependency
 `node_modules` subtree. External Codex `tmp/arg0` shims remain forbidden.
 Only redacted `attempts.json` and `claude-install.log` were read for this latest
 observation; no other fresh installation, authentication or credential artifact
-was read. Corrected plugin-cache source installation remains pending coordinator
-execution; all eight native pairs and release remain HOLD.
+was read. The later corrected plugin-cache installation succeeded at source `6a33b2ae`, as recorded below; this earlier failed attempt remains historical evidence.
+
+## Latest retained successful installation and current review boundary
+
+Latest retained controlled installation used source `6a33b2ae1a8cf8884c4336e01170a1c6ed2ea158`: Codex installation, Claude dependency and Claude plugin preparation all exited 0, with shared defaults unchanged in all three records. Evidence: `/Volumes/KINGSTON/.wt-claude-shipyard/phase46-postfix-plugin-links-fresh-20261002/attempts.json` (1790 bytes, SHA-256 `ddb3b2aafa05cab7e6be472d81d3e79333f2f41514cbb0fe3278c0533873cb92`). The redacted durable index `/tmp/phase46-full-auth-success-install-durable.json` reports archive SHA-256 `cd3f525c362bda711e5a948b5d0dd4c2dfa568e5af0d5094201359675eb35de2`; the archive itself was not opened. Authentication and profile readiness are already true per retained operator evidence; they do not establish complete native-pair receipts. Installed Codex source `dad21495143a5b4e06fe1ecd5aa2e4eee56be9e3` is a separate later identity verified read-only from `/Volumes/KINGSTON/.wt-claude-shipyard/phase46-isolated-recheck-20261002/codex-candidate/agents/.shipyard-provenance.json` (`source_sha` matches and `dirty: false`), not the source of the historical three-stage result. The hook change in this review round has not undergone a fresh actual installation; that check is coordinator-owned. All eight complete native pairs, rollback rehearsal, live release round, release, operator checkpoint and activation remain HOLD.

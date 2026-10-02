@@ -519,7 +519,12 @@ fs.symlinkSync('../'+executable,path.join(modules,'.bin',${pluginCache ? "'acorn
       let destination = target;
       if (hazard === 'outside') destination = path.join(f.ambient, '.gsd/defaults.json');
       if (hazard === 'sibling-subtree') destination = path.join(f.candidate, '.shipyard-home/.gsd/defaults.json');
-      if (hazard === 'external-shim') destination = path.join(f.ambient, '.codex/tmp/arg0/shim');
+      if (hazard === 'external-shim') {
+        destination = path.join(f.ambient, '.codex/tmp/arg0/shim');
+        fs.mkdirSync(path.dirname(destination), { recursive: true });
+        fs.writeFileSync(destination, 'external fixture shim');
+        assert.ok(fs.lstatSync(destination).isFile());
+      }
       if (hazard === 'dangling') destination = path.join(path.dirname(target), 'missing');
       if (hazard === 'cyclic') destination = link;
       if (hazard === 'directory') destination = path.dirname(target);
@@ -529,6 +534,7 @@ fs.symlinkSync('../'+executable,path.join(modules,'.bin',${pluginCache ? "'acorn
       const snapshot = fullSnapshot(f.dir);
       const refused = f.run('/bin/bash', ['scripts/ensure-gsd-core.sh', '--isolation-env', selectedRuntime, f.candidate]);
       assert.equal(refused.status, 3, hazard + refused.stderr);
+      if (hazard === 'external-shim') assert.match(refused.stderr, /npm executable escapes npm subtree/);
       assert.deepEqual(fullSnapshot(f.dir), snapshot, hazard + ' refuses before writes');
       if (hazard === 'hardlink') fs.unlinkSync(path.join(path.dirname(target), 'alias'));
       if (hazard === 'non-npm') fs.unlinkSync(path.join(f.candidate, 'ordinary-link'));
@@ -579,7 +585,7 @@ test('marketplace through generated installed bootstrap and idempotent early ret
 
 test('isolated Claude config without an envelope refuses before dependency and dogfood copy', t => {
   const f = processFixture(t), before = fullSnapshot(f.dir);
-  for (const args of [['scripts/ensure-gsd-core.sh', 'claude'], ['scripts/install-shipyard-claude-hook.sh', '--dogfood-root', path.join(f.candidate, 'plugin')]]) {
+  for (const args of [['scripts/ensure-gsd-core.sh', 'claude'], ['scripts/install-shipyard-claude-hook.sh', '--dogfood-root', path.join(f.candidate, 'plugin'), '--wire-hooks']]) {
     const result = f.run('/bin/bash', args, { SHIPYARD_ISOLATION_ROOT: undefined });
     assert.notEqual(result.status, 0); assert.match(result.stderr, /absolute bounded candidate root/);
     assert.deepEqual(fullSnapshot(f.dir), before);
@@ -661,4 +667,27 @@ test('empty explicit envelopes and relative selected runtime paths refuse before
     assert.notEqual(result.status, 0); assert.match(result.stderr, /isolation refusal/);
     assert.deepEqual(fullSnapshot(f.dir), before);
   }
+});
+
+ test('legacy make unwired Claude dogfood copies only; wired copy without envelope refuses', t => {
+  const f = processFixture(t), before = fullSnapshot(f.ambient);
+  const plugin = path.join(f.candidate, 'legacy-plugin');
+  const env = { ...f.env, SHIPYARD_ISOLATION_ROOT: undefined, CLAUDE_HOME: undefined, CLAUDE_CONFIG_DIR: undefined, CODEX_HOME: undefined };
+  const installed = spawnSync('make', ['install-shipyard-dogfood-claude', `DOGFOOD_ROOT=${plugin}`], { cwd: repository, env, encoding: 'utf8' });
+  assert.equal(installed.status, 0, installed.stdout + installed.stderr);
+  assert.ok(fs.existsSync(path.join(plugin, '.shipyard-provenance.json')));
+  assert.deepEqual(fullSnapshot(f.ambient), before);
+  assert.equal(fs.existsSync(path.join(f.candidate, '.shipyard-home')), false);
+  for (const unsafe of [f.ambient, path.join(f.ambient, '.gsd'), path.join(f.ambient, '.claude'), repository]) {
+    const snapshot = fullSnapshot(f.dir);
+    const refused = spawnSync('/bin/bash', ['scripts/install-shipyard-claude-hook.sh', '--dogfood-root', unsafe], { cwd: repository, env, encoding: 'utf8' });
+    assert.notEqual(refused.status, 0);
+    assert.match(refused.stderr, /overlaps protected state/);
+    assert.deepEqual(fullSnapshot(f.dir), snapshot);
+  }
+  const snapshot = fullSnapshot(f.dir);
+  const wired = spawnSync('/bin/bash', ['scripts/install-shipyard-claude-hook.sh', '--dogfood-root', plugin, '--wire-hooks'], { cwd: repository, env, encoding: 'utf8' });
+  assert.notEqual(wired.status, 0);
+  assert.match(wired.stderr, /absolute bounded candidate root/);
+  assert.deepEqual(fullSnapshot(f.dir), snapshot);
 });
