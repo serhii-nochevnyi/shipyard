@@ -8872,7 +8872,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
-      "missing_paths": false,
+      "missing_paths": true,
       "files": [
         "docs/gsd_multilevel_delivery_pipeline.md",
         ".planning/architecture/ADR-024-ROLLOUT.md",
@@ -8930,7 +8930,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
-      "missing_paths": false,
+      "missing_paths": true,
       "files": [
         ".planning/phases/46-refresh-native-runtime-model-ladder/46-ROLLOUT-EVIDENCE.md"
       ],
@@ -8961,11 +8961,14 @@
       "files": [
         "plugins/delivery-pipeline/scripts/runtime-adapters.cjs",
         "plugins/delivery-pipeline/scripts/run-contract.cjs",
+        "plugins/delivery-pipeline/scripts/codex-delivery-host.cjs",
         "tests/unit/run-contract.test.cjs",
         "tests/unit/run-store.test.cjs",
+        "tests/unit/codex-delivery-host.test.cjs",
         "tests/unit/runtime-file-digests.json",
         "plugins/shipyard/host/plugins/delivery-pipeline/scripts/runtime-adapters.cjs",
         "plugins/shipyard/host/plugins/delivery-pipeline/scripts/run-contract.cjs",
+        "plugins/shipyard/host/plugins/delivery-pipeline/scripts/codex-delivery-host.cjs",
         "plugins/shipyard/.codex-plugin/plugin.json",
         "plugins/shipyard/package-build.json"
       ],

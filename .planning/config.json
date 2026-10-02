@@ -93,9 +93,13 @@
       "standard": "high",
       "heavy": "xhigh"
     },
-    "agent_overrides": {}
+    "agent_overrides": {
+      "gsd-code-reviewer": "xhigh"
+    }
   },
-  "model_overrides": {},
+  "model_overrides": {
+    "gsd-code-reviewer": "opus"
+  },
   "delivery_pipeline": {
     "max_concurrent_agents": 4,
     "model_ladder": "adaptive",
@@ -313,6 +317,21 @@
             "tests/unit/run-scope.test.cjs"
           ],
           "profile": "sandbox",
+          "timeout_s": 600
+        },
+        {
+          "argv": [
+            "node",
+            "--test",
+            "tests/unit/run-contract.test.cjs",
+            "tests/unit/run-store.test.cjs",
+            "tests/unit/run-controller.test.cjs",
+            "tests/unit/model-policy.test.cjs",
+            "tests/unit/marketplace-install.test.cjs",
+            "tests/unit/run-scope.test.cjs",
+            "tests/unit/codex-delivery-host.test.cjs"
+          ],
+          "profile": "host",
           "timeout_s": 600
         }
       ]

@@ -4410,7 +4410,7 @@ tickets:
     repo: null
     wave: 5
     depends_on: [T-46-06]
-    files: [plugins/delivery-pipeline/scripts/runtime-adapters.cjs, plugins/delivery-pipeline/scripts/run-contract.cjs, tests/unit/run-contract.test.cjs, tests/unit/run-store.test.cjs, tests/unit/runtime-file-digests.json, plugins/shipyard/host/plugins/delivery-pipeline/scripts/runtime-adapters.cjs, plugins/shipyard/host/plugins/delivery-pipeline/scripts/run-contract.cjs, plugins/shipyard/.codex-plugin/plugin.json, plugins/shipyard/package-build.json]
+    files: [plugins/delivery-pipeline/scripts/runtime-adapters.cjs, plugins/delivery-pipeline/scripts/run-contract.cjs, plugins/delivery-pipeline/scripts/codex-delivery-host.cjs, tests/unit/run-contract.test.cjs, tests/unit/run-store.test.cjs, tests/unit/codex-delivery-host.test.cjs, tests/unit/runtime-file-digests.json, plugins/shipyard/host/plugins/delivery-pipeline/scripts/runtime-adapters.cjs, plugins/shipyard/host/plugins/delivery-pipeline/scripts/run-contract.cjs, plugins/shipyard/host/plugins/delivery-pipeline/scripts/codex-delivery-host.cjs, plugins/shipyard/.codex-plugin/plugin.json, plugins/shipyard/package-build.json]
     risk: high
     human_checkpoint: true
     checkpoint: review
