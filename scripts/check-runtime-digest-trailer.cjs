@@ -34,7 +34,17 @@ function trailerBlock(message) {
 
 function refreshedPaths(message) {
   const paths = new Set();
-  for (const line of trailerBlock(message)) {
+  const text = String(message || '').replace(/\r\n/g, '\n');
+  const blocks = [trailerBlock(text)];
+  // GitHub's default squash message preserves each original commit as a
+  // '* subject' section. Its trailers remain at that section's end.
+  if (/^[^\n]+ \(#\d+\)\n/.test(text)) {
+    const sections = text.split(/\n\n(?=\* [^\n]+(?:\n|$))/);
+    if (sections.length > 1) {
+      for (const section of sections.slice(1)) blocks.push(trailerBlock(section));
+    }
+  }
+  for (const line of blocks.flat()) {
     const m = TRAILER_KEY.exec(line);
     if (m) paths.add(m[1]);
   }
