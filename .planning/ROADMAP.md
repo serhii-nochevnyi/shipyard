@@ -930,8 +930,8 @@ Native-role policy changes are authorized for investigation and implementation a
 <!-- shipyard:gsd-sync:begin -->
 ## Shipyard synchronization (generated)
 
-- Source fingerprint: `b05ee2d99d30999a84c9f6f636abdb5fb70c57d86e7ec5baa0db6c875f3620e9`
-- Plans merged: 247/251
+- Source fingerprint: `d144ff57edd373349705cd7a327f41f165c376b3399409c3d83b6e7d8a349467`
+- Plans merged: 251/253
 - Phases verified: 10/28
 - Current phase: 20
 
@@ -963,7 +963,7 @@ Native-role policy changes are authorized for investigation and implementation a
 | 43 — Target-project delivery at scale | 19 | 19 | pending |
 | 44 — Optimize subscription efficiency per runtime | 8 | 8 | pending |
 | 45 — Close residual pipeline efficiency gaps | 18 | 18 | gaps_found |
-| 46 — Refresh the native runtime model ladder | 4 | 0 | pending |
+| 46 — Refresh the native runtime model ladder | 6 | 4 | gaps_found |
 | 47 — Complete deferred decomposition wait attribution | 0 | 0 | pending |
 
 <!-- shipyard:gsd-sync:end -->

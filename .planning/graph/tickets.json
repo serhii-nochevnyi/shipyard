@@ -8944,6 +8944,84 @@
       "primary_parent": "T-46-05",
       "pr_base": "ticket/T-46-05-regenerate-the-reviewed-package-and-veri",
       "jira": null
+    },
+    "T-46-07": {
+      "title": "Preserve versioned native identities in persisted run contracts",
+      "plan": ".planning/phases/46-refresh-native-runtime-model-ladder/46-07-PLAN.md",
+      "phase": "46",
+      "repo": null,
+      "wave": 5,
+      "depends_on": [
+        "T-46-06"
+      ],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": false,
+      "files": [
+        "plugins/delivery-pipeline/scripts/runtime-adapters.cjs",
+        "plugins/delivery-pipeline/scripts/run-contract.cjs",
+        "plugins/delivery-pipeline/scripts/codex-delivery-host.cjs",
+        "tests/unit/run-contract.test.cjs",
+        "tests/unit/run-store.test.cjs",
+        "tests/unit/codex-delivery-host.test.cjs",
+        "tests/unit/runtime-file-digests.json",
+        "plugins/shipyard/host/plugins/delivery-pipeline/scripts/runtime-adapters.cjs",
+        "plugins/shipyard/host/plugins/delivery-pipeline/scripts/run-contract.cjs",
+        "plugins/shipyard/host/plugins/delivery-pipeline/scripts/codex-delivery-host.cjs",
+        "plugins/shipyard/.codex-plugin/plugin.json",
+        "plugins/shipyard/package-build.json"
+      ],
+      "risk": "high",
+      "type": "implementation",
+      "human_checkpoint": true,
+      "checkpoint": "review",
+      "preauthorized": false,
+      "branch": "ticket/T-46-07-preserve-history-runtime-trailer",
+      "epic": "epic/46-refresh-native-runtime-model-ladder",
+      "primary_parent": "T-46-06",
+      "pr_base": "ticket/T-46-06-independently-review-native-application",
+      "jira": null
+    },
+    "T-46-08": {
+      "title": "Confine candidate dependency installation and tuning to isolated state",
+      "plan": ".planning/phases/46-refresh-native-runtime-model-ladder/46-08-PLAN.md",
+      "phase": "46",
+      "repo": null,
+      "wave": 6,
+      "depends_on": [
+        "T-46-07",
+        "T-46-06"
+      ],
+      "cross_phase_deps": [],
+      "cross_repo_deps": [],
+      "unreachable_paths": false,
+      "missing_paths": true,
+      "files": [
+        "scripts/ensure-gsd-core.sh",
+        "scripts/install-shipyard-codex.sh",
+        "scripts/install-shipyard-marketplace.cjs",
+        "scripts/bootstrap-shipyard-plugin.cjs",
+        "scripts/install-shipyard-claude-hook.sh",
+        "tests/unit/marketplace-installer.test.cjs",
+        ".planning/architecture/ADR-024-ROLLOUT.md",
+        "docs/audits/phase46/2026-10-01-isolated-native-rollout-proof.md",
+        "plugins/shipyard/host/scripts/ensure-gsd-core.sh",
+        "plugins/shipyard/host/scripts/install-shipyard-codex.sh",
+        "plugins/shipyard/host/scripts/bootstrap-shipyard-plugin.cjs",
+        "plugins/shipyard/.codex-plugin/plugin.json",
+        "plugins/shipyard/package-build.json"
+      ],
+      "risk": "high",
+      "type": "implementation",
+      "human_checkpoint": true,
+      "checkpoint": "review",
+      "preauthorized": false,
+      "branch": "ticket/T-46-08-confine-candidate-dependency-installatio",
+      "epic": "epic/46-refresh-native-runtime-model-ladder",
+      "primary_parent": "T-46-07",
+      "pr_base": "ticket/T-46-07-preserve-history-runtime-trailer",
+      "jira": null
     }
   }
 }
