@@ -1663,6 +1663,25 @@ test('unknown native pid probe refuses recovery with zero durable recorder recor
   }
 });
 
+test('Codex recovery scans existing native transcripts even when its zero-wait deadline elapses', async () => {
+  const setup = await recoverySetup('gsd-planner');
+  const originalNow = Date.now;
+  try {
+    assert.equal(setup.crashError.code, 'SIMULATED_HOST_DEATH');
+    setup.setLeasePid(2147483647);
+    let now = originalNow();
+    Date.now = () => ++now;
+    const recovered = await setup.recover();
+    assert.equal(recovered.recovered, true);
+    assert.equal(recovered.receipt.compliance, 'verified');
+    assert.equal(setup.recorder.getReservation(setup.dispatchId).recorded, true);
+    assert.equal(setup.spawned.length, 0);
+  } finally {
+    Date.now = originalNow;
+    setup.f.clean();
+  }
+});
+
 test('Codex recovery gates every judgment role at the recorder boundary', async () => {
   for (const role of ['gsd-phase-researcher', 'gsd-planner', 'gsd-plan-checker']) {
     for (const refusal of ['WRITER_FENCED', 'FOREIGN_EDIT']) {
