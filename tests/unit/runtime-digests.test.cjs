@@ -134,6 +134,30 @@ test('passes an annotated pin commit', () => {
   assert.equal(result.status, 0, result.stderr);
 });
 
+for (const [name, message, passes] of [
+  ['accepts trailers at original commit ends in a GitHub squash',
+    `Refresh runtime (#412)\n\n* refresh pin\n\nRuntime-Digest-Refresh: ${FILE_A}\nShipyard-Verification-Evidence: original\n\n* finalize verification\n\nShipyard-Verification-Evidence: final`, true],
+  ['rejects ordinary body text posing as a trailer',
+    `Refresh runtime\n\nRuntime-Digest-Refresh: ${FILE_A}\n\nAdditional explanation`, false],
+  ['rejects a trailer inside a squash section body',
+    `Refresh runtime (#412)\n\n* refresh pin\n\nRuntime-Digest-Refresh: ${FILE_A}\n\nAdditional explanation\n\n* finalize verification\n\nShipyard-Verification-Evidence: final`, false],
+  ['rejects a squash trailer for a different path',
+    `Refresh runtime (#412)\n\n* refresh pin\n\nRuntime-Digest-Refresh: ${FILE_B}\n\n* finalize verification\n\nShipyard-Verification-Evidence: final`, false],
+  ['does not interpret bullets in ordinary commit messages as squash sections',
+    `Refresh runtime\n\n* refresh pin\n\nRuntime-Digest-Refresh: ${FILE_A}\n\n* finalize verification\n\nShipyard-Verification-Evidence: final`, false],
+]) {
+  test(name, () => {
+    const { repo, env } = fixture();
+    const base = git(repo, ['rev-parse', 'HEAD'], env);
+    writeFile(repo, FILE_A, 'const a = 2;\n');
+    writePin(repo, { [FILE_A]: sha256('const a = 2;\n'), [FILE_B]: sha256('const b = 2;\n') });
+    git(repo, ['add', '-A'], env);
+    git(repo, ['commit', '-q', '-m', message], env);
+    const result = runCheckTrailer(repo, ['--base', base]);
+    assert.equal(result.status === 0, passes, result.stderr);
+  });
+}
+
 test('fails an unannotated pin commit, naming the commit and the missing path', () => {
   const { repo, env } = fixture();
   const base = git(repo, ['rev-parse', 'HEAD'], env);
