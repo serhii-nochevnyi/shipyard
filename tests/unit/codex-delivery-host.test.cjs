@@ -1243,7 +1243,9 @@ test('recovery-only CLI returns the signed artifact with zero executor launches 
       (refusal) => refusal.code === 'INVALID_INPUT');
     assert.throws(() => parseResumeArguments(['--resume-finalization', 'not-an-id', '--scope-file', scopeFile]),
       (refusal) => refusal.code === 'INVALID_INPUT');
-    fs.writeFileSync(scopeFile, JSON.stringify(liveScope(f)));
+    const recoveryScope = liveScope(f);
+    fs.writeFileSync(scopeFile, JSON.stringify(recoveryScope));
+    const candidateBytes = fs.readFileSync(candidatePath(f, error.candidate_id), 'utf8');
     const output = [];
     const result = await runCli(['--resume-finalization', error.candidate_id, '--scope-file', scopeFile],
       { write: (chunk) => output.push(chunk) }, {
@@ -1252,8 +1254,92 @@ test('recovery-only CLI returns the signed artifact with zero executor launches 
       });
     assert.equal(result.artifact.commit, git(f.root, 'rev-parse', 'HEAD'));
     assert.equal(JSON.parse(output.join('')).artifact.candidate_id, error.candidate_id);
+    assertRecoveryPolicy(f, error.candidate_id, recoveryScope);
+    assert.equal(fs.readFileSync(candidatePath(f, error.candidate_id), 'utf8'), candidateBytes);
     assert.equal(f.calls.length, launchesBefore);
   } finally { clean(f); }
+});
+
+function assertRecoveryPolicy(f, id, scope) {
+  const file = candidatePath(f, id);
+  const candidate = JSON.parse(fs.readFileSync(file, 'utf8')).payload;
+  const original = f.host.recorder.getVerifiedRecord(candidate.dispatch_id);
+  assert.equal(candidate.policy_version, original.policy_version);
+  assert.equal(candidate.policy_hash, original.receipt.policy_hash);
+  const identity = crypto.createHash('sha256').update(`${scope.run_id}\0${fs.realpathSync(f.root)}`).digest('hex');
+  const stored = createRunController({ storeDir: path.join(f.storageRoot, identity, 'runs') }).status(scope.run_id);
+  assert.equal(stored.scope.dispatch.policy_version, original.policy_version);
+  assert.equal(stored.scope.dispatch.policy_hash, original.receipt.policy_hash);
+}
+
+function resealCandidate(f, id, mutate) {
+  const payload = JSON.parse(fs.readFileSync(candidatePath(f, id), 'utf8')).payload;
+  delete payload.candidate_id;
+  mutate(payload);
+  const sorted = (value) => Array.isArray(value) ? value.map(sorted)
+    : value && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort().map((key) => [key, sorted(value[key])])) : value;
+  const canonical = (value) => JSON.stringify(sorted(value));
+  const nextId = crypto.createHash('sha256').update(canonical(payload)).digest('hex');
+  payload.candidate_id = nextId;
+  const key = fs.readFileSync(path.join(stateRoot(f), 'finalization-authority', 'hmac.key'));
+  const envelope = { format: 'shipyard.host-authenticated.v1', payload,
+    integrity: { algorithm: 'hmac-sha256', mac: crypto.createHmac('sha256', key).update(canonical(payload)).digest('hex') } };
+  fs.writeFileSync(candidatePath(f, nextId), JSON.stringify(envelope) + '\n', { mode: 0o600 });
+  return nextId;
+}
+
+test('recovery CLI derives a legacy candidate version only from bound authenticated authority and refuses conflicts', async () => {
+  for (const variant of ['legacy', 'conflict', 'null', 'missing-authority', 'historical']) {
+    const f = fixture();
+    try {
+      const error = await failedFinalization(f);
+      const id = resealCandidate(f, error.candidate_id, (candidate) => {
+        if (variant === 'legacy') delete candidate.policy_version;
+        if (variant === 'conflict') candidate.policy_version = 'adr-014.v6';
+        if (variant === 'null') candidate.policy_version = null;
+      });
+      const scope = liveScope(f);
+      const file = path.join(f.graphDir, 'recovery-scope.json');
+      fs.writeFileSync(file, JSON.stringify(scope));
+      const before = fs.readFileSync(candidatePath(f, id), 'utf8');
+      let recorder = f.host.recorder;
+      if (variant === 'missing-authority') recorder = { getVerifiedRecord(dispatchId) {
+        const record = structuredClone(f.host.recorder.getVerifiedRecord(dispatchId));
+        delete record.policy_version;
+        delete record.resolution.policy_version;
+        delete record.receipt.policy_version;
+        return record;
+      } };
+      const action = () => runCli(['--resume-finalization', id, '--scope-file', file], { write() {} },
+        { storageRoot: f.storageRoot, graphDir: f.graphDir, finalizeCommit, verification: f.verification, recorder });
+      if (variant === 'historical') {
+        const candidate = JSON.parse(before).payload;
+        const record = structuredClone(f.host.recorder.getVerifiedRecord(candidate.dispatch_id));
+        const hash = '30e71fb4066fee5b67df14120532c0b4f8aedde169907bc16f70dd2569744968';
+        record.policy_version = record.resolution.policy_version = 'adr-014.v6';
+        record.policy_hash = record.resolution.policy_hash = record.receipt.policy_hash = hash;
+        record.receipt.compliance_proof.policy_hash = hash;
+        if (Object.hasOwn(record.receipt, 'policy_version')) record.receipt.policy_version = 'adr-014.v6';
+        const sorted = (value) => Array.isArray(value) ? value.map(sorted)
+          : value && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort().map((key) => [key, sorted(value[key])])) : value;
+        const historicalId = resealCandidate(f, id, (value) => {
+          value.policy_version = 'adr-014.v6';
+          value.policy_hash = hash;
+          value.receipt_sha256 = crypto.createHash('sha256').update(JSON.stringify(sorted(record.receipt))).digest('hex');
+        });
+        await assert.rejects(() => recovery(f, { recorder: { getVerifiedRecord() { return record; } } })
+          .resumeFinalization(historicalId, scope), (error) => error.code === 'IDENTITY_CHANGED' && error.invalidated.includes('policy'));
+      } else if (variant === 'legacy') {
+        await action();
+        assert.equal(git(f.root, 'rev-parse', 'HEAD^'), f.base);
+      } else {
+        await assert.rejects(action, (error) => error.code === (variant === 'missing-authority' ? 'MISSING_RECEIPT' : 'IDENTITY_CHANGED'));
+        assert.equal(git(f.root, 'rev-parse', 'HEAD'), f.base);
+      }
+      assert.equal(fs.readFileSync(candidatePath(f, id), 'utf8'), before);
+      assert.equal(f.calls.length, 1);
+    } finally { clean(f); }
+  }
 });
 
 function approvedPlan(f, commands) {
@@ -1326,11 +1412,13 @@ test('recovery-only CLI reuses the PLAN-pinned verification spec without an inje
     }).run({ role: 'executor', context: { prompt: 'Implement the scoped ticket.' } }),
     (error) => { captured = error; return error.code === 'SIGNING_FAILED'; });
     const scopeFile = path.join(f.graphDir, 'recovery-scope.json');
-    fs.writeFileSync(scopeFile, JSON.stringify(liveScope(f)));
+    const recoveryScope = liveScope(f);
+    fs.writeFileSync(scopeFile, JSON.stringify(recoveryScope));
     const result = await runCli(['--resume-finalization', captured.candidate_id, '--scope-file', scopeFile], { write() {} },
       { storageRoot: f.storageRoot, graphDir: f.graphDir, finalizeCommit, recorder: f.host.recorder });
     assert.equal(result.artifact.commit, git(f.root, 'rev-parse', 'HEAD'));
     assert.equal(git(f.root, 'rev-parse', 'HEAD^'), f.base);
+    assertRecoveryPolicy(f, captured.candidate_id, recoveryScope);
     assert.equal(f.calls.length, 1);
   } finally { clean(f); }
 });
