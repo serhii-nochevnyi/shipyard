@@ -1,14 +1,18 @@
 # Phase 46 isolated installation proof and remaining HOLD
 
-Date: 2026-10-02. Scope: T-46-08 / P46-D, P46-E. This proof path was absent on parent `66519ad3f633bcdb1123213310983c34b7a56e0a`; it is created here.
+Date: 2026-10-02. Scope: T-46-08 / P46-D, P46-E. This proof path was absent on parent `66519ad3f633bcdb1123213310983c34b7a56e0a`; it was created by the prior core execution and is updated in this continuation.
 
 The original authenticated integration at `1ead39a290966aacc3cb37a0feb2acb851b58300` found F1: GSD wrote `runtime: codex` to shared defaults and Shipyard removed that key. The historical before-image is unavailable. No restoration is claimed. The operator explicitly accepted the current shared-defaults bytes as the baseline; this supersedes a demand to reconstruct unknown historical bytes, without erasing the violation.
 
 Three actual controlled installation stages exited 0 and preserved that approved baseline's recorded bytes, mode, uid, gid and mtime. Their complete argv, cwd, actual environment overrides, exits and log hashes appear below. This was an external OS HOME workaround against the earlier source, with sibling OS homes and npm cache in the retained rollout-artifact directory. It does not prove that the published installers were isolated, and it did not execute this new source guard. The corrected guard would reject that external npm cache unless its destination was changed to lie within the candidate envelope.
 
-The corrected-source regression uses temporary fixture homes and a deliberately aggressive fake npx that writes through `os.homedir()`. The source generator, installer, tuner and generated package bootstrap are real. Fixture capabilities, converter, marketplace CLI responses and application records are fixture evidence only. A negative control demonstrates outside-write detection; native-home divergence refuses before installation or state creation. Actual controlled post-fix installation is still required later by the operator. No real installer, authentication command or native model call was run by T-46-08.
+The corrected-source regression uses temporary fixture homes and a deliberately aggressive fake npx that writes through `os.homedir()`. The source generator, installer, tuner and generated package bootstrap are real. Fixture capabilities, converter, marketplace CLI responses and application records are fixture evidence only. A negative control demonstrates outside-write detection; native-home divergence refuses before installation or state creation. Actual controlled current-safe-link installation is still required later by the coordinator. No real installer, authentication command or native model call was run by T-46-08.
 
-Fresh redacted status records report Codex profile authentication succeeded and Claude authentication succeeded with normal OS HOME and an isolated config via Keychain. Claude candidate OS HOME authentication remains **FALSE**; normal-home config isolation does not establish candidate OS-home authentication. These statuses prove no model entitlement or native model/effort application. No auth file or credential was read or copied.
+Fresh redacted status records establish both OS profiles authenticated. Claude dedicated candidate OS HOME authentication exited 0 / loggedIn true at `2026-10-02T09:47:30.624434+00:00`, using a dedicated isolated macOS Keychain; active default/search Keychain metadata and shared defaults remain unchanged. The earlier normal-home observation remains historical. Authentication proves no model entitlement or native model/effort application. This continuation read only redacted status JSON, never credential/password/Keychain files or archives.
+
+Chronology: the original violation at integration head `1ead39a290966aacc3cb37a0feb2acb851b58300` precedes the external workaround recorded below. Prior core work is retained at `6d1bfbc4`; the later controlled-source attempt records raw source head `3eea0e4d58e327970c5a70aa3e498317a79d88ae`, distinct from this continuation's starting head `b7b565d68d7f64bf9ace72d776b41a24280f3f62`. That attempt's Codex installation exited 0, Claude dependency exited 0, and Claude hook exited 3 on its dependency-created contained npm `node_modules/.bin/anthropic-ai-sdk` link. All three recorded shared defaults unchanged. Core VERSION was 1.14.0 as requested, but the actually discovered enabled Claude marketplace dependency was **1.15.0**; the marketplace pin 1.14.0 was not honored. This failed two-stage attempt is historical and does not prove installation of the current safe-link correction.
+
+The read-only guard now accepts only npm `.bin` executable links whose fully resolved regular, single-link file targets remain physically in the same candidate npm subtree. Outside, dangling, cyclic, directory, active-state, hardlink and other symlink hazards still refuse before any write. Actual current-safe-link fixed-source controlled installation remains pending with the coordinator. Durable retention must contain redacted-only status filenames `codex-authenticated-status.json`, `claude-authenticated-normal-home-status.json`, and `claude-authenticated-dedicated-home-status.json`, plus attempts/log hashes; no credential or Keychain material belongs in published or durable proof. No new durable sealing is claimed here.
 
 PR408 was APPROVED by `copilot-pull-request-reviewer[bot]` at exact head `992fd1fca755ce812ef04d3714f12e108378c090`, with both retained checks completed/success at that head. This is historical merged PR408 evidence, not a current T-46-08 approval, current CI pass, human review or rollout decision.
 
@@ -25,7 +29,7 @@ PR408 was APPROVED by `copilot-pull-request-reviewer[bot]` at exact head `992fd1
 | claude-sonnet-5-5 / xhigh | HOLD — genuine authorized role receipt absent |
 | claude-opus-5-5 / high | HOLD — genuine escalation duty/chain and receipt absent |
 
-Retained byte verification used read-only Python `hashlib.sha256(Path(path).read_bytes())`, JSON parsing and `tarfile.open(archive, 'r:').extractfile(member).read()` in the T-46-08 worktree; exit 0. Every referenced approved archive member and post-baseline durable file matched its manifest's byte count and SHA-256. Nothing was extracted to disk; the retained installer harness was hashed only, never executed. Absolute references and bounded source records follow so CI and future review do not require private paths.
+Prior core execution's retained byte verification used read-only Python `hashlib.sha256(Path(path).read_bytes())`, JSON parsing and `tarfile.open(archive, 'r:').extractfile(member).read()` in the T-46-08 worktree; exit 0. Every referenced approved archive member and post-baseline durable file matched its manifest's byte count and SHA-256. Nothing was extracted to disk; the retained installer harness was hashed only, never executed. Absolute references and bounded source records follow so CI and future review do not require private paths.
 
 ```json
 {
@@ -364,26 +368,115 @@ Retained byte verification used read-only Python `hashlib.sha256(Path(path).read
       "path": "/Users/serhii/.local/state/shipyard/evidence/phase46/66dd4bb8c6e9d32db180c797af242482ac338c0c8d44abeb8b3d831e5fb0b2aa.tar",
       "bytes": 30720,
       "sha256": "66dd4bb8c6e9d32db180c797af242482ac338c0c8d44abeb8b3d831e5fb0b2aa"
+    },
+    {
+      "path": "/Volumes/KINGSTON/.wt-claude-shipyard/phase46-isolated-recheck-20261002/claude-authenticated-dedicated-home-status.json",
+      "bytes": 343,
+      "sha256": "07c9e8972517125b59f79be7b4c7bd6a0242afcb577be5f2a1b2811384c3905c"
+    },
+    {
+      "path": "/Volumes/KINGSTON/.wt-claude-shipyard/phase46-postfix-install-cleanenv-20261002/attempts.json",
+      "bytes": 1778,
+      "sha256": "a9208523e10e57ed274864f68afb93bf949698c4df94c5a086064abd1c491266"
+    },
+    {
+      "path": "/Volumes/KINGSTON/.wt-claude-shipyard/phase46-postfix-install-cleanenv-20261002/codex-install.log",
+      "bytes": 8231,
+      "sha256": "e16eb67e6e58c2dfcc1e3e0366ebc420c5e74c1415afbf2e7b990d1a9837d014"
+    },
+    {
+      "path": "/Volumes/KINGSTON/.wt-claude-shipyard/phase46-postfix-install-cleanenv-20261002/claude-dependency.log",
+      "bytes": 4240,
+      "sha256": "77014ddb0dd1edd59c8a3bb4e843b8750b271c50fcb4f14004e73770f6c7820a"
+    },
+    {
+      "path": "/Volumes/KINGSTON/.wt-claude-shipyard/phase46-postfix-install-cleanenv-20261002/claude-install.log",
+      "bytes": 204,
+      "sha256": "7c150e090fae1bc3d78576aa84f8e9f381dc983f47146cac415c6e97772eafad"
     }
-  ]
+  ],
+  "claude_authenticated_dedicated_home_status": {
+    "observed_at": "2026-10-02T09:47:30.624434+00:00",
+    "runtime": "claude",
+    "exit": 0,
+    "loggedIn": true,
+    "authMethod": "claude.ai",
+    "apiProvider": "firstParty",
+    "isolated_os_home": true,
+    "credential_storage": "dedicated isolated macOS Keychain",
+    "active_keychain_metadata_unchanged": true,
+    "shared_defaults_unchanged": true
+  },
+  "controlled_source_attempts": [
+    {
+      "stage": "codex-install",
+      "exit": 0,
+      "source_head": "3eea0e4d58e327970c5a70aa3e498317a79d88ae",
+      "environment_overrides": {
+        "SHIPYARD_CODEX_CAPABILITIES_FILE": "/Users/serhii/.codex/shipyard/codex-capabilities.json"
+      },
+      "log_bytes": 8231,
+      "log_sha256": "e16eb67e6e58c2dfcc1e3e0366ebc420c5e74c1415afbf2e7b990d1a9837d014",
+      "shared_defaults_unchanged": true
+    },
+    {
+      "stage": "claude-dependency",
+      "exit": 0,
+      "source_head": "3eea0e4d58e327970c5a70aa3e498317a79d88ae",
+      "environment_overrides": {
+        "SHIPYARD_ISOLATION_ROOT": "/Volumes/KINGSTON/.wt-claude-shipyard/phase46-postfix-install-cleanenv-20261002/claude",
+        "CLAUDE_CONFIG_DIR": "/Volumes/KINGSTON/.wt-claude-shipyard/phase46-postfix-install-cleanenv-20261002/claude/config",
+        "CLAUDE_HOME": "/Volumes/KINGSTON/.wt-claude-shipyard/phase46-postfix-install-cleanenv-20261002/claude/config"
+      },
+      "log_bytes": 4240,
+      "log_sha256": "77014ddb0dd1edd59c8a3bb4e843b8750b271c50fcb4f14004e73770f6c7820a",
+      "shared_defaults_unchanged": true
+    },
+    {
+      "stage": "claude-install",
+      "exit": 3,
+      "source_head": "3eea0e4d58e327970c5a70aa3e498317a79d88ae",
+      "environment_overrides": {
+        "SHIPYARD_ISOLATION_ROOT": "/Volumes/KINGSTON/.wt-claude-shipyard/phase46-postfix-install-cleanenv-20261002/claude",
+        "CLAUDE_CONFIG_DIR": "/Volumes/KINGSTON/.wt-claude-shipyard/phase46-postfix-install-cleanenv-20261002/claude/config",
+        "CLAUDE_HOME": "/Volumes/KINGSTON/.wt-claude-shipyard/phase46-postfix-install-cleanenv-20261002/claude/config",
+        "SHIPYARD_GSD_AUTO_INSTALL": "0"
+      },
+      "log_bytes": 204,
+      "log_sha256": "7c150e090fae1bc3d78576aa84f8e9f381dc983f47146cac415c6e97772eafad",
+      "shared_defaults_unchanged": true
+    }
+  ],
+  "controlled_source_dependency_versions": {
+    "requested_core": "1.14.0",
+    "observed_core": "1.14.0",
+    "observed_claude_marketplace": "1.15.0",
+    "marketplace_pin_honored": false
+  },
+  "current_safe_link_controlled_install": "pending coordinator execution"
 }
 ```
 
-Corrected-source scoped verification uses the repository's `createHostProfileRunner`
-with the configured host environment allowlist PATH/LANG/LC_ALL. Each of the
-following four exact PLAN commands exited 0 in the T-46-08 worktree. Raw output
-and status records are retained as `/tmp/T-46-08-host-{0,1,2,3}.{log,json}`;
-these are local command evidence, not signed host finalization or native receipts.
+Prior core verification and RED evidence remain historical at signed core `6d1bfbc4`.
+This native continuation added a two-stage fake-npx regression first: the exact
+marketplace command exited 1 with a contained `.bin/anthropic-ai-sdk` refusal
+(`/tmp/T-46-08-continuation-red.log`). After the narrow guard correction and
+mechanical package generation, all four exact PLAN commands below exited 0
+through `createHostProfileRunner`, allowing PATH/LANG/LC_ALL only. Local raw
+outputs/status records are `/tmp/T-46-08-host-{0,1,2,3}.{log,json}`; these are
+unsealed fixture verification, not host finalization or native receipts.
 
 | Command | Exit |
 |---|---|
-| `node --test tests/unit/marketplace-installer.test.cjs` | 0 |
-| `node --test tests/unit/gen-codex-shipyard.test.cjs tests/unit/gsd-tune.test.cjs tests/unit/marketplace-install.test.cjs` | 0 |
+| `node --test tests/unit/marketplace-installer.test.cjs` | 0 (30 pass / 0 fail) |
+| `node --test tests/unit/gen-codex-shipyard.test.cjs tests/unit/gsd-tune.test.cjs tests/unit/marketplace-install.test.cjs` | 0 (3 owners pass) |
 | `bash tests/smoke/docs-smoke.sh` | 0 |
 | `bash -n scripts/ensure-gsd-core.sh scripts/install-shipyard-codex.sh scripts/install-shipyard-claude-hook.sh` | 0 |
 
-The initial `node --test tests/unit/marketplace-installer.test.cjs` was RED
-(exit 1, retained `/tmp/T-46-08-red.log`) before the source guard was implemented.
-No broader suite, real package download, authentication command or native
-runtime launch was executed. Independent review and trusted finalization of the
-live T-46-08 head remain pending. Actual controlled post-fix installation remains HOLD.
+No broader suite, real dependency installer, auth probe, account/Keychain/GPG
+operation, native launch, commit or push was performed by this continuation.
+No credential/password/Keychain file or archive was read. The coordinator owns
+actual current-safe-link fixed-source controlled installation. Trusted host
+owns staging, signing, finalization/sealing and current-head independent review.
+All eight native pairs, rollback rehearsal, final release live-round, operator
+checkpoint and activation remain HOLD under T-46-06 and ADR-023 D6 ownership.

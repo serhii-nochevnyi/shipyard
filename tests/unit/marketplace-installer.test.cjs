@@ -455,6 +455,48 @@ test('Claude explicit dependency and unwired dogfood preparation confine native 
   assert.equal(JSON.parse(fs.readFileSync(path.join(f.candidate, '.shipyard-home/.gsd/defaults.json'))).runtime, 'claude');
 });
 
+test('two-stage npm executable links survive dependency then Claude hook and packaged bootstrap', t => {
+  for (const runtime of ['claude', 'codex']) {
+    const f = processFixture(t), before = fullSnapshot(f.ambient);
+    const fake = path.join(f.bin, 'npx');
+    fs.appendFileSync(fake, `
+const modules=path.join(process.env.npm_config_cache,'_npx','fixture','node_modules');
+fs.mkdirSync(path.join(modules,'.bin'),{recursive:true});
+fs.mkdirSync(path.join(modules,'anthropic-ai-sdk'),{recursive:true});
+fs.writeFileSync(path.join(modules,'anthropic-ai-sdk','cli.js'),'fixture executable');
+fs.symlinkSync('../anthropic-ai-sdk/cli.js',path.join(modules,'.bin','anthropic-ai-sdk'));
+`);
+    const dependency = f.run('/bin/bash', ['scripts/ensure-gsd-core.sh', runtime]);
+    assert.equal(dependency.status, 0, dependency.stdout + dependency.stderr);
+    const link = path.join(f.candidate, '.shipyard-home/.npm/_npx/fixture/node_modules/.bin/anthropic-ai-sdk');
+    assert.ok(fs.lstatSync(link).isSymbolicLink());
+    const continued = runtime === 'claude'
+      ? f.run('/bin/bash', ['scripts/install-shipyard-claude-hook.sh', '--dogfood-root', path.join(f.candidate, 'plugin')], { SHIPYARD_GSD_AUTO_INSTALL: '0' })
+      : f.run(process.execPath, ['plugins/shipyard/host/scripts/bootstrap-shipyard-plugin.cjs'], { SHIPYARD_GSD_AUTO_INSTALL: '0' });
+    assert.equal(continued.status, 0, continued.stdout + continued.stderr);
+    assert.ok(fs.existsSync(runtime === 'claude' ? path.join(f.candidate, 'plugin/.shipyard-provenance.json') : path.join(f.env.CODEX_HOME, 'agents/.shipyard-manifest.json')));
+    assert.deepEqual(fullSnapshot(f.ambient), before);
+    const target = fs.realpathSync(link);
+    for (const hazard of ['outside', 'dangling', 'cyclic', 'directory', 'hardlink', 'non-npm']) {
+      fs.unlinkSync(link);
+      let destination = target;
+      if (hazard === 'outside') destination = path.join(f.ambient, '.gsd/defaults.json');
+      if (hazard === 'dangling') destination = path.join(path.dirname(target), 'missing');
+      if (hazard === 'cyclic') destination = link;
+      if (hazard === 'directory') destination = path.dirname(target);
+      if (hazard === 'hardlink') fs.linkSync(target, path.join(path.dirname(target), 'alias'));
+      if (hazard === 'non-npm') fs.symlinkSync(target, path.join(f.candidate, 'ordinary-link'));
+      fs.symlinkSync(destination, link);
+      const snapshot = fullSnapshot(f.dir);
+      const refused = f.run('/bin/bash', ['scripts/ensure-gsd-core.sh', '--isolation-env', runtime, f.candidate]);
+      assert.equal(refused.status, 3, hazard + refused.stderr);
+      assert.deepEqual(fullSnapshot(f.dir), snapshot, hazard + ' refuses before writes');
+      if (hazard === 'hardlink') fs.unlinkSync(path.join(path.dirname(target), 'alias'));
+      if (hazard === 'non-npm') fs.unlinkSync(path.join(f.candidate, 'ordinary-link'));
+    }
+  }
+});
+
 test('preflight rejects all escaping supported overrides and aliasing without any writes', t => {
   const f = processFixture(t);
   for (const key of ['GSD_DEFAULTS_PATH', 'AGENTS_SKILLS_DIR', 'CODEX_AGENTS_MD', 'GSD_CAPABILITIES_DIR', 'GSD_CAPABILITIES_ROOT',
@@ -526,8 +568,15 @@ test('published proof keeps historical approved baseline, attempts, exact PR408 
   assert.equal(data.codex_authenticated_status.logged_in, true);
   assert.equal(data.claude_authenticated_normal_home_status.environment, 'normal-home');
   assert.equal(data.claude_authenticated_normal_home_status.loggedIn, true);
-  assert.match(proof, /candidate OS HOME authentication remains \*\*FALSE\*\*/);
-  assert.match(proof, /Actual controlled post-fix installation is still required/);
+  assert.equal(data.claude_authenticated_dedicated_home_status.exit, 0);
+  assert.equal(data.claude_authenticated_dedicated_home_status.loggedIn, true);
+  assert.equal(data.claude_authenticated_dedicated_home_status.active_keychain_metadata_unchanged, true);
+  assert.deepEqual(data.controlled_source_attempts.map(a => a.exit), [0, 0, 3]);
+  assert.ok(data.controlled_source_attempts.every(a => a.shared_defaults_unchanged && a.source_head === '3eea0e4d58e327970c5a70aa3e498317a79d88ae'));
+  assert.equal(data.controlled_source_dependency_versions.observed_claude_marketplace, '1.15.0');
+  assert.equal(data.controlled_source_dependency_versions.marketplace_pin_honored, false);
+  assert.doesNotMatch(proof, /candidate OS HOME authentication remains \*\*FALSE\*\*/);
+  assert.match(proof, /Actual controlled current-safe-link installation is still required/);
   assert.match(proof, /rollback rehearsal, final release live-round, operator rollout checkpoint and activation/);
   assert.equal((proof.match(/\| HOLD —/g) || []).length, 8);
   const runbook = fs.readFileSync(path.join(repository, '.planning/architecture/ADR-024-ROLLOUT.md'), 'utf8');

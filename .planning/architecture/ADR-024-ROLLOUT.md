@@ -159,7 +159,29 @@ Unreleased Claude marketplace sources still refuse. Supported release
 marketplace setup propagates the same environment through dependency, hooks
 and capability installation. Native authentication and launches are a separate
 T-46-06/operator action; normal OS HOME plus isolated config/Keychain is not
-proof of candidate OS-home authentication. No credential copying is permitted.
+proof of candidate OS-home authentication. Fresh redacted dedicated-home status
+(`claude-authenticated-dedicated-home-status.json`, auth exit 0/loggedIn true)
+now establishes Claude candidate OS-profile authentication via a dedicated
+isolated Keychain, with active default/search metadata and shared defaults unchanged.
+Both OS profiles are authenticated; all eight native pairs, rollback rehearsal,
+final release live-round and activation remain HOLD. No credential copying is permitted.
+
+The controlled source attempt at `3eea0e4d58e327970c5a70aa3e498317a79d88ae`
+recorded Codex install 0, Claude dependency 0 and Claude hook 3: the read-only
+guard rejected a legitimate npm-created contained `.bin/anthropic-ai-sdk` link.
+Shared approved defaults were unchanged at every stage. Requested core 1.14.0
+was installed, while the actually discovered Claude marketplace dependency was
+1.15.0; do not treat the marketplace as pinned to 1.14.0.
+The continuation permits only npm executable links in `node_modules/.bin` whose
+fully resolved regular file targets have one hardlink and stay physically within
+the same candidate npm cache/prefix (or candidate `npm`) subtree. Other symlinks
+and outside/dangling/cyclic/directory/active-state/hardlink hazards still refuse
+before writes. Current-safe-link controlled installation is pending coordinator
+execution; the earlier workaround and failed hook remain historical.
+Retain redacted-only status filenames `codex-authenticated-status.json`,
+`claude-authenticated-normal-home-status.json`, and
+`claude-authenticated-dedicated-home-status.json`; never retain credentials,
+passwords or Keychain contents in this proof.
 
 Preserve former package/provenance/checksums. Stop if an existing target has
 foreign ownership, unsafe aliases or cannot satisfy the boundary. See the

@@ -96,8 +96,23 @@ try {
     }
     return resolved;
   }
+  function npmExecutable(value) {
+    if (path.basename(path.dirname(value)) !== '.bin' || path.basename(path.dirname(path.dirname(value))) !== 'node_modules') return false;
+    const npmRoots = [env.npm_config_cache, env.npm_config_prefix, path.join(root, 'npm')].map(physical);
+    const subtree = npmRoots.find(base => inside(root, base) && inside(base, value));
+    if (!subtree) return false;
+    const target = fs.realpathSync(value);
+    if (!inside(subtree, target)) fail(`npm executable escapes npm subtree: ${value}`);
+    validate(target);
+    const stat = fs.statSync(target);
+    if (!stat.isFile() || stat.nlink !== 1) fail(`unsafe npm executable target: ${value}`);
+    validate(path.dirname(value));
+    return true;
+  }
   function scan(value) {
-    if (!fs.existsSync(value)) return;
+    let stat;
+    try { stat = fs.lstatSync(value); } catch (error) { if (error.code === 'ENOENT') return; throw error; }
+    if (stat.isSymbolicLink() && npmExecutable(value)) return;
     validate(value);
     if (fs.lstatSync(value).isDirectory()) for (const name of fs.readdirSync(value)) scan(path.join(value, name));
   }
