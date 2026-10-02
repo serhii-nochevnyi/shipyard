@@ -36,7 +36,7 @@ function refreshedPaths(message) {
   const paths = new Set();
   const text = String(message || '').replace(/\r\n/g, '\n');
   const blocks = [trailerBlock(text)];
-  // @invariant: GitHub squash sections preserve original commit trailers at each section's end.
+  // @invariant: each preserved squash section must end with its own trailer paragraph.
   if (/^[^\n]+ \(#\d+\)\n/.test(text)) {
     const sections = text.split(/\n\n(?=\* [^\n]+(?:\n|$))/);
     if (sections.length > 1) {
