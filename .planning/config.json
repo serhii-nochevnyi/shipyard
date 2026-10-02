@@ -93,13 +93,9 @@
       "standard": "high",
       "heavy": "xhigh"
     },
-    "agent_overrides": {
-      "gsd-code-reviewer": "xhigh"
-    }
+    "agent_overrides": {}
   },
-  "model_overrides": {
-    "gsd-code-reviewer": "opus"
-  },
+  "model_overrides": {},
   "delivery_pipeline": {
     "max_concurrent_agents": 4,
     "model_ladder": "adaptive",
