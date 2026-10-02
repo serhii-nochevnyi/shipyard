@@ -152,7 +152,11 @@ if [[ ! -f "$GSD_TOOLS" ]]; then
   exit 1
 fi
 
-STAGE="$(mktemp -d)"
+if [[ -n "${SHIPYARD_ISOLATION_ROOT:-}" ]]; then
+  STAGE="$(mktemp -d "$TMPDIR/shipyard-stage.XXXXXX")"
+else
+  STAGE="$(mktemp -d)"
+fi
 ROLLBACK_ACTIVE=0
 cleanup() {
   local status="${1:-0}"
@@ -681,7 +685,7 @@ if [[ -f "$GSD_TUNE" ]]; then
   # the installer may have been launched from a ticket worktree or another
   # checkout entirely.
   (cd "$PROJECT_DIR" && GSD_RUNTIME=codex SHIPYARD_RUNTIME=codex \
-    node "$GSD_TUNE" --global --runtime codex --apply) 2>&1 | sed 's/^/  /' || { [[ -z "${SHIPYARD_ISOLATION_ROOT:-}" ]] || exit 1; }
+    run_isolated_tuner "$GSD_TUNE" --global --runtime codex --apply) 2>&1 | sed 's/^/  /' || { [[ -z "${SHIPYARD_ISOLATION_ROOT:-}" ]] || exit 1; }
 fi
 
 prepare_isolation codex "$CODEX_HOME" "${SHIPYARD_ISOLATION_ROOT-$CODEX_HOME}"

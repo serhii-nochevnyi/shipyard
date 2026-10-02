@@ -115,8 +115,33 @@ try {
       path.join(env.CLAUDE_CONFIG_DIR, 'plugins/cache'), path.join(env.CODEX_HOME, 'plugins/cache')].map(physical);
     if (!dependencyRoots.some(base => inside(root, base) && inside(base, dependencyRoot))) return false;
     const subtree = validate(dependencyRoot);
-    const target = fs.realpathSync(value);
-    if (!inside(subtree, target)) fail(`npm executable escapes npm subtree: ${value}`);
+    let target = subtree, pending = path.relative(subtree, value).split(path.sep), hops = 0;
+    const seen = new Set();
+    while (pending.length) {
+      const part = pending.shift();
+      if (!part || part === '.') continue;
+      if (part === '..') {
+        target = path.dirname(target);
+        if (!inside(subtree, target)) fail(`npm executable escapes npm subtree: ${value}`);
+        continue;
+      }
+      target = path.join(target, part);
+      const stat = fs.lstatSync(target);
+      if (stat.isSymbolicLink()) {
+        const state = target + '\0' + pending.join(path.sep);
+        if (seen.has(state) || ++hops > 40) fail(`cyclic npm executable: ${value}`);
+        seen.add(state);
+        const hop = fs.readlinkSync(target);
+        if (path.isAbsolute(hop)) {
+          if (!inside(subtree, hop)) fail(`npm executable escapes npm subtree: ${value}`);
+          pending = hop.slice(subtree.length).split(path.sep).concat(pending);
+          target = subtree;
+        } else {
+          pending = hop.split(path.sep).concat(pending);
+          target = path.dirname(target);
+        }
+      } else if (pending.length && !stat.isDirectory()) fail(`unsafe npm executable component: ${value}`);
+    }
     validate(target);
     const stat = fs.statSync(target);
     if (!stat.isFile() || stat.nlink !== 1) fail(`unsafe npm executable target: ${value}`);
@@ -149,6 +174,116 @@ try {
   writable.nativeDefaults = validate(path.join(actual.home, '.gsd/defaults.json'));
   process.stdout.write(JSON.stringify({ environment: env, writable }));
 } catch (error) { console.error(error.message); process.exitCode = 3; }
+NODE
+}
+
+run_isolated_tuner() {
+  if [[ -z "${SHIPYARD_ISOLATION_ROOT:-}" ]]; then node "$@"; return $?; fi
+  isolation_env "${SHIPYARD_RUNTIME:-codex}" "$SHIPYARD_ISOLATION_ROOT" >/dev/null || return $?
+  node - "$@" <<'NODE'
+const fs = require('node:fs'), path = require('node:path');
+const { spawnSync } = require('node:child_process');
+const fail = message => { throw new Error(`isolation refusal: ${message}`); };
+const identity = s => `${s.dev}:${s.ino}:${s.mode}:${s.isDirectory() ? "directory" : `${s.nlink}:${s.size}:${s.mtimeMs}:${s.ctimeMs}`}`;
+try {
+  const root = fs.realpathSync(process.env.SHIPYARD_ISOLATION_ROOT);
+  const inside = p => p === root || p.startsWith(root + path.sep);
+  function parents(p) {
+    if (!inside(p)) fail('CLI helper parent outside candidate');
+    for (let cur = p; inside(cur); cur = path.dirname(cur)) {
+      let s; try { s = fs.lstatSync(cur); } catch (e) { if (e.code === 'ENOENT') continue; throw e; }
+      if (!s.isDirectory() || s.isSymbolicLink() || s.uid !== process.getuid() || (s.mode & 0o022) !== 0 || fs.realpathSync(cur) !== cur) fail(`unsafe CLI helper parent: ${cur}`);
+      if (cur === root) break;
+    }
+  }
+  const base = path.join(process.env.CODEX_HOME, 'tmp/arg0');
+  parents(base);
+  const before = new Map();
+  function snapshot(p) {
+    let s; try { s = fs.lstatSync(p); } catch (e) { if (e.code === 'ENOENT') return; throw e; }
+    before.set(p, identity(s));
+    if (s.isDirectory()) for (const n of fs.readdirSync(p)) snapshot(path.join(p, n));
+  }
+  snapshot(base);
+  for (let cur = path.dirname(base); inside(cur); cur = path.dirname(cur)) {
+    if (fs.existsSync(cur)) before.set(cur, identity(fs.lstatSync(cur)));
+    if (cur === root) break;
+  }
+  let cli, cliStat;
+  const cliPaths = new Set(), cliChain = new Map();
+  function captureCli(p) {
+    let cursor = path.parse(p).root, pending = p.slice(cursor.length).split(path.sep), hops = 0;
+    while (pending.length) {
+      const part = pending.shift();
+      if (!part || part === '.') continue;
+      if (part === '..') { cursor = path.dirname(cursor); continue; }
+      cursor = path.join(cursor, part);
+      const stat = fs.lstatSync(cursor);
+      const link = stat.isSymbolicLink() ? fs.readlinkSync(cursor) : null;
+      cliChain.set(cursor, [identity(stat), link]);
+      if (link !== null) {
+        if (++hops > 40) fail('cyclic native CLI alias');
+        if (!pending.length) cliPaths.add(cursor);
+        if (path.isAbsolute(link)) { cursor = path.parse(link).root; pending = link.slice(cursor.length).split(path.sep).concat(pending); }
+        else { cursor = path.dirname(cursor); pending = link.split(path.sep).concat(pending); }
+      }
+    }
+    cliPaths.add(cursor);
+    return cursor;
+  }
+  function verifyCli() {
+    for (const [p, [id, link]] of cliChain) {
+      const stat = fs.lstatSync(p);
+      if (identity(stat) !== id || (stat.isSymbolicLink() ? fs.readlinkSync(p) : null) !== link) fail(`native CLI alias changed: ${p}`);
+    }
+  }
+  for (const dir of (process.env.PATH || '').split(path.delimiter)) {
+    const p = path.resolve(dir, 'codex');
+    try { fs.accessSync(p, fs.constants.X_OK); cli = captureCli(p); break; } catch { cliPaths.clear(); cliChain.clear(); }
+  }
+  if (cli) {
+    cliStat = fs.statSync(cli);
+    const fd = fs.openSync(cli, 'r'), magic = Buffer.alloc(4);
+    try { fs.readSync(fd, magic, 0, 4, 0); } finally { fs.closeSync(fd); }
+    // Native CLI binaries only: PATH scripts and executable shims grant no cleanup authority.
+    if (!cliStat.isFile() || cliStat.nlink !== 1 || path.basename(cli) !== 'codex'
+      || !['7f454c46', 'cffaedfe', 'feedfacf', 'cafebabe', 'bebafeca'].includes(magic.toString('hex'))) cli = null;
+  }
+  const result = spawnSync(process.execPath, process.argv.slice(2), { stdio: 'inherit', timeout: 30000 });
+  parents(base);
+  verifyCli();
+  const removals = [];
+  if (fs.existsSync(base)) for (const name of fs.readdirSync(base)) {
+    const dir = path.join(base, name);
+    if (!/^codex-arg0[A-Za-z0-9]+$/.test(name)) continue;
+    parents(dir);
+    for (const leaf of fs.readdirSync(dir)) {
+      const p = path.join(dir, leaf), stat = fs.lstatSync(p);
+      if (before.has(p)) {
+        if (identity(stat) !== before.get(p)) fail(`preexisting CLI helper changed: ${p}`);
+        continue;
+      }
+      if (!stat.isSymbolicLink()) continue;
+      if (!['apply_patch', 'applypatch', 'codex-execve-wrapper'].includes(leaf)
+        || !cli || !cliPaths.has(fs.readlinkSync(p)) || fs.realpathSync(p) !== cli || identity(fs.statSync(cli)) !== identity(cliStat))
+        fail(`unrecognized CLI helper: ${p}`);
+      removals.push([p, identity(stat), fs.readlinkSync(p)]);
+    }
+  }
+  for (const [p, id] of before) {
+    const s = fs.lstatSync(p);
+    if (s.isDirectory() && identity(s) !== id) fail(`candidate parent changed during tuner: ${p}`);
+  }
+  for (const [p, id, target] of removals) {
+    parents(path.dirname(p));
+    verifyCli();
+    if (identity(fs.lstatSync(p)) !== id || fs.readlinkSync(p) !== target || fs.realpathSync(p) !== cli)
+      fail(`CLI helper repointed: ${p}`);
+    fs.unlinkSync(p);
+  }
+  if (result.error) throw result.error;
+  process.exitCode = result.status ?? 1;
+} catch (e) { console.error(e.message); process.exitCode = 3; }
 NODE
 }
 

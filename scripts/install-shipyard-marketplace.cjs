@@ -122,6 +122,8 @@ function codexMarketplaceSource(source) {
   return { sourceType: 'git', source };
 }
 function installCodexMarketplace(source, execute = run, read = capture, env = process.env) {
+  env = isolatedEnvironment('codex', env, env.CODEX_HOME || path.join(env.HOME || os.homedir(), '.codex'));
+  prepareDirectories(env);
   const executeOriginal = execute;
   execute = (command, args) => {
     env = isolatedEnvironment('codex', env, env.CODEX_HOME || path.join(env.HOME || os.homedir(), '.codex'));

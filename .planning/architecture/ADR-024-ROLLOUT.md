@@ -173,7 +173,8 @@ Shared approved defaults were unchanged at every stage. Requested core 1.14.0
 was installed, while the actually discovered Claude marketplace dependency was
 1.15.0; do not treat the marketplace as pinned to 1.14.0.
 The continuation permits only npm executable links in `node_modules/.bin` whose
-fully resolved regular file targets have one hardlink and stay physically within
+every intermediate symlink hop and path component stays within the subtree;
+final regular file targets have one hardlink and stay physically within
 the same `node_modules` subtree inside the candidate npm cache/prefix, candidate
 `npm`, or physically contained candidate Codex/Claude runtime plugin caches.
 This permits contained npm executable links only; it does not permit general
@@ -181,6 +182,28 @@ plugin-cache aliases or links escaping those subtrees. Other symlinks
 and outside/dangling/cyclic/directory/active-state/hardlink hazards still refuse
 before writes. The earlier npm-cache-only correction was subsequently tested as recorded below; the later plugin-cache installation succeeded at `6a33b2ae`; the current hook change awaits coordinator
 execution; the earlier workaround and failed hook remain historical.
+The owned global tuner child still performs the real `codex --version` floor
+probe. That native CLI can leave `CODEX_HOME/tmp/arg0/codex-arg0<suffix>`
+helpers pointing to its external executable. Before the next parent scan/write,
+`run_isolated_tuner` captures pre-child parent/leaf identities and the resolved
+native CLI binary and its PATH alias-chain identities, then unlinks only newly created `apply_patch`, `applypatch`
+and `codex-execve-wrapper` symlink leaves targeting that same binary. Parents
+and the captured CLI alias chain must remain unchanged. Parents
+must remain physically inside the candidate, owned directories without writable
+shared permissions or aliases. The target is never modified. Existing,
+repointed, unknown or shim-targeted aliases refuse; the initial shared guard
+continues to reject escaping CLI aliases. Both Codex and Claude tuner invocations
+use this lifecycle boundary; marketplace/bootstrap reach it through the direct
+installer. This is bounded installer-owned cleanup, not a kernel sandbox or a
+claim of total race safety. Other child-created aliases still refuse. The failed
+`e99a8782` real update remains failed; the coordinator owns the subsequent retry.
+
+Candidate Codex staging and Claude hook verification use explicit templates
+under the validated TMPDIR, because BSD/macOS mktemp can ignore TMPDIR when
+no template is supplied. Ordinary active installation keeps its default temporary
+directory behavior. The exported Codex marketplace entry validates and prepares
+the candidate environment before its first CLI read.
+
 Retain redacted-only status filenames `codex-authenticated-status.json`,
 `claude-authenticated-normal-home-status.json`, and
 `claude-authenticated-dedicated-home-status.json`; never retain credentials,

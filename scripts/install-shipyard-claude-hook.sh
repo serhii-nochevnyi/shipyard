@@ -303,7 +303,11 @@ fi
 while IFS= read -r -d '' file; do
   node --check "$file"
 done < <(find "$STOP_TMP" -type f \( -name '*.cjs' -o -name '*.js' \) -print0)
-VERIFY_CWD="$(mktemp -d)"
+if [[ -n "${SHIPYARD_ISOLATION_ROOT:-}" ]]; then
+  VERIFY_CWD="$(mktemp -d "$TMPDIR/shipyard-verify_cwd.XXXXXX")"
+else
+  VERIFY_CWD="$(mktemp -d)"
+fi
 VERIFY_STATUS=0
 printf '{}\n' | (cd "$VERIFY_CWD" && node "$STOP_TMP/$(basename "$STOP_SRC")") >/dev/null || VERIFY_STATUS=$?
 prepare_isolation claude "${CLAUDE_CONFIG_DIR:-$CLAUDE_HOME}" "${SHIPYARD_ISOLATION_ROOT:-}"
@@ -350,7 +354,7 @@ if [[ -n "$GSD_TUNE" ]]; then
   echo "→ GSD global defaults (~/.gsd/defaults.json)"
   # Never fatal: a shipyard install must not fail because GSD is absent or its
   # defaults file is unreadable. `--check` exits 1 on drift, which is data here.
-  GSD_RUNTIME=claude SHIPYARD_RUNTIME=claude node "$GSD_TUNE" --global --runtime claude --apply 2>&1 | sed 's/^/  /' || { [[ -z "${SHIPYARD_ISOLATION_ROOT:-}" ]] || exit 1; }
+  GSD_RUNTIME=claude SHIPYARD_RUNTIME=claude run_isolated_tuner "$GSD_TUNE" --global --runtime claude --apply 2>&1 | sed 's/^/  /' || { [[ -z "${SHIPYARD_ISOLATION_ROOT:-}" ]] || exit 1; }
 fi
 
 prepare_isolation claude "${CLAUDE_CONFIG_DIR:-$CLAUDE_HOME}" "${SHIPYARD_ISOLATION_ROOT:-}"
