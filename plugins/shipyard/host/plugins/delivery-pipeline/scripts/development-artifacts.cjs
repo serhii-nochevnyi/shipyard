@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 'use strict';
 
 const { execFileSync } = require('node:child_process');
@@ -7,7 +6,8 @@ const PREFIXES = Object.freeze(['.planning/', '.shipyard/', '.shipyard-', 'docs/
 const FILES = Object.freeze(['AGENTS.md', 'CLAUDE.md']);
 
 function isDevelopmentArtifact(file) {
-  const relative = String(file).replaceAll('\\', '/').replace(/^\.\//, '');
+  let relative = String(file).replaceAll('\\', '/');
+  if (relative.startsWith('./')) relative = relative.slice(2);
   if (relative.split('/').some(part => part === '..') || relative.startsWith('/')) return false;
   return FILES.includes(relative) || relative === '.planning' || relative === '.shipyard'
     || PREFIXES.some(prefix => relative.startsWith(prefix));

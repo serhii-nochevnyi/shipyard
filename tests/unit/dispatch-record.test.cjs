@@ -497,6 +497,16 @@ test('a live host pid within the TTL makes an in-flight record active', () => {
   assert.equal(live['T-01-01'].pid, process.pid);
 });
 
+test('phase judgments retain their authenticated subject in the in-flight record', () => {
+  const { project, graph } = scratch({ 'T-01-01': { ...READY } });
+  const ticket = 'phase=46-runtime;repository=/tmp/phase.git;tickets=' + 'a'.repeat(64);
+  const input = { graphDir: graph, ticket, role: 'integrator', dispatch_id: 'dispatch-phase', pid: process.pid, host: 'codex' };
+  recordInflight(input);
+  assert.equal(inflightStore(graph)['dispatch-phase'].ticket, ticket);
+  assert.throws(() => recordInflight({ ...input, role: 'executor' }), /ticket/);
+  assert.throws(() => recordInflight({ ...input, ticket: ticket.replace('phase.git', 'phase;git') }), /ticket/);
+});
+
 test('a dead pid or an expired started_at makes the in-flight record not live', () => {
   const { project, graph } = scratch({ 'T-01-01': { ...READY }, 'T-01-02': { ...READY } });
   recordInflight({ graphDir: graph, ticket: 'T-01-01', role: 'executor', dispatch_id: 'dispatch-dead', pid: reapedPid(), host: 'claude' });
