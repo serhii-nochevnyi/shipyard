@@ -1334,9 +1334,9 @@ test('legacy Codex recovery refuses a different original writer namespace before
   } finally { setup.f.clean(); }
 });
 
-test('planner accepts multiple declared plans with a preexisting phase research baseline', async () => {
+test('planner accepts zero-padded and ordinary declared plans with a preexisting phase research baseline', async () => {
   const artifactPaths = [
-    '.planning/phases/38-codex-decompose/38-01-PLAN.md',
+    '.planning/phases/38-codex-decompose/038-01-PLAN.md',
     '.planning/phases/38-codex-decompose/38-02-PLAN.md',
   ];
   const setup = await recoverySetup('gsd-planner', { artifactPaths, preexistingResearchBaseline: true });
@@ -1345,7 +1345,7 @@ test('planner accepts multiple declared plans with a preexisting phase research 
       setup.crashError && setup.crashError.message);
     const launchDir = path.join(setup.hostState, 'launches');
     const launchRecord = JSON.parse(fs.readFileSync(path.join(launchDir, fs.readdirSync(launchDir)[0]), 'utf8'));
-    assert.deepEqual(Object.keys(launchRecord.completed.artifact_digests).sort(), ['38-01-PLAN.md', '38-02-PLAN.md']);
+    assert.deepEqual(Object.keys(launchRecord.completed.artifact_digests).sort(), ['038-01-PLAN.md', '38-02-PLAN.md']);
     assert.equal(fs.readFileSync(path.join(setup.f.root, '.planning', 'phases', '38-codex-decompose', '38-RESEARCH.md'), 'utf8'),
       '# Authorized research baseline\n');
 

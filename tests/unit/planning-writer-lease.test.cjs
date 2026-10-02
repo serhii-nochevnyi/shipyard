@@ -69,6 +69,26 @@ test('full completion manifest binds unchanged PLAN and CONTEXT bytes alongside 
     declared, changed: declared, outputs, lease }), { code: 'FOREIGN_EDIT' });
 }));
 
+test('zero-padded phase plans remain bound through completion and recovery', () => fixture(({ stateRoot, worktree }) => {
+  const phaseDir = path.join(worktree, '01-phase');
+  fs.mkdirSync(phaseDir);
+  fs.writeFileSync(path.join(phaseDir, 'CONTEXT.md'), '# Context\n');
+  fs.writeFileSync(path.join(phaseDir, '01-02-PLAN.md'), '# Baseline\n');
+  const lease = createPlanningWriterLease({ stateRoot, worktree, phaseDir });
+  const snapshot = lease.snapshotTree();
+  fs.writeFileSync(path.join(phaseDir, '01-01-PLAN.md'), '# New plan\n');
+  const declared = ['01-01-PLAN.md'];
+  const outputs = captureSealManifest({ role: 'gsd-planner', phaseDir, snapshot,
+    declared, changed: lease.changedSince(snapshot).changed });
+  assert.deepEqual(Object.keys(outputs).sort(), ['01-01-PLAN.md', '01-02-PLAN.md', 'CONTEXT.md']);
+  assert.equal(outputs['01-02-PLAN.md'].origin, 'unchanged-baseline');
+  assertSealManifest({ role: 'gsd-planner', phaseDir, snapshot, declared,
+    changed: declared, outputs, lease });
+  fs.writeFileSync(path.join(phaseDir, '01-02-PLAN.md'), '# Altered\n');
+  assert.throws(() => assertSealManifest({ role: 'gsd-planner', phaseDir, snapshot,
+    declared, changed: declared, outputs, lease }), { code: 'FOREIGN_EDIT' });
+}));
+
 test('legacy private active and corrupt leases refuse without changing their bytes', () => fixture(({ stateRoot, worktree }) => {
   const phaseDir = path.join(worktree, '38-phase');
   fs.mkdirSync(phaseDir);

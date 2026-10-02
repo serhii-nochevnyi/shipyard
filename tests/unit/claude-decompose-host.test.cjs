@@ -679,7 +679,7 @@ test('a live Claude launcher saves evidence that verifies identically after the 
   } finally { f.clean(); }
 });
 
-test('fixture launcher and no-relaunch recovery produce identical authenticated boundary receipt fields for one dispatch', async () => {
+test('fixture launcher and no-relaunch recovery produce identical authenticated boundary receipt fields for one dispatch with a zero-padded plan', async () => {
   const f = preparedPhaseFixture();
   const store = path.join(f.root, 'same-dispatch-store');
   const role = 'gsd-planner';
@@ -713,11 +713,11 @@ test('fixture launcher and no-relaunch recovery produce identical authenticated 
           fs.writeFileSync(startFile, JSON.stringify({ hook_event_name: 'SessionStart', source: 'startup',
             session_id: sessionId, transcript_path: originalNativeFile, agent_type: role,
             cwd: fs.realpathSync(f.worktree) }), { mode: 0o600 });
-          fs.writeFileSync(path.join(f.phaseDir, '38-01-PLAN.md'), '# Completed plan\n');
+          fs.writeFileSync(path.join(f.phaseDir, '038-01-PLAN.md'), '# Completed plan\n');
           const stream = [
             { type: 'assistant', session_id: sessionId, message: { role: 'assistant', content: 'completed' } },
             { type: 'result', session_id: sessionId, result: 'completed',
-              structured_output: { changed_paths: ['38-01-PLAN.md'] } },
+              structured_output: { changed_paths: ['038-01-PLAN.md'] } },
           ].map(JSON.stringify).join('\n') + '\n';
           const child = new EventEmitter();
           child.pid = 99999999;
