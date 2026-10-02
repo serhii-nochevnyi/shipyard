@@ -29,7 +29,7 @@ Codex isolated home: `/Volumes/KINGSTON/.wt-claude-shipyard/phase46-rollout-arti
 
 GSD payload VERSION is **1.14.0 in both homes**; Claude enabled marketplace dependency is **1.15.0**, inventory git SHA `6eeaf87441370e7e2c29f6829f4d6cb428ccec95`, settings enable `gsd-core@gsd-core`. These are distinct installed surfaces, not a claim that the payload is 1.15.0 or that a dependency discovery applied a worker model.
 
-Installer-log caveat: the preexisting Codex install log reports removal of legacy global runtime in `/Users/serhii/.gsd/defaults.json`. This callback did not perform that action or inspect/change that file; the log prevents a blanket assertion that the earlier installer touched isolated paths only. Operator must assess that installer side effect before activation. No active homes/controllers were changed by this callback.
+Installer-log caveat: the preexisting Codex install log reports removal of legacy global runtime in `/Users/serhii/.gsd/defaults.json`. The npm dependency source `/Volumes/KINGSTON/.wt-claude-shipyard/phase46-rollout-artifacts-20261001/npm-cache/_npx/c62f1caa6eeb184d/node_modules/@opengsd/gsd-core/bin/install.js`, `writeNonClaudeDefaults`, hardcodes `path.join(os.homedir(), '.gsd')` and `defaults.json` before the Shipyard tuner step; isolated config overrides do not isolate this shared-defaults write. The coordinator preserved the actual post-install shared GSD defaults as `/Volumes/KINGSTON/.wt-claude-shipyard/phase46-rollout-artifacts-20261001/global-defaults-after-install.json` (private mode `0600`, 1005 bytes, SHA-256 `2edab0e2e95e8d265da9c66fcf4de6d5193b3511b629d4d07920dda4ac4ee4b0`). The exact before image is unavailable; no guessed restoration was attempted. This callback did not perform that action or inspect/change that file; the log prevents a blanket assertion that the earlier installer touched isolated paths only. Operator must assess that installer side effect before activation. No active homes/controllers were changed by this callback.
 
 - plugins/delivery-pipeline/scripts → /Volumes/KINGSTON/.wt-claude-shipyard/phase46-rollout-artifacts-20261001/codex-6bf4a496/shipyard/scripts: 111 matching files; differences []
 - plugins/delivery-pipeline → /Volumes/KINGSTON/.wt-claude-shipyard/phase46-rollout-artifacts-20261001/claude-6bf4a496/plugin-0.70.0: 137 matching files; differences []
@@ -39,6 +39,44 @@ Installer-log caveat: the preexisting Codex install log reports removal of legac
 
 Both supplied actual isolated auth discoveries report `authenticated:false`, exit 1; Claude auth method is `none`. Account entitlement is **unknown**, not proven unsupported. No authenticated model-list receipt is available and discovery cannot stand in for application.
 
+### Historical invocation record (do not rerun)
+
+The coordinator supplied the historical argv, environment overrides, cwd and exit statuses below. Unlisted environment values were inherited; a complete inherited environment snapshot is unavailable. Authentication discovery used Python subprocess calls, not literal shell transcripts: Codex argv was `["codex", "login", "status"]`, with `CODEX_HOME=/Volumes/KINGSTON/.wt-claude-shipyard/phase46-rollout-artifacts-20261001/codex-6bf4a496`; Claude argv was `["claude", "auth", "status", "--json"]`, with both `CLAUDE_CONFIG_DIR` and `CLAUDE_HOME` set to `/Volumes/KINGSTON/.wt-claude-shipyard/phase46-rollout-artifacts-20261001/claude-6bf4a496/config`. Both subprocesses ran with cwd `/Volumes/KINGSTON/claude-shipyard` and exited 1. The following shell forms are explicitly **equivalent argv/environment**, not commands claimed to have been entered literally:
+
+```sh
+cd /Volumes/KINGSTON/claude-shipyard
+CODEX_HOME=/Volumes/KINGSTON/.wt-claude-shipyard/phase46-rollout-artifacts-20261001/codex-6bf4a496 codex login status
+CLAUDE_CONFIG_DIR=/Volumes/KINGSTON/.wt-claude-shipyard/phase46-rollout-artifacts-20261001/claude-6bf4a496/config CLAUDE_HOME=/Volumes/KINGSTON/.wt-claude-shipyard/phase46-rollout-artifacts-20261001/claude-6bf4a496/config claude auth status --json
+```
+
+The actual isolated role entry command ran with cwd `/Volumes/KINGSTON/claude-shipyard` (inherited coordinator default), executable argv `["node", "/tmp/phase46-06-isolated-executor-entry.cjs"]`, the three overrides shown below, and exit 1:
+
+```sh
+cd /Volumes/KINGSTON/claude-shipyard
+CODEX_HOME=/Volumes/KINGSTON/.wt-claude-shipyard/phase46-rollout-artifacts-20261001/codex-6bf4a496 SHIPYARD_GRAPH_DIR=/Volumes/KINGSTON/.wt-claude-shipyard/inv-011-model-ladder-refresh/.planning/graph SHIPYARD_CODEX_CAPABILITIES_FILE=/Users/serhii/.codex/shipyard/codex-capabilities.json node /tmp/phase46-06-isolated-executor-entry.cjs > /tmp/phase46-06-isolated-executor-result.json 2> /tmp/phase46-06-isolated-executor-host.log
+```
+
+The preserved entry calls the installed host API exactly as follows (API invocation, not a standalone CLI command):
+
+```js
+const h = require('/Volumes/KINGSTON/.wt-claude-shipyard/phase46-rollout-artifacts-20261001/codex-6bf4a496/shipyard/scripts/codex-delivery-host.cjs');
+h.runCli(['--args-file', '/tmp/phase46-06-isolated-executor-request.json'], process.stdout, {
+  agentDir: '/Volumes/KINGSTON/.wt-claude-shipyard/phase46-rollout-artifacts-20261001/codex-6bf4a496/agents',
+  agentManifest: '/Volumes/KINGSTON/.wt-claude-shipyard/phase46-rollout-artifacts-20261001/codex-6bf4a496/agents/.shipyard-manifest.json'
+}).catch(e => { process.stderr.write(e.stack + '\n'); process.exitCode = 1; });
+```
+
+All three installer/dependency invocations below ran with cwd `/Volumes/KINGSTON/.wt-claude-shipyard/.wt-inv-011-model-ladder-refresh/T-46-06` and exited 0. Their executable is `bash`; argv is the script path followed by the displayed arguments. Environment overrides and output redirections are recorded in full:
+
+```sh
+cd /Volumes/KINGSTON/.wt-claude-shipyard/.wt-inv-011-model-ladder-refresh/T-46-06
+SHIPYARD_CODEX_CAPABILITIES_FILE=/Users/serhii/.codex/shipyard/codex-capabilities.json GSD_CORE_VERSION=1.14.0 NPM_CONFIG_CACHE=/Volumes/KINGSTON/.wt-claude-shipyard/phase46-rollout-artifacts-20261001/npm-cache bash scripts/install-shipyard-codex.sh --dogfood-root /Volumes/KINGSTON/.wt-claude-shipyard/phase46-rollout-artifacts-20261001/codex-6bf4a496 --project-dir /Volumes/KINGSTON/.wt-claude-shipyard/.wt-inv-011-model-ladder-refresh/T-46-06 > /tmp/phase46-06-isolated-codex-install.log 2>&1
+CLAUDE_CONFIG_DIR=/Volumes/KINGSTON/.wt-claude-shipyard/phase46-rollout-artifacts-20261001/claude-6bf4a496/config CLAUDE_HOME=/Volumes/KINGSTON/.wt-claude-shipyard/phase46-rollout-artifacts-20261001/claude-6bf4a496/config GSD_CORE_VERSION=1.14.0 NPM_CONFIG_CACHE=/Volumes/KINGSTON/.wt-claude-shipyard/phase46-rollout-artifacts-20261001/npm-cache bash scripts/ensure-gsd-core.sh claude > /tmp/phase46-06-isolated-claude-dependency.log 2>&1
+CLAUDE_CONFIG_DIR=/Volumes/KINGSTON/.wt-claude-shipyard/phase46-rollout-artifacts-20261001/claude-6bf4a496/config CLAUDE_HOME=/Volumes/KINGSTON/.wt-claude-shipyard/phase46-rollout-artifacts-20261001/claude-6bf4a496/config SHIPYARD_GSD_AUTO_INSTALL=0 bash scripts/install-shipyard-claude-hook.sh --dogfood-root /Volumes/KINGSTON/.wt-claude-shipyard/phase46-rollout-artifacts-20261001/claude-6bf4a496/plugin-0.70.0 > /tmp/phase46-06-isolated-claude-install.log 2>&1
+```
+
+These are historical attempts only; this repair did not execute them. Existing logs and their inventory hashes remain unchanged. Authentication failure leaves entitlement unknown and all eight application outcomes on HOLD.
+
 The one authorized Codex executor attempt used installed `codex-delivery-host.cjs --args-file /tmp/phase46-06-isolated-executor-request.json`, through `/tmp/phase46-06-isolated-executor-entry.cjs` binding the isolated agents/manifest. Request scope run ID `phase46-06-isolated-evidence-c667e5d2-a476-466c-97f5-701e4cb56fb0`, ticket T-46-06, role executor, signal risk high (not fabricated critical). Coordinator records host exit 1; actual host log reports `CodexRuntimeHostError: Codex process exited 1`; result file has no verified application receipt. Canonical target low is a policy expectation, not an applied/observed tuple. No verified native session or application dispatch ID can be reported. Request/result/entry/log bytes are hashed below. No retries, auth/login launches, availability prompts, credentials copying or synthetic repair/signals were used.
 
 This report's authoring dispatch uses the existing active authenticated Codex account with candidate installed agent manifest. It is excluded from isolated entitlement and application proof, regardless of model selected for this authoring role.
@@ -47,7 +85,7 @@ This report's authoring dispatch uses the existing active authenticated Codex ac
 |---|---|---|---|
 | `gpt-6.1-sol` | `low` | HOLD | Ordinary executor authorized; actual isolated installed host attempt exited 1, no verified receipt. Applied/observed/session receipt: absent. |
 | `gpt-6.1-sol` | `high` | HOLD | Ordinary research/review would require its own authorized role; no isolated authentication or such role receipt supplied. Applied/observed/session receipt: absent. |
-| `gpt-6.1-sol` | `xhigh` | HOLD | No genuine very-complex research or critical judgment signal; no isolated authentication. Applied/observed/session receipt: absent. |
+| `gpt-6.1-sol` | `xhigh` | HOLD | Isolated authentication and a verified xhigh judgment receipt are absent. The graph-backed human checkpoint is a prospective authorized judgment signal, not an applied pair receipt. Applied/observed/session receipt: absent. |
 | `claude-sonnet-5-5` | `low` | HOLD | No bounded actionable sentinel duty authorized; isolated auth absent. Applied/observed/session receipt: absent. |
 | `claude-sonnet-5-5` | `medium` | HOLD | Ordinary executor/drift route cannot apply without isolated auth; no Claude role receipt. Applied/observed/session receipt: absent. |
 | `claude-sonnet-5-5` | `high` | HOLD | No authentic fixer duty or repair predecessor supplied; isolated auth absent. Applied/observed/session receipt: absent. |
