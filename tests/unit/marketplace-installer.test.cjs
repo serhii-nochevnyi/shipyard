@@ -1015,26 +1015,40 @@ test('cleanup conditional context cannot suppress a failed isolation guard', t =
   assert.deepEqual(fullSnapshot(f.dir), before, 'guard failure does not prepare directories or continue');
 });
 
-test('owned tuner cleans real version-probe helpers before parent continuation and refuses hostile aliases', t => {
-  const lookup = spawnSync('/bin/bash', ['-c', 'command -v codex'], { encoding: 'utf8' });
-  const executable = lookup.stdout.trim();
-  if (!executable || !fs.existsSync(executable)) return t.skip('native Codex version binary unavailable');
+test('Claude capability child mutations are revalidated before marketplace install succeeds', t => {
+  const f = processFixture(t);
+  const marker = path.join(f.dir, 'capability-ran');
+  const mutationScript = `const fs=require('node:fs'),path=require('node:path');fs.symlinkSync(${JSON.stringify(f.ambient)},path.join(process.env.SHIPYARD_ISOLATION_ROOT,'capability-escape'));`;
+  fs.writeFileSync(path.join(f.bin, 'bash'), `#!${process.execPath}
+const fs=require('node:fs'),path=require('node:path'),cp=require('node:child_process');
+const args=process.argv.slice(2),script=args[0]||'';
+const result=cp.spawnSync('/bin/bash',args,{stdio:'inherit'});
+if(result.status===0&&script.endsWith('/ensure-gsd-core.sh')&&args[1]==='claude'){
+  fs.writeFileSync(path.join(process.env.CLAUDE_HOME,'gsd-core/bin/gsd-tools.cjs'),${JSON.stringify(mutationScript)});
+}
+if(result.status===0&&script.endsWith('/install-shipyard-capability.sh'))fs.writeFileSync(${JSON.stringify(marker)},'ran');
+process.exit(result.status??1);
+`);
+  fs.chmodSync(path.join(f.bin, 'bash'), 0o755);
+  const env = { ...f.env, PATH: `${f.bin}:${f.env.PATH}` };
+  assert.throws(() => main(['claude', '--source', 'https://example.invalid/fixture.git'], {
+    env,
+    ensure: () => ({ version: '1.14.0' }),
+    read: () => [],
+    execute: () => {},
+  }), /isolation refusal/);
+  assert.equal(fs.readFileSync(marker, 'utf8'), 'ran');
+});
+
+test('owned tuner cleans native fixture helpers before parent continuation and refuses hostile aliases', t => {
+  const executable = process.execPath;
   const target = fs.realpathSync(executable);
   const bytes = fs.readFileSync(target), stat = fs.statSync(target);
-  {
-    const f = processFixture(t), outside = fullSnapshot(f.ambient);
-    const seed = f.run('/bin/bash', ['scripts/ensure-gsd-core.sh', 'codex']);
-    assert.equal(seed.status, 0, seed.stdout + seed.stderr);
-    fs.unlinkSync(path.join(f.bin, 'codex')); fs.symlinkSync(executable, path.join(f.bin, 'codex'));
-    const result = f.run('/bin/bash', ['scripts/install-shipyard-codex.sh'], { SHIPYARD_GSD_AUTO_INSTALL: '0' });
-    assert.equal(result.status, 0, result.stdout + result.stderr);
-    assert.ok(fs.existsSync(path.join(f.env.CODEX_HOME, 'agents/.shipyard-provenance.json')));
-    assert.deepEqual(fullSnapshot(f.ambient), outside);
-  }
   for (const hazard of ['none', 'unknown', 'repointed', 'preexisting', 'parent', 'shim', 'alias-hop', 'cli-repointed', 'parent-replaced']) {
     const f = processFixture(t), outside = fullSnapshot(f.ambient);
-    const cliDir = path.join(f.dir, 'native-bin'); fs.mkdirSync(cliDir);
-    fs.symlinkSync(executable, path.join(cliDir, 'codex'));
+    const cliDir = path.join(f.candidate, 'native-bin'); fs.mkdirSync(cliDir, { recursive: true });
+    const cli = path.join(cliDir, 'codex');
+    fs.copyFileSync(executable, cli); fs.chmodSync(cli, 0o755);
     const probe = path.join(f.dir, 'probe.cjs');
     const mutation = hazard === 'unknown' ? "fs.symlinkSync(cli,path.join(dir,'unknown-helper'));"
       : hazard === 'repointed' ? "fs.unlinkSync(path.join(dir,'apply_patch'));fs.symlinkSync(process.env.HOME,path.join(dir,'apply_patch'));"
@@ -1042,10 +1056,10 @@ test('owned tuner cleans real version-probe helpers before parent continuation a
       : hazard === 'cli-repointed' ? "const alias=process.env.PATH.split(path.delimiter)[0]+'/codex';fs.unlinkSync(alias);fs.symlinkSync(process.env.HOME,alias);"
       : hazard === 'parent-replaced' ? "fs.renameSync(base,base+'-old');fs.mkdirSync(base);"
       : '';
-    fs.writeFileSync(probe, `const fs=require('node:fs'),path=require('node:path');const cli=${JSON.stringify(executable)};const r=require('node:child_process').spawnSync(cli,['--version'],{stdio:'inherit',timeout:10000});if(r.status!==0)process.exit(1);const base=path.join(process.env.CODEX_HOME,'tmp/arg0');const dir=path.join(base,fs.readdirSync(base).find(x=>x.startsWith('codex-arg0')));${mutation}`);
+    fs.writeFileSync(probe, `const fs=require('node:fs'),path=require('node:path');const cli=${JSON.stringify(cli)};const r=require('node:child_process').spawnSync(cli,['--version'],{stdio:'inherit',timeout:10000});if(r.status!==0)process.exit(1);const base=path.join(process.env.CODEX_HOME,'tmp/arg0'),dir=path.join(base,'codex-arg0Fixture');fs.mkdirSync(dir,{recursive:true});for(const leaf of ['apply_patch','applypatch','codex-execve-wrapper'])fs.symlinkSync(cli,path.join(dir,leaf));${mutation}`);
     if (hazard === 'shim') {
-      fs.unlinkSync(path.join(cliDir, 'codex'));
-      fs.writeFileSync(path.join(cliDir, 'codex'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+      fs.unlinkSync(cli);
+      fs.writeFileSync(cli, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
     }
     if (hazard === 'preexisting' || hazard === 'parent') {
       const dir = path.join(f.env.CODEX_HOME, 'tmp/arg0/codex-arg0Before');
@@ -1053,12 +1067,12 @@ test('owned tuner cleans real version-probe helpers before parent continuation a
       if (hazard === 'preexisting') fs.symlinkSync(executable, path.join(dir, 'apply_patch'));
       else { fs.rmdirSync(dir); fs.symlinkSync(f.ambient, dir); }
     }
-    fs.mkdirSync(f.env.CODEX_HOME, { recursive: true });
+    fs.mkdirSync(f.env.CODEX_HOME, { recursive: true, mode: 0o700 });
     const before = fullSnapshot(f.candidate);
     const result = f.run('/bin/bash', ['-c', 'source scripts/ensure-gsd-core.sh --library; prepare_isolation codex "$CODEX_HOME" "$SHIPYARD_ISOLATION_ROOT"; run_isolated_tuner "$1" || exit $?; isolation_env codex "$SHIPYARD_ISOLATION_ROOT" >/dev/null || exit $?; touch "$CODEX_HOME/parent-continued"', 'probe', probe], { PATH: `${cliDir}:${f.env.PATH}` });
     if (hazard === 'none') {
       assert.equal(result.status, 0, result.stdout + result.stderr);
-      assert.match(result.stdout, /codex-cli \d+\./, 'real version floor input remains available');
+      assert.match(result.stdout, /v\d+\.\d+\.\d+/, 'native fixture version input remains available');
       assert.ok(fs.existsSync(path.join(f.env.CODEX_HOME, 'parent-continued')));
       const base = path.join(f.env.CODEX_HOME, 'tmp/arg0');
       for (const dir of fs.readdirSync(base)) for (const leaf of ['apply_patch', 'applypatch', 'codex-execve-wrapper'])
@@ -1091,7 +1105,7 @@ test('exported Codex marketplace refuses compromised candidate before read', t =
 });
 
 test('explicit temp templates confine Codex stage and Claude verification with BSD mktemp behavior', t => {
-  for (const runtime of ['codex', 'claude']) {
+  for (const runtime of ['codex', 'claude', 'capability']) {
     const f = processFixture(t), before = fullSnapshot(f.ambient);
     const trace = path.join(f.dir, 'mktemp-trace.jsonl');
     fs.writeFileSync(path.join(f.bin, 'mktemp'), `#!${process.execPath}
@@ -1103,8 +1117,20 @@ if(!template.endsWith('XXXXXX'))process.exit(97);
 const dir=fs.mkdtempSync(template.slice(0,-6));console.log(dir);
 `);
     fs.chmodSync(path.join(f.bin, 'mktemp'), 0o755);
-    const result = f.run('/bin/bash', runtime === 'codex' ? ['scripts/install-shipyard-codex.sh']
-      : ['scripts/install-shipyard-claude-hook.sh', '--dogfood-root', path.join(f.candidate, 'plugin'), '--wire-hooks']);
+    let result;
+    if (runtime === 'capability') {
+      const dependency = f.run('/bin/bash', ['scripts/ensure-gsd-core.sh', 'claude']);
+      assert.equal(dependency.status, 0, dependency.stdout + dependency.stderr);
+      const tmp = path.join(f.candidate, '.shipyard-tmp');
+      fs.mkdirSync(tmp, { recursive: true });
+      result = f.run('/bin/bash', ['scripts/install-shipyard-capability.sh', 'claude'], {
+        TMPDIR: tmp,
+        GSD_CAPABILITIES_DIR: path.join(f.candidate, '.shipyard-home/.gsd/capabilities'),
+      });
+    } else {
+      result = f.run('/bin/bash', runtime === 'codex' ? ['scripts/install-shipyard-codex.sh']
+        : ['scripts/install-shipyard-claude-hook.sh', '--dogfood-root', path.join(f.candidate, 'plugin'), '--wire-hooks']);
+    }
     assert.equal(result.status, 0, result.stdout + result.stderr);
     const calls = fs.readFileSync(trace, 'utf8').trim().split('\n').map(JSON.parse);
     assert.ok(calls.length > 0);

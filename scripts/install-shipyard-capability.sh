@@ -38,7 +38,11 @@ if [[ ! -f "$GSD_TOOLS" ]]; then
   exit 1
 fi
 
-STAGE="$(mktemp -d)"
+if [[ -n "${SHIPYARD_ISOLATION_ROOT:-}" ]]; then
+  STAGE="$(mktemp -d "$TMPDIR/shipyard-capability.XXXXXX")"
+else
+  STAGE="$(mktemp -d)"
+fi
 trap 'rm -rf "$STAGE"' EXIT
 CAP_STAGE="$STAGE/delivery-pipeline"
 mkdir -p "$CAP_STAGE/checks"
