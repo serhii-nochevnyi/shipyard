@@ -1,14 +1,18 @@
 {
-  "generated_at": "2026-10-01T12:14:27.176Z",
-  "observed_at": "2026-10-01T12:14:27.176Z",
-  "generation": 404,
+  "generated_at": "2026-10-02T08:34:39.574Z",
+  "observed_at": "2026-10-02T08:34:39.574Z",
+  "generation": 419,
   "parked_by_run": [],
   "auto_merge": "epic",
-  "dispatches_applied_at": "2026-10-01T12:14:27.176Z",
+  "dispatches_applied_at": "2026-10-02T08:34:39.574Z",
   "actionable": {
-    "execute": [],
+    "execute": [
+      "T-46-08"
+    ],
     "publish": [],
-    "fix": [],
+    "fix": [
+      "T-46-07"
+    ],
     "finalize": [],
     "merge": []
   },
@@ -20,12 +24,7 @@
     "human": []
   },
   "parked": {
-    "blocked": [
-      "T-46-01",
-      "T-46-04",
-      "T-46-05",
-      "T-46-06"
-    ],
+    "blocked": [],
     "done": [
       "T-20-01",
       "T-20-02",
@@ -273,19 +272,21 @@
       "T-45-15",
       "T-45-16",
       "T-45-17",
-      "T-45-18"
+      "T-45-18",
+      "T-46-01",
+      "T-46-04",
+      "T-46-05",
+      "T-46-06"
     ]
   },
   "why": {
-    "T-46-01": "escalated — Native epic refresh refused: 39 planning/state/journal conflicts merging origin/main after PR381. Epic remains dcf19566b304b2ecf69be536dd5741ab15ced7c1; effective base is not validated. Requires owner-reviewed conflict reconciliation preserving receipt history before hold clear, fresh drift and native executor.. It lifts by itself once the PR moves (a push, a review answer, undrafting); `escalation-record.cjs clear T-46-01` to take it back.",
-    "T-46-04": "T-46-01 (parent has no branch yet (nothing to cascade from))",
-    "T-46-05": "T-46-04 (parent has no branch yet (nothing to cascade from))",
-    "T-46-06": "T-46-05 (parent has no branch yet (nothing to cascade from))"
+    "T-46-07": "PR #412: 1 failing check(s)",
+    "T-46-08": "ready — worktree + executor"
   },
   "counts": {
-    "execute": 0,
+    "execute": 1,
     "publish": 0,
-    "fix": 0,
+    "fix": 1,
     "finalize": 0,
     "merge": 0,
     "ci": 0,
@@ -293,25 +294,27 @@
     "parent": 0,
     "merge_human": 0,
     "human": 0,
-    "blocked": 4,
-    "done": 247
+    "blocked": 0,
+    "done": 251
   },
   "parent_of": {},
-  "actionable_count": 0,
+  "actionable_count": 2,
   "tracker_blocked_count": 0,
   "left_behind_count": 0,
-  "fixpoint": true,
+  "fixpoint": false,
   "capacity": {
     "max": 4,
     "in_flight": 0,
     "free": 4
   },
   "sentinel": {
-    "duty": [],
+    "duty": [
+      "T-46-07"
+    ],
     "waiting_ci": [],
     "waiting_parent": [],
     "dispatched": [],
-    "clear": true
+    "clear": false
   },
   "roles": {
     "execute": [

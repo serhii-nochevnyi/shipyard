@@ -1,13 +1,13 @@
 {
   "schema_version": 1,
-  "generation": 404,
-  "generation_identity": "71121b96-c5b7-4c60-81fc-f534658e7f11",
-  "previous_generation_identity": "16777245:12940684083:1790856962693285400:a43ebf507a151f98d98778509666d3be5ae890e006e4e20f2b2ceb16cb5249d7",
-  "observed_at": "2026-10-01T12:14:27.176Z",
-  "generated_at": "2026-10-01T12:14:27.176Z",
+  "generation": 419,
+  "generation_identity": "4e7fc9c1-8eac-4256-a5d6-f5e7d5f6d0eb",
+  "previous_generation_identity": "16777245:12940927755:1790926487223954000:9cefa80ae36ee9c50f5d923b8b55d4a9b2f85496f727a81847921d3970dd78b8",
+  "observed_at": "2026-10-02T08:34:39.574Z",
+  "generated_at": "2026-10-02T08:34:39.574Z",
   "by": "state-sync",
-  "pid": 48680,
-  "observation_generation": 404,
+  "pid": 31889,
+  "observation_generation": 419,
   "observation_projection": {
     "tickets": {
       "T-20-01": {
@@ -2728,9 +2728,9 @@
         "checks": null
       },
       "T-46-01": {
-        "status": "pending",
+        "status": "merged",
         "repository": null,
-        "pr": null,
+        "pr": 405,
         "head": null,
         "draft": false,
         "base": "epic/46-refresh-native-runtime-model-ladder",
@@ -2739,9 +2739,9 @@
         "checks": null
       },
       "T-46-04": {
-        "status": "pending",
+        "status": "merged",
         "repository": null,
-        "pr": null,
+        "pr": 406,
         "head": null,
         "draft": false,
         "base": "epic/46-refresh-native-runtime-model-ladder",
@@ -2750,9 +2750,9 @@
         "checks": null
       },
       "T-46-05": {
-        "status": "pending",
+        "status": "merged",
         "repository": null,
-        "pr": null,
+        "pr": 408,
         "head": null,
         "draft": false,
         "base": "epic/46-refresh-native-runtime-model-ladder",
@@ -2761,12 +2761,46 @@
         "checks": null
       },
       "T-46-06": {
+        "status": "merged",
+        "repository": null,
+        "pr": 409,
+        "head": null,
+        "draft": false,
+        "base": "epic/46-refresh-native-runtime-model-ladder",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-46-07": {
+        "status": "pr-open",
+        "repository": null,
+        "pr": 412,
+        "head": "fe8b1440f985acb5442bf767cb8a947c60dfe249",
+        "draft": true,
+        "base": "epic/46-refresh-native-runtime-model-ladder",
+        "merge_state": "UNSTABLE",
+        "review_decision": null,
+        "checks": {
+          "total": 1,
+          "pending": 0,
+          "failing": 1,
+          "none_reported": false,
+          "unavailable": false
+        },
+        "author": {
+          "login": "serhii-nochevnyi"
+        },
+        "approved_reviews": [],
+        "reviewer_bots": [],
+        "review_fresh": false
+      },
+      "T-46-08": {
         "status": "pending",
         "repository": null,
         "pr": null,
         "head": null,
         "draft": false,
-        "base": "epic/46-refresh-native-runtime-model-ladder",
+        "base": "ticket/T-46-07-preserve-history-runtime-trailer",
         "merge_state": null,
         "review_decision": null,
         "checks": null
@@ -2775,9 +2809,9 @@
   },
   "binding": {
     "schema_version": 1,
-    "state_digest": "951fef05c479eaa98f37883865d2ce96a335ec4bff47f09226c60d5882c60d85",
-    "front_digest": "539445082f3654a5e56844347c068c2232b27d7299bf63e9fe3a5bcee36bd9e5",
-    "observation_digest": "a7c6aa341fb3dcf6f6640f0993e3e1e878851351f23258d660b8ea78ff5dee20",
-    "observation_generation": 404
+    "state_digest": "fdd6559e288379d8c5f04a7b7c3316fec500e79132d2650e95387851c4f7b4d6",
+    "front_digest": "ca9a71a2612e84ec116cc31c3c5e2d5bb3f52fece768748ea11609eb1c337efe",
+    "observation_digest": "b92c9c6c64072a7d161cd447e8865062a3b3f56fd0e44e3a3c1bd2c57a115500",
+    "observation_generation": 419
   }
 }

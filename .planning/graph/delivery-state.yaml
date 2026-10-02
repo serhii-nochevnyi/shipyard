@@ -3002,42 +3002,86 @@
 "T-46-01":
   base: "epic/46-refresh-native-runtime-model-ladder"
   base_reason: "no primary parent — a root ticket PRs into epic/46-refresh-native-runtime-model-ladder"
-  branch: "ticket/T-46-01-migrate-native-ladder-and-coupled-ci-con"
+  branch: "ticket/T-46-01-migrate-native-ladder-runtime-trailer"
+  epic: "epic/46-refresh-native-runtime-model-ladder"
+  epic_pr: {"base":"main","branch":"epic/46-refresh-native-runtime-model-ladder","landed":false,"number":403,"state":"OPEN"}
+  merge_sha: "a3821498ecd6f72740650f1cc6b988c9b54c8cd9"
+  merged_into: "epic/46-refresh-native-runtime-model-ladder"
+  pr: 405
+  reapable: true
+  recorded_pr: 405
+  status: "merged"
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/405"
+"T-46-04":
+  base: "epic/46-refresh-native-runtime-model-ladder"
+  base_reason: "T-46-01 is MERGED, so its branch is no longer where work lands — the base is epic/46-refresh-native-runtime-model-ladder (base-merge it in first to keep the review diff one slice)"
+  branch: "ticket/T-46-04-publish-supported-grid-and-isolated-roll"
+  epic: "epic/46-refresh-native-runtime-model-ladder"
+  epic_pr: {"base":"main","branch":"epic/46-refresh-native-runtime-model-ladder","landed":false,"number":403,"state":"OPEN"}
+  merge_sha: "316778bf7afdc3bc2d31a515508c474fc1b00b8d"
+  merged_into: "epic/46-refresh-native-runtime-model-ladder"
+  pr: 406
+  reapable: true
+  recorded_pr: 406
+  status: "merged"
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/406"
+"T-46-05":
+  base: "epic/46-refresh-native-runtime-model-ladder"
+  base_reason: "T-46-04 is MERGED, so its branch is no longer where work lands — the base is epic/46-refresh-native-runtime-model-ladder (base-merge it in first to keep the review diff one slice)"
+  branch: "ticket/T-46-05-regenerate-the-reviewed-package-and-veri"
+  epic: "epic/46-refresh-native-runtime-model-ladder"
+  epic_pr: {"base":"main","branch":"epic/46-refresh-native-runtime-model-ladder","landed":false,"number":403,"state":"OPEN"}
+  merge_sha: "6bf4a496d84f7716da0655aaaf976c6502c88adc"
+  merged_into: "epic/46-refresh-native-runtime-model-ladder"
+  pr: 408
+  reapable: true
+  recorded_pr: 408
+  status: "merged"
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/408"
+"T-46-06":
+  base: "epic/46-refresh-native-runtime-model-ladder"
+  base_reason: "T-46-05 is MERGED, so its branch is no longer where work lands — the base is epic/46-refresh-native-runtime-model-ladder (base-merge it in first to keep the review diff one slice)"
+  branch: "ticket/T-46-06-independently-review-native-application"
+  epic: "epic/46-refresh-native-runtime-model-ladder"
+  epic_pr: {"base":"main","branch":"epic/46-refresh-native-runtime-model-ladder","landed":false,"number":403,"state":"OPEN"}
+  merge_sha: "1ead39a290966aacc3cb37a0feb2acb851b58300"
+  merged_into: "epic/46-refresh-native-runtime-model-ladder"
+  pr: 409
+  reapable: true
+  recorded_pr: 409
+  status: "merged"
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/409"
+"T-46-07":
+  approved_reviews: []
+  author: {"login":"serhii-nochevnyi"}
+  base: "epic/46-refresh-native-runtime-model-ladder"
+  base_reason: "T-46-06 is MERGED, so its branch is no longer where work lands — the base is epic/46-refresh-native-runtime-model-ladder (base-merge it in first to keep the review diff one slice)"
+  behind_by: 0
+  branch: "ticket/T-46-07-preserve-history-runtime-trailer"
+  checks: {"failing":1,"none_reported":false,"pending":0,"total":1,"unavailable":false}
+  draft: true
+  epic: "epic/46-refresh-native-runtime-model-ladder"
+  head_sha: "fe8b1440f985acb5442bf767cb8a947c60dfe249"
+  merge_scope: "stacked"
+  merge_state: "UNSTABLE"
+  pr: 412
+  pr_base: "epic/46-refresh-native-runtime-model-ladder"
+  pr_created_at: "2026-10-02T08:24:27Z"
+  reapable: false
+  recorded_pr: 412
+  review_decision: null
+  review_fresh: false
+  review_freshness_reason: null
+  reviewer_bots: []
+  status: "pr-open"
+  url: "https://github.com/serhii-nochevnyi/shipyard/pull/412"
+"T-46-08":
+  base: "ticket/T-46-07-preserve-history-runtime-trailer"
+  base_merge: "epic/46-refresh-native-runtime-model-ladder"
+  base_reason: "T-46-07 is pr-open — cascade off ticket/T-46-07-preserve-history-runtime-trailer; the sentinel retargets this PR onto epic/46-refresh-native-runtime-model-ladder when T-46-07 lands; ticket-worktree.sh create merges epic/46-refresh-native-runtime-model-ladder in for non-primary parent(s) T-46-06"
+  branch: "ticket/T-46-08-confine-candidate-dependency-installatio"
   epic: "epic/46-refresh-native-runtime-model-ladder"
   pr: null
   ready: true
-  reapable: false
-  status: "pending"
-"T-46-04":
-  base: "epic/46-refresh-native-runtime-model-ladder"
-  base_reason: "T-46-01 has no branch on the remote yet (status pending) — ticket/T-46-01-migrate-native-ladder-and-coupled-ci-con is not a base that exists, so the base is epic/46-refresh-native-runtime-model-ladder"
-  blocked_by: ["T-46-01"]
-  blocked_reasons: {"T-46-01":"parent has no branch yet (nothing to cascade from)"}
-  branch: "ticket/T-46-04-publish-supported-grid-and-isolated-roll"
-  epic: "epic/46-refresh-native-runtime-model-ladder"
-  pr: null
-  ready: false
-  reapable: false
-  status: "pending"
-"T-46-05":
-  base: "epic/46-refresh-native-runtime-model-ladder"
-  base_reason: "T-46-04 has no branch on the remote yet (status pending) — ticket/T-46-04-publish-supported-grid-and-isolated-roll is not a base that exists, so the base is epic/46-refresh-native-runtime-model-ladder"
-  blocked_by: ["T-46-04"]
-  blocked_reasons: {"T-46-04":"parent has no branch yet (nothing to cascade from)"}
-  branch: "ticket/T-46-05-regenerate-the-reviewed-package-and-veri"
-  epic: "epic/46-refresh-native-runtime-model-ladder"
-  pr: null
-  ready: false
-  reapable: false
-  status: "pending"
-"T-46-06":
-  base: "epic/46-refresh-native-runtime-model-ladder"
-  base_reason: "T-46-05 has no branch on the remote yet (status pending) — ticket/T-46-05-regenerate-the-reviewed-package-and-veri is not a base that exists, so the base is epic/46-refresh-native-runtime-model-ladder"
-  blocked_by: ["T-46-05"]
-  blocked_reasons: {"T-46-05":"parent has no branch yet (nothing to cascade from)"}
-  branch: "ticket/T-46-06-independently-review-native-application"
-  epic: "epic/46-refresh-native-runtime-model-ladder"
-  pr: null
-  ready: false
   reapable: false
   status: "pending"
