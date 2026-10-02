@@ -395,3 +395,7 @@ setup and the published local route use real package/installer processes with
 fixture dependency and CLI responses. These checks are fixture evidence only;
 retained real installation/authentication records and native/operator HOLDs above
 remain separate.
+
+The standalone capability installer uses the sibling shared library before Node or staging. Explicit candidate/dogfood invocation requires the same envelope and validated child environment; ordinary custom Claude homes retain their destination. Isolated staging passes an explicit `$TMPDIR/shipyard-capability.XXXXXX` template, then captures the stage and candidate ancestor directory identities. Version and capability children are checked before continuation, including failures, and EXIT cleanup rescans the environment and identities before recursive deletion. Unsafe cleanup refuses and leaves the stage for inspection. The Claude marketplace parent also rescans after its final capability child, including nonzero outcomes. These are bounded child-boundary checks, without an arbitrary dependency, kernel or concurrent replacement guarantee.
+
+The accepted-helper security matrix uses a copied Node executable with basename `codex` and probe-created helper links on every runner. Those fixtures test the narrow cleanup contract; they are not native Codex application proof. Historical real-Codex observations above retain their original attribution.

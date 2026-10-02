@@ -1016,25 +1016,13 @@ test('cleanup conditional context cannot suppress a failed isolation guard', t =
 });
 
 test('owned tuner cleans real version-probe helpers before parent continuation and refuses hostile aliases', t => {
-  const lookup = spawnSync('/bin/bash', ['-c', 'command -v codex'], { encoding: 'utf8' });
-  const executable = lookup.stdout.trim();
-  if (!executable || !fs.existsSync(executable)) return t.skip('native Codex version binary unavailable');
-  const target = fs.realpathSync(executable);
+  const target = process.execPath;
   const bytes = fs.readFileSync(target), stat = fs.statSync(target);
-  {
-    const f = processFixture(t), outside = fullSnapshot(f.ambient);
-    const seed = f.run('/bin/bash', ['scripts/ensure-gsd-core.sh', 'codex']);
-    assert.equal(seed.status, 0, seed.stdout + seed.stderr);
-    fs.unlinkSync(path.join(f.bin, 'codex')); fs.symlinkSync(executable, path.join(f.bin, 'codex'));
-    const result = f.run('/bin/bash', ['scripts/install-shipyard-codex.sh'], { SHIPYARD_GSD_AUTO_INSTALL: '0' });
-    assert.equal(result.status, 0, result.stdout + result.stderr);
-    assert.ok(fs.existsSync(path.join(f.env.CODEX_HOME, 'agents/.shipyard-provenance.json')));
-    assert.deepEqual(fullSnapshot(f.ambient), outside);
-  }
   for (const hazard of ['none', 'unknown', 'repointed', 'preexisting', 'parent', 'shim', 'alias-hop', 'cli-repointed', 'parent-replaced']) {
     const f = processFixture(t), outside = fullSnapshot(f.ambient);
     const cliDir = path.join(f.dir, 'native-bin'); fs.mkdirSync(cliDir);
-    fs.symlinkSync(executable, path.join(cliDir, 'codex'));
+    const executable = path.join(cliDir, 'codex');
+    fs.copyFileSync(process.execPath, executable); fs.chmodSync(executable, 0o755);
     const probe = path.join(f.dir, 'probe.cjs');
     const mutation = hazard === 'unknown' ? "fs.symlinkSync(cli,path.join(dir,'unknown-helper'));"
       : hazard === 'repointed' ? "fs.unlinkSync(path.join(dir,'apply_patch'));fs.symlinkSync(process.env.HOME,path.join(dir,'apply_patch'));"
@@ -1042,7 +1030,7 @@ test('owned tuner cleans real version-probe helpers before parent continuation a
       : hazard === 'cli-repointed' ? "const alias=process.env.PATH.split(path.delimiter)[0]+'/codex';fs.unlinkSync(alias);fs.symlinkSync(process.env.HOME,alias);"
       : hazard === 'parent-replaced' ? "fs.renameSync(base,base+'-old');fs.mkdirSync(base);"
       : '';
-    fs.writeFileSync(probe, `const fs=require('node:fs'),path=require('node:path');const cli=${JSON.stringify(executable)};const r=require('node:child_process').spawnSync(cli,['--version'],{stdio:'inherit',timeout:10000});if(r.status!==0)process.exit(1);const base=path.join(process.env.CODEX_HOME,'tmp/arg0');const dir=path.join(base,fs.readdirSync(base).find(x=>x.startsWith('codex-arg0')));${mutation}`);
+    fs.writeFileSync(probe, `const fs=require('node:fs'),path=require('node:path');const cli=${JSON.stringify(executable)};const base=path.join(process.env.CODEX_HOME,'tmp/arg0');const dir=path.join(base,'codex-arg0Fixture');fs.mkdirSync(dir,{recursive:true});for(const leaf of ['apply_patch','applypatch','codex-execve-wrapper'])fs.symlinkSync(cli,path.join(dir,leaf));console.log('fixture helpers created');${mutation}`);
     if (hazard === 'shim') {
       fs.unlinkSync(path.join(cliDir, 'codex'));
       fs.writeFileSync(path.join(cliDir, 'codex'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
@@ -1058,7 +1046,7 @@ test('owned tuner cleans real version-probe helpers before parent continuation a
     const result = f.run('/bin/bash', ['-c', 'source scripts/ensure-gsd-core.sh --library; prepare_isolation codex "$CODEX_HOME" "$SHIPYARD_ISOLATION_ROOT"; run_isolated_tuner "$1" || exit $?; isolation_env codex "$SHIPYARD_ISOLATION_ROOT" >/dev/null || exit $?; touch "$CODEX_HOME/parent-continued"', 'probe', probe], { PATH: `${cliDir}:${f.env.PATH}` });
     if (hazard === 'none') {
       assert.equal(result.status, 0, result.stdout + result.stderr);
-      assert.match(result.stdout, /codex-cli \d+\./, 'real version floor input remains available');
+      assert.match(result.stdout, /fixture helpers created/, 'fixture created accepted helper links');
       assert.ok(fs.existsSync(path.join(f.env.CODEX_HOME, 'parent-continued')));
       const base = path.join(f.env.CODEX_HOME, 'tmp/arg0');
       for (const dir of fs.readdirSync(base)) for (const leaf of ['apply_patch', 'applypatch', 'codex-execve-wrapper'])
@@ -1353,4 +1341,98 @@ test('ordinary custom Claude home installs and removes while explicit invalid en
   assert.equal(removed.status, 0, removed.stdout + removed.stderr);
   assert.equal(fs.existsSync(path.join(custom, 'hooks/shipyard-auto-route.sh')), false);
   assert.deepEqual(fullSnapshot(f.ambient), before);
+});
+
+function capabilityBsdFixture(f) {
+  const trace = path.join(f.dir, 'capability-stage.jsonl');
+  fs.writeFileSync(path.join(f.bin, 'mktemp'), `#!${process.execPath}
+const fs=require('node:fs'),path=require('node:path');const args=process.argv.slice(2),template=args.find(x=>!x.startsWith('-'));
+const stage=fs.mkdtempSync(template?template.slice(0,-6):${JSON.stringify(path.join(f.dir,'bsd-outside-'))});
+fs.appendFileSync(${JSON.stringify(trace)},JSON.stringify({args,stage,tmp:process.env.TMPDIR})+'\\n');console.log(stage);
+`); fs.chmodSync(path.join(f.bin, 'mktemp'), 0o755);
+  return trace;
+}
+for (const entry of ['standalone', 'marketplace']) test('contained Claude capability lifecycle with BSD temporary semantics: '+entry, t => {
+  const f=processFixture(t), trace=capabilityBsdFixture(f);
+  const negative=f.run(path.join(f.bin,'mktemp'),['-d'],{TMPDIR:f.candidate});
+  assert.equal(negative.status,0,negative.stderr);
+  assert.ok(!negative.stdout.trim().startsWith(f.candidate+path.sep),'BSD bare -d negative control ignores TMPDIR');
+  fs.rmSync(negative.stdout.trim(),{recursive:true});fs.unlinkSync(trace);
+  const before=fullSnapshot(f.ambient);
+  const seed=f.run('/bin/bash',['scripts/ensure-gsd-core.sh','claude']);assert.equal(seed.status,0,seed.stdout+seed.stderr);
+  const result=f.run('/bin/bash',entry==='standalone'?['scripts/install-shipyard-capability.sh','claude']:['scripts/ensure-gsd-core.sh','--launch-marketplace','claude']);
+  assert.equal(result.status,0,result.stdout+result.stderr);
+  assert.match(result.stdout,/✓ installed/);
+  const stages=fs.readFileSync(trace,'utf8').trim().split('\n').map(JSON.parse);
+  assert.ok(stages.some(x=>x.args.some(a=>a.startsWith(x.tmp+'/shipyard-capability.'))));
+  for(const row of stages){assert.ok(row.stage.startsWith(f.candidate+path.sep));assert.equal(fs.existsSync(row.stage),false,'safe stage cleaned');}
+  assert.ok(fs.existsSync(path.join(f.candidate,'.shipyard-home/.gsd/capabilities/delivery-pipeline/capability.json')));
+  assert.deepEqual(fullSnapshot(f.ambient),before);
+});
+
+for(const entry of ['standalone','marketplace']) for(const hazard of ['destination','stage','stage-parent','sibling','parent-replaced']) for(const failure of [false,true]) test(`capability boundary refuses ${entry} ${hazard} failure=${failure}`,t=>{
+  const f=processFixture(t),trace=capabilityBsdFixture(f);
+  const seed=f.run('/bin/bash',['scripts/ensure-gsd-core.sh','claude']);assert.equal(seed.status,0,seed.stdout+seed.stderr);
+  const tools=path.join(f.env.CLAUDE_HOME,'gsd-core/bin/gsd-tools.cjs');
+  const mutationProgram=`const fs=require('node:fs'),path=require('node:path');const stage=path.dirname(process.argv[4]);const hazard=${JSON.stringify(hazard)};
+let target=hazard==='destination'?process.env.GSD_CAPABILITIES_DIR:hazard==='stage'?stage:hazard==='stage-parent'||hazard==='parent-replaced'?path.dirname(stage):path.join(process.env.SHIPYARD_ISOLATION_ROOT,'sibling');
+if(fs.existsSync(target))fs.renameSync(target,target+'-retained');
+if(hazard==='parent-replaced')fs.mkdirSync(target);else fs.symlinkSync(${JSON.stringify(f.ambient)},target);
+process.exitCode=${failure?17:0};`;
+  fs.writeFileSync(tools,mutationProgram);
+  fs.appendFileSync(path.join(f.bin,'npx'),`\nfs.writeFileSync(path.join(core,'bin/gsd-tools.cjs'),${JSON.stringify(mutationProgram)});`);
+  const before=fullSnapshot(f.ambient);
+  const result=f.run('/bin/bash',entry==='standalone'?['scripts/install-shipyard-capability.sh','claude']:['scripts/ensure-gsd-core.sh','--launch-marketplace','claude']);
+  assert.notEqual(result.status,0,result.stdout+result.stderr);assert.match(result.stderr,/isolation refusal/);
+  assert.doesNotMatch(result.stdout,/✓ installed/,'parent never reports capability success');
+  assert.deepEqual(fullSnapshot(f.ambient),before,'cleanup never deletes protected sentinels');
+  assert.ok(fs.existsSync(trace));
+});
+
+for(const failure of [false,true]) test('capability version child mutation refuses before install failure='+failure,t=>{
+  const f=processFixture(t);capabilityBsdFixture(f);
+  const seed=f.run('/bin/bash',['scripts/ensure-gsd-core.sh','claude']);assert.equal(seed.status,0,seed.stdout+seed.stderr);
+  fs.unlinkSync(path.join(f.bin,'node'));
+  fs.writeFileSync(path.join(f.bin,'node'),`#!${process.execPath}
+const fs=require('node:fs'),path=require('node:path'),cp=require('node:child_process');const args=process.argv.slice(2);const r=cp.spawnSync(${JSON.stringify(process.execPath)},args,{stdio:'inherit'});
+if(args[0]==='-p'&&args[1].includes('capability.json')){fs.symlinkSync(${JSON.stringify(f.ambient)},path.join(process.env.SHIPYARD_ISOLATION_ROOT,'version-escape'));process.exit(${failure?19:0});}process.exit(r.status||0);
+`);fs.chmodSync(path.join(f.bin,'node'),0o755);
+  const before=fullSnapshot(f.ambient);
+  const result=f.run('/bin/bash',['scripts/install-shipyard-capability.sh','claude']);
+  assert.notEqual(result.status,0,result.stdout+result.stderr);assert.match(result.stderr,/isolation refusal/);assert.doesNotMatch(result.stdout,/→ installing|✓ installed/);
+  assert.deepEqual(fullSnapshot(f.ambient),before);
+});
+
+test('standalone capability refuses compromised state and unsafe options before staging',t=>{
+  for(const hazard of ['alias','require','import']){
+    const f=processFixture(t),trace=capabilityBsdFixture(f);
+    const payload=path.join(f.dir,'preload.cjs');fs.writeFileSync(payload,`require('node:fs').writeFileSync(${JSON.stringify(path.join(f.ambient,'preload-ran'))},'bad');`);
+    if(hazard==='alias'){fs.mkdirSync(f.candidate);fs.symlinkSync(f.ambient,path.join(f.candidate,'escape'));}
+    const before=fullSnapshot(f.dir);
+    const result=f.run('/bin/bash',['scripts/install-shipyard-capability.sh','claude'],hazard==='alias'?{}:{NODE_OPTIONS:`--${hazard}=${payload}`});
+    assert.equal(result.status,3,result.stdout+result.stderr);assert.match(result.stderr,/isolation refusal/);
+    assert.equal(fs.existsSync(trace),false);assert.deepEqual(fullSnapshot(f.dir),before);
+  }
+});
+
+test('ordinary custom Claude capability keeps destination and cleans stage',t=>{
+  const f=processFixture(t),trace=capabilityBsdFixture(f);
+  const seed=f.run('/bin/bash',['scripts/ensure-gsd-core.sh','claude']);assert.equal(seed.status,0,seed.stdout+seed.stderr);
+  const dest=path.join(f.dir,'ordinary-capabilities');
+  const before=fullSnapshot(f.ambient);
+  const result=f.run('/bin/bash',['scripts/install-shipyard-capability.sh','claude'],{SHIPYARD_ISOLATION_ROOT:undefined,CODEX_HOME:undefined,GSD_CAPABILITIES_DIR:dest});
+  assert.equal(result.status,0,result.stdout+result.stderr);assert.match(result.stdout,/for claude/);
+  assert.ok(fs.existsSync(path.join(dest,'delivery-pipeline/capability.json')));
+  for(const row of fs.readFileSync(trace,'utf8').trim().split('\n').map(JSON.parse))assert.equal(fs.existsSync(row.stage),false);
+  assert.deepEqual(fullSnapshot(f.ambient),before);
+});
+
+for(const failure of [false,true]) test('marketplace parent independently scans final capability result failure='+failure,t=>{
+  const f=processFixture(t),before=fullSnapshot(f.ambient);
+  const program=`const fs=require('node:fs'),path=require('node:path'),cp=require('node:child_process'),original=cp.spawnSync;
+cp.spawnSync=(c,a,o)=>{if(c==='bash'&&a[0].endsWith('/install-shipyard-capability.sh')){fs.symlinkSync(${JSON.stringify(f.ambient)},path.join(o.env.SHIPYARD_ISOLATION_ROOT,'final-child-escape'));return {status:${failure?21:0}};}return original(c,a,o);};
+require('./scripts/install-shipyard-marketplace.cjs').main(['claude']);fs.writeFileSync(path.join(process.env.SHIPYARD_ISOLATION_ROOT,'parent-success'),'bad');`;
+  const result=f.run(process.execPath,['-e',program]);
+  assert.notEqual(result.status,0,result.stdout+result.stderr);assert.match(result.stderr,/isolation refusal/);
+  assert.equal(fs.existsSync(path.join(f.candidate,'parent-success')),false);assert.deepEqual(fullSnapshot(f.ambient),before);
 });

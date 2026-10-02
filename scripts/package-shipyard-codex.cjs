@@ -7,7 +7,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const root = path.resolve(__dirname, '..');
 const scripts = ['bootstrap-shipyard-plugin.cjs', 'ensure-gsd-plugin.cjs', 'ensure-gsd-core.sh',
-  'install-shipyard-codex.sh', 'gen-codex-shipyard.cjs', 'merge-codex-config.cjs', 'configure-codex-notify.cjs'];
+  'install-shipyard-codex.sh', 'install-shipyard-capability.sh', 'gen-codex-shipyard.cjs', 'merge-codex-config.cjs', 'configure-codex-notify.cjs'];
 const names = ['route', 'investigate', 'decompose', 'deliver', 'bench', 'delivery-rules'];
 function build(destination = path.join(root, 'plugins/shipyard')) {
   fs.mkdirSync(destination, { recursive: true });
