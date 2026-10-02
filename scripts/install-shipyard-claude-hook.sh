@@ -88,13 +88,16 @@ function contains(parent, child) {
   const rel = path.relative(parent, child);
   return rel === '' || (rel !== '..' && !rel.startsWith('..' + path.sep) && !path.isAbsolute(rel));
 }
-const protectedPaths = [process.env.SOURCE, process.env.HOME,
-  path.join(process.env.HOME, '.gsd'), path.join(process.env.HOME, '.codex'),
-  path.join(process.env.HOME, '.agents'), path.join(process.env.HOME, '.claude'),
-  process.env.CLAUDE_HOME, process.env.CLAUDE_CONFIG_DIR, process.env.CODEX_HOME].filter(Boolean);
-for (const item of protectedPaths) {
-  const protectedPath = real(item);
-  if (contains(target, protectedPath) || (item !== process.env.HOME && contains(protectedPath, target))) {
+const protectedPaths = [
+  { value: process.env.HOME, allowDescendants: true },
+  ...[process.env.SOURCE, path.join(process.env.HOME, '.gsd'), path.join(process.env.HOME, '.codex'),
+    path.join(process.env.HOME, '.agents'), path.join(process.env.HOME, '.claude'),
+    process.env.CLAUDE_HOME, process.env.CLAUDE_CONFIG_DIR, process.env.CODEX_HOME]
+    .filter(Boolean).map(value => ({ value, allowDescendants: false })),
+];
+for (const { value, allowDescendants } of protectedPaths) {
+  const protectedPath = real(value);
+  if (contains(target, protectedPath) || (!allowDescendants && contains(protectedPath, target))) {
     throw new Error(`isolation refusal: dogfood destination overlaps protected state: ${target}`);
   }
 }

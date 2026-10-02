@@ -736,6 +736,33 @@ test('copy-only Claude dogfood protects divergent active roots and physical alia
   }
 });
 
+test('copy-only Claude dogfood retains strict duplicate HOME protections', t => {
+  for (const kind of ['source', 'CLAUDE_HOME', 'CLAUDE_CONFIG_DIR', 'CODEX_HOME']) {
+    const f = processFixture(t);
+    const source = path.join(f.dir, 'source-home');
+    fs.mkdirSync(path.join(source, 'scripts'), { recursive: true });
+    fs.mkdirSync(path.join(source, 'plugins/delivery-pipeline/scripts'), { recursive: true });
+    for (const name of ['install-shipyard-claude-hook.sh', 'ensure-gsd-core.sh'])
+      fs.copyFileSync(path.join(repository, 'scripts', name), path.join(source, 'scripts', name));
+    fs.copyFileSync(path.join(repository, 'plugins/delivery-pipeline/scripts/host-provenance.cjs'),
+      path.join(source, 'plugins/delivery-pipeline/scripts/host-provenance.cjs'));
+    const home = kind === 'source' ? source : f.ambient;
+    const target = path.join(home, 'candidate-plugin');
+    fs.mkdirSync(target);
+    fs.writeFileSync(path.join(target, '.shipyard-provenance.json'), '{}\n');
+    fs.writeFileSync(path.join(target, 'sentinel'), 'preserve before recursive replacement\n', { mode: 0o640 });
+    const env = { ...f.env, HOME: home, SHIPYARD_ISOLATION_ROOT: undefined,
+      CLAUDE_HOME: undefined, CLAUDE_CONFIG_DIR: undefined, CODEX_HOME: undefined };
+    if (kind !== 'source') env[kind] = home;
+    const before = fullSnapshot(f.dir);
+    const result = spawnSync('/bin/bash', [path.join(source, 'scripts/install-shipyard-claude-hook.sh'), '--dogfood-root', target],
+      { cwd: repository, env, encoding: 'utf8' });
+    assert.notEqual(result.status, 0, kind);
+    assert.match(result.stderr, /overlaps protected state/, kind);
+    assert.deepEqual(fullSnapshot(f.dir), before, kind + ' refuses before deletion or copy');
+  }
+});
+
 test('root-only canonical and published bootstrap use guarded runtime home before state access', t => {
   for (const entry of ['canonical', 'published']) {
     const f = processFixture(t);

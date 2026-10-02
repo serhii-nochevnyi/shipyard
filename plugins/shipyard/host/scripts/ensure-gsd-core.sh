@@ -69,10 +69,15 @@ try {
   const root = physical(supplied), ambient = physical(process.env.SHIPYARD_ORIGINAL_HOME || process.env.HOME || os.homedir());
   const inside = (base, target) => target === base || target.startsWith(base + path.sep);
   const nativeHome = physical(os.userInfo().homedir);
-  for (const protectedPath of [...new Set([ambient, nativeHome].flatMap(home => [home, ...['.codex', '.claude', '.gsd', '.agents', '.npm', '.cache', '.config', '.local/state/shipyard', '.local/state/shipyard/codex', '.local/state/shipyard/claude'].map(p => path.join(home, p))]))]) {
-    const protectedRoot = physical(protectedPath);
-    if (root === protectedRoot || inside(root, protectedRoot) || (![ambient, nativeHome].includes(protectedPath) && !protectedPath.endsWith('/.local/state/shipyard') && inside(protectedRoot, root)))
-      fail(`candidate aliases active state: ${protectedPath}`);
+  const protections = [ambient, nativeHome].flatMap(home => [
+    { value: home, allowDescendants: true },
+    ...['.codex', '.claude', '.gsd', '.agents', '.npm', '.cache', '.config', '.local/state/shipyard', '.local/state/shipyard/codex', '.local/state/shipyard/claude']
+      .map(relative => ({ value: path.join(home, relative), allowDescendants: relative === '.local/state/shipyard' })),
+  ]);
+  for (const { value, allowDescendants } of protections) {
+    const protectedRoot = physical(value);
+    if (root === protectedRoot || inside(root, protectedRoot) || (!allowDescendants && inside(protectedRoot, root)))
+      fail(`candidate aliases active state: ${value}`);
   }
   const env = { SHIPYARD_ISOLATION_ROOT: root, SHIPYARD_ORIGINAL_HOME: ambient, HOME: path.join(root, '.shipyard-home') };
   const defaults = {
