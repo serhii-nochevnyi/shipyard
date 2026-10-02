@@ -21,7 +21,7 @@ Codex uses its marketplace package and automatically installs the GSD plugin:
 
 ```bash
 make package-shipyard-codex
-node scripts/install-shipyard-marketplace.cjs codex --source "$PWD"
+bash scripts/ensure-gsd-core.sh --launch-marketplace codex --source "$PWD"
 ```
 
 The installers write only to the selected runtime homes. Set `CLAUDE_HOME`,

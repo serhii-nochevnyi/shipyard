@@ -316,6 +316,23 @@ prepare_isolation() {
   fi
 }
 
+case "${1:-}" in
+  --launch-marketplace)
+    [[ "$#" == 2 || ( "$#" == 4 && "${3:-}" == --source && -n "${4:-}" ) ]] &&
+      [[ "${2:-}" == claude || "${2:-}" == codex ]] || { echo "invalid marketplace launcher arguments" >&2; exit 2; }
+    validate_isolated_node_options || exit $?
+    LAUNCH_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+    shift
+    exec node "$LAUNCH_DIR/install-shipyard-marketplace.cjs" "$@"
+    ;;
+  --launch-bootstrap)
+    [[ "$#" == 1 ]] || { echo "invalid bootstrap launcher arguments" >&2; exit 2; }
+    validate_isolated_node_options || exit $?
+    LAUNCH_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+    exec node "$LAUNCH_DIR/bootstrap-shipyard-plugin.cjs"
+    ;;
+esac
+
 if [[ "${1:-}" == --library ]]; then return 0; fi
 
 if [[ "${1:-}" == --isolation-env ]]; then

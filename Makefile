@@ -4,13 +4,13 @@ GSD_CORE_VERSION ?= latest
 
 .PHONY: package-shipyard-codex install-shipyard-marketplace-codex install-shipyard-marketplace-claude
 package-shipyard-codex:
-	node scripts/package-shipyard-codex.cjs
+	source scripts/ensure-gsd-core.sh --library && validate_isolated_node_options && node scripts/package-shipyard-codex.cjs
 
 install-shipyard-marketplace-codex:
-	node scripts/install-shipyard-marketplace.cjs codex
+	bash scripts/ensure-gsd-core.sh --launch-marketplace codex
 
 install-shipyard-marketplace-claude:
-	node scripts/install-shipyard-marketplace.cjs claude
+	bash scripts/ensure-gsd-core.sh --launch-marketplace claude
 
 .PHONY: install-shipyard-codex install-shipyard-claude-hook remove-shipyard-claude-hook \
         install-shipyard-claude-statusline remove-shipyard-claude-statusline test-statusline \
@@ -21,9 +21,8 @@ install-shipyard-marketplace-claude:
 
 # Install or refresh the conveyor on a host OpenAI Codex CLI setup.
 # Set SHIPYARD_CODEX_PHASE=1 for investigate/decompose only.
-install-shipyard-codex:
-	node scripts/package-shipyard-codex.cjs
-	node scripts/install-shipyard-marketplace.cjs codex --source "$(CURDIR)"
+install-shipyard-codex: package-shipyard-codex
+	bash scripts/ensure-gsd-core.sh --launch-marketplace codex --source "$(CURDIR)"
 
 # Install or refresh the host Claude Code hooks that inject routing and enforce
 # the delivery stop gate.
@@ -125,7 +124,7 @@ release:
 refresh-runtime-digests:
 	node scripts/refresh-runtime-digests.cjs
 
-dogfood_root = $(shell SHIPYARD_DOGFOOD_RUNTIME=$(1) node -e "const c=require('node:crypto');const fs=require('node:fs');const os=require('node:os');const p=require('node:path');const r=fs.realpathSync(process.cwd());const d=c.createHash('sha256').update(r).digest('hex').slice(0,16);const b=process.env.XDG_STATE_HOME||p.join(os.homedir(),'.local','state');process.stdout.write(p.join(b,'shipyard','dogfood',process.env.SHIPYARD_DOGFOOD_RUNTIME,d));")
+dogfood_root = $(shell source scripts/ensure-gsd-core.sh --library && validate_isolated_node_options && SHIPYARD_DOGFOOD_RUNTIME=$(1) node -e "const c=require('node:crypto');const fs=require('node:fs');const os=require('node:os');const p=require('node:path');const r=fs.realpathSync(process.cwd());const d=c.createHash('sha256').update(r).digest('hex').slice(0,16);const b=process.env.XDG_STATE_HOME||p.join(os.homedir(),'.local','state');process.stdout.write(p.join(b,'shipyard','dogfood',process.env.SHIPYARD_DOGFOOD_RUNTIME,d));")
 
 install-shipyard-dogfood-claude:
 	./scripts/install-shipyard-claude-hook.sh --dogfood-root "$(or $(DOGFOOD_ROOT),$(call dogfood_root,claude))"

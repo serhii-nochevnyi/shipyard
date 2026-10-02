@@ -8,7 +8,7 @@ description: "Deep investigation (loop 1): pick up an open INV or create a new o
 Resolve this installed skill directory from its supplied absolute SKILL.md path. The plugin root is two directories above it. Run, with that absolute root:
 
 ```sh
-node "<plugin-root>/host/scripts/bootstrap-shipyard-plugin.cjs"
+bash "<plugin-root>/host/scripts/ensure-gsd-core.sh" --launch-bootstrap
 ```
 
 This idempotently installs/enables the GSD marketplace dependency and prepares native Codex host components. On any failure stop and report the exact setup error; do not run a partial workflow. If setup registered agents for the first time, start a new Codex session before dispatching them.

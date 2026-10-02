@@ -146,7 +146,9 @@ function codexSetup(source, inspect, { sandbox = fs.mkdtempSync(path.join(os.tmp
   return withEnv({ ...fixtureDestinationDefaults, HOME: sandbox, CODEX_HOME: codexHomeEnv }, () => {
     setupCodexHost(source, (command, args, env) => runs.push({ command, args, env }), read, inspect, home);
     assert.equal(runs.length, 1);
-    assert.match(runs[0].args[0], /host\/scripts\/bootstrap-shipyard-plugin\.cjs$/);
+    assert.equal(runs[0].command, 'bash');
+    assert.equal(runs[0].args[1], '--launch-bootstrap');
+    assert.match(runs[0].args[0], /host\/scripts\/ensure-gsd-core\.sh$/);
     return runs[0].env;
   });
 }
@@ -309,7 +311,7 @@ test('main selects each checkout home before ensure and carries it through marke
     assert.ok(codexEvents.every(event => event.env.CODEX_HOME === selectedHomes[index]),
       `every Codex operation should use ${selectedHomes[index]}`);
     assert.ok(codexEvents.some(event => event.type === 'execute'
-      && event.command === process.execPath && /bootstrap-shipyard-plugin\.cjs$/.test(event.args[0])),
+      && event.command === 'bash' && /ensure-gsd-core\.sh$/.test(event.args[0])),
     'bootstrap receives the selected environment');
     assert.ok(codexEvents.some(event => event.type === 'execute'
       && event.args[0] === 'plugin' && event.args[1] === 'marketplace' && event.args[2] === 'add'),
@@ -397,9 +399,9 @@ test('OS-home dependency negative control detects outside writes; every entry re
       ['bash', ['scripts/ensure-gsd-core.sh', 'codex']],
       ['bash', ['scripts/ensure-gsd-core.sh', 'claude']],
       ['bash', ['scripts/install-shipyard-codex.sh']],
-      [process.execPath, ['scripts/install-shipyard-marketplace.cjs', 'codex']],
-      [process.execPath, ['scripts/install-shipyard-marketplace.cjs', 'claude']],
-      [process.execPath, ['scripts/bootstrap-shipyard-plugin.cjs']],
+      ['/bin/bash', ['scripts/ensure-gsd-core.sh', '--launch-marketplace', 'codex']],
+      ['/bin/bash', ['scripts/ensure-gsd-core.sh', '--launch-marketplace', 'claude']],
+      ['/bin/bash', ['scripts/ensure-gsd-core.sh', '--launch-bootstrap']],
       ['bash', ['scripts/install-shipyard-claude-hook.sh', '--dogfood-root', path.join(candidate, 'plugin')]],
     ]) {
       const snapshot = fullSnapshot(dir);
@@ -584,10 +586,21 @@ test('marketplace through generated installed bootstrap and idempotent early ret
   const packageRoot = path.join(f.dir, 'package');
   require('../../scripts/package-shipyard-codex.cjs').build(packageRoot);
   f.env.FIXTURE_PACKAGE_ROOT = packageRoot;
-  const installed = f.run(process.execPath, ['scripts/install-shipyard-marketplace.cjs', 'codex', '--source', repository]);
+  const installed = f.run('/bin/bash', ['scripts/ensure-gsd-core.sh', '--launch-marketplace', 'codex', '--source', repository]);
   assert.equal(installed.status, 0, installed.stdout + installed.stderr);
   const bootstrap = path.join(f.env.CODEX_HOME, 'plugins/cache/shipyard/shipyard/local/host/scripts/bootstrap-shipyard-plugin.cjs');
-  const repeated = f.run(process.execPath, [bootstrap]);
+  const launcher = path.join(path.dirname(bootstrap), 'ensure-gsd-core.sh');
+  const hook = JSON.parse(fs.readFileSync(path.join(packageRoot, 'hooks/hooks.json'))).hooks.SessionStart[0].hooks[0].command;
+  for (const options of ['', '--no-warnings --trace-warnings']) {
+    const safe = f.run('/bin/bash', ['-c', hook], { PLUGIN_ROOT: packageRoot, NODE_OPTIONS: options });
+    assert.equal(safe.status, 0, safe.stdout + safe.stderr);
+  }
+  for (const name of ['route', 'investigate', 'decompose', 'deliver', 'bench', 'delivery-rules']) {
+    const skill = fs.readFileSync(path.join(packageRoot, 'skills', 'shipyard-' + name, 'SKILL.md'), 'utf8');
+    assert.match(skill, /bash "<plugin-root>\/host\/scripts\/ensure-gsd-core\.sh" --launch-bootstrap/);
+    assert.doesNotMatch(skill, /node .*bootstrap-shipyard-plugin/);
+  }
+  const repeated = f.run('/bin/bash', [launcher, '--launch-bootstrap']);
   assert.equal(repeated.status, 0, repeated.stdout + repeated.stderr);
   assert.ok(fs.existsSync(path.join(f.env.CODEX_HOME, 'shipyard-plugin/installed.json')));
   assert.ok(fs.existsSync(path.join(f.env.CODEX_HOME, 'shipyard-native-skills/shipyard-deliver/SKILL.md')));
@@ -595,7 +608,7 @@ test('marketplace through generated installed bootstrap and idempotent early ret
   const preload = path.join(f.dir, 'outside-home.cjs');
   fs.writeFileSync(preload, `require('node:os').homedir=()=>${JSON.stringify(f.ambient)};`);
   const snapshot = fullSnapshot(f.dir);
-  const refused = f.run(process.execPath, [bootstrap], { NODE_OPTIONS: `--require=${preload}`, SHIPYARD_GSD_AUTO_INSTALL: '0' });
+  const refused = f.run('/bin/bash', [launcher, '--launch-bootstrap'], { NODE_OPTIONS: `--require=${preload}`, SHIPYARD_GSD_AUTO_INSTALL: '0' });
   assert.notEqual(refused.status, 0); assert.match(refused.stderr, /isolation refusal/);
   assert.deepEqual(fullSnapshot(f.dir), snapshot, 'matching installed state cannot skip preflight');
 });
@@ -642,6 +655,7 @@ test('published proof keeps historical approved baseline, attempts, exact PR408 
   assert.match(proof, /rollback rehearsal, final release live-round, operator rollout checkpoint and activation/);
   assert.equal((proof.match(/\| HOLD —/g) || []).length, 8);
   const runbook = fs.readFileSync(path.join(repository, '.planning/architecture/ADR-024-ROLLOUT.md'), 'utf8');
+  assert.match(runbook, /--launch-marketplace/); assert.match(proof, /Direct external.*unsupported/);
   assert.match(runbook, /--isolation-env/); assert.match(runbook, /SHIPYARD_ISOLATION_ROOT/);
   assert.match(runbook, /candidate_run claude .*ensure-gsd-core/); assert.match(runbook, /prior reviewed installer must support/);
 });
@@ -1173,5 +1187,111 @@ test('original-home marker cannot turn an aliased child HOME into a generated re
     assert.equal(legitimate.status, 0, legitimate.stderr);
     assert.equal(JSON.parse(legitimate.stdout).environment.SHIPYARD_ORIGINAL_HOME, f.ambient);
     assert.deepEqual(fullSnapshot(f.dir), before);
+  }
+});
+
+for (const kind of ['require', 'import']) test(`supported shell startup blocks effective ${kind} evaluation and exit writers`, t => {
+  const f = processFixture(t), packageRoot = path.join(f.dir, 'fresh-package');
+  require('../../scripts/package-shipyard-codex.cjs').build(packageRoot);
+  const marker = path.join(f.dir, 'preload-executed');
+  const preload = path.join(f.dir, `writer.${kind === 'require' ? 'cjs' : 'mjs'}`);
+  const imports = kind === 'require' ? "const fs=require('node:fs');" : "import fs from 'node:fs';";
+  fs.writeFileSync(preload, imports + `const write=()=>{fs.writeFileSync(${JSON.stringify(marker)},'executed');fs.writeFileSync(${JSON.stringify(path.join(f.ambient, '.gsd/defaults.json'))},'preload write');};write();process.on('exit',write);`);
+  const options = `--${kind}=${preload}`;
+  const hook = JSON.parse(fs.readFileSync(path.join(packageRoot, 'hooks/hooks.json'))).hooks.SessionStart[0].hooks[0].command;
+  const entries = [
+    ['scripts/ensure-gsd-core.sh', '--launch-marketplace', 'codex', '--source', repository],
+    ['scripts/ensure-gsd-core.sh', '--launch-marketplace', 'claude', '--source', repository],
+    ['-c', hook]
+  ];
+  const protectedBefore = fullSnapshot(f.ambient), before = fullSnapshot(f.dir);
+  for (const args of entries) {
+    const result = f.run('/bin/bash', args, { NODE_OPTIONS: options, PLUGIN_ROOT: packageRoot });
+    assert.equal(result.status, 3, result.stdout + result.stderr);
+    assert.match(result.stderr, /unsupported NODE_OPTIONS/);
+    assert.deepEqual(fullSnapshot(f.dir), before);
+  }
+  const control = f.run(process.execPath, ['-e', ''], { NODE_OPTIONS: options });
+  assert.equal(control.status, 0, control.stderr);
+  assert.equal(fs.readFileSync(marker, 'utf8'), 'executed');
+  assert.notDeepEqual(fullSnapshot(f.ambient), protectedBefore);
+});
+
+test('ordinary active generated hook supports safe diagnostic startup', t => {
+  const f = processFixture(t), packageRoot = path.join(f.dir, 'ordinary-package'), home = path.join(f.dir, 'ordinary-home');
+  fs.mkdirSync(home);
+  require('../../scripts/package-shipyard-codex.cjs').build(packageRoot);
+  const hook = JSON.parse(fs.readFileSync(path.join(packageRoot, 'hooks/hooks.json'))).hooks.SessionStart[0].hooks[0].command;
+  for (const options of ['', '--no-warnings --trace-warnings']) {
+    const result = f.run('/bin/bash', ['-c', hook], { HOME: home, PLUGIN_ROOT: packageRoot,
+      SHIPYARD_ISOLATION_ROOT: undefined, CODEX_HOME: undefined, CLAUDE_HOME: undefined,
+      GSD_CAPABILITIES_DIR: path.join(home, '.gsd/capabilities'),
+      CLAUDE_CONFIG_DIR: undefined, NODE_OPTIONS: options });
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    assert.ok(fs.existsSync(path.join(home, '.codex/shipyard-plugin/installed.json')));
+  }
+});
+
+function publishedSequenceFixture(t) {
+  const f = processFixture(t), checkout = path.join(f.dir, 'checkout');
+  fs.mkdirSync(checkout);
+  for (const entry of ['scripts', 'plugins', 'capabilities', 'Makefile', 'README.md', 'CLAUDE.md']) {
+    fs.cpSync(path.join(repository, entry), path.join(checkout, entry), { recursive: true });
+  }
+  const sequences = [];
+  for (const file of ['README.md', 'CLAUDE.md']) {
+    const text = fs.readFileSync(path.join(checkout, file), 'utf8');
+    for (const match of text.matchAll(/```bash\n([\s\S]*?)```/g)) {
+      if (match[1].includes('--launch-marketplace')) sequences.push([file, match[1]]);
+    }
+  }
+  assert.equal(sequences.length, 3);
+  for (const target of ['package-shipyard-codex', 'install-shipyard-codex',
+    'install-shipyard-marketplace-codex', 'install-shipyard-marketplace-claude']) {
+    sequences.push([target, 'make ' + target]);
+  }
+  const run = (script, extra = {}) => spawnSync('/bin/bash', ['-ec', script], {
+    cwd: checkout, env: { ...f.env, ...extra }, encoding: 'utf8', timeout: 90000,
+  });
+  return { ...f, checkout, sequences, run };
+}
+
+for (const kind of ['require', 'import']) test(`complete published sequences refuse ${kind} before package or dogfood Node startup`, t => {
+  const f = publishedSequenceFixture(t), marker = path.join(f.dir, 'preload-marker');
+  const preload = path.join(f.dir, 'writer.' + (kind === 'require' ? 'cjs' : 'mjs'));
+  const imports = kind === 'require' ? "const fs=require('node:fs');" : "import fs from 'node:fs';";
+  fs.writeFileSync(preload, imports + `const write=()=>{fs.writeFileSync(${JSON.stringify(marker)},'executed');fs.writeFileSync(${JSON.stringify(path.join(f.ambient, '.gsd/defaults.json'))},'preload write');};write();process.on('exit',write);`);
+  const before = fullSnapshot(f.dir);
+  for (const [name, script] of f.sequences) {
+    const result = f.run(script, { NODE_OPTIONS: `--${kind}=${preload}` });
+    assert.notEqual(result.status, 0, name + result.stdout + result.stderr);
+    assert.match(result.stderr, /unsupported NODE_OPTIONS/, name);
+    assert.deepEqual(fullSnapshot(f.dir), before, name + ' leaves package, candidate, traces and outside sentinels unchanged');
+  }
+  const control = f.run('node -e ""', { NODE_OPTIONS: `--${kind}=${preload}` });
+  assert.equal(control.status, 0, control.stderr);
+  assert.ok(fs.existsSync(marker));
+  assert.notDeepEqual(fullSnapshot(f.dir), before, 'effective disposable direct-Node control');
+});
+
+test('guarded Make package and published local route support ordinary safe startup', t => {
+  const f = publishedSequenceFixture(t), home = path.join(f.dir, 'ordinary-home');
+  fs.mkdirSync(home);
+  const before = fullSnapshot(f.ambient);
+  for (const options of ['', '--no-warnings --trace-warnings']) {
+    const result = f.run('make package-shipyard-codex\nmake install-shipyard-marketplace-codex', { NODE_OPTIONS: options, HOME: home,
+      SHIPYARD_ISOLATION_ROOT: undefined, CODEX_HOME: undefined, CLAUDE_HOME: undefined,
+      CLAUDE_CONFIG_DIR: undefined, GSD_CAPABILITIES_DIR: path.join(home, '.gsd/capabilities'),
+      FIXTURE_PACKAGE_ROOT: path.join(f.checkout, 'plugins/shipyard') });
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    assert.ok(fs.existsSync(path.join(home, '.codex/shipyard-plugin/installed.json')));
+    assert.deepEqual(fullSnapshot(f.ambient), before);
+    const generated = JSON.parse(fs.readFileSync(path.join(f.checkout, 'plugins/shipyard/package-build.json')));
+    assert.match(generated.digest, /^[a-f0-9]{64}$/);
+    const local = f.run(f.sequences[0][1], { NODE_OPTIONS: options,
+      FIXTURE_PACKAGE_ROOT: path.join(f.checkout, 'plugins/shipyard') });
+    assert.equal(local.status, 0, local.stdout + local.stderr);
+    assert.ok(fs.existsSync(path.join(f.env.CODEX_HOME, 'shipyard-plugin/installed.json')));
+    assert.deepEqual(fullSnapshot(f.ambient), before);
   }
 });

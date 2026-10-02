@@ -126,7 +126,7 @@ For the alternative marketplace path, use a separate fresh envelope and run:
 (
   export SHIPYARD_ISOLATION_ROOT CODEX_HOME="$SHIPYARD_ISOLATION_ROOT/codex"
   export SHIPYARD_PROJECT_DIR="$PROJECT_DIR"
-  candidate_run codex node "$SOURCE_ROOT/scripts/install-shipyard-marketplace.cjs" codex --source "$SOURCE_ROOT"
+  candidate_run codex bash "$SOURCE_ROOT/scripts/ensure-gsd-core.sh" --launch-marketplace codex --source "$SOURCE_ROOT"
 )
 ```
 
@@ -369,3 +369,29 @@ safety against concurrent filesystem replacement. Existing verified isolated
 CLI-version helpers, npm links and temporary templates retain their supported
 checks; preload refusal does not relax alias validation. Native authentication,
 application and operator rollout remain HOLD.
+
+### Supported startup boundary
+
+For isolated marketplace setup use `bash "$SOURCE_ROOT/scripts/ensure-gsd-core.sh" --launch-marketplace codex --source "$SOURCE_ROOT"` or the same command with `claude`, under the candidate environment above. Rollback marketplace setup uses this same shell entry with the reviewed rollback source. The fixed launcher validates NODE_OPTIONS before launching its sibling Node installer. Empty options, `--no-warnings` and `--trace-warnings` are supported and retained; all other options refuse with exit 3 before Node starts.
+
+Packaged SessionStart and all six skill bootstrap instructions use `bash "${PLUGIN_ROOT}/host/scripts/ensure-gsd-core.sh" --launch-bootstrap` (skills resolve their absolute plugin root first). Cached marketplace bootstrap uses that same fixed mode. This protects bootstrap startup, not the already-running host process. Direct external `node scripts/install-shipyard-marketplace.cjs` or `node .../bootstrap-shipyard-plugin.cjs` with a malicious preload is unsupported for candidate isolation: preloads execute before JavaScript guards. Exported trusted JS helpers cannot retroactively isolate their parent. This does not sandbox arbitrary parent code, dependencies or concurrent filesystem replacements.
+
+The require/import evaluation-and-exit write regressions are hermetic fixture evidence only. They do not relabel the retained successful 6a33b2ae installation or authentication readiness as shell-launcher installation proof. Complete native pairs, rollback rehearsal and operator activation remain HOLD.
+
+The published local preparation sequence starts with `make package-shipyard-codex`.
+That fixed Make recipe imports `scripts/ensure-gsd-core.sh --library` and calls
+`validate_isolated_node_options` in the same shell before its package-generator
+Node command. `make install-shipyard-codex` reuses that guarded prerequisite.
+The README dogfood sequence also uses a Node-based Make root calculation; it
+imports the same library and validates before that calculation starts Node.
+Neither path clears NODE_OPTIONS or adds a third launcher mode. Direct external
+package-generator Node startup has the same unsupported-preloaded-parent limit.
+The process regression executes all three primary README/CLAUDE marketplace
+examples and the package/local-install/two release-marketplace Make targets in
+disposable checkout fixtures. Require/import evaluation-and-exit writers are
+refused with complete package/candidate/outside snapshots unchanged; direct-Node
+controls demonstrate the writers work. Safe package generation, ordinary release
+setup and the published local route use real package/installer processes with
+fixture dependency and CLI responses. These checks are fixture evidence only;
+retained real installation/authentication records and native/operator HOLDs above
+remain separate.

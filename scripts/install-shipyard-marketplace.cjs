@@ -231,7 +231,7 @@ function setupCodexHost(source, execute = run, read = capture, inspect = inspect
   const candidates = [plugin.version, 'local'].filter(Boolean).map(v => path.join(cache, v));
   const installed = candidates.find(p => fs.existsSync(path.join(p, 'package-build.json')));
   if (!installed) throw new Error('Marketplace Shipyard lacks native Codex packaging; update the marketplace source before continuing');
-  execute(process.execPath, [path.join(installed, 'host/scripts/bootstrap-shipyard-plugin.cjs')], env);
+  execute('bash', [path.join(installed, 'host/scripts/ensure-gsd-core.sh'), '--launch-bootstrap'], env);
 }
 function ensureWithEnvironment(runtime, env, ensureRuntime, runCommand = run) {
   if (ensureRuntime === ensure) {
@@ -243,7 +243,7 @@ function ensureWithEnvironment(runtime, env, ensureRuntime, runCommand = run) {
 }
 function main(args, commands = {}) {
   const runtime = args.shift();
-  if (!['claude', 'codex'].includes(runtime)) throw new Error('Usage: node scripts/install-shipyard-marketplace.cjs <claude|codex> [--source <marketplace-root-or-git-url>]');
+  if (!['claude', 'codex'].includes(runtime)) throw new Error('Usage: bash scripts/ensure-gsd-core.sh --launch-marketplace <claude|codex> [--source <marketplace-root-or-git-url>]');
   let source = 'serhii-nochevnyi/shipyard';
   if (args.length) {
     if (args.length !== 2 || args[0] !== '--source' || !args[1]) throw new Error('Expected --source <marketplace-root-or-git-url>');

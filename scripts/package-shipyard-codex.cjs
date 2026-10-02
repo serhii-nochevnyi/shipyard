@@ -37,7 +37,7 @@ function build(destination = path.join(root, 'plugins/shipyard')) {
       `# Shipyard ${name}\n\n` +
       'Resolve this installed skill directory from its supplied absolute SKILL.md path. ' +
       'The plugin root is two directories above it. Run, with that absolute root:\n\n' +
-      '```sh\nnode "<plugin-root>/host/scripts/bootstrap-shipyard-plugin.cjs"\n```\n\n' +
+      '```sh\nbash "<plugin-root>/host/scripts/ensure-gsd-core.sh" --launch-bootstrap\n```\n\n' +
       'This idempotently installs/enables the GSD marketplace dependency and prepares native Codex host components. ' +
       'On any failure stop and report the exact setup error; do not run a partial workflow. ' +
       'If setup registered agents for the first time, start a new Codex session before dispatching them.\n\n' +
@@ -46,7 +46,7 @@ function build(destination = path.join(root, 'plugins/shipyard')) {
       'Do not summarize or substitute its runtime policy, model selection, validation, gates, or receipts.\n');
   }
   write('hooks/hooks.json', JSON.stringify({ hooks: { SessionStart: [{ hooks: [{ type: 'command',
-    command: 'node "${PLUGIN_ROOT}/host/scripts/bootstrap-shipyard-plugin.cjs"', timeout: 360,
+    command: 'bash "${PLUGIN_ROOT}/host/scripts/ensure-gsd-core.sh" --launch-bootstrap', timeout: 360,
     statusMessage: 'Preparing Shipyard and GSD' }] }] } }, null, 2) + '\n');
   const hash = crypto.createHash('sha256');
   function walk(dir, prefix = '') {
