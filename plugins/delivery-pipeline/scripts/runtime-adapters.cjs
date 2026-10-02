@@ -17,6 +17,19 @@ const CLAUDE_MODEL_ALIASES = Object.freeze({
   fable: 'fable',
 });
 
+const RECORDED_PALETTES = Object.freeze({
+  'adr-014.v6': Object.freeze({
+    codex: Object.freeze({ luna: 'gpt-6-luna', astra: 'gpt-6-astra', sol: 'gpt-6-sol' }),
+    claude: Object.freeze({ sonnet: 'sonnet', opus: 'claude-opus-5-5', fable: 'fable' }),
+  }),
+  'adr-014.v7': Object.freeze({ codex: CODEX_MODEL_IDS, claude: CLAUDE_MODEL_ALIASES }),
+});
+
+function recordedPalette(version, runtime) {
+  return Object.prototype.hasOwnProperty.call(RECORDED_PALETTES, version)
+    ? RECORDED_PALETTES[version][runtime] : undefined;
+}
+
 function modelFor(runtime, modelKey) {
   const map = runtime === 'codex' ? CODEX_MODEL_IDS : runtime === 'claude' ? CLAUDE_MODEL_ALIASES : null;
   return map && Object.prototype.hasOwnProperty.call(map, modelKey) ? map[modelKey] : undefined;
@@ -51,6 +64,7 @@ function adapterForRuntime(runtime) {
 // resolution captures its own mapping snapshot and never dispatches through
 // these replaceable entrypoints.
 module.exports = Object.freeze({
+  recordedPalette,
   CODEX_MODEL_IDS,
   CLAUDE_MODEL_ALIASES,
   RUNTIME_ADAPTERS,
