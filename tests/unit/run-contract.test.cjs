@@ -238,3 +238,26 @@ test('serialized concrete-only dispatch cannot silently turn a symbolic alias in
   delete input.schema;
   assert.equal(contract.normalizeDispatchIdentity(input).model, 'gpt-6.1-sol');
 });
+
+ test('authoritative policy pairs reject crossed and arbitrary hashes across dispatch and receipts', () => {
+  for (const [version, hash, model] of [['adr-014.v6', historicalHash, 'gpt-6-sol'], ['adr-014.v7', currentPolicy.POLICY_HASH, 'gpt-6.1-sol']]) {
+    const base = { ...makeScope().dispatch, model_key: 'sol', model, policy_version: version, policy_hash: hash };
+    for (const invalid of [version.endsWith('v6') ? currentPolicy.POLICY_HASH : historicalHash, 'a'.repeat(64)]) {
+      assert.throws(() => contract.normalizeDispatchIdentity({ ...base, policy_hash: invalid }), { code: 'POLICY_IDENTITY_CONFLICT' });
+      assert.throws(() => contract.normalizeReceiptIdentity({ ...base, receipt_id: 'r', run_id: 'r', requested_model: model, policy_hash: invalid }), { code: 'POLICY_IDENTITY_CONFLICT' });
+    }
+  }
+  assert.equal(currentPolicy.POLICY_HASH, '3978b08721ef8f2381aa1f31355c9fef1dafd4058a2093b4a5f06ee90cd44570');
+});
+test('fresh receipt constructors default current identity and serialized receipts require it', () => {
+  for (const runtime of ['codex', 'claude']) {
+    const fresh = { receipt_id: 'fresh', run_id: 'r', dispatch_id: 'd', runtime, requested_model: runtime === 'codex' ? 'sol' : 'sonnet' };
+    const receipt = scope.createReceiptIdentity(fresh);
+    assert.equal(receipt.policy_hash, currentPolicy.POLICY_HASH);
+    assert.equal(receipt.policy_version, currentPolicy.POLICY_VERSION);
+    for (const field of ['policy_hash', 'policy_version']) {
+      const serialized = { ...receipt }; delete serialized[field];
+      assert.throws(() => contract.normalizeReceiptIdentity(serialized), { code: 'MISSING_POLICY_IDENTITY' });
+    }
+  }
+});

@@ -174,12 +174,15 @@ function policyIdentity(input, recorded = false) {
   }
   if (!hasVersion) version = policy.POLICY_VERSION;
   version = safeId(version, 'policy_version');
-  if (!adapters.recordedPalette(version, 'codex')) refuse('UNSUPPORTED_POLICY_VERSION', 'unregistered recorded policy');
+  const registered = adapters.recordedPolicyFor(version, { policy_version: policy.POLICY_VERSION, policy_hash: policy.POLICY_HASH });
+  if (!registered) refuse('UNSUPPORTED_POLICY_VERSION', 'unregistered recorded policy');
   if (!hasHash) {
     if (version !== policy.POLICY_VERSION) refuse('MISSING_POLICY_IDENTITY', 'historical policy hash is required');
     hash = policy.POLICY_HASH;
   }
-  return { policy_version: version, policy_hash: digestValue(hash, 'policy_hash') };
+  hash = digestValue(hash, 'policy_hash');
+  if (hash !== registered.policy_hash) refuse('POLICY_IDENTITY_CONFLICT', 'policy version and hash disagree with registered authority');
+  return { policy_version: version, policy_hash: hash };
 }
 
 function normalizeModel(runtime, value, field = 'model', version = policy.POLICY_VERSION, keyOnly = false, concreteOnly = false) {
@@ -355,7 +358,7 @@ function normalizeReceiptIdentity(input) {
   const receipt_id = safeId(input.receipt_id || input.receiptId, 'receipt_id');
   const run_id = safeId(input.run_id || input.runId, 'receipt.run_id');
   const dispatch_id = safeId(input.dispatch_id || input.dispatchId, 'receipt.dispatch_id');
-  const identity = policyIdentity(input, true);
+  const identity = policyIdentity(input, input.schema !== undefined);
   const models = {};
   for (const field of ['requested_model', 'applied_model', 'observed_model']) {
     const value = input[field];

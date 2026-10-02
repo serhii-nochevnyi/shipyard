@@ -2,6 +2,6 @@
   "schema": "shipyard.runtime-file-digests.v1",
   "files": {
     "plugins/delivery-pipeline/scripts/claude-dispatch-adapter.cjs": "9d0682e37ee5d7a45d620eaaf6fc2b9e2b23ff0adc8bbed4e86d097cb9f3ba07",
-    "plugins/delivery-pipeline/scripts/runtime-adapters.cjs": "74b55dbc29569d867b96bb611c52e5e95837e1e49613c423d5c72481ec8197b4"
+    "plugins/delivery-pipeline/scripts/runtime-adapters.cjs": "bf2632cbe3f4fe978c098a782d8607878437dbec3f6a65bc400a9b79a6977a54"
   }
 }

@@ -100,15 +100,19 @@ test('synthetic v6/v7 store matrix preserves siblings and refuses invalid input 
     const palettes = { codex: { sol: 'gpt-6-sol', luna: 'gpt-6-luna', astra: 'gpt-6-astra' }, claude: { sonnet: 'sonnet', opus: 'claude-opus-5-5', fable: 'fable' } };
     const runs = {};
     for (const version of ['adr-014.v6', 'adr-014.v7']) for (const [runtime, palette] of Object.entries(palettes)) for (const [key, oldModel] of Object.entries(palette)) {
-      const run = JSON.parse(JSON.stringify(makeRun('owner-a', `fixture-${version}-${key}`)));
+      const run = JSON.parse(JSON.stringify(makeRun('owner-a', `fixture-${runtime}-${version}-${key}`)));
       const model = version.endsWith('v7') && key === 'sol' ? 'gpt-6.1-sol' : version.endsWith('v7') && key === 'sonnet' ? 'claude-sonnet-5-5' : oldModel;
       run.runtime = { ...run.runtime, runtime, provider: runtime === 'codex' ? 'openai' : 'anthropic' };
       run.dispatch = { ...run.dispatch, runtime, provider: run.runtime.provider, model_key: key, model, policy_version: version, policy_hash: version.endsWith('v6') ? '30e71fb4066fee5b67df14120532c0b4f8aedde169907bc16f70dd2569744968' : policy.POLICY_HASH };
       runs[run.run_id] = { schema: 'shipyard.run-record.v1', version: 1, run, owner: { owner_id: 'owner-a', lease_id: run.lease.lease_id, epoch: 0, acquired_at: 1000, heartbeat_at: 1000, expires_at: 2000, status: 'active' }, retry: {}, checkpoint: null, successor: null, idempotency: {}, history: [] };
     }
+    assert.equal(Object.keys(runs).length, 12);
+    assert.equal(new Set(Object.keys(runs)).size, 12);
     fs.writeFileSync(store.storeFile, JSON.stringify({ schema: 'shipyard.run-store.v1', version: 1, generation: 0, updated_at: null, runs }));
     const bytes = fs.readFileSync(store.storeFile, 'utf8');
     const before = store.read();
+    assert.equal(Object.keys(before.runs).length, 12);
+    assert.equal(fs.readFileSync(store.storeFile, 'utf8'), bytes);
     for (const [id, record] of Object.entries(runs)) assert.deepEqual(store.get(id).run, record.run);
     store.transact(() => {});
     assert.equal(fs.readFileSync(store.storeFile, 'utf8'), bytes);
@@ -121,6 +125,23 @@ test('synthetic v6/v7 store matrix preserves siblings and refuses invalid input 
       assert.deepEqual(disk.runs[id].run, runs[id].run);
       const expected = { ...before.runs[id], history: [{ event: 'synthetic-note' }] };
       assert.deepEqual(after.runs[id], expected);
+    }
+    assert.equal(Object.keys(after.runs).length, 12);
+    assert.equal(Object.keys(disk.runs).length, 12);
+    for (const [recordId, original] of Object.entries(runs)) {
+      const version = original.run.dispatch.policy_version;
+      for (const invalid of [version.endsWith('v6') ? policy.POLICY_HASH : '30e71fb4066fee5b67df14120532c0b4f8aedde169907bc16f70dd2569744968', 'a'.repeat(64)]) {
+        const valid = fs.readFileSync(store.storeFile, 'utf8');
+        assert.throws(() => store.transaction(recordId, record => { record.run = { ...record.run, dispatch: { ...record.run.dispatch, policy_hash: invalid } }; }), { code: 'POLICY_IDENTITY_CONFLICT' });
+        assert.equal(fs.readFileSync(store.storeFile, 'utf8'), valid);
+        const corrupted = JSON.parse(valid); corrupted.runs[recordId].run.dispatch.policy_hash = invalid;
+        fs.writeFileSync(store.storeFile, JSON.stringify(corrupted));
+        const bad = fs.readFileSync(store.storeFile, 'utf8'); let called = false;
+        assert.throws(() => store.read(), { code: 'POLICY_IDENTITY_CONFLICT' });
+        assert.throws(() => store.transaction(recordId, () => { called = true; }), { code: 'POLICY_IDENTITY_CONFLICT' });
+        assert.equal(called, false); assert.equal(fs.readFileSync(store.storeFile, 'utf8'), bad);
+        fs.writeFileSync(store.storeFile, valid);
+      }
     }
     const id = Object.keys(runs)[0];
     const validBytes = fs.readFileSync(store.storeFile, 'utf8');
