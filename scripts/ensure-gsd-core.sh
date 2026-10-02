@@ -156,7 +156,7 @@ prepare_isolation() {
   local RUNTIME="$1" RUNTIME_HOME="$2" ENVELOPE="${3:-}" ISOLATION_JSON
   if [[ -n "${SHIPYARD_ISOLATION_ROOT+x}" || -n "${SHIPYARD_DOGFOOD_ROOT:-}" || "${SHIPYARD_INSTALL_KIND:-}" == dogfood || "$RUNTIME_HOME" != "$HOME/.$RUNTIME" ]]; then
     if [[ "$RUNTIME" == codex && -z "$ENVELOPE" && -z "${SHIPYARD_ISOLATION_ROOT+x}" ]]; then ENVELOPE="$RUNTIME_HOME"; fi
-    ISOLATION_JSON="$(isolation_env "$RUNTIME" "$ENVELOPE")"
+    ISOLATION_JSON="$(isolation_env "$RUNTIME" "$ENVELOPE")" || return $?
     eval "$(printf '%s' "$ISOLATION_JSON" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{for(const [k,v] of Object.entries(JSON.parse(s).environment)) console.log("export "+k+"="+"\x27"+v.replaceAll("\x27", "\x27\\\x27\x27")+"\x27");});')"
     mkdir -p -m 700 "$HOME" "$TMPDIR" "$npm_config_cache" "$npm_config_prefix"
   fi
@@ -207,6 +207,7 @@ if [[ "$VERSION" == "latest" ]]; then
     resolved=latest
   fi
 fi
+prepare_isolation "$RUNTIME" "$RUNTIME_HOME" "${SHIPYARD_ISOLATION_ROOT:-}"
 before="$(installed_version)"
 
 if [[ -n "$before" ]]; then
@@ -237,6 +238,7 @@ if npx --yes "@opengsd/gsd-core@${VERSION}" "${FLAGS[@]}" </dev/null; then
   # codex this script exited 1 and the caller's `set -e` aborted the whole install
   # right after reporting success. An `if` has no such tail.
   node "$(dirname "${BASH_SOURCE[0]}")/ensure-gsd-plugin.cjs" "$RUNTIME"
+  prepare_isolation "$RUNTIME" "$RUNTIME_HOME" "${SHIPYARD_ISOLATION_ROOT:-}"
 else
   echo "⚠ gsd-core install failed for $RUNTIME (offline? npm registry unreachable?)." >&2
   # For Codex this IS fatal further down — the generator cannot convert a command

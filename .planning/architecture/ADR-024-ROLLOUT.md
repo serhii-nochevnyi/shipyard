@@ -174,7 +174,10 @@ was installed, while the actually discovered Claude marketplace dependency was
 1.15.0; do not treat the marketplace as pinned to 1.14.0.
 The continuation permits only npm executable links in `node_modules/.bin` whose
 fully resolved regular file targets have one hardlink and stay physically within
-the same candidate npm cache/prefix (or candidate `npm`) subtree. Other symlinks
+the same `node_modules` subtree inside the candidate npm cache/prefix, candidate
+`npm`, or physically contained candidate Codex/Claude runtime plugin caches.
+This permits contained npm executable links only; it does not permit general
+plugin-cache aliases or links escaping those subtrees. Other symlinks
 and outside/dangling/cyclic/directory/active-state/hardlink hazards still refuse
 before writes. The earlier npm-cache-only correction was subsequently tested as recorded below; the later plugin-cache installation succeeded at `6a33b2ae`; the current hook change awaits coordinator
 execution; the earlier workaround and failed hook remain historical.

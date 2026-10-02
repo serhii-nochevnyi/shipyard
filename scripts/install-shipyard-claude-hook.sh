@@ -266,6 +266,7 @@ done
 [[ -n "$STOP_SRC" ]] || { echo "error: stop-gate.cjs not found under $ROOT/plugins/delivery-pipeline" >&2; exit 1; }
 STOP_TMP=""
 cleanup_stop_tmp() {
+  prepare_isolation claude "${CLAUDE_CONFIG_DIR:-$CLAUDE_HOME}" "${SHIPYARD_ISOLATION_ROOT:-}" || return 3
   [[ -z "$STOP_TMP" || ! -e "$STOP_TMP" ]] || rm -rf "$STOP_TMP"
 }
 trap cleanup_stop_tmp EXIT
@@ -305,6 +306,7 @@ done < <(find "$STOP_TMP" -type f \( -name '*.cjs' -o -name '*.js' \) -print0)
 VERIFY_CWD="$(mktemp -d)"
 VERIFY_STATUS=0
 printf '{}\n' | (cd "$VERIFY_CWD" && node "$STOP_TMP/$(basename "$STOP_SRC")") >/dev/null || VERIFY_STATUS=$?
+prepare_isolation claude "${CLAUDE_CONFIG_DIR:-$CLAUDE_HOME}" "${SHIPYARD_ISOLATION_ROOT:-}"
 rm -rf "$VERIFY_CWD"
 (( VERIFY_STATUS == 0 )) || exit "$VERIFY_STATUS"
 rm -rf "$STOP_DIR"
@@ -350,5 +352,7 @@ if [[ -n "$GSD_TUNE" ]]; then
   # defaults file is unreadable. `--check` exits 1 on drift, which is data here.
   GSD_RUNTIME=claude SHIPYARD_RUNTIME=claude node "$GSD_TUNE" --global --runtime claude --apply 2>&1 | sed 's/^/  /' || { [[ -z "${SHIPYARD_ISOLATION_ROOT:-}" ]] || exit 1; }
 fi
+
+prepare_isolation claude "${CLAUDE_CONFIG_DIR:-$CLAUDE_HOME}" "${SHIPYARD_ISOLATION_ROOT:-}"
 
 echo "✓ shipyard auto-route + stop-gate hooks installed for Claude Code (new sessions; open /hooks or restart to load in a running session)"

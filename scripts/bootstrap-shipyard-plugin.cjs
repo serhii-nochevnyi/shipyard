@@ -117,6 +117,8 @@ function bootstrap({ packageRoot = path.resolve(__dirname, '../..'), projectDir 
       && fs.existsSync(path.join(home, 'gsd-core/bin/lib/runtime-artifact-conversion.cjs')) ? '0' : '1';
     const result = spawnSync('bash', [path.join(host, 'scripts/install-shipyard-codex.sh')],
       { env: childEnv, stdio: 'inherit', timeout: 300000 });
+    env = isolatedEnvironment('codex', process.env, home);
+    Object.assign(process.env, env);
     if (result.error || result.status !== 0) throw new Error(`Shipyard host setup failed: ${result.error?.message || result.status}`);
 
     // @contract: Back up exact owned originals outside skill discovery after host setup.
@@ -134,7 +136,10 @@ function bootstrap({ packageRoot = path.resolve(__dirname, '../..'), projectDir 
     }
     fs.writeFileSync(marker, JSON.stringify({ build: metadata.digest, gsd: gsd.version, backup }, null, 2) + '\n');
     console.log('✓ Shipyard marketplace host ready. Start a new Codex session to load registered agents.');
-  } finally { fs.rmdirSync(lock); }
+  } finally {
+    isolatedEnvironment('codex', process.env, home);
+    fs.rmdirSync(lock);
+  }
 }
 module.exports = { bootstrap, migrationCandidates, installedFilesMatch };
 if (require.main === module) {

@@ -122,6 +122,12 @@ function codexMarketplaceSource(source) {
   return { sourceType: 'git', source };
 }
 function installCodexMarketplace(source, execute = run, read = capture, env = process.env) {
+  const executeOriginal = execute;
+  execute = (command, args) => {
+    env = isolatedEnvironment('codex', env, env.CODEX_HOME || path.join(env.HOME || os.homedir(), '.codex'));
+    try { return executeOriginal(command, args, env); }
+    finally { env = isolatedEnvironment('codex', env, env.CODEX_HOME || path.join(env.HOME || os.homedir(), '.codex')); }
+  };
   const existing = read('codex', ['plugin', 'marketplace', 'list', '--json'], env)
     .marketplaces.find(item => item.name === 'shipyard');
   const target = codexMarketplaceSource(source);
@@ -168,7 +174,11 @@ function installClaudeMarketplace(source, execute = run, read = capture, inspect
   env = isolatedEnvironment('claude', env, env.CLAUDE_CONFIG_DIR || env.CLAUDE_HOME || path.join(env.HOME || os.homedir(), '.claude'));
   prepareDirectories(env);
   const executeOriginal = execute, readOriginal = read;
-  execute = (command, args) => executeOriginal(command, args, env);
+  execute = (command, args) => {
+    env = isolatedEnvironment('claude', env, env.CLAUDE_CONFIG_DIR || env.CLAUDE_HOME || path.join(env.HOME || os.homedir(), '.claude'));
+    try { return executeOriginal(command, args, env); }
+    finally { env = isolatedEnvironment('claude', env, env.CLAUDE_CONFIG_DIR || env.CLAUDE_HOME || path.join(env.HOME || os.homedir(), '.claude')); }
+  };
   read = (command, args) => readOriginal(command, args, env);
   const existing = read('claude', ['plugin', 'marketplace', 'list', '--json'])
     .find(item => item.name === 'shipyard');
@@ -243,6 +253,7 @@ function main(args, commands = {}) {
     ensureWithEnvironment(runtime, selected.env, ensureRuntime, runCommand);
     selected.env = isolatedEnvironment(runtime, selected.env, selected.home);
     installCodexMarketplace(source, execute, read, selected.env);
+    selected.env = isolatedEnvironment(runtime, selected.env, selected.home);
     setupCodexHost(source, execute, read, inspect, undefined, selected.env, selected);
     return;
   }
@@ -250,12 +261,16 @@ function main(args, commands = {}) {
   env = isolatedEnvironment(runtime, env, env.CLAUDE_CONFIG_DIR || env.CLAUDE_HOME || path.join(env.HOME || os.homedir(), '.claude'));
   prepareDirectories(env);
   ensureWithEnvironment(runtime, env, ensureRuntime, runCommand);
+  env = isolatedEnvironment(runtime, env, env.CLAUDE_CONFIG_DIR || env.CLAUDE_HOME || path.join(env.HOME || os.homedir(), '.claude'));
   installClaudeMarketplace(source, execute, read, inspect, env);
+  env = isolatedEnvironment(runtime, env, env.CLAUDE_CONFIG_DIR || env.CLAUDE_HOME || path.join(env.HOME || os.homedir(), '.claude'));
   // @contract: Claude host hooks and capability come from this release checkout.
   const root = path.resolve(__dirname, '..');
   run('bash', [path.join(root, 'scripts/ensure-gsd-core.sh'), 'claude'], env);
-  const claudeEnv = { ...env, ...installKindEnv(source), SHIPYARD_GSD_AUTO_INSTALL: '0' };
+  env = isolatedEnvironment(runtime, env, env.CLAUDE_CONFIG_DIR || env.CLAUDE_HOME || path.join(env.HOME || os.homedir(), '.claude'));
+  let claudeEnv = { ...env, ...installKindEnv(source), SHIPYARD_GSD_AUTO_INSTALL: '0' };
   run('bash', [path.join(root, 'scripts/install-shipyard-claude-hook.sh')], claudeEnv);
+  claudeEnv = isolatedEnvironment(runtime, claudeEnv, claudeEnv.CLAUDE_CONFIG_DIR || claudeEnv.CLAUDE_HOME || path.join(claudeEnv.HOME || os.homedir(), '.claude'));
   run('bash', [path.join(root, 'scripts/install-shipyard-capability.sh'), 'claude'], claudeEnv);
 }
 module.exports = { main, installCodexMarketplace, claudeMarketplaceMatches,

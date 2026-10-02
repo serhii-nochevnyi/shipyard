@@ -156,6 +156,7 @@ STAGE="$(mktemp -d)"
 ROLLBACK_ACTIVE=0
 cleanup() {
   local status="${1:-0}"
+  prepare_isolation codex "$CODEX_HOME" "${SHIPYARD_ISOLATION_ROOT-$CODEX_HOME}" || { trap - EXIT; exit 3; }
   if [[ "$status" -ne 0 && "$ROLLBACK_ACTIVE" == 1 ]]; then
     echo "error: install failed after mutating installer-owned state; restoring the previous set" >&2
     restore_runtime_paths 2>/dev/null || echo "warning: runtime artifact rollback was incomplete; inspect ${AGENTS_SKILLS:-$HOME/.agents/skills}, ${BUNDLE_ROOT:-$CODEX_HOME/shipyard}, ${AGENTS_MD:-$CODEX_HOME/AGENTS.md} and ${CAPABILITY_TARGET:-${GSD_CAPABILITIES_ROOT:-$HOME/.gsd/capabilities}/delivery-pipeline}" >&2
@@ -315,6 +316,7 @@ GSD_RUNTIME=codex SHIPYARD_RUNTIME=codex node "$REPO_ROOT/scripts/gen-codex-ship
   --plugin "$PLUGIN_DIR" --out "$OUT" \
   --codex-home "$CODEX_HOME" --bundle-root "$BUNDLE_ROOT" --phase "$PHASE" \
   --project-dir "$PROJECT_DIR" --capabilities "$CAPABILITIES_FILE"
+prepare_isolation codex "$CODEX_HOME" "${SHIPYARD_ISOLATION_ROOT-$CODEX_HOME}"
 
 # Validate the staged generation against the source policy and host evidence
 # before any destination replacement (including agents/config/capabilities).
@@ -478,7 +480,7 @@ NODE
   echo "→ merging agent registrations → $CODEX_HOME/config.toml"
   if node "$REPO_ROOT/scripts/merge-codex-config.cjs" \
     --config "$CONFIG_TARGET" --fragment "$OUT/config.fragment.toml"; then
-    :
+    prepare_isolation codex "$CODEX_HOME" "${SHIPYARD_ISOLATION_ROOT-$CODEX_HOME}"
   else
     status=$?
     echo "error: config merge failed; restoring the previous agent and config set" >&2
@@ -638,6 +640,7 @@ cp -R "$CAP_SRC/." "$CAP_STAGE/"
 # leave the gate unable to load its parser.
 cp "$PLUGIN_DIR"/scripts/*.cjs "$CAP_STAGE/checks/"
 GSD_RUNTIME=codex SHIPYARD_RUNTIME=codex node "$GSD_TOOLS" capability install "$CAP_STAGE" --scope global --yes
+prepare_isolation codex "$CODEX_HOME" "${SHIPYARD_ISOLATION_ROOT-$CODEX_HOME}"
 
 # ── auto-route policy → global AGENTS.md (Codex's always-loaded instructions) ──
 # So the pipeline is applied without the user invoking $shipyard-* by hand.
@@ -680,6 +683,8 @@ if [[ -f "$GSD_TUNE" ]]; then
   (cd "$PROJECT_DIR" && GSD_RUNTIME=codex SHIPYARD_RUNTIME=codex \
     node "$GSD_TUNE" --global --runtime codex --apply) 2>&1 | sed 's/^/  /' || { [[ -z "${SHIPYARD_ISOLATION_ROOT:-}" ]] || exit 1; }
 fi
+
+prepare_isolation codex "$CODEX_HOME" "${SHIPYARD_ISOLATION_ROOT-$CODEX_HOME}"
 
 # ── skills → ~/.agents/skills (only our own shipyard-* dirs are touched) ──────
 echo "→ installing skills → $AGENTS_SKILLS"
@@ -778,6 +783,7 @@ node "$REPO_ROOT/scripts/configure-codex-notify.cjs" \
   --config "$CODEX_HOME/config.toml" \
   --wrapper "$BUNDLE_ROOT/scripts/codex-notify.cjs" \
   --delegate-file "$NOTIFY_DELEGATE"
+prepare_isolation codex "$CODEX_HOME" "${SHIPYARD_ISOLATION_ROOT-$CODEX_HOME}"
 
 # Nothing installer-owned remains to roll back after this point. Keeping the
 # rollback active through the skill reconciliation is what makes a failed
