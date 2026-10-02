@@ -9018,7 +9018,11 @@
         "plugins/shipyard/skills/shipyard-decompose/SKILL.md",
         "plugins/shipyard/skills/shipyard-deliver/SKILL.md",
         "plugins/shipyard/skills/shipyard-bench/SKILL.md",
-        "plugins/shipyard/skills/shipyard-delivery-rules/SKILL.md"
+        "plugins/shipyard/skills/shipyard-delivery-rules/SKILL.md",
+        "README.md",
+        "CLAUDE.md",
+        "Makefile",
+        "tests/smoke/docs-smoke.sh"
       ],
       "risk": "high",
       "type": "implementation",
