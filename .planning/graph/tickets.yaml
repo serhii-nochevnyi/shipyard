@@ -4415,7 +4415,7 @@ tickets:
     human_checkpoint: true
     checkpoint: review
     preauthorized: false
-    branch: ticket/T-46-07-preserve-versioned-native-identities-in
+    branch: ticket/T-46-07-preserve-history-runtime-trailer
     epic: epic/46-refresh-native-runtime-model-ladder
     primary_parent: T-46-06
     pr_base: ticket/T-46-06-independently-review-native-application
@@ -4435,5 +4435,5 @@ tickets:
     branch: ticket/T-46-08-confine-candidate-dependency-installatio
     epic: epic/46-refresh-native-runtime-model-ladder
     primary_parent: T-46-07
-    pr_base: ticket/T-46-07-preserve-versioned-native-identities-in
+    pr_base: ticket/T-46-07-preserve-history-runtime-trailer
     jira: null

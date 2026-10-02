@@ -8872,7 +8872,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
-      "missing_paths": true,
+      "missing_paths": false,
       "files": [
         "docs/gsd_multilevel_delivery_pipeline.md",
         ".planning/architecture/ADR-024-ROLLOUT.md",
@@ -8930,7 +8930,7 @@
       "cross_phase_deps": [],
       "cross_repo_deps": [],
       "unreachable_paths": false,
-      "missing_paths": true,
+      "missing_paths": false,
       "files": [
         ".planning/phases/46-refresh-native-runtime-model-ladder/46-ROLLOUT-EVIDENCE.md"
       ],
@@ -8974,7 +8974,7 @@
       "human_checkpoint": true,
       "checkpoint": "review",
       "preauthorized": false,
-      "branch": "ticket/T-46-07-preserve-versioned-native-identities-in",
+      "branch": "ticket/T-46-07-preserve-history-runtime-trailer",
       "epic": "epic/46-refresh-native-runtime-model-ladder",
       "primary_parent": "T-46-06",
       "pr_base": "ticket/T-46-06-independently-review-native-application",
@@ -9017,7 +9017,7 @@
       "branch": "ticket/T-46-08-confine-candidate-dependency-installatio",
       "epic": "epic/46-refresh-native-runtime-model-ladder",
       "primary_parent": "T-46-07",
-      "pr_base": "ticket/T-46-07-preserve-versioned-native-identities-in",
+      "pr_base": "ticket/T-46-07-preserve-history-runtime-trailer",
       "jira": null
     }
   }

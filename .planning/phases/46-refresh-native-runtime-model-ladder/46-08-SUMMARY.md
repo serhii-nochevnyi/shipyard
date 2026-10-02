@@ -1,5 +1,5 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 7130550be2e3dc3bc422e6859e87da179a4b214e5ad8b677a66f5a2e6f5d8070
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 13d2bdfdc124747b2e100affb93a249dfecd5e9e7f5e3d30b59d6c8033ddfa53
 phase: 46-refresh-native-runtime-model-ladder
 plan: 08
 subsystem: shipyard delivery
@@ -22,7 +22,7 @@ key-decisions:
 duration: 0min
 status: halted
 shipyard_sync: delivery-projection
-shipyard_source_fingerprint: 7130550be2e3dc3bc422e6859e87da179a4b214e5ad8b677a66f5a2e6f5d8070
+shipyard_source_fingerprint: 13d2bdfdc124747b2e100affb93a249dfecd5e9e7f5e3d30b59d6c8033ddfa53
 ---
 
 # Phase 46: Confine candidate dependency installation and tuning to isolated state — Delivery Projection
