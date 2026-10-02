@@ -62,8 +62,9 @@ function migrationCandidates(skillsDir, previous) {
 }
 
 function bootstrap({ packageRoot = path.resolve(__dirname, '../..'), projectDir = process.cwd() } = {}) {
-  const home = path.resolve(process.env.CODEX_HOME || path.join(os.homedir(), '.codex'));
-  const env = isolatedEnvironment('codex', process.env, home);
+  const selectedHome = path.resolve(process.env.CODEX_HOME || path.join(os.homedir(), '.codex'));
+  const env = isolatedEnvironment('codex', process.env, selectedHome);
+  const home = path.resolve(env.CODEX_HOME || selectedHome);
   Object.assign(process.env, env);
   prepareDirectories(env);
   const metadata = read(path.join(packageRoot, 'package-build.json'));

@@ -691,3 +691,30 @@ test('empty explicit envelopes and relative selected runtime paths refuse before
   assert.match(wired.stderr, /absolute bounded candidate root/);
   assert.deepEqual(fullSnapshot(f.dir), snapshot);
 });
+
+
+test('root-only canonical and published bootstrap use guarded runtime home before state access', t => {
+  for (const entry of ['canonical', 'published']) {
+    const f = processFixture(t);
+    const before = fullSnapshot(f.ambient);
+    const args = entry === 'canonical'
+      ? ['-e', "require('./scripts/bootstrap-shipyard-plugin.cjs').bootstrap({packageRoot:require('node:path').resolve('plugins/shipyard')})"]
+      : ['plugins/shipyard/host/scripts/bootstrap-shipyard-plugin.cjs'];
+    const result = f.run(process.execPath, args, { CODEX_HOME: undefined });
+    assert.equal(result.status, 0, entry + ': ' + result.stdout + result.stderr);
+    assert.deepEqual(fullSnapshot(f.ambient), before, entry + ' preserves ambient bytes and metadata');
+    const home = f.candidate;
+    const marker = JSON.parse(fs.readFileSync(path.join(home, 'shipyard-plugin/installed.json')));
+    assert.ok(marker.backup.startsWith(home + path.sep));
+    assert.equal(fs.existsSync(path.join(home, 'shipyard-plugin/install.lock')), false);
+    const manifest = JSON.parse(fs.readFileSync(path.join(home, 'agents/.shipyard-manifest.json')));
+    assert.ok(Object.keys(manifest.agent_digests).length > 0);
+    assert.ok(manifest.gsd_lib.startsWith(home + path.sep));
+    assert.equal(JSON.parse(fs.readFileSync(path.join(home, 'agents/.shipyard-provenance.json'))).schema, 'shipyard.host-provenance.v1');
+    assert.ok(fs.existsSync(path.join(home, 'shipyard-native-skills/shipyard-deliver/SKILL.md')));
+    const nativeHome = path.join(f.candidate, '.shipyard-home');
+    const trace = fs.readFileSync(path.join(nativeHome, 'child-trace.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+    assert.ok(trace.some(row => row.command === 'npx'));
+    assert.ok(trace.every(row => row.home === nativeHome));
+  }
+});
