@@ -279,6 +279,7 @@ function main(args, commands = {}) {
   run('bash', [path.join(root, 'scripts/install-shipyard-claude-hook.sh')], claudeEnv);
   claudeEnv = isolatedEnvironment(runtime, claudeEnv, claudeEnv.CLAUDE_CONFIG_DIR || claudeEnv.CLAUDE_HOME || path.join(claudeEnv.HOME || os.homedir(), '.claude'));
   run('bash', [path.join(root, 'scripts/install-shipyard-capability.sh'), 'claude'], claudeEnv);
+  isolatedEnvironment(runtime, claudeEnv, claudeEnv.CLAUDE_CONFIG_DIR || claudeEnv.CLAUDE_HOME || path.join(claudeEnv.HOME || os.homedir(), '.claude'));
 }
 module.exports = { main, installCodexMarketplace, claudeMarketplaceMatches,
   claudeMarketplaceSource, installClaudeMarketplace, installKindEnv, setupCodexHost, dogfoodHome,
