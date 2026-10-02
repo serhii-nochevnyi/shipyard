@@ -1,10 +1,10 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: b4035723a80c02c5b6d8dd26b650a192202201448fe63474b41e27ab15a1721e
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 03e080a8d4bd47935f13f1086b647679bd070187d7a8d0681654dbd79e05b812
 phase: 46
-status: pending
-result: pending
+status: failed
+result: failed
 shipyard_sync: evidence-projection
-shipyard_source_fingerprint: b4035723a80c02c5b6d8dd26b650a192202201448fe63474b41e27ab15a1721e
+shipyard_source_fingerprint: 03e080a8d4bd47935f13f1086b647679bd070187d7a8d0681654dbd79e05b812
 ---
 
 # Phase 46: Refresh the native runtime model ladder — UAT Projection
@@ -13,15 +13,15 @@ This file is generated from the delivery graph and phase integration evidence.
 
 ### 1. Delivery plans are accounted for
 result: pending
-expected: all 4 phase plan(s) are merged
-actual: 0 merged
+expected: all 6 phase plan(s) are merged
+actual: 4 merged
 
 ### 2. Integration evidence is explicit
-result: pending
+result: failed
 expected: an explicit passed verdict in .planning/phases/46-refresh-native-runtime-model-ladder/INTEGRATION.md
-actual: pending — INTEGRATION.md is missing
+actual: needs-fix — integration evidence records a finding or failed verdict
 
 ### 3. Phase verification is evidence-backed
-result: pending
+result: failed
 expected: positive repository-local verification evidence is present
-actual: pending — INTEGRATION.md is missing
+actual: failed — integration evidence records a finding or failed verdict

@@ -246,6 +246,60 @@
           ],
           "profile": "host",
           "timeout_s": 600
+        },
+        {
+          "argv": [
+            "node",
+            "--test",
+            "tests/unit/run-contract.test.cjs",
+            "tests/unit/run-store.test.cjs",
+            "tests/unit/run-controller.test.cjs",
+            "tests/unit/model-policy.test.cjs",
+            "tests/unit/marketplace-install.test.cjs"
+          ],
+          "profile": "sandbox",
+          "timeout_s": 600
+        },
+        {
+          "argv": [
+            "node",
+            "scripts/refresh-runtime-digests.cjs",
+            "--check",
+            "."
+          ],
+          "profile": "sandbox",
+          "timeout_s": 600
+        },
+        {
+          "argv": [
+            "node",
+            "--test",
+            "tests/unit/marketplace-installer.test.cjs"
+          ],
+          "profile": "host",
+          "timeout_s": 600
+        },
+        {
+          "argv": [
+            "node",
+            "--test",
+            "tests/unit/gen-codex-shipyard.test.cjs",
+            "tests/unit/gsd-tune.test.cjs",
+            "tests/unit/marketplace-install.test.cjs"
+          ],
+          "profile": "host",
+          "timeout_s": 600
+        },
+        {
+          "argv": [
+            "bash",
+            "-n",
+            "scripts/ensure-gsd-core.sh",
+            "scripts/install-shipyard-codex.sh",
+            "scripts/install-shipyard-claude-hook.sh"
+          ],
+          "profile": "host",
+          "timeout_s": 600
         }
       ]
     }
