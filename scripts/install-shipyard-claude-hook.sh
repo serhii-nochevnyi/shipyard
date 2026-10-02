@@ -180,6 +180,8 @@ if [[ "${SHIPYARD_GSD_AUTO_INSTALL:-1}" != "0" ]]; then
   fi
 fi
 
+prepare_isolation claude "${CLAUDE_CONFIG_DIR:-$CLAUDE_HOME}" "${SHIPYARD_ISOLATION_ROOT:-}"
+
 mkdir -p "$CLAUDE_HOME/hooks"
 
 ROUTE_SRC=""

@@ -240,6 +240,7 @@ function main(args, commands = {}) {
   if (runtime === 'codex') {
     const selected = selectCodexTarget(source, env, inspect, { pinDefaultHome: true });
     ensureWithEnvironment(runtime, selected.env, ensureRuntime, runCommand);
+    selected.env = isolatedEnvironment(runtime, selected.env, selected.home);
     installCodexMarketplace(source, execute, read, selected.env);
     setupCodexHost(source, execute, read, inspect, undefined, selected.env, selected);
     return;

@@ -140,6 +140,10 @@ PROJECT_DIR="$(cd "$PROJECT_DIR" && pwd)"
 if [[ "${SHIPYARD_GSD_AUTO_INSTALL:-1}" != "0" ]]; then
   bash "$REPO_ROOT/scripts/ensure-gsd-core.sh" codex
 fi
+prepare_isolation codex "$CODEX_HOME" "${SHIPYARD_ISOLATION_ROOT-$CODEX_HOME}"
+AGENTS_SKILLS="${AGENTS_SKILLS_DIR:-$HOME/.agents/skills}"
+AGENTS_MD="${CODEX_AGENTS_MD:-$CODEX_HOME/AGENTS.md}"
+GSD_TOOLS="$CODEX_HOME/gsd-core/bin/gsd-tools.cjs"
 if [[ ! -f "$GSD_TOOLS" ]]; then
   echo "error: gsd-core for Codex not found at $GSD_TOOLS" >&2
   echo "       install it first:" >&2

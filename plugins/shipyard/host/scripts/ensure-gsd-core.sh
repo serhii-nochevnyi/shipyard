@@ -221,6 +221,10 @@ fi
 
 # @contract: Both runtimes require the GSD payload and enabled marketplace plugin.
 if npx --yes "@opengsd/gsd-core@${VERSION}" "${FLAGS[@]}" </dev/null; then
+  prepare_isolation "$RUNTIME" "$RUNTIME_HOME" "${SHIPYARD_ISOLATION_ROOT:-}"
+  HOME_DIR="${CODEX_HOME:-$HOME/.codex}"
+  [[ "$RUNTIME" != claude ]] || HOME_DIR="${CLAUDE_CONFIG_DIR:-${CLAUDE_HOME:-$HOME/.claude}}"
+  CORE="$HOME_DIR/gsd-core"
   after="$(installed_version)"
   # Report what the FILE says, not what was asked for: an install that quietly
   # landed something else is exactly the case worth seeing.

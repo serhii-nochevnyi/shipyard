@@ -63,7 +63,7 @@ function migrationCandidates(skillsDir, previous) {
 
 function bootstrap({ packageRoot = path.resolve(__dirname, '../..'), projectDir = process.cwd() } = {}) {
   const selectedHome = path.resolve(process.env.CODEX_HOME || path.join(os.homedir(), '.codex'));
-  const env = isolatedEnvironment('codex', process.env, selectedHome);
+  let env = isolatedEnvironment('codex', process.env, selectedHome);
   const home = path.resolve(env.CODEX_HOME || selectedHome);
   Object.assign(process.env, env);
   prepareDirectories(env);
@@ -90,6 +90,8 @@ function bootstrap({ packageRoot = path.resolve(__dirname, '../..'), projectDir 
       if (fs.existsSync(target) && !candidates.includes(target)) throw new Error(`Unowned duplicate: ${target}`);
     }
     const gsd = ensure('codex');
+    env = isolatedEnvironment('codex', process.env, home);
+    Object.assign(process.env, env);
     let current;
     try { current = read(marker); } catch {}
     if (current?.build === metadata.digest && current.gsd === gsd.version && candidates.length === 0

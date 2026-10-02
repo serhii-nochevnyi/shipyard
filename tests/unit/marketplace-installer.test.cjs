@@ -759,3 +759,46 @@ test('direct dogfood selection cannot erase an unsafe inward alias before prefli
   assert.notEqual(result.status, 0); assert.match(result.stderr, /isolation refusal/);
   assert.deepEqual(fullSnapshot(f.dir), before);
 });
+
+
+for (const transition of ['core', 'direct', 'claude', 'bootstrap', 'bootstrap-early', 'marketplace']) {
+  test('dependency transitions rescan escaping aliases: ' + transition, t => {
+    const f = processFixture(t), before = fullSnapshot(f.ambient);
+    if (transition === 'bootstrap-early') {
+      const installed = f.run(process.execPath, ['-e', "require('./scripts/bootstrap-shipyard-plugin.cjs').bootstrap({packageRoot:require('node:path').resolve('plugins/shipyard')});"]);
+      assert.equal(installed.status, 0, installed.stdout + installed.stderr);
+    }
+    const marker = path.join(f.candidate, 'codex/shipyard-plugin/installed.json');
+    const priorMarker = fs.existsSync(marker) ? fs.readFileSync(marker, 'utf8') : null;
+    const priorPaths = Object.fromEntries(['parent-continuation', 'codex/agents', 'claude/hooks', 'claude/settings.json', 'codex/shipyard-plugin/capabilities.json', 'codex/shipyard-plugin/installed.json'].map(relative => [relative, fs.existsSync(path.join(f.candidate, relative))]));
+    const mutation = `const fs=require('node:fs'),path=require('node:path');const root=process.env.SHIPYARD_ISOLATION_ROOT;fs.mkdirSync(root,{recursive:true});fs.symlinkSync(${JSON.stringify(f.ambient)},path.join(root,'dependency-escape'));fs.writeFileSync(path.join(root,'dependency-completed'),'fixture');`;
+    let command = '/bin/bash', args;
+    if (transition === 'core') {
+      fs.appendFileSync(path.join(f.bin, 'npx'), '\n{' + mutation + '}');
+      args = ['scripts/ensure-gsd-core.sh', 'codex'];
+    } else if (transition === 'direct' || transition === 'claude') {
+      fs.writeFileSync(path.join(f.bin, 'bash'), `#!${process.execPath}\nif(process.argv[2].endsWith('/ensure-gsd-core.sh')&&['codex','claude'].includes(process.argv[3])){const r=require('node:child_process').spawnSync(${JSON.stringify(path.join(f.bin, 'npx'))},[process.argv[3]==='claude'?'--claude':'--codex'],{stdio:'inherit'});if(r.status!==0)process.exit(r.status??1);${mutation}}else{const r=require('node:child_process').spawnSync('/bin/bash',process.argv.slice(2),{stdio:'inherit'});process.exit(r.status??1);}`);
+      fs.chmodSync(path.join(f.bin, 'bash'), 0o755);
+      args = [transition === 'direct' ? 'scripts/install-shipyard-codex.sh' : 'scripts/install-shipyard-claude-hook.sh'];
+    } else {
+      command = process.execPath;
+      const helper = path.join(repository, 'scripts/ensure-gsd-plugin.cjs');
+      const fakeEnsure = `()=>{${mutation}return {version:'1.14.0'};}`;
+      args = ['-e', transition.startsWith('bootstrap')
+        ? `require(${JSON.stringify(helper)});require.cache[${JSON.stringify(helper)}].exports.ensure=${fakeEnsure};const cp=require('node:child_process'),original=cp.spawnSync;cp.spawnSync=(cmd,args,opts)=>{if(cmd==='bash'&&args[0].endsWith('/install-shipyard-codex.sh')){require('node:fs').writeFileSync(require('node:path').join(process.env.SHIPYARD_ISOLATION_ROOT,'parent-continuation'),'fixture');return {status:0};}return original(cmd,args,opts);};require('./scripts/bootstrap-shipyard-plugin.cjs').bootstrap({packageRoot:require('node:path').resolve('plugins/shipyard')});`
+        : `require('./scripts/install-shipyard-marketplace.cjs').main(['codex','--source','https://example.invalid/fixture.git'],{ensure:${fakeEnsure},execute:()=>{throw Error('unexpected marketplace continuation')},read:()=>{throw Error('unexpected marketplace read')},run:()=>{throw Error('unexpected bootstrap continuation')}});`];
+    }
+    const result = f.run(command, args);
+    assert.ok(fs.existsSync(path.join(f.candidate, 'dependency-completed')), transition + ': actual dependency transition ran');
+    assert.notEqual(result.status, 0, transition + ': must refuse');
+    assert.match(result.stderr, /isolation refusal/, transition + ': ' + result.stdout + result.stderr);
+    assert.deepEqual(fullSnapshot(f.ambient), before, transition + ': no outside writes');
+    for (const relative of ['parent-continuation', 'codex/agents', 'claude/hooks', 'claude/settings.json', 'codex/shipyard-plugin/capabilities.json', 'codex/shipyard-plugin/installed.json'])
+      assert.equal(fs.existsSync(path.join(f.candidate, relative)), priorPaths[relative], transition + ': no further parent mutation at ' + relative);
+    if (priorMarker !== null) assert.equal(fs.readFileSync(marker, 'utf8'), priorMarker, 'idempotence marker unchanged');
+    if (transition === 'core') {
+      const trace = fs.readFileSync(path.join(f.candidate, '.shipyard-home/child-trace.jsonl'), 'utf8');
+      assert.equal(trace.includes('"command":"codex"'), false, 'marketplace helper never launched after npx');
+    }
+  });
+}
