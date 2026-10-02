@@ -9,6 +9,7 @@ const { createCodexRuntimeHost, normalizeScope } = require('./codex-runtime-host
 const { launchAgent, ROLE_ALIASES } = require('./codex-agent.cjs');
 const { repoRootOf, resolveBaseRef } = require('./graph-dir.cjs');
 const policy = require('./model-policy.cjs');
+const { recordedPolicyFor } = require('./runtime-adapters.cjs');
 const { sealResearch, researchLineFailure, verifySealedLine, assertContained } = require('./planning-result-sealer.cjs');
 const { REPAIR: CODEX_ADAPTER_REPAIR } = require('./codex-model-remap.cjs');
 const { newDispatchId, createDurableRecorder } = require('./dispatch-boundary.cjs');
@@ -384,7 +385,16 @@ function authenticatedReceipt(recorder, dispatchId) {
       || typeof receipt.launch_id !== 'string' || !receipt.launch_id) {
     fail('MISSING_RECEIPT', 'original executor dispatch has no authenticated verified receipt');
   }
-  return Object.freeze({ receipt, digest: sha256(canonical(receipt)) });
+  const versions = [record.policy_version, record.resolution?.policy_version, receipt.policy_version]
+    .filter((value) => value !== undefined);
+  const version = versions[0];
+  const registered = recordedPolicyFor(version, { policy_version: policy.POLICY_VERSION, policy_hash: policy.POLICY_HASH });
+  if (!version || versions.some((value) => value !== version) || !registered
+      || registered.policy_hash !== receipt.policy_hash || record.policy_hash !== receipt.policy_hash
+      || (record.resolution && record.resolution.policy_hash !== receipt.policy_hash)) {
+    fail('MISSING_RECEIPT', 'authenticated original receipt has no consistent registered policy identity');
+  }
+  return Object.freeze({ receipt, digest: sha256(canonical(receipt)), policy_version: version });
 }
 
 function planSnapshot(graph, row) {
@@ -591,7 +601,7 @@ function admitCandidate(prepared, verification, records, tree) {
     run_id: prepared.identity.run_id, dispatch_id: prepared.identity.dispatch_id, launch_id: prepared.identity.launch_id,
     receipt_sha256: prepared.identity.receipt_sha256,
     graph_sha256: prepared.graphDigest, plan_path: prepared.plan.path, plan_sha256: prepared.plan.sha256,
-    policy_hash: prepared.identity.policy_hash, model: prepared.identity.model, effort: prepared.identity.effort,
+    policy_version: prepared.identity.policy_version, policy_hash: prepared.identity.policy_hash, model: prepared.identity.model, effort: prepared.identity.effort,
     signer: prepared.commit.expectedSigner, expected_head: prepared.commit.expectedHead,
     expected_base: prepared.commit.expectedBase, base_ref: prepared.baseRef,
     scoped_tree: tree.tree, changed: [...tree.changed],
@@ -972,7 +982,7 @@ function finalizedArtifact(result, prepared, options) {
   const identity = Object.freeze({
     run_id: options.scope.run_id, phase: options.scope.phase,
     dispatch_id: original.receipt.dispatch_id, launch_id: original.receipt.launch_id,
-    receipt_sha256: original.digest, policy_hash: original.receipt.policy_hash,
+    receipt_sha256: original.digest, policy_version: original.policy_version, policy_hash: original.receipt.policy_hash,
     model: original.receipt.applied_model || null, effort: original.receipt.applied_effort || null,
   });
   const staged = { ...prepared, identity };
@@ -1062,6 +1072,15 @@ function liveGraph(options, worktree, ticket) {
   }
 }
 
+function candidatePolicy(candidate, original) {
+  if (original.digest !== candidate.receipt_sha256 || original.receipt.launch_id !== candidate.launch_id
+      || original.receipt.policy_hash !== candidate.policy_hash
+      || (Object.hasOwn(candidate, 'policy_version') && candidate.policy_version !== original.policy_version)) {
+    throw candidateRefusal('IDENTITY_CHANGED', 'original dispatch policy identity differs from the candidate', candidate, ['receipt']);
+  }
+  return original.policy_version;
+}
+
 async function resumeFinalization(options, candidateId, liveScopeInput) {
   if (typeof candidateId !== 'string' || !/^[0-9a-f]{64}$/.test(candidateId)) {
     fail('INVALID_INPUT', 'candidate id must be a 64-character hex digest');
@@ -1093,9 +1112,7 @@ async function resumeFinalization(options, candidateId, liveScopeInput) {
   let original;
   try { original = authenticatedReceipt(recorder, candidate.dispatch_id); }
   catch (error) { throw candidateRefusal('MISSING_RECEIPT', error.message.replace(/^codex-delivery-host: /, ''), candidate, ['receipt']); }
-  if (original.digest !== candidate.receipt_sha256 || original.receipt.launch_id !== candidate.launch_id) {
-    throw candidateRefusal('IDENTITY_CHANGED', 'original dispatch receipt differs from the candidate', candidate, ['receipt']);
-  }
+  candidatePolicy(candidate, original);
 
   const lock = acquireLock(privateDirectory(stateRoot, 'recovery'), candidateId,
     { ttlMs: LOCK_TTL_MS, waitMs: 0, label: 'resume-finalization:' + liveScope.run_id });
@@ -1511,11 +1528,19 @@ async function runResumeCli(argv, stdout, options) {
   const stateRoot = hostStateRoot(options, scope);
   const candidate = readSealed(candidateFile(stateRoot, parsed.candidateId), hostKey(stateRoot));
   if (!candidate) throw candidateRefusal('CANDIDATE_MISSING', 'no authenticated finalization candidate ' + parsed.candidateId);
+  const { candidate_id: id, ...body } = candidate;
+  if (candidate.schema !== CANDIDATE_SCHEMA || id !== parsed.candidateId || sha256(canonical(body)) !== id) {
+    throw candidateRefusal('STATE_RECORD_INVALID', 'candidate content does not match its id', candidate);
+  }
+  const recorder = options.recorder || createDurableRecorder(path.join(storageRootOf(options, scope),
+    sha256(`${candidate.run_id}\0${fs.realpathSync(scope.worktree)}`), 'receipts'));
+  const original = authenticatedReceipt(recorder, candidate.dispatch_id);
+  const policyVersion = candidatePolicy(candidate, original);
   controller.begin(createRunScope({
     run_id: scope.run_id, repository_id: scope.repository, phase: scope.phase, ticket: scope.ticket,
     worktree: scope.worktree, runtime: 'codex', provider: 'openai', owner_id: controller.owner_id,
     dispatch: { dispatch_id: 'recovery-' + parsed.candidateId.slice(0, 32), role: 'executor',
-      model: candidate.model, effort: candidate.effort, policy_hash: candidate.policy_hash },
+      model: candidate.model, effort: candidate.effort, policy_version: policyVersion, policy_hash: candidate.policy_hash },
   }));
   let result;
   try {
