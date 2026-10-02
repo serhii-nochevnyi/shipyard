@@ -702,6 +702,10 @@ test('fixture launcher and no-relaunch recovery produce identical authenticated 
           const outputSchema = JSON.parse(args[schemaIndex + 1]);
           assert.deepEqual(outputSchema.required, ['changed_paths']);
           assert.equal(outputSchema.properties.changed_paths.type, 'array');
+          assert.ok(args[args.indexOf('--tools') + 1].split(',').includes('StructuredOutput'));
+          assert.ok(args[args.indexOf('--allowedTools') + 1].split(',').includes('StructuredOutput'));
+          const agent = JSON.parse(args[args.indexOf('--agents') + 1]);
+          assert.ok(agent[role].tools.includes('StructuredOutput'));
           const sessionId = args[args.indexOf('--session-id') + 1];
           const settings = JSON.parse(args[args.indexOf('--settings') + 1]);
           const hookArgs = settings.hooks.SessionStart[0].hooks[0].args;
