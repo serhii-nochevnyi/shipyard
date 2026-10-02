@@ -1,6 +1,6 @@
 # T-46-06 rollout evidence — HOLD
 
-Date: 2026-10-01. Automatic evidence report is source-complete for a DRAFT PR; deployment remains **HOLD / awaiting operator**. This report does not approve the blocking human checkpoint, activate a runtime, merge T-46-06, or complete phase 46. Eight required new pairs lack isolated exact application receipts. Rollout blockers: eight application receipt gaps, installation/provenance HOLD for a violated isolation boundary, rollback readiness HOLD, and a pending operator decision. Package activation was not performed; the earlier installation did mutate shared runtime defaults.
+Date: 2026-10-01. Automatic evidence report is source-complete for review PR409; deployment remains **HOLD / awaiting operator**. This report does not approve the blocking human checkpoint, activate a runtime, merge T-46-06, or complete phase 46. Eight required new pairs lack isolated exact application receipts. Rollout blockers: eight application receipt gaps, installation/provenance HOLD for a violated isolation boundary, rollback readiness HOLD, and a pending operator decision. Package activation was not performed; the earlier installation did mutate shared runtime defaults.
 
 ## Contract and source boundary
 
@@ -10,7 +10,7 @@ Parent PR408 squash merge is `6bf4a496d84f7716da0655aaaf976c6502c88adc`, verifie
 
 ## Independent review disposition
 
-Actual PR408 native Codex arch-review artifact SHA-256 `1758d9665077150300623b2ffefec9930ba9cddaac8e08391adcfc24bfe172f0` was read and hash-checked, including both referenced evidence/findings file digests. Outcome: **conform**, zero findings/blockers; no accepted fix required. Dispatch `dispatch-mupxtd22-9cac6594-afa3-4bd8-a1ba-b90683fae194`, launch `codex-01a0f8fa-0cbd-7e32-83bf-d3a81b49a531`. Its review covers reproduction, 37 rungs, repair refusals, pinned Sonnet and stale v6 attribution; it explicitly does not authorize activation. Coordinator independently verified Copilot APPROVED and exact-head CI passed; these are coordinator attestations, not newly queried remote results in this callback. Independent review of this evidence DRAFT remains host-owned.
+Actual PR408 native Codex arch-review artifact SHA-256 `1758d9665077150300623b2ffefec9930ba9cddaac8e08391adcfc24bfe172f0` was read and hash-checked, including both referenced evidence/findings file digests. Outcome: **conform**, zero findings/blockers; no accepted fix required. Dispatch `dispatch-mupxtd22-9cac6594-afa3-4bd8-a1ba-b90683fae194`, launch `codex-01a0f8fa-0cbd-7e32-83bf-d3a81b49a531`. Its review covers reproduction, 37 rungs, repair refusals, pinned Sonnet and stale v6 attribution; it explicitly does not authorize activation. Coordinator independently verified Copilot APPROVED and exact-head CI passed; these are coordinator attestations, not newly queried remote results in this callback. Independent review of this evidence for PR409 remains host-owned.
 
 ## Exact verification results
 
@@ -100,11 +100,61 @@ Prior reviewed metadata identifies source `845fd6d7f22aac05f96288e80604ac48c394a
 
 Old-policy in-flight work remains owned by its original policy; v6 receipts stay historical and must not be relabeled v7. No graph/receipt/history/config/PLAN/SUMMARY bytes were modified. D6/controller ownership stays separate. No activation, signing, commit, push or checkpoint approval occurred in this callback.
 
-Operator checkpoint remains blocking and pending. To reconsider HOLD, the operator must arrange authorized authentication within isolated homes and authentic bounded role duties/signals, then obtain eight host-owned exact same-session requested = applied = observed receipts under the v7 hash, review package/dependency provenance, address the violated installation isolation boundary with exact before-image/restoration evidence, establish the missing rollback installed identity and isolated restore target, preserve history, and explicitly decide rollout. No new native launches belong inside the checkpoint. A host may sign the source-complete evidence report for a DRAFT PR while deployment stays HOLD; signing does not resolve the application, installation/provenance or rollback readiness HOLDs.
+Operator checkpoint remains blocking and pending. To reconsider HOLD, the operator must arrange authorized authentication within isolated homes and authentic bounded role duties/signals, then obtain eight host-owned exact same-session requested = applied = observed receipts under the v7 hash, review package/dependency provenance, address the violated installation isolation boundary with exact before-image/restoration evidence, establish the missing rollback installed identity and isolated restore target, preserve history, and explicitly decide rollout. No new native launches belong inside the checkpoint. A host may sign the source-complete evidence report for review PR409 while deployment stays HOLD; signing does not resolve the application, installation/provenance or rollback readiness HOLDs.
+
+## Completed private durable preservation
+
+Before merge, the coordinator preserved all 30 original proof inventory rows and the shared-defaults post-install capture in the content-addressed host archive below. This repair independently verified their original byte counts and SHA-256 values against the report and actual archive contents without extracting or copying private payloads into Git.
+
+- Archive: `/Users/serhii/.local/state/shipyard/evidence/phase46/0e79d8cf8d187c1c897d24622133586415039d9e33ac39d844ef6e281c1c2508.tar`; **20,080,640 bytes**; SHA-256 `0e79d8cf8d187c1c897d24622133586415039d9e33ac39d844ef6e281c1c2508`.
+- Manifest: `/Users/serhii/.local/state/shipyard/evidence/phase46/dccd9979e0c4e440edf0adae75746bbdc666318ad1580e11a54e8e6c8eab7ad1.manifest.json`; **8,690 bytes**; SHA-256 `dccd9979e0c4e440edf0adae75746bbdc666318ad1580e11a54e8e6c8eab7ad1`.
+- Member mapping: the manifest's 31 `entries` map each original `source` to its archive `member`, `bytes` and `sha256`; `proof/00-*` through `proof/29-*` preserve the 30 inventory rows in order, and `proof/30-global-defaults-after-install.json` preserves the 1,005-byte shared-defaults capture with SHA-256 `2edab0e2e95e8d265da9c66fcf4de6d5193b3511b629d4d07920dda4ac4ee4b0`. The archive also contains `manifest.json`, byte-identical to the external manifest.
+
+The archive and manifest are immutable evidence references identified by content hashes, with filesystem mode `0400` under directory `/Users/serhii/.local/state/shipyard/evidence/phase46` mode `0700`. These permissions prevent ordinary writes; they do not establish filesystem-enforced immutability against the owner. Preservation is durable, private and host-local, **not remotely replicated or published**; no off-host recovery is claimed. Only references, digests and the verification command are recorded in Git. Preservation establishes retained evidence identity, not a successful application receipt, installation isolation, rollback restoration or deployment approval; all existing HOLDs remain.
+
+Reproducible read-only verification from the ticket worktree (self-contained; no dependency on temporary proof files):
+
+```sh
+python3 - <<'PY'
+import hashlib, json, pathlib, re, stat, tarfile
+report = pathlib.Path('.planning/phases/46-refresh-native-runtime-model-ladder/46-ROLLOUT-EVIDENCE.md')
+root = pathlib.Path('/Users/serhii/.local/state/shipyard/evidence/phase46')
+archive = root / '0e79d8cf8d187c1c897d24622133586415039d9e33ac39d844ef6e281c1c2508.tar'
+manifest = root / 'dccd9979e0c4e440edf0adae75746bbdc666318ad1580e11a54e8e6c8eab7ad1.manifest.json'
+def digest(data): return hashlib.sha256(data).hexdigest()
+assert not archive.is_symlink() and not manifest.is_symlink()
+assert stat.S_IMODE(root.stat().st_mode) == 0o700
+for path, size in ((archive, 20080640), (manifest, 8690)):
+    assert stat.S_IMODE(path.stat().st_mode) == 0o400
+    assert path.stat().st_size == size
+    assert digest(path.read_bytes()) == path.name.split('.')[0]
+entries = json.loads(manifest.read_text())['entries']
+rows = re.findall(r'^\| `([^`]+)` \| (\d+) \| `([0-9a-f]{64})` \|$', report.read_text(), re.M)
+assert len(rows) == 30 and len(entries) == 31
+expected = [(s, int(n), h) for s, n, h in rows]
+expected.append(('/Volumes/KINGSTON/.wt-claude-shipyard/phase46-rollout-artifacts-20261001/global-defaults-after-install.json', 1005, '2edab0e2e95e8d265da9c66fcf4de6d5193b3511b629d4d07920dda4ac4ee4b0'))
+assert [(e['source'], e['bytes'], e['sha256']) for e in entries] == expected
+with tarfile.open(archive, 'r:') as tar:
+    assert sorted(tar.getnames()) == sorted([e['member'] for e in entries] + ['manifest.json'])
+    assert tar.extractfile('manifest.json').read() == manifest.read_bytes()
+    for e in entries:
+        member = tar.getmember(e['member'])
+        assert member.isfile() and member.size == e['bytes']
+        data = tar.extractfile(member).read()
+        assert len(data) == e['bytes'] and digest(data) == e['sha256']
+print('PASS: 30 original proof rows + 1 shared-defaults capture; 31 archive members match original bytes/SHA-256; archive 20080640 bytes and manifest 8690 bytes match content-addressed SHA-256; files mode 0400, directory mode 0700.')
+PY
+```
+
+Actual execution: `python3 /tmp/phase46-06-verify-durable-proof.py` (the exact Python body above), exit **0**, output:
+
+```text
+PASS: 30 original proof rows + 1 shared-defaults capture; 31 archive members match original bytes/SHA-256; archive 20080640 bytes and manifest 8690 bytes match content-addressed SHA-256; files mode 0400, directory mode 0700.
+```
 
 ## Actual artifact SHA-256 inventory
 
-Paths below are read-only proof references, not secrets or full private transcripts. Preserve these external artifacts with the host evidence archive before their temporary locations expire.
+Paths below are read-only proof references, not secrets or full private transcripts. All entries have been preserved at their original bytes/digests in the verified private durable archive above; the manifest maps original locations to retained members.
 
 | Artifact | Bytes | SHA-256 |
 |---|---:|---|
