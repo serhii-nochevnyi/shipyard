@@ -181,7 +181,11 @@ function installClaudeMarketplace(source, execute = run, read = capture, inspect
     try { return executeOriginal(command, args, env); }
     finally { env = isolatedEnvironment('claude', env, env.CLAUDE_CONFIG_DIR || env.CLAUDE_HOME || path.join(env.HOME || os.homedir(), '.claude')); }
   };
-  read = (command, args) => readOriginal(command, args, env);
+read = (command, args) => {
+    env = isolatedEnvironment('claude', env, env.CLAUDE_CONFIG_DIR || env.CLAUDE_HOME || path.join(env.HOME || os.homedir(), '.claude'));
+    try { return readOriginal(command, args, env); }
+    finally { env = isolatedEnvironment('claude', env, env.CLAUDE_CONFIG_DIR || env.CLAUDE_HOME || path.join(env.HOME || os.homedir(), '.claude')); }
+  };
   const existing = read('claude', ['plugin', 'marketplace', 'list', '--json'])
     .find(item => item.name === 'shipyard');
   const installed = read('claude', ['plugin', 'list', '--json'])
