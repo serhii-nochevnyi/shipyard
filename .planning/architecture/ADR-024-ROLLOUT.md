@@ -76,7 +76,9 @@ absolute retained source/project/capability inputs and a unique candidate path:
 candidate_run() {
   local runtime="$1"
   shift
-  node - "$SOURCE_ROOT" "$runtime" "$SHIPYARD_ISOLATION_ROOT" "$@" <<'NODE'
+  source "$SOURCE_ROOT/scripts/ensure-gsd-core.sh" --library
+  validate_isolated_node_options || return $?
+  node - "$SOURCE_ROOT" "$runtime" "$SHIPYARD_ISOLATION_ROOT" "$@" <<'NODE
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const [source, runtime, root, executable, ...argv] = process.argv.slice(2);
