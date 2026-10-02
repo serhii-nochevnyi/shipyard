@@ -712,9 +712,17 @@ test('empty explicit envelopes and relative selected runtime paths refuse before
 });
 
  test('legacy make unwired Claude dogfood copies only; wired copy without envelope refuses', t => {
-  const f = processFixture(t), before = fullSnapshot(f.ambient);
+  const f = processFixture(t), before = fullSnapshot(f.ambient), untouched = fullSnapshot(f.dir);
   const plugin = path.join(f.candidate, 'legacy-plugin');
   const env = { ...f.env, SHIPYARD_ISOLATION_ROOT: undefined, CLAUDE_HOME: undefined, CLAUDE_CONFIG_DIR: undefined, CODEX_HOME: undefined };
+  for (const [runtime, target] of [['claude', 'install-shipyard-dogfood-claude'], ['codex', 'install-shipyard-dogfood-codex']]) {
+    const refused = spawnSync('make', [target], {
+      cwd: repository, env: { ...env, NODE_OPTIONS: '--import=data:text/javascript,process.exit(0)' }, encoding: 'utf8'
+    });
+    assert.notEqual(refused.status, 0, runtime + refused.stdout + refused.stderr);
+    assert.match(refused.stderr, new RegExp(`${target}: failed to compute dogfood root`));
+    assert.deepEqual(fullSnapshot(f.dir), untouched, `${runtime} failed root calculation has no installation side effects`);
+  }
   const installed = spawnSync('make', ['install-shipyard-dogfood-claude', `DOGFOOD_ROOT=${plugin}`], { cwd: repository, env, encoding: 'utf8' });
   assert.equal(installed.status, 0, installed.stdout + installed.stderr);
   assert.ok(fs.existsSync(path.join(plugin, '.shipyard-provenance.json')));

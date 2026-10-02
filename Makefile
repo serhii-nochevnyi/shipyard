@@ -127,10 +127,10 @@ refresh-runtime-digests:
 dogfood_root = $(shell source scripts/ensure-gsd-core.sh --library && validate_isolated_node_options && SHIPYARD_DOGFOOD_RUNTIME=$(1) node -e "const c=require('node:crypto');const fs=require('node:fs');const os=require('node:os');const p=require('node:path');const r=fs.realpathSync(process.cwd());const d=c.createHash('sha256').update(r).digest('hex').slice(0,16);const b=process.env.XDG_STATE_HOME||p.join(os.homedir(),'.local','state');process.stdout.write(p.join(b,'shipyard','dogfood',process.env.SHIPYARD_DOGFOOD_RUNTIME,d));")
 
 install-shipyard-dogfood-claude:
-	./scripts/install-shipyard-claude-hook.sh --dogfood-root "$(or $(DOGFOOD_ROOT),$(call dogfood_root,claude))"
+	@root="$(or $(DOGFOOD_ROOT),$(call dogfood_root,claude))"; test -n "$$root" || { echo "install-shipyard-dogfood-claude: failed to compute dogfood root" >&2; exit 1; }; ./scripts/install-shipyard-claude-hook.sh --dogfood-root "$$root"
 
 install-shipyard-dogfood-codex:
-	./scripts/install-shipyard-codex.sh --dogfood-root "$(or $(DOGFOOD_ROOT),$(call dogfood_root,codex))"
+	@root="$(or $(DOGFOOD_ROOT),$(call dogfood_root,codex))"; test -n "$$root" || { echo "install-shipyard-dogfood-codex: failed to compute dogfood root" >&2; exit 1; }; ./scripts/install-shipyard-codex.sh --dogfood-root "$$root"
 
 untrack-planning:
 ifeq ($(CONFIRM),untrack-planning)
