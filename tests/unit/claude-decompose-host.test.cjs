@@ -702,6 +702,7 @@ test('fixture launcher and no-relaunch recovery produce identical authenticated 
           const outputSchema = JSON.parse(args[schemaIndex + 1]);
           assert.deepEqual(outputSchema.required, ['changed_paths']);
           assert.equal(outputSchema.properties.changed_paths.type, 'array');
+          assert.equal(outputSchema.properties.summary.maxLength, 500);
           assert.ok(args[args.indexOf('--tools') + 1].split(',').includes('StructuredOutput'));
           assert.ok(args[args.indexOf('--allowedTools') + 1].split(',').includes('StructuredOutput'));
           const agent = JSON.parse(args[args.indexOf('--agents') + 1]);
@@ -725,8 +726,8 @@ test('fixture launcher and no-relaunch recovery produce identical authenticated 
           fs.writeFileSync(path.join(f.phaseDir, '038-01-PLAN.md'), '# Completed plan\n');
           const stream = [
             { type: 'assistant', session_id: sessionId, message: { role: 'assistant', content: 'completed' } },
-            { type: 'result', session_id: sessionId, result: 'completed',
-              structured_output: { changed_paths: ['038-01-PLAN.md'] } },
+            { type: 'result', session_id: sessionId, result: 'Long native narrative. '.repeat(100),
+              structured_output: { changed_paths: ['038-01-PLAN.md'], summary: 'Completed padded plan' } },
           ].map(JSON.stringify).join('\n') + '\n';
           const child = new EventEmitter();
           child.pid = 99999999;
@@ -740,6 +741,7 @@ test('fixture launcher and no-relaunch recovery produce identical authenticated 
     };
     const live = await runDecomposition(request(f.worktree, role), deps);
     assert.equal(launches, 1);
+    assert.equal(live.envelope.summary, 'Completed padded plan');
     const recorder = createDurableRecorder(path.join(store, 'receipts'));
     const originalReservation = recorder.getReservation(live.dispatch_id);
     assert.ok(originalReservation?.reserved_at);
@@ -760,6 +762,7 @@ test('fixture launcher and no-relaunch recovery produce identical authenticated 
     const recovered = await recoverDecomposition(live.dispatch_id, recoveryDeps);
     assert.equal(launches, 1, 'recovery must make zero additional launcher calls');
     assert.equal(recovered.recovered, true);
+    assert.equal(recovered.envelope.summary, 'Completed padded plan');
     assert.equal(live.recovered, undefined);
     assert.equal(recovered.dispatch_id, live.dispatch_id);
     assert.equal(recovered.run_id, live.run_id);
