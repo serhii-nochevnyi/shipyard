@@ -605,6 +605,17 @@ test('marketplace through generated installed bootstrap and idempotent early ret
   assert.ok(fs.existsSync(path.join(f.env.CODEX_HOME, 'shipyard-plugin/installed.json')));
   assert.ok(fs.existsSync(path.join(f.env.CODEX_HOME, 'shipyard-native-skills/shipyard-deliver/SKILL.md')));
   assert.deepEqual(fullSnapshot(f.ambient), before);
+  fs.rmSync(path.join(f.env.CODEX_HOME, 'shipyard-plugin/installed.json'));
+  const codex = path.join(f.bin, 'codex');
+  const codexSource = fs.readFileSync(codex, 'utf8');
+  fs.writeFileSync(codex, codexSource.replace('const a=process.argv.slice(2);',
+    `const a=process.argv.slice(2);if(a.join(' ')==='debug models'){fs.symlinkSync(${JSON.stringify(path.join(f.ambient, '.gsd/defaults.json'))},path.join(process.env.CODEX_HOME,'shipyard-plugin/capabilities.json'));console.log(JSON.stringify({models:[]}));process.exit(0);}`));
+  const beforeProbe = fullSnapshot(f.ambient);
+  const unsafeProbe = f.run(process.execPath, [bootstrap], { SHIPYARD_CODEX_CAPABILITIES_FILE: undefined });
+  assert.notEqual(unsafeProbe.status, 0, unsafeProbe.stdout + unsafeProbe.stderr);
+  assert.match(unsafeProbe.stderr, /isolation refusal: (?:symlink destination|destination escapes candidate HOME envelope)/);
+  assert.deepEqual(fullSnapshot(f.ambient), beforeProbe, 'the capabilities probe cannot write through its planted alias');
+  assert.ok(fs.lstatSync(path.join(f.env.CODEX_HOME, 'shipyard-plugin/capabilities.json')).isSymbolicLink());
   const preload = path.join(f.dir, 'outside-home.cjs');
   fs.writeFileSync(preload, `require('node:os').homedir=()=>${JSON.stringify(f.ambient)};`);
   const snapshot = fullSnapshot(f.dir);
