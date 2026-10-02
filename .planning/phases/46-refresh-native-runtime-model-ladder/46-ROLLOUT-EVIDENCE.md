@@ -1,0 +1,190 @@
+# T-46-06 rollout evidence — HOLD
+
+Date: 2026-10-01. Automatic evidence report is source-complete for review PR409; deployment remains **HOLD / awaiting operator**. This report does not approve the blocking human checkpoint, activate a runtime, merge T-46-06, or complete phase 46. Eight required new pairs lack isolated exact application receipts. Rollout blockers: eight application receipt gaps, installation/provenance HOLD for a violated isolation boundary, rollback readiness HOLD, and a pending operator decision. Package activation was not performed; the earlier installation did mutate shared runtime defaults.
+
+## Contract and source boundary
+
+The supplied 46-06-PLAN contract was read in the dispatch, SHA-256 `85b33ebfefc3cda34487ff52017ec6bf6a14a374d156b3de82bd9b4620ef1bb4`. The same PLAN also exists in the ticket worktree. Supplied research context SHA-256 `2df970596ccb249822d6f56addcc5807800f7c676273223b67413e2a4a611f6d` provides context only. INV-011 sealed manifest/digest chain is unavailable in this bounded proof set and remains **unverified**, not accepted research evidence and not a blocker to documenting HOLD. No replacement research attestation is inferred.
+
+Parent PR408 squash merge is `6bf4a496d84f7716da0655aaaf976c6502c88adc`, verified as an ancestor of this worktree HEAD. Its tree `7d5f0f59457c11dabc9ba3fbcfbc82da7ae7fc80` equals the independent reviewed head `992fd1fca755ce812ef04d3714f12e108378c090` tree. The premerge head is not asserted to be an ancestor. Parent proof and artifact hashes are below.
+
+## Independent review disposition
+
+Actual PR408 native Codex arch-review artifact SHA-256 `1758d9665077150300623b2ffefec9930ba9cddaac8e08391adcfc24bfe172f0` was read and hash-checked, including both referenced evidence/findings file digests. Outcome: **conform**, zero findings/blockers; no accepted fix required. Dispatch `dispatch-mupxtd22-9cac6594-afa3-4bd8-a1ba-b90683fae194`, launch `codex-01a0f8fa-0cbd-7e32-83bf-d3a81b49a531`. Its review covers reproduction, 37 rungs, repair refusals, pinned Sonnet and stale v6 attribution; it explicitly does not authorize activation. Coordinator independently verified Copilot APPROVED and exact-head CI passed; these are coordinator attestations, not newly queried remote results in this callback. Independent review of this evidence for PR409 remains host-owned.
+
+## Exact verification results
+
+Only the two PLAN verification commands were run, each once:
+
+1. `node --test tests/unit/model-policy.test.cjs tests/unit/model-capability.test.cjs tests/unit/codex-dispatch-adapter.test.cjs tests/unit/claude-dispatch-adapter.test.cjs tests/unit/marketplace-install.test.cjs` — exit 0, 9 top-level tests passed, 0 failed. Log `/tmp/phase46-06-focused-tests.log`.
+2. `bash tests/smoke/model-ladder-runtime-smoke.sh` — exit 0, reports 37 installed runtime rungs, fingerprints, installer validation, native Claude bytes and refusal cases. Log `/tmp/phase46-06-smoke.log`.
+
+Scoped regression covers exact grid and conflicting/stale selection refusal, installed agent integrity, native mismatch negatives, authenticated adjacent repair progression and capability fallback. Retained Luna/medium sentinel and Fable measured-window routing/consent restrictions are regression requirements only; no extra live roles were invented. Historical v6 classification is supported by the independent review; no additional history suite was run. Fixture/smoke application is not account application evidence.
+
+## Installed provenance and package comparison
+
+Policy: `adr-014.v7`, hash `3978b08721ef8f2381aa1f31355c9fef1dafd4058a2093b4a5f06ee90cd44570`. Codex manifest declares this identity; all 14 declared static agent file hashes checked equal. Installed policy bytes compare with clean source and generated mirror below. Package-build version `0.70.0+codex.852f99a1cb762216`, content build digest `baceaab44caacb408876d267009c97d1f8b300cd2a44c708afd0c0fc9127a492` (distinct from SHA-256 of metadata file).
+
+Codex isolated home: `/Volumes/KINGSTON/.wt-claude-shipyard/phase46-rollout-artifacts-20261001/codex-6bf4a496`. Claude config: `/Volumes/KINGSTON/.wt-claude-shipyard/phase46-rollout-artifacts-20261001/claude-6bf4a496/config`; actual dogfood plugin root is sibling `plugin-0.70.0`. Both public provenance files state dogfood, version 0.70.0, clean source SHA 6bf4a496. Both installer exits 0 are coordinator-observed; installation logs are hashed below. Claude launch must use this plugin directory; config dependency inventory alone is not shipyard plugin activation.
+
+GSD payload VERSION is **1.14.0 in both homes**; Claude enabled marketplace dependency is **1.15.0**, inventory git SHA `6eeaf87441370e7e2c29f6829f4d6cb428ccec95`, settings enable `gsd-core@gsd-core`. These are distinct installed surfaces, not a claim that the payload is 1.15.0 or that a dependency discovery applied a worker model.
+
+**Installation/provenance chain: HOLD — violated isolation boundary**, independently of the eight model receipt HOLD rows. The preexisting Codex install log reports setting and subsequent removal of legacy global runtime in `/Users/serhii/.gsd/defaults.json`. The npm dependency source `/Volumes/KINGSTON/.wt-claude-shipyard/phase46-rollout-artifacts-20261001/npm-cache/_npx/c62f1caa6eeb184d/node_modules/@opengsd/gsd-core/bin/install.js`, `writeNonClaudeDefaults`, hardcodes `path.join(os.homedir(), '.gsd')` and `defaults.json` before the Shipyard tuner step; isolated config overrides do not isolate this shared-defaults write. The coordinator preserved the actual post-install shared GSD defaults as `/Volumes/KINGSTON/.wt-claude-shipyard/phase46-rollout-artifacts-20261001/global-defaults-after-install.json` (private mode `0600`, 1005 bytes, SHA-256 `2edab0e2e95e8d265da9c66fcf4de6d5193b3511b629d4d07920dda4ac4ee4b0`). The exact before image and restoration proof are unavailable; no guessed restoration was attempted and no restoration is claimed. Package activation was not performed, but the earlier install actually mutated shared `~/.gsd/defaults.json`, violating ADR-024 P46-D and the rollout isolation boundary. Successful package comparisons do not clear this installation/provenance HOLD. Verification: `rg -n 'defaults|legacy global' /tmp/phase46-06-isolated-codex-install.log` reports the set at line 39 and removal at line 91; `sed -n '23,28p' .planning/architecture/ADR-024-model-ladder-refresh.md` states the isolation requirement. The post-install capture cannot establish the prior bytes or prove restoration. This documentation repair performs no shared-default restoration.
+
+- plugins/delivery-pipeline/scripts → /Volumes/KINGSTON/.wt-claude-shipyard/phase46-rollout-artifacts-20261001/codex-6bf4a496/shipyard/scripts: 111 matching files; differences []
+- plugins/delivery-pipeline → /Volumes/KINGSTON/.wt-claude-shipyard/phase46-rollout-artifacts-20261001/claude-6bf4a496/plugin-0.70.0: 137 matching files; differences []
+- plugins/delivery-pipeline → plugins/shipyard/host/plugins/delivery-pipeline: 137 matching files; differences []
+
+## Native discovery and actual attempt
+
+Both supplied actual isolated auth discoveries report `authenticated:false`, exit 1; Claude auth method is `none`. Account entitlement is **unknown**, not proven unsupported. No authenticated model-list receipt is available and discovery cannot stand in for application.
+
+### Historical invocation record (do not rerun)
+
+The coordinator supplied the historical argv, environment overrides, cwd and exit statuses below. Unlisted environment values were inherited; a complete inherited environment snapshot is unavailable. Authentication discovery used Python subprocess calls, not literal shell transcripts: Codex argv was `["codex", "login", "status"]`, with `CODEX_HOME=/Volumes/KINGSTON/.wt-claude-shipyard/phase46-rollout-artifacts-20261001/codex-6bf4a496`; Claude argv was `["claude", "auth", "status", "--json"]`, with both `CLAUDE_CONFIG_DIR` and `CLAUDE_HOME` set to `/Volumes/KINGSTON/.wt-claude-shipyard/phase46-rollout-artifacts-20261001/claude-6bf4a496/config`. Both subprocesses ran with cwd `/Volumes/KINGSTON/claude-shipyard` and exited 1. The following shell forms are explicitly **equivalent argv/environment**, not commands claimed to have been entered literally:
+
+```sh
+cd /Volumes/KINGSTON/claude-shipyard
+CODEX_HOME=/Volumes/KINGSTON/.wt-claude-shipyard/phase46-rollout-artifacts-20261001/codex-6bf4a496 codex login status
+CLAUDE_CONFIG_DIR=/Volumes/KINGSTON/.wt-claude-shipyard/phase46-rollout-artifacts-20261001/claude-6bf4a496/config CLAUDE_HOME=/Volumes/KINGSTON/.wt-claude-shipyard/phase46-rollout-artifacts-20261001/claude-6bf4a496/config claude auth status --json
+```
+
+The actual isolated role entry command ran with cwd `/Volumes/KINGSTON/claude-shipyard` (inherited coordinator default), executable argv `["node", "/tmp/phase46-06-isolated-executor-entry.cjs"]`, the three overrides shown below, and exit 1:
+
+```sh
+cd /Volumes/KINGSTON/claude-shipyard
+CODEX_HOME=/Volumes/KINGSTON/.wt-claude-shipyard/phase46-rollout-artifacts-20261001/codex-6bf4a496 SHIPYARD_GRAPH_DIR=/Volumes/KINGSTON/.wt-claude-shipyard/inv-011-model-ladder-refresh/.planning/graph SHIPYARD_CODEX_CAPABILITIES_FILE=/Users/serhii/.codex/shipyard/codex-capabilities.json node /tmp/phase46-06-isolated-executor-entry.cjs > /tmp/phase46-06-isolated-executor-result.json 2> /tmp/phase46-06-isolated-executor-host.log
+```
+
+The preserved entry calls the installed host API exactly as follows (API invocation, not a standalone CLI command):
+
+```js
+const h = require('/Volumes/KINGSTON/.wt-claude-shipyard/phase46-rollout-artifacts-20261001/codex-6bf4a496/shipyard/scripts/codex-delivery-host.cjs');
+h.runCli(['--args-file', '/tmp/phase46-06-isolated-executor-request.json'], process.stdout, {
+  agentDir: '/Volumes/KINGSTON/.wt-claude-shipyard/phase46-rollout-artifacts-20261001/codex-6bf4a496/agents',
+  agentManifest: '/Volumes/KINGSTON/.wt-claude-shipyard/phase46-rollout-artifacts-20261001/codex-6bf4a496/agents/.shipyard-manifest.json'
+}).catch(e => { process.stderr.write(e.stack + '\n'); process.exitCode = 1; });
+```
+
+All three installer/dependency invocations below ran with cwd `/Volumes/KINGSTON/.wt-claude-shipyard/.wt-inv-011-model-ladder-refresh/T-46-06` and exited 0. Their executable is `bash`; argv is the script path followed by the displayed arguments. Environment overrides and output redirections are recorded in full:
+
+```sh
+cd /Volumes/KINGSTON/.wt-claude-shipyard/.wt-inv-011-model-ladder-refresh/T-46-06
+SHIPYARD_CODEX_CAPABILITIES_FILE=/Users/serhii/.codex/shipyard/codex-capabilities.json GSD_CORE_VERSION=1.14.0 NPM_CONFIG_CACHE=/Volumes/KINGSTON/.wt-claude-shipyard/phase46-rollout-artifacts-20261001/npm-cache bash scripts/install-shipyard-codex.sh --dogfood-root /Volumes/KINGSTON/.wt-claude-shipyard/phase46-rollout-artifacts-20261001/codex-6bf4a496 --project-dir /Volumes/KINGSTON/.wt-claude-shipyard/.wt-inv-011-model-ladder-refresh/T-46-06 > /tmp/phase46-06-isolated-codex-install.log 2>&1
+CLAUDE_CONFIG_DIR=/Volumes/KINGSTON/.wt-claude-shipyard/phase46-rollout-artifacts-20261001/claude-6bf4a496/config CLAUDE_HOME=/Volumes/KINGSTON/.wt-claude-shipyard/phase46-rollout-artifacts-20261001/claude-6bf4a496/config GSD_CORE_VERSION=1.14.0 NPM_CONFIG_CACHE=/Volumes/KINGSTON/.wt-claude-shipyard/phase46-rollout-artifacts-20261001/npm-cache bash scripts/ensure-gsd-core.sh claude > /tmp/phase46-06-isolated-claude-dependency.log 2>&1
+CLAUDE_CONFIG_DIR=/Volumes/KINGSTON/.wt-claude-shipyard/phase46-rollout-artifacts-20261001/claude-6bf4a496/config CLAUDE_HOME=/Volumes/KINGSTON/.wt-claude-shipyard/phase46-rollout-artifacts-20261001/claude-6bf4a496/config SHIPYARD_GSD_AUTO_INSTALL=0 bash scripts/install-shipyard-claude-hook.sh --dogfood-root /Volumes/KINGSTON/.wt-claude-shipyard/phase46-rollout-artifacts-20261001/claude-6bf4a496/plugin-0.70.0 > /tmp/phase46-06-isolated-claude-install.log 2>&1
+```
+
+These are historical attempts only; this repair did not execute them. Existing logs and their inventory hashes remain unchanged. Authentication failure leaves entitlement unknown and all eight application outcomes on HOLD.
+
+The one authorized Codex executor attempt used installed `codex-delivery-host.cjs --args-file /tmp/phase46-06-isolated-executor-request.json`, through `/tmp/phase46-06-isolated-executor-entry.cjs` binding the isolated agents/manifest. Request scope run ID `phase46-06-isolated-evidence-c667e5d2-a476-466c-97f5-701e4cb56fb0`, ticket T-46-06, role executor, signal risk high (not fabricated critical). Coordinator records host exit 1; actual host log reports `CodexRuntimeHostError: Codex process exited 1`; result file has no verified application receipt. Canonical target low is a policy expectation, not an applied/observed tuple. No verified native session or application dispatch ID can be reported. Request/result/entry/log bytes are hashed below. No retries, auth/login launches, availability prompts, credentials copying or synthetic repair/signals were used.
+
+This report's authoring dispatch uses the existing active authenticated Codex account with candidate installed agent manifest. It is excluded from isolated entitlement and application proof, regardless of model selected for this authoring role.
+
+| Required model | Effort | Outcome | Concrete reason |
+|---|---|---|---|
+| `gpt-6.1-sol` | `low` | HOLD | Ordinary executor authorized; actual isolated installed host attempt exited 1, no verified receipt. Applied/observed/session receipt: absent. |
+| `gpt-6.1-sol` | `high` | HOLD | Ordinary research/review would require its own authorized role; no isolated authentication or such role receipt supplied. Applied/observed/session receipt: absent. |
+| `gpt-6.1-sol` | `xhigh` | HOLD | Isolated authentication and a verified xhigh judgment receipt are absent. The graph-backed human checkpoint is a prospective authorized judgment signal, not an applied pair receipt. Applied/observed/session receipt: absent. |
+| `claude-sonnet-5-5` | `low` | HOLD | No bounded actionable sentinel duty authorized; isolated auth absent. Applied/observed/session receipt: absent. |
+| `claude-sonnet-5-5` | `medium` | HOLD | Ordinary executor/drift route cannot apply without isolated auth; no Claude role receipt. Applied/observed/session receipt: absent. |
+| `claude-sonnet-5-5` | `high` | HOLD | No authentic fixer duty or repair predecessor supplied; isolated auth absent. Applied/observed/session receipt: absent. |
+| `claude-sonnet-5-5` | `xhigh` | HOLD | No authorized ordinary research instance or authenticated critical executor receipt; isolated auth absent. Applied/observed/session receipt: absent. |
+| `claude-opus-5-5` | `high` | HOLD | No genuine very-complex/contested/critical judgment or authenticated exhausted repair chain; isolated auth absent. Applied/observed/session receipt: absent. |
+
+For every row, requested target is the policy tuple shown; applied and observed are unknown, receipt reference/session IDs absent. No alias, older model or effort downgrade is accepted. Missing observation is HOLD; no false unsupported-model refusal is claimed. Other pairs were not launched because isolated authentication and/or a genuinely authorized role/signal was absent.
+
+## Rollback and operator boundary
+
+Prior reviewed metadata identifies source `845fd6d7f22aac05f96288e80604ac48c394ae49`, package `0.70.0+codex.1cbb4290ddee735b`, content build digest `a2065eb34c43c0873d6a43659758f444bb4822293aa356160c006ba9df88964d`. Archive `prior-reviewed-845fd6d7.tar` is 19,865,600 bytes; its actual SHA-256 equals metadata `c3e054c407e56ad18adb819a7dc6f914a5db9afa97f98ba2c8e55fe6e5420edf`. This verifies archived identity, not a restore rehearsal or new review of historical bytes. **Rollback readiness: HOLD.** The prior package's installed manifest/provenance identity and intended isolated restore target path were not recorded before install and are **unavailable** in the supplied proof set. Neither the candidate home paths nor the source archive establish those missing values. A source archive alone is not rollback readiness; no supported-installer restore or restoration proof is claimed. Verification: `cat /Volumes/KINGSTON/.wt-claude-shipyard/phase46-rollout-artifacts-20261001/prior-reviewed.json` records source/package/archive metadata only; `sed -n '226,248p' .planning/architecture/ADR-024-ROLLOUT.md` requires the installed manifest identity and isolated target before rollout. Operator review must retain this HOLD until a verified prior installed identity and explicitly chosen quiescent or fresh isolated target are available; no target or identity is guessed here.
+
+Old-policy in-flight work remains owned by its original policy; v6 receipts stay historical and must not be relabeled v7. No graph/receipt/history/config/PLAN/SUMMARY bytes were modified. D6/controller ownership stays separate. No activation, signing, commit, push or checkpoint approval occurred in this callback.
+
+Operator checkpoint remains blocking and pending. To reconsider HOLD, the operator must arrange authorized authentication within isolated homes and authentic bounded role duties/signals, then obtain eight host-owned exact same-session requested = applied = observed receipts under the v7 hash, review package/dependency provenance, address the violated installation isolation boundary with exact before-image/restoration evidence, establish the missing rollback installed identity and isolated restore target, preserve history, and explicitly decide rollout. No new native launches belong inside the checkpoint. A host may sign the source-complete evidence report for review PR409 while deployment stays HOLD; signing does not resolve the application, installation/provenance or rollback readiness HOLDs.
+
+## Completed private durable preservation
+
+Before merge, the coordinator preserved all 30 original proof inventory rows and the shared-defaults post-install capture in the content-addressed host archive below. This repair independently verified their original byte counts and SHA-256 values against the report and actual archive contents without extracting or copying private payloads into Git.
+
+- Archive: `/Users/serhii/.local/state/shipyard/evidence/phase46/0e79d8cf8d187c1c897d24622133586415039d9e33ac39d844ef6e281c1c2508.tar`; **20,080,640 bytes**; SHA-256 `0e79d8cf8d187c1c897d24622133586415039d9e33ac39d844ef6e281c1c2508`.
+- Manifest: `/Users/serhii/.local/state/shipyard/evidence/phase46/dccd9979e0c4e440edf0adae75746bbdc666318ad1580e11a54e8e6c8eab7ad1.manifest.json`; **8,690 bytes**; SHA-256 `dccd9979e0c4e440edf0adae75746bbdc666318ad1580e11a54e8e6c8eab7ad1`.
+- Member mapping: the manifest's 31 `entries` map each original `source` to its archive `member`, `bytes` and `sha256`; `proof/00-*` through `proof/29-*` preserve the 30 inventory rows in order, and `proof/30-global-defaults-after-install.json` preserves the 1,005-byte shared-defaults capture with SHA-256 `2edab0e2e95e8d265da9c66fcf4de6d5193b3511b629d4d07920dda4ac4ee4b0`. The archive also contains `manifest.json`, byte-identical to the external manifest.
+
+The archive and manifest are immutable evidence references identified by content hashes, with filesystem mode `0400` under directory `/Users/serhii/.local/state/shipyard/evidence/phase46` mode `0700`. These permissions prevent ordinary writes; they do not establish filesystem-enforced immutability against the owner. Preservation is durable, private and host-local, **not remotely replicated or published**; no off-host recovery is claimed. Only references, digests and the verification command are recorded in Git. Preservation establishes retained evidence identity, not a successful application receipt, installation isolation, rollback restoration or deployment approval; all existing HOLDs remain.
+
+Reproducible read-only verification from the ticket worktree (self-contained; no dependency on temporary proof files):
+
+```sh
+python3 - <<'PY'
+import hashlib, json, pathlib, re, stat, tarfile
+report = pathlib.Path('.planning/phases/46-refresh-native-runtime-model-ladder/46-ROLLOUT-EVIDENCE.md')
+root = pathlib.Path('/Users/serhii/.local/state/shipyard/evidence/phase46')
+archive = root / '0e79d8cf8d187c1c897d24622133586415039d9e33ac39d844ef6e281c1c2508.tar'
+manifest = root / 'dccd9979e0c4e440edf0adae75746bbdc666318ad1580e11a54e8e6c8eab7ad1.manifest.json'
+def digest(data): return hashlib.sha256(data).hexdigest()
+assert not archive.is_symlink() and not manifest.is_symlink()
+assert stat.S_IMODE(root.stat().st_mode) == 0o700
+for path, size in ((archive, 20080640), (manifest, 8690)):
+    assert stat.S_IMODE(path.stat().st_mode) == 0o400
+    assert path.stat().st_size == size
+    assert digest(path.read_bytes()) == path.name.split('.')[0]
+entries = json.loads(manifest.read_text())['entries']
+rows = re.findall(r'^\| `([^`]+)` \| (\d+) \| `([0-9a-f]{64})` \|$', report.read_text(), re.M)
+assert len(rows) == 30 and len(entries) == 31
+expected = [(s, int(n), h) for s, n, h in rows]
+expected.append(('/Volumes/KINGSTON/.wt-claude-shipyard/phase46-rollout-artifacts-20261001/global-defaults-after-install.json', 1005, '2edab0e2e95e8d265da9c66fcf4de6d5193b3511b629d4d07920dda4ac4ee4b0'))
+assert [(e['source'], e['bytes'], e['sha256']) for e in entries] == expected
+with tarfile.open(archive, 'r:') as tar:
+    assert sorted(tar.getnames()) == sorted([e['member'] for e in entries] + ['manifest.json'])
+    assert tar.extractfile('manifest.json').read() == manifest.read_bytes()
+    for e in entries:
+        member = tar.getmember(e['member'])
+        assert member.isfile() and member.size == e['bytes']
+        data = tar.extractfile(member).read()
+        assert len(data) == e['bytes'] and digest(data) == e['sha256']
+print('PASS: 30 original proof rows + 1 shared-defaults capture; 31 archive members match original bytes/SHA-256; archive 20080640 bytes and manifest 8690 bytes match content-addressed SHA-256; files mode 0400, directory mode 0700.')
+PY
+```
+
+Actual execution: `python3 /tmp/phase46-06-verify-durable-proof.py` (the exact Python body above), exit **0**, output:
+
+```text
+PASS: 30 original proof rows + 1 shared-defaults capture; 31 archive members match original bytes/SHA-256; archive 20080640 bytes and manifest 8690 bytes match content-addressed SHA-256; files mode 0400, directory mode 0700.
+```
+
+## Actual artifact SHA-256 inventory
+
+Paths below are read-only proof references, not secrets or full private transcripts. All entries have been preserved at their original bytes/digests in the verified private durable archive above; the manifest maps original locations to retained members.
+
+| Artifact | Bytes | SHA-256 |
+|---|---:|---|
+| `/tmp/phase46-06-parent-proof.json` | 686 | `e7eac611d9dbbbfb02ceaac5e4aef836bcc2348b18be93a37c091bdaaa4e9c9b` |
+| `/Volumes/KINGSTON/.wt-claude-shipyard/.wt-inv-011-model-ladder-refresh/T-46-05/.shipyard-role-artifacts/0d6c8c04367d9f12f364f06c423c0bf870e9eaf6463ee07a72b8a5e516bdeb79/.shipyard-role-artifact.json` | 5102 | `1758d9665077150300623b2ffefec9930ba9cddaac8e08391adcfc24bfe172f0` |
+| `/Volumes/KINGSTON/.wt-claude-shipyard/.wt-inv-011-model-ladder-refresh/T-46-05/.shipyard-role-artifacts/0d6c8c04367d9f12f364f06c423c0bf870e9eaf6463ee07a72b8a5e516bdeb79/.shipyard-arch-review-evidence.md` | 21840 | `5a95c76f109a9cb12bea34b17955c6e0d46129ee9008a17820a0771881424f5e` |
+| `/Volumes/KINGSTON/.wt-claude-shipyard/.wt-inv-011-model-ladder-refresh/T-46-05/.shipyard-role-artifacts/0d6c8c04367d9f12f364f06c423c0bf870e9eaf6463ee07a72b8a5e516bdeb79/findings.json` | 505 | `9daeecd85200ea3ed3ec8093a2bf33d1b1516865f684b7298433bb213819a959` |
+| `plugins/shipyard/package-build.json` | 300 | `89bd9c70fb2e26c48be7c8aab8dbe073ec5eafda2e6f0f77cf628817d6e42c9f` |
+| `/Volumes/KINGSTON/.wt-claude-shipyard/phase46-rollout-artifacts-20261001/codex-6bf4a496/agents/.shipyard-manifest.json` | 23673 | `f7de4a7ba43e4a47abc0ca2d86740cfe54738008a4a428476fbecf16b8bcc952` |
+| `/Volumes/KINGSTON/.wt-claude-shipyard/phase46-rollout-artifacts-20261001/codex-6bf4a496/agents/.shipyard-provenance.json` | 275 | `d5883022011d597b27cca45a7b4249f71916eb2e896c3a877c1a347426eb2af5` |
+| `/Volumes/KINGSTON/.wt-claude-shipyard/phase46-rollout-artifacts-20261001/codex-6bf4a496/shipyard/scripts/model-policy-internal.cjs` | 46225 | `84ed98ee287d2b5066f8099b74d11550dcf75d52a6ebd69cc7d6e75a2375176a` |
+| `plugins/delivery-pipeline/scripts/model-policy-internal.cjs` | 46225 | `84ed98ee287d2b5066f8099b74d11550dcf75d52a6ebd69cc7d6e75a2375176a` |
+| `/Volumes/KINGSTON/.wt-claude-shipyard/phase46-rollout-artifacts-20261001/claude-6bf4a496/plugin-0.70.0/.shipyard-provenance.json` | 275 | `d5883022011d597b27cca45a7b4249f71916eb2e896c3a877c1a347426eb2af5` |
+| `/Volumes/KINGSTON/.wt-claude-shipyard/phase46-rollout-artifacts-20261001/claude-6bf4a496/plugin-0.70.0/.claude-plugin/plugin.json` | 736 | `274152db71826dd71f5e58b0fa1f1a46b465cc42261ba9496185b76bb5d4ce09` |
+| `/Volumes/KINGSTON/.wt-claude-shipyard/phase46-rollout-artifacts-20261001/codex-6bf4a496/gsd-core/VERSION` | 6 | `45b2d9dc7463345bd6fa29edce2c10899765b1d22fee137d902edd0bd9bf2d37` |
+| `/Volumes/KINGSTON/.wt-claude-shipyard/phase46-rollout-artifacts-20261001/claude-6bf4a496/config/gsd-core/VERSION` | 6 | `45b2d9dc7463345bd6fa29edce2c10899765b1d22fee137d902edd0bd9bf2d37` |
+| `/Volumes/KINGSTON/.wt-claude-shipyard/phase46-rollout-artifacts-20261001/claude-6bf4a496/config/plugins/installed_plugins.json` | 471 | `cf676a0663c6d6047abe66527bbf0f51072121c8e7e5a8622b349404be6a7ce5` |
+| `/Volumes/KINGSTON/.wt-claude-shipyard/phase46-rollout-artifacts-20261001/claude-6bf4a496/config/settings.json` | 9530 | `94fe09aaa10e368ff7ef2d8f4150c290ca386852564d21969cce181e7322fa5d` |
+| `/Volumes/KINGSTON/.wt-claude-shipyard/phase46-rollout-artifacts-20261001/prior-reviewed.json` | 414 | `820d3a49efd081c99d35d4f8e4988fbfcb56eda89d9ab25ce0446b6c3d5d9e32` |
+| `/Volumes/KINGSTON/.wt-claude-shipyard/phase46-rollout-artifacts-20261001/prior-reviewed-845fd6d7.tar` | 19865600 | `c3e054c407e56ad18adb819a7dc6f914a5db9afa97f98ba2c8e55fe6e5420edf` |
+| `/tmp/phase46-06-isolated-executor-request.json` | 2044 | `dc87ba6d6fe239b9eb05bd6b31810f5109046a52ab442d2b1e214cd7d6291dc0` |
+| `/tmp/phase46-06-isolated-executor-result.json` | 0 | `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855` |
+| `/tmp/phase46-06-isolated-executor-host.log` | 1087 | `86b1bb37b96aaca12f36dc6e4f94023d6ac2c9641d212faab802046b5dd4f4af` |
+| `/tmp/phase46-06-isolated-executor-entry.cjs` | 548 | `fc288105c24708a82b29b1757be32f4a5ba7a8b82e4a4cb5ca4152b134fd1b51` |
+| `/tmp/phase46-06-codex-discovery.json` | 223 | `70c708643d30dd05000f4efdb888973a03a60ce8e9348d346d8e4f84ad767d2c` |
+| `/tmp/phase46-06-claude-discovery.json` | 289 | `048a9197cfe8f73f2c552648f331f87a8950fd92843cd61276c09fc515ede111` |
+| `/tmp/phase46-06-codex-auth-status.log` | 14 | `a06d5ca8261150a5175e866fc3dc401070fb4ea30e849a1b9394b7e252fa1677` |
+| `/tmp/phase46-06-claude-auth-status.log` | 360 | `dfe60f6ddce94e2eed92c1d9f0464673e7e141a7217e9d760961a3e9753729b8` |
+| `/tmp/phase46-06-isolated-codex-install.log` | 7564 | `e6d94b4ec2afc98b67a4f532842581c9949e9bf33ac5d9ce95dbee0e60e65290` |
+| `/tmp/phase46-06-isolated-claude-install.log` | 353 | `8df26986091ac339820b41e1f5e68e7d6d09e743e3b5109013d0e6c448d6530d` |
+| `/tmp/phase46-06-isolated-claude-dependency.log` | 3941 | `6424200e689236719b713076938e7bebac042b1b81a7a71ece9ec0465834855b` |
+| `/tmp/phase46-06-focused-tests.log` | 7596 | `bbf8271f6fc4c1dad4729606b80e43464ba582ad7100180a725a8913beb4ebe5` |
+| `/tmp/phase46-06-smoke.log` | 132 | `2cc759ab908ac0b29b54d67fecdc1f4b8a1267639a6a0570e3f5ff6c5ff746e2` |
