@@ -45,6 +45,16 @@ try {
     if (ancestor !== path.resolve(value) && !fs.statSync(ancestor).isDirectory()) fail(`non-directory ancestor: ${ancestor}`);
     return path.join(fs.realpathSync(ancestor), path.relative(ancestor, path.resolve(value)));
   }
+  function systemSpelling(value) {
+    let absolute = path.resolve(value);
+    if (process.platform === 'darwin') for (const prefix of ['/var', '/tmp']) {
+      if ((absolute === prefix || absolute.startsWith(prefix + path.sep)) && fs.realpathSync(prefix) === '/private' + prefix)
+        absolute = '/private' + absolute;
+    }
+    return absolute;
+  }
+  const declaredRoot = systemSpelling(supplied);
+  if (physical(supplied) !== declaredRoot) fail('candidate root has an unsafe alias ancestor');
   const root = physical(supplied), ambient = physical(process.env.SHIPYARD_ORIGINAL_HOME || process.env.HOME || os.homedir());
   const inside = (base, target) => target === base || target.startsWith(base + path.sep);
   const nativeHome = physical(os.userInfo().homedir);
@@ -84,7 +94,9 @@ try {
   function validate(value) {
     const resolved = physical(value);
     if (!inside(root, resolved)) fail(`destination escapes candidate HOME envelope: ${value}`);
-    let cursor = path.resolve(value);
+    const lexical = systemSpelling(value);
+    if (!inside(declaredRoot, lexical)) fail(`destination escapes candidate HOME envelope lexically: ${value}`);
+    let cursor = lexical;
     while (inside(root, cursor) && cursor !== path.dirname(cursor)) {
       if (fs.existsSync(cursor) && fs.lstatSync(cursor).isSymbolicLink()) fail(`symlink destination: ${cursor}`);
       cursor = path.dirname(cursor);

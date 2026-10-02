@@ -718,3 +718,44 @@ test('root-only canonical and published bootstrap use guarded runtime home befor
     assert.ok(trace.every(row => row.home === nativeHome));
   }
 });
+
+
+test('explicit empty unwired Claude envelope refuses before copy', t => {
+  const f = processFixture(t), before = fullSnapshot(f.dir);
+  const result = f.run('/bin/bash', ['scripts/install-shipyard-claude-hook.sh', '--dogfood-root', path.join(f.candidate, 'plugin')], { SHIPYARD_ISOLATION_ROOT: '' });
+  assert.notEqual(result.status, 0); assert.match(result.stderr, /isolation refusal/);
+  assert.deepEqual(fullSnapshot(f.dir), before);
+});
+
+test('canonical and published guards reject external inward aliases for every writable family', t => {
+  const f = processFixture(t);
+  fs.mkdirSync(f.candidate);
+  const alias = path.join(f.dir, 'inward'); fs.symlinkSync(f.candidate, alias);
+  const keys = ['CODEX_HOME', 'CLAUDE_HOME', 'CLAUDE_CONFIG_DIR', 'AGENTS_SKILLS_DIR', 'CODEX_AGENTS_MD',
+    'GSD_CAPABILITIES_DIR', 'GSD_CAPABILITIES_ROOT', 'GSD_DEFAULTS_PATH', 'GSD_HOME', 'SHIPYARD_DOGFOOD_ROOT',
+    'XDG_STATE_HOME', 'XDG_CACHE_HOME', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'TMPDIR', 'TMP', 'TEMP',
+    ...['cache', 'prefix', 'logs_dir', 'tmp', 'userconfig', 'globalconfig'].flatMap(k => ['npm_config_' + k, ('npm_config_' + k).toUpperCase()])];
+  for (const script of ['scripts/ensure-gsd-core.sh', 'plugins/shipyard/host/scripts/ensure-gsd-core.sh']) {
+    for (const key of keys) {
+      const before = fullSnapshot(f.dir);
+      const result = f.run('/bin/bash', [script, '--isolation-env', 'codex', f.candidate], { [key]: path.join(alias, 'destination') });
+      assert.notEqual(result.status, 0, script + ': ' + key);
+      assert.match(result.stderr, /isolation refusal/);
+      assert.deepEqual(fullSnapshot(f.dir), before, key + ' no writes');
+    }
+    const before = fullSnapshot(f.dir);
+    const result = f.run('/bin/bash', [script, '--isolation-env', 'codex', alias], { CODEX_HOME: undefined, CLAUDE_HOME: undefined, CLAUDE_CONFIG_DIR: undefined });
+    assert.notEqual(result.status, 0, 'aliased envelope');
+    assert.deepEqual(fullSnapshot(f.dir), before);
+  }
+});
+
+
+test('direct dogfood selection cannot erase an unsafe inward alias before preflight', t => {
+  const f = processFixture(t); fs.mkdirSync(f.candidate);
+  const alias = path.join(f.dir, 'direct-inward'); fs.symlinkSync(f.candidate, alias);
+  const before = fullSnapshot(f.dir);
+  const result = f.run('/bin/bash', ['scripts/install-shipyard-codex.sh', '--dogfood-root', path.join(alias, 'codex')], { CODEX_HOME: undefined });
+  assert.notEqual(result.status, 0); assert.match(result.stderr, /isolation refusal/);
+  assert.deepEqual(fullSnapshot(f.dir), before);
+});

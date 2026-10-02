@@ -72,6 +72,7 @@ NODE
 fi
 if [[ -n "$DOGFOOD_ROOT" ]]; then
   [[ -f "$PROVENANCE" ]] || { echo "error: host-provenance.cjs not found under $PLUGIN_DIR" >&2; exit 1; }
+  export SHIPYARD_DOGFOOD_ROOT="$DOGFOOD_ROOT"
   DOGFOOD_ROOT="$(TARGET="$DOGFOOD_ROOT" ACTIVE_HOME="$CODEX_HOME" DEFAULT_HOME="$HOME/.codex" node - <<'NODE'
 const fs = require('node:fs');
 const path = require('node:path');
@@ -103,7 +104,7 @@ NODE
 fi
 source "$REPO_ROOT/scripts/ensure-gsd-core.sh" --library
 export CODEX_HOME
-[[ -z "$DOGFOOD_ROOT" ]] || export SHIPYARD_DOGFOOD_ROOT="$DOGFOOD_ROOT"
+[[ -z "$DOGFOOD_ROOT" ]] || export SHIPYARD_DOGFOOD_ROOT="${SHIPYARD_DOGFOOD_ROOT-$DOGFOOD_ROOT}"
 prepare_isolation codex "$CODEX_HOME" "${SHIPYARD_ISOLATION_ROOT-$CODEX_HOME}"
 AGENTS_SKILLS="${AGENTS_SKILLS_DIR:-$HOME/.agents/skills}"
 AGENTS_MD="${CODEX_AGENTS_MD:-$CODEX_HOME/AGENTS.md}"

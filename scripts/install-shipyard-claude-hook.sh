@@ -46,7 +46,7 @@ PROVENANCE="$ROOT/plugins/delivery-pipeline/scripts/host-provenance.cjs"
 source "$ROOT/scripts/ensure-gsd-core.sh" --library
 [[ -z "$DOGFOOD_ROOT" ]] || export SHIPYARD_DOGFOOD_ROOT="$DOGFOOD_ROOT"
 export CLAUDE_HOME
-if [[ -z "$DOGFOOD_ROOT" || "$WIRE_HOOKS" == 1 || -n "${SHIPYARD_ISOLATION_ROOT:-}" ]]; then
+if [[ -z "$DOGFOOD_ROOT" || "$WIRE_HOOKS" == 1 || -n "${SHIPYARD_ISOLATION_ROOT+x}" ]]; then
   prepare_isolation claude "${CLAUDE_CONFIG_DIR:-$CLAUDE_HOME}" "${SHIPYARD_ISOLATION_ROOT:-}"
 fi
 SETTINGS="$CLAUDE_HOME/settings.json"
