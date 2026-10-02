@@ -55,6 +55,39 @@ if (match[1] !== capability.config["delivery_pipeline.codex_models"].default) {
   throw new Error("README Codex palette differs from capability.json");
 }'
 
+node <<'NODE'
+const fs = require('node:fs');
+const assert = require('node:assert/strict');
+const launcher = 'bash scripts/ensure-gsd-core.sh --launch-marketplace';
+for (const [file, count] of [['README.md', 2], ['CLAUDE.md', 1]]) {
+  const text = fs.readFileSync(file, 'utf8');
+  const examples = [...text.matchAll(/```(?:bash|sh)\n([\s\S]*?)```/g)].flatMap(match => match[1].split('\n'));
+  const routes = examples.filter(line => /install-shipyard-marketplace\.cjs|--launch-marketplace/.test(line));
+  assert.equal(routes.length, count, file + ' primary marketplace example count');
+  for (const route of routes) assert.equal(route, launcher + ' codex --source "$PWD"', file + ' must preserve guarded runtime/source');
+}
+const make = fs.readFileSync('Makefile', 'utf8');
+assert.ok(make.includes('package-shipyard-codex:\n\tsource scripts/ensure-gsd-core.sh --library && validate_isolated_node_options && node scripts/package-shipyard-codex.cjs\n'));
+assert.ok(make.includes('install-shipyard-codex: package-shipyard-codex\n'));
+assert.ok(make.includes('dogfood_root = $(shell source scripts/ensure-gsd-core.sh --library && validate_isolated_node_options && SHIPYARD_DOGFOOD_RUNTIME='));
+for (const [target, runtime, source] of [
+  ['install-shipyard-marketplace-codex', 'codex', ''],
+  ['install-shipyard-marketplace-claude', 'claude', ''],
+  ['install-shipyard-codex', 'codex', ' --source "$(CURDIR)"'],
+]) {
+  const recipe = make.match(new RegExp('^' + target + '(?:: package-shipyard-codex|:)\\n((?:\\t[^\\n]*\\n)+)', 'm'));
+  assert.ok(recipe, target + ' recipe missing');
+  const lines = recipe[1].trim().split('\n').map(line => line.trim());
+  assert.deepEqual(lines.filter(line => /install-shipyard-marketplace\.cjs|--launch-marketplace/.test(line)),
+    [launcher + ' ' + runtime + source], target + ' must preserve guarded runtime/source');
+  if (source) {
+    assert.deepEqual(lines, [
+      launcher + ' ' + runtime + source,
+    ], target + ' must validate before package Node startup and retain generation');
+  }
+}
+NODE
+
 while IFS= read -r target; do
   [[ -z "$target" ]] && continue
   grep -qE "^$target:" Makefile || fail "README references missing make target: $target"

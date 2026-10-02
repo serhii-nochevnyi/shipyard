@@ -25,6 +25,321 @@ set -euo pipefail
 # This is a NETWORK operation that writes to the user's runtime home, so it says
 # what it is doing and what changed.
 
+validate_isolated_node_options() {
+  local option
+  for option in ${NODE_OPTIONS:-}; do
+    case "$option" in
+      --no-warnings|--trace-warnings) ;;
+      *) echo "isolation refusal: unsupported NODE_OPTIONS (child HOME preloads and execution options are not supported)" >&2; return 3 ;;
+    esac
+  done
+}
+
+isolation_env() {
+  validate_isolated_node_options || return $?
+  node - "$1" "$2" <<'NODE'
+const fs = require('node:fs'), path = require('node:path'), os = require('node:os');
+const { spawnSync } = require('node:child_process');
+const [runtime, supplied] = process.argv.slice(2);
+const fail = message => { throw new Error(`isolation refusal: ${message}`); };
+try {
+  if (!['claude', 'codex'].includes(runtime)) fail('unknown runtime');
+  if (!supplied || !path.isAbsolute(supplied) || path.resolve(supplied) === path.parse(supplied).root)
+    fail('an absolute bounded candidate root is required');
+  function physical(value) {
+    if (!value || !path.isAbsolute(value)) fail(`nonabsolute destination: ${value}`);
+    let ancestor = path.resolve(value);
+    while (!fs.existsSync(ancestor)) {
+      try { fs.lstatSync(ancestor); fail(`dangling alias: ${ancestor}`); } catch (e) { if (e.code !== 'ENOENT') throw e; }
+      ancestor = path.dirname(ancestor);
+    }
+    if (ancestor !== path.resolve(value) && !fs.statSync(ancestor).isDirectory()) fail(`non-directory ancestor: ${ancestor}`);
+    return path.join(fs.realpathSync(ancestor), path.relative(ancestor, path.resolve(value)));
+  }
+  function systemSpelling(value) {
+    let absolute = path.resolve(value);
+    if (process.platform === 'darwin') for (const prefix of ['/var', '/tmp']) {
+      if ((absolute === prefix || absolute.startsWith(prefix + path.sep)) && fs.realpathSync(prefix) === '/private' + prefix)
+        absolute = '/private' + absolute;
+    }
+    return absolute;
+  }
+  const declaredRoot = systemSpelling(supplied);
+  if (physical(supplied) !== declaredRoot) fail('candidate root has an unsafe alias ancestor');
+  const root = physical(supplied), childHome = path.join(root, '.shipyard-home');
+  const incomingHome = process.env.HOME || os.homedir();
+  const rebased = systemSpelling(incomingHome) === childHome && physical(incomingHome) === childHome;
+  const ambient = physical((rebased && process.env.SHIPYARD_ORIGINAL_HOME) || incomingHome);
+  const inside = (base, target) => target === base || target.startsWith(base + path.sep);
+  const nativeHome = physical(os.userInfo().homedir);
+  const protections = [ambient, nativeHome].flatMap(home => [
+    { value: home, allowDescendants: true },
+    ...['.codex', '.claude', '.gsd', '.agents', '.npm', '.cache', '.config', '.local/state/shipyard', '.local/state/shipyard/codex', '.local/state/shipyard/claude']
+      .map(relative => ({ value: path.join(home, relative), allowDescendants: relative === '.local/state/shipyard' })),
+  ]);
+  for (const { value, allowDescendants } of protections) {
+    const protectedRoot = physical(value);
+    if (root === protectedRoot || inside(root, protectedRoot) || (!allowDescendants && inside(protectedRoot, root)))
+      fail(`candidate aliases active state: ${value}`);
+  }
+  const env = { SHIPYARD_ISOLATION_ROOT: root, SHIPYARD_ORIGINAL_HOME: ambient, HOME: path.join(root, '.shipyard-home') };
+  const defaults = {
+    CODEX_HOME: runtime === 'codex' ? root : path.join(root, 'codex'),
+    CLAUDE_CONFIG_DIR: path.join(root, 'claude'), CLAUDE_HOME: path.join(root, 'claude'),
+    AGENTS_SKILLS_DIR: path.join(env.HOME, '.agents/skills'), CODEX_AGENTS_MD: null,
+    GSD_CAPABILITIES_DIR: path.join(env.HOME, '.gsd/capabilities'), GSD_CAPABILITIES_ROOT: path.join(env.HOME, '.gsd/capabilities'),
+    XDG_STATE_HOME: path.join(env.HOME, '.local/state'), XDG_CACHE_HOME: path.join(env.HOME, '.cache'),
+    XDG_CONFIG_HOME: path.join(env.HOME, '.config'), XDG_DATA_HOME: path.join(env.HOME, '.local/share'),
+    npm_config_cache: path.join(env.HOME, '.npm'), npm_config_prefix: path.join(env.HOME, '.npm-prefix'),
+    npm_config_logs_dir: path.join(env.HOME, '.npm/_logs'), npm_config_tmp: path.join(root, '.shipyard-tmp'),
+    npm_config_userconfig: path.join(env.HOME, '.npmrc'), npm_config_globalconfig: path.join(env.HOME, '.npm-prefix/etc/npmrc'),
+    TMPDIR: path.join(root, '.shipyard-tmp'), TMP: path.join(root, '.shipyard-tmp'), TEMP: path.join(root, '.shipyard-tmp'),
+  };
+  for (const [key, fallback] of Object.entries(defaults)) {
+    const upper = key.startsWith('npm_config_') ? key.toUpperCase() : key;
+    if (process.env[key] !== undefined && process.env[upper] !== undefined && process.env[key] !== process.env[upper]) fail(`conflicting ${key}`);
+    env[key] = process.env[key] ?? process.env[upper] ?? fallback;
+  }
+  env.CODEX_AGENTS_MD ??= path.join(env.CODEX_HOME, 'AGENTS.md');
+  if (runtime === 'claude') {
+    const config = process.env.CLAUDE_CONFIG_DIR ?? process.env.CLAUDE_HOME ?? defaults.CLAUDE_HOME;
+    if (process.env.CLAUDE_CONFIG_DIR && process.env.CLAUDE_HOME && process.env.CLAUDE_CONFIG_DIR !== process.env.CLAUDE_HOME) fail('conflicting Claude homes');
+    env.CLAUDE_CONFIG_DIR = env.CLAUDE_HOME = config;
+  }
+  for (const key of ['GSD_DEFAULTS_PATH', 'GSD_HOME', 'SHIPYARD_DOGFOOD_ROOT']) {
+    if (process.env[key] !== undefined) env[key] = process.env[key];
+  }
+  const writable = {};
+  function validate(value) {
+    const resolved = physical(value);
+    if (!inside(root, resolved)) fail(`destination escapes candidate HOME envelope: ${value}`);
+    const lexical = systemSpelling(value);
+    if (!inside(declaredRoot, lexical)) fail(`destination escapes candidate HOME envelope lexically: ${value}`);
+    let cursor = lexical;
+    while (inside(root, cursor) && cursor !== path.dirname(cursor)) {
+      if (fs.existsSync(cursor) && fs.lstatSync(cursor).isSymbolicLink()) fail(`symlink destination: ${cursor}`);
+      cursor = path.dirname(cursor);
+    }
+    if (fs.existsSync(value)) {
+      const stat = fs.lstatSync(value);
+      if (!stat.isDirectory() && !stat.isFile()) fail(`unsafe file kind: ${value}`);
+      if (stat.isFile() && stat.nlink > 1) fail(`hardlink destination: ${value}`);
+    }
+    return resolved;
+  }
+  function npmExecutable(value) {
+    if (path.basename(path.dirname(value)) !== '.bin' || path.basename(path.dirname(path.dirname(value))) !== 'node_modules') return false;
+    const dependencyRoot = path.dirname(path.dirname(value));
+    const dependencyRoots = [env.npm_config_cache, env.npm_config_prefix, path.join(root, 'npm'),
+      path.join(env.CLAUDE_CONFIG_DIR, 'plugins/cache'), path.join(env.CODEX_HOME, 'plugins/cache')].map(physical);
+    if (!dependencyRoots.some(base => inside(root, base) && inside(base, dependencyRoot))) return false;
+    const subtree = validate(dependencyRoot);
+    let target = subtree, pending = path.relative(subtree, value).split(path.sep), hops = 0;
+    const seen = new Set();
+    while (pending.length) {
+      const part = pending.shift();
+      if (!part || part === '.') continue;
+      if (part === '..') {
+        target = path.dirname(target);
+        if (!inside(subtree, target)) fail(`npm executable escapes npm subtree: ${value}`);
+        continue;
+      }
+      target = path.join(target, part);
+      const stat = fs.lstatSync(target);
+      if (stat.isSymbolicLink()) {
+        const state = target + '\0' + pending.join(path.sep);
+        if (seen.has(state) || ++hops > 40) fail(`cyclic npm executable: ${value}`);
+        seen.add(state);
+        const hop = fs.readlinkSync(target);
+        if (path.isAbsolute(hop)) {
+          if (!inside(subtree, hop)) fail(`npm executable escapes npm subtree: ${value}`);
+          pending = hop.slice(subtree.length).split(path.sep).concat(pending);
+          target = subtree;
+        } else {
+          pending = hop.split(path.sep).concat(pending);
+          target = path.dirname(target);
+        }
+      } else if (pending.length && !stat.isDirectory()) fail(`unsafe npm executable component: ${value}`);
+    }
+    validate(target);
+    const stat = fs.statSync(target);
+    if (!stat.isFile() || stat.nlink !== 1) fail(`unsafe npm executable target: ${value}`);
+    validate(path.dirname(value));
+    return true;
+  }
+  function scan(value) {
+    let stat;
+    try { stat = fs.lstatSync(value); } catch (error) { if (error.code === 'ENOENT') return; throw error; }
+    if (stat.isSymbolicLink() && npmExecutable(value)) return;
+    validate(value);
+    if (fs.lstatSync(value).isDirectory()) for (const name of fs.readdirSync(value)) scan(path.join(value, name));
+  }
+  validate(root); scan(root);
+  const fileKeys = new Set(['CODEX_AGENTS_MD', 'GSD_DEFAULTS_PATH', 'npm_config_userconfig', 'npm_config_globalconfig']);
+  for (const [key, value] of Object.entries(env)) if (!['SHIPYARD_ORIGINAL_HOME', 'SHIPYARD_ISOLATION_ROOT'].includes(key)) {
+    writable[key] = validate(value);
+    if (fs.existsSync(value) && fs.statSync(value).isDirectory() === fileKeys.has(key)) fail(`wrong destination kind for ${key}: ${value}`);
+  }
+  for (const key of ['npm_config_userconfig', 'npm_config_globalconfig']) {
+    if (fs.existsSync(env[key]) && fs.statSync(env[key]).size > 0) fail(`unverified npm configuration: ${env[key]}`);
+  }
+  for (const key of Object.keys(env).filter(k => k.startsWith('npm_config_'))) env[key.toUpperCase()] = env[key];
+  const probe = spawnSync(process.execPath, ['-e', "process.stdout.write(JSON.stringify({home:require('node:os').homedir(),tmp:require('node:os').tmpdir()}))"],
+    { env: { ...process.env, ...env }, encoding: 'utf8', timeout: 10000 });
+  if (probe.error || probe.status !== 0) fail('Node native HOME probe failed');
+  let actual; try { actual = JSON.parse(probe.stdout); } catch { fail('Node native HOME probe returned invalid JSON'); }
+  if (validate(actual.home) !== physical(env.HOME)) fail('Node native HOME differs from private child HOME');
+  validate(actual.tmp);
+  writable.nativeDefaults = validate(path.join(actual.home, '.gsd/defaults.json'));
+  process.stdout.write(JSON.stringify({ environment: env, writable }));
+} catch (error) { console.error(error.message); process.exitCode = 3; }
+NODE
+}
+
+run_isolated_tuner() {
+  if [[ -z "${SHIPYARD_ISOLATION_ROOT:-}" ]]; then node "$@"; return $?; fi
+  isolation_env "${SHIPYARD_RUNTIME:-codex}" "$SHIPYARD_ISOLATION_ROOT" >/dev/null || return $?
+  node - "$@" <<'NODE'
+const fs = require('node:fs'), path = require('node:path');
+const { spawnSync } = require('node:child_process');
+const fail = message => { throw new Error(`isolation refusal: ${message}`); };
+const identity = s => `${s.dev}:${s.ino}:${s.mode}:${s.isDirectory() ? "directory" : `${s.nlink}:${s.size}:${s.mtimeMs}:${s.ctimeMs}`}`;
+try {
+  const root = fs.realpathSync(process.env.SHIPYARD_ISOLATION_ROOT);
+  const inside = p => p === root || p.startsWith(root + path.sep);
+  function parents(p) {
+    if (!inside(p)) fail('CLI helper parent outside candidate');
+    for (let cur = p; inside(cur); cur = path.dirname(cur)) {
+      let s; try { s = fs.lstatSync(cur); } catch (e) { if (e.code === 'ENOENT') continue; throw e; }
+      if (!s.isDirectory() || s.isSymbolicLink() || s.uid !== process.getuid() || (s.mode & 0o022) !== 0 || fs.realpathSync(cur) !== cur) fail(`unsafe CLI helper parent: ${cur}`);
+      if (cur === root) break;
+    }
+  }
+  const base = path.join(process.env.CODEX_HOME, 'tmp/arg0');
+  parents(base);
+  const before = new Map();
+  function snapshot(p) {
+    let s; try { s = fs.lstatSync(p); } catch (e) { if (e.code === 'ENOENT') return; throw e; }
+    before.set(p, identity(s));
+    if (s.isDirectory()) for (const n of fs.readdirSync(p)) snapshot(path.join(p, n));
+  }
+  snapshot(base);
+  for (let cur = path.dirname(base); inside(cur); cur = path.dirname(cur)) {
+    if (fs.existsSync(cur)) before.set(cur, identity(fs.lstatSync(cur)));
+    if (cur === root) break;
+  }
+  let cli, cliStat;
+  const cliPaths = new Set(), cliChain = new Map();
+  function captureCli(p) {
+    let cursor = path.parse(p).root, pending = p.slice(cursor.length).split(path.sep), hops = 0;
+    while (pending.length) {
+      const part = pending.shift();
+      if (!part || part === '.') continue;
+      if (part === '..') { cursor = path.dirname(cursor); continue; }
+      cursor = path.join(cursor, part);
+      const stat = fs.lstatSync(cursor);
+      const link = stat.isSymbolicLink() ? fs.readlinkSync(cursor) : null;
+      cliChain.set(cursor, [identity(stat), link]);
+      if (link !== null) {
+        if (++hops > 40) fail('cyclic native CLI alias');
+        if (!pending.length) cliPaths.add(cursor);
+        if (path.isAbsolute(link)) { cursor = path.parse(link).root; pending = link.slice(cursor.length).split(path.sep).concat(pending); }
+        else { cursor = path.dirname(cursor); pending = link.split(path.sep).concat(pending); }
+      }
+    }
+    cliPaths.add(cursor);
+    return cursor;
+  }
+  function verifyCli() {
+    for (const [p, [id, link]] of cliChain) {
+      const stat = fs.lstatSync(p);
+      if (identity(stat) !== id || (stat.isSymbolicLink() ? fs.readlinkSync(p) : null) !== link) fail(`native CLI alias changed: ${p}`);
+    }
+  }
+  for (const dir of (process.env.PATH || '').split(path.delimiter)) {
+    const p = path.resolve(dir, 'codex');
+    try { fs.accessSync(p, fs.constants.X_OK); cli = captureCli(p); break; } catch { cliPaths.clear(); cliChain.clear(); }
+  }
+  if (cli) {
+    cliStat = fs.statSync(cli);
+    const fd = fs.openSync(cli, 'r'), magic = Buffer.alloc(4);
+    try { fs.readSync(fd, magic, 0, 4, 0); } finally { fs.closeSync(fd); }
+    // Native CLI binaries only: PATH scripts and executable shims grant no cleanup authority.
+    if (!cliStat.isFile() || cliStat.nlink !== 1 || path.basename(cli) !== 'codex'
+      || !['7f454c46', 'cffaedfe', 'feedfacf', 'cafebabe', 'bebafeca'].includes(magic.toString('hex'))) cli = null;
+  }
+  const result = spawnSync(process.execPath, process.argv.slice(2), { stdio: 'inherit', timeout: 30000 });
+  parents(base);
+  verifyCli();
+  const removals = [];
+  if (fs.existsSync(base)) for (const name of fs.readdirSync(base)) {
+    const dir = path.join(base, name);
+    if (!/^codex-arg0[A-Za-z0-9]+$/.test(name)) continue;
+    parents(dir);
+    for (const leaf of fs.readdirSync(dir)) {
+      const p = path.join(dir, leaf), stat = fs.lstatSync(p);
+      if (before.has(p)) {
+        if (identity(stat) !== before.get(p)) fail(`preexisting CLI helper changed: ${p}`);
+        continue;
+      }
+      if (!stat.isSymbolicLink()) continue;
+      if (!['apply_patch', 'applypatch', 'codex-execve-wrapper'].includes(leaf)
+        || !cli || !cliPaths.has(fs.readlinkSync(p)) || fs.realpathSync(p) !== cli || identity(fs.statSync(cli)) !== identity(cliStat))
+        fail(`unrecognized CLI helper: ${p}`);
+      removals.push([p, identity(stat), fs.readlinkSync(p)]);
+    }
+  }
+  for (const [p, id] of before) {
+    const s = fs.lstatSync(p);
+    if (s.isDirectory() && identity(s) !== id) fail(`candidate parent changed during tuner: ${p}`);
+  }
+  for (const [p, id, target] of removals) {
+    parents(path.dirname(p));
+    verifyCli();
+    if (identity(fs.lstatSync(p)) !== id || fs.readlinkSync(p) !== target || fs.realpathSync(p) !== cli)
+      fail(`CLI helper repointed: ${p}`);
+    fs.unlinkSync(p);
+  }
+  if (result.error) throw result.error;
+  process.exitCode = result.status ?? 1;
+} catch (e) { console.error(e.message); process.exitCode = 3; }
+NODE
+}
+
+prepare_isolation() {
+  local RUNTIME="$1" RUNTIME_HOME="$2" ENVELOPE="${3:-}" ISOLATION_JSON
+  if [[ -n "${SHIPYARD_ISOLATION_ROOT+x}" || -n "${SHIPYARD_DOGFOOD_ROOT:-}" || "${SHIPYARD_INSTALL_KIND:-}" == dogfood || ( "$RUNTIME" == codex && "$RUNTIME_HOME" != "$HOME/.$RUNTIME" ) ]]; then
+    if [[ "$RUNTIME" == codex && -z "$ENVELOPE" && -z "${SHIPYARD_ISOLATION_ROOT+x}" ]]; then ENVELOPE="$RUNTIME_HOME"; fi
+    ISOLATION_JSON="$(isolation_env "$RUNTIME" "$ENVELOPE")" || return $?
+    eval "$(printf '%s' "$ISOLATION_JSON" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{for(const [k,v] of Object.entries(JSON.parse(s).environment)) console.log("export "+k+"="+"\x27"+v.replaceAll("\x27", "\x27\\\x27\x27")+"\x27");});')"
+    mkdir -p -m 700 "$HOME" "$TMPDIR" "$npm_config_cache" "$npm_config_prefix"
+  fi
+}
+
+case "${1:-}" in
+  --launch-marketplace)
+    [[ "$#" == 2 || ( "$#" == 4 && "${3:-}" == --source && -n "${4:-}" ) ]] &&
+      [[ "${2:-}" == claude || "${2:-}" == codex ]] || { echo "invalid marketplace launcher arguments" >&2; exit 2; }
+    validate_isolated_node_options || exit $?
+    LAUNCH_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+    shift
+    exec node "$LAUNCH_DIR/install-shipyard-marketplace.cjs" "$@"
+    ;;
+  --launch-bootstrap)
+    [[ "$#" == 1 ]] || { echo "invalid bootstrap launcher arguments" >&2; exit 2; }
+    validate_isolated_node_options || exit $?
+    LAUNCH_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+    exec node "$LAUNCH_DIR/bootstrap-shipyard-plugin.cjs"
+    ;;
+esac
+
+if [[ "${1:-}" == --library ]]; then return 0; fi
+
+if [[ "${1:-}" == --isolation-env ]]; then
+  isolation_env "${2:-}" "${3:-}"
+  exit $?
+fi
+
 RUNTIME="${1:-}"
 VERSION="${2:-${GSD_CORE_VERSION:-latest}}"
 
@@ -34,6 +349,10 @@ case "$RUNTIME" in
 esac
 
 command -v node >/dev/null 2>&1 || { echo "error: node not found on PATH" >&2; exit 1; }
+RUNTIME_HOME="${CODEX_HOME:-$HOME/.codex}"
+[[ "$RUNTIME" != claude ]] || RUNTIME_HOME="${CLAUDE_CONFIG_DIR:-${CLAUDE_HOME:-$HOME/.claude}}"
+prepare_isolation "$RUNTIME" "$RUNTIME_HOME" "${SHIPYARD_ISOLATION_ROOT:-}"
+
 command -v npx  >/dev/null 2>&1 || { echo "error: npx not found on PATH" >&2; exit 1; }
 
 if [[ "$RUNTIME" == "claude" ]]; then
@@ -54,8 +373,12 @@ installed_version() { cat "$CORE/VERSION" 2>/dev/null | tr -d '\n\r' || true; }
 
 resolved="$VERSION"
 if [[ "$VERSION" == "latest" ]]; then
-  resolved="$(npm view @opengsd/gsd-core version 2>/dev/null || echo latest)"
+  if ! resolved="$(npm view @opengsd/gsd-core version 2>/dev/null)"; then
+    [[ -z "${SHIPYARD_ISOLATION_ROOT:-}" ]] || { echo "isolation dependency version query failed" >&2; exit 1; }
+    resolved=latest
+  fi
 fi
+prepare_isolation "$RUNTIME" "$RUNTIME_HOME" "${SHIPYARD_ISOLATION_ROOT:-}"
 before="$(installed_version)"
 
 if [[ -n "$before" ]]; then
@@ -70,6 +393,10 @@ fi
 
 # @contract: Both runtimes require the GSD payload and enabled marketplace plugin.
 if npx --yes "@opengsd/gsd-core@${VERSION}" "${FLAGS[@]}" </dev/null; then
+  prepare_isolation "$RUNTIME" "$RUNTIME_HOME" "${SHIPYARD_ISOLATION_ROOT:-}"
+  HOME_DIR="${CODEX_HOME:-$HOME/.codex}"
+  [[ "$RUNTIME" != claude ]] || HOME_DIR="${CLAUDE_CONFIG_DIR:-${CLAUDE_HOME:-$HOME/.claude}}"
+  CORE="$HOME_DIR/gsd-core"
   after="$(installed_version)"
   # Report what the FILE says, not what was asked for: an install that quietly
   # landed something else is exactly the case worth seeing.
@@ -82,6 +409,7 @@ if npx --yes "@opengsd/gsd-core@${VERSION}" "${FLAGS[@]}" </dev/null; then
   # codex this script exited 1 and the caller's `set -e` aborted the whole install
   # right after reporting success. An `if` has no such tail.
   node "$(dirname "${BASH_SOURCE[0]}")/ensure-gsd-plugin.cjs" "$RUNTIME"
+  prepare_isolation "$RUNTIME" "$RUNTIME_HOME" "${SHIPYARD_ISOLATION_ROOT:-}"
 else
   echo "⚠ gsd-core install failed for $RUNTIME (offline? npm registry unreachable?)." >&2
   # For Codex this IS fatal further down — the generator cannot convert a command
