@@ -69,6 +69,7 @@ const base = process.env.XDG_STATE_HOME || path.join(os.homedir(), '.local', 'st
 process.stdout.write(path.join(base, 'shipyard', 'dogfood', 'codex', digest));
 NODE
 )"
+  unset XDG_STATE_HOME
 fi
 if [[ -n "$DOGFOOD_ROOT" ]]; then
   [[ -f "$PROVENANCE" ]] || { echo "error: host-provenance.cjs not found under $PLUGIN_DIR" >&2; exit 1; }

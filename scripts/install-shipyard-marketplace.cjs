@@ -92,6 +92,7 @@ function selectCodexTarget(source, baseEnv = process.env, inspect = inspectCheck
     }
     if (!hasExplicitHome) {
       home = dedicated;
+      delete env.XDG_STATE_HOME;
       console.log(`→ dogfood Codex home: ${dedicated}`);
       console.log(`  export CODEX_HOME="${dedicated}"`);
     }

@@ -802,3 +802,34 @@ for (const transition of ['core', 'direct', 'claude', 'bootstrap', 'bootstrap-ea
     }
   });
 }
+
+for (const entry of ['direct', 'marketplace']) {
+  test(`${entry} default dogfood selection consumes inherited XDG state base only for the dedicated root`, t => {
+    const f = processFixture(t), before = fullSnapshot(f.ambient);
+    const state = path.join(f.dir, 'external-state');
+    const home = dogfoodHome('codex', fs.realpathSync(repository), { HOME: f.ambient, XDG_STATE_HOME: state });
+    const extra = { CODEX_HOME: undefined, CLAUDE_HOME: undefined, CLAUDE_CONFIG_DIR: undefined,
+      SHIPYARD_ISOLATION_ROOT: undefined, XDG_STATE_HOME: state, SHIPYARD_INSTALL_KIND: 'dogfood',
+      SHIPYARD_SOURCE_ROOT: repository, FIXTURE_PACKAGE_ROOT: path.join(repository, 'plugins/shipyard') };
+    const result = entry === 'direct'
+      ? f.run('/bin/bash', ['scripts/install-shipyard-codex.sh'], extra)
+      : f.run(process.execPath, ['scripts/install-shipyard-marketplace.cjs', 'codex', '--source', repository], extra);
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    assert.deepEqual(fullSnapshot(f.ambient), before);
+    assert.ok(fs.existsSync(path.join(home, 'agents/.shipyard-manifest.json')));
+    const childHome = path.join(home, '.shipyard-home');
+    const trace = fs.readFileSync(path.join(childHome, 'child-trace.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+    assert.ok(trace.some(row => row.command === 'npx'));
+    assert.ok(trace.every(row => row.home === childHome));
+    assert.ok(trace.filter(row => row.env).every(row => row.env.XDG_STATE_HOME.startsWith(home + path.sep)));
+    assert.deepEqual(fs.readdirSync(state), ['shipyard']);
+
+    const snapshot = fullSnapshot(f.dir);
+    const refused = entry === 'direct'
+      ? f.run('/bin/bash', ['scripts/install-shipyard-codex.sh', '--dogfood-root', f.candidate], { ...extra, CODEX_HOME: undefined })
+      : f.run(process.execPath, ['scripts/install-shipyard-marketplace.cjs', 'codex', '--source', repository], { ...extra, CODEX_HOME: f.candidate });
+    assert.notEqual(refused.status, 0);
+    assert.match(refused.stderr, /destination escapes candidate HOME envelope/);
+    assert.deepEqual(fullSnapshot(f.dir), snapshot, 'independent escaping destination refuses before further writes');
+  });
+}
