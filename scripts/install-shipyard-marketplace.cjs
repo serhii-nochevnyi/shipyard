@@ -8,6 +8,23 @@ const os = require('node:os');
 const crypto = require('node:crypto');
 const { spawnSync } = require('node:child_process');
 const { ensure } = require('./ensure-gsd-plugin.cjs');
+function isolatedEnvironment(runtime, env, home) {
+  for (const key of runtime === 'codex' ? ['CODEX_HOME'] : ['CLAUDE_HOME', 'CLAUDE_CONFIG_DIR'])
+    if (env[key] !== undefined && (!env[key] || !path.isAbsolute(env[key]))) throw new Error(`isolation refusal: absolute ${key} required`);
+  const defaultHome = path.join(env.HOME || os.homedir(), `.${runtime}`);
+  if (!Object.hasOwn(env, 'SHIPYARD_ISOLATION_ROOT') && !env.SHIPYARD_DOGFOOD_ROOT
+    && env.SHIPYARD_INSTALL_KIND !== 'dogfood' && path.resolve(home) === path.resolve(defaultHome)) return env;
+  const envelope = env.SHIPYARD_ISOLATION_ROOT ?? (runtime === 'codex' ? home : '');
+  const result = spawnSync('bash', [path.join(__dirname, 'ensure-gsd-core.sh'), '--isolation-env', runtime, envelope],
+    { env, encoding: 'utf8', timeout: 15000 });
+  if (result.error || result.status !== 0) throw new Error(result.stderr || `isolation refusal: ${result.error?.message}`);
+  return { ...env, ...JSON.parse(result.stdout).environment };
+}
+function prepareDirectories(env) {
+  if (!env.SHIPYARD_ISOLATION_ROOT) return;
+  for (const key of ['HOME', 'TMPDIR', 'npm_config_cache', 'npm_config_prefix'])
+    fs.mkdirSync(env[key], { recursive: true, mode: 0o700 });
+}
 function run(command, args, env = process.env) {
   const result = spawnSync(command, args, { env, stdio: 'inherit', timeout: 300000 });
   if (result.error || result.status !== 0) throw new Error(`${command} ${args.join(' ')} failed: ${result.error?.message || result.status}`);
@@ -58,8 +75,10 @@ function samePath(left, right) {
   return canonical(left) === canonical(right);
 }
 function selectCodexTarget(source, baseEnv = process.env, inspect = inspectCheckout, { pinDefaultHome = false } = {}) {
+  if (baseEnv.CODEX_HOME !== undefined && (!baseEnv.CODEX_HOME || !path.isAbsolute(baseEnv.CODEX_HOME)))
+    throw new Error('isolation refusal: absolute CODEX_HOME required');
   const kindEnv = installKindEnv(source, inspect);
-  const env = { ...baseEnv, ...kindEnv };
+  let env = { ...baseEnv, ...kindEnv };
   const hasExplicitHome = typeof baseEnv.CODEX_HOME === 'string' && baseEnv.CODEX_HOME.length > 0;
   const sharedDefault = path.join(userHome(baseEnv), '.codex');
   let home = hasExplicitHome ? path.resolve(baseEnv.CODEX_HOME) : sharedDefault;
@@ -73,7 +92,6 @@ function selectCodexTarget(source, baseEnv = process.env, inspect = inspectCheck
     }
     if (!hasExplicitHome) {
       home = dedicated;
-      fs.mkdirSync(home, { recursive: true, mode: 0o700 });
       console.log(`→ dogfood Codex home: ${dedicated}`);
       console.log(`  export CODEX_HOME="${dedicated}"`);
     }
@@ -82,6 +100,9 @@ function selectCodexTarget(source, baseEnv = process.env, inspect = inspectCheck
   // @invariant: Marketplace, ensure and bootstrap children use the selected CODEX_HOME.
   if (hasExplicitHome || env.SHIPYARD_INSTALL_KIND === 'dogfood' || pinDefaultHome) env.CODEX_HOME = home;
   else delete env.CODEX_HOME;
+  env = isolatedEnvironment('codex', env, home);
+  prepareDirectories(env);
+  if (env.SHIPYARD_INSTALL_KIND === 'dogfood') fs.mkdirSync(home, { recursive: true, mode: 0o700 });
   return { env, home };
 }
 // @invariant: A Claude local install shares the release cache directory, so only the tagged clean release may use it.
@@ -141,8 +162,13 @@ function claudeMarketplaceSource(existing) {
   if (existing.url) return existing.url;
   throw new Error('Cannot restore previous Claude marketplace source');
 }
-function installClaudeMarketplace(source, execute = run, read = capture, inspect = inspectCheckout) {
+function installClaudeMarketplace(source, execute = run, read = capture, inspect = inspectCheckout, env = process.env) {
   refuseUnreleasedClaudeSource(source, inspect);
+  env = isolatedEnvironment('claude', env, env.CLAUDE_CONFIG_DIR || env.CLAUDE_HOME || path.join(env.HOME || os.homedir(), '.claude'));
+  prepareDirectories(env);
+  const executeOriginal = execute, readOriginal = read;
+  execute = (command, args) => executeOriginal(command, args, env);
+  read = (command, args) => readOriginal(command, args, env);
   const existing = read('claude', ['plugin', 'marketplace', 'list', '--json'])
     .find(item => item.name === 'shipyard');
   const installed = read('claude', ['plugin', 'list', '--json'])
@@ -190,7 +216,7 @@ function setupCodexHost(source, execute = run, read = capture, inspect = inspect
   execute(process.execPath, [path.join(installed, 'host/scripts/bootstrap-shipyard-plugin.cjs')], env);
 }
 function ensureWithEnvironment(runtime, env, ensureRuntime, runCommand = run) {
-  if (runtime === 'codex' && ensureRuntime === ensure) {
+  if (ensureRuntime === ensure) {
     // @contract: Run the unchanged ensure helper with CODEX_HOME supplied as child env.
     runCommand(process.execPath, [path.join(__dirname, 'ensure-gsd-plugin.cjs'), runtime], env);
     return;
@@ -205,7 +231,7 @@ function main(args, commands = {}) {
     if (args.length !== 2 || args[0] !== '--source' || !args[1]) throw new Error('Expected --source <marketplace-root-or-git-url>');
     source = args[1];
   }
-  const env = commands.env || process.env;
+  let env = commands.env || process.env;
   const inspect = commands.inspect || inspectCheckout;
   const execute = commands.execute || run;
   const read = commands.read || capture;
@@ -218,12 +244,15 @@ function main(args, commands = {}) {
     setupCodexHost(source, execute, read, inspect, undefined, selected.env, selected);
     return;
   }
+  refuseUnreleasedClaudeSource(source, inspect);
+  env = isolatedEnvironment(runtime, env, env.CLAUDE_CONFIG_DIR || env.CLAUDE_HOME || path.join(env.HOME || os.homedir(), '.claude'));
+  prepareDirectories(env);
   ensureWithEnvironment(runtime, env, ensureRuntime, runCommand);
-  installClaudeMarketplace(source, execute, read);
+  installClaudeMarketplace(source, execute, read, inspect, env);
   // @contract: Claude host hooks and capability come from this release checkout.
   const root = path.resolve(__dirname, '..');
-  run('bash', [path.join(root, 'scripts/ensure-gsd-core.sh'), 'claude']);
-  const claudeEnv = { ...process.env, ...installKindEnv(source), SHIPYARD_GSD_AUTO_INSTALL: '0' };
+  run('bash', [path.join(root, 'scripts/ensure-gsd-core.sh'), 'claude'], env);
+  const claudeEnv = { ...env, ...installKindEnv(source), SHIPYARD_GSD_AUTO_INSTALL: '0' };
   run('bash', [path.join(root, 'scripts/install-shipyard-claude-hook.sh')], claudeEnv);
   run('bash', [path.join(root, 'scripts/install-shipyard-capability.sh'), 'claude'], claudeEnv);
 }

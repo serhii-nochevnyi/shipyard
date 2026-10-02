@@ -24,22 +24,9 @@ set -euo pipefail
 #
 # Usage: bash scripts/install-shipyard-claude-hook.sh [--remove]
 
-CLAUDE_HOME="${CLAUDE_HOME:-$HOME/.claude}"
+[[ -z "${CLAUDE_HOME+x}" || -n "$CLAUDE_HOME" ]] || { echo "isolation refusal: empty CLAUDE_HOME" >&2; exit 3; }
+CLAUDE_HOME="${CLAUDE_HOME:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SETTINGS="$CLAUDE_HOME/settings.json"
-
-ROUTE_HOOK="$CLAUDE_HOME/hooks/shipyard-auto-route.sh"
-ROUTE_CJS="$CLAUDE_HOME/hooks/shipyard-auto-route.cjs"
-PRE_PUSH_HOOK="$CLAUDE_HOME/hooks/shipyard-pre-push-gate.sh"
-STOP_DIR="$CLAUDE_HOME/hooks/shipyard-stop-gate"
-STOP_HOOK="$STOP_DIR/stop-gate.cjs"
-SESSION_HOOK="$STOP_DIR/session-observer.cjs"
-OLD_STOP_HOOK="$CLAUDE_HOME/hooks/shipyard-stop-gate.cjs"
-ROUTE_CMD="bash \"$ROUTE_HOOK\""
-PRE_PUSH_CMD="bash \"$PRE_PUSH_HOOK\""
-STOP_CMD="node \"$STOP_HOOK\""
-SESSION_CMD="node \"$SESSION_HOOK\" hook"
-OLD_STOP_CMD="node \"$OLD_STOP_HOOK\""
 
 REMOVE=0
 DOGFOOD_ROOT="${SHIPYARD_DOGFOOD_ROOT:-}"
@@ -55,6 +42,25 @@ done
 
 command -v node >/dev/null 2>&1 || { echo "error: node not found on PATH" >&2; exit 1; }
 PROVENANCE="$ROOT/plugins/delivery-pipeline/scripts/host-provenance.cjs"
+
+source "$ROOT/scripts/ensure-gsd-core.sh" --library
+[[ -z "$DOGFOOD_ROOT" ]] || export SHIPYARD_DOGFOOD_ROOT="$DOGFOOD_ROOT"
+export CLAUDE_HOME
+prepare_isolation claude "${CLAUDE_CONFIG_DIR:-$CLAUDE_HOME}" "${SHIPYARD_ISOLATION_ROOT:-}"
+SETTINGS="$CLAUDE_HOME/settings.json"
+
+ROUTE_HOOK="$CLAUDE_HOME/hooks/shipyard-auto-route.sh"
+ROUTE_CJS="$CLAUDE_HOME/hooks/shipyard-auto-route.cjs"
+PRE_PUSH_HOOK="$CLAUDE_HOME/hooks/shipyard-pre-push-gate.sh"
+STOP_DIR="$CLAUDE_HOME/hooks/shipyard-stop-gate"
+STOP_HOOK="$STOP_DIR/stop-gate.cjs"
+SESSION_HOOK="$STOP_DIR/session-observer.cjs"
+OLD_STOP_HOOK="$CLAUDE_HOME/hooks/shipyard-stop-gate.cjs"
+ROUTE_CMD="bash \"$ROUTE_HOOK\""
+PRE_PUSH_CMD="bash \"$PRE_PUSH_HOOK\""
+STOP_CMD="node \"$STOP_HOOK\""
+SESSION_CMD="node \"$SESSION_HOOK\" hook"
+OLD_STOP_CMD="node \"$OLD_STOP_HOOK\""
 
 if [[ -n "$DOGFOOD_ROOT" ]]; then
   [[ "$REMOVE" == 0 ]] || { echo "error: --dogfood-root cannot be combined with --remove" >&2; exit 2; }
@@ -150,7 +156,7 @@ fi
 if [[ "${SHIPYARD_GSD_AUTO_INSTALL:-1}" != "0" ]]; then
   if [[ -x "$ROOT/scripts/ensure-gsd-core.sh" ]]; then
     bash "$ROOT/scripts/ensure-gsd-core.sh" claude || \
-      echo "  (continuing: the hooks below do not need gsd-core)"
+      { [[ -z "${SHIPYARD_ISOLATION_ROOT:-}" ]] || exit 1; echo "  (continuing: the hooks below do not need gsd-core)"; }
   fi
 fi
 
@@ -319,7 +325,7 @@ if [[ -n "$GSD_TUNE" ]]; then
   echo "→ GSD global defaults (~/.gsd/defaults.json)"
   # Never fatal: a shipyard install must not fail because GSD is absent or its
   # defaults file is unreadable. `--check` exits 1 on drift, which is data here.
-  GSD_RUNTIME=claude SHIPYARD_RUNTIME=claude node "$GSD_TUNE" --global --runtime claude --apply 2>&1 | sed 's/^/  /' || true
+  GSD_RUNTIME=claude SHIPYARD_RUNTIME=claude node "$GSD_TUNE" --global --runtime claude --apply 2>&1 | sed 's/^/  /' || { [[ -z "${SHIPYARD_ISOLATION_ROOT:-}" ]] || exit 1; }
 fi
 
 echo "✓ shipyard auto-route + stop-gate hooks installed for Claude Code (new sessions; open /hooks or restart to load in a running session)"

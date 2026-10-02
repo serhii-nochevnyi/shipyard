@@ -11,6 +11,23 @@ const { ensure } = require('./ensure-gsd-plugin.cjs');
 const hash = value => crypto.createHash('sha256').update(value).digest('hex');
 const read = file => JSON.parse(fs.readFileSync(file, 'utf8'));
 
+function isolatedEnvironment(runtime, env, home) {
+  for (const key of runtime === 'codex' ? ['CODEX_HOME'] : ['CLAUDE_HOME', 'CLAUDE_CONFIG_DIR'])
+    if (env[key] !== undefined && (!env[key] || !path.isAbsolute(env[key]))) throw new Error(`isolation refusal: absolute ${key} required`);
+  const defaultHome = path.join(env.HOME || os.homedir(), `.${runtime}`);
+  if (!Object.hasOwn(env, 'SHIPYARD_ISOLATION_ROOT') && !env.SHIPYARD_DOGFOOD_ROOT
+    && env.SHIPYARD_INSTALL_KIND !== 'dogfood' && path.resolve(home) === path.resolve(defaultHome)) return env;
+  const envelope = env.SHIPYARD_ISOLATION_ROOT ?? (runtime === 'codex' ? home : '');
+  const result = spawnSync('bash', [path.join(__dirname, 'ensure-gsd-core.sh'), '--isolation-env', runtime, envelope],
+    { env, encoding: 'utf8', timeout: 15000 });
+  if (result.error || result.status !== 0) throw new Error(result.stderr || `isolation refusal: ${result.error?.message}`);
+  return { ...env, ...JSON.parse(result.stdout).environment };
+}
+function prepareDirectories(env) {
+  if (!env.SHIPYARD_ISOLATION_ROOT) return;
+  for (const key of ['HOME', 'TMPDIR', 'npm_config_cache', 'npm_config_prefix'])
+    fs.mkdirSync(env[key], { recursive: true, mode: 0o700 });
+}
 function installedFilesMatch(home, nativeSkills, manifest) {
   if (!manifest?.agent_digests || !manifest.skill_digests || !manifest.bundle_digests) return false;
   const groups = [[path.join(home, 'agents'), manifest.agent_digests],
@@ -46,6 +63,9 @@ function migrationCandidates(skillsDir, previous) {
 
 function bootstrap({ packageRoot = path.resolve(__dirname, '../..'), projectDir = process.cwd() } = {}) {
   const home = path.resolve(process.env.CODEX_HOME || path.join(os.homedir(), '.codex'));
+  const env = isolatedEnvironment('codex', process.env, home);
+  Object.assign(process.env, env);
+  prepareDirectories(env);
   const metadata = read(path.join(packageRoot, 'package-build.json'));
   const stateDir = path.join(home, 'shipyard-plugin');
   const marker = path.join(stateDir, 'installed.json');
@@ -83,17 +103,17 @@ function bootstrap({ packageRoot = path.resolve(__dirname, '../..'), projectDir 
       const { readCodexCliCapabilities } = require(path.join(host, 'scripts/gen-codex-shipyard.cjs'));
       fs.writeFileSync(capabilities, JSON.stringify(readCodexCliCapabilities(), null, 2) + '\n');
     }
-    const env = { ...process.env, CODEX_HOME: home, AGENTS_SKILLS_DIR: nativeSkills,
+    const childEnv = { ...process.env, CODEX_HOME: home, AGENTS_SKILLS_DIR: nativeSkills,
       SHIPYARD_CODEX_MARKETPLACE: '1',
       SHIPYARD_PROJECT_DIR: projectDir, SHIPYARD_CODEX_CAPABILITIES_FILE: capabilities };
     // @contract: A matching GSD runtime needs no network reinstall per session.
     const versionFile = path.join(home, 'gsd-core/VERSION');
     const coreVersion = fs.existsSync(versionFile) ? fs.readFileSync(versionFile, 'utf8').trim() : null;
-    env.GSD_CORE_VERSION = gsd.version;
-    env.SHIPYARD_GSD_AUTO_INSTALL = coreVersion === gsd.version
+    childEnv.GSD_CORE_VERSION = gsd.version;
+    childEnv.SHIPYARD_GSD_AUTO_INSTALL = coreVersion === gsd.version
       && fs.existsSync(path.join(home, 'gsd-core/bin/lib/runtime-artifact-conversion.cjs')) ? '0' : '1';
     const result = spawnSync('bash', [path.join(host, 'scripts/install-shipyard-codex.sh')],
-      { env, stdio: 'inherit', timeout: 300000 });
+      { env: childEnv, stdio: 'inherit', timeout: 300000 });
     if (result.error || result.status !== 0) throw new Error(`Shipyard host setup failed: ${result.error?.message || result.status}`);
 
     // @contract: Back up exact owned originals outside skill discovery after host setup.

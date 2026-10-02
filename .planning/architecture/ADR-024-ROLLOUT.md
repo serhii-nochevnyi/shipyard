@@ -44,103 +44,127 @@ dogfood procedure below for an untagged or dirty Claude checkout. Retain the
 installer's provenance fields alongside the package SHA and installed
 identity, rather than replacing one with another.
 
-## 2. Create isolated runtime homes
+## 2. Prepare a verified candidate envelope before any installation
 
-Use a unique path outside each runtime's active home and keep the prior
-reviewed package at a separate immutable path. Do not copy active credentials,
-reuse a release cache, wire global hooks, change shared runtime defaults, or
-install both runtime variants into one home. Authenticate the isolated host
-separately when native application evidence is ready.
+Use an absolute, dedicated `SHIPYARD_ISOLATION_ROOT` outside active runtime,
+cache, defaults and controller state. CODEX_HOME or CLAUDE_CONFIG_DIR alone
+cannot isolate GSD: the dependency writes through Node's native `os.homedir()`.
+The shared owner `ensure-gsd-core.sh --isolation-env` is read-only: it checks
+physical ancestors, unsafe aliases/file kinds/hardlinks, all declared writable
+destinations and the exact Node executable's actual child OS home and temp path.
+It returns JSON or refuses before mkdir, npm/npx, marketplace calls or tuning.
 
-Before either runtime setup, run from the pinned Shipyard source checkout and
-set `PROJECT_DIR` to the existing project to validate. That project may be a
-separate checkout; the Shipyard source repository is not necessarily the target.
-Use an absolute path and stop if it is absent or not a directory:
+The verified environment supplies a private child HOME, npm cache/prefix/config,
+XDG config/cache/data/state, temporary state, skills and capability destinations.
+Absent defaults become candidate-owned; explicit destinations outside the
+envelope refuse. Source, project and actual capability evidence are read-only
+inputs that may be outside it. No active credentials or authentication files
+are copied. This is a supported-dependency destination contract, not a kernel
+sandbox or a guarantee for arbitrary packages. If a dependency requires a fixed
+shared path, refuse; never run it and restore shared state afterward.
 
-```bash
-SOURCE_ROOT="$(pwd -P)"
-: "${PROJECT_DIR:?Set this to the existing absolute target project directory}"
-[[ "$PROJECT_DIR" = /* && -d "$PROJECT_DIR" ]] || exit 1
-```
-
-### Codex
-
-For the marketplace package path, select an explicit source-scoped Codex home
-and invoke the existing installer from the pinned source:
-
-```bash
-SOURCE_ROOT="$(pwd -P)"
-CODEX_DOGFOOD_HOME="${XDG_STATE_HOME:-$HOME/.local/state}/shipyard/dogfood/codex/<source-id>"
-CODEX_HOME="$CODEX_DOGFOOD_HOME" \
-  node "$SOURCE_ROOT/scripts/install-shipyard-marketplace.cjs" codex --source "$SOURCE_ROOT"
-```
-
-`<source-id>` must distinguish this source from every other candidate. The
-marketplace installer propagates the selected `CODEX_HOME`, checks for the
-enabled `shipyard@shipyard` plugin, and requires the installed
-`plugins/cache/shipyard/shipyard/<version>/package-build.json` before bootstrapping
-the host. If validating the direct generated-bundle path instead, use the
-installer that owns that layout:
+The following procedure is for a later operator-controlled installation, not
+an instruction to execute installers during T-46-08 source verification. Set
+absolute retained source/project/capability inputs and a unique candidate path:
 
 ```bash
-: "${SHIPYARD_CODEX_CAPABILITIES_FILE:?Set this to the actual host capability evidence file}"
-[[ -f "$SHIPYARD_CODEX_CAPABILITIES_FILE" && -r "$SHIPYARD_CODEX_CAPABILITIES_FILE" ]] || exit 1
-SHIPYARD_CODEX_CAPABILITIES_FILE="$SHIPYARD_CODEX_CAPABILITIES_FILE" \
-  bash "$SOURCE_ROOT/scripts/install-shipyard-codex.sh" \
-  --dogfood-root "$CODEX_DOGFOOD_HOME" --project-dir "$PROJECT_DIR"
+: "${SOURCE_ROOT:?Set the absolute reviewed Shipyard checkout}"
+: "${PROJECT_DIR:?Set the absolute existing target project}"
+: "${SHIPYARD_ISOLATION_ROOT:?Set an absolute dedicated candidate envelope}"
+[[ "$SOURCE_ROOT" = /* && -d "$SOURCE_ROOT" && "$PROJECT_DIR" = /* && -d "$PROJECT_DIR" ]] || exit 1
+[[ "$SHIPYARD_ISOLATION_ROOT" = /* ]] || exit 1
+candidate_run() {
+  local runtime="$1"
+  shift
+  node - "$SOURCE_ROOT" "$runtime" "$SHIPYARD_ISOLATION_ROOT" "$@" <<'NODE'
+const path = require('node:path');
+const { spawnSync } = require('node:child_process');
+const [source, runtime, root, executable, ...argv] = process.argv.slice(2);
+const guard = spawnSync('/bin/bash', [path.join(source, 'scripts/ensure-gsd-core.sh'),
+  '--isolation-env', runtime, root], { env: process.env, encoding: 'utf8' });
+if (guard.error || guard.status !== 0) {
+  process.stderr.write(guard.stderr || 'candidate preflight failed'); process.exit(guard.status || 1);
+}
+const environment = JSON.parse(guard.stdout).environment;
+const result = spawnSync(executable, argv, { env: { ...process.env, ...environment }, stdio: 'inherit' });
+if (result.error) { console.error(result.error.message); process.exit(1); }
+process.exit(result.status ?? 1);
+NODE
+}
 ```
 
-Do not point `CODEX_HOME` at the shared default. Supply the host's actual
-capability evidence through `SHIPYARD_CODEX_CAPABILITIES_FILE` before running
-the direct command; this readable file is mandatory. Never synthesize supported
-models or efforts from ADR-024.
+Set any inherited runtime/defaults/skills/capability/npm/XDG/temporary overrides to candidate paths, or remove
+those overrides in a subshell so the guard can supply its defaults. The guard
+never silently ignores an explicitly escaping destination. Preserve unrelated
+NODE_OPTIONS; if its native-home behavior defeats the contract, stop on refusal.
+An untrusted success marker cannot replace child-entry revalidation.
 
-### Claude Code
+### Codex direct and marketplace
 
-Set the documented Claude CLI config directory and the hook installer's home
-override to the same isolated config root. Use a versioned dogfood plugin root
-so a later candidate cannot erase the prior reviewed files:
+Both supported paths use the same selected runtime home and prepared child
+HOME. Each child revalidates before its own state/lock/installation mutation,
+including matching-core, auto-install-disabled and bootstrap early-return paths.
+Original active-home exclusions apply before HOME is rebased.
 
 ```bash
-SOURCE_ROOT="$(pwd -P)"
-CLAUDE_DOGFOOD_HOME="${XDG_STATE_HOME:-$HOME/.local/state}/shipyard/dogfood/claude/<source-id>"
-CLAUDE_PLUGIN_ROOT="$CLAUDE_DOGFOOD_HOME/plugins/shipyard/<package-id>"
-CLAUDE_CONFIG_DIR="$CLAUDE_DOGFOOD_HOME/config" \
-CLAUDE_HOME="$CLAUDE_DOGFOOD_HOME/config" \
-  bash "$SOURCE_ROOT/scripts/ensure-gsd-core.sh" claude || exit 1
-CLAUDE_CONFIG_DIR="$CLAUDE_DOGFOOD_HOME/config" \
-CLAUDE_HOME="$CLAUDE_DOGFOOD_HOME/config" \
-SHIPYARD_GSD_AUTO_INSTALL=0 \
-  bash "$SOURCE_ROOT/scripts/install-shipyard-claude-hook.sh" \
-    --dogfood-root "$CLAUDE_PLUGIN_ROOT"
-CLAUDE_CONFIG_DIR="$CLAUDE_DOGFOOD_HOME/config" \
-  claude --plugin-dir "$CLAUDE_PLUGIN_ROOT"
+(
+  export SHIPYARD_ISOLATION_ROOT
+  export CODEX_HOME="$SHIPYARD_ISOLATION_ROOT/codex"
+  : "${SHIPYARD_CODEX_CAPABILITIES_FILE:?Set the absolute actual host capability evidence file}"
+  [[ "$SHIPYARD_CODEX_CAPABILITIES_FILE" = /* && -r "$SHIPYARD_CODEX_CAPABILITIES_FILE" ]] || exit 1
+  export SHIPYARD_CODEX_CAPABILITIES_FILE SHIPYARD_PROJECT_DIR="$PROJECT_DIR"
+  candidate_run codex /bin/bash "$SOURCE_ROOT/scripts/install-shipyard-codex.sh" --project-dir "$PROJECT_DIR"
+)
 ```
 
-The explicit `ensure-gsd-core.sh claude` step installs the GSD payload and
-runs `ensure-gsd-plugin.cjs` in the fresh isolated config: it registers
-`open-gsd/gsd-core`, installs `gsd-core@gsd-core`, and verifies that dependency
-is enabled before launch. Stop if setup fails. The dogfood hook installer
-returns before its GSD setup without `--wire-hooks`, and
-`SHIPYARD_GSD_AUTO_INSTALL=0` disables its automatic setup; neither replaces
-this explicit dependency step.
+For a direct dogfood root, choose a fresh target outside the originally active
+Codex home, export CODEX_HOME to that selected target and SHIPYARD_INSTALL_KIND
+to `dogfood`; do not use --dogfood-root equal to the originally active home.
+For the alternative marketplace path, use a separate fresh envelope and run:
 
-Claude Code supports loading a development plugin directly from a folder with
-`--plugin-dir`; see the [official plugin documentation](https://code.claude.com/docs/en/plugins).
-The dogfood-root path must be outside
-`$CLAUDE_HOME/plugins/cache`; the installer refuses a target inside that cache
-and records `.shipyard-provenance.json` beside the copied plugin. Without
-`--wire-hooks`, this command prepares the isolated plugin root and leaves hook
-settings unchanged. `CLAUDE_CONFIG_DIR` selects the CLI's isolated settings,
-credentials, session history, and plugin store; see the [Claude Code environment
-variable reference](https://code.claude.com/docs/en/env-vars#variables). The
-installer's `CLAUDE_HOME` is its hook/config destination, so keeping both
-variables on the isolated root prevents that override from being mistaken for
-runtime isolation.
+```bash
+(
+  export SHIPYARD_ISOLATION_ROOT CODEX_HOME="$SHIPYARD_ISOLATION_ROOT/codex"
+  export SHIPYARD_PROJECT_DIR="$PROJECT_DIR"
+  candidate_run codex node "$SOURCE_ROOT/scripts/install-shipyard-marketplace.cjs" codex --source "$SOURCE_ROOT"
+)
+```
 
-For either runtime, stop and choose a new versioned target if the install path
-already contains files without matching Shipyard provenance. Preserve the
-former package and its checksums; do not overwrite it to save space.
+Do not synthesize capabilities from ADR-024. Marketplace bootstrap requires an
+enabled plugin and a matching installed package-build identity. Any isolated
+dependency or tuning failure is fatal. Ordinary active release installation
+retains its established destinations and optional-failure policy.
+
+### Claude standalone dependency and dogfood
+
+Claude's multi-directory layout requires the explicit bounded envelope. An
+ambiguous isolated config/dogfood invocation refuses before copying a plugin,
+writing provenance or settings. Keep both config overrides consistent:
+
+```bash
+(
+  export SHIPYARD_ISOLATION_ROOT
+  export CLAUDE_CONFIG_DIR="$SHIPYARD_ISOLATION_ROOT/claude/config"
+  export CLAUDE_HOME="$CLAUDE_CONFIG_DIR"
+  CLAUDE_DOGFOOD_PLUGIN="$SHIPYARD_ISOLATION_ROOT/claude/plugins/shipyard/<package-id>"
+  candidate_run claude /bin/bash "$SOURCE_ROOT/scripts/ensure-gsd-core.sh" claude || exit 1
+  SHIPYARD_GSD_AUTO_INSTALL=0 candidate_run claude /bin/bash "$SOURCE_ROOT/scripts/install-shipyard-claude-hook.sh" --dogfood-root "$CLAUDE_DOGFOOD_PLUGIN" || exit 1
+)
+```
+
+Without --wire-hooks, dogfood preparation exits before dependency setup and
+leaves hook settings unchanged; it does not replace the explicit dependency
+step. Optional --wire-hooks may write only the verified candidate config.
+Unreleased Claude marketplace sources still refuse. Supported release
+marketplace setup propagates the same environment through dependency, hooks
+and capability installation. Native authentication and launches are a separate
+T-46-06/operator action; normal OS HOME plus isolated config/Keychain is not
+proof of candidate OS-home authentication. No credential copying is permitted.
+
+Preserve former package/provenance/checksums. Stop if an existing target has
+foreign ownership, unsafe aliases or cannot satisfy the boundary. See the
+[retained proof](../../docs/audits/phase46/2026-10-01-isolated-native-rollout-proof.md)
+for the original violation, approved baseline, historical workaround and HOLD.
 
 ## 3. Verify installed identity before dispatch
 
@@ -233,19 +257,17 @@ runtime home only after it is quiescent: all sessions and dispatches using that
 home have finished, and no controller can admit new work there. If work is
 still in flight, install the prior reviewed version into a separate fresh
 isolated runtime home for future work; leave the original home and package
-untouched until those sessions finish. Use the retained source/package and
-that runtime's existing installer against the chosen quiescent or fresh target. For Codex, run the prior source's
-`install-shipyard-marketplace.cjs codex --source <prior-source>` with the chosen
-dedicated `CODEX_HOME`, or run its `install-shipyard-codex.sh` against the
-dedicated `--dogfood-root`, the guarded absolute `--project-dir "$PROJECT_DIR"`
-from section 2, and a readable actual host
-`SHIPYARD_CODEX_CAPABILITIES_FILE`. For Claude, prepare a new versioned `--dogfood-root`
-from the prior reviewed source with `CLAUDE_HOME` and `CLAUDE_CONFIG_DIR` still
-pointing at the chosen isolated config directory. For a fresh config, run the
-prior source's `ensure-gsd-core.sh claude` with both overrides as in section 2
-and stop on failure before launch. Then launch that exact root with
-`claude --plugin-dir`. Confirm the prior installed identity and package digest
-before allowing new work.
+untouched until those sessions finish. Use the retained prior source/package only through the section-2 guarded
+procedure, with the same verified child OS HOME and bounded destinations.
+The prior reviewed installer must support the read-only --isolation-env guard;
+if it does not, HOLD and obtain a reviewed guard-bearing rollback package
+rather than executing its unsafe dependency setup. For Codex, set the chosen
+fresh/quiescent envelope and CODEX_HOME and use candidate_run with either direct
+or marketplace installation. For Claude, set that envelope and both config
+overrides, run the guarded standalone dependency step, then prepare a new
+versioned dogfood root with candidate_run. Check prior installed identity,
+package digest and provenance before admitting work. An unexecuted procedure
+or archived prior identity is not a successful rollback rehearsal.
 
 Rollback changes only which package future isolated dispatches load. Preserve
 the candidate package, HOLD reason, prior/new checksums, all dispatch records,

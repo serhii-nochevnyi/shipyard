@@ -133,7 +133,7 @@ function codexSetup(source, inspect, { sandbox = fs.mkdtempSync(path.join(os.tmp
   const home = codexHome(version);
   const runs = [];
   const read = () => ({ installed: [{ pluginId: 'shipyard@shipyard', enabled: true, version }] });
-  return withEnv({ HOME: sandbox, XDG_STATE_HOME: path.join(sandbox, 'xdg-state'), CODEX_HOME: codexHomeEnv }, () => {
+  return withEnv({ HOME: sandbox, XDG_STATE_HOME: undefined, TMPDIR: undefined, CODEX_HOME: codexHomeEnv }, () => {
     setupCodexHost(source, (command, args, env) => runs.push({ command, args, env }), read, inspect, home);
     assert.equal(runs.length, 1);
     assert.match(runs[0].args[0], /host\/scripts\/bootstrap-shipyard-plugin\.cjs$/);
@@ -169,7 +169,7 @@ test('installKindEnv omits SHIPYARD_SOURCE_ROOT for a tagged release checkout', 
 
 // @contract: Mirrors codexSetup's own env shape, so the expected path is computed under the same sandbox.
 function expectedDedicatedHome(sandbox, source) {
-  return withEnv({ HOME: sandbox, XDG_STATE_HOME: path.join(sandbox, 'xdg-state') },
+  return withEnv({ HOME: sandbox, XDG_STATE_HOME: undefined, TMPDIR: undefined },
     () => dogfoodHome('codex', fs.realpathSync(source)));
 }
 
@@ -224,7 +224,7 @@ function mainCodexHarness(source, { sandbox, codexHomeEnv, inspect: inspectSourc
   marketplaceList = [] } = {}) {
   const home = sandbox || fs.mkdtempSync(path.join(os.tmpdir(), 'marketplace-main-home-'));
   const version = '0.66.0+codex.0123456789abcdef';
-  const env = { ...process.env, HOME: home, XDG_STATE_HOME: path.join(home, 'xdg-state'),
+  const env = { ...process.env, HOME: home, XDG_STATE_HOME: undefined, TMPDIR: undefined,
     CODEX_HOME: codexHomeEnv };
   const events = [];
   const inspect = inspectSource || (() => ({ version: '0.66.0', sha: 'dirty', tagSha: 'release', dirty: true }));
@@ -324,4 +324,253 @@ test('main refuses an explicit shared default before ensure, Codex calls or file
   assert.deepEqual(fs.readdirSync(home).sort(), before, 'refusal creates no target or state directories');
   assert.equal(fs.existsSync(defaultHome), false);
   assert.equal(fs.existsSync(stateRoot), false);
+});
+
+const { spawnSync } = require('node:child_process');
+const repository = path.resolve(__dirname, '../..');
+function fullSnapshot(root) {
+  const result = {};
+  function walk(dir) {
+    for (const name of fs.readdirSync(dir).sort()) {
+      const file = path.join(dir, name), stat = fs.lstatSync(file, { bigint: true });
+      result[path.relative(root, file)] = { mode: String(stat.mode), mtime: String(stat.mtimeNs),
+        ino: String(stat.ino), nlink: String(stat.nlink),
+        data: stat.isSymbolicLink() ? fs.readlinkSync(file) : stat.isFile() ? fs.readFileSync(file).toString('base64') : null };
+      if (stat.isDirectory()) walk(file);
+    }
+  }
+  walk(root); return result;
+}
+test('OS-home dependency negative control detects outside writes; every entry refuses divergent native home before writes', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'candidate-boundary-'));
+  try {
+    const ambient = path.join(dir, 'ambient'), candidate = path.join(dir, 'candidate'), bin = path.join(dir, 'bin');
+    fs.mkdirSync(ambient); fs.mkdirSync(bin);
+    fs.mkdirSync(path.join(ambient, '.gsd'));
+    fs.writeFileSync(path.join(ambient, '.gsd/defaults.json'), '{"operator":"preserve"}\n', { mode: 0o640 });
+    const fake = path.join(bin, 'npx');
+    fs.writeFileSync(fake, `#!${process.execPath}\nconst fs=require('node:fs'),path=require('node:path'),os=require('node:os');\nconst dir=path.join(os.homedir(),'.gsd');fs.mkdirSync(dir,{recursive:true});fs.writeFileSync(path.join(dir,'defaults.json'),'{"runtime":"fake-dependency"}');\n`);
+    fs.chmodSync(fake, 0o755);
+    const before = fullSnapshot(ambient);
+    const negative = spawnSync(fake, [], { env: { HOME: ambient }, encoding: 'utf8' });
+    assert.equal(negative.status, 0, negative.stderr);
+    assert.notDeepEqual(fullSnapshot(ambient), before, 'snapshot actually detects native-home dependency mutation');
+    const preload = path.join(dir, 'outside.cjs');
+    fs.writeFileSync(preload, `require('node:os').homedir=()=>${JSON.stringify(ambient)};\n`);
+    const env = { PATH: `${bin}:/usr/bin:/bin`, HOME: ambient, CODEX_HOME: path.join(candidate, 'codex'),
+      CLAUDE_CONFIG_DIR: path.join(candidate, 'claude'), CLAUDE_HOME: path.join(candidate, 'claude'),
+      SHIPYARD_ISOLATION_ROOT: candidate, NODE_OPTIONS: `--require=${preload}`, SHIPYARD_GSD_AUTO_INSTALL: '0' };
+    fs.symlinkSync(process.execPath, path.join(bin, 'node'));
+    for (const [command, args] of [
+      ['bash', ['scripts/ensure-gsd-core.sh', 'codex']],
+      ['bash', ['scripts/ensure-gsd-core.sh', 'claude']],
+      ['bash', ['scripts/install-shipyard-codex.sh']],
+      [process.execPath, ['scripts/install-shipyard-marketplace.cjs', 'codex']],
+      [process.execPath, ['scripts/install-shipyard-marketplace.cjs', 'claude']],
+      [process.execPath, ['scripts/bootstrap-shipyard-plugin.cjs']],
+      ['bash', ['scripts/install-shipyard-claude-hook.sh', '--dogfood-root', path.join(candidate, 'plugin')]],
+    ]) {
+      const snapshot = fullSnapshot(dir);
+      const result = spawnSync(command, args, { cwd: repository, env, encoding: 'utf8' });
+      assert.notEqual(result.status, 0, `${args.join(' ')} must refuse`);
+      assert.match(result.stderr, /isolation.*(home|HOME)/i, `${args.join(' ')}: ${result.stderr}`);
+      assert.deepEqual(fullSnapshot(dir), snapshot, `${args.join(' ')} has zero filesystem side effects`);
+    }
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+function processFixture(t) {
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'candidate-process-')));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const ambient = path.join(dir, 'ambient'), candidate = path.join(dir, 'candidate'), bin = path.join(dir, 'bin');
+  fs.mkdirSync(ambient); fs.mkdirSync(bin);
+  for (const relative of ['.gsd/defaults.json', '.codex/config.toml', '.claude/settings.json', '.cache/sentinel', '.agents/skills/sentinel', '.local/state/sentinel']) {
+    const file = path.join(ambient, relative); fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, 'protected operator bytes\n', { mode: 0o640 });
+  }
+  const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
+  const selections = Object.values(policy.CODEX_ROLE_RUNG_DEFINITIONS).flat().map(r => ({ model: policy.CODEX_MODEL_IDS[r.model_key], effort: r.effort }));
+  const capabilities = path.join(dir, 'capabilities.json');
+  fs.writeFileSync(capabilities, JSON.stringify({ supportedModels: [...new Set(selections.map(s => s.model))],
+    supportedEfforts: [...new Set(selections.map(s => s.effort))], supportedSelections: selections }));
+  const executable = (name, content) => {
+    fs.writeFileSync(path.join(bin, name), `#!${process.execPath}\n${content}\n`); fs.chmodSync(path.join(bin, name), 0o755);
+  };
+  fs.symlinkSync(process.execPath, path.join(bin, 'node'));
+  executable('npm', "console.log('1.14.0');");
+  executable('npx', `const fs=require('node:fs'),path=require('node:path'),os=require('node:os');
+    const home=os.homedir();fs.mkdirSync(path.join(home,'.gsd'),{recursive:true});
+    fs.writeFileSync(path.join(home,'.gsd/defaults.json'),JSON.stringify({runtime:process.argv.includes('--claude')?'claude':'codex',fixture_dependency:true}));
+    fs.appendFileSync(path.join(home,'child-trace.jsonl'),JSON.stringify({command:'npx',home,env:process.env})+'\\n');
+    const core=path.join(process.argv.includes('--claude')?process.env.CLAUDE_CONFIG_DIR:process.env.CODEX_HOME,'gsd-core');
+    fs.mkdirSync(path.join(core,'bin/lib'),{recursive:true});fs.writeFileSync(path.join(core,'VERSION'),'1.14.0');
+    fs.writeFileSync(path.join(core,'bin/lib/runtime-artifact-conversion.cjs'),'module.exports={convertClaudeCommandToCodexSkill:x=>x,convertClaudeToCodexMarkdown:x=>x};\\n');
+    fs.writeFileSync(path.join(core,'bin/gsd-tools.cjs'),"const fs=require('node:fs'),path=require('node:path');const a=process.argv.slice(2);if(a[0]!=='capability'||a[1]!=='install')process.exit(99);fs.cpSync(a[2],path.join(process.env.GSD_CAPABILITIES_DIR,'delivery-pipeline'),{recursive:true});");`);
+  for (const runtime of ['codex', 'claude']) executable(runtime, `const fs=require('node:fs'),path=require('node:path'),os=require('node:os');
+    fs.appendFileSync(path.join(os.homedir(),'child-trace.jsonl'),JSON.stringify({command:${JSON.stringify(runtime)},home:os.homedir(),args:process.argv.slice(2)})+'\\n');
+    const a=process.argv.slice(2);if(process.env.FIXTURE_PACKAGE_ROOT&&a.join(' ')==='plugin add shipyard@shipyard'){fs.cpSync(process.env.FIXTURE_PACKAGE_ROOT,path.join(process.env.CODEX_HOME,'plugins/cache/shipyard/shipyard/local'),{recursive:true});}
+    if(a[1]==='marketplace'&&a[2]==='list')console.log(JSON.stringify(${runtime === 'codex' ? "{marketplaces:[{name:'gsd-core'}]}" : "[{name:'gsd-core'}]"}));
+    else if(a[1]==='list')console.log(JSON.stringify(${runtime === 'codex' ? "{installed:[{pluginId:'gsd-core@gsd-core',enabled:true,version:'1.14.0'},{pluginId:'shipyard@shipyard',enabled:true,version:'local'}]}" : "[{id:'gsd-core@gsd-core',scope:'user',enabled:true,version:'1.14.0'}]"}));`);
+  const env = { PATH: `${bin}:/usr/bin:/bin:/usr/sbin:/sbin`, LANG: 'C', HOME: ambient,
+    SHIPYARD_ISOLATION_ROOT: candidate, CODEX_HOME: path.join(candidate, 'codex'),
+    CLAUDE_HOME: path.join(candidate, 'claude'), CLAUDE_CONFIG_DIR: path.join(candidate, 'claude'),
+    SHIPYARD_CODEX_CAPABILITIES_FILE: capabilities, GSD_CORE_VERSION: '1.14.0', SHIPYARD_PROJECT_DIR: repository };
+  const run = (command, args, extra = {}) => spawnSync(command, args, { cwd: repository, env: { ...env, ...extra }, encoding: 'utf8', timeout: 90000 });
+  return { dir, ambient, candidate, bin, env, run };
+}
+
+test('automatic direct dependency, actual tuner, manifest and reinstall stay inside candidate OS HOME', t => {
+  const f = processFixture(t), before = fullSnapshot(f.ambient);
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const result = attempt === 0
+      ? f.run('/bin/bash', ['scripts/install-shipyard-codex.sh', '--dogfood-root', f.env.CODEX_HOME], { CODEX_HOME: undefined })
+      : f.run('/bin/bash', ['scripts/install-shipyard-codex.sh']);
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    assert.deepEqual(fullSnapshot(f.ambient), before);
+    const home = path.join(f.candidate, '.shipyard-home');
+    const defaults = JSON.parse(fs.readFileSync(path.join(home, '.gsd/defaults.json')));
+    assert.equal(defaults.runtime, undefined, 'real tuner removed dependency runtime marker only inside candidate');
+    assert.equal(defaults.fixture_dependency, true);
+    const manifest = JSON.parse(fs.readFileSync(path.join(f.env.CODEX_HOME, 'agents/.shipyard-manifest.json')));
+    assert.ok(Object.keys(manifest.agent_digests).length > 0);
+    assert.equal(manifest.gsd_lib_digest, require('node:crypto').createHash('sha256').update(fs.readFileSync(manifest.gsd_lib)).digest('hex'));
+    assert.equal(manifest.capabilities_digest, require('node:crypto').createHash('sha256').update(fs.readFileSync(f.env.SHIPYARD_CODEX_CAPABILITIES_FILE)).digest('hex'));
+    assert.equal(JSON.parse(fs.readFileSync(path.join(f.env.CODEX_HOME, 'agents/.shipyard-provenance.json'))).schema, 'shipyard.host-provenance.v1');
+    const trace = fs.readFileSync(path.join(home, 'child-trace.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+    assert.ok(trace.some(row => row.command === 'npx'));
+    assert.ok(trace.every(row => row.home === home));
+  }
+});
+
+test('Claude explicit dependency and unwired dogfood preparation confine native defaults and preserve active state', t => {
+  const f = processFixture(t), before = fullSnapshot(f.ambient);
+  const dependency = f.run('/bin/bash', ['scripts/ensure-gsd-core.sh', 'claude']);
+  assert.equal(dependency.status, 0, dependency.stdout + dependency.stderr);
+  const plugin = path.join(f.candidate, 'plugin');
+  const installed = f.run('/bin/bash', ['scripts/install-shipyard-claude-hook.sh', '--dogfood-root', plugin], { SHIPYARD_GSD_AUTO_INSTALL: '0' });
+  assert.equal(installed.status, 0, installed.stdout + installed.stderr);
+  assert.ok(fs.existsSync(path.join(plugin, '.shipyard-provenance.json')));
+  assert.equal(fs.existsSync(path.join(f.env.CLAUDE_HOME, 'settings.json')), false);
+  assert.deepEqual(fullSnapshot(f.ambient), before);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(f.candidate, '.shipyard-home/.gsd/defaults.json'))).runtime, 'claude');
+});
+
+test('preflight rejects all escaping supported overrides and aliasing without any writes', t => {
+  const f = processFixture(t);
+  for (const key of ['GSD_DEFAULTS_PATH', 'AGENTS_SKILLS_DIR', 'CODEX_AGENTS_MD', 'GSD_CAPABILITIES_DIR', 'GSD_CAPABILITIES_ROOT',
+    'npm_config_cache', 'NPM_CONFIG_PREFIX', 'npm_config_userconfig', 'XDG_STATE_HOME', 'XDG_CACHE_HOME', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'TMPDIR', 'TMP', 'TEMP']) {
+    const before = fullSnapshot(f.dir);
+    const result = f.run('/bin/bash', ['scripts/ensure-gsd-core.sh', '--isolation-env', 'codex', f.candidate], { [key]: path.join(f.ambient, 'escape') });
+    assert.notEqual(result.status, 0, key); assert.match(result.stderr, /isolation refusal/);
+    assert.deepEqual(fullSnapshot(f.dir), before, key);
+  }
+  fs.mkdirSync(f.candidate); fs.symlinkSync(f.ambient, path.join(f.candidate, 'alias'));
+  let before = fullSnapshot(f.dir);
+  let result = f.run('/bin/bash', ['scripts/ensure-gsd-core.sh', '--isolation-env', 'codex', f.candidate]);
+  assert.notEqual(result.status, 0); assert.deepEqual(fullSnapshot(f.dir), before);
+  fs.unlinkSync(path.join(f.candidate, 'alias'));
+  fs.linkSync(path.join(f.ambient, '.gsd/defaults.json'), path.join(f.candidate, 'hardlink.json'));
+  before = fullSnapshot(f.dir);
+  result = f.run('/bin/bash', ['scripts/ensure-gsd-core.sh', '--isolation-env', 'codex', f.candidate]);
+  assert.notEqual(result.status, 0); assert.match(result.stderr, /hardlink/); assert.deepEqual(fullSnapshot(f.dir), before);
+});
+
+test('marketplace through generated installed bootstrap and idempotent early return confines all dependency children', t => {
+  const f = processFixture(t), before = fullSnapshot(f.ambient);
+  const packageRoot = path.join(f.dir, 'package');
+  require('../../scripts/package-shipyard-codex.cjs').build(packageRoot);
+  f.env.FIXTURE_PACKAGE_ROOT = packageRoot;
+  const installed = f.run(process.execPath, ['scripts/install-shipyard-marketplace.cjs', 'codex', '--source', repository]);
+  assert.equal(installed.status, 0, installed.stdout + installed.stderr);
+  const bootstrap = path.join(f.env.CODEX_HOME, 'plugins/cache/shipyard/shipyard/local/host/scripts/bootstrap-shipyard-plugin.cjs');
+  const repeated = f.run(process.execPath, [bootstrap]);
+  assert.equal(repeated.status, 0, repeated.stdout + repeated.stderr);
+  assert.ok(fs.existsSync(path.join(f.env.CODEX_HOME, 'shipyard-plugin/installed.json')));
+  assert.ok(fs.existsSync(path.join(f.env.CODEX_HOME, 'shipyard-native-skills/shipyard-deliver/SKILL.md')));
+  assert.deepEqual(fullSnapshot(f.ambient), before);
+  const preload = path.join(f.dir, 'outside-home.cjs');
+  fs.writeFileSync(preload, `require('node:os').homedir=()=>${JSON.stringify(f.ambient)};`);
+  const snapshot = fullSnapshot(f.dir);
+  const refused = f.run(process.execPath, [bootstrap], { NODE_OPTIONS: `--require=${preload}`, SHIPYARD_GSD_AUTO_INSTALL: '0' });
+  assert.notEqual(refused.status, 0); assert.match(refused.stderr, /isolation refusal/);
+  assert.deepEqual(fullSnapshot(f.dir), snapshot, 'matching installed state cannot skip preflight');
+});
+
+test('isolated Claude config without an envelope refuses before dependency and dogfood copy', t => {
+  const f = processFixture(t), before = fullSnapshot(f.dir);
+  for (const args of [['scripts/ensure-gsd-core.sh', 'claude'], ['scripts/install-shipyard-claude-hook.sh', '--dogfood-root', path.join(f.candidate, 'plugin')]]) {
+    const result = f.run('/bin/bash', args, { SHIPYARD_ISOLATION_ROOT: undefined });
+    assert.notEqual(result.status, 0); assert.match(result.stderr, /absolute bounded candidate root/);
+    assert.deepEqual(fullSnapshot(f.dir), before);
+  }
+});
+
+test('published proof keeps historical approved baseline, attempts, exact PR408 gates and independent HOLDs', () => {
+  const proof = fs.readFileSync(path.join(repository, 'docs/audits/phase46/2026-10-01-isolated-native-rollout-proof.md'), 'utf8');
+  const data = JSON.parse(proof.match(/```json\n([\s\S]*?)\n```/)[1]);
+  assert.equal(data.operator_baseline_acceptance.historical_restoration_claim, false);
+  assert.equal(data.operator_baseline_acceptance.decision, 'accept-current-shared-defaults-as-baseline-and-test-fresh-isolated-installation');
+  assert.equal(data.baseline.sha256, '2edab0e2e95e8d265da9c66fcf4de6d5193b3511b629d4d07920dda4ac4ee4b0');
+  assert.equal(data.attempts.length, 3);
+  for (const attempt of data.attempts) {
+    assert.equal(attempt.exit, 0);
+    for (const key of ['sha256', 'bytes', 'mode', 'uid', 'gid', 'mtime_ns']) assert.equal(attempt.shared_defaults_after[key], data.baseline[key]);
+    const log = data.retained_files.find(record => record.path === attempt.log);
+    assert.equal(log.sha256, attempt.log_sha256); assert.equal(log.bytes, attempt.log_bytes);
+    assert.ok(path.isAbsolute(attempt.cwd)); assert.equal(attempt.environment_overrides.GSD_CORE_VERSION, '1.14.0');
+  }
+  const head = '992fd1fca755ce812ef04d3714f12e108378c090';
+  assert.deepEqual(data.pr408_review, [{ commit_id: head, state: 'APPROVED', submitted_at: '2026-10-01T19:36:02Z', user: 'copilot-pull-request-reviewer[bot]' }]);
+  assert.deepEqual(data.pr408_checks.map(check => check.name).sort(), ['copilot-pull-request-reviewer', 'test-fast']);
+  for (const check of data.pr408_checks) { assert.equal(check.head_sha, head); assert.equal(check.status, 'completed'); assert.equal(check.conclusion, 'success'); }
+  assert.equal(data.codex_authenticated_status.logged_in, true);
+  assert.equal(data.claude_authenticated_normal_home_status.environment, 'normal-home');
+  assert.equal(data.claude_authenticated_normal_home_status.loggedIn, true);
+  assert.match(proof, /candidate OS HOME authentication remains \*\*FALSE\*\*/);
+  assert.match(proof, /Actual controlled post-fix installation is still required/);
+  assert.match(proof, /rollback rehearsal, final release live-round, operator rollout checkpoint and activation/);
+  assert.equal((proof.match(/\| HOLD —/g) || []).length, 8);
+  const runbook = fs.readFileSync(path.join(repository, '.planning/architecture/ADR-024-ROLLOUT.md'), 'utf8');
+  assert.match(runbook, /--isolation-env/); assert.match(runbook, /SHIPYARD_ISOLATION_ROOT/);
+  assert.match(runbook, /candidate_run claude .*ensure-gsd-core/); assert.match(runbook, /prior reviewed installer must support/);
+});
+
+test('wired Claude hooks and real tuner remain candidate-owned', t => {
+  const f = processFixture(t), before = fullSnapshot(f.ambient);
+  const result = f.run('/bin/bash', ['scripts/install-shipyard-claude-hook.sh', '--dogfood-root', path.join(f.candidate, 'plugin'), '--wire-hooks']);
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  const settings = JSON.parse(fs.readFileSync(path.join(f.env.CLAUDE_HOME, 'settings.json')));
+  assert.ok(settings.hooks.UserPromptSubmit.length);
+  const defaults = JSON.parse(fs.readFileSync(path.join(f.candidate, '.shipyard-home/.gsd/defaults.json')));
+  assert.equal(defaults.runtime, undefined);
+  assert.deepEqual(fullSnapshot(f.ambient), before);
+});
+
+test('isolated real tuning failure is fatal and protects outside state', t => {
+  for (const runtime of ['codex', 'claude']) {
+    const f = processFixture(t), before = fullSnapshot(f.ambient);
+    const fake = path.join(f.bin, 'npx');
+    const source = fs.readFileSync(fake, 'utf8');
+    fs.writeFileSync(fake, source.replace("JSON.stringify({runtime:process.argv.includes('--claude')?'claude':'codex',fixture_dependency:true})", "'invalid-defaults-json'"));
+    const args = runtime === 'codex' ? ['scripts/install-shipyard-codex.sh']
+      : ['scripts/install-shipyard-claude-hook.sh', '--dogfood-root', path.join(f.candidate, 'plugin'), '--wire-hooks'];
+    const result = f.run('/bin/bash', args);
+    assert.notEqual(result.status, 0, result.stdout + result.stderr);
+    assert.match(result.stdout + result.stderr, /defaults|JSON/);
+    assert.deepEqual(fullSnapshot(f.ambient), before);
+  }
+});
+
+test('empty explicit envelopes and relative selected runtime paths refuse before any mutation', t => {
+  const f = processFixture(t);
+  for (const [command, args, extra] of [
+    ['/bin/bash', ['scripts/install-shipyard-codex.sh'], { SHIPYARD_ISOLATION_ROOT: '' }],
+    [process.execPath, ['scripts/install-shipyard-marketplace.cjs', 'codex'], { CODEX_HOME: 'relative' }],
+    [process.execPath, ['scripts/bootstrap-shipyard-plugin.cjs'], { CODEX_HOME: 'relative' }],
+    ['/bin/bash', ['scripts/ensure-gsd-core.sh', '--isolation-env', 'codex', 'relative'], {}],
+  ]) {
+    const before = fullSnapshot(f.dir), result = f.run(command, args, extra);
+    assert.notEqual(result.status, 0); assert.match(result.stderr, /isolation refusal/);
+    assert.deepEqual(fullSnapshot(f.dir), before);
+  }
 });

@@ -31,6 +31,7 @@ CAP_SRC="$REPO_ROOT/capabilities/delivery-pipeline"
 PHASE="${SHIPYARD_CODEX_PHASE:-2}"
 PROJECT_DIR="${SHIPYARD_PROJECT_DIR:-$REPO_ROOT}"
 
+[[ -z "${CODEX_HOME+x}" || -n "$CODEX_HOME" ]] || { echo "isolation refusal: empty CODEX_HOME" >&2; exit 3; }
 CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
 AGENTS_SKILLS="${AGENTS_SKILLS_DIR:-$HOME/.agents/skills}"
 BUNDLE_ROOT="$CODEX_HOME/shipyard"
@@ -98,9 +99,15 @@ NODE
   GSD_TOOLS="$CODEX_HOME/gsd-core/bin/gsd-tools.cjs"
   AGENTS_MD="${CODEX_AGENTS_MD:-$CODEX_HOME/AGENTS.md}"
   export CODEX_HOME GSD_CAPABILITIES_DIR="${GSD_CAPABILITIES_DIR:-$CODEX_HOME/.gsd/capabilities}"
-  mkdir -p -m 700 "$CODEX_HOME"
   echo "→ dogfood CODEX_HOME $CODEX_HOME"
 fi
+source "$REPO_ROOT/scripts/ensure-gsd-core.sh" --library
+export CODEX_HOME
+[[ -z "$DOGFOOD_ROOT" ]] || export SHIPYARD_DOGFOOD_ROOT="$DOGFOOD_ROOT"
+prepare_isolation codex "$CODEX_HOME" "${SHIPYARD_ISOLATION_ROOT-$CODEX_HOME}"
+AGENTS_SKILLS="${AGENTS_SKILLS_DIR:-$HOME/.agents/skills}"
+AGENTS_MD="${CODEX_AGENTS_MD:-$CODEX_HOME/AGENTS.md}"
+
 [[ -d "$PLUGIN_DIR" ]] || { echo "error: plugin dir missing: $PLUGIN_DIR" >&2; exit 1; }
 [[ -d "$CAP_SRC" ]] || { echo "error: capability dir missing: $CAP_SRC" >&2; exit 1; }
 [[ -d "$PROJECT_DIR" ]] || { echo "error: project dir missing: $PROJECT_DIR" >&2; exit 1; }
@@ -665,7 +672,7 @@ if [[ -f "$GSD_TUNE" ]]; then
   # the installer may have been launched from a ticket worktree or another
   # checkout entirely.
   (cd "$PROJECT_DIR" && GSD_RUNTIME=codex SHIPYARD_RUNTIME=codex \
-    node "$GSD_TUNE" --global --runtime codex --apply) 2>&1 | sed 's/^/  /' || true
+    node "$GSD_TUNE" --global --runtime codex --apply) 2>&1 | sed 's/^/  /' || { [[ -z "${SHIPYARD_ISOLATION_ROOT:-}" ]] || exit 1; }
 fi
 
 # ── skills → ~/.agents/skills (only our own shipyard-* dirs are touched) ──────
