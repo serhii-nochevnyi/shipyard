@@ -183,7 +183,7 @@ function sealResearchArtifact(scope, root, output, leaseCtx) {
 function sealPlans(scope, root, output, leaseCtx) {
   const directory = phaseDirectory(scope.worktree, scope.phase);
   assertContained({ worktree: scope.worktree, allowed: [path.relative(scope.worktree, directory)] });
-  const names = fs.readdirSync(directory).filter((name) => new RegExp(`^${scope.phase}-[0-9]+-PLAN\\.md$`).test(name)).sort();
+  const names = fs.readdirSync(directory).filter((name) => new RegExp(`^0*${scope.phase}-[0-9]+-PLAN\\.md$`).test(name)).sort();
   if (!names.length) fail('MISSING_ARTIFACT', 'no materialized PLAN.md files were found in ' + directory);
   const plans = [...(fs.existsSync(path.join(directory, 'CONTEXT.md')) ? ['CONTEXT.md'] : []), ...names]
     .map((name) => path.join(directory, name));

@@ -23,6 +23,8 @@ test('claudePolicy names both the router and the investigate route', () => {
   const text = claudePolicy();
   assert.match(text, /\/shipyard:route/);
   assert.match(text, /\/shipyard:investigate/);
+  assert.match(text, /claude-sonnet-5-5/);
+  assert.match(text, /claude-opus-5-5/);
 });
 
 test('codexBlock is marker-delimited and names the investigate route for phase 1 and 2', () => {
@@ -32,6 +34,9 @@ test('codexBlock is marker-delimited and names the investigate route for phase 1
     assert.strictEqual(block.endsWith(AUTO_ROUTE_END), true);
     assert.match(block, /\$shipyard-investigate/);
     assert.match(block, /\$shipyard-route/);
+    assert.match(block, /gpt-6\.1-sol/);
+    assert.match(block, /Sol\/low/);
+    assert.match(block, /Luna\/medium/);
   }
 });
 

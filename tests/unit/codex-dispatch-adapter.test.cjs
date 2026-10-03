@@ -124,11 +124,11 @@ suite('strict Codex adapter — canonical launches and application evidence');
 test('all base roles receive explicit ADR-014 selections', () => {
   const f = setup();
   const expected = {
-    research: ['gpt-6-sol', 'high'], decomposition: ['gpt-6-sol', 'high'],
-    executor: ['gpt-6-luna', 'max'], 'pr-sentinel': ['gpt-6-luna', 'medium'],
-    integrator: ['gpt-6-sol', 'high'], 'drift-check': ['gpt-6-luna', 'max'],
-    'arch-review': ['gpt-6-sol', 'high'], 'ci-fix': ['gpt-6-luna', 'max'],
-    'review-fix': ['gpt-6-luna', 'max'],
+    research: ['gpt-6.1-sol', 'high'], decomposition: ['gpt-6.1-sol', 'high'],
+    executor: ['gpt-6.1-sol', 'low'], 'pr-sentinel': ['gpt-6-luna', 'medium'],
+    integrator: ['gpt-6.1-sol', 'high'], 'drift-check': ['gpt-6.1-sol', 'low'],
+    'arch-review': ['gpt-6.1-sol', 'high'], 'ci-fix': ['gpt-6.1-sol', 'low'],
+    'review-fix': ['gpt-6.1-sol', 'low'],
   };
   try {
     for (const [role, [model, effort]] of Object.entries(expected)) {
@@ -155,12 +155,12 @@ test('research, dynamic and judgement escalation use exact canonical files/argum
   const f = setup();
   try {
     for (const [role, signals, model, effort, suffix] of [
-      ['research', { type: 'alternatives' }, 'gpt-6-sol', 'high', '.toml'],
-      ['research', { complexity: 'very-complex' }, 'gpt-6-sol', 'xhigh', '-critical.toml'],
-      ['executor', { critical: true }, 'gpt-6-sol', 'high', null],
-      ['decomposition', { checkpoint: true }, 'gpt-6-sol', 'xhigh', null],
-      ['integrator', { contested: true }, 'gpt-6-sol', 'xhigh', '-critical.toml'],
-      ['arch-review', { inputTokens: 250001 }, 'gpt-6-sol', 'xhigh', '-critical.toml'],
+      ['research', { type: 'alternatives' }, 'gpt-6.1-sol', 'high', '.toml'],
+      ['research', { complexity: 'very-complex' }, 'gpt-6.1-sol', 'xhigh', '-critical.toml'],
+      ['executor', { critical: true }, 'gpt-6.1-sol', 'high', null],
+      ['decomposition', { checkpoint: true }, 'gpt-6.1-sol', 'xhigh', null],
+      ['integrator', { contested: true }, 'gpt-6.1-sol', 'xhigh', '-critical.toml'],
+      ['arch-review', { inputTokens: 250001 }, 'gpt-6.1-sol', 'xhigh', '-critical.toml'],
     ]) {
       const result = f.boundary.dispatch({ runtime: 'codex', role, signals });
       assert.equal(result.applied_model, model);
@@ -177,9 +177,9 @@ test('repair escalation consumes boundary-verified predecessor receipts through 
       const base = f.boundary.dispatch({ runtime: 'codex', role });
       const repeat = f.boundary.dispatch({ runtime: 'codex', role, previous_dispatch_id: base.dispatch_id, signals: { signatureState: 'repeat', priorApplied: base.receipt } });
       const deep = f.boundary.dispatch({ runtime: 'codex', role, previous_dispatch_id: repeat.dispatch_id, signals: { signatureState: 'repeat_exhausted', priorApplied: repeat.receipt } });
-      assert.equal(repeat.applied_model, 'gpt-6-sol');
+      assert.equal(repeat.applied_model, 'gpt-6.1-sol');
       assert.equal(repeat.applied_effort, 'high');
-      assert.equal(deep.applied_model, 'gpt-6-sol');
+      assert.equal(deep.applied_model, 'gpt-6.1-sol');
       assert.equal(deep.applied_effort, 'xhigh');
     }
   } finally { clean(f); }
@@ -212,7 +212,7 @@ for (const [name, mutate] of [
 for (const [name, change] of [
   ['duplicate model', (text) => text.replace('developer_instructions', 'model = "gpt-6-luna"\ndeveloper_instructions')],
   ['nested model table', (text) => text.replace('model = ', '[other]\nmodel = ')],
-  ['model only inside instructions', (text) => text.replace('model = "gpt-6-sol"\n', '').replace('Run the exact role.', 'model = "gpt-6-luna"')],
+  ['model only inside instructions', (text) => text.replace('model = "gpt-6.1-sol"\n', '').replace('Run the exact role.', 'model = "gpt-6-luna"')],
   ['policy only inside instructions', (text) => text.replace('# shipyard-policy-role = "arch-review"\n', '').replace('Run the exact role.', '# shipyard-policy-role = "arch-review"')],
   ['duplicate policy comment', (text) => '# shipyard-policy-role = "arch-review"\n' + text],
   ['configuration after instructions', (text) => text + 'model = "gpt-6-luna"\n'],
@@ -585,7 +585,7 @@ test('asynchronous native application evidence is verified and recorded', async 
   try {
     const result = await f.boundary.dispatch({ runtime: 'codex', role: 'executor' });
     assert.equal(result.receipt.compliance, 'verified');
-    assert.equal(result.applied_effort, 'max');
+    assert.equal(result.applied_effort, 'low');
   } finally { clean(f); }
 });
 

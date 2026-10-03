@@ -1,22 +1,55 @@
 'use strict';
 
 // Runtime-owned concrete palettes. The canonical policy owns the role grids and
-// evidence rules; each runtime names its own native model keys. Claude's keys
-// are the existing aliases themselves and are intentionally not translations of
-// Codex's Luna/Sol vocabulary. Astra remains registered for compatibility with
-// older explicit configurations, but is not selected by the current grid.
+// evidence rules; each runtime names its own pinned native model keys. Claude's
+// keys are intentionally not translations of Codex's Luna/Sol vocabulary.
+// Astra remains registered for compatibility, but is not selected by the grid.
 
 const CODEX_MODEL_IDS = Object.freeze({
   luna: 'gpt-6-luna',
   astra: 'gpt-6-astra',
-  sol: 'gpt-6-sol',
+  sol: 'gpt-6.1-sol',
 });
 
 const CLAUDE_MODEL_ALIASES = Object.freeze({
-  sonnet: 'sonnet',
+  sonnet: 'claude-sonnet-5-5',
   opus: 'claude-opus-5-5',
   fable: 'fable',
 });
+
+const RECORDED_PALETTES = Object.freeze({
+  'adr-014.v6': Object.freeze({
+    codex: Object.freeze({ luna: 'gpt-6-luna', astra: 'gpt-6-astra', sol: 'gpt-6-sol' }),
+    claude: Object.freeze({ sonnet: 'sonnet', opus: 'claude-opus-5-5', fable: 'fable' }),
+  }),
+  'adr-014.v7': Object.freeze({ codex: CODEX_MODEL_IDS, claude: CLAUDE_MODEL_ALIASES }),
+});
+
+const RECORDED_POLICIES = Object.freeze({
+  'adr-014.v6': Object.freeze({
+    policy_version: 'adr-014.v6',
+    policy_hash: '30e71fb4066fee5b67df14120532c0b4f8aedde169907bc16f70dd2569744968',
+    palettes: RECORDED_PALETTES['adr-014.v6'],
+  }),
+});
+
+function recordedPolicyFor(version, activePolicyIdentity) {
+  if (Object.hasOwn(RECORDED_POLICIES, version)) return RECORDED_POLICIES[version];
+  if (activePolicyIdentity && version === activePolicyIdentity.policy_version
+      && Object.hasOwn(RECORDED_PALETTES, version)) {
+    return Object.freeze({
+      policy_version: version,
+      policy_hash: activePolicyIdentity.policy_hash,
+      palettes: RECORDED_PALETTES[version],
+    });
+  }
+  return undefined;
+}
+
+function recordedPalette(version, runtime) {
+  return Object.prototype.hasOwnProperty.call(RECORDED_PALETTES, version)
+    ? RECORDED_PALETTES[version][runtime] : undefined;
+}
 
 function modelFor(runtime, modelKey) {
   const map = runtime === 'codex' ? CODEX_MODEL_IDS : runtime === 'claude' ? CLAUDE_MODEL_ALIASES : null;
@@ -25,7 +58,6 @@ function modelFor(runtime, modelKey) {
 
 function matchesModelObservation(runtime, observed, applied) {
   if (typeof observed !== 'string' || typeof applied !== 'string') return false;
-  if (runtime === 'claude' && applied === 'sonnet') return /^claude-sonnet-\d+(?:-[A-Za-z0-9.]+)*$/.test(observed);
   if (runtime === 'claude' && applied === 'fable') return /^claude-fable-[A-Za-z0-9]+(?:[-.][A-Za-z0-9]+)*$/.test(observed);
   return observed === applied;
 }
@@ -53,6 +85,8 @@ function adapterForRuntime(runtime) {
 // resolution captures its own mapping snapshot and never dispatches through
 // these replaceable entrypoints.
 module.exports = Object.freeze({
+  recordedPalette,
+  recordedPolicyFor,
   CODEX_MODEL_IDS,
   CLAUDE_MODEL_ALIASES,
   RUNTIME_ADAPTERS,

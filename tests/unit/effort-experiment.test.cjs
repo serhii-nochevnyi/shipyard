@@ -159,7 +159,7 @@ test('normalizeExperiment refuses fewer than two arms and more than one baseline
   );
 });
 
-test('a valid Claude executor definition with a max baseline and a high candidate is accepted', () => {
+test('a valid Claude executor definition with a medium baseline and a high candidate is accepted', () => {
   const normalized = normalizeExperiment(claudeExecutorExperiment());
   assert.equal(normalized.schema, EXPERIMENT_SCHEMA);
   assert.equal(normalized.runtime, 'claude');
@@ -185,12 +185,12 @@ test('an eligible unit counts a ci-fix repair row and a critical-rung escalation
 
     recorder.record(overheadRow({
       observation_id: 'assign', run_id: 'run-1', dispatch_id: 'dispatch-1',
-      role: 'executor', model: experiment.model, effort: 'max', policy_hash: experiment.policy_hash,
+      role: 'executor', model: experiment.model, effort: 'medium', policy_hash: experiment.policy_hash,
       estimated_tokens: 100,
     }));
     recorder.record(overheadRow({
       observation_id: 'repair', run_id: 'run-1', dispatch_id: 'dispatch-2',
-      role: 'ci-fix', model: 'opus', effort: 'medium', policy_hash: experiment.policy_hash,
+      role: 'ci-fix', model: baseRungOf('claude', 'ci-fix').model_key, effort: baseRungOf('claude', 'ci-fix').effort, policy_hash: experiment.policy_hash,
       estimated_tokens: 50,
     }));
     recorder.record(overheadRow({
@@ -200,7 +200,7 @@ test('an eligible unit counts a ci-fix repair row and a critical-rung escalation
     }));
     recorder.record(overheadRow({
       observation_id: 'orphan', run_id: 'run-unknown', dispatch_id: 'dispatch-4',
-      role: 'executor', model: experiment.model, effort: 'max', policy_hash: experiment.policy_hash,
+      role: 'executor', model: experiment.model, effort: 'medium', policy_hash: experiment.policy_hash,
       estimated_tokens: 999,
     }));
 
@@ -232,7 +232,7 @@ test('below the floor, under attribution, or under seven observed days the verdi
     const experiment = normalizeExperiment(claudeExecutorExperiment());
     const outcomes = [];
     for (let i = 0; i < 5; i++) {
-      outcomes.push(verifiedUnit(recorder, { effort: 'max', index: i, day: 0, model: experiment.model }));
+      outcomes.push(verifiedUnit(recorder, { effort: 'medium', index: i, day: 0, model: experiment.model }));
     }
     for (let i = 0; i < 25; i++) {
       outcomes.push(verifiedUnit(recorder, { effort: 'high', index: i, day: 0, model: experiment.model }));
@@ -252,9 +252,9 @@ test('under 0.95 attribution the verdict is inconclusive even with both arms abo
     const recorder = overhead.createRecorder(graph);
     const experiment = normalizeExperiment(claudeExecutorExperiment());
     const outcomes = [];
-    for (const effort of ['max', 'high']) {
+    for (const effort of ['medium', 'high']) {
       for (let i = 0; i < 20; i++) {
-        const attributionStatus = effort === 'max' && i < 4 ? 'missing' : 'observed';
+        const attributionStatus = effort === 'medium' && i < 4 ? 'missing' : 'observed';
         outcomes.push(verifiedUnit(recorder, { effort, index: i, day: 0, model: experiment.model, attributionStatus }));
       }
     }
@@ -274,7 +274,7 @@ test('under seven observed days the verdict is inconclusive even with floor and 
     const recorder = overhead.createRecorder(graph);
     const experiment = normalizeExperiment(claudeExecutorExperiment());
     const outcomes = [];
-    for (const effort of ['max', 'high']) {
+    for (const effort of ['medium', 'high']) {
       for (let i = 0; i < 20; i++) {
         outcomes.push(verifiedUnit(recorder, { effort, index: i, day: 0, model: experiment.model }));
       }
@@ -295,7 +295,7 @@ test('above the floor, at full attribution and spanning seven days the verdict i
     const recorder = overhead.createRecorder(graph);
     const experiment = normalizeExperiment(claudeExecutorExperiment());
     const outcomes = [];
-    for (const effort of ['max', 'high']) {
+    for (const effort of ['medium', 'high']) {
       for (let i = 0; i < 20; i++) {
         outcomes.push(verifiedUnit(recorder, { effort, index: i, day: i % 2 === 0 ? 0 : 7, model: experiment.model }));
       }
@@ -322,7 +322,7 @@ test('a decision record with a stale evidence_digest is ignored with a reason; '
     const recorder = overhead.createRecorder(graph);
     const experiment = normalizeExperiment(claudeExecutorExperiment());
     const outcomes = [];
-    for (const effort of ['max', 'high']) {
+    for (const effort of ['medium', 'high']) {
       for (let i = 0; i < 20; i++) {
         outcomes.push(verifiedUnit(recorder, { effort, index: i, day: i % 2 === 0 ? 0 : 7, model: experiment.model }));
       }
@@ -361,7 +361,7 @@ test('a candidate arm with more failed or abandoned work than the baseline yield
     const experiment = normalizeExperiment(claudeExecutorExperiment());
     const outcomes = [];
     for (let i = 0; i < 20; i++) {
-      outcomes.push(verifiedUnit(recorder, { effort: 'max', index: i, day: 0, model: experiment.model }));
+      outcomes.push(verifiedUnit(recorder, { effort: 'medium', index: i, day: 0, model: experiment.model }));
     }
     for (let i = 0; i < 12; i++) {
       outcomes.push(verifiedUnit(recorder, { effort: 'high', index: i, day: 0, model: experiment.model }));
@@ -418,13 +418,13 @@ test('the report CLI leaves the graph dir byte-unchanged and exits 2 on invalid 
   try {
     const recorder = overhead.createRecorder(graph);
     const experiment = normalizeExperiment(claudeExecutorExperiment());
-    verifiedUnit(recorder, { effort: 'max', index: 0, day: 0, model: experiment.model });
+    verifiedUnit(recorder, { effort: 'medium', index: 0, day: 0, model: experiment.model });
 
     const experimentFile = path.join(root, 'experiment.json');
     const outcomesFile = path.join(root, 'outcomes.json');
     fs.writeFileSync(experimentFile, JSON.stringify(claudeExecutorExperiment()));
     fs.writeFileSync(outcomesFile, JSON.stringify([
-      { ticket: 'T-CLI', run_ids: ['run-max-0'], outcome: 'verified', completed_at: new Date(0).toISOString() },
+      { ticket: 'T-CLI', run_ids: ['run-medium-0'], outcome: 'verified', completed_at: new Date(0).toISOString() },
     ]));
 
     const streamFile = path.join(graph, overhead.STREAM_NAME);

@@ -190,8 +190,8 @@ function fakeRuntimeFactory(fixture, options = {}) {
       controller,
       recorder,
       capabilities: {
-        supportedModels: ['claude-opus-5-5', 'claude-fable-5', 'sonnet'],
-        supportedEfforts: ['low', 'medium', 'high', 'max'],
+        supportedModels: ['claude-opus-5-5', 'claude-fable-5', 'claude-sonnet-5-5'],
+        supportedEfforts: ['low', 'medium', 'high', 'xhigh', 'max'],
         observedModel: true,
         observedEffort: true,
       },
@@ -455,8 +455,8 @@ test('pr-sentinel derives and records one authenticated round for all live phase
       },
     })).run(request(fixture));
     const packet = packetFromPrompt(launched.prompt);
-    assert.equal(launched.selection.model, 'sonnet');
-    assert.equal(launched.selection.effort, 'high');
+    assert.equal(launched.selection.model, 'claude-sonnet-5-5');
+    assert.equal(launched.selection.effort, 'low');
     assert.equal(packet.role_context.ticket_set.length, 2);
     assert.equal(result.subject, `round:${packet.role_context.ticket_set_digest}`);
     assert.equal(result.dispatch.trace.at(-1).stage, 'receipt');

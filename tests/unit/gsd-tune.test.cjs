@@ -166,26 +166,65 @@ test('a foreign projection is reported and never overwritten', () => {
   assert.equal(fs.readFileSync(file, 'utf8'), before, 'foreign content is preserved');
 });
 
-test('GSD\'s two context-bound agents take the paid tier on the SAME terms as ours', () => {
-  // They had `fable` unconditionally, on the identical 1M-window argument that
-  // ADR-005 retired for `arch-review` on a measurement. So: `opus` by default,
-  // and `fable` only where a person has consented through pipeline.fable.
-  const shut = keyed(driftOf(project({}), ['--runtime', 'claude']));
-  assert.equal(shut['model_overrides.gsd-planner'].want, 'opus');
-  assert.equal(shut['model_overrides.gsd-code-reviewer'].want, 'opus');
-  const consented = keyed(driftOf(project({ pipeline: { fable: 'auto' } }), ['--runtime', 'claude']));
-  assert.equal(consented['model_overrides.gsd-planner'].want, 'fable');
-  assert.equal(consented['model_overrides.gsd-code-reviewer'].want, 'fable');
-  // And via model_overrides, NOT the tier keys: the resolver's runtime-tier step
-  // is guarded by `configRuntime !== 'claude'`, so model_profile_overrides.claude.*
-  // is inert — it looks like the lever and does nothing.
-  assert.equal(shut['model_profile_overrides.claude.opus'], undefined,
-    'the inert key must not be written — it would read as a working setting');
-
-  const codex = keyed(driftOf(project({ pipeline: { fable: 'auto' } }), ['--runtime', 'codex']));
-  for (const k of Object.keys(codex)) {
-    assert.ok(!k.startsWith('model_overrides.'), `${k}: fable does not exist off Claude`);
+test('tuner leaves native planner and reviewer selection to routed policy', () => {
+  for (const runtime of ['claude', 'codex']) {
+    for (const fable of ['off', 'auto']) {
+      const dir = project({ pipeline: { fable }, model_overrides: { 'gsd-verifier': 'sonnet' } });
+      const d = keyed(driftOf(dir, ['--runtime', runtime]));
+      for (const agent of ['gsd-planner', 'gsd-code-reviewer']) {
+        assert.equal(d[`model_overrides.${agent}`], undefined);
+      }
+      assert.equal(run(dir, ['--runtime', runtime, '--apply']).status, 0);
+      assert.deepEqual(readCfg(dir).model_overrides, { 'gsd-verifier': 'sonnet' });
+      assert.equal(readCfg(dir).pipeline.fable, fable);
+      const { config } = pc.loadConfig(dir, { runtime, env: {}, routed: true });
+      const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
+      for (const role of ['decomposition', 'arch-review']) {
+        assert.deepEqual(pc.resolveDispatch({ config, role }), policy.resolveDispatch({ runtime, role }));
+      }
+    }
   }
+});
+
+test('old tuner project overrides block apply without claiming ownership or writing files', () => {
+  for (const runtime of ['claude', 'codex']) {
+    for (const value of ['opus', 'fable']) {
+      const dir = project({
+        pipeline: { fable: 'auto', reviewer: 'copilot' },
+        model_overrides: { 'gsd-planner': value, 'gsd-code-reviewer': value, 'gsd-verifier': 'sonnet' },
+        agent_skills: { 'gsd-executor': ['operator-skill'] },
+      });
+      const file = path.join(dir, '.planning', 'config.json');
+      const before = fs.readFileSync(file, 'utf8');
+      const report = run(dir, ['--runtime', runtime, '--json']);
+      assert.equal(report.status, 1);
+      const blockers = JSON.parse(report.stdout).blockers;
+      assert.deepEqual(blockers.map((blocker) => blocker.key),
+        ['model_overrides.gsd-planner', 'model_overrides.gsd-code-reviewer']);
+      for (const blocker of blockers) {
+        assert.equal(blocker.have, value);
+        assert.ok(/does not prove ownership/.test(blocker.why), blocker.why);
+        assert.ok(blocker.why.includes(`explicitly remove ${blocker.key}`), blocker.why);
+      }
+      for (const args of [[], ['--json']]) {
+        const applied = run(dir, ['--runtime', runtime, '--apply', ...args]);
+        assert.equal(applied.status, 1);
+        assert.ok(/refusing --apply/.test(applied.stderr), applied.stderr);
+        assert.equal(fs.readFileSync(file, 'utf8'), before);
+        assert.equal(fs.existsSync(path.join(dir, PROJECT_DELIVERY_RULES)), false);
+        assert.equal(fs.existsSync(`${file}.gsd-tune.tmp`), false);
+      }
+    }
+  }
+});
+
+test('compatible operator planner and reviewer overrides survive apply', () => {
+  const overrides = { 'gsd-planner': 'sonnet', 'gsd-code-reviewer': 'sonnet', 'gsd-verifier': 'sonnet' };
+  const dir = project({ pipeline: { fable: 'off', reviewer: 'copilot' }, model_overrides: overrides });
+  const applied = run(dir, ['--runtime', 'claude', '--apply']);
+  assert.equal(applied.status, 0, applied.stderr);
+  assert.deepEqual(readCfg(dir).model_overrides, overrides);
+  assert.deepEqual(readCfg(dir).pipeline, { fable: 'off', reviewer: 'copilot' });
 });
 
 test('models.* is Claude-only (D-24): Codex proposes none of it, Claude still proposes all four', () => {

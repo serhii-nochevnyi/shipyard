@@ -965,7 +965,6 @@ function renderVerification(phase, evidence, fingerprint) {
     '',
     '## Verification Commands',
     '',
-    '- `node plugins/delivery-pipeline/scripts/gsd-sync.cjs --check --json`',
     '- `gsd-tools phase uat-passed ' + phase.number + ' --raw`',
     '',
     '## Gaps Summary',

@@ -1,0 +1,228 @@
+{
+  "schema": "shipyard.advisory-model-research.v1",
+  "date": "2026-09-30",
+  "status": "advisory proposal; not accepted policy or authenticated INV",
+  "checkout_head": "22ef429b5cf6f7326065e11ba9c5b56c4bfe4f13",
+  "remote_tracking_head": "9e9ddbf575c8ab3f8265b0641f5df9a1bebd2245",
+  "installed_policy": {
+    "policy_version": "adr-014.v6",
+    "policy_hash": "30e71fb4066fee5b67df14120532c0b4f8aedde169907bc16f70dd2569744968"
+  },
+  "cli_versions": {
+    "codex": "codex-cli 0.159.2",
+    "claude": "2.1.285 (Claude Code)"
+  },
+  "files": [
+    {
+      "path": ".planning/architecture/ADR-014-mandatory-runtime-model-ladder.md",
+      "bytes": 10066,
+      "sha256": "1e674e55319918996af8032d94c30f4bb5d3ae43845af0c0b2a8d925d8a22886",
+      "kind": "current inspected file; may contain pre-existing edits"
+    },
+    {
+      "path": "plugins/delivery-pipeline/scripts/runtime-adapters.cjs",
+      "bytes": 2143,
+      "sha256": "949748da1bccd51704f9a7382cce5a93b1c58f7acfea21f2ffffe315831a05e5",
+      "kind": "current inspected file; may contain pre-existing edits"
+    },
+    {
+      "path": "docs/audits/2026-09-25-claude-session-efficiency.md",
+      "bytes": 13643,
+      "sha256": "1ed851aaf0c889112c5478246ce4673312b158a4718395f2e48c21c1693964de",
+      "kind": "current inspected file; may contain pre-existing edits"
+    },
+    {
+      "path": "docs/audits/2026-09-30-pipeline-critical-analysis.md",
+      "bytes": 39586,
+      "sha256": "ee32b59d9670fc2ce57a37e9dbc5030c5e04a8c01a04b14bfcd73ee32a261da8",
+      "kind": "current inspected file; may contain pre-existing edits"
+    },
+    {
+      "path": "docs/audits/2026-09-30-phase45-planning-brief.md",
+      "bytes": 17323,
+      "sha256": "b0150d723d52f29151d9d8858a1b16e07b09afebaedb54a13d335cc014d986df",
+      "kind": "current inspected file; may contain pre-existing edits"
+    },
+    {
+      "path": "docs/audits/2026-09-30-model-ladder-refresh.md",
+      "bytes": 20746,
+      "sha256": "3945e5cd88babd406299d73946a3fe4b69c2756afc36bfdddbd26c7aabb50d48",
+      "kind": "current inspected file; may contain pre-existing edits"
+    },
+    {
+      "path": "/Users/serhii/.codex/shipyard/scripts/model-policy-internal.cjs",
+      "bytes": 46213,
+      "sha256": "2e2c217cd180ab96ce94ad00c44b1c8445451bb7f3bd418bb935475fc4930cbd",
+      "kind": "current inspected file; may contain pre-existing edits"
+    },
+    {
+      "path": "/Users/serhii/.codex/shipyard/scripts/runtime-adapters.cjs",
+      "bytes": 2143,
+      "sha256": "949748da1bccd51704f9a7382cce5a93b1c58f7acfea21f2ffffe315831a05e5",
+      "kind": "current inspected file; may contain pre-existing edits"
+    },
+    {
+      "path": "/Users/serhii/.codex/shipyard/scripts/codex-model-remap.cjs",
+      "bytes": 9599,
+      "sha256": "ad03617d0e74cdc65ec4af29cd8a249fdb2b3547e6f0f78d8030c78f5df87ab7",
+      "kind": "current inspected file; may contain pre-existing edits"
+    },
+    {
+      "path": "/Volumes/KINGSTON/.wt-claude-shipyard/deliver45/.planning/phases/45-close-residual-pipeline-efficiency-gaps/MODEL-ROUTING-RESEARCH.md",
+      "bytes": 14824,
+      "sha256": "1ae2c1d7fda544a8ccbc68f467f67aed57fe5f01ad4ea92ae009e296a8214b3a",
+      "kind": "current inspected file; may contain pre-existing edits"
+    }
+  ],
+  "remote_snapshot_files": [
+    {
+      "path": ".planning/architecture/ADR-021-subscription-efficiency-per-runtime.md",
+      "bytes": 10618,
+      "sha256": "fc64afb80278a3c9c16b3b7ceea456527c60baa5e8c6a7ea4e7bd86fc948f220",
+      "revision": "9e9ddbf575c8ab3f8265b0641f5df9a1bebd2245",
+      "kind": "frozen remote-tracking snapshot, not live GitHub"
+    },
+    {
+      "path": ".planning/architecture/ADR-022-review-stage-efficiency.md",
+      "bytes": 5141,
+      "sha256": "30e3b3f28a6082e78da9c1765c4248df18fee662bffc8db16075963572b922f6",
+      "revision": "9e9ddbf575c8ab3f8265b0641f5df9a1bebd2245",
+      "kind": "frozen remote-tracking snapshot, not live GitHub"
+    },
+    {
+      "path": ".planning/architecture/ADR-023-residual-pipeline-efficiency.md",
+      "bytes": 5465,
+      "sha256": "762e5c2b4f4507bf458314acc81cb600b45136e05ad8b4c23a97a4a409ddf41d",
+      "revision": "9e9ddbf575c8ab3f8265b0641f5df9a1bebd2245",
+      "kind": "frozen remote-tracking snapshot, not live GitHub"
+    }
+  ],
+  "official_sources": [
+    {
+      "url": "https://www.anthropic.com/claude-sonnet-5-5",
+      "retrieved_on": "2026-09-30",
+      "method": "web open/click; actual page inspected"
+    },
+    {
+      "url": "https://www.anthropic.com/claude-opus-5-5",
+      "retrieved_on": "2026-09-30",
+      "method": "web open/click; actual page inspected"
+    },
+    {
+      "url": "https://code.claude.com/docs/en/model-config",
+      "retrieved_on": "2026-09-30",
+      "method": "web open/click; actual page inspected"
+    },
+    {
+      "url": "https://learn.chatgpt.com/docs/changelog",
+      "retrieved_on": "2026-09-30",
+      "method": "web open/click; actual page inspected"
+    },
+    {
+      "url": "https://learn.chatgpt.com/docs/models",
+      "retrieved_on": "2026-09-30",
+      "method": "web open/click; actual page inspected"
+    },
+    {
+      "url": "https://learn.chatgpt.com/docs/pricing",
+      "retrieved_on": "2026-09-30",
+      "method": "web open/click; actual page inspected"
+    },
+    {
+      "url": "https://learn.chatgpt.com/docs/agent-configuration/speed",
+      "retrieved_on": "2026-09-30",
+      "method": "web open/click; actual page inspected"
+    },
+    {
+      "url": "https://developers.openai.com/api/docs/models/gpt-6.1-sol",
+      "retrieved_on": "2026-09-30",
+      "method": "web open/click; actual page inspected"
+    }
+  ],
+  "context7": {
+    "queried": [
+      "Claude Code",
+      "OpenAI Codex"
+    ],
+    "result": "Monthly quota exceeded",
+    "fallback": "official vendor documentation; OpenAI Docs skill"
+  },
+  "verification": {
+    "source_inspection": true,
+    "installed_policy_read": true,
+    "cli_version_read": true,
+    "native_model_launch": false,
+    "account_entitlement_verified": false,
+    "benchmark_run": false,
+    "quota_savings_measured": false,
+    "production_policy_changed": false
+  },
+  "commands": [
+    "git status --short",
+    "git log -10 --date=iso",
+    "git rev-parse HEAD origin/main",
+    "git show origin/main:<ADR-021/022/023 path>",
+    "node /Users/serhii/.codex/shipyard/scripts/model-policy.cjs fingerprint",
+    "codex --version",
+    "claude --version",
+    "targeted rg/sed source and audit reads"
+  ],
+  "limitations": [
+    "No live GitHub reconciliation or fetch",
+    "Pre-existing dirty checkout remains untouched",
+    "Existing usage findings were read, not re-measured",
+    "New model access/application requires future bounded dispatch",
+    "No API pricing to subscription percentage conversion"
+  ],
+  "proposal_revisions": [
+    {
+      "date": "2026-09-30",
+      "authority": "explicit operator instruction in conversation",
+      "replacement": {
+        "from": {
+          "model": "gpt-6-luna",
+          "effort": "max"
+        },
+        "to": {
+          "model": "gpt-6.1-sol",
+          "effort": "low"
+        }
+      },
+      "roles": [
+        "executor",
+        "ci-fix",
+        "review-fix",
+        "drift-check",
+        "routine outer Codex coordination"
+      ],
+      "scope": "proposal only; historical controls and installed policy preserved",
+      "unchanged_selection": "pr-sentinel gpt-6-luna/medium"
+    },
+    {
+      "date": "2026-09-30",
+      "authority": "explicit operator instruction in conversation",
+      "replacement": {
+        "from": {
+          "model": "claude-opus-5-5",
+          "effort": "medium"
+        },
+        "to": {
+          "model": "claude-sonnet-5-5",
+          "effort": "xhigh"
+        }
+      },
+      "roles": [
+        "research",
+        "decomposition",
+        "arch-review",
+        "integrator",
+        "executor critical/checkpoint rung",
+        "ci-fix repeat rung",
+        "review-fix repeat rung",
+        "outer Claude design/recovery coordination"
+      ],
+      "scope": "proposal only; historical controls and installed policy preserved",
+      "unchanged_selection": "Opus 5.5/high capability escalation"
+    }
+  ]
+}

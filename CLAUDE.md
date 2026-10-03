@@ -21,7 +21,7 @@ Codex uses its marketplace package and automatically installs the GSD plugin:
 
 ```bash
 make package-shipyard-codex
-node scripts/install-shipyard-marketplace.cjs codex --source "$PWD"
+bash scripts/ensure-gsd-core.sh --launch-marketplace codex --source "$PWD"
 ```
 
 The installers write only to the selected runtime homes. Set `CLAUDE_HOME`,
@@ -85,18 +85,21 @@ parsing, graph validation, ticket and PR matching, state synchronization,
 worktree lifecycle, dispatch records, model resolution, convergence and stop
 conditions. When adding a rule, add a focused unit or fixture test with it.
 
-**Active routed dispatch policy (ADR-014, accepted):** ADR-014 supersedes ADR-005 and ADR-012 for model and effort selection. The one boundary contract has two independent native grids: Codex uses Luna/Sol (`gpt-6-luna`/`gpt-6-sol`); Claude uses Sonnet/Opus/Fable (`sonnet`/`claude-opus-5-5`/`fable`). Do not alias either grid through the other, and do not use a compatibility palette, generic GSD tier default, or per-role override as launch authority.
+**Active routed dispatch policy (ADR-014 v7, accepted):** ADR-014 supersedes ADR-005 and ADR-012 for model and effort selection. The one boundary contract has two independent native grids: Codex Sol is `gpt-6.1-sol`, Luna is `gpt-6-luna`; Claude Sonnet is `claude-sonnet-5-5`, Opus is `claude-opus-5-5`, and Fable is a measured-window-only ceiling. Do not alias either grid through the other, and do not use a compatibility palette, generic GSD tier default, or per-role override as launch authority.
 
-**Codex grid:** research Sol/high → Sol/xhigh only for explicit very-complex; decomposition Sol/high → Sol/xhigh only for explicit critical/checkpoint; executor Luna/max → Sol/high only for explicit `critical`/`checkpoint`; pr-sentinel Luna/medium; integrator Sol/high → Sol/xhigh only for contested, explicit `critical`/`checkpoint`, or a measured window; drift-check Luna/max; arch-review Sol/high → Sol/xhigh only for contested, explicit `critical`/`checkpoint`, or a measured window; ci-fix and review-fix Luna/max → Sol/high for verified `repeat` → Sol/xhigh for verified `repeat_exhausted`.
+**Codex grid:** research Sol/high → Sol/xhigh only for explicit very-complex; decomposition Sol/high → Sol/xhigh only for explicit critical/checkpoint; executor Sol/low → Sol/high only for explicit `critical`/`checkpoint`; pr-sentinel Luna/medium; integrator Sol/high → Sol/xhigh only for contested, explicit `critical`/`checkpoint`, or a measured window; drift-check Sol/low; arch-review Sol/high → Sol/xhigh only for contested, explicit `critical`/`checkpoint`, or a measured window; ci-fix and review-fix Sol/low → Sol/high for verified `repeat` → Sol/xhigh for verified `repeat_exhausted`.
 
-**Claude grid:** research Opus/medium → Opus/high only for explicit `very-complex` (`alternatives` remains evidence but does not promote); decomposition Opus/medium → Opus/high only for explicit `critical`/`checkpoint`; executor Sonnet/max → Opus/low only for explicit `critical`/`checkpoint`; pr-sentinel Sonnet/high; integrator Opus/medium → Opus/high only for `contested`, explicit `critical`/`checkpoint`, or a measured window; drift-check Opus/high; arch-review Opus/medium → Opus/high for `critical`/`checkpoint`/`contested` → Fable/medium for a measured window; ci-fix and review-fix Opus/medium → Opus/high for verified `repeat` or `repeat_exhausted`. Fixed mechanical roles do not promote from global window or complexity signals.
+**Claude grid:** research Sonnet/xhigh → Opus/high only for explicit `very-complex` (`alternatives` remains evidence but does not promote); decomposition Sonnet/xhigh → Opus/high only for explicit `critical`/`checkpoint`; executor Sonnet/medium → Sonnet/xhigh only for explicit `critical`/`checkpoint`; pr-sentinel Sonnet/low; integrator Sonnet/xhigh → Opus/high only for `contested`, explicit `critical`/`checkpoint`, or a measured window; drift-check Sonnet/medium; arch-review Sonnet/xhigh → Opus/high for `critical`/`checkpoint`/`contested` → Fable/medium for a measured window; ci-fix and review-fix Sonnet/high → Sonnet/xhigh for verified `repeat` → Opus/high for verified `repeat_exhausted`. Fixed mechanical roles do not promote from global window or complexity signals.
 
 **Mandatory boundary:** every routed launch must resolve → validate → launch → receipt. The selected runtime-native model and effort must be explicit at launch; validate the policy fingerprint and selected generated Codex agent or dynamic launch arguments before side effects; then record requested and applied model/effort with an application receipt. Unknown or ambiguous runtimes, unsupported selections, stale or missing generated variants, conflicting overrides, inline or session-inherited selection, and missing receipts hard-refuse. A successful process exit is not evidence that the runtime applied the selection. Historical ADR reasoning stays in ADR-005 and ADR-012; it is not operating guidance.
 
-`pipeline-config.cjs` is the single policy reader. It resolves the tier alias,
-effort and earned escalation for Claude dispatches. Claude launches use the runtime-native model ID, including `claude-opus-5-5`; Codex writes a concrete
+`model-policy.cjs` is the versioned reader for routed model and effort selections.
+`pipeline-config.cjs` remains a compatibility reader; it cannot authorize routed
+dispatches. Claude launches use the runtime-native model ID, including
+`claude-sonnet-5-5` and `claude-opus-5-5`; Codex writes a concrete
 model and effort into generated agent files because its agents are static.
-Codex model ids are resolved from the runtime-native ADR-014 grid; legacy
+Codex model ids are resolved from the runtime-native ADR-014 grid; the active
+policy is `adr-014.v7` and historical v6 receipts remain unchanged. Legacy
 palette input is compatibility-only and cannot authorize a routed dispatch.
 
 Fable is a Claude-only ceiling and is reached only by an explicit measured

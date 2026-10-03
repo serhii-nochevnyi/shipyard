@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 'use strict';
 
+const { isDevelopmentArtifact } = require('./development-artifacts.cjs');
+
 const fs = require('node:fs');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
@@ -397,6 +399,10 @@ function analyze(worktree, base, options = {}) {
   };
 
   for (const [relative, change] of changes) {
+    if (isDevelopmentArtifact(relative)) {
+      skipped.push({ path: relative, reason: 'development-artifact' });
+      continue;
+    }
     const language = languageFor(relative);
     if (!language) {
       skipped.push({ path: relative, reason: 'unsupported-file-type' });

@@ -1,17 +1,18 @@
 {
-  "generated_at": "2026-09-30T20:48:56.850Z",
-  "observed_at": "2026-09-30T20:48:56.850Z",
-  "generation": 401,
+  "generated_at": "2026-10-02T08:34:39.574Z",
+  "observed_at": "2026-10-02T08:34:39.574Z",
+  "generation": 419,
   "parked_by_run": [],
   "auto_merge": "epic",
-  "dispatches_applied_at": "2026-09-30T20:48:56.850Z",
+  "dispatches_applied_at": "2026-10-02T08:34:39.574Z",
   "actionable": {
     "execute": [
-      "T-45-16",
-      "T-45-17"
+      "T-46-08"
     ],
     "publish": [],
-    "fix": [],
+    "fix": [
+      "T-46-07"
+    ],
     "finalize": [],
     "merge": []
   },
@@ -23,9 +24,7 @@
     "human": []
   },
   "parked": {
-    "blocked": [
-      "T-45-18"
-    ],
+    "blocked": [],
     "done": [
       "T-20-01",
       "T-20-02",
@@ -270,18 +269,24 @@
       "T-45-12",
       "T-45-13",
       "T-45-14",
-      "T-45-15"
+      "T-45-15",
+      "T-45-16",
+      "T-45-17",
+      "T-45-18",
+      "T-46-01",
+      "T-46-04",
+      "T-46-05",
+      "T-46-06"
     ]
   },
   "why": {
-    "T-45-16": "ready — worktree + executor",
-    "T-45-17": "ready — worktree + executor",
-    "T-45-18": "T-45-16 (parent has no branch yet (nothing to cascade from)); T-45-17 (parent has no branch yet (nothing to cascade from))"
+    "T-46-07": "PR #412: 1 failing check(s)",
+    "T-46-08": "ready — worktree + executor"
   },
   "counts": {
-    "execute": 2,
+    "execute": 1,
     "publish": 0,
-    "fix": 0,
+    "fix": 1,
     "finalize": 0,
     "merge": 0,
     "ci": 0,
@@ -289,8 +294,8 @@
     "parent": 0,
     "merge_human": 0,
     "human": 0,
-    "blocked": 1,
-    "done": 244
+    "blocked": 0,
+    "done": 251
   },
   "parent_of": {},
   "actionable_count": 2,
@@ -303,11 +308,13 @@
     "free": 4
   },
   "sentinel": {
-    "duty": [],
+    "duty": [
+      "T-46-07"
+    ],
     "waiting_ci": [],
     "waiting_parent": [],
     "dispatched": [],
-    "clear": true
+    "clear": false
   },
   "roles": {
     "execute": [

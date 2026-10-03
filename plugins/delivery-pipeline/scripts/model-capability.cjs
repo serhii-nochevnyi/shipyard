@@ -99,16 +99,17 @@ function signalsForRung(rung) {
 }
 
 function fallbackInput(input, resolution) {
-  const prior = resolution.signals && resolution.signals.priorApplied;
   const rung = previousRung(resolution);
+  if (rung && (rung.name === 'repeat' || rung.name === 'repeat_exhausted')) {
+    const error = new Error('Repair capability fallback requires the fallback rung authenticated predecessor; the immediate receipt authorizes only the requested rung');
+    error.code = 'UNSUPPORTED_REPAIR_FALLBACK';
+    throw error;
+  }
   const signals = signalsForRung(rung);
-  if (prior && (rung.name === 'repeat' || rung.name === 'repeat_exhausted')) signals.priorApplied = clone(prior);
   return {
     runtime: resolution.runtime,
     role: resolution.role,
     dispatch_id: resolution.dispatch_id,
-    ...(prior && (rung.name === 'repeat' || rung.name === 'repeat_exhausted') && prior.dispatch_id
-      ? { previous_dispatch_id: prior.dispatch_id } : {}),
     signals,
     ...(input && input.gsd_role !== undefined ? { gsd_role: input.gsd_role } : {}),
   };

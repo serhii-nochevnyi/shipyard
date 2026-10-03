@@ -1,0 +1,92 @@
+{
+  "schema": "operator.verified-research.v1",
+  "source_revision": "c105349656e445275db8b72cebd398c670f1b5ae",
+  "repository": "git-common:470a3e13d2a8baca3ff1641f5e6b9a45a65dac1c5f900119f6151993466c7d64",
+  "policy_hash": "30e71fb4066fee5b67df14120532c0b4f8aedde169907bc16f70dd2569744968",
+  "lines": [
+    {
+      "id": "system-state",
+      "status": "completed",
+      "summary": "Research line system-state completed.",
+      "artifact_ref": "/Users/serhii/.local/state/shipyard/codex/ceabab6407efeae8273d57ee6b4b0bc25b5abf2cb12523549d917bdbfae34d71/planning-artifacts/f373698184c81c869c3baae95b451bd8ec57679616200eb168ca2cc8ccf7e601.json",
+      "artifact_digest": "819409dce9f3e404abaa40cb540ef4af60873f0f65f098515a5bf0dcdb664693",
+      "artifact_index": {
+        "path": "/Users/serhii/.local/state/shipyard/codex/ceabab6407efeae8273d57ee6b4b0bc25b5abf2cb12523549d917bdbfae34d71/planning-artifacts/f373698184c81c869c3baae95b451bd8ec57679616200eb168ca2cc8ccf7e601.md",
+        "bytes": 17324,
+        "content_bytes": 17324,
+        "sha256": "9d251435de7e15ad1e76d309f01a277229a6221db7f3d887b9b7ec121a650aa2",
+        "digest": "9d251435de7e15ad1e76d309f01a277229a6221db7f3d887b9b7ec121a650aa2"
+      },
+      "evidence_index": {
+        "path": "/Users/serhii/.local/state/shipyard/codex/ceabab6407efeae8273d57ee6b4b0bc25b5abf2cb12523549d917bdbfae34d71/planning-artifacts/f373698184c81c869c3baae95b451bd8ec57679616200eb168ca2cc8ccf7e601.md",
+        "bytes": 17324,
+        "content_bytes": 17324,
+        "sha256": "9d251435de7e15ad1e76d309f01a277229a6221db7f3d887b9b7ec121a650aa2",
+        "digest": "9d251435de7e15ad1e76d309f01a277229a6221db7f3d887b9b7ec121a650aa2"
+      }
+    },
+    {
+      "id": "alternatives",
+      "status": "completed",
+      "summary": "Research line alternatives completed.",
+      "artifact_ref": "/Users/serhii/.local/state/shipyard/codex/ceabab6407efeae8273d57ee6b4b0bc25b5abf2cb12523549d917bdbfae34d71/planning-artifacts/1edd56cf9321252e6501fddbf12b574ed5a51273d1cea7edfade4491a46a4715.json",
+      "artifact_digest": "d03b746cffa02c4b1c566637d3d1611bd7efc3a128ea78f8e750d281fa041237",
+      "artifact_index": {
+        "path": "/Users/serhii/.local/state/shipyard/codex/ceabab6407efeae8273d57ee6b4b0bc25b5abf2cb12523549d917bdbfae34d71/planning-artifacts/1edd56cf9321252e6501fddbf12b574ed5a51273d1cea7edfade4491a46a4715.md",
+        "bytes": 12478,
+        "content_bytes": 12478,
+        "sha256": "51c4ca5bfeec0b2e0ef3367fe159a5b6d82a686fb52c57e819d040c531a40c48",
+        "digest": "51c4ca5bfeec0b2e0ef3367fe159a5b6d82a686fb52c57e819d040c531a40c48"
+      },
+      "evidence_index": {
+        "path": "/Users/serhii/.local/state/shipyard/codex/ceabab6407efeae8273d57ee6b4b0bc25b5abf2cb12523549d917bdbfae34d71/planning-artifacts/1edd56cf9321252e6501fddbf12b574ed5a51273d1cea7edfade4491a46a4715.md",
+        "bytes": 12478,
+        "content_bytes": 12478,
+        "sha256": "51c4ca5bfeec0b2e0ef3367fe159a5b6d82a686fb52c57e819d040c531a40c48",
+        "digest": "51c4ca5bfeec0b2e0ef3367fe159a5b6d82a686fb52c57e819d040c531a40c48"
+      }
+    },
+    {
+      "id": "constraints",
+      "status": "completed",
+      "summary": "Research line constraints completed.",
+      "artifact_ref": "/Users/serhii/.local/state/shipyard/codex/ceabab6407efeae8273d57ee6b4b0bc25b5abf2cb12523549d917bdbfae34d71/planning-artifacts/1dcca85248528798383adb740c3cf4236389d039bedf443133e93eb3c37052c5.json",
+      "artifact_digest": "0f13c679d48fff43c9b530d0fe378dbe65e5965af16b43af6513c9e2638f785b",
+      "artifact_index": {
+        "path": "/Users/serhii/.local/state/shipyard/codex/ceabab6407efeae8273d57ee6b4b0bc25b5abf2cb12523549d917bdbfae34d71/planning-artifacts/1dcca85248528798383adb740c3cf4236389d039bedf443133e93eb3c37052c5.md",
+        "bytes": 14845,
+        "content_bytes": 14845,
+        "sha256": "73501d0cab8a1d04e9e3f2735119caf647bdc19113aecea21e59455455aa8e65",
+        "digest": "73501d0cab8a1d04e9e3f2735119caf647bdc19113aecea21e59455455aa8e65"
+      },
+      "evidence_index": {
+        "path": "/Users/serhii/.local/state/shipyard/codex/ceabab6407efeae8273d57ee6b4b0bc25b5abf2cb12523549d917bdbfae34d71/planning-artifacts/1dcca85248528798383adb740c3cf4236389d039bedf443133e93eb3c37052c5.md",
+        "bytes": 14845,
+        "content_bytes": 14845,
+        "sha256": "73501d0cab8a1d04e9e3f2735119caf647bdc19113aecea21e59455455aa8e65",
+        "digest": "73501d0cab8a1d04e9e3f2735119caf647bdc19113aecea21e59455455aa8e65"
+      }
+    },
+    {
+      "id": "risks",
+      "status": "completed",
+      "summary": "Research line risks completed.",
+      "artifact_ref": "/Users/serhii/.local/state/shipyard/codex/ceabab6407efeae8273d57ee6b4b0bc25b5abf2cb12523549d917bdbfae34d71/planning-artifacts/6bdeb7e536c1c516daff10ec945dc3dbe0add44920626188118bd53dae06b628.json",
+      "artifact_digest": "230cca30e67ae90469b83aa54100e017ba4ab4c86a5d95d67840d3731de30e55",
+      "artifact_index": {
+        "path": "/Users/serhii/.local/state/shipyard/codex/ceabab6407efeae8273d57ee6b4b0bc25b5abf2cb12523549d917bdbfae34d71/planning-artifacts/6bdeb7e536c1c516daff10ec945dc3dbe0add44920626188118bd53dae06b628.md",
+        "bytes": 15032,
+        "content_bytes": 15032,
+        "sha256": "f91da393a92fbcaa55fa797085643308c32fb9e34d3b74921e0daabc567f06b9",
+        "digest": "f91da393a92fbcaa55fa797085643308c32fb9e34d3b74921e0daabc567f06b9"
+      },
+      "evidence_index": {
+        "path": "/Users/serhii/.local/state/shipyard/codex/ceabab6407efeae8273d57ee6b4b0bc25b5abf2cb12523549d917bdbfae34d71/planning-artifacts/6bdeb7e536c1c516daff10ec945dc3dbe0add44920626188118bd53dae06b628.md",
+        "bytes": 15032,
+        "content_bytes": 15032,
+        "sha256": "f91da393a92fbcaa55fa797085643308c32fb9e34d3b74921e0daabc567f06b9",
+        "digest": "f91da393a92fbcaa55fa797085643308c32fb9e34d3b74921e0daabc567f06b9"
+      }
+    }
+  ]
+}

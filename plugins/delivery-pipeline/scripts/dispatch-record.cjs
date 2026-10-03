@@ -1480,9 +1480,17 @@ function pidLive(pid) {
 const INFLIGHT_TICKET = /^T-[A-Z0-9][A-Z0-9._-]*$/i;
 const INFLIGHT_TOKEN = /^[A-Za-z0-9._:-]{1,200}$/;
 
+function inflightSubject(ticket, role) {
+  if (typeof ticket !== 'string' || ticket.length > 4096) return false;
+  if (INFLIGHT_TICKET.test(ticket)) return true;
+  return ['integrator', 'pr-sentinel'].includes(role)
+    && /^phase=[A-Za-z0-9._-]+;repository=\/[^;\x00-\x1f]+;tickets=[a-f0-9]{64}$/.test(ticket);
+}
+
+
 function inflightRowLive(row, dispatchId, now = Date.now()) {
   if (!roundObject(row) || row.dispatch_id !== dispatchId) return false;
-  if (typeof row.ticket !== 'string' || !INFLIGHT_TICKET.test(row.ticket)) return false;
+  if (!inflightSubject(row.ticket, row.role)) return false;
   if (typeof row.role !== 'string' || !INFLIGHT_TOKEN.test(row.role)) return false;
   if (typeof row.host !== 'string' || !INFLIGHT_TOKEN.test(row.host)) return false;
   const at = Date.parse(row.started_at || '');
@@ -1503,7 +1511,7 @@ function inflightCwd(input) {
 function recordInflight(input) {
   const cwd = inflightCwd(input);
   const { ticket, role, dispatch_id: dispatchId, pid, host } = input;
-  if (typeof ticket !== 'string' || !INFLIGHT_TICKET.test(ticket)) throw new Error('in-flight ticket is invalid');
+  if (!inflightSubject(ticket, role)) throw new Error('in-flight ticket is invalid');
   if (typeof role !== 'string' || !INFLIGHT_TOKEN.test(role)) throw new Error('in-flight role is invalid');
   if (typeof host !== 'string' || !INFLIGHT_TOKEN.test(host)) throw new Error('in-flight host is invalid');
   const issue = opaqueDispatchValueIssue(dispatchId);

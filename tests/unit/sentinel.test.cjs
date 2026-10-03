@@ -2029,7 +2029,7 @@ const FIX_ARGS = (over = {}) => ({
   prs: [{
     id: 'T-24-06', pr: 42, branch: 'ticket/T-24-06', worktreePath: '/wt/T-24-06',
     planPath: '/proj/.planning/phases/24/24-06-PLAN.md', needsCiFix: true,
-    base: 'epic/24-x', model: 'claude-opus-5-5', effort: 'medium', ...over,
+    base: 'epic/24-x', model: 'claude-sonnet-5-5', effort: 'high', ...over,
   }],
   ciFixRefPath: '/refs/ci-fix.md',
   reviewFixRefPath: '/refs/review-fix.md',

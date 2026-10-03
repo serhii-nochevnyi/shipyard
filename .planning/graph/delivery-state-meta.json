@@ -1,13 +1,13 @@
 {
   "schema_version": 1,
-  "generation": 401,
-  "generation_identity": "ecf9a4ce-f489-4f06-86a5-e2578f3d0599",
-  "previous_generation_identity": "16777245:12939493840:1790801322360196600:e1ef5465b616b446391fb8f7e0ad99b15695be41f1508fc51f56f4f63987db8a",
-  "observed_at": "2026-09-30T20:48:56.850Z",
-  "generated_at": "2026-09-30T20:48:56.850Z",
+  "generation": 419,
+  "generation_identity": "4e7fc9c1-8eac-4256-a5d6-f5e7d5f6d0eb",
+  "previous_generation_identity": "16777245:12940927755:1790926487223954000:9cefa80ae36ee9c50f5d923b8b55d4a9b2f85496f727a81847921d3970dd78b8",
+  "observed_at": "2026-10-02T08:34:39.574Z",
+  "generated_at": "2026-10-02T08:34:39.574Z",
   "by": "state-sync",
-  "pid": 20308,
-  "observation_generation": 401,
+  "pid": 31889,
+  "observation_generation": 419,
   "observation_projection": {
     "tickets": {
       "T-20-01": {
@@ -2695,9 +2695,9 @@
         "checks": null
       },
       "T-45-16": {
-        "status": "pending",
+        "status": "merged",
         "repository": null,
-        "pr": null,
+        "pr": 393,
         "head": null,
         "draft": false,
         "base": "epic/45-close-residual-pipeline-efficiency-gaps",
@@ -2706,9 +2706,9 @@
         "checks": null
       },
       "T-45-17": {
-        "status": "pending",
+        "status": "merged",
         "repository": null,
-        "pr": null,
+        "pr": 392,
         "head": null,
         "draft": false,
         "base": "epic/45-close-residual-pipeline-efficiency-gaps",
@@ -2717,12 +2717,90 @@
         "checks": null
       },
       "T-45-18": {
+        "status": "merged",
+        "repository": null,
+        "pr": 398,
+        "head": null,
+        "draft": false,
+        "base": "epic/45-close-residual-pipeline-efficiency-gaps",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-46-01": {
+        "status": "merged",
+        "repository": null,
+        "pr": 405,
+        "head": null,
+        "draft": false,
+        "base": "epic/46-refresh-native-runtime-model-ladder",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-46-04": {
+        "status": "merged",
+        "repository": null,
+        "pr": 406,
+        "head": null,
+        "draft": false,
+        "base": "epic/46-refresh-native-runtime-model-ladder",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-46-05": {
+        "status": "merged",
+        "repository": null,
+        "pr": 408,
+        "head": null,
+        "draft": false,
+        "base": "epic/46-refresh-native-runtime-model-ladder",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-46-06": {
+        "status": "merged",
+        "repository": null,
+        "pr": 409,
+        "head": null,
+        "draft": false,
+        "base": "epic/46-refresh-native-runtime-model-ladder",
+        "merge_state": null,
+        "review_decision": null,
+        "checks": null
+      },
+      "T-46-07": {
+        "status": "pr-open",
+        "repository": null,
+        "pr": 412,
+        "head": "fe8b1440f985acb5442bf767cb8a947c60dfe249",
+        "draft": true,
+        "base": "epic/46-refresh-native-runtime-model-ladder",
+        "merge_state": "UNSTABLE",
+        "review_decision": null,
+        "checks": {
+          "total": 1,
+          "pending": 0,
+          "failing": 1,
+          "none_reported": false,
+          "unavailable": false
+        },
+        "author": {
+          "login": "serhii-nochevnyi"
+        },
+        "approved_reviews": [],
+        "reviewer_bots": [],
+        "review_fresh": false
+      },
+      "T-46-08": {
         "status": "pending",
         "repository": null,
         "pr": null,
         "head": null,
         "draft": false,
-        "base": "epic/45-close-residual-pipeline-efficiency-gaps",
+        "base": "ticket/T-46-07-preserve-history-runtime-trailer",
         "merge_state": null,
         "review_decision": null,
         "checks": null
@@ -2731,9 +2809,9 @@
   },
   "binding": {
     "schema_version": 1,
-    "state_digest": "f1792aecd4f9008ad0c749b534bdbf064bd9fd86429e6d7039938c980a7d9525",
-    "front_digest": "3fd8bd0d88e079cc4eb2d940b05619f707e1dc82742677c4eb2f2e7ecddaec54",
-    "observation_digest": "dd1dd6e49dea00fb795c56287f8a982bd5b960c6e32133dac3a9ddb3236dac3e",
-    "observation_generation": 401
+    "state_digest": "fdd6559e288379d8c5f04a7b7c3316fec500e79132d2650e95387851c4f7b4d6",
+    "front_digest": "ca9a71a2612e84ec116cc31c3c5e2d5bb3f52fece768748ea11609eb1c337efe",
+    "observation_digest": "b92c9c6c64072a7d161cd447e8865062a3b3f56fd0e44e3a3c1bd2c57a115500",
+    "observation_generation": 419
   }
 }

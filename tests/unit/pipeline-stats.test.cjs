@@ -591,8 +591,8 @@ test('ADR-014 reconciliation keeps resolution, application, observation and join
     journal: [good, codex, stale, contradictory, legacy].map(JSON.stringify),
     attributions: [{
       observation_id: 'joined-good', dispatch_id: 'good', runtime: 'claude', provider: 'anthropic',
-      session_id: 'session-good', model: 'sonnet', effort: 'max',
-      observed_model: 'sonnet', observed_effort: 'max',
+      session_id: 'session-good', model: good.requested_model, effort: good.requested_effort,
+      observed_model: good.requested_model, observed_effort: good.requested_effort,
     }],
     prs: [],
   });
@@ -623,7 +623,7 @@ test('ADR-014 reconciliation keeps resolution, application, observation and join
   assert.deepStrictEqual(reconciliation.by_runtime, { claude: 3, codex: 2 });
   assert.deepStrictEqual(reconciliation.by_rung, { base: 3, critical: 1 });
   assert.deepStrictEqual(reconciliation.by_concrete_model, {
-    'gpt-6-sol': 1, opus: 1, sonnet: 1,
+    'gpt-6.1-sol': 1, opus: 1, 'claude-sonnet-5-5': 1,
   });
   assert.deepStrictEqual(reconciliation.by_fired_signal, { critical: 1 });
   assert.strictEqual(reconciliation.records.find((r) => r.dispatch_id === 'stale').compliant, false);

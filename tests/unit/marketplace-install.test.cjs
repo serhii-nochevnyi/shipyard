@@ -71,10 +71,27 @@ fs.writeFileSync(file,JSON.stringify(s));
   assert.equal(packageFreshnessRequired('main'),true);
   assert.equal(packageFreshnessRequired('epic/43-target-project-delivery-at-scale'),false);
   assert.equal(packageFreshnessRequired('ticket/T-40-17-add-the-publish-time-pr-hygiene-gate-and'),false);
-  if (packageFreshnessRequired(process.env.GITHUB_BASE_REF)) {
-    assert.deepEqual(snapshot(path.join(root,'plugins/shipyard')),snapshot(out),
+  const currentPolicy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
+  assert.equal(currentPolicy.POLICY_VERSION, 'adr-014.v7');
+  function assertCurrentPackage(dir) {
+    assert.deepEqual(snapshot(dir), snapshot(out),
       'Marketplace package is stale: run make package-shipyard-codex');
+    const packagedPolicy = require(path.join(dir, 'host/plugins/delivery-pipeline/scripts/model-policy.cjs'));
+    assert.equal(packagedPolicy.POLICY_VERSION, currentPolicy.POLICY_VERSION);
+    assert.equal(packagedPolicy.POLICY_HASH, currentPolicy.POLICY_HASH);
+    const manifest = JSON.parse(fs.readFileSync(path.join(dir, '.codex-plugin/plugin.json')));
+    const identity = JSON.parse(fs.readFileSync(path.join(dir, 'package-build.json')));
+    assert.deepEqual(identity, first);
+    assert.equal(manifest.version, first.version);
+    assert.match(identity.digest, /^[a-f0-9]{64}$/);
+    assert.match(manifest.version, /\+codex\.[a-f0-9]{16}$/);
   }
+  assertCurrentPackage(path.join(root, 'plugins/shipyard'));
+  const staleMirror = path.join(tmp, 'stale-package');
+  fs.cpSync(out, staleMirror, { recursive: true });
+  const stalePolicy = path.join(staleMirror, 'host/plugins/delivery-pipeline/scripts/model-policy-internal.cjs');
+  fs.writeFileSync(stalePolicy, fs.readFileSync(stalePolicy, 'utf8').replace('adr-014.v7', 'adr-014.v6'));
+  assert.throws(() => assertCurrentPackage(staleMirror), /Marketplace package is stale/);
   assert.equal(first.skills.length,6);
   assert(fs.existsSync(path.join(out,'host/scripts/ensure-gsd-plugin.cjs')));
   assert(fs.existsSync(path.join(out,'host/plugins/delivery-pipeline/scripts/model-policy.cjs')));

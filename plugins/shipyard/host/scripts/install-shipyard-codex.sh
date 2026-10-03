@@ -31,6 +31,7 @@ CAP_SRC="$REPO_ROOT/capabilities/delivery-pipeline"
 PHASE="${SHIPYARD_CODEX_PHASE:-2}"
 PROJECT_DIR="${SHIPYARD_PROJECT_DIR:-$REPO_ROOT}"
 
+[[ -z "${CODEX_HOME+x}" || -n "$CODEX_HOME" ]] || { echo "isolation refusal: empty CODEX_HOME" >&2; exit 3; }
 CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
 AGENTS_SKILLS="${AGENTS_SKILLS_DIR:-$HOME/.agents/skills}"
 BUNDLE_ROOT="$CODEX_HOME/shipyard"
@@ -50,6 +51,11 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+source "$REPO_ROOT/scripts/ensure-gsd-core.sh" --library
+if [[ -n "${SHIPYARD_ISOLATION_ROOT+x}" || -n "$DOGFOOD_ROOT" || "${SHIPYARD_INSTALL_KIND:-}" == dogfood || "$CODEX_HOME" != "$HOME/.codex" ]]; then
+  validate_isolated_node_options
+fi
+
 # ── preconditions ────────────────────────────────────────────────────────────
 command -v node >/dev/null 2>&1 || { echo "error: node not found on PATH" >&2; exit 1; }
 PROVENANCE="$PLUGIN_DIR/scripts/host-provenance.cjs"
@@ -68,9 +74,11 @@ const base = process.env.XDG_STATE_HOME || path.join(os.homedir(), '.local', 'st
 process.stdout.write(path.join(base, 'shipyard', 'dogfood', 'codex', digest));
 NODE
 )"
+  unset XDG_STATE_HOME
 fi
 if [[ -n "$DOGFOOD_ROOT" ]]; then
   [[ -f "$PROVENANCE" ]] || { echo "error: host-provenance.cjs not found under $PLUGIN_DIR" >&2; exit 1; }
+  export SHIPYARD_DOGFOOD_ROOT="$DOGFOOD_ROOT"
   DOGFOOD_ROOT="$(TARGET="$DOGFOOD_ROOT" ACTIVE_HOME="$CODEX_HOME" DEFAULT_HOME="$HOME/.codex" node - <<'NODE'
 const fs = require('node:fs');
 const path = require('node:path');
@@ -98,9 +106,15 @@ NODE
   GSD_TOOLS="$CODEX_HOME/gsd-core/bin/gsd-tools.cjs"
   AGENTS_MD="${CODEX_AGENTS_MD:-$CODEX_HOME/AGENTS.md}"
   export CODEX_HOME GSD_CAPABILITIES_DIR="${GSD_CAPABILITIES_DIR:-$CODEX_HOME/.gsd/capabilities}"
-  mkdir -p -m 700 "$CODEX_HOME"
   echo "→ dogfood CODEX_HOME $CODEX_HOME"
 fi
+source "$REPO_ROOT/scripts/ensure-gsd-core.sh" --library
+export CODEX_HOME
+[[ -z "$DOGFOOD_ROOT" ]] || export SHIPYARD_DOGFOOD_ROOT="${SHIPYARD_DOGFOOD_ROOT-$DOGFOOD_ROOT}"
+prepare_isolation codex "$CODEX_HOME" "${SHIPYARD_ISOLATION_ROOT-$CODEX_HOME}"
+AGENTS_SKILLS="${AGENTS_SKILLS_DIR:-$HOME/.agents/skills}"
+AGENTS_MD="${CODEX_AGENTS_MD:-$CODEX_HOME/AGENTS.md}"
+
 [[ -d "$PLUGIN_DIR" ]] || { echo "error: plugin dir missing: $PLUGIN_DIR" >&2; exit 1; }
 [[ -d "$CAP_SRC" ]] || { echo "error: capability dir missing: $CAP_SRC" >&2; exit 1; }
 [[ -d "$PROJECT_DIR" ]] || { echo "error: project dir missing: $PROJECT_DIR" >&2; exit 1; }
@@ -132,6 +146,10 @@ PROJECT_DIR="$(cd "$PROJECT_DIR" && pwd)"
 if [[ "${SHIPYARD_GSD_AUTO_INSTALL:-1}" != "0" ]]; then
   bash "$REPO_ROOT/scripts/ensure-gsd-core.sh" codex
 fi
+prepare_isolation codex "$CODEX_HOME" "${SHIPYARD_ISOLATION_ROOT-$CODEX_HOME}"
+AGENTS_SKILLS="${AGENTS_SKILLS_DIR:-$HOME/.agents/skills}"
+AGENTS_MD="${CODEX_AGENTS_MD:-$CODEX_HOME/AGENTS.md}"
+GSD_TOOLS="$CODEX_HOME/gsd-core/bin/gsd-tools.cjs"
 if [[ ! -f "$GSD_TOOLS" ]]; then
   echo "error: gsd-core for Codex not found at $GSD_TOOLS" >&2
   echo "       install it first:" >&2
@@ -139,10 +157,15 @@ if [[ ! -f "$GSD_TOOLS" ]]; then
   exit 1
 fi
 
-STAGE="$(mktemp -d)"
+if [[ -n "${SHIPYARD_ISOLATION_ROOT:-}" ]]; then
+  STAGE="$(mktemp -d "$TMPDIR/shipyard-stage.XXXXXX")"
+else
+  STAGE="$(mktemp -d)"
+fi
 ROLLBACK_ACTIVE=0
 cleanup() {
   local status="${1:-0}"
+  prepare_isolation codex "$CODEX_HOME" "${SHIPYARD_ISOLATION_ROOT-$CODEX_HOME}" || { trap - EXIT; exit 3; }
   if [[ "$status" -ne 0 && "$ROLLBACK_ACTIVE" == 1 ]]; then
     echo "error: install failed after mutating installer-owned state; restoring the previous set" >&2
     restore_runtime_paths 2>/dev/null || echo "warning: runtime artifact rollback was incomplete; inspect ${AGENTS_SKILLS:-$HOME/.agents/skills}, ${BUNDLE_ROOT:-$CODEX_HOME/shipyard}, ${AGENTS_MD:-$CODEX_HOME/AGENTS.md} and ${CAPABILITY_TARGET:-${GSD_CAPABILITIES_ROOT:-$HOME/.gsd/capabilities}/delivery-pipeline}" >&2
@@ -302,11 +325,13 @@ GSD_RUNTIME=codex SHIPYARD_RUNTIME=codex node "$REPO_ROOT/scripts/gen-codex-ship
   --plugin "$PLUGIN_DIR" --out "$OUT" \
   --codex-home "$CODEX_HOME" --bundle-root "$BUNDLE_ROOT" --phase "$PHASE" \
   --project-dir "$PROJECT_DIR" --capabilities "$CAPABILITIES_FILE"
+prepare_isolation codex "$CODEX_HOME" "${SHIPYARD_ISOLATION_ROOT-$CODEX_HOME}"
 
 # Validate the staged generation against the source policy and host evidence
 # before any destination replacement (including agents/config/capabilities).
 node "$PLUGIN_DIR/scripts/gsd-tune.cjs" --validate-codex-bundle "$OUT" \
   --codex-home "$CODEX_HOME" --phase "$PHASE" --capabilities "$CAPABILITIES_FILE"
+prepare_isolation codex "$CODEX_HOME" "${SHIPYARD_ISOLATION_ROOT-$CODEX_HOME}"
 
 # ── skills + bundle install LAST ───────────────────────────────────────────────
 # Keep both staged until agent/config/capability/AGENTS.md have succeeded, so a
@@ -465,7 +490,7 @@ NODE
   echo "→ merging agent registrations → $CODEX_HOME/config.toml"
   if node "$REPO_ROOT/scripts/merge-codex-config.cjs" \
     --config "$CONFIG_TARGET" --fragment "$OUT/config.fragment.toml"; then
-    :
+    prepare_isolation codex "$CODEX_HOME" "${SHIPYARD_ISOLATION_ROOT-$CODEX_HOME}"
   else
     status=$?
     echo "error: config merge failed; restoring the previous agent and config set" >&2
@@ -625,6 +650,7 @@ cp -R "$CAP_SRC/." "$CAP_STAGE/"
 # leave the gate unable to load its parser.
 cp "$PLUGIN_DIR"/scripts/*.cjs "$CAP_STAGE/checks/"
 GSD_RUNTIME=codex SHIPYARD_RUNTIME=codex node "$GSD_TOOLS" capability install "$CAP_STAGE" --scope global --yes
+prepare_isolation codex "$CODEX_HOME" "${SHIPYARD_ISOLATION_ROOT-$CODEX_HOME}"
 
 # ── auto-route policy → global AGENTS.md (Codex's always-loaded instructions) ──
 # So the pipeline is applied without the user invoking $shipyard-* by hand.
@@ -665,8 +691,10 @@ if [[ -f "$GSD_TUNE" ]]; then
   # the installer may have been launched from a ticket worktree or another
   # checkout entirely.
   (cd "$PROJECT_DIR" && GSD_RUNTIME=codex SHIPYARD_RUNTIME=codex \
-    node "$GSD_TUNE" --global --runtime codex --apply) 2>&1 | sed 's/^/  /' || true
+    run_isolated_tuner "$GSD_TUNE" --global --runtime codex --apply) 2>&1 | sed 's/^/  /' || { [[ -z "${SHIPYARD_ISOLATION_ROOT:-}" ]] || exit 1; }
 fi
+
+prepare_isolation codex "$CODEX_HOME" "${SHIPYARD_ISOLATION_ROOT-$CODEX_HOME}"
 
 # ── skills → ~/.agents/skills (only our own shipyard-* dirs are touched) ──────
 echo "→ installing skills → $AGENTS_SKILLS"
@@ -765,6 +793,7 @@ node "$REPO_ROOT/scripts/configure-codex-notify.cjs" \
   --config "$CODEX_HOME/config.toml" \
   --wrapper "$BUNDLE_ROOT/scripts/codex-notify.cjs" \
   --delegate-file "$NOTIFY_DELEGATE"
+prepare_isolation codex "$CODEX_HOME" "${SHIPYARD_ISOLATION_ROOT-$CODEX_HOME}"
 
 # Nothing installer-owned remains to roll back after this point. Keeping the
 # rollback active through the skill reconciliation is what makes a failed

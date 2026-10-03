@@ -19,8 +19,8 @@ const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
 const source = fs.readFileSync(WORKFLOW, 'utf8').replace(/^export const meta/m, 'const meta');
 
 const capabilities = Object.freeze({
-  supportedModels: [CLAUDE_MODEL_ALIASES.opus],
-  supportedEfforts: ['medium'],
+  supportedModels: [CLAUDE_MODEL_ALIASES.sonnet],
+  supportedEfforts: ['xhigh'],
   observedModel: true,
   observedEffort: true,
 });
@@ -30,10 +30,10 @@ function transcriptEvidence(value) {
 }
 
 const lines = [
-  { id: 'system-state', label: 'system state', model: 'claude-opus-5-5', effort: 'medium', signals: { type: 'facts' } },
-  { id: 'alternatives', label: 'alternatives', model: 'claude-opus-5-5', effort: 'medium', signals: { type: 'alternatives' } },
-  { id: 'constraints', label: 'constraints', model: 'claude-opus-5-5', effort: 'medium', signals: { type: 'facts' } },
-  { id: 'risks', label: 'risks and unknowns', model: 'claude-opus-5-5', effort: 'medium', signals: { type: 'facts' } },
+  { id: 'system-state', label: 'system state', model: 'claude-sonnet-5-5', effort: 'xhigh', signals: { type: 'facts' } },
+  { id: 'alternatives', label: 'alternatives', model: 'claude-sonnet-5-5', effort: 'xhigh', signals: { type: 'alternatives' } },
+  { id: 'constraints', label: 'constraints', model: 'claude-sonnet-5-5', effort: 'xhigh', signals: { type: 'facts' } },
+  { id: 'risks', label: 'risks and unknowns', model: 'claude-sonnet-5-5', effort: 'xhigh', signals: { type: 'facts' } },
 ];
 
 function gitInitWorktree(worktree) {
@@ -105,8 +105,8 @@ test('dispatches all four lines through the typed boundary and returns verified 
       assert.ok(result, `missing result for ${line.id}`);
       assert.equal(result.status, 'completed');
       assert.equal(result.receipt.compliance, 'verified');
-      assert.equal(result.receipt.applied_model, 'claude-opus-5-5');
-      assert.equal(result.receipt.applied_effort, 'medium');
+      assert.equal(result.receipt.applied_model, 'claude-sonnet-5-5');
+      assert.equal(result.receipt.applied_effort, 'xhigh');
       assert.ok(recorder.getVerifiedRecord(result.receipt.dispatch_id));
       const call = calls.find((item) => item.options.label.endsWith(`:${line.id}`));
       assert.ok(call, `missing host call for ${line.id}`);

@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 'use strict';
 
+const { isDevelopmentArtifact } = require('./development-artifacts.cjs');
+
 const fs = require('node:fs');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
@@ -260,6 +262,9 @@ function pathViolation(entry) {
 
 function check(input = {}) {
   const { title, body, head, base, paths = [], commits = [], jiraKeys = [], titleFormat: format } = input;
+  if (paths.length && paths.every(entry => isDevelopmentArtifact(typeof entry === 'string' ? entry : entry.path))) {
+    return { ok: true, exempt: true, reason: 'development-artifacts-only', violations: [] };
+  }
   void base;
   const compiled = asCompiledFormat(format);
   const violations = [];
@@ -284,6 +289,7 @@ function check(input = {}) {
   violations.push(...jiraViolations('head', head, jiraKeys));
 
   for (const entry of paths) {
+    if (isDevelopmentArtifact(typeof entry === 'string' ? entry : entry.path)) continue;
     const violation = pathViolation(entry);
     if (violation) violations.push(violation);
   }
@@ -345,7 +351,11 @@ function runCheckCli(argv) {
   const bodyFile = required(argv, 'body-file');
   const repo = resolveRepoSlug(root, flagValue(argv, 'repo'));
   const body = fs.readFileSync(path.resolve(bodyFile), 'utf8');
-  const paths = collectPaths(root, base, head);
+  const paths = collectPaths(root, base, head).filter(item => !isDevelopmentArtifact(item.path));
+  if (!paths.length) {
+    console.log(json ? JSON.stringify({ ok: true, exempt: true, reason: 'development-artifacts-only' }) : 'development-artifacts-only: exempt');
+    return 0;
+  }
   const commits = collectCommits(root, base, head);
   const format = titleFormat({ root, repo });
   const result = check({ title, body, head, base, paths, commits, jiraKeys: [], titleFormat: format });

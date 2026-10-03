@@ -45,17 +45,34 @@ jobs:
           # Keep CI on the supported Node major used by the host-side scripts.
           node-version: '24.15.0'
 
+      - name: product change scope
+        id: scope
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          BASE="$BASE_SHA"
+          if [ -z "$BASE" ] || [ "$BASE" = "0000000000000000000000000000000000000000" ]; then
+            BASE=$(git hash-object -t tree /dev/null)
+          fi
+          node plugins/delivery-pipeline/scripts/development-artifacts.cjs "$BASE" HEAD >> "$GITHUB_OUTPUT"
+
+      - name: development artifacts only
+        if: steps.scope.outputs.product_changes != 'true'
+        run: echo "Development artifacts are excluded from product review and verification."
+
       - name: publish gate
+        if: steps.scope.outputs.product_changes == 'true'
         run: |
           BASE=origin/main
           if [ -n "$GITHUB_BASE_REF" ]; then BASE=origin/$GITHUB_BASE_REF; fi
           node plugins/delivery-pipeline/scripts/publish-gate.cjs --base "$BASE" --working-tree --json
 
       - name: runtime digest trailer
-        if: github.event_name == 'pull_request'
+        if: steps.scope.outputs.product_changes == 'true' && github.event_name == 'pull_request'
         run: node scripts/check-runtime-digest-trailer.cjs --base "origin/${{ github.base_ref || 'main' }}"
 
       - name: OS sandbox backend
+        if: steps.scope.outputs.product_changes == 'true'
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq bubblewrap
@@ -65,6 +82,7 @@ jobs:
           bwrap --unshare-all --die-with-parent --ro-bind / / /bin/true
 
       - name: make test-fast
+        if: steps.scope.outputs.product_changes == 'true'
         env:
           SHIPYARD_REQUIRE_OS_SANDBOX: "1"
           COMMENT_POLICY_BASE: origin/${{ github.base_ref || 'main' }}

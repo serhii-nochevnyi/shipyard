@@ -152,7 +152,7 @@ function sealOutputPaths(role, phaseDir) {
   if (role === 'gsd-plan-checker') return [];
   if (role === 'gsd-phase-researcher') return [`${phase}-RESEARCH.md`];
   if (role !== 'gsd-planner') fail('INVALID_INPUT', 'invalid typed GSD role');
-  const plans = fs.readdirSync(phaseDir).filter((name) => new RegExp(`^${phase}-[0-9]+-PLAN\\.md$`).test(name)).sort();
+  const plans = fs.readdirSync(phaseDir).filter((name) => new RegExp(`^0*${phase}-[0-9]+-PLAN\\.md$`).test(name)).sort();
   if (!plans.length) fail('MISSING_ARTIFACT', 'planner has no phase PLAN.md output');
   return [...(fs.existsSync(path.join(phaseDir, 'CONTEXT.md')) ? ['CONTEXT.md'] : []), ...plans].sort();
 }

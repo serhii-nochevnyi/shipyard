@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${PLUGIN_ROOT}/host/scripts/bootstrap-shipyard-plugin.cjs\"",
+            "command": "bash \"${PLUGIN_ROOT}/host/scripts/ensure-gsd-core.sh\" --launch-bootstrap",
             "timeout": 360,
             "statusMessage": "Preparing Shipyard and GSD"
           }

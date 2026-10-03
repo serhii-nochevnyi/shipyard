@@ -1,10 +1,10 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 36a476e29155dfd997f766c3005ea3cd95c26418646d8e2f603c01e15232f082
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: c2c579e7a74a1375efb74ced085e4d4af1561d9296c40aeb389a476b6fbdcdae
 phase: 45
 status: failed
 result: failed
 shipyard_sync: evidence-projection
-shipyard_source_fingerprint: 36a476e29155dfd997f766c3005ea3cd95c26418646d8e2f603c01e15232f082
+shipyard_source_fingerprint: c2c579e7a74a1375efb74ced085e4d4af1561d9296c40aeb389a476b6fbdcdae
 ---
 
 # Phase 45: Close residual pipeline efficiency gaps — UAT Projection
@@ -12,9 +12,9 @@ shipyard_source_fingerprint: 36a476e29155dfd997f766c3005ea3cd95c26418646d8e2f603
 This file is generated from the delivery graph and phase integration evidence.
 
 ### 1. Delivery plans are accounted for
-result: pending
+result: passed
 expected: all 18 phase plan(s) are merged
-actual: 15 merged
+actual: 18 merged
 
 ### 2. Integration evidence is explicit
 result: failed

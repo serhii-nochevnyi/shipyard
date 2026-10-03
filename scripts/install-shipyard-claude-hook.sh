@@ -24,22 +24,9 @@ set -euo pipefail
 #
 # Usage: bash scripts/install-shipyard-claude-hook.sh [--remove]
 
-CLAUDE_HOME="${CLAUDE_HOME:-$HOME/.claude}"
+[[ -z "${CLAUDE_HOME+x}" || -n "$CLAUDE_HOME" ]] || { echo "isolation refusal: empty CLAUDE_HOME" >&2; exit 3; }
+CLAUDE_HOME="${CLAUDE_HOME:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SETTINGS="$CLAUDE_HOME/settings.json"
-
-ROUTE_HOOK="$CLAUDE_HOME/hooks/shipyard-auto-route.sh"
-ROUTE_CJS="$CLAUDE_HOME/hooks/shipyard-auto-route.cjs"
-PRE_PUSH_HOOK="$CLAUDE_HOME/hooks/shipyard-pre-push-gate.sh"
-STOP_DIR="$CLAUDE_HOME/hooks/shipyard-stop-gate"
-STOP_HOOK="$STOP_DIR/stop-gate.cjs"
-SESSION_HOOK="$STOP_DIR/session-observer.cjs"
-OLD_STOP_HOOK="$CLAUDE_HOME/hooks/shipyard-stop-gate.cjs"
-ROUTE_CMD="bash \"$ROUTE_HOOK\""
-PRE_PUSH_CMD="bash \"$PRE_PUSH_HOOK\""
-STOP_CMD="node \"$STOP_HOOK\""
-SESSION_CMD="node \"$SESSION_HOOK\" hook"
-OLD_STOP_CMD="node \"$OLD_STOP_HOOK\""
 
 REMOVE=0
 DOGFOOD_ROOT="${SHIPYARD_DOGFOOD_ROOT:-}"
@@ -56,19 +43,65 @@ done
 command -v node >/dev/null 2>&1 || { echo "error: node not found on PATH" >&2; exit 1; }
 PROVENANCE="$ROOT/plugins/delivery-pipeline/scripts/host-provenance.cjs"
 
+source "$ROOT/scripts/ensure-gsd-core.sh" --library
+if [[ -n "${SHIPYARD_ISOLATION_ROOT+x}" || -n "$DOGFOOD_ROOT" || "${SHIPYARD_INSTALL_KIND:-}" == dogfood || "$CLAUDE_HOME" != "$HOME/.claude" ]]; then
+  validate_isolated_node_options
+fi
+[[ -z "$DOGFOOD_ROOT" ]] || export SHIPYARD_DOGFOOD_ROOT="$DOGFOOD_ROOT"
+export CLAUDE_HOME
+if [[ -z "$DOGFOOD_ROOT" || "$WIRE_HOOKS" == 1 || -n "${SHIPYARD_ISOLATION_ROOT+x}" ]]; then
+  prepare_isolation claude "${CLAUDE_CONFIG_DIR:-$CLAUDE_HOME}" "${SHIPYARD_ISOLATION_ROOT:-}"
+fi
+SETTINGS="$CLAUDE_HOME/settings.json"
+
+ROUTE_HOOK="$CLAUDE_HOME/hooks/shipyard-auto-route.sh"
+ROUTE_CJS="$CLAUDE_HOME/hooks/shipyard-auto-route.cjs"
+PRE_PUSH_HOOK="$CLAUDE_HOME/hooks/shipyard-pre-push-gate.sh"
+STOP_DIR="$CLAUDE_HOME/hooks/shipyard-stop-gate"
+STOP_HOOK="$STOP_DIR/stop-gate.cjs"
+SESSION_HOOK="$STOP_DIR/session-observer.cjs"
+OLD_STOP_HOOK="$CLAUDE_HOME/hooks/shipyard-stop-gate.cjs"
+ROUTE_CMD="bash \"$ROUTE_HOOK\""
+PRE_PUSH_CMD="bash \"$PRE_PUSH_HOOK\""
+STOP_CMD="node \"$STOP_HOOK\""
+SESSION_CMD="node \"$SESSION_HOOK\" hook"
+OLD_STOP_CMD="node \"$OLD_STOP_HOOK\""
+
 if [[ -n "$DOGFOOD_ROOT" ]]; then
   [[ "$REMOVE" == 0 ]] || { echo "error: --dogfood-root cannot be combined with --remove" >&2; exit 2; }
   [[ -f "$PROVENANCE" ]] || { echo "error: host-provenance.cjs not found under $ROOT/plugins/delivery-pipeline" >&2; exit 1; }
-  DOGFOOD_ROOT="$(TARGET="$DOGFOOD_ROOT" CACHE="$CLAUDE_HOME/plugins/cache" node - <<'NODE'
+  DOGFOOD_ROOT="$(TARGET="$DOGFOOD_ROOT" CACHE="$CLAUDE_HOME/plugins/cache" SOURCE="$ROOT" node - <<'NODE'
 const fs = require('node:fs');
 const path = require('node:path');
 function real(p) {
   const abs = path.resolve(p);
   let base = abs;
-  while (!fs.existsSync(base)) base = path.dirname(base);
+  while (!fs.existsSync(base)) {
+    if (fs.lstatSync(base, { throwIfNoEntry: false })) throw new Error(`isolation refusal: dangling destination: ${base}`);
+    base = path.dirname(base);
+  }
   return path.join(fs.realpathSync(base), path.relative(base, abs));
 }
+if (!path.isAbsolute(process.env.TARGET)) throw new Error('isolation refusal: dogfood root must be absolute');
 const target = real(process.env.TARGET);
+function contains(parent, child) {
+  const rel = path.relative(parent, child);
+  return rel === '' || (rel !== '..' && !rel.startsWith('..' + path.sep) && !path.isAbsolute(rel));
+}
+const protectedPaths = [
+  { value: process.env.HOME, allowDescendants: true },
+  ...[process.env.SOURCE, path.join(process.env.HOME, '.gsd'), path.join(process.env.HOME, '.codex'),
+    path.join(process.env.HOME, '.agents'), path.join(process.env.HOME, '.claude'),
+    process.env.CLAUDE_HOME, process.env.CLAUDE_CONFIG_DIR, process.env.CODEX_HOME]
+    .filter(Boolean).map(value => ({ value, allowDescendants: false })),
+];
+for (const { value, allowDescendants } of protectedPaths) {
+  const protectedPath = real(value);
+  if (contains(target, protectedPath) || (!allowDescendants && contains(protectedPath, target))) {
+    throw new Error(`isolation refusal: dogfood destination overlaps protected state: ${target}`);
+  }
+}
+if (fs.existsSync(target) && !fs.statSync(target).isDirectory()) throw new Error('isolation refusal: dogfood root must be a directory');
 const cache = real(process.env.CACHE);
 const rel = path.relative(cache, target);
 if (rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel))) {
@@ -150,9 +183,11 @@ fi
 if [[ "${SHIPYARD_GSD_AUTO_INSTALL:-1}" != "0" ]]; then
   if [[ -x "$ROOT/scripts/ensure-gsd-core.sh" ]]; then
     bash "$ROOT/scripts/ensure-gsd-core.sh" claude || \
-      echo "  (continuing: the hooks below do not need gsd-core)"
+      { [[ -z "${SHIPYARD_ISOLATION_ROOT:-}" ]] || exit 1; echo "  (continuing: the hooks below do not need gsd-core)"; }
   fi
 fi
+
+prepare_isolation claude "${CLAUDE_CONFIG_DIR:-$CLAUDE_HOME}" "${SHIPYARD_ISOLATION_ROOT:-}"
 
 mkdir -p "$CLAUDE_HOME/hooks"
 
@@ -237,6 +272,7 @@ done
 [[ -n "$STOP_SRC" ]] || { echo "error: stop-gate.cjs not found under $ROOT/plugins/delivery-pipeline" >&2; exit 1; }
 STOP_TMP=""
 cleanup_stop_tmp() {
+  prepare_isolation claude "${CLAUDE_CONFIG_DIR:-$CLAUDE_HOME}" "${SHIPYARD_ISOLATION_ROOT:-}" || return 3
   [[ -z "$STOP_TMP" || ! -e "$STOP_TMP" ]] || rm -rf "$STOP_TMP"
 }
 trap cleanup_stop_tmp EXIT
@@ -273,9 +309,14 @@ fi
 while IFS= read -r -d '' file; do
   node --check "$file"
 done < <(find "$STOP_TMP" -type f \( -name '*.cjs' -o -name '*.js' \) -print0)
-VERIFY_CWD="$(mktemp -d)"
+if [[ -n "${SHIPYARD_ISOLATION_ROOT:-}" ]]; then
+  VERIFY_CWD="$(mktemp -d "$TMPDIR/shipyard-verify_cwd.XXXXXX")"
+else
+  VERIFY_CWD="$(mktemp -d)"
+fi
 VERIFY_STATUS=0
 printf '{}\n' | (cd "$VERIFY_CWD" && node "$STOP_TMP/$(basename "$STOP_SRC")") >/dev/null || VERIFY_STATUS=$?
+prepare_isolation claude "${CLAUDE_CONFIG_DIR:-$CLAUDE_HOME}" "${SHIPYARD_ISOLATION_ROOT:-}"
 rm -rf "$VERIFY_CWD"
 (( VERIFY_STATUS == 0 )) || exit "$VERIFY_STATUS"
 rm -rf "$STOP_DIR"
@@ -319,7 +360,9 @@ if [[ -n "$GSD_TUNE" ]]; then
   echo "→ GSD global defaults (~/.gsd/defaults.json)"
   # Never fatal: a shipyard install must not fail because GSD is absent or its
   # defaults file is unreadable. `--check` exits 1 on drift, which is data here.
-  GSD_RUNTIME=claude SHIPYARD_RUNTIME=claude node "$GSD_TUNE" --global --runtime claude --apply 2>&1 | sed 's/^/  /' || true
+  GSD_RUNTIME=claude SHIPYARD_RUNTIME=claude run_isolated_tuner "$GSD_TUNE" --global --runtime claude --apply 2>&1 | sed 's/^/  /' || { [[ -z "${SHIPYARD_ISOLATION_ROOT:-}" ]] || exit 1; }
 fi
+
+prepare_isolation claude "${CLAUDE_CONFIG_DIR:-$CLAUDE_HOME}" "${SHIPYARD_ISOLATION_ROOT:-}"
 
 echo "✓ shipyard auto-route + stop-gate hooks installed for Claude Code (new sessions; open /hooks or restart to load in a running session)"

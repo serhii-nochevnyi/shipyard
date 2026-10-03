@@ -9,6 +9,8 @@ const { execFileSync } = require('node:child_process');
 const { EventEmitter } = require('node:events');
 const test = require('node:test');
 const { transcriptEvidence } = require('./claude-test-evidence.cjs');
+const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
+const runtimeAdapters = require('../../plugins/delivery-pipeline/scripts/runtime-adapters.cjs');
 const { ROLES, canonicalRequest, inlineReferences, trustedAgent, parseArguments,
   runDecomposition: nativeRunDecomposition, recoverDecomposition } = require('../../plugins/delivery-pipeline/scripts/claude-decompose-host.cjs');
 const { createPlanningWriterLease, captureSealManifest } = require('../../plugins/delivery-pipeline/scripts/planning-writer-lease.cjs');
@@ -75,12 +77,13 @@ function successDependencies(f, { store, writerLease, onLaunch, mutateEvidence }
       preRecordValidation: validateStubWriter,
       ...(writerLease ? { writerLease } : {}),
       resolveDispatch: ({ runtime, role: boundaryRole, dispatch_id }) => ({
-        runtime, role: boundaryRole, dispatch_id, model: 'claude-opus-5-5', effort: 'medium',
+        ...policy.resolveDispatch({ runtime, role: boundaryRole, dispatch_id }),
       }),
       probe: () => ({ status: 'available', executable: 'claude', runtime_version: 'test' }),
       runtimeHostFactory: ({ recorder, controller, scope }) => ({
         recorder, controller, scope,
-        capabilities: { supportedModels: ['claude-opus-5-5'], supportedEfforts: ['medium'], observedModel: true, observedEffort: true },
+        capabilities: { supportedModels: Object.values(runtimeAdapters.CLAUDE_MODEL_ALIASES),
+          supportedEfforts: ['low', 'medium', 'high', 'xhigh'], observedModel: true, observedEffort: true },
         typedGsdCallback: async (prompt, options, launchedRole) => {
           calls.push({ prompt, options, launchedRole });
           if (onLaunch) await onLaunch();
@@ -189,12 +192,13 @@ test('routes each role through the boundary and durably records exact-role evide
         store: path.join(f.root, `store-${role}`),
         preRecordValidation: validateStubWriter,
         resolveDispatch: ({ runtime, role: boundaryRole, dispatch_id }) => ({
-          runtime, role: boundaryRole, dispatch_id, model: 'claude-opus-5-5', effort: 'medium',
+          ...policy.resolveDispatch({ runtime, role: boundaryRole, dispatch_id }),
         }),
         probe: () => ({ status: 'available', executable: 'claude', runtime_version: 'test' }),
         runtimeHostFactory: ({ recorder, controller, scope, gsdAgentRoot }) => ({
           recorder, controller, scope,
-          capabilities: { supportedModels: ['claude-opus-5-5'], supportedEfforts: ['medium'], observedModel: true, observedEffort: true },
+          capabilities: { supportedModels: Object.values(runtimeAdapters.CLAUDE_MODEL_ALIASES),
+            supportedEfforts: ['low', 'medium', 'high', 'xhigh'], observedModel: true, observedEffort: true },
           typedGsdCallback: async (prompt, options, launchedRole) => {
             const agent = fs.readFileSync(path.join(gsdAgentRoot, `${launchedRole}.md`), 'utf8');
             assert.doesNotMatch(agent, /^(model|effort):/m);
@@ -211,12 +215,14 @@ test('routes each role through the boundary and durably records exact-role evide
       });
       assert.equal(calls.length, 1);
       assert.equal(calls[0].launchedRole, role);
-      assert.equal(calls[0].options.model, 'claude-opus-5-5');
-      assert.equal(calls[0].options.effort, 'medium');
+      const expected = policy.resolveDispatch({ runtime: 'claude',
+        role: role === 'gsd-phase-researcher' ? 'research' : 'decomposition' });
+      assert.equal(calls[0].options.model, expected.model);
+      assert.equal(calls[0].options.effort, expected.effort);
       assert.equal(output.receipt.compliance, 'verified');
       assert.equal(output.receipt.gsd_role, role);
-      assert.equal(output.receipt.applied_model, 'claude-opus-5-5');
-      assert.equal(output.receipt.applied_effort, 'medium');
+      assert.equal(output.receipt.applied_model, expected.model);
+      assert.equal(output.receipt.applied_effort, expected.effort);
       const launchFiles = fs.readdirSync(path.join(f.root, `store-${role}`, 'launches'));
       assert.equal(launchFiles.length, 1);
       const launchPath = path.join(f.root, `store-${role}`, 'launches', launchFiles[0]);
@@ -306,12 +312,11 @@ test('refuses missing, wrong, or cross-session typed role evidence', async () =>
       const store = path.join(f.root, `invalid-${crypto.randomUUID()}`);
       await assert.rejects(runDecomposition(request(f.worktree, 'gsd-plan-checker'), {
         configRoot: f.config, store,
-        resolveDispatch: ({ runtime, role, dispatch_id }) => ({ runtime, role, dispatch_id,
-          model: 'claude-opus-5-5', effort: 'medium' }),
+        resolveDispatch: ({ runtime, role, dispatch_id }) => policy.resolveDispatch({ runtime, role, dispatch_id }),
         probe: () => ({ status: 'available' }),
         runtimeHostFactory: ({ recorder }) => ({
           recorder,
-          capabilities: { supportedModels: ['claude-opus-5-5'], supportedEfforts: ['medium'], observedModel: true, observedEffort: true },
+          capabilities: { supportedModels: ['claude-sonnet-5-5'], supportedEfforts: ['xhigh'], observedModel: true, observedEffort: true },
           typedGsdCallback: async (prompt, options, role) => {
             const evidence = transcriptEvidence({ launch_id: `launch-${crypto.randomUUID()}`,
               applied_model: options.model, applied_effort: options.effort,
@@ -524,9 +529,8 @@ function recoveryFixture(role, { cli = false, extraPlannerBaseline = false } = {
   const dispatchId = `decompose-${crypto.randomUUID()}`;
   const runId = `decompose-${crypto.randomUUID()}`;
   const sessionId = crypto.randomUUID();
-  const resolution = { model: 'claude-opus-5-5', effort: 'medium',
-    ...(cli ? { policy_hash: require('../../plugins/delivery-pipeline/scripts/model-policy.cjs').POLICY_HASH,
-      policy_version: 'adr-014.v6', rung: 'base' } : {}) };
+  const policyRole = role === 'gsd-phase-researcher' ? 'research' : 'decomposition';
+  const resolution = policy.resolveDispatch({ runtime: 'claude', role: policyRole, dispatch_id: dispatchId });
   const writerLease = createPlanningWriterLease({ worktree: fs.realpathSync(f.worktree), phaseDir: f.phaseDir,
     stateRoot: path.join(f.root, 'shared-writer') });
   const head = execFileSync('git', ['-C', f.worktree, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
@@ -574,8 +578,8 @@ function recoveryFixture(role, { cli = false, extraPlannerBaseline = false } = {
       role, request_sha256: digestValue(JSON.stringify({ role, phase: 38, worktree,
         prompt: 'Create the phase plan.', signals: {} })), model: resolution.model,
       effort: resolution.effort, policy_hash: resolution.policy_hash ?? null,
-      policy_version: cli ? 'adr-014.v6' : null, policy_id: null,
-      policy_rung: cli ? 'base' : null },
+      policy_version: resolution.policy_version ?? null, policy_id: resolution.policy_id ?? null,
+      policy_rung: resolution.rung ?? null },
     completed: { stream_sha256: digest(streamFile), selection_sha256: digest(savedNativeFile),
       start_sha256: digest(startFile), declared_paths: changedPaths, changed_paths: changedPaths,
       artifact_digests: Object.fromEntries(changedPaths.map((name) => [name, digest(path.join(f.phaseDir, name))])),
@@ -614,6 +618,7 @@ test('a live Claude launcher saves evidence that verifies identically after the 
   const f = preparedPhaseFixture();
   try {
     const role = 'gsd-planner';
+    const selection = policy.resolveDispatch({ runtime: 'claude', role: 'decomposition' });
     const sessionId = crypto.randomUUID();
     const runId = `decompose-${crypto.randomUUID()}`;
     const store = path.join(f.root, 'live-evidence');
@@ -624,8 +629,8 @@ test('a live Claude launcher saves evidence that verifies identically after the 
     const nativeFile = path.join(nativeDir, `${sessionId}.jsonl`);
     fs.writeFileSync(nativeFile, [
       { type: 'agent-setting', sessionId, agentSetting: role },
-      { type: 'assistant', sessionId, effort: 'medium', agentSetting: role,
-        message: { role: 'assistant', model: 'claude-opus-5-5' } },
+      { type: 'assistant', sessionId, effort: selection.effort, agentSetting: role,
+        message: { role: 'assistant', model: selection.model } },
     ].map(JSON.stringify).join('\n') + '\n');
     const stream = [
       { type: 'assistant', session_id: sessionId, message: { role: 'assistant', content: 'completed' } },
@@ -658,7 +663,7 @@ test('a live Claude launcher saves evidence that verifies identically after the 
         return child;
       },
     });
-    const live = await launch('Create the plan.', { model: 'claude-opus-5-5', effort: 'medium',
+    const live = await launch('Create the plan.', { model: selection.model, effort: selection.effort,
       session_id: sessionId, gsd_role: role });
     assert.equal(spawned, 1);
     assert.equal(completed, 1);
@@ -666,7 +671,7 @@ test('a live Claude launcher saves evidence that verifies identically after the 
     fs.rmSync(nativeFile);
     const recovered = await verifyCompletedClaudeLaunch({ session_id: sessionId,
       start_evidence_file: startFile, transcript_path: live.applicationEvidence.transcript.path,
-      model: 'claude-opus-5-5', effort: 'medium', gsd_role: role, worktree: f.worktree });
+      model: selection.model, effort: selection.effort, gsd_role: role, worktree: f.worktree });
     assert.deepEqual(recovered.result, { status: live.status, summary: live.summary, output: live.output });
     assert.deepEqual(recovered.applicationEvidence.selection_evidence, live.applicationEvidence.selection_evidence);
     assert.deepEqual(recovered.applicationEvidence.gsd_agent_evidence, live.applicationEvidence.gsd_agent_evidence);
@@ -674,7 +679,7 @@ test('a live Claude launcher saves evidence that verifies identically after the 
   } finally { f.clean(); }
 });
 
-test('fixture launcher and no-relaunch recovery produce identical authenticated boundary receipt fields for one dispatch', async () => {
+test('fixture launcher and no-relaunch recovery produce identical authenticated boundary receipt fields for one dispatch with a zero-padded plan', async () => {
   const f = preparedPhaseFixture();
   const store = path.join(f.root, 'same-dispatch-store');
   const role = 'gsd-planner';
@@ -685,14 +690,23 @@ test('fixture launcher and no-relaunch recovery produce identical authenticated 
   try {
     const deps = {
       configRoot: f.config, store, testWriterStateRoot: path.join(f.root, 'shared-writer'),
-      resolveDispatch: ({ runtime, role: boundaryRole, dispatch_id }) => ({
-        runtime, role: boundaryRole, dispatch_id, model: 'claude-opus-5-5', effort: 'medium',
-      }),
+      resolveDispatch: ({ runtime, role: boundaryRole, dispatch_id }) =>
+        policy.resolveDispatch({ runtime, role: boundaryRole, dispatch_id }),
       probe: () => ({ status: 'available', executable: 'claude-fixture', runtime_version: 'fixture' }),
       runtimeHostFactory: (options) => createClaudeRuntimeHost({
         ...options, env: { CLAUDE_CONFIG_DIR: f.config }, transcriptPollMs: 1,
         spawn: (_executable, args) => {
           launches++;
+          const schemaIndex = args.indexOf('--json-schema');
+          assert.ok(schemaIndex >= 0, 'native completion must declare its changed paths');
+          const outputSchema = JSON.parse(args[schemaIndex + 1]);
+          assert.deepEqual(outputSchema.required, ['changed_paths']);
+          assert.equal(outputSchema.properties.changed_paths.type, 'array');
+          assert.equal(outputSchema.properties.summary.maxLength, 500);
+          assert.ok(args[args.indexOf('--tools') + 1].split(',').includes('StructuredOutput'));
+          assert.ok(args[args.indexOf('--allowedTools') + 1].split(',').includes('StructuredOutput'));
+          const agent = JSON.parse(args[args.indexOf('--agents') + 1]);
+          assert.ok(agent[role].tools.includes('StructuredOutput'));
           const sessionId = args[args.indexOf('--session-id') + 1];
           const settings = JSON.parse(args[args.indexOf('--settings') + 1]);
           const hookArgs = settings.hooks.SessionStart[0].hooks[0].args;
@@ -700,17 +714,20 @@ test('fixture launcher and no-relaunch recovery produce identical authenticated 
           originalNativeFile = path.join(nativeDir, `${sessionId}.jsonl`);
           fs.writeFileSync(originalNativeFile, [
             { type: 'agent-setting', sessionId, agentSetting: role },
-            { type: 'assistant', sessionId, effort: 'medium', agentSetting: role,
-              message: { role: 'assistant', model: 'claude-opus-5-5', content: 'completed' } },
+            { type: 'assistant', sessionId,
+              effort: policy.resolveDispatch({ runtime: 'claude', role: 'decomposition' }).effort,
+              agentSetting: role,
+              message: { role: 'assistant',
+                model: policy.resolveDispatch({ runtime: 'claude', role: 'decomposition' }).model, content: 'completed' } },
           ].map(JSON.stringify).join('\n') + '\n');
           fs.writeFileSync(startFile, JSON.stringify({ hook_event_name: 'SessionStart', source: 'startup',
             session_id: sessionId, transcript_path: originalNativeFile, agent_type: role,
             cwd: fs.realpathSync(f.worktree) }), { mode: 0o600 });
-          fs.writeFileSync(path.join(f.phaseDir, '38-01-PLAN.md'), '# Completed plan\n');
+          fs.writeFileSync(path.join(f.phaseDir, '038-01-PLAN.md'), '# Completed plan\n');
           const stream = [
             { type: 'assistant', session_id: sessionId, message: { role: 'assistant', content: 'completed' } },
-            { type: 'result', session_id: sessionId, result: 'completed',
-              structured_output: { changed_paths: ['38-01-PLAN.md'] } },
+            { type: 'result', session_id: sessionId, result: 'Long native narrative. '.repeat(100),
+              structured_output: { changed_paths: ['038-01-PLAN.md'], summary: 'Completed padded plan' } },
           ].map(JSON.stringify).join('\n') + '\n';
           const child = new EventEmitter();
           child.pid = 99999999;
@@ -724,6 +741,7 @@ test('fixture launcher and no-relaunch recovery produce identical authenticated 
     };
     const live = await runDecomposition(request(f.worktree, role), deps);
     assert.equal(launches, 1);
+    assert.equal(live.envelope.summary, 'Completed padded plan');
     const recorder = createDurableRecorder(path.join(store, 'receipts'));
     const originalReservation = recorder.getReservation(live.dispatch_id);
     assert.ok(originalReservation?.reserved_at);
@@ -744,6 +762,7 @@ test('fixture launcher and no-relaunch recovery produce identical authenticated 
     const recovered = await recoverDecomposition(live.dispatch_id, recoveryDeps);
     assert.equal(launches, 1, 'recovery must make zero additional launcher calls');
     assert.equal(recovered.recovered, true);
+    assert.equal(recovered.envelope.summary, 'Completed padded plan');
     assert.equal(live.recovered, undefined);
     assert.equal(recovered.dispatch_id, live.dispatch_id);
     assert.equal(recovered.run_id, live.run_id);
@@ -757,8 +776,9 @@ test('fixture launcher and no-relaunch recovery produce identical authenticated 
     }
     assert.equal(recovered.receipt.dispatch_id, originalReservation.dispatch_id);
     assert.equal(recovered.receipt.gsd_role, role);
-    assert.equal(recovered.receipt.applied_model, 'claude-opus-5-5');
-    assert.equal(recovered.receipt.applied_effort, 'medium');
+    const selection = policy.resolveDispatch({ runtime: 'claude', role: 'decomposition' });
+    assert.equal(recovered.receipt.applied_model, selection.model);
+    assert.equal(recovered.receipt.applied_effort, selection.effort);
     assert.equal(recovered.receipt.selection_evidence.source, 'claude-session-assistant-transcript');
     assert.equal(recovered.receipt.gsd_agent_evidence.session_start_agent_type, role);
     assert.equal(recovered.receipt.gsd_agent_evidence.transcript_agent_setting, role);
@@ -793,8 +813,9 @@ test('a missing child pid or failed synchronous pid persistence kills Claude bef
           return child;
         },
       });
-      await assert.rejects(launch('Create the plan.', { model: 'claude-opus-5-5',
-        effort: 'medium', session_id: crypto.randomUUID(), gsd_role: 'gsd-planner' }),
+      const selection = policy.resolveDispatch({ runtime: 'claude', role: 'decomposition' });
+      await assert.rejects(launch('Create the plan.', { model: selection.model,
+        effort: selection.effort, session_id: crypto.randomUUID(), gsd_role: 'gsd-planner' }),
       { code: 'RUNTIME_UNAVAILABLE' });
       assert.equal(stdinWrites, 0);
       assert.equal(kills, 1);
@@ -1017,4 +1038,14 @@ test('Claude recovery aborts a provisional role record when ownership changes be
       } finally { f.finish(); }
     }
   }
+});
+
+test('decomposition seals plans whose phase prefix has leading zeros', async () => {
+  const f = preparedPhaseFixture();
+  try {
+    fs.renameSync(path.join(f.phaseDir, '38-01-PLAN.md'), path.join(f.phaseDir, '038-01-PLAN.md'));
+    const { deps } = successDependencies(f, { store: path.join(f.root, 'zero-padded-store') });
+    const output = await nativeRunDecomposition(request(f.worktree, 'gsd-planner'), deps);
+    assert.ok(output.envelope);
+  } finally { f.clean(); }
 });

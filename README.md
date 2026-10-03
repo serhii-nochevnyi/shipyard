@@ -77,7 +77,7 @@ observer and GSD gates together from this checkout:
 
 ```bash
 make package-shipyard-codex
-node scripts/install-shipyard-marketplace.cjs codex --source "$PWD"
+bash scripts/ensure-gsd-core.sh --launch-marketplace codex --source "$PWD"
 ```
 
 For a published release, use the same installer without `--source` to register
@@ -146,7 +146,7 @@ never overwrites the release cache:
 ```bash
 make install-shipyard-dogfood-claude
 make install-shipyard-dogfood-codex
-node scripts/install-shipyard-marketplace.cjs codex --source "$PWD"
+bash scripts/ensure-gsd-core.sh --launch-marketplace codex --source "$PWD"
 ```
 
 Each of these defaults to a home dedicated to this checkout when no override
@@ -263,7 +263,7 @@ palette is:
 
 {
   "delivery_pipeline": {
-    "codex_models": "gpt-6-sol:high@0.155.1, gpt-6-sol:xhigh@0.155.1"
+    "codex_models": "gpt-6.1-sol:high@0.155.1, gpt-6.1-sol:xhigh@0.155.1"
   }
 }
 

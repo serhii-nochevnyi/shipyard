@@ -366,7 +366,7 @@ function projectsDirectory(options, environment) {
   return path.join(path.resolve(resolved), 'projects');
 }
 
-function gsdAgentDefinition(role, environment, configuredRoot) {
+function gsdAgentDefinition(role, environment, configuredRoot, schema) {
   const home = environment.HOME || os.homedir();
   const config = environment.CLAUDE_CONFIG_DIR || process.env.CLAUDE_CONFIG_DIR || path.join(home, '.claude');
   const expanded = config.startsWith('~/') ? path.join(home, config.slice(2)) : config;
@@ -398,6 +398,7 @@ function gsdAgentDefinition(role, environment, configuredRoot) {
   if (!allowed.includes('Bash') || !allowed.includes('Read') || !allowed.includes('Glob') || !allowed.includes('Grep')) {
     fail('RUNTIME_CAPABILITY_MISSING', 'GSD agent definition lacks required scoped tools');
   }
+  if (schema !== undefined) allowed.push('StructuredOutput');
   return Object.freeze({
     role,
     tools: allowed.join(','),
@@ -724,7 +725,7 @@ function createClaudeCliLauncher(options = {}) {
       try { schemaJson = JSON.stringify(schema); } catch { schemaJson = undefined; }
       if (typeof schemaJson !== 'string') fail('INVALID_INPUT', 'schema must be serializable JSON');
     }
-    const agentDefinition = gsdRole ? gsdAgentDefinition(gsdRole, childEnvironment, options.gsdAgentRoot) : null;
+    const agentDefinition = gsdRole ? gsdAgentDefinition(gsdRole, childEnvironment, options.gsdAgentRoot, schema) : null;
     const persistentEvidence = typeof options.startEvidenceFile === 'string';
     const evidenceDirectory = persistentEvidence ? path.dirname(path.resolve(options.startEvidenceFile))
       : fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-claude-session-start-'));

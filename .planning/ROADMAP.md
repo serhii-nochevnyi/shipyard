@@ -910,12 +910,29 @@ S1 is a separate high-risk correctness fix with its own ticket and human checkpo
 
 REQ-193 has an approved first-pass contribution here; its full completion belongs to queued Phase 47 after phase-43 caller ownership clears. Retain its unchecked status until production caller attribution is verified.
 
+### Phase 46: Refresh the native runtime model ladder
+
+**Status**: planned; accepted ADR-024 and authenticated INV-011 Gate 1; no executable plans
+**Goal**: adopt the operator-selected GPT-6.1 Sol and pinned Sonnet 5.5 native role matrix with verified application, coherent generated roles, preserved historical evidence and reviewable installation provenance.
+**Requirements**: P46-A, P46-B, P46-C, P46-D, P46-E (phase-local requirements mapped to ADR-024 decision bullets)
+**Depends on**: no blanket phase-43/45 completion dependency; exact file ownership and any necessary cross-phase dependencies must be established by authenticated decomposition
+**Plans**: 0; authenticated decomposition from accepted [ADR-024](architecture/ADR-024-model-ladder-refresh.md) and [INV-011](investigations/INV-011-model-ladder-refresh/PROBLEM.md)
+
+- **P46-A** — exact Codex native ladder and pinned model identity.
+- **P46-B** — exact Claude native ladder and supported model/effort application.
+- **P46-C** — coherent policy/adapters/generated roles, exact observed application and historical receipt integrity.
+- **P46-D** — isolated installation provenance, documented migration and rollback; existing D6 outer coordination activation deferred.
+- **P46-E** — scoped regression evidence and independent review without unmeasured quota claims or duplicate experiment infrastructure.
+
+Native-role policy changes are authorized for investigation and implementation after their gates. Preserve active phase-43/45 work. Outer coordination activation stays with its existing ADR-023 D6 owner seam.
+
+
 <!-- shipyard:gsd-sync:begin -->
 ## Shipyard synchronization (generated)
 
-- Source fingerprint: `e4b0d663bd0867924b7115398376f8fd62e3ea9a5474ef971c1a3cdc8097215d`
-- Plans merged: 244/247
-- Phases verified: 10/27
+- Source fingerprint: `d144ff57edd373349705cd7a327f41f165c376b3399409c3d83b6e7d8a349467`
+- Plans merged: 251/253
+- Phases verified: 10/28
 - Current phase: 20
 
 | Phase | Plans | Merged | Verification |
@@ -945,7 +962,8 @@ REQ-193 has an approved first-pass contribution here; its full completion belong
 | 42 — Resume trusted finalization without executor replay | 3 | 3 | gaps_found |
 | 43 — Target-project delivery at scale | 19 | 19 | pending |
 | 44 — Optimize subscription efficiency per runtime | 8 | 8 | pending |
-| 45 — Close residual pipeline efficiency gaps | 18 | 15 | gaps_found |
+| 45 — Close residual pipeline efficiency gaps | 18 | 18 | gaps_found |
+| 46 — Refresh the native runtime model ladder | 6 | 4 | gaps_found |
 | 47 — Complete deferred decomposition wait attribution | 0 | 0 | pending |
 
 <!-- shipyard:gsd-sync:end -->

@@ -157,26 +157,42 @@ function normalizeProvider(runtime, value) {
   return expected;
 }
 
-function runtimeModels(runtime) {
-  return runtime === 'codex' ? adapters.CODEX_MODEL_IDS : adapters.CLAUDE_MODEL_ALIASES;
+function policyIdentity(input, recorded = false) {
+  const read = (snake, camel) => {
+    if (Object.hasOwn(input, snake) && Object.hasOwn(input, camel) && input[snake] !== input[camel]) {
+      refuse('POLICY_IDENTITY_CONFLICT', `${snake} spellings disagree`);
+    }
+    return Object.hasOwn(input, snake) ? input[snake] : input[camel];
+  };
+  let version = read('policy_version', 'policyVersion');
+  let hash = read('policy_hash', 'policyHash');
+  const hasVersion = Object.hasOwn(input, 'policy_version') || Object.hasOwn(input, 'policyVersion');
+  const hasHash = Object.hasOwn(input, 'policy_hash') || Object.hasOwn(input, 'policyHash');
+  if ((hasVersion && !version) || (hasHash && !hash)
+      || (recorded && (!hasVersion || !hasHash)) || (!hasVersion && hasHash)) {
+    refuse('MISSING_POLICY_IDENTITY', 'recorded policy version and hash are required');
+  }
+  if (!hasVersion) version = policy.POLICY_VERSION;
+  version = safeId(version, 'policy_version');
+  const registered = adapters.recordedPolicyFor(version, { policy_version: policy.POLICY_VERSION, policy_hash: policy.POLICY_HASH });
+  if (!registered) refuse('UNSUPPORTED_POLICY_VERSION', 'unregistered recorded policy');
+  if (!hasHash) {
+    if (version !== policy.POLICY_VERSION) refuse('MISSING_POLICY_IDENTITY', 'historical policy hash is required');
+    hash = policy.POLICY_HASH;
+  }
+  hash = digestValue(hash, 'policy_hash');
+  if (hash !== registered.policy_hash) refuse('POLICY_IDENTITY_CONFLICT', 'policy version and hash disagree with registered authority');
+  return { policy_version: version, policy_hash: hash };
 }
 
-function normalizeModel(runtime, value, field = 'model') {
+function normalizeModel(runtime, value, field = 'model', version = policy.POLICY_VERSION, keyOnly = false, concreteOnly = false) {
   if (value === undefined || value === null) return { model_key: null, model: null };
-  const selectedRuntime = normalizeRuntime(runtime);
-  const map = runtimeModels(selectedRuntime);
-  const entry = Object.entries(map).find(([key, native]) => key === value || native === value);
+  const map = adapters.recordedPalette(version, runtime);
+  const entry = Object.entries(map).find(([key, native]) => (keyOnly ? key === value : concreteOnly ? native === value : key === value || native === value));
   if (entry) return { model_key: entry[0], model: entry[1] };
-  const otherRuntime = RUNTIMES.find((candidate) => candidate !== selectedRuntime
-    && Object.entries(runtimeModels(candidate)).some(([key, native]) => key === value || native === value));
-  if (otherRuntime) {
-    refuse('RUNTIME_MODEL_MISMATCH', `${field} belongs to ${otherRuntime}, not ${selectedRuntime}`, {
-      runtime: selectedRuntime, model: value, other_runtime: otherRuntime,
-    });
-  }
-  refuse('UNSUPPORTED_MODEL', `${field} is not registered for ${selectedRuntime}`, {
-    runtime: selectedRuntime, model: value,
-  });
+  const foreign = RUNTIMES.some(candidate => candidate !== runtime && Object.entries(adapters.recordedPalette(version, candidate)).some(([key, native]) => key === value || native === value));
+  const crossed = ['adr-014.v6', 'adr-014.v7'].some(candidate => Object.values(adapters.recordedPalette(candidate, runtime)).includes(value));
+  refuse(foreign || crossed ? 'RUNTIME_MODEL_MISMATCH' : 'UNSUPPORTED_MODEL', `${field} is not registered for recorded runtime/policy`);
 }
 
 function normalizeRole(value) {
@@ -235,19 +251,19 @@ function normalizeRevisionIdentity(input) {
   return deepFreeze({ schema: ID_SCHEMAS.revision, version: VERSION, value });
 }
 
-function normalizeDispatchIdentity(input) {
+function normalizeDispatchIdentity(input, { recorded = false } = {}) {
   if (!object(input)) refuse('MISSING_SCOPE', 'dispatch identity is required');
   rejectSerializedAuthority(input, 'dispatch');
   const runtimeIdentity = normalizeRuntimeIdentity(input.runtime, input.provider);
   const dispatch_id = safeId(input.dispatch_id || input.dispatchId, 'dispatch_id');
   const role = normalizeRole(input.role);
-  const selection = normalizeModel(runtimeIdentity.runtime, input.model_key || input.model, 'dispatch.model');
-  if (input.model_key !== undefined && input.model_key !== null) {
-    const explicit = normalizeModel(runtimeIdentity.runtime, input.model_key, 'dispatch.model_key');
-    if (selection.model_key !== explicit.model_key) refuse('RUNTIME_MODEL_MISMATCH', 'model and model_key disagree');
+  const { policy_version, policy_hash } = policyIdentity(input, recorded || input.schema !== undefined);
+  const key = normalizeModel(runtimeIdentity.runtime, input.model_key, 'dispatch.model_key', policy_version, true);
+  const concrete = normalizeModel(runtimeIdentity.runtime, input.model, 'dispatch.model', policy_version, false, key.model_key !== null || recorded || input.schema !== undefined);
+  if (key.model_key !== null && concrete.model_key !== null && key.model !== input.model) {
+    refuse('RUNTIME_MODEL_MISMATCH', 'model and model_key disagree');
   }
-  const policy_version = safeId(input.policy_version || input.policyVersion || policy.POLICY_VERSION, 'policy_version');
-  const policy_hash = digestValue(input.policy_hash || input.policyHash || policy.POLICY_HASH, 'policy_hash');
+  const selection = key.model_key !== null ? key : concrete;
   const launchValue = input.launch_id === undefined ? input.launchId : input.launch_id;
   const launch_id = launchValue === undefined || launchValue === null ? null : safeId(launchValue, 'launch_id');
   return deepFreeze({
@@ -342,11 +358,13 @@ function normalizeReceiptIdentity(input) {
   const receipt_id = safeId(input.receipt_id || input.receiptId, 'receipt_id');
   const run_id = safeId(input.run_id || input.runId, 'receipt.run_id');
   const dispatch_id = safeId(input.dispatch_id || input.dispatchId, 'receipt.dispatch_id');
+  const recorded = input.schema !== undefined;
+  const identity = policyIdentity(input, recorded);
   const models = {};
   for (const field of ['requested_model', 'applied_model', 'observed_model']) {
     const value = input[field];
     if (value === undefined || value === null || value === 'unknown' || value === 'unsupported') models[field] = value === undefined ? null : value;
-    else models[field] = normalizeModel(runtime, value, `receipt.${field}`).model;
+    else models[field] = normalizeModel(runtime, value, `receipt.${field}`, identity.policy_version, false, recorded || field !== 'requested_model').model;
   }
   const efforts = {};
   for (const field of ['requested_effort', 'applied_effort', 'observed_effort']) {
@@ -373,8 +391,7 @@ function normalizeReceiptIdentity(input) {
     requested_effort: efforts.requested_effort,
     applied_effort: efforts.applied_effort,
     observed_effort: efforts.observed_effort,
-    policy_version: safeId(input.policy_version || input.policyVersion || policy.POLICY_VERSION, 'receipt.policy_version'),
-    policy_hash: digestValue(input.policy_hash || input.policyHash || policy.POLICY_HASH, 'receipt.policy_hash'),
+    ...identity,
     status,
     usage_status,
     launch_id: receiptLaunchValue === undefined || receiptLaunchValue === null
@@ -393,7 +410,15 @@ function normalizeRunContract(input, { requireRunId = true } = {}) {
   });
   const phase = normalizePhaseIdentity(input.phase);
   const runtime = normalizeRuntimeIdentity(input.runtime);
-  const dispatch = normalizeDispatchIdentity({ ...(input.dispatch || {}), runtime: runtime.runtime, provider: runtime.provider });
+  const nested = input.dispatch || {};
+  if (Object.hasOwn(nested, 'runtime')) {
+    const value = object(nested.runtime) ? nested.runtime.runtime : nested.runtime;
+    if (!RUNTIMES.includes(value)) refuse('UNSUPPORTED_RUNTIME', 'unknown nested runtime');
+    if (value !== runtime.runtime) refuse('RUNTIME_MODEL_MISMATCH', 'nested runtime conflicts with run');
+    if (object(nested.runtime) && Object.hasOwn(nested.runtime, 'provider')) normalizeProvider(runtime.runtime, nested.runtime.provider);
+  }
+  if (Object.hasOwn(nested, 'provider')) normalizeProvider(runtime.runtime, nested.provider);
+  const dispatch = normalizeDispatchIdentity({ ...nested, runtime: runtime.runtime, provider: runtime.provider }, { recorded: input.schema !== undefined });
   const ticket = normalizeTicketIdentity(input.ticket, { role: dispatch.role, phase: phase.phase });
   const worktree = normalizeWorktreeIdentity(input.worktree || repository.worktree);
   if (worktree.path !== repository.worktree) refuse('SCOPE_MISMATCH', 'repository and worktree identities disagree');

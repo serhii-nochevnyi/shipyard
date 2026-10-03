@@ -1,13 +1,13 @@
 ---
-# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: d7e28c8a2862d4b2bf4c0696d17e942edf06d874e05fedc0c91bc01cbff4577f
+# shipyard:gsd-sync generated; sync-version: 1; source fingerprint: 8364b8ea31139b38d432c526e7c5ae6793464e1395f7595347b1edfbb03996cf
 gsd_state_version: '1.0'
 status: planning
 progress:
-  total_phases: 27
+  total_phases: 28
   completed_phases: 10
-  total_plans: 247
-  completed_plans: 244
-  percent: 98
+  total_plans: 253
+  completed_plans: 251
+  percent: 99
 ---
 
 # Project State
@@ -21,16 +21,16 @@ See: .planning/PROJECT.md (updated by Shipyard GSD synchronization)
 
 ## Current Position
 
-Phase: 1 of 27 (Phase 20: Autonomy of the drive-to-green loop)
+Phase: 1 of 28 (Phase 20: Autonomy of the drive-to-green loop)
 Plan: 6 of 6 merged
 Status: pending
-Last activity: 2026-09-30 — Shipyard projection synchronized
+Last activity: 2026-10-02 — Shipyard projection synchronized
 
-Progress: [█████████░] 98%
+Progress: [█████████░] 99%
 
 ## Performance Metrics
 
-- Total plans completed: 244
+- Total plans completed: 251
 - Average duration: not measured by the projection
 - Total execution time: not measured by the projection
 
@@ -63,7 +63,8 @@ Progress: [█████████░] 98%
 | 42 | 3 | 3 | gaps_found |
 | 43 | 19 | 19 | pending |
 | 44 | 8 | 8 | pending |
-| 45 | 18 | 15 | gaps_found |
+| 45 | 18 | 18 | gaps_found |
+| 46 | 6 | 4 | gaps_found |
 | 47 | 0 | 0 | pending |
 
 ## Accumulated Context
@@ -79,14 +80,14 @@ Review and resolve phase integration findings shown in the phase artifacts.
 
 ### Blockers/Concerns
 
-- T-45-16: delivery status is pending
-- T-45-17: delivery status is pending
-- T-45-18: delivery status is pending
+- T-46-07: delivery status is pr-open
+- T-46-08: delivery status is pending
 - Phase 20: INTEGRATION.md is missing
 - Phase 21: INTEGRATION.md is missing
 - Phase 22: INTEGRATION.md is missing
 - Phase 23: INTEGRATION.md is missing
 - Phase 24: integration evidence records a finding or failed verdict
+- Phase 26: verification evidence records a failed check
 
 ## Deferred Items
 
@@ -96,6 +97,6 @@ Review and resolve phase integration findings shown in the phase artifacts.
 
 ## Session Continuity
 
-Last session: 2026-09-30 20:48
+Last session: 2026-10-02 08:34
 Stopped at: Shipyard GSD projection synchronized from the delivery graph.
 Resume file: None

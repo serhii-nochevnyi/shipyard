@@ -255,7 +255,7 @@ test('the Claude workflow host and Codex adapter both enforce the host-held owne
     const claudeHandoff = createSessionHandoff({ cwd: claudeRoot });
     const claudeOwner = claudeHandoff.begin({ runId: 'run-claude-owner', sessionId: 'session-claude-owner', phase: '33', tickets: ['T-33-08'], runtime: 'claude' });
     const workflow = path.join(claudeRoot, 'workflow.mjs');
-    fs.writeFileSync(workflow, "return await __createClaudeWorkflowDispatch({ agent, prompt: 'handoff test', role: 'executor', model: 'sonnet', effort: 'max', context: { ticket: 'T-33-08' } })");
+    fs.writeFileSync(workflow, "return await __createClaudeWorkflowDispatch({ agent, prompt: 'handoff test', role: 'executor', model: 'claude-sonnet-5-5', effort: 'medium', context: { ticket: 'T-33-08' } })");
     const recorder = createDurableRecorder(path.join(claudeRoot, 'receipts'));
     const evidence = new WeakMap();
     let claudeCalls = 0;
@@ -268,7 +268,7 @@ test('the Claude workflow host and Codex adapter both enforce the host-held owne
         return result;
       },
       parallel: async (thunks) => Promise.all(thunks.map((thunk) => thunk())),
-      capabilities: { supportedModels: [CLAUDE_MODEL_ALIASES.sonnet], supportedEfforts: ['max'], observedModel: true, observedEffort: true },
+      capabilities: { supportedModels: [CLAUDE_MODEL_ALIASES.sonnet], supportedEfforts: ['medium'], observedModel: true, observedEffort: true },
       recorder,
       applicationEvidence: ({ result }) => evidence.get(result),
       handoff: claudeOwner,
@@ -278,7 +278,7 @@ test('the Claude workflow host and Codex adapter both enforce the host-held owne
     const registered = registerClaudeWorkflowHost({
       agent: async () => ({ launch_id: 'unused' }),
       parallel: async (thunks) => Promise.all(thunks.map((thunk) => thunk())),
-      capabilities: { supportedModels: [CLAUDE_MODEL_ALIASES.sonnet], supportedEfforts: ['max'], observedModel: true, observedEffort: true },
+      capabilities: { supportedModels: [CLAUDE_MODEL_ALIASES.sonnet], supportedEfforts: ['medium'], observedModel: true, observedEffort: true },
       recorder,
       applicationEvidence: ({ result }) => evidence.get(result),
       handoff: claudeOwner,
@@ -290,7 +290,7 @@ test('the Claude workflow host and Codex adapter both enforce the host-held owne
         scriptPath: workflow,
         agent: async () => { claudeCalls++; },
         parallel: async (thunks) => Promise.all(thunks.map((thunk) => thunk())),
-        capabilities: { supportedModels: [CLAUDE_MODEL_ALIASES.sonnet], supportedEfforts: ['max'], observedModel: true, observedEffort: true },
+        capabilities: { supportedModels: [CLAUDE_MODEL_ALIASES.sonnet], supportedEfforts: ['medium'], observedModel: true, observedEffort: true },
         recorder,
         applicationEvidence: ({ result }) => evidence.get(result),
         handoff: claudeOwner,

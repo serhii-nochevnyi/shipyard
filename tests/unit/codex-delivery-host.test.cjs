@@ -29,11 +29,11 @@ const { createRunScope } = require('../../plugins/delivery-pipeline/scripts/run-
 const { SCRATCH_FILES } = require('../../plugins/delivery-pipeline/scripts/conveyor-scratch.cjs');
 
 const capabilities = {
-  supportedModels: ['gpt-6-luna', 'gpt-6-sol'],
+  supportedModels: ['gpt-6-luna', 'gpt-6.1-sol'],
   supportedEfforts: ['low', 'medium', 'high', 'xhigh', 'max'],
   supportedSelections: [
-    { model: 'gpt-6-luna', effort: 'max' },
-    { model: 'gpt-6-sol', effort: 'high' },
+    { model: 'gpt-6.1-sol', effort: 'low' },
+    { model: 'gpt-6.1-sol', effort: 'high' },
   ],
 };
 const finalizerFile = path.join(__dirname, '../../plugins/delivery-pipeline/scripts/delivery-commit-finalizer.cjs');
@@ -288,7 +288,7 @@ test('executor refuses an untracked file outside the shared scratch set', async 
   } finally { clean(f); }
 });
 
-test('dynamic executor resolves Luna/max through the boundary with worktree write access', async () => {
+test('dynamic executor resolves Sol/low through the boundary with worktree write access', async () => {
   const f = fixture();
   try {
     const result = await delivery(f).run({
@@ -298,8 +298,8 @@ test('dynamic executor resolves Luna/max through the boundary with worktree writ
     });
     const call = f.calls[0];
     assert.equal(call.method, 'dynamic');
-    assert.equal(call.selection.model, 'gpt-6-luna');
-    assert.equal(call.selection.reasoning_effort, 'max');
+    assert.equal(call.selection.model, 'gpt-6.1-sol');
+    assert.equal(call.selection.reasoning_effort, 'low');
     assert.equal(call.context.sandbox_mode, 'workspace-write');
     assert.equal(call.context.run_id, f.scope.run_id);
     assert.equal(call.context.worktreePath, f.scope.worktree);
@@ -308,8 +308,8 @@ test('dynamic executor resolves Luna/max through the boundary with worktree writ
       /Leave changes uncommitted\. The trusted host will stage, sign, and verify the commit\.\n\n<TICKET-CONTRACT path="\.planning\/PLAN\.md"/);
     assert.match(call.context.prompt, /# approved plan/);
     assert.equal(result.receipt.compliance, 'verified');
-    assert.equal(result.receipt.applied_model, 'gpt-6-luna');
-    assert.equal(result.receipt.applied_effort, 'max');
+    assert.equal(result.receipt.applied_model, 'gpt-6.1-sol');
+    assert.equal(result.receipt.applied_effort, 'low');
     assert.equal(result.artifact.status, 'committed');
     assert.equal(result.artifact.commit, git(f.root, 'rev-parse', 'HEAD'));
     assert.equal(result.artifact.signer, signer);
@@ -359,7 +359,7 @@ test('production runtime host receives the scoped prompt and records native mode
   const transcript = captured('tests/fixtures/captured/codex-agent-stream-parent.jsonl', { '<SESSION-2>': session })
     .split('\n').filter(Boolean).map((line) => {
       const record = JSON.parse(line);
-      if (record.type === 'turn_context') Object.assign(record.payload, { model: 'gpt-6-luna', effort: 'max' });
+      if (record.type === 'turn_context') Object.assign(record.payload, { model: 'gpt-6.1-sol', effort: 'low' });
       return JSON.stringify(record);
     }).join('\n') + '\n';
   const output = captured('tests/fixtures/captured/codex-agent-stream-exec.jsonl', { '<SESSION-1>': session });
@@ -402,8 +402,8 @@ test('production runtime host receives the scoped prompt and records native mode
       },
     }).run({ role: 'executor', context: { prompt: 'Edit the scoped file.' } });
     assert.ok(received.join('').includes('Edit the scoped file.'));
-    assert.equal(result.receipt.applied_model, 'gpt-6-luna');
-    assert.equal(result.receipt.applied_effort, 'max');
+    assert.equal(result.receipt.applied_model, 'gpt-6.1-sol');
+    assert.equal(result.receipt.applied_effort, 'low');
     assert.equal(result.receipt.runtime_evidence.native_session_evidence.session_id, session);
     assert.equal(result.artifact.status, 'committed');
     assert.ok(result.receipt.runtime_evidence.transcript.path.startsWith(fs.realpathSync(f.storageRoot)));
@@ -420,7 +420,7 @@ test('generated static role uses its immutable file and declared read-only sandb
     const call = f.calls[0];
     assert.equal(call.method, 'static');
     assert.equal(call.selection.agent_file, f.file);
-    assert.equal(call.selection.model, 'gpt-6-sol');
+    assert.equal(call.selection.model, 'gpt-6.1-sol');
     assert.equal(call.selection.reasoning_effort, 'high');
     assert.equal(call.selection.sandbox_mode, 'read-only');
     assert.equal(result.receipt.agent_file_digest, f.fileDigest);
@@ -449,7 +449,7 @@ test('typed GSD delivery goes through the host-owned typed callback', async () =
       context: { prompt: 'Create the approved phase plan.' },
     });
     assert.equal(f.calls[0].method, 'typed');
-    assert.equal(f.calls[0].selection.model, 'gpt-6-sol');
+    assert.equal(f.calls[0].selection.model, 'gpt-6.1-sol');
     assert.equal(f.calls[0].selection.reasoning_effort, 'high');
     assert.equal(result.receipt.gsd_launch_mechanism, 'typed-gsd-callback');
     assert.ok(f.host.recorder.getVerifiedRecord(result.receipt.dispatch_id));
@@ -1119,7 +1119,7 @@ test('Codex retries one failed plan command with sealed diagnostics and binds th
     run_id: f.scope.run_id, repository_id: 'shipyard/test', phase: f.scope.phase,
     ticket: f.scope.ticket, worktree: f.root, runtime: 'codex', provider: 'openai',
     owner_id: controllerOwner,
-    dispatch: { dispatch_id: 'verification-retry-initial', role: 'executor', model: 'gpt-6-luna', effort: 'max' },
+    dispatch: { dispatch_id: 'verification-retry-initial', role: 'executor', model: 'gpt-6.1-sol', effort: 'low' },
   }));
   let checks = 0;
   try {
@@ -1243,7 +1243,9 @@ test('recovery-only CLI returns the signed artifact with zero executor launches 
       (refusal) => refusal.code === 'INVALID_INPUT');
     assert.throws(() => parseResumeArguments(['--resume-finalization', 'not-an-id', '--scope-file', scopeFile]),
       (refusal) => refusal.code === 'INVALID_INPUT');
-    fs.writeFileSync(scopeFile, JSON.stringify(liveScope(f)));
+    const recoveryScope = liveScope(f);
+    fs.writeFileSync(scopeFile, JSON.stringify(recoveryScope));
+    const candidateBytes = fs.readFileSync(candidatePath(f, error.candidate_id), 'utf8');
     const output = [];
     const result = await runCli(['--resume-finalization', error.candidate_id, '--scope-file', scopeFile],
       { write: (chunk) => output.push(chunk) }, {
@@ -1252,8 +1254,92 @@ test('recovery-only CLI returns the signed artifact with zero executor launches 
       });
     assert.equal(result.artifact.commit, git(f.root, 'rev-parse', 'HEAD'));
     assert.equal(JSON.parse(output.join('')).artifact.candidate_id, error.candidate_id);
+    assertRecoveryPolicy(f, error.candidate_id, recoveryScope);
+    assert.equal(fs.readFileSync(candidatePath(f, error.candidate_id), 'utf8'), candidateBytes);
     assert.equal(f.calls.length, launchesBefore);
   } finally { clean(f); }
+});
+
+function assertRecoveryPolicy(f, id, scope) {
+  const file = candidatePath(f, id);
+  const candidate = JSON.parse(fs.readFileSync(file, 'utf8')).payload;
+  const original = f.host.recorder.getVerifiedRecord(candidate.dispatch_id);
+  assert.equal(candidate.policy_version, original.policy_version);
+  assert.equal(candidate.policy_hash, original.receipt.policy_hash);
+  const identity = crypto.createHash('sha256').update(`${scope.run_id}\0${fs.realpathSync(f.root)}`).digest('hex');
+  const stored = createRunController({ storeDir: path.join(f.storageRoot, identity, 'runs') }).status(scope.run_id);
+  assert.equal(stored.scope.dispatch.policy_version, original.policy_version);
+  assert.equal(stored.scope.dispatch.policy_hash, original.receipt.policy_hash);
+}
+
+function resealCandidate(f, id, mutate) {
+  const payload = JSON.parse(fs.readFileSync(candidatePath(f, id), 'utf8')).payload;
+  delete payload.candidate_id;
+  mutate(payload);
+  const sorted = (value) => Array.isArray(value) ? value.map(sorted)
+    : value && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort().map((key) => [key, sorted(value[key])])) : value;
+  const canonical = (value) => JSON.stringify(sorted(value));
+  const nextId = crypto.createHash('sha256').update(canonical(payload)).digest('hex');
+  payload.candidate_id = nextId;
+  const key = fs.readFileSync(path.join(stateRoot(f), 'finalization-authority', 'hmac.key'));
+  const envelope = { format: 'shipyard.host-authenticated.v1', payload,
+    integrity: { algorithm: 'hmac-sha256', mac: crypto.createHmac('sha256', key).update(canonical(payload)).digest('hex') } };
+  fs.writeFileSync(candidatePath(f, nextId), JSON.stringify(envelope) + '\n', { mode: 0o600 });
+  return nextId;
+}
+
+test('recovery CLI derives a legacy candidate version only from bound authenticated authority and refuses conflicts', async () => {
+  for (const variant of ['legacy', 'conflict', 'null', 'missing-authority', 'historical']) {
+    const f = fixture();
+    try {
+      const error = await failedFinalization(f);
+      const id = resealCandidate(f, error.candidate_id, (candidate) => {
+        if (variant === 'legacy') delete candidate.policy_version;
+        if (variant === 'conflict') candidate.policy_version = 'adr-014.v6';
+        if (variant === 'null') candidate.policy_version = null;
+      });
+      const scope = liveScope(f);
+      const file = path.join(f.graphDir, 'recovery-scope.json');
+      fs.writeFileSync(file, JSON.stringify(scope));
+      const before = fs.readFileSync(candidatePath(f, id), 'utf8');
+      let recorder = f.host.recorder;
+      if (variant === 'missing-authority') recorder = { getVerifiedRecord(dispatchId) {
+        const record = structuredClone(f.host.recorder.getVerifiedRecord(dispatchId));
+        delete record.policy_version;
+        delete record.resolution.policy_version;
+        delete record.receipt.policy_version;
+        return record;
+      } };
+      const action = () => runCli(['--resume-finalization', id, '--scope-file', file], { write() {} },
+        { storageRoot: f.storageRoot, graphDir: f.graphDir, finalizeCommit, verification: f.verification, recorder });
+      if (variant === 'historical') {
+        const candidate = JSON.parse(before).payload;
+        const record = structuredClone(f.host.recorder.getVerifiedRecord(candidate.dispatch_id));
+        const hash = '30e71fb4066fee5b67df14120532c0b4f8aedde169907bc16f70dd2569744968';
+        record.policy_version = record.resolution.policy_version = 'adr-014.v6';
+        record.policy_hash = record.resolution.policy_hash = record.receipt.policy_hash = hash;
+        record.receipt.compliance_proof.policy_hash = hash;
+        if (Object.hasOwn(record.receipt, 'policy_version')) record.receipt.policy_version = 'adr-014.v6';
+        const sorted = (value) => Array.isArray(value) ? value.map(sorted)
+          : value && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort().map((key) => [key, sorted(value[key])])) : value;
+        const historicalId = resealCandidate(f, id, (value) => {
+          value.policy_version = 'adr-014.v6';
+          value.policy_hash = hash;
+          value.receipt_sha256 = crypto.createHash('sha256').update(JSON.stringify(sorted(record.receipt))).digest('hex');
+        });
+        await assert.rejects(() => recovery(f, { recorder: { getVerifiedRecord() { return record; } } })
+          .resumeFinalization(historicalId, scope), (error) => error.code === 'IDENTITY_CHANGED' && error.invalidated.includes('policy'));
+      } else if (variant === 'legacy') {
+        await action();
+        assert.equal(git(f.root, 'rev-parse', 'HEAD^'), f.base);
+      } else {
+        await assert.rejects(action, (error) => error.code === (variant === 'missing-authority' ? 'MISSING_RECEIPT' : 'IDENTITY_CHANGED'));
+        assert.equal(git(f.root, 'rev-parse', 'HEAD'), f.base);
+      }
+      assert.equal(fs.readFileSync(candidatePath(f, id), 'utf8'), before);
+      assert.equal(f.calls.length, 1);
+    } finally { clean(f); }
+  }
 });
 
 function approvedPlan(f, commands) {
@@ -1326,11 +1412,13 @@ test('recovery-only CLI reuses the PLAN-pinned verification spec without an inje
     }).run({ role: 'executor', context: { prompt: 'Implement the scoped ticket.' } }),
     (error) => { captured = error; return error.code === 'SIGNING_FAILED'; });
     const scopeFile = path.join(f.graphDir, 'recovery-scope.json');
-    fs.writeFileSync(scopeFile, JSON.stringify(liveScope(f)));
+    const recoveryScope = liveScope(f);
+    fs.writeFileSync(scopeFile, JSON.stringify(recoveryScope));
     const result = await runCli(['--resume-finalization', captured.candidate_id, '--scope-file', scopeFile], { write() {} },
       { storageRoot: f.storageRoot, graphDir: f.graphDir, finalizeCommit, recorder: f.host.recorder });
     assert.equal(result.artifact.commit, git(f.root, 'rev-parse', 'HEAD'));
     assert.equal(git(f.root, 'rev-parse', 'HEAD^'), f.base);
+    assertRecoveryPolicy(f, captured.candidate_id, recoveryScope);
     assert.equal(f.calls.length, 1);
   } finally { clean(f); }
 });

@@ -154,7 +154,7 @@ test('the migration branch (deletions of .planning/ only) has no internal-path v
   assert.deepStrictEqual(result.violations.filter((v) => v.field === 'paths'), []);
 });
 
-test('a branch that ADDS a .planning/ file does not pass the paths rule', () => {
+test('a branch that adds only planning files is outside product hygiene', () => {
   const { dir, env } = hermeticRepo();
   git(dir, ['checkout', '-q', '-b', 'feature/bad-add'], env);
   fs.mkdirSync(path.join(dir, '.planning', 'phases'), { recursive: true });
@@ -172,7 +172,8 @@ test('a branch that ADDS a .planning/ file does not pass the paths rule', () => 
     commits: ['feat: add a plan file'],
     jiraKeys: [],
   });
-  assert.ok(result.violations.some((v) => v.field === 'paths' && v.rule === 'internal-path'));
+  assert.equal(result.exempt, true);
+  assert.deepStrictEqual(result.violations, []);
 });
 
 done();

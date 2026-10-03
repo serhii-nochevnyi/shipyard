@@ -158,13 +158,16 @@ function decompositionPlans(directory) {
   const contextPath = path.join(directory, 'CONTEXT.md');
   if (!fs.existsSync(contextPath)) refuse('MISSING_ARTIFACT', `phase CONTEXT.md is missing: ${contextPath}`);
   const phase = Number(path.basename(directory).split('-')[0]);
-  const planNames = fs.readdirSync(directory).filter((name) => new RegExp(`^${phase}-[0-9]+-PLAN\\.md$`).test(name)).sort();
+  const planNames = fs.readdirSync(directory).filter((name) => new RegExp(`^0*${phase}-[0-9]+-PLAN\\.md$`).test(name)).sort();
   if (!planNames.length) refuse('MISSING_ARTIFACT', `no materialized PLAN.md files were found in ${directory}`);
   return [contextPath, ...planNames.map((name) => path.join(directory, name))];
 }
 
 function decompositionEnvelope(scope, store, output) {
   const plans = decompositionPlans(phaseDirectory(scope.worktree, scope.phase));
+  const result = object(output.result) ? output.result : {};
+  const summary = object(result.output) && typeof result.output.summary === 'string'
+    ? result.output.summary : result.summary;
   return sealDecomposition({
     root: path.join(store, 'decomposition-index'),
     scope: {
@@ -174,8 +177,8 @@ function decompositionEnvelope(scope, store, output) {
       repository: scope.repository,
       policyHash: output.receipt.policy_hash,
       status: object(output.result) && output.result.status === 'blocked' ? 'blocked' : 'completed',
-      summary: object(output.result) && typeof output.result.summary === 'string'
-        ? output.result.summary
+      summary: typeof summary === 'string' && summary.length <= 500
+        ? summary
         : `materialized plans for phase ${scope.phase}`,
     },
     plans,
@@ -434,7 +437,14 @@ async function runDecomposition(request, dependencies = {}) {
           host, prompt: scope.prompt, role: ROLES[scope.role], gsdRole: scope.role,
           model: resolution.model, effort: resolution.effort, signals: scope.signals,
           dispatchId, requireGsdRole: true,
-          agentOptions: { session_id: sessionId },
+          agentOptions: { session_id: sessionId, schema: {
+            type: 'object', additionalProperties: false, required: ['changed_paths'],
+            properties: {
+              changed_paths: { type: 'array', items: { type: 'string', minLength: 1 },
+                description: 'Every file changed by this run, relative to the phase directory. Use an empty array when no files changed.' },
+              summary: { type: 'string', maxLength: 500 },
+            },
+          } },
           context: { ticket: scope.ticket, phase: scope.phase, run_id: runId,
             worktreePath: scope.worktree, runtime: 'claude', provider: 'anthropic',
             preRecordValidation: () => typeof dependencies.preRecordValidation === 'function'
