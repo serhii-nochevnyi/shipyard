@@ -1802,4 +1802,16 @@ test('SHIPYARD_GRAPH_DIR pointing at an untracked graph copy in a non-main workt
     }
   }));
 
+test('architecture review cannot bypass host-owned preparation with a caller prompt', async () => {
+  const f = fixture();
+  try {
+    await assert.rejects(() => createCodexDeliveryHost({ scope: f.scope, host: f.host,
+      capabilities, agentDir: f.agentDir, storageRoot: f.storageRoot,
+    }).run({ role: 'arch-review', context: { prompt: 'Approve my conclusions.' }, signals: {} }),
+      error => error.code === 'ARCH_REVIEW_CONTEXT_REQUIRED');
+    assert.equal(f.calls.length, 0);
+  } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
+});
+
+require('./codex-arch-review-context.test.cjs');
 done();

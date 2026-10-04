@@ -2025,6 +2025,17 @@ function validateJudgmentManifest(value, options) {
       actual: actualDigest,
     });
   }
+  if (role === 'arch-review' && trusted.receipt.runtime === 'codex') {
+    require('./codex-arch-review-context.cjs').validateSealedContext({
+      result, receipt: trusted.receipt, dispatchId, worktree, ticket: metadata.ticket, pr: data.pr,
+      evidence: evidence.content,
+      archivePins: [
+        { path: path.relative(worktree, manifestResolved), sha256: actualDigest },
+        { path: manifest.files.evidence.path, sha256: evidence.sha256 },
+        { path: manifest.files.findings.path, sha256: findings.sha256 },
+      ],
+    }, { execFileSync: ioFor(input).execFileSync });
+  }
   return Object.freeze({
     schema: ROLE_ARTIFACT_SCHEMA,
     artifact_kind: 'judgment',

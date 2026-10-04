@@ -681,4 +681,154 @@ test('unknown arch-review normalization keeps the role artifact schema string', 
   assert.equal(roleArtifact.ROLE_ARTIFACT_SCHEMA, 'shipyard.role-artifact.v1');
 });
 
+suite('role-artifact — Codex sealed architecture context');
+
+const codexJudgmentFixtures = require('./codex-arch-review-context.test.cjs');
+
+test('fresh Codex architecture artifact remains valid after CLI inflight cleanup', async () => {
+  const f = codexJudgmentFixtures.fixture();
+  try {
+    const { validationInput } = await codexJudgmentFixtures.unitJudgment(f);
+    assert.equal(roleArtifact.validateJudgmentManifest(validationInput).envelope.verdict, 'conform');
+    const child = `
+      const fs = require('node:fs');
+      const { execFileSync } = require('node:child_process');
+      const input = JSON.parse(process.argv[1]);
+      input.recorder = require(input.boundary).createDurableRecorder(input.store);
+      input.io = { execFileSync(executable, args, options) {
+        if (executable === 'gh') return JSON.stringify(input.fixturePr);
+        if (executable === 'git' && args.includes('fetch')) return '';
+        return execFileSync(executable, args, options);
+      } };
+      const validated = require(input.consumer).validateJudgmentManifest(input);
+      process.stdout.write(JSON.stringify({ verdict: validated.envelope.verdict }));
+    `;
+    const childInput = { ...validationInput, recorder: undefined, io: undefined,
+      fixturePr: f.pr, store: path.join(f.storage, 'receipts'),
+      boundary: path.resolve(__dirname, '../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs'),
+      consumer: path.resolve(__dirname, '../../plugins/delivery-pipeline/scripts/role-artifact.cjs') };
+    assert.equal(JSON.parse(execFileSync(process.execPath, ['-e', child, JSON.stringify(childInput)],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })).verdict, 'conform');
+
+  } finally { codexJudgmentFixtures.cleanupJudgment(f); }
+});
+
+for (const [name, mutate] of [
+  ['ADR content', f => fs.appendFileSync(path.join(f.root,
+    '.planning/architecture/ADR-014-host-bound-review.md'), '\nChanged authority.\n')],
+  ['draft lifecycle', f => { f.pr.isDraft = !f.pr.isDraft; }],
+  ['live head', f => { f.pr.headRefOid = 'a'.repeat(40); }],
+  ['live base', f => { f.pr.baseRefOid = 'b'.repeat(40); }],
+  ['plan authority', f => fs.appendFileSync(path.join(f.root,
+    '.planning/phases/38-codex-arch-review/38-01-PLAN.md'), '\nChanged acceptance.\n')],
+  ['graph authority', f => fs.appendFileSync(path.join(f.root,
+    '.planning/graph/tickets.json'), ' ')],
+  ['corpus membership', f => fs.writeFileSync(path.join(f.root,
+    '.planning/architecture/ADR-099-new.md'), '# New architecture authority\n')],
+  ['original transcript', (f, sealed) => fs.appendFileSync(sealed.transcript, '\n')],
+  ['complete evidence', (f, sealed) => {
+    const manifest = JSON.parse(fs.readFileSync(sealed.validationInput.artifactPath, 'utf8'));
+    fs.appendFileSync(path.join(f.root, manifest.files.evidence.path), '\nChanged evidence.\n');
+  }],
+]) test('shared consumer refuses post-seal changed ' + name, async () => {
+  const f = codexJudgmentFixtures.fixture();
+  try {
+    const sealed = await codexJudgmentFixtures.unitJudgment(f);
+    mutate(f, sealed);
+    assert.throws(() => roleArtifact.validateJudgmentManifest(sealed.validationInput),
+      /changed|local changes|STALE|digest|transcript|head|base|identity differs/);
+  } finally { codexJudgmentFixtures.cleanupJudgment(f); }
+});
+
+
+test('shared consumer refuses atomic source replacement while its original descriptor is open', async () => {
+  const f = codexJudgmentFixtures.fixture();
+  const originalOpen = fs.openSync;
+  try {
+    const sealed = await codexJudgmentFixtures.unitJudgment(f);
+    const target = path.join(f.root, '.planning/architecture/ADR-014-host-bound-review.md');
+    let replaced = false;
+    fs.openSync = function (filePath, ...args) {
+      const fd = originalOpen.call(fs, filePath, ...args);
+      if (String(filePath) === target && !replaced) {
+        replaced = true;
+        const replacement = path.join(f.storage, 'replacement.md');
+        fs.writeFileSync(replacement, '# Replaced complete architecture authority\n');
+        fs.renameSync(replacement, target);
+      }
+      return fd;
+    };
+    assert.throws(() => roleArtifact.validateJudgmentManifest(sealed.validationInput), /changed/);
+    assert.equal(replaced, true);
+  } finally {
+    fs.openSync = originalOpen;
+    codexJudgmentFixtures.cleanupJudgment(f);
+  }
+});
+
+test('public sealer cannot rebind an original native receipt to another canonical context', async () => {
+  const context = require('../../plugins/delivery-pipeline/scripts/codex-arch-review-context.cjs');
+  const sha = bytes => require('node:crypto').createHash('sha256').update(bytes).digest('hex');
+  const f = codexJudgmentFixtures.fixture();
+  const canonical = f.root + '-canonical';
+  try {
+    const { result, recorder, validationInput, transcript } = await codexJudgmentFixtures.unitJudgment(f);
+    const originalRecordDigest = sha(JSON.stringify(recorder.getVerifiedRecord(result.receipt.dispatch_id)));
+    const originalTranscriptDigest = sha(fs.readFileSync(transcript));
+    const manifest = JSON.parse(fs.readFileSync(result.artifact.ref));
+    const archived = JSON.parse(fs.readFileSync(path.join(f.root, manifest.files.findings.path)));
+    const evidence = fs.readFileSync(path.join(f.root, '.shipyard-arch-review-evidence.md'));
+    execFileSync('git', ['-C', f.root, 'worktree', 'add', canonical, 'main'], { stdio: 'pipe' });
+    fs.appendFileSync(path.join(canonical, '.planning/architecture/ADR-014-host-bound-review.md'),
+      '\nNEW AUTHORITY NEVER REVIEWED BY ORIGINAL TRANSCRIPT.\n');
+    fs.rmSync(path.join(f.root, '.shipyard-role-artifacts'), { recursive: true });
+    fs.rmSync(path.join(f.root, '.planning/graph/dispatches.json'));
+    fs.rmSync(path.join(f.root, '.planning/graph/provenance'), { recursive: true });
+    const graphDir = path.join(canonical, '.planning/graph');
+    const fresh = context.prepare({ worktree: f.root, ticket: result.subject, phase: 38 },
+      { role: 'arch-review', context: {}, signals: {} },
+      { graphDir, getPullRequest: () => f.pr, refreshGit: false });
+    const forged = { ...archived, host_context: { ...archived.host_context,
+      graph_dir: graphDir, packet_digest: fresh.prepared.packet.digest,
+      selected_refs: fresh.evidence.selected_refs, bookkeeping: [] } };
+    fs.writeFileSync(path.join(f.root, '.shipyard-arch-review-evidence.md'), evidence);
+    let rejection;
+    try { roleArtifact.sealJudgment({ ...validationInput, result: forged }); }
+    catch (error) { rejection = error; }
+    assert.equal(sha(JSON.stringify(recorder.getVerifiedRecord(result.receipt.dispatch_id))), originalRecordDigest);
+    assert.equal(sha(fs.readFileSync(transcript)), originalTranscriptDigest);
+    assert.notEqual(forged.host_context.packet_digest, archived.host_context.packet_digest);
+    assert(rejection, 'forged context was accepted with original receipt and transcript');
+    assert.match(rejection.message, /original authenticated launch identity/);
+
+  } finally {
+    try { execFileSync('git', ['-C', f.root, 'worktree', 'remove', '--force', canonical], { stdio: 'pipe' }); } catch {}
+    codexJudgmentFixtures.cleanupJudgment(f);
+  }
+});
+
+
+test('shared consumer refuses corpus membership added during recursive inventory', async () => {
+  const f = codexJudgmentFixtures.fixture();
+  const originalRead = fs.readdirSync;
+  try {
+    const sealed = await codexJudgmentFixtures.unitJudgment(f);
+    const directory = path.join(f.root, '.planning/architecture');
+    let added = false;
+    fs.readdirSync = function (filePath, ...args) {
+      const entries = originalRead.call(fs, filePath, ...args);
+      if (String(filePath) === directory && !added) {
+        added = true;
+        fs.writeFileSync(path.join(directory, 'ADR-099-added-during-inventory.md'), '# New authority\n');
+      }
+      return entries;
+    };
+    assert.throws(() => roleArtifact.validateJudgmentManifest(sealed.validationInput), /membership changed/);
+    assert.equal(added, true);
+  } finally {
+    fs.readdirSync = originalRead;
+    codexJudgmentFixtures.cleanupJudgment(f);
+  }
+});
+
 done();

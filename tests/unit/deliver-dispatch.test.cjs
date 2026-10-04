@@ -345,19 +345,29 @@ test('planning builders are deterministic and missing PROBLEM.md exits 2 naming 
   }
 });
 
-test('Codex arch-review shape acceptance is not evidence-bound host parity', () => {
+test('Codex arch-review builder delegates context and signals to its trusted host', () => {
   const fixture = builderFixture('T-12-12');
   try {
     const shape = validateArgs({ role: 'arch-review', signals: {}, context: {} });
     assert.equal(shape.request.role, 'arch-review');
     assert.equal(shape.request.context.prompt, undefined);
-    assert.throws(
-      () => deliverDispatch.build(['arch-review', fixture.id, '--runtime', 'codex', '--pr', '501'], {
-        cwd: fixture.root, graphDir: fixture.graphDir,
-      }),
-      (error) => error.exitCode === 2 && /codex arch-review host contract missing/.test(error.message)
-        && /caller-built prompt/.test(error.message),
-    );
+    const request = deliverDispatch.build(['arch-review', fixture.id, '--runtime', 'codex', '--pr', '501'], {
+      cwd: fixture.root, graphDir: fixture.graphDir,
+    });
+    assert.equal(request.role, 'arch-review');
+    assert.equal(request.scope.ticket, fixture.id);
+    assert.equal(request.graph_dir, fs.realpathSync(fixture.graphDir));
+    assert.deepEqual(request.context, {});
+    assert.deepEqual(request.signals, {});
+    const cli = spawnSync(process.execPath, [path.resolve(__dirname, '../../plugins/delivery-pipeline/scripts/deliver-dispatch.cjs'), 'build', 'arch-review', fixture.id,
+      '--runtime', 'codex', '--pr', '501', '--graph', fixture.graphDir], {
+      cwd: fixture.root, encoding: 'utf8', env: { ...process.env, SHIPYARD_GRAPH_DIR: fixture.graphDir },
+    });
+    assert.equal(cli.status, 0, cli.stderr);
+    assert.equal(JSON.parse(cli.stdout).scope.ticket, fixture.id);
+    assert.throws(() => deliverDispatch.build(['arch-review', fixture.id, '--runtime', 'codex', '--pr', '502'], {
+      cwd: fixture.root, graphDir: fixture.graphDir,
+    }), /PR differs/);
   } finally {
     cleanup(fixture.root);
   }
