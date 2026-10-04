@@ -86,12 +86,21 @@ fs.writeFileSync(file,JSON.stringify(s));
     assert.match(identity.digest, /^[a-f0-9]{64}$/);
     assert.match(manifest.version, /\+codex\.[a-f0-9]{16}$/);
   }
-  assertCurrentPackage(path.join(root, 'plugins/shipyard'));
+  function assertPackageForBase(dir, baseRef) {
+    if (packageFreshnessRequired(baseRef)) assertCurrentPackage(dir);
+  }
+  assertPackageForBase(path.join(root, 'plugins/shipyard'), process.env.GITHUB_BASE_REF);
   const staleMirror = path.join(tmp, 'stale-package');
   fs.cpSync(out, staleMirror, { recursive: true });
   const stalePolicy = path.join(staleMirror, 'host/plugins/delivery-pipeline/scripts/model-policy-internal.cjs');
   fs.writeFileSync(stalePolicy, fs.readFileSync(stalePolicy, 'utf8').replace('adr-014.v7', 'adr-014.v6'));
-  assert.throws(() => assertCurrentPackage(staleMirror), /Marketplace package is stale/);
+  for (const baseRef of ['', 'main']) {
+    assert.throws(() => assertPackageForBase(staleMirror, baseRef), /Marketplace package is stale/);
+    assertPackageForBase(out, baseRef);
+  }
+  for (const baseRef of ['epic/47-complete-deferred-decomposition-wait-attribution', 'ticket/T-47-14']) {
+    assert.doesNotThrow(() => assertPackageForBase(staleMirror, baseRef));
+  }
   assert.equal(first.skills.length,6);
   assert(fs.existsSync(path.join(out,'host/scripts/ensure-gsd-plugin.cjs')));
   assert(fs.existsSync(path.join(out,'host/plugins/delivery-pipeline/scripts/model-policy.cjs')));

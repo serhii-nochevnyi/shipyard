@@ -275,11 +275,16 @@ async function unitJudgment(f, afterLaunch) {
         launch_digest: launchContext.prompt.match(/launch_digest=([a-f0-9]{64})/)[1],
         evidence_markdown: 'Complete evidence from the unit adapter.' };
       write(f.root, '.shipyard-arch-review-evidence.md', judgment.evidence_markdown);
-      const records = [
-        { type: 'thread.started', thread_id: session },
-        { type: 'item.completed', item: { type: 'agent_message', text: JSON.stringify(judgment) } },
-        { type: 'turn.completed', usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 } },
-      ];
+      const capture = fs.readFileSync(path.join(__dirname,
+        '../fixtures/captured/codex-agent-stream-exec.jsonl'), 'utf8')
+        .trim().split('\n').map(line => JSON.parse(line));
+      const records = ['thread.started', 'item.completed', 'turn.completed']
+        .map(type => structuredClone(capture.find(record => record.type === type)));
+      records[0].thread_id = session;
+      records[1].item.text = JSON.stringify(judgment);
+      records[2].usage.input_tokens = 1;
+      records[2].usage.cached_input_tokens = 0;
+      records[2].usage.output_tokens = 1;
       if (f.resultAfterCompletion) [records[1], records[2]] = [records[2], records[1]];
       const stream = records.map(x => JSON.stringify(x)).join('\n') + '\n';
       transcript = path.join(storage, 'transcript.jsonl');
