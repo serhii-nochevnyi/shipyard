@@ -22,6 +22,7 @@ const {
   probeCodexRuntime,
 } = require('../../plugins/delivery-pipeline/scripts/codex-runtime-host.cjs');
 const { launchAgent } = require('../../plugins/delivery-pipeline/scripts/codex-agent.cjs');
+const { createCodexDispatchAdapter } = require('../../plugins/delivery-pipeline/scripts/codex-dispatch-adapter.cjs');
 
 const SCOPE = {
   run_id: 'run-37-04',
@@ -705,6 +706,7 @@ test('typed launch accepts a completed native child after timeout-only parent wa
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-codex-timeout-'));
     const codeHome = path.join(root, 'codex-home');
     try {
+      fs.mkdirSync(path.join(root, 'worktree'));
       fs.mkdirSync(path.join(codeHome, 'agents'), { recursive: true });
       fs.writeFileSync(path.join(codeHome, 'agents', 'gsd-plan-checker.toml'), ROLE_TOML(instructions));
       const launch = createCodexCliLauncher({
@@ -712,7 +714,12 @@ test('typed launch accepts a completed native child after timeout-only parent wa
         taskDir: path.join(root, 'tasks'), env: { CODEX_HOME: codeHome },
         spawn: () => relayChild(codeHome, timeoutOnly, childTranscript),
       });
-      return await launch(CAPTURED_TASK, TYPED);
+      let started;
+      const result = await launch(CAPTURED_TASK, {
+        ...TYPED, onSessionStarted(value) { started = value; },
+      });
+      assert.deepStrictEqual(result.runtime_evidence.sandbox_evidence, started.runtime_launch.sandbox_evidence);
+      return result;
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
@@ -796,6 +803,173 @@ test('typed launch relays the task by host-owned file path and digest outside th
     assert.equal(outcome.error.code, 'TASK_RELAY_UNVERIFIED', missing + ': ' + outcome.error.message);
     assert.ok(outcome.error.details.missing.includes(missing.trim()), missing + ': ' + outcome.error.message);
   }
+});
+
+test('actual typed host and adapter retain all-deny launch/completion evidence', async () => {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-typed-profile-')));
+  const worktree = path.join(root, 'worktree');
+  const codeHome = path.join(root, 'codex-home');
+  const { parentRaw, childRaw, instructions } = recordedTypedSession();
+  let started;
+  try {
+    fs.mkdirSync(worktree);
+    assert.equal(fs.existsSync(path.join(worktree, '.git')), false);
+    fs.mkdirSync(path.join(codeHome, 'agents'), { recursive: true });
+    fs.writeFileSync(path.join(codeHome, 'agents', 'gsd-plan-checker.toml'), ROLE_TOML(instructions));
+    const graph = path.join(worktree, '.planning', 'graph');
+    const archive = path.join(worktree, '.shipyard-role-artifacts');
+    const authority = path.join(root, 'role-artifact-authority');
+    const staging = path.join(root, '.git', 'shipyard-role-archive-staging');
+    const resolution = { ...policy.resolveDispatch({
+      runtime: 'codex', role: 'decomposition', dispatch_id: 'typed-profile',
+    }), gsd_role: 'gsd-plan-checker' };
+    const matchingSelection = (raw) => transformJsonl(raw, (record) => {
+      if (record.type === 'turn_context') {
+        Object.assign(record.payload, { model: resolution.model, effort: resolution.effort });
+      }
+      if (record.type === 'response_item' && record.payload.type === 'function_call'
+          && record.payload.name === 'spawn_agent') {
+        const args = JSON.parse(record.payload.arguments);
+        Object.assign(args, { model: resolution.model, reasoning_effort: resolution.effort });
+        record.payload.arguments = JSON.stringify(args);
+      }
+      return record;
+    });
+    const host = createCodexRuntimeHost({
+      scope: { ...SCOPE, worktree }, probe: probe(), controller: { assertOwner() {} },
+      recorder: () => true, taskDir: path.join(root, 'tasks'),
+      env: { CODEX_HOME: codeHome }, additionalProtectedPaths: [authority, staging, graph, archive],
+      spawn: () => relayChild(codeHome, matchingSelection(parentRaw), matchingSelection(childRaw)),
+    });
+    const context = { run_id: SCOPE.run_id, prompt: CAPTURED_TASK, sandbox_mode: 'read-only',
+      onSessionStarted(value) { started = value; } };
+    const receipt = await createCodexDispatchAdapter({ host }).launch(resolution, context);
+    assert.equal(receipt.gsd_role, 'gsd-plan-checker');
+    assert.equal(receipt.gsd_launch_mechanism, 'typed-gsd-callback');
+    assert.deepStrictEqual(receipt.runtime_evidence.sandbox_evidence, started.runtime_launch.sandbox_evidence);
+    assert.equal(receipt.runtime_evidence.sandbox_evidence.read_only_protected_paths, undefined);
+    for (const denied of [authority, staging]) {
+      assert.ok(receipt.runtime_evidence.command.args.some((entry) =>
+        entry.includes(JSON.stringify(denied) + '=\"deny\"')));
+    }
+
+    // Model the supported read metadata at the adapter boundary. The unchanged
+    // baseline launcher above proves typed evidence; these clones prove policy
+    // validation, without claiming a new native producer or OS enforcement.
+    const applied = { ...receipt, runtime_evidence: receipt.runtime_evidence };
+    const validate = (value) => createCodexDispatchAdapter({
+      host: { ...host, launchTypedGsd() { return value; } },
+    }).launch(resolution, context);
+    const clone = () => JSON.parse(JSON.stringify(applied));
+    const filesystem = (value, reads = [], permission = 'read') => {
+      const evidence = value.runtime_evidence;
+      const rules = evidence.sandbox_evidence.protected_paths.map((entry) =>
+        JSON.stringify(entry) + '=' + JSON.stringify(reads.includes(entry) ? permission : 'deny'));
+      const index = evidence.command.args.findIndex((entry) => entry.startsWith('permissions.shipyard-runtime.filesystem='));
+      evidence.command.args[index] = 'permissions.shipyard-runtime.filesystem={' + rules.join(',') + '}';
+      evidence.command_digest = crypto.createHash('sha256').update(JSON.stringify(evidence.command.args)).digest('hex');
+    };
+    const readProfile = () => {
+      const value = clone();
+      value.runtime_evidence.sandbox_evidence.read_only_protected_paths = [graph, archive];
+      filesystem(value, [graph, archive]);
+      return value;
+    };
+    const positive = readProfile();
+    assert.deepStrictEqual(validate(positive).runtime_evidence, positive.runtime_evidence);
+    const explicitAllDeny = clone();
+    explicitAllDeny.runtime_evidence.sandbox_evidence.read_only_protected_paths = [];
+    assert.deepStrictEqual(validate(explicitAllDeny).runtime_evidence, explicitAllDeny.runtime_evidence);
+
+    const rejects = (name, edit, base = readProfile) => {
+      const value = base();
+      edit(value.runtime_evidence.sandbox_evidence, value);
+      assert.throws(() => validate(value), (error) => error.code === 'MISSING_RECEIPT', name);
+    };
+    for (const invalid of [null, false, {}, 'read', [null], [graph, graph], [archive, archive],
+      [path.join(worktree, 'foreign')], [authority], [staging], [graph + '/child'],
+      [path.join(root, '.planning', 'graph')], [worktree + '/.planning/../.planning/graph']]) {
+      rejects('malformed or foreign read metadata: ' + JSON.stringify(invalid), (sandbox, value) => {
+        sandbox.read_only_protected_paths = invalid;
+        // Even internally consistent CLI rules cannot grant foreign reads.
+        if (Array.isArray(invalid) && invalid.every((entry) => typeof entry === 'string')) {
+          for (const entry of invalid) if (!sandbox.protected_paths.includes(entry)) sandbox.protected_paths.push(entry);
+          filesystem(value, invalid);
+        }
+      });
+    }
+    rejects('missing read metadata', (sandbox) => { delete sandbox.read_only_protected_paths; });
+    rejects('explicit undefined read metadata', (sandbox) => {
+      sandbox.read_only_protected_paths = undefined;
+    }, clone);
+    rejects('incomplete read metadata', (sandbox) => { sandbox.read_only_protected_paths = [graph]; });
+    rejects('missing protected metadata', (sandbox) => { delete sandbox.protected_paths; });
+    rejects('duplicate protected metadata', (sandbox, value) => {
+      sandbox.protected_paths.push(graph); filesystem(value, [graph, archive]);
+    });
+    rejects('missing protected membership', (sandbox, value) => {
+      sandbox.protected_paths = sandbox.protected_paths.filter((entry) => entry !== graph);
+      filesystem(value, [graph, archive]);
+    });
+    rejects('malformed protected metadata', (sandbox) => { sandbox.protected_paths.push(null); });
+    for (const denied of [authority, staging]) {
+      rejects('missing private denial: ' + denied, (sandbox) => {
+        sandbox.protected_paths = sandbox.protected_paths.filter((entry) => entry !== denied);
+      });
+      rejects('weakened private denial: ' + denied, (_sandbox, value) => {
+        filesystem(value, [graph, archive, denied]);
+      });
+    }
+    rejects('unknown profile metadata', (sandbox) => { sandbox.permissions = 'write'; });
+    rejects('unknown profile', (sandbox) => { sandbox.profile = 'caller-runtime'; });
+    rejects('weakened parent', (sandbox, value) => {
+      sandbox.base_profile = ':workspace';
+      const args = value.runtime_evidence.command.args;
+      args[args.findIndex((entry) => entry.startsWith('permissions.shipyard-runtime.extends='))]
+        = 'permissions.shipyard-runtime.extends=":workspace"';
+    });
+    rejects('read metadata with deny command', (_sandbox, value) => filesystem(value));
+    rejects('write instead of read', (_sandbox, value) => filesystem(value, [graph, archive], 'write'));
+    for (const prefix of ['default_permissions=', 'permissions.shipyard-runtime.extends=', 'permissions.shipyard-runtime.filesystem=']) {
+      rejects('duplicate ' + prefix, (_sandbox, value) => {
+        const args = value.runtime_evidence.command.args;
+        args.push('--config', args.find((entry) => entry.startsWith(prefix)));
+      });
+      rejects('missing ' + prefix, (_sandbox, value) => {
+        const args = value.runtime_evidence.command.args;
+        args.splice(args.findIndex((entry) => entry.startsWith(prefix)) - 1, 2);
+      });
+    }
+    for (const denied of [worktree, path.join(worktree, '.planning'), path.parse(worktree).root]) {
+      const stronger = clone();
+      stronger.runtime_evidence.sandbox_evidence.protected_paths.push(denied);
+      filesystem(stronger);
+      assert.deepStrictEqual(validate(stronger).runtime_evidence, stronger.runtime_evidence);
+      rejects('read below stronger denial: ' + denied, (sandbox, value) => {
+        sandbox.protected_paths.push(denied); filesystem(value, [graph, archive]);
+      });
+    }
+    rejects('noncanonical denial cannot hide an enclosing deny', (sandbox, value) => {
+      sandbox.protected_paths.push(worktree + '/.planning/..');
+      filesystem(value, [graph, archive]);
+    });
+    rejects('nonexistent read worktree', (_sandbox, value) => {
+      value.runtime_evidence.worktree = path.join(root, 'missing');
+    });
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('actual launcher refuses a nonexistent worktree without requiring Git for existing fixtures', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-missing-worktree-'));
+  try {
+    const launch = createCodexCliLauncher({
+      scope: { ...SCOPE, worktree: path.join(root, 'missing') }, capabilities,
+      executable: process.execPath, taskDir: path.join(root, 'tasks'),
+    });
+    await assert.rejects(launch('fixture', { model: 'gpt-6.1-sol', effort: 'low', sandbox_mode: 'workspace-write' }),
+      (error) => error.code === 'RUNTIME_UNAVAILABLE');
+    assert.equal(fs.existsSync(path.join(root, 'missing')), false);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
 done();

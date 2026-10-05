@@ -109,8 +109,33 @@ function validateRuntimeEvidence(evidence, selection, resolution) {
     && typeof evidence.worktree === 'string' && path.isAbsolute(evidence.worktree)
     ? path.join(evidence.worktree, evidenceNames[resolution.agent_file]) : null;
   const evidenceWritePath = sandboxEvidence && sandboxEvidence.evidence_write_path;
+  // Older signed hosts report an all-deny profile without read metadata.
+  // A newer host may expose only these two worktree paths for reading; retain
+  // protected membership and any stronger enclosing denial when rebuilding it.
+  const readOnlyPaths = object(sandboxEvidence) && Object.hasOwn(sandboxEvidence, 'read_only_protected_paths')
+    ? sandboxEvidence.read_only_protected_paths : [];
+  let allowedReadOnlyPaths = [];
+  if (Array.isArray(readOnlyPaths) && readOnlyPaths.length) {
+    try {
+      if (typeof evidence.worktree !== 'string' || !path.isAbsolute(evidence.worktree)
+          || !fs.statSync(evidence.worktree).isDirectory()) throw new Error('invalid worktree');
+      const root = fs.realpathSync(evidence.worktree);
+      allowedReadOnlyPaths = [path.join(root, '.planning', 'graph'), path.join(root, '.shipyard-role-artifacts')];
+    } catch (_) {
+      refuse('MISSING_RECEIPT', 'read-only runtime evidence lacks a physical worktree');
+    }
+  }
+  const readOnlyValid = Array.isArray(readOnlyPaths)
+    && Array.isArray(protectedPaths)
+    && protectedPaths.every((entry) => typeof entry === 'string' && path.isAbsolute(entry)
+      && path.resolve(entry) === entry && !/[\u0000-\u001f\u007f]/.test(entry))
+    && new Set(readOnlyPaths).size === readOnlyPaths.length
+    && readOnlyPaths.every((entry) => allowedReadOnlyPaths.includes(entry) && protectedPaths.includes(entry)
+      && !protectedPaths.some((denied) => !readOnlyPaths.includes(denied)
+        && entry.startsWith(denied.endsWith(path.sep) ? denied : denied + path.sep)));
   const expectedFilesystem = Array.isArray(protectedPaths) && protectedPaths.length
-    ? '{' + [...protectedPaths.map((entry) => JSON.stringify(entry) + '=\"deny\"'),
+    ? '{' + [...protectedPaths.map((entry) => JSON.stringify(entry)
+      + (readOnlyValid && readOnlyPaths.includes(entry) ? '=\"read\"' : '=\"deny\"')),
       ...(evidenceWritePath ? [JSON.stringify(evidenceWritePath) + '=\"write\"'] : [])].join(',') + '}' : null;
   const configArgs = evidence.command.args.filter((value) => typeof value === 'string'
     && value.startsWith('default_permissions='));
@@ -122,7 +147,10 @@ function validateRuntimeEvidence(evidence, selection, resolution) {
       || modelIndex < 0 || evidence.command.args[modelIndex + 1] !== selection.model
       || evidence.command.args.includes('--sandbox')
       || evidence.command.args.includes('--dangerously-bypass-approvals-and-sandbox')
-      || !object(sandboxEvidence)
+      || !object(sandboxEvidence) || !readOnlyValid
+      || Object.keys(sandboxEvidence).some((key) => ![
+        'profile', 'base_profile', 'protected_paths', 'read_only_protected_paths', 'evidence_write_path',
+      ].includes(key))
       || sandboxEvidence.profile !== 'shipyard-runtime'
       || sandboxEvidence.base_profile !== expectedProfileParent
       || !Array.isArray(protectedPaths) || !protectedPaths.length
