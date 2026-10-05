@@ -847,10 +847,14 @@ test('actual typed host and adapter retain all-deny launch/completion evidence',
     assert.equal(receipt.gsd_role, 'gsd-plan-checker');
     assert.equal(receipt.gsd_launch_mechanism, 'typed-gsd-callback');
     assert.deepStrictEqual(receipt.runtime_evidence.sandbox_evidence, started.runtime_launch.sandbox_evidence);
-    assert.equal(receipt.runtime_evidence.sandbox_evidence.read_only_protected_paths, undefined);
-    for (const denied of [authority, staging]) {
-      assert.ok(receipt.runtime_evidence.command.args.some((entry) =>
-        entry.includes(JSON.stringify(denied) + '=\"deny\"')));
+    const sandbox = receipt.runtime_evidence.sandbox_evidence;
+    if (Object.hasOwn(sandbox, 'read_only_protected_paths')) {
+      assert.deepStrictEqual(sandbox.read_only_protected_paths, []);
+    }
+    assert.ok(receipt.runtime_evidence.command.args.includes('permissions.shipyard-runtime.filesystem={'
+      + sandbox.protected_paths.map((entry) => JSON.stringify(entry) + '=\"deny\"').join(',') + '}'));
+    for (const denied of [authority, staging, graph, archive]) {
+      assert.ok(sandbox.protected_paths.includes(denied));
     }
 
     // Model the supported read metadata at the adapter boundary. The unchanged
@@ -877,6 +881,9 @@ test('actual typed host and adapter retain all-deny launch/completion evidence',
     };
     const positive = readProfile();
     assert.deepStrictEqual(validate(positive).runtime_evidence, positive.runtime_evidence);
+    const legacyAllDeny = clone();
+    delete legacyAllDeny.runtime_evidence.sandbox_evidence.read_only_protected_paths;
+    assert.deepStrictEqual(validate(legacyAllDeny).runtime_evidence, legacyAllDeny.runtime_evidence);
     const explicitAllDeny = clone();
     explicitAllDeny.runtime_evidence.sandbox_evidence.read_only_protected_paths = [];
     assert.deepStrictEqual(validate(explicitAllDeny).runtime_evidence, explicitAllDeny.runtime_evidence);
@@ -960,15 +967,20 @@ test('actual typed host and adapter retain all-deny launch/completion evidence',
 });
 
 test('actual launcher refuses a nonexistent worktree without requiring Git for existing fixtures', async () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-missing-worktree-'));
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-missing-worktree-')));
+  const worktree = path.join(root, 'missing');
   try {
-    const launch = createCodexCliLauncher({
-      scope: { ...SCOPE, worktree: path.join(root, 'missing') }, capabilities,
-      executable: process.execPath, taskDir: path.join(root, 'tasks'),
-    });
-    await assert.rejects(launch('fixture', { model: 'gpt-6.1-sol', effort: 'low', sandbox_mode: 'workspace-write' }),
-      (error) => error.code === 'RUNTIME_UNAVAILABLE');
-    assert.equal(fs.existsSync(path.join(root, 'missing')), false);
+    await assert.rejects(async () => {
+      const launch = createCodexCliLauncher({
+        scope: { ...SCOPE, worktree }, capabilities,
+        executable: process.execPath, taskDir: path.join(root, 'tasks'),
+      });
+      await launch('fixture', { model: 'gpt-6.1-sol', effort: 'low', sandbox_mode: 'workspace-write' });
+    }, (error) => ((error.code === 'ENOENT' || error.code === 'ENOTDIR') && error.path === worktree)
+      || (error.code === 'RUNTIME_UNAVAILABLE'
+        && ['ENOENT', 'ENOTDIR'].some((code) => error.message
+          === 'codex-runtime-host: Codex process failed: spawn ' + process.execPath + ' ' + code)));
+    assert.equal(fs.existsSync(worktree), false);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
