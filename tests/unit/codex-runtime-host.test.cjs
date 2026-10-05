@@ -857,9 +857,6 @@ test('actual typed host and adapter retain all-deny launch/completion evidence',
       assert.ok(sandbox.protected_paths.includes(denied));
     }
 
-    // Model the supported read metadata at the adapter boundary. The unchanged
-    // baseline launcher above proves typed evidence; these clones prove policy
-    // validation, without claiming a new native producer or OS enforcement.
     const applied = { ...receipt, runtime_evidence: receipt.runtime_evidence };
     const validate = (value) => createCodexDispatchAdapter({
       host: { ...host, launchTypedGsd() { return value; } },
@@ -898,7 +895,6 @@ test('actual typed host and adapter retain all-deny launch/completion evidence',
       [path.join(root, '.planning', 'graph')], [worktree + '/.planning/../.planning/graph']]) {
       rejects('malformed or foreign read metadata: ' + JSON.stringify(invalid), (sandbox, value) => {
         sandbox.read_only_protected_paths = invalid;
-        // Even internally consistent CLI rules cannot grant foreign reads.
         if (Array.isArray(invalid) && invalid.every((entry) => typeof entry === 'string')) {
           for (const entry of invalid) if (!sandbox.protected_paths.includes(entry)) sandbox.protected_paths.push(entry);
           filesystem(value, invalid);

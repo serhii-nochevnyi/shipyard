@@ -109,9 +109,6 @@ function validateRuntimeEvidence(evidence, selection, resolution) {
     && typeof evidence.worktree === 'string' && path.isAbsolute(evidence.worktree)
     ? path.join(evidence.worktree, evidenceNames[resolution.agent_file]) : null;
   const evidenceWritePath = sandboxEvidence && sandboxEvidence.evidence_write_path;
-  // Older signed hosts report an all-deny profile without read metadata.
-  // A newer host may expose only these two worktree paths for reading; retain
-  // protected membership and any stronger enclosing denial when rebuilding it.
   const readOnlyPaths = object(sandboxEvidence) && Object.hasOwn(sandboxEvidence, 'read_only_protected_paths')
     ? sandboxEvidence.read_only_protected_paths : [];
   let allowedReadOnlyPaths = [];
