@@ -410,6 +410,10 @@ test('production runtime host receives the scoped prompt and records native mode
     assert.equal(git(f.root, 'status', '--porcelain'), '');
     const filesystemArg = capturedArgs.find((value) => value.startsWith('permissions.shipyard-runtime.filesystem='));
     assert.ok(filesystemArg.includes(JSON.stringify(stateRoot(f)) + '="deny"'));
+    const archiveAuthority = require('../../plugins/delivery-pipeline/scripts/role-artifact.cjs')
+      .archiveAuthorityDirectory(f.root);
+    assert.ok(filesystemArg.includes(JSON.stringify(archiveAuthority) + '="deny"'));
+    assert(result.receipt.runtime_evidence.sandbox_evidence.protected_paths.includes(archiveAuthority));
   } finally { clean(f); }
 });
 
@@ -1813,5 +1817,5 @@ test('architecture review cannot bypass host-owned preparation with a caller pro
   } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
 });
 
-require('./codex-arch-review-context.test.cjs');
+require('./codex-arch-review-context.test.cjs').registerTests(test);
 done();

@@ -1528,7 +1528,7 @@ function recordInflight(input) {
     return null;
   }, undefined, true);
   writeProvenanceOnce(graphDir(cwd), { dispatch_id: dispatchId, ticket, role, recorded_at: row.started_at });
-  refreshFront(cwd);
+  if (input.refreshBoard !== false) refreshFront(cwd);
   return Object.freeze({ ...row });
 }
 
@@ -1580,7 +1580,7 @@ function clearInflight(input) {
     cleared = true;
     return null;
   }, undefined, true);
-  if (cleared) refreshFront(cwd);
+  if (cleared && input.refreshBoard !== false) refreshFront(cwd);
   return cleared;
 }
 

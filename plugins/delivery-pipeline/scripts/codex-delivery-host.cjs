@@ -10,6 +10,7 @@ const { launchAgent, ROLE_ALIASES } = require('./codex-agent.cjs');
 const { repoRootOf, resolveBaseRef } = require('./graph-dir.cjs');
 const policy = require('./model-policy.cjs');
 const archReviewContext = require('./codex-arch-review-context.cjs');
+const roleArtifact = require('./role-artifact.cjs');
 const { recordedPolicyFor } = require('./runtime-adapters.cjs');
 const { sealResearch, researchLineFailure, verifySealedLine, assertContained } = require('./planning-result-sealer.cjs');
 const { REPAIR: CODEX_ADAPTER_REPAIR } = require('./codex-model-remap.cjs');
@@ -1246,7 +1247,7 @@ function createCodexDeliveryHost(options = {}) {
     spawn: options.spawn,
     ephemeral: options.ephemeral,
     approveForMe: options.approveForMe,
-    additionalProtectedPaths: [stateRoot],
+    additionalProtectedPaths: [stateRoot, roleArtifact.archiveAuthorityDirectory(scope.worktree)],
   });
   const writerSession = options.writerSession;
   if (writerSession && (typeof writerSession.lease?.snapshotTree !== 'function'
@@ -1669,7 +1670,9 @@ async function runCli(argv = process.argv.slice(2), stdout = process.stdout, opt
   }, heartbeatMs);
   heartbeat.unref?.();
   const inflightDir = inflightGraphDir(options, scope.worktree);
-  const inflight = inflightDir ? { graphDir: inflightDir, dispatch_id: dispatchId, pid: process.pid } : null;
+  const inflight = inflightDir ? { graphDir: inflightDir, dispatch_id: dispatchId, pid: process.pid,
+    ...(preparedArchReview && path.resolve(inflightDir, '../..') === fs.realpathSync(scope.worktree)
+      ? { refreshBoard: false } : {}) } : null;
   let result;
   try {
     if (inflight) {

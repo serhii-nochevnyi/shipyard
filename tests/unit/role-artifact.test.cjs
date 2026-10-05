@@ -785,6 +785,12 @@ test('public sealer cannot rebind an original native receipt to another canonica
     fs.rmSync(path.join(f.root, '.planning/graph/dispatches.json'));
     fs.rmSync(path.join(f.root, '.planning/graph/provenance'), { recursive: true });
     const graphDir = path.join(canonical, '.planning/graph');
+    assert.throws(() => context.prepare({ worktree: f.root, ticket: result.subject, phase: 38 },
+      { role: 'arch-review', context: {}, signals: {} },
+      { graphDir, getPullRequest: () => f.pr, refreshGit: false }), /historical archive.*missing|ENOENT/);
+    fs.rmSync(roleArtifact.archiveAuthorityDirectory(f.root), { recursive: true, force: true });
+    execFileSync('git', ['-C', canonical, 'add', '.planning/architecture/ADR-014-host-bound-review.md'], { stdio: 'pipe' });
+    execFileSync('git', ['-C', canonical, 'commit', '-m', 'fixture: commit distinct canonical authority'], { stdio: 'pipe' });
     const fresh = context.prepare({ worktree: f.root, ticket: result.subject, phase: 38 },
       { role: 'arch-review', context: {}, signals: {} },
       { graphDir, getPullRequest: () => f.pr, refreshGit: false });

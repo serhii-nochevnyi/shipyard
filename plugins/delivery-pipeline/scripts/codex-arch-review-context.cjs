@@ -68,13 +68,9 @@ function codexResultText(dispatch) {
   if (!stat.isFile() || stat.isSymbolicLink() || stat.size !== transcript.bytes || stat.size > TRANSCRIPT_MAX_BYTES) {
     fail('Codex architecture transcript is not the recorded bounded file', 'RUNTIME_EVIDENCE_MISMATCH');
   }
-  let raw;
-  try { raw = fs.readFileSync(absolute); }
-  catch { fail('Codex architecture transcript cannot be read', 'MISSING_RECEIPT'); }
-  const after = fs.lstatSync(transcript.path);
-  if (after.isSymbolicLink() || !after.isFile() || !sameFileIdentity(stat, after) || digest(raw) !== transcript.sha256) {
+  const raw = boundedBytes(fs, absolute, TRANSCRIPT_MAX_BYTES, transcript.bytes, stat);
+  if (fs.realpathSync(transcript.path) !== absolute || !sameFileIdentity(stat, fs.lstatSync(transcript.path)) || digest(raw) !== transcript.sha256)
     fail('Codex architecture transcript changed after its authenticated receipt', 'RUNTIME_EVIDENCE_MISMATCH');
-  }
   const parsed = parseCodexStream(raw.toString('utf8'));
   if (parsed.session_id !== evidence.session_id) {
     fail('Codex architecture transcript session differs from its authenticated receipt', 'RUNTIME_EVIDENCE_MISMATCH');
@@ -127,27 +123,44 @@ function sameFileIdentity(left, right) {
   return ['dev', 'ino', 'size', 'mtimeMs', 'ctimeMs'].every(field => left[field] === right[field]);
 }
 
-function file(root, relative) {
+function boundedBytes(fsApi, absolute, maximumBytes, expectedBytes, expectedIdentity) {
+  if (fsApi.realpathSync(absolute) !== absolute) fail('context source contains a symlink');
+  const physicalBefore = fsApi.lstatSync(absolute);
+  if (expectedIdentity && !sameFileIdentity(expectedIdentity, physicalBefore)) fail('context source changed before reading', 'STALE_CONTEXT');
+  if (expectedBytes !== undefined && physicalBefore.size !== expectedBytes) fail('context source differs from recorded bounded bytes');
+  if (!physicalBefore.isFile() || physicalBefore.size > maximumBytes) fail('complete context source exceeds its bound');
+  const fd = fsApi.openSync(absolute, fsApi.constants.O_RDONLY | fsApi.constants.O_NOFOLLOW);
+  try {
+    const before = fsApi.fstatSync(fd);
+    if (!before.isFile() || before.size > maximumBytes) fail('context source exceeds its bound');
+    if (!sameFileIdentity(physicalBefore, before)) fail('context source changed before reading', 'STALE_CONTEXT');
+    const bytes = Buffer.alloc(before.size);
+    let offset = 0;
+    while (offset < bytes.length) {
+      const read = fsApi.readSync(fd, bytes, offset, bytes.length - offset, offset);
+      if (!read) fail('context source changed while reading', 'STALE_CONTEXT');
+      offset += read;
+    }
+    if (fsApi.readSync(fd, Buffer.alloc(1), 0, 1, bytes.length))
+      fail('context source grew beyond its bound while reading', 'STALE_CONTEXT');
+    const after = fsApi.fstatSync(fd);
+    const physicalAfter = fsApi.lstatSync(absolute);
+    if (!physicalAfter.isFile() || physicalAfter.isSymbolicLink()
+        || fsApi.realpathSync(absolute) !== absolute || !sameFileIdentity(before, after)
+        || !sameFileIdentity(after, physicalAfter) || bytes.length !== before.size)
+      fail('context source changed while reading', 'STALE_CONTEXT');
+    return bytes;
+  } finally { fsApi.closeSync(fd); }
+}
+
+function file(root, relative, maximumBytes = INPUT_MAX_BYTES) {
   if (typeof relative !== 'string' || path.isAbsolute(relative)
       || relative.includes('\\') || path.posix.normalize(relative) !== relative
       || relative.split('/').includes('..')) fail('invalid context source path');
   const absolute = path.join(root, relative);
   if (fs.realpathSync(absolute) !== absolute) fail('context source contains a symlink');
-  const physicalBefore = fs.lstatSync(absolute);
-  const fd = fs.openSync(absolute, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
-  try {
-    const before = fs.fstatSync(fd);
-    if (!before.isFile() || before.size > INPUT_MAX_BYTES) fail('context source exceeds its bound');
-    if (!sameFileIdentity(physicalBefore, before)) fail('context source changed before reading', 'STALE_CONTEXT');
-    const bytes = fs.readFileSync(fd);
-    const after = fs.fstatSync(fd);
-    const physicalAfter = fs.lstatSync(absolute);
-    if (!physicalAfter.isFile() || physicalAfter.isSymbolicLink()
-        || fs.realpathSync(absolute) !== absolute || !sameFileIdentity(before, after)
-        || !sameFileIdentity(after, physicalAfter) || bytes.length !== before.size)
-      fail('context source changed while reading', 'STALE_CONTEXT');
-    return { path: relative, sha256: digest(bytes), bytes: bytes.length, content: new TextDecoder('utf-8', { fatal: true }).decode(bytes) };
-  } finally { fs.closeSync(fd); }
+  const bytes = boundedBytes(fs, absolute, maximumBytes);
+  return { path: relative, sha256: digest(bytes), bytes: bytes.length, content: new TextDecoder('utf-8', { fatal: true }).decode(bytes) };
 }
 
 function collect(scope, options) {
@@ -183,9 +196,14 @@ function collect(scope, options) {
       }
     } catch {}
   }
+  for (const pin of options.historicalBookkeepingPins || []) {
+    if (!bookkeeping.has(pin.path) && file(worktree, pin.path).sha256 !== pin.sha256)
+      fail('authenticated historical bookkeeping changed', 'STALE_CONTEXT');
+    bookkeeping.add(pin.path);
+  }
   const archives = new Set();
   for (const pin of options.archivePins || []) {
-    if (file(worktree, pin.path).sha256 !== pin.sha256) fail('authenticated archive changed', 'STALE_CONTEXT');
+    roleArtifact.assertArchivePin(worktree, pin);
     archives.add(pin.path);
   }
   if (!status.ok || status.entries.some(entry => !bookkeeping.has(entry.path)
@@ -212,6 +230,7 @@ function collect(scope, options) {
       ...(row.repo ? ['--repo', row.repo] : []), '--json',
       'number,state,isDraft,headRefName,headRefOid,baseRefName,baseRefOid,reviewDecision'], worktree, 65536)));
   if (!object(live) || live.number !== number || live.state !== 'OPEN'
+      || !['', 'APPROVED', 'CHANGES_REQUESTED', 'REVIEW_REQUIRED'].includes(live.reviewDecision)
       || typeof live.isDraft !== 'boolean' || live.headRefName !== branch || live.headRefOid !== head
       || !/^[a-f0-9]{40}$/.test(live.baseRefOid || '')
       || typeof live.baseRefName !== 'string' || !/^[A-Za-z0-9._/-]+$/.test(live.baseRefName)
@@ -245,9 +264,12 @@ function collect(scope, options) {
       && !/-(?:DATA-MODEL|INTERFACES|ROLLOUT)\.md$/.test(n));
     if (!matches.length) fail('required architecture record is missing: ' + id);
   }
-  for (const name of names) refs.push(file(project, '.planning/architecture/' + name));
+  let corpusBytes = plan.bytes;
+  for (const name of names) {
+    const ref = file(project, '.planning/architecture/' + name, INPUT_MAX_BYTES - corpusBytes);
+    corpusBytes += ref.bytes; refs.push(ref);
+  }
   const visited = new Set(refs.map(ref => ref.path));
-  let corpusBytes = refs.reduce((total, ref) => total + ref.bytes, 0);
   if (corpusBytes > INPUT_MAX_BYTES) fail('complete architecture corpus exceeds its bound');
   for (const ref of refs) {
     const decisions = new Set(Array.from(ref.content.matchAll(
@@ -264,16 +286,18 @@ function collect(scope, options) {
     }
     for (const relative of [...decisions].sort()) {
       if (visited.has(relative)) continue;
-      const decision = file(project, relative);
+      if (visited.size >= 1000) fail('complete linked decision closure exceeds its bound');
+      const decision = file(project, relative, INPUT_MAX_BYTES - corpusBytes);
       corpusBytes += decision.bytes;
       if (visited.size >= 1000 || corpusBytes > INPUT_MAX_BYTES)
         fail('complete linked decision closure exceeds its bound');
       visited.add(relative); refs.push(decision);
     }
   }
-  const packet = { schema: SCHEMA, ticket: scope.ticket, phase: Number(scope.phase),
+  const sourceAuthority = roleArtifact.authenticateArchitectureSources(worktree, project, refs.filter(ref => ref.path !== plan.path));
+  const packet = { source_authority: sourceAuthority, schema: SCHEMA, ticket: scope.ticket, phase: Number(scope.phase),
     graph: { path: graphFile.path, sha256: graphFile.sha256, row },
-    pr: { number, head, branch, base: live.baseRefName, base_commit: live.baseRefOid, draft: live.isDraft },
+    pr: { number, head, branch, base: live.baseRefName, base_commit: live.baseRefOid, draft: live.isDraft, review_decision: live.reviewDecision },
     post_change_inventory: String(run(options, 'git', ['-C', worktree, 'ls-tree', '-r', '--name-only', head], worktree)),
     diff: { merge_base: mergeBase, merge_base_tree: mergeBaseTree, content: diff }, refs };
   const serialized = JSON.stringify(packet);
@@ -286,8 +310,12 @@ function collect(scope, options) {
       fail('context source changed while collecting', 'STALE_CONTEXT');
   }
   for (const pin of options.archivePins || []) {
+    roleArtifact.assertArchivePin(worktree, pin);
+  }
+  for (const pin of options.historicalBookkeepingPins || []) {
+    if ((options.bookkeepingPins || []).some(current => current.path === pin.path)) continue;
     if (file(worktree, pin.path).sha256 !== pin.sha256)
-      fail('authenticated archive changed while collecting', 'STALE_CONTEXT');
+      fail('authenticated historical bookkeeping changed while collecting', 'STALE_CONTEXT');
   }
   for (const pin of options.bookkeepingPins || []) {
     if (!bookkeeping.has(pin.path)) continue;
@@ -330,7 +358,7 @@ function writeEvidence(prepared, value, dispatchId) {
     const stat = fs.lstatSync(evidencePath);
     if (!stat.isFile() || stat.isSymbolicLink() || stat.size > EVIDENCE_MAX_BYTES)
       fail('existing reviewer evidence differs from its complete response', 'INVALID_RESULT');
-    const bytes = fs.readFileSync(evidencePath);
+    const bytes = boundedBytes(fs, evidencePath, EVIDENCE_MAX_BYTES, undefined, stat);
     if (bytes.toString('utf8').trim() !== value.trim())
       fail('existing reviewer evidence differs from its complete response', 'INVALID_RESULT');
     return { path: evidencePath, sha256: digest(bytes) };
@@ -381,11 +409,11 @@ function finish(value, dispatch, recorder) {
   const checkedFs = new Proxy(fs, { get(target, property) {
     if (property !== 'readFileSync') return target[property];
     return (filePath, ...args) => {
-      const bytes = target.readFileSync(filePath, ...args);
-      if (path.resolve(String(filePath)) === evidence.path
-          && digest(Buffer.from(bytes)) !== evidence.sha256)
-        fail('complete evidence changed before authenticated archival', 'STALE_CONTEXT');
-      return bytes;
+      if (path.resolve(String(filePath)) !== evidence.path) return target.readFileSync(filePath, ...args);
+      const bytes = boundedBytes(target, evidence.path, EVIDENCE_MAX_BYTES);
+      if (digest(bytes) !== evidence.sha256) fail('complete evidence changed before authenticated archival', 'STALE_CONTEXT');
+      const encoding = typeof args[0] === 'string' ? args[0] : args[0]?.encoding;
+      return encoding ? bytes.toString(encoding) : bytes;
     };
   } });
   const artifactInput = {
@@ -401,6 +429,8 @@ function finish(value, dispatch, recorder) {
       selected_refs: value.evidence.selected_refs,
       installation,
       bookkeeping: preparedOptions.get(value).bookkeepingPins || [],
+      historical_archives: preparedOptions.get(value).archivePins || [],
+      historical_bookkeeping: preparedOptions.get(value).historicalBookkeepingPins || [],
     } }, evidencePath: evidence.path, io: { fs: checkedFs, execFileSync(executable, args, options) {
       const privateOptions = preparedOptions.get(value);
       if (executable === 'gh' && privateOptions.getPullRequest)
@@ -445,6 +475,8 @@ function prepare(scope, launch, options = {}) {
   }
   if (launch.gsd_role !== undefined) fail('arch-review cannot use a typed GSD role');
 
+  options = { ...options, archivePins: roleArtifact.authenticatedArchivePins(scope.worktree),
+    historicalBookkeepingPins: roleArtifact.historicalBookkeepingPins(scope.worktree) };
   roleArtifact.prepareRoleArtifact({ worktreePath: scope.worktree, role: 'arch-review' });
   const prepared = collect(scope, options);
   const packet = JSON.stringify(prepared.packet);
@@ -515,7 +547,7 @@ function admitInstalledLaunch(value, options) {
   const files = [
     { root: agentRoot, ...agent },
     { root: manifestRoot, ...manifest },
-    ...['codex-arch-review-context.cjs', 'codex-delivery-host.cjs', 'codex-runtime-host.cjs', 'role-artifact.cjs'].map(name =>
+    ...['codex-arch-review-context.cjs', 'codex-delivery-host.cjs', 'codex-runtime-host.cjs', 'role-artifact.cjs', 'plan-delivery.cjs', 'conveyor-scratch.cjs', 'dispatch-record.cjs', 'claude-runtime-host.cjs'].map(name =>
       ({ root: scriptRoot, ...file(scriptRoot, name) })),
   ].map(({ content: _content, ...pin }) => pin);
   if (options.capabilitiesFile) {
@@ -560,12 +592,34 @@ function launchDigest(value, installation = installedLaunches.get(value)) {
     graph_dir: path.resolve(options.graphDir || process.env.SHIPYARD_GRAPH_DIR
       || path.join(value.prepared.canonical.worktree, '.planning/graph')),
     packet_digest: value.prepared.packet.digest, installation, bookkeeping: options.bookkeepingPins || [],
+    historical_archives: options.archivePins || [], historical_bookkeeping: options.historicalBookkeepingPins || [],
   })));
 }
 
 function admittedPrompt(value) {
   return value.launch.context.prompt.replace('launch_digest=' + '0'.repeat(64),
     'launch_digest=' + launchDigest(value));
+}
+
+function validateHistoricalContext(input) {
+  const context = input.result?.host_context;
+  if (!object(context) || context.schema !== SCHEMA || !object(context.installation) || !Array.isArray(context.bookkeeping))
+    fail('historical architecture authority is missing', 'ARCH_REVIEW_CONTEXT_REQUIRED');
+  const original = codexResultText({ runtime: input.receipt.runtime, role: input.receipt.role,
+    dispatch_id: input.dispatchId, receipt: input.receipt,
+    application_evidence: { runtime_evidence: input.receipt.runtime_evidence } }).result;
+  const attestation = { graph_dir: context.graph_dir, packet_digest: context.packet_digest,
+    installation: context.installation, bookkeeping: context.bookkeeping };
+  if (context.historical_archives !== undefined) attestation.historical_archives = context.historical_archives;
+  if (context.historical_bookkeeping !== undefined) attestation.historical_bookkeeping = context.historical_bookkeeping;
+  const { evidence_markdown: markdown, host_context: _nativeContext, ...native } = original;
+  const { host_context: _sealedContext, ...sealed } = input.result;
+  if (original.context_digest !== context.packet_digest
+      || original.launch_digest !== digest(JSON.stringify(canonical(attestation)))
+      || JSON.stringify(canonical(native)) !== JSON.stringify(canonical(sealed))
+      || typeof markdown !== 'string' || input.evidence.toString('utf8').trim() !== markdown.trim())
+    fail('historical bookkeeping differs from original authenticated native launch', 'STALE_CONTEXT');
+  return true;
 }
 
 function validateSealedContext(input, options = {}) {
@@ -582,6 +636,7 @@ function validateSealedContext(input, options = {}) {
       || context.transcript_sha256 !== receipt.runtime_evidence.transcript?.sha256
       || context.evidence_sha256 !== digest(input.evidence)
       || !Array.isArray(context.selected_refs) || !Array.isArray(context.bookkeeping)
+      || !Array.isArray(context.historical_archives) || !Array.isArray(context.historical_bookkeeping)
       || !object(context.installation) || !Array.isArray(context.installation.files))
     fail('missing or malformed required Codex architecture context', 'ARCH_REVIEW_CONTEXT_REQUIRED');
   const installation = context.installation;
@@ -591,7 +646,7 @@ function validateSealedContext(input, options = {}) {
       || installation.capacity.complete_upper_bound_bytes > INPUT_MAX_BYTES
       || installation.capacity.maximum_bytes !== INPUT_MAX_BYTES)
     fail('installed launch authority differs from sealed context', 'STALE_CONTEXT');
-  for (const required of ['codex-arch-review-context.cjs', 'codex-delivery-host.cjs', 'codex-runtime-host.cjs', 'role-artifact.cjs']) {
+  for (const required of ['codex-arch-review-context.cjs', 'codex-delivery-host.cjs', 'codex-runtime-host.cjs', 'role-artifact.cjs', 'plan-delivery.cjs', 'conveyor-scratch.cjs', 'dispatch-record.cjs', 'claude-runtime-host.cjs']) {
     if (!installation.files.some(pin => pin.root === installation.script_root && pin.path === required))
       fail('required installed source pin is missing', 'ARCH_REVIEW_CONTEXT_REQUIRED');
   }
@@ -606,7 +661,8 @@ function validateSealedContext(input, options = {}) {
     dispatch_id: input.dispatchId, receipt, application_evidence: { runtime_evidence: receipt.runtime_evidence } }).result;
   if (original.context_digest !== context.packet_digest
       || original.launch_digest !== digest(JSON.stringify(canonical({ graph_dir: context.graph_dir,
-        packet_digest: context.packet_digest, installation, bookkeeping: context.bookkeeping }))))
+        packet_digest: context.packet_digest, installation, bookkeeping: context.bookkeeping,
+        historical_archives: context.historical_archives, historical_bookkeeping: context.historical_bookkeeping }))))
     fail('sealed context differs from original authenticated launch identity', 'STALE_CONTEXT');
   const { evidence_markdown: evidenceMarkdown, host_context: _originalContext, ...originalJudgment } = original;
   const { host_context: _sealedContext, ...sealedJudgment } = input.result;
@@ -621,7 +677,8 @@ function validateSealedContext(input, options = {}) {
     fail('malformed authenticated bookkeeping pin', 'ARCH_REVIEW_CONTEXT_REQUIRED');
   const current = collect({ worktree: input.worktree, ticket: input.ticket, phase: context.phase }, {
     ...options, graphDir: context.graph_dir, inflightDispatchId: input.dispatchId,
-    bookkeepingPins: context.bookkeeping, allowClearedBookkeeping: true, archivePins: input.archivePins,
+    bookkeepingPins: context.bookkeeping, historicalBookkeepingPins: context.historical_bookkeeping,
+    allowClearedBookkeeping: true, archivePins: [...context.historical_archives, ...(input.archivePins || [])],
   });
   if (current.pr !== input.pr || current.packet.digest !== context.packet_digest
       || JSON.stringify(canonical(current.packet.required_refs.map(({ path, sha256, bytes }) => ({ path, sha256, bytes }))))
@@ -630,4 +687,4 @@ function validateSealedContext(input, options = {}) {
   return true;
 }
 
-module.exports = Object.freeze({ SCHEMA, prepare, finish, isPreparedContext, admitInstalledLaunch, admitBookkeeping, admittedPrompt, validateSealedContext });
+module.exports = Object.freeze({ SCHEMA, prepare, finish, isPreparedContext, admitInstalledLaunch, admitBookkeeping, admittedPrompt, validateHistoricalContext, validateSealedContext });

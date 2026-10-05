@@ -1063,11 +1063,15 @@ function createCodexCliLauncher(options = {}) {
   if (options.additionalProtectedPaths !== undefined && !Array.isArray(options.additionalProtectedPaths)) {
     fail('INVALID_INPUT', 'additionalProtectedPaths must be an array of host-owned paths');
   }
-  const hostProtectedPaths = normalizeProtectedPaths(options.additionalProtectedPaths);
+  const archiveAuthority = require('./role-artifact.cjs').archiveAuthorityNamespace(true);
+  const hostProtectedPaths = normalizeProtectedPaths([archiveAuthority, ...(options.additionalProtectedPaths || [])]);
   const taskDir = taskStateDir(options, scope);
 
   return async function launch(prompt, launchOptions = {}) {
     if (!object(launchOptions)) fail('INVALID_INPUT', 'Codex launch options must be an object');
+    if (['archiveAuthorityPath', 'archiveCataloguePath', 'archive_authority_path', 'archive_catalogue_path']
+      .some(key => Object.hasOwn(launchOptions, key)))
+      fail('INVALID_INPUT', 'archive authority paths are fixed by the trusted host');
     const model = text(launchOptions.model, 'model', 256);
     const effort = text(launchOptions.effort || launchOptions.reasoning_effort, 'effort', 32);
     if (!Object.values(CODEX_MODEL_IDS).includes(model)
