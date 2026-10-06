@@ -11,6 +11,7 @@ const DECOMPOSITION_PLAN_MAX_BYTES = 1024 * 1024;
 const DECOMPOSITION_MAX_PLANS = 128;
 const LINE_PATTERN = /^((?:INV-[A-Za-z0-9-]+)):(system-state|alternatives|constraints|risks)$/;
 const RESEARCH_LINE_IDS = Object.freeze(['system-state', 'alternatives', 'constraints', 'risks']);
+const containmentBaselines = new WeakMap();
 
 function refuse(code, message) {
   const error = new Error(`planning-result-sealer: ${message}`);
@@ -345,11 +346,63 @@ function entriesFromStatus(raw) {
   return entries;
 }
 
-function assertContained({ worktree, allowed } = {}) {
+function containmentGit(root, args) {
+  try {
+    return execFileSync('git', ['-C', root, ...args], {
+      encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 10000, maxBuffer: 16 * 1024 * 1024,
+    });
+  } catch (error) {
+    refuse('CONTAINMENT_STATUS_FAILED', `Git containment metadata could not be read: ${String(error.stderr || error.message).trim()}`);
+  }
+}
+
+function containmentSource(root, relative) {
+  const file = path.join(root, relative);
+  let stat;
+  try { stat = fs.lstatSync(file); }
+  catch (error) {
+    if (error.code === 'ENOENT' || error.code === 'ENOTDIR') return null;
+    refuse('CONTAINMENT_STATUS_FAILED', `containment source could not be inspected: ${relative}`);
+  }
+  if (stat.isSymbolicLink()) return `${stat.mode}:symlink:${fs.readlinkSync(file)}`;
+  if (stat.isDirectory()) return `${stat.mode}:directory`;
+  if (!stat.isFile()) refuse('CONTAINMENT_STATUS_FAILED', `containment source is not a regular file: ${relative}`);
+  const digest = crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+  const after = fs.lstatSync(file);
+  if (stat.dev !== after.dev || stat.ino !== after.ino || stat.mode !== after.mode
+      || stat.size !== after.size || stat.mtimeMs !== after.mtimeMs || stat.ctimeMs !== after.ctimeMs) {
+    refuse('CONTAINMENT_VIOLATION', `source changed during containment inspection: ${relative}`);
+  }
+  return `${stat.mode}:${digest}`;
+}
+
+function containmentSnapshot(root) {
+  const head = containmentGit(root, ['rev-parse', '--verify', 'HEAD^{commit}']).trim();
+  const index = crypto.createHash('sha256')
+    .update(containmentGit(root, ['ls-files', '--stage', '-v', '-z'])).digest('hex');
+  const entries = entriesFromStatus(containmentGit(root,
+    ['status', '--porcelain=v1', '-z', '--untracked-files=all']));
+  const paths = new Set(containmentGit(root, ['ls-files', '--cached', '--others', '--exclude-standard', '-z'])
+    .split('\0').filter(Boolean));
+  for (const entry of entries) paths.add(entry.path);
+  const sources = new Map([...paths].map((relative) => [relative, containmentSource(root, relative)]));
+  return { root, head, index, sources, status: new Map(entries.map((entry) => [entry.path, entry.status])) };
+}
+
+function captureContainmentBaseline({ worktree } = {}) {
+  if (typeof worktree !== 'string' || !worktree.trim()) {
+    refuse('CONTAINMENT_INPUT_INVALID', 'captureContainmentBaseline requires a worktree path');
+  }
+  const token = Object.freeze({});
+  containmentBaselines.set(token, containmentSnapshot(fs.realpathSync(worktree)));
+  return token;
+}
+
+function assertContained({ worktree, allowed, baseline } = {}) {
   if (typeof worktree !== 'string' || !worktree.trim()) refuse('CONTAINMENT_INPUT_INVALID', 'assertContained requires a worktree path');
   const root = fs.realpathSync(worktree);
   const list = Array.isArray(allowed) ? allowed : [allowed];
-  if (!list.length) refuse('CONTAINMENT_INPUT_INVALID', 'assertContained requires at least one allowed path');
+  if (!list.length && baseline === undefined) refuse('CONTAINMENT_INPUT_INVALID', 'assertContained requires at least one allowed path');
   const relativeAllowed = list.map((entry) => {
     if (typeof entry !== 'string' || !entry.trim()) refuse('CONTAINMENT_INPUT_INVALID', 'allowed path must be bounded text');
     const resolved = path.resolve(root, entry);
@@ -361,6 +414,24 @@ function assertContained({ worktree, allowed } = {}) {
   });
   const isAllowed = (candidate) => relativeAllowed.some((entry) => entry === ''
     || candidate === entry || candidate.startsWith(`${entry}${path.sep}`));
+  if (baseline !== undefined) {
+    const original = object(baseline) && containmentBaselines.get(baseline);
+    if (!original || original.root !== root) {
+      refuse('CONTAINMENT_BASELINE_INVALID', 'containment requires the original host-owned token for this worktree');
+    }
+    const current = containmentSnapshot(root);
+    if (original.head !== current.head) refuse('CONTAINMENT_VIOLATION', 'worktree HEAD changed since the host baseline');
+    if (original.index !== current.index) refuse('CONTAINMENT_VIOLATION', 'worktree index changed since the host baseline');
+    const paths = new Set([...original.sources.keys(), ...current.sources.keys(),
+      ...original.status.keys(), ...current.status.keys()]);
+    const outside = [...paths].filter((relative) => !isAllowed(relative)
+      && (original.sources.get(relative) !== current.sources.get(relative)
+        || original.status.get(relative) !== current.status.get(relative))).sort();
+    if (outside.length) {
+      refuse('CONTAINMENT_VIOLATION', `worktree changed outside the allowed path(s): ${outside.join(', ')}`);
+    }
+    return;
+  }
   let raw;
   try {
     raw = execFileSync('git', ['-C', root, 'status', '--porcelain=v1', '-z', '--untracked-files=all'], {
@@ -382,4 +453,5 @@ module.exports = Object.freeze({
   researchLineFailure,
   verifySealedLine,
   assertContained,
+  captureContainmentBaseline,
 });
