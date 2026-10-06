@@ -1569,8 +1569,6 @@ for (const includeDispatchId of [true, false]) {
     assert.ok(measured.rows.filter(row => row.actor === 'parent').every(row => row.dispatch_id === child.dispatch_id));
     const transcript = measured.childTranscript.split('\n').filter(Boolean).map(line => JSON.parse(line));
     assert.equal(transcript.filter(row => row.type === 'turn_context').length, 2);
-    // The unchanged overhead ledger accepts planning actors; do not force a
-    // typed GSD receipt into the narrower legacy attribution record schema.
     const overhead = require('../../plugins/delivery-pipeline/scripts/orchestration-overhead.cjs');
     assert.deepEqual(overhead.latestRows(measured.rows), measured.rows);
     assert.equal(new Set(measured.rows.map(row => row.observation_id)).size, measured.rows.length);

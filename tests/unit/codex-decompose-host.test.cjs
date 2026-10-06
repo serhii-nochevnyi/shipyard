@@ -7,7 +7,6 @@ const os = require('node:os');
 const path = require('node:path');
 const { EventEmitter } = require('node:events');
 const { spawnSync } = require('node:child_process');
-// Importing the controlled boundary fixture must not register this suite.
 const test = require.main === module ? require('node:test') : () => {};
 const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
 const { codexStaticVariants } = require('../../plugins/delivery-pipeline/scripts/gsd-tune.cjs');
@@ -2046,7 +2045,6 @@ test('recover argv is exact', () => {
   assert.throws(() => parseRecoverArguments(['recover', '--dispatch', 'd-1']), (error) => error.code === 'INVALID_INPUT');
 });
 
-// Controlled native transcripts and subprocess, shared with attribution/report tests.
 const MEASURED_HOST = path.resolve(__dirname, '../../plugins/delivery-pipeline/scripts/codex-decompose-host.cjs');
 function measuredGit(root, ...args) {
   const result = spawnSync('git', ['-C', root, '-c', 'commit.gpgsign=false', '-c', 'user.name=t',
@@ -2273,7 +2271,6 @@ async function measuredPlanningFixture({ includeDispatchId = true, timeout = fal
     pid = JSON.parse(fs.readFileSync(path.join(f.stateDir, originalId, 'record.json'))).pid;
     assert.equal(launches, 1);
     const rows = orchestrationOverhead.readStream(f.graph).rows;
-    // Generated identity is handed back to recovery; never regenerate it.
     const request = JSON.parse(fs.readFileSync(f.request));
     fs.writeFileSync(f.request, JSON.stringify({ ...request, dispatch_id: originalId }));
     const repeated = await planning.runCli(['--args-file', f.request], { write() {} }, options);
