@@ -1,6 +1,5 @@
 'use strict';
 
-// Read-only publication admission. The coordinator owns generation and sealing.
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -189,7 +188,6 @@ function selectedArtifact(common, handback) {
 function authenticateHandback() {
   const bytes = read(HANDOFF, HANDOFF_SHA, true);
   read(HANDOFF + '.asc', undefined, true);
-  // A public export beside the handback avoids reading the operator's private keyring.
   const publicKey = path.join(path.dirname(HANDOFF), 'operator-public-key.asc');
   read(publicKey);
   const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-p47-signature-')));
@@ -235,7 +233,6 @@ function validateParents(source, state, getPullRequest, ancestor) {
     }
     assert.match(commit.head, /^[a-f0-9]{40}$/);
     assert(Array.isArray(commit.base_merge_commits));
-    // Squash merges do not require original PR-head ancestry.
     for (const merged of [commit.merge, ...commit.base_merge_commits]) {
       assert.match(merged, /^[a-f0-9]{40}$/); ancestor(merged, source.head);
     }
@@ -329,9 +326,6 @@ function validateSource(root, binding) {
   }
   const commits = gitText(root, 'log', '--format=%s', BASELINE + '..' + source.head);
   assert(!/^T-48-/m.test(commits), 'phase48 changes in selected source ancestry');
-  // Generation's operator signature authenticates the coordinator's original live
-  // PR/head/merge observations. Consumers retain that immutable association and
-  // recheck direct state rows and actual merge ancestry; they do not regenerate it.
   validateParents(source, state, null, ancestor);
   return { head: gitText(root, 'rev-parse', 'HEAD'), tree: gitText(root, 'rev-parse', 'HEAD^{tree}'),
     canonical_input_digest: binding.canonical_input_digest, source_ancestor: true };
@@ -396,8 +390,6 @@ function stageContracts(selected) {
       encoding: 'utf8', env, timeout: 600000, maxBuffer: 16 * 1024 * 1024,
     });
     assert.equal(launch.status, 0, 'stage-bound launch contract failed:\n' + launch.stdout + launch.stderr);
-    // Existing architecture fixtures exercise genuine cleanup/fresh shared consumption.
-    // Redirect their module reads, including helpers, to the authenticated installed form.
     const script = `const fs=require('node:fs'),Module=require('node:module');
       const filename=${JSON.stringify(path.join(__dirname, 'codex-arch-review-context.test.cjs'))};
       const source=fs.readFileSync(filename,'utf8').replaceAll('../../plugins/delivery-pipeline',${JSON.stringify(packageRoot)});
@@ -443,7 +435,6 @@ function check(group) {
   const planning = validatePlanning(handback, selected.binding.source);
   const count = validatePublication(REPOSITORY, selected, group);
   const contracts = stageContracts(selected);
-  // Revalidate physical bytes after the actual installed-form contracts.
   selectedArtifact(common, handback);
   assert.deepEqual(canonicalInputs(REPOSITORY), selected.binding.source.identities, 'canonical drift during verification');
   return { status: 'completed', ticket: 'T-47-05', group, generation_id: handback.generation_id,
@@ -459,7 +450,6 @@ function check(group) {
 }
 
 function privateFixtures() {
-  // Only this private disposable repository builds. No fixture uses the real stage.
   const temporary = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-p47-publication-')));
   const root = path.join(temporary, 'repo');
   const write = (relative, bytes, mode = 0o644) => {
@@ -646,7 +636,6 @@ function privateFixtures() {
     assert.equal(buildCalls, 1); consume();
     return { passed: cases, private_build_calls: buildCalls, selected_reuse_build_calls: 0 };
   } finally {
-    // Restore directory write permission solely for disposal of this fixture.
     const writable = directory => {
       fs.chmodSync(directory, 0o700);
       for (const entry of fs.readdirSync(directory, { withFileTypes: true }))
@@ -660,11 +649,15 @@ module.exports = { check };
 
 if (require.main === module) {
   try {
-    assert.equal(process.argv.length, 4, 'usage: node phase47-package-publication.test.cjs --group <group>');
-    assert.equal(process.argv[2], '--group');
-    assert(Object.hasOwn(GROUPS, process.argv[3]), 'unknown publication group');
-    const fixtures = privateFixtures();
-    console.log(JSON.stringify({ ...check(process.argv[3]), fixtures }));
+    if (process.argv.length === 2) {
+      console.log(JSON.stringify({ status: 'passed', fixture_only: true, fixtures: privateFixtures() }));
+    } else {
+      assert.equal(process.argv.length, 4, 'usage: node phase47-package-publication.test.cjs --group <group>');
+      assert.equal(process.argv[2], '--group');
+      assert(Object.hasOwn(GROUPS, process.argv[3]), 'unknown publication group');
+      const fixtures = privateFixtures();
+      console.log(JSON.stringify({ ...check(process.argv[3]), fixtures }));
+    }
   } catch (error) {
     console.error(JSON.stringify({ status: 'blocked', ticket: 'T-47-05', reason: error.message }));
     process.exitCode = 1;
