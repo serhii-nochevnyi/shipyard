@@ -650,6 +650,40 @@ test('the detached child pid is the host process; status/wait report exit and re
   }
 });
 
+test('blocking observations are measured once across repeat waits and lost recovery adds no poll', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-wait-measurement-'));
+  const stateDir = path.join(root, 'dispatch');
+  const graphDir = path.join(root, 'graph');
+  const id = 'original-wait';
+  const directory = path.join(stateDir, id);
+  fs.mkdirSync(directory, { recursive: true });
+  writeJson(path.join(directory, 'record.json'), { dispatch_id: id, pid: 999999,
+    role: 'gsd-planner', runtime: 'codex', ticket: 'T-47-02', graph_dir: graphDir,
+    started_at: '2026-10-06T00:00:00.000Z', result: path.join(directory, 'result.jsonl') });
+  writeJson(path.join(directory, 'args.json'), { scope: { run_id: 'original-run', worktree: root } });
+  const overhead = require('../../plugins/delivery-pipeline/scripts/orchestration-overhead.cjs');
+  try {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      let tick = 0;
+      const result = await deliverDispatch.waitOnce(id, { stateDir, pidLive: () => true,
+        timeoutMs: 20, intervalMs: 10, clock: () => tick,
+        sleep: async (ms) => { tick += ms; } });
+      assert.equal(result.status, 'running');
+      assert.equal(result.exit_code, 3);
+    }
+    const rows = overhead.readStream(graphDir).rows;
+    assert.equal(rows.length, 2, 'same original observations are deduplicated in storage');
+    assert.ok(rows.every((row) => row.actor === 'parent' && row.run_id === 'original-run'
+      && row.dispatch_id === id && row.counts.polls === 1 && row.counts.model_turns === null));
+    const lost = await deliverDispatch.waitOnce('lost-original', { stateDir });
+    assert.equal(lost.status, 'lost');
+    assert.equal(lost.exit_code, 2);
+    const failed = await deliverDispatch.waitOnce(id, { stateDir, pidLive: () => false, recordWakeEvent() {} });
+    assert.equal(failed.status, 'exited-failed');
+    assert.equal(overhead.readStream(graphDir).rows.length, 2);
+  } finally { cleanup(root); }
+});
+
 test('an unknown dispatch id reports lost', () => {
   const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-deliver-dispatch-state-'));
   try {
