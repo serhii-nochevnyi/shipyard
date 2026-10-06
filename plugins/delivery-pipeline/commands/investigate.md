@@ -35,8 +35,8 @@ or `codex`. Keep that runtime fixed for the investigation. Claude routes through
 <json>`. Codex routes each research line through
 `${CLAUDE_PLUGIN_ROOT}/scripts/codex-delivery-host.cjs --args-file <json>` with
 `role: research`. Claude's request carries the four canonical line selections;
-Codex requests carry one line's signals and scoped context, and its host
-resolves that line's selection. Each host builds `createDispatchBoundary`,
+Codex's builder request carries the investigation packet and four canonical
+lines, and its host resolves each line's selection. Each host builds `createDispatchBoundary`,
 calls `boundary.dispatch`, and returns the durable application receipt; accept
 research output only after that receipt is verified.
 
@@ -51,6 +51,9 @@ is unavailable, stop that research line and report the runtime status.
 On a non-zero exit from a host launch, read its `hint[<CODE>]` stderr line and
 explain the hint and its remedy to the user in the user's language; never
 propose bypassing the host or switching runtime because of it.
+Preserve the original refusal code, cause, command, request digest and recovery
+references, including refusals before `controller.begin`. Missing capability or
+installed role evidence is an admission refusal; it is never native completion.
 
 ## Host evidence directory
 
@@ -105,8 +108,24 @@ Read `.planning/investigations/` (may not exist):
 
    ```bash
    node ${CLAUDE_PLUGIN_ROOT}/scripts/deliver-dispatch.cjs \
-     build research "$invId" --runtime "$runtime"
+     build research "$invId" --runtime "$runtime" > "$requestFile"
    ```
+
+   Pass those unchanged bytes to the selected host with `--request-file
+   "$requestFile"` for Claude or `--args-file "$requestFile"` for Codex.
+   The builder supplies the investigation scope, phase, canonical worktree and
+   a fresh UUID run identity. Keep that identity bound to this attempt's request,
+   controller and receipts. Do not patch the envelope, borrow a `T-...` execution
+   subject, or reuse a failed controller record with a fresh dispatch scope.
+   Before launch, require the selected runtime's capability evidence and installed
+   role/policy evidence. The host validates the actual parser, role, repository,
+   source and policy bindings before its native launcher.
+
+   Complete context, input and manifest refresh **before** taking the planning
+   snapshot and acquiring a writer. While a callback owns its writer, freeze
+   all planning inputs and preserve its active run and lease. Do not refresh
+   planning manifests merely to update progress. After authenticated writer
+   release, a new attempt may refresh inputs and take its own snapshot.
 
    Use the canonical line names `system-state`, `alternatives`, `constraints`,
    and `risks`. The generated request has already passed its runtime's exported
@@ -174,6 +193,15 @@ only the failed line, carrying the three sealed sibling references (each
 one's `id`, `status`, `summary`, and verified artifact reference and
 digest) so the host can verify them instead of re-running them.
 
+Inspect the original dispatch/controller recovery and sealed artifacts before
+building a failed-line retry. An unknown outcome or foreground timeout requires
+recovery against the original identity. If the original run is terminal failed,
+keep its request, primary refusal, receipts and artifacts immutable; after
+authenticated writer release, build one fresh attempt with matching run id,
+repository/worktree, investigation/phase and source bindings. A partial retry
+uses the supported host's failed-line and sealed-sibling fields below; it must
+not relaunch accepted sibling lines or reopen the old failed controller record.
+
 For Claude, invoke the same entry point again with a request file whose
 `args.lines` holds that one line and whose `args.sealedLines` holds the
 three sealed sibling references:
@@ -196,6 +224,17 @@ node ${CLAUDE_PLUGIN_ROOT}/scripts/codex-delivery-host.cjs \
 Both hosts verify every sealed sibling reference before sealing the full
 `shipyard.research-result.v1` envelope; a missing or tampered sibling
 refuses, naming that sibling, rather than trusting the request.
+
+For subsequent decomposition, use unchanged output from
+`deliver-dispatch.cjs build decomposition <INV-id|ADR-id> --phase <phase>
+--runtime <runtime>`. Codex's planning context host validates the packet before
+delegating to the typed decomposition host. A direct ADR must be accepted and
+contain decisions; its decomposition run subject binds the requested phase and
+input. ADR research and executor/integrator INV/ADR subjects refuse. Planning
+admission does not authorize execution. Continue using the supported linked INV
+until the complete direct ADR record/host guard is verified by T-47-06; the
+installed native acceptance remains T-47-08's obligation. Preserve the already
+accepted INV-014 research lines instead of launching them again.
 
 ## Step 2 — Iterative dialogue (the main resume mode)
 

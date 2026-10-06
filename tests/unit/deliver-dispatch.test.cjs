@@ -265,7 +265,8 @@ test('research and decomposition builders round-trip through both runtimes’ re
             assert.ok(request.prompt.includes(source.sha256));
           }
         } else if (role === 'research') {
-          accepted = codexDeliveryHost.validateArgs(request);
+          const { scope: _scope, ...launch } = request;
+          accepted = codexDeliveryHost.validateArgs(launch);
           assert.equal(accepted.request.role, 'research');
           assert.deepEqual(request.context.investigation.lines.map((line) => line.id),
             ['system-state', 'alternatives', 'constraints', 'risks']);
@@ -278,7 +279,8 @@ test('research and decomposition builders round-trip through both runtimes’ re
           assert.throws(() => validateContextPacket(request.context.contextPacket), /changed after packet construction/);
           fs.writeFileSync(path.join(fixture.invPath, 'PROBLEM.md'), '---\nadr: .planning/architecture/ADR-TEST.md\n---\n\n# Problem\n');
         } else {
-          accepted = codexPlanningContextHost.requestValue(request, { worktreePath: fixture.root });
+          const { scope: _scope, ...launch } = request;
+          accepted = codexPlanningContextHost.requestValue(launch, { worktreePath: fixture.root });
           assert.equal(accepted.gsd_role, 'gsd-planner');
           assert.equal(accepted.contextPacketRequired, true);
           assert.equal(accepted.sourceRevision, git(fixture.root, 'rev-parse', 'HEAD'));
@@ -292,7 +294,7 @@ test('research and decomposition builders round-trip through both runtimes’ re
             sourceRevision: accepted.sourceRevision, policyHash: modelPolicy.POLICY_HASH,
           });
           fs.appendFileSync(path.join(fixture.root, '.planning', 'architecture', 'ADR-TEST.md'), 'Changed after build.\n');
-          assert.throws(() => codexPlanningContextHost.requestValue(request, { worktreePath: fixture.root }),
+          assert.throws(() => codexPlanningContextHost.requestValue(launch, { worktreePath: fixture.root }),
             /changed after packet construction/);
           fs.writeFileSync(path.join(fixture.root, '.planning', 'architecture', 'ADR-TEST.md'), '# Planning ADR\n');
           for (const source of decompositionRefs) {
@@ -312,13 +314,20 @@ test('research and decomposition builders round-trip through both runtimes’ re
   }
 });
 
-test('planning builders are deterministic and missing PROBLEM.md exits 2 naming that input', () => {
+test('planning builders preserve context with distinct fresh run ids and missing PROBLEM.md exits 2', () => {
   const fixture = planningBuilderFixture('INV-43-16');
   const args = ['research', fixture.invId, '--runtime', 'codex'];
   try {
     const first = deliverDispatch.build(args, { cwd: fixture.root, graphDir: fixture.graphDir });
     const second = deliverDispatch.build(args, { cwd: fixture.root, graphDir: fixture.graphDir });
-    assert.deepEqual(second, first);
+    assert.notEqual(second.scope.run_id, first.scope.run_id);
+    assert.match(first.scope.run_id, /^deliver-build-research-[a-f0-9-]{36}$/);
+    assert.deepEqual({ ...second, scope: { ...second.scope, run_id: first.scope.run_id } }, first);
+    const claudeFirst = deliverDispatch.build(['research', fixture.invId, '--runtime', 'claude'],
+      { cwd: fixture.root, graphDir: fixture.graphDir });
+    const claudeSecond = deliverDispatch.build(['research', fixture.invId, '--runtime', 'claude'],
+      { cwd: fixture.root, graphDir: fixture.graphDir });
+    assert.notEqual(claudeSecond.scope.run_id, claudeFirst.scope.run_id);
     fs.rmSync(path.join(fixture.invPath, 'PROBLEM.md'));
     const result = spawnSync(process.execPath, [
       path.resolve(__dirname, '../../plugins/delivery-pipeline/scripts/deliver-dispatch.cjs'),
