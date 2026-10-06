@@ -240,7 +240,6 @@ async function runCli(argv = process.argv.slice(2), stdout = process.stdout, opt
     const argsFile = path.join(tempDir, 'args.json');
     fs.writeFileSync(argsFile, JSON.stringify(delegated), { mode: 0o600, flag: 'wx' });
     const runHost = options.runHost || codexDecomposeHost.runCli;
-    // Lazy import keeps the existing dispatch -> planning-host dependency acyclic at load time.
     const dispatch = require('./deliver-dispatch.cjs');
     const hostOptions = options.hostOptions || options;
     let id = request.dispatch_id;
