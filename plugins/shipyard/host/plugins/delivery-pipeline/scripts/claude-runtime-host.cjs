@@ -695,9 +695,13 @@ function createClaudeCliLauncher(options = {}) {
   const environment = options.env && object(options.env) ? { ...options.env } : {};
   const childEnvironment = claudeEnvironment({ ...process.env, ...environment });
   const uuid = typeof options.uuid === 'function' ? options.uuid : crypto.randomUUID;
+  const archiveAuthority = require('./role-artifact.cjs').archiveAuthorityNamespace(true);
 
   return async function launch(prompt, launchOptions = {}) {
     if (typeof prompt !== 'string' || prompt.trim() === '') fail('INVALID_INPUT', 'Claude prompt must be non-empty text');
+    if (['archiveAuthorityPath', 'archiveCataloguePath', 'archive_authority_path', 'archive_catalogue_path']
+      .some(key => Object.hasOwn(launchOptions, key)))
+      fail('INVALID_INPUT', 'archive authority paths are fixed by the trusted host');
     const model = text(launchOptions.model, 'model', 128);
     const effort = text(launchOptions.effort, 'effort', 32);
     if (!Object.values(CLAUDE_MODEL_ALIASES).includes(model)) fail('RUNTIME_CAPABILITY_MISSING', `unsupported Claude model alias ${model}`);
@@ -737,18 +741,20 @@ function createClaudeCliLauncher(options = {}) {
       : path.join(evidenceDirectory, 'session-start.json');
     try {
       const evidenceGlob = `//${evidenceDirectory.split(path.sep).filter(Boolean).join('/')}/**`;
+      const archiveGlob = `//${archiveAuthority.split(path.sep).filter(Boolean).join('/')}/**`;
       const settings = JSON.stringify({
         sandbox: {
           enabled: true,
           failIfUnavailable: true,
           allowUnsandboxedCommands: false,
           autoAllowBashIfSandboxed: true,
-          filesystem: { allowWrite: [path.resolve(scope.worktree)] },
+          filesystem: { allowWrite: [path.resolve(scope.worktree)], denyRead: [archiveAuthority], denyWrite: [archiveAuthority] },
           credentials: { envVars: SENSITIVE_SUBPROCESS_ENV.map((name) => ({ name, mode: 'deny' })) },
         },
         permissions: {
           blockReadsOutsideWorkingDirectories: true,
-          deny: ['Read', 'Edit', 'Write', 'Glob', 'Grep'].map((tool) => `${tool}(${evidenceGlob})`),
+          deny: ['Read', 'Edit', 'Write', 'Glob', 'Grep'].flatMap((tool) =>
+            [evidenceGlob, archiveGlob].map(glob => `${tool}(${glob})`)),
         },
         hooks: {
           SessionStart: [{
@@ -776,7 +782,7 @@ function createClaudeCliLauncher(options = {}) {
       ...(gsdRole ? ['--agents', agentDefinition.agents, '--agent', gsdRole] : []),
       '--strict-mcp-config', '--tools', tools,
       '--allowedTools', tools, '--permission-mode', 'dontAsk',
-      '--permission-prompts', 'none', '--settings', settings,
+      '--permission-prompts', 'none', '--setting-sources', '', '--settings', settings,
       ...(schema === undefined ? [] : ['--json-schema', schemaJson]),
       ];
       let child;
