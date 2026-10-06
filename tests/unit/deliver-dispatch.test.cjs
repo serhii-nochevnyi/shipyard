@@ -663,9 +663,16 @@ test('blocking observations are measured once across repeat waits and lost recov
   writeJson(path.join(directory, 'args.json'), { scope: { run_id: 'original-run', worktree: root } });
   const overhead = require('../../plugins/delivery-pipeline/scripts/orchestration-overhead.cjs');
   try {
+    let genericTick = 0;
+    await deliverDispatch.waitOnce(id, { stateDir, pidLive: () => true,
+      timeoutMs: 20, intervalMs: 10, clock: () => genericTick,
+      sleep: async (ms) => { genericTick += ms; } });
+    assert.equal(overhead.readStream(graphDir).rows.length, 0,
+      'generic wait must not mutate a live contained planner worktree');
     for (let attempt = 0; attempt < 2; attempt++) {
       let tick = 0;
-      const result = await deliverDispatch.waitOnce(id, { stateDir, pidLive: () => true,
+      const result = await deliverDispatch.waitOnce(id, { stateDir,
+        waitScope: { run_id: 'original-run', worktree: root }, pidLive: () => true,
         timeoutMs: 20, intervalMs: 10, clock: () => tick,
         sleep: async (ms) => { tick += ms; } });
       assert.equal(result.status, 'running');
