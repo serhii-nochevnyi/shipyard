@@ -1030,8 +1030,9 @@ function incompleteHostReason(runtime, role) {
 function build(argv, options = {}) {
   const args = parseBuildArgs(argv);
   if (args.graphDir) {
-    const requestedGraphDir = path.resolve(options.cwd || process.cwd(), args.graphDir);
-    if (options.graphDir && path.resolve(options.graphDir) !== requestedGraphDir)
+    const effectiveCwd = options.cwd || process.cwd();
+    const requestedGraphDir = path.resolve(effectiveCwd, args.graphDir);
+    if (options.graphDir && path.resolve(effectiveCwd, options.graphDir) !== requestedGraphDir)
       buildFail('--graph', 'conflicting canonical graph selectors');
     options = { ...options, graphDir: requestedGraphDir };
   }

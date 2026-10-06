@@ -359,6 +359,9 @@ test('Codex arch-review builder delegates context and signals to its trusted hos
     assert.equal(request.graph_dir, fs.realpathSync(fixture.graphDir));
     assert.deepEqual(request.context, {});
     assert.deepEqual(request.signals, {});
+    const relativeGraph = deliverDispatch.build(['arch-review', fixture.id, '--runtime', 'codex',
+      '--pr', '501', '--graph', '.planning/graph'], { cwd: fixture.root, graphDir: fixture.graphDir });
+    assert.equal(relativeGraph.graph_dir, fs.realpathSync(fixture.graphDir));
     const cli = spawnSync(process.execPath, [path.resolve(__dirname, '../../plugins/delivery-pipeline/scripts/deliver-dispatch.cjs'), 'build', 'arch-review', fixture.id,
       '--runtime', 'codex', '--pr', '501', '--graph', fixture.graphDir], {
       cwd: fixture.root, encoding: 'utf8', env: { ...process.env, SHIPYARD_GRAPH_DIR: fixture.graphDir },
