@@ -98,7 +98,6 @@ test('planning identities are scoped to their parsed role and decomposition phas
         dispatch: { dispatch_id: 'execution', role, model: 'sol', effort: 'high' } }), { code: 'INVALID_INPUT' });
     }
   }
-  // An ADR id alone carries no accepted packet/phase binding.
   assert.throws(() => scope.createTicketIdentity('ADR-025-runtime', { role: 'decomposition', phase: 47 }),
     { code: 'INVALID_INPUT' });
   for (const ticket of [adr.replace('ADR-025-runtime', 'ADR-'), adr.replace('phase=47', 'phase=0'),

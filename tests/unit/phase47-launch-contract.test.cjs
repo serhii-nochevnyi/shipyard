@@ -8,7 +8,6 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { execFileSync, spawnSync } = require('node:child_process');
 
-// Load every producer/consumer from one isolated candidate, never a mixture.
 const selectedRoot = process.env.SHIPYARD_TEST_PACKAGE_ROOT;
 if (selectedRoot !== undefined && (!path.isAbsolute(selectedRoot)
     || !fs.existsSync(selectedRoot) || !fs.statSync(selectedRoot).isDirectory())) {
@@ -217,7 +216,6 @@ test('failed controller recovery is inspected before a coherent fresh builder at
   const mismatched = f.build();
   const mismatchedParsed = delivery.readRequestFile(f.requestFile(mismatched));
   const mismatchedRun = f.runScope(mismatchedParsed.scope, mismatchedParsed.launch.role);
-  // Historical failure: fresh dispatch scope paired with the old controller id.
   assert.throws(() => f.controller.begin({ ...mismatchedRun, run_id: originalRun.run_id,
     lease: { ...mismatchedRun.lease, run_id: originalRun.run_id } }), { code: 'SCOPE_MISMATCH' });
   assert.throws(() => f.controller.begin(originalRun), { code: 'RUN_TERMINAL' });

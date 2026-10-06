@@ -228,8 +228,6 @@ function normalizeTicketIdentity(input, { role, phase } = {}) {
   const subject = value.match(/^phase=(\d+)-[A-Z0-9][A-Z0-9._-]*;repository=[^;\s]+;tickets=[a-f0-9]{64}$/i);
   const phaseSubject = role === 'integrator' && subject && Number(subject[1]) === Number(phase);
   const investigation = /^INV-[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$/.test(value);
-  // The planning CLI verifies the accepted packet before constructing this
-  // phase-bound subject. It grants no executor or integrator identity.
   const planningInput = value.match(/^phase=(\d+);input=((?:INV|ADR)-[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*);repository=[^;\s]+$/);
   const planningSubject = role === 'decomposition' && planningInput
     && Number(planningInput[1]) === Number(phase);
