@@ -127,9 +127,13 @@ function validateRuntimeEvidence(evidence, selection, resolution) {
     && protectedPaths.every((entry) => typeof entry === 'string' && path.isAbsolute(entry)
       && path.resolve(entry) === entry && !/[\u0000-\u001f\u007f]/.test(entry))
     && new Set(readOnlyPaths).size === readOnlyPaths.length
+    && (readOnlyPaths.length === 0
+      || (expectedSandbox === 'read-only'
+        && readOnlyPaths.length === allowedReadOnlyPaths.length
+        && allowedReadOnlyPaths.every((entry) => readOnlyPaths.includes(entry))))
     && readOnlyPaths.every((entry) => allowedReadOnlyPaths.includes(entry) && protectedPaths.includes(entry)
       && !protectedPaths.some((denied) => !readOnlyPaths.includes(denied)
-        && entry.startsWith(denied.endsWith(path.sep) ? denied : denied + path.sep)));
+        && entry.startsWith(denied.endsWith(path.sep) ? denied : denied + path.sep)))
   const expectedFilesystem = Array.isArray(protectedPaths) && protectedPaths.length
     ? '{' + [...protectedPaths.map((entry) => JSON.stringify(entry)
       + (readOnlyValid && readOnlyPaths.includes(entry) ? '=\"read\"' : '=\"deny\"')),
