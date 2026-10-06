@@ -158,7 +158,10 @@ if (dirtyCheck.entries.length) {
   fail('the worktree has uncommitted changes to tracked files — commit or stash before merging the base in');
 }
 
-if (!noFetch) git(['fetch', 'origin', '--prune'], { tolerate: true });
+if (!noFetch) {
+  const fetched = git(['fetch', 'origin', '--prune'], { tolerate: true });
+  if (fetched.status !== 0) fail(`fetch failed; refusing cached origin refs before merge: ${fetched.err || fetched.out}`);
+}
 
 // Resolved AFTER the fetch, because that is when origin/<base> is current. The
 // bare local name is what made this script report "already up to date" while
