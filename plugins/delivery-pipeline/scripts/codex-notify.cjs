@@ -18,6 +18,9 @@ function readDelegate(file) {
 }
 
 function main(argv = process.argv.slice(2)) {
+  // Retain compatibility with the emergency installed guard while adopting INV012.
+  if (process.env.SHIPYARD_CODEX_NOTIFY_ACTIVE === '1'
+      || process.env.SHIPYARD_NOTIFY_ACTIVE === '1') return 0;
   const payloadText = argv.at(-1) || '';
   let payload = {};
   try { payload = JSON.parse(payloadText); } catch {}
@@ -33,9 +36,11 @@ function main(argv = process.argv.slice(2)) {
   if (!delegate || !delegate.length) return 0;
   try {
     const child = spawn(delegate[0], delegate.slice(1).concat(payloadText), {
+      env: { ...process.env, SHIPYARD_CODEX_NOTIFY_ACTIVE: '1', SHIPYARD_NOTIFY_ACTIVE: '1' },
       detached: true,
       stdio: 'ignore',
     });
+    child.on('error', () => {});
     child.unref();
   } catch {}
   return 0;
