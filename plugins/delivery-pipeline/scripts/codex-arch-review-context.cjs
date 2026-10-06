@@ -246,7 +246,7 @@ function collect(scope, options) {
   const diff = String(run(options, 'git', ['-C', worktree, 'diff', '--no-ext-diff', '--no-textconv',
     '--unified=50', mergeBase + '...' + head], worktree));
   const plan = file(project, row.plan);
-  const ids = new Set(['ADR-014', ...Array.from(plan.content.matchAll(/ADR-(\d{3})/g), m => 'ADR-' + m[1])]);
+  const ids = new Set(Array.from(plan.content.matchAll(/ADR-(\d{3})/g), m => 'ADR-' + m[1]));
   let inventoryCount = 0;
   function architectureNames(relative = '.planning/architecture') {
     return fs.readdirSync(path.join(project, relative), { withFileTypes: true }).flatMap(entry => {
