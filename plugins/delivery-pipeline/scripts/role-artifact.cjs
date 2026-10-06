@@ -518,6 +518,7 @@ function writeManifest(fsApi, file, manifest) {
   const frame = archivePublicationFrames.at(-1);
   const serialized = `${JSON.stringify(manifest)}\n`;
   const desired = Buffer.from(serialized, 'utf8');
+  const frame = archivePublicationFrames.at(-1);
   try {
     if (fsApi.existsSync(file)) {
       const stat = fsApi.lstatSync(file);
