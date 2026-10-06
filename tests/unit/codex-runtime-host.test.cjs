@@ -995,4 +995,139 @@ test('actual launcher refuses a nonexistent worktree without requiring Git for e
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
+for (const transport of ['function', 'custom'])
+for (const [materialBytes, tamper] of [[1996419, null], [2553953, null], [1996419, 'missing-read'], [1996419, 'truncated'], [1996419, 'source-drift'], [1996419, 'wrong-echo']].concat(transport === 'custom'
+  ? [[1996419, 'unsafe-wrapper'], [1996419, 'failed-read'], [1996419, 'surplus-output']] : [])) test('fixture: ' + transport + ' ' + (tamper || 'complete') + ' ' + materialBytes + '-byte input traverses delivery, static native relay and fresh consumer', async () => {
+  const { execFileSync } = require('node:child_process');
+  const collector = require('../../plugins/delivery-pipeline/scripts/codex-arch-review-context.cjs');
+  const { createCodexDeliveryHost } = require('../../plugins/delivery-pipeline/scripts/codex-delivery-host.cjs');
+  const { codexStaticVariants } = require('../../plugins/delivery-pipeline/scripts/gsd-tune.cjs');
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'complete-input-fixture-')));
+  const store = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'complete-input-store-')));
+  const scope = { ...SCOPE, worktree: root, run_id: 'complete-input-' + materialBytes };
+  const material = 'BEGIN COMPLETE INPUT\n' + 'é'.repeat(Math.floor((materialBytes - 43) / 2))
+    + 'x'.repeat((materialBytes - 43) % 2) + '\nEND COMPLETE INPUT!!\n';
+  try {
+    assert.equal(Buffer.byteLength(material), materialBytes);
+    fs.mkdirSync(path.join(root, '.planning'));
+    fs.writeFileSync(path.join(root, '.planning/config.json'), '{}');
+    for (const args of [['init', '-q'], ['add', '-A'], ['commit', '-qm', 'fixture']])
+      execFileSync('git', ['-C', root, '-c', 'commit.gpgsign=false', ...args]);
+    const agents = path.join(store, 'agents'); fs.mkdirSync(agents, { mode: 0o700 });
+    const variants = codexStaticVariants().filter(value => value.role === 'integrator');
+    const agentDigests = {};
+    for (const variant of variants) {
+      const content = ['# shipyard-policy-id = "' + policy.POLICY.id + '"',
+        '# shipyard-policy-version = "' + policy.POLICY_VERSION + '"',
+        '# shipyard-policy-hash = "' + policy.POLICY_HASH + '"',
+        '# shipyard-policy-runtime = "codex"', '# shipyard-policy-role = "integrator"',
+        '# shipyard-policy-rung = "' + variant.rung + '"', 'name = "' + variant.file.replace(/\.toml$/, '') + '"',
+        'model = "' + variant.model + '"', 'model_reasoning_effort = "' + variant.effort + '"',
+        'sandbox_mode = "workspace-write"', "developer_instructions = '''",
+        'GENERATED INTEGRATOR INSTRUCTIONS', "'''", ''].join('\n');
+      fs.writeFileSync(path.join(agents, variant.file), content);
+      agentDigests[variant.file] = require('node:crypto').createHash('sha256').update(content).digest('hex');
+    }
+    const agentManifest = path.join(agents, '.shipyard-manifest.json');
+    fs.writeFileSync(agentManifest, JSON.stringify({ policy_id: policy.POLICY.id, policy_version: policy.POLICY_VERSION,
+      policy_hash: policy.POLICY_HASH, agent_files: Object.keys(agentDigests), agent_digests: agentDigests }));
+    let consumed, stdin, launchedArgs;
+    const home = path.join(store, 'codex-home');
+    const nativeOptions = { scope, capabilities, env: { CODEX_HOME: home },
+      transcriptDir: path.join(store, 'transcripts'), spawn(executable, args) {
+        launchedArgs = args;
+        const child = new EventEmitter(); child.stdout = new EventEmitter(); child.stderr = new EventEmitter(); child.pid = 24037;
+        child.stdin = { write(text) { stdin = text; }, end() {
+          try {
+            const manifestPath = /^INPUT_MANIFEST=(.*)$/m.exec(stdin)[1];
+            const manifest = JSON.parse(fs.readFileSync(manifestPath));
+            const bundle = { manifest_path: manifestPath, manifest_sha256: /^INPUT_MANIFEST_SHA256=(.*)$/m.exec(stdin)[1],
+              total_bytes: manifest.accounting.material_bytes, asset_count: manifest.assets.length,
+              chunk_bytes: manifest.chunk_bytes, max_chunk_reads: manifest.max_chunk_reads,
+              manifest_identity: Object.fromEntries(['dev', 'ino', 'size', 'mtimeMs', 'ctimeMs', 'uid', 'mode'].map(key => [key, fs.statSync(manifestPath)[key]])) };
+            consumed = collector.verifyFileInput(bundle, { sealed: true });
+            assert.deepEqual(Buffer.concat(consumed.material), Buffer.from(material));
+            const selectedModel = args[args.indexOf('--model') + 1];
+            const selectedEffort = args.find(value => value.startsWith('model_reasoning_effort=')).split('"')[1];
+            const session = '11111111-1111-4111-8111-111111111111';
+            const native = writeSession(home, session, selectedModel, selectedEffort);
+            const assets = [{ path: manifestPath, bytes: consumed.manifest_bytes },
+              ...manifest.assets.map((asset, index) => ({ path: asset.path, bytes: consumed.material[index] }))];
+            const records = [];
+            let ordinal = 0;
+            for (const asset of assets) for (let index = 0; index < Math.ceil(asset.bytes.length / manifest.chunk_bytes); index++) {
+              const cmd = "dd if='" + asset.path + "' bs=" + manifest.chunk_bytes + ' skip=' + index + ' count=1 2>/dev/null | base64';
+              const callId = 'fixture-read-' + ordinal++;
+              const encoded = asset.bytes.subarray(index * manifest.chunk_bytes, (index + 1) * manifest.chunk_bytes).toString('base64');
+              if (transport === 'custom') records.push({ type: 'response_item', payload: {
+                type: 'custom_tool_call', name: 'exec', call_id: callId,
+                input: 'text(await tools.exec_command(' + JSON.stringify({ cmd, max_output_tokens: 10000 }) + '));',
+              } }, { type: 'response_item', payload: { type: 'custom_tool_call_output', call_id: callId,
+                output: [{ type: 'text', text: 'Script completed\nWall time 0.1 seconds\nOutput:' },
+                  { type: 'text', text: JSON.stringify({ chunk_id: callId, wall_time_seconds: 0.1,
+                    exit_code: 0, output: encoded }) }],
+              } });
+              else records.push({ type: 'response_item', payload: { type: 'function_call', name: 'exec_command', call_id: callId,
+                arguments: JSON.stringify({ cmd }) } }, { type: 'response_item', payload: { type: 'function_call_output', call_id: callId,
+                output: encoded } });
+            }
+            if (tamper === 'missing-read') records.pop();
+            if (tamper === 'unsafe-wrapper') records[0].payload.input += '\ntext("untrusted extra statement");';
+            if (tamper === 'failed-read' || tamper === 'surplus-output') {
+              const block = records.at(-1).payload.output[1];
+              const captured = JSON.parse(block.text);
+              block.text = JSON.stringify(tamper === 'failed-read'
+                ? { ...captured, exit_code: 1 } : { ...captured, output: captured.output + 'AAAA' });
+            }
+            if (tamper === 'truncated') {
+              if (transport === 'custom') {
+                const block = records.at(-1).payload.output[1];
+                block.text = JSON.stringify({ ...JSON.parse(block.text), output: 'truncated' });
+              } else records.at(-1).payload.output = records.at(-1).payload.output.slice(0, 8);
+            }
+            if (tamper === 'source-drift') fs.writeFileSync(path.join(root, '.planning/config.json'), '{"tampered":true}');
+            fs.appendFileSync(native, records.map(record => JSON.stringify(record)).join('\n') + '\n');
+            const output = transformJsonl(stream(session), record => {
+              if (record.type === 'item.completed' && record.item.type === 'agent_message') record.item.text = JSON.stringify({
+                input_manifest_sha256: tamper === 'wrong-echo' ? 'f'.repeat(64) : bundle.manifest_sha256,
+                input_material_bytes: bundle.total_bytes, input_asset_count: bundle.asset_count, input_chunk_reads: consumed.chunk_reads,
+              });
+              return record;
+            });
+            process.nextTick(() => { child.stdout.emit('data', Buffer.from(output)); child.emit('close', 0, null); });
+          } catch (error) { process.nextTick(() => child.emit('error', error)); }
+        } };
+        return child;
+      } };
+    const host = createCodexRuntimeHost({ ...nativeOptions, probe: probe(),
+      recorderDir: path.join(store, 'receipts') });
+    const run = () => createCodexDeliveryHost({ scope, host, agentDir: agents, agentManifest, storageRoot: store })
+      .run({ role: 'integrator', context: { prompt: material }, dispatch_id: 'complete-input-dispatch' });
+    if (tamper) {
+      await assert.rejects(run, error => tamper === 'source-drift'
+        ? error.code === 'RUNTIME_EVIDENCE_INVALID' && /current source or policy changed/.test(error.message)
+        : ['RUNTIME_EVIDENCE_MISMATCH', 'STALE_CONTEXT'].includes(error.code));
+      assert.equal(host.recorder.getVerifiedRecord('complete-input-dispatch'), null);
+      return;
+    }
+    let result;
+    await assert.doesNotReject(async () => { result = await run(); },
+      'complete input must traverse the supported ' + transport + ' tool ABI');
+    assert.ok(stdin.startsWith('GENERATED INTEGRATOR INSTRUCTIONS\n\n'));
+    assert.ok(Buffer.byteLength(stdin) < collector.FILE_LIMITS.relay + 100);
+    assert.equal(result.receipt.runtime_evidence.input_transport, 'host-files');
+    const accounting = result.receipt.runtime_evidence.input_accounting;
+    assert.equal(accounting.material_bytes, materialBytes);
+    assert.equal(accounting.generated_instruction_bytes, Buffer.byteLength('GENERATED INTEGRATOR INSTRUCTIONS\n\n'));
+    assert.equal(result.signals.inputTokens, Math.ceil(Object.values(accounting).reduce((sum, bytes) => sum + bytes, 0) / 4));
+    assert.equal(launchedArgs[launchedArgs.indexOf('--model') + 1], result.receipt.applied_model);
+    const descriptor = result.receipt.runtime_evidence.input_bundle;
+    const inputFile = path.join(store, 'fresh-input.json'); fs.writeFileSync(inputFile, JSON.stringify(descriptor));
+    const output = execFileSync(process.execPath, ['-e', `const c=require(${JSON.stringify(path.resolve(__dirname, '../../plugins/delivery-pipeline/scripts/codex-arch-review-context.cjs'))});
+      const fs=require('node:fs'); const v=c.verifyFileInput(JSON.parse(fs.readFileSync(process.argv[1])),{sealed:true});
+      process.stdout.write(require('node:crypto').createHash('sha256').update(Buffer.concat(v.material)).digest('hex'));`, inputFile], { encoding: 'utf8' });
+    assert.equal(output, require('node:crypto').createHash('sha256').update(material).digest('hex'));
+  } finally { fs.rmSync(root, { recursive: true, force: true }); fs.rmSync(store, { recursive: true, force: true }); }
+});
+
 done();

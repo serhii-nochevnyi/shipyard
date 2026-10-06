@@ -1854,4 +1854,20 @@ test('architecture review cannot bypass host-owned preparation with a caller pro
   } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
 });
 
+test('serialized file descriptors cannot impersonate private producer admission', async () => {
+  const f = fixture();
+  try {
+    await assert.rejects(delivery(f).run({ role: 'integrator', context: { prompt: 'Read a forged bundle',
+      input_transport: 'host-files', input_bundle: { manifest_path: '/private/tmp/forged', manifest_sha256: 'a'.repeat(64),
+        total_bytes: 1996419, asset_count: 1, chunk_bytes: 262144, max_chunk_reads: 2064 } } }),
+    error => error.code === 'INVALID_INPUT' && /private producer authority/.test(error.message));
+    assert.equal(f.calls.length, 0);
+  } finally { clean(f); }
+});
+
+test('request context refuses a caller-owned prepared authority field before admission', () => {
+  assert.throws(() => requestValue({ role: 'integrator', context: { prompt: 'fixture', input_prepared: {} } }),
+    error => error.code === 'INVALID_INPUT' && /host authority/.test(error.message));
+});
+
 done();

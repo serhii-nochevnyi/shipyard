@@ -201,3 +201,105 @@ test('timeout and lost recovery retain the original dispatch and copied private 
     assert.equal(launches, 1);
   } finally { f.clean(); }
 });
+
+test('supported caller retains genuine blocking parent polls outside its writer tree and reads without writes', async () => {
+  const f = fixture();
+  const external = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'planning-external-')));
+  let child;
+  try {
+    assert.equal(typeof planningHost.readWaitAccounting, 'function');
+    const request = { ...requestFor(f.root), dispatch_id: 'original-external-wait' };
+    const file = argsFile(f.root, request);
+    const options = { stateDir: path.join(external, 'dispatch'), testStateRoot: external,
+      env: { SHIPYARD_GRAPH_DIR: path.join(f.root, '.planning/graph') },
+      waitOptions: { timeoutMs: 80, intervalMs: 20, recordWakeEvent() {} },
+      runHost: async (argv, stdout, hostOptions) => {
+        await require('../../plugins/delivery-pipeline/scripts/codex-decompose-host.cjs').runCli(argv, stdout, {
+          ...hostOptions, spawn() {
+            child = require('node:child_process').spawn(process.execPath, ['-e', 'setTimeout(() => {}, 10000)']);
+            return child;
+          },
+        });
+      },
+    };
+    let diagnostic;
+    await assert.rejects(planningHost.runCli(['--args-file', file], { write() {} }, {
+      ...options, onWaitAccounting(value) { diagnostic = value; },
+    }), error => error.code === 'DISPATCH_TIMEOUT');
+    assert.ok(diagnostic.parent_rows.length > 0);
+    assert.ok(!diagnostic.sink.startsWith(f.root + path.sep));
+    for (const row of diagnostic.parent_rows) {
+      assert.equal(row.dispatch_id, request.dispatch_id);
+      assert.equal(row.run_id, request.scope.run_id);
+      assert.equal(row.actor, 'parent');
+      assert.equal(row.stage, 'wait_poll');
+      assert.equal(row.evidence, 'wait-event');
+      assert.equal(row.counts.model_turns, null);
+      assert.equal(row.provider_tokens, null);
+    }
+    const stream = path.join(diagnostic.sink, 'orchestration-overhead.jsonl');
+    const before = fs.readFileSync(stream);
+    const read = planningHost.readWaitAccounting({ scope: request.scope, dispatchId: request.dispatch_id,
+      graphDir: path.join(f.root, '.planning/graph') }, options);
+    assert.deepEqual(read.parent_rows, diagnostic.parent_rows);
+    assert.deepEqual(fs.readFileSync(stream), before);
+    assert.equal(fs.existsSync(path.join(f.root, '.planning/graph/orchestration-overhead.jsonl')), false);
+  } finally {
+    child?.kill();
+    f.clean(); fs.rmSync(external, { recursive: true, force: true });
+  }
+});
+
+for (const kind of ['inside', 'symlink', 'public']) test('caller refuses ' + kind + ' recorder destinations before waiting', async () => {
+  const f = fixture();
+  const external = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'planning-recorder-')));
+  try {
+    const directory = kind === 'inside' ? path.join(f.root, 'telemetry') : path.join(external, 'telemetry');
+    fs.mkdirSync(directory, { mode: kind === 'public' ? 0o755 : 0o700 });
+    let sink = directory;
+    if (kind === 'symlink') { sink = path.join(external, 'alias'); fs.symlinkSync(directory, sink); }
+    const recorder = require('../../plugins/delivery-pipeline/scripts/orchestration-overhead.cjs').createRecorder(sink);
+    assert.throws(() => planningHost.readWaitAccounting({ scope: requestFor(f.root).scope,
+      dispatchId: 'unsafe', graphDir: path.join(f.root, '.planning/graph') }, {
+      testStateRoot: external, waitOptions: { overheadRecorder: recorder },
+    }), error => error.code === 'INVALID_WAIT_RECORDER');
+    assert.equal(fs.existsSync(path.join(directory, 'orchestration-overhead.jsonl')), false);
+  } finally { f.clean(); fs.rmSync(external, { recursive: true, force: true }); }
+});
+
+for (const failure of [false, true]) test('trusted external recorder ' + (failure ? 'failure preserves the timeout and bounded diagnostic' : 'deduplicates repeat observations'), async () => {
+  const f = fixture();
+  const external = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'planning-injection-')));
+  try {
+    const sink = path.join(external, 'telemetry'); fs.mkdirSync(sink, { mode: 0o700 });
+    const durable = require('../../plugins/delivery-pipeline/scripts/orchestration-overhead.cjs').createRecorder(sink);
+    const recorder = failure ? { ...durable, record() { throw new Error('missing telemetry ' + 'x'.repeat(2000)); } } : durable;
+    const request = { ...requestFor(f.root), dispatch_id: 'original-injected-wait' };
+    const file = argsFile(f.root, request);
+    const options = { stateDir: path.join(external, 'dispatch'), testStateRoot: external,
+      env: { SHIPYARD_GRAPH_DIR: path.join(f.root, '.planning/graph') },
+      runHost: async (argv, stdout, hostOptions) => require('../../plugins/delivery-pipeline/scripts/codex-decompose-host.cjs').runCli(argv, stdout, {
+        ...hostOptions, spawn: () => ({ pid: 999999, on() {}, unref() {} }),
+      }),
+    };
+    const readings = [];
+    for (let attempt = 0; attempt < 2; attempt++) {
+      let tick = 1000;
+      await assert.rejects(planningHost.runCli(['--args-file', file], { write() {} }, { ...options,
+        onWaitAccounting: value => readings.push(value), waitOptions: { overheadRecorder: recorder,
+          pidLive: () => true, timeoutMs: 10, intervalMs: 10, clock: () => tick,
+          sleep: async ms => { tick += ms; }, recordWakeEvent() {} },
+      }), error => error.code === 'DISPATCH_TIMEOUT' && error.dispatch_id === request.dispatch_id);
+    }
+    if (failure) {
+      assert.equal(readings[0].parent_rows.length, 0);
+      assert.ok(readings[0].missing_evidence.length < 600);
+      assert.match(readings[0].missing_evidence, /missing telemetry/);
+    } else {
+      assert.equal(durable.latest().length, 1);
+      assert.deepEqual(readings[0].parent_rows, readings[1].parent_rows);
+      assert.equal(readings[0].parent_rows[0].observed_at, new Date(1000).toISOString());
+    }
+    assert.equal(fs.existsSync(path.join(f.root, '.planning/graph/orchestration-overhead.jsonl')), false);
+  } finally { f.clean(); fs.rmSync(external, { recursive: true, force: true }); }
+});

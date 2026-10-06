@@ -97,7 +97,7 @@ function requestValue(input) {
   if (input.signals !== undefined && !object(input.signals)) fail('INVALID_INPUT', 'signals must be an object');
   if (input.context !== undefined && !object(input.context)) fail('INVALID_INPUT', 'context must be an object');
   for (const key of Object.keys(input.context || {})) {
-    if (key === 'preRecordValidation' || key === 'writerSession' || key === 'verification_assignment') {
+    if (key === 'preRecordValidation' || key === 'writerSession' || key === 'verification_assignment' || key === 'input_prepared') {
       fail('INVALID_INPUT', 'request context cannot supply host authority');
     }
     if (key.startsWith('plan') && key !== 'plan_sha256') {
@@ -700,6 +700,66 @@ function finalizer(options) {
   }
   try { return require('./delivery-commit-finalizer.cjs').finalizeDeliveryCommit; }
   catch (_) { fail('MISSING_FINALIZER', 'trusted delivery commit finalizer is unavailable'); }
+}
+
+function installedAgentOptions(options, selection, capabilities) {
+  const env = options.env || process.env;
+  const agentDir = options.agentDir || path.join(env.CODEX_HOME || path.join(os.homedir(), '.codex'), 'agents');
+  return { agentDir, agentFile: selection.agent_file,
+    agentManifest: options.agentManifest || path.join(agentDir, '.shipyard-manifest.json'),
+    capabilities, capabilitiesFile: options.capabilitiesFile || env.SHIPYARD_CODEX_CAPABILITIES_FILE };
+}
+
+function admitArchitectureInput(prepared, request, options, capabilities) {
+  let signals = { ...request.signals };
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const selected = policy.resolveDispatch({ runtime: 'codex', role: request.role, signals });
+    archReviewContext.admitInstalledLaunch(prepared, installedAgentOptions(options, selected, capabilities));
+    const input = archReviewContext.admittedFileInput(prepared);
+    const next = input ? { ...signals, inputTokens: input.inputTokens } : signals;
+    const actual = policy.resolveDispatch({ runtime: 'codex', role: request.role, signals: next });
+    signals = next;
+    if (actual.agent_file === selected.agent_file) return signals;
+  }
+  fail('CONTEXT_OVER_BOUND', 'selected generated instruction accounting did not stabilize');
+}
+
+function prepareIntegratorInput(scope, request, options) {
+  if (request.context.input_transport !== undefined || request.context.input_bundle !== undefined) {
+    const prepared = options.fileInputContext;
+    if (!archReviewContext.isPreparedFileInput(prepared)
+        || request.context.input_transport !== 'host-files'
+        || JSON.stringify(request.context.input_bundle) !== JSON.stringify(prepared.input_bundle)
+        || request.context.prompt !== prepared.prompt) fail('INVALID_INPUT', 'serialized bundle has no private producer authority');
+    archReviewContext.verifyFileInput(prepared, { association: { run_id: scope.run_id, ticket: scope.ticket,
+      phase: scope.phase, role: request.role, dispatch_id: request.dispatch_id } });
+    return prepared;
+  }
+  const material = request.context.prompt || request.context.task_prompt || request.context.input;
+  if (request.role !== 'integrator' || request.gsd_role !== undefined || typeof material !== 'string'
+      || Buffer.byteLength(material) <= 1024 * 1024) return null;
+  let signals = { ...request.signals, inputTokens: Math.ceil(Buffer.byteLength(material) / 4) };
+  let input;
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const selected = policy.resolveDispatch({ runtime: 'codex', role: request.role, signals });
+    const installed = installedAgentOptions(options, selected, options.host?.capabilities || options.capabilities);
+    const agentPath = path.join(installed.agentDir, installed.agentFile);
+    const instructions = archReviewContext.instructionEvidence(installed.agentDir, installed.agentFile, installed.agentManifest);
+    const instructionBytes = instructions.generated_instruction_bytes;
+    input = archReviewContext.prepareFileInput(scope, material, { role: request.role, dispatchId: request.dispatch_id,
+      storageRoot: storageDirectory(options, scope), graphDir: options.graphDir, generatedInstructionBytes: instructionBytes,
+      binding: { agent_file: selected.agent_file, agent_path: path.resolve(agentPath), agent_sha256: instructions.sha256, installed_files: instructions.installed_files, policy_hash: selected.policy_hash } });
+    signals = { ...signals, inputTokens: input.inputTokens };
+    const actual = policy.resolveDispatch({ runtime: 'codex', role: request.role, signals });
+    if (actual.agent_file === selected.agent_file) {
+      if (request.signals.inputTokens !== undefined && request.signals.inputTokens !== input.inputTokens)
+        fail('INVALID_INPUT', 'caller inputTokens differs from complete measured input');
+      request.signals = signals;
+      request.context = { ...request.context, prompt: input.prompt, input_transport: 'host-files', input_bundle: input.input_bundle };
+      return input;
+    }
+  }
+  fail('CONTEXT_OVER_BOUND', 'selected generated instruction accounting did not stabilize');
 }
 
 function storageDirectory(options, scope) {
@@ -1430,6 +1490,8 @@ function createCodexDeliveryHost(options = {}) {
         fail('UNSUPPORTED_ROLE', 'typed GSD role does not match the delivery role');
       }
       options.controller?.assertOwner(scope.run_id);
+      request.dispatch_id = request.dispatch_id || newDispatchId();
+      let fileInput;
       if (request.role === 'arch-review') {
         const prepared = options.archReviewContext;
         if (!archReviewContext.isPreparedContext(prepared)
@@ -1437,19 +1499,16 @@ function createCodexDeliveryHost(options = {}) {
             || prepared.prepared.phaseNumber !== scope.phase
             || prepared.prepared.canonical.worktree !== scope.worktree
             || request.context.prompt !== prepared.prepared.prompt
-            || JSON.stringify(request.signals) !== JSON.stringify(prepared.prepared.signals))
+            || (![prepared.prepared.signals, options.archReviewSignals].filter(Boolean).some(signals => JSON.stringify(request.signals) === JSON.stringify(signals))))
           fail('ARCH_REVIEW_CONTEXT_REQUIRED', 'architecture context must be host-built and graph-bound');
-        const selection = policy.resolveDispatch({ runtime: 'codex', role: request.role, signals: request.signals });
-        const installedDir = agentDir || path.join(env.CODEX_HOME || path.join(os.homedir(), '.codex'), 'agents');
-        archReviewContext.admitInstalledLaunch(prepared, {
-          agentDir: installedDir, agentFile: selection.agent_file,
-          agentManifest: agentManifest || path.join(installedDir, '.shipyard-manifest.json'),
-          capabilities: runtimeHost.capabilities,
-          capabilitiesFile: options.capabilitiesFile || env.SHIPYARD_CODEX_CAPABILITIES_FILE,
-        });
+        request.signals = admitArchitectureInput(prepared, request, options, runtimeHost.capabilities);
+        fileInput = archReviewContext.admittedFileInput(prepared);
+        if (fileInput) Object.assign(request.context, { input_transport: 'host-files', input_bundle: fileInput.input_bundle });
         request.context.prompt = archReviewContext.admittedPrompt(prepared);
       }
+      if (request.role !== 'arch-review') fileInput = prepareIntegratorInput(scope, request, options);
       const context = request.context;
+      if (fileInput) context.input_prepared = fileInput;
       const prompt = context.prompt || context.task_prompt || context.input;
       if (typeof prompt !== 'string' || !prompt.trim()) fail('INVALID_INPUT', 'context requires a task prompt');
       const originalContext = { ...context };
@@ -1550,7 +1609,9 @@ function createCodexDeliveryHost(options = {}) {
         context: request.gsd_role !== undefined && preRecordValidation
           ? { ...taskContext, preRecordValidation } : taskContext,
       });
-      let result = await dispatchAgent(request.dispatch_id || newDispatchId(), context);
+      if (fileInput) archReviewContext.verifyFileInput(fileInput);
+      let result = await dispatchAgent(request.dispatch_id, context);
+      if (fileInput) archReviewContext.verifyFileInput(fileInput);
       options.controller?.assertOwner(scope.run_id);
       if (request.role === 'arch-review') return archReviewContext.finish(options.archReviewContext, result, runtimeHost.recorder);
       if (!committing) return result;
@@ -1736,9 +1797,16 @@ async function runCli(argv = process.argv.slice(2), stdout = process.stdout, opt
       graphDir: options.graphDir || process.env.SHIPYARD_GRAPH_DIR,
       execFileSync: options.execFileSync, getPullRequest: options.getPullRequest,
       refreshGit: options.refreshGit,
-      inflightDispatchId: archDispatchId,
+      inflightDispatchId: archDispatchId, storageRoot: storageDirectory(options, scope),
     }) : null;
-  const request = preparedArchReview ? preparedArchReview.launch : parsed.launch;
+  const request = preparedArchReview ? { ...preparedArchReview.launch, signals: { ...preparedArchReview.launch.signals },
+    context: { ...preparedArchReview.launch.context }, dispatch_id: archDispatchId } : parsed.launch;
+  request.dispatch_id = request.dispatch_id || newDispatchId();
+  const fileInputContext = preparedArchReview ? null : prepareIntegratorInput(scope, request, options);
+  const archReviewSignals = preparedArchReview ? admitArchitectureInput(preparedArchReview, request, options,
+    options.host?.capabilities || options.capabilities || {}) : null;
+  if (archReviewSignals) request.signals = archReviewSignals;
+
   if (request.gsd_role !== undefined && GSD_DELIVERY_ROLES[request.gsd_role] !== request.role) {
     fail('UNSUPPORTED_ROLE', 'typed GSD role does not match the delivery role');
   }
@@ -1836,7 +1904,7 @@ async function runCli(argv = process.argv.slice(2), stdout = process.stdout, opt
       scopedTree: options.scopedTree,
       host: options.host,
       writerSession,
-      archReviewContext: preparedArchReview,
+      archReviewContext: preparedArchReview, archReviewSignals, fileInputContext,
     });
     result = await host.run({ ...request, dispatch_id: dispatchId });
     clearInterval(heartbeat);

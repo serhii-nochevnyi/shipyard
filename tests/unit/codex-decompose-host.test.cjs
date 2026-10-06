@@ -2136,6 +2136,8 @@ process.stdin.on('end', () => {
   const phaseDir = path.join(process.cwd(), '.planning', 'phases', '45-detached-contract');
   fs.writeFileSync(path.join(phaseDir, '45-01-PLAN.md'), '# Detached plan\\n');
   if (process.env.MOCK_MUTATE_CONTEXT === '1') fs.appendFileSync(path.join(phaseDir, 'CONTEXT.md'), 'foreign mutation\\n');
+  if (process.env.MOCK_MUTATE_SOURCE === '1') fs.appendFileSync(path.join(process.cwd(), 'source.cjs'), 'foreign source\\n');
+  if (process.env.MOCK_MUTATE_GRAPH === '1') fs.writeFileSync(path.join(process.env.SHIPYARD_GRAPH_DIR, 'foreign.json'), '{}\\n');
   setTimeout(() => process.stdout.write(data('exec.jsonl')), 600);
 });
 `;
@@ -2162,8 +2164,10 @@ function measuredCreateFixture({ installPlanner = true, includeDispatchId = true
   fs.writeFileSync(path.join(phase, 'CONTEXT.md'), '# Context\n');
   fs.writeFileSync(path.join(root, 'source.cjs'), "'use strict';\n");
   fs.writeFileSync(path.join(root, '.gitignore'), '.planning/graph/\n');
+  fs.writeFileSync(path.join(graph, 'foreign.json'), '{"original":true}\n');
   measuredGit(root, 'init', '-q');
   measuredGit(root, 'add', '-A');
+  measuredGit(root, 'add', '-f', '.planning/graph/foreign.json');
   measuredGit(root, 'commit', '-q', '-m', 'detached contract fixture');
 
   const gsdRole = 'gsd-planner';
@@ -2270,13 +2274,19 @@ async function measuredPlanningFixture({ includeDispatchId = true, timeout = fal
     const originalId = result.receipt.dispatch_id;
     pid = JSON.parse(fs.readFileSync(path.join(f.stateDir, originalId, 'record.json'))).pid;
     assert.equal(launches, 1);
-    const rows = orchestrationOverhead.readStream(f.graph).rows;
+    const accounting = planning.readWaitAccounting({ scope: f.scope, dispatchId: originalId, graphDir: f.graph }, options);
+    const graphRows = orchestrationOverhead.readStream(f.graph).rows;
+    const rows = [...graphRows, ...accounting.parent_rows];
+    assert.ok(accounting.parent_rows.length > 0);
+    assert.ok(!accounting.sink.startsWith(f.root + path.sep));
+    assert.equal(graphRows.some(row => row.actor === 'parent'), false);
     const request = JSON.parse(fs.readFileSync(f.request));
     fs.writeFileSync(f.request, JSON.stringify({ ...request, dispatch_id: originalId }));
     const repeated = await planning.runCli(['--args-file', f.request], { write() {} }, options);
     assert.equal(repeated.receipt.dispatch_id, originalId);
     assert.equal(launches, 1);
-    assert.deepEqual(orchestrationOverhead.readStream(f.graph).rows, rows);
+    assert.deepEqual(orchestrationOverhead.readStream(f.graph).rows, graphRows);
+    assert.deepEqual(planning.readWaitAccounting({ scope: f.scope, dispatchId: originalId, graphDir: f.graph }, options).parent_rows, accounting.parent_rows);
     assert.equal(new Set(rows.map(row => row.observation_id)).size, rows.length);
     assert.ok(rows.every(row => row.dispatch_id === originalId && row.run_id === f.scope.run_id));
     const record = JSON.parse(fs.readFileSync(path.join(f.stateDir, originalId, 'record.json')));
@@ -2291,7 +2301,8 @@ async function measuredPlanningFixture({ includeDispatchId = true, timeout = fal
       error => error.code === 'DISPATCH_UNAVAILABLE');
     fs.writeFileSync(record.result, original);
     assert.equal(launches, 1);
-    assert.deepEqual(orchestrationOverhead.readStream(f.graph).rows, rows);
+    assert.deepEqual(orchestrationOverhead.readStream(f.graph).rows, graphRows);
+    assert.deepEqual(planning.readWaitAccounting({ scope: f.scope, dispatchId: originalId, graphDir: f.graph }, options).parent_rows, accounting.parent_rows);
     const store = defaultRunStoreDir(f.scope, options.testStateRoot);
     const authenticated = createDurableRecorder(path.join(path.dirname(store), 'receipts')).getVerifiedRecord(originalId);
     assert.deepEqual(authenticated.receipt, result.receipt);
@@ -2299,7 +2310,7 @@ async function measuredPlanningFixture({ includeDispatchId = true, timeout = fal
     const transcript = path.join(f.codexHome, 'sessions', String(now.getFullYear()),
       String(now.getMonth() + 1).padStart(2, '0'), String(now.getDate()).padStart(2, '0'),
       'rollout-' + f.data.childId + '.jsonl');
-    return { rows, result, authenticated, childTranscript: fs.readFileSync(transcript, 'utf8') };
+    return { rows, result, authenticated, accounting, childTranscript: fs.readFileSync(transcript, 'utf8') };
   } finally {
     if (pid && delivery.pidLive(pid)) { try { process.kill(pid, 'SIGTERM'); } catch {} }
     f.clean();
@@ -2307,3 +2318,46 @@ async function measuredPlanningFixture({ includeDispatchId = true, timeout = fal
 }
 
 module.exports = { measuredPlanningFixture };
+
+for (const input of [{ includeDispatchId: false }, { timeout: true }]) {
+  test('supported contained caller preserves external accounting through ' + (input.timeout ? 'timeout/resume' : 'generated identity'), async () => {
+    const measured = await measuredPlanningFixture(input);
+    assert.equal(measured.accounting.dispatch_id, measured.result.receipt.dispatch_id);
+    assert.equal(measured.accounting.missing_evidence, null);
+    assert.equal(measured.accounting.savings, 'inconclusive');
+    assert.ok(measured.rows.some(row => row.actor === 'parent' && row.evidence === 'wait-event'));
+  });
+}
+
+for (const mutation of ['SOURCE', 'GRAPH']) test('supported caller keeps original contained refusal after foreign ' + mutation.toLowerCase() + ' edit', async () => {
+  const f = measuredCreateFixture();
+  const planning = require('../../plugins/delivery-pipeline/scripts/codex-planning-context-host.cjs');
+  const dispatch = require('../../plugins/delivery-pipeline/scripts/deliver-dispatch.cjs');
+  let pid;
+  try {
+    measuredPlanningRequest(f);
+    const options = { stateDir: f.stateDir, env: { ...f.env, ['MOCK_MUTATE_' + mutation]: '1' },
+      testStateRoot: path.join(f.home, '.local/state/shipyard/codex-decompose'),
+      waitOptions: measuredWaitOptions(f), onWaitAccounting() {} };
+    await assert.rejects(planning.runCli(['--args-file', f.request], { write() {} }, options),
+      error => error.code === 'DISPATCH_UNAVAILABLE');
+    const original = JSON.parse(fs.readFileSync(path.join(f.stateDir, f.dispatchId, 'record.json')));
+    pid = original.pid;
+    const copied = fs.readFileSync(path.join(f.stateDir, f.dispatchId, 'args.json'));
+    const store = defaultRunStoreDir(f.scope, options.testStateRoot);
+    const recorder = createDurableRecorder(path.join(path.dirname(store), 'receipts'));
+    assert.equal(recorder.getVerifiedRecord(f.dispatchId), null);
+    const log = fs.readFileSync(original.log, 'utf8');
+    assert.match(log, /outside|FOREIGN_EDIT|RUNTIME_EVIDENCE_INVALID/);
+    await assert.rejects(planning.runCli(['--args-file', f.request], { write() {} }, options));
+    assert.deepEqual(fs.readFileSync(path.join(f.stateDir, f.dispatchId, 'args.json')), copied);
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(f.stateDir, f.dispatchId, 'record.json'))), original);
+    assert.equal(recorder.getVerifiedRecord(f.dispatchId), null);
+    const accounting = planning.readWaitAccounting({ scope: f.scope, dispatchId: f.dispatchId, graphDir: f.graph }, options);
+    assert.ok(accounting.parent_rows.length > 0);
+    assert.equal(orchestrationOverhead.readStream(f.graph).rows.some(row => row.actor === 'parent'), false);
+  } finally {
+    if (pid && dispatch.pidLive(pid)) { try { process.kill(pid, 'SIGTERM'); } catch {} }
+    f.clean();
+  }
+});
