@@ -772,6 +772,11 @@ test('typed launch relays the task by host-owned file path and digest outside th
       assert.ok(!observed.real.startsWith(fs.realpathSync(worktree) + path.sep));
       assert.ok(input.join('').includes('TASK_FILE=' + observed.file + '\n'));
       assert.ok(!input.join('').includes(CAPTURED_TASK));
+      assert.ok(input.join('').includes('filesystem read-only'));
+      assert.ok(input.join('').includes('inline python -c or node -e'));
+      assert.ok(input.join('').includes('Do not use shell heredocs, create temporary files'));
+      assert.ok(input.join('').includes('first small standalone output'));
+      assert.ok(input.join('').includes('separate FIRST text item'));
       assert.ok(!fs.existsSync(observed.file));
       return outcome;
     } finally {
@@ -802,6 +807,16 @@ test('typed launch relays the task by host-owned file path and digest outside th
     assert.ok(outcome.error, missing);
     assert.equal(outcome.error.code, 'TASK_RELAY_UNVERIFIED', missing + ': ' + outcome.error.message);
     assert.ok(outcome.error.details.missing.includes(missing.trim()), missing + ': ' + outcome.error.message);
+  }
+  for (const field of ['parent_thread_id', 'agent_role']) {
+    const outcome = await runRelay({ mutate: (raw) => transformJsonl(raw, (record) => {
+      if (record.type === 'session_meta') {
+        record.payload.source.subagent.thread_spawn[field] = 'foreign';
+      }
+      return record;
+    }) });
+    assert.equal(outcome.error.code, 'RUNTIME_EVIDENCE_MISMATCH', field);
+    assert.equal(outcome.result, undefined);
   }
 });
 
