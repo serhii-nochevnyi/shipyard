@@ -201,6 +201,7 @@ function collect(scope, options) {
       fail('authenticated historical bookkeeping changed', 'STALE_CONTEXT');
     bookkeeping.add(pin.path);
   }
+  roleArtifact.assertArchiveInventory(worktree, options.archivePins || []);
   const archives = new Set();
   for (const pin of options.archivePins || []) {
     roleArtifact.assertArchivePin(worktree, pin);
@@ -323,6 +324,7 @@ function collect(scope, options) {
     if (current !== pin.sha256 && !(options.allowClearedBookkeeping === true && current === pin.cleared_sha256))
       fail('authenticated bookkeeping changed while collecting', 'STALE_CONTEXT');
   }
+  roleArtifact.assertArchiveInventory(worktree, options.archivePins || []);
   const finalStatus = statusIgnoringScratch(worktree, { untracked: 'all', forJudge: true });
   if (!finalStatus.ok || finalStatus.entries.some(entry => !bookkeeping.has(entry.path)
       && !(entry.status === '??' && archives.has(entry.path))))
@@ -331,7 +333,7 @@ function collect(scope, options) {
   return { role: 'arch-review', ticket: scope.ticket, phaseNumber: Number(scope.phase), pr: number,
     base, baseName: live.baseRefName, baseCommit: live.baseRefOid, mergeBaseTree,
     canonical: { worktree, head, branch }, rows: [{ id: scope.ticket, row }],
-    packet: { ...packet, digest: digest(serialized), required_refs: refs,
+    packet: { ...packet, digest: digest(serialized), required_refs: refs.map(({ path, sha256, bytes }) => ({ path, sha256, bytes })),
       accounting: { estimated_bytes: Buffer.byteLength(serialized) } },
     draft: live.isDraft, livePullRequests: [{ ...live }], evidencePath: '.shipyard-arch-review-evidence.md' };
 }
@@ -547,7 +549,7 @@ function admitInstalledLaunch(value, options) {
   const files = [
     { root: agentRoot, ...agent },
     { root: manifestRoot, ...manifest },
-    ...['codex-arch-review-context.cjs', 'codex-delivery-host.cjs', 'codex-runtime-host.cjs', 'role-artifact.cjs', 'plan-delivery.cjs', 'conveyor-scratch.cjs', 'dispatch-record.cjs', 'claude-runtime-host.cjs'].map(name =>
+    ...['codex-arch-review-context.cjs', 'codex-delivery-host.cjs', 'codex-runtime-host.cjs', 'role-artifact.cjs', 'plan-delivery.cjs', 'conveyor-scratch.cjs', 'dispatch-record.cjs', 'claude-runtime-host.cjs', 'lock.cjs'].map(name =>
       ({ root: scriptRoot, ...file(scriptRoot, name) })),
   ].map(({ content: _content, ...pin }) => pin);
   if (options.capabilitiesFile) {
@@ -646,7 +648,7 @@ function validateSealedContext(input, options = {}) {
       || installation.capacity.complete_upper_bound_bytes > INPUT_MAX_BYTES
       || installation.capacity.maximum_bytes !== INPUT_MAX_BYTES)
     fail('installed launch authority differs from sealed context', 'STALE_CONTEXT');
-  for (const required of ['codex-arch-review-context.cjs', 'codex-delivery-host.cjs', 'codex-runtime-host.cjs', 'role-artifact.cjs', 'plan-delivery.cjs', 'conveyor-scratch.cjs', 'dispatch-record.cjs', 'claude-runtime-host.cjs']) {
+  for (const required of ['codex-arch-review-context.cjs', 'codex-delivery-host.cjs', 'codex-runtime-host.cjs', 'role-artifact.cjs', 'plan-delivery.cjs', 'conveyor-scratch.cjs', 'dispatch-record.cjs', 'claude-runtime-host.cjs', 'lock.cjs']) {
     if (!installation.files.some(pin => pin.root === installation.script_root && pin.path === required))
       fail('required installed source pin is missing', 'ARCH_REVIEW_CONTEXT_REQUIRED');
   }

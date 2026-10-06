@@ -9,6 +9,7 @@
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
+const { acquire } = require('./lock.cjs');
 const { execFileSync } = require('node:child_process');
 const {
   boundaryError,
@@ -532,7 +533,9 @@ function writeManifest(fsApi, file, manifest) {
     try {
       // A hard link publishes only when the destination is absent. `renameSync`
       // would silently replace an authenticated manifest during a duplicate seal.
+      if (frame) assertArchiveLock(frame.worktree);
       fsApi.linkSync(temp, file);
+      if (frame?.created) { const stat = fsApi.lstatSync(file); frame.created.push({ path: file, dev: stat.dev, ino: stat.ino }); }
     } catch (error) {
       if (!error || error.code !== 'EEXIST') throw error;
       const existing = readImmutableFile(fsApi, file, 'artifact manifest');
@@ -1190,7 +1193,7 @@ function authenticatedArchivePins(worktreePath) {
   const pins = [];
   for (const [dispatchId, record] of Object.entries(state.payload.records)) {
     if (!object(record) || record.dispatch_id !== dispatchId || record.receipt?.dispatch_id !== dispatchId
-        || record.receipt.runtime !== 'codex' || record.receipt.compliance !== 'verified'
+        || !['codex', 'claude'].includes(record.receipt.runtime) || record.receipt.compliance !== 'verified'
         || record.receipt.compliance_proof?.boundary !== 'adr-014.dispatch-boundary'
         || !Array.isArray(record.pins) || record.pins.length !== 3)
       fail('ARCHIVE_AUTHORITY_INVALID', 'archive catalogue has a malformed verified record');
@@ -1212,10 +1215,23 @@ function authenticatedArchivePins(worktreePath) {
   return pins.sort((a, b) => a.path.localeCompare(b.path));
 }
 
+function assertArchiveInventory(worktreePath, pins) {
+  const worktree = fs.realpathSync(worktreePath);
+  if (!Array.isArray(pins) || new Set(pins.map(pin => pin.path)).size !== pins.length)
+    fail('ARCHIVE_AUTHORITY_INVALID', 'complete archive inventory pins are malformed');
+  const expected = pins.map(pin => pin.path).sort();
+  if (stable(archiveInventory(worktree)) !== stable(expected))
+    fail('ARCHIVE_AUTHORITY_INVALID', 'archive membership differs from authenticated complete inventory');
+  for (const pin of pins) readPinnedArchiveFile(worktree, pin, 'authenticated complete archive');
+  if (stable(archiveInventory(worktree)) !== stable(expected))
+    fail('ARCHIVE_AUTHORITY_INVALID', 'archive membership changed while authenticating');
+}
+
 function historicalBookkeepingPins(worktreePath) {
   const worktree = fs.realpathSync(worktreePath);
   if (!fs.existsSync(path.join(archiveAuthorityDirectory(worktree), 'catalogue.json'))) return [];
   const { payload } = authorityState(worktree), pins = [];
+  if (Array.isArray(payload.bookkeeping_state)) return payload.bookkeeping_state.map(pin => ({ ...pin }));
   for (const record of Object.values(payload.records)) {
     for (const pin of record.bookkeeping || []) {
       if (pin.path === '.planning/graph/provenance/' + record.dispatch_id + '.json') pins.push(pin);
@@ -1228,8 +1244,163 @@ function historicalBookkeepingPins(worktreePath) {
   return pins;
 }
 
+function writeArchiveCatalogue(state) {
+  const envelope = { payload: state.payload,
+    mac: crypto.createHmac('sha256', state.key).update(stable(state.payload)).digest('hex') };
+  const serialized = JSON.stringify(envelope) + '\n';
+  if (Buffer.byteLength(serialized) > HISTORICAL_ARCHIVE_MAX_BYTES)
+    fail('ARCHIVE_AUTHORITY_INVALID', 'complete archive catalogue exceeds its bound');
+  const temporary = state.file + '.' + crypto.randomUUID() + '.tmp';
+  try {
+    assertArchiveLock(state.payload.worktree);
+    fs.writeFileSync(temporary, serialized, { flag: 'wx', mode: 0o600 });
+    assertArchiveLock(state.payload.worktree);
+    fs.renameSync(temporary, state.file);
+  } finally { try { assertArchiveLock(state.payload.worktree); fs.unlinkSync(temporary); } catch {} }
+}
+function trustedBookkeepingMutation(worktreePath, fn, writtenPaths = ['.planning/graph/dispatches.json']) {
+  const worktree = fs.realpathSync(worktreePath);
+  const allowed = relative => relative === '.planning/graph/dispatches.json'
+    || /^\.planning\/graph\/provenance\/[A-Za-z0-9_.-]+\.json$/.test(relative);
+  if (!Array.isArray(writtenPaths) || writtenPaths.some(relative => !allowed(relative)))
+    fail('ARCHIVE_AUTHORITY_INVALID', 'trusted writer paths are malformed');
+  return withArchiveAuthorityLock(worktree, () => {
+    const state = authorityState(worktree, true);
+    const previous = historicalBookkeepingPins(worktree);
+    const validatedPrevious = [];
+    const provenance = fixedPath(worktree, '.planning/graph/provenance', 'host bookkeeping directory');
+    const inventory = () => {
+      if (!fs.existsSync(provenance)) return [];
+      const stat = fs.lstatSync(provenance);
+      if (stat.isSymbolicLink() || !stat.isDirectory()) fail('ARCHIVE_AUTHORITY_INVALID', 'host bookkeeping directory is not physical');
+      return fs.readdirSync(provenance).map(name => '.planning/graph/provenance/' + name).sort();
+    };
+    const authenticatedPaths = previous.map(pin => pin.path);
+    if (inventory().some(relative => !authenticatedPaths.includes(relative)))
+      fail('ARCHIVE_AUTHORITY_INVALID', 'unknown host provenance member before trusted mutation');
+    for (const pin of previous) {
+      const legacy = !state.payload.bookkeeping_state && (state.payload.latest_bookkeeping || []).find(item => item.path === pin.path);
+      let actual = pin;
+      if (!Number.isSafeInteger(pin.bytes)) {
+        const file = fixedPath(worktree, pin.path, 'authenticated bookkeeping');
+        actual = { ...pin, bytes: fs.lstatSync(file).size };
+      }
+      if (legacy) {
+        const file = fixedPath(worktree, pin.path, 'authenticated bookkeeping');
+        const stat = fs.lstatSync(file);
+        const content = readImmutableFile(fs, file, 'authenticated bookkeeping', HISTORICAL_ARCHIVE_MAX_BYTES, stat.size);
+        const current = digest(content);
+        if (current !== legacy.sha256 && current !== legacy.cleared_sha256)
+          fail('ARCHIVE_AUTHORITY_INVALID', 'authenticated legacy bookkeeping changed before trusted mutation');
+        actual = { ...pin, sha256: current, bytes: content.length };
+      }
+      readPinnedArchiveFile(worktree, actual, 'authenticated historical bookkeeping');
+      validatedPrevious.push(actual);
+    }
+    assertArchiveLock(worktree);
+    const result = fn();
+    assertArchiveLock(worktree);
+    for (const pin of validatedPrevious) {
+      if (!writtenPaths.includes(pin.path))
+        readPinnedArchiveFile(worktree, pin, 'undeclared authenticated bookkeeping');
+    }
+    const paths = [...new Set([...authenticatedPaths, ...writtenPaths])].sort();
+    if (inventory().some(relative => !paths.includes(relative)))
+      fail('ARCHIVE_AUTHORITY_INVALID', 'trusted mutation published an undeclared provenance member');
+    state.payload.bookkeeping_state = paths.filter(relative =>
+      validatedPrevious.some(pin => pin.path === relative && !writtenPaths.includes(relative))
+      || fs.existsSync(fixedPath(worktree, relative, 'host bookkeeping')))
+      .map(relative => {
+        const retained = validatedPrevious.find(pin => pin.path === relative);
+        if (retained && !writtenPaths.includes(relative)) return { ...retained };
+        const file = fixedPath(worktree, relative, 'host bookkeeping');
+        const stat = fs.lstatSync(file);
+        const content = readImmutableFile(fs, file, 'host bookkeeping', HISTORICAL_ARCHIVE_MAX_BYTES, stat.size);
+        return { path: relative, bytes: content.length, sha256: digest(content) };
+      });
+    writeArchiveCatalogue(state);
+    return result;
+  });
+}
+
+const archivePublicationFrames = [];
+function withArchiveAuthorityLock(worktree, fn) {
+  const active = archivePublicationFrames.at(-1);
+  if (active?.worktree === worktree) { assertArchiveLock(worktree); return fn(); }
+  const state = authorityState(worktree, true);
+  const lockPath = path.join(state.directory, 'catalogue.lock');
+  if (fs.existsSync(lockPath)) {
+    const stat = fs.lstatSync(lockPath);
+    if (stat.isSymbolicLink() || !stat.isDirectory())
+      fail('ARCHIVE_AUTHORITY_BUSY', 'archive catalogue lock is not a physical directory');
+    let owner;
+    try { owner = JSON.parse(readImmutableFile(fs, path.join(lockPath, 'owner.json'), 'archive catalogue lock owner', 4096)); } catch {}
+    if (Number.isSafeInteger(owner?.pid) && owner.pid > 0) {
+      let live = true;
+      try { process.kill(owner.pid, 0); } catch (error) { if (error.code === 'ESRCH') live = false; }
+      if (live) fail('ARCHIVE_AUTHORITY_BUSY', 'archive catalogue lock has a live owner');
+    }
+  }
+  let lock;
+  try { lock = acquire(state.directory, 'catalogue', { waitMs: 1000, label: 'role-archive-authority' }); }
+  catch (error) { fail('ARCHIVE_AUTHORITY_BUSY', error.message); }
+  if (!lock) fail('ARCHIVE_AUTHORITY_BUSY', 'archive catalogue lock acquisition timed out');
+  const frame = { worktree, lockOnly: true, lock };
+  archivePublicationFrames.push(frame);
+  try { assertArchiveLock(worktree); return fn(); } finally { archivePublicationFrames.pop(); lock.release(); }
+}
+function assertArchiveLock(worktree) {
+  const frame = [...archivePublicationFrames].reverse().find(item => item.worktree === worktree && item.lock);
+  let owner;
+  try {
+    const stat = fs.lstatSync(frame.lock.path);
+    if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error('lock is not physical');
+    owner = JSON.parse(readImmutableFile(fs, path.join(frame.lock.path, 'owner.json'), 'archive catalogue lock owner', 4096));
+  } catch { fail('ARCHIVE_AUTHORITY_BUSY', 'archive catalogue lock ownership was lost'); }
+  if (!frame?.lock.owner.token || owner?.token !== frame.lock.owner.token)
+    fail('ARCHIVE_AUTHORITY_BUSY', 'archive catalogue lock ownership was lost');
+}
+
+function withArchivePublication(worktree, fn) {
+  return withArchiveAuthorityLock(worktree, () => {
+    const inherited = [...archivePublicationFrames].reverse().find(item => item.worktree === worktree && item.lock);
+    const frame = { worktree, lock: inherited.lock, created: [], directories: [] };
+    archivePublicationFrames.push(frame);
+    try { return fn(); }
+    catch (error) {
+      for (const member of frame.created.reverse()) {
+        try { const stat = fs.lstatSync(member.path);
+          if (stat.dev === member.dev && stat.ino === member.ino) { assertArchiveLock(worktree); fs.unlinkSync(member.path); }
+        } catch {}
+      }
+      for (const directory of frame.directories.reverse()) {
+        try { const stat = fs.lstatSync(directory.path);
+          if (stat.dev === directory.dev && stat.ino === directory.ino) { assertArchiveLock(worktree); fs.rmdirSync(directory.path); }
+        } catch {}
+      }
+      throw error;
+    } finally { archivePublicationFrames.pop(); }
+  });
+}
+
+function preflightArchiveCatalogue(worktree, trusted, manifestPath, manifest, manifestBytes, findingsBytes) {
+  if (manifestBytes.length > HISTORICAL_ARCHIVE_MAX_BYTES)
+    fail('ARTIFACT_WRITE', 'complete archive manifest exceeds its complete-byte bound');
+  const pins = [{ path: path.relative(worktree, manifestPath), sha256: digest(manifestBytes), bytes: manifestBytes.length },
+    ...[manifest.files.evidence, manifest.files.findings].map(pin => ({ path: pin.path, sha256: pin.sha256, bytes: pin.bytes }))];
+  if (pins.some(pin => pin.bytes > HISTORICAL_ARCHIVE_MAX_BYTES))
+    fail('ARTIFACT_WRITE', 'complete archive member exceeds its complete-byte bound');
+  const state = authorityState(worktree, true);
+  const record = { dispatch_id: trusted.dispatchId, receipt: trusted.receipt, pins,
+    bookkeeping: trusted.receipt.role === 'arch-review' ? JSON.parse(findingsBytes).host_context?.bookkeeping || [] : [] };
+  const candidate = { ...state.payload, records: { ...state.payload.records, [trusted.dispatchId]: record },
+    ...(record.bookkeeping.length ? { latest_bookkeeping: record.bookkeeping } : {}) };
+  const envelope = { payload: candidate, mac: crypto.createHmac('sha256', state.key).update(stable(candidate)).digest('hex') };
+  if (Buffer.byteLength(JSON.stringify(envelope) + '\n') > HISTORICAL_ARCHIVE_MAX_BYTES)
+    fail('ARCHIVE_AUTHORITY_INVALID', 'complete archive catalogue exceeds its bound before publication');
+}
+
 function retainArchiveAuthority(worktree, trusted, manifestPath, manifestDigest) {
-  if (trusted.receipt.runtime !== 'codex') return;
   const manifestBytes = readPinnedArchiveFile(worktree, { path: path.relative(worktree, manifestPath),
     sha256: manifestDigest, bytes: fs.lstatSync(manifestPath).size }, 'validated archive manifest');
   if (digest(manifestBytes) !== manifestDigest) fail('ARCHIVE_AUTHORITY_INVALID', 'validated archive changed before retention');
@@ -1241,11 +1412,7 @@ function retainArchiveAuthority(worktree, trusted, manifestPath, manifestDigest)
       fail('ARCHIVE_AUTHORITY_INVALID', 'validated complete archive changed before retention');
     pins.push({ path: reference.path, sha256: reference.sha256, bytes: reference.bytes });
   }
-  const bootstrap = authorityState(worktree, true);
-  const lock = path.join(bootstrap.directory, 'catalogue.write-lock');
-  try { fs.mkdirSync(lock, { mode: 0o700 }); }
-  catch { fail('ARCHIVE_AUTHORITY_BUSY', 'archive catalogue mutation is already in progress'); }
-  try {
+  return withArchiveAuthorityLock(worktree, () => {
   const state = authorityState(worktree, true);
   const findings = JSON.parse(readPinnedArchiveFile(worktree, manifest.files.findings, 'validated findings'));
   const bookkeeping = trusted.receipt.role === 'arch-review' ? findings.host_context?.bookkeeping || [] : [];
@@ -1255,27 +1422,18 @@ function retainArchiveAuthority(worktree, trusted, manifestPath, manifestDigest)
       && stable(state.payload.records[trusted.dispatchId]) !== stable(record))
     fail('ARCHIVE_AUTHORITY_INVALID', 'archive retention cannot replace authenticated historical bytes');
   state.payload.records[trusted.dispatchId] = record;
-  const envelope = { payload: state.payload,
-    mac: crypto.createHmac('sha256', state.key).update(stable(state.payload)).digest('hex') };
-  const temporary = state.file + '.' + crypto.randomUUID() + '.tmp';
-  try {
-    const serialized = JSON.stringify(envelope) + '\n';
-    if (Buffer.byteLength(serialized) > HISTORICAL_ARCHIVE_MAX_BYTES)
-      fail('ARCHIVE_AUTHORITY_INVALID', 'complete archive catalogue exceeds its bound');
-    fs.writeFileSync(temporary, serialized, { flag: 'wx', mode: 0o600 });
-    fs.renameSync(temporary, state.file);
-  } finally { try { fs.unlinkSync(temporary); } catch {} }
-  } finally { fs.rmdirSync(lock); }
+  writeArchiveCatalogue(state);
+  });
 }
 
-function admitHistoricalArchive(input) {
+function validateHistoricalArchive(input, defer = false) {
   if (!object(input) || !/^[a-f0-9]{64}$/.test(input.expectedManifestDigest || '')
       || !/^[a-f0-9]{64}$/.test(input.expectedReceiptDigest || '')
       || !Array.isArray(input.expectedArchivePins) || input.expectedArchivePins.length !== 3)
     fail('ARCHIVE_ADMISSION_REQUIRED', 'trusted legacy admission requires retained manifest, receipt and all three archive identities');
   const worktree = fs.realpathSync(input.worktreePath), trusted = trustedRecord(input);
-  if (trusted.receipt.runtime !== 'codex' || digest(Buffer.from(stable(trusted.receipt))) !== input.expectedReceiptDigest)
-    fail('ARCHIVE_AUTHORITY_INVALID', 'retained original Codex receipt identity differs from authenticated record');
+  if (!['codex', 'claude'].includes(trusted.receipt.runtime) || digest(Buffer.from(stable(trusted.receipt))) !== input.expectedReceiptDigest)
+    fail('ARCHIVE_AUTHORITY_INVALID', 'retained original runtime receipt identity differs from authenticated record');
   const manifestPath = archivePath(worktree, trusted.dispatchId, MANIFEST_NAME, 'historical manifest');
   const manifestPin = input.expectedArchivePins.find(pin => pin.path === path.relative(worktree, manifestPath));
   if (!manifestPin || manifestPin.sha256 !== input.expectedManifestDigest)
@@ -1328,15 +1486,45 @@ function admitHistoricalArchive(input) {
     for (const pin of previous) readPinnedArchiveFile(worktree, pin, 'existing authenticated historical archive');
   }
   const expectedInventory = [...new Set([...previous, ...pins].map(pin => pin.path))].sort();
-  if (stable(archiveInventory(worktree)) !== stable(expectedInventory))
+  if (!defer && stable(archiveInventory(worktree)) !== stable(expectedInventory))
     fail('ARCHIVE_AUTHORITY_INVALID', 'trusted historical admission refuses unknown archive membership');
-  if (trusted.receipt.role === 'arch-review')
+  if (trusted.receipt.role === 'arch-review' && trusted.receipt.runtime === 'codex')
     require('./codex-arch-review-context.cjs').validateHistoricalContext({ result: JSON.parse(findings.content),
       receipt: trusted.receipt, dispatchId: trusted.dispatchId, evidence: evidence.content });
+  if (defer) return { worktree, trusted, manifestPath, pins, digest: input.expectedManifestDigest };
   retainArchiveAuthority(worktree, trusted, manifestPath, input.expectedManifestDigest);
   authenticatedArchivePins(worktree);
   return Object.freeze({ worktree, dispatch_id: trusted.dispatchId,
     manifest_digest: input.expectedManifestDigest, admitted_paths: pins.map(pin => pin.path) });
+}
+
+function admitHistoricalArchive(input) {
+  const worktree = fs.realpathSync(input.worktreePath);
+  return withArchiveAuthorityLock(worktree, () => {
+    if (!Array.isArray(input.archives)) return validateHistoricalArchive(input);
+    if (!input.archives.length || input.archives.length > 1000)
+      fail('ARCHIVE_ADMISSION_REQUIRED', 'bounded complete historical archive inventory is required');
+    const admissions = input.archives.map(archive => validateHistoricalArchive({ ...input, ...archive, worktreePath: worktree }, true));
+    if (new Set(admissions.map(item => item.trusted.dispatchId)).size !== admissions.length)
+      fail('ARCHIVE_AUTHORITY_INVALID', 'historical batch has duplicate dispatch identities');
+    const state = authorityState(worktree, true);
+    const prior = Object.values(state.payload.records).flatMap(record => record.pins);
+    const expected = [...new Set([...prior, ...admissions.flatMap(item => item.pins)].map(pin => pin.path))].sort();
+    if (stable(archiveInventory(worktree)) !== stable(expected))
+      fail('ARCHIVE_AUTHORITY_INVALID', 'trusted historical admission refuses unknown archive membership');
+    for (const item of admissions) {
+      const findings = JSON.parse(readPinnedArchiveFile(worktree, item.pins.find(pin => pin.path.endsWith('/' + FINDINGS_NAME)), 'historical batch findings'));
+      const bookkeeping = item.trusted.receipt.role === 'arch-review' ? findings.host_context?.bookkeeping || [] : [];
+      const record = { dispatch_id: item.trusted.dispatchId, receipt: item.trusted.receipt, pins: item.pins, bookkeeping };
+      if (state.payload.records[item.trusted.dispatchId] && stable(state.payload.records[item.trusted.dispatchId]) !== stable(record))
+        fail('ARCHIVE_AUTHORITY_INVALID', 'historical batch cannot replace authenticated original bytes');
+      state.payload.records[item.trusted.dispatchId] = record;
+      if (bookkeeping.length) state.payload.latest_bookkeeping = bookkeeping;
+    }
+    writeArchiveCatalogue(state);
+    authenticatedArchivePins(worktree);
+    return Object.freeze({ worktree, admitted_paths: expected });
+  });
 }
 
 function prepareRoleArtifact(value, options) {
@@ -1406,8 +1594,11 @@ function ensureArchiveDirectory(fsApi, worktree, dispatchId) {
     } catch (error) {
       if (error && error.code === 'ENOENT') {
         try {
+          assertArchiveLock(worktree);
           fsApi.mkdirSync(directory, { recursive: true, mode: 0o700 });
           stat = fsApi.lstatSync(directory);
+          const frame = archivePublicationFrames.at(-1);
+          if (frame?.directories) frame.directories.push({ path: directory, dev: stat.dev, ino: stat.ino });
         } catch (mkdirError) {
           fail('ARTIFACT_WRITE', `artifact archive directory could not be created: ${mkdirError.message}`, {
             path: directory,
@@ -1427,7 +1618,8 @@ function ensureArchiveDirectory(fsApi, worktree, dispatchId) {
 
 function writeImmutableArtifactFile(fsApi, file, content, label, maximum) {
   const value = Buffer.isBuffer(content) ? Buffer.from(content) : Buffer.from(String(content), 'utf8');
-  if (maximum !== undefined && value.length > maximum) fail('ARTIFACT_WRITE', label + ' exceeds its complete-byte bound');
+  maximum ??= HISTORICAL_ARCHIVE_MAX_BYTES;
+  if (value.length > maximum) fail('ARTIFACT_WRITE', label + ' exceeds its complete-byte bound');
   try {
     fsApi.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
     if (fsApi.existsSync(file)) {
@@ -1438,11 +1630,15 @@ function writeImmutableArtifactFile(fsApi, file, content, label, maximum) {
       return existing;
     }
     const temp = `${file}.${process.pid}.${crypto.randomBytes(8).toString('hex')}.tmp`;
+    const frame = archivePublicationFrames.at(-1);
+    if (frame) assertArchiveLock(frame.worktree);
     fsApi.writeFileSync(temp, value, { flag: 'wx', mode: 0o600 });
     try {
       // link() keeps a retry from replacing an archive that has already been
       // authenticated for this dispatch.
+      if (frame) assertArchiveLock(frame.worktree);
       fsApi.linkSync(temp, file);
+      if (frame?.created) { const stat = fsApi.lstatSync(file); frame.created.push({ path: file, dev: stat.dev, ino: stat.ino }); }
     } catch (error) {
       if (error && error.code !== 'EEXIST') throw error;
       const existing = readImmutableFile(fsApi, file, label, maximum, maximum === undefined ? undefined : value.length);
@@ -1451,7 +1647,7 @@ function writeImmutableArtifactFile(fsApi, file, content, label, maximum) {
       }
       return existing;
     } finally {
-      try { fsApi.unlinkSync(temp); } catch (_) { /* linked or raced */ }
+      try { if (frame) assertArchiveLock(frame.worktree); fsApi.unlinkSync(temp); } catch (_) { /* linked or raced */ }
     }
     return value;
   } catch (error) {
@@ -2291,7 +2487,7 @@ function sealJudgment(value, options) {
   const worktree = safeRealpath(fsApi, input.worktreePath, 'worktree');
   const trusted = trustedRecord(input);
   const role = artifactRole(input, trusted);
-  const maximum = role === 'arch-review' && trusted.receipt.runtime === 'codex' ? HISTORICAL_ARCHIVE_MAX_BYTES : undefined;
+  const maximum = HISTORICAL_ARCHIVE_MAX_BYTES;
   if (!JUDGMENT_ROLES.has(role)) fail('INVALID_ARTIFACT', `judgment artifacts do not support ${role}`);
   const identity = gitIdentity({ ...input, role }, worktree);
   const metadata = trustedMetadata({ ...input, role }, trusted, identity);
@@ -2310,8 +2506,11 @@ function sealJudgment(value, options) {
   );
   assertContainedRegularPath(fsApi, worktree, evidencePath, 'complete judgment evidence');
   const sourceEvidence = readImmutableFile(fsApi, evidencePath, 'complete judgment evidence',
-    role === 'arch-review' && trusted.receipt.runtime === 'codex' ? 96 * 1024 : undefined);
+    role === 'arch-review' && trusted.receipt.runtime === 'codex' ? 96 * 1024 : HISTORICAL_ARCHIVE_MAX_BYTES);
   if (!sourceEvidence.length) fail('MISSING_ARTIFACT', 'complete judgment evidence is empty');
+  if (role === 'arch-review' && trusted.receipt.runtime === 'codex'
+      && digest(sourceEvidence) !== result?.host_context?.evidence_sha256)
+    fail('ARTIFACT_DIGEST_MISMATCH', 'complete judgment evidence differs from host-captured digest');
   const completeResult = sanitizedRoleResult(result, trusted);
   let findingsBytes;
   try {
@@ -2319,12 +2518,14 @@ function sealJudgment(value, options) {
   } catch (error) {
     fail('INVALID_RESULT', `complete ${role} judgment is not JSON-serializable: ${error.message}`);
   }
+  if (findingsBytes.length > HISTORICAL_ARCHIVE_MAX_BYTES)
+    fail('ARTIFACT_WRITE', 'complete findings exceeds its complete-byte bound');
   const dispatchId = trusted.dispatchId;
-  ensureArchiveDirectory(fsApi, worktree, dispatchId);
+  return withArchivePublication(worktree, () => {
   const archiveEvidence = archivePath(worktree, dispatchId, JUDGMENT_EVIDENCE_NAMES[role], 'archived judgment evidence');
   const archiveFindings = archivePath(worktree, dispatchId, FINDINGS_NAME, 'archived judgment findings');
-  const evidenceBytes = writeImmutableArtifactFile(fsApi, archiveEvidence, sourceEvidence, 'archived judgment evidence', maximum);
-  const findingsFileBytes = writeImmutableArtifactFile(fsApi, archiveFindings, findingsBytes, 'archived judgment findings', maximum);
+  const evidenceBytes = sourceEvidence;
+  const findingsFileBytes = findingsBytes;
   const files = {
     evidence: {
       relative: path.relative(worktree, archiveEvidence),
@@ -2336,13 +2537,12 @@ function sealJudgment(value, options) {
   const envelope = judgmentEnvelope(data, files);
   const manifest = judgmentManifest(data, metadata, files, envelope, dispatchId);
   const manifestPath = archivePath(worktree, dispatchId, MANIFEST_NAME, 'judgment artifact manifest');
-  const manifestBytes = writeImmutableArtifactFile(
-    fsApi,
-    manifestPath,
-    Buffer.from(`${JSON.stringify(manifest)}\n`, 'utf8'),
-    'judgment artifact manifest',
-    maximum,
-  );
+  const manifestBytes = Buffer.from(`${JSON.stringify(manifest)}\n`, 'utf8');
+  preflightArchiveCatalogue(worktree, trusted, manifestPath, manifest, manifestBytes, findingsFileBytes);
+  ensureArchiveDirectory(fsApi, worktree, dispatchId);
+  writeImmutableArtifactFile(fsApi, archiveEvidence, evidenceBytes, 'archived judgment evidence', maximum);
+  writeImmutableArtifactFile(fsApi, archiveFindings, findingsFileBytes, 'archived judgment findings', maximum);
+  writeImmutableArtifactFile(fsApi, manifestPath, manifestBytes, 'judgment artifact manifest', maximum);
   const artifactDigest = digest(manifestBytes);
   validateJudgmentManifest({ ...input, artifactPath: manifestPath, artifactDigest });
   retainArchiveAuthority(worktree, trusted, manifestPath, artifactDigest);
@@ -2364,6 +2564,7 @@ function sealJudgment(value, options) {
     ...(data.phase === undefined ? {} : { phase: data.phase }),
     ...(data.pr === undefined ? {} : { pr: data.pr }),
   });
+  });
 }
 
 function validateJudgmentManifest(value, options) {
@@ -2372,7 +2573,7 @@ function validateJudgmentManifest(value, options) {
   const worktree = safeRealpath(fsApi, input.worktreePath, 'worktree');
   const trusted = trustedRecord(input);
   const role = artifactRole(input, trusted);
-  const maximum = role === 'arch-review' && trusted.receipt.runtime === 'codex' ? HISTORICAL_ARCHIVE_MAX_BYTES : undefined;
+  const maximum = HISTORICAL_ARCHIVE_MAX_BYTES;
   if (!JUDGMENT_ROLES.has(role)) fail('INVALID_ARTIFACT', `judgment artifacts do not support ${role}`);
   const identity = gitIdentity({ ...input, role }, worktree);
   const metadata = trustedMetadata({ ...input, role }, trusted, identity);
@@ -2615,14 +2816,17 @@ function sealRole(value, options) {
     fsApi,
     fixedPath(worktree, producerEvidenceName(role), 'producer evidence'),
     'producer evidence',
+    HISTORICAL_ARCHIVE_MAX_BYTES,
   );
   if (!sourceEvidence.length) fail('MISSING_ARTIFACT', `${role} producer evidence is empty`);
+  if (findingsBytes.length > HISTORICAL_ARCHIVE_MAX_BYTES)
+    fail('ARTIFACT_WRITE', 'complete findings exceeds its complete-byte bound');
   const dispatchId = trusted.dispatchId;
-  ensureArchiveDirectory(fsApi, worktree, dispatchId);
+  return withArchivePublication(worktree, () => {
   const archiveEvidence = archivePath(worktree, dispatchId, producerEvidenceName(role), 'archived producer evidence');
   const archiveFindings = archivePath(worktree, dispatchId, FINDINGS_NAME, 'archived role findings');
-  const evidenceBytes = writeImmutableArtifactFile(fsApi, archiveEvidence, sourceEvidence, 'archived producer evidence');
-  const findingsFileBytes = writeImmutableArtifactFile(fsApi, archiveFindings, findingsBytes, 'archived role findings');
+  const evidenceBytes = sourceEvidence;
+  const findingsFileBytes = findingsBytes;
   const files = {
     evidence: {
       relative: path.relative(worktree, archiveEvidence),
@@ -2678,6 +2882,10 @@ function sealRole(value, options) {
   };
   const manifestPath = archivePath(worktree, dispatchId, MANIFEST_NAME, 'artifact manifest');
   const manifestBytes = Buffer.from(`${JSON.stringify(manifest)}\n`, 'utf8');
+  preflightArchiveCatalogue(worktree, trusted, manifestPath, manifest, manifestBytes, findingsFileBytes);
+  ensureArchiveDirectory(fsApi, worktree, dispatchId);
+  writeImmutableArtifactFile(fsApi, archiveEvidence, evidenceBytes, 'archived producer evidence');
+  writeImmutableArtifactFile(fsApi, archiveFindings, findingsFileBytes, 'archived role findings');
   const writtenManifest = writeImmutableArtifactFile(fsApi, manifestPath, manifestBytes, 'artifact manifest');
   const artifactDigest = digest(writtenManifest);
   // The host-owned consumer must return only after the exact bytes it is about
@@ -2707,6 +2915,7 @@ function sealRole(value, options) {
     role,
     ticket: metadata.ticket,
     ...(data.pr === undefined ? {} : { pr: data.pr }),
+  });
   });
 }
 
@@ -2898,6 +3107,7 @@ function validateRoleManifest(value, options) {
     producerEvidenceName(role),
     manifest.files.evidence,
     'producer evidence',
+    HISTORICAL_ARCHIVE_MAX_BYTES,
   );
   const findings = expectedRoleReference(
     fsApi,
@@ -3245,7 +3455,9 @@ module.exports = Object.freeze({
   archiveAuthorityNamespace,
   archiveAuthorityDirectory,
   authenticatedArchivePins,
+  assertArchiveInventory,
   historicalBookkeepingPins,
+  trustedBookkeepingMutation,
   admitHistoricalArchive,
   prepareRoleArtifact,
   sealRole,

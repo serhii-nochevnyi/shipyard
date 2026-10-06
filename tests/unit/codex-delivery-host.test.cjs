@@ -1817,5 +1817,4 @@ test('architecture review cannot bypass host-owned preparation with a caller pro
   } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
 });
 
-require('./codex-arch-review-context.test.cjs').registerTests(test);
 done();

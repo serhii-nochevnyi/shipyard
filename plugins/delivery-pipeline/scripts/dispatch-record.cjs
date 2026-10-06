@@ -1292,7 +1292,7 @@ function telemetryFor(recorded, ticket, role) {
 // for and serialize nothing.
 function mutate(cwd, fn, fence = (commit) => commit(), strictLoad = false) {
   fs.mkdirSync(graphDir(cwd), { recursive: true });
-  return withLock(lockDirFor(cwd), 'dispatch-record', () => {
+  return require('./role-artifact.cjs').trustedBookkeepingMutation(path.resolve(graphDir(cwd), '../..'), () => withLock(lockDirFor(cwd), 'dispatch-record', () => {
     const store = load(cwd, strictLoad);
     const commit = () => {
       const extra = fn(store);
@@ -1309,7 +1309,7 @@ function mutate(cwd, fn, fence = (commit) => commit(), strictLoad = false) {
       return extra;
     };
     return fence(commit);
-  }, { label: 'dispatch-record' });
+  }, { label: 'dispatch-record' }), ['.planning/graph/dispatches.json']);
 }
 
 const roleOf = (rec) => (typeof rec === 'string' ? rec : ((rec && rec.role) || 'an agent'));
@@ -1540,6 +1540,7 @@ function provenanceFile(dir, dispatchId) {
 
 // @invariant: a provenance sidecar is written once per dispatch_id and never overwritten.
 function writeProvenanceOnce(dir, fields) {
+  return require('./role-artifact.cjs').trustedBookkeepingMutation(path.resolve(dir, '../..'), () => {
   const file = provenanceFile(dir, fields.dispatch_id);
   if (fs.existsSync(file)) return false;
   const stamp = hostProvenance.current({ pluginRoot: path.join(__dirname, '..') });
@@ -1555,6 +1556,7 @@ function writeProvenanceOnce(dir, fields) {
   } finally {
     try { fs.unlinkSync(staged); } catch {}
   }
+  }, ['.planning/graph/provenance/' + fields.dispatch_id + '.json']);
 }
 
 function readProvenance(dir, dispatchId) {
