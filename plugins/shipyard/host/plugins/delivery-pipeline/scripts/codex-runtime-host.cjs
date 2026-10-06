@@ -601,7 +601,9 @@ function taskRelayInput(role, model, effort, task) {
     + ', fork_turns none, and task_name gsd_task. Give that child exactly this message:\n'
     + 'TASK_FILE=' + task.path + '\nTASK_SHA256=' + task.sha256 + '\n'
     + 'Your FIRST tool call must read TASK_FILE and every mandatory GSD/AGENTS initial source required by your role in that same call. If those sources must come first, read them before TASK_FILE.\n'
-    + 'In that same call, compute SHA-256 from the TASK_FILE bytes and print the exact standalone line TASK_SHA256=<digest> in the call output. Then follow TASK_FILE exactly.\n'
+    + 'Make this first read/hash filesystem read-only using inline python -c or node -e. Do not use shell heredocs, create temporary files, or use shell features that require temporary files.\n'
+    + 'In that same call, compute SHA-256 from the TASK_FILE bytes; do not print the supplied expected digest without reading and hashing those bytes. Emit TASK_SHA256=<computed digest> as the first small standalone output, before any source bodies, task text, or tool inventory. Reading mandatory sources first does not require printing them first.\n'
+    + 'When using functions.exec, explicitly forward that computed marker as a separate FIRST text item with text(marker), then emit the remaining output. Preserve it through BOTH the nested command output budget and the outer functions.exec output budget; increasing only the nested budget is insufficient. Then follow TASK_FILE exactly.\n'
     + 'Wait for that child to finish. Do not perform the task yourself.';
 }
 
@@ -1063,11 +1065,15 @@ function createCodexCliLauncher(options = {}) {
   if (options.additionalProtectedPaths !== undefined && !Array.isArray(options.additionalProtectedPaths)) {
     fail('INVALID_INPUT', 'additionalProtectedPaths must be an array of host-owned paths');
   }
-  const hostProtectedPaths = normalizeProtectedPaths(options.additionalProtectedPaths);
+  const archiveAuthority = require('./role-artifact.cjs').archiveAuthorityNamespace(true);
+  const hostProtectedPaths = normalizeProtectedPaths([archiveAuthority, ...(options.additionalProtectedPaths || [])]);
   const taskDir = taskStateDir(options, scope);
 
   return async function launch(prompt, launchOptions = {}) {
     if (!object(launchOptions)) fail('INVALID_INPUT', 'Codex launch options must be an object');
+    if (['archiveAuthorityPath', 'archiveCataloguePath', 'archive_authority_path', 'archive_catalogue_path']
+      .some(key => Object.hasOwn(launchOptions, key)))
+      fail('INVALID_INPUT', 'archive authority paths are fixed by the trusted host');
     const model = text(launchOptions.model, 'model', 256);
     const effort = text(launchOptions.effort || launchOptions.reasoning_effort, 'effort', 32);
     if (!Object.values(CODEX_MODEL_IDS).includes(model)
@@ -1540,6 +1546,7 @@ module.exports = Object.freeze({
   observedSelection,
   writeTranscript,
   writeTaskFile,
+  taskRelayInput,
   verifyTaskRelay,
   createCodexCliLauncher,
   createCodexRuntimeHost,
