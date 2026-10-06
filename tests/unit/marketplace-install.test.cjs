@@ -86,20 +86,24 @@ fs.writeFileSync(file,JSON.stringify(s));
     assert.match(identity.digest, /^[a-f0-9]{64}$/);
     assert.match(manifest.version, /\+codex\.[a-f0-9]{16}$/);
   }
-  function assertPackageForBase(dir, baseRef) {
-    if (packageFreshnessRequired(baseRef)) assertCurrentPackage(dir);
+  const branch = spawnSync('git', ['branch', '--show-current'], { cwd: root, encoding: 'utf8' });
+  assert.equal(branch.status, 0, 'must resolve the checkout branch');
+  const rawBaseRef = process.env.COMMENT_POLICY_BASE ?? branch.stdout.trim();
+  const baseRef = rawBaseRef.startsWith('origin/') ? rawBaseRef.slice(7) : rawBaseRef;
+  function assertPackageForBase(dir, ref) {
+    if (packageFreshnessRequired(ref)) assertCurrentPackage(dir);
   }
-  assertPackageForBase(path.join(root, 'plugins/shipyard'), process.env.GITHUB_BASE_REF);
+  assertCurrentPackage(out);
+  assertPackageForBase(path.join(root, 'plugins/shipyard'), baseRef);
   const staleMirror = path.join(tmp, 'stale-package');
   fs.cpSync(out, staleMirror, { recursive: true });
   const stalePolicy = path.join(staleMirror, 'host/plugins/delivery-pipeline/scripts/model-policy-internal.cjs');
   fs.writeFileSync(stalePolicy, fs.readFileSync(stalePolicy, 'utf8').replace('adr-014.v7', 'adr-014.v6'));
-  for (const baseRef of ['', 'main']) {
-    assert.throws(() => assertPackageForBase(staleMirror, baseRef), /Marketplace package is stale/);
-    assertPackageForBase(out, baseRef);
+  for (const ref of ['', 'main']) {
+    assert.throws(() => assertPackageForBase(staleMirror, ref), /Marketplace package is stale/);
   }
-  for (const baseRef of ['epic/47-complete-deferred-decomposition-wait-attribution', 'ticket/T-47-14']) {
-    assert.doesNotThrow(() => assertPackageForBase(staleMirror, baseRef));
+  for (const ref of ['epic/47-complete-deferred-decomposition-wait-attribution', 'ticket/T-47-15']) {
+    assert.doesNotThrow(() => assertPackageForBase(staleMirror, ref));
   }
   assert.equal(first.skills.length,6);
   assert(fs.existsSync(path.join(out,'host/scripts/ensure-gsd-plugin.cjs')));

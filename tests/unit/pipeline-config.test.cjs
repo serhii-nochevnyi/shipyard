@@ -28,7 +28,7 @@ function withConfig(pipeline) {
   if (pipeline !== undefined) {
     fs.writeFileSync(path.join(dir, '.planning', 'config.json'), JSON.stringify({ pipeline }, null, 2));
   }
-  return loadConfig(dir);
+  return loadConfig(dir, { env: {} });
 }
 
 // write an arbitrary config.json (to cover GSD's own top-level keys)
@@ -36,7 +36,7 @@ function withRaw(raw) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-cfg-'));
   fs.mkdirSync(path.join(dir, '.planning'), { recursive: true });
   fs.writeFileSync(path.join(dir, '.planning', 'config.json'), JSON.stringify(raw, null, 2));
-  return loadConfig(dir);
+  return loadConfig(dir, { env: {} });
 }
 
 function withRawOptions(raw, options) {
@@ -1847,7 +1847,7 @@ function runCli(args, raw) {
     fs.mkdirSync(path.join(dir, '.planning'), { recursive: true });
     fs.writeFileSync(path.join(dir, '.planning', 'config.json'), JSON.stringify(raw, null, 2));
   }
-  const r = spawnSync(process.execPath, [mod, ...args], { cwd: dir, encoding: 'utf8' });
+  const r = spawnSync(process.execPath, [mod, ...args], { cwd: dir, env: {}, encoding: 'utf8' });
   return { status: r.status, out: (r.stdout || '').trim(), err: r.stderr || '', json: () => JSON.parse(r.stdout) };
 }
 // The ceiling exists only where the runtime declares the 1M tier AND a person has
@@ -3290,5 +3290,711 @@ test('unconfigured projects inspect inherited GSD selection and reject conflicti
     }
   }
 });
+
+const phase47Crypto = require('node:crypto');
+const phase47Scripts = path.join(__dirname, '../../plugins/delivery-pipeline/scripts');
+const phase47Verification = require(path.join(phase47Scripts, 'host-verification.cjs'));
+const phase47Boundary = require(path.join(phase47Scripts, 'dispatch-boundary.cjs'));
+const phase47Policy = require(path.join(phase47Scripts, 'model-policy-internal.cjs'));
+const phase47Phase = '.planning/phases/47-complete-deferred-decomposition-wait-attribution';
+const phase47Rows = [
+  [1, ['node', '--test', 'tests/unit/phase47-launch-contract.test.cjs', 'tests/unit/deliver-dispatch.test.cjs', 'tests/unit/run-contract.test.cjs']],
+  [1, ['node', '--test', 'tests/unit/phase47-launch-contract.test.cjs', 'tests/unit/run-contract.test.cjs']],
+  [2, ['node', '--test', 'tests/unit/codex-planning-context-host.test.cjs', 'tests/unit/decompose-dispatch-wait-contract.test.cjs', 'tests/unit/deliver-dispatch.test.cjs']],
+  [3, ['node', '--test', 'tests/unit/configure-codex-notify.test.cjs']],
+  [4, ['node', '--test', 'tests/unit/phase47-host-assignment.test.cjs', 'tests/unit/host-verification.test.cjs']],
+  [4, ['node', '--test', 'tests/unit/codex-decompose-host.test.cjs', 'tests/unit/codex-runtime-host.test.cjs', 'tests/unit/codex-delivery-host.test.cjs', 'tests/unit/dispatch-boundary.test.cjs', 'tests/unit/pipeline-config.test.cjs'], 'host'],
+  [5, ['node', 'tests/unit/phase47-package-publication.test.cjs', '--group', 'candidate']],
+  [5, ['node', 'tests/unit/phase47-package-publication.test.cjs', '--group', 'launch']],
+  [6, ['node', '--test', 'tests/unit/codex-decompose-host.test.cjs', 'tests/unit/planning-result-sealer.test.cjs']],
+  [6, ['node', '--test', 'tests/unit/dispatch-record.test.cjs', 'tests/unit/planning-result-sealer.test.cjs']],
+  [7, ['node', '--test', 'tests/unit/phase47-research-handback.test.cjs']],
+  [8, ['node', '--test', 'tests/unit/phase47-runtime-acceptance.test.cjs']],
+  [8, ['node', 'tests/smoke/phase47-runtime-acceptance.cjs', '--evidence', 'docs/audits/phase47-runtime-acceptance.json']],
+  [9, ['node', '--test', 'tests/unit/codex-runtime-host.test.cjs', 'tests/unit/phase47-task-relay-output-budget.test.cjs']],
+  [9, ['node', '--check', 'plugins/delivery-pipeline/scripts/codex-runtime-host.cjs']],
+  [13, ['node', '--test', 'tests/unit/codex-decompose-host.test.cjs', 'tests/unit/usage-attribution.test.cjs']],
+  [13, ['node', '--test', 'tests/unit/usage-report.test.cjs']],
+  [11, ['node', 'tests/unit/phase47-package-publication.test.cjs', '--group', 'caller']],
+  [11, ['node', 'tests/unit/phase47-package-publication.test.cjs', '--group', 'integration']],
+  [12, ['node', 'tests/unit/phase47-package-publication.test.cjs', '--group', 'relay']],
+  [12, ['node', 'tests/unit/phase47-package-publication.test.cjs', '--group', 'complete']],
+  [12, ['node', 'scripts/refresh-runtime-digests.cjs', '--check', '.']],
+  [10, ['node', '--test', 'tests/unit/gsd-tune.test.cjs', 'tests/unit/model-capability.test.cjs', 'tests/unit/dispatch-boundary.test.cjs', 'tests/unit/pipeline-config.test.cjs'], 'host'],
+].map(([plan, argv, profile = 'sandbox']) => Object.freeze({ plan,
+  tuple: Object.freeze({ argv: Object.freeze(argv), profile, timeout_s: 600 }) }));
+const phase47Names = Array.from({ length: 13 }, (_, i) => `47-${String(i + 1).padStart(2, '0')}-PLAN.md`);
+const phase47Sha = (bytes) => phase47Crypto.createHash('sha256').update(bytes).digest('hex');
+
+function phase47Physical(file, digest, { readonly = false, bytes } = {}) {
+  assert.ok(path.isAbsolute(file) && path.resolve(file) === file, 'physical absolute path required');
+  for (let p = file; ; p = path.dirname(p)) {
+    assert.ok(!fs.lstatSync(p).isSymbolicLink(), `symlink: ${p}`);
+    if (p === path.dirname(p)) break;
+  }
+  const before = fs.lstatSync(file);
+  assert.ok(before.isFile(), `not regular: ${file}`);
+  if (readonly) assert.strictEqual(before.mode & 0o222, 0, `not read-only: ${file}`);
+  const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+  try {
+    const opened = fs.fstatSync(fd);
+    const content = fs.readFileSync(fd);
+    const after = fs.lstatSync(file);
+    for (const key of ['dev', 'ino', 'size', 'mode', 'uid', 'gid', 'mtimeMs']) {
+      assert.strictEqual(opened[key], before[key], `open race: ${file}`);
+      assert.strictEqual(after[key], before[key], `read race: ${file}`);
+    }
+    assert.strictEqual(content.length, before.size);
+    if (bytes !== undefined) assert.strictEqual(content.length, bytes, `bytes: ${file}`);
+    if (digest !== undefined) {
+      assert.match(digest, /^[a-f0-9]{64}$/);
+      assert.strictEqual(phase47Sha(content), digest, `digest: ${file}`);
+    }
+    return content;
+  } finally { fs.closeSync(fd); }
+}
+
+function phase47WithPrivate(fn) {
+  const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'shipyard-phase47-'));
+  try { return fn(root); } finally { fs.rmSync(root, { recursive: true, force: true }); }
+}
+
+function phase47PlannerRecord(manifest) {
+  const host = path.dirname(path.dirname(manifest.root));
+  const receipts = path.join(host, 'receipts');
+  const recordName = `record-${phase47Sha(manifest.planner_dispatch)}.json`;
+  const keyPath = path.join(host, `.shipyard-dispatch-authority-${phase47Sha(receipts)}.key`);
+  const key = phase47Physical(keyPath);
+  const record = phase47Physical(path.join(receipts, recordName));
+  assert.strictEqual(fs.lstatSync(keyPath).mode & 0o077, 0, 'private HMAC key required');
+  assert.strictEqual(key.length, 32);
+  return phase47WithPrivate((root) => {
+    const copy = path.join(root, 'receipts');
+    fs.mkdirSync(copy);
+    fs.writeFileSync(path.join(root, `.shipyard-dispatch-authority-${phase47Sha(copy)}.key`), key, { mode: 0o600 });
+    fs.writeFileSync(path.join(copy, recordName), record, { mode: 0o600 });
+    const verified = phase47Boundary.createDurableRecorder(copy).getVerifiedRecord(manifest.planner_dispatch);
+    assert.ok(verified, 'original dispatch-specific HMAC required');
+    return verified;
+  });
+}
+
+function phase47Snapshot(preparation) {
+  assert.ok(preparation, 'trusted preparation required');
+  const m = JSON.parse(phase47Physical(preparation.snapshot_manifest_path,
+    preparation.snapshot_manifest_sha256, { readonly: true }));
+  assert.strictEqual(m.schema, 'shipyard.phase47-plan-snapshot.v1');
+  assert.strictEqual(m.phase, 47);
+  assert.strictEqual(m.root, preparation.snapshot_root);
+  assert.strictEqual(preparation.snapshot_manifest_path, path.join(m.root, 'manifest.json'));
+  assert.strictEqual(m.planner_dispatch, preparation.original_planner_dispatch);
+  assert.strictEqual(path.basename(m.root), m.planner_dispatch);
+  assert.strictEqual(m.original_index_sha256, preparation.original_index_sha256);
+  assert.strictEqual(preparation.canonical_config_path, path.join(m.repository, '.planning/config.json'));
+  assert.strictEqual(m.policy_hash, phase47Policy.POLICY_HASH, 'stale planner policy');
+  assert.strictEqual(m.original_index_copy, path.join(m.root, 'original-index.json'));
+  const indexBytes = phase47Physical(m.original_index_copy, m.original_index_sha256, { readonly: true });
+  assert.deepStrictEqual(phase47Physical(m.original_index_path, m.original_index_sha256), indexBytes);
+  const index = JSON.parse(indexBytes);
+  assert.strictEqual(index.schema, 'shipyard.decomposition-index.v1');
+  assert.strictEqual(index.version, 1);
+  const names = [...phase47Names, 'CONTEXT.md'];
+  assert.deepStrictEqual(m.entries.map((e) => e.path).sort(), names.map((name) => `${phase47Phase}/${name}`).sort());
+  assert.deepStrictEqual(index.entries.map((e) => e.path).sort(), names.map((name) => path.join(m.repository, phase47Phase, name)).sort());
+  const plans = new Map();
+  for (const e of m.entries) {
+    assert.strictEqual(e.physical_path, path.join(m.root, path.basename(e.path)));
+    assert.strictEqual(e.original_path, path.join(m.repository, e.path));
+    const original = index.entries.find((v) => v.path === e.original_path);
+    assert.strictEqual(original.sha256, e.sha256);
+    assert.strictEqual(original.digest, e.sha256);
+    assert.strictEqual(original.bytes, e.bytes);
+    assert.strictEqual(original.content_bytes, e.bytes);
+    const content = phase47Physical(e.physical_path, e.sha256, { readonly: true, bytes: e.bytes });
+    if (e.path.endsWith('-PLAN.md')) plans.set(path.basename(e.path), content.toString('utf8'));
+  }
+  const result = JSON.parse(phase47Physical(m.original_result_path, m.original_result_sha256, { readonly: true }));
+  assert.strictEqual(result.schema, 'shipyard.decomposition-result.v1');
+  assert.strictEqual(result.version, 1);
+  assert.strictEqual(result.status, 'completed');
+  assert.strictEqual(result.role, 'decomposition');
+  assert.strictEqual(result.plan_count, 14);
+  assert.strictEqual(result.subject, `phase=47;repository=${m.repository}`);
+  assert.strictEqual(result.source_revision, m.source_revision, 'stale planner source');
+  assert.strictEqual(result.repository, m.repository);
+  assert.strictEqual(result.policy_hash, m.policy_hash);
+  assert.strictEqual(result.artifact_index.path, m.original_index_path);
+  assert.strictEqual(result.artifact_index.sha256, m.original_index_sha256);
+  assert.strictEqual(result.artifact_index.digest, m.original_index_sha256);
+  assert.strictEqual(result.artifact_index.bytes, indexBytes.length);
+  assert.strictEqual(result.artifact_index.content_bytes, indexBytes.length);
+  assert.deepStrictEqual(result.evidence_index, result.artifact_index);
+  const verified = phase47PlannerRecord(m);
+  assert.strictEqual(verified.dispatch_id, m.planner_dispatch);
+  assert.strictEqual(verified.role, 'decomposition');
+  assert.strictEqual(verified.runtime, 'codex');
+  assert.strictEqual(verified.gsd_role, 'gsd-planner');
+  assert.strictEqual(verified.gsd_launch_mechanism, 'typed-gsd-callback');
+  assert.strictEqual(verified.launch_id, result.receipt.launch_id);
+  assert.strictEqual(verified.policy_hash, m.policy_hash);
+  assert.deepStrictEqual(verified.receipt, result.receipt, 'original full native receipt changed');
+  assert.strictEqual(result.receipt.dispatch_id, m.planner_dispatch);
+  assert.strictEqual(result.receipt.compliance, 'verified');
+  assert.ok(verified.trace.some((row) => row.stage === 'receipt' && row.status === 'passed'));
+  return { manifest: m, plans };
+}
+
+function phase47ExactAdmission(plans, loaded, repository = null) {
+  assert.strictEqual(loaded.valid, true, 'real config loader must accept policy');
+  const allow = repoValue(loaded, 'verification_commands', repository);
+  assert.ok(Array.isArray(allow), 'configured verification map required');
+  assert.deepStrictEqual([...plans.keys()].sort(), [...phase47Names].sort());
+  let count = 0;
+  for (const [name, text] of plans) {
+    const plan = Number(/^47-(\d+)-PLAN.md$/.exec(name)[1]);
+    const expected = phase47Rows.filter((r) => r.plan === plan).map((r) => r.tuple);
+    const commands = phase47Verification.planCommands(text);
+    assert.ok(commands.length, `${name}: nonempty Verification commands required`);
+    assert.deepStrictEqual(commands, expected.map((e) => e.argv), `${name}: exact frozen argv required`);
+    const admitted = phase47Verification.admit(commands, allow);
+    assert.strictEqual(admitted.configured, true);
+    assert.deepStrictEqual(admitted.not_allowed, [], `${name}: not_allowed`);
+    assert.strictEqual(admitted.commands.length, expected.length);
+    for (const [i, tuple] of expected.entries()) {
+      const exact = allow.filter((e) => JSON.stringify(e.argv) === JSON.stringify(tuple.argv));
+      assert.strictEqual(exact.length, 1, `${name}: one exact full argv entry required`);
+      assert.deepStrictEqual(exact[0], tuple, `${name}: exact profile/timeout required`);
+      assert.deepStrictEqual(admitted.commands[i], { argv: [...tuple.argv], profile: tuple.profile, timeout_ms: 600000 });
+    }
+    count += commands.length;
+  }
+  assert.strictEqual(count, 23);
+  return count;
+}
+
+function phase47PolicyDiff(baseline, candidate) {
+  const old = baseline.delivery_pipeline.verification_commands.default;
+  const expected = structuredClone(old);
+  for (const { tuple } of phase47Rows) {
+    if (!expected.some((row) => JSON.stringify(row) === JSON.stringify(tuple))) expected.push(structuredClone(tuple));
+  }
+  assert.deepStrictEqual(candidate.delivery_pipeline.verification_commands.default, expected,
+    'only missing frozen tuples may be appended; inherited host authority must remain identical');
+  const rest = structuredClone(candidate);
+  rest.delivery_pipeline.verification_commands.default = old;
+  assert.deepStrictEqual(rest, baseline, 'unrelated policy must remain unchanged');
+}
+
+function phase47Audit(preparation, candidatePath, candidateDigest) {
+  const { manifest, plans } = phase47Snapshot(preparation);
+  const baselineBytes = phase47Physical(preparation.canonical_config_path, preparation.canonical_config_sha256);
+  const candidateBytes = phase47Physical(candidatePath, candidateDigest);
+  phase47PolicyDiff(JSON.parse(baselineBytes), JSON.parse(candidateBytes));
+  const count = phase47ExactAdmission(plans, loadConfig(path.dirname(path.dirname(candidatePath))));
+  phase47Physical(candidatePath, phase47Sha(candidateBytes));
+  phase47Physical(preparation.canonical_config_path, preparation.canonical_config_sha256);
+  assert.deepStrictEqual(phase47Snapshot(preparation).manifest, manifest);
+  return { manifest_sha256: preparation.snapshot_manifest_sha256, original_index_sha256: manifest.original_index_sha256,
+    source_revision: manifest.source_revision, config_sha256: phase47Sha(candidateBytes), command_count: count,
+    plan_sha256: Object.fromEntries(manifest.entries.filter((e) => e.path.endsWith('-PLAN.md')).map((e) => [e.path, e.sha256])),
+    tuples: phase47Rows.map((r) => r.tuple) };
+}
+
+function phase47Fixture(root) {
+  const host = path.join(root, 'host');
+  const dispatch = 'dispatch-private-phase47-planner';
+  const snapshot = path.join(host, 'phase47-plan-snapshots', dispatch);
+  const project = path.join(root, 'project');
+  fs.mkdirSync(snapshot, { recursive: true });
+  fs.mkdirSync(path.join(project, '.planning'), { recursive: true });
+  const put = (file, value) => {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const bytes = Buffer.from(typeof value === 'string' ? value : JSON.stringify(value) + '\n');
+    if (fs.existsSync(file)) fs.chmodSync(file, 0o600);
+    fs.writeFileSync(file, bytes, { mode: 0o400 });
+    fs.chmodSync(file, 0o400);
+    return { path: file, bytes: bytes.length, content_bytes: bytes.length, sha256: phase47Sha(bytes), digest: phase47Sha(bytes) };
+  };
+  const entries = [...phase47Names, 'CONTEXT.md'].map((name) => {
+    const plan = Number(name.slice(3, 5));
+    const text = name === 'CONTEXT.md' ? 'Private controlled context\n'
+      : `## Verification commands\n\n${phase47Rows.filter((r) => r.plan === plan).map((r) => '- `' + r.tuple.argv.join(' ') + '`').join('\n')}\n`;
+    const file = put(path.join(snapshot, name), text);
+    return { path: `${phase47Phase}/${name}`, original_path: path.join(project, phase47Phase, name),
+      physical_path: file.path, sha256: file.sha256, bytes: file.bytes };
+  });
+  const index = { schema: 'shipyard.decomposition-index.v1', version: 1, entries: entries.map((e) => ({
+    path: e.original_path, bytes: e.bytes, content_bytes: e.bytes, sha256: e.sha256, digest: e.sha256 })) };
+  const ix = put(path.join(host, 'sealed', 'index.json'), index);
+  put(path.join(snapshot, 'original-index.json'), index);
+  const receipt = { dispatch_id: dispatch, launch_id: 'private-planner-launch', compliance: 'verified',
+    runtime: 'codex', role: 'decomposition', policy_hash: phase47Policy.POLICY_HASH,
+    runtime_evidence: { native_session_evidence: { session_id: 'private-parent' },
+      native_child_evidence: { session_id: 'private-child', parent_thread_id: 'private-parent' } } };
+  const result = { schema: 'shipyard.decomposition-result.v1', version: 1, status: 'completed', role: 'decomposition',
+    plan_count: 14, subject: `phase=47;repository=${project}`, source_revision: '7eebae4812b3c67ccdbbb63c8c1603f7767b1466',
+    repository: project, policy_hash: phase47Policy.POLICY_HASH, receipt, artifact_index: ix, evidence_index: ix };
+  const resultFile = put(path.join(host, 'private-result.json'), result);
+  const manifest = { schema: 'shipyard.phase47-plan-snapshot.v1', phase: 47, root: snapshot, entries,
+    planner_dispatch: dispatch, original_index_path: ix.path, original_index_copy: path.join(snapshot, 'original-index.json'),
+    original_index_sha256: ix.sha256, original_result_path: resultFile.path, original_result_sha256: resultFile.sha256,
+    repository: project, source_revision: result.source_revision, policy_hash: result.policy_hash };
+  const manifestFile = put(path.join(snapshot, 'manifest.json'), manifest);
+  const preparation = { snapshot_manifest_path: manifestFile.path, snapshot_manifest_sha256: manifestFile.sha256,
+    snapshot_root: snapshot, original_planner_dispatch: dispatch, original_index_sha256: ix.sha256,
+    canonical_config_path: path.join(project, '.planning/config.json') };
+  const baseline = { delivery_pipeline: { verification_commands: { default: phase47Rows
+    .filter((r) => r.tuple.profile === 'host' || r.tuple.argv[1] === 'scripts/refresh-runtime-digests.cjs').map((r) => r.tuple) } },
+    unrelated: { preserve: true } };
+  preparation.canonical_config_sha256 = put(preparation.canonical_config_path, baseline).sha256;
+  const record = { dispatch_id: dispatch, runtime: 'codex', role: 'decomposition', launch_id: receipt.launch_id,
+    gsd_role: 'gsd-planner', gsd_launch_mechanism: 'typed-gsd-callback', policy_hash: result.policy_hash, receipt,
+    trace: [{ stage: 'receipt', status: 'passed' }] };
+  const receipts = path.join(host, 'receipts');
+  fs.mkdirSync(receipts);
+  const key = phase47Crypto.randomBytes(32);
+  fs.writeFileSync(path.join(host, `.shipyard-dispatch-authority-${phase47Sha(receipts)}.key`), key, { mode: 0o600 });
+  const seal = () => {
+    const envelope = { format: 'adr-014.durable-boundary.v1', payload: record,
+      integrity: { algorithm: 'hmac-sha256', mac: phase47Crypto.createHmac('sha256', key)
+        .update(phase47Policy.stableStringify(record)).digest('hex') } };
+    return put(path.join(receipts, `record-${phase47Sha(dispatch)}.json`), envelope);
+  };
+  seal();
+  const candidatePath = path.join(root, 'candidate', '.planning/config.json');
+  const candidate = structuredClone(baseline);
+  for (const { tuple } of phase47Rows) {
+    if (!candidate.delivery_pipeline.verification_commands.default.some((r) => JSON.stringify(r) === JSON.stringify(tuple))) {
+      candidate.delivery_pipeline.verification_commands.default.push(structuredClone(tuple));
+    }
+  }
+  const candidateDigest = put(candidatePath, candidate).sha256;
+  const rewrite = (file, value) => { fs.chmodSync(file, 0o600); return put(file, value); };
+  return { preparation, manifest, index, result, record, candidate, candidatePath, candidateDigest, put, rewrite, seal, receipts };
+}
+
+suite('phase47 — exact read-only whole-plan admission');
+
+test('the actual candidate admits all 23 frozen tuples with their exact profiles and timeouts', () => {
+  const candidate = loadConfig(path.join(__dirname, '../..'));
+  const plans = new Map(phase47Names.map((name) => {
+    const plan = Number(name.slice(3, 5));
+    return [name, '## Verification commands\n' + phase47Rows.filter((r) => r.plan === plan)
+      .map((r) => '- `' + r.tuple.argv.join(' ') + '`').join('\n')];
+  }));
+  assert.strictEqual(phase47ExactAdmission(plans, candidate), 23);
+});
+
+test('a governed physical snapshot succeeds without any checkout PLAN files or command execution', () => phase47WithPrivate((root) => {
+  const f = phase47Fixture(root);
+  assert.ok(!fs.existsSync(path.join(root, 'candidate', phase47Phase)));
+  const audit = phase47Audit(f.preparation, f.candidatePath, f.candidateDigest);
+  assert.strictEqual(audit.command_count, 23);
+  assert.strictEqual(Object.keys(audit.plan_sha256).length, 13);
+  assert.strictEqual(audit.config_sha256, f.candidateDigest);
+}));
+
+test('missing preparation refuses even on a fresh checkout', () => {
+  assert.throws(() => phase47Snapshot(null), /trusted preparation required/);
+  assert.throws(() => phase47Snapshot({}), /physical absolute path required|path.*string/);
+});
+
+for (const variant of ['missing-manifest', 'symlink-manifest', 'missing-plan', 'symlink-plan', 'symlink-parent',
+  'writable-plan', 'manifest-digest', 'plan-digest', 'plan-size', 'missing-index', 'index-digest',
+  'stale-dispatch', 'stale-source', 'stale-policy', 'original-path', 'physical-path', 'plan-set',
+  'result-digest', 'receipt-hmac', 'native-identity', 'unfinalized-planner']) {
+  test(`${variant} refuses before command admission`, () => phase47WithPrivate((root) => {
+    const f = phase47Fixture(root);
+    const e = f.manifest.entries[0];
+    const saveManifest = () => { f.preparation.snapshot_manifest_sha256 = f.rewrite(f.preparation.snapshot_manifest_path, f.manifest).sha256; };
+    if (variant === 'missing-manifest') fs.unlinkSync(f.preparation.snapshot_manifest_path);
+    if (variant === 'symlink-manifest') { fs.renameSync(f.preparation.snapshot_manifest_path, f.preparation.snapshot_manifest_path + '.real'); fs.symlinkSync(f.preparation.snapshot_manifest_path + '.real', f.preparation.snapshot_manifest_path); }
+    if (variant === 'missing-plan') fs.unlinkSync(e.physical_path);
+    if (variant === 'symlink-plan') { fs.renameSync(e.physical_path, e.physical_path + '.real'); fs.symlinkSync(e.physical_path + '.real', e.physical_path); }
+    if (variant === 'symlink-parent') { fs.renameSync(f.manifest.root, f.manifest.root + '.real'); fs.symlinkSync(f.manifest.root + '.real', f.manifest.root); }
+    if (variant === 'writable-plan') fs.chmodSync(e.physical_path, 0o600);
+    if (variant === 'manifest-digest') f.preparation.snapshot_manifest_sha256 = '0'.repeat(64);
+    if (variant === 'plan-digest') f.rewrite(e.physical_path, 'altered plan');
+    if (variant === 'plan-size') { e.bytes++; saveManifest(); }
+    if (variant === 'missing-index') fs.unlinkSync(f.manifest.original_index_copy);
+    if (variant === 'index-digest') f.rewrite(f.manifest.original_index_path, { ...f.index, version: 2 });
+    if (variant === 'stale-dispatch') f.preparation.original_planner_dispatch = 'dispatch-foreign-planner';
+    if (variant === 'stale-source') { f.manifest.source_revision = '0'.repeat(40); saveManifest(); }
+    if (variant === 'stale-policy') { f.manifest.policy_hash = '0'.repeat(64); saveManifest(); }
+    if (variant === 'original-path') { e.original_path += '.foreign'; saveManifest(); }
+    if (variant === 'physical-path') { e.physical_path = f.manifest.entries[1].physical_path; saveManifest(); }
+    if (variant === 'plan-set') { f.manifest.entries.pop(); saveManifest(); }
+    if (variant === 'result-digest') f.rewrite(f.manifest.original_result_path, { ...f.result, status: 'blocked' });
+    if (variant === 'receipt-hmac') { const file = path.join(f.receipts, `record-${phase47Sha(f.manifest.planner_dispatch)}.json`); const envelope = JSON.parse(fs.readFileSync(file)); envelope.payload.receipt.launch_id = 'forged'; f.rewrite(file, envelope); }
+    if (variant === 'native-identity') { f.record.receipt.runtime_evidence.native_child_evidence.session_id = 'foreign-native-child'; f.seal(); }
+    if (variant === 'unfinalized-planner') { f.record.trace = []; f.seal(); }
+    assert.throws(() => phase47Audit(f.preparation, f.candidatePath, f.candidateDigest));
+  }));
+}
+
+test('an overwritten global latest receipt cannot invalidate the original authenticated planner', () => phase47WithPrivate((root) => {
+  const f = phase47Fixture(root);
+  f.put(path.join(f.receipts, `latest-${phase47Sha('codex:decomposition')}.json`), { dispatch_id: 'later-checker' });
+  assert.strictEqual(phase47Audit(f.preparation, f.candidatePath, f.candidateDigest).command_count, 23);
+}));
+
+for (const variant of ['missing-entry', 'altered-argv', 'prefix-only', 'profile', 'timeout', 'missing-profile',
+  'missing-timeout', 'duplicate', 'unrelated-policy', 'gpg-tuple', 'repository-authority', 'config-digest',
+  'canonical-config-digest', 'symlink-canonical-config']) {
+  test(`${variant} cannot gain phase47 authority`, () => phase47WithPrivate((root) => {
+    const f = phase47Fixture(root);
+    const rows = f.candidate.delivery_pipeline.verification_commands.default;
+    const target = rows.findIndex((r) => JSON.stringify(r.argv) === JSON.stringify(phase47Rows[0].tuple.argv));
+    if (variant === 'missing-entry') rows.splice(target, 1);
+    if (variant === 'altered-argv') rows[target].argv.push('--extra');
+    if (variant === 'prefix-only') rows[target].argv = ['node', '--test'];
+    if (variant === 'profile') rows[target].profile = 'host';
+    if (variant === 'timeout') rows[target].timeout_s = 601;
+    if (variant === 'missing-profile') delete rows[target].profile;
+    if (variant === 'missing-timeout') delete rows[target].timeout_s;
+    if (variant === 'duplicate') rows.push(structuredClone(rows[target]));
+    if (variant === 'unrelated-policy') f.candidate.unrelated.preserve = false;
+    if (variant === 'gpg-tuple') rows[0].profile = 'sandbox';
+    if (variant === 'repository-authority') f.candidate.delivery_pipeline.verification_commands['private/repo'] = [];
+    if (variant === 'canonical-config-digest') f.preparation.canonical_config_sha256 = '0'.repeat(64);
+    if (variant === 'symlink-canonical-config') {
+      const canonical = f.preparation.canonical_config_path;
+      fs.renameSync(canonical, canonical + '.real');
+      fs.symlinkSync(canonical + '.real', canonical);
+    }
+    const digest = f.rewrite(f.candidatePath, f.candidate).sha256;
+    assert.throws(() => phase47Audit(f.preparation, f.candidatePath, variant === 'config-digest' ? '0'.repeat(64) : digest));
+  }));
+}
+
+for (const variant of ['appended-argument', 'empty-commands', 'extra-command', 'wrong-consumer']) {
+  test(`${variant} in a freshly bound PLAN still fails exact admission`, () => phase47WithPrivate((root) => {
+    const f = phase47Fixture(root);
+    const { plans } = phase47Snapshot(f.preparation);
+    const name = phase47Names[0];
+    if (variant === 'appended-argument') plans.set(name, plans.get(name).replace('run-contract.test.cjs`', 'run-contract.test.cjs --extra`'));
+    if (variant === 'empty-commands') plans.set(name, '## Verification commands\n');
+    if (variant === 'extra-command') plans.set(name, plans.get(name) + '\n- `node --test tests/unit/unreviewed.test.cjs`\n');
+    if (variant === 'wrong-consumer') plans.set(name, plans.get(phase47Names[1]));
+    assert.throws(() => phase47ExactAdmission(plans, loadConfig(path.join(root, 'candidate'))));
+  }));
+}
+
+test('prefix admission and normalized defaults cannot substitute for exact reviewed tuples', () => phase47WithPrivate((root) => {
+  const f = phase47Fixture(root);
+  const { plans } = phase47Snapshot(f.preparation);
+  const raw = structuredClone(f.candidate);
+  const rows = raw.delivery_pipeline.verification_commands.default;
+  const target = rows.find((r) => JSON.stringify(r.argv) === JSON.stringify(phase47Rows[0].tuple.argv));
+  target.argv = ['node', '--test'];
+  const admitted = phase47Verification.admit([phase47Rows[0].tuple.argv], rows);
+  assert.deepStrictEqual(admitted.not_allowed, []);
+  f.rewrite(f.candidatePath, raw);
+  assert.throws(() => phase47ExactAdmission(plans, loadConfig(path.join(root, 'candidate'))), /exact full argv/);
+  target.argv = [...phase47Rows[0].tuple.argv];
+  target.timeout_s = 599;
+  f.rewrite(f.candidatePath, raw);
+  assert.throws(() => phase47ExactAdmission(plans, loadConfig(path.join(root, 'candidate'))), /profile\/timeout/);
+  target.timeout_s = 600;
+  target.profile = 'host';
+  f.rewrite(f.candidatePath, raw);
+  assert.throws(() => phase47ExactAdmission(plans, loadConfig(path.join(root, 'candidate'))), /profile\/timeout/);
+}));
+
+if (process.env.SHIPYARD_PHASE47_PREPARATION) {
+  test('the actual coordinator-pinned thirteen-plan snapshot and candidate config pass the read-only audit', () => {
+    const preparation = JSON.parse(process.env.SHIPYARD_PHASE47_PREPARATION);
+    const candidate = path.resolve(__dirname, '../../.planning/config.json');
+    const evidence = phase47Audit(preparation, candidate, phase47Sha(phase47Physical(candidate)));
+    console.log('phase47 admission evidence: ' + JSON.stringify(evidence));
+  });
+}
+
+suite('phase47 — delivered Context (Reads) boundaries');
+
+test('all thirteen exact Context headings reach real deliverPlan and deliver canonical CONTEXT content', () => phase47WithPrivate((root) => {
+  const f = phase47Fixture(root);
+  const { deliverPlan } = require(path.join(phase47Scripts, 'plan-delivery.cjs'));
+  const required = ['.planning/PROJECT.md', '.planning/ROADMAP.md', '.planning/STATE.md',
+    `${phase47Phase}/CONTEXT.md`, `${phase47Phase}/47-RESEARCH.md`,
+    '.planning/architecture/ADR-025-phase47-runtime-delivery-correctness.md'];
+  let plans = phase47Snapshot(f.preparation).plans;
+  if (process.env.SHIPYARD_PHASE47_PREPARATION) {
+    plans = phase47Snapshot(JSON.parse(process.env.SHIPYARD_PHASE47_PREPARATION)).plans;
+  } else {
+    plans = new Map([...plans].map(([name, text]) => [name, '## Context (Reads)\n'
+      + required.map((ref) => '- `' + ref + '`').join('\n') + '\n\n' + text]));
+  }
+  for (const ref of required) f.put(path.join(root, 'project', ref), `private ${ref}\n`);
+  const graphDir = path.join(root, 'project/.planning/graph');
+  fs.mkdirSync(graphDir, { recursive: true });
+  for (const [name, text] of plans) {
+    assert.match(text, /^## Context \(Reads\)$/m, name);
+    const rel = `${phase47Phase}/${name}`;
+    f.put(path.join(root, 'project', rel), text);
+    const delivery = deliverPlan({ graphDir, row: { plan: rel }, worktree: path.join(root, 'candidate'),
+      expectedSha256: phase47Sha(text) });
+    assert.strictEqual(delivery.mode, 'delivered');
+    assert.strictEqual(delivery.plan.sha256, phase47Sha(text));
+    for (const ref of required) {
+      const file = delivery.files.find((e) => e.path === ref);
+      assert.ok(file, `${name}: ${ref} was not collected`);
+      assert.strictEqual(file.content, `private ${ref}\n`);
+      assert.strictEqual(file.sha256, phase47Sha(file.content));
+    }
+  }
+}));
+
+test('the shipped per-reference and aggregate budgets and exclusions survive exact Context collection', () => phase47WithPrivate((root) => {
+  const { deliverPlan, MAX_REFERENCE_BYTES, MAX_TOTAL_BYTES } = require(path.join(phase47Scripts, 'plan-delivery.cjs'));
+  const f = phase47Fixture(root);
+  const project = path.join(root, 'project');
+  const graphDir = path.join(project, '.planning/graph');
+  fs.mkdirSync(graphDir);
+  const refs = [`${phase47Phase}/CONTEXT.md`, `${phase47Phase}/BIG.md`,
+    ...Array.from({ length: 5 }, (_, i) => `${phase47Phase}/CHUNK-${i}.md`),
+    '.planning/graph/tickets.json', `${phase47Phase}/MISSING.md`, `${phase47Phase}/SYMLINK.md`,
+    `${phase47Phase}/DIRECTORY`, '.planning/phases/<phase-dir>/CONTEXT.md'];
+  f.put(path.join(project, refs[0]), 'canonical context fixture\n');
+  f.put(path.join(project, refs[1]), 'x'.repeat(MAX_REFERENCE_BYTES + 1));
+  const chunk = Math.floor(MAX_TOTAL_BYTES / 4);
+  assert.ok(chunk <= MAX_REFERENCE_BYTES);
+  for (const ref of refs.slice(2, 7)) f.put(path.join(project, ref), 'a'.repeat(chunk));
+  fs.symlinkSync(path.join(project, refs[0]), path.join(project, `${phase47Phase}/SYMLINK.md`));
+  fs.mkdirSync(path.join(project, `${phase47Phase}/DIRECTORY`));
+  const plan = `${phase47Phase}/47-10-PLAN.md`;
+  f.put(path.join(project, plan), '## Context (Reads)\n' + refs.map((ref) => '- `' + ref + '`').join('\n')
+    + '\n## Scope\n- `.planning/UNDECLARED.md`\n');
+  const delivery = deliverPlan({ graphDir, row: { plan }, worktree: path.join(root, 'candidate') });
+  const reasons = Object.fromEntries(delivery.not_delivered.map((e) => [e.path, e.reason]));
+  assert.strictEqual(delivery.files[0].path, refs[0]);
+  assert.strictEqual(reasons[refs[1]], 'too-large');
+  assert.strictEqual(reasons[`${phase47Phase}/CHUNK-3.md`], 'budget-exceeded');
+  assert.strictEqual(reasons[`${phase47Phase}/CHUNK-4.md`], 'budget-exceeded');
+  assert.strictEqual(reasons['.planning/graph/tickets.json'], 'machine-state');
+  assert.strictEqual(reasons[`${phase47Phase}/MISSING.md`], 'missing');
+  assert.strictEqual(reasons[`${phase47Phase}/SYMLINK.md`], 'not-regular');
+  assert.strictEqual(reasons[`${phase47Phase}/DIRECTORY`], 'directory');
+  assert.strictEqual(reasons['.planning/phases/<phase-dir>/CONTEXT.md'], 'placeholder');
+  assert.ok(!delivery.files.some((e) => e.path === '.planning/UNDECLARED.md'));
+  assert.ok(delivery.files.reduce((sum, file) => sum + Buffer.byteLength(file.content), 0) <= MAX_TOTAL_BYTES);
+}));
+
+function phase47CoordinatorSource(preparation) {
+  const { manifest } = phase47Snapshot(preparation);
+  return phase47Physical(path.join(path.dirname(manifest.original_result_path), 'original-preparation-program.cjs'),
+    '92d4b451fbad2ed5abcb7c750fc21cbbea6f00421f9692cbc96f848c6274bbfd', { readonly: true }).toString('utf8');
+}
+
+function phase47ActivationFixture(root, source, variant = 'approved') {
+  const f = phase47Fixture(root);
+  const project = path.join(root, 'project');
+  const configPath = f.preparation.canonical_config_path;
+  const oldBytes = fs.readFileSync(configPath);
+  fs.chmodSync(configPath, 0o640);
+  const host = path.dirname(path.dirname(f.manifest.root));
+  fs.chmodSync(host, 0o700);
+  const operation = path.join(host, 'activation-fixture');
+  fs.mkdirSync(operation, { mode: 0o700 });
+  const common = path.join(root, 'common');
+  fs.mkdirSync(common);
+  const graphPath = path.join(project, '.planning/graph/tickets.json');
+  const statePath = path.join(project, '.planning/graph/delivery-state.json');
+  const graph = { tickets: { 'T-47-10': { plan: `${phase47Phase}/47-10-PLAN.md`, repo: 'private/repo' } } };
+  const head = 'a'.repeat(40), merge = 'b'.repeat(40);
+  const state = { 'T-47-10': { status: 'merged', pr: 10, merge_sha: merge, repo: 'private/repo' } };
+  if (variant === 'wrong-delivery-row') state['T-47-10'].pr = 11;
+  if (variant === 'wrong-repository') state['T-47-10'].repo = 'foreign/repo';
+  const graphFile = f.put(graphPath, graph), stateFile = f.put(statePath, state);
+  const lease = f.put(path.join(host, 'writer-lease.json'), { status: 'released' });
+  const planEntry = f.manifest.entries.find((e) => e.path.endsWith('47-10-PLAN.md'));
+  const text = fs.readFileSync(planEntry.physical_path, 'utf8') + '\n## Exact admission table\n\n'
+    + phase47Rows.map(({ plan, tuple }) => `| 47-${String(plan).padStart(2, '0')} | \`${JSON.stringify(tuple.argv)}\` | ${tuple.profile} | 600 | private fixture |`).join('\n') + '\n## End\n';
+  const updated = f.rewrite(planEntry.physical_path, text);
+  planEntry.sha256 = updated.sha256; planEntry.bytes = updated.bytes;
+  const ixEntry = f.index.entries.find((e) => e.path === planEntry.original_path);
+  Object.assign(ixEntry, { bytes: updated.bytes, content_bytes: updated.bytes, sha256: updated.sha256, digest: updated.sha256 });
+  f.manifest.original_index_sha256 = f.rewrite(f.manifest.original_index_copy, f.index).sha256;
+  f.preparation.snapshot_manifest_sha256 = f.rewrite(f.preparation.snapshot_manifest_path, f.manifest).sha256;
+  const nextBytes = Buffer.from(JSON.stringify(f.candidate) + '\n');
+  const input = { host_root: host, operation_root: operation, worktree: project, graph_path: graphPath,
+    graph_sha256: graphFile.sha256, writer_lease_paths: [lease.path], writer_lease_digests: { [lease.path]: lease.sha256 },
+    snapshot_manifest_path: f.preparation.snapshot_manifest_path, snapshot_manifest_sha256: f.preparation.snapshot_manifest_sha256,
+    captured_config_sha256: phase47Sha(oldBytes), github_repository: 'private/repo', pr_number: 10,
+    reviewed_head: head, merge_commit: merge, reviewed_config_sha256: phase47Sha(nextBytes),
+    delivery_state_path: statePath, delivery_state_sha256: stateFile.sha256 };
+  if (variant === 'different-approved-pr') input.pr_number = 11;
+  const review = { state: 'APPROVED', user: { login: 'private-owner', type: 'User' }, commit_id: head,
+    submitted_at: '2026-10-03T21:00:00Z' };
+  const reviews = [review];
+  if (variant === 'stale-review') review.commit_id = 'c'.repeat(40);
+  if (variant === 'nonhuman-review') review.user.type = 'Bot';
+  if (variant === 'author-review') review.user.login = 'private-author';
+  if (variant === 'configured-bot-review') review.user.login = 'coderabbitai';
+  if (variant === 'dismissed-review') reviews.push({ ...review, state: 'DISMISSED', submitted_at: '2026-10-03T22:00:00Z' });
+  if (variant === 'unreadable-review') reviews.length = 0;
+  const view = { number: 10, state: 'MERGED', headRefOid: head, baseRefName: 'epic/phase47',
+    author: { login: 'private-author' }, reviewDecision: '', mergeCommit: { oid: merge },
+    commits: [{ oid: head, committedDate: '2026-10-03T20:00:00Z' }], files: [{ path: '.planning/config.json' }, { path: 'tests/unit/pipeline-config.test.cjs' }] };
+  if (variant === 'wrong-head') view.headRefOid = 'c'.repeat(40);
+  if (variant === 'wrong-merge') view.mergeCommit.oid = 'c'.repeat(40);
+  let renamed = false, injected = false;
+  const events = [];
+  const privateFs = { ...fs,
+    openSync(file, flags, ...args) {
+      if (typeof flags === 'string' && /[wax+]/.test(flags)) assert.ok(file.startsWith(root + path.sep), `foreign write: ${file}`);
+      if (typeof flags === 'number' && (flags & (fs.constants.O_WRONLY | fs.constants.O_RDWR))) assert.ok(file.startsWith(root + path.sep));
+      const fd = fs.openSync(file, flags, ...args); events.push(['open', file, flags]); return fd;
+    },
+    fsyncSync(fd) {
+      events.push(['fsync', fd]);
+      if (renamed && !injected && ['after-rename', 'foreign-byte-race', 'foreign-inode-race'].includes(variant)) {
+        injected = true;
+        if (variant !== 'after-rename') {
+          const replacement = configPath + '.foreign';
+          const s = fs.statSync(configPath);
+          fs.writeFileSync(replacement, variant === 'foreign-inode-race' ? nextBytes : Buffer.from('foreign bytes'), { mode: s.mode & 0o777 });
+          fs.utimesSync(replacement, s.atime, s.mtime);
+          fs.renameSync(replacement, configPath);
+        }
+        throw new Error('private post-rename failure');
+      }
+      return fs.fsyncSync(fd);
+    },
+    renameSync(from, to) {
+      assert.ok(from.startsWith(root + path.sep) && to.startsWith(root + path.sep), 'private rename only');
+      if (to === configPath && from.includes('.phase47-config-')) {
+        assert.ok(fs.existsSync(path.join(operation, 'config-original.json')), 'backup must precede rename');
+        assert.ok(fs.existsSync(path.join(operation, 'activation-intent.json')), 'intent must precede rename');
+        assert.ok(!fs.existsSync(path.join(operation, 'activation.json')), 'completion cannot precede rename');
+        renamed = true;
+      }
+      events.push(['rename', from, to]); return fs.renameSync(from, to);
+    },
+  };
+  const privateCp = { execFileSync(program, args) {
+    if (program === 'gh') {
+      if (args[0] === 'repo') return Buffer.from(JSON.stringify({ owner: { login: 'private' }, name: 'repo' }));
+      if (args[0] === 'pr') {
+        if (variant === 'delivery-state-race') f.rewrite(statePath, { ...state, foreign: true });
+        return Buffer.from(JSON.stringify(view));
+      }
+      if (args[0] === 'api') return Buffer.from(JSON.stringify([reviews]));
+    }
+    if (program === 'git') {
+      const command = args.slice(2);
+      if (command[0] === 'rev-parse' && command[1] === '--show-toplevel') return Buffer.from(project + '\n');
+      if (command[0] === 'rev-parse' && command.includes('--git-common-dir')) return Buffer.from(common + '\n');
+      if (command[0] === 'merge-base') {
+        assert.strictEqual(command[2], merge);
+        if (variant === 'missing-merge-ancestry') throw new Error('merge absent from assigned epic');
+        return Buffer.from('');
+      }
+      if (command[0] === 'show') return command[1].startsWith(merge) && variant === 'different-merge-config'
+        ? Buffer.from('{}\n') : nextBytes;
+    }
+    throw new Error(`unapproved private process request: ${program} ${args.join(' ')}`);
+  } };
+  function run(op, values = input) {
+    const inputFile = f.put(path.join(operation, `${op}-input-${events.length}.json`), values);
+    const localRequire = (name) => {
+      if (name === 'node:fs') return privateFs;
+      if (name === 'node:child_process') return privateCp;
+      if (name.startsWith(path.join(project, 'plugins/delivery-pipeline/scripts') + path.sep)) {
+        const moduleName = path.basename(name);
+        const actual = require(path.join(phase47Scripts, moduleName));
+        if (moduleName === 'pipeline-config.cjs' && variant === 'invalid-loader') {
+          return { ...actual, loadConfig(dir) {
+            fs.chmodSync(path.join(dir, '.planning/config.json'), 0o600);
+            fs.writeFileSync(path.join(dir, '.planning/config.json'), '{invalid');
+            return actual.loadConfig(dir);
+          } };
+        }
+        return actual;
+      }
+      assert.ok(['node:path', 'node:crypto', 'node:assert/strict'].includes(name), `unexpected require: ${name}`);
+      return require(name);
+    };
+    require('node:vm').runInNewContext(source, { require: localRequire, Buffer, structuredClone,
+      process: { argv: ['private-coordinator', op, inputFile.path, inputFile.sha256], _eval: source,
+        getuid: () => process.getuid(), pid: process.pid, stderr: { write() {} } },
+      console: { log(value) { events.push(['completion', JSON.parse(value)]); }, error() {} } }, { timeout: 10000 });
+  }
+  return { run, f, input, configPath, oldBytes, nextBytes, operation, events };
+}
+
+if (process.env.SHIPYARD_PHASE47_PREPARATION) {
+  const preparation = JSON.parse(process.env.SHIPYARD_PHASE47_PREPARATION);
+  suite('phase47 — exact host-owned activation and recovery private fixtures');
+  test('genuine current-head human approval with empty merged aggregate and squash merge completes activation last', () => phase47WithPrivate((root) => {
+    const f = phase47ActivationFixture(root, phase47CoordinatorSource(preparation));
+    f.run('activate');
+    assert.deepStrictEqual(fs.readFileSync(f.configPath), f.nextBytes);
+    const activation = JSON.parse(fs.readFileSync(path.join(f.operation, 'activation.json')));
+    assert.strictEqual(activation.status, 'completed');
+    assert.strictEqual(activation.reviewed_head, f.input.reviewed_head);
+    assert.strictEqual(activation.merge_commit, f.input.merge_commit);
+    assert.ok(activation.activated_cas);
+    assert.strictEqual(activation.activated_cas.ino, fs.statSync(f.configPath).ino);
+    assert.strictEqual(f.events.at(-1)[0], 'completion');
+  }));
+  for (const variant of ['different-approved-pr', 'wrong-delivery-row', 'wrong-repository', 'stale-review',
+    'nonhuman-review', 'author-review', 'configured-bot-review', 'dismissed-review', 'unreadable-review',
+    'wrong-head', 'wrong-merge', 'missing-merge-ancestry', 'different-merge-config', 'delivery-state-race', 'invalid-loader']) {
+    test(`${variant} refuses activation before governing-policy mutation`, () => phase47WithPrivate((root) => {
+      const f = phase47ActivationFixture(root, phase47CoordinatorSource(preparation), variant);
+      assert.throws(() => f.run('activate'));
+      assert.deepStrictEqual(fs.readFileSync(f.configPath), f.oldBytes);
+      assert.ok(!fs.existsSync(path.join(f.operation, 'activation.json')));
+      assert.ok(!f.events.some((e) => e[0] === 'rename' && e[2] === f.configPath));
+    }));
+  }
+  test('a post-rename failure restores only the owned policy and original metadata', () => phase47WithPrivate((root) => {
+    const f = phase47ActivationFixture(root, phase47CoordinatorSource(preparation), 'after-rename');
+    const original = fs.statSync(f.configPath);
+    assert.throws(() => f.run('activate'), /post-rename/);
+    assert.deepStrictEqual(fs.readFileSync(f.configPath), f.oldBytes);
+    const restored = fs.statSync(f.configPath);
+    for (const key of ['mode', 'uid', 'gid']) assert.strictEqual(restored[key], original[key]);
+    assert.ok(Math.abs(restored.mtimeMs - original.mtimeMs) < 1);
+    assert.ok(fs.existsSync(path.join(f.operation, 'activation-intent.json')));
+    assert.ok(!fs.existsSync(path.join(f.operation, 'activation.json')));
+  }));
+  for (const variant of ['foreign-byte-race', 'foreign-inode-race']) {
+    test(`${variant} refuses rollback without overwriting the foreign file`, () => phase47WithPrivate((root) => {
+      const f = phase47ActivationFixture(root, phase47CoordinatorSource(preparation), variant);
+      assert.throws(() => f.run('activate'), /owned recovery refused/);
+      assert.deepStrictEqual(fs.readFileSync(f.configPath), variant === 'foreign-inode-race' ? f.nextBytes : Buffer.from('foreign bytes'));
+      assert.ok(!fs.existsSync(path.join(f.operation, 'activation.json')));
+    }));
+  }
+  for (const variant of ['intent-only', 'intent-foreign-inode', 'invalid-backup']) {
+    test(`${variant} recovery retains pinned intent and original activated CAS`, () => phase47WithPrivate((root) => {
+      const f = phase47ActivationFixture(root, phase47CoordinatorSource(preparation));
+      f.run('activate');
+      fs.unlinkSync(path.join(f.operation, 'activation.json'));
+      const intentPath = path.join(f.operation, 'activation-intent.json');
+      const intent = JSON.parse(fs.readFileSync(intentPath));
+      if (variant === 'intent-foreign-inode') {
+        const replacement = f.configPath + '.foreign';
+        const s = fs.statSync(f.configPath);
+        fs.writeFileSync(replacement, f.nextBytes, { mode: s.mode & 0o777 });
+        fs.utimesSync(replacement, s.atime, s.mtime);
+        fs.renameSync(replacement, f.configPath);
+      }
+      if (variant === 'invalid-backup') f.f.rewrite(intent.backup_path, 'foreign backup');
+      const recovery = { ...f.input, activation_intent_path: intentPath, activation_intent_sha256: phase47Sha(fs.readFileSync(intentPath)) };
+      if (variant === 'intent-only') {
+        f.run('restore', recovery);
+        assert.deepStrictEqual(fs.readFileSync(f.configPath), f.oldBytes);
+        assert.strictEqual(JSON.parse(fs.readFileSync(path.join(f.operation, 'restore.json'))).status, 'completed');
+      } else {
+        assert.throws(() => f.run('restore', recovery));
+        assert.deepStrictEqual(fs.readFileSync(f.configPath), f.nextBytes);
+        assert.ok(!fs.existsSync(path.join(f.operation, 'restore.json')));
+      }
+    }));
+  }
+}
 
 done();
