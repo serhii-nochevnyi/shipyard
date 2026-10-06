@@ -1,8 +1,6 @@
 #!/usr/bin/env node
 'use strict';
 
-// This executable checks evidence; exit zero with HOLD means the evidence check
-// succeeded, never that installed acceptance, signing or rollout succeeded.
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -192,9 +190,6 @@ function inspectCandidate(candidate, root = ROOT) {
 function originalReceipt(reference, scripts = SCRIPTS) {
   assert(typeof reference.dispatch_id === 'string' && reference.dispatch_id, 'original dispatch required');
   assert.equal(physical(reference.store, true).mode & 0o077, 0, 'original receipt store must be private');
-  // Read the frozen durable-boundary envelope exactly as conveyor-coverage does.
-  // createDurableRecorder always attempts a temporary key write, even when its
-  // original key exists; inspection must never call that creating API.
   const key = path.join(path.dirname(reference.store), '.shipyard-dispatch-authority-'
     + sha(reference.store) + '.key');
   assert(fs.existsSync(key), 'original receipt authority is missing');
@@ -279,8 +274,6 @@ function validateHostProof(proof, obligation, identity, row) {
     assert.equal(result.tree_before, assignment.candidate_tree);
     assert.equal(result.tree_after, assignment.candidate_tree);
   }
-  // Signed host assertions describe the property checked. Executable assertions
-  // and original artifacts stay outside the model-authored applicability ledger.
   assert.equal(assignment.property, obligation);
   assert.equal(assignment.outcome, 'verified');
   assert(Array.isArray(assignment.artifacts) && assignment.artifacts.length > 0, 'original artifacts required');
@@ -399,8 +392,6 @@ function validateLedger(ledger) {
     }
     verified.push({ id: row.id, ...validateHostProof(row.proof, row.id, ledger.installation, row) });
   }
-  // Every claim needs live pinned bytes as well as original host proof. A ledger
-  // cannot obtain acceptance merely by relabeling its missing observations.
   let inspected = null;
   if (ledger.candidate) {
     inspected = inspectCandidate(ledger.candidate.candidate_path);
@@ -466,8 +457,6 @@ function inspectInstalled(identity, selected) {
   for (const ref of [identity.capability, identity.agent_manifest])
     assert(ref.path.startsWith(identity.runtime_root + path.sep), 'foreign installed capability/agent manifest');
   assert.equal(identity.host_root, path.join(identity.runtime_root, 'shipyard'), 'unsupported installed bundle root');
-  // The cache is not the executor. The supported installer places the actual
-  // native bundle here; validate every executable the bundle will consume.
   for (const output of selected.binding.outputs) {
     const prefix = 'host/plugins/delivery-pipeline/scripts/';
     if (!output.path.startsWith(prefix)) continue;
@@ -552,8 +541,6 @@ function collectNative(ledger, options, report) {
     'supported installer/runtime environment missing');
   assert(!Object.hasOwn(approval.environment, 'TMPDIR'), 'unsuitable/ambiguous inherited TMPDIR must be omitted');
   assert(!Object.hasOwn(approval.environment, 'NODE_OPTIONS'), 'native module replacement is not supported');
-  // Do not inherit a caller-controlled graph, executable override or tuning.
-  // The host selects provider/model/effort using the original policy.
   const env = { ...approval.environment };
   assert(env.PATH && env.SHIPYARD_GRAPH_DIR === approval.graph_dir, 'canonical graph/environment binding required');
   assert.equal(env.SHIPYARD_CODEX_CAPABILITIES_FILE, ledger.installation.native_capabilities.path,
@@ -564,7 +551,6 @@ function collectNative(ledger, options, report) {
     'ambiguous native executable identity');
   physical(approval.graph_dir, true);
   readOriginal(approval.request);
-  // Re-read identity immediately before crossing the native launch boundary.
   inspectInstalled(ledger.installation, inspectCandidate(options.candidate));
   process.stdout.write(JSON.stringify({ event: 'authorized-native-command', argv: approval.argv,
     environment_sha256: sha(canonical(env)), candidate_sha256: selected.selection.candidate_sha256 }) + '\n');

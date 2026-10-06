@@ -228,9 +228,6 @@ test('existing boundary original receipt authenticates read-only; copied claims 
   assert.throws(() => acceptance.originalReceipt(reference, f.scripts), /tampered/);
 });
 
-// Reuse the already owned deterministic fixtures, with their product imports
-// rebound to the actual package bytes. These are fixture observations, not
-// native release receipts. Only the named boundaries execute.
 function packagedSuite(t, filename, pattern, count) {
   const f = productFixture(t);
   const sourceFile = path.join(__dirname, filename);
@@ -239,8 +236,6 @@ function packagedSuite(t, filename, pattern, count) {
   const projected = path.join(f.temporary, filename);
   source = source.replaceAll("require('./assert-harness.cjs')",
     'require(' + JSON.stringify(path.join(__dirname, 'assert-harness.cjs')) + ')');
-  // The decompose fixture uses sibling raw stream samples. Retain its test
-  // directory while compiling; preload fixtures use their projected file.
   let script = filename === 'codex-decompose-host.test.cjs'
     ? `const Module=require('node:module');const filename=${JSON.stringify(sourceFile)};
       const m=new Module(filename);m.filename=filename;m.paths=Module._nodeModulePaths(${JSON.stringify(__dirname)});
