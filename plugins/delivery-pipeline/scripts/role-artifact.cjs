@@ -515,6 +515,7 @@ function manifestFor(metadata, trusted, envelope, files) {
 }
 
 function writeManifest(fsApi, file, manifest) {
+  const frame = archivePublicationFrames.at(-1);
   const serialized = `${JSON.stringify(manifest)}\n`;
   const desired = Buffer.from(serialized, 'utf8');
   try {
