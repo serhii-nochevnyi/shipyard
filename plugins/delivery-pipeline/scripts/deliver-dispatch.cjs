@@ -1030,9 +1030,10 @@ function incompleteHostReason(runtime, role) {
 function build(argv, options = {}) {
   const args = parseBuildArgs(argv);
   if (args.graphDir) {
-    if (options.graphDir && path.resolve(options.graphDir) !== path.resolve(args.graphDir))
+    const requestedGraphDir = path.resolve(options.cwd || process.cwd(), args.graphDir);
+    if (options.graphDir && path.resolve(options.graphDir) !== requestedGraphDir)
       buildFail('--graph', 'conflicting canonical graph selectors');
-    options = { ...options, graphDir: path.resolve(options.cwd || process.cwd(), args.graphDir) };
+    options = { ...options, graphDir: requestedGraphDir };
   }
   if (args.role === 'research' || args.role === 'decomposition') {
     return buildPlanningRequest(args, options);
