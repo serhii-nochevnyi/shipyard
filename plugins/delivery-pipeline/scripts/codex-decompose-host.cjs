@@ -1367,7 +1367,7 @@ module.exports = Object.freeze({
 });
 
 if (require.main === module) {
-  runCli().catch((error) => {
+  Promise.resolve().then(() => runCli()).catch((error) => {
     process.stderr.write('codex-decompose-host: ' + (error && error.message ? error.message : error) + '\n');
     process.stderr.write(formatHint(error && error.code) + '\n');
     process.exitCode = 1;
