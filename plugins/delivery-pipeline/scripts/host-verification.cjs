@@ -10,6 +10,7 @@ const { scopedTree } = require('./delivery-commit-finalizer.cjs');
 
 const MAX_OUTPUT = 1024 * 1024;
 const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
+const MAX_ASSIGNMENT_BYTES = 16 * 1024;
 
 function sha256(value) {
   return crypto.createHash('sha256').update(value).digest('hex');
@@ -105,11 +106,38 @@ function admit(commands, allowList) {
       .find((item) => Array.isArray(item.argv) && item.argv.length
       && item.argv.every((part, index) => part === argv[index])
       && (item.profile !== 'host' || item.argv.length === argv.length));
-    if (!entry) { notAllowed.push(argv); continue; }
+    if (!entry || !['host', 'sandbox'].includes(entry.profile === undefined ? 'sandbox' : entry.profile)) {
+      notAllowed.push(argv); continue;
+    }
     approved.push(Object.freeze({ argv: [...argv], profile: entry.profile || 'sandbox',
       timeout_ms: (entry.timeout_s || DEFAULT_TIMEOUT_MS / 1000) * 1000 }));
   }
   return Object.freeze({ commands: approved, not_allowed: notAllowed, configured: true });
+}
+
+function assignPlan(planText, allowList) {
+  const commands = planCommands(planText);
+  // Preserve legacy explicit verification specs with no PLAN commands. A PLAN
+  // that names assertions requires current configuration before dispatch.
+  if (!commands.length && !Array.isArray(allowList)) return null;
+  const admitted = admit(commands, allowList);
+  if (!admitted.configured || admitted.not_allowed.length || !admitted.commands.length) {
+    const error = refusal(!admitted.configured ? 'HOLD: verification allow-list is absent'
+      : admitted.not_allowed.length ? 'HOLD: PLAN command has no approved profile or exact host argv'
+        : 'HOLD: PLAN has no verification commands');
+    error.status = 'hold';
+    error.command = admitted.not_allowed[0] || commands[0] || null;
+    error.retryable = false;
+    throw error;
+  }
+  if (Buffer.byteLength(JSON.stringify(admitted.commands), 'utf8') > MAX_ASSIGNMENT_BYTES) {
+    const error = refusal('HOLD: approved command assignment exceeds 16384 bytes');
+    error.status = 'hold';
+    error.retryable = false;
+    throw error;
+  }
+  return Object.freeze(admitted.commands.map((command) => Object.freeze({ ...command,
+    argv: Object.freeze([...command.argv]) })));
 }
 
 function executable(program, worktree) {
@@ -230,7 +258,9 @@ function readEvidence(file, digest) {
   const keyPath = path.join(path.dirname(file), 'hmac.key');
   if (!fs.existsSync(keyPath)) return null;
   const keyStat = fs.lstatSync(keyPath);
-  const recordStat = fs.lstatSync(file);
+  let recordStat;
+  try { recordStat = fs.lstatSync(file); }
+  catch (error) { if (error.code === 'ENOENT') return null; throw error; }
   if (!keyStat.isFile() || keyStat.isSymbolicLink() || (keyStat.mode & 0o077)
       || !recordStat.isFile() || recordStat.isSymbolicLink() || (recordStat.mode & 0o077)
       || recordStat.size > MAX_OUTPUT) return null;
@@ -271,5 +301,5 @@ function verifyPlan({ planText, allowList, worktree, stateRoot, ticket, planSha2
   return sealed;
 }
 
-module.exports = Object.freeze({ planCommands, admit, run, evidence, readEvidence,
+module.exports = Object.freeze({ planCommands, admit, assignPlan, run, evidence, readEvidence,
   collectVerificationEvidence: verifyPlan, verifyPlan });

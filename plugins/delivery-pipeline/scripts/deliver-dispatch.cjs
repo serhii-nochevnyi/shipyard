@@ -449,7 +449,7 @@ async function waitOnce(dispatchId, options = {}) {
     // observation identity survives repeat waits; no per-call sequence resets.
     const record = readRecord(dispatchStateDir(options), dispatchId);
     const graphDir = record && record.graph_dir;
-    if (record && graphDir) {
+    if (record && graphDir && options.waitScope) {
       try {
         const copied = readJsonBounded(path.join(dispatchStateDir(options), dispatchId, 'args.json'));
         const scope = copied && copied.scope || options.waitScope || {};
