@@ -21,7 +21,16 @@ const AGENT = { file: 'controlled-checker.toml', sha256: 'a'.repeat(64),
   instructions: 'Read mandatory sources before the exact task.', instructions_sha256: 'b'.repeat(64) };
 const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
 const jsonl = (records) => records.map((record) => JSON.stringify(record)).join('\n') + '\n';
-const response = (payload) => ({ type: 'response_item', payload });
+const CAPTURED_PARENT = 'tests/fixtures/captured/codex-agent-stream-parent.jsonl';
+const CAPTURED_CHILD = 'tests/fixtures/captured/codex-agent-stream-child.jsonl';
+const captured = [CAPTURED_PARENT, CAPTURED_CHILD].map(file => fs.readFileSync(
+  path.resolve(__dirname, '../..', file), 'utf8').trim().split('\n').map(line => JSON.parse(line)));
+function capturedRecord(kind, payload, child = false) {
+  const template = captured[child ? 1 : 0].find(record => record.type === kind);
+  assert.ok(template, 'registered native fixture lacks ' + kind);
+  return { ...structuredClone(template), payload };
+}
+const response = payload => capturedRecord('response_item', payload);
 const quote = (value) => "'" + value.replace(/'/g, "'\\''") + "'";
 
 const NESTED_BYTES = 16000;
@@ -55,8 +64,8 @@ async function fixture(run) {
       'Read the original task bytes: Київ.\n' + 'synthetic-task-0123456789\n'.repeat(24000));
     const input = taskRelayInput(ROLE, MODEL, EFFORT, task);
     const parentRaw = jsonl([
-      { type: 'session_meta', payload: { id: PARENT, model_provider: 'openai' } },
-      { type: 'turn_context', payload: { model: MODEL, effort: EFFORT } },
+      capturedRecord('session_meta', { id: PARENT, model_provider: 'openai' }),
+      capturedRecord('turn_context', { model: MODEL, effort: EFFORT }),
       response({ type: 'function_call', name: 'spawn_agent', call_id: 'spawn', arguments: JSON.stringify({
         agent_type: ROLE, model: MODEL, reasoning_effort: EFFORT, fork_turns: 'none', task_name: 'gsd_task',
         message: input.slice(input.indexOf('TASK_FILE='), input.indexOf('Wait for that child')),
@@ -106,9 +115,9 @@ async function execute(call, nestedBudget, outerBudget) {
 function childRecords(call, output, stdout) {
   const spawned = { parent_thread_id: PARENT, agent_role: ROLE, agent_path: TASK_PATH };
   return [
-    { type: 'session_meta', payload: { id: CHILD, model_provider: 'openai', ...spawned,
-      source: { subagent: { thread_spawn: { ...spawned } } } } },
-    { type: 'turn_context', payload: { model: MODEL, effort: EFFORT } },
+    capturedRecord('session_meta', { id: CHILD, model_provider: 'openai', ...spawned,
+      source: { subagent: { thread_spawn: { ...spawned } } } }, true),
+    capturedRecord('turn_context', { model: MODEL, effort: EFFORT }),
     response({ type: 'message', role: 'developer', content: [{ type: 'input_text', text: AGENT.instructions }] }),
     response({ type: 'agent_message', author: '/root', recipient: TASK_PATH }),
     response({ type: 'custom_tool_call', name: 'exec', call_id: 'first', input: call }),
