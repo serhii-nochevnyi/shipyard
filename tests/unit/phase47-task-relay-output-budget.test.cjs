@@ -24,8 +24,6 @@ const jsonl = (records) => records.map((record) => JSON.stringify(record)).join(
 const response = (payload) => ({ type: 'response_item', payload });
 const quote = (value) => "'" + value.replace(/'/g, "'\\''") + "'";
 
-// Deterministic byte caps model bounded prefix output at the two independent
-// boundaries (roughly 4K and 12K text-token budgets). No live native launch.
 const NESTED_BYTES = 16000;
 const OUTER_BYTES = 48000;
 function boundedItems(items, budget) {
@@ -73,8 +71,6 @@ async function fixture(run) {
 }
 
 function inlineCall(task, sources, suffix = false, nestedBudget = NESTED_BYTES) {
-  // Only inline code reaches the child shell: source/task reads and byte hashing
-  // use readFileSync; there are no filesystem writes or shell temporary files.
   const code = [
     'const fs = require("node:fs"), crypto = require("node:crypto");',
     'const order = [];',
@@ -114,8 +110,6 @@ function childRecords(call, output, stdout) {
       source: { subagent: { thread_spawn: { ...spawned } } } } },
     { type: 'turn_context', payload: { model: MODEL, effort: EFFORT } },
     response({ type: 'message', role: 'developer', content: [{ type: 'input_text', text: AGENT.instructions }] }),
-    // The original native delivery proves authority without a plaintext shortcut
-    // that could bypass the first-call output requirement under test.
     response({ type: 'agent_message', author: '/root', recipient: TASK_PATH }),
     response({ type: 'custom_tool_call', name: 'exec', call_id: 'first', input: call }),
     { type: 'event_msg', payload: { type: 'item_completed', item: { type: 'CommandExecution', stdout } } },
@@ -212,7 +206,6 @@ test('bounded output retains strict hash, path, parent, role and unchanged priva
     fs.chmodSync(task.path, 0o644);
     refuses(original, task, relay, 'private regular task file');
     fs.chmodSync(task.path, 0o600);
-    // Same byte length, different digest: verification must check both.
     bytes[0] ^= 1;
     fs.writeFileSync(task.path, bytes);
     refuses(original, task, relay, 'unchanged task file');
@@ -227,7 +220,6 @@ test('denied heredoc first call and later computed hash stay unaccepted; a fresh
       + ", 'rb').read()).hexdigest())\nPY";
     const deniedCall = 'const r = await tools.exec_command(' + JSON.stringify({ cmd: deniedCommand }) + '); text(r.output);';
     const denial = "zsh: can't create temp file for here document: operation not permitted";
-    // Controlled protected-boundary denial, never a replay or edit of historical evidence.
     const denied = childRecords(deniedCall, [{ type: 'input_text', text: denial }], '');
     const deniedRaw = jsonl(denied);
     refuses(denied, task, relay, 'TASK_SHA256 in child tool output');
