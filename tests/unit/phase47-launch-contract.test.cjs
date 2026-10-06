@@ -236,39 +236,33 @@ test('failed controller recovery is inspected before a coherent fresh builder at
   lease.release({ token: successor.token, epoch: successor.epoch });
 });
 
-test('unchanged direct accepted ADR and linked INV decomposition cross real planning CLI/run admission', async (t) => {
+test('unchanged direct accepted ADR and linked INV decomposition cross real request/run admission', async (t) => {
   const f = fixture(t);
   for (const input of ['ADR-TEST', 'INV-TEST']) {
     const output = await f.buildBytes('decomposition', input);
     const request = JSON.parse(output);
     const file = f.requestFile(output);
     const bytes = fs.readFileSync(file);
-    await planning.runCli(['--args-file', file], { write() {} }, {
-      runHost: async (argv) => {
-        const parsed = decompose.readRequestFile(argv[1]);
-        assert.equal(parsed.launch.gsd_role, 'gsd-planner');
-        const role = decompose.ROLES[parsed.launch.gsd_role].role;
-        const run = f.runScope(parsed.scope, role);
-        f.controller.begin(run);
-        assert.equal(contract.normalizeRunContract(run).dispatch.role, 'decomposition');
-        assert.throws(() => f.runScope({ ...parsed.scope, phase: 48 }, role), { code: 'INVALID_INPUT' });
-        assert.throws(() => f.runScope({ ...parsed.scope, repository: 'foreign/repository' }, role),
-          { code: 'SCOPE_MISMATCH' });
-        f.controller.fail(run.run_id, { reason: 'controlled admission complete; record admission belongs to T-47-06' });
-      },
-    });
+    const { scope, ...value } = request;
+    const delegated = planning.delegateRequest(planning.requestValue(value, { worktreePath: f.root }));
+    const parsed = decompose.readRequestFile(f.requestFile({ scope, ...delegated }));
+    assert.equal(parsed.launch.gsd_role, 'gsd-planner');
+    const role = decompose.ROLES[parsed.launch.gsd_role].role;
+    const run = f.runScope(parsed.scope, role);
+    f.controller.begin(run);
+    assert.equal(contract.normalizeRunContract(run).dispatch.role, 'decomposition');
+    assert.throws(() => f.runScope({ ...parsed.scope, phase: 48 }, role), { code: 'INVALID_INPUT' });
+    assert.throws(() => f.runScope({ ...parsed.scope, repository: 'foreign/repository' }, role),
+      { code: 'SCOPE_MISMATCH' });
+    f.controller.fail(run.run_id, { reason: 'controlled request admission complete' });
     assert.deepEqual(fs.readFileSync(file), bytes);
     assert.notEqual(f.build('decomposition', input).scope.run_id, request.scope.run_id);
   }
   const wrongRole = f.build('decomposition', 'ADR-TEST');
-  wrongRole.gsd_role = 'gsd-phase-researcher';
-  await assert.rejects(() => planning.runCli(['--args-file', f.requestFile(wrongRole)], { write() {} }, {
-    runHost: async (argv) => {
-      const parsed = decompose.readRequestFile(argv[1]);
-      f.runScope(parsed.scope, decompose.ROLES[parsed.launch.gsd_role].role);
-      assert.fail('ADR research cannot enter the controller');
-    },
-  }), { code: 'INVALID_INPUT' });
+  const { scope, ...value } = wrongRole;
+  const delegated = planning.delegateRequest(planning.requestValue(value, { worktreePath: f.root }));
+  const parsed = decompose.readRequestFile(f.requestFile({ scope, ...delegated, gsd_role: 'gsd-phase-researcher' }));
+  assert.throws(() => f.runScope(parsed.scope, decompose.ROLES[parsed.launch.gsd_role].role), { code: 'INVALID_INPUT' });
 });
 
 test('direct ADR refuses research, malformed or unaccepted sources and changed packet bytes', async (t) => {

@@ -11,7 +11,7 @@ const { buildContextPacket } = require('../../plugins/delivery-pipeline/scripts/
 const planningHost = require('../../plugins/delivery-pipeline/scripts/codex-planning-context-host.cjs');
 
 function git(root, ...args) {
-  return execFileSync('git', ['-C', root, '-c', 'user.name=test', '-c', 'user.email=test@example.invalid', ...args], {
+  return execFileSync('git', ['-C', root, '-c', 'commit.gpgsign=false', '-c', 'user.name=test', '-c', 'user.email=test@example.invalid', ...args], {
     encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
   }).trim();
 }
@@ -79,16 +79,21 @@ test('validates the packet at launch and delegates only the typed prompt to the 
     const file = argsFile(f.root, request);
     let delegated;
     let delegatedFile;
-    const result = await planningHost.runCli(['--args-file', file], { write() {} }, {
-      runHost: async (argv) => {
-        assert.deepEqual(argv.slice(0, 1), ['--args-file']);
-        delegatedFile = argv[1];
-        delegated = JSON.parse(fs.readFileSync(argv[1], 'utf8'));
-        assert.equal(fs.statSync(argv[1]).mode & 0o777, 0o600);
-        return { receipt: 'owned by codex-decompose-host' };
+    const stateDir = path.join(f.root, 'dispatch');
+    await assert.rejects(() => planningHost.runCli(['--args-file', file], { write() {} }, {
+      stateDir, waitOptions: { pidLive: () => false },
+      runHost: async (argv, stdout, options) => {
+        assert.deepEqual(argv.slice(0, 2), ['--detach', '--args-file']);
+        delegatedFile = argv[2];
+        delegated = JSON.parse(fs.readFileSync(argv[2], 'utf8'));
+        assert.equal(fs.statSync(argv[2]).mode & 0o777, 0o600);
+        const host = require('../../plugins/delivery-pipeline/scripts/codex-decompose-host.cjs');
+        const ack = await host.runCli(argv, stdout, { ...options,
+          spawn: () => ({ pid: 999999, on() {}, unref() {} }) });
+        fs.writeFileSync(path.join(stateDir, ack.dispatch_id, 'result.jsonl'), JSON.stringify({ status: 'blocked' }));
+        return ack;
       },
-    });
-    assert.equal(result.receipt, 'owned by codex-decompose-host');
+    }), (error) => error.code === 'PLANNING_REFUSED');
     assert.equal(delegated.scope.run_id, 'run-43-15');
     assert.equal(delegated.scope.repository, 'shipyard/test');
     assert.equal(delegated.gsd_role, 'gsd-planner');
@@ -124,5 +129,75 @@ test('refuses a moved source revision before invoking the host', async () => {
       runHost: async () => { launched = true; },
     }), (error) => error.code === 'STALE_CONTEXT_PACKET' && /source revision differs/.test(error.message));
     assert.equal(launched, false);
+  } finally { f.clean(); }
+});
+
+for (const [name, result, code] of [
+  ['blocked', { status: 'blocked', summary: 'primary refusal' }, 'PLANNING_REFUSED'],
+  ['verification_failed', { status: 'verification_failed' }, 'PLANNING_REFUSED'],
+  ['missing receipt', { status: 'completed' }, 'UNVERIFIED_RECEIPT'],
+  ['foreign receipt', { status: 'completed', receipt: { dispatch_id: 'foreign', compliance: 'verified' } }, 'UNVERIFIED_RECEIPT'],
+  ['forged receipt', { status: 'completed', receipt: { compliance: 'verified', gsd_role: 'gsd-planner', policy_hash: policy.POLICY_HASH } }, 'UNVERIFIED_RECEIPT'],
+]) test(`readable terminal ${name} refuses and repeat consumption does not launch`, async () => {
+  const f = fixture();
+  try {
+    const request = { ...requestFor(f.root), dispatch_id: 'original-dispatch' };
+    const file = argsFile(f.root, request);
+    const stateDir = path.join(f.root, 'dispatch');
+    let launches = 0;
+    const options = { stateDir, testStateRoot: path.join(os.tmpdir(), path.basename(f.root) + '-receipts'),
+      waitOptions: { pidLive: () => false, recordWakeEvent() {} },
+      runHost: async (argv, stdout) => {
+        launches++;
+        const host = require('../../plugins/delivery-pipeline/scripts/codex-decompose-host.cjs');
+        await host.runCli(argv, stdout, { stateDir,
+          spawn: () => ({ pid: 999999, on() {}, unref() {} }) });
+        const terminal = { ...result, ...(result.receipt ? { receipt: {
+          dispatch_id: request.dispatch_id, ...result.receipt } } : {}) };
+        fs.writeFileSync(path.join(stateDir, request.dispatch_id, 'result.jsonl'), JSON.stringify(terminal));
+      } };
+    for (let attempt = 0; attempt < 2; attempt++) {
+      let output = '';
+      await assert.rejects(() => planningHost.runCli(['--args-file', file], { write(chunk) { output += chunk; } }, options),
+        (error) => error.code === code && error.dispatch_id === request.dispatch_id && error.wait.result.status === result.status);
+      assert.equal(output, '');
+    }
+    assert.equal(launches, 1);
+  } finally { f.clean(); }
+});
+
+test('timeout and lost recovery retain the original dispatch and copied private request', async () => {
+  const f = fixture();
+  try {
+    const request = { ...requestFor(f.root), dispatch_id: 'original-timeout' };
+    const file = argsFile(f.root, request);
+    const stateDir = path.join(f.root, 'dispatch');
+    let launches = 0;
+    let tempFile;
+    const options = { stateDir, runHost: async (argv, stdout) => {
+      launches++;
+      tempFile = argv[2];
+      await require('../../plugins/delivery-pipeline/scripts/codex-decompose-host.cjs').runCli(argv, stdout,
+        { stateDir, spawn: () => ({ pid: 999999, on() {}, unref() {} }) });
+    } };
+    for (let attempt = 0; attempt < 2; attempt++) {
+      let tick = 0;
+      await assert.rejects(() => planningHost.runCli(['--args-file', file], { write() {} }, { ...options,
+        waitOptions: { pidLive: () => true, timeoutMs: 10, intervalMs: 10,
+          clock: () => tick, sleep: async (ms) => { tick += ms; } } }),
+      (error) => error.code === 'DISPATCH_TIMEOUT' && error.dispatch_id === request.dispatch_id);
+      assert.equal(fs.existsSync(tempFile), false);
+      assert.equal(fs.existsSync(path.join(stateDir, request.dispatch_id, 'args.json')), true);
+      const copied = fs.readFileSync(path.join(stateDir, request.dispatch_id, 'args.json'));
+      fs.writeFileSync(file, JSON.stringify({ ...request, prompt: 'concurrent changed input' }));
+      await assert.rejects(() => planningHost.runCli(['--args-file', file], { write() {} }, options),
+        (error) => error.code === 'INVALID_DISPATCH');
+      assert.deepEqual(fs.readFileSync(path.join(stateDir, request.dispatch_id, 'args.json')), copied);
+      fs.writeFileSync(file, JSON.stringify(request));
+    }
+    await assert.rejects(() => planningHost.runCli(['--args-file', file], { write() {} }, { ...options,
+      waitOptions: { pidLive: () => false, recordWakeEvent() {} } }),
+    (error) => error.code === 'DISPATCH_UNAVAILABLE' && error.dispatch_id === request.dispatch_id);
+    assert.equal(launches, 1);
   } finally { f.clean(); }
 });

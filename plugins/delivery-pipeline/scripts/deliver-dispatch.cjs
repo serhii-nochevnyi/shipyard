@@ -13,7 +13,6 @@ const { assertCanonicalGraph } = require('./plan-delivery.cjs');
 const claudeHost = require('./claude-delivery-host.cjs');
 const claudeDecomposeHost = require('./claude-decompose-host.cjs');
 const codexHost = require('./codex-delivery-host.cjs');
-const codexPlanningContextHost = require('./codex-planning-context-host.cjs');
 const claudeRoleHost = require('./claude-role-host.cjs');
 const sentinelPreflight = require('./sentinel-preflight.cjs');
 const prHygiene = require('./pr-hygiene.cjs');
@@ -21,6 +20,7 @@ const { buildContextPacket } = require('./context-packet.cjs');
 const modelPolicy = require('./model-policy.cjs');
 const pipelineConfig = require('./pipeline-config.cjs');
 const runWaker = require('./run-waker.cjs');
+const overhead = require('./orchestration-overhead.cjs');
 
 const ROLE_BUCKETS = Object.freeze({
   executor: Object.freeze(['execute']),
@@ -381,7 +381,11 @@ function readRecord(stateDir, dispatchId) {
 
 function readResult(resultFile) {
   let raw = '';
-  try { raw = fs.readFileSync(resultFile, 'utf8'); } catch { return null; }
+  try {
+    const stat = fs.lstatSync(resultFile);
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 8 * 1024 * 1024) return null;
+    raw = fs.readFileSync(resultFile, 'utf8');
+  } catch { return null; }
   const lines = raw.split('\n').filter((line) => line.trim());
   if (!lines.length) return null;
   try { return JSON.parse(lines[lines.length - 1]); } catch { return null; }
@@ -437,9 +441,28 @@ async function waitOnce(dispatchId, options = {}) {
       }
       return Object.freeze({ ...current, exit_code: EXIT_CODES[current.status] });
     }
-    const remaining = deadline - clock();
+    const observedAt = clock();
+    const remaining = deadline - observedAt;
     if (remaining <= 0) return Object.freeze({ ...current, exit_code: 3 });
     await sleep(Math.min(intervalMs, remaining));
+    // Only a real blocking running observation owns a parent poll. Absolute
+    // observation identity survives repeat waits; no per-call sequence resets.
+    const record = readRecord(dispatchStateDir(options), dispatchId);
+    const graphDir = record && record.graph_dir;
+    if (record && graphDir && options.waitScope) {
+      try {
+        const copied = readJsonBounded(path.join(dispatchStateDir(options), dispatchId, 'args.json'));
+        const scope = copied && copied.scope || options.waitScope || {};
+        overhead.recordWaitPoll(options.overheadRecorder || overhead.createRecorder(graphDir), {
+          observation_id: `deliver-dispatch:${dispatchId}:${record.started_at}:wait:${observedAt}`,
+          run_id: scope.run_id || dispatchId, dispatch_id: dispatchId,
+          role: record.role, runtime: record.runtime,
+          source: 'deliver-dispatch.waitOnce', pass_id: record.ticket,
+          counts: { polls: 1, model_turns: null, tool_calls: null, retries: null },
+          bytes: 0, estimated_tokens: null, provider_tokens: null,
+        });
+      } catch { /* best-effort telemetry must preserve the original wait outcome */ }
+    }
   }
 }
 
@@ -992,7 +1015,7 @@ function buildPlanningRequest(args, options) {
     contextPacket: packet,
     contextPacketRequired: true,
   };
-  validateBuildRequest(args.role, ({ scope: _scope, ...value }) => codexPlanningContextHost.requestValue(value, {
+  validateBuildRequest(args.role, ({ scope: _scope, ...value }) => require('./codex-planning-context-host.cjs').requestValue(value, {
     worktreePath: context.projectRoot,
   }), request);
   return request;
