@@ -804,7 +804,23 @@ function adrPlanningInputs(projectRoot, adrId) {
   if (matches.length !== 1) {
     buildFail(adrId, `expected one architecture input for ${adrId} in ${architectureDir}, found ${matches.length}`);
   }
-  return { sourceRefs: [planningSource(projectRoot, path.join('.planning', 'architecture', matches[0]))] };
+  const source = planningSource(projectRoot, path.join('.planning', 'architecture', matches[0]));
+  const content = fs.readFileSync(source.path, 'utf8');
+  const frontmatter = content.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/);
+  const statuses = frontmatter ? frontmatter[1].split(/\r?\n/).filter((line) => /^status\s*:/.test(line)) : [];
+  const accepted = statuses.length === 1 && /^status:\s*(?:accepted|"accepted"|'accepted')\s*$/i.test(statuses[0]);
+  // Older Nygard ADRs use a Status line rather than frontmatter.
+  const legacyStatuses = content.split(/^##\s/m)[0].split(/\r?\n/)
+    .filter((line) => /^[-*]?\s*\*{0,2}Status\b/i.test(line));
+  const legacyAccepted = !frontmatter && legacyStatuses.length === 1
+    && /^[-*]?\s*\*{0,2}Status:?\*{0,2}:?\s*accepted\s*$/i.test(legacyStatuses[0]);
+  if (!accepted && !legacyAccepted) buildFail(adrId, 'direct decomposition requires an accepted ADR');
+  try {
+    const ingest = require('./adr-ingest.cjs');
+    ingest.validateAdr(ingest.normalizeAdr(content), source.path);
+  }
+  catch (error) { buildFail(adrId, `direct decomposition requires ADR decisions: ${error.message}`); }
+  return { sourceRefs: [source] };
 }
 
 function latestGraphPhase(graph) {
@@ -859,7 +875,7 @@ function buildPlanningRequest(args, options) {
       const request = {
         schema: claudeHost.REQUEST_SCHEMA,
         scope: {
-          run_id: `deliver-build-research-${args.ticket}`,
+          run_id: `deliver-build-research-${crypto.randomUUID()}`,
           ticket: args.ticket,
           phase,
           worktree: context.projectRoot,
@@ -897,6 +913,14 @@ function buildPlanningRequest(args, options) {
       },
     });
     const request = {
+      scope: {
+        run_id: `deliver-build-research-${crypto.randomUUID()}`,
+        ticket: args.ticket,
+        phase: latestGraphPhase(context.graph),
+        worktree: context.projectRoot,
+        runtime: 'codex',
+        provider: 'openai',
+      },
       role: 'research',
       signals: {},
       context: {
@@ -915,7 +939,7 @@ function buildPlanningRequest(args, options) {
         },
       },
     };
-    validateBuildRequest(args.role, (value) => codexHost.validateArgs(value), request);
+    validateBuildRequest(args.role, ({ scope: _scope, ...value }) => codexHost.validateArgs(value), request);
     return request;
   }
 
@@ -951,6 +975,15 @@ function buildPlanningRequest(args, options) {
     },
   });
   const request = {
+    scope: {
+      run_id: `deliver-build-decomposition-${crypto.randomUUID()}`,
+      ticket: subject,
+      phase: args.phase,
+      worktree: context.projectRoot,
+      repository,
+      runtime: 'codex',
+      provider: 'openai',
+    },
     gsd_role: 'gsd-planner',
     prompt,
     signals: {},
@@ -959,7 +992,7 @@ function buildPlanningRequest(args, options) {
     contextPacket: packet,
     contextPacketRequired: true,
   };
-  validateBuildRequest(args.role, (value) => codexPlanningContextHost.requestValue(value, {
+  validateBuildRequest(args.role, ({ scope: _scope, ...value }) => codexPlanningContextHost.requestValue(value, {
     worktreePath: context.projectRoot,
   }), request);
   return request;

@@ -227,7 +227,14 @@ function normalizeTicketIdentity(input, { role, phase } = {}) {
   const ticketId = /^T-[A-Z0-9][A-Z0-9._-]*$/i.test(value);
   const subject = value.match(/^phase=(\d+)-[A-Z0-9][A-Z0-9._-]*;repository=[^;\s]+;tickets=[a-f0-9]{64}$/i);
   const phaseSubject = role === 'integrator' && subject && Number(subject[1]) === Number(phase);
-  if (!ticketId && !phaseSubject) {
+  const investigation = /^INV-[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$/.test(value);
+  // The planning CLI verifies the accepted packet before constructing this
+  // phase-bound subject. It grants no executor or integrator identity.
+  const planningInput = value.match(/^phase=(\d+);input=((?:INV|ADR)-[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*);repository=[^;\s]+$/);
+  const planningSubject = role === 'decomposition' && planningInput
+    && Number(planningInput[1]) === Number(phase);
+  const investigationSubject = investigation && ['research', 'decomposition'].includes(role);
+  if (!ticketId && !phaseSubject && !investigationSubject && !planningSubject) {
     refuse('INVALID_INPUT', `ticket ${value} must use the T-... identifier form`, { ticket: value });
   }
   return deepFreeze({ schema: ID_SCHEMAS.ticket, version: VERSION, ticket: value });
@@ -420,6 +427,12 @@ function normalizeRunContract(input, { requireRunId = true } = {}) {
   if (Object.hasOwn(nested, 'provider')) normalizeProvider(runtime.runtime, nested.provider);
   const dispatch = normalizeDispatchIdentity({ ...nested, runtime: runtime.runtime, provider: runtime.provider }, { recorded: input.schema !== undefined });
   const ticket = normalizeTicketIdentity(input.ticket, { role: dispatch.role, phase: phase.phase });
+  if (dispatch.role === 'decomposition' && ticket.ticket.startsWith('phase=')) {
+    const subjectRepository = ticket.ticket.slice(ticket.ticket.indexOf(';repository=') + ';repository='.length);
+    if (subjectRepository !== repository.repository_id) {
+      refuse('SCOPE_MISMATCH', 'planning subject and repository identities disagree');
+    }
+  }
   const worktree = normalizeWorktreeIdentity(input.worktree || repository.worktree);
   if (worktree.path !== repository.worktree) refuse('SCOPE_MISMATCH', 'repository and worktree identities disagree');
   const state_revision = normalizeRevisionIdentity(input.state_revision === undefined ? 0 : input.state_revision);
