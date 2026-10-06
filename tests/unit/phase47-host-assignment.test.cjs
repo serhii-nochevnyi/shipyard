@@ -9,8 +9,6 @@ const path = require('node:path');
 const { EventEmitter } = require('node:events');
 const childProcess = require('node:child_process');
 
-// This boundary fixture never starts GPG. Only the existing preflight key lookup
-// is controlled; real git, pinned PLAN parsing and native launch remain in use.
 const execFileSync = childProcess.execFileSync;
 const fingerprint = 'A'.repeat(40);
 childProcess.execFileSync = (program, argv, options) => {
