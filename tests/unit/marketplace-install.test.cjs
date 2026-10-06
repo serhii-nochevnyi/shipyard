@@ -86,12 +86,25 @@ fs.writeFileSync(file,JSON.stringify(s));
     assert.match(identity.digest, /^[a-f0-9]{64}$/);
     assert.match(manifest.version, /\+codex\.[a-f0-9]{16}$/);
   }
-  assertCurrentPackage(path.join(root, 'plugins/shipyard'));
+  // Ticket and epic branches publish their package at integration time.
+  const branch = spawnSync('git', ['branch', '--show-current'], { cwd: root, encoding: 'utf8' });
+  assert.equal(branch.status, 0, 'must resolve the checkout branch');
+  const baseRef = (process.env.COMMENT_POLICY_BASE ?? branch.stdout.trim()).replace(/^origin\//, '');
+  function assertPackageForBase(dir, ref) {
+    if (packageFreshnessRequired(ref)) assertCurrentPackage(dir);
+  }
+  assertCurrentPackage(out);
+  assertPackageForBase(path.join(root, 'plugins/shipyard'), baseRef);
   const staleMirror = path.join(tmp, 'stale-package');
   fs.cpSync(out, staleMirror, { recursive: true });
   const stalePolicy = path.join(staleMirror, 'host/plugins/delivery-pipeline/scripts/model-policy-internal.cjs');
   fs.writeFileSync(stalePolicy, fs.readFileSync(stalePolicy, 'utf8').replace('adr-014.v7', 'adr-014.v6'));
-  assert.throws(() => assertCurrentPackage(staleMirror), /Marketplace package is stale/);
+  for (const ref of ['', 'main']) {
+    assert.throws(() => assertPackageForBase(staleMirror, ref), /Marketplace package is stale/);
+  }
+  for (const ref of ['epic/47-complete-deferred-decomposition-wait-attribution', 'ticket/T-47-15']) {
+    assert.doesNotThrow(() => assertPackageForBase(staleMirror, ref));
+  }
   assert.equal(first.skills.length,6);
   assert(fs.existsSync(path.join(out,'host/scripts/ensure-gsd-plugin.cjs')));
   assert(fs.existsSync(path.join(out,'host/plugins/delivery-pipeline/scripts/model-policy.cjs')));
