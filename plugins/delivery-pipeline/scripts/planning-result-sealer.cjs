@@ -11,8 +11,6 @@ const DECOMPOSITION_PLAN_MAX_BYTES = 1024 * 1024;
 const DECOMPOSITION_MAX_PLANS = 128;
 const LINE_PATTERN = /^((?:INV-[A-Za-z0-9-]+)):(system-state|alternatives|constraints|risks)$/;
 const RESEARCH_LINE_IDS = Object.freeze(['system-state', 'alternatives', 'constraints', 'risks']);
-// Authority is process-local object identity. Neither the token nor launch JSON
-// exposes the prepared source snapshot, and recovery cannot recreate it.
 const containmentBaselines = new WeakMap();
 
 function refuse(code, message) {
@@ -380,7 +378,6 @@ function containmentSource(root, relative) {
 
 function containmentSnapshot(root) {
   const head = containmentGit(root, ['rev-parse', '--verify', 'HEAD^{commit}']).trim();
-  // Hash index object IDs/modes, never a text diff of potentially large binaries.
   const index = crypto.createHash('sha256')
     .update(containmentGit(root, ['ls-files', '--stage', '-v', '-z'])).digest('hex');
   const entries = entriesFromStatus(containmentGit(root,

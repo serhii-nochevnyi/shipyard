@@ -38,7 +38,6 @@ const gen = require(path.join(__dirname, '..', '..', 'scripts', 'gen-codex-shipy
 
 // SHIPYARD_GRAPH_DIR is the other explicit channel for "which graph"; a value
 // inherited from the runner would decide these cases instead of the flag.
-// Cover direct execFileSync/spawn calls as well as the run helper below.
 process.env.SHIPYARD_GRAPH_DIR = '';
 const run = (args, cwd, env = {}) => spawnSync('node', [DISPATCH, ...args], {
   cwd, encoding: 'utf8', env: { ...process.env, SHIPYARD_GRAPH_DIR: '', ...env },

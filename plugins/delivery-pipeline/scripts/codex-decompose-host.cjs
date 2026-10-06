@@ -926,8 +926,6 @@ function detachCli(argv, stdout, options) {
   if (dispatchId === '.' || dispatchId === '..' || /[\\/]/.test(dispatchId) || path.isAbsolute(dispatchId)) {
     fail('INVALID_INPUT', 'dispatch_id must be a path-safe identifier for detached mode');
   }
-  // deliver-dispatch also loads this host through planning-context. Resolve the
-  // fixed sibling export after public module initialization has completed.
   const stateRoot = path.resolve(require('./deliver-dispatch.cjs').dispatchStateDir(options));
   const directory = path.resolve(stateRoot, dispatchId);
   const relative = path.relative(stateRoot, directory);

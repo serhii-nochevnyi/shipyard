@@ -813,7 +813,6 @@ for (const mutation of ['none', 'modify', 'remove', 'add', 'stage', 'commit', 'm
       const manifest = path.join(f.root, '.planning', 'input-manifest.json');
       fs.appendFileSync(input, '// prepared input\n');
       fs.writeFileSync(manifest, '{"generation":1}\n');
-      // A completed refresh precedes baseline capture and is an admissible input.
       fs.writeFileSync(manifest, '{"generation":2}\n');
       const request = path.join(f.root, 'cli-request.json');
       const dispatchId = 'fresh-dirty-' + mutation;
@@ -1589,7 +1588,6 @@ for (const role of ['gsd-phase-researcher', 'gsd-planner', 'gsd-plan-checker']) 
         assert.equal(siblingRecord.receipt.compliance, 'verified');
       }
       setup.setLeasePid(2147483647);
-      // A caller's JSON allowlist and a serialized token cannot certify recovery.
       const callerOptions = role === 'gsd-planner' ? {} : {
         containmentBaseline: JSON.parse(JSON.stringify(setup.containmentBaseline)),
         dirtyAllowlist: ['source.cjs', '.planning/input-manifest.json'],
