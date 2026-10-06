@@ -16,10 +16,9 @@ const { newDispatchId, createDispatchBoundary, createDurableRecorder } = require
 const { createRunScope } = require('./run-scope.cjs');
 const { createRunController, DEFAULT_LEASE_TTL_MS } = require('./run-controller.cjs');
 const { formatHint } = require('./refusal-hints.cjs');
-const { sealDecomposition, assertContained } = require('./planning-result-sealer.cjs');
+const { sealDecomposition, assertContained, captureContainmentBaseline } = require('./planning-result-sealer.cjs');
 const { createPlanningWriterLease, sharedPlanningWriterRoot, legacyPlanningWriterRoots,
   assertNoLegacyPlanningWriter, captureSealManifest, assertSealManifest } = require('./planning-writer-lease.cjs');
-const { dispatchStateDir } = require('./deliver-dispatch.cjs');
 const orchestrationOverhead = require('./orchestration-overhead.cjs');
 
 const SCHEMA = 'shipyard.codex-decompose-host.v1';
@@ -160,7 +159,8 @@ function assertNoForeignEdit(leaseCtx, scope, directory, declaredAbsolutePaths) 
 
 function sealResearchArtifact(scope, root, output, leaseCtx) {
   const artifact = researchArtifact(scope.worktree, scope.phase);
-  assertContained({ worktree: scope.worktree, allowed: [path.relative(scope.worktree, artifact)] });
+  assertContained({ worktree: scope.worktree, allowed: [path.relative(scope.worktree, artifact)],
+    baseline: leaseCtx?.containmentBaseline });
   let stat;
   try { stat = fs.lstatSync(artifact); }
   catch (_) { fail('MISSING_ARTIFACT', 'phase research artifact is missing: ' + artifact); }
@@ -182,11 +182,14 @@ function sealResearchArtifact(scope, root, output, leaseCtx) {
 
 function sealPlans(scope, root, output, leaseCtx) {
   const directory = phaseDirectory(scope.worktree, scope.phase);
-  assertContained({ worktree: scope.worktree, allowed: [path.relative(scope.worktree, directory)] });
   const names = fs.readdirSync(directory).filter((name) => new RegExp(`^0*${scope.phase}-[0-9]+-PLAN\\.md$`).test(name)).sort();
   if (!names.length) fail('MISSING_ARTIFACT', 'no materialized PLAN.md files were found in ' + directory);
   const plans = [...(fs.existsSync(path.join(directory, 'CONTEXT.md')) ? ['CONTEXT.md'] : []), ...names]
     .map((name) => path.join(directory, name));
+  assertContained({ worktree: scope.worktree,
+    allowed: leaseCtx?.containmentBaseline === undefined ? [path.relative(scope.worktree, directory)]
+      : plans.map((file) => path.relative(scope.worktree, file)),
+    baseline: leaseCtx?.containmentBaseline });
   assertNoForeignEdit(leaseCtx, scope, directory, plans);
   return sealDecomposition({
     root: path.join(root, 'decomposition-index'),
@@ -347,16 +350,19 @@ function declaredArtifactPaths(message, scope, gsdRole, code = 'RECOVERY_EVIDENC
   return declared;
 }
 
-function artifactDigests(scope, writerLease, snapshot, declared, code) {
+function artifactDigests(scope, writerLease, snapshot, declared, code, containmentBaseline) {
   const changed = writerLease.changedSince(snapshot).changed;
   if (changed.length !== declared.length || changed.some((relPath, index) => relPath !== declared[index])) {
     fail(code, 'planning tree delta differs from the authenticated child artifact declaration');
   }
   const directory = phaseDirectory(scope.worktree, scope.phase);
   try {
-    assertContained({ worktree: scope.worktree, allowed: [path.relative(scope.worktree, directory)] });
-  } catch (_) {
-    fail(code, 'planning tree changed outside the current phase directory');
+    assertContained({ worktree: scope.worktree,
+      allowed: containmentBaseline === undefined ? [path.relative(scope.worktree, directory)]
+        : declared.map((relative) => path.relative(scope.worktree, path.join(directory, relative))),
+      baseline: containmentBaseline });
+  } catch (error) {
+    fail(code, 'planning tree containment refused: ' + error.message);
   }
   let worktreeReal;
   let directoryReal;
@@ -553,7 +559,8 @@ function createCodexDecomposeHost(options = {}) {
     async run(rawRequest, runOptions = {}) {
       const request = requestValue(rawRequest);
       const recovering = object(runOptions.recovered);
-      const leaseCtx = recovering ? runOptions.lease : options.lease || null;
+      const suppliedLease = recovering ? runOptions.lease : options.lease;
+      const leaseCtx = suppliedLease ? Object.freeze({ ...suppliedLease }) : null;
           const chosen = ROLES[request.gsd_role];
           const agent = installedGsdAgent(request.gsd_role, env);
           let launched = false;
@@ -670,7 +677,7 @@ function createCodexDecomposeHost(options = {}) {
             const declared = declaredArtifactPaths(completed.last_agent_message, scope, request.gsd_role,
               'ARTIFACT_DECLARATION_INVALID');
             const digests = artifactDigests(scope, leaseCtx.writerLease, leaseCtx.snapshot, declared,
-              'ARTIFACT_DECLARATION_INVALID');
+              'ARTIFACT_DECLARATION_INVALID', leaseCtx.containmentBaseline);
             const fullOutputManifest = captureSealManifest({ role: request.gsd_role,
               phaseDir: phaseDirectory(scope.worktree, scope.phase), snapshot: leaseCtx.snapshot,
               declared, changed: Object.keys(digests).sort() });
@@ -813,7 +820,7 @@ function createCodexDecomposeHost(options = {}) {
             assertNoForeignEdit(leaseCtx, scope, directory,
               declared.map((item) => path.join(directory, item)));
             const current = artifactDigests(scope, leaseCtx.writerLease, leaseCtx.snapshot,
-              declared, 'RECOVERY_ARTIFACT_ALTERED');
+              declared, 'RECOVERY_ARTIFACT_ALTERED', leaseCtx.containmentBaseline);
             if (canonicalJson(current) !== canonicalJson(completed.artifact_digests)) {
               fail('RECOVERY_ARTIFACT_ALTERED', 'completed artifact bytes changed before recorder mutation');
             }
@@ -919,7 +926,9 @@ function detachCli(argv, stdout, options) {
   if (dispatchId === '.' || dispatchId === '..' || /[\\/]/.test(dispatchId) || path.isAbsolute(dispatchId)) {
     fail('INVALID_INPUT', 'dispatch_id must be a path-safe identifier for detached mode');
   }
-  const stateRoot = path.resolve(dispatchStateDir(options));
+  // deliver-dispatch also loads this host through planning-context. Resolve the
+  // fixed sibling export after public module initialization has completed.
+  const stateRoot = path.resolve(require('./deliver-dispatch.cjs').dispatchStateDir(options));
   const directory = path.resolve(stateRoot, dispatchId);
   const relative = path.relative(stateRoot, directory);
   if (relative === '' || relative.startsWith('..') || path.isAbsolute(relative)) {
@@ -1261,6 +1270,7 @@ async function runCli(argv = process.argv.slice(2), stdout = process.stdout, opt
   let dispatchId;
   let stopHeartbeat = () => {};
   try {
+  const containmentBaseline = captureContainmentBaseline({ worktree: scope.worktree });
   const leaseSnapshot = writerLease.snapshotTree();
   const request = parsed.launch;
   dispatchId = request.dispatch_id || newDispatchId();
@@ -1314,7 +1324,7 @@ async function runCli(argv = process.argv.slice(2), stdout = process.stdout, opt
       agentDir: options.agentDir,
       agentManifest: options.agentManifest,
       sealRoot: path.join(hostStateDir, 'sealed'),
-      lease: { writerLease, token: leaseHandle.token, epoch: leaseHandle.epoch, snapshot: leaseSnapshot },
+      lease: { writerLease, token: leaseHandle.token, epoch: leaseHandle.epoch, snapshot: leaseSnapshot, containmentBaseline },
       launchDir: options.launchDir || path.join(hostStateDir, 'launches'),
     });
     result = await host.run({ ...request, dispatch_id: dispatchId });

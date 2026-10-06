@@ -12,6 +12,7 @@ const {
   researchLineFailure,
   verifySealedLine,
   assertContained,
+  captureContainmentBaseline,
 } = require('../../plugins/delivery-pipeline/scripts/planning-result-sealer.cjs');
 
 function git(worktree, ...args) {
@@ -375,6 +376,77 @@ test('assertContained treats an allowed directory as containing every path benea
     fs.writeFileSync(path.join(dir, 'CONTEXT.md'), '# context\n');
     fs.writeFileSync(path.join(dir, 'PLAN.md'), '# plan\n');
     assert.doesNotThrow(() => assertContained({ worktree: fixture.worktree, allowed: [dir] }));
+  } finally { fixture.clean(); }
+});
+
+test('a live host baseline admits unchanged dirty inputs and only the declared output', () => {
+  const fixture = containmentFixture();
+  try {
+    fs.writeFileSync(path.join(fixture.worktree, 'tracked.txt'), 'prepared\n');
+    fs.writeFileSync(path.join(fixture.worktree, 'manifest.json'), '{"prepared":true}\n');
+    const baseline = captureContainmentBaseline({ worktree: fixture.worktree });
+    assert.ok(Object.isFrozen(baseline));
+    assert.throws(() => { baseline.worktree = 'forged'; }, TypeError);
+    fs.writeFileSync(path.join(fixture.worktree, 'artifact.md'), 'output\n');
+    assert.doesNotThrow(() => assertContained({ worktree: fixture.worktree, allowed: ['artifact.md'], baseline }));
+    assert.throws(() => assertContained({ worktree: fixture.worktree, allowed: ['artifact.md'] }),
+      (error) => error.code === 'CONTAINMENT_VIOLATION');
+  } finally { fixture.clean(); }
+});
+
+for (const mutation of ['modify', 'remove', 'add', 'mode', 'rename', 'stage-output', 'index-flags', 'HEAD']) {
+  test(`a live baseline refuses subsequent ${mutation} outside its authority`, () => {
+    const fixture = containmentFixture();
+    try {
+      const root = fixture.worktree;
+      fs.writeFileSync(path.join(root, 'tracked.txt'), 'prepared\n');
+      fs.writeFileSync(path.join(root, 'manifest.json'), 'prepared\n');
+      const baseline = captureContainmentBaseline({ worktree: root });
+      fs.writeFileSync(path.join(root, 'artifact.md'), 'output\n');
+      if (mutation === 'modify') fs.writeFileSync(path.join(root, 'tracked.txt'), 'changed\n');
+      if (mutation === 'remove') fs.unlinkSync(path.join(root, 'manifest.json'));
+      if (mutation === 'add') fs.writeFileSync(path.join(root, 'outside.md'), 'changed\n');
+      if (mutation === 'mode') fs.chmodSync(path.join(root, 'tracked.txt'), 0o755);
+      if (mutation === 'rename') fs.renameSync(path.join(root, 'manifest.json'), path.join(root, 'renamed.json'));
+      if (mutation === 'stage-output') git(root, 'add', 'artifact.md');
+      if (mutation === 'index-flags') git(root, 'update-index', '--assume-unchanged', 'tracked.txt');
+      if (mutation === 'HEAD') git(root, '-c', 'commit.gpgsign=false', 'commit', '--allow-empty', '-qm', 'changed HEAD');
+      assert.throws(() => assertContained({ worktree: root, allowed: ['artifact.md'], baseline }),
+        (error) => error.code === 'CONTAINMENT_VIOLATION');
+    } finally { fixture.clean(); }
+  });
+}
+
+test('foreign, copied and JSON-recreated baselines refuse instead of becoming dirty allowlists', () => {
+  const fixture = containmentFixture();
+  const foreign = containmentFixture();
+  try {
+    fs.writeFileSync(path.join(fixture.worktree, 'tracked.txt'), 'prepared\n');
+    const baseline = captureContainmentBaseline({ worktree: fixture.worktree });
+    const impostors = [{ ...baseline }, JSON.parse(JSON.stringify(baseline)),
+      captureContainmentBaseline({ worktree: foreign.worktree }), null];
+    for (const token of impostors) {
+      assert.throws(() => assertContained({ worktree: fixture.worktree, allowed: ['artifact.md'], baseline: token }),
+        (error) => error.code === 'CONTAINMENT_BASELINE_INVALID');
+    }
+  } finally { fixture.clean(); foreign.clean(); }
+});
+
+test('large staged binary input uses index metadata and detects a later staging change', () => {
+  const fixture = containmentFixture();
+  try {
+    const file = path.join(fixture.worktree, 'large.bin');
+    const bytes = crypto.randomBytes(4 * 1024 * 1024);
+    fs.writeFileSync(file, bytes);
+    git(fixture.worktree, 'add', 'large.bin');
+    const baseline = captureContainmentBaseline({ worktree: fixture.worktree });
+    fs.writeFileSync(path.join(fixture.worktree, 'artifact.md'), 'output\n');
+    assert.doesNotThrow(() => assertContained({ worktree: fixture.worktree, allowed: ['artifact.md'], baseline }));
+    bytes[0] ^= 0xff;
+    fs.writeFileSync(file, bytes);
+    git(fixture.worktree, 'add', 'large.bin');
+    assert.throws(() => assertContained({ worktree: fixture.worktree, allowed: ['artifact.md'], baseline }),
+      (error) => error.code === 'CONTAINMENT_VIOLATION' && /index/.test(error.message));
   } finally { fixture.clean(); }
 });
 

@@ -38,6 +38,8 @@ const gen = require(path.join(__dirname, '..', '..', 'scripts', 'gen-codex-shipy
 
 // SHIPYARD_GRAPH_DIR is the other explicit channel for "which graph"; a value
 // inherited from the runner would decide these cases instead of the flag.
+// Cover direct execFileSync/spawn calls as well as the run helper below.
+process.env.SHIPYARD_GRAPH_DIR = '';
 const run = (args, cwd, env = {}) => spawnSync('node', [DISPATCH, ...args], {
   cwd, encoding: 'utf8', env: { ...process.env, SHIPYARD_GRAPH_DIR: '', ...env },
 });
@@ -505,6 +507,42 @@ test('phase judgments retain their authenticated subject in the in-flight record
   assert.equal(inflightStore(graph)['dispatch-phase'].ticket, ticket);
   assert.throws(() => recordInflight({ ...input, role: 'executor' }), /ticket/);
   assert.throws(() => recordInflight({ ...input, ticket: ticket.replace('phase.git', 'phase;git') }), /ticket/);
+});
+
+test('planning in-flight admission agrees with the role-scoped run contract', () => {
+  const { project, graph } = scratch({ 'T-01-01': { ...READY } });
+  const { normalizeTicketIdentity } = require(path.join(SCRIPTS, 'run-contract.cjs'));
+  const subjects = ['INV-014', `phase=47;input=INV-014;repository=${project}`,
+    `phase=47;input=ADR-025;repository=${project}`, `phase=047;input=ADR-025;repository=${project}`];
+  for (const ticket of subjects) {
+    for (const role of ['research', 'decomposition', 'executor', 'arch-review', 'integrator', 'pr-sentinel']) {
+      const admitted = ticket === 'INV-014' ? ['research', 'decomposition'].includes(role)
+        : role === 'decomposition';
+      const dispatchId = 'planning-' + role + '-' + subjects.indexOf(ticket);
+      const input = { graphDir: graph, ticket, role, dispatch_id: dispatchId,
+        pid: process.pid, host: 'codex', refreshBoard: false };
+      if (admitted) {
+        assert.equal(normalizeTicketIdentity(ticket, { role, phase: 47 }).ticket, ticket);
+        recordInflight(input);
+        assert.equal(inflightStore(graph)[dispatchId].ticket, ticket);
+        assert.equal(activeDispatches(project)[ticket].dispatch_id, dispatchId);
+        const provenance = fs.readFileSync(path.join(graph, 'provenance', dispatchId + '.json'), 'utf8');
+        recordInflight(input);
+        assert.equal(fs.readFileSync(path.join(graph, 'provenance', dispatchId + '.json'), 'utf8'), provenance);
+        assert.equal(clearInflight(input), true);
+      } else {
+        assert.throws(() => normalizeTicketIdentity(ticket, { role, phase: 47 }), /ticket/);
+        assert.throws(() => recordInflight(input), /ticket/);
+        assert.equal(inflightStore(graph)[dispatchId], undefined);
+      }
+    }
+  }
+  for (const ticket of ['ADR-025', 'INV-014:risks', 'INV--014', 'phase=47;input=ADR-025;repository=a;b',
+    'phase=47;input=ADR-025;repository=with space', 'phase=0;input=ADR-025;repository=repo',
+    'phase=47;input=ADR-025;repository=repo\u0000', 'phase=47;input=ADR-025;repository=' + 'a'.repeat(512)]) {
+    assert.throws(() => recordInflight({ graphDir: graph, ticket, role: 'decomposition',
+      dispatch_id: 'malformed-planning', pid: process.pid, host: 'codex', refreshBoard: false }), /ticket/);
+  }
 });
 
 test('a dead pid or an expired started_at makes the in-flight record not live', () => {
@@ -2133,6 +2171,9 @@ test('dispatch records run scope and telemetry treatment metadata', () => {
 test('external canonical graph history is not admitted as ticket-local archive bookkeeping', () => {
   const { project, graph } = scratch({ 'T-01-01': { ...READY } });
   const ticketWorktree = fs.mkdtempSync(path.join(os.tmpdir(), 'dispatch-external-ticket-'));
+  const authorityHome = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'dispatch-authority-home-')));
+  const originalHomedir = os.homedir;
+  os.homedir = () => authorityHome;
   const authority = require(path.join(SCRIPTS, 'role-artifact.cjs'));
   try {
     authority.trustedBookkeepingMutation(project, () => {});
@@ -2146,7 +2187,8 @@ test('external canonical graph history is not admitted as ticket-local archive b
     assert.equal(fs.readFileSync(legacy, 'utf8'), 'historical canonical graph record');
     assert.deepStrictEqual(authority.historicalBookkeepingPins(project), []);
   } finally {
-    fs.rmSync(authority.archiveAuthorityDirectory(project), { recursive: true, force: true });
+    os.homedir = originalHomedir;
+    fs.rmSync(authorityHome, { recursive: true, force: true });
     fs.rmSync(ticketWorktree, { recursive: true, force: true });
     fs.rmSync(path.dirname(project), { recursive: true, force: true });
   }

@@ -89,6 +89,7 @@ const {
 const { activeTrackerSnapshotLocked } = require(path.join(__dirname, 'tracker-record.cjs'));
 const runTelemetry = require(path.join(__dirname, 'run-telemetry.cjs'));
 const hostProvenance = require(path.join(__dirname, 'host-provenance.cjs'));
+const { normalizeTicketIdentity, normalizePhaseIdentity } = require('./run-contract.cjs');
 
 // HOW LONG A DISPATCH MAY STAY SILENT — the backstop, not the main rule. It only
 // has to cover the longest stretch of REAL work that legitimately moves no
@@ -1496,6 +1497,13 @@ const INFLIGHT_TOKEN = /^[A-Za-z0-9._:-]{1,200}$/;
 function inflightSubject(ticket, role) {
   if (typeof ticket !== 'string' || ticket.length > 4096) return false;
   if (INFLIGHT_TICKET.test(ticket)) return true;
+  if (['research', 'decomposition'].includes(role)) {
+    try {
+      const phaseInput = /^phase=(\d+);/.exec(ticket);
+      const phase = phaseInput ? normalizePhaseIdentity(phaseInput[1]).phase : undefined;
+      return normalizeTicketIdentity(ticket, { role, phase }).ticket === ticket;
+    } catch { return false; }
+  }
   return ['integrator', 'pr-sentinel'].includes(role)
     && /^phase=[A-Za-z0-9._-]+;repository=\/[^;\x00-\x1f]+;tickets=[a-f0-9]{64}$/.test(ticket);
 }
