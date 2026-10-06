@@ -45,17 +45,28 @@ const previousEnv = {
   GIT_CONFIG_NOSYSTEM: process.env.GIT_CONFIG_NOSYSTEM,
   SHIPYARD_COVERAGE_ROOT: process.env.SHIPYARD_COVERAGE_ROOT,
 };
-process.env.GNUPGHOME = path.join(temporary, 'gnupg');
+const disposableGpgHome = path.join(temporary, 'gnupg');
+process.env.GNUPGHOME = disposableGpgHome;
 process.env.GIT_CONFIG_GLOBAL = path.join(temporary, 'empty-gitconfig');
 process.env.GIT_CONFIG_NOSYSTEM = '1';
 process.env.SHIPYARD_COVERAGE_ROOT = path.join(temporary, 'coverage');
 fs.mkdirSync(process.env.GNUPGHOME, { mode: 0o700 });
 process.on('exit', () => {
-  for (const [key, value] of Object.entries(previousEnv)) {
-    if (value === undefined) delete process.env[key];
-    else process.env[key] = value;
+  try {
+    const stopped = spawnSync('gpgconf', ['--homedir', disposableGpgHome, '--kill', 'gpg-agent'], {
+      env: { ...process.env, GNUPGHOME: disposableGpgHome }, stdio: 'ignore', timeout: 5000,
+    });
+    if (stopped.error || stopped.status !== 0) {
+      process.stderr.write('codex-delivery-host tests: disposable GPG agent cleanup failed\n');
+      process.exitCode = process.exitCode || 1;
+    }
+  } finally {
+    for (const [key, value] of Object.entries(previousEnv)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    fs.rmSync(temporary, { recursive: true, force: true });
   }
-  fs.rmSync(temporary, { recursive: true, force: true });
 });
 execFileSync('gpg', ['--batch', '--pinentry-mode', 'loopback', '--passphrase', '', '--quick-generate-key',
   'Delivery Test <delivery@example.test>', 'ed25519', 'sign', '0'], { stdio: ['ignore', 'pipe', 'pipe'] });
@@ -215,6 +226,10 @@ function application(selection, context) {
     observed_model: selection.model,
     observed_effort: selection.reasoning_effort,
     ...(selection.agent_file ? { agent_file_digest: selection.agent_file_digest } : {}),
+    ...(context.research_line ? {
+      runtime_evidence: { session_id: 'research-fixture-session',
+        native_session_evidence: { session_id: 'research-fixture-session' } },
+    } : {}),
     ...(context.gsd_role ? { gsd_role: context.gsd_role, gsd_launch_mechanism: 'typed-gsd-callback',
       runtime_evidence: { native_session_evidence: { session_id: 'typed-fixture-session' } } } : {}),
   };
@@ -1499,6 +1514,12 @@ function researchLaunchStub(f, { skip = new Set(), rogueWrite } = {}) {
     } else if (!skip.has(context.research_line)) {
       fs.writeFileSync(context.artifactPath, `# ${context.research_line}\n\nfinding for ${context.research_line}\n`);
     }
+    const bytes = Buffer.from(`# ${context.research_line}\n\nfinding for ${context.research_line}\n`);
+    const digest = crypto.createHash('sha256').update(bytes).digest('hex');
+    context.onCompleted({ launch_id: 'codex-delivery-test', session_id: 'research-fixture-session',
+      last_agent_message: JSON.stringify({ id: context.research_line, status: 'completed',
+        summary: 'Research line completed.', artifact: { path: context.artifactPath,
+          bytes: bytes.length, content_bytes: bytes.length, sha256: digest, digest } }) });
     return application(selection, context);
   };
 }
