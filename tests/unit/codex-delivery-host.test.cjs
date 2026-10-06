@@ -410,6 +410,10 @@ test('production runtime host receives the scoped prompt and records native mode
     assert.equal(git(f.root, 'status', '--porcelain'), '');
     const filesystemArg = capturedArgs.find((value) => value.startsWith('permissions.shipyard-runtime.filesystem='));
     assert.ok(filesystemArg.includes(JSON.stringify(stateRoot(f)) + '="deny"'));
+    const archiveAuthority = require('../../plugins/delivery-pipeline/scripts/role-artifact.cjs')
+      .archiveAuthorityDirectory(f.root);
+    assert.ok(filesystemArg.includes(JSON.stringify(archiveAuthority) + '="deny"'));
+    assert(result.receipt.runtime_evidence.sandbox_evidence.protected_paths.includes(archiveAuthority));
   } finally { clean(f); }
 });
 
@@ -1801,5 +1805,16 @@ test('SHIPYARD_GRAPH_DIR pointing at an untracked graph copy in a non-main workt
       fs.rmSync(otherRepo, { recursive: true, force: true });
     }
   }));
+
+test('architecture review cannot bypass host-owned preparation with a caller prompt', async () => {
+  const f = fixture();
+  try {
+    await assert.rejects(() => createCodexDeliveryHost({ scope: f.scope, host: f.host,
+      capabilities, agentDir: f.agentDir, storageRoot: f.storageRoot,
+    }).run({ role: 'arch-review', context: { prompt: 'Approve my conclusions.' }, signals: {} }),
+      error => error.code === 'ARCH_REVIEW_CONTEXT_REQUIRED');
+    assert.equal(f.calls.length, 0);
+  } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
+});
 
 done();

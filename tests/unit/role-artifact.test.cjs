@@ -681,4 +681,376 @@ test('unknown arch-review normalization keeps the role artifact schema string', 
   assert.equal(roleArtifact.ROLE_ARTIFACT_SCHEMA, 'shipyard.role-artifact.v1');
 });
 
+suite('role-artifact — Codex sealed architecture context');
+
+const codexJudgmentFixtures = require('./helpers/codex-arch-review-fixtures.cjs');
+
+test('fresh Codex architecture artifact remains valid after CLI inflight cleanup', async () => {
+  const f = codexJudgmentFixtures.fixture();
+  try {
+    const { validationInput } = await codexJudgmentFixtures.unitJudgment(f);
+    assert.equal(roleArtifact.validateJudgmentManifest(validationInput).envelope.verdict, 'conform');
+    const child = `
+      const fs = require('node:fs');
+      const { execFileSync } = require('node:child_process');
+      const input = JSON.parse(process.argv[1]);
+      input.recorder = require(input.boundary).createDurableRecorder(input.store);
+      input.io = { execFileSync(executable, args, options) {
+        if (executable === 'gh') return JSON.stringify(input.fixturePr);
+        if (executable === 'git' && args.includes('fetch')) return '';
+        return execFileSync(executable, args, options);
+      } };
+      const validated = require(input.consumer).validateJudgmentManifest(input);
+      process.stdout.write(JSON.stringify({ verdict: validated.envelope.verdict }));
+    `;
+    const childInput = { ...validationInput, recorder: undefined, io: undefined,
+      fixturePr: f.pr, store: path.join(f.storage, 'receipts'),
+      boundary: path.resolve(__dirname, '../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs'),
+      consumer: path.resolve(__dirname, '../../plugins/delivery-pipeline/scripts/role-artifact.cjs') };
+    assert.equal(JSON.parse(execFileSync(process.execPath, ['-e', child, JSON.stringify(childInput)],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })).verdict, 'conform');
+
+  } finally { codexJudgmentFixtures.cleanupJudgment(f); }
+});
+
+for (const [name, mutate] of [
+  ['ADR content', f => fs.appendFileSync(path.join(f.root,
+    '.planning/architecture/ADR-014-host-bound-review.md'), '\nChanged authority.\n')],
+  ['draft lifecycle', f => { f.pr.isDraft = !f.pr.isDraft; }],
+  ['live head', f => { f.pr.headRefOid = 'a'.repeat(40); }],
+  ['live base', f => { f.pr.baseRefOid = 'b'.repeat(40); }],
+  ['plan authority', f => fs.appendFileSync(path.join(f.root,
+    '.planning/phases/38-codex-arch-review/38-01-PLAN.md'), '\nChanged acceptance.\n')],
+  ['graph authority', f => fs.appendFileSync(path.join(f.root,
+    '.planning/graph/tickets.json'), ' ')],
+  ['corpus membership', f => fs.writeFileSync(path.join(f.root,
+    '.planning/architecture/ADR-099-new.md'), '# New architecture authority\n')],
+  ['original transcript', (f, sealed) => fs.appendFileSync(sealed.transcript, '\n')],
+  ['complete evidence', (f, sealed) => {
+    const manifest = JSON.parse(fs.readFileSync(sealed.validationInput.artifactPath, 'utf8'));
+    fs.appendFileSync(path.join(f.root, manifest.files.evidence.path), '\nChanged evidence.\n');
+  }],
+]) test('shared consumer refuses post-seal changed ' + name, async () => {
+  const f = codexJudgmentFixtures.fixture();
+  try {
+    const sealed = await codexJudgmentFixtures.unitJudgment(f);
+    mutate(f, sealed);
+    assert.throws(() => roleArtifact.validateJudgmentManifest(sealed.validationInput),
+      /changed|local changes|STALE|digest|transcript|head|base|identity differs/);
+  } finally { codexJudgmentFixtures.cleanupJudgment(f); }
+});
+
+
+test('shared consumer refuses atomic source replacement while its original descriptor is open', async () => {
+  const f = codexJudgmentFixtures.fixture();
+  const originalOpen = fs.openSync;
+  try {
+    const sealed = await codexJudgmentFixtures.unitJudgment(f);
+    const target = path.join(f.root, '.planning/architecture/ADR-014-host-bound-review.md');
+    let replaced = false;
+    fs.openSync = function (filePath, ...args) {
+      const fd = originalOpen.call(fs, filePath, ...args);
+      if (String(filePath) === target && !replaced) {
+        replaced = true;
+        const replacement = path.join(f.storage, 'replacement.md');
+        fs.writeFileSync(replacement, '# Replaced complete architecture authority\n');
+        fs.renameSync(replacement, target);
+      }
+      return fd;
+    };
+    assert.throws(() => roleArtifact.validateJudgmentManifest(sealed.validationInput), /changed/);
+    assert.equal(replaced, true);
+  } finally {
+    fs.openSync = originalOpen;
+    codexJudgmentFixtures.cleanupJudgment(f);
+  }
+});
+
+test('public sealer cannot rebind an original native receipt to another canonical context', async () => {
+  const context = require('../../plugins/delivery-pipeline/scripts/codex-arch-review-context.cjs');
+  const sha = bytes => require('node:crypto').createHash('sha256').update(bytes).digest('hex');
+  const f = codexJudgmentFixtures.fixture();
+  const canonical = f.root + '-canonical';
+  try {
+    const { result, recorder, validationInput, transcript } = await codexJudgmentFixtures.unitJudgment(f);
+    const originalRecordDigest = sha(JSON.stringify(recorder.getVerifiedRecord(result.receipt.dispatch_id)));
+    const originalTranscriptDigest = sha(fs.readFileSync(transcript));
+    const manifest = JSON.parse(fs.readFileSync(result.artifact.ref));
+    const archived = JSON.parse(fs.readFileSync(path.join(f.root, manifest.files.findings.path)));
+    const evidence = fs.readFileSync(path.join(f.root, '.shipyard-arch-review-evidence.md'));
+    execFileSync('git', ['-C', f.root, 'worktree', 'add', canonical, 'main'], { stdio: 'pipe' });
+    fs.appendFileSync(path.join(canonical, '.planning/architecture/ADR-014-host-bound-review.md'),
+      '\nNEW AUTHORITY NEVER REVIEWED BY ORIGINAL TRANSCRIPT.\n');
+    fs.rmSync(path.join(f.root, '.shipyard-role-artifacts'), { recursive: true });
+    fs.rmSync(path.join(f.root, '.planning/graph/dispatches.json'));
+    fs.rmSync(path.join(f.root, '.planning/graph/provenance'), { recursive: true });
+    const graphDir = path.join(canonical, '.planning/graph');
+    assert.throws(() => context.prepare({ worktree: f.root, ticket: result.subject, phase: 38 },
+      { role: 'arch-review', context: {}, signals: {} },
+      { graphDir, getPullRequest: () => f.pr, refreshGit: false }), /historical archive.*missing|ENOENT/);
+    fs.rmSync(roleArtifact.archiveAuthorityDirectory(f.root), { recursive: true, force: true });
+    execFileSync('git', ['-C', canonical, 'add', '.planning/architecture/ADR-014-host-bound-review.md'], { stdio: 'pipe' });
+    execFileSync('git', ['-C', canonical, 'commit', '-m', 'fixture: commit distinct canonical authority'], { stdio: 'pipe' });
+    const fresh = context.prepare({ worktree: f.root, ticket: result.subject, phase: 38 },
+      { role: 'arch-review', context: {}, signals: {} },
+      { graphDir, getPullRequest: () => f.pr, refreshGit: false });
+    const forged = { ...archived, host_context: { ...archived.host_context,
+      graph_dir: graphDir, packet_digest: fresh.prepared.packet.digest,
+      selected_refs: fresh.evidence.selected_refs, bookkeeping: [] } };
+    fs.writeFileSync(path.join(f.root, '.shipyard-arch-review-evidence.md'), evidence);
+    let rejection;
+    try { roleArtifact.sealJudgment({ ...validationInput, result: forged }); }
+    catch (error) { rejection = error; }
+    assert.equal(sha(JSON.stringify(recorder.getVerifiedRecord(result.receipt.dispatch_id))), originalRecordDigest);
+    assert.equal(sha(fs.readFileSync(transcript)), originalTranscriptDigest);
+    assert.notEqual(forged.host_context.packet_digest, archived.host_context.packet_digest);
+    assert(rejection, 'forged context was accepted with original receipt and transcript');
+    assert.match(rejection.message, /original authenticated launch identity/);
+
+  } finally {
+    try { execFileSync('git', ['-C', f.root, 'worktree', 'remove', '--force', canonical], { stdio: 'pipe' }); } catch {}
+    codexJudgmentFixtures.cleanupJudgment(f);
+  }
+});
+
+
+test('shared consumer refuses corpus membership added during recursive inventory', async () => {
+  const f = codexJudgmentFixtures.fixture();
+  const originalRead = fs.readdirSync;
+  try {
+    const sealed = await codexJudgmentFixtures.unitJudgment(f);
+    const directory = path.join(f.root, '.planning/architecture');
+    let added = false;
+    fs.readdirSync = function (filePath, ...args) {
+      const entries = originalRead.call(fs, filePath, ...args);
+      if (String(filePath) === directory && !added) {
+        added = true;
+        fs.writeFileSync(path.join(directory, 'ADR-099-added-during-inventory.md'), '# New authority\n');
+      }
+      return entries;
+    };
+    assert.throws(() => roleArtifact.validateJudgmentManifest(sealed.validationInput), /membership changed/);
+    assert.equal(added, true);
+  } finally {
+    fs.readdirSync = originalRead;
+    codexJudgmentFixtures.cleanupJudgment(f);
+  }
+});
+
+suite('role-artifact — protected archive lifecycle');
+
+test('Claude archives retain authenticated history and stale catalogue locks recover', () => {
+  const value = judgmentFixture('T-47-14-claude-retention');
+  try {
+    const directory = roleArtifact.archiveAuthorityDirectory(value.root, true);
+    fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+    const lock = path.join(directory, 'catalogue.lock');
+    fs.mkdirSync(lock);
+    fs.writeFileSync(path.join(lock, 'owner.json'), JSON.stringify({ pid: 2147483647, token: 'dead-owner', at: '2000-01-01T00:00:00Z' }));
+    const sealed = sealArchReview(value, archReviewResult(value, { verdict: 'conform', blocking_count: 0 }));
+    const pins = roleArtifact.authenticatedArchivePins(value.root);
+    assert.equal(pins.length, 3);
+    assert.ok(pins.some(pin => pin.sha256 === sealed.artifact_digest));
+    assert.equal(fs.existsSync(lock), false);
+    fs.writeFileSync(path.join(value.root, '.shipyard-role-artifacts', 'unknown.log'), 'unauthenticated');
+    assert.throws(() => roleArtifact.assertArchiveInventory(value.root, pins), /membership/);
+  } finally { clean(value); }
+});
+
+test('oversized findings fail before any archive directory or member is published', () => {
+  const value = judgmentFixture('T-47-14-oversized-findings');
+  try {
+    assert.throws(() => sealArchReview(value, archReviewResult(value, {
+      verdict: 'conform', blocking_count: 0, detail: 'x'.repeat(4 * 1024 * 1024 + 1),
+    })), /complete-byte bound/);
+    assert.equal(fs.existsSync(path.join(value.root, '.shipyard-role-artifacts')), false);
+  } finally { clean(value); }
+});
+
+test('failed late validation rolls back only this attempt and preserves retained history', () => {
+  const value = judgmentFixture('T-47-14-publication-rollback');
+  const originalLink = fs.linkSync;
+  try {
+    const first = sealArchReview(value, archReviewResult(value, { verdict: 'conform', blocking_count: 0 }));
+    const existingPins = roleArtifact.authenticatedArchivePins(value.root);
+    const boundary = createDispatchBoundary({ adapters: { claude: { launch: judgmentReceipt } }, recorder: value.recorder });
+    value.dispatch = boundary.dispatch({ runtime: 'claude', role: 'arch-review', signals: {} }, { ticket: value.ticket });
+    const next = archReviewResult(value, { verdict: 'conform', blocking_count: 0 });
+    let changed = false;
+    fs.linkSync = function (source, target) {
+      const result = originalLink.call(fs, source, target);
+      if (String(target).endsWith('.shipyard-role-artifact.json') && !changed) {
+        changed = true;
+        fs.writeFileSync(path.join(value.root, '.shipyard-arch-review-evidence.md'), 'changed during sealing');
+      }
+      return result;
+    };
+    assert.throws(() => sealArchReview(value, next), /evidence|complete/);
+    assert.equal(changed, true);
+    assert.deepEqual(roleArtifact.authenticatedArchivePins(value.root), existingPins);
+    assert.equal(fs.existsSync(first.artifact_ref), true);
+  } finally { fs.linkSync = originalLink; clean(value); }
+});
+
+test('trusted bookkeeping updates remain mutable while changed bytes and unknown provenance are refused', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-bookkeeping-authority-'));
+  const store = path.join(root, '.planning/graph/dispatches.json');
+  try {
+    fs.mkdirSync(path.dirname(store), { recursive: true });
+    roleArtifact.trustedBookkeepingMutation(root, () => fs.writeFileSync(store, '{"one":1}'));
+    roleArtifact.trustedBookkeepingMutation(root, () => fs.writeFileSync(store, '{"two":2}'));
+    const provenance = path.join(root, '.planning/graph/provenance/dispatch-one.json');
+    roleArtifact.trustedBookkeepingMutation(root, () => {
+      fs.mkdirSync(path.dirname(provenance), { recursive: true }); fs.writeFileSync(provenance, '{"dispatch":"one"}');
+    }, ['.planning/graph/provenance/dispatch-one.json']);
+    assert.equal(roleArtifact.historicalBookkeepingPins(root).length, 2);
+    const catalogue = path.join(roleArtifact.archiveAuthorityDirectory(root), 'catalogue.json');
+    const before = fs.readFileSync(catalogue);
+    assert.throws(() => roleArtifact.trustedBookkeepingMutation(root, () => {
+      fs.writeFileSync(store, '{"three":3}');
+      fs.writeFileSync(provenance, '{"dispatch":"bad"}');
+    }, ['.planning/graph/dispatches.json']), /undeclared authenticated bookkeeping.*(changed|differs)/);
+    assert.deepEqual(fs.readFileSync(catalogue), before);
+    fs.writeFileSync(store, '{"two":2}');
+    fs.writeFileSync(provenance, '{"dispatch":"one"}');
+    fs.writeFileSync(store, '{"bad":9}');
+    let invoked = false;
+    assert.throws(() => roleArtifact.trustedBookkeepingMutation(root, () => { invoked = true; }), /bookkeeping.*changed|authenticated.*pin/);
+    assert.equal(invoked, false);
+    fs.writeFileSync(store, '{"two":2}');
+    fs.writeFileSync(path.join(path.dirname(provenance), 'forged.json'), '{}');
+    assert.throws(() => roleArtifact.trustedBookkeepingMutation(root, () => {}), /unknown host provenance/);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('complete multi-archive Claude legacy admission is atomic and rejects unknown physical members', () => {
+  const crypto = require('node:crypto');
+  const stable = value => value === null || typeof value !== 'object' ? JSON.stringify(value)
+    : Array.isArray(value) ? '[' + value.map(stable).join(',') + ']'
+    : '{' + Object.keys(value).sort().map(key => JSON.stringify(key) + ':' + stable(value[key])).join(',') + '}';
+  const sha = content => crypto.createHash('sha256').update(content).digest('hex');
+  const value = judgmentFixture('T-47-14-multi-archive');
+  try {
+    const first = sealArchReview(value, archReviewResult(value, { verdict: 'conform', blocking_count: 0 }));
+    const firstId = value.dispatch.receipt.dispatch_id;
+    const firstReceipt = value.recorder.getVerifiedRecord(firstId).receipt;
+    const boundary = createDispatchBoundary({ adapters: { claude: { launch: judgmentReceipt } }, recorder: value.recorder });
+    value.dispatch = boundary.dispatch({ runtime: 'claude', role: 'arch-review', signals: {} }, { ticket: value.ticket });
+    const second = sealArchReview(value, archReviewResult(value, { verdict: 'conform', blocking_count: 0 }));
+    const pins = roleArtifact.authenticatedArchivePins(value.root);
+    const archives = [[first, firstId, firstReceipt], [second, value.dispatch.receipt.dispatch_id, value.dispatch.receipt]].map(([sealed, dispatchId, receipt]) => ({
+      dispatchId, recorder: value.recorder, expectedManifestDigest: sealed.artifact_digest,
+      expectedReceiptDigest: sha(stable(receipt)), expectedArchivePins: pins.filter(pin => pin.path.startsWith(path.relative(fs.realpathSync(value.root), path.dirname(sealed.artifact_ref)) + '/')),
+    }));
+    assert.deepEqual(archives.map(archive => archive.expectedArchivePins.length), [3, 3]);
+    fs.rmSync(roleArtifact.archiveAuthorityDirectory(value.root), { recursive: true, force: true });
+    const unknown = path.join(value.root, '.shipyard-role-artifacts', 'unknown.log');
+    fs.writeFileSync(unknown, 'unknown');
+    assert.throws(() => roleArtifact.admitHistoricalArchive({ worktreePath: value.root, archives }), /unknown archive membership/);
+    const catalogue = path.join(roleArtifact.archiveAuthorityDirectory(value.root), 'catalogue.json');
+    assert.equal(fs.existsSync(catalogue), false);
+    fs.unlinkSync(unknown);
+    roleArtifact.admitHistoricalArchive({ worktreePath: value.root, archives });
+    assert.deepEqual(roleArtifact.authenticatedArchivePins(value.root), pins);
+  } finally { clean(value); }
+});
+
+test('live catalogue lock timeout never invokes a writer or changes retained bytes', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-live-archive-lock-'));
+  const store = path.join(root, '.planning/graph/dispatches.json');
+  let held;
+  try {
+    fs.mkdirSync(path.dirname(store), { recursive: true });
+    roleArtifact.trustedBookkeepingMutation(root, () => fs.writeFileSync(store, '{"original":1}'));
+    const directory = roleArtifact.archiveAuthorityDirectory(root);
+    const catalogue = path.join(directory, 'catalogue.json');
+    const originalCatalogue = fs.readFileSync(catalogue);
+    const originalStore = fs.readFileSync(store);
+    held = require('../../plugins/delivery-pipeline/scripts/lock.cjs').acquire(directory, 'catalogue', { waitMs: 0 });
+    assert(held);
+    const ownerFile = path.join(held.path, 'owner.json');
+    const originalOwner = fs.readFileSync(ownerFile);
+    const agedOwner = { ...JSON.parse(originalOwner), at: '2000-01-01T00:00:00Z' };
+    fs.writeFileSync(ownerFile, JSON.stringify(agedOwner));
+    let invoked = false;
+    assert.throws(() => roleArtifact.trustedBookkeepingMutation(root, () => {
+      invoked = true; fs.writeFileSync(store, '{"bad":2}');
+    }), error => error?.code === 'ARCHIVE_AUTHORITY_BUSY');
+    assert.equal(invoked, false);
+    assert.deepEqual(JSON.parse(fs.readFileSync(ownerFile)), agedOwner);
+    assert.deepEqual(fs.readFileSync(catalogue), originalCatalogue);
+    assert.deepEqual(fs.readFileSync(store), originalStore);
+    assert.equal(fs.existsSync(path.join(root, '.shipyard-role-artifacts')), false);
+  } finally { held?.release(); fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('lost catalogue owner before publication refuses new archive bytes and preserves successor lock', () => {
+  const value = judgmentFixture('T-47-14-lost-owner-before-publication');
+  const originalOpen = fs.openSync;
+  let directory;
+  try {
+    sealArchReview(value, archReviewResult(value, { verdict: 'conform', blocking_count: 0 }));
+    const pins = roleArtifact.authenticatedArchivePins(value.root);
+    directory = roleArtifact.archiveAuthorityDirectory(value.root);
+    const catalogue = path.join(directory, 'catalogue.json');
+    const ownerFile = path.join(directory, 'catalogue.lock/owner.json');
+    const originalCatalogue = fs.readFileSync(catalogue);
+    const boundary = createDispatchBoundary({ adapters: { claude: { launch: judgmentReceipt } }, recorder: value.recorder });
+    value.dispatch = boundary.dispatch({ runtime: 'claude', role: 'arch-review', signals: {} }, { ticket: value.ticket });
+    let successor;
+    fs.openSync = function (file, ...args) {
+      const fd = originalOpen.call(fs, file, ...args);
+      if (String(file) === catalogue && fs.existsSync(ownerFile) && !successor) {
+        successor = { ...JSON.parse(fs.readFileSync(ownerFile)), token: 'replacement-owner-before-publication' };
+        fs.writeFileSync(ownerFile, JSON.stringify(successor));
+      }
+      return fd;
+    };
+    assert.throws(() => sealArchReview(value, archReviewResult(value, { verdict: 'conform', blocking_count: 0 })), /ownership|owner|lock/i);
+    assert(successor);
+    assert.deepEqual(JSON.parse(fs.readFileSync(ownerFile)), successor);
+    assert.deepEqual(fs.readFileSync(catalogue), originalCatalogue);
+    assert.deepEqual(roleArtifact.authenticatedArchivePins(value.root), pins);
+  } finally {
+    fs.openSync = originalOpen;
+    if (directory) fs.rmSync(directory, { recursive: true, force: true });
+    clean(value);
+  }
+});
+
+test('lost catalogue owner before rollback leaves successor-owned archive files untouched', () => {
+  const value = judgmentFixture('T-47-14-lost-owner-before-rollback');
+  const originalLink = fs.linkSync;
+  let directory;
+  try {
+    sealArchReview(value, archReviewResult(value, { verdict: 'conform', blocking_count: 0 }));
+    directory = roleArtifact.archiveAuthorityDirectory(value.root);
+    const catalogue = path.join(directory, 'catalogue.json');
+    const ownerFile = path.join(directory, 'catalogue.lock/owner.json');
+    const originalCatalogue = fs.readFileSync(catalogue);
+    const boundary = createDispatchBoundary({ adapters: { claude: { launch: judgmentReceipt } }, recorder: value.recorder });
+    value.dispatch = boundary.dispatch({ runtime: 'claude', role: 'arch-review', signals: {} }, { ticket: value.ticket });
+    let successor, published, publishedBytes;
+    fs.linkSync = function (source, target) {
+      const result = originalLink.call(fs, source, target);
+      if (String(target).endsWith('.shipyard-role-artifact.json') && !successor) {
+        published = target; publishedBytes = fs.readFileSync(target);
+        successor = { ...JSON.parse(fs.readFileSync(ownerFile)), token: 'replacement-owner-before-rollback' };
+        fs.writeFileSync(ownerFile, JSON.stringify(successor));
+        fs.writeFileSync(path.join(value.root, '.shipyard-arch-review-evidence.md'), 'changed before validation');
+      }
+      return result;
+    };
+    assert.throws(() => sealArchReview(value, archReviewResult(value, { verdict: 'conform', blocking_count: 0 })), /evidence|ownership|owner|lock/i);
+    assert(successor);
+    assert.deepEqual(fs.readFileSync(published), publishedBytes);
+    assert.deepEqual(JSON.parse(fs.readFileSync(ownerFile)), successor);
+    assert.deepEqual(fs.readFileSync(catalogue), originalCatalogue);
+  } finally {
+    fs.linkSync = originalLink;
+    if (directory) fs.rmSync(directory, { recursive: true, force: true });
+    clean(value);
+  }
+});
+
 done();

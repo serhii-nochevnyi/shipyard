@@ -480,7 +480,7 @@ function parseBuildArgs(argv) {
   const seen = new Set();
   for (let index = 2; index < argv.length; index++) {
     const flag = argv[index];
-    if (!['--runtime', '--pr', '--failure-file', '--review-file', '--line', '--phase'].includes(flag)) {
+    if (!['--runtime', '--pr', '--failure-file', '--review-file', '--line', '--phase', '--graph'].includes(flag)) {
       buildFail(flag, `unsupported build field ${flag}`);
     }
     if (seen.has(flag)) buildFail(flag, `${flag} may be supplied only once`);
@@ -497,7 +497,8 @@ function parseBuildArgs(argv) {
         buildFail(flag, '--pr must be a positive integer');
       }
       args.pr = Number(value);
-    } else if (flag === '--line') args.line = value;
+    } else if (flag === '--graph') args.graphDir = value;
+    else if (flag === '--line') args.line = value;
     else if (flag === '--phase') {
       if (!/^\d+$/.test(value) || !Number.isSafeInteger(Number(value)) || Number(value) < 1) {
         buildFail(flag, '--phase must be a positive integer');
@@ -533,6 +534,8 @@ function parseBuildArgs(argv) {
 }
 
 function resolveBuildGraphDir(worktree, options) {
+  if (!options.graphDir && process.env.SHIPYARD_GRAPH_DIR)
+    options = { ...options, graphDir: process.env.SHIPYARD_GRAPH_DIR };
   if (options.graphDir) {
     if (!fs.existsSync(path.join(options.graphDir, 'tickets.json'))) {
       buildFail('--graph-dir', `canonical ticket graph is unavailable: ${options.graphDir}`);
@@ -1026,6 +1029,13 @@ function incompleteHostReason(runtime, role) {
 
 function build(argv, options = {}) {
   const args = parseBuildArgs(argv);
+  if (args.graphDir) {
+    const effectiveCwd = options.cwd || process.cwd();
+    const requestedGraphDir = path.resolve(effectiveCwd, args.graphDir);
+    if (options.graphDir && path.resolve(effectiveCwd, options.graphDir) !== requestedGraphDir)
+      buildFail('--graph', 'conflicting canonical graph selectors');
+    options = { ...options, graphDir: requestedGraphDir };
+  }
   if (args.role === 'research' || args.role === 'decomposition') {
     return buildPlanningRequest(args, options);
   }
@@ -1034,6 +1044,22 @@ function build(argv, options = {}) {
   const evidence = args.failureFile
     ? evidenceInput(input.worktree, args.failureFile, '--failure-file')
     : args.reviewFile ? evidenceInput(input.worktree, args.reviewFile, '--review-file') : null;
+
+  if (args.role === 'arch-review' && args.runtime === 'codex') {
+    const request = {
+      scope: { run_id: `deliver-arch-${crypto.randomUUID()}`, ticket: args.ticket,
+        phase: phaseNumber(input.row.phase), worktree: input.worktree, runtime: 'codex', provider: 'openai' },
+      graph_dir: input.graphDir,
+      role: 'arch-review', signals: {}, context: {},
+    };
+    if (args.pr !== undefined && args.pr !== input.stateRow.pr)
+      buildFail('--pr', 'PR differs from the canonical ticket state');
+    validateBuildRequest(args.role, value => {
+      const { scope: _scope, graph_dir: _graphDir, ...launch } = value;
+      return codexHost.validateArgs(launch);
+    }, request);
+    return request;
+  }
 
   if (args.role === 'arch-review' && args.runtime === 'claude') {
     const pr = args.pr || (Number.isSafeInteger(input.stateRow.pr) && input.stateRow.pr > 0

@@ -9,6 +9,8 @@ const { createCodexRuntimeHost, normalizeScope } = require('./codex-runtime-host
 const { launchAgent, ROLE_ALIASES } = require('./codex-agent.cjs');
 const { repoRootOf, resolveBaseRef } = require('./graph-dir.cjs');
 const policy = require('./model-policy.cjs');
+const archReviewContext = require('./codex-arch-review-context.cjs');
+const roleArtifact = require('./role-artifact.cjs');
 const { recordedPolicyFor } = require('./runtime-adapters.cjs');
 const { sealResearch, researchLineFailure, verifySealedLine, assertContained } = require('./planning-result-sealer.cjs');
 const { REPAIR: CODEX_ADAPTER_REPAIR } = require('./codex-model-remap.cjs');
@@ -1245,7 +1247,7 @@ function createCodexDeliveryHost(options = {}) {
     spawn: options.spawn,
     ephemeral: options.ephemeral,
     approveForMe: options.approveForMe,
-    additionalProtectedPaths: [stateRoot],
+    additionalProtectedPaths: [stateRoot, roleArtifact.archiveAuthorityDirectory(scope.worktree)],
   });
   const writerSession = options.writerSession;
   if (writerSession && (typeof writerSession.lease?.snapshotTree !== 'function'
@@ -1334,6 +1336,25 @@ function createCodexDeliveryHost(options = {}) {
         fail('UNSUPPORTED_ROLE', 'typed GSD role does not match the delivery role');
       }
       options.controller?.assertOwner(scope.run_id);
+      if (request.role === 'arch-review') {
+        const prepared = options.archReviewContext;
+        if (!archReviewContext.isPreparedContext(prepared)
+            || prepared.prepared.ticket !== scope.ticket
+            || prepared.prepared.phaseNumber !== scope.phase
+            || prepared.prepared.canonical.worktree !== scope.worktree
+            || request.context.prompt !== prepared.prepared.prompt
+            || JSON.stringify(request.signals) !== JSON.stringify(prepared.prepared.signals))
+          fail('ARCH_REVIEW_CONTEXT_REQUIRED', 'architecture context must be host-built and graph-bound');
+        const selection = policy.resolveDispatch({ runtime: 'codex', role: request.role, signals: request.signals });
+        const installedDir = agentDir || path.join(env.CODEX_HOME || path.join(os.homedir(), '.codex'), 'agents');
+        archReviewContext.admitInstalledLaunch(prepared, {
+          agentDir: installedDir, agentFile: selection.agent_file,
+          agentManifest: agentManifest || path.join(installedDir, '.shipyard-manifest.json'),
+          capabilities: runtimeHost.capabilities,
+          capabilitiesFile: options.capabilitiesFile || env.SHIPYARD_CODEX_CAPABILITIES_FILE,
+        });
+        request.context.prompt = archReviewContext.admittedPrompt(prepared);
+      }
       const context = request.context;
       const prompt = context.prompt || context.task_prompt || context.input;
       if (typeof prompt !== 'string' || !prompt.trim()) fail('INVALID_INPUT', 'context requires a task prompt');
@@ -1434,6 +1455,7 @@ function createCodexDeliveryHost(options = {}) {
       });
       let result = await dispatchAgent(request.dispatch_id || newDispatchId(), context);
       options.controller?.assertOwner(scope.run_id);
+      if (request.role === 'arch-review') return archReviewContext.finish(options.archReviewContext, result, runtimeHost.recorder);
       if (!committing) return result;
       let artifact = finalizedArtifact(result, prepared, { ...options, scope, recorder: runtimeHost.recorder });
       if (retryableVerificationFailure(artifact)) {
@@ -1487,8 +1509,11 @@ function readRequestFile(file) {
       fail('INVALID_INPUT', 'unsupported scope field ' + key);
     }
   }
-  const { scope, ...launch } = request;
-  return { scope, launch: requestValue(launch) };
+  const { scope, graph_dir: graphDir, ...launch } = request;
+  if (graphDir !== undefined && (launch.role !== 'arch-review'
+      || typeof graphDir !== 'string' || !path.isAbsolute(graphDir)))
+    fail('INVALID_INPUT', 'graph_dir requires an absolute architecture graph selector');
+  return { scope, launch: requestValue(launch), ...(graphDir ? { graphDir } : {}) };
 }
 
 function parseResumeArguments(argv) {
@@ -1569,11 +1594,24 @@ async function runCli(argv = process.argv.slice(2), stdout = process.stdout, opt
   if (Array.isArray(argv) && argv[0] === '--resume-finalization') return runResumeCli(argv, stdout, options);
   const parsed = readRequestFile(parseCliArguments(argv));
   const scope = canonicalCliScope(parsed.scope);
-  const request = parsed.launch;
+  if (parsed.graphDir) {
+    if (options.graphDir && path.resolve(options.graphDir) !== path.resolve(parsed.graphDir))
+      fail('INVALID_INPUT', 'conflicting canonical graph selectors');
+    options = { ...options, graphDir: parsed.graphDir };
+  }
+  const archDispatchId = parsed.launch.role === 'arch-review' ? parsed.launch.dispatch_id || newDispatchId() : null;
+  const preparedArchReview = parsed.launch.role === 'arch-review'
+    ? archReviewContext.prepare(scope, parsed.launch, {
+      graphDir: options.graphDir || process.env.SHIPYARD_GRAPH_DIR,
+      execFileSync: options.execFileSync, getPullRequest: options.getPullRequest,
+      refreshGit: options.refreshGit,
+      inflightDispatchId: archDispatchId,
+    }) : null;
+  const request = preparedArchReview ? preparedArchReview.launch : parsed.launch;
   if (request.gsd_role !== undefined && GSD_DELIVERY_ROLES[request.gsd_role] !== request.role) {
     fail('UNSUPPORTED_ROLE', 'typed GSD role does not match the delivery role');
   }
-  const dispatchId = request.dispatch_id || newDispatchId();
+  const dispatchId = archDispatchId || request.dispatch_id || newDispatchId();
   const resolution = policy.resolveDispatch({
     runtime: 'codex', role: request.role,
     signals: request.signals, dispatch_id: dispatchId,
@@ -1632,11 +1670,14 @@ async function runCli(argv = process.argv.slice(2), stdout = process.stdout, opt
   }, heartbeatMs);
   heartbeat.unref?.();
   const inflightDir = inflightGraphDir(options, scope.worktree);
-  const inflight = inflightDir ? { graphDir: inflightDir, dispatch_id: dispatchId, pid: process.pid } : null;
+  const inflight = inflightDir ? { graphDir: inflightDir, worktree: scope.worktree, dispatch_id: dispatchId, pid: process.pid,
+    ...(preparedArchReview && path.resolve(inflightDir, '../..') === fs.realpathSync(scope.worktree)
+      ? { refreshBoard: false } : {}) } : null;
   let result;
   try {
     if (inflight) {
       recordInflight({ ...inflight, ticket: scope.ticket, role: resolution.role, host: 'codex' });
+      if (preparedArchReview) archReviewContext.admitBookkeeping(preparedArchReview);
     }
     const host = createCodexDeliveryHost({
       scope,
@@ -1664,6 +1705,7 @@ async function runCli(argv = process.argv.slice(2), stdout = process.stdout, opt
       scopedTree: options.scopedTree,
       host: options.host,
       writerSession,
+      archReviewContext: preparedArchReview,
     });
     result = await host.run({ ...request, dispatch_id: dispatchId });
     clearInterval(heartbeat);
