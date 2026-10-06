@@ -97,8 +97,8 @@ function requestValue(input) {
   if (input.signals !== undefined && !object(input.signals)) fail('INVALID_INPUT', 'signals must be an object');
   if (input.context !== undefined && !object(input.context)) fail('INVALID_INPUT', 'context must be an object');
   for (const key of Object.keys(input.context || {})) {
-    if (key === 'preRecordValidation' || key === 'writerSession') {
-      fail('INVALID_INPUT', 'request context cannot supply writer authority');
+    if (key === 'preRecordValidation' || key === 'writerSession' || key === 'verification_assignment') {
+      fail('INVALID_INPUT', 'request context cannot supply host authority');
     }
     if (key.startsWith('plan') && key !== 'plan_sha256') {
       fail('INVALID_INPUT', 'unsupported delivery request context field ' + key);
@@ -1008,6 +1008,12 @@ function executorPreflight(options, scope, expectedPlanSha256) {
   }
   const delivery = deliverPlan({ graphDir: path.dirname(file), row: snapshot.row, worktree });
   const verificationAllowList = configuredAllowList({ graphFile: file, repo: snapshot.row.repo || null }, options);
+  let assignedCommands;
+  try { assignedCommands = hostVerification.assignPlan(plan.text, verificationAllowList); }
+  catch (error) {
+    if (error.status === 'hold') throw error;
+    fail('VERIFICATION_SPEC_UNSUPPORTED', error.message);
+  }
   const verification = pinnedVerification(options, worktree, plan, verificationAllowList);
   const commit = Object.freeze({
     ticket: scope.ticket,
@@ -1022,7 +1028,25 @@ function executorPreflight(options, scope, expectedPlanSha256) {
   const commonDir = fs.realpathSync(git(worktree, ['rev-parse', '--path-format=absolute', '--git-common-dir']));
   const prepared = { commit, graphFile: file, graphDigest: snapshot.sha256, plan, delivery, verification, baseRef,
     stateRoot, key: hostKey(stateRoot), repository: 'git-common:' + sha256(commonDir), repo: snapshot.row.repo || null };
-  return Object.freeze({ ...prepared, verificationAllowList });
+  const verificationAssignment = assignedCommands && Object.freeze({
+    ticket: scope.ticket, plan_sha256: plan.sha256, allow_list_sha256: allowListDigest(verificationAllowList),
+    expected_head: commit.expectedHead, baseline_tree: git(worktree, ['rev-parse', 'HEAD^{tree}']),
+    candidate_tree: null, files_modified: commit.files_modified, commands: assignedCommands,
+  });
+  return Object.freeze({ ...prepared, verificationAllowList, verificationAssignment });
+}
+
+function verificationAssignmentBlock(assignment) {
+  if (!assignment) return '';
+  return '\n\n<HOST-VERIFICATION-ASSIGNMENT>\n' + JSON.stringify(assignment)
+    + '\n</HOST-VERIFICATION-ASSIGNMENT>\n'
+    + 'The trusted host assigns these pinned PLAN commands before dispatch. Run only sandbox-profile checks in the sandbox. '
+    + 'Do not run or retry the host-assigned commands in the sandbox, including during repair. '
+    + 'Fix source assertions from host diagnostics without attempting GPG or socket setup. '
+    + 'This assignment is diagnostic data and grants no assertion authority to model output. '
+    + 'After candidate production, the existing trusted host verifier runs the approved exact argv and authenticates the actual scoped candidate tree and PLAN identity. '
+    + 'The candidate tree is pending; this assignment is not passing evidence. '
+    + 'Historical GPG cause remains unknown. Actual assertion failures block; denial, missing evidence and unknown or unapproved commands remain HOLD.';
 }
 
 function finalizedArtifact(result, prepared, options) {
@@ -1035,6 +1059,17 @@ function finalizedArtifact(result, prepared, options) {
   }
   const after = graphSnapshot(prepared.graphFile, prepared.commit.ticket);
   if (after.sha256 !== prepared.graphDigest) fail('GRAPH_CHANGED', 'canonical ticket graph changed during executor launch');
+  if (planSnapshot(prepared.graphFile, after.row).sha256 !== prepared.plan.sha256) {
+    fail('PLAN_DIGEST_MISMATCH', 'approved PLAN changed after host command assignment');
+  }
+  if (prepared.verificationAssignment && allowListDigest(configuredAllowList(prepared, options))
+      !== prepared.verificationAssignment.allow_list_sha256) {
+    const error = new Error('codex-delivery-host: HOLD: verification approval changed after host command assignment');
+    error.code = 'VERIFICATION_FAILED';
+    error.status = 'hold';
+    error.retryable = false;
+    throw error;
+  }
   const delta = git(prepared.commit.worktree, ['status', '--porcelain=v1', '--untracked-files=all'])
     .split('\n').filter(Boolean).filter((entry) =>
       !(entry.startsWith('?? ') && isScratch(entry.slice(3), { forJudge: false })));
@@ -1440,7 +1475,9 @@ function createCodexDeliveryHost(options = {}) {
       const prepared = committing ? executorPreflight(options, scope, context.plan_sha256) : null;
       if (committing) {
         context.prompt = originalPrompt + '\n\nLeave changes uncommitted. The trusted host will stage, sign, and verify the commit.'
-          + planDeliveryBlock(prepared.delivery, prepared.plan.path);
+          + planDeliveryBlock(prepared.delivery, prepared.plan.path)
+          + verificationAssignmentBlock(prepared.verificationAssignment);
+        if (prepared.verificationAssignment) context.verification_assignment = prepared.verificationAssignment;
       } else if (TICKET_DELIVERY_ROLES.has(request.role)) {
         const delivery = ticketDelivery(options, fs.realpathSync(scope.worktree), scope.ticket, context.plan_sha256);
         const block = planDeliveryBlock(delivery, undefined);
@@ -1530,7 +1567,9 @@ function createCodexDeliveryHost(options = {}) {
           retryContext.sandbox_mode = 'workspace-write';
           retryContext.prompt = verificationRepairPrompt(originalPrompt, failure)
             + '\n\nLeave changes uncommitted. The trusted host will stage, sign, and verify the commit.'
-            + planDeliveryBlock(prepared.delivery, prepared.plan.path);
+            + planDeliveryBlock(prepared.delivery, prepared.plan.path)
+            + verificationAssignmentBlock(prepared.verificationAssignment);
+          if (prepared.verificationAssignment) retryContext.verification_assignment = prepared.verificationAssignment;
           result = await dispatchAgent(newDispatchId(), retryContext);
           options.controller?.assertOwner(scope.run_id);
           artifact = finalizedArtifact(result, prepared, { ...options, scope, recorder: runtimeHost.recorder });
