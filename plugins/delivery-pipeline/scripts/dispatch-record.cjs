@@ -1290,9 +1290,22 @@ function telemetryFor(recorded, ticket, role) {
 // reliably produced five). The lock sits beside the STORE, never at cwd: a mark
 // run from a ticket worktree would otherwise take a lock nobody else contends
 // for and serialize nothing.
-function mutate(cwd, fn, fence = (commit) => commit(), strictLoad = false) {
+function authenticateBookkeeping(cwd, fn, writtenPaths, required = false) {
+  const worktree = path.resolve(graphDir(cwd), '../..');
+  const authority = require('./role-artifact.cjs');
+  if (!required && !fs.existsSync(path.join(worktree, '.shipyard-role-artifacts'))
+      && authority.historicalBookkeepingPins(worktree).length === 0) return fn();
+  return authority.trustedBookkeepingMutation(worktree, fn, writtenPaths);
+}
+
+function localInflightBookkeeping(input, cwd) {
+  return typeof input.worktree === 'string'
+    && fs.realpathSync(input.worktree) === fs.realpathSync(path.resolve(graphDir(cwd), '../..'));
+}
+
+function mutate(cwd, fn, fence = (commit) => commit(), strictLoad = false, authenticate = false) {
   fs.mkdirSync(graphDir(cwd), { recursive: true });
-  return require('./role-artifact.cjs').trustedBookkeepingMutation(path.resolve(graphDir(cwd), '../..'), () => withLock(lockDirFor(cwd), 'dispatch-record', () => {
+  return authenticateBookkeeping(cwd, () => withLock(lockDirFor(cwd), 'dispatch-record', () => {
     const store = load(cwd, strictLoad);
     const commit = () => {
       const extra = fn(store);
@@ -1309,7 +1322,7 @@ function mutate(cwd, fn, fence = (commit) => commit(), strictLoad = false) {
       return extra;
     };
     return fence(commit);
-  }, { label: 'dispatch-record' }), ['.planning/graph/dispatches.json']);
+  }, { label: 'dispatch-record' }), ['.planning/graph/dispatches.json'], authenticate);
 }
 
 const roleOf = (rec) => (typeof rec === 'string' ? rec : ((rec && rec.role) || 'an agent'));
@@ -1526,8 +1539,8 @@ function recordInflight(input) {
     }
     store.inflight[dispatchId] = row;
     return null;
-  }, undefined, true);
-  writeProvenanceOnce(graphDir(cwd), { dispatch_id: dispatchId, ticket, role, recorded_at: row.started_at });
+  }, undefined, true, localInflightBookkeeping(input, cwd));
+  writeProvenanceOnce(graphDir(cwd), { dispatch_id: dispatchId, ticket, role, recorded_at: row.started_at }, localInflightBookkeeping(input, cwd));
   if (input.refreshBoard !== false) refreshFront(cwd);
   return Object.freeze({ ...row });
 }
@@ -1539,8 +1552,8 @@ function provenanceFile(dir, dispatchId) {
 }
 
 // @invariant: a provenance sidecar is written once per dispatch_id and never overwritten.
-function writeProvenanceOnce(dir, fields) {
-  return require('./role-artifact.cjs').trustedBookkeepingMutation(path.resolve(dir, '../..'), () => {
+function writeProvenanceOnce(dir, fields, authenticate) {
+  return authenticateBookkeeping(path.resolve(dir, '../..'), () => {
   const file = provenanceFile(dir, fields.dispatch_id);
   if (fs.existsSync(file)) return false;
   const stamp = hostProvenance.current({ pluginRoot: path.join(__dirname, '..') });
@@ -1556,7 +1569,7 @@ function writeProvenanceOnce(dir, fields) {
   } finally {
     try { fs.unlinkSync(staged); } catch {}
   }
-  }, ['.planning/graph/provenance/' + fields.dispatch_id + '.json']);
+  }, ['.planning/graph/provenance/' + fields.dispatch_id + '.json'], authenticate);
 }
 
 function readProvenance(dir, dispatchId) {
@@ -1581,7 +1594,7 @@ function clearInflight(input) {
     delete store.inflight[dispatchId];
     cleared = true;
     return null;
-  }, undefined, true);
+  }, undefined, true, localInflightBookkeeping(input, cwd));
   if (cleared && input.refreshBoard !== false) refreshFront(cwd);
   return cleared;
 }

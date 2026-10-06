@@ -1670,7 +1670,7 @@ async function runCli(argv = process.argv.slice(2), stdout = process.stdout, opt
   }, heartbeatMs);
   heartbeat.unref?.();
   const inflightDir = inflightGraphDir(options, scope.worktree);
-  const inflight = inflightDir ? { graphDir: inflightDir, dispatch_id: dispatchId, pid: process.pid,
+  const inflight = inflightDir ? { graphDir: inflightDir, worktree: scope.worktree, dispatch_id: dispatchId, pid: process.pid,
     ...(preparedArchReview && path.resolve(inflightDir, '../..') === fs.realpathSync(scope.worktree)
       ? { refreshBoard: false } : {}) } : null;
   let result;

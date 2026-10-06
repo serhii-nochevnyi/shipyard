@@ -2130,4 +2130,26 @@ test('dispatch records run scope and telemetry treatment metadata', () => {
   assert.equal(event.telemetry.provider, 'anthropic');
 });
 
+test('external canonical graph history is not admitted as ticket-local archive bookkeeping', () => {
+  const { project, graph } = scratch({ 'T-01-01': { ...READY } });
+  const ticketWorktree = fs.mkdtempSync(path.join(os.tmpdir(), 'dispatch-external-ticket-'));
+  const authority = require(path.join(SCRIPTS, 'role-artifact.cjs'));
+  try {
+    authority.trustedBookkeepingMutation(project, () => {});
+    fs.mkdirSync(path.join(graph, 'provenance'), { recursive: true });
+    const legacy = path.join(graph, 'provenance', 'historical.json');
+    fs.writeFileSync(legacy, 'historical canonical graph record');
+    const input = { graphDir: graph, worktree: ticketWorktree, ticket: 'T-01-01', role: 'arch-review',
+      dispatch_id: 'external-review', pid: process.pid, host: 'codex', refreshBoard: false };
+    recordInflight(input);
+    assert.equal(clearInflight(input), true);
+    assert.equal(fs.readFileSync(legacy, 'utf8'), 'historical canonical graph record');
+    assert.deepStrictEqual(authority.historicalBookkeepingPins(project), []);
+  } finally {
+    fs.rmSync(authority.archiveAuthorityDirectory(project), { recursive: true, force: true });
+    fs.rmSync(ticketWorktree, { recursive: true, force: true });
+    fs.rmSync(path.dirname(project), { recursive: true, force: true });
+  }
+});
+
 done();
