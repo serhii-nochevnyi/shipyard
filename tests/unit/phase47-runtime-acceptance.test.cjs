@@ -293,9 +293,14 @@ test('first-call inline task attestation refuses a denied heredoc followed by a 
   const task = { path: path.join(f.temporary, 'retained-task.md'), bytes: 4, sha256: acceptance.sha('task') };
   fs.writeFileSync(task.path, 'task', { mode: 0o600 });
   const relay = { parent_thread_id: 'parent', task_path: '/root/gsd_task' };
-  const response = payload => ({ type: 'response_item', payload });
+  const captured = fs.readFileSync(path.join(__dirname, '../fixtures/captured/codex-agent-stream-parent.jsonl'),
+    'utf8').trim().split('\n').map(line => JSON.parse(line));
+  const sessionFrame = captured.find(row => row.type === 'session_meta');
+  const responseFrame = captured.find(row => row.type === 'response_item');
+  assert(sessionFrame && responseFrame, 'registered capture must contain both native frame shapes');
+  const response = payload => ({ ...structuredClone(responseFrame), payload });
   const records = [
-    { type: 'session_meta', payload: { parent_thread_id: relay.parent_thread_id } },
+    { ...structuredClone(sessionFrame), payload: { ...sessionFrame.payload, parent_thread_id: relay.parent_thread_id } },
     response({ type: 'agent_message', author: '/root', recipient: relay.task_path }),
     response({ type: 'custom_tool_call', name: 'exec', call_id: 'first',
       input: 'const r = await tools.exec_command(' + JSON.stringify({ cmd:
