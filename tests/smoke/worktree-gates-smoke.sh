@@ -156,7 +156,7 @@ grep -q 'working-directory' <<<"$out" || fail "the error must name the real caus
 ok "with no graph anywhere, the error names the cause and the flag"
 
 # ── an explicit --graph still wins (the cross-repo case) ─────────────────────
-out="$(cd "$BARE" && node "$SCRIPTS/base-merge.cjs" T-02 --graph "$P/.planning/graph" --worktree "$BARE" --base main 2>&1)" || true
+out="$(cd "$BARE" && node "$SCRIPTS/base-merge.cjs" T-02 --graph "$P/.planning/graph" --worktree "$BARE" --base main --no-fetch 2>&1)" || true
 grep -q 'not in the graph\|already up to date\|merged' <<<"$out" \
   || fail "--graph must be honoured over the worktree's own repository: $out"
 ok "--graph wins, which is the only thing that works cross-repo"

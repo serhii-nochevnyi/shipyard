@@ -16,6 +16,49 @@ allowed-tools:
 
 # /shipyard:deliver
 
+## Architecture review follows the live PR target
+
+Architecture review is mandatory only when the live PR base is the repository's
+integration branch: the project's `git.base_branch`, otherwise its repository
+default. A foreign repository uses its own default. Ticket-to-epic and stacked
+ticket-to-ticket PRs report `skipped-by-target`; do not launch architecture
+review, wait for its status/receipt/trailer, or write a synthetic conform verdict.
+Retain genuine reviews and original receipts as history. CI, unresolved feedback,
+conflicts, plan/source scope, current-head checks and human checkpoints still apply.
+
+A direct ticket PR to the integration branch requires its own fresh authenticated
+review. For the phase epic PR, explicitly select the canonical phase directory and
+actual integration PR from the epic worktree:
+
+```sh
+node ${CLAUDE_PLUGIN_ROOT}/scripts/deliver-dispatch.cjs build arch-review <phase-directory> --phase <N> --pr <integration-pr> --runtime <codex|claude>
+node ${CLAUDE_PLUGIN_ROOT}/scripts/gate-trailer.cjs verify <integration-pr> --worktree <epic-worktree> --graph <project-root>/.planning/graph [--repo owner/name]
+```
+
+Both hosts derive the aggregate subject from actual phase graph membership,
+repository, PR, exact live head and base. The context includes the entire aggregate
+PR diff, all phase plans/evidence, architecture records, linked decisions and
+available authenticated retained ticket artifacts. Repeat the complete ticket set
+and digest. Do not invent a graph ticket, substitute a ticket/integrator verdict,
+or dispatch a provider/model replacement. The native boundary and durable receipt
+validation remain mandatory. Missing retained/native evidence stays unknown or HOLD.
+
+Run the live verifier before the integration human merge. A moved head or base
+re-owes review; verdict carry is refused even for an identical tree. Retargeting
+into the integration branch adds this gate; retargeting into the epic removes it.
+Resumed delivery derives the policy again from the current live target. Ticket
+completion cannot mark phase completion, installed acceptance or rollout passed.
+Keep the sealed T-47-05 core generation, original receipts and T-47-08's twenty
+installed/native HOLD obligations unchanged. This policy package is a separate
+T-47-16 generation built through the supported package builder.
+
+Delegated executors are already inside the coordinator-owned loop. The coordinator
+owns setup and dispatch; executors implement the delivered plan within its file
+scope and sandbox, leave changes uncommitted, and do not restart the router,
+bootstrap, marketplace installation or a second delivery orchestrator. Fresh
+top-level router entry retains its normal bootstrap.
+
+
 You drive loop 3: a set of tickets → separate worktrees → PR per ticket → green
 state. State lives in GitHub and `.planning/graph/` — the session can be killed
 at any time and restarted with `/shipyard:deliver` without any loss.
@@ -53,10 +96,10 @@ actionable now  execute  — ready, no branch yet          → Step 3   [main lo
                 fix      — open PR with failing checks, a base that MOVED under
                            it (`base-merge`), or unresolved review threads
                            (both serviced AHEAD of a running CI)  [SENTINEL]
-                finalize — green: arch-review verdict, conform trailer, undraft
+                finalize — green: resolve feedback; review only integration targets; undraft
                            (the guard splits it into `arch-review` + `undraft`,
                            so a faulted verdict cannot ready the PR) [SENTINEL]
-                merge    — green + conform, targets the stack: squash it in [SENTINEL]
+                merge    — green + resolved feedback, targets the stack: squash it in [SENTINEL]
 waiting         ci       — checks still running (NOT a fixpoint; NOT a reason to block)
                 dispatched— an agent already holds it (`dispatch-record.cjs`): not
                            actionable, because handing it out twice is duplicate
@@ -333,10 +376,8 @@ node ${CLAUDE_PLUGIN_ROOT}/scripts/sentinel.cjs report [--json] [--since <iso>]
 
 `merge` squashes a ticket PR into **its own base** — the phase epic, or the
 parent ticket's branch — and only when, re-checked against LIVE GitHub: the PR is
-open and undrafted, checks are green, unresolved threads = 0, the `merge-gate`
-commit status on the PR's live head reads `arch-review=conform` (falling back to
-the PR body's `gate_status:` trailer only for a verdict written before that
-status existed), the review is not CHANGES_REQUESTED, the
+open and undrafted, checks are green, unresolved threads = 0, the review is
+not CHANGES_REQUESTED, the
 ticket is not `human_checkpoint`, and the base is inside the stack. It then
 retargets cascade children onto the epic and journals a `merge` event. It refuses
 — loudly, with the reason — on anything unproven, and a refusal never aborts the
@@ -2334,7 +2375,7 @@ loop:
        the agent either fixes (push → step d), or replies to invalid feedback (no push → mark the
        threads processed, b again).
 
-  c. arch-review agent — host-bound judgment, never cheapened. Read the canonical
+  c. arch-review agent — host-bound judgment, required only for a live integration-branch target. Skip this step for epic/stacked targets. Read the canonical
      `references/pr-sentinel.md` procedure: MEASURE the complete judged input
      (the diff plus the architecture corpus), then DISPATCH the complete evidence
      to the selected host. It resolves, validates, launches the typed judge,
@@ -2402,9 +2443,8 @@ loop:
        journal: `log-event.cjs degenerate_green ticket=<T> pr=<N>
        findings=<n> modes=<mode:count,…> --graph <project>/.planning/graph`.
        IT REPORTS AND DECIDES NOTHING — never a reason to withhold `conform`,
-       never a reason to hold a merge. `sentinel.cjs merge` reads `arch-review`
-       and the `head` that verdict is bound to, and nothing else, pinned by
-       tests/unit/trailer.test.cjs.
+       never a reason to hold a merge. The integration gate validates the complete
+       authenticated artifact on its exact live head and base; epic targets skip it.
      violation    → fix in the worktree → push → step d
      adr-outdated → `escalation-record.cjs mark <T> "adr-outdated: …"` (changing the ADR is a human's call), continue the front
      conform      → check the green criteria:
@@ -2416,21 +2456,15 @@ loop:
          measured (references/arch-review.md). Never a branch name and never an
          abbreviation — the writer refuses both, and there is no fallback that
          computes one here, because a base_tree nobody measured is an assertion
-         rather than a proof. Omit it and the trailer still writes, but no later
-         `gate-trailer.cjs carry` can ever reuse this verdict across a base move:
-         it refuses on absent proof, and the ~150k-token re-judgement is bought
-         again.
-         The writer reads the live body and the live head, and writes ONE `gate_status:`
-         line carrying every key plus `head=<full 40-char sha>` — the diff the verdict is
-         about. NEVER hand-assemble that line: a second one hides the verdict
-         above it (the reader takes the LAST), and a trailer with no `head=` is
-         ABSENT to every reader once the board knows the head. The writer also
-         refuses while any review thread is unresolved, because recording a
-         verdict over unanswered feedback falsifies the gate.
+         rather than a proof. The writer checks the authenticated current artifact,
+         then publishes a `merge-gate` status for telemetry. It preserves the PR
+         body and retained reviews. Statuses and legacy trailers are history;
+         only the complete current artifact is integration merge authority.
+         Unresolved feedback still refuses publication and merge.
          NOT to be confused with GSD 1.13's `gate-status:` COMMIT trailer, which
          its TDD audit reads: one hyphen apart, different mechanism, different
          place (PR body vs commit message), and neither reads the other.
-         Consequence to expect: a push AFTER the verdict re-owes arch-review
+         Consequence to expect: an integration-target push AFTER the verdict re-owes arch-review
          instead of inheriting it — the trailer names the old head, so the front
          says `finalize` and the guard refuses the merge, naming both SHAs.
        → gh pr ready <pr> (remove draft)
@@ -2630,7 +2664,7 @@ The round order:
    while CI runs — `ci-wait.cjs` (loop-back item 6) is the wait, and only once the
    front has no other move: it refuses while it has.
 4. Then — step **c** of the cycle (arch-review, resolved with a measured
-   `--input-tokens`), the conform gate
+   `--input-tokens`) for integration targets, the authenticated gate
    and the `sentinel.cjs merge` for each PR in the main loop, as above. This is
    judgment, finalization and a merge — do NOT hand any of it to an executor.
 
@@ -2962,7 +2996,7 @@ driving PRs hands the user a half-truth.
 ## Rules
 
 - **Ticket PRs land automatically, the phase does not.** epic-stacked with
-  `auto_merge: epic` (default): the sentinel squashes each green+conform ticket PR
+  `auto_merge: epic` (default): the sentinel squashes each green ticket PR with resolved feedback
   into its base (epic/parent branch) through `sentinel.cjs merge` — never by a raw
   `gh pr merge`, because the gate lives in the script. The phase reaches the
   default branch as ONE epic-PR, merged by a human, always. `auto_merge: off` or

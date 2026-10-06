@@ -545,7 +545,7 @@ function parseBuildArgs(argv) {
     buildFail('<INV-id>', `invalid investigation id ${ticket}`);
   }
   if (role === 'decomposition' && !args.phase) buildFail('--phase', 'decomposition requires --phase <N>');
-  if (role !== 'decomposition' && args.phase) buildFail('--phase', '--phase is only valid for decomposition');
+  if (!['decomposition', 'arch-review'].includes(role) && args.phase) buildFail('--phase', '--phase is only valid for decomposition');
   if (role === 'decomposition' && !/^INV-[A-Za-z0-9-]+$/.test(ticket)
       && !/^ADR-[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$/.test(ticket)) {
     buildFail('<INV-id|ADR-id>', `invalid planning input id ${ticket}`);
@@ -609,7 +609,7 @@ function buildTicketContext(args, options) {
   const rawState = readJsonBounded(path.join(graphDir, 'delivery-state.json')) || {};
   const state = object(rawState) && object(rawState.tickets) ? rawState.tickets : rawState;
   const stateRow = object(state) && object(state[args.ticket]) ? state[args.ticket] : {};
-  return { worktree, graphDir, graph, row, projectRoot, planPath, stateRow };
+  return { worktree, graphDir, graph, row, projectRoot, planPath, stateRow, branch };
 }
 
 function evidenceInput(worktree, value, field) {
@@ -1083,6 +1083,49 @@ function incompleteHostReason(runtime, role) {
   return `claude ${role} host contract missing: fix-round does not authenticate the supplied ${evidence} evidence path and SHA-256 at launch`;
 }
 
+
+function architectureLive(input, pr, options) {
+  if (!Number.isSafeInteger(pr) || pr < 1) buildFail('--pr', 'architecture request needs a recorded live PR');
+  const live = options.getPullRequest ? options.getPullRequest({ worktree: input.worktree, pr, repo: input.row.repo || null })
+    : JSON.parse((options.execFileSync || execFileSync)('gh', ['pr', 'view', String(pr),
+      ...(input.row.repo ? ['--repo', input.row.repo] : []), '--json',
+      'number,state,headRefName,headRefOid,baseRefName,baseRefOid'], { cwd: input.worktree, encoding: 'utf8', timeout: 30000 }));
+  if (live.number !== pr || live.state !== 'OPEN' || live.headRefName !== input.branch
+      || live.headRefOid !== git(input.worktree, ['rev-parse', 'HEAD'])) buildFail('--pr', 'live PR identity differs from worktree');
+  return live;
+}
+function requireArchitectureTarget(input, args, options) {
+  if (args.pr !== undefined && input.stateRow.pr !== undefined && args.pr !== input.stateRow.pr)
+    buildFail('--pr', 'PR differs from the canonical ticket state');
+  const { resolveIntegrationBranch, architectureTarget } = require('./architecture-target.cjs');
+  const live = architectureLive(input, args.pr || input.stateRow.pr, options);
+  const integration = resolveIntegrationBranch({ projectRoot: input.projectRoot, repo: input.row.repo || null,
+    defaultBranch: options.defaultBranch, exec: options.execFileSync || execFileSync });
+  if (!architectureTarget({ base: live.baseRefName, integrationBranch: integration }).required)
+    buildFail('--pr', 'architecture review skipped-by-target');
+  return live;
+}
+function buildPhaseArchitectureRequest(args, options) {
+  if (!args.pr) buildFail('--pr', 'phase architecture review requires an explicit integration PR');
+  const input = planningBuildContext(options);
+  const branch = git(input.worktree, ['symbolic-ref', '--quiet', '--short', 'HEAD']);
+  const row = Object.values(input.graph.tickets).find(row => phaseNumber(row.phase) === args.phase);
+  if (!row) buildFail('--phase', 'phase absent from canonical graph');
+  const stateRaw = readJsonBounded(path.join(input.graphDir, 'delivery-state.json'));
+  const state = stateRaw?.tickets || stateRaw;
+  if (!object(state)) buildFail('state', 'canonical phase evidence is unavailable');
+  const live = requireArchitectureTarget({ ...input, row, branch, stateRow: {} }, args, options);
+  const repository = fs.realpathSync(git(input.worktree, ['rev-parse', '--path-format=absolute', '--git-common-dir']));
+  const binding = require('./architecture-target.cjs').phaseBinding({ graph: input.graph, state,
+    phase: args.phase, repository, branch, pr: args.pr, head: live.headRefOid, base: live.baseRefOid });
+  if (args.ticket !== binding.phase) buildFail('<phase>', 'phase selector must name its canonical directory');
+  if (args.runtime === 'claude') return { schema: claudeRoleHost.REQUEST_SCHEMA, role: 'arch-review',
+    worktree: input.worktree, phase: binding.phase, pr: args.pr };
+  return { scope: { run_id: `deliver-arch-${crypto.randomUUID()}`, ticket: binding.subject,
+    phase: args.phase, worktree: input.worktree, runtime: 'codex', provider: 'openai' },
+    graph_dir: input.graphDir, role: 'arch-review', signals: {}, context: {} };
+}
+
 function build(argv, options = {}) {
   const args = parseBuildArgs(argv);
   if (args.graphDir) {
@@ -1095,7 +1138,9 @@ function build(argv, options = {}) {
   if (args.role === 'research' || args.role === 'decomposition') {
     return buildPlanningRequest(args, options);
   }
+  if (args.role === 'arch-review' && args.phase) return buildPhaseArchitectureRequest(args, options);
   const input = buildTicketContext(args, options);
+  if (args.role === 'arch-review') requireArchitectureTarget(input, args, options);
   const signals = buildSignals(input.row);
   const evidence = args.failureFile
     ? evidenceInput(input.worktree, args.failureFile, '--failure-file')

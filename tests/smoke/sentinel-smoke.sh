@@ -45,7 +45,7 @@ printf '%s\n' \
   'argv="$*"' \
   'case "$argv" in' \
   '  "repo view --json defaultBranchRef"*) echo "main" ;;' \
-  '  "pr list --state open"*"--json number,state,isDraft,headRefName,headRefOid,baseRefName,mergedAt,createdAt,url,title"*)' \
+  '  "pr list --state open"*"--json number,state,isDraft,headRefName,headRefOid,baseRefName,baseRefOid,mergedAt,createdAt,url,title"*)' \
   '    printf '"'"'%s\n'"'"' \' \
   '  '"'"'[{"number":101,"state":"OPEN","isDraft":false,"headRefName":"ticket/T-01-01-root","headRefOid":"1111111111111111111111111111111111111111","baseRefName":"epic/01-demo","mergedAt":null,"createdAt":"2026-01-01T00:00:00Z","url":"https://example/101","title":"T-01-01: root"},'"'"' \' \
   '  '"'"' {"number":102,"state":"OPEN","isDraft":false,"headRefName":"ticket/T-01-02-child","headRefOid":"3333333333333333333333333333333333333333","baseRefName":"ticket/T-01-01-root","mergedAt":null,"createdAt":"2026-01-01T00:00:00Z","url":"https://example/102","title":"T-01-02: child"}]'"'"'' \
@@ -587,7 +587,7 @@ printf '%s\n' \
   "  # head the verdict was rendered against. That is the whole fixture." \
   "  \"pr list --state all\"*)" \
   "    echo '[{\"number\":301,\"state\":\"OPEN\",\"isDraft\":false,\"headRefName\":\"ticket/T-02-01-moved\",\"headRefOid\":\"$LIVE\",\"baseRefName\":\"epic/02-demo\",\"mergedAt\":null,\"createdAt\":\"2026-01-01T00:00:00Z\",\"url\":\"https://example/301\",\"title\":\"T-02-01: moved\"}]' ;;" \
-  "  \"pr list --state open\"*\"--json number,state,isDraft,headRefName,headRefOid,baseRefName,mergedAt,createdAt,url,title\"*)" \
+  "  \"pr list --state open\"*\"--json number,state,isDraft,headRefName,headRefOid,baseRefName,baseRefOid,mergedAt,createdAt,url,title\"*)" \
   "    echo '[{\"number\":301,\"state\":\"OPEN\",\"isDraft\":false,\"headRefName\":\"ticket/T-02-01-moved\",\"headRefOid\":\"$LIVE\",\"baseRefName\":\"epic/02-demo\",\"mergedAt\":null,\"createdAt\":\"2026-01-01T00:00:00Z\",\"url\":\"https://example/301\",\"title\":\"T-02-01: moved\"}]' ;;" \
   "  \"pr list --state open\"*\"--json number,reviewDecision,body,mergeStateStatus\"*)" \
   "    echo '[{\"number\":301,\"reviewDecision\":null,\"body\":\"Ticket: T-02-01\n\ngate_status: arch-review=conform, drift-check=fresh, degenerate-green=clean, checks=green, head=$JUDGED\"}]' ;;" \
@@ -627,8 +627,8 @@ hq() { node -e 'const s=require(process.argv[1]);const v=process.argv.slice(2).r
   && ok "and keeps the head the trailer claims, so the two can be compared" \
   || bad "the trailer's head is parsed" "got: $(hq T-02-01 gate head)"
 
-hasnt "the board does not offer a merge for a verdict about another diff" "$hbboard" "merge: T-02-01"
-has "it offers the arch-review instead" "$hbboard" "finalize: T-02-01"
+has "the board offers an epic merge despite historical verdict head" "$hbboard" "merge: T-02-01"
+hasnt "an epic target never launches architecture review" "$hbboard" "finalize: T-02-01"
 
 hbduty="$W/hb-duty.json"
 ( cd "$hbproj" && PATH="$W/bin3:$PATH" node "$SCRIPTS/sentinel.cjs" duty --json > "$hbduty" 2>/dev/null ) \
@@ -637,11 +637,11 @@ if node -e '
 const i = require(process.argv[1]).items.find((x) => x.ticket === "T-02-01");
 // Both SHAs, or the remedy ("re-judge THIS head") is a guess — and "no conform
 // trailer" would be a lie about a body that visibly carries one.
-process.exit(i && i.action === "arch-review" && /1111111/.test(i.why) && /2222222/.test(i.why) ? 0 : 1);
+process.exit(i && i.action === "merge" && i.architecture.status === "skipped-by-target" ? 0 : 1);
 ' "$hbduty" 2>/dev/null; then
-  ok "duty owes arch-review again and names both heads"
+  ok "duty skips architecture review for an epic target"
 else
-  bad "duty owes arch-review again" "$(head -20 "$hbduty")"
+  bad "duty skips the epic architecture gate" "$(head -20 "$hbduty")"
 fi
 
 hbmerge="$W/hb-merge.json"
@@ -649,12 +649,12 @@ hbmerge="$W/hb-merge.json"
 if node -e '
 const r = require(process.argv[1]).results[0];
 const refused = r && r.merged === false && r.would_merge !== true;
-const named = refused && r.blockers.some((b) => /1111111/.test(b) && /2222222/.test(b) && /arch-review/.test(b));
+const named = r && r.would_merge === true && r.architecture.status === "skipped-by-target";
 process.exit(named ? 0 : 1);
 ' "$hbmerge" 2>/dev/null; then
-  ok "the gate refuses the merge against the live head, naming both"
+  ok "the epic merge ignores historical architecture verdicts"
 else
-  bad "the gate refuses a superseded verdict" "$(head -20 "$hbmerge")"
+  bad "the epic target is not blocked by a superseded architecture verdict" "$(head -20 "$hbmerge")"
 fi
 
 stproj="$W/stproj"
@@ -669,7 +669,7 @@ printf '%s\n' \
   "  \"repo view --json owner,name\"*) echo '{\"owner\":{\"login\":\"acme\"},\"name\":\"demo\"}' ;;" \
   "  \"pr list --state all\"*)" \
   "    echo '[{\"number\":301,\"state\":\"OPEN\",\"isDraft\":false,\"headRefName\":\"ticket/T-02-01-moved\",\"headRefOid\":\"$LIVE\",\"baseRefName\":\"epic/02-demo\",\"mergedAt\":null,\"createdAt\":\"2026-01-01T00:00:00Z\",\"url\":\"https://example/301\",\"title\":\"T-02-01: moved\"}]' ;;" \
-  "  \"pr list --state open\"*\"--json number,state,isDraft,headRefName,headRefOid,baseRefName,mergedAt,createdAt,url,title\"*)" \
+  "  \"pr list --state open\"*\"--json number,state,isDraft,headRefName,headRefOid,baseRefName,baseRefOid,mergedAt,createdAt,url,title\"*)" \
   "    echo '[{\"number\":301,\"state\":\"OPEN\",\"isDraft\":false,\"headRefName\":\"ticket/T-02-01-moved\",\"headRefOid\":\"$LIVE\",\"baseRefName\":\"epic/02-demo\",\"mergedAt\":null,\"createdAt\":\"2026-01-01T00:00:00Z\",\"url\":\"https://example/301\",\"title\":\"T-02-01: moved\"}]' ;;" \
   "  \"pr list --state open\"*\"--json number,reviewDecision,body,mergeStateStatus\"*)" \
   "    echo '[{\"number\":301,\"reviewDecision\":null,\"body\":\"Ticket: T-02-01\n\ngate_status: arch-review=conform, checks=green, head=$JUDGED\"}]' ;;" \
@@ -694,9 +694,9 @@ stmerge() {
 
 ( cd "$stproj" && PATH="$W/binS:$PATH" SMOKE_STATUS_SHA="$LIVE" node "$SCRIPTS/state-sync.cjs" > /dev/null 2>"$W/st-err.txt" ) \
   || bad "state-sync runs against the status stub" "$(cat "$W/st-err.txt")"
-[[ "$(sq T-02-01 gate arch-review)" == "conform" && "$(sq T-02-01 gate head)" == "$LIVE" ]] \
-  && ok "state-sync reads the gate from the merge-gate status on the head, over a stale body trailer" \
-  || bad "state-sync reads the gate from the status" "got: $(sq T-02-01 gate)"
+[[ "$(sq T-02-01 gate arch-review)" == "conform" && "$(sq T-02-01 gate head)" == "$JUDGED" ]] \
+  && ok "state-sync retains historical body verdict without consuming an epic architecture status" \
+  || bad "state-sync retains the historical epic verdict" "got: $(sq T-02-01 gate)"
 
 if stmerge "$LIVE" | node -e '
 const r = JSON.parse(require("fs").readFileSync(0, "utf8")).results[0];
@@ -708,12 +708,29 @@ else
 fi
 if stmerge "$JUDGED" | node -e '
 const r = JSON.parse(require("fs").readFileSync(0, "utf8")).results[0];
-process.exit(r && r.would_merge !== true && r.blockers.some((b) => /arch-review/.test(b)) ? 0 : 1);
+process.exit(r && r.would_merge === true && r.architecture.status === "skipped-by-target" ? 0 : 1);
 ' 2>/dev/null; then
-  ok "a merge-gate status on another sha is not a verdict: the guard refuses"
+  ok "a historical status cannot add an epic architecture gate"
 else
-  bad "a stale-sha status is refused" "$(stmerge "$JUDGED" | head -20)"
+  bad "a stale-sha status does not block an epic merge" "$(stmerge "$JUDGED" | head -20)"
 fi
+
+mkdir -p "$W/bin-main"
+sed 's#epic/02-demo#main#g' "$W/bin3/gh" > "$W/bin-main/gh"
+chmod +x "$W/bin-main/gh"
+( cd "$hbproj" && PATH="$W/bin-main:$PATH" node "$SCRIPTS/state-sync.cjs" > "$W/main-board.txt" 2>"$W/main-err.txt" ) \
+  || bad "the integration retarget fixture synchronizes" "$(cat "$W/main-err.txt")"
+( cd "$hbproj" && PATH="$W/bin-main:$PATH" node "$SCRIPTS/sentinel.cjs" duty --json > "$W/main-duty.json" 2>"$W/main-duty.err" ) \
+  || bad "integration duty reads the retargeted PR" "$(cat "$W/main-duty.err")"
+if node -e '
+const item = require(process.argv[1]).items.find(row => row.ticket === "T-02-01");
+process.exit(item && item.architecture.required && item.action === "arch-review" ? 0 : 1);
+' "$W/main-duty.json"; then
+  ok "retargeting an epic PR to main adds authenticated architecture review"
+else
+  bad "retargeting to main adds architecture review" "$(head -25 "$W/main-duty.json")"
+fi
+hasnt "the retargeted main PR is never offered as an automatic merge" "$W/main-board.txt" "merge: T-02-01"
 
 # ── a PR where nothing ran is not a green PR ─────────────────────────────────
 # Б3, end to end across the three readers. `failing === 0 && pending === 0` is
@@ -836,7 +853,7 @@ printf '%s\n' \
   "case \"\$argv\" in" \
   "  \"repo view --json defaultBranchRef\"*) echo \"main\" ;;" \
   "  \"repo view --json owner,name\"*) echo '{\"owner\":{\"login\":\"acme\"},\"name\":\"demo\"}' ;;" \
-  "  \"pr list --state open\"*\"--json number,state,isDraft,headRefName,headRefOid,baseRefName,mergedAt,createdAt,url,title\"*)" \
+  "  \"pr list --state open\"*\"--json number,state,isDraft,headRefName,headRefOid,baseRefName,baseRefOid,mergedAt,createdAt,url,title\"*)" \
   "    echo '[{\"number\":501,\"state\":\"OPEN\",\"isDraft\":false,\"headRefName\":\"ticket/T-05-01-unread\",\"headRefOid\":\"$URHEAD\",\"baseRefName\":\"epic/05-demo\",\"mergedAt\":null,\"createdAt\":\"2026-01-01T00:00:00Z\",\"url\":\"https://example/501\",\"title\":\"T-05-01: unreadable checks\"}]' ;;" \
   "  \"pr list --state open\"*\"--json number,reviewDecision,body,mergeStateStatus\"*)" \
   "    echo '[{\"number\":501,\"reviewDecision\":\"APPROVED\",\"mergeStateStatus\":\"CLEAN\",\"body\":\"Ticket: T-05-01\n\ngate_status: arch-review=conform, checks=green, head=$URHEAD\"}]' ;;" \
@@ -1263,7 +1280,7 @@ printf '%s\n' \
   '  # The review verdict is the ONE fact this fixture varies, and it is answered on' \
   '  # both calls that read it — the sync'"'"'s open-only pass and the guard'"'"'s own PR' \
   '  # view — because a fixture where the two disagree tests neither.' \
-  '  "pr list --state open"*"--json number,state,isDraft,headRefName,headRefOid,baseRefName,mergedAt,createdAt,url,title"*)' \
+  '  "pr list --state open"*"--json number,state,isDraft,headRefName,headRefOid,baseRefName,baseRefOid,mergedAt,createdAt,url,title"*)' \
   '    echo '"'"'[{"number":501,"state":"OPEN","isDraft":false,"headRefName":"ticket/T-04-01-x","headRefOid":"5555555555555555555555555555555555555555","baseRefName":"epic/04-demo","mergedAt":null,"createdAt":"2026-01-01T00:00:00Z","url":"https://example/501","title":"T-04-01: x"}]'"'"' ;;' \
   '  "pr list --state open"*"--json number,reviewDecision,body,mergeStateStatus"*)' \
   '    printf '"'"'%s\n'"'"' \' \
@@ -1683,7 +1700,7 @@ printf '%s\n' \
   "  \"repo view --json owner,name\"*) echo '{\"owner\":{\"login\":\"acme\"},\"name\":\"demo\"}' ;;" \
   "  # SMOKE_PARENT_MERGED is the ONE fact the two boards differ by: whether the" \
   "  # parent's PR has landed. Everything else about the fixture is identical." \
-  "  \"pr list --state open\"*\"--json number,state,isDraft,headRefName,headRefOid,baseRefName,mergedAt,createdAt,url,title\"*)" \
+  "  \"pr list --state open\"*\"--json number,state,isDraft,headRefName,headRefOid,baseRefName,baseRefOid,mergedAt,createdAt,url,title\"*)" \
   "    if [ -n \"\${SMOKE_PARENT_UNSTARTED:-}\" ]; then" \
   "      echo '[]'" \
   "    elif [ -n \"\${SMOKE_PARENT_MERGED:-}\" ]; then" \

@@ -1461,6 +1461,7 @@ function createCodexDeliveryHost(options = {}) {
       }
       bind(context, 'run_id', scope.run_id);
       bind(context, 'ticket', scope.ticket);
+      if (request.role === 'arch-review' && scope.ticket.startsWith('phase=')) context.subject_kind = 'phase';
       bind(context, 'phase', scope.phase);
       bind(context, 'worktreePath', scope.worktree);
       bind(context, 'runtime', 'codex');
@@ -1474,7 +1475,7 @@ function createCodexDeliveryHost(options = {}) {
       const committing = request.role === 'executor';
       const prepared = committing ? executorPreflight(options, scope, context.plan_sha256) : null;
       if (committing) {
-        context.prompt = originalPrompt + '\n\nLeave changes uncommitted. The trusted host will stage, sign, and verify the commit.'
+        context.prompt = originalPrompt + '\n\nYou are an executor already dispatched inside the active coordinator-owned Shipyard delivery loop. The coordinator owns setup and dispatch. Do not restart shipyard-route, bootstrap, marketplace installation, investigate, decomposition, or a second delivery orchestrator. Implement the delivered PLAN within files_modified and the existing sandbox boundaries. Leave changes uncommitted. The trusted host will stage, sign, and verify the commit.'
           + planDeliveryBlock(prepared.delivery, prepared.plan.path)
           + verificationAssignmentBlock(prepared.verificationAssignment);
         if (prepared.verificationAssignment) context.verification_assignment = prepared.verificationAssignment;
@@ -1566,7 +1567,7 @@ function createCodexDeliveryHost(options = {}) {
           bind(retryContext, 'provider', 'openai');
           retryContext.sandbox_mode = 'workspace-write';
           retryContext.prompt = verificationRepairPrompt(originalPrompt, failure)
-            + '\n\nLeave changes uncommitted. The trusted host will stage, sign, and verify the commit.'
+            + '\n\nYou are an executor already dispatched inside the active coordinator-owned Shipyard delivery loop. The coordinator owns setup and dispatch. Do not restart shipyard-route, bootstrap, marketplace installation, investigate, decomposition, or a second delivery orchestrator. Implement the delivered PLAN within files_modified and the existing sandbox boundaries. Leave changes uncommitted. The trusted host will stage, sign, and verify the commit.'
             + planDeliveryBlock(prepared.delivery, prepared.plan.path)
             + verificationAssignmentBlock(prepared.verificationAssignment);
           if (prepared.verificationAssignment) retryContext.verification_assignment = prepared.verificationAssignment;

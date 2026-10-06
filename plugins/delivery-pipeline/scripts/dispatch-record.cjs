@@ -134,7 +134,7 @@ const DISPATCH_SUBJECT = {
   'ci-fix': { fields: ['head_sha', 'status', 'pr'], lifts: "the PR's head moves (a push)" },
   'review-fix': { fields: ['head_sha', 'status', 'pr'], lifts: "the PR's head moves (a push)" },
   // A judge writes a verdict into the PR body (`gate_status:`) and may undraft.
-  'arch-review': { fields: ['gate', 'draft', 'status'], lifts: 'the gate trailer or the draft state changes' },
+  'arch-review': { fields: ['gate', 'draft', 'status', 'pr_base', 'head_sha', 'architecture'], lifts: 'the gate trailer or the draft state changes' },
   // The guard's output is a merge, or the retarget that follows one.
   'pr-sentinel': { fields: ['status', 'pr_base', 'pr'], lifts: 'the PR merges, or its base moves' },
   integrator: {
@@ -1497,6 +1497,7 @@ const INFLIGHT_TOKEN = /^[A-Za-z0-9._:-]{1,200}$/;
 function inflightSubject(ticket, role) {
   if (typeof ticket !== 'string' || ticket.length > 4096) return false;
   if (INFLIGHT_TICKET.test(ticket)) return true;
+  if (role === 'arch-review') return require('./architecture-target.cjs').PHASE_SUBJECT.test(ticket);
   if (['research', 'decomposition'].includes(role)) {
     try {
       const phaseInput = /^phase=(\d+);/.exec(ticket);

@@ -16,7 +16,35 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+
+const testAuthorityHome = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'architecture-authority-')));
+const testAuthorityModule = path.join(testAuthorityHome, 'fixture.cjs');
+fs.writeFileSync(testAuthorityModule, "require('node:os').homedir = () => " + JSON.stringify(testAuthorityHome) + ";\n");
+const testAuthorityArgs = ['--require', testAuthorityModule];
+const testOriginalHomedir = os.homedir;
+os.homedir = () => testAuthorityHome;
+process.on('exit', () => { os.homedir = testOriginalHomedir; fs.rmSync(testAuthorityHome, {recursive:true,force:true}); });
 const { execFileSync } = require('node:child_process');
+
+const targetBin = fs.mkdtempSync(path.join(os.tmpdir(), 'architecture-gh-'));
+fs.writeFileSync(path.join(targetBin, 'gh'), `#!/usr/bin/env node
+const fs = require('node:fs');
+const cp = require('node:child_process');
+const path = require('node:path');
+const git = args => cp.execFileSync('git', args, {encoding:'utf8'}).trim();
+const args = process.argv.slice(2);
+if (args[0] === 'repo') process.stdout.write('main');
+else if (args[0] === 'pr' && args[1] === 'view') {
+  let base = 'main';
+  try { base = JSON.parse(fs.readFileSync('.planning/config.json')).git?.base_branch || base; } catch {}
+  let oid; try { oid = git(['rev-parse','refs/remotes/origin/' + base]); } catch { oid = git(['rev-parse','HEAD']); }
+  process.stdout.write(JSON.stringify({number:Number(args[2]),state:'OPEN',headRefName:git(['branch','--show-current']),
+    headRefOid:git(['rev-parse','HEAD']),baseRefName:base,baseRefOid:oid}));
+} else process.exit(2);
+`, {mode:0o755});
+const targetOldPath = process.env.PATH;
+process.env.PATH = targetBin + path.delimiter + targetOldPath;
+process.on('exit', () => { process.env.PATH = targetOldPath; fs.rmSync(targetBin, {recursive:true,force:true}); });
 const contextBuilder = require('../../plugins/delivery-pipeline/scripts/codex-arch-review-context.cjs');
 const { TICKET, BRANCH, ADR, git, write, fixture, planPath, prepared, unitJudgment, cleanupJudgment } = require('./helpers/codex-arch-review-fixtures.cjs');
 
@@ -179,7 +207,87 @@ test('document-relative decision links are collected completely and missing auth
   } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
 });
 
-module.exports = { fixture, unitJudgment, cleanupJudgment, registerTests, registerCases };
+test('public Codex host seals and consumes an aggregate phase architecture verdict', async () => {
+  const f = fixture();
+  const storage = fs.mkdtempSync(path.join(os.tmpdir(), 'phase-architecture-host-'));
+  try {
+    const originalTicketReview = await unitJudgment(f);
+    const graphDir = path.join(f.root, '.planning/graph');
+    const graph = JSON.parse(fs.readFileSync(path.join(graphDir, 'tickets.json')));
+    graph.tickets[TICKET].epic = 'epic/38-codex-arch-review';
+    write(f.root, '.planning/graph/tickets.json', JSON.stringify(graph));
+    write(f.root, '.planning/phases/38-codex-arch-review/SUMMARY.md', 'Original native obligations remain HOLD.');
+    git(f.root, ['switch', '-c', graph.tickets[TICKET].epic]);
+    git(f.root, ['add', '.planning']); git(f.root, ['commit', '-m', 'fixture: aggregate evidence']);
+    f.head = git(f.root, ['rev-parse', 'HEAD']);
+    f.pr.headRefName = graph.tickets[TICKET].epic; f.pr.headRefOid = f.head;
+    const request = require('../../plugins/delivery-pipeline/scripts/deliver-dispatch.cjs').build(
+      ['arch-review', '38-codex-arch-review', '--phase', '38', '--pr', String(f.pr.number), '--runtime', 'codex'],
+      { cwd: f.root, graphDir });
+    const requestPath = path.join(storage, 'request.json');
+    fs.writeFileSync(requestPath, JSON.stringify(request));
+    const hostModule = require('../../plugins/delivery-pipeline/scripts/codex-delivery-host.cjs');
+    const parsed = hostModule.readRequestFile(requestPath);
+    const options = { graphDir, refreshGit: false, getPullRequest: () => f.pr };
+    const value = contextBuilder.prepare(parsed.scope, parsed.launch, options);
+    const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
+    const selected = policy.resolveDispatch({ runtime: 'codex', role: 'arch-review', signals: value.launch.signals });
+    const agentDir = path.join(storage, 'agents'); fs.mkdirSync(agentDir);
+    const text = ['# shipyard-policy-id = "' + policy.POLICY.id + '"',
+      '# shipyard-policy-version = "' + selected.policy_version + '"',
+      '# shipyard-policy-hash = "' + selected.policy_hash + '"',
+      '# shipyard-policy-runtime = "codex"', '# shipyard-policy-role = "arch-review"',
+      '# shipyard-policy-rung = "' + selected.rung + '"',
+      'name = "' + selected.agent_file.replace(/\.toml$/, '') + '"',
+      'model = "' + selected.model + '"', 'model_reasoning_effort = "' + selected.effort + '"',
+      'sandbox_mode = "read-only"', "developer_instructions = '''Judge the complete authenticated phase.'''", ''].join('\n');
+    const digest = value => require('node:crypto').createHash('sha256').update(value).digest('hex');
+    fs.writeFileSync(path.join(agentDir, selected.agent_file), text);
+    const agentManifest = path.join(agentDir, '.shipyard-manifest.json');
+    fs.writeFileSync(agentManifest, JSON.stringify({ policy_id: policy.POLICY.id,
+      policy_version: selected.policy_version, policy_hash: selected.policy_hash,
+      agent_files: [selected.agent_file], agent_digests: { [selected.agent_file]: digest(text) } }));
+    const capabilities = { supportedModels: [selected.model], supportedEfforts: [selected.effort] };
+    const recorder = require('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs').createDurableRecorder(path.join(storage, 'receipts'));
+    const host = { scope: parsed.scope, capabilities, recorder,
+      launchStatic(selection, context) {
+        const session = require('node:crypto').randomUUID();
+        const judgment = { id: request.scope.ticket, pr: f.pr.number, head: f.head,
+          base_tree: value.prepared.mergeBaseTree, verdict: 'conform', summary: 'Unit aggregate judgment.',
+          findings: [], blocking_count: 0, ticket_set: value.prepared.binding.ticketSet,
+          ticket_set_digest: value.prepared.binding.membership, context_digest: value.prepared.packet.digest,
+          launch_digest: context.prompt.match(/launch_digest=([a-f0-9]{64})/)[1], evidence_markdown: 'Complete unit aggregate review.' };
+        write(f.root, '.shipyard-arch-review-evidence.md', judgment.evidence_markdown);
+        const records = fs.readFileSync(path.join(__dirname, '../fixtures/captured/codex-agent-stream-exec.jsonl'), 'utf8')
+          .trim().split('\n').map(line => JSON.parse(line));
+        const streamRecords = ['thread.started', 'item.completed', 'turn.completed'].map(type => structuredClone(records.find(record => record.type === type)));
+        streamRecords[0].thread_id = session; streamRecords[1].item.text = JSON.stringify(judgment);
+        const stream = streamRecords.map(record => JSON.stringify(record)).join('\n') + '\n';
+        const transcript = path.join(storage, 'transcript.jsonl'); fs.writeFileSync(transcript, stream);
+        return { launch_id: 'codex-' + session, applied_model: selection.model, applied_effort: selection.reasoning_effort,
+          observed_model: selection.model, observed_effort: selection.reasoning_effort, agent_file_digest: selection.agent_file_digest,
+          runtime_evidence: { schema: 'shipyard.codex-runtime-evidence.v1', version: 1, runtime: 'codex', provider: 'openai',
+            session_id: session, worktree: f.root, ticket: request.scope.ticket, phase: 38,
+            transcript: { path: transcript, bytes: Buffer.byteLength(stream), sha256: digest(stream) } } };
+      } };
+    let output = '';
+    await hostModule.runCli(['--args-file', requestPath], { write: text => { output += text; } },
+      { ...options, host, capabilities, recorder, agentDir, agentManifest, storageRoot: storage });
+    const result = JSON.parse(output);
+    assert.equal(result.subject, request.scope.ticket);
+    assert(value.prepared.packet.retained_evidence.some(item => item.dispatch_id === originalTicketReview.result.receipt.dispatch_id));
+    assert.notEqual(result.receipt.dispatch_id, originalTicketReview.result.receipt.dispatch_id);
+    const artifacts = require('../../plugins/delivery-pipeline/scripts/role-artifact.cjs');
+    const current = { worktreePath: f.root, pr: f.pr.number, head: f.head, headBranch: f.pr.headRefName,
+      baseName: 'main', baseCommit: f.base, graphDir };
+    assert.equal(artifacts.currentArchitectureVerdict(current).subject, request.scope.ticket);
+    assert.equal(artifacts.currentArchitectureVerdict({ ...current, head: 'f'.repeat(40) }), null);
+    fs.appendFileSync(path.join(f.root, '.planning/phases/38-codex-arch-review/SUMMARY.md'), '\nChanged evidence.');
+    assert.equal(artifacts.currentArchitectureVerdict(current), null);
+  } finally { cleanupJudgment(f); fs.rmSync(storage, { recursive: true, force: true }); }
+});
+
+module.exports = { fixture, unitJudgment, cleanupJudgment, registerTests, registerCases, testAuthorityArgs };
 
 test('large complete architecture context is included once within final prompt capacity', () => {
   const f = fixture();
@@ -380,7 +488,7 @@ test('fresh process rejects review decision drift after artifact sealing', async
       } };
       require(${JSON.stringify(path.resolve(__dirname, '../../plugins/delivery-pipeline/scripts/role-artifact.cjs'))})
         .validateJudgmentManifest(input.validation);`;
-    assert.throws(() => execFileSync(process.execPath, ['-e', consumer], {
+    assert.throws(() => execFileSync(process.execPath, [...testAuthorityArgs, '-e', consumer], {
       input: JSON.stringify({ validation: input, pr: f.pr }), encoding: 'utf8',
       stdio: ['pipe', 'pipe', 'pipe'],
     }), /sealed architecture context changed/);
@@ -398,7 +506,7 @@ test('fixture-only import does not load or register a node test suite', () => {
     };
     const imported = require(${JSON.stringify(modulePath)});
     if (typeof imported.fixture !== 'function' || imported.registerTests !== undefined) process.exit(2);`;
-  execFileSync(process.execPath, ['-e', script], { stdio: ['ignore', 'pipe', 'pipe'] });
+  execFileSync(process.execPath, [...testAuthorityArgs, '-e', script], { stdio: ['ignore', 'pipe', 'pipe'] });
 });
 
 
@@ -421,6 +529,7 @@ for (const dependency of ['plan-delivery.cjs', 'conveyor-scratch.cjs']) {
           const assert = require('node:assert/strict');
           const { execFileSync } = require('node:child_process');
           const suite = require('./tests/unit/codex-arch-review-context.test.cjs');
+          const testAuthorityArgs = suite.testAuthorityArgs;
           const dependency = ${JSON.stringify(dependency)}, stage = ${JSON.stringify(stage)};
           const f = suite.fixture();
           const helper = path.resolve('plugins/delivery-pipeline/scripts', dependency);
@@ -443,12 +552,12 @@ for (const dependency of ['plan-delivery.cjs', 'conveyor-scratch.cjs']) {
               const consumer = "const fs = require('node:fs'); const input = JSON.parse(fs.readFileSync(0, 'utf8')); "
                 + "input.evidence = Buffer.from(input.evidence, 'base64'); "
                 + "require('./plugins/delivery-pipeline/scripts/codex-arch-review-context.cjs').validateSealedContext(input);";
-              assert.throws(() => execFileSync(process.execPath, ['-e', consumer], {
+              assert.throws(() => execFileSync(process.execPath, [...testAuthorityArgs, '-e', consumer], {
                 input: JSON.stringify(input), encoding: 'utf8', stdio: ['pipe','pipe','pipe'] }),
                 stage === 'consumer' ? /installed architecture source changed/ : /required installed source pin is missing/);
             }
           } finally { suite.cleanupJudgment(f); } })().catch(error => { console.error(error); process.exitCode = 1; });`;
-        execFileSync(process.execPath, ['-e', script], { cwd: installed, encoding: 'utf8',
+        execFileSync(process.execPath, [...testAuthorityArgs, '-e', script], { cwd: installed, encoding: 'utf8',
           stdio: ['ignore', 'pipe', 'pipe'], timeout: 30000, maxBuffer: 4 * 1024 * 1024 });
       } finally { fs.rmSync(installed, { recursive: true, force: true }); }
     });
@@ -492,7 +601,7 @@ test('actual architecture record, seal, clear preserve an existing committed boa
         return execFileSync(exe, args, opts); } };
       require(${JSON.stringify(path.resolve(__dirname, '../../plugins/delivery-pipeline/scripts/role-artifact.cjs'))})
         .validateJudgmentManifest(x.input);`;
-    const consume = () => execFileSync(process.execPath, ['-e', consumer], {
+    const consume = () => execFileSync(process.execPath, [...testAuthorityArgs, '-e', consumer], {
       input: JSON.stringify({ input, pr: f.pr }), encoding: 'utf8', stdio: ['pipe','pipe','pipe'],
     });
     consume();
@@ -701,7 +810,7 @@ test('a missing authority namespace is created privately and symlink namespaces 
       fs.rmdirSync(namespace); const other = path.join(${JSON.stringify(temporary)}, 'other'); fs.mkdirSync(other);
       fs.symlinkSync(other, namespace, 'dir');
       assert.throws(() => artifacts.archiveAuthorityNamespace(), /symlinks/);`;
-    execFileSync(process.execPath, ['-e', script], { stdio: ['ignore','pipe','pipe'] });
+    execFileSync(process.execPath, [...testAuthorityArgs, '-e', script], { stdio: ['ignore','pipe','pipe'] });
   } finally { fs.rmSync(temporary, { recursive: true, force: true }); }
 });
 
@@ -1041,7 +1150,7 @@ for (const kind of ['current manifest', 'current archive evidence', 'current arc
           x.input.io = { execFileSync(exe, args, options) { if (exe === 'gh') return JSON.stringify(x.pr); if (exe === 'git' && args.includes('fetch')) return ''; return execFileSync(exe, args, options); } };
           assert.throws(() => require(${JSON.stringify(path.resolve(__dirname, '../../plugins/delivery-pipeline/scripts/role-artifact.cjs'))}).validateJudgmentManifest(x.input), /bound|changed/);
           if (x.mode === 'oversized before open') assert.equal(opened, false); else assert.equal(changed, true);`;
-        execFileSync(process.execPath, ['-e', script], { input: JSON.stringify({ input, pr: f.pr, target, mode }), encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] });
+        execFileSync(process.execPath, [...testAuthorityArgs, '-e', script], { input: JSON.stringify({ input, pr: f.pr, target, mode }), encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] });
       } finally { cleanupJudgment(f); }
     });
 
@@ -1112,7 +1221,7 @@ test('two independently approved linked decision closures coexist across sealed 
       const script = `const fs = require('node:fs'), { execFileSync } = require('node:child_process'); const x = JSON.parse(fs.readFileSync(0, 'utf8'));
         x.input.io = { execFileSync(exe,args,options) { if(exe==='gh')return JSON.stringify(x.pr);if(exe==='git'&&args.includes('fetch'))return '';return execFileSync(exe,args,options); } };
         require(${JSON.stringify(path.resolve(__dirname, '../../plugins/delivery-pipeline/scripts/role-artifact.cjs'))}).validateJudgmentManifest(x.input);`;
-      execFileSync(process.execPath, ['-e', script], { input: JSON.stringify({ input, pr: fixture.pr }), encoding: 'utf8', stdio: ['pipe','pipe','pipe'] });
+      execFileSync(process.execPath, [...testAuthorityArgs, '-e', script], { input: JSON.stringify({ input, pr: fixture.pr }), encoding: 'utf8', stdio: ['pipe','pipe','pipe'] });
     }
     fs.unlinkSync(secondRegistration.recordPath);
     assert.throws(() => a.role.validateJudgmentManifest(second.validationInput), /uncommitted architecture source.*protected approval/);

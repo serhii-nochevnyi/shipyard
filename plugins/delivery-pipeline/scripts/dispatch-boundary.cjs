@@ -1062,7 +1062,14 @@ function subjectKindFromContext(context, role, ticket) {
   const kind = isObject(context) && context.subject_kind !== undefined
     ? context.subject_kind
     : 'ticket';
+  if (kind === 'phase') {
+    if (role !== 'arch-review' || !require('./architecture-target.cjs').PHASE_SUBJECT.test(ticket || ''))
+      refuse('INVALID_INPUT', 'phase subjects require an exact aggregate architecture identity');
+    return kind;
+  }
   if (kind === 'ticket') {
+    if (role === 'arch-review' && typeof ticket === 'string' && ticket.startsWith('phase='))
+      refuse('INVALID_INPUT', 'phase subjects require subject_kind phase');
     if (typeof ticket === 'string' && ticket.startsWith('round:')) {
       refuse('INVALID_INPUT', 'round subjects require subject_kind round');
     }
@@ -2481,7 +2488,7 @@ function createDispatchBoundary(options = {}) {
       const baseTrace = {
         dispatch_id: validatedResolution.dispatch_id,
         ...(ticket !== undefined ? { ticket } : {}),
-        ...(subjectKind === 'round' ? { subject_kind: subjectKind } : {}),
+        ...(subjectKind !== 'ticket' ? { subject_kind: subjectKind } : {}),
         policy_version: validatedResolution.policy_version,
         policy_hash: validatedResolution.policy_hash,
         runtime: validatedResolution.runtime,

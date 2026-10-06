@@ -273,19 +273,7 @@ test('an untracked path the incoming base ADDS refuses, and git names the path',
   );
 });
 
-// ── the verdict a base-merge that changed nothing does not have to buy again ──
-//
-// This is where "the same tree, a different sha" actually exists: the `cascade()`
-// fixture holds the parent's work on the epic as a SQUASH, so the epic's commit
-// is not an ancestor of the child while its CONTENT already is. Merging it in
-// moves the commit graph and leaves the child's tree untouched — the exact shape
-// measured on T-25-05, where the re-judgement cost ~150k tokens and changed
-// nothing (ADR-006 D2).
-//
-// The proof is two object identities and `gate-trailer.cjs carry` computes both;
-// base-merge only hands it the pre-merge head. A merge that brought content
-// resolves to a different tree and is refused by construction, so this caller
-// needs no judgement of its own — which is the reason it can call it at all.
+// A new integration HEAD requires a fresh review, including an equal-tree merge.
 
 const CARRY_W = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-carry-'));
 process.on('exit', () => { try { fs.rmSync(CARRY_W, { recursive: true, force: true }); } catch { /* best effort */ } });
@@ -299,6 +287,7 @@ fs.writeFileSync(path.join(CARRY_BIN, 'gh'), [
   '#!/usr/bin/env bash',
   'argv="$*"',
   'case "$argv" in',
+  '  "repo view --json defaultBranchRef --jq .defaultBranchRef.name") echo epic ;;',
   '  *"--json body,headRefOid"*) cat "$SHIPYARD_CARRY_VIEW" ;;',
   '  "api "*"/commits/"*"/statuses") echo "[]" ;;',
   '  "api "*"/statuses/"*) printf \'%s\\n\' "$@" > "$SHIPYARD_CARRY_STATUS"; echo "{}" ;;',
@@ -315,7 +304,7 @@ fs.writeFileSync(path.join(CARRY_BIN, 'gh'), [
 ].join('\n'));
 fs.chmodSync(path.join(CARRY_BIN, 'gh'), 0o755);
 
-const { gateConform, gateKind, gateFromStatus, STATUS_CONTEXT } = require(path.join(SCRIPTS, 'gate-trailer.cjs'));
+const { STATUS_CONTEXT } = require(path.join(SCRIPTS, 'gate-trailer.cjs'));
 
 // The board is where the PR number comes from: no prompt has to learn a new flag
 // for the carry to happen, and a project whose graph carries no delivery state
@@ -372,9 +361,9 @@ const postedStatus = () => {
   return { endpoint: argv[1], ...fields };
 };
 
-suite('base merge — a verdict survives a head move it provably covers');
+suite('base merge — integration review is bound to the exact head');
 
-test('a merge that changed nothing carries the verdict onto the new head', () => {
+test('an equal-tree integration merge re-owes review without carrying a verdict', () => {
   const fx = carryFixture({ squashDiffers: false });
 
   const r = baseMergeWithBoard(fx.proj, ['T-01-02', '--worktree', fx.repo, '--base', 'epic', '--no-fetch', '--json']);
@@ -391,18 +380,13 @@ test('a merge that changed nothing carries the verdict onto the new head', () =>
     'the merge must not move the tree'
   );
 
-  const status = postedStatus();
-  assert.ok(status, `no ${STATUS_CONTEXT} status was posted: ${r.stdout}${r.stderr}`);
-  assert.ok(status.endpoint.endsWith(`/statuses/${newHead}`), `the status is not on the new head: ${status.endpoint}`);
-  assert.strictEqual(status.context, STATUS_CONTEXT);
-  assert.strictEqual(status.state, 'success');
-  assert.strictEqual(edited(), null, `the carry edited the PR body:\n${edited()}`);
-  const gate = gateFromStatus(status, newHead);
-  assert.strictEqual(gateConform(gate, newHead), true, `the verdict does not cover the new head:\n${status.description}`);
-  assert.strictEqual(gateKind(gate, fx.judgedHead), 'stale', 'the old head must no longer read conform');
-  assert.strictEqual(gate.base_tree, fx.judgedBaseTree, 'the proof it was measured against is kept');
-  assert.ok(!('checks' in gate), 'a green measured against the old base must not carry');
-  assert.strictEqual(payload.carry && payload.carry.carried, true, `the carry was refused: ${r.stdout}`);
+  assert.strictEqual(postedStatus(), null, 'no architecture success is posted on the new head');
+  assert.strictEqual(edited(), null, 'the retained trailer is not rewritten');
+  assert.strictEqual(payload.carry.carried, false);
+  assert.strictEqual(payload.carry.architecture, 'required');
+  assert.strictEqual(payload.carry.carry, 're-owed');
+  assert.match(payload.carry.reason, /head moved/);
+
 });
 
 test('a merge that brought content refuses the carry and leaves the trailer alone', () => {
@@ -421,7 +405,7 @@ test('a merge that brought content refuses the carry and leaves the trailer alon
     'the fixture must actually bring content in'
   );
   assert.strictEqual(payload.carry && payload.carry.carried, false, `the carry was allowed: ${r.stdout}`);
-  assert.ok(/tree/i.test(payload.carry.reason), `the refusal does not name the trees: ${payload.carry.reason}`);
+  assert.match(payload.carry.reason, /head moved/, 'the new integration head requires fresh review');
   assert.strictEqual(postedStatus(), null, `a ${STATUS_CONTEXT} status was posted anyway`);
   assert.strictEqual(edited(), null, `the trailer was rewritten anyway:\n${edited()}`);
 });

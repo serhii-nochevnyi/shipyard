@@ -40,9 +40,9 @@ function git(repo, ...args) {
 
 function fixture({ sibling = 'unowned', adapt = false, duplicate = false, extra = false, treeEqual = false, deferMerge = false } = {}) {
   const repo = fs.mkdtempSync(path.join(tmp, 'repo-'));
-  const graph = path.join(repo, 'graph');
+  const graph = path.join(repo, '.planning', 'graph');
   const statuses = path.join(repo, 'statuses');
-  fs.mkdirSync(graph);
+  fs.mkdirSync(graph, { recursive: true });
   fs.mkdirSync(statuses);
   git(repo, 'init', '-q');
   git(repo, 'config', 'user.name', 'Test');
@@ -90,8 +90,9 @@ function fixture({ sibling = 'unowned', adapt = false, duplicate = false, extra 
     git(repo, 'commit', '-qm', 'non-owned merge adaptation');
   }
   const to = git(repo, 'rev-parse', 'HEAD');
-  fs.writeFileSync(path.join(graph, 'tickets.json'), JSON.stringify({ tickets: { 'T-01-01': { files: ['owned.js', 'owned-other.js'] } } }));
+  fs.writeFileSync(path.join(graph, 'tickets.json'), JSON.stringify({ tickets: { 'T-01-01': { phase: '01-demo', branch: 'ticket', epic: 'epic/01-demo', files: ['owned.js', 'owned-other.js'] } } }));
   fs.writeFileSync(path.join(graph, 'delivery-state.json'), JSON.stringify({ 'T-01-01': { pr: 9 } }));
+  fs.writeFileSync(path.join(repo, '.planning/config.json'), JSON.stringify({ git: { base_branch: 'base' } }));
   const prView = path.join(repo, 'view.json');
   fs.writeFileSync(prView, JSON.stringify({ number: 9, headRefOid: from, baseRefName: 'base',
     body: `gate_status: arch-review=conform, drift-check=skipped, degenerate-green=skipped, base_tree=${judgedBaseTree}, head=${from}` }));
@@ -105,7 +106,7 @@ function carry(fx, { badBase = false, viaMerge = false } = {}) {
     fs.writeFileSync(fx.prView, JSON.stringify(view));
   }
   const env = { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH}`,
-    CARRY_STATUS_DIR: fx.statuses, CARRY_PR_VIEW: fx.prView };
+    CARRY_STATUS_DIR: fx.statuses, CARRY_PR_VIEW: fx.prView, SHIPYARD_COVERAGE_ROOT: path.join(fx.repo, 'coverage') };
   const args = viaMerge
     ? [BASE_MERGE, 'T-01-01', '--worktree', fx.repo, '--base', 'base', '--graph', fx.graph, '--no-fetch', '--json']
     : [CARRY, 'carry', 'T-01-01', '--pr', '9', '--from', fx.from, '--to', fx.to,
@@ -118,19 +119,15 @@ function carry(fx, { badBase = false, viaMerge = false } = {}) {
 }
 
 suite('carry a conform verdict across a sibling base merge');
-test('identical own patch carries with patch-id and posts merge-gate', () => {
+test('identical own patch re-owes review without posting a new verdict', () => {
   const fx = fixture();
   const before = fs.readFileSync(fx.prView, 'utf8');
   const r = carry(fx);
-  assert.strictEqual(r.status, 0, r.stderr);
-  assert.strictEqual(r.data.carry, 'patch-id');
-  assert.deepStrictEqual(r.posted, [fx.to]);
-  const status = JSON.parse(fs.readFileSync(path.join(fx.statuses, fx.to + '.json')))[0];
-  assert.strictEqual(status.context, 'merge-gate');
-  assert.match(status.description, /carried=patch-id/);
-  assert.match(status.description, /degenerate-green=skipped/);
-  assert.ok(status.description.length <= 140);
-  assert.strictEqual(fs.readFileSync(fx.prView, 'utf8'), before, 'carry must not edit the PR body');
+  assert.strictEqual(r.status, 1, r.stderr);
+  assert.strictEqual(r.data.carry, 're-owed');
+  assert.match(r.data.reason, /fresh authenticated architecture verdict/);
+  assert.deepStrictEqual(r.posted, []);
+  assert.strictEqual(fs.readFileSync(fx.prView, 'utf8'), before);
 });
 test('duplicated block in an owned file re-owes', () => {
   const r = carry(fixture({ duplicate: true }));
@@ -139,8 +136,8 @@ test('duplicated block in an owned file re-owes', () => {
   assert.match(r.data.reason, /owned blob|patch-id/);
   assert.deepStrictEqual(r.posted, []);
 });
-test('sibling deletion of a called function carries while an owned adaptation re-owes', () => {
-  assert.strictEqual(carry(fixture({ sibling: 'delete-call' })).data.carry, 'patch-id');
+test('both sibling deletion and owned adaptation re-owe review', () => {
+  assert.strictEqual(carry(fixture({ sibling: 'delete-call' })).data.carry, 're-owed');
   const adapted = carry(fixture({ sibling: 'delete-call', adapt: true }));
   assert.strictEqual(adapted.data.carry, 're-owed');
   assert.deepStrictEqual(adapted.posted, []);
@@ -168,18 +165,19 @@ test('unreadable judged base re-owes', () => {
   assert.strictEqual(r.data.carry, 're-owed');
   assert.deepStrictEqual(r.posted, []);
 });
-test('tree-equal path still carries', () => {
+test('tree-equal new head still re-owes authenticated review', () => {
   const r = carry(fixture({ treeEqual: true }));
-  assert.strictEqual(r.status, 0, r.stderr);
-  assert.strictEqual(r.data.carry, 'tree-equal');
+  assert.strictEqual(r.status, 1, r.stderr);
+  assert.strictEqual(r.data.carry, 're-owed');
+  assert.deepStrictEqual(r.posted, []);
 });
-test('base-merge passes both base refs and reports the patch-id carry', () => {
+test('base-merge reports required integration review without copying a verdict', () => {
   const fx = fixture({ deferMerge: true });
   const r = carry(fx, { viaMerge: true });
   assert.strictEqual(r.status, 0, r.stderr);
-  assert.strictEqual(r.data.carry.carry, 'patch-id');
-  assert.strictEqual(r.data.carry.carried, true);
-  assert.deepStrictEqual(r.posted, [git(fx.repo, 'rev-parse', 'HEAD')]);
+  assert.strictEqual(r.data.carry.carry, 're-owed');
+  assert.strictEqual(r.data.carry.carried, false);
+  assert.deepStrictEqual(r.posted, []);
 });
 
 done();

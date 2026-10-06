@@ -1216,6 +1216,99 @@ function authenticatedArchivePins(worktreePath) {
   return pins.sort((a, b) => a.path.localeCompare(b.path));
 }
 
+function phaseArchitectureEvidence(worktreePath, binding, options = {}) {
+  const root = fs.realpathSync(worktreePath);
+  const ids = new Set(binding.rows.map(row => row.id));
+  const list = execFileSync('git', ['-C', root, 'worktree', 'list', '--porcelain'], { encoding: 'utf8' });
+  const evidence = [];
+  for (const line of list.split('\n').filter(line => line.startsWith('worktree '))) {
+    const worktree = fs.realpathSync(line.slice(9));
+    let pins;
+    if (worktree === root && Array.isArray(options.archivePins)) {
+      assertArchiveInventory(worktree, options.archivePins);
+      if (!fs.existsSync(path.join(archiveAuthorityDirectory(worktree), 'catalogue.json'))) continue;
+      pins = Object.values(authorityState(worktree).payload.records).flatMap(record => record.pins);
+      for (const pin of pins) {
+        if (!options.archivePins.some(expected => stable(expected) === stable(pin)))
+          fail('ARCHIVE_AUTHORITY_INVALID', 'retained catalogue differs from the admitted complete archive inventory');
+        readPinnedArchiveFile(worktree, pin, 'authenticated phase history');
+      }
+    } else pins = authenticatedArchivePins(worktree);
+    if (!pins.length) continue;
+    for (const record of Object.values(authorityState(worktree).payload.records)) {
+      if (!ids.has(record.receipt.ticket || record.receipt.runtime_evidence?.ticket)) continue;
+      evidence.push({ worktree, dispatch_id: record.dispatch_id, receipt: record.receipt,
+        files: record.pins.map(pin => ({ ...pin,
+          content: readPinnedArchiveFile(worktree, pin, 'complete phase ticket evidence').toString('utf8') })) });
+    }
+  }
+  return evidence.sort((a, b) => a.dispatch_id.localeCompare(b.dispatch_id));
+}
+
+function phaseArchitectureEvidenceDigest(evidence) { return digest(stable(evidence)); }
+
+function currentArchitectureVerdict({ worktreePath, pr, head, baseName, baseCommit, graphDir, headBranch }) {
+  const root = fs.realpathSync(worktreePath);
+  const common = fs.realpathSync(execFileSync('git', ['-C', root, 'rev-parse', '--path-format=absolute', '--git-common-dir'], { encoding: 'utf8' }).trim());
+  const directory = graphDir || path.join(root, '.planning/graph');
+  let targetGraph;
+  try { targetGraph = JSON.parse(fs.readFileSync(path.join(directory, 'tickets.json'), 'utf8')); }
+  catch (error) { if (error.code !== 'ENOENT') throw error; }
+  const targetBranch = headBranch || execFileSync('git', ['-C', root, 'symbolic-ref', '--quiet', '--short', 'HEAD'], { encoding: 'utf8' }).trim();
+  const aggregateRequired = Object.values(targetGraph?.tickets || {}).some(row => row.epic === targetBranch);
+  const list = execFileSync('git', ['-C', root, 'worktree', 'list', '--porcelain'], { encoding: 'utf8' });
+  for (const line of list.split('\n').filter(line => line.startsWith('worktree '))) {
+    const worktree = fs.realpathSync(line.slice(9));
+    const pins = authenticatedArchivePins(worktree);
+    if (!pins.length) continue;
+    const state = authorityState(worktree);
+    for (const record of Object.values(state.payload.records)) {
+      if (record.receipt.role !== 'arch-review') continue;
+      const pin = record.pins.find(pin => pin.path.endsWith('/' + MANIFEST_NAME));
+      const manifest = JSON.parse(readPinnedArchiveFile(worktree, pin, 'architecture manifest'));
+      if (aggregateRequired && !manifest.boundary_subject?.startsWith('phase=')) continue;
+      if (manifest.role !== 'arch-review' || manifest.artifact_kind !== 'judgment'
+          || manifest.producer_dispatch !== record.dispatch_id || manifest.repository_identity !== common
+          || manifest.pr !== pr || manifest.head !== head || manifest.base_commit !== baseCommit
+          || manifest.base.replace(/^(?:refs\/remotes\/origin\/|origin\/)/, '') !== baseName
+          || manifest.envelope?.verdict !== 'conform') continue;
+      const findings = JSON.parse(readPinnedArchiveFile(worktree, manifest.files.findings, 'architecture findings'));
+      if (findings.id !== manifest.boundary_subject || findings.pr !== pr || findings.head !== head
+          || findings.base_tree !== manifest.merge_base_tree || findings.verdict !== 'conform') continue;
+      if (manifest.boundary_subject.startsWith('phase=')) {
+        const directory = graphDir || findings.host_context?.graph_dir || path.join(root, '.planning/graph');
+        const graph = JSON.parse(fs.readFileSync(path.join(directory, 'tickets.json'), 'utf8'));
+        const raw = JSON.parse(fs.readFileSync(path.join(directory, 'delivery-state.json'), 'utf8'));
+        const aggregate = require('./architecture-target.cjs').PHASE_SUBJECT.exec(manifest.boundary_subject);
+        if (!aggregate) continue;
+        const branch = headBranch || execFileSync('git', ['-C', worktree, 'symbolic-ref', '--quiet', '--short', 'HEAD'], { encoding: 'utf8' }).trim();
+        const binding = require('./architecture-target.cjs').phaseBinding({ graph, state: raw.tickets || raw,
+          phase: Number(aggregate[1].split('-')[0]), repository: common, branch, pr, head, base: baseCommit });
+        if (binding.subject !== manifest.boundary_subject
+            || findings.host_context?.phase_evidence_digest !== phaseArchitectureEvidenceDigest(phaseArchitectureEvidence(root, binding))) continue;
+      }
+      try {
+        if (findings.host_context?.selected_refs) {
+          const project = findings.host_context.source_root || path.resolve(findings.host_context.graph_dir || graphDir || path.join(root, '.planning/graph'), '../..');
+          const architectureRefs = [];
+          for (const source of findings.host_context.selected_refs) {
+            if (source.path === '.planning/graph/delivery-state.json') continue;
+            const content = readPinnedArchiveFile(project, source, 'current architecture context source').toString('utf8');
+            if (/^(?:\.planning\/architecture\/.+\.md|\.planning\/investigations\/.+\/DECISIONS\.md)$/.test(source.path)) architectureRefs.push({ ...source, content });
+          }
+          if (architectureRefs.length) authenticateArchitectureSources(worktree, project, architectureRefs);
+        }
+        if (record.receipt.runtime === 'codex') require('./codex-arch-review-context.cjs').validateHistoricalContext({
+          result: findings, receipt: record.receipt, dispatchId: record.dispatch_id,
+          evidence: readPinnedArchiveFile(worktree, manifest.files.evidence, 'architecture evidence') });
+      } catch { continue; }
+      return Object.freeze({ authenticated: true, verdict: 'conform', pr, head, base: baseName,
+        base_commit: baseCommit, subject: manifest.boundary_subject, dispatch_id: record.dispatch_id });
+    }
+  }
+  return null;
+}
+
 function assertArchiveInventory(worktreePath, pins) {
   const worktree = fs.realpathSync(worktreePath);
   if (!Array.isArray(pins) || new Set(pins.map(pin => pin.path)).size !== pins.length)
@@ -2074,13 +2167,16 @@ function canonicalTicketSet(value, label) {
 }
 
 function ticketSetFor(input, result, role, metadata) {
-  if (role !== 'pr-sentinel' && role !== 'integrator') return { entries: [], digest: null };
+  if (role !== 'pr-sentinel' && role !== 'integrator'
+      && !(role === 'arch-review' && metadata.ticket.startsWith('phase='))) return { entries: [], digest: null };
   const supplied = aliasValue(input, ['ticketSet', 'ticket_set'], `${role} input ticket set`);
   const resultValue = aliasValue(result, ['ticket_set', 'ticketSet'], `${role} result ticket set`);
   if (supplied === undefined) fail('MISSING_JUDGMENT_CONTEXT', `${role} requires the guarded/merged ticket set before dispatch`);
   if (resultValue === undefined) fail('MISSING_ARTIFACT', `${role} result must repeat the complete ticket set`);
   const expected = canonicalTicketSet(supplied, `${role} ticket set`);
   const actual = canonicalTicketSet(resultValue, `${role} result ticket set`);
+  if (role === 'arch-review' && stable(supplied) !== stable(resultValue))
+    fail('JUDGMENT_IDENTITY_MISMATCH', 'aggregate result must repeat complete membership and evidence');
   if (stable(expected) !== stable(actual)) {
     fail('JUDGMENT_IDENTITY_MISMATCH', `${role} result ticket set does not match the authenticated input ticket set`);
   }
@@ -2242,6 +2338,13 @@ function judgmentSubject(role, metadata, identity, input, ticketSet, pr) {
     const phase = compactIdentity(input.phase, 'integration phase');
     return `phase=${phase};repository=${identity.repository.identity};tickets=${ticketSet.digest}`;
   }
+  if (role === 'arch-review' && metadata.ticket.startsWith('phase=')) {
+    const aggregate = require('./architecture-target.cjs').PHASE_SUBJECT.exec(metadata.ticket);
+    if (!aggregate || aggregate[2] !== identity.repository.identity || aggregate[3] !== ticketSet.digest
+        || Number(aggregate[4]) !== pr || aggregate[5] !== identity.head || aggregate[6] !== identity.base_commit)
+      fail('JUDGMENT_IDENTITY_MISMATCH', 'aggregate architecture identity differs from the authenticated PR and membership');
+    return metadata.ticket;
+  }
   return `ticket=${metadata.ticket};pr=${pr}`;
 }
 
@@ -2289,7 +2392,7 @@ function judgmentResultData(result, metadata, input, identity) {
       blocking_count: findings.blocking_count,
       finding_count: findings.finding_count,
       reviewed,
-      ticket_set_digest: null,
+      ticket_set_digest: ticketSet.digest,
       pr,
       findings: findings.findings,
     };
@@ -3456,6 +3559,9 @@ module.exports = Object.freeze({
   archiveAuthorityNamespace,
   archiveAuthorityDirectory,
   authenticatedArchivePins,
+  currentArchitectureVerdict,
+  phaseArchitectureEvidence,
+  phaseArchitectureEvidenceDigest,
   assertArchiveInventory,
   historicalBookkeepingPins,
   trustedBookkeepingMutation,

@@ -7,6 +7,7 @@ const { execFileSync } = require('node:child_process');
 const { assertCanonicalGraph } = require('./plan-delivery.cjs');
 const { statusIgnoringScratch } = require('./conveyor-scratch.cjs');
 const roleArtifact = require('./role-artifact.cjs');
+const { resolveIntegrationBranch, architectureTarget, phaseBinding, phaseEvidencePaths, PHASE_SUBJECT } = require('./architecture-target.cjs');
 const { parseCodexStream } = require('./codex-runtime-host.cjs');
 
 const SCHEMA = 'shipyard.codex-arch-review-context.v1';
@@ -217,14 +218,17 @@ function collect(scope, options) {
   const stateFile = file(project, '.planning/graph/delivery-state.json');
   const graph = JSON.parse(graphFile.content), rawState = JSON.parse(stateFile.content);
   const state = rawState.tickets || rawState;
-  const row = graph.tickets && graph.tickets[scope.ticket];
+  const aggregate = PHASE_SUBJECT.exec(scope.ticket);
+  let binding;
+  const aggregateRows = aggregate ? Object.entries(graph.tickets).filter(([, item]) => Number(String(item.phase).match(/^0*(\d+)/)?.[1]) === Number(scope.phase)) : [];
+  const row = aggregate ? aggregateRows[0]?.[1] : graph.tickets && graph.tickets[scope.ticket];
   if (!object(row) || Number(String(row.phase).match(/^0*(\d+)/)?.[1]) !== Number(scope.phase))
     fail('ticket or phase absent from canonical graph');
-  const number = state[scope.ticket]?.pr;
+  const number = aggregate ? Number(aggregate[4]) : state[scope.ticket]?.pr;
   if (!Number.isSafeInteger(number) || number < 1) fail('ticket has no recorded PR');
   const branch = git(options, worktree, ['symbolic-ref', '--quiet', '--short', 'HEAD']);
   const head = git(options, worktree, ['rev-parse', 'HEAD']);
-  if (branch !== row.branch) fail('ticket branch differs from review worktree');
+  if (branch !== (aggregate ? row.epic : row.branch)) fail('ticket branch differs from review worktree');
   const live = options.getPullRequest
     ? options.getPullRequest({ worktree, pr: number, repo: row.repo || null })
     : JSON.parse(String(run(options, 'gh', ['pr', 'view', String(number),
@@ -237,6 +241,15 @@ function collect(scope, options) {
       || typeof live.baseRefName !== 'string' || !/^[A-Za-z0-9._/-]+$/.test(live.baseRefName)
       || live.baseRefName.startsWith('-') || live.baseRefName.includes('..'))
     fail('live PR identity differs from ticket', 'STALE_CONTEXT');
+  const integration = resolveIntegrationBranch({ projectRoot: project, repo: row.repo || null,
+    defaultBranch: options.defaultBranch, exec: options.execFileSync || execFileSync });
+  if (!architectureTarget({ base: live.baseRefName, integrationBranch: integration }).required)
+    fail('architecture review skipped-by-target', 'ARCH_REVIEW_SKIPPED_BY_TARGET');
+  if (aggregate) {
+    binding = phaseBinding({ graph, state, phase: scope.phase, repository: common(worktree),
+      pr: number, head, base: live.baseRefOid, branch });
+    if (binding.subject !== scope.ticket) fail('aggregate phase identity changed', 'STALE_CONTEXT');
+  }
   const base = 'refs/remotes/origin/' + live.baseRefName;
   if (options.refreshGit !== false) git(options, worktree, ['fetch', '--no-tags', 'origin',
     '+refs/heads/' + live.baseRefName + ':' + base]);
@@ -246,8 +259,9 @@ function collect(scope, options) {
   const mergeBaseTree = git(options, worktree, ['rev-parse', mergeBase + '^{tree}']);
   const diff = String(run(options, 'git', ['-C', worktree, 'diff', '--no-ext-diff', '--no-textconv',
     '--unified=50', mergeBase + '...' + head], worktree));
-  const plan = file(project, row.plan);
-  const ids = new Set(Array.from(plan.content.matchAll(/ADR-(\d{3})/g), m => 'ADR-' + m[1]));
+  const plans = (binding ? binding.rows : [{ row }]).map(item => file(project, item.row.plan));
+  const plan = plans[0];
+  const ids = new Set(Array.from(plans.map(item => item.content).join('\n').matchAll(/ADR-(\d{3})/g), m => 'ADR-' + m[1]));
   let inventoryCount = 0;
   function architectureNames(relative = '.planning/architecture') {
     return fs.readdirSync(path.join(project, relative), { withFileTypes: true }).flatMap(entry => {
@@ -259,13 +273,18 @@ function collect(scope, options) {
     });
   }
   const names = architectureNames().sort();
-  const refs = [plan];
+  const refs = [...plans];
+  if (binding) {
+    for (const relative of phaseEvidencePaths(project, binding))
+      if (!refs.some(ref => ref.path === relative)) refs.push(file(project, relative));
+    refs.push(stateFile);
+  }
   for (const id of [...ids].sort()) {
     const matches = names.filter(n => (path.posix.basename(n) === id + '.md' || path.posix.basename(n).startsWith(id + '-'))
       && !/-(?:DATA-MODEL|INTERFACES|ROLLOUT)\.md$/.test(n));
     if (!matches.length) fail('required architecture record is missing: ' + id);
   }
-  let corpusBytes = plan.bytes;
+  let corpusBytes = refs.reduce((sum, ref) => sum + ref.bytes, 0);
   for (const name of names) {
     const ref = file(project, '.planning/architecture/' + name, INPUT_MAX_BYTES - corpusBytes);
     corpusBytes += ref.bytes; refs.push(ref);
@@ -295,9 +314,11 @@ function collect(scope, options) {
       visited.add(relative); refs.push(decision);
     }
   }
-  const sourceAuthority = roleArtifact.authenticateArchitectureSources(worktree, project, refs.filter(ref => ref.path !== plan.path));
+  const sourceAuthority = roleArtifact.authenticateArchitectureSources(worktree, project, refs.filter(ref => /^(?:\.planning\/architecture\/.+\.md|\.planning\/investigations\/.+\/DECISIONS\.md)$/.test(ref.path)));
   const packet = { source_authority: sourceAuthority, schema: SCHEMA, ticket: scope.ticket, phase: Number(scope.phase),
-    graph: { path: graphFile.path, sha256: graphFile.sha256, row },
+    graph: { path: graphFile.path, sha256: graphFile.sha256, row, ...(binding ? { binding } : {}) },
+    ...(binding ? { ticket_set: binding.ticketSet, ticket_set_digest: binding.membership,
+      retained_evidence: roleArtifact.phaseArchitectureEvidence(worktree, binding, { archivePins: options.archivePins }) } : {}),
     pr: { number, head, branch, base: live.baseRefName, base_commit: live.baseRefOid, draft: live.isDraft, review_decision: live.reviewDecision },
     post_change_inventory: String(run(options, 'git', ['-C', worktree, 'ls-tree', '-r', '--name-only', head], worktree)),
     diff: { merge_base: mergeBase, merge_base_tree: mergeBaseTree, content: diff }, refs };
@@ -332,7 +353,8 @@ function collect(scope, options) {
 
   return { role: 'arch-review', ticket: scope.ticket, phaseNumber: Number(scope.phase), pr: number,
     base, baseName: live.baseRefName, baseCommit: live.baseRefOid, mergeBaseTree,
-    canonical: { worktree, head, branch }, rows: [{ id: scope.ticket, row }],
+    canonical: { worktree, head, branch }, rows: binding ? binding.rows : [{ id: scope.ticket, row }],
+    ...(binding ? { binding } : {}),
     packet: { ...packet, digest: digest(serialized), required_refs: refs.map(({ path, sha256, bytes }) => ({ path, sha256, bytes })),
       accounting: { estimated_bytes: Buffer.byteLength(serialized) } },
     draft: live.isDraft, livePullRequests: [{ ...live }], evidencePath: '.shipyard-arch-review-evidence.md' };
@@ -422,6 +444,7 @@ function finish(value, dispatch, recorder) {
     worktreePath: prepared.canonical.worktree,
     role: 'arch-review', ticket: prepared.ticket, pr: prepared.pr,
     base: prepared.base, recorder, dispatchId: dispatch.dispatch_id,
+    ...(prepared.binding ? { phase: prepared.binding.phase, ticketSet: prepared.binding.ticketSet, ticketSetDigest: prepared.binding.membership } : {}),
     result: { ...judgment, host_context: {
       schema: SCHEMA, graph_dir: preparedOptions.get(value).graphDir || process.env.SHIPYARD_GRAPH_DIR
         || path.join(prepared.canonical.worktree, '.planning/graph'),
@@ -429,6 +452,7 @@ function finish(value, dispatch, recorder) {
       worktree: prepared.canonical.worktree, evidence_sha256: evidence.sha256,
       transcript_sha256: dispatch.receipt.runtime_evidence.transcript.sha256,
       selected_refs: value.evidence.selected_refs,
+      ...(prepared.binding ? { phase_evidence_digest: roleArtifact.phaseArchitectureEvidenceDigest(prepared.packet.retained_evidence) } : {}),
       installation,
       bookkeeping: preparedOptions.get(value).bookkeepingPins || [],
       historical_archives: preparedOptions.get(value).archivePins || [],
@@ -492,6 +516,7 @@ function prepare(scope, launch, options = {}) {
     'context_digest=' + prepared.packet.digest,
     'launch_digest=' + '0'.repeat(64),
     'Use packet ticket, pr.number, pr.head and diff.merge_base_tree for the exact identity fields.',
+    ...(prepared.binding ? ['Repeat the complete packet ticket_set and ticket_set_digest in the result. This is the phase integration review, bound to the aggregate PR, not a ticket verdict.'] : []),
     'Keep development artifacts as context; judge product behavior. Retain uncertainty in the evidence.',
     'Write the complete review to .shipyard-arch-review-evidence.md in the supplied worktree.',
     'That required role-owned file must contain exactly the complete evidence_markdown text.',
@@ -549,7 +574,7 @@ function admitInstalledLaunch(value, options) {
   const files = [
     { root: agentRoot, ...agent },
     { root: manifestRoot, ...manifest },
-    ...['codex-arch-review-context.cjs', 'codex-delivery-host.cjs', 'codex-runtime-host.cjs', 'role-artifact.cjs', 'plan-delivery.cjs', 'conveyor-scratch.cjs', 'dispatch-record.cjs', 'claude-runtime-host.cjs', 'lock.cjs'].map(name =>
+    ...['codex-arch-review-context.cjs', 'codex-delivery-host.cjs', 'codex-runtime-host.cjs', 'role-artifact.cjs', 'plan-delivery.cjs', 'conveyor-scratch.cjs', 'dispatch-record.cjs', 'claude-runtime-host.cjs', 'lock.cjs', 'architecture-target.cjs'].map(name =>
       ({ root: scriptRoot, ...file(scriptRoot, name) })),
   ].map(({ content: _content, ...pin }) => pin);
   if (options.capabilitiesFile) {
@@ -648,7 +673,7 @@ function validateSealedContext(input, options = {}) {
       || installation.capacity.complete_upper_bound_bytes > INPUT_MAX_BYTES
       || installation.capacity.maximum_bytes !== INPUT_MAX_BYTES)
     fail('installed launch authority differs from sealed context', 'STALE_CONTEXT');
-  for (const required of ['codex-arch-review-context.cjs', 'codex-delivery-host.cjs', 'codex-runtime-host.cjs', 'role-artifact.cjs', 'plan-delivery.cjs', 'conveyor-scratch.cjs', 'dispatch-record.cjs', 'claude-runtime-host.cjs', 'lock.cjs']) {
+  for (const required of ['codex-arch-review-context.cjs', 'codex-delivery-host.cjs', 'codex-runtime-host.cjs', 'role-artifact.cjs', 'plan-delivery.cjs', 'conveyor-scratch.cjs', 'dispatch-record.cjs', 'claude-runtime-host.cjs', 'lock.cjs', 'architecture-target.cjs']) {
     if (!installation.files.some(pin => pin.root === installation.script_root && pin.path === required))
       fail('required installed source pin is missing', 'ARCH_REVIEW_CONTEXT_REQUIRED');
   }
@@ -682,7 +707,8 @@ function validateSealedContext(input, options = {}) {
     bookkeepingPins: context.bookkeeping, historicalBookkeepingPins: context.historical_bookkeeping,
     allowClearedBookkeeping: true, archivePins: [...context.historical_archives, ...(input.archivePins || [])],
   });
-  if (current.pr !== input.pr || current.packet.digest !== context.packet_digest
+  if ((current.binding && context.phase_evidence_digest !== roleArtifact.phaseArchitectureEvidenceDigest(current.packet.retained_evidence))
+      || current.pr !== input.pr || current.packet.digest !== context.packet_digest
       || JSON.stringify(canonical(current.packet.required_refs.map(({ path, sha256, bytes }) => ({ path, sha256, bytes }))))
         !== JSON.stringify(canonical(context.selected_refs)))
     fail('sealed architecture context changed before artifact consumption', 'STALE_CONTEXT');

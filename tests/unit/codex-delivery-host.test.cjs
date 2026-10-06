@@ -318,7 +318,9 @@ test('dynamic executor resolves Sol/low through the boundary with worktree write
     assert.equal(call.context.sandbox_mode, 'workspace-write');
     assert.equal(call.context.run_id, f.scope.run_id);
     assert.equal(call.context.worktreePath, f.scope.worktree);
-    assert.match(call.context.prompt, /^Implement the scoped ticket\.\n\nLeave changes uncommitted/);
+    assert.match(call.context.prompt, /active coordinator-owned Shipyard delivery loop/);
+    assert.match(call.context.prompt, /Do not restart shipyard-route, bootstrap, marketplace installation/);
+    assert.match(call.context.prompt, /^Implement the scoped ticket\.\n\nYou are an executor already dispatched/);
     assert.match(call.context.prompt,
       /Leave changes uncommitted\. The trusted host will stage, sign, and verify the commit\.\n\n<TICKET-CONTRACT path="\.planning\/PLAN\.md"/);
     assert.match(call.context.prompt, /# approved plan/);
