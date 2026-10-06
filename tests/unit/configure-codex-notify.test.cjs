@@ -167,8 +167,6 @@ test('remove cannot restore a recursive previous notification handler', () => {
 });
 
 
-// The lifecycle cases above retain the INV012 regression fixtures. These extend
-// that same supported entrypoint to aliases, upgrade, refusal and real callbacks.
 function sidecar(f, delegate) {
   fs.writeFileSync(f.delegate, JSON.stringify({ version: 1, wrapper: f.wrapper, had_notify: true, delegate }));
 }
@@ -208,7 +206,6 @@ test('realpath and lexical aliases are recognized at the root and inside previou
       alias = path.join(f.dir, 'notify-alias.cjs');
       fs.symlinkSync(f.wrapper, alias);
     } else {
-      // No target exists: exercise the preserved path.resolve fallback.
       alias = f.dir + '/unused/../codex-notify.cjs';
     }
     fs.writeFileSync(f.configFile, `notify = ${JSON.stringify([process.execPath, alias])}\n`);
@@ -253,7 +250,6 @@ test('supported upgrade at the same bundle path repairs the sidecar and preserve
   fs.writeFileSync(target, `notify = ${JSON.stringify(original)}\n\n[agents]\nmax_depth = 1\n`);
   fs.chmodSync(target, 0o640);
   run(configureArgs(f));
-  // The supported installer replaces bundle bytes at the existing wrapper path.
   fs.writeFileSync(f.wrapper, fs.readFileSync(WRAPPER));
   sidecar(f, previousChain(1, [process.execPath, f.wrapper]));
   run(configureArgs(f));
@@ -279,7 +275,6 @@ test('nonrecursive previous handlers survive reinstall, upgrade and removal byte
   assert.deepStrictEqual(JSON.parse(fs.readFileSync(f.delegate, 'utf8')).delegate, original);
   run([...configureArgs(f), '--remove']);
   assert.deepStrictEqual(configuredNotify(f), original);
-  // Removal with an unrelated root handler leaves it in place.
   run([...configureArgs(f), '--remove']);
   assert.deepStrictEqual(configuredNotify(f), original);
 });
@@ -353,8 +348,6 @@ test('invalid stored delegates and malformed root notify refuse before mutation'
   }
 });
 
-// Run hook probes in an isolated process so observer/spawn instrumentation never
-// affects the installer or the real subprocess fixtures.
 function hookProbe(f, source, extra = {}) {
   const result = spawnSync(process.execPath, ['-e', `
 const fs = require('node:fs');
@@ -448,9 +441,6 @@ test('real missing executable emits a handled async launch error and exits zero'
   assert.strictEqual(result.stderr, '');
 });
 
-// Preserve INV012's four-invocation backstop. Atomic slot reservations and a
-// deadline are independent of the production guard; no failing guard can launch
-// more than four delegates plus four wrappers. Only fixture PIDs are recorded.
 function ownedProcesses(f) {
   return fs.readdirSync(f.dir).filter(name => /^pid-\d+\.json$/.test(name))
     .map(name => JSON.parse(fs.readFileSync(path.join(f.dir, name), 'utf8')));
@@ -468,7 +458,6 @@ function activeProcesses(f) {
 
 function disposeCallback(f) {
   fs.writeFileSync(path.join(f.dir, 'stop'), '');
-  // Let already-launched fixture scripts register and finish before signalling.
   const end = Date.now() + 2000;
   do {
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
@@ -542,8 +531,6 @@ if (slot < 4 && !stopped()) {
     fs.writeFileSync(path.join(f.dir, `pid-${result.pid}.json`), JSON.stringify({ pid: result.pid, ppid: process.pid, type: 'wrapper' }));
     fs.writeFileSync(path.join(f.dir, `pid-${result.pid}.done`), '');
     waitFor(() => fs.existsSync(path.join(f.dir, 'invocation-1', 'guards.json')) && activeProcesses(f).length === 0);
-    // Detached descendants may still be starting after their immediate parent
-    // exits. Observe a bounded settling window before counting the whole chain.
     const settled = Date.now() + 1000;
     while (Date.now() < settled) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
     waitFor(() => activeProcesses(f).length === 0);

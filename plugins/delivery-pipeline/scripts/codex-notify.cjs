@@ -18,7 +18,6 @@ function readDelegate(file) {
 }
 
 function main(argv = process.argv.slice(2)) {
-  // Retain compatibility with the emergency installed guard while adopting INV012.
   if (process.env.SHIPYARD_CODEX_NOTIFY_ACTIVE === '1'
       || process.env.SHIPYARD_NOTIFY_ACTIVE === '1') return 0;
   const payloadText = argv.at(-1) || '';
