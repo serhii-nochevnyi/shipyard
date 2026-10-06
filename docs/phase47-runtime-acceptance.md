@@ -1,0 +1,190 @@
+# Phase47 isolated runtime acceptance
+
+T-47-08 implements bounded evidence inspection. Its two Verification commands
+can pass while phase acceptance remains **HOLD**. Exit zero means supplied
+evidence was checked and every uncovered property stayed explicit; only
+`accepted: true` with no open obligations means acceptance. A fixture result,
+merged ticket, transport exit zero or matching cache bytes cannot supply native
+proof. No public rollout, signing, merge or prior UAT completion is authorized.
+
+The delivered PLAN SHA-256 is
+`99710c9577d76ead5514b1ba00e5277571ef6ff9827f8d06cb692ef6284fe42c`.
+The delivered context is the execution contract; unavailable planning documents
+are not reconstructed. The immutable generation is
+`bbf5ec33bf9b5bd1e5361254fb740c90c2e91d48f31b3f7bee700848fea76c34`.
+It contains 160 package files. The landed publication checker allocates twenty
+changed outputs (five plus nine plus six), including the Claude native guard;
+the delivered prose's nineteen-output count does not permit dropping that file.
+
+The pinned package digest is
+`6be2bdeefdcb339c4a19fe863cb05462083dd4de194306b92688f063bd68991a`;
+the plugin manifest digest is
+`62820bdf169cb1d4d2ab35dfe9fb07a7dbb21f67a97935de014989cabf1b3e1d`;
+the version is `0.71.0+codex.08a9403153faa8aa`. The original source is
+`29e0b404fecd7cd711ee5cf29de9a3dfc8e44e82`, tree
+`adace6f023b8b6913a313dcced9c0f01386e0ccb`, on baseline
+`7eebae4812b3c67ccdbbb63c8c1603f7767b1466`.
+
+Run the safe, unpaid checks from the assigned worktree:
+
+```sh
+node --test tests/unit/phase47-runtime-acceptance.test.cjs
+node tests/smoke/phase47-runtime-acceptance.cjs --evidence docs/audits/phase47-runtime-acceptance.json
+```
+
+The smoke command reads the exclusive selection/binding and the original
+coordinator handback pinned by the existing publication checker, recomputes
+canonical input and complete package digests, checks source ancestry and bytes,
+and checks both Verification argv/profile/timeout assignments through existing
+T-47-10 admission. Later mechanical publication HEADs are admissible only with
+identical canonical inputs; original source HEAD/tree remain unchanged.
+The checkout's current head, tree and dirty-status digest are reported separately.
+Unrelated tuning changes do not invalidate canonical source identity; current
+policy and applicable exact-command admission must still match.
+
+Original INV014 archives are checked with planning-result-sealer and the original
+durable boundary HMAC envelope, without opening its creating recorder. The
+runner never creates a receipt key, replays a completed role, installs a package
+or deletes host resources during inspection. Signature checks, when original
+approved-host proof is supplied, use a private temporary verification keyring
+containing only the public key and remove only that owned directory. Diagnostics
+contain identities/digest references, not findings, transcripts or private keys.
+
+The unit command projects only scoped, already owned fixtures onto package
+bytes in disposable test directories. It executes both public detached CLI
+load orders, completed and artifact-producing blocked semantic callbacks, and
+legitimate plus indirect notification callbacks with independent caps and exact
+owned cleanup. It also refuses altered/missing/extra package files, lost modes,
+foreign/tampered receipts, denied first-call heredocs followed by later hashes,
+invented counters and unsafe switches. These deterministic observations do not
+establish that an operator's runtime was installed or behaviorally accepted.
+
+Before any isolated install, the trusted rollout owner must authenticate 12's
+original complete parity result and unchanged exclusive 05 stage. Current-head
+human review, signing and merge are separate gates: PR433 is recorded as draft,
+pr-open on the inspected delivery snapshot. Bytes already present in this
+dependency worktree do not close that gate. Preserve PR418's original
+head/snapshot history. Do not run package generation, refresh-runtime writes,
+marketplace generator tests or gsd-sync to repair a missing handoff.
+
+The supported installer entry is an explicit Codex marketplace invocation:
+
+```text
+node scripts/install-shipyard-marketplace.cjs codex --source <approved-source-root>
+```
+
+The source must contain the exact published package. Record the full installer
+argv, source revision/tree/dirty inventory, explicit runtime=codex, capability
+file/digest, owned destination and environment before executing it. Use the
+existing dedicated dogfood target selected by this installer, never the shared
+default Codex home. Its installed cache's bootstrap entry is:
+
+```text
+bash <installed-package-root>/host/scripts/ensure-gsd-core.sh --launch-bootstrap
+```
+
+Record the actual resulting environment and successful outcome. Omit an
+unsuitable inherited TMPDIR; do not rewrite global config or change policy.
+Preserve the emergency notification mitigation until replacement proof exists.
+These templates are procedural prerequisites, not authorized executor commands.
+There is no install or current safe rollback identity supplied in this handoff.
+
+Supply the existing host's original evidence in the ledger before native work.
+Each obligation stores governing inputs, original argv arrays/environment,
+outcome/exit, owner and original digest references. `HOLD`, `open` and `blocked`
+require a reason and no accepted `proof`; unaccepted historical references remain
+in `retained_references`. A `proven` row uses `kind: approved-host` with the
+existing host-verification evidence path, byte SHA-256 and canonical evidence
+digest. The trusted host supplies a detached operator-signed applicability
+descriptor, `shipyard.phase47-acceptance-approval.v1`, not a model verdict.
+It binds ticket/PLAN, exact installation identity and per-property commands,
+environment, governing inputs, unchanged assertion tree, original artifact
+references and a separately recorded implementation approval reference.
+The pinned operator fingerprint is
+`2F485C0A455BA33463F66332900FCE87BD1BFF0D`. Every signature/public-key reference
+includes original path and byte digest. This descriptor associates existing
+assertions; it does not grant a new host runner or replace assertion authority.
+
+The installation identity includes runtime/root, actual native bundle root
+(`<runtime-root>/shipyard`), complete package cache root/digests, original
+source HEAD/tree/dirty state, current worktree HEAD/tree/dirty digest,
+repository/common directory, controller/run, provenance sidecar, native CLI
+executable bytes, runtime capability evidence, registered capability and
+generated agent manifest/individual agent digests. Both the cache and every
+actual bundle executable must match the immutable candidate. Ambiguous runtime,
+unsuitable environment, foreign provenance or missing capability refuses.
+
+Planner/checker obligations additionally require original authenticated native
+receipts and child transcript/task digests. Their **first call** must have used
+filesystem read-only inline `python -c` or `node -e`, with its computed task hash
+in that same call's output. A denied original heredoc plus a later hash, a suffix,
+an output file alone or a model claim does not satisfy this amended-input gate.
+Keep a separately authenticated `validate-graph` exit-zero obligation. The runner
+does not launch replacement planners/checkers or rerun accepted researchers.
+
+Require independent final combined fifteen-file implementation approval with
+separate 47-14 thirteen-file and 47-15 two-file ownership, distinct approved
+pure-ticket/canonical/runtime source maps and human/trusted-host exact-byte
+bootstrap approval. The experimental architecture target judgment cannot approve
+its own implementation. Installed critical architecture evidence must bind
+canonical graph, current PR/head/base/draft, complete architecture corpus and
+decisions, installed capability/agent identity, original context/launch digest
+echoes, receipt/transcript and sealed judgment. Use the existing shared
+role-artifact boundary immediately before each actual writer, including a fresh
+process after clearInflight. Mutable archive rebinding, corpus/path replacement,
+symlinks and descriptor races refuse. Full generated instructions and complete
+prompt/corpus/input byte accounting plus actual native model capacity proof
+remain required; missing capacity is HOLD.
+
+The actual caller obligation requires one genuine planning-context detached
+trace per distinct supported Codex path, or command-backed proof that paths are
+shared. Keep the original dispatch, measured parent waiter observations and
+separate original child usage. Unknown counters remain null and efficiency
+inconclusive. Bounded installed notification lifecycle and 04's original approved
+exact-argv candidate-bound host/GPG assertions with disposable cleanup are
+separate obligations. Reuse them only when governing inputs match; denial is
+HOLD and an actual assertion failure blocks. Historical GPG cause remains unknown.
+
+Only after applicable prerequisite proof and explicit signed execution authority
+may the rollout owner invoke:
+
+```text
+node tests/smoke/phase47-runtime-acceptance.cjs --native --runtime codex --candidate <exact-selected-candidate> --runtime-root <owned-isolated-runtime> --evidence <current-ledger>
+```
+
+The collection descriptor, `shipyard.phase47-native-authorization.v1`, binds the
+same ticket/PLAN/installation, authenticated writer release, separate
+implementation approval, safe rollback package digest, original prerequisite
+references, canonical graph/config, full environment, bounded timeout and an
+existing installed builder-produced request reference. Native argv must be exactly
+`node <runtime-root>/shipyard/scripts/codex-planning-context-host.cjs --args-file <request>`;
+record it before launch. Existing canonical config must admit that exact argv
+as a host command with the same timeout (at most 600 seconds). The current
+Verification allow-list alone does not authorize a paid collection.
+
+The request is parsed by the actual installed host. Only the supported
+`gsd-phase-researcher` trace is collected here; planner/checker proof is supplied.
+Provider/model remain selected by unchanged host policy. Use the approved PATH,
+CODEX_HOME, capability file and canonical SHIPYARD_GRAPH_DIR; TMPDIR and
+NODE_OPTIONS must be absent. The resolved native CLI bytes must agree with the
+installation identity. The runner reports command/outcome digests and leaves
+acceptance HOLD pending original evidence validation. Timeout/error/nonzero exit
+is nonzero; inspect original dispatch recovery before any retry. A host invocation
+does not establish a count of paid launches. Native receipts stay in their existing
+trusted archives; the coordinator preserves the completed result outside checkout.
+
+Stop on identity/containment drift, stale or disputed original context,
+unreleased writer, invalid semantic result, suppressed legitimate notification,
+recursion beyond the independent cap, host authority regression or missing
+rollback proof. Retain original errors and accepted siblings. New product defects
+go to their 01/02/03/04/06/07 owners; this ticket cannot change those products.
+
+Rollback is HOLD until the owner names the exact prior reviewed safe package,
+digest/version/source and approved supported-installer argv/environment for the
+same owned runtime. Restore only that package under existing rollout authority,
+preserving the known notify mitigation. Do not infer that an older launch-incompatible
+package is safe. Retain candidate stage, sealed receipts/archives, dirty preparation,
+backups and unrelated installations. Maintenance may delete only authenticated
+exact owned disposables after checking prior disposal; no broad path/PID cleanup
+is inferred. Follow the separate durable handoff before any refresh or failed-role
+retry. No current installed release is claimed by this procedure.
