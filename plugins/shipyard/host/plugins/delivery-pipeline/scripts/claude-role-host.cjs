@@ -1270,7 +1270,7 @@ function createClaudeRoleHost(options = {}) {
         try { controller.heartbeat(scope.run_id); } catch (error) { heartbeatError = error; }
       }, 60000) : null;
       if (heartbeat) heartbeat.unref();
-      const inflight = { graphDir: prepared.graph.directory, dispatch_id: dispatchId, pid: process.pid };
+      const inflight = { graphDir: prepared.graph.directory, worktree: prepared.canonical.worktree, dispatch_id: dispatchId, pid: process.pid };
       let inflightRecorded = false;
       try {
         require('./dispatch-record.cjs').recordInflight({ ...inflight, role: prepared.role, host: 'claude',

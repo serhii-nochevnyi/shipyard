@@ -9,6 +9,8 @@ const codexDecomposeHost = require('./codex-decompose-host.cjs');
 const { normalizeScope } = require('./codex-runtime-host.cjs');
 const { validateContextPacket } = require('./context-packet.cjs');
 const modelPolicy = require('./model-policy.cjs');
+const { createDurableRecorder } = require('./dispatch-boundary.cjs');
+const { isDeepStrictEqual } = require('node:util');
 
 const MAX_ARGS_BYTES = 4 * 1024 * 1024;
 
@@ -144,6 +146,75 @@ function readArgsFile(argv) {
   return { scope, launch };
 }
 
+function privateJson(file) {
+  let stat;
+  try { stat = fs.lstatSync(file); }
+  catch { fail('INVALID_DISPATCH', 'original dispatch file is unavailable'); }
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.size > MAX_ARGS_BYTES) {
+    fail('INVALID_DISPATCH', 'original dispatch file must be bounded and regular');
+  }
+  try { return JSON.parse(fs.readFileSync(file, 'utf8')); }
+  catch { fail('INVALID_DISPATCH', 'original dispatch file is invalid JSON'); }
+}
+
+function originalRecord(dispatch, id, delegated, options) {
+  if (typeof id !== 'string' || !id.trim() || id === '.' || id === '..' || /[\\/]/.test(id)) {
+    fail('INVALID_DISPATCH', 'detached acknowledgement has no path-safe dispatch identity');
+  }
+  const directory = path.join(fs.realpathSync(dispatch.dispatchStateDir(options)), id);
+  if (fs.realpathSync(directory) !== path.resolve(directory)) fail('INVALID_DISPATCH', 'original dispatch directory must not be a symlink');
+  const record = privateJson(path.join(directory, 'record.json'));
+  const copied = privateJson(path.join(directory, 'args.json'));
+  if (record.dispatch_id !== id || record.runtime !== 'codex' || record.role !== delegated.gsd_role
+      || record.ticket !== (delegated.scope.ticket || 'decomposition')
+      || typeof record.graph_dir !== 'string'
+      || path.resolve(record.graph_dir) !== path.resolve((options.env || process.env).SHIPYARD_GRAPH_DIR
+        || path.join(delegated.scope.worktree, '.planning', 'graph'))
+      || !Number.isSafeInteger(record.pid) || record.pid <= 0
+      || (typeof record.result !== 'string' || path.basename(record.result) !== 'result.jsonl'
+        || fs.realpathSync(path.dirname(record.result)) !== directory)
+      || !isDeepStrictEqual(copied, { ...delegated, dispatch_id: id })) {
+    fail('INVALID_DISPATCH', 'original dispatch record/request differs from the validated request');
+  }
+  return record;
+}
+
+function completedResult(waited, scope, request, options) {
+  const id = waited.dispatch_id;
+  const refuse = (code, message) => {
+    const error = new Error('codex-planning-context-host: ' + message);
+    error.code = code;
+    error.message += ' (dispatch ' + id + ')';
+    error.dispatch_id = id;
+    error.wait = waited;
+    throw error;
+  };
+  if (waited.status !== 'exited-ok' || waited.exit_code !== 0) {
+    refuse(waited.status === 'running' ? 'DISPATCH_TIMEOUT' : 'DISPATCH_UNAVAILABLE',
+      'original dispatch ' + id + ' remains ' + waited.status);
+  }
+  const result = waited.result;
+  const semantic = result && (result.status || result.result?.status);
+  const refusal = [result?.status, result?.result?.status].find((status) => status && status !== 'completed');
+  if (refusal) refuse('PLANNING_REFUSED', 'original planning result is ' + refusal);
+  if (!object(result) || (!semantic && request.gsd_role !== 'gsd-plan-checker')) {
+    refuse('PLANNING_REFUSED', 'original planning result has no semantic completion');
+  }
+  const receipt = result.receipt;
+  if (!object(receipt) || receipt.dispatch_id !== id || receipt.compliance !== 'verified'
+      || receipt.gsd_role !== request.gsd_role || receipt.policy_hash !== modelPolicy.POLICY_HASH) {
+    refuse('UNVERIFIED_RECEIPT', 'original planning result has no matching verified receipt');
+  }
+  const runStore = options.testRunStoreDir || codexDecomposeHost.defaultRunStoreDir(scope, options.testStateRoot);
+  const recorderDir = options.recorderDir || path.join(path.dirname(runStore), 'receipts');
+  if (!fs.existsSync(recorderDir)) refuse('UNVERIFIED_RECEIPT', 'original authenticated receipt is missing');
+  const authenticated = createDurableRecorder(recorderDir).getVerifiedRecord(id);
+  if (!authenticated || !isDeepStrictEqual(authenticated.receipt, receipt)) {
+    refuse('UNVERIFIED_RECEIPT', 'original receipt differs from authenticated storage');
+  }
+  return result;
+}
+
 async function runCli(argv = process.argv.slice(2), stdout = process.stdout, options = {}) {
   if (!object(options)) fail('INVALID_INPUT', 'host options must be an object');
   const parsed = readArgsFile(argv);
@@ -169,7 +240,31 @@ async function runCli(argv = process.argv.slice(2), stdout = process.stdout, opt
     const argsFile = path.join(tempDir, 'args.json');
     fs.writeFileSync(argsFile, JSON.stringify(delegated), { mode: 0o600, flag: 'wx' });
     const runHost = options.runHost || codexDecomposeHost.runCli;
-    return await runHost(['--args-file', argsFile], stdout, options.hostOptions || options);
+    const dispatch = require('./deliver-dispatch.cjs');
+    const hostOptions = options.hostOptions || options;
+    let id = request.dispatch_id;
+    if (id && (id === '.' || id === '..' || /[\\/]/.test(id))) fail('INVALID_DISPATCH', 'dispatch identity must be path-safe');
+    if (!id || !fs.existsSync(path.join(dispatch.dispatchStateDir(hostOptions), id))) {
+      let acknowledgement = '';
+      await runHost(['--detach', '--args-file', argsFile], { write(chunk) {
+        acknowledgement += String(chunk);
+        if (Buffer.byteLength(acknowledgement) > 16 * 1024) fail('INVALID_DISPATCH', 'detached acknowledgement exceeds its bound');
+      } }, hostOptions);
+      let returned;
+      try { returned = JSON.parse(acknowledgement); }
+      catch { fail('INVALID_DISPATCH', 'detached acknowledgement is invalid JSON'); }
+      if (!object(returned)) fail('INVALID_DISPATCH', 'detached acknowledgement must be an object');
+      if (id && returned.dispatch_id !== id) fail('INVALID_DISPATCH', 'detached host changed the original dispatch');
+      id = returned.dispatch_id;
+    }
+    const record = originalRecord(dispatch, id, delegated, hostOptions);
+    const waited = await dispatch.waitOnce(id, { ...hostOptions, ...options.waitOptions,
+      waitScope: parsed.scope, graphDir: record.graph_dir });
+    const result = completedResult(waited, parsed.scope, request, hostOptions);
+    const output = JSON.stringify(result) + '\n';
+    if (Buffer.byteLength(output) > MAX_ARGS_BYTES) fail('RESULT_TOO_LARGE', 'planning result exceeds its bound');
+    stdout.write(output);
+    return result;
   } finally {
     if (tempDir) fs.rmSync(tempDir, { recursive: true, force: true });
   }
