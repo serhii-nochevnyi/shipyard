@@ -86,10 +86,10 @@ fs.writeFileSync(file,JSON.stringify(s));
     assert.match(identity.digest, /^[a-f0-9]{64}$/);
     assert.match(manifest.version, /\+codex\.[a-f0-9]{16}$/);
   }
-  // Ticket and epic branches publish their package at integration time.
   const branch = spawnSync('git', ['branch', '--show-current'], { cwd: root, encoding: 'utf8' });
   assert.equal(branch.status, 0, 'must resolve the checkout branch');
-  const baseRef = (process.env.COMMENT_POLICY_BASE ?? branch.stdout.trim()).replace(/^origin\//, '');
+  const rawBaseRef = process.env.COMMENT_POLICY_BASE ?? branch.stdout.trim();
+  const baseRef = rawBaseRef.startsWith('origin/') ? rawBaseRef.slice(7) : rawBaseRef;
   function assertPackageForBase(dir, ref) {
     if (packageFreshnessRequired(ref)) assertCurrentPackage(dir);
   }
