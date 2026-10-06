@@ -15,8 +15,6 @@ const hash = (value) => crypto.createHash('sha256').update(value).digest('hex');
 const capabilities = { supportedModels: ['gpt-6-luna', 'gpt-6.1-sol'],
   supportedEfforts: ['low', 'medium', 'high', 'xhigh', 'max'] };
 
-// A preload replaces only the native worker with a controlled completion hook.
-// The actual CLI, adapter, durable recorder, sealer and controller still execute.
 if (process.env.SHIPYARD_RESEARCH_HANDBACK_FIXTURE) {
   const config = JSON.parse(fs.readFileSync(process.env.SHIPYARD_RESEARCH_HANDBACK_FIXTURE, 'utf8'));
   os.homedir = () => config.home;
@@ -99,7 +97,7 @@ if (process.env.SHIPYARD_RESEARCH_HANDBACK_FIXTURE) {
       if (mode === 'duplicate' && context.onCompleted) context.onCompleted(completion);
       if (mode === 'conflicting-duplicate' && context.onCompleted) {
         try { context.onCompleted({ ...completion, last_agent_message: JSON.stringify({ ...semantic, status: 'blocked' }) }); }
-        catch { /* A worker swallowing the callback refusal must still fail closed. */ }
+        catch {}
       }
       if (mode === 'mutated') fs.appendFileSync(context.artifactPath, 'Altered after callback.\n');
       return { launch_id: launchId, applied_model: selection.model,

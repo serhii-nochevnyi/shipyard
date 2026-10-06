@@ -1659,7 +1659,6 @@ function secondaryDiagnostic(primary, action, error) {
     diagnostics: Object.freeze([...(primary.diagnostics || []), Object.freeze(diagnostic)]) });
 }
 
-// Preserve recovery state and retry metadata rather than attempting completion.
 function finishDeliveryRun(controller, runId, failure) {
   let result = failure;
   try {
@@ -1673,7 +1672,6 @@ function finishDeliveryRun(controller, runId, failure) {
     try {
       controller.release(runId, 'blocked delivery released its owned lease');
     } catch (error) {
-      // Release itself checks process-local authority and fences successor ownership.
       if (error?.code !== 'RUN_NOT_FOUND') {
         result = secondaryDiagnostic(result, 'run release', error);
       }
