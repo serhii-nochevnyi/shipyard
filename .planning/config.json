@@ -329,6 +329,203 @@
           ],
           "profile": "host",
           "timeout_s": 600
+        },
+        {
+          "argv": [
+            "node",
+            "--test",
+            "tests/unit/phase47-launch-contract.test.cjs",
+            "tests/unit/deliver-dispatch.test.cjs",
+            "tests/unit/run-contract.test.cjs"
+          ],
+          "profile": "sandbox",
+          "timeout_s": 600
+        },
+        {
+          "argv": [
+            "node",
+            "--test",
+            "tests/unit/phase47-launch-contract.test.cjs",
+            "tests/unit/run-contract.test.cjs"
+          ],
+          "profile": "sandbox",
+          "timeout_s": 600
+        },
+        {
+          "argv": [
+            "node",
+            "--test",
+            "tests/unit/codex-planning-context-host.test.cjs",
+            "tests/unit/decompose-dispatch-wait-contract.test.cjs",
+            "tests/unit/deliver-dispatch.test.cjs"
+          ],
+          "profile": "sandbox",
+          "timeout_s": 600
+        },
+        {
+          "argv": [
+            "node",
+            "--test",
+            "tests/unit/configure-codex-notify.test.cjs"
+          ],
+          "profile": "sandbox",
+          "timeout_s": 600
+        },
+        {
+          "argv": [
+            "node",
+            "--test",
+            "tests/unit/phase47-host-assignment.test.cjs",
+            "tests/unit/host-verification.test.cjs"
+          ],
+          "profile": "sandbox",
+          "timeout_s": 600
+        },
+        {
+          "argv": [
+            "node",
+            "tests/unit/phase47-package-publication.test.cjs",
+            "--group",
+            "candidate"
+          ],
+          "profile": "sandbox",
+          "timeout_s": 600
+        },
+        {
+          "argv": [
+            "node",
+            "tests/unit/phase47-package-publication.test.cjs",
+            "--group",
+            "launch"
+          ],
+          "profile": "sandbox",
+          "timeout_s": 600
+        },
+        {
+          "argv": [
+            "node",
+            "--test",
+            "tests/unit/codex-decompose-host.test.cjs",
+            "tests/unit/planning-result-sealer.test.cjs"
+          ],
+          "profile": "sandbox",
+          "timeout_s": 600
+        },
+        {
+          "argv": [
+            "node",
+            "--test",
+            "tests/unit/dispatch-record.test.cjs",
+            "tests/unit/planning-result-sealer.test.cjs"
+          ],
+          "profile": "sandbox",
+          "timeout_s": 600
+        },
+        {
+          "argv": [
+            "node",
+            "--test",
+            "tests/unit/phase47-research-handback.test.cjs"
+          ],
+          "profile": "sandbox",
+          "timeout_s": 600
+        },
+        {
+          "argv": [
+            "node",
+            "--test",
+            "tests/unit/phase47-runtime-acceptance.test.cjs"
+          ],
+          "profile": "sandbox",
+          "timeout_s": 600
+        },
+        {
+          "argv": [
+            "node",
+            "tests/smoke/phase47-runtime-acceptance.cjs",
+            "--evidence",
+            "docs/audits/phase47-runtime-acceptance.json"
+          ],
+          "profile": "sandbox",
+          "timeout_s": 600
+        },
+        {
+          "argv": [
+            "node",
+            "--test",
+            "tests/unit/codex-runtime-host.test.cjs",
+            "tests/unit/phase47-task-relay-output-budget.test.cjs"
+          ],
+          "profile": "sandbox",
+          "timeout_s": 600
+        },
+        {
+          "argv": [
+            "node",
+            "--check",
+            "plugins/delivery-pipeline/scripts/codex-runtime-host.cjs"
+          ],
+          "profile": "sandbox",
+          "timeout_s": 600
+        },
+        {
+          "argv": [
+            "node",
+            "--test",
+            "tests/unit/codex-decompose-host.test.cjs",
+            "tests/unit/usage-attribution.test.cjs"
+          ],
+          "profile": "sandbox",
+          "timeout_s": 600
+        },
+        {
+          "argv": [
+            "node",
+            "--test",
+            "tests/unit/usage-report.test.cjs"
+          ],
+          "profile": "sandbox",
+          "timeout_s": 600
+        },
+        {
+          "argv": [
+            "node",
+            "tests/unit/phase47-package-publication.test.cjs",
+            "--group",
+            "caller"
+          ],
+          "profile": "sandbox",
+          "timeout_s": 600
+        },
+        {
+          "argv": [
+            "node",
+            "tests/unit/phase47-package-publication.test.cjs",
+            "--group",
+            "integration"
+          ],
+          "profile": "sandbox",
+          "timeout_s": 600
+        },
+        {
+          "argv": [
+            "node",
+            "tests/unit/phase47-package-publication.test.cjs",
+            "--group",
+            "relay"
+          ],
+          "profile": "sandbox",
+          "timeout_s": 600
+        },
+        {
+          "argv": [
+            "node",
+            "tests/unit/phase47-package-publication.test.cjs",
+            "--group",
+            "complete"
+          ],
+          "profile": "sandbox",
+          "timeout_s": 600
         }
       ]
     }
