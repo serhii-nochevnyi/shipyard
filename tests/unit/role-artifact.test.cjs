@@ -3,7 +3,35 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
+
+const testAuthorityHome = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'architecture-authority-')));
+const testAuthorityModule = path.join(testAuthorityHome, 'fixture.cjs');
+fs.writeFileSync(testAuthorityModule, "require('node:os').homedir = () => " + JSON.stringify(testAuthorityHome) + ";\n");
+const testAuthorityArgs = ['--require', testAuthorityModule];
+const testOriginalHomedir = os.homedir;
+os.homedir = () => testAuthorityHome;
+process.on('exit', () => { os.homedir = testOriginalHomedir; fs.rmSync(testAuthorityHome, {recursive:true,force:true}); });
 const { execFileSync, spawnSync } = require('node:child_process');
+
+const targetBin = fs.mkdtempSync(path.join(os.tmpdir(), 'architecture-gh-'));
+fs.writeFileSync(path.join(targetBin, 'gh'), `#!/usr/bin/env node
+const fs = require('node:fs');
+const cp = require('node:child_process');
+const path = require('node:path');
+const git = args => cp.execFileSync('git', args, {encoding:'utf8'}).trim();
+const args = process.argv.slice(2);
+if (args[0] === 'repo') process.stdout.write('main');
+else if (args[0] === 'pr' && args[1] === 'view') {
+  let base = 'main';
+  try { base = JSON.parse(fs.readFileSync('.planning/config.json')).git?.base_branch || base; } catch {}
+  let oid; try { oid = git(['rev-parse','refs/remotes/origin/' + base]); } catch { oid = git(['rev-parse','HEAD']); }
+  process.stdout.write(JSON.stringify({number:Number(args[2]),state:'OPEN',headRefName:git(['branch','--show-current']),
+    headRefOid:git(['rev-parse','HEAD']),baseRefName:base,baseRefOid:oid}));
+} else process.exit(2);
+`, {mode:0o755});
+const targetOldPath = process.env.PATH;
+process.env.PATH = targetBin + path.delimiter + targetOldPath;
+process.on('exit', () => { process.env.PATH = targetOldPath; fs.rmSync(targetBin, {recursive:true,force:true}); });
 const { suite, test, done, assert } = require('./assert-harness.cjs');
 const { transcriptEvidence: testTranscriptEvidence } = require('./claude-test-evidence.cjs');
 const {
@@ -455,7 +483,7 @@ test('CLI validate/read use the canonical helper and return the verified byte sn
   try {
     fs.unlinkSync(artifact.artifact_ref);
     fs.writeFileSync(resultFile, JSON.stringify(value.agentResult));
-    const sealing = spawnSync(process.execPath, [
+    const sealing = spawnSync(process.execPath, [...testAuthorityArgs,
       ROLE_ARTIFACT, 'seal', '--worktree', value.root, '--base', 'main',
       '--role', 'executor', '--ticket', value.ticket, '--boundary-store', value.receipts,
       '--dispatch-id', artifact.receipt.dispatch_id, '--result-file', resultFile,
@@ -463,7 +491,7 @@ test('CLI validate/read use the canonical helper and return the verified byte sn
     assert.equal(sealing.status, 0, sealing.stderr);
     assert.equal(JSON.parse(sealing.stdout).artifact_digest, artifact.artifact_digest);
 
-    const validation = spawnSync(process.execPath, [
+    const validation = spawnSync(process.execPath, [...testAuthorityArgs,
       ROLE_ARTIFACT, 'validate', '--worktree', value.root, '--base', 'main',
       '--role', 'executor', '--ticket', value.ticket, '--boundary-store', value.receipts,
       '--dispatch-id', artifact.receipt.dispatch_id, '--artifact', artifact.artifact_ref,
@@ -475,7 +503,7 @@ test('CLI validate/read use the canonical helper and return the verified byte sn
     assert.ok(!('pr_body' in validated), 'CLI validation must not print the complete PR body');
     assert.ok(!('evidence' in validated), 'CLI validation must not print complete evidence');
 
-    const read = spawnSync(process.execPath, [
+    const read = spawnSync(process.execPath, [...testAuthorityArgs,
       ROLE_ARTIFACT, 'read', '--worktree', value.root, '--base', 'main',
       '--role', 'executor', '--ticket', value.ticket, '--boundary-store', value.receipts,
       '--dispatch-id', artifact.receipt.dispatch_id, '--artifact', artifact.artifact_ref,
@@ -707,7 +735,7 @@ test('fresh Codex architecture artifact remains valid after CLI inflight cleanup
       fixturePr: f.pr, store: path.join(f.storage, 'receipts'),
       boundary: path.resolve(__dirname, '../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs'),
       consumer: path.resolve(__dirname, '../../plugins/delivery-pipeline/scripts/role-artifact.cjs') };
-    assert.equal(JSON.parse(execFileSync(process.execPath, ['-e', child, JSON.stringify(childInput)],
+    assert.equal(JSON.parse(execFileSync(process.execPath, [...testAuthorityArgs, '-e', child, JSON.stringify(childInput)],
       { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })).verdict, 'conform');
 
   } finally { codexJudgmentFixtures.cleanupJudgment(f); }

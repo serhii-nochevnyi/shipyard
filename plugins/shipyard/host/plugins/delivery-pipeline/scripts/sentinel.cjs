@@ -597,16 +597,13 @@ function ghChecks(pr, repo) {
   return out;
 }
 
+const { resolveIntegrationBranch, architectureTarget } = require('./architecture-target.cjs');
 const defaultBranchCache = new Map();
 function integrationBranchOf(repo) {
   if (defaultBranchCache.has(repo || '')) return defaultBranchCache.get(repo || '');
-  let name;
-  if (!repo && cfg.gsd.base_branch) {
-    name = cfg.gsd.base_branch;
-  } else {
-    const out = gh(['repo', 'view', ...(repo ? [repo] : []), '--json', 'defaultBranchRef', '--jq', '.defaultBranchRef.name'], { tolerate: true });
-    name = typeof out === 'string' && out.trim() ? out.trim() : 'main';
-  }
+  const name = resolveIntegrationBranch({ projectRoot: ROOT, repo, config: cfg,
+    exec: (_exe, args) => { const result = gh(args, { tolerate: true });
+      if (typeof result !== 'string') throw new Error('integration branch unavailable'); return result; } });
   defaultBranchCache.set(repo || '', name);
   return name;
 }
@@ -908,6 +905,12 @@ function dutyItems() {
       why: '',
     };
 
+    item.architecture = architectureTarget({ base, integrationBranch: s.integration_branch || (!s.repo && cfg.gsd.base_branch),
+      epic: s.epic || t.epic, ticketBranches: Object.values(tickets).filter(row => (row.repo || null) === (s.repo || null)).map(row => row.branch) });
+    const architectureReady = !item.architecture.required || (s.authenticated_architecture?.authenticated === true
+      && s.authenticated_architecture.pr === s.pr && s.authenticated_architecture.head === s.head_sha
+      && s.authenticated_architecture.base_commit === s.pr_base_sha && s.authenticated_architecture.base === base
+      && s.authenticated_architecture.verdict === 'conform');
     item.depth = stackDepth(id);
 
     if (PARKED.has(id)) {
@@ -980,7 +983,7 @@ function dutyItems() {
     } else if ((c.pending || 0) > 0) {
       item.action = 'wait-ci';
       item.why = `${c.pending} check(s) still running${unresolved === null ? ' — review threads unreadable this tick' : ''} — re-tick, do not block the main loop`;
-    } else if (s.draft && !gateConform(s.gate, s.head_sha)) {
+    } else if (s.draft && !architectureReady) {
       // Certify BEFORE readying. Bundled together as one `finalize` these two
       // could not report separately, so a `violation` verdict and a clean one
       // ended the same way, and the action name itself was not a role the model
@@ -1001,7 +1004,10 @@ function dutyItems() {
       item.why = `${NO_CI_WHY} Left as a draft — readying it is the step that hands it to the guard's own merge.`;
     } else if (s.draft) {
       item.action = 'undraft';
-      item.why = 'green + conform, still a draft — ready it (`gh pr ready`); nothing else is owed';
+      item.why = `green, architecture ${item.architecture.status}, still a draft — ready it (gh pr ready)`;
+    } else if (item.architecture.required && !architectureReady && s.review_decision !== 'CHANGES_REQUESTED') {
+      item.action = 'arch-review';
+      item.why = 'integration target requires a fresh authenticated verdict on the exact live head and base';
     } else if (t.checkpoint === 'review' && !reviewCheckpointReady(s)) {
       item.action = 'human';
       item.why = 'awaiting human review';
@@ -1029,7 +1035,7 @@ function dutyItems() {
       item.action = 'review-fix';
       item.why = 'CHANGES_REQUESTED, and the thread count could not be read this tick — '
         + 'read them yourself and service them (a bot can be wrong: a reasoned reply is a valid resolution)';
-    } else if (!gateConform(s.gate, s.head_sha)) {
+    } else if (!architectureReady) {
       item.action = 'arch-review';
       item.why = gateKind(s.gate, s.head_sha) === 'unrecorded'
         ? 'green and out of draft, but no `gate_status: arch-review=conform` trailer — the architecture verdict was never recorded'
@@ -1226,12 +1232,13 @@ function mergeOne(id) {
 
   const repo = s.repo || null;
   const view = gh(['pr', 'view', String(s.pr), ...repoArg(repo), '--json',
-    'number,state,isDraft,baseRefName,headRefName,headRefOid,createdAt,mergeStateStatus,reviewDecision,author,body'], { tolerate: true });
+    'number,state,isDraft,baseRefName,baseRefOid,headRefName,headRefOid,createdAt,mergeStateStatus,reviewDecision,author,body'], { tolerate: true });
   if (typeof view !== 'string') return block(`gh pr view failed: ${view.error}`);
   let pr;
   try { pr = JSON.parse(view); } catch (e) { return block(`gh pr view returned unparseable JSON (${e.message})`); }
 
   res.base = pr.baseRefName;
+  if (s.head_sha && s.head_sha !== pr.headRefOid) return block('live PR head differs from the current delivery snapshot; sync again');
   if (pr.state !== 'OPEN') return block(`PR is ${pr.state}, not OPEN`);
   if (pr.isDraft) return block('PR is still a draft — the conform gate has not been passed');
   if (t.checkpoint === 'review') {
@@ -1251,7 +1258,9 @@ function mergeOne(id) {
   // epic quarantines, so it is the unit the boundary measures. A graph whose
   // tickets carry no `phase` at all is unaffected: they then all share the same
   // (absent) phase, which is the pre-existing behaviour.
-  const integration = integrationBranchOf(repo);
+  let integration;
+  try { integration = integrationBranchOf(repo); }
+  catch (error) { return block('integration branch unavailable: ' + error.message); }
   const phaseOf = (o) => (o && o.phase !== undefined && o.phase !== null ? String(o.phase) : null);
   const myPhase = phaseOf(t);
   const samePhaseTicketBranches = Object.entries(tickets)
@@ -1259,6 +1268,13 @@ function mergeOne(id) {
     .flatMap(([id, o]) => observedBranchesOf(id, o));
   const allowed = new Set([s.epic, t.epic, ...samePhaseTicketBranches].filter(Boolean));
   if (pr.baseRefName === integration) {
+    res.architecture = architectureTarget({ base: pr.baseRefName, integrationBranch: integration });
+    const checkout = localCheckout(repo, id);
+    let verdict;
+    try { verdict = checkout && require('./role-artifact.cjs').currentArchitectureVerdict({ worktreePath: checkout,
+      pr: s.pr, head: pr.headRefOid, headBranch: pr.headRefName, baseName: pr.baseRefName, baseCommit: pr.baseRefOid, graphDir: GRAPH_DIR }); }
+    catch (error) { return block('authenticated architecture review unavailable: ' + error.message); }
+    if (!verdict) return block('integration PR requires a fresh authenticated architecture verdict on its live head and base before human merge');
     return block(`PR targets the integration branch ${integration} — landing a phase there is a human's decision, never the sentinel's`);
   }
   if (!allowed.has(pr.baseRefName)) {
@@ -1318,8 +1334,9 @@ function mergeOne(id) {
   // only a verdict about the diff it was rendered against. `head_sha` on the
   // board is minutes old, and "it was that diff last tick" is the same reasoning
   // this whole live re-verification exists to refuse.
-  const gate = readGate({ repo, sha: pr.headRefOid, body: pr.body });
-  if (!gateConform(gate, pr.headRefOid)) {
+  res.architecture = architectureTarget({ base: pr.baseRefName, integrationBranch: integration });
+  const gate = res.architecture.required ? readGate({ repo, sha: pr.headRefOid, body: pr.body }) : null;
+  if (res.architecture.required && !gateConform(gate, pr.headRefOid)) {
     return block(gateKind(gate, pr.headRefOid) === 'unrecorded'
       ? 'no `merge-gate` status (nor legacy `gate_status: arch-review=conform` trailer) on this head — the architecture verdict is not recorded'
       : `${gateWhy(gate, pr.headRefOid)} — arch-review is owed again on this head before it can land`);

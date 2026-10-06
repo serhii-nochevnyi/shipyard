@@ -5,6 +5,26 @@ const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { execFileSync, spawnSync } = require('node:child_process');
+
+const targetBin = fs.mkdtempSync(path.join(os.tmpdir(), 'architecture-gh-'));
+fs.writeFileSync(path.join(targetBin, 'gh'), `#!/usr/bin/env node
+const fs = require('node:fs');
+const cp = require('node:child_process');
+const path = require('node:path');
+const git = args => cp.execFileSync('git', args, {encoding:'utf8'}).trim();
+const args = process.argv.slice(2);
+if (args[0] === 'repo') process.stdout.write('main');
+else if (args[0] === 'pr' && args[1] === 'view') {
+  let base = 'main';
+  try { base = JSON.parse(fs.readFileSync('.planning/config.json')).git?.base_branch || base; } catch {}
+  let oid; try { oid = git(['rev-parse','refs/remotes/origin/' + base]); } catch { oid = git(['rev-parse','HEAD']); }
+  process.stdout.write(JSON.stringify({number:Number(args[2]),state:'OPEN',headRefName:git(['branch','--show-current']),
+    headRefOid:git(['rev-parse','HEAD']),baseRefName:base,baseRefOid:oid}));
+} else process.exit(2);
+`, {mode:0o755});
+const targetOldPath = process.env.PATH;
+process.env.PATH = targetBin + path.delimiter + targetOldPath;
+process.on('exit', () => { process.env.PATH = targetOldPath; fs.rmSync(targetBin, {recursive:true,force:true}); });
 const { suite, test, done, assert } = require('./assert-harness.cjs');
 
 const codexSessionEnv = Object.fromEntries(['CODEX_SANDBOX', 'CODEX_SANDBOX_NETWORK_DISABLED']

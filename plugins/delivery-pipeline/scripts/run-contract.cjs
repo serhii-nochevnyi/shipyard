@@ -226,7 +226,9 @@ function normalizeTicketIdentity(input, { role, phase } = {}) {
   const value = safeId(ticket, 'ticket');
   const ticketId = /^T-[A-Z0-9][A-Z0-9._-]*$/i.test(value);
   const subject = value.match(/^phase=(\d+)-[A-Z0-9][A-Z0-9._-]*;repository=[^;\s]+;tickets=[a-f0-9]{64}$/i);
-  const phaseSubject = role === 'integrator' && subject && Number(subject[1]) === Number(phase);
+  const aggregate = role === 'arch-review' && require('./architecture-target.cjs').PHASE_SUBJECT.exec(value);
+  const phaseSubject = (role === 'integrator' && subject && Number(subject[1]) === Number(phase))
+    || (aggregate && Number(aggregate[1].split('-')[0]) === Number(phase));
   const investigation = /^INV-[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$/.test(value);
   const planningInput = value.match(/^phase=(\d+);input=((?:INV|ADR)-[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*);repository=[^;\s]+$/);
   const planningSubject = role === 'decomposition' && planningInput
@@ -430,6 +432,12 @@ function normalizeRunContract(input, { requireRunId = true } = {}) {
     if (subjectRepository !== repository.repository_id) {
       refuse('SCOPE_MISMATCH', 'planning subject and repository identities disagree');
     }
+  }
+  if (dispatch.role === 'arch-review' && ticket.ticket.startsWith('phase=')) {
+    const subject = require('./architecture-target.cjs').PHASE_SUBJECT.exec(ticket.ticket);
+    const hashedRepository = 'git-common:' + require('node:crypto').createHash('sha256').update(subject[2]).digest('hex');
+    if (repository.repository_id !== subject[2] && repository.repository_id !== hashedRepository)
+      refuse('SCOPE_MISMATCH', 'aggregate architecture subject and repository identities disagree');
   }
   const worktree = normalizeWorktreeIdentity(input.worktree || repository.worktree);
   if (worktree.path !== repository.worktree) refuse('SCOPE_MISMATCH', 'repository and worktree identities disagree');

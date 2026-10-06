@@ -174,7 +174,7 @@ const RUN_PARKED = parkedArg === -1
 // 7s without — and it is only ever read for OPEN PRs. So the bulk window skips
 // it and a second, open-only pass fills it in (a handful of rows, ~1s). state-sync
 // runs on every babysit round, so its wall time is the conveyor's tick rate.
-const PR_FIELDS = 'number,state,isDraft,headRefName,headRefOid,baseRefName,mergedAt,createdAt,url,title';
+const PR_FIELDS = 'number,state,isDraft,headRefName,headRefOid,baseRefName,baseRefOid,mergedAt,createdAt,url,title';
 const FULL_PR_FIELDS = `${PR_FIELDS},mergeCommit`;
 const PR_LOOKUP_FIELDS = `${PR_FIELDS},mergeCommit,reviewDecision,body,mergeStateStatus`;
 
@@ -464,10 +464,10 @@ function readMeta() {
 // /gsd-ship targets. Honour it over the repo's default branch: in a repo that
 // integrates into `develop`, resolving from origin/HEAD alone cut every epic
 // from main and pointed the integration PR at the wrong place.
+const { resolveIntegrationBranch, architectureTarget } = require('./architecture-target.cjs');
 function integrationBranch() {
-  if (cfg.gsd.base_branch) return { name: cfg.gsd.base_branch, from: 'git.base_branch' };
-  const d = gh(['repo', 'view', '--json', 'defaultBranchRef', '--jq', '.defaultBranchRef.name'], { tolerate: true });
-  return { name: (d && d.trim()) || 'main', from: 'repo default' };
+  return { name: resolveIntegrationBranch({ projectRoot: ROOT, config: cfg,
+    exec: (_exe, args) => gh(args, { tolerate: true }) }), from: cfg.gsd.base_branch ? 'git.base_branch' : 'repo default' };
 }
 const { name: DEFAULT_BRANCH, from: DEFAULT_BRANCH_SOURCE } = integrationBranch();
 
@@ -597,7 +597,7 @@ function loadRepo(repo) {
   // git.base_branch is the PROJECT's integration branch, so it only applies to
   // the project's own repo; a sibling repo keeps its own default.
   const defaultBranch = repo
-    ? ((gh(['repo', 'view', repo, '--json', 'defaultBranchRef', '--jq', '.defaultBranchRef.name'], { tolerate: true }) || '').trim() || 'main')
+    ? resolveIntegrationBranch({ projectRoot: ROOT, repo, config: cfg, exec: (_exe, args) => gh(args, { tolerate: true }) })
     : DEFAULT_BRANCH;
   return { repo, available: true, openListAvailable, prs, branches, branchesAvailable, truncated, defaultBranch };
 }
@@ -857,6 +857,15 @@ for (const [id, t] of Object.entries(tickets)) {
       // `gateConform(gate, head_sha)` is absent when they disagree, so a push
       // after arch-review re-owes the verdict instead of inheriting it.
       entry.head_sha = pr.headRefOid || null;
+      entry.pr_base_sha = pr.baseRefOid || null;
+      entry.integration_branch = repoData.get(repo)?.defaultBranch;
+      entry.architecture = architectureTarget({ base: pr.baseRefName, integrationBranch: entry.integration_branch });
+      if (entry.architecture.required) {
+        try { entry.authenticated_architecture = require('./role-artifact.cjs').currentArchitectureVerdict({
+          worktreePath: repo ? localResolutions.get(repo)?.repository_root : ROOT,
+          pr: pr.number, head: pr.headRefOid, headBranch: pr.headRefName, baseName: pr.baseRefName, baseCommit: pr.baseRefOid, graphDir: GRAPH_DIR }); }
+        catch { entry.authenticated_architecture = null; }
+      }
       if (t.human_checkpoint === true && t.checkpoint === 'review') {
         Object.assign(entry, reviewCheckpointObservation(pr, repo));
       }
@@ -891,7 +900,7 @@ for (const [id, t] of Object.entries(tickets)) {
         const behind = typeof cmp === 'string' && /^\d+$/.test(cmp.trim()) ? parseInt(cmp.trim(), 10) : null;
         if (behind !== null) entry.behind_by = behind;
       }
-      const gate = readGate({ repo, sha: entry.head_sha, body: pr.body });
+      const gate = entry.architecture.required ? readGate({ repo, sha: entry.head_sha, body: pr.body }) : require('./gate-trailer.cjs').parseGate(pr.body);
       if (gate) entry.gate = gate;
       const { rows, note } = ghChecks(pr.number, repo);
       // check-state.cjs classifies; this file only records. The KEYS are the
@@ -1002,7 +1011,15 @@ if (mode === 'epic-stacked') {
       const pr = observedPr || previousPr;
       // "landed" = nothing from this phase is still waiting outside the default
       // branch (either the epic never started, or its whole diff is already in);
-      epicInfo[epicKey(phase, repo)] = { phase: String(phase), repo, branch: e.branch, base, exists, ahead, pr, landed, landed_reason: landedReason };
+      let authenticatedArchitecture = null;
+      if (pr?.state === 'OPEN') {
+        try { authenticatedArchitecture = require('./role-artifact.cjs').currentArchitectureVerdict({
+          worktreePath: repo ? localResolutions.get(repo)?.repository_root : ROOT,
+          pr: pr.number, head: pr.headRefOid, headBranch: pr.headRefName, baseName: pr.baseRefName, baseCommit: pr.baseRefOid, graphDir: GRAPH_DIR }); }
+        catch {}
+      }
+      epicInfo[epicKey(phase, repo)] = { phase: String(phase), repo, branch: e.branch, base, exists, ahead, pr, landed, landed_reason: landedReason,
+        architecture: architectureTarget({ base: pr?.baseRefName || base, integrationBranch: base }), authenticated_architecture: authenticatedArchitecture };
     }
   }
 }
@@ -1207,6 +1224,8 @@ for (const [id, t] of Object.entries(tickets)) {
       for (const [otherId, other] of Object.entries(tickets)) {
         if (otherId !== id && repoOf(other) === repoOf(t)) stackable.add(other.branch);
       }
+      s.integration_branch = integ;
+      s.architecture = architectureTarget({ base: s.pr_base, integrationBranch: integ });
       s.merge_scope = s.pr_base && s.pr_base !== integ && stackable.has(s.pr_base) ? 'stacked' : 'integration';
     }
   } else {
@@ -1586,7 +1605,7 @@ if (mode === 'epic-stacked') {
       : (info.ahead === null
         ? `integration state unknown (${info.landed_reason}) — cross-phase dependents parked, retried next sync`
         : `${info.ahead} ahead of ${info.base}`);
-    console.log(`epic phase ${info.phase}${where}: ${info.branch} — ${aheadPart}, ${prPart}`);
+    console.log(`epic phase ${info.phase}${where}: ${info.branch} — ${aheadPart}, ${prPart}${info.pr?.state === 'OPEN' ? `, architecture=${info.architecture.status}${info.architecture.required ? (info.authenticated_architecture ? ' (authenticated)' : ' (review owed)') : ''}` : ''}`);
     if (info.exists && info.ahead !== null && info.ahead > 0 && !info.pr) {
       console.log(`⚠ epic ${info.branch}${where} has ${info.ahead} commit(s) but no PR into ${info.base} — open it: epic-branch.sh pr ${info.branch}${info.repo ? ` (run it inside the ${info.repo} checkout)` : ''}`);
     }

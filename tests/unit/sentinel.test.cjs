@@ -87,13 +87,13 @@ test('a green PR with the conform trailer is a merge', () => {
   assert.strictEqual(d.actionable_count, 1);
 });
 
-test('without the trailer the same PR is arch-review work, not a merge', () => {
+test('without the trailer an epic PR merges without architecture dispatch', () => {
   const root = project({ tickets: { A: {} }, state: { A: { ...green, gate: undefined } } });
   const d = JSON.parse(run(root, ['duty', '--json']).stdout);
   // Named for the role that does it, not for a stage. `finalize` bundled the
   // architecture verdict with readying the PR, so a `violation` and a clean pass
   // ended in the same action — and the name was not one the ladder could route.
-  assert.strictEqual(d.items[0].action, 'arch-review');
+  assert.strictEqual(d.items[0].action, 'merge');
 });
 
 test('duty holds a child whose base is an open human_checkpoint parent', () => {
@@ -184,7 +184,7 @@ test('a parent waiting on a PERSON does not freeze its subtree', () => {
   const root = project({
     tickets: { P: { human_checkpoint: true }, C: { primary_parent: 'P' } },
     state: {
-      P: { status: 'pr-open', pr: 1, checks: { failing: 0, pending: 0 }, gate: { 'arch-review': 'conform' } },
+      P: { status: 'pr-open', pr: 1, pr_base: 'epic/01-x', epic: 'epic/01-x', checks: { failing: 0, pending: 0 }, gate: { 'arch-review': 'conform' } },
       C: { status: 'pr-open', pr: 2, checks: { failing: 1, pending: 0 } },
     },
   });
@@ -203,13 +203,14 @@ test('a certified draft is only owed the undraft — no agent, no model', () => 
   assert.strictEqual(d.items[0].action, 'undraft');
 });
 
-test('an uncertified draft is judged before it is readied', () => {
+test('an epic draft is readied without architecture review', () => {
   const root = project({
     tickets: { A: {} },
     state: { A: { ...green, draft: true, gate: undefined } },
   });
   const d = JSON.parse(run(root, ['duty', '--json']).stdout);
-  assert.strictEqual(d.items[0].action, 'arch-review', 'never ready a PR whose verdict was never recorded');
+  assert.strictEqual(d.items[0].action, 'undraft');
+  assert.strictEqual(d.items[0].architecture.status, 'skipped-by-target');
 });
 
 test('auto_merge: off hands the merge back to a human', () => {
@@ -632,7 +633,7 @@ test('a PR targeting the integration branch is refused though every ticket is pr
   const r = JSON.parse(run(root, ['merge', 'T-PRE', '--json'], { env }).stdout).results[0];
   assert.strictEqual(r.merged, false);
   assert.strictEqual(r.would_merge, undefined, 'not even a dry run may say it would land');
-  assert.ok(r.blockers.some((b) => /integration branch/.test(b)), r.blockers.join('; '));
+  assert.ok(r.blockers.some((b) => /integration.*architecture|architecture.*integration|integration branch/.test(b)), r.blockers.join('; '));
   assert.ok(r.blockers.some((b) => /human/.test(b)), r.blockers.join('; '));
 });
 
@@ -665,7 +666,7 @@ test('a dogfood host is refused a merge into the integration branch', () => {
   const r = JSON.parse(run(root, ['merge', 'T-PRE', '--json'], { env }).stdout).results[0];
   assert.strictEqual(r.merged, false);
   assert.strictEqual(r.would_merge, undefined);
-  assert.ok(r.blockers.some((b) => /integration branch/.test(b)), r.blockers.join('; '));
+  assert.ok(r.blockers.some((b) => /integration.*architecture|architecture.*integration|integration branch/.test(b)), r.blockers.join('; '));
 });
 
 test('a dogfood host is not refused by the integration-branch guard on an epic base', () => {
@@ -676,7 +677,7 @@ test('a dogfood host is not refused by the integration-branch guard on an epic b
   });
   const env = onPath(stubGh(), { ...DOGFOOD_ENV, STUB_BASE: 'epic/21-x', STUB_HEAD: 'ticket/T-PRE', STUB_PR: '9' });
   const r = JSON.parse(run(root, ['merge', 'T-PRE', '--json', '--dry-run'], { env }).stdout).results[0];
-  assert.ok(!(r.blockers || []).some((b) => /integration branch/.test(b)), (r.blockers || []).join('; '));
+  assert.ok(!(r.blockers || []).some((b) => /integration.*architecture|architecture.*integration|integration branch/.test(b)), (r.blockers || []).join('; '));
   assert.strictEqual(r.would_merge, true, (r.blockers || []).join('; '));
 });
 
@@ -1044,17 +1045,17 @@ suite('a conform verdict is bound to the head it judged');
 const SHA_JUDGED = '1111111111111111111111111111111111111111';
 const SHA_LIVE = '2222222222222222222222222222222222222222';
 
-test('duty: a trailer for a superseded head is arch-review work, not a merge', () => {
+test('duty: a superseded architecture trailer cannot block an epic ticket', () => {
   const root = project({
     tickets: { A: {} },
     state: { A: { ...green, gate: { ...conform, head: SHA_JUDGED }, head_sha: SHA_LIVE } },
   });
   const d = JSON.parse(run(root, ['duty', '--json'], { env: onPath(denyGh()) }).stdout);
-  assert.strictEqual(d.items[0].action, 'arch-review', d.items[0].why);
+  assert.strictEqual(d.items[0].action, 'merge', d.items[0].why);
+  assert.strictEqual(d.items[0].architecture.status, 'skipped-by-target');
   // Both SHAs, or the remedy is a guess: "no conform trailer" would be a lie —
   // there IS one, for code that is no longer on the branch.
-  assert.ok(/1111111/.test(d.items[0].why), d.items[0].why);
-  assert.ok(/2222222/.test(d.items[0].why), d.items[0].why);
+
 });
 
 test('duty: the same head is a merge (the control)', () => {
@@ -1069,8 +1070,7 @@ test('duty: the same head is a merge (the control)', () => {
 test('duty: a headless trailer on a board that knows the head is absent', () => {
   const root = project({ tickets: { A: {} }, state: { A: { ...green, head_sha: SHA_LIVE } } });
   const d = JSON.parse(run(root, ['duty', '--json'], { env: onPath(denyGh()) }).stdout);
-  assert.strictEqual(d.items[0].action, 'arch-review', d.items[0].why);
-  assert.ok(/predates head binding/.test(d.items[0].why), d.items[0].why);
+  assert.strictEqual(d.items[0].action, 'merge', d.items[0].why);
 });
 
 test('duty: neither side carries a head — the previous release\'s verdict stands', () => {
@@ -1101,14 +1101,10 @@ const hbMerge = (trailerHead, liveHead) => JSON.parse(run(
   }
 ).stdout).results[0];
 
-test('merge refuses a conform trailer that names another head, and names both', () => {
+test('merge ignores a stale architecture trailer on an epic target', () => {
   const r = hbMerge(SHA_JUDGED, SHA_LIVE);
-  assert.strictEqual(r.merged, false);
-  assert.strictEqual(r.would_merge, undefined, 'not even a dry run may say it would land');
-  const b = r.blockers.join('; ');
-  assert.ok(/1111111/.test(b), b);
-  assert.ok(/2222222/.test(b), b);
-  assert.ok(/arch-review/.test(b), b);
+  assert.strictEqual(r.would_merge, true);
+  assert.strictEqual(r.architecture.status, 'skipped-by-target');
 });
 
 test('...and lands it when the trailer names the live head (the control)', () => {
@@ -1116,10 +1112,8 @@ test('...and lands it when the trailer names the live head (the control)', () =>
   assert.strictEqual(r.would_merge, true, (r.blockers || []).join('; '));
 });
 
-test('merge refuses a headless trailer once the PR reports a head', () => {
-  const r = hbMerge(null, SHA_LIVE);
-  assert.strictEqual(r.would_merge, undefined);
-  assert.ok(r.blockers.some((x) => /predates head binding/.test(x)), r.blockers.join('; '));
+test('an epic merge ignores a headless architecture trailer', () => {
+  assert.strictEqual(hbMerge(null, SHA_LIVE).would_merge, true);
 });
 
 test('merge still lands a pre-head-binding PR whose head nothing reports', () => {
@@ -1174,7 +1168,7 @@ test('duty: an UNCERTIFIED draft where nothing ran still owes the arch-review', 
     state: { A: { ...green, checks: noCiChecks, draft: true, gate: undefined } },
   });
   const d = JSON.parse(run(root, ['duty', '--json'], { env: onPath(denyGh()) }).stdout);
-  assert.strictEqual(d.items[0].action, 'arch-review', d.items[0].why);
+  assert.strictEqual(d.items[0].action, 'human-merge', d.items[0].why);
 });
 
 test('duty: with auto-merge off the draft is still readied for the human who will merge it', () => {

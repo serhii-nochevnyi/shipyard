@@ -319,3 +319,17 @@ test('fresh receipt constructors default current identity and serialized receipt
     }
   }
 });
+
+test('architecture phase identity binds repository, PR, head and base without a synthetic ticket', () => {
+  const subject = 'phase=37-policy;repository=shipyard/test;tickets=' + 'a'.repeat(64)
+    + ';pr=91;head=' + 'b'.repeat(40) + ';base=' + 'c'.repeat(40);
+  const run = makeScope({ ticket: subject,
+    dispatch: { dispatch_id: 'arch-phase', role: 'arch-review', model: 'sol', effort: 'high' } });
+  assert.equal(contract.normalizeRunContract(run).ticket.ticket, subject);
+  for (const role of ['executor', 'integrator', 'pr-sentinel']) assert.throws(() => makeScope({ ticket: subject,
+    dispatch: { dispatch_id: 'wrong', role, model: 'sol', effort: 'high' } }), { code: 'INVALID_INPUT' });
+  assert.throws(() => contract.normalizeRunContract({ ...run, repository: { ...run.repository, repository_id: 'foreign/repo' } }), { code: 'SCOPE_MISMATCH' });
+  assert.throws(() => contract.normalizeRunContract({ ...run, phase: { phase: 38 } }), { code: 'INVALID_INPUT' });
+  assert.throws(() => makeScope({ ticket: subject.replace(';pr=91', ';pr=0'),
+    dispatch: { dispatch_id: 'bad', role: 'arch-review', model: 'sol', effort: 'high' } }), { code: 'INVALID_INPUT' });
+});

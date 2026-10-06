@@ -508,6 +508,17 @@ test('phase judgments retain their authenticated subject in the in-flight record
   assert.throws(() => recordInflight({ ...input, ticket: ticket.replace('phase.git', 'phase;git') }), /ticket/);
 });
 
+test('aggregate architecture in-flight records retain exact PR identity and role', () => {
+  const { graph } = scratch({ 'T-01-01': { ...READY } });
+  const ticket = 'phase=01-policy;repository=/tmp/phase.git;tickets=' + 'a'.repeat(64)
+    + ';pr=91;head=' + 'b'.repeat(40) + ';base=' + 'c'.repeat(40);
+  const input = { graphDir: graph, ticket, role: 'arch-review', dispatch_id: 'aggregate-review', pid: process.pid, host: 'codex' };
+  recordInflight(input);
+  assert.equal(inflightStore(graph)['aggregate-review'].ticket, ticket);
+  for (const role of ['executor', 'integrator', 'pr-sentinel']) assert.throws(() => recordInflight({ ...input, role }), /ticket/);
+  assert.throws(() => recordInflight({ ...input, ticket: ticket.replace(';pr=91', ';pr=0') }), /ticket/);
+});
+
 test('planning in-flight admission agrees with the role-scoped run contract', () => {
   const { project, graph } = scratch({ 'T-01-01': { ...READY } });
   const { normalizeTicketIdentity } = require(path.join(SCRIPTS, 'run-contract.cjs'));

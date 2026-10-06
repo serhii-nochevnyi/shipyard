@@ -200,8 +200,26 @@ function postGate({ repo, sha, description, cwd }) {
   return { ok: true };
 }
 
+function verifyArchitectureTarget({ pr, repo = null, worktreePath = process.cwd(), graphDir, getPullRequest }) {
+  const live = getPullRequest ? getPullRequest({ pr, repo, worktree: worktreePath }) : JSON.parse(require('node:child_process').execFileSync('gh',
+    ['pr', 'view', String(pr), ...(repo ? ['--repo', repo] : []), '--json', 'number,state,headRefName,headRefOid,baseRefName,baseRefOid'],
+    { cwd: worktreePath, encoding: 'utf8', timeout: 30000, maxBuffer: 65536 }));
+  if (live.number !== pr || live.state !== 'OPEN' || !TREE_SHA.test(live.headRefOid || '')
+      || !TREE_SHA.test(live.baseRefOid || '') || typeof live.baseRefName !== 'string')
+    throw new Error('live architecture PR identity is incomplete');
+  const target = require('./architecture-target.cjs');
+  const integration = target.resolveIntegrationBranch({ projectRoot: worktreePath, repo });
+  const architecture = target.architectureTarget({ base: live.baseRefName, integrationBranch: integration });
+  if (!architecture.required) return { ...architecture, ready: true, pr, head: live.headRefOid };
+  const verdict = require('./role-artifact.cjs').currentArchitectureVerdict({ worktreePath, graphDir,
+    pr, head: live.headRefOid, headBranch: live.headRefName, baseName: live.baseRefName, baseCommit: live.baseRefOid });
+  return { ...architecture, ready: !!verdict, pr, head: live.headRefOid, base_commit: live.baseRefOid, verdict };
+}
+
 module.exports = {
+  verifyArchitectureTarget,
   USAGE, CARRY_USAGE, TREE_SHA, STATUS_CONTEXT, STATUS_MAX,
+  currentArchitectureVerdict: input => require('./role-artifact.cjs').currentArchitectureVerdict(input),
   parseGate, gateKind, gateConform, gateWhy, shortSha, gateFromStatus, readGate,
 };
 
@@ -321,6 +339,17 @@ if (require.main === module) {
   // ── which verb ────────────────────────────────────────────────────────────
   // `carry` is implemented at the foot of this block (`runCarry`, a hoisted
   // declaration) and always exits, so everything below runs only for `write`.
+  if (argv[0] === 'verify') {
+    const pr = Number(argv[1]);
+    if (!Number.isSafeInteger(pr) || pr < 1) die('verify needs a positive PR number', 2);
+    const flags = parseFlags(2, ['repo', 'graph', 'worktree'], 'gate-trailer.cjs verify <pr> [--repo owner/name] [--graph <dir>] [--worktree <path>]');
+    try {
+      const checked = verifyArchitectureTarget({ pr, repo: flags.get('repo') || null,
+        graphDir: flags.get('graph'), worktreePath: flags.get('worktree') || process.cwd() });
+      console.log(JSON.stringify(checked));
+      process.exit(checked.ready ? 0 : 1);
+    } catch (error) { die(error.message); }
+  }
   if (argv[0] === 'carry') runCarry();
   if (argv[0] !== 'write') {
     die(`unknown command "${argv[0] || ''}"\nusage: ${USAGE}\n   or: ${CARRY_USAGE}`, 2);
@@ -371,7 +400,7 @@ if (require.main === module) {
   // The live PR: the body to rewrite and the head the verdict is about. A head
   // the writer cannot read is fatal — writing a head-less trailer would have
   // this script manufacture the very legacy shape the readers fail closed on.
-  const view = spawnSync('gh', ['pr', 'view', String(pr), ...repoArg, '--json', 'body,headRefOid'], { encoding: 'utf8' });
+  const view = spawnSync('gh', ['pr', 'view', String(pr), ...repoArg, '--json', 'body,headRefOid,headRefName,baseRefName,baseRefOid,number,state'], { encoding: 'utf8' });
   if (view.status !== 0) {
     die(`gh pr view ${pr} failed: ${(view.stderr || '').trim() || `exit ${view.status}`}`);
   }
@@ -379,6 +408,16 @@ if (require.main === module) {
   try { live = JSON.parse(view.stdout); } catch (e) { die(`gh pr view returned unparseable JSON (${e.message})`); }
   const head = normSha(live.headRefOid);
   if (!head) die(`PR #${pr} reports no headRefOid — refusing to write a trailer that names no diff`);
+
+  let architecture;
+  try { architecture = verifyArchitectureTarget({ pr, repo, getPullRequest: () => live }); }
+  catch (error) { die(error.message); }
+  if (!architecture.required) {
+    console.log(JSON.stringify(architecture));
+    process.exit(0);
+  }
+  if (!architecture.ready || (archReview === 'conform' && architecture.verdict?.verdict !== 'conform'))
+    die('integration target requires a current authenticated complete architecture artifact');
 
   // Refusing on an open thread is the rule `pr-sentinel.md` could only state:
   // a verdict recorded over unanswered review feedback is a falsified gate.
@@ -401,41 +440,10 @@ if (require.main === module) {
     + (baseTree ? `, base_tree=${normSha(baseTree)}` : '');
   const posted = postGate({ repo, sha: head, description });
   if (!posted.ok) die(`could not record the ${STATUS_CONTEXT} status on ${shortSha(head)}: ${posted.why}`);
-  stripLegacyTrailer(pr, repoArg, live.body);
+
   console.log(JSON.stringify({ pr, head, context: STATUS_CONTEXT, description, unresolved }, null, 2));
 
-  function stripLegacyTrailer(n, rArg, rawBody, cwd) {
-    const lines = String(rawBody || '').split('\n');
-    const kept = lines.filter((l) => !/^\s*gate_status:/i.test(l));
-    if (kept.length === lines.length) return;
-    while (kept.length && kept[kept.length - 1].trim() === '') kept.pop();
-    try {
-      execFileSync('gh', ['pr', 'edit', String(n), ...rArg, '--body', `${kept.join('\n')}\n`],
-        { stdio: ['ignore', 'pipe', 'pipe'], ...(cwd ? { cwd } : {}) });
-    } catch (e) {
-      die(`gh pr edit ${n} failed: ${e.stderr ? String(e.stderr).trim() : e.message}`);
-    }
-  }
-
-  // ── carry: the only writer of a CARRIED verdict ────────────────────────────
-  //
-  // a missing `base_tree`, a sha this repository does not have, either tree
-  // moved — is a REFUSAL, and a refusal is not an error: the verdict is simply
-  // owed again, which is what the conveyor did before this verb existed. Hence
-  // exit 1 for a refusal and exit 2 for a usage error, so a caller can tell the
-  // two apart while treating both as "no carry".
-  //
-  // The script computes the proof; the CALLER does not supply it. It is handed
-  // two heads and reads everything else — the verdict, the judged base tree, the
-  // live head and the base branch — from the PR and from git. That is deliberate:
-  // prose rules get skipped and mechanical gates hold, so a caller told to
-  // "check the tree first" is not a gate, while a script that re-derives both
-  // conditions is one.
-  //
-  // What it does NOT cover, and by whom: the PR BODY and any thread opened since
-  // the judgement. An identical tree says nothing about either, so both keep
-  // their existing checks — `sentinel.cjs merge` re-verifies threads, checks and
-  // the review decision against live GitHub on every merge.
+  // @contract: Historical carry proofs cannot authorize a new integration head.
   function runCarry() {
     const ticket = argv[1];
     if (!ticket || String(ticket).startsWith('--')) {
@@ -663,12 +671,7 @@ if (require.main === module) {
       if (carryKind === 'patch-id') compact.push('carried=patch-id');
       description = [...parts, ...compact].join(',');
     }
-    const posted = postGate({ repo, sha: to, description, cwd: worktree });
-    if (!posted.ok) die(`could not record the ${STATUS_CONTEXT} status on ${shortSha(to)}: ${posted.why}`);
-    console.log(JSON.stringify({
-      ticket, pr, carried: true, carry: carryKind, from, to, head_tree: toTree, base_ref: baseRef,
-      base_tree: newBaseTree, context: STATUS_CONTEXT, description,
-    }, null, 2));
-    process.exit(0);
+    refuse('new head requires a fresh authenticated architecture verdict; retained review remains history',
+      { from, to, base_tree: newBaseTree });
   }
 }

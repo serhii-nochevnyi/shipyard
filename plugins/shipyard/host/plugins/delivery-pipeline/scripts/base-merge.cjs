@@ -37,19 +37,6 @@
 // in the FIRST branch and discarded exactly the work the rule exists to protect,
 // so ownership is answered by path-owner.cjs and by nothing local to this file.
 //
-// AND THE VERDICT THIS MERGE DID NOT INVALIDATE (ADR-006 D2). Because this is
-// the only thing in the conveyor that moves a head WITHOUT adding content, it is
-// the only place a carried architecture verdict can be PROVED — measured on
-// T-25-05, a merge whose whole tree was byte-identical cost a full re-judgement
-// at ~150k tokens, 42% of that ticket's cost, once per cascade step per ticket.
-// So after a merge it completed, this script hands the pre-merge and post-merge
-//
-// One consequence worth naming: the carry runs BEFORE the push (this script does
-// not push), so between the two the trailer names a head origin has not seen and
-// every reader says `stale`. That is the fail-closed direction — a verdict that
-// counted a moment ago now does not — and it resolves the moment the fixer
-// pushes, which is the next thing its own instructions tell it to do.
-
 const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
@@ -180,63 +167,36 @@ if (!noFetch) git(['fetch', 'origin', '--prune'], { tolerate: true });
 // caller must be able to see which ref was actually measured.
 const baseRef = resolveBaseRef(worktree, base);
 
-// The head the architecture verdict was rendered against, read before anything
-// moves it. Everything the carry proves is about this sha and the one after.
 const preMergeHead = git(['rev-parse', 'HEAD'], { tolerate: true }).out;
-const preMergeBase = preMergeHead
-  ? git(['merge-base', baseRef, preMergeHead], { tolerate: true }).out : null;
 
-// WHICH PR, from the BOARD rather than from a flag. No prompt has to learn a new
-// argument for the carry to happen — this script is named in ci-fix.md,
-// review-fix.md and pr-sentinel.md, none of which can be taught here — and a
-// project whose graph carries no delivery state simply keeps the behaviour this
-// script had before the carry existed.
 function boardPr(id) {
   try {
     const state = JSON.parse(fs.readFileSync(path.join(graphDir, 'delivery-state.json'), 'utf8'));
-    const n = Number(((state || {})[id] || {}).pr);
+    const n = Number(((state.tickets || state || {})[id] || {}).pr);
     return Number.isInteger(n) && n > 0 ? n : null;
   } catch { return null; }
 }
 
-// Returns null when no carry was ATTEMPTED (the head did not move, or nothing
-// knows this ticket's PR), and the carry's own outcome otherwise. Never throws
-// and never changes this script's exit status: the merge either happened or it
-// did not, and whether a verdict survived it is a separate fact.
 function carryVerdict() {
   const postMergeHead = git(['rev-parse', 'HEAD'], { tolerate: true }).out;
-  // Nothing moved, so the trailer already names this head: there is nothing to
-  // carry, and re-stamping the same line would be a `gh` call for no reason.
   if (!preMergeHead || !postMergeHead || preMergeHead === postMergeHead) return null;
   const pr = boardPr(ticket);
   if (!pr) return null;
-  const postMergeBase = git(['merge-base', baseRef, postMergeHead], { tolerate: true }).out;
-  const r = spawnSync('node', [
-    path.join(__dirname, 'gate-trailer.cjs'), 'carry', ticket, '--pr', String(pr),
-    ...(t.repo ? ['--repo', t.repo] : []),
-    '--from', preMergeHead, '--to', postMergeHead,
-    ...(preMergeBase ? ['--from-base', preMergeBase] : []),
-    ...(postMergeBase ? ['--to-base', postMergeBase] : []),
-    '--graph', graphDir, '--worktree', worktree, '--json',
-  ], { encoding: 'utf8' });
-  try {
-    const out = JSON.parse(r.stdout);
-    if (out && typeof out.carried === 'boolean') return out;
-  } catch { /* fall through to the stderr reason below */ }
-  return {
-    ticket,
-    pr,
-    carried: false,
-    carry: 're-owed',
-    reason: (r.stderr || '').trim().split('\n').pop()
-      || `gate-trailer.cjs carry exited ${r.status} without a verdict`,
-  };
+  const target = require('./architecture-target.cjs');
+  let integrationBranch;
+  try { integrationBranch = target.resolveIntegrationBranch({ projectRoot: path.resolve(graphDir, '../..'), repo: t.repo || null }); }
+  catch {}
+  const architecture = target.architectureTarget({ base, integrationBranch,
+    epic: t.epic, ticketBranches: Object.values(tickets).filter(row => (row.repo || null) === (t.repo || null)).map(row => row.branch) });
+  return { ticket, pr, carried: false, carry: architecture.required ? 're-owed' : 'skipped-by-target',
+    architecture: architecture.status,
+    reason: 'head moved; retained review remains history' };
 }
 
 const carryLine = (c) => (c.carried
   ? `The architecture verdict CARRIED onto ${c.to.slice(0, 7)} (${c.carry}). `
     + 'CI still re-runs — a green is measured against a base.'
-  : `No verdict carried — ${c.reason}. arch-review is owed against the new head.`);
+  : `No verdict carried — ${c.reason}. Architecture review: ${c.architecture}.`);
 
 // @security: a merge is covered only when this script committed it itself.
 function recordMerge(taken) {

@@ -480,6 +480,24 @@ test('a sentinel round subject is authenticated through launch, receipt and reco
   }
 });
 
+test('architecture phase receipts replay only their exact authenticated subject kind', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'boundary-phase-subject-'));
+  try {
+    const recorder = boundaryModule.createDurableRecorder(directory);
+    const boundary = boundaryModule.createDispatchBoundary({ adapters: { codex: fakeAdapter() }, recorder });
+    const subject = 'phase=47-policy;repository=/tmp/phase.git;tickets=' + 'a'.repeat(64)
+      + ';pr=91;head=' + 'b'.repeat(40) + ';base=' + 'c'.repeat(40);
+    const context = { ticket: subject, subject_kind: 'phase' };
+    const result = boundary.dispatch({ runtime: 'codex', role: 'arch-review', dispatch_id: 'phase-verdict' }, context);
+    assert.equal(recorder.getVerifiedRecord(result.dispatch_id).subject_kind, 'phase');
+    assert.equal(boundary.reconcile(result.dispatch_id, context).subject_kind, 'phase');
+    assert.throws(() => boundary.reconcile(result.dispatch_id, { ticket: subject }), { code: 'INVALID_INPUT' });
+    assert.throws(() => boundary.reconcile(result.dispatch_id, { ...context, ticket: subject.replace(';pr=91', ';pr=92') }), { code: 'NONCOMPLIANT_RECEIPT' });
+    for (const role of ['executor', 'integrator', 'pr-sentinel']) assert.throws(() =>
+      boundary.dispatch({ runtime: 'codex', role }, context), { code: 'INVALID_INPUT' });
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
 test('receipts and repair predecessors remain bound to their launch ticket', () => {
   const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'boundary-ticket-binding-'));
   try {
