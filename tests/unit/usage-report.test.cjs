@@ -853,3 +853,26 @@ test('usage-report.cjs requires none of the network or process-spawning core mod
     assert.equal(new RegExp(`require\\(['"](node:)?${forbidden}['"]\\)`).test(src), false, `must not require ${forbidden}`);
   }
 });
+
+test('real waiter and authenticated child reports keep actors separate and unknown counters out of sums', async () => {
+  const { measuredPlanningFixture } = require('./codex-decompose-host.test.cjs');
+  const overhead = require('../../plugins/delivery-pipeline/scripts/orchestration-overhead.cjs');
+  const measured = await measuredPlanningFixture({ timeout: true });
+  const r = overhead.report({ rows: measured.rows });
+  const actors = new Map(r.by_actor.map(entry => [entry.actor, entry.metrics]));
+  const parents = measured.rows.filter(row => row.actor === 'parent');
+  assert.equal(actors.get('parent').wait_polls.sum, parents.length);
+  assert.equal(actors.get('child').wait_polls.sum, null);
+  for (const key of ['model_turns', 'tool_calls', 'retries', 'provider_tokens']) {
+    assert.equal(actors.get('child')[key].sum, null);
+    assert.equal(actors.get('child')[key].count, 0);
+  }
+  assert.equal(r.metrics.model_turns.sum, null);
+  assert.equal(r.verdict, 'inconclusive');
+  assert.equal(r.status.efficiency_measured, false);
+  assert.ok(r.verdict_reasons.some(reason => /no savings/.test(reason)));
+  assert.equal(Object.keys(r).some(key => /percent/i.test(key)), false);
+  const transcript = measured.childTranscript.split('\n').filter(Boolean).map(line => JSON.parse(line));
+  const usage = report([{ source: 'authenticated-original-child', rows: transcript }]);
+  assert.ok(usage.groups.every(group => group.provider === 'openai'));
+});
