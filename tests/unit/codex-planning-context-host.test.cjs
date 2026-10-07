@@ -267,13 +267,16 @@ for (const kind of ['inside', 'symlink', 'public']) test('caller refuses ' + kin
   } finally { f.clean(); fs.rmSync(external, { recursive: true, force: true }); }
 });
 
-for (const failure of [false, true]) test('trusted external recorder ' + (failure ? 'failure preserves the timeout and bounded diagnostic' : 'deduplicates repeat observations'), async () => {
+for (const failure of [false, true, 'stream-alias', 'lock-alias']) test('trusted external recorder ' + (failure ? 'failure preserves the timeout and bounded diagnostic' : 'deduplicates repeat observations'), async () => {
   const f = fixture();
   const external = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'planning-injection-')));
   try {
     const sink = path.join(external, 'telemetry'); fs.mkdirSync(sink, { mode: 0o700 });
     const durable = require('../../plugins/delivery-pipeline/scripts/orchestration-overhead.cjs').createRecorder(sink);
-    const recorder = failure ? { ...durable, record() { throw new Error('missing telemetry ' + 'x'.repeat(2000)); } } : durable;
+    if (failure === 'stream-alias') fs.symlinkSync(path.join(f.root, 'source.md'), path.join(sink, 'orchestration-overhead.jsonl'));
+    if (failure === 'lock-alias') fs.symlinkSync(f.root, path.join(sink, '.locks'));
+    const originalSource = fs.readFileSync(path.join(f.root, 'source.md'));
+    const recorder = failure === true ? { ...durable, record() { throw new Error('missing telemetry ' + 'x'.repeat(2000)); } } : durable;
     const request = { ...requestFor(f.root), dispatch_id: 'original-injected-wait' };
     const file = argsFile(f.root, request);
     const options = { stateDir: path.join(external, 'dispatch'), testStateRoot: external,
@@ -294,7 +297,9 @@ for (const failure of [false, true]) test('trusted external recorder ' + (failur
     if (failure) {
       assert.equal(readings[0].parent_rows.length, 0);
       assert.ok(readings[0].missing_evidence.length < 600);
-      assert.match(readings[0].missing_evidence, /missing telemetry/);
+      assert.match(readings[0].missing_evidence, failure === true ? /missing telemetry/ : /physically trusted|bounded regular files/);
+      assert.deepEqual(fs.readFileSync(path.join(f.root, 'source.md')), originalSource);
+      assert.equal(fs.existsSync(path.join(f.root, 'orchestration-overhead.lock')), false);
     } else {
       assert.equal(durable.latest().length, 1);
       assert.deepEqual(readings[0].parent_rows, readings[1].parent_rows);

@@ -982,11 +982,24 @@ async function verifyCompletedNativeLaunch(input = {}) {
   });
 }
 
-function verifyFileConsumption(prepared, nativeRaw, dispatchId) {
+function verifyFileConsumption(prepared, nativeRaw, dispatchId, resultText) {
   const checked = require('./codex-arch-review-context.cjs').verifyFileInput(prepared, {
     association: { dispatch_id: dispatchId },
   });
   const records = nativeRaw.split('\n').filter(Boolean).map(line => JSON.parse(line));
+  const starts = records.map((record, index) => record.type === 'event_msg' && record.payload?.type === 'task_started' ? index : -1).filter(index => index >= 0);
+  const completions = records.map((record, index) => record.type === 'event_msg' && record.payload?.type === 'task_complete' ? index : -1).filter(index => index >= 0);
+  if (starts.length !== 1 || completions.length !== 1 || completions[0] <= starts[0]
+      || records[completions[0]].payload.turn_id !== records[starts[0]].payload.turn_id
+      || records[completions[0]].payload.last_agent_message !== resultText)
+    fail('RUNTIME_EVIDENCE_MISMATCH', 'file consumption is not bound to the original native completion');
+  const finalIndex = records.findIndex((record, index) => index > starts[0] && record.type === 'response_item'
+    && record.payload?.type === 'message' && record.payload.role === 'assistant' && record.payload.phase === 'final_answer');
+  if (finalIndex < 0 || records[finalIndex].payload.content?.map(block => block.text || '').join('') !== resultText)
+    fail('RUNTIME_EVIDENCE_MISMATCH', 'native final response differs from the returned result');
+  const emittedFinal = records.findIndex(record => record.type === 'event_msg'
+    && record.payload?.type === 'item_completed' && record.payload.item?.phase === 'final_answer');
+  const boundary = Math.min(finalIndex, completions[0], emittedFinal < 0 ? completions[0] : emittedFinal);
   const expected = [{ path: prepared.input_bundle.manifest_path,
     bytes: checked.manifest_bytes },
     ...checked.manifest.assets.map((asset, index) => ({ path: asset.path, bytes: checked.material[index] }))];
@@ -1008,7 +1021,7 @@ function verifyFileConsumption(prepared, nativeRaw, dispatchId) {
           || args.max_output_tokens < 1 || args.max_output_tokens > 10000))) return null;
     return args;
   };
-  for (const record of records) {
+  for (const [index, record] of records.entries()) {
     const item = record.payload;
     if (record.type !== 'response_item' || !item) continue;
     const custom = item.type === 'custom_tool_call';
@@ -1018,30 +1031,44 @@ function verifyFileConsumption(prepared, nativeRaw, dispatchId) {
       else { try { args = JSON.parse(item.arguments); } catch { continue; } }
       if (!object(args)) continue;
       if (typeof args.cmd !== 'string' || !expected.some(asset => args.cmd.startsWith('dd if=' + quote(asset.path) + ' '))) continue;
+      if (item.internal_chat_message_metadata_passthrough?.turn_id !== undefined
+          && item.internal_chat_message_metadata_passthrough.turn_id !== records[starts[0]].payload.turn_id)
+        fail('RUNTIME_EVIDENCE_MISMATCH', 'native read belongs to a foreign task');
+      if (index <= starts[0] || index >= boundary) fail('RUNTIME_EVIDENCE_MISMATCH', 'native read is outside the original task input boundary');
       if (args.cmd !== reads[at]?.command || at >= prepared.input_bundle.max_chunk_reads)
         fail('RUNTIME_EVIDENCE_MISMATCH', 'native file read is reordered, duplicated or exceeds its budget');
       if (pending.size) fail('RUNTIME_EVIDENCE_MISMATCH', 'ordered file read did not finish before the next read');
       pending.set(item.call_id, { ...reads[at], custom });
     }
     if (['function_call_output', 'custom_tool_call_output'].includes(item.type) && pending.has(item.call_id)) {
+      if (index >= boundary) fail('RUNTIME_EVIDENCE_MISMATCH', 'native read completed after the result');
       const read = pending.get(item.call_id);
       if (read.custom !== (item.type === 'custom_tool_call_output'))
         fail('RUNTIME_EVIDENCE_MISMATCH', 'native file read output has a foreign transport');
       let output = item.output;
       if (read.custom) {
-        if (!Array.isArray(output) || output.some(block => block?.type !== 'text' || typeof block.text !== 'string'))
+        if (!Array.isArray(output) || output.some(block => !['text', 'input_text'].includes(block?.type) || typeof block.text !== 'string'))
           fail('RUNTIME_EVIDENCE_MISMATCH', 'native file read output is not the original text response');
-        const results = output.flatMap(block => {
+        if (output.length !== 2 || !/^Script completed\nWall time [0-9.]+ seconds\nOutput:\s*$/.test(output[0].text))
+          fail('RUNTIME_EVIDENCE_MISMATCH', 'native read output has surplus or unsupported text');
+        const results = output.slice(1).flatMap(block => {
           try { const result = JSON.parse(block.text); return object(result) && typeof result.output === 'string' ? [result] : []; }
           catch { return []; }
         });
         if (results.length !== 1 || results[0].exit_code !== 0 || results[0].session_id !== undefined)
           fail('RUNTIME_EVIDENCE_MISMATCH', 'native file read did not complete successfully');
         output = results[0].output;
-      } else { try { const parsed = JSON.parse(output); output = parsed.output ?? parsed.stdout ?? output; } catch {} }
+      } else {
+        let parsed; try { parsed = JSON.parse(output); } catch {}
+        if (!object(parsed)) fail('RUNTIME_EVIDENCE_MISMATCH', 'native file read lacks a successful output envelope');
+        if (object(parsed)) {
+          if (parsed.exit_code !== 0 || parsed.session_id !== undefined)
+            fail('RUNTIME_EVIDENCE_MISMATCH', 'native file read did not complete successfully');
+          output = parsed.output ?? parsed.stdout;
+        }
+      }
       const encoded = read.bytes.toString('base64');
-      if (typeof output !== 'string' || (read.custom
-        ? output.replace(/\s/g, '') !== encoded : !output.replace(/\s/g, '').includes(encoded)))
+      if (typeof output !== 'string' || output.replace(/\s/g, '') !== encoded)
         fail('RUNTIME_EVIDENCE_MISMATCH', 'original native file read is incomplete or truncated');
       pending.delete(item.call_id); at++;
     }
@@ -1373,13 +1400,13 @@ function createCodexCliLauncher(options = {}) {
       });
       const nativeEvidence = verified.native_session_evidence;
       if (fileTransport) {
-        const consumed = verifyFileConsumption(fileInput,
-          readNativeParentRaw(parsed.session_id, nativeEvidence, env), launchOptions.dispatch_id);
         const message = parsed.records.filter(record => record.type === 'item.completed'
           && record.item?.type === 'agent_message').at(-1);
         if (!message || parsed.records.indexOf(message) > parsed.records.findLastIndex(record => record.type === 'turn.completed'))
           fail('RUNTIME_EVIDENCE_MISMATCH', 'file input result is outside the original completed turn');
         const resultText = message.item.text || '';
+        const consumed = verifyFileConsumption(fileInput,
+          readNativeParentRaw(parsed.session_id, nativeEvidence, env), launchOptions.dispatch_id, resultText);
         let result;
         try { result = JSON.parse(resultText.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '')); } catch {}
         for (const [key, expected] of Object.entries({ input_manifest_sha256: fileInput.input_bundle.manifest_sha256,

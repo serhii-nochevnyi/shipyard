@@ -649,4 +649,45 @@ test('recordHandoffCost accepts successor_reread and handoffCostSummary reports 
   }
 });
 
+for (const alias of ['stream', 'locks', 'lock', 'owner']) {
+  test(`recorder refuses existing ${alias} alias before writing`, () => {
+    const f = fixture();
+    try {
+      const writer = path.join(f.root, 'writer');
+      fs.mkdirSync(writer);
+      const sentinel = path.join(writer, 'sentinel');
+      fs.writeFileSync(sentinel, 'protected\n', { mode: 0o600 });
+      const before = fs.statSync(sentinel);
+      const locks = path.join(f.graph, '.locks');
+      const lock = path.join(locks, 'orchestration-overhead.lock');
+      if (alias === 'stream') fs.symlinkSync(sentinel, path.join(f.graph, overhead.STREAM_NAME));
+      if (alias === 'locks') { fs.rmdirSync(locks); fs.symlinkSync(writer, locks); }
+      if (alias === 'lock') fs.symlinkSync(writer, lock);
+      if (alias === 'owner') { fs.mkdirSync(lock); fs.symlinkSync(sentinel, path.join(lock, 'owner.json')); }
+      assert.throws(() => overhead.createRecorder(f.graph).record(identity()));
+      assert.equal(fs.readFileSync(sentinel, 'utf8'), 'protected\n');
+      const after = fs.statSync(sentinel);
+      assert.equal(after.ino, before.ino);
+      assert.equal(after.mode, before.mode);
+      assert.deepEqual(fs.readdirSync(writer), ['sentinel']);
+      if (alias === 'stream') assert.throws(() => overhead.readStream(f.graph));
+    } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
+  });
+}
+
+test('shared lock refuses a symlink owner without stale takeover', () => {
+  const f = fixture();
+  try {
+    const { acquire } = require('../../plugins/delivery-pipeline/scripts/lock.cjs');
+    const lock = path.join(f.graph, '.locks', 'alias.lock');
+    fs.mkdirSync(lock);
+    const target = path.join(f.root, 'owner-target');
+    fs.writeFileSync(target, JSON.stringify({ at: '2000-01-01' }));
+    fs.symlinkSync(target, path.join(lock, 'owner.json'));
+    assert.throws(() => acquire(path.dirname(lock), 'alias', { waitMs: 0 }));
+    assert.equal(fs.lstatSync(path.join(lock, 'owner.json')).isSymbolicLink(), true);
+    assert.deepEqual(fs.readdirSync(path.dirname(lock)), ['alias.lock']);
+  } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
+});
+
 done();

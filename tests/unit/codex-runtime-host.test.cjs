@@ -996,8 +996,8 @@ test('actual launcher refuses a nonexistent worktree without requiring Git for e
 });
 
 for (const transport of ['function', 'custom'])
-for (const [materialBytes, tamper] of [[1996419, null], [2553953, null], [1996419, 'missing-read'], [1996419, 'truncated'], [1996419, 'source-drift'], [1996419, 'wrong-echo']].concat(transport === 'custom'
-  ? [[1996419, 'unsafe-wrapper'], [1996419, 'failed-read'], [1996419, 'surplus-output']] : [])) test('fixture: ' + transport + ' ' + (tamper || 'complete') + ' ' + materialBytes + '-byte input traverses delivery, static native relay and fresh consumer', async () => {
+for (const [materialBytes, tamper] of [[1996419, null], [2553953, null], [1996419, 'missing-read'], [1996419, 'truncated'], [1996419, 'source-drift'], [1996419, 'wrong-echo'], [1996419, 'after-complete'], [1996419, 'foreign-completion'], [1996419, 'failed-read'], [1996419, 'surplus-output']].concat(transport === 'custom'
+  ? [[1996419, 'unsafe-wrapper']] : [])) test('fixture: ' + transport + ' ' + (tamper || 'complete') + ' ' + materialBytes + '-byte input traverses delivery, static native relay and fresh consumer', async () => {
   const { execFileSync } = require('node:child_process');
   const collector = require('../../plugins/delivery-pipeline/scripts/codex-arch-review-context.cjs');
   const { createCodexDeliveryHost } = require('../../plugins/delivery-pipeline/scripts/codex-delivery-host.cjs');
@@ -1053,31 +1053,39 @@ for (const [materialBytes, tamper] of [[1996419, null], [2553953, null], [199641
             const native = writeSession(home, session, selectedModel, selectedEffort);
             const assets = [{ path: manifestPath, bytes: consumed.manifest_bytes },
               ...manifest.assets.map((asset, index) => ({ path: asset.path, bytes: consumed.material[index] }))];
+            const templates = captured(PARENT_FIXTURE).split('\n').filter(Boolean).map(JSON.parse);
+            const response = templates.find(record => record.type === 'response_item');
+            const wrap = payload => ({ ...structuredClone(response), payload });
             const records = [];
             let ordinal = 0;
             for (const asset of assets) for (let index = 0; index < Math.ceil(asset.bytes.length / manifest.chunk_bytes); index++) {
               const cmd = "dd if='" + asset.path + "' bs=" + manifest.chunk_bytes + ' skip=' + index + ' count=1 2>/dev/null | base64';
               const callId = 'fixture-read-' + ordinal++;
               const encoded = asset.bytes.subarray(index * manifest.chunk_bytes, (index + 1) * manifest.chunk_bytes).toString('base64');
-              if (transport === 'custom') records.push({ type: 'response_item', payload: {
+              if (transport === 'custom') records.push(wrap({
                 type: 'custom_tool_call', name: 'exec', call_id: callId,
                 input: 'text(await tools.exec_command(' + JSON.stringify({ cmd, max_output_tokens: 10000 }) + '));',
-              } }, { type: 'response_item', payload: { type: 'custom_tool_call_output', call_id: callId,
-                output: [{ type: 'text', text: 'Script completed\nWall time 0.1 seconds\nOutput:' },
-                  { type: 'text', text: JSON.stringify({ chunk_id: callId, wall_time_seconds: 0.1,
+              }), wrap({ type: 'custom_tool_call_output', call_id: callId,
+                output: [{ type: 'input_text', text: 'Script completed\nWall time 0.1 seconds\nOutput:' },
+                  { type: 'input_text', text: JSON.stringify({ chunk_id: callId, wall_time_seconds: 0.1,
                     exit_code: 0, output: encoded }) }],
-              } });
-              else records.push({ type: 'response_item', payload: { type: 'function_call', name: 'exec_command', call_id: callId,
-                arguments: JSON.stringify({ cmd }) } }, { type: 'response_item', payload: { type: 'function_call_output', call_id: callId,
-                output: encoded } });
+              }));
+              else records.push(wrap({ type: 'function_call', name: 'exec_command', call_id: callId,
+                arguments: JSON.stringify({ cmd }) }), wrap({ type: 'function_call_output', call_id: callId,
+                output: JSON.stringify({ exit_code: 0, output: encoded }) }));
             }
             if (tamper === 'missing-read') records.pop();
             if (tamper === 'unsafe-wrapper') records[0].payload.input += '\ntext("untrusted extra statement");';
             if (tamper === 'failed-read' || tamper === 'surplus-output') {
-              const block = records.at(-1).payload.output[1];
-              const captured = JSON.parse(block.text);
-              block.text = JSON.stringify(tamper === 'failed-read'
-                ? { ...captured, exit_code: 1 } : { ...captured, output: captured.output + 'AAAA' });
+              if (transport === 'custom') {
+                const block = records.at(-1).payload.output[1];
+                const captured = JSON.parse(block.text);
+                block.text = JSON.stringify(tamper === 'failed-read'
+                  ? { ...captured, exit_code: 1 } : { ...captured, output: captured.output + 'AAAA' });
+              } else records.at(-1).payload.output = JSON.stringify({
+                exit_code: tamper === 'failed-read' ? 1 : 0,
+                output: JSON.parse(records.at(-1).payload.output).output + (tamper === 'surplus-output' ? 'AAAA' : ''),
+              });
             }
             if (tamper === 'truncated') {
               if (transport === 'custom') {
@@ -1086,7 +1094,7 @@ for (const [materialBytes, tamper] of [[1996419, null], [2553953, null], [199641
               } else records.at(-1).payload.output = records.at(-1).payload.output.slice(0, 8);
             }
             if (tamper === 'source-drift') fs.writeFileSync(path.join(root, '.planning/config.json'), '{"tampered":true}');
-            fs.appendFileSync(native, records.map(record => JSON.stringify(record)).join('\n') + '\n');
+
             const output = transformJsonl(stream(session), record => {
               if (record.type === 'item.completed' && record.item.type === 'agent_message') record.item.text = JSON.stringify({
                 input_manifest_sha256: tamper === 'wrong-echo' ? 'f'.repeat(64) : bundle.manifest_sha256,
@@ -1094,6 +1102,14 @@ for (const [materialBytes, tamper] of [[1996419, null], [2553953, null], [199641
               });
               return record;
             });
+            const resultText = output.split('\n').filter(Boolean).map(JSON.parse).find(record => record.item?.type === 'agent_message').item.text;
+            const parentRecords = fs.readFileSync(native, 'utf8').split('\n').filter(Boolean).map(JSON.parse);
+            for (const record of parentRecords) if (record.payload?.type === 'task_complete') record.payload.last_agent_message = tamper === 'foreign-completion' ? 'foreign result' : resultText;
+            for (const record of parentRecords) if (record.payload?.type === 'message' && record.payload.phase === 'final_answer') record.payload.content.forEach(block => { block.text = resultText; });
+            const boundary = parentRecords.findIndex(record => (record.payload?.type === 'message' && record.payload.phase === 'final_answer')
+              || (record.payload?.type === 'item_completed' && record.payload.item?.phase === 'final_answer'));
+            parentRecords.splice(tamper === 'after-complete' ? parentRecords.length : boundary, 0, ...records);
+            fs.writeFileSync(native, parentRecords.map(JSON.stringify).join('\n') + '\n');
             process.nextTick(() => { child.stdout.emit('data', Buffer.from(output)); child.emit('close', 0, null); });
           } catch (error) { process.nextTick(() => child.emit('error', error)); }
         } };

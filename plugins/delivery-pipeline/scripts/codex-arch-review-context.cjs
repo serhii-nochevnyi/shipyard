@@ -211,11 +211,15 @@ function fileSnapshot(scope, options) {
   const config = path.join(worktree, '.planning/config.json');
   const graph = path.resolve(options.graphDir || path.join(worktree, '.planning/graph'));
   const graphPins = ['tickets.json', 'delivery-state.json'].filter(name => fs.existsSync(path.join(graph, name)))
-    .map(name => ({ path: path.join(graph, name), sha256: digest(boundedBytes(fs, path.join(graph, name), FILE_LIMITS.manifest)) }));
+    .map(name => ({ path: path.join(graph, name), sha256: digest(boundedBytes(fs, path.join(graph, name), 8 * 1024 * 1024)) }));
   return { worktree, repository: common, common, head, head_tree: git(options, worktree, ['rev-parse', 'HEAD^{tree}']),
     graph: graphPins, config_sha256: fs.existsSync(config) ? digest(boundedBytes(fs, config, FILE_LIMITS.manifest)) : null,
     policy_hash: require('./model-policy.cjs').POLICY_HASH,
-    sources: ['codex-arch-review-context.cjs', 'codex-delivery-host.cjs', 'codex-runtime-host.cjs'].map(name => {
+    live_inputs_sha256: digest(JSON.stringify(statusIgnoringScratch(worktree, { untracked: 'all', forJudge: false }).entries
+      .filter(entry => !entry.path.startsWith('.planning/graph/'))
+      .map(entry => ({ ...entry, sha256: fs.existsSync(path.join(worktree, entry.path))
+        ? digest(boundedBytes(fs, path.join(worktree, entry.path), FILE_LIMITS.material)) : null })))),
+    sources: ['codex-arch-review-context.cjs', 'codex-delivery-host.cjs', 'codex-runtime-host.cjs', 'development-artifacts.cjs'].map(name => {
       const { content: _content, ...pin } = file(__dirname, name); return pin;
     }) };
 }
@@ -248,7 +252,8 @@ function prepareFileInput(scope, material, options = {}) {
     total += length; reads += Math.ceil(length / INPUT_CHUNK_BYTES);
     if (total > FILE_LIMITS.material || reads > FILE_LIMITS.reads) fail('complete material exceeds its bound', 'CONTEXT_OVER_BOUND');
     const bytes = Buffer.from(value);
-    try { new TextDecoder('utf-8', { fatal: true }).decode(bytes); } catch { fail('material is invalid UTF-8'); }
+    try { const decoded = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes);
+      if (typeof value === 'string' && decoded !== value) fail('material does not round-trip through UTF-8'); } catch { fail('material is invalid UTF-8'); }
     return bytes;
   });
   if (options.relayPrefix !== undefined && (typeof options.relayPrefix !== 'string' || Buffer.byteLength(options.relayPrefix) > FILE_LIMITS.relay))
@@ -477,8 +482,8 @@ function collect(scope, options) {
   const mergeBaseTree = git(options, worktree, ['rev-parse', mergeBase + '^{tree}']);
   const diff = String(run(options, 'git', ['-C', worktree, 'diff', '--no-ext-diff', '--no-textconv',
     '--unified=50', mergeBase + '...' + head, ...productPathspec()], worktree, FILE_LIMITS.material));
-  const developmentPaths = String(run(options, 'git', ['-C', worktree, 'diff', '--name-only',
-    mergeBase + '...' + head], worktree, FILE_LIMITS.material)).split('\n').filter(name => name && require('./development-artifacts.cjs').isDevelopmentArtifact(name));
+  const developmentPaths = String(run(options, 'git', ['-C', worktree, 'diff', '--name-only', '-z',
+    mergeBase + '...' + head], worktree, FILE_LIMITS.material)).split('\0').filter(name => name && require('./development-artifacts.cjs').isDevelopmentArtifact(name));
   const developmentDiff = developmentPaths.length ? String(run(options, 'git', ['-C', worktree, 'diff',
     '--no-ext-diff', '--no-textconv', '--unified=50', mergeBase + '...' + head, '--', ...developmentPaths], worktree, FILE_LIMITS.material)) : '';
   const plans = (binding ? binding.rows : [{ row }]).map(item => file(project, item.row.plan));
@@ -824,7 +829,7 @@ function prepare(scope, launch, options = {}) {
     }),
   });
   preparedContexts.add(result);
-  preparedOptions.set(result, { ...options, fileInput });
+  preparedOptions.set(result, { ...options, scope, fileInput });
   return result;
 }
 
@@ -842,7 +847,7 @@ function admitInstalledLaunch(value, options) {
   const files = [
     { root: agentRoot, ...agent },
     { root: manifestRoot, ...manifest },
-    ...['codex-arch-review-context.cjs', 'codex-delivery-host.cjs', 'codex-runtime-host.cjs', 'role-artifact.cjs', 'plan-delivery.cjs', 'conveyor-scratch.cjs', 'dispatch-record.cjs', 'claude-runtime-host.cjs', 'lock.cjs', 'architecture-target.cjs'].map(name =>
+    ...['codex-arch-review-context.cjs', 'codex-delivery-host.cjs', 'codex-runtime-host.cjs', 'role-artifact.cjs', 'plan-delivery.cjs', 'conveyor-scratch.cjs', 'dispatch-record.cjs', 'claude-runtime-host.cjs', 'lock.cjs', 'architecture-target.cjs', 'development-artifacts.cjs'].map(name =>
       ({ root: scriptRoot, ...file(scriptRoot, name) })),
   ].map(({ content: _content, ...pin }) => pin);
   if (options.capabilitiesFile) {
@@ -851,26 +856,36 @@ function admitInstalledLaunch(value, options) {
     files.push({ root, ...pin });
   }
   const privateOptions = preparedOptions.get(value);
+  const instructions = require('./codex-runtime-host.cjs').generatedInstructions(agent.content);
+  const instructionBytes = Buffer.byteLength(instructions) + 2;
+  if (!privateOptions.fileInput && Buffer.byteLength(value.launch.context.prompt) + instructionBytes > INPUT_MAX_BYTES) {
+    privateOptions.fileInput = prepareFileInput(privateOptions.scope, JSON.stringify(value.prepared.packet), {
+      ...privateOptions, role: 'arch-review', dispatchId: privateOptions.inflightDispatchId,
+      relayPrefix: value.launch.context.prompt.slice(0, value.launch.context.prompt.indexOf('<AUTHENTICATED_CONTEXT_PACKET>')),
+      binding: { packet_digest: value.prepared.packet.digest,
+        ticket_set_digest: value.prepared.binding?.membership || null, base: value.prepared.baseCommit,
+        merge_base_tree: value.prepared.mergeBaseTree, retained_evidence: value.prepared.packet.retained_evidence || [] } });
+    preparedOptions.set(value, privateOptions);
+  }
   if (privateOptions.fileInput) {
     verifyFileInput(privateOptions.fileInput);
-    const instructions = require('./codex-runtime-host.cjs').generatedInstructions(agent.content);
     const previous = privateOptions.fileInput;
     const next = prepareFileInput(privateOptions.fileInput && { worktree: value.prepared.canonical.worktree,
       ticket: value.prepared.ticket, phase: value.prepared.phaseNumber, run_id: previous.manifest.run_id },
       verifyFileInput(previous).material, { ...fileInputOptions.get(previous),
-        generatedInstructionBytes: Buffer.byteLength(instructions) + 2,
+        generatedInstructionBytes: instructionBytes,
         binding: { ...previous.manifest.binding, agent_path: path.join(agentRoot, agent.path),
           agent_file: agent.path, agent_sha256: agent.sha256, installed_files: files } });
     preparedOptions.set(value, { ...privateOptions, fileInput: next });
   }
   const fileInput = preparedOptions.get(value).fileInput;
   const completeUpperBound = fileInput ? fileInput.input_bytes
-    : Buffer.byteLength(value.launch.context.prompt, 'utf8') + agent.bytes + 2;
+    : Buffer.byteLength(value.launch.context.prompt, 'utf8') + instructionBytes;
   if (!fileInput && completeUpperBound > INPUT_MAX_BYTES)
     fail('generated instructions plus complete review prompt exceed the launch bound', 'CONTEXT_OVER_BOUND');
   const installation = deepFreeze({ script_root: scriptRoot, files,
     capabilities_sha256: digest(JSON.stringify(options.capabilities)),
-    capacity: { complete_upper_bound_bytes: completeUpperBound, maximum_bytes: fileInput ? FILE_LIMITS.material + FILE_LIMITS.manifest + FILE_LIMITS.relay + agent.bytes + 2 : INPUT_MAX_BYTES,
+    capacity: { complete_upper_bound_bytes: completeUpperBound, maximum_bytes: fileInput ? FILE_LIMITS.material + FILE_LIMITS.manifest + FILE_LIMITS.relay + instructionBytes : INPUT_MAX_BYTES,
       ...(fileInput ? { accounting: fileInput.manifest.accounting } : {}),
       runtime_capacity_acceptance: 'requires separate installed native acceptance' } });
   installedLaunches.set(value, installation);

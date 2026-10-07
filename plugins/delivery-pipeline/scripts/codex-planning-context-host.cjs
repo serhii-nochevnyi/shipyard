@@ -258,6 +258,21 @@ function waitRecorder(association, options = {}) {
   return { sink, recorder: injected || overhead.createRecorder(sink), graphDir: canonicalGraph, repository: fs.realpathSync(common) };
 }
 
+function validateWaitWritePaths(sink, worktree) {
+  externalWaitDirectory(sink, worktree);
+  const locks = path.join(sink, '.locks');
+  externalWaitDirectory(locks, worktree);
+  const lock = path.join(locks, 'orchestration-overhead.lock');
+  externalWaitDirectory(lock, worktree);
+  for (const file of [path.join(sink, overhead.STREAM_NAME), path.join(lock, 'owner.json')]) {
+    let stat;
+    try { stat = fs.lstatSync(file); } catch (error) { if (error.code === 'ENOENT') continue; throw error; }
+    if (!stat.isFile() || stat.isSymbolicLink() || fs.realpathSync(file) !== file
+        || stat.uid !== process.getuid() || (stat.mode & 0o022))
+      fail('INVALID_WAIT_RECORDER', 'wait recorder file is not physically trusted');
+  }
+}
+
 function waitDiagnostic(error) {
   return (String(error.code || 'WAIT_ACCOUNTING_MISSING').slice(0, 64) + ': ' + String(error.message)).slice(0, 512);
 }
@@ -349,6 +364,7 @@ async function runCli(argv = process.argv.slice(2), stdout = process.stdout, opt
         externalWaitDirectory(accounting.sink, parsed.scope.worktree);
         fs.mkdirSync(accounting.sink, { recursive: true, mode: 0o700 });
         externalWaitDirectory(accounting.sink, parsed.scope.worktree);
+        validateWaitWritePaths(accounting.sink, parsed.scope.worktree);
         const observed = /:wait:(\d+)$/.exec(value.observation_id || '')?.[1];
         return accounting.recorder.record({ ...value, ...(observed ? { observed_at: new Date(Number(observed)).toISOString() } : {}) });
       } catch (error) {

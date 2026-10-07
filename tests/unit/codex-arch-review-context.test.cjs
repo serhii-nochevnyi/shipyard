@@ -1375,14 +1375,22 @@ function aggregateRuntimeFixture({ host: fixtureHost, parsed, storage, capabilit
             });
           const assets = [{ path: manifestPath, bytes: checked.manifest_bytes },
             ...manifest.assets.map((asset, index) => ({ path: asset.path, bytes: checked.material[index] }))];
+          const response = parent.find(record => record.type === 'response_item');
+          const wrap = payload => ({ ...structuredClone(response), payload });
+          const reads = [];
           let ordinal = 0;
           for (const asset of assets) for (let index = 0; index < Math.ceil(asset.bytes.length / manifest.chunk_bytes); index++) {
             const callId = 'fixture-read-' + ordinal++;
-            parent.push({ type: 'response_item', payload: { type: 'function_call', name: 'exec_command', call_id: callId,
-              arguments: JSON.stringify({ cmd: "dd if='" + asset.path + "' bs=" + manifest.chunk_bytes + ' skip=' + index + ' count=1 2>/dev/null | base64' }) } },
-            { type: 'response_item', payload: { type: 'function_call_output', call_id: callId,
-              output: asset.bytes.subarray(index * manifest.chunk_bytes, (index + 1) * manifest.chunk_bytes).toString('base64') } });
+            reads.push(wrap({ type: 'function_call', name: 'exec_command', call_id: callId,
+              arguments: JSON.stringify({ cmd: "dd if='" + asset.path + "' bs=" + manifest.chunk_bytes + ' skip=' + index + ' count=1 2>/dev/null | base64' }) }),
+            wrap({ type: 'function_call_output', call_id: callId,
+              output: JSON.stringify({ exit_code: 0, output: asset.bytes.subarray(index * manifest.chunk_bytes, (index + 1) * manifest.chunk_bytes).toString('base64') }) }));
           }
+          const resultText = fs.readFileSync(produced.runtime_evidence.transcript.path, 'utf8').split('\n').filter(Boolean).map(JSON.parse).find(record => record.item?.type === 'agent_message').item.text;
+          for (const record of parent) if (record.payload?.type === 'task_complete') record.payload.last_agent_message = resultText;
+          for (const record of parent) if (record.payload?.type === 'message' && record.payload.phase === 'final_answer') record.payload.content.forEach(block => { block.text = resultText; });
+          parent.splice(parent.findIndex(record => (record.payload?.type === 'message' && record.payload.phase === 'final_answer')
+            || (record.payload?.type === 'item_completed' && record.payload.item?.phase === 'final_answer')), 0, ...reads);
           const now = new Date();
           const directory = path.join(home, 'sessions', String(now.getFullYear()), String(now.getMonth() + 1).padStart(2, '0'), String(now.getDate()).padStart(2, '0'));
           fs.mkdirSync(directory, { recursive: true });
@@ -1417,6 +1425,7 @@ test('bounded file input retains exact multibyte bytes, full accounting and priv
     assert.equal(input.inputTokens, Math.ceil(Object.values(checked.manifest.accounting).reduce((sum, bytes) => sum + bytes, 0) / 4));
     assert.equal(checked.chunk_reads, checked.manifest.assets[0].chunk_count + 1);
     assert.equal(checked.manifest.dispatch_id, 'original-file-input');
+    assert.ok(checked.manifest.snapshot.sources.some(pin => pin.path === 'development-artifacts.cjs'));
     assert.equal(checked.manifest.snapshot.policy_hash, require('../../plugins/delivery-pipeline/scripts/model-policy.cjs').POLICY_HASH);
     assert.ok(input.input_bundle.total_bytes > Buffer.byteLength(input.prompt));
   } finally { f.clean(); }
@@ -1426,6 +1435,8 @@ for (const [name, material, options] of [
   ['material maximum plus one', 'x'.repeat(16 * 1024 * 1024 + 1), {}],
   ['multibyte maximum plus one', 'é'.repeat(8 * 1024 * 1024) + 'x', {}],
   ['invalid UTF-8', Buffer.from([0xc3, 0x28]), {}],
+  ['unpaired high surrogate', 'x'.repeat(1048576) + '\ud800', {}],
+  ['unpaired low surrogate', '\udc00' + 'x'.repeat(1048576), {}],
   ['asset maximum plus one', Array(2001).fill('x'), {}],
   ['relay maximum plus one', 'x', { relayPrefix: 'x'.repeat(64 * 1024 + 1) }],
 ]) test('file producer refuses ' + name + ' before publishing a bundle', () => {
@@ -1455,6 +1466,9 @@ for (const [name, mutate] of [
   ['head', f => git(f.f.root, ['commit', '--allow-empty', '-m', 'moved head'])],
   ['member inventory', f => write(f.f.root, '.planning/graph/tickets.json', '{}')],
   ['configuration', f => write(f.f.root, '.planning/config.json', '{"changed":true}')],
+  ['live product', f => write(f.f.root, 'product-new.cjs', 'changed')],
+  ['live plan', f => write(f.f.root, '.planning/phases/new-PLAN.md', 'changed')],
+  ['live architecture', f => write(f.f.root, '.planning/architecture/new.md', 'changed')],
 ]) test('fresh file consumer refuses current ' + name + ' drift despite the original immutable manifest', () => {
   const f = fileInputFixture();
   try {
@@ -1505,6 +1519,57 @@ for (const [name, mutate] of [
     assert.throws(() => contextBuilder.verifyFileInput(descriptor, { sealed: true }), /inventory|accounting|reordered|asset|budget/);
     assert.throws(() => contextBuilder.verifyFileInput(descriptor), /private producer authority/);
   } finally { f.clean(); }
+});
+
+
+
+test('file snapshot accepts canonical graph bytes above the input manifest limit', () => {
+  const f = fileInputFixture('small');
+  try {
+    write(f.f.root, '.planning/graph/tickets.json', JSON.stringify({ padding: 'x'.repeat(600000) }));
+    assert.doesNotThrow(f.create);
+  } finally { f.clean(); }
+});
+
+test('selected instruction bytes upgrade a below-limit architecture prompt to authenticated file input', () => {
+  const f = fixture();
+  const storage = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'instruction-fallback-')));
+  try {
+    write(f.root, '.planning/architecture/ADR-014-host-bound-review.md', ADR + 'a'.repeat(250000));
+    git(f.root, ['add', '-A']); git(f.root, ['commit', '-m', 'large review context']);
+    f.head = git(f.root, ['rev-parse', 'HEAD']); f.pr.headRefOid = f.head;
+    const value = prepared(f, { storageRoot: storage, inflightDispatchId: 'instruction-fallback' });
+    assert.ok(Buffer.byteLength(value.launch.context.prompt) < 1048576);
+    assert.ok(!contextBuilder.admittedFileInput(value));
+    const agents = path.join(storage, 'agents'); fs.mkdirSync(agents);
+    write(agents, 'review.toml', ["developer_instructions = '''", 'b'.repeat(900000), "'''", ''].join('\n'));
+    write(agents, 'manifest.json', '{}');
+    const installation = contextBuilder.admitInstalledLaunch(value, { agentDir: agents, agentFile: 'review.toml',
+      agentManifest: path.join(agents, 'manifest.json'), capabilities: {} });
+    const input = contextBuilder.admittedFileInput(value);
+    assert.ok(input); assert.equal(input.manifest.dispatch_id, 'instruction-fallback');
+    assert.ok(input.input_bytes > 1048576);
+    assert.equal(installation.capacity.complete_upper_bound_bytes, input.input_bytes);
+    assert.ok(input.manifest.accounting.generated_instruction_bytes >= 900000);
+    assert.deepEqual(JSON.parse(Buffer.concat(contextBuilder.verifyFileInput(input).material)), value.prepared.packet);
+  } finally { cleanupJudgment(f); fs.rmSync(storage, { recursive: true, force: true }); }
+});
+
+
+
+test('complete development inventory preserves Unicode, quotes, tabs and newlines in Git paths', () => {
+  const f = fixture();
+  try {
+    const paths = ['docs/audits/é.md', 'docs/audits/quote".md', 'docs/audits/tab\t.md', 'docs/audits/line\n.md'];
+    paths.forEach((name, index) => write(f.root, name, 'development evidence ' + index));
+    git(f.root, ['add', '-A']); git(f.root, ['commit', '-m', 'unusual development paths']);
+    f.head = git(f.root, ['rev-parse', 'HEAD']); f.pr.headRefOid = f.head;
+    const value = prepared(f);
+    for (const [index, name] of paths.entries()) {
+      assert.ok(value.prepared.packet.development.paths.includes(name));
+      assert.ok(value.prepared.packet.development.content.includes('development evidence ' + index));
+    }
+  } finally { cleanupJudgment(f); }
 });
 
 if (require.main === module) registerTests(require('node:test'));
