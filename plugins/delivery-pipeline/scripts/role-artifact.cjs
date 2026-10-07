@@ -1422,7 +1422,7 @@ function phaseArchiveHints(scope, binding, roster, currentDispatchId) {
     const stat = fs.lstatSync(directory);
     if (!stat.isDirectory() || stat.isSymbolicLink()) continue;
     const names = fs.readdirSync(directory);
-    if (names.length > 1000) fail('ARCHIVE_AUTHORITY_INVALID', 'archive identity hints exceed their bound');
+    let relevantHints = 0;
     for (const name of names) {
       if (roster.records.some(row => row.worktree === worktree && path.basename(archiveRelative(row.dispatch_id, '')) === name)) continue;
       const file = path.join(directory, name, MANIFEST_NAME);
@@ -1437,6 +1437,7 @@ function phaseArchiveHints(scope, binding, roster, currentDispatchId) {
         fail('ARCHIVE_AUTHORITY_INVALID', 'possible current family is absent from independently retained roster');
       if (hint.boundary_subject !== binding.subject) continue;
       if (hint.producer_dispatch === currentDispatchId) continue;
+      if (++relevantHints > 1000) fail('ARCHIVE_AUTHORITY_INVALID', 'archive identity hints exceed their bound');
       const state = authorityState(worktree), record = state.payload.records[hint.producer_dispatch];
       if (!record || record.receipt.role !== 'arch-review'
           || ![record.ticket, record.receipt.ticket, record.receipt.runtime_evidence?.ticket].some(value => value === binding.subject)

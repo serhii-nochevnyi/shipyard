@@ -1205,6 +1205,120 @@ for (const [name, mutate] of [
   } finally { cleanPhaseScope(value); }
 });
 
+function addForeignPhaseFamilies(root) {
+  const directory = path.join(root, roleArtifact.ARTIFACT_ARCHIVE_DIR);
+  fs.mkdirSync(directory, { recursive: true });
+  for (let index = 0; index < 1001; index++) {
+    const family = path.join(directory, 'foreign-volume-' + String(index).padStart(4, '0'));
+    fs.mkdirSync(family);
+    fs.writeFileSync(path.join(family, roleArtifact.MANIFEST_NAME), JSON.stringify({
+      ticket: 'T-38-01', boundary_subject: 'T-38-01' }));
+    fs.writeFileSync(path.join(family, 'evidence.md'), 'foreign evidence');
+    fs.writeFileSync(path.join(family, 'findings.json'), 'foreign findings');
+  }
+  return directory;
+}
+
+for (const registered of [false, true])
+test('phase-local archive scope: foreign volume preserves evidence and late current omission refuses in ' +
+    (registered ? 'another registered worktree' : 'review worktree'), () => {
+  const value = phaseScopeFixture({ second: registered });
+  const previousReaddir = fs.readdirSync;
+  try {
+    const selected = value.select();
+    const row = value.rows[registered ? 1 : 0];
+    const directory = addForeignPhaseFamilies(row.worktree);
+    const after = value.select();
+    assert.deepEqual(after, selected);
+    assert.equal(roleArtifact.phaseArchitectureEvidenceDigest(after.evidence),
+      roleArtifact.phaseArchitectureEvidenceDigest(selected.evidence));
+    for (const name of previousReaddir(directory).filter(name => name.startsWith('foreign-volume-'))) {
+      fs.appendFileSync(path.join(directory, name, 'evidence.md'), 'changed');
+      fs.appendFileSync(path.join(directory, name, 'findings.json'), 'changed');
+    }
+    assert.deepEqual(value.select(), selected);
+    const omitted = 'zz-current-omitted';
+    fs.mkdirSync(path.join(directory, omitted));
+    fs.writeFileSync(path.join(directory, omitted, roleArtifact.MANIFEST_NAME), JSON.stringify({ ticket: row.ticket }));
+    let scannedForeign = 0;
+    fs.readdirSync = function(file, ...args) {
+      const names = previousReaddir.call(this, file, ...args);
+      if (file !== directory) return names;
+      const foreign = names.filter(name => name.startsWith('foreign-volume-')).sort();
+      scannedForeign = foreign.length;
+      return [...names.filter(name => !foreign.includes(name) && name !== omitted), ...foreign, omitted];
+    };
+    assert.throws(() => value.select(), { code: 'ARCHIVE_AUTHORITY_INVALID',
+      message: /possible current family is absent from independently retained roster/ });
+    assert.equal(scannedForeign, 1001);
+  } finally { fs.readdirSync = previousReaddir; cleanPhaseScope(value); }
+});
+
+function fixtureAggregateHint(value, row, boundary) {
+  const subject = value.input.binding.subject;
+  const dispatch = boundary.dispatch({ runtime: 'claude', role: 'arch-review', signals: {} },
+    { ticket: subject, subject_kind: 'phase', phase: 47 });
+  const id = dispatch.receipt.dispatch_id;
+  const familyName = require('node:crypto').createHash('sha256').update(id).digest('hex');
+  const family = path.join(roleArtifact.ARTIFACT_ARCHIVE_DIR, familyName);
+  fs.mkdirSync(path.join(row.worktree, family));
+  const pins = row.pins.filter(pin => !pin.path.endsWith(roleArtifact.MANIFEST_NAME)).map(pin => {
+    const relative = path.join(family, path.basename(pin.path));
+    fs.copyFileSync(path.join(row.worktree, pin.path), path.join(row.worktree, relative));
+    fs.chmodSync(path.join(row.worktree, relative), 0o600);
+    return { ...pin, path: relative };
+  });
+  const manifest = JSON.parse(fs.readFileSync(path.join(row.worktree,
+    row.pins.find(pin => pin.path.endsWith(roleArtifact.MANIFEST_NAME)).path)));
+  Object.assign(manifest, { producer_dispatch: id, producer_dispatch_id: id, dispatch_id: id,
+    producer_launch: dispatch.receipt.launch_id, boundary_subject: subject, policy_hash: dispatch.receipt.policy_hash,
+    runtime: dispatch.receipt.runtime, role: dispatch.receipt.role });
+  for (const field of ['evidence', 'findings']) {
+    const pin = pins.find(pin => path.basename(pin.path) === path.basename(manifest.files[field].path));
+    manifest.files[field] = { ...manifest.files[field], ...pin };
+  }
+  const bytes = Buffer.from(JSON.stringify(manifest));
+  const manifestPath = path.join(family, roleArtifact.MANIFEST_NAME);
+  fs.writeFileSync(path.join(row.worktree, manifestPath), bytes, { mode: 0o600 });
+  pins.push({ path: manifestPath, bytes: bytes.length,
+    sha256: require('node:crypto').createHash('sha256').update(bytes).digest('hex') });
+  return { familyName, id, record: { dispatch_id: id, ticket: subject, receipt: dispatch.receipt, pins } };
+}
+
+test('phase-local archive scope: relevant 1000 boundary is independent of foreign volume and resets per worktree', () => {
+  const value = phaseScopeFixture({ second: true });
+  const previousReaddir = fs.readdirSync;
+  try {
+    const populations = value.rows.map(row => {
+      const directory = addForeignPhaseFamilies(row.worktree);
+      const recorder = createDurableRecorder(path.join(row.worktree, 'aggregate-receipts'));
+      const boundary = createDispatchBoundary({ adapters: { claude: { launch: judgmentReceipt } }, recorder });
+      const hints = Array.from({ length: 1001 }, () => fixtureAggregateHint(value, row, boundary));
+      mutateFixtureCatalogue({ root: row.worktree }, payload => {
+        for (const hint of hints) payload.records[hint.id] = hint.record;
+      });
+      return { directory, hints };
+    });
+    let overflow = false;
+    fs.readdirSync = function(file, ...args) {
+      const names = previousReaddir.call(this, file, ...args);
+      const population = populations.find(item => item.directory === file);
+      if (!population) return names;
+      const aggregateNames = population.hints.map(hint => hint.familyName);
+      return [...names.filter(name => !aggregateNames.includes(name)),
+        ...aggregateNames.slice(0, overflow && population === populations[0] ? 1001 : 1000)];
+    };
+    const selected = value.select();
+    assert.equal(selected.candidates.length, 2000);
+    assert.equal(new Set(selected.candidates.map(candidate => candidate.dispatch_id)).size, 2000);
+    assert.deepEqual(selected.selection.records, value.roster.records);
+    overflow = true;
+    assert.throws(() => value.select(), { code: 'ARCHIVE_AUTHORITY_INVALID',
+      message: /archive identity hints exceed their bound/ });
+    assert.equal(value.select({ currentDispatchId: populations[0].hints[1000].id }).candidates.length, 2000);
+  } finally { fs.readdirSync = previousReaddir; cleanPhaseScope(value); }
+});
+
 test('phase-local archive scope: authenticated empty history differs from missing history', () => {
   const value = phaseScopeFixture({ empty: true });
   try {
@@ -1228,6 +1342,27 @@ test('phase-local archive scope: retained inventory cannot invent receipts, pins
     }
     assert.throws(() => roleArtifact.registerPhaseArchiveRoster({ ...value.input, expectedInventoryDigest: '0'.repeat(64) }), /inventory differs/);
   } finally { cleanPhaseScope(value); }
+});
+
+test('phase-local archive scope: independent inventory and authenticated roster retain their 1000 limits', () => {
+  const value = phaseScopeFixture();
+  const original = fs.readFileSync(value.roster.record_path);
+  try {
+    const rows = Array.from({ length: 1001 }, () => value.rows[0]);
+    fs.writeFileSync(value.input.inventoryPath, JSON.stringify({ rows }));
+    const expectedInventoryDigest = require('node:crypto').createHash('sha256')
+      .update(fs.readFileSync(value.input.inventoryPath)).digest('hex');
+    assert.throws(() => roleArtifact.registerPhaseArchiveRoster({ ...value.input, expectedInventoryDigest }),
+      { code: 'ARCHIVE_AUTHORITY_INVALID', message: /complete retained current inventory rows are required/ });
+    const envelope = JSON.parse(original);
+    envelope.payload.records = Array.from({ length: 1001 }, () => value.roster.records[0]);
+    envelope.mac = require('node:crypto').createHmac('sha256',
+      fs.readFileSync(path.join(path.dirname(value.roster.record_path), 'hmac.key')))
+      .update(stableTestValue(envelope.payload)).digest('hex');
+    fs.writeFileSync(value.roster.record_path, JSON.stringify(envelope));
+    assert.throws(() => value.select(), { code: 'ARCHIVE_AUTHORITY_INVALID',
+      message: /current phase roster authentication or membership differs/ });
+  } finally { fs.writeFileSync(value.roster.record_path, original); cleanPhaseScope(value); }
 });
 
 test('phase-local archive scope: independently authenticated original record with conflicting receipt ticket refuses', () => {

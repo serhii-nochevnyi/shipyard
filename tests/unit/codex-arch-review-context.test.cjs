@@ -247,7 +247,7 @@ function registerAggregateRoster(f, original, graphDir, storage) {
 for (const scenario of [
   { productBytes: 0, name: 'small packet' },
   { productBytes: 2600000, name: 'large packet' },
-  { scoped: true, mutation: 'foreign', name: 'foreign bodies preserve current evidence' },
+  { scoped: true, mutation: 'foreign', name: '1001 foreign families per worktree preserve current evidence' },
   { scoped: true, mutation: 'bytes', name: 'selected bytes refuse' },
   { scoped: true, mutation: 'membership', name: 'selected membership refuses' },
   { scoped: true, mutation: 'omission', name: 'relabelled current manifest and removed authority refuse before discovery' },
@@ -306,6 +306,16 @@ for (const scenario of [
       write(foreignRoot, '.shipyard-role-artifacts/foreign-history/evidence.md', 'Foreign evidence');
       write(foreignRoot, '.shipyard-role-artifacts/foreign-history/findings.json', 'Foreign findings');
       foreignPaths.push(path.join(f.root, '.shipyard-role-artifacts/foreign-history'), foreignRoot);
+      for (const root of [f.root, foreignRoot]) {
+        for (let index = 0; index < 1001; index++) {
+          const family = '.shipyard-role-artifacts/foreign-volume-' + String(index).padStart(4, '0');
+          write(root, family + '/.shipyard-role-artifact.json', JSON.stringify({
+            ticket: 'T-37-01', boundary_subject: 'T-37-01' }));
+          write(root, family + '/evidence.md', 'Foreign evidence');
+          write(root, family + '/findings.json', 'Foreign findings');
+          if (root === f.root) foreignPaths.push(path.join(root, family));
+        }
+      }
       restoreForeignGuard = guardExcludedArchives(foreignPaths);
     }
     if (mutation === 'omission' || mutation === 'family') {
@@ -405,10 +415,12 @@ for (const scenario of [
       fresh(false); fresh(true);
       const selectedDigest = artifacts.phaseArchitectureEvidenceDigest(value.prepared.packet.retained_evidence);
       if (mutation === 'foreign') {
-        for (const foreign of foreignPaths) {
-          const family = foreign === foreignPaths[0] ? foreign : path.join(foreign, '.shipyard-role-artifacts/foreign-history');
-          fs.appendFileSync(path.join(family, 'evidence.md'), 'changed foreign body');
-          fs.appendFileSync(path.join(family, 'findings.json'), 'changed foreign body');
+        for (const root of [f.root, foreignPaths[1]]) {
+          for (const name of fs.readdirSync(path.join(root, '.shipyard-role-artifacts')).filter(name => name.startsWith('foreign-'))) {
+            const family = path.join(root, '.shipyard-role-artifacts', name);
+            fs.appendFileSync(path.join(family, 'evidence.md'), 'changed foreign body');
+            fs.appendFileSync(path.join(family, 'findings.json'), 'changed foreign body');
+          }
         }
         assert.equal(artifacts.phaseArchitectureEvidenceDigest(artifacts.phaseArchitectureEvidence(f.root, value.prepared.binding,
           { graphDir, phaseArchiveSelection: value.prepared.packet.phase_archive_selection })), selectedDigest);
