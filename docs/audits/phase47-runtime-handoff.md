@@ -1,3 +1,61 @@
+# T-47-19 current durable handoff
+
+Duty: return the uncommitted fifteen-owner implementation to the existing trusted
+coordinator. Worktree: `/Volumes/KINGSTON/worktrees/phase47-authenticated-delivery/T-47-19`. HEAD: `8192ba38942be328b27f8aa54984eae7cd47231c`;
+source tree: `4ba34341bc4e94620de21a4c81d58a2f627afdca`. Common directory:
+`/Volumes/KINGSTON/claude-shipyard/.git`. Current executor controller/run/writer lease are
+not supplied and remain null; this handback does not infer them from a historical
+research receipt. No host cleanup paths/PIDs, safe rollback identity, installed
+release or new paid native collection is claimed.
+
+Current signed handback: `/Users/serhii/.local/state/shipyard/codex-decompose/6cba328f5f0de395b373ad6c77a164feb771363c4e6b7a96888b7075d52da7aa/phase47-final-generation-adr026-source-update-1/generation.json`,
+SHA-256 `d788b6e1be9b78914d9e58f1d9fb88f5069a0ece2517a22e9b80973c75ebccfe`.
+Signed source approval: `/Users/serhii/.local/state/shipyard/codex-decompose/6cba328f5f0de395b373ad6c77a164feb771363c4e6b7a96888b7075d52da7aa/phase47-final-generation-adr026-source-update-1/source-approval.json`,
+SHA-256 `c91002a34bf75f85d4860a052310b1b84fff1aadfe7e57be9ea433a4ac4ca659`.
+Selection: `/Volumes/KINGSTON/claude-shipyard/.git/shipyard-phase47-final-publication/INV-014-runtime-delivery-correctness/ADR-026-source-update-1/selection.json`, SHA-256 `012a1889290a5aa9cd76e50eb291b3b09d156acc4c17506a26514e285f1905a6`.
+Binding: `/Volumes/KINGSTON/claude-shipyard/.git/shipyard-phase47-final-publication/INV-014-runtime-delivery-correctness/ADR-026-source-update-1/4e63582ca45a0dc5edd2f63fd46ccc07afbff13cf3e71f8d6bbb305715598d50/binding.json`, SHA-256 `21c9c96cbebedf1a3029a93bd5ae650fdbecdb1c0e28352a0c6285c4a184a996`.
+Readonly candidate: `/Volumes/KINGSTON/claude-shipyard/.git/shipyard-phase47-final-publication/INV-014-runtime-delivery-correctness/ADR-026-source-update-1/4e63582ca45a0dc5edd2f63fd46ccc07afbff13cf3e71f8d6bbb305715598d50/candidate`, inventory SHA-256
+`e92f06723873ad56a3337f011cc144b4ce7a287a972c28f6f6a86b751dd536c8`. Package: `56e4bb0aa02dbcacb9c0ab4764adc575d5b565cb8ca01d18ce630be80ea6aa8d`;
+version: `0.71.0+codex.3274a569f21d3bce`; complete inventory: 161 files.
+The four corrected mirrors/plugin manifest, three shared mirrors and build
+manifest all come from this single coordinator-supported stage with sealed bytes
+and original publication modes; no builder/signing authority was used here.
+
+Original T05 and superseded first-final selections, signatures and approval links
+remain immutable. Superseded first-final handback SHA-256 is
+`83441e6d3f4a65b8b6018e9a753c1c7ea95a64181cf49a4b8877d679f55ae799`;
+it retains source72f033c9 and eight-output correction history. Current D22 source
+8192ba38 uses seven mirrors plus two manifests, nine outputs. This history is
+separate from original sixteen native owners and twenty mechanical outputs.
+The full 48868-byte original ledger is retained under
+`/Users/serhii/.local/state/shipyard/codex-decompose/6cba328f5f0de395b373ad6c77a164feb771363c4e6b7a96888b7075d52da7aa/phase47-final-generation-adr026-source-update-1/original-runtime-acceptance.json`, SHA-256 `592439dcf4d663f9a072d280dfbb9b6866d43061ffda8094cdc5ddbd94c5d98d`.
+Original refused research and missing capacity, notification, GPG, cleanup,
+installed/native acceptance and unknown accounting retain their prior meaning.
+
+Verification outcomes are measured in `.shipyard-evidence.md` and the current
+ledger's `verification` field. HOST acceptance units and three final HOST tuples
+remain coordinator obligations until authenticated current-candidate evidence is
+retained. No fixture result replaces host proof. An actual failure blocks;
+protected-authority denial remains unresolved without a permission change/retry.
+
+Next criterion: trusted current scoped-candidate verification, supported signing
+and coverage, then coordinator publication/merge. After genuine19 delivery merge,
+obtain fresh full architecture and integrator judgments at exact live final
+head/base and complete phase membership. Do not relabel earlier ticket-target
+skips or fabricate a verdict. These later judgments do not block native executor
+handback. Preserve the existing writer/recovery order and phase48 independence.
+
+Final sandbox results: all six publication groups exited 0; complete parity covers 161 files.
+Current smoke exited 0 with evidence_check:passed, HOLD, accepted:false, native_launches:0
+and twenty open obligations. Runtime digest check exited 0. The acceptance unit
+and three HOST tuples remain pending; full output hashes/durations are recorded
+in `.shipyard-evidence.md` and the ledger.
+
+## Retained original T08 handoff (historical)
+
+The text below describes the earlier T08 worktree and duty. Its receipts and
+resource exclusions are retained; they do not identify the current executor run.
+
 # T-47-08 durable handoff
 
 Current duty is **finish the executor handback to the trusted coordinator**.

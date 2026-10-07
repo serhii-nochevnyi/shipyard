@@ -3,29 +3,29 @@
   "ticket": "T-47-08",
   "plan_sha256": "99710c9577d76ead5514b1ba00e5277571ef6ff9827f8d06cb692ef6284fe42c",
   "candidate": {
-    "package_sha256": "6be2bdeefdcb339c4a19fe863cb05462083dd4de194306b92688f063bd68991a",
-    "manifest_sha256": "62820bdf169cb1d4d2ab35dfe9fb07a7dbb21f67a97935de014989cabf1b3e1d",
-    "output_count": 160,
-    "source_head": "29e0b404fecd7cd711ee5cf29de9a3dfc8e44e82",
-    "source_tree": "adace6f023b8b6913a313dcced9c0f01386e0ccb",
-    "canonical_input_digest": "bbf5ec33bf9b5bd1e5361254fb740c90c2e91d48f31b3f7bee700848fea76c34",
+    "package_sha256": "56e4bb0aa02dbcacb9c0ab4764adc575d5b565cb8ca01d18ce630be80ea6aa8d",
+    "manifest_sha256": "979253211605de30276eb772d44dad1e4242e3b2804e80ba6306b0e61f3bebf2",
+    "output_count": 161,
+    "source_head": "8192ba38942be328b27f8aa54984eae7cd47231c",
+    "source_tree": "4ba34341bc4e94620de21a4c81d58a2f627afdca",
+    "canonical_input_digest": "4e63582ca45a0dc5edd2f63fd46ccc07afbff13cf3e71f8d6bbb305715598d50",
     "policy_sha256": "3978b08721ef8f2381aa1f31355c9fef1dafd4058a2093b4a5f06ee90cd44570",
-    "worktree": "/Volumes/KINGSTON/worktrees/phase47-investigation/.wt-claude-shipyard/T-47-08",
+    "worktree": "/Volumes/KINGSTON/worktrees/phase47-authenticated-delivery/T-47-19",
     "common_dir": "/Volumes/KINGSTON/claude-shipyard/.git",
-    "head": "6d47be603714b8c493838424242fc0435ecec322",
-    "tree": "8debd6b2db46fc38cb9982ed7277d362f542975b",
-    "dirty_sha256": "3aec083e15b77eb1b21ec289b018848edc97729ab587fad915424c92a974ac84",
-    "selection_path": "/Volumes/KINGSTON/claude-shipyard/.git/shipyard-phase47-publication/INV-014-runtime-delivery-correctness/selection.json",
-    "selection_sha256": "845a90729264029e5bdd78c92c2c60c288faa381541710d1c0007f293349956a",
-    "binding_path": "/Volumes/KINGSTON/claude-shipyard/.git/shipyard-phase47-publication/INV-014-runtime-delivery-correctness/bbf5ec33bf9b5bd1e5361254fb740c90c2e91d48f31b3f7bee700848fea76c34/binding.json",
-    "binding_sha256": "1a622db6af3fe989dbdc603fa22f7493b6b6120f8ff0fb18ded889ff33e7c4c8",
-    "candidate_path": "/Volumes/KINGSTON/claude-shipyard/.git/shipyard-phase47-publication/INV-014-runtime-delivery-correctness/bbf5ec33bf9b5bd1e5361254fb740c90c2e91d48f31b3f7bee700848fea76c34/candidate",
-    "candidate_sha256": "8b1a9d2b81083d35434a7b6f1d0ef7de9cf361df4f42d72f8faf0f93605007a5",
+    "head": "8192ba38942be328b27f8aa54984eae7cd47231c",
+    "tree": "4ba34341bc4e94620de21a4c81d58a2f627afdca",
+    "dirty_sha256": "f022b62def8590cfa5845b06016d3f103e675d8a2c1254185deeb2b1ba6b4dea",
+    "selection_path": "/Volumes/KINGSTON/claude-shipyard/.git/shipyard-phase47-final-publication/INV-014-runtime-delivery-correctness/ADR-026-source-update-1/selection.json",
+    "selection_sha256": "012a1889290a5aa9cd76e50eb291b3b09d156acc4c17506a26514e285f1905a6",
+    "binding_path": "/Volumes/KINGSTON/claude-shipyard/.git/shipyard-phase47-final-publication/INV-014-runtime-delivery-correctness/ADR-026-source-update-1/4e63582ca45a0dc5edd2f63fd46ccc07afbff13cf3e71f8d6bbb305715598d50/binding.json",
+    "binding_sha256": "21c9c96cbebedf1a3029a93bd5ae650fdbecdb1c0e28352a0c6285c4a184a996",
+    "candidate_path": "/Volumes/KINGSTON/claude-shipyard/.git/shipyard-phase47-final-publication/INV-014-runtime-delivery-correctness/ADR-026-source-update-1/4e63582ca45a0dc5edd2f63fd46ccc07afbff13cf3e71f8d6bbb305715598d50/candidate",
+    "candidate_sha256": "e92f06723873ad56a3337f011cc144b4ce7a287a972c28f6f6a86b751dd536c8",
     "generation_handback": {
-      "path": "/Users/serhii/.local/state/shipyard/codex-decompose/6cba328f5f0de395b373ad6c77a164feb771363c4e6b7a96888b7075d52da7aa/phase47-current-generation-20261006/generation.json",
-      "sha256": "64e111070452b70065e4f1a71041c7b0a3091105f3e40a7253a3e9b25132fb81"
+      "path": "/Users/serhii/.local/state/shipyard/codex-decompose/6cba328f5f0de395b373ad6c77a164feb771363c4e6b7a96888b7075d52da7aa/phase47-final-generation-adr026-source-update-1/generation.json",
+      "sha256": "d788b6e1be9b78914d9e58f1d9fb88f5069a0ece2517a22e9b80973c75ebccfe"
     },
-    "original_source_dirty": []
+    "historical_only": false
   },
   "installation": null,
   "accounting": {
@@ -816,7 +816,7 @@
     }
   },
   "handoff": {
-    "worktree": "/Volumes/KINGSTON/worktrees/phase47-investigation/.wt-claude-shipyard/T-47-08",
+    "worktree": "/Volumes/KINGSTON/worktrees/phase47-authenticated-delivery/T-47-19",
     "repository_id": "/Volumes/KINGSTON/claude-shipyard/.git",
     "graph_dir": "/Volumes/KINGSTON/worktrees/phase47-investigation/claude-shipyard/.planning/graph",
     "controller": null,
@@ -826,8 +826,8 @@
     "primary_error": null,
     "accepted_siblings": null,
     "retained_unaccepted_artifacts": null,
-    "current_duty": "finish executor handback to trusted coordinator",
-    "next_criterion": "Authenticate current callback completion/release and correct owner/run/duty before refresh or failed-role-only retry.",
+    "current_duty": "T-47-19 executor handback to existing trusted coordinator",
+    "next_criterion": "Trusted current-candidate HOST verification, supported signing/coverage and coordinator publication; then fresh complete architecture/integrator judgment after actual19 delivery merge.",
     "inspect": {
       "command": [
         "node",
@@ -857,7 +857,14 @@
         "/Users/serhii/.local/state/shipyard/codex-decompose/6cba328f5f0de395b373ad6c77a164feb771363c4e6b7a96888b7075d52da7aa/phase47-current-generation-20261006/generation.json",
         "/Users/serhii/.local/state/shipyard/codex/0fd9a841a5da4528f18a5ddd346452ddd67b8bbf03ddc67639480665e11af98f",
         "/Users/serhii/.local/state/shipyard/investigations/INV-014-20261003",
-        "/Volumes/KINGSTON/worktrees/phase47-investigation/.wt-claude-shipyard/T-47-08"
+        "/Volumes/KINGSTON/worktrees/phase47-investigation/.wt-claude-shipyard/T-47-08",
+        "/Users/serhii/.local/state/shipyard/codex-decompose/6cba328f5f0de395b373ad6c77a164feb771363c4e6b7a96888b7075d52da7aa/phase47-final-generation-adr026-source-update-1/generation.json",
+        "/Users/serhii/.local/state/shipyard/codex-decompose/6cba328f5f0de395b373ad6c77a164feb771363c4e6b7a96888b7075d52da7aa/phase47-final-generation-adr026-source-update-1/source-approval.json",
+        "/Volumes/KINGSTON/claude-shipyard/.git/shipyard-phase47-final-publication/INV-014-runtime-delivery-correctness/ADR-026-source-update-1/selection.json",
+        "/Volumes/KINGSTON/claude-shipyard/.git/shipyard-phase47-final-publication/INV-014-runtime-delivery-correctness/ADR-026-source-update-1/4e63582ca45a0dc5edd2f63fd46ccc07afbff13cf3e71f8d6bbb305715598d50/binding.json",
+        "/Volumes/KINGSTON/claude-shipyard/.git/shipyard-phase47-final-publication/INV-014-runtime-delivery-correctness/ADR-026-source-update-1/4e63582ca45a0dc5edd2f63fd46ccc07afbff13cf3e71f8d6bbb305715598d50/candidate",
+        "/Users/serhii/.local/state/shipyard/codex-decompose/6cba328f5f0de395b373ad6c77a164feb771363c4e6b7a96888b7075d52da7aa/phase47-final-generation-adr026-source-update-1/original-runtime-acceptance.json",
+        "/Users/serhii/.local/state/shipyard/codex-decompose/6cba328f5f0de395b373ad6c77a164feb771363c4e6b7a96888b7075d52da7aa/phase47-final-generation-adr026/generation.json"
       ],
       "disposable_paths": [],
       "disposable_pids": [],
@@ -879,6 +886,270 @@
     "accounting": "unknown; no quota or savings inference"
   },
   "verification": {
+    "status": "sandbox-passed; HOST pending",
+    "acceptance": "HOLD",
+    "accepted": false,
+    "native_launches": 0,
+    "plan_sha256": "d12c3b870fda04f0dc1f2f6afcebedbfad619f8961662ac253ad2abd45d781e8",
+    "host_status": "pending trusted verifier",
+    "results": [
+      {
+        "argv": [
+          "node",
+          "tests/unit/phase47-package-publication.test.cjs",
+          "--group",
+          "candidate"
+        ],
+        "profile": "sandbox",
+        "timeout_ms": 600000,
+        "cwd": "/Volumes/KINGSTON/worktrees/phase47-authenticated-delivery/T-47-19",
+        "recorded_at": "2026-10-07T12:30:07.268639+00:00",
+        "exit_code": 0,
+        "elapsed_seconds": 173.609,
+        "stdout_sha256": "a32020d3954043cc71a4cbc2a603b5bfbce299de472864e7ecf661a5112a8762",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_path": "/private/tmp/t4719-candidate.stdout",
+        "stderr_path": "/private/tmp/t4719-candidate.stderr"
+      },
+      {
+        "argv": [
+          "node",
+          "tests/unit/phase47-package-publication.test.cjs",
+          "--group",
+          "launch"
+        ],
+        "profile": "sandbox",
+        "timeout_ms": 600000,
+        "cwd": "/Volumes/KINGSTON/worktrees/phase47-authenticated-delivery/T-47-19",
+        "recorded_at": "2026-10-07T12:33:00.385525+00:00",
+        "exit_code": 0,
+        "elapsed_seconds": 172.982,
+        "stdout_sha256": "72b831a559ae5890a49329ed3a1395965bfe30c4cddf71326e2f31f4ce40686d",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_path": "/private/tmp/t4719-launch.stdout",
+        "stderr_path": "/private/tmp/t4719-launch.stderr"
+      },
+      {
+        "argv": [
+          "node",
+          "tests/unit/phase47-package-publication.test.cjs",
+          "--group",
+          "caller"
+        ],
+        "profile": "sandbox",
+        "timeout_ms": 600000,
+        "cwd": "/Volumes/KINGSTON/worktrees/phase47-authenticated-delivery/T-47-19",
+        "recorded_at": "2026-10-07T12:35:49.904855+00:00",
+        "exit_code": 0,
+        "elapsed_seconds": 169.397,
+        "stdout_sha256": "57f699c229981476942013790794065df7c5001706ddc85fb24c9ae9f1640571",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_path": "/private/tmp/t4719-caller.stdout",
+        "stderr_path": "/private/tmp/t4719-caller.stderr"
+      },
+      {
+        "argv": [
+          "node",
+          "tests/unit/phase47-package-publication.test.cjs",
+          "--group",
+          "integration"
+        ],
+        "profile": "sandbox",
+        "timeout_ms": 600000,
+        "cwd": "/Volumes/KINGSTON/worktrees/phase47-authenticated-delivery/T-47-19",
+        "recorded_at": "2026-10-07T12:38:40.605495+00:00",
+        "exit_code": 0,
+        "elapsed_seconds": 170.648,
+        "stdout_sha256": "49443739c18d1186b07aa023f43d40d70e8d7cc6d11a1011f4ffdb16b07d3b66",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_path": "/private/tmp/t4719-integration.stdout",
+        "stderr_path": "/private/tmp/t4719-integration.stderr"
+      },
+      {
+        "argv": [
+          "node",
+          "tests/unit/phase47-package-publication.test.cjs",
+          "--group",
+          "relay"
+        ],
+        "profile": "sandbox",
+        "timeout_ms": 600000,
+        "cwd": "/Volumes/KINGSTON/worktrees/phase47-authenticated-delivery/T-47-19",
+        "recorded_at": "2026-10-07T12:41:29.945187+00:00",
+        "exit_code": 0,
+        "elapsed_seconds": 169.292,
+        "stdout_sha256": "e7ee5827f526fb0fdf40867f9219f25b0b7cb710951c00f37d21f06a301f55fd",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_path": "/private/tmp/t4719-relay.stdout",
+        "stderr_path": "/private/tmp/t4719-relay.stderr"
+      },
+      {
+        "argv": [
+          "node",
+          "tests/unit/phase47-package-publication.test.cjs",
+          "--group",
+          "complete"
+        ],
+        "profile": "sandbox",
+        "timeout_ms": 600000,
+        "cwd": "/Volumes/KINGSTON/worktrees/phase47-authenticated-delivery/T-47-19",
+        "recorded_at": "2026-10-07T12:44:18.072554+00:00",
+        "exit_code": 0,
+        "elapsed_seconds": 168.075,
+        "stdout_sha256": "22139a61c3cd3dcb68a590db55f73ebed2f6f568de7047fed2c3164dab28f32f",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_path": "/private/tmp/t4719-complete.stdout",
+        "stderr_path": "/private/tmp/t4719-complete.stderr"
+      },
+      {
+        "argv": [
+          "node",
+          "tests/smoke/phase47-runtime-acceptance.cjs",
+          "--evidence",
+          "docs/audits/phase47-runtime-acceptance.json"
+        ],
+        "profile": "sandbox",
+        "timeout_ms": 600000,
+        "cwd": "/Volumes/KINGSTON/worktrees/phase47-authenticated-delivery/T-47-19",
+        "recorded_at": "2026-10-07T12:45:01.141011+00:00",
+        "exit_code": 0,
+        "elapsed_seconds": 43.023,
+        "stdout_sha256": "87c3edd20aeb99d275ae877ea9cf087f76d68868134e750a9a660efafd66a8c3",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_path": "/private/tmp/t4719-smoke-before-final-projection.stdout",
+        "stderr_path": "/private/tmp/t4719-smoke-before-final-projection.stderr"
+      },
+      {
+        "argv": [
+          "node",
+          "scripts/refresh-runtime-digests.cjs",
+          "--check",
+          "."
+        ],
+        "profile": "sandbox",
+        "timeout_ms": 600000,
+        "cwd": "/Volumes/KINGSTON/worktrees/phase47-authenticated-delivery/T-47-19",
+        "recorded_at": "2026-10-07T12:45:01.213805+00:00",
+        "exit_code": 0,
+        "elapsed_seconds": 0.029,
+        "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_path": "/private/tmp/t4719-digests.stdout",
+        "stderr_path": "/private/tmp/t4719-digests.stderr"
+      }
+    ],
+    "evidence_check": "passed",
+    "open_obligations": 20,
+    "candidate_sha256": "e92f06723873ad56a3337f011cc144b4ce7a287a972c28f6f6a86b751dd536c8",
+    "package_sha256": "56e4bb0aa02dbcacb9c0ab4764adc575d5b565cb8ca01d18ce630be80ea6aa8d",
+    "fixture_only": false,
+    "publication_fixture_cases": 74,
+    "host_unit_outcome": null,
+    "host_tuple_outcomes": null,
+    "aggregate_architecture_outcome": null,
+    "integrator_outcome": null,
+    "executable_inputs": [
+      {
+        "path": "tests/unit/phase47-package-publication.test.cjs",
+        "sha256": "476948ab053cae314580d54160ef5567a3cad894dc2e57d1ecac898c9cb9c56c"
+      },
+      {
+        "path": "tests/smoke/phase47-runtime-acceptance.cjs",
+        "sha256": "5ec54df5bcfeb210df780f1a490f5982a6a53bea135c19265e83f644111c1c64"
+      },
+      {
+        "path": "tests/unit/phase47-runtime-acceptance.test.cjs",
+        "sha256": "73be4c517765feccdb7f3cc4633c59c1a667dc02f1309e071d3e25eb39822896"
+      }
+    ],
+    "host_assignment": {
+      "allow_list_sha256": "66bc2e074083ac2b723bb30c24770a6019104117ddc91c854baf08df013c49d6",
+      "expected_head": "8192ba38942be328b27f8aa54984eae7cd47231c",
+      "baseline_tree": "4ba34341bc4e94620de21a4c81d58a2f627afdca",
+      "candidate_tree": null,
+      "commands": [
+        {
+          "argv": [
+            "node",
+            "--test",
+            "tests/unit/phase47-runtime-acceptance.test.cjs"
+          ],
+          "profile": "host",
+          "timeout_ms": 600000,
+          "outcome": null
+        },
+        {
+          "argv": [
+            "node",
+            "--test",
+            "tests/unit/architecture-target.test.cjs",
+            "tests/unit/pipeline-config.test.cjs",
+            "tests/unit/sentinel.test.cjs",
+            "tests/unit/sentinel-preflight.test.cjs",
+            "tests/unit/front.test.cjs",
+            "tests/unit/state-sync-listing.test.cjs",
+            "tests/unit/state-sync-yaml.test.cjs",
+            "tests/unit/trailer.test.cjs",
+            "tests/unit/base-merge.test.cjs"
+          ],
+          "profile": "host",
+          "timeout_ms": 600000,
+          "outcome": null
+        },
+        {
+          "argv": [
+            "node",
+            "--test",
+            "tests/unit/deliver-dispatch.test.cjs",
+            "tests/unit/codex-arch-review-context.test.cjs",
+            "tests/unit/codex-delivery-host.test.cjs",
+            "tests/unit/claude-role-host.test.cjs",
+            "tests/unit/run-contract.test.cjs",
+            "tests/unit/role-artifact.test.cjs",
+            "tests/unit/dispatch-record.test.cjs",
+            "tests/unit/dispatch-boundary.test.cjs"
+          ],
+          "profile": "host",
+          "timeout_ms": 600000,
+          "outcome": null
+        },
+        {
+          "argv": [
+            "node",
+            "--test",
+            "tests/unit/codex-decompose-host.test.cjs",
+            "tests/unit/codex-runtime-host.test.cjs",
+            "tests/unit/codex-delivery-host.test.cjs",
+            "tests/unit/dispatch-boundary.test.cjs",
+            "tests/unit/pipeline-config.test.cjs"
+          ],
+          "profile": "host",
+          "timeout_ms": 600000,
+          "outcome": null
+        }
+      ],
+      "status": "not executed by sandbox executor"
+    },
+    "final_ledger_check": {
+      "argv": [
+        "node",
+        "tests/smoke/phase47-runtime-acceptance.cjs",
+        "--evidence",
+        "docs/audits/phase47-runtime-acceptance.json"
+      ],
+      "profile": "sandbox",
+      "timeout_ms": 600000,
+      "cwd": "/Volumes/KINGSTON/worktrees/phase47-authenticated-delivery/T-47-19",
+      "recorded_at": "2026-10-07T12:47:23.262726+00:00",
+      "exit_code": 0,
+      "elapsed_seconds": 41.543,
+      "stdout_sha256": "a57bb01445cd97ae6f39b09453edd00acd9c119fbf5020bb568be4c71f4ea140",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout_path": "/private/tmp/t4719-smoke.stdout",
+      "stderr_path": "/private/tmp/t4719-smoke.stderr"
+    }
+  },
+  "historical_verification": {
     "status": "passed",
     "acceptance": "HOLD",
     "native_launches": 0,
@@ -941,5 +1212,205 @@
     ],
     "retention": "Trusted coordinator must retain original executor transcript/completed result beside its authenticated receipt; external path not supplied.",
     "prior_red": "Initial declared unit command failed MODULE_NOT_FOUND before runner implementation; subsequent real boundary negatives and green scoped commands are retained in the executor transcript."
+  },
+  "corrective_generation": {
+    "ticket": "T-47-19",
+    "plan_sha256": "d12c3b870fda04f0dc1f2f6afcebedbfad619f8961662ac253ad2abd45d781e8",
+    "handback": {
+      "path": "/Users/serhii/.local/state/shipyard/codex-decompose/6cba328f5f0de395b373ad6c77a164feb771363c4e6b7a96888b7075d52da7aa/phase47-final-generation-adr026-source-update-1/generation.json",
+      "sha256": "d788b6e1be9b78914d9e58f1d9fb88f5069a0ece2517a22e9b80973c75ebccfe"
+    },
+    "source_approval": {
+      "path": "/Users/serhii/.local/state/shipyard/codex-decompose/6cba328f5f0de395b373ad6c77a164feb771363c4e6b7a96888b7075d52da7aa/phase47-final-generation-adr026-source-update-1/source-approval.json",
+      "sha256": "c91002a34bf75f85d4860a052310b1b84fff1aadfe7e57be9ea433a4ac4ca659",
+      "signature_path": "/Users/serhii/.local/state/shipyard/codex-decompose/6cba328f5f0de395b373ad6c77a164feb771363c4e6b7a96888b7075d52da7aa/phase47-final-generation-adr026-source-update-1/source-approval.json.asc"
+    },
+    "original_ledger": {
+      "path": "/Users/serhii/.local/state/shipyard/codex-decompose/6cba328f5f0de395b373ad6c77a164feb771363c4e6b7a96888b7075d52da7aa/phase47-final-generation-adr026-source-update-1/original-runtime-acceptance.json",
+      "sha256": "592439dcf4d663f9a072d280dfbb9b6866d43061ffda8094cdc5ddbd94c5d98d",
+      "bytes": 48868
+    },
+    "original_configuration_snapshot": {
+      "path": "/Users/serhii/.local/state/shipyard/codex-decompose/6cba328f5f0de395b373ad6c77a164feb771363c4e6b7a96888b7075d52da7aa/phase47-final-generation-adr026-source-update-1/original-config.json",
+      "sha256": "2eb2a0475127916c4c120d7616d13df1393d116c07b2a5f259cd6453234c65f9",
+      "bytes": 14488
+    },
+    "source_update": {
+      "commit": "8192ba38942be328b27f8aa54984eae7cd47231c",
+      "parent": "72f033c994053654d5025e128081ee37be0e04b7",
+      "canonical_path": "plugins/delivery-pipeline/scripts/architecture-target.cjs",
+      "added_generated_owner": "plugins/shipyard/host/plugins/delivery-pipeline/scripts/architecture-target.cjs",
+      "authority": "User standing approval of all phase47 corrections and prior instruction to pull external Copilot changes",
+      "superseded_final_generation": {
+        "path": "/Users/serhii/.local/state/shipyard/codex-decompose/6cba328f5f0de395b373ad6c77a164feb771363c4e6b7a96888b7075d52da7aa/phase47-final-generation-adr026/generation.json",
+        "sha256": "83441e6d3f4a65b8b6018e9a753c1c7ea95a64181cf49a4b8877d679f55ae799",
+        "generation_id": "2c7027486fa2680349bbcca1b7ad8a66fd8f1aa6c257688ec4725259643c461d",
+        "source_head": "72f033c994053654d5025e128081ee37be0e04b7",
+        "selection_path": "/Volumes/KINGSTON/claude-shipyard/.git/shipyard-phase47-final-publication/INV-014-runtime-delivery-correctness/ADR-026/selection.json",
+        "selection_sha256": "d6f08f160917c2876a8cd90ea170038211043fc3446628007b9fdd0f9fd4c497"
+      },
+      "prior19_plan": {
+        "path": "/tmp/phase47-19-before-autofix-source-update-PLAN.md",
+        "sha256": "60d291e2b96ccca691491c18a1fa0bc2636e923ba880d607d49b29de2bd93654"
+      },
+      "current19_plan_sha256": "d12c3b870fda04f0dc1f2f6afcebedbfad619f8961662ac253ad2abd45d781e8",
+      "task_sizes": [
+        3,
+        5,
+        3,
+        4
+      ],
+      "current_owner_count": 15,
+      "current_corrective_outputs": 9,
+      "checker_dispatch_id": "dispatch-phase47-19-current-runtime-contract-4922fe8e-0e40-4142-bbaf-0b78dd6e704e"
+    },
+    "original_native_owner_count": 16,
+    "original_mechanical_output_count": 20,
+    "corrective_output_count": 9,
+    "corrective_allocation": {
+      "T-47-19": [
+        "host/plugins/delivery-pipeline/scripts/codex-arch-review-context.cjs",
+        "host/plugins/delivery-pipeline/scripts/codex-runtime-host.cjs",
+        "host/plugins/delivery-pipeline/scripts/codex-delivery-host.cjs",
+        "host/plugins/delivery-pipeline/scripts/codex-planning-context-host.cjs",
+        "host/plugins/delivery-pipeline/scripts/orchestration-overhead.cjs",
+        "host/plugins/delivery-pipeline/scripts/lock.cjs",
+        "host/plugins/delivery-pipeline/scripts/architecture-target.cjs",
+        ".codex-plugin/plugin.json",
+        "package-build.json"
+      ]
+    },
+    "successor_planner": {
+      "path": "/Users/serhii/.local/state/shipyard/codex-decompose/6cba328f5f0de395b373ad6c77a164feb771363c4e6b7a96888b7075d52da7aa/phase47-final-generation-adr026-source-update-1/successor-planner.json",
+      "sha256": "474e3e22b460b8bce47e0c75fce81dda5088c703a988184ef0b67779c65b3799",
+      "dispatch_id": "dispatch-phase47-final-scope-1c93cd0f-df24-46a3-9ec5-704c54c73b7f",
+      "artifact_index": {
+        "path": "/Users/serhii/.local/state/shipyard/codex-decompose/6cba328f5f0de395b373ad6c77a164feb771363c4e6b7a96888b7075d52da7aa/sealed/decomposition-index/941794ad2a71e07e3e2cbbd2b33845a0af2f3cac937f576568eaae008c9f5d76.json",
+        "bytes": 7026,
+        "content_bytes": 7026,
+        "sha256": "941794ad2a71e07e3e2cbbd2b33845a0af2f3cac937f576568eaae008c9f5d76",
+        "digest": "941794ad2a71e07e3e2cbbd2b33845a0af2f3cac937f576568eaae008c9f5d76"
+      }
+    },
+    "current_checker": {
+      "path": "/Users/serhii/.local/state/shipyard/codex-decompose/6cba328f5f0de395b373ad6c77a164feb771363c4e6b7a96888b7075d52da7aa/phase47-final-generation-adr026-source-update-1/current-contract-checker.json",
+      "sha256": "2bfef487b5b29a8ea3e16d493841ec69606aa9b410d8f2926c48792741c938d0",
+      "dispatch_id": "dispatch-phase47-19-current-runtime-contract-4922fe8e-0e40-4142-bbaf-0b78dd6e704e",
+      "transcript": {
+        "path": "/Users/serhii/.local/state/shipyard/codex-decompose/6cba328f5f0de395b373ad6c77a164feb771363c4e6b7a96888b7075d52da7aa/transcripts/phase47-19-current-runtime-contract-be8e6dd5-91f6-4f31-a251-68655782876d-01a11635-2720-7fa2-a1cc-d871297d3f8d.jsonl",
+        "bytes": 4930,
+        "sha256": "be81bb61c4fa062daed457868532019177dbcc22379d5c6373be4cfb051d32f8"
+      },
+      "native_child_evidence": {
+        "schema": "shipyard.codex-native-child-evidence.v1",
+        "version": 1,
+        "session_id": "01a11635-5f4b-7b43-a465-99f117b54ecb",
+        "parent_thread_id": "01a11635-2720-7fa2-a1cc-d871297d3f8d",
+        "agent_role": "gsd-plan-checker",
+        "agent_file": "/Users/serhii/.codex/agents/gsd-plan-checker.toml",
+        "agent_file_digest": "12df3597d458e60ce86e88610525449da92750915a5c252f9cfc047a1e462e21",
+        "agent_instructions_digest": "9c3f24802856dbfefded99269c5f5e125d53e29c2526aa504998a1090b7c7fc7",
+        "task_path": "/root/gsd_task",
+        "provider": "openai",
+        "models": [
+          "gpt-6.1-sol"
+        ],
+        "efforts": [
+          "xhigh"
+        ],
+        "selections": [
+          {
+            "model": "gpt-6.1-sol",
+            "effort": "xhigh"
+          }
+        ],
+        "sha256": "919f078af1407f7b89911f0c90d7d741db133bb27dec307c05819ba587539937",
+        "task_relay": {
+          "path": "/Users/serhii/.local/state/shipyard/codex-decompose/6cba328f5f0de395b373ad6c77a164feb771363c4e6b7a96888b7075d52da7aa/tasks/dispatch-phase47-19-current-runtime-contract-4922fe8e-0e40-4142-bbaf-0b78dd6e704e.md",
+          "bytes": 32738,
+          "sha256": "dc4cfb8164bd0f31e154f85008485eca266e8d58644558bfc726d43e44414426"
+        }
+      },
+      "native_child_transcript": {
+        "path": "/Users/serhii/.local/state/shipyard/codex-decompose/6cba328f5f0de395b373ad6c77a164feb771363c4e6b7a96888b7075d52da7aa/phase47-final-generation-adr026-source-update-1/current-checker-native-child.jsonl",
+        "bytes": 406446,
+        "sha256": "919f078af1407f7b89911f0c90d7d741db133bb27dec307c05819ba587539937"
+      },
+      "verdict": {
+        "schema": "shipyard.codex-decompose-output.v1",
+        "status": "passed",
+        "artifact_paths": [],
+        "blockers": [],
+        "scope": "Read-only targeted PLAN19 amendment verification",
+        "input_sha256": {
+          "task": "dc4cfb8164bd0f31e154f85008485eca266e8d58644558bfc726d43e44414426",
+          "plan18": "a3887e0413c32385938bfed2481944616d31c0d2d144e39579378b7b679317c7",
+          "plan19": "d12c3b870fda04f0dc1f2f6afcebedbfad619f8961662ac253ad2abd45d781e8",
+          "context": "01e9ea87aeb5b48fdc9aeb261cda5d04d5ab82d6a6414172a7ebad1b9ce021be"
+        },
+        "summary": "No blocker found within the authorized amendment. PLAN19 has fifteen owners, task sizes 3/5/3/4, seven mirrors and two manifests. Task 3 owns the added architecture-target mirror. Dependencies, verification argv and phase48 independence remain unchanged. The source worktree is clean at 8192ba38942be328b27f8aa54984eae7cd47231c. Independent signed current-source approval precedes one coordinator-owned supported successor build in ADR-026-source-update-1. Native19 has no signing or builder authority. Historical generations, signatures, allocations and native receipts remain immutable. Separate source/coordinator config pins, authentic HOST proof and truthful missing-native HOLD remain required. This verdict supplies no implementation or installed acceptance."
+      }
+    },
+    "source_config_sha256": "2eb2a0475127916c4c120d7616d13df1393d116c07b2a5f259cd6453234c65f9",
+    "coordinator_config_sha256": "6f3f3a35b9a0cbd31ec686b5b0f0bd67e0790d13d612cf42e3aa9f635ca969a0",
+    "recorded_at": "2026-10-07T12:26:41.664469+00:00"
+  },
+  "historical_handoff": {
+    "worktree": "/Volumes/KINGSTON/worktrees/phase47-investigation/.wt-claude-shipyard/T-47-08",
+    "repository_id": "/Volumes/KINGSTON/claude-shipyard/.git",
+    "graph_dir": "/Volumes/KINGSTON/worktrees/phase47-investigation/claude-shipyard/.planning/graph",
+    "controller": null,
+    "run_id": null,
+    "writer_lease": null,
+    "failed_role": null,
+    "primary_error": null,
+    "accepted_siblings": null,
+    "retained_unaccepted_artifacts": null,
+    "current_duty": "finish executor handback to trusted coordinator",
+    "next_criterion": "Authenticate current callback completion/release and correct owner/run/duty before refresh or failed-role-only retry.",
+    "inspect": {
+      "command": [
+        "node",
+        "plugins/delivery-pipeline/scripts/session-handoff.cjs",
+        "inspect",
+        "--cwd",
+        ".",
+        "--runtime",
+        "codex"
+      ],
+      "exit_code": 0,
+      "original_outcome": {
+        "schema": "shipyard.session-handoff.v1",
+        "version": 1,
+        "repository_id": "/Volumes/KINGSTON/claude-shipyard/.git",
+        "common_dir": "/Volumes/KINGSTON/claude-shipyard/.git",
+        "next_epoch": 1,
+        "scopes": []
+      },
+      "authority": "read-only inspection; no owner inferred"
+    },
+    "resources": {
+      "retained": [
+        "/Volumes/KINGSTON/claude-shipyard/.git/shipyard-phase47-publication/INV-014-runtime-delivery-correctness/selection.json",
+        "/Volumes/KINGSTON/claude-shipyard/.git/shipyard-phase47-publication/INV-014-runtime-delivery-correctness/bbf5ec33bf9b5bd1e5361254fb740c90c2e91d48f31b3f7bee700848fea76c34/binding.json",
+        "/Volumes/KINGSTON/claude-shipyard/.git/shipyard-phase47-publication/INV-014-runtime-delivery-correctness/bbf5ec33bf9b5bd1e5361254fb740c90c2e91d48f31b3f7bee700848fea76c34/candidate",
+        "/Users/serhii/.local/state/shipyard/codex-decompose/6cba328f5f0de395b373ad6c77a164feb771363c4e6b7a96888b7075d52da7aa/phase47-current-generation-20261006/generation.json",
+        "/Users/serhii/.local/state/shipyard/codex/0fd9a841a5da4528f18a5ddd346452ddd67b8bbf03ddc67639480665e11af98f",
+        "/Users/serhii/.local/state/shipyard/investigations/INV-014-20261003",
+        "/Volumes/KINGSTON/worktrees/phase47-investigation/.wt-claude-shipyard/T-47-08"
+      ],
+      "disposable_paths": [],
+      "disposable_pids": [],
+      "prior_safe_package": null,
+      "rollback_argv": null,
+      "deletion_exclusions": [
+        "sealed archives",
+        "original receipts",
+        "dirty preparation",
+        "backups",
+        "unrelated installations"
+      ],
+      "cleanup": "HOLD; exact ownership/prior disposal/authority required"
+    }
   }
 }

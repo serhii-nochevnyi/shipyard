@@ -16,7 +16,7 @@ function resolveIntegrationBranch({ projectRoot = process.cwd(), repo = null, co
   const configured = !repo && (config.gsd?.base_branch || config.git?.base_branch);
   const value = configured || defaultBranch || exec('gh', ['repo', 'view', ...(repo ? [repo] : []), '--json', 'defaultBranchRef', '--jq', '.defaultBranchRef.name'],
     { cwd: projectRoot, encoding: 'utf8', timeout: 30000, maxBuffer: 4096 });
-  const branch = normalizeBranch(String(value));
+  const branch = normalizeBranch(typeof value === 'string' ? value : null);
   if (!branch || !/^[A-Za-z0-9._/-]+$/.test(branch) || branch.startsWith('-') || branch.includes('..'))
     throw new Error('repository integration branch is unavailable');
   return branch;

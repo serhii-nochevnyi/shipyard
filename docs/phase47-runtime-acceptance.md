@@ -1,3 +1,70 @@
+# T-47-19 current final publication
+
+Current inspection requires `ADR-026-source-update-1`, handback SHA-256
+`d788b6e1be9b78914d9e58f1d9fb88f5069a0ece2517a22e9b80973c75ebccfe`. A missing or invalid current selection refuses;
+HOLD applies only after candidate authentication. No original or superseded stage
+is a fallback for current acceptance.
+
+The reviewed source is `8192ba38942be328b27f8aa54984eae7cd47231c`, tree
+`4ba34341bc4e94620de21a4c81d58a2f627afdca`, after actual T18 merge
+`72f033c994053654d5025e128081ee37be0e04b7`. D22 changed only canonical
+`plugins/delivery-pipeline/scripts/architecture-target.cjs`; its generated mirror
+is mechanically copied from the supported successor candidate. Current15-owner
+PLAN SHA-256 is `d12c3b870fda04f0dc1f2f6afcebedbfad619f8961662ac253ad2abd45d781e8`;
+task sizes are 3/5/3/4. The signed fresh checker authenticates this amendment;
+the historical checker retains its original contract and receipt meaning.
+
+Current generation is `4e63582ca45a0dc5edd2f63fd46ccc07afbff13cf3e71f8d6bbb305715598d50` with 161 package files,
+version `0.71.0+codex.3274a569f21d3bce`, package SHA-256 `56e4bb0aa02dbcacb9c0ab4764adc575d5b565cb8ca01d18ce630be80ea6aa8d`.
+The seven host mirrors and two manifests are the exact nine-output delta from the
+reviewed checked-in package, copied with original publication modes. The original
+T05 stage has 160 files, sixteen native owners (thirteen T14 plus three T15), and
+twenty historical mechanical outputs. Those inventories and all original receipts
+remain historical anchors. Earlier fifteen/nineteen statements below are retained
+historical prose, not the operative inventory.
+
+Source configuration is independently pinned to
+`2eb2a0475127916c4c120d7616d13df1393d116c07b2a5f259cd6453234c65f9` and checked against reviewed Git and
+the source checkout. Operative coordinator configuration is separately pinned to
+`6f3f3a35b9a0cbd31ec686b5b0f0bd67e0790d13d612cf42e3aa9f635ca969a0`. No equality waiver links the two.
+Canonical bytes, modes and source ancestry remain strict on the checkout and the
+signed epic branch. Only publication/test/docs descendants are admitted; even a
+canonical change later reverted refuses. The supported builder is unchanged and
+never invoked by either current consumer. Signature verification uses only an
+owned temporary public keyring; no signing or installed native launch occurs.
+
+The entire original ledger is retained at `/Users/serhii/.local/state/shipyard/codex-decompose/6cba328f5f0de395b373ad6c77a164feb771363c4e6b7a96888b7075d52da7aa/phase47-final-generation-adr026-source-update-1/original-runtime-acceptance.json`,
+SHA-256 `592439dcf4d663f9a072d280dfbb9b6866d43061ffda8094cdc5ddbd94c5d98d`, 48868 bytes,
+and authenticated by the signed current handback. All twenty original obligation
+rows, historical research/refusals/reasons/references and null accounting remain
+unchanged. Current preparation is not installed identity or native acceptance.
+`evidence_check: passed`, `status: HOLD`, `accepted: false`, `native_launches: 0`
+is the expected valid missing-native smoke outcome, never a substitute for a pass
+when source, selection or package authentication fails.
+
+Run the six existing publication groups (`candidate`, `launch`, `caller`,
+`integration`, `relay`, `complete`) sequentially using
+`node tests/unit/phase47-package-publication.test.cjs --group <group>`.
+Relay checks every non-manifest package file; complete checks all 161 files.
+The sandbox smoke and `node scripts/refresh-runtime-digests.cjs --check .` follow
+publication. The acceptance unit command and all three assigned final HOST tuples
+belong exclusively to the trusted verifier with current scoped candidate-tree,
+source and PLAN admission. Their results remain pending until authentic evidence
+is supplied. A denial remains unresolved and genuine assertion failure blocks.
+No global install, push, GitHub message, finalizer or coverage action is performed
+by this executor.
+
+After genuine19 handback and delivery merge, the coordinator obtains full phase
+architecture and integrator judgments at the actual final integration head/base
+and complete membership including18/19. These are retained final obligations,
+not a prerequisite to this executor's native handback. Ticket target skips do not
+supply a conformity verdict. Phase48 remains independent.
+
+## Retained original T08 procedure (historical)
+
+The text below is the original procedure at the retained ledger snapshot. Its
+source/package and delivery-state statements describe that earlier handback.
+
 # Phase47 isolated runtime acceptance
 
 T-47-08 implements bounded evidence inspection. Its two Verification commands

@@ -126,57 +126,19 @@ function comparePackage(directory, binding, sealed = false) {
   return { package_sha256: build.digest, manifest_sha256: sha(manifestBytes), output_count: actual.length };
 }
 
-function inspectCandidate(candidate, root = ROOT) {
+function inspectCandidate(candidate, root = ROOT, kind = 'final') {
+  const publication = require('../unit/phase47-package-publication.test.cjs');
   const common = gitText(root, 'rev-parse', '--path-format=absolute', '--git-common-dir');
-  const durable = path.join(common, 'shipyard-phase47-publication/INV-014-runtime-delivery-correctness');
-  const handback = jsonOriginal({ path: HANDOFF, sha256: HANDOFF_SHA256 });
-  assert.equal(handback.status, 'completed');
-  assert.equal(handback.actor, 'trusted-coordinator');
-  assert.equal(handback.native_receipt, false);
-  const selectionPath = path.join(durable, 'selection.json');
-  assert.equal(handback.selection_path, selectionPath);
-  const selection = jsonOriginal({ path: selectionPath, sha256: handback.selection_sha256 });
-  assert.match(selection.generation_id, /^[a-f0-9]{64}$/);
-  assert.deepEqual(fs.readdirSync(durable).sort(), [selection.generation_id, 'selection.json'].sort(),
-    'exclusive generation selection changed');
-  const generation = path.join(durable, selection.generation_id);
-  assert.equal(selection.candidate_path, path.join(generation, 'candidate'));
-  assert.equal(selection.binding_path, path.join(generation, 'binding.json'));
-  assert.deepEqual(fs.readdirSync(generation).sort(), ['binding.json', 'candidate']);
+  assert(['original', 'final'].includes(kind), 'unknown generation branch');
+  const authenticated = kind === 'final' ? publication.authenticateFinal(common, root)
+    : publication.authenticateOriginal(common);
+  const { handback, selected } = authenticated;
+  const { selection, binding, selectionPath } = selected;
   if (candidate) assert.equal(candidate, selection.candidate_path, 'foreign candidate');
-  for (const file of [selectionPath, selection.binding_path]) {
-    const stat = physical(file);
-    assert.equal(stat.mode & 0o222, 0, 'unsealed selection/binding');
-    assert.equal(stat.uid, process.getuid(), 'foreign stage owner');
-  }
-  for (const key of ['generation_id', 'candidate_path', 'binding_path', 'binding_sha256', 'candidate_sha256'])
-    assert.equal(handback[key], selection[key], 'original generation handback drift');
-  const binding = jsonOriginal({ path: selection.binding_path, sha256: selection.binding_sha256 });
-  assert.equal(binding.generation_id, selection.generation_id);
-  assert.equal(binding.canonical_input_digest, selection.generation_id);
-  assert.equal(binding.source.common, common);
-  assert.equal(binding.source.head, handback.source_head);
-  assert.equal(sha(canonical(binding.source)), handback.source_identity_sha256);
-  assert.equal(sha(canonical(binding.outputs)), selection.candidate_sha256);
-  assert.equal(sha(canonical(binding.source.identities)), selection.generation_id);
-  assert.deepEqual(canonicalInputs(root), binding.source.identities, 'canonical input drift');
-  git(root, 'merge-base', '--is-ancestor', BASELINE, binding.source.head);
-  git(root, 'merge-base', '--is-ancestor', binding.source.head, 'HEAD');
-  assert.equal(gitText(root, 'rev-parse', binding.source.head + '^{tree}'), binding.source.tree);
-  for (const entry of binding.source.identities) {
-    assert.equal(sha(git(root, 'show', binding.source.head + ':' + entry.path)), entry.sha256,
-      'unreviewed original canonical bytes');
-    const mode = binding.source.input_modes.find(row => row.path === entry.path)?.mode;
-    assert.equal(physical(path.join(root, entry.path)).mode & 0o777, mode, 'canonical mode drift');
-  }
-  const policy = require(path.join(root, 'plugins/delivery-pipeline/scripts/model-policy.cjs'));
-  assert.equal(policy.POLICY_HASH, binding.source.policy_sha256, 'policy drift');
-  assert(!/^T-48-/m.test(gitText(root, 'log', '--format=%s', BASELINE + '..HEAD')),
-    'phase48 publication in candidate ancestry');
-  comparePackage(selection.candidate_path, binding, true);
-  const packageEvidence = comparePackage(path.join(root, 'plugins/shipyard'), binding);
+  const packageEvidence = comparePackage(selection.candidate_path, binding, true);
+  if (kind === 'final') comparePackage(path.join(root, 'plugins/shipyard'), binding);
   const dirty = gitText(root, 'status', '--porcelain=v1', '--untracked-files=all');
-  return { selection, binding, identity: { ...packageEvidence,
+  const result = { selection, binding, identity: { ...packageEvidence,
     source_head: binding.source.head, source_tree: binding.source.tree,
     canonical_input_digest: binding.canonical_input_digest, policy_sha256: binding.source.policy_sha256,
     worktree: root, common_dir: common, head: gitText(root, 'rev-parse', 'HEAD'),
@@ -184,7 +146,14 @@ function inspectCandidate(candidate, root = ROOT) {
     selection_path: selectionPath, selection_sha256: handback.selection_sha256,
     binding_path: selection.binding_path, binding_sha256: selection.binding_sha256,
     candidate_path: selection.candidate_path, candidate_sha256: selection.candidate_sha256,
-    generation_handback: { path: HANDOFF, sha256: HANDOFF_SHA256 } } };
+    generation_handback: { path: kind === 'final' ? publication.FINAL_HANDOFF : HANDOFF,
+      sha256: kind === 'final' ? publication.FINAL_HANDOFF_SHA : HANDOFF_SHA256 },
+    historical_only: kind === 'original' }, authenticated };
+  if (kind === 'final') {
+    publication.recheckFinal(authenticated, root);
+    comparePackage(path.join(root, 'plugins/shipyard'), binding);
+  } else publication.selectedArtifact(common, handback);
+  return result;
 }
 
 function originalReceipt(reference, scripts = SCRIPTS) {
@@ -362,6 +331,23 @@ function validateLedger(ledger) {
   assert.equal(ledger.ticket, 'T-47-08'); assert.equal(ledger.plan_sha256, PLAN_SHA256);
   assert.deepEqual(ledger.obligations?.map(row => row.id).sort(), [...OBLIGATIONS].sort(), 'obligation inventory incomplete');
   assert.equal(ledger.accounting?.efficiency, 'inconclusive', 'efficiency remains inconclusive without matched cohorts');
+  if (ledger.corrective_generation) {
+    assert(ledger.candidate, 'corrective ledger requires current candidate');
+    const publication = require('../unit/phase47-package-publication.test.cjs');
+    assert.deepEqual(ledger.corrective_generation.handback,
+      { path: publication.FINAL_HANDOFF, sha256: publication.FINAL_HANDOFF_SHA }, 'foreign corrective handback');
+    const authenticated = publication.authenticateFinal(gitText(ROOT, 'rev-parse',
+      '--path-format=absolute', '--git-common-dir'));
+    assert.deepEqual(ledger.corrective_generation.original_ledger, authenticated.handback.original_ledger,
+      'foreign retained original ledger');
+    assert.deepEqual(ledger.corrective_generation.source_approval, authenticated.handback.current_source_approval);
+    const original = jsonOriginal(authenticated.handback.original_ledger);
+    for (const field of ['ticket', 'plan_sha256', 'historical_research', 'retained_references', 'historical_unknowns', 'accounting'])
+      assert.deepEqual(ledger[field], original[field], 'retained original ledger drift: ' + field);
+    for (const row of ledger.obligations.filter(row => row.status !== 'proven'))
+      assert.deepEqual(row, original.obligations.find(prior => prior.id === row.id), 'original HOLD obligation drift');
+    publication.recheckFinal(authenticated);
+  }
   const open = [], verified = [];
   const historical = (ledger.historical_research || []).map(reference => {
     assert.equal(reference.store, '/Users/serhii/.local/state/shipyard/codex/'
@@ -396,8 +382,9 @@ function validateLedger(ledger) {
   if (ledger.candidate) {
     inspected = inspectCandidate(ledger.candidate.candidate_path);
     for (const key of ['candidate_sha256', 'binding_sha256', 'canonical_input_digest', 'package_sha256',
-      'manifest_sha256', 'source_head', 'source_tree', 'policy_sha256'])
-      assert.equal(ledger.candidate[key], inspected.identity[key], 'ledger candidate identity mismatch: ' + key);
+      'manifest_sha256', 'source_head', 'source_tree', 'policy_sha256', 'selection_path', 'selection_sha256',
+      'binding_path', 'candidate_path', 'generation_handback'])
+      assert.deepEqual(ledger.candidate[key], inspected.identity[key], 'ledger candidate identity mismatch: ' + key);
   }
   if (ledger.installation || verified.length) {
     assert(inspected && ledger.installation, 'current installed candidate identity required');
@@ -408,6 +395,10 @@ function validateLedger(ledger) {
     if (ledger.accounting[field] === null) continue;
     assert(originalAccounting && Number.isSafeInteger(ledger.accounting[field]) && ledger.accounting[field] >= 0
       && originalAccounting[field] === ledger.accounting[field], 'unknown accounting must remain unknown without original observations');
+  }
+  if (inspected) {
+    require('../unit/phase47-package-publication.test.cjs').recheckFinal(inspected.authenticated);
+    comparePackage(path.join(ROOT, 'plugins/shipyard'), inspected.binding);
   }
   return { schema: 'shipyard.phase47-runtime-acceptance-result.v1', status: open.length ? 'HOLD' : 'accepted',
     evidence_check: 'passed', accepted: open.length === 0, native_launches: 0,

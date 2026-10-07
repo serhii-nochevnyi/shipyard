@@ -261,10 +261,43 @@ function normalizeObservation(raw, now = new Date().toISOString()) {
   };
 }
 
+function validateRecorderPaths(graph) {
+  for (const directory of [graph, path.join(graph, '.locks'), path.join(graph, '.locks', 'orchestration-overhead.lock')]) {
+    try {
+      const stat = fs.lstatSync(directory);
+      if (!stat.isDirectory() || stat.isSymbolicLink()) fail('RECORDER_ALIAS', 'recorder directory is not physically trusted');
+    } catch (error) { if (error.code !== 'ENOENT') throw error; }
+  }
+  for (const file of [path.join(graph, STREAM_NAME), path.join(graph, '.locks', 'orchestration-overhead.lock', 'owner.json')]) {
+    try {
+      if (!fs.lstatSync(file).isFile()) fail('RECORDER_ALIAS', 'recorder leaf is not physically trusted');
+    } catch (error) { if (error.code !== 'ENOENT') throw error; }
+  }
+}
+
+function streamIO(file, append) {
+  const flags = fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK
+    | (append === undefined ? fs.constants.O_RDONLY : fs.constants.O_WRONLY | fs.constants.O_APPEND | fs.constants.O_CREAT);
+  const fd = fs.openSync(file, flags, 0o600);
+  try {
+    const stat = fs.fstatSync(fd);
+    const entry = fs.lstatSync(file);
+    if (!stat.isFile() || !entry.isFile() || stat.dev !== entry.dev || stat.ino !== entry.ino || stat.nlink !== 1)
+      fail('RECORDER_ALIAS', 'recorder stream must be the opened regular file');
+    if (append !== undefined) return fs.writeFileSync(fd, append);
+    const raw = fs.readFileSync(fd, 'utf8');
+    const after = fs.fstatSync(fd), current = fs.lstatSync(file);
+    if (['dev', 'ino', 'size', 'mtimeMs', 'ctimeMs'].some(key => stat[key] !== after[key])
+        || current.dev !== stat.dev || current.ino !== stat.ino)
+      fail('RECORDER_CHANGED', 'recorder stream changed during read');
+    return raw;
+  } finally { fs.closeSync(fd); }
+}
+
 function readStream(graphDir) {
   const file = path.join(path.resolve(graphDir), STREAM_NAME);
   let raw;
-  try { raw = fs.readFileSync(file, 'utf8'); }
+  try { validateRecorderPaths(path.resolve(graphDir)); raw = streamIO(file); }
   catch (error) {
     if (error.code === 'ENOENT') return { rows: [], warnings: [], file };
     throw error;
@@ -313,7 +346,8 @@ function recordBatch(graphDir, raw) {
   const input = Array.isArray(raw) ? raw : [raw];
   if (!input.length) return { recorded: [], skipped: 0 };
   const graph = path.resolve(graphDir);
-  fs.mkdirSync(graph, { recursive: true });
+  validateRecorderPaths(graph);
+  fs.mkdirSync(graph, { recursive: true, mode: 0o700 });
   const normalized = input.map((value) => normalizeObservation(value));
   const ids = new Set();
   for (const row of normalized) {
@@ -334,7 +368,8 @@ function recordBatch(graphDir, raw) {
       const next = { ...row, revision: Math.max(previousRevision + 1, row.revision || 1) };
       toAppend.push(next); latest.set(next.observation_id, next);
     }
-    if (toAppend.length) fs.appendFileSync(path.join(graph, STREAM_NAME), toAppend.map((row) => JSON.stringify(row)).join('\n') + '\n');
+    validateRecorderPaths(graph);
+    if (toAppend.length) streamIO(path.join(graph, STREAM_NAME), toAppend.map((row) => JSON.stringify(row)).join('\n') + '\n');
     return { recorded: toAppend, skipped: normalized.length - toAppend.length,
       duplicate: toAppend.length === 0 && normalized.length === 1 };
   }, { label: 'orchestration-overhead' });
