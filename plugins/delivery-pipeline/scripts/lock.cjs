@@ -81,7 +81,34 @@ function ownerFile(lockPath) {
 // giving those bytes an identity.
 function ownerRecord(lockPath) {
   let raw = null;
-  try { raw = fs.readFileSync(ownerFile(lockPath), 'utf8'); } catch { return { raw: null, owner: null }; }
+  let fd;
+  let observed = false;
+  try {
+    const before = fs.lstatSync(ownerFile(lockPath));
+    observed = true;
+    const refuseAlias = stat => {
+      if (!stat.isFile() || stat.nlink > 1)
+        throw Object.assign(new Error('lock owner must be the opened regular file'), { code: 'LOCK_OWNER_ALIAS' });
+    };
+    const retry = () => ({ raw: null, owner: null, retryable: true });
+    refuseAlias(before);
+    fd = fs.openSync(ownerFile(lockPath), fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+    const stat = fs.fstatSync(fd), entry = fs.lstatSync(ownerFile(lockPath));
+    refuseAlias(stat);
+    refuseAlias(entry);
+    if (stat.nlink === 0 || before.dev !== stat.dev || before.ino !== stat.ino
+        || stat.dev !== entry.dev || stat.ino !== entry.ino) return retry();
+    raw = fs.readFileSync(fd, 'utf8');
+    const after = fs.fstatSync(fd), current = fs.lstatSync(ownerFile(lockPath));
+    refuseAlias(after);
+    refuseAlias(current);
+    if (after.nlink === 0 || ['dev', 'ino', 'size', 'mtimeMs', 'ctimeMs'].some(key => stat[key] !== after[key])
+        || current.dev !== stat.dev || current.ino !== stat.ino)
+      return retry();
+  } catch (error) {
+    if (error.code === 'ENOENT') return { raw: null, owner: null, retryable: observed };
+    throw error;
+  } finally { if (fd !== undefined) fs.closeSync(fd); }
   try { return { raw, owner: JSON.parse(raw) }; } catch { return { raw, owner: null }; }
 }
 
@@ -179,7 +206,8 @@ function takeover(lockPath, identity, ttlMs) {
     try { fs.rmdirSync(claim); } catch { /* the empty-claim rule catches it */ }
     return false;
   }
-  if (identityOf(ownerRecord(dead).raw, dead) !== identity) {
+  const observed = ownerRecord(dead);
+  if (observed.retryable || identityOf(observed.raw, dead) !== identity) {
     // We moved a directory that is not the one we judged: the dead holder
     // released and someone acquired normally between our read and our rename. Put
     // it back — an unrestored live lock is two writers in the section, which is
@@ -242,7 +270,8 @@ function sweepClaims(lockPath, ttlMs) {
 // worse. This is not F12: F12 was unconditional and reproduced on demand.
 function releaseOwned(lockPath, owner) {
   if (!fs.existsSync(lockPath)) return;
-  const holder = readOwner(lockPath);
+  let holder;
+  try { holder = readOwner(lockPath); } catch { return; }
   if (holder && owner && holder.token && owner.token && holder.token === owner.token) {
     try { fs.rmSync(lockPath, { recursive: true, force: true }); } catch { /* raced with a sweeper */ }
     return;
@@ -264,18 +293,24 @@ function acquire(dir, name, opts = {}) {
   const waitMs = Number.isFinite(opts.waitMs) ? opts.waitMs : DEFAULT_WAIT_MS;
   const label = opts.label || path.basename(process.argv[1] || 'shipyard');
 
-  fs.mkdirSync(dir, { recursive: true });
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   const lockPath = path.join(dir, `${name}.lock`);
   const deadline = Date.now() + waitMs;
 
   for (;;) {
     try {
-      fs.mkdirSync(lockPath);
+      fs.mkdirSync(lockPath, { mode: 0o700 });
       // The token is what makes `release()` an assertion of ownership rather than
       // a guess. It is written WITH the rest of the owner record — one file, one
       // write — so a reader either sees a holder it can identify or sees nothing.
       const owner = { pid: process.pid, label, at: new Date().toISOString(), token: crypto.randomBytes(12).toString('hex') };
-      fs.writeFileSync(ownerFile(lockPath), JSON.stringify(owner) + '\n');
+      const fd = fs.openSync(ownerFile(lockPath), fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK, 0o600);
+      try {
+        const stat = fs.fstatSync(fd), entry = fs.lstatSync(ownerFile(lockPath));
+        if (!stat.isFile() || !entry.isFile() || stat.dev !== entry.dev || stat.ino !== entry.ino || stat.nlink !== 1)
+          throw Object.assign(new Error('lock owner must be the opened regular file'), { code: 'LOCK_OWNER_ALIAS' });
+        fs.writeFileSync(fd, JSON.stringify(owner) + '\n');
+      } finally { fs.closeSync(fd); }
       let released = false;
       return {
         path: lockPath,
@@ -292,7 +327,12 @@ function acquire(dir, name, opts = {}) {
       // staleness verdict and the identity a takeover would displace have to
       // describe the same observation, or the takeover cannot prove afterwards
       // what it moved.
-      const { raw, owner: holder } = ownerRecord(lockPath);
+      const { raw, owner: holder, retryable } = ownerRecord(lockPath);
+      if (retryable) {
+        if (Date.now() >= deadline) return null;
+        sleepSync(POLL_MS);
+        continue;
+      }
       const identity = identityOf(raw, lockPath);
       if (identity === null) {
         // The lock vanished while we were looking at it. There is no holder to
@@ -362,7 +402,7 @@ function withLock(dir, name, fn, opts = {}) {
 // directory so the rename stays within one filesystem.
 function writeAtomic(file, data) {
   const dir = path.dirname(file);
-  fs.mkdirSync(dir, { recursive: true });
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   const tmp = path.join(dir, `.${path.basename(file)}.tmp-${process.pid}`);
   try {
     fs.writeFileSync(tmp, data);

@@ -202,6 +202,27 @@ function waitOptions(f) {
   };
 }
 
+function retainedCallerAccounting(f, id, options = {}) {
+  const planningHost = require('../../plugins/delivery-pipeline/scripts/codex-planning-context-host.cjs');
+  const stream = path.join(f.graph, overhead.STREAM_NAME);
+  const before = fs.existsSync(stream) ? fs.readFileSync(stream) : null;
+  const accounting = planningHost.readWaitAccounting({ scope: f.scope, dispatchId: id, graphDir: f.graph }, {
+    testStateRoot: path.join(f.home, '.local', 'state', 'shipyard', 'codex-decompose'), ...options,
+  });
+  assert.equal(accounting.missing_evidence, null);
+  assert.equal(accounting.run_id, f.scope.run_id);
+  assert.equal(accounting.dispatch_id, id);
+  assert.equal(accounting.graph_dir, f.graph);
+  assert.ok(!accounting.sink.startsWith(f.root + path.sep));
+  assert.ok(accounting.parent_rows.length > 0, 'real blocking waiter retains external parent rows');
+  assert.ok(accounting.parent_rows.every(row => row.dispatch_id === id && row.run_id === f.scope.run_id
+    && row.actor === 'parent' && row.stage === 'wait_poll' && row.counts.polls === 1
+    && row.counts.model_turns === null && row.provider_tokens === null));
+  assert.deepEqual(fs.existsSync(stream) ? fs.readFileSync(stream) : null, before, 'reporting leaves graph bytes unchanged');
+  assert.ok(!overhead.readStream(f.graph).rows.some(row => row.actor === 'parent'));
+  return accounting;
+}
+
 for (const includeDispatchId of [true, false]) {
 test(`detached decomposition preserves ${includeDispatchId ? 'explicit' : 'omitted'} dispatch identity through wait`, async () => {
   const f = createFixture({ includeDispatchId });
@@ -367,15 +388,16 @@ for (const includeDispatchId of [true, false]) {
       const copied = JSON.parse(fs.readFileSync(path.join(f.stateDir, id, 'args.json'), 'utf8'));
       assert.equal(copied.dispatch_id, id);
       assert.ok(copied.prompt.includes(JSON.stringify(contextPacket)));
-      const rows = overhead.readStream(f.graph).rows;
-      const parent = rows.filter((row) => row.actor === 'parent');
+      const accounting = retainedCallerAccounting(f, id);
+      const rows = [...accounting.child_rows, ...accounting.parent_rows];
+      const parent = accounting.parent_rows;
       assert.ok(parent.length > 0, 'real blocking waiter emits parent rows');
       assert.ok(parent.every((row) => row.dispatch_id === id && row.run_id === f.scope.run_id
         && row.stage === 'wait_poll' && row.counts.polls === 1));
       const child = rows.find((row) => row.actor === 'child');
       assert.equal(child.dispatch_id, id);
       assert.equal(child.counts.model_turns, null);
-      assert.equal(overhead.report({ graphDir: f.graph }).verdict, 'inconclusive');
+      assert.equal(accounting.report.verdict, 'inconclusive');
     } finally { f.clean(); }
   });
 }
@@ -410,13 +432,17 @@ test('actual caller timeout resumes the original child with frozen context and a
     assert.equal(completed.receipt.dispatch_id, f.dispatchId);
     assert.equal(launches, 1);
     assert.deepEqual(fs.readFileSync(context), frozen);
-    const rows = overhead.readStream(f.graph).rows;
+    const accounting = retainedCallerAccounting(f, f.dispatchId, options);
+    const rows = [...accounting.child_rows, ...accounting.parent_rows];
     assert.ok(rows.some((row) => row.actor === 'parent'));
     const before = rows.length;
     const repeated = await planningHost.runCli(['--args-file', f.request], { write() {} }, options);
     assert.equal(repeated.receipt.dispatch_id, f.dispatchId);
     assert.equal(launches, 1);
-    assert.equal(overhead.readStream(f.graph).rows.length, before, 'terminal re-wait adds no observer');
+    const repeatedAccounting = retainedCallerAccounting(f, f.dispatchId, options);
+    assert.equal(repeatedAccounting.child_rows.length + repeatedAccounting.parent_rows.length, before,
+      'terminal re-wait adds no observer');
+    assert.deepEqual(repeatedAccounting.parent_rows, accounting.parent_rows);
     // Keep the authentic stored receipt intact while testing a foreign readable result.
     const resultFile = path.join(f.stateDir, f.dispatchId, 'result.jsonl');
     fs.writeFileSync(resultFile, JSON.stringify({ ...completed,
