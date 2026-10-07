@@ -9,7 +9,7 @@ The reviewed source is `8192ba38942be328b27f8aa54984eae7cd47231c`, tree
 `4ba34341bc4e94620de21a4c81d58a2f627afdca`, after actual T18 merge
 `72f033c994053654d5025e128081ee37be0e04b7`. D22 changed only canonical
 `plugins/delivery-pipeline/scripts/architecture-target.cjs`; its generated mirror
-is mechanically copied from the supported successor candidate. Current15-owner
+is mechanically copied from the supported successor candidate. Current 15-owner
 PLAN SHA-256 is `d12c3b870fda04f0dc1f2f6afcebedbfad619f8961662ac253ad2abd45d781e8`;
 task sizes are 3/5/3/4. The signed fresh checker authenticates this amendment;
 the historical checker retains its original contract and receipt meaning.
@@ -33,6 +33,15 @@ canonical change later reverted refuses. The supported builder is unchanged and
 never invoked by either current consumer. Signature verification uses only an
 owned temporary public keyring; no signing or installed native launch occurs.
 
+The canonical context reader's `boundedBytes` rejects world-writable non-sticky
+ancestors, but does not reject group-writable ancestors. Its leaf checks reject
+symlinks and group/world-writable leaves, use `O_NOFOLLOW`, and compare descriptor
+and pathname identity before/after reading; manifest/assets are checked against
+pinned SHA-256 values. These checks do not establish directory-anchor protection
+against every ancestor replacement race. Broader ancestor hardening is expressly
+deferred. Changing that canonical reader requires separate source approval and a
+new supported generation; no such fix or regenerated mirror is claimed here.
+
 The entire original ledger is retained at `/Users/serhii/.local/state/shipyard/codex-decompose/6cba328f5f0de395b373ad6c77a164feb771363c4e6b7a96888b7075d52da7aa/phase47-final-generation-adr026-source-update-1/original-runtime-acceptance.json`,
 SHA-256 `592439dcf4d663f9a072d280dfbb9b6866d43061ffda8094cdc5ddbd94c5d98d`, 48868 bytes,
 and authenticated by the signed current handback. All twenty original obligation
@@ -49,16 +58,37 @@ Relay checks every non-manifest package file; complete checks all 161 files.
 The sandbox smoke and `node scripts/refresh-runtime-digests.cjs --check .` follow
 publication. The acceptance unit command and all three assigned final HOST tuples
 belong exclusively to the trusted verifier with current scoped candidate-tree,
-source and PLAN admission. Their results remain pending until authentic evidence
-is supplied. A denial remains unresolved and genuine assertion failure blocks.
+source and PLAN admission. At the sandbox executor handback, their results were pending. The trusted
+coordinator subsequently reported all twelve exact PLAN19 commands passed and
+signed predecessor commit `c21e04e1e7863bb1f07a562145a8c2faaf46241a`, tree
+`af3fd000fac48cf083d5dbd245ec3b21a7324444`, with verification evidence digest
+`1fd8c0dc7d7674dfc322daf21c36a7636cad44a8af7e882f8dbe2a608231dba3`
+(the commit trailer retains this digest). The authenticated publication result
+`/tmp/phase47-19-final-publication-result.json` identifies that commit/tree.
+The coordinator also reports CI run `37626213827` passed for that predecessor.
+These are predecessor results, not verification of these subsequent document edits.
+The protected host evidence is unavailable to this review-fix sandbox; exact
+per-command host output and CI status cannot be independently rechecked here.
+Fresh post-edit trusted verification and publication remain pending. A denial remains unresolved and genuine assertion failure blocks.
 No global install, push, GitHub message, finalizer or coverage action is performed
 by this executor.
 
-After genuine19 handback and delivery merge, the coordinator obtains full phase
+After genuine 19 handback and delivery merge, the coordinator obtains full phase
 architecture and integrator judgments at the actual final integration head/base
-and complete membership including18/19. These are retained final obligations,
+and complete membership including 18/19. These are retained final obligations,
 not a prerequisite to this executor's native handback. Ticket target skips do not
-supply a conformity verdict. Phase48 remains independent.
+supply a conformity verdict. Phase 48 remains independent.
+
+Post-edit sandbox diagnostics: `node --test tests/unit/phase47-runtime-acceptance.test.cjs`
+exited 1 (17 passed, one packaged public-load-order test failed with
+`native spawn must be reached`). The exact smoke command
+`node tests/smoke/phase47-runtime-acceptance.cjs --evidence docs/audits/phase47-runtime-acceptance.json`
+exited 1 (`ERR_ASSERTION`). Direct `validateLedger` diagnosis identified
+coordinator `delivery-state.json` digest drift: observed
+`c1e4d846c924100c3412b61e59cef52fe98cce58d0dfa962d3f90d4ca6a6ae24`, expected
+`be5bc64f990bd6f15cb679939f32ac81fbff165796dfaf8f3c62f0cdd8605d0d`.
+These are unresolved post-edit checks for the trusted coordinator; no authority,
+source, graph, generation or expected digest was changed to bypass refusal.
 
 ## Retained original T08 procedure (historical)
 

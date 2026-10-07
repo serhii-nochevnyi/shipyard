@@ -472,6 +472,13 @@ function validateParents(source, state, getPullRequest, ancestor, final = false)
   }
 }
 
+function validateDeliveryState(source, ancestor, final = false) {
+  // The signed whole-board digest records generation-time history. Live board
+  // progress is authenticated by the individually pinned parent rows below.
+  const state = JSON.parse(read(path.join(source.repository, '.planning/graph/delivery-state.json')));
+  validateParents(source, state, null, ancestor, final);
+}
+
 function planOwners(bytes) {
   const text = bytes.toString();
   const owners = text.match(/^files_modified:\s*\n((?:[ \t]+- [^\n]+\n)+)/m);
@@ -561,8 +568,6 @@ function validateSource(root, binding, approval = null) {
   assert.equal(require(path.join(root, 'plugins/delivery-pipeline/scripts/model-policy.cjs'))
     .resolveDispatch({ runtime: 'codex', role: 'research' }).policy_hash, source.policy_sha256, 'policy drift');
   const graph = JSON.parse(read(path.join(source.repository, '.planning/graph/tickets.json'), source.graph_sha256));
-  const state = JSON.parse(read(path.join(source.repository, '.planning/graph/delivery-state.json'),
-    approval ? source.delivery_state_sha256 : undefined));
   for (const [id, row] of Object.entries(graph.tickets)) {
     if (!id.startsWith('T-47-')) continue;
     for (const dep of [...(row.depends_on || []), ...(row.cross_phase_deps || [])])
@@ -570,7 +575,7 @@ function validateSource(root, binding, approval = null) {
   }
   const commits = gitText(root, 'log', '--format=%s', BASELINE + '..' + source.head);
   assert(!/^T-48-/m.test(commits), 'phase48 changes in selected source ancestry');
-  validateParents(source, state, null, ancestor, Boolean(approval));
+  validateDeliveryState(source, ancestor, Boolean(approval));
   return { head: gitText(root, 'rev-parse', 'HEAD'), tree: gitText(root, 'rev-parse', 'HEAD^{tree}'),
     canonical_input_digest: binding.canonical_input_digest, source_ancestor: true };
 }
@@ -976,6 +981,36 @@ function privateFixtures(authenticatedSignatureFixture = false) {
     parentSource.parent_commits['T-47-13'].base_merge_commits = ['f'.repeat(40)];
     rejects('unmerged base_merge', () => validateParents(parentSource, state, number => live[number], ancestry));
     parentSource.parent_commits['T-47-13'].base_merge_commits = originalMerge;
+    const finalState = {}, finalSource = { repository: root, head: source.head, parent_commits: {}, provenance: {} };
+    for (let n = 1; n <= 18; n++) {
+      const id = 'T-47-' + String(n).padStart(2, '0');
+      finalState[id] = { status: 'merged', pr: n, merge_sha: source.head, base: 'epic/47',
+        url: 'https://github.com/serhii-nochevnyi/shipyard/pull/' + n };
+      finalSource.parent_commits[id] = { head: sha(id).slice(0, 40), merge: source.head, base_merge_commits: [source.head] };
+      finalSource.provenance[id] = { pr: n, base: 'epic/47', url: finalState[id].url,
+        state_sha256: sha(canon(finalState[id])) };
+    }
+    finalState['T-47-19'] = { status: 'pending' };
+    const saveBoard = () => write('.planning/graph/delivery-state.json', JSON.stringify(finalState));
+    finalSource.delivery_state_sha256 = sha(read(saveBoard()));
+    validateDeliveryState(finalSource, ancestry, true); cases++;
+    finalState['T-47-19'] = { status: 'pr-open', pr: 438 };
+    finalState['T-48-01'] = { status: 'pending' };
+    saveBoard();
+    assert.notEqual(sha(read(path.join(root, '.planning/graph/delivery-state.json'))), finalSource.delivery_state_sha256);
+    validateDeliveryState(finalSource, ancestry, true); cases++;
+    for (const id of Object.keys(finalSource.parent_commits)) {
+      const original = finalState[id];
+      for (const mutation of [{ ...original, projection: 'changed' }, undefined,
+        { ...original, merge_sha: 'f'.repeat(40) }]) {
+        if (mutation) finalState[id] = mutation; else delete finalState[id];
+        saveBoard();
+        rejects('final signed parent mutation/missing/merge drift: ' + id,
+          () => validateDeliveryState(finalSource, ancestry, true));
+      }
+      finalState[id] = original;
+    }
+    saveBoard(); validateDeliveryState(finalSource, ancestry, true); cases++;
     assert.equal(buildCalls, 1); consume();
     return { passed: cases, private_build_calls: buildCalls, selected_reuse_build_calls: 0 };
   } finally {

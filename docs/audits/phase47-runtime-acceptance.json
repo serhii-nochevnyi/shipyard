@@ -826,8 +826,8 @@
     "primary_error": null,
     "accepted_siblings": null,
     "retained_unaccepted_artifacts": null,
-    "current_duty": "T-47-19 executor handback to existing trusted coordinator",
-    "next_criterion": "Trusted current-candidate HOST verification, supported signing/coverage and coordinator publication; then fresh complete architecture/integrator judgment after actual19 delivery merge.",
+    "current_duty": "Bounded PR438 three-document review repair; uncommitted trusted coordinator handback",
+    "next_criterion": "Fresh post-edit trusted verification, signing/coverage and publication; then fresh complete architecture/integrator judgment after actual 19 delivery merge.",
     "inspect": {
       "command": [
         "node",
@@ -886,12 +886,12 @@
     "accounting": "unknown; no quota or savings inference"
   },
   "verification": {
-    "status": "sandbox-passed; HOST pending",
+    "status": "predecessor coordinator verification reported passed; post-edit trusted verification pending",
     "acceptance": "HOLD",
     "accepted": false,
     "native_launches": 0,
     "plan_sha256": "d12c3b870fda04f0dc1f2f6afcebedbfad619f8961662ac253ad2abd45d781e8",
-    "host_status": "pending trusted verifier",
+    "host_status": "predecessor passed per authenticated coordinator dispatch; protected payload unavailable to review-fix sandbox",
     "results": [
       {
         "argv": [
@@ -1128,7 +1128,7 @@
           "outcome": null
         }
       ],
-      "status": "not executed by sandbox executor"
+      "status": "Historical sandbox assignment; not executed by sandbox executor; subsequently fulfilled for predecessor per coordinator dispatch"
     },
     "final_ledger_check": {
       "argv": [
@@ -1147,7 +1147,53 @@
       "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "stdout_path": "/private/tmp/t4719-smoke.stdout",
       "stderr_path": "/private/tmp/t4719-smoke.stderr"
-    }
+    },
+    "predecessor_publication": {
+      "commit": "c21e04e1e7863bb1f07a562145a8c2faaf46241a",
+      "tree": "af3fd000fac48cf083d5dbd245ec3b21a7324444",
+      "verification_evidence_digest": "1fd8c0dc7d7674dfc322daf21c36a7636cad44a8af7e882f8dbe2a608231dba3",
+      "result_path": "/tmp/phase47-19-final-publication-result.json",
+      "command_count": 12,
+      "outcome": "passed per authenticated coordinator dispatch",
+      "ci_run": 37626213827,
+      "ci_outcome": "passed per coordinator dispatch; API unavailable in review-fix sandbox",
+      "applicability": "Exact predecessor commit/tree only; does not verify subsequent document edits",
+      "payload_access": "Protected finalization state denied by active permission profile; no access attempted",
+      "native_acceptance": false
+    },
+    "post_edit_verification": {
+      "status": "pending trusted coordinator",
+      "host_unit_outcome": null,
+      "host_tuple_outcomes": null,
+      "publication_outcome": null,
+      "local_diagnostics": [
+        {
+          "argv": [
+            "node",
+            "--test",
+            "tests/unit/phase47-runtime-acceptance.test.cjs"
+          ],
+          "profile": "sandbox",
+          "exit_code": 1,
+          "outcome": "17 passed; packaged detached CLI public-load-order test failed: native spawn must be reached",
+          "log_path": "/tmp/phase47-438-repair-unit.log"
+        },
+        {
+          "argv": [
+            "node",
+            "tests/smoke/phase47-runtime-acceptance.cjs",
+            "--evidence",
+            "docs/audits/phase47-runtime-acceptance.json"
+          ],
+          "profile": "sandbox",
+          "exit_code": 1,
+          "outcome": "refused ERR_ASSERTION; direct validateLedger diagnosis: coordinator delivery-state.json digest mismatch",
+          "log_path": "/tmp/phase47-438-repair-smoke.log"
+        }
+      ]
+    },
+    "sandbox_handback_status": "sandbox-passed; HOST pending",
+    "sandbox_handback_host_status": "pending trusted verifier"
   },
   "historical_verification": {
     "status": "passed",
