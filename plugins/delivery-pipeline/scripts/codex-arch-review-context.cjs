@@ -104,6 +104,7 @@ function codexResultText(dispatch) {
 
 const preparedOptions = new WeakMap();
 const installedLaunches = new WeakMap();
+const installedFileInputs = new WeakMap();
 const INPUT_MAX_BYTES = 1024 * 1024;
 const FILE_LIMITS = Object.freeze({ material: 16 * 1024 * 1024, manifest: 512 * 1024,
   relay: 64 * 1024, chunk: 256 * 1024, assets: 2000, decisions: 1000, reads: 2064 });
@@ -204,19 +205,39 @@ function outsideWriter(destination, writer) {
     fail('host input storage must be outside the entire writer tree');
 }
 
+function integrationOutput(scope, role) {
+  if (role !== 'integrator') return null;
+  if (!Number.isSafeInteger(Number(scope.phase)) || Number(scope.phase) < 1) fail('integrator phase is invalid');
+  const worktree = fs.realpathSync(scope.worktree);
+  const root = path.join(worktree, '.planning/phases');
+  if (!fs.existsSync(root)) return null;
+  if (fs.realpathSync(root) !== root) fail('integrator phase root is not canonical');
+  const names = fs.readdirSync(root).filter(name => /^\d+-/.test(name)
+    && Number(name.split('-')[0]) === Number(scope.phase));
+  if (!names.length) return null;
+  if (names.length !== 1) fail('integrator phase directory is ambiguous');
+  const directory = path.join(root, names[0]);
+  if (!fs.lstatSync(directory).isDirectory() || fs.realpathSync(directory) !== directory)
+    fail('integrator phase directory is not canonical');
+  return { worktree, role, phase: Number(scope.phase),
+    path: path.relative(worktree, path.join(directory, 'INTEGRATION.md')).split(path.sep).join('/') };
+}
+
 function fileSnapshot(scope, options) {
   const worktree = fs.realpathSync(scope.worktree);
   const common = fs.realpathSync(git(options, worktree, ['rev-parse', '--path-format=absolute', '--git-common-dir']));
   const head = git(options, worktree, ['rev-parse', 'HEAD']);
+  const output = integrationOutput(scope, options.role);
   const config = path.join(worktree, '.planning/config.json');
   const graph = path.resolve(options.graphDir || path.join(worktree, '.planning/graph'));
   const graphPins = ['tickets.json', 'delivery-state.json'].filter(name => fs.existsSync(path.join(graph, name)))
     .map(name => ({ path: path.join(graph, name), sha256: digest(boundedBytes(fs, path.join(graph, name), 8 * 1024 * 1024)) }));
   return { worktree, repository: common, common, head, head_tree: git(options, worktree, ['rev-parse', 'HEAD^{tree}']),
+    ...(output ? { integration_output: output } : {}),
     graph: graphPins, config_sha256: fs.existsSync(config) ? digest(boundedBytes(fs, config, FILE_LIMITS.manifest)) : null,
     policy_hash: require('./model-policy.cjs').POLICY_HASH,
     live_inputs_sha256: digest(JSON.stringify(statusIgnoringScratch(worktree, { untracked: 'all', forJudge: false }).entries
-      .filter(entry => !entry.path.startsWith('.planning/graph/'))
+      .filter(entry => !entry.path.startsWith('.planning/graph/') && entry.path !== output?.path)
       .map(entry => ({ ...entry, sha256: fs.existsSync(path.join(worktree, entry.path))
         ? digest(boundedBytes(fs, path.join(worktree, entry.path), FILE_LIMITS.material)) : null })))),
     sources: ['codex-arch-review-context.cjs', 'codex-delivery-host.cjs', 'codex-runtime-host.cjs', 'development-artifacts.cjs'].map(name => {
@@ -352,9 +373,9 @@ function verifyFileInput(value, options = {}) {
   });
   reads += Math.ceil(raw.length / bundle.chunk_bytes);
   if (bytes !== bundle.total_bytes || reads > FILE_LIMITS.reads) fail('full input byte accounting differs');
-  const scope = privateOptions.scope || { worktree: manifest.snapshot.worktree };
+  const scope = privateOptions.scope || { worktree: manifest.snapshot.worktree, phase: manifest.phase };
   if (options.historical !== true) {
-    const current = fileSnapshot(scope, { ...privateOptions, graphDir: manifest.snapshot.graph?.[0] ? path.dirname(manifest.snapshot.graph[0].path) : privateOptions.graphDir });
+    const current = fileSnapshot(scope, { ...privateOptions, role: manifest.role, graphDir: manifest.snapshot.graph?.[0] ? path.dirname(manifest.snapshot.graph[0].path) : privateOptions.graphDir });
     if (JSON.stringify(canonical(current)) !== JSON.stringify(canonical(manifest.snapshot))) fail('current source or policy changed', 'STALE_CONTEXT');
   }
   for (const pin of options.historical === true ? [] : manifest.binding?.installed_files || []) {
@@ -870,12 +891,20 @@ function admitInstalledLaunch(value, options) {
   if (privateOptions.fileInput) {
     verifyFileInput(privateOptions.fileInput);
     const previous = privateOptions.fileInput;
-    const next = prepareFileInput(privateOptions.fileInput && { worktree: value.prepared.canonical.worktree,
+    const binding = { ...previous.manifest.binding, agent_path: path.join(agentRoot, agent.path),
+      agent_file: agent.path, agent_sha256: agent.sha256, installed_files: files,
+      capabilities_sha256: digest(JSON.stringify(options.capabilities)) };
+    const variants = installedFileInputs.get(value) || new Map();
+    const variantKey = digest(JSON.stringify(canonical({ binding, instructionBytes })));
+    const cached = variants.get(variantKey);
+    if (cached) verifyFileInput(cached);
+    const next = cached || prepareFileInput(privateOptions.fileInput && { worktree: value.prepared.canonical.worktree,
       ticket: value.prepared.ticket, phase: value.prepared.phaseNumber, run_id: previous.manifest.run_id },
       verifyFileInput(previous).material, { ...fileInputOptions.get(previous),
         generatedInstructionBytes: instructionBytes,
-        binding: { ...previous.manifest.binding, agent_path: path.join(agentRoot, agent.path),
-          agent_file: agent.path, agent_sha256: agent.sha256, installed_files: files } });
+        binding });
+    variants.set(variantKey, next);
+    installedFileInputs.set(value, variants);
     preparedOptions.set(value, { ...privateOptions, fileInput: next });
   }
   const fileInput = preparedOptions.get(value).fileInput;
