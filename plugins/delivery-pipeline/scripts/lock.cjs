@@ -83,30 +83,49 @@ function ownerRecord(lockPath) {
   let raw = null;
   let fd;
   let observed = false;
+  let directory;
+  const retry = () => ({ raw: null, owner: null, retryable: true });
+  const directoryUnchanged = () => {
+    const current = fs.lstatSync(lockPath);
+    return current.isDirectory() && current.dev === directory.dev && current.ino === directory.ino;
+  };
   try {
+    directory = fs.lstatSync(lockPath);
+    if (!directory.isDirectory())
+      throw Object.assign(new Error('lock path must be a directory'), { code: 'LOCK_DIRECTORY_ALIAS' });
     const before = fs.lstatSync(ownerFile(lockPath));
     observed = true;
     const refuseAlias = stat => {
       if (!stat.isFile() || stat.nlink > 1)
         throw Object.assign(new Error('lock owner must be the opened regular file'), { code: 'LOCK_OWNER_ALIAS' });
     };
-    const retry = () => ({ raw: null, owner: null, retryable: true });
+    if (!directoryUnchanged()) return retry();
     refuseAlias(before);
     fd = fs.openSync(ownerFile(lockPath), fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
     const stat = fs.fstatSync(fd), entry = fs.lstatSync(ownerFile(lockPath));
+    if (!directoryUnchanged()) return retry();
     refuseAlias(stat);
     refuseAlias(entry);
     if (stat.nlink === 0 || before.dev !== stat.dev || before.ino !== stat.ino
         || stat.dev !== entry.dev || stat.ino !== entry.ino) return retry();
     raw = fs.readFileSync(fd, 'utf8');
     const after = fs.fstatSync(fd), current = fs.lstatSync(ownerFile(lockPath));
+    if (!directoryUnchanged()) return retry();
     refuseAlias(after);
     refuseAlias(current);
     if (after.nlink === 0 || ['dev', 'ino', 'size', 'mtimeMs', 'ctimeMs'].some(key => stat[key] !== after[key])
         || current.dev !== stat.dev || current.ino !== stat.ino)
       return retry();
   } catch (error) {
-    if (error.code === 'ENOENT') return { raw: null, owner: null, retryable: observed };
+    if (error.code === 'ENOENT') {
+      if (!directory || observed) return retry();
+      try {
+        return { raw: null, owner: null, retryable: !directoryUnchanged() };
+      } catch (missing) {
+        if (missing.code === 'ENOENT') return retry();
+        throw missing;
+      }
+    }
     throw error;
   } finally { if (fd !== undefined) fs.closeSync(fd); }
   try { return { raw, owner: JSON.parse(raw) }; } catch { return { raw, owner: null }; }
