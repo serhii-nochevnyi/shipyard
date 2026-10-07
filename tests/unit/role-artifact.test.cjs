@@ -1081,4 +1081,172 @@ test('lost catalogue owner before rollback leaves successor-owned archive files 
   }
 });
 
+function phaseScopeFixture({ second = false, empty = false } = {}) {
+  const value = judgmentFixture('T-47-01');
+  value.originalReceiptStore = path.join(value.root, 'receipts');
+  value.root = fs.realpathSync(value.root);
+  const rows = [];
+  const retain = item => {
+    sealArchReview(item, archReviewResult(item, { verdict: 'conform', blocking_count: 0 }));
+    rows.push({ worktree: fs.realpathSync(item.root), ticket: item.ticket,
+      dispatch_id: item.dispatch.receipt.dispatch_id, receipt: item.dispatch.receipt,
+      receipt_store: item.originalReceiptStore || path.join(item.root, 'receipts'), pins: roleArtifact.authenticatedArchivePins(item.root) });
+  };
+  if (!empty) retain(value);
+  if (second) {
+    value.second = value.root + '-second';
+    git(value.root, ['worktree', 'add', '--detach', value.second, 'HEAD']);
+    const recorder = createDurableRecorder(path.join(value.second, 'receipts'));
+    const boundary = createDispatchBoundary({ adapters: { claude: { launch: judgmentReceipt } }, recorder });
+    const dispatch = boundary.dispatch({ runtime: 'claude', role: 'arch-review', signals: {} }, { ticket: 'T-47-02' });
+    retain({ root: value.second, ticket: 'T-47-02', recorder, dispatch });
+  }
+  const graphDir = path.join(value.root, '.planning/graph');
+  fs.mkdirSync(graphDir, { recursive: true });
+  const tickets = Object.fromEntries((second ? ['T-47-01', 'T-47-02'] : ['T-47-01']).map(id => [id,
+    { phase: '47', epic: 'epic/47-scope', plan: '.planning/phases/47-scope/' + id + '-PLAN.md' }]));
+  fs.writeFileSync(path.join(graphDir, 'tickets.json'), JSON.stringify({ tickets }));
+  fs.writeFileSync(path.join(graphDir, 'delivery-state.json'), '{}');
+  git(value.root, ['switch', '-c', 'epic/47-scope']);
+  git(value.root, ['add', '.planning']); git(value.root, ['commit', '-m', 'fixture: current phase graph']);
+  const binding = require('../../plugins/delivery-pipeline/scripts/architecture-target.cjs').phaseBinding({
+    graph: { tickets }, state: {}, phase: 47,
+    repository: git(value.root, ['rev-parse', '--path-format=absolute', '--git-common-dir']),
+    branch: 'epic/47-scope', pr: 404, head: git(value.root, ['rev-parse', 'HEAD']), base: git(value.root, ['rev-parse', 'main']) });
+  const inventoryPath = path.join(value.root, 'retained-inventory.json');
+  fs.writeFileSync(inventoryPath, JSON.stringify({ rows }), { mode: 0o600 });
+  const input = { worktreePath: value.root, graphDir, binding, inventoryPath,
+    expectedInventoryDigest: require('node:crypto').createHash('sha256').update(fs.readFileSync(inventoryPath)).digest('hex') };
+  const roster = roleArtifact.registerPhaseArchiveRoster(input);
+  return { ...value, input, rows, roster,
+    select: extra => roleArtifact.selectPhaseArchives(value.root, binding, { graphDir, ...extra }) };
+}
+
+function cleanPhaseScope(value) {
+  if (value.second) fs.rmSync(value.second, { recursive: true, force: true });
+  clean(value);
+}
+
+test('phase-local archive scope: two original current tickets and older source receipts remain complete', () => {
+  const value = phaseScopeFixture({ second: true });
+  try {
+    const selected = value.select();
+    assert.equal(selected.evidence.length, 2);
+    for (const row of selected.evidence) {
+      assert.equal(row.files.length, 3);
+      const manifest = JSON.parse(row.files.find(pin => pin.path.endsWith(roleArtifact.MANIFEST_NAME)).content);
+      assert.notEqual(manifest.head, value.input.binding.subject.split(';head=')[1].split(';')[0]);
+      assert.deepEqual(row.receipt, value.rows.find(original => original.dispatch_id === row.dispatch_id).receipt);
+    }
+    assert.deepEqual(roleArtifact.readPhaseArchiveRoster(value.input), value.roster);
+    assert.deepEqual(roleArtifact.registerPhaseArchiveRoster(value.input), value.roster);
+    assert.throws(() => roleArtifact.selectPhaseArchives(value.root, value.input.binding,
+      { graphDir: value.input.graphDir, phaseArchiveSelection: { ...selected.selection, records: [] } }), /frozen/);
+    const foreign = path.join(value.root, roleArtifact.ARTIFACT_ARCHIVE_DIR, 'foreign');
+    fs.mkdirSync(foreign); fs.writeFileSync(path.join(foreign, roleArtifact.MANIFEST_NAME), JSON.stringify({ ticket: 'T-38-01' }));
+    fs.writeFileSync(path.join(foreign, 'findings.json'), 'changed foreign findings');
+    assert.equal(roleArtifact.phaseArchitectureEvidenceDigest(value.select().evidence), roleArtifact.phaseArchitectureEvidenceDigest(selected.evidence));
+    assert.throws(() => roleArtifact.authenticatedArchivePins(value.root), /membership/);
+  } finally { cleanPhaseScope(value); }
+});
+
+function mutateFixtureCatalogue(value, mutate) {
+  const directory = roleArtifact.archiveAuthorityDirectory(value.root);
+  const file = path.join(directory, 'catalogue.json');
+  const envelope = JSON.parse(fs.readFileSync(file)); mutate(envelope.payload);
+  envelope.mac = require('node:crypto').createHmac('sha256', fs.readFileSync(path.join(directory, 'hmac.key')))
+    .update(stableTestValue(envelope.payload)).digest('hex');
+  fs.writeFileSync(file, JSON.stringify(envelope));
+}
+
+function stableTestValue(value) {
+  const normalize = value => Array.isArray(value) ? value.map(normalize)
+    : value !== null && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort().map(key => [key, normalize(value[key])])) : value;
+  return JSON.stringify(normalize(value));
+}
+
+for (const registered of [false, true])
+for (const [name, mutate] of [
+  ['missing selected manifest', value => fs.unlinkSync(path.join(value.root, value.rows[0].pins.find(pin => pin.path.endsWith(roleArtifact.MANIFEST_NAME)).path))],
+  ['missing selected evidence', value => fs.unlinkSync(path.join(value.root, value.rows[0].pins.find(pin => pin.path.endsWith('.md')).path))],
+  ['missing selected findings', value => fs.unlinkSync(path.join(value.root, value.rows[0].pins.find(pin => pin.path.endsWith('/findings.json')).path))],
+  ['removed entire selected family', value => fs.rmSync(path.dirname(path.join(value.root, value.rows[0].pins[0].path)), { recursive: true })],
+  ['changed selected bytes', value => fs.appendFileSync(path.join(value.root, value.rows[0].pins[0].path), 'changed')],
+  ['changed selected mode', value => fs.chmodSync(path.join(value.root, value.rows[0].pins[0].path), 0o644)],
+  ['extra selected member', value => fs.writeFileSync(path.join(path.dirname(path.join(value.root, value.rows[0].pins[0].path)), 'extra'), 'extra')],
+  ['nonregular selected member', value => fs.symlinkSync('missing', path.join(path.dirname(path.join(value.root, value.rows[0].pins[0].path)), 'extra'))],
+  ['removed protected selected record', value => mutateFixtureCatalogue(value, payload => { delete payload.records[value.rows[0].dispatch_id]; })],
+  ['changed protected original receipt', value => mutateFixtureCatalogue(value, payload => { payload.records[value.rows[0].dispatch_id].receipt.ticket = 'T-38-forged'; })],
+  ['changed protected original pin', value => mutateFixtureCatalogue(value, payload => { payload.records[value.rows[0].dispatch_id].pins[0].sha256 = '0'.repeat(64); })],
+  ['missing selected catalogue', value => fs.unlinkSync(path.join(roleArtifact.archiveAuthorityDirectory(value.root), 'catalogue.json'))],
+  ['missing protected roster', value => fs.unlinkSync(value.roster.record_path)],
+  ['tampered protected roster', value => fs.appendFileSync(value.roster.record_path, 'changed')],
+  ['missing original recorder record', value => fs.rmSync(path.join(value.root, 'receipts'), { recursive: true })],
+  ['relabelled manifest and removed authority before discovery', value => {
+    const manifest = path.join(value.root, value.rows[0].pins.find(pin => pin.path.endsWith(roleArtifact.MANIFEST_NAME)).path);
+    fs.writeFileSync(manifest, JSON.stringify({ ticket: 'T-38-01', boundary_subject: 'T-38-01' }));
+    fs.unlinkSync(path.join(roleArtifact.archiveAuthorityDirectory(value.root), 'catalogue.json'));
+  }],
+  ['forged current family', value => {
+    const family = path.join(value.root, roleArtifact.ARTIFACT_ARCHIVE_DIR, 'forged'); fs.mkdirSync(family);
+    fs.writeFileSync(path.join(family, roleArtifact.MANIFEST_NAME), JSON.stringify({ ticket: value.ticket }));
+  }],
+  ['changed actual membership', value => {
+    const file = path.join(value.input.graphDir, 'tickets.json'); const graph = JSON.parse(fs.readFileSync(file));
+    graph.tickets['T-47-extra'] = { ...graph.tickets[value.ticket] }; fs.writeFileSync(file, JSON.stringify(graph));
+  }],
+]) test('phase-local archive scope: ' + name + ' refuses against independent retained membership in ' + (registered ? 'another registered worktree' : 'review worktree'), () => {
+  const value = phaseScopeFixture({ second: registered });
+  try {
+    const frozen = value.select().selection;
+    const row = value.rows[registered ? 1 : 0];
+    mutate({ ...value, root: row.worktree, ticket: row.ticket, rows: [row] });
+    assert.throws(() => value.select({ phaseArchiveSelection: frozen }));
+  } finally { cleanPhaseScope(value); }
+});
+
+test('phase-local archive scope: authenticated empty history differs from missing history', () => {
+  const value = phaseScopeFixture({ empty: true });
+  try {
+    assert.deepEqual(value.select().evidence, []);
+    fs.unlinkSync(value.roster.record_path);
+    assert.throws(value.select, /roster is missing/);
+  } finally { cleanPhaseScope(value); }
+});
+
+test('phase-local archive scope: retained inventory cannot invent receipts, pins or roster replacements', () => {
+  const value = phaseScopeFixture();
+  try {
+    for (const mutate of [rows => { rows[0].receipt.ticket = 'T-38-forged'; },
+      rows => { rows[0].pins.pop(); }, rows => { rows[0].ticket = 'T-38-forged'; },
+      rows => { rows.length = 0; }]) {
+      const rows = structuredClone(value.rows); mutate(rows);
+      fs.writeFileSync(value.input.inventoryPath, JSON.stringify({ rows }));
+      const expectedInventoryDigest = require('node:crypto').createHash('sha256').update(fs.readFileSync(value.input.inventoryPath)).digest('hex');
+      assert.throws(() => roleArtifact.registerPhaseArchiveRoster({ ...value.input, expectedInventoryDigest }));
+      assert.deepEqual(value.select().selection.records, value.roster.records);
+    }
+    assert.throws(() => roleArtifact.registerPhaseArchiveRoster({ ...value.input, expectedInventoryDigest: '0'.repeat(64) }), /inventory differs/);
+  } finally { cleanPhaseScope(value); }
+});
+
+test('phase-local archive scope: independently authenticated original record with conflicting receipt ticket refuses', () => {
+  const value = phaseScopeFixture();
+  try {
+    const recorder = createDurableRecorder(path.join(value.root, 'conflicting-receipts'));
+    const boundary = createDispatchBoundary({ adapters: { claude: { launch(resolution) {
+      return { ...judgmentReceipt(resolution), ticket: 'T-38-conflicting' };
+    } } }, recorder });
+    const dispatch = boundary.dispatch({ runtime: 'claude', role: 'arch-review', signals: {} }, { ticket: value.ticket });
+    const original = recorder.getVerifiedRecord(dispatch.receipt.dispatch_id);
+    assert.equal(original.ticket, value.ticket);
+    assert.equal(original.receipt.ticket, 'T-38-conflicting');
+    const rows = [{ ...value.rows[0], dispatch_id: dispatch.receipt.dispatch_id,
+      receipt: original.receipt, receipt_store: path.join(value.root, 'conflicting-receipts') }];
+    fs.writeFileSync(value.input.inventoryPath, JSON.stringify({ rows }));
+    const expectedInventoryDigest = require('node:crypto').createHash('sha256').update(fs.readFileSync(value.input.inventoryPath)).digest('hex');
+    assert.throws(() => roleArtifact.registerPhaseArchiveRoster({ ...value.input, expectedInventoryDigest }), /ticket identities conflict/);
+  } finally { cleanPhaseScope(value); }
+});
+
 done();
