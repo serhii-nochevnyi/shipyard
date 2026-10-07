@@ -473,8 +473,6 @@ function validateParents(source, state, getPullRequest, ancestor, final = false)
 }
 
 function validateDeliveryState(source, ancestor, final = false) {
-  // The signed whole-board digest records generation-time history. Live board
-  // progress is authenticated by the individually pinned parent rows below.
   const state = JSON.parse(read(path.join(source.repository, '.planning/graph/delivery-state.json')));
   validateParents(source, state, null, ancestor, final);
 }
