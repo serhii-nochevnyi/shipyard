@@ -1304,6 +1304,32 @@ test('phase-local archive scope: missing producer without current dispatch refus
   } finally { cleanPhaseScope(value); }
 });
 
+for (const registered of [false, true])
+for (const target of ['catalogue.json', 'hmac.key'])
+test('phase-local archive scope: changed ' + target + ' during selection refuses in ' +
+    (registered ? 'another registered worktree' : 'review worktree'), () => {
+  const value = phaseScopeFixture({ second: registered });
+  const previousReaddir = fs.readdirSync;
+  const row = value.rows[registered ? 1 : 0];
+  const family = path.dirname(path.join(row.worktree, row.pins[0].path));
+  let changed = false;
+  try {
+    fs.readdirSync = function(file, ...args) {
+      const names = previousReaddir.call(this, file, ...args);
+      if (file === family && !changed) {
+        changed = true;
+        const authority = path.join(roleArtifact.archiveAuthorityDirectory(row.worktree), target);
+        if (target === 'catalogue.json') fs.appendFileSync(authority, ' ');
+        else fs.chmodSync(authority, 0o400);
+      }
+      return names;
+    };
+    assert.throws(() => value.select(), { code: 'ARCHIVE_AUTHORITY_INVALID',
+      message: /archive authority changed during phase selection/ });
+    assert.equal(changed, true);
+  } finally { fs.readdirSync = previousReaddir; cleanPhaseScope(value); }
+});
+
 test('phase-local archive scope: relevant 1000 boundary is independent of foreign volume and resets per worktree', () => {
   const value = phaseScopeFixture({ second: true });
   const previousReaddir = fs.readdirSync;
@@ -1332,18 +1358,30 @@ test('phase-local archive scope: relevant 1000 boundary is independent of foreig
         ...aggregateNames.slice(0, overflow && population === populations[0] ? 1001 : 1000),
         ...(malformedOverflow && population === populations[0] ? [missingProducer] : [])];
     };
-    const selected = value.select();
+    const previousOpen = fs.openSync;
+    const catalogues = new Set(value.rows.map(row => path.join(roleArtifact.archiveAuthorityDirectory(row.worktree), 'catalogue.json')));
+    let catalogueReads = 0;
+    const measuredSelect = options => {
+      catalogueReads = 0;
+      fs.openSync = function(file, ...args) {
+        if (catalogues.has(file)) catalogueReads++;
+        return previousOpen.call(this, file, ...args);
+      };
+      try { return value.select(options); }
+      finally { fs.openSync = previousOpen; assert.equal(catalogueReads, 2); }
+    };
+    const selected = measuredSelect();
     assert.equal(selected.candidates.length, 2000);
     assert.equal(new Set(selected.candidates.map(candidate => candidate.dispatch_id)).size, 2000);
     assert.deepEqual(selected.selection.records, value.roster.records);
     malformedOverflow = true;
-    assert.throws(() => value.select(), { code: 'ARCHIVE_AUTHORITY_INVALID',
+    assert.throws(() => measuredSelect(), { code: 'ARCHIVE_AUTHORITY_INVALID',
       message: /archive identity hints exceed their bound/ });
     malformedOverflow = false;
     overflow = true;
-    assert.throws(() => value.select(), { code: 'ARCHIVE_AUTHORITY_INVALID',
+    assert.throws(() => measuredSelect(), { code: 'ARCHIVE_AUTHORITY_INVALID',
       message: /archive identity hints exceed their bound/ });
-    assert.equal(value.select({ currentDispatchId: populations[0].hints[1000].id }).candidates.length, 2000);
+    assert.equal(measuredSelect({ currentDispatchId: populations[0].hints[1000].id }).candidates.length, 2000);
   } finally { fs.readdirSync = previousReaddir; cleanPhaseScope(value); }
 });
 
