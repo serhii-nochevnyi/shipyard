@@ -1,3 +1,53 @@
+# T-47-21 current ADR-027 successor
+
+The operative current branch is `ADR-027-current-ticket-evidence`. All T19 prose below is retained history, superseded for current inspection. Current inspection refuses missing, unsigned, stale, foreign or changed authority; source refusal is blocking and cannot become HOLD.
+
+The coordinator built the immutable successor once after actual T20 merge `c9bd8ccae0c688e034cf9f94df4ad0cfc4c909b7`, tree `81ba5853ced3f8d07cd21b7d27d0fa00e7f77732`. Executor worktree is `/Volumes/KINGSTON/worktrees/phase47-authenticated-delivery/T-47-21`; common repository is `/Volumes/KINGSTON/claude-shipyard/.git`. Executor controller/run/writer lease are not supplied and remain unknown. Current duty is an uncommitted eleven-owner handback to the dispatched coordinator; no new delivery loop is started.
+
+| Current identity | Path / measurement |
+| --- | --- |
+| Signed handoff | `/Users/serhii/.local/state/shipyard/codex-decompose/6cba328f5f0de395b373ad6c77a164feb771363c4e6b7a96888b7075d52da7aa/phase47-final-generation-adr027-current-ticket-evidence/generation.json`; SHA256 `a56da0e28c524cbc55821e10f5791404229f85442edc4424e808b3768b870f15` |
+| Signed source approval | `c9bd8ccae0c688e034cf9f94df4ad0cfc4c909b7`; `/Users/serhii/.local/state/shipyard/codex-decompose/6cba328f5f0de395b373ad6c77a164feb771363c4e6b7a96888b7075d52da7aa/phase47-final-generation-adr027-current-ticket-evidence/source-approval.json`; SHA256 `a7e71a2f9f2a53d3a828adb46a19544e40e98da50f8e5169b3c9f5d113d308fc` |
+| Selection | `/Volumes/KINGSTON/claude-shipyard/.git/shipyard-phase47-final-publication/INV-014-runtime-delivery-correctness/ADR-027-current-ticket-evidence/selection.json`; SHA256 `78d96a5b9a001170e4e3e02050025acb8cc569ea4605ee3ca7b98cb4d3fe9b59` |
+| Binding | `/Volumes/KINGSTON/claude-shipyard/.git/shipyard-phase47-final-publication/INV-014-runtime-delivery-correctness/ADR-027-current-ticket-evidence/b0c89350a4d253d539a4cb39abf299e422807f5ce11be575c688d5dec47842bf/binding.json`; SHA256 `fe4054ea3b5703be85a57acf3930535593d7cff0ffbe3e9bd7a31981efae4822` |
+| Candidate | `/Volumes/KINGSTON/claude-shipyard/.git/shipyard-phase47-final-publication/INV-014-runtime-delivery-correctness/ADR-027-current-ticket-evidence/b0c89350a4d253d539a4cb39abf299e422807f5ce11be575c688d5dec47842bf/candidate`; inventory SHA256 `01b5ada28446a2e03aee831767d08e2b6fb2209576bb61298dfa38d61d929e23` |
+| Generation | `b0c89350a4d253d539a4cb39abf299e422807f5ce11be575c688d5dec47842bf` |
+| Package / content version | `fe3f1b1bb516cc53df5e02bfce457dd7c926dc990685434e75b5dcf34b310f8b` / `0.71.0+codex.0010d0b2f631cd73`; 161 files |
+| Policy | `3978b08721ef8f2381aa1f31355c9fef1dafd4058a2093b4a5f06ee90cd44570` |
+| Reviewed source39 configuration | `2eb2a0475127916c4c120d7616d13df1393d116c07b2a5f259cd6453234c65f9` |
+| Coordinator43 configuration | `63a18625794b2772663567c95401ad91358daf13974f9c18117e0ce237256780` |
+| Frozen pre-T21 ledger | `/Users/serhii/.local/state/shipyard/codex-decompose/6cba328f5f0de395b373ad6c77a164feb771363c4e6b7a96888b7075d52da7aa/phase47-final-generation-adr027-current-ticket-evidence/prior-final-runtime-acceptance.json`; SHA256 `cdfc741be2c9e3dea66818ac2a1c86272c7f3ac19605024c9816fa19a518092c` |
+| Frozen pre-T21 handoff | `/Users/serhii/.local/state/shipyard/codex-decompose/6cba328f5f0de395b373ad6c77a164feb771363c4e6b7a96888b7075d52da7aa/phase47-final-generation-adr027-current-ticket-evidence/prior-final-runtime-handoff.md`; SHA256 `8384d2a06b12b1a881a6abf94580e9edf7eec94434dc881e4c5d053fb29ef9a1` |
+
+The five mechanical publication outputs are three mirrors (`role-artifact.cjs`, `codex-arch-review-context.cjs`, `claude-role-host.cjs`) and `.codex-plugin/plugin.json` / `package-build.json`. They are copied from the same immutable supported stage with recorded publication modes. No builder, signer, stage repair, global installation, digest-index edit or config edit belongs to this executor. Full package inventory retains `architecture-target.cjs`; original sixteen native owners/twenty outputs and T19 nine-output correction remain distinct historical inventories.
+
+The signed handoff preserves original T05 and actual T19 selections, signatures and source bindings. Native original planner index `6fd5a44ad6ee4d47a33c84317dbb0b2774165814eae40fed9a007a3fcfbb3992` remains historical; explicit operator amendments do not relabel its original PLAN bytes. Current independent checker `dispatch-phase47-seven-owner-serialized-checker-b1ca8c93-a611-4183-a4df-d303112b7385` binds actual PLAN20 `d4f25b6a0668eb2848b73dc0738f6c166883a232aa607142b5b9d066537bc9c6` and PLAN21 `e0477ce6956720fd9697474731dea417626e7128cd84868c91b663d9a17a2f66`. Its retained native child transcript `/Users/serhii/.local/state/shipyard/codex-decompose/6cba328f5f0de395b373ad6c77a164feb771363c4e6b7a96888b7075d52da7aa/phase47-final-generation-adr027-current-ticket-evidence/current-checker-native-child.jsonl` has SHA256 `2f303a62351532a8e3984042a13cb0487c4223925163359f2817eda67eecbf27`. The original task relay file is absent; its signed binding and original first-call hash/output in the retained transcript are inspected without reconstructing it.
+
+Original failed T20 executor `/tmp/phase47-20-archive-scope-result.json` / `5d8789eed50f9c794218405281038f570b4e4162f51993aba2dd48707ccec3d2` remains `verification_failed`. Source ci-fix `/tmp/phase47-20-aggregate-caller-repair-result.json` / `aeeab38cb08374a313f19432a299ec3ef5af0a82a0c6a347f28173e6234f93be` and actual PR439 fixture ci-fix `/tmp/phase47-439-ci-fixture-fix-result.json` / `27a05a26d0aabc8b684fc9cdf5929e7e2fd33e6295ffe79705d6b0e70f9ce5f8` are separate genuine results. Final supported T20 four-command envelope `/Users/serhii/.local/state/shipyard/codex/finalization/a6723cb3f1aa3e9687e201328c112897c038bba1d262791977fe6ad587f2fde4/verification/6f144e5f4b18bd666b29bc78ae6a03c69bb60afb0ae7f6de1c52202fb6f9b124.json` binds digest `6f144e5f4b18bd666b29bc78ae6a03c69bb60afb0ae7f6de1c52202fb6f9b124` and passed outcomes to the actual source tree; it does not change earlier failures.
+
+Original twenty native obligations remain HOLD, `accepted=false`, `native_launches=0`; accounting remains unknown/inconclusive. Package equality and trusted-coordinator approval (`native_receipt:false`) do not prove installation or native completion. All earlier checker/CI/HOST denials, architecture preflight refusals and unsealed native results remain history.
+
+Sandbox checks are candidate, complete, ledger smoke and runtime-digest `--check`, sequentially. Complete covers all six existing publication groups and stage contracts on the same tree. The three exact HOST/600000 ms assignments stay pending trusted coordinator verification; they are never launched in this sandbox. The acceptance suite's protected-authority EPERM cause remains unknown. Actual environment refusals must be retained separately from assertions and passed checks.
+
+After actual T21 merge the coordinator owes complete current-phase architecture/integration at the final PR into main, live head/base and membership including T20/T21. Ticket-to-epic architecture is skipped-by-target. The previous nineteen-ticket integrator's passed raw report was 983049 bytes and sealing refused; it is not a sealed final gate. Preserve the raw report and refusal in coordinator evidence. A fresh complete integrator report must be at most 98304 UTF-8 bytes with all findings/commands/results/limitations and concise path/digest references; no limit change or truncation is authorized. A moved head/base re-owes review. Next criterion: trusted verification/signing/finalization of this actual uncommitted candidate, then actual merge and final aggregate native judgments.
+
+Retained unaccepted final history (measured during T21; these references do not establish a sealed current gate):
+
+| Evidence | Bytes | SHA256 |
+| --- | --- | --- |
+| `/Volumes/KINGSTON/worktrees/phase47-final-integration-current/claude-shipyard/.planning/phases/47-complete-deferred-decomposition-wait-attribution/INTEGRATION.md` | 983049 | `a82f09ca1397b5f1578d2f3527fc610e331bd76d81d287184a346a51ad1f85ce` |
+| `/private/tmp/phase47-final-integration-20261007/integrator-result.json` | 11317 | `9d3eb371e013eac27d9cdcdfc6eee6709e6744a6a61674757abc7fc0d336b4bd` |
+| `/private/tmp/phase47-final-integration-20261007/integrator-native-result.json` | 7304 | `fd7abf3623ad94eebb795048f12598602e65e346995b44376a60e15416a6d48f` |
+| `/private/tmp/phase47-final-integration-20261007/architecture-stderr.log` | 75 | `9e380681efd18ec9938321829625587362addc8f80b8a1e7a8030c9efad12a22` |
+| `/private/tmp/phase47-final-integration-20261007/architecture-canonical-stderr.log` | 152 | `a577729893df284c4d86e3be968074cc7d5ae937a433ed7da74bca4ab99ce43a` |
+| `/private/tmp/phase47-final-integration-20261007/architecture-approved-source-stderr.log` | 243 | `28581e04037685557cdca31a0cf6997df5bf9464bd6d75017df65554fde57d73` |
+
+The original integrator sealing-refusal transcript path/digest was not supplied; it remains an explicit coordinator retention obligation. The 983049-byte raw report and its native passed result remain distinct from a sealed final verdict.
+
+T21 local sandbox handback: candidate and complete exit 0 with 139 fixture cases / zero private builds; complete verifies all 161 outputs and six groups, stage contracts 7 launch / 156 architecture / 2 detached plus two load orders. Ledger smoke exits 0 with `evidence_check=passed`, `status=HOLD`, `accepted=false`, `native_launches=0`, twenty open obligations. Runtime digest check exits 0. Original logs and SHA256 are recorded in the current ledger under `current_verification.sandbox_results`; these local records are not trusted HOST/native receipts. The three HOST assignments remain pending and were not attempted in this sandbox.
+
+---
+
 # T-47-19 current final publication
 
 Current inspection requires `ADR-026-source-update-1`, handback SHA-256
