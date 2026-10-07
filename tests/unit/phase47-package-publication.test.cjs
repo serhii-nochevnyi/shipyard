@@ -7,6 +7,8 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { execFileSync, spawnSync } = require('node:child_process');
 
+const hostVerification = require('../../plugins/delivery-pipeline/scripts/host-verification.cjs');
+
 const REPOSITORY = path.resolve(__dirname, '../..');
 const HOST = '/Users/serhii/.local/state/shipyard/codex-decompose/6cba328f5f0de395b373ad6c77a164feb771363c4e6b7a96888b7075d52da7aa';
 const HANDOFF = path.join(HOST, 'phase47-current-generation-20261006/generation.json');
@@ -414,7 +416,8 @@ function authenticateFinal(common, root = REPOSITORY, historical = false) {
   const verificationEnvelope = JSON.parse(read(verificationRef.path));
   assert.equal(sha(canon(verificationEnvelope)), verificationRef.digest, 'signed verification envelope drift');
   assert.equal(verificationEnvelope.format, 'shipyard.host-authenticated.v1');
-  const verification = verificationEnvelope.payload;
+  const verification = hostVerification.readEvidence(verificationRef.path, verificationRef.digest);
+  assert(verification, 'authenticated HOST verification payload required');
   assert(verification && verification.ticket === 'T-47-18', 'authentic retained fixer verification required');
   assert.equal(verification.plan_sha256, approval.tail_plan_amendments[0].sha256);
   assert(verification.results.length && verification.results.every(row => row.outcome === 'passed'));
@@ -563,7 +566,8 @@ function authenticateSuccessor(common, root = REPOSITORY) {
   const verificationEnvelope = JSON.parse(read(verificationRef.path));
   assert.equal(sha(canon(verificationEnvelope)), verificationRef.digest, 'signed verification envelope drift');
   assert.equal(verificationEnvelope.format, 'shipyard.host-authenticated.v1');
-  const verification = verificationEnvelope.payload;
+  const verification = hostVerification.readEvidence(verificationRef.path, verificationRef.digest);
+  assert(verification, 'authenticated HOST verification payload required');
   assert.equal(verification.ticket, 'T-47-20');
   assert.equal(verification.plan_sha256, approval.tail_plan_amendments[0].sha256);
   assert.equal(verification.results.length, 4);
@@ -864,6 +868,44 @@ function privateFixtures(authenticatedSignatureFixture = false) {
   let cases = 0;
   const rejects = (name, action) => { assert.throws(action, undefined, name); cases++; };
   try {
+    const evidenceDirectory = path.join(temporary, 'host-evidence');
+    fs.mkdirSync(evidenceDirectory, { mode: 0o700 });
+    const evidencePath = path.join(evidenceDirectory, 'verification.json');
+    const keyPath = path.join(evidenceDirectory, 'hmac.key');
+    const fixtureKey = crypto.randomBytes(32);
+    fs.writeFileSync(keyPath, fixtureKey, { mode: 0o600 });
+    for (const ticket of ['T-47-18', 'T-47-20']) {
+      const payload = { schema: 'shipyard.host-verification.v1', ticket,
+        plan_sha256: sha(ticket), results: [{ outcome: 'passed' }] };
+      const envelope = { format: 'shipyard.host-authenticated.v1', payload,
+        integrity: { algorithm: 'hmac-sha256', mac: crypto.createHmac('sha256', fixtureKey)
+          .update(canon(payload)).digest('hex') } };
+      const admit = (value = envelope) => {
+        fs.writeFileSync(evidencePath, JSON.stringify(value), { mode: 0o600 });
+        const authenticated = hostVerification.readEvidence(evidencePath, sha(canon(value)));
+        assert(authenticated, 'authenticated HOST verification payload required');
+        assert.deepEqual(authenticated, payload);
+      };
+      admit(); cases++;
+      rejects(ticket + ' invalid MAC with recomputed public digest', () => admit({ ...envelope,
+        integrity: { ...envelope.integrity, mac: '0'.repeat(64) } }));
+      rejects(ticket + ' tampered payload with recomputed public digest', () => admit({ ...envelope,
+        payload: { ...payload, ticket: 'foreign' } }));
+      const malformed = { ...payload, schema: 'foreign' };
+      rejects(ticket + ' authenticated wrong schema', () => admit({ ...envelope, payload: malformed,
+        integrity: { algorithm: 'hmac-sha256', mac: crypto.createHmac('sha256', fixtureKey)
+          .update(canon(malformed)).digest('hex') } }));
+      fs.writeFileSync(keyPath, crypto.randomBytes(32));
+      rejects(ticket + ' wrong key', () => admit());
+      fs.writeFileSync(keyPath, fixtureKey);
+      fs.chmodSync(keyPath, 0o644);
+      rejects(ticket + ' public key permissions', () => admit());
+      fs.chmodSync(keyPath, 0o600);
+      fs.chmodSync(evidencePath, 0o644);
+      rejects(ticket + ' public evidence permissions', () => admit());
+      fs.chmodSync(evidencePath, 0o600);
+      admit(); cases++;
+    }
     const successorFixture = {
       purpose: 'ADR-027-current-ticket-evidence', source_head: SUCCESSOR_SOURCE,
       changed_outputs: SUCCESSOR_CORRECTIVE, corrective_allocation: { 'T-47-21': SUCCESSOR_CORRECTIVE },
