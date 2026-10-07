@@ -306,7 +306,7 @@ for (const scenario of [
       write(foreignRoot, '.shipyard-role-artifacts/foreign-history/evidence.md', 'Foreign evidence');
       write(foreignRoot, '.shipyard-role-artifacts/foreign-history/findings.json', 'Foreign findings');
       foreignPaths.push(path.join(f.root, '.shipyard-role-artifacts/foreign-history'), foreignRoot);
-      for (const root of [f.root, foreignRoot]) {
+      if (mutation === 'foreign') for (const root of [f.root, foreignRoot]) {
         for (let index = 0; index < 1001; index++) {
           const family = '.shipyard-role-artifacts/foreign-volume-' + String(index).padStart(4, '0');
           write(root, family + '/.shipyard-role-artifact.json', JSON.stringify({

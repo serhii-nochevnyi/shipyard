@@ -1285,6 +1285,25 @@ function fixtureAggregateHint(value, row, boundary) {
   return { familyName, id, record: { dispatch_id: id, ticket: subject, receipt: dispatch.receipt, pins } };
 }
 
+for (const registered of [false, true])
+test('phase-local archive scope: missing producer without current dispatch refuses in ' +
+    (registered ? 'another registered worktree' : 'review worktree'), () => {
+  const value = phaseScopeFixture({ second: registered });
+  try {
+    const selected = value.select();
+    assert.deepEqual(selected.selection.records, value.roster.records);
+    const row = value.rows[registered ? 1 : 0];
+    const family = path.join(row.worktree, roleArtifact.ARTIFACT_ARCHIVE_DIR, 'missing-producer');
+    fs.mkdirSync(family);
+    fs.writeFileSync(path.join(family, roleArtifact.MANIFEST_NAME), JSON.stringify({
+      boundary_subject: value.input.binding.subject }));
+    for (const options of [{}, { currentDispatchId: '' }]) {
+      assert.throws(() => value.select(options), { code: 'ARCHIVE_AUTHORITY_INVALID',
+        message: /aggregate candidate lacks original protected authority/ });
+    }
+  } finally { cleanPhaseScope(value); }
+});
+
 test('phase-local archive scope: relevant 1000 boundary is independent of foreign volume and resets per worktree', () => {
   const value = phaseScopeFixture({ second: true });
   const previousReaddir = fs.readdirSync;
@@ -1299,19 +1318,28 @@ test('phase-local archive scope: relevant 1000 boundary is independent of foreig
       });
       return { directory, hints };
     });
-    let overflow = false;
+    const missingProducer = 'missing-producer';
+    fs.mkdirSync(path.join(populations[0].directory, missingProducer));
+    fs.writeFileSync(path.join(populations[0].directory, missingProducer, roleArtifact.MANIFEST_NAME),
+      JSON.stringify({ boundary_subject: value.input.binding.subject }));
+    let overflow = false, malformedOverflow = false;
     fs.readdirSync = function(file, ...args) {
       const names = previousReaddir.call(this, file, ...args);
       const population = populations.find(item => item.directory === file);
       if (!population) return names;
       const aggregateNames = population.hints.map(hint => hint.familyName);
-      return [...names.filter(name => !aggregateNames.includes(name)),
-        ...aggregateNames.slice(0, overflow && population === populations[0] ? 1001 : 1000)];
+      return [...names.filter(name => !aggregateNames.includes(name) && name !== missingProducer),
+        ...aggregateNames.slice(0, overflow && population === populations[0] ? 1001 : 1000),
+        ...(malformedOverflow && population === populations[0] ? [missingProducer] : [])];
     };
     const selected = value.select();
     assert.equal(selected.candidates.length, 2000);
     assert.equal(new Set(selected.candidates.map(candidate => candidate.dispatch_id)).size, 2000);
     assert.deepEqual(selected.selection.records, value.roster.records);
+    malformedOverflow = true;
+    assert.throws(() => value.select(), { code: 'ARCHIVE_AUTHORITY_INVALID',
+      message: /archive identity hints exceed their bound/ });
+    malformedOverflow = false;
     overflow = true;
     assert.throws(() => value.select(), { code: 'ARCHIVE_AUTHORITY_INVALID',
       message: /archive identity hints exceed their bound/ });

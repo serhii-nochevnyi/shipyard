@@ -1436,7 +1436,8 @@ function phaseArchiveHints(scope, binding, roster, currentDispatchId) {
       if (scope.identity.tickets.includes(hint.ticket) || scope.identity.tickets.includes(hint.boundary_subject))
         fail('ARCHIVE_AUTHORITY_INVALID', 'possible current family is absent from independently retained roster');
       if (hint.boundary_subject !== binding.subject) continue;
-      if (hint.producer_dispatch === currentDispatchId) continue;
+      if (typeof currentDispatchId === 'string' && currentDispatchId.trim().length > 0
+          && hint.producer_dispatch === currentDispatchId) continue;
       if (++relevantHints > 1000) fail('ARCHIVE_AUTHORITY_INVALID', 'archive identity hints exceed their bound');
       const state = authorityState(worktree), record = state.payload.records[hint.producer_dispatch];
       if (!record || record.receipt.role !== 'arch-review'
