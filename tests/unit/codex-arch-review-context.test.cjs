@@ -207,7 +207,56 @@ test('document-relative decision links are collected completely and missing auth
   } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
 });
 
-for (const productBytes of [0, 2600000]) test('fixture: public Codex host seals and consumes a complete aggregate phase architecture verdict (' + productBytes + ' product bytes)', async () => {
+function guardExcludedArchives(foreignPaths) {
+  const fs = require('node:fs');
+  const crypto = require('node:crypto');
+  const previous = { openSync: fs.openSync, readFileSync: fs.readFileSync, realpathSync: fs.realpathSync };
+  const authority = foreignPaths.map(root => crypto.createHash('sha256').update(root).digest('hex'));
+  let deniedReads = 0;
+  const check = (file, physical) => {
+    if (typeof file !== 'string') return;
+    if ((physical && foreignPaths.some(root => file === root || file.startsWith(root + '/')))
+        || authority.some(id => file.includes('/role-artifact-authority/' + id))
+        || foreignPaths.some(root => file.startsWith(root + '/') && /(?:evidence\.md|findings\.json)$/.test(file))) {
+      deniedReads++; throw new Error('Excluded foreign archive was accessed: ' + file);
+    }
+  };
+  fs.openSync = function(file, ...args) { check(file, false); return previous.openSync.call(this, file, ...args); };
+  fs.readFileSync = function(file, ...args) { check(file, false); return previous.readFileSync.call(this, file, ...args); };
+  fs.realpathSync = function(file, ...args) { check(file, true); return previous.realpathSync.call(this, file, ...args); };
+  return () => { Object.assign(fs, previous); return deniedReads; };
+}
+
+function registerAggregateRoster(f, original, graphDir, storage) {
+  const role = require('../../plugins/delivery-pipeline/scripts/role-artifact.cjs');
+  const graph = JSON.parse(fs.readFileSync(path.join(graphDir, 'tickets.json')));
+  const raw = JSON.parse(fs.readFileSync(path.join(graphDir, 'delivery-state.json')));
+  const binding = require('../../plugins/delivery-pipeline/scripts/architecture-target.cjs').phaseBinding({ graph,
+    state: raw.tickets || raw, phase: 38, repository: git(f.root, ['rev-parse', '--path-format=absolute', '--git-common-dir']),
+    branch: f.pr.headRefName, pr: f.pr.number, head: f.head, base: f.base });
+  const pins = role.authenticatedArchivePins(f.root);
+  const inventory = { rows: [{ worktree: f.root, ticket: TICKET,
+    dispatch_id: original.result.receipt.dispatch_id, receipt: original.result.receipt,
+    receipt_store: path.join(f.storage, 'receipts'), pins }] };
+  const inventoryPath = path.join(storage, 'phase-inventory.json');
+  fs.writeFileSync(inventoryPath, JSON.stringify(inventory), { mode: 0o600 });
+  return role.registerPhaseArchiveRoster({ worktreePath: f.root, binding, graphDir, inventoryPath,
+    expectedInventoryDigest: require('node:crypto').createHash('sha256').update(fs.readFileSync(inventoryPath)).digest('hex') });
+}
+
+for (const scenario of [
+  { productBytes: 0, name: 'small packet' },
+  { productBytes: 2600000, name: 'large packet' },
+  { scoped: true, mutation: 'foreign', name: 'foreign bodies preserve current evidence' },
+  { scoped: true, mutation: 'bytes', name: 'selected bytes refuse' },
+  { scoped: true, mutation: 'membership', name: 'selected membership refuses' },
+  { scoped: true, mutation: 'omission', name: 'relabelled current manifest and removed authority refuse before discovery' },
+  { scoped: true, mutation: 'family', name: 'removed current family refuses before discovery' },
+  { scoped: true, mutation: 'roster', name: 'missing protected roster refuses public aggregate preparation' },
+]) test((scenario.scoped ? 'phase-local archive scope: ' : 'fixture: ') +
+    'public Codex host seals and consumes a complete aggregate phase architecture verdict (' + scenario.name + ')', async () => {
+  const { scoped = false, productBytes = 0, mutation } = scenario;
+  let restoreForeignGuard;
   const f = fixture();
   const storage = fs.mkdtempSync(path.join(os.tmpdir(), 'phase-architecture-host-'));
   try {
@@ -239,7 +288,37 @@ for (const productBytes of [0, 2600000]) test('fixture: public Codex host seals 
     const hostModule = require('../../plugins/delivery-pipeline/scripts/codex-delivery-host.cjs');
     const parsed = hostModule.readRequestFile(requestPath);
     const options = { graphDir, refreshGit: false, getPullRequest: () => f.pr };
-    const value = contextBuilder.prepare(parsed.scope, parsed.launch, options);
+    const roster = registerAggregateRoster(f, originalTicketReview, graphDir, storage);
+    if (mutation === 'roster') {
+      fs.unlinkSync(roster.record_path);
+      assert.throws(() => contextBuilder.prepare(parsed.scope, parsed.launch, options),
+        { code: 'ARCHIVE_AUTHORITY_REQUIRED', message: /independently retained current phase roster is missing/ });
+      return;
+    }
+    const foreignPaths = [];
+    if (scoped) {
+      write(f.root, '.shipyard-role-artifacts/foreign-history/.shipyard-role-artifact.json', JSON.stringify({ ticket: 'T-37-01', boundary_subject: 'T-37-01' }));
+      write(f.root, '.shipyard-role-artifacts/foreign-history/evidence.md', 'Foreign evidence');
+      write(f.root, '.shipyard-role-artifacts/foreign-history/findings.json', 'Foreign findings');
+      const foreignRoot = path.join(fs.realpathSync(storage), 'foreign-worktree');
+      git(f.root, ['worktree', 'add', '--detach', foreignRoot, 'HEAD']);
+      write(foreignRoot, '.shipyard-role-artifacts/foreign-history/.shipyard-role-artifact.json', JSON.stringify({ ticket: 'T-37-01' }));
+      write(foreignRoot, '.shipyard-role-artifacts/foreign-history/evidence.md', 'Foreign evidence');
+      write(foreignRoot, '.shipyard-role-artifacts/foreign-history/findings.json', 'Foreign findings');
+      foreignPaths.push(path.join(f.root, '.shipyard-role-artifacts/foreign-history'), foreignRoot);
+      restoreForeignGuard = guardExcludedArchives(foreignPaths);
+    }
+    if (mutation === 'omission' || mutation === 'family') {
+      const manifestPin = roster.records[0].pins.find(pin => pin.path.endsWith('/.shipyard-role-artifact.json'));
+      if (mutation === 'omission') {
+        write(f.root, manifestPin.path, JSON.stringify({ ticket: 'T-37-01', boundary_subject: 'T-37-01' }));
+        fs.unlinkSync(path.join(require('../../plugins/delivery-pipeline/scripts/role-artifact.cjs').archiveAuthorityDirectory(f.root), 'catalogue.json'));
+      } else fs.rmSync(path.dirname(path.join(f.root, manifestPin.path)), { recursive: true });
+      assert.throws(() => contextBuilder.prepare(parsed.scope, parsed.launch, options), /selected|catalogue|archive|family|ENOENT/i);
+      return;
+    }
+    let value;
+    assert.doesNotThrow(() => { value = contextBuilder.prepare(parsed.scope, parsed.launch, options); });
     const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
     const selected = policy.resolveDispatch({ runtime: 'codex', role: 'arch-review', signals: value.launch.signals });
     const agentDir = path.join(storage, 'agents'); fs.mkdirSync(agentDir);
@@ -303,6 +382,48 @@ for (const productBytes of [0, 2600000]) test('fixture: public Codex host seals 
     const current = { worktreePath: f.root, pr: f.pr.number, head: f.head, headBranch: f.pr.headRefName,
       baseName: 'main', baseCommit: f.base, graphDir };
     assert.equal(artifacts.currentArchitectureVerdict(current).subject, request.scope.ticket);
+    if (scoped) {
+      assert.equal(value.prepared.packet.retained_evidence.length, 1);
+      assert.equal(value.prepared.packet.retained_evidence[0].files.length, 3);
+      assert.deepEqual(value.prepared.packet.retained_evidence[0].receipt, originalTicketReview.result.receipt);
+      assert.notEqual(JSON.parse(value.prepared.packet.retained_evidence[0].files.find(pin => pin.path.endsWith(artifacts.MANIFEST_NAME)).content).head, f.head);
+      const input = { worktreePath: f.root, role: 'arch-review', ticket: request.scope.ticket, pr: f.pr.number,
+        base: 'refs/remotes/origin/main', ticketSet: value.prepared.binding.ticketSet,
+        ticketSetDigest: value.prepared.binding.membership, boundaryStore: path.join(storage, 'receipts'),
+        dispatchId: result.receipt.dispatch_id, artifactPath: result.artifact.ref, artifactDigest: result.artifact.digest };
+      const consumer = `const fs=require('node:fs'), cp=require('node:child_process');
+        const x=JSON.parse(fs.readFileSync(0,'utf8'));
+        const restore=(${guardExcludedArchives.toString()})(x.foreignPaths);
+        x.input.io={execFileSync(exe,args,opts){if(exe==='gh')return JSON.stringify(x.pr);
+          if(exe==='git'&&args.includes('fetch'))return '';return cp.execFileSync(exe,args,opts);}};
+        const role=require(${JSON.stringify(path.resolve(__dirname, '../../plugins/delivery-pipeline/scripts/role-artifact.cjs'))});
+        if(x.verdict) require('node:assert/strict').equal(role.currentArchitectureVerdict(x.current).subject,x.input.ticket);
+        else role.validateJudgmentManifest(x.input);
+        require('node:assert/strict').equal(restore(),0);`;
+      const fresh = verdict => execFileSync(process.execPath, [...testAuthorityArgs, '-e', consumer], {
+        input: JSON.stringify({ input, current, pr: f.pr, verdict, foreignPaths }), stdio: ['pipe', 'pipe', 'pipe'] });
+      fresh(false); fresh(true);
+      const selectedDigest = artifacts.phaseArchitectureEvidenceDigest(value.prepared.packet.retained_evidence);
+      if (mutation === 'foreign') {
+        for (const foreign of foreignPaths) {
+          const family = foreign === foreignPaths[0] ? foreign : path.join(foreign, '.shipyard-role-artifacts/foreign-history');
+          fs.appendFileSync(path.join(family, 'evidence.md'), 'changed foreign body');
+          fs.appendFileSync(path.join(family, 'findings.json'), 'changed foreign body');
+        }
+        assert.equal(artifacts.phaseArchitectureEvidenceDigest(artifacts.phaseArchitectureEvidence(f.root, value.prepared.binding,
+          { graphDir, phaseArchiveSelection: value.prepared.packet.phase_archive_selection })), selectedDigest);
+        fresh(false); fresh(true);
+      } else {
+        const pin = roster.records[0].pins.find(pin => pin.path.endsWith('/findings.json'));
+        if (mutation === 'bytes') fs.appendFileSync(path.join(f.root, pin.path), 'changed selected bytes');
+        else fs.writeFileSync(path.join(path.dirname(path.join(f.root, pin.path)), 'unexpected-member'), 'changed selected membership');
+        assert.throws(() => fresh(false), /selected|archive|family|pin|membership/i);
+        assert.throws(() => fresh(true), /selected|archive|family|pin|membership/i);
+        assert.throws(() => artifacts.currentArchitectureVerdict(current), /selected|archive|family|pin|membership/i);
+        return;
+      }
+    }
+
     if (productBytes) {
       const program = `const assert=require('node:assert/strict'); const c=require(${JSON.stringify(path.resolve(__dirname, '../../plugins/delivery-pipeline/scripts/role-artifact.cjs'))});
         assert.equal(c.currentArchitectureVerdict(JSON.parse(process.argv[1])).subject,${JSON.stringify(request.scope.ticket)});`;
@@ -315,7 +436,10 @@ for (const productBytes of [0, 2600000]) test('fixture: public Codex host seals 
     assert.equal(artifacts.currentArchitectureVerdict({ ...current, head: 'f'.repeat(40) }), null);
     fs.appendFileSync(path.join(f.root, '.planning/phases/38-codex-arch-review/SUMMARY.md'), '\nChanged evidence.');
     assert.equal(artifacts.currentArchitectureVerdict(current), null);
-  } finally { cleanupJudgment(f); fs.rmSync(storage, { recursive: true, force: true }); }
+  } finally {
+    if (restoreForeignGuard) assert.equal(restoreForeignGuard(), 0);
+    cleanupJudgment(f); fs.rmSync(storage, { recursive: true, force: true });
+  }
 });
 
 module.exports = { fixture, unitJudgment, cleanupJudgment, registerTests, registerCases, testAuthorityArgs };

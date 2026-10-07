@@ -143,7 +143,7 @@ function git(options, root, args, maxBuffer, preserveWhitespace = false) {
   return command(options, 'git', ['-C', root, ...args], root, maxBuffer, preserveWhitespace);
 }
 
-function canonicalWorktree(options, value) {
+function canonicalWorktree(options, value, aggregate = false) {
   let worktree;
   try { worktree = fs.realpathSync(value); } catch { reject('worktree does not exist'); }
   if (git(options, worktree, ['rev-parse', '--show-toplevel']) !== worktree) {
@@ -151,7 +151,7 @@ function canonicalWorktree(options, value) {
   }
   let status;
   try {
-    status = statusIgnoringScratch(worktree, { untracked: 'all', forJudge: true });
+    status = statusIgnoringScratch(worktree, { untracked: 'all', forJudge: !aggregate });
   } catch (error) {
     reject(`git preflight failed: ${String(error.stderr || error.message).trim().slice(0, 800)}`, 'PREFLIGHT_FAILED');
   }
@@ -464,6 +464,7 @@ function prepareArch(options, request, canonical, graph, rows) {
   const { id: ticketId, row } = rows[0];
   let id = ticketId;
   let binding;
+  let selectedArchives;
   if (canonical.branch !== (request.phase ? row.epic : row.branch)) reject('architecture worktree branch differs from the canonical ticket branch');
   const pr = request.phase ? { number: request.pr } : selectPullRequest(options, canonical.worktree, row, request, 'open');
   const live = getPullRequest(options, canonical.worktree, pr.number, row.repo || null);
@@ -516,8 +517,8 @@ function prepareArch(options, request, canonical, graph, rows) {
         if (sources.requiredRefs.length > 2000) reject('complete source inventory exceeds its bound');
       }
     }
-    const pins = roleArtifact.authenticatedArchivePins(canonical.worktree);
-    sources.requiredRefs.push(...pins.map(pin => pin.path));
+    selectedArchives = roleArtifact.selectPhaseArchives(canonical.worktree, binding, { graphDir: graph.directory });
+    sources.requiredRefs.push(...selectedArchives.pins.map(pin => pin.path));
     roleArtifact.authenticateArchitectureSources(canonical.worktree, canonical.projectRoot,
       [...new Set(sources.requiredRefs)].filter(relative => /^(?:\.planning\/architecture\/.+\.md|\.planning\/investigations\/.+\/DECISIONS\.md)$/.test(relative))
         .map(relative => { const content = fileText(canonical.projectRoot, relative);
@@ -535,14 +536,14 @@ function prepareArch(options, request, canonical, graph, rows) {
     adr_unresolved: sources.architecture.unresolved,
     reference_digest: referenceDigest(reference),
     ...(binding ? { ticket_set: binding.ticketSet, ticket_set_digest: binding.membership,
-      retained_evidence: roleArtifact.phaseArchitectureEvidence(canonical.worktree, binding) } : {}),
+      phase_archive_selection: selectedArchives.selection, retained_evidence: selectedArchives.evidence } : {}),
   };
   const packet = buildPacket(canonical, 'arch-review', id, sources, plan, roleContext);
   const signals = observedSignals(request, rows, [live], estimatePromptTokens('arch-review', packet, plan, live, reference));
   const prompt = makePrompt('arch-review', id, packet, reference);
   return Object.freeze({ role: 'arch-review', ticket: id, phase: String(row.phase), phaseNumber: phaseNumberOf(row.phase),
     pr: live.number, base, baseName, baseCommit: live.baseRefOid, mergeBase, mergeBaseTree,
-    ...(binding ? { binding, ticketSet: binding.ticketSet, ticketSetDigest: binding.membership } : {}),
+    ...(binding ? { binding, phaseArchiveSelection: selectedArchives.selection, ticketSet: binding.ticketSet, ticketSetDigest: binding.membership } : {}),
     livePullRequests: [live], canonical, graph, rows, sources, packet, prompt, signals, evidencePath: ARCH_EVIDENCE });
 }
 
@@ -851,7 +852,7 @@ function estimatePromptTokens(role, packet, plan, pr, reference, readOnlySmoke =
 }
 
 function prepareInvocation(options, request) {
-  const canonical = canonicalWorktree(options, request.worktree);
+  const canonical = canonicalWorktree(options, request.worktree, request.role === 'arch-review' && !!request.phase);
   const graph = graphData(options, canonical.projectRoot);
   const rows = requestRows(request, graph, canonical);
   return request.role === 'arch-review'
@@ -1112,6 +1113,8 @@ function assertEvidenceOnlyChanges(options, prepared, hostOwnedFiles = new Map()
     .split('\0').filter(Boolean);
   const unexpected = [...new Set([...changed, ...untracked])].filter((file) => {
     if (file === prepared.evidencePath) return false;
+    if (prepared.binding && untracked.includes(file) && !changed.includes(file)
+        && file.startsWith(roleArtifact.ARTIFACT_ARCHIVE_DIR + '/')) return false;
     const scratchDigest = prepared.canonical.scratchDigests.get(file);
     if (scratchDigest !== undefined) {
       try {
@@ -1139,7 +1142,7 @@ function assertEvidenceOnlyChanges(options, prepared, hostOwnedFiles = new Map()
     subject: prepared.packet.subject, sourceRevision: prepared.canonical.head, policyHash: policy.POLICY_HASH });
 }
 
-function revalidateLiveInputs(options, prepared) {
+function revalidateLiveInputs(options, prepared, currentDispatchId) {
   const worktree = prepared.canonical.worktree;
   if (prepared.role === 'arch-review') {
     const live = getPullRequest(options, worktree, prepared.pr, prepared.rows[0].row.repo || null);
@@ -1155,6 +1158,8 @@ function revalidateLiveInputs(options, prepared) {
         phase: prepared.phaseNumber, repository: prepared.canonical.commonPath, branch: prepared.canonical.branch,
         pr: live.number, head: live.headRefOid, base: live.baseRefOid });
       if (binding.subject !== prepared.ticket) reject('phase membership changed while architecture review ran', 'STALE_CONTEXT');
+      roleArtifact.selectPhaseArchives(worktree, binding, { graphDir: prepared.graph.directory,
+        phaseArchiveSelection: prepared.phaseArchiveSelection, currentDispatchId });
     }
     return;
   }
@@ -1365,11 +1370,11 @@ function createClaudeRoleHost(options = {}) {
         if (getLaunchCount() !== 1 || !getLaunched()) reject('boundary did not perform exactly one authenticated model launch', 'MISSING_RECEIPT');
         if (heartbeatError) throw heartbeatError;
         assertEvidenceOnlyChanges(options, prepared, getHostOwnedFiles());
-        const expiredTickets = revalidateLiveInputs(options, prepared) || [];
+        const expiredTickets = revalidateLiveInputs(options, prepared, record.receipt.dispatch_id) || [];
         const validatedResult = validateResult(prepared, resultFrom(getLaunched().output));
         const result = prepared.role === 'arch-review' ? { ...validatedResult, host_context: {
           graph_dir: prepared.graph.directory, source_root: prepared.canonical.worktree,
-          ...(prepared.binding ? { phase_evidence_digest: roleArtifact.phaseArchitectureEvidenceDigest(prepared.packet.role_context.retained_evidence) } : {}),
+          ...(prepared.binding ? { phase_archive_selection: prepared.phaseArchiveSelection, phase_evidence_digest: roleArtifact.phaseArchitectureEvidenceDigest(prepared.packet.role_context.retained_evidence) } : {}),
           selected_refs: prepared.packet.required_refs.map(ref => ({ path: ref.path, sha256: ref.sha256, bytes: ref.bytes })),
         } } : validatedResult;
         const { artifact, validated } = sealResult(prepared, result, runtime.recorder, record.receipt.dispatch_id);

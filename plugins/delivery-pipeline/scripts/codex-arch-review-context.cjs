@@ -407,6 +407,19 @@ function instructionEvidence(agentDir, agentFile, manifestPath) {
     installed_files: [{ root, ...agentPin }, { root: path.dirname(path.resolve(manifestPath)), ...manifestPin }] };
 }
 
+function assertAggregateGraph(directory, options) {
+  const project = fs.realpathSync(git(options, directory, ['rev-parse', '--show-toplevel']));
+  const worktrees = git(options, directory, ['worktree', 'list', '--porcelain']).split('\n')
+    .filter(line => line.startsWith('worktree ')).map(line => path.resolve(line.slice(9)));
+  if (!worktrees.includes(project)) fail('canonical graph is outside registered repository worktrees', 'GRAPH_NOT_CANONICAL');
+  const relative = path.relative(project, directory).split(path.sep).join('/');
+  if (relative.startsWith('..') || path.isAbsolute(relative))
+    fail('canonical graph is outside its repository root', 'GRAPH_NOT_CANONICAL');
+  if (project === worktrees[0]) return;
+  try { git(options, project, ['cat-file', '-e', 'HEAD:' + relative + '/tickets.json']); }
+  catch { fail('untracked graph copy inside a non-main worktree', 'GRAPH_NOT_CANONICAL'); }
+}
+
 function collect(scope, options) {
   const worktree = fs.realpathSync(scope.worktree);
   const initialHead = git(options, worktree, ['rev-parse', 'HEAD']);
@@ -417,7 +430,8 @@ function collect(scope, options) {
   if (path.basename(directory) !== 'graph' || path.basename(path.dirname(directory)) !== '.planning')
     fail('canonical graph layout is required');
   if (fs.realpathSync(directory) !== directory) fail('graph contains a symlink');
-  assertCanonicalGraph({ graphDir: directory, worktree, source: 'flag' });
+  if (PHASE_SUBJECT.test(scope.ticket)) assertAggregateGraph(directory, options);
+  else assertCanonicalGraph({ graphDir: directory, worktree, source: 'flag' });
   const project = path.resolve(directory, '../..');
   const status = statusIgnoringScratch(worktree, { untracked: 'all', forJudge: true });
   const dispatchId = options.inflightDispatchId;
@@ -441,20 +455,6 @@ function collect(scope, options) {
       }
     } catch {}
   }
-  for (const pin of options.historicalBookkeepingPins || []) {
-    if (!bookkeeping.has(pin.path) && file(worktree, pin.path).sha256 !== pin.sha256)
-      fail('authenticated historical bookkeeping changed', 'STALE_CONTEXT');
-    bookkeeping.add(pin.path);
-  }
-  roleArtifact.assertArchiveInventory(worktree, options.archivePins || []);
-  const archives = new Set();
-  for (const pin of options.archivePins || []) {
-    roleArtifact.assertArchivePin(worktree, pin);
-    archives.add(pin.path);
-  }
-  if (!status.ok || status.entries.some(entry => !bookkeeping.has(entry.path)
-      && !(entry.status === '??' && archives.has(entry.path))))
-    fail('review worktree has local changes');
   const common = root => fs.realpathSync(git(options, root,
     ['rev-parse', '--path-format=absolute', '--git-common-dir']));
   if (common(project) !== common(worktree)) fail('graph belongs to another repository');
@@ -494,6 +494,31 @@ function collect(scope, options) {
       pr: number, head, base: live.baseRefOid, branch });
     if (binding.subject !== scope.ticket) fail('aggregate phase identity changed', 'STALE_CONTEXT');
   }
+  let selectedArchives;
+  if (binding) {
+    selectedArchives = roleArtifact.selectPhaseArchives(worktree, binding, { graphDir: directory,
+      phaseArchiveSelection: options.phaseArchiveSelection, currentDispatchId: options.inflightDispatchId });
+    options.phaseArchiveSelection = selectedArchives.selection;
+    options.archivePins = selectedArchives.pins;
+  } else {
+    roleArtifact.assertArchiveInventory(worktree, options.archivePins || []);
+  }
+  if (binding && selectedArchives.pins.length && !options.historicalBookkeepingPins?.length)
+    options.historicalBookkeepingPins = roleArtifact.historicalBookkeepingPins(worktree);
+  for (const pin of options.historicalBookkeepingPins || []) {
+    if (!bookkeeping.has(pin.path) && file(worktree, pin.path).sha256 !== pin.sha256)
+      fail('authenticated historical bookkeeping changed', 'STALE_CONTEXT');
+    bookkeeping.add(pin.path);
+  }
+  const archives = new Set();
+  for (const pin of options.archivePins || []) {
+    roleArtifact.assertArchivePin(worktree, pin);
+    archives.add(pin.path);
+  }
+  const archiveBookkeeping = entry => entry.status === '??' && (archives.has(entry.path)
+    || (binding && entry.path.startsWith(roleArtifact.ARTIFACT_ARCHIVE_DIR + '/')));
+  if (!status.ok || status.entries.some(entry => !bookkeeping.has(entry.path) && !archiveBookkeeping(entry)))
+    fail('review worktree has local changes');
   const base = 'refs/remotes/origin/' + live.baseRefName;
   if (options.refreshGit !== false) git(options, worktree, ['fetch', '--no-tags', 'origin',
     '+refs/heads/' + live.baseRefName + ':' + base]);
@@ -582,7 +607,7 @@ function collect(scope, options) {
     ...(cycles.length ? { decision_cycles: cycles } : {}),
     graph: { path: graphFile.path, sha256: graphFile.sha256, row, ...(binding ? { binding } : {}) },
     ...(binding ? { ticket_set: binding.ticketSet, ticket_set_digest: binding.membership,
-      retained_evidence: roleArtifact.phaseArchitectureEvidence(worktree, binding, { archivePins: options.archivePins }) } : {}),
+      phase_archive_selection: selectedArchives.selection, retained_evidence: selectedArchives.evidence } : {}),
     pr: { number, head, branch, base: live.baseRefName, base_commit: live.baseRefOid, draft: live.isDraft, review_decision: live.reviewDecision },
     post_change_inventory: String(run(options, 'git', ['-C', worktree, 'ls-tree', '-r', '--name-only', head], worktree, FILE_LIMITS.material)),
     diff: { merge_base: mergeBase, merge_base_tree: mergeBaseTree, content: diff },
@@ -610,10 +635,12 @@ function collect(scope, options) {
     if (current !== pin.sha256 && !(options.allowClearedBookkeeping === true && current === pin.cleared_sha256))
       fail('authenticated bookkeeping changed while collecting', 'STALE_CONTEXT');
   }
-  roleArtifact.assertArchiveInventory(worktree, options.archivePins || []);
+  if (binding) roleArtifact.selectPhaseArchives(worktree, binding, { graphDir: directory,
+    phaseArchiveSelection: options.phaseArchiveSelection, currentDispatchId: options.inflightDispatchId });
+  else roleArtifact.assertArchiveInventory(worktree, options.archivePins || []);
   const finalStatus = statusIgnoringScratch(worktree, { untracked: 'all', forJudge: true });
   if (!finalStatus.ok || finalStatus.entries.some(entry => !bookkeeping.has(entry.path)
-      && !(entry.status === '??' && archives.has(entry.path))))
+      && !archiveBookkeeping(entry)))
     fail('review worktree has local changes after context collection', 'STALE_CONTEXT');
 
   if (git(options, worktree, ['rev-parse', 'HEAD']) !== initialHead
@@ -734,7 +761,8 @@ function finish(value, dispatch, recorder) {
       worktree: prepared.canonical.worktree, evidence_sha256: evidence.sha256,
       transcript_sha256: dispatch.receipt.runtime_evidence.transcript.sha256,
       selected_refs: value.evidence.selected_refs,
-      ...(prepared.binding ? { phase_evidence_digest: roleArtifact.phaseArchitectureEvidenceDigest(prepared.packet.retained_evidence) } : {}),
+      ...(prepared.binding ? { phase_evidence_digest: roleArtifact.phaseArchitectureEvidenceDigest(prepared.packet.retained_evidence),
+        phase_archive_selection: preparedOptions.get(value).phaseArchiveSelection } : {}),
       installation,
       ...(preparedOptions.get(value).fileInput ? transportAttestation(preparedOptions.get(value).fileInput) : {}),
       bookkeeping: preparedOptions.get(value).bookkeepingPins || [],
@@ -786,8 +814,8 @@ function prepare(scope, launch, options = {}) {
   }
   if (launch.gsd_role !== undefined) fail('arch-review cannot use a typed GSD role');
 
-  options = { ...options, archivePins: roleArtifact.authenticatedArchivePins(scope.worktree),
-    historicalBookkeepingPins: roleArtifact.historicalBookkeepingPins(scope.worktree) };
+  options = { ...options, archivePins: PHASE_SUBJECT.test(scope.ticket) ? [] : roleArtifact.authenticatedArchivePins(scope.worktree),
+    historicalBookkeepingPins: PHASE_SUBJECT.test(scope.ticket) ? [] : roleArtifact.historicalBookkeepingPins(scope.worktree) };
   roleArtifact.prepareRoleArtifact({ worktreePath: scope.worktree, role: 'arch-review' });
   const prepared = collect(scope, options);
   const packet = JSON.stringify(prepared.packet);
@@ -948,6 +976,7 @@ function launchDigest(value, installation = installedLaunches.get(value)) {
       || path.join(value.prepared.canonical.worktree, '.planning/graph')),
     packet_digest: value.prepared.packet.digest, installation, bookkeeping: options.bookkeepingPins || [],
     historical_archives: options.archivePins || [], historical_bookkeeping: options.historicalBookkeepingPins || [],
+    ...(options.phaseArchiveSelection ? { phase_archive_selection: options.phaseArchiveSelection } : {}),
     ...(options.fileInput ? { input_transport: 'host-files', input_bundle: options.fileInput.input_bundle } : {}),
   })));
 }
@@ -978,6 +1007,7 @@ function validateHistoricalContext(input) {
   const attestation = { graph_dir: context.graph_dir, packet_digest: context.packet_digest,
     installation: context.installation, bookkeeping: context.bookkeeping };
   if (context.historical_archives !== undefined) attestation.historical_archives = context.historical_archives;
+  if (context.phase_archive_selection !== undefined) attestation.phase_archive_selection = context.phase_archive_selection;
   if (context.historical_bookkeeping !== undefined) attestation.historical_bookkeeping = context.historical_bookkeeping;
   Object.assign(attestation, transportAttestation(context));
   if (context.input_transport === 'host-files') {
@@ -1055,6 +1085,7 @@ function validateSealedContext(input, options = {}) {
       || original.launch_digest !== digest(JSON.stringify(canonical({ graph_dir: context.graph_dir,
         packet_digest: context.packet_digest, installation, bookkeeping: context.bookkeeping,
         historical_archives: context.historical_archives, historical_bookkeeping: context.historical_bookkeeping,
+        ...(context.phase_archive_selection ? { phase_archive_selection: context.phase_archive_selection } : {}),
         ...transportAttestation(context) }))))
     fail('sealed context differs from original authenticated launch identity', 'STALE_CONTEXT');
   const { evidence_markdown: evidenceMarkdown, host_context: _originalContext, ...originalJudgment } = original;
@@ -1068,10 +1099,12 @@ function validateSealedContext(input, options = {}) {
       || !/^[a-f0-9]{64}$/.test(pin.sha256 || '')
       || (pin.cleared_sha256 !== undefined && !/^[a-f0-9]{64}$/.test(pin.cleared_sha256))))
     fail('malformed authenticated bookkeeping pin', 'ARCH_REVIEW_CONTEXT_REQUIRED');
+  if (PHASE_SUBJECT.test(input.ticket) && !object(context.phase_archive_selection))
+    fail('sealed aggregate current phase archive selection is missing', 'ARCH_REVIEW_CONTEXT_REQUIRED');
   const current = collect({ worktree: input.worktree, ticket: input.ticket, phase: context.phase }, {
     ...options, graphDir: context.graph_dir, inflightDispatchId: input.dispatchId,
     bookkeepingPins: context.bookkeeping, historicalBookkeepingPins: context.historical_bookkeeping,
-    allowClearedBookkeeping: true, archivePins: [...context.historical_archives, ...(input.archivePins || [])],
+    allowClearedBookkeeping: true, phaseArchiveSelection: context.phase_archive_selection, archivePins: [...context.historical_archives, ...(input.archivePins || [])],
   });
   if ((current.binding && context.phase_evidence_digest !== roleArtifact.phaseArchitectureEvidenceDigest(current.packet.retained_evidence))
       || current.pr !== input.pr || current.packet.digest !== context.packet_digest
