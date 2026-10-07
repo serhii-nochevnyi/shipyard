@@ -4,6 +4,13 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const authorityHome = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'architecture-authority-')));
+const originalHomedir = os.homedir;
+os.homedir = () => authorityHome;
+process.on('exit', () => {
+  os.homedir = originalHomedir;
+  fs.rmSync(authorityHome,{recursive:true,force:true});
+});
 const { resolveIntegrationBranch, architectureTarget, phaseBinding, PHASE_SUBJECT } = require('../../plugins/delivery-pipeline/scripts/architecture-target.cjs');
 
 test('configuration wins for the project; foreign repositories keep their own default', () => {
@@ -59,6 +66,15 @@ test('public phase builder and native context use the explicit aggregate PR and 
     const args = ['arch-review','38-codex-arch-review','--phase','38','--pr','801'];
     const request = builder.build([...args,'--runtime','codex'],options);
     assert(PHASE_SUBJECT.test(request.scope.ticket));
+    const rawState = JSON.parse(fs.readFileSync(path.join(graphDir,'delivery-state.json')));
+    const binding = phaseBinding({ graph, state: rawState.tickets || rawState, phase: 38,
+      repository: git(f.root,['rev-parse','--path-format=absolute','--git-common-dir']),
+      branch: f.pr.headRefName, pr: f.pr.number, head: f.pr.headRefOid, base: f.base });
+    const inventoryPath = path.join(authorityHome,'current-phase-inventory.json');
+    fs.writeFileSync(inventoryPath,JSON.stringify({rows:[]}),{mode:0o600});
+    require('../../plugins/delivery-pipeline/scripts/role-artifact.cjs').registerPhaseArchiveRoster({
+      worktreePath: f.root, binding, graphDir, inventoryPath,
+      expectedInventoryDigest: require('node:crypto').createHash('sha256').update(fs.readFileSync(inventoryPath)).digest('hex') });
     const prepared = context.prepare(request.scope,{role:'arch-review',signals:{},context:{}},options);
     assert.equal(prepared.prepared.pr,801);
     assert.equal(prepared.prepared.rows[0].id,TICKET);
