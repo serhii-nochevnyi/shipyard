@@ -690,4 +690,50 @@ test('shared lock refuses a symlink owner without stale takeover', () => {
   } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
 });
 
+for (const change of ['replace', 'disappear', 'write', 'hardlink', 'symlink']) {
+  test(`shared lock handles contended owner ${change} without seizing a successor`, () => {
+    const f = fixture();
+    const originalRead = fs.readFileSync;
+    const { acquire } = require('../../plugins/delivery-pipeline/scripts/lock.cjs');
+    const dir = path.join(f.graph, '.locks');
+    const lock = path.join(dir, 'observation.lock');
+    const file = path.join(lock, 'owner.json');
+    let injected = false;
+    try {
+      fs.mkdirSync(lock);
+      const stale = JSON.stringify({ at: '2000-01-01', token: 'old' });
+      const successor = JSON.stringify({ at: new Date().toISOString(), token: 'successor' });
+      fs.writeFileSync(file, stale);
+      fs.readFileSync = function (input, ...args) {
+        const result = originalRead.call(fs, input, ...args);
+        if (typeof input === 'number' && !injected) {
+          injected = true;
+          if (change === 'write') fs.writeFileSync(file, successor);
+          else if (change === 'hardlink') fs.linkSync(file, path.join(f.root, 'alias'));
+          else {
+            fs.unlinkSync(file);
+            if (change === 'replace') fs.writeFileSync(file, successor);
+            if (change === 'symlink') {
+              const target = path.join(f.root, 'target');
+              fs.writeFileSync(target, successor);
+              fs.symlinkSync(target, file);
+            }
+          }
+        }
+        return result;
+      };
+      if (change === 'hardlink' || change === 'symlink')
+        assert.throws(() => acquire(dir, 'observation', { waitMs: 0 }), /opened regular file/);
+      else assert.equal(acquire(dir, 'observation', { waitMs: 0 }), null);
+      assert.equal(injected, true);
+      assert.deepEqual(fs.readdirSync(dir), ['observation.lock']);
+      if (change === 'replace' || change === 'write')
+        assert.equal(originalRead(file, 'utf8'), successor);
+    } finally {
+      fs.readFileSync = originalRead;
+      fs.rmSync(f.root, { recursive: true, force: true });
+    }
+  });
+}
+
 done();
