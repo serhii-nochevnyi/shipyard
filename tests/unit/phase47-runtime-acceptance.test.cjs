@@ -320,3 +320,16 @@ test('first-call inline task attestation refuses a denied heredoc followed by a 
     response({ type: 'custom_tool_call_output', call_id: 'later', output: task.sha256 }));
   assert.throws(() => acceptance.validateInlineFirstCall(jsonl(), task, relay, f.scripts), /first call/);
 });
+
+
+test('current candidate refusal cannot be converted to missing-native HOLD', () => {
+  const ledger = acceptance.openLedger();
+  ledger.candidate = { candidate_path: '/tmp/foreign-final-candidate' };
+  assert.throws(() => acceptance.validateLedger(ledger));
+});
+
+test('a corrective ledger requires the exact signed retained original ledger', () => {
+  const ledger = acceptance.openLedger();
+  ledger.corrective_generation = { original_ledger: { path: '/tmp/foreign', sha256: '0'.repeat(64) } };
+  assert.throws(() => acceptance.validateLedger(ledger));
+});

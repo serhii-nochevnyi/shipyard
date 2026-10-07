@@ -11,6 +11,11 @@ const REPOSITORY = path.resolve(__dirname, '../..');
 const HOST = '/Users/serhii/.local/state/shipyard/codex-decompose/6cba328f5f0de395b373ad6c77a164feb771363c4e6b7a96888b7075d52da7aa';
 const HANDOFF = path.join(HOST, 'phase47-current-generation-20261006/generation.json');
 const HANDOFF_SHA = '64e111070452b70065e4f1a71041c7b0a3091105f3e40a7253a3e9b25132fb81';
+const FINAL_HANDOFF = path.join(HOST, 'phase47-final-generation-adr026-source-update-1/generation.json');
+const FINAL_HANDOFF_SHA = 'd788b6e1be9b78914d9e58f1d9fb88f5069a0ece2517a22e9b80973c75ebccfe';
+const FINAL_STAGE = 'shipyard-phase47-final-publication/INV-014-runtime-delivery-correctness/ADR-026-source-update-1';
+const PLAN19_SHA = 'd12c3b870fda04f0dc1f2f6afcebedbfad619f8961662ac253ad2abd45d781e8';
+const FINAL_SOURCE = '8192ba38942be328b27f8aa54984eae7cd47231c';
 const OPERATOR = '2F485C0A455BA33463F66332900FCE87BD1BFF0D';
 const BASELINE = '7eebae4812b3c67ccdbbb63c8c1603f7767b1466';
 const PHASE = '.planning/phases/47-complete-deferred-decomposition-wait-attribution';
@@ -30,6 +35,9 @@ const ALLOCATION = {
     'package-build.json', mirror('codex-runtime-host'), mirror('claude-runtime-host')],
 };
 const UNION = Object.values(ALLOCATION).flat().sort();
+const CORRECTIVE = ['codex-arch-review-context', 'codex-runtime-host', 'codex-delivery-host',
+  'codex-planning-context-host', 'orchestration-overhead', 'lock', 'architecture-target'].map(mirror)
+  .concat('.codex-plugin/plugin.json', 'package-build.json').sort();
 const CALLER = ['codex-arch-review-context', 'role-artifact', 'codex-decompose-host',
   'codex-planning-context-host'].map(mirror);
 const GROUPS = {
@@ -67,10 +75,20 @@ function physical(file, directory = false, sealed = false) {
 
 function read(file, digest, sealed = false) {
   const before = physical(file, false, sealed);
-  const bytes = fs.readFileSync(file);
-  const after = physical(file, false, sealed);
-  for (const field of ['dev', 'ino', 'size', 'mode', 'mtimeMs', 'ctimeMs'])
-    assert.equal(after[field], before[field], 'physical input replaced during read');
+  assert(before.size <= 32 * 1024 * 1024, 'physical input exceeds read bound');
+  const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+  let bytes;
+  try {
+    const opened = fs.fstatSync(fd);
+    bytes = fs.readFileSync(fd);
+    const after = physical(file, false, sealed), final = fs.fstatSync(fd);
+    for (const field of ['dev', 'ino', 'size', 'mode', 'mtimeMs', 'ctimeMs']) {
+      assert.equal(opened[field], before[field], 'physical input replaced before open');
+      assert.equal(final[field], before[field], 'physical descriptor replaced during read');
+      assert.equal(after[field], before[field], 'physical input replaced during read');
+    }
+    assert.equal(bytes.length, before.size, 'physical input truncated');
+  } finally { fs.closeSync(fd); }
   if (digest !== undefined) assert.equal(sha(bytes), digest, 'digest mismatch: ' + file);
   return bytes;
 }
@@ -125,11 +143,16 @@ function validateHandback(handback, selection, binding, selectionPath) {
   assert.equal(handback.historical_manifest_sha256, binding.source.plan_manifest_sha256);
   assert.deepEqual(handback.current_plan_amendments, binding.source.current_plan_amendments);
   validateAllocation(handback.publication_allocation);
-  assert.deepEqual([...handback.changed_outputs].sort(), UNION, 'unexpected generation scope');
+  assert.deepEqual([...handback.changed_outputs].sort(), handback.purpose === 'ADR-026-final'
+    ? (handback.source_update ? CORRECTIVE : CORRECTIVE.filter(p => p !== mirror('architecture-target'))) : UNION,
+    'unexpected generation scope');
+  if (handback.purpose === 'ADR-026-final')
+    validateCorrective(handback.corrective_allocation, handback.source_update
+      ? CORRECTIVE : CORRECTIVE.filter(p => p !== mirror('architecture-target')));
 }
 
-function selectedArtifact(common, handback) {
-  const root = path.join(common, STAGE_DIRECTORY);
+function selectedArtifact(common, handback, stage = STAGE_DIRECTORY) {
+  const root = path.join(common, stage);
   assert.equal(physical(root, true).uid, process.getuid(), 'foreign publication root');
   assert.equal(physical(root, true).mode & 0o077, 0, 'public publication root');
   const selectionPath = path.join(root, 'selection.json');
@@ -185,11 +208,11 @@ function selectedArtifact(common, handback) {
   return { root, selectionPath, selection, binding };
 }
 
-function authenticateHandback() {
-  const bytes = read(HANDOFF, HANDOFF_SHA, true);
-  read(HANDOFF + '.asc', undefined, true);
-  const publicKey = path.join(path.dirname(HANDOFF), 'operator-public-key.asc');
-  read(publicKey);
+function authenticateHandback(file = HANDOFF, digest = HANDOFF_SHA) {
+  const bytes = read(file, digest, true);
+  const signature = read(file + '.asc', undefined, true);
+  const publicKey = path.join(path.dirname(file), 'operator-public-key.asc');
+  const keyBytes = read(publicKey);
   const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-p47-signature-')));
   fs.chmodSync(home, 0o700);
   try {
@@ -198,19 +221,229 @@ function authenticateHandback() {
       stdio: ['ignore', 'pipe', 'pipe'], timeout: 10000,
     });
     const result = execFileSync('gpgv', ['--homedir', home, '--keyring', keyring,
-      '--status-fd', '1', HANDOFF + '.asc', HANDOFF], {
+      '--status-fd', '1', file + '.asc', file], {
       encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 10000,
     });
     const valid = result.split('\n').filter(line => line.startsWith('[GNUPG:] VALIDSIG '));
     assert.equal(valid.length, 1, 'missing unique operator signature');
     assert(valid[0].split(' ').slice(2).includes(OPERATOR), 'wrong operator signature');
-    read(HANDOFF, sha(bytes), true);
+    read(file, sha(bytes), true);
+    read(file + '.asc', sha(signature), true);
+    read(publicKey, sha(keyBytes));
     return JSON.parse(bytes);
   } finally { fs.rmSync(home, { recursive: true, force: true }); }
 }
 
-function validateParents(source, state, getPullRequest, ancestor) {
-  const parents = ['T-47-13', 'T-47-03', 'T-47-04', 'T-47-09', 'T-47-15', 'T-47-14'];
+function validateCorrective(allocation, expected = CORRECTIVE) {
+  assert.deepEqual(Object.keys(allocation), ['T-47-19'], 'corrective owner drift');
+  assert.deepEqual([...allocation['T-47-19']].sort(), expected, 'corrective allocation drift');
+}
+
+function validateSourceUpdate(update) {
+  assert.equal(update.commit, FINAL_SOURCE, 'foreign source update');
+  assert.equal(update.parent, '72f033c994053654d5025e128081ee37be0e04b7', 'foreign source parent');
+  assert.equal(update.canonical_path, 'plugins/delivery-pipeline/scripts/architecture-target.cjs');
+  assert.equal(update.added_generated_owner, 'plugins/shipyard/' + mirror('architecture-target'));
+  assert.equal(update.current19_plan_sha256, PLAN19_SHA);
+  assert.equal(update.current_owner_count, 15);
+  assert.equal(update.current_corrective_outputs, 9);
+  assert.deepEqual(update.task_sizes, [3, 5, 3, 4]);
+}
+
+function validateConfigurations(root, source, approval) {
+  if (approval) {
+    assert.equal(source.config_sha256, approval.reviewed_source_config_sha256, 'reviewed source config binding');
+    assert.equal(source.coordinator_config_sha256, approval.coordinator_config_sha256, 'coordinator config binding');
+    read(path.join(source.repository, '.planning/config.json'), approval.coordinator_config_sha256);
+    assert.equal(sha(git(root, 'show', source.head + ':.planning/config.json')), source.config_sha256,
+      'unreviewed source configuration');
+  } else read(path.join(source.repository, '.planning/config.json'), source.config_sha256);
+  read(path.join(root, '.planning/config.json'), source.config_sha256);
+}
+
+function validateDescendant(root, source, revision = 'HEAD') {
+  git(root, 'merge-base', '--is-ancestor', source.head, revision);
+  assert.deepEqual(canonicalInputs(root), source.identities, 'canonical source descendant drift');
+  assert.deepEqual(source.input_modes, source.identities.map(entry => ({ path: entry.path,
+    mode: physical(path.join(root, entry.path)).mode & 0o777 })), 'canonical descendant mode drift');
+  for (const entry of source.identities) {
+    assert.equal(sha(git(root, 'show', revision + ':' + entry.path)), entry.sha256, 'committed canonical descendant drift');
+    const treeMode = gitText(root, 'ls-tree', revision, '--', entry.path).split(' ')[0];
+    assert.equal(treeMode, source.input_modes.find(row => row.path === entry.path).mode === 0o755 ? '100755' : '100644');
+  }
+  const changed = gitText(root, 'log', '--format=', '--name-only', source.head + '..' + revision)
+    .split('\n').filter(Boolean);
+  for (const relative of changed)
+    assert(/^(?:plugins\/shipyard\/|tests\/|docs\/|\.shipyard-(?:evidence|pr-body)\.md$)/.test(relative),
+      'unapproved publication descendant: ' + relative);
+}
+
+function reference(reference, sealed = false) {
+  const digest = reference.sha256 || reference.digest;
+  assert.match(digest || '', /^[a-f0-9]{64}$/, 'signed reference digest required');
+  let file = reference.path;
+  if (file.startsWith('/tmp/')) {
+    assert.equal(fs.realpathSync('/tmp'), '/private/tmp', 'foreign system temporary root');
+    file = '/private/tmp/' + file.slice(5);
+  }
+  const bytes = read(file, digest, sealed);
+  if (reference.bytes !== undefined) assert.equal(bytes.length, reference.bytes, 'reference byte count drift');
+  return bytes;
+}
+
+function authenticateOriginal(common) {
+  const handback = authenticateHandback();
+  const selected = selectedArtifact(common, handback);
+  const planning = validatePlanning(handback, selected.binding.source, true);
+  return { handback, selected, planning, historical_only: true };
+}
+
+function authenticateFinal(common, root = REPOSITORY) {
+  const handback = authenticateHandback(FINAL_HANDOFF, FINAL_HANDOFF_SHA);
+  assert.equal(handback.purpose, 'ADR-026-final');
+  const selected = selectedArtifact(common, handback, FINAL_STAGE);
+  selected.final = true;
+  const approvalRef = handback.current_source_approval;
+  assert.equal(approvalRef.path, path.join(path.dirname(FINAL_HANDOFF), 'source-approval.json'));
+  assert.equal(approvalRef.signature_path, approvalRef.path + '.asc');
+  const approval = authenticateHandback(approvalRef.path, approvalRef.sha256);
+  assert.equal(approval.schema, 'shipyard.phase47-current-source-approval.v1');
+  assert.equal(approval.purpose, 'ADR-026-final');
+  assert.equal(approval.status, 'approved');
+  assert.equal(approval.actor, 'trusted-coordinator');
+  assert.equal(approval.native_receipt, false);
+  assert.equal(approval.source_head, FINAL_SOURCE);
+  assert.equal(approval.source_head, selected.binding.source.head);
+  assert.equal(approval.source_tree, selected.binding.source.tree);
+  assert.equal(approval.source_identity_sha256, handback.source_identity_sha256);
+  assert.equal(approval.canonical_input_digest, selected.binding.canonical_input_digest);
+  validateCorrective(approval.corrective_allocation);
+  for (const key of ['source_update', 'successor_planner', 'current_checker', 'tail_plan_amendments',
+    'delivery_metadata_amendment', 'corrective_allocation'])
+    assert.deepEqual(approval[key], handback[key], 'signed approval/handback drift: ' + key);
+  assert.deepEqual(approval.parent_commits, selected.binding.source.parent_commits);
+  assert.deepEqual(approval.provenance, selected.binding.source.provenance);
+  validateSourceUpdate(approval.source_update);
+  const update = approval.source_update;
+  assert.equal(gitText(root, 'rev-parse', update.commit + '^'), update.parent);
+  assert.equal(gitText(root, 'diff', '--name-only', update.parent, update.commit), update.canonical_path,
+    'source update membership drift');
+  assert.equal(selected.binding.source.parent_commits['T-47-18'].merge, update.parent, 'actual T18 merge required');
+  assert.equal(approval.original_handoff_path, HANDOFF);
+  assert.equal(approval.original_handoff_sha256, HANDOFF_SHA);
+  for (const key of ['original_handoff_path', 'original_handoff_sha256', 'original_source_head',
+    'original_source_identity_sha256', 'original_index_sha256'])
+    assert.equal(handback[key], approval[key], 'original signed approval anchor drift');
+  const original = authenticateHandback();
+  const originalSelected = selectedArtifact(common, original);
+  assert.equal(original.generation_id, handback.original_generation_id);
+  assert.equal(original.source_head, approval.original_source_head);
+  assert.equal(original.source_identity_sha256, approval.original_source_identity_sha256);
+  assert.equal(original.original_index_sha256, approval.original_index_sha256);
+  git(root, 'merge-base', '--is-ancestor', original.source_head, approval.source_head);
+  assert.equal(gitText(root, 'rev-parse', original.source_head + '^{tree}'), originalSelected.binding.source.tree);
+  reference(handback.original_configuration_snapshot, true);
+  assert.equal(handback.original_configuration_snapshot.sha256, originalSelected.binding.source.config_sha256);
+  assert.equal(sha(git(root, 'show', original.source_head + ':.planning/config.json')),
+    handback.original_configuration_snapshot.sha256, 'historical configuration approval drift');
+  const planning = validatePlanning(original, originalSelected.binding.source, true);
+  for (const amendment of selected.binding.source.current_plan_amendments) reference(amendment);
+  assert.deepEqual(planOwners(reference(selected.binding.source.current_plan_amendments[0])),
+    planOwners(read(path.join(path.dirname(HANDOFF), 'captured-coordinator-47-05-PLAN.md'))));
+  const supersededRef = update.superseded_final_generation;
+  assert.equal(supersededRef.path, path.join(HOST, 'phase47-final-generation-adr026/generation.json'));
+  assert.equal(supersededRef.sha256, '83441e6d3f4a65b8b6018e9a753c1c7ea95a64181cf49a4b8877d679f55ae799');
+  const superseded = authenticateHandback(supersededRef.path, supersededRef.sha256);
+  for (const key of ['generation_id', 'source_head', 'selection_path', 'selection_sha256'])
+    assert.equal(superseded[key], supersededRef[key], 'superseded history drift');
+  assert.equal(superseded.source_head, update.parent);
+  selectedArtifact(common, superseded, 'shipyard-phase47-final-publication/INV-014-runtime-delivery-correctness/ADR-026');
+  reference(update.prior19_plan);
+  assert.deepEqual(approval.tail_plan_amendments.map(ref => path.basename(ref.path)), ['47-18-PLAN.md', '47-19-PLAN.md']);
+  const plans = approval.tail_plan_amendments.map(ref => reference(ref));
+  assert.equal(approval.tail_plan_amendments[1].sha256, PLAN19_SHA);
+  const currentOwners = planOwners(plans[1]);
+  assert.deepEqual(currentOwners, ['tests/unit/phase47-package-publication.test.cjs',
+    'tests/smoke/phase47-runtime-acceptance.cjs', 'tests/unit/phase47-runtime-acceptance.test.cjs',
+    ...CORRECTIVE.map(relative => 'plugins/shipyard/' + relative),
+    'docs/phase47-runtime-acceptance.md', 'docs/audits/phase47-runtime-acceptance.json',
+    'docs/audits/phase47-runtime-handoff.md'].sort(), 'current fifteen-owner contract drift');
+  const planner = JSON.parse(reference(approval.successor_planner));
+  assert.equal(planner.status, 'completed');
+  assert.equal(planner.receipt.dispatch_id, approval.successor_planner.dispatch_id);
+  assert.equal(planner.receipt.compliance, 'verified');
+  assert.equal(planner.receipt.gsd_role, 'gsd-planner');
+  assert.deepEqual(planner.artifact_index, approval.successor_planner.artifact_index);
+  reference(planner.artifact_index);
+  const checkerRef = approval.current_checker, checker = JSON.parse(reference(checkerRef));
+  assert.equal(checker.dispatch_id, checkerRef.dispatch_id);
+  assert.equal(checker.receipt.compliance, 'verified');
+  assert.equal(checker.receipt.gsd_role, 'gsd-plan-checker');
+  assert.equal(checker.policy_hash, selected.binding.source.policy_sha256);
+  assert.deepEqual(checker.receipt.runtime_evidence.native_child_evidence, checkerRef.native_child_evidence);
+  reference(checkerRef.transcript);
+  const native = reference(checkerRef.native_child_transcript, true);
+  assert.equal(sha(native), checkerRef.native_child_evidence.sha256);
+  const records = native.toString().trim().split('\n').map(line => JSON.parse(line));
+  const meta = records.find(row => row.type === 'session_meta')?.payload;
+  assert.equal(meta?.id, checkerRef.native_child_evidence.session_id);
+  assert.equal(meta?.parent_thread_id, checkerRef.native_child_evidence.parent_thread_id);
+  assert.equal(meta?.agent_role, 'gsd-plan-checker');
+  const complete = records.filter(row => row.type === 'event_msg' && row.payload?.type === 'task_complete');
+  assert.equal(complete.length, 1, 'missing unique native checker completion');
+  assert.deepEqual(JSON.parse(complete[0].payload.last_agent_message), checkerRef.verdict, 'native checker verdict drift');
+  assert.equal(checkerRef.verdict.input_sha256.task, checkerRef.native_child_evidence.task_relay.sha256);
+  assert.equal(checkerRef.verdict.status, 'passed');
+  assert.deepEqual(checkerRef.verdict.blockers, []);
+  assert.equal(checkerRef.verdict.input_sha256.plan19, PLAN19_SHA);
+  assert.equal(checkerRef.verdict.input_sha256.plan18, approval.tail_plan_amendments[0].sha256);
+  const metadata = approval.delivery_metadata_amendment;
+  for (const ref of [...metadata.prior_plans, ...metadata.current_plans, metadata.canonical_coverage_registration,
+    metadata.initial_trusted_publication, metadata.current_fixer_result, metadata.trusted_finalization]) reference(ref);
+  const verificationRef = metadata.trusted_finalization.verification;
+  const verificationBytes = read(verificationRef.path);
+  assert.equal(sha(canon(JSON.parse(verificationBytes))), verificationRef.digest, 'supported verification envelope drift');
+  const verification = require(path.join(root, 'plugins/delivery-pipeline/scripts/host-verification.cjs'))
+    .readEvidence(verificationRef.path, verificationRef.digest);
+  assert(verification && verification.ticket === 'T-47-18', 'authentic retained fixer verification required');
+  assert.equal(verification.plan_sha256, approval.tail_plan_amendments[0].sha256);
+  assert(verification.results.length && verification.results.every(row => row.outcome === 'passed'));
+  read(verificationRef.path, sha(verificationBytes));
+  assert.equal(metadata.trusted_finalization.verification.outcome, 'passed');
+  assert.equal(metadata.trusted_finalization.coverage.covered, true);
+  const fixer = JSON.parse(reference(metadata.current_fixer_result));
+  assert.equal(fixer.receipt?.dispatch_id || fixer.dispatch_id, metadata.current_fixer_result.dispatch_id);
+  const originalLedger = JSON.parse(reference(handback.original_ledger, true));
+  assert.equal(originalLedger.ticket, 'T-47-08');
+  const historicalPaths = originalSelected.binding.outputs.map(entry => entry.path);
+  const currentPaths = selected.binding.outputs.map(entry => entry.path);
+  assert.equal(historicalPaths.length, 160, 'original package inventory drift');
+  assert.deepEqual(currentPaths.filter(relative => !historicalPaths.includes(relative)), [mirror('architecture-target')]);
+  assert(historicalPaths.every(relative => currentPaths.includes(relative)), 'historical package member removed');
+  const delta = selected.binding.outputs.filter(entry => {
+    const relative = 'plugins/shipyard/' + entry.path;
+    const bytes = git(root, 'show', selected.binding.source.head + ':' + relative);
+    const mode = gitText(root, 'ls-tree', selected.binding.source.head, '--', relative).split(' ')[0];
+    return sha(bytes) !== entry.sha256 || mode !== entry.git_mode;
+  }).map(entry => entry.path).sort();
+  assert.deepEqual(delta, CORRECTIVE, 'actual complete reviewed-source publication delta drift');
+  const current = validateSource(root, selected.binding, approval);
+  return { handback, selected, approval, original, originalSelected, planning, current };
+}
+
+function recheckFinal(authenticated, root = REPOSITORY) {
+  const { handback, selected, approval, original } = authenticated;
+  read(FINAL_HANDOFF, FINAL_HANDOFF_SHA, true);
+  reference(handback.current_source_approval, true);
+  read(handback.current_source_approval.signature_path, undefined, true);
+  selectedArtifact(selected.binding.source.common, handback, FINAL_STAGE);
+  selectedArtifact(selected.binding.source.common, original);
+  reference(handback.original_ledger, true);
+  validateSource(root, selected.binding, approval);
+}
+
+function validateParents(source, state, getPullRequest, ancestor, final = false) {
+  const parents = final ? Array.from({ length: 18 }, (_, n) => 'T-47-' + String(n + 1).padStart(2, '0')) : ['T-47-13', 'T-47-03', 'T-47-04', 'T-47-09', 'T-47-15', 'T-47-14'];
   assert.deepEqual(Object.keys(source.parent_commits).sort(), [...parents].sort());
   assert.deepEqual(Object.keys(source.provenance).sort(), [...parents].sort());
   for (const id of parents) {
@@ -239,6 +472,11 @@ function validateParents(source, state, getPullRequest, ancestor) {
   }
 }
 
+function validateDeliveryState(source, ancestor, final = false) {
+  const state = JSON.parse(read(path.join(source.repository, '.planning/graph/delivery-state.json')));
+  validateParents(source, state, null, ancestor, final);
+}
+
 function planOwners(bytes) {
   const text = bytes.toString();
   const owners = text.match(/^files_modified:\s*\n((?:[ \t]+- [^\n]+\n)+)/m);
@@ -246,7 +484,7 @@ function planOwners(bytes) {
   return owners[1].split('\n').filter(Boolean).map(line => line.replace(/^\s*-\s*/, '').trim()).sort();
 }
 
-function validatePlanning(handback, source) {
+function validatePlanning(handback, source, historical = false) {
   const manifest = JSON.parse(read(handback.historical_manifest_path, source.plan_manifest_sha256, true));
   assert.equal(manifest.schema, 'shipyard.phase47-plan-snapshot.v1');
   assert.equal(manifest.phase, 47);
@@ -278,22 +516,26 @@ function validatePlanning(handback, source) {
     assert.equal(original.sha256, entry.sha256);
     assert.equal(original.bytes, entry.bytes);
   }
+  const nativeOwners = ['47-14-PLAN.md', '47-15-PLAN.md'].map(name =>
+    planOwners(read(path.join(manifest.root, name))));
+  assert.deepEqual(nativeOwners.map(owners => owners.length), [13, 3], 'original native ownership drift');
+  assert.equal(new Set(nativeOwners.flat()).size, 16);
   const capturedPath = path.join(path.dirname(HANDOFF), 'captured-coordinator-47-05-PLAN.md');
   const captured = read(capturedPath, source.current_plan_amendments[0].sha256, true);
-  const current = read(source.current_plan_amendments[0].path);
+  const current = historical ? captured : read(source.current_plan_amendments[0].path);
   assert.deepEqual(planOwners(current), planOwners(captured), 'later handback reference changed owners');
-  assert.equal(sha(current), '70e5ce04dd05e5bba28ebdec7d0dc833fc158a7b844b1f7d58b26f782b2849cf', 'unreviewed current coordinator amendment');
+  if (!historical) assert.equal(sha(current), '70e5ce04dd05e5bba28ebdec7d0dc833fc158a7b844b1f7d58b26f782b2849cf', 'unreviewed current coordinator amendment');
   assert.deepEqual(planOwners(captured), ['tests/unit/phase47-package-publication.test.cjs',
     ...ALLOCATION['T-47-05'].map(relative => 'plugins/shipyard/' + relative)].sort());
   const successor = read(source.current_plan_amendments[1].path, source.current_plan_amendments[1].sha256);
   assert.deepEqual(planOwners(successor), ALLOCATION['T-47-11'].map(relative => 'plugins/shipyard/' + relative).sort());
   return { manifest_sha256: source.plan_manifest_sha256, index_sha256: source.plan_index_sha256,
-    captured_plan_sha256: sha(captured), current_plan_sha256: sha(current),
+    captured_plan_sha256: sha(captured), current_plan_sha256: sha(current), historical_only: historical,
     original_result_path: manifest.original_result_path, original_result_sha256: manifest.original_result_sha256,
     original_dispatch_id: originalResult.receipt.dispatch_id };
 }
 
-function validateSource(root, binding) {
+function validateSource(root, binding, approval = null) {
   const source = binding.source;
   const ancestor = (before, after) => git(root, 'merge-base', '--is-ancestor', before, after);
   ancestor(BASELINE, source.head); ancestor(source.head, 'HEAD');
@@ -313,12 +555,17 @@ function validateSource(root, binding) {
   assert.equal(source.diff_sha256, sha(''));
   assert.equal(source.index_sha256, sha(git(root, 'ls-tree', '-r', source.head).toString().split('\n').filter(Boolean)
     .map(line => line.replace(/^(\d+) blob ([a-f0-9]+)\t/, '$1 $2 0\t') + '\0').join('')));
-  read(path.join(source.repository, '.planning/config.json'), source.config_sha256);
-  read(path.join(root, '.planning/config.json'), source.config_sha256);
+  validateConfigurations(root, source, approval);
+  if (approval) {
+    validateDescendant(root, source);
+    const canonicalRef = 'refs/heads/' + source.provenance['T-47-18'].base;
+    validateDescendant(root, source, canonicalRef);
+    assert.equal(sha(git(root, 'show', canonicalRef + ':.planning/config.json')),
+      approval.reviewed_source_config_sha256, 'canonical reviewed configuration drift');
+  }
   assert.equal(require(path.join(root, 'plugins/delivery-pipeline/scripts/model-policy.cjs'))
     .resolveDispatch({ runtime: 'codex', role: 'research' }).policy_hash, source.policy_sha256, 'policy drift');
   const graph = JSON.parse(read(path.join(source.repository, '.planning/graph/tickets.json'), source.graph_sha256));
-  const state = JSON.parse(read(path.join(source.repository, '.planning/graph/delivery-state.json')));
   for (const [id, row] of Object.entries(graph.tickets)) {
     if (!id.startsWith('T-47-')) continue;
     for (const dep of [...(row.depends_on || []), ...(row.cross_phase_deps || [])])
@@ -326,7 +573,7 @@ function validateSource(root, binding) {
   }
   const commits = gitText(root, 'log', '--format=%s', BASELINE + '..' + source.head);
   assert(!/^T-48-/m.test(commits), 'phase48 changes in selected source ancestry');
-  validateParents(source, state, null, ancestor);
+  validateDeliveryState(source, ancestor, Boolean(approval));
   return { head: gitText(root, 'rev-parse', 'HEAD'), tree: gitText(root, 'rev-parse', 'HEAD^{tree}'),
     canonical_input_digest: binding.canonical_input_digest, source_ancestor: true };
 }
@@ -336,11 +583,16 @@ function validatePublication(root, selected, group) {
   const published = path.join(root, 'plugins/shipyard');
   const observed = inventory(published);
   const outputs = new Map(binding.outputs.map(entry => [entry.path, entry]));
+  const final = selected.final === true;
+  const permitted = final ? CORRECTIVE : UNION;
+  const required = final && ['relay', 'complete'].includes(group)
+    ? binding.outputs.map(entry => entry.path).filter(relative => group === 'complete'
+      || !['.codex-plugin/plugin.json', 'package-build.json'].includes(relative)) : GROUPS[group];
   for (const entry of observed) {
     const expected = outputs.get(entry.path);
     assert(expected, 'unexpected checked-in package path: ' + entry.path);
     if (entry.sha256 !== expected.sha256 || entry.mode !== expected.publication_mode)
-      assert(UNION.includes(entry.path), 'unexpected publication delta: ' + entry.path);
+      assert(permitted.includes(entry.path), 'unexpected publication delta: ' + entry.path);
     const indexMode = gitText(root, 'ls-files', '--stage', '--', 'plugins/shipyard/' + entry.path).split(' ')[0];
     if (!indexMode) assert.equal(entry.path, mirror('codex-arch-review-context'), 'unreviewed new package path');
     else assert.equal(indexMode, expected.git_mode, 'package git index mode drift');
@@ -348,7 +600,7 @@ function validatePublication(root, selected, group) {
   for (const output of binding.outputs)
     if (!observed.some(entry => entry.path === output.path))
       assert.equal(output.path, mirror('codex-arch-review-context'), 'unexpected missing package path');
-  for (const relative of GROUPS[group]) {
+  for (const relative of required) {
     const expected = outputs.get(relative);
     assert(expected, 'missing publication ledger member');
     const file = path.join(published, relative);
@@ -363,7 +615,7 @@ function validatePublication(root, selected, group) {
     if (relative.startsWith('host/')) read(path.join(root, relative.slice(5)), expected.sha256);
     read(path.join(selection.candidate_path, relative), expected.sha256, true);
   }
-  return GROUPS[group].length;
+  return required.length;
 }
 
 function stageContracts(selected) {
@@ -429,27 +681,26 @@ function stageContracts(selected) {
 function check(group) {
   assert(Object.hasOwn(GROUPS, group), 'unknown publication group');
   const common = gitText(REPOSITORY, 'rev-parse', '--path-format=absolute', '--git-common-dir');
-  const handback = authenticateHandback();
-  const selected = selectedArtifact(common, handback);
-  const current = validateSource(REPOSITORY, selected.binding);
-  const planning = validatePlanning(handback, selected.binding.source);
+  const authenticated = authenticateFinal(common);
+  const { handback, selected, current, planning } = authenticated;
   const count = validatePublication(REPOSITORY, selected, group);
   const contracts = stageContracts(selected);
-  selectedArtifact(common, handback);
-  assert.deepEqual(canonicalInputs(REPOSITORY), selected.binding.source.identities, 'canonical drift during verification');
-  return { status: 'completed', ticket: 'T-47-05', group, generation_id: handback.generation_id,
+  recheckFinal(authenticated);
+  validatePublication(REPOSITORY, selected, group);
+  return { status: 'completed', ticket: 'T-47-19', group, generation_id: handback.generation_id,
     source_head: selected.binding.source.head, source_identity_sha256: handback.source_identity_sha256,
-    current_admission: current, handback_path: HANDOFF, handback_sha256: HANDOFF_SHA,
+    current_admission: current, handback_path: FINAL_HANDOFF, handback_sha256: FINAL_HANDOFF_SHA,
     selection_path: selected.selectionPath, selection_sha256: handback.selection_sha256,
     binding_path: selected.selection.binding_path, binding_sha256: selected.selection.binding_sha256,
     candidate_path: selected.selection.candidate_path, candidate_sha256: selected.selection.candidate_sha256,
     package_sha256: selected.binding.package_sha256, version: selected.binding.version,
     output_count: selected.binding.outputs.length, publication_count: count, build_calls: 0, planning,
-    contracts, remaining_obligations: ['current-head human review', 'T-47-11 publication',
-      'T-47-12 complete publication', 'T-47-08 installed/native acceptance'] };
+    corrective_outputs: CORRECTIVE, original_output_count: UNION.length, original_native_owner_count: 16,
+    contracts, remaining_obligations: ['current exact HOST verification', 'T-47-08 installed/native acceptance',
+      'post-delivery aggregate architecture and integrator judgments'] };
 }
 
-function privateFixtures() {
+function privateFixtures(authenticatedSignatureFixture = false) {
   const temporary = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-p47-publication-')));
   const root = path.join(temporary, 'repo');
   const write = (relative, bytes, mode = 0o644) => {
@@ -460,6 +711,17 @@ function privateFixtures() {
   let cases = 0;
   const rejects = (name, action) => { assert.throws(action, undefined, name); cases++; };
   try {
+    const currentUpdate = { commit: '8192ba38942be328b27f8aa54984eae7cd47231c',
+      parent: '72f033c994053654d5025e128081ee37be0e04b7',
+      canonical_path: 'plugins/delivery-pipeline/scripts/architecture-target.cjs',
+      added_generated_owner: 'plugins/shipyard/' + mirror('architecture-target'),
+      current19_plan_sha256: 'd12c3b870fda04f0dc1f2f6afcebedbfad619f8961662ac253ad2abd45d781e8',
+      current_owner_count: 15, current_corrective_outputs: 9, task_sizes: [3, 5, 3, 4] };
+    validateSourceUpdate(currentUpdate); cases++;
+    for (const mutation of [{ commit: 'f'.repeat(40) }, { parent: 'f'.repeat(40) },
+      { canonical_path: 'foreign' }, { added_generated_owner: 'foreign' },
+      { current_owner_count: 14 }, { current_corrective_outputs: 8 }, { task_sizes: [3, 5, 2, 4] }])
+      rejects('current source update refuses contract drift', () => validateSourceUpdate({ ...currentUpdate, ...mutation }));
     fs.mkdirSync(root);
     git(root, 'init', '-q', '-b', 'main');
     git(root, 'config', 'user.name', 'Publication Fixture');
@@ -477,6 +739,7 @@ function privateFixtures() {
     for (const relative of UNION.filter(relative => relative.startsWith('host/plugins/')))
       if (!fs.existsSync(path.join(root, relative.slice(5))))
         write(relative.slice(5), '// private fixture\n', relative === mirror('codex-decompose-host') ? 0o755 : 0o644);
+    write('.planning/config.json', '{"reviewed":true}\n');
     git(root, 'add', '.'); git(root, 'commit', '-qm', 'private reviewed inputs');
     const common = gitText(root, 'rev-parse', '--path-format=absolute', '--git-common-dir');
     const inputs = canonicalInputs(root), generation = sha(canon(inputs));
@@ -488,7 +751,9 @@ function privateFixtures() {
     const builder = require(path.join(root, 'scripts/package-shipyard-codex.cjs'));
     buildCalls++; builder.build(candidate);
     const source = { head: gitText(root, 'rev-parse', 'HEAD'), common,
-      identities: inputs, canonical_input_digest: generation, publication_allocation: ALLOCATION,
+      identities: inputs, input_modes: inputs.map(entry => ({ path: entry.path,
+        mode: physical(path.join(root, entry.path)).mode & 0o777 })),
+      canonical_input_digest: generation, publication_allocation: ALLOCATION,
       plan_index_sha256: sha('private index'), plan_manifest_sha256: sha('private manifest'),
       current_plan_amendments: [] };
     const outputs = inventory(candidate).map(entry => {
@@ -575,6 +840,87 @@ function privateFixtures() {
       fs.symlinkSync(bindingPath, file); rejects('symlink installed consumer', consume); fs.unlinkSync(file);
       fs.writeFileSync(file, original, { mode: 0o444 }); fs.chmodSync(directory, 0o500);
     }
+    validateDescendant(root, source); cases++;
+    const finalRoot = path.join(common, FINAL_STAGE);
+    fs.mkdirSync(path.dirname(finalRoot), { recursive: true });
+    fs.cpSync(durable, finalRoot, { recursive: true }); fs.chmodSync(finalRoot, 0o700);
+    const finalSelection = { ...selection, candidate_path: path.join(finalRoot, generation, 'candidate'),
+      binding_path: path.join(finalRoot, generation, 'binding.json') };
+    const finalSelectionPath = path.join(finalRoot, 'selection.json');
+    fs.chmodSync(finalSelectionPath, 0o600);
+    fs.writeFileSync(finalSelectionPath, JSON.stringify(finalSelection)); fs.chmodSync(finalSelectionPath, 0o400);
+    const finalHandback = { ...handback, purpose: 'ADR-026-final', source_update: currentUpdate,
+      changed_outputs: CORRECTIVE, corrective_allocation: { 'T-47-19': CORRECTIVE },
+      ...finalSelection, selection_path: finalSelectionPath, selection_sha256: sha(read(finalSelectionPath)) };
+    sealDirectories(path.join(finalRoot, generation, 'candidate'));
+    fs.chmodSync(path.join(finalRoot, generation), 0o500);
+    const finalConsume = () => selectedArtifact(common, finalHandback, FINAL_STAGE);
+    finalConsume(); cases++;
+    rejects('current selector never falls back to original namespace', () => selectedArtifact(common, finalHandback));
+    rejects('corrective allocation cannot replace historical twenty outputs', () => finalConsumeWithDrift());
+    function finalConsumeWithDrift() {
+      return selectedArtifact(common, { ...finalHandback, publication_allocation: { 'T-47-19': CORRECTIVE } }, FINAL_STAGE);
+    }
+    fs.mkdirSync(path.join(finalRoot, 'unselected'), { mode: 0o500 });
+    rejects('additional final generation refuses', finalConsume);
+    fs.rmdirSync(path.join(finalRoot, 'unselected'));
+    if (authenticatedSignatureFixture) {
+    const signatureRoot = path.join(temporary, 'signature'); fs.mkdirSync(signatureRoot);
+    const fixtureApproval = path.join(signatureRoot, 'generation.json');
+    for (const name of ['generation.json', 'generation.json.asc', 'operator-public-key.asc']) {
+      fs.writeFileSync(path.join(signatureRoot, name), read(path.join(path.dirname(HANDOFF), name)));
+      fs.chmodSync(path.join(signatureRoot, name), 0o400);
+    }
+    authenticateHandback(fixtureApproval, HANDOFF_SHA); cases++;
+    fs.chmodSync(fixtureApproval, 0o600);
+    fs.writeFileSync(fixtureApproval, JSON.stringify({ ...JSON.parse(read(fixtureApproval)), actor: 'foreign' }));
+    fs.chmodSync(fixtureApproval, 0o400);
+    rejects('self-supplied digest cannot authenticate changed signed bytes',
+      () => authenticateHandback(fixtureApproval, sha(read(fixtureApproval))));
+    fs.unlinkSync(fixtureApproval + '.asc');
+    rejects('missing signature refuses despite matching digest',
+      () => authenticateHandback(fixtureApproval, sha(read(fixtureApproval))));
+    }
+    const coordinator = path.join(temporary, 'coordinator');
+    fs.mkdirSync(path.join(coordinator, '.planning'), { recursive: true });
+    fs.writeFileSync(path.join(coordinator, '.planning/config.json'), '{"admission":"host"}\n');
+    const sourceConfig = sha(read(path.join(root, '.planning/config.json')));
+    const coordinatorConfig = sha(read(path.join(coordinator, '.planning/config.json')));
+    const configured = { ...source, repository: coordinator, config_sha256: sourceConfig,
+      coordinator_config_sha256: coordinatorConfig };
+    const configApproval = { reviewed_source_config_sha256: sourceConfig, coordinator_config_sha256: coordinatorConfig };
+    validateConfigurations(root, configured, configApproval); cases++;
+    rejects('distinct configuration pins cannot be swapped', () => validateConfigurations(root,
+      { ...configured, config_sha256: coordinatorConfig }, configApproval));
+    fs.appendFileSync(path.join(coordinator, '.planning/config.json'), 'drift');
+    rejects('operative coordinator config drift', () => validateConfigurations(root, configured, configApproval));
+    fs.writeFileSync(path.join(coordinator, '.planning/config.json'), '{"admission":"host"}\n');
+    fs.appendFileSync(path.join(root, '.planning/config.json'), 'drift');
+    rejects('reviewed checkout config drift', () => validateConfigurations(root, configured, configApproval));
+    write('.planning/config.json', '{"reviewed":true}\n');
+    write('docs/publication.md', 'private publication descendant\n');
+    git(root, 'add', 'docs'); git(root, 'commit', '-qm', 'private docs descendant');
+    validateDescendant(root, source); cases++;
+    const mutationFile = 'plugins/delivery-pipeline/scripts/role-artifact.cjs';
+    const unchangedInput = read(path.join(root, mutationFile));
+    write(mutationFile, 'foreign canonical update\n');
+    git(root, 'add', mutationFile); git(root, 'commit', '-qm', 'private canonical drift');
+    rejects('canonical descendant refuses', () => validateDescendant(root, source));
+    write(mutationFile, unchangedInput); git(root, 'add', mutationFile); git(root, 'commit', '-qm', 'private revert');
+    rejects('reverted canonical movement still refuses', () => validateDescendant(root, source));
+    git(root, 'checkout', '--detach', source.head);
+    const noWriteMethods = ['writeFileSync', 'appendFileSync', 'mkdirSync', 'renameSync', 'chmodSync',
+      'unlinkSync', 'rmSync', 'cpSync', 'linkSync', 'symlinkSync'];
+    const savedMethods = new Map(noWriteMethods.map(name => [name, fs[name]]));
+    const savedBuild = builder.build;
+    try {
+      for (const name of noWriteMethods) fs[name] = () => { throw new Error('consumer attempted write: ' + name); };
+      builder.build = () => { throw new Error('consumer attempted builder'); };
+      consume(); validateDescendant(root, source); cases++;
+    } finally {
+      for (const [name, method] of savedMethods) fs[name] = method;
+      builder.build = savedBuild;
+    }
     const canonical = path.join(root, 'plugins/delivery-pipeline/scripts/role-artifact.cjs');
     const originalCanonical = read(canonical); fs.appendFileSync(canonical, 'drift\n');
     rejects('source drift', () => assert.deepEqual(canonicalInputs(root), source.identities));
@@ -633,6 +979,36 @@ function privateFixtures() {
     parentSource.parent_commits['T-47-13'].base_merge_commits = ['f'.repeat(40)];
     rejects('unmerged base_merge', () => validateParents(parentSource, state, number => live[number], ancestry));
     parentSource.parent_commits['T-47-13'].base_merge_commits = originalMerge;
+    const finalState = {}, finalSource = { repository: root, head: source.head, parent_commits: {}, provenance: {} };
+    for (let n = 1; n <= 18; n++) {
+      const id = 'T-47-' + String(n).padStart(2, '0');
+      finalState[id] = { status: 'merged', pr: n, merge_sha: source.head, base: 'epic/47',
+        url: 'https://github.com/serhii-nochevnyi/shipyard/pull/' + n };
+      finalSource.parent_commits[id] = { head: sha(id).slice(0, 40), merge: source.head, base_merge_commits: [source.head] };
+      finalSource.provenance[id] = { pr: n, base: 'epic/47', url: finalState[id].url,
+        state_sha256: sha(canon(finalState[id])) };
+    }
+    finalState['T-47-19'] = { status: 'pending' };
+    const saveBoard = () => write('.planning/graph/delivery-state.json', JSON.stringify(finalState));
+    finalSource.delivery_state_sha256 = sha(read(saveBoard()));
+    validateDeliveryState(finalSource, ancestry, true); cases++;
+    finalState['T-47-19'] = { status: 'pr-open', pr: 438 };
+    finalState['T-48-01'] = { status: 'pending' };
+    saveBoard();
+    assert.notEqual(sha(read(path.join(root, '.planning/graph/delivery-state.json'))), finalSource.delivery_state_sha256);
+    validateDeliveryState(finalSource, ancestry, true); cases++;
+    for (const id of Object.keys(finalSource.parent_commits)) {
+      const original = finalState[id];
+      for (const mutation of [{ ...original, projection: 'changed' }, undefined,
+        { ...original, merge_sha: 'f'.repeat(40) }]) {
+        if (mutation) finalState[id] = mutation; else delete finalState[id];
+        saveBoard();
+        rejects('final signed parent mutation/missing/merge drift: ' + id,
+          () => validateDeliveryState(finalSource, ancestry, true));
+      }
+      finalState[id] = original;
+    }
+    saveBoard(); validateDeliveryState(finalSource, ancestry, true); cases++;
     assert.equal(buildCalls, 1); consume();
     return { passed: cases, private_build_calls: buildCalls, selected_reuse_build_calls: 0 };
   } finally {
@@ -645,7 +1021,8 @@ function privateFixtures() {
   }
 }
 
-module.exports = { check };
+module.exports = { check, authenticateOriginal, authenticateFinal, recheckFinal, selectedArtifact, validateSourceUpdate,
+  validateDescendant, validateConfigurations, CORRECTIVE, FINAL_HANDOFF, FINAL_HANDOFF_SHA };
 
 if (require.main === module) {
   try {
@@ -655,11 +1032,11 @@ if (require.main === module) {
       assert.equal(process.argv.length, 4, 'usage: node phase47-package-publication.test.cjs --group <group>');
       assert.equal(process.argv[2], '--group');
       assert(Object.hasOwn(GROUPS, process.argv[3]), 'unknown publication group');
-      const fixtures = privateFixtures();
+      const fixtures = privateFixtures(true);
       console.log(JSON.stringify({ ...check(process.argv[3]), fixtures }));
     }
   } catch (error) {
-    console.error(JSON.stringify({ status: 'blocked', ticket: 'T-47-05', reason: error.message }));
+    console.error(JSON.stringify({ status: 'blocked', ticket: 'T-47-19', reason: error.message }));
     process.exitCode = 1;
   }
 }

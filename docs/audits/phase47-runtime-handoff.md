@@ -1,3 +1,82 @@
+# T-47-19 current durable handoff
+
+Historical executor duty: return the uncommitted fifteen-owner implementation
+to the existing trusted coordinator. Current duty: return these three document
+repairs, uncommitted, for trusted verification and publication. Worktree: `/Volumes/KINGSTON/worktrees/phase47-authenticated-delivery/T-47-19`. Executor source HEAD: `8192ba38942be328b27f8aa54984eae7cd47231c`;
+source tree: `4ba34341bc4e94620de21a4c81d58a2f627afdca`. Common directory:
+`/Volumes/KINGSTON/claude-shipyard/.git`. Current executor controller/run/writer lease are
+not supplied and remain null; this handback does not infer them from a historical
+research receipt. No host cleanup paths/PIDs, safe rollback identity, installed
+release or new paid native collection is claimed.
+
+Current signed handback: `/Users/serhii/.local/state/shipyard/codex-decompose/6cba328f5f0de395b373ad6c77a164feb771363c4e6b7a96888b7075d52da7aa/phase47-final-generation-adr026-source-update-1/generation.json`,
+SHA-256 `d788b6e1be9b78914d9e58f1d9fb88f5069a0ece2517a22e9b80973c75ebccfe`.
+Signed source approval: `/Users/serhii/.local/state/shipyard/codex-decompose/6cba328f5f0de395b373ad6c77a164feb771363c4e6b7a96888b7075d52da7aa/phase47-final-generation-adr026-source-update-1/source-approval.json`,
+SHA-256 `c91002a34bf75f85d4860a052310b1b84fff1aadfe7e57be9ea433a4ac4ca659`.
+Selection: `/Volumes/KINGSTON/claude-shipyard/.git/shipyard-phase47-final-publication/INV-014-runtime-delivery-correctness/ADR-026-source-update-1/selection.json`, SHA-256 `012a1889290a5aa9cd76e50eb291b3b09d156acc4c17506a26514e285f1905a6`.
+Binding: `/Volumes/KINGSTON/claude-shipyard/.git/shipyard-phase47-final-publication/INV-014-runtime-delivery-correctness/ADR-026-source-update-1/4e63582ca45a0dc5edd2f63fd46ccc07afbff13cf3e71f8d6bbb305715598d50/binding.json`, SHA-256 `21c9c96cbebedf1a3029a93bd5ae650fdbecdb1c0e28352a0c6285c4a184a996`.
+Readonly candidate: `/Volumes/KINGSTON/claude-shipyard/.git/shipyard-phase47-final-publication/INV-014-runtime-delivery-correctness/ADR-026-source-update-1/4e63582ca45a0dc5edd2f63fd46ccc07afbff13cf3e71f8d6bbb305715598d50/candidate`, inventory SHA-256
+`e92f06723873ad56a3337f011cc144b4ce7a287a972c28f6f6a86b751dd536c8`. Package: `56e4bb0aa02dbcacb9c0ab4764adc575d5b565cb8ca01d18ce630be80ea6aa8d`;
+version: `0.71.0+codex.3274a569f21d3bce`; complete inventory: 161 files.
+The four corrected mirrors/plugin manifest, three shared mirrors and build
+manifest all come from this single coordinator-supported stage with sealed bytes
+and original publication modes; no builder/signing authority was used here.
+
+Original T05 and superseded first-final selections, signatures and approval links
+remain immutable. Superseded first-final handback SHA-256 is
+`83441e6d3f4a65b8b6018e9a753c1c7ea95a64181cf49a4b8877d679f55ae799`;
+it retains source 72f033c9 and eight-output correction history. Current D22 source
+8192ba38 uses seven mirrors plus two manifests, nine outputs. This history is
+separate from original sixteen native owners and twenty mechanical outputs.
+The full 48868-byte original ledger is retained under
+`/Users/serhii/.local/state/shipyard/codex-decompose/6cba328f5f0de395b373ad6c77a164feb771363c4e6b7a96888b7075d52da7aa/phase47-final-generation-adr026-source-update-1/original-runtime-acceptance.json`, SHA-256 `592439dcf4d663f9a072d280dfbb9b6866d43061ffda8094cdc5ddbd94c5d98d`.
+Original refused research and missing capacity, notification, GPG, cleanup,
+installed/native acceptance and unknown accounting retain their prior meaning.
+
+Verification outcomes are measured in `.shipyard-evidence.md` and the current
+ledger's `verification` field. HOST acceptance units and three final HOST tuples were pending at the sandbox
+executor handback. Subsequently, the trusted coordinator reported all twelve
+exact PLAN19 commands passed and signed predecessor commit
+`c21e04e1e7863bb1f07a562145a8c2faaf46241a`, tree
+`af3fd000fac48cf083d5dbd245ec3b21a7324444`, with verification evidence digest
+`1fd8c0dc7d7674dfc322daf21c36a7636cad44a8af7e882f8dbe2a608231dba3`.
+The commit trailer and `/tmp/phase47-19-final-publication-result.json` identify
+that predecessor; the coordinator reports CI run `37626213827` passed. The
+protected host proof is unavailable to this sandbox and the CI API could not be
+reached for independent rechecking. This record summarizes the coordinator
+report, without inventing per-command outputs or a native acceptance receipt.
+Fresh verification of these document edits remains pending with the coordinator. No fixture result replaces host proof. An actual failure blocks;
+protected-authority denial remains unresolved without a permission change/retry.
+
+Next criterion: fresh trusted verification of this document repair, supported
+signing and coverage, then coordinator publication/merge. After genuine 19 delivery merge,
+obtain fresh full architecture and integrator judgments at exact live final
+head/base and complete phase membership. Do not relabel earlier ticket-target
+skips or fabricate a verdict. These later judgments do not block native executor
+handback. Preserve the existing writer/recovery order and phase48 independence.
+
+Historical executor sandbox results: all six publication groups exited 0; complete parity covers 161 files.
+Current smoke exited 0 with evidence_check:passed, HOLD, accepted:false, native_launches:0
+and twenty open obligations. Runtime digest check exited 0. At that handback the acceptance unit
+and three HOST tuples were pending; full output hashes/durations are recorded
+in `.shipyard-evidence.md` and the ledger.
+
+Post-edit sandbox diagnostics: `node --test tests/unit/phase47-runtime-acceptance.test.cjs`
+exited 1 (17 passed, one packaged public-load-order test failed with
+`native spawn must be reached`). The exact smoke command
+`node tests/smoke/phase47-runtime-acceptance.cjs --evidence docs/audits/phase47-runtime-acceptance.json`
+exited 1 (`ERR_ASSERTION`). Direct `validateLedger` diagnosis identified
+coordinator `delivery-state.json` digest drift: observed
+`c1e4d846c924100c3412b61e59cef52fe98cce58d0dfa962d3f90d4ca6a6ae24`, expected
+`be5bc64f990bd6f15cb679939f32ac81fbff165796dfaf8f3c62f0cdd8605d0d`.
+These are unresolved post-edit checks for the trusted coordinator; no authority,
+source, graph, generation or expected digest was changed to bypass refusal.
+
+## Retained original T08 handoff (historical)
+
+The text below describes the earlier T08 worktree and duty. Its receipts and
+resource exclusions are retained; they do not identify the current executor run.
+
 # T-47-08 durable handoff
 
 Current duty is **finish the executor handback to the trusted coordinator**.
