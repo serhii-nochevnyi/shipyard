@@ -16,6 +16,12 @@ const FINAL_HANDOFF_SHA = 'd788b6e1be9b78914d9e58f1d9fb88f5069a0ece2517a22e9b809
 const FINAL_STAGE = 'shipyard-phase47-final-publication/INV-014-runtime-delivery-correctness/ADR-026-source-update-1';
 const PLAN19_SHA = 'd12c3b870fda04f0dc1f2f6afcebedbfad619f8961662ac253ad2abd45d781e8';
 const FINAL_SOURCE = '8192ba38942be328b27f8aa54984eae7cd47231c';
+const SUCCESSOR_HANDOFF = path.join(HOST, 'phase47-final-generation-adr027-current-ticket-evidence/generation.json');
+const SUCCESSOR_HANDOFF_SHA = 'a56da0e28c524cbc55821e10f5791404229f85442edc4424e808b3768b870f15';
+const SUCCESSOR_APPROVAL_SHA = 'a7e71a2f9f2a53d3a828adb46a19544e40e98da50f8e5169b3c9f5d113d308fc';
+const SUCCESSOR_STAGE = 'shipyard-phase47-final-publication/INV-014-runtime-delivery-correctness/ADR-027-current-ticket-evidence';
+const SUCCESSOR_SOURCE = 'c9bd8ccae0c688e034cf9f94df4ad0cfc4c909b7';
+const PLAN21_SHA = 'e0477ce6956720fd9697474731dea417626e7128cd84868c91b663d9a17a2f66';
 const OPERATOR = '2F485C0A455BA33463F66332900FCE87BD1BFF0D';
 const BASELINE = '7eebae4812b3c67ccdbbb63c8c1603f7767b1466';
 const PHASE = '.planning/phases/47-complete-deferred-decomposition-wait-attribution';
@@ -37,6 +43,8 @@ const ALLOCATION = {
 const UNION = Object.values(ALLOCATION).flat().sort();
 const CORRECTIVE = ['codex-arch-review-context', 'codex-runtime-host', 'codex-delivery-host',
   'codex-planning-context-host', 'orchestration-overhead', 'lock', 'architecture-target'].map(mirror)
+  .concat('.codex-plugin/plugin.json', 'package-build.json').sort();
+const SUCCESSOR_CORRECTIVE = ['role-artifact', 'codex-arch-review-context', 'claude-role-host'].map(mirror)
   .concat('.codex-plugin/plugin.json', 'package-build.json').sort();
 const CALLER = ['codex-arch-review-context', 'role-artifact', 'codex-decompose-host',
   'codex-planning-context-host'].map(mirror);
@@ -143,7 +151,7 @@ function validateHandback(handback, selection, binding, selectionPath) {
   assert.equal(handback.historical_manifest_sha256, binding.source.plan_manifest_sha256);
   assert.deepEqual(handback.current_plan_amendments, binding.source.current_plan_amendments);
   validateAllocation(handback.publication_allocation);
-  assert.deepEqual([...handback.changed_outputs].sort(), handback.purpose === 'ADR-026-final'
+  assert.deepEqual([...handback.changed_outputs].sort(), handback.purpose === 'ADR-027-current-ticket-evidence' ? SUCCESSOR_CORRECTIVE : handback.purpose === 'ADR-026-final'
     ? (handback.source_update ? CORRECTIVE : CORRECTIVE.filter(p => p !== mirror('architecture-target'))) : UNION,
     'unexpected generation scope');
   if (handback.purpose === 'ADR-026-final')
@@ -298,7 +306,7 @@ function authenticateOriginal(common) {
   return { handback, selected, planning, historical_only: true };
 }
 
-function authenticateFinal(common, root = REPOSITORY) {
+function authenticateFinal(common, root = REPOSITORY, historical = false) {
   const handback = authenticateHandback(FINAL_HANDOFF, FINAL_HANDOFF_SHA);
   assert.equal(handback.purpose, 'ADR-026-final');
   const selected = selectedArtifact(common, handback, FINAL_STAGE);
@@ -403,8 +411,10 @@ function authenticateFinal(common, root = REPOSITORY) {
   const verificationRef = metadata.trusted_finalization.verification;
   const verificationBytes = read(verificationRef.path);
   assert.equal(sha(canon(JSON.parse(verificationBytes))), verificationRef.digest, 'supported verification envelope drift');
-  const verification = require(path.join(root, 'plugins/delivery-pipeline/scripts/host-verification.cjs'))
-    .readEvidence(verificationRef.path, verificationRef.digest);
+  const verificationEnvelope = JSON.parse(read(verificationRef.path));
+  assert.equal(sha(canon(verificationEnvelope)), verificationRef.digest, 'signed verification envelope drift');
+  assert.equal(verificationEnvelope.format, 'shipyard.host-authenticated.v1');
+  const verification = verificationEnvelope.payload;
   assert(verification && verification.ticket === 'T-47-18', 'authentic retained fixer verification required');
   assert.equal(verification.plan_sha256, approval.tail_plan_amendments[0].sha256);
   assert(verification.results.length && verification.results.every(row => row.outcome === 'passed'));
@@ -427,8 +437,149 @@ function authenticateFinal(common, root = REPOSITORY) {
     return sha(bytes) !== entry.sha256 || mode !== entry.git_mode;
   }).map(entry => entry.path).sort();
   assert.deepEqual(delta, CORRECTIVE, 'actual complete reviewed-source publication delta drift');
-  const current = validateSource(root, selected.binding, approval);
+  const current = historical ? { historical_only: true } : validateSource(root, selected.binding, approval);
   return { handback, selected, approval, original, originalSelected, planning, current };
+}
+
+function validateSuccessorContract(handback, approval) {
+  assert.equal(handback.purpose, 'ADR-027-current-ticket-evidence');
+  assert.equal(approval.schema, 'shipyard.phase47-current-source-approval.v1');
+  assert.equal(approval.purpose, handback.purpose);
+  assert.equal(approval.status, 'approved');
+  assert.equal(approval.actor, 'trusted-coordinator');
+  assert.equal(approval.native_receipt, false);
+  assert.equal(approval.source_head, SUCCESSOR_SOURCE);
+  assert.equal(handback.source_head, SUCCESSOR_SOURCE);
+  assert.deepEqual(approval.corrective_allocation, { 'T-47-21': handback.corrective_allocation['T-47-21'] });
+  assert.deepEqual(Object.keys(handback.corrective_allocation), ['T-47-21']);
+  assert.deepEqual([...approval.corrective_allocation['T-47-21']].sort(), SUCCESSOR_CORRECTIVE);
+  assert.deepEqual([...handback.changed_outputs].sort(), SUCCESSOR_CORRECTIVE);
+  for (const key of ['successor_planner', 'current_checker', 'current_research', 'source_correction',
+    'tail_plan_amendments', 'delivery_metadata_amendment', 'corrective_allocation', 'prior_final_handoff'])
+    assert.deepEqual(approval[key], handback[key], 'successor approval drift: ' + key);
+  assert.equal(approval.tail_plan_amendments[0].sha256, 'd4f25b6a0668eb2848b73dc0738f6c166883a232aa607142b5b9d066537bc9c6');
+  assert.equal(approval.tail_plan_amendments[1].sha256, PLAN21_SHA);
+  assert.equal(approval.current_checker.verdict.input_sha256.plan21, PLAN21_SHA);
+  assert.equal(approval.current_checker.verdict.input_sha256.plan20, approval.tail_plan_amendments[0].sha256);
+  assert.equal(approval.current_checker.verdict.status, 'passed');
+  assert.deepEqual(approval.current_checker.verdict.blockers, []);
+}
+
+function authenticateSuccessor(common, root = REPOSITORY) {
+  const handback = authenticateHandback(SUCCESSOR_HANDOFF, SUCCESSOR_HANDOFF_SHA);
+  const approvalRef = handback.current_source_approval;
+  assert.equal(approvalRef.path, path.join(path.dirname(SUCCESSOR_HANDOFF), 'source-approval.json'));
+  assert.equal(approvalRef.sha256, SUCCESSOR_APPROVAL_SHA);
+  assert.equal(approvalRef.signature_path, approvalRef.path + '.asc');
+  const approval = authenticateHandback(approvalRef.path, SUCCESSOR_APPROVAL_SHA);
+  validateSuccessorContract(handback, approval);
+  const selected = selectedArtifact(common, handback, SUCCESSOR_STAGE);
+  selected.successor = true;
+  const source = selected.binding.source;
+  assert.equal(approval.source_tree, source.tree);
+  assert.equal(approval.source_identity_sha256, handback.source_identity_sha256);
+  assert.equal(approval.canonical_input_digest, selected.binding.canonical_input_digest);
+  assert.deepEqual(approval.parent_commits, source.parent_commits);
+  assert.deepEqual(approval.provenance, source.provenance);
+  const prior = authenticateFinal(common, root, true);
+  for (const key of ['generation_id', 'source_head', 'selection_path', 'selection_sha256', 'binding_path', 'binding_sha256'])
+    assert.equal(handback.prior_final_handoff[key], prior.handback[key], 'T19 predecessor drift: ' + key);
+  assert.equal(handback.prior_final_handoff.path, FINAL_HANDOFF);
+  assert.equal(handback.prior_final_handoff.sha256, FINAL_HANDOFF_SHA);
+  assert.equal(handback.original_handoff_path, HANDOFF);
+  assert.equal(handback.original_handoff_sha256, HANDOFF_SHA);
+  assert.equal(handback.original_generation_id, prior.original.generation_id);
+  assert.equal(handback.original_index_sha256, prior.original.original_index_sha256);
+  reference(handback.original_configuration_snapshot, true);
+  assert.equal(handback.original_configuration_snapshot.sha256, prior.originalSelected.binding.source.config_sha256);
+  reference(handback.original_ledger, true);
+  reference(handback.prior_handoff_document, true);
+  assert.deepEqual(JSON.parse(reference(handback.original_ledger, true)), JSON.parse(git(root, 'show', SUCCESSOR_SOURCE + ':docs/audits/phase47-runtime-acceptance.json')));
+  assert.equal(sha(reference(handback.prior_handoff_document, true)), sha(git(root, 'show', SUCCESSOR_SOURCE + ':docs/audits/phase47-runtime-handoff.md')));
+  for (const ref of approval.tail_plan_amendments) reference(ref);
+  const planner = JSON.parse(reference(approval.successor_planner));
+  assert.equal(planner.status, 'completed');
+  assert.equal(planner.receipt.compliance, 'verified');
+  assert.equal(planner.receipt.gsd_role, 'gsd-planner');
+  assert.equal(planner.receipt.dispatch_id, approval.successor_planner.dispatch_id);
+  assert.deepEqual(planner.artifact_index, approval.successor_planner.artifact_index);
+  reference(planner.receipt.runtime_evidence.transcript);
+  const plannerChild = planner.receipt.runtime_evidence.native_child_evidence;
+  assert.equal(plannerChild.agent_role, 'gsd-planner');
+  const plannerRaw = read('/Users/serhii/.codex/sessions/2026/10/07/rollout-2026-10-07T18-50-31-01a1170f-26ce-7203-9e61-40c863b26c3e.jsonl', plannerChild.sha256).toString();
+  require('../smoke/phase47-runtime-acceptance.cjs').validateInlineFirstCall(plannerRaw, plannerChild.task_relay, plannerChild);
+  const plannerRecords = plannerRaw.trim().split('\n').map(line => JSON.parse(line));
+  const plannerMeta = plannerRecords.find(row => row.type === 'session_meta')?.payload;
+  assert.equal(plannerMeta?.id, plannerChild.session_id);
+  assert.equal(plannerMeta?.parent_thread_id, plannerChild.parent_thread_id);
+  assert.equal(plannerMeta?.agent_role, 'gsd-planner');
+  const index = JSON.parse(reference(planner.artifact_index));
+  for (const entry of approval.successor_planner.historical_materialized_entries) {
+    const original = index.entries.find(row => row.path === entry.path);
+    assert(original, 'native planner index member missing');
+    assert.equal(original.sha256, entry.sha256);
+    reference({ ...entry, path: entry.physical_path });
+  }
+  const checkerRef = approval.current_checker, checker = JSON.parse(reference(checkerRef));
+  assert.equal(checker.dispatch_id, checkerRef.dispatch_id);
+  assert.equal(checker.receipt.compliance, 'verified');
+  assert.equal(checker.receipt.gsd_role, 'gsd-plan-checker');
+  assert.deepEqual(checker.receipt.runtime_evidence.native_child_evidence, checkerRef.native_child_evidence);
+  reference(checkerRef.transcript);
+  const childRaw = reference(checkerRef.native_child_transcript, true).toString();
+  require('../smoke/phase47-runtime-acceptance.cjs').validateInlineFirstCall(childRaw,
+    checkerRef.native_child_evidence.task_relay, checkerRef.native_child_evidence);
+  const records = childRaw.trim().split('\n').map(line => JSON.parse(line));
+  const meta = records.find(row => row.type === 'session_meta')?.payload;
+  assert.equal(meta?.id, checkerRef.native_child_evidence.session_id);
+  assert.equal(meta?.parent_thread_id, checkerRef.native_child_evidence.parent_thread_id);
+  assert.equal(meta?.agent_role, 'gsd-plan-checker');
+  const completed = records.filter(row => row.type === 'event_msg' && row.payload?.type === 'task_complete');
+  assert.equal(completed.length, 1);
+  assert.deepEqual(JSON.parse(completed[0].payload.last_agent_message), checkerRef.verdict);
+  assert.equal(checkerRef.native_child_transcript.sha256, checkerRef.native_child_evidence.sha256);
+  assert.equal(checkerRef.verdict.input_sha256.task, checkerRef.native_child_evidence.task_relay.sha256);
+  reference(approval.current_research);
+  for (const ref of approval.delivery_metadata_amendment.amendments) reference(ref, true);
+  const preservedPlans = JSON.parse(reference(approval.original19_plan_preservation));
+  assert.equal(preservedPlans.count, 19);
+  assert.equal(preservedPlans.files.length, 19);
+  for (const entry of preservedPlans.files)
+    reference({ ...entry, path: path.join(source.repository, entry.path) });
+  assert.equal(preservedPlans.files.find(row => path.basename(row.path) === '47-19-PLAN.md').sha256, PLAN19_SHA);
+  for (const key of ['executor', 'fixer', 'fixture_fixer']) {
+    const result = JSON.parse(reference(approval.source_correction[key]));
+    assert.equal(result.ticket, 'T-47-20');
+    assert.equal(result.receipt.compliance, 'verified');
+    assert.equal(result.receipt.runtime, 'codex');
+    assert.equal(result.receipt.role, key === 'executor' ? 'executor' : 'ci-fix');
+    assert.equal(result.receipt.dispatch_id, result.dispatch_id);
+    if (key === 'executor') assert.equal(result.status, 'verification_failed');
+  }
+  for (const key of ['prior_six_owner_finalization', 'trusted_finalization']) reference(approval.source_correction[key]);
+  assert.deepEqual(approval.source_correction.actual_merge, source.parent_commits['T-47-20']);
+  assert.equal(source.parent_commits['T-47-20'].merge, SUCCESSOR_SOURCE);
+  const verificationRef = approval.source_correction.trusted_finalization.verification;
+  const verificationEnvelope = JSON.parse(read(verificationRef.path));
+  assert.equal(sha(canon(verificationEnvelope)), verificationRef.digest, 'signed verification envelope drift');
+  assert.equal(verificationEnvelope.format, 'shipyard.host-authenticated.v1');
+  const verification = verificationEnvelope.payload;
+  assert.equal(verification.ticket, 'T-47-20');
+  assert.equal(verification.plan_sha256, approval.tail_plan_amendments[0].sha256);
+  assert.equal(verification.results.length, 4);
+  assert(verification.results.every(row => row.outcome === 'passed'));
+  assert.deepEqual(verification, approval.source_correction.host_verification);
+  assert.deepEqual(selected.binding.outputs.map(row => row.path), prior.selected.binding.outputs.map(row => row.path));
+  const delta = selected.binding.outputs.filter(entry => sha(git(root, 'show', source.head + ':plugins/shipyard/' + entry.path)) !== entry.sha256
+    || gitText(root, 'ls-tree', source.head, '--', 'plugins/shipyard/' + entry.path).split(' ')[0] !== entry.git_mode).map(row => row.path).sort();
+  assert.deepEqual(delta, SUCCESSOR_CORRECTIVE);
+  const current = validateSource(root, selected.binding, approval);
+  return { handback, selected, approval, prior, planning: prior.planning, current };
+}
+
+function recheckSuccessor(authenticated, root = REPOSITORY) {
+  const refreshed = authenticateSuccessor(authenticated.selected.binding.source.common, root);
+  assert.deepEqual(refreshed, authenticated, 'successor changed during inspection');
 }
 
 function recheckFinal(authenticated, root = REPOSITORY) {
@@ -443,7 +594,7 @@ function recheckFinal(authenticated, root = REPOSITORY) {
 }
 
 function validateParents(source, state, getPullRequest, ancestor, final = false) {
-  const parents = final ? Array.from({ length: 18 }, (_, n) => 'T-47-' + String(n + 1).padStart(2, '0')) : ['T-47-13', 'T-47-03', 'T-47-04', 'T-47-09', 'T-47-15', 'T-47-14'];
+  const parents = final ? Array.from({ length: source.parent_commits['T-47-20'] ? 20 : 18 }, (_, n) => 'T-47-' + String(n + 1).padStart(2, '0')) : ['T-47-13', 'T-47-03', 'T-47-04', 'T-47-09', 'T-47-15', 'T-47-14'];
   assert.deepEqual(Object.keys(source.parent_commits).sort(), [...parents].sort());
   assert.deepEqual(Object.keys(source.provenance).sort(), [...parents].sort());
   for (const id of parents) {
@@ -583,8 +734,8 @@ function validatePublication(root, selected, group) {
   const published = path.join(root, 'plugins/shipyard');
   const observed = inventory(published);
   const outputs = new Map(binding.outputs.map(entry => [entry.path, entry]));
-  const final = selected.final === true;
-  const permitted = final ? CORRECTIVE : UNION;
+  const final = selected.final === true || selected.successor === true;
+  const permitted = selected.successor ? SUCCESSOR_CORRECTIVE : final ? CORRECTIVE : UNION;
   const required = final && ['relay', 'complete'].includes(group)
     ? binding.outputs.map(entry => entry.path).filter(relative => group === 'complete'
       || !['.codex-plugin/plugin.json', 'package-build.json'].includes(relative)) : GROUPS[group];
@@ -681,22 +832,24 @@ function stageContracts(selected) {
 function check(group) {
   assert(Object.hasOwn(GROUPS, group), 'unknown publication group');
   const common = gitText(REPOSITORY, 'rev-parse', '--path-format=absolute', '--git-common-dir');
-  const authenticated = authenticateFinal(common);
+  const authenticated = authenticateSuccessor(common);
   const { handback, selected, current, planning } = authenticated;
   const count = validatePublication(REPOSITORY, selected, group);
-  const contracts = stageContracts(selected);
-  recheckFinal(authenticated);
+  const contracts = group === 'candidate' ? null : stageContracts(selected);
+  recheckSuccessor(authenticated);
   validatePublication(REPOSITORY, selected, group);
-  return { status: 'completed', ticket: 'T-47-19', group, generation_id: handback.generation_id,
+  return { status: 'completed', ticket: 'T-47-21', group, generation_id: handback.generation_id,
     source_head: selected.binding.source.head, source_identity_sha256: handback.source_identity_sha256,
-    current_admission: current, handback_path: FINAL_HANDOFF, handback_sha256: FINAL_HANDOFF_SHA,
+    current_admission: current, handback_path: SUCCESSOR_HANDOFF, handback_sha256: SUCCESSOR_HANDOFF_SHA,
     selection_path: selected.selectionPath, selection_sha256: handback.selection_sha256,
     binding_path: selected.selection.binding_path, binding_sha256: selected.selection.binding_sha256,
     candidate_path: selected.selection.candidate_path, candidate_sha256: selected.selection.candidate_sha256,
     package_sha256: selected.binding.package_sha256, version: selected.binding.version,
     output_count: selected.binding.outputs.length, publication_count: count, build_calls: 0, planning,
-    corrective_outputs: CORRECTIVE, original_output_count: UNION.length, original_native_owner_count: 16,
-    contracts, remaining_obligations: ['current exact HOST verification', 'T-47-08 installed/native acceptance',
+    corrective_outputs: SUCCESSOR_CORRECTIVE, historical_corrective_output_count: CORRECTIVE.length, original_output_count: UNION.length, original_native_owner_count: 16,
+    contracts, covered_groups: group === 'complete' ? Object.keys(GROUPS) : [group],
+    successor_corrective_output_count: SUCCESSOR_CORRECTIVE.length, inspector_build_calls: 0,
+    remaining_obligations: ['current exact HOST verification', 'T-47-08 installed/native acceptance',
       'post-delivery aggregate architecture and integrator judgments'] };
 }
 
@@ -711,6 +864,22 @@ function privateFixtures(authenticatedSignatureFixture = false) {
   let cases = 0;
   const rejects = (name, action) => { assert.throws(action, undefined, name); cases++; };
   try {
+    const successorFixture = {
+      purpose: 'ADR-027-current-ticket-evidence', source_head: SUCCESSOR_SOURCE,
+      changed_outputs: SUCCESSOR_CORRECTIVE, corrective_allocation: { 'T-47-21': SUCCESSOR_CORRECTIVE },
+      tail_plan_amendments: [{ sha256: 'd4f25b6a0668eb2848b73dc0738f6c166883a232aa607142b5b9d066537bc9c6' }, { sha256: PLAN21_SHA }],
+      current_checker: { verdict: { status: 'passed', blockers: [], input_sha256: {
+        plan20: 'd4f25b6a0668eb2848b73dc0738f6c166883a232aa607142b5b9d066537bc9c6', plan21: PLAN21_SHA } } },
+    };
+    const successorApproval = { ...successorFixture, schema: 'shipyard.phase47-current-source-approval.v1',
+      status: 'approved', actor: 'trusted-coordinator', native_receipt: false };
+    validateSuccessorContract(successorFixture, successorApproval); cases++;
+    for (const mutation of [{ purpose: 'ADR-026-final' }, { source_head: FINAL_SOURCE },
+      { actor: 'foreign' }, { native_receipt: true }, { status: 'pending' },
+      { corrective_allocation: { 'T-47-21': CORRECTIVE } },
+      { tail_plan_amendments: [{ sha256: PLAN19_SHA }, { sha256: PLAN19_SHA }] }])
+      rejects('successor refuses stale or expanded authority', () =>
+        validateSuccessorContract(successorFixture, { ...successorApproval, ...mutation }));
     const currentUpdate = { commit: '8192ba38942be328b27f8aa54984eae7cd47231c',
       parent: '72f033c994053654d5025e128081ee37be0e04b7',
       canonical_path: 'plugins/delivery-pipeline/scripts/architecture-target.cjs',
@@ -747,9 +916,26 @@ function privateFixtures(authenticatedSignatureFixture = false) {
     const candidate = path.join(generationRoot, 'candidate');
     const bindingPath = path.join(generationRoot, 'binding.json'), selectionPath = path.join(durable, 'selection.json');
     fs.mkdirSync(generationRoot, { recursive: true, mode: 0o700 }); fs.chmodSync(durable, 0o700);
-    let buildCalls = 0;
+    const buildCalls = 0;
     const builder = require(path.join(root, 'scripts/package-shipyard-codex.cjs'));
-    buildCalls++; builder.build(candidate);
+    for (const input of inputs.filter(row => row.path !== 'scripts/package-shipyard-codex.cjs')) {
+      const target = path.join(candidate, 'host', input.path);
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.writeFileSync(target, read(path.join(root, input.path)));
+      fs.chmodSync(target, physical(path.join(root, input.path)).mode & 0o777);
+    }
+    fs.mkdirSync(path.join(candidate, 'hooks'));
+    fs.writeFileSync(path.join(candidate, 'hooks/hooks.json'), '{}\n');
+    const fixtureContent = crypto.createHash('sha256');
+    for (const entry of inventory(candidate)) {
+      fixtureContent.update(entry.path + '\0'); fixtureContent.update(read(path.join(candidate, entry.path)));
+    }
+    const fixtureDigest = fixtureContent.digest('hex');
+    const fixtureManifest = Buffer.from(JSON.stringify({ version: '0.71.0+codex.' + fixtureDigest.slice(0, 16) }));
+    fs.mkdirSync(path.join(candidate, '.codex-plugin'));
+    fs.writeFileSync(path.join(candidate, '.codex-plugin/plugin.json'), fixtureManifest);
+    fs.writeFileSync(path.join(candidate, 'package-build.json'), JSON.stringify({
+      version: JSON.parse(fixtureManifest).version, digest: sha(Buffer.concat([Buffer.from(fixtureDigest + '\0'), fixtureManifest])) }));
     const source = { head: gitText(root, 'rev-parse', 'HEAD'), common,
       identities: inputs, input_modes: inputs.map(entry => ({ path: entry.path,
         mode: physical(path.join(root, entry.path)).mode & 0o777 })),
@@ -787,7 +973,13 @@ function privateFixtures(authenticatedSignatureFixture = false) {
       source_head: source.head, source_identity_sha256: sha(canon(source)),
       original_index_sha256: source.plan_index_sha256, historical_manifest_sha256: source.plan_manifest_sha256,
       current_plan_amendments: [], publication_allocation: ALLOCATION, changed_outputs: UNION };
-    const consume = () => selectedArtifact(common, handback);
+    const consume = () => {
+      const methods = ['writeFileSync', 'appendFileSync', 'mkdirSync', 'chmodSync', 'renameSync', 'unlinkSync', 'rmSync', 'cpSync'];
+      const original = new Map(methods.map(name => [name, fs[name]]));
+      for (const name of methods) fs[name] = () => { throw new Error('inspection attempted write: ' + name); };
+      try { return selectedArtifact(common, handback); }
+      finally { for (const [name, method] of original) fs[name] = method; }
+    };
     consume(); cases++;
     const buildsBefore = buildCalls;
     git(root, '-c', 'commit.gpgsign=false', 'commit', '--allow-empty', '-qm', 'private mechanical descendant');
@@ -1009,7 +1201,7 @@ function privateFixtures(authenticatedSignatureFixture = false) {
       finalState[id] = original;
     }
     saveBoard(); validateDeliveryState(finalSource, ancestry, true); cases++;
-    assert.equal(buildCalls, 1); consume();
+    assert.equal(buildCalls, 0); consume();
     return { passed: cases, private_build_calls: buildCalls, selected_reuse_build_calls: 0 };
   } finally {
     const writable = directory => {
@@ -1021,7 +1213,7 @@ function privateFixtures(authenticatedSignatureFixture = false) {
   }
 }
 
-module.exports = { check, authenticateOriginal, authenticateFinal, recheckFinal, selectedArtifact, validateSourceUpdate,
+module.exports = { authenticateSuccessor, recheckSuccessor, validateSuccessorContract, SUCCESSOR_CORRECTIVE, SUCCESSOR_HANDOFF, SUCCESSOR_HANDOFF_SHA, check, authenticateOriginal, authenticateFinal, recheckFinal, selectedArtifact, validateSourceUpdate,
   validateDescendant, validateConfigurations, CORRECTIVE, FINAL_HANDOFF, FINAL_HANDOFF_SHA };
 
 if (require.main === module) {
@@ -1036,7 +1228,7 @@ if (require.main === module) {
       console.log(JSON.stringify({ ...check(process.argv[3]), fixtures }));
     }
   } catch (error) {
-    console.error(JSON.stringify({ status: 'blocked', ticket: 'T-47-19', reason: error.message }));
+    console.error(JSON.stringify({ status: 'blocked', ticket: 'T-47-21', reason: error.message }));
     process.exitCode = 1;
   }
 }

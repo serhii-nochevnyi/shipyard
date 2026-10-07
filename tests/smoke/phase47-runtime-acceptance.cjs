@@ -126,17 +126,18 @@ function comparePackage(directory, binding, sealed = false) {
   return { package_sha256: build.digest, manifest_sha256: sha(manifestBytes), output_count: actual.length };
 }
 
-function inspectCandidate(candidate, root = ROOT, kind = 'final') {
+function inspectCandidate(candidate, root = ROOT, kind = 'successor') {
   const publication = require('../unit/phase47-package-publication.test.cjs');
   const common = gitText(root, 'rev-parse', '--path-format=absolute', '--git-common-dir');
-  assert(['original', 'final'].includes(kind), 'unknown generation branch');
-  const authenticated = kind === 'final' ? publication.authenticateFinal(common, root)
+  assert(['original', 'final', 'successor'].includes(kind), 'unknown generation branch');
+  const authenticated = kind === 'successor' ? publication.authenticateSuccessor(common, root)
+    : kind === 'final' ? publication.authenticateFinal(common, root, true)
     : publication.authenticateOriginal(common);
   const { handback, selected } = authenticated;
   const { selection, binding, selectionPath } = selected;
   if (candidate) assert.equal(candidate, selection.candidate_path, 'foreign candidate');
   const packageEvidence = comparePackage(selection.candidate_path, binding, true);
-  if (kind === 'final') comparePackage(path.join(root, 'plugins/shipyard'), binding);
+  if (kind === 'successor') comparePackage(path.join(root, 'plugins/shipyard'), binding);
   const dirty = gitText(root, 'status', '--porcelain=v1', '--untracked-files=all');
   const result = { selection, binding, identity: { ...packageEvidence,
     source_head: binding.source.head, source_tree: binding.source.tree,
@@ -146,13 +147,14 @@ function inspectCandidate(candidate, root = ROOT, kind = 'final') {
     selection_path: selectionPath, selection_sha256: handback.selection_sha256,
     binding_path: selection.binding_path, binding_sha256: selection.binding_sha256,
     candidate_path: selection.candidate_path, candidate_sha256: selection.candidate_sha256,
-    generation_handback: { path: kind === 'final' ? publication.FINAL_HANDOFF : HANDOFF,
-      sha256: kind === 'final' ? publication.FINAL_HANDOFF_SHA : HANDOFF_SHA256 },
-    historical_only: kind === 'original' }, authenticated };
-  if (kind === 'final') {
-    publication.recheckFinal(authenticated, root);
+    generation_handback: { path: kind === 'successor' ? publication.SUCCESSOR_HANDOFF : kind === 'final' ? publication.FINAL_HANDOFF : HANDOFF,
+      sha256: kind === 'successor' ? publication.SUCCESSOR_HANDOFF_SHA : kind === 'final' ? publication.FINAL_HANDOFF_SHA : HANDOFF_SHA256 },
+    historical_only: kind !== 'successor', generation_kind: kind }, authenticated };
+  if (kind === 'successor') {
+    publication.recheckSuccessor(authenticated, root);
     comparePackage(path.join(root, 'plugins/shipyard'), binding);
-  } else publication.selectedArtifact(common, handback);
+  } else publication.selectedArtifact(common, handback, kind === 'final'
+    ? 'shipyard-phase47-final-publication/INV-014-runtime-delivery-correctness/ADR-026-source-update-1' : undefined);
   return result;
 }
 
@@ -298,7 +300,12 @@ function validateInlineFirstCall(raw, task, relay, scripts = SCRIPTS) {
     && row.payload?.call_id === first.payload.call_id
     && ['custom_tool_call_output', 'function_call_output'].includes(row.payload.type));
   assert(output && JSON.stringify(output.payload).includes(task.sha256), 'original first-call computed hash missing');
-  assert(!/denied|permission denied|not permitted/i.test(JSON.stringify(output.payload)), 'original first call was denied');
+  const toolOutput = typeof output.payload.output === 'string' ? output.payload.output
+    : Array.isArray(output.payload.output) ? output.payload.output.map(item => item.text || '').join('\n')
+      : JSON.stringify(output.payload);
+  const diagnostics = toolOutput.split(/\n(?:SOURCE=|GATES\n|AGENTS\n|TASK\n)/, 1)[0];
+  assert(diagnostics.includes(task.sha256), 'original first-call hash must precede printed source text');
+  assert(!/denied|permission denied|not permitted/i.test(diagnostics), 'original first call was denied');
   return true;
 }
 
@@ -335,18 +342,23 @@ function validateLedger(ledger) {
     assert(ledger.candidate, 'corrective ledger requires current candidate');
     const publication = require('../unit/phase47-package-publication.test.cjs');
     assert.deepEqual(ledger.corrective_generation.handback,
-      { path: publication.FINAL_HANDOFF, sha256: publication.FINAL_HANDOFF_SHA }, 'foreign corrective handback');
-    const authenticated = publication.authenticateFinal(gitText(ROOT, 'rev-parse',
+      { path: publication.SUCCESSOR_HANDOFF, sha256: publication.SUCCESSOR_HANDOFF_SHA }, 'foreign corrective handback');
+    const authenticated = publication.authenticateSuccessor(gitText(ROOT, 'rev-parse',
       '--path-format=absolute', '--git-common-dir'));
     assert.deepEqual(ledger.corrective_generation.original_ledger, authenticated.handback.original_ledger,
       'foreign retained original ledger');
     assert.deepEqual(ledger.corrective_generation.source_approval, authenticated.handback.current_source_approval);
     const original = jsonOriginal(authenticated.handback.original_ledger);
+    assert.equal(ledger.corrective_generation.kind, 'successor');
+    assert.equal(ledger.corrective_generation.ticket, 'T-47-21');
+    assert.deepEqual(ledger.corrective_generation.predecessor, original.corrective_generation);
+    assert.deepEqual(ledger.corrective_generation.prior_handoff_document, authenticated.handback.prior_handoff_document);
+    assert.deepEqual(ledger.obligations, original.obligations, 'twenty original HOLD rows must remain unchanged');
     for (const field of ['ticket', 'plan_sha256', 'historical_research', 'retained_references', 'historical_unknowns', 'accounting'])
       assert.deepEqual(ledger[field], original[field], 'retained original ledger drift: ' + field);
     for (const row of ledger.obligations.filter(row => row.status !== 'proven'))
       assert.deepEqual(row, original.obligations.find(prior => prior.id === row.id), 'original HOLD obligation drift');
-    publication.recheckFinal(authenticated);
+    publication.recheckSuccessor(authenticated);
   }
   const open = [], verified = [];
   const historical = (ledger.historical_research || []).map(reference => {
@@ -397,7 +409,7 @@ function validateLedger(ledger) {
       && originalAccounting[field] === ledger.accounting[field], 'unknown accounting must remain unknown without original observations');
   }
   if (inspected) {
-    require('../unit/phase47-package-publication.test.cjs').recheckFinal(inspected.authenticated);
+    require('../unit/phase47-package-publication.test.cjs').recheckSuccessor(inspected.authenticated);
     comparePackage(path.join(ROOT, 'plugins/shipyard'), inspected.binding);
   }
   return { schema: 'shipyard.phase47-runtime-acceptance-result.v1', status: open.length ? 'HOLD' : 'accepted',

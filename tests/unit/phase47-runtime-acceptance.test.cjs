@@ -313,6 +313,12 @@ test('first-call inline task attestation refuses a denied heredoc followed by a 
   ];
   const jsonl = () => records.map(record => JSON.stringify(record)).join('\n');
   assert.equal(acceptance.validateInlineFirstCall(jsonl(), task, relay, f.scripts), true);
+  records[3] = response({ type: 'custom_tool_call_output', call_id: 'first',
+    output: 'Script completed\nTASK_SHA256=' + task.sha256 + '\nSOURCE=retained-task.md\nPrior denied HOST outcomes remain denied.' });
+  assert.equal(acceptance.validateInlineFirstCall(jsonl(), task, relay, f.scripts), true);
+  records[3] = response({ type: 'custom_tool_call_output', call_id: 'first',
+    output: 'operation not permitted\nTASK_SHA256=' + task.sha256 + '\nSOURCE=retained-task.md' });
+  assert.throws(() => acceptance.validateInlineFirstCall(jsonl(), task, relay, f.scripts), /first call was denied/);
   const good = records[2];
   records[2] = response({ ...good.payload, input: "python - <<'PY'\nread denied\nPY" });
   records[3] = response({ type: 'custom_tool_call_output', call_id: 'first', output: 'operation not permitted' });
@@ -332,4 +338,25 @@ test('a corrective ledger requires the exact signed retained original ledger', (
   const ledger = acceptance.openLedger();
   ledger.corrective_generation = { original_ledger: { path: '/tmp/foreign', sha256: '0'.repeat(64) } };
   assert.throws(() => acceptance.validateLedger(ledger));
+});
+
+
+test('current successor allocation keeps the original inventories separate', () => {
+  const publication = require('./phase47-package-publication.test.cjs');
+  assert.equal(publication.SUCCESSOR_CORRECTIVE.length, 5);
+  assert.equal(publication.CORRECTIVE.length, 9);
+  assert.notEqual(publication.SUCCESSOR_HANDOFF, publication.FINAL_HANDOFF);
+  assert.notEqual(publication.SUCCESSOR_HANDOFF_SHA, publication.FINAL_HANDOFF_SHA);
+  for (const kind of ['foreign', 'ADR-026', ''])
+    assert.throws(() => acceptance.inspectCandidate(null, REPOSITORY, kind), /unknown generation branch/);
+});
+
+test('successor contract refuses missing, stale, foreign and expanded authority', () => {
+  const publication = require('./phase47-package-publication.test.cjs');
+  const handback = { purpose: 'ADR-027-current-ticket-evidence', source_head: 'c9bd8ccae0c688e034cf9f94df4ad0cfc4c909b7',
+    changed_outputs: publication.SUCCESSOR_CORRECTIVE,
+    corrective_allocation: { 'T-47-21': publication.SUCCESSOR_CORRECTIVE } };
+  for (const approval of [{}, { purpose: 'ADR-026-final' }, { actor: 'trusted-coordinator', native_receipt: false },
+    { source_head: '8192ba38942be328b27f8aa54984eae7cd47231c' }])
+    assert.throws(() => publication.validateSuccessorContract(handback, approval));
 });
