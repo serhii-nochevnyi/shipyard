@@ -236,22 +236,26 @@ function packagedSuite(t, filename, pattern, count) {
   const projected = path.join(f.temporary, filename);
   source = source.replaceAll("require('./assert-harness.cjs')",
     'require(' + JSON.stringify(path.join(__dirname, 'assert-harness.cjs')) + ')');
-  let script = filename === 'codex-decompose-host.test.cjs'
-    ? `const Module=require('node:module');const filename=${JSON.stringify(sourceFile)};
-      const m=new Module(filename);m.filename=filename;m.paths=Module._nodeModulePaths(${JSON.stringify(__dirname)});
-      process.mainModule=m;m._compile(${JSON.stringify(source)},filename);`
-    : null;
+  const script = filename === 'codex-decompose-host.test.cjs'
+    ? path.join(f.temporary, 'packaged-entry.cjs') : null;
+  if (script) fs.writeFileSync(script, `const Module=require('node:module');
+    const fs=require('node:fs');const path=require('node:path');
+    const filename=process.argv[2];const source=fs.readFileSync(process.argv[3],'utf8');
+    const m=new Module(filename);m.filename=filename;
+    m.paths=Module._nodeModulePaths(path.dirname(filename));
+    process.mainModule=m;m._compile(source,filename);`);
   fs.writeFileSync(projected, source);
   const env = { ...process.env, CODEX_HOME: path.join(f.temporary, 'codex'),
     GIT_CONFIG_GLOBAL: path.join(f.temporary, 'gitconfig'), GIT_CONFIG_NOSYSTEM: '1' };
   fs.writeFileSync(env.GIT_CONFIG_GLOBAL, '[user]\nname = Acceptance Fixture\nemail = fixture@example.test\n[commit]\ngpgsign = false\n');
   delete env.NODE_OPTIONS; delete env.SHIPYARD_GRAPH_DIR;
   delete env.NODE_TEST_CONTEXT; delete env.SHIPYARD_RESEARCH_HANDBACK_FIXTURE;
-  const argv = script ? ['--test-name-pattern', pattern, '-e', script]
+  const argv = script ? ['--test-name-pattern', pattern, script, sourceFile, projected]
     : ['--test', '--test-name-pattern', pattern, projected];
   const result = spawnSync(process.execPath, argv, { env, encoding: 'utf8', timeout: 30000,
     maxBuffer: 4 * 1024 * 1024 });
-  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.ifError(result.error);
+  assert.equal(result.status, 0, 'signal=' + result.signal + '\n' + result.stdout + result.stderr);
   assert.match(result.stdout, new RegExp('(?:# |ℹ )pass ' + count + '\\b'));
 }
 
