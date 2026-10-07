@@ -1011,7 +1011,10 @@ for (const [materialBytes, tamper] of [[1996419, null], [2553953, null], [199641
     assert.equal(Buffer.byteLength(material), materialBytes);
     fs.mkdirSync(path.join(root, '.planning'));
     fs.writeFileSync(path.join(root, '.planning/config.json'), '{}');
-    for (const args of [['init', '-q'], ['add', '-A'], ['commit', '-qm', 'fixture']])
+    for (const args of [['init', '-q'],
+      ['config', '--local', 'user.name', 'Shipyard Test'],
+      ['config', '--local', 'user.email', 'shipyard-test@example.invalid'],
+      ['add', '-A'], ['commit', '-qm', 'fixture']])
       execFileSync('git', ['-C', root, '-c', 'commit.gpgsign=false', ...args]);
     const agents = path.join(store, 'agents'); fs.mkdirSync(agents, { mode: 0o700 });
     const variants = codexStaticVariants().filter(value => value.role === 'integrator');
