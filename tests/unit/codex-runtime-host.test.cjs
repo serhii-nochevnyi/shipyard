@@ -996,7 +996,7 @@ test('actual launcher refuses a nonexistent worktree without requiring Git for e
 });
 
 for (const transport of ['function', 'custom'])
-for (const [materialBytes, tamper] of [[1996419, null], [2553953, null], [1996419, 'missing-read'], [1996419, 'truncated'], [1996419, 'source-drift'], [1996419, 'wrong-echo'], [1996419, 'after-complete'], [1996419, 'foreign-completion'], [1996419, 'failed-read'], [1996419, 'surplus-output']].concat(transport === 'custom'
+for (const [materialBytes, tamper] of [[1996419, null], [2553953, null], [1996419, 'missing-read'], [1996419, 'truncated'], [1996419, 'source-drift'], [1996419, 'wrong-echo'], [1996419, 'after-complete'], [1996419, 'foreign-completion'], [1996419, 'failed-read'], [1996419, 'surplus-output'], [1996419, 'known-count-early-asset'], [1996419, 'known-count-complete'], [1996419, 'duplicate-read'], [1996419, 'overlapping-read']].concat(transport === 'custom'
   ? [[1996419, 'unsafe-wrapper']] : [])) test('fixture: ' + transport + ' ' + (tamper || 'complete') + ' ' + materialBytes + '-byte input traverses delivery, static native relay and fresh consumer', async () => {
   const { execFileSync } = require('node:child_process');
   const collector = require('../../plugins/delivery-pipeline/scripts/codex-arch-review-context.cjs');
@@ -1034,6 +1034,21 @@ for (const [materialBytes, tamper] of [[1996419, null], [2553953, null], [199641
     const agentManifest = path.join(agents, '.shipyard-manifest.json');
     fs.writeFileSync(agentManifest, JSON.stringify({ policy_id: policy.POLICY.id, policy_version: policy.POLICY_VERSION,
       policy_hash: policy.POLICY_HASH, agent_files: Object.keys(agentDigests), agent_digests: agentDigests }));
+    const finiteFixture = ['known-count-early-asset', 'known-count-complete', 'duplicate-read', 'overlapping-read'].includes(tamper);
+    let fileInputContext;
+    if (finiteFixture) {
+      const selection = policy.resolveDispatch({ runtime: 'codex', role: 'integrator', signals: { inputTokens: Math.ceil(materialBytes / 4) } });
+      const instructions = collector.instructionEvidence(agents, selection.agent_file, agentManifest);
+      const parts = material.match(/[\s\S]{1,5000}/gu);
+      fileInputContext = collector.prepareFileInput(scope, parts, { role: 'integrator', dispatchId: 'complete-input-dispatch',
+        storageRoot: store, generatedInstructionBytes: instructions.generated_instruction_bytes,
+        binding: { agent_file: selection.agent_file, agent_path: path.join(agents, selection.agent_file),
+          agent_sha256: instructions.sha256, installed_files: instructions.installed_files, policy_hash: selection.policy_hash } });
+      const checked = collector.verifyFileInput(fileInputContext);
+      assert.ok(Math.ceil(checked.manifest_bytes.length / fileInputContext.input_bundle.chunk_bytes) > 7);
+      assert.deepEqual(Buffer.concat(checked.material), Buffer.from(material));
+      assert.equal(policy.resolveDispatch({ runtime: 'codex', role: 'integrator', signals: { inputTokens: fileInputContext.inputTokens } }).agent_file, selection.agent_file);
+    }
     let consumed, stdin, launchedArgs;
     const home = path.join(store, 'codex-home');
     const nativeOptions = { scope, capabilities, env: { CODEX_HOME: home },
@@ -1076,6 +1091,30 @@ for (const [materialBytes, tamper] of [[1996419, null], [2553953, null], [199641
               else records.push(wrap({ type: 'function_call', name: 'exec_command', call_id: callId,
                 arguments: JSON.stringify({ cmd }) }), wrap({ type: 'function_call_output', call_id: callId,
                 output: JSON.stringify({ exit_code: 0, output: encoded }) }));
+            }
+            if (finiteFixture) {
+              const manifestCount = Math.ceil(consumed.manifest_bytes.length / manifest.chunk_bytes);
+              assert.ok(consumed.manifest_bytes.subarray(0, manifest.chunk_bytes).includes(Buffer.from('"manifest_bytes":' + consumed.manifest_bytes.length)));
+              const checksum = JSON.stringify({ sha256: require('node:crypto').createHash('sha256').update(consumed.manifest_bytes).digest('hex'), chunk_count: manifestCount });
+              assert.equal(JSON.parse(checksum).sha256, bundle.manifest_sha256);
+              const checksumProgram = 'const fs=require("node:fs"),crypto=require("node:crypto");const bytes=fs.readFileSync(' + JSON.stringify(manifestPath) + ');console.log(JSON.stringify({sha256:crypto.createHash("sha256").update(bytes).digest("hex"),chunk_count:Math.ceil(bytes.length/' + manifest.chunk_bytes + ')}));';
+              const cmd = "node -e '" + checksumProgram.replaceAll("'", "'\\''") + "'";
+              const checksumRecords = transport === 'custom'
+                ? [wrap({ type: 'custom_tool_call', name: 'exec', call_id: 'fixture-checksum',
+                  input: 'text(await tools.exec_command(' + JSON.stringify({ cmd, max_output_tokens: 10000 }) + '));' }),
+                wrap({ type: 'custom_tool_call_output', call_id: 'fixture-checksum', output: [
+                  { type: 'input_text', text: 'Script completed\nWall time 0.1 seconds\nOutput:' },
+                  { type: 'input_text', text: JSON.stringify({ exit_code: 0, output: checksum }) }] })]
+                : [wrap({ type: 'function_call', name: 'exec_command', call_id: 'fixture-checksum', arguments: JSON.stringify({ cmd }) }),
+                  wrap({ type: 'function_call_output', call_id: 'fixture-checksum', output: JSON.stringify({ exit_code: 0, output: checksum }) })];
+              if (tamper === 'known-count-early-asset') records.splice(14, records.length - 14, ...records.slice(manifestCount * 2, manifestCount * 2 + 2));
+              if (tamper === 'duplicate-read') {
+                const duplicate = structuredClone(records.slice(0, 2));
+                duplicate.forEach(record => { record.payload.call_id = 'fixture-duplicate'; });
+                records.splice(2, 0, ...duplicate);
+              }
+              if (tamper === 'overlapping-read') records.splice(1, 0, records.splice(2, 1)[0]);
+              records.unshift(...checksumRecords);
             }
             if (tamper === 'missing-read') records.pop();
             if (tamper === 'unsafe-wrapper') records[0].payload.input += '\ntext("untrusted extra statement");';
@@ -1120,12 +1159,16 @@ for (const [materialBytes, tamper] of [[1996419, null], [2553953, null], [199641
       } };
     const host = createCodexRuntimeHost({ ...nativeOptions, probe: probe(),
       recorderDir: path.join(store, 'receipts') });
-    const run = () => createCodexDeliveryHost({ scope, host, agentDir: agents, agentManifest, storageRoot: store })
-      .run({ role: 'integrator', context: { prompt: material }, dispatch_id: 'complete-input-dispatch' });
-    if (tamper) {
+    const run = () => createCodexDeliveryHost({ scope, host, agentDir: agents, agentManifest, storageRoot: store, fileInputContext })
+      .run({ role: 'integrator', ...(fileInputContext ? { signals: { inputTokens: fileInputContext.inputTokens } } : {}), context: fileInputContext
+        ? { prompt: fileInputContext.prompt, input_transport: 'host-files', input_bundle: fileInputContext.input_bundle }
+        : { prompt: material }, dispatch_id: 'complete-input-dispatch' });
+    if (tamper && tamper !== 'known-count-complete') {
       await assert.rejects(run, error => tamper === 'source-drift'
         ? error.code === 'RUNTIME_EVIDENCE_INVALID' && /current source or policy changed/.test(error.message)
-        : ['RUNTIME_EVIDENCE_MISMATCH', 'STALE_CONTEXT'].includes(error.code));
+        : tamper === 'known-count-early-asset'
+          ? error.code === 'RUNTIME_EVIDENCE_MISMATCH' && /reordered, duplicated or exceeds its budget/.test(error.message)
+          : ['RUNTIME_EVIDENCE_MISMATCH', 'STALE_CONTEXT'].includes(error.code));
       assert.equal(host.recorder.getVerifiedRecord('complete-input-dispatch'), null);
       return;
     }

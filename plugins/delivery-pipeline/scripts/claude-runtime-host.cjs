@@ -18,7 +18,7 @@ const GSD_ROLES = Object.freeze(['gsd-phase-researcher', 'gsd-planner', 'gsd-pla
 const REQUIRED_HELP_MARKERS = Object.freeze([
   '--model', '--effort', '--output-format', 'stream-json', '--session-id',
   '--permission-mode', '--permission-prompts', '--allowedTools', '--tools',
-  '--restricted', '--strict-mcp-config', '--settings', '--agent',
+  '--restricted', '--strict-mcp-config', '--settings', '--setting-sources', '--agent',
   '--agents',
 ]);
 const UNAVAILABLE_CODES = new Set([
