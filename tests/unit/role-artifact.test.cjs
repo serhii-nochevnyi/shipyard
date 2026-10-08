@@ -1913,8 +1913,6 @@ test('F2 original durable receipt parity and genuine fresh-process DIRECT Codex 
   } finally { fixtureAPI.cleanupJudgment(f); }
 });
 
-done();
-
 for (const repo of [null, 'acme/selected']) test('mixed repository archive scope retains exact selected evidence: ' + repo, () => {
   const value = phaseScopeFixture({repo,mixed:true});
   try {
@@ -1929,3 +1927,5 @@ for (const repo of [null, 'acme/selected']) test('mixed repository archive scope
     assert.throws(()=>value.select({phaseArchiveSelection:selected.selection}));
   } finally {cleanPhaseScope(value);}
 });
+
+done();
