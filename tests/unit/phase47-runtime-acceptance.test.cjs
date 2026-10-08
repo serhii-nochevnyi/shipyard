@@ -849,6 +849,23 @@ test('exact GENF1 historical identity retains its separate pin and signed source
 });
 
 
+test('genuine historical-F1 inspection rechecks the complete original authenticated selection', t => {
+  const p = require('./phase47-package-publication.test.cjs');
+  if (!hostRecordsAvailable(t, [p.F1_HANDOFF, p.F1_HISTORICAL_CONTRACT.path])) return;
+  const common = execFileSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'],
+    { cwd: REPOSITORY, encoding: 'utf8' }).trim();
+  const original = p.authenticateRepairSuccessor(common, REPOSITORY, 'F1', p.F1_HISTORICAL_CONTRACT);
+  const inspected = acceptance.inspectCandidate(null, REPOSITORY, 'historical-F1');
+  assert.deepEqual(inspected.authenticated, original);
+  assert.equal(inspected.identity.output_count, 161);
+  assert.equal(inspected.identity.source_head, original.selected.binding.source.head);
+  assert.equal(inspected.identity.source_tree, original.selected.binding.source.tree);
+  assert.deepEqual(inspected.identity.generation_handback, { path: p.F1_HANDOFF, sha256: p.F1_HANDOFF_SHA });
+  assert.equal(inspected.identity.historical_only, true);
+  assert.equal(inspected.identity.generation_kind, 'historical-F1');
+  assert.equal(Object.keys(original.selected.binding.source.parent_commits).length, 26);
+});
+
 test('pending R2 selection refuses before authority access and retains exact original materialization mappings', () => {
   const p = require('./phase47-package-publication.test.cjs');
   if (p.R2_HANDOFF_SHA === null) {

@@ -156,6 +156,8 @@ function inspectCandidate(candidate, root = ROOT, kind = 'main-review-repair') {
   if (kind === 'main-review-repair') {
     publication.recheckRepairSuccessor(authenticated, root);
     publication.validatePublication(root, selected, 'candidate');
+  } else if (kind === 'historical-F1') {
+    assert.deepEqual(publication.authenticateRepairSuccessor(common, root, 'F1', publication.F1_HISTORICAL_CONTRACT), authenticated);
   } else if (kind === 'volume-successor') {
     assert.deepEqual(publication.authenticateVolumeSuccessor(common, root, true), authenticated);
   } else if (kind === 'successor') {
