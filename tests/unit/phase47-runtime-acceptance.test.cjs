@@ -442,6 +442,28 @@ test('main-review-repair contract refuses configuration swaps and forged publica
     const changed = structuredClone(followup); mutate(changed);
     assert.throws(() => publication.validateRepairContract(changed, { ...followupApproval, ...changed }, true));
   }
+  const r2 = structuredClone(followup);
+  r2.source_head = '15a205063774993bc35404b5c8c8f1013f98b016';
+  r2.source_correction.scope_disposition.path = '/tmp/phase47-R2-existing-contract-scope.json';
+  r2.source_correction.previous_current_publication = {
+    path: publication.F1_HANDOFF, sha256: publication.F1_HANDOFF_SHA,
+    historical_source_contract: publication.F1_HISTORICAL_CONTRACT,
+    selection_path: '/Volumes/KINGSTON/claude-shipyard/.git/shipyard-phase47-final-publication/INV-014-runtime-delivery-correctness/ADR-027-main-review-repair-F1/selection.json',
+    selection_sha256: '68623cda4d53280dca2ad625589a45680b54949ed69afad81f3598cddc5d00f5',
+    binding_path: '/Volumes/KINGSTON/claude-shipyard/.git/shipyard-phase47-final-publication/INV-014-runtime-delivery-correctness/ADR-027-main-review-repair-F1/12b4367bd4d9aaf0dbaea193a5c6693de09499c652a59b3d935d9cad5e022fa8/binding.json',
+    binding_sha256: '3753108de3d078bc90ee50c8618f28f6170b03756c94f2419855ba80c1ed7523' };
+  const r2Approval = { ...structuredClone(approval), ...structuredClone(r2) };
+  publication.validateRepairContract(r2, r2Approval, 'R2');
+  for (const key of ['selection_path', 'selection_sha256', 'binding_path', 'binding_sha256']) {
+    for (const missing of [true, false]) {
+      const changed = structuredClone(r2);
+      if (missing) delete changed.source_correction.previous_current_publication[key];
+      else changed.source_correction.previous_current_publication[key] = key.endsWith('_sha256') ? '0'.repeat(64) : '/foreign/' + key;
+      const changedApproval = { ...structuredClone(r2Approval), ...structuredClone(changed) };
+      assert.throws(() => publication.validateRepairContract(changed, changedApproval, 'R2'),
+        new RegExp('previous GENF1 drift: ' + key));
+    }
+  }
   assert.equal(publication.F1_CORRECTIVE.length, 3);
   assert.equal(publication.F1_HANDOFF_SHA, '27ca0d42db637e83f181d398f0d047959d4295a8486967cfe798dd24476e5509');
 
@@ -794,4 +816,99 @@ test('historical identity equality refuses altered original tuple (non-native fi
     assert.throws(() => p.validatePinnedHistoricalIdentity(changed, source, original));
   }
   assert.throws(() => p.validatePinnedHistoricalIdentity(contract, { ...source, head: 'e'.repeat(40) }, original));
+});
+
+
+test('R2 exact scope and pinned GENF1 history refuse missing or tampered references', () => {
+  const p = require('./phase47-package-publication.test.cjs');
+  const scope = { schema: 'shipyard.phase47-existing-contract-remedy.v1', actor: 'trusted-coordinator',
+    native_receipt: false, status: 'approved', finding: { id: 'F2' }, ticket_count: 27, new_tickets: 0,
+    source_ticket: 'T-47-26', source_pr: 449, publication_ticket: 'T-47-27',
+    actual_corrective_package_outputs: p.F1_CORRECTIVE, publication_files: p.REPAIR_OWNERS,
+    preserve_previous_generation: { path: p.REPAIR_HANDOFF, sha256: p.REPAIR_HANDOFF_SHA },
+    preserve_previous_current_generation: { path: p.F1_HANDOFF, sha256: p.F1_HANDOFF_SHA },
+    plan_pins: p.REPAIR_PLANS.map(sha256 => ({ sha256 })), config_sha256: p.COORDINATOR48_SHA,
+    historical_index_sha256: 'f28d939b31f05fc9ca1da2ce024151e04449a4c1e84315fd56b0d449bf2fc58e' };
+  p.validateR2Scope(scope);
+  for (const mutate of [s => { s.source_pr = 447; }, s => { s.finding.id = 'F1'; },
+    s => { s.actual_corrective_package_outputs.push('foreign'); },
+    s => { delete s.preserve_previous_current_generation; },
+    s => { s.preserve_previous_current_generation.sha256 = '0'.repeat(64); }]) {
+    const altered = structuredClone(scope); mutate(altered); assert.throws(() => p.validateR2Scope(altered));
+  }
+  const previous = { selection_path: '/fixed/selection.json', selection_sha256: 'a'.repeat(64),
+    binding_path: '/fixed/binding.json', binding_sha256: 'b'.repeat(64) };
+  const ref = { path: p.F1_HANDOFF, sha256: p.F1_HANDOFF_SHA, ...previous,
+    historical_source_contract: p.F1_HISTORICAL_CONTRACT };
+  p.validatePreviousCurrentPublication(ref, previous);
+  for (const key of Object.keys(ref)) {
+    const altered = structuredClone(ref); delete altered[key];
+    assert.throws(() => p.validatePreviousCurrentPublication(altered, previous));
+    assert.throws(() => p.validatePreviousCurrentPublication({ ...ref, [key]: 'foreign' }, previous));
+  }
+  if (p.R2_HANDOFF_SHA !== null) assert.match(p.R2_HANDOFF_SHA, /^[a-f0-9]{64}$/);
+  assert.notEqual(p.R2_HANDOFF, p.F1_HANDOFF);
+});
+
+
+test('exact GENF1 historical identity retains its separate pin and signed source attestation', () => {
+  const p = require('./phase47-package-publication.test.cjs');
+  const source = { head: '485058d9797efc40469a6db005dc4449e68015b1', delivery_state_sha256: 'b'.repeat(64) };
+  const contract = { original_generation: { path: p.F1_HANDOFF, sha256: p.F1_HANDOFF_SHA },
+    original_source_identity_sha256: crypto.createHash('sha256').update(acceptance.canonical(source)).digest('hex'),
+    original_source_head: source.head, original_delivery_state_digest: source.delivery_state_sha256, original_parent_count: 26 };
+  const original = { source_identity_sha256: contract.original_source_identity_sha256 };
+  p.validatePinnedHistoricalIdentity(contract, source, original, true);
+  assert.throws(() => p.validatePinnedHistoricalIdentity(contract, source, original));
+  for (const mutate of [r => { r.original_generation.path = p.REPAIR_HANDOFF; },
+    r => { r.original_generation.sha256 = p.REPAIR_HANDOFF_SHA; },
+    r => { r.original_delivery_state_digest = '0'.repeat(64); }]) {
+    const altered = structuredClone(contract); mutate(altered);
+    assert.throws(() => p.validatePinnedHistoricalIdentity(altered, source, original, true));
+  }
+  assert.throws(() => p.authenticatePinnedHistoricalContract(null, { source }, {}));
+  assert.throws(() => p.authenticatePinnedHistoricalContract({ ...p.F1_HISTORICAL_CONTRACT, sha256: '0'.repeat(64) }, { source }, {}));
+});
+
+
+test('genuine historical-F1 inspection rechecks the complete original authenticated selection', t => {
+  const p = require('./phase47-package-publication.test.cjs');
+  if (!hostRecordsAvailable(t, [p.F1_HANDOFF, p.F1_HISTORICAL_CONTRACT.path])) return;
+  const common = execFileSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'],
+    { cwd: REPOSITORY, encoding: 'utf8' }).trim();
+  const original = p.authenticateRepairSuccessor(common, REPOSITORY, 'F1', p.F1_HISTORICAL_CONTRACT);
+  const inspected = acceptance.inspectCandidate(null, REPOSITORY, 'historical-F1');
+  assert.deepEqual(inspected.authenticated, original);
+  assert.equal(inspected.identity.output_count, 161);
+  assert.equal(inspected.identity.source_head, original.selected.binding.source.head);
+  assert.equal(inspected.identity.source_tree, original.selected.binding.source.tree);
+  assert.deepEqual(inspected.identity.generation_handback, { path: p.F1_HANDOFF, sha256: p.F1_HANDOFF_SHA });
+  assert.equal(inspected.identity.historical_only, true);
+  assert.equal(inspected.identity.generation_kind, 'historical-F1');
+  assert.equal(Object.keys(original.selected.binding.source.parent_commits).length, 26);
+});
+
+test('pending R2 selection refuses before authority access and retains exact original materialization mappings', () => {
+  const p = require('./phase47-package-publication.test.cjs');
+  if (p.R2_HANDOFF_SHA === null) {
+    assert.throws(() => acceptance.inspectCandidate(), /actual signed main-review-repair generation is pending/);
+  } else {
+    assert.match(p.R2_HANDOFF_SHA, /^[a-f0-9]{64}$/);
+  }
+  const previousV1 = { current_handoff: { path: p.REPAIR_HANDOFF, sha256: p.REPAIR_HANDOFF_SHA },
+    entry: { retained_path: path.join(path.dirname(p.REPAIR_HANDOFF), 'volume-original-CONTEXT.md'), bytes: 224296,
+      sha256: '79c335ae5ab21f168ac86d1d890e66a577c621c1e5c180d1e2b0e3eccfa240b0' } };
+  const previousV2 = { current_handoff: previousV1.current_handoff,
+    previous_materialization: { path: p.MATERIALIZATION, sha256: p.MATERIALIZATION_SHA }, entries: p.ORIGINAL_ENTRIES };
+  const v1 = structuredClone(previousV1), v2 = structuredClone(previousV2);
+  for (const fresh of [v1, v2]) fresh.current_handoff = { path: p.R2_HANDOFF, sha256: 'a'.repeat(64) };
+  v2.previous_materialization = { path: path.join(path.dirname(p.R2_HANDOFF), 'historical-materialization.json'), sha256: 'b'.repeat(64) };
+  for (const row of [v1.entry, ...v2.entries]) row.retained_path = path.join(path.dirname(p.R2_HANDOFF), path.basename(row.retained_path));
+  const check = (second = v2) => p.validateFreshMaterializations(v1, second, previousV1, previousV2, 'a'.repeat(64), 'b'.repeat(64), p.R2_HANDOFF);
+  check();
+  for (const mutate of [r => { r.entries.pop(); }, r => { r.entries[0].sha256 = '0'.repeat(64); },
+    r => { r.entries[1].native_result.sha256 = '0'.repeat(64); },
+    r => { r.current_handoff.path = p.F1_HANDOFF; }]) {
+    const altered = structuredClone(v2); mutate(altered); assert.throws(() => check(altered));
+  }
 });

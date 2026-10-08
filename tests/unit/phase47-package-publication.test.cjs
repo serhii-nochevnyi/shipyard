@@ -72,12 +72,43 @@ const REPAIR_CORRECTIVE = ['codex-arch-review-context', 'claude-runtime-host', '
 
 const F1_HANDOFF = path.join(HOST, 'phase47-final-generation-adr027-main-review-repair-F1/generation.json');
 const F1_HANDOFF_SHA = '27ca0d42db637e83f181d398f0d047959d4295a8486967cfe798dd24476e5509';
+const F1_PUBLICATION_PINS = Object.freeze({
+  selection_path: '/Volumes/KINGSTON/claude-shipyard/.git/shipyard-phase47-final-publication/INV-014-runtime-delivery-correctness/ADR-027-main-review-repair-F1/selection.json',
+  selection_sha256: '68623cda4d53280dca2ad625589a45680b54949ed69afad81f3598cddc5d00f5',
+  binding_path: '/Volumes/KINGSTON/claude-shipyard/.git/shipyard-phase47-final-publication/INV-014-runtime-delivery-correctness/ADR-027-main-review-repair-F1/12b4367bd4d9aaf0dbaea193a5c6693de09499c652a59b3d935d9cad5e022fa8/binding.json',
+  binding_sha256: '3753108de3d078bc90ee50c8618f28f6170b03756c94f2419855ba80c1ed7523'
+});
 const F1_STAGE = REPAIR_STAGE + '-F1';
 const F1_CORRECTIVE = VOLUME_CORRECTIVE;
 const F1_SCOPE = '/tmp/phase47-F1-existing-contract-scope.json';
 const F1_SCOPE_SHA = '853d28bce0ba31f135a12f197989a435516971242e03091dc9e73156c851b1a7';
 const F1_MATERIALIZATION_SHA = '2ef15f5583c34ec9da5b77bbec010b031fcf0d5b98e68ff54664a0b94affaba2';
 const F1_MATERIALIZATION_V2_SHA = 'd6a4c1a288f5f01445aa94511a4b3693c39b17e2853139bab5ce4046195273b4';
+
+const R2_HANDOFF = path.join(HOST, 'phase47-final-generation-adr027-main-review-repair-R2/generation.json');
+const R2_HANDOFF_SHA = 'b0b582fde0c832e89c4121cde4de34218a7ad3f3d1f73ce76767d7952375b5e5';
+const R2_STAGE = REPAIR_STAGE + '-R2';
+const R2_MATERIALIZATION_SHA = '2e620175880f10daacf7067685b76ffdbea116e7fca2f4e87e63364d917b9f74';
+const R2_MATERIALIZATION_V2_SHA = 'b1537ddbf637f8b07deff897dc02ad1adced6ada61af99adb4c0e2d1af927045';
+const R2_SCOPE = '/tmp/phase47-R2-existing-contract-scope.json';
+const R2_SCOPE_SHA = '4647587d0324060505c1516ffe61e76fb45892e10d0ad7e62705f0141891be6a';
+const F1_HISTORICAL_CONTRACT = { path: '/tmp/phase47-R2-pinned-F1-historical-source-contract.json',
+  sha256: '71a6acf6f858715a5e04f4270ec2f52252bbee298259f513a69a59d7963d16ce' };
+
+function validatePreviousCurrentPublication(ref, previous) {
+  assert.equal(ref.path, F1_HANDOFF);
+  assert.equal(ref.sha256, F1_HANDOFF_SHA);
+  assert.deepEqual(ref.historical_source_contract, F1_HISTORICAL_CONTRACT);
+  for (const key of ['selection_path', 'selection_sha256', 'binding_path', 'binding_sha256'])
+    assert.equal(ref[key], previous[key], 'previous GENF1 drift: ' + key);
+}
+
+function validateR2Scope(scope) {
+  assert.equal(scope.finding.id, 'F2');
+  assert.equal(scope.source_pr, 449);
+  assert.deepEqual(scope.preserve_previous_current_generation, { path: F1_HANDOFF, sha256: F1_HANDOFF_SHA });
+  validateF1Scope({ ...scope, finding: { ...scope.finding, id: 'F1' }, source_pr: 447 });
+}
 
 function validatePreviousRepairPublication(ref, previous) {
   assert.equal(ref.path, REPAIR_HANDOFF);
@@ -105,18 +136,18 @@ function validateF1Scope(scope) {
   assert.deepEqual([...scope.publication_files].sort(), REPAIR_OWNERS);
 }
 
-function validateFreshMaterializations(v1, v2, previousV1, previousV2, handoffSHA, v1SHA) {
+function validateFreshMaterializations(v1, v2, previousV1, previousV2, handoffSHA, v1SHA, operation = F1_HANDOFF) {
   for (const [fresh, previous] of [[v1, previousV1], [v2, previousV2]]) {
-    assert.deepEqual(fresh.current_handoff, { path: F1_HANDOFF, sha256: handoffSHA });
+    assert.deepEqual(fresh.current_handoff, { path: operation, sha256: handoffSHA });
     const normalized = structuredClone(fresh);
     normalized.current_handoff = previous.current_handoff;
     if (fresh === v2) {
       assert.deepEqual(fresh.previous_materialization,
-        { path: path.join(path.dirname(F1_HANDOFF), 'historical-materialization.json'), sha256: v1SHA });
+        { path: path.join(path.dirname(operation), 'historical-materialization.json'), sha256: v1SHA });
       normalized.previous_materialization = previous.previous_materialization;
     }
     for (const row of fresh === v1 ? [normalized.entry] : normalized.entries) {
-      assert.equal(path.dirname(row.retained_path), path.dirname(F1_HANDOFF));
+      assert.equal(path.dirname(row.retained_path), path.dirname(operation));
       row.retained_path = path.join(path.dirname(REPAIR_HANDOFF), path.basename(row.retained_path));
     }
     assert.deepEqual(normalized, previous, 'fresh materialization must retain exact original mappings and bytes');
@@ -157,12 +188,13 @@ function validateRepairContract(handback, approval, followup = false) {
   assert.equal(approval.prior_final_handoff.path, VOLUME_HANDOFF);
   assert.equal(approval.prior_final_handoff.sha256, VOLUME_HANDOFF_SHA);
   if (followup) {
-    assert.equal(approval.source_head, '485058d9797efc40469a6db005dc4449e68015b1');
-    assert.equal(approval.source_correction.scope_disposition.path, F1_SCOPE);
+    assert.equal(approval.source_head, followup === 'R2' ? '15a205063774993bc35404b5c8c8f1013f98b016' : '485058d9797efc40469a6db005dc4449e68015b1');
+    assert.equal(approval.source_correction.scope_disposition.path, followup === 'R2' ? R2_SCOPE : F1_SCOPE);
     assert.match(approval.source_correction.scope_disposition.sha256, /^[a-f0-9]{64}$/);
     assert.equal(approval.source_correction.previous_repair_publication.path, REPAIR_HANDOFF);
     assert.equal(approval.source_correction.previous_repair_publication.sha256, REPAIR_HANDOFF_SHA);
   }
+  if (followup === 'R2') validatePreviousCurrentPublication(approval.source_correction.previous_current_publication, F1_PUBLICATION_PINS);
   const verdict = approval.current_checker.verdict;
   assert.equal(verdict.verdict || verdict.status, 'passed');
   assert.deepEqual(verdict.blockers, []);
@@ -333,20 +365,22 @@ function reauthenticateRepairCoverage(repair, worktree = REPOSITORY, verify = nu
 }
 
 function authenticateRepairSuccessor(common, root = REPOSITORY, historical = false, historicalContract = null) {
-  const operation = historical ? REPAIR_HANDOFF : F1_HANDOFF;
-  const pin = historical ? REPAIR_HANDOFF_SHA : F1_HANDOFF_SHA;
-  const stage = historical ? REPAIR_STAGE : F1_STAGE;
-  const corrective = historical ? REPAIR_CORRECTIVE : F1_CORRECTIVE;
+  assert([false, true, 'F1'].includes(historical), 'unknown repair historical selector');
+  const originalRepair = historical === true;
+  const operation = originalRepair ? REPAIR_HANDOFF : historical === 'F1' ? F1_HANDOFF : R2_HANDOFF;
+  const pin = originalRepair ? REPAIR_HANDOFF_SHA : historical === 'F1' ? F1_HANDOFF_SHA : R2_HANDOFF_SHA;
+  const stage = originalRepair ? REPAIR_STAGE : historical === 'F1' ? F1_STAGE : R2_STAGE;
+  const corrective = originalRepair ? REPAIR_CORRECTIVE : F1_CORRECTIVE;
   assert(pin, 'actual signed main-review-repair generation is pending');
   const handback = authenticateHandback(operation, pin);
   const approvalRef = handback.current_source_approval;
   assert.equal(approvalRef.path, path.join(path.dirname(operation), 'source-approval.json'));
   assert.equal(approvalRef.signature_path, approvalRef.path + '.asc');
   const approval = authenticateHandback(approvalRef.path, approvalRef.sha256);
-  validateRepairContract(handback, approval, !historical);
+  validateRepairContract(handback, approval, originalRepair ? false : historical ? true : 'R2');
   const selected = selectedArtifact(common, handback, stage);
   selected.repair = true;
-  selected.followup = !historical;
+  selected.followup = !originalRepair;
   const source = selected.binding.source;
   assert.equal(source.head, approval.source_head);
   assert.equal(source.tree, approval.source_tree);
@@ -417,10 +451,32 @@ function authenticateRepairSuccessor(common, root = REPOSITORY, historical = fal
   const correction = approval.source_correction;
   reference(correction.command_approval);
   if (!historical) {
-    assert(F1_SCOPE_SHA, 'signed F1 scope pin pending trusted adoption');
-    assert.equal(correction.scope_disposition.sha256, F1_SCOPE_SHA);
-    assert.equal(correction.scope_disposition.path, F1_SCOPE);
+    assert(R2_SCOPE_SHA, 'signed R2 scope pin pending trusted adoption');
+    assert.equal(correction.scope_disposition.sha256, R2_SCOPE_SHA);
+    assert.equal(correction.scope_disposition.path, R2_SCOPE);
     assert.equal(fs.realpathSync('/tmp'), '/private/tmp', 'foreign system temporary root');
+    const scope = authenticateHandback('/private/tmp/phase47-R2-existing-contract-scope.json', R2_SCOPE_SHA,
+      path.join(path.dirname(REPAIR_HANDOFF), 'operator-public-key.asc'));
+    validateR2Scope(scope);
+    const sourceFix = correction.source_repairs.find(row => row.ticket === 'T-47-26');
+    assert.deepEqual(scope.source_finalization, { path: sourceFix.finalization.path, sha256: sourceFix.finalization.sha256 });
+    const previous = authenticateRepairSuccessor(common, root, true, correction.previous_repair_publication.historical_source_contract);
+    validatePreviousRepairPublication(correction.previous_repair_publication, previous.handback);
+    const previousCurrent = authenticateRepairSuccessor(common, root, 'F1', correction.previous_current_publication.historical_source_contract);
+    validatePreviousCurrentPublication(correction.previous_current_publication, previousCurrent.handback);
+    assert(R2_MATERIALIZATION_SHA && R2_MATERIALIZATION_V2_SHA, 'fresh signed original-input materializations pending trusted adoption');
+    const freshV1 = authenticateHandback(path.join(path.dirname(operation), 'historical-materialization.json'), R2_MATERIALIZATION_SHA);
+    const freshV2 = authenticateHandback(path.join(path.dirname(operation), 'historical-materialization-2.json'), R2_MATERIALIZATION_V2_SHA);
+    validateFreshMaterializations(freshV1, freshV2,
+      authenticateHandback(MATERIALIZATION, MATERIALIZATION_SHA),
+      authenticateHandback(MATERIALIZATION_V2, MATERIALIZATION_V2_SHA), pin, R2_MATERIALIZATION_SHA, operation);
+    for (const row of [freshV1.entry, ...freshV2.entries])
+      reference({ path: row.retained_path, bytes: row.bytes, sha256: row.sha256 }, true);
+  }
+  if (historical === 'F1') {
+    assert.equal(correction.scope_disposition.path, F1_SCOPE);
+    assert.equal(correction.scope_disposition.sha256, F1_SCOPE_SHA);
+    assert.equal(fs.realpathSync('/tmp'), '/private/tmp');
     const scope = authenticateHandback('/private/tmp/phase47-F1-existing-contract-scope.json', F1_SCOPE_SHA,
       path.join(path.dirname(REPAIR_HANDOFF), 'operator-public-key.asc'));
     validateF1Scope(scope);
@@ -428,14 +484,11 @@ function authenticateRepairSuccessor(common, root = REPOSITORY, historical = fal
     assert.deepEqual(scope.source_finalization, { path: sourceFix.finalization.path, sha256: sourceFix.finalization.sha256 });
     const previous = authenticateRepairSuccessor(common, root, true, correction.previous_repair_publication.historical_source_contract);
     validatePreviousRepairPublication(correction.previous_repair_publication, previous.handback);
-    assert(F1_MATERIALIZATION_SHA && F1_MATERIALIZATION_V2_SHA, 'fresh signed original-input materializations pending trusted adoption');
-    const freshV1 = authenticateHandback(path.join(path.dirname(operation), 'historical-materialization.json'), F1_MATERIALIZATION_SHA);
-    const freshV2 = authenticateHandback(path.join(path.dirname(operation), 'historical-materialization-2.json'), F1_MATERIALIZATION_V2_SHA);
-    validateFreshMaterializations(freshV1, freshV2,
-      authenticateHandback(MATERIALIZATION, MATERIALIZATION_SHA),
+    const v1 = authenticateHandback(path.join(path.dirname(operation), 'historical-materialization.json'), F1_MATERIALIZATION_SHA);
+    const v2 = authenticateHandback(path.join(path.dirname(operation), 'historical-materialization-2.json'), F1_MATERIALIZATION_V2_SHA);
+    validateFreshMaterializations(v1, v2, authenticateHandback(MATERIALIZATION, MATERIALIZATION_SHA),
       authenticateHandback(MATERIALIZATION_V2, MATERIALIZATION_V2_SHA), pin, F1_MATERIALIZATION_SHA);
-    for (const row of [freshV1.entry, ...freshV2.entries])
-      reference({ path: row.retained_path, bytes: row.bytes, sha256: row.sha256 }, true);
+    for (const row of [v1.entry, ...v2.entries]) reference({ path: row.retained_path, bytes: row.bytes, sha256: row.sha256 }, true);
   }
   reference(correction.scope_disposition);
   assert.deepEqual(correction.prior_source_correction, prior.approval.source_correction);
@@ -595,7 +648,7 @@ function validateHandback(handback, selection, binding, selectionPath) {
   assert.equal(handback.historical_manifest_sha256, binding.source.plan_manifest_sha256);
   assert.deepEqual(handback.current_plan_amendments, binding.source.current_plan_amendments);
   validateAllocation(handback.publication_allocation);
-  assert.deepEqual([...handback.changed_outputs].sort(), handback.purpose === 'ADR-027-main-review-repair' ? (selectionPath === path.join(binding.source.common, F1_STAGE, 'selection.json') ? F1_CORRECTIVE : REPAIR_CORRECTIVE) : handback.purpose === 'ADR-027-current-ticket-volume' ? VOLUME_CORRECTIVE : handback.purpose === 'ADR-027-current-ticket-evidence' ? SUCCESSOR_CORRECTIVE : handback.purpose === 'ADR-026-final'
+  assert.deepEqual([...handback.changed_outputs].sort(), handback.purpose === 'ADR-027-main-review-repair' ? ([F1_STAGE, R2_STAGE].some(stage => selectionPath === path.join(binding.source.common, stage, 'selection.json')) ? F1_CORRECTIVE : REPAIR_CORRECTIVE) : handback.purpose === 'ADR-027-current-ticket-volume' ? VOLUME_CORRECTIVE : handback.purpose === 'ADR-027-current-ticket-evidence' ? SUCCESSOR_CORRECTIVE : handback.purpose === 'ADR-026-final'
     ? (handback.source_update ? CORRECTIVE : CORRECTIVE.filter(p => p !== mirror('architecture-target'))) : UNION,
     'unexpected generation scope');
   if (handback.purpose === 'ADR-026-final')
@@ -1034,23 +1087,27 @@ const HISTORICAL_CONTRACT_PATH = '/tmp/phase47-F1-pinned-historical-source-contr
 const HISTORICAL_CONTRACT_SHA = '07b20e75d00b8c40d7b4db4d8c6baf360e47860f998c9fc9c4035727990e9a14';
 
 function authenticatePinnedHistoricalContract(ref, binding, approval) {
-  assert.deepEqual(ref, { path: HISTORICAL_CONTRACT_PATH, sha256: HISTORICAL_CONTRACT_SHA });
+  const f1 = binding.source?.head === '485058d9797efc40469a6db005dc4449e68015b1';
+  if (f1) assert.deepEqual(ref, F1_HISTORICAL_CONTRACT);
+  const operation = f1 ? F1_HANDOFF : REPAIR_HANDOFF;
+  const pin = f1 ? F1_HANDOFF_SHA : REPAIR_HANDOFF_SHA;
+  if (!f1) assert.deepEqual(ref, { path: HISTORICAL_CONTRACT_PATH, sha256: HISTORICAL_CONTRACT_SHA });
   assert.equal(fs.realpathSync('/tmp'), '/private/tmp', 'foreign system temporary root');
-  const contract = authenticateHandback('/private/tmp/phase47-F1-pinned-historical-source-contract.json', ref.sha256,
+  const contract = authenticateHandback(f1 ? '/private/tmp/phase47-R2-pinned-F1-historical-source-contract.json' : '/private/tmp/phase47-F1-pinned-historical-source-contract.json', ref.sha256,
     path.join(path.dirname(REPAIR_HANDOFF), 'operator-public-key.asc'));
-  const original = authenticateHandback(REPAIR_HANDOFF, REPAIR_HANDOFF_SHA);
-  assert.deepEqual(contract.original_generation, { path: REPAIR_HANDOFF, sha256: REPAIR_HANDOFF_SHA });
+  const original = authenticateHandback(operation, pin);
+  assert.deepEqual(contract.original_generation, { path: operation, sha256: pin });
   assert.deepEqual(contract.original_approval, original.current_source_approval);
   assert.equal(contract.original_binding.path, original.binding_path);
   assert.equal(contract.original_binding.sha256, original.binding_sha256);
   assert.deepEqual(JSON.parse(reference(contract.original_binding, true)), binding);
   assert.deepEqual(authenticateHandback(contract.original_approval.path, contract.original_approval.sha256), approval);
-  validatePinnedHistoricalIdentity(contract, binding.source, original);
+  validatePinnedHistoricalIdentity(contract, binding.source, original, f1);
 }
 
-function validatePinnedHistoricalIdentity(contract, source, original) {
-  assert.equal(contract.original_generation.path, REPAIR_HANDOFF);
-  assert.equal(contract.original_generation.sha256, REPAIR_HANDOFF_SHA);
+function validatePinnedHistoricalIdentity(contract, source, original, f1 = false) {
+  assert.equal(contract.original_generation.path, f1 ? F1_HANDOFF : REPAIR_HANDOFF);
+  assert.equal(contract.original_generation.sha256, f1 ? F1_HANDOFF_SHA : REPAIR_HANDOFF_SHA);
   assert.equal(sha(canon(source)), contract.original_source_identity_sha256);
   assert.equal(original.source_identity_sha256, contract.original_source_identity_sha256);
   assert.equal(source.head, contract.original_source_head);
@@ -1567,7 +1624,7 @@ function check(group) {
   validatePublication(REPOSITORY, selected, group);
   return { status: 'completed', ticket: 'T-47-27', group, generation_id: handback.generation_id,
     source_head: selected.binding.source.head, source_identity_sha256: handback.source_identity_sha256,
-    current_admission: current, handback_path: F1_HANDOFF, handback_sha256: F1_HANDOFF_SHA,
+    current_admission: current, handback_path: R2_HANDOFF, handback_sha256: R2_HANDOFF_SHA,
     selection_path: selected.selectionPath, selection_sha256: handback.selection_sha256,
     binding_path: selected.selection.binding_path, binding_sha256: selected.selection.binding_sha256,
     candidate_path: selected.selection.candidate_path, candidate_sha256: selected.selection.candidate_sha256,
@@ -2048,7 +2105,7 @@ function privateFixtures(authenticatedSignatureFixture = false) {
   }
 }
 
-module.exports = { validatePinnedHistoricalIdentity, validateSignedHistoricalParents, authenticatePinnedHistoricalContract, F1_HANDOFF, F1_HANDOFF_SHA, F1_CORRECTIVE, validateF1Scope, validateFreshMaterializations, validatePreviousRepairPublication, REPAIR_OWNERS, reauthenticateRepairCoverage, validateOriginalMaterialization, ORIGINAL_ENTRIES, MATERIALIZATION_V2, MATERIALIZATION_V2_SHA, validateOperatorSignature, validateVolumeMaterialization, historicalVolumeEntry, MATERIALIZATION, MATERIALIZATION_SHA, validateRepairContract, authenticateRepairSuccessor, recheckRepairSuccessor, REPAIR_HANDOFF, REPAIR_HANDOFF_SHA, REPAIR_CORRECTIVE, REPAIR_PLANS, SOURCE39_SHA, COORDINATOR48_SHA, HISTORICAL43_SHA, validatePublication, authenticateVolumeSuccessor, recheckVolumeSuccessor, validateVolumeContract, VOLUME_CORRECTIVE, VOLUME_HANDOFF, VOLUME_HANDOFF_SHA, authenticateSuccessor, recheckSuccessor, validateSuccessorContract, SUCCESSOR_CORRECTIVE, SUCCESSOR_HANDOFF, SUCCESSOR_HANDOFF_SHA, check, authenticateOriginal, authenticateFinal, recheckFinal, selectedArtifact, validateSourceUpdate,
+module.exports = { R2_HANDOFF, R2_HANDOFF_SHA, F1_HISTORICAL_CONTRACT, validateR2Scope, validatePreviousCurrentPublication, validatePinnedHistoricalIdentity, validateSignedHistoricalParents, authenticatePinnedHistoricalContract, F1_HANDOFF, F1_HANDOFF_SHA, F1_CORRECTIVE, validateF1Scope, validateFreshMaterializations, validatePreviousRepairPublication, REPAIR_OWNERS, reauthenticateRepairCoverage, validateOriginalMaterialization, ORIGINAL_ENTRIES, MATERIALIZATION_V2, MATERIALIZATION_V2_SHA, validateOperatorSignature, validateVolumeMaterialization, historicalVolumeEntry, MATERIALIZATION, MATERIALIZATION_SHA, validateRepairContract, authenticateRepairSuccessor, recheckRepairSuccessor, REPAIR_HANDOFF, REPAIR_HANDOFF_SHA, REPAIR_CORRECTIVE, REPAIR_PLANS, SOURCE39_SHA, COORDINATOR48_SHA, HISTORICAL43_SHA, validatePublication, authenticateVolumeSuccessor, recheckVolumeSuccessor, validateVolumeContract, VOLUME_CORRECTIVE, VOLUME_HANDOFF, VOLUME_HANDOFF_SHA, authenticateSuccessor, recheckSuccessor, validateSuccessorContract, SUCCESSOR_CORRECTIVE, SUCCESSOR_HANDOFF, SUCCESSOR_HANDOFF_SHA, check, authenticateOriginal, authenticateFinal, recheckFinal, selectedArtifact, validateSourceUpdate,
   validateDescendant, validateConfigurations, CORRECTIVE, FINAL_HANDOFF, FINAL_HANDOFF_SHA };
 
 if (require.main === module) {
