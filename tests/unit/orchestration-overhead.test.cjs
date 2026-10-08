@@ -649,6 +649,76 @@ test('recordHandoffCost accepts successor_reread and handoffCostSummary reports 
   }
 });
 
+for (const component of ['.planning', '.planning/intervening', '.planning/graph']) {
+  for (const entry of ['symlink', 'file']) {
+    for (const operation of ['read', 'record']) {
+      test(`recorder refuses ${component} ${entry} before public ${operation}`, () => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-overhead-ancestor-'));
+        const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-overhead-outside-'));
+        try {
+          const sentinel = path.join(outside, overhead.STREAM_NAME);
+          fs.writeFileSync(sentinel, 'outside sentinel\n', { mode: 0o600 });
+          fs.mkdirSync(path.join(outside, 'graph'));
+          fs.writeFileSync(path.join(outside, 'graph', overhead.STREAM_NAME), 'nested sentinel\n');
+          const before = fs.statSync(sentinel);
+          const target = path.join(root, component);
+          fs.mkdirSync(path.dirname(target), { recursive: true });
+          if (entry === 'symlink') fs.symlinkSync(outside, target, 'dir');
+          else fs.writeFileSync(target, 'physical file\n');
+          const graph = component === '.planning/intervening'
+            ? path.join(target, 'graph') : path.join(root, '.planning', 'graph');
+          const recorder = overhead.createRecorder(graph);
+          const originalOpen = fs.openSync;
+          let opened = false;
+          fs.openSync = function (...args) { opened = true; return originalOpen.apply(fs, args); };
+          try {
+            assert.throws(() => operation === 'read' ? recorder.read() : recorder.record(identity()),
+              error => error.code === 'RECORDER_ALIAS');
+            assert.equal(opened, false);
+          } finally { fs.openSync = originalOpen; }
+          assert.equal(fs.readFileSync(sentinel, 'utf8'), 'outside sentinel\n');
+          assert.equal(fs.readFileSync(path.join(outside, 'graph', overhead.STREAM_NAME), 'utf8'), 'nested sentinel\n');
+          const after = fs.statSync(sentinel);
+          assert.equal(after.ino, before.ino);
+          assert.equal(after.mode, before.mode);
+          assert.deepEqual(fs.readdirSync(outside).sort(), ['graph', overhead.STREAM_NAME].sort());
+          assert.deepEqual(fs.readdirSync(path.join(outside, 'graph')), [overhead.STREAM_NAME]);
+          if (entry === 'file') assert.equal(fs.readFileSync(target, 'utf8'), 'physical file\n');
+        } finally {
+          fs.rmSync(root, { recursive: true, force: true });
+          fs.rmSync(outside, { recursive: true, force: true });
+        }
+      });
+    }
+  }
+}
+
+for (const anchor of ['project', 'project alias', 'protected store']) {
+  test(`recorder creates absent descendants under legitimate ${anchor}`, () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-overhead-anchor-'));
+    try {
+      const project = path.join(root, 'project');
+      fs.mkdirSync(project);
+      const alias = path.join(root, 'project-alias');
+      fs.symlinkSync(project, alias, 'dir');
+      const store = path.join(root, 'planning-overhead');
+      fs.mkdirSync(store, { mode: 0o700 });
+      const graph = anchor === 'protected store' ? path.join(store, 'dispatch-identity')
+        : path.join(anchor === 'project alias' ? alias : project, '.planning', 'graph');
+      const recorder = overhead.createRecorder(graph);
+      assert.deepEqual(recorder.read().rows, []);
+      const result = recorder.record(identity());
+      assert.equal(result.recorded.length, 1);
+      assert.equal(recorder.read().rows[0].dispatch_id, 'dispatch-33-07');
+      const physicalGraph = anchor === 'protected store' ? graph : path.join(project, '.planning', 'graph');
+      assert.equal(fs.lstatSync(physicalGraph).isDirectory(), true);
+      assert.equal(fs.lstatSync(path.join(physicalGraph, overhead.STREAM_NAME)).isFile(), true);
+      if (anchor === 'protected store') assert.equal(fs.existsSync(path.join(project, '.planning')), false);
+      else assert.equal(overhead.createRecorder(path.join(project, '.planning', 'graph')).read().rows.length, 1);
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  });
+}
+
 for (const alias of ['stream', 'locks', 'lock', 'owner']) {
   test(`recorder refuses existing ${alias} alias before writing`, () => {
     const f = fixture();

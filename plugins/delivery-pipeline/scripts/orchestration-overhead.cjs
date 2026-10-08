@@ -261,8 +261,28 @@ function normalizeObservation(raw, now = new Date().toISOString()) {
   };
 }
 
-function validateRecorderPaths(graph) {
-  for (const directory of [graph, path.join(graph, '.locks'), path.join(graph, '.locks', 'orchestration-overhead.lock')]) {
+function recorderPaths(graphDir) {
+  const resolved = path.resolve(graphDir);
+  const parts = resolved.split(path.sep);
+  const planning = parts.indexOf('.planning');
+  let anchor = planning === -1 ? path.dirname(resolved) : parts.slice(0, planning).join(path.sep) || path.sep;
+  while (!fs.existsSync(anchor)) {
+    try { fs.lstatSync(anchor); fail('RECORDER_ALIAS', 'recorder anchor is not physically trusted'); }
+    catch (error) { if (error.code !== 'ENOENT') throw error; }
+    anchor = path.dirname(anchor);
+  }
+  const relative = path.relative(anchor, resolved);
+  const canonical = fs.realpathSync(anchor);
+  if (!fs.statSync(canonical).isDirectory()) fail('RECORDER_ALIAS', 'recorder anchor is not a directory');
+  return { anchor: canonical, graph: path.join(canonical, relative) };
+}
+
+function validateRecorderPaths(paths) {
+  const { anchor, graph } = paths;
+  const lock = path.join(graph, '.locks', 'orchestration-overhead.lock');
+  let directory = anchor;
+  for (const component of path.relative(anchor, lock).split(path.sep)) {
+    directory = path.join(directory, component);
     try {
       const stat = fs.lstatSync(directory);
       if (!stat.isDirectory() || stat.isSymbolicLink()) fail('RECORDER_ALIAS', 'recorder directory is not physically trusted');
@@ -295,9 +315,13 @@ function streamIO(file, append) {
 }
 
 function readStream(graphDir) {
-  const file = path.join(path.resolve(graphDir), STREAM_NAME);
+  return readRecorderStream(recorderPaths(graphDir));
+}
+
+function readRecorderStream(paths) {
+  const file = path.join(paths.graph, STREAM_NAME);
   let raw;
-  try { validateRecorderPaths(path.resolve(graphDir)); raw = streamIO(file); }
+  try { validateRecorderPaths(paths); raw = streamIO(file); }
   catch (error) {
     if (error.code === 'ENOENT') return { rows: [], warnings: [], file };
     throw error;
@@ -345,9 +369,11 @@ function identityShape(row) {
 function recordBatch(graphDir, raw) {
   const input = Array.isArray(raw) ? raw : [raw];
   if (!input.length) return { recorded: [], skipped: 0 };
-  const graph = path.resolve(graphDir);
-  validateRecorderPaths(graph);
+  const paths = recorderPaths(graphDir);
+  const { graph } = paths;
+  validateRecorderPaths(paths);
   fs.mkdirSync(graph, { recursive: true, mode: 0o700 });
+  validateRecorderPaths(paths);
   const normalized = input.map((value) => normalizeObservation(value));
   const ids = new Set();
   for (const row of normalized) {
@@ -355,7 +381,7 @@ function recordBatch(graphDir, raw) {
     ids.add(row.observation_id);
   }
   return withLock(path.join(graph, '.locks'), 'orchestration-overhead', () => {
-    const current = readStream(graph).rows;
+    const current = readRecorderStream(paths).rows;
     const latest = new Map(latestRows(current).map((row) => [row.observation_id, row]));
     const toAppend = [];
     for (const row of normalized) {
@@ -368,7 +394,7 @@ function recordBatch(graphDir, raw) {
       const next = { ...row, revision: Math.max(previousRevision + 1, row.revision || 1) };
       toAppend.push(next); latest.set(next.observation_id, next);
     }
-    validateRecorderPaths(graph);
+    validateRecorderPaths(paths);
     if (toAppend.length) streamIO(path.join(graph, STREAM_NAME), toAppend.map((row) => JSON.stringify(row)).join('\n') + '\n');
     return { recorded: toAppend, skipped: normalized.length - toAppend.length,
       duplicate: toAppend.length === 0 && normalized.length === 1 };
