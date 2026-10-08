@@ -18,7 +18,7 @@ const GSD_ROLES = Object.freeze(['gsd-phase-researcher', 'gsd-planner', 'gsd-pla
 const REQUIRED_HELP_MARKERS = Object.freeze([
   '--model', '--effort', '--output-format', 'stream-json', '--session-id',
   '--permission-mode', '--permission-prompts', '--allowedTools', '--tools',
-  '--restricted', '--strict-mcp-config', '--settings', '--agent',
+  '--restricted', '--strict-mcp-config', '--settings', '--setting-sources', '--agent',
   '--agents',
 ]);
 const UNAVAILABLE_CODES = new Set([
@@ -197,7 +197,7 @@ function probeClaudeRuntime(options = {}) {
     return unavailableProbe(executable, 'capability_help_unavailable', { detail: bounded(error.message) });
   }
   const helpText = spawnResultText(help);
-  const missing = REQUIRED_HELP_MARKERS.filter((marker) => !helpText.includes(marker));
+  const missing = REQUIRED_HELP_MARKERS.filter((marker) => !new RegExp(`(^|[^\\w-])${marker}(?=$|[^\\w-])`).test(helpText));
   if (!help || help.error || help.status !== 0 || missing.length) {
     return unavailableProbe(executable, 'runtime_capability_missing', {
       detail: bounded(spawnResultText(help) || help && help.error && help.error.message), missing,

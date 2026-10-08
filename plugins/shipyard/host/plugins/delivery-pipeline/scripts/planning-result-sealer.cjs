@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { execFileSync } = require('node:child_process');
-const { SUMMARY_MAX_CHARS } = require('./role-artifact.cjs');
+const { SUMMARY_MAX_CHARS, registerPlanningContainmentBaseline, readPlanningContainmentBaseline } = require('./role-artifact.cjs');
 
 const RESEARCH_ARTIFACT_MAX_BYTES = 1024 * 1024;
 const DECOMPOSITION_PLAN_MAX_BYTES = 1024 * 1024;
@@ -357,23 +357,105 @@ function containmentGit(root, args) {
 }
 
 function containmentSource(root, relative) {
-  const file = path.join(root, relative);
-  let stat;
-  try { stat = fs.lstatSync(file); }
-  catch (error) {
-    if (error.code === 'ENOENT' || error.code === 'ENOTDIR') return null;
-    refuse('CONTAINMENT_STATUS_FAILED', `containment source could not be inspected: ${relative}`);
+  const file = path.resolve(root, relative);
+  const canonical = path.relative(root, file);
+  if (!canonical || canonical === '..' || canonical.startsWith(`..${path.sep}`) || path.isAbsolute(canonical))
+    refuse('CONTAINMENT_STATUS_FAILED', 'containment source escapes its rooted directory');
+  const same = (a, b) => a.dev === b.dev && a.ino === b.ino && a.mode === b.mode
+    && a.size === b.size && a.mtimeMs === b.mtimeMs && a.ctimeMs === b.ctimeMs;
+  const parents = [];
+  let parent = root;
+  for (const part of canonical.split(path.sep).slice(0, -1)) {
+    parent = path.join(parent, part);
+    let stat;
+    try { stat = fs.lstatSync(parent); }
+    catch (error) {
+      if (error.code !== 'ENOENT' && error.code !== 'ENOTDIR') throw error;
+      for (const [target, original] of parents) {
+        if (!same(original, fs.lstatSync(target)))
+          refuse('CONTAINMENT_VIOLATION', 'source parent moved during containment inspection');
+      }
+      return null;
+    }
+    if (!stat.isDirectory() || stat.isSymbolicLink())
+      refuse('CONTAINMENT_STATUS_FAILED', 'containment source parent is not physical');
+    parents.push([parent, stat]);
   }
-  if (stat.isSymbolicLink()) return `${stat.mode}:symlink:${fs.readlinkSync(file)}`;
-  if (stat.isDirectory()) return `${stat.mode}:directory`;
-  if (!stat.isFile()) refuse('CONTAINMENT_STATUS_FAILED', `containment source is not a regular file: ${relative}`);
-  const digest = crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
-  const after = fs.lstatSync(file);
-  if (stat.dev !== after.dev || stat.ino !== after.ino || stat.mode !== after.mode
-      || stat.size !== after.size || stat.mtimeMs !== after.mtimeMs || stat.ctimeMs !== after.ctimeMs) {
-    refuse('CONTAINMENT_VIOLATION', `source changed during containment inspection: ${relative}`);
+  let entries = 0;
+  let bytes = 0;
+  const inspected = [];
+  const inspect = (target, depth, nested) => {
+    if (depth > 32 || ++entries > 10000)
+      refuse('CONTAINMENT_STATUS_FAILED', 'containment directory exceeds depth or entry bound');
+    let stat;
+    try { stat = fs.lstatSync(target); }
+    catch (error) {
+      if (!nested && (error.code === 'ENOENT' || error.code === 'ENOTDIR')) return null;
+      refuse('CONTAINMENT_STATUS_FAILED', 'containment source could not be inspected');
+    }
+    inspected.push([target, stat]);
+    if (!stat.isSymbolicLink() && fs.realpathSync(target) !== target)
+      refuse('CONTAINMENT_VIOLATION', 'source moved outside its physical directory');
+    let identity;
+    if (stat.isSymbolicLink()) {
+      if (nested) refuse('CONTAINMENT_STATUS_FAILED', 'containment directory contains a symlink');
+      identity = `${stat.mode}:symlink:${fs.readlinkSync(target)}`;
+    } else if (stat.isDirectory()) {
+      const listing = () => {
+        const names = [];
+        const directory = fs.opendirSync(target);
+        try {
+          let entry;
+          while ((entry = directory.readSync()) !== null) {
+            if (names.length >= 10000)
+              refuse('CONTAINMENT_STATUS_FAILED', 'containment directory exceeds entry bound');
+            names.push(entry.name);
+          }
+        } finally { directory.closeSync(); }
+        return names.sort();
+      };
+      const names = listing();
+      if (names.length > 10000 - entries)
+        refuse('CONTAINMENT_STATUS_FAILED', 'containment directory exceeds entry bound');
+      const hash = crypto.createHash('sha256');
+      for (const name of names) {
+        const child = inspect(path.join(target, name), depth + 1, true);
+        hash.update(JSON.stringify([name, child]) + '\n');
+      }
+      if (JSON.stringify(listing()) !== JSON.stringify(names))
+        refuse('CONTAINMENT_VIOLATION', 'directory membership changed during containment inspection');
+      identity = `${stat.mode}:directory-sha256:${hash.digest('hex')}`;
+    } else if (stat.isFile()) {
+      if (nested && (bytes += stat.size) > 64 * 1024 * 1024)
+        refuse('CONTAINMENT_STATUS_FAILED', 'containment directory exceeds byte bound');
+      const fd = fs.openSync(target, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+      try {
+        if (!same(stat, fs.fstatSync(fd)))
+          refuse('CONTAINMENT_VIOLATION', 'source moved during containment inspection');
+        const hash = crypto.createHash('sha256');
+        const buffer = Buffer.alloc(65536);
+        let read;
+        let total = 0;
+        while ((read = fs.readSync(fd, buffer, 0, buffer.length, null)) > 0) {
+          total += read;
+          if (total > stat.size) refuse('CONTAINMENT_VIOLATION', 'source grew during containment inspection');
+          hash.update(buffer.subarray(0, read));
+        }
+        if (total !== stat.size || !same(stat, fs.fstatSync(fd)))
+          refuse('CONTAINMENT_VIOLATION', 'source changed during containment inspection');
+        identity = `${stat.mode}:${hash.digest('hex')}`;
+      } finally { fs.closeSync(fd); }
+    } else refuse('CONTAINMENT_STATUS_FAILED', 'containment source has an unsupported entry type');
+    if (!same(stat, fs.lstatSync(target)))
+      refuse('CONTAINMENT_VIOLATION', 'source changed during containment inspection');
+    return identity;
+  };
+  const identity = inspect(file, 0, false);
+  for (const [target, stat] of [...parents, ...inspected]) {
+    if (!same(stat, fs.lstatSync(target)))
+      refuse('CONTAINMENT_VIOLATION', 'source parent moved during containment inspection');
   }
-  return `${stat.mode}:${digest}`;
+  return identity;
 }
 
 function containmentSnapshot(root) {
@@ -395,6 +477,40 @@ function captureContainmentBaseline({ worktree } = {}) {
   }
   const token = Object.freeze({});
   containmentBaselines.set(token, containmentSnapshot(fs.realpathSync(worktree)));
+  return token;
+}
+
+function containmentBindingKey(value) {
+  if (Array.isArray(value)) return '[' + value.map(containmentBindingKey).join(',') + ']';
+  if (object(value)) return '{' + Object.keys(value).sort()
+    .map(key => JSON.stringify(key) + ':' + containmentBindingKey(value[key])).join(',') + '}';
+  return JSON.stringify(value);
+}
+
+function persistContainmentBaseline({ worktree, baseline, binding } = {}) {
+  const original = object(baseline) && containmentBaselines.get(baseline);
+  if (!original || original.root !== fs.realpathSync(worktree))
+    refuse('CONTAINMENT_BASELINE_INVALID', 'persistence requires the original private host token');
+  const bindingKey = containmentBindingKey(binding);
+  if (original.bindingKey !== undefined && original.bindingKey !== bindingKey)
+    refuse('CONTAINMENT_BASELINE_INVALID', 'an original containment token cannot authorize another launch binding');
+  const sorted = entries => [...entries].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0);
+  const reference = registerPlanningContainmentBaseline({ worktree, binding, snapshot: {
+    schema: 'shipyard.planning-containment-snapshot.v1', root: original.root,
+    head: original.head, index: original.index,
+    sources: sorted(original.sources), status: sorted(original.status),
+  } });
+  original.bindingKey = bindingKey;
+  return reference;
+}
+
+function restoreContainmentBaseline({ worktree, binding, reference, recoveredEpoch } = {}) {
+  if (!object(binding) || !Number.isSafeInteger(recoveredEpoch) || recoveredEpoch !== binding.lease_epoch + 1)
+    refuse('CONTAINMENT_BASELINE_INVALID', 'restoration requires the original lease epoch successor');
+  const original = readPlanningContainmentBaseline({ worktree, binding, reference });
+  const token = Object.freeze({});
+  containmentBaselines.set(token, { root: original.root, head: original.head, index: original.index,
+    sources: new Map(original.sources), status: new Map(original.status), bindingKey: containmentBindingKey(binding) });
   return token;
 }
 
@@ -454,4 +570,6 @@ module.exports = Object.freeze({
   verifySealedLine,
   assertContained,
   captureContainmentBaseline,
+  persistContainmentBaseline,
+  restoreContainmentBaseline,
 });
