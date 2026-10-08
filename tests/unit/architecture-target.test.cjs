@@ -47,6 +47,33 @@ test('aggregate subject binds actual membership, repository, PR, live head and b
   assert.throws(() => phaseBinding({...input,branch:'ticket/T-47-01'}), /canonical phase epic/);
 });
 
+test('public phase builder reports empty selections as structured build refusals', () => {
+  const { fixture, write } = require('./helpers/codex-arch-review-fixtures.cjs');
+  const builder = require('../../plugins/delivery-pipeline/scripts/deliver-dispatch.cjs');
+  const f = fixture();
+  try {
+    const graphDir = path.join(f.root, '.planning/graph');
+    write(f.root, '.planning/graph/tickets.json', JSON.stringify({ tickets: {} }));
+    let liveLookups = 0;
+    const options = { cwd: f.root, graphDir, refreshGit: false,
+      getPullRequest: () => { liveLookups++; throw new Error('unexpected live lookup'); } };
+    for (const runtime of ['codex', 'claude']) {
+      for (const repo of [undefined, 'acme/missing']) {
+        assert.throws(() => builder.build(['arch-review', '38-codex-arch-review',
+          '--phase', '38', '--pr', '801', '--runtime', runtime,
+          ...(repo === undefined ? [] : ['--repo', repo])], options), error => {
+          assert.equal(error.code, 'BUILD_REFUSED');
+          assert.equal(error.exitCode, 2);
+          assert.equal(error.field, repo === undefined ? '--phase' : '--repo');
+          assert.equal(error.message, 'deliver-dispatch: phase absent from canonical graph');
+          return true;
+        });
+      }
+    }
+    assert.equal(liveLookups, 0);
+  } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
+});
+
 test('public phase builder and native context use the explicit aggregate PR and complete evidence', () => {
   const { fixture, write, git, TICKET } = require('./helpers/codex-arch-review-fixtures.cjs');
   const builder = require('../../plugins/delivery-pipeline/scripts/deliver-dispatch.cjs');

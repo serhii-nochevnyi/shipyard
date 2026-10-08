@@ -1112,8 +1112,12 @@ function buildPhaseArchitectureRequest(args, options) {
   const input = planningBuildContext(options);
   const branch = git(input.worktree, ['symbolic-ref', '--quiet', '--short', 'HEAD']);
   const repo = args.repo ?? null;
-  const row = require('./architecture-target.cjs').phaseRows(input.graph, args.phase, repo)[0]?.[1];
-  if (!row) buildFail('--phase', 'phase absent from canonical graph');
+  let row;
+  try {
+    row = require('./architecture-target.cjs').phaseRows(input.graph, args.phase, repo)[0][1];
+  } catch (error) {
+    buildFail(args.repo === undefined ? '--phase' : '--repo', error.message);
+  }
   const stateRaw = readJsonBounded(path.join(input.graphDir, 'delivery-state.json'));
   const state = stateRaw?.tickets || stateRaw;
   if (!object(state)) buildFail('state', 'canonical phase evidence is unavailable');
