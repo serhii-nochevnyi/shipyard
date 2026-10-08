@@ -105,7 +105,7 @@ function successDependencies(f, { store, writerLease, onLaunch, mutateEvidence }
 const HELP_MARKERS = [
   '--model', '--effort', '--output-format', 'stream-json', '--session-id',
   '--permission-mode', '--permission-prompts', '--allowedTools', '--tools',
-  '--restricted', '--strict-mcp-config', '--settings', '--agent', '--agents',
+  '--restricted', '--strict-mcp-config', '--settings', '--setting-sources', '--agent', '--agents',
 ];
 
 function fakeAvailableClaudeBin(root) {

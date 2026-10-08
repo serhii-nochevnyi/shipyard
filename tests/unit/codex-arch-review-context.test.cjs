@@ -329,6 +329,8 @@ for (const scenario of [
     }
     let value;
     assert.doesNotThrow(() => { value = contextBuilder.prepare(parsed.scope, parsed.launch, options); });
+    const preparedInput = productBytes ? contextBuilder.admittedFileInput(value) : null;
+    if (preparedInput) assertFiniteFileSchedule(preparedInput, JSON.stringify(value.prepared.packet));
     const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
     const selected = policy.resolveDispatch({ runtime: 'codex', role: 'arch-review', signals: value.launch.signals });
     const agentDir = path.join(storage, 'agents'); fs.mkdirSync(agentDir);
@@ -347,6 +349,14 @@ for (const scenario of [
       policy_version: selected.policy_version, policy_hash: selected.policy_hash,
       agent_files: [selected.agent_file], agent_digests: { [selected.agent_file]: digest(text) } }));
     const capabilities = { supportedModels: [selected.model], supportedEfforts: [selected.effort] };
+    if (productBytes) {
+      const installation = contextBuilder.admitInstalledLaunch(value, { agentDir, agentFile: selected.agent_file, agentManifest, capabilities });
+      const installedInput = contextBuilder.admittedFileInput(value);
+      assertFiniteFileSchedule(installedInput, JSON.stringify(value.prepared.packet));
+      assert.notStrictEqual(installedInput, preparedInput);
+      assert.deepEqual(contextBuilder.verifyFileInput(installedInput).material, contextBuilder.verifyFileInput(preparedInput).material);
+      assert.deepEqual(installation.capacity.accounting, installedInput.manifest.accounting);
+    }
     const recorder = require('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs').createDurableRecorder(path.join(storage, 'receipts'));
     let host = { scope: parsed.scope, capabilities, recorder,
       launchStatic(selection, context) {
@@ -1537,6 +1547,26 @@ function aggregateRuntimeFixture({ host: fixtureHost, parsed, storage, capabilit
       return child;
     },
   });
+}
+
+function assertFiniteFileSchedule(input, material) {
+  assert.equal(contextBuilder.isPreparedFileInput(input), true);
+  assert.throws(() => contextBuilder.verifyFileInput({ ...input }), /private producer authority/);
+  const checked = contextBuilder.verifyFileInput(input);
+  const bytes = fs.readFileSync(input.input_bundle.manifest_path);
+  const count = Math.ceil(bytes.length / input.input_bundle.chunk_bytes);
+  assert.ok(count > 1, 'real producer manifest must span multiple chunks');
+  assert.ok(bytes.subarray(0, input.input_bundle.chunk_bytes).includes(Buffer.from('"manifest_bytes":' + bytes.length)));
+  assert.equal(checked.manifest.accounting.manifest_bytes, bytes.length);
+  assert.equal(checked.manifest.accounting.relay_bytes, Buffer.byteLength(input.prompt));
+  assert.equal(checked.chunk_reads, count + checked.manifest.assets.reduce((sum, asset) => sum + asset.chunk_count, 0));
+  assert.equal(input.input_bytes, Object.values(checked.manifest.accounting).reduce((sum, value) => sum + value, 0));
+  assert.equal(input.inputTokens, Math.ceil(input.input_bytes / 4));
+  assert.equal(Buffer.concat(checked.material).toString(), material);
+  assert.ok(input.prompt.includes('Math.ceil(accounting.manifest_bytes / chunk_bytes)'));
+  assert.ok(input.prompt.includes('indices 0 through manifest_chunk_count - 1 before requesting any asset'));
+  assert.ok(input.prompt.includes('indices 0 through asset.chunk_count - 1'));
+  assert.ok(input.prompt.includes('Matching whole-file checksums or hash/count-only outputs confer no native content-read credit'));
 }
 
 function fileInputFixture(material = 'é'.repeat(600000), overrides = {}) {

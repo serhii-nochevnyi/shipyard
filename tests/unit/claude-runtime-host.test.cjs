@@ -661,7 +661,7 @@ test('probe requires the scoped permission and sandbox CLI surface', () => {
       if (args[0] === '--version') return { status: 0, stdout: '2.1.280\n', stderr: '' };
       if (args[0] === '--help') return {
         status: 0,
-        stdout: '--model --effort --output-format stream-json --session-id --permission-mode --permission-prompts --allowedTools --tools --restricted --strict-mcp-config --settings --agent --agents',
+        stdout: '--model --effort --output-format stream-json --session-id --permission-mode --permission-prompts --allowedTools --tools --restricted --strict-mcp-config --settings --setting-sources --agent --agents',
         stderr: '',
       };
       return { status: 0, stdout: JSON.stringify({ loggedIn: true, authMethod: 'claude.ai' }), stderr: '' };
@@ -679,6 +679,40 @@ test('probe requires the scoped permission and sandbox CLI surface', () => {
     && call.env.ANTHROPIC_BASE_URL === 'https://provider.invalid'
     && call.env.OPENAI_API_KEY === undefined
     && call.env.CODEX_API_KEY === undefined));
+});
+
+test('probe refuses otherwise supported help missing exactly --setting-sources without a runtime launch or receipt', () => {
+  const calls = [];
+  const help = '--model --effort --output-format stream-json --session-id --permission-mode --permission-prompts --allowedTools --tools --restricted --strict-mcp-config --settings --setting-sources --agent --agents';
+  const result = probeClaudeRuntime({ spawnSync(command, args) {
+    calls.push({ command, args });
+    if (args[0] === '--version') return { status: 0, stdout: '2.1.280\n', stderr: '' };
+    if (args[0] === '--help') return { status: 0, stdout: help.replace(' --setting-sources', ''), stderr: '' };
+    assert.deepEqual(args, ['auth', 'status', '--json']);
+    return { status: 0, stdout: JSON.stringify({ loggedIn: true, authMethod: 'claude.ai' }), stderr: '' };
+  } });
+  assert.equal(result.status, 'unavailable');
+  assert.equal(result.reason, 'runtime_capability_missing');
+  assert.deepEqual(result.missing, ['--setting-sources']);
+  assert.equal(result.receipt, undefined);
+  assert.deepEqual(calls.map(call => call.args), [['--version'], ['--help']]);
+});
+
+test('probe refuses a near-match --setting-sources-file without a runtime launch or receipt', () => {
+  const calls = [];
+  const help = '--model --effort --output-format stream-json --session-id --permission-mode --permission-prompts --allowedTools --tools --restricted --strict-mcp-config --settings --setting-sources-file --agent --agents';
+  const result = probeClaudeRuntime({ spawnSync(command, args) {
+    calls.push({ command, args });
+    if (args[0] === '--version') return { status: 0, stdout: '2.1.280\n', stderr: '' };
+    if (args[0] === '--help') return { status: 0, stdout: help, stderr: '' };
+    assert.deepEqual(args, ['auth', 'status', '--json']);
+    return { status: 0, stdout: JSON.stringify({ loggedIn: true, authMethod: 'claude.ai' }), stderr: '' };
+  } });
+  assert.equal(result.status, 'unavailable');
+  assert.equal(result.reason, 'runtime_capability_missing');
+  assert.deepEqual(result.missing, ['--setting-sources']);
+  assert.equal(result.receipt, undefined);
+  assert.deepEqual(calls.map(call => call.args), [['--version'], ['--help']]);
 });
 
 test('probe reports unavailable without turning missing runtime into a receipt', () => {
