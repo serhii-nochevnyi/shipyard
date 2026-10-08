@@ -24,6 +24,13 @@ const SUCCESSOR_APPROVAL_SHA = 'a7e71a2f9f2a53d3a828adb46a19544e40e98da50f8e5169
 const SUCCESSOR_STAGE = 'shipyard-phase47-final-publication/INV-014-runtime-delivery-correctness/ADR-027-current-ticket-evidence';
 const SUCCESSOR_SOURCE = 'c9bd8ccae0c688e034cf9f94df4ad0cfc4c909b7';
 const PLAN21_SHA = 'e0477ce6956720fd9697474731dea417626e7128cd84868c91b663d9a17a2f66';
+const VOLUME_HANDOFF = path.join(HOST, 'phase47-final-generation-adr027-current-ticket-volume/generation.json');
+const VOLUME_HANDOFF_SHA = '32eb9144cc872ee6f6f4747ef83e475905c565effee16f93f64dc7a7e8d7062f';
+const VOLUME_APPROVAL_SHA = '547bc307249ac7aaa8ceaa0c690e473a8f34819333a8d2c0dad141307a3d304d';
+const VOLUME_STAGE = 'shipyard-phase47-final-publication/INV-014-runtime-delivery-correctness/ADR-027-current-ticket-volume';
+const VOLUME_SOURCE = '462683f52df5c3e2ab45a08d8a5e72f9281e5750';
+const PLAN22_SHA = '5225fd21717e38d59a10c2921e1e1dfd8b54c0a2bc1c3e1115a623485095b7b7';
+const PLAN23_SHA = 'c6a3f59e634d5683b2c7cda80520d0d4584dffb4bf9ad2d62bab67dddcedfc8c';
 const OPERATOR = '2F485C0A455BA33463F66332900FCE87BD1BFF0D';
 const BASELINE = '7eebae4812b3c67ccdbbb63c8c1603f7767b1466';
 const PHASE = '.planning/phases/47-complete-deferred-decomposition-wait-attribution';
@@ -48,6 +55,7 @@ const CORRECTIVE = ['codex-arch-review-context', 'codex-runtime-host', 'codex-de
   .concat('.codex-plugin/plugin.json', 'package-build.json').sort();
 const SUCCESSOR_CORRECTIVE = ['role-artifact', 'codex-arch-review-context', 'claude-role-host'].map(mirror)
   .concat('.codex-plugin/plugin.json', 'package-build.json').sort();
+const VOLUME_CORRECTIVE = [mirror('role-artifact'), '.codex-plugin/plugin.json', 'package-build.json'].sort();
 const CALLER = ['codex-arch-review-context', 'role-artifact', 'codex-decompose-host',
   'codex-planning-context-host'].map(mirror);
 const GROUPS = {
@@ -153,7 +161,7 @@ function validateHandback(handback, selection, binding, selectionPath) {
   assert.equal(handback.historical_manifest_sha256, binding.source.plan_manifest_sha256);
   assert.deepEqual(handback.current_plan_amendments, binding.source.current_plan_amendments);
   validateAllocation(handback.publication_allocation);
-  assert.deepEqual([...handback.changed_outputs].sort(), handback.purpose === 'ADR-027-current-ticket-evidence' ? SUCCESSOR_CORRECTIVE : handback.purpose === 'ADR-026-final'
+  assert.deepEqual([...handback.changed_outputs].sort(), handback.purpose === 'ADR-027-current-ticket-volume' ? VOLUME_CORRECTIVE : handback.purpose === 'ADR-027-current-ticket-evidence' ? SUCCESSOR_CORRECTIVE : handback.purpose === 'ADR-026-final'
     ? (handback.source_update ? CORRECTIVE : CORRECTIVE.filter(p => p !== mirror('architecture-target'))) : UNION,
     'unexpected generation scope');
   if (handback.purpose === 'ADR-026-final')
@@ -468,7 +476,7 @@ function validateSuccessorContract(handback, approval) {
   assert.deepEqual(approval.current_checker.verdict.blockers, []);
 }
 
-function authenticateSuccessor(common, root = REPOSITORY) {
+function authenticateSuccessor(common, root = REPOSITORY, historical = false) {
   const handback = authenticateHandback(SUCCESSOR_HANDOFF, SUCCESSOR_HANDOFF_SHA);
   const approvalRef = handback.current_source_approval;
   assert.equal(approvalRef.path, path.join(path.dirname(SUCCESSOR_HANDOFF), 'source-approval.json'));
@@ -577,8 +585,188 @@ function authenticateSuccessor(common, root = REPOSITORY) {
   const delta = selected.binding.outputs.filter(entry => sha(git(root, 'show', source.head + ':plugins/shipyard/' + entry.path)) !== entry.sha256
     || gitText(root, 'ls-tree', source.head, '--', 'plugins/shipyard/' + entry.path).split(' ')[0] !== entry.git_mode).map(row => row.path).sort();
   assert.deepEqual(delta, SUCCESSOR_CORRECTIVE);
+  const current = historical ? validateHistoricalSource(root, selected.binding, approval) : validateSource(root, selected.binding, approval);
+  return { handback, selected, approval, prior, planning: prior.planning, current };
+}
+
+function validateHistoricalSource(root, binding, approval) {
+  const source = binding.source;
+  assert.equal(gitText(root, 'rev-parse', source.head + '^{tree}'), source.tree);
+  assert.equal(sha(git(root, 'show', source.head + ':.planning/config.json')), approval.reviewed_source_config_sha256);
+  assert.equal(source.config_sha256, approval.reviewed_source_config_sha256);
+  assert.equal(source.coordinator_config_sha256, approval.coordinator_config_sha256);
+  for (const input of source.identities) {
+    assert.equal(sha(git(root, 'show', source.head + ':' + input.path)), input.sha256);
+    assert.equal(gitText(root, 'ls-tree', source.head, '--', input.path).split(' ')[0],
+      source.input_modes.find(row => row.path === input.path).mode === 0o755 ? '100755' : '100644');
+  }
+  assert.equal(sha(canon(source.identities)), binding.canonical_input_digest);
+  const state = JSON.parse(read(path.join(source.repository, '.planning/graph/delivery-state.json')));
+  validateParents(source, state, null, (before, after) => git(root, 'merge-base', '--is-ancestor', before, after), true);
+  return { historical_only: true, source_head: source.head };
+}
+
+function validateVolumeContract(handback, approval) {
+  assert.equal(handback.purpose, 'ADR-027-current-ticket-volume');
+  assert.equal(approval.schema, 'shipyard.phase47-current-source-approval.v1');
+  assert.equal(approval.purpose, handback.purpose);
+  assert.equal(approval.actor, 'trusted-coordinator');
+  assert.equal(approval.native_receipt, false);
+  assert.equal(approval.status, 'approved');
+  assert.equal(approval.source_head, VOLUME_SOURCE);
+  assert.equal(handback.source_head, VOLUME_SOURCE);
+  assert.deepEqual(Object.keys(handback.corrective_allocation), ['T-47-23']);
+  assert.deepEqual([...handback.corrective_allocation['T-47-23']].sort(), VOLUME_CORRECTIVE);
+  assert.deepEqual([...handback.changed_outputs].sort(), VOLUME_CORRECTIVE);
+  for (const key of ['successor_planner', 'current_checker', 'current_research', 'source_correction',
+    'tail_plan_amendments', 'delivery_metadata_amendment', 'corrective_allocation', 'prior_final_handoff'])
+    assert.deepEqual(approval[key], handback[key], 'volume approval drift: ' + key);
+  assert.deepEqual(approval.tail_plan_amendments.map(row => row.sha256), [PLAN22_SHA, PLAN23_SHA]);
+  const checker = approval.current_checker.verdict;
+  assert.equal(checker.status, 'passed');
+  assert.deepEqual(checker.blockers, []);
+  assert.equal(checker.input_sha256[PHASE + '/47-22-PLAN.md'], PLAN22_SHA);
+  assert.equal(checker.input_sha256[PHASE + '/47-23-PLAN.md'], PLAN23_SHA);
+  assert.equal(approval.reviewed_source_config_sha256, '2eb2a0475127916c4c120d7616d13df1393d116c07b2a5f259cd6453234c65f9');
+  assert.equal(approval.coordinator_config_sha256, '63a18625794b2772663567c95401ad91358daf13974f9c18117e0ce237256780');
+}
+
+function validateCurrentNative(result, role, childPath = null) {
+  assert.equal(result.receipt.compliance, 'verified');
+  assert.equal(result.receipt.runtime, 'codex');
+  assert.equal(result.receipt.dispatch_id, result.dispatch_id || result.receipt.runtime_evidence.dispatch_id);
+  if (role.startsWith('gsd-')) assert.equal(result.receipt.gsd_role, role);
+  else assert.equal(result.receipt.role, role);
+  const evidence = result.receipt.runtime_evidence;
+  reference(evidence.transcript);
+  const child = evidence.native_child_evidence;
+  assert(child, 'genuine native child evidence required');
+  if (role.startsWith('gsd-')) assert.equal(child.agent_role, role);
+  const raw = childPath ? reference(childPath, true).toString()
+    : read(path.join('/Users/serhii/.codex/sessions/2026/10/08',
+      role === 'gsd-planner' ? 'rollout-2026-10-08T01-18-03-01a11871-f17d-79f2-a373-a4568376243a.jsonl'
+        : 'rollout-2026-10-08T01-09-16-01a11869-e6f6-7d23-8cc0-72519234af8b.jsonl'), child.sha256).toString();
+  require('../smoke/phase47-runtime-acceptance.cjs').validateInlineFirstCall(raw, child.task_relay, child);
+  const records = raw.trim().split('\n').map(line => JSON.parse(line));
+  const meta = records.find(row => row.type === 'session_meta')?.payload;
+  assert.equal(meta?.id, child.session_id);
+  assert.equal(meta?.parent_thread_id, child.parent_thread_id);
+  assert.equal(meta?.agent_role, child.agent_role);
+  return records;
+}
+
+function authenticateVolumeSuccessor(common, root = REPOSITORY) {
+  const handback = authenticateHandback(VOLUME_HANDOFF, VOLUME_HANDOFF_SHA);
+  const approvalRef = handback.current_source_approval;
+  assert.equal(approvalRef.path, path.join(path.dirname(VOLUME_HANDOFF), 'source-approval.json'));
+  assert.equal(approvalRef.sha256, VOLUME_APPROVAL_SHA);
+  assert.equal(approvalRef.signature_path, approvalRef.path + '.asc');
+  const approval = authenticateHandback(approvalRef.path, VOLUME_APPROVAL_SHA);
+  validateVolumeContract(handback, approval);
+  const selected = selectedArtifact(common, handback, VOLUME_STAGE);
+  selected.volume = true;
+  const source = selected.binding.source;
+  assert.equal(approval.source_tree, source.tree);
+  assert.equal(approval.source_identity_sha256, handback.source_identity_sha256);
+  assert.equal(approval.canonical_input_digest, selected.binding.canonical_input_digest);
+  assert.deepEqual(approval.parent_commits, source.parent_commits);
+  assert.deepEqual(approval.provenance, source.provenance);
+  const prior = authenticateSuccessor(common, root, true);
+  assert.equal(handback.prior_final_handoff.path, SUCCESSOR_HANDOFF);
+  assert.equal(handback.prior_final_handoff.sha256, SUCCESSOR_HANDOFF_SHA);
+  for (const key of ['generation_id', 'source_head', 'selection_path', 'selection_sha256', 'binding_path', 'binding_sha256'])
+    assert.equal(handback.prior_final_handoff[key], prior.handback[key], 'T21 predecessor drift: ' + key);
+  for (const key of ['original_handoff_path', 'original_handoff_sha256', 'original_source_head',
+    'original_source_identity_sha256', 'original_index_sha256']) {
+    assert.equal(handback[key], prior.handback[key]);
+    assert.equal(approval[key], handback[key]);
+  }
+  assert.equal(handback.original_generation_id, prior.handback.original_generation_id);
+  reference(handback.original_configuration_snapshot, true);
+  assert.equal(handback.original_configuration_snapshot.sha256, approval.reviewed_source_config_sha256);
+  assert.deepEqual(JSON.parse(reference(handback.original_ledger, true)), JSON.parse(git(root,
+    'show', VOLUME_SOURCE + ':docs/audits/phase47-runtime-acceptance.json')));
+  assert.equal(sha(reference(handback.prior_handoff_document, true)), sha(git(root,
+    'show', VOLUME_SOURCE + ':docs/audits/phase47-runtime-handoff.md')));
+  for (const ref of approval.tail_plan_amendments) reference(ref);
+  const planner = JSON.parse(reference(approval.successor_planner));
+  assert.equal(planner.status, 'completed');
+  assert.equal(planner.receipt.dispatch_id, approval.successor_planner.dispatch_id);
+  assert.deepEqual(planner.artifact_index, approval.successor_planner.artifact_index);
+  validateCurrentNative(planner, 'gsd-planner');
+  const index = JSON.parse(reference(planner.artifact_index));
+  assert.equal(index.entries.length, 24);
+  assert.equal(approval.successor_planner.historical_materialized_entries.length, 24);
+  for (const entry of approval.successor_planner.historical_materialized_entries) {
+    const indexed = index.entries.find(row => row.path === entry.path);
+    assert(indexed, 'missing planner index entry');
+    assert.equal(indexed.sha256, entry.sha256);
+    assert.equal(indexed.bytes, entry.bytes);
+    reference({ ...entry, path: entry.physical_path });
+  }
+  const checkerRef = approval.current_checker, checker = JSON.parse(reference(checkerRef));
+  assert.equal(checker.dispatch_id, checkerRef.dispatch_id);
+  assert.deepEqual(checker.receipt.runtime_evidence.native_child_evidence, checkerRef.native_child_evidence);
+  reference(checkerRef.transcript);
+  assert.equal(checkerRef.native_child_transcript.sha256, checkerRef.native_child_evidence.sha256);
+  const records = validateCurrentNative(checker, 'gsd-plan-checker', checkerRef.native_child_transcript);
+  const completed = records.filter(row => row.type === 'event_msg' && row.payload?.type === 'task_complete');
+  assert.equal(completed.length, 1);
+  assert.deepEqual(JSON.parse(completed[0].payload.last_agent_message), checkerRef.verdict);
+  assert.equal(checkerRef.verdict.input_sha256.TASK_FILE, checkerRef.native_child_evidence.task_relay.sha256);
+  const research = JSON.parse(reference(approval.current_research));
+  assert.equal(research.status, 'completed');
+  validateCurrentNative(research, 'gsd-phase-researcher');
+  const researchIndex = JSON.parse(reference(research.artifact_index));
+  for (const entry of researchIndex.entries) reference(entry);
+  for (const ref of approval.delivery_metadata_amendment.amendments) reference(ref, true);
+  const preserved = JSON.parse(reference(approval.original19_plan_preservation));
+  assert.equal(preserved.count, 19);
+  assert.equal(preserved.files.length, 19);
+  for (const entry of preserved.files) reference({ ...entry, path: path.join(source.repository, entry.path) });
+  assert.equal(preserved.files.find(row => path.basename(row.path) === '47-19-PLAN.md').sha256, PLAN19_SHA);
+  const correction = approval.source_correction;
+  for (const key of ['executor', 'fixer', 'current_completion', 'current_cost_fixer']) {
+    const result = JSON.parse(reference(correction[key]));
+    assert.equal(result.ticket, 'T-47-22');
+    assert.equal(result.receipt.compliance, 'verified');
+    assert.equal(result.receipt.runtime, 'codex');
+    assert.equal(result.receipt.role, ['executor', 'current_completion'].includes(key) ? 'executor' : 'ci-fix');
+    assert.equal(result.receipt.dispatch_id, result.dispatch_id);
+    reference(result.receipt.runtime_evidence.transcript);
+    if (key === 'executor') assert.equal(result.status, 'verification_failed');
+    if (key === 'current_completion') {
+      assert.equal(result.artifact.schema, 'shipyard.codex-delivery-artifact.v1');
+    }
+  }
+  reference(correction.current_cost_fixer.actual_prior_ci_cancellation);
+  for (const key of ['historical_review_finalization', 'historical_initial_finalization', 'diagnostic', 'trusted_finalization'])
+    reference(correction[key]);
+  assert.deepEqual(correction.actual_merge, source.parent_commits['T-47-22']);
+  assert.equal(source.parent_commits['T-47-22'].merge, VOLUME_SOURCE);
+  const verificationRef = correction.trusted_finalization.verification;
+  const envelope = JSON.parse(read(verificationRef.path));
+  assert.equal(sha(canon(envelope)), verificationRef.digest);
+  assert.equal(envelope.format, 'shipyard.host-authenticated.v1');
+  const verification = hostVerification.readEvidence(verificationRef.path, verificationRef.digest);
+  assert(verification, 'authenticated HOST verification payload required');
+  assert.equal(verification.ticket, 'T-47-22');
+  assert.equal(verification.plan_sha256, PLAN22_SHA);
+  assert.equal(verification.results.length, 2);
+  assert(verification.results.every(row => row.outcome === 'passed' && row.tree_before === source.tree && row.tree_after === source.tree));
+  assert.deepEqual(verification, correction.host_verification);
+  assert.deepEqual(selected.binding.outputs.map(row => row.path), prior.selected.binding.outputs.map(row => row.path));
+  assert.equal(selected.binding.outputs.length, 161);
+  const delta = selected.binding.outputs.filter(entry => sha(git(root, 'show', source.head + ':plugins/shipyard/' + entry.path)) !== entry.sha256
+    || gitText(root, 'ls-tree', source.head, '--', 'plugins/shipyard/' + entry.path).split(' ')[0] !== entry.git_mode).map(row => row.path).sort();
+  assert.deepEqual(delta, VOLUME_CORRECTIVE);
   const current = validateSource(root, selected.binding, approval);
   return { handback, selected, approval, prior, planning: prior.planning, current };
+}
+
+function recheckVolumeSuccessor(authenticated, root = REPOSITORY) {
+  assert.deepEqual(authenticateVolumeSuccessor(authenticated.selected.binding.source.common, root), authenticated,
+    'volume successor changed during inspection');
 }
 
 function recheckSuccessor(authenticated, root = REPOSITORY) {
@@ -598,7 +786,7 @@ function recheckFinal(authenticated, root = REPOSITORY) {
 }
 
 function validateParents(source, state, getPullRequest, ancestor, final = false) {
-  const parents = final ? Array.from({ length: source.parent_commits['T-47-20'] ? 20 : 18 }, (_, n) => 'T-47-' + String(n + 1).padStart(2, '0')) : ['T-47-13', 'T-47-03', 'T-47-04', 'T-47-09', 'T-47-15', 'T-47-14'];
+  const parents = final ? Array.from({ length: source.parent_commits['T-47-22'] ? 22 : source.parent_commits['T-47-20'] ? 20 : 18 }, (_, n) => 'T-47-' + String(n + 1).padStart(2, '0')) : ['T-47-13', 'T-47-03', 'T-47-04', 'T-47-09', 'T-47-15', 'T-47-14'];
   assert.deepEqual(Object.keys(source.parent_commits).sort(), [...parents].sort());
   assert.deepEqual(Object.keys(source.provenance).sort(), [...parents].sort());
   for (const id of parents) {
@@ -738,8 +926,8 @@ function validatePublication(root, selected, group) {
   const published = path.join(root, 'plugins/shipyard');
   const observed = inventory(published);
   const outputs = new Map(binding.outputs.map(entry => [entry.path, entry]));
-  const final = selected.final === true || selected.successor === true;
-  const permitted = selected.successor ? SUCCESSOR_CORRECTIVE : final ? CORRECTIVE : UNION;
+  const final = selected.final === true || selected.successor === true || selected.volume === true;
+  const permitted = selected.volume ? VOLUME_CORRECTIVE : selected.successor ? SUCCESSOR_CORRECTIVE : final ? CORRECTIVE : UNION;
   const required = final && ['relay', 'complete'].includes(group)
     ? binding.outputs.map(entry => entry.path).filter(relative => group === 'complete'
       || !['.codex-plugin/plugin.json', 'package-build.json'].includes(relative)) : GROUPS[group];
@@ -836,23 +1024,23 @@ function stageContracts(selected) {
 function check(group) {
   assert(Object.hasOwn(GROUPS, group), 'unknown publication group');
   const common = gitText(REPOSITORY, 'rev-parse', '--path-format=absolute', '--git-common-dir');
-  const authenticated = authenticateSuccessor(common);
+  const authenticated = authenticateVolumeSuccessor(common);
   const { handback, selected, current, planning } = authenticated;
   const count = validatePublication(REPOSITORY, selected, group);
   const contracts = group === 'candidate' ? null : stageContracts(selected);
-  recheckSuccessor(authenticated);
+  recheckVolumeSuccessor(authenticated);
   validatePublication(REPOSITORY, selected, group);
-  return { status: 'completed', ticket: 'T-47-21', group, generation_id: handback.generation_id,
+  return { status: 'completed', ticket: 'T-47-23', group, generation_id: handback.generation_id,
     source_head: selected.binding.source.head, source_identity_sha256: handback.source_identity_sha256,
-    current_admission: current, handback_path: SUCCESSOR_HANDOFF, handback_sha256: SUCCESSOR_HANDOFF_SHA,
+    current_admission: current, handback_path: VOLUME_HANDOFF, handback_sha256: VOLUME_HANDOFF_SHA,
     selection_path: selected.selectionPath, selection_sha256: handback.selection_sha256,
     binding_path: selected.selection.binding_path, binding_sha256: selected.selection.binding_sha256,
     candidate_path: selected.selection.candidate_path, candidate_sha256: selected.selection.candidate_sha256,
     package_sha256: selected.binding.package_sha256, version: selected.binding.version,
     output_count: selected.binding.outputs.length, publication_count: count, build_calls: 0, planning,
-    corrective_outputs: SUCCESSOR_CORRECTIVE, historical_corrective_output_count: CORRECTIVE.length, original_output_count: UNION.length, original_native_owner_count: 16,
+    corrective_outputs: VOLUME_CORRECTIVE, historical_successor_output_count: SUCCESSOR_CORRECTIVE.length, historical_corrective_output_count: CORRECTIVE.length, original_output_count: UNION.length, original_native_owner_count: 16,
     contracts, covered_groups: group === 'complete' ? Object.keys(GROUPS) : [group],
-    successor_corrective_output_count: SUCCESSOR_CORRECTIVE.length, inspector_build_calls: 0,
+    successor_corrective_output_count: VOLUME_CORRECTIVE.length, inspector_build_calls: 0,
     remaining_obligations: ['current exact HOST verification', 'T-47-08 installed/native acceptance',
       'post-delivery aggregate architecture and integrator judgments'] };
 }
@@ -922,6 +1110,28 @@ function privateFixtures(authenticatedSignatureFixture = false) {
       { tail_plan_amendments: [{ sha256: PLAN19_SHA }, { sha256: PLAN19_SHA }] }])
       rejects('successor refuses stale or expanded authority', () =>
         validateSuccessorContract(successorFixture, { ...successorApproval, ...mutation }));
+    const volumeFixture = { purpose: 'ADR-027-current-ticket-volume', source_head: VOLUME_SOURCE,
+      changed_outputs: VOLUME_CORRECTIVE, corrective_allocation: { 'T-47-23': VOLUME_CORRECTIVE },
+      tail_plan_amendments: [{ sha256: PLAN22_SHA }, { sha256: PLAN23_SHA }],
+      current_checker: { verdict: { status: 'passed', blockers: [], input_sha256: {
+        [PHASE + '/47-22-PLAN.md']: PLAN22_SHA, [PHASE + '/47-23-PLAN.md']: PLAN23_SHA } } } };
+    const volumeApproval = { ...volumeFixture, schema: 'shipyard.phase47-current-source-approval.v1',
+      status: 'approved', actor: 'trusted-coordinator', native_receipt: false,
+      reviewed_source_config_sha256: '2eb2a0475127916c4c120d7616d13df1393d116c07b2a5f259cd6453234c65f9',
+      coordinator_config_sha256: '63a18625794b2772663567c95401ad91358daf13974f9c18117e0ce237256780' };
+    validateVolumeContract(volumeFixture, volumeApproval); cases++;
+    for (const mutation of [{ purpose: successorFixture.purpose }, { source_head: SUCCESSOR_SOURCE },
+      { actor: 'foreign' }, { native_receipt: true }, { status: 'pending' },
+      { corrective_allocation: { 'T-47-23': SUCCESSOR_CORRECTIVE } },
+      { tail_plan_amendments: [{ sha256: PLAN21_SHA }, { sha256: PLAN21_SHA }] },
+      { reviewed_source_config_sha256: volumeApproval.coordinator_config_sha256 },
+      { coordinator_config_sha256: volumeApproval.reviewed_source_config_sha256 },
+      { prior_final_handoff: { path: FINAL_HANDOFF } }, { source_correction: {} },
+      { current_checker: { verdict: { status: 'pending' } } }])
+      rejects('volume successor refuses moved or expanded authority', () =>
+        validateVolumeContract(volumeFixture, { ...volumeApproval, ...mutation }));
+    rejects('volume handback expanded output allocation', () => validateVolumeContract({ ...volumeFixture,
+      changed_outputs: SUCCESSOR_CORRECTIVE }, volumeApproval));
     const currentUpdate = { commit: '8192ba38942be328b27f8aa54984eae7cd47231c',
       parent: '72f033c994053654d5025e128081ee37be0e04b7',
       canonical_path: 'plugins/delivery-pipeline/scripts/architecture-target.cjs',
@@ -1255,7 +1465,7 @@ function privateFixtures(authenticatedSignatureFixture = false) {
   }
 }
 
-module.exports = { authenticateSuccessor, recheckSuccessor, validateSuccessorContract, SUCCESSOR_CORRECTIVE, SUCCESSOR_HANDOFF, SUCCESSOR_HANDOFF_SHA, check, authenticateOriginal, authenticateFinal, recheckFinal, selectedArtifact, validateSourceUpdate,
+module.exports = { validatePublication, authenticateVolumeSuccessor, recheckVolumeSuccessor, validateVolumeContract, VOLUME_CORRECTIVE, VOLUME_HANDOFF, VOLUME_HANDOFF_SHA, authenticateSuccessor, recheckSuccessor, validateSuccessorContract, SUCCESSOR_CORRECTIVE, SUCCESSOR_HANDOFF, SUCCESSOR_HANDOFF_SHA, check, authenticateOriginal, authenticateFinal, recheckFinal, selectedArtifact, validateSourceUpdate,
   validateDescendant, validateConfigurations, CORRECTIVE, FINAL_HANDOFF, FINAL_HANDOFF_SHA };
 
 if (require.main === module) {
@@ -1270,7 +1480,7 @@ if (require.main === module) {
       console.log(JSON.stringify({ ...check(process.argv[3]), fixtures }));
     }
   } catch (error) {
-    console.error(JSON.stringify({ status: 'blocked', ticket: 'T-47-21', reason: error.message }));
+    console.error(JSON.stringify({ status: 'blocked', ticket: 'T-47-23', reason: error.message }));
     process.exitCode = 1;
   }
 }

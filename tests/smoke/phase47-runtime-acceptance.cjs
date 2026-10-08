@@ -126,18 +126,19 @@ function comparePackage(directory, binding, sealed = false) {
   return { package_sha256: build.digest, manifest_sha256: sha(manifestBytes), output_count: actual.length };
 }
 
-function inspectCandidate(candidate, root = ROOT, kind = 'successor') {
+function inspectCandidate(candidate, root = ROOT, kind = 'volume-successor') {
   const publication = require('../unit/phase47-package-publication.test.cjs');
   const common = gitText(root, 'rev-parse', '--path-format=absolute', '--git-common-dir');
-  assert(['original', 'final', 'successor'].includes(kind), 'unknown generation branch');
-  const authenticated = kind === 'successor' ? publication.authenticateSuccessor(common, root)
+  assert(['original', 'final', 'successor', 'volume-successor'].includes(kind), 'unknown generation branch');
+  const authenticated = kind === 'volume-successor' ? publication.authenticateVolumeSuccessor(common, root)
+    : kind === 'successor' ? publication.authenticateSuccessor(common, root, true)
     : kind === 'final' ? publication.authenticateFinal(common, root, true)
     : publication.authenticateOriginal(common);
   const { handback, selected } = authenticated;
   const { selection, binding, selectionPath } = selected;
   if (candidate) assert.equal(candidate, selection.candidate_path, 'foreign candidate');
   const packageEvidence = comparePackage(selection.candidate_path, binding, true);
-  if (kind === 'successor') comparePackage(path.join(root, 'plugins/shipyard'), binding);
+  if (kind === 'volume-successor') publication.validatePublication(root, selected, 'candidate');
   const dirty = gitText(root, 'status', '--porcelain=v1', '--untracked-files=all');
   const result = { selection, binding, identity: { ...packageEvidence,
     source_head: binding.source.head, source_tree: binding.source.tree,
@@ -147,12 +148,14 @@ function inspectCandidate(candidate, root = ROOT, kind = 'successor') {
     selection_path: selectionPath, selection_sha256: handback.selection_sha256,
     binding_path: selection.binding_path, binding_sha256: selection.binding_sha256,
     candidate_path: selection.candidate_path, candidate_sha256: selection.candidate_sha256,
-    generation_handback: { path: kind === 'successor' ? publication.SUCCESSOR_HANDOFF : kind === 'final' ? publication.FINAL_HANDOFF : HANDOFF,
-      sha256: kind === 'successor' ? publication.SUCCESSOR_HANDOFF_SHA : kind === 'final' ? publication.FINAL_HANDOFF_SHA : HANDOFF_SHA256 },
-    historical_only: kind !== 'successor', generation_kind: kind }, authenticated };
-  if (kind === 'successor') {
-    publication.recheckSuccessor(authenticated, root);
-    comparePackage(path.join(root, 'plugins/shipyard'), binding);
+    generation_handback: { path: kind === 'volume-successor' ? publication.VOLUME_HANDOFF : kind === 'successor' ? publication.SUCCESSOR_HANDOFF : kind === 'final' ? publication.FINAL_HANDOFF : HANDOFF,
+      sha256: kind === 'volume-successor' ? publication.VOLUME_HANDOFF_SHA : kind === 'successor' ? publication.SUCCESSOR_HANDOFF_SHA : kind === 'final' ? publication.FINAL_HANDOFF_SHA : HANDOFF_SHA256 },
+    historical_only: kind !== 'volume-successor', generation_kind: kind }, authenticated };
+  if (kind === 'volume-successor') {
+    publication.recheckVolumeSuccessor(authenticated, root);
+    publication.validatePublication(root, selected, 'candidate');
+  } else if (kind === 'successor') {
+    assert.deepEqual(publication.authenticateSuccessor(common, root, true), authenticated);
   } else publication.selectedArtifact(common, handback, kind === 'final'
     ? 'shipyard-phase47-final-publication/INV-014-runtime-delivery-correctness/ADR-026-source-update-1' : undefined);
   return result;
@@ -341,16 +344,22 @@ function validateLedger(ledger) {
   if (ledger.corrective_generation) {
     assert(ledger.candidate, 'corrective ledger requires current candidate');
     const publication = require('../unit/phase47-package-publication.test.cjs');
+    const volume = ledger.corrective_generation.kind === 'volume-successor';
+    assert(['successor', 'volume-successor'].includes(ledger.corrective_generation.kind), 'unknown corrective generation');
     assert.deepEqual(ledger.corrective_generation.handback,
-      { path: publication.SUCCESSOR_HANDOFF, sha256: publication.SUCCESSOR_HANDOFF_SHA }, 'foreign corrective handback');
-    const authenticated = publication.authenticateSuccessor(gitText(ROOT, 'rev-parse',
-      '--path-format=absolute', '--git-common-dir'));
+      { path: volume ? publication.VOLUME_HANDOFF : publication.SUCCESSOR_HANDOFF, sha256: volume ? publication.VOLUME_HANDOFF_SHA : publication.SUCCESSOR_HANDOFF_SHA }, 'foreign corrective handback');
+    const common = gitText(ROOT, 'rev-parse', '--path-format=absolute', '--git-common-dir');
+    const authenticated = volume ? publication.authenticateVolumeSuccessor(common)
+      : publication.authenticateSuccessor(common, ROOT, true);
     assert.deepEqual(ledger.corrective_generation.original_ledger, authenticated.handback.original_ledger,
       'foreign retained original ledger');
     assert.deepEqual(ledger.corrective_generation.source_approval, authenticated.handback.current_source_approval);
     const original = jsonOriginal(authenticated.handback.original_ledger);
-    assert.equal(ledger.corrective_generation.kind, 'successor');
-    assert.equal(ledger.corrective_generation.ticket, 'T-47-21');
+    assert.equal(ledger.corrective_generation.ticket, volume ? 'T-47-23' : 'T-47-21');
+    assert.equal(ledger.corrective_generation.plan_sha256, authenticated.approval.tail_plan_amendments[1].sha256);
+    assert.equal(ledger.acceptance, 'HOLD');
+    assert.equal(ledger.current_verification.accepted, false);
+    assert.equal(ledger.current_verification.native_launches, 0);
     assert.deepEqual(ledger.corrective_generation.predecessor, original.corrective_generation);
     assert.deepEqual(ledger.corrective_generation.prior_handoff_document, authenticated.handback.prior_handoff_document);
     assert.deepEqual(ledger.obligations, original.obligations, 'twenty original HOLD rows must remain unchanged');
@@ -358,7 +367,8 @@ function validateLedger(ledger) {
       assert.deepEqual(ledger[field], original[field], 'retained original ledger drift: ' + field);
     for (const row of ledger.obligations.filter(row => row.status !== 'proven'))
       assert.deepEqual(row, original.obligations.find(prior => prior.id === row.id), 'original HOLD obligation drift');
-    publication.recheckSuccessor(authenticated);
+    if (volume) publication.recheckVolumeSuccessor(authenticated);
+    else assert.deepEqual(publication.authenticateSuccessor(common, ROOT, true), authenticated);
   }
   const open = [], verified = [];
   const historical = (ledger.historical_research || []).map(reference => {
@@ -392,7 +402,7 @@ function validateLedger(ledger) {
   }
   let inspected = null;
   if (ledger.candidate) {
-    inspected = inspectCandidate(ledger.candidate.candidate_path);
+    inspected = inspectCandidate(ledger.candidate.candidate_path, ROOT, ledger.corrective_generation?.kind || 'original');
     for (const key of ['candidate_sha256', 'binding_sha256', 'canonical_input_digest', 'package_sha256',
       'manifest_sha256', 'source_head', 'source_tree', 'policy_sha256', 'selection_path', 'selection_sha256',
       'binding_path', 'candidate_path', 'generation_handback'])
@@ -409,7 +419,13 @@ function validateLedger(ledger) {
       && originalAccounting[field] === ledger.accounting[field], 'unknown accounting must remain unknown without original observations');
   }
   if (inspected) {
-    require('../unit/phase47-package-publication.test.cjs').recheckSuccessor(inspected.authenticated);
+    const publication = require('../unit/phase47-package-publication.test.cjs');
+    if (inspected.identity.generation_kind === 'volume-successor') publication.recheckVolumeSuccessor(inspected.authenticated);
+    else if (inspected.identity.generation_kind === 'successor')
+      assert.deepEqual(publication.authenticateSuccessor(inspected.binding.source.common, ROOT, true), inspected.authenticated);
+    else if (inspected.identity.generation_kind === 'final')
+      assert.deepEqual(publication.authenticateFinal(inspected.binding.source.common, ROOT, true), inspected.authenticated);
+    else assert.deepEqual(publication.authenticateOriginal(inspected.binding.source.common), inspected.authenticated);
     comparePackage(path.join(ROOT, 'plugins/shipyard'), inspected.binding);
   }
   return { schema: 'shipyard.phase47-runtime-acceptance-result.v1', status: open.length ? 'HOLD' : 'accepted',
