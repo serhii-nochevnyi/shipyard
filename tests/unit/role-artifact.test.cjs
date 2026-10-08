@@ -259,6 +259,69 @@ function rejectsCode(fn, code) {
   assert.throws(fn, (error) => error && error.code === code, `expected ${code}`);
 }
 
+suite('role-artifact — judgment evidence bound parity');
+
+test('judgment evidence bound parity role/runtime descriptor thresholds', () => {
+  const Module = require('node:module');
+  const isolated = new Module(ROLE_ARTIFACT, module);
+  isolated.filename = ROLE_ARTIFACT;
+  isolated.paths = Module._nodeModulePaths(path.dirname(ROLE_ARTIFACT));
+  isolated._compile(fs.readFileSync(ROLE_ARTIFACT, 'utf8')
+    + '\nmodule.exports = { judgmentEvidenceMaximum, readImmutableFile };', ROLE_ARTIFACT);
+  const { judgmentEvidenceMaximum, readImmutableFile } = isolated.exports;
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'judgment-bound-')));
+  const file = path.join(root, 'evidence.md');
+  try {
+    for (const [role, runtime, maximum] of [
+      ['arch-review', 'codex', 96 * 1024],
+      ['integrator', 'codex', 96 * 1024],
+      ['integrator', 'claude', 96 * 1024],
+      ['arch-review', 'claude', 4 * 1024 * 1024],
+      ['pr-sentinel', 'codex', 4 * 1024 * 1024],
+      ['pr-sentinel', 'claude', 4 * 1024 * 1024],
+    ]) {
+      assert.equal(judgmentEvidenceMaximum(role, runtime), maximum);
+      fs.writeFileSync(file, Buffer.alloc(maximum, 120));
+      assert.equal(readImmutableFile(fs, file, 'complete judgment evidence',
+        judgmentEvidenceMaximum(role, runtime)).length, maximum);
+      fs.appendFileSync(file, 'x');
+      assert.throws(() => readImmutableFile(fs, file, 'complete judgment evidence',
+        judgmentEvidenceMaximum(role, runtime)), error => error.code === 'INVALID_ARTIFACT'
+          && error.message === 'complete judgment evidence exceeds its authenticated complete-byte bound');
+    }
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+for (const size of [96 * 1024, 96 * 1024 + 1, 4 * 1024 * 1024, 4 * 1024 * 1024 + 1]) {
+  test('judgment evidence bound parity Claude complete bytes ' + size, () => {
+    const value = judgmentFixture('T-47-26-bound-' + size);
+    try {
+      const evidencePath = path.join(value.root, '.shipyard-arch-review-evidence.md');
+      const content = 'é'.repeat(Math.floor(size / 2)) + (size % 2 ? 'x' : '');
+      fs.writeFileSync(evidencePath, content);
+      const input = { worktreePath: value.root, base: 'main', role: 'arch-review',
+        ticket: value.ticket, pr: 404, recorder: value.recorder,
+        dispatchId: value.dispatch.receipt.dispatch_id, evidencePath,
+        result: archReviewResult(value, { verdict: 'conform', blocking_count: 0 }) };
+      if (size > 4 * 1024 * 1024) {
+        assert.throws(() => roleArtifact.seal(input), error => error.code === 'INVALID_ARTIFACT'
+          && error.message === 'complete judgment evidence exceeds its authenticated complete-byte bound');
+        assert.equal(fs.existsSync(path.join(value.root, '.shipyard-role-artifacts')), false);
+        return;
+      }
+      const sealed = roleArtifact.seal(input);
+      const validation = { ...input, artifactPath: sealed.artifact_ref, artifactDigest: sealed.artifact_digest };
+      const read = roleArtifact.read(validation);
+      assert.equal(read.evidence, content);
+      assert.equal(read.evidence_index.bytes, size);
+      assert.equal(read.findings.verdict, 'conform');
+      fs.appendFileSync(evidencePath, 'x'.repeat(4 * 1024 * 1024 + 1 - size));
+      assert.throws(() => roleArtifact.validate(validation), error => error.code === 'INVALID_ARTIFACT'
+        && error.message === 'complete judgment evidence exceeds its authenticated complete-byte bound');
+    } finally { clean(value); }
+  });
+}
+
 suite('role-artifact — bounded executor evidence');
 
 test('exposes the trusted seal, validate, and read boundary', () => {

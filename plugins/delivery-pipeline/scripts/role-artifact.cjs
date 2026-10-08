@@ -2991,6 +2991,11 @@ function judgmentManifest(data, metadata, files, envelope, dispatchId) {
   return manifest;
 }
 
+function judgmentEvidenceMaximum(role, runtime) {
+  return role === 'integrator' || (role === 'arch-review' && runtime === 'codex')
+    ? 96 * 1024 : HISTORICAL_ARCHIVE_MAX_BYTES;
+}
+
 function sealJudgment(value, options) {
   const input = normalizeCall(value, options);
   const fsApi = ioFor(input).fs;
@@ -3016,7 +3021,7 @@ function sealJudgment(value, options) {
   );
   assertContainedRegularPath(fsApi, worktree, evidencePath, 'complete judgment evidence');
   const sourceEvidence = readImmutableFile(fsApi, evidencePath, 'complete judgment evidence',
-    role === 'arch-review' && trusted.receipt.runtime === 'codex' ? 96 * 1024 : HISTORICAL_ARCHIVE_MAX_BYTES);
+    judgmentEvidenceMaximum(role, trusted.receipt.runtime));
   if (!sourceEvidence.length) fail('MISSING_ARTIFACT', 'complete judgment evidence is empty');
   if (role === 'arch-review' && trusted.receipt.runtime === 'codex'
       && digest(sourceEvidence) !== result?.host_context?.evidence_sha256)
@@ -3136,7 +3141,8 @@ function validateJudgmentManifest(value, options) {
     fail('MISSING_ARTIFACT', 'judgment artifact manifest is missing complete evidence and findings references');
   }
   const sourceEvidenceName = judgmentEvidenceName(role, input.phase);
-  const evidence = expectedRoleReference(fsApi, worktree, dispatchId, JUDGMENT_EVIDENCE_NAMES[role], manifest.files.evidence, 'judgment evidence', maximum);
+  const evidence = expectedRoleReference(fsApi, worktree, dispatchId, JUDGMENT_EVIDENCE_NAMES[role], manifest.files.evidence, 'judgment evidence',
+    judgmentEvidenceMaximum(role, trusted.receipt.runtime));
   const findings = expectedRoleReference(fsApi, worktree, dispatchId, FINDINGS_NAME, manifest.files.findings, 'judgment findings', maximum);
   if (!evidence.content.length) fail('MISSING_ARTIFACT', 'judgment evidence archive is empty');
   if (manifest.source_evidence_path !== sourceEvidenceName) {
@@ -3148,7 +3154,7 @@ function validateJudgmentManifest(value, options) {
     fsApi,
     sourceEvidencePath,
     'complete judgment evidence',
-    maximum === undefined ? undefined : 96 * 1024,
+    judgmentEvidenceMaximum(role, trusted.receipt.runtime),
   );
   if (!currentEvidence.length) fail('MISSING_ARTIFACT', 'complete judgment evidence is empty');
   if (!currentEvidence.equals(evidence.content)) {
