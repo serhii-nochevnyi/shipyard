@@ -861,9 +861,10 @@ for (const [id, t] of Object.entries(tickets)) {
       entry.integration_branch = repoData.get(repo)?.defaultBranch;
       entry.architecture = architectureTarget({ base: pr.baseRefName, integrationBranch: entry.integration_branch });
       if (entry.architecture.required) {
-        try { entry.authenticated_architecture = require('./role-artifact.cjs').currentArchitectureVerdict({
-          worktreePath: repo ? localResolutions.get(repo)?.repository_root : ROOT, repo,
-          pr: pr.number, head: pr.headRefOid, headBranch: pr.headRefName, baseName: pr.baseRefName, baseCommit: pr.baseRefOid, graphDir: GRAPH_DIR }); }
+        try { entry.authenticated_architecture = (!repo || localResolutions.get(repo)?.executable)
+          ? require('./role-artifact.cjs').currentArchitectureVerdict({
+            worktreePath: ROOT, repo,
+            pr: pr.number, head: pr.headRefOid, headBranch: pr.headRefName, baseName: pr.baseRefName, baseCommit: pr.baseRefOid, graphDir: GRAPH_DIR }) : null; }
         catch { entry.authenticated_architecture = null; }
       }
       if (t.human_checkpoint === true && t.checkpoint === 'review') {
@@ -1013,9 +1014,10 @@ if (mode === 'epic-stacked') {
       // branch (either the epic never started, or its whole diff is already in);
       let authenticatedArchitecture = null;
       if (pr?.state === 'OPEN') {
-        try { authenticatedArchitecture = require('./role-artifact.cjs').currentArchitectureVerdict({
-          worktreePath: repo ? localResolutions.get(repo)?.repository_root : ROOT, repo,
-          pr: pr.number, head: pr.headRefOid, headBranch: pr.headRefName, baseName: pr.baseRefName, baseCommit: pr.baseRefOid, graphDir: GRAPH_DIR }); }
+        try { authenticatedArchitecture = (!repo || localResolutions.get(repo)?.executable)
+          ? require('./role-artifact.cjs').currentArchitectureVerdict({
+            worktreePath: ROOT, repo,
+            pr: pr.number, head: pr.headRefOid, headBranch: pr.headRefName, baseName: pr.baseRefName, baseCommit: pr.baseRefOid, graphDir: GRAPH_DIR }) : null; }
         catch {}
       }
       epicInfo[epicKey(phase, repo)] = { phase: String(phase), repo, branch: e.branch, base, exists, ahead, pr, landed, landed_reason: landedReason,

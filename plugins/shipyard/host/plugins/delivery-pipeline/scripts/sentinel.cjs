@@ -1271,7 +1271,7 @@ function mergeOne(id) {
     res.architecture = architectureTarget({ base: pr.baseRefName, integrationBranch: integration });
     const checkout = localCheckout(repo, id);
     let verdict;
-    try { verdict = checkout && require('./role-artifact.cjs').currentArchitectureVerdict({ worktreePath: checkout, repo,
+    try { verdict = checkout && require('./role-artifact.cjs').currentArchitectureVerdict({ worktreePath: ROOT, repo,
       pr: s.pr, head: pr.headRefOid, headBranch: pr.headRefName, baseName: pr.baseRefName, baseCommit: pr.baseRefOid, graphDir: GRAPH_DIR }); }
     catch (error) { return block('authenticated architecture review unavailable: ' + error.message); }
     if (!verdict) return block('integration PR requires a fresh authenticated architecture verdict on its live head and base before human merge');

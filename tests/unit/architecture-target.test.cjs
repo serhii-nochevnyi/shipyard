@@ -125,7 +125,7 @@ test(`public phase builder and hosts select ${repo ?? 'current project'} from mi
   const context = require('../../plugins/delivery-pipeline/scripts/codex-arch-review-context.cjs');
   const f = fixture();
   try {
-    const graphDir = path.join(f.root,'.planning/graph');
+    let graphDir = path.join(f.root,'.planning/graph');
     const graph = JSON.parse(fs.readFileSync(path.join(graphDir,'tickets.json')));
     graph.tickets[TICKET].repo = repo;
     graph.tickets = { foreign: {...graph.tickets[TICKET], repo: repo === null ? 'acme/other' : null, plan: '.planning/phases/38-foreign/38-02-PLAN.md', epic: 'epic/38-codex-arch-review'}, ...graph.tickets };
@@ -136,6 +136,9 @@ test(`public phase builder and hosts select ${repo ?? 'current project'} from mi
     git(f.root,['branch','develop',f.base]);git(f.root,['update-ref','refs/remotes/origin/develop',f.base]);
     git(f.root,['switch','-c',graph.tickets[TICKET].epic]);git(f.root,['add','.']);git(f.root,['commit','-m','phase evidence']);
     f.pr = {...f.pr,number:801,headRefName:graph.tickets[TICKET].epic,headRefOid:git(f.root,['rev-parse','HEAD']),baseRefName:'develop'};
+    const planningRoot = f.planningRoot = f.root + '-planning';
+    git(f.root, ['worktree','add','-b','planning-fixture',planningRoot,f.pr.headRefOid]);
+    graphDir = path.join(planningRoot,'.planning/graph');
     const options = {cwd:f.root,graphDir,refreshGit:false,defaultBranch:'develop',getPullRequest:input=>{ assert.equal(input.repo,repo); return f.pr; }};
     const args = ['arch-review','38-codex-arch-review','--phase','38','--pr','801', ...(repo ? ['--repo',repo] : [])];
     const request = builder.build([...args,'--runtime','codex'],options);
@@ -279,10 +282,21 @@ test(`public phase builder and hosts select ${repo ?? 'current project'} from mi
       };
       assert.equal(artifacts.currentArchitectureVerdict(verdictInput).authenticated,true);
       assert.equal(artifacts.currentArchitectureVerdict({...verdictInput,repo}).authenticated,true);
+      assert.equal(artifacts.currentArchitectureVerdict({...verdictInput,worktreePath:planningRoot,repo}).authenticated,true);
+      assert.equal(artifacts.currentArchitectureVerdict({...verdictInput,worktreePath:planningRoot,repo,head:'f'.repeat(40)}),null);
+      assert.equal(artifacts.currentArchitectureVerdict({...verdictInput,worktreePath:planningRoot,repo,baseCommit:'f'.repeat(40)}),null);
+      assert.equal(artifacts.currentArchitectureVerdict({...verdictInput,worktreePath:planningRoot,repo,baseName:'main'}),null);
+      assert.equal(artifacts.currentArchitectureVerdict({...verdictInput,worktreePath:planningRoot,repo:repo === null ? 'acme/other' : null}),null);
     } finally {
       fs.openSync = originalOpen; fs.readdirSync = originalReaddir;
       for (let index = 0; index < 1001; index++) fs.rmSync(foreignFamilies + index, {recursive:true,force:true});
     }
+
+    const foreignCheckout = path.join(f.root,'foreign-checkout');
+    fs.mkdirSync(foreignCheckout);
+    git(foreignCheckout,['init','-b','foreign']);
+    assert.notEqual(git(foreignCheckout,['rev-parse','--path-format=absolute','--git-common-dir']),git(f.root,['rev-parse','--path-format=absolute','--git-common-dir']));
+    assert.throws(()=>artifacts.currentArchitectureVerdict({...verdictInput,worktreePath:foreignCheckout,repo}),/phase graph belongs to another repository/);
 
     assert.equal(artifacts.currentArchitectureVerdict({...verdictInput,repo:repo === null ? 'acme/other' : null}),null);
     assert.equal(artifacts.currentArchitectureVerdict({...verdictInput,baseCommit:'f'.repeat(40)}),null);
@@ -305,7 +319,7 @@ test(`public phase builder and hosts select ${repo ?? 'current project'} from mi
     assert.throws(()=>context.prepare(request.scope,{role:'arch-review',signals:{},context:request.context},options),/skipped-by-target/);
     f.pr.baseRefName='develop';f.pr.headRefOid='f'.repeat(40);
     assert.throws(()=>context.prepare(request.scope,{role:'arch-review',signals:{},context:request.context},options),/identity/);
-  } finally {fs.rmSync(f.root,{recursive:true,force:true});}
+  } finally {fs.rmSync(f.root,{recursive:true,force:true}); if (f.planningRoot) fs.rmSync(f.planningRoot,{recursive:true,force:true});}
 });
 
 }

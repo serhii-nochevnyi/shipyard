@@ -1656,7 +1656,24 @@ function currentArchitectureVerdict({ worktreePath, pr, head, baseName, baseComm
     const project = fs.realpathSync(path.resolve(directory, '../..'));
     if (fs.realpathSync(execFileSync('git', ['-C', project, 'rev-parse', '--path-format=absolute', '--git-common-dir'], { encoding: 'utf8' }).trim()) !== common)
       fail('ARCHIVE_AUTHORITY_INVALID', 'phase graph belongs to another repository');
-    for (const worktree of new Set([root, project])) {
+    const currentEpics = execFileSync('git', ['-C', root, 'worktree', 'list', '--porcelain'], { encoding: 'utf8' })
+      .split('\n\n').map(block => Object.fromEntries(block.split('\n').map(line => {
+        const separator = line.indexOf(' ');
+        return separator < 0 ? [line, true] : [line.slice(0, separator), line.slice(separator + 1)];
+      }))).filter(row => row.branch === 'refs/heads/' + targetBranch && row.HEAD === head && !row.prunable);
+    if (currentEpics.length > 1000) fail('ARCHIVE_AUTHORITY_INVALID', 'selected current epic checkouts exceed their total bound');
+    const candidates = new Set([root, project]);
+    for (const row of currentEpics) {
+      const checkout = fs.realpathSync(row.worktree);
+      if (checkout !== path.resolve(row.worktree)) fail('ARCHIVE_AUTHORITY_INVALID', 'current epic checkout is not canonical');
+      const actualCommon = fs.realpathSync(execFileSync('git', ['-C', checkout, 'rev-parse', '--path-format=absolute', '--git-common-dir'], { encoding: 'utf8' }).trim());
+      const actualHead = execFileSync('git', ['-C', checkout, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+      const actualBranch = execFileSync('git', ['-C', checkout, 'symbolic-ref', '--quiet', 'HEAD'], { encoding: 'utf8' }).trim();
+      if (actualCommon !== common || actualHead !== head || actualBranch !== 'refs/heads/' + targetBranch)
+        fail('ARCHIVE_AUTHORITY_INVALID', 'current epic checkout identity changed');
+      candidates.add(checkout);
+    }
+    for (const worktree of candidates) {
       if (!fs.existsSync(path.join(archiveAuthorityDirectory(worktree), 'catalogue.json'))) continue;
       for (const record of Object.values(authorityState(worktree).payload.records)) {
         if (record.receipt?.role !== 'arch-review') continue;
