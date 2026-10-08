@@ -1010,7 +1010,7 @@ function authorityState(worktree, create = false, requireCatalogue = true, readC
     fail('ARCHIVE_AUTHORITY_INVALID', 'archive authority directory is not private or contains symlinks');
   const keyFile = path.join(directory, 'hmac.key');
   if (create) {
-    if (!fs.existsSync(keyFile) && fs.readdirSync(directory).some(name => name === 'catalogue.json' || name.startsWith('architecture-sources-') || name.startsWith('phase-archive-roster-')))
+    if (!fs.existsSync(keyFile) && fs.readdirSync(directory).some(name => name === 'catalogue.json' || name.startsWith('architecture-sources-') || name.startsWith('phase-archive-roster-') || name.startsWith('planning-containment-')))
       fail('ARCHIVE_AUTHORITY_INVALID', 'existing protected records require their original authority key');
     try { fs.writeFileSync(keyFile, crypto.randomBytes(32), { flag: 'wx', mode: 0o600 }); }
     catch (error) { if (error.code !== 'EEXIST') throw error; }
@@ -1030,6 +1030,135 @@ function authorityState(worktree, create = false, requireCatalogue = true, readC
   if (payload.schema !== 'shipyard.role-archive-catalogue.v1' || payload.worktree !== worktree || !object(payload.records))
     fail('ARCHIVE_AUTHORITY_INVALID', 'archive catalogue identity is invalid');
   return { directory, file, key, payload };
+}
+
+function planningContainmentIdentity(worktree, binding) {
+  const root = fs.realpathSync(worktree);
+  if (!object(binding) || !object(binding.launch) || !object(binding.launch.scope)
+      || (typeof binding.launch.scope.worktree !== 'string' || fs.realpathSync(binding.launch.scope.worktree) !== root)
+      || typeof binding.launch.dispatch_id !== 'string' || !binding.launch.dispatch_id.trim()
+      || typeof binding.launch.gsd_role !== 'string' || !binding.launch.gsd_role.trim()
+      || typeof binding.launch.scope.run_id !== 'string' || !binding.launch.scope.run_id.trim()
+      || typeof binding.launch.scope.ticket !== 'string' || !binding.launch.scope.ticket.trim()
+      || !Number.isSafeInteger(binding.launch.scope.phase) || binding.launch.scope.phase < 1
+      || !/^[a-f0-9]{40,64}$/.test(binding.source_revision || '')
+      || !/^[a-f0-9]{64}$/.test(binding.launch.request_sha256 || '')
+      || !/^[a-f0-9]{64}$/.test(binding.launch.policy_hash || '')
+      || !object(binding.launch.agent) || !/^[a-f0-9]{64}$/.test(binding.launch.agent.sha256 || '')
+      || typeof binding.writer_lease_file !== 'string' || !path.isAbsolute(binding.writer_lease_file)
+      || !Number.isSafeInteger(binding.lease_epoch) || binding.lease_epoch < 0
+      || !/^[a-f0-9]{64}$/.test(binding.lease_identity_sha256 || '')
+      || !/^[a-f0-9]{64}$/.test(binding.tree_snapshot_sha256 || ''))
+    fail('CONTAINMENT_AUTHORITY_INVALID', 'complete original launch, scope, source, policy and lease binding is required');
+  const launch = binding.launch;
+  if (launch.scope.runtime !== 'codex' || launch.scope.provider !== 'openai'
+      || !['gsd-planner', 'gsd-plan-checker', 'gsd-phase-researcher'].includes(launch.gsd_role)
+      || launch.role !== (launch.gsd_role === 'gsd-phase-researcher' ? 'research' : 'decomposition')
+      || [launch.model, launch.effort, launch.policy_version, launch.rung, launch.agent.file]
+        .some(value => typeof value !== 'string' || !value.trim() || value.length > 8192)
+      || !/^[a-f0-9]{64}$/.test(launch.agent.instructions_sha256 || '')
+      || (launch.generated_agent !== undefined && (!object(launch.generated_agent)
+        || typeof launch.generated_agent.file !== 'string' || !launch.generated_agent.file.trim()
+        || !/^[a-f0-9]{64}$/.test(launch.generated_agent.sha256 || '')))
+      || typeof binding.launched_at !== 'string' || !Number.isFinite(Date.parse(binding.launched_at))
+      || !object(binding.reservation) || binding.reservation.dispatch_id !== launch.dispatch_id
+      || typeof binding.reservation.reserved_at !== 'string' || !binding.reservation.reserved_at.trim()
+      || Buffer.byteLength(stable(binding)) > 1024 * 1024)
+    fail('CONTAINMENT_AUTHORITY_INVALID', 'original selection, launch and reservation binding is incomplete');
+  const common = git({}, root, ['rev-parse', '--git-common-dir'], 'containment common directory');
+  return { worktree: root,
+    repository: fs.realpathSync(git({}, root, ['rev-parse', '--show-toplevel'], 'containment repository')),
+    common_directory: fs.realpathSync(path.resolve(root, common)), binding };
+}
+
+function validatePlanningContainmentSnapshot(snapshot, identity) {
+  if (!object(snapshot) || snapshot.schema !== 'shipyard.planning-containment-snapshot.v1'
+      || snapshot.root !== identity.worktree || snapshot.head !== identity.binding.source_revision
+      || !/^[a-f0-9]{40,64}$/.test(snapshot.head || '') || !/^[a-f0-9]{64}$/.test(snapshot.index || '')
+      || Buffer.byteLength(stable(snapshot)) > 4 * 1024 * 1024)
+    fail('CONTAINMENT_AUTHORITY_INVALID', 'complete original containment snapshot is required');
+  for (const kind of ['sources', 'status']) {
+    const entries = snapshot[kind];
+    if (!Array.isArray(entries) || entries.length > 100000)
+      fail('CONTAINMENT_AUTHORITY_INVALID', 'containment map exceeds its bound');
+    let previous = null;
+    for (const entry of entries) {
+      if (!Array.isArray(entry) || entry.length !== 2 || typeof entry[0] !== 'string'
+          || !entry[0] || entry[0].length > 8192 || /[\\\0]/.test(entry[0])
+          || path.isAbsolute(entry[0]) || entry[0].replace(/\/$/, '').split('/').some(part => !part || part === '.' || part === '..')
+          || (previous !== null && previous >= entry[0]))
+        fail('CONTAINMENT_AUTHORITY_INVALID', 'containment paths must be unique sorted bounded relative entries');
+      const value = entry[1];
+      if (kind === 'status' ? typeof value !== 'string' || !/^[ MADRC?!T]{2}$/.test(value)
+        : value !== null && (typeof value !== 'string' || value.length > 16384
+          || !/^\d+:(?:[a-f0-9]{64}|directory-sha256:[a-f0-9]{64}|symlink:[\s\S]*)$/.test(value)))
+        fail('CONTAINMENT_AUTHORITY_INVALID', 'containment source identity or status is malformed');
+      previous = entry[0];
+    }
+  }
+  const sources = new Set(snapshot.sources.map(entry => entry[0]));
+  if (snapshot.status.some(entry => !sources.has(entry[0])))
+    fail('CONTAINMENT_AUTHORITY_INVALID', 'containment status lacks its original source entry');
+  return snapshot;
+}
+
+function registerPlanningContainmentBaseline({ worktree, binding, snapshot } = {}) {
+  const identity = planningContainmentIdentity(worktree, binding);
+  validatePlanningContainmentSnapshot(snapshot, identity);
+  const reference = 'planning-containment-' + digest(stable(identity)) + '.json';
+  const payload = { schema: 'shipyard.planning-containment.v1', identity, snapshot };
+  const state = authorityState(identity.worktree, true, false, false);
+  const keyFd = fs.openSync(path.join(state.directory, 'hmac.key'), fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+  try { fs.fsyncSync(keyFd); } finally { fs.closeSync(keyFd); }
+  const serialized = Buffer.from(stable({ payload,
+    mac: crypto.createHmac('sha256', state.key).update(stable(payload)).digest('hex') }) + '\n');
+  if (serialized.length > 4 * 1024 * 1024)
+    fail('CONTAINMENT_AUTHORITY_INVALID', 'protected containment envelope exceeds its byte bound');
+  const file = path.join(state.directory, reference);
+  const temporary = file + '.' + crypto.randomUUID() + '.tmp';
+  try {
+    const fd = fs.openSync(temporary, 'wx', 0o600);
+    try { fs.writeFileSync(fd, serialized); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+    try { fs.linkSync(temporary, file); }
+    catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+      if (!authorityFile(file).equals(serialized))
+        fail('CONTAINMENT_AUTHORITY_INVALID', 'original containment baseline is immutable');
+    }
+    const directoryFd = fs.openSync(state.directory, fs.constants.O_RDONLY);
+    try { fs.fsyncSync(directoryFd); } finally { fs.closeSync(directoryFd); }
+  } finally { try { fs.unlinkSync(temporary); } catch {} }
+  return Object.freeze({ reference, sha256: digest(stable(payload)) });
+}
+
+function readPlanningContainmentBaseline({ worktree, binding, reference } = {}) {
+  if (!object(reference) || !/^planning-containment-[a-f0-9]{64}\.json$/.test(reference.reference || '')
+      || !/^[a-f0-9]{64}$/.test(reference.sha256 || ''))
+    fail('CONTAINMENT_AUTHORITY_REQUIRED', 'authenticated original prelaunch containment reference is required');
+  const identity = planningContainmentIdentity(worktree, binding);
+  if (reference.reference !== 'planning-containment-' + digest(stable(identity)) + '.json')
+    fail('CONTAINMENT_AUTHORITY_INVALID', 'containment reference does not identify the original launch binding');
+  const state = authorityState(identity.worktree, false, false, false);
+  const file = path.join(state.directory, reference.reference);
+  if (!fs.existsSync(file)) fail('CONTAINMENT_AUTHORITY_REQUIRED', 'original protected containment baseline is missing');
+  const bytes = authorityFile(file);
+  let envelope;
+  try { envelope = JSON.parse(bytes); }
+  catch (error) {
+    if (!(error instanceof SyntaxError)) throw error;
+    fail('CONTAINMENT_AUTHORITY_INVALID', 'original containment envelope is malformed JSON');
+  }
+  if (!object(envelope) || !object(envelope.payload)
+      || typeof envelope.mac !== 'string' || !/^[a-f0-9]{64}$/.test(envelope.mac)
+      || envelope.payload.schema !== 'shipyard.planning-containment.v1'
+      || !object(envelope.payload.identity) || !object(envelope.payload.snapshot))
+    fail('CONTAINMENT_AUTHORITY_INVALID', 'original containment envelope is malformed');
+  const mac = crypto.createHmac('sha256', state.key).update(stable(envelope.payload)).digest('hex');
+  if (!crypto.timingSafeEqual(Buffer.from(mac, 'hex'), Buffer.from(envelope.mac, 'hex'))
+      || stable(envelope.payload.identity) !== stable(identity)
+      || digest(stable(envelope.payload)) !== reference.sha256)
+    fail('CONTAINMENT_AUTHORITY_INVALID', 'original containment envelope authentication failed');
+  return validatePlanningContainmentSnapshot(envelope.payload.snapshot, identity);
 }
 
 function architectureSourceIdentity(project) {
@@ -3828,6 +3957,8 @@ module.exports = Object.freeze({
   DRIFT_ENVELOPE_SCHEMA,
   JUDGMENT_ENVELOPE_SCHEMA,
   JUDGMENT_EVIDENCE_NAMES,
+  registerPlanningContainmentBaseline,
+  readPlanningContainmentBaseline,
   architectureAuthorityPath,
   registerArchitectureAuthority,
   authenticateArchitectureSources,

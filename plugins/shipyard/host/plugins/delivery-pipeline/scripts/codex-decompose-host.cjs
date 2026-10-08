@@ -16,7 +16,8 @@ const { newDispatchId, createDispatchBoundary, createDurableRecorder } = require
 const { createRunScope } = require('./run-scope.cjs');
 const { createRunController, DEFAULT_LEASE_TTL_MS } = require('./run-controller.cjs');
 const { formatHint } = require('./refusal-hints.cjs');
-const { sealDecomposition, assertContained, captureContainmentBaseline } = require('./planning-result-sealer.cjs');
+const { sealDecomposition, assertContained, captureContainmentBaseline,
+  persistContainmentBaseline, restoreContainmentBaseline } = require('./planning-result-sealer.cjs');
 const { createPlanningWriterLease, sharedPlanningWriterRoot, legacyPlanningWriterRoots,
   assertNoLegacyPlanningWriter, captureSealManifest, assertSealManifest } = require('./planning-writer-lease.cjs');
 const orchestrationOverhead = require('./orchestration-overhead.cjs');
@@ -294,6 +295,14 @@ function launchBinding(scope, request, dispatchId, resolution, agent, generatedA
       generated_agent: { file: generatedAgent.file, sha256: generatedAgent.sha256 },
     } : {}),
   });
+}
+
+function containmentBinding(record, worktree) {
+  return { launch: record.binding, source_revision: sourceRevision(worktree),
+    launched_at: record.launched_at, reservation: record.reservation,
+    writer_lease_file: record.writer_lease_file, lease_epoch: record.lease_epoch,
+    lease_identity_sha256: record.containment_lease_sha256,
+    tree_snapshot_sha256: sha256Text(canonicalJson(record.tree_snapshot)) };
 }
 
 function validTaskRelay(value) {
@@ -610,11 +619,16 @@ function createCodexDecomposeHost(options = {}) {
             binding,
             reservation: { dispatch_id: reservation.dispatch_id, reserved_at: reservation.reserved_at },
             lease_epoch: leaseCtx.epoch,
+            containment_lease_sha256: sha256Text(leaseCtx.token),
             writer_lease_file: leaseCtx.writerLease.file,
             tree_snapshot: leaseCtx.snapshot,
             launched_at: new Date().toISOString(),
           } : null;
-          if (launchRecord) writeLaunchRecord(options.launchDir, launchRecord);
+          if (launchRecord) {
+            launchRecord.containment_baseline = persistContainmentBaseline({ worktree: scope.worktree,
+              baseline: leaseCtx.containmentBaseline, binding: containmentBinding(launchRecord, scope.worktree) });
+            writeLaunchRecord(options.launchDir, launchRecord);
+          }
           const captureProcessSpawned = launchRecord ? (pid) => {
             if (!Number.isSafeInteger(pid) || pid <= 0) {
               fail('RUNTIME_EVIDENCE_MISSING', 'native process has no positive original pid');
@@ -1154,8 +1168,11 @@ async function recoverCli(argv, stdout, options) {
     const declaredSet = new Set(declared);
     const foreign = writerLease.changedSince(record.tree_snapshot).changed.filter((item) => !declaredSet.has(item));
     if (foreign.length) fail('FOREIGN_EDIT', 'phase directory path(s) changed outside the authenticated child declaration: ' + foreign.join(', '));
+    const containmentBaseline = restoreContainmentBaseline({ worktree: scope.worktree,
+      binding: containmentBinding(record, scope.worktree), reference: record.containment_baseline,
+      recoveredEpoch: leaseHandle.epoch });
     const currentDigests = artifactDigests(scope, writerLease, record.tree_snapshot, declared,
-      'RECOVERY_ARTIFACT_ALTERED');
+      'RECOVERY_ARTIFACT_ALTERED', containmentBaseline);
     if (canonicalJson(currentDigests) !== canonicalJson(completed.artifact_digests)) {
       fail('RECOVERY_ARTIFACT_ALTERED', 'phase artifacts differ from the digests recorded when the child completed');
     }
@@ -1214,7 +1231,7 @@ async function recoverCli(argv, stdout, options) {
     });
     const result = await host.run(request, {
       recovered: { applied, output, binding: record.binding },
-      lease: { writerLease, token: leaseHandle.token, epoch: leaseHandle.epoch, snapshot: record.tree_snapshot },
+      lease: { writerLease, token: leaseHandle.token, epoch: leaseHandle.epoch, snapshot: record.tree_snapshot, containmentBaseline },
     });
     controller.complete(scope.run_id, { reason: 'recovered typed GSD receipt ' + dispatchId });
     stdout.write(JSON.stringify(result) + '\n');

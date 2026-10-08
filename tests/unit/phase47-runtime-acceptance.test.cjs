@@ -3,6 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const crypto = require('node:crypto');
 const os = require('node:os');
 const path = require('node:path');
 const { execFileSync, spawnSync } = require('node:child_process');
@@ -403,4 +404,154 @@ test('volume contract checks both configuration identities and current checker p
     assert.throws(() => publication.validateVolumeContract(handback, { ...approval, ...mutation }));
   assert.throws(() => publication.validateVolumeContract({ ...handback,
     changed_outputs: publication.SUCCESSOR_CORRECTIVE }, approval));
+});
+
+test('main-review-repair contract refuses configuration swaps and forged publication authority', () => {
+  const publication = require('./phase47-package-publication.test.cjs');
+  const { REPAIR_CORRECTIVE, REPAIR_PLANS, VOLUME_HANDOFF, VOLUME_HANDOFF_SHA, SOURCE39_SHA, COORDINATOR48_SHA, HISTORICAL43_SHA } = publication;
+  const PHASE = '.planning/phases/47-complete-deferred-decomposition-wait-attribution';
+  const repairFixture = { purpose: 'ADR-027-main-review-repair', source_head: 'a'.repeat(40),
+      changed_outputs: REPAIR_CORRECTIVE, corrective_allocation: { 'T-47-27': REPAIR_CORRECTIVE },
+      tail_plan_amendments: REPAIR_PLANS.map(sha256 => ({ sha256 })),
+      prior_final_handoff: { path: VOLUME_HANDOFF, sha256: VOLUME_HANDOFF_SHA },
+      source_correction: { strict_configuration_identity: { source39: SOURCE39_SHA,
+        coordinator48: COORDINATOR48_SHA, historical43: HISTORICAL43_SHA },
+      command_approval: { path: '/tmp/phase47-main-review-exact-command-approval.json',
+        sha256: '2e7bd51c86d5eff1d65fe09fcf3d366cd27d5dd98eea86a7af0689ae2009696e' } },
+      current_checker: { verdict: { status: 'passed', blockers: [], artifact_paths: [], input_sha256:
+        Object.fromEntries(REPAIR_PLANS.map((digest, i) => [PHASE + '/47-' + (24 + i) + '-PLAN.md', digest])) } } };
+
+  const approval = { ...repairFixture, schema: 'shipyard.phase47-current-source-approval.v1',
+    status: 'approved', actor: 'trusted-coordinator', native_receipt: false,
+    reviewed_source_config_sha256: SOURCE39_SHA, coordinator_config_sha256: COORDINATOR48_SHA };
+  publication.validateRepairContract(repairFixture, approval);
+  for (const mutate of [a => { a.coordinator_config_sha256 = SOURCE39_SHA; },
+    a => { a.reviewed_source_config_sha256 = COORDINATOR48_SHA; },
+    a => { a.coordinator_config_sha256 = HISTORICAL43_SHA; },
+    a => { a.current_checker.verdict.status = 'blocked'; },
+    a => { a.current_checker.verdict.input_sha256[PHASE + '/47-27-PLAN.md'] = '0'.repeat(64); },
+    a => { a.corrective_allocation['T-47-27'].push('foreign'); },
+    a => { a.prior_final_handoff.sha256 = '0'.repeat(64); },
+    a => { a.source_correction.strict_configuration_identity.historical43 = SOURCE39_SHA; },
+    a => { a.native_receipt = true; }]) {
+    const altered = structuredClone(approval); mutate(altered);
+    assert.throws(() => publication.validateRepairContract(repairFixture, altered));
+  }
+  assert.equal(publication.REPAIR_CORRECTIVE.length, 8);
+  assert.equal(publication.VOLUME_CORRECTIVE.length, 3);
+  assert.notEqual(publication.REPAIR_HANDOFF, publication.VOLUME_HANDOFF);
+  for (const selector of ['main-review', 'repair', 'ADR-027-main-review-repair'])
+    assert.throws(() => acceptance.inspectCandidate(null, REPOSITORY, selector), /unknown generation branch/);
+});
+
+test('a publication fixture cannot advance original native HOLD obligations', () => {
+  const ledger = acceptance.openLedger();
+  const result = acceptance.validateLedger(ledger);
+  assert.equal(result.status, 'HOLD');
+  assert.equal(result.accepted, false);
+  assert.equal(result.native_launches, 0);
+  assert.equal(ledger.obligations.length, 20);
+  const forged = structuredClone(ledger);
+  forged.obligations[0] = { ...forged.obligations[0], status: 'proven',
+    proof: { kind: 'main-review-repair', package_parity: true, build_calls: 0 } };
+  assert.throws(() => acceptance.validateLedger(forged), /original proof/);
+});
+
+
+test('historical volume materialization binds original index and entry to the exact current handoff', () => {
+  const publication = require('./phase47-package-publication.test.cjs');
+  const record = JSON.parse(fs.readFileSync(publication.MATERIALIZATION));
+  const index = JSON.parse(fs.readFileSync(record.original_artifact_index.path));
+  const indexed = index.entries.find(row => row.path === record.entry.original_path);
+  const entry = { ...indexed, physical_path: record.entry.original_physical_path };
+  publication.validateVolumeMaterialization(record, record.original_artifact_index, indexed, entry);
+  for (const mutate of [r => { r.entry.sha256 = '0'.repeat(64); },
+    r => { r.entry.bytes++; }, r => { r.entry.original_path += '-foreign'; },
+    r => { r.original_artifact_index.sha256 = '0'.repeat(64); },
+    r => { r.original_artifact_index.path += '-foreign'; },
+    r => { r.current_handoff.sha256 = publication.VOLUME_HANDOFF_SHA; },
+    r => { r.volume_handoff.sha256 = publication.REPAIR_HANDOFF_SHA; },
+    r => { r.entry.retained_path += '-foreign'; },
+    r => { r.current_context.sha256 = r.entry.sha256; },
+    r => { r.actor = 'caller'; }]) {
+    const altered = structuredClone(record); mutate(altered);
+    assert.throws(() => publication.validateVolumeMaterialization(altered,
+      record.original_artifact_index, indexed, entry));
+  }
+  assert.throws(() => publication.validateVolumeMaterialization(record,
+    record.original_artifact_index, { ...indexed, bytes: indexed.bytes + 1 }, entry));
+  for (const status of ['', '[GNUPG:] VALIDSIG ' + '0'.repeat(40),
+    '[GNUPG:] VALIDSIG 2F485C0A455BA33463F66332900FCE87BD1BFF0D\n[GNUPG:] VALIDSIG foreign'])
+    assert.throws(() => publication.validateOperatorSignature(status));
+  publication.validateOperatorSignature('[GNUPG:] VALIDSIG 2F485C0A455BA33463F66332900FCE87BD1BFF0D');
+  const retained = fs.readFileSync(record.entry.retained_path);
+  assert.equal(retained.length, record.entry.bytes);
+  assert.equal(crypto.createHash('sha256').update(retained).digest('hex'), record.entry.sha256);
+  const tampered = Buffer.from(retained); tampered[0] ^= 1;
+  assert.notEqual(crypto.createHash('sha256').update(tampered).digest('hex'), record.entry.sha256);
+});
+
+test('v2 original materialization fixes exactly three predecessor/index/role entries', () => {
+  const publication = require('./phase47-package-publication.test.cjs');
+  const rows = structuredClone(publication.ORIGINAL_ENTRIES);
+  const record = { schema: 'shipyard.phase47-historical-planner-materialization.v2',
+    actor: 'trusted-coordinator', native_receipt: false,
+    current_handoff: { path: publication.REPAIR_HANDOFF, sha256: publication.REPAIR_HANDOFF_SHA },
+    previous_materialization: { path: publication.MATERIALIZATION, sha256: publication.MATERIALIZATION_SHA },
+    entries: rows };
+  for (const row of rows) {
+    const indexed = { path: row.original_path, bytes: row.bytes, sha256: row.sha256 };
+    const entry = { ...indexed, physical_path: row.original_physical_path };
+    const validate = (r, predecessor = row.predecessor_handoff, result = row.native_result,
+      index = row.original_artifact_index) => publication.validateOriginalMaterialization(
+      r, predecessor, result, index, indexed, entry);
+    assert.deepEqual(validate(record), row);
+    assert.throws(() => publication.validateOriginalMaterialization(record,
+      row.predecessor_handoff, row.native_result, row.original_artifact_index,
+      { ...indexed, path: indexed.path + '-foreign' }, entry), { code: 'ERR_ASSERTION' });
+    for (const field of ['sha256', 'bytes', 'current_sha256', 'retained_path']) {
+      const changed = structuredClone(record);
+      const target = changed.entries.find(item => item.sha256 === row.sha256);
+      target[field] = typeof target[field] === 'number' ? target[field] + 1 : target[field] + '-tampered';
+      assert.throws(() => validate(changed), { code: 'ERR_ASSERTION' });
+    }
+    assert.throws(() => validate(record, { ...row.predecessor_handoff, sha256: '0'.repeat(64) }), { code: 'ERR_ASSERTION' });
+    assert.throws(() => validate(record, row.predecessor_handoff,
+      { ...row.native_result, path: row.native_result.path + '-foreign-role' }), { code: 'ERR_ASSERTION' });
+    assert.throws(() => validate(record, row.predecessor_handoff, row.native_result,
+      { ...row.original_artifact_index, sha256: '0'.repeat(64) }), { code: 'ERR_ASSERTION' });
+  }
+  for (const entries of [rows.slice(1), [...rows, rows[0]], [rows[1], rows[0], rows[2]]])
+    assert.throws(() => publication.validateOriginalMaterialization({ ...record, entries },
+      rows[0].predecessor_handoff, rows[0].native_result, rows[0].original_artifact_index,
+      { path: rows[0].original_path, bytes: rows[0].bytes, sha256: rows[0].sha256 },
+      { path: rows[0].original_path, physical_path: rows[0].original_physical_path,
+        bytes: rows[0].bytes, sha256: rows[0].sha256 }), { code: 'ERR_ASSERTION' });
+});
+
+
+test('source-repair coverage uses genuine fixed authority with temporary HOME and refuses foreign records', t => {
+  const publication = require('./phase47-package-publication.test.cjs');
+  const handback = JSON.parse(fs.readFileSync(publication.REPAIR_HANDOFF));
+  const approval = JSON.parse(fs.readFileSync(handback.current_source_approval.path));
+  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'p47-coverage-home-'));
+  const previousHome = process.env.HOME;
+  t.after(() => fs.rmSync(temporary, { recursive: true, force: true }));
+  try {
+    process.env.HOME = temporary;
+    assert.equal(os.homedir(), temporary);
+    for (const repair of approval.source_correction.source_repairs) {
+      assert.deepEqual(publication.reauthenticateRepairCoverage(repair), repair.coverage);
+      const tampered = structuredClone(repair);
+      tampered.coverage.record.tree = 'f'.repeat(40);
+      assert.throws(() => publication.reauthenticateRepairCoverage(tampered));
+      const foreign = structuredClone(repair);
+      foreign.coverage.record.repo = 'foreign/phase47-coverage';
+      assert.throws(() => publication.reauthenticateRepairCoverage(foreign));
+    }
+    assert.deepEqual(fs.readdirSync(temporary), []);
+  } finally {
+    if (previousHome === undefined) delete process.env.HOME;
+    else process.env.HOME = previousHome;
+  }
 });

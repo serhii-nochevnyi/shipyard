@@ -126,11 +126,12 @@ function comparePackage(directory, binding, sealed = false) {
   return { package_sha256: build.digest, manifest_sha256: sha(manifestBytes), output_count: actual.length };
 }
 
-function inspectCandidate(candidate, root = ROOT, kind = 'volume-successor') {
+function inspectCandidate(candidate, root = ROOT, kind = 'main-review-repair') {
   const publication = require('../unit/phase47-package-publication.test.cjs');
   const common = gitText(root, 'rev-parse', '--path-format=absolute', '--git-common-dir');
-  assert(['original', 'final', 'successor', 'volume-successor'].includes(kind), 'unknown generation branch');
-  const authenticated = kind === 'volume-successor' ? publication.authenticateVolumeSuccessor(common, root)
+  assert(['original', 'final', 'successor', 'volume-successor', 'main-review-repair'].includes(kind), 'unknown generation branch');
+  const authenticated = kind === 'main-review-repair' ? publication.authenticateRepairSuccessor(common, root)
+    : kind === 'volume-successor' ? publication.authenticateVolumeSuccessor(common, root, true)
     : kind === 'successor' ? publication.authenticateSuccessor(common, root, true)
     : kind === 'final' ? publication.authenticateFinal(common, root, true)
     : publication.authenticateOriginal(common);
@@ -138,7 +139,7 @@ function inspectCandidate(candidate, root = ROOT, kind = 'volume-successor') {
   const { selection, binding, selectionPath } = selected;
   if (candidate) assert.equal(candidate, selection.candidate_path, 'foreign candidate');
   const packageEvidence = comparePackage(selection.candidate_path, binding, true);
-  if (kind === 'volume-successor') publication.validatePublication(root, selected, 'candidate');
+  if (kind === 'main-review-repair') publication.validatePublication(root, selected, 'candidate');
   const dirty = gitText(root, 'status', '--porcelain=v1', '--untracked-files=all');
   const result = { selection, binding, identity: { ...packageEvidence,
     source_head: binding.source.head, source_tree: binding.source.tree,
@@ -148,12 +149,14 @@ function inspectCandidate(candidate, root = ROOT, kind = 'volume-successor') {
     selection_path: selectionPath, selection_sha256: handback.selection_sha256,
     binding_path: selection.binding_path, binding_sha256: selection.binding_sha256,
     candidate_path: selection.candidate_path, candidate_sha256: selection.candidate_sha256,
-    generation_handback: { path: kind === 'volume-successor' ? publication.VOLUME_HANDOFF : kind === 'successor' ? publication.SUCCESSOR_HANDOFF : kind === 'final' ? publication.FINAL_HANDOFF : HANDOFF,
-      sha256: kind === 'volume-successor' ? publication.VOLUME_HANDOFF_SHA : kind === 'successor' ? publication.SUCCESSOR_HANDOFF_SHA : kind === 'final' ? publication.FINAL_HANDOFF_SHA : HANDOFF_SHA256 },
-    historical_only: kind !== 'volume-successor', generation_kind: kind }, authenticated };
-  if (kind === 'volume-successor') {
-    publication.recheckVolumeSuccessor(authenticated, root);
+    generation_handback: { path: kind === 'main-review-repair' ? publication.REPAIR_HANDOFF : kind === 'volume-successor' ? publication.VOLUME_HANDOFF : kind === 'successor' ? publication.SUCCESSOR_HANDOFF : kind === 'final' ? publication.FINAL_HANDOFF : HANDOFF,
+      sha256: kind === 'main-review-repair' ? publication.REPAIR_HANDOFF_SHA : kind === 'volume-successor' ? publication.VOLUME_HANDOFF_SHA : kind === 'successor' ? publication.SUCCESSOR_HANDOFF_SHA : kind === 'final' ? publication.FINAL_HANDOFF_SHA : HANDOFF_SHA256 },
+    historical_only: kind !== 'main-review-repair', generation_kind: kind }, authenticated };
+  if (kind === 'main-review-repair') {
+    publication.recheckRepairSuccessor(authenticated, root);
     publication.validatePublication(root, selected, 'candidate');
+  } else if (kind === 'volume-successor') {
+    assert.deepEqual(publication.authenticateVolumeSuccessor(common, root, true), authenticated);
   } else if (kind === 'successor') {
     assert.deepEqual(publication.authenticateSuccessor(common, root, true), authenticated);
   } else publication.selectedArtifact(common, handback, kind === 'final'
@@ -344,19 +347,21 @@ function validateLedger(ledger) {
   if (ledger.corrective_generation) {
     assert(ledger.candidate, 'corrective ledger requires current candidate');
     const publication = require('../unit/phase47-package-publication.test.cjs');
+    const repair = ledger.corrective_generation.kind === 'main-review-repair';
     const volume = ledger.corrective_generation.kind === 'volume-successor';
-    assert(['successor', 'volume-successor'].includes(ledger.corrective_generation.kind), 'unknown corrective generation');
+    assert(['successor', 'volume-successor', 'main-review-repair'].includes(ledger.corrective_generation.kind), 'unknown corrective generation');
     assert.deepEqual(ledger.corrective_generation.handback,
-      { path: volume ? publication.VOLUME_HANDOFF : publication.SUCCESSOR_HANDOFF, sha256: volume ? publication.VOLUME_HANDOFF_SHA : publication.SUCCESSOR_HANDOFF_SHA }, 'foreign corrective handback');
+      { path: repair ? publication.REPAIR_HANDOFF : volume ? publication.VOLUME_HANDOFF : publication.SUCCESSOR_HANDOFF, sha256: repair ? publication.REPAIR_HANDOFF_SHA : volume ? publication.VOLUME_HANDOFF_SHA : publication.SUCCESSOR_HANDOFF_SHA }, 'foreign corrective handback');
     const common = gitText(ROOT, 'rev-parse', '--path-format=absolute', '--git-common-dir');
-    const authenticated = volume ? publication.authenticateVolumeSuccessor(common)
+    const authenticated = repair ? publication.authenticateRepairSuccessor(common)
+      : volume ? publication.authenticateVolumeSuccessor(common, ROOT, true)
       : publication.authenticateSuccessor(common, ROOT, true);
     assert.deepEqual(ledger.corrective_generation.original_ledger, authenticated.handback.original_ledger,
       'foreign retained original ledger');
     assert.deepEqual(ledger.corrective_generation.source_approval, authenticated.handback.current_source_approval);
     const original = jsonOriginal(authenticated.handback.original_ledger);
-    assert.equal(ledger.corrective_generation.ticket, volume ? 'T-47-23' : 'T-47-21');
-    assert.equal(ledger.corrective_generation.plan_sha256, authenticated.approval.tail_plan_amendments[1].sha256);
+    assert.equal(ledger.corrective_generation.ticket, repair ? 'T-47-27' : volume ? 'T-47-23' : 'T-47-21');
+    assert.equal(ledger.corrective_generation.plan_sha256, authenticated.approval.tail_plan_amendments[repair ? 3 : 1].sha256);
     assert.equal(ledger.acceptance, 'HOLD');
     assert.equal(ledger.current_verification.accepted, false);
     assert.equal(ledger.current_verification.native_launches, 0);
@@ -367,7 +372,8 @@ function validateLedger(ledger) {
       assert.deepEqual(ledger[field], original[field], 'retained original ledger drift: ' + field);
     for (const row of ledger.obligations.filter(row => row.status !== 'proven'))
       assert.deepEqual(row, original.obligations.find(prior => prior.id === row.id), 'original HOLD obligation drift');
-    if (volume) publication.recheckVolumeSuccessor(authenticated);
+    if (repair) publication.recheckRepairSuccessor(authenticated);
+    else if (volume) assert.deepEqual(publication.authenticateVolumeSuccessor(common, ROOT, true), authenticated);
     else assert.deepEqual(publication.authenticateSuccessor(common, ROOT, true), authenticated);
   }
   const open = [], verified = [];
@@ -420,7 +426,9 @@ function validateLedger(ledger) {
   }
   if (inspected) {
     const publication = require('../unit/phase47-package-publication.test.cjs');
-    if (inspected.identity.generation_kind === 'volume-successor') publication.recheckVolumeSuccessor(inspected.authenticated);
+    if (inspected.identity.generation_kind === 'main-review-repair') publication.recheckRepairSuccessor(inspected.authenticated);
+    else if (inspected.identity.generation_kind === 'volume-successor')
+      assert.deepEqual(publication.authenticateVolumeSuccessor(inspected.binding.source.common, ROOT, true), inspected.authenticated);
     else if (inspected.identity.generation_kind === 'successor')
       assert.deepEqual(publication.authenticateSuccessor(inspected.binding.source.common, ROOT, true), inspected.authenticated);
     else if (inspected.identity.generation_kind === 'final')

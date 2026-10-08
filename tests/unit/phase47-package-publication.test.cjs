@@ -56,6 +56,347 @@ const CORRECTIVE = ['codex-arch-review-context', 'codex-runtime-host', 'codex-de
 const SUCCESSOR_CORRECTIVE = ['role-artifact', 'codex-arch-review-context', 'claude-role-host'].map(mirror)
   .concat('.codex-plugin/plugin.json', 'package-build.json').sort();
 const VOLUME_CORRECTIVE = [mirror('role-artifact'), '.codex-plugin/plugin.json', 'package-build.json'].sort();
+const REPAIR_HANDOFF = path.join(HOST, 'phase47-final-generation-adr027-main-review-repair/generation.json');
+const REPAIR_HANDOFF_SHA = '3b678863a64f1d65606fc37ebcc75dd30c9e8650acd797b3eada909e67b0ef23';
+const REPAIR_STAGE = 'shipyard-phase47-final-publication/INV-014-runtime-delivery-correctness/ADR-027-main-review-repair';
+const SOURCE39_SHA = '2eb2a0475127916c4c120d7616d13df1393d116c07b2a5f259cd6453234c65f9';
+const COORDINATOR48_SHA = '1195fed6807740e886592ba92ca99913368becde6b21d8de8126ecf134a0efe9';
+const HISTORICAL43_SHA = '63a18625794b2772663567c95401ad91358daf13974f9c18117e0ce237256780';
+const REPAIR_PLANS = ['3b595c2d141f88edbc23f6211cf1d0dd5d86d4e7cd0445f9505bfed7337d9920',
+  '921ed98c728a878df40ce45a657f5082b7c551e44a967d794192c3de54530fc2',
+  'df2032950c47991c8c90a89eb63d62b4a78a13afe51665c1e669fa72aa71cf62',
+  '9227da74913edf1e704826508b375c99413c65933b2f5b5aed6d743638bc96ac'];
+const REPAIR_CORRECTIVE = ['codex-arch-review-context', 'claude-runtime-host', 'orchestration-overhead',
+  'planning-result-sealer', 'codex-decompose-host', 'role-artifact'].map(mirror)
+  .concat('.codex-plugin/plugin.json', 'package-build.json').sort();
+
+function validateRepairContract(handback, approval) {
+  assert.equal(handback.purpose, 'ADR-027-main-review-repair');
+  assert.equal(approval.schema, 'shipyard.phase47-current-source-approval.v1');
+  assert.equal(approval.purpose, handback.purpose);
+  assert.equal(approval.actor, 'trusted-coordinator');
+  assert.equal(approval.native_receipt, false);
+  assert.equal(approval.status, 'approved');
+  assert.match(approval.source_head, /^[a-f0-9]{40}$/);
+  assert.notEqual(approval.source_head, VOLUME_SOURCE, 'stale volume source');
+  assert.equal(approval.source_head, handback.source_head);
+  assert.deepEqual(Object.keys(handback.corrective_allocation), ['T-47-27']);
+  assert.deepEqual([...handback.corrective_allocation['T-47-27']].sort(), REPAIR_CORRECTIVE);
+  assert.deepEqual([...handback.changed_outputs].sort(), REPAIR_CORRECTIVE);
+  for (const key of ['successor_planner', 'current_checker', 'current_research', 'source_correction',
+    'tail_plan_amendments', 'delivery_metadata_amendment', 'corrective_allocation', 'prior_final_handoff'])
+    assert.deepEqual(approval[key], handback[key], 'repair approval drift: ' + key);
+  assert.deepEqual(approval.tail_plan_amendments.map(row => row.sha256), REPAIR_PLANS);
+  assert.equal(approval.reviewed_source_config_sha256, SOURCE39_SHA);
+  assert.equal(approval.coordinator_config_sha256, COORDINATOR48_SHA);
+  assert.deepEqual(approval.source_correction.strict_configuration_identity,
+    { source39: SOURCE39_SHA, coordinator48: COORDINATOR48_SHA, historical43: HISTORICAL43_SHA });
+  assert.equal(approval.source_correction.command_approval.path, '/tmp/phase47-main-review-exact-command-approval.json');
+  assert.equal(approval.source_correction.command_approval.sha256,
+    '2e7bd51c86d5eff1d65fe09fcf3d366cd27d5dd98eea86a7af0689ae2009696e');
+  assert.equal(approval.prior_final_handoff.path, VOLUME_HANDOFF);
+  assert.equal(approval.prior_final_handoff.sha256, VOLUME_HANDOFF_SHA);
+  const verdict = approval.current_checker.verdict;
+  assert.equal(verdict.verdict || verdict.status, 'passed');
+  assert.deepEqual(verdict.blockers, []);
+  assert.deepEqual(verdict.artifact_paths, []);
+  for (let i = 0; i < 4; i++)
+    assert.equal(verdict.input_sha256[PHASE + '/47-' + (24 + i) + '-PLAN.md'], REPAIR_PLANS[i]);
+}
+
+const MATERIALIZATION = path.join(path.dirname(REPAIR_HANDOFF), 'historical-materialization.json');
+const MATERIALIZATION_SHA = '991222edd7862d6a04d32bbd919ce0527644fd89e1ef221fd705525582a9d3fa';
+
+function validateVolumeMaterialization(record, indexRef, indexed, entry) {
+  assert.equal(record.schema, 'shipyard.phase47-historical-planner-materialization.v1');
+  assert.equal(record.actor, 'trusted-coordinator');
+  assert.equal(record.native_receipt, false);
+  assert.deepEqual(record.volume_handoff, { path: VOLUME_HANDOFF, sha256: VOLUME_HANDOFF_SHA });
+  assert.deepEqual(record.current_handoff, { path: REPAIR_HANDOFF, sha256: REPAIR_HANDOFF_SHA });
+  assert.deepEqual(record.original_artifact_index, indexRef);
+  assert.equal(record.entry.original_path, indexed.path);
+  assert.equal(record.entry.original_path, entry.path);
+  assert.equal(record.entry.original_physical_path, entry.physical_path);
+  assert.equal(record.entry.bytes, indexed.bytes);
+  assert.equal(record.entry.bytes, entry.bytes);
+  assert.equal(record.entry.sha256, indexed.sha256);
+  assert.equal(record.entry.sha256, entry.sha256);
+  assert.equal(record.entry.sha256, '79c335ae5ab21f168ac86d1d890e66a577c621c1e5c180d1e2b0e3eccfa240b0');
+  assert.equal(record.entry.bytes, 224296);
+  assert.equal(record.entry.retained_path, path.join(path.dirname(REPAIR_HANDOFF), 'volume-original-CONTEXT.md'));
+  assert.deepEqual(record.current_context, { path: entry.physical_path, bytes: 237493,
+    sha256: 'cccdfc72ae92f372c8d886a0ed6399cd22ad862fb9c955a4801c4a6761e1d76d' });
+}
+
+const MATERIALIZATION_V2 = path.join(path.dirname(REPAIR_HANDOFF), 'historical-materialization-2.json');
+const MATERIALIZATION_V2_SHA = 'db4c2aab32ae33189521720758c76446faac578b5e476e81a5431b45c5bdcf97';
+const ORIGINAL_ENTRIES = [
+  {
+    "predecessor_handoff": {
+      "path": "/Users/serhii/.local/state/shipyard/codex-decompose/6cba328f5f0de395b373ad6c77a164feb771363c4e6b7a96888b7075d52da7aa/phase47-final-generation-adr027-current-ticket-evidence/generation.json",
+      "sha256": "a56da0e28c524cbc55821e10f5791404229f85442edc4424e808b3768b870f15"
+    },
+    "native_result": {
+      "path": "/Users/serhii/.local/state/shipyard/codex-decompose/6cba328f5f0de395b373ad6c77a164feb771363c4e6b7a96888b7075d52da7aa/phase47-final-generation-adr027-current-ticket-evidence/archive-scope-research.json",
+      "sha256": "b057fb77b837ed2ab60925f7608d449a85c832903a7cb0e68c32ff633018a1b5"
+    },
+    "original_artifact_index": {
+      "path": "/Users/serhii/.local/state/shipyard/codex-decompose/6cba328f5f0de395b373ad6c77a164feb771363c4e6b7a96888b7075d52da7aa/sealed/research-index/ecd87dce49a54e56541794f6a0c94017a36a8098209476d8728dc0a0ad93c6cf.json",
+      "bytes": 420,
+      "content_bytes": 420,
+      "sha256": "ecd87dce49a54e56541794f6a0c94017a36a8098209476d8728dc0a0ad93c6cf",
+      "digest": "ecd87dce49a54e56541794f6a0c94017a36a8098209476d8728dc0a0ad93c6cf"
+    },
+    "original_path": "/Volumes/KINGSTON/worktrees/phase47-investigation/claude-shipyard/.planning/phases/47-complete-deferred-decomposition-wait-attribution/47-RESEARCH.md",
+    "original_physical_path": "/Volumes/KINGSTON/worktrees/phase47-investigation/claude-shipyard/.planning/phases/47-complete-deferred-decomposition-wait-attribution/47-RESEARCH.md",
+    "bytes": 110608,
+    "sha256": "ea7733d74705aa856a74d0d3919697e06dfa2efaf2715a4fec6ba8455deab5ff",
+    "retained_path": "/Users/serhii/.local/state/shipyard/codex-decompose/6cba328f5f0de395b373ad6c77a164feb771363c4e6b7a96888b7075d52da7aa/phase47-final-generation-adr027-main-review-repair/original-ea7733d74705aa856a74d0d3919697e06dfa2efaf2715a4fec6ba8455deab5ff-47-RESEARCH.md",
+    "current_sha256": "1d81a2022e3b5812897bbe61178818054eb3f58a6955616b476967a61caba6ec",
+    "current_bytes": 216250
+  },
+  {
+    "predecessor_handoff": {
+      "path": "/Users/serhii/.local/state/shipyard/codex-decompose/6cba328f5f0de395b373ad6c77a164feb771363c4e6b7a96888b7075d52da7aa/phase47-final-generation-adr027-current-ticket-volume/generation.json",
+      "sha256": "32eb9144cc872ee6f6f4747ef83e475905c565effee16f93f64dc7a7e8d7062f"
+    },
+    "native_result": {
+      "path": "/Users/serhii/.local/state/shipyard/codex-decompose/6cba328f5f0de395b373ad6c77a164feb771363c4e6b7a96888b7075d52da7aa/phase47-final-generation-adr027-current-ticket-volume/successor-planner.json",
+      "sha256": "6817edca92f38d04d311b8919d5667b05388bec122e95c0bd9a1cd252cec9add"
+    },
+    "original_artifact_index": {
+      "path": "/Users/serhii/.local/state/shipyard/codex-decompose/6cba328f5f0de395b373ad6c77a164feb771363c4e6b7a96888b7075d52da7aa/sealed/decomposition-index/f7a7ec24e883c18f095e518536cf670ae080538d739b4e3ffb40a652c264f6df.json",
+      "bytes": 8418,
+      "content_bytes": 8418,
+      "sha256": "f7a7ec24e883c18f095e518536cf670ae080538d739b4e3ffb40a652c264f6df",
+      "digest": "f7a7ec24e883c18f095e518536cf670ae080538d739b4e3ffb40a652c264f6df"
+    },
+    "original_path": "/Volumes/KINGSTON/worktrees/phase47-investigation/claude-shipyard/.planning/phases/47-complete-deferred-decomposition-wait-attribution/CONTEXT.md",
+    "original_physical_path": "/Volumes/KINGSTON/worktrees/phase47-investigation/claude-shipyard/.planning/phases/47-complete-deferred-decomposition-wait-attribution/CONTEXT.md",
+    "bytes": 224296,
+    "sha256": "79c335ae5ab21f168ac86d1d890e66a577c621c1e5c180d1e2b0e3eccfa240b0",
+    "retained_path": "/Users/serhii/.local/state/shipyard/codex-decompose/6cba328f5f0de395b373ad6c77a164feb771363c4e6b7a96888b7075d52da7aa/phase47-final-generation-adr027-main-review-repair/original-79c335ae5ab21f168ac86d1d890e66a577c621c1e5c180d1e2b0e3eccfa240b0-CONTEXT.md",
+    "current_sha256": "cccdfc72ae92f372c8d886a0ed6399cd22ad862fb9c955a4801c4a6761e1d76d",
+    "current_bytes": 237493
+  },
+  {
+    "predecessor_handoff": {
+      "path": "/Users/serhii/.local/state/shipyard/codex-decompose/6cba328f5f0de395b373ad6c77a164feb771363c4e6b7a96888b7075d52da7aa/phase47-final-generation-adr027-current-ticket-volume/generation.json",
+      "sha256": "32eb9144cc872ee6f6f4747ef83e475905c565effee16f93f64dc7a7e8d7062f"
+    },
+    "native_result": {
+      "path": "/Users/serhii/.local/state/shipyard/codex-decompose/6cba328f5f0de395b373ad6c77a164feb771363c4e6b7a96888b7075d52da7aa/phase47-final-generation-adr027-current-ticket-volume/archive-scope-research.json",
+      "sha256": "b01b085cb661e3a0ea7ca795d6d083369de00e39105722cec2d031412ff4b5d5"
+    },
+    "original_artifact_index": {
+      "path": "/Users/serhii/.local/state/shipyard/codex-decompose/6cba328f5f0de395b373ad6c77a164feb771363c4e6b7a96888b7075d52da7aa/sealed/research-index/748bb1f44b72dde3604cef458dc0ea728c78e266bf64ddcd0f105496d73cfe69.json",
+      "bytes": 420,
+      "content_bytes": 420,
+      "sha256": "748bb1f44b72dde3604cef458dc0ea728c78e266bf64ddcd0f105496d73cfe69",
+      "digest": "748bb1f44b72dde3604cef458dc0ea728c78e266bf64ddcd0f105496d73cfe69"
+    },
+    "original_path": "/Volumes/KINGSTON/worktrees/phase47-investigation/claude-shipyard/.planning/phases/47-complete-deferred-decomposition-wait-attribution/47-RESEARCH.md",
+    "original_physical_path": "/Volumes/KINGSTON/worktrees/phase47-investigation/claude-shipyard/.planning/phases/47-complete-deferred-decomposition-wait-attribution/47-RESEARCH.md",
+    "bytes": 137184,
+    "sha256": "e5c93b9cbbe1d31986d17a1f6fbfe98ca2fd0ce4528fab106c8247649504fa44",
+    "retained_path": "/Users/serhii/.local/state/shipyard/codex-decompose/6cba328f5f0de395b373ad6c77a164feb771363c4e6b7a96888b7075d52da7aa/phase47-final-generation-adr027-main-review-repair/original-e5c93b9cbbe1d31986d17a1f6fbfe98ca2fd0ce4528fab106c8247649504fa44-47-RESEARCH.md",
+    "current_sha256": "1d81a2022e3b5812897bbe61178818054eb3f58a6955616b476967a61caba6ec",
+    "current_bytes": 216250
+  }
+];
+
+function validateOriginalMaterialization(record, predecessor, resultRef, indexRef, indexed, entry) {
+  assert.equal(record.schema, 'shipyard.phase47-historical-planner-materialization.v2');
+  assert.equal(record.actor, 'trusted-coordinator');
+  assert.equal(record.native_receipt, false);
+  assert.deepEqual(record.current_handoff, { path: REPAIR_HANDOFF, sha256: REPAIR_HANDOFF_SHA });
+  assert.deepEqual(record.previous_materialization, { path: MATERIALIZATION, sha256: MATERIALIZATION_SHA });
+  assert.deepEqual(record.entries, ORIGINAL_ENTRIES, 'fixed three original entries required');
+  const matches = record.entries.filter(row => row.predecessor_handoff.path === predecessor.path
+    && row.original_path === entry.path && row.sha256 === indexed.sha256);
+  assert.equal(matches.length, 1, 'unknown original entry');
+  const row = matches[0];
+  assert.deepEqual(row.predecessor_handoff, predecessor);
+  assert.equal(row.native_result.path, resultRef.path);
+  assert.equal(row.native_result.sha256, resultRef.sha256);
+  assert.deepEqual(row.original_artifact_index, indexRef);
+  assert.equal(indexed.path, row.original_path, 'foreign original index entry path');
+  assert.equal(row.original_physical_path, entry.physical_path || entry.path);
+  assert.equal(row.bytes, indexed.bytes);
+  assert.equal(row.bytes, entry.bytes);
+  assert.equal(row.sha256, entry.sha256);
+  return row;
+}
+
+function historicalOriginalEntry(predecessor, resultRef, indexRef, indexed, entry) {
+  const expected = ORIGINAL_ENTRIES.find(row => row.predecessor_handoff.path === predecessor.path
+    && row.original_path === entry.path && row.sha256 === indexed.sha256);
+  if (!expected) return reference({ ...entry, path: entry.physical_path || entry.path });
+  const record = authenticateHandback(MATERIALIZATION_V2, MATERIALIZATION_V2_SHA);
+  const row = validateOriginalMaterialization(record, predecessor, resultRef, indexRef, indexed, entry);
+  authenticateHandback(MATERIALIZATION, MATERIALIZATION_SHA);
+  authenticateHandback(predecessor.path, predecessor.sha256);
+  read(REPAIR_HANDOFF, REPAIR_HANDOFF_SHA, true);
+  const result = JSON.parse(reference(resultRef));
+  assert.equal(result.status, 'completed');
+  assert.equal(result.receipt.gsd_role, path.basename(entry.path) === 'CONTEXT.md'
+    ? 'gsd-planner' : 'gsd-phase-researcher');
+  assert.deepEqual(result.artifact_index, indexRef);
+  const index = JSON.parse(reference(indexRef));
+  assert.deepEqual(index.entries.filter(member => member.path === indexed.path), [indexed]);
+  reference({ path: row.original_physical_path, bytes: row.current_bytes, sha256: row.current_sha256 });
+  return reference({ path: row.retained_path, bytes: row.bytes, sha256: row.sha256 }, true);
+}
+
+function historicalVolumeEntry(indexRef, indexed, entry, resultRef) {
+  const row = ORIGINAL_ENTRIES.find(row => row.predecessor_handoff.path === VOLUME_HANDOFF
+    && row.original_path === entry.path && row.sha256 === indexed.sha256);
+  return historicalOriginalEntry({ path: VOLUME_HANDOFF, sha256: VOLUME_HANDOFF_SHA },
+    resultRef || (row ? row.native_result : {}), indexRef, indexed, entry);
+}
+
+function reauthenticateRepairCoverage(repair, worktree = REPOSITORY) {
+  const cv = require('../../plugins/delivery-pipeline/scripts/conveyor-coverage.cjs');
+  const root = path.resolve(HOST, '../../coverage');
+  const coverage = cv.verify({ commit: repair.current_head, repo: repair.coverage.record.repo,
+    worktree, root, keyPath: path.join(root, 'coverage.key') });
+  assert.equal(coverage.covered, true, coverage.reason);
+  assert.deepEqual(coverage, repair.coverage);
+  return coverage;
+}
+
+function authenticateRepairSuccessor(common, root = REPOSITORY) {
+  assert(REPAIR_HANDOFF_SHA, 'actual signed main-review-repair generation is pending');
+  const handback = authenticateHandback(REPAIR_HANDOFF, REPAIR_HANDOFF_SHA);
+  const approvalRef = handback.current_source_approval;
+  assert.equal(approvalRef.path, path.join(path.dirname(REPAIR_HANDOFF), 'source-approval.json'));
+  assert.equal(approvalRef.signature_path, approvalRef.path + '.asc');
+  const approval = authenticateHandback(approvalRef.path, approvalRef.sha256);
+  validateRepairContract(handback, approval);
+  const selected = selectedArtifact(common, handback, REPAIR_STAGE);
+  selected.repair = true;
+  const source = selected.binding.source;
+  assert.equal(source.head, approval.source_head);
+  assert.equal(source.tree, approval.source_tree);
+  assert.equal(approval.source_identity_sha256, handback.source_identity_sha256);
+  assert.equal(approval.canonical_input_digest, selected.binding.canonical_input_digest);
+  assert.deepEqual(approval.parent_commits, source.parent_commits);
+  assert.deepEqual(approval.provenance, source.provenance);
+  const prior = authenticateVolumeSuccessor(common, root, true);
+  for (const key of ['generation_id', 'source_head', 'selection_path', 'selection_sha256', 'binding_path', 'binding_sha256'])
+    assert.equal(handback.prior_final_handoff[key], prior.handback[key], 'volume predecessor drift: ' + key);
+  for (const key of ['original_handoff_path', 'original_handoff_sha256', 'original_source_head',
+    'original_source_identity_sha256', 'original_index_sha256']) {
+    assert.equal(handback[key], prior.handback[key]);
+    assert.equal(approval[key], handback[key]);
+  }
+  assert.equal(handback.original_generation_id, prior.handback.original_generation_id);
+  assert.equal(handback.original_configuration_snapshot.sha256, SOURCE39_SHA);
+  reference(handback.original_configuration_snapshot, true);
+  reference({ path: path.join(path.dirname(REPAIR_HANDOFF), 'historical43-config.json'), sha256: HISTORICAL43_SHA }, true);
+  reference({ path: path.join(path.dirname(REPAIR_HANDOFF), 'coordinator48-config.json'), sha256: COORDINATOR48_SHA }, true);
+  assert.deepEqual(JSON.parse(reference(handback.original_ledger, true)), JSON.parse(git(root,
+    'show', source.head + ':docs/audits/phase47-runtime-acceptance.json')));
+  assert.equal(sha(reference(handback.prior_handoff_document, true)), sha(git(root,
+    'show', source.head + ':docs/audits/phase47-runtime-handoff.md')));
+  for (let i = 0; i < 4; i++) {
+    const ref = approval.tail_plan_amendments[i];
+    assert.equal(ref.path, path.join(source.repository, PHASE, '47-' + (24 + i) + '-PLAN.md'));
+    reference(ref);
+  }
+  const planner = JSON.parse(reference(approval.successor_planner));
+  assert.equal(planner.status, 'completed');
+  assert.equal(planner.receipt.dispatch_id, approval.successor_planner.dispatch_id);
+  assert.deepEqual(planner.artifact_index, approval.successor_planner.artifact_index);
+  validateCurrentNative(planner, 'gsd-planner', null, true);
+  const index = JSON.parse(reference(planner.artifact_index));
+  const entries = approval.successor_planner.historical_materialized_entries;
+  assert.equal(index.entries.length, 28);
+  assert.equal(entries.length, index.entries.length);
+  assert.deepEqual(entries.map(row => row.path).sort(), index.entries.map(row => row.path).sort());
+  for (const entry of entries) {
+    const indexed = index.entries.find(row => row.path === entry.path);
+    assert.equal(indexed.sha256, entry.sha256);
+    assert.equal(indexed.bytes, entry.bytes);
+    reference({ ...entry, path: entry.physical_path });
+  }
+  const checkerRef = approval.current_checker, checker = JSON.parse(reference(checkerRef));
+  assert.equal(checker.receipt.dispatch_id, checkerRef.dispatch_id);
+  assert.deepEqual(checker.receipt.runtime_evidence.native_child_evidence, checkerRef.native_child_evidence);
+  assert.deepEqual(checker.receipt.runtime_evidence.transcript, checkerRef.transcript);
+  assert.equal(checkerRef.native_child_transcript.sha256, checkerRef.native_child_evidence.sha256);
+  const records = validateCurrentNative(checker, 'gsd-plan-checker', checkerRef.native_child_transcript);
+  const finals = records.filter(row => row.type === 'response_item' && row.payload?.role === 'assistant'
+    && row.payload.phase === 'final_answer');
+  assert.equal(finals.length, 1, 'unique original checker final required');
+  const text = finals[0].payload.content.filter(row => row.type === 'output_text').map(row => row.text).join('');
+  assert.deepEqual(JSON.parse(text), checkerRef.verdict);
+  assert.equal(checkerRef.verdict.task_sha256 || checkerRef.verdict.input_sha256.TASK_FILE,
+    checkerRef.native_child_evidence.task_relay.sha256);
+  const research = JSON.parse(reference(approval.current_research));
+  assert.equal(research.status, 'completed');
+  validateCurrentNative(research, 'gsd-phase-researcher', null, true);
+  for (const entry of JSON.parse(reference(research.artifact_index)).entries) reference(entry);
+  for (const ref of approval.delivery_metadata_amendment.amendments) reference(ref, true);
+  const preservation = JSON.parse(reference(approval.original19_plan_preservation));
+  assert.equal(preservation.count, 19);
+  assert.equal(preservation.files.length, 19);
+  for (const entry of preservation.files) reference({ ...entry, path: path.join(source.repository, entry.path) });
+  const correction = approval.source_correction;
+  reference(correction.command_approval);
+  reference(correction.scope_disposition);
+  assert.deepEqual(correction.prior_source_correction, prior.approval.source_correction);
+  assert(path.isAbsolute(correction.consumer_contract_ready.worktree));
+  assert.match(correction.consumer_contract_ready.evidence_sha256, /^[a-f0-9]{64}$/);
+  assert.equal(correction.consumer_contract_ready.native_receipt, false);
+  for (const file of ['tests/unit/phase47-package-publication.test.cjs', 'tests/smoke/phase47-runtime-acceptance.cjs',
+    'tests/unit/phase47-runtime-acceptance.test.cjs']) assert(correction.consumer_contract_ready.declared_delta.includes(file));
+  assert.deepEqual(correction.source_repairs.map(row => row.ticket), ['T-47-24', 'T-47-25', 'T-47-26']);
+  for (const repair of correction.source_repairs) {
+    const result = JSON.parse(reference(repair.native_executor));
+    assert.equal(result.receipt.compliance, 'verified');
+    assert.equal(result.receipt.runtime, 'codex');
+    assert.equal(result.ticket, repair.ticket);
+    assert.equal(result.receipt.role, 'executor');
+    assert.equal(result.receipt.dispatch_id, result.dispatch_id);
+    assert.deepEqual(result.receipt, repair.native_executor.receipt);
+    reference(result.receipt.runtime_evidence.transcript);
+    assert.equal(result.artifact.status, 'committed');
+    git(root, 'merge-base', '--is-ancestor', result.artifact.commit, repair.current_head);
+    assert.deepEqual(repair.actual_merge, source.parent_commits[repair.ticket]);
+    assert.equal(repair.current_head, repair.actual_merge.head);
+    const finalization = JSON.parse(reference(repair.finalization));
+    assert.equal(finalization.committed.commit, repair.finalization.commit);
+    assert.equal(finalization.committed.tree, repair.finalization.tree);
+    assert.equal(finalization.current_config_sha256, COORDINATOR48_SHA);
+    assert.deepEqual(finalization.verification, repair.finalization.verification);
+    git(root, 'merge-base', '--is-ancestor', repair.finalization.commit, repair.current_head);
+    const verification = hostVerification.readEvidence(repair.finalization.verification.path, repair.finalization.verification.digest);
+    assert(verification, 'authenticated source repair verification required');
+    assert.equal(verification.ticket, repair.ticket);
+    assert.equal(verification.plan_sha256, REPAIR_PLANS[Number(repair.ticket.slice(-2)) - 24]);
+    assert.equal(verification.results.length, repair.ticket === 'T-47-25' ? 1 : 2);
+    assert(verification.results.every(row => row.outcome === 'passed'
+      && row.tree_before === repair.finalization.tree && row.tree_after === repair.finalization.tree));
+    assert.deepEqual(verification, repair.host_verification);
+    assert.equal(repair.coverage.covered, true);
+    reauthenticateRepairCoverage(repair, root);
+  }
+  assert.equal(source.head, source.parent_commits['T-47-26'].merge);
+  assert.deepEqual(selected.binding.outputs.map(row => row.path), prior.selected.binding.outputs.map(row => row.path));
+  assert.equal(selected.binding.outputs.length, 161);
+  const delta = selected.binding.outputs.filter(entry => sha(git(root, 'show', source.head + ':plugins/shipyard/' + entry.path)) !== entry.sha256
+    || gitText(root, 'ls-tree', source.head, '--', 'plugins/shipyard/' + entry.path).split(' ')[0] !== entry.git_mode).map(row => row.path).sort();
+  assert.deepEqual(delta, REPAIR_CORRECTIVE, 'actual supported builder delta drift');
+  const current = validateSource(root, selected.binding, approval);
+  return { handback, selected, approval, prior, planning: prior.planning, current };
+}
+
+function recheckRepairSuccessor(authenticated, root = REPOSITORY) {
+  assert.deepEqual(authenticateRepairSuccessor(authenticated.selected.binding.source.common, root), authenticated,
+    'main-review-repair successor changed during inspection');
+}
+
 const CALLER = ['codex-arch-review-context', 'role-artifact', 'codex-decompose-host',
   'codex-planning-context-host'].map(mirror);
 const GROUPS = {
@@ -161,7 +502,7 @@ function validateHandback(handback, selection, binding, selectionPath) {
   assert.equal(handback.historical_manifest_sha256, binding.source.plan_manifest_sha256);
   assert.deepEqual(handback.current_plan_amendments, binding.source.current_plan_amendments);
   validateAllocation(handback.publication_allocation);
-  assert.deepEqual([...handback.changed_outputs].sort(), handback.purpose === 'ADR-027-current-ticket-volume' ? VOLUME_CORRECTIVE : handback.purpose === 'ADR-027-current-ticket-evidence' ? SUCCESSOR_CORRECTIVE : handback.purpose === 'ADR-026-final'
+  assert.deepEqual([...handback.changed_outputs].sort(), handback.purpose === 'ADR-027-main-review-repair' ? REPAIR_CORRECTIVE : handback.purpose === 'ADR-027-current-ticket-volume' ? VOLUME_CORRECTIVE : handback.purpose === 'ADR-027-current-ticket-evidence' ? SUCCESSOR_CORRECTIVE : handback.purpose === 'ADR-026-final'
     ? (handback.source_update ? CORRECTIVE : CORRECTIVE.filter(p => p !== mirror('architecture-target'))) : UNION,
     'unexpected generation scope');
   if (handback.purpose === 'ADR-026-final')
@@ -226,6 +567,12 @@ function selectedArtifact(common, handback, stage = STAGE_DIRECTORY) {
   return { root, selectionPath, selection, binding };
 }
 
+function validateOperatorSignature(result) {
+  const valid = result.split('\n').filter(line => line.startsWith('[GNUPG:] VALIDSIG '));
+  assert.equal(valid.length, 1, 'missing unique operator signature');
+  assert(valid[0].split(' ').slice(2).includes(OPERATOR), 'wrong operator signature');
+}
+
 function authenticateHandback(file = HANDOFF, digest = HANDOFF_SHA) {
   const bytes = read(file, digest, true);
   const signature = read(file + '.asc', undefined, true);
@@ -242,9 +589,7 @@ function authenticateHandback(file = HANDOFF, digest = HANDOFF_SHA) {
       '--status-fd', '1', file + '.asc', file], {
       encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 10000,
     });
-    const valid = result.split('\n').filter(line => line.startsWith('[GNUPG:] VALIDSIG '));
-    assert.equal(valid.length, 1, 'missing unique operator signature');
-    assert(valid[0].split(' ').slice(2).includes(OPERATOR), 'wrong operator signature');
+    validateOperatorSignature(result);
     read(file, sha(bytes), true);
     read(file + '.asc', sha(signature), true);
     read(publicKey, sha(keyBytes));
@@ -529,7 +874,8 @@ function authenticateSuccessor(common, root = REPOSITORY, historical = false) {
     const original = index.entries.find(row => row.path === entry.path);
     assert(original, 'native planner index member missing');
     assert.equal(original.sha256, entry.sha256);
-    reference({ ...entry, path: entry.physical_path });
+    historicalOriginalEntry({ path: SUCCESSOR_HANDOFF, sha256: SUCCESSOR_HANDOFF_SHA },
+      approval.successor_planner, planner.artifact_index, original, entry);
   }
   const checkerRef = approval.current_checker, checker = JSON.parse(reference(checkerRef));
   assert.equal(checker.dispatch_id, checkerRef.dispatch_id);
@@ -550,7 +896,10 @@ function authenticateSuccessor(common, root = REPOSITORY, historical = false) {
   assert.deepEqual(JSON.parse(completed[0].payload.last_agent_message), checkerRef.verdict);
   assert.equal(checkerRef.native_child_transcript.sha256, checkerRef.native_child_evidence.sha256);
   assert.equal(checkerRef.verdict.input_sha256.task, checkerRef.native_child_evidence.task_relay.sha256);
-  reference(approval.current_research);
+  const historicalResearch = JSON.parse(reference(approval.current_research));
+  for (const entry of JSON.parse(reference(historicalResearch.artifact_index)).entries)
+    historicalOriginalEntry({ path: SUCCESSOR_HANDOFF, sha256: SUCCESSOR_HANDOFF_SHA },
+      approval.current_research, historicalResearch.artifact_index, entry, entry);
   for (const ref of approval.delivery_metadata_amendment.amendments) reference(ref, true);
   const preservedPlans = JSON.parse(reference(approval.original19_plan_preservation));
   assert.equal(preservedPlans.count, 19);
@@ -592,6 +941,9 @@ function authenticateSuccessor(common, root = REPOSITORY, historical = false) {
 function validateHistoricalSource(root, binding, approval) {
   const source = binding.source;
   assert.equal(gitText(root, 'rev-parse', source.head + '^{tree}'), source.tree);
+  assert.equal(source.coordinator_config_sha256, approval.coordinator_config_sha256);
+  assert.equal(approval.coordinator_config_sha256, HISTORICAL43_SHA);
+  reference({ path: '/tmp/phase47-coordinator-config-before-main-review-commands.json', sha256: approval.coordinator_config_sha256 });
   assert.equal(sha(git(root, 'show', source.head + ':.planning/config.json')), approval.reviewed_source_config_sha256);
   assert.equal(source.config_sha256, approval.reviewed_source_config_sha256);
   assert.equal(source.coordinator_config_sha256, approval.coordinator_config_sha256);
@@ -631,7 +983,7 @@ function validateVolumeContract(handback, approval) {
   assert.equal(approval.coordinator_config_sha256, '63a18625794b2772663567c95401ad91358daf13974f9c18117e0ce237256780');
 }
 
-function validateCurrentNative(result, role, childPath = null) {
+function validateCurrentNative(result, role, childPath = null, currentRepair = false) {
   assert.equal(result.receipt.compliance, 'verified');
   assert.equal(result.receipt.runtime, 'codex');
   assert.equal(result.receipt.runtime_evidence.dispatch_id, result.receipt.dispatch_id);
@@ -645,7 +997,9 @@ function validateCurrentNative(result, role, childPath = null) {
   if (role.startsWith('gsd-')) assert.equal(child.agent_role, role);
   const raw = childPath ? reference(childPath, true).toString()
     : read(path.join('/Users/serhii/.codex/sessions/2026/10/08',
-      role === 'gsd-planner' ? 'rollout-2026-10-08T01-18-03-01a11871-f17d-79f2-a373-a4568376243a.jsonl'
+      currentRepair ? (role === 'gsd-planner'
+        ? 'rollout-2026-10-08T06-53-18-01a119a4-e321-7821-8aca-d3b24c7d1677.jsonl'
+        : 'rollout-2026-10-08T04-55-25-01a11938-f689-75d0-b112-97f18b5d95ab.jsonl') : role === 'gsd-planner' ? 'rollout-2026-10-08T01-18-03-01a11871-f17d-79f2-a373-a4568376243a.jsonl'
         : 'rollout-2026-10-08T01-09-16-01a11869-e6f6-7d23-8cc0-72519234af8b.jsonl'), child.sha256).toString();
   require('../smoke/phase47-runtime-acceptance.cjs').validateInlineFirstCall(raw, child.task_relay, child);
   const records = raw.trim().split('\n').map(line => JSON.parse(line));
@@ -656,7 +1010,7 @@ function validateCurrentNative(result, role, childPath = null) {
   return records;
 }
 
-function authenticateVolumeSuccessor(common, root = REPOSITORY) {
+function authenticateVolumeSuccessor(common, root = REPOSITORY, historical = false) {
   const handback = authenticateHandback(VOLUME_HANDOFF, VOLUME_HANDOFF_SHA);
   const approvalRef = handback.current_source_approval;
   assert.equal(approvalRef.path, path.join(path.dirname(VOLUME_HANDOFF), 'source-approval.json'));
@@ -703,7 +1057,8 @@ function authenticateVolumeSuccessor(common, root = REPOSITORY) {
     assert(indexed, 'missing planner index entry');
     assert.equal(indexed.sha256, entry.sha256);
     assert.equal(indexed.bytes, entry.bytes);
-    reference({ ...entry, path: entry.physical_path });
+    historical ? historicalVolumeEntry(planner.artifact_index, indexed, entry, approval.successor_planner)
+      : reference({ ...entry, path: entry.physical_path });
   }
   const checkerRef = approval.current_checker, checker = JSON.parse(reference(checkerRef));
   assert.equal(checker.dispatch_id, checkerRef.dispatch_id);
@@ -737,7 +1092,9 @@ function authenticateVolumeSuccessor(common, root = REPOSITORY) {
   assert.equal(research.status, 'completed');
   validateCurrentNative(research, 'gsd-phase-researcher');
   const researchIndex = JSON.parse(reference(research.artifact_index));
-  for (const entry of researchIndex.entries) reference(entry);
+  for (const entry of researchIndex.entries)
+    historical ? historicalOriginalEntry({ path: VOLUME_HANDOFF, sha256: VOLUME_HANDOFF_SHA },
+      approval.current_research, research.artifact_index, entry, entry) : reference(entry);
   for (const ref of approval.delivery_metadata_amendment.amendments) reference(ref, true);
   const preserved = JSON.parse(reference(approval.original19_plan_preservation));
   assert.equal(preserved.count, 19);
@@ -779,7 +1136,7 @@ function authenticateVolumeSuccessor(common, root = REPOSITORY) {
   const delta = selected.binding.outputs.filter(entry => sha(git(root, 'show', source.head + ':plugins/shipyard/' + entry.path)) !== entry.sha256
     || gitText(root, 'ls-tree', source.head, '--', 'plugins/shipyard/' + entry.path).split(' ')[0] !== entry.git_mode).map(row => row.path).sort();
   assert.deepEqual(delta, VOLUME_CORRECTIVE);
-  const current = validateSource(root, selected.binding, approval);
+  const current = historical ? validateHistoricalSource(root, selected.binding, approval) : validateSource(root, selected.binding, approval);
   return { handback, selected, approval, prior, planning: prior.planning, current };
 }
 
@@ -805,7 +1162,7 @@ function recheckFinal(authenticated, root = REPOSITORY) {
 }
 
 function validateParents(source, state, getPullRequest, ancestor, final = false) {
-  const parents = final ? Array.from({ length: source.parent_commits['T-47-22'] ? 22 : source.parent_commits['T-47-20'] ? 20 : 18 }, (_, n) => 'T-47-' + String(n + 1).padStart(2, '0')) : ['T-47-13', 'T-47-03', 'T-47-04', 'T-47-09', 'T-47-15', 'T-47-14'];
+  const parents = final ? Array.from({ length: source.parent_commits['T-47-26'] ? 26 : source.parent_commits['T-47-22'] ? 22 : source.parent_commits['T-47-20'] ? 20 : 18 }, (_, n) => 'T-47-' + String(n + 1).padStart(2, '0')) : ['T-47-13', 'T-47-03', 'T-47-04', 'T-47-09', 'T-47-15', 'T-47-14'];
   assert.deepEqual(Object.keys(source.parent_commits).sort(), [...parents].sort());
   assert.deepEqual(Object.keys(source.provenance).sort(), [...parents].sort());
   for (const id of parents) {
@@ -945,23 +1302,33 @@ function validatePublication(root, selected, group) {
   const published = path.join(root, 'plugins/shipyard');
   const observed = inventory(published);
   const outputs = new Map(binding.outputs.map(entry => [entry.path, entry]));
-  const final = selected.final === true || selected.successor === true || selected.volume === true;
-  const permitted = selected.volume ? VOLUME_CORRECTIVE : selected.successor ? SUCCESSOR_CORRECTIVE : final ? CORRECTIVE : UNION;
+  const final = selected.repair === true || selected.final === true || selected.successor === true || selected.volume === true;
+  const permitted = selected.repair ? REPAIR_CORRECTIVE : selected.volume ? VOLUME_CORRECTIVE : selected.successor ? SUCCESSOR_CORRECTIVE : final ? CORRECTIVE : UNION;
   const required = final && ['relay', 'complete'].includes(group)
     ? binding.outputs.map(entry => entry.path).filter(relative => group === 'complete'
       || !['.codex-plugin/plugin.json', 'package-build.json'].includes(relative)) : GROUPS[group];
   for (const entry of observed) {
     const expected = outputs.get(entry.path);
     assert(expected, 'unexpected checked-in package path: ' + entry.path);
-    if (entry.sha256 !== expected.sha256 || entry.mode !== expected.publication_mode)
+    if (entry.sha256 !== expected.sha256 || entry.mode !== expected.publication_mode) {
       assert(permitted.includes(entry.path), 'unexpected publication delta: ' + entry.path);
+      if (selected.repair) {
+        assert.equal(entry.sha256, sha(git(root, 'show', binding.source.head + ':plugins/shipyard/' + entry.path)),
+          'partial current publication must retain exact pre-T27 bytes');
+        const baselineMode = gitText(root, 'ls-tree', binding.source.head, '--', 'plugins/shipyard/' + entry.path).split(' ')[0];
+        assert.equal(entry.mode, baselineMode === '100755' ? 0o755 : 0o644,
+          'partial current publication mode drift');
+      }
+    }
     const indexMode = gitText(root, 'ls-files', '--stage', '--', 'plugins/shipyard/' + entry.path).split(' ')[0];
     if (!indexMode) assert.equal(entry.path, mirror('codex-arch-review-context'), 'unreviewed new package path');
     else assert.equal(indexMode, expected.git_mode, 'package git index mode drift');
   }
   for (const output of binding.outputs)
-    if (!observed.some(entry => entry.path === output.path))
+    if (!observed.some(entry => entry.path === output.path)) {
+      assert(!selected.repair, 'missing current package inventory member');
       assert.equal(output.path, mirror('codex-arch-review-context'), 'unexpected missing package path');
+    }
   for (const relative of required) {
     const expected = outputs.get(relative);
     assert(expected, 'missing publication ledger member');
@@ -1043,23 +1410,23 @@ function stageContracts(selected) {
 function check(group) {
   assert(Object.hasOwn(GROUPS, group), 'unknown publication group');
   const common = gitText(REPOSITORY, 'rev-parse', '--path-format=absolute', '--git-common-dir');
-  const authenticated = authenticateVolumeSuccessor(common);
+  const authenticated = authenticateRepairSuccessor(common);
   const { handback, selected, current, planning } = authenticated;
   const count = validatePublication(REPOSITORY, selected, group);
   const contracts = group === 'candidate' ? null : stageContracts(selected);
-  recheckVolumeSuccessor(authenticated);
+  recheckRepairSuccessor(authenticated);
   validatePublication(REPOSITORY, selected, group);
-  return { status: 'completed', ticket: 'T-47-23', group, generation_id: handback.generation_id,
+  return { status: 'completed', ticket: 'T-47-27', group, generation_id: handback.generation_id,
     source_head: selected.binding.source.head, source_identity_sha256: handback.source_identity_sha256,
-    current_admission: current, handback_path: VOLUME_HANDOFF, handback_sha256: VOLUME_HANDOFF_SHA,
+    current_admission: current, handback_path: REPAIR_HANDOFF, handback_sha256: REPAIR_HANDOFF_SHA,
     selection_path: selected.selectionPath, selection_sha256: handback.selection_sha256,
     binding_path: selected.selection.binding_path, binding_sha256: selected.selection.binding_sha256,
     candidate_path: selected.selection.candidate_path, candidate_sha256: selected.selection.candidate_sha256,
     package_sha256: selected.binding.package_sha256, version: selected.binding.version,
     output_count: selected.binding.outputs.length, publication_count: count, build_calls: 0, planning,
-    corrective_outputs: VOLUME_CORRECTIVE, historical_successor_output_count: SUCCESSOR_CORRECTIVE.length, historical_corrective_output_count: CORRECTIVE.length, original_output_count: UNION.length, original_native_owner_count: 16,
+    corrective_outputs: REPAIR_CORRECTIVE, historical_successor_output_count: SUCCESSOR_CORRECTIVE.length, historical_corrective_output_count: CORRECTIVE.length, original_output_count: UNION.length, original_native_owner_count: 16,
     contracts, covered_groups: group === 'complete' ? Object.keys(GROUPS) : [group],
-    successor_corrective_output_count: VOLUME_CORRECTIVE.length, inspector_build_calls: 0,
+    successor_corrective_output_count: REPAIR_CORRECTIVE.length, inspector_build_calls: 0,
     remaining_obligations: ['current exact HOST verification', 'T-47-08 installed/native acceptance',
       'post-delivery aggregate architecture and integrator judgments'] };
 }
@@ -1151,6 +1518,31 @@ function privateFixtures(authenticatedSignatureFixture = false) {
         validateVolumeContract(volumeFixture, { ...volumeApproval, ...mutation }));
     rejects('volume handback expanded output allocation', () => validateVolumeContract({ ...volumeFixture,
       changed_outputs: SUCCESSOR_CORRECTIVE }, volumeApproval));
+    const repairFixture = { purpose: 'ADR-027-main-review-repair', source_head: 'a'.repeat(40),
+      changed_outputs: REPAIR_CORRECTIVE, corrective_allocation: { 'T-47-27': REPAIR_CORRECTIVE },
+      tail_plan_amendments: REPAIR_PLANS.map(sha256 => ({ sha256 })),
+      prior_final_handoff: { path: VOLUME_HANDOFF, sha256: VOLUME_HANDOFF_SHA },
+      source_correction: { strict_configuration_identity: { source39: SOURCE39_SHA,
+        coordinator48: COORDINATOR48_SHA, historical43: HISTORICAL43_SHA },
+      command_approval: { path: '/tmp/phase47-main-review-exact-command-approval.json',
+        sha256: '2e7bd51c86d5eff1d65fe09fcf3d366cd27d5dd98eea86a7af0689ae2009696e' } },
+      current_checker: { verdict: { status: 'passed', blockers: [], artifact_paths: [], input_sha256:
+        Object.fromEntries(REPAIR_PLANS.map((digest, i) => [PHASE + '/47-' + (24 + i) + '-PLAN.md', digest])) } } };
+    const repairApproval = { ...repairFixture, schema: 'shipyard.phase47-current-source-approval.v1',
+      status: 'approved', actor: 'trusted-coordinator', native_receipt: false,
+      reviewed_source_config_sha256: SOURCE39_SHA, coordinator_config_sha256: COORDINATOR48_SHA };
+    validateRepairContract(repairFixture, repairApproval); cases++;
+    for (const mutation of [{ purpose: 'ADR-027-current-ticket-volume' }, { source_head: VOLUME_SOURCE },
+      { actor: 'foreign' }, { native_receipt: true }, { status: 'pending' },
+      { corrective_allocation: { 'T-47-27': VOLUME_CORRECTIVE } },
+      { reviewed_source_config_sha256: COORDINATOR48_SHA }, { coordinator_config_sha256: SOURCE39_SHA },
+      { coordinator_config_sha256: HISTORICAL43_SHA }, { prior_final_handoff: { path: SUCCESSOR_HANDOFF } },
+      { current_checker: { verdict: { status: 'blocked', blockers: [] } } },
+      { tail_plan_amendments: REPAIR_PLANS.slice().reverse().map(sha256 => ({ sha256 })) }])
+      rejects('main-review-repair refuses stale, foreign or expanded authority', () =>
+        validateRepairContract(repairFixture, { ...repairApproval, ...mutation }));
+    rejects('main-review-repair refuses expanded stage delta', () => validateRepairContract({ ...repairFixture,
+      changed_outputs: [...REPAIR_CORRECTIVE, mirror('lock')] }, repairApproval));
     const currentUpdate = { commit: '8192ba38942be328b27f8aa54984eae7cd47231c',
       parent: '72f033c994053654d5025e128081ee37be0e04b7',
       canonical_path: 'plugins/delivery-pipeline/scripts/architecture-target.cjs',
@@ -1399,6 +1791,29 @@ function privateFixtures(authenticatedSignatureFixture = false) {
     git(root, 'add', 'plugins/shipyard');
     for (const group of Object.keys(GROUPS)) validatePublication(root, consume(), group);
     cases++;
+    git(root, '-c', 'commit.gpgsign=false', 'commit', '-qm', 'private pre-T27 package baseline');
+    const repairSelected = { ...consume(), repair: true, binding: { ...binding,
+      source: { ...binding.source, head: gitText(root, 'rev-parse', 'HEAD') } } };
+    validatePublication(root, repairSelected, 'complete'); cases++;
+    const partialPath = mirror('claude-runtime-host');
+    const partialFile = path.join(root, 'plugins/shipyard', partialPath), partialBytes = read(partialFile);
+    const partialBinding = structuredClone(repairSelected.binding);
+    partialBinding.outputs.find(row => row.path === partialPath).sha256 = sha('new supported fixture bytes');
+    const partialSelected = { ...repairSelected, binding: partialBinding };
+    validatePublication(root, partialSelected, 'candidate'); cases++;
+    rejects('partial publication cannot claim complete parity', () => validatePublication(root, partialSelected, 'complete'));
+    fs.writeFileSync(partialFile, 'foreign allocated bytes');
+    rejects('allocated current byte forgery refuses even in candidate mode', () => validatePublication(root, partialSelected, 'candidate'));
+    fs.writeFileSync(partialFile, partialBytes);
+    fs.unlinkSync(partialFile);
+    rejects('current candidate requires complete package membership', () => validatePublication(root, repairSelected, 'candidate'));
+    fs.writeFileSync(partialFile, partialBytes);
+    const noWrite = ['writeFileSync', 'appendFileSync', 'mkdirSync', 'chmodSync', 'renameSync', 'unlinkSync', 'rmSync', 'cpSync'];
+    const originalMethods = new Map(noWrite.map(name => [name, fs[name]]));
+    try {
+      for (const name of noWrite) fs[name] = () => { throw new Error('current publication inspector wrote ' + name); };
+      validatePublication(root, repairSelected, 'candidate'); cases++;
+    } finally { for (const [name, method] of originalMethods) fs[name] = method; }
     const newCollector = 'plugins/shipyard/' + mirror('codex-arch-review-context');
     git(root, 'update-index', '--force-remove', newCollector);
     validatePublication(root, consume(), 'caller'); cases++;
@@ -1484,7 +1899,7 @@ function privateFixtures(authenticatedSignatureFixture = false) {
   }
 }
 
-module.exports = { validatePublication, authenticateVolumeSuccessor, recheckVolumeSuccessor, validateVolumeContract, VOLUME_CORRECTIVE, VOLUME_HANDOFF, VOLUME_HANDOFF_SHA, authenticateSuccessor, recheckSuccessor, validateSuccessorContract, SUCCESSOR_CORRECTIVE, SUCCESSOR_HANDOFF, SUCCESSOR_HANDOFF_SHA, check, authenticateOriginal, authenticateFinal, recheckFinal, selectedArtifact, validateSourceUpdate,
+module.exports = { reauthenticateRepairCoverage, validateOriginalMaterialization, ORIGINAL_ENTRIES, MATERIALIZATION_V2, MATERIALIZATION_V2_SHA, validateOperatorSignature, validateVolumeMaterialization, historicalVolumeEntry, MATERIALIZATION, MATERIALIZATION_SHA, validateRepairContract, authenticateRepairSuccessor, recheckRepairSuccessor, REPAIR_HANDOFF, REPAIR_HANDOFF_SHA, REPAIR_CORRECTIVE, REPAIR_PLANS, SOURCE39_SHA, COORDINATOR48_SHA, HISTORICAL43_SHA, validatePublication, authenticateVolumeSuccessor, recheckVolumeSuccessor, validateVolumeContract, VOLUME_CORRECTIVE, VOLUME_HANDOFF, VOLUME_HANDOFF_SHA, authenticateSuccessor, recheckSuccessor, validateSuccessorContract, SUCCESSOR_CORRECTIVE, SUCCESSOR_HANDOFF, SUCCESSOR_HANDOFF_SHA, check, authenticateOriginal, authenticateFinal, recheckFinal, selectedArtifact, validateSourceUpdate,
   validateDescendant, validateConfigurations, CORRECTIVE, FINAL_HANDOFF, FINAL_HANDOFF_SHA };
 
 if (require.main === module) {
