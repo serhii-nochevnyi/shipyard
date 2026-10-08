@@ -634,7 +634,8 @@ function validateVolumeContract(handback, approval) {
 function validateCurrentNative(result, role, childPath = null) {
   assert.equal(result.receipt.compliance, 'verified');
   assert.equal(result.receipt.runtime, 'codex');
-  assert.equal(result.receipt.dispatch_id, result.dispatch_id || result.receipt.runtime_evidence.dispatch_id);
+  assert.equal(result.receipt.runtime_evidence.dispatch_id, result.receipt.dispatch_id);
+  if (Object.hasOwn(result, 'dispatch_id')) assert.equal(result.dispatch_id, result.receipt.dispatch_id);
   if (role.startsWith('gsd-')) assert.equal(result.receipt.gsd_role, role);
   else assert.equal(result.receipt.role, role);
   const evidence = result.receipt.runtime_evidence;
@@ -710,6 +711,24 @@ function authenticateVolumeSuccessor(common, root = REPOSITORY) {
   reference(checkerRef.transcript);
   assert.equal(checkerRef.native_child_transcript.sha256, checkerRef.native_child_evidence.sha256);
   const records = validateCurrentNative(checker, 'gsd-plan-checker', checkerRef.native_child_transcript);
+  const mismatchedEvidence = structuredClone(checker);
+  mismatchedEvidence.receipt.runtime_evidence.dispatch_id += '-foreign';
+  assert.throws(() => validateCurrentNative(mismatchedEvidence, 'gsd-plan-checker',
+    checkerRef.native_child_transcript), { code: 'ERR_ASSERTION' },
+  'matching wrapper and receipt must not mask a foreign evidence dispatch');
+  const absentWrapper = structuredClone(checker);
+  delete absentWrapper.dispatch_id;
+  assert.deepEqual(validateCurrentNative(absentWrapper, 'gsd-plan-checker',
+    checkerRef.native_child_transcript), records);
+  absentWrapper.receipt.runtime_evidence.dispatch_id += '-foreign';
+  assert.throws(() => validateCurrentNative(absentWrapper, 'gsd-plan-checker',
+    checkerRef.native_child_transcript), { code: 'ERR_ASSERTION' },
+  'absent wrapper still requires the evidence dispatch to match the receipt');
+  const mismatchedWrapper = structuredClone(checker);
+  mismatchedWrapper.dispatch_id += '-foreign';
+  assert.throws(() => validateCurrentNative(mismatchedWrapper, 'gsd-plan-checker',
+    checkerRef.native_child_transcript), { code: 'ERR_ASSERTION' },
+  'supplied wrapper dispatch must independently match the receipt');
   const completed = records.filter(row => row.type === 'event_msg' && row.payload?.type === 'task_complete');
   assert.equal(completed.length, 1);
   assert.deepEqual(JSON.parse(completed[0].payload.last_agent_message), checkerRef.verdict);
