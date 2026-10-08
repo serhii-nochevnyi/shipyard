@@ -1144,7 +1144,7 @@ test('lost catalogue owner before rollback leaves successor-owned archive files 
   }
 });
 
-function phaseScopeFixture({ second = false, empty = false } = {}) {
+function phaseScopeFixture({ second = false, empty = false, repo = null, mixed = false } = {}) {
   const value = judgmentFixture('T-47-01');
   value.originalReceiptStore = path.join(value.root, 'receipts');
   value.root = fs.realpathSync(value.root);
@@ -1167,13 +1167,14 @@ function phaseScopeFixture({ second = false, empty = false } = {}) {
   const graphDir = path.join(value.root, '.planning/graph');
   fs.mkdirSync(graphDir, { recursive: true });
   const tickets = Object.fromEntries((second ? ['T-47-01', 'T-47-02'] : ['T-47-01']).map(id => [id,
-    { phase: '47', epic: 'epic/47-scope', plan: '.planning/phases/47-scope/' + id + '-PLAN.md' }]));
+    { phase: '47', repo, epic: 'epic/47-scope', plan: '.planning/phases/47-scope/' + id + '-PLAN.md' }]));
+  if (mixed) tickets.foreign = {...tickets['T-47-01'],repo:repo === null ? 'acme/foreign' : null,epic:'epic/foreign',plan:'.planning/phases/47-foreign/foreign-PLAN.md'};
   fs.writeFileSync(path.join(graphDir, 'tickets.json'), JSON.stringify({ tickets }));
   fs.writeFileSync(path.join(graphDir, 'delivery-state.json'), '{}');
   git(value.root, ['switch', '-c', 'epic/47-scope']);
   git(value.root, ['add', '.planning']); git(value.root, ['commit', '-m', 'fixture: current phase graph']);
   const binding = require('../../plugins/delivery-pipeline/scripts/architecture-target.cjs').phaseBinding({
-    graph: { tickets }, state: {}, phase: 47,
+    graph: { tickets }, state: {}, phase: 47, repo,
     repository: git(value.root, ['rev-parse', '--path-format=absolute', '--git-common-dir']),
     branch: 'epic/47-scope', pr: 404, head: git(value.root, ['rev-parse', 'HEAD']), base: git(value.root, ['rev-parse', 'main']) });
   const inventoryPath = path.join(value.root, 'retained-inventory.json');
@@ -1913,3 +1914,18 @@ test('F2 original durable receipt parity and genuine fresh-process DIRECT Codex 
 });
 
 done();
+
+for (const repo of [null, 'acme/selected']) test('mixed repository archive scope retains exact selected evidence: ' + repo, () => {
+  const value = phaseScopeFixture({repo,mixed:true});
+  try {
+    const selected = value.select();
+    assert.deepEqual(selected.selection.identity.tickets,['T-47-01']);
+    assert.equal(selected.evidence.length,1);
+    for (const edit of [{repo:'acme/missing'}, {repo:repo === null ? 'acme/foreign' : null},
+      {rows:[]}, {membership:'0'.repeat(64)}])
+      assert.throws(()=>roleArtifact.selectPhaseArchives(value.root,{...value.input.binding,...edit},{graphDir:value.input.graphDir}));
+    const pin = value.rows[0].pins.find(pin=>pin.path.endsWith('.md'));
+    fs.unlinkSync(path.join(value.root,pin.path));
+    assert.throws(()=>value.select({phaseArchiveSelection:selected.selection}));
+  } finally {cleanPhaseScope(value);}
+});
