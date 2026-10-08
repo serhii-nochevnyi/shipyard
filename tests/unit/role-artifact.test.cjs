@@ -1834,4 +1834,82 @@ for (const archived of [false, true]) test('phase47 original containment recover
   } finally { if (archived) cleanPhaseScope(value); else clean(value); }
 });
 
+
+for (const mutation of ['missingAuthority', 'missingStore', 'missingKey', 'invalidKey', 'foreignKey', 'symlinkKey', 'symlinkStore', 'symlinkRecord', 'broadKey', 'oversizedRecord', 'tamper', 'legacy'])
+  test('F2 readonly original receipt authority refuses without mutation: ' + mutation, async () => {
+    const value = await runFixture();
+    try {
+      const crypto = require('node:crypto');
+      const store = path.resolve(value.receipts);
+      const key = path.join(path.dirname(store), '.shipyard-dispatch-authority-' + crypto.createHash('sha256').update(store).digest('hex') + '.key');
+      const dispatchId = value.result[0].receipt.dispatch_id;
+      const record = path.join(store, 'record-' + crypto.createHash('sha256').update(dispatchId).digest('hex') + '.json');
+      if (mutation === 'missingAuthority') { fs.rmSync(store, {recursive:true}); fs.unlinkSync(key); }
+      if (mutation === 'missingStore') fs.rmSync(store, {recursive:true});
+      if (mutation === 'missingKey') fs.unlinkSync(key);
+      if (mutation === 'invalidKey') fs.writeFileSync(key, 'invalid');
+      if (mutation === 'foreignKey') fs.writeFileSync(key, Buffer.alloc(32, 7));
+      if (mutation === 'symlinkKey') { fs.renameSync(key, key + '.original'); fs.symlinkSync(key + '.original', key); }
+      if (mutation === 'symlinkStore') { fs.renameSync(store, store + '.original'); fs.symlinkSync(store + '.original', store); }
+      if (mutation === 'symlinkRecord') { fs.renameSync(record, record + '.original'); fs.symlinkSync(record + '.original', record); }
+      if (mutation === 'broadKey') fs.chmodSync(key, 0o644);
+      if (mutation === 'oversizedRecord') fs.writeFileSync(record, Buffer.alloc(16 * 1024 * 1024 + 1));
+      if (mutation === 'tamper') { const raw = JSON.parse(fs.readFileSync(record)); raw.payload.receipt.launch_id += '-tampered'; fs.writeFileSync(record, JSON.stringify(raw)); }
+      if (mutation === 'legacy') { const raw = JSON.parse(fs.readFileSync(record)); fs.writeFileSync(record, JSON.stringify(raw.payload)); }
+      const snapshot = () => {
+        const rows = [];
+        const visit = dir => { for (const name of fs.readdirSync(dir).sort()) {
+          const file = path.join(dir, name), stat = fs.lstatSync(file);
+          rows.push([path.relative(value.root,file), stat.mode, stat.ino, stat.mtimeMs, stat.ctimeMs,
+            stat.isSymbolicLink() ? fs.readlinkSync(file) : stat.isFile() ? fs.readFileSync(file).toString('hex') : null]);
+          if (stat.isDirectory()) visit(file);
+        } }; visit(value.root); return rows;
+      };
+      const before = snapshot();
+      const input = {worktreePath:value.root, ticket:value.ticket, base:'main', boundaryStore:store, dispatchId};
+      for (const consumer of ['validate', 'read', 'seal']) {
+        assert.throws(() => roleArtifact[consumer](input), error => ['MISSING_RECEIPT','RECORD_FAILED'].includes(error.code));
+        assert.deepEqual(snapshot(), before);
+      }
+    } finally { clean(value); }
+  });
+
+test('F2 original durable receipt parity and genuine fresh-process DIRECT Codex validate/read', async () => {
+  const fixtureAPI = require('./codex-arch-review-context.test.cjs');
+  const f = fixtureAPI.fixture();
+  try {
+    const {validationInput:input} = await fixtureAPI.unitJudgment(f);
+    const expected = roleArtifact.validateJudgmentManifest(input);
+    const preload = path.join(f.storage, 'F2-disposable-direct-cli-io.cjs');
+    fs.writeFileSync(preload, "require('node:os').homedir=()=>" + JSON.stringify(os.homedir()) + ";\n"
+      + "const cp=require('node:child_process'),original=cp.execFileSync;cp.execFileSync=function(executable,args,options){"
+      + "if(executable==='gh')return " + JSON.stringify(JSON.stringify(f.pr)) + ";"
+      + "if(executable==='git'&&args.includes('fetch'))return '';return original(executable,args,options);};\n");
+    const args = ['--worktree',input.worktreePath,'--role','arch-review','--ticket',input.ticket,
+      '--pr',String(input.pr),'--base',input.base,'--boundary-store',path.join(f.storage,'receipts'),
+      '--dispatch-id',input.dispatchId,'--artifact',input.artifactPath,'--artifact-digest',input.artifactDigest];
+    const keyFiles = fs.readdirSync(f.storage).filter(name => name.startsWith('.shipyard-dispatch-authority-'));
+    assert.equal(keyFiles.length, 1);
+    const receiptDirectory = path.join(f.storage, 'receipts');
+    const records = fs.readdirSync(receiptDirectory).sort().map(name => [name, fs.readFileSync(path.join(receiptDirectory,name))]);
+    const keys = keyFiles.map(name => [name, fs.readFileSync(path.join(f.storage,name))]);
+    for (const command of ['validate','read']) {
+      const result = spawnSync(process.execPath, ['--require',preload,ROLE_ARTIFACT,command,...args],
+        {encoding:'utf8',timeout:30000,maxBuffer:1024*1024});
+      assert.equal(result.status, 0, result.stderr);
+      assert.doesNotMatch(result.stderr, /assertArchiveInventory is not a function|circular dependency/i);
+      const output = JSON.parse(result.stdout);
+      assert.equal(output.envelope.verdict, expected.envelope.verdict);
+      const invalid = spawnSync(process.execPath, ['--require',preload,ROLE_ARTIFACT,command,...args.slice(0,-1),'0'.repeat(64)],
+        {encoding:'utf8',timeout:30000,maxBuffer:1024*1024});
+      assert.equal(invalid.status, 1);
+      assert.match(invalid.stderr, /ARTIFACT_DIGEST_MISMATCH/);
+      assert.equal(output.artifactDigest || output.artifact_digest, expected.artifactDigest || expected.artifact_digest);
+      assert.deepEqual(fs.readdirSync(receiptDirectory).sort(), records.map(([name]) => name));
+      for (const [name, bytes] of records) assert.deepEqual(fs.readFileSync(path.join(receiptDirectory,name)), bytes);
+      for (const [name, bytes] of keys) assert.deepEqual(fs.readFileSync(path.join(f.storage,name)), bytes);
+    }
+  } finally { fixtureAPI.cleanupJudgment(f); }
+});
+
 done();

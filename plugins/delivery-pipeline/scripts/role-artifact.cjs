@@ -13,7 +13,6 @@ const { acquire } = require('./lock.cjs');
 const { execFileSync } = require('node:child_process');
 const {
   boundaryError,
-  createDurableRecorder,
   isDurableRecorder,
 } = require('./dispatch-boundary.cjs');
 const {
@@ -258,10 +257,43 @@ function gitIdentity(input, worktree) {
   return identity;
 }
 
+function readonlyOriginalRecorder(store) {
+  const root = path.resolve(store);
+  const keyName = `.shipyard-dispatch-authority-${digest(root)}.key`;
+  const canonical = require('./model-policy-internal.cjs').stableStringify;
+  return Object.freeze({
+    getVerifiedRecord(dispatchId) {
+      if (!fs.existsSync(root)) return null;
+      const directory = fs.lstatSync(root);
+      if (!directory.isDirectory() || directory.isSymbolicLink())
+        fail('RECORD_FAILED', 'original durable dispatch store must be a physical directory');
+      const physicalRoot = fs.realpathSync(root);
+      const keyFile = path.join(fs.realpathSync(path.dirname(root)), keyName);
+      const keyStat = fs.lstatSync(keyFile);
+      if (!keyStat.isFile() || keyStat.isSymbolicLink() || (keyStat.mode & 0o077) !== 0)
+        fail('RECORD_FAILED', 'original durable dispatch authority key is invalid or too broadly accessible');
+      const key = readImmutableFile(fs, keyFile, 'original durable dispatch authority key', 32, 32);
+      const file = path.join(physicalRoot, `record-${digest(dispatchId)}.json`);
+      if (!fs.existsSync(file)) return null;
+      const raw = JSON.parse(readImmutableFile(fs, file, 'original durable dispatch record', 16 * 1024 * 1024));
+      const retainedKey = readImmutableFile(fs, keyFile, 'original durable dispatch authority key', 32, 32);
+      if (!sameStat(keyStat, fs.lstatSync(keyFile)) || !key.equals(retainedKey)
+          || !sameStat(directory, fs.lstatSync(root)) || fs.realpathSync(root) !== physicalRoot)
+        fail('RECORD_FAILED', 'original durable dispatch authority changed during authentication');
+      if (!object(raw) || raw.format !== 'adr-014.durable-boundary.v1'
+          || !object(raw.payload) || !object(raw.integrity)
+          || raw.integrity.algorithm !== 'hmac-sha256'
+          || typeof raw.integrity.mac !== 'string' || !/^[a-f0-9]{64}$/.test(raw.integrity.mac)) return null;
+      const expected = crypto.createHmac('sha256', key).update(canonical(raw.payload)).digest();
+      return crypto.timingSafeEqual(expected, Buffer.from(raw.integrity.mac, 'hex')) ? raw.payload : null;
+    },
+  });
+}
+
 function recorderFor(input) {
   if (isDurableRecorder(input.recorder)) return input.recorder;
   if (typeof input.boundaryStore === 'string' && input.boundaryStore.trim()) {
-    return createDurableRecorder(input.boundaryStore);
+    return readonlyOriginalRecorder(input.boundaryStore);
   }
   fail('RECORD_UNAVAILABLE', 'trusted artifact validation requires the durable dispatch recorder');
 }
@@ -3934,20 +3966,7 @@ function cli(argv) {
   return 0;
 }
 
-if (require.main === module) {
-  try {
-    process.exitCode = cli(process.argv.slice(2));
-  } catch (error) {
-    process.stderr.write(`${JSON.stringify({ error: {
-      name: error.name,
-      code: error.code || 'ARTIFACT_FAILURE',
-      message: error.message,
-    } })}\n`);
-    process.exitCode = 1;
-  }
-}
-
-module.exports = Object.freeze({
+module.exports = Object.freeze(Object.assign(Object.create(null), {
   ROLE_ARTIFACT_SCHEMA,
   ENVELOPE_SCHEMA,
   ENVELOPE_MAX_BYTES,
@@ -3995,4 +4014,17 @@ module.exports = Object.freeze({
   sealRoleArtifact: seal,
   validateRoleArtifact: validate,
   readRoleArtifact: read,
-});
+}));
+
+if (require.main === module) {
+  try {
+    process.exitCode = cli(process.argv.slice(2));
+  } catch (error) {
+    process.stderr.write(`${JSON.stringify({ error: {
+      name: error.name,
+      code: error.code || 'ARTIFACT_FAILURE',
+      message: error.message,
+    } })}\n`);
+    process.exitCode = 1;
+  }
+}
