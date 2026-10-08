@@ -1085,7 +1085,7 @@ function validatePlanningContainmentSnapshot(snapshot, identity) {
     for (const entry of entries) {
       if (!Array.isArray(entry) || entry.length !== 2 || typeof entry[0] !== 'string'
           || !entry[0] || entry[0].length > 8192 || /[\\\0]/.test(entry[0])
-          || path.isAbsolute(entry[0]) || entry[0].split('/').some(part => !part || part === '.' || part === '..')
+          || path.isAbsolute(entry[0]) || entry[0].replace(/\/$/, '').split('/').some(part => !part || part === '.' || part === '..')
           || (previous !== null && previous >= entry[0]))
         fail('CONTAINMENT_AUTHORITY_INVALID', 'containment paths must be unique sorted bounded relative entries');
       const value = entry[1];
@@ -1141,11 +1141,20 @@ function readPlanningContainmentBaseline({ worktree, binding, reference } = {}) 
   const state = authorityState(identity.worktree, false, false, false);
   const file = path.join(state.directory, reference.reference);
   if (!fs.existsSync(file)) fail('CONTAINMENT_AUTHORITY_REQUIRED', 'original protected containment baseline is missing');
-  const envelope = JSON.parse(authorityFile(file));
-  const mac = crypto.createHmac('sha256', state.key).update(stable(envelope.payload)).digest('hex');
-  if (!object(envelope.payload) || !/^[a-f0-9]{64}$/.test(envelope.mac || '')
-      || !crypto.timingSafeEqual(Buffer.from(mac, 'hex'), Buffer.from(envelope.mac, 'hex'))
+  const bytes = authorityFile(file);
+  let envelope;
+  try { envelope = JSON.parse(bytes); }
+  catch (error) {
+    if (!(error instanceof SyntaxError)) throw error;
+    fail('CONTAINMENT_AUTHORITY_INVALID', 'original containment envelope is malformed JSON');
+  }
+  if (!object(envelope) || !object(envelope.payload)
+      || typeof envelope.mac !== 'string' || !/^[a-f0-9]{64}$/.test(envelope.mac)
       || envelope.payload.schema !== 'shipyard.planning-containment.v1'
+      || !object(envelope.payload.identity) || !object(envelope.payload.snapshot))
+    fail('CONTAINMENT_AUTHORITY_INVALID', 'original containment envelope is malformed');
+  const mac = crypto.createHmac('sha256', state.key).update(stable(envelope.payload)).digest('hex');
+  if (!crypto.timingSafeEqual(Buffer.from(mac, 'hex'), Buffer.from(envelope.mac, 'hex'))
       || stable(envelope.payload.identity) !== stable(identity)
       || digest(stable(envelope.payload)) !== reference.sha256)
     fail('CONTAINMENT_AUTHORITY_INVALID', 'original containment envelope authentication failed');

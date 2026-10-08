@@ -1474,6 +1474,42 @@ function containmentAuthorityFixture(value = fixture(), leaseEpoch = 1) {
 
 suite('original protected planning containment');
 
+test('phase47 original containment recovery preserves an unchanged untracked nested repository directory', () => {
+  const value = fixture();
+  try {
+    const vendor = path.join(value.root, 'vendor');
+    fs.mkdirSync(vendor);
+    git(vendor, ['init']);
+    fs.writeFileSync(path.join(vendor, 'nested.txt'), 'original nested repository content\n');
+    assert.ok(git(value.root, ['status', '--porcelain=v1', '--untracked-files=all']).includes('?? vendor/'));
+    const c = containmentAuthorityFixture(value);
+    assert.deepEqual(c.snapshot.status.find(([key]) => key === 'vendor/'), ['vendor/', '??']);
+    assert.match(c.snapshot.sources.find(([key]) => key === 'vendor/')[1], /^\d+:directory$/);
+    assert.equal(c.snapshot.sources.some(([key]) => key === 'vendor'), false);
+    const bytes = fs.readFileSync(c.file);
+    const restored = c.sealer.restoreContainmentBaseline({ worktree: c.root, binding: c.binding,
+      reference: c.reference, recoveredEpoch: 2 });
+    c.sealer.assertContained({ worktree: c.root, allowed: [], baseline: restored });
+    assert.deepEqual(c.read(), c.snapshot);
+    assert.deepEqual(c.sealer.persistContainmentBaseline({ worktree: c.root, baseline: restored,
+      binding: c.binding }), c.reference);
+    assert.deepEqual(fs.readFileSync(c.file), bytes);
+    assert.equal(fs.readFileSync(path.join(vendor, 'nested.txt'), 'utf8'), 'original nested repository content\n');
+  } finally { clean(value); }
+});
+
+for (const [name, bytes] of Object.entries({ truncated: '{"payload":', emptyObject: '{}', null: 'null',
+  missingPayload: '{"mac":"' + '0'.repeat(64) + '"}', nullPayload: '{"payload":null}',
+  malformedMac: '{"payload":{},"mac":[]}' }))
+  test('phase47 original containment recovery rejects malformed protected JSON ' + name, () => {
+    const c = containmentAuthorityFixture();
+    try {
+      fs.writeFileSync(c.file, bytes);
+      assert.throws(() => c.read(), { code: 'CONTAINMENT_AUTHORITY_INVALID' });
+      assert.equal(fs.readFileSync(c.file, 'utf8'), bytes);
+    } finally { clean(c.value); }
+  });
+
 test('phase47 original containment recovery authenticates initial epoch zero and requires its exact successor', () => {
   const c = containmentAuthorityFixture(fixture(), 0);
   try {
@@ -1516,6 +1552,11 @@ for (const [name, mutate] of Object.entries({
   duplicate(s) { s.sources.push(s.sources[0]); },
   escaped(s) { s.sources[0][0] = '../escape'; },
   absolute(s) { s.sources[0][0] = '/escape'; },
+  repeatedSlash(s) { s.sources[0][0] = 'vendor//'; },
+  interiorSlash(s) { s.sources[0][0] = 'vendor//child/'; },
+  traversalSlash(s) { s.sources[0][0] = 'vendor/../'; },
+  dotSlash(s) { s.sources[0][0] = 'vendor/./'; },
+  absoluteSlash(s) { s.sources[0][0] = '/vendor/'; },
   backslash(s) { s.sources[0][0] = 'a\\b'; },
   unsorted(s) { s.sources.reverse(); },
   missing(s) { delete s.sources; },
