@@ -129,8 +129,9 @@ function comparePackage(directory, binding, sealed = false) {
 function inspectCandidate(candidate, root = ROOT, kind = 'main-review-repair') {
   const publication = require('../unit/phase47-package-publication.test.cjs');
   const common = gitText(root, 'rev-parse', '--path-format=absolute', '--git-common-dir');
-  assert(['original', 'final', 'successor', 'volume-successor', 'main-review-repair'].includes(kind), 'unknown generation branch');
+  assert(['original', 'final', 'successor', 'volume-successor', 'main-review-repair', 'historical-F1'].includes(kind), 'unknown generation branch');
   const authenticated = kind === 'main-review-repair' ? publication.authenticateRepairSuccessor(common, root)
+    : kind === 'historical-F1' ? publication.authenticateRepairSuccessor(common, root, 'F1', publication.F1_HISTORICAL_CONTRACT)
     : kind === 'volume-successor' ? publication.authenticateVolumeSuccessor(common, root, true)
     : kind === 'successor' ? publication.authenticateSuccessor(common, root, true)
     : kind === 'final' ? publication.authenticateFinal(common, root, true)
@@ -149,8 +150,8 @@ function inspectCandidate(candidate, root = ROOT, kind = 'main-review-repair') {
     selection_path: selectionPath, selection_sha256: handback.selection_sha256,
     binding_path: selection.binding_path, binding_sha256: selection.binding_sha256,
     candidate_path: selection.candidate_path, candidate_sha256: selection.candidate_sha256,
-    generation_handback: { path: kind === 'main-review-repair' ? publication.F1_HANDOFF : kind === 'volume-successor' ? publication.VOLUME_HANDOFF : kind === 'successor' ? publication.SUCCESSOR_HANDOFF : kind === 'final' ? publication.FINAL_HANDOFF : HANDOFF,
-      sha256: kind === 'main-review-repair' ? publication.F1_HANDOFF_SHA : kind === 'volume-successor' ? publication.VOLUME_HANDOFF_SHA : kind === 'successor' ? publication.SUCCESSOR_HANDOFF_SHA : kind === 'final' ? publication.FINAL_HANDOFF_SHA : HANDOFF_SHA256 },
+    generation_handback: { path: kind === 'main-review-repair' ? publication.R2_HANDOFF : kind === 'historical-F1' ? publication.F1_HANDOFF : kind === 'volume-successor' ? publication.VOLUME_HANDOFF : kind === 'successor' ? publication.SUCCESSOR_HANDOFF : kind === 'final' ? publication.FINAL_HANDOFF : HANDOFF,
+      sha256: kind === 'main-review-repair' ? publication.R2_HANDOFF_SHA : kind === 'historical-F1' ? publication.F1_HANDOFF_SHA : kind === 'volume-successor' ? publication.VOLUME_HANDOFF_SHA : kind === 'successor' ? publication.SUCCESSOR_HANDOFF_SHA : kind === 'final' ? publication.FINAL_HANDOFF_SHA : HANDOFF_SHA256 },
     historical_only: kind !== 'main-review-repair', generation_kind: kind }, authenticated };
   if (kind === 'main-review-repair') {
     publication.recheckRepairSuccessor(authenticated, root);
@@ -351,7 +352,7 @@ function validateLedger(ledger) {
     const volume = ledger.corrective_generation.kind === 'volume-successor';
     assert(['successor', 'volume-successor', 'main-review-repair'].includes(ledger.corrective_generation.kind), 'unknown corrective generation');
     assert.deepEqual(ledger.corrective_generation.handback,
-      { path: repair ? publication.F1_HANDOFF : volume ? publication.VOLUME_HANDOFF : publication.SUCCESSOR_HANDOFF, sha256: repair ? publication.F1_HANDOFF_SHA : volume ? publication.VOLUME_HANDOFF_SHA : publication.SUCCESSOR_HANDOFF_SHA }, 'foreign corrective handback');
+      { path: repair ? publication.R2_HANDOFF : volume ? publication.VOLUME_HANDOFF : publication.SUCCESSOR_HANDOFF, sha256: repair ? publication.R2_HANDOFF_SHA : volume ? publication.VOLUME_HANDOFF_SHA : publication.SUCCESSOR_HANDOFF_SHA }, 'foreign corrective handback');
     const common = gitText(ROOT, 'rev-parse', '--path-format=absolute', '--git-common-dir');
     const authenticated = repair ? publication.authenticateRepairSuccessor(common)
       : volume ? publication.authenticateVolumeSuccessor(common, ROOT, true)
