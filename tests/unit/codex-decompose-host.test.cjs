@@ -8,6 +8,11 @@ const path = require('node:path');
 const { EventEmitter } = require('node:events');
 const { spawnSync } = require('node:child_process');
 const test = require.main === module ? require('node:test') : () => {};
+const testAuthorityHome = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'containment-authority-')));
+const testOriginalHomedir = os.homedir;
+os.homedir = () => testAuthorityHome;
+process.on('exit', () => { os.homedir = testOriginalHomedir; fs.rmSync(testAuthorityHome, { recursive: true, force: true }); });
+
 const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
 const { codexStaticVariants } = require('../../plugins/delivery-pipeline/scripts/gsd-tune.cjs');
 const { createDurableRecorder } = require('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs');
@@ -27,6 +32,7 @@ for (const first of ['deliver-dispatch', 'codex-decompose-host']) {
     try {
       const scripts = path.resolve(__dirname, '../../plugins/delivery-pipeline/scripts');
       const bootstrap = `
+        require('node:os').homedir = () => ${JSON.stringify(testAuthorityHome)};
         const assert = require('node:assert/strict');
         const crypto = require('node:crypto');
         const fs = require('node:fs');
@@ -1504,7 +1510,7 @@ test('recover rebuilds the original ' + gsdRole + ' receipt after completion was
 }
 
 for (const role of ['gsd-phase-researcher', 'gsd-planner', 'gsd-plan-checker']) {
-  test(`dirty ${role} recovery inspects original completion and refuses without live containment authority`, async () => {
+  test(`phase47 original containment recovery legacy ${role} refuses caller authority`, async () => {
     const setup = await recoverySetup(role, { preparedDirtyInputs: true,
       sealedResearchSibling: role === 'gsd-planner' });
     try {
@@ -1513,6 +1519,9 @@ for (const role of ['gsd-phase-researcher', 'gsd-planner', 'gsd-plan-checker']) 
         crypto.createHash('sha256').update(setup.dispatchId).digest('hex') + '.launch.json');
       const originalBytes = fs.readFileSync(launchFile, 'utf8');
       const original = JSON.parse(originalBytes);
+      delete original.containment_baseline;
+      fs.writeFileSync(launchFile, JSON.stringify(original));
+      const legacyBytes = fs.readFileSync(launchFile, 'utf8');
       assert.equal(original.gsd_role, role);
       assert.ok(original.completed);
       assert.equal(original.containmentBaseline, undefined);
@@ -1531,9 +1540,8 @@ for (const role of ['gsd-phase-researcher', 'gsd-planner', 'gsd-plan-checker']) 
         containmentBaseline: JSON.parse(JSON.stringify(setup.containmentBaseline)),
         dirtyAllowlist: ['source.cjs', '.planning/input-manifest.json'],
       };
-      await assert.rejects(setup.recover(setup.dispatchId, callerOptions), error => error.code === 'RECOVERY_ARTIFACT_ALTERED'
-        && /source\.cjs/.test(error.message) && /input-manifest\.json/.test(error.message));
-      assert.equal(fs.readFileSync(launchFile, 'utf8'), originalBytes);
+      assert.equal(freshContainmentRecovery(setup, callerOptions).code, 'CONTAINMENT_AUTHORITY_REQUIRED');
+      assert.equal(fs.readFileSync(launchFile, 'utf8'), legacyBytes);
       assert.equal(fs.existsSync(setup.recordFile), false);
       assert.equal(setup.recorder.getReservation(setup.dispatchId).recorded, false);
       assert.equal(setup.spawned.length, 0);
@@ -2360,4 +2368,154 @@ for (const mutation of ['SOURCE', 'GRAPH']) test('supported caller keeps origina
     if (pid && dispatch.pidLive(pid)) { try { process.kill(pid, 'SIGTERM'); } catch {} }
     f.clean();
   }
+});
+
+function freshContainmentRecovery(setup, overrides = {}) {
+  const script = `
+    require('node:os').homedir = () => ${JSON.stringify(testAuthorityHome)};
+    const { runCli } = require(${JSON.stringify(path.resolve(__dirname, '../../plugins/delivery-pipeline/scripts/codex-decompose-host.cjs'))});
+    let spawns = 0;
+    const options = ${JSON.stringify({ env: { CODEX_HOME: setup.f.codexHome },
+      agentDir: setup.f.agentDir, agentManifest: path.join(setup.f.agentDir, '.shipyard-manifest.json'),
+      testStateRoot: setup.f.stateRoot, testWriterStateRoot: path.join(setup.f.stateRoot, 'shared-writer'),
+      probe: { status: 'available', executable: 'codex', runtime_version: '0.157.1', capabilities } })};
+    Object.assign(options, ${JSON.stringify(overrides)});
+    options.spawn = () => { spawns++; throw new Error('replacement spawn forbidden'); };
+    runCli(${JSON.stringify(['recover', '--dispatch', setup.dispatchId, '--args-file', setup.file])}, { write() {} }, options)
+      .then(result => console.log(JSON.stringify({ result, spawns })))
+      .catch(error => console.log(JSON.stringify({ code: error.code, message: error.message, spawns })));
+  `;
+  const child = spawnSync(process.execPath, ['-e', script], { encoding: 'utf8', timeout: 30000 });
+  assert.equal(child.status, 0, child.stderr);
+  const value = JSON.parse(child.stdout.trim());
+  assert.equal(value.spawns, 0);
+  return value;
+}
+
+for (const role of ['gsd-phase-researcher', 'gsd-planner', 'gsd-plan-checker']) {
+  test(`phase47 original containment recovery fresh ${role} seals unchanged dirt once`, async () => {
+    const setup = await recoverySetup(role, { preparedDirtyInputs: true });
+    try {
+      assert.equal(setup.crashError.code, 'SIMULATED_HOST_DEATH');
+      assert.equal(setup.runtimeSpawnCalls.length, 1);
+      const source = fs.readFileSync(path.join(setup.f.root, 'source.cjs'));
+      const launchFile = path.join(setup.hostState, 'launches',
+        crypto.createHash('sha256').update(setup.dispatchId).digest('hex') + '.launch.json');
+      const original = JSON.parse(fs.readFileSync(launchFile));
+      assert.match(original.containment_baseline.reference, /^planning-containment-[a-f0-9]{64}\.json$/);
+      assert.match(original.containment_baseline.sha256, /^[a-f0-9]{64}$/);
+      assert.deepEqual(Object.keys(original.containment_baseline).sort(), ['reference', 'sha256']);
+      assert.equal(JSON.stringify(setup.runtimeSpawnCalls).includes(original.containment_baseline.reference), false);
+      setup.setLeasePid(2147483647);
+      const recovered = freshContainmentRecovery(setup);
+      assert.equal(recovered.code, undefined, recovered.message);
+      assert.equal(recovered.result.recovered, true);
+      assert.equal(recovered.result.receipt.dispatch_id, setup.dispatchId);
+      assert.equal(recovered.result.receipt.launch_id, 'codex-' + setup.expectedSessionId);
+      assert.equal(recovered.result.receipt.runtime_evidence.native_child_evidence.session_id, setup.fixtureData.childId);
+      assert.equal(recovered.result.receipt.compliance, 'verified');
+      assert.deepEqual(recovered.result.receipt.runtime_evidence.native_session_evidence,
+        original.completed.runtime_evidence.native_session_evidence);
+      assert.deepEqual(recovered.result.receipt.runtime_evidence.native_child_evidence,
+        original.completed.runtime_evidence.native_child_evidence);
+      assert.equal(setup.recorder.getReservation(setup.dispatchId).recorded, true);
+      const receipt = fs.readFileSync(setup.recordFile);
+      assert.equal(freshContainmentRecovery(setup).code, 'RECOVERY_ALREADY_RECORDED');
+      assert.deepEqual(fs.readFileSync(setup.recordFile), receipt);
+      assert.deepEqual(fs.readFileSync(path.join(setup.f.root, 'source.cjs')), source);
+    } finally { setup.f.clean(); }
+  });
+}
+
+const containmentMutations = {
+  source(s) { fs.appendFileSync(path.join(s.f.root, 'source.cjs'), 'changed'); },
+  hidden(s) { git(s.f.root, 'update-index', '--assume-unchanged', 'source.cjs'); fs.appendFileSync(path.join(s.f.root, 'source.cjs'), 'hidden'); },
+  index(s) { git(s.f.root, 'add', 'source.cjs'); },
+  head(s) { git(s.f.root, 'commit', '--allow-empty', '-m', 'new head'); },
+  create(s) { fs.writeFileSync(path.join(s.f.root, 'foreign.txt'), 'foreign'); },
+  remove(s) { fs.unlinkSync(path.join(s.f.root, '.planning', 'input-manifest.json')); },
+  status(s) { fs.chmodSync(path.join(s.f.root, 'source.cjs'), 0o755); },
+  request(s) { const r = JSON.parse(fs.readFileSync(s.file)); r.prompt += ' altered'; fs.writeFileSync(s.file, JSON.stringify(r)); },
+  scope(s) { const r = JSON.parse(fs.readFileSync(s.file)); r.scope.run_id += '-other'; fs.writeFileSync(s.file, JSON.stringify(r)); },
+  worktree(s) { const alias = path.join(s.f.stateRoot, 'other-worktree'); fs.symlinkSync(s.f.root, alias);
+    const r = JSON.parse(fs.readFileSync(s.file)); r.scope.worktree = alias; fs.writeFileSync(s.file, JSON.stringify(r)); },
+  reference(s, r) { r.containment_baseline.reference = 'planning-containment-' + '0'.repeat(64) + '.json'; },
+  digest(s, r) { r.containment_baseline.sha256 = '0'.repeat(64); },
+  missingAuthority(s, r) { alterProtectedContainment(s, r, () => {}, true); },
+  policy(s, r) { r.binding.policy_hash = '0'.repeat(64); },
+  lease(s, r) { r.lease_epoch++; },
+  leaseIdentity(s, r) { r.containment_lease_sha256 = '0'.repeat(64); },
+  leaseFile(s, r) { r.writer_lease_file += '-other'; },
+  launchTime(s, r) { r.launched_at = '2026-10-08T00:00:00.000Z'; },
+  snapshot(s, r) { r.tree_snapshot.digests['forged'] = '0'.repeat(64); },
+  legacy(s, r) { delete r.containment_baseline; },
+  payload(s, r) { alterProtectedContainment(s, r, e => { e.payload.snapshot.head = '0'.repeat(40); }); },
+  mac(s, r) { alterProtectedContainment(s, r, e => { e.mac = '0'.repeat(64); }); },
+  replay(s, r) { r.binding.dispatch_id = 'earlier-dispatch'; },
+};
+
+function alterProtectedContainment(setup, record, alter, remove = false) {
+  const directory = path.join(testAuthorityHome, '.local/state/shipyard/role-artifact-authority',
+    crypto.createHash('sha256').update(fs.realpathSync(setup.f.root)).digest('hex'));
+  const file = path.join(directory, record.containment_baseline.reference);
+  if (remove) { fs.unlinkSync(file); return; }
+  const envelope = JSON.parse(fs.readFileSync(file));
+  alter(envelope);
+  fs.writeFileSync(file, JSON.stringify(envelope), { mode: 0o600 });
+}
+
+for (const [name, mutate] of Object.entries(containmentMutations)) {
+  test(`phase47 original containment recovery refuses ${name} in a fresh process`, async () => {
+    const setup = await recoverySetup('gsd-planner', { preparedDirtyInputs: true });
+    try {
+      assert.equal(setup.crashError.code, 'SIMULATED_HOST_DEATH');
+      const launchFile = path.join(setup.hostState, 'launches',
+        crypto.createHash('sha256').update(setup.dispatchId).digest('hex') + '.launch.json');
+      const record = JSON.parse(fs.readFileSync(launchFile));
+      mutate(setup, record);
+      fs.writeFileSync(launchFile, JSON.stringify(record));
+      const source = fs.readFileSync(path.join(setup.f.root, 'source.cjs'));
+      setup.setLeasePid(2147483647);
+      const refused = freshContainmentRecovery(setup);
+      const expected = {
+        source: ['RECOVERY_ARTIFACT_ALTERED'], hidden: ['RECOVERY_ARTIFACT_ALTERED'],
+        index: ['RECOVERY_ARTIFACT_ALTERED'], head: ['BASE_MOVED'],
+        create: ['RECOVERY_ARTIFACT_ALTERED'], remove: ['RECOVERY_ARTIFACT_ALTERED'], status: ['RECOVERY_ARTIFACT_ALTERED'],
+        request: ['RECOVERY_EVIDENCE_INCOMPLETE'], scope: ['RECOVERY_NO_RESERVATION', 'RECOVERY_EVIDENCE_INCOMPLETE'],
+        worktree: ['RECOVERY_NO_RESERVATION', 'RECOVERY_EVIDENCE_INCOMPLETE'],
+        reference: ['CONTAINMENT_AUTHORITY_INVALID'], digest: ['CONTAINMENT_AUTHORITY_INVALID'],
+        missingAuthority: ['CONTAINMENT_AUTHORITY_REQUIRED'], policy: ['RECOVERY_EVIDENCE_INCOMPLETE'],
+        lease: ['RECOVERY_EVIDENCE_INCOMPLETE'], leaseIdentity: ['CONTAINMENT_AUTHORITY_INVALID'],
+        leaseFile: ['LEGACY_WRITER_STATE'], launchTime: ['CONTAINMENT_AUTHORITY_INVALID', 'RECOVERY_EVIDENCE_INCOMPLETE'],
+        snapshot: ['FOREIGN_EDIT', 'CONTAINMENT_AUTHORITY_INVALID'], legacy: ['CONTAINMENT_AUTHORITY_REQUIRED'],
+        payload: ['CONTAINMENT_AUTHORITY_INVALID'], mac: ['CONTAINMENT_AUTHORITY_INVALID'],
+        replay: ['RECOVERY_EVIDENCE_INCOMPLETE'],
+      };
+      assert.ok(expected[name].includes(refused.code), JSON.stringify(refused));
+      assert.equal(refused.result, undefined);
+      assert.equal(fs.existsSync(setup.recordFile), false);
+      assert.equal(setup.recorder.getReservation(setup.dispatchId).recorded, false);
+      assert.deepEqual(fs.readFileSync(path.join(setup.f.root, 'source.cjs')), source);
+    } finally { setup.f.clean(); }
+  });
+}
+
+test('phase47 original containment recovery refuses an earlier genuine dispatch snapshot', async () => {
+  const original = await recoverySetup('gsd-planner', { preparedDirtyInputs: true });
+  const other = await recoverySetup('gsd-planner', { preparedDirtyInputs: true });
+  try {
+    assert.equal(original.crashError.code, 'SIMULATED_HOST_DEATH');
+    assert.equal(other.crashError.code, 'SIMULATED_HOST_DEATH');
+    const fileFor = s => path.join(s.hostState, 'launches',
+      crypto.createHash('sha256').update(s.dispatchId).digest('hex') + '.launch.json');
+    const record = JSON.parse(fs.readFileSync(fileFor(original)));
+    record.containment_baseline = JSON.parse(fs.readFileSync(fileFor(other))).containment_baseline;
+    fs.writeFileSync(fileFor(original), JSON.stringify(record));
+    original.setLeasePid(2147483647);
+    assert.equal(freshContainmentRecovery(original).code, 'CONTAINMENT_AUTHORITY_INVALID');
+    assert.equal(fs.existsSync(original.recordFile), false);
+    assert.equal(fs.existsSync(other.recordFile), false);
+    assert.equal(original.recorder.getReservation(original.dispatchId).recorded, false);
+    assert.equal(other.recorder.getReservation(other.dispatchId).recorded, false);
+  } finally { original.f.clean(); other.f.clean(); }
 });

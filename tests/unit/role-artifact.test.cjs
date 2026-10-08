@@ -1450,4 +1450,146 @@ test('phase-local archive scope: independently authenticated original record wit
   } finally { cleanPhaseScope(value); }
 });
 
+function containmentAuthorityFixture(value = fixture(), leaseEpoch = 1) {
+  const crypto = require('node:crypto');
+  const root = fs.realpathSync(value.root);
+  const binding = { launch: { scope: { worktree: root, run_id: 'original-run', ticket: value.ticket, phase: 47, runtime: 'codex', provider: 'openai' },
+    dispatch_id: 'original-dispatch', gsd_role: 'gsd-planner', role: 'decomposition',
+    request_sha256: '1'.repeat(64), policy_hash: '2'.repeat(64), policy_version: 'original-policy',
+    model: 'gpt-6.1-sol', effort: 'low', rung: 'base',
+    agent: { file: path.join(root, 'agent.toml'), sha256: '3'.repeat(64), instructions_sha256: '6'.repeat(64) } },
+    launched_at: '2026-10-08T00:00:00.000Z', reservation: { dispatch_id: 'original-dispatch', reserved_at: 'original-reservation' },
+    source_revision: git(root, ['rev-parse', 'HEAD']), writer_lease_file: path.join(root, 'lease.json'),
+    lease_epoch: leaseEpoch, lease_identity_sha256: '4'.repeat(64), tree_snapshot_sha256: '5'.repeat(64) };
+  const sealer = require('../../plugins/delivery-pipeline/scripts/planning-result-sealer.cjs');
+  const token = sealer.captureContainmentBaseline({ worktree: root });
+  const reference = sealer.persistContainmentBaseline({ worktree: root, baseline: token, binding });
+  const directory = roleArtifact.archiveAuthorityDirectory(root);
+  const file = path.join(directory, reference.reference);
+  const read = (overrides = {}) => roleArtifact.readPlanningContainmentBaseline({ worktree: root, binding, reference, ...overrides });
+  const snapshot = read();
+  const register = (overrides = {}) => roleArtifact.registerPlanningContainmentBaseline({ worktree: root, binding, snapshot, ...overrides });
+  return { value, root, binding, sealer, token, reference, directory, file, read, register, snapshot, crypto };
+}
+
+suite('original protected planning containment');
+
+test('phase47 original containment recovery authenticates initial epoch zero and requires its exact successor', () => {
+  const c = containmentAuthorityFixture(fixture(), 0);
+  try {
+    assert.equal(c.read().head, c.binding.source_revision);
+    const restored = c.sealer.restoreContainmentBaseline({ worktree: c.root, binding: c.binding,
+      reference: c.reference, recoveredEpoch: 1 });
+    c.sealer.assertContained({ worktree: c.root, allowed: [], baseline: restored });
+    for (const recoveredEpoch of [0, 2])
+      assert.throws(() => c.sealer.restoreContainmentBaseline({ worktree: c.root, binding: c.binding,
+        reference: c.reference, recoveredEpoch }), { code: 'CONTAINMENT_BASELINE_INVALID' });
+    const binding = structuredClone(c.binding);
+    binding.lease_epoch = -1;
+    assert.throws(() => c.register({ binding }), { code: 'CONTAINMENT_AUTHORITY_INVALID' });
+  } finally { clean(c.value); }
+});
+
+test('phase47 original containment recovery private token persistence is immutable and restores only authenticated authority', () => {
+  const c = containmentAuthorityFixture();
+  try {
+    const bytes = fs.readFileSync(c.file);
+    assert.deepEqual(c.register(), c.reference);
+    assert.deepEqual(c.sealer.persistContainmentBaseline({ worktree: c.root, baseline: c.token, binding: c.binding }), c.reference);
+    const restored = c.sealer.restoreContainmentBaseline({ worktree: c.root, binding: c.binding, reference: c.reference, recoveredEpoch: 2 });
+    c.sealer.assertContained({ worktree: c.root, allowed: [], baseline: restored });
+    const replacement = structuredClone(c.binding);
+    replacement.launch.dispatch_id = 'replacement-dispatch';
+    replacement.reservation.dispatch_id = 'replacement-dispatch';
+    for (const baseline of [c.token, restored])
+      assert.throws(() => c.sealer.persistContainmentBaseline({ worktree: c.root, baseline, binding: replacement }), { code: 'CONTAINMENT_BASELINE_INVALID' });
+    assert.throws(() => c.sealer.persistContainmentBaseline({ worktree: c.root, baseline: {}, binding: c.binding }), { code: 'CONTAINMENT_BASELINE_INVALID' });
+    assert.throws(() => c.sealer.assertContained({ worktree: c.root, allowed: [], baseline: c.snapshot }), { code: 'CONTAINMENT_BASELINE_INVALID' });
+    assert.throws(() => c.sealer.restoreContainmentBaseline({ worktree: c.root, binding: c.binding, reference: c.reference, recoveredEpoch: 3 }), { code: 'CONTAINMENT_BASELINE_INVALID' });
+    const changed = structuredClone(c.snapshot); changed.index = '0'.repeat(64);
+    assert.throws(() => c.register({ snapshot: changed }), /immutable/);
+    assert.deepEqual(fs.readFileSync(c.file), bytes);
+  } finally { clean(c.value); }
+});
+
+for (const [name, mutate] of Object.entries({
+  duplicate(s) { s.sources.push(s.sources[0]); },
+  escaped(s) { s.sources[0][0] = '../escape'; },
+  absolute(s) { s.sources[0][0] = '/escape'; },
+  backslash(s) { s.sources[0][0] = 'a\\b'; },
+  unsorted(s) { s.sources.reverse(); },
+  missing(s) { delete s.sources; },
+  badIdentity(s) { s.sources[0][1] = 'unbound'; },
+  badStatus(s) { s.status = [['absent', '??']]; },
+  wrongHead(s) { s.head = '0'.repeat(40); },
+  wrongRoot(s) { s.root += '-other'; },
+})) test('phase47 original containment recovery rejects ' + name + ' serialized map', () => {
+  const c = containmentAuthorityFixture();
+  try {
+    const snapshot = structuredClone(c.snapshot); mutate(snapshot);
+    const bytes = fs.readFileSync(c.file);
+    assert.throws(() => c.register({ snapshot }), { code: 'CONTAINMENT_AUTHORITY_INVALID' });
+    assert.deepEqual(fs.readFileSync(c.file), bytes);
+  } finally { clean(c.value); }
+});
+
+for (const [name, mutate] of Object.entries({
+  run(b) { b.launch.scope.run_id += '-other'; },
+  ticket(b) { b.launch.scope.ticket += '-other'; },
+  phase(b) { b.launch.scope.phase++; },
+  dispatch(b) { b.launch.dispatch_id += '-other'; },
+  request(b) { b.launch.request_sha256 = '0'.repeat(64); },
+  policy(b) { b.launch.policy_hash = '0'.repeat(64); },
+  generatedSelection(b) { b.launch.generated_agent = { file: 'other.toml', sha256: '0'.repeat(64) }; },
+  source(b) { b.source_revision = '0'.repeat(40); },
+  lease(b) { b.lease_epoch++; },
+  leaseIdentity(b) { b.lease_identity_sha256 = '0'.repeat(64); },
+  leaseFile(b) { b.writer_lease_file += '-other'; },
+  tree(b) { b.tree_snapshot_sha256 = '0'.repeat(64); },
+  launchTime(b) { b.launched_at = '2026-10-08T01:00:00.000Z'; },
+  reservation(b) { b.reservation.reserved_at += '-other'; },
+})) test('phase47 original containment recovery rejects cross-launch ' + name + ' binding', () => {
+  const c = containmentAuthorityFixture();
+  try {
+    const binding = structuredClone(c.binding); mutate(binding);
+    assert.throws(() => c.read({ binding }), { code: 'CONTAINMENT_AUTHORITY_INVALID' });
+  } finally { clean(c.value); }
+});
+
+for (const name of ['payload', 'mac', 'digest', 'reference', 'missing', 'symlink', 'oversized', 'publicSnapshot', 'otherWorktree'])
+  test('phase47 original containment recovery authenticates protected ' + name, () => {
+    const c = containmentAuthorityFixture();
+    let other;
+    try {
+      const envelope = JSON.parse(fs.readFileSync(c.file));
+      let overrides = {};
+      if (name === 'payload') { envelope.payload.snapshot.index = '0'.repeat(64); fs.writeFileSync(c.file, JSON.stringify(envelope)); }
+      if (name === 'mac') { envelope.mac = '0'.repeat(64); fs.writeFileSync(c.file, JSON.stringify(envelope)); }
+      if (name === 'digest') overrides.reference = { ...c.reference, sha256: '0'.repeat(64) };
+      if (name === 'reference') overrides.reference = { ...c.reference, reference: '../hmac.key' };
+      if (name === 'missing') fs.unlinkSync(c.file);
+      if (name === 'symlink') { fs.unlinkSync(c.file); fs.symlinkSync(path.join(c.directory, 'hmac.key'), c.file); }
+      if (name === 'oversized') fs.writeFileSync(c.file, Buffer.alloc(4 * 1024 * 1024 + 1));
+      if (name === 'publicSnapshot') overrides.reference = c.snapshot;
+      if (name === 'otherWorktree') { other = fixture(); overrides.worktree = fs.realpathSync(other.root); }
+      assert.throws(() => c.read(overrides));
+    } finally { clean(c.value); if (other) clean(other); }
+  });
+
+for (const archived of [false, true]) test('phase47 original containment recovery retains missing original key with ' + (archived ? 'archive/source records' : 'baseline only'), () => {
+  const value = archived ? phaseScopeFixture() : fixture();
+  const c = containmentAuthorityFixture(value);
+  try {
+    const retained = fs.readdirSync(c.directory).filter(name => name !== 'hmac.key')
+      .map(name => [name, fs.readFileSync(path.join(c.directory, name))]);
+    const archivePins = archived ? value.rows.flatMap(row => row.pins.map(pin => [path.join(row.worktree, pin.path), fs.readFileSync(path.join(row.worktree, pin.path))])) : [];
+    fs.unlinkSync(path.join(c.directory, 'hmac.key'));
+    assert.throws(() => c.register(), /original authority key/);
+    assert.throws(() => c.read());
+    assert.equal(fs.existsSync(path.join(c.directory, 'hmac.key')), false);
+    for (const [name, bytes] of retained) assert.deepEqual(fs.readFileSync(path.join(c.directory, name)), bytes);
+    for (const [file, bytes] of archivePins) assert.deepEqual(fs.readFileSync(file), bytes);
+  } finally { if (archived) cleanPhaseScope(value); else clean(value); }
+});
+
 done();

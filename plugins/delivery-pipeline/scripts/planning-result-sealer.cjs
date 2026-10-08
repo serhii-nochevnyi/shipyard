@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { execFileSync } = require('node:child_process');
-const { SUMMARY_MAX_CHARS } = require('./role-artifact.cjs');
+const { SUMMARY_MAX_CHARS, registerPlanningContainmentBaseline, readPlanningContainmentBaseline } = require('./role-artifact.cjs');
 
 const RESEARCH_ARTIFACT_MAX_BYTES = 1024 * 1024;
 const DECOMPOSITION_PLAN_MAX_BYTES = 1024 * 1024;
@@ -398,6 +398,40 @@ function captureContainmentBaseline({ worktree } = {}) {
   return token;
 }
 
+function containmentBindingKey(value) {
+  if (Array.isArray(value)) return '[' + value.map(containmentBindingKey).join(',') + ']';
+  if (object(value)) return '{' + Object.keys(value).sort()
+    .map(key => JSON.stringify(key) + ':' + containmentBindingKey(value[key])).join(',') + '}';
+  return JSON.stringify(value);
+}
+
+function persistContainmentBaseline({ worktree, baseline, binding } = {}) {
+  const original = object(baseline) && containmentBaselines.get(baseline);
+  if (!original || original.root !== fs.realpathSync(worktree))
+    refuse('CONTAINMENT_BASELINE_INVALID', 'persistence requires the original private host token');
+  const bindingKey = containmentBindingKey(binding);
+  if (original.bindingKey !== undefined && original.bindingKey !== bindingKey)
+    refuse('CONTAINMENT_BASELINE_INVALID', 'an original containment token cannot authorize another launch binding');
+  const sorted = entries => [...entries].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0);
+  const reference = registerPlanningContainmentBaseline({ worktree, binding, snapshot: {
+    schema: 'shipyard.planning-containment-snapshot.v1', root: original.root,
+    head: original.head, index: original.index,
+    sources: sorted(original.sources), status: sorted(original.status),
+  } });
+  original.bindingKey = bindingKey;
+  return reference;
+}
+
+function restoreContainmentBaseline({ worktree, binding, reference, recoveredEpoch } = {}) {
+  if (!object(binding) || !Number.isSafeInteger(recoveredEpoch) || recoveredEpoch !== binding.lease_epoch + 1)
+    refuse('CONTAINMENT_BASELINE_INVALID', 'restoration requires the original lease epoch successor');
+  const original = readPlanningContainmentBaseline({ worktree, binding, reference });
+  const token = Object.freeze({});
+  containmentBaselines.set(token, { root: original.root, head: original.head, index: original.index,
+    sources: new Map(original.sources), status: new Map(original.status), bindingKey: containmentBindingKey(binding) });
+  return token;
+}
+
 function assertContained({ worktree, allowed, baseline } = {}) {
   if (typeof worktree !== 'string' || !worktree.trim()) refuse('CONTAINMENT_INPUT_INVALID', 'assertContained requires a worktree path');
   const root = fs.realpathSync(worktree);
@@ -454,4 +488,6 @@ module.exports = Object.freeze({
   verifySealedLine,
   assertContained,
   captureContainmentBaseline,
+  persistContainmentBaseline,
+  restoreContainmentBaseline,
 });
