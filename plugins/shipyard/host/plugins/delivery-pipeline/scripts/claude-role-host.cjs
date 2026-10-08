@@ -85,12 +85,14 @@ function parseRequest(value) {
   const role = safeText(value.role, 'role', 64);
   if (!ROLES.includes(role)) reject(`role must be ${ROLES.join(' or ')}`);
   const allowed = role === 'arch-review'
-    ? new Set(['schema', 'role', 'worktree', 'ticket', 'phase', 'pr', 'signals'])
+    ? new Set(['schema', 'role', 'worktree', 'ticket', 'phase', 'pr', 'signals', 'repo'])
     : new Set(['schema', 'role', 'worktree', 'phase', 'signals']);
   for (const key of Object.keys(value)) if (!allowed.has(key)) reject(`request field ${key} is not permitted`);
   if (role === 'arch-review' && value.phase !== undefined && (value.ticket !== undefined || value.pr === undefined))
     reject('phase architecture review requires an explicit PR and no ticket selector');
   if (role !== 'arch-review' && (value.ticket !== undefined || value.pr !== undefined)) reject(`${role} subject is derived from the canonical phase ticket set`);
+  if (value.repo !== undefined && !(role === 'arch-review' && value.phase !== undefined)) reject('repo requires phase architecture review');
+  if (value.repo !== undefined && value.repo !== null && (typeof value.repo !== 'string' || !/^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/.test(value.repo))) reject('invalid phase repository selector');
   const worktree = safeText(value.worktree, 'worktree', 2048);
   if (!path.isAbsolute(worktree)) reject('worktree must be an absolute path');
   let realWorktree;
@@ -109,6 +111,7 @@ function parseRequest(value) {
     }
   }
   return Object.freeze({ schema: REQUEST_SCHEMA, role, worktree: realWorktree, ...selector,
+    ...(value.phase !== undefined && role === 'arch-review' ? { repo: value.repo ?? null } : {}),
     ...(value.pr === undefined ? {} : { pr: value.pr }),
     ...(value.signals === undefined ? {} : { signals: Object.freeze({ ...value.signals }) }),
   });
@@ -450,7 +453,7 @@ function diffText(options, worktree, base, head, pathspec = productPathspec()) {
 
 function requestRows(request, graph, canonical) {
   if (request.role === 'arch-review') {
-    if (request.phase) return phaseSelection(graph, request.phase).rows;
+    if (request.phase) return require('./architecture-target.cjs').phaseRows(graph, phaseNumberOf(request.phase), request.repo).map(([id, row]) => ({ id, row }));
     const branch = canonical.branch;
     const matches = Object.entries(graph.tickets).filter(([id, row]) => row && row.branch === branch
       && (!request.ticket || id === request.ticket));
@@ -479,7 +482,7 @@ function prepareArch(options, request, canonical, graph, rows) {
     reject('architecture review skipped-by-target', 'ARCH_REVIEW_SKIPPED_BY_TARGET');
   if (request.phase) {
     binding = target.phaseBinding({ graph, state: graph.state, phase: phaseNumberOf(request.phase),
-      repository: canonical.commonPath, branch: canonical.branch, pr: live.number, head: canonical.head, base: live.baseRefOid });
+      repository: canonical.commonPath, repo: request.repo, branch: canonical.branch, pr: live.number, head: canonical.head, base: live.baseRefOid });
     id = binding.subject;
   }
   const baseName = safeBranch(live.baseRefName, 'live PR base');
@@ -1155,7 +1158,7 @@ function revalidateLiveInputs(options, prepared, currentDispatchId) {
     if (prepared.binding) {
       const current = graphData(options, prepared.canonical.projectRoot);
       const binding = require('./architecture-target.cjs').phaseBinding({ graph: current, state: current.state,
-        phase: prepared.phaseNumber, repository: prepared.canonical.commonPath, branch: prepared.canonical.branch,
+        phase: prepared.phaseNumber, repository: prepared.canonical.commonPath, repo: prepared.binding.repo, branch: prepared.canonical.branch,
         pr: live.number, head: live.headRefOid, base: live.baseRefOid });
       if (binding.subject !== prepared.ticket) reject('phase membership changed while architecture review ran', 'STALE_CONTEXT');
       roleArtifact.selectPhaseArchives(worktree, binding, { graphDir: prepared.graph.directory,
@@ -1374,7 +1377,7 @@ function createClaudeRoleHost(options = {}) {
         const validatedResult = validateResult(prepared, resultFrom(getLaunched().output));
         const result = prepared.role === 'arch-review' ? { ...validatedResult, host_context: {
           graph_dir: prepared.graph.directory, source_root: prepared.canonical.worktree,
-          ...(prepared.binding ? { phase_archive_selection: prepared.phaseArchiveSelection, phase_evidence_digest: roleArtifact.phaseArchitectureEvidenceDigest(prepared.packet.role_context.retained_evidence) } : {}),
+          ...(prepared.binding ? { phase_repo: prepared.binding.repo, phase_archive_selection: prepared.phaseArchiveSelection, phase_evidence_digest: roleArtifact.phaseArchitectureEvidenceDigest(prepared.packet.role_context.retained_evidence) } : {}),
           selected_refs: prepared.packet.required_refs.map(ref => ({ path: ref.path, sha256: ref.sha256, bytes: ref.bytes })),
         } } : validatedResult;
         const { artifact, validated } = sealResult(prepared, result, runtime.recorder, record.receipt.dispatch_id);

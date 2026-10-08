@@ -30,10 +30,17 @@ function architectureTarget({ base, integrationBranch, epic, ticketBranches = []
     integration_branch: integration });
 }
 
-function phaseBinding({ graph, state, phase, repository, pr, head, base, branch }) {
+function phaseRows(graph, phase, repo = null) {
+  if (repo !== null && (typeof repo !== 'string' || !/^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/.test(repo)))
+    throw new Error('invalid phase repository selector');
   const rows = Object.entries(graph.tickets || {}).filter(([, row]) =>
-    Number(String(row.phase).match(/^0*(\d+)/)?.[1]) === Number(phase)).sort(([a], [b]) => a.localeCompare(b));
+    Number(String(row.phase).match(/^0*(\d+)/)?.[1]) === Number(phase) && (row.repo ?? null) === repo).sort(([a], [b]) => a.localeCompare(b));
   if (!rows.length) throw new Error('phase absent from canonical graph');
+  return rows;
+}
+
+function phaseBinding({ graph, state, phase, repository, repo = null, pr, head, base, branch }) {
+  const rows = phaseRows(graph, phase, repo);
   const directories = new Set(rows.map(([, row]) => path.posix.basename(path.posix.dirname(row.plan || ''))));
   const epics = new Set(rows.map(([, row]) => row.epic).filter(Boolean));
   const repos = new Set(rows.map(([, row]) => row.repo || null));
@@ -69,4 +76,4 @@ function phaseEvidencePaths(project, binding) {
   return paths;
 }
 
-module.exports = { resolveIntegrationBranch, architectureTarget, phaseBinding, phaseEvidencePaths, PHASE_SUBJECT };
+module.exports = { resolveIntegrationBranch, architectureTarget, phaseBinding, phaseRows, phaseEvidencePaths, PHASE_SUBJECT };
