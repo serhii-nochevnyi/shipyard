@@ -1588,60 +1588,33 @@ function selectedArchiveRecord(scope, row, trusted) {
   return { worktree: row.worktree, dispatch_id: row.dispatch_id, receipt: row.receipt, files };
 }
 
-function archiveIdentityHint(file, stat) {
-  const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
-  try {
-    if (!sameStat(stat, fs.fstatSync(fd))) fail('ARCHIVE_AUTHORITY_INVALID', 'archive identity hint changed before reading');
-    const bytes = Buffer.alloc(stat.size); let offset = 0;
-    while (offset < bytes.length) {
-      const count = fs.readSync(fd, bytes, offset, bytes.length - offset, offset);
-      if (!count) fail('ARCHIVE_AUTHORITY_INVALID', 'archive identity hint ended before bounded bytes');
-      offset += count;
-    }
-    if (fs.readSync(fd, Buffer.alloc(1), 0, 1, offset) || !sameStat(stat, fs.fstatSync(fd))
-        || !sameStat(stat, fs.lstatSync(file)))
-      fail('ARCHIVE_AUTHORITY_INVALID', 'archive identity hint changed during reading');
-    return JSON.parse(bytes);
-  } finally { fs.closeSync(fd); }
-}
-
-function phaseArchiveHints(scope, binding, roster, currentDispatchId) {
+function selectedPhaseJudgments(scope, binding, roster) {
   const candidates = [];
-  for (const worktree of registeredPhaseWorktrees(scope.root)) {
-    if (!fs.existsSync(worktree) || fs.lstatSync(worktree).isSymbolicLink()) continue;
-    const directory = path.join(worktree, ARTIFACT_ARCHIVE_DIR);
-    if (!fs.existsSync(directory)) continue;
-    const stat = fs.lstatSync(directory);
-    if (!stat.isDirectory() || stat.isSymbolicLink()) continue;
-    const names = fs.readdirSync(directory);
-    let relevantHints = 0;
-    for (const name of names) {
-      if (roster.records.some(row => row.worktree === worktree && path.basename(archiveRelative(row.dispatch_id, '')) === name)) continue;
-      const file = path.join(directory, name, MANIFEST_NAME);
-      if (!fs.existsSync(file)) continue;
-      const familyStat = fs.lstatSync(path.dirname(file)), hintStat = fs.lstatSync(file);
-      if (familyStat.isSymbolicLink() || !familyStat.isDirectory() || !hintStat.isFile() || hintStat.isSymbolicLink()
-          || hintStat.size > HISTORICAL_ARCHIVE_MAX_BYTES) continue;
-      let hint;
-      try { hint = archiveIdentityHint(file, hintStat); }
-      catch (error) { if (error instanceof SyntaxError) continue; throw error; }
-      if (scope.identity.tickets.includes(hint.ticket) || scope.identity.tickets.includes(hint.boundary_subject))
-        fail('ARCHIVE_AUTHORITY_INVALID', 'possible current family is absent from independently retained roster');
-      if (hint.boundary_subject !== binding.subject) continue;
-      if (typeof currentDispatchId === 'string' && currentDispatchId.trim().length > 0
-          && hint.producer_dispatch === currentDispatchId) continue;
-      if (++relevantHints > 1000) fail('ARCHIVE_AUTHORITY_INVALID', 'archive identity hints exceed their bound');
-      const state = scope.verification.authority(worktree), record = state.payload.records[hint.producer_dispatch];
-      if (!record || record.receipt.role !== 'arch-review'
-          || ![record.ticket, record.receipt.ticket, record.receipt.runtime_evidence?.ticket].some(value => value === binding.subject)
-          || [record.ticket, record.receipt.ticket, record.receipt.runtime_evidence?.ticket].some(value => value !== undefined && value !== binding.subject)
-          || path.basename(archiveRelative(record.dispatch_id, '')) !== name)
-        fail('ARCHIVE_AUTHORITY_INVALID', 'aggregate candidate lacks original protected authority');
-      const row = { worktree, dispatch_id: record.dispatch_id, ticket: binding.subject, receipt: record.receipt, pins: record.pins };
-      candidates.push(selectedArchiveRecord(scope, row));
+  const worktrees = [...new Set([scope.root, scope.project, ...roster.records.map(row => row.worktree)])];
+  for (const worktree of worktrees) {
+    const catalogue = path.join(archiveAuthorityDirectory(worktree), 'catalogue.json');
+    if (!fs.existsSync(catalogue)) continue;
+    const state = scope.verification ? scope.verification.authority(worktree) : authorityState(worktree);
+    for (const record of Object.values(state.payload.records)) {
+      if (record.ticket !== binding.subject || record.receipt?.role !== 'arch-review') continue;
+      if ([record.receipt.ticket, record.receipt.runtime_evidence?.ticket]
+          .some(value => value !== undefined && value !== binding.subject))
+        fail('ARCHIVE_AUTHORITY_INVALID', 'aggregate candidate original receipt identity differs');
+      if (candidates.length >= 1000)
+        fail('ARCHIVE_AUTHORITY_INVALID', 'selected phase judgments exceed their total bound');
+      candidates.push({ worktree, record });
     }
   }
   return candidates;
+}
+
+function phaseArchiveHints(scope, binding, roster, currentDispatchId) {
+  return selectedPhaseJudgments(scope, binding, roster)
+    .filter(({ record }) => record.dispatch_id !== currentDispatchId)
+    .map(({ worktree, record }) => selectedArchiveRecord(scope, {
+      worktree, dispatch_id: record.dispatch_id, ticket: binding.subject,
+      receipt: record.receipt, pins: record.pins,
+    }));
 }
 
 function selectPhaseArchives(worktreePath, binding, options = {}) {
@@ -1674,34 +1647,26 @@ function currentArchitectureVerdict({ worktreePath, pr, head, baseName, baseComm
   catch (error) { if (error.code !== 'ENOENT') throw error; }
   const targetBranch = headBranch || execFileSync('git', ['-C', root, 'symbolic-ref', '--quiet', '--short', 'HEAD'], { encoding: 'utf8' }).trim();
   const aggregateRequired = Object.values(targetGraph?.tickets || {}).some(row => row.epic === targetBranch);
-  const worktrees = registeredPhaseWorktrees(root);
+  let selected = null;
+  if (aggregateRequired) {
+    const rows = Object.values(targetGraph.tickets).filter(row => row.epic === targetBranch);
+    const phases = new Set(rows.map(row => Number(String(row.phase).match(/^0*(\d+)/)?.[1])));
+    const repos = new Set(rows.map(row => row.repo ?? null));
+    if (phases.size !== 1 || repos.size !== 1)
+      fail('ARCHIVE_AUTHORITY_INVALID', 'aggregate verdict requires one current phase and repository');
+    const raw = JSON.parse(readImmutableFile(fs, path.join(directory, 'delivery-state.json'), 'phase state'));
+    const binding = require('./architecture-target.cjs').phaseBinding({ graph: targetGraph,
+      state: raw.tickets || raw, phase: [...phases][0], repository: common,
+      repo: [...repos][0], branch: targetBranch, pr, head, base: baseCommit });
+    const scope = phaseArchiveScope(root, binding, directory);
+    const roster = readPhaseArchiveRoster({ worktreePath: root, binding, graphDir: directory });
+    selected = selectedPhaseJudgments(scope, binding, roster);
+  }
+  const worktrees = selected ? [...new Set(selected.map(row => row.worktree))] : registeredPhaseWorktrees(root);
   for (const worktree of worktrees) {
     let records;
     if (aggregateRequired) {
-      records = [];
-      const archive = path.join(worktree, ARTIFACT_ARCHIVE_DIR);
-      if (!fs.existsSync(archive)) continue;
-      const archiveStat = fs.lstatSync(archive);
-      if (!archiveStat.isDirectory() || archiveStat.isSymbolicLink()) continue;
-      for (const name of fs.readdirSync(archive)) {
-        const file = path.join(archive, name, MANIFEST_NAME);
-        if (!fs.existsSync(file)) continue;
-        const familyStat = fs.lstatSync(path.dirname(file)), hintStat = fs.lstatSync(file);
-        if (!familyStat.isDirectory() || familyStat.isSymbolicLink() || !hintStat.isFile()
-            || hintStat.isSymbolicLink() || hintStat.size > HISTORICAL_ARCHIVE_MAX_BYTES) continue;
-        let hint;
-        try { hint = archiveIdentityHint(file, hintStat); }
-        catch (error) { if (error instanceof SyntaxError) continue; throw error; }
-        const subject = require('./architecture-target.cjs').PHASE_SUBJECT.exec(hint.boundary_subject || '');
-        if (!subject || subject[2] !== common || Number(subject[4]) !== pr
-            || subject[5] !== head || subject[6] !== baseCommit) continue;
-        if (records.length >= 1000) fail('ARCHIVE_AUTHORITY_INVALID', 'archive identity hints exceed their bound');
-        const record = authorityState(worktree).payload.records[hint.producer_dispatch];
-        if (!record || record.ticket !== hint.boundary_subject
-            || path.basename(archiveRelative(record.dispatch_id, '')) !== name)
-          fail('ARCHIVE_AUTHORITY_INVALID', 'aggregate candidate lacks original protected authority');
-        records.push(record);
-      }
+      records = selected.filter(row => row.worktree === worktree).map(row => row.record);
     }
     else {
       const pins = authenticatedArchivePins(worktree);

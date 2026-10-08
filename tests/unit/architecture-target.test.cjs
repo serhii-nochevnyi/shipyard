@@ -267,7 +267,7 @@ test(`public phase builder and hosts select ${repo ?? 'current project'} from mi
     const originalGraph = fs.readFileSync(graphPath);
     graph.tickets[TICKET].repo = repo === null ? 'acme/wrong' : null;
     fs.writeFileSync(graphPath,JSON.stringify(graph));
-    assert.throws(()=>artifacts.currentArchitectureVerdict(verdictInput), /phase absent|canonical phase epic|membership|digest|one current phase/);
+    assert.throws(()=>artifacts.currentArchitectureVerdict(verdictInput), /phase absent|canonical phase epic|membership|digest|one current phase|independently retained current phase roster/);
     fs.writeFileSync(graphPath,originalGraph);
     const findingsPin = artifacts.authenticatedArchivePins(f.root).find(pin=>pin.path.endsWith('/findings.json'));
     const findingsPath = path.join(f.root,findingsPin.path);

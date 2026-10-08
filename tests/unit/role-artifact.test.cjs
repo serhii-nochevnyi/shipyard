@@ -1254,6 +1254,9 @@ for (const [name, mutate] of [
   ['forged current family', value => {
     const family = path.join(value.root, roleArtifact.ARTIFACT_ARCHIVE_DIR, 'forged'); fs.mkdirSync(family);
     fs.writeFileSync(path.join(family, roleArtifact.MANIFEST_NAME), JSON.stringify({ ticket: value.ticket }));
+    mutateFixtureCatalogue(value, payload => { payload.records.forged = {
+      dispatch_id: 'forged', ticket: value.input.binding.subject, receipt: { role: 'arch-review' }, pins: [],
+    }; });
   }],
   ['changed actual membership', value => {
     const file = path.join(value.input.graphDir, 'tickets.json'); const graph = JSON.parse(fs.readFileSync(file));
@@ -1284,7 +1287,7 @@ function addForeignPhaseFamilies(root) {
 }
 
 for (const registered of [false, true])
-test('phase-local archive scope: foreign volume preserves evidence and late current omission refuses in ' +
+test('phase-local archive scope: foreign volume and unselected families do not affect literal selection in ' +
     (registered ? 'another registered worktree' : 'review worktree'), () => {
   const value = phaseScopeFixture({ second: registered });
   const previousReaddir = fs.readdirSync;
@@ -1312,9 +1315,8 @@ test('phase-local archive scope: foreign volume preserves evidence and late curr
       scannedForeign = foreign.length;
       return [...names.filter(name => !foreign.includes(name) && name !== omitted), ...foreign, omitted];
     };
-    assert.throws(() => value.select(), { code: 'ARCHIVE_AUTHORITY_INVALID',
-      message: /possible current family is absent from independently retained roster/ });
-    assert.equal(scannedForeign, 1001);
+    assert.deepEqual(value.select(), selected);
+    assert.equal(scannedForeign, 0);
   } finally { fs.readdirSync = previousReaddir; cleanPhaseScope(value); }
 });
 
@@ -1350,7 +1352,7 @@ function fixtureAggregateHint(value, row, boundary) {
 }
 
 for (const registered of [false, true])
-test('phase-local archive scope: missing producer without current dispatch refuses in ' +
+test('phase-local archive scope: unselected missing producer is not opened in ' +
     (registered ? 'another registered worktree' : 'review worktree'), () => {
   const value = phaseScopeFixture({ second: registered });
   try {
@@ -1362,8 +1364,7 @@ test('phase-local archive scope: missing producer without current dispatch refus
     fs.writeFileSync(path.join(family, roleArtifact.MANIFEST_NAME), JSON.stringify({
       boundary_subject: value.input.binding.subject }));
     for (const options of [{}, { currentDispatchId: '' }]) {
-      assert.throws(() => value.select(options), { code: 'ARCHIVE_AUTHORITY_INVALID',
-        message: /aggregate candidate lacks original protected authority/ });
+      assert.deepEqual(value.select(options), selected);
     }
   } finally { cleanPhaseScope(value); }
 });
@@ -1394,59 +1395,62 @@ test('phase-local archive scope: changed ' + target + ' during selection refuses
   } finally { fs.readdirSync = previousReaddir; cleanPhaseScope(value); }
 });
 
-test('phase-local archive scope: relevant 1000 boundary is independent of foreign volume and resets per worktree', () => {
+test('phase-local archive scope: total selected judgment bound precedes all candidate manifests', () => {
   const value = phaseScopeFixture({ second: true });
-  const previousReaddir = fs.readdirSync;
+  const previousOpen = fs.openSync;
   try {
-    const populations = value.rows.map(row => {
-      const directory = addForeignPhaseFamilies(row.worktree);
-      const recorder = createDurableRecorder(path.join(row.worktree, 'aggregate-receipts'));
-      const boundary = createDispatchBoundary({ adapters: { claude: { launch: judgmentReceipt } }, recorder });
-      const hints = Array.from({ length: 1001 }, () => fixtureAggregateHint(value, row, boundary));
-      mutateFixtureCatalogue({ root: row.worktree }, payload => {
-        for (const hint of hints) payload.records[hint.id] = hint.record;
-      });
-      return { directory, hints };
-    });
-    const missingProducer = 'missing-producer';
-    fs.mkdirSync(path.join(populations[0].directory, missingProducer));
-    fs.writeFileSync(path.join(populations[0].directory, missingProducer, roleArtifact.MANIFEST_NAME),
-      JSON.stringify({ boundary_subject: value.input.binding.subject }));
-    let overflow = false, malformedOverflow = false;
-    fs.readdirSync = function(file, ...args) {
-      const names = previousReaddir.call(this, file, ...args);
-      const population = populations.find(item => item.directory === file);
-      if (!population) return names;
-      const aggregateNames = population.hints.map(hint => hint.familyName);
-      return [...names.filter(name => !aggregateNames.includes(name) && name !== missingProducer),
-        ...aggregateNames.slice(0, overflow && population === populations[0] ? 1001 : 1000),
-        ...(malformedOverflow && population === populations[0] ? [missingProducer] : [])];
-    };
-    const previousOpen = fs.openSync;
-    const catalogues = new Set(value.rows.map(row => path.join(roleArtifact.archiveAuthorityDirectory(row.worktree), 'catalogue.json')));
-    let catalogueReads = 0;
-    const measuredSelect = options => {
-      catalogueReads = 0;
-      fs.openSync = function(file, ...args) {
-        if (catalogues.has(file)) catalogueReads++;
-        return previousOpen.call(this, file, ...args);
+    for (const row of value.rows) mutateFixtureCatalogue({ root: row.worktree }, payload => {
+      for (let i = 0; i < 501; i++) payload.records['candidate-' + i] = {
+        dispatch_id: 'candidate-' + i, ticket: value.input.binding.subject,
+        receipt: { role: 'arch-review' }, pins: [],
       };
-      try { return value.select(options); }
-      finally { fs.openSync = previousOpen; assert.equal(catalogueReads, 2); }
+    });
+    fs.openSync = function(file, ...args) {
+      if (String(file).includes('candidate-')) throw new Error('candidate opened before total bound');
+      return previousOpen.call(this, file, ...args);
     };
-    const selected = measuredSelect();
-    assert.equal(selected.candidates.length, 2000);
-    assert.equal(new Set(selected.candidates.map(candidate => candidate.dispatch_id)).size, 2000);
-    assert.deepEqual(selected.selection.records, value.roster.records);
-    malformedOverflow = true;
-    assert.throws(() => measuredSelect(), { code: 'ARCHIVE_AUTHORITY_INVALID',
-      message: /archive identity hints exceed their bound/ });
-    malformedOverflow = false;
-    overflow = true;
-    assert.throws(() => measuredSelect(), { code: 'ARCHIVE_AUTHORITY_INVALID',
-      message: /archive identity hints exceed their bound/ });
-    assert.equal(measuredSelect({ currentDispatchId: populations[0].hints[1000].id }).candidates.length, 2000);
-  } finally { fs.readdirSync = previousReaddir; cleanPhaseScope(value); }
+    assert.throws(value.select, { code: 'ARCHIVE_AUTHORITY_INVALID',
+      message: /selected phase judgments exceed their total bound/ });
+  } finally { fs.openSync = previousOpen; cleanPhaseScope(value); }
+});
+
+test('phase-local archive scope: 10000 registered foreign worktree hints never open archive bodies or authority', () => {
+  const value = phaseScopeFixture();
+  const foreign = path.join(path.dirname(value.root), 'foreign-' + Date.now());
+  const gitShim = path.join(targetBin, 'git');
+  const previousOpen = fs.openSync, previousReaddir = fs.readdirSync;
+  try {
+    execFileSync('git', ['-C', value.root, 'worktree', 'add', '--detach', foreign, 'HEAD'], { stdio: 'ignore' });
+    addForeignPhaseFamilies(foreign);
+    const authority = roleArtifact.archiveAuthorityDirectory(foreign);
+    const expected = value.select();
+    const realGit = execFileSync('which', ['git'], { encoding: 'utf8' }).trim();
+    fs.writeFileSync(gitShim, '#!/usr/bin/env node\n' +
+      'const cp = require("node:child_process"); const args = process.argv.slice(2);\n' +
+      'process.stdout.write(cp.execFileSync(' + JSON.stringify(realGit) + ', args));\n' +
+      'if (args.includes("worktree") && args.includes("list")) for (let i = 0; i < 10000; i++) ' +
+      'process.stdout.write("worktree " + ' + JSON.stringify('/tmp/t4716-unselected-') + ' + i + "\\n\\n");\n',
+      { mode: 0o755 });
+    fs.openSync = function(file, ...args) {
+      if (String(file).startsWith(foreign + path.sep) || String(file).startsWith(authority + path.sep))
+        throw new Error('foreign body or key opened');
+      return previousOpen.call(this, file, ...args);
+    };
+    fs.readdirSync = function(file, ...args) {
+      if (String(file).endsWith(roleArtifact.ARTIFACT_ARCHIVE_DIR)) throw new Error('archive enumerated');
+      return previousReaddir.call(this, file, ...args);
+    };
+    assert.deepEqual(value.select(), expected);
+    const subject = require('../../plugins/delivery-pipeline/scripts/architecture-target.cjs').PHASE_SUBJECT.exec(value.input.binding.subject);
+    assert.equal(roleArtifact.currentArchitectureVerdict({ worktreePath: value.root,
+      graphDir: value.input.graphDir, pr: 404, head: subject[5], baseCommit: subject[6],
+      baseName: 'main', headBranch: 'epic/47-scope' }), null);
+  } finally {
+    fs.openSync = previousOpen; fs.readdirSync = previousReaddir;
+    if (fs.existsSync(gitShim)) fs.unlinkSync(gitShim);
+    execFileSync('git', ['-C', value.root, 'worktree', 'remove', '--force', foreign], { stdio: 'ignore' });
+    cleanPhaseScope(value);
+  }
 });
 
 test('phase-local archive scope: authenticated empty history differs from missing history', () => {
