@@ -367,7 +367,16 @@ function containmentSource(root, relative) {
   let parent = root;
   for (const part of canonical.split(path.sep).slice(0, -1)) {
     parent = path.join(parent, part);
-    const stat = fs.lstatSync(parent);
+    let stat;
+    try { stat = fs.lstatSync(parent); }
+    catch (error) {
+      if (error.code !== 'ENOENT' && error.code !== 'ENOTDIR') throw error;
+      for (const [target, original] of parents) {
+        if (!same(original, fs.lstatSync(target)))
+          refuse('CONTAINMENT_VIOLATION', 'source parent moved during containment inspection');
+      }
+      return null;
+    }
     if (!stat.isDirectory() || stat.isSymbolicLink())
       refuse('CONTAINMENT_STATUS_FAILED', 'containment source parent is not physical');
     parents.push([parent, stat]);

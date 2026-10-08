@@ -1474,6 +1474,64 @@ function containmentAuthorityFixture(value = fixture(), leaseEpoch = 1) {
 
 suite('original protected planning containment');
 
+test('phase47 original containment recovery preserves a pre-existing deleted tracked parent directory', () => {
+  const value = fixture();
+  try {
+    const directory = path.join(value.root, 'src', 'nested');
+    const relative = 'src/nested/tracked.cjs';
+    fs.mkdirSync(directory, { recursive: true });
+    fs.writeFileSync(path.join(value.root, relative), 'original tracked source\n');
+    git(value.root, ['add', relative]);
+    git(value.root, ['commit', '-m', 'tracked parent fixture']);
+    fs.rmSync(path.join(value.root, 'src'), { recursive: true });
+    const c = containmentAuthorityFixture(value);
+    assert.deepEqual(c.snapshot.sources.find(([key]) => key === relative), [relative, null]);
+    assert.deepEqual(c.snapshot.status.find(([key]) => key === relative), [relative, ' D']);
+    const restored = c.sealer.restoreContainmentBaseline({ worktree: c.root, binding: c.binding,
+      reference: c.reference, recoveredEpoch: 2 });
+    c.sealer.assertContained({ worktree: c.root, allowed: [], baseline: restored });
+    fs.mkdirSync(directory, { recursive: true });
+    fs.writeFileSync(path.join(value.root, relative), 'original tracked source\n');
+    assert.throws(() => c.sealer.assertContained({ worktree: c.root, allowed: [], baseline: restored }),
+      { code: 'CONTAINMENT_VIOLATION' });
+  } finally { clean(value); }
+});
+
+for (const kind of ['ENOTDIR', 'EACCES', 'symlink', 'file', 'movement']) {
+  test('phase47 original containment recovery deleted tracked parent inspection ' + kind, () => {
+    const value = fixture();
+    const lstat = fs.lstatSync;
+    try {
+      const root = fs.realpathSync(value.root);
+      const directory = path.join(root, 'src', 'nested');
+      fs.mkdirSync(directory, { recursive: true });
+      fs.writeFileSync(path.join(directory, 'tracked.cjs'), 'tracked source\n');
+      git(root, ['add', 'src/nested/tracked.cjs']);
+      git(root, ['commit', '-m', 'tracked parent inspection fixture']);
+      fs.rmSync(directory, { recursive: true });
+      if (kind === 'symlink') fs.symlinkSync(root, directory);
+      if (kind === 'file') fs.writeFileSync(directory, 'physical file');
+      let inspected = false;
+      fs.lstatSync = function(target, ...args) {
+        if (target === directory) {
+          inspected = true;
+          if (kind === 'ENOTDIR' || kind === 'EACCES')
+            throw Object.assign(new Error('injected parent inspection error'), { code: kind });
+          if (kind === 'movement') fs.writeFileSync(path.join(root, 'src', 'changed'), 'changed parent');
+        }
+        return lstat.call(this, target, ...args);
+      };
+      const sealer = require('../../plugins/delivery-pipeline/scripts/planning-result-sealer.cjs');
+      if (kind === 'ENOTDIR') {
+        const baseline = sealer.captureContainmentBaseline({ worktree: root });
+        sealer.assertContained({ worktree: root, allowed: [], baseline });
+      } else assert.throws(() => sealer.captureContainmentBaseline({ worktree: root }),
+        { code: kind === 'EACCES' ? 'EACCES' : kind === 'movement' ? 'CONTAINMENT_VIOLATION' : 'CONTAINMENT_STATUS_FAILED' });
+      assert.equal(inspected, true);
+    } finally { fs.lstatSync = lstat; clean(value); }
+  });
+}
+
 test('phase47 original containment recovery preserves an unchanged untracked nested repository directory', () => {
   const value = fixture();
   try {

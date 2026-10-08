@@ -1283,7 +1283,7 @@ async function recoverySetup(gsdRole, {
   complete = true, crashBeforeCompletionCallback = false, crashBeforeNativeCheckpoint = false,
   crashBeforeTranscriptWrite = false,
   artifactPaths, writeArtifactPaths, preexistingResearchBaseline = false,
-  extraPlannerBaseline = false, preparedDirtyInputs = false, nestedRepository = false, sealedResearchSibling = false,
+  extraPlannerBaseline = false, preparedDirtyInputs = false, nestedRepository = false, deletedTrackedParent = false, sealedResearchSibling = false,
 } = {}) {
   const f = fixture();
   if (preexistingResearchBaseline) {
@@ -1321,6 +1321,14 @@ async function recoverySetup(gsdRole, {
     fs.mkdirSync(vendor);
     git(vendor, 'init');
     fs.writeFileSync(path.join(vendor, 'nested.txt'), 'original nested content\n');
+  }
+  if (deletedTrackedParent) {
+    const directory = path.join(f.root, 'src', 'nested');
+    fs.mkdirSync(directory, { recursive: true });
+    fs.writeFileSync(path.join(directory, 'tracked.cjs'), 'original tracked source\n');
+    git(f.root, 'add', 'src/nested/tracked.cjs');
+    git(f.root, 'commit', '-m', 'tracked parent fixture');
+    fs.rmSync(path.join(f.root, 'src'), { recursive: true });
   }
   let sibling = null;
   if (sealedResearchSibling) {
@@ -2457,6 +2465,37 @@ for (const changed of [false, true]) test(`phase47 original containment recovery
       assert.deepEqual(fs.readFileSync(setup.recordFile), receipt);
     }
     assert.deepEqual(fs.readFileSync(nested), bytes);
+  } finally { setup.f.clean(); }
+});
+
+for (const changed of [false, true]) test(`phase47 original containment recovery fresh deleted tracked parent ${changed ? 'refuses restoration' : 'seals unchanged deletion'}`, async () => {
+  const setup = await recoverySetup('gsd-planner', { preparedDirtyInputs: true, deletedTrackedParent: true });
+  try {
+    assert.equal(setup.crashError.code, 'SIMULATED_HOST_DEATH');
+    assert.equal(setup.runtimeSpawnCalls.length, 1);
+    const directory = path.join(setup.f.root, 'src', 'nested');
+    if (changed) {
+      fs.mkdirSync(directory, { recursive: true });
+      fs.writeFileSync(path.join(directory, 'tracked.cjs'), 'original tracked source\n');
+    }
+    setup.setLeasePid(2147483647);
+    const recovered = freshContainmentRecovery(setup);
+    if (changed) {
+      assert.equal(recovered.code, 'RECOVERY_ARTIFACT_ALTERED');
+      assert.equal(recovered.result, undefined);
+      assert.equal(fs.existsSync(setup.recordFile), false);
+      assert.equal(setup.recorder.getReservation(setup.dispatchId).recorded, false);
+      assert.equal(fs.readFileSync(path.join(directory, 'tracked.cjs'), 'utf8'), 'original tracked source\n');
+    } else {
+      assert.equal(recovered.code, undefined, recovered.message);
+      assert.equal(recovered.result.recovered, true);
+      assert.equal(recovered.result.receipt.dispatch_id, setup.dispatchId);
+      assert.equal(setup.recorder.getReservation(setup.dispatchId).recorded, true);
+      const receipt = fs.readFileSync(setup.recordFile);
+      assert.equal(freshContainmentRecovery(setup).code, 'RECOVERY_ALREADY_RECORDED');
+      assert.deepEqual(fs.readFileSync(setup.recordFile), receipt);
+      assert.equal(fs.existsSync(path.join(setup.f.root, 'src')), false);
+    }
   } finally { setup.f.clean(); }
 });
 
