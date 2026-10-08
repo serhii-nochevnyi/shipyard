@@ -211,7 +211,7 @@ function verifyArchitectureTarget({ pr, repo = null, worktreePath = process.cwd(
   const integration = target.resolveIntegrationBranch({ projectRoot: worktreePath, repo });
   const architecture = target.architectureTarget({ base: live.baseRefName, integrationBranch: integration });
   if (!architecture.required) return { ...architecture, ready: true, pr, head: live.headRefOid };
-  const verdict = require('./role-artifact.cjs').currentArchitectureVerdict({ worktreePath, graphDir,
+  const verdict = require('./role-artifact.cjs').currentArchitectureVerdict({ worktreePath, graphDir, repo,
     pr, head: live.headRefOid, headBranch: live.headRefName, baseName: live.baseRefName, baseCommit: live.baseRefOid });
   return { ...architecture, ready: !!verdict, pr, head: live.headRefOid, base_commit: live.baseRefOid, verdict };
 }

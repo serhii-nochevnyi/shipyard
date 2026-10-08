@@ -862,7 +862,7 @@ for (const [id, t] of Object.entries(tickets)) {
       entry.architecture = architectureTarget({ base: pr.baseRefName, integrationBranch: entry.integration_branch });
       if (entry.architecture.required) {
         try { entry.authenticated_architecture = require('./role-artifact.cjs').currentArchitectureVerdict({
-          worktreePath: repo ? localResolutions.get(repo)?.repository_root : ROOT,
+          worktreePath: repo ? localResolutions.get(repo)?.repository_root : ROOT, repo,
           pr: pr.number, head: pr.headRefOid, headBranch: pr.headRefName, baseName: pr.baseRefName, baseCommit: pr.baseRefOid, graphDir: GRAPH_DIR }); }
         catch { entry.authenticated_architecture = null; }
       }
@@ -1014,7 +1014,7 @@ if (mode === 'epic-stacked') {
       let authenticatedArchitecture = null;
       if (pr?.state === 'OPEN') {
         try { authenticatedArchitecture = require('./role-artifact.cjs').currentArchitectureVerdict({
-          worktreePath: repo ? localResolutions.get(repo)?.repository_root : ROOT,
+          worktreePath: repo ? localResolutions.get(repo)?.repository_root : ROOT, repo,
           pr: pr.number, head: pr.headRefOid, headBranch: pr.headRefName, baseName: pr.baseRefName, baseCommit: pr.baseRefOid, graphDir: GRAPH_DIR }); }
         catch {}
       }

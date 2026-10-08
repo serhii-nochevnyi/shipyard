@@ -128,7 +128,7 @@ test(`public phase builder and hosts select ${repo ?? 'current project'} from mi
     const graphDir = path.join(f.root,'.planning/graph');
     const graph = JSON.parse(fs.readFileSync(path.join(graphDir,'tickets.json')));
     graph.tickets[TICKET].repo = repo;
-    graph.tickets = { foreign: {...graph.tickets[TICKET], repo: repo === null ? 'acme/other' : null, plan: '.planning/phases/38-foreign/38-02-PLAN.md', epic: 'epic/foreign'}, ...graph.tickets };
+    graph.tickets = { foreign: {...graph.tickets[TICKET], repo: repo === null ? 'acme/other' : null, plan: '.planning/phases/38-foreign/38-02-PLAN.md', epic: 'epic/38-codex-arch-review'}, ...graph.tickets };
     graph.tickets[TICKET].epic = 'epic/38-codex-arch-review';
     write(f.root,'.planning/graph/tickets.json',JSON.stringify(graph));
     write(f.root,'.planning/phases/38-codex-arch-review/38-01-SUMMARY.md','Original acceptance: installed obligations remain HOLD.');
@@ -261,7 +261,31 @@ test(`public phase builder and hosts select ${repo ?? 'current project'} from mi
     assert.equal(native.result.host_context.phase_repo, repo);
     }
     const verdictInput = {worktreePath:f.root,graphDir,pr:801,head:f.pr.headRefOid,headBranch:f.pr.headRefName,baseName:'develop',baseCommit:f.base};
-    assert.equal(artifacts.currentArchitectureVerdict(verdictInput).authenticated,true);
+    const foreignFamilies = path.join(f.root, artifacts.ARTIFACT_ARCHIVE_DIR, 'foreign-family-');
+    for (let index = 0; index < 1001; index++) {
+      const family = foreignFamilies + index;
+      fs.mkdirSync(family);
+      fs.writeFileSync(path.join(family, 'findings.json'), 'foreign findings');
+    }
+    const originalOpen = fs.openSync, originalReaddir = fs.readdirSync;
+    try {
+      fs.openSync = function(file, ...args) {
+        if (String(file).startsWith(foreignFamilies)) throw new Error('foreign archive body opened');
+        return originalOpen.call(this, file, ...args);
+      };
+      fs.readdirSync = function(file, ...args) {
+        if (String(file) === path.join(f.root, artifacts.ARTIFACT_ARCHIVE_DIR)) throw new Error('archive root enumerated');
+        return originalReaddir.call(this, file, ...args);
+      };
+      assert.equal(artifacts.currentArchitectureVerdict(verdictInput).authenticated,true);
+      assert.equal(artifacts.currentArchitectureVerdict({...verdictInput,repo}).authenticated,true);
+    } finally {
+      fs.openSync = originalOpen; fs.readdirSync = originalReaddir;
+      for (let index = 0; index < 1001; index++) fs.rmSync(foreignFamilies + index, {recursive:true,force:true});
+    }
+
+    assert.equal(artifacts.currentArchitectureVerdict({...verdictInput,repo:repo === null ? 'acme/other' : null}),null);
+    assert.equal(artifacts.currentArchitectureVerdict({...verdictInput,baseCommit:'f'.repeat(40)}),null);
     assert.equal(artifacts.currentArchitectureVerdict({...verdictInput,head:'f'.repeat(40)}),null);
     const graphPath = path.join(graphDir,'tickets.json');
     const originalGraph = fs.readFileSync(graphPath);

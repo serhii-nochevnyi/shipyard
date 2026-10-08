@@ -1638,7 +1638,7 @@ function phaseArchitectureEvidence(worktreePath, binding, options = {}) {
 
 function phaseArchitectureEvidenceDigest(evidence) { return digest(stable(evidence)); }
 
-function currentArchitectureVerdict({ worktreePath, pr, head, baseName, baseCommit, graphDir, headBranch }) {
+function currentArchitectureVerdict({ worktreePath, pr, head, baseName, baseCommit, graphDir, headBranch, repo: requestedRepo }) {
   const root = fs.realpathSync(worktreePath);
   const common = fs.realpathSync(execFileSync('git', ['-C', root, 'rev-parse', '--path-format=absolute', '--git-common-dir'], { encoding: 'utf8' }).trim());
   const directory = graphDir || path.join(root, '.planning/graph');
@@ -1649,19 +1649,27 @@ function currentArchitectureVerdict({ worktreePath, pr, head, baseName, baseComm
   const aggregateRequired = Object.values(targetGraph?.tickets || {}).some(row => row.epic === targetBranch);
   let selected = null;
   if (aggregateRequired) {
-    const rows = Object.values(targetGraph.tickets).filter(row => row.epic === targetBranch);
-    const phases = new Set(rows.map(row => Number(String(row.phase).match(/^0*(\d+)/)?.[1])));
-    const repos = new Set(rows.map(row => row.repo ?? null));
-    if (phases.size !== 1 || repos.size !== 1)
-      fail('ARCHIVE_AUTHORITY_INVALID', 'aggregate verdict requires one current phase and repository');
-    const raw = JSON.parse(readImmutableFile(fs, path.join(directory, 'delivery-state.json'), 'phase state'));
-    const binding = require('./architecture-target.cjs').phaseBinding({ graph: targetGraph,
-      state: raw.tickets || raw, phase: [...phases][0], repository: common,
-      repo: [...repos][0], branch: targetBranch, pr, head, base: baseCommit });
-    const scope = phaseArchiveScope(root, binding, directory);
-    const roster = readPhaseArchiveRoster({ worktreePath: root, binding, graphDir: directory });
-    selected = selectedPhaseJudgments(scope, binding, roster);
+    selected = [];
+    if (path.basename(directory) !== 'graph' || path.basename(path.dirname(directory)) !== '.planning'
+        || fs.realpathSync(directory) !== path.resolve(directory))
+      fail('ARCHIVE_AUTHORITY_INVALID', 'canonical phase graph directory is required');
+    const project = fs.realpathSync(path.resolve(directory, '../..'));
+    if (fs.realpathSync(execFileSync('git', ['-C', project, 'rev-parse', '--path-format=absolute', '--git-common-dir'], { encoding: 'utf8' }).trim()) !== common)
+      fail('ARCHIVE_AUTHORITY_INVALID', 'phase graph belongs to another repository');
+    for (const worktree of new Set([root, project])) {
+      if (!fs.existsSync(path.join(archiveAuthorityDirectory(worktree), 'catalogue.json'))) continue;
+      for (const record of Object.values(authorityState(worktree).payload.records)) {
+        if (record.receipt?.role !== 'arch-review') continue;
+        const subject = require('./architecture-target.cjs').PHASE_SUBJECT.exec(record.ticket);
+        if (!subject || subject[2] !== common || Number(subject[4]) !== pr || subject[5] !== head || subject[6] !== baseCommit) continue;
+        if ([record.receipt.ticket, record.receipt.runtime_evidence?.ticket].some(value => value !== undefined && value !== record.ticket))
+          fail('ARCHIVE_AUTHORITY_INVALID', 'aggregate candidate original receipt identity differs');
+        if (selected.length >= 1000) fail('ARCHIVE_AUTHORITY_INVALID', 'selected phase judgments exceed their total bound');
+        selected.push({ worktree, record });
+      }
+    }
   }
+  let current = null;
   const worktrees = selected ? [...new Set(selected.map(row => row.worktree))] : registeredPhaseWorktrees(root);
   for (const worktree of worktrees) {
     let records;
@@ -1677,7 +1685,8 @@ function currentArchitectureVerdict({ worktreePath, pr, head, baseName, baseComm
       if (record.receipt.role !== 'arch-review') continue;
       const pin = record.pins.find(pin => pin.path.endsWith('/' + MANIFEST_NAME));
       const manifest = JSON.parse(readPinnedArchiveFile(worktree, pin, 'architecture manifest'));
-      if (aggregateRequired && !manifest.boundary_subject?.startsWith('phase=')) continue;
+      if (aggregateRequired && manifest.boundary_subject !== record.ticket)
+        fail('ARCHIVE_AUTHORITY_INVALID', 'aggregate candidate manifest subject differs');
       if (manifest.role !== 'arch-review' || manifest.artifact_kind !== 'judgment'
           || manifest.producer_dispatch !== record.dispatch_id || manifest.repository_identity !== common
           || manifest.pr !== pr || manifest.head !== head || manifest.base_commit !== baseCommit
@@ -1696,6 +1705,7 @@ function currentArchitectureVerdict({ worktreePath, pr, head, baseName, baseComm
         if (!aggregate) continue;
         const branch = headBranch || execFileSync('git', ['-C', worktree, 'symbolic-ref', '--quiet', '--short', 'HEAD'], { encoding: 'utf8' }).trim();
         const repo = findings.host_context?.phase_repo ?? null;
+        if (requestedRepo !== undefined && requestedRepo !== repo) continue;
         const phases = new Set(Object.values(graph.tickets || {}).filter(row =>
           (row.repo ?? null) === repo && row.epic === branch).map(row => Number(String(row.phase).match(/^0*(\d+)/)?.[1])));
         if (phases.size !== 1 || !phases.has(Number(aggregate[1].split('-')[0])))
@@ -1721,11 +1731,14 @@ function currentArchitectureVerdict({ worktreePath, pr, head, baseName, baseComm
           result: findings, receipt: record.receipt, dispatchId: record.dispatch_id,
           evidence: readPinnedArchiveFile(worktree, manifest.files.evidence, 'architecture evidence') });
       } catch { continue; }
-      return Object.freeze({ authenticated: true, verdict: 'conform', pr, head, base: baseName,
+      if (current && current.subject !== manifest.boundary_subject)
+        fail('ARCHIVE_AUTHORITY_INVALID', 'aggregate verdict has ambiguous current repository selection');
+      current = Object.freeze({ authenticated: true, verdict: 'conform', pr, head, base: baseName,
         base_commit: baseCommit, subject: manifest.boundary_subject, dispatch_id: record.dispatch_id });
+      if (!aggregateRequired) return current;
     }
   }
-  return null;
+  return current;
 }
 
 function assertArchiveInventory(worktreePath, pins) {

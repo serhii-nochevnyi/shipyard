@@ -1415,7 +1415,11 @@ test('phase-local archive scope: total selected judgment bound precedes all cand
 });
 
 test('phase-local archive scope: 10000 registered foreign worktree hints never open archive bodies or authority', () => {
-  const value = phaseScopeFixture();
+  const value = phaseScopeFixture({ mixed: true });
+  const graphPath = path.join(value.input.graphDir, 'tickets.json');
+  const graph = JSON.parse(fs.readFileSync(graphPath));
+  graph.tickets.foreign.epic = 'epic/47-scope';
+  fs.writeFileSync(graphPath, JSON.stringify(graph));
   const foreign = path.join(path.dirname(value.root), 'foreign-' + Date.now());
   const gitShim = path.join(targetBin, 'git');
   const previousOpen = fs.openSync, previousReaddir = fs.readdirSync;
