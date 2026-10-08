@@ -1484,7 +1484,7 @@ test('phase47 original containment recovery preserves an unchanged untracked nes
     assert.ok(git(value.root, ['status', '--porcelain=v1', '--untracked-files=all']).includes('?? vendor/'));
     const c = containmentAuthorityFixture(value);
     assert.deepEqual(c.snapshot.status.find(([key]) => key === 'vendor/'), ['vendor/', '??']);
-    assert.match(c.snapshot.sources.find(([key]) => key === 'vendor/')[1], /^\d+:directory$/);
+    assert.match(c.snapshot.sources.find(([key]) => key === 'vendor/')[1], /^\d+:directory-sha256:[a-f0-9]{64}$/);
     assert.equal(c.snapshot.sources.some(([key]) => key === 'vendor'), false);
     const bytes = fs.readFileSync(c.file);
     const restored = c.sealer.restoreContainmentBaseline({ worktree: c.root, binding: c.binding,
@@ -1497,6 +1497,85 @@ test('phase47 original containment recovery preserves an unchanged untracked nes
     assert.equal(fs.readFileSync(path.join(vendor, 'nested.txt'), 'utf8'), 'original nested repository content\n');
   } finally { clean(value); }
 });
+
+test('phase47 original containment recovery refuses authenticated legacy directory-only restoration', () => {
+  const value = fixture();
+  try {
+    const vendor = path.join(value.root, 'vendor');
+    fs.mkdirSync(vendor); git(vendor, ['init']);
+    const c = containmentAuthorityFixture(value);
+    const envelope = JSON.parse(fs.readFileSync(c.file));
+    const entry = envelope.payload.snapshot.sources.find(([key]) => key === 'vendor/');
+    entry[1] = entry[1].split(':')[0] + ':directory';
+    const stable = value => Array.isArray(value) ? '[' + value.map(stable).join(',') + ']'
+      : value && typeof value === 'object' ? '{' + Object.keys(value).sort().map(key => JSON.stringify(key) + ':' + stable(value[key])).join(',') + '}'
+        : JSON.stringify(value);
+    const payload = stable(envelope.payload);
+    envelope.mac = c.crypto.createHmac('sha256', fs.readFileSync(path.join(c.directory, 'hmac.key'))).update(payload).digest('hex');
+    fs.writeFileSync(c.file, JSON.stringify(envelope));
+    const reference = { ...c.reference, sha256: c.crypto.createHash('sha256').update(payload).digest('hex') };
+    const bytes = fs.readFileSync(c.file);
+    assert.throws(() => c.sealer.restoreContainmentBaseline({ worktree: c.root, binding: c.binding,
+      reference, recoveredEpoch: 2 }), { code: 'CONTAINMENT_AUTHORITY_INVALID' });
+    assert.deepEqual(fs.readFileSync(c.file), bytes);
+  } finally { clean(value); }
+});
+
+test('phase47 original containment recovery refuses movement during directory inspection', () => {
+  const value = fixture();
+  const read = fs.readSync;
+  try {
+    const vendor = path.join(value.root, 'vendor');
+    fs.mkdirSync(vendor); git(vendor, ['init']);
+    const file = path.join(vendor, 'nested.txt');
+    fs.writeFileSync(file, 'original');
+    const inode = fs.statSync(file).ino;
+    let mutated = false;
+    fs.readSync = function(fd, ...args) {
+      const result = read.call(this, fd, ...args);
+      if (!mutated && fs.fstatSync(fd).ino === inode) {
+        mutated = true; fs.appendFileSync(file, 'changed during inspection');
+      }
+      return result;
+    };
+    const sealer = require('../../plugins/delivery-pipeline/scripts/planning-result-sealer.cjs');
+    assert.throws(() => sealer.captureContainmentBaseline({ worktree: value.root }), { code: 'CONTAINMENT_VIOLATION' });
+    assert.equal(mutated, true);
+  } finally { fs.readSync = read; clean(value); }
+});
+
+for (const kind of ['symlink', 'unsupported', 'depth', 'entries', 'bytes', 'gitPointer'])
+  test('phase47 original containment recovery bounds rooted directory ' + kind, () => {
+    const value = fixture();
+    try {
+      const vendor = path.join(value.root, 'vendor');
+      fs.mkdirSync(vendor);
+      git(vendor, ['init']);
+      if (kind === 'unsupported') require('node:child_process').execFileSync('mkfifo', [path.join(vendor, 'pipe')]);
+      if (kind === 'symlink') fs.symlinkSync(path.dirname(value.root), path.join(vendor, 'escape'));
+      if (kind === 'depth') {
+        let current = vendor;
+        for (let i = 0; i < 33; i++) { current = path.join(current, 'd'); fs.mkdirSync(current); }
+      }
+      if (kind === 'entries') for (let i = 0; i < 10001; i++) fs.writeFileSync(path.join(vendor, 'f' + i), '');
+      if (kind === 'bytes') {
+        const fd = fs.openSync(path.join(vendor, 'large'), 'w');
+        try { fs.ftruncateSync(fd, 64 * 1024 * 1024 + 1); } finally { fs.closeSync(fd); }
+      }
+      const sealer = require('../../plugins/delivery-pipeline/scripts/planning-result-sealer.cjs');
+      if (kind === 'gitPointer') {
+        const linked = path.join(vendor, 'linked');
+        fs.mkdirSync(linked);
+        fs.writeFileSync(path.join(linked, '.git'), 'gitdir: /outside/root\n');
+        const c = containmentAuthorityFixture(value);
+        sealer.assertContained({ worktree: c.root, allowed: [], baseline: c.token });
+        fs.appendFileSync(path.join(linked, '.git'), 'changed pointer bytes\n');
+        assert.throws(() => sealer.assertContained({ worktree: c.root, allowed: [], baseline: c.token }),
+          { code: 'CONTAINMENT_VIOLATION' });
+      } else assert.throws(() => sealer.captureContainmentBaseline({ worktree: value.root }),
+        { code: 'CONTAINMENT_STATUS_FAILED' });
+    } finally { clean(value); }
+  });
 
 for (const [name, bytes] of Object.entries({ truncated: '{"payload":', emptyObject: '{}', null: 'null',
   missingPayload: '{"mac":"' + '0'.repeat(64) + '"}', nullPayload: '{"payload":null}',
@@ -1560,6 +1639,7 @@ for (const [name, mutate] of Object.entries({
   backslash(s) { s.sources[0][0] = 'a\\b'; },
   unsorted(s) { s.sources.reverse(); },
   missing(s) { delete s.sources; },
+  legacyDirectory(s) { s.sources[0][1] = '16877:directory'; },
   badIdentity(s) { s.sources[0][1] = 'unbound'; },
   badStatus(s) { s.status = [['absent', '??']]; },
   wrongHead(s) { s.head = '0'.repeat(40); },

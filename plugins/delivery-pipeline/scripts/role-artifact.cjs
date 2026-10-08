@@ -1091,7 +1091,7 @@ function validatePlanningContainmentSnapshot(snapshot, identity) {
       const value = entry[1];
       if (kind === 'status' ? typeof value !== 'string' || !/^[ MADRC?!T]{2}$/.test(value)
         : value !== null && (typeof value !== 'string' || value.length > 16384
-          || !/^\d+:(?:[a-f0-9]{64}|directory|symlink:[\s\S]*)$/.test(value)))
+          || !/^\d+:(?:[a-f0-9]{64}|directory-sha256:[a-f0-9]{64}|symlink:[\s\S]*)$/.test(value)))
         fail('CONTAINMENT_AUTHORITY_INVALID', 'containment source identity or status is malformed');
       previous = entry[0];
     }

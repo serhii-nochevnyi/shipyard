@@ -357,23 +357,96 @@ function containmentGit(root, args) {
 }
 
 function containmentSource(root, relative) {
-  const file = path.join(root, relative);
-  let stat;
-  try { stat = fs.lstatSync(file); }
-  catch (error) {
-    if (error.code === 'ENOENT' || error.code === 'ENOTDIR') return null;
-    refuse('CONTAINMENT_STATUS_FAILED', `containment source could not be inspected: ${relative}`);
+  const file = path.resolve(root, relative);
+  const canonical = path.relative(root, file);
+  if (!canonical || canonical === '..' || canonical.startsWith(`..${path.sep}`) || path.isAbsolute(canonical))
+    refuse('CONTAINMENT_STATUS_FAILED', 'containment source escapes its rooted directory');
+  const same = (a, b) => a.dev === b.dev && a.ino === b.ino && a.mode === b.mode
+    && a.size === b.size && a.mtimeMs === b.mtimeMs && a.ctimeMs === b.ctimeMs;
+  const parents = [];
+  let parent = root;
+  for (const part of canonical.split(path.sep).slice(0, -1)) {
+    parent = path.join(parent, part);
+    const stat = fs.lstatSync(parent);
+    if (!stat.isDirectory() || stat.isSymbolicLink())
+      refuse('CONTAINMENT_STATUS_FAILED', 'containment source parent is not physical');
+    parents.push([parent, stat]);
   }
-  if (stat.isSymbolicLink()) return `${stat.mode}:symlink:${fs.readlinkSync(file)}`;
-  if (stat.isDirectory()) return `${stat.mode}:directory`;
-  if (!stat.isFile()) refuse('CONTAINMENT_STATUS_FAILED', `containment source is not a regular file: ${relative}`);
-  const digest = crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
-  const after = fs.lstatSync(file);
-  if (stat.dev !== after.dev || stat.ino !== after.ino || stat.mode !== after.mode
-      || stat.size !== after.size || stat.mtimeMs !== after.mtimeMs || stat.ctimeMs !== after.ctimeMs) {
-    refuse('CONTAINMENT_VIOLATION', `source changed during containment inspection: ${relative}`);
+  let entries = 0;
+  let bytes = 0;
+  const inspected = [];
+  const inspect = (target, depth, nested) => {
+    if (depth > 32 || ++entries > 10000)
+      refuse('CONTAINMENT_STATUS_FAILED', 'containment directory exceeds depth or entry bound');
+    let stat;
+    try { stat = fs.lstatSync(target); }
+    catch (error) {
+      if (!nested && (error.code === 'ENOENT' || error.code === 'ENOTDIR')) return null;
+      refuse('CONTAINMENT_STATUS_FAILED', 'containment source could not be inspected');
+    }
+    inspected.push([target, stat]);
+    if (!stat.isSymbolicLink() && fs.realpathSync(target) !== target)
+      refuse('CONTAINMENT_VIOLATION', 'source moved outside its physical directory');
+    let identity;
+    if (stat.isSymbolicLink()) {
+      if (nested) refuse('CONTAINMENT_STATUS_FAILED', 'containment directory contains a symlink');
+      identity = `${stat.mode}:symlink:${fs.readlinkSync(target)}`;
+    } else if (stat.isDirectory()) {
+      const listing = () => {
+        const names = [];
+        const directory = fs.opendirSync(target);
+        try {
+          let entry;
+          while ((entry = directory.readSync()) !== null) {
+            if (names.length >= 10000)
+              refuse('CONTAINMENT_STATUS_FAILED', 'containment directory exceeds entry bound');
+            names.push(entry.name);
+          }
+        } finally { directory.closeSync(); }
+        return names.sort();
+      };
+      const names = listing();
+      if (names.length > 10000 - entries)
+        refuse('CONTAINMENT_STATUS_FAILED', 'containment directory exceeds entry bound');
+      const hash = crypto.createHash('sha256');
+      for (const name of names) {
+        const child = inspect(path.join(target, name), depth + 1, true);
+        hash.update(JSON.stringify([name, child]) + '\n');
+      }
+      if (JSON.stringify(listing()) !== JSON.stringify(names))
+        refuse('CONTAINMENT_VIOLATION', 'directory membership changed during containment inspection');
+      identity = `${stat.mode}:directory-sha256:${hash.digest('hex')}`;
+    } else if (stat.isFile()) {
+      if (nested && (bytes += stat.size) > 64 * 1024 * 1024)
+        refuse('CONTAINMENT_STATUS_FAILED', 'containment directory exceeds byte bound');
+      const fd = fs.openSync(target, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+      try {
+        if (!same(stat, fs.fstatSync(fd)))
+          refuse('CONTAINMENT_VIOLATION', 'source moved during containment inspection');
+        const hash = crypto.createHash('sha256');
+        const buffer = Buffer.alloc(65536);
+        let read;
+        let total = 0;
+        while ((read = fs.readSync(fd, buffer, 0, buffer.length, null)) > 0) {
+          total += read;
+          if (total > stat.size) refuse('CONTAINMENT_VIOLATION', 'source grew during containment inspection');
+          hash.update(buffer.subarray(0, read));
+        }
+        if (total !== stat.size || !same(stat, fs.fstatSync(fd)))
+          refuse('CONTAINMENT_VIOLATION', 'source changed during containment inspection');
+        identity = `${stat.mode}:${hash.digest('hex')}`;
+      } finally { fs.closeSync(fd); }
+    } else refuse('CONTAINMENT_STATUS_FAILED', 'containment source has an unsupported entry type');
+    if (!same(stat, fs.lstatSync(target)))
+      refuse('CONTAINMENT_VIOLATION', 'source changed during containment inspection');
+    return identity;
+  };
+  const identity = inspect(file, 0, false);
+  for (const [target, stat] of [...parents, ...inspected]) {
+    if (!same(stat, fs.lstatSync(target)))
+      refuse('CONTAINMENT_VIOLATION', 'source parent moved during containment inspection');
   }
-  return `${stat.mode}:${digest}`;
+  return identity;
 }
 
 function containmentSnapshot(root) {

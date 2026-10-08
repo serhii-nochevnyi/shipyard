@@ -1283,7 +1283,7 @@ async function recoverySetup(gsdRole, {
   complete = true, crashBeforeCompletionCallback = false, crashBeforeNativeCheckpoint = false,
   crashBeforeTranscriptWrite = false,
   artifactPaths, writeArtifactPaths, preexistingResearchBaseline = false,
-  extraPlannerBaseline = false, preparedDirtyInputs = false, sealedResearchSibling = false,
+  extraPlannerBaseline = false, preparedDirtyInputs = false, nestedRepository = false, sealedResearchSibling = false,
 } = {}) {
   const f = fixture();
   if (preexistingResearchBaseline) {
@@ -1315,6 +1315,12 @@ async function recoverySetup(gsdRole, {
   if (preparedDirtyInputs) {
     fs.appendFileSync(path.join(f.root, 'source.cjs'), '// prepared dirty input\n');
     fs.writeFileSync(path.join(f.root, '.planning', 'input-manifest.json'), '{"prepared":true}\n');
+  }
+  if (nestedRepository) {
+    const vendor = path.join(f.root, 'vendor');
+    fs.mkdirSync(vendor);
+    git(vendor, 'init');
+    fs.writeFileSync(path.join(vendor, 'nested.txt'), 'original nested content\n');
   }
   let sibling = null;
   if (sealedResearchSibling) {
@@ -2426,6 +2432,33 @@ for (const role of ['gsd-phase-researcher', 'gsd-planner', 'gsd-plan-checker']) 
     } finally { setup.f.clean(); }
   });
 }
+
+for (const changed of [false, true]) test(`phase47 original containment recovery fresh nested repository ${changed ? 'refuses mutation' : 'seals unchanged content'}`, async () => {
+  const setup = await recoverySetup('gsd-planner', { preparedDirtyInputs: true, nestedRepository: true });
+  try {
+    assert.equal(setup.crashError.code, 'SIMULATED_HOST_DEATH');
+    assert.equal(setup.runtimeSpawnCalls.length, 1);
+    const nested = path.join(setup.f.root, 'vendor', 'nested.txt');
+    if (changed) fs.appendFileSync(nested, 'unauthorized change\n');
+    const bytes = fs.readFileSync(nested);
+    setup.setLeasePid(2147483647);
+    const recovered = freshContainmentRecovery(setup);
+    if (changed) {
+      assert.equal(recovered.code, 'RECOVERY_ARTIFACT_ALTERED');
+      assert.equal(recovered.result, undefined);
+      assert.equal(fs.existsSync(setup.recordFile), false);
+      assert.equal(setup.recorder.getReservation(setup.dispatchId).recorded, false);
+    } else {
+      assert.equal(recovered.code, undefined, recovered.message);
+      assert.equal(recovered.result.receipt.dispatch_id, setup.dispatchId);
+      assert.equal(setup.recorder.getReservation(setup.dispatchId).recorded, true);
+      const receipt = fs.readFileSync(setup.recordFile);
+      assert.equal(freshContainmentRecovery(setup).code, 'RECOVERY_ALREADY_RECORDED');
+      assert.deepEqual(fs.readFileSync(setup.recordFile), receipt);
+    }
+    assert.deepEqual(fs.readFileSync(nested), bytes);
+  } finally { setup.f.clean(); }
+});
 
 const containmentMutations = {
   source(s) { fs.appendFileSync(path.join(s.f.root, 'source.cjs'), 'changed'); },
