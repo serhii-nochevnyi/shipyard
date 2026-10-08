@@ -255,10 +255,10 @@ function historicalVolumeEntry(indexRef, indexed, entry, resultRef) {
     resultRef || (row ? row.native_result : {}), indexRef, indexed, entry);
 }
 
-function reauthenticateRepairCoverage(repair, worktree = REPOSITORY) {
+function reauthenticateRepairCoverage(repair, worktree = REPOSITORY, verify = null) {
   const cv = require('../../plugins/delivery-pipeline/scripts/conveyor-coverage.cjs');
   const root = path.resolve(HOST, '../../coverage');
-  const coverage = cv.verify({ commit: repair.current_head, repo: repair.coverage.record.repo,
+  const coverage = (verify || cv.verify)({ commit: repair.current_head, repo: repair.coverage.record.repo,
     worktree, root, keyPath: path.join(root, 'coverage.key') });
   assert.equal(coverage.covered, true, coverage.reason);
   assert.deepEqual(coverage, repair.coverage);
