@@ -360,3 +360,47 @@ test('successor contract refuses missing, stale, foreign and expanded authority'
     { source_head: '8192ba38942be328b27f8aa54984eae7cd47231c' }])
     assert.throws(() => publication.validateSuccessorContract(handback, approval));
 });
+
+test('volume successor retains distinct three, five and nine output contracts', () => {
+  const publication = require('./phase47-package-publication.test.cjs');
+  assert.equal(publication.VOLUME_CORRECTIVE.length, 3);
+  assert.equal(publication.SUCCESSOR_CORRECTIVE.length, 5);
+  assert.equal(publication.CORRECTIVE.length, 9);
+  assert.notEqual(publication.VOLUME_HANDOFF, publication.SUCCESSOR_HANDOFF);
+  assert.notEqual(publication.VOLUME_HANDOFF_SHA, publication.SUCCESSOR_HANDOFF_SHA);
+  assert.throws(() => acceptance.inspectCandidate(null, REPOSITORY, 'volume'), /unknown generation branch/);
+});
+
+test('volume successor refuses foreign, incomplete and expanded current approval', () => {
+  const publication = require('./phase47-package-publication.test.cjs');
+  for (const approval of [{}, { purpose: 'ADR-027-current-ticket-evidence' },
+    { native_receipt: true }, { source_head: 'c9bd8ccae0c688e034cf9f94df4ad0cfc4c909b7' }])
+    assert.throws(() => publication.validateVolumeContract({}, approval));
+});
+
+test('volume contract checks both configuration identities and current checker plans', () => {
+  const publication = require('./phase47-package-publication.test.cjs');
+  const phase = '.planning/phases/47-complete-deferred-decomposition-wait-attribution';
+  const plan22 = '5225fd21717e38d59a10c2921e1e1dfd8b54c0a2bc1c3e1115a623485095b7b7';
+  const plan23 = 'c6a3f59e634d5683b2c7cda80520d0d4584dffb4bf9ad2d62bab67dddcedfc8c';
+  const handback = { purpose: 'ADR-027-current-ticket-volume',
+    source_head: '462683f52df5c3e2ab45a08d8a5e72f9281e5750',
+    changed_outputs: publication.VOLUME_CORRECTIVE,
+    corrective_allocation: { 'T-47-23': publication.VOLUME_CORRECTIVE },
+    tail_plan_amendments: [{ sha256: plan22 }, { sha256: plan23 }],
+    current_checker: { verdict: { status: 'passed', blockers: [], input_sha256: {
+      [phase + '/47-22-PLAN.md']: plan22, [phase + '/47-23-PLAN.md']: plan23 } } } };
+  const approval = { ...handback, schema: 'shipyard.phase47-current-source-approval.v1',
+    status: 'approved', actor: 'trusted-coordinator', native_receipt: false,
+    reviewed_source_config_sha256: '2eb2a0475127916c4c120d7616d13df1393d116c07b2a5f259cd6453234c65f9',
+    coordinator_config_sha256: '63a18625794b2772663567c95401ad91358daf13974f9c18117e0ce237256780' };
+  publication.validateVolumeContract(handback, approval);
+  for (const mutation of [{ reviewed_source_config_sha256: approval.coordinator_config_sha256 },
+    { coordinator_config_sha256: approval.reviewed_source_config_sha256 },
+    { corrective_allocation: { 'T-47-23': publication.SUCCESSOR_CORRECTIVE } },
+    { tail_plan_amendments: [{ sha256: plan23 }, { sha256: plan22 }] },
+    { current_checker: { verdict: { status: 'failed', blockers: ['missing inputs'] } } }])
+    assert.throws(() => publication.validateVolumeContract(handback, { ...approval, ...mutation }));
+  assert.throws(() => publication.validateVolumeContract({ ...handback,
+    changed_outputs: publication.SUCCESSOR_CORRECTIVE }, approval));
+});

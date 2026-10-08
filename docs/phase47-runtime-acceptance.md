@@ -1,3 +1,52 @@
+# T-47-23 current ADR-027 volume successor
+
+The operative branch is `ADR-027-current-ticket-volume`, generation `a096ae2afe9da4314994333128914a683074a42f1959573e5beab0ebb28ddf00`. Every section below the historical boundary retains its earlier T21/T19 meaning. Current publication and installed/native acceptance are separate: all twenty original obligations remain HOLD, accepted=false, native_launches=0, with unknown/inconclusive accounting unchanged.
+
+The existing trusted coordinator built this immutable stage once after actual T22 merge `462683f52df5c3e2ab45a08d8a5e72f9281e5750`, tree `94d616d0ccaadb9c7bce551bc7fc12c1bffe6d3c`. Executor worktree is `/Volumes/KINGSTON/worktrees/phase47-authenticated-delivery/T-47-23`; approved source worktree is `/Volumes/KINGSTON/worktrees/phase47-investigation/claude-shipyard`; common repository is `/Volumes/KINGSTON/claude-shipyard/.git`. Controller/run/writer lease remain unknown. Native source run identities are retained in the signed handoff's source_correction records and current researcher/planner/checker records; no executor run identity is inferred from them.
+
+| Current identity | Path / SHA256 |
+| --- | --- |
+| Signed handoff | `/Users/serhii/.local/state/shipyard/codex-decompose/6cba328f5f0de395b373ad6c77a164feb771363c4e6b7a96888b7075d52da7aa/phase47-final-generation-adr027-current-ticket-volume/generation.json`; `32eb9144cc872ee6f6f4747ef83e475905c565effee16f93f64dc7a7e8d7062f` |
+| Distinct signed approval | `/Users/serhii/.local/state/shipyard/codex-decompose/6cba328f5f0de395b373ad6c77a164feb771363c4e6b7a96888b7075d52da7aa/phase47-final-generation-adr027-current-ticket-volume/source-approval.json`; `547bc307249ac7aaa8ceaa0c690e473a8f34819333a8d2c0dad141307a3d304d` |
+| Selection | `/Volumes/KINGSTON/claude-shipyard/.git/shipyard-phase47-final-publication/INV-014-runtime-delivery-correctness/ADR-027-current-ticket-volume/selection.json`; `d98122718e031c63e4e7f2937824abb213e1e1b1ed403ef1795f594e8e381d51` |
+| Binding | `/Volumes/KINGSTON/claude-shipyard/.git/shipyard-phase47-final-publication/INV-014-runtime-delivery-correctness/ADR-027-current-ticket-volume/a096ae2afe9da4314994333128914a683074a42f1959573e5beab0ebb28ddf00/binding.json`; `8bd7eb3d844b0255ace7d57d106b4fe683c826f7c240b24d781e0f8699c304f7` |
+| Candidate inventory | `/Volumes/KINGSTON/claude-shipyard/.git/shipyard-phase47-final-publication/INV-014-runtime-delivery-correctness/ADR-027-current-ticket-volume/a096ae2afe9da4314994333128914a683074a42f1959573e5beab0ebb28ddf00/candidate`; `0326df20c175f80f7f3f99034e1d4ab2e247c698a85eb0fa38f81db72f5f16e5` |
+| Frozen pre-T23 ledger | `/Users/serhii/.local/state/shipyard/codex-decompose/6cba328f5f0de395b373ad6c77a164feb771363c4e6b7a96888b7075d52da7aa/phase47-final-generation-adr027-current-ticket-volume/prior-final-runtime-acceptance.json`; `da5aa475e068eb28110d04f8f730363538bc606db6ba2cec7566096877d72284` |
+| Frozen pre-T23 handoff | `/Users/serhii/.local/state/shipyard/codex-decompose/6cba328f5f0de395b373ad6c77a164feb771363c4e6b7a96888b7075d52da7aa/phase47-final-generation-adr027-current-ticket-volume/prior-final-runtime-handoff.md`; `675e86304f2d16360090fd2519919aeea3dbe335dfe97a08f4b08e488aff7fe4` |
+
+Package SHA256 is `f25362a504e739afb3000a51cd3c223033b8cf19f64a9a5df29348cea8dd2a54`; content-derived version is `0.71.0+codex.c7c7e59fda712a64`. The complete inventory has 161 files. Exactly three generated outputs were measured and copied from this same stage, each mode 0644:
+
+- `.codex-plugin/plugin.json`: 924 bytes, SHA256 `bbb47aa6773d971409cee345898260e798a7a69e0d87880e5a62c7b8a4b1d166`.
+- `host/plugins/delivery-pipeline/scripts/role-artifact.cjs`: 191327 bytes, SHA256 `55d814c4812f83e36f4054436f4030c865ee7f3d8088ada20eda14bf6d75075d`.
+- `package-build.json`: 300 bytes, SHA256 `097f81cbc660465b52b558bc107b3a95c0456b8135ce06cd4574f09a6b201105`.
+
+Fixed signer remains `2F485C0A455BA33463F66332900FCE87BD1BFF0D`. Source39 `2eb2a0475127916c4c120d7616d13df1393d116c07b2a5f259cd6453234c65f9` and coordinator43 `63a18625794b2772663567c95401ad91358daf13974f9c18117e0ce237256780` are authenticated independently. Neither is copied or waived. PLAN22 `5225fd21717e38d59a10c2921e1e1dfd8b54c0a2bc1c3e1115a623485095b7b7` and PLAN23 `c6a3f59e634d5683b2c7cda80520d0d4584dffb4bf9ad2d62bab67dddcedfc8c` are bound to the genuine current checker and planner index/child/first-call evidence.
+
+Immediate T21 predecessor `a56da0e28c524cbc55821e10f5791404229f85442edc4424e808b3768b870f15` remains signed and immutable, with its five-output allocation and approval `a7e71a2f9f2a53d3a828adb46a19544e40e98da50f8e5169b3c9f5d113d308fc`. The T19 nine-output and original T05 twenty-output generations and original native chains remain authenticated history. PLAN21 remains `e0477ce6956720fd9697474731dea417626e7128cd84868c91b663d9a17a2f66`.
+
+T22 initial executor remains verification_failed; fixture-kind ci-fix, distinct signed executor review completion and CI-cost ci-fix remain separate genuine records. The initial CI cancellation is preserved. The signed current approval binds the actual two-command final2 proof and actual complete22 merged parents; no failed or cancelled outcome was relabelled.
+
+`node tests/unit/phase47-package-publication.test.cjs --group candidate` passed on the real stage with 169 private fixture checks and zero inspector builds. Complete parity and ledger smoke passed; measured results are recorded below. The exact `node --test tests/unit/phase47-runtime-acceptance.test.cjs` HOST/600000 ms assignment remains pending trusted verification and is not run in the sandbox. Formal host-assigned verification/signing remains the trusted host's responsibility.
+
+Final complete23 main-target architecture/integration remains outstanding after actual T23 merge. The coordinator must use the live head/base and complete phase membership, consume every original required manifest chunk and asset, and retain a complete integrator report of at most 98304 UTF-8 bytes. Preserve the earlier complete-input consumption refusal and 983049-byte integrator sealing refusal; neither supplies a current passed gate or an invented product violation. Source/head/base movement re-owes judgment. There is no phase48 dependency, install, recovery, process restoration or global audit in this publication.
+
+## Measured T23 executor checks
+
+Candidate authentication exited 0 before copying. The one complete invocation exited 0 after copying: 161/161 files, all six existing groups, 169 private fixtures, and stageContracts launch 7/7, architecture 156/156, detached 2/2, plus two public load orders. Both publication checks reported zero inspector builds. Ledger smoke exited 0 with evidence_check=passed, twenty open obligations, accepted=false and native_launches=0. These are current executor sandbox observations; formal trusted scoped candidate-tree verification remains pending. The exact HOST acceptance command has not been run in the sandbox.
+
+Working-tree comment policy used the existing analyze API with workingTree:true against actual baseline 462683f52df5c3e2ab45a08d8a5e72f9281e5750: ok=true, 301 added lines inspected and zero added comments. `git diff --check` exited 0. The generated mirror was recognized as a verified generated copy.
+
+| Measured artifact | SHA256 / bytes |
+| --- | --- |
+| `/private/tmp/t4723-complete.stdout.json` | `b30036b6774c9b7530d54b90a3226cbca7c184d8c69e2e4aa1d9c9c96d152f89` / 4010 |
+| `/private/tmp/t4723-complete.stderr` | `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855` / 0 |
+| `/private/tmp/t4723-ledger.stdout.json` | `4736105b2ddf80c9253e80dfcf3d37299637e6f4402094fa00bb6e7c1c8eb8c5` / 13062 |
+| `/private/tmp/t4723-ledger.stderr` | `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855` / 0 |
+| `/private/tmp/t4723-comment-policy.json` | `777db4a8a1a02966a35c766b6cab858f50e1e128d980deee77178a167a07f2ca` / 1909 |
+| `/private/tmp/t4723-publication-copy.json` | `0daeecfefa8f41d60cb437c26b9ff024d56e3d438c3a6cf6f52d7da0ec43d862` / 1024 |
+
+## Historical T21 and earlier records (frozen meaning)
+
 # T-47-21 current ADR-027 successor
 
 The operative current branch is `ADR-027-current-ticket-evidence`. All T19 prose below is retained history, superseded for current inspection. Current inspection refuses missing, unsigned, stale, foreign or changed authority; source refusal is blocking and cannot become HOLD.

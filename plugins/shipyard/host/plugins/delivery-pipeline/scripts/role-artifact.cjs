@@ -1349,8 +1349,40 @@ function readPhaseArchiveRoster(input) {
   return { ...envelope.payload, roster_digest: digest(stable(envelope.payload)), record_path: file };
 }
 
+function phaseSelectionVerification() {
+  const authorities = new Map(), objects = new Map();
+  const snapshot = state => [state.directory, path.join(state.directory, 'hmac.key'), state.file]
+    .map(file => ({ file, real: fs.realpathSync(file), stat: fs.lstatSync(file, { bigint: true }) }));
+  const unchanged = retained => {
+    for (const entry of retained) {
+      const stat = fs.lstatSync(entry.file, { bigint: true });
+      if (fs.realpathSync(entry.file) !== entry.real
+          || ['dev', 'ino', 'mode', 'size', 'mtimeNs', 'ctimeNs'].some(field => stat[field] !== entry.stat[field]))
+        fail('ARCHIVE_AUTHORITY_INVALID', 'archive authority changed during phase selection');
+    }
+  };
+  return {
+    authority(worktree) {
+      const existing = authorities.get(worktree);
+      if (existing) { unchanged(existing.snapshot); return existing.state; }
+      const directory = archiveAuthorityDirectory(worktree);
+      const before = snapshot({ directory, file: path.join(directory, 'catalogue.json') });
+      const state = authorityState(worktree);
+      unchanged(before);
+      authorities.set(worktree, { state, snapshot: before });
+      return state;
+    },
+    identity(worktree, commit, label) {
+      const key = worktree + ':' + commit;
+      if (!objects.has(key)) objects.set(key, gitObjectIdentity({}, worktree, commit, label));
+      return objects.get(key);
+    },
+    finish() { for (const retained of authorities.values()) unchanged(retained.snapshot); },
+  };
+}
+
 function selectedArchiveRecord(scope, row, trusted) {
-  const state = authorityState(row.worktree);
+  const state = scope.verification.authority(row.worktree);
   const record = state.payload.records[row.dispatch_id];
   const pins = phaseRecordPins(row.dispatch_id, row.pins);
   if (!record || record.dispatch_id !== row.dispatch_id || stable(record.receipt) !== stable(row.receipt)
@@ -1389,7 +1421,7 @@ function selectedArchiveRecord(scope, row, trusted) {
   }
   for (const [commit, tree, label] of [[manifest.head, manifest.head_tree, 'selected original head'],
     [manifest.base_commit, manifest.base_tree, 'selected original base']])
-    if (gitObjectIdentity({}, row.worktree, sha(commit, label), label).tree !== tree)
+    if (scope.verification.identity(row.worktree, sha(commit, label), label).tree !== tree)
       fail('ARCHIVE_AUTHORITY_INVALID', 'selected original revision differs');
   if (stable(membership()) !== stable(pins.map(pin => pin.path)))
     fail('ARCHIVE_AUTHORITY_INVALID', 'selected membership changed while authenticating');
@@ -1422,7 +1454,7 @@ function phaseArchiveHints(scope, binding, roster, currentDispatchId) {
     const stat = fs.lstatSync(directory);
     if (!stat.isDirectory() || stat.isSymbolicLink()) continue;
     const names = fs.readdirSync(directory);
-    if (names.length > 1000) fail('ARCHIVE_AUTHORITY_INVALID', 'archive identity hints exceed their bound');
+    let relevantHints = 0;
     for (const name of names) {
       if (roster.records.some(row => row.worktree === worktree && path.basename(archiveRelative(row.dispatch_id, '')) === name)) continue;
       const file = path.join(directory, name, MANIFEST_NAME);
@@ -1436,8 +1468,10 @@ function phaseArchiveHints(scope, binding, roster, currentDispatchId) {
       if (scope.identity.tickets.includes(hint.ticket) || scope.identity.tickets.includes(hint.boundary_subject))
         fail('ARCHIVE_AUTHORITY_INVALID', 'possible current family is absent from independently retained roster');
       if (hint.boundary_subject !== binding.subject) continue;
-      if (hint.producer_dispatch === currentDispatchId) continue;
-      const state = authorityState(worktree), record = state.payload.records[hint.producer_dispatch];
+      if (typeof currentDispatchId === 'string' && currentDispatchId.trim().length > 0
+          && hint.producer_dispatch === currentDispatchId) continue;
+      if (++relevantHints > 1000) fail('ARCHIVE_AUTHORITY_INVALID', 'archive identity hints exceed their bound');
+      const state = scope.verification.authority(worktree), record = state.payload.records[hint.producer_dispatch];
       if (!record || record.receipt.role !== 'arch-review'
           || ![record.ticket, record.receipt.ticket, record.receipt.runtime_evidence?.ticket].some(value => value === binding.subject)
           || [record.ticket, record.receipt.ticket, record.receipt.runtime_evidence?.ticket].some(value => value !== undefined && value !== binding.subject)
@@ -1452,6 +1486,7 @@ function phaseArchiveHints(scope, binding, roster, currentDispatchId) {
 
 function selectPhaseArchives(worktreePath, binding, options = {}) {
   const scope = phaseArchiveScope(worktreePath, binding, options.graphDir);
+  scope.verification = phaseSelectionVerification();
   const roster = readPhaseArchiveRoster({ worktreePath, binding, graphDir: options.graphDir });
   const selection = { identity: roster.identity, roster_digest: roster.roster_digest,
     inventory_digest: roster.inventory_digest, records: roster.records };
@@ -1459,6 +1494,7 @@ function selectPhaseArchives(worktreePath, binding, options = {}) {
     fail('ARCHIVE_AUTHORITY_INVALID', 'frozen current phase archive selection differs');
   const evidence = roster.records.map(row => selectedArchiveRecord(scope, row, verifyPhaseRosterRecord(scope, row)));
   const candidates = phaseArchiveHints(scope, binding, roster, options.currentDispatchId);
+  scope.verification.finish();
   return { selection, evidence: evidence.sort((a, b) => a.dispatch_id.localeCompare(b.dispatch_id)), candidates,
     pins: roster.records.filter(row => row.worktree === scope.root).flatMap(row => row.pins).sort((a, b) => a.path.localeCompare(b.path)) };
 }
