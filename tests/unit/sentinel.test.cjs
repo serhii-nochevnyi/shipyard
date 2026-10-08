@@ -637,6 +637,45 @@ test('a PR targeting the integration branch is refused though every ticket is pr
   assert.ok(r.blockers.some((b) => /human/.test(b)), r.blockers.join('; '));
 });
 
+test('foreign integration lookup uses planning Git identity and keeps checkout availability guard', () => {
+  const repo = 'acme/other';
+  const root = project({
+    tickets: { 'T-FR': { phase: 24, branch: 'ticket/T-FR', epic: 'epic/24-x', repo } },
+    state: { 'T-FR': { ...openGreen(9, 'ticket/T-FR', 'main'), repo, merge_scope: 'integration' } },
+    config: epicConfig,
+  });
+  const foreign = fs.mkdtempSync(path.join(os.tmpdir(), 'sentinel-foreign-'));
+  roots.push(foreign);
+  for (const checkout of [root, foreign]) execFileSync('git', ['-C', checkout, 'init'], {stdio:'ignore'});
+  execFileSync('git', ['-C', foreign, 'remote', 'add', 'origin', 'https://github.com/' + repo + '.git']);
+  const common = checkout => execFileSync('git', ['-C', checkout, 'rev-parse', '--path-format=absolute', '--git-common-dir'], {encoding:'utf8'}).trim();
+  assert.notStrictEqual(common(root), common(foreign));
+  const configPath = path.join(root,'.planning/config.json');
+  fs.writeFileSync(configPath, JSON.stringify({...epicConfig,pipeline:{repos:{[repo]:foreign}}}));
+  const observed = path.join(root,'verdict-call.json');
+  const preload = path.join(root,'verdict-preload.cjs');
+  const artifactModule = path.join(path.dirname(SENTINEL),'role-artifact.cjs');
+  fs.writeFileSync(preload, `const fs=require('fs'),target=${JSON.stringify(artifactModule)};const original=require(target);require.cache[require.resolve(target)].exports = {...original,currentArchitectureVerdict: input => { fs.writeFileSync(${JSON.stringify(observed)},JSON.stringify(input)); return {authenticated:true,verdict:'conform'}; }};`);
+  const env = onPath(stubGh(), {STUB_BASE:'main',STUB_HEAD:'ticket/T-FR',STUB_PR:'9',STUB_HEAD_OID:'a'.repeat(40),NODE_OPTIONS:'--require=' + preload});
+  const result = run(root,['merge','T-FR','--json','--dry-run'],{env});
+  assert.strictEqual(result.status,0,result.stderr);
+  assert.ok(fs.existsSync(observed),result.stdout);
+  const input = JSON.parse(fs.readFileSync(observed));
+  assert.strictEqual(input.worktreePath,fs.realpathSync(root));
+  assert.strictEqual(input.repo,repo);
+  assert.strictEqual(input.graphDir,fs.realpathSync(path.join(root,'.planning/graph')));
+  assert.strictEqual(input.head,'a'.repeat(40));
+  const row = JSON.parse(result.stdout).results[0];
+  assert.strictEqual(row.merged,false);
+  assert.ok(row.blockers.some(b=>/human/.test(b)),row.blockers.join('; '));
+  fs.unlinkSync(observed);
+  fs.writeFileSync(configPath,JSON.stringify({...epicConfig,pipeline:{repos:{[repo]:path.join(foreign,'missing')}}}));
+  const missing = run(root,['merge','T-FR','--json','--dry-run'],{env});
+  assert.strictEqual(missing.status,0,missing.stderr);
+  assert.strictEqual(fs.existsSync(observed),false);
+  assert.ok(JSON.parse(missing.stdout).results[0].blockers.some(b=>/fresh authenticated architecture/.test(b)));
+});
+
 test('...and the SAME pre-authorized ticket does land on its epic (the control)', () => {
   // Without this the refusal above proves nothing: a gate that refuses
   // everything would satisfy it.

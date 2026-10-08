@@ -9,7 +9,7 @@ const { execFileSync } = require('node:child_process');
 const { assertCanonicalGraph } = require('./plan-delivery.cjs');
 const { statusIgnoringScratch } = require('./conveyor-scratch.cjs');
 const roleArtifact = require('./role-artifact.cjs');
-const { resolveIntegrationBranch, architectureTarget, phaseBinding, phaseEvidencePaths, PHASE_SUBJECT } = require('./architecture-target.cjs');
+const { resolveIntegrationBranch, architectureTarget, phaseBinding, phaseRows, phaseEvidencePaths, PHASE_SUBJECT } = require('./architecture-target.cjs');
 const { parseCodexStream } = require('./codex-runtime-host.cjs');
 
 const SCHEMA = 'shipyard.codex-arch-review-context.v1';
@@ -468,7 +468,7 @@ function collect(scope, options) {
   const state = rawState.tickets || rawState;
   const aggregate = PHASE_SUBJECT.exec(scope.ticket);
   let binding;
-  const aggregateRows = aggregate ? Object.entries(graph.tickets).filter(([, item]) => Number(String(item.phase).match(/^0*(\d+)/)?.[1]) === Number(scope.phase)) : [];
+  const aggregateRows = aggregate ? phaseRows(graph, scope.phase, options.phaseRepo ?? null) : [];
   const row = aggregate ? aggregateRows[0]?.[1] : graph.tickets && graph.tickets[scope.ticket];
   if (!object(row) || Number(String(row.phase).match(/^0*(\d+)/)?.[1]) !== Number(scope.phase))
     fail('ticket or phase absent from canonical graph');
@@ -494,7 +494,7 @@ function collect(scope, options) {
   if (!architectureTarget({ base: live.baseRefName, integrationBranch: integration }).required)
     fail('architecture review skipped-by-target', 'ARCH_REVIEW_SKIPPED_BY_TARGET');
   if (aggregate) {
-    binding = phaseBinding({ graph, state, phase: scope.phase, repository: common(worktree),
+    binding = phaseBinding({ graph, state, phase: scope.phase, repository: common(worktree), repo: options.phaseRepo ?? null,
       pr: number, head, base: live.baseRefOid, branch });
     if (binding.subject !== scope.ticket) fail('aggregate phase identity changed', 'STALE_CONTEXT');
   }
@@ -661,7 +661,7 @@ function collect(scope, options) {
 
 function verifyLivePullRequest(prepared, options) {
   const current = collect({ worktree: prepared.canonical.worktree,
-    ticket: prepared.ticket, phase: prepared.phaseNumber }, options);
+    ticket: prepared.ticket, phase: prepared.phaseNumber }, { ...options, phaseRepo: prepared.binding?.repo ?? null });
   if (current.packet.digest !== prepared.packet.digest)
     fail('authenticated PR, graph, diff or architecture context changed', 'STALE_CONTEXT');
   return current.livePullRequests[0];
@@ -765,6 +765,7 @@ function finish(value, dispatch, recorder) {
       worktree: prepared.canonical.worktree, evidence_sha256: evidence.sha256,
       transcript_sha256: dispatch.receipt.runtime_evidence.transcript.sha256,
       selected_refs: value.evidence.selected_refs,
+      ...(prepared.binding ? { phase_repo: prepared.binding.repo } : {}),
       ...(prepared.binding ? { phase_evidence_digest: roleArtifact.phaseArchitectureEvidenceDigest(prepared.packet.retained_evidence),
         phase_archive_selection: preparedOptions.get(value).phaseArchiveSelection } : {}),
       installation,
@@ -774,7 +775,7 @@ function finish(value, dispatch, recorder) {
       historical_bookkeeping: preparedOptions.get(value).historicalBookkeepingPins || [],
     } }, evidencePath: evidence.path, io: { fs: checkedFs, execFileSync(executable, args, options) {
       const privateOptions = preparedOptions.get(value);
-      if (executable === 'gh' && privateOptions.getPullRequest)
+      if (executable === 'gh' && args[0] === 'pr' && args[1] === 'view' && privateOptions.getPullRequest)
         return JSON.stringify(privateOptions.getPullRequest({ worktree: prepared.canonical.worktree,
           pr: prepared.pr, repo: prepared.rows[0].row.repo || null }));
       if (executable === 'git' && args.includes('fetch') && privateOptions.refreshGit === false) return '';
@@ -810,7 +811,7 @@ function prepare(scope, launch, options = {}) {
 
   const context = object(launch.context) ? launch.context : {};
   const suppliedSignals = object(launch.signals) ? launch.signals : {};
-  if (Object.keys(context).length) {
+  if (Object.keys(context).some(key => key !== 'repo') || (Object.hasOwn(context, 'repo') && !PHASE_SUBJECT.test(scope.ticket))) {
     fail('arch-review context is host-built; caller-supplied prompts or selectors are refused');
   }
   if (Object.keys(suppliedSignals).length) {
@@ -818,7 +819,7 @@ function prepare(scope, launch, options = {}) {
   }
   if (launch.gsd_role !== undefined) fail('arch-review cannot use a typed GSD role');
 
-  options = { ...options, archivePins: PHASE_SUBJECT.test(scope.ticket) ? [] : roleArtifact.authenticatedArchivePins(scope.worktree),
+  options = { ...options, phaseRepo: context.repo ?? null, archivePins: PHASE_SUBJECT.test(scope.ticket) ? [] : roleArtifact.authenticatedArchivePins(scope.worktree),
     historicalBookkeepingPins: PHASE_SUBJECT.test(scope.ticket) ? [] : roleArtifact.historicalBookkeepingPins(scope.worktree) };
   roleArtifact.prepareRoleArtifact({ worktreePath: scope.worktree, role: 'arch-review' });
   const prepared = collect(scope, options);
@@ -980,6 +981,7 @@ function launchDigest(value, installation = installedLaunches.get(value)) {
       || path.join(value.prepared.canonical.worktree, '.planning/graph')),
     packet_digest: value.prepared.packet.digest, installation, bookkeeping: options.bookkeepingPins || [],
     historical_archives: options.archivePins || [], historical_bookkeeping: options.historicalBookkeepingPins || [],
+    ...(value.prepared.binding ? { phase_repo: value.prepared.binding.repo } : {}),
     ...(options.phaseArchiveSelection ? { phase_archive_selection: options.phaseArchiveSelection } : {}),
     ...(options.fileInput ? { input_transport: 'host-files', input_bundle: options.fileInput.input_bundle } : {}),
   })));
@@ -1011,6 +1013,7 @@ function validateHistoricalContext(input) {
   const attestation = { graph_dir: context.graph_dir, packet_digest: context.packet_digest,
     installation: context.installation, bookkeeping: context.bookkeeping };
   if (context.historical_archives !== undefined) attestation.historical_archives = context.historical_archives;
+  if (context.phase_repo !== undefined) attestation.phase_repo = context.phase_repo;
   if (context.phase_archive_selection !== undefined) attestation.phase_archive_selection = context.phase_archive_selection;
   if (context.historical_bookkeeping !== undefined) attestation.historical_bookkeeping = context.historical_bookkeeping;
   Object.assign(attestation, transportAttestation(context));
@@ -1089,6 +1092,7 @@ function validateSealedContext(input, options = {}) {
       || original.launch_digest !== digest(JSON.stringify(canonical({ graph_dir: context.graph_dir,
         packet_digest: context.packet_digest, installation, bookkeeping: context.bookkeeping,
         historical_archives: context.historical_archives, historical_bookkeeping: context.historical_bookkeeping,
+        ...(context.phase_repo !== undefined ? { phase_repo: context.phase_repo } : {}),
         ...(context.phase_archive_selection ? { phase_archive_selection: context.phase_archive_selection } : {}),
         ...transportAttestation(context) }))))
     fail('sealed context differs from original authenticated launch identity', 'STALE_CONTEXT');
@@ -1106,7 +1110,7 @@ function validateSealedContext(input, options = {}) {
   if (PHASE_SUBJECT.test(input.ticket) && !object(context.phase_archive_selection))
     fail('sealed aggregate current phase archive selection is missing', 'ARCH_REVIEW_CONTEXT_REQUIRED');
   const current = collect({ worktree: input.worktree, ticket: input.ticket, phase: context.phase }, {
-    ...options, graphDir: context.graph_dir, inflightDispatchId: input.dispatchId,
+    ...options, phaseRepo: context.phase_repo ?? null, graphDir: context.graph_dir, inflightDispatchId: input.dispatchId,
     bookkeepingPins: context.bookkeeping, historicalBookkeepingPins: context.historical_bookkeeping,
     allowClearedBookkeeping: true, phaseArchiveSelection: context.phase_archive_selection, archivePins: [...context.historical_archives, ...(input.archivePins || [])],
   });

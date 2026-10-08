@@ -503,7 +503,7 @@ function parseBuildArgs(argv) {
   const seen = new Set();
   for (let index = 2; index < argv.length; index++) {
     const flag = argv[index];
-    if (!['--runtime', '--pr', '--failure-file', '--review-file', '--line', '--phase', '--graph'].includes(flag)) {
+    if (!['--runtime', '--pr', '--failure-file', '--review-file', '--line', '--phase', '--graph', '--repo'].includes(flag)) {
       buildFail(flag, `unsupported build field ${flag}`);
     }
     if (seen.has(flag)) buildFail(flag, `${flag} may be supplied only once`);
@@ -520,7 +520,8 @@ function parseBuildArgs(argv) {
         buildFail(flag, '--pr must be a positive integer');
       }
       args.pr = Number(value);
-    } else if (flag === '--graph') args.graphDir = value;
+    } else if (flag === '--repo') args.repo = value;
+    else if (flag === '--graph') args.graphDir = value;
     else if (flag === '--line') args.line = value;
     else if (flag === '--phase') {
       if (!/^\d+$/.test(value) || !Number.isSafeInteger(Number(value)) || Number(value) < 1) {
@@ -553,6 +554,7 @@ function parseBuildArgs(argv) {
   if ((role === 'research' || role === 'decomposition') && args.pr !== undefined) {
     buildFail('--pr', '--pr is not valid for planning requests');
   }
+  if (args.repo !== undefined && !(role === 'arch-review' && args.phase)) buildFail('--repo', '--repo requires phase architecture review');
   return args;
 }
 
@@ -1109,21 +1111,26 @@ function buildPhaseArchitectureRequest(args, options) {
   if (!args.pr) buildFail('--pr', 'phase architecture review requires an explicit integration PR');
   const input = planningBuildContext(options);
   const branch = git(input.worktree, ['symbolic-ref', '--quiet', '--short', 'HEAD']);
-  const row = Object.values(input.graph.tickets).find(row => phaseNumber(row.phase) === args.phase);
-  if (!row) buildFail('--phase', 'phase absent from canonical graph');
+  const repo = args.repo ?? null;
+  let row;
+  try {
+    row = require('./architecture-target.cjs').phaseRows(input.graph, args.phase, repo)[0][1];
+  } catch (error) {
+    buildFail(args.repo === undefined ? '--phase' : '--repo', error.message);
+  }
   const stateRaw = readJsonBounded(path.join(input.graphDir, 'delivery-state.json'));
   const state = stateRaw?.tickets || stateRaw;
   if (!object(state)) buildFail('state', 'canonical phase evidence is unavailable');
   const live = requireArchitectureTarget({ ...input, row, branch, stateRow: {} }, args, options);
   const repository = fs.realpathSync(git(input.worktree, ['rev-parse', '--path-format=absolute', '--git-common-dir']));
   const binding = require('./architecture-target.cjs').phaseBinding({ graph: input.graph, state,
-    phase: args.phase, repository, branch, pr: args.pr, head: live.headRefOid, base: live.baseRefOid });
+    phase: args.phase, repository, repo, branch, pr: args.pr, head: live.headRefOid, base: live.baseRefOid });
   if (args.ticket !== binding.phase) buildFail('<phase>', 'phase selector must name its canonical directory');
   if (args.runtime === 'claude') return { schema: claudeRoleHost.REQUEST_SCHEMA, role: 'arch-review',
-    worktree: input.worktree, phase: binding.phase, pr: args.pr };
+    worktree: input.worktree, phase: binding.phase, pr: args.pr, repo: binding.repo };
   return { scope: { run_id: `deliver-arch-${crypto.randomUUID()}`, ticket: binding.subject,
     phase: args.phase, worktree: input.worktree, runtime: 'codex', provider: 'openai' },
-    graph_dir: input.graphDir, role: 'arch-review', signals: {}, context: {} };
+    graph_dir: input.graphDir, role: 'arch-review', signals: {}, context: { repo: binding.repo } };
 }
 
 function build(argv, options = {}) {

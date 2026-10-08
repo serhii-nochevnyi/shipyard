@@ -1389,8 +1389,7 @@ function phaseArchiveScope(worktreePath, binding, graphDir) {
   const common = repository(root);
   if (repository(project) !== common) fail('ARCHIVE_AUTHORITY_INVALID', 'phase graph belongs to another repository');
   const graph = JSON.parse(readImmutableFile(fs, path.join(directory, 'tickets.json'), 'phase graph'));
-  const rows = Object.entries(graph.tickets || {}).filter(([, row]) =>
-    Number(String(row.phase).match(/^0*(\d+)/)?.[1]) === Number(binding.phase.split('-')[0])).sort(([a], [b]) => a.localeCompare(b));
+  const rows = require('./architecture-target.cjs').phaseRows(graph, Number(binding.phase.split('-')[0]), binding.repo ?? null);
   if (!rows.length || stable(rows.map(([id, row]) => ({ id, row }))) !== stable(binding.rows))
     fail('ARCHIVE_AUTHORITY_INVALID', 'selected phase graph membership differs');
   const subject = require('./architecture-target.cjs').PHASE_SUBJECT.exec(binding.subject);
@@ -1398,7 +1397,7 @@ function phaseArchiveScope(worktreePath, binding, graphDir) {
     fail('ARCHIVE_AUTHORITY_INVALID', 'selected phase repository identity differs');
   const raw = JSON.parse(readImmutableFile(fs, path.join(directory, 'delivery-state.json'), 'phase state'));
   const actual = require('./architecture-target.cjs').phaseBinding({ graph, state: raw.tickets || raw,
-    phase: Number(binding.phase.split('-')[0]), repository: common, branch: rows[0][1].epic,
+    phase: Number(binding.phase.split('-')[0]), repository: common, repo: binding.repo ?? null, branch: rows[0][1].epic,
     pr: Number(subject[4]), head: subject[5], base: subject[6] });
   if (actual.subject !== binding.subject) fail('ARCHIVE_AUTHORITY_INVALID', 'actual current phase ticket-set digest differs');
   return { root, project, identity: { repository: common, graph_dir: directory,
@@ -1589,60 +1588,33 @@ function selectedArchiveRecord(scope, row, trusted) {
   return { worktree: row.worktree, dispatch_id: row.dispatch_id, receipt: row.receipt, files };
 }
 
-function archiveIdentityHint(file, stat) {
-  const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
-  try {
-    if (!sameStat(stat, fs.fstatSync(fd))) fail('ARCHIVE_AUTHORITY_INVALID', 'archive identity hint changed before reading');
-    const bytes = Buffer.alloc(stat.size); let offset = 0;
-    while (offset < bytes.length) {
-      const count = fs.readSync(fd, bytes, offset, bytes.length - offset, offset);
-      if (!count) fail('ARCHIVE_AUTHORITY_INVALID', 'archive identity hint ended before bounded bytes');
-      offset += count;
-    }
-    if (fs.readSync(fd, Buffer.alloc(1), 0, 1, offset) || !sameStat(stat, fs.fstatSync(fd))
-        || !sameStat(stat, fs.lstatSync(file)))
-      fail('ARCHIVE_AUTHORITY_INVALID', 'archive identity hint changed during reading');
-    return JSON.parse(bytes);
-  } finally { fs.closeSync(fd); }
-}
-
-function phaseArchiveHints(scope, binding, roster, currentDispatchId) {
+function selectedPhaseJudgments(scope, binding, roster) {
   const candidates = [];
-  for (const worktree of registeredPhaseWorktrees(scope.root)) {
-    if (!fs.existsSync(worktree) || fs.lstatSync(worktree).isSymbolicLink()) continue;
-    const directory = path.join(worktree, ARTIFACT_ARCHIVE_DIR);
-    if (!fs.existsSync(directory)) continue;
-    const stat = fs.lstatSync(directory);
-    if (!stat.isDirectory() || stat.isSymbolicLink()) continue;
-    const names = fs.readdirSync(directory);
-    let relevantHints = 0;
-    for (const name of names) {
-      if (roster.records.some(row => row.worktree === worktree && path.basename(archiveRelative(row.dispatch_id, '')) === name)) continue;
-      const file = path.join(directory, name, MANIFEST_NAME);
-      if (!fs.existsSync(file)) continue;
-      const familyStat = fs.lstatSync(path.dirname(file)), hintStat = fs.lstatSync(file);
-      if (familyStat.isSymbolicLink() || !familyStat.isDirectory() || !hintStat.isFile() || hintStat.isSymbolicLink()
-          || hintStat.size > HISTORICAL_ARCHIVE_MAX_BYTES) continue;
-      let hint;
-      try { hint = archiveIdentityHint(file, hintStat); }
-      catch (error) { if (error instanceof SyntaxError) continue; throw error; }
-      if (scope.identity.tickets.includes(hint.ticket) || scope.identity.tickets.includes(hint.boundary_subject))
-        fail('ARCHIVE_AUTHORITY_INVALID', 'possible current family is absent from independently retained roster');
-      if (hint.boundary_subject !== binding.subject) continue;
-      if (typeof currentDispatchId === 'string' && currentDispatchId.trim().length > 0
-          && hint.producer_dispatch === currentDispatchId) continue;
-      if (++relevantHints > 1000) fail('ARCHIVE_AUTHORITY_INVALID', 'archive identity hints exceed their bound');
-      const state = scope.verification.authority(worktree), record = state.payload.records[hint.producer_dispatch];
-      if (!record || record.receipt.role !== 'arch-review'
-          || ![record.ticket, record.receipt.ticket, record.receipt.runtime_evidence?.ticket].some(value => value === binding.subject)
-          || [record.ticket, record.receipt.ticket, record.receipt.runtime_evidence?.ticket].some(value => value !== undefined && value !== binding.subject)
-          || path.basename(archiveRelative(record.dispatch_id, '')) !== name)
-        fail('ARCHIVE_AUTHORITY_INVALID', 'aggregate candidate lacks original protected authority');
-      const row = { worktree, dispatch_id: record.dispatch_id, ticket: binding.subject, receipt: record.receipt, pins: record.pins };
-      candidates.push(selectedArchiveRecord(scope, row));
+  const worktrees = [...new Set([scope.root, scope.project, ...roster.records.map(row => row.worktree)])];
+  for (const worktree of worktrees) {
+    const catalogue = path.join(archiveAuthorityDirectory(worktree), 'catalogue.json');
+    if (!fs.existsSync(catalogue)) continue;
+    const state = scope.verification ? scope.verification.authority(worktree) : authorityState(worktree);
+    for (const record of Object.values(state.payload.records)) {
+      if (record.ticket !== binding.subject || record.receipt?.role !== 'arch-review') continue;
+      if ([record.receipt.ticket, record.receipt.runtime_evidence?.ticket]
+          .some(value => value !== undefined && value !== binding.subject))
+        fail('ARCHIVE_AUTHORITY_INVALID', 'aggregate candidate original receipt identity differs');
+      if (candidates.length >= 1000)
+        fail('ARCHIVE_AUTHORITY_INVALID', 'selected phase judgments exceed their total bound');
+      candidates.push({ worktree, record });
     }
   }
   return candidates;
+}
+
+function phaseArchiveHints(scope, binding, roster, currentDispatchId) {
+  return selectedPhaseJudgments(scope, binding, roster)
+    .filter(({ record }) => record.dispatch_id !== currentDispatchId)
+    .map(({ worktree, record }) => selectedArchiveRecord(scope, {
+      worktree, dispatch_id: record.dispatch_id, ticket: binding.subject,
+      receipt: record.receipt, pins: record.pins,
+    }));
 }
 
 function selectPhaseArchives(worktreePath, binding, options = {}) {
@@ -1666,7 +1638,7 @@ function phaseArchitectureEvidence(worktreePath, binding, options = {}) {
 
 function phaseArchitectureEvidenceDigest(evidence) { return digest(stable(evidence)); }
 
-function currentArchitectureVerdict({ worktreePath, pr, head, baseName, baseCommit, graphDir, headBranch }) {
+function currentArchitectureVerdict({ worktreePath, pr, head, baseName, baseCommit, graphDir, headBranch, repo: requestedRepo }) {
   const root = fs.realpathSync(worktreePath);
   const common = fs.realpathSync(execFileSync('git', ['-C', root, 'rev-parse', '--path-format=absolute', '--git-common-dir'], { encoding: 'utf8' }).trim());
   const directory = graphDir || path.join(root, '.planning/graph');
@@ -1675,20 +1647,52 @@ function currentArchitectureVerdict({ worktreePath, pr, head, baseName, baseComm
   catch (error) { if (error.code !== 'ENOENT') throw error; }
   const targetBranch = headBranch || execFileSync('git', ['-C', root, 'symbolic-ref', '--quiet', '--short', 'HEAD'], { encoding: 'utf8' }).trim();
   const aggregateRequired = Object.values(targetGraph?.tickets || {}).some(row => row.epic === targetBranch);
-  let selected;
+  let selected = null;
   if (aggregateRequired) {
-    const phases = new Set(Object.values(targetGraph.tickets).filter(row => row.epic === targetBranch).map(row => Number(String(row.phase).match(/^0*(\d+)/)?.[1])));
-    if (phases.size !== 1) fail('ARCHIVE_AUTHORITY_INVALID', 'aggregate verdict requires one current phase');
-    const raw = JSON.parse(fs.readFileSync(path.join(directory, 'delivery-state.json'), 'utf8'));
-    const binding = require('./architecture-target.cjs').phaseBinding({ graph: targetGraph, state: raw.tickets || raw,
-      phase: [...phases][0], repository: common, branch: targetBranch, pr, head, base: baseCommit });
-    selected = selectPhaseArchives(root, binding, { graphDir: directory });
+    selected = [];
+    if (path.basename(directory) !== 'graph' || path.basename(path.dirname(directory)) !== '.planning'
+        || fs.realpathSync(directory) !== path.resolve(directory))
+      fail('ARCHIVE_AUTHORITY_INVALID', 'canonical phase graph directory is required');
+    const project = fs.realpathSync(path.resolve(directory, '../..'));
+    if (fs.realpathSync(execFileSync('git', ['-C', project, 'rev-parse', '--path-format=absolute', '--git-common-dir'], { encoding: 'utf8' }).trim()) !== common)
+      fail('ARCHIVE_AUTHORITY_INVALID', 'phase graph belongs to another repository');
+    const currentEpics = execFileSync('git', ['-C', root, 'worktree', 'list', '--porcelain'], { encoding: 'utf8' })
+      .split('\n\n').map(block => Object.fromEntries(block.split('\n').map(line => {
+        const separator = line.indexOf(' ');
+        return separator < 0 ? [line, true] : [line.slice(0, separator), line.slice(separator + 1)];
+      }))).filter(row => row.branch === 'refs/heads/' + targetBranch && row.HEAD === head && !row.prunable);
+    if (currentEpics.length > 1000) fail('ARCHIVE_AUTHORITY_INVALID', 'selected current epic checkouts exceed their total bound');
+    const candidates = new Set([root, project]);
+    for (const row of currentEpics) {
+      const checkout = fs.realpathSync(row.worktree);
+      if (checkout !== path.resolve(row.worktree)) fail('ARCHIVE_AUTHORITY_INVALID', 'current epic checkout is not canonical');
+      const actualCommon = fs.realpathSync(execFileSync('git', ['-C', checkout, 'rev-parse', '--path-format=absolute', '--git-common-dir'], { encoding: 'utf8' }).trim());
+      const actualHead = execFileSync('git', ['-C', checkout, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+      const actualBranch = execFileSync('git', ['-C', checkout, 'symbolic-ref', '--quiet', 'HEAD'], { encoding: 'utf8' }).trim();
+      if (actualCommon !== common || actualHead !== head || actualBranch !== 'refs/heads/' + targetBranch)
+        fail('ARCHIVE_AUTHORITY_INVALID', 'current epic checkout identity changed');
+      candidates.add(checkout);
+    }
+    for (const worktree of candidates) {
+      if (!fs.existsSync(path.join(archiveAuthorityDirectory(worktree), 'catalogue.json'))) continue;
+      for (const record of Object.values(authorityState(worktree).payload.records)) {
+        if (record.receipt?.role !== 'arch-review') continue;
+        const subject = require('./architecture-target.cjs').PHASE_SUBJECT.exec(record.ticket);
+        if (!subject || subject[2] !== common || Number(subject[4]) !== pr || subject[5] !== head || subject[6] !== baseCommit) continue;
+        if ([record.receipt.ticket, record.receipt.runtime_evidence?.ticket].some(value => value !== undefined && value !== record.ticket))
+          fail('ARCHIVE_AUTHORITY_INVALID', 'aggregate candidate original receipt identity differs');
+        if (selected.length >= 1000) fail('ARCHIVE_AUTHORITY_INVALID', 'selected phase judgments exceed their total bound');
+        selected.push({ worktree, record });
+      }
+    }
   }
-  const worktrees = selected ? [...new Set([...selected.evidence, ...selected.candidates].map(row => row.worktree))] : registeredPhaseWorktrees(root);
+  let current = null;
+  const worktrees = selected ? [...new Set(selected.map(row => row.worktree))] : registeredPhaseWorktrees(root);
   for (const worktree of worktrees) {
     let records;
-    if (selected) records = [...selected.evidence, ...selected.candidates].filter(row => row.worktree === worktree)
-      .map(row => ({ ...row, pins: row.files.map(({ content, ...pin }) => pin) }));
+    if (aggregateRequired) {
+      records = selected.filter(row => row.worktree === worktree).map(row => row.record);
+    }
     else {
       const pins = authenticatedArchivePins(worktree);
       if (!pins.length) continue;
@@ -1698,7 +1702,8 @@ function currentArchitectureVerdict({ worktreePath, pr, head, baseName, baseComm
       if (record.receipt.role !== 'arch-review') continue;
       const pin = record.pins.find(pin => pin.path.endsWith('/' + MANIFEST_NAME));
       const manifest = JSON.parse(readPinnedArchiveFile(worktree, pin, 'architecture manifest'));
-      if (aggregateRequired && !manifest.boundary_subject?.startsWith('phase=')) continue;
+      if (aggregateRequired && manifest.boundary_subject !== record.ticket)
+        fail('ARCHIVE_AUTHORITY_INVALID', 'aggregate candidate manifest subject differs');
       if (manifest.role !== 'arch-review' || manifest.artifact_kind !== 'judgment'
           || manifest.producer_dispatch !== record.dispatch_id || manifest.repository_identity !== common
           || manifest.pr !== pr || manifest.head !== head || manifest.base_commit !== baseCommit
@@ -1708,8 +1713,7 @@ function currentArchitectureVerdict({ worktreePath, pr, head, baseName, baseComm
       if (findings.id !== manifest.boundary_subject || findings.pr !== pr || findings.head !== head
           || findings.base_tree !== manifest.merge_base_tree || findings.verdict !== 'conform') continue;
       if (manifest.boundary_subject.startsWith('phase=')) {
-        if (!object(findings.host_context?.phase_archive_selection)
-            || (selected && stable(findings.host_context.phase_archive_selection) !== stable(selected.selection)))
+        if (!object(findings.host_context?.phase_archive_selection))
           fail('ARCHIVE_AUTHORITY_INVALID', 'aggregate verdict lacks its frozen current phase selection');
         const directory = graphDir || findings.host_context?.graph_dir || path.join(root, '.planning/graph');
         const graph = JSON.parse(fs.readFileSync(path.join(directory, 'tickets.json'), 'utf8'));
@@ -1717,8 +1721,14 @@ function currentArchitectureVerdict({ worktreePath, pr, head, baseName, baseComm
         const aggregate = require('./architecture-target.cjs').PHASE_SUBJECT.exec(manifest.boundary_subject);
         if (!aggregate) continue;
         const branch = headBranch || execFileSync('git', ['-C', worktree, 'symbolic-ref', '--quiet', '--short', 'HEAD'], { encoding: 'utf8' }).trim();
+        const repo = findings.host_context?.phase_repo ?? null;
+        if (requestedRepo !== undefined && requestedRepo !== repo) continue;
+        const phases = new Set(Object.values(graph.tickets || {}).filter(row =>
+          (row.repo ?? null) === repo && row.epic === branch).map(row => Number(String(row.phase).match(/^0*(\d+)/)?.[1])));
+        if (phases.size !== 1 || !phases.has(Number(aggregate[1].split('-')[0])))
+          fail('ARCHIVE_AUTHORITY_INVALID', 'aggregate verdict requires one current phase');
         const binding = require('./architecture-target.cjs').phaseBinding({ graph, state: raw.tickets || raw,
-          phase: Number(aggregate[1].split('-')[0]), repository: common, branch, pr, head, base: baseCommit });
+          phase: [...phases][0], repository: common, repo, branch, pr, head, base: baseCommit });
         if (binding.subject !== manifest.boundary_subject
             || findings.host_context?.phase_evidence_digest !== phaseArchitectureEvidenceDigest(phaseArchitectureEvidence(root, binding, { graphDir: directory,
               phaseArchiveSelection: findings.host_context?.phase_archive_selection }))) continue;
@@ -1738,11 +1748,14 @@ function currentArchitectureVerdict({ worktreePath, pr, head, baseName, baseComm
           result: findings, receipt: record.receipt, dispatchId: record.dispatch_id,
           evidence: readPinnedArchiveFile(worktree, manifest.files.evidence, 'architecture evidence') });
       } catch { continue; }
-      return Object.freeze({ authenticated: true, verdict: 'conform', pr, head, base: baseName,
+      if (current && current.subject !== manifest.boundary_subject)
+        fail('ARCHIVE_AUTHORITY_INVALID', 'aggregate verdict has ambiguous current repository selection');
+      current = Object.freeze({ authenticated: true, verdict: 'conform', pr, head, base: baseName,
         base_commit: baseCommit, subject: manifest.boundary_subject, dispatch_id: record.dispatch_id });
+      if (!aggregateRequired) return current;
     }
   }
-  return null;
+  return current;
 }
 
 function assertArchiveInventory(worktreePath, pins) {
