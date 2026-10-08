@@ -442,6 +442,28 @@ test('main-review-repair contract refuses configuration swaps and forged publica
     const changed = structuredClone(followup); mutate(changed);
     assert.throws(() => publication.validateRepairContract(changed, { ...followupApproval, ...changed }, true));
   }
+  const r2 = structuredClone(followup);
+  r2.source_head = '15a205063774993bc35404b5c8c8f1013f98b016';
+  r2.source_correction.scope_disposition.path = '/tmp/phase47-R2-existing-contract-scope.json';
+  r2.source_correction.previous_current_publication = {
+    path: publication.F1_HANDOFF, sha256: publication.F1_HANDOFF_SHA,
+    historical_source_contract: publication.F1_HISTORICAL_CONTRACT,
+    selection_path: '/Volumes/KINGSTON/claude-shipyard/.git/shipyard-phase47-final-publication/INV-014-runtime-delivery-correctness/ADR-027-main-review-repair-F1/selection.json',
+    selection_sha256: '68623cda4d53280dca2ad625589a45680b54949ed69afad81f3598cddc5d00f5',
+    binding_path: '/Volumes/KINGSTON/claude-shipyard/.git/shipyard-phase47-final-publication/INV-014-runtime-delivery-correctness/ADR-027-main-review-repair-F1/12b4367bd4d9aaf0dbaea193a5c6693de09499c652a59b3d935d9cad5e022fa8/binding.json',
+    binding_sha256: '3753108de3d078bc90ee50c8618f28f6170b03756c94f2419855ba80c1ed7523' };
+  const r2Approval = { ...structuredClone(approval), ...structuredClone(r2) };
+  publication.validateRepairContract(r2, r2Approval, 'R2');
+  for (const key of ['selection_path', 'selection_sha256', 'binding_path', 'binding_sha256']) {
+    for (const missing of [true, false]) {
+      const changed = structuredClone(r2);
+      if (missing) delete changed.source_correction.previous_current_publication[key];
+      else changed.source_correction.previous_current_publication[key] = key.endsWith('_sha256') ? '0'.repeat(64) : '/foreign/' + key;
+      const changedApproval = { ...structuredClone(r2Approval), ...structuredClone(changed) };
+      assert.throws(() => publication.validateRepairContract(changed, changedApproval, 'R2'),
+        new RegExp('previous GENF1 drift: ' + key));
+    }
+  }
   assert.equal(publication.F1_CORRECTIVE.length, 3);
   assert.equal(publication.F1_HANDOFF_SHA, '27ca0d42db637e83f181d398f0d047959d4295a8486967cfe798dd24476e5509');
 

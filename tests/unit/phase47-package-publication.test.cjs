@@ -72,6 +72,12 @@ const REPAIR_CORRECTIVE = ['codex-arch-review-context', 'claude-runtime-host', '
 
 const F1_HANDOFF = path.join(HOST, 'phase47-final-generation-adr027-main-review-repair-F1/generation.json');
 const F1_HANDOFF_SHA = '27ca0d42db637e83f181d398f0d047959d4295a8486967cfe798dd24476e5509';
+const F1_PUBLICATION_PINS = Object.freeze({
+  selection_path: '/Volumes/KINGSTON/claude-shipyard/.git/shipyard-phase47-final-publication/INV-014-runtime-delivery-correctness/ADR-027-main-review-repair-F1/selection.json',
+  selection_sha256: '68623cda4d53280dca2ad625589a45680b54949ed69afad81f3598cddc5d00f5',
+  binding_path: '/Volumes/KINGSTON/claude-shipyard/.git/shipyard-phase47-final-publication/INV-014-runtime-delivery-correctness/ADR-027-main-review-repair-F1/12b4367bd4d9aaf0dbaea193a5c6693de09499c652a59b3d935d9cad5e022fa8/binding.json',
+  binding_sha256: '3753108de3d078bc90ee50c8618f28f6170b03756c94f2419855ba80c1ed7523'
+});
 const F1_STAGE = REPAIR_STAGE + '-F1';
 const F1_CORRECTIVE = VOLUME_CORRECTIVE;
 const F1_SCOPE = '/tmp/phase47-F1-existing-contract-scope.json';
@@ -188,7 +194,7 @@ function validateRepairContract(handback, approval, followup = false) {
     assert.equal(approval.source_correction.previous_repair_publication.path, REPAIR_HANDOFF);
     assert.equal(approval.source_correction.previous_repair_publication.sha256, REPAIR_HANDOFF_SHA);
   }
-  if (followup === 'R2') validatePreviousCurrentPublication(approval.source_correction.previous_current_publication, approval.source_correction.previous_current_publication);
+  if (followup === 'R2') validatePreviousCurrentPublication(approval.source_correction.previous_current_publication, F1_PUBLICATION_PINS);
   const verdict = approval.current_checker.verdict;
   assert.equal(verdict.verdict || verdict.status, 'passed');
   assert.deepEqual(verdict.blockers, []);
