@@ -1001,6 +1001,10 @@ function finish(value, dispatch, recorder) {
   });
 }
 
+function architectureMemberIds(prepared) {
+  return prepared.binding ? prepared.binding.ticketSet.map(record => record.id) : [prepared.ticket];
+}
+
 function prepare(scope, launch, options = {}) {
   if (!object(scope) || !object(launch)) fail('scope and launch must be objects');
   if (launch.role !== 'arch-review') return Object.freeze({ schema: SCHEMA, launch, prepared: null });
@@ -1044,7 +1048,7 @@ function prepare(scope, launch, options = {}) {
       architecturePacket: prepared.packet,
       dispatchId: options.inflightDispatchId || launch.dispatch_id || crypto.randomUUID(),
       relayPrefix: prefix, binding: { packet_digest: prepared.packet.digest,
-        ticket_set: prepared.binding?.ticketSet || [prepared.ticket],
+        ticket_set: architectureMemberIds(prepared),
         ticket_set_digest: prepared.binding?.membership || digest(JSON.stringify([prepared.ticket])), base: prepared.baseCommit, base_ref: prepared.base,
         merge_base: prepared.packet.diff.merge_base,
         merge_base_tree: prepared.mergeBaseTree, retained_evidence: prepared.packet.retained_evidence || [] } });
@@ -1119,7 +1123,7 @@ function admitInstalledLaunch(value, options) {
       ...privateOptions, role: 'arch-review', dispatchId: privateOptions.inflightDispatchId,
       relayPrefix: value.launch.context.prompt.slice(0, value.launch.context.prompt.indexOf('<AUTHENTICATED_CONTEXT_PACKET>')),
       binding: { packet_digest: value.prepared.packet.digest,
-        ticket_set: value.prepared.binding?.ticketSet || [value.prepared.ticket],
+        ticket_set: architectureMemberIds(value.prepared),
         ticket_set_digest: value.prepared.binding?.membership || digest(JSON.stringify([value.prepared.ticket])), base: value.prepared.baseCommit, base_ref: value.prepared.base,
         merge_base: value.prepared.packet.diff.merge_base,
         merge_base_tree: value.prepared.mergeBaseTree, retained_evidence: value.prepared.packet.retained_evidence || [] } });

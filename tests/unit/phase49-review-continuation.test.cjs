@@ -20,7 +20,74 @@ const session = '11111111-1111-4111-8111-111111111111';
 const childSession = '33333333-3333-4333-8333-333333333333';
 const selection = { model: 'gpt-6.1-sol', effort: 'high', sandbox_mode: 'read-only' };
 const serialize = records => records.map(record => JSON.stringify(record) + '\n').join('');
-const event = (type, turn, extra = {}) => ({ type: 'event_msg', payload: { type, turn_id: turn, ...extra } });
+const fixtureRoot = path.resolve(__dirname, '../..');
+const registry = JSON.parse(fs.readFileSync(path.join(fixtureRoot, 'tests/fixtures/captured/boundaries/codex-agent-stream.json')));
+function captured(name) {
+  const file = registry.fixtures.find(file => file.endsWith('/codex-agent-stream-' + name + '.jsonl'));
+  assert.ok(file, 'native record templates must come from the registered boundary');
+  return fs.readFileSync(path.join(fixtureRoot, file), 'utf8').trim().split('\n').map(JSON.parse)
+    .filter(record => !record.shipyard_fixture);
+}
+const cliRecords = captured('exec');
+const parentRecords = captured('parent');
+const childRecords = captured('child');
+function template(records, match) {
+  const record = records.find(match);
+  assert.ok(record, 'registered native record template is required');
+  return structuredClone(record);
+}
+function event(type, turn, extra = {}) {
+  const record = template(childRecords, record => record.type === 'event_msg'
+    && record.payload.type === (type === 'task_aborted' ? 'task_started' : type));
+  Object.assign(record.payload, { type, turn_id: turn, ...extra });
+  if (record.payload.root_turn_id) record.payload.root_turn_id = turn;
+  return record;
+}
+function response(type, turn, fields, records = childRecords) {
+  const record = template(records, record => record.type === 'response_item' && record.payload.type === type
+    && (!fields.role || record.payload.role === fields.role)
+    && (!fields.phase || record.payload.phase === fields.phase));
+  Object.assign(record.payload, fields);
+  record.payload.internal_chat_message_metadata_passthrough.turn_id = turn;
+  return record;
+}
+function message(role, turn, text) {
+  const record = response('message', turn, { role, ...(role === 'assistant' ? { phase: 'final_answer' } : {}) });
+  record.payload.content = [{ ...record.payload.content[0], text }];
+  return record;
+}
+function nativeMetadata(id, worktree, typed = false) {
+  const record = template(typed ? childRecords : parentRecords, record => record.type === 'session_meta');
+  Object.assign(record.payload, { id, session_id: id, cwd: worktree, runtime_workspace_roots: [worktree] });
+  if (typed) {
+    Object.assign(record.payload, { parent_thread_id: session, agent_role: 'shipyard-arch-review', agent_path: '/root/gsd_task' });
+    Object.assign(record.payload.source.subagent.thread_spawn, {
+      parent_thread_id: session, agent_role: 'shipyard-arch-review', agent_path: '/root/gsd_task',
+    });
+  }
+  return record;
+}
+function nativeContext(turn, worktree) {
+  const record = template(childRecords, record => record.type === 'turn_context');
+  Object.assign(record.payload, { turn_id: turn, root_turn_id: turn, model: selection.model,
+    effort: selection.effort, cwd: worktree, workspace_roots: [worktree] });
+  record.payload.sandbox_policy.type = selection.sandbox_mode;
+  Object.assign(record.payload.collaboration_mode.settings, { model: selection.model, reasoning_effort: selection.effort });
+  return record;
+}
+function cliThread(id) {
+  const record = template(cliRecords, record => record.type === 'thread.started');
+  record.thread_id = id;
+  return record;
+}
+function cliCompletion(text) {
+  const records = ['turn.started', 'item.completed', 'turn.completed']
+    .map(type => template(cliRecords, record => record.type === type));
+  records[1].item.text = text;
+  for (const key of Object.keys(records[2].usage)) records[2].usage[key] = 0;
+  Object.assign(records[2].usage, { input_tokens: 1, output_tokens: 1 });
+  return records;
+}
 
 function readRecords(input) {
   const checked = collector.verifyFileInput(input);
@@ -36,20 +103,17 @@ function readRecords(input) {
 function nativeReads(reads, turn, offset = 0) {
   return reads.flatMap((read, index) => {
     const call_id = turn + '-' + (index + offset);
-    const metadata = { turn_id: turn };
-    return [{ type: 'response_item', payload: { type: 'custom_tool_call', name: 'exec', call_id,
-      input: 'text(await tools.exec_command(' + JSON.stringify({ cmd: read.command, max_output_tokens: 10000 }) + '));',
-      internal_chat_message_metadata_passthrough: metadata } },
-    { type: 'response_item', payload: { type: 'custom_tool_call_output', call_id,
-      internal_chat_message_metadata_passthrough: metadata,
-      output: [{ type: 'text', text: 'Script completed\nWall time 0.1 seconds\nOutput:\n' },
-        { type: 'text', text: JSON.stringify({ exit_code: 0, output: read.output }) }] } }];
+    const call = response('custom_tool_call', turn, { name: 'exec', call_id,
+      input: 'text(await tools.exec_command(' + JSON.stringify({ cmd: read.command, max_output_tokens: 10000 }) + '));' });
+    const output = response('custom_tool_call_output', turn, { call_id });
+    output.payload.output[0].text = 'Script completed\nWall time 0.1 seconds\nOutput:\n';
+    output.payload.output[1].text = JSON.stringify({ exit_code: 0, output: read.output });
+    return [call, output];
   });
 }
 
 function finish(turn, result) {
-  return [{ type: 'response_item', payload: { type: 'message', role: 'assistant', phase: 'final_answer',
-    internal_chat_message_metadata_passthrough: { turn_id: turn }, content: [{ type: 'output_text', text: result }] } },
+  return [message('assistant', turn, result),
   event('task_complete', turn, { last_agent_message: result })];
 }
 
@@ -90,10 +154,8 @@ async function fixture(action, options = {}) {
     const result = JSON.stringify({ verdict: 'conform', input_manifest_sha256: input.input_bundle.manifest_sha256,
       input_material_bytes: input.input_bundle.total_bytes, input_asset_count: input.input_bundle.asset_count,
       input_chunk_reads: reads.length });
-    const metadata = { type: 'session_meta', payload: { id: reviewerSession, model_provider: 'openai',
-      ...(options.typed ? { parent_thread_id: session, agent_role: 'shipyard-arch-review', agent_path: '/root/gsd_task',
-        source: { subagent: { thread_spawn: { parent_thread_id: session, agent_role: 'shipyard-arch-review', agent_path: '/root/gsd_task' } } } } : {}) } };
-    const context = { type: 'turn_context', payload: { model: selection.model, effort: selection.effort } };
+    const metadata = nativeMetadata(reviewerSession, worktree, options.typed);
+    const context = nativeContext('original-turn', worktree);
     let progress, attempts = 0, resumedCommands = [], firstRaw, closed = false, liveCredit = false;
     const originalCount = options.noOutput ? 0 : options.originalCount || 1;
     const references = []; const stdin = []; const completions = [];
@@ -113,33 +175,32 @@ async function fixture(action, options = {}) {
               const taskPath = /^TASK_FILE=(.*)$/m.exec(sent)[1];
               const taskDigest = /^TASK_SHA256=(.*)$/m.exec(sent)[1];
               fs.writeFileSync(parent, serialize([
-                { type: 'session_meta', payload: { id: session, model_provider: 'openai' } }, context,
+                nativeMetadata(session, worktree), nativeContext('parent-turn', worktree),
                 event('task_started', 'parent-turn'),
-                { type: 'response_item', payload: { type: 'function_call', name: 'spawn_agent', call_id: 'spawn',
+                response('function_call', 'parent-turn', { name: 'spawn_agent', call_id: 'spawn',
                   arguments: JSON.stringify({ agent_type: 'shipyard-arch-review', model: selection.model,
-                    reasoning_effort: selection.effort, fork_turns: 'none', task_name: 'gsd_task' }) } },
-                { type: 'response_item', payload: { type: 'function_call_output', call_id: 'spawn',
-                  output: JSON.stringify({ task_name: '/root/gsd_task' }) } },
+                    reasoning_effort: selection.effort, fork_turns: 'none', task_name: 'gsd_task' }) }, parentRecords),
+                response('function_call_output', 'parent-turn', { call_id: 'spawn',
+                  output: JSON.stringify({ task_name: '/root/gsd_task' }) }, parentRecords),
               ]));
-              typedRecords.push({ type: 'response_item', payload: { type: 'message', role: 'developer',
-                content: [{ type: 'input_text', text: typedInstructions }] } },
-                { type: 'response_item', payload: { type: 'message', role: 'user',
-                  content: [{ type: 'input_text', text: 'TASK_FILE=' + taskPath + '\nTASK_SHA256=' + taskDigest }] } },
-                { type: 'response_item', payload: { type: 'custom_tool_call', name: 'exec', call_id: 'task-read',
-                  input: 'text(await tools.exec_command(' + JSON.stringify({ cmd: 'cat ' + taskPath, max_output_tokens: 10000 }) + '));' } },
-                { type: 'response_item', payload: { type: 'custom_tool_call_output', call_id: 'task-read',
-                  output: [{ type: 'text', text: 'TASK_SHA256=' + taskDigest + '\n' + fs.readFileSync(taskPath, 'utf8') }] } });
+              const taskOutput = response('custom_tool_call_output', 'original-turn', { call_id: 'task-read' });
+              taskOutput.payload.output = [{ ...taskOutput.payload.output[1],
+                text: 'TASK_SHA256=' + taskDigest + '\n' + fs.readFileSync(taskPath, 'utf8') }];
+              typedRecords.push(message('developer', 'original-turn', typedInstructions),
+                message('user', 'original-turn', 'TASK_FILE=' + taskPath + '\nTASK_SHA256=' + taskDigest),
+                response('custom_tool_call', 'original-turn', { name: 'exec', call_id: 'task-read',
+                  input: 'text(await tools.exec_command(' + JSON.stringify({ cmd: 'cat ' + taskPath, max_output_tokens: 10000 }) + '));' }),
+                taskOutput);
             }
             const prefix = [metadata, context, ...typedRecords, event('task_started', 'original-turn'),
               ...nativeReads(reads.slice(0, originalCount), 'original-turn'),
               ...(options.typed ? [event('task_aborted', 'original-turn')] : [])];
             firstRaw = serialize(options.tamperOriginal ? options.tamperOriginal(prefix) : prefix);
             fs.writeFileSync(native, options.live ? serialize(prefix.slice(0, 3)) : firstRaw);
-            child.stdout.emit('data', Buffer.from(serialize([{ type: 'thread.started', thread_id: session }])));
+            child.stdout.emit('data', Buffer.from(serialize([cliThread(session)])));
             if (options.premature) {
               fs.appendFileSync(native, serialize(finish('original-turn', 'premature')));
-              child.stdout.emit('data', Buffer.from(serialize([{ type: 'turn.started' },
-                { type: 'item.completed', item: { type: 'agent_message', text: 'premature' } }, { type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 1 } }])));
+              child.stdout.emit('data', Buffer.from(serialize(cliCompletion('premature'))));
             }
             if (options.live) {
               setTimeout(() => fs.writeFileSync(native, firstRaw), 30);
@@ -149,11 +210,9 @@ async function fixture(action, options = {}) {
             resumedCommands = reads.slice(originalCount).map(read => read.command);
             let remaining = nativeReads(reads.slice(originalCount), 'resumed-turn', 1);
             if (options.tamperResume) remaining = options.tamperResume(remaining, reads);
-            fs.appendFileSync(native, serialize([context, event('task_started', 'resumed-turn'), ...remaining,
+            fs.appendFileSync(native, serialize([nativeContext('resumed-turn', worktree), event('task_started', 'resumed-turn'), ...remaining,
               ...finish('resumed-turn', options.resumedResult || result)]));
-            child.stdout.emit('data', Buffer.from(serialize([{ type: 'thread.started', thread_id: reviewerSession },
-              { type: 'turn.started' }, { type: 'item.completed', item: { type: 'agent_message', text: options.resumedResult || result } },
-              { type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 1 } }])));
+            child.stdout.emit('data', Buffer.from(serialize([cliThread(reviewerSession), ...cliCompletion(options.resumedResult || result)])));
             child.emit('close', 0);
           }
         }); } };
@@ -303,8 +362,7 @@ test('crash after complete output but before atomic tip publication permits a fu
     assert.equal(f.progress, undefined);
     const directory = authority.archiveAuthorityDirectory(f.worktree);
     assert.equal(fs.readdirSync(directory).some(name => name.startsWith('review-tip-')), false);
-    const raw = serialize([{ type: 'session_meta', payload: { id: session, model_provider: 'openai' } },
-      { type: 'turn_context', payload: { model: selection.model, effort: selection.effort } },
+    const raw = serialize([nativeMetadata(session, f.worktree), nativeContext('reread', f.worktree),
       event('task_started', 'reread'), ...nativeReads(f.reads, 'reread'), ...finish('reread', f.result)]);
     assert.equal(runtime.verifyFileConsumption(f.input, raw, 'original-review', f.result).chunk_reads, f.reads.length);
   }, { beforeLaunch({ root }) {
@@ -476,8 +534,7 @@ test('a bare serialized descriptor or observation cannot publish protected autho
 
 test('legacy one-turn full read succeeds and unrelated extra turns remain refused', async () => {
   await fixture(async f => {
-    const raw = serialize([{ type: 'session_meta', payload: { id: session, model_provider: 'openai' } },
-      { type: 'turn_context', payload: { model: selection.model, effort: selection.effort } },
+    const raw = serialize([nativeMetadata(session, f.worktree), nativeContext('legacy', f.worktree),
       event('task_started', 'legacy'), ...nativeReads(f.reads, 'legacy'), ...finish('legacy', f.result)]);
     assert.equal(runtime.verifyFileConsumption(f.input, raw, 'original-review', f.result).chunk_reads, f.reads.length);
     assert.throws(() => runtime.verifyFileConsumption(f.input, raw + serialize([event('task_started', 'foreign'),
