@@ -137,6 +137,9 @@ function inspectCandidate(candidate, root = ROOT, kind = 't16-source-repair') {
     publication.recheckT16Successor(authenticated, root);
     return { selection, binding, authenticated, identity: {
       generation_kind: kind, historical_only: false,
+      worktree: root, common_dir: common, head: gitText(root, 'rev-parse', 'HEAD'),
+      tree: gitText(root, 'rev-parse', 'HEAD^{tree}'),
+      dirty_sha256: sha(gitText(root, 'status', '--porcelain=v1', '--untracked-files=all')),
       candidate_sha256: null, policy_sha256: null,
       canonical_input_digest: binding.canonical_input_digest,
       package_sha256: binding.package_sha256,
@@ -478,15 +481,57 @@ function validateLedger(ledger) {
     fixture_only: false, candidate: inspected?.identity || null, historical_research: historical, verified, open };
 }
 
+function installedContract(selected, root = ROOT) {
+  if (selected.identity.generation_kind !== 't16-source-repair') return {
+    inputs: selected.binding.source.identities,
+    policy: selected.binding.source.policy_sha256,
+    candidate: selected.selection.candidate_sha256, binding: selected.binding
+  };
+  const publication = require('../unit/phase47-package-publication.test.cjs');
+  publication.validateR8Contract(selected.authenticated.handback, selected.selection, selected.binding);
+  assert.equal(selected.identity.binding_sha256, selected.selection.binding_sha256);
+  assert.equal(selected.identity.generation_handback.sha256, publication.R8_HANDOFF_SHA);
+  const inputs = selected.binding.source.inputs;
+  assert(Array.isArray(inputs) && inputs.length > 0, 'authenticated R8 source inputs required');
+  const policyPath = 'plugins/delivery-pipeline/scripts/model-policy.cjs';
+  const policyInput = inputs.find(entry => entry.path === policyPath);
+  assert(policyInput, 'authenticated R8 policy input required');
+  assert.equal(sha(stableRead(path.join(root, policyPath))), policyInput.sha256, 'R8 policy input drift');
+  const policy = require(path.join(root, policyPath)).resolveDispatch({ runtime: 'codex', role: 'research' }).policy_hash;
+  assert.match(policy, /^[a-f0-9]{64}$/, 'R8 policy hash required');
+  return { inputs, policy, candidate: null,
+    binding: r8InstalledPackageBinding(selected.selection.candidate_path, selected.binding) };
+}
+
+function r8InstalledPackageBinding(directory, originalBinding) {
+  const content = crypto.createHash('sha256');
+  for (const entry of originalBinding.outputs) {
+    const bytes = stableRead(path.join(directory, entry.path));
+    assert.equal(sha(bytes), entry.sha256, 'R8 sealed output drift');
+    if (!['package-build.json', '.codex-plugin/plugin.json'].includes(entry.path)) {
+      content.update(entry.path + '\0'); content.update(bytes);
+    }
+  }
+  const build = JSON.parse(stableRead(path.join(directory, 'package-build.json')));
+  const binding = { ...originalBinding, source_content_sha256: content.digest('hex'), package_sha256: build.digest };
+  comparePackage(directory, binding, true);
+  return binding;
+}
+
 function inspectInstalled(identity, selected) {
+  const contract = installedContract(selected);
   assert.equal(identity.runtime, 'codex', 'explicit runtime=codex required');
-  assert.equal(identity.candidate_sha256, selected.selection.candidate_sha256);
+  assert.equal(identity.candidate_sha256, contract.candidate);
+  if (selected.identity.generation_kind === 't16-source-repair') {
+    assert.equal(identity.binding_sha256, selected.identity.binding_sha256, 'installed R8 binding mismatch');
+    assert.deepEqual(identity.generation_handback, selected.identity.generation_handback, 'installed R8 generation mismatch');
+  }
   physical(identity.runtime_root, true);
   assert.equal(physical(identity.runtime_root, true).uid, process.getuid(), 'foreign isolated runtime owner');
   assert.notEqual(identity.runtime_root, path.join(os.homedir(), '.codex'), 'shared runtime is not isolated acceptance');
   physical(identity.package_root, true);
   assert(identity.package_root.startsWith(identity.runtime_root + path.sep), 'installed package outside owned runtime');
-  const observed = comparePackage(identity.package_root, selected.binding);
+  const observed = comparePackage(identity.package_root, contract.binding);
   assert.equal(identity.package_sha256, observed.package_sha256);
   assert.equal(identity.manifest_sha256, observed.manifest_sha256);
   const provenance = jsonOriginal(identity.provenance);
@@ -495,8 +540,10 @@ function inspectInstalled(identity, selected) {
   assert.equal(provenance.install_kind, 'dogfood', 'isolated candidate must preserve dogfood identity');
   assert.equal(provenance.dirty, identity.source_dirty);
   assert.equal(provenance.source_sha, identity.source_head);
-  git(ROOT, 'merge-base', '--is-ancestor', selected.binding.source.head, identity.source_head);
-  for (const entry of selected.binding.source.identities)
+  if (selected.identity.generation_kind === 't16-source-repair')
+    assert.equal(identity.source_head, selected.identity.head, 'installed R8 current authenticated source required');
+  else git(ROOT, 'merge-base', '--is-ancestor', selected.binding.source.head, identity.source_head);
+  for (const entry of contract.inputs)
     assert.equal(sha(git(ROOT, 'show', identity.source_head + ':' + entry.path)), entry.sha256, 'installed provenance source drift');
   readOriginal(identity.capability);
   for (const output of selected.binding.outputs) {
@@ -506,7 +553,7 @@ function inspectInstalled(identity, selected) {
       output.sha256, 'installed registered capability drift');
   }
   const agents = jsonOriginal(identity.agent_manifest);
-  assert.equal(agents.policy_hash, selected.binding.source.policy_sha256, 'installed generated agent policy drift');
+  assert.equal(agents.policy_hash, contract.policy, 'installed generated agent policy drift');
   assert(object(agents.agent_digests) && Object.keys(agents.agent_digests).length > 0,
     'installed generated agent digests required');
   for (const [name, digest] of Object.entries(agents.agent_digests)) {
@@ -528,7 +575,7 @@ function inspectInstalled(identity, selected) {
     assert.equal(sha(stableRead(executable)), output.sha256, 'actual installed executable drift');
     assert.equal(physical(executable).mode & 0o777, output.publication_mode, 'actual installed executable mode drift');
   }
-  assert.equal(identity.policy_sha256, selected.binding.source.policy_sha256);
+  assert.equal(identity.policy_sha256, contract.policy);
   for (const field of ['run_id', 'repository_id', 'worktree', 'controller', 'source_tree', 'source_dirty'])
     assert(identity[field] !== undefined && identity[field] !== null, 'installed ' + field + ' identity required');
   assert.equal(identity.worktree, ROOT); assert.equal(identity.repository_id, selected.binding.source.common);
@@ -617,7 +664,8 @@ function collectNative(ledger, options, report) {
   readOriginal(approval.request);
   inspectInstalled(ledger.installation, inspectCandidate(options.candidate));
   process.stdout.write(JSON.stringify({ event: 'authorized-native-command', argv: approval.argv,
-    environment_sha256: sha(canonical(env)), candidate_sha256: selected.selection.candidate_sha256 }) + '\n');
+    environment_sha256: sha(canonical(env)), candidate_sha256: selected.identity.candidate_sha256,
+    binding_sha256: selected.identity.binding_sha256, generation_handback: selected.identity.generation_handback }) + '\n');
   const result = spawnSync(process.execPath, argv, { env, cwd: ROOT, encoding: 'utf8',
     timeout: approval.timeout_ms, maxBuffer: 16 * 1024 * 1024 });
   return { ...report, native_launches: null, native_host_invocations: 1, status: 'HOLD', accepted: false,
@@ -656,7 +704,7 @@ function runCli(argv = process.argv.slice(2)) {
 }
 
 module.exports = { OBLIGATIONS, OWNED, PLAN_SHA256, sha, canonical, readOriginal, comparePackage,
-  inspectCandidate, inspectInstalled, originalReceipt, validateFirstCall, validateResearchOriginal,
+  inspectCandidate, r8InstalledPackageBinding, installedContract, inspectInstalled, originalReceipt, validateFirstCall, validateResearchOriginal,
   validateNativeOriginal, validateInlineFirstCall, openLedger, validateLedger, parseArgs, runCli };
 if (require.main === module) {
   try { runCli(); } catch (error) {

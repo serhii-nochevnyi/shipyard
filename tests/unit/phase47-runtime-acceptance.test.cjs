@@ -1147,3 +1147,27 @@ test('R8 literal authenticated-batch successor rejects altered pins and inventor
   const duplicate=structuredClone(b); duplicate.outputs[1]=duplicate.outputs[0];
   assert.throws(() => p.validateR8Contract(h,s,duplicate));
 });
+
+
+test('R8 installed package literal shape validates bytes and refuses drift without legacy hashes', t => {
+  const fixture = productFixture(t);
+  const binding = structuredClone(fixture.binding);
+  delete binding.source_content_sha256;
+  delete binding.package_sha256;
+  for (const entry of binding.outputs) {
+    entry.sealed_mode = entry.publication_mode & ~0o222;
+    fs.chmodSync(path.join(fixture.installed, entry.path), entry.sealed_mode);
+  }
+  assert.throws(() => acceptance.comparePackage(fixture.installed, binding, true), /content digest mismatch/);
+  const normalized = acceptance.r8InstalledPackageBinding(fixture.installed, binding);
+  assert.equal(normalized.package_sha256, fixture.binding.package_sha256);
+  assert.equal(normalized.source_content_sha256, fixture.binding.source_content_sha256);
+  assert.equal(binding.package_sha256, undefined);
+  const changed = structuredClone(binding);
+  changed.outputs[0].sha256 = '0'.repeat(64);
+  assert.throws(() => acceptance.r8InstalledPackageBinding(fixture.installed, changed), /sealed output drift/);
+  const legacy = { identity: { generation_kind: 'main-review-repair' },
+    selection: { candidate_sha256: 'original' }, binding: { source: { identities: ['original'], policy_sha256: 'policy' } } };
+  assert.deepEqual(acceptance.installedContract(legacy), {
+    inputs: ['original'], policy: 'policy', candidate: 'original', binding: legacy.binding });
+});

@@ -824,7 +824,7 @@
     "accepted_siblings": null,
     "retained_unaccepted_artifacts": null,
     "current_duty": "Uncommitted six-owner literal R8 consumer handback to existing trusted coordinator",
-    "next_criterion": "Actual PR452 merge and signed exact squash provenance; original four formal commands at timeout_s:600 and fresh live complete main-head/base judgment",
+    "next_criterion": "Latest repaired-code original four formal commands at timeout_s:600; fresh live complete main-head/base judgment",
     "inspect": {
       "command": [
         "node",
@@ -1370,7 +1370,7 @@
   },
   "current_verification": {
     "ticket": "T-47-27",
-    "observation_timing": "R8 focused consumer work; four formal commands remain coordinator-owned",
+    "observation_timing": "Follow-up review repair after prior signed R8 consumer finalization",
     "native_acceptance": "HOLD",
     "accepted": false,
     "native_launches": 0,
@@ -1379,8 +1379,8 @@
       "sha256": "5792799323c1533de10e65fe418aca8b640691db640f24f6623361381e7bccd0"
     },
     "integrator_max_bytes": 98304,
-    "host": "Four original formal commands at timeout_s:600 outstanding; no current T27 formal proof asserted",
-    "final_aggregate": "Actual PR452 merge evidence and fresh complete live main-target judgment outstanding",
+    "host": "Prior four formal commands passed at17406/digest1e64; latest repaired-code four formal commands remain coordinator-owned pending",
+    "final_aggregate": "PR452 actually MERGED16c2ff; signed R8 squash provenance established; fresh complete live main-target judgment remains outstanding",
     "measured_publication": {
       "inventory": 161,
       "delta": [
@@ -1397,8 +1397,39 @@
       "authority": "Immutable R8 signed binding; focused authentication outcome recorded separately"
     },
     "sandbox": "node --test --test-name-pattern='explicit HOLD|foreign, unsigned|publication fixture cannot|current candidate refusal|R7 literal|R8 literal|R8 signed squash|R6 shared-epic|R2 historical|T16 source-repair contract|R2 exact|exact GENF1' tests/unit/phase47-runtime-acceptance.test.cjs: exit0 tests13/pass13/fail0; /private/tmp/t27-r8-final-focused.log",
-    "focused_source_authentication": "node -e final R8 authenticateT16Successor plus validatePublication(candidate): exit0; /private/tmp/t27-r8-final-auth.log; source_publication verified, version0.71.0+codex.b319402d6ef6389f, outputs161; full formal complete command remains outstanding",
-    "narrowed_ledger": "node -e validateLedger(JSON.parse(fs.readFileSync(\"docs/audits/phase47-runtime-acceptance.json\"))): exit0; /private/tmp/t27-r8-ledger.log; HOLD/evidence_check passed/accepted false/native_launches0/open20; original four formal commands remain outstanding"
+    "focused_source_authentication": "node -e final R8 authenticateT16Successor plus validatePublication(candidate): exit0; /private/tmp/t27-r8-final-auth.log; source_publication verified, version0.71.0+codex.b319402d6ef6389f, outputs161; full formal complete command remains outstanding (historical pre-this-fix observation; formal proof subsequently passed at17406)",
+    "narrowed_ledger": "node -e validateLedger(JSON.parse(fs.readFileSync(\"docs/audits/phase47-runtime-acceptance.json\"))): exit0; /private/tmp/t27-r8-ledger.log; HOLD/evidence_check passed/accepted false/native_launches0/open20; original four formal commands remain outstanding (historical pre-this-fix observation; formal proof subsequently passed at17406)",
+    "prior_formal_verification": {
+      "commit": "17406a1e69e693a33e4f2c3277c7479c0084cf18",
+      "digest": "1e64a3e243ddcde5baccf4cb13a26fa18c674e4a0b8e34ed7a95895bd9722136",
+      "outcome": "passed",
+      "path": "/tmp/phase47-27-final-R8-consumer-trusted-finalization.json",
+      "scope": "Historical original four formal 600-second checks on pre-this-fix code; latest repaired-code formal proof remains coordinator-owned pending"
+    },
+    "source_merge": {
+      "schema": "shipyard.phase47-t16-squash-publication.v1",
+      "actor": "trusted-coordinator",
+      "native_receipt": false,
+      "ticket": "T-47-16",
+      "repo": "serhii-nochevnyi/shipyard",
+      "pr": 452,
+      "head": "0b7791c208c2d3069c868d39af4f6bd9b2720e3c",
+      "source_stage_sha256": "5792799323c1533de10e65fe418aca8b640691db640f24f6623361381e7bccd0",
+      "source_tree": "4a4afdf128ea7bc533004800a8a2a5d1f9856cc7",
+      "merge_commit": "16c2ff774185a77db55526361fc228dc8684a989",
+      "merge_tree": "4a4afdf128ea7bc533004800a8a2a5d1f9856cc7",
+      "base_commit": "265110621c8097a83867a9e9dd7958c0e7830cb2",
+      "state": "MERGED",
+      "live_github": {
+        "baseRefName": "epic/47-complete-deferred-decomposition-wait-attribution",
+        "headRefOid": "0b7791c208c2d3069c868d39af4f6bd9b2720e3c",
+        "mergeCommit": {
+          "oid": "16c2ff774185a77db55526361fc228dc8684a989"
+        },
+        "state": "MERGED",
+        "url": "https://github.com/serhii-nochevnyi/shipyard/pull/452"
+      }
+    }
   },
   "historical_pre_t23_candidate": {
     "selection_path": "/Volumes/KINGSTON/claude-shipyard/.git/shipyard-phase47-final-publication/INV-014-runtime-delivery-correctness/ADR-027-current-ticket-evidence/selection.json",
@@ -7563,7 +7594,38 @@
       "path": "/tmp/phase47-16-pr452-review-fix-result.json",
       "sha256": "90c94c82cbeb98954044f4ce4c71f221f738f22c2dc23c62a2d946a6d308c85f"
     },
-    "formal_consumer_verification": "Outstanding coordinator four original commands at timeout_s:600",
-    "final_main_judgment": "Outstanding actual PR452 merge and fresh live complete head/base judgment"
+    "formal_consumer_verification": "Prior four formal commands passed at17406/digest1e64; latest repaired-code four formal commands remain coordinator-owned pending",
+    "final_main_judgment": "PR452 merged and exact signed squash provenance established; fresh live complete head/base judgment remains outstanding",
+    "source_merge": {
+      "schema": "shipyard.phase47-t16-squash-publication.v1",
+      "actor": "trusted-coordinator",
+      "native_receipt": false,
+      "ticket": "T-47-16",
+      "repo": "serhii-nochevnyi/shipyard",
+      "pr": 452,
+      "head": "0b7791c208c2d3069c868d39af4f6bd9b2720e3c",
+      "source_stage_sha256": "5792799323c1533de10e65fe418aca8b640691db640f24f6623361381e7bccd0",
+      "source_tree": "4a4afdf128ea7bc533004800a8a2a5d1f9856cc7",
+      "merge_commit": "16c2ff774185a77db55526361fc228dc8684a989",
+      "merge_tree": "4a4afdf128ea7bc533004800a8a2a5d1f9856cc7",
+      "base_commit": "265110621c8097a83867a9e9dd7958c0e7830cb2",
+      "state": "MERGED",
+      "live_github": {
+        "baseRefName": "epic/47-complete-deferred-decomposition-wait-attribution",
+        "headRefOid": "0b7791c208c2d3069c868d39af4f6bd9b2720e3c",
+        "mergeCommit": {
+          "oid": "16c2ff774185a77db55526361fc228dc8684a989"
+        },
+        "state": "MERGED",
+        "url": "https://github.com/serhii-nochevnyi/shipyard/pull/452"
+      }
+    },
+    "prior_formal_verification": {
+      "commit": "17406a1e69e693a33e4f2c3277c7479c0084cf18",
+      "digest": "1e64a3e243ddcde5baccf4cb13a26fa18c674e4a0b8e34ed7a95895bd9722136",
+      "outcome": "passed",
+      "path": "/tmp/phase47-27-final-R8-consumer-trusted-finalization.json",
+      "scope": "Historical original four formal 600-second checks on pre-this-fix code; latest repaired-code formal proof remains coordinator-owned pending"
+    }
   }
 }
