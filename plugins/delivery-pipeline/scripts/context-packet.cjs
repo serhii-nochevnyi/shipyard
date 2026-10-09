@@ -676,7 +676,7 @@ function encodeUniqueContent(packet) {
     if (Object.hasOwn(value, '$semantic_content')) fail('INVALID_CONTEXT_PACKET', 'reserved content alias');
     const result = Object.create(null);
     for (const key of Object.keys(value).sort()) {
-      const pointer = location + '/' + key.replace(/~/g, '~0').replace(/\//g, '~1');
+      const pointer = location + '/' + key.replace(/~/g, '~0').split('/').join('~1');
       const jsonContent = key === 'retained_evidence' && (object(value[key]) || Array.isArray(value[key]));
       if (!jsonContent && (key !== 'content' || typeof value[key] !== 'string')) {
         result[key] = visit(value[key], pointer); continue;
