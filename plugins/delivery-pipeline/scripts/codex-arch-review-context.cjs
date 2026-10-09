@@ -240,7 +240,8 @@ function fileSnapshot(scope, options) {
       .filter(entry => !entry.path.startsWith('.planning/graph/') && entry.path !== output?.path)
       .map(entry => ({ ...entry, sha256: fs.existsSync(path.join(worktree, entry.path))
         ? digest(boundedBytes(fs, path.join(worktree, entry.path), FILE_LIMITS.material)) : null })))),
-    sources: ['codex-arch-review-context.cjs', 'codex-delivery-host.cjs', 'codex-runtime-host.cjs', 'development-artifacts.cjs'].map(name => {
+    sources: ['codex-arch-review-context.cjs', 'codex-delivery-host.cjs', 'codex-runtime-host.cjs', 'development-artifacts.cjs',
+      'context-packet.cjs', 'model-policy.cjs', 'model-policy-internal.cjs', 'role-artifact.cjs'].map(name => {
       const { content: _content, ...pin } = file(__dirname, name); return pin;
     }) };
 }
@@ -280,7 +281,8 @@ function prepareFileInput(scope, material, options = {}) {
   const snapshot = fileSnapshot(scope, options);
   const chunkBytes = options.readerCapacity ? 128 * 1024 : INPUT_CHUNK_BYTES;
   if (options.chunkBytes !== undefined && options.chunkBytes !== chunkBytes)
-    fail('unmeasured reader size is unsupported', 'READER_CAPACITY_UNSUPPORTED');
+    capacityRefusal('measured_chunk_bytes', chunkBytes, options.chunkBytes,
+      'Use the supported legacy full reader or supply original matching native reader measurement.');
   const inputs = typeof material === 'string' || Buffer.isBuffer(material) ? [material] : material;
   if (!Array.isArray(inputs) || !inputs.length || inputs.length > FILE_LIMITS.assets) fail('asset count exceeds its bound');
   let total = 0, reads = 0;
@@ -317,7 +319,7 @@ function prepareFileInput(scope, material, options = {}) {
     const subject = { snapshot, run_id: scope.run_id || null, ticket: scope.ticket, phase: Number(scope.phase),
       role: options.role, dispatch_id: options.dispatchId, binding: options.binding || null, assets,
       accounting: { generated_instruction_bytes: options.generatedInstructionBytes || 0 } };
-    if (options.readerCapacity) bundle.transport = require('./codex-runtime-host.cjs').readerCapacityContract(options.readerCapacity, subject);
+    if (options.readerCapacity) bundle.transport = measuredReaderContract(options.readerCapacity, subject);
     const relay = fileRelay(bundle, options.relayPrefix);
     const relayBytes = Buffer.byteLength(relay);
     if (relayBytes > FILE_LIMITS.relay) fail('relay exceeds its bound', 'CONTEXT_OVER_BOUND');
@@ -330,7 +332,7 @@ function prepareFileInput(scope, material, options = {}) {
       assets, accounting: { material_bytes: total, manifest_bytes: 0, relay_bytes: relayBytes,
         generated_instruction_bytes: instructionBytes } };
     if (options.readerCapacity) {
-      const transport = require('./codex-runtime-host.cjs').readerCapacityContract(options.readerCapacity, manifest);
+      const transport = measuredReaderContract(options.readerCapacity, manifest);
       bundle.transport = transport;
       manifest.schema = 'shipyard.host-file-input.v2';
       manifest.transport = transport;
@@ -361,6 +363,84 @@ function prepareFileInput(scope, material, options = {}) {
 }
 
 function isPreparedFileInput(value) { return object(value) && preparedFileInputs.has(value); }
+
+function preflightReviewMaterial(material, expected = {}) {
+  let value = material;
+  if (typeof value === 'string' || Buffer.isBuffer(value)) {
+    try { value = JSON.parse(value.toString()); } catch { return null; }
+  }
+  if (!object(value) || typeof value.schema !== 'string') return null;
+  if (!value.schema.startsWith('shipyard.semantic-content.')
+      && !value.schema.startsWith('shipyard.context-packet.')) return null;
+  const packets = require('./context-packet.cjs');
+  const packet = value.schema.startsWith('shipyard.semantic-content.') ? packets.decodeUniqueContent(value) : value;
+  if (packet.schema === SCHEMA) {
+    const { digest: recorded, required_refs: required } = packet;
+    if (!Array.isArray(required) || !Array.isArray(packet.refs)
+        || !/^[a-f0-9]{64}$/.test(recorded || '') || recorded !== expected.packetDigest
+        || packet.pr?.head !== expected.sourceRevision || expected.role !== 'arch-review'
+        || (expected.subject !== undefined && packet.ticket !== expected.subject))
+      fail('architecture packet identity or inventory changed', 'STALE_CONTEXT');
+    packets.encodeUniqueContent(packet);
+    if (expected.architecturePacket && JSON.stringify(canonical(packets.encodeUniqueContent(packet)))
+        !== JSON.stringify(canonical(packets.encodeUniqueContent(expected.architecturePacket))))
+      fail('architecture input differs from its original private packet authority', 'STALE_CONTEXT');
+  } else packets.validateContextPacket(packet, expected);
+  return deepFreeze({ schema: 'shipyard.review-integrity.v1', packet_digest: packet.digest || digest(JSON.stringify(canonical(value))),
+    required_references: packet.required_refs.length,
+    logical_obligations: value.obligations?.length ?? packet.logical_source_obligations?.length ?? 0,
+    semantic_credit: false });
+}
+
+function capacityRefusal(field, observed, required, nextAction) {
+  const error = new Error(`review preflight: ${field}: observed ${observed}, required ${required}; ${nextAction}`);
+  error.code = 'READER_CAPACITY_UNSUPPORTED';
+  error.refusal = deepFreeze({ schema: 'shipyard.review-preflight-refusal.v1', limiting_field: field,
+    observed, required, supported_next_action: nextAction });
+  throw error;
+}
+
+function measuredReaderContract(capacity, subject) {
+  try { return require('./codex-runtime-host.cjs').readerCapacityContract(capacity, subject); }
+  catch (error) {
+    if (error.code !== 'READER_CAPACITY_UNSUPPORTED') throw error;
+    capacityRefusal('original_matching_capacity_authority', 'unavailable', 'authenticated current subject measurement',
+      'Use the supported legacy full reader or obtain original matching complete native capacity evidence.');
+  }
+}
+
+function preflightReaderSchedule(manifest, manifestBytes) {
+  const launchBytes = manifest.accounting.relay_bytes + manifest.accounting.generated_instruction_bytes;
+  if (launchBytes > INPUT_MAX_BYTES) capacityRefusal('complete_launch_input_bytes', INPUT_MAX_BYTES, launchBytes,
+    'Use supported instructions and transport that fit the launch bound without omitting required review content.');
+  if (!manifest.transport) return null;
+  const transport = manifest.transport;
+  if (transport.schema !== 'shipyard.native-reader-transport.v2'
+      || transport.chunk_bytes !== 128 * 1024 || manifest.chunk_bytes !== transport.chunk_bytes
+      || transport.encoding !== 'base64' || transport.output_tokens !== 10000
+      || transport.range_schedule !== 'manifest-first/ordinal-offset/v1'
+      || transport.nested_envelope !== 'exec-command.v1' || transport.outer_envelope !== 'functions-exec.v1'
+      || !Number.isSafeInteger(transport.output_budget_bytes) || transport.output_budget_bytes < 1
+      || transport.output_budget_bytes > 256 * 1024)
+    capacityRefusal('transport_contract', transport.schema, 'shipyard.native-reader-transport.v2',
+      'Use a supported version with original matching host capacity authority.');
+  const ranges = readerRanges(manifestBytes, manifest.assets, manifest.chunk_bytes);
+  const outputs = ranges.map(range => {
+    const encoded = 4 * Math.ceil(range.bytes / 3);
+    return encoded + 2 * Math.ceil(encoded / 76) + 4096;
+  });
+  const largest = Math.max(...outputs);
+  const total = outputs.reduce((sum, bytes) => sum + bytes, 0);
+  const maximum = Math.min(252 * 1024, transport.output_budget_bytes);
+  if (largest > maximum) capacityRefusal('encoded_range_envelope_bytes', maximum, largest,
+    'Use the supported legacy full reader or obtain original matching complete native capacity evidence.');
+  if (total > 128 * 1024 * 1024) capacityRefusal('complete_encoded_schedule_bytes', 128 * 1024 * 1024, total,
+    'Use the supported legacy full reader; do not omit required material.');
+  return deepFreeze({ schema: 'shipyard.reader-schedule-accounting.v1', range_count: ranges.length,
+    largest_envelope_bytes: largest, encoded_schedule_bytes: total,
+    launch_input_bytes: launchBytes,
+    semantic_credit: false });
+}
 
 function verifyFileInput(value, options = {}) {
   const privateValue = isPreparedFileInput(value);
@@ -397,9 +477,10 @@ function verifyFileInput(value, options = {}) {
         || !/^[a-f0-9]{64}$/.test(transport.native_sha256 || '')
         || !Number.isSafeInteger(transport.output_budget_bytes) || transport.output_budget_bytes < 1
         || transport.output_budget_bytes > 256 * 1024)
-      fail('unsupported measured reader contract', 'READER_CAPACITY_UNSUPPORTED');
+      capacityRefusal('transport_contract', transport.schema, 'shipyard.native-reader-transport.v2',
+        'Use a supported transport with original matching host measurement.');
     if (privateValue) {
-      const admitted = require('./codex-runtime-host.cjs').readerCapacityContract(privateOptions.readerCapacity, manifest);
+      const admitted = measuredReaderContract(privateOptions.readerCapacity, manifest);
       if (JSON.stringify(canonical(admitted)) !== JSON.stringify(canonical(transport)))
         fail('reader measurement changed', 'READER_CAPACITY_UNSUPPORTED');
     }
@@ -420,13 +501,18 @@ function verifyFileInput(value, options = {}) {
     try { new TextDecoder('utf-8', { fatal: true }).decode(rawAsset); } catch { fail('asset is invalid UTF-8'); }
     let semantic;
     try { semantic = JSON.parse(rawAsset.toString('utf8')); } catch {}
-    if (typeof semantic?.schema === 'string' && semantic.schema.startsWith('shipyard.semantic-content.'))
-      require('./context-packet.cjs').decodeUniqueContent(semantic);
+    if (options.historical === true) {
+      if (typeof semantic?.schema === 'string' && semantic.schema.startsWith('shipyard.semantic-content.'))
+        require('./context-packet.cjs').decodeUniqueContent(semantic);
+    } else preflightReviewMaterial(semantic, { root: manifest.snapshot.worktree, role: manifest.role,
+      sourceRevision: manifest.snapshot.head, policyHash: manifest.snapshot.policy_hash,
+      packetDigest: manifest.binding?.packet_digest, architecturePacket: privateOptions.architecturePacket });
     return rawAsset;
   });
   if (bundle.transport && JSON.stringify(canonical(manifest.ranges))
       !== JSON.stringify(canonical(readerRanges(raw.length, manifest.assets, bundle.chunk_bytes))))
     fail('reader ranges are missing, overlapping or reordered', 'READER_CAPACITY_UNSUPPORTED');
+  const schedule = preflightReaderSchedule(manifest, raw.length);
   reads += Math.ceil(raw.length / bundle.chunk_bytes);
   if (bytes !== bundle.total_bytes || reads > FILE_LIMITS.reads) fail('full input byte accounting differs');
   const scope = privateOptions.scope || { worktree: manifest.snapshot.worktree, phase: manifest.phase };
@@ -449,7 +535,7 @@ function verifyFileInput(value, options = {}) {
   physicalPath(bundle.manifest_path, true, true);
   if (digest(boundedBytes(fs, bundle.manifest_path, FILE_LIMITS.manifest, raw.length, bundle.manifest_identity)) !== bundle.manifest_sha256)
     fail('manifest changed during consumption', 'STALE_CONTEXT');
-  return { manifest, manifest_bytes: raw, material, chunk_reads: reads };
+  return { manifest, manifest_bytes: raw, material, chunk_reads: reads, schedule, semantic_credit: false };
 }
 
 function instructionEvidence(agentDir, agentFile, manifestPath) {
@@ -897,6 +983,7 @@ function prepare(scope, launch, options = {}) {
   if (Buffer.byteLength(prompt, 'utf8') > INPUT_MAX_BYTES) {
     const prefix = prompt.slice(0, prompt.indexOf('<AUTHENTICATED_CONTEXT_PACKET>'));
     fileInput = prepareFileInput(scope, packet, { ...options, role: 'arch-review',
+      architecturePacket: prepared.packet,
       dispatchId: options.inflightDispatchId || launch.dispatch_id || crypto.randomUUID(),
       relayPrefix: prefix, binding: { packet_digest: prepared.packet.digest,
         ticket_set_digest: prepared.binding?.membership || null, base: prepared.baseCommit,
@@ -946,6 +1033,7 @@ function isPreparedContext(value) {
 
 function admitInstalledLaunch(value, options) {
   if (!isPreparedContext(value)) fail('capacity requires private prepared authority');
+  verifyLivePullRequest(value.prepared, preparedOptions.get(value));
   const agentRoot = fs.realpathSync(options.agentDir);
   const agent = file(agentRoot, options.agentFile, INPUT_MAX_BYTES);
   const manifestRoot = fs.realpathSync(path.dirname(options.agentManifest));
@@ -954,7 +1042,7 @@ function admitInstalledLaunch(value, options) {
   const files = [
     { root: agentRoot, ...agent },
     { root: manifestRoot, ...manifest },
-    ...['codex-arch-review-context.cjs', 'codex-delivery-host.cjs', 'codex-runtime-host.cjs', 'role-artifact.cjs', 'plan-delivery.cjs', 'conveyor-scratch.cjs', 'dispatch-record.cjs', 'claude-runtime-host.cjs', 'lock.cjs', 'architecture-target.cjs', 'development-artifacts.cjs'].map(name =>
+    ...['codex-arch-review-context.cjs', 'codex-delivery-host.cjs', 'codex-runtime-host.cjs', 'role-artifact.cjs', 'plan-delivery.cjs', 'conveyor-scratch.cjs', 'dispatch-record.cjs', 'claude-runtime-host.cjs', 'lock.cjs', 'architecture-target.cjs', 'development-artifacts.cjs', 'context-packet.cjs', 'model-policy.cjs', 'model-policy-internal.cjs'].map(name =>
       ({ root: scriptRoot, ...file(scriptRoot, name) })),
   ].map(({ content: _content, ...pin }) => pin);
   if (options.capabilitiesFile) {
@@ -967,6 +1055,7 @@ function admitInstalledLaunch(value, options) {
   const instructionBytes = Buffer.byteLength(instructions) + 2;
   if (!privateOptions.fileInput && Buffer.byteLength(value.launch.context.prompt) + instructionBytes > INPUT_MAX_BYTES) {
     privateOptions.fileInput = prepareFileInput(privateOptions.scope, JSON.stringify(require('./context-packet.cjs').encodeUniqueContent(value.prepared.packet)), {
+      architecturePacket: value.prepared.packet,
       ...privateOptions, role: 'arch-review', dispatchId: privateOptions.inflightDispatchId,
       relayPrefix: value.launch.context.prompt.slice(0, value.launch.context.prompt.indexOf('<AUTHENTICATED_CONTEXT_PACKET>')),
       binding: { packet_digest: value.prepared.packet.digest,
@@ -980,13 +1069,21 @@ function admitInstalledLaunch(value, options) {
     const binding = { ...previous.manifest.binding, agent_path: path.join(agentRoot, agent.path),
       agent_file: agent.path, agent_sha256: agent.sha256, installed_files: files,
       capabilities_sha256: digest(JSON.stringify(options.capabilities)) };
+    const readerCapacity = options.readerCapacity || fileInputOptions.get(previous).readerCapacity;
+    const transport = readerCapacity ? measuredReaderContract(readerCapacity, { ...previous.manifest, binding,
+      accounting: { ...previous.manifest.accounting, generated_instruction_bytes: instructionBytes } }) : null;
+    if (transport && options.selection && (transport.selection?.model !== options.selection.model
+        || transport.selection?.effort !== options.selection.effort))
+      capacityRefusal('measured_runtime_selection', JSON.stringify(transport.selection), JSON.stringify(options.selection),
+        'Use the original matching runtime selection under the unchanged model policy.');
     const variants = installedFileInputs.get(value) || new Map();
-    const variantKey = digest(JSON.stringify(canonical({ binding, instructionBytes })));
+    const variantKey = digest(JSON.stringify(canonical({ binding, instructionBytes, transport })));
     const cached = variants.get(variantKey);
     if (cached) verifyFileInput(cached);
     const next = cached || prepareFileInput(privateOptions.fileInput && { worktree: value.prepared.canonical.worktree,
       ticket: value.prepared.ticket, phase: value.prepared.phaseNumber, run_id: previous.manifest.run_id },
       verifyFileInput(previous).material, { ...fileInputOptions.get(previous),
+        readerCapacity,
         generatedInstructionBytes: instructionBytes,
         binding });
     variants.set(variantKey, next);
@@ -1005,6 +1102,15 @@ function admitInstalledLaunch(value, options) {
       runtime_capacity_acceptance: 'requires separate installed native acceptance' } });
   installedLaunches.set(value, installation);
   return installation;
+}
+
+function recheckInstalledLaunch(value) {
+  if (!isPreparedContext(value) || !installedLaunches.has(value)) fail('launch requires private installed admission');
+  const options = preparedOptions.get(value);
+  verifyLivePullRequest(value.prepared, options);
+  for (const pin of installedLaunches.get(value).files)
+    if (file(pin.root, pin.path).sha256 !== pin.sha256) fail('installed source or instructions changed', 'STALE_CONTEXT');
+  if (options.fileInput) verifyFileInput(options.fileInput);
 }
 
 function admitBookkeeping(value) {
@@ -1175,4 +1281,4 @@ function validateSealedContext(input, options = {}) {
   return true;
 }
 
-module.exports = Object.freeze({ SCHEMA, FILE_LIMITS, prepareFileInput, isPreparedFileInput, verifyFileInput, instructionEvidence, prepare, finish, isPreparedContext, admitInstalledLaunch, admittedFileInput, admitBookkeeping, admittedPrompt, validateHistoricalContext, validateSealedContext });
+module.exports = Object.freeze({ SCHEMA, FILE_LIMITS, preflightReviewMaterial, preflightReaderSchedule, capacityRefusal, recheckInstalledLaunch, prepareFileInput, isPreparedFileInput, verifyFileInput, instructionEvidence, prepare, finish, isPreparedContext, admitInstalledLaunch, admittedFileInput, admitBookkeeping, admittedPrompt, validateHistoricalContext, validateSealedContext });
