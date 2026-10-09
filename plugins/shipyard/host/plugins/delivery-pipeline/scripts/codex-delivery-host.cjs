@@ -9,6 +9,8 @@ const { createCodexRuntimeHost, normalizeScope } = require('./codex-runtime-host
 const { launchAgent, ROLE_ALIASES } = require('./codex-agent.cjs');
 const { repoRootOf, resolveBaseRef } = require('./graph-dir.cjs');
 const policy = require('./model-policy.cjs');
+const archReviewContext = require('./codex-arch-review-context.cjs');
+const roleArtifact = require('./role-artifact.cjs');
 const { recordedPolicyFor } = require('./runtime-adapters.cjs');
 const { sealResearch, researchLineFailure, verifySealedLine, assertContained } = require('./planning-result-sealer.cjs');
 const { REPAIR: CODEX_ADAPTER_REPAIR } = require('./codex-model-remap.cjs');
@@ -38,6 +40,7 @@ const KEY_BYTES = 32;
 const MAX_STATE_BYTES = 1024 * 1024;
 const DOWNSTREAM_GATES = Object.freeze(['ci', 'review']);
 const REQUIRED_RESEARCH_LINES = Object.freeze(['system-state', 'alternatives', 'constraints', 'risks']);
+const MAX_RESEARCH_HANDBACK_BYTES = 16 * 1024;
 const RESUME_SCOPE_FIELDS = Object.freeze(['run_id', 'repository', 'worktree', 'phase', 'ticket']);
 const PLAN_COMMAND_TIMEOUT_MS = 10 * 60 * 1000;
 const PLAN_COMMAND_OUTPUT_BYTES = 1024 * 1024;
@@ -94,8 +97,8 @@ function requestValue(input) {
   if (input.signals !== undefined && !object(input.signals)) fail('INVALID_INPUT', 'signals must be an object');
   if (input.context !== undefined && !object(input.context)) fail('INVALID_INPUT', 'context must be an object');
   for (const key of Object.keys(input.context || {})) {
-    if (key === 'preRecordValidation' || key === 'writerSession') {
-      fail('INVALID_INPUT', 'request context cannot supply writer authority');
+    if (key === 'preRecordValidation' || key === 'writerSession' || key === 'verification_assignment' || key === 'input_prepared') {
+      fail('INVALID_INPUT', 'request context cannot supply host authority');
     }
     if (key.startsWith('plan') && key !== 'plan_sha256') {
       fail('INVALID_INPUT', 'unsupported delivery request context field ' + key);
@@ -699,6 +702,66 @@ function finalizer(options) {
   catch (_) { fail('MISSING_FINALIZER', 'trusted delivery commit finalizer is unavailable'); }
 }
 
+function installedAgentOptions(options, selection, capabilities) {
+  const env = options.env || process.env;
+  const agentDir = options.agentDir || path.join(env.CODEX_HOME || path.join(os.homedir(), '.codex'), 'agents');
+  return { agentDir, agentFile: selection.agent_file,
+    agentManifest: options.agentManifest || path.join(agentDir, '.shipyard-manifest.json'),
+    capabilities, capabilitiesFile: options.capabilitiesFile || env.SHIPYARD_CODEX_CAPABILITIES_FILE };
+}
+
+function admitArchitectureInput(prepared, request, options, capabilities) {
+  let signals = { ...request.signals };
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const selected = policy.resolveDispatch({ runtime: 'codex', role: request.role, signals });
+    archReviewContext.admitInstalledLaunch(prepared, installedAgentOptions(options, selected, capabilities));
+    const input = archReviewContext.admittedFileInput(prepared);
+    const next = input ? { ...signals, inputTokens: input.inputTokens } : signals;
+    const actual = policy.resolveDispatch({ runtime: 'codex', role: request.role, signals: next });
+    signals = next;
+    if (actual.agent_file === selected.agent_file) return signals;
+  }
+  fail('CONTEXT_OVER_BOUND', 'selected generated instruction accounting did not stabilize');
+}
+
+function prepareIntegratorInput(scope, request, options) {
+  if (request.context.input_transport !== undefined || request.context.input_bundle !== undefined) {
+    const prepared = options.fileInputContext;
+    if (!archReviewContext.isPreparedFileInput(prepared)
+        || request.context.input_transport !== 'host-files'
+        || JSON.stringify(request.context.input_bundle) !== JSON.stringify(prepared.input_bundle)
+        || request.context.prompt !== prepared.prompt) fail('INVALID_INPUT', 'serialized bundle has no private producer authority');
+    archReviewContext.verifyFileInput(prepared, { association: { run_id: scope.run_id, ticket: scope.ticket,
+      phase: scope.phase, role: request.role, dispatch_id: request.dispatch_id } });
+    return prepared;
+  }
+  const material = request.context.prompt || request.context.task_prompt || request.context.input;
+  if (request.role !== 'integrator' || request.gsd_role !== undefined || typeof material !== 'string'
+      || Buffer.byteLength(material) <= 1024 * 1024) return null;
+  let signals = { ...request.signals, inputTokens: Math.ceil(Buffer.byteLength(material) / 4) };
+  let input;
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const selected = policy.resolveDispatch({ runtime: 'codex', role: request.role, signals });
+    const installed = installedAgentOptions(options, selected, options.host?.capabilities || options.capabilities);
+    const agentPath = path.join(installed.agentDir, installed.agentFile);
+    const instructions = archReviewContext.instructionEvidence(installed.agentDir, installed.agentFile, installed.agentManifest);
+    const instructionBytes = instructions.generated_instruction_bytes;
+    input = archReviewContext.prepareFileInput(scope, material, { role: request.role, dispatchId: request.dispatch_id,
+      storageRoot: storageDirectory(options, scope), graphDir: options.graphDir, generatedInstructionBytes: instructionBytes,
+      binding: { agent_file: selected.agent_file, agent_path: path.resolve(agentPath), agent_sha256: instructions.sha256, installed_files: instructions.installed_files, policy_hash: selected.policy_hash } });
+    signals = { ...signals, inputTokens: input.inputTokens };
+    const actual = policy.resolveDispatch({ runtime: 'codex', role: request.role, signals });
+    if (actual.agent_file === selected.agent_file) {
+      if (request.signals.inputTokens !== undefined && request.signals.inputTokens !== input.inputTokens)
+        fail('INVALID_INPUT', 'caller inputTokens differs from complete measured input');
+      request.signals = signals;
+      request.context = { ...request.context, prompt: input.prompt, input_transport: 'host-files', input_bundle: input.input_bundle };
+      return input;
+    }
+  }
+  fail('CONTEXT_OVER_BOUND', 'selected generated instruction accounting did not stabilize');
+}
+
 function storageDirectory(options, scope) {
   const identity = crypto.createHash('sha256').update(`${scope.run_id}\0${scope.worktree}`).digest('hex');
   const root = stateRootOutsideWorktree(scope, options.storageRoot
@@ -778,6 +841,9 @@ async function investigationResearch(options, scope, runtimeHost, agentDir, agen
   const verifyScope = Object.freeze({ invId: inv.invId, sourceRevision: inv.sourceRevision,
     repository: inv.repository, policyHash: inv.policyHash });
   const verifiedSiblings = inv.sealedLines.map((line) => verifySealedLine({ root, scope: verifyScope, line }));
+  if (verifiedSiblings.some((line) => line.status !== 'completed')) {
+    fail('RESEARCH_VERIFY_STATUS_INVALID', 'blocked research evidence cannot be reused as a completed sibling');
+  }
   const allowedPaths = REQUIRED_RESEARCH_LINES.map((id) => researchArtifactPath(worktree, inv.invId, id));
   const sealed = [];
   for (const line of inv.lines) {
@@ -787,6 +853,27 @@ async function investigationResearch(options, scope, runtimeHost, agentDir, agen
       scope: verifyScope, sealed: [...verifiedSiblings, ...sealed], failed: causeFromError(error, line.id),
     });
     let record;
+    let completed;
+    let callbackError;
+    let callbackOpen = true;
+    const onCompleted = (value) => {
+      try {
+        if (!callbackOpen || completed || callbackError) {
+          fail('RUNTIME_EVIDENCE_MISMATCH', 'research line completed more than once or outside its launch');
+        }
+        if (!object(value) || typeof value.launch_id !== 'string' || !value.launch_id
+            || typeof value.session_id !== 'string' || !value.session_id
+            || typeof value.last_agent_message !== 'string'
+            || Buffer.byteLength(value.last_agent_message) > MAX_RESEARCH_HANDBACK_BYTES) {
+          fail('RESEARCH_HANDBACK_INVALID', 'research callback lacks a bounded native completion');
+        }
+        completed = Object.freeze({ launch_id: value.launch_id, session_id: value.session_id,
+          last_agent_message: value.last_agent_message });
+      } catch (error) {
+        callbackError = error;
+        throw error;
+      }
+    };
     try {
       record = await launchAgent('research', {
         cwd: scope.worktree,
@@ -803,14 +890,22 @@ async function investigationResearch(options, scope, runtimeHost, agentDir, agen
         context: {
           ...baseContext,
           prompt: prompt.trim() + '\n\nResearch line: ' + line.id + '.\nWrite the complete finding for this line to exactly: '
-            + artifactPath + '\nThe host reads that file directly; do not return the finding inline.',
+            + artifactPath + '\nThe host reads that file directly; do not return the finding inline.'
+            + '\nReturn only bounded JSON with id, status (completed or blocked), summary (1–500 characters),'
+            + ' and artifact: {path, bytes, content_bytes, sha256, digest}. Use this assigned line id and absolute'
+            + ' artifact path, actual UTF-8 byte counts and SHA-256 (digest equals sha256).'
+            + ' For blocked, summary retains the original cause and the file contains the complete blocked finding.'
+            + ' Do not author a receipt.',
           research_line: line.id,
           investigation: inv.invId,
           artifactPath,
+          onCompleted,
         },
       });
     } catch (error) {
       return failed(error);
+    } finally {
+      callbackOpen = false;
     }
     try {
       assertContained({ worktree, allowed: allowedPaths });
@@ -826,23 +921,49 @@ async function investigationResearch(options, scope, runtimeHost, agentDir, agen
     if (stat.isSymbolicLink() || !stat.isFile()) {
       return failed({ code: 'RESEARCH_LINE_MISSING', message: 'research line ' + line.id + ' artifact is not a regular file: ' + artifactPath });
     }
-    const bytes = fs.readFileSync(artifactPath);
-    const digest = crypto.createHash('sha256').update(bytes).digest('hex');
     let sealedLine;
+    let semantic;
+    let original;
     try {
+      if (callbackError) throw callbackError;
+      if (!completed) fail('RESEARCH_HANDBACK_MISSING', 'research line has no authenticated semantic callback');
+      original = runtimeHost.recorder.getVerifiedRecord(record.receipt.dispatch_id);
+      const receipt = original?.receipt;
+      if (!receipt || receipt.compliance !== 'verified' || receipt.role !== 'research'
+          || original.dispatch_id !== record.dispatch_id
+          || canonical(original) !== canonical(record)
+          || receipt.launch_id !== completed.launch_id
+          || receipt.runtime_evidence?.session_id !== completed.session_id
+          || receipt.runtime_evidence?.native_session_evidence?.session_id !== completed.session_id) {
+        fail('RUNTIME_EVIDENCE_MISMATCH', 'research callback differs from the original authenticated launch/session');
+      }
+      try { semantic = JSON.parse(completed.last_agent_message); }
+      catch { fail('RESEARCH_HANDBACK_INVALID', 'research semantic handback is invalid JSON'); }
+      if (!object(semantic) || Object.keys(semantic).some((key) => !['id', 'status', 'summary', 'artifact'].includes(key))
+          || semantic.id !== line.id || !['completed', 'blocked'].includes(semantic.status)
+          || typeof semantic.summary !== 'string' || !semantic.summary.trim()
+          || Array.from(semantic.summary).length > roleArtifact.SUMMARY_MAX_CHARS
+          || !object(semantic.artifact)
+          || Object.keys(semantic.artifact).some((key) => !['path', 'bytes', 'content_bytes', 'sha256', 'digest'].includes(key))) {
+        fail('RESEARCH_HANDBACK_INVALID', 'research semantic handback has an invalid line, status, summary or producer reference');
+      }
       sealedLine = sealResearch({
         root, scope: { worktree },
         lines: {
           artifact: { role: 'research', subject: inv.invId + ':' + line.id, ticket: inv.invId + ':' + line.id,
             worktreePath: worktree, sourceRevision: inv.sourceRevision, repository: inv.repository,
             policyHash: inv.policyHash, artifactPath },
-          result: { id: line.id, status: 'completed', summary: 'Research line ' + line.id + ' completed.',
-            artifact: { path: artifactPath, bytes: bytes.length, content_bytes: bytes.length, sha256: digest, digest } },
-          record,
+          result: semantic,
+          record: original,
         },
       });
     } catch (error) {
       return failed(error);
+    }
+    if (semantic.status === 'blocked') {
+      return Object.freeze({ ...researchLineFailure({ scope: verifyScope, sealed: [...verifiedSiblings, ...sealed],
+        failed: { line: line.id, code: 'RESEARCH_LINE_BLOCKED', cause: semantic.summary } }),
+        failed_artifact: Object.freeze({ id: line.id, ...sealedLine, receipt: original.receipt }) });
     }
     sealed.push(Object.freeze({ id: line.id, ...sealedLine }));
   }
@@ -947,6 +1068,12 @@ function executorPreflight(options, scope, expectedPlanSha256) {
   }
   const delivery = deliverPlan({ graphDir: path.dirname(file), row: snapshot.row, worktree });
   const verificationAllowList = configuredAllowList({ graphFile: file, repo: snapshot.row.repo || null }, options);
+  let assignedCommands;
+  try { assignedCommands = hostVerification.assignPlan(plan.text, verificationAllowList); }
+  catch (error) {
+    if (error.status === 'hold') throw error;
+    fail('VERIFICATION_SPEC_UNSUPPORTED', error.message);
+  }
   const verification = pinnedVerification(options, worktree, plan, verificationAllowList);
   const commit = Object.freeze({
     ticket: scope.ticket,
@@ -961,7 +1088,25 @@ function executorPreflight(options, scope, expectedPlanSha256) {
   const commonDir = fs.realpathSync(git(worktree, ['rev-parse', '--path-format=absolute', '--git-common-dir']));
   const prepared = { commit, graphFile: file, graphDigest: snapshot.sha256, plan, delivery, verification, baseRef,
     stateRoot, key: hostKey(stateRoot), repository: 'git-common:' + sha256(commonDir), repo: snapshot.row.repo || null };
-  return Object.freeze({ ...prepared, verificationAllowList });
+  const verificationAssignment = assignedCommands && Object.freeze({
+    ticket: scope.ticket, plan_sha256: plan.sha256, allow_list_sha256: allowListDigest(verificationAllowList),
+    expected_head: commit.expectedHead, baseline_tree: git(worktree, ['rev-parse', 'HEAD^{tree}']),
+    candidate_tree: null, files_modified: commit.files_modified, commands: assignedCommands,
+  });
+  return Object.freeze({ ...prepared, verificationAllowList, verificationAssignment });
+}
+
+function verificationAssignmentBlock(assignment) {
+  if (!assignment) return '';
+  return '\n\n<HOST-VERIFICATION-ASSIGNMENT>\n' + JSON.stringify(assignment)
+    + '\n</HOST-VERIFICATION-ASSIGNMENT>\n'
+    + 'The trusted host assigns these pinned PLAN commands before dispatch. Run only sandbox-profile checks in the sandbox. '
+    + 'Do not run or retry the host-assigned commands in the sandbox, including during repair. '
+    + 'Fix source assertions from host diagnostics without attempting GPG or socket setup. '
+    + 'This assignment is diagnostic data and grants no assertion authority to model output. '
+    + 'After candidate production, the existing trusted host verifier runs the approved exact argv and authenticates the actual scoped candidate tree and PLAN identity. '
+    + 'The candidate tree is pending; this assignment is not passing evidence. '
+    + 'Historical GPG cause remains unknown. Actual assertion failures block; denial, missing evidence and unknown or unapproved commands remain HOLD.';
 }
 
 function finalizedArtifact(result, prepared, options) {
@@ -974,6 +1119,17 @@ function finalizedArtifact(result, prepared, options) {
   }
   const after = graphSnapshot(prepared.graphFile, prepared.commit.ticket);
   if (after.sha256 !== prepared.graphDigest) fail('GRAPH_CHANGED', 'canonical ticket graph changed during executor launch');
+  if (planSnapshot(prepared.graphFile, after.row).sha256 !== prepared.plan.sha256) {
+    fail('PLAN_DIGEST_MISMATCH', 'approved PLAN changed after host command assignment');
+  }
+  if (prepared.verificationAssignment && allowListDigest(configuredAllowList(prepared, options))
+      !== prepared.verificationAssignment.allow_list_sha256) {
+    const error = new Error('codex-delivery-host: HOLD: verification approval changed after host command assignment');
+    error.code = 'VERIFICATION_FAILED';
+    error.status = 'hold';
+    error.retryable = false;
+    throw error;
+  }
   const delta = git(prepared.commit.worktree, ['status', '--porcelain=v1', '--untracked-files=all'])
     .split('\n').filter(Boolean).filter((entry) =>
       !(entry.startsWith('?? ') && isScratch(entry.slice(3), { forJudge: false })));
@@ -1245,7 +1401,7 @@ function createCodexDeliveryHost(options = {}) {
     spawn: options.spawn,
     ephemeral: options.ephemeral,
     approveForMe: options.approveForMe,
-    additionalProtectedPaths: [stateRoot],
+    additionalProtectedPaths: [stateRoot, roleArtifact.archiveAuthorityDirectory(scope.worktree)],
   });
   const writerSession = options.writerSession;
   if (writerSession && (typeof writerSession.lease?.snapshotTree !== 'function'
@@ -1334,7 +1490,25 @@ function createCodexDeliveryHost(options = {}) {
         fail('UNSUPPORTED_ROLE', 'typed GSD role does not match the delivery role');
       }
       options.controller?.assertOwner(scope.run_id);
+      request.dispatch_id = request.dispatch_id || newDispatchId();
+      let fileInput;
+      if (request.role === 'arch-review') {
+        const prepared = options.archReviewContext;
+        if (!archReviewContext.isPreparedContext(prepared)
+            || prepared.prepared.ticket !== scope.ticket
+            || prepared.prepared.phaseNumber !== scope.phase
+            || prepared.prepared.canonical.worktree !== scope.worktree
+            || request.context.prompt !== prepared.prepared.prompt
+            || (![prepared.prepared.signals, options.archReviewSignals].filter(Boolean).some(signals => JSON.stringify(request.signals) === JSON.stringify(signals))))
+          fail('ARCH_REVIEW_CONTEXT_REQUIRED', 'architecture context must be host-built and graph-bound');
+        request.signals = admitArchitectureInput(prepared, request, options, runtimeHost.capabilities);
+        fileInput = archReviewContext.admittedFileInput(prepared);
+        if (fileInput) Object.assign(request.context, { input_transport: 'host-files', input_bundle: fileInput.input_bundle });
+        request.context.prompt = archReviewContext.admittedPrompt(prepared);
+      }
+      if (request.role !== 'arch-review') fileInput = prepareIntegratorInput(scope, request, options);
       const context = request.context;
+      if (fileInput) context.input_prepared = fileInput;
       const prompt = context.prompt || context.task_prompt || context.input;
       if (typeof prompt !== 'string' || !prompt.trim()) fail('INVALID_INPUT', 'context requires a task prompt');
       const originalContext = { ...context };
@@ -1346,6 +1520,7 @@ function createCodexDeliveryHost(options = {}) {
       }
       bind(context, 'run_id', scope.run_id);
       bind(context, 'ticket', scope.ticket);
+      if (request.role === 'arch-review' && scope.ticket.startsWith('phase=')) context.subject_kind = 'phase';
       bind(context, 'phase', scope.phase);
       bind(context, 'worktreePath', scope.worktree);
       bind(context, 'runtime', 'codex');
@@ -1359,8 +1534,10 @@ function createCodexDeliveryHost(options = {}) {
       const committing = request.role === 'executor';
       const prepared = committing ? executorPreflight(options, scope, context.plan_sha256) : null;
       if (committing) {
-        context.prompt = originalPrompt + '\n\nLeave changes uncommitted. The trusted host will stage, sign, and verify the commit.'
-          + planDeliveryBlock(prepared.delivery, prepared.plan.path);
+        context.prompt = originalPrompt + '\n\nYou are an executor already dispatched inside the active coordinator-owned Shipyard delivery loop. The coordinator owns setup and dispatch. Do not restart shipyard-route, bootstrap, marketplace installation, investigate, decomposition, or a second delivery orchestrator. Implement the delivered PLAN within files_modified and the existing sandbox boundaries. Leave changes uncommitted. The trusted host will stage, sign, and verify the commit.'
+          + planDeliveryBlock(prepared.delivery, prepared.plan.path)
+          + verificationAssignmentBlock(prepared.verificationAssignment);
+        if (prepared.verificationAssignment) context.verification_assignment = prepared.verificationAssignment;
       } else if (TICKET_DELIVERY_ROLES.has(request.role)) {
         const delivery = ticketDelivery(options, fs.realpathSync(scope.worktree), scope.ticket, context.plan_sha256);
         const block = planDeliveryBlock(delivery, undefined);
@@ -1432,8 +1609,11 @@ function createCodexDeliveryHost(options = {}) {
         context: request.gsd_role !== undefined && preRecordValidation
           ? { ...taskContext, preRecordValidation } : taskContext,
       });
-      let result = await dispatchAgent(request.dispatch_id || newDispatchId(), context);
+      if (fileInput) archReviewContext.verifyFileInput(fileInput);
+      let result = await dispatchAgent(request.dispatch_id, context);
+      if (fileInput) archReviewContext.verifyFileInput(fileInput);
       options.controller?.assertOwner(scope.run_id);
+      if (request.role === 'arch-review') return archReviewContext.finish(options.archReviewContext, result, runtimeHost.recorder);
       if (!committing) return result;
       let artifact = finalizedArtifact(result, prepared, { ...options, scope, recorder: runtimeHost.recorder });
       if (retryableVerificationFailure(artifact)) {
@@ -1448,8 +1628,10 @@ function createCodexDeliveryHost(options = {}) {
           bind(retryContext, 'provider', 'openai');
           retryContext.sandbox_mode = 'workspace-write';
           retryContext.prompt = verificationRepairPrompt(originalPrompt, failure)
-            + '\n\nLeave changes uncommitted. The trusted host will stage, sign, and verify the commit.'
-            + planDeliveryBlock(prepared.delivery, prepared.plan.path);
+            + '\n\nYou are an executor already dispatched inside the active coordinator-owned Shipyard delivery loop. The coordinator owns setup and dispatch. Do not restart shipyard-route, bootstrap, marketplace installation, investigate, decomposition, or a second delivery orchestrator. Implement the delivered PLAN within files_modified and the existing sandbox boundaries. Leave changes uncommitted. The trusted host will stage, sign, and verify the commit.'
+            + planDeliveryBlock(prepared.delivery, prepared.plan.path)
+            + verificationAssignmentBlock(prepared.verificationAssignment);
+          if (prepared.verificationAssignment) retryContext.verification_assignment = prepared.verificationAssignment;
           result = await dispatchAgent(newDispatchId(), retryContext);
           options.controller?.assertOwner(scope.run_id);
           artifact = finalizedArtifact(result, prepared, { ...options, scope, recorder: runtimeHost.recorder });
@@ -1487,8 +1669,11 @@ function readRequestFile(file) {
       fail('INVALID_INPUT', 'unsupported scope field ' + key);
     }
   }
-  const { scope, ...launch } = request;
-  return { scope, launch: requestValue(launch) };
+  const { scope, graph_dir: graphDir, ...launch } = request;
+  if (graphDir !== undefined && (launch.role !== 'arch-review'
+      || typeof graphDir !== 'string' || !path.isAbsolute(graphDir)))
+    fail('INVALID_INPUT', 'graph_dir requires an absolute architecture graph selector');
+  return { scope, launch: requestValue(launch), ...(graphDir ? { graphDir } : {}) };
 }
 
 function parseResumeArguments(argv) {
@@ -1564,16 +1749,68 @@ async function runResumeCli(argv, stdout, options) {
   return result;
 }
 
+function historyReason(value) {
+  return String(value).replace(/[\u0000-\u001f\u007f]/g, ' ').slice(0, 400);
+}
+
+function secondaryDiagnostic(primary, action, error) {
+  const diagnostic = { action, code: typeof error?.code === 'string' ? historyReason(error.code) : 'CONTROLLER_FAILURE',
+    cause: historyReason(error?.message || error) };
+  return Object.freeze({ ...primary,
+    diagnostics: Object.freeze([...(primary.diagnostics || []), Object.freeze(diagnostic)]) });
+}
+
+function finishDeliveryRun(controller, runId, failure) {
+  let result = failure;
+  try {
+    const status = controller.status(runId);
+    if (status && !['runtime_unavailable', 'retryable', 'waiting'].includes(status.state)) {
+      controller.fail(runId, { reason: historyReason(failure.cause) });
+    }
+  } catch (error) {
+    result = secondaryDiagnostic(result, 'run finalization', error);
+  } finally {
+    try {
+      controller.release(runId, 'blocked delivery released its owned lease');
+    } catch (error) {
+      if (error?.code !== 'RUN_NOT_FOUND') {
+        result = secondaryDiagnostic(result, 'run release', error);
+      }
+    }
+  }
+  return result;
+}
+
 async function runCli(argv = process.argv.slice(2), stdout = process.stdout, options = {}) {
   if (!object(options)) fail('INVALID_INPUT', 'host options must be an object');
   if (Array.isArray(argv) && argv[0] === '--resume-finalization') return runResumeCli(argv, stdout, options);
   const parsed = readRequestFile(parseCliArguments(argv));
   const scope = canonicalCliScope(parsed.scope);
-  const request = parsed.launch;
+  if (parsed.graphDir) {
+    if (options.graphDir && path.resolve(options.graphDir) !== path.resolve(parsed.graphDir))
+      fail('INVALID_INPUT', 'conflicting canonical graph selectors');
+    options = { ...options, graphDir: parsed.graphDir };
+  }
+  const archDispatchId = parsed.launch.role === 'arch-review' ? parsed.launch.dispatch_id || newDispatchId() : null;
+  const preparedArchReview = parsed.launch.role === 'arch-review'
+    ? archReviewContext.prepare(scope, parsed.launch, {
+      graphDir: options.graphDir || process.env.SHIPYARD_GRAPH_DIR,
+      execFileSync: options.execFileSync, getPullRequest: options.getPullRequest,
+      refreshGit: options.refreshGit,
+      inflightDispatchId: archDispatchId, storageRoot: storageDirectory(options, scope),
+    }) : null;
+  const request = preparedArchReview ? { ...preparedArchReview.launch, signals: { ...preparedArchReview.launch.signals },
+    context: { ...preparedArchReview.launch.context }, dispatch_id: archDispatchId } : parsed.launch;
+  request.dispatch_id = request.dispatch_id || newDispatchId();
+  const fileInputContext = preparedArchReview ? null : prepareIntegratorInput(scope, request, options);
+  const archReviewSignals = preparedArchReview ? admitArchitectureInput(preparedArchReview, request, options,
+    options.host?.capabilities || options.capabilities || {}) : null;
+  if (archReviewSignals) request.signals = archReviewSignals;
+
   if (request.gsd_role !== undefined && GSD_DELIVERY_ROLES[request.gsd_role] !== request.role) {
     fail('UNSUPPORTED_ROLE', 'typed GSD role does not match the delivery role');
   }
-  const dispatchId = request.dispatch_id || newDispatchId();
+  const dispatchId = archDispatchId || request.dispatch_id || newDispatchId();
   const resolution = policy.resolveDispatch({
     runtime: 'codex', role: request.role,
     signals: request.signals, dispatch_id: dispatchId,
@@ -1632,11 +1869,14 @@ async function runCli(argv = process.argv.slice(2), stdout = process.stdout, opt
   }, heartbeatMs);
   heartbeat.unref?.();
   const inflightDir = inflightGraphDir(options, scope.worktree);
-  const inflight = inflightDir ? { graphDir: inflightDir, dispatch_id: dispatchId, pid: process.pid } : null;
+  const inflight = inflightDir ? { graphDir: inflightDir, worktree: scope.worktree, dispatch_id: dispatchId, pid: process.pid,
+    ...(preparedArchReview && path.resolve(inflightDir, '../..') === fs.realpathSync(scope.worktree)
+      ? { refreshBoard: false } : {}) } : null;
   let result;
   try {
     if (inflight) {
       recordInflight({ ...inflight, ticket: scope.ticket, role: resolution.role, host: 'codex' });
+      if (preparedArchReview) archReviewContext.admitBookkeeping(preparedArchReview);
     }
     const host = createCodexDeliveryHost({
       scope,
@@ -1664,35 +1904,34 @@ async function runCli(argv = process.argv.slice(2), stdout = process.stdout, opt
       scopedTree: options.scopedTree,
       host: options.host,
       writerSession,
+      archReviewContext: preparedArchReview, archReviewSignals, fileInputContext,
     });
     result = await host.run({ ...request, dispatch_id: dispatchId });
     clearInterval(heartbeat);
-    if (heartbeatError) throw heartbeatError;
-    controller.assertOwner(scope.run_id);
-    if (request.role === 'executor' && result.status !== 'verification_failed'
-        && (!result.artifact || result.artifact.status !== 'committed')) {
-      fail('MISSING_ARTIFACT', 'executor produced no committed artifact');
+    if (result.status === 'blocked') {
+      if (heartbeatError) result = secondaryDiagnostic(result, 'run heartbeat', heartbeatError);
+      result = finishDeliveryRun(controller, scope.run_id, result);
+    } else {
+      if (heartbeatError) throw heartbeatError;
+      controller.assertOwner(scope.run_id);
+      if (request.role === 'executor' && result.status !== 'verification_failed'
+          && (!result.artifact || result.artifact.status !== 'committed')) {
+        fail('MISSING_ARTIFACT', 'executor produced no committed artifact');
+      }
+      if (result.status === 'verification_failed') result = finishDeliveryRun(controller, scope.run_id, {
+        ...result, cause: verificationFailureReason(result),
+      });
+      else controller.complete(scope.run_id, {
+        reason: request.role === 'executor' ? 'verified signed commit ' + result.artifact.commit
+          : Array.isArray(result) ? 'sealed research lines ' + result.map((line) => line && line.id).join(', ')
+            : result && result.receipt ? 'verified dispatch receipt ' + result.receipt.dispatch_id
+              : 'research result ' + String(result && (result.status || result.code) || 'without a receipt'),
+      });
     }
-    if (result.status === 'verification_failed') controller.fail(scope.run_id, {
-      reason: verificationFailureReason(result),
-    });
-    else controller.complete(scope.run_id, {
-      reason: request.role === 'executor' ? 'verified signed commit ' + result.artifact.commit
-        : Array.isArray(result) ? 'sealed research lines ' + result.map((line) => line && line.id).join(', ')
-          : result && result.receipt ? 'verified dispatch receipt ' + result.receipt.dispatch_id
-            : 'research result ' + String(result && (result.status || result.code) || 'without a receipt'),
-    });
   } catch (error) {
     clearInterval(heartbeat);
-    try {
-      controller.fail(scope.run_id, {
-        reason: String(error && error.message || error).replace(/[\u0000-\u001f\u007f]/g, ' ').slice(0, 400),
-      });
-    } catch (controllerError) {
-      if (error && typeof error === 'object') {
-        error.message += '; run controller failure: ' + controllerError.message;
-      }
-    }
+    const failure = finishDeliveryRun(controller, scope.run_id, { cause: error?.message || String(error) });
+    if (failure.diagnostics && error && typeof error === 'object') error.diagnostics = failure.diagnostics;
     throw error;
   } finally {
     if (inflight) {
@@ -1708,7 +1947,7 @@ async function runCli(argv = process.argv.slice(2), stdout = process.stdout, opt
     if (writerHandle) {
       try { writerLease.release({ token: writerHandle.token, epoch: writerHandle.epoch }); }
       catch (releaseError) {
-        if (primaryError) primaryError.message += '; writer release failed: ' + releaseError.message;
+        if (primaryError) primaryError.diagnostics = secondaryDiagnostic(primaryError, 'writer release', releaseError).diagnostics;
         else throw releaseError;
       }
     }
@@ -1735,9 +1974,12 @@ module.exports = Object.freeze({
 });
 
 if (require.main === module) {
-  runCli().catch((error) => {
+  runCli().then((result) => {
+    if (result?.status === 'blocked' || result?.status === 'verification_failed') process.exitCode = 1;
+  }).catch((error) => {
     process.stderr.write('codex-delivery-host: ' + (error && error.message ? error.message : error) + '\n');
     process.stderr.write(formatHint(error && error.code) + '\n');
+    if (error?.diagnostics) process.stderr.write(JSON.stringify({ diagnostics: error.diagnostics }) + '\n');
     process.exitCode = 1;
   });
 }

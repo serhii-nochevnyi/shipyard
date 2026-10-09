@@ -278,7 +278,7 @@ test('watching CI is only sanctioned when nothing else is actionable', () => {
 });
 
 test('approved + green + out of draft is a human merge when auto-merge is off', () => {
-  const f = computeFront({ T: {} }, { T: { status: 'pr-open', pr: 7, draft: false, review_decision: 'APPROVED', checks: checks() } });
+  const f = computeFront({ T: {} }, { T: { status: 'pr-open', pr_base: 'epic/01-x', epic: 'epic/01-x', pr: 7, draft: false, review_decision: 'APPROVED', checks: checks() } });
   assert.deepStrictEqual(f.waiting.merge_human, ['T']);
   assert.strictEqual(f.fixpoint, true);
 });
@@ -286,7 +286,7 @@ test('approved + green + out of draft is a human merge when auto-merge is off', 
 test('a checkpoint ticket out of draft waits on the human, not on the run', () => {
   const f = computeFront(
     { T: { human_checkpoint: true } },
-    { T: { status: 'pr-open', pr: 7, draft: false, review_decision: null, checks: checks() } }
+    { T: { status: 'pr-open', pr_base: 'epic/01-x', epic: 'epic/01-x', pr: 7, draft: false, review_decision: null, checks: checks() } }
   );
   assert.deepStrictEqual(f.waiting.human, ['T']);
   assert.strictEqual(f.fixpoint, true);
@@ -302,7 +302,9 @@ test('a checkpoint ticket that has NOT been worked on is still executable', () =
 suite('front — auto-merge turns the merge tail into the sentinel\'s work');
 
 const conform = { 'arch-review': 'conform', 'drift-check': 'fresh', checks: 'green' };
-const landed = { status: 'pr-open', pr: 9, draft: false, checks: checks(), gate: conform, merge_scope: 'stacked', pr_base: 'epic/01-x' };
+const landed = { status: 'pr-open', pr: 9, draft: false, checks: checks(), gate: conform, merge_scope: 'stacked', pr_base: 'epic/01-x',
+  head_sha:'a'.repeat(40), pr_base_sha:'b'.repeat(40),
+  authenticated_architecture: {authenticated:true,verdict:'conform',base:'main',pr:9,head:'a'.repeat(40),base_commit:'b'.repeat(40)} };
 
 test('green + conform + stacked base is a merge the run performs itself', () => {
   const f = computeFront({ T: {} }, { T: { ...landed } }, { autoMerge: true });
@@ -325,10 +327,10 @@ test('a PR pointed at the integration branch is NEVER auto-merged', () => {
   assert.ok(f.why.T.includes('a human'));
 });
 
-test('no gate_status trailer means the conform gate is still owed, not a merge', () => {
+test('an epic ticket with no architecture trailer is mergeable', () => {
   const f = computeFront({ T: {} }, { T: { ...landed, gate: undefined } }, { autoMerge: true });
-  assert.deepStrictEqual(f.actionable.finalize, ['T']);
-  assert.deepStrictEqual(f.actionable.merge, []);
+  assert.deepStrictEqual(f.actionable.finalize, []);
+  assert.deepStrictEqual(f.actionable.merge, ['T']);
 });
 
 test('CHANGES_REQUESTED blocks the auto-merge even with a conform trailer', () => {
@@ -353,18 +355,16 @@ suite('front — a conform verdict is bound to the head it judged');
 
 const conformAt = (head) => ({ ...conform, head });
 
-test('a trailer whose head is not the PR head owes arch-review again', () => {
+test('an epic ticket ignores a stale architecture verdict', () => {
   const f = computeFront(
     { T: {} },
     { T: { ...landed, gate: conformAt('abc123'), head_sha: 'def456' } },
     { autoMerge: true }
   );
-  assert.deepStrictEqual(f.actionable.merge, [], 'a verdict for another diff must not be a merge');
-  assert.deepStrictEqual(f.actionable.finalize, ['T']);
+  assert.deepStrictEqual(f.actionable.merge, ['T']);
+  assert.deepStrictEqual(f.actionable.finalize, []);
   // The reason has to name both SHAs, or the remedy ("re-judge this head") is a
   // guess: a bare "no conform trailer" is false — there IS one, for other code.
-  assert.ok(/abc123/.test(f.why.T) && /def456/.test(f.why.T), f.why.T);
-  assert.ok(/arch-review/.test(f.why.T), f.why.T);
 });
 
 test('the same head is conform — the ordinary path is unchanged', () => {
@@ -397,14 +397,13 @@ test('a pre-head-binding trailer on a pre-head-binding board is still conform', 
   assert.deepStrictEqual(f.actionable.merge, ['T']);
 });
 
-test('but a headless trailer on a board that KNOWS the head is absent', () => {
+test('an epic ticket ignores a headless architecture verdict', () => {
   // Fail-closed: the board carries a head, the trailer does not, so nothing can
   // say which diff was judged. It bites only a PR verdicted before the upgrade
   // and not merged before it — one re-review, never a silent merge.
   const f = computeFront({ T: {} }, { T: { ...landed, head_sha: 'def456' } }, { autoMerge: true });
-  assert.deepStrictEqual(f.actionable.merge, []);
-  assert.deepStrictEqual(f.actionable.finalize, ['T']);
-  assert.ok(/predates head binding/.test(f.why.T), f.why.T);
+  assert.deepStrictEqual(f.actionable.merge, ['T']);
+  assert.deepStrictEqual(f.actionable.finalize, []);
 });
 
 suite('front — sentinel ownership');
@@ -738,7 +737,9 @@ test('a PARKED parent is not a moving parent — the child is offered again', ()
 test('a CHECKPOINT parent still routes to waiting.human, not to waiting.parent', () => {
   // The two holds are different facts with different remedies: a person holds
   // the key in one, the guard drives the parent in the other.
-  const f = computeFront(cpTickets, cpState('pr-open'), { autoMerge: true });
+  const state = cpState('pr-open');
+  state.P.pr_base = state.P.epic = 'epic/01-x';
+  const f = computeFront(cpTickets, state, { autoMerge: true });
   assert.deepStrictEqual(f.waiting.parent, [], 'a checkpoint parent is not a parent being DRIVEN');
   assert.ok(f.waiting.human.includes('C'), 'the child waits on the person holding the parent');
   // …and the parent itself is that person's, which is why it is here too: the
@@ -1590,14 +1591,14 @@ test('the same ticket WITHOUT the record still waits on a person (the control)',
   assert.deepStrictEqual(f.parked.blocked, []);
 });
 
-test('pre-authorization is not a bypass: no conform trailer is still finalize work', () => {
+test('a preauthorized epic ticket needs no architecture trailer', () => {
   const f = computeFront(
     { T: { human_checkpoint: true, preauthorized: true } },
     { T: { ...landed, gate: undefined } },
     { autoMerge: true }
   );
-  assert.deepStrictEqual(f.actionable.merge, []);
-  assert.deepStrictEqual(f.actionable.finalize, ['T'], 'the architecture verdict is still owed');
+  assert.deepStrictEqual(f.actionable.merge, ['T']);
+  assert.deepStrictEqual(f.actionable.finalize, []);
 });
 
 test('pre-authorization never reaches the integration branch on the board either', () => {
@@ -1817,12 +1818,12 @@ test('a certified draft where nothing ran is held too, not finalized', () => {
   assert.ok(/merge_without_ci/.test(f.why.T), f.why.T);
 });
 
-test('an UNCERTIFIED draft where nothing ran is still finalize work', () => {
+test('an epic draft with no CI remains held regardless of architecture history', () => {
   // The architecture verdict and the review threads are real work whatever CI
   // did, so only the two landing actions are withheld.
   const f = computeFront({ T: {} }, { T: { ...noCiLanded, draft: true, gate: undefined } }, { autoMerge: true });
-  assert.deepStrictEqual(f.actionable.finalize, ['T']);
-  assert.deepStrictEqual(f.waiting.merge_human, []);
+  assert.deepStrictEqual(f.actionable.finalize, []);
+  assert.deepStrictEqual(f.waiting.merge_human, ['T']);
 });
 
 test('with auto-merge off nothing is withheld — the human merges it either way', () => {
@@ -2928,7 +2929,7 @@ test('NO config file at all is not a refusal — that is the regression the guar
   // `loadConfig` reports an absent file as `valid: true, error: null`: nobody has
   // configured this project yet, and the defaults are exactly the right answer.
   const absent = frontJson(demoBoard(undefined));
-  assert.deepStrictEqual(absent.actionable.finalize, ['T-01-01'], 'defaults still apply to an unconfigured project');
+  assert.deepStrictEqual(absent.actionable.merge, ['T-01-01'], 'defaults still apply without an architecture gate on an epic ticket');
   assert.strictEqual(absent.config_invalid, undefined, 'and nothing is refused, so nothing is reported');
   assert.deepStrictEqual(
     boardShape(absent),

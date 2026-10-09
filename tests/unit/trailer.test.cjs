@@ -37,6 +37,7 @@ const crypto = require('crypto');
 const { spawnSync } = require('child_process');
 const { suite, test, done, assert } = require(path.join(__dirname, 'assert-harness.cjs'));
 
+const trailerReader = require('../../plugins/delivery-pipeline/scripts/gate-trailer.cjs');
 const SENTINEL = path.join(__dirname, '..', '..', 'plugins', 'delivery-pipeline', 'scripts', 'sentinel.cjs');
 
 const W = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-trailer-'));
@@ -54,7 +55,7 @@ fs.writeFileSync(GH, [
   '#!/usr/bin/env bash',
   'argv="$*"',
   'case "$argv" in',
-  '  "repo view --json defaultBranchRef"*) echo "main" ;;',
+  '  "repo view "*"--json defaultBranchRef"*) echo "main" ;;',
   // reviewers.cjs resolves the repo slug before it can read any thread.
   '  "repo view --json owner,name"*) echo \'{"owner":{"login":"acme"},"name":"demo"}\' ;;',
   // The review threads: served from a FILE when one is named, so the writer's
@@ -212,7 +213,7 @@ test('baseline — a conform trailer with no extra key would merge', () => {
   // the comparison would be measuring nothing.
   assert.deepStrictEqual(bare.blockers, [], 'the baseline must not be refused');
   assert.strictEqual(bare.would_merge, true, 'the baseline must reach the merge verdict');
-  assert.strictEqual(bare.gate['arch-review'], 'conform');
+  assert.strictEqual(bare.architecture.status, 'skipped-by-target');
 });
 
 test('degenerate-green=<n> yields exactly the verdict of a body without it', () => {
@@ -223,8 +224,8 @@ test('degenerate-green=<n> yields exactly the verdict of a body without it', () 
     verdictOf(withFindings), verdictOf(bare),
     'reported findings must not change what the guard does'
   );
-  assert.strictEqual(withFindings.gate['arch-review'], 'conform', 'the architecture verdict still reads');
-  assert.strictEqual(withFindings.gate['degenerate-green'], '3', 'the new key is parsed, not swallowed');
+  assert.strictEqual(withFindings.architecture.status, 'skipped-by-target');
+  assert.strictEqual(trailerReader.parseGate(FINDINGS)['degenerate-green'], '3');
 });
 
 test('degenerate-green=clean yields exactly the same verdict too', () => {
@@ -232,7 +233,7 @@ test('degenerate-green=clean yields exactly the same verdict too', () => {
   const clean = mergeVerdict(CLEAN);
   assert.strictEqual(bare.would_merge, true, 'baseline must reach the verdict being compared');
   assert.deepStrictEqual(verdictOf(clean), verdictOf(bare), 'a clean report must not change the verdict either');
-  assert.strictEqual(clean.gate['degenerate-green'], 'clean');
+  assert.strictEqual(trailerReader.parseGate(CLEAN)['degenerate-green'], 'clean');
 });
 
 test('a malformed extra part is skipped and arch-review still reads conform', () => {
@@ -240,48 +241,24 @@ test('a malformed extra part is skipped and arch-review still reads conform', ()
   const malformed = mergeVerdict(MALFORMED);
   assert.strictEqual(bare.would_merge, true, 'baseline must reach the verdict being compared');
   assert.deepStrictEqual(verdictOf(malformed), verdictOf(bare), 'a malformed extra part must not break the merge');
-  assert.strictEqual(malformed.gate['arch-review'], 'conform');
+  assert.strictEqual(trailerReader.parseGate(MALFORMED)['arch-review'], 'conform');
   assert.ok(
-    !('degenerate-green' in malformed.gate),
+    !('degenerate-green' in trailerReader.parseGate(MALFORMED)),
     'a part with no `=` is dropped, not recorded with an empty value'
   );
 });
 
-test('negative control — the comparison DOES separate two different verdicts', () => {
-  // Without this the equivalence assertions above could be satisfied by a
-  // comparison that cannot tell any two verdicts apart. `arch-review=violation`
-  // carries the new key as well, so what changes the outcome is the
-  // architecture verdict and nothing else.
-  const bare = mergeVerdict(BARE);
-  const violation = mergeVerdict(VIOLATION);
-  assert.strictEqual(violation.would_merge, undefined, 'a non-conform trailer must not merge');
-  assert.ok(
-    violation.blockers.some((b) => b.includes('arch-review=conform')),
-    `expected the missing-verdict refusal, got: ${violation.blockers.join('; ')}`
-  );
-  assert.notDeepStrictEqual(
-    verdictOf(violation), verdictOf(bare),
-    'the equivalence comparison must be able to fail'
-  );
+test('a genuine architecture violation remains history and cannot block an epic ticket', () => {
+  const bare = mergeVerdict(BARE), violation = mergeVerdict(VIOLATION);
+  assert.strictEqual(violation.would_merge, true);
+  assert.deepStrictEqual(verdictOf(violation), verdictOf(bare));
+  assert.equal(trailerReader.parseGate(VIOLATION)['arch-review'], 'violation');
 });
 
-test('a SECOND gate_status line loses the architecture verdict and is refused', () => {
-  // The reader takes the LAST matching line, so appending the report as its own
-  // trailer line hides the one the gate reads. This is the mistake the writing
-  // instruction exists to prevent: the key goes INTO the existing line.
+test('a second historical trailer cannot add an architecture gate to an epic target', () => {
   const second = mergeVerdict(SECOND_LINE);
-  assert.strictEqual(second.would_merge, undefined, 'a shadowed trailer must not merge');
-  assert.ok(
-    second.blockers.some((b) => b.includes('arch-review=conform')),
-    `expected the missing-verdict refusal, got: ${second.blockers.join('; ')}`
-  );
-  // `res.gate` is assigned only AFTER the conform check passes, so a refusal
-  // reports no gate at all. Asserting the absence of a key inside `|| {}` would
-  // pass against that empty object while claiming to be about last-line
-  // parsing — which the two assertions above already pin: had the reader taken
-  // the FIRST matching line, `arch-review=conform` would have been found and
-  // this body would have merged.
-  assert.strictEqual(second.gate, undefined, 'a refused merge reports no parsed gate');
+  assert.strictEqual(second.would_merge, true);
+  assert.strictEqual(second.architecture.status, 'skipped-by-target');
 });
 
 suite('duty: the same key changes no action either');
@@ -302,8 +279,8 @@ test('negative control — duty DOES change when the architecture verdict does',
     project({ 'arch-review': 'violation', 'drift-check': 'fresh', 'degenerate-green': '0' }),
     ['duty', '--json']
   );
-  assert.strictEqual(violation.items[0].action, 'arch-review', 'a non-conform gate is unrecorded work');
-  assert.notDeepStrictEqual(violation, bare, 'the duty comparison must be able to fail');
+  assert.strictEqual(violation.items[0].action, 'merge');
+  assert.deepStrictEqual(violation, bare);
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -441,7 +418,7 @@ function postedIn(dir) {
 }
 
 function writeTrailer({ body, headRefOid, threads, args } = {}) {
-  fs.writeFileSync(PRVIEW, JSON.stringify({ number: 9, body: body === undefined ? 'Ticket: T-01-01\n' : body, ...(headRefOid === null ? {} : { headRefOid: headRefOid || SHA_A }) }));
+  fs.writeFileSync(PRVIEW, JSON.stringify({ number: 9, state: 'OPEN', baseRefName: 'epic/01-x', baseRefOid: SHA_B, body: body === undefined ? 'Ticket: T-01-01\n' : body, ...(headRefOid === null ? {} : { headRefOid: headRefOid || SHA_A }) }));
   try { fs.unlinkSync(EDIT); } catch { /* not written yet */ }
   const statuses = fs.mkdtempSync(path.join(W, 'statuses-'));
   const env = { ...process.env, PATH: `${BIN}${path.delimiter}${process.env.PATH}`, SHIPYARD_TRAILER_PRVIEW: PRVIEW, SHIPYARD_TRAILER_EDIT: EDIT, SHIPYARD_TRAILER_STATUSES: statuses };
@@ -450,41 +427,12 @@ function writeTrailer({ body, headRefOid, threads, args } = {}) {
   return { ...r, edited: fs.existsSync(EDIT) ? fs.readFileSync(EDIT, 'utf8') : null, ...postedIn(statuses) };
 }
 
-test('the verdict is posted as a merge-gate status on the live head, and a legacy line is removed', () => {
-  const r = writeTrailer({
-    body: `Ticket: T-01-01\n\nProblem: x\n\ngate_status: arch-review=conform, drift-check=fresh, degenerate-green=clean, checks=green, head=${SHA_B}`,
-    headRefOid: SHA_A,
-  });
-  assert.strictEqual(r.status, 0, `${r.stdout}\n${r.stderr}`);
-  assert.strictEqual(r.posted.length, 1, 'exactly one status is posted');
-  assert.strictEqual(r.posted[0].sha, SHA_A);
-  assert.strictEqual(r.posted[0].context, 'merge-gate');
-  assert.strictEqual(r.posted[0].state, 'success');
-  assert.ok(!/gate_status:/.test(r.edited), `the legacy trailer survived:\n${r.edited}`);
-  assert.ok(!r.edited.includes(SHA_B), `the superseded head survived:\n${r.edited}`);
-  assert.ok(r.edited.startsWith('Ticket: T-01-01'), `the body was not preserved:\n${r.edited}`);
-  assert.strictEqual(gateConform(r.gate, SHA_A), true);
-  assert.strictEqual(gateConform(r.gate, SHA_B), false);
-});
-
-test('a new verdict on a clean body never edits the PR body', () => {
-  const r = writeTrailer({ body: 'Ticket: T-01-01\n\nProblem: x\n' });
-  assert.strictEqual(r.status, 0, `${r.stdout}\n${r.stderr}`);
-  assert.strictEqual(r.edited, null, `the body was edited:\n${r.edited}`);
-  assert.strictEqual(r.posted.length, 1);
-});
-
-test('the status description round-trips through the parseGate grammar and fits 140 chars', () => {
-  const r = writeTrailer({
-    args: ['write', '9', '--arch-review', 'conform', '--drift-check', 'skipped',
-      '--degenerate-green', 'skipped', '--base-tree', SHA_B],
-  });
-  assert.strictEqual(r.status, 0, `${r.stdout}\n${r.stderr}`);
-  assert.ok(r.description.length <= STATUS_MAX, `${r.description.length}: ${r.description}`);
-  const parsed = parseGate(`gate_status: ${r.description}`);
-  assert.strictEqual(parsed['arch-review'], 'conform');
-  assert.strictEqual(parsed.base_tree, SHA_B);
-  assert.strictEqual(parsed['drift-check'], 'skipped');
+test('write skips an epic target without publishing conform or removing retained history', () => {
+  const r = writeTrailer({body: `Ticket: T-01-01\ngate_status: arch-review=violation, head=${SHA_B}`});
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.strictEqual(JSON.parse(r.stdout).status, 'skipped-by-target');
+  assert.deepStrictEqual(r.posted, []);
+  assert.strictEqual(r.edited, null);
 });
 
 suite('readGate: the merge-gate status first, the body trailer only as a legacy fallback');
@@ -538,14 +486,12 @@ test('a status on a stale sha is not a verdict for the live head', () => {
   });
 });
 
-test('an unresolved thread refuses the write, and nothing is edited', () => {
-  // "Writing it while a thread is open is falsifying the gate" was a sentence in
-  // pr-sentinel.md. It is now a refusal — and the PR body must be untouched,
-  // because a half-written verdict is worse than none.
+test('a skipped target publishes nothing even when feedback is open', () => {
   const r = writeTrailer({ threads: oneOpenThread });
-  assert.notStrictEqual(r.status, 0, `expected a refusal, got exit 0:\n${r.stdout}`);
-  assert.strictEqual(r.edited, null, `the body was edited anyway:\n${r.edited}`);
-  assert.ok(/unresolved review thread/.test(r.stderr), r.stderr);
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.strictEqual(JSON.parse(r.stdout).status, 'skipped-by-target');
+  assert.deepStrictEqual(r.posted, []);
+  assert.strictEqual(r.edited, null);
 });
 
 test('a PR reporting no head refuses too, rather than writing a headless trailer', () => {
@@ -557,11 +503,12 @@ test('a PR reporting no head refuses too, rather than writing a headless trailer
   assert.ok(/headRefOid/.test(r.stderr), r.stderr);
 });
 
-test('threads it cannot read refuse as well — the writer is not softer than the gate', () => {
+test('a skipped target does not query review threads for an architecture write', () => {
   const r = writeTrailer({ threads: 'not json at all' });
-  assert.notStrictEqual(r.status, 0, `expected a refusal, got exit 0:\n${r.stdout}`);
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.strictEqual(JSON.parse(r.stdout).status, 'skipped-by-target');
+  assert.deepStrictEqual(r.posted, []);
   assert.strictEqual(r.edited, null);
-  assert.ok(/review threads/.test(r.stderr), r.stderr);
 });
 
 test('a missing required flag is a usage error, not a trailer with holes in it', () => {
@@ -741,8 +688,9 @@ for (const [what, over, extra, expected] of [
   test(`accepted: ${what}`, () => {
     const r = writeTrailer({ args: argsWith(over, extra) });
     assert.strictEqual(r.status, 0, `expected the write to succeed\n${r.stdout}\n${r.stderr}`);
-    assert.strictEqual(r.posted.length, 1, 'expected one status');
-    assert.ok(r.description.includes(expected), `expected \`${expected}\` in: ${r.description}`);
+    assert.strictEqual(JSON.parse(r.stdout).status, 'skipped-by-target');
+    assert.deepStrictEqual(r.posted, []);
+    assert.strictEqual(r.edited, null);
   });
 }
 
@@ -752,8 +700,8 @@ test('the writer accepts exactly the casing the readers do, and no other', () =>
   // it writes for; one that accepted `confrom` would be looser than its own docs.
   const r = writeTrailer({ args: argsWith({ 'arch-review': 'CONFORM', 'drift-check': 'Skipped' }) });
   assert.strictEqual(r.status, 0, `${r.stdout}\n${r.stderr}`);
-  assert.strictEqual(gateConform(r.gate, SHA_A), true, `the reader must accept what was written:\n${r.description}`);
-  assert.strictEqual(gateKind(r.gate, SHA_B), 'stale', 'and still bind it to the head it judged');
+  assert.strictEqual(JSON.parse(r.stdout).status, 'skipped-by-target');
+  assert.deepStrictEqual(r.posted, []);
 });
 
 test('a rejected value is refused BEFORE the PR is read, not after', () => {
@@ -844,7 +792,7 @@ test('a flag whose value is missing names THAT flag, not the next flag\'s value'
   assert.ok(!/"conform"/.test(r.stderr), `the refusal names the next flag's value: ${r.stderr}`);
 });
 
-test('the sentinel\'s own invocation, flag for flag, still writes', () => {
+test('the sentinel\'s own invocation, flag for flag, skips an epic target', () => {
   // The refusals above are only safe if the call the conveyor actually makes
   // survives them. This is that call verbatim — the qualifier the guard passes on
   // every gate write, a `skipped` drift verdict (the ordinary case: drift-check
@@ -857,14 +805,9 @@ test('the sentinel\'s own invocation, flag for flag, still writes', () => {
       '--arch-review', 'conform', '--drift-check', 'skipped', '--degenerate-green', 'clean'],
   });
   assert.strictEqual(r.status, 0, `the guard's own invocation was refused\n${r.stdout}\n${r.stderr}`);
-  assert.strictEqual(r.posted.length, 1, 'expected one status');
-  const d = r.description;
-  assert.ok(d.includes('arch-review=conform'), d);
-  assert.ok(d.includes('drift-check=skipped'), d);
-  assert.ok(d.includes('degenerate-green=clean'), d);
-  assert.ok(d.includes('checks=green'), d);
-  assert.strictEqual(r.posted[0].sha, SHA_A);
-  assert.strictEqual(gateConform(r.gate, SHA_A), true);
+  assert.strictEqual(JSON.parse(r.stdout).status, 'skipped-by-target');
+  assert.deepStrictEqual(r.posted, []);
+  assert.strictEqual(r.edited, null);
 });
 
 test('a duplicate is refused BEFORE the PR is read, like every other usage error', () => {
@@ -1020,25 +963,26 @@ test('parseGate reads base_tree, and a trailer without it parses as before', () 
   assert.strictEqual(gateKind(withIt, SHA_B), 'stale');
 });
 
-test('the writer records base_tree beside head when it is given one', () => {
+test('a skipped target accepts a measured base_tree without publishing a new verdict', () => {
   const r = writeTrailer({
     args: ['write', '9', '--arch-review', 'conform', '--drift-check', 'fresh',
       '--degenerate-green', 'clean', '--base-tree', SHA_B],
   });
   assert.strictEqual(r.status, 0, `${r.stdout}\n${r.stderr}`);
-  assert.ok(r.description.includes(`base_tree=${SHA_B}`), r.description);
-  assert.strictEqual(r.posted[0].sha, SHA_A);
-  assert.strictEqual(r.gate.base_tree, SHA_B, 'the writer and the reader must agree');
+  assert.strictEqual(JSON.parse(r.stdout).status, 'skipped-by-target');
+  assert.deepStrictEqual(r.posted, []);
+  assert.strictEqual(r.edited, null);
 });
 
-test('--base-tree is optional, and its absence writes the trailer it wrote before', () => {
+test('a skipped target without base_tree publishes no trailer', () => {
   // The one direction backwards compatibility runs in: the guard's pinned
   // invocation does not pass it yet, and must keep writing a trailer the readers
   // accept. What it must NOT do is invent a base_tree nobody measured.
   const r = writeTrailer();
   assert.strictEqual(r.status, 0, `${r.stdout}\n${r.stderr}`);
-  assert.ok(!/base_tree/.test(r.description), `a base_tree was invented:\n${r.description}`);
-  assert.strictEqual(gateConform(r.gate, SHA_A), true);
+  assert.strictEqual(JSON.parse(r.stdout).status, 'skipped-by-target');
+  assert.deepStrictEqual(r.posted, []);
+  assert.strictEqual(r.edited, null);
 });
 
 test('an ABBREVIATED base_tree is rejected on write, not silently accepted', () => {
@@ -1221,107 +1165,26 @@ test('a usage error is a usage error, and costs no PR read', () => {
   }
 });
 
-suite('gate-trailer carry: what a proved carry writes, and what it refuses to claim');
+suite('gate-trailer carry: exact-head policy');
 
-test('the same tree under a new sha carries the verdict onto the new head', () => {
-  // THE case. `from` and `to` are different commits with the same tree — which is
-  // what a base-merge that resolved to the branch's own content produces, and
-  // what a head-SHA comparison cannot tell from a real push.
+for (const bodyKind of ['ordinary', 'longest', 'repeated']) test(`a ${bodyKind} retained verdict cannot authorize a new head`, () => {
   const fx = carryRepo();
-  assert.notStrictEqual(fx.from, fx.to, 'the fixture must move the head sha');
-  assert.strictEqual(fx.fromTree, fx.toTree, 'and must not move the tree');
-
-  const r = carry(fx);
-  assert.strictEqual(r.status, 0, `expected the carry to be proved\n${r.stdout}\n${r.stderr}`);
-  assert.strictEqual(r.edited, null, `carry edited the PR body:\n${r.edited}`);
-  assert.strictEqual(r.posted.length, 1);
-  assert.strictEqual(r.posted[0].sha, fx.to, 'the status goes on the NEW head');
-  assert.ok(r.description.length <= STATUS_MAX, r.description);
-
-  const gate = r.gate;
-  assert.strictEqual(gateConform(gate, fx.to), true, `the new head is not conform:\n${r.description}`);
-  assert.strictEqual(gateKind(gate, fx.from), 'stale', 'the old head must no longer read conform');
-  assert.strictEqual(gate.base_tree, fx.judgedBaseTree, 'the proof it was measured against is kept');
-  assert.strictEqual(gate['drift-check'], 'fresh', 'every other recorded key survives');
-  assert.strictEqual(gate.carried_from, fx.from.slice(0, 7), 'the head a judge actually read is recorded');
-  assert.strictEqual(JSON.parse(r.stdout).carried, true, r.stdout);
+  const body = bodyKind === 'longest' ? `gate_status: arch-review=conform, drift-check=skipped, degenerate-green=skipped, base_tree=${fx.judgedBaseTree}, head=${fx.from}` : undefined;
+  const r = carry(fx, { ...(body ? {body} : {}) });
+  assert.strictEqual(r.status, 1, r.stderr);
+  assert.strictEqual(JSON.parse(r.stdout).carried, false);
+  assert.match(r.stderr, /fresh authenticated architecture verdict/);
+  assert.deepStrictEqual(r.posted, []);
+  assert.strictEqual(r.edited, null);
 });
 
-test('a carried status keeps the verdict grammar within 140 characters at its longest values', () => {
-  const fx = carryRepo();
-  const body = `gate_status: arch-review=conform, drift-check=skipped, `
-    + `degenerate-green=skipped, base_tree=${fx.judgedBaseTree}, head=${fx.from}`;
-  const r = carry(fx, { body });
-  assert.strictEqual(r.status, 0, `${r.stdout}\n${r.stderr}`);
-  assert.ok(r.description.length <= STATUS_MAX, `${r.description.length}: ${r.description}`);
-  assert.strictEqual(r.posted[0].context, 'merge-gate');
-  const parsed = parseGate(`gate_status: ${r.description}`);
-  assert.strictEqual(parsed['arch-review'], 'conform');
-  assert.strictEqual(parsed['drift-check'], 'skipped');
-  assert.strictEqual(parsed['degenerate-green'], 'skipped');
-  assert.strictEqual(parsed.base_tree || parsed.base, fx.judgedBaseTree);
-  assert.strictEqual(parsed.carried_from || parsed.from, fx.from.slice(0, 7));
-});
-
-test('carry runs both gh calls with cwd: <worktree>, not the caller\'s own cwd', () => {
-  // base-merge.cjs invokes `carry` from ITS OWN cwd (a conveyor project
-  // directory, not necessarily the ticket worktree). Without `--repo`, `gh`
-  // resolves the repo from the process cwd — so if the two `gh` calls here ran
-  // in the test process's cwd instead of the fixture's git repo, `gh` would
-  // resolve the wrong repository (or none at all) the moment `--repo` is
-  // omitted. The fixture repo is a fresh tempdir distinct from wherever this
-  // test process itself runs, so this only passes if `cwd: worktree` is
-  // actually threaded through.
+test('carry validates the live PR in the supplied worktree before refusing new-head authority', () => {
   const fx = carryRepo();
   const cwdLog = path.join(W, 'carry-cwd.txt');
-  try { fs.unlinkSync(cwdLog); } catch { /* not written yet */ }
-  const r = carry(fx, { cwdLog });
-  assert.strictEqual(r.status, 0, `expected the carry to be proved\n${r.stdout}\n${r.stderr}`);
-  assert.ok(fs.existsSync(cwdLog), 'neither gh call recorded a cwd — the stub case did not match');
-  // Realpath both sides: bash's `pwd` reports the OS's canonical cwd, which on
-  // macOS resolves /var's symlink to /private/var — a difference in spelling,
-  // not in which directory `gh` actually ran in.
-  const recorded = fs.realpathSync(fs.readFileSync(cwdLog, 'utf8').trim());
-  const expected = fs.realpathSync(fx.repo);
-  assert.strictEqual(recorded, expected, `gh ran in "${recorded}", expected the worktree "${expected}"`);
-  assert.notStrictEqual(recorded, fs.realpathSync(process.cwd()), 'gh must not run in the test process\'s own cwd');
-});
-
-test('checks=green NEVER carries — a green is measured by CI against a base', () => {
-  // The merge commit is a new merge base, so CI has not built this commit and a
-  // carried `checks=green` would be a claim about a build nobody ran. Dropping
-  // the key is the mechanical form of that rule; nothing reads it, and the merge
-  // gate asks live GitHub for the check state either way.
-  const fx = carryRepo();
-  const r = carry(fx);
-  assert.strictEqual(r.status, 0, `${r.stdout}\n${r.stderr}`);
-  assert.ok(
-    conformTrailerFor(fx.from, fx.judgedBaseTree).includes('checks=green'),
-    'the fixture body must carry a green to lose'
-  );
-  assert.ok(!/checks=/.test(r.description), `a green was carried onto an unbuilt commit:\n${r.description}`);
-  assert.ok(!('checks' in r.gate), 'the reader must see no check claim at all');
-});
-
-test('a chain of carries keeps the head a judge actually read', () => {
-  // Carry twice. `carried_from` must stay the FIRST head — the one whose diff a
-  // judge looked at — or the audit trail says a verdict was rendered against a
-  // commit nobody ever judged.
-  const fx = carryRepo();
-  const first = carry(fx);
-  assert.strictEqual(first.status, 0, `${first.stdout}\n${first.stderr}`);
-
-  const third = g(fx.repo, ['rev-parse', 'HEAD']);
-  g(fx.repo, ['commit', '-q', '--allow-empty', '-m', 'another sha over the same tree']);
-  const fourth = g(fx.repo, ['rev-parse', 'HEAD']);
-  const second = carry(fx, {
-    headRefOid: third, from: third, to: fourth, statuses: first.statuses,
-  });
-  assert.strictEqual(second.status, 0, `${second.stdout}\n${second.stderr}`);
-  const gate = second.gate;
-  assert.strictEqual(second.posted[0].sha, fourth);
-  assert.strictEqual(gateConform(gate, fourth), true);
-  assert.strictEqual(gate.carried_from, fx.from.slice(0, 7), 'the originally judged head must survive the chain');
+  const r = carry(fx, {cwdLog});
+  assert.strictEqual(r.status, 1, r.stderr);
+  assert.strictEqual(fs.realpathSync(fs.readFileSync(cwdLog, 'utf8').trim()), fs.realpathSync(fx.repo));
+  assert.deepStrictEqual(r.posted, []);
 });
 
 done();

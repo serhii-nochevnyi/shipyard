@@ -129,7 +129,7 @@ function fixture(options = {}) {
   return { root, graphDir, bin, responseFile, callsFile };
 }
 
-function run(f, args = []) {
+function run(f, args = [], extraEnv = {}) {
   const env = { ...process.env };
   for (const key of Object.keys(env)) {
     if (/^(?:SHIPYARD_|GSD_|CLAUDE_|CODEX_|GH_|GITHUB_)/.test(key)
@@ -141,7 +141,7 @@ function run(f, args = []) {
   env.STATE_SYNC_GH_CALLS = f.callsFile;
   fs.mkdirSync(env.HOME, { recursive: true });
   return spawnSync(process.execPath, [SCRIPT, ...args], {
-    cwd: f.root, env, encoding: 'utf8', timeout: 20000,
+    cwd: f.root, env: {...env,...extraEnv}, encoding: 'utf8', timeout: 20000,
   });
 }
 
@@ -608,6 +608,56 @@ test('refreshes reap safety on a skipped landed ticket when an open PR targets i
   assert.equal(state(f)[TICKET].reapable, false);
   assert.deepEqual(state(f)[TICKET].reap_blocked_by, { open_from_branch: [], open_onto_branch: [312] });
   assert.match(result.stdout, /skipped_landed=1/);
+});
+
+test('foreign ticket and epic architecture consumers use planning root and refuse unavailable checkout', () => {
+  const repo = 'acme/other';
+  const ticketPr = {...pr(401,'OPEN',BRANCH,'main'),baseRefOid:'c'.repeat(40)};
+  const epicPr = {...pr(399,'OPEN',EPIC,'main'),baseRefOid:'c'.repeat(40)};
+  const f = fixture({ticket:{repo},responses:{open:[ticketPr,epicPr],review:[ticketPr,epicPr],comparisons:{[`main...${EPIC}`]:1}}});
+  const foreign = fs.mkdtempSync(path.join(os.tmpdir(),'sync-foreign-'));
+  const {execFileSync} = require('child_process');
+  try {
+    for (const checkout of [f.root,foreign]) execFileSync('git',['-C',checkout,'init'],{stdio:'ignore'});
+    execFileSync('git',['-C',foreign,'remote','add','origin','https://github.com/'+repo+'.git']);
+    const common = checkout => execFileSync('git',['-C',checkout,'rev-parse','--path-format=absolute','--git-common-dir'],{encoding:'utf8'}).trim();
+    assert.notEqual(common(f.root),common(foreign));
+    const configPath = path.join(f.root,'.planning/config.json');
+    const config = JSON.parse(fs.readFileSync(configPath));
+    config.pipeline.repos = {[repo]:foreign};
+    fs.writeFileSync(configPath,JSON.stringify(config));
+    const graphPath = path.join(f.graphDir,'tickets.json');
+    const graph = JSON.parse(fs.readFileSync(graphPath));
+    graph.epics['43'].repos = [repo];
+    fs.writeFileSync(graphPath,JSON.stringify(graph));
+    const observed = path.join(f.root,'verdict-calls.jsonl');
+    const preload = path.join(f.root,'verdict-preload.cjs');
+    const artifactModule = path.join(path.dirname(SCRIPT),'role-artifact.cjs');
+    fs.writeFileSync(preload, `const fs=require('fs'),target=${JSON.stringify(artifactModule)};const original=require(target);require.cache[require.resolve(target)].exports = {...original,currentArchitectureVerdict: input => { fs.appendFileSync(${JSON.stringify(observed)},JSON.stringify(input)+'\\n'); return {authenticated:true,verdict:'conform',pr:input.pr,head:input.head}; }};`);
+    const env = {NODE_OPTIONS:'--require='+preload};
+    const result = run(f,[],env);
+    assert.equal(result.status,0,result.stderr);
+    const inputs = fs.readFileSync(observed,'utf8').trim().split('\n').map(JSON.parse);
+    assert.deepEqual(inputs.map(input=>input.pr).sort(),[399,401]);
+    for (const input of inputs) {
+      assert.equal(input.worktreePath,fs.realpathSync(f.root));
+      assert.equal(input.graphDir,fs.realpathSync(f.graphDir));
+      assert.equal(input.repo,repo);
+      assert.equal(input.head,'b'.repeat(40));
+      assert.equal(input.baseCommit,'c'.repeat(40));
+    }
+    assert.equal(state(f)[TICKET].authenticated_architecture.authenticated,true);
+    fs.unlinkSync(observed);
+    config.pipeline.repos[repo] = path.join(foreign,'missing');
+    fs.writeFileSync(configPath,JSON.stringify(config));
+    const missing = run(f,[],env);
+    assert.equal(missing.status,0,missing.stderr);
+    assert.equal(fs.existsSync(observed),false);
+    assert.equal(state(f)[TICKET].authenticated_architecture,null);
+  } finally {
+    fs.rmSync(foreign,{recursive:true,force:true});
+    fs.rmSync(f.root,{recursive:true,force:true});
+  }
 });
 
 done();

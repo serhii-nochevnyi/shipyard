@@ -5,6 +5,53 @@ description: Delivery-conveyor rules for GSD planner/executor agents — plan fr
 
 # Delivery conveyor rules
 
+## Architecture review follows the live PR target
+
+Architecture review is mandatory only when the live PR base is the repository's
+integration branch: the project's `git.base_branch`, otherwise its repository
+default. A foreign repository uses its own default. Ticket-to-epic and stacked
+ticket-to-ticket PRs report `skipped-by-target`; do not launch architecture
+review, wait for its status/receipt/trailer, or write a synthetic conform verdict.
+Retain genuine reviews and original receipts as history. CI, unresolved feedback,
+conflicts, plan/source scope, current-head checks and human checkpoints still apply.
+
+A direct ticket PR to the integration branch requires its own fresh authenticated
+review. For the phase epic PR, explicitly select the canonical phase directory and
+actual integration PR from the epic worktree:
+
+```sh
+node ${CLAUDE_PLUGIN_ROOT}/scripts/deliver-dispatch.cjs build arch-review <phase-directory> --phase <N> --pr <integration-pr> --runtime <codex|claude> [--repo owner/name]
+node ${CLAUDE_PLUGIN_ROOT}/scripts/gate-trailer.cjs verify <integration-pr> --worktree <epic-worktree> --graph <project-root>/.planning/graph [--repo owner/name]
+```
+
+For a foreign repository phase, pass `--repo owner/name` to both commands to
+select that repository’s phase tickets and integration PR. For a local repository
+phase, omit `--repo` and invoke from its epic worktree as above.
+
+Both hosts derive the aggregate subject from actual phase graph membership,
+repository, PR, exact live head and base. The context includes the entire aggregate
+PR diff, all phase plans/evidence, architecture records, linked decisions and
+available authenticated retained ticket artifacts. Repeat the complete ticket set
+and digest. Do not invent a graph ticket, substitute a ticket/integrator verdict,
+or dispatch a provider/model replacement. The native boundary and durable receipt
+validation remain mandatory. Missing retained/native evidence stays unknown or HOLD.
+
+Run the live verifier before the integration human merge. A moved head or base
+re-owes review; verdict carry is refused even for an identical tree. Retargeting
+into the integration branch adds this gate; retargeting into the epic removes it.
+Resumed delivery derives the policy again from the current live target. Ticket
+completion cannot mark phase completion, installed acceptance or rollout passed.
+Keep the sealed T-47-05 core generation, original receipts and T-47-08's twenty
+installed/native HOLD obligations unchanged. This policy package is a separate
+T-47-16 generation built through the supported package builder.
+
+Delegated executors are already inside the coordinator-owned loop. The coordinator
+owns setup and dispatch; executors implement the delivered plan within its file
+scope and sandbox, leave changes uncommitted, and do not restart the router,
+bootstrap, marketplace installation or a second delivery orchestrator. Fresh
+top-level router entry retains its normal bootstrap.
+
+
 This project runs a per-ticket delivery conveyor on top of GSD
 (see `docs/gsd_multilevel_delivery_pipeline.md`). Plans double as tickets;
 these rules keep them machine-consumable by the conveyor's deterministic layer.

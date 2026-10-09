@@ -72,6 +72,41 @@ test('requires the complete scope before constructing a run', () => {
   );
 });
 
+test('planning identities are scoped to their parsed role and decomposition phase', () => {
+  const adr = 'phase=47;input=ADR-025-runtime;repository=shipyard/test';
+  const inv = 'phase=47;input=INV-014-runtime;repository=shipyard/test';
+  for (const ticket of [adr, inv]) {
+    const run = makeScope({ phase: 47, ticket,
+      dispatch: { dispatch_id: 'planning', role: 'decomposition', model: 'sol', effort: 'high' } });
+    assert.equal(contract.normalizeRunContract(run).ticket.ticket, ticket);
+    assert.throws(() => contract.normalizeRunContract({ ...run, phase: { phase: 48 } }), { code: 'INVALID_INPUT' });
+    assert.throws(() => contract.normalizeRunContract({ ...run,
+      repository: { ...run.repository, repository_id: 'foreign/repository' } }), { code: 'SCOPE_MISMATCH' });
+    for (const role of ['executor', 'integrator', 'research']) {
+      assert.throws(() => makeScope({ phase: 47, ticket,
+        dispatch: { dispatch_id: 'wrong-role', role, model: 'sol', effort: 'high' } }), { code: 'INVALID_INPUT' });
+    }
+  }
+  for (const role of ['research', 'decomposition']) {
+    const run = makeScope({ ticket: 'INV-014-runtime',
+      dispatch: { dispatch_id: 'investigation', role, model: 'sol', effort: 'high' } });
+    assert.equal(contract.normalizeRunContract(run).ticket.ticket, 'INV-014-runtime');
+  }
+  for (const ticket of ['INV-014-runtime', 'ADR-025-runtime']) {
+    for (const role of ['executor', 'integrator']) {
+      assert.throws(() => makeScope({ ticket,
+        dispatch: { dispatch_id: 'execution', role, model: 'sol', effort: 'high' } }), { code: 'INVALID_INPUT' });
+    }
+  }
+  assert.throws(() => scope.createTicketIdentity('ADR-025-runtime', { role: 'decomposition', phase: 47 }),
+    { code: 'INVALID_INPUT' });
+  for (const ticket of [adr.replace('ADR-025-runtime', 'ADR-'), adr.replace('phase=47', 'phase=0'),
+    adr.replace('repository=shipyard/test', 'repository='), adr + ';authority=host']) {
+    assert.throws(() => scope.createTicketIdentity(ticket, { role: 'decomposition', phase: 47 }),
+      { code: 'INVALID_INPUT' });
+  }
+});
+
 test('rejects a provider or model from the other runtime', () => {
   assert.throws(
     () => scope.createRuntimeIdentity({ runtime: 'claude', provider: 'openai' }),
@@ -283,4 +318,18 @@ test('fresh receipt constructors default current identity and serialized receipt
       assert.throws(() => contract.normalizeReceiptIdentity(serialized), { code: 'MISSING_POLICY_IDENTITY' });
     }
   }
+});
+
+test('architecture phase identity binds repository, PR, head and base without a synthetic ticket', () => {
+  const subject = 'phase=37-policy;repository=shipyard/test;tickets=' + 'a'.repeat(64)
+    + ';pr=91;head=' + 'b'.repeat(40) + ';base=' + 'c'.repeat(40);
+  const run = makeScope({ ticket: subject,
+    dispatch: { dispatch_id: 'arch-phase', role: 'arch-review', model: 'sol', effort: 'high' } });
+  assert.equal(contract.normalizeRunContract(run).ticket.ticket, subject);
+  for (const role of ['executor', 'integrator', 'pr-sentinel']) assert.throws(() => makeScope({ ticket: subject,
+    dispatch: { dispatch_id: 'wrong', role, model: 'sol', effort: 'high' } }), { code: 'INVALID_INPUT' });
+  assert.throws(() => contract.normalizeRunContract({ ...run, repository: { ...run.repository, repository_id: 'foreign/repo' } }), { code: 'SCOPE_MISMATCH' });
+  assert.throws(() => contract.normalizeRunContract({ ...run, phase: { phase: 38 } }), { code: 'INVALID_INPUT' });
+  assert.throws(() => makeScope({ ticket: subject.replace(';pr=91', ';pr=0'),
+    dispatch: { dispatch_id: 'bad', role: 'arch-review', model: 'sol', effort: 'high' } }), { code: 'INVALID_INPUT' });
 });

@@ -53,10 +53,10 @@ function realStateSyncFixture() {
   fs.mkdirSync(graphDir, { recursive: true });
   fs.writeFileSync(path.join(root, '.planning', 'config.json'), JSON.stringify({
     git: { base_branch: 'main' },
-    delivery_pipeline: { integration_mode: 'direct-to-main', gsd_sync: false },
+    delivery_pipeline: { integration_mode: 'epic-stacked', gsd_sync: false },
   }));
-  fs.writeFileSync(path.join(graphDir, 'tickets.json'), JSON.stringify({ tickets: {
-    'T-33-01': { phase: '33', wave: 1, branch: 'ticket/T-33-01', depends_on: [] },
+  fs.writeFileSync(path.join(graphDir, 'tickets.json'), JSON.stringify({ epics: { '33': { branch: 'epic/33', repos: [null], phaseDir: '33' } }, tickets: {
+    'T-33-01': { phase: '33', wave: 1, branch: 'ticket/T-33-01', epic: 'epic/33', depends_on: [], human_checkpoint: true, checkpoint: 'merge' },
   } }));
   const modeFile = path.join(root, 'gh-mode');
   fs.writeFileSync(modeFile, 'pending');
@@ -64,7 +64,7 @@ function realStateSyncFixture() {
   fs.mkdirSync(bin, { recursive: true });
   const pendingPr = {
     number: 101, state: 'OPEN', isDraft: false, headRefName: 'ticket/T-33-01',
-    headRefOid: 'head-a', baseRefName: 'main', mergedAt: null,
+    headRefOid: 'head-a', baseRefName: 'epic/33', baseRefOid: 'b'.repeat(40), mergedAt: null,
     createdAt: '2026-09-16T00:00:00Z', url: 'https://example.test/pr/101', title: 'T-33-01',
     reviewDecision: 'APPROVED', body: '', mergeStateStatus: 'CLEAN',
   };
@@ -87,6 +87,7 @@ function realStateSyncFixture() {
     'fi\n' +
     'if [ "$1" = "api" ]; then\n' +
     '  case "$2" in\n' +
+    '    */branches) printf "main\\nepic/33\\nticket/T-33-01\\n" ;;\n' +
     '    */compare/*) printf "0\\n" ;;\n' +
     '    *) printf "main\\n" ;;\n' +
     '  esac\n' +

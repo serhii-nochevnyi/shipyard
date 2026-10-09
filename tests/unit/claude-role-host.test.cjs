@@ -5,6 +5,14 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+
+const testAuthorityHome = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'architecture-authority-')));
+const testAuthorityModule = path.join(testAuthorityHome, 'fixture.cjs');
+fs.writeFileSync(testAuthorityModule, "require('node:os').homedir = () => " + JSON.stringify(testAuthorityHome) + ";\n");
+const testAuthorityArgs = ['--require', testAuthorityModule];
+const testOriginalHomedir = os.homedir;
+os.homedir = () => testAuthorityHome;
+process.on('exit', () => { os.homedir = testOriginalHomedir; fs.rmSync(testAuthorityHome, {recursive:true,force:true}); });
 const crypto = require('node:crypto');
 const { execFileSync } = require('node:child_process');
 const { createDurableRecorder } = require('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs');
@@ -202,7 +210,7 @@ function fakeRuntimeFactory(fixture, options = {}) {
         let result;
         let evidencePath;
         if (packet.role === 'arch-review') {
-          result = { id: TICKET, pr: live.number, verdict: 'conform', head: fixture.head,
+          result = { id: packet.subject, ...(context.ticket_set ? { ticket_set: context.ticket_set, ticket_set_digest: context.ticket_set_digest } : {}), pr: live.number, verdict: 'conform', head: fixture.head,
             base_tree: fixture.mergeBaseTree, blocking_count: 0, summary: 'No architecture conflict.', findings: [] };
           evidencePath = path.join(fixture.root, '.shipyard-arch-review-evidence.md');
           fs.writeFileSync(evidencePath, `Reviewed ${fixture.head}; base tree ${fixture.mergeBaseTree}.\n`);
@@ -396,6 +404,9 @@ test('arch-review launches through ADR-014 and seals only the matching PR judgme
     const result = await createClaudeRoleHost(hostOptions(fixture, {
       onLaunch(prompt, selection) { launched = { prompt, selection }; },
     })).run(request(fixture));
+    assert.match(launched.prompt, /active coordinator-owned delivery loop/);
+    assert.match(launched.prompt, /coordinator owns setup and dispatch/);
+    assert.match(launched.prompt, /Do not restart shipyard-route, bootstrap, marketplace installation/);
     const packet = packetFromPrompt(launched.prompt);
     assert.equal(launched.selection.model, 'claude-opus-5-5');
     assert.equal(launched.selection.effort, 'high');
@@ -416,6 +427,66 @@ test('arch-review launches through ADR-014 and seals only the matching PR judgme
     cleanupFixture(fixture);
   }
 });
+
+for (const scenario of ['seals a phase verdict and re-owes changed context', 'rejects roster removal during launch']) {
+test(`aggregate architecture ${scenario}`, async () => {
+  const fixture = setupRepository('arch-review');
+  try {
+    const epic = `epic/${PHASE}`;
+    git(fixture.root, ['branch', '-m', epic]);
+    fixture.branch = epic;
+    const graphFile = path.join(fixture.root, '.planning/graph/tickets.json');
+    const graph = JSON.parse(fs.readFileSync(graphFile));
+    graph.tickets[TICKET].branch = `ticket/${TICKET}`;
+    graph.tickets[TICKET].epic = epic;
+    fs.writeFileSync(graphFile, JSON.stringify(graph));
+    write(fixture.root, `.planning/phases/${PHASE}/SUMMARY.md`, 'Twenty installed obligations remain HOLD.');
+    git(fixture.root, ['add', '.planning']);
+    git(fixture.root, ['commit', '-m', 'chore: bind canonical phase evidence']);
+    fixture.head = git(fixture.root, ['rev-parse', 'HEAD']);
+    fixture.headTree = git(fixture.root, ['rev-parse', 'HEAD^{tree}']);
+    const artifact = require('../../plugins/delivery-pipeline/scripts/role-artifact.cjs');
+    const graphDir = path.dirname(graphFile);
+    const state = JSON.parse(fs.readFileSync(path.join(graphDir, 'delivery-state.json')));
+    const binding = require('../../plugins/delivery-pipeline/scripts/architecture-target.cjs').phaseBinding({
+      graph, state: state.tickets || state, phase: 38,
+      repository: git(fixture.root, ['rev-parse', '--path-format=absolute', '--git-common-dir']),
+      branch: epic, pr: 101, head: fixture.head, base: fixture.base });
+    const inventoryPath = path.join(fixture.storageRoot, 'current-phase-inventory.json');
+    fs.writeFileSync(inventoryPath, JSON.stringify({ rows: [] }), { mode: 0o600 });
+    const roster = artifact.registerPhaseArchiveRoster({ worktreePath: fixture.root, binding, graphDir, inventoryPath,
+      expectedInventoryDigest: crypto.createHash('sha256').update(fs.readFileSync(inventoryPath)).digest('hex') });
+    write(fixture.root, '.shipyard-role-artifacts/foreign/.shipyard-role-artifact.json', JSON.stringify({ ticket: 'T-37-01' }));
+    write(fixture.root, '.shipyard-role-artifacts/foreign/evidence.md', 'Unadmitted foreign evidence.');
+    let packet;
+    const launched = createClaudeRoleHost(hostOptions(fixture, {
+      onLaunch(prompt) {
+        if (scenario === 'rejects roster removal during launch') fs.unlinkSync(roster.record_path);
+        packet = packetFromPrompt(prompt);
+        write(fixture.root, '.shipyard-role-artifacts/foreign/evidence.md', 'Changed foreign evidence.');
+      },
+    })).run({ ...request(fixture), ticket: undefined, phase: PHASE, pr: 101 });
+    if (scenario === 'rejects roster removal during launch') {
+      await assert.rejects(launched, error => error.code === 'ARCHIVE_AUTHORITY_REQUIRED');
+      return;
+    }
+    const result = await launched;
+    assert.match(result.subject, /^phase=38-/);
+    assert.equal(packet.role_context.ticket_set.length, 1);
+    assert.deepStrictEqual(result.result.host_context.phase_archive_selection, packet.role_context.phase_archive_selection);
+    assert.ok(packet.role_context.exact_diff.content.includes('SUMMARY.md'));
+    const input = { worktreePath: fixture.root, pr: 101, head: fixture.head, baseName: 'main', baseCommit: fixture.base };
+    assert.equal(artifact.currentArchitectureVerdict(input).subject, result.subject);
+    const live = livePr(fixture);
+    assert.equal(require('../../plugins/delivery-pipeline/scripts/gate-trailer.cjs').verifyArchitectureTarget({
+      pr: 101, worktreePath: fixture.root, getPullRequest: () => live }).ready, true);
+    assert.equal(artifact.currentArchitectureVerdict({ ...input, head: 'f'.repeat(40) }), null);
+    assert.equal(artifact.currentArchitectureVerdict({ ...input, baseName: epic }), null);
+    fs.appendFileSync(path.join(fixture.root, `.planning/phases/${PHASE}/SUMMARY.md`), '\nChanged obligations.');
+    assert.equal(artifact.currentArchitectureVerdict(input), null);
+  } finally { cleanupFixture(fixture); }
+});
+}
 
 test('a role launch records and clears its in-flight row and stamps a provenance sidecar', async () => {
   const fixture = setupRepository('arch-review');

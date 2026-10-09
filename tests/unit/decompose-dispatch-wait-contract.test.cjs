@@ -104,6 +104,7 @@ process.stdin.on('end', () => {
   fs.writeFileSync(path.join(sessions, 'rollout-__CHILD_SESSION__.jsonl'), child);
   const phaseDir = path.join(process.cwd(), '.planning', 'phases', '45-detached-contract');
   fs.writeFileSync(path.join(phaseDir, '45-01-PLAN.md'), '# Detached plan\\n');
+  if (process.env.MOCK_MUTATE_CONTEXT === '1') fs.appendFileSync(path.join(phaseDir, 'CONTEXT.md'), 'foreign mutation\\n');
   setTimeout(() => process.stdout.write(data('exec.jsonl')), 600);
 });
 `;
@@ -156,7 +157,10 @@ function createFixture({ installPlanner = true, includeDispatchId = true } = {})
       + "developer_instructions = '''\n" + data.instructions + "'''\n");
   }
 
+  const preload = path.join(base, 'account-home.cjs');
+  fs.writeFileSync(preload, "const os = require('node:os'); const original = os.userInfo; os.userInfo = (...args) => ({ ...original(...args), homedir: process.env.HOME });\n");
   const env = {
+    NODE_OPTIONS: '--require=' + preload,
     ...process.env,
     HOME: home,
     CODEX_HOME: codexHome,
@@ -196,6 +200,27 @@ function waitOptions(f) {
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     recordWakeEvent() {},
   };
+}
+
+function retainedCallerAccounting(f, id, options = {}) {
+  const planningHost = require('../../plugins/delivery-pipeline/scripts/codex-planning-context-host.cjs');
+  const stream = path.join(f.graph, overhead.STREAM_NAME);
+  const before = fs.existsSync(stream) ? fs.readFileSync(stream) : null;
+  const accounting = planningHost.readWaitAccounting({ scope: f.scope, dispatchId: id, graphDir: f.graph }, {
+    testStateRoot: path.join(f.home, '.local', 'state', 'shipyard', 'codex-decompose'), ...options,
+  });
+  assert.equal(accounting.missing_evidence, null);
+  assert.equal(accounting.run_id, f.scope.run_id);
+  assert.equal(accounting.dispatch_id, id);
+  assert.equal(accounting.graph_dir, f.graph);
+  assert.ok(!accounting.sink.startsWith(f.root + path.sep));
+  assert.ok(accounting.parent_rows.length > 0, 'real blocking waiter retains external parent rows');
+  assert.ok(accounting.parent_rows.every(row => row.dispatch_id === id && row.run_id === f.scope.run_id
+    && row.actor === 'parent' && row.stage === 'wait_poll' && row.counts.polls === 1
+    && row.counts.model_turns === null && row.provider_tokens === null));
+  assert.deepEqual(fs.existsSync(stream) ? fs.readFileSync(stream) : null, before, 'reporting leaves graph bytes unchanged');
+  assert.ok(!overhead.readStream(f.graph).rows.some(row => row.actor === 'parent'));
+  return accounting;
 }
 
 for (const includeDispatchId of [true, false]) {
@@ -326,4 +351,126 @@ test('detached host refusal has no JSON result and wait reports exited-failed', 
     }
     f.clean();
   }
+});
+
+function planningRequest(f) {
+  const { buildContextPacket } = require('../../plugins/delivery-pipeline/scripts/context-packet.cjs');
+  const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
+  const { execFileSync } = require('node:child_process');
+  const sourceRevision = execFileSync('git', ['-C', f.root, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+  const subject = 'phase=45;input=detached-contract';
+  const contextPacket = buildContextPacket({ root: f.root, role: 'decomposition', subject,
+    sourceRevision, policy: policy.POLICY, policyHash: policy.POLICY_HASH,
+    scope: { files_modified: [] }, acceptance: [], verification: [], requiredRefs: ['source.cjs'],
+    roleContext: { adr_refs: [{ path: 'source.cjs' }], requirements: [{ path: 'source.cjs' }],
+      research_refs: [], context: { phase: 45, input: 'detached-contract' } } });
+  const request = JSON.parse(fs.readFileSync(f.request, 'utf8'));
+  fs.writeFileSync(f.request, JSON.stringify({ ...request, subject, sourceRevision,
+    contextPacket, contextPacketRequired: true }), { mode: 0o600 });
+  return contextPacket;
+}
+
+for (const includeDispatchId of [true, false]) {
+  test(`supported planning caller blocks and measures the original ${includeDispatchId ? 'explicit' : 'generated'} dispatch`, () => {
+    const f = createFixture({ includeDispatchId });
+    try {
+      const contextPacket = planningRequest(f);
+      const planning = spawnSync(process.execPath, [path.resolve(__dirname,
+        '../../plugins/delivery-pipeline/scripts/codex-planning-context-host.cjs'), '--args-file', f.request],
+      { cwd: f.root, env: f.env, encoding: 'utf8', timeout: 15000 });
+      assert.equal(planning.status, 0, planning.stderr);
+      const result = JSON.parse(planning.stdout.trim());
+      assert.equal(result.status, 'completed');
+      const id = result.receipt.dispatch_id;
+      if (includeDispatchId) assert.equal(id, f.dispatchId);
+      const records = fs.readdirSync(f.stateDir);
+      assert.deepEqual(records, [id], 'one original detached child');
+      const copied = JSON.parse(fs.readFileSync(path.join(f.stateDir, id, 'args.json'), 'utf8'));
+      assert.equal(copied.dispatch_id, id);
+      assert.ok(copied.prompt.includes(JSON.stringify(contextPacket)));
+      const accounting = retainedCallerAccounting(f, id);
+      const rows = [...accounting.child_rows, ...accounting.parent_rows];
+      const parent = accounting.parent_rows;
+      assert.ok(parent.length > 0, 'real blocking waiter emits parent rows');
+      assert.ok(parent.every((row) => row.dispatch_id === id && row.run_id === f.scope.run_id
+        && row.stage === 'wait_poll' && row.counts.polls === 1));
+      const child = rows.find((row) => row.actor === 'child');
+      assert.equal(child.dispatch_id, id);
+      assert.equal(child.counts.model_turns, null);
+      assert.equal(accounting.report.verdict, 'inconclusive');
+    } finally { f.clean(); }
+  });
+}
+
+test('actual caller timeout resumes the original child with frozen context and authentic receipt', async () => {
+  const f = createFixture();
+  let childPid;
+  try {
+    planningRequest(f);
+    const planningHost = require('../../plugins/delivery-pipeline/scripts/codex-planning-context-host.cjs');
+    const host = require('../../plugins/delivery-pipeline/scripts/codex-decompose-host.cjs');
+    let launches = 0;
+    let parentArgs;
+    const options = { stateDir: f.stateDir, env: f.env,
+      testStateRoot: path.join(f.home, '.local', 'state', 'shipyard', 'codex-decompose'),
+      runHost: async (argv, stdout, opts) => {
+        launches++;
+        parentArgs = argv[2];
+        return host.runCli(argv, stdout, opts);
+      } };
+    await assert.rejects(() => planningHost.runCli(['--args-file', f.request], { write() {} }, {
+      ...options, waitOptions: { timeoutMs: 1, intervalMs: 1 } }),
+    (error) => error.code === 'DISPATCH_TIMEOUT' && error.dispatch_id === f.dispatchId);
+    childPid = JSON.parse(fs.readFileSync(path.join(f.stateDir, f.dispatchId, 'record.json'), 'utf8')).pid;
+    assert.equal(fs.existsSync(parentArgs), false);
+    const context = path.join(f.root, '.planning', 'phases', '45-detached-contract', 'CONTEXT.md');
+    const frozen = fs.readFileSync(context);
+    let output = '';
+    const completed = await planningHost.runCli(['--args-file', f.request], { write(chunk) { output += chunk; } }, {
+      ...options, waitOptions: waitOptions(f) });
+    assert.equal(completed.status, 'completed');
+    assert.equal(completed.receipt.dispatch_id, f.dispatchId);
+    assert.equal(launches, 1);
+    assert.deepEqual(fs.readFileSync(context), frozen);
+    const accounting = retainedCallerAccounting(f, f.dispatchId, options);
+    const rows = [...accounting.child_rows, ...accounting.parent_rows];
+    assert.ok(rows.some((row) => row.actor === 'parent'));
+    const before = rows.length;
+    const repeated = await planningHost.runCli(['--args-file', f.request], { write() {} }, options);
+    assert.equal(repeated.receipt.dispatch_id, f.dispatchId);
+    assert.equal(launches, 1);
+    const repeatedAccounting = retainedCallerAccounting(f, f.dispatchId, options);
+    assert.equal(repeatedAccounting.child_rows.length + repeatedAccounting.parent_rows.length, before,
+      'terminal re-wait adds no observer');
+    assert.deepEqual(repeatedAccounting.parent_rows, accounting.parent_rows);
+    // Keep the authentic stored receipt intact while testing a foreign readable result.
+    const resultFile = path.join(f.stateDir, f.dispatchId, 'result.jsonl');
+    fs.writeFileSync(resultFile, JSON.stringify({ ...completed,
+      receipt: { ...completed.receipt, observed_model: 'foreign-model' } }) + '\n');
+    await assert.rejects(() => planningHost.runCli(['--args-file', f.request], { write() {} }, options),
+      (error) => error.code === 'UNVERIFIED_RECEIPT');
+    assert.equal(launches, 1);
+  } finally {
+    if (childPid && dispatch.pidLive(childPid)) { try { process.kill(childPid, 'SIGTERM'); } catch {} }
+    f.clean();
+  }
+});
+
+test('actual planning child refuses mutation of frozen context without a completion receipt', () => {
+  const f = createFixture();
+  try {
+    planningRequest(f);
+    const context = path.join(f.root, '.planning', 'phases', '45-detached-contract', 'CONTEXT.md');
+    const original = fs.readFileSync(context, 'utf8');
+    const planning = spawnSync(process.execPath, [path.resolve(__dirname,
+      '../../plugins/delivery-pipeline/scripts/codex-planning-context-host.cjs'), '--args-file', f.request],
+    { cwd: f.root, env: { ...f.env, MOCK_MUTATE_CONTEXT: '1' }, encoding: 'utf8', timeout: 15000 });
+    assert.equal(planning.status, 1);
+    assert.equal(planning.stdout, '');
+    const record = JSON.parse(fs.readFileSync(path.join(f.stateDir, f.dispatchId, 'record.json'), 'utf8'));
+    assert.match(fs.readFileSync(record.log, 'utf8'), /phase delta|declaration|foreign/i);
+    assert.equal(fs.readFileSync(record.result, 'utf8'), '');
+    assert.equal(fs.readFileSync(context, 'utf8'), original + 'foreign mutation\n',
+      'the refusal retains the original mutation evidence');
+  } finally { f.clean(); }
 });

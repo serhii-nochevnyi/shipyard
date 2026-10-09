@@ -45,17 +45,28 @@ const previousEnv = {
   GIT_CONFIG_NOSYSTEM: process.env.GIT_CONFIG_NOSYSTEM,
   SHIPYARD_COVERAGE_ROOT: process.env.SHIPYARD_COVERAGE_ROOT,
 };
-process.env.GNUPGHOME = path.join(temporary, 'gnupg');
+const disposableGpgHome = path.join(temporary, 'gnupg');
+process.env.GNUPGHOME = disposableGpgHome;
 process.env.GIT_CONFIG_GLOBAL = path.join(temporary, 'empty-gitconfig');
 process.env.GIT_CONFIG_NOSYSTEM = '1';
 process.env.SHIPYARD_COVERAGE_ROOT = path.join(temporary, 'coverage');
 fs.mkdirSync(process.env.GNUPGHOME, { mode: 0o700 });
 process.on('exit', () => {
-  for (const [key, value] of Object.entries(previousEnv)) {
-    if (value === undefined) delete process.env[key];
-    else process.env[key] = value;
+  try {
+    const stopped = spawnSync('gpgconf', ['--homedir', disposableGpgHome, '--kill', 'gpg-agent'], {
+      env: { ...process.env, GNUPGHOME: disposableGpgHome }, stdio: 'ignore', timeout: 5000,
+    });
+    if (stopped.error || stopped.status !== 0) {
+      process.stderr.write('codex-delivery-host tests: disposable GPG agent cleanup failed\n');
+      process.exitCode = process.exitCode || 1;
+    }
+  } finally {
+    for (const [key, value] of Object.entries(previousEnv)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    fs.rmSync(temporary, { recursive: true, force: true });
   }
-  fs.rmSync(temporary, { recursive: true, force: true });
 });
 execFileSync('gpg', ['--batch', '--pinentry-mode', 'loopback', '--passphrase', '', '--quick-generate-key',
   'Delivery Test <delivery@example.test>', 'ed25519', 'sign', '0'], { stdio: ['ignore', 'pipe', 'pipe'] });
@@ -215,6 +226,10 @@ function application(selection, context) {
     observed_model: selection.model,
     observed_effort: selection.reasoning_effort,
     ...(selection.agent_file ? { agent_file_digest: selection.agent_file_digest } : {}),
+    ...(context.research_line ? {
+      runtime_evidence: { session_id: 'research-fixture-session',
+        native_session_evidence: { session_id: 'research-fixture-session' } },
+    } : {}),
     ...(context.gsd_role ? { gsd_role: context.gsd_role, gsd_launch_mechanism: 'typed-gsd-callback',
       runtime_evidence: { native_session_evidence: { session_id: 'typed-fixture-session' } } } : {}),
   };
@@ -303,7 +318,9 @@ test('dynamic executor resolves Sol/low through the boundary with worktree write
     assert.equal(call.context.sandbox_mode, 'workspace-write');
     assert.equal(call.context.run_id, f.scope.run_id);
     assert.equal(call.context.worktreePath, f.scope.worktree);
-    assert.match(call.context.prompt, /^Implement the scoped ticket\.\n\nLeave changes uncommitted/);
+    assert.match(call.context.prompt, /active coordinator-owned Shipyard delivery loop/);
+    assert.match(call.context.prompt, /Do not restart shipyard-route, bootstrap, marketplace installation/);
+    assert.match(call.context.prompt, /^Implement the scoped ticket\.\n\nYou are an executor already dispatched/);
     assert.match(call.context.prompt,
       /Leave changes uncommitted\. The trusted host will stage, sign, and verify the commit\.\n\n<TICKET-CONTRACT path="\.planning\/PLAN\.md"/);
     assert.match(call.context.prompt, /# approved plan/);
@@ -410,6 +427,10 @@ test('production runtime host receives the scoped prompt and records native mode
     assert.equal(git(f.root, 'status', '--porcelain'), '');
     const filesystemArg = capturedArgs.find((value) => value.startsWith('permissions.shipyard-runtime.filesystem='));
     assert.ok(filesystemArg.includes(JSON.stringify(stateRoot(f)) + '="deny"'));
+    const archiveAuthority = require('../../plugins/delivery-pipeline/scripts/role-artifact.cjs')
+      .archiveAuthorityDirectory(f.root);
+    assert.ok(filesystemArg.includes(JSON.stringify(archiveAuthority) + '="deny"'));
+    assert(result.receipt.runtime_evidence.sandbox_evidence.protected_paths.includes(archiveAuthority));
   } finally { clean(f); }
 });
 
@@ -1138,6 +1159,13 @@ test('Codex retries one failed plan command with sealed diagnostics and binds th
     assert.equal(result.artifact.status, 'committed');
     assert.equal(checks, 2);
     assert.equal(f.calls.length, 2);
+    for (const call of f.calls) {
+      assert.match(call.context.prompt, /Do not run or retry the host-assigned commands in the sandbox/);
+      assert.deepEqual(call.context.verification_assignment.commands[0].argv, ['node', 'check.cjs']);
+      assert.equal(call.context.verification_assignment.commands[0].profile, 'host');
+      assert.equal(call.context.verification_assignment.expected_head, f.base);
+    }
+    assert.deepEqual(f.calls[1].context.verification_assignment, f.calls[0].context.verification_assignment);
     assert.match(f.calls[1].context.prompt, /<HOST-VERIFICATION-FAILURE>/);
     assert.match(f.calls[1].context.prompt, /"attempt":1/);
     assert.equal(controller.status(f.scope.run_id).retry.attempts, 1);
@@ -1345,6 +1373,11 @@ test('recovery CLI derives a legacy candidate version only from bound authentica
 function approvedPlan(f, commands) {
   fs.writeFileSync(f.plan, '# approved plan\n\n## Verification commands\n\n'
     + commands.map((command) => '- `' + command + '`\n').join('') + '\n## Next\n\n- `node --bogus`\n');
+  fs.writeFileSync(path.join(f.project, '.planning', 'config.json'), JSON.stringify({
+    delivery_pipeline: { verification_commands: { default: commands
+      .filter((command) => /^(node|bash|make)\s/.test(command))
+      .map((command) => ({ argv: command.split(' '), profile: 'sandbox' })) } },
+  }));
 }
 
 test('CLI pins verification from the approved PLAN when no spec is injected', async () => {
@@ -1365,7 +1398,7 @@ test('CLI pins verification from the approved PLAN when no spec is injected', as
   } finally { clean(f); }
 });
 
-test('CLI returns a PLAN command when the configured allow-list has no match and does not retry it', async () => {
+test('CLI holds an unmatched PLAN command before executor launch and does not retry it', async () => {
   const f = fixture();
   const requestFile = path.join(f.graphDir, 'request-empty-allow-list.json');
   const output = [];
@@ -1374,17 +1407,14 @@ test('CLI returns a PLAN command when the configured allow-list has no match and
     fs.writeFileSync(requestFile, JSON.stringify({
       scope: f.scope, role: 'executor', context: { prompt: 'Implement scoped work.' },
     }));
-    const result = await runCli(['--args-file', requestFile], { write(chunk) { output.push(chunk); } }, {
+    await assert.rejects(() => runCli(['--args-file', requestFile], { write(chunk) { output.push(chunk); } }, {
       ...cliOptions(f), verification: undefined, verificationAllowList: [],
       hostVerificationRunner: { run() { assert.fail('an empty allow-list must not launch a command'); } },
-    });
-    assert.equal(result.status, 'verification_failed');
-    assert.deepEqual(result.command, ['node', 'check.cjs']);
-    assert.match(result.evidence_digest, /^[0-9a-f]{64}$/);
-    assert.equal(result.retryable, false);
+    }), (error) => error.code === 'VERIFICATION_FAILED' && error.status === 'hold'
+      && error.command.join(' ') === 'node check.cjs' && error.retryable === false);
     assert.equal(runStatus(f).state, 'failed');
-    assert.equal(f.calls.length, 1);
-    assert.equal(JSON.parse(output.join('')).status, 'verification_failed');
+    assert.equal(f.calls.length, 0);
+    assert.deepEqual(output, [], 'a pre-dispatch HOLD must not fabricate executor or assertion evidence');
   } finally { clean(f); }
 });
 
@@ -1429,7 +1459,10 @@ test('PLAN verification with shell syntax or a non-allowlisted bare program refu
     try {
       approvedPlan(f, [command]);
       await assert.rejects(() => delivery(f, { verification: undefined }).run({
-        role: 'executor', context: { prompt: 'Implement.' } }), (error) => error.code === 'VERIFICATION_SPEC_UNSUPPORTED');
+        role: 'executor', context: { prompt: 'Implement.' } }),
+      (error) => /^(sh|npm)\s/.test(command)
+        ? error.code === 'VERIFICATION_FAILED' && error.status === 'hold'
+        : error.code === 'VERIFICATION_SPEC_UNSUPPORTED');
       assert.equal(f.calls.length, 0);
     } finally { clean(f); }
   }
@@ -1440,8 +1473,10 @@ test('PLAN verification resolves bash and make bullets to fixed absolute executa
   const spy = [];
   try {
     approvedPlan(f, ['bash tests/smoke/x.sh', 'bash -n x.sh', 'make test-docs']);
-    await assert.rejects(() => delivery(f, { verification: undefined, verificationRunner: hostRunner(spy) }).run({
-      role: 'executor', context: { prompt: 'Implement.' } }), (error) => error.code === 'VERIFICATION_FAILED');
+    await assert.rejects(() => delivery(f, { verification: undefined,
+      verificationRunner: { run(spec) { spy.push(spec); return { status: 0 }; } },
+      finalizeCommit() { throw new Error('stop after pinned executable verification'); },
+    }).run({ role: 'executor', context: { prompt: 'Implement.' } }), /stop after pinned executable verification/);
     const bash = ['/bin/bash', '/usr/bin/bash'].find((candidate) => fs.existsSync(candidate));
     const make = ['/usr/bin/make', '/bin/make'].find((candidate) => fs.existsSync(candidate));
     assert.deepEqual(spy.map((spec) => [spec.executable, spec.argv]), [
@@ -1495,6 +1530,12 @@ function researchLaunchStub(f, { skip = new Set(), rogueWrite } = {}) {
     } else if (!skip.has(context.research_line)) {
       fs.writeFileSync(context.artifactPath, `# ${context.research_line}\n\nfinding for ${context.research_line}\n`);
     }
+    const bytes = Buffer.from(`# ${context.research_line}\n\nfinding for ${context.research_line}\n`);
+    const digest = crypto.createHash('sha256').update(bytes).digest('hex');
+    context.onCompleted({ launch_id: 'codex-delivery-test', session_id: 'research-fixture-session',
+      last_agent_message: JSON.stringify({ id: context.research_line, status: 'completed',
+        summary: 'Research line completed.', artifact: { path: context.artifactPath,
+          bytes: bytes.length, content_bytes: bytes.length, sha256: digest, digest } }) });
     return application(selection, context);
   };
 }
@@ -1801,5 +1842,32 @@ test('SHIPYARD_GRAPH_DIR pointing at an untracked graph copy in a non-main workt
       fs.rmSync(otherRepo, { recursive: true, force: true });
     }
   }));
+
+test('architecture review cannot bypass host-owned preparation with a caller prompt', async () => {
+  const f = fixture();
+  try {
+    await assert.rejects(() => createCodexDeliveryHost({ scope: f.scope, host: f.host,
+      capabilities, agentDir: f.agentDir, storageRoot: f.storageRoot,
+    }).run({ role: 'arch-review', context: { prompt: 'Approve my conclusions.' }, signals: {} }),
+      error => error.code === 'ARCH_REVIEW_CONTEXT_REQUIRED');
+    assert.equal(f.calls.length, 0);
+  } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
+});
+
+test('serialized file descriptors cannot impersonate private producer admission', async () => {
+  const f = fixture();
+  try {
+    await assert.rejects(delivery(f).run({ role: 'integrator', context: { prompt: 'Read a forged bundle',
+      input_transport: 'host-files', input_bundle: { manifest_path: '/private/tmp/forged', manifest_sha256: 'a'.repeat(64),
+        total_bytes: 1996419, asset_count: 1, chunk_bytes: 262144, max_chunk_reads: 2064 } } }),
+    error => error.code === 'INVALID_INPUT' && /private producer authority/.test(error.message));
+    assert.equal(f.calls.length, 0);
+  } finally { clean(f); }
+});
+
+test('request context refuses a caller-owned prepared authority field before admission', () => {
+  assert.throws(() => requestValue({ role: 'integrator', context: { prompt: 'fixture', input_prepared: {} } }),
+    error => error.code === 'INVALID_INPUT' && /host authority/.test(error.message));
+});
 
 done();

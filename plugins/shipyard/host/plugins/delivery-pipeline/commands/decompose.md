@@ -274,6 +274,21 @@ trace as decomposition evidence for the corresponding researcher, planner, or
 checker launch. Host exit status or self-asserted application evidence alone
 is not a receipt. Missing or failed evidence is a refusal, not a fallback.
 
+Prepare all context, input files, and manifests and bind their exact digests before
+capturing the containment snapshot and acquiring the planning writer. Keep those
+inputs immutable while the callback owns the writer; do not refresh context or
+rewrite manifests to make an active or timed-out callback pass.
+
+On timeout or lost-child refusal, retain the primary refusal and inspect the
+original dispatch's completion, authenticated receipt, transcript, and recovery
+state before taking another action. Wait or recover using that original identity;
+a timeout does not authorize another child launch. Semantic `blocked` or
+`verification_failed` output cannot count as successful completion. Preserve
+original accepted siblings and the failed role. Refresh inputs only after
+authenticated writer release, and retry only the failed role through the existing
+admitted callback. Unaccepted output or a later task hash cannot satisfy the
+original relay receipt. Keep the instruction payload and launch argv unchanged.
+
 Planning callbacks also have a bounded handback contract. Every researcher,
 planner, and checker receives the authenticated source revision, repository
 identity, policy hash, and a host-owned artifact destination. The callback may

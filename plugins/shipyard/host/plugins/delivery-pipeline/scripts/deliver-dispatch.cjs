@@ -13,7 +13,6 @@ const { assertCanonicalGraph } = require('./plan-delivery.cjs');
 const claudeHost = require('./claude-delivery-host.cjs');
 const claudeDecomposeHost = require('./claude-decompose-host.cjs');
 const codexHost = require('./codex-delivery-host.cjs');
-const codexPlanningContextHost = require('./codex-planning-context-host.cjs');
 const claudeRoleHost = require('./claude-role-host.cjs');
 const sentinelPreflight = require('./sentinel-preflight.cjs');
 const prHygiene = require('./pr-hygiene.cjs');
@@ -21,6 +20,7 @@ const { buildContextPacket } = require('./context-packet.cjs');
 const modelPolicy = require('./model-policy.cjs');
 const pipelineConfig = require('./pipeline-config.cjs');
 const runWaker = require('./run-waker.cjs');
+const overhead = require('./orchestration-overhead.cjs');
 
 const ROLE_BUCKETS = Object.freeze({
   executor: Object.freeze(['execute']),
@@ -381,7 +381,11 @@ function readRecord(stateDir, dispatchId) {
 
 function readResult(resultFile) {
   let raw = '';
-  try { raw = fs.readFileSync(resultFile, 'utf8'); } catch { return null; }
+  try {
+    const stat = fs.lstatSync(resultFile);
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 8 * 1024 * 1024) return null;
+    raw = fs.readFileSync(resultFile, 'utf8');
+  } catch { return null; }
   const lines = raw.split('\n').filter((line) => line.trim());
   if (!lines.length) return null;
   try { return JSON.parse(lines[lines.length - 1]); } catch { return null; }
@@ -437,9 +441,28 @@ async function waitOnce(dispatchId, options = {}) {
       }
       return Object.freeze({ ...current, exit_code: EXIT_CODES[current.status] });
     }
-    const remaining = deadline - clock();
+    const observedAt = clock();
+    const remaining = deadline - observedAt;
     if (remaining <= 0) return Object.freeze({ ...current, exit_code: 3 });
     await sleep(Math.min(intervalMs, remaining));
+    // Only a real blocking running observation owns a parent poll. Absolute
+    // observation identity survives repeat waits; no per-call sequence resets.
+    const record = readRecord(dispatchStateDir(options), dispatchId);
+    const graphDir = record && record.graph_dir;
+    if (record && graphDir && options.waitScope) {
+      try {
+        const copied = readJsonBounded(path.join(dispatchStateDir(options), dispatchId, 'args.json'));
+        const scope = copied && copied.scope || options.waitScope || {};
+        overhead.recordWaitPoll(options.overheadRecorder || overhead.createRecorder(graphDir), {
+          observation_id: `deliver-dispatch:${dispatchId}:${record.started_at}:wait:${observedAt}`,
+          run_id: scope.run_id || dispatchId, dispatch_id: dispatchId,
+          role: record.role, runtime: record.runtime,
+          source: 'deliver-dispatch.waitOnce', pass_id: record.ticket,
+          counts: { polls: 1, model_turns: null, tool_calls: null, retries: null },
+          bytes: 0, estimated_tokens: null, provider_tokens: null,
+        });
+      } catch { /* best-effort telemetry must preserve the original wait outcome */ }
+    }
   }
 }
 
@@ -480,7 +503,7 @@ function parseBuildArgs(argv) {
   const seen = new Set();
   for (let index = 2; index < argv.length; index++) {
     const flag = argv[index];
-    if (!['--runtime', '--pr', '--failure-file', '--review-file', '--line', '--phase'].includes(flag)) {
+    if (!['--runtime', '--pr', '--failure-file', '--review-file', '--line', '--phase', '--graph', '--repo'].includes(flag)) {
       buildFail(flag, `unsupported build field ${flag}`);
     }
     if (seen.has(flag)) buildFail(flag, `${flag} may be supplied only once`);
@@ -497,7 +520,9 @@ function parseBuildArgs(argv) {
         buildFail(flag, '--pr must be a positive integer');
       }
       args.pr = Number(value);
-    } else if (flag === '--line') args.line = value;
+    } else if (flag === '--repo') args.repo = value;
+    else if (flag === '--graph') args.graphDir = value;
+    else if (flag === '--line') args.line = value;
     else if (flag === '--phase') {
       if (!/^\d+$/.test(value) || !Number.isSafeInteger(Number(value)) || Number(value) < 1) {
         buildFail(flag, '--phase must be a positive integer');
@@ -521,7 +546,7 @@ function parseBuildArgs(argv) {
     buildFail('<INV-id>', `invalid investigation id ${ticket}`);
   }
   if (role === 'decomposition' && !args.phase) buildFail('--phase', 'decomposition requires --phase <N>');
-  if (role !== 'decomposition' && args.phase) buildFail('--phase', '--phase is only valid for decomposition');
+  if (!['decomposition', 'arch-review'].includes(role) && args.phase) buildFail('--phase', '--phase is only valid for decomposition');
   if (role === 'decomposition' && !/^INV-[A-Za-z0-9-]+$/.test(ticket)
       && !/^ADR-[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$/.test(ticket)) {
     buildFail('<INV-id|ADR-id>', `invalid planning input id ${ticket}`);
@@ -529,10 +554,13 @@ function parseBuildArgs(argv) {
   if ((role === 'research' || role === 'decomposition') && args.pr !== undefined) {
     buildFail('--pr', '--pr is not valid for planning requests');
   }
+  if (args.repo !== undefined && !(role === 'arch-review' && args.phase)) buildFail('--repo', '--repo requires phase architecture review');
   return args;
 }
 
 function resolveBuildGraphDir(worktree, options) {
+  if (!options.graphDir && process.env.SHIPYARD_GRAPH_DIR)
+    options = { ...options, graphDir: process.env.SHIPYARD_GRAPH_DIR };
   if (options.graphDir) {
     if (!fs.existsSync(path.join(options.graphDir, 'tickets.json'))) {
       buildFail('--graph-dir', `canonical ticket graph is unavailable: ${options.graphDir}`);
@@ -583,7 +611,7 @@ function buildTicketContext(args, options) {
   const rawState = readJsonBounded(path.join(graphDir, 'delivery-state.json')) || {};
   const state = object(rawState) && object(rawState.tickets) ? rawState.tickets : rawState;
   const stateRow = object(state) && object(state[args.ticket]) ? state[args.ticket] : {};
-  return { worktree, graphDir, graph, row, projectRoot, planPath, stateRow };
+  return { worktree, graphDir, graph, row, projectRoot, planPath, stateRow, branch };
 }
 
 function evidenceInput(worktree, value, field) {
@@ -801,7 +829,23 @@ function adrPlanningInputs(projectRoot, adrId) {
   if (matches.length !== 1) {
     buildFail(adrId, `expected one architecture input for ${adrId} in ${architectureDir}, found ${matches.length}`);
   }
-  return { sourceRefs: [planningSource(projectRoot, path.join('.planning', 'architecture', matches[0]))] };
+  const source = planningSource(projectRoot, path.join('.planning', 'architecture', matches[0]));
+  const content = fs.readFileSync(source.path, 'utf8');
+  const frontmatter = content.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/);
+  const statuses = frontmatter ? frontmatter[1].split(/\r?\n/).filter((line) => /^status\s*:/.test(line)) : [];
+  const accepted = statuses.length === 1 && /^status:\s*(?:accepted|"accepted"|'accepted')\s*$/i.test(statuses[0]);
+  // Older Nygard ADRs use a Status line rather than frontmatter.
+  const legacyStatuses = content.split(/^##\s/m)[0].split(/\r?\n/)
+    .filter((line) => /^[-*]?\s*\*{0,2}Status\b/i.test(line));
+  const legacyAccepted = !frontmatter && legacyStatuses.length === 1
+    && /^[-*]?\s*\*{0,2}Status:?\*{0,2}:?\s*accepted\s*$/i.test(legacyStatuses[0]);
+  if (!accepted && !legacyAccepted) buildFail(adrId, 'direct decomposition requires an accepted ADR');
+  try {
+    const ingest = require('./adr-ingest.cjs');
+    ingest.validateAdr(ingest.normalizeAdr(content), source.path);
+  }
+  catch (error) { buildFail(adrId, `direct decomposition requires ADR decisions: ${error.message}`); }
+  return { sourceRefs: [source] };
 }
 
 function latestGraphPhase(graph) {
@@ -856,7 +900,7 @@ function buildPlanningRequest(args, options) {
       const request = {
         schema: claudeHost.REQUEST_SCHEMA,
         scope: {
-          run_id: `deliver-build-research-${args.ticket}`,
+          run_id: `deliver-build-research-${crypto.randomUUID()}`,
           ticket: args.ticket,
           phase,
           worktree: context.projectRoot,
@@ -894,6 +938,14 @@ function buildPlanningRequest(args, options) {
       },
     });
     const request = {
+      scope: {
+        run_id: `deliver-build-research-${crypto.randomUUID()}`,
+        ticket: args.ticket,
+        phase: latestGraphPhase(context.graph),
+        worktree: context.projectRoot,
+        runtime: 'codex',
+        provider: 'openai',
+      },
       role: 'research',
       signals: {},
       context: {
@@ -912,7 +964,7 @@ function buildPlanningRequest(args, options) {
         },
       },
     };
-    validateBuildRequest(args.role, (value) => codexHost.validateArgs(value), request);
+    validateBuildRequest(args.role, ({ scope: _scope, ...value }) => codexHost.validateArgs(value), request);
     return request;
   }
 
@@ -948,6 +1000,15 @@ function buildPlanningRequest(args, options) {
     },
   });
   const request = {
+    scope: {
+      run_id: `deliver-build-decomposition-${crypto.randomUUID()}`,
+      ticket: subject,
+      phase: args.phase,
+      worktree: context.projectRoot,
+      repository,
+      runtime: 'codex',
+      provider: 'openai',
+    },
     gsd_role: 'gsd-planner',
     prompt,
     signals: {},
@@ -956,7 +1017,7 @@ function buildPlanningRequest(args, options) {
     contextPacket: packet,
     contextPacketRequired: true,
   };
-  validateBuildRequest(args.role, (value) => codexPlanningContextHost.requestValue(value, {
+  validateBuildRequest(args.role, ({ scope: _scope, ...value }) => require('./codex-planning-context-host.cjs').requestValue(value, {
     worktreePath: context.projectRoot,
   }), request);
   return request;
@@ -1024,16 +1085,89 @@ function incompleteHostReason(runtime, role) {
   return `claude ${role} host contract missing: fix-round does not authenticate the supplied ${evidence} evidence path and SHA-256 at launch`;
 }
 
+
+function architectureLive(input, pr, options) {
+  if (!Number.isSafeInteger(pr) || pr < 1) buildFail('--pr', 'architecture request needs a recorded live PR');
+  const live = options.getPullRequest ? options.getPullRequest({ worktree: input.worktree, pr, repo: input.row.repo || null })
+    : JSON.parse((options.execFileSync || execFileSync)('gh', ['pr', 'view', String(pr),
+      ...(input.row.repo ? ['--repo', input.row.repo] : []), '--json',
+      'number,state,headRefName,headRefOid,baseRefName,baseRefOid'], { cwd: input.worktree, encoding: 'utf8', timeout: 30000 }));
+  if (live.number !== pr || live.state !== 'OPEN' || live.headRefName !== input.branch
+      || live.headRefOid !== git(input.worktree, ['rev-parse', 'HEAD'])) buildFail('--pr', 'live PR identity differs from worktree');
+  return live;
+}
+function requireArchitectureTarget(input, args, options) {
+  if (args.pr !== undefined && input.stateRow.pr !== undefined && args.pr !== input.stateRow.pr)
+    buildFail('--pr', 'PR differs from the canonical ticket state');
+  const { resolveIntegrationBranch, architectureTarget } = require('./architecture-target.cjs');
+  const live = architectureLive(input, args.pr || input.stateRow.pr, options);
+  const integration = resolveIntegrationBranch({ projectRoot: input.projectRoot, repo: input.row.repo || null,
+    defaultBranch: options.defaultBranch, exec: options.execFileSync || execFileSync });
+  if (!architectureTarget({ base: live.baseRefName, integrationBranch: integration }).required)
+    buildFail('--pr', 'architecture review skipped-by-target');
+  return live;
+}
+function buildPhaseArchitectureRequest(args, options) {
+  if (!args.pr) buildFail('--pr', 'phase architecture review requires an explicit integration PR');
+  const input = planningBuildContext(options);
+  const branch = git(input.worktree, ['symbolic-ref', '--quiet', '--short', 'HEAD']);
+  const repo = args.repo ?? null;
+  let row;
+  try {
+    row = require('./architecture-target.cjs').phaseRows(input.graph, args.phase, repo)[0][1];
+  } catch (error) {
+    buildFail(args.repo === undefined ? '--phase' : '--repo', error.message);
+  }
+  const stateRaw = readJsonBounded(path.join(input.graphDir, 'delivery-state.json'));
+  const state = stateRaw?.tickets || stateRaw;
+  if (!object(state)) buildFail('state', 'canonical phase evidence is unavailable');
+  const live = requireArchitectureTarget({ ...input, row, branch, stateRow: {} }, args, options);
+  const repository = fs.realpathSync(git(input.worktree, ['rev-parse', '--path-format=absolute', '--git-common-dir']));
+  const binding = require('./architecture-target.cjs').phaseBinding({ graph: input.graph, state,
+    phase: args.phase, repository, repo, branch, pr: args.pr, head: live.headRefOid, base: live.baseRefOid });
+  if (args.ticket !== binding.phase) buildFail('<phase>', 'phase selector must name its canonical directory');
+  if (args.runtime === 'claude') return { schema: claudeRoleHost.REQUEST_SCHEMA, role: 'arch-review',
+    worktree: input.worktree, phase: binding.phase, pr: args.pr, repo: binding.repo };
+  return { scope: { run_id: `deliver-arch-${crypto.randomUUID()}`, ticket: binding.subject,
+    phase: args.phase, worktree: input.worktree, runtime: 'codex', provider: 'openai' },
+    graph_dir: input.graphDir, role: 'arch-review', signals: {}, context: { repo: binding.repo } };
+}
+
 function build(argv, options = {}) {
   const args = parseBuildArgs(argv);
+  if (args.graphDir) {
+    const effectiveCwd = options.cwd || process.cwd();
+    const requestedGraphDir = path.resolve(effectiveCwd, args.graphDir);
+    if (options.graphDir && path.resolve(effectiveCwd, options.graphDir) !== requestedGraphDir)
+      buildFail('--graph', 'conflicting canonical graph selectors');
+    options = { ...options, graphDir: requestedGraphDir };
+  }
   if (args.role === 'research' || args.role === 'decomposition') {
     return buildPlanningRequest(args, options);
   }
+  if (args.role === 'arch-review' && args.phase) return buildPhaseArchitectureRequest(args, options);
   const input = buildTicketContext(args, options);
+  if (args.role === 'arch-review') requireArchitectureTarget(input, args, options);
   const signals = buildSignals(input.row);
   const evidence = args.failureFile
     ? evidenceInput(input.worktree, args.failureFile, '--failure-file')
     : args.reviewFile ? evidenceInput(input.worktree, args.reviewFile, '--review-file') : null;
+
+  if (args.role === 'arch-review' && args.runtime === 'codex') {
+    const request = {
+      scope: { run_id: `deliver-arch-${crypto.randomUUID()}`, ticket: args.ticket,
+        phase: phaseNumber(input.row.phase), worktree: input.worktree, runtime: 'codex', provider: 'openai' },
+      graph_dir: input.graphDir,
+      role: 'arch-review', signals: {}, context: {},
+    };
+    if (args.pr !== undefined && args.pr !== input.stateRow.pr)
+      buildFail('--pr', 'PR differs from the canonical ticket state');
+    validateBuildRequest(args.role, value => {
+      const { scope: _scope, graph_dir: _graphDir, ...launch } = value;
+      return codexHost.validateArgs(launch);
+    }, request);
+    return request;
+  }
 
   if (args.role === 'arch-review' && args.runtime === 'claude') {
     const pr = args.pr || (Number.isSafeInteger(input.stateRow.pr) && input.stateRow.pr > 0

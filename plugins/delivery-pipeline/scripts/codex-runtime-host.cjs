@@ -601,7 +601,9 @@ function taskRelayInput(role, model, effort, task) {
     + ', fork_turns none, and task_name gsd_task. Give that child exactly this message:\n'
     + 'TASK_FILE=' + task.path + '\nTASK_SHA256=' + task.sha256 + '\n'
     + 'Your FIRST tool call must read TASK_FILE and every mandatory GSD/AGENTS initial source required by your role in that same call. If those sources must come first, read them before TASK_FILE.\n'
-    + 'In that same call, compute SHA-256 from the TASK_FILE bytes and print the exact standalone line TASK_SHA256=<digest> in the call output. Then follow TASK_FILE exactly.\n'
+    + 'Make this first read/hash filesystem read-only using inline python -c or node -e. Do not use shell heredocs, create temporary files, or use shell features that require temporary files.\n'
+    + 'In that same call, compute SHA-256 from the TASK_FILE bytes; do not print the supplied expected digest without reading and hashing those bytes. Emit TASK_SHA256=<computed digest> as the first small standalone output, before any source bodies, task text, or tool inventory. Reading mandatory sources first does not require printing them first.\n'
+    + 'When using functions.exec, explicitly forward that computed marker as a separate FIRST text item with text(marker), then emit the remaining output. Preserve it through BOTH the nested command output budget and the outer functions.exec output budget; increasing only the nested budget is insufficient. Then follow TASK_FILE exactly.\n'
     + 'Wait for that child to finish. Do not perform the task yourself.';
 }
 
@@ -980,6 +982,101 @@ async function verifyCompletedNativeLaunch(input = {}) {
   });
 }
 
+function verifyFileConsumption(prepared, nativeRaw, dispatchId, resultText) {
+  const checked = require('./codex-arch-review-context.cjs').verifyFileInput(prepared, {
+    association: { dispatch_id: dispatchId },
+  });
+  const records = nativeRaw.split('\n').filter(Boolean).map(line => JSON.parse(line));
+  const starts = records.map((record, index) => record.type === 'event_msg' && record.payload?.type === 'task_started' ? index : -1).filter(index => index >= 0);
+  const completions = records.map((record, index) => record.type === 'event_msg' && record.payload?.type === 'task_complete' ? index : -1).filter(index => index >= 0);
+  if (starts.length !== 1 || completions.length !== 1 || completions[0] <= starts[0]
+      || records[completions[0]].payload.turn_id !== records[starts[0]].payload.turn_id
+      || records[completions[0]].payload.last_agent_message !== resultText)
+    fail('RUNTIME_EVIDENCE_MISMATCH', 'file consumption is not bound to the original native completion');
+  const finalIndex = records.findIndex((record, index) => index > starts[0] && record.type === 'response_item'
+    && record.payload?.type === 'message' && record.payload.role === 'assistant' && record.payload.phase === 'final_answer');
+  if (finalIndex < 0 || records[finalIndex].payload.content?.map(block => block.text || '').join('') !== resultText)
+    fail('RUNTIME_EVIDENCE_MISMATCH', 'native final response differs from the returned result');
+  const emittedFinal = records.findIndex(record => record.type === 'event_msg'
+    && record.payload?.type === 'item_completed' && record.payload.item?.phase === 'final_answer');
+  const boundary = Math.min(finalIndex, completions[0], emittedFinal < 0 ? completions[0] : emittedFinal);
+  const expected = [{ path: prepared.input_bundle.manifest_path,
+    bytes: checked.manifest_bytes },
+    ...checked.manifest.assets.map((asset, index) => ({ path: asset.path, bytes: checked.material[index] }))];
+  const quote = value => "'" + value.replaceAll("'", "'\\''") + "'";
+  const reads = expected.flatMap(asset => Array.from({ length: Math.ceil(asset.bytes.length / prepared.input_bundle.chunk_bytes) }, (_, index) => ({
+    command: 'dd if=' + quote(asset.path) + ' bs=' + prepared.input_bundle.chunk_bytes
+      + ' skip=' + index + ' count=1 2>/dev/null | base64',
+    bytes: asset.bytes.subarray(index * prepared.input_bundle.chunk_bytes, (index + 1) * prepared.input_bundle.chunk_bytes),
+  })));
+  let at = 0;
+  const pending = new Map();
+  const customArguments = item => {
+    if (!['exec', 'functions.exec'].includes(item.name) || typeof item.input !== 'string') return null;
+    const match = /^\s*text\s*\(\s*await\s+tools\.exec_command\s*\(([\s\S]+)\)\s*\)\s*;?\s*$/.exec(item.input);
+    if (!match) return null;
+    let args; try { args = JSON.parse(match[1]); } catch { return null; }
+    if (!object(args) || !Object.keys(args).every(key => ['cmd', 'max_output_tokens'].includes(key))
+        || (args.max_output_tokens !== undefined && (!Number.isInteger(args.max_output_tokens)
+          || args.max_output_tokens < 1 || args.max_output_tokens > 10000))) return null;
+    return args;
+  };
+  for (const [index, record] of records.entries()) {
+    const item = record.payload;
+    if (record.type !== 'response_item' || !item) continue;
+    const custom = item.type === 'custom_tool_call';
+    if (custom || (item.type === 'function_call' && /(?:^|[._])exec_command$/.test(item.name || ''))) {
+      let args;
+      if (custom) args = customArguments(item);
+      else { try { args = JSON.parse(item.arguments); } catch { continue; } }
+      if (!object(args)) continue;
+      if (typeof args.cmd !== 'string' || !expected.some(asset => args.cmd.startsWith('dd if=' + quote(asset.path) + ' '))) continue;
+      if (item.internal_chat_message_metadata_passthrough?.turn_id !== undefined
+          && item.internal_chat_message_metadata_passthrough.turn_id !== records[starts[0]].payload.turn_id)
+        fail('RUNTIME_EVIDENCE_MISMATCH', 'native read belongs to a foreign task');
+      if (index <= starts[0] || index >= boundary) fail('RUNTIME_EVIDENCE_MISMATCH', 'native read is outside the original task input boundary');
+      if (args.cmd !== reads[at]?.command || at >= prepared.input_bundle.max_chunk_reads)
+        fail('RUNTIME_EVIDENCE_MISMATCH', 'native file read is reordered, duplicated or exceeds its budget');
+      if (pending.size) fail('RUNTIME_EVIDENCE_MISMATCH', 'ordered file read did not finish before the next read');
+      pending.set(item.call_id, { ...reads[at], custom });
+    }
+    if (['function_call_output', 'custom_tool_call_output'].includes(item.type) && pending.has(item.call_id)) {
+      if (index >= boundary) fail('RUNTIME_EVIDENCE_MISMATCH', 'native read completed after the result');
+      const read = pending.get(item.call_id);
+      if (read.custom !== (item.type === 'custom_tool_call_output'))
+        fail('RUNTIME_EVIDENCE_MISMATCH', 'native file read output has a foreign transport');
+      let output = item.output;
+      if (read.custom) {
+        if (!Array.isArray(output) || output.some(block => !['text', 'input_text'].includes(block?.type) || typeof block.text !== 'string'))
+          fail('RUNTIME_EVIDENCE_MISMATCH', 'native file read output is not the original text response');
+        if (output.length !== 2 || !/^Script completed\nWall time [0-9.]+ seconds\nOutput:\s*$/.test(output[0].text))
+          fail('RUNTIME_EVIDENCE_MISMATCH', 'native read output has surplus or unsupported text');
+        const results = output.slice(1).flatMap(block => {
+          try { const result = JSON.parse(block.text); return object(result) && typeof result.output === 'string' ? [result] : []; }
+          catch { return []; }
+        });
+        if (results.length !== 1 || results[0].exit_code !== 0 || results[0].session_id !== undefined)
+          fail('RUNTIME_EVIDENCE_MISMATCH', 'native file read did not complete successfully');
+        output = results[0].output;
+      } else {
+        let parsed; try { parsed = JSON.parse(output); } catch {}
+        if (!object(parsed)) fail('RUNTIME_EVIDENCE_MISMATCH', 'native file read lacks a successful output envelope');
+        if (object(parsed)) {
+          if (parsed.exit_code !== 0 || parsed.session_id !== undefined)
+            fail('RUNTIME_EVIDENCE_MISMATCH', 'native file read did not complete successfully');
+          output = parsed.output ?? parsed.stdout;
+        }
+      }
+      const encoded = read.bytes.toString('base64');
+      if (typeof output !== 'string' || output.replace(/\s/g, '') !== encoded)
+        fail('RUNTIME_EVIDENCE_MISMATCH', 'original native file read is incomplete or truncated');
+      pending.delete(item.call_id); at++;
+    }
+  }
+  if (at !== reads.length || pending.size) fail('RUNTIME_EVIDENCE_MISMATCH', 'complete original native file consumption is unproven');
+  return checked;
+}
+
 function launchPrompt(prompt, content) {
   if (typeof prompt !== 'string' || !prompt.trim()
       || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(prompt)) {
@@ -1063,11 +1160,15 @@ function createCodexCliLauncher(options = {}) {
   if (options.additionalProtectedPaths !== undefined && !Array.isArray(options.additionalProtectedPaths)) {
     fail('INVALID_INPUT', 'additionalProtectedPaths must be an array of host-owned paths');
   }
-  const hostProtectedPaths = normalizeProtectedPaths(options.additionalProtectedPaths);
+  const archiveAuthority = require('./role-artifact.cjs').archiveAuthorityNamespace(true);
+  const hostProtectedPaths = normalizeProtectedPaths([archiveAuthority, ...(options.additionalProtectedPaths || [])]);
   const taskDir = taskStateDir(options, scope);
 
   return async function launch(prompt, launchOptions = {}) {
     if (!object(launchOptions)) fail('INVALID_INPUT', 'Codex launch options must be an object');
+    if (['archiveAuthorityPath', 'archiveCataloguePath', 'archive_authority_path', 'archive_catalogue_path']
+      .some(key => Object.hasOwn(launchOptions, key)))
+      fail('INVALID_INPUT', 'archive authority paths are fixed by the trusted host');
     const model = text(launchOptions.model, 'model', 256);
     const effort = text(launchOptions.effort || launchOptions.reasoning_effort, 'effort', 32);
     if (!Object.values(CODEX_MODEL_IDS).includes(model)
@@ -1079,6 +1180,23 @@ function createCodexCliLauncher(options = {}) {
       fail('RUNTIME_CAPABILITY_MISSING', 'Codex host does not support reasoning effort ' + effort);
     }
     const content = launchOptions.agent_file_content;
+    const fileInput = launchOptions.input_prepared;
+    const fileTransport = launchOptions.input_transport !== undefined || launchOptions.input_bundle !== undefined || fileInput !== undefined;
+    if (fileTransport) {
+      const collector = require('./codex-arch-review-context.cjs');
+      if (launchOptions.input_transport !== 'host-files' || !collector.isPreparedFileInput(fileInput)
+          || JSON.stringify(fileInput.input_bundle) !== JSON.stringify(launchOptions.input_bundle)
+          || launchOptions.gsd_role !== undefined) fail('INVALID_INPUT', 'file transport lacks private producer authority');
+      const normalizeRelay = value => value.replace(/launch_digest=[a-f0-9]{64}/g, 'launch_digest=' + '0'.repeat(64));
+      if (typeof prompt !== 'string' || normalizeRelay(prompt) !== normalizeRelay(fileInput.prompt))
+        fail('INVALID_INPUT', 'native relay differs from private prepared input');
+      const checked = collector.verifyFileInput(fileInput, { association: { dispatch_id: launchOptions.dispatch_id,
+        run_id: scope.run_id, ticket: scope.ticket, phase: scope.phase } });
+      if ((checked.manifest.binding?.agent_sha256 && checked.manifest.binding.agent_sha256 !== launchOptions.agent_file_digest)
+          || Buffer.byteLength(generatedInstructions(content)) + 2 !== checked.manifest.accounting.generated_instruction_bytes)
+        fail('STALE_GENERATED_AGENT', 'selected generated instruction accounting changed');
+    }
+
     const typedRole = launchOptions.gsd_role;
     if (typedRole && (content !== undefined || launchOptions.agent_file || options.ephemeral === true)) {
       fail('INVALID_INPUT', 'typed GSD launch cannot use a static handoff or ephemeral transcript');
@@ -1219,12 +1337,28 @@ function createCodexCliLauncher(options = {}) {
         catch (_) {}
       }
     };
+    let stdoutBytes = 0, stderrBytes = 0;
     child.stdout.on('data', (chunk) => {
       const bytes = Buffer.from(chunk);
+      stdoutBytes += bytes.length;
+      if (stdoutBytes > NATIVE_SESSION_MAX_BYTES) {
+        sessionCallbackError = hostError('RUNTIME_EVIDENCE_INVALID', 'Codex output exceeds its transcript bound');
+        try { child.kill(); } catch (_) {}
+        return;
+      }
       stdout.push(bytes);
       inspectSessionRecords(bytes);
     });
-    child.stderr.on('data', (chunk) => stderr.push(Buffer.from(chunk)));
+    child.stderr.on('data', (chunk) => {
+      const bytes = Buffer.from(chunk);
+      stderrBytes += bytes.length;
+      if (stderrBytes > NATIVE_SESSION_MAX_BYTES) {
+        sessionCallbackError = hostError('RUNTIME_EVIDENCE_INVALID', 'Codex stderr exceeds its transcript bound');
+        try { child.kill(); } catch (_) {}
+        return;
+      }
+      stderr.push(bytes);
+    });
     try {
       const input = agent ? taskRelayInput(agent.role, model, effort, task) : launchPrompt(prompt, content);
       child.stdin.write(input);
@@ -1265,6 +1399,25 @@ function createCodexCliLauncher(options = {}) {
         allowTimedOutWait: false, startedAt, task,
       });
       const nativeEvidence = verified.native_session_evidence;
+      if (fileTransport) {
+        const message = parsed.records.filter(record => record.type === 'item.completed'
+          && record.item?.type === 'agent_message').at(-1);
+        if (!message || parsed.records.indexOf(message) > parsed.records.findLastIndex(record => record.type === 'turn.completed'))
+          fail('RUNTIME_EVIDENCE_MISMATCH', 'file input result is outside the original completed turn');
+        const resultText = message.item.text || '';
+        const consumed = verifyFileConsumption(fileInput,
+          readNativeParentRaw(parsed.session_id, nativeEvidence, env), launchOptions.dispatch_id, resultText);
+        let result;
+        try { result = JSON.parse(resultText.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '')); } catch {}
+        for (const [key, expected] of Object.entries({ input_manifest_sha256: fileInput.input_bundle.manifest_sha256,
+          input_material_bytes: fileInput.input_bundle.total_bytes, input_asset_count: fileInput.input_bundle.asset_count,
+          input_chunk_reads: consumed.chunk_reads })) {
+          const value = result?.[key] ?? new RegExp('(?:^|\\n)' + key + '=([^\\n]+)(?:\\n|$)').exec(resultText)?.[1];
+          if (String(value) !== String(expected)) fail('RUNTIME_EVIDENCE_MISMATCH', 'original native result has a wrong file input identity echo');
+        }
+      }
+
+
       const selection = observedSelection(parsed, model, effort, {
         model: args[args.indexOf('--model') + 1],
         effort: (args.find((value) => value.startsWith('model_reasoning_effort=')) || '').match(/^model_reasoning_effort="([^"]+)"$/)?.[1],
@@ -1304,6 +1457,10 @@ function createCodexCliLauncher(options = {}) {
         observed_effort: selection.effort,
         native_session_evidence: nativeEvidence,
         ...(typedEvidence ? { native_child_evidence: typedEvidence } : {}),
+        ...(fileTransport ? { input_transport: 'host-files', input_bundle: fileInput.input_bundle,
+          input_accounting: fileInput.manifest.accounting,
+          input_consumption: { native_session_sha256: nativeEvidence.sha256,
+            manifest_sha256: fileInput.input_bundle.manifest_sha256, chunk_reads: require('./codex-arch-review-context.cjs').verifyFileInput(fileInput).chunk_reads } } : {}),
         stream_evidence: {
           format: STREAM_FORMAT,
           records: parsed.records.length,
@@ -1445,6 +1602,9 @@ function createCodexRuntimeHost(options = {}) {
       const result = await launcher(prompt, {
         ...selection,
         dispatch_id: input.dispatch_id,
+        input_transport: input.input_transport,
+        input_bundle: input.input_bundle,
+        input_prepared: input.input_prepared,
         sandbox_mode: selection.sandbox_mode || input.sandbox_mode,
         gsd_role: input.gsd_role,
         onProcessSpawned: input.onProcessSpawned,
@@ -1540,7 +1700,9 @@ module.exports = Object.freeze({
   observedSelection,
   writeTranscript,
   writeTaskFile,
+  taskRelayInput,
   verifyTaskRelay,
   createCodexCliLauncher,
+  generatedInstructions,
   createCodexRuntimeHost,
 });

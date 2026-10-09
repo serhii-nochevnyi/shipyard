@@ -1557,3 +1557,28 @@ test('fixed v6 historical attribution stays stale without changing its source by
     assert.equal(crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex'), before);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
+
+for (const includeDispatchId of [true, false]) {
+  test(`actual parent wait joins authenticated multi-turn child on ${includeDispatchId ? 'explicit' : 'generated'} original dispatch`, async () => {
+    const { measuredPlanningFixture } = require('./codex-decompose-host.test.cjs');
+    const measured = await measuredPlanningFixture({ includeDispatchId, timeout: includeDispatchId });
+    const receipt = measured.result.receipt;
+    const resolution = measured.authenticated.resolution;
+    const child = measured.rows.find(row => row.actor === 'child');
+    assert.equal(child.dispatch_id, receipt.dispatch_id);
+    assert.ok(measured.rows.filter(row => row.actor === 'parent').every(row => row.dispatch_id === child.dispatch_id));
+    const transcript = measured.childTranscript.split('\n').filter(Boolean).map(line => JSON.parse(line));
+    assert.equal(transcript.filter(row => row.type === 'turn_context').length, 2);
+    const overhead = require('../../plugins/delivery-pipeline/scripts/orchestration-overhead.cjs');
+    assert.deepEqual(overhead.latestRows(measured.rows), measured.rows);
+    assert.equal(new Set(measured.rows.map(row => row.observation_id)).size, measured.rows.length);
+    assert.equal(resolution.dispatch_id, receipt.dispatch_id);
+    assert.deepEqual(measured.authenticated.receipt, receipt);
+    const joined = overhead.report({ rows: measured.rows, attributions: [resolution] });
+    assert.equal(joined.coverage.attributed_rows, 0, 'identity binding does not invent supported usage counters');
+    assert.equal(joined.verdict, 'inconclusive');
+    assert.equal(child.counts.model_turns, null);
+    assert.equal(child.counts.tool_calls, null);
+    assert.equal(child.counts.retries, null);
+  });
+}

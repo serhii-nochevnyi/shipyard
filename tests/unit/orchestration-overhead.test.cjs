@@ -649,4 +649,243 @@ test('recordHandoffCost accepts successor_reread and handoffCostSummary reports 
   }
 });
 
+for (const component of ['.planning', '.planning/intervening', '.planning/graph']) {
+  for (const entry of ['symlink', 'file']) {
+    for (const operation of ['read', 'record']) {
+      test(`recorder refuses ${component} ${entry} before public ${operation}`, () => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-overhead-ancestor-'));
+        const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-overhead-outside-'));
+        try {
+          const sentinel = path.join(outside, overhead.STREAM_NAME);
+          fs.writeFileSync(sentinel, 'outside sentinel\n', { mode: 0o600 });
+          fs.mkdirSync(path.join(outside, 'graph'));
+          fs.writeFileSync(path.join(outside, 'graph', overhead.STREAM_NAME), 'nested sentinel\n');
+          const before = fs.statSync(sentinel);
+          const target = path.join(root, component);
+          fs.mkdirSync(path.dirname(target), { recursive: true });
+          if (entry === 'symlink') fs.symlinkSync(outside, target, 'dir');
+          else fs.writeFileSync(target, 'physical file\n');
+          const graph = component === '.planning/intervening'
+            ? path.join(target, 'graph') : path.join(root, '.planning', 'graph');
+          const recorder = overhead.createRecorder(graph);
+          const originalOpen = fs.openSync;
+          let opened = false;
+          fs.openSync = function (...args) { opened = true; return originalOpen.apply(fs, args); };
+          try {
+            assert.throws(() => operation === 'read' ? recorder.read() : recorder.record(identity()),
+              error => error.code === 'RECORDER_ALIAS');
+            assert.equal(opened, false);
+          } finally { fs.openSync = originalOpen; }
+          assert.equal(fs.readFileSync(sentinel, 'utf8'), 'outside sentinel\n');
+          assert.equal(fs.readFileSync(path.join(outside, 'graph', overhead.STREAM_NAME), 'utf8'), 'nested sentinel\n');
+          const after = fs.statSync(sentinel);
+          assert.equal(after.ino, before.ino);
+          assert.equal(after.mode, before.mode);
+          assert.deepEqual(fs.readdirSync(outside).sort(), ['graph', overhead.STREAM_NAME].sort());
+          assert.deepEqual(fs.readdirSync(path.join(outside, 'graph')), [overhead.STREAM_NAME]);
+          if (entry === 'file') assert.equal(fs.readFileSync(target, 'utf8'), 'physical file\n');
+        } finally {
+          fs.rmSync(root, { recursive: true, force: true });
+          fs.rmSync(outside, { recursive: true, force: true });
+        }
+      });
+    }
+  }
+}
+
+for (const anchor of ['project', 'project alias', 'protected store']) {
+  test(`recorder creates absent descendants under legitimate ${anchor}`, () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-overhead-anchor-'));
+    try {
+      const project = path.join(root, 'project');
+      fs.mkdirSync(project);
+      const alias = path.join(root, 'project-alias');
+      fs.symlinkSync(project, alias, 'dir');
+      const store = path.join(root, 'planning-overhead');
+      fs.mkdirSync(store, { mode: 0o700 });
+      const graph = anchor === 'protected store' ? path.join(store, 'dispatch-identity')
+        : path.join(anchor === 'project alias' ? alias : project, '.planning', 'graph');
+      const recorder = overhead.createRecorder(graph);
+      assert.deepEqual(recorder.read().rows, []);
+      const result = recorder.record(identity());
+      assert.equal(result.recorded.length, 1);
+      assert.equal(recorder.read().rows[0].dispatch_id, 'dispatch-33-07');
+      const physicalGraph = anchor === 'protected store' ? graph : path.join(project, '.planning', 'graph');
+      assert.equal(fs.lstatSync(physicalGraph).isDirectory(), true);
+      assert.equal(fs.lstatSync(path.join(physicalGraph, overhead.STREAM_NAME)).isFile(), true);
+      if (anchor === 'protected store') assert.equal(fs.existsSync(path.join(project, '.planning')), false);
+      else assert.equal(overhead.createRecorder(path.join(project, '.planning', 'graph')).read().rows.length, 1);
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  });
+}
+
+for (const alias of ['stream', 'locks', 'lock', 'owner']) {
+  test(`recorder refuses existing ${alias} alias before writing`, () => {
+    const f = fixture();
+    try {
+      const writer = path.join(f.root, 'writer');
+      fs.mkdirSync(writer);
+      const sentinel = path.join(writer, 'sentinel');
+      fs.writeFileSync(sentinel, 'protected\n', { mode: 0o600 });
+      const before = fs.statSync(sentinel);
+      const locks = path.join(f.graph, '.locks');
+      const lock = path.join(locks, 'orchestration-overhead.lock');
+      if (alias === 'stream') fs.symlinkSync(sentinel, path.join(f.graph, overhead.STREAM_NAME));
+      if (alias === 'locks') { fs.rmdirSync(locks); fs.symlinkSync(writer, locks); }
+      if (alias === 'lock') fs.symlinkSync(writer, lock);
+      if (alias === 'owner') { fs.mkdirSync(lock); fs.symlinkSync(sentinel, path.join(lock, 'owner.json')); }
+      assert.throws(() => overhead.createRecorder(f.graph).record(identity()));
+      assert.equal(fs.readFileSync(sentinel, 'utf8'), 'protected\n');
+      const after = fs.statSync(sentinel);
+      assert.equal(after.ino, before.ino);
+      assert.equal(after.mode, before.mode);
+      assert.deepEqual(fs.readdirSync(writer), ['sentinel']);
+      if (alias === 'stream') assert.throws(() => overhead.readStream(f.graph));
+    } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
+  });
+}
+
+test('shared lock refuses a symlink owner without stale takeover', () => {
+  const f = fixture();
+  try {
+    const { acquire } = require('../../plugins/delivery-pipeline/scripts/lock.cjs');
+    const lock = path.join(f.graph, '.locks', 'alias.lock');
+    fs.mkdirSync(lock);
+    const target = path.join(f.root, 'owner-target');
+    fs.writeFileSync(target, JSON.stringify({ at: '2000-01-01' }));
+    fs.symlinkSync(target, path.join(lock, 'owner.json'));
+    assert.throws(() => acquire(path.dirname(lock), 'alias', { waitMs: 0 }));
+    assert.equal(fs.lstatSync(path.join(lock, 'owner.json')).isSymbolicLink(), true);
+    assert.deepEqual(fs.readdirSync(path.dirname(lock)), ['alias.lock']);
+  } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
+});
+
+for (const change of ['replace', 'disappear', 'write', 'hardlink', 'symlink']) {
+  test(`shared lock handles contended owner ${change} without seizing a successor`, () => {
+    const f = fixture();
+    const originalRead = fs.readFileSync;
+    const { acquire } = require('../../plugins/delivery-pipeline/scripts/lock.cjs');
+    const dir = path.join(f.graph, '.locks');
+    const lock = path.join(dir, 'observation.lock');
+    const file = path.join(lock, 'owner.json');
+    let injected = false;
+    try {
+      fs.mkdirSync(lock);
+      const stale = JSON.stringify({ at: '2000-01-01', token: 'old' });
+      const successor = JSON.stringify({ at: new Date().toISOString(), token: 'successor' });
+      fs.writeFileSync(file, stale);
+      fs.readFileSync = function (input, ...args) {
+        const result = originalRead.call(fs, input, ...args);
+        if (typeof input === 'number' && !injected) {
+          injected = true;
+          if (change === 'write') fs.writeFileSync(file, successor);
+          else if (change === 'hardlink') fs.linkSync(file, path.join(f.root, 'alias'));
+          else {
+            fs.unlinkSync(file);
+            if (change === 'replace') fs.writeFileSync(file, successor);
+            if (change === 'symlink') {
+              const target = path.join(f.root, 'target');
+              fs.writeFileSync(target, successor);
+              fs.symlinkSync(target, file);
+            }
+          }
+        }
+        return result;
+      };
+      if (change === 'hardlink' || change === 'symlink')
+        assert.throws(() => acquire(dir, 'observation', { waitMs: 0 }), /opened regular file/);
+      else assert.equal(acquire(dir, 'observation', { waitMs: 0 }), null);
+      assert.equal(injected, true);
+      assert.deepEqual(fs.readdirSync(dir), ['observation.lock']);
+      if (change === 'replace' || change === 'write')
+        assert.equal(originalRead(file, 'utf8'), successor);
+    } finally {
+      fs.readFileSync = originalRead;
+      fs.rmSync(f.root, { recursive: true, force: true });
+    }
+  });
+}
+
+suite('shared recorder lock — lock directory leaf identity');
+
+test('a stale-owner directory symlink refuses acquisition without changing its target', () => {
+  const f = fixture();
+  const tmp = path.join(f.graph, '.locks');
+  const { acquire } = require('../../plugins/delivery-pipeline/scripts/lock.cjs');
+  try {
+    const target = path.join(tmp, 'alias-target');
+    const leaf = path.join(tmp, 'alias.lock');
+    fs.mkdirSync(target);
+    const bytes = JSON.stringify({ at: new Date(0).toISOString(), token: 'target-owner' });
+    fs.writeFileSync(path.join(target, 'owner.json'), bytes);
+    const before = fs.lstatSync(target);
+    fs.symlinkSync(target, leaf, 'dir');
+    let handle;
+    try {
+      assert.throws(() => { handle = acquire(tmp, 'alias', { waitMs: 0 }); },
+        error => error.code === 'LOCK_DIRECTORY_ALIAS');
+      assert.ok(fs.lstatSync(leaf).isSymbolicLink());
+      assert.strictEqual(fs.readFileSync(path.join(target, 'owner.json'), 'utf8'), bytes);
+      const after = fs.lstatSync(target);
+      assert.strictEqual(after.dev, before.dev);
+      assert.strictEqual(after.ino, before.ino);
+      assert.deepStrictEqual(fs.readdirSync(target), ['owner.json']);
+    } finally { if (handle) handle.release(); }
+  } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
+});
+
+test('a non-directory lock leaf refuses acquisition', () => {
+  const f = fixture();
+  const tmp = path.join(f.graph, '.locks');
+  const { acquire } = require('../../plugins/delivery-pipeline/scripts/lock.cjs');
+  try {
+    const leaf = path.join(tmp, 'file-leaf.lock');
+    fs.writeFileSync(leaf, 'unchanged');
+    assert.throws(() => acquire(tmp, 'file-leaf', { waitMs: 0 }),
+      error => error.code === 'LOCK_DIRECTORY_ALIAS');
+    assert.strictEqual(fs.readFileSync(leaf, 'utf8'), 'unchanged');
+  } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
+});
+
+for (const replacement of [false, true]) {
+  test(`directory ${replacement ? 'replacement' : 'disappearance'} during owner read is retryable`, () => {
+    const f = fixture();
+    const tmp = path.join(f.graph, '.locks');
+    const { acquire } = require('../../plugins/delivery-pipeline/scripts/lock.cjs');
+    try {
+      const name = replacement ? 'replaced-read' : 'vanished-read';
+      const leaf = path.join(tmp, `${name}.lock`);
+      const moved = `${leaf}.original`;
+      const bytes = JSON.stringify({ at: new Date(0).toISOString(), token: 'old-owner' });
+      fs.mkdirSync(leaf);
+      fs.writeFileSync(path.join(leaf, 'owner.json'), bytes);
+      const original = fs.readFileSync;
+      const open = fs.openSync;
+      let changed = false;
+      fs.openSync = function(file, ...args) {
+        if (file === path.join(leaf, 'owner.json') && !changed) {
+          changed = true;
+          fs.renameSync(leaf, moved);
+          if (replacement) {
+            fs.mkdirSync(leaf);
+            fs.renameSync(path.join(moved, 'owner.json'), path.join(leaf, 'owner.json'));
+          }
+        }
+        return open.call(this, file, ...args);
+      };
+      let handle;
+      try {
+        handle = acquire(tmp, name, { waitMs: 0 });
+        assert.strictEqual(handle, null, 'a changed directory must retry rather than take over');
+        assert.ok(changed, 'the actual owner descriptor open reached the race');
+        if (replacement) {
+          assert.deepStrictEqual(fs.readdirSync(moved), []);
+          assert.strictEqual(original(path.join(leaf, 'owner.json'), 'utf8'), bytes);
+        } else assert.strictEqual(original(path.join(moved, 'owner.json'), 'utf8'), bytes);
+      } finally { fs.openSync = open; if (handle) handle.release(); }
+    } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
+  });
+}
+
+
 done();

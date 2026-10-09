@@ -5,6 +5,26 @@ const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { execFileSync, spawnSync } = require('node:child_process');
+
+const targetBin = fs.mkdtempSync(path.join(os.tmpdir(), 'architecture-gh-'));
+fs.writeFileSync(path.join(targetBin, 'gh'), `#!/usr/bin/env node
+const fs = require('node:fs');
+const cp = require('node:child_process');
+const path = require('node:path');
+const git = args => cp.execFileSync('git', args, {encoding:'utf8'}).trim();
+const args = process.argv.slice(2);
+if (args[0] === 'repo') process.stdout.write('main');
+else if (args[0] === 'pr' && args[1] === 'view') {
+  let base = 'main';
+  try { base = JSON.parse(fs.readFileSync('.planning/config.json')).git?.base_branch || base; } catch {}
+  let oid; try { oid = git(['rev-parse','refs/remotes/origin/' + base]); } catch { oid = git(['rev-parse','HEAD']); }
+  process.stdout.write(JSON.stringify({number:Number(args[2]),state:'OPEN',headRefName:git(['branch','--show-current']),
+    headRefOid:git(['rev-parse','HEAD']),baseRefName:base,baseRefOid:oid}));
+} else process.exit(2);
+`, {mode:0o755});
+const targetOldPath = process.env.PATH;
+process.env.PATH = targetBin + path.delimiter + targetOldPath;
+process.on('exit', () => { process.env.PATH = targetOldPath; fs.rmSync(targetBin, {recursive:true,force:true}); });
 const { suite, test, done, assert } = require('./assert-harness.cjs');
 
 const codexSessionEnv = Object.fromEntries(['CODEX_SANDBOX', 'CODEX_SANDBOX_NETWORK_DISABLED']
@@ -265,7 +285,8 @@ test('research and decomposition builders round-trip through both runtimes’ re
             assert.ok(request.prompt.includes(source.sha256));
           }
         } else if (role === 'research') {
-          accepted = codexDeliveryHost.validateArgs(request);
+          const { scope: _scope, ...launch } = request;
+          accepted = codexDeliveryHost.validateArgs(launch);
           assert.equal(accepted.request.role, 'research');
           assert.deepEqual(request.context.investigation.lines.map((line) => line.id),
             ['system-state', 'alternatives', 'constraints', 'risks']);
@@ -278,7 +299,8 @@ test('research and decomposition builders round-trip through both runtimes’ re
           assert.throws(() => validateContextPacket(request.context.contextPacket), /changed after packet construction/);
           fs.writeFileSync(path.join(fixture.invPath, 'PROBLEM.md'), '---\nadr: .planning/architecture/ADR-TEST.md\n---\n\n# Problem\n');
         } else {
-          accepted = codexPlanningContextHost.requestValue(request, { worktreePath: fixture.root });
+          const { scope: _scope, ...launch } = request;
+          accepted = codexPlanningContextHost.requestValue(launch, { worktreePath: fixture.root });
           assert.equal(accepted.gsd_role, 'gsd-planner');
           assert.equal(accepted.contextPacketRequired, true);
           assert.equal(accepted.sourceRevision, git(fixture.root, 'rev-parse', 'HEAD'));
@@ -292,7 +314,7 @@ test('research and decomposition builders round-trip through both runtimes’ re
             sourceRevision: accepted.sourceRevision, policyHash: modelPolicy.POLICY_HASH,
           });
           fs.appendFileSync(path.join(fixture.root, '.planning', 'architecture', 'ADR-TEST.md'), 'Changed after build.\n');
-          assert.throws(() => codexPlanningContextHost.requestValue(request, { worktreePath: fixture.root }),
+          assert.throws(() => codexPlanningContextHost.requestValue(launch, { worktreePath: fixture.root }),
             /changed after packet construction/);
           fs.writeFileSync(path.join(fixture.root, '.planning', 'architecture', 'ADR-TEST.md'), '# Planning ADR\n');
           for (const source of decompositionRefs) {
@@ -312,13 +334,20 @@ test('research and decomposition builders round-trip through both runtimes’ re
   }
 });
 
-test('planning builders are deterministic and missing PROBLEM.md exits 2 naming that input', () => {
+test('planning builders preserve context with distinct fresh run ids and missing PROBLEM.md exits 2', () => {
   const fixture = planningBuilderFixture('INV-43-16');
   const args = ['research', fixture.invId, '--runtime', 'codex'];
   try {
     const first = deliverDispatch.build(args, { cwd: fixture.root, graphDir: fixture.graphDir });
     const second = deliverDispatch.build(args, { cwd: fixture.root, graphDir: fixture.graphDir });
-    assert.deepEqual(second, first);
+    assert.notEqual(second.scope.run_id, first.scope.run_id);
+    assert.match(first.scope.run_id, /^deliver-build-research-[a-f0-9-]{36}$/);
+    assert.deepEqual({ ...second, scope: { ...second.scope, run_id: first.scope.run_id } }, first);
+    const claudeFirst = deliverDispatch.build(['research', fixture.invId, '--runtime', 'claude'],
+      { cwd: fixture.root, graphDir: fixture.graphDir });
+    const claudeSecond = deliverDispatch.build(['research', fixture.invId, '--runtime', 'claude'],
+      { cwd: fixture.root, graphDir: fixture.graphDir });
+    assert.notEqual(claudeSecond.scope.run_id, claudeFirst.scope.run_id);
     fs.rmSync(path.join(fixture.invPath, 'PROBLEM.md'));
     const result = spawnSync(process.execPath, [
       path.resolve(__dirname, '../../plugins/delivery-pipeline/scripts/deliver-dispatch.cjs'),
@@ -345,19 +374,32 @@ test('planning builders are deterministic and missing PROBLEM.md exits 2 naming 
   }
 });
 
-test('Codex arch-review shape acceptance is not evidence-bound host parity', () => {
+test('Codex arch-review builder delegates context and signals to its trusted host', () => {
   const fixture = builderFixture('T-12-12');
   try {
     const shape = validateArgs({ role: 'arch-review', signals: {}, context: {} });
     assert.equal(shape.request.role, 'arch-review');
     assert.equal(shape.request.context.prompt, undefined);
-    assert.throws(
-      () => deliverDispatch.build(['arch-review', fixture.id, '--runtime', 'codex', '--pr', '501'], {
-        cwd: fixture.root, graphDir: fixture.graphDir,
-      }),
-      (error) => error.exitCode === 2 && /codex arch-review host contract missing/.test(error.message)
-        && /caller-built prompt/.test(error.message),
-    );
+    const request = deliverDispatch.build(['arch-review', fixture.id, '--runtime', 'codex', '--pr', '501'], {
+      cwd: fixture.root, graphDir: fixture.graphDir,
+    });
+    assert.equal(request.role, 'arch-review');
+    assert.equal(request.scope.ticket, fixture.id);
+    assert.equal(request.graph_dir, fs.realpathSync(fixture.graphDir));
+    assert.deepEqual(request.context, {});
+    assert.deepEqual(request.signals, {});
+    const relativeGraph = deliverDispatch.build(['arch-review', fixture.id, '--runtime', 'codex',
+      '--pr', '501', '--graph', '.planning/graph'], { cwd: fixture.root, graphDir: fixture.graphDir });
+    assert.equal(relativeGraph.graph_dir, fs.realpathSync(fixture.graphDir));
+    const cli = spawnSync(process.execPath, [path.resolve(__dirname, '../../plugins/delivery-pipeline/scripts/deliver-dispatch.cjs'), 'build', 'arch-review', fixture.id,
+      '--runtime', 'codex', '--pr', '501', '--graph', fixture.graphDir], {
+      cwd: fixture.root, encoding: 'utf8', env: { ...process.env, SHIPYARD_GRAPH_DIR: fixture.graphDir },
+    });
+    assert.equal(cli.status, 0, cli.stderr);
+    assert.equal(JSON.parse(cli.stdout).scope.ticket, fixture.id);
+    assert.throws(() => deliverDispatch.build(['arch-review', fixture.id, '--runtime', 'codex', '--pr', '502'], {
+      cwd: fixture.root, graphDir: fixture.graphDir,
+    }), /PR differs/);
   } finally {
     cleanup(fixture.root);
   }
@@ -626,6 +668,47 @@ test('the detached child pid is the host process; status/wait report exit and re
   } finally {
     cleanup(fixture.root, stateDir);
   }
+});
+
+test('blocking observations are measured once across repeat waits and lost recovery adds no poll', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-wait-measurement-'));
+  const stateDir = path.join(root, 'dispatch');
+  const graphDir = path.join(root, 'graph');
+  const id = 'original-wait';
+  const directory = path.join(stateDir, id);
+  fs.mkdirSync(directory, { recursive: true });
+  writeJson(path.join(directory, 'record.json'), { dispatch_id: id, pid: 999999,
+    role: 'gsd-planner', runtime: 'codex', ticket: 'T-47-02', graph_dir: graphDir,
+    started_at: '2026-10-06T00:00:00.000Z', result: path.join(directory, 'result.jsonl') });
+  writeJson(path.join(directory, 'args.json'), { scope: { run_id: 'original-run', worktree: root } });
+  const overhead = require('../../plugins/delivery-pipeline/scripts/orchestration-overhead.cjs');
+  try {
+    let genericTick = 0;
+    await deliverDispatch.waitOnce(id, { stateDir, pidLive: () => true,
+      timeoutMs: 20, intervalMs: 10, clock: () => genericTick,
+      sleep: async (ms) => { genericTick += ms; } });
+    assert.equal(overhead.readStream(graphDir).rows.length, 0,
+      'generic wait must not mutate a live contained planner worktree');
+    for (let attempt = 0; attempt < 2; attempt++) {
+      let tick = 0;
+      const result = await deliverDispatch.waitOnce(id, { stateDir,
+        waitScope: { run_id: 'original-run', worktree: root }, pidLive: () => true,
+        timeoutMs: 20, intervalMs: 10, clock: () => tick,
+        sleep: async (ms) => { tick += ms; } });
+      assert.equal(result.status, 'running');
+      assert.equal(result.exit_code, 3);
+    }
+    const rows = overhead.readStream(graphDir).rows;
+    assert.equal(rows.length, 2, 'same original observations are deduplicated in storage');
+    assert.ok(rows.every((row) => row.actor === 'parent' && row.run_id === 'original-run'
+      && row.dispatch_id === id && row.counts.polls === 1 && row.counts.model_turns === null));
+    const lost = await deliverDispatch.waitOnce('lost-original', { stateDir });
+    assert.equal(lost.status, 'lost');
+    assert.equal(lost.exit_code, 2);
+    const failed = await deliverDispatch.waitOnce(id, { stateDir, pidLive: () => false, recordWakeEvent() {} });
+    assert.equal(failed.status, 'exited-failed');
+    assert.equal(overhead.readStream(graphDir).rows.length, 2);
+  } finally { cleanup(root); }
 });
 
 test('an unknown dispatch id reports lost', () => {

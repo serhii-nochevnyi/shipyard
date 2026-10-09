@@ -22,6 +22,7 @@ const {
   probeCodexRuntime,
 } = require('../../plugins/delivery-pipeline/scripts/codex-runtime-host.cjs');
 const { launchAgent } = require('../../plugins/delivery-pipeline/scripts/codex-agent.cjs');
+const { createCodexDispatchAdapter } = require('../../plugins/delivery-pipeline/scripts/codex-dispatch-adapter.cjs');
 
 const SCOPE = {
   run_id: 'run-37-04',
@@ -705,6 +706,7 @@ test('typed launch accepts a completed native child after timeout-only parent wa
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-codex-timeout-'));
     const codeHome = path.join(root, 'codex-home');
     try {
+      fs.mkdirSync(path.join(root, 'worktree'));
       fs.mkdirSync(path.join(codeHome, 'agents'), { recursive: true });
       fs.writeFileSync(path.join(codeHome, 'agents', 'gsd-plan-checker.toml'), ROLE_TOML(instructions));
       const launch = createCodexCliLauncher({
@@ -712,7 +714,12 @@ test('typed launch accepts a completed native child after timeout-only parent wa
         taskDir: path.join(root, 'tasks'), env: { CODEX_HOME: codeHome },
         spawn: () => relayChild(codeHome, timeoutOnly, childTranscript),
       });
-      return await launch(CAPTURED_TASK, TYPED);
+      let started;
+      const result = await launch(CAPTURED_TASK, {
+        ...TYPED, onSessionStarted(value) { started = value; },
+      });
+      assert.deepStrictEqual(result.runtime_evidence.sandbox_evidence, started.runtime_launch.sandbox_evidence);
+      return result;
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
@@ -765,6 +772,11 @@ test('typed launch relays the task by host-owned file path and digest outside th
       assert.ok(!observed.real.startsWith(fs.realpathSync(worktree) + path.sep));
       assert.ok(input.join('').includes('TASK_FILE=' + observed.file + '\n'));
       assert.ok(!input.join('').includes(CAPTURED_TASK));
+      assert.ok(input.join('').includes('filesystem read-only'));
+      assert.ok(input.join('').includes('inline python -c or node -e'));
+      assert.ok(input.join('').includes('Do not use shell heredocs, create temporary files'));
+      assert.ok(input.join('').includes('first small standalone output'));
+      assert.ok(input.join('').includes('separate FIRST text item'));
       assert.ok(!fs.existsSync(observed.file));
       return outcome;
     } finally {
@@ -796,6 +808,388 @@ test('typed launch relays the task by host-owned file path and digest outside th
     assert.equal(outcome.error.code, 'TASK_RELAY_UNVERIFIED', missing + ': ' + outcome.error.message);
     assert.ok(outcome.error.details.missing.includes(missing.trim()), missing + ': ' + outcome.error.message);
   }
+  for (const field of ['parent_thread_id', 'agent_role']) {
+    const outcome = await runRelay({ mutate: (raw) => transformJsonl(raw, (record) => {
+      if (record.type === 'session_meta') {
+        record.payload.source.subagent.thread_spawn[field] = 'foreign';
+      }
+      return record;
+    }) });
+    assert.equal(outcome.error.code, 'RUNTIME_EVIDENCE_MISMATCH', field);
+    assert.equal(outcome.result, undefined);
+  }
+});
+
+test('actual typed host and adapter retain all-deny launch/completion evidence', async () => {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-typed-profile-')));
+  const worktree = path.join(root, 'worktree');
+  const codeHome = path.join(root, 'codex-home');
+  const { parentRaw, childRaw, instructions } = recordedTypedSession();
+  let started;
+  try {
+    fs.mkdirSync(worktree);
+    assert.equal(fs.existsSync(path.join(worktree, '.git')), false);
+    fs.mkdirSync(path.join(codeHome, 'agents'), { recursive: true });
+    fs.writeFileSync(path.join(codeHome, 'agents', 'gsd-plan-checker.toml'), ROLE_TOML(instructions));
+    const graph = path.join(worktree, '.planning', 'graph');
+    const archive = path.join(worktree, '.shipyard-role-artifacts');
+    const authority = path.join(root, 'role-artifact-authority');
+    const staging = path.join(root, '.git', 'shipyard-role-archive-staging');
+    const resolution = { ...policy.resolveDispatch({
+      runtime: 'codex', role: 'decomposition', dispatch_id: 'typed-profile',
+    }), gsd_role: 'gsd-plan-checker' };
+    const matchingSelection = (raw) => transformJsonl(raw, (record) => {
+      if (record.type === 'turn_context') {
+        Object.assign(record.payload, { model: resolution.model, effort: resolution.effort });
+      }
+      if (record.type === 'response_item' && record.payload.type === 'function_call'
+          && record.payload.name === 'spawn_agent') {
+        const args = JSON.parse(record.payload.arguments);
+        Object.assign(args, { model: resolution.model, reasoning_effort: resolution.effort });
+        record.payload.arguments = JSON.stringify(args);
+      }
+      return record;
+    });
+    const host = createCodexRuntimeHost({
+      scope: { ...SCOPE, worktree }, probe: probe(), controller: { assertOwner() {} },
+      recorder: () => true, taskDir: path.join(root, 'tasks'),
+      env: { CODEX_HOME: codeHome }, additionalProtectedPaths: [authority, staging, graph, archive],
+      spawn: () => relayChild(codeHome, matchingSelection(parentRaw), matchingSelection(childRaw)),
+    });
+    const context = { run_id: SCOPE.run_id, prompt: CAPTURED_TASK, sandbox_mode: 'read-only',
+      onSessionStarted(value) { started = value; } };
+    const receipt = await createCodexDispatchAdapter({ host }).launch(resolution, context);
+    assert.equal(receipt.gsd_role, 'gsd-plan-checker');
+    assert.equal(receipt.gsd_launch_mechanism, 'typed-gsd-callback');
+    assert.deepStrictEqual(receipt.runtime_evidence.sandbox_evidence, started.runtime_launch.sandbox_evidence);
+    const sandbox = receipt.runtime_evidence.sandbox_evidence;
+    if (Object.hasOwn(sandbox, 'read_only_protected_paths')) {
+      assert.deepStrictEqual(sandbox.read_only_protected_paths, []);
+    }
+    assert.ok(receipt.runtime_evidence.command.args.includes('permissions.shipyard-runtime.filesystem={'
+      + sandbox.protected_paths.map((entry) => JSON.stringify(entry) + '=\"deny\"').join(',') + '}'));
+    for (const denied of [authority, staging, graph, archive]) {
+      assert.ok(sandbox.protected_paths.includes(denied));
+    }
+
+    const applied = { ...receipt, runtime_evidence: receipt.runtime_evidence };
+    const validate = (value) => createCodexDispatchAdapter({
+      host: { ...host, launchTypedGsd() { return value; } },
+    }).launch(resolution, context);
+    const clone = () => JSON.parse(JSON.stringify(applied));
+    const filesystem = (value, reads = [], permission = 'read') => {
+      const evidence = value.runtime_evidence;
+      const rules = evidence.sandbox_evidence.protected_paths.map((entry) =>
+        JSON.stringify(entry) + '=' + JSON.stringify(reads.includes(entry) ? permission : 'deny'));
+      const index = evidence.command.args.findIndex((entry) => entry.startsWith('permissions.shipyard-runtime.filesystem='));
+      evidence.command.args[index] = 'permissions.shipyard-runtime.filesystem={' + rules.join(',') + '}';
+      evidence.command_digest = crypto.createHash('sha256').update(JSON.stringify(evidence.command.args)).digest('hex');
+    };
+    const readProfile = () => {
+      const value = clone();
+      value.runtime_evidence.sandbox_evidence.read_only_protected_paths = [graph, archive];
+      filesystem(value, [graph, archive]);
+      return value;
+    };
+    const positive = readProfile();
+    assert.deepStrictEqual(validate(positive).runtime_evidence, positive.runtime_evidence);
+    const legacyAllDeny = clone();
+    delete legacyAllDeny.runtime_evidence.sandbox_evidence.read_only_protected_paths;
+    assert.deepStrictEqual(validate(legacyAllDeny).runtime_evidence, legacyAllDeny.runtime_evidence);
+    const explicitAllDeny = clone();
+    explicitAllDeny.runtime_evidence.sandbox_evidence.read_only_protected_paths = [];
+    assert.deepStrictEqual(validate(explicitAllDeny).runtime_evidence, explicitAllDeny.runtime_evidence);
+
+    const rejects = (name, edit, base = readProfile) => {
+      const value = base();
+      edit(value.runtime_evidence.sandbox_evidence, value);
+      assert.throws(() => validate(value), (error) => error.code === 'MISSING_RECEIPT', name);
+    };
+    for (const invalid of [null, false, {}, 'read', [null], [graph, graph], [archive, archive],
+      [path.join(worktree, 'foreign')], [authority], [staging], [graph + '/child'],
+      [path.join(root, '.planning', 'graph')], [worktree + '/.planning/../.planning/graph']]) {
+      rejects('malformed or foreign read metadata: ' + JSON.stringify(invalid), (sandbox, value) => {
+        sandbox.read_only_protected_paths = invalid;
+        if (Array.isArray(invalid) && invalid.every((entry) => typeof entry === 'string')) {
+          for (const entry of invalid) if (!sandbox.protected_paths.includes(entry)) sandbox.protected_paths.push(entry);
+          filesystem(value, invalid);
+        }
+      });
+    }
+    rejects('missing read metadata', (sandbox) => { delete sandbox.read_only_protected_paths; });
+    rejects('explicit undefined read metadata', (sandbox) => {
+      sandbox.read_only_protected_paths = undefined;
+    }, clone);
+    rejects('incomplete read metadata', (sandbox) => { sandbox.read_only_protected_paths = [graph]; });
+    rejects('missing protected metadata', (sandbox) => { delete sandbox.protected_paths; });
+    rejects('duplicate protected metadata', (sandbox, value) => {
+      sandbox.protected_paths.push(graph); filesystem(value, [graph, archive]);
+    });
+    rejects('missing protected membership', (sandbox, value) => {
+      sandbox.protected_paths = sandbox.protected_paths.filter((entry) => entry !== graph);
+      filesystem(value, [graph, archive]);
+    });
+    rejects('malformed protected metadata', (sandbox) => { sandbox.protected_paths.push(null); });
+    for (const denied of [authority, staging]) {
+      rejects('missing private denial: ' + denied, (sandbox) => {
+        sandbox.protected_paths = sandbox.protected_paths.filter((entry) => entry !== denied);
+      });
+      rejects('weakened private denial: ' + denied, (_sandbox, value) => {
+        filesystem(value, [graph, archive, denied]);
+      });
+    }
+    rejects('unknown profile metadata', (sandbox) => { sandbox.permissions = 'write'; });
+    rejects('unknown profile', (sandbox) => { sandbox.profile = 'caller-runtime'; });
+    rejects('weakened parent', (sandbox, value) => {
+      sandbox.base_profile = ':workspace';
+      const args = value.runtime_evidence.command.args;
+      args[args.findIndex((entry) => entry.startsWith('permissions.shipyard-runtime.extends='))]
+        = 'permissions.shipyard-runtime.extends=":workspace"';
+    });
+    rejects('read metadata with deny command', (_sandbox, value) => filesystem(value));
+    rejects('write instead of read', (_sandbox, value) => filesystem(value, [graph, archive], 'write'));
+    for (const prefix of ['default_permissions=', 'permissions.shipyard-runtime.extends=', 'permissions.shipyard-runtime.filesystem=']) {
+      rejects('duplicate ' + prefix, (_sandbox, value) => {
+        const args = value.runtime_evidence.command.args;
+        args.push('--config', args.find((entry) => entry.startsWith(prefix)));
+      });
+      rejects('missing ' + prefix, (_sandbox, value) => {
+        const args = value.runtime_evidence.command.args;
+        args.splice(args.findIndex((entry) => entry.startsWith(prefix)) - 1, 2);
+      });
+    }
+    for (const denied of [worktree, path.join(worktree, '.planning'), path.parse(worktree).root]) {
+      const stronger = clone();
+      stronger.runtime_evidence.sandbox_evidence.protected_paths.push(denied);
+      filesystem(stronger);
+      assert.deepStrictEqual(validate(stronger).runtime_evidence, stronger.runtime_evidence);
+      rejects('read below stronger denial: ' + denied, (sandbox, value) => {
+        sandbox.protected_paths.push(denied); filesystem(value, [graph, archive]);
+      });
+    }
+    rejects('noncanonical denial cannot hide an enclosing deny', (sandbox, value) => {
+      sandbox.protected_paths.push(worktree + '/.planning/..');
+      filesystem(value, [graph, archive]);
+    });
+    rejects('nonexistent read worktree', (_sandbox, value) => {
+      value.runtime_evidence.worktree = path.join(root, 'missing');
+    });
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('actual launcher refuses a nonexistent worktree without requiring Git for existing fixtures', async () => {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-missing-worktree-')));
+  const worktree = path.join(root, 'missing');
+  try {
+    await assert.rejects(async () => {
+      const launch = createCodexCliLauncher({
+        scope: { ...SCOPE, worktree }, capabilities,
+        executable: process.execPath, taskDir: path.join(root, 'tasks'),
+      });
+      await launch('fixture', { model: 'gpt-6.1-sol', effort: 'low', sandbox_mode: 'workspace-write' });
+    }, (error) => ((error.code === 'ENOENT' || error.code === 'ENOTDIR') && error.path === worktree)
+      || (error.code === 'RUNTIME_UNAVAILABLE'
+        && ['ENOENT', 'ENOTDIR'].some((code) => error.message
+          === 'codex-runtime-host: Codex process failed: spawn ' + process.execPath + ' ' + code)));
+    assert.equal(fs.existsSync(worktree), false);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+for (const transport of ['function', 'custom'])
+for (const [materialBytes, tamper] of [[1996419, null], [2553953, null], [1996419, 'missing-read'], [1996419, 'truncated'], [1996419, 'source-drift'], [1996419, 'wrong-echo'], [1996419, 'after-complete'], [1996419, 'foreign-completion'], [1996419, 'failed-read'], [1996419, 'surplus-output'], [1996419, 'known-count-early-asset'], [1996419, 'known-count-complete'], [1996419, 'duplicate-read'], [1996419, 'overlapping-read']].concat(transport === 'custom'
+  ? [[1996419, 'unsafe-wrapper']] : [])) test('fixture: ' + transport + ' ' + (tamper || 'complete') + ' ' + materialBytes + '-byte input traverses delivery, static native relay and fresh consumer', async () => {
+  const { execFileSync } = require('node:child_process');
+  const collector = require('../../plugins/delivery-pipeline/scripts/codex-arch-review-context.cjs');
+  const { createCodexDeliveryHost } = require('../../plugins/delivery-pipeline/scripts/codex-delivery-host.cjs');
+  const { codexStaticVariants } = require('../../plugins/delivery-pipeline/scripts/gsd-tune.cjs');
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'complete-input-fixture-')));
+  const store = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'complete-input-store-')));
+  const scope = { ...SCOPE, worktree: root, run_id: 'complete-input-' + materialBytes };
+  const material = 'BEGIN COMPLETE INPUT\n' + 'é'.repeat(Math.floor((materialBytes - 43) / 2))
+    + 'x'.repeat((materialBytes - 43) % 2) + '\nEND COMPLETE INPUT!!\n';
+  try {
+    assert.equal(Buffer.byteLength(material), materialBytes);
+    fs.mkdirSync(path.join(root, '.planning'));
+    fs.writeFileSync(path.join(root, '.planning/config.json'), '{}');
+    for (const args of [['init', '-q'],
+      ['config', '--local', 'user.name', 'Shipyard Test'],
+      ['config', '--local', 'user.email', 'shipyard-test@example.invalid'],
+      ['add', '-A'], ['commit', '-qm', 'fixture']])
+      execFileSync('git', ['-C', root, '-c', 'commit.gpgsign=false', ...args]);
+    const agents = path.join(store, 'agents'); fs.mkdirSync(agents, { mode: 0o700 });
+    const variants = codexStaticVariants().filter(value => value.role === 'integrator');
+    const agentDigests = {};
+    for (const variant of variants) {
+      const content = ['# shipyard-policy-id = "' + policy.POLICY.id + '"',
+        '# shipyard-policy-version = "' + policy.POLICY_VERSION + '"',
+        '# shipyard-policy-hash = "' + policy.POLICY_HASH + '"',
+        '# shipyard-policy-runtime = "codex"', '# shipyard-policy-role = "integrator"',
+        '# shipyard-policy-rung = "' + variant.rung + '"', 'name = "' + variant.file.replace(/\.toml$/, '') + '"',
+        'model = "' + variant.model + '"', 'model_reasoning_effort = "' + variant.effort + '"',
+        'sandbox_mode = "workspace-write"', "developer_instructions = '''",
+        'GENERATED INTEGRATOR INSTRUCTIONS', "'''", ''].join('\n');
+      fs.writeFileSync(path.join(agents, variant.file), content);
+      agentDigests[variant.file] = require('node:crypto').createHash('sha256').update(content).digest('hex');
+    }
+    const agentManifest = path.join(agents, '.shipyard-manifest.json');
+    fs.writeFileSync(agentManifest, JSON.stringify({ policy_id: policy.POLICY.id, policy_version: policy.POLICY_VERSION,
+      policy_hash: policy.POLICY_HASH, agent_files: Object.keys(agentDigests), agent_digests: agentDigests }));
+    const finiteFixture = ['known-count-early-asset', 'known-count-complete', 'duplicate-read', 'overlapping-read'].includes(tamper);
+    let fileInputContext;
+    if (finiteFixture) {
+      const selection = policy.resolveDispatch({ runtime: 'codex', role: 'integrator', signals: { inputTokens: Math.ceil(materialBytes / 4) } });
+      const instructions = collector.instructionEvidence(agents, selection.agent_file, agentManifest);
+      const parts = material.match(/[\s\S]{1,5000}/gu);
+      fileInputContext = collector.prepareFileInput(scope, parts, { role: 'integrator', dispatchId: 'complete-input-dispatch',
+        storageRoot: store, generatedInstructionBytes: instructions.generated_instruction_bytes,
+        binding: { agent_file: selection.agent_file, agent_path: path.join(agents, selection.agent_file),
+          agent_sha256: instructions.sha256, installed_files: instructions.installed_files, policy_hash: selection.policy_hash } });
+      const checked = collector.verifyFileInput(fileInputContext);
+      assert.ok(Math.ceil(checked.manifest_bytes.length / fileInputContext.input_bundle.chunk_bytes) > 7);
+      assert.deepEqual(Buffer.concat(checked.material), Buffer.from(material));
+      assert.equal(policy.resolveDispatch({ runtime: 'codex', role: 'integrator', signals: { inputTokens: fileInputContext.inputTokens } }).agent_file, selection.agent_file);
+    }
+    let consumed, stdin, launchedArgs;
+    const home = path.join(store, 'codex-home');
+    const nativeOptions = { scope, capabilities, env: { CODEX_HOME: home },
+      transcriptDir: path.join(store, 'transcripts'), spawn(executable, args) {
+        launchedArgs = args;
+        const child = new EventEmitter(); child.stdout = new EventEmitter(); child.stderr = new EventEmitter(); child.pid = 24037;
+        child.stdin = { write(text) { stdin = text; }, end() {
+          try {
+            const manifestPath = /^INPUT_MANIFEST=(.*)$/m.exec(stdin)[1];
+            const manifest = JSON.parse(fs.readFileSync(manifestPath));
+            const bundle = { manifest_path: manifestPath, manifest_sha256: /^INPUT_MANIFEST_SHA256=(.*)$/m.exec(stdin)[1],
+              total_bytes: manifest.accounting.material_bytes, asset_count: manifest.assets.length,
+              chunk_bytes: manifest.chunk_bytes, max_chunk_reads: manifest.max_chunk_reads,
+              manifest_identity: Object.fromEntries(['dev', 'ino', 'size', 'mtimeMs', 'ctimeMs', 'uid', 'mode'].map(key => [key, fs.statSync(manifestPath)[key]])) };
+            consumed = collector.verifyFileInput(bundle, { sealed: true });
+            assert.deepEqual(Buffer.concat(consumed.material), Buffer.from(material));
+            const selectedModel = args[args.indexOf('--model') + 1];
+            const selectedEffort = args.find(value => value.startsWith('model_reasoning_effort=')).split('"')[1];
+            const session = '11111111-1111-4111-8111-111111111111';
+            const native = writeSession(home, session, selectedModel, selectedEffort);
+            const assets = [{ path: manifestPath, bytes: consumed.manifest_bytes },
+              ...manifest.assets.map((asset, index) => ({ path: asset.path, bytes: consumed.material[index] }))];
+            const templates = captured(PARENT_FIXTURE).split('\n').filter(Boolean).map(JSON.parse);
+            const response = templates.find(record => record.type === 'response_item');
+            const wrap = payload => ({ ...structuredClone(response), payload });
+            const records = [];
+            let ordinal = 0;
+            for (const asset of assets) for (let index = 0; index < Math.ceil(asset.bytes.length / manifest.chunk_bytes); index++) {
+              const cmd = "dd if='" + asset.path + "' bs=" + manifest.chunk_bytes + ' skip=' + index + ' count=1 2>/dev/null | base64';
+              const callId = 'fixture-read-' + ordinal++;
+              const encoded = asset.bytes.subarray(index * manifest.chunk_bytes, (index + 1) * manifest.chunk_bytes).toString('base64');
+              if (transport === 'custom') records.push(wrap({
+                type: 'custom_tool_call', name: 'exec', call_id: callId,
+                input: 'text(await tools.exec_command(' + JSON.stringify({ cmd, max_output_tokens: 10000 }) + '));',
+              }), wrap({ type: 'custom_tool_call_output', call_id: callId,
+                output: [{ type: 'input_text', text: 'Script completed\nWall time 0.1 seconds\nOutput:' },
+                  { type: 'input_text', text: JSON.stringify({ chunk_id: callId, wall_time_seconds: 0.1,
+                    exit_code: 0, output: encoded }) }],
+              }));
+              else records.push(wrap({ type: 'function_call', name: 'exec_command', call_id: callId,
+                arguments: JSON.stringify({ cmd }) }), wrap({ type: 'function_call_output', call_id: callId,
+                output: JSON.stringify({ exit_code: 0, output: encoded }) }));
+            }
+            if (finiteFixture) {
+              const manifestCount = Math.ceil(consumed.manifest_bytes.length / manifest.chunk_bytes);
+              assert.ok(consumed.manifest_bytes.subarray(0, manifest.chunk_bytes).includes(Buffer.from('"manifest_bytes":' + consumed.manifest_bytes.length)));
+              const checksum = JSON.stringify({ sha256: require('node:crypto').createHash('sha256').update(consumed.manifest_bytes).digest('hex'), chunk_count: manifestCount });
+              assert.equal(JSON.parse(checksum).sha256, bundle.manifest_sha256);
+              const checksumProgram = 'const fs=require("node:fs"),crypto=require("node:crypto");const bytes=fs.readFileSync(' + JSON.stringify(manifestPath) + ');console.log(JSON.stringify({sha256:crypto.createHash("sha256").update(bytes).digest("hex"),chunk_count:Math.ceil(bytes.length/' + manifest.chunk_bytes + ')}));';
+              const cmd = "node -e '" + checksumProgram.replaceAll("'", "'\\''") + "'";
+              const checksumRecords = transport === 'custom'
+                ? [wrap({ type: 'custom_tool_call', name: 'exec', call_id: 'fixture-checksum',
+                  input: 'text(await tools.exec_command(' + JSON.stringify({ cmd, max_output_tokens: 10000 }) + '));' }),
+                wrap({ type: 'custom_tool_call_output', call_id: 'fixture-checksum', output: [
+                  { type: 'input_text', text: 'Script completed\nWall time 0.1 seconds\nOutput:' },
+                  { type: 'input_text', text: JSON.stringify({ exit_code: 0, output: checksum }) }] })]
+                : [wrap({ type: 'function_call', name: 'exec_command', call_id: 'fixture-checksum', arguments: JSON.stringify({ cmd }) }),
+                  wrap({ type: 'function_call_output', call_id: 'fixture-checksum', output: JSON.stringify({ exit_code: 0, output: checksum }) })];
+              if (tamper === 'known-count-early-asset') records.splice(14, records.length - 14, ...records.slice(manifestCount * 2, manifestCount * 2 + 2));
+              if (tamper === 'duplicate-read') {
+                const duplicate = structuredClone(records.slice(0, 2));
+                duplicate.forEach(record => { record.payload.call_id = 'fixture-duplicate'; });
+                records.splice(2, 0, ...duplicate);
+              }
+              if (tamper === 'overlapping-read') records.splice(1, 0, records.splice(2, 1)[0]);
+              records.unshift(...checksumRecords);
+            }
+            if (tamper === 'missing-read') records.pop();
+            if (tamper === 'unsafe-wrapper') records[0].payload.input += '\ntext("untrusted extra statement");';
+            if (tamper === 'failed-read' || tamper === 'surplus-output') {
+              if (transport === 'custom') {
+                const block = records.at(-1).payload.output[1];
+                const captured = JSON.parse(block.text);
+                block.text = JSON.stringify(tamper === 'failed-read'
+                  ? { ...captured, exit_code: 1 } : { ...captured, output: captured.output + 'AAAA' });
+              } else records.at(-1).payload.output = JSON.stringify({
+                exit_code: tamper === 'failed-read' ? 1 : 0,
+                output: JSON.parse(records.at(-1).payload.output).output + (tamper === 'surplus-output' ? 'AAAA' : ''),
+              });
+            }
+            if (tamper === 'truncated') {
+              if (transport === 'custom') {
+                const block = records.at(-1).payload.output[1];
+                block.text = JSON.stringify({ ...JSON.parse(block.text), output: 'truncated' });
+              } else records.at(-1).payload.output = records.at(-1).payload.output.slice(0, 8);
+            }
+            if (tamper === 'source-drift') fs.writeFileSync(path.join(root, '.planning/config.json'), '{"tampered":true}');
+
+            const output = transformJsonl(stream(session), record => {
+              if (record.type === 'item.completed' && record.item.type === 'agent_message') record.item.text = JSON.stringify({
+                input_manifest_sha256: tamper === 'wrong-echo' ? 'f'.repeat(64) : bundle.manifest_sha256,
+                input_material_bytes: bundle.total_bytes, input_asset_count: bundle.asset_count, input_chunk_reads: consumed.chunk_reads,
+              });
+              return record;
+            });
+            const resultText = output.split('\n').filter(Boolean).map(JSON.parse).find(record => record.item?.type === 'agent_message').item.text;
+            const parentRecords = fs.readFileSync(native, 'utf8').split('\n').filter(Boolean).map(JSON.parse);
+            for (const record of parentRecords) if (record.payload?.type === 'task_complete') record.payload.last_agent_message = tamper === 'foreign-completion' ? 'foreign result' : resultText;
+            for (const record of parentRecords) if (record.payload?.type === 'message' && record.payload.phase === 'final_answer') record.payload.content.forEach(block => { block.text = resultText; });
+            const boundary = parentRecords.findIndex(record => (record.payload?.type === 'message' && record.payload.phase === 'final_answer')
+              || (record.payload?.type === 'item_completed' && record.payload.item?.phase === 'final_answer'));
+            parentRecords.splice(tamper === 'after-complete' ? parentRecords.length : boundary, 0, ...records);
+            fs.writeFileSync(native, parentRecords.map(JSON.stringify).join('\n') + '\n');
+            process.nextTick(() => { child.stdout.emit('data', Buffer.from(output)); child.emit('close', 0, null); });
+          } catch (error) { process.nextTick(() => child.emit('error', error)); }
+        } };
+        return child;
+      } };
+    const host = createCodexRuntimeHost({ ...nativeOptions, probe: probe(),
+      recorderDir: path.join(store, 'receipts') });
+    const run = () => createCodexDeliveryHost({ scope, host, agentDir: agents, agentManifest, storageRoot: store, fileInputContext })
+      .run({ role: 'integrator', ...(fileInputContext ? { signals: { inputTokens: fileInputContext.inputTokens } } : {}), context: fileInputContext
+        ? { prompt: fileInputContext.prompt, input_transport: 'host-files', input_bundle: fileInputContext.input_bundle }
+        : { prompt: material }, dispatch_id: 'complete-input-dispatch' });
+    if (tamper && tamper !== 'known-count-complete') {
+      await assert.rejects(run, error => tamper === 'source-drift'
+        ? error.code === 'RUNTIME_EVIDENCE_INVALID' && /current source or policy changed/.test(error.message)
+        : tamper === 'known-count-early-asset'
+          ? error.code === 'RUNTIME_EVIDENCE_MISMATCH' && /reordered, duplicated or exceeds its budget/.test(error.message)
+          : ['RUNTIME_EVIDENCE_MISMATCH', 'STALE_CONTEXT'].includes(error.code));
+      assert.equal(host.recorder.getVerifiedRecord('complete-input-dispatch'), null);
+      return;
+    }
+    let result;
+    await assert.doesNotReject(async () => { result = await run(); },
+      'complete input must traverse the supported ' + transport + ' tool ABI');
+    assert.ok(stdin.startsWith('GENERATED INTEGRATOR INSTRUCTIONS\n\n'));
+    assert.ok(Buffer.byteLength(stdin) < collector.FILE_LIMITS.relay + 100);
+    assert.equal(result.receipt.runtime_evidence.input_transport, 'host-files');
+    const accounting = result.receipt.runtime_evidence.input_accounting;
+    assert.equal(accounting.material_bytes, materialBytes);
+    assert.equal(accounting.generated_instruction_bytes, Buffer.byteLength('GENERATED INTEGRATOR INSTRUCTIONS\n\n'));
+    assert.equal(result.signals.inputTokens, Math.ceil(Object.values(accounting).reduce((sum, bytes) => sum + bytes, 0) / 4));
+    assert.equal(launchedArgs[launchedArgs.indexOf('--model') + 1], result.receipt.applied_model);
+    const descriptor = result.receipt.runtime_evidence.input_bundle;
+    const inputFile = path.join(store, 'fresh-input.json'); fs.writeFileSync(inputFile, JSON.stringify(descriptor));
+    const output = execFileSync(process.execPath, ['-e', `const c=require(${JSON.stringify(path.resolve(__dirname, '../../plugins/delivery-pipeline/scripts/codex-arch-review-context.cjs'))});
+      const fs=require('node:fs'); const v=c.verifyFileInput(JSON.parse(fs.readFileSync(process.argv[1])),{sealed:true});
+      process.stdout.write(require('node:crypto').createHash('sha256').update(Buffer.concat(v.material)).digest('hex'));`, inputFile], { encoding: 'utf8' });
+    assert.equal(output, require('node:crypto').createHash('sha256').update(material).digest('hex'));
+  } finally { fs.rmSync(root, { recursive: true, force: true }); fs.rmSync(store, { recursive: true, force: true }); }
 });
 
 done();

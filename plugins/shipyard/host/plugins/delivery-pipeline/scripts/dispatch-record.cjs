@@ -89,6 +89,7 @@ const {
 const { activeTrackerSnapshotLocked } = require(path.join(__dirname, 'tracker-record.cjs'));
 const runTelemetry = require(path.join(__dirname, 'run-telemetry.cjs'));
 const hostProvenance = require(path.join(__dirname, 'host-provenance.cjs'));
+const { normalizeTicketIdentity, normalizePhaseIdentity } = require('./run-contract.cjs');
 
 // HOW LONG A DISPATCH MAY STAY SILENT — the backstop, not the main rule. It only
 // has to cover the longest stretch of REAL work that legitimately moves no
@@ -133,7 +134,7 @@ const DISPATCH_SUBJECT = {
   'ci-fix': { fields: ['head_sha', 'status', 'pr'], lifts: "the PR's head moves (a push)" },
   'review-fix': { fields: ['head_sha', 'status', 'pr'], lifts: "the PR's head moves (a push)" },
   // A judge writes a verdict into the PR body (`gate_status:`) and may undraft.
-  'arch-review': { fields: ['gate', 'draft', 'status'], lifts: 'the gate trailer or the draft state changes' },
+  'arch-review': { fields: ['gate', 'draft', 'status', 'pr_base', 'head_sha', 'architecture'], lifts: 'the gate trailer or the draft state changes' },
   // The guard's output is a merge, or the retarget that follows one.
   'pr-sentinel': { fields: ['status', 'pr_base', 'pr'], lifts: 'the PR merges, or its base moves' },
   integrator: {
@@ -1290,9 +1291,22 @@ function telemetryFor(recorded, ticket, role) {
 // reliably produced five). The lock sits beside the STORE, never at cwd: a mark
 // run from a ticket worktree would otherwise take a lock nobody else contends
 // for and serialize nothing.
-function mutate(cwd, fn, fence = (commit) => commit(), strictLoad = false) {
+function authenticateBookkeeping(cwd, fn, writtenPaths, required = false) {
+  const worktree = path.resolve(graphDir(cwd), '../..');
+  const authority = require('./role-artifact.cjs');
+  if (!required && !fs.existsSync(path.join(worktree, '.shipyard-role-artifacts'))
+      && authority.historicalBookkeepingPins(worktree).length === 0) return fn();
+  return authority.trustedBookkeepingMutation(worktree, fn, writtenPaths);
+}
+
+function localInflightBookkeeping(input, cwd) {
+  return typeof input.worktree === 'string'
+    && fs.realpathSync(input.worktree) === fs.realpathSync(path.resolve(graphDir(cwd), '../..'));
+}
+
+function mutate(cwd, fn, fence = (commit) => commit(), strictLoad = false, authenticate = false) {
   fs.mkdirSync(graphDir(cwd), { recursive: true });
-  return withLock(lockDirFor(cwd), 'dispatch-record', () => {
+  return authenticateBookkeeping(cwd, () => withLock(lockDirFor(cwd), 'dispatch-record', () => {
     const store = load(cwd, strictLoad);
     const commit = () => {
       const extra = fn(store);
@@ -1309,7 +1323,7 @@ function mutate(cwd, fn, fence = (commit) => commit(), strictLoad = false) {
       return extra;
     };
     return fence(commit);
-  }, { label: 'dispatch-record' });
+  }, { label: 'dispatch-record' }), ['.planning/graph/dispatches.json'], authenticate);
 }
 
 const roleOf = (rec) => (typeof rec === 'string' ? rec : ((rec && rec.role) || 'an agent'));
@@ -1483,6 +1497,14 @@ const INFLIGHT_TOKEN = /^[A-Za-z0-9._:-]{1,200}$/;
 function inflightSubject(ticket, role) {
   if (typeof ticket !== 'string' || ticket.length > 4096) return false;
   if (INFLIGHT_TICKET.test(ticket)) return true;
+  if (role === 'arch-review') return require('./architecture-target.cjs').PHASE_SUBJECT.test(ticket);
+  if (['research', 'decomposition'].includes(role)) {
+    try {
+      const phaseInput = /^phase=(\d+);/.exec(ticket);
+      const phase = phaseInput ? normalizePhaseIdentity(phaseInput[1]).phase : undefined;
+      return normalizeTicketIdentity(ticket, { role, phase }).ticket === ticket;
+    } catch { return false; }
+  }
   return ['integrator', 'pr-sentinel'].includes(role)
     && /^phase=[A-Za-z0-9._-]+;repository=\/[^;\x00-\x1f]+;tickets=[a-f0-9]{64}$/.test(ticket);
 }
@@ -1526,9 +1548,9 @@ function recordInflight(input) {
     }
     store.inflight[dispatchId] = row;
     return null;
-  }, undefined, true);
-  writeProvenanceOnce(graphDir(cwd), { dispatch_id: dispatchId, ticket, role, recorded_at: row.started_at });
-  refreshFront(cwd);
+  }, undefined, true, localInflightBookkeeping(input, cwd));
+  writeProvenanceOnce(graphDir(cwd), { dispatch_id: dispatchId, ticket, role, recorded_at: row.started_at }, localInflightBookkeeping(input, cwd));
+  if (input.refreshBoard !== false) refreshFront(cwd);
   return Object.freeze({ ...row });
 }
 
@@ -1539,7 +1561,8 @@ function provenanceFile(dir, dispatchId) {
 }
 
 // @invariant: a provenance sidecar is written once per dispatch_id and never overwritten.
-function writeProvenanceOnce(dir, fields) {
+function writeProvenanceOnce(dir, fields, authenticate) {
+  return authenticateBookkeeping(path.resolve(dir, '../..'), () => {
   const file = provenanceFile(dir, fields.dispatch_id);
   if (fs.existsSync(file)) return false;
   const stamp = hostProvenance.current({ pluginRoot: path.join(__dirname, '..') });
@@ -1555,6 +1578,7 @@ function writeProvenanceOnce(dir, fields) {
   } finally {
     try { fs.unlinkSync(staged); } catch {}
   }
+  }, ['.planning/graph/provenance/' + fields.dispatch_id + '.json'], authenticate);
 }
 
 function readProvenance(dir, dispatchId) {
@@ -1579,8 +1603,8 @@ function clearInflight(input) {
     delete store.inflight[dispatchId];
     cleared = true;
     return null;
-  }, undefined, true);
-  if (cleared) refreshFront(cwd);
+  }, undefined, true, localInflightBookkeeping(input, cwd));
+  if (cleared && input.refreshBoard !== false) refreshFront(cwd);
   return cleared;
 }
 

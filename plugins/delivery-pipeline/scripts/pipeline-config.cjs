@@ -90,6 +90,7 @@ const fs = require('fs');
 const path = require('path');
 const { resolveRuntime, readInheritedConfig } = require('./runtime-context.cjs');
 const modelPolicy = require('./model-policy.cjs');
+const { resolveIntegrationBranch, architectureTarget } = require('./architecture-target.cjs');
 
 // A dispatch context is issued by loadConfig, not by a caller mutating the
 // returned config. Keep that binding private so routed readers can reject a
@@ -2407,6 +2408,7 @@ function signalGaps(role, signals = {}, cfg = DEFAULTS) {
 }
 
 module.exports = {
+  resolveIntegrationBranch, architectureTarget,
   resolveDispatch, COMPATIBILITY_ROLES, ROUTED_ROLES,
   loadConfig, resolveModel, resolveEffort, resolveTaskLevel, strategyFor, fableRoute, signalGaps, repoValue,
   routeOf, parseRoute, ROUTE_RE, runtimeToken,

@@ -184,7 +184,27 @@ function readSidecar(file) {
 }
 
 function isWrapper(argv, wrapper) {
-  return Array.isArray(argv) && argv.some((value) => path.resolve(value) === path.resolve(wrapper));
+  const identity = value => {
+    try { return fs.realpathSync(value); } catch { return path.resolve(value); }
+  };
+  return Array.isArray(argv) && argv.some((value) => identity(value) === identity(wrapper));
+}
+
+function safeDelegate(argv, wrapper, depth = 0) {
+  if (argv === null) return null;
+  if (!Array.isArray(argv) || argv.some(value => typeof value !== 'string')) fail('invalid notification delegate');
+  if (depth > 16) fail('notification delegate chain is too deep');
+  if (isWrapper(argv, wrapper)) return null;
+  const safe = [...argv];
+  for (let i = 0; i < safe.length; i++) {
+    if (safe[i] !== '--previous-notify') continue;
+    let previous;
+    try { previous = JSON.parse(safe[i + 1]); } catch { fail('invalid previous notification delegate'); }
+    const cleaned = safeDelegate(previous, wrapper, depth + 1);
+    if (JSON.stringify(cleaned) !== JSON.stringify(previous)) safe[i + 1] = JSON.stringify(cleaned || []);
+    i++;
+  }
+  return safe;
 }
 
 function main(argv = process.argv.slice(2)) {
@@ -205,7 +225,7 @@ function main(argv = process.argv.slice(2)) {
       return { changed: false, verification: 'not-installed' };
     }
     if (!currentSidecar) fail(`cannot remove Codex notify wrapper without a valid delegate record: ${delegateFile}`);
-    const restored = currentSidecar.had_notify ? currentSidecar.delegate : null;
+    const restored = currentSidecar.had_notify ? safeDelegate(currentSidecar.delegate, wrapper) : null;
     const next = restored ? replaceNotify(existing, restored) : (() => {
       let start = found.start;
       if (start > 0 && existing[start - 1] === '\n') start--;
@@ -228,6 +248,7 @@ function main(argv = process.argv.slice(2)) {
   } else {
     delegate = found.argv;
   }
+  delegate = safeDelegate(delegate || null, wrapper);
   const next = replaceNotify(existing, [process.execPath, wrapper]);
   const mode = fs.existsSync(target) ? fs.statSync(target).mode & 0o777 : 0o600;
   const sidecar = {

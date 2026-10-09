@@ -16,10 +16,10 @@ const { newDispatchId, createDispatchBoundary, createDurableRecorder } = require
 const { createRunScope } = require('./run-scope.cjs');
 const { createRunController, DEFAULT_LEASE_TTL_MS } = require('./run-controller.cjs');
 const { formatHint } = require('./refusal-hints.cjs');
-const { sealDecomposition, assertContained } = require('./planning-result-sealer.cjs');
+const { sealDecomposition, assertContained, captureContainmentBaseline,
+  persistContainmentBaseline, restoreContainmentBaseline } = require('./planning-result-sealer.cjs');
 const { createPlanningWriterLease, sharedPlanningWriterRoot, legacyPlanningWriterRoots,
   assertNoLegacyPlanningWriter, captureSealManifest, assertSealManifest } = require('./planning-writer-lease.cjs');
-const { dispatchStateDir } = require('./deliver-dispatch.cjs');
 const orchestrationOverhead = require('./orchestration-overhead.cjs');
 
 const SCHEMA = 'shipyard.codex-decompose-host.v1';
@@ -160,7 +160,8 @@ function assertNoForeignEdit(leaseCtx, scope, directory, declaredAbsolutePaths) 
 
 function sealResearchArtifact(scope, root, output, leaseCtx) {
   const artifact = researchArtifact(scope.worktree, scope.phase);
-  assertContained({ worktree: scope.worktree, allowed: [path.relative(scope.worktree, artifact)] });
+  assertContained({ worktree: scope.worktree, allowed: [path.relative(scope.worktree, artifact)],
+    baseline: leaseCtx?.containmentBaseline });
   let stat;
   try { stat = fs.lstatSync(artifact); }
   catch (_) { fail('MISSING_ARTIFACT', 'phase research artifact is missing: ' + artifact); }
@@ -182,11 +183,14 @@ function sealResearchArtifact(scope, root, output, leaseCtx) {
 
 function sealPlans(scope, root, output, leaseCtx) {
   const directory = phaseDirectory(scope.worktree, scope.phase);
-  assertContained({ worktree: scope.worktree, allowed: [path.relative(scope.worktree, directory)] });
   const names = fs.readdirSync(directory).filter((name) => new RegExp(`^0*${scope.phase}-[0-9]+-PLAN\\.md$`).test(name)).sort();
   if (!names.length) fail('MISSING_ARTIFACT', 'no materialized PLAN.md files were found in ' + directory);
   const plans = [...(fs.existsSync(path.join(directory, 'CONTEXT.md')) ? ['CONTEXT.md'] : []), ...names]
     .map((name) => path.join(directory, name));
+  assertContained({ worktree: scope.worktree,
+    allowed: leaseCtx?.containmentBaseline === undefined ? [path.relative(scope.worktree, directory)]
+      : plans.map((file) => path.relative(scope.worktree, file)),
+    baseline: leaseCtx?.containmentBaseline });
   assertNoForeignEdit(leaseCtx, scope, directory, plans);
   return sealDecomposition({
     root: path.join(root, 'decomposition-index'),
@@ -293,6 +297,14 @@ function launchBinding(scope, request, dispatchId, resolution, agent, generatedA
   });
 }
 
+function containmentBinding(record, worktree) {
+  return { launch: record.binding, source_revision: sourceRevision(worktree),
+    launched_at: record.launched_at, reservation: record.reservation,
+    writer_lease_file: record.writer_lease_file, lease_epoch: record.lease_epoch,
+    lease_identity_sha256: record.containment_lease_sha256,
+    tree_snapshot_sha256: sha256Text(canonicalJson(record.tree_snapshot)) };
+}
+
 function validTaskRelay(value) {
   return object(value) && typeof value.path === 'string' && path.isAbsolute(value.path)
     && path.normalize(value.path) === value.path && Number.isSafeInteger(value.bytes) && value.bytes >= 0
@@ -347,16 +359,19 @@ function declaredArtifactPaths(message, scope, gsdRole, code = 'RECOVERY_EVIDENC
   return declared;
 }
 
-function artifactDigests(scope, writerLease, snapshot, declared, code) {
+function artifactDigests(scope, writerLease, snapshot, declared, code, containmentBaseline) {
   const changed = writerLease.changedSince(snapshot).changed;
   if (changed.length !== declared.length || changed.some((relPath, index) => relPath !== declared[index])) {
     fail(code, 'planning tree delta differs from the authenticated child artifact declaration');
   }
   const directory = phaseDirectory(scope.worktree, scope.phase);
   try {
-    assertContained({ worktree: scope.worktree, allowed: [path.relative(scope.worktree, directory)] });
-  } catch (_) {
-    fail(code, 'planning tree changed outside the current phase directory');
+    assertContained({ worktree: scope.worktree,
+      allowed: containmentBaseline === undefined ? [path.relative(scope.worktree, directory)]
+        : declared.map((relative) => path.relative(scope.worktree, path.join(directory, relative))),
+      baseline: containmentBaseline });
+  } catch (error) {
+    fail(code, 'planning tree containment refused: ' + error.message);
   }
   let worktreeReal;
   let directoryReal;
@@ -553,7 +568,8 @@ function createCodexDecomposeHost(options = {}) {
     async run(rawRequest, runOptions = {}) {
       const request = requestValue(rawRequest);
       const recovering = object(runOptions.recovered);
-      const leaseCtx = recovering ? runOptions.lease : options.lease || null;
+      const suppliedLease = recovering ? runOptions.lease : options.lease;
+      const leaseCtx = suppliedLease ? Object.freeze({ ...suppliedLease }) : null;
           const chosen = ROLES[request.gsd_role];
           const agent = installedGsdAgent(request.gsd_role, env);
           let launched = false;
@@ -603,11 +619,16 @@ function createCodexDecomposeHost(options = {}) {
             binding,
             reservation: { dispatch_id: reservation.dispatch_id, reserved_at: reservation.reserved_at },
             lease_epoch: leaseCtx.epoch,
+            containment_lease_sha256: sha256Text(leaseCtx.token),
             writer_lease_file: leaseCtx.writerLease.file,
             tree_snapshot: leaseCtx.snapshot,
             launched_at: new Date().toISOString(),
           } : null;
-          if (launchRecord) writeLaunchRecord(options.launchDir, launchRecord);
+          if (launchRecord) {
+            launchRecord.containment_baseline = persistContainmentBaseline({ worktree: scope.worktree,
+              baseline: leaseCtx.containmentBaseline, binding: containmentBinding(launchRecord, scope.worktree) });
+            writeLaunchRecord(options.launchDir, launchRecord);
+          }
           const captureProcessSpawned = launchRecord ? (pid) => {
             if (!Number.isSafeInteger(pid) || pid <= 0) {
               fail('RUNTIME_EVIDENCE_MISSING', 'native process has no positive original pid');
@@ -670,7 +691,7 @@ function createCodexDecomposeHost(options = {}) {
             const declared = declaredArtifactPaths(completed.last_agent_message, scope, request.gsd_role,
               'ARTIFACT_DECLARATION_INVALID');
             const digests = artifactDigests(scope, leaseCtx.writerLease, leaseCtx.snapshot, declared,
-              'ARTIFACT_DECLARATION_INVALID');
+              'ARTIFACT_DECLARATION_INVALID', leaseCtx.containmentBaseline);
             const fullOutputManifest = captureSealManifest({ role: request.gsd_role,
               phaseDir: phaseDirectory(scope.worktree, scope.phase), snapshot: leaseCtx.snapshot,
               declared, changed: Object.keys(digests).sort() });
@@ -813,7 +834,7 @@ function createCodexDecomposeHost(options = {}) {
             assertNoForeignEdit(leaseCtx, scope, directory,
               declared.map((item) => path.join(directory, item)));
             const current = artifactDigests(scope, leaseCtx.writerLease, leaseCtx.snapshot,
-              declared, 'RECOVERY_ARTIFACT_ALTERED');
+              declared, 'RECOVERY_ARTIFACT_ALTERED', leaseCtx.containmentBaseline);
             if (canonicalJson(current) !== canonicalJson(completed.artifact_digests)) {
               fail('RECOVERY_ARTIFACT_ALTERED', 'completed artifact bytes changed before recorder mutation');
             }
@@ -919,7 +940,7 @@ function detachCli(argv, stdout, options) {
   if (dispatchId === '.' || dispatchId === '..' || /[\\/]/.test(dispatchId) || path.isAbsolute(dispatchId)) {
     fail('INVALID_INPUT', 'dispatch_id must be a path-safe identifier for detached mode');
   }
-  const stateRoot = path.resolve(dispatchStateDir(options));
+  const stateRoot = path.resolve(require('./deliver-dispatch.cjs').dispatchStateDir(options));
   const directory = path.resolve(stateRoot, dispatchId);
   const relative = path.relative(stateRoot, directory);
   if (relative === '' || relative.startsWith('..') || path.isAbsolute(relative)) {
@@ -1147,8 +1168,11 @@ async function recoverCli(argv, stdout, options) {
     const declaredSet = new Set(declared);
     const foreign = writerLease.changedSince(record.tree_snapshot).changed.filter((item) => !declaredSet.has(item));
     if (foreign.length) fail('FOREIGN_EDIT', 'phase directory path(s) changed outside the authenticated child declaration: ' + foreign.join(', '));
+    const containmentBaseline = restoreContainmentBaseline({ worktree: scope.worktree,
+      binding: containmentBinding(record, scope.worktree), reference: record.containment_baseline,
+      recoveredEpoch: leaseHandle.epoch });
     const currentDigests = artifactDigests(scope, writerLease, record.tree_snapshot, declared,
-      'RECOVERY_ARTIFACT_ALTERED');
+      'RECOVERY_ARTIFACT_ALTERED', containmentBaseline);
     if (canonicalJson(currentDigests) !== canonicalJson(completed.artifact_digests)) {
       fail('RECOVERY_ARTIFACT_ALTERED', 'phase artifacts differ from the digests recorded when the child completed');
     }
@@ -1207,7 +1231,7 @@ async function recoverCli(argv, stdout, options) {
     });
     const result = await host.run(request, {
       recovered: { applied, output, binding: record.binding },
-      lease: { writerLease, token: leaseHandle.token, epoch: leaseHandle.epoch, snapshot: record.tree_snapshot },
+      lease: { writerLease, token: leaseHandle.token, epoch: leaseHandle.epoch, snapshot: record.tree_snapshot, containmentBaseline },
     });
     controller.complete(scope.run_id, { reason: 'recovered typed GSD receipt ' + dispatchId });
     stdout.write(JSON.stringify(result) + '\n');
@@ -1261,6 +1285,7 @@ async function runCli(argv = process.argv.slice(2), stdout = process.stdout, opt
   let dispatchId;
   let stopHeartbeat = () => {};
   try {
+  const containmentBaseline = captureContainmentBaseline({ worktree: scope.worktree });
   const leaseSnapshot = writerLease.snapshotTree();
   const request = parsed.launch;
   dispatchId = request.dispatch_id || newDispatchId();
@@ -1314,7 +1339,7 @@ async function runCli(argv = process.argv.slice(2), stdout = process.stdout, opt
       agentDir: options.agentDir,
       agentManifest: options.agentManifest,
       sealRoot: path.join(hostStateDir, 'sealed'),
-      lease: { writerLease, token: leaseHandle.token, epoch: leaseHandle.epoch, snapshot: leaseSnapshot },
+      lease: { writerLease, token: leaseHandle.token, epoch: leaseHandle.epoch, snapshot: leaseSnapshot, containmentBaseline },
       launchDir: options.launchDir || path.join(hostStateDir, 'launches'),
     });
     result = await host.run({ ...request, dispatch_id: dispatchId });
@@ -1359,7 +1384,7 @@ module.exports = Object.freeze({
 });
 
 if (require.main === module) {
-  runCli().catch((error) => {
+  Promise.resolve().then(() => runCli()).catch((error) => {
     process.stderr.write('codex-decompose-host: ' + (error && error.message ? error.message : error) + '\n');
     process.stderr.write(formatHint(error && error.code) + '\n');
     process.exitCode = 1;

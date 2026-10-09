@@ -92,7 +92,7 @@ const {
 } = require(path.join(__dirname, 'parent-moving.cjs'));
 // The trailer's classification comes from its own module — the board and the
 // guard (sentinel.cjs) must never disagree about whether a verdict counts.
-const { gateConform: trailerConform, gateWhy } = require(path.join(__dirname, 'gate-trailer.cjs'));
+const { gateWhy } = require(path.join(__dirname, 'gate-trailer.cjs'));
 // The check vocabulary, from the file that owns it. `isGreen` rather than the
 // inline `failing === 0 && pending === 0` this file used to spell out: an
 // UNAVAILABLE reading (a 503, a rate limit, an old `gh` rejecting `bucket`)
@@ -685,7 +685,10 @@ function computeFront(tickets, state, opts = {}) {
         // Draft is the pre-gate state: threads, arch-review and the conform gate
         // are all still ahead, and every one of them is work the run can do now.
         actionable.finalize.push(id);
-        why[id] = `PR #${s.pr}: green and still a draft — threads, arch-review, conform gate`;
+        why[id] = `PR #${s.pr}: green and still a draft — service feedback, ${architectureRequired(s) ? 'authenticated architecture review' : 'architecture skipped-by-target'}, undraft`;
+      } else if (architectureRequired(s) && !gateConform(s) && s.review_decision !== 'CHANGES_REQUESTED') {
+        actionable.finalize.push(id);
+        why[id] = `PR #${s.pr}: integration target requires a fresh authenticated architecture verdict on this head and base`;
       } else if (needsHuman(t, s) && green) {
         // Out of draft on a checkpoint ticket whose judgement nobody has supplied
         // = the gate was cleared and the approval/merge is the human's. A
@@ -1130,8 +1133,18 @@ function computeFront(tickets, state, opts = {}) {
 // arch-review never saw. `sentinel.cjs merge` refuses that against the LIVE head,
 // so the board has to refuse it too — the front must never offer what the guard
 // declines, or every round re-proposes the same impossible action.
+function architectureRequired(s) {
+  return require('./architecture-target.cjs').architectureTarget({ base: s?.pr_base || s?.base,
+    integrationBranch: s?.integration_branch, epic: s?.epic,
+    ticketBranches: s?.merge_scope === 'stacked' ? [s?.pr_base || s?.base] : [] }).required;
+}
 function gateConform(s) {
-  return trailerConform((s || {}).gate, (s || {}).head_sha);
+  if (!architectureRequired(s)) return true;
+  return /^[a-f0-9]{40}$/.test(s?.head_sha || '') && /^[a-f0-9]{40}$/.test(s?.pr_base_sha || '')
+    && s?.authenticated_architecture?.authenticated === true && s.authenticated_architecture.pr === s.pr
+    && s.authenticated_architecture.verdict === 'conform'
+    && s.authenticated_architecture.head === s.head_sha && s.authenticated_architecture.base_commit === s.pr_base_sha
+    && s.authenticated_architecture.base === (s.pr_base || s.base);
 }
 
 // EXPECTED CI LENGTH, as a per-repo median over the delivery journal.
