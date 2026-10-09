@@ -1278,7 +1278,8 @@ test('tracer: original measured 128 KiB output admits producer relay and ordered
       execFileSync('git', argv, { cwd: root, stdio: 'pipe' });
     const native = writeSession(home, session, 'gpt-6-luna', 'max');
     const original = fs.readFileSync(native, 'utf8').split('\n').filter(Boolean).map(JSON.parse);
-    const wrap = payload => ({ type: 'response_item', payload });
+    const response = original.find(record => record.type === 'response_item');
+    const wrap = payload => ({ ...structuredClone(response), payload });
     const transcript = (prepared, chunkBytes) => {
       const checked = collector.verifyFileInput(prepared);
       const assets = [{ path: prepared.input_bundle.manifest_path, bytes: checked.manifest_bytes },
