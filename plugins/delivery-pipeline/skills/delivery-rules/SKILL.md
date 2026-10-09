@@ -20,9 +20,13 @@ review. For the phase epic PR, explicitly select the canonical phase directory a
 actual integration PR from the epic worktree:
 
 ```sh
-node ${CLAUDE_PLUGIN_ROOT}/scripts/deliver-dispatch.cjs build arch-review <phase-directory> --phase <N> --pr <integration-pr> --runtime <codex|claude>
+node ${CLAUDE_PLUGIN_ROOT}/scripts/deliver-dispatch.cjs build arch-review <phase-directory> --phase <N> --pr <integration-pr> --runtime <codex|claude> [--repo owner/name]
 node ${CLAUDE_PLUGIN_ROOT}/scripts/gate-trailer.cjs verify <integration-pr> --worktree <epic-worktree> --graph <project-root>/.planning/graph [--repo owner/name]
 ```
+
+For a foreign repository phase, pass `--repo owner/name` to both commands to
+select that repository’s phase tickets and integration PR. For a local repository
+phase, omit `--repo` and invoke from its epic worktree as above.
 
 Both hosts derive the aggregate subject from actual phase graph membership,
 repository, PR, exact live head and base. The context includes the entire aggregate

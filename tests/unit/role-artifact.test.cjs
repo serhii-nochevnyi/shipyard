@@ -252,6 +252,7 @@ function sealArchReview(value, result) {
     dispatchId: value.dispatch.receipt.dispatch_id,
     result,
     evidencePath,
+    ...(value.ticketSet ? { ticketSet: value.ticketSet } : {}),
   });
 }
 
@@ -1350,6 +1351,48 @@ function fixtureAggregateHint(value, row, boundary) {
     sha256: require('node:crypto').createHash('sha256').update(bytes).digest('hex') });
   return { familyName, id, record: { dispatch_id: id, ticket: subject, receipt: dispatch.receipt, pins } };
 }
+
+for (const conflict of [null, 'ticket', 'receipt.ticket', 'runtime_evidence.ticket'])
+test('phase-local archive scope: batch catalogue aggregate identities ' + (conflict || 'discover current verdict'), () => {
+  const value = phaseScopeFixture();
+  try {
+    const selected = value.select();
+    const subject = value.input.binding.subject;
+    const dispatch = createDispatchBoundary({ adapters: { claude: { launch: judgmentReceipt } },
+      recorder: value.recorder }).dispatch({ runtime: 'claude', role: 'arch-review', signals: {} },
+      { ticket: subject, subject_kind: 'phase', phase: 47 });
+    const aggregate = { ...value, ticket: subject, dispatch, ticketSet: value.input.binding.ticketSet };
+    sealArchReview(aggregate, archReviewResult(aggregate, { verdict: 'conform', blocking_count: 0,
+      ticket_set: aggregate.ticketSet,
+      host_context: { phase_archive_selection: selected.selection, graph_dir: value.input.graphDir,
+        phase_repo: null, phase_evidence_digest: roleArtifact.phaseArchitectureEvidenceDigest(selected.evidence) } }));
+    mutateFixtureCatalogue(value, payload => {
+      const record = payload.records[dispatch.receipt.dispatch_id];
+      delete record.ticket;
+      record.receipt.ticket = subject;
+      record.receipt.runtime_evidence = { ...record.receipt.runtime_evidence, ticket: subject };
+      if (conflict === 'ticket') record.ticket = 'T-47-conflict';
+      if (conflict === 'receipt.ticket') record.receipt.ticket = 'T-47-conflict';
+      if (conflict === 'runtime_evidence.ticket') record.receipt.runtime_evidence.ticket = 'T-47-conflict';
+    });
+    const parsed = require('../../plugins/delivery-pipeline/scripts/architecture-target.cjs').PHASE_SUBJECT.exec(subject);
+    const lookup = extra => roleArtifact.currentArchitectureVerdict({ worktreePath: value.root,
+      graphDir: value.input.graphDir, pr: 404, head: parsed[5], baseCommit: parsed[6],
+      baseName: 'main', headBranch: 'epic/47-scope', ...extra });
+    if (conflict) {
+      for (const check of [value.select, lookup]) assert.throws(check,
+        { code: 'ARCHIVE_AUTHORITY_INVALID', message: /original receipt identity differs/ });
+    } else {
+      assert.equal(value.select().candidates[0].dispatch_id, dispatch.receipt.dispatch_id);
+      assert.equal(lookup().dispatch_id, dispatch.receipt.dispatch_id);
+      assert.equal(lookup({ pr: 405 }), null);
+      assert.equal(lookup({ head: parsed[6] }), null);
+      assert.equal(lookup({ baseName: 'develop' }), null);
+      assert.equal(lookup({ baseCommit: parsed[5] }), null);
+      assert.equal(lookup({ repo: 'acme/foreign' }), null);
+    }
+  } finally { cleanPhaseScope(value); }
+});
 
 for (const registered of [false, true])
 test('phase-local archive scope: unselected missing producer is not opened in ' +

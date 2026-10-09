@@ -1588,6 +1588,14 @@ function selectedArchiveRecord(scope, row, trusted) {
   return { worktree: row.worktree, dispatch_id: row.dispatch_id, receipt: row.receipt, files };
 }
 
+function authenticatedRecordSubject(record) {
+  const identities = [record.ticket, record.receipt?.ticket, record.receipt?.runtime_evidence?.ticket]
+    .filter(value => value !== undefined);
+  if (identities.some(value => typeof value !== 'string' || !value || value !== identities[0]))
+    fail('ARCHIVE_AUTHORITY_INVALID', 'aggregate candidate original receipt identity differs');
+  return identities[0];
+}
+
 function selectedPhaseJudgments(scope, binding, roster) {
   const candidates = [];
   const worktrees = [...new Set([scope.root, scope.project, ...roster.records.map(row => row.worktree)])];
@@ -1596,10 +1604,8 @@ function selectedPhaseJudgments(scope, binding, roster) {
     if (!fs.existsSync(catalogue)) continue;
     const state = scope.verification ? scope.verification.authority(worktree) : authorityState(worktree);
     for (const record of Object.values(state.payload.records)) {
-      if (record.ticket !== binding.subject || record.receipt?.role !== 'arch-review') continue;
-      if ([record.receipt.ticket, record.receipt.runtime_evidence?.ticket]
-          .some(value => value !== undefined && value !== binding.subject))
-        fail('ARCHIVE_AUTHORITY_INVALID', 'aggregate candidate original receipt identity differs');
+      if (record.receipt?.role !== 'arch-review') continue;
+      if (authenticatedRecordSubject(record) !== binding.subject) continue;
       if (candidates.length >= 1000)
         fail('ARCHIVE_AUTHORITY_INVALID', 'selected phase judgments exceed their total bound');
       candidates.push({ worktree, record });
@@ -1677,10 +1683,8 @@ function currentArchitectureVerdict({ worktreePath, pr, head, baseName, baseComm
       if (!fs.existsSync(path.join(archiveAuthorityDirectory(worktree), 'catalogue.json'))) continue;
       for (const record of Object.values(authorityState(worktree).payload.records)) {
         if (record.receipt?.role !== 'arch-review') continue;
-        const subject = require('./architecture-target.cjs').PHASE_SUBJECT.exec(record.ticket);
+        const subject = require('./architecture-target.cjs').PHASE_SUBJECT.exec(authenticatedRecordSubject(record));
         if (!subject || subject[2] !== common || Number(subject[4]) !== pr || subject[5] !== head || subject[6] !== baseCommit) continue;
-        if ([record.receipt.ticket, record.receipt.runtime_evidence?.ticket].some(value => value !== undefined && value !== record.ticket))
-          fail('ARCHIVE_AUTHORITY_INVALID', 'aggregate candidate original receipt identity differs');
         if (selected.length >= 1000) fail('ARCHIVE_AUTHORITY_INVALID', 'selected phase judgments exceed their total bound');
         selected.push({ worktree, record });
       }
@@ -1702,7 +1706,7 @@ function currentArchitectureVerdict({ worktreePath, pr, head, baseName, baseComm
       if (record.receipt.role !== 'arch-review') continue;
       const pin = record.pins.find(pin => pin.path.endsWith('/' + MANIFEST_NAME));
       const manifest = JSON.parse(readPinnedArchiveFile(worktree, pin, 'architecture manifest'));
-      if (aggregateRequired && manifest.boundary_subject !== record.ticket)
+      if (aggregateRequired && manifest.boundary_subject !== authenticatedRecordSubject(record))
         fail('ARCHIVE_AUTHORITY_INVALID', 'aggregate candidate manifest subject differs');
       if (manifest.role !== 'arch-review' || manifest.artifact_kind !== 'judgment'
           || manifest.producer_dispatch !== record.dispatch_id || manifest.repository_identity !== common
