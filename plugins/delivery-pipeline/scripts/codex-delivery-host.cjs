@@ -12,7 +12,7 @@ const policy = require('./model-policy.cjs');
 const archReviewContext = require('./codex-arch-review-context.cjs');
 const roleArtifact = require('./role-artifact.cjs');
 const { recordedPolicyFor } = require('./runtime-adapters.cjs');
-const { sealResearch, researchLineFailure, verifySealedLine, assertContained } = require('./planning-result-sealer.cjs');
+const { sealResearch, researchLineFailure, verifySealedLine, assertContained, captureContainmentBaseline } = require('./planning-result-sealer.cjs');
 const { REPAIR: CODEX_ADAPTER_REPAIR } = require('./codex-model-remap.cjs');
 const { newDispatchId, createDurableRecorder } = require('./dispatch-boundary.cjs');
 const { createVerificationRunner } = require('./command-runner.cjs');
@@ -844,7 +844,6 @@ async function investigationResearch(options, scope, runtimeHost, agentDir, agen
   if (verifiedSiblings.some((line) => line.status !== 'completed')) {
     fail('RESEARCH_VERIFY_STATUS_INVALID', 'blocked research evidence cannot be reused as a completed sibling');
   }
-  const allowedPaths = REQUIRED_RESEARCH_LINES.map((id) => researchArtifactPath(worktree, inv.invId, id));
   const sealed = [];
   for (const line of inv.lines) {
     const artifactPath = researchArtifactPath(worktree, inv.invId, line.id);
@@ -874,7 +873,9 @@ async function investigationResearch(options, scope, runtimeHost, agentDir, agen
         throw error;
       }
     };
+    let containmentBaseline;
     try {
+      containmentBaseline = captureContainmentBaseline({ worktree });
       record = await launchAgent('research', {
         cwd: scope.worktree,
         flags: new Map(),
@@ -908,7 +909,7 @@ async function investigationResearch(options, scope, runtimeHost, agentDir, agen
       callbackOpen = false;
     }
     try {
-      assertContained({ worktree, allowed: allowedPaths });
+      assertContained({ worktree, allowed: [artifactPath], baseline: containmentBaseline });
     } catch (error) {
       return failed(error);
     }

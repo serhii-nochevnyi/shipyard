@@ -64,6 +64,9 @@ function sessionTranscript(session, model = 'gpt-6-luna', effort = 'max', provid
   return transformJsonl(captured(PARENT_FIXTURE, { '<SESSION-2>': session }), (record) => {
     if (record.type === 'session_meta') record.payload.model_provider = provider;
     if (record.type === 'turn_context') Object.assign(record.payload, { model, effort });
+    if (record.payload?.type === 'task_complete') record.payload.last_agent_message = 'OK';
+    if (record.payload?.type === 'message' && record.payload.phase === 'final_answer')
+      record.payload.content.forEach(block => { block.text = 'OK'; });
     return record;
   });
 }
@@ -1191,5 +1194,65 @@ for (const [materialBytes, tamper] of [[1996419, null], [2553953, null], [199641
     assert.equal(output, require('node:crypto').createHash('sha256').update(material).digest('hex'));
   } finally { fs.rmSync(root, { recursive: true, force: true }); fs.rmSync(store, { recursive: true, force: true }); }
 });
+
+for (const tamper of [null, 'missing', 'missing-start', 'missing-final', 'duplicate', 'duplicate-start', 'duplicate-final', 'reordered', 'foreign-turn', 'foreign-final', 'altered-final', 'divergent-cli', 'late-cli', 'altered-transcript']) {
+  test('non-typed runtime completion carries original final: ' + (tamper || 'genuine'), async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-native-final-'));
+    const home = path.join(root, 'codex-home');
+    const session = '77777777-7777-4777-8777-777777777777';
+    let completed;
+    let restoreRead = () => {};
+    try {
+      const host = createCodexRuntimeHost({ scope: { ...SCOPE, worktree: root }, probe: probe(),
+        controller: { assertOwner() {} }, recorder: () => true, env: { CODEX_HOME: home }, transcriptDir: null,
+        spawn: () => {
+          const file = writeSession(home, session);
+          const records = fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).map(JSON.parse);
+          const at = records.findIndex(record => record.payload?.type === 'task_complete');
+          if (tamper === 'missing') records.splice(at, 1);
+          if (tamper === 'missing-start') records.splice(records.findIndex(record => record.payload?.type === 'task_started'), 1);
+          if (tamper === 'missing-final') records.splice(records.findIndex(record => record.payload?.phase === 'final_answer'), 1);
+          if (tamper === 'duplicate') records.push(records[at]);
+          if (tamper === 'duplicate-start') records.push(records.find(record => record.payload?.type === 'task_started'));
+          if (tamper === 'duplicate-final') records.push(records.find(record => record.payload?.phase === 'final_answer'));
+          if (tamper === 'foreign-final') records.find(record => record.payload?.phase === 'final_answer')
+            .payload.internal_chat_message_metadata_passthrough.turn_id = 'foreign';
+          if (tamper === 'reordered') records.unshift(records.splice(at, 1)[0]);
+          if (tamper === 'foreign-turn') records[at].payload.turn_id = 'foreign';
+          if (tamper === 'altered-final') records.find(record => record.payload?.phase === 'final_answer').payload.content[0].text = 'altered';
+          fs.writeFileSync(file, records.map(JSON.stringify).join('\n') + '\n');
+          if (tamper === 'altered-transcript') {
+            const originalRead = fs.readFileSync;
+            let reads = 0;
+            fs.readFileSync = function (target, ...args) {
+              if (target === file && ++reads === 2) fs.appendFileSync(file, '\n');
+              return originalRead.call(this, target, ...args);
+            };
+            restoreRead = () => { fs.readFileSync = originalRead; };
+          }
+          let output = stream(session);
+          if (tamper === 'divergent-cli') output = output.replace('"text":"OK"', '"text":"other"');
+          if (tamper === 'late-cli') {
+            const cli = output.split('\n').filter(Boolean).map(JSON.parse);
+            cli.push(cli.splice(2, 1)[0]);
+            output = cli.map(JSON.stringify).join('\n') + '\n';
+          }
+          return childFor(output);
+        },
+      });
+      const launch = () => host.launch({ model: 'gpt-6-luna', reasoning_effort: 'max', sandbox_mode: 'workspace-write' },
+        { run_id: SCOPE.run_id, dispatch_id: 'native-final', prompt: 'Return OK.', onCompleted(value) { completed = value; } });
+      if (tamper) {
+        await assert.rejects(launch, error => /^RUNTIME_EVIDENCE_/.test(error.code));
+        assert.equal(completed, undefined);
+      } else {
+        const result = await launch();
+        assert.equal(completed.last_agent_message, 'OK');
+        assert.equal(completed.session_id, result.session_id);
+        assert.equal(completed.runtime_evidence.native_session_evidence.session_id, session);
+      }
+    } finally { restoreRead(); fs.rmSync(root, { recursive: true, force: true }); }
+  });
+}
 
 done();

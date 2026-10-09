@@ -959,7 +959,32 @@ async function verifyCompletedNativeLaunch(input = {}) {
     ...(input.now === undefined ? {} : { now: input.now }),
   };
   const nativeEvidence = await readNativeCodexSession(input.session_id, { env, ...timing });
-  if (!input.agent) return freeze({ native_session_evidence: nativeEvidence });
+  if (!input.agent) {
+    const raw = readNativeParentRaw(input.session_id, nativeEvidence, env, input.now);
+    const records = raw.split(/\r?\n/).filter(line => line.trim()).map(line => JSON.parse(line));
+    const indices = predicate => records.flatMap((record, index) => predicate(record) ? [index] : []);
+    const starts = indices(record => record.type === 'event_msg' && record.payload?.type === 'task_started');
+    const finals = indices(record => record.type === 'response_item' && record.payload?.type === 'message'
+      && record.payload.role === 'assistant' && record.payload.phase === 'final_answer');
+    const completions = indices(record => record.type === 'event_msg' && record.payload?.type === 'task_complete');
+    if (starts.length !== 1 || finals.length !== 1 || completions.length !== 1
+        || starts[0] >= finals[0] || finals[0] >= completions[0]) {
+      fail('RUNTIME_EVIDENCE_MISMATCH', 'native launch lacks one ordered start, final and completion');
+    }
+    const turn = records[starts[0]].payload.turn_id;
+    const final = records[finals[0]].payload;
+    const completion = records[completions[0]].payload;
+    const message = completionMessage(raw);
+    if (typeof turn !== 'string' || !turn || completion.turn_id !== turn
+        || final.internal_chat_message_metadata_passthrough?.turn_id !== turn
+        || !Array.isArray(final.content) || !final.content.length
+        || final.content.some(block => block.type !== 'output_text' || typeof block.text !== 'string')
+        || final.content.map(block => block.text).join('') !== message
+        || input.resultText !== message) {
+      fail('RUNTIME_EVIDENCE_MISMATCH', 'native final differs from its original turn or CLI result');
+    }
+    return freeze({ native_session_evidence: nativeEvidence, last_agent_message: message });
+  }
   const agent = input.agent;
   const parentRaw = readNativeParentRaw(input.session_id, nativeEvidence, env, input.now);
   const spawnEvidence = parseNativeParentSpawn(parentRaw, input.session_id, agent.role, model, effort);
@@ -1394,8 +1419,19 @@ function createCodexCliLauncher(options = {}) {
       if (typeof launchOptions.onSessionStarted === 'function' && announcedSessionId !== parsed.session_id) {
         fail('RUNTIME_EVIDENCE_MISSING', 'Codex session identity was not durably announced while the process ran');
       }
+      const cliFinal = parsed.records.findLastIndex(record => record.type === 'item.completed'
+        && record.item?.type === 'agent_message');
+      if (!agent) {
+        const starts = parsed.records.flatMap((record, index) => record.type === 'turn.started' ? [index] : []);
+        const completions = parsed.records.flatMap((record, index) => record.type === 'turn.completed' ? [index] : []);
+        if (starts.length !== 1 || completions.length !== 1
+            || cliFinal <= starts[0] || cliFinal >= completions[0]) {
+          fail('RUNTIME_EVIDENCE_MISMATCH', 'CLI final is outside its unique completed turn');
+        }
+      }
       const verified = await verifyCompletedNativeLaunch({
         session_id: parsed.session_id, selection: { model, effort }, agent, env,
+        resultText: parsed.records[cliFinal]?.item.text,
         allowTimedOutWait: false, startedAt, task,
       });
       const nativeEvidence = verified.native_session_evidence;
