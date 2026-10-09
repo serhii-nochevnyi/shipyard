@@ -372,8 +372,8 @@ for (const scenario of [
         write(f.root, '.shipyard-arch-review-evidence.md', judgment.evidence_markdown);
         const records = fs.readFileSync(path.join(__dirname, '../fixtures/captured/codex-agent-stream-exec.jsonl'), 'utf8')
           .trim().split('\n').map(line => JSON.parse(line));
-        const streamRecords = ['thread.started', 'item.completed', 'turn.completed'].map(type => structuredClone(records.find(record => record.type === type)));
-        streamRecords[0].thread_id = session; streamRecords[1].item.text = JSON.stringify(judgment);
+        const streamRecords = ['thread.started', 'turn.started', 'item.completed', 'turn.completed'].map(type => structuredClone(records.find(record => record.type === type)));
+        streamRecords[0].thread_id = session; streamRecords[2].item.text = JSON.stringify(judgment);
         const stream = streamRecords.map(record => JSON.stringify(record)).join('\n') + '\n';
         const transcript = path.join(storage, 'transcript.jsonl'); fs.writeFileSync(transcript, stream);
         return { launch_id: 'codex-' + session, applied_model: selection.model, applied_effort: selection.reasoning_effort,
