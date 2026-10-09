@@ -1171,3 +1171,53 @@ test('R8 installed package literal shape validates bytes and refuses drift witho
   assert.deepEqual(acceptance.installedContract(legacy), {
     inputs: ['original'], policy: 'policy', candidate: 'original', binding: legacy.binding });
 });
+
+test('T16 ledger requires authenticated candidate parent delta and source tuple through validateLedger', () => {
+  const Module = require('node:module');
+  const filename = require.resolve('../smoke/phase47-runtime-acceptance.cjs');
+  const ledger = JSON.parse(fs.readFileSync(path.join(REPOSITORY, 'docs/audits/phase47-runtime-acceptance.json')));
+  ledger.historical_research = [];
+  const identity = structuredClone(ledger.candidate);
+  identity.generation_kind = 't16-source-repair';
+  const binding = { previous_publication: structuredClone(ledger.corrective_generation.previous_publication),
+    changed_outputs: structuredClone(ledger.corrective_generation.changed_outputs),
+    source: { head: identity.source_head, tree: identity.source_tree } };
+  const handback = { previous_publication: structuredClone(binding.previous_publication),
+    changed_outputs: structuredClone(binding.changed_outputs), source_commit: identity.source_head };
+  let inspections = 0, rechecks = 0;
+  const isolated = new Module(filename, module);
+  isolated.filename = filename;
+  isolated.paths = Module._nodeModulePaths(path.dirname(filename));
+  const normalRequire = isolated.require.bind(isolated);
+  isolated.require = name => name === '../unit/phase47-package-publication.test.cjs' ? {
+    R8_STAGE: path.dirname(identity.generation_handback.path), R8_HANDOFF_SHA: identity.generation_handback.sha256,
+    recheckT16Successor() { rechecks++; }
+  } : normalRequire(name);
+  isolated.__inspection = () => { inspections++; return { identity, binding, authenticated: { handback } }; };
+  isolated._compile(fs.readFileSync(filename, 'utf8')
+    + '\ninspectCandidate = module.__inspection; comparePackage = () => {};\n', filename);
+  const validate = isolated.exports.validateLedger;
+  const positive = validate(structuredClone(ledger));
+  assert.equal(positive.evidence_check, 'passed'); assert.equal(positive.status, 'HOLD');
+  assert.equal(positive.open.length, 20); assert.equal(positive.accepted, false);
+  assert.equal(positive.native_launches, 0); assert.equal(inspections, 1); assert.equal(rechecks, 1);
+  for (const [name, mutate, pattern] of [
+    ['absent candidate', x => { delete x.candidate; }, /requires current candidate/],
+    ['altered parent', x => { x.corrective_generation.previous_publication.sha256 = '0'.repeat(64); }, /previous_publication/],
+    ['absent parent', x => { delete x.corrective_generation.previous_publication; }, /previous_publication/],
+    ['absent delta', x => { delete x.corrective_generation.changed_outputs; }, /changed_outputs/],
+    ['altered delta', x => { x.corrective_generation.changed_outputs.pop(); }, /changed_outputs/],
+    ['altered source head', x => { x.candidate.source_head = '0'.repeat(40); }, /candidate identity mismatch: source_head/],
+    ['altered source tree', x => { x.candidate.source_tree = '0'.repeat(40); }, /candidate identity mismatch: source_tree/]
+  ]) {
+    const changed = structuredClone(ledger); mutate(changed);
+    assert.throws(() => validate(changed), pattern, name);
+  }
+  for (const field of ['previous_publication', 'changed_outputs']) {
+    const retained = handback[field]; handback[field] = null;
+    assert.throws(() => validate(structuredClone(ledger)), new RegExp(field), 'authenticated handback mismatch');
+    handback[field] = retained;
+  }
+  handback.source_commit = '0'.repeat(40);
+  assert.throws(() => validate(structuredClone(ledger)), /T16 handback source mismatch/);
+});

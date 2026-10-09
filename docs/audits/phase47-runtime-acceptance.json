@@ -824,7 +824,7 @@
     "accepted_siblings": null,
     "retained_unaccepted_artifacts": null,
     "current_duty": "Uncommitted six-owner literal R8 consumer handback to existing trusted coordinator",
-    "next_criterion": "Latest repaired-code original four formal commands at timeout_s:600; fresh live complete main-head/base judgment",
+    "next_criterion": "Coordinator writes external /tmp/phase47-27-pr453-ledger-fix-trusted-finalization.json after original four formal commands at timeout_s:600; current PR body carries exact final head/proof; fresh live complete main-head/base judgment remains separate",
     "inspect": {
       "command": [
         "node",
@@ -1370,7 +1370,7 @@
   },
   "current_verification": {
     "ticket": "T-47-27",
-    "observation_timing": "Follow-up review repair after prior signed R8 consumer finalization",
+    "observation_timing": "Historical completed formal snapshot captured 2026-10-09 before subsequent ledger repair; later formal verification follows the external procedure",
     "native_acceptance": "HOLD",
     "accepted": false,
     "native_launches": 0,
@@ -1379,7 +1379,7 @@
       "sha256": "5792799323c1533de10e65fe418aca8b640691db640f24f6623361381e7bccd0"
     },
     "integrator_max_bytes": 98304,
-    "host": "Prior four formal commands passed at17406/digest1e64; latest repaired-code four formal commands remain coordinator-owned pending",
+    "host": "For repaired-code formal verification, the coordinator runs the original four commands at their existing 600-second assignments, writes /tmp/phase47-27-pr453-ledger-fix-trusted-finalization.json, and records the exact final head and proof in the current PR body. This procedure asserts no result for subsequent code.",
     "final_aggregate": "PR452 actually MERGED16c2ff; signed R8 squash provenance established; fresh complete live main-target judgment remains outstanding",
     "measured_publication": {
       "inventory": 161,
@@ -1404,7 +1404,7 @@
       "digest": "1e64a3e243ddcde5baccf4cb13a26fa18c674e4a0b8e34ed7a95895bd9722136",
       "outcome": "passed",
       "path": "/tmp/phase47-27-final-R8-consumer-trusted-finalization.json",
-      "scope": "Historical original four formal 600-second checks on pre-this-fix code; latest repaired-code formal proof remains coordinator-owned pending"
+      "scope": "Dated historical predecessor snapshot captured 2026-10-09: original four formal 600-second checks passed on17406 before ce4 and this subsequent ledger repair"
     },
     "source_merge": {
       "schema": "shipyard.phase47-t16-squash-publication.v1",
@@ -1429,7 +1429,18 @@
         "state": "MERGED",
         "url": "https://github.com/serhii-nochevnyi/shipyard/pull/452"
       }
-    }
+    },
+    "historical_completed_formal_snapshot": {
+      "captured_date": "2026-10-09",
+      "timing": "Historical snapshot captured before the subsequent ledger guard repair",
+      "status": "VERIFIED",
+      "commit": "ce4c9a8e76ac7b3262d431281ba5c41c7fa0ad20",
+      "digest": "c2ee6c9d626a0780f02eaa16ebc2e5b3b9479bababe7657c73fe0ea788ec71c3",
+      "outcome": "passed",
+      "path": "/tmp/phase47-27-pr453-review-fix-trusted-finalization.json",
+      "scope": "Latest completed original four formal 600-second commands on ce4; historical evidence only for later edits"
+    },
+    "formal_verification_procedure": "For repaired-code formal verification, the coordinator runs the original four commands at their existing 600-second assignments, writes /tmp/phase47-27-pr453-ledger-fix-trusted-finalization.json, and records the exact final head and proof in the current PR body. This procedure asserts no result for subsequent code."
   },
   "historical_pre_t23_candidate": {
     "selection_path": "/Volumes/KINGSTON/claude-shipyard/.git/shipyard-phase47-final-publication/INV-014-runtime-delivery-correctness/ADR-027-current-ticket-evidence/selection.json",
@@ -7594,7 +7605,7 @@
       "path": "/tmp/phase47-16-pr452-review-fix-result.json",
       "sha256": "90c94c82cbeb98954044f4ce4c71f221f738f22c2dc23c62a2d946a6d308c85f"
     },
-    "formal_consumer_verification": "Prior four formal commands passed at17406/digest1e64; latest repaired-code four formal commands remain coordinator-owned pending",
+    "formal_consumer_verification": "For repaired-code formal verification, the coordinator runs the original four commands at their existing 600-second assignments, writes /tmp/phase47-27-pr453-ledger-fix-trusted-finalization.json, and records the exact final head and proof in the current PR body. This procedure asserts no result for subsequent code.",
     "final_main_judgment": "PR452 merged and exact signed squash provenance established; fresh live complete head/base judgment remains outstanding",
     "source_merge": {
       "schema": "shipyard.phase47-t16-squash-publication.v1",
@@ -7625,7 +7636,18 @@
       "digest": "1e64a3e243ddcde5baccf4cb13a26fa18c674e4a0b8e34ed7a95895bd9722136",
       "outcome": "passed",
       "path": "/tmp/phase47-27-final-R8-consumer-trusted-finalization.json",
-      "scope": "Historical original four formal 600-second checks on pre-this-fix code; latest repaired-code formal proof remains coordinator-owned pending"
-    }
+      "scope": "Dated historical predecessor snapshot captured 2026-10-09: original four formal 600-second checks passed on17406 before ce4 and this subsequent ledger repair"
+    },
+    "historical_completed_formal_snapshot": {
+      "captured_date": "2026-10-09",
+      "timing": "Historical snapshot captured before the subsequent ledger guard repair",
+      "status": "VERIFIED",
+      "commit": "ce4c9a8e76ac7b3262d431281ba5c41c7fa0ad20",
+      "digest": "c2ee6c9d626a0780f02eaa16ebc2e5b3b9479bababe7657c73fe0ea788ec71c3",
+      "outcome": "passed",
+      "path": "/tmp/phase47-27-pr453-review-fix-trusted-finalization.json",
+      "scope": "Latest completed original four formal 600-second commands on ce4; historical evidence only for later edits"
+    },
+    "formal_verification_procedure": "For repaired-code formal verification, the coordinator runs the original four commands at their existing 600-second assignments, writes /tmp/phase47-27-pr453-ledger-fix-trusted-finalization.json, and records the exact final head and proof in the current PR body. This procedure asserts no result for subsequent code."
   }
 }

@@ -441,6 +441,7 @@ function validateLedger(ledger) {
     verified.push({ id: row.id, ...validateHostProof(row.proof, row.id, ledger.installation, row) });
   }
   if (ledger.corrective_generation?.kind === 't16-source-repair') {
+    assert(ledger.candidate, 'T16 corrective ledger requires current candidate');
     const publication = require('../unit/phase47-package-publication.test.cjs');
     assert.deepEqual(ledger.corrective_generation.handback, {path: publication.R8_STAGE + '/generation.json', sha256: publication.R8_HANDOFF_SHA});
     assert.equal(ledger.corrective_generation.ticket, 'T-47-16');
@@ -448,6 +449,15 @@ function validateLedger(ledger) {
   let inspected = null;
   if (ledger.candidate) {
     inspected = inspectCandidate(ledger.candidate.candidate_path, ROOT, ledger.corrective_generation?.kind || 'original');
+    if (ledger.corrective_generation?.kind === 't16-source-repair') {
+      for (const field of ['previous_publication', 'changed_outputs']) {
+        assert.deepEqual(ledger.corrective_generation[field], inspected.binding[field], 'T16 corrective ' + field + ' mismatch');
+        assert.deepEqual(ledger.corrective_generation[field], inspected.authenticated.handback[field], 'T16 handback ' + field + ' mismatch');
+      }
+      assert.equal(ledger.candidate.source_head, inspected.binding.source.head, 'ledger candidate identity mismatch: source_head');
+      assert.equal(ledger.candidate.source_tree, inspected.binding.source.tree, 'ledger candidate identity mismatch: source_tree');
+      assert.equal(ledger.candidate.source_head, inspected.authenticated.handback.source_commit, 'T16 handback source mismatch');
+    }
     for (const key of ['candidate_sha256', 'binding_sha256', 'canonical_input_digest', 'package_sha256',
       'manifest_sha256', 'source_head', 'source_tree', 'policy_sha256', 'selection_path', 'selection_sha256',
       'binding_path', 'candidate_path', 'generation_handback'])
