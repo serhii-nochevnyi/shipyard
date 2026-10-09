@@ -104,7 +104,8 @@ test('architecture collector and authenticated reader retain every duplicate gov
     assert.equal(encoded.dictionary.filter(entry => entry.sha256 === original.sha256).length, 1);
     assert.equal(encoded.obligations.filter(ref => ref.content_sha256 === original.sha256).length, 2);
     const input = contextBuilder.prepareFileInput({ worktree: f.root, ticket: TICKET, phase: 38 },
-      JSON.stringify(encoded), { role: 'arch-review', dispatchId: 'unique-content-reader', storageRoot: storage });
+      JSON.stringify(encoded), { role: 'arch-review', dispatchId: 'unique-content-reader', storageRoot: storage,
+        binding: { packet_digest: result.prepared.packet.digest } });
     const checked = contextBuilder.verifyFileInput(input);
     assert.deepEqual(api.decodeUniqueContent(JSON.parse(Buffer.concat(checked.material).toString())),
       api.decodeUniqueContent(encoded));
@@ -112,7 +113,8 @@ test('architecture collector and authenticated reader retain every duplicate gov
     assert.equal(fs.readFileSync(path.join(f.root, originalPath), 'utf8'), original.content);
     const broken = JSON.parse(JSON.stringify(encoded)); broken.obligations.pop();
     assert.throws(() => contextBuilder.prepareFileInput({ worktree: f.root, ticket: TICKET, phase: 38 },
-      JSON.stringify(broken), { role: 'arch-review', dispatchId: 'missing-obligation', storageRoot: storage }));
+      JSON.stringify(broken), { role: 'arch-review', dispatchId: 'missing-obligation', storageRoot: storage,
+        binding: { packet_digest: result.prepared.packet.digest } }));
     write(f.root, duplicatePath, 'changed after collection');
     assert.throws(() => contextBuilder.verifyFileInput(input));
   } finally { cleanupJudgment(f); fs.rmSync(storage, { recursive: true, force: true }); }

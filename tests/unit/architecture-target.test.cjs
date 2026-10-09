@@ -244,7 +244,8 @@ test(`public phase builder and hosts select ${repo ?? 'current project'} from mi
         async agent(prompt, selection) {
           const marker = '<AUTHENTICATED_CONTEXT_PACKET>\n\n';
           const start = prompt.indexOf(marker) + marker.length;
-          const packet = JSON.parse(prompt.slice(start,prompt.indexOf('\n\n</AUTHENTICATED_CONTEXT_PACKET>',start)));
+          const encoded = JSON.parse(prompt.slice(start,prompt.indexOf('\n\n</AUTHENTICATED_CONTEXT_PACKET>',start)));
+          const packet = require('../../plugins/delivery-pipeline/scripts/context-packet.cjs').decodeUniqueContent(encoded);
           assert.deepEqual(packet.role_context.ticket_set.map(row=>row.id),[TICKET]);
           const output = {id:packet.subject,pr:801,head:f.pr.headRefOid,base_tree:git(f.root,['rev-parse',f.base+'^{tree}']),
             ticket_set:packet.role_context.ticket_set,ticket_set_digest:packet.role_context.ticket_set_digest,
