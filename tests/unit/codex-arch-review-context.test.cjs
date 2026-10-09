@@ -372,8 +372,8 @@ for (const scenario of [
         write(f.root, '.shipyard-arch-review-evidence.md', judgment.evidence_markdown);
         const records = fs.readFileSync(path.join(__dirname, '../fixtures/captured/codex-agent-stream-exec.jsonl'), 'utf8')
           .trim().split('\n').map(line => JSON.parse(line));
-        const streamRecords = ['thread.started', 'item.completed', 'turn.completed'].map(type => structuredClone(records.find(record => record.type === type)));
-        streamRecords[0].thread_id = session; streamRecords[1].item.text = JSON.stringify(judgment);
+        const streamRecords = ['thread.started', 'turn.started', 'item.completed', 'turn.completed'].map(type => structuredClone(records.find(record => record.type === type)));
+        streamRecords[0].thread_id = session; streamRecords[2].item.text = JSON.stringify(judgment);
         const stream = streamRecords.map(record => JSON.stringify(record)).join('\n') + '\n';
         const transcript = path.join(storage, 'transcript.jsonl'); fs.writeFileSync(transcript, stream);
         return { launch_id: 'codex-' + session, applied_model: selection.model, applied_effort: selection.reasoning_effort,
@@ -1590,6 +1590,17 @@ for (const [role, changedPath] of [
     const input = f.create();
     write(f.f.root, changedPath, 'unauthorized mutation');
     assert.throws(() => contextBuilder.verifyFileInput(input), /current source or policy changed/);
+  } finally { f.clean(); }
+});
+
+for (const options of [
+  { chunkBytes: 128 * 1024 }, { chunkBytes: 256 * 1024 },
+  { readerCapacity: { contract: { chunk_bytes: 128 * 1024, output_budget_bytes: 256 * 1024 } } },
+]) test('larger reader refuses unmeasured size and serialized capacity authority', () => {
+  const f = fileInputFixture('x'.repeat(128 * 1024), options);
+  try {
+    assert.throws(f.create, error => error.code === 'READER_CAPACITY_UNSUPPORTED');
+    assert.deepEqual(fs.readdirSync(f.storage), []);
   } finally { f.clean(); }
 });
 

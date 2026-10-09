@@ -948,6 +948,49 @@ function parseNativeChildTranscript(raw, childId, parentId, role, model, effort,
   });
 }
 
+const measuredLaunches = new WeakMap();
+const readerCapacities = new WeakMap();
+
+function readerSubject(manifest) {
+  const canonical = value => Array.isArray(value) ? value.map(canonical) : object(value)
+    ? Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])])) : value;
+  return JSON.stringify(canonical([manifest.snapshot, manifest.run_id, manifest.ticket, manifest.phase,
+    manifest.role, manifest.dispatch_id, manifest.binding, manifest.accounting?.generated_instruction_bytes || 0,
+    manifest.assets.map(asset => [asset.ordinal, asset.bytes, asset.sha256])]));
+}
+
+function readerCapacityContract(capacity, manifest) {
+  const measured = readerCapacities.get(capacity);
+  if (!measured || measured.subject !== readerSubject(manifest))
+    fail('READER_CAPACITY_UNSUPPORTED', 'reader capacity lacks original measured current-subject authority');
+  readNativeParentRaw(measured.launch.session, measured.verified.native_session_evidence, measured.launch.env, measured.launch.now);
+  return measured.contract;
+}
+
+function measureReaderCapacity(verified, prepared) {
+  const launch = measuredLaunches.get(verified);
+  if (!launch) fail('READER_CAPACITY_UNSUPPORTED', 'capacity requires original verified native launch');
+  if (readNativeParentRaw(launch.session, verified.native_session_evidence, launch.env, launch.now) !== launch.raw)
+    fail('READER_CAPACITY_UNSUPPORTED', 'original measured output changed');
+  const checked = require('./codex-arch-review-context.cjs').verifyFileInput(prepared);
+  if (!checked.material.some(bytes => bytes.length >= 128 * 1024))
+    fail('READER_CAPACITY_UNSUPPORTED', 'capacity requires a complete 128 KiB observed range');
+  const measurement = { chunk_bytes: 128 * 1024, output_tokens: 10000 };
+  const observed = verifyFileConsumption(prepared, launch.raw, checked.manifest.dispatch_id,
+    verified.last_agent_message, measurement);
+  const contract = freeze({ schema: 'shipyard.native-reader-transport.v2', chunk_bytes: measurement.chunk_bytes,
+    encoding: 'base64', range_schedule: 'manifest-first/ordinal-offset/v1', output_tokens: 10000, nested_envelope: 'exec-command.v1',
+    outer_envelope: 'functions-exec.v1', native_sha256: verified.native_session_evidence.sha256,
+    native_session_id: verified.native_session_evidence.session_id,
+    policy_hash: checked.manifest.snapshot.policy_hash,
+    selection: verified.native_session_evidence.selections[0],
+    binding_sha256: crypto.createHash('sha256').update(readerSubject(checked.manifest)).digest('hex'),
+    output_budget_bytes: observed.largest_envelope_bytes + 4096, encoded_bytes: observed.encoded_bytes });
+  const capacity = freeze({ contract });
+  readerCapacities.set(capacity, { contract, subject: readerSubject(checked.manifest), launch, verified });
+  return capacity;
+}
+
 async function verifyCompletedNativeLaunch(input = {}) {
   if (!object(input)) fail('INVALID_INPUT', 'native verification input must be an object');
   const env = object(input.env) ? input.env : {};
@@ -959,6 +1002,8 @@ async function verifyCompletedNativeLaunch(input = {}) {
     ...(input.now === undefined ? {} : { now: input.now }),
   };
   const nativeEvidence = await readNativeCodexSession(input.session_id, { env, ...timing });
+  if (nativeEvidence.provider !== 'openai' || nativeEvidence.selections.some(value => value.model !== model || value.effort !== effort))
+    fail('RUNTIME_EVIDENCE_MISMATCH', 'native launch changed the selected model or reasoning effort');
   if (!input.agent) {
     const raw = readNativeParentRaw(input.session_id, nativeEvidence, env, input.now);
     const records = raw.split(/\r?\n/).filter(line => line.trim()).map(line => JSON.parse(line));
@@ -983,7 +1028,9 @@ async function verifyCompletedNativeLaunch(input = {}) {
         || input.resultText !== message) {
       fail('RUNTIME_EVIDENCE_MISMATCH', 'native final differs from its original turn or CLI result');
     }
-    return freeze({ native_session_evidence: nativeEvidence, last_agent_message: message });
+    const verified = freeze({ native_session_evidence: nativeEvidence, last_agent_message: message });
+    measuredLaunches.set(verified, { raw, session: input.session_id, env, now: input.now });
+    return verified;
   }
   const agent = input.agent;
   const parentRaw = readNativeParentRaw(input.session_id, nativeEvidence, env, input.now);
@@ -1007,11 +1054,23 @@ async function verifyCompletedNativeLaunch(input = {}) {
   });
 }
 
-function verifyFileConsumption(prepared, nativeRaw, dispatchId, resultText) {
+function verifyFileConsumption(prepared, nativeRaw, dispatchId, resultText, measurement) {
   const checked = require('./codex-arch-review-context.cjs').verifyFileInput(prepared, {
     association: { dispatch_id: dispatchId },
   });
+  const chunkBytes = measurement?.chunk_bytes || prepared.input_bundle.chunk_bytes;
+  const v2 = Boolean(measurement || prepared.input_bundle.transport);
+  let outputBytes = 0, encodedBytes = 0, nestedBytes = 0, largestEnvelope = 0;
+  if (typeof nativeRaw !== 'string' || Buffer.byteLength(nativeRaw) > 128 * 1024 * 1024)
+    fail('READER_CAPACITY_UNSUPPORTED', 'native reader transcript exceeds its bounded output budget');
   const records = nativeRaw.split('\n').filter(Boolean).map(line => JSON.parse(line));
+  if (prepared.input_bundle.transport && !measurement) {
+    const selection = prepared.input_bundle.transport.selection;
+    if (!object(selection) || records.some(record => record.type === 'turn_context'
+        && (record.payload?.model !== selection.model || record.payload?.effort !== selection.effort))
+        || records.some(record => record.type === 'session_meta' && record.payload?.model_provider !== 'openai'))
+      fail('READER_CAPACITY_UNSUPPORTED', 'native reader differs from its measured model or provider');
+  }
   const starts = records.map((record, index) => record.type === 'event_msg' && record.payload?.type === 'task_started' ? index : -1).filter(index => index >= 0);
   const completions = records.map((record, index) => record.type === 'event_msg' && record.payload?.type === 'task_complete' ? index : -1).filter(index => index >= 0);
   if (starts.length !== 1 || completions.length !== 1 || completions[0] <= starts[0]
@@ -1029,13 +1088,15 @@ function verifyFileConsumption(prepared, nativeRaw, dispatchId, resultText) {
     bytes: checked.manifest_bytes },
     ...checked.manifest.assets.map((asset, index) => ({ path: asset.path, bytes: checked.material[index] }))];
   const quote = value => "'" + value.replaceAll("'", "'\\''") + "'";
-  const reads = expected.flatMap(asset => Array.from({ length: Math.ceil(asset.bytes.length / prepared.input_bundle.chunk_bytes) }, (_, index) => ({
-    command: 'dd if=' + quote(asset.path) + ' bs=' + prepared.input_bundle.chunk_bytes
+  const reads = expected.flatMap(asset => Array.from({ length: Math.ceil(asset.bytes.length / chunkBytes) }, (_, index) => ({
+    command: 'dd if=' + quote(asset.path) + ' bs=' + chunkBytes
       + ' skip=' + index + ' count=1 2>/dev/null | base64',
-    bytes: asset.bytes.subarray(index * prepared.input_bundle.chunk_bytes, (index + 1) * prepared.input_bundle.chunk_bytes),
+    bytes: asset.bytes.subarray(index * chunkBytes, (index + 1) * chunkBytes),
   })));
   let at = 0;
   const pending = new Map();
+  const calls = new Set();
+  const credited = new Set();
   const customArguments = item => {
     if (!['exec', 'functions.exec'].includes(item.name) || typeof item.input !== 'string') return null;
     const match = /^\s*text\s*\(\s*await\s+tools\.exec_command\s*\(([\s\S]+)\)\s*\)\s*;?\s*$/.exec(item.input);
@@ -1063,13 +1124,30 @@ function verifyFileConsumption(prepared, nativeRaw, dispatchId, resultText) {
       if (args.cmd !== reads[at]?.command || at >= prepared.input_bundle.max_chunk_reads)
         fail('RUNTIME_EVIDENCE_MISMATCH', 'native file read is reordered, duplicated or exceeds its budget');
       if (pending.size) fail('RUNTIME_EVIDENCE_MISMATCH', 'ordered file read did not finish before the next read');
+      if (typeof item.call_id !== 'string' || !item.call_id || calls.has(item.call_id))
+        fail('RUNTIME_EVIDENCE_MISMATCH', 'native file read repeats a call identity');
+      if (v2 && (!custom || args.max_output_tokens !== 10000))
+        fail('RUNTIME_EVIDENCE_MISMATCH', 'native reader changed its supported output policy');
+      calls.add(item.call_id);
       pending.set(item.call_id, { ...reads[at], custom });
     }
+    if (['function_call_output', 'custom_tool_call_output'].includes(item.type) && credited.has(item.call_id))
+      fail('RUNTIME_EVIDENCE_MISMATCH', 'native range received repeated output credit');
     if (['function_call_output', 'custom_tool_call_output'].includes(item.type) && pending.has(item.call_id)) {
       if (index >= boundary) fail('RUNTIME_EVIDENCE_MISMATCH', 'native read completed after the result');
+      if (item.internal_chat_message_metadata_passthrough?.turn_id !== undefined
+          && item.internal_chat_message_metadata_passthrough.turn_id !== records[starts[0]].payload.turn_id)
+        fail('RUNTIME_EVIDENCE_MISMATCH', 'native read output belongs to a foreign task');
       const read = pending.get(item.call_id);
       if (read.custom !== (item.type === 'custom_tool_call_output'))
         fail('RUNTIME_EVIDENCE_MISMATCH', 'native file read output has a foreign transport');
+      const envelopeBytes = Buffer.byteLength(JSON.stringify(item.output));
+      largestEnvelope = Math.max(largestEnvelope, envelopeBytes);
+      if (envelopeBytes > 252 * 1024) fail('READER_CAPACITY_UNSUPPORTED', 'native reader envelope exceeds its bound');
+      if (!measurement && prepared.input_bundle.transport && envelopeBytes > prepared.input_bundle.transport.output_budget_bytes)
+        fail('READER_CAPACITY_UNSUPPORTED', 'reader exceeded its measured output envelope');
+      outputBytes += envelopeBytes;
+      if (outputBytes > 128 * 1024 * 1024) fail('READER_CAPACITY_UNSUPPORTED', 'reader output budget exceeded');
       let output = item.output;
       if (read.custom) {
         if (!Array.isArray(output) || output.some(block => !['text', 'input_text'].includes(block?.type) || typeof block.text !== 'string'))
@@ -1082,6 +1160,7 @@ function verifyFileConsumption(prepared, nativeRaw, dispatchId, resultText) {
         });
         if (results.length !== 1 || results[0].exit_code !== 0 || results[0].session_id !== undefined)
           fail('RUNTIME_EVIDENCE_MISMATCH', 'native file read did not complete successfully');
+        nestedBytes += Buffer.byteLength(output[1].text);
         output = results[0].output;
       } else {
         let parsed; try { parsed = JSON.parse(output); } catch {}
@@ -1089,17 +1168,23 @@ function verifyFileConsumption(prepared, nativeRaw, dispatchId, resultText) {
         if (object(parsed)) {
           if (parsed.exit_code !== 0 || parsed.session_id !== undefined)
             fail('RUNTIME_EVIDENCE_MISMATCH', 'native file read did not complete successfully');
+          nestedBytes += Buffer.byteLength(output);
           output = parsed.output ?? parsed.stdout;
         }
       }
       const encoded = read.bytes.toString('base64');
-      if (typeof output !== 'string' || output.replace(/\s/g, '') !== encoded)
+      if (typeof output !== 'string' || (v2 && !/^[A-Za-z0-9+/=\r\n]*$/.test(output))
+          || output.replace(v2 ? /[\r\n]/g : /\s/g, '') !== encoded)
         fail('RUNTIME_EVIDENCE_MISMATCH', 'original native file read is incomplete or truncated');
+      encodedBytes += Buffer.byteLength(output);
+      credited.add(item.call_id);
       pending.delete(item.call_id); at++;
     }
   }
   if (at !== reads.length || pending.size) fail('RUNTIME_EVIDENCE_MISMATCH', 'complete original native file consumption is unproven');
-  return checked;
+  return { ...checked, chunk_reads: at, output_bytes: outputBytes, encoded_bytes: encodedBytes, largest_envelope_bytes: largestEnvelope,
+    transport_accounting: { raw_bytes: expected.reduce((sum, asset) => sum + asset.bytes.length, 0),
+      encoded_bytes: encodedBytes, nested_output_bytes: nestedBytes, outer_output_bytes: outputBytes } };
 }
 
 function launchPrompt(prompt, content) {
@@ -1733,6 +1818,9 @@ module.exports = Object.freeze({
   nativeSessionCandidates,
   readNativeCodexSession,
   verifyCompletedNativeLaunch,
+  measureReaderCapacity,
+  readerCapacityContract,
+  verifyFileConsumption: (prepared, raw, dispatch, result) => verifyFileConsumption(prepared, raw, dispatch, result),
   observedSelection,
   writeTranscript,
   writeTaskFile,
