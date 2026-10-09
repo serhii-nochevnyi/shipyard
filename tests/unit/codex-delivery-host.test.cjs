@@ -377,6 +377,9 @@ test('production runtime host receives the scoped prompt and records native mode
     .split('\n').filter(Boolean).map((line) => {
       const record = JSON.parse(line);
       if (record.type === 'turn_context') Object.assign(record.payload, { model: 'gpt-6.1-sol', effort: 'low' });
+      if (record.payload?.type === 'task_complete') record.payload.last_agent_message = 'OK';
+      if (record.payload?.type === 'message' && record.payload.phase === 'final_answer')
+        record.payload.content.forEach(block => { block.text = 'OK'; });
       return JSON.stringify(record);
     }).join('\n') + '\n';
   const output = captured('tests/fixtures/captured/codex-agent-stream-exec.jsonl', { '<SESSION-1>': session });
@@ -1869,5 +1872,86 @@ test('request context refuses a caller-owned prepared authority field before adm
   assert.throws(() => requestValue({ role: 'integrator', context: { prompt: 'fixture', input_prepared: {} } }),
     error => error.code === 'INVALID_INPUT' && /host authority/.test(error.message));
 });
+
+for (const mutation of [null, 'dirty-source', 'dirty-intake', 'new-output', 'sibling-output']) {
+  test('authenticated native research seals with dirty operator inputs: ' + (mutation || 'unchanged'), async () => {
+    const f = fixture();
+    const home = fs.mkdtempSync(path.join(temporary, 'research-native-'));
+    let launches = 0;
+    const source = path.join(f.root, 'src', 'owned.txt');
+    const intake = path.join(f.root, '.planning', 'intake.md');
+    try {
+      fs.writeFileSync(source, 'operator source\n');
+      fs.writeFileSync(intake, 'operator intake\n');
+      const result = await createCodexDeliveryHost({ scope: f.scope, graphDir: f.graphDir,
+        storageRoot: f.storageRoot, capabilities, agentDir: f.agentDir,
+        agentManifest: path.join(f.agentDir, '.shipyard-manifest.json'),
+        env: { CODEX_HOME: home },
+        probe: { status: 'available', executable: 'codex', runtime_version: '0.157.1', capabilities },
+        spawn: (_executable, args) => {
+          const ids = ['system-state', 'alternatives', 'constraints', 'risks'];
+          const id = ids[launches++];
+          const session = '88888888-8888-4888-8888-' + String(launches).padStart(12, '0');
+          const artifactPath = path.join(fs.realpathSync(f.root), '.planning', 'investigations', 'INV-100', 'research', id + '.md');
+          const bytes = Buffer.from('# ' + id + '\nNative finding.\n');
+          fs.writeFileSync(artifactPath, bytes);
+          if (mutation && launches === 2) {
+            const target = mutation === 'dirty-source' ? source : mutation === 'dirty-intake' ? intake : mutation === 'new-output'
+              ? path.join(f.root, 'rogue.txt') : path.join(path.dirname(artifactPath), 'system-state.md');
+            fs.writeFileSync(target, 'unauthorized mutation\n');
+          }
+          const digest = crypto.createHash('sha256').update(bytes).digest('hex');
+          const final = JSON.stringify({ id, status: 'completed', summary: 'Native research completed.',
+            artifact: { path: artifactPath, bytes: bytes.length, content_bytes: bytes.length, sha256: digest, digest } });
+          const model = args[args.indexOf('--model') + 1];
+          const effort = JSON.parse(args.find(value => value.startsWith('model_reasoning_effort=')).split('=')[1]);
+          const transcript = captured('tests/fixtures/captured/codex-agent-stream-parent.jsonl', { '<SESSION-2>': session })
+            .split('\n').filter(Boolean).map(line => {
+              const record = JSON.parse(line);
+              if (record.type === 'turn_context') Object.assign(record.payload, { model, effort });
+              if (record.payload?.type === 'task_complete') record.payload.last_agent_message = final;
+              if (record.payload?.type === 'message' && record.payload.phase === 'final_answer')
+                record.payload.content.forEach(block => { block.text = final; });
+              return JSON.stringify(record);
+            }).join('\n') + '\n';
+          const date = new Date();
+          const directory = path.join(home, 'sessions', String(date.getFullYear()),
+            String(date.getMonth() + 1).padStart(2, '0'), String(date.getDate()).padStart(2, '0'));
+          fs.mkdirSync(directory, { recursive: true });
+          fs.writeFileSync(path.join(directory, 'rollout-' + session + '.jsonl'), transcript);
+          const output = captured('tests/fixtures/captured/codex-agent-stream-exec.jsonl', { '<SESSION-1>': session })
+            .split('\n').filter(Boolean).map(line => {
+              const record = JSON.parse(line);
+              if (record.item?.type === 'agent_message') record.item.text = final;
+              return JSON.stringify(record);
+            }).join('\n') + '\n';
+          const child = new EventEmitter();
+          child.stdout = new EventEmitter(); child.stderr = new EventEmitter();
+          child.stdin = { write() {}, end() {} }; child.pid = 45678;
+          process.nextTick(() => { child.stdout.emit('data', Buffer.from(output)); child.emit('close', 0, null); });
+          return child;
+        },
+      }).run({ role: 'research', context: { prompt: 'Investigate.', investigation: baseInvestigation(f) } });
+      if (mutation) {
+        assert.equal(result.status, 'blocked');
+        assert.equal(result.code, 'CONTAINMENT_VIOLATION');
+        assert.equal(result.failed_line, 'alternatives');
+        assert.equal(result.sealed_lines.length, 1);
+        assert.equal(launches, 2);
+      } else {
+        assert.equal(launches, 4);
+        assert.deepEqual(result.map(entry => entry.id), ['system-state', 'alternatives', 'constraints', 'risks']);
+        for (const entry of result) {
+          assert.equal(entry.schema, 'shipyard.role-artifact.v1');
+          assert.equal(entry.envelope.status, 'completed');
+          assert.equal(entry.envelope.subject, 'INV-100:' + entry.id);
+          assert.ok(fs.existsSync(entry.artifact_index.path));
+        }
+        assert.equal(fs.readFileSync(source, 'utf8'), 'operator source\n');
+        assert.equal(fs.readFileSync(intake, 'utf8'), 'operator intake\n');
+      }
+    } finally { clean(f); fs.rmSync(home, { recursive: true, force: true }); }
+  });
+}
 
 done();
