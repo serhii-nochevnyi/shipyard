@@ -111,6 +111,7 @@ const FILE_LIMITS = Object.freeze({ material: 16 * 1024 * 1024, manifest: 512 * 
 const INPUT_CHUNK_BYTES = 8 * 1024;
 const preparedFileInputs = new WeakSet();
 const fileInputOptions = new WeakMap();
+const restoredFileInputs = new WeakSet();
 
 
 function run(options, executable, args, cwd, maxBuffer = INPUT_MAX_BYTES) {
@@ -364,6 +365,63 @@ function prepareFileInput(scope, material, options = {}) {
 
 function isPreparedFileInput(value) { return object(value) && preparedFileInputs.has(value); }
 
+function restoreReviewInput(progress) {
+  if (!roleArtifact.isAuthenticatedReviewProgress(progress))
+    fail('serialized progress has no original protected authority');
+  progress = roleArtifact.readReviewProgress({ worktree: progress.identity.worktree, reference: progress.state.reference });
+  const checked = verifyFileInput(progress.input.input_bundle, { sealed: true });
+  if (digest(JSON.stringify(canonical(checked.manifest))) !== progress.identity.manifest_digest)
+    fail('protected progress differs from immutable input', 'STALE_CONTEXT');
+  const result = deepFreeze({ ...progress.input, manifest: checked.manifest });
+  preparedFileInputs.add(result); restoredFileInputs.add(result);
+  fileInputOptions.set(result, { scope: { worktree: checked.manifest.snapshot.worktree,
+    phase: checked.manifest.phase, ticket: checked.manifest.ticket, run_id: checked.manifest.run_id },
+    manifestIdentity: result.input_bundle.manifest_identity });
+  try {
+    verifyFileInput(result);
+    if (JSON.stringify(canonical(reviewProgressIdentity(result))) !== JSON.stringify(canonical(progress.identity)))
+      fail('protected continuation subject changed', 'STALE_CONTEXT');
+    require('./codex-runtime-host.cjs').validateReviewRestoration(progress, result);
+    return result;
+  } catch (error) { preparedFileInputs.delete(result); restoredFileInputs.delete(result); fileInputOptions.delete(result); throw error; }
+}
+
+function reviewProgressIdentity(prepared) {
+  const checked = verifyFileInput(prepared);
+  const manifest = checked.manifest;
+  const binding = manifest.binding;
+  if (!['arch-review', 'integrator'].includes(manifest.role) || !object(binding)
+      || !/^[a-f0-9]{40,64}$/.test(binding.base || '')
+      || !/^[a-f0-9]{40,64}$/.test(binding.merge_base || '')
+      || !Array.isArray(binding.ticket_set) || !binding.ticket_set.length
+      || binding.ticket_set.length > 2000 || new Set(binding.ticket_set).size !== binding.ticket_set.length
+      || binding.ticket_set.some(ticket => !/^T-\d{2,}-\d{2,}$/.test(ticket))
+      || !/^[a-f0-9]{64}$/.test(binding.ticket_set_digest || ''))
+    fail('continuation requires complete original role, base, merge-base and ticket membership', 'REVIEW_RESTART_REQUIRED');
+  if (binding.base_ref !== undefined && (typeof binding.base_ref !== 'string'
+      || !/^refs\/(?:heads|remotes)\/[A-Za-z0-9._/-]+$/.test(binding.base_ref)
+      || git({}, manifest.snapshot.worktree, ['rev-parse', binding.base_ref + '^{commit}']) !== binding.base))
+    fail('original review base changed', 'REVIEW_RESTART_REQUIRED');
+  if (git({}, manifest.snapshot.worktree, ['merge-base', binding.base, manifest.snapshot.head]) !== binding.merge_base)
+    fail('original review merge ancestry changed', 'REVIEW_RESTART_REQUIRED');
+  const semanticPins = checked.material.map(bytes => {
+    let semantic; try { semantic = JSON.parse(bytes.toString('utf8')); } catch {}
+    return typeof semantic?.schema === 'string' && semantic.schema.startsWith('shipyard.semantic-content.')
+      ? { dictionary: semantic.dictionary_sha256, obligations: semantic.obligations_sha256 }
+      : { dictionary: digest(bytes), obligations: digest(JSON.stringify(canonical(binding))) };
+  });
+  return deepFreeze({ manifest_digest: digest(JSON.stringify(canonical(manifest))),
+    manifest_sha256: prepared.input_bundle.manifest_sha256,
+    dictionary_digest: digest(JSON.stringify(semanticPins.map(pin => pin.dictionary))),
+    obligation_digest: digest(JSON.stringify(semanticPins.map(pin => pin.obligations))),
+    repository: manifest.snapshot.repository, worktree: manifest.snapshot.worktree, role: manifest.role,
+    policy_hash: manifest.snapshot.policy_hash, contract: manifest.schema,
+    head: manifest.snapshot.head, head_tree: manifest.snapshot.head_tree, base: binding.base,
+    base_ref: binding.base_ref || null,
+    merge_base: binding.merge_base, ticket_set: binding.ticket_set, ticket_set_digest: binding.ticket_set_digest,
+    dispatch_id: manifest.dispatch_id, run_id: manifest.run_id, ticket: manifest.ticket, phase: manifest.phase });
+}
+
 function preflightReviewMaterial(material, expected = {}) {
   let value = material;
   if (typeof value === 'string' || Buffer.isBuffer(value)) {
@@ -479,7 +537,7 @@ function verifyFileInput(value, options = {}) {
         || transport.output_budget_bytes > 256 * 1024)
       capacityRefusal('transport_contract', transport.schema, 'shipyard.native-reader-transport.v2',
         'Use a supported transport with original matching host measurement.');
-    if (privateValue) {
+    if (privateValue && !restoredFileInputs.has(value)) {
       const admitted = measuredReaderContract(privateOptions.readerCapacity, manifest);
       if (JSON.stringify(canonical(admitted)) !== JSON.stringify(canonical(transport)))
         fail('reader measurement changed', 'READER_CAPACITY_UNSUPPORTED');
@@ -986,7 +1044,9 @@ function prepare(scope, launch, options = {}) {
       architecturePacket: prepared.packet,
       dispatchId: options.inflightDispatchId || launch.dispatch_id || crypto.randomUUID(),
       relayPrefix: prefix, binding: { packet_digest: prepared.packet.digest,
-        ticket_set_digest: prepared.binding?.membership || null, base: prepared.baseCommit,
+        ticket_set: prepared.binding?.ticketSet || [prepared.ticket],
+        ticket_set_digest: prepared.binding?.membership || digest(JSON.stringify([prepared.ticket])), base: prepared.baseCommit, base_ref: prepared.base,
+        merge_base: prepared.packet.diff.merge_base,
         merge_base_tree: prepared.mergeBaseTree, retained_evidence: prepared.packet.retained_evidence || [] } });
     prompt = fileInput.prompt;
   }
@@ -1059,7 +1119,9 @@ function admitInstalledLaunch(value, options) {
       ...privateOptions, role: 'arch-review', dispatchId: privateOptions.inflightDispatchId,
       relayPrefix: value.launch.context.prompt.slice(0, value.launch.context.prompt.indexOf('<AUTHENTICATED_CONTEXT_PACKET>')),
       binding: { packet_digest: value.prepared.packet.digest,
-        ticket_set_digest: value.prepared.binding?.membership || null, base: value.prepared.baseCommit,
+        ticket_set: value.prepared.binding?.ticketSet || [value.prepared.ticket],
+        ticket_set_digest: value.prepared.binding?.membership || digest(JSON.stringify([value.prepared.ticket])), base: value.prepared.baseCommit, base_ref: value.prepared.base,
+        merge_base: value.prepared.packet.diff.merge_base,
         merge_base_tree: value.prepared.mergeBaseTree, retained_evidence: value.prepared.packet.retained_evidence || [] } });
     preparedOptions.set(value, privateOptions);
   }
@@ -1234,7 +1296,10 @@ function validateSealedContext(input, options = {}) {
   if (!installation.files.some(pin => pin.path === receipt.agent_file && pin.sha256 === receipt.agent_file_digest))
     fail('installed agent differs from original receipt', 'STALE_CONTEXT');
   if (context.input_transport === 'host-files') {
-    const checked = verifyFileInput(context.input_bundle, { sealed: true, association: { role: 'arch-review', dispatch_id: input.dispatchId } });
+    const progress = receipt.runtime_evidence.review_continuation
+      ? roleArtifact.validateReviewContinuationEvidence(receipt.runtime_evidence) : null;
+    const checked = verifyFileInput(context.input_bundle, { sealed: true, association: { role: 'arch-review',
+      dispatch_id: progress ? progress.identity.dispatch_id : input.dispatchId } });
     if (checked.manifest.binding?.packet_digest !== context.packet_digest
         || receipt.runtime_evidence.input_transport !== 'host-files'
         || JSON.stringify(canonical(receipt.runtime_evidence.input_bundle)) !== JSON.stringify(canonical(context.input_bundle))
@@ -1281,4 +1346,4 @@ function validateSealedContext(input, options = {}) {
   return true;
 }
 
-module.exports = Object.freeze({ SCHEMA, FILE_LIMITS, preflightReviewMaterial, preflightReaderSchedule, capacityRefusal, recheckInstalledLaunch, prepareFileInput, isPreparedFileInput, verifyFileInput, instructionEvidence, prepare, finish, isPreparedContext, admitInstalledLaunch, admittedFileInput, admitBookkeeping, admittedPrompt, validateHistoricalContext, validateSealedContext });
+module.exports = Object.freeze({ SCHEMA, FILE_LIMITS, preflightReviewMaterial, preflightReaderSchedule, capacityRefusal, recheckInstalledLaunch, restoreReviewInput, reviewProgressIdentity, prepareFileInput, isPreparedFileInput, verifyFileInput, instructionEvidence, prepare, finish, isPreparedContext, admitInstalledLaunch, admittedFileInput, admitBookkeeping, admittedPrompt, validateHistoricalContext, validateSealedContext });

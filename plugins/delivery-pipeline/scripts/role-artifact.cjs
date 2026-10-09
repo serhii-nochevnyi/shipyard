@@ -333,6 +333,11 @@ function trustedRecord(input) {
       || record.receipt.compliance_proof.boundary !== 'adr-014.dispatch-boundary') {
     fail('NONCOMPLIANT_RECEIPT', 'dispatch receipt is not a finalized ADR-014 boundary receipt', { dispatch_id: dispatchId });
   }
+  if (record.receipt.runtime_evidence?.review_continuation) {
+    const progress = validateReviewContinuationEvidence(record.receipt.runtime_evidence);
+    if (progress.identity.role !== record.receipt.role || progress.identity.policy_hash !== record.receipt.policy_hash)
+      fail('NONCOMPLIANT_RECEIPT', 'continuation receipt changed its original role or policy');
+  }
   nonEmpty(record.receipt.runtime, 'receipt runtime');
   nonEmpty(record.receipt.role, 'receipt role');
   nonEmpty(record.receipt.launch_id, 'receipt launch id');
@@ -1042,7 +1047,7 @@ function authorityState(worktree, create = false, requireCatalogue = true, readC
     fail('ARCHIVE_AUTHORITY_INVALID', 'archive authority directory is not private or contains symlinks');
   const keyFile = path.join(directory, 'hmac.key');
   if (create) {
-    if (!fs.existsSync(keyFile) && fs.readdirSync(directory).some(name => name === 'catalogue.json' || name.startsWith('architecture-sources-') || name.startsWith('phase-archive-roster-') || name.startsWith('planning-containment-')))
+    if (!fs.existsSync(keyFile) && fs.readdirSync(directory).some(name => name === 'catalogue.json' || name.startsWith('architecture-sources-') || name.startsWith('phase-archive-roster-') || name.startsWith('planning-containment-') || name.startsWith('review-')))
       fail('ARCHIVE_AUTHORITY_INVALID', 'existing protected records require their original authority key');
     try { fs.writeFileSync(keyFile, crypto.randomBytes(32), { flag: 'wx', mode: 0o600 }); }
     catch (error) { if (error.code !== 'EEXIST') throw error; }
@@ -1062,6 +1067,211 @@ function authorityState(worktree, create = false, requireCatalogue = true, readC
   if (payload.schema !== 'shipyard.role-archive-catalogue.v1' || payload.worktree !== worktree || !object(payload.records))
     fail('ARCHIVE_AUTHORITY_INVALID', 'archive catalogue identity is invalid');
   return { directory, file, key, payload };
+}
+
+const authenticatedReviewProgress = new WeakSet();
+const REVIEW_PROGRESS_LIMIT = 4 * 1024 * 1024;
+
+function isAuthenticatedReviewProgress(value) { return authenticatedReviewProgress.has(value); }
+
+function reviewEnvelope(state, name) {
+  if (!/^review-(?:progress|tip)-[a-f0-9]{64}\.json$/.test(name || ''))
+    fail('REVIEW_PROGRESS_INVALID', 'invalid protected review reference');
+  const envelope = JSON.parse(authorityFile(path.join(state.directory, name), REVIEW_PROGRESS_LIMIT));
+  if (!object(envelope) || !object(envelope.payload) || !/^[a-f0-9]{64}$/.test(envelope.mac || ''))
+    fail('REVIEW_PROGRESS_INVALID', 'malformed protected review envelope');
+  const mac = crypto.createHmac('sha256', state.key).update(stable(envelope.payload)).digest('hex');
+  if (!crypto.timingSafeEqual(Buffer.from(mac, 'hex'), Buffer.from(envelope.mac, 'hex')))
+    fail('REVIEW_PROGRESS_INVALID', 'original review authority authentication failed');
+  return envelope.payload;
+}
+
+function writeReviewEnvelope(state, name, payload, immutable = false) {
+  const serialized = Buffer.from(stable({ payload,
+    mac: crypto.createHmac('sha256', state.key).update(stable(payload)).digest('hex') }) + '\n');
+  if (serialized.length > REVIEW_PROGRESS_LIMIT) fail('REVIEW_PROGRESS_INVALID', 'protected review exceeds its bound');
+  const file = path.join(state.directory, name);
+  const temporary = file + '.' + crypto.randomUUID() + '.tmp';
+  try {
+    const fd = fs.openSync(temporary, 'wx', 0o600);
+    try { fs.writeFileSync(fd, serialized); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+    assertArchiveLock(state.payload.worktree);
+    if (immutable) {
+      try { fs.linkSync(temporary, file); }
+      catch (error) {
+        if (error.code !== 'EEXIST') throw error;
+        if (!authorityFile(file).equals(serialized)) fail('REVIEW_PROGRESS_INVALID', 'protected range is immutable');
+      }
+    } else fs.renameSync(temporary, file);
+    const directoryFd = fs.openSync(state.directory, fs.constants.O_RDONLY);
+    try { fs.fsyncSync(directoryFd); } finally { fs.closeSync(directoryFd); }
+  } finally { try { fs.unlinkSync(temporary); } catch {} }
+}
+
+function reviewTipName(stream) { return 'review-tip-' + stream + '.json'; }
+
+function readReviewProgress({ worktree, reference } = {}) {
+  const root = fs.realpathSync(worktree);
+  if (!object(reference) || Object.keys(reference).length !== 2
+      || !Object.keys(reference).every(key => ['reference', 'sha256'].includes(key)) || !/^review-progress-[a-f0-9]{64}\.json$/.test(reference.reference || '')
+      || !/^[a-f0-9]{64}$/.test(reference.sha256 || ''))
+    fail('REVIEW_PROGRESS_REQUIRED', 'original protected progress reference is required');
+  const state = authorityState(root, false, false, false);
+  const relative = path.relative(root, state.directory);
+  if (!relative || (!relative.startsWith('..' + path.sep) && relative !== '..' && !path.isAbsolute(relative)))
+    fail('REVIEW_PROGRESS_INVALID', 'protected review authority is inside the writer tree');
+  const chain = [];
+  let cursor = reference;
+  for (let count = 0; cursor && count < 2064; count++) {
+    const payload = reviewEnvelope(state, cursor.reference);
+    if (payload.schema !== 'shipyard.review-progress.v1' || payload.identity?.worktree !== root
+        || payload.original_authority !== digest(state.key) || digest(stable(payload)) !== cursor.sha256
+        || cursor.reference !== 'review-progress-' + cursor.sha256 + '.json'
+        || !Number.isSafeInteger(payload.completed_ranges) || payload.completed_ranges < 1
+        || payload.completed_ranges > 2064 || payload.range?.ordinal !== payload.completed_ranges - 1
+        || !Number.isSafeInteger(payload.range.bytes) || payload.range.bytes < 1 || payload.range.bytes > 256 * 1024
+        || !Number.isSafeInteger(payload.range.native_bytes) || payload.range.native_bytes < 1
+        || payload.range.native_bytes > 128 * 1024 * 1024
+        || !/^[a-f0-9]{64}$/.test(payload.range.sha256 || '') || !/^[a-f0-9]{64}$/.test(payload.range.native_sha256 || '')
+        || payload.semantic_context !== 'exact-native-session'
+        || !/^[a-f0-9]{64}$/.test(payload.stream || ''))
+      fail('REVIEW_PROGRESS_INVALID', 'protected progress identity, range or authority changed');
+    chain.push(payload);
+    cursor = payload.predecessor;
+  }
+  if (cursor || !chain.length) fail('REVIEW_PROGRESS_INVALID', 'progress chain exceeds its bound');
+  chain.reverse();
+  const original = chain[0];
+  if (original.completed_ranges !== 1 || original.predecessor !== null)
+    fail('REVIEW_PROGRESS_INVALID', 'progress lacks its original range');
+  for (const [index, payload] of chain.entries()) {
+    if (payload.completed_ranges !== index + 1 || payload.stream !== original.stream
+        || stable(payload.identity) !== stable(original.identity)
+        || stable(payload.input) !== stable(original.input)
+        || stable(payload.original_launch) !== stable(original.original_launch)
+        || payload.session_id !== original.session_id || payload.parent_session_id !== original.parent_session_id
+        || payload.turn_id !== original.turn_id || payload.native_file !== original.native_file
+        || (index && (payload.range.native_bytes <= chain[index - 1].range.native_bytes
+          || payload.predecessor.sha256 !== digest(stable(chain[index - 1])))))
+      fail('REVIEW_PROGRESS_INVALID', 'progress predecessor, session or ordered range changed');
+  }
+  const tip = reviewEnvelope(state, reviewTipName(original.stream));
+  if (tip.schema !== 'shipyard.review-progress-tip.v1' || tip.original_authority !== digest(state.key)
+      || stable(tip.reference) !== stable(reference))
+    fail('REVIEW_PROGRESS_INVALID', 'progress is not the current protected cursor');
+  const originalTranscript = tip.original_exit?.transcript;
+  if (originalTranscript) {
+    if (!Number.isSafeInteger(originalTranscript.bytes) || originalTranscript.bytes < 1
+        || originalTranscript.bytes > 128 * 1024 * 1024 || !/^[a-f0-9]{64}$/.test(originalTranscript.sha256 || ''))
+      fail('REVIEW_PROGRESS_INVALID', 'original interrupted CLI reference is malformed');
+    const bytes = authorityFile(originalTranscript.path, 128 * 1024 * 1024);
+    if (bytes.length !== originalTranscript.bytes || digest(bytes) !== originalTranscript.sha256)
+      fail('REVIEW_PROGRESS_INVALID', 'original interrupted CLI history changed');
+  }
+  const payload = chain.at(-1);
+  const result = require('./codex-runtime-host.cjs').freezeReviewProgress({ ...payload, chain, state: tip });
+  authenticatedReviewProgress.add(result);
+  return result;
+}
+
+function persistReviewProgress(observation) {
+  const observed = require('./codex-runtime-host.cjs').reviewObservationData(observation);
+  const root = observed.identity.worktree;
+  return withArchiveAuthorityLock(root, () => {
+    const state = authorityState(root, true, false, false);
+    const relative = path.relative(root, state.directory);
+    if (!relative || (!relative.startsWith('..' + path.sep) && relative !== '..' && !path.isAbsolute(relative)))
+      fail('REVIEW_PROGRESS_INVALID', 'protected review authority is inside the writer tree');
+    const keyFd = fs.openSync(path.join(state.directory, 'hmac.key'), fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+    try { fs.fsyncSync(keyFd); } finally { fs.closeSync(keyFd); }
+    const name = reviewTipName(observed.stream);
+    let tip = fs.existsSync(path.join(state.directory, name)) ? reviewEnvelope(state, name) : null;
+    if (tip?.resume) fail('REVIEW_PROGRESS_INVALID', 'original review was already claimed for continuation');
+    let previous = tip ? readReviewProgress({ worktree: root, reference: tip.reference }) : null;
+    if (previous && (stable(previous.identity) !== stable(observed.identity)
+        || stable(previous.original_launch) !== stable(observed.launch) || stable(previous.input) !== stable(observed.input)
+        || previous.session_id !== observed.session_id || previous.turn_id !== observed.turn_id
+        || previous.native_file !== observed.native_file || previous.parent_session_id !== observed.parent_session_id))
+      fail('REVIEW_PROGRESS_INVALID', 'observed prefix differs from its original launch or subject');
+    require('./codex-runtime-host.cjs').reviewObservationData(observation);
+    for (const range of observed.ranges) {
+      if (range.ordinal < (previous?.completed_ranges || 0)) {
+        const old = previous.chain[range.ordinal];
+        if (stable(old.range) !== stable(range)) fail('REVIEW_PROGRESS_INVALID', 'observed range conflicts with durable credit');
+        continue;
+      }
+      if (range.ordinal !== (previous?.completed_ranges || 0))
+        fail('REVIEW_PROGRESS_INVALID', 'range is overlapping, missing or out of order');
+      const payload = { schema: 'shipyard.review-progress.v1', original_authority: digest(state.key),
+        stream: observed.stream, identity: observed.identity, input: observed.input,
+        original_launch: observed.launch, session_id: observed.session_id, parent_session_id: observed.parent_session_id,
+        turn_id: observed.turn_id, native_file: observed.native_file, semantic_context: 'exact-native-session',
+        completed_ranges: range.ordinal + 1, range, predecessor: tip?.reference || null };
+      const hash = digest(stable(payload));
+      const reference = { reference: 'review-progress-' + hash + '.json', sha256: hash };
+      writeReviewEnvelope(state, reference.reference, payload, true);
+      tip = { schema: 'shipyard.review-progress-tip.v1', original_authority: digest(state.key), reference, resume: null, original_exit: tip?.original_exit || null };
+      writeReviewEnvelope(state, name, tip);
+      previous = { completed_ranges: payload.completed_ranges, chain: [...(previous?.chain || []), payload] };
+    }
+    return tip ? Object.freeze({ ...tip.reference }) : null;
+  });
+}
+
+function finishOriginalReviewObservation(observation) {
+  const ended = require('./codex-runtime-host.cjs').reviewObservationData(observation);
+  return withArchiveAuthorityLock(ended.worktree, () => {
+    const progress = readReviewProgress({ worktree: ended.worktree, reference: ended.reference });
+    if (progress.state.resume || progress.original_launch.process_id !== ended.process_id)
+      fail('REVIEW_PROGRESS_INVALID', 'original process exit differs from its protected launch');
+    const state = authorityState(ended.worktree, false, false, false);
+    require('./codex-runtime-host.cjs').reviewObservationData(observation);
+    const tip = { ...progress.state, original_exit: ended.exit };
+    writeReviewEnvelope(state, reviewTipName(progress.stream), tip);
+  });
+}
+
+function claimReviewContinuation(observation) {
+  const claim = require('./codex-runtime-host.cjs').reviewObservationData(observation);
+  return withArchiveAuthorityLock(claim.worktree, () => {
+    const progress = readReviewProgress({ worktree: claim.worktree, reference: claim.reference });
+    if (progress.state.resume) fail('REVIEW_PROGRESS_INVALID', 'protected continuation was already dispatched');
+    const state = authorityState(claim.worktree, false, false, false);
+    require('./codex-runtime-host.cjs').reviewObservationData(observation);
+    const tip = { ...progress.state, resume: { status: 'claimed', dispatch_id: claim.dispatch_id,
+      native_bytes: claim.native_bytes, native_sha256: claim.native_sha256 } };
+    writeReviewEnvelope(state, reviewTipName(progress.stream), tip);
+    return readReviewProgress({ worktree: claim.worktree, reference: claim.reference });
+  });
+}
+
+function completeReviewContinuation(observation) {
+  const completed = require('./codex-runtime-host.cjs').reviewObservationData(observation);
+  return withArchiveAuthorityLock(completed.worktree, () => {
+    const progress = readReviewProgress({ worktree: completed.worktree, reference: completed.reference });
+    const resume = progress.state.resume;
+    if (resume?.status !== 'claimed' || resume.dispatch_id !== completed.evidence.dispatch_id)
+      fail('REVIEW_PROGRESS_INVALID', 'fresh completed turn lacks its claimed dispatch');
+    const state = authorityState(completed.worktree, false, false, false);
+    require('./codex-runtime-host.cjs').reviewObservationData(observation);
+    const tip = { ...progress.state, resume: { ...resume, status: 'completed',
+      evidence_sha256: digest(stable(completed.evidence)), turn_id: completed.turn_id } };
+    writeReviewEnvelope(state, reviewTipName(progress.stream), tip);
+  });
+}
+
+function validateReviewContinuationEvidence(evidence) {
+  const continuation = evidence?.review_continuation;
+  if (!object(continuation) || continuation.schema !== 'shipyard.review-continuation.v1')
+    fail('REVIEW_PROGRESS_INVALID', 'unsupported review continuation evidence');
+  const progress = readReviewProgress({ worktree: evidence.worktree, reference: continuation.progress });
+  if (progress.state.resume?.status !== 'completed'
+      || progress.state.resume.dispatch_id !== evidence.dispatch_id
+      || progress.state.resume.evidence_sha256 !== digest(stable(evidence))
+      || continuation.original_dispatch_id !== progress.identity.dispatch_id
+      || evidence.session_id !== progress.session_id || continuation.semantic_context !== progress.semantic_context)
+    fail('REVIEW_PROGRESS_INVALID', 'fresh final differs from protected completed continuation');
+  return progress;
 }
 
 function planningContainmentIdentity(worktree, binding) {
@@ -3999,6 +4209,13 @@ module.exports = Object.freeze(Object.assign(Object.create(null), {
   DRIFT_ENVELOPE_SCHEMA,
   JUDGMENT_ENVELOPE_SCHEMA,
   JUDGMENT_EVIDENCE_NAMES,
+  isAuthenticatedReviewProgress,
+  readReviewProgress,
+  persistReviewProgress,
+  finishOriginalReviewObservation,
+  claimReviewContinuation,
+  completeReviewContinuation,
+  validateReviewContinuationEvidence,
   registerPlanningContainmentBaseline,
   readPlanningContainmentBaseline,
   architectureAuthorityPath,
