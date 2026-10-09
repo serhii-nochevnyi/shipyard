@@ -126,9 +126,29 @@ function comparePackage(directory, binding, sealed = false) {
   return { package_sha256: build.digest, manifest_sha256: sha(manifestBytes), output_count: actual.length };
 }
 
-function inspectCandidate(candidate, root = ROOT, kind = 'main-review-repair') {
+function inspectCandidate(candidate, root = ROOT, kind = 't16-source-repair') {
   const publication = require('../unit/phase47-package-publication.test.cjs');
   const common = gitText(root, 'rev-parse', '--path-format=absolute', '--git-common-dir');
+  if (kind === 't16-source-repair') {
+    const authenticated = publication.authenticateT16Successor(common, root);
+    const { selection, binding, selectionPath } = authenticated.selected;
+    if (candidate) assert.equal(candidate, selection.candidate_path, 'foreign T16 candidate');
+    publication.validatePublication(root, authenticated.selected, 'candidate');
+    publication.recheckT16Successor(authenticated, root);
+    return { selection, binding, authenticated, identity: {
+      generation_kind: kind, historical_only: false,
+      candidate_sha256: null, policy_sha256: null,
+      canonical_input_digest: binding.canonical_input_digest,
+      package_sha256: binding.package_sha256,
+      manifest_sha256: sha(stableRead(path.join(selection.candidate_path, '.codex-plugin/plugin.json'))),
+      selection_sha256: authenticated.handback.selection_sha256,
+      source_head: binding.source.head,
+      source_tree: binding.source.tree, output_count: binding.outputs.length, version: binding.version,
+      selection_path: selectionPath, binding_path: selection.binding_path,
+      binding_sha256: selection.binding_sha256, candidate_path: selection.candidate_path,
+      generation_handback: { path: publication.R8_STAGE + "/generation.json", sha256: publication.R8_HANDOFF_SHA }
+    } };
+  }
   assert(['original', 'final', 'successor', 'volume-successor', 'main-review-repair', 'historical-F1'].includes(kind), 'unknown generation branch');
   const authenticated = kind === 'main-review-repair' ? publication.authenticateRepairSuccessor(common, root)
     : kind === 'historical-F1' ? publication.authenticateRepairSuccessor(common, root, 'F1', publication.F1_HISTORICAL_CONTRACT)
@@ -343,11 +363,19 @@ function openLedger() {
 }
 
 function validateLedger(ledger) {
+  if (ledger.pending_source_publication) {
+    const pending = ledger.pending_source_publication;
+    assert.equal(pending.kind, 't16-source-repair');
+    assert.equal(pending.accepted, false); assert.equal(pending.native_launches, 0);
+    assert.equal(ledger.current_verification.accepted, false);
+    assert.equal(ledger.current_verification.native_launches, 0);
+    inspectCandidate(null, ROOT, pending.kind);
+  }
   assert.equal(ledger.schema, 'shipyard.phase47-runtime-acceptance.v1');
   assert.equal(ledger.ticket, 'T-47-08'); assert.equal(ledger.plan_sha256, PLAN_SHA256);
   assert.deepEqual(ledger.obligations?.map(row => row.id).sort(), [...OBLIGATIONS].sort(), 'obligation inventory incomplete');
   assert.equal(ledger.accounting?.efficiency, 'inconclusive', 'efficiency remains inconclusive without matched cohorts');
-  if (ledger.corrective_generation) {
+  if (ledger.corrective_generation && ledger.corrective_generation.kind !== 't16-source-repair') {
     assert(ledger.candidate, 'corrective ledger requires current candidate');
     const publication = require('../unit/phase47-package-publication.test.cjs');
     const repair = ledger.corrective_generation.kind === 'main-review-repair';
@@ -409,6 +437,11 @@ function validateLedger(ledger) {
     }
     verified.push({ id: row.id, ...validateHostProof(row.proof, row.id, ledger.installation, row) });
   }
+  if (ledger.corrective_generation?.kind === 't16-source-repair') {
+    const publication = require('../unit/phase47-package-publication.test.cjs');
+    assert.deepEqual(ledger.corrective_generation.handback, {path: publication.R8_STAGE + '/generation.json', sha256: publication.R8_HANDOFF_SHA});
+    assert.equal(ledger.corrective_generation.ticket, 'T-47-16');
+  }
   let inspected = null;
   if (ledger.candidate) {
     inspected = inspectCandidate(ledger.candidate.candidate_path, ROOT, ledger.corrective_generation?.kind || 'original');
@@ -429,7 +462,8 @@ function validateLedger(ledger) {
   }
   if (inspected) {
     const publication = require('../unit/phase47-package-publication.test.cjs');
-    if (inspected.identity.generation_kind === 'main-review-repair') publication.recheckRepairSuccessor(inspected.authenticated);
+    if (inspected.identity.generation_kind === 't16-source-repair') publication.recheckT16Successor(inspected.authenticated);
+    else if (inspected.identity.generation_kind === 'main-review-repair') publication.recheckRepairSuccessor(inspected.authenticated);
     else if (inspected.identity.generation_kind === 'volume-successor')
       assert.deepEqual(publication.authenticateVolumeSuccessor(inspected.binding.source.common, ROOT, true), inspected.authenticated);
     else if (inspected.identity.generation_kind === 'successor')

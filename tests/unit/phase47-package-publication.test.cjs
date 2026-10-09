@@ -95,6 +95,514 @@ const R2_SCOPE_SHA = '4647587d0324060505c1516ffe61e76fb45892e10d0ad7e62705f01418
 const F1_HISTORICAL_CONTRACT = { path: '/tmp/phase47-R2-pinned-F1-historical-source-contract.json',
   sha256: '71a6acf6f858715a5e04f4270ec2f52252bbee298259f513a69a59d7963d16ce' };
 
+const T16_STAGE = '/Volumes/KINGSTON/claude-shipyard/.git/shipyard-phase47-final-publication/INV-014-runtime-delivery-correctness/ADR-027-main421-T16-R3';
+const T16_HANDOFF = T16_STAGE + '/generation.json';
+const T16_HANDOFF_SHA = '3f4b67549647d227c375da8d1042e5dbb601e80303cf3d52fe47ef1ff54b9eba';
+const T16_SOURCE = 'd1e3fcb20c4c8d3786dd7fa7294bd519fa57618d';
+const T16_CORRECTIVE = ['architecture-target', 'claude-role-host', 'codex-arch-review-context', 'deliver-dispatch', 'role-artifact'].map(mirror)
+  .concat('host/plugins/delivery-pipeline/references/arch-review.md', '.codex-plugin/plugin.json', 'package-build.json').sort();
+
+const R3_STAGE = T16_STAGE;
+const R3_HANDOFF_SHA = T16_HANDOFF_SHA;
+const R4_STAGE = R3_STAGE.replace('-R3', '-R4');
+const R4_HANDOFF_SHA = 'd749a68e28c4355cd59c49b70ca42636d57d5cd318ff0a8d489e24383dd9a035';
+const R4_CORRECTIVE = ['.codex-plugin/plugin.json', mirror('deliver-dispatch'), 'package-build.json'];
+
+const R5_STAGE = R3_STAGE.replace('-R3', '-R5');
+const R5_HANDOFF_SHA = 'bc0fd3d6dd33ee608056ef3e76aa5e835e48e538ca44699be5f44ae5a762a6b9';
+const R5_CORRECTIVE = ['.codex-plugin/plugin.json', mirror('role-artifact'), 'package-build.json'];
+
+
+const R6_STAGE = R3_STAGE.replace('-R3', '-R6');
+const R6_HANDOFF_SHA = 'b3a59beb7e369cb891e5934fe974e1bcad9d3ba7c96078fa6d6595b294a40de9';
+const R6_CORRECTIVE = ['.codex-plugin/plugin.json', mirror('gate-trailer'), mirror('role-artifact'), mirror('sentinel'), mirror('state-sync'), 'package-build.json'];
+
+function validateR6Contract(handback, selection, binding) {
+  assert.deepEqual(binding.previous_publication, {"path":"/Volumes/KINGSTON/claude-shipyard/.git/shipyard-phase47-final-publication/INV-014-runtime-delivery-correctness/ADR-027-main421-T16-R5/generation.json","sha256":"bc0fd3d6dd33ee608056ef3e76aa5e835e48e538ca44699be5f44ae5a762a6b9","selection_path":"/Volumes/KINGSTON/claude-shipyard/.git/shipyard-phase47-final-publication/INV-014-runtime-delivery-correctness/ADR-027-main421-T16-R5/selection.json","selection_sha256":"0ef7c97179ffaa88afd5386bc4550bf84e92f2d33ecb67ce0163964dbc284f90","binding_path":"/Volumes/KINGSTON/claude-shipyard/.git/shipyard-phase47-final-publication/INV-014-runtime-delivery-correctness/ADR-027-main421-T16-R5/binding.json","binding_sha256":"062570456684fd64cedd7e3dda05bad46f7379a33b308755755311c68570b979"});
+  assert.deepEqual(binding.source_finalization, {"path":"/tmp/phase47-16-shared-epic-final-trusted-fixer-finalization.json","sha256":"ab3064f6d6948be1f41f88514377c8d5a83e2ea3bf60d044b7b2a96093b7bf14","commit":"fb444e75a115c57c70d27cb70f37c3a0e742a2df","tree":"4188f087f978ccda7cb9c942232e1c742aa532f0","verification":{"digest":"3f22588fadf574bf8f3e73eec91d586ed8b7196cb762ac4905f5196489f98c16","path":"/Users/serhii/.local/state/shipyard/codex/finalization/9724bc475b9461ad5008f65c939f17074448416305d2d83f41f80dc3a853209d/verification/3f22588fadf574bf8f3e73eec91d586ed8b7196cb762ac4905f5196489f98c16.json","outcome":"passed"},"fixer_result_path":"/tmp/phase47-16-shared-epic-parity-result.json","fixer_result_sha256":"593238c7bae5aee8881cfae3e668d0a3d8628e9e0acbb495a8fcd7aa82c13eec"});
+  assert.deepEqual(binding.builder_inventory, {"path":"/tmp/phase47-16-shared-epic-candidate-inventory.json","sha256":"a0984feb89d0ffc4c3d2616fb2bd7d847b467af2e5a1993f2bedb3b550437a51"});
+  assert.deepEqual(binding.publication_native_result, {"path":"/tmp/phase47-16-shared-epic-parity-result.json","sha256":"593238c7bae5aee8881cfae3e668d0a3d8628e9e0acbb495a8fcd7aa82c13eec"});
+  assert.deepEqual(binding.build_sequence, "built-once-before-final-proof; native-complete-parity; original-two-formal-commands-on-final-tree; seal-without-rebuild");
+  assert.deepEqual(handback.previous_publication, binding.previous_publication);
+  assert.deepEqual(binding.source.head, "fb444e75a115c57c70d27cb70f37c3a0e742a2df");
+  assert.deepEqual(binding.source.tree, "4188f087f978ccda7cb9c942232e1c742aa532f0");
+  assert.deepEqual(binding.source.changes, ["plugins/delivery-pipeline/scripts/gate-trailer.cjs", "plugins/delivery-pipeline/scripts/role-artifact.cjs", "plugins/delivery-pipeline/scripts/sentinel.cjs", "plugins/delivery-pipeline/scripts/state-sync.cjs", "tests/unit/architecture-target.test.cjs", "tests/unit/role-artifact.test.cjs"]);
+  for (const object of [handback, selection, binding]) assert.equal(object.version, '0.71.0+codex.c926509d9f20d683');
+  for (const object of [handback, binding]) assert.deepEqual(object.changed_outputs, R6_CORRECTIVE);
+  for (const object of [handback, selection]) {
+    assert.equal(object.source_commit, binding.source.head);
+    assert.equal(object.candidate_path, R6_STAGE+'/candidate');
+    assert.equal(object.binding_path, R6_STAGE+'/binding.json');
+    assert.equal(object.binding_sha256, '1e70af73894d13c982591ce6a4217c0321ea7ecb2062dcc957dec15f316e5b33');
+  }
+  assert.equal(handback.selection_path, R6_STAGE+'/selection.json');
+  assert.equal(handback.selection_sha256, 'e8954ec3ba0060ace0bc6b3256043e0564b4797a6c154d0abd698662eba1a87c');
+  const h=structuredClone(handback), sel=structuredClone(selection), b=structuredClone(binding);
+  b.previous_publication={"path":"/Volumes/KINGSTON/claude-shipyard/.git/shipyard-phase47-final-publication/INV-014-runtime-delivery-correctness/ADR-027-main421-T16-R4/generation.json","sha256":"d749a68e28c4355cd59c49b70ca42636d57d5cd318ff0a8d489e24383dd9a035","selection_path":"/Volumes/KINGSTON/claude-shipyard/.git/shipyard-phase47-final-publication/INV-014-runtime-delivery-correctness/ADR-027-main421-T16-R4/selection.json","selection_sha256":"7034eb1d3381a625312b7e55da5eea92190b1eacdc2de0d9cf9a5ca9a3e25eae","binding_path":"/Volumes/KINGSTON/claude-shipyard/.git/shipyard-phase47-final-publication/INV-014-runtime-delivery-correctness/ADR-027-main421-T16-R4/binding.json","binding_sha256":"d6d9aa45d3354bc86c7a637ab70ccad8cc00ed95b755b7896f65a23ad7a57783"};
+  b.source_finalization={"path":"/tmp/phase47-16-bounded-final-retry-trusted-fixer-finalization.json","sha256":"094bf1244879ae03fa95708b12b49df0de922dbc0eae815c4938d8b95e3e724b","commit":"74597623434d748357fcafedc87ed8d7397b7757","tree":"6c8bf92fe236af7058ae1bed7ecd3e99dfbe3090","verification":{"digest":"e6ba9e5707ac24ca70b0cf68a0905d67b344eeaa419ee1b1cb3d33c028c145e8","path":"/Users/serhii/.local/state/shipyard/codex/finalization/9724bc475b9461ad5008f65c939f17074448416305d2d83f41f80dc3a853209d/verification/e6ba9e5707ac24ca70b0cf68a0905d67b344eeaa419ee1b1cb3d33c028c145e8.json","outcome":"passed"},"fixer_result_path":"/tmp/phase47-16-bounded-clean-parity-result.json","fixer_result_sha256":"8f052bf028805172bdd4103289fd6201fb530a4cd517bce675af20b7e8dbcdf1"};
+  b.builder_inventory={"path":"/tmp/phase47-16-bounded-clean-candidate-inventory.json","sha256":"402ad93713ccd39501ffc8360724f31ad7ea26a2e276cdb2b1bb919e00fc0cd6"};
+  b.publication_native_result={"path":"/tmp/phase47-16-bounded-clean-parity-result.json","sha256":"8f052bf028805172bdd4103289fd6201fb530a4cd517bce675af20b7e8dbcdf1"};
+  b.build_sequence="built-once-before-final-proof; native-complete-parity; original-two-formal-commands-on-final-tree; seal-without-rebuild";
+  b.source.head="74597623434d748357fcafedc87ed8d7397b7757";
+  b.source.tree="6c8bf92fe236af7058ae1bed7ecd3e99dfbe3090";
+  b.source.changes=["plugins/delivery-pipeline/scripts/role-artifact.cjs", "tests/unit/architecture-target.test.cjs", "tests/unit/role-artifact.test.cjs"];
+  h.previous_publication=b.previous_publication;
+  h.changed_outputs=b.changed_outputs=R5_CORRECTIVE;
+  for (const object of [h,sel,b]) object.version="0.71.0+codex.b8ac969962427971";
+  for (const object of [h,sel]) {
+    object.source_commit="74597623434d748357fcafedc87ed8d7397b7757";
+    object.candidate_path="/Volumes/KINGSTON/claude-shipyard/.git/shipyard-phase47-final-publication/INV-014-runtime-delivery-correctness/ADR-027-main421-T16-R5/candidate";
+    object.binding_path="/Volumes/KINGSTON/claude-shipyard/.git/shipyard-phase47-final-publication/INV-014-runtime-delivery-correctness/ADR-027-main421-T16-R5/binding.json";
+    object.binding_sha256="062570456684fd64cedd7e3dda05bad46f7379a33b308755755311c68570b979";
+  }
+  h.selection_path="/Volumes/KINGSTON/claude-shipyard/.git/shipyard-phase47-final-publication/INV-014-runtime-delivery-correctness/ADR-027-main421-T16-R5/selection.json";
+  h.selection_sha256="0ef7c97179ffaa88afd5386bc4550bf84e92f2d33ecb67ce0163964dbc284f90";
+  validateR5Contract(h,sel,b);
+}
+
+function validateR5Contract(handback, selection, binding) {
+  const prior = {path:R4_STAGE+'/generation.json',sha256:R4_HANDOFF_SHA,
+    selection_path:R4_STAGE+'/selection.json',selection_sha256:'7034eb1d3381a625312b7e55da5eea92190b1eacdc2de0d9cf9a5ca9a3e25eae',
+    binding_path:R4_STAGE+'/binding.json',binding_sha256:'d6d9aa45d3354bc86c7a637ab70ccad8cc00ed95b755b7896f65a23ad7a57783'};
+  assert.deepEqual(binding.previous_publication, prior);
+  assert.deepEqual(handback.previous_publication, prior);
+  assert.equal(binding.source.head, '74597623434d748357fcafedc87ed8d7397b7757');
+  assert.equal(binding.source.tree, '6c8bf92fe236af7058ae1bed7ecd3e99dfbe3090');
+  assert.deepEqual(binding.source.changes, ['plugins/delivery-pipeline/scripts/role-artifact.cjs', 'tests/unit/architecture-target.test.cjs', 'tests/unit/role-artifact.test.cjs']);
+  assert.deepEqual(binding.builder_inventory, {path:'/tmp/phase47-16-bounded-clean-candidate-inventory.json',sha256:'402ad93713ccd39501ffc8360724f31ad7ea26a2e276cdb2b1bb919e00fc0cd6'});
+  assert.deepEqual(binding.publication_native_result, {path:'/tmp/phase47-16-bounded-clean-parity-result.json',sha256:'8f052bf028805172bdd4103289fd6201fb530a4cd517bce675af20b7e8dbcdf1'});
+  assert.equal(binding.source_finalization.path, '/tmp/phase47-16-bounded-final-retry-trusted-fixer-finalization.json');
+  assert.equal(binding.source_finalization.sha256, '094bf1244879ae03fa95708b12b49df0de922dbc0eae815c4938d8b95e3e724b');
+  assert.equal(binding.source_finalization.verification.digest, 'e6ba9e5707ac24ca70b0cf68a0905d67b344eeaa419ee1b1cb3d33c028c145e8');
+  assert.equal(binding.source_finalization.commit, binding.source.head);
+  assert.equal(binding.source_finalization.tree, binding.source.tree);
+  const h=structuredClone(handback), sel=structuredClone(selection), b=structuredClone(binding);
+  for (const object of [handback, selection, binding]) assert.equal(object.version, '0.71.0+codex.b8ac969962427971');
+  for (const object of [handback, binding]) assert.deepEqual(object.changed_outputs, R5_CORRECTIVE);
+  for (const object of [handback, selection]) {
+    assert.equal(object.source_commit, binding.source.head);
+    assert.equal(object.candidate_path, R5_STAGE+'/candidate');
+    assert.equal(object.binding_path, R5_STAGE+'/binding.json');
+    assert.equal(object.binding_sha256, '062570456684fd64cedd7e3dda05bad46f7379a33b308755755311c68570b979');
+  }
+  assert.equal(handback.selection_path, R5_STAGE+'/selection.json');
+  assert.equal(handback.selection_sha256, '0ef7c97179ffaa88afd5386bc4550bf84e92f2d33ecb67ce0163964dbc284f90');
+  for (const object of [h,sel,b]) object.version='0.71.0+codex.daf277913a59a95f';
+  for (const object of [h,sel]) {
+    object.source_commit='6bd6943be0d617144803399b987a2877ed365c0c';
+    object.candidate_path=R4_STAGE+'/candidate';object.binding_path=R4_STAGE+'/binding.json';
+    object.binding_sha256=prior.binding_sha256;
+  }
+  h.selection_path=prior.selection_path;h.selection_sha256=prior.selection_sha256;
+  h.changed_outputs=b.changed_outputs=R4_CORRECTIVE;
+  b.source.head=b.source_finalization.commit='6bd6943be0d617144803399b987a2877ed365c0c';
+  b.source.tree=b.source_finalization.tree='0588af073a11d35dab3abfd87aa5aa3349eca9aa';
+  b.source.changes=['plugins/delivery-pipeline/scripts/deliver-dispatch.cjs','tests/unit/architecture-target.test.cjs','tests/unit/role-artifact.test.cjs'];
+  b.source_finalization.verification.digest='c2fda6a34be316bf5af4ace1f1cd26d48f0d89abebb870a660817d662fc54323';
+  b.builder_inventory={path:'/tmp/phase47-16-copilot-ci-repair-candidate-inventory.json',sha256:'d1ba21dd591a0e519689d3a4238eaa2699d8df867f6e5f05fe55f07d034f67a2'};
+  b.publication_native_result={path:'/tmp/phase47-16-copilot-package-parity-result.json',sha256:'ba3b54faee7d91d449c96de098f6785d44b6a335caddf109eef10f7ad14a6fca'};
+  const r4Previous={path:R3_STAGE+'/generation.json',sha256:R3_HANDOFF_SHA,
+    selection_path:R3_STAGE+'/selection.json',selection_sha256:'cb368749284ad1dce8157c8c64ce37c6d7b44a6662b14d3a3b9907f4685f0a03',
+    binding_path:R3_STAGE+'/binding.json',binding_sha256:'1f4c6584245d59dfb0fd8c8d2893d84201ad0854a2ebcd972a204e296b627f35'};
+  h.previous_publication=b.previous_publication=r4Previous;
+  validateR4Contract(h,sel,b);
+}
+
+function validateT16Contract(handback, selection, binding, final = false) {
+  if (final) return validateR4Contract(handback, selection, binding);
+  assert.equal(handback.schema, 'shipyard.phase47-t16-publication-generation.v1');
+  assert.equal(selection.schema, 'shipyard.phase47-t16-publication-selection.v1');
+  assert.equal(binding.schema, 'shipyard.phase47-t16-publication-binding.v1');
+  for (const object of [handback, binding]) {
+    assert.equal(object.actor, 'trusted-coordinator'); assert.equal(object.native_receipt, false);
+    assert.equal(object.build_calls, 1); assert.deepEqual([...object.changed_outputs].sort(), T16_CORRECTIVE);
+  }
+  assert.equal(handback.status, 'completed'); assert.equal(binding.ticket, 'T-47-16');
+  assert.equal(binding.phase_membership, 27); assert.equal(binding.outputs.length, 161);
+  assert.equal(new Set(binding.outputs.map(row => row.path)).size, 161);
+  assert.equal(binding.source.head, T16_SOURCE);
+  assert.equal(binding.source.tree, '215134d0bc1063547f391ed654764e0afc823c1a');
+  assert.equal(binding.source.config_sha256, COORDINATOR48_SHA);
+  assert.equal(binding.source.plan_sha256, 'f52ee4c06fbc5af6a04c8298d4ca3176f0b14519183c0fbf2a54d2d589cb3c56');
+  assert.equal(binding.builder, 'scripts/package-shipyard-codex.cjs');
+  assert.equal(binding.source_finalization.verification.digest, '2e54221eabbf9cc97508791834c5ea737d6af66afe5c7a59da331b4256a41f36');
+  assert.equal(binding.source_finalization.verification.outcome, 'passed');
+  assert.equal(binding.source_finalization.commit, T16_SOURCE);
+  assert.equal(binding.source_finalization.tree, binding.source.tree);
+  assert.deepEqual(handback.previous_publication, binding.previous_publication);
+  assert.equal(binding.previous_publication.path, R2_HANDOFF);
+  assert.equal(binding.previous_publication.sha256, R2_HANDOFF_SHA);
+  assert.equal(binding.previous_publication.selection_sha256, '1394f2b6cfb5447194b80a67b4e6456416cd3b1d1b40926da8b34073c995f3c1');
+  assert.equal(binding.previous_publication.binding_sha256, 'e3e08aefe542e17732976f670950fbced1c094eafae96d80fca4c53c3491d6a7');
+  for (const object of [handback, selection, binding]) assert.equal(object.version, '0.71.0+codex.b7fbd7d015a08f33');
+  for (const object of [handback, selection]) {
+    assert.equal(object.source_commit, T16_SOURCE);
+    assert.equal(object.candidate_path, T16_STAGE + '/candidate');
+    assert.equal(object.binding_path, T16_STAGE + '/binding.json');
+    assert.equal(object.binding_sha256, '1f4c6584245d59dfb0fd8c8d2893d84201ad0854a2ebcd972a204e296b627f35');
+  }
+  assert.equal(handback.selection_path, T16_STAGE + '/selection.json');
+  assert.equal(handback.selection_sha256, 'cb368749284ad1dce8157c8c64ce37c6d7b44a6662b14d3a3b9907f4685f0a03');
+  assert.equal(selection.output_count, 161); assert.equal(handback.outputs, 161);
+}
+
+function validateR4Contract(handback, selection, binding) {
+  const prior = binding.previous_publication;
+  assert.deepEqual(prior, {path: R3_STAGE + '/generation.json', sha256: R3_HANDOFF_SHA,
+    selection_path: R3_STAGE + '/selection.json', selection_sha256: 'cb368749284ad1dce8157c8c64ce37c6d7b44a6662b14d3a3b9907f4685f0a03',
+    binding_path: R3_STAGE + '/binding.json', binding_sha256: '1f4c6584245d59dfb0fd8c8d2893d84201ad0854a2ebcd972a204e296b627f35'});
+  assert.deepEqual(handback.previous_publication, prior);
+  assert.equal(binding.build_sequence, 'built-once-before-final-proof; native-complete-parity; original-two-formal-commands-on-final-tree; seal-without-rebuild');
+  assert.deepEqual(binding.builder_inventory, {path:'/tmp/phase47-16-copilot-ci-repair-candidate-inventory.json',sha256:'d1ba21dd591a0e519689d3a4238eaa2699d8df867f6e5f05fe55f07d034f67a2'});
+  assert.deepEqual(binding.publication_native_result, {path:'/tmp/phase47-16-copilot-package-parity-result.json',sha256:'ba3b54faee7d91d449c96de098f6785d44b6a335caddf109eef10f7ad14a6fca'});
+  assert.equal(binding.source.head, '6bd6943be0d617144803399b987a2877ed365c0c');
+  assert.equal(binding.source.tree, '0588af073a11d35dab3abfd87aa5aa3349eca9aa');
+  assert.deepEqual(binding.source.changes, ['plugins/delivery-pipeline/scripts/deliver-dispatch.cjs', 'tests/unit/architecture-target.test.cjs', 'tests/unit/role-artifact.test.cjs']);
+  assert.equal(binding.source_finalization.verification.digest, 'c2fda6a34be316bf5af4ace1f1cd26d48f0d89abebb870a660817d662fc54323');
+  assert.equal(binding.source_finalization.commit, binding.source.head);
+  assert.equal(binding.source_finalization.tree, binding.source.tree);
+  for (const object of [handback, selection, binding]) assert.equal(object.version, '0.71.0+codex.daf277913a59a95f');
+  for (const object of [handback, binding]) assert.deepEqual(object.changed_outputs, R4_CORRECTIVE);
+  const h = structuredClone(handback), sel = structuredClone(selection), b = structuredClone(binding);
+  for (const object of [h, sel, b]) object.version = '0.71.0+codex.b7fbd7d015a08f33';
+  for (const object of [h, sel]) {
+    assert.equal(object.source_commit, binding.source.head);
+    assert.equal(object.candidate_path, R4_STAGE + '/candidate');
+    assert.equal(object.binding_path, R4_STAGE + '/binding.json');
+    assert.equal(object.binding_sha256, 'd6d9aa45d3354bc86c7a637ab70ccad8cc00ed95b755b7896f65a23ad7a57783');
+    object.source_commit = T16_SOURCE; object.candidate_path = R3_STAGE + '/candidate';
+    object.binding_path = R3_STAGE + '/binding.json'; object.binding_sha256 = '1f4c6584245d59dfb0fd8c8d2893d84201ad0854a2ebcd972a204e296b627f35';
+  }
+  assert.equal(h.selection_path, R4_STAGE + '/selection.json');
+  assert.equal(h.selection_sha256, '7034eb1d3381a625312b7e55da5eea92190b1eacdc2de0d9cf9a5ca9a3e25eae');
+  h.selection_path = R3_STAGE + '/selection.json'; h.selection_sha256 = 'cb368749284ad1dce8157c8c64ce37c6d7b44a6662b14d3a3b9907f4685f0a03';
+  h.changed_outputs = b.changed_outputs = T16_CORRECTIVE;
+  b.source.head = b.source_finalization.commit = T16_SOURCE;
+  b.source.tree = b.source_finalization.tree = '215134d0bc1063547f391ed654764e0afc823c1a';
+  b.source_finalization.verification.digest = '2e54221eabbf9cc97508791834c5ea737d6af66afe5c7a59da331b4256a41f36';
+  h.previous_publication = b.previous_publication = {path:R2_HANDOFF,sha256:R2_HANDOFF_SHA,
+    selection_sha256:'1394f2b6cfb5447194b80a67b4e6456416cd3b1d1b40926da8b34073c995f3c1',binding_sha256:'e3e08aefe542e17732976f670950fbced1c094eafae96d80fca4c53c3491d6a7'};
+  validateT16Contract(h, sel, b);
+}
+
+const R2_HISTORY_ADMISSION = Symbol('authenticated literal-pinned R2 history');
+const R2_HISTORY_CONTRACT = Object.freeze({ path: '/tmp/phase47-R2-historical-authentication-contract.json',
+  sha256: 'f587d3fa29eada2708cc44ab56270e78a312b4a28e0c388446d39e99c74000ba' });
+
+function validateR2HistoricalAdmission(contract, snapshot) {
+  assert.equal(contract.schema, 'shipyard.phase47-r2-historical-authentication.v1');
+  assert.equal(contract.actor, 'trusted-coordinator');
+  assert.equal(contract.native_receipt, false);
+  assert.deepEqual(contract.snapshot, { path: '/tmp/phase47-R2-historical-authentication-before-T16.json',
+    sha256: 'ce4f18bb385e2894182d35e395a1dffd933492fd568496cae32458db266101fc', bytes: 684623 });
+  assert.deepEqual(contract.original_handoff, { path: R2_HANDOFF, sha256: R2_HANDOFF_SHA });
+  assert.deepEqual(contract.validated_current, { head: '265110621c8097a83867a9e9dd7958c0e7830cb2',
+    tree: 'e713fcbb21a22761c956bae621529544947e67dd',
+    canonical_input_digest: '9365fc4817abc41cce69798cb84bf9a8938e4b9d1e0645ba5dce5a9781aebbd0', source_ancestor: true });
+  assert.equal(contract.original_raw_board_retained, false);
+  assert.equal(contract.original_raw_board_reconstructed, false);
+  assert.equal(contract.rebuilds, 0);
+  assert.deepEqual(snapshot.current, contract.validated_current);
+  assert.equal(snapshot.handback.selection_sha256, '1394f2b6cfb5447194b80a67b4e6456416cd3b1d1b40926da8b34073c995f3c1');
+  assert.equal(snapshot.handback.binding_sha256, 'e3e08aefe542e17732976f670950fbced1c094eafae96d80fca4c53c3491d6a7');
+  assert.equal(snapshot.selected.binding.canonical_input_digest, contract.validated_current.canonical_input_digest);
+}
+
+function authenticateR2History(common, root = REPOSITORY) {
+  const key = '/private/tmp/operator-public-key.asc';
+  read(key, 'a2831936134d378395058b84e81ae9411c4da03800933700f1d995ebd51f89c3');
+  const contract = authenticateHandback('/private/tmp/phase47-R2-historical-authentication-contract.json', R2_HISTORY_CONTRACT.sha256, key);
+  const snapshot = JSON.parse(reference({ ...contract.snapshot, path: '/private/tmp/phase47-R2-historical-authentication-before-T16.json' }, true));
+  validateR2HistoricalAdmission(contract, snapshot);
+  const authenticated = authenticateRepairSuccessor(common, root, 'R2-history', R2_HISTORY_ADMISSION);
+  for (const field of ['handback', 'selected', 'approval'])
+    assert.deepEqual(authenticated[field], snapshot[field], 'original R2 historical identity moved: ' + field);
+  return authenticated;
+}
+
+const R7_STAGE = R3_STAGE.replace('-R3', '-R7');
+const R7_HANDOFF_SHA = '5d8f2d08de1421849719fdd3db3f3f01b9b8caca474b5b9a4efc485857cbec1a';
+const R7_CORRECTIVE = [".codex-plugin/plugin.json","host/plugins/delivery-pipeline/scripts/role-artifact.cjs","host/plugins/delivery-pipeline/scripts/sentinel.cjs","host/plugins/delivery-pipeline/scripts/state-sync.cjs","package-build.json"];
+
+function validateR7Contract(handback, selection, binding) {
+  assert.deepEqual(handback.source_commit, "cab5dc80ac223814713088fc5077860882508b8c");
+  assert.deepEqual(handback.selection_path, "/Volumes/KINGSTON/claude-shipyard/.git/shipyard-phase47-final-publication/INV-014-runtime-delivery-correctness/ADR-027-main421-T16-R7/selection.json");
+  assert.deepEqual(handback.selection_sha256, "94f3a5b13babfa51b5389b0c7b9d4ab8a9f3abf504e4561672f0bfa76eb42c92");
+  assert.deepEqual(handback.binding_path, "/Volumes/KINGSTON/claude-shipyard/.git/shipyard-phase47-final-publication/INV-014-runtime-delivery-correctness/ADR-027-main421-T16-R7/binding.json");
+  assert.deepEqual(handback.binding_sha256, "777583fc79ee9b539d348e4e1285a58f135b51ec250ac16e72a058d66beb72c1");
+  assert.deepEqual(handback.candidate_path, "/Volumes/KINGSTON/claude-shipyard/.git/shipyard-phase47-final-publication/INV-014-runtime-delivery-correctness/ADR-027-main421-T16-R7/candidate");
+  assert.deepEqual(handback.version, "0.71.0+codex.bf58e0d9b9d7b99f");
+  assert.deepEqual(handback.changed_outputs, [".codex-plugin/plugin.json","host/plugins/delivery-pipeline/scripts/role-artifact.cjs","host/plugins/delivery-pipeline/scripts/sentinel.cjs","host/plugins/delivery-pipeline/scripts/state-sync.cjs","package-build.json"]);
+  assert.deepEqual(handback.previous_publication, {"path":"/Volumes/KINGSTON/claude-shipyard/.git/shipyard-phase47-final-publication/INV-014-runtime-delivery-correctness/ADR-027-main421-T16-R6/generation.json","sha256":"b3a59beb7e369cb891e5934fe974e1bcad9d3ba7c96078fa6d6595b294a40de9","selection_path":"/Volumes/KINGSTON/claude-shipyard/.git/shipyard-phase47-final-publication/INV-014-runtime-delivery-correctness/ADR-027-main421-T16-R6/selection.json","selection_sha256":"e8954ec3ba0060ace0bc6b3256043e0564b4797a6c154d0abd698662eba1a87c","binding_path":"/Volumes/KINGSTON/claude-shipyard/.git/shipyard-phase47-final-publication/INV-014-runtime-delivery-correctness/ADR-027-main421-T16-R6/binding.json","binding_sha256":"1e70af73894d13c982591ce6a4217c0321ea7ecb2062dcc957dec15f316e5b33"});
+  assert.deepEqual(selection.candidate_path, "/Volumes/KINGSTON/claude-shipyard/.git/shipyard-phase47-final-publication/INV-014-runtime-delivery-correctness/ADR-027-main421-T16-R7/candidate");
+  assert.deepEqual(selection.binding_path, "/Volumes/KINGSTON/claude-shipyard/.git/shipyard-phase47-final-publication/INV-014-runtime-delivery-correctness/ADR-027-main421-T16-R7/binding.json");
+  assert.deepEqual(selection.binding_sha256, "777583fc79ee9b539d348e4e1285a58f135b51ec250ac16e72a058d66beb72c1");
+  assert.deepEqual(selection.source_commit, "cab5dc80ac223814713088fc5077860882508b8c");
+  assert.deepEqual(selection.version, "0.71.0+codex.bf58e0d9b9d7b99f");
+  assert.deepEqual(binding.source.head, "cab5dc80ac223814713088fc5077860882508b8c");
+  assert.deepEqual(binding.source.tree, "df908628cd1016a4f7d41c89661b23f1dbaa4f94");
+  assert.deepEqual(binding.source.changes, ["plugins/delivery-pipeline/scripts/role-artifact.cjs","plugins/delivery-pipeline/scripts/sentinel.cjs","plugins/delivery-pipeline/scripts/state-sync.cjs","tests/unit/architecture-target.test.cjs","tests/unit/sentinel.test.cjs","tests/unit/state-sync-listing.test.cjs"]);
+  assert.deepEqual(binding.source_finalization, {"path":"/tmp/phase47-16-planning-root-final-trusted-fixer-finalization.json","sha256":"3cf075199ae9c73a8683155f994c618579aef3e71416dfdb0f9708ad08661a3b","commit":"cab5dc80ac223814713088fc5077860882508b8c","tree":"df908628cd1016a4f7d41c89661b23f1dbaa4f94","verification":{"digest":"b2d78c0ad1a32bda4557eb9c25df6b33bdf9c5e340c79d214c440fa2a51a7bb9","path":"/Users/serhii/.local/state/shipyard/codex/finalization/9724bc475b9461ad5008f65c939f17074448416305d2d83f41f80dc3a853209d/verification/b2d78c0ad1a32bda4557eb9c25df6b33bdf9c5e340c79d214c440fa2a51a7bb9.json","outcome":"passed"},"fixer_result_path":"/tmp/phase47-16-planning-root-parity-result.json","fixer_result_sha256":"82f9bd8a6d20ed93da685fa8e1f30fc9a269c8243d678f75f7ea087e99a47570"});
+  assert.deepEqual(binding.previous_publication, {"path":"/Volumes/KINGSTON/claude-shipyard/.git/shipyard-phase47-final-publication/INV-014-runtime-delivery-correctness/ADR-027-main421-T16-R6/generation.json","sha256":"b3a59beb7e369cb891e5934fe974e1bcad9d3ba7c96078fa6d6595b294a40de9","selection_path":"/Volumes/KINGSTON/claude-shipyard/.git/shipyard-phase47-final-publication/INV-014-runtime-delivery-correctness/ADR-027-main421-T16-R6/selection.json","selection_sha256":"e8954ec3ba0060ace0bc6b3256043e0564b4797a6c154d0abd698662eba1a87c","binding_path":"/Volumes/KINGSTON/claude-shipyard/.git/shipyard-phase47-final-publication/INV-014-runtime-delivery-correctness/ADR-027-main421-T16-R6/binding.json","binding_sha256":"1e70af73894d13c982591ce6a4217c0321ea7ecb2062dcc957dec15f316e5b33"});
+  assert.deepEqual(binding.changed_outputs, [".codex-plugin/plugin.json","host/plugins/delivery-pipeline/scripts/role-artifact.cjs","host/plugins/delivery-pipeline/scripts/sentinel.cjs","host/plugins/delivery-pipeline/scripts/state-sync.cjs","package-build.json"]);
+  assert.deepEqual(binding.version, "0.71.0+codex.bf58e0d9b9d7b99f");
+  assert.deepEqual(binding.builder_inventory, {"path":"/tmp/phase47-16-planning-root-candidate-inventory.json","sha256":"61a2df1c6ac216650d120e8c477cb42ffbacf86ed6de44e14baca2d166e24d17"});
+  assert.deepEqual(binding.publication_native_result, {"path":"/tmp/phase47-16-planning-root-parity-result.json","sha256":"82f9bd8a6d20ed93da685fa8e1f30fc9a269c8243d678f75f7ea087e99a47570"});
+  const h=structuredClone(handback), s=structuredClone(selection), b=structuredClone(binding);
+  h.source_commit="fb444e75a115c57c70d27cb70f37c3a0e742a2df";
+  h.selection_path="/Volumes/KINGSTON/claude-shipyard/.git/shipyard-phase47-final-publication/INV-014-runtime-delivery-correctness/ADR-027-main421-T16-R6/selection.json";
+  h.selection_sha256="e8954ec3ba0060ace0bc6b3256043e0564b4797a6c154d0abd698662eba1a87c";
+  h.binding_path="/Volumes/KINGSTON/claude-shipyard/.git/shipyard-phase47-final-publication/INV-014-runtime-delivery-correctness/ADR-027-main421-T16-R6/binding.json";
+  h.binding_sha256="1e70af73894d13c982591ce6a4217c0321ea7ecb2062dcc957dec15f316e5b33";
+  h.candidate_path="/Volumes/KINGSTON/claude-shipyard/.git/shipyard-phase47-final-publication/INV-014-runtime-delivery-correctness/ADR-027-main421-T16-R6/candidate";
+  h.version="0.71.0+codex.c926509d9f20d683";
+  h.changed_outputs=[".codex-plugin/plugin.json","host/plugins/delivery-pipeline/scripts/gate-trailer.cjs","host/plugins/delivery-pipeline/scripts/role-artifact.cjs","host/plugins/delivery-pipeline/scripts/sentinel.cjs","host/plugins/delivery-pipeline/scripts/state-sync.cjs","package-build.json"];
+  h.previous_publication={"path":"/Volumes/KINGSTON/claude-shipyard/.git/shipyard-phase47-final-publication/INV-014-runtime-delivery-correctness/ADR-027-main421-T16-R5/generation.json","sha256":"bc0fd3d6dd33ee608056ef3e76aa5e835e48e538ca44699be5f44ae5a762a6b9","selection_path":"/Volumes/KINGSTON/claude-shipyard/.git/shipyard-phase47-final-publication/INV-014-runtime-delivery-correctness/ADR-027-main421-T16-R5/selection.json","selection_sha256":"0ef7c97179ffaa88afd5386bc4550bf84e92f2d33ecb67ce0163964dbc284f90","binding_path":"/Volumes/KINGSTON/claude-shipyard/.git/shipyard-phase47-final-publication/INV-014-runtime-delivery-correctness/ADR-027-main421-T16-R5/binding.json","binding_sha256":"062570456684fd64cedd7e3dda05bad46f7379a33b308755755311c68570b979"};
+  s.candidate_path="/Volumes/KINGSTON/claude-shipyard/.git/shipyard-phase47-final-publication/INV-014-runtime-delivery-correctness/ADR-027-main421-T16-R6/candidate";
+  s.binding_path="/Volumes/KINGSTON/claude-shipyard/.git/shipyard-phase47-final-publication/INV-014-runtime-delivery-correctness/ADR-027-main421-T16-R6/binding.json";
+  s.binding_sha256="1e70af73894d13c982591ce6a4217c0321ea7ecb2062dcc957dec15f316e5b33";
+  s.source_commit="fb444e75a115c57c70d27cb70f37c3a0e742a2df";
+  s.version="0.71.0+codex.c926509d9f20d683";
+  b.source.head="fb444e75a115c57c70d27cb70f37c3a0e742a2df";
+  b.source.tree="4188f087f978ccda7cb9c942232e1c742aa532f0";
+  b.source.changes=["plugins/delivery-pipeline/scripts/gate-trailer.cjs","plugins/delivery-pipeline/scripts/role-artifact.cjs","plugins/delivery-pipeline/scripts/sentinel.cjs","plugins/delivery-pipeline/scripts/state-sync.cjs","tests/unit/architecture-target.test.cjs","tests/unit/role-artifact.test.cjs"];
+  b.source_finalization={"path":"/tmp/phase47-16-shared-epic-final-trusted-fixer-finalization.json","sha256":"ab3064f6d6948be1f41f88514377c8d5a83e2ea3bf60d044b7b2a96093b7bf14","commit":"fb444e75a115c57c70d27cb70f37c3a0e742a2df","tree":"4188f087f978ccda7cb9c942232e1c742aa532f0","verification":{"digest":"3f22588fadf574bf8f3e73eec91d586ed8b7196cb762ac4905f5196489f98c16","path":"/Users/serhii/.local/state/shipyard/codex/finalization/9724bc475b9461ad5008f65c939f17074448416305d2d83f41f80dc3a853209d/verification/3f22588fadf574bf8f3e73eec91d586ed8b7196cb762ac4905f5196489f98c16.json","outcome":"passed"},"fixer_result_path":"/tmp/phase47-16-shared-epic-parity-result.json","fixer_result_sha256":"593238c7bae5aee8881cfae3e668d0a3d8628e9e0acbb495a8fcd7aa82c13eec"};
+  b.previous_publication={"path":"/Volumes/KINGSTON/claude-shipyard/.git/shipyard-phase47-final-publication/INV-014-runtime-delivery-correctness/ADR-027-main421-T16-R5/generation.json","sha256":"bc0fd3d6dd33ee608056ef3e76aa5e835e48e538ca44699be5f44ae5a762a6b9","selection_path":"/Volumes/KINGSTON/claude-shipyard/.git/shipyard-phase47-final-publication/INV-014-runtime-delivery-correctness/ADR-027-main421-T16-R5/selection.json","selection_sha256":"0ef7c97179ffaa88afd5386bc4550bf84e92f2d33ecb67ce0163964dbc284f90","binding_path":"/Volumes/KINGSTON/claude-shipyard/.git/shipyard-phase47-final-publication/INV-014-runtime-delivery-correctness/ADR-027-main421-T16-R5/binding.json","binding_sha256":"062570456684fd64cedd7e3dda05bad46f7379a33b308755755311c68570b979"};
+  b.changed_outputs=[".codex-plugin/plugin.json","host/plugins/delivery-pipeline/scripts/gate-trailer.cjs","host/plugins/delivery-pipeline/scripts/role-artifact.cjs","host/plugins/delivery-pipeline/scripts/sentinel.cjs","host/plugins/delivery-pipeline/scripts/state-sync.cjs","package-build.json"];
+  b.version="0.71.0+codex.c926509d9f20d683";
+  b.builder_inventory={"path":"/tmp/phase47-16-shared-epic-candidate-inventory.json","sha256":"a0984feb89d0ffc4c3d2616fb2bd7d847b467af2e5a1993f2bedb3b550437a51"};
+  b.publication_native_result={"path":"/tmp/phase47-16-shared-epic-parity-result.json","sha256":"593238c7bae5aee8881cfae3e668d0a3d8628e9e0acbb495a8fcd7aa82c13eec"};
+  validateR6Contract(h,s,b);
+}
+
+const R8_STAGE = R3_STAGE.replace('-R3', '-R8');
+const R8_HANDOFF_SHA = '5792799323c1533de10e65fe418aca8b640691db640f24f6623361381e7bccd0';
+const R8_CORRECTIVE = [".codex-plugin/plugin.json","host/plugins/delivery-pipeline/commands/deliver.md","host/plugins/delivery-pipeline/references/arch-review.md","host/plugins/delivery-pipeline/references/pr-sentinel.md","host/plugins/delivery-pipeline/scripts/role-artifact.cjs","host/plugins/delivery-pipeline/skills/delivery-rules/SKILL.md","package-build.json"];
+
+function validateR8Contract(handback, selection, binding) {
+  assert.deepEqual(handback, {"schema":"shipyard.phase47-t16-publication-generation.v1","actor":"trusted-coordinator","native_receipt":false,"authority":"Operator standing phase47 repair authorization; existing T47-16 supported publisher ownership","status":"completed","source_commit":"0b7791c208c2d3069c868d39af4f6bd9b2720e3c","selection_path":"/Volumes/KINGSTON/claude-shipyard/.git/shipyard-phase47-final-publication/INV-014-runtime-delivery-correctness/ADR-027-main421-T16-R8/selection.json","selection_sha256":"e53f5bcff100db381aba215bc899f541250f9102ee24a14ab84014a02e5d821d","binding_path":"/Volumes/KINGSTON/claude-shipyard/.git/shipyard-phase47-final-publication/INV-014-runtime-delivery-correctness/ADR-027-main421-T16-R8/binding.json","binding_sha256":"c9de489f0d340ba0d49c28d6a18b0c95b9915db81d549e31bebe0b99e05b52d7","candidate_path":"/Volumes/KINGSTON/claude-shipyard/.git/shipyard-phase47-final-publication/INV-014-runtime-delivery-correctness/ADR-027-main421-T16-R8/candidate","version":"0.71.0+codex.b319402d6ef6389f","outputs":161,"changed_outputs":[".codex-plugin/plugin.json","host/plugins/delivery-pipeline/commands/deliver.md","host/plugins/delivery-pipeline/references/arch-review.md","host/plugins/delivery-pipeline/references/pr-sentinel.md","host/plugins/delivery-pipeline/scripts/role-artifact.cjs","host/plugins/delivery-pipeline/skills/delivery-rules/SKILL.md","package-build.json"],"previous_publication":{"path":"/Volumes/KINGSTON/claude-shipyard/.git/shipyard-phase47-final-publication/INV-014-runtime-delivery-correctness/ADR-027-main421-T16-R7/generation.json","sha256":"5d8f2d08de1421849719fdd3db3f3f01b9b8caca474b5b9a4efc485857cbec1a","selection_path":"/Volumes/KINGSTON/claude-shipyard/.git/shipyard-phase47-final-publication/INV-014-runtime-delivery-correctness/ADR-027-main421-T16-R7/selection.json","selection_sha256":"94f3a5b13babfa51b5389b0c7b9d4ab8a9f3abf504e4561672f0bfa76eb42c92","binding_path":"/Volumes/KINGSTON/claude-shipyard/.git/shipyard-phase47-final-publication/INV-014-runtime-delivery-correctness/ADR-027-main421-T16-R7/binding.json","binding_sha256":"777583fc79ee9b539d348e4e1285a58f135b51ec250ac16e72a058d66beb72c1"},"build_calls":1});
+  assert.deepEqual(selection, {"schema":"shipyard.phase47-t16-publication-selection.v1","candidate_path":"/Volumes/KINGSTON/claude-shipyard/.git/shipyard-phase47-final-publication/INV-014-runtime-delivery-correctness/ADR-027-main421-T16-R8/candidate","binding_path":"/Volumes/KINGSTON/claude-shipyard/.git/shipyard-phase47-final-publication/INV-014-runtime-delivery-correctness/ADR-027-main421-T16-R8/binding.json","binding_sha256":"c9de489f0d340ba0d49c28d6a18b0c95b9915db81d549e31bebe0b99e05b52d7","source_commit":"0b7791c208c2d3069c868d39af4f6bd9b2720e3c","version":"0.71.0+codex.b319402d6ef6389f","output_count":161});
+  assert.deepEqual(binding.schema, "shipyard.phase47-t16-publication-binding.v1");
+  assert.deepEqual(binding.actor, "trusted-coordinator");
+  assert.deepEqual(binding.native_receipt, false);
+  assert.deepEqual(binding.ticket, "T-47-16");
+  assert.deepEqual(binding.phase_membership, 27);
+  assert.deepEqual(binding.source.head, "0b7791c208c2d3069c868d39af4f6bd9b2720e3c");
+  assert.deepEqual(binding.source.tree, "4a4afdf128ea7bc533004800a8a2a5d1f9856cc7");
+  assert.deepEqual(binding.source.status_sha256, "6e45799e5a3580b192b5210dd523a70d0b18bd525166ef2d4a911c29488d4db9");
+  assert.deepEqual(binding.source.index_sha256, "b0ccd33707914bceb1fed67170744a3e282a3d1447c36ccab910c49e7e787270");
+  assert.deepEqual(binding.source.graph_sha256, "0ddd4abafcf43255f6cca8caa16e61c25d3475acd7016bcfc7c6272e6c6c2392");
+  assert.deepEqual(binding.source.delivery_state_sha256, "7b7c07cbbac8d7d0bf10b8c639fe6c9da75230974098e482f36e0fdcbcabef96");
+  assert.deepEqual(binding.source.config_sha256, "1195fed6807740e886592ba92ca99913368becde6b21d8de8126ecf134a0efe9");
+  assert.deepEqual(binding.source.plan_sha256, "f52ee4c06fbc5af6a04c8298d4ca3176f0b14519183c0fbf2a54d2d589cb3c56");
+  assert.deepEqual(binding.source.worktree, "/Volumes/KINGSTON/worktrees/phase47-authenticated-delivery/T-47-16-native-landing");
+  assert.deepEqual(binding.source.common, "/Volumes/KINGSTON/claude-shipyard/.git");
+  assert.deepEqual(binding.source.changes, ["plugins/delivery-pipeline/commands/deliver.md","plugins/delivery-pipeline/references/arch-review.md","plugins/delivery-pipeline/references/pr-sentinel.md","plugins/delivery-pipeline/scripts/role-artifact.cjs","plugins/delivery-pipeline/skills/delivery-rules/SKILL.md","tests/unit/role-artifact.test.cjs"]);
+  assert.deepEqual(binding.source_finalization, {"path":"/tmp/phase47-16-pr452-final-trusted-fixer-finalization.json","sha256":"f4e5324daa6630f54972323c9c4420f691d54ba031fa76cdfc80ba6eb9394fd3","commit":"0b7791c208c2d3069c868d39af4f6bd9b2720e3c","tree":"4a4afdf128ea7bc533004800a8a2a5d1f9856cc7","verification":{"digest":"a38ee7ab4425f7e49a55510bf962df87608e33b722cd4b0d17126716e4e1460b","path":"/Users/serhii/.local/state/shipyard/codex/finalization/9948690cafe3db51f405d431c9f1d12f7529e3300907234e81c069fcbe642162/verification/a38ee7ab4425f7e49a55510bf962df87608e33b722cd4b0d17126716e4e1460b.json","outcome":"passed"},"fixer_result_path":"/tmp/phase47-16-pr452-review-fix-result.json","fixer_result_sha256":"90c94c82cbeb98954044f4ce4c71f221f738f22c2dc23c62a2d946a6d308c85f"});
+  assert.deepEqual(binding.previous_publication, {"path":"/Volumes/KINGSTON/claude-shipyard/.git/shipyard-phase47-final-publication/INV-014-runtime-delivery-correctness/ADR-027-main421-T16-R7/generation.json","sha256":"5d8f2d08de1421849719fdd3db3f3f01b9b8caca474b5b9a4efc485857cbec1a","selection_path":"/Volumes/KINGSTON/claude-shipyard/.git/shipyard-phase47-final-publication/INV-014-runtime-delivery-correctness/ADR-027-main421-T16-R7/selection.json","selection_sha256":"94f3a5b13babfa51b5389b0c7b9d4ab8a9f3abf504e4561672f0bfa76eb42c92","binding_path":"/Volumes/KINGSTON/claude-shipyard/.git/shipyard-phase47-final-publication/INV-014-runtime-delivery-correctness/ADR-027-main421-T16-R7/binding.json","binding_sha256":"777583fc79ee9b539d348e4e1285a58f135b51ec250ac16e72a058d66beb72c1"});
+  assert.deepEqual(binding.source_snapshots, {"graph":{"path":"/Volumes/KINGSTON/claude-shipyard/.git/shipyard-phase47-final-publication/INV-014-runtime-delivery-correctness/ADR-027-main421-T16-R8/source-graph.json","sha256":"0ddd4abafcf43255f6cca8caa16e61c25d3475acd7016bcfc7c6272e6c6c2392"},"state":{"path":"/Volumes/KINGSTON/claude-shipyard/.git/shipyard-phase47-final-publication/INV-014-runtime-delivery-correctness/ADR-027-main421-T16-R8/source-delivery-state.json","sha256":"7b7c07cbbac8d7d0bf10b8c639fe6c9da75230974098e482f36e0fdcbcabef96"}});
+  assert.deepEqual(binding.changed_outputs, [".codex-plugin/plugin.json","host/plugins/delivery-pipeline/commands/deliver.md","host/plugins/delivery-pipeline/references/arch-review.md","host/plugins/delivery-pipeline/references/pr-sentinel.md","host/plugins/delivery-pipeline/scripts/role-artifact.cjs","host/plugins/delivery-pipeline/skills/delivery-rules/SKILL.md","package-build.json"]);
+  assert.deepEqual(binding.version, "0.71.0+codex.b319402d6ef6389f");
+  assert.deepEqual(binding.installed_native_obligations, "HOLD; no promotion");
+  assert.deepEqual(binding.builder, "scripts/package-shipyard-codex.cjs");
+  assert.deepEqual(binding.build_calls, 1);
+  assert.deepEqual(binding.build_sequence, "built-once-before-final-proof; native-complete-parity; original-two-formal-commands-on-final-tree; seal-without-rebuild");
+  assert.deepEqual(binding.builder_inventory, {"path":"/tmp/phase47-16-pr452-candidate-inventory.json","sha256":"a003127099ff3a327804d6405620e6a57a4ba504c93ce5368a7dbff8fb4f6699"});
+  assert.deepEqual(binding.publication_native_result, {"path":"/tmp/phase47-16-pr452-parity-result.json","sha256":"e5b93cd1aa6cbf42b2bd1aff135f03222bd561ba3ada0de2b4e37e387aa43ce7"});
+  assert.equal(binding.outputs.length, 161);
+  assert.equal(new Set(binding.outputs.map(row => row.path)).size, 161);
+}
+
+function validateSquashPublication(evidence, source, common, commitTree, ancestor) {
+  assert.equal(common, '/Volumes/KINGSTON/claude-shipyard/.git');
+  assert.equal(evidence.schema, 'shipyard.phase47-t16-squash-publication.v1');
+  assert.equal(evidence.actor, 'trusted-coordinator');
+  assert.equal(evidence.native_receipt, false);
+  assert.equal(evidence.ticket, 'T-47-16');
+  assert.equal(evidence.repo, 'serhii-nochevnyi/shipyard');
+  assert.equal(evidence.pr, 452);
+  assert.equal(evidence.head, '0b7791c208c2d3069c868d39af4f6bd9b2720e3c');
+  assert.equal(source.head, evidence.head);
+  assert.equal(evidence.source_stage_sha256, R8_HANDOFF_SHA);
+  assert.equal(evidence.source_tree, source.tree);
+  assert.equal(evidence.merge_tree, source.tree);
+  assert.match(evidence.merge_commit, /^[0-9a-f]{40}$/);
+  assert.equal(evidence.base_commit, '265110621c8097a83867a9e9dd7958c0e7830cb2');
+  assert.equal(evidence.state, 'MERGED');
+  assert.equal(commitTree(evidence.merge_commit), source.tree);
+  ancestor(evidence.base_commit, evidence.merge_commit);
+  ancestor(evidence.merge_commit, 'HEAD');
+}
+
+function admitT16CurrentSource(root, source, generation, key) {
+  const direct = spawnSync('git', ['-C', root, 'merge-base', '--is-ancestor', source.head, 'HEAD']);
+  if (direct.status === 0) return;
+  assert.equal(direct.status, 1, 'Git ancestry check failed');
+  assert.equal(generation, 8, 'only literal R8 admits signed squash publication');
+  const common = gitText(root, 'rev-parse', '--path-format=absolute', '--git-common-dir');
+  const file = fs.realpathSync('/tmp/phase47-452-merged-publication.json');
+  const evidence = authenticateHandback(file, sha(read(file)), key);
+  validateSquashPublication(evidence, source, common,
+    commit => gitText(root, 'rev-parse', commit + '^{tree}'),
+    (before, after) => git(root, 'merge-base', '--is-ancestor', before, after));
+}
+
+function authenticateT16Successor(common, root = REPOSITORY, generation = 8) {
+  if (generation === true) generation = 3;
+  if (generation === false) generation = 8;
+  assert([3,4,5,6,7,8].includes(generation), 'unknown T16 generation');
+  const historical = generation !== 8;
+  const T16_STAGE = generation === 3 ? R3_STAGE : generation === 4 ? R4_STAGE : generation === 5 ? R5_STAGE : generation === 6 ? R6_STAGE : generation === 7 ? R7_STAGE : R8_STAGE;
+  const T16_HANDOFF = T16_STAGE + '/generation.json';
+  const T16_HANDOFF_SHA = generation === 3 ? R3_HANDOFF_SHA : generation === 4 ? R4_HANDOFF_SHA : generation === 5 ? R5_HANDOFF_SHA : generation === 6 ? R6_HANDOFF_SHA : generation === 7 ? R7_HANDOFF_SHA : R8_HANDOFF_SHA;
+  const T16_CORRECTIVE = generation === 3 ? module.exports.T16_CORRECTIVE : generation === 4 ? R4_CORRECTIVE : generation === 5 ? R5_CORRECTIVE : generation === 6 ? R6_CORRECTIVE : generation === 7 ? R7_CORRECTIVE : R8_CORRECTIVE;
+  assert.equal(common, '/Volumes/KINGSTON/claude-shipyard/.git');
+  const key = path.join(path.dirname(REPAIR_HANDOFF), 'operator-public-key.asc');
+  read(key, 'a2831936134d378395058b84e81ae9411c4da03800933700f1d995ebd51f89c3');
+  const handback = authenticateHandback(T16_HANDOFF, T16_HANDOFF_SHA, key);
+  const selection = authenticateHandback(T16_STAGE + '/selection.json', handback.selection_sha256, key);
+  const binding = authenticateHandback(T16_STAGE + '/binding.json', selection.binding_sha256, key);
+  if (generation === 8) validateR8Contract(handback, selection, binding);
+  else if (generation === 7) validateR7Contract(handback, selection, binding);
+  else if (generation === 6) validateR6Contract(handback, selection, binding);
+  else if (generation === 5) validateR5Contract(handback, selection, binding);
+  else validateT16Contract(handback, selection, binding, generation === 4);
+  for (const [name, digest] of [['graph', binding.source.graph_sha256], ['state', binding.source.delivery_state_sha256]]) {
+    const ref = binding.source_snapshots[name]; assert.equal(ref.sha256, digest);
+    assert.equal(ref.path, T16_STAGE + (name === 'graph' ? '/source-graph.json' : '/source-delivery-state.json'));
+    read(ref.path, digest, true);
+  }
+  const graph = JSON.parse(read(binding.source_snapshots.graph.path));
+  assert.equal(Object.keys(graph.tickets).filter(id => /^T-47-\d+$/.test(id)).length, 27);
+  const source = binding.source;
+  assert.equal(gitText(root, 'rev-parse', source.head + '^{tree}'), source.tree);
+  const signatureHome = fs.realpathSync(fs.mkdtempSync('/private/tmp/p47-git-'));
+  try {
+    const keyring = path.join(signatureHome, 'operator.gpg');
+    execFileSync('gpg', ['--batch', '--no-options', '--homedir', signatureHome, '--dearmor', '--output', keyring, key], {stdio: 'pipe', timeout: 10000});
+    const raw = git(root, 'cat-file', 'commit', source.head).toString('utf8');
+    const headerEnd = raw.indexOf('\n\n');
+    const headers = raw.slice(0, headerEnd).split('\n');
+    const signature = [], payloadHeaders = [];
+    let inSignature = false;
+    for (const line of headers) {
+      if (line.startsWith('gpgsig ')) { assert.equal(signature.length, 0); inSignature = true; signature.push(line.slice(7)); }
+      else if (inSignature && line.startsWith(' ')) signature.push(line.slice(1));
+      else { inSignature = false; payloadHeaders.push(line); }
+    }
+    assert(signature.length > 0, 'unsigned T16 Git source');
+    const signatureFile = path.join(signatureHome, 'commit.asc'), payloadFile = path.join(signatureHome, 'commit');
+    fs.writeFileSync(signatureFile, signature.join('\n') + '\n');
+    fs.writeFileSync(payloadFile, payloadHeaders.join('\n') + raw.slice(headerEnd));
+    const signed = execFileSync('gpgv', ['--homedir', signatureHome, '--keyring', keyring, '--status-fd', '1', signatureFile, payloadFile],
+      {encoding: 'utf8', stdio: 'pipe', timeout: 30000});
+    validateOperatorSignature(signed);
+  } finally { fs.rmSync(signatureHome, {recursive: true, force: true}); }
+  for (const row of source.inputs) {
+    assert.equal(sha(git(root, 'show', source.head + ':' + row.path)), row.sha256);
+    assert.equal(git(root, 'show', source.head + ':' + row.path).length, row.bytes);
+    assert.equal(gitText(root, 'ls-tree', source.head, '--', row.path).split(' ')[0], row.mode === 0o755 ? '100755' : '100644');
+  }
+  if (!historical) assert.deepEqual(canonicalInputs(root), source.inputs.map(({path, sha256}) => ({path, sha256})), 'T16 source publication pending: canonical source drift');
+  if (!historical) {
+    admitT16CurrentSource(root, source, generation, key);
+    for (const row of source.inputs) assert.equal(physical(path.join(root, row.path)).mode & 0o777, row.mode);
+  }
+  const finalization = JSON.parse(read(fs.realpathSync(binding.source_finalization.path), binding.source_finalization.sha256));
+  const proofRef = binding.source_finalization.verification;
+  const envelope = JSON.parse(read(proofRef.path));
+  assert.equal(sha(canon(envelope)), proofRef.digest);
+  const proof = hostVerification.readEvidence(proofRef.path, proofRef.digest);
+  assert(proof, 'authenticated T16 HOST proof required');
+  assert.equal(proof.ticket, 'T-47-16');
+  assert.equal(proof.plan_sha256, source.plan_sha256);
+  assert.equal(proof.results.length, 2);
+  assert(proof.results.every(row => row.status === 0 && row.outcome === 'passed' && row.timeout_ms === 600000
+    && row.tree_before === source.tree && row.tree_after === source.tree));
+  const native = JSON.parse(read(fs.realpathSync(binding.source_finalization.fixer_result_path), binding.source_finalization.fixer_result_sha256));
+  assert.equal(native.ticket, 'T-47-16');
+  assert.equal(native.role, generation === 3 || generation === 8 ? 'review-fix' : 'ci-fix');
+  assert.equal(native.receipt.dispatch_id, native.dispatch_id);
+  reference(native.receipt.runtime_evidence.transcript);
+  assert.equal(native.receipt.runtime_evidence.ticket, 'T-47-16');
+  assert.equal(finalization.committed.commit, source.head);
+  assert.equal(finalization.committed.tree, source.tree);
+  assert.equal(finalization.committed.signer, '2F485C0A455BA33463F66332900FCE87BD1BFF0D');
+  assert.equal(finalization.coverage.covered, true);
+  reauthenticateRepairCoverage({current_head: source.head, coverage: finalization.coverage}, root);
+  assert.equal(finalization.verification.digest, binding.source_finalization.verification.digest);
+  if (generation >= 4) {
+    const sourceNative = JSON.parse(read(generation === 4 ? '/private/tmp/phase47-16-copilot-ci-repair-result.json' : generation === 5 ? '/private/tmp/phase47-16-bounded-verdict-lookup-result.json' : generation === 6 ? '/private/tmp/phase47-16-shared-epic-repo-fix-result.json' : generation === 7 ? '/private/tmp/phase47-16-planning-artifact-root-result.json' : '/private/tmp/phase47-16-pr452-review-fix-result.json', generation === 4 ? 'dfdbc82033718d11dfd2b8a83f13518cde566d206ee6649698592d890c5e72ae' : generation === 5 ? 'cf09547bcd4bd5b419e43b3284042bd7a13407071256d00fd916e6f3d2b171f9' : generation === 6 ? '8e6b32a17a71eb72f0fece5350629500fb40ee21dfec34a342c981d32ee96843' : generation === 7 ? 'c462cc116e905a500792522c86bc8b3b2be6f3aa6b51e5414fc6e436b3a2326f' : '90c94c82cbeb98954044f4ce4c71f221f738f22c2dc23c62a2d946a6d308c85f'));
+    assert.equal(sourceNative.role, 'review-fix'); assert.equal(sourceNative.ticket, 'T-47-16');
+    reference(sourceNative.receipt.runtime_evidence.transcript);
+    read(fs.realpathSync(binding.builder_inventory.path), binding.builder_inventory.sha256);
+    read(fs.realpathSync(binding.publication_native_result.path), binding.publication_native_result.sha256);
+    if (generation === 8) {
+      const publisher = JSON.parse(read(fs.realpathSync(binding.publication_native_result.path), binding.publication_native_result.sha256));
+      assert.equal(publisher.ticket, 'T-47-16');
+      assert.equal(publisher.role, 'ci-fix');
+      assert.equal(publisher.receipt.dispatch_id, publisher.dispatch_id);
+      assert.equal(publisher.receipt.runtime_evidence.ticket, 'T-47-16');
+      reference(publisher.receipt.runtime_evidence.transcript);
+    }
+  }
+  read('/Volumes/KINGSTON/worktrees/phase47-investigation/claude-shipyard/.planning/config.json', source.config_sha256);
+  assert.equal(sha(git(root, 'show', source.head + ':.planning/config.json')), SOURCE39_SHA);
+  read(path.join(source.worktree, '.planning/config.json'), SOURCE39_SHA);
+  const previous = generation === 3 ? authenticateR2History(common, root) : authenticateT16Successor(common, root, generation - 1);
+  assert.equal(previous.handback.selection_sha256, binding.previous_publication.selection_sha256);
+  const parentOutputs = new Map(previous.selected.binding.outputs.map(row => [row.path, row]));
+  const delta = binding.outputs.filter(row => {const before = parentOutputs.get(row.path);
+    assert(before, 'foreign T16 inventory member');
+    return before.sha256 !== row.sha256 || before.publication_mode !== row.publication_mode;
+  }).map(row => row.path).sort();
+  assert.deepEqual(delta, T16_CORRECTIVE, 'T16 measured delta differs from exact original owners');
+  if (generation === 3) {
+    const publication = JSON.parse(read('/private/tmp/phase47-16-main421-publication-trusted-fixer-finalization.json',
+      '7304cfdb4df2924ee9a22820ce9b1f07d9c1fcb68a5590b49b7aa5939793a8ef'));
+    assert.equal(publication.committed.commit, '63209e88de5213bb378b07b61cb7b64a4bc3d44f');
+    assert.equal(publication.committed.previousHead, source.head);
+    assert.equal(publication.committed.tree, gitText(root, 'rev-parse', publication.committed.commit + '^{tree}'));
+    assert.equal(publication.verification.digest, '564d45fca85cc6b2a2b5b088eb4c1d6b15571974660a1e483946468f13256c8d');
+    const proof = hostVerification.readEvidence(publication.verification.path, publication.verification.digest);
+    assert(proof && proof.ticket === 'T-47-16' && proof.results.length === 2);
+    assert(proof.results.every(row => row.status === 0 && row.outcome === 'passed'
+      && row.tree_before === publication.committed.tree && row.tree_after === publication.committed.tree));
+    reauthenticateRepairCoverage({current_head: publication.committed.commit, coverage: publication.coverage}, root);
+    const native = JSON.parse(read(fs.realpathSync(publication.fixer_result_path), publication.fixer_result_sha256));
+    assert.equal(native.role, 'ci-fix'); assert.equal(native.ticket, 'T-47-16');
+    reference(native.receipt.runtime_evidence.transcript);
+  }
+  const published = generation === 3 ? '63209e88de5213bb378b07b61cb7b64a4bc3d44f' : source.head;
+  git(root, 'merge-base', '--is-ancestor', source.head, published);
+  for (const row of binding.outputs) {
+    assert.equal(sha(git(root, 'show', published + ':plugins/shipyard/' + row.path)), row.sha256, 'published T16 byte drift');
+    assert.equal(gitText(root, 'ls-tree', published, '--', 'plugins/shipyard/' + row.path).split(' ')[0], row.publication_mode === 0o755 ? '100755' : '100644');
+  }
+  const actual = inventory(selection.candidate_path, false, true);
+  assert.deepEqual(actual, binding.outputs.map(row => ({path: row.path, sha256: row.sha256, bytes: row.bytes, mode: row.sealed_mode})));
+  const contentHash = crypto.createHash('sha256');
+  for (const row of actual) {
+    if (['package-build.json', '.codex-plugin/plugin.json'].includes(row.path)) continue;
+    contentHash.update(row.path + '\0'); contentHash.update(read(path.join(selection.candidate_path, row.path)));
+  }
+  const content = contentHash.digest('hex');
+  const manifestBytes = read(path.join(selection.candidate_path, '.codex-plugin/plugin.json'));
+  const manifest = JSON.parse(manifestBytes);
+  const build = JSON.parse(read(path.join(selection.candidate_path, 'package-build.json')));
+  const packageDigest = sha(Buffer.concat([Buffer.from(content + '\0'), manifestBytes]));
+  assert.equal(build.digest, packageDigest); assert.equal(manifest.version, binding.version);
+  assert.equal(build.version, binding.version);
+  assert.equal(binding.version.split('+codex.')[1], content.slice(0, 16));
+  const outputs = binding.outputs.map(row => ({...row, git_mode: row.publication_mode === 0o755 ? '100755' : '100644'}));
+  return { handback, selected: { root: T16_STAGE, selectionPath: handback.selection_path, selection,
+    binding: {...binding, outputs, source_content_sha256: content, package_sha256: packageDigest, canonical_input_digest: sha(canon(source.inputs))}, t16: true }, current: {source_publication: 'verified'}, planning: { historical_only: true, current_authority: false, predecessor: previous.planning } };
+}
+
+function recheckT16Successor(authenticated, root = REPOSITORY) {
+  assert.deepEqual(authenticateT16Successor('/Volumes/KINGSTON/claude-shipyard/.git', root), authenticated, 'T16 authority moved during inspection');
+}
+
 function validatePreviousCurrentPublication(ref, previous) {
   assert.equal(ref.path, F1_HANDOFF);
   assert.equal(ref.sha256, F1_HANDOFF_SHA);
@@ -365,7 +873,8 @@ function reauthenticateRepairCoverage(repair, worktree = REPOSITORY, verify = nu
 }
 
 function authenticateRepairSuccessor(common, root = REPOSITORY, historical = false, historicalContract = null) {
-  assert([false, true, 'F1'].includes(historical), 'unknown repair historical selector');
+  assert([false, true, 'F1', 'R2-history'].includes(historical), 'unknown repair historical selector');
+  if (historical === 'R2-history') assert.equal(historicalContract, R2_HISTORY_ADMISSION, 'signed pinned R2 historical admission required');
   const originalRepair = historical === true;
   const operation = originalRepair ? REPAIR_HANDOFF : historical === 'F1' ? F1_HANDOFF : R2_HANDOFF;
   const pin = originalRepair ? REPAIR_HANDOFF_SHA : historical === 'F1' ? F1_HANDOFF_SHA : R2_HANDOFF_SHA;
@@ -377,7 +886,7 @@ function authenticateRepairSuccessor(common, root = REPOSITORY, historical = fal
   assert.equal(approvalRef.path, path.join(path.dirname(operation), 'source-approval.json'));
   assert.equal(approvalRef.signature_path, approvalRef.path + '.asc');
   const approval = authenticateHandback(approvalRef.path, approvalRef.sha256);
-  validateRepairContract(handback, approval, originalRepair ? false : historical ? true : 'R2');
+  validateRepairContract(handback, approval, originalRepair ? false : historical === 'F1' ? true : 'R2');
   const selected = selectedArtifact(common, handback, stage);
   selected.repair = true;
   selected.followup = !originalRepair;
@@ -450,7 +959,7 @@ function authenticateRepairSuccessor(common, root = REPOSITORY, historical = fal
   for (const entry of preservation.files) reference({ ...entry, path: path.join(source.repository, entry.path) });
   const correction = approval.source_correction;
   reference(correction.command_approval);
-  if (!historical) {
+  if (!historical || historical === 'R2-history') {
     assert(R2_SCOPE_SHA, 'signed R2 scope pin pending trusted adoption');
     assert.equal(correction.scope_disposition.sha256, R2_SCOPE_SHA);
     assert.equal(correction.scope_disposition.path, R2_SCOPE);
@@ -534,7 +1043,10 @@ function authenticateRepairSuccessor(common, root = REPOSITORY, historical = fal
   const delta = selected.binding.outputs.filter(entry => sha(git(root, 'show', source.head + ':plugins/shipyard/' + entry.path)) !== entry.sha256
     || gitText(root, 'ls-tree', source.head, '--', 'plugins/shipyard/' + entry.path).split(' ')[0] !== entry.git_mode).map(row => row.path).sort();
   assert.deepEqual(delta, corrective, 'actual supported builder delta drift');
-  const current = historical ? validateHistoricalSource(root, selected.binding, approval, true, historicalContract) : validateSource(root, selected.binding, approval);
+  const current = historical === 'R2-history' ? validateHistoricalSource(root, selected.binding, approval, 'R2-history')
+    : historical ? validateHistoricalSource(root, selected.binding, approval, true, historicalContract) : validateSource(root, selected.binding, approval);
+  if (historical === 'R2-history') validateSignedHistoricalParents(source, approval,
+    (before, after) => git(root, 'merge-base', '--is-ancestor', before, after));
   return { handback, selected, approval, prior, planning: prior.planning, current };
 }
 
@@ -1118,7 +1630,8 @@ function validatePinnedHistoricalIdentity(contract, source, original, f1 = false
 function validateSignedHistoricalParents(source, approval, ancestor) {
   assert.deepEqual(source.parent_commits, approval.parent_commits);
   assert.deepEqual(source.provenance, approval.provenance);
-  const parents = Array.from({ length: 26 }, (_, n) => 'T-47-' + String(n + 1).padStart(2, '0'));
+  const count = source.parent_commits['T-47-26'] ? 26 : source.parent_commits['T-47-22'] ? 22 : source.parent_commits['T-47-20'] ? 20 : 18;
+  const parents = Array.from({ length: count }, (_, n) => 'T-47-' + String(n + 1).padStart(2, '0'));
   assert.deepEqual(Object.keys(source.parent_commits).sort(), parents);
   assert.deepEqual(Object.keys(source.provenance).sort(), parents);
   assert.match(source.delivery_state_sha256, /^[a-f0-9]{64}$/);
@@ -1153,13 +1666,13 @@ function validateHistoricalSource(root, binding, approval, repair = false, histo
       source.input_modes.find(row => row.path === input.path).mode === 0o755 ? '100755' : '100644');
   }
   assert.equal(sha(canon(source.identities)), binding.canonical_input_digest);
-  if (repair) {
+  if (repair && repair !== 'R2-history') {
     authenticatePinnedHistoricalContract(historicalContract, binding, approval);
     validateSignedHistoricalParents(source, approval,
       (before, after) => git(root, 'merge-base', '--is-ancestor', before, after));
-  } else {
-    const state = JSON.parse(read(path.join(source.repository, '.planning/graph/delivery-state.json')));
-    validateParents(source, state, null, (before, after) => git(root, 'merge-base', '--is-ancestor', before, after), true);
+  } else if (repair !== 'R2-history') {
+    validateSignedHistoricalParents(source, approval,
+      (before, after) => git(root, 'merge-base', '--is-ancestor', before, after));
   }
   return { historical_only: true, source_head: source.head };
 }
@@ -1508,8 +2021,8 @@ function validatePublication(root, selected, group) {
   const published = path.join(root, 'plugins/shipyard');
   const observed = inventory(published);
   const outputs = new Map(binding.outputs.map(entry => [entry.path, entry]));
-  const final = selected.repair === true || selected.final === true || selected.successor === true || selected.volume === true;
-  const permitted = selected.repair ? (selected.followup ? F1_CORRECTIVE : REPAIR_CORRECTIVE) : selected.volume ? VOLUME_CORRECTIVE : selected.successor ? SUCCESSOR_CORRECTIVE : final ? CORRECTIVE : UNION;
+  const final = selected.t16 === true || selected.repair === true || selected.final === true || selected.successor === true || selected.volume === true;
+  const permitted = selected.t16 ? binding.changed_outputs : selected.repair ? (selected.followup ? F1_CORRECTIVE : REPAIR_CORRECTIVE) : selected.volume ? VOLUME_CORRECTIVE : selected.successor ? SUCCESSOR_CORRECTIVE : final ? CORRECTIVE : UNION;
   const required = final && ['relay', 'complete'].includes(group)
     ? binding.outputs.map(entry => entry.path).filter(relative => group === 'complete'
       || !['.codex-plugin/plugin.json', 'package-build.json'].includes(relative)) : GROUPS[group];
@@ -1518,7 +2031,7 @@ function validatePublication(root, selected, group) {
     assert(expected, 'unexpected checked-in package path: ' + entry.path);
     if (entry.sha256 !== expected.sha256 || entry.mode !== expected.publication_mode) {
       assert(permitted.includes(entry.path), 'unexpected publication delta: ' + entry.path);
-      if (selected.repair) {
+      if (selected.repair || selected.t16) {
         assert.equal(entry.sha256, sha(git(root, 'show', binding.source.head + ':plugins/shipyard/' + entry.path)),
           'partial current publication must retain exact pre-T27 bytes');
         const baselineMode = gitText(root, 'ls-tree', binding.source.head, '--', 'plugins/shipyard/' + entry.path).split(' ')[0];
@@ -1532,7 +2045,7 @@ function validatePublication(root, selected, group) {
   }
   for (const output of binding.outputs)
     if (!observed.some(entry => entry.path === output.path)) {
-      assert(!selected.repair, 'missing current package inventory member');
+      assert(!selected.repair && !selected.t16, 'missing current package inventory member');
       assert.equal(output.path, mirror('codex-arch-review-context'), 'unexpected missing package path');
     }
   for (const relative of required) {
@@ -1616,21 +2129,21 @@ function stageContracts(selected) {
 function check(group) {
   assert(Object.hasOwn(GROUPS, group), 'unknown publication group');
   const common = gitText(REPOSITORY, 'rev-parse', '--path-format=absolute', '--git-common-dir');
-  const authenticated = authenticateRepairSuccessor(common);
+  const authenticated = authenticateT16Successor(common);
   const { handback, selected, current, planning } = authenticated;
   const count = validatePublication(REPOSITORY, selected, group);
   const contracts = group === 'candidate' ? null : stageContracts(selected);
-  recheckRepairSuccessor(authenticated);
+  recheckT16Successor(authenticated);
   validatePublication(REPOSITORY, selected, group);
-  return { status: 'completed', ticket: 'T-47-27', group, generation_id: handback.generation_id,
-    source_head: selected.binding.source.head, source_identity_sha256: handback.source_identity_sha256,
-    current_admission: current, handback_path: R2_HANDOFF, handback_sha256: R2_HANDOFF_SHA,
+  return { status: 'completed', ticket: 'T-47-27', group, generation_kind: 't16-source-repair', generation_id: null,
+    source_head: selected.binding.source.head, source_identity_sha256: null,
+    current_admission: current, handback_path: R8_STAGE + "/generation.json", handback_sha256: R8_HANDOFF_SHA,
     selection_path: selected.selectionPath, selection_sha256: handback.selection_sha256,
     binding_path: selected.selection.binding_path, binding_sha256: selected.selection.binding_sha256,
-    candidate_path: selected.selection.candidate_path, candidate_sha256: selected.selection.candidate_sha256,
+    candidate_path: selected.selection.candidate_path, candidate_sha256: null,
     package_sha256: selected.binding.package_sha256, version: selected.binding.version,
     output_count: selected.binding.outputs.length, publication_count: count, build_calls: 0, planning,
-    corrective_outputs: F1_CORRECTIVE, historical_successor_output_count: SUCCESSOR_CORRECTIVE.length, historical_corrective_output_count: CORRECTIVE.length, original_output_count: UNION.length, original_native_owner_count: 16,
+    corrective_outputs: R8_CORRECTIVE, historical_successor_output_count: SUCCESSOR_CORRECTIVE.length, historical_corrective_output_count: CORRECTIVE.length, original_output_count: UNION.length, original_native_owner_count: 16,
     contracts, covered_groups: group === 'complete' ? Object.keys(GROUPS) : [group],
     successor_corrective_output_count: F1_CORRECTIVE.length, inspector_build_calls: 0,
     remaining_obligations: ['current exact HOST verification', 'T-47-08 installed/native acceptance',
@@ -2105,7 +2618,7 @@ function privateFixtures(authenticatedSignatureFixture = false) {
   }
 }
 
-module.exports = { R2_HANDOFF, R2_HANDOFF_SHA, F1_HISTORICAL_CONTRACT, validateR2Scope, validatePreviousCurrentPublication, validatePinnedHistoricalIdentity, validateSignedHistoricalParents, authenticatePinnedHistoricalContract, F1_HANDOFF, F1_HANDOFF_SHA, F1_CORRECTIVE, validateF1Scope, validateFreshMaterializations, validatePreviousRepairPublication, REPAIR_OWNERS, reauthenticateRepairCoverage, validateOriginalMaterialization, ORIGINAL_ENTRIES, MATERIALIZATION_V2, MATERIALIZATION_V2_SHA, validateOperatorSignature, validateVolumeMaterialization, historicalVolumeEntry, MATERIALIZATION, MATERIALIZATION_SHA, validateRepairContract, authenticateRepairSuccessor, recheckRepairSuccessor, REPAIR_HANDOFF, REPAIR_HANDOFF_SHA, REPAIR_CORRECTIVE, REPAIR_PLANS, SOURCE39_SHA, COORDINATOR48_SHA, HISTORICAL43_SHA, validatePublication, authenticateVolumeSuccessor, recheckVolumeSuccessor, validateVolumeContract, VOLUME_CORRECTIVE, VOLUME_HANDOFF, VOLUME_HANDOFF_SHA, authenticateSuccessor, recheckSuccessor, validateSuccessorContract, SUCCESSOR_CORRECTIVE, SUCCESSOR_HANDOFF, SUCCESSOR_HANDOFF_SHA, check, authenticateOriginal, authenticateFinal, recheckFinal, selectedArtifact, validateSourceUpdate,
+module.exports = { R8_STAGE, R8_HANDOFF_SHA, R8_CORRECTIVE, validateR8Contract, R7_STAGE, R7_HANDOFF_SHA, R7_CORRECTIVE, validateR7Contract, validateSquashPublication, R6_STAGE, R6_HANDOFF_SHA, R6_CORRECTIVE, validateR6Contract, R5_STAGE, R5_HANDOFF_SHA, R5_CORRECTIVE, validateR5Contract, R3_STAGE, R3_HANDOFF_SHA, R4_STAGE, R4_HANDOFF_SHA, R4_CORRECTIVE, validateR4Contract, R2_HISTORY_CONTRACT, validateR2HistoricalAdmission, authenticateR2History, T16_STAGE, T16_HANDOFF, T16_HANDOFF_SHA, T16_CORRECTIVE, validateT16Contract, authenticateT16Successor, recheckT16Successor, R2_HANDOFF, R2_HANDOFF_SHA, F1_HISTORICAL_CONTRACT, validateR2Scope, validatePreviousCurrentPublication, validatePinnedHistoricalIdentity, validateSignedHistoricalParents, authenticatePinnedHistoricalContract, F1_HANDOFF, F1_HANDOFF_SHA, F1_CORRECTIVE, validateF1Scope, validateFreshMaterializations, validatePreviousRepairPublication, REPAIR_OWNERS, reauthenticateRepairCoverage, validateOriginalMaterialization, ORIGINAL_ENTRIES, MATERIALIZATION_V2, MATERIALIZATION_V2_SHA, validateOperatorSignature, validateVolumeMaterialization, historicalVolumeEntry, MATERIALIZATION, MATERIALIZATION_SHA, validateRepairContract, authenticateRepairSuccessor, recheckRepairSuccessor, REPAIR_HANDOFF, REPAIR_HANDOFF_SHA, REPAIR_CORRECTIVE, REPAIR_PLANS, SOURCE39_SHA, COORDINATOR48_SHA, HISTORICAL43_SHA, validatePublication, authenticateVolumeSuccessor, recheckVolumeSuccessor, validateVolumeContract, VOLUME_CORRECTIVE, VOLUME_HANDOFF, VOLUME_HANDOFF_SHA, authenticateSuccessor, recheckSuccessor, validateSuccessorContract, SUCCESSOR_CORRECTIVE, SUCCESSOR_HANDOFF, SUCCESSOR_HANDOFF_SHA, check, authenticateOriginal, authenticateFinal, recheckFinal, selectedArtifact, validateSourceUpdate,
   validateDescendant, validateConfigurations, CORRECTIVE, FINAL_HANDOFF, FINAL_HANDOFF_SHA };
 
 if (require.main === module) {
