@@ -410,6 +410,18 @@ function validateLedger(ledger) {
     else if (volume) assert.deepEqual(publication.authenticateVolumeSuccessor(common, ROOT, true), authenticated);
     else assert.deepEqual(publication.authenticateSuccessor(common, ROOT, true), authenticated);
   }
+  if (ledger.corrective_generation?.kind === 't16-source-repair') {
+    const publication = require('../unit/phase47-package-publication.test.cjs');
+    const common = gitText(ROOT, 'rev-parse', '--path-format=absolute', '--git-common-dir');
+    const authenticated = publication.authenticateR2History(common, ROOT);
+    const original = jsonOriginal(authenticated.handback.original_ledger);
+    assert.equal(ledger.acceptance, 'HOLD');
+    assert.equal(ledger.current_verification.accepted, false);
+    assert.equal(ledger.current_verification.native_launches, 0);
+    assert.deepEqual(ledger.obligations, original.obligations, 'twenty original HOLD rows must remain unchanged');
+    for (const field of ['ticket', 'plan_sha256', 'historical_research', 'retained_references', 'historical_unknowns', 'accounting'])
+      assert.deepEqual(ledger[field], original[field], 'retained original ledger drift: ' + field);
+  }
   const open = [], verified = [];
   const historical = (ledger.historical_research || []).map(reference => {
     assert.equal(reference.store, '/Users/serhii/.local/state/shipyard/codex/'
