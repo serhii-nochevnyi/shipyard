@@ -15,9 +15,13 @@ review. For the phase epic PR, explicitly select the canonical phase directory a
 actual integration PR from the epic worktree:
 
 ```sh
-node ${CLAUDE_PLUGIN_ROOT}/scripts/deliver-dispatch.cjs build arch-review <phase-directory> --phase <N> --pr <integration-pr> --runtime <codex|claude>
+node ${CLAUDE_PLUGIN_ROOT}/scripts/deliver-dispatch.cjs build arch-review <phase-directory> --phase <N> --pr <integration-pr> --runtime <codex|claude> [--repo owner/name]
 node ${CLAUDE_PLUGIN_ROOT}/scripts/gate-trailer.cjs verify <integration-pr> --worktree <epic-worktree> --graph <project-root>/.planning/graph [--repo owner/name]
 ```
+
+For a foreign repository phase, pass `--repo owner/name` to both commands to
+select that repository’s phase tickets and integration PR. For a local repository
+phase, omit `--repo` and invoke from its epic worktree as above.
 
 Both hosts derive the aggregate subject from actual phase graph membership,
 repository, PR, exact live head and base. The context includes the entire aggregate
@@ -96,13 +100,11 @@ command-backed evidence is not verification.
   ```
 
   It is recorded in the PR body beside the head
-  (`gate-trailer.cjs write … --base-tree <sha>`), and it is what lets a later
-  base move that provably changes nothing keep this verdict instead of buying it
-  again — a re-judgement measured at ~150k tokens, 42% of one ticket's cost.
-  The proof is two object identities (the head trees equal, the base trees
-  equal), so an abbreviated value is refused on write: report all forty
-  characters. Report a TREE and never a branch name — the base branch gets
-  reaped, and a tree sha is immortal.
+  (`gate-trailer.cjs write … --base-tree <sha>`) as telemetry of the reviewed
+  merge-base context. Report all forty characters and report a TREE, never a
+  branch name. Equal head or base trees do not authorize verdict carry: any
+  changed integration head or base requires a fresh authenticated review of
+  the exact current PR identity.
 - for `violation`: list each violated ADR/section, the offending hunk
   (file:line), and the minimal remediation direction
 - for `adr-outdated`: which decision, what reality contradicts it, and what
