@@ -20,7 +20,6 @@ const OWNED = ['codex-arch-review-context', 'codex-runtime-host', 'codex-deliver
   .map(name => 'host/plugins/delivery-pipeline/scripts/' + name + '.cjs');
 const sha = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 
-// @security: Resolve the temporary parent; inspected paths must still be physical.
 function temporaryDirectory(prefix) {
   return fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), prefix));
 }
