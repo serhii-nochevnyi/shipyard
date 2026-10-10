@@ -200,24 +200,50 @@ function postGate({ repo, sha, description, cwd }) {
   return { ok: true };
 }
 
-function verifyArchitectureTarget({ pr, repo = null, worktreePath = process.cwd(), graphDir, getPullRequest }) {
-  const live = getPullRequest ? getPullRequest({ pr, repo, worktree: worktreePath }) : JSON.parse(require('node:child_process').execFileSync('gh',
+function verifyCurrentReviews({ pr, repo = null, worktreePath = process.cwd(), graphDir, getPullRequest }) {
+  const read = () => getPullRequest ? getPullRequest({ pr, repo, worktree: worktreePath }) : JSON.parse(require('node:child_process').execFileSync('gh',
     ['pr', 'view', String(pr), ...(repo ? ['--repo', repo] : []), '--json', 'number,state,headRefName,headRefOid,baseRefName,baseRefOid'],
     { cwd: worktreePath, encoding: 'utf8', timeout: 30000, maxBuffer: 65536 }));
+  const live = read();
   if (live.number !== pr || live.state !== 'OPEN' || !TREE_SHA.test(live.headRefOid || '')
-      || !TREE_SHA.test(live.baseRefOid || '') || typeof live.baseRefName !== 'string')
-    throw new Error('live architecture PR identity is incomplete');
+      || !TREE_SHA.test(live.baseRefOid || '') || typeof live.baseRefName !== 'string' || typeof live.headRefName !== 'string')
+    throw new Error('live current review PR identity is incomplete');
   const target = require('./architecture-target.cjs');
-  const integration = target.resolveIntegrationBranch({ projectRoot: worktreePath, repo });
-  const architecture = target.architectureTarget({ base: live.baseRefName, integrationBranch: integration });
-  if (!architecture.required) return { ...architecture, ready: true, pr, head: live.headRefOid };
-  const verdict = require('./role-artifact.cjs').currentArchitectureVerdict({ worktreePath, graphDir, repo,
-    pr, head: live.headRefOid, headBranch: live.headRefName, baseName: live.baseRefName, baseCommit: live.baseRefOid });
-  return { ...architecture, ready: !!verdict, pr, head: live.headRefOid, base_commit: live.baseRefOid, verdict };
+  const integrationBranch = target.resolveIntegrationBranch({ projectRoot: worktreePath, repo });
+  const architecture = target.architectureTarget({ base: live.baseRefName, integrationBranch });
+  if (!architecture.required) return { architecture: { ...architecture, ready: true, pr, head: live.headRefOid }, integration: null };
+  const directory = graphDir || require('node:path').join(worktreePath, '.planning/graph');
+  const fs = require('node:fs'), path = require('node:path');
+  const membership = () => ['tickets.json', 'delivery-state.json'].map(name => {
+    const file = path.join(directory, name);
+    if (!fs.existsSync(file)) return null;
+    const stat = fs.lstatSync(file);
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 8 * 1024 * 1024)
+      throw new Error('current complete membership is unavailable or over its bound');
+    return fs.readFileSync(file).toString('base64');
+  });
+  const before = membership();
+  const subject = { worktreePath, graphDir, repo, pr, head: live.headRefOid, headBranch: live.headRefName,
+    baseName: live.baseRefName, baseCommit: live.baseRefOid };
+  const authority = require('./role-artifact.cjs');
+  let verdict = null, integration = null;
+  try { verdict = authority.currentArchitectureVerdict(subject); } catch {}
+  try { integration = authority.currentIntegrationVerdict(subject); } catch {}
+  const after = read();
+  const fields = ['number', 'state', 'headRefName', 'headRefOid', 'baseRefName', 'baseRefOid'];
+  const unchanged = fields.every(field => after[field] === live[field])
+    && JSON.stringify(before) === JSON.stringify(membership())
+    && integrationBranch === target.resolveIntegrationBranch({ projectRoot: worktreePath, repo });
+  if (!unchanged) { verdict = null; integration = null; }
+  return { architecture: { ...architecture, ready: !!verdict, pr, head: live.headRefOid,
+    base_commit: live.baseRefOid, verdict }, integration };
 }
+
+function verifyArchitectureTarget(input) { return verifyCurrentReviews(input).architecture; }
 
 module.exports = {
   verifyArchitectureTarget,
+  verifyCurrentReviews,
   USAGE, CARRY_USAGE, TREE_SHA, STATUS_CONTEXT, STATUS_MAX,
   currentArchitectureVerdict: input => require('./role-artifact.cjs').currentArchitectureVerdict(input),
   parseGate, gateKind, gateConform, gateWhy, shortSha, gateFromStatus, readGate,
@@ -410,7 +436,7 @@ if (require.main === module) {
   if (!head) die(`PR #${pr} reports no headRefOid — refusing to write a trailer that names no diff`);
 
   let architecture;
-  try { architecture = verifyArchitectureTarget({ pr, repo, getPullRequest: () => live }); }
+  try { architecture = verifyArchitectureTarget({ pr, repo }); }
   catch (error) { die(error.message); }
   if (!architecture.required) {
     console.log(JSON.stringify(architecture));
@@ -438,6 +464,11 @@ if (require.main === module) {
   const description = `arch-review=${archReview}, drift-check=${driftCheck}, `
     + `degenerate-green=${degenerateGreen}, checks=${checks}`
     + (baseTree ? `, base_tree=${normSha(baseTree)}` : '');
+  let finalReview;
+  try { finalReview = verifyArchitectureTarget({ pr, repo }); } catch (error) { die(error.message); }
+  if (!finalReview.required || !finalReview.ready || finalReview.head !== head
+      || finalReview.base_commit !== live.baseRefOid || finalReview.target !== live.baseRefName)
+    die('current architecture subject changed before admission; obtain a fresh current review');
   const posted = postGate({ repo, sha: head, description });
   if (!posted.ok) die(`could not record the ${STATUS_CONTEXT} status on ${shortSha(head)}: ${posted.why}`);
 

@@ -169,7 +169,8 @@ function preflight(input, options = {}) {
   const graphFile = path.join(input.graphDir, 'tickets.json');
   const graph = readJson(graphFile, 'canonical graph');
   const statePath = path.join(input.graphDir, 'delivery-state.json');
-  const state = fs.existsSync(statePath) ? readJson(statePath, 'delivery state').value : {};
+  const stateInput = fs.existsSync(statePath) ? readJson(statePath, 'delivery state') : null;
+  const state = stateInput?.value || {};
   const { rows, planDir, epic } = phaseRows(graph.value, phase);
   assertCompletePlanSet(worktree, planDir, rows);
   const pinned = pinEpic(options, worktree, epic);
@@ -184,11 +185,17 @@ function preflight(input, options = {}) {
   }
   const again = pinEpic(options, worktree, epic);
   if (again.commit !== pinned.commit || again.tree !== pinned.tree) refuse(`${epic} moved during preflight; re-run preflight`);
+  if (git(options, worktree, ['rev-parse', '--verify', 'HEAD^{commit}']) !== head)
+    refuse('integrator HEAD moved during complete membership preflight');
+  assertCompletePlanSet(worktree, planDir, rows);
+  if (readJson(graphFile, 'current graph').text !== graph.text
+      || (fs.existsSync(statePath) ? readJson(statePath, 'current delivery state').text : null) !== (stateInput?.text || null))
+    refuse('graph or delivery membership changed during complete preflight');
   const proof = {
     schema: SCHEMA,
     phase,
     plan_dir: planDir,
-    graph: { path: 'tickets.json', digest: sha(graph.text), phase_rows_digest: sha(canonicalJson(rows)) },
+    graph: { path: 'tickets.json', directory: path.resolve(input.graphDir), digest: sha(graph.text), phase_rows_digest: sha(canonicalJson(rows)) },
     epic: { branch: epic, commit: pinned.commit, tree: pinned.tree },
     ticket_set: ticketSet,
     ticket_set_digest: sha(JSON.stringify(ticketSet)),
@@ -217,6 +224,13 @@ function verifyProof(input, options = {}) {
   if (head !== proof.epic.commit || tree !== proof.epic.tree) refuse('integrator worktree is not at the proof-pinned epic commit/tree');
   const live = pinEpic(options, worktree, proof.epic.branch);
   if (live.commit !== proof.epic.commit) refuse(`${proof.epic.branch} moved since the proof; re-run preflight`);
+  if (typeof proof.graph?.directory !== 'string' || !path.isAbsolute(proof.graph.directory))
+    refuse('complete live membership requires the original graph directory; re-run preflight');
+  if (input.graphDir && path.resolve(input.graphDir) !== proof.graph.directory)
+    refuse('current graph directory differs from the proof');
+  const current = preflight({ worktree, graphDir: proof.graph.directory, phase: proof.phase }, options);
+  if (canonicalJson(current) !== canonicalJson(proof))
+    refuse('complete current graph, ticket membership or live merge ancestry changed; re-run preflight');
   return proof;
 }
 
