@@ -22,6 +22,24 @@ command-backed evidence is not verification.
   and generated planning state is not code under integration.
 - `.planning/architecture/` (ADRs and companions).
 - Ticket contracts (plan files) with their acceptance criteria.
+- For `shipyard.integration-review.v2`, the trusted producer's complete current
+  dictionary and `role_context.review_coverage` from the independent integration
+  selector and impact builder. This carries the separately authenticated original
+  baseline, complete endpoint delta from every contributor, inherited conclusions
+  and assumptions, newly required obligations, affected dependencies/boundaries,
+  limitations and complete live current phase membership/ancestry proof.
+
+For v2, review the inherited conclusions as inherited. Evaluate their assumptions
+against the current contracts and impact. Read every newly required source and
+affected boundary, including generated, configuration and governing changes and
+other contributors' repairs. Retain every logical obligation and the complete
+current acceptance sweep. The complete current dictionary remains required input;
+mechanical hashes, preflight and consumption checks provide no semantic credit.
+If the producer selects full review, read all current material. Missing integration
+authority requires integration full review even when architecture has a baseline.
+Uncertainty that remains after review belongs in findings and the complete evidence;
+it cannot disappear by copying an inherited success. Unknown contract versions
+are refused. Existing v1 full-input reviews remain complete and compatible.
 
 ## Procedure
 1. Cross-ticket coherence: duplicated helpers/solutions introduced by parallel
@@ -36,6 +54,12 @@ command-backed evidence is not verification.
 4. Write `.planning/phases/<phase>/INTEGRATION.md`: findings, evidence,
    verdict. Cite file:line for every finding — "the sum looks fine" is not a
    verdict anyone can act on.
+5. For v2, issue a fresh native outcome bound to the exact current HEAD, base,
+   merge-base and full ticket set. Report inherited/new/impact/limitations coverage
+   separately in the complete evidence. A baseline artifact is a reference to prior
+   conclusions, never the current verdict or receipt. Tree equality supplies no
+   judgment. Only the existing protected exact-packet continuation contract can
+   restore semantic context; old failed or interrupted finals remain rejected.
 
 ## Verdict
 - `passed` — phase is coherent, nothing to do.
@@ -85,6 +109,28 @@ complete merged ticket set:
 `ticket_set` is `role_context.ticket_set` copied verbatim, the exact array of
 `{id, pr, head, base, branch}` objects in host order; a string, a list of ids,
 a reordered or re-keyed array is refused.
+
+For v2, also copy `role_context.review_coverage.reviewed_identity` exactly into
+`reviewed_identity`. Return `coverage` with schema
+`shipyard.integration-coverage-result.v1`, `mode` and `lineage_digest` from the
+producer's coverage `mode` and `digest`. `inherited_obligations` lists, in host
+order, the `identity` of every `current_logical_obligations` entry whose `coverage`
+is `inherited`; `newly_reviewed_obligations` lists every other entry's `identity`.
+Copy `impact.paths` into `impact_paths` and preserve `limitations` completely.
+These fields declare current semantic coverage; the host checks their complete
+inventory and binds the original output. Additional uncertainty requires findings
+and a suitable fresh outcome. The bounded synopsis cannot replace that evidence.
+
+The Codex v2 result additionally includes the complete `evidence_markdown`,
+`context_digest` equal to manifest binding `packet_digest`, and the exact
+`input_manifest_sha256`, `input_material_bytes`, `input_asset_count` and
+`input_chunk_reads` from the current file input. The trusted host reads the original
+digest-verified native output, hands off the complete evidence, and calls the
+original sealer. Both v2 runtime hosts return their fresh receipt and sealed
+artifact; do not replay the legacy standalone seal commands for that result.
+Premature finals, incomplete reading, omitted obligations or changed current
+identity cannot produce an accepted current judgment. Current lineage admission
+and installed/generated acceptance remain downstream obligations.
 
 A `needs-fix` result attaches its fix tickets as findings:
 
