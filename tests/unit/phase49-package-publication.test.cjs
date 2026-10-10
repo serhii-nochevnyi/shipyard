@@ -455,6 +455,143 @@ function inspectAccountingSuccessor(bytes, expected, repository, stage, historic
   return { ...result, unchanged_outputs: 157, installed_acceptance: false, empirical_acceptance: false };
 }
 
+const MODE_ROOT = '/Users/serhii/.local/state/shipyard/phase49-selected-package-7d1608645431';
+const MODE_SHA = '378f07d528a41d25424839092b203f6b6b2f8f5647133a5c3501d512d99d9a2d';
+const MODE_HEAD = '7d16086454311ce1524d3cd4f500cabc8ffb6522';
+const MODE_TREE = '3ad781d746cb28c4097633d10054a0eac977ecd9';
+const MODE_INPUT = 'plugins/delivery-pipeline/scripts/ticket-worktree.sh';
+const MODE_OUTPUT = 'host/' + MODE_INPUT;
+
+function inspectModeDelta(selected, historical) {
+  assert.notEqual(selected.source.head, historical.source.head, 'old producer substituted');
+  assert.notEqual(selected.source.tree, historical.source.tree, 'old source tree substituted');
+  assert.notEqual(selected.stage, historical.stage, 'historical stage reused');
+  assert.equal(selected.build_calls, 1);
+  assert.equal(historical.build_calls, 1);
+  assert.equal(selected.builder_sha256, historical.builder_sha256, 'builder changed');
+  assert.deepEqual(selected.package, historical.package, 'mode-only metadata changed');
+  for (const [field, count, mode, member] of [
+    ['inputs', 162, 'mode', MODE_INPUT], ['outputs', 161, 'publication_mode', MODE_OUTPUT],
+  ]) {
+    const rows = selected[field], oldRows = historical[field];
+    assert.equal(rows.length, count); assert.equal(oldRows.length, count);
+    for (const list of [rows, oldRows]) {
+      assert.equal(new Set(list.map(row => row.path)).size, count, 'duplicate inventory credit');
+      list.forEach(row => safeRelative(row.path));
+    }
+    assert.deepEqual(rows.map(row => row.path).sort(), oldRows.map(row => row.path).sort(),
+      'complete inventory paths changed');
+    const changed = [];
+    for (const row of rows) {
+      const old = oldRows.find(previous => previous.path === row.path);
+      assert.equal(row.sha256, old.sha256, 'mode-only bytes changed');
+      assert.equal(row.bytes, old.bytes, 'mode-only lengths changed');
+      if (row[mode] !== old[mode]) {
+        assert.equal(old[mode], 0o644); assert.equal(row[mode], 0o755);
+        changed.push(row.path);
+      }
+    }
+    assert.deepEqual(changed, [member], 'unexpected mode delta requires ownership amendment');
+  }
+}
+
+function inspectModeSuccessor(bytes, expected, repository, stage, historicalBytes, historicalExpected) {
+  assert.equal(sha(historicalBytes), historicalExpected.selection_sha256, 'historical selection changed');
+  const historical = JSON.parse(historicalBytes), selected = JSON.parse(bytes);
+  assert.equal(historical.source.head, historicalExpected.head);
+  assert.equal(historical.source.tree, historicalExpected.tree);
+  assert.notEqual(expected.selection_sha256, historicalExpected.selection_sha256, 'old selection substituted');
+  assert.equal(sha(bytes), expected.selection_sha256);
+  inspectModeDelta(selected, historical);
+  const oldInventory = inventory(historical.stage, '', true);
+  assert.deepEqual(oldInventory, historical.outputs.map(row => ({ path: row.path, sha256: row.sha256,
+    bytes: row.bytes, mode: row.publication_mode === 0o755 ? 0o500 : 0o400 })));
+  const result = inspect(bytes, expected, repository, stage);
+  inspectAccountingAPIs(path.join(repository, 'plugins/shipyard/host/plugins/delivery-pipeline'));
+  return { ...result, changed_modes: 1, unchanged_outputs: 160, unchanged_output_bytes: 161,
+    installed_acceptance: false, empirical_acceptance: false };
+}
+
+function inspectModeInstalled(identity, authenticated, selectionBytes, expected, authenticate) {
+  assert.equal(typeof authenticate, 'function', 'protected installed verifier missing');
+  const proof = authenticate(expected);
+  assert(proof && proof.authenticated === true, 'installed authority missing or forged');
+  assert.deepEqual(proof.expected, expected, 'independent installed references differ');
+  assert.deepEqual(proof.identity, identity, 'installed identity substitution');
+  assert.deepEqual(proof.binding, authenticated, 'installed binding substitution');
+  assert.equal(expected.source_head, MODE_HEAD); assert.equal(expected.source_tree, MODE_TREE);
+  for (const field of ['publication_head', 'publication_tree'])
+    assert.match(expected[field], /^[a-f0-9]{40}$/, 'missing exact installed publication subject');
+  assert.equal(typeof expected.runtime_root, 'string');
+  assert(path.isAbsolute(expected.runtime_root), 'missing isolated runtime reference');
+  assert.equal(proof.ci.headSha, expected.publication_head, 'stale publication CI');
+  assert.equal(proof.ci.status, 'completed'); assert.equal(proof.ci.conclusion, 'success');
+  const job = proof.ci.jobs.find(row => row.name === 'test-fast');
+  assert(job && job.status === 'completed' && job.conclusion === 'success');
+  for (const name of ['publish gate', 'runtime digest trailer', 'make test-fast']) {
+    const step = job.steps.find(row => row.name === name);
+    assert(step && step.status === 'completed' && step.conclusion === 'success', 'incomplete publication CI');
+  }
+  const log = proof.ci.original_full_log;
+  assert(log && typeof log.path === 'string', 'full publication CI log missing');
+  assert.equal(read(log.path, log.sha256).length, log.bytes, 'full publication CI log changed');
+  assert.equal(expected.selection_sha256, MODE_SHA, 'old or foreign mode selection');
+  assert.equal(sha(selectionBytes), expected.selection_sha256, 'foreign installed selection');
+  assert(![ACCOUNTING_SHA, CURRENT_SHA, SELECTION_SHA].includes(expected.selection_sha256), 'old installed selection');
+  const signedBytes = authenticatePublicSelection(MODE_ROOT, MODE_SHA, 'public-key.asc');
+  assert.deepEqual(selectionBytes, signedBytes, 'installed unsigned selection substitution');
+  const historicalBytes = authenticatePublicSelection(ACCOUNTING_ROOT, ACCOUNTING_SHA, 'public-key.asc');
+  inspectModeSuccessor(selectionBytes, { selection_sha256: MODE_SHA, head: MODE_HEAD, tree: MODE_TREE },
+    ROOT, path.join(MODE_ROOT, 'candidate'), historicalBytes,
+    { selection_sha256: ACCOUNTING_SHA, head: ACCOUNTING_HEAD, tree: ACCOUNTING_TREE });
+  const selected = JSON.parse(selectionBytes);
+  assert.equal(selected.source.head, MODE_HEAD); assert.equal(selected.source.tree, MODE_TREE);
+  assert.equal(selected.source.head, expected.source_head); assert.equal(selected.source.tree, expected.source_tree);
+  assert.equal(selected.stage, path.join(MODE_ROOT, 'candidate'));
+  assert.equal(selected.build_calls, 1);
+  assert.equal(selected.inputs.length, 162); assert.equal(selected.outputs.length, 161);
+  assert.equal(selected.outputs.find(row => row.path === MODE_OUTPUT).publication_mode, 0o755);
+  assert.deepEqual(authenticated.binding.outputs, selected.outputs, 'installed inventory differs');
+  assert.equal(authenticated.binding.version, selected.package.version);
+  assert.equal(authenticated.binding.package_sha256, selected.package.digest);
+  equalInputs(selected.inputs, authenticated.binding.source.identities);
+  assert.equal(identity.source_head, expected.publication_head, 'stale installed source');
+  assert.equal(identity.source_tree, expected.publication_tree, 'foreign installed source tree');
+  assert.equal(identity.runtime_root, expected.runtime_root, 'same-version cache substitution');
+  assert.notEqual(identity.runtime_root, '/Users/serhii/.local/state/shipyard/dogfood/codex/3412ce7b163b2e7f',
+    'original13 isolated cache reused');
+  assert.equal(authenticated.identity.head, expected.publication_head);
+  assert.equal(authenticated.identity.tree, expected.publication_tree);
+  const acceptance = require('../smoke/phase47-runtime-acceptance.cjs');
+  const observed = acceptance.inspectInstalled(identity, authenticated);
+  inspectAccountingAPIs(identity.host_root);
+  return { ...observed, empirical_acceptance: false };
+}
+
+function historicalAccountingRepository(selected, callback) {
+  const repository = temporaryDirectory('phase49-historical-accounting-');
+  try {
+    for (const input of selected.inputs) {
+      const bytes = execFileSync('git', ['-C', ROOT, 'show', selected.source.head + ':' + input.path],
+        { timeout: 10000, maxBuffer: 32 * 1024 * 1024 });
+      assert.equal(sha(bytes), input.sha256, 'historical committed input drift');
+      const mode = execFileSync('git', ['-C', ROOT, 'ls-tree', selected.source.head, '--', input.path],
+        { encoding: 'utf8', timeout: 10000 }).split(' ')[0];
+      assert.equal(mode, input.mode === 0o755 ? '100755' : '100644');
+      const target = path.join(repository, input.path);
+      fs.mkdirSync(path.dirname(target), { recursive: true }); fs.writeFileSync(target, bytes);
+      fs.chmodSync(target, input.mode);
+    }
+    for (const output of selected.outputs) {
+      const target = path.join(repository, 'plugins/shipyard', output.path);
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.writeFileSync(target, read(path.join(selected.stage, output.path), output.sha256));
+      fs.chmodSync(target, output.publication_mode);
+    }
+    return callback(repository);
+  } finally { fs.rmSync(repository, { recursive: true, force: true }); }
+}
+
 function inspectAccountingAPIs(hostRoot) {
   const runtime = require(path.join(hostRoot, 'scripts/codex-runtime-host.cjs'));
   const authority = require(path.join(hostRoot, 'scripts/role-artifact.cjs'));
@@ -485,6 +622,163 @@ function inspectAccountingInstalled(identity, authenticated, selectionBytes) {
   return { ...observed, empirical_acceptance: false };
 }
 
+test('mode-only successor rejects same-version old identity and complete inventory mutations', () => {
+  const temporary = temporaryDirectory('phase49-mode-fixture-');
+  const stage = path.join(temporary, 'candidate'), oldStage = path.join(temporary, 'historical');
+  const repository = path.join(temporary, 'repository');
+  try {
+    build(stage);
+    const inputs = canonicalInputs(ROOT);
+    for (const input of inputs) {
+      const target = path.join(repository, input.path);
+      fs.mkdirSync(path.dirname(target), { recursive: true }); fs.copyFileSync(path.join(ROOT, input.path), target);
+      fs.chmodSync(target, input.mode);
+    }
+    const outputs = inventory(stage).map(row => ({ path: row.path, sha256: row.sha256,
+      bytes: row.bytes, publication_mode: row.mode }));
+    const selected = { schema: 'shipyard.phase49.selected-package.v1',
+      source: { head: 'fixture-mode-head', tree: 'fixture-mode-tree' }, stage, build_calls: 1,
+      builder_sha256: sha(read(path.join(ROOT, 'scripts/package-shipyard-codex.cjs'))), inputs, outputs,
+      package: JSON.parse(read(path.join(stage, 'package-build.json'))) };
+    const historical = structuredClone(selected);
+    historical.source = { head: 'fixture-old-head', tree: 'fixture-old-tree' }; historical.stage = oldStage;
+    historical.inputs.find(row => row.path === MODE_INPUT).mode = 0o644;
+    historical.outputs.find(row => row.path === MODE_OUTPUT).publication_mode = 0o644;
+    for (const output of outputs) {
+      for (const [root, mode] of [[path.join(repository, 'plugins/shipyard'), output.publication_mode],
+        [oldStage, historical.outputs.find(row => row.path === output.path).publication_mode === 0o755 ? 0o500 : 0o400]]) {
+        const target = path.join(root, output.path);
+        fs.mkdirSync(path.dirname(target), { recursive: true }); fs.copyFileSync(path.join(stage, output.path), target);
+        fs.chmodSync(target, mode);
+      }
+      fs.chmodSync(path.join(stage, output.path), output.publication_mode === 0o755 ? 0o500 : 0o400);
+    }
+    fixtureDirectoryModes(stage, 0o500); fixtureDirectoryModes(oldStage, 0o500);
+    const bytes = Buffer.from(JSON.stringify(selected)), oldBytes = Buffer.from(JSON.stringify(historical));
+    const expected = { selection_sha256: sha(bytes), ...selected.source };
+    const oldExpected = { selection_sha256: sha(oldBytes), ...historical.source };
+    const { privateKey, publicKey } = crypto.generateKeyPairSync('ed25519');
+    const signature = crypto.sign(null, bytes, privateKey);
+    assert(crypto.verify(null, bytes, publicKey, signature));
+    assert(!crypto.verify(null, oldBytes, publicKey, signature));
+    const consume = (value = bytes, pins = expected) => withoutWrites(() =>
+      inspectModeSuccessor(value, pins, repository, stage, oldBytes, oldExpected));
+    assert.equal(consume().unchanged_outputs, 160);
+    assert.equal(consume().unchanged_output_bytes, 161);
+    assert.equal(consume().inspector_build_calls, 0);
+    assert.throws(() => consume(oldBytes, oldExpected), /old selection substituted/);
+    for (const mutate of [
+      value => { value.source = historical.source; },
+      value => { value.stage = historical.stage; },
+      value => { value.build_calls = 2; },
+      value => { value.inputs.pop(); },
+      value => { value.outputs.pop(); },
+      value => { value.inputs[0].path = value.inputs[1].path; },
+      value => { value.outputs[0].sha256 = '0'.repeat(64); },
+      value => { value.outputs[0].bytes++; },
+      value => { value.inputs.find(row => row.path === MODE_INPUT).mode = 0o644; },
+      value => { value.outputs.find(row => row.path === MODE_OUTPUT).publication_mode = 0o644; },
+      value => { value.outputs.find(row => row.path !== MODE_OUTPUT).publication_mode ^= 0o100; },
+      value => { value.package.digest = '0'.repeat(64); },
+    ]) {
+      const altered = structuredClone(selected); mutate(altered);
+      const alteredBytes = Buffer.from(JSON.stringify(altered));
+      assert.throws(() => consume(alteredBytes, { ...expected, selection_sha256: sha(alteredBytes) }));
+    }
+    const mirror = path.join(repository, 'plugins/shipyard', MODE_OUTPUT);
+    fs.chmodSync(mirror, 0o644); assert.throws(() => consume(), /incomplete or mixed publication/);
+    fs.chmodSync(mirror, 0o755);
+    assert.throws(() => inspectModeInstalled({}, {}, bytes, expected, () => ({ authenticated: false })),
+      /authority missing or forged/);
+    assert.throws(() => inspectModeInstalled({}, {}, oldBytes, oldExpected, () =>
+      ({ authenticated: true, expected: expected, identity: {}, binding: {} })), /independent installed references differ/);
+    assert.deepEqual(inventory(oldStage, '', true), historical.outputs.map(row => ({ path: row.path,
+      sha256: row.sha256, bytes: row.bytes, mode: row.publication_mode === 0o755 ? 0o500 : 0o400 })));
+  } finally {
+    for (const root of [stage, oldStage]) if (fs.existsSync(root)) fixtureDirectoryModes(root, 0o700);
+    fs.rmSync(temporary, { recursive: true, force: true });
+  }
+});
+
+test('installed mode admission refuses forged references and incomplete exact publication CI', () => {
+  const expected = { selection_sha256: MODE_SHA, source_head: MODE_HEAD, source_tree: MODE_TREE,
+    publication_head: 'a'.repeat(40), publication_tree: 'b'.repeat(40), runtime_root: '/fixture-only-runtime' };
+  const identity = { source_head: expected.publication_head }, binding = { identity: {} };
+  const proof = { authenticated: true, expected, identity, binding,
+    ci: { headSha: expected.publication_head, status: 'completed', conclusion: 'success', jobs: [
+      { name: 'test-fast', status: 'completed', conclusion: 'success', steps:
+        ['publish gate', 'runtime digest trailer', 'make test-fast'].map(name =>
+          ({ name, status: 'completed', conclusion: 'success' })) },
+    ] } };
+  for (const [mutate, refusal] of [
+    [value => { value.authenticated = false; }, /authority missing or forged/],
+    [value => { value.expected.publication_head = MODE_HEAD; }, /independent installed references differ/],
+    [value => { value.identity.source_head = null; }, /installed identity substitution/],
+    [value => { value.binding.identity = null; }, /installed binding substitution/],
+    [value => { value.ci.headSha = MODE_HEAD; }, /stale publication CI/],
+    [value => { value.ci.status = 'cancelled'; }, /strictly equal/],
+    [value => { value.ci.conclusion = 'failure'; }, /strictly equal/],
+    [value => { value.ci.jobs = []; }, /assertion|falsy/i],
+    [value => { value.ci.jobs[0].steps[2].conclusion = 'skipped'; }, /incomplete publication CI/],
+    [value => { value.ci.jobs[0].steps.pop(); }, /incomplete publication CI/],
+    [() => {}, /full publication CI log missing/],
+  ]) {
+    const altered = structuredClone(proof); mutate(altered);
+    assert.throws(() => inspectModeInstalled(identity, binding, Buffer.from('{}'), expected, () => altered), refusal);
+  }
+});
+
+test('distinct signed mode successor independently inspects full162/all161 without production builds', t => {
+  const markerPath = '/Users/serhii/.local/state/shipyard/phase49-T49-15-installed-mode-selected-copies.json';
+  if (!fs.existsSync(markerPath) || !fs.existsSync(path.join(MODE_ROOT, 'selection.json'))) {
+    t.skip('HOLD: coordinator mode selection/copy evidence unavailable; no installed or empirical acceptance');
+    return;
+  }
+  const marker = JSON.parse(read(markerPath));
+  const digest = MODE_SHA;
+  assert.equal(marker.selection_sha256, digest);
+  assert.equal(marker.source_head, MODE_HEAD); assert.equal(marker.build_calls, 1);
+  assert.deepEqual(marker.published, ['plugins/shipyard/' + MODE_OUTPUT]);
+  assert(![ACCOUNTING_SHA, CURRENT_SHA, SELECTION_SHA].includes(digest));
+  const bytes = authenticatePublicSelection(MODE_ROOT, digest, 'public-key.asc');
+  const historicalBytes = authenticatePublicSelection(ACCOUNTING_ROOT, ACCOUNTING_SHA, 'public-key.asc');
+  const expected = { selection_sha256: digest, head: MODE_HEAD, tree: MODE_TREE };
+  const result = withoutWrites(() => inspectModeSuccessor(bytes, expected, ROOT, path.join(MODE_ROOT, 'candidate'),
+    historicalBytes, { selection_sha256: ACCOUNTING_SHA, head: ACCOUNTING_HEAD, tree: ACCOUNTING_TREE }));
+  assert.equal(result.unchanged_outputs, 160); assert.equal(result.inspector_build_calls, 0);
+  const accountingBaseline = JSON.parse(authenticatePublicSelection(CURRENT_ROOT, CURRENT_SHA, 'public-key.asc'));
+  const historical = JSON.parse(historicalBytes);
+  const byteChanges = historical.outputs.filter(row => {
+    const old = accountingBaseline.outputs.find(previous => previous.path === row.path);
+    assert(old, 'cumulative output path missing');
+    return row.sha256 !== old.sha256 || row.bytes !== old.bytes;
+  }).map(row => row.path).sort();
+  assert.deepEqual(byteChanges, [...ACCOUNTING_OWNED].sort(), 'historical four accounting byte changes');
+  const selected = JSON.parse(bytes);
+  const coverage = require('../../plugins/delivery-pipeline/scripts/conveyor-coverage.cjs');
+  const verified = coverage.verify({ commit: MODE_HEAD, repo: coverage.repoSlug(ROOT), worktree: ROOT });
+  assert.equal(verified.covered, true, 'protected final14 source authority: ' + verified.reason);
+  assert.equal(verified.record.tree, MODE_TREE);
+  const original = JSON.parse(read(selected.source.original_result, selected.source.original_result_sha256));
+  assert.equal(original.ticket, 'T-49-14'); assert.equal(original.dispatch_id, selected.source.original_dispatch);
+  assert.deepEqual(coverage.validateFinalizationEvidence(verified.record).receipt, original.receipt);
+  const stream = original.receipt.runtime_evidence.transcript;
+  assert.equal(read(stream.path, stream.sha256).length, stream.bytes);
+  const ci = JSON.parse(read('/Users/serhii/.local/state/shipyard/phase49-T49-14-installed-mode-ci-admission.json'));
+  assert.equal(ci.headSha, MODE_HEAD); assert.equal(ci.status, 'completed'); assert.equal(ci.conclusion, 'success');
+  const job = ci.jobs.find(row => row.name === 'test-fast');
+  assert(job && job.status === 'completed' && job.conclusion === 'success');
+  for (const name of ['publish gate', 'runtime digest trailer', 'make test-fast']) {
+    const step = job.steps.find(row => row.name === name);
+    assert(step && step.status === 'completed' && step.conclusion === 'success');
+  }
+  read('/Users/serhii/.local/state/shipyard/phase49-T49-14-full-ci-success.log',
+    'ab76711cf608025ce0f8b03909893b7255be46dc1c71907c40d0cd6b60b29ee1');
+  inspectRuntimeConsumers(ROOT);
+  assert.deepEqual(read(path.join(ACCOUNTING_ROOT, 'selection.json'), ACCOUNTING_SHA), historicalBytes);
+  t.diagnostic('Mode distribution only: exact15-head full CI and actual supported isolated package/bundle admission remain separate trusted-host gates. Original13 failed installation remains historical; no empirical acceptance.');
+});
+
 test('fresh completed-accounting selection independently inspects full162/all161 and unchanged157', t => {
   try { fs.accessSync(path.join(ACCOUNTING_ROOT, 'selection.json')); }
   catch (error) {
@@ -498,8 +792,8 @@ test('fresh completed-accounting selection independently inspects full162/all161
   const historicalBytes = authenticatePublicSelection(CURRENT_ROOT, CURRENT_SHA, 'public-key.asc');
   const historical = JSON.parse(historicalBytes), selected = JSON.parse(bytes);
   const expected = { selection_sha256: digest, head: ACCOUNTING_HEAD, tree: ACCOUNTING_TREE };
-  const result = withoutWrites(() => inspectAccountingSuccessor(bytes, expected, ROOT,
-    path.join(ACCOUNTING_ROOT, 'candidate'), historical));
+  const result = historicalAccountingRepository(selected, repository => withoutWrites(() =>
+    inspectAccountingSuccessor(bytes, expected, repository, path.join(ACCOUNTING_ROOT, 'candidate'), historical)));
   assert.equal(result.unchanged_outputs, 157);
   assert.equal(result.inspector_build_calls, 0);
   assert.equal(result.installed_acceptance, false);
@@ -882,4 +1176,4 @@ test('packaged role APIs authenticate full and v2 current reviews with original 
   });
 });
 
-module.exports = { inspect, inspectAccountingSuccessor, inspectAccountingInstalled, inventory, read, canonicalInputs, admitSuccessor, OWNED: COMPLETE_OWNED };
+module.exports = { inspect, inspectAccountingSuccessor, inspectAccountingInstalled, inspectModeSuccessor, inspectModeInstalled, inventory, read, canonicalInputs, admitSuccessor, OWNED: COMPLETE_OWNED };
