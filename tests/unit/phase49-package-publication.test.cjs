@@ -199,18 +199,25 @@ function inspect(selectionBytes, expected, repository, stage) {
   return { outputs: actual.length, scoped_outputs: COMPLETE_OWNED.length, complete_publication: true, inspector_build_calls: 0 };
 }
 function inspectRuntimeConsumers(repository) {
-  for (const [runtime, method, fixture, identity] of [
-    ['codex', 'parseCodexStream', 'codex-agent-stream-exec.jsonl', { type: 'thread.started', thread_id: 'foreign' }],
-    ['claude', 'parseClaudeStream', 'claude-stream-executor.jsonl', { type: 'system', session_id: 'foreign' }],
+  for (const [runtime, method, fixture, identityType, identityField] of [
+    ['codex', 'parseCodexStream', 'codex-agent-stream-exec.jsonl', 'thread.started', 'thread_id'],
+    ['claude', 'parseClaudeStream', 'claude-stream-executor.jsonl', 'system', 'session_id'],
   ]) {
     const relative = 'plugins/delivery-pipeline/scripts/' + runtime + '-runtime-host.cjs';
     const canonical = require(path.join(repository, relative));
     const packaged = require(path.join(repository, 'plugins/shipyard/host', relative));
-    const stream = read(path.join(ROOT, 'tests/fixtures/captured', fixture)).toString('utf8')
-      .split('\n').filter(line => line.trim() && !JSON.parse(line).shipyard_fixture).join('\n');
+    const records = read(path.join(ROOT, 'tests/fixtures/captured', fixture)).toString('utf8')
+      .split('\n').filter(line => line.trim()).map(JSON.parse).filter(record => !record.shipyard_fixture);
+    const original = records.find(record => record.type === identityType && record[identityField]);
+    assert(original, 'registered runtime identity record missing');
+    const identity = structuredClone(original);
+    identity[identityField] = 'foreign';
+    assert.notEqual(identity[identityField], original[identityField]);
+    const stream = records.map(record => JSON.stringify(record)).join('\n');
     assert.deepEqual(packaged[method](stream), canonical[method](stream));
-    assert.throws(() => packaged[method](stream + '\n' + JSON.stringify(identity)),
-      error => error.code === 'RUNTIME_EVIDENCE_INVALID');
+    for (const consumer of [canonical, packaged])
+      assert.throws(() => consumer[method](stream + '\n' + JSON.stringify(identity)),
+        error => error.code === 'RUNTIME_EVIDENCE_INVALID');
   }
 }
 function fixtureDirectoryModes(root, mode) {
