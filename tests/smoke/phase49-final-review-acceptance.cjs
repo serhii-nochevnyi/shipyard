@@ -9,6 +9,8 @@ const { execFileSync } = require('node:child_process');
 const ROOT = path.resolve(__dirname, '../..');
 const SCRIPTS = path.join(ROOT, 'plugins/delivery-pipeline/scripts');
 const SCHEMA = 'shipyard.phase49.final-review-acceptance.v1';
+const HISTORICAL_PLAN = '3328a4c25ae4f451a6f8dcbe01b0164260f31bf294ea33e70877795ae24380e1';
+const CURRENT_PLAN = 'a6e2b6805cbe54f62c065a0d471a94f8517244170f177ed452987e2d1b6d3034';
 const MAX_BYTES = 128 * 1024 * 1024;
 const CHECKS = ['full-fallback', 'changed-base-expansion', 'shared-contract-expansion', 'forged', 'stale', 'truncated', 'replay'];
 const sha = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
@@ -165,13 +167,19 @@ function inspectPublication(ref) {
 function verifyEvidence(ledger) {
   assert.equal(ledger.schema, SCHEMA);
   assert.equal(ledger.ticket, 'T-49-11');
-  assert.equal(ledger.plan_sha256, '3328a4c25ae4f451a6f8dcbe01b0164260f31bf294ea33e70877795ae24380e1');
+  assert([HISTORICAL_PLAN, CURRENT_PLAN].includes(ledger.plan_sha256), 'unsupported acceptance plan');
+  const historical = ledger.plan_sha256 === HISTORICAL_PLAN;
   assert.equal(ledger.benchmark.material_bytes, 6530992);
   assert.equal(ledger.benchmark.observed_successful_reads, 830);
-  assert.equal(ledger.candidate.expected.selection_sha256, 'b09e4ab44ee00bd8600fb34774994a37e46dc2c98d1b311d163b881b939c65db');
-  assert.equal(ledger.candidate.selection.sha256, ledger.candidate.expected.selection_sha256);
-  assert.equal(ledger.candidate.expected.head, 'bd18893c69484c47db9b6d1b0613b4bac962b237');
-  assert.equal(ledger.candidate.expected.tree, '60dc53b466502e62a33d8e8d48233e8469e1c60c');
+  const expected = ledger.candidate.expected;
+  assert(/^[a-f0-9]{64}$/.test(expected.selection_sha256 || ''), 'selection digest required');
+  assert.equal(ledger.candidate.selection.sha256, expected.selection_sha256);
+  for (const key of ['head', 'tree']) assert(/^[a-f0-9]{40}$/.test(expected[key] || ''), 'source identity required');
+  if (historical) {
+    assert.equal(expected.selection_sha256, 'b09e4ab44ee00bd8600fb34774994a37e46dc2c98d1b311d163b881b939c65db');
+    assert.equal(expected.head, 'bd18893c69484c47db9b6d1b0613b4bac962b237', 'historical source');
+    assert.equal(expected.tree, '60dc53b466502e62a33d8e8d48233e8469e1c60c', 'historical tree');
+  }
   assert.equal(ledger.status, 'hold', 'pending native matrix must remain explicit HOLD');
   assert.equal(ledger.empirical_acceptance, false, 'caller success label supplies no authority');
   assert(Array.isArray(ledger.holds) && ledger.holds.length > 0, 'explicit acceptance prerequisites required');
@@ -182,7 +190,7 @@ function verifyEvidence(ledger) {
     for (const row of Object.values(ledger.metrics)) assert.equal(row.value, null, 'missing trace cannot supply observed treatment counters');
     for (const row of Object.values(ledger.baseline_setup)) assert.equal(row.value, null, 'missing baseline cannot supply setup counters');
   }
-  const report = { schema: SCHEMA, status: 'hold', empirical_acceptance: false, verified: [], holds: [...ledger.holds] };
+  const report = { schema: SCHEMA, status: 'hold', empirical_acceptance: false, historical_only: historical, verified: [], holds: [...ledger.holds] };
   for (const [name, action] of [['original-benchmark', () => verifyBenchmark(ledger.benchmark.authority)],
     ['immutable-publication', () => inspectPublication(ledger.candidate)]]) {
     try { report.verified.push({ name, evidence: action() }); }
@@ -195,7 +203,11 @@ function verifyEvidence(ledger) {
   const roles = new Set();
   for (const trace of ledger.native_traces) {
     assert(!roles.has(trace.role), 'duplicate native role credit'); roles.add(trace.role);
-    try { report.verified.push({ name: trace.role, evidence: verifyNativeTrace(trace) }); }
+    try {
+      const evidence = verifyNativeTrace(trace);
+      report.verified.push({ name: trace.role, evidence });
+      report.holds.push(...evidence.holds.map(reason => trace.role + ': ' + reason));
+    }
     catch (error) { if (!unavailable(error)) throw error; report.holds.push(trace.role + ': protected originals unavailable (' + error.code + ')'); }
   }
   return report;
@@ -208,10 +220,26 @@ function verifyNativeTrace({ receipt, current, role }) {
   const verdict = role === 'arch-review' ? authority.currentArchitectureVerdict(current) : authority.currentIntegrationVerdict(current);
   assert(verdict?.authenticated && verdict.dispatch_id === record.dispatch_id, 'fresh exact-current admission required');
   const runtime = record.receipt.runtime_evidence;
+  assert.equal(record.receipt.runtime, 'codex', 'unchanged native runtime required');
   const progress = authority.validateReviewContinuationEvidence(runtime);
+  assert.equal(progress.identity.role, role, 'foreign continuation role');
+  assert.equal(progress.identity.policy_hash, record.receipt.policy_hash, 'changed continuation policy');
+  assert.equal(progress.identity.worktree, fs.realpathSync(current.worktreePath), 'foreign continuation repository');
+  assert.equal(progress.identity.head, current.head, 'stale continuation head');
+  assert.equal(progress.identity.base, current.baseCommit, 'stale continuation base');
+  assert(progress.state.original_exit?.transcript, 'original interruption history missing');
+  original(progress.state.original_exit.transcript);
+  assert.equal(runtime.review_continuation.original_session_id, progress.session_id, 'foreign resumed session');
+  assert.equal(runtime.review_continuation.inherited_ranges, progress.completed_ranges, 'duplicate inherited credit');
   assert(progress.completed_ranges > 0 && runtime.review_continuation.newly_completed_ranges > 0, 'real interrupted reading required');
   const checked = require(path.join(SCRIPTS, 'codex-arch-review-context.cjs'))
     .verifyFileInput(runtime.input_bundle, { sealed: true, historical: true });
+  assert.equal(runtime.input_consumption.manifest_sha256, runtime.input_bundle.manifest_sha256, 'foreign consumption');
+  assert.equal(runtime.input_consumption.chunk_reads, checked.chunk_reads, 'truncated native coverage');
+  assert.equal(progress.completed_ranges + runtime.review_continuation.newly_completed_ranges, checked.chunk_reads,
+    'incomplete or duplicated continuation ranges');
+  original({ path: progress.native_file, sha256: runtime.native_session_evidence.sha256,
+    bytes: runtime.native_session_evidence.bytes });
   const packet = require(path.join(SCRIPTS, 'context-packet.cjs')).decodeUniqueContent(JSON.parse(checked.material[0]));
   const lineage = packet.role_context?.review_coverage || packet.review_coverage;
   assert(lineage && lineage.role === role && lineage.mode === 'incremental' && lineage.baseline, 'independent eligible baseline lineage required');
@@ -225,7 +253,10 @@ function verifyNativeTrace({ receipt, current, role }) {
   assert(typeof current.coordinator_author === 'string' && current.coordinator_author.trim(), 'actual coordinator author identity required');
   assert(authors.some(author => author !== current.coordinator_author), 'another contributor repair required');
   return { verdict, lineage, observed_contributor_authors: [...new Set(authors)], continuation: runtime.review_continuation, consumption: runtime.input_consumption,
-    accounting: runtime.input_accounting, empirical_acceptance: false,
+    accounting: runtime.input_accounting, native_trace_verified: true,
+    metrics: { successful_reads: metric(checked.chunk_reads),
+      retries: metric(null, 'Separate original attempt association has not been verified.'),
+      tokens: metric(null, 'Comparable native per-review token observations unavailable.') },
     holds: ['Installed candidate/policy, comparable original obligations, coordinator contributor attribution, capacity and independent observed matrix counters must also be admitted.'] };
 }
 

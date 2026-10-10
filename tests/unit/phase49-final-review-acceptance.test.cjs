@@ -148,3 +148,28 @@ test('explicit-path read-only mode refuses unsupported launch switches and chang
   assert.throws(() => original({ ...ref, path: alias }), /symlinked/);
   fs.truncateSync(file, 128 * 1024 * 1024 + 1); assert.throws(() => original(ref), /bounded regular/);
 });
+
+test('current preparation admits a new plan identity without relabeling the historical HOLD', t => {
+  const fs = require('node:fs'), path = require('node:path'), os = require('node:os');
+  const { verifyEvidence } = require('../smoke/phase49-final-review-acceptance.cjs');
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'phase49-current-hold-')));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const ledger = JSON.parse(fs.readFileSync(path.join(__dirname, '../../docs/audits/phase49-final-review-acceptance.json')));
+  ledger.plan_sha256 = 'a6e2b6805cbe54f62c065a0d471a94f8517244170f177ed452987e2d1b6d3034';
+  ledger.candidate.expected = { selection_sha256: '9'.repeat(64), head: '8'.repeat(40), tree: '7'.repeat(40) };
+  ledger.candidate.selection = { path: path.join(root, 'selection.json'), sha256: '9'.repeat(64) };
+  ledger.benchmark.authority.store = path.join(root, 'receipts');
+  const report = verifyEvidence(ledger);
+  assert.equal(report.status, 'hold');
+  assert.equal(report.historical_only, false);
+  assert.equal(report.empirical_acceptance, false);
+  assert(report.holds.some(reason => reason.includes('immutable-publication')));
+  assert.deepEqual(fs.readdirSync(root), []);
+});
+test('historical plan cannot authenticate a substituted historical selection', () => {
+  const fs = require('node:fs'), path = require('node:path');
+  const { verifyEvidence } = require('../smoke/phase49-final-review-acceptance.cjs');
+  const ledger = JSON.parse(fs.readFileSync(path.join(__dirname, '../../docs/audits/phase49-final-review-acceptance.json')));
+  ledger.candidate.expected.head = 'f'.repeat(40);
+  assert.throws(() => verifyEvidence(ledger), /historical source/);
+});
