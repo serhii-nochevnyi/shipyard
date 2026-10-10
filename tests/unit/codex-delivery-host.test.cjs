@@ -104,12 +104,14 @@ function writeShipyardManifest(repo) {
 }
 
 function fixture(config = {}) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-codex-delivery-'));
-  const agentDir = fs.mkdtempSync(path.join(temporary, 'agents-'));
-  const project = fs.mkdtempSync(path.join(temporary, 'project-'));
+  const fixtureBase = config.physicalPaths ? fs.realpathSync(temporary) : temporary;
+  const createdRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-codex-delivery-'));
+  const root = config.physicalPaths ? fs.realpathSync(createdRoot) : createdRoot;
+  const agentDir = fs.mkdtempSync(path.join(fixtureBase, 'agents-'));
+  const project = fs.mkdtempSync(path.join(fixtureBase, 'project-'));
   const graphDir = path.join(project, '.planning', 'graph');
   const plan = path.join(project, '.planning', 'PLAN.md');
-  const storageRoot = path.join(temporary, 'storage');
+  const storageRoot = path.join(fixtureBase, 'storage');
   fs.mkdirSync(path.join(root, '.planning'), { recursive: true });
   fs.mkdirSync(path.join(root, 'src'));
   fs.writeFileSync(path.join(root, '.planning', 'config.json'), '{}\n');
@@ -377,6 +379,9 @@ test('production runtime host receives the scoped prompt and records native mode
     .split('\n').filter(Boolean).map((line) => {
       const record = JSON.parse(line);
       if (record.type === 'turn_context') Object.assign(record.payload, { model: 'gpt-6.1-sol', effort: 'low' });
+      if (record.payload?.type === 'task_complete') record.payload.last_agent_message = 'OK';
+      if (record.payload?.type === 'message' && record.payload.phase === 'final_answer')
+        record.payload.content.forEach(block => { block.text = 'OK'; });
       return JSON.stringify(record);
     }).join('\n') + '\n';
   const output = captured('tests/fixtures/captured/codex-agent-stream-exec.jsonl', { '<SESSION-1>': session });
@@ -1869,5 +1874,158 @@ test('request context refuses a caller-owned prepared authority field before adm
   assert.throws(() => requestValue({ role: 'integrator', context: { prompt: 'fixture', input_prepared: {} } }),
     error => error.code === 'INVALID_INPUT' && /host authority/.test(error.message));
 });
+
+test('integrator refuses unsupported logical coverage before dispatch', async () => {
+  const f = fixture();
+  try {
+    for (const schema of ['shipyard.semantic-content.v99', 'shipyard.semantic-content.v1']) {
+      await assert.rejects(delivery(f).run({ role: 'integrator', context: {
+        prompt: JSON.stringify({ schema, dictionary: [], obligations: [], body: {} }),
+      } }), error => error.code === 'INVALID_CONTEXT_PACKET');
+    }
+    assert.equal(f.calls.length, 0);
+  } finally { clean(f); }
+});
+
+test('current dictionary integrity retains logical obligations without semantic credit', () => {
+  const f = fixture({ physicalPaths: true });
+  const context = require('../../plugins/delivery-pipeline/scripts/codex-arch-review-context.cjs');
+  const packets = require('../../plugins/delivery-pipeline/scripts/context-packet.cjs');
+  try {
+    const packet = packets.buildContextPacket({ root: f.root, role: 'integrator', subject: f.scope.ticket,
+      sourceRevision: f.base, policy: policy.POLICY, policyHash: policy.POLICY_HASH,
+      scope: { files_modified: ['src/owned.txt'] }, requiredRefs: ['src/owned.txt'],
+      roleContext: { phase_contracts: [], combined_diff: { content: 'base\n' } } });
+    const encoded = packets.encodeUniqueContent(packet);
+    const expected = { root: f.root, role: 'integrator', subject: f.scope.ticket,
+      sourceRevision: f.base, policyHash: policy.POLICY_HASH };
+    const proof = context.preflightReviewMaterial(encoded, expected);
+    assert.equal(proof.semantic_credit, false);
+    assert.equal(proof.logical_obligations, encoded.obligations.length);
+    for (const key of ['role', 'sourceRevision', 'policyHash', 'subject'])
+      assert.throws(() => context.preflightReviewMaterial(encoded, { ...expected, [key]: 'foreign' }));
+    const incomplete = structuredClone(encoded);
+    incomplete.obligations.pop();
+    assert.throws(() => context.preflightReviewMaterial(incomplete, expected), /logical obligations|provenance/);
+    const input = context.prepareFileInput(f.scope, JSON.stringify(encoded), {
+      role: 'integrator', dispatchId: 'preflight-fixture', storageRoot: f.storageRoot, graphDir: f.graphDir });
+    assert.equal(context.verifyFileInput(input).semantic_credit, false);
+    fs.writeFileSync(path.join(f.root, 'src/owned.txt'), 'changed\n');
+    assert.throws(() => context.verifyFileInput(input), /changed|stale/i);
+  } finally { clean(f); }
+});
+
+test('unavailable measured capacity returns actionable refusal without native dispatch', () => {
+  const f = fixture({ physicalPaths: true });
+  const context = require('../../plugins/delivery-pipeline/scripts/codex-arch-review-context.cjs');
+  try {
+    assert.throws(() => context.prepareFileInput(f.scope, 'complete input', {
+      role: 'integrator', dispatchId: 'capacity-fixture', storageRoot: f.storageRoot,
+      readerCapacity: { contract: { schema: 'shipyard.native-reader-transport.v2' } },
+    }), error => error.code === 'READER_CAPACITY_UNSUPPORTED'
+      && error.refusal.limiting_field === 'original_matching_capacity_authority'
+      && error.refusal.observed === 'unavailable' && /legacy/.test(error.refusal.supported_next_action));
+    assert.equal(f.calls.length, 0);
+  } finally { clean(f); }
+});
+
+test('encoded schedule admission counts complete manifest, envelopes and launch instructions', () => {
+  const { preflightReaderSchedule } = require('../../plugins/delivery-pipeline/scripts/codex-arch-review-context.cjs');
+  const manifest = { chunk_bytes: 128 * 1024, assets: [{ ordinal: 0, bytes: 256 * 1024 }],
+    accounting: { relay_bytes: 1200, generated_instruction_bytes: 2400 },
+    transport: { schema: 'shipyard.native-reader-transport.v2', chunk_bytes: 128 * 1024,
+      encoding: 'base64', output_tokens: 10000, range_schedule: 'manifest-first/ordinal-offset/v1',
+      nested_envelope: 'exec-command.v1', outer_envelope: 'functions-exec.v1', output_budget_bytes: 252 * 1024 } };
+  const result = preflightReaderSchedule(manifest, 1024);
+  assert.equal(result.range_count, 3);
+  assert.equal(result.launch_input_bytes, 3600);
+  assert.ok(result.encoded_schedule_bytes > 4 * Math.ceil((256 * 1024 + 1024) / 3));
+  assert.equal(result.semantic_credit, false);
+  for (const transport of [{ ...manifest.transport, schema: 'shipyard.native-reader-transport.v99' },
+    { ...manifest.transport, output_budget_bytes: 128 * 1024 }])
+    assert.throws(() => preflightReaderSchedule({ ...manifest, transport }, 1024), error =>
+      error.code === 'READER_CAPACITY_UNSUPPORTED' && Boolean(error.refusal.supported_next_action));
+});
+
+for (const mutation of [null, 'dirty-source', 'dirty-intake', 'new-output', 'sibling-output']) {
+  test('authenticated native research seals with dirty operator inputs: ' + (mutation || 'unchanged'), async () => {
+    const f = fixture();
+    const home = fs.mkdtempSync(path.join(temporary, 'research-native-'));
+    let launches = 0;
+    const source = path.join(f.root, 'src', 'owned.txt');
+    const intake = path.join(f.root, '.planning', 'intake.md');
+    try {
+      fs.writeFileSync(source, 'operator source\n');
+      fs.writeFileSync(intake, 'operator intake\n');
+      const result = await createCodexDeliveryHost({ scope: f.scope, graphDir: f.graphDir,
+        storageRoot: f.storageRoot, capabilities, agentDir: f.agentDir,
+        agentManifest: path.join(f.agentDir, '.shipyard-manifest.json'),
+        env: { CODEX_HOME: home },
+        probe: { status: 'available', executable: 'codex', runtime_version: '0.157.1', capabilities },
+        spawn: (_executable, args) => {
+          const ids = ['system-state', 'alternatives', 'constraints', 'risks'];
+          const id = ids[launches++];
+          const session = '88888888-8888-4888-8888-' + String(launches).padStart(12, '0');
+          const artifactPath = path.join(fs.realpathSync(f.root), '.planning', 'investigations', 'INV-100', 'research', id + '.md');
+          const bytes = Buffer.from('# ' + id + '\nNative finding.\n');
+          fs.writeFileSync(artifactPath, bytes);
+          if (mutation && launches === 2) {
+            const target = mutation === 'dirty-source' ? source : mutation === 'dirty-intake' ? intake : mutation === 'new-output'
+              ? path.join(f.root, 'rogue.txt') : path.join(path.dirname(artifactPath), 'system-state.md');
+            fs.writeFileSync(target, 'unauthorized mutation\n');
+          }
+          const digest = crypto.createHash('sha256').update(bytes).digest('hex');
+          const final = JSON.stringify({ id, status: 'completed', summary: 'Native research completed.',
+            artifact: { path: artifactPath, bytes: bytes.length, content_bytes: bytes.length, sha256: digest, digest } });
+          const model = args[args.indexOf('--model') + 1];
+          const effort = JSON.parse(args.find(value => value.startsWith('model_reasoning_effort=')).split('=')[1]);
+          const transcript = captured('tests/fixtures/captured/codex-agent-stream-parent.jsonl', { '<SESSION-2>': session })
+            .split('\n').filter(Boolean).map(line => {
+              const record = JSON.parse(line);
+              if (record.type === 'turn_context') Object.assign(record.payload, { model, effort });
+              if (record.payload?.type === 'task_complete') record.payload.last_agent_message = final;
+              if (record.payload?.type === 'message' && record.payload.phase === 'final_answer')
+                record.payload.content.forEach(block => { block.text = final; });
+              return JSON.stringify(record);
+            }).join('\n') + '\n';
+          const date = new Date();
+          const directory = path.join(home, 'sessions', String(date.getFullYear()),
+            String(date.getMonth() + 1).padStart(2, '0'), String(date.getDate()).padStart(2, '0'));
+          fs.mkdirSync(directory, { recursive: true });
+          fs.writeFileSync(path.join(directory, 'rollout-' + session + '.jsonl'), transcript);
+          const output = captured('tests/fixtures/captured/codex-agent-stream-exec.jsonl', { '<SESSION-1>': session })
+            .split('\n').filter(Boolean).map(line => {
+              const record = JSON.parse(line);
+              if (record.item?.type === 'agent_message') record.item.text = final;
+              return JSON.stringify(record);
+            }).join('\n') + '\n';
+          const child = new EventEmitter();
+          child.stdout = new EventEmitter(); child.stderr = new EventEmitter();
+          child.stdin = { write() {}, end() {} }; child.pid = 45678;
+          process.nextTick(() => { child.stdout.emit('data', Buffer.from(output)); child.emit('close', 0, null); });
+          return child;
+        },
+      }).run({ role: 'research', context: { prompt: 'Investigate.', investigation: baseInvestigation(f) } });
+      if (mutation) {
+        assert.equal(result.status, 'blocked');
+        assert.equal(result.code, 'CONTAINMENT_VIOLATION');
+        assert.equal(result.failed_line, 'alternatives');
+        assert.equal(result.sealed_lines.length, 1);
+        assert.equal(launches, 2);
+      } else {
+        assert.equal(launches, 4);
+        assert.deepEqual(result.map(entry => entry.id), ['system-state', 'alternatives', 'constraints', 'risks']);
+        for (const entry of result) {
+          assert.equal(entry.schema, 'shipyard.role-artifact.v1');
+          assert.equal(entry.envelope.status, 'completed');
+          assert.equal(entry.envelope.subject, 'INV-100:' + entry.id);
+          assert.ok(fs.existsSync(entry.artifact_index.path));
+        }
+        assert.equal(fs.readFileSync(source, 'utf8'), 'operator source\n');
+        assert.equal(fs.readFileSync(intake, 'utf8'), 'operator intake\n');
+      }
+    } finally { clean(f); fs.rmSync(home, { recursive: true, force: true }); }
+  });
+}
 
 done();

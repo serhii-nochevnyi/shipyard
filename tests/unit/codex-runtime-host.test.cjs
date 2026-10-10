@@ -64,6 +64,9 @@ function sessionTranscript(session, model = 'gpt-6-luna', effort = 'max', provid
   return transformJsonl(captured(PARENT_FIXTURE, { '<SESSION-2>': session }), (record) => {
     if (record.type === 'session_meta') record.payload.model_provider = provider;
     if (record.type === 'turn_context') Object.assign(record.payload, { model, effort });
+    if (record.payload?.type === 'task_complete') record.payload.last_agent_message = 'OK';
+    if (record.payload?.type === 'message' && record.payload.phase === 'final_answer')
+      record.payload.content.forEach(block => { block.text = 'OK'; });
     return record;
   });
 }
@@ -1190,6 +1193,214 @@ for (const [materialBytes, tamper] of [[1996419, null], [2553953, null], [199641
       process.stdout.write(require('node:crypto').createHash('sha256').update(Buffer.concat(v.material)).digest('hex'));`, inputFile], { encoding: 'utf8' });
     assert.equal(output, require('node:crypto').createHash('sha256').update(material).digest('hex'));
   } finally { fs.rmSync(root, { recursive: true, force: true }); fs.rmSync(store, { recursive: true, force: true }); }
+});
+
+for (const tamper of [null, 'missing', 'missing-start', 'missing-final', 'duplicate', 'duplicate-start', 'duplicate-final', 'reordered', 'foreign-turn', 'foreign-final', 'altered-final', 'divergent-cli', 'late-cli', 'altered-transcript']) {
+  test('non-typed runtime completion carries original final: ' + (tamper || 'genuine'), async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-native-final-'));
+    const home = path.join(root, 'codex-home');
+    const session = '77777777-7777-4777-8777-777777777777';
+    let completed;
+    let restoreRead = () => {};
+    try {
+      const host = createCodexRuntimeHost({ scope: { ...SCOPE, worktree: root }, probe: probe(),
+        controller: { assertOwner() {} }, recorder: () => true, env: { CODEX_HOME: home }, transcriptDir: null,
+        spawn: () => {
+          const file = writeSession(home, session);
+          const records = fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).map(JSON.parse);
+          const at = records.findIndex(record => record.payload?.type === 'task_complete');
+          if (tamper === 'missing') records.splice(at, 1);
+          if (tamper === 'missing-start') records.splice(records.findIndex(record => record.payload?.type === 'task_started'), 1);
+          if (tamper === 'missing-final') records.splice(records.findIndex(record => record.payload?.phase === 'final_answer'), 1);
+          if (tamper === 'duplicate') records.push(records[at]);
+          if (tamper === 'duplicate-start') records.push(records.find(record => record.payload?.type === 'task_started'));
+          if (tamper === 'duplicate-final') records.push(records.find(record => record.payload?.phase === 'final_answer'));
+          if (tamper === 'foreign-final') records.find(record => record.payload?.phase === 'final_answer')
+            .payload.internal_chat_message_metadata_passthrough.turn_id = 'foreign';
+          if (tamper === 'reordered') records.unshift(records.splice(at, 1)[0]);
+          if (tamper === 'foreign-turn') records[at].payload.turn_id = 'foreign';
+          if (tamper === 'altered-final') records.find(record => record.payload?.phase === 'final_answer').payload.content[0].text = 'altered';
+          fs.writeFileSync(file, records.map(JSON.stringify).join('\n') + '\n');
+          if (tamper === 'altered-transcript') {
+            const originalRead = fs.readFileSync;
+            let reads = 0;
+            fs.readFileSync = function (target, ...args) {
+              if (target === file && ++reads === 2) fs.appendFileSync(file, '\n');
+              return originalRead.call(this, target, ...args);
+            };
+            restoreRead = () => { fs.readFileSync = originalRead; };
+          }
+          let output = stream(session);
+          if (tamper === 'divergent-cli') output = output.replace('"text":"OK"', '"text":"other"');
+          if (tamper === 'late-cli') {
+            const cli = output.split('\n').filter(Boolean).map(JSON.parse);
+            cli.push(cli.splice(2, 1)[0]);
+            output = cli.map(JSON.stringify).join('\n') + '\n';
+          }
+          return childFor(output);
+        },
+      });
+      const launch = () => host.launch({ model: 'gpt-6-luna', reasoning_effort: 'max', sandbox_mode: 'workspace-write' },
+        { run_id: SCOPE.run_id, dispatch_id: 'native-final', prompt: 'Return OK.', onCompleted(value) { completed = value; } });
+      if (tamper) {
+        await assert.rejects(launch, error => /^RUNTIME_EVIDENCE_/.test(error.code));
+        assert.equal(completed, undefined);
+      } else {
+        const result = await launch();
+        assert.equal(completed.last_agent_message, 'OK');
+        assert.equal(completed.session_id, result.session_id);
+        assert.equal(completed.runtime_evidence.native_session_evidence.session_id, session);
+      }
+    } finally { restoreRead(); fs.rmSync(root, { recursive: true, force: true }); }
+  });
+}
+
+test('fixture: original 128 KiB capacity refuses; independently wrapped output admits complete ordered reads', async () => {
+  const runtime = require('../../plugins/delivery-pipeline/scripts/codex-runtime-host.cjs');
+  const collector = require('../../plugins/delivery-pipeline/scripts/codex-arch-review-context.cjs');
+  const { execFileSync } = require('node:child_process');
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'reader-subject-')));
+  const store = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'reader-capacity-')));
+  const home = path.join(store, 'native');
+  const scope = { ...SCOPE, worktree: root };
+  const options = { role: 'arch-review', dispatchId: 'reader-tracer', storageRoot: store,
+    binding: { policy_hash: policy.POLICY_HASH, ticket_set: ['T-49-01', 'T-49-02'], base: 'exact-base', instructions: 'exact-pin' } };
+  const material = ['x'.repeat(128 * 1024 - 1) + '€' + 'é'.repeat(70000),
+    ...Array.from({ length: 600 }, (_, ordinal) => 'source ordinal ' + ordinal + ' €'), 'short terminal €'];
+  const result = 'reader complete';
+  const session = '11111111-1111-4111-8111-111111111111';
+  try {
+    fs.mkdirSync(path.join(root, '.planning'));
+    fs.writeFileSync(path.join(root, '.planning/config.json'), '{}');
+    for (const argv of [['init', '-q'], ['config', '--local', 'user.name', 'Shipyard Test'],
+      ['config', '--local', 'user.email', 'shipyard-test@example.invalid'],
+      ['add', '-A'], ['-c', 'commit.gpgsign=false', 'commit', '-qm', 'fixture']])
+      execFileSync('git', argv, { cwd: root, stdio: 'pipe' });
+    const native = writeSession(home, session, 'gpt-6-luna', 'max');
+    const original = fs.readFileSync(native, 'utf8').split('\n').filter(Boolean).map(JSON.parse);
+    const response = original.find(record => record.type === 'response_item');
+    const wrap = payload => ({ ...structuredClone(response), payload });
+    const transcript = (prepared, chunkBytes, wrapped = false) => {
+      const checked = collector.verifyFileInput(prepared);
+      const assets = [{ path: prepared.input_bundle.manifest_path, bytes: checked.manifest_bytes },
+        ...checked.manifest.assets.map((asset, index) => ({ path: asset.path, bytes: checked.material[index] }))];
+      const reads = [];
+      for (const asset of assets) for (let index = 0; index < Math.ceil(asset.bytes.length / chunkBytes); index++) {
+        const id = 'read-' + reads.length;
+        const cmd = "dd if='" + asset.path + "' bs=" + chunkBytes + ' skip=' + index + ' count=1 2>/dev/null | base64';
+        const base64 = asset.bytes.subarray(index * chunkBytes, (index + 1) * chunkBytes).toString('base64');
+        const encoded = wrapped ? base64.match(/.{1,76}/g).join('\n') + '\n' : base64;
+        reads.push(wrap({ type: 'custom_tool_call', name: 'exec', call_id: id,
+          input: 'text(await tools.exec_command(' + JSON.stringify({ cmd, max_output_tokens: 10000 }) + '));' }),
+        wrap({ type: 'custom_tool_call_output', call_id: id, output: [
+          { type: 'input_text', text: 'Script completed\nWall time 0.1 seconds\nOutput:' },
+          { type: 'input_text', text: JSON.stringify({ exit_code: 0, output: encoded }) }] }));
+      }
+      const records = structuredClone(original);
+      for (const record of records) {
+        if (record.payload?.type === 'task_complete') record.payload.last_agent_message = result;
+        if (record.payload?.type === 'message' && record.payload.phase === 'final_answer')
+          record.payload.content.forEach(block => { block.text = result; });
+      }
+      const boundary = records.findIndex(record => record.payload?.phase === 'final_answer'
+        || record.payload?.item?.phase === 'final_answer');
+      records.splice(boundary, 0, ...reads);
+      return records;
+    };
+    const encode = records => records.map(JSON.stringify).join('\n') + '\n';
+    const legacy = collector.prepareFileInput(scope, material, options);
+    const legacyChecked = runtime.verifyFileConsumption(legacy, encode(transcript(legacy, 8192)), options.dispatchId, result);
+    assert.deepEqual(legacyChecked.material, material.map(value => Buffer.from(value)));
+    assert.equal(legacyChecked.chunk_reads, Math.ceil(legacyChecked.manifest_bytes.length / 8192)
+      + legacyChecked.material.reduce((sum, bytes) => sum + Math.ceil(bytes.length / 8192), 0));
+    assert.throws(() => runtime.measureReaderCapacity({ native_session_evidence: {} }, legacy),
+      error => error.code === 'READER_CAPACITY_UNSUPPORTED');
+    fs.writeFileSync(native, encode(transcript(legacy, 128 * 1024)));
+    const verified = await runtime.verifyCompletedNativeLaunch({ session_id: session,
+      selection: { model: 'gpt-6-luna', effort: 'max' }, env: { CODEX_HOME: home }, resultText: result });
+    const insufficientCapacity = runtime.measureReaderCapacity(verified, legacy);
+    assert.equal(insufficientCapacity.contract.chunk_bytes, 128 * 1024);
+    const observedBound = insufficientCapacity.contract.output_budget_bytes;
+    const encodedRangeBytes = 4 * Math.ceil(128 * 1024 / 3);
+    const requiredBound = encodedRangeBytes + 2 * Math.ceil(encodedRangeBytes / 76) + 4096;
+    assert.equal(observedBound, 179006);
+    assert.equal(requiredBound, 183460);
+    assert.equal(insufficientCapacity.contract.output_budget_bytes, observedBound);
+    assert.throws(() => collector.prepareFileInput(scope, material, { ...options, readerCapacity: insufficientCapacity }),
+      error => error.code === 'READER_CAPACITY_UNSUPPORTED'
+        && error.refusal.limiting_field === 'encoded_range_envelope_bytes'
+        && error.refusal.observed === observedBound && error.refusal.required === requiredBound);
+    const wrappedHome = path.join(store, 'wrapped-native');
+    const wrappedNative = writeSession(wrappedHome, session, 'gpt-6-luna', 'max');
+    const wrappedOriginal = encode(transcript(legacy, 128 * 1024, true));
+    fs.writeFileSync(wrappedNative, wrappedOriginal);
+    const wrappedVerified = await runtime.verifyCompletedNativeLaunch({ session_id: session,
+      selection: { model: 'gpt-6-luna', effort: 'max' }, env: { CODEX_HOME: wrappedHome }, resultText: result });
+    const capacity = runtime.measureReaderCapacity(wrappedVerified, legacy);
+    const prospectiveManifest = { ...legacy.manifest, chunk_bytes: 128 * 1024, transport: capacity.contract };
+    const schedule = collector.preflightReaderSchedule(prospectiveManifest, legacyChecked.manifest_bytes.length);
+    assert.ok(schedule.largest_envelope_bytes <= capacity.contract.output_budget_bytes);
+    assert.equal(fs.readFileSync(native, 'utf8'), encode(transcript(legacy, 128 * 1024)));
+    assert.equal(fs.readFileSync(wrappedNative, 'utf8'), wrappedOriginal);
+    const admitted = collector.prepareFileInput(scope, material, { ...options, readerCapacity: capacity });
+    assert.equal(admitted.manifest.schema, 'shipyard.host-file-input.v2');
+    assert.ok(admitted.manifest.accounting.manifest_bytes > 128 * 1024);
+    assert.ok(admitted.prompt.includes('bs=131072'));
+    assert.ok(admitted.prompt.includes('READER_TRANSPORT='));
+    const admittedSchedule = collector.preflightReaderSchedule(admitted.manifest,
+      collector.verifyFileInput(admitted).manifest_bytes.length);
+    assert.ok(admittedSchedule.largest_envelope_bytes <= capacity.contract.output_budget_bytes);
+    const complete = transcript(admitted, 128 * 1024, true);
+    const checked = runtime.verifyFileConsumption(admitted, encode(complete), options.dispatchId, result);
+    assert.deepEqual(checked.material, material.map(value => Buffer.from(value)));
+    assert.ok(checked.chunk_reads < legacyChecked.chunk_reads);
+    assert.ok(checked.output_bytes > checked.encoded_bytes);
+    assert.ok(checked.transport_accounting.outer_output_bytes > checked.transport_accounting.nested_output_bytes);
+    const reconstructed = complete.filter(record => record.payload?.type === 'custom_tool_call_output')
+      .map(record => Buffer.from(JSON.parse(record.payload.output[1].text).output, 'base64'));
+    assert.equal(checked.chunk_reads, reconstructed.length);
+    assert.equal(checked.chunk_reads, admitted.manifest.ranges.length);
+    assert.equal(checked.transport_accounting.raw_bytes, reconstructed.reduce((sum, bytes) => sum + bytes.length, 0));
+    assert.ok(reconstructed.some(bytes => bytes.length === 128 * 1024));
+    assert.deepEqual(reconstructed.at(-1), Buffer.from('short terminal €'));
+    assert.deepEqual(Buffer.concat(reconstructed), Buffer.concat([checked.manifest_bytes, ...checked.material]));
+    for (const mutate of [
+      records => records.splice(records.findIndex(r => r.payload?.type === 'custom_tool_call_output'), 1),
+      records => { const i = records.findIndex(r => r.payload?.type === 'custom_tool_call'); records.splice(i + 2, 0, structuredClone(records[i + 1])); },
+      records => { const outputs = records.filter(r => r.payload?.type === 'custom_tool_call_output'); [outputs[0].payload.output, outputs[1].payload.output] = [outputs[1].payload.output, outputs[0].payload.output]; },
+      records => { const output = records.find(r => r.payload?.type === 'custom_tool_call_output'); output.payload.output[1].text = JSON.stringify({ exit_code: 1, output: '' }); },
+      records => { const output = records.find(r => r.payload?.type === 'custom_tool_call_output'); output.payload.output[1].text = JSON.stringify({ exit_code: 0, output: 'hash/count only' }); },
+      records => { const output = records.find(r => r.payload?.type === 'custom_tool_call_output'); const envelope = JSON.parse(output.payload.output[1].text); envelope.output = envelope.output.slice(0, -4); output.payload.output[1].text = JSON.stringify(envelope); },
+      records => { const call = records.find(r => r.payload?.type === 'custom_tool_call'); call.payload.internal_chat_message_metadata_passthrough = { turn_id: 'foreign' }; },
+      records => { const call = records.find(r => r.payload?.type === 'custom_tool_call'); call.payload.input = call.payload.input.replace('10000', '9999'); },
+      records => { const output = records.find(r => r.payload?.type === 'custom_tool_call_output'); const envelope = JSON.parse(output.payload.output[1].text); envelope.output += 'AAAA'; output.payload.output[1].text = JSON.stringify(envelope); },
+      records => { const i = records.findIndex(r => r.payload?.type === 'custom_tool_call_output'); records.push(records.splice(i, 1)[0]); },
+      records => { const i = records.findIndex(r => r.payload?.type === 'custom_tool_call'); records.splice(i + 1, 0, records.splice(i + 2, 1)[0]); },
+      records => { const call = records.find(r => r.payload?.type === 'custom_tool_call'); call.payload.input = call.payload.input.replace('skip=0', 'skip=1'); },
+      records => { const calls = records.filter(r => r.payload?.type === 'custom_tool_call'); calls[1].payload.call_id = calls[0].payload.call_id; },
+    ]) {
+      const altered = structuredClone(complete); mutate(altered);
+      assert.throws(() => runtime.verifyFileConsumption(admitted, encode(altered), options.dispatchId, result),
+        error => ['RUNTIME_EVIDENCE_MISMATCH', 'READER_CAPACITY_UNSUPPORTED'].includes(error.code));
+    }
+    for (const changes of [{ dispatchId: 'foreign' }, { role: 'integrator' }, { binding: { base: 'foreign' } },
+      { readerCapacity: JSON.parse(JSON.stringify(capacity)) }])
+      assert.throws(() => collector.prepareFileInput(scope, material, { ...options, readerCapacity: capacity, ...changes }),
+        error => error.code === 'READER_CAPACITY_UNSUPPORTED');
+    const truncated = transcript(legacy, 128 * 1024);
+    const output = truncated.find(record => record.payload?.type === 'custom_tool_call_output');
+    output.payload.output[1].text = JSON.stringify({ exit_code: 0, output: 'truncated' });
+    fs.writeFileSync(wrappedNative, encode(truncated));
+    const incomplete = await runtime.verifyCompletedNativeLaunch({ session_id: session,
+      selection: { model: 'gpt-6-luna', effort: 'max' }, env: { CODEX_HOME: wrappedHome }, resultText: result });
+    assert.throws(() => runtime.measureReaderCapacity(incomplete, legacy),
+      error => error.code === 'RUNTIME_EVIDENCE_MISMATCH');
+    assert.throws(() => collector.prepareFileInput(scope, material, { ...options, readerCapacity: capacity }),
+      error => error.code === 'RUNTIME_EVIDENCE_INVALID');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(store, { recursive: true, force: true });
+  }
 });
 
 done();

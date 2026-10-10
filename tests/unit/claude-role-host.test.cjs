@@ -132,8 +132,59 @@ function packetFromPrompt(prompt) {
   const start = prompt.indexOf(startTag);
   const end = prompt.indexOf(endTag, start + startTag.length);
   assert.ok(start >= 0 && end > start);
-  return JSON.parse(prompt.slice(start + startTag.length, end));
+  const packet = JSON.parse(prompt.slice(start + startTag.length, end));
+  return packet.schema === 'shipyard.semantic-content.v1'
+    ? require('../../plugins/delivery-pipeline/scripts/context-packet.cjs').decodeUniqueContent(packet) : packet;
 }
+
+test('native inline preparation preserves shared logical coverage and refuses incompatible schemas', () => {
+  const fixture = setupRepository('integrator');
+  const packets = require('../../plugins/delivery-pipeline/scripts/context-packet.cjs');
+  const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
+  const { prepareInlineReview } = require('../../plugins/delivery-pipeline/scripts/claude-role-host.cjs');
+  try {
+    const packet = packets.buildContextPacket({ root: fixture.root, role: 'integrator', subject: 'inline-fixture',
+      sourceRevision: fixture.head, policy: policy.POLICY, policyHash: policy.POLICY_HASH,
+      scope: { files_modified: [] }, requiredRefs: [],
+      roleContext: { phase_contracts: [], combined_diff: { content: 'complete diff' } } });
+    const encoded = packets.encodeUniqueContent(packet);
+    const prompt = prepareInlineReview('integrator', packet.subject, encoded, 'native inline reference');
+    assert.deepEqual(packetFromPrompt(prompt), packets.decodeUniqueContent(encoded));
+    assert.ok(prompt.includes('no semantic reading credit'));
+    assert.ok(!prompt.includes('INPUT_MANIFEST='));
+    assert.throws(() => prepareInlineReview('integrator', packet.subject, encoded, 'x'.repeat(1500000)),
+      error => error.code === 'CONTEXT_PACKET_OVER_BOUND'
+        && error.refusal.limiting_field === 'complete_inline_prompt_bytes'
+        && error.refusal.required > error.refusal.observed);
+    for (const mutation of ['version', 'obligation', 'dictionary']) {
+      const changed = structuredClone(encoded);
+      if (mutation === 'version') changed.schema = 'shipyard.semantic-content.v99';
+      if (mutation === 'obligation') changed.obligations.pop();
+      if (mutation === 'dictionary') changed.dictionary[0].content += 'tamper';
+      assert.throws(() => prepareInlineReview('integrator', packet.subject, changed, 'reference'),
+        error => error.code === 'INVALID_CONTEXT_PACKET');
+    }
+  } finally { cleanupFixture(fixture); }
+});
+
+test('native inline launch refuses governing source mutation after preparation', async () => {
+  const fixture = setupRepository('integrator');
+  let launched = false;
+  try {
+    const options = hostOptions(fixture, { onLaunch() { launched = true; } });
+    const factory = options.createRuntimeHost;
+    options.createRuntimeHost = input => {
+      const runtime = factory(input);
+      const plans = fs.readdirSync(path.join(fixture.root, '.planning/phases', PHASE));
+      const plan = plans.find(name => name.endsWith('-PLAN.md'));
+      fs.appendFileSync(path.join(fixture.root, '.planning/phases', PHASE, plan), '\nchanged governing source\n');
+      return runtime;
+    };
+    await assert.rejects(createClaudeRoleHost(options).run(request(fixture)), error =>
+      ['STALE_CONTEXT_PACKET', 'STALE_CONTEXT'].includes(error.code));
+    assert.equal(launched, false);
+  } finally { cleanupFixture(fixture); }
+});
 
 function fakeEvidence(model, effort, usage) {
   const sessionId = `session-${crypto.randomUUID()}`;
@@ -191,7 +242,7 @@ function fakeEvidenceLines(model, effort, lines) {
 
 function fakeRuntimeFactory(fixture, options = {}) {
   const live = fixture.kind === 'pr-sentinel' ? null : livePr(fixture);
-  return ({ scope, controller, recorderDir }) => {
+  return ({ scope, controller, recorderDir, transcriptDir }) => {
     const recorder = createDurableRecorder(recorderDir);
     const runtime = {
       scope: { worktree: scope.worktree.path },
@@ -244,6 +295,7 @@ function fakeRuntimeFactory(fixture, options = {}) {
           fs.writeFileSync(evidencePath, `Integration check at ${context.combined_diff.head}.\n`);
         }
         options.mutateResult?.(result, packet);
+        if (options.originalStream) return { output: result };
         const applicationEvidence = options.badEvidence ? fakeEvidence(selection.model, 'low')
           : options.firstResponseLines ? fakeEvidenceLines(selection.model, selection.effort, options.firstResponseLines)
           : fakeEvidence(selection.model, selection.effort, options.firstResponseUsage);
@@ -252,9 +304,95 @@ function fakeRuntimeFactory(fixture, options = {}) {
       },
       applicationEvidence({ result }) { return result.applicationEvidence; },
     };
+    if (options.originalStream) {
+      const claudeRuntime = require('../../plugins/delivery-pipeline/scripts/claude-runtime-host.cjs');
+      const captureStart = require('../../plugins/delivery-pipeline/scripts/claude-agent-start-hook.cjs').capture;
+      const registry = JSON.parse(fs.readFileSync(path.join(__dirname, '../fixtures/captured/boundaries/claude-stream.json')));
+      const streamPath = registry.fixtures.find(file => file.endsWith('/claude-stream-research.jsonl'));
+      assert.ok(streamPath, 'registered original Claude stream is required');
+      const records = fs.readFileSync(path.resolve(__dirname, '../..', streamPath), 'utf8').trim().split('\n')
+        .map(JSON.parse).filter(record => !record.shipyard_fixture);
+      const template = predicate => structuredClone(records.find(predicate));
+      const serialize = rows => rows.map(row => JSON.stringify(row) + '\n').join('');
+      const session = crypto.randomUUID();
+      return claudeRuntime.createClaudeRuntimeHost({ scope, controller, recorderDir, transcriptDir,
+        startEvidenceFile: path.join(transcriptDir, 'session-start.json'),
+        uuid: () => session, sessionTranscriptRoot: path.join(fixture.storageRoot, 'native'),
+        probe: { status: 'available', executable: 'claude-fixture', runtime_version: registry.cli_version,
+          capabilities: { assistantTranscriptEvidence: true, restrictedTools: true, sandboxedBash: true } },
+        spawn(_file, args) {
+          const { EventEmitter } = require('node:events');
+          const child = new EventEmitter(); child.pid = process.pid;
+          child.stdout = new EventEmitter(); child.stderr = new EventEmitter();
+          let framedInput = '';
+          child.stdin = { write(value) { framedInput += value; }, end() {
+            process.nextTick(async () => {
+              try {
+                assert.ok(framedInput.endsWith('\n'));
+                const userInput = JSON.parse(framedInput.slice(0, -1));
+                const model = args[args.indexOf('--model') + 1], effort = args[args.indexOf('--effort') + 1];
+                const observedModel = model === 'sonnet' ? 'claude-sonnet-5' : model === 'fable' ? 'claude-fable-5' : model;
+                const { output } = await runtime.agent(userInput.message.content, { model, effort });
+                const init = template(row => row.type === 'system' && row.subtype === 'init');
+                Object.assign(init, { session_id: session, model, cwd: fixture.root });
+                const assistant = template(row => row.type === 'assistant');
+                assistant.session_id = session; assistant.message.model = observedModel;
+                assistant.message.content[0].input = output;
+                const final = template(row => row.type === 'result');
+                Object.assign(final, { session_id: session, is_error: false, structured_output: output, result: JSON.stringify(output) });
+                const nativeFile = path.join(fixture.storageRoot, 'native/project', session + '.jsonl');
+                fs.mkdirSync(path.dirname(nativeFile), { recursive: true });
+                const nativeAssistant = { ...structuredClone(assistant), sessionId: session, effort };
+                fs.writeFileSync(nativeFile, serialize([{ ...userInput, sessionId: session }, nativeAssistant]));
+                const settings = JSON.parse(args[args.indexOf('--settings') + 1]);
+                const hookArgs = settings.hooks.SessionStart[0].hooks[0].args;
+                const hookValue = name => hookArgs[hookArgs.indexOf(name) + 1];
+                captureStart({ hook_event_name: 'SessionStart', source: 'startup', session_id: session,
+                  transcript_path: nativeFile, cwd: fixture.root }, {
+                  evidenceFile: hookValue('--evidence-file'), expectedSession: hookValue('--expected-session') });
+                child.stdout.emit('data', Buffer.from(serialize([init, assistant, final]))); child.emit('close', 0, null);
+              } catch (error) { child.emit('error', error); }
+            });
+          } };
+          return child;
+        } });
+    }
     return runtime;
   };
 }
+
+test('changed role instruction bytes refuse before native launch without modifying shared references', async (t) => {
+  const fixture = setupRepository('arch-review');
+  let launched = false;
+  let altered = false;
+  try {
+    const referencePath = require('../../plugins/delivery-pipeline/scripts/claude-reference-content.cjs').REFERENCE_PATHS['arch-review'];
+    const referenceStat = fs.statSync(referencePath);
+    const originalRead = fs.readSync;
+    const options = hostOptions(fixture, { onLaunch() { launched = true; } });
+    const originalFactory = options.createRuntimeHost;
+    options.createRuntimeHost = (...args) => {
+      const runtime = originalFactory(...args);
+      t.mock.method(fs, 'readSync', (fd, buffer, offset, length, position) => {
+        const count = originalRead(fd, buffer, offset, length, position);
+        const stat = fs.fstatSync(fd);
+        if (count > 0 && stat.dev === referenceStat.dev && stat.ino === referenceStat.ino) {
+          buffer[offset] = buffer[offset] === 35 ? 32 : 35;
+          altered = true;
+        }
+        return count;
+      });
+      return runtime;
+    };
+    await assert.rejects(createClaudeRoleHost(options).run(request(fixture)),
+      error => error.code === 'STALE_CONTEXT' && /role instructions changed before native launch/.test(error.message));
+    assert.equal(altered, true);
+    assert.equal(launched, false);
+  } finally {
+    t.mock.restoreAll();
+    cleanupFixture(fixture);
+  }
+});
 
 function hostOptions(fixture, extra = {}) {
   const pr = livePr(fixture);
@@ -431,6 +569,7 @@ test('arch-review launches through ADR-014 and seals only the matching PR judgme
 for (const scenario of ['seals a phase verdict and re-owes changed context', 'rejects roster removal during launch']) {
 test(`aggregate architecture ${scenario}`, async () => {
   const fixture = setupRepository('arch-review');
+  fixture.storageRoot = fs.realpathSync(fixture.storageRoot);
   try {
     const epic = `epic/${PHASE}`;
     git(fixture.root, ['branch', '-m', epic]);
@@ -460,6 +599,7 @@ test(`aggregate architecture ${scenario}`, async () => {
     write(fixture.root, '.shipyard-role-artifacts/foreign/evidence.md', 'Unadmitted foreign evidence.');
     let packet;
     const launched = createClaudeRoleHost(hostOptions(fixture, {
+      originalStream: true,
       onLaunch(prompt) {
         if (scenario === 'rejects roster removal during launch') fs.unlinkSync(roster.record_path);
         packet = packetFromPrompt(prompt);

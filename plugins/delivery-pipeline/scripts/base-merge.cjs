@@ -119,7 +119,7 @@ function contestedBy(p) {
 const git = (args, { tolerate = false } = {}) => {
   const r = spawnSync('git', ['-C', worktree, ...args], { encoding: 'utf8' });
   if (r.status !== 0 && !tolerate) fail(`git ${args.join(' ')} failed: ${(r.stderr || '').trim()}`);
-  return { status: r.status, out: (r.stdout || '').trim(), err: (r.stderr || '').trim() };
+  return { status: r.status, out: (r.stdout || '').trim(), raw: r.stdout || '', err: (r.stderr || '').trim() };
 };
 
 // THE QUESTION IS ABOUT UNSAVED WORK, AND THAT MEANS TRACKED CONTENT.
@@ -170,7 +170,16 @@ if (!noFetch) {
 // caller must be able to see which ref was actually measured.
 const baseRef = resolveBaseRef(worktree, base);
 
-const preMergeHead = git(['rev-parse', 'HEAD'], { tolerate: true }).out;
+function requireAbsent(ref) {
+  const probe = git(['rev-parse', '--verify', '--quiet', ref], { tolerate: true });
+  if (probe.status !== 1 || probe.raw || probe.err) fail(`cannot establish absent ${ref}; refusing merge`);
+}
+requireAbsent('MERGE_HEAD');
+requireAbsent('AUTO_MERGE');
+const preMergeHead = git(['rev-parse', '--verify', 'HEAD^{commit}']).out;
+const preMergeBase = git(['rev-parse', '--verify', `${baseRef}^{commit}`]).out;
+const preMergeTree = git(['rev-parse', '--verify', `${preMergeHead}^{tree}`]).out;
+const incomingTree = git(['rev-parse', '--verify', `${preMergeBase}^{tree}`]).out;
 
 function boardPr(id) {
   try {
@@ -227,10 +236,56 @@ if (merge.status === 0) {
   process.exit(0);
 }
 
-const conflicted = git(['diff', '--name-only', '--diff-filter=U'], { tolerate: true }).out
-  .split('\n').map((s) => s.trim()).filter(Boolean);
+function nulPaths(result) {
+  if (!result.raw) return [];
+  if (!result.raw.endsWith('\0')) fail('unterminated Git path evidence; not guessing');
+  const paths = result.raw.slice(0, -1).split('\0');
+  if (paths.some(p => !p)) fail('empty Git path evidence; not guessing');
+  return paths;
+}
+const conflicted = nulPaths(git(['diff', '--name-only', '-z', '--diff-filter=U']));
 if (!conflicted.length) {
-  fail(`git merge failed but reported no conflicted paths — not guessing:\n${merge.err || merge.out}`);
+  const refuse = reason => fail(`git merge failed but reported no conflicted paths — not guessing: ${reason}\n${merge.err || merge.out}`);
+  if (git(['rev-parse', '--verify', 'HEAD^{commit}']).out !== preMergeHead
+      || resolveBaseRef(worktree, base) !== baseRef
+      || git(['rev-parse', '--verify', `${baseRef}^{commit}`]).out !== preMergeBase)
+    refuse('merge pins changed');
+  const mergeHeadPath = git(['rev-parse', '--git-path', 'MERGE_HEAD']).out;
+  let pending;
+  try { pending = fs.readFileSync(path.resolve(worktree, mergeHeadPath), 'utf8'); }
+  catch { refuse('missing MERGE_HEAD'); }
+  if (pending !== `${preMergeBase}\n`) refuse('MERGE_HEAD does not match the single pinned base');
+  const automatic = git(['rev-parse', '--verify', 'AUTO_MERGE^{tree}']).out;
+  const index = git(['write-tree']).out;
+  if (index !== preMergeTree) refuse('resolved whole tree changed');
+  const unstaged = git(['diff', '--quiet'], { tolerate: true });
+  if (unstaged.status !== 0) refuse('unstaged tracked changes or failed Git evidence');
+  const history = git(['log', '--skip=1', '--max-count=1000', '--format=%H %T', preMergeHead]).out.split('\n');
+  if (!history.some(row => row.split(' ')[1] === incomingTree)) refuse('incoming full tree absent from bounded candidate ancestry');
+  const paths = nulPaths(git(['diff', '--no-renames', '--name-only', '-z', automatic, index, '--']));
+  if (!paths.length || !paths.every(owns)) refuse('missing or unowned AUTO_MERGE resolution paths');
+  if (git(['rev-parse', '--verify', 'HEAD^{commit}']).out !== preMergeHead
+      || resolveBaseRef(worktree, base) !== baseRef
+      || git(['rev-parse', '--verify', `${baseRef}^{commit}`]).out !== preMergeBase
+      || git(['write-tree']).out !== preMergeTree
+      || fs.readFileSync(path.resolve(worktree, mergeHeadPath), 'utf8') !== `${preMergeBase}\n`)
+    refuse('merge evidence moved before commit');
+  git(['commit', '--no-edit']);
+  const actual = git(['rev-parse', '--verify', 'HEAD^{commit}']).out;
+  if (git(['show', '-s', '--format=%P', actual]).out !== `${preMergeHead} ${preMergeBase}`
+      || git(['show', '-s', '--format=%T', actual]).out !== preMergeTree)
+    fail(`merge commit ${actual} exists but its tree or parents differ; coverage refused`);
+  let clean;
+  try { clean = statusIgnoringScratch(worktree, { untracked: 'no' }); }
+  catch { fail(`merge commit ${actual} exists but tracked cleanliness failed; coverage refused`); }
+  if (!clean.ok || clean.entries.length) fail(`merge commit ${actual} exists but tracked changes remain; coverage refused`);
+  recordMerge([]);
+  const carry = carryVerdict();
+  const payload = { ticket, base: baseRef, requested_base: base, result: 'resolved without content changes',
+    taken_from_base: [], unresolved: [], contested: [], carry };
+  if (asJson) console.log(JSON.stringify(payload, null, 2));
+  else console.log(`base-merge: ${ticket} — ${payload.result} with ${baseRef}`);
+  process.exit(0);
 }
 
 const taken = [];

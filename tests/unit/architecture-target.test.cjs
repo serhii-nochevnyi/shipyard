@@ -236,29 +236,65 @@ test(`public phase builder and hosts select ${repo ?? 'current project'} from mi
     } else {
     const storageRoot = fs.mkdtempSync(path.join(authorityHome, 'claude-mixed-'));
     const native = await claude.createClaudeRoleHost({...options, storageRoot,
-      createRuntimeHost: ({scope, controller, recorderDir}) => ({
-        scope: {worktree:scope.worktree.path}, controller,
-        recorder: require('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs').createDurableRecorder(recorderDir),
-        capabilities: {supportedModels:['claude-opus-5-5','claude-fable-5','claude-sonnet-5-5'],
-          supportedEfforts:['low','medium','high','xhigh','max'],observedModel:true,observedEffort:true},
-        async agent(prompt, selection) {
-          const marker = '<AUTHENTICATED_CONTEXT_PACKET>\n\n';
-          const start = prompt.indexOf(marker) + marker.length;
-          const packet = JSON.parse(prompt.slice(start,prompt.indexOf('\n\n</AUTHENTICATED_CONTEXT_PACKET>',start)));
-          assert.deepEqual(packet.role_context.ticket_set.map(row=>row.id),[TICKET]);
-          const output = {id:packet.subject,pr:801,head:f.pr.headRefOid,base_tree:git(f.root,['rev-parse',f.base+'^{tree}']),
-            ticket_set:packet.role_context.ticket_set,ticket_set_digest:packet.role_context.ticket_set_digest,
-            verdict:'conform',blocking_count:0,summary:'Fixture review',findings:[]};
-          write(f.root,'.shipyard-arch-review-evidence.md','Complete fixture architecture review.');
-          const session = 'fixture-'+require('node:crypto').randomUUID();
-          const transcript = {path:path.join(storageRoot,session+'.jsonl'),bytes:64,sha256:'a'.repeat(64)};
-          const observed = selection.model === 'fable' ? 'claude-fable-5' : selection.model;
-          return {output,applicationEvidence:{launch_id:'claude-'+session,session_id:session,process_id:process.pid,runtime_version:'2.1.280',
-            applied_model:selection.model,applied_effort:selection.effort,observed_model:observed,observed_effort:selection.effort,
-            selection_evidence:{source:'claude-session-assistant-transcript',session_id:session,assistant_records:1,model:observed,effort:selection.effort,transcript},
-            stream_evidence:{format:'stream-json',records:1,assistant_messages:1},transcript}};
-        }, applicationEvidence:({result})=>result.applicationEvidence,
-      }),
+      createRuntimeHost: ({scope, controller, recorderDir, transcriptDir}) => {
+        const runtime = require('../../plugins/delivery-pipeline/scripts/claude-runtime-host.cjs');
+        const captureStart = require('../../plugins/delivery-pipeline/scripts/claude-agent-start-hook.cjs').capture;
+        const registry = JSON.parse(fs.readFileSync(path.join(__dirname, '../fixtures/captured/boundaries/claude-stream.json')));
+        const streamPath = registry.fixtures.find(file => file.endsWith('/claude-stream-research.jsonl'));
+        assert.ok(streamPath, 'registered original Claude stream is required');
+        const records = fs.readFileSync(path.resolve(__dirname, '../..', streamPath), 'utf8').trim().split('\n')
+          .map(JSON.parse).filter(record => !record.shipyard_fixture);
+        const template = predicate => structuredClone(records.find(predicate));
+        const serialize = rows => rows.map(row => JSON.stringify(row) + '\n').join('');
+        const session = require('node:crypto').randomUUID();
+        return runtime.createClaudeRuntimeHost({scope, controller, recorderDir, transcriptDir,
+          startEvidenceFile: path.join(transcriptDir, 'session-start.json'),
+          uuid: () => session, sessionTranscriptRoot: path.join(storageRoot, 'native'),
+          probe: {status:'available', executable:'claude-fixture', runtime_version:registry.cli_version,
+            capabilities:{assistantTranscriptEvidence:true, restrictedTools:true, sandboxedBash:true}},
+          spawn(_file, args) {
+            const {EventEmitter} = require('node:events');
+            const child = new EventEmitter(); child.pid = process.pid;
+            child.stdout = new EventEmitter(); child.stderr = new EventEmitter();
+            let framedInput = '';
+            child.stdin = {write(value) { framedInput += value; }, end() {
+              process.nextTick(() => {
+                assert.ok(framedInput.endsWith('\n'));
+                const userInput = JSON.parse(framedInput.slice(0, -1));
+                const prompt = userInput.message.content;
+                const encoded = JSON.parse(prompt.split('<AUTHENTICATED_CONTEXT_PACKET>')[1].split('</AUTHENTICATED_CONTEXT_PACKET>')[0]);
+                const packet = require('../../plugins/delivery-pipeline/scripts/context-packet.cjs').decodeUniqueContent(encoded);
+                assert.deepEqual(packet.role_context.ticket_set.map(row=>row.id),[TICKET]);
+                const output = {id:packet.subject,pr:801,head:f.pr.headRefOid,base_tree:git(f.root,['rev-parse',f.base+'^{tree}']),
+                  ticket_set:packet.role_context.ticket_set,ticket_set_digest:packet.role_context.ticket_set_digest,
+                  verdict:'conform',blocking_count:0,summary:'Fixture review',findings:[]};
+                write(f.root,'.shipyard-arch-review-evidence.md','Complete fixture architecture review.');
+                const model = args[args.indexOf('--model') + 1], effort = args[args.indexOf('--effort') + 1];
+                const observedModel = model === 'sonnet' ? 'claude-sonnet-5' : model === 'fable' ? 'claude-fable-5' : model;
+                const init = template(row => row.type === 'system' && row.subtype === 'init');
+                Object.assign(init, {session_id:session, model, cwd:f.root});
+                const assistant = template(row => row.type === 'assistant');
+                assistant.session_id = session; assistant.message.model = observedModel;
+                assistant.message.content[0].input = output;
+                const final = template(row => row.type === 'result');
+                Object.assign(final, {session_id:session, is_error:false, structured_output:output, result:JSON.stringify(output)});
+                const nativeFile = path.join(storageRoot, 'native/project', session + '.jsonl');
+                fs.mkdirSync(path.dirname(nativeFile), {recursive:true});
+                const nativeAssistant = {...structuredClone(assistant), sessionId:session, effort};
+                fs.writeFileSync(nativeFile, serialize([{...userInput, sessionId:session}, nativeAssistant]));
+                const settings = JSON.parse(args[args.indexOf('--settings') + 1]);
+                const hookArgs = settings.hooks.SessionStart[0].hooks[0].args;
+                const hookValue = name => hookArgs[hookArgs.indexOf(name) + 1];
+                captureStart({hook_event_name:'SessionStart', source:'startup', session_id:session,
+                  transcript_path:nativeFile, cwd:f.root}, {
+                  evidenceFile:hookValue('--evidence-file'), expectedSession:hookValue('--expected-session')});
+                child.stdout.emit('data', Buffer.from(serialize([init, assistant, final])));
+                child.emit('close', 0, null);
+              });
+            }};
+            return child;
+          }});
+      },
     }).run(claudeRequest);
     assert.equal(native.result.verdict, 'conform');
     assert.equal(native.result.host_context.phase_repo, repo);
@@ -296,7 +332,7 @@ test(`public phase builder and hosts select ${repo ?? 'current project'} from mi
     fs.mkdirSync(foreignCheckout);
     git(foreignCheckout,['init','-b','foreign']);
     assert.notEqual(git(foreignCheckout,['rev-parse','--path-format=absolute','--git-common-dir']),git(f.root,['rev-parse','--path-format=absolute','--git-common-dir']));
-    assert.throws(()=>artifacts.currentArchitectureVerdict({...verdictInput,worktreePath:foreignCheckout,repo}),/phase graph belongs to another repository/);
+    assert.equal(artifacts.currentArchitectureVerdict({...verdictInput,worktreePath:foreignCheckout,repo}),null);
 
     assert.equal(artifacts.currentArchitectureVerdict({...verdictInput,repo:repo === null ? 'acme/other' : null}),null);
     assert.equal(artifacts.currentArchitectureVerdict({...verdictInput,baseCommit:'f'.repeat(40)}),null);

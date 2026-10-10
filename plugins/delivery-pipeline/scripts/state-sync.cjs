@@ -73,6 +73,13 @@ const { readGate } = require(path.join(__dirname, 'gate-trailer.cjs'));
 const { nonPrimaryParents, landedInEpic } = require(path.join(__dirname, 'diamond-parents.cjs'));
 const { readCapacitySnapshot } = require(path.join(__dirname, 'capacity-lease.cjs'));
 
+function currentReviewAdmission(input) {
+  return require('./gate-trailer.cjs').verifyCurrentReviews(input);
+}
+
+module.exports = Object.freeze({ currentReviewAdmission });
+
+if (require.main === module) {
 const ROOT = process.cwd();
 const GH_TIMEOUT_MS = timeoutFromEnv('SHIPYARD_GH_TIMEOUT_MS', 60_000, 5 * 60_000);
 const PROJECTION_TIMEOUT_MS = timeoutFromEnv('SHIPYARD_GSD_SYNC_TIMEOUT_MS', 120_000, 10 * 60_000);
@@ -861,11 +868,22 @@ for (const [id, t] of Object.entries(tickets)) {
       entry.integration_branch = repoData.get(repo)?.defaultBranch;
       entry.architecture = architectureTarget({ base: pr.baseRefName, integrationBranch: entry.integration_branch });
       if (entry.architecture.required) {
-        try { entry.authenticated_architecture = (!repo || localResolutions.get(repo)?.executable)
-          ? require('./role-artifact.cjs').currentArchitectureVerdict({
-            worktreePath: ROOT, repo,
-            pr: pr.number, head: pr.headRefOid, headBranch: pr.headRefName, baseName: pr.baseRefName, baseCommit: pr.baseRefOid, graphDir: GRAPH_DIR }) : null; }
-        catch { entry.authenticated_architecture = null; }
+        try {
+          const admitted = (!repo || localResolutions.get(repo)?.executable) ? currentReviewAdmission({
+            worktreePath: ROOT, repo, graphDir: GRAPH_DIR, pr: pr.number,
+            getPullRequest: () => prForNumber(repo, pr.number).find(candidate => candidate.number === pr.number),
+          }) : null;
+          if (admitted && (admitted.architecture.head !== pr.headRefOid || admitted.architecture.base_commit !== pr.baseRefOid))
+            throw new Error('current review subject differs from the synchronization observation');
+          entry.authenticated_architecture = admitted?.architecture.verdict || null;
+          entry.authenticated_integration = admitted?.integration || null;
+          entry.review_owed = { architecture: !entry.authenticated_architecture, integration: !entry.authenticated_integration };
+        } catch {
+          entry.authenticated_architecture = null; entry.authenticated_integration = null;
+          entry.review_owed = { architecture: true, integration: true };
+        }
+      } else {
+        delete entry.authenticated_architecture; delete entry.authenticated_integration; delete entry.review_owed;
       }
       if (t.human_checkpoint === true && t.checkpoint === 'review') {
         Object.assign(entry, reviewCheckpointObservation(pr, repo));
@@ -1012,16 +1030,17 @@ if (mode === 'epic-stacked') {
       const pr = observedPr || previousPr;
       // "landed" = nothing from this phase is still waiting outside the default
       // branch (either the epic never started, or its whole diff is already in);
-      let authenticatedArchitecture = null;
+      let admitted = null;
       if (pr?.state === 'OPEN') {
-        try { authenticatedArchitecture = (!repo || localResolutions.get(repo)?.executable)
-          ? require('./role-artifact.cjs').currentArchitectureVerdict({
-            worktreePath: ROOT, repo,
-            pr: pr.number, head: pr.headRefOid, headBranch: pr.headRefName, baseName: pr.baseRefName, baseCommit: pr.baseRefOid, graphDir: GRAPH_DIR }) : null; }
-        catch {}
+        try { admitted = (!repo || localResolutions.get(repo)?.executable) ? currentReviewAdmission({
+          worktreePath: ROOT, repo, graphDir: GRAPH_DIR, pr: pr.number,
+          getPullRequest: () => prForNumber(repo, pr.number).find(candidate => candidate.number === pr.number),
+        }) : null; } catch {}
       }
       epicInfo[epicKey(phase, repo)] = { phase: String(phase), repo, branch: e.branch, base, exists, ahead, pr, landed, landed_reason: landedReason,
-        architecture: architectureTarget({ base: pr?.baseRefName || base, integrationBranch: base }), authenticated_architecture: authenticatedArchitecture };
+        architecture: architectureTarget({ base: pr?.baseRefName || base, integrationBranch: base }),
+        authenticated_architecture: admitted?.architecture.verdict || null, authenticated_integration: admitted?.integration || null,
+        review_owed: { architecture: !admitted?.architecture.ready, integration: !admitted?.integration } };
     }
   }
 }
@@ -1675,3 +1694,5 @@ console.log(
   `wrote .planning/graph/delivery-state.json, delivery-state.yaml, delivery-front.json ` +
   `and delivery-state-meta.json (snapshot generation ${published.generation})${gsdSyncSummary}`
 );
+
+}
