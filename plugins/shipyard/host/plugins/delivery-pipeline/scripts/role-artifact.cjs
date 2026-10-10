@@ -1274,6 +1274,87 @@ function validateReviewContinuationEvidence(evidence) {
   return progress;
 }
 
+function authenticateCompletedReviewReferences(selectors) {
+  const keys = ['worktree', 'progress', 'receipt_store', 'dispatch_id'];
+  if (!object(selectors) || Object.keys(selectors).length !== keys.length
+      || Object.keys(selectors).some(key => !keys.includes(key))
+      || keys.filter(key => key !== 'progress').some(key => typeof selectors[key] !== 'string' || !selectors[key]))
+    fail('REVIEW_PROGRESS_REQUIRED', 'completed accounting requires only original protected reference selectors');
+  const worktree = fs.realpathSync(selectors.worktree);
+  const store = path.resolve(selectors.receipt_store);
+  const state = authorityState(worktree, false, false, false);
+  const files = [store, path.join(fs.realpathSync(path.dirname(store)), `.shipyard-dispatch-authority-${digest(store)}.key`),
+    path.join(store, `record-${digest(selectors.dispatch_id)}.json`), state.directory, path.join(state.directory, 'hmac.key')];
+  const physical = files.map(file => {
+    const stat = fs.lstatSync(file);
+    if (stat.isSymbolicLink() || fs.realpathSync(file) !== file || (stat.mode & 0o077)
+        || stat.uid !== process.getuid() || (!stat.isFile() && !stat.isDirectory()))
+      fail('REVIEW_PROGRESS_INVALID', 'completed references require original private physical authority');
+    return { file, stat };
+  });
+  const trusted = trustedRecord({ boundaryStore: selectors.receipt_store, dispatch_id: selectors.dispatch_id });
+  const evidence = trusted.receipt.runtime_evidence;
+  const progress = validateReviewContinuationEvidence(evidence);
+  const selected = readReviewProgress({ worktree, reference: selectors.progress });
+  for (const file of [...progress.chain.map(payload => path.join(state.directory, 'review-progress-' + digest(stable(payload)) + '.json')),
+    path.join(state.directory, reviewTipName(progress.stream))]) {
+    physical.push({ file, stat: fs.lstatSync(file) });
+  }
+  const identity = progress.identity;
+  const launch = progress.original_launch.runtime_launch;
+  const originalChild = progress.original_launch.native_child_evidence;
+  const completedChild = evidence.native_child_evidence;
+  const childAssociation = value => Object.fromEntries(Object.entries(value || {})
+    .filter(([key]) => !['schema', 'sha256', 'fresh_turn_id'].includes(key)));
+  if (stable(selected) !== stable(progress) || stable(selectors.progress) !== stable(evidence.review_continuation.progress)
+      || identity.worktree !== worktree || evidence.worktree !== worktree
+      || trusted.receipt.runtime !== 'codex' || evidence.runtime !== 'codex' || evidence.provider !== 'openai'
+      || !['arch-review', 'integrator'].includes(identity.role)
+      || trusted.receipt.role !== identity.role || trusted.receipt.policy_hash !== identity.policy_hash
+      || trusted.record.ticket !== identity.ticket
+      || trusted.receipt.agent_file_digest !== progress.original_launch.agent_file_digest
+      || !object(launch) || launch.dispatch_id !== identity.dispatch_id
+      || launch.runtime !== 'codex' || launch.provider !== 'openai'
+      || ['worktree', 'run_id', 'ticket', 'phase'].some(key => launch[key] !== identity[key] || evidence[key] !== identity[key])
+      || ['applied_model', 'observed_model'].some(key => evidence[key] !== progress.original_launch.model
+        || trusted.receipt[key] !== progress.original_launch.model)
+      || ['applied_effort', 'observed_effort'].some(key => evidence[key] !== progress.original_launch.effort
+        || trusted.receipt[key] !== progress.original_launch.effort)
+      || stable(evidence.input_bundle) !== stable(progress.input.input_bundle)
+      || stable(evidence.review_continuation.original_launch) !== stable(launch)
+      || evidence.review_continuation.original_turn_id !== progress.turn_id
+      || evidence.review_continuation.fresh_turn_id !== progress.state.resume.turn_id
+      || evidence.review_continuation.inherited_ranges !== progress.completed_ranges
+      || !progress.state.original_exit?.transcript
+      || trusted.receipt.gsd_role !== undefined || trusted.receipt.gsd_launch_mechanism !== undefined
+      || (progress.original_launch.agent && (launch.gsd_role !== progress.original_launch.agent.role
+        || launch.agent_file !== progress.original_launch.agent.file
+        || launch.agent_file_digest !== progress.original_launch.agent.sha256
+        || launch.agent_instructions_digest !== progress.original_launch.agent.instructions_sha256
+        || stable(launch.task_relay) !== stable(progress.original_launch.task)
+        || !object(originalChild) || !object(completedChild)
+        || stable(childAssociation(completedChild)) !== stable(childAssociation(originalChild))
+        || completedChild.schema !== 'shipyard.codex-native-child-evidence.v1'
+        || completedChild.sha256 !== evidence.native_session_evidence?.sha256
+        || completedChild.fresh_turn_id !== progress.state.resume.turn_id
+        || evidence.native_child_evidence?.agent_role !== progress.original_launch.agent.role
+        || evidence.native_child_evidence?.agent_file_digest !== progress.original_launch.agent.sha256
+        || evidence.native_child_evidence?.agent_instructions_digest !== progress.original_launch.agent.instructions_sha256))
+      || (progress.parent_session_id && (evidence.native_child_evidence?.parent_thread_id !== progress.parent_session_id
+        || evidence.native_child_evidence?.session_id !== progress.session_id)))
+    fail('REVIEW_PROGRESS_INVALID', 'completed receipt differs from its original protected review association');
+  for (const pin of physical) {
+    const current = fs.lstatSync(pin.file);
+    if (!sameStat(pin.stat, current) || pin.stat.mode !== current.mode || pin.stat.uid !== current.uid)
+      fail('REVIEW_PROGRESS_INVALID', 'completed reference authority changed during authentication');
+  }
+  return require('./codex-runtime-host.cjs').freezeReviewProgress({
+    record: JSON.parse(stable(trusted.record)), progress: JSON.parse(stable(progress)),
+    reference_identity: physical.map(pin => Object.fromEntries(['dev', 'ino', 'size', 'mtimeMs', 'ctimeMs', 'mode', 'uid']
+      .map(key => [key, pin.stat[key]]))),
+  });
+}
+
 function planningContainmentIdentity(worktree, binding) {
   const root = fs.realpathSync(worktree);
   if (!object(binding) || !object(binding.launch) || !object(binding.launch.scope)
@@ -5190,6 +5271,7 @@ module.exports = Object.freeze(Object.assign(Object.create(null), {
   JUDGMENT_EVIDENCE_NAMES,
   isAuthenticatedReviewProgress,
   readReviewProgress,
+  authenticateCompletedReviewReferences,
   persistReviewProgress,
   finishOriginalReviewObservation,
   claimReviewContinuation,
