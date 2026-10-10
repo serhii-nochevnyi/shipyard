@@ -5,7 +5,15 @@ const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { EventEmitter } = require('node:events');
-const { suite, test, done, assert } = require('./assert-harness.cjs');
+const { suite, test: harnessTest, done, assert } = require('./assert-harness.cjs');
+const originalRuntimeCases = [];
+function test(name, callback) {
+  harnessTest(name, () => {
+    const result = callback();
+    if (result && typeof result.then === 'function') originalRuntimeCases.push(result.catch(() => {}));
+    return result;
+  });
+}
 const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
 const {
   EFFORTS,
@@ -1402,5 +1410,460 @@ test('fixture: original 128 KiB capacity refuses; independently wrapped output a
     fs.rmSync(store, { recursive: true, force: true });
   }
 });
+
+{
+
+
+let completedCases = Promise.all(originalRuntimeCases);
+function test(name, callback) {
+  harnessTest(name, () => {
+    const result = completedCases.then(callback);
+    completedCases = result.catch(() => {});
+    return result;
+  });
+}
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const crypto = require('node:crypto');
+const { EventEmitter } = require('node:events');
+const { execFileSync } = require('node:child_process');
+const collector = require('../../plugins/delivery-pipeline/scripts/codex-arch-review-context.cjs');
+const runtime = require('../../plugins/delivery-pipeline/scripts/codex-runtime-host.cjs');
+const authority = require('../../plugins/delivery-pipeline/scripts/role-artifact.cjs');
+const sha = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
+const stable = value => JSON.stringify(value, function(_key, child) {
+  return child && typeof child === 'object' && !Array.isArray(child)
+    ? Object.fromEntries(Object.keys(child).sort().map(key => [key, child[key]])) : child;
+});
+const session = '11111111-1111-4111-8111-111111111111';
+const childSession = '33333333-3333-4333-8333-333333333333';
+const selection = { model: 'gpt-6.1-sol', effort: 'high', sandbox_mode: 'read-only' };
+const serialize = records => records.map(record => JSON.stringify(record) + '\n').join('');
+const fixtureRoot = path.resolve(__dirname, '../..');
+const registry = JSON.parse(fs.readFileSync(path.join(fixtureRoot, 'tests/fixtures/captured/boundaries/codex-agent-stream.json')));
+function captured(name) {
+  const file = registry.fixtures.find(file => file.endsWith('/codex-agent-stream-' + name + '.jsonl'));
+  assert.ok(file, 'native record templates must come from the registered boundary');
+  return fs.readFileSync(path.join(fixtureRoot, file), 'utf8').trim().split('\n').map(JSON.parse)
+    .filter(record => !record.shipyard_fixture);
+}
+const cliRecords = captured('exec');
+const parentRecords = captured('parent');
+const childRecords = captured('child');
+function template(records, match) {
+  const record = records.find(match);
+  assert.ok(record, 'registered native record template is required');
+  return structuredClone(record);
+}
+function event(type, turn, extra = {}) {
+  const record = template(childRecords, record => record.type === 'event_msg'
+    && record.payload.type === (type === 'task_aborted' ? 'task_started' : type));
+  Object.assign(record.payload, { type, turn_id: turn, ...extra });
+  if (record.payload.root_turn_id) record.payload.root_turn_id = turn;
+  return record;
+}
+function response(type, turn, fields, records = childRecords) {
+  const record = template(records, record => record.type === 'response_item' && record.payload.type === type
+    && (!fields.role || record.payload.role === fields.role)
+    && (!fields.phase || record.payload.phase === fields.phase));
+  Object.assign(record.payload, fields);
+  record.payload.internal_chat_message_metadata_passthrough.turn_id = turn;
+  return record;
+}
+function message(role, turn, text) {
+  const record = response('message', turn, { role, ...(role === 'assistant' ? { phase: 'final_answer' } : {}) });
+  record.payload.content = [{ ...record.payload.content[0], text }];
+  return record;
+}
+function nativeMetadata(id, worktree, typed = false) {
+  const record = template(typed ? childRecords : parentRecords, record => record.type === 'session_meta');
+  Object.assign(record.payload, { id, session_id: id, cwd: worktree, runtime_workspace_roots: [worktree] });
+  if (typed) {
+    Object.assign(record.payload, { parent_thread_id: session, agent_role: 'shipyard-arch-review', agent_path: '/root/gsd_task' });
+    Object.assign(record.payload.source.subagent.thread_spawn, {
+      parent_thread_id: session, agent_role: 'shipyard-arch-review', agent_path: '/root/gsd_task',
+    });
+  }
+  return record;
+}
+function nativeContext(turn, worktree) {
+  const record = template(childRecords, record => record.type === 'turn_context');
+  Object.assign(record.payload, { turn_id: turn, root_turn_id: turn, model: selection.model,
+    effort: selection.effort, cwd: worktree, workspace_roots: [worktree] });
+  record.payload.sandbox_policy.type = selection.sandbox_mode;
+  Object.assign(record.payload.collaboration_mode.settings, { model: selection.model, reasoning_effort: selection.effort });
+  return record;
+}
+function cliThread(id) {
+  const record = template(cliRecords, record => record.type === 'thread.started');
+  record.thread_id = id;
+  return record;
+}
+function cliCompletion(text) {
+  const records = ['turn.started', 'item.completed', 'turn.completed']
+    .map(type => template(cliRecords, record => record.type === type));
+  records[1].item.text = text;
+  for (const key of Object.keys(records[2].usage)) records[2].usage[key] = 0;
+  Object.assign(records[2].usage, { input_tokens: 1, output_tokens: 1 });
+  return records;
+}
+
+function readRecords(input) {
+  const checked = collector.verifyFileInput(input);
+  return [{ path: input.input_bundle.manifest_path, bytes: checked.manifest_bytes },
+    ...checked.manifest.assets.map((asset, index) => ({ path: asset.path, bytes: checked.material[index] }))]
+    .flatMap(asset => Array.from({ length: Math.ceil(asset.bytes.length / input.input_bundle.chunk_bytes) }, (_, index) => ({
+      command: "dd if='" + asset.path.replaceAll("'", "'\\''") + "' bs=" + input.input_bundle.chunk_bytes
+        + ' skip=' + index + ' count=1 2>/dev/null | base64',
+      output: asset.bytes.subarray(index * input.input_bundle.chunk_bytes, (index + 1) * input.input_bundle.chunk_bytes).toString('base64'),
+    })));
+}
+
+function nativeReads(reads, turn, offset = 0) {
+  return reads.flatMap((read, index) => {
+    const call_id = turn + '-' + (index + offset);
+    const call = response('custom_tool_call', turn, { name: 'exec', call_id,
+      input: 'text(await tools.exec_command(' + JSON.stringify({ cmd: read.command, max_output_tokens: 10000 }) + '));' });
+    const output = response('custom_tool_call_output', turn, { call_id });
+    output.payload.output[0].text = 'Script completed\nWall time 0.1 seconds\nOutput:\n';
+    output.payload.output[1].text = JSON.stringify({ exit_code: 0, output: read.output });
+    return [call, output];
+  });
+}
+
+function finish(turn, result) {
+  return [message('assistant', turn, result),
+  event('task_complete', turn, { last_agent_message: result })];
+}
+
+async function fixture(action, options = {}) {
+  const typedRole = options.role === 'integrator' ? 'shipyard-integrator' : 'shipyard-arch-review';
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'review-continuation-')));
+  const oldHome = os.homedir;
+  os.homedir = () => root;
+  try {
+    const worktree = path.join(root, 'worktree'); fs.mkdirSync(worktree);
+    fs.writeFileSync(path.join(worktree, 'source.txt'), 'fixture');
+    for (const args of [['init', '-q'], ['add', 'source.txt'], ['commit', '-qm', 'fixture']])
+      execFileSync('git', ['-C', worktree, '-c', 'commit.gpgsign=false', '-c', 'user.name=Fixture',
+        '-c', 'user.email=fixture@example.invalid', ...args], { stdio: 'pipe' });
+    const head = execFileSync('git', ['-C', worktree, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+    execFileSync('git', ['-C', worktree, 'update-ref', 'refs/heads/review-base', head]);
+    const scope = { worktree, phase: 49, ticket: 'T-49-05', run_id: 'isolated-review' };
+    const content = "developer_instructions = '''\nReview all required material.\n'''";
+    const typedInstructions = 'Review all required material.\n';
+    const input = collector.prepareFileInput(scope, 'required material\n'.repeat(2000), {
+      role: options.role || 'arch-review', dispatchId: 'original-review', storageRoot: path.join(root, 'inputs'),
+      generatedInstructionBytes: Buffer.byteLength(options.typed ? typedInstructions : runtime.generatedInstructions(content)) + 2,
+      binding: { base: head, base_ref: 'refs/heads/review-base', merge_base: head, ticket_set: ['T-49-05'], ticket_set_digest: sha(JSON.stringify(['T-49-05'])) },
+    });
+    const reads = readRecords(input);
+    const home = path.join(root, 'codex');
+    if (options.typed) {
+      fs.mkdirSync(path.join(home, 'agents'), { recursive: true });
+      fs.writeFileSync(path.join(home, 'agents/' + typedRole + '.toml'),
+        'name = "' + typedRole + '"\ndescription = "Architecture reviewer"\nsandbox_mode = "read-only"\n' + content + '\n');
+    }
+    const reviewerSession = options.typed ? childSession : session;
+    const date = new Date();
+    const directory = path.join(home, 'sessions', String(date.getFullYear()),
+      String(date.getMonth() + 1).padStart(2, '0'), String(date.getDate()).padStart(2, '0'));
+    fs.mkdirSync(directory, { recursive: true });
+    const native = path.join(directory, reviewerSession + '.jsonl');
+    const parent = path.join(directory, session + '.jsonl');
+    const result = JSON.stringify({ verdict: 'conform', input_manifest_sha256: input.input_bundle.manifest_sha256,
+      input_material_bytes: input.input_bundle.total_bytes, input_asset_count: input.input_bundle.asset_count,
+      input_chunk_reads: reads.length });
+    const metadata = nativeMetadata(reviewerSession, worktree, options.typed);
+    if (options.typed) { metadata.payload.agent_role = typedRole; metadata.payload.source.subagent.thread_spawn.agent_role = typedRole; }
+    const context = nativeContext('original-turn', worktree);
+    let progress, attempts = 0, resumedCommands = [], firstRaw, closed = false, liveCredit = false;
+    const originalCount = options.noOutput ? 0 : options.originalCount || 1;
+    const references = []; const stdin = []; const completions = [];
+    const calls = [];
+    const hostOptions = { scope, recorder: () => true, transcriptDir: path.join(root, 'transcripts'),
+      env: { CODEX_HOME: home }, probe: { status: 'available', runtime_version: 'fixture', executable: 'codex',
+        capabilities: { supportedModels: [selection.model], supportedEfforts: [selection.effort] } },
+      spawn(executable, args) {
+        calls.push(args); attempts++;
+        const child = new EventEmitter(); child.stdout = new EventEmitter(); child.stderr = new EventEmitter();
+        child.pid = process.pid; child.kill = () => {};
+        child.stdin = { write(value) { stdin.push(value); }, end() { process.nextTick(() => {
+          if (attempts === 1) {
+            const typedRecords = [];
+            if (options.typed) {
+              const sent = stdin.at(-1);
+              const taskPath = /^TASK_FILE=(.*)$/m.exec(sent)[1];
+              const taskDigest = /^TASK_SHA256=(.*)$/m.exec(sent)[1];
+              fs.writeFileSync(parent, serialize([
+                nativeMetadata(session, worktree), nativeContext('parent-turn', worktree),
+                event('task_started', 'parent-turn'),
+                response('function_call', 'parent-turn', { name: 'spawn_agent', call_id: 'spawn',
+                  arguments: JSON.stringify({ agent_type: typedRole, model: selection.model,
+                    reasoning_effort: selection.effort, fork_turns: 'none', task_name: 'gsd_task' }) }, parentRecords),
+                response('function_call_output', 'parent-turn', { call_id: 'spawn',
+                  output: JSON.stringify({ task_name: '/root/gsd_task' }) }, parentRecords),
+              ]));
+              const taskOutput = response('custom_tool_call_output', 'original-turn', { call_id: 'task-read' });
+              taskOutput.payload.output = [{ ...taskOutput.payload.output[1],
+                text: 'TASK_SHA256=' + taskDigest + '\n' + fs.readFileSync(taskPath, 'utf8') }];
+              typedRecords.push(message('developer', 'original-turn', typedInstructions),
+                message('user', 'original-turn', 'TASK_FILE=' + taskPath + '\nTASK_SHA256=' + taskDigest),
+                response('custom_tool_call', 'original-turn', { name: 'exec', call_id: 'task-read',
+                  input: 'text(await tools.exec_command(' + JSON.stringify({ cmd: 'cat ' + taskPath, max_output_tokens: 10000 }) + '));' }),
+                taskOutput);
+            }
+            const prefix = [metadata, context, ...typedRecords, event('task_started', 'original-turn'),
+              ...nativeReads(reads.slice(0, originalCount), 'original-turn'),
+              ...(options.typed ? [event('task_aborted', 'original-turn')] : [])];
+            firstRaw = serialize(options.tamperOriginal ? options.tamperOriginal(prefix) : prefix);
+            fs.writeFileSync(native, options.live ? serialize(prefix.slice(0, 3)) : firstRaw);
+            child.stdout.emit('data', Buffer.from(serialize([cliThread(session)])));
+            if (options.premature) {
+              fs.appendFileSync(native, serialize(finish('original-turn', 'premature')));
+              child.stdout.emit('data', Buffer.from(serialize(cliCompletion('premature'))));
+            }
+            if (options.live) {
+              setTimeout(() => fs.writeFileSync(native, firstRaw), 30);
+              setTimeout(() => { closed = true; child.emit('close', 1); }, 400);
+            } else { closed = true; child.emit('close', options.premature ? 0 : 1); }
+          } else {
+            resumedCommands = reads.slice(originalCount).map(read => read.command);
+            let remaining = nativeReads(reads.slice(originalCount), 'resumed-turn', 1);
+            if (options.tamperResume) remaining = options.tamperResume(remaining, reads);
+            fs.appendFileSync(native, serialize([nativeContext('resumed-turn', worktree), event('task_started', 'resumed-turn'), ...remaining,
+              ...finish('resumed-turn', options.resumedResult || result)]));
+            child.stdout.emit('data', Buffer.from(serialize([cliThread(reviewerSession), ...cliCompletion(options.resumedResult || result)])));
+            child.emit('close', 0);
+          }
+        }); } };
+        return child;
+      } };
+    const createHost = () => runtime.createCodexRuntimeHost(hostOptions);
+    const host = createHost();
+    const launch = { dispatch_id: 'original-review', input_transport: 'host-files', input_bundle: input.input_bundle,
+      input_prepared: input, prompt: input.prompt, review_progress: true,
+      ...(options.typed ? { gsd_role: typedRole, gsd_launch_mechanism: 'typed-gsd-callback' } : {}),
+      onReviewProgress: reference => { progress = reference; references.push(reference); liveCredit ||= !closed; } };
+    const staticSelection = options.typed ? { ...selection }
+      : { ...selection, agent_file_content: content, agent_file_digest: sha(content) };
+    const restore = options.beforeLaunch?.({ root, worktree });
+    try { await assert.rejects(host.launchStatic(staticSelection, launch)); } finally { restore?.(); }
+    await action({ root, worktree, input, host, progress, calls, native, parent, reviewerSession, firstRaw, reads, result,
+      selection: staticSelection, createHost, scope, stdin, references, completions,
+      liveCredit, launch, get resumedCommands() { return resumedCommands; } });
+  } finally { os.homedir = oldHome; fs.rmSync(root, { recursive: true, force: true }); }
+}
+
+
+async function completedFixture(f) {
+  fs.chmodSync(f.native, 0o600);
+  if (f.parent !== f.native) fs.chmodSync(f.parent, 0o600);
+  const boundaryModule = require('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs');
+  const receiptStore = path.join(f.root, 'receipts');
+  const recorder = boundaryModule.createDurableRecorder(receiptStore);
+  const progress = authority.readReviewProgress({ worktree: f.worktree, reference: f.progress });
+  const content = f.selection.agent_file_content || fs.readFileSync(progress.original_launch.agent.file, 'utf8');
+  const adapter = {
+    validateGeneratedAgent(resolution) {
+      return { valid: true, exists: true, content_verified: true, policy_hash: resolution.policy_hash,
+        agent_file: resolution.agent_file, agent_file_digest: sha(content), agent_file_content: content };
+    },
+    async launchStatic(resolution) {
+      const completed = await f.host.resumeReview(f.selection, { progress: f.progress, dispatch_id: resolution.dispatch_id });
+      return { ...completed, receipt_type: 'adr-014.application', runtime: resolution.runtime, role: resolution.role,
+        dispatch_id: resolution.dispatch_id, requested_model: resolution.requested_model,
+        requested_effort: resolution.requested_effort, policy_hash: resolution.policy_hash,
+        agent_file: resolution.agent_file, agent_file_digest: resolution.agent_file_digest };
+    },
+  };
+  const boundary = boundaryModule.createDispatchBoundary({ adapters: { codex: adapter }, recorder });
+  const completed = await boundary.dispatch({ runtime: 'codex', role: progress.identity.role,
+    dispatch_id: 'completed-accounting', signals: {} }, { ticket: f.scope.ticket });
+  const recorded = recorder.getVerifiedRecord(completed.dispatch_id);
+  assert.ok(recorded);
+  assert.deepEqual(recorded.receipt, completed.receipt);
+  const evidence = recorded.receipt.runtime_evidence;
+  if (progress.original_launch.agent) {
+    assert.equal(recorded.receipt.gsd_role, undefined);
+    assert.equal(recorded.receipt.gsd_launch_mechanism, undefined);
+    assert.equal(evidence.review_continuation.original_launch.gsd_role, progress.original_launch.agent.role);
+    assert.deepEqual(evidence.review_continuation.original_launch.task_relay, progress.original_launch.runtime_launch.task_relay);
+    assert.equal(evidence.native_child_evidence.agent_role, progress.original_launch.agent.role);
+  }
+  return { selectors: { worktree: f.worktree, progress: f.progress, receipt_store: receiptStore,
+    dispatch_id: completed.dispatch_id }, completed };
+}
+
+function accountingChild(f, selectors, operation = 'account') {
+  const program = `
+    const fs = require('node:fs');
+    require('node:os').homedir = () => process.env.ACCOUNTING_FIXTURE_ROOT;
+    const runtime = require(process.env.ACCOUNTING_RUNTIME);
+    const authority = require(process.env.ACCOUNTING_AUTHORITY);
+    const selectors = JSON.parse(process.env.ACCOUNTING_SELECTORS);
+    if (process.env.ACCOUNTING_OPERATION === 'race') {
+      const nativeFile = process.env.ACCOUNTING_NATIVE;
+      const nativeIdentity = fs.lstatSync(nativeFile);
+      const nativeBytes = fs.readFileSync(nativeFile);
+      const originalRead = fs.readSync, originalWrite = fs.writeFileSync, originalRename = fs.renameSync;
+      let replaced = false;
+      fs.readSync = (fd, ...args) => {
+        const count = originalRead(fd, ...args);
+        const identity = fs.fstatSync(fd);
+        if (!replaced && identity.dev === nativeIdentity.dev && identity.ino === nativeIdentity.ino) {
+          replaced = true;
+          originalWrite(nativeFile + '.race', nativeBytes, { mode: 0o600 });
+          originalRename(nativeFile + '.race', nativeFile);
+        }
+        return count;
+      };
+    }
+    for (const name of ['mkdirSync', 'writeFileSync', 'renameSync', 'unlinkSync', 'appendFileSync', 'fsyncSync'])
+      fs[name] = () => { throw new Error('accounting attempted mutation: ' + name); };
+    const originalOpen = fs.openSync;
+    fs.openSync = (file, flags, ...rest) => {
+      if (typeof flags === 'string' ? flags !== 'r' : (flags & (fs.constants.O_WRONLY | fs.constants.O_RDWR | fs.constants.O_CREAT)))
+        throw new Error('accounting attempted write-open');
+      return originalOpen(file, flags, ...rest);
+    };
+    const value = process.env.ACCOUNTING_OPERATION === 'references'
+      ? authority.authenticateCompletedReviewReferences(selectors) : runtime.verifyCompletedReviewConsumption(selectors);
+    if (!Object.isFrozen(value) || !Object.isFrozen(value.identity || value.progress.identity)) throw new Error('mutable result');
+    process.stdout.write(JSON.stringify(value));
+  `;
+  return JSON.parse(execFileSync(process.execPath, ['-e', program], { encoding: 'utf8', env: { ...process.env,
+    ACCOUNTING_FIXTURE_ROOT: f.root, ACCOUNTING_SELECTORS: JSON.stringify(selectors), ACCOUNTING_OPERATION: operation,
+    ACCOUNTING_NATIVE: f.native,
+    ACCOUNTING_RUNTIME: require.resolve('../../plugins/delivery-pipeline/scripts/codex-runtime-host.cjs'),
+    ACCOUNTING_AUTHORITY: require.resolve('../../plugins/delivery-pipeline/scripts/role-artifact.cjs') } }));
+}
+
+for (const role of ['arch-review', 'integrator']) for (const typed of [false, true]) {
+  test(`completed accounting independently replays ${role} ${typed ? 'typed' : 'direct'} references in a read-only cold process`, async () => {
+    await fixture(async f => {
+      const { selectors } = await completedFixture(f);
+      const result = accountingChild(f, selectors);
+      const observations = f.reads.map(read => {
+        const range = nativeReads([read], 'independent')[1].payload.output;
+        return { successful_reads: 1, raw_bytes: Buffer.from(read.output, 'base64').length,
+          encoded_bytes: Buffer.byteLength(read.output), nested_bytes: Buffer.byteLength(range[1].text),
+          outer_bytes: Buffer.byteLength(JSON.stringify(range)) };
+      });
+      const sum = entries => Object.fromEntries(Object.keys(entries[0]).map(key => [key,
+        entries.reduce((count, entry) => count + entry[key], 0)]));
+      assert.equal(result.schema, 'shipyard.completed-review-consumption.v1');
+      assert.deepEqual(result.coverage.prefix, sum(observations.slice(0, 2)));
+      assert.deepEqual(result.coverage.new, sum(observations.slice(2)));
+      assert.deepEqual(result.coverage.total, sum(observations));
+      assert.equal(result.scheduled_reads, f.reads.length);
+      assert.equal(result.identity.role, role);
+      assert.equal(result.current_verdict_authority, false);
+      assert.equal(result.semantic_credit, false);
+      assert.equal(result.attempts[0].status, 'interrupted');
+      assert.equal(result.attempts[0].successful_calls, 2);
+      assert.equal(result.attempts[0].tokens.input_tokens, null);
+      assert.ok(result.attempts[0].unavailable_reasons['tokens.input_tokens']);
+      assert.equal(result.attempts[1].successful_calls, f.reads.length - 2);
+      assert.equal(result.attempts[1].tokens.input_tokens, 1);
+      assert.deepEqual(accountingChild(f, selectors), result);
+      const snapshots = accountingChild(f, selectors, 'references');
+      assert.equal(snapshots.progress.identity.role, role);
+      const progress = authority.readReviewProgress({ worktree: f.worktree, reference: f.progress });
+      assert.throws(() => collector.restoreReviewInput(progress));
+      assert.throws(() => runtime.validateReviewRestoration(progress, f.input));
+      assert.throws(() => runtime.verifyFileConsumption(JSON.parse(JSON.stringify(f.input)), fs.readFileSync(f.native, 'utf8'),
+        'original-review', f.result));
+      assert.throws(() => runtime.verifyCompletedReviewConsumption(snapshots));
+      for (const key of ['expected', 'evidence', 'input_bundle', 'transcript', 'counters', 'authority', 'completed', 'start'])
+        assert.throws(() => runtime.verifyCompletedReviewConsumption({ ...selectors, [key]: result }));
+      assert.throws(() => accountingChild(f, { ...selectors, receipt_store: path.join(f.root, 'missing') }));
+      assert.equal(fs.existsSync(path.join(f.root, 'missing')), false);
+      assert.throws(() => accountingChild(f, { ...selectors, dispatch_id: 'missing-receipt' }));
+      assert.throws(() => accountingChild(f, { ...selectors, progress: { ...f.progress, sha256: '0'.repeat(64) } }));
+      const receiptFile = path.join(selectors.receipt_store, 'record-' + sha(selectors.dispatch_id) + '.json');
+      const originalReceipt = fs.readFileSync(receiptFile);
+      for (const key of ['role', 'ticket', 'policy_hash', 'dispatch_id']) {
+        const forged = JSON.parse(originalReceipt);
+        forged.payload.receipt[key] = 'forged-' + key;
+        fs.writeFileSync(receiptFile, JSON.stringify(forged));
+        assert.throws(() => accountingChild(f, selectors));
+      }
+      fs.writeFileSync(receiptFile, originalReceipt);
+      const original = fs.readFileSync(f.native);
+      for (const mutate of [
+        text => text.slice(0, -1),
+        text => text.replace('resumed-turn', 'foreign-turn'),
+        ...(typed ? [
+          text => text.replace(role === 'integrator' ? 'shipyard-integrator' : 'shipyard-arch-review', 'foreign-reviewer'),
+          text => text.replace('/root/gsd_task', '/root/foreign_task'),
+          text => text.replace(session, '00000000-0000-4000-8000-000000000099'),
+        ] : []),
+        text => text.replace('gpt-6.1-sol', 'foreign-model'),
+        text => text.replace('"model_provider":"openai"', '"model_provider":"foreign"'),
+        text => text + serialize(finish('replayed-turn', f.result)),
+        text => text + JSON.stringify({ type: 'context_compaction' }) + '\n',
+        text => text.replace('Script completed', 'Script running'),
+      ]) {
+        fs.writeFileSync(f.native, mutate(original.toString('utf8')));
+        assert.throws(() => accountingChild(f, selectors));
+      }
+      fs.writeFileSync(f.native, original);
+      assert.throws(() => accountingChild(f, selectors, 'race'));
+      fs.appendFileSync(f.native, '\n');
+      assert.throws(() => accountingChild(f, selectors));
+      fs.writeFileSync(f.native, original);
+      fs.chmodSync(f.native, 0o666);
+      assert.throws(() => accountingChild(f, selectors));
+      fs.chmodSync(f.native, 0o600);
+      fs.renameSync(f.native, f.native + '.original');
+      fs.symlinkSync(f.native + '.original', f.native);
+      assert.throws(() => accountingChild(f, selectors));
+    }, { role, typed, originalCount: 2 });
+  });
+}
+
+for (const [name, mutate] of [
+  ['reordered ranges', records => [records[2], records[3], records[0], records[1], ...records.slice(4)]],
+  ['duplicate output', records => [records[0], records[1], records[1], ...records.slice(2)]],
+  ['duplicate call', records => [records[0], records[0], ...records.slice(1)]],
+  ['foreign read turn', records => { records[0].payload.internal_chat_message_metadata_passthrough.turn_id = 'foreign'; return records; }],
+  ['incomplete outer output', records => { records[1].payload.output.pop(); return records; }],
+  ['failed output', records => { const output = JSON.parse(records[1].payload.output[1].text); output.exit_code = 1;
+    records[1].payload.output[1].text = JSON.stringify(output); return records; }],
+  ['truncated encoded output', records => { const output = JSON.parse(records[1].payload.output[1].text);
+    output.output = output.output.slice(0, -1); records[1].payload.output[1].text = JSON.stringify(output); return records; }],
+  ['wrong offset', records => { records[0].payload.input = records[0].payload.input.replace('skip=0', 'skip=999'); return records; }],
+]) {
+  test('completed accounting cannot authenticate a refused continuation: ' + name, async () => {
+    await fixture(async f => {
+      assert.ok(f.progress);
+      await assert.rejects(completedFixture(f));
+      const reference = authority.readReviewProgress({ worktree: f.worktree, reference: f.progress });
+      assert.notEqual(reference.state.resume?.status, 'completed');
+      assert.throws(() => accountingChild(f, { worktree: f.worktree, progress: f.progress,
+        receipt_store: path.join(f.root, 'receipts'), dispatch_id: 'completed-accounting' }));
+      assert.throws(() => collector.restoreReviewInput(reference));
+    }, { tamperResume: mutate });
+  });
+}
+
+for (const target of ['manifest', 'material']) {
+  test('completed accounting refuses immutable ' + target + ' drift before replay', async () => {
+    await fixture(async f => {
+      const { selectors } = await completedFixture(f);
+      const file = target === 'manifest' ? f.input.input_bundle.manifest_path : f.input.manifest.assets[0].path;
+      fs.chmodSync(file, 0o600);
+      const bytes = fs.readFileSync(file);
+      bytes[0] ^= 1;
+      fs.writeFileSync(file, bytes);
+      fs.chmodSync(file, 0o400);
+      assert.throws(() => accountingChild(f, selectors));
+    });
+  });
+}
+}
 
 done();
