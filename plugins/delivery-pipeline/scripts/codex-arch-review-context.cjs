@@ -46,9 +46,9 @@ function canonical(value) {
 }
 
 function codexResultText(dispatch) {
-  if (!object(dispatch) || dispatch.runtime !== 'codex' || dispatch.role !== 'arch-review'
+  if (!object(dispatch) || dispatch.runtime !== 'codex' || !['arch-review', 'integrator'].includes(dispatch.role)
       || typeof dispatch.dispatch_id !== 'string' || !dispatch.dispatch_id.trim()
-      || dispatch.receipt?.runtime !== 'codex' || dispatch.receipt?.role !== 'arch-review'
+      || dispatch.receipt?.runtime !== 'codex' || dispatch.receipt?.role !== dispatch.role
       || dispatch.receipt?.dispatch_id !== dispatch.dispatch_id) {
     fail('architecture dispatch lacks its matching durable Codex receipt', 'MISSING_RECEIPT');
   }
@@ -99,7 +99,7 @@ function codexResultText(dispatch) {
   if (!object(result)) fail('Codex architecture response must be a JSON object', 'INVALID_RESULT');
   const usage = (parsed.records.filter((record) => record.type === 'turn.completed'
     && object(record.usage)).at(-1) || {}).usage || null;
-  return { result, runtimeEvidence: evidence, usage };
+  return { result, text, runtimeEvidence: evidence, usage };
 }
 
 const preparedOptions = new WeakMap();
@@ -110,6 +110,7 @@ const FILE_LIMITS = Object.freeze({ material: 16 * 1024 * 1024, manifest: 512 * 
   relay: 64 * 1024, chunk: 256 * 1024, assets: 2000, decisions: 1000, reads: 2064 });
 const INPUT_CHUNK_BYTES = 8 * 1024;
 const preparedFileInputs = new WeakSet();
+const historicalReviewInputs = new WeakSet();
 const fileInputOptions = new WeakMap();
 const restoredFileInputs = new WeakSet();
 
@@ -501,6 +502,7 @@ function preflightReaderSchedule(manifest, manifestBytes) {
 }
 
 function verifyFileInput(value, options = {}) {
+  if (historicalReviewInputs.has(value)) options = { ...options, historical: true };
   const privateValue = isPreparedFileInput(value);
   if (!privateValue && options.sealed !== true) fail('serialized bundle has no private producer authority');
   const bundle = value?.input_bundle || value;
@@ -511,7 +513,7 @@ function verifyFileInput(value, options = {}) {
       || ![INPUT_CHUNK_BYTES, 128 * 1024].includes(bundle.chunk_bytes) || bundle.chunk_bytes > FILE_LIMITS.chunk || bundle.max_chunk_reads !== FILE_LIMITS.reads) fail('malformed bounded file descriptor');
   const directory = path.dirname(bundle.manifest_path);
   physicalPath(directory, true); physicalPath(bundle.manifest_path, true, true);
-  const privateOptions = privateValue ? fileInputOptions.get(value) : {};
+  const privateOptions = privateValue ? fileInputOptions.get(value) || {} : {};
   const raw = boundedBytes(fs, bundle.manifest_path, FILE_LIMITS.manifest, undefined, privateOptions.manifestIdentity || bundle.manifest_identity);
   if (digest(raw) !== bundle.manifest_sha256) fail('immutable manifest changed', 'STALE_CONTEXT');
   let manifest;
@@ -537,7 +539,7 @@ function verifyFileInput(value, options = {}) {
         || transport.output_budget_bytes > 256 * 1024)
       capacityRefusal('transport_contract', transport.schema, 'shipyard.native-reader-transport.v2',
         'Use a supported transport with original matching host measurement.');
-    if (privateValue && !restoredFileInputs.has(value)) {
+    if (privateValue && !restoredFileInputs.has(value) && !historicalReviewInputs.has(value)) {
       const admitted = measuredReaderContract(privateOptions.readerCapacity, manifest);
       if (JSON.stringify(canonical(admitted)) !== JSON.stringify(canonical(transport)))
         fail('reader measurement changed', 'READER_CAPACITY_UNSUPPORTED');
@@ -586,7 +588,7 @@ function verifyFileInput(value, options = {}) {
     fail('selected installed instructions changed', 'STALE_CONTEXT');
   for (const [key, expected] of Object.entries(options.association || {}))
     if (manifest[key] !== expected) fail('file input original launch identity differs', 'STALE_CONTEXT');
-  if (privateValue && (digest(value.prompt.replace(bundle.manifest_sha256, '0'.repeat(64))) !== manifest.relay_sha256
+  if (privateValue && !historicalReviewInputs.has(value) && (digest(value.prompt.replace(bundle.manifest_sha256, '0'.repeat(64))) !== manifest.relay_sha256
       || Buffer.byteLength(value.prompt) !== manifest.accounting.relay_bytes
       || value.input_bytes !== bytes + raw.length + manifest.accounting.relay_bytes + manifest.accounting.generated_instruction_bytes))
     fail('relay or full input signals differ');
@@ -1263,6 +1265,283 @@ function validateHistoricalContext(input) {
   return true;
 }
 
+function validateOriginalReviewContext(input) {
+  const { receipt, dispatchId, result, evidence, nativePin } = input;
+  const recorded = receipt?.runtime_evidence;
+  if (receipt?.runtime !== 'codex' || !['arch-review', 'integrator'].includes(receipt.role)
+      || recorded?.input_transport !== 'host-files' || recorded.review_continuation || recorded.native_child_evidence)
+    fail('original review transport is unsupported for inheritance', 'REVIEW_BASELINE_UNSUPPORTED');
+  const response = codexResultText({ runtime: 'codex', role: receipt.role, dispatch_id: dispatchId, receipt,
+    application_evidence: { runtime_evidence: recorded } });
+  const original = response.result;
+  if (receipt.role === 'arch-review') validateHistoricalContext(input);
+  else {
+    const { host_context: _context, evidence_markdown: markdown, ...native } = original;
+    const { host_context: _sealedContext, ...sealed } = result;
+    if (JSON.stringify(canonical(native)) !== JSON.stringify(canonical(sealed))
+        || typeof markdown !== 'string' || markdown.trim() !== evidence.toString('utf8').trim())
+      fail('integration differs from its complete original response', 'REVIEW_BASELINE_INVALID');
+  }
+  const checked = verifyFileInput(recorded.input_bundle, { sealed: true, historical: true,
+    association: { role: receipt.role, dispatch_id: dispatchId } });
+  if (checked.material.length !== 1 || checked.manifest.binding?.agent_sha256 !== receipt.agent_file_digest
+      || checked.manifest.binding?.ticket_set_digest !== result.ticket_set_digest
+      || checked.manifest.binding?.packet_digest !== original.context_digest
+      || recorded.input_consumption?.manifest_sha256 !== recorded.input_bundle.manifest_sha256
+      || recorded.input_consumption?.chunk_reads !== checked.chunk_reads
+      || original.input_manifest_sha256 !== recorded.input_bundle.manifest_sha256
+      || original.input_material_bytes !== recorded.input_bundle.total_bytes
+      || original.input_asset_count !== recorded.input_bundle.asset_count || original.input_chunk_reads !== checked.chunk_reads)
+    fail('original complete input consumption or instruction binding differs', 'REVIEW_BASELINE_INVALID');
+  if (!object(nativePin) || typeof nativePin.path !== 'string' || !path.isAbsolute(nativePin.path)
+      || !Number.isSafeInteger(nativePin.bytes) || nativePin.bytes < 1 || nativePin.bytes > TRANSCRIPT_MAX_BYTES
+      || nativePin.sha256 !== recorded.native_session_evidence?.sha256
+      || recorded.input_consumption?.native_session_sha256 !== nativePin.sha256)
+    fail('protected original native transcript is unavailable', 'REVIEW_BASELINE_REQUIRED');
+  physicalPath(nativePin.path, false, true);
+  const raw = boundedBytes(fs, nativePin.path, TRANSCRIPT_MAX_BYTES, nativePin.bytes).toString('utf8');
+  if (digest(raw) !== nativePin.sha256) fail('original native transcript changed', 'REVIEW_BASELINE_INVALID');
+  const runtime = require('./codex-runtime-host.cjs');
+  const parsed = runtime.parseNativeCodexTranscript(raw, recorded.session_id);
+  if (parsed.sha256 !== nativePin.sha256 || parsed.selections.some(selection => selection.model !== receipt.observed_model
+      || selection.effort !== receipt.observed_effort)) fail('original native selection changed', 'REVIEW_BASELINE_INVALID');
+  const prepared = { input_bundle: recorded.input_bundle };
+  preparedFileInputs.add(prepared); historicalReviewInputs.add(prepared);
+  try {
+    const consumed = runtime.verifyFileConsumption(prepared, raw, dispatchId, response.text);
+    if (consumed.chunk_reads !== checked.chunk_reads) fail('original native coverage is incomplete', 'REVIEW_BASELINE_INVALID');
+  } finally { preparedFileInputs.delete(prepared); historicalReviewInputs.delete(prepared); }
+  let encoded;
+  try { encoded = JSON.parse(checked.material[0]); } catch { fail('original semantic packet is missing', 'REVIEW_BASELINE_UNSUPPORTED'); }
+  if (encoded.schema !== 'shipyard.semantic-content.v1') fail('unsupported original semantic packet', 'REVIEW_BASELINE_UNSUPPORTED');
+  const packet = require('./context-packet.cjs').decodeUniqueContent(encoded);
+  const membership = packet.ticket_set || packet.role_context?.ticket_set;
+  const packetRole = packet.schema === SCHEMA ? 'arch-review' : packet.role;
+  const source = packet.schema === SCHEMA ? packet.pr?.head : packet.source_revision;
+  if (packetRole !== receipt.role || source !== checked.manifest.snapshot.head
+      || JSON.stringify(canonical(membership)) !== JSON.stringify(canonical(result.ticket_set))
+      || (packet.digest || digest(JSON.stringify(canonical(encoded)))) !== checked.manifest.binding.packet_digest
+      || (packet.ticket_set_digest || packet.role_context?.ticket_set_digest) !== result.ticket_set_digest)
+    fail('original packet source, role or full membership differs', 'REVIEW_BASELINE_INVALID');
+  const refs = packet.schema === SCHEMA ? packet.refs : packet.required_refs;
+  if (!Array.isArray(refs) || refs.length > FILE_LIMITS.assets || refs.some(ref => typeof ref.path !== 'string'
+      || typeof ref.content !== 'string' || digest(ref.content) !== ref.sha256 || Buffer.byteLength(ref.content) !== ref.bytes))
+    fail('original complete obligations differ', 'REVIEW_BASELINE_INVALID');
+  const inventory = new Map(endpointInventory(checked.manifest.snapshot.worktree, checked.manifest.snapshot.head)
+    .map(entry => [entry.path, entry]));
+  if (refs.some(ref => !require('./development-artifacts.cjs').isDevelopmentArtifact(ref.path)
+      && !matchesGitSource(inventory.get(ref.path), ref)))
+    fail('original product obligations differ from the authenticated source revision', 'REVIEW_BASELINE_INVALID');
+  return { manifest: checked.manifest, logical_obligations: encoded.obligations, obligations: refs.map(ref => ({ path: ref.path, bytes: ref.bytes,
+    sha256: ref.sha256, purpose: ref.purpose || 'required-source', mandatory: true })) };
+}
+
+function matchesGitSource(entry, ref) {
+  return entry?.type === 'blob' && ['100644', '100755'].includes(entry.mode)
+    && typeof ref.content === 'string' && Buffer.byteLength(ref.content) === ref.bytes
+    && crypto.createHash('sha1').update('blob ' + ref.bytes + '\0').update(ref.content).digest('hex') === entry.object;
+}
+
+function endpointInventory(root, revision) {
+  const entries = run({}, 'git', ['-C', root, 'ls-tree', '-r', '-z', revision], root, FILE_LIMITS.material).split('\0').filter(Boolean);
+  if (entries.length > 20000) fail('complete endpoint inventory exceeds its bound', 'CONTEXT_OVER_BOUND');
+  return entries.map(entry => {
+    const match = /^(\d{6}) (blob|commit) ([a-f0-9]{40})\t([\s\S]+)$/.exec(entry);
+    if (!match) fail('unsupported endpoint inventory', 'REVIEW_IMPACT_UNCERTAIN');
+    return { mode: match[1], type: match[2], object: match[3], path: match[4] };
+  });
+}
+
+function endpointChanges(root, baseline, head) {
+  const raw = run({}, 'git', ['-C', root, 'diff', '--no-ext-diff', '--no-textconv', '--name-status',
+    '--find-renames', '-z', baseline, head], root, FILE_LIMITS.material).split('\0').filter(Boolean);
+  const entries = [];
+  for (let index = 0; index < raw.length;) {
+    const status = raw[index++];
+    if (!/^(?:[ACDMRTUXB]|[RC]\d+)$/.test(status) || index >= raw.length) fail('unsupported endpoint delta', 'REVIEW_IMPACT_UNCERTAIN');
+    const before = raw[index++];
+    const after = /^[RC]/.test(status) ? raw[index++] : before;
+    if (!after) fail('incomplete endpoint rename', 'REVIEW_IMPACT_UNCERTAIN');
+    entries.push({ status, path: after, ...(after !== before ? { previous_path: before } : {}),
+      development_context: require('./development-artifacts.cjs').isDevelopmentArtifact(after) });
+  }
+  return entries.sort((a, b) => a.path.localeCompare(b.path));
+}
+
+function buildReviewImpactPacket(currentInput, selection = roleArtifact.selectReviewBaseline({ currentInput })) {
+  if (!isPreparedFileInput(currentInput)) fail('impact packet requires private current input', 'REVIEW_BASELINE_REQUIRED');
+  const current = reviewProgressIdentity(currentInput);
+  if (selection.schema !== 'shipyard.review-baseline-selection.v1' || selection.role !== current.role
+      || !['full', 'incremental'].includes(selection.mode) || (selection.mode === 'incremental') !== Boolean(selection.baseline)
+      || JSON.stringify(canonical(selection.current)) !== JSON.stringify(canonical(current)))
+    fail('baseline selection has a different current subject', 'REVIEW_BASELINE_INVALID');
+  const baseline = selection.baseline;
+  if (baseline && !roleArtifact.isAuthenticatedReviewBaseline(baseline))
+    fail('baseline is not independently authenticated', 'REVIEW_BASELINE_INVALID');
+  if (baseline && (baseline.role !== current.role || baseline.repository !== current.repository
+      || baseline.phase !== current.phase || baseline.base !== current.base || baseline.merge_base !== current.merge_base
+      || baseline.policy_hash !== current.policy_hash || baseline.contract !== current.contract
+      || JSON.stringify(canonical(baseline.ticket_set)) !== JSON.stringify(canonical(current.ticket_set))
+      || baseline.ticket_set_digest !== current.ticket_set_digest))
+    fail('baseline role or subject differs from the current review', 'REVIEW_BASELINE_INVALID');
+  const checked = verifyFileInput(currentInput), root = current.worktree;
+  const endpoint = baseline?.head || current.merge_base;
+  const previousInventory = endpointInventory(root, endpoint), inventory = endpointInventory(root, current.head);
+  const delta = endpointChanges(root, endpoint, current.head);
+  const changed = new Set(delta.flatMap(entry => [entry.path, entry.previous_path].filter(Boolean)));
+  const previous = new Map(previousInventory.map(entry => [entry.path, entry])), now = new Map(inventory.map(entry => [entry.path, entry]));
+  const graph = new Map(), boundaries = [], uncertainty = [], bodies = new Map();
+  let total = 0;
+  const read = entry => {
+    if (bodies.has(entry.object)) return bodies.get(entry.object);
+    if (entry.type !== 'blob' || !['100644', '100755'].includes(entry.mode)) {
+      uncertainty.push({ path: entry.path, reason: 'non-regular-source-boundary' }); return null;
+    }
+    const size = Number(git({}, root, ['cat-file', '-s', entry.object]));
+    if (!Number.isSafeInteger(size) || size < 0 || size > FILE_LIMITS.material || total + size > FILE_LIMITS.material)
+      fail('complete impact sources exceed their bound', 'CONTEXT_OVER_BOUND');
+    const raw = execFileSync('git', ['-C', root, 'cat-file', 'blob', entry.object], { maxBuffer: FILE_LIMITS.material });
+    total += raw.length;
+    let content;
+    try { content = new TextDecoder('utf-8', { fatal: true }).decode(raw); } catch {
+      uncertainty.push({ path: entry.path, reason: 'binary-source-boundary' }); return null;
+    }
+    if (raw.includes(0)) { uncertainty.push({ path: entry.path, reason: 'binary-source-boundary' }); return null; }
+    bodies.set(entry.object, content); return content;
+  };
+  const resolve = (source, specifier, sources) => {
+    const name = path.posix.normalize(path.posix.join(path.posix.dirname(source), specifier));
+    const candidates = [name, ...['.cjs', '.mjs', '.js', '.ts', '.tsx', '.jsx', '.json'].map(extension => name + extension),
+      ...['index.cjs', 'index.mjs', 'index.js', 'index.ts'].map(file => name + '/' + file)].filter(file => sources.has(file));
+    return candidates.length === 1 ? candidates[0] : null;
+  };
+  for (const sources of [previous, now]) for (const entry of sources.values()) {
+    if (!/\.(?:cjs|mjs|js|ts|tsx|jsx)$/.test(entry.path)) continue;
+    const content = read(entry);
+    if (content === null) continue;
+    if (!graph.has(entry.path)) graph.set(entry.path, new Set());
+    const imports = [...content.matchAll(/(?:\brequire\s*\(\s*|\bimport\s*\(\s*|\bfrom\s*|\bimport\s*)(['"])([^'"\n]+)\1/g)];
+    const literalCalls = [...content.matchAll(/\b(?:require|import)\s*\(\s*['"][^'"\n]+['"]\s*\)/g)].length;
+    if ([...content.matchAll(/\b(?:require|import)\s*\(/g)].length !== literalCalls
+        || /\b(?:eval|new\s+Function|createRequire)\s*\(|\brequire\.(?:resolve|context)\s*\(|=\s*require\b(?!\s*\()|\bmodule\s*\[|\b(?:readFile|readFileSync|readdir|readdirSync|spawn|execFile|execFileSync)\s*\(/.test(content))
+      uncertainty.push({ path: entry.path, reason: 'dynamic-dependency-boundary' });
+    for (const match of imports) {
+      const specifier = match[2];
+      if (specifier.startsWith('node:')) continue;
+      if (!specifier.startsWith('.')) { boundaries.push({ path: entry.path, dependency: specifier, reason: 'external-package-boundary' }); continue; }
+      const dependency = resolve(entry.path, specifier, sources);
+      if (!dependency) { uncertainty.push({ path: entry.path, dependency: specifier, reason: 'unresolved-import-boundary' }); continue; }
+      graph.get(entry.path).add(dependency);
+      if (!graph.has(dependency)) graph.set(dependency, new Set());
+      graph.get(dependency).add(entry.path);
+      boundaries.push({ path: entry.path, dependency, reason: 'static-import-boundary' });
+    }
+  }
+  const affected = new Set(changed), queue = [...changed];
+  for (let index = 0; index < queue.length; index++) {
+    if (queue.length > 20000) fail('dependency closure exceeds its bound', 'CONTEXT_OVER_BOUND');
+    for (const dependency of graph.get(queue[index]) || []) if (!affected.has(dependency)) { affected.add(dependency); queue.push(dependency); }
+  }
+  const governing = name => /^(?:AGENTS\.md|CLAUDE\.md|\.planning\/architecture\/|\.planning\/investigations\/.+\/DECISIONS\.md)/.test(name)
+    || /(?:^|\/)(?:package(?:-lock)?\.json|[^/]*lock[^/]*|tsconfig[^/]*\.json|[^/]*config[^/]*|[^/]*contract[^/]*)$/i.test(name)
+    || /(?:^|\/)(?:generated|schemas|contracts)(?:\/|$)/.test(name);
+  const limitations = [];
+  let mode = selection.mode;
+  if (mode === 'full') limitations.push({ reason: selection.reason });
+  const governingChanges = [...changed].filter(governing);
+  if (governingChanges.length) { mode = 'full'; limitations.push({ reason: 'governing-or-contract-change', paths: governingChanges }); }
+  const unsupported = [...changed].filter(name => !require('./development-artifacts.cjs').isDevelopmentArtifact(name)
+    && !/\.(?:cjs|mjs|js|ts|tsx|jsx|json|md|txt)$/.test(name));
+  for (const name of unsupported) uncertainty.push({ path: name, reason: 'unsupported-interaction-boundary' });
+  if ([...changed].some(name => !require('./development-artifacts.cjs').isDevelopmentArtifact(name))) {
+    for (const entry of inventory) if (/\.(?:go|py|rs|rb|php|java|sh|html|css|vue|svelte)$/.test(entry.path))
+      uncertainty.push({ path: entry.path, reason: 'cross-language-interaction-boundary' });
+  }
+  for (const boundary of boundaries) if (boundary.reason === 'external-package-boundary' && affected.has(boundary.path))
+    uncertainty.push(boundary);
+  if (uncertainty.length) { mode = 'full'; limitations.push({ reason: 'uncertain-dependency-closure', boundaries: uncertainty }); }
+  const encoded = checked.material.length === 1 ? JSON.parse(checked.material[0]) : null;
+  if (encoded?.schema !== 'shipyard.semantic-content.v1') fail('complete current semantic packet is required', 'REVIEW_BASELINE_UNSUPPORTED');
+  const originalPacket = require('./context-packet.cjs').decodeUniqueContent(encoded);
+  const members = originalPacket.ticket_set || originalPacket.role_context?.ticket_set;
+  if (!Array.isArray(members) || JSON.stringify(members.map(item => typeof item === 'string' ? item : item.id).sort()) !== JSON.stringify([...current.ticket_set].sort())
+      || (originalPacket.ticket_set_digest || originalPacket.role_context?.ticket_set_digest) !== current.ticket_set_digest)
+    fail('complete current membership differs from its input binding', 'REVIEW_BASELINE_INVALID');
+  const refs = originalPacket.schema === SCHEMA ? originalPacket.refs : originalPacket.required_refs;
+  if (!Array.isArray(refs)) fail('complete current obligation inventory is required', 'REVIEW_BASELINE_REQUIRED');
+  const changedProductRefs = refs.filter(ref => !require('./development-artifacts.cjs').isDevelopmentArtifact(ref.path)
+    && !matchesGitSource(now.get(ref.path), ref)).map(ref => ref.path);
+  if (changedProductRefs.length) {
+    mode = 'full';
+    limitations.push({ reason: 'current-product-source-differs-from-head', paths: changedProductRefs });
+  }
+  const priorObligations = baseline?.obligations || [], inheritedPrior = new Set();
+  const inherited = [], newly = [];
+  for (const ref of refs) {
+    const index = priorObligations.findIndex((prior, index) => !inheritedPrior.has(index) && prior.path === ref.path
+      && prior.sha256 === ref.sha256 && prior.bytes === ref.bytes && prior.purpose === (ref.purpose || 'required-source'));
+    if (mode === 'incremental' && index >= 0 && !affected.has(ref.path)) {
+      inheritedPrior.add(index);
+      inherited.push({ ...priorObligations[index], conclusion: baseline.conclusion, assumptions: baseline.assumptions });
+    } else newly.push({ ...ref, obligation: 'current-required-source' });
+  }
+  for (const name of [...affected].sort()) {
+    const entry = now.get(name);
+    if (!entry) {
+      const old = previous.get(name);
+      if (old) newly.push({ path: name, revision: endpoint, content: read(old), deleted: true, obligation: 'removed-endpoint-source' });
+      continue;
+    }
+    const content = read(entry);
+    if (content === null) { mode = 'full'; continue; }
+    newly.push({ path: name, revision: current.head, bytes: Buffer.byteLength(content), sha256: digest(content), content,
+      development_context: require('./development-artifacts.cjs').isDevelopmentArtifact(name), obligation: 'affected-endpoint-source' });
+  }
+  if (mode === 'full' && inherited.length) {
+    inherited.length = 0;
+    for (const ref of refs) if (!newly.some(item => item.obligation === 'current-required-source' && item.path === ref.path))
+      newly.push({ ...ref, obligation: 'current-required-source' });
+  }
+  if (mode === 'full') limitations.push({ reason: 'complete-current-packet-required', semantic_reading: 'all-current-material' });
+  const usedLogical = new Set();
+  const logical = encoded.obligations.map(obligation => {
+    const index = (baseline?.logical_obligations || []).findIndex((prior, index) => !usedLogical.has(index)
+      && prior.source_path === obligation.source_path && prior.content_sha256 === obligation.content_sha256
+      && prior.mandatory === obligation.mandatory && prior.purpose.replace(/\/\d+(?=\/|$)/g, '/*') === obligation.purpose.replace(/\/\d+(?=\/|$)/g, '/*'));
+    if (mode === 'incremental' && index >= 0 && inherited.some(ref => ref.path === obligation.source_path && ref.sha256 === obligation.content_sha256)) {
+      usedLogical.add(index);
+      return { ...obligation, coverage: 'inherited', semantic_credit: false,
+        baseline_obligation: baseline.logical_obligations[index], baseline_dispatch_id: baseline.dispatch_id };
+    }
+    return { ...obligation, coverage: 'newly-reviewed-current-packet', semantic_credit: false };
+  });
+  const lineage = { schema: 'shipyard.review-coverage-lineage.v1', role: current.role, mode, current,
+    baseline: baseline ? { role: baseline.role, repository: baseline.repository, worktree: baseline.worktree,
+      phase: baseline.phase, head: baseline.head, base: baseline.base, merge_base: baseline.merge_base,
+      contract: baseline.contract, policy_hash: baseline.policy_hash, instruction_digest: baseline.instruction_digest,
+      dispatch_id: baseline.dispatch_id,
+      artifact: baseline.artifact, receipt_digest: baseline.receipt_digest, packet_digest: baseline.packet_digest,
+      finalized_at: baseline.finalized_at, consumption: baseline.consumption, ticket_set_digest: baseline.ticket_set_digest } : null,
+    endpoint: { from: endpoint, to: current.head, comparison: 'complete-git-endpoints' },
+    endpoint_delta: delta, source_inventories: { baseline: previousInventory, current: inventory }, inherited, newly_reviewed: newly,
+    impact: { paths: [...affected].sort(), boundaries, governing_changes: governingChanges }, limitations,
+    current_membership: { ticket_set: members, ticket_set_digest: current.ticket_set_digest,
+      mechanical_preflight: 'complete-current-phase-required' }, current_logical_obligations: logical,
+    original_packet: encoded, semantic_credit: false };
+  const raw = JSON.stringify(canonical(lineage));
+  if (Buffer.byteLength(raw) > FILE_LIMITS.material) fail('complete impact packet exceeds its bound', 'CONTEXT_OVER_BOUND');
+  verifyFileInput(currentInput);
+  if (baseline) {
+    const rechecked = roleArtifact.selectReviewBaseline({ currentInput });
+    if (!rechecked.baseline || JSON.stringify(canonical(rechecked.baseline)) !== JSON.stringify(canonical(baseline)))
+      fail('original baseline changed during impact collection', 'REVIEW_BASELINE_INVALID');
+  }
+  if (baseline && digest(boundedBytes(fs, path.join(baseline.worktree, baseline.artifact.path),
+      FILE_LIMITS.material, baseline.artifact.bytes)) !== baseline.artifact.sha256)
+    fail('baseline changed during impact collection', 'REVIEW_BASELINE_INVALID');
+  return deepFreeze({ ...lineage, digest: digest(raw) });
+}
+
 function validateSealedContext(input, options = {}) {
   const context = input.result?.host_context;
   const receipt = input.receipt;
@@ -1350,4 +1629,4 @@ function validateSealedContext(input, options = {}) {
   return true;
 }
 
-module.exports = Object.freeze({ SCHEMA, FILE_LIMITS, preflightReviewMaterial, preflightReaderSchedule, capacityRefusal, recheckInstalledLaunch, restoreReviewInput, reviewProgressIdentity, prepareFileInput, isPreparedFileInput, verifyFileInput, instructionEvidence, prepare, finish, isPreparedContext, admitInstalledLaunch, admittedFileInput, admitBookkeeping, admittedPrompt, validateHistoricalContext, validateSealedContext });
+module.exports = Object.freeze({ SCHEMA, FILE_LIMITS, freezeReviewBaseline: deepFreeze, validateOriginalReviewContext, buildReviewImpactPacket, preflightReviewMaterial, preflightReaderSchedule, capacityRefusal, recheckInstalledLaunch, restoreReviewInput, reviewProgressIdentity, prepareFileInput, isPreparedFileInput, verifyFileInput, instructionEvidence, prepare, finish, isPreparedContext, admitInstalledLaunch, admittedFileInput, admitBookkeeping, admittedPrompt, validateHistoricalContext, validateSealedContext });
