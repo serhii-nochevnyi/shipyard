@@ -120,7 +120,7 @@ function original(ref) {
   return bytes;
 }
 function unavailable(error) {
-  return ['ENOENT', 'EACCES', 'EPERM', 'RECORD_FAILED', 'MISSING_RECEIPT', 'ARCHIVE_AUTHORITY_MISSING'].includes(error.code);
+  return ['ENOENT', 'EACCES', 'EPERM', 'RECORD_FAILED', 'MISSING_RECEIPT', 'ARCHIVE_AUTHORITY_MISSING', 'SOURCE_AUTHORITY_MISSING'].includes(error.code);
 }
 function verifiedRecord(ref) {
   assert(ref && path.isAbsolute(ref.store) && typeof ref.dispatch === 'string', 'original recorder reference required');
@@ -164,6 +164,129 @@ function inspectPublication(ref) {
   const result = inspector.inspect(bytes, ref.expected, ROOT, ref.stage);
   return { ...result, package: JSON.parse(bytes).package, installed: false };
 }
+function gitBytes(root, ...args) {
+  const env = { ...process.env, GIT_OPTIONAL_LOCKS: '0' };
+  for (const key of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON_DIR']) delete env[key];
+  return execFileSync('git', ['-C', root, ...args], { env, timeout: 10000, maxBuffer: MAX_BYTES });
+}
+function compareCanonicalInputs(expected, actual) {
+  const normalize = rows => {
+    assert(Array.isArray(rows) && rows.length > 0 && rows.length <= 1000, 'bounded complete canonical inputs required');
+    const names = new Set();
+    for (const row of rows) {
+      assert(typeof row.path === 'string' && !path.isAbsolute(row.path) && !row.path.includes('\\')
+        && row.path.split('/').every(part => part && part !== '.' && part !== '..'), 'canonical input path escape');
+      assert(!names.has(row.path), 'duplicate canonical input'); names.add(row.path);
+      assert(/^[a-f0-9]{64}$/.test(row.sha256 || ''), 'canonical input digest required');
+      assert([0o644, 0o755].includes(row.mode), 'canonical input mode required');
+      if (row.bytes !== undefined)
+        assert(Number.isSafeInteger(row.bytes) && row.bytes >= 0 && row.bytes <= 32 * 1024 * 1024, 'bounded input bytes required');
+    }
+    return rows.map(({ path, sha256, mode }) => ({ path, sha256, mode }))
+      .sort((a, b) => a.path.localeCompare(b.path));
+  };
+  assert.deepEqual(normalize(actual), normalize(expected), 'complete canonical input equivalence required');
+  for (const row of expected) if (row.bytes !== undefined)
+    assert.equal(actual.find(item => item.path === row.path).bytes, row.bytes, 'canonical input length differs');
+  return true;
+}
+function sourceInputs(repository, commit) {
+  assert(/^[a-f0-9]{40}$/.test(commit || ''), 'exact source commit required');
+  const entries = gitBytes(repository, 'ls-tree', '-rz', '--full-tree', commit).toString('utf8').split('\0').filter(Boolean);
+  assert(entries.length <= 20000, 'source tree inventory exceeds bound');
+  const scripts = new Set(['package-shipyard-codex.cjs', 'bootstrap-shipyard-plugin.cjs', 'ensure-gsd-plugin.cjs',
+    'ensure-gsd-core.sh', 'install-shipyard-codex.sh', 'install-shipyard-capability.sh', 'gen-codex-shipyard.cjs',
+    'merge-codex-config.cjs', 'configure-codex-notify.cjs'].map(name => 'scripts/' + name));
+  const rows = [];
+  let totalBytes = 0;
+  for (const entry of entries) {
+    const match = /^(\d{6}) (\w+) ([a-f0-9]{40})\t(.+)$/.exec(entry); assert(match, 'malformed source tree member');
+    const [, mode, type, object, relative] = match;
+    if (!scripts.has(relative) && !/^(plugins|capabilities)\/delivery-pipeline\//.test(relative)) continue;
+    if (/\.(bak|orig|rej|swp)$|(?:^|\/)\.DS_Store$|~$/.test(relative)) continue;
+    assert(type === 'blob' && ['100644', '100755'].includes(mode), 'canonical nonregular source');
+    const size = Number(gitBytes(repository, 'cat-file', '-s', object).toString().trim());
+    assert(Number.isSafeInteger(size) && size >= 0 && size <= 32 * 1024 * 1024, 'source blob exceeds bound');
+    totalBytes += size; assert(totalBytes <= 64 * 1024 * 1024, 'complete canonical source bytes exceed bound');
+    const bytes = gitBytes(repository, 'cat-file', 'blob', object);
+    assert.equal(bytes.length, size, 'source blob length changed');
+    rows.push({ path: relative, sha256: sha(bytes), bytes: bytes.length, mode: mode === '100755' ? 0o755 : 0o644 });
+    assert(rows.length <= 1000, 'canonical inventory exceeds bound');
+  }
+  assert([...scripts].every(name => rows.some(row => row.path === name)), 'builder input inventory incomplete');
+  return rows;
+}
+function verifySourceHistory(ref) {
+  assert(ref && typeof ref.worktree === 'string' && /^[a-f0-9]{40}$/.test(ref.commit || ''), 'original source history reference required');
+  assert.equal(fs.realpathSync(ref.worktree), ref.worktree, 'source worktree must be physical');
+  const coverage = require(path.join(SCRIPTS, 'conveyor-coverage.cjs'));
+  const result = coverage.verify({ commit: ref.commit, repo: coverage.repoSlug(ref.worktree, ref.repo), worktree: ref.worktree });
+  if (!result.covered) {
+    const error = new Error('source history: ' + result.reason);
+    error.code = /ENOENT|EACCES|EPERM/.test(result.reason) ? 'SOURCE_AUTHORITY_MISSING' : 'SOURCE_AUTHORITY_INVALID';
+    throw error;
+  }
+  assert.equal(result.record.commit, ref.commit);
+  assert.equal(result.record.tree, gitBytes(ref.worktree, 'rev-parse', ref.commit + '^{tree}').toString().trim());
+  return result.record;
+}
+function verifySourceEquivalence(candidate) {
+  const selected = JSON.parse(original(candidate.selection));
+  assert.equal(selected.inputs.length, 162, 'complete original 162 inputs required');
+  assert.equal(selected.outputs.length, 161, 'complete original 161 outputs required');
+  assert(candidate.producer, 'original producer authority reference required');
+  assert.equal(candidate.producer.worktree, selected.source.worktree, 'historical producer worktree changed');
+  assert.equal(candidate.producer.commit, selected.source.head, 'historical producer commit changed');
+  const producer = verifySourceHistory(candidate.producer);
+  assert(['executor', 'fixer'].includes(producer.kind), 'original producer needs signed native finalization');
+  assert.equal(producer.dispatch_id, selected.source.original_dispatch, 'original producer dispatch differs');
+  assert.equal(producer.receipt_store, selected.source.boundary_store, 'original producer receipt custody differs');
+  assert.equal(producer.tree, selected.source.tree, 'historical source tree changed');
+  compareCanonicalInputs(selected.inputs, sourceInputs(candidate.producer.worktree, candidate.producer.commit));
+  const current = verifySourceHistory(candidate.current_source);
+  assert.equal(current.repository_id, producer.repository_id, 'foreign current source repository');
+  const inputs = sourceInputs(candidate.current_source.worktree, candidate.current_source.commit);
+  compareCanonicalInputs(selected.inputs, inputs);
+  assert.equal(selected.builder_sha256, inputs.find(row => row.path === 'scripts/package-shipyard-codex.cjs').sha256,
+    'builder equality required');
+  if (candidate.current_source.commit !== candidate.producer.commit)
+    gitBytes(candidate.current_source.worktree, 'merge-base', '--is-ancestor', candidate.producer.commit, candidate.current_source.commit);
+  if (candidate.publication_source) {
+    const publication = verifySourceHistory(candidate.publication_source);
+    assert.equal(publication.repository_id, producer.repository_id, 'foreign publication source repository');
+    compareCanonicalInputs(inputs, sourceInputs(candidate.publication_source.worktree, candidate.publication_source.commit));
+    gitBytes(candidate.publication_source.worktree, 'merge-base', '--is-ancestor', candidate.current_source.commit, publication.commit);
+  }
+  return { producer, current, canonical_inputs: inputs.length, outputs: selected.outputs.length,
+    source_equivalent: true, full_ci_authenticated: false };
+}
+function verifyInstalledCandidate(candidate) {
+  inspectPublication(candidate);
+  const selected = JSON.parse(original(candidate.selection));
+  assert.equal(selected.outputs.length, 161, 'complete installed 161 outputs required');
+  const installed = candidate.installed_identity;
+  assert(installed && typeof installed.package_root === 'string', 'physical installed identity required');
+  const content = crypto.createHash('sha256');
+  for (const row of selected.outputs) if (!['package-build.json', '.codex-plugin/plugin.json'].includes(row.path)) {
+    content.update(row.path + '\0'); content.update(read(path.join(candidate.stage, row.path), 32 * 1024 * 1024));
+  }
+  const policy = require(path.join(SCRIPTS, 'model-policy.cjs')).resolveDispatch({ runtime: 'codex', role: 'research' }).policy_hash;
+  const source = candidate.current_source;
+  assert(source, 'authenticated current source required for installation');
+  verifySourceEquivalence(candidate);
+  const binding = { outputs: selected.outputs, source_content_sha256: content.digest('hex'),
+    package_sha256: selected.package.digest, version: selected.package.version,
+    source: { head: selected.source.head, common: fs.realpathSync(gitBytes(ROOT, 'rev-parse', '--path-format=absolute', '--git-common-dir').toString().trim()),
+      identities: selected.inputs, policy_sha256: policy } };
+  const observation = require('./phase47-runtime-acceptance.cjs').inspectInstalled(installed, {
+    selection: { candidate_sha256: candidate.selection.sha256 }, binding,
+    identity: { head: gitBytes(ROOT, 'rev-parse', 'HEAD').toString().trim(),
+      tree: gitBytes(ROOT, 'rev-parse', 'HEAD^{tree}').toString().trim(),
+      dirty_sha256: sha(gitBytes(ROOT, 'status', '--porcelain=v1', '--untracked-files=all').toString().trim()) } });
+  assert.equal(installed.source_head, source.commit, 'installed current source differs');
+  assert.equal(installed.policy_sha256, policy, 'installed runtime policy differs');
+  return { ...observation, policy, selection_sha256: candidate.selection.sha256, installed: true };
+}
 function verifyEvidence(ledger) {
   assert.equal(ledger.schema, SCHEMA);
   assert.equal(ledger.ticket, 'T-49-11');
@@ -180,17 +303,19 @@ function verifyEvidence(ledger) {
     assert.equal(expected.head, 'bd18893c69484c47db9b6d1b0613b4bac962b237', 'historical source');
     assert.equal(expected.tree, '60dc53b466502e62a33d8e8d48233e8469e1c60c', 'historical tree');
   }
-  assert.equal(ledger.status, 'hold', 'pending native matrix must remain explicit HOLD');
-  assert.equal(ledger.empirical_acceptance, false, 'caller success label supplies no authority');
-  assert(Array.isArray(ledger.holds) && ledger.holds.length > 0, 'explicit acceptance prerequisites required');
+  assert(['hold', 'acceptance'].includes(ledger.status), 'unsupported acceptance label');
+  if (historical) assert.equal(ledger.status, 'hold', 'historical HOLD is immutable');
+  assert.equal(typeof ledger.empirical_acceptance, 'boolean', 'explicit empirical label required');
+  if (historical) assert.equal(ledger.empirical_acceptance, false, 'historical acceptance is immutable');
+  assert(Array.isArray(ledger.holds) && (!historical || ledger.holds.length > 0), 'explicit historical prerequisites required');
   assert.equal(ledger.fixture_evidence, false, 'fixture evidence cannot enter native admission');
   metrics(ledger.metrics); metrics(ledger.baseline_setup);
-  assert.equal(ledger.candidate.installed_identity, null, 'installation assertion requires separate installed authentication');
+  if (historical) assert.equal(ledger.candidate.installed_identity, null, 'historical installed identity is immutable');
   if (!ledger.native_traces.length) {
     for (const row of Object.values(ledger.metrics)) assert.equal(row.value, null, 'missing trace cannot supply observed treatment counters');
     for (const row of Object.values(ledger.baseline_setup)) assert.equal(row.value, null, 'missing baseline cannot supply setup counters');
   }
-  const report = { schema: SCHEMA, status: 'hold', empirical_acceptance: false, historical_only: historical, verified: [], holds: [...ledger.holds] };
+  const report = { schema: SCHEMA, status: 'hold', empirical_acceptance: false, historical_only: historical, verified: [], holds: historical ? [...ledger.holds] : [] };
   for (const [name, action] of [['original-benchmark', () => verifyBenchmark(ledger.benchmark.authority)],
     ['immutable-publication', () => inspectPublication(ledger.candidate)]]) {
     try { report.verified.push({ name, evidence: action() }); }
@@ -209,6 +334,29 @@ function verifyEvidence(ledger) {
       report.holds.push(...evidence.holds.map(reason => trace.role + ': ' + reason));
     }
     catch (error) { if (!unavailable(error)) throw error; report.holds.push(trace.role + ': protected originals unavailable (' + error.code + ')'); }
+  }
+  if (!historical) {
+    for (const [name, ref, action] of [
+      ['source-equivalence', ledger.candidate.current_source, () => verifySourceEquivalence(ledger.candidate)],
+      ['installed-candidate', ledger.candidate.installed_identity, () => verifyInstalledCandidate(ledger.candidate)],
+    ]) {
+      if (!ref) { report.holds.push(name + ': original authenticated reference absent'); continue; }
+      try { report.verified.push({ name, evidence: action() }); }
+      catch (error) {
+        if (!unavailable(error)) throw error;
+        report.holds.push(name + ': protected original unavailable (' + error.code + ')');
+      }
+    }
+    for (const name of ['arch-review', 'integrator'])
+      if (!report.verified.some(row => row.name === name)) report.holds.push(name + ': independently authenticated native trace absent');
+    if (!ledger.runtime.capacity) report.holds.push('capacity: original complete 128 KiB probe reference absent');
+    else report.holds.push('capacity: serialized probe has not supplied private prepared-input authority to measureReaderCapacity');
+    if (ledger.native_traces.length) report.holds.push('native-counter-replay: completed progress cannot restore private input for verifyFileConsumption');
+    report.holds.push('full-CI/fallback/refusal matrix: no independent original-observation verifier has admitted these obligations');
+    report.status = report.holds.length ? 'hold' : 'acceptance';
+    report.empirical_acceptance = report.status === 'acceptance';
+    assert.equal(ledger.status, report.status, 'caller acceptance label differs from independent admission');
+    assert.equal(ledger.empirical_acceptance, report.empirical_acceptance, 'caller empirical label differs from independent admission');
   }
   return report;
 }
@@ -257,7 +405,7 @@ function verifyNativeTrace({ receipt, current, role }) {
     metrics: { successful_reads: metric(checked.chunk_reads),
       retries: metric(null, 'Separate original attempt association has not been verified.'),
       tokens: metric(null, 'Comparable native per-review token observations unavailable.') },
-    holds: ['Installed candidate/policy, comparable original obligations, coordinator contributor attribution, capacity and independent observed matrix counters must also be admitted.'] };
+    holds: ['Equivalent original obligations and physical attempt accounting are not yet independently admitted.'] };
 }
 
 async function verifyNativeCapacity(input, prepared) {
@@ -299,7 +447,7 @@ function main(argv) {
   const report = verifyEvidence(ledger);
   process.stdout.write(JSON.stringify(report, null, 2) + '\n');
 }
-module.exports = { SCHEMA, metric, validateTrace, verifyFixture, verifyEvidence, verifyNativeTrace, verifyNativeCapacity, observeNativeConsumption, verifiedRecord, original, main };
+module.exports = { SCHEMA, metric, validateTrace, verifyFixture, verifyEvidence, verifyNativeTrace, verifyNativeCapacity, observeNativeConsumption, verifiedRecord, original, compareCanonicalInputs, sourceInputs, verifySourceHistory, verifySourceEquivalence, verifyInstalledCandidate, main };
 if (require.main === module) {
   try { main(process.argv.slice(2)); }
   catch (error) { process.stderr.write(JSON.stringify({ status: 'refused', code: error.code || 'EVIDENCE_INVALID', reason: error.message }) + '\n'); process.exitCode = 1; }

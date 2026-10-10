@@ -173,3 +173,70 @@ test('historical plan cannot authenticate a substituted historical selection', (
   ledger.candidate.expected.head = 'f'.repeat(40);
   assert.throws(() => verifyEvidence(ledger), /historical source/);
 });
+
+
+test('current installed evidence is independently inspected instead of requiring installed-null', t => {
+  const fs = require('node:fs'), path = require('node:path'), os = require('node:os');
+  const { verifyEvidence } = require('../smoke/phase49-final-review-acceptance.cjs');
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'phase49-installed-hold-')));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const ledger = JSON.parse(fs.readFileSync(path.join(__dirname, '../../docs/audits/phase49-final-review-acceptance.json')));
+  ledger.plan_sha256 = 'a6e2b6805cbe54f62c065a0d471a94f8517244170f177ed452987e2d1b6d3034';
+  ledger.candidate.selection.path = path.join(root, 'selection.json');
+  ledger.benchmark.authority.store = path.join(root, 'receipts');
+  ledger.candidate.installed_identity = { package_root: path.join(root, 'package') };
+  const report = verifyEvidence(ledger);
+  assert.equal(report.status, 'hold');
+  assert(report.holds.some(reason => reason.includes('installed-candidate')));
+  assert.equal(report.empirical_acceptance, false);
+  assert.deepEqual(fs.readdirSync(root), []);
+});
+
+test('source equivalence compares complete canonical inventories including modes and additions', () => {
+  const { compareCanonicalInputs } = require('../smoke/phase49-final-review-acceptance.cjs');
+  const rows = [{ path: 'scripts/package-shipyard-codex.cjs', sha256: 'a'.repeat(64), mode: 0o755, bytes: 12 }];
+  assert.equal(compareCanonicalInputs(rows, clone(rows)), true);
+  for (const mutate of [v => v[0].mode = 0o644, v => v[0].sha256 = 'b'.repeat(64), v => v[0].bytes++,
+    v => v.push({ ...v[0], path: 'scripts/added.cjs' }), v => v.push(v[0]), v => v[0].path = '../escape']) {
+    const changed = clone(rows); mutate(changed);
+    assert.throws(() => compareCanonicalInputs(rows, changed));
+  }
+});
+
+test('serialized input and caller progress cannot mint retrospective private reader authority', () => {
+  const context = require('../../plugins/delivery-pipeline/scripts/codex-arch-review-context.cjs');
+  assert.throws(() => context.verifyFileInput({ input_bundle: {} }), /private producer authority/);
+  assert.throws(() => context.restoreReviewInput({ state: { resume: { status: 'completed' } } }), /protected authority/);
+});
+
+
+test('immutable source inventory includes added canonical inputs and excludes test-only repairs', t => {
+  const fs = require('node:fs'), path = require('node:path'), os = require('node:os');
+  const { execFileSync } = require('node:child_process');
+  const { sourceInputs, compareCanonicalInputs } = require('../smoke/phase49-final-review-acceptance.cjs');
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'phase49-source-inputs-')));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const git = (...args) => execFileSync('git', ['-C', root, ...args], { encoding: 'utf8', stdio: 'pipe' }).trim();
+  git('init'); git('config', 'commit.gpgsign', 'false'); git('config', 'user.name', 'Isolated fixture'); git('config', 'user.email', 'fixture@example.invalid');
+  for (const directory of ['scripts', 'tests', 'plugins/delivery-pipeline', 'capabilities/delivery-pipeline'])
+    fs.mkdirSync(path.join(root, directory), { recursive: true });
+  for (const name of ['package-shipyard-codex.cjs', 'bootstrap-shipyard-plugin.cjs', 'ensure-gsd-plugin.cjs',
+    'ensure-gsd-core.sh', 'install-shipyard-codex.sh', 'install-shipyard-capability.sh', 'gen-codex-shipyard.cjs',
+    'merge-codex-config.cjs', 'configure-codex-notify.cjs']) fs.writeFileSync(path.join(root, 'scripts', name), name);
+  fs.writeFileSync(path.join(root, 'plugins/delivery-pipeline/consumer.cjs'), 'original');
+  git('add', '.'); git('commit', '-m', 'original isolated source');
+  const baseline = sourceInputs(root, git('rev-parse', 'HEAD'));
+  fs.writeFileSync(path.join(root, 'tests/repair.cjs'), 'isolated repair');
+  git('add', '.'); git('commit', '-m', 'excluded test repair');
+  assert.equal(compareCanonicalInputs(baseline, sourceInputs(root, git('rev-parse', 'HEAD'))), true);
+  fs.writeFileSync(path.join(root, 'capabilities/delivery-pipeline/added.cjs'), 'new required input');
+  git('add', '.'); git('commit', '-m', 'added canonical input');
+  assert.throws(() => compareCanonicalInputs(baseline, sourceInputs(root, git('rev-parse', 'HEAD'))), /equivalence/);
+  fs.unlinkSync(path.join(root, 'capabilities/delivery-pipeline/added.cjs'));
+  git('add', '-u'); git('update-index', '--chmod=+x', 'plugins/delivery-pipeline/consumer.cjs');
+  git('commit', '-m', 'canonical mode change');
+  assert.throws(() => compareCanonicalInputs(baseline, sourceInputs(root, git('rev-parse', 'HEAD'))), /equivalence/);
+  fs.unlinkSync(path.join(root, 'plugins/delivery-pipeline/consumer.cjs'));
+  git('add', '-u'); git('commit', '-m', 'removed canonical input');
+  assert.throws(() => compareCanonicalInputs(baseline, sourceInputs(root, git('rev-parse', 'HEAD'))), /equivalence/);
+});
