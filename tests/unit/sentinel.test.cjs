@@ -378,7 +378,7 @@ function stubGh() {
     // default — an absent head on both sides is the pre-head-binding case, and
     // `${VAR:+…}` adds nothing at all rather than an empty `head=`.
     '  "pr view "*)',
-    '    printf \'{"number":%s,"state":"OPEN","isDraft":false,"baseRefName":"%s","headRefName":"%s","headRefOid":"%s","createdAt":"%s","mergeStateStatus":"%s","reviewDecision":%s,"author":{"login":"%s"},"body":"gate_status: arch-review=conform%s, checks=green"}\\n\' "${STUB_PR:-9}" "${STUB_BASE}" "${STUB_HEAD}" "${STUB_HEAD_OID:-}" "${STUB_CREATED_AT:-2026-09-30T12:00:00Z}" "${STUB_MERGE_STATE:-CLEAN}" "${STUB_REVIEW_DECISION:-null}" "${STUB_AUTHOR:-owner}" "${STUB_TRAILER_HEAD:+, head=$STUB_TRAILER_HEAD}" ;;',
+    '    printf \'{"number":%s,"state":"OPEN","isDraft":false,"baseRefName":"%s","baseRefOid":"%s","headRefName":"%s","headRefOid":"%s","createdAt":"%s","mergeStateStatus":"%s","reviewDecision":%s,"author":{"login":"%s"},"body":"gate_status: arch-review=conform%s, checks=green"}\\n\' "${STUB_PR:-9}" "${STUB_BASE}" "${STUB_BASE_OID:-}" "${STUB_HEAD}" "${STUB_HEAD_OID:-}" "${STUB_CREATED_AT:-2026-09-30T12:00:00Z}" "${STUB_MERGE_STATE:-CLEAN}" "${STUB_REVIEW_DECISION:-null}" "${STUB_AUTHOR:-owner}" "${STUB_TRAILER_HEAD:+, head=$STUB_TRAILER_HEAD}" ;;',
     // The rows carry gh's own `bucket`, because check-state.cjs reads that
     // field and a row without one is PENDING by its fail-closed rule — a
     // bucket-less stub would leave every merge case waiting on CI forever.
@@ -655,25 +655,74 @@ test('foreign integration lookup uses planning Git identity and keeps checkout a
   const observed = path.join(root,'verdict-call.json');
   const preload = path.join(root,'verdict-preload.cjs');
   const artifactModule = path.join(path.dirname(SENTINEL),'role-artifact.cjs');
-  fs.writeFileSync(preload, `const fs=require('fs'),target=${JSON.stringify(artifactModule)};const original=require(target);require.cache[require.resolve(target)].exports = {...original,currentArchitectureVerdict: input => { fs.writeFileSync(${JSON.stringify(observed)},JSON.stringify(input)); return {authenticated:true,verdict:'conform'}; }};`);
-  const env = onPath(stubGh(), {STUB_BASE:'main',STUB_HEAD:'ticket/T-FR',STUB_PR:'9',STUB_HEAD_OID:'a'.repeat(40),NODE_OPTIONS:'--require=' + preload});
+  fs.writeFileSync(preload, `const fs=require('fs'),target=${JSON.stringify(artifactModule)};
+const original=require(target);
+const observe=(role,input)=>{fs.appendFileSync(${JSON.stringify(observed)},JSON.stringify({role,input})+'\\n');return role==='integration'&&process.env.STUB_INTEGRATION_MISSING==='1'?null:{authenticated:true,verdict:'conform'};};
+require.cache[require.resolve(target)].exports={...original,currentArchitectureVerdict:input=>observe('architecture',input),currentIntegrationVerdict:input=>observe('integration',input)};`);
+  const env = onPath(stubGh(), {STUB_BASE:'main',STUB_BASE_OID:'c'.repeat(40),STUB_HEAD:'ticket/T-FR',STUB_PR:'9',STUB_HEAD_OID:'a'.repeat(40),STUB_INTEGRATION_MISSING:'0',NODE_OPTIONS:'--require=' + preload});
   const result = run(root,['merge','T-FR','--json','--dry-run'],{env});
   assert.strictEqual(result.status,0,result.stderr);
   assert.ok(fs.existsSync(observed),result.stdout);
-  const input = JSON.parse(fs.readFileSync(observed));
-  assert.strictEqual(input.worktreePath,fs.realpathSync(root));
-  assert.strictEqual(input.repo,repo);
-  assert.strictEqual(input.graphDir,fs.realpathSync(path.join(root,'.planning/graph')));
-  assert.strictEqual(input.head,'a'.repeat(40));
+  const observations = () => fs.readFileSync(observed,'utf8').trim().split('\n').map(JSON.parse);
+  const inputs = observations();
+  assert.deepStrictEqual(inputs.map(({role})=>role),['architecture','integration']);
+  for (const {input} of inputs) {
+    assert.strictEqual(input.worktreePath,fs.realpathSync(root));
+    assert.strictEqual(input.repo,repo);
+    assert.strictEqual(input.graphDir,fs.realpathSync(path.join(root,'.planning/graph')));
+    assert.strictEqual(input.pr,9);
+    assert.strictEqual(input.head,'a'.repeat(40));
+    assert.strictEqual(input.headBranch,'ticket/T-FR');
+    assert.strictEqual(input.baseName,'main');
+    assert.strictEqual(input.baseCommit,'c'.repeat(40));
+  }
   const row = JSON.parse(result.stdout).results[0];
   assert.strictEqual(row.merged,false);
+  assert.strictEqual(row.would_merge,undefined);
   assert.ok(row.blockers.some(b=>/human/.test(b)),row.blockers.join('; '));
   fs.unlinkSync(observed);
-  fs.writeFileSync(configPath,JSON.stringify({...epicConfig,pipeline:{repos:{[repo]:path.join(foreign,'missing')}}}));
+  const unavailableRole = run(root,['merge','T-FR','--json','--dry-run'],{env:{...env,STUB_INTEGRATION_MISSING:'1'}});
+  assert.strictEqual(unavailableRole.status,0,unavailableRole.stderr);
+  assert.deepStrictEqual(observations().map(({role})=>role),['architecture','integration']);
+  const roleRow = JSON.parse(unavailableRole.stdout).results[0];
+  assert.strictEqual(roleRow.merged,false);
+  assert.strictEqual(roleRow.would_merge,undefined);
+  assert.ok(roleRow.blockers.some(b=>/fresh authenticated integration/.test(b)),roleRow.blockers.join('; '));
+  fs.unlinkSync(observed);
+  const incomplete = run(root,['merge','T-FR','--json','--dry-run'],{env:{...env,STUB_BASE_OID:''}});
+  assert.strictEqual(incomplete.status,0,incomplete.stderr);
+  assert.strictEqual(fs.existsSync(observed),false);
+  assert.ok(JSON.parse(incomplete.stdout).results[0].blockers.some(b=>/live current review PR identity is incomplete/.test(b)));
+  const config = JSON.parse(fs.readFileSync(configPath));
+  const absent = foreign + '-missing';
+  fs.rmSync(foreign,{recursive:true,force:true});
+  assert.strictEqual(fs.existsSync(foreign),false);
+  assert.strictEqual(fs.existsSync(absent),false);
+  const enclosing = spawnSync('git',['-C',path.dirname(absent),'rev-parse','--show-toplevel'],{encoding:'utf8'});
+  assert.strictEqual(enclosing.status,128,enclosing.stderr);
+  assert.match(enclosing.stderr,/not a git repository/);
+  assert.ok(fs.existsSync(path.join(root,'.git')));
+  for (const namespace of ['pipeline','delivery_pipeline']) {
+    config[namespace] = {...config[namespace],repos:{...config[namespace]?.repos,[repo]:absent}};
+  }
+  fs.writeFileSync(configPath,JSON.stringify(config));
+  const effective = require(path.join(path.dirname(SENTINEL),'pipeline-config.cjs')).loadConfig(root);
+  assert.strictEqual(effective.valid,true);
+  assert.strictEqual(effective.config.repos[repo],absent);
+  const resolution = require(path.join(path.dirname(SENTINEL),'repo-resolve.cjs')).resolveRepository({
+    ticket:'T-FR',repo,config:effective.config,configValid:effective.valid,projectRoot:root,
+  });
+  assert.strictEqual(resolution.executable,false);
+  assert.strictEqual(resolution.resolution,'track-only');
   const missing = run(root,['merge','T-FR','--json','--dry-run'],{env});
   assert.strictEqual(missing.status,0,missing.stderr);
   assert.strictEqual(fs.existsSync(observed),false);
-  assert.ok(JSON.parse(missing.stdout).results[0].blockers.some(b=>/fresh authenticated architecture/.test(b)));
+  const missingRow = JSON.parse(missing.stdout).results[0];
+  assert.strictEqual(missingRow.merged,false);
+  assert.strictEqual(missingRow.would_merge,undefined);
+  assert.strictEqual(missingRow.architecture.verdict,undefined);
+  assert.strictEqual(missingRow.integration,undefined);
+  assert.ok(missingRow.blockers.some(b=>/fresh authenticated architecture/.test(b)));
 });
 
 test('...and the SAME pre-authorized ticket does land on its epic (the control)', () => {

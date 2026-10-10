@@ -89,6 +89,7 @@ fs.writeFileSync(GH, [
   '  *"--json body,headRefOid"*)',
   '    if [ -n "${SHIPYARD_TRAILER_CARRY_CWD:-}" ]; then pwd > "$SHIPYARD_TRAILER_CARRY_CWD"; fi',
   '    cat "$SHIPYARD_TRAILER_PRVIEW" ;;',
+  '  *"--json number,state,headRefName,headRefOid,baseRefName,baseRefOid"*) cat "$SHIPYARD_TRAILER_PRVIEW" ;;',
   // reviewers.cjs asks for the review DECISION with an explicit --repo, which is
   // a different argv shape from the body read below. Unanswered it merely warns
   // (the call is tolerated), but then every writer case would run with a stub
@@ -418,7 +419,7 @@ function postedIn(dir) {
 }
 
 function writeTrailer({ body, headRefOid, threads, args } = {}) {
-  fs.writeFileSync(PRVIEW, JSON.stringify({ number: 9, state: 'OPEN', baseRefName: 'epic/01-x', baseRefOid: SHA_B, body: body === undefined ? 'Ticket: T-01-01\n' : body, ...(headRefOid === null ? {} : { headRefOid: headRefOid || SHA_A }) }));
+  fs.writeFileSync(PRVIEW, JSON.stringify({ number: 9, state: 'OPEN', headRefName: 'ticket/T-01-01-x', baseRefName: 'epic/01-x', baseRefOid: SHA_B, body: body === undefined ? 'Ticket: T-01-01\n' : body, ...(headRefOid === null ? {} : { headRefOid: headRefOid || SHA_A }) }));
   try { fs.unlinkSync(EDIT); } catch { /* not written yet */ }
   const statuses = fs.mkdtempSync(path.join(W, 'statuses-'));
   const env = { ...process.env, PATH: `${BIN}${path.delimiter}${process.env.PATH}`, SHIPYARD_TRAILER_PRVIEW: PRVIEW, SHIPYARD_TRAILER_EDIT: EDIT, SHIPYARD_TRAILER_STATUSES: statuses };

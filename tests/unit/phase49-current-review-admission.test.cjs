@@ -137,7 +137,7 @@ async function runArchitecture(f, edit = {}) {
   write(f.worktree, '.shipyard-arch-review-evidence.md', evidence_markdown);
   const artifact = authority.sealJudgment({ worktreePath: f.worktree, role: 'arch-review', phase: f.phase,
     pr: f.pr.number, base: 'origin/main', recorder, dispatchId, result: judgment,
-    ticketSet: result.ticket_set, ticketSetDigest: result.ticket_set_digest });
+    ticketSet: edit.inputTicketSet || result.ticket_set, ticketSetDigest: result.ticket_set_digest });
   return { input, artifact, dispatched, coverage };
 }
 
@@ -361,6 +361,342 @@ test('current architecture cannot reinterpret the fresh signed native response a
     assert.deepEqual(fs.readFileSync(original).subarray(0, bytes.length), bytes);
   });
 });
+
+test('canonicalized Codex architecture membership retains the original complete input digest at current consumers', async () => {
+  await fixture(async f => {
+    await successfulReview(f, 'arch-review');
+    write(f.worktree, 'src/provider.cjs', 'exports.value = 2;\n'); commit(f, 'current input representation repair');
+    const original = phaseBinding(f).ticketSet;
+    const sorted = value => Array.isArray(value) ? value.map(sorted) : value && typeof value === 'object'
+      ? Object.fromEntries(Object.keys(value).sort().map(key => [key, sorted(value[key])])) : value;
+    const fresh = await runArchitecture(f, { inputTicketSet: original,
+      result: result => { result.ticket_set = sorted(result.ticket_set); } });
+    const checked = collector.verifyFileInput(fresh.input);
+    const packet = packets.decodeUniqueContent(JSON.parse(checked.material[0]));
+    assert.equal(packet.refs.some(ref => ref.path === '.planning/graph/tickets.json'), false);
+    assert.equal(packet.graph.path, '.planning/graph/tickets.json');
+    assert.equal(packet.graph.sha256, hash(fs.readFileSync(path.join(f.graphDir, 'tickets.json'))));
+    const manifest = JSON.parse(fs.readFileSync(fresh.artifact.artifact_path));
+    const file = path.join(f.worktree, manifest.files.findings.path), bytes = fs.readFileSync(file);
+    assert.notEqual(hash(JSON.stringify(JSON.parse(bytes).ticket_set)), manifest.ticket_set_digest);
+    assert.equal(hash(JSON.stringify(original)), manifest.ticket_set_digest);
+    for (const consumer of consumers) assert.equal(consumer(currentSubject(f)).architecture.ready, true);
+    assert.deepEqual(fs.readFileSync(file), bytes);
+    const graphFile = path.join(f.graphDir, 'tickets.json');
+    fs.appendFileSync(graphFile, '\n');
+    for (const consumer of consumers) assert.equal(consumer(currentSubject(f)).architecture.ready, false);
+    assert.deepEqual(fs.readFileSync(file), bytes);
+  });
+});
+
+test('genuine finalized Claude receipts admit full architecture and inline integration at all current consumers', async () => {
+  for (const role of ['arch-review', 'integrator']) await claudeFixture(async f => {
+    const scratch = require('../../plugins/delivery-pipeline/scripts/conveyor-scratch.cjs');
+    const before = scratch.statusIgnoringScratch(f.worktree, { forJudge: false });
+    assert.equal(before.ok, true);
+    assert.deepEqual(before.entries, []);
+    const fresh = await runClaudeCurrentReview(f, role);
+    const receipt = fresh.dispatch.receipt;
+    assert.equal(receipt.runtime, 'claude');
+    assert.equal(receipt.runtime_evidence, undefined);
+    assert.ok(receipt.session_id);
+    assert.notEqual(receipt.transcript.path, claudeNativePin(receipt).path);
+    for (const pin of [receipt.transcript, claudeNativePin(receipt)]) {
+      const original = fs.readFileSync(pin.path);
+      assert.equal(original.length, pin.bytes);
+      assert.equal(hash(original), pin.sha256);
+    }
+    const native = fs.readFileSync(claudeNativePin(receipt).path, 'utf8');
+    const userRecords = native.trim().split('\n').map(JSON.parse).filter(row => row.type === 'user');
+    assert.equal(userRecords.length, 1);
+    assert.equal(userRecords[0].sessionId, receipt.session_id);
+    assert.deepEqual(userRecords[0].message, f.lastClaudeUserInput.message);
+    if (role === 'arch-review') {
+      const manifest = JSON.parse(fs.readFileSync(fresh.artifact.ref));
+      const findings = JSON.parse(fs.readFileSync(path.join(f.worktree, manifest.files.findings.path)));
+      assert.notEqual(hash(JSON.stringify(findings.ticket_set)), manifest.ticket_set_digest);
+      assert.equal(hash(JSON.stringify(phaseBinding(f).ticketSet)), manifest.ticket_set_digest);
+      assert.deepEqual(findings.ticket_set, f.lastClaudePacket.role_context.ticket_set);
+      assert.equal(f.lastClaudePacket.required_refs.some(ref => ref.path === '.planning/graph/tickets.json'), false);
+      const stateRef = f.lastClaudePacket.required_refs.find(ref => ref.path === '.planning/graph/delivery-state.json');
+      assert.ok(stateRef);
+      assert.equal(hash(stateRef.content), stateRef.sha256);
+      assert.equal(Buffer.byteLength(stateRef.content), stateRef.bytes);
+      const originalState = JSON.parse(stateRef.content);
+      const currentGraph = JSON.parse(fs.readFileSync(path.join(f.graphDir, 'tickets.json')));
+      const originalBinding = target.phaseBinding({ graph: currentGraph, state: originalState.tickets || originalState,
+        phase: 49, repository: git(f.worktree, 'rev-parse', '--path-format=absolute', '--git-common-dir'),
+        branch: f.pr.headRefName, pr: f.pr.number, head: f.head, base: f.pr.baseRefOid });
+      assert.equal(originalBinding.subject, manifest.boundary_subject);
+      assert.equal(originalBinding.membership, manifest.ticket_set_digest);
+      assert.equal(hash(JSON.stringify(originalBinding.ticketSet)), manifest.ticket_set_digest);
+      assert.deepEqual(originalBinding.ticketSet, findings.ticket_set);
+    }
+    for (const consumer of consumers) {
+      const admitted = consumer(currentSubject(f));
+      if (role === 'arch-review') {
+        assert.equal(admitted.architecture.ready, true);
+        assert.equal(admitted.integration, null);
+      } else {
+        assert.equal(admitted.integration.authenticated, true);
+        assert.equal(admitted.architecture.ready, false);
+      }
+    }
+    if (role === 'arch-review') {
+      const dirty = scratch.statusIgnoringScratch(f.worktree, { forJudge: false });
+      assert.equal(dirty.ok, true);
+      for (const relative of ['.planning/graph/dispatches.json',
+        '.planning/graph/provenance/' + receipt.dispatch_id + '.json']) {
+        assert.ok(dirty.entries.some(entry => entry.status === '??' && entry.path === relative), relative);
+      }
+      await assert.rejects(runClaudeCurrentReview(f, 'integrator'),
+        error => error.code === 'INVALID_HOST' && /worktree has local changes before role dispatch/.test(error.message));
+    }
+  });
+});
+
+for (const [name, edit] of [
+  ['absent original user packet', rows => rows.shift()],
+  ['duplicate original user packet', rows => rows.unshift(structuredClone(rows[0]))],
+  ['foreign original user session', rows => { rows[0].sessionId = crypto.randomUUID(); }],
+  ['changed complete original membership with unchanged digest', rows => {
+    const text = rows[0].message.content;
+    const match = /<AUTHENTICATED_CONTEXT_PACKET>\s*([\s\S]*?)\s*<\/AUTHENTICATED_CONTEXT_PACKET>/.exec(text);
+    const packet = packets.decodeUniqueContent(JSON.parse(match[1]));
+    packet.role_context.ticket_set[0].row.title = 'Altered original membership';
+    rows[0].message.content = text.replace(match[1], JSON.stringify(packets.encodeUniqueContent(packet)));
+  }],
+  ['reordered original delivery-state bytes with repinned semantic content', rows => {
+    const text = rows[0].message.content;
+    const match = /<AUTHENTICATED_CONTEXT_PACKET>\s*([\s\S]*?)\s*<\/AUTHENTICATED_CONTEXT_PACKET>/.exec(text);
+    const packet = packets.decodeUniqueContent(JSON.parse(match[1]));
+    const ref = packet.required_refs.find(item => item.path === '.planning/graph/delivery-state.json');
+    assert.ok(ref, 'the actual original packet carries delivery-state');
+    const reorder = value => Array.isArray(value) ? value.map(reorder) : value && typeof value === 'object'
+      ? Object.fromEntries(Object.keys(value).reverse().map(key => [key, reorder(value[key])])) : value;
+    ref.content = JSON.stringify(reorder(JSON.parse(ref.content)));
+    ref.sha256 = ref.digest = hash(ref.content); ref.bytes = ref.content_bytes = Buffer.byteLength(ref.content);
+    for (const item of packet.logical_source_obligations.filter(item => item.path === ref.path)) {
+      item.sha256 = ref.sha256; item.bytes = ref.bytes;
+    }
+    rows[0].message.content = text.replace(match[1], JSON.stringify(packets.encodeUniqueContent(packet)));
+  }],
+]) test('Claude architecture archive reconstruction refuses ' + name, async () => {
+  await claudeFixture(async f => {
+    const fresh = await runClaudeCurrentReview(f, 'arch-review', { native: edit });
+    const manifest = JSON.parse(fs.readFileSync(fresh.artifact.ref));
+    assert.notEqual(hash(JSON.stringify(JSON.parse(fs.readFileSync(path.join(f.worktree,
+      manifest.files.findings.path))).ticket_set)), manifest.ticket_set_digest);
+    for (const consumer of consumers) assert.equal(consumer(currentSubject(f)).architecture.ready, false);
+  });
+});
+
+for (const [name, mutate] of [
+  ['complete live row mutation', f => {
+    const graph = JSON.parse(fs.readFileSync(path.join(f.graphDir, 'tickets.json')));
+    graph.tickets['T-49-02'].files.push('src/unchanged.cjs');
+    write(f.worktree, '.planning/graph/tickets.json', JSON.stringify(graph));
+  }],
+  ['semantically equal live row with a different original digest', f => {
+    const graph = JSON.parse(fs.readFileSync(path.join(f.graphDir, 'tickets.json')));
+    const row = graph.tickets['T-49-02'];
+    graph.tickets['T-49-02'] = Object.fromEntries(Object.keys(row).reverse().map(key => [key, row[key]]));
+    write(f.worktree, '.planning/graph/tickets.json', JSON.stringify(graph));
+  }],
+  ['complete live member evidence mutation', f => {
+    const state = JSON.parse(fs.readFileSync(path.join(f.graphDir, 'delivery-state.json')));
+    state['T-49-02'].head_sha = 'f'.repeat(40);
+    write(f.worktree, '.planning/graph/delivery-state.json', JSON.stringify(state));
+  }],
+  ['semantically equal original state with changed physical source bytes', f => {
+    const state = JSON.parse(fs.readFileSync(path.join(f.graphDir, 'delivery-state.json')));
+    write(f.worktree, '.planning/graph/delivery-state.json', JSON.stringify(state, null, 2));
+  }],
+]) test('Claude architecture current binding refuses ' + name, async () => {
+  await claudeFixture(async f => {
+    const fresh = await runClaudeCurrentReview(f, 'arch-review');
+    const manifestBytes = fs.readFileSync(fresh.artifact.ref);
+    for (const consumer of consumers) assert.equal(consumer(currentSubject(f)).architecture.ready, true);
+    mutate(f);
+    for (const consumer of consumers) assert.equal(consumer(currentSubject(f)).architecture.ready, false);
+    assert.deepEqual(fs.readFileSync(fresh.artifact.ref), manifestBytes);
+  });
+});
+
+for (const role of ['arch-review', 'integrator']) for (const [name, mutate] of [
+  ['missing physical stream', pin => fs.unlinkSync(pin.path)],
+  ['changed original final JSON', pin => {
+    const rows = fs.readFileSync(pin.path, 'utf8').trim().split('\n').map(JSON.parse);
+    rows.at(-1).structured_output.summary = 'Altered original output';
+    fs.writeFileSync(pin.path, serialize(rows));
+  }],
+  ['truncated original stream', pin => {
+    const raw = fs.readFileSync(pin.path); fs.writeFileSync(pin.path, raw.subarray(0, raw.length - 1));
+  }],
+  ['missing physical semantic transcript', (_pin, native) => fs.unlinkSync(native.path)],
+  ['changed original semantic transcript', (_pin, native) => fs.appendFileSync(native.path, '\n')],
+]) test('Claude ' + role + ' current consumers refuse ' + name, async () => {
+  await claudeFixture(async f => {
+    const fresh = await runClaudeCurrentReview(f, role);
+    const receipt = fresh.dispatch.receipt;
+    mutate(receipt.transcript, claudeNativePin(receipt));
+    for (const consumer of consumers) {
+      const admitted = consumer(currentSubject(f));
+      if (role === 'arch-review') assert.equal(admitted.architecture.ready, false);
+      else assert.equal(admitted.integration, null);
+    }
+  });
+});
+
+for (const [name, edit] of [
+  ['absent user packet', rows => rows.shift()],
+  ['duplicate user packet', rows => rows.unshift(structuredClone(rows[0]))],
+  ['changed original user packet', rows => { rows[0].message.content = rows[0].message.content.replace('AUTHENTICATED_CONTEXT_PACKET', 'ALTERED_CONTEXT_PACKET'); }],
+  ['foreign user session', rows => { rows[0].sessionId = crypto.randomUUID(); }],
+]) test('Claude inline integration refuses ' + name, async () => {
+  await claudeFixture(async f => {
+    await assert.rejects(runClaudeCurrentReview(f, 'integrator', { native: edit }),
+      error => error.code === 'REVIEW_COVERAGE_INVALID');
+  });
+});
+
+for (const [name, edit] of [
+  ['incomplete stream without terminal newline', raw => raw.slice(0, -1)],
+  ['stream with records after final result', raw => raw + serialize([JSON.parse(raw.split('\n')[0])])],
+]) test('Claude inline integration refuses ' + name + ' even with matching original pins', async () => {
+  await claudeFixture(async f => {
+    await assert.rejects(runClaudeCurrentReview(f, 'integrator', { stream: edit }),
+      error => error.code === 'REVIEW_NATIVE_INVALID');
+  });
+});
+
+for (const [name, edit] of [
+  ['wrong native policy', { native: rows => { rows[1].effort = rows[1].effort === 'low' ? 'high' : 'low'; } }],
+  ['wrong original stream session', { stream: raw => serialize(raw.trim().split('\n').map(JSON.parse).map(row => ({ ...row, session_id: 'foreign-session' }))) }],
+]) test('Claude inline integration refuses ' + name, async () => {
+  await claudeFixture(async f => {
+    await assert.rejects(runClaudeCurrentReview(f, 'integrator', edit),
+      error => error.code === 'RUNTIME_EVIDENCE_MISMATCH');
+  });
+});
+
+for (const [name, edit] of [
+  ['caller-altered completed JSON', output => { output.summary = 'Caller replacement'; }],
+  ['caller-provided evidence alias', output => { output.runtime_evidence = { session_id: 'caller-session' }; }],
+]) test('Claude inline integration refuses ' + name, async () => {
+  await claudeFixture(async f => {
+    await assert.rejects(runClaudeCurrentReview(f, 'integrator', { result: edit }),
+      error => error.code === 'REVIEW_NATIVE_INVALID');
+  });
+});
+
+async function claudeFixture(action) {
+  await fixture(async f => {
+    const originalConfig = process.env.CLAUDE_CONFIG_DIR;
+    process.env.CLAUDE_CONFIG_DIR = path.join(f.root, '.claude');
+    try { await action(f); }
+    finally {
+      if (originalConfig === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+      else process.env.CLAUDE_CONFIG_DIR = originalConfig;
+    }
+  });
+}
+
+function claudeNativePin(receipt) {
+  const pin = receipt.selection_evidence.transcript;
+  return { ...pin, path: path.join(path.dirname(receipt.transcript.path), 'projects', pin.path) };
+}
+
+async function runClaudeCurrentReview(f, role, edit = {}) {
+  const claudeRuntime = require('../../plugins/delivery-pipeline/scripts/claude-runtime-host.cjs');
+  const captureStart = require('../../plugins/delivery-pipeline/scripts/claude-agent-start-hook.cjs').capture;
+  const streamRegistry = JSON.parse(fs.readFileSync(path.join(captureRoot, 'boundaries/claude-stream.json')));
+  const streamPath = streamRegistry.fixtures.find(file => file.endsWith('/claude-stream-research.jsonl'));
+  assert.ok(streamPath, 'registered second-runtime originals are required');
+  const stream = fs.readFileSync(path.resolve(__dirname, '../..', streamPath), 'utf8').trim().split('\n')
+    .map(JSON.parse).filter(record => !record.shipyard_fixture);
+  const session = crypto.randomUUID();
+  const options = { ...projectOptions(f), getPullRequest: () => f.pr, controller: false,
+    storageRoot: path.join(f.root, 'claude-' + role),
+    createRuntimeHost({ scope, recorderDir, transcriptDir }) {
+      const originalHost = claudeRuntime.createClaudeRuntimeHost({ scope, recorderDir, transcriptDir,
+        startEvidenceFile: path.join(transcriptDir, 'session-start.json'),
+        uuid: () => session, sessionTranscriptRoot: path.join(f.root, 'claude-native'),
+        probe: { status: 'available', executable: 'claude-fixture', runtime_version: streamRegistry.cli_version,
+          capabilities: { assistantTranscriptEvidence: true, restrictedTools: true, sandboxedBash: true } },
+        spawn(_file, args) {
+          const childProcess = new EventEmitter(); childProcess.pid = process.pid;
+          childProcess.stdout = new EventEmitter(); childProcess.stderr = new EventEmitter();
+          let framedInput = '';
+          childProcess.stdin = { write(value) { framedInput += value; }, end() {
+            process.nextTick(() => {
+              assert.ok(framedInput.endsWith('\n'));
+              const userInput = JSON.parse(framedInput.slice(0, -1));
+              f.lastClaudeUserInput = structuredClone(userInput);
+              const prompt = userInput.message.content;
+              const encoded = JSON.parse(prompt.split('<AUTHENTICATED_CONTEXT_PACKET>')[1].split('</AUTHENTICATED_CONTEXT_PACKET>')[0]);
+              const packet = packets.decodeUniqueContent(encoded), context = packet.role_context;
+              f.lastClaudePacket = structuredClone(packet);
+              let result;
+              if (role === 'arch-review') {
+                result = { id: packet.subject, pr: f.pr.number, head: f.head,
+                  base_tree: git(f.worktree, 'rev-parse', f.base + '^{tree}'),
+                  ticket_set: context.ticket_set, ticket_set_digest: context.ticket_set_digest,
+                  verdict: 'conform', blocking_count: 0, summary: 'Complete original architecture fixture', findings: [] };
+                write(f.worktree, '.shipyard-arch-review-evidence.md', 'Complete original architecture fixture evidence.\n');
+              } else {
+                const coverage = context.review_coverage;
+                result = { outcome: 'passed', phase: context.phase, head: context.combined_diff.head,
+                  head_tree: context.combined_diff.head_tree, base: context.integration_base.ref,
+                  base_tree: context.integration_base.tree, ticket_set: context.ticket_set,
+                  ticket_set_digest: context.ticket_set_digest, reviewed_identity: coverage.reviewed_identity,
+                  coverage: coverageResult(coverage), blocking_count: 0, summary: 'Complete inline integration fixture', findings: [] };
+                write(f.worktree, '.planning/phases/' + f.phase + '/INTEGRATION.md', 'Complete original integration fixture evidence.\n');
+              }
+              const model = args[args.indexOf('--model') + 1], effort = args[args.indexOf('--effort') + 1];
+              const observedModel = model === 'sonnet' ? 'claude-sonnet-5' : model === 'fable' ? 'claude-fable-5' : model;
+              const init = template(stream, row => row.type === 'system' && row.subtype === 'init');
+              Object.assign(init, { session_id: session, model, cwd: f.worktree });
+              const assistant = template(stream, row => row.type === 'assistant');
+              assistant.session_id = session; assistant.message.model = observedModel;
+              assistant.message.content[0].input = result;
+              const final = template(stream, row => row.type === 'result');
+              Object.assign(final, { session_id: session, is_error: false, structured_output: result, result: JSON.stringify(result) });
+              const nativeFile = path.join(f.root, 'claude-native/project', session + '.jsonl');
+              fs.mkdirSync(path.dirname(nativeFile), { recursive: true });
+              const nativeAssistant = structuredClone(assistant);
+              Object.assign(nativeAssistant, { sessionId: session, effort });
+              const native = [{ ...userInput, sessionId: session }, nativeAssistant];
+              edit.native?.(native);
+              fs.writeFileSync(nativeFile, serialize(native));
+              const settings = JSON.parse(args[args.indexOf('--settings') + 1]);
+              const hookArgs = settings.hooks.SessionStart[0].hooks[0].args;
+              const hookValue = name => hookArgs[hookArgs.indexOf(name) + 1];
+              captureStart({ hook_event_name: 'SessionStart', source: 'startup', session_id: session,
+                transcript_path: nativeFile, cwd: f.worktree }, {
+                evidenceFile: hookValue('--evidence-file'), expectedSession: hookValue('--expected-session') });
+              let raw = serialize([init, assistant, final]);
+              if (edit.stream) raw = edit.stream(raw);
+              childProcess.stdout.emit('data', Buffer.from(raw)); childProcess.emit('close', 0, null);
+            });
+          } };
+          return childProcess;
+        } });
+      if (!edit.result) return originalHost;
+      const originals = new WeakMap();
+      return { ...originalHost, async agent(...args) {
+        const original = await originalHost.agent(...args);
+        const output = structuredClone(original.output); edit.result(output);
+        const changed = { ...original, output }; originals.set(changed, original); return changed;
+      }, applicationEvidence({ result }) {
+        return originalHost.applicationEvidence({ result: originals.get(result) });
+      } };
+    } };
+  if (role === 'integrator') options.getPullRequest = projectOptions(f).getPullRequest;
+  return secondRuntime.createClaudeRoleHost(options).run({ schema: secondRuntime.REQUEST_SCHEMA,
+    role, worktree: f.worktree, phase: f.phase,
+    ...(role === 'arch-review' ? { pr: f.pr.number } : { review_contract: 'shipyard.integration-review.v2' }) });
+}
 
 async function fixture(action) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'review-lineage-')));

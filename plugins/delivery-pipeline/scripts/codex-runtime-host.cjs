@@ -1061,9 +1061,13 @@ function verifyFileConsumption(prepared, nativeRaw, dispatchId, resultText, meas
   const checked = require('./codex-arch-review-context.cjs').verifyFileInput(prepared, {
     association: { dispatch_id: dispatchId },
   });
+  return verifyCheckedFileConsumption(checked, prepared, nativeRaw, resultText, measurement, prefix);
+}
+
+function verifyCheckedFileConsumption(checked, prepared, nativeRaw, resultText, measurement, prefix) {
   const chunkBytes = measurement?.chunk_bytes || prepared.input_bundle.chunk_bytes;
   const v2 = Boolean(measurement || prepared.input_bundle.transport);
-  let outputBytes = 0, encodedBytes = 0, nestedBytes = 0, largestEnvelope = 0;
+  let outputBytes = 0, encodedBytes = 0, nestedBytes = 0, largestEnvelope = 0, rawBytes = 0;
   if (typeof nativeRaw !== 'string' || Buffer.byteLength(nativeRaw) > 128 * 1024 * 1024)
     fail('READER_CAPACITY_UNSUPPORTED', 'native reader transcript exceeds its bounded output budget');
   const records = nativeRaw.split('\n').filter(Boolean).map(line => JSON.parse(line));
@@ -1191,6 +1195,7 @@ function verifyFileConsumption(prepared, nativeRaw, dispatchId, resultText, meas
           || output.replace(v2 ? /[\r\n]/g : /\s/g, '') !== encoded)
         fail('RUNTIME_EVIDENCE_MISMATCH', 'original native file read is incomplete or truncated');
       encodedBytes += Buffer.byteLength(output);
+      rawBytes += read.bytes.length;
       credited.add(item.call_id);
       pending.delete(item.call_id); at++;
       if (prefix) completedRanges.push({ ordinal: at - 1, command: read.command,
@@ -1201,6 +1206,7 @@ function verifyFileConsumption(prepared, nativeRaw, dispatchId, resultText, meas
   if (!prefix && (at !== reads.length || pending.size)) fail('RUNTIME_EVIDENCE_MISMATCH', 'complete original native file consumption is unproven');
   return { ...checked, chunk_reads: at, output_bytes: outputBytes, encoded_bytes: encodedBytes, largest_envelope_bytes: largestEnvelope,
     ...(prefix ? { completed_ranges: completedRanges, pending_reads: pending.size } : {}),
+    observed_raw_bytes: rawBytes,
     transport_accounting: { raw_bytes: expected.reduce((sum, asset) => sum + asset.bytes.length, 0),
       encoded_bytes: encodedBytes, nested_output_bytes: nestedBytes, outer_output_bytes: outputBytes } };
 }
@@ -1285,7 +1291,7 @@ function validateReviewNative(raw, sessionId, selection) {
   return { parsed, records };
 }
 
-function verifyProtectedReviewPrefix(progress, prepared, raw) {
+function verifyProtectedReviewPrefix(progress, prepared, raw, material) {
   const parentContext = progress.original_launch.parent_context;
   if (parentContext) {
     const parent = Buffer.from(readReviewNativeFile(parentContext.file, progress.identity.worktree));
@@ -1298,8 +1304,9 @@ function verifyProtectedReviewPrefix(progress, prepared, raw) {
     fail('REVIEW_RESTART_REQUIRED', 'original native semantic context was replaced or truncated');
   const prefix = bytes.subarray(0, boundary).toString('utf8');
   validateReviewNative(prefix, progress.session_id, { ...progress.original_launch, worktree: progress.identity.worktree });
-  const checked = verifyFileConsumption(prepared, prefix, progress.identity.dispatch_id, null, null,
-    { turn_id: progress.turn_id });
+  const checked = material
+    ? verifyCheckedFileConsumption(material, prepared, prefix, null, null, { turn_id: progress.turn_id })
+    : verifyFileConsumption(prepared, prefix, progress.identity.dispatch_id, null, null, { turn_id: progress.turn_id });
   if (checked.pending_reads || checked.chunk_reads !== progress.completed_ranges
       || checked.completed_ranges.length !== progress.chain.length
       || checked.completed_ranges.some((range, index) => Object.keys(range).some(key => range[key] !== progress.chain[index].range[key])))
@@ -1346,11 +1353,12 @@ function freshReviewTurn(raw, resultText) {
   return turn;
 }
 
-function verifyResumedReview(progress, prepared, nativeRaw, resultText) {
-  const identity = require('./codex-arch-review-context.cjs').reviewProgressIdentity(prepared);
+function verifyResumedReview(progress, prepared, nativeRaw, resultText, material) {
+  const identity = material ? completedReviewIdentity(material, prepared.input_bundle)
+    : require('./codex-arch-review-context.cjs').reviewProgressIdentity(prepared);
   if (Object.keys(identity).some(key => JSON.stringify(identity[key]) !== JSON.stringify(progress.identity[key])))
     fail('REVIEW_RESTART_REQUIRED', 'current subject changed before fresh final admission');
-  verifyProtectedReviewPrefix(progress, prepared, nativeRaw);
+  verifyProtectedReviewPrefix(progress, prepared, nativeRaw, material);
   const resume = progress.state.resume;
   const bytes = Buffer.from(nativeRaw);
   if (bytes.length <= resume.native_bytes || reviewHash(bytes.subarray(0, resume.native_bytes)) !== resume.native_sha256)
@@ -1362,11 +1370,189 @@ function verifyResumedReview(progress, prepared, nativeRaw, resultText) {
     .filter(record => record.type === 'turn_context');
   if (!contexts.length || contexts.some(record => record.payload?.turn_id !== undefined && record.payload.turn_id !== turn))
     fail('REVIEW_RESTART_REQUIRED', 'resumed turn lacks native selection attestation');
-  const checked = verifyFileConsumption(prepared, newRaw, progress.identity.dispatch_id, resultText, null,
-    { turn_id: turn, start: progress.completed_ranges });
-  if (checked.pending_reads || checked.chunk_reads !== require('./codex-arch-review-context.cjs').verifyFileInput(prepared).chunk_reads)
+  const checked = material
+    ? verifyCheckedFileConsumption(material, prepared, newRaw, resultText, null, { turn_id: turn, start: progress.completed_ranges })
+    : verifyFileConsumption(prepared, newRaw, progress.identity.dispatch_id, resultText, null,
+      { turn_id: turn, start: progress.completed_ranges });
+  if (checked.pending_reads || checked.chunk_reads !== (material || require('./codex-arch-review-context.cjs').verifyFileInput(prepared)).chunk_reads)
     fail('RUNTIME_EVIDENCE_MISMATCH', 'fresh review has incomplete total current coverage');
   return { ...checked, turn_id: turn };
+}
+
+function completedReviewIdentity(checked, bundle) {
+  const canonical = require('./model-policy-internal.cjs').stableStringify;
+  const manifest = checked.manifest, binding = manifest.binding;
+  if (!object(binding)) fail('REVIEW_RESTART_REQUIRED', 'original review binding is missing');
+  const pins = checked.material.map(bytes => {
+    let semantic; try { semantic = JSON.parse(bytes.toString('utf8')); } catch {}
+    return typeof semantic?.schema === 'string' && semantic.schema.startsWith('shipyard.semantic-content.')
+      ? { dictionary: semantic.dictionary_sha256, obligations: semantic.obligations_sha256 }
+      : { dictionary: reviewHash(bytes), obligations: reviewHash(canonical(binding)) };
+  });
+  return { manifest_digest: reviewHash(canonical(manifest)), manifest_sha256: bundle.manifest_sha256,
+    dictionary_digest: reviewHash(JSON.stringify(pins.map(pin => pin.dictionary))),
+    obligation_digest: reviewHash(JSON.stringify(pins.map(pin => pin.obligations))),
+    repository: manifest.snapshot.repository, worktree: manifest.snapshot.worktree, role: manifest.role,
+    policy_hash: manifest.snapshot.policy_hash, contract: manifest.schema,
+    head: manifest.snapshot.head, head_tree: manifest.snapshot.head_tree, base: binding.base,
+    base_ref: binding.base_ref || null, merge_base: binding.merge_base,
+    ticket_set: binding.ticket_set, ticket_set_digest: binding.ticket_set_digest,
+    dispatch_id: manifest.dispatch_id, run_id: manifest.run_id, ticket: manifest.ticket, phase: manifest.phase };
+}
+
+function verifyCompletedReviewConsumption(selectors) {
+  const authority = require('./role-artifact.cjs');
+  const collector = require('./codex-arch-review-context.cjs');
+  const canonical = require('./model-policy-internal.cjs').stableStringify;
+  const authenticated = authority.authenticateCompletedReviewReferences(selectors);
+  const progress = authenticated.progress, evidence = authenticated.record.receipt.runtime_evidence;
+  const bundle = progress.input.input_bundle;
+  const checked = collector.verifyFileInput(bundle, { sealed: true, historical: true,
+    association: { role: progress.identity.role, dispatch_id: progress.identity.dispatch_id } });
+  const prepared = { input_bundle: bundle };
+  const identity = completedReviewIdentity(checked, bundle);
+  if (canonical(identity) !== canonical(progress.identity))
+    fail('REVIEW_RESTART_REQUIRED', 'immutable input differs from original protected identity');
+  const retained = [];
+  const read = (file, pin) => {
+    const stat = fs.lstatSync(file);
+    if (stat.mode & 0o077) fail('RUNTIME_EVIDENCE_MISMATCH', 'completed physical evidence is not private');
+    const raw = readReviewNativeFile(file, identity.worktree);
+    if (!raw.endsWith('\n')) fail('RUNTIME_EVIDENCE_MISMATCH', 'physical evidence lacks a complete JSONL boundary');
+    if (pin && (Buffer.byteLength(raw) !== pin.bytes || reviewHash(raw) !== pin.sha256))
+      fail('RUNTIME_EVIDENCE_MISMATCH', 'physical evidence differs from its protected complete-byte pin');
+    retained.push({ file, raw, stat });
+    return raw;
+  };
+  const raw = read(progress.native_file);
+  if (Buffer.byteLength(raw) !== evidence.native_session_evidence?.bytes
+      || evidence.native_session_evidence?.file !== path.basename(progress.native_file)
+      || evidence.native_session_evidence?.session_id !== progress.session_id
+      || reviewHash(raw) !== evidence.native_session_evidence?.sha256
+      || evidence.input_consumption?.native_session_sha256 !== reviewHash(raw))
+    fail('RUNTIME_EVIDENCE_MISMATCH', 'completed native session differs from its protected receipt');
+  validateReviewNative(raw, progress.session_id, { ...progress.original_launch, worktree: identity.worktree });
+  if (progress.original_launch.parent_context) read(progress.original_launch.parent_context.file);
+  const cli = read(evidence.transcript?.path, evidence.transcript);
+  const parsed = parseCodexStream(cli);
+  const finals = parsed.records.filter(record => record.type === 'item.completed' && record.item?.type === 'agent_message');
+  const starts = parsed.records.filter(record => record.type === 'turn.started');
+  const completions = parsed.records.filter(record => record.type === 'turn.completed');
+  if (parsed.session_id !== progress.session_id || starts.length !== 1 || finals.length !== 1 || completions.length !== 1
+      || parsed.records.indexOf(starts[0]) >= parsed.records.indexOf(finals[0])
+      || parsed.records.indexOf(finals[0]) >= parsed.records.indexOf(completions[0]) || typeof finals[0].item.text !== 'string')
+    fail('RUNTIME_EVIDENCE_MISMATCH', 'completed CLI lacks one exact-session ordered final');
+  const prefix = verifyProtectedReviewPrefix(progress, prepared, raw, checked);
+  const suffix = verifyResumedReview(progress, prepared, raw, finals[0].item.text, checked);
+  if (suffix.turn_id !== progress.state.resume.turn_id
+      || evidence.input_consumption?.chunk_reads !== checked.chunk_reads
+      || evidence.review_continuation.newly_completed_ranges !== checked.chunk_reads - progress.completed_ranges)
+    fail('RUNTIME_EVIDENCE_MISMATCH', 'completed total differs from protected fresh-turn accounting');
+  const originalCliPin = progress.state.original_exit.transcript;
+  const originalCli = read(originalCliPin.path, originalCliPin);
+  const originalRaw = Buffer.from(raw).subarray(0, progress.state.resume.native_bytes).toString('utf8');
+  const freshRaw = Buffer.from(raw).subarray(progress.state.resume.native_bytes).toString('utf8');
+  const originalStarts = originalRaw.split('\n').filter(Boolean).map(line => JSON.parse(line))
+    .filter(record => record.type === 'event_msg' && record.payload?.type === 'task_started');
+  if (!originalRaw.endsWith('\n') || originalStarts.length !== 1 || originalStarts[0].payload.turn_id !== progress.turn_id)
+    fail('REVIEW_RESTART_REQUIRED', 'pre-resume context has intervening or incomplete original turns');
+  const originalObserved = verifyCheckedFileConsumption(checked, prepared, originalRaw, null, null, { turn_id: progress.turn_id });
+  if (originalObserved.chunk_reads < progress.completed_ranges)
+    fail('REVIEW_RESTART_REQUIRED', 'original attempt lost its already protected physical prefix');
+  const coverage = (value, reads) => ({ successful_reads: reads, raw_bytes: value.observed_raw_bytes,
+    encoded_bytes: value.encoded_bytes, nested_bytes: value.transport_accounting.nested_output_bytes,
+    outer_bytes: value.output_bytes });
+  const inherited = coverage(prefix, progress.completed_ranges);
+  const newly = coverage(suffix, checked.chunk_reads - progress.completed_ranges);
+  const total = Object.fromEntries(Object.keys(inherited).map(key => [key, inherited[key] + newly[key]]));
+  const attempts = [completedReviewAttempt(originalRaw, originalCli, progress.identity.dispatch_id,
+    progress.session_id, progress.turn_id, checked, bundle, 'interrupted', progress.parent_session_id || progress.session_id),
+  completedReviewAttempt(freshRaw, cli, evidence.dispatch_id, progress.session_id, suffix.turn_id, checked, bundle, 'completed')];
+  attempts[0].original_exit = progress.state.original_exit;
+  attempts[0].accepted_historical_final = false;
+  if (attempts[1].call_ids.some(call => attempts[0].call_ids.includes(call)))
+    fail('RUNTIME_EVIDENCE_MISMATCH', 'fresh attempt replayed an original reader call identity');
+  attempts[1].retries += attempts[1].read_commands.filter(command => attempts[0].read_commands.includes(command)).length;
+  for (const attempt of attempts) { delete attempt.read_commands; delete attempt.call_ids; }
+  for (const pin of retained) {
+    const current = fs.lstatSync(pin.file);
+    if (['dev', 'ino', 'size', 'mtimeMs', 'ctimeMs', 'mode', 'uid'].some(key => current[key] !== pin.stat[key])
+        || readReviewNativeFile(pin.file, identity.worktree) !== pin.raw)
+      fail('RUNTIME_EVIDENCE_MISMATCH', 'original physical evidence changed during completed accounting');
+  }
+  const rechecked = collector.verifyFileInput(bundle, { sealed: true, historical: true,
+    association: { role: identity.role, dispatch_id: identity.dispatch_id } });
+  if (canonical(completedReviewIdentity(rechecked, bundle)) !== canonical(identity)
+      || canonical(authority.authenticateCompletedReviewReferences(selectors)) !== canonical(authenticated))
+    fail('REVIEW_RESTART_REQUIRED', 'protected references changed during completed accounting');
+  return freeze({ schema: 'shipyard.completed-review-consumption.v1', identity,
+    evidence_pins: { progress: selectors.progress, dispatch_id: evidence.dispatch_id,
+      receipt_store: fs.realpathSync(selectors.receipt_store),
+      receipt_reference: 'record-' + reviewHash(evidence.dispatch_id) + '.json', native_file: progress.native_file,
+      original_launch_sha256: reviewHash(canonical(progress.original_launch.runtime_launch)),
+      receipt_sha256: reviewHash(canonical(authenticated.record)), completed_evidence_sha256: progress.state.resume.evidence_sha256,
+      manifest_sha256: bundle.manifest_sha256, native_session_sha256: reviewHash(raw),
+      original_transcript: originalCliPin, completed_transcript: evidence.transcript },
+    coverage: { prefix: inherited, new: newly, total }, scheduled_reads: checked.chunk_reads, attempts,
+    semantic_credit: false, current_verdict_authority: false });
+}
+
+function completedReviewAttempt(raw, cli, dispatchId, sessionId, turnId, checked, bundle, status, cliSessionId = sessionId) {
+  const records = raw.split('\n').filter(Boolean).map(line => JSON.parse(line));
+  const assets = [bundle.manifest_path, ...checked.manifest.assets.map(asset => asset.path)];
+  const calls = new Map(), outputs = new Set(), commands = new Map();
+  let successful = 0, failed = 0;
+  for (const record of records) {
+    const item = record.type === 'response_item' ? record.payload : null;
+    if (!item) continue;
+    if (item.type === 'custom_tool_call') {
+      const match = /^\s*text\s*\(\s*await\s+tools\.exec_command\s*\(([\s\S]+)\)\s*\)\s*;?\s*$/.exec(item.input || '');
+      let args; try { args = match && JSON.parse(match[1]); } catch {}
+      if (!args || !assets.some(file => args.cmd?.startsWith("dd if='" + file.replaceAll("'", "'\\''") + "' "))) continue;
+      if (item.internal_chat_message_metadata_passthrough?.turn_id !== turnId || calls.has(item.call_id))
+        fail('RUNTIME_EVIDENCE_MISMATCH', 'attempt call has a foreign or duplicate identity');
+      calls.set(item.call_id, args.cmd);
+      commands.set(args.cmd, (commands.get(args.cmd) || 0) + 1);
+    }
+    if (item.type === 'custom_tool_call_output' && calls.has(item.call_id)) {
+      if (outputs.has(item.call_id) || item.internal_chat_message_metadata_passthrough?.turn_id !== turnId)
+        fail('RUNTIME_EVIDENCE_MISMATCH', 'attempt output has a foreign or repeated identity');
+      outputs.add(item.call_id);
+      if (!Array.isArray(item.output) || item.output.length !== 2) fail('RUNTIME_EVIDENCE_MISMATCH', 'attempt output is incomplete');
+      if (Buffer.byteLength(JSON.stringify(item.output)) > 252 * 1024)
+        fail('READER_CAPACITY_UNSUPPORTED', 'attempt output exceeds its original envelope bound');
+      let output; try { output = JSON.parse(item.output[1].text); } catch {}
+      if (!object(output) || !Number.isSafeInteger(output.exit_code) || output.session_id !== undefined)
+        fail('RUNTIME_EVIDENCE_MISMATCH', 'attempt lacks an observed terminal call outcome');
+      if (output.exit_code === 0) successful++; else failed++;
+    }
+  }
+  const cliRecords = cli.split('\n').filter(Boolean).map(line => JSON.parse(line));
+  if (cliRecords.length > 10000) fail('RUNTIME_EVIDENCE_INVALID', 'attempt CLI exceeds its original record bound');
+  const sessions = cliRecords.filter(record => record.type === 'thread.started').map(record => record.thread_id);
+  if (sessions.length !== 1 || sessions[0] !== cliSessionId)
+    fail('RUNTIME_EVIDENCE_MISMATCH', 'attempt CLI has a foreign or ambiguous session');
+  const usage = cliRecords.filter(record => record.type === 'turn.completed');
+  const unavailable = {};
+  const tokens = {};
+  for (const key of ['input_tokens', 'cached_input_tokens', 'output_tokens']) {
+    const observed = usage.length === 1 ? usage[0].usage?.[key] : undefined;
+    tokens[key] = Number.isSafeInteger(observed) && observed >= 0 ? observed : null;
+    if (tokens[key] === null) unavailable['tokens.' + key] = 'matching original CLI has no single bounded usage observation';
+  }
+  const taskStart = records.findIndex(record => record.type === 'event_msg' && record.payload?.type === 'task_started'
+    && record.payload.turn_id === turnId);
+  const timestamps = taskStart < 0 ? [] : records.slice(taskStart).map(record => Date.parse(record.timestamp));
+  const elapsed = timestamps.length > 1 && timestamps.every(Number.isFinite)
+    && timestamps.every((value, index) => !index || value >= timestamps[index - 1])
+    ? timestamps.at(-1) - timestamps[0] : null;
+  if (elapsed === null) unavailable.elapsed_ms = 'matching native attempt lacks complete monotonic timestamps';
+  return { dispatch_id: dispatchId, session_id: sessionId, cli_session_id: cliSessionId, turn_id: turnId, status,
+    successful_calls: successful, failed_calls: failed, pending_calls: calls.size - outputs.size,
+    retries: [...commands.values()].reduce((sum, count) => sum + count - 1, 0), elapsed_ms: elapsed,
+    read_commands: [...commands.keys()],
+    call_ids: [...calls.keys()],
+    tokens, unavailable_reasons: unavailable };
 }
 
 function liveReviewChild(parentRaw, parentId, launch, env, worktree) {
@@ -2270,6 +2456,7 @@ module.exports = Object.freeze({
   reviewObservationData,
   freezeReviewProgress: freeze,
   verifyCompletedNativeLaunch,
+  verifyCompletedReviewConsumption,
   measureReaderCapacity,
   readerCapacityContract,
   verifyFileConsumption: (prepared, raw, dispatch, result) => verifyFileConsumption(prepared, raw, dispatch, result),
