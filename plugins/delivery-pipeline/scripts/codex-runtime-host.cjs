@@ -15,7 +15,9 @@ const EFFORTS = Object.freeze(['low', 'medium', 'high', 'xhigh', 'max']);
 const REQUIRED_HELP_MARKERS = Object.freeze(['--json', '--model', '--config', '--cd', '--ignore-user-config']);
 const NATIVE_SESSION_MAX_BYTES = 128 * 1024 * 1024;
 const NATIVE_SESSION_WAIT_MS = 5000;
-const GSD_ROLES = new Set(['gsd-phase-researcher', 'gsd-planner', 'gsd-plan-checker']);
+const REVIEW_AGENT_ROLES = Object.freeze({ 'shipyard-arch-review': 'arch-review',
+  'shipyard-arch-review-critical': 'arch-review', 'shipyard-integrator': 'integrator' });
+const GSD_ROLES = new Set(['gsd-phase-researcher', 'gsd-planner', 'gsd-plan-checker', ...Object.keys(REVIEW_AGENT_ROLES)]);
 const GSD_AGENT_MAX_BYTES = 256 * 1024;
 const PERMISSION_PROFILE = 'shipyard-runtime';
 const UNAVAILABLE_CODES = new Set([
@@ -799,7 +801,7 @@ function installedGsdAgent(role, env = {}) {
   });
 }
 
-function parseNativeParentSpawn(raw, parentId, role, model, effort) {
+function parseNativeParentSpawn(raw, parentId, role, model, effort, live = false) {
   parseNativeCodexTranscript(raw, parentId);
   const calls = [];
   const waits = [];
@@ -845,8 +847,9 @@ function parseNativeParentSpawn(raw, parentId, role, model, effort) {
       || path.basename(output.task_name) !== args.task_name) {
     fail('RUNTIME_EVIDENCE_MISMATCH', 'native spawn output does not identify the requested task');
   }
-  if (!waits.length) fail('RUNTIME_EVIDENCE_MISSING', 'native parent did not wait for its child');
+  if (!live && !waits.length) fail('RUNTIME_EVIDENCE_MISSING', 'native parent did not wait for its child');
   const waitResults = waits.map((wait) => {
+    if (live && !outputs.has(wait.call_id)) return { timed_out: true };
     if (typeof wait.call_id !== 'string' || !outputs.has(wait.call_id)) {
       fail('RUNTIME_EVIDENCE_MISSING', 'native parent has an unfinished child wait');
     }
@@ -891,7 +894,7 @@ function readNativeParentRaw(sessionId, evidence, env, now) {
   return raw;
 }
 
-function parseNativeChildTranscript(raw, childId, parentId, role, model, effort, agent, spawnEvidence) {
+function parseNativeChildTranscript(raw, childId, parentId, role, model, effort, agent, spawnEvidence, live = false) {
   const native = parseNativeCodexTranscript(raw, childId);
   if (native.selections.some((value) => value.model !== model || value.effort !== effort)) {
     fail('RUNTIME_EVIDENCE_MISMATCH', 'native child used a different model or reasoning effort');
@@ -909,7 +912,7 @@ function parseNativeChildTranscript(raw, childId, parentId, role, model, effort,
       developer.push(record.payload);
     }
   }
-  if (metadata.length !== 1 || !object(metadata[0]) || completed !== 1) {
+  if (metadata.length !== 1 || !object(metadata[0]) || (!live && completed !== 1)) {
     fail('RUNTIME_EVIDENCE_INVALID', 'native child has incomplete or duplicate execution evidence');
   }
   const meta = metadata[0];
@@ -1054,7 +1057,7 @@ async function verifyCompletedNativeLaunch(input = {}) {
   });
 }
 
-function verifyFileConsumption(prepared, nativeRaw, dispatchId, resultText, measurement) {
+function verifyFileConsumption(prepared, nativeRaw, dispatchId, resultText, measurement, prefix) {
   const checked = require('./codex-arch-review-context.cjs').verifyFileInput(prepared, {
     association: { dispatch_id: dispatchId },
   });
@@ -1073,17 +1076,20 @@ function verifyFileConsumption(prepared, nativeRaw, dispatchId, resultText, meas
   }
   const starts = records.map((record, index) => record.type === 'event_msg' && record.payload?.type === 'task_started' ? index : -1).filter(index => index >= 0);
   const completions = records.map((record, index) => record.type === 'event_msg' && record.payload?.type === 'task_complete' ? index : -1).filter(index => index >= 0);
-  if (starts.length !== 1 || completions.length !== 1 || completions[0] <= starts[0]
+  if (starts.length !== 1 || (prefix && records[starts[0]].payload.turn_id !== prefix.turn_id)
+      || (!prefix && (completions.length !== 1 || completions[0] <= starts[0]
       || records[completions[0]].payload.turn_id !== records[starts[0]].payload.turn_id
-      || records[completions[0]].payload.last_agent_message !== resultText)
+      || records[completions[0]].payload.last_agent_message !== resultText)))
     fail('RUNTIME_EVIDENCE_MISMATCH', 'file consumption is not bound to the original native completion');
   const finalIndex = records.findIndex((record, index) => index > starts[0] && record.type === 'response_item'
     && record.payload?.type === 'message' && record.payload.role === 'assistant' && record.payload.phase === 'final_answer');
-  if (finalIndex < 0 || records[finalIndex].payload.content?.map(block => block.text || '').join('') !== resultText)
+  if (!prefix && (finalIndex < 0 || records[finalIndex].payload.content?.map(block => block.text || '').join('') !== resultText))
     fail('RUNTIME_EVIDENCE_MISMATCH', 'native final response differs from the returned result');
   const emittedFinal = records.findIndex(record => record.type === 'event_msg'
     && record.payload?.type === 'item_completed' && record.payload.item?.phase === 'final_answer');
-  const boundary = Math.min(finalIndex, completions[0], emittedFinal < 0 ? completions[0] : emittedFinal);
+  const interrupted = prefix ? records.findIndex(record => record.type === 'event_msg'
+    && ['task_aborted', 'task_failed'].includes(record.payload?.type)) : -1;
+  const boundary = Math.min(...[finalIndex, completions[0], emittedFinal, interrupted].filter(index => index >= 0), records.length);
   const expected = [{ path: prepared.input_bundle.manifest_path,
     bytes: checked.manifest_bytes },
     ...checked.manifest.assets.map((asset, index) => ({ path: asset.path, bytes: checked.material[index] }))];
@@ -1093,7 +1099,11 @@ function verifyFileConsumption(prepared, nativeRaw, dispatchId, resultText, meas
       + ' skip=' + index + ' count=1 2>/dev/null | base64',
     bytes: asset.bytes.subarray(index * chunkBytes, (index + 1) * chunkBytes),
   })));
-  let at = 0;
+  let at = prefix?.start || 0;
+  const completedRanges = [];
+  const lines = nativeRaw.split('\n').filter(Boolean);
+  const prefixHasher = crypto.createHash('sha256');
+  let nativeBytes = 0;
   const pending = new Map();
   const calls = new Set();
   const credited = new Set();
@@ -1108,6 +1118,10 @@ function verifyFileConsumption(prepared, nativeRaw, dispatchId, resultText, meas
     return args;
   };
   for (const [index, record] of records.entries()) {
+    if (prefix) {
+      const line = lines[index] + '\n';
+      nativeBytes += Buffer.byteLength(line); prefixHasher.update(line);
+    }
     const item = record.payload;
     if (record.type !== 'response_item' || !item) continue;
     const custom = item.type === 'custom_tool_call';
@@ -1117,8 +1131,8 @@ function verifyFileConsumption(prepared, nativeRaw, dispatchId, resultText, meas
       else { try { args = JSON.parse(item.arguments); } catch { continue; } }
       if (!object(args)) continue;
       if (typeof args.cmd !== 'string' || !expected.some(asset => args.cmd.startsWith('dd if=' + quote(asset.path) + ' '))) continue;
-      if (item.internal_chat_message_metadata_passthrough?.turn_id !== undefined
-          && item.internal_chat_message_metadata_passthrough.turn_id !== records[starts[0]].payload.turn_id)
+      if ((prefix || item.internal_chat_message_metadata_passthrough?.turn_id !== undefined)
+          && item.internal_chat_message_metadata_passthrough?.turn_id !== records[starts[0]].payload.turn_id)
         fail('RUNTIME_EVIDENCE_MISMATCH', 'native read belongs to a foreign task');
       if (index <= starts[0] || index >= boundary) fail('RUNTIME_EVIDENCE_MISMATCH', 'native read is outside the original task input boundary');
       if (args.cmd !== reads[at]?.command || at >= prepared.input_bundle.max_chunk_reads)
@@ -1126,7 +1140,7 @@ function verifyFileConsumption(prepared, nativeRaw, dispatchId, resultText, meas
       if (pending.size) fail('RUNTIME_EVIDENCE_MISMATCH', 'ordered file read did not finish before the next read');
       if (typeof item.call_id !== 'string' || !item.call_id || calls.has(item.call_id))
         fail('RUNTIME_EVIDENCE_MISMATCH', 'native file read repeats a call identity');
-      if (v2 && (!custom || args.max_output_tokens !== 10000))
+      if ((v2 || prefix) && (!custom || args.max_output_tokens !== 10000))
         fail('RUNTIME_EVIDENCE_MISMATCH', 'native reader changed its supported output policy');
       calls.add(item.call_id);
       pending.set(item.call_id, { ...reads[at], custom });
@@ -1135,8 +1149,8 @@ function verifyFileConsumption(prepared, nativeRaw, dispatchId, resultText, meas
       fail('RUNTIME_EVIDENCE_MISMATCH', 'native range received repeated output credit');
     if (['function_call_output', 'custom_tool_call_output'].includes(item.type) && pending.has(item.call_id)) {
       if (index >= boundary) fail('RUNTIME_EVIDENCE_MISMATCH', 'native read completed after the result');
-      if (item.internal_chat_message_metadata_passthrough?.turn_id !== undefined
-          && item.internal_chat_message_metadata_passthrough.turn_id !== records[starts[0]].payload.turn_id)
+      if ((prefix || item.internal_chat_message_metadata_passthrough?.turn_id !== undefined)
+          && item.internal_chat_message_metadata_passthrough?.turn_id !== records[starts[0]].payload.turn_id)
         fail('RUNTIME_EVIDENCE_MISMATCH', 'native read output belongs to a foreign task');
       const read = pending.get(item.call_id);
       if (read.custom !== (item.type === 'custom_tool_call_output'))
@@ -1179,12 +1193,297 @@ function verifyFileConsumption(prepared, nativeRaw, dispatchId, resultText, meas
       encodedBytes += Buffer.byteLength(output);
       credited.add(item.call_id);
       pending.delete(item.call_id); at++;
+      if (prefix) completedRanges.push({ ordinal: at - 1, command: read.command,
+        sha256: crypto.createHash('sha256').update(read.bytes).digest('hex'), bytes: read.bytes.length,
+        call_id: item.call_id, native_bytes: nativeBytes, native_sha256: prefixHasher.copy().digest('hex') });
     }
   }
-  if (at !== reads.length || pending.size) fail('RUNTIME_EVIDENCE_MISMATCH', 'complete original native file consumption is unproven');
+  if (!prefix && (at !== reads.length || pending.size)) fail('RUNTIME_EVIDENCE_MISMATCH', 'complete original native file consumption is unproven');
   return { ...checked, chunk_reads: at, output_bytes: outputBytes, encoded_bytes: encodedBytes, largest_envelope_bytes: largestEnvelope,
+    ...(prefix ? { completed_ranges: completedRanges, pending_reads: pending.size } : {}),
     transport_accounting: { raw_bytes: expected.reduce((sum, asset) => sum + asset.bytes.length, 0),
       encoded_bytes: encodedBytes, nested_output_bytes: nestedBytes, outer_output_bytes: outputBytes } };
+}
+
+const reviewObservations = new WeakMap();
+const reviewResumptions = new WeakMap();
+const reviewHash = value => crypto.createHash('sha256').update(value).digest('hex');
+
+function reviewObservation(data, validate) {
+  const token = Object.freeze({});
+  reviewObservations.set(token, { data: freeze(data), validate });
+  return token;
+}
+
+function reviewObservationData(token) {
+  const observation = reviewObservations.get(token);
+  if (!observation) fail('REVIEW_PROGRESS_INVALID', 'caller bytes cannot mint original native progress');
+  observation.validate();
+  return observation.data;
+}
+
+function readReviewNativeFile(file, worktree, live = false) {
+  if (typeof file !== 'string' || fs.realpathSync(file) !== file || pathInside(worktree, file))
+    fail('REVIEW_RESTART_REQUIRED', 'native semantic context must be original and outside the writer tree');
+  let ancestor = path.dirname(file);
+  for (;;) {
+    const stat = fs.lstatSync(ancestor);
+    if (!stat.isDirectory() || stat.isSymbolicLink() || (stat.uid !== process.getuid() && stat.uid !== 0)
+        || ((stat.mode & 0o002) && !(stat.mode & 0o1000)))
+      fail('REVIEW_RESTART_REQUIRED', 'native context has an untrusted ancestor');
+    if (path.dirname(ancestor) === ancestor) break;
+    ancestor = path.dirname(ancestor);
+  }
+  const physical = fs.lstatSync(file);
+  if (!physical.isFile() || physical.isSymbolicLink() || physical.uid !== process.getuid()
+      || (physical.mode & 0o022) || physical.size > NATIVE_SESSION_MAX_BYTES)
+    fail('REVIEW_RESTART_REQUIRED', 'native context is not a bounded original regular file');
+  const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+  try {
+    const before = fs.fstatSync(fd);
+    const bytes = Buffer.alloc(before.size);
+    let at = 0;
+    while (at < bytes.length) {
+      const count = fs.readSync(fd, bytes, at, bytes.length - at, at);
+      if (!count) fail('REVIEW_OBSERVATION_BUSY', 'native context changed during observation');
+      at += count;
+    }
+    const after = fs.fstatSync(fd), current = fs.lstatSync(file);
+    if ([before, after, current].some(stat => ['dev', 'ino', 'size', 'mtimeMs', 'ctimeMs']
+      .some(key => stat[key] !== physical[key])))
+      fail('REVIEW_OBSERVATION_BUSY', 'native context changed during observation');
+    const complete = live ? bytes.subarray(0, bytes.lastIndexOf(0x0a) + 1) : bytes;
+    return new TextDecoder('utf-8', { fatal: true }).decode(complete);
+  } finally { fs.closeSync(fd); }
+}
+
+function originalReviewFile(sessionId, env, worktree, live = false) {
+  const home = path.resolve(env.CODEX_HOME || process.env.CODEX_HOME || path.join(os.homedir(), '.codex'));
+  const matches = nativeSessionCandidates(path.join(home, 'sessions'), sessionId);
+  if (!matches.length) return null;
+  if (matches.length !== 1) fail('REVIEW_RESTART_REQUIRED', 'original review session is ambiguous');
+  readReviewNativeFile(matches[0], worktree, live);
+  return matches[0];
+}
+
+function validateReviewNative(raw, sessionId, selection) {
+  const parsed = parseNativeCodexTranscript(raw, sessionId);
+  const records = raw.split('\n').filter(Boolean).map(line => JSON.parse(line));
+  if (!/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(sessionId)
+      || records.filter(record => record.type === 'session_meta').length !== 1
+      || parsed.selections.some(value => value.model !== selection.model || value.effort !== selection.effort))
+    fail('REVIEW_RESTART_REQUIRED', 'native review UUID, provider or selection changed');
+  if (records.some(record => ['compacted', 'context_compaction'].includes(record.type)
+      || record.payload?.type === 'context_compacted'))
+    fail('REVIEW_RESTART_REQUIRED', 'native semantic context requires an authenticated handoff or full review');
+  for (const record of records.filter(record => record.type === 'turn_context')) {
+    const context = record.payload;
+    if ((context.cwd !== undefined && context.cwd !== selection.worktree)
+        || (context.sandbox_policy?.type !== undefined && context.sandbox_policy.type !== selection.sandbox_mode))
+      fail('REVIEW_RESTART_REQUIRED', 'native review changed worktree or sandbox');
+  }
+  return { parsed, records };
+}
+
+function verifyProtectedReviewPrefix(progress, prepared, raw) {
+  const parentContext = progress.original_launch.parent_context;
+  if (parentContext) {
+    const parent = Buffer.from(readReviewNativeFile(parentContext.file, progress.identity.worktree));
+    if (reviewHash(parent.subarray(0, parentContext.bytes)) !== parentContext.sha256)
+      fail('REVIEW_RESTART_REQUIRED', 'original typed parent association changed');
+  }
+  const bytes = Buffer.from(raw);
+  const boundary = progress.range.native_bytes;
+  if (bytes.length < boundary || reviewHash(bytes.subarray(0, boundary)) !== progress.range.native_sha256)
+    fail('REVIEW_RESTART_REQUIRED', 'original native semantic context was replaced or truncated');
+  const prefix = bytes.subarray(0, boundary).toString('utf8');
+  validateReviewNative(prefix, progress.session_id, { ...progress.original_launch, worktree: progress.identity.worktree });
+  const checked = verifyFileConsumption(prepared, prefix, progress.identity.dispatch_id, null, null,
+    { turn_id: progress.turn_id });
+  if (checked.pending_reads || checked.chunk_reads !== progress.completed_ranges
+      || checked.completed_ranges.length !== progress.chain.length
+      || checked.completed_ranges.some((range, index) => Object.keys(range).some(key => range[key] !== progress.chain[index].range[key])))
+    fail('REVIEW_RESTART_REQUIRED', 'protected ranges differ from original native outputs');
+  return checked;
+}
+
+function reviewOriginInactive(progress) {
+  if (progress.state.original_exit) return;
+  const pid = progress.original_launch.process_id;
+  if (!Number.isSafeInteger(pid) || pid < 1) fail('REVIEW_RESTART_REQUIRED', 'original native process identity is missing');
+  let dead = false;
+  try { process.kill(pid, 0); } catch (error) { if (error.code === 'ESRCH') dead = true; }
+  if (!dead) fail('REVIEW_RESTART_REQUIRED', 'original native reviewer process is active or uncertain');
+}
+
+function readSchedule(prepared) {
+  const checked = require('./codex-arch-review-context.cjs').verifyFileInput(prepared);
+  const quote = value => "'" + value.replaceAll("'", "'\\''") + "'";
+  return [{ path: prepared.input_bundle.manifest_path, bytes: checked.manifest_bytes },
+    ...checked.manifest.assets.map((asset, index) => ({ path: asset.path, bytes: checked.material[index] }))]
+    .flatMap(asset => Array.from({ length: Math.ceil(asset.bytes.length / prepared.input_bundle.chunk_bytes) }, (_, index) => ({
+      command: 'dd if=' + quote(asset.path) + ' bs=' + prepared.input_bundle.chunk_bytes
+        + ' skip=' + index + ' count=1 2>/dev/null | base64',
+    })));
+}
+
+function freshReviewTurn(raw, resultText) {
+  const records = raw.split('\n').filter(Boolean).map(line => JSON.parse(line));
+  const starts = records.filter(record => record.type === 'event_msg' && record.payload?.type === 'task_started');
+  const turn = starts[0]?.payload.turn_id;
+  const completion = records.filter(record => record.type === 'event_msg' && record.payload?.type === 'task_complete');
+  const finals = records.filter(record => record.type === 'response_item' && record.payload?.type === 'message'
+    && record.payload.role === 'assistant' && record.payload.phase === 'final_answer');
+  if (records.some(record => record.type === 'event_msg' && ['task_failed', 'task_aborted', 'turn_failed', 'error'].includes(record.payload?.type))
+      || starts.length !== 1 || completion.length !== 1 || finals.length !== 1 || typeof turn !== 'string' || !turn
+      || records.indexOf(starts[0]) >= records.indexOf(finals[0]) || records.indexOf(finals[0]) >= records.indexOf(completion[0])
+      || completion[0].payload.turn_id !== turn || completion[0].payload.last_agent_message !== resultText
+      || finals[0].payload.internal_chat_message_metadata_passthrough?.turn_id !== turn
+      || !Array.isArray(finals[0].payload.content) || !finals[0].payload.content.length
+      || finals[0].payload.content.some(block => block.type !== 'output_text' || typeof block.text !== 'string')
+      || finals[0].payload.content.map(block => block.text).join('') !== resultText)
+    fail('RUNTIME_EVIDENCE_MISMATCH', 'continuation lacks one fresh ordered completed judgment');
+  return turn;
+}
+
+function verifyResumedReview(progress, prepared, nativeRaw, resultText) {
+  const identity = require('./codex-arch-review-context.cjs').reviewProgressIdentity(prepared);
+  if (Object.keys(identity).some(key => JSON.stringify(identity[key]) !== JSON.stringify(progress.identity[key])))
+    fail('REVIEW_RESTART_REQUIRED', 'current subject changed before fresh final admission');
+  verifyProtectedReviewPrefix(progress, prepared, nativeRaw);
+  const resume = progress.state.resume;
+  const bytes = Buffer.from(nativeRaw);
+  if (bytes.length <= resume.native_bytes || reviewHash(bytes.subarray(0, resume.native_bytes)) !== resume.native_sha256)
+    fail('REVIEW_RESTART_REQUIRED', 'original conversation differs from the protected pre-resume context');
+  const newRaw = bytes.subarray(resume.native_bytes).toString('utf8');
+  const turn = freshReviewTurn(newRaw, resultText);
+  if (turn === progress.turn_id) fail('RUNTIME_EVIDENCE_MISMATCH', 'historical turn cannot become a fresh judgment');
+  const contexts = newRaw.split('\n').filter(Boolean).map(line => JSON.parse(line))
+    .filter(record => record.type === 'turn_context');
+  if (!contexts.length || contexts.some(record => record.payload?.turn_id !== undefined && record.payload.turn_id !== turn))
+    fail('REVIEW_RESTART_REQUIRED', 'resumed turn lacks native selection attestation');
+  const checked = verifyFileConsumption(prepared, newRaw, progress.identity.dispatch_id, resultText, null,
+    { turn_id: turn, start: progress.completed_ranges });
+  if (checked.pending_reads || checked.chunk_reads !== require('./codex-arch-review-context.cjs').verifyFileInput(prepared).chunk_reads)
+    fail('RUNTIME_EVIDENCE_MISMATCH', 'fresh review has incomplete total current coverage');
+  return { ...checked, turn_id: turn };
+}
+
+function liveReviewChild(parentRaw, parentId, launch, env, worktree) {
+  const complete = parentRaw.slice(0, parentRaw.lastIndexOf('\n') + 1);
+  const parentRecords = complete.split('\n').filter(Boolean).map(line => JSON.parse(line));
+  const spawnCall = parentRecords.find(record => record.type === 'response_item'
+    && record.payload?.type === 'function_call' && record.payload.name === 'spawn_agent');
+  if (!spawnCall) return null;
+  const at = parentRecords.findIndex(record => record.type === 'response_item'
+    && record.payload?.type === 'function_call_output' && record.payload.call_id === spawnCall.payload.call_id);
+  if (at < 0) return null;
+  const parentPrefix = complete.split('\n').filter(Boolean).slice(0, at + 1).join('\n') + '\n';
+  const spawn = parseNativeParentSpawn(parentPrefix, parentId, launch.agent.role, launch.model, launch.effort, true);
+  const home = path.resolve(env.CODEX_HOME || process.env.CODEX_HOME || path.join(os.homedir(), '.codex'));
+  const matches = [];
+  for (const offset of [-1, 0, 1]) {
+    const date = new Date(); date.setDate(date.getDate() + offset);
+    const directory = sessionDirectory(path.join(home, 'sessions'), date);
+    if (!fs.existsSync(directory)) continue;
+    const names = fs.readdirSync(directory);
+    if (names.length > 4096) fail('REVIEW_RESTART_REQUIRED', 'native child inventory exceeds its bound');
+    for (const name of names.filter(name => name.endsWith('.jsonl'))) {
+      const file = path.join(directory, name);
+      const raw = readReviewNativeFile(file, worktree, true);
+      let meta;
+      try { meta = JSON.parse(raw.slice(0, raw.indexOf('\n'))); } catch { continue; }
+      if (meta.type === 'session_meta' && meta.payload?.parent_thread_id === parentId)
+        matches.push({ file, raw: raw.slice(0, raw.lastIndexOf('\n') + 1), session_id: meta.payload.id });
+    }
+  }
+  if (matches.length > 1) fail('REVIEW_RESTART_REQUIRED', 'original parent has ambiguous semantic children');
+  if (!matches.length) return null;
+  const child = matches[0];
+  let evidence;
+  try {
+    evidence = parseNativeChildTranscript(child.raw, child.session_id, parentId, launch.agent.role,
+      launch.model, launch.effort, launch.agent, spawn, true);
+    verifyTaskRelay(child.raw, launch.task, spawn);
+    const records = child.raw.split('\n').filter(Boolean).map(line => JSON.parse(line));
+    const firstCall = records.find(record => record.type === 'response_item' && toolCommand(record.payload) !== null)?.payload;
+    const output = records.find(record => record.type === 'response_item'
+      && ['custom_tool_call_output', 'function_call_output'].includes(record.payload?.type)
+      && record.payload.call_id === firstCall?.call_id)?.payload;
+    const taskBytes = fs.readFileSync(launch.task.path, 'utf8');
+    if (reviewHash(taskBytes) !== launch.task.sha256) fail('REVIEW_RESTART_REQUIRED', 'original reviewer task changed');
+    if (!firstCall || !readsExactPath(toolCommand(firstCall), launch.task.path) || !output
+        || !toolOutput(output).includes(taskBytes) || !toolOutput(output).includes('TASK_SHA256=' + launch.task.sha256)) return null;
+  } catch (error) {
+    if (['RUNTIME_EVIDENCE_MISSING', 'TASK_RELAY_UNVERIFIED'].includes(error.code)) return null;
+    throw error;
+  }
+  return { ...child, evidence, parent_context: { file: originalReviewFile(parentId, env, worktree),
+    bytes: Buffer.byteLength(parentPrefix), sha256: reviewHash(parentPrefix) } };
+}
+
+function createReviewObserver(prepared, launch, env, onProgress, processId) {
+  const collector = require('./codex-arch-review-context.cjs');
+  const identity = collector.reviewProgressIdentity(prepared);
+  const authority = require('./role-artifact.cjs');
+  let reference = null;
+  const observer = sessionId => {
+    const parentFile = originalReviewFile(sessionId, env, identity.worktree, true);
+    if (!parentFile) return;
+    const parentWhole = readReviewNativeFile(parentFile, identity.worktree, true);
+    const semantic = launch.agent ? liveReviewChild(parentWhole, sessionId, launch, env, identity.worktree) : null;
+    if (launch.agent && !semantic) return;
+    const file = semantic?.file || parentFile;
+    const reviewerSession = semantic?.session_id || sessionId;
+    const parentSession = semantic ? sessionId : null;
+    const whole = semantic?.raw || parentWhole;
+    const raw = whole.slice(0, whole.lastIndexOf('\n') + 1);
+    if (!raw) return;
+    const pendingRecords = raw.split('\n').filter(Boolean).map(line => JSON.parse(line));
+    if (!pendingRecords.some(record => record.type === 'turn_context')) return;
+    const { records } = validateReviewNative(raw, reviewerSession, { ...launch, worktree: identity.worktree });
+    const starts = records.filter(record => record.type === 'event_msg' && record.payload?.type === 'task_started');
+    if (!starts.length) return;
+    if (starts.length !== 1) fail('REVIEW_RESTART_REQUIRED', 'original reviewer has ambiguous turns');
+    const turn = starts[0].payload.turn_id;
+    if (typeof turn !== 'string' || !turn) fail('REVIEW_RESTART_REQUIRED', 'original reviewer has no native turn identity');
+    const prefix = verifyFileConsumption(prepared, raw, identity.dispatch_id, null, null, { turn_id: turn });
+    if (!prefix.completed_ranges.length) return;
+    const input = { input_transport: 'host-files', input_bundle: prepared.input_bundle, prompt: prepared.prompt,
+      input_bytes: prepared.input_bytes, inputTokens: prepared.inputTokens };
+    const { sha256: _childHash, ...childAssociation } = semantic?.evidence || {};
+    const pid = processId();
+    if (!Number.isSafeInteger(pid) || pid < 1) fail('REVIEW_RESTART_REQUIRED', 'original native process lacks a positive identity');
+    const savedLaunch = semantic ? { ...launch, process_id: pid, parent_context: semantic.parent_context,
+      native_child_evidence: { ...childAssociation, schema: 'shipyard.codex-native-child-association.v1' } } : { ...launch, process_id: pid };
+    const token = reviewObservation({ identity, input, launch: savedLaunch, session_id: reviewerSession, parent_session_id: parentSession,
+      turn_id: turn, native_file: file, ranges: prefix.completed_ranges,
+      stream: reviewHash(JSON.stringify([identity.manifest_sha256, launch.runtime_launch.command_digest, reviewerSession, turn])) }, () => {
+      const current = readReviewNativeFile(file, identity.worktree, true);
+      const last = prefix.completed_ranges.at(-1);
+      if (reviewHash(Buffer.from(current).subarray(0, last.native_bytes)) !== last.native_sha256)
+        fail('REVIEW_RESTART_REQUIRED', 'original observed output changed before protected persistence');
+      collector.verifyFileInput(prepared);
+    });
+    const next = authority.persistReviewProgress(token);
+    if (next && next.sha256 !== reference?.sha256) {
+      reference = next;
+      if (typeof onProgress === 'function') onProgress(reference);
+    }
+  };
+  observer.finish = (exit, transcript) => {
+    if (!reference) return;
+    const token = reviewObservation({ worktree: identity.worktree, reference, process_id: processId(),
+      exit: { code: exit.code ?? null, signal: exit.signal ?? null, transcript } }, () => {
+      if (transcript) {
+        const bytes = fs.readFileSync(transcript.path);
+        if (bytes.length !== transcript.bytes || reviewHash(bytes) !== transcript.sha256)
+          fail('REVIEW_RESTART_REQUIRED', 'original interrupted CLI transcript changed');
+      }
+    });
+    authority.finishOriginalReviewObservation(token);
+  };
+  return observer;
 }
 
 function launchPrompt(prompt, content) {
@@ -1290,28 +1589,34 @@ function createCodexCliLauncher(options = {}) {
       fail('RUNTIME_CAPABILITY_MISSING', 'Codex host does not support reasoning effort ' + effort);
     }
     const content = launchOptions.agent_file_content;
+    const typedRole = launchOptions.gsd_role;
+    const agent = typedRole ? installedGsdAgent(typedRole, environment) : null;
     const fileInput = launchOptions.input_prepared;
+    const resumeReview = launchOptions.resume_review ? reviewResumptions.get(launchOptions.resume_review) : null;
+    if (launchOptions.resume_review && !resumeReview) fail('REVIEW_PROGRESS_INVALID', 'serialized continuation has no host claim');
     const fileTransport = launchOptions.input_transport !== undefined || launchOptions.input_bundle !== undefined || fileInput !== undefined;
     if (fileTransport) {
       const collector = require('./codex-arch-review-context.cjs');
       if (launchOptions.input_transport !== 'host-files' || !collector.isPreparedFileInput(fileInput)
           || JSON.stringify(fileInput.input_bundle) !== JSON.stringify(launchOptions.input_bundle)
-          || launchOptions.gsd_role !== undefined) fail('INVALID_INPUT', 'file transport lacks private producer authority');
+          || (typedRole && REVIEW_AGENT_ROLES[typedRole] !== fileInput.manifest.role)) fail('INVALID_INPUT', 'file transport lacks private producer authority');
       const normalizeRelay = value => value.replace(/launch_digest=[a-f0-9]{64}/g, 'launch_digest=' + '0'.repeat(64));
-      if (typeof prompt !== 'string' || normalizeRelay(prompt) !== normalizeRelay(fileInput.prompt))
+      if (typeof prompt !== 'string' || normalizeRelay(prompt) !== normalizeRelay(resumeReview ? resumeReview.prompt : fileInput.prompt))
         fail('INVALID_INPUT', 'native relay differs from private prepared input');
-      const checked = collector.verifyFileInput(fileInput, { association: { dispatch_id: launchOptions.dispatch_id,
+      const checked = collector.verifyFileInput(fileInput, { association: { dispatch_id: resumeReview ? resumeReview.progress.identity.dispatch_id : launchOptions.dispatch_id,
         run_id: scope.run_id, ticket: scope.ticket, phase: scope.phase } });
+      if (checked.manifest.snapshot.worktree !== fs.realpathSync(scope.worktree))
+        fail('SCOPE_MISMATCH', 'prepared review input belongs to a different physical worktree');
       if ((checked.manifest.binding?.agent_sha256 && checked.manifest.binding.agent_sha256 !== launchOptions.agent_file_digest)
-          || Buffer.byteLength(generatedInstructions(content)) + 2 !== checked.manifest.accounting.generated_instruction_bytes)
+          || Buffer.byteLength(agent ? agent.instructions : resumeReview?.progress.original_launch.agent
+          ? installedGsdAgent(resumeReview.progress.original_launch.agent.role, environment).instructions : generatedInstructions(content))
+          + 2 !== checked.manifest.accounting.generated_instruction_bytes)
         fail('STALE_GENERATED_AGENT', 'selected generated instruction accounting changed');
     }
 
-    const typedRole = launchOptions.gsd_role;
     if (typedRole && (content !== undefined || launchOptions.agent_file || options.ephemeral === true)) {
       fail('INVALID_INPUT', 'typed GSD launch cannot use a static handoff or ephemeral transcript');
     }
-    const agent = typedRole ? installedGsdAgent(typedRole, environment) : null;
     if (content !== undefined) {
       const actualDigest = crypto.createHash('sha256').update(content).digest('hex');
       if (actualDigest !== launchOptions.agent_file_digest) {
@@ -1325,7 +1630,8 @@ function createCodexCliLauncher(options = {}) {
     const env = { ...process.env, ...environment };
     const task = agent ? writeTaskFile(taskDir, scope, launchOptions.dispatch_id, launchPrompt(prompt)) : null;
     try {
-    const protectedPaths = normalizeProtectedPaths([...signerProtectionPaths(env, scope.worktree), ...hostProtectedPaths]);
+    const protectedPaths = normalizeProtectedPaths([...signerProtectionPaths(env, scope.worktree), ...hostProtectedPaths,
+      ...(resumeReview?.progress.original_launch.runtime_launch.sandbox_evidence.protected_paths || [])]);
     const evidenceWritePath = staticEvidenceWritePath(scope.worktree, launchOptions, sandbox);
     for (const key of [
       'CODEX_MODEL', 'CODEX_MODEL_REASONING_EFFORT', 'CODEX_THREAD_ID', 'CODEX_SESSION_ID',
@@ -1338,12 +1644,16 @@ function createCodexCliLauncher(options = {}) {
           || key === 'GNUPGHOME' || key === 'GPG_AGENT_INFO' || key === 'GPG_TTY'
           || key === 'SSH_AUTH_SOCK' || key === 'SSH_AGENT_PID') delete env[key];
     }
+    if (resumeReview && (resumeReview.prepared !== fileInput || model !== resumeReview.progress.original_launch.model
+        || effort !== resumeReview.progress.original_launch.effort || sandbox !== resumeReview.progress.original_launch.sandbox_mode
+        || launchOptions.agent_file_digest !== resumeReview.progress.original_launch.agent_file_digest))
+      fail('REVIEW_RESTART_REQUIRED', 'continuation changed original selection, instructions or sandbox');
     const args = [
-      'exec', '--json', '--model', model,
+      'exec', ...(resumeReview ? ['resume'] : []), '--json', '--model', model,
       '--config', 'model_reasoning_effort="' + effort + '"',
       '--config', 'model_provider="openai"',
       '--config', 'forced_login_method="chatgpt"',
-      '--cd', scope.worktree, '--ignore-user-config',
+      ...(!resumeReview ? ['--cd', scope.worktree] : []), '--ignore-user-config',
     ];
     args.push(...signerPermissionProfileArgs(protectedPaths, sandbox, evidenceWritePath));
     if (agent) {
@@ -1354,6 +1664,7 @@ function createCodexCliLauncher(options = {}) {
     }
     if (options.ephemeral === true) args.push('--ephemeral');
     if (options.approveForMe === true || launchOptions.approve_for_me === true) args.push('--approve-for-me');
+    if (resumeReview) args.push(resumeReview.progress.session_id);
     args.push('-');
     const startedAt = Date.now();
     const commandDigest = crypto.createHash('sha256').update(JSON.stringify(args)).digest('hex');
@@ -1379,6 +1690,12 @@ function createCodexCliLauncher(options = {}) {
       applied_model: model, applied_effort: effort,
       observed_model: model, observed_effort: effort,
     });
+    const observeReview = fileTransport && !resumeReview && (launchOptions.review_progress === true
+      || (fileInput.manifest.binding?.ticket_set && fileInput.manifest.binding?.merge_base))
+      ? createReviewObserver(fileInput, { model, effort, sandbox_mode: sandbox,
+        agent_file: agent?.file || launchOptions.agent_file || null,
+        agent_file_digest: agent?.sha256 || launchOptions.agent_file_digest || null,
+        ...(agent ? { agent, task } : {}), runtime_launch: runtimeLaunch }, env, launchOptions.onReviewProgress, () => child?.pid) : null;
     let child;
     try {
       child = spawnImpl(executable, args, {
@@ -1433,7 +1750,7 @@ function createCodexCliLauncher(options = {}) {
       }
     };
     const inspectSessionRecords = (chunk, flush = false) => {
-      if (typeof launchOptions.onSessionStarted !== 'function') return;
+      if (typeof launchOptions.onSessionStarted !== 'function' && !observeReview && !resumeReview) return;
       sessionLineBuffer += chunk.toString('utf8');
       const lines = sessionLineBuffer.split(/\r?\n/);
       sessionLineBuffer = lines.pop() || '';
@@ -1447,6 +1764,16 @@ function createCodexCliLauncher(options = {}) {
         catch (_) {}
       }
     };
+    const observe = () => {
+      if (!observeReview || !announcedSessionId || sessionCallbackError) return;
+      try { observeReview(announcedSessionId); } catch (error) {
+        if (error.code === 'REVIEW_OBSERVATION_BUSY') return;
+        sessionCallbackError = error;
+        try { child.kill(); } catch {}
+      }
+    };
+    const observerTimer = observeReview ? setInterval(observe, 250) : null;
+    if (observerTimer) observerTimer.unref();
     let stdoutBytes = 0, stderrBytes = 0;
     child.stdout.on('data', (chunk) => {
       const bytes = Buffer.from(chunk);
@@ -1458,6 +1785,7 @@ function createCodexCliLauncher(options = {}) {
       }
       stdout.push(bytes);
       inspectSessionRecords(bytes);
+      observe();
     });
     child.stderr.on('data', (chunk) => {
       const bytes = Buffer.from(chunk);
@@ -1475,6 +1803,7 @@ function createCodexCliLauncher(options = {}) {
       child.stdin.end();
     } catch (error) {
       try { child.kill(); } catch (_) {}
+      if (observerTimer) clearInterval(observerTimer);
       fail('RUNTIME_UNAVAILABLE', 'Codex process input failed: ' + error.message);
     }
     const exit = await new Promise((resolve) => {
@@ -1488,10 +1817,17 @@ function createCodexCliLauncher(options = {}) {
       child.on('close', (code, signal) => finish({ code, signal }));
       child.on('exit', (code, signal) => finish({ code, signal }));
     });
+    if (observerTimer) clearInterval(observerTimer);
     inspectSessionRecords(Buffer.alloc(0), true);
-    if (sessionCallbackError) throw sessionCallbackError;
+    observe();
     const rawStdout = Buffer.concat(stdout).toString('utf8');
     const rawStderr = Buffer.concat(stderr).toString('utf8');
+    const transcriptScope = resumeReview || observeReview ? { ...scope, run_id: scope.run_id + '-' + launchOptions.dispatch_id } : scope;
+    if ((observeReview || resumeReview) && announcedSessionId) {
+      const historical = writeTranscript(transcriptDir, transcriptScope, announcedSessionId, rawStdout);
+      if (observeReview) observeReview.finish(exit, historical);
+    }
+    if (sessionCallbackError) throw sessionCallbackError;
     if (exit.error) fail('RUNTIME_UNAVAILABLE', 'Codex process failed: ' + exit.error.message);
     if (exit.code !== 0) {
       fail('RUNTIME_UNAVAILABLE', 'Codex process exited ' + (exit.code === null ? 'without a code' : exit.code), {
@@ -1514,7 +1850,18 @@ function createCodexCliLauncher(options = {}) {
           fail('RUNTIME_EVIDENCE_MISMATCH', 'CLI final is outside its unique completed turn');
         }
       }
-      const verified = await verifyCompletedNativeLaunch({
+      if (resumeReview && parsed.session_id !== resumeReview.progress.session_id)
+        fail('REVIEW_RESTART_REQUIRED', 'CLI resumed a different reviewer session');
+      let resumedConsumption;
+      const verified = resumeReview ? await (async () => {
+        const raw = readReviewNativeFile(resumeReview.progress.native_file, scope.worktree);
+        const native = parseNativeCodexTranscript(raw, parsed.session_id);
+        const nativeEvidence = freeze({ schema: 'shipyard.codex-native-session-evidence.v1', version: 1,
+          ...native, bytes: Buffer.byteLength(raw), file: path.basename(resumeReview.progress.native_file) });
+        validateReviewNative(raw, parsed.session_id, { model, effort, sandbox_mode: sandbox, worktree: scope.worktree });
+        resumedConsumption = verifyResumedReview(resumeReview.progress, fileInput, raw, parsed.records[cliFinal]?.item.text);
+        return { native_session_evidence: nativeEvidence, last_agent_message: parsed.records[cliFinal]?.item.text };
+      })() : await verifyCompletedNativeLaunch({
         session_id: parsed.session_id, selection: { model, effort }, agent, env,
         resultText: parsed.records[cliFinal]?.item.text,
         allowTimedOutWait: false, startedAt, task,
@@ -1525,9 +1872,13 @@ function createCodexCliLauncher(options = {}) {
           && record.item?.type === 'agent_message').at(-1);
         if (!message || parsed.records.indexOf(message) > parsed.records.findLastIndex(record => record.type === 'turn.completed'))
           fail('RUNTIME_EVIDENCE_MISMATCH', 'file input result is outside the original completed turn');
-        const resultText = message.item.text || '';
-        const consumed = verifyFileConsumption(fileInput,
-          readNativeParentRaw(parsed.session_id, nativeEvidence, env), launchOptions.dispatch_id, resultText);
+        const resultText = agent ? verified.last_agent_message : message.item.text || '';
+        const semanticRaw = resumeReview ? readReviewNativeFile(resumeReview.progress.native_file, scope.worktree)
+          : agent && verified.native_child_evidence
+          ? readReviewNativeFile(originalReviewFile(verified.native_child_evidence.session_id, env, scope.worktree), scope.worktree)
+          : readNativeParentRaw(parsed.session_id, nativeEvidence, env);
+        const consumed = resumedConsumption || verifyFileConsumption(fileInput, semanticRaw, launchOptions.dispatch_id,
+          agent ? verified.last_agent_message : resultText);
         let result;
         try { result = JSON.parse(resultText.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '')); } catch {}
         for (const [key, expected] of Object.entries({ input_manifest_sha256: fileInput.input_bundle.manifest_sha256,
@@ -1543,14 +1894,16 @@ function createCodexCliLauncher(options = {}) {
         model: args[args.indexOf('--model') + 1],
         effort: (args.find((value) => value.startsWith('model_reasoning_effort=')) || '').match(/^model_reasoning_effort="([^"]+)"$/)?.[1],
       }, nativeEvidence);
-      const typedEvidence = verified.native_child_evidence || null;
+      const typedEvidence = verified.native_child_evidence || (resumeReview?.progress.original_launch.native_child_evidence
+        ? { ...resumeReview.progress.original_launch.native_child_evidence, schema: 'shipyard.codex-native-child-evidence.v1', sha256: nativeEvidence.sha256,
+          fresh_turn_id: resumedConsumption.turn_id } : null);
       if (agent) {
         const current = installedGsdAgent(agent.role, environment);
         if (current.file !== agent.file || current.sha256 !== agent.sha256) {
           fail('STALE_GSD_AGENT', 'installed GSD role changed during native launch');
         }
       }
-      const expectedTranscript = transcriptEvidence(transcriptDir, scope, parsed.session_id, rawStdout);
+      const expectedTranscript = transcriptEvidence(transcriptDir, transcriptScope, parsed.session_id, rawStdout);
       const runtimeEvidence = {
         schema: 'shipyard.codex-runtime-evidence.v1',
         version: 1,
@@ -1577,6 +1930,15 @@ function createCodexCliLauncher(options = {}) {
         observed_model: selection.model,
         observed_effort: selection.effort,
         native_session_evidence: nativeEvidence,
+        ...(resumeReview ? { review_continuation: { schema: 'shipyard.review-continuation.v1',
+          progress: resumeReview.reference, original_dispatch_id: resumeReview.progress.identity.dispatch_id,
+          original_launch: resumeReview.progress.original_launch.runtime_launch,
+          original_exit: resumeReview.progress.state.original_exit,
+          original_process_id: resumeReview.progress.original_launch.process_id,
+          original_session_id: resumeReview.progress.session_id, original_turn_id: resumeReview.progress.turn_id,
+          fresh_turn_id: resumedConsumption.turn_id, semantic_context: 'exact-native-session',
+          inherited_ranges: resumeReview.progress.completed_ranges,
+          newly_completed_ranges: resumedConsumption.chunk_reads - resumeReview.progress.completed_ranges } } : {}),
         ...(typedEvidence ? { native_child_evidence: typedEvidence } : {}),
         ...(fileTransport ? { input_transport: 'host-files', input_bundle: fileInput.input_bundle,
           input_accounting: fileInput.manifest.accounting,
@@ -1591,7 +1953,7 @@ function createCodexCliLauncher(options = {}) {
         ...(expectedTranscript ? { transcript: expectedTranscript } : {}),
       };
       const evidence = {
-        launch_id: 'codex-' + parsed.session_id,
+        launch_id: 'codex-' + parsed.session_id + (resumeReview ? '-' + reviewHash(launchOptions.dispatch_id).slice(0, 24) : ''),
         session_id: parsed.session_id,
         process_id: Number.isInteger(child.pid) ? child.pid : undefined,
         applied_model: selection.model,
@@ -1610,6 +1972,17 @@ function createCodexCliLauncher(options = {}) {
           agent_file_digest: agent.sha256,
         } : {}),
       };
+      if (resumeReview) {
+        const token = reviewObservation({ worktree: scope.worktree, reference: resumeReview.reference,
+          evidence: runtimeEvidence, turn_id: resumedConsumption.turn_id }, () => {
+          const identity = require('./codex-arch-review-context.cjs').reviewProgressIdentity(fileInput);
+          if (Object.keys(identity).some(key => JSON.stringify(identity[key]) !== JSON.stringify(resumeReview.progress.identity[key])))
+            fail('REVIEW_RESTART_REQUIRED', 'current subject changed before protected final admission');
+          const raw = readReviewNativeFile(resumeReview.progress.native_file, scope.worktree);
+          if (reviewHash(raw) !== nativeEvidence.sha256) fail('REVIEW_RESTART_REQUIRED', 'fresh final changed before protected admission');
+        });
+        require('./role-artifact.cjs').completeReviewContinuation(token);
+      }
       if (typeof launchOptions.onNativeCompleted === 'function') {
         launchOptions.onNativeCompleted(freeze({
           launch_id: evidence.launch_id,
@@ -1620,7 +1993,7 @@ function createCodexCliLauncher(options = {}) {
           spawn_evidence: verified.spawn_evidence,
         }));
       }
-      const transcript = writeTranscript(transcriptDir, scope, parsed.session_id, rawStdout);
+      const transcript = writeTranscript(transcriptDir, transcriptScope, parsed.session_id, rawStdout);
       if ((transcript === null) !== (expectedTranscript === null)
           || (transcript && (transcript.path !== expectedTranscript.path
             || transcript.bytes !== expectedTranscript.bytes || transcript.sha256 !== expectedTranscript.sha256))) {
@@ -1728,6 +2101,9 @@ function createCodexRuntimeHost(options = {}) {
         input_prepared: input.input_prepared,
         sandbox_mode: selection.sandbox_mode || input.sandbox_mode,
         gsd_role: input.gsd_role,
+        resume_review: input.resume_review,
+        review_progress: input.review_progress,
+        onReviewProgress: input.onReviewProgress,
         onProcessSpawned: input.onProcessSpawned,
         onSessionStarted: input.onSessionStarted,
         onNativeCompleted: input.onNativeCompleted,
@@ -1744,6 +2120,67 @@ function createCodexRuntimeHost(options = {}) {
       throw error;
     }
   };
+  const resumeReview = async (selection, context = {}) => {
+    assertOwner();
+    validateContext(context);
+    const allowed = new Set(['progress', 'dispatch_id', 'role', 'run_id', 'runtime', 'provider',
+      'onProcessSpawned', 'onSessionStarted', 'onNativeCompleted', 'onTranscriptWritten', 'onCompleted']);
+    if (Object.keys(context).some(key => !allowed.has(key)))
+      fail('REVIEW_PROGRESS_INVALID', 'continuation accepts protected references and host callbacks, never caller transcript or cursor authority');
+    const authority = require('./role-artifact.cjs');
+    const collector = require('./codex-arch-review-context.cjs');
+    const dispatchId = text(context.dispatch_id, 'dispatch_id', 256);
+    const reference = context.progress;
+    const progress = authority.readReviewProgress({ worktree: scope.worktree, reference });
+    if ((context.role !== undefined && context.role !== progress.identity.role)
+        || progress.state.resume || dispatchId === progress.identity.dispatch_id
+        || progress.identity.run_id !== scope.run_id || progress.identity.ticket !== scope.ticket
+        || progress.identity.phase !== scope.phase)
+      fail('REVIEW_RESTART_REQUIRED', 'continuation lacks a fresh dispatch in the exact original scope');
+    const original = progress.original_launch;
+    reviewOriginInactive(progress);
+    let nativeSelection = selection;
+    if (original.agent) {
+      const agent = installedGsdAgent(original.agent.role, options.env);
+      if (agent.file !== original.agent.file || agent.sha256 !== original.agent.sha256)
+        fail('REVIEW_RESTART_REQUIRED', 'original typed reviewer instructions changed');
+      nativeSelection = { ...selection, agent_file: agent.file, agent_file_digest: agent.sha256,
+        agent_file_content: fs.readFileSync(agent.file, 'utf8') };
+    }
+    if (nativeSelection.model !== original.model || (nativeSelection.effort || nativeSelection.reasoning_effort) !== original.effort
+        || nativeSelection.sandbox_mode !== original.sandbox_mode || nativeSelection.agent_file_digest !== original.agent_file_digest
+        || (nativeSelection.agent_file || null) !== original.agent_file
+        || reviewHash(nativeSelection.agent_file_content || '') !== original.agent_file_digest)
+      fail('REVIEW_RESTART_REQUIRED', 'continuation changed its original reviewer selection or instructions');
+    const prepared = collector.restoreReviewInput(progress);
+    const raw = readReviewNativeFile(progress.native_file, scope.worktree);
+    verifyProtectedReviewPrefix(progress, prepared, raw);
+    const nativeContext = validateReviewNative(raw, progress.session_id, { ...original, worktree: scope.worktree });
+    if (original.agent && !nativeContext.records.some(record => record.type === 'event_msg'
+        && ['task_aborted', 'task_complete'].includes(record.payload?.type) && record.payload.turn_id === progress.turn_id))
+      fail('REVIEW_RESTART_REQUIRED', 'typed semantic reviewer is still active or lacks an authenticated interruption');
+    if (!raw.endsWith('\n')) fail('REVIEW_RESTART_REQUIRED', 'original native context has unfinished serialized evidence');
+    const remaining = readSchedule(prepared).slice(progress.completed_ranges);
+    const prompt = 'Continue the identical review in this original native conversation. Preserve its conclusions, assumptions and limitations.\n'
+      + 'The trusted host authenticated ' + progress.completed_ranges + ' ordered ranges. Do not reread those ranges.\n'
+      + 'Resume at the following exact command, then continue every remaining ordered manifest/asset range under the original reader contract:\n'
+      + (remaining[0]?.command || 'All required material is already authenticated; issue a fresh current judgment.') + '\n'
+      + 'Use the original final judgment contract and identity echoes, with total input_chunk_reads=' + readSchedule(prepared).length + '.\n'
+      + 'INPUT_MANIFEST_SHA256=' + prepared.input_bundle.manifest_sha256;
+    const claim = reviewObservation({ worktree: scope.worktree, reference, dispatch_id: dispatchId,
+      native_bytes: Buffer.byteLength(raw), native_sha256: reviewHash(raw) }, () => {
+      collector.verifyFileInput(prepared);
+      if (readReviewNativeFile(progress.native_file, scope.worktree) !== raw)
+        fail('REVIEW_RESTART_REQUIRED', 'original conversation changed before continuation claim');
+    });
+    const claimed = authority.claimReviewContinuation(claim);
+    const token = Object.freeze({});
+    reviewResumptions.set(token, { progress: claimed, reference, prepared, prompt });
+    try {
+      return await launch(nativeSelection, { ...context, gsd_role: undefined, resume_review: token, input_transport: 'host-files',
+        input_prepared: prepared, input_bundle: prepared.input_bundle, prompt });
+    } finally { reviewResumptions.delete(token); }
+  };
   const host = {
     schema: SCHEMA,
     version: VERSION,
@@ -1757,6 +2194,7 @@ function createCodexRuntimeHost(options = {}) {
     requireRuntimeEvidence: true,
     launch: (selection, context) => launch(selection, context),
     launchStatic: (selection, context) => launch(selection, context),
+    resumeReview,
     launchTypedGsd: (selection, context) => launch(selection, context),
   };
   return Object.freeze(host);
@@ -1817,6 +2255,20 @@ module.exports = Object.freeze({
   signerPermissionProfileArgs,
   nativeSessionCandidates,
   readNativeCodexSession,
+  validateReviewRestoration: (progress, prepared) => {
+    if (!require('./role-artifact.cjs').isAuthenticatedReviewProgress(progress))
+      fail('REVIEW_PROGRESS_INVALID', 'restore lacks original protected progress');
+    reviewOriginInactive(progress);
+    const raw = readReviewNativeFile(progress.native_file, progress.identity.worktree);
+    const { records } = validateReviewNative(raw, progress.session_id, { ...progress.original_launch, worktree: progress.identity.worktree });
+    const starts = records.filter(record => record.type === 'event_msg' && record.payload?.type === 'task_started');
+    if (progress.state.resume || starts.length !== 1 || starts[0].payload.turn_id !== progress.turn_id)
+      fail('REVIEW_RESTART_REQUIRED', 'original conversation has intervening or claimed review turns');
+    verifyFileConsumption(prepared, raw, progress.identity.dispatch_id, null, null, { turn_id: progress.turn_id });
+    return verifyProtectedReviewPrefix(progress, prepared, raw);
+  },
+  reviewObservationData,
+  freezeReviewProgress: freeze,
   verifyCompletedNativeLaunch,
   measureReaderCapacity,
   readerCapacityContract,
