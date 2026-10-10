@@ -322,10 +322,11 @@ test('second runtime adapter fixture seals a fresh full current judgment without
     const stream = fs.readFileSync(path.resolve(__dirname, '../..', streamPath), 'utf8').trim().split('\n')
       .map(JSON.parse).filter(record => !record.shipyard_fixture);
     const session = crypto.randomUUID();
-    let launched = 0;
+    let launched = 0, suppliedUserInput;
     const options = { ...projectOptions(f), storageRoot: path.join(f.root, 'second-adapter'), controller: false,
       createRuntimeHost({ scope, recorderDir, transcriptDir }) {
         return claudeRuntime.createClaudeRuntimeHost({ scope, recorderDir, transcriptDir,
+          startEvidenceFile: path.join(transcriptDir, 'session-start.json'),
           uuid: () => session, sessionTranscriptRoot: path.join(f.root, 'second-native'),
           probe: { status: 'available', executable: 'claude-fixture', runtime_version: streamRegistry.cli_version,
             capabilities: { assistantTranscriptEvidence: true, restrictedTools: true, sandboxedBash: true } },
@@ -338,6 +339,7 @@ test('second runtime adapter fixture seals a fresh full current judgment without
                 launched++;
                 assert.ok(framedInput.endsWith('\n'));
                 const userInput = JSON.parse(framedInput.slice(0, -1));
+                suppliedUserInput = userInput;
                 assert.equal(userInput.type, 'user');
                 assert.equal(userInput.message.role, 'user');
                 const prompt = userInput.message.content;
@@ -353,17 +355,19 @@ test('second runtime adapter fixture seals a fresh full current judgment without
                   blocking_count: 0, summary: 'Fresh full adapter fixture judgment', findings: [] };
                 write(f.worktree, '.planning/phases/' + f.phase + '/INTEGRATION.md', 'Complete fresh inline adapter fixture evidence.\n');
                 const model = args[args.indexOf('--model') + 1], effort = args[args.indexOf('--effort') + 1];
+                const observedModel = model === 'sonnet' ? 'claude-sonnet-5' : model === 'fable' ? 'claude-fable-5' : model;
                 const init = template(stream, record => record.type === 'system' && record.subtype === 'init');
                 Object.assign(init, { session_id: session, model, cwd: f.worktree });
                 const assistant = template(stream, record => record.type === 'assistant');
-                assistant.session_id = session; assistant.message.model = model;
+                assistant.session_id = session; assistant.message.model = observedModel;
+                assistant.message.content[0].input = result;
                 const final = template(stream, record => record.type === 'result');
                 Object.assign(final, { session_id: session, is_error: false, structured_output: result, result: JSON.stringify(result) });
                 const nativeFile = path.join(f.root, 'second-native/project', session + '.jsonl');
                 fs.mkdirSync(path.dirname(nativeFile), { recursive: true });
                 const nativeAssistant = structuredClone(assistant);
                 Object.assign(nativeAssistant, { sessionId: session, effort });
-                fs.writeFileSync(nativeFile, serialize([nativeAssistant]));
+                fs.writeFileSync(nativeFile, serialize([{ ...userInput, sessionId: session }, nativeAssistant]));
                 const settings = JSON.parse(args[args.indexOf('--settings') + 1]);
                 const hookArgs = settings.hooks.SessionStart[0].hooks[0].args;
                 const hookValue = name => hookArgs[hookArgs.indexOf(name) + 1];
@@ -384,6 +388,14 @@ test('second runtime adapter fixture seals a fresh full current judgment without
     assert.equal(fresh.result.coverage.mode, 'full');
     assert.deepEqual(fresh.result.ticket_set.map(item => item.id), ['T-49-01', 'T-49-02']);
     assert.equal(fresh.dispatch.receipt.compliance, 'verified');
+    const receipt = fresh.dispatch.receipt;
+    const native = fs.readFileSync(path.join(path.dirname(receipt.transcript.path), 'projects', receipt.selection_evidence.transcript.path));
+    assert.equal(native.length, receipt.selection_evidence.transcript.bytes);
+    assert.equal(hash(native), receipt.selection_evidence.transcript.sha256);
+    const users = native.toString('utf8').trim().split('\n').map(JSON.parse)
+      .filter(row => row.type === 'user' && row.sessionId === receipt.session_id);
+    assert.equal(users.length, 1);
+    assert.deepEqual(users[0].message, suppliedUserInput.message);
     assert.ok(fs.existsSync(fresh.artifact.ref));
   });
 });
