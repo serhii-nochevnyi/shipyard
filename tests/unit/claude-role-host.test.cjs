@@ -242,7 +242,7 @@ function fakeEvidenceLines(model, effort, lines) {
 
 function fakeRuntimeFactory(fixture, options = {}) {
   const live = fixture.kind === 'pr-sentinel' ? null : livePr(fixture);
-  return ({ scope, controller, recorderDir }) => {
+  return ({ scope, controller, recorderDir, transcriptDir }) => {
     const recorder = createDurableRecorder(recorderDir);
     const runtime = {
       scope: { worktree: scope.worktree.path },
@@ -295,6 +295,7 @@ function fakeRuntimeFactory(fixture, options = {}) {
           fs.writeFileSync(evidencePath, `Integration check at ${context.combined_diff.head}.\n`);
         }
         options.mutateResult?.(result, packet);
+        if (options.originalStream) return { output: result };
         const applicationEvidence = options.badEvidence ? fakeEvidence(selection.model, 'low')
           : options.firstResponseLines ? fakeEvidenceLines(selection.model, selection.effort, options.firstResponseLines)
           : fakeEvidence(selection.model, selection.effort, options.firstResponseUsage);
@@ -303,6 +304,59 @@ function fakeRuntimeFactory(fixture, options = {}) {
       },
       applicationEvidence({ result }) { return result.applicationEvidence; },
     };
+    if (options.originalStream) {
+      const claudeRuntime = require('../../plugins/delivery-pipeline/scripts/claude-runtime-host.cjs');
+      const captureStart = require('../../plugins/delivery-pipeline/scripts/claude-agent-start-hook.cjs').capture;
+      const registry = JSON.parse(fs.readFileSync(path.join(__dirname, '../fixtures/captured/boundaries/claude-stream.json')));
+      const streamPath = registry.fixtures.find(file => file.endsWith('/claude-stream-research.jsonl'));
+      assert.ok(streamPath, 'registered original Claude stream is required');
+      const records = fs.readFileSync(path.resolve(__dirname, '../..', streamPath), 'utf8').trim().split('\n')
+        .map(JSON.parse).filter(record => !record.shipyard_fixture);
+      const template = predicate => structuredClone(records.find(predicate));
+      const serialize = rows => rows.map(row => JSON.stringify(row) + '\n').join('');
+      const session = crypto.randomUUID();
+      return claudeRuntime.createClaudeRuntimeHost({ scope, controller, recorderDir, transcriptDir,
+        startEvidenceFile: path.join(transcriptDir, 'session-start.json'),
+        uuid: () => session, sessionTranscriptRoot: path.join(fixture.storageRoot, 'native'),
+        probe: { status: 'available', executable: 'claude-fixture', runtime_version: registry.cli_version,
+          capabilities: { assistantTranscriptEvidence: true, restrictedTools: true, sandboxedBash: true } },
+        spawn(_file, args) {
+          const { EventEmitter } = require('node:events');
+          const child = new EventEmitter(); child.pid = process.pid;
+          child.stdout = new EventEmitter(); child.stderr = new EventEmitter();
+          let framedInput = '';
+          child.stdin = { write(value) { framedInput += value; }, end() {
+            process.nextTick(async () => {
+              try {
+                assert.ok(framedInput.endsWith('\n'));
+                const userInput = JSON.parse(framedInput.slice(0, -1));
+                const model = args[args.indexOf('--model') + 1], effort = args[args.indexOf('--effort') + 1];
+                const observedModel = model === 'sonnet' ? 'claude-sonnet-5' : model === 'fable' ? 'claude-fable-5' : model;
+                const { output } = await runtime.agent(userInput.message.content, { model, effort });
+                const init = template(row => row.type === 'system' && row.subtype === 'init');
+                Object.assign(init, { session_id: session, model, cwd: fixture.root });
+                const assistant = template(row => row.type === 'assistant');
+                assistant.session_id = session; assistant.message.model = observedModel;
+                assistant.message.content[0].input = output;
+                const final = template(row => row.type === 'result');
+                Object.assign(final, { session_id: session, is_error: false, structured_output: output, result: JSON.stringify(output) });
+                const nativeFile = path.join(fixture.storageRoot, 'native/project', session + '.jsonl');
+                fs.mkdirSync(path.dirname(nativeFile), { recursive: true });
+                const nativeAssistant = { ...structuredClone(assistant), sessionId: session, effort };
+                fs.writeFileSync(nativeFile, serialize([{ ...userInput, sessionId: session }, nativeAssistant]));
+                const settings = JSON.parse(args[args.indexOf('--settings') + 1]);
+                const hookArgs = settings.hooks.SessionStart[0].hooks[0].args;
+                const hookValue = name => hookArgs[hookArgs.indexOf(name) + 1];
+                captureStart({ hook_event_name: 'SessionStart', source: 'startup', session_id: session,
+                  transcript_path: nativeFile, cwd: fixture.root }, {
+                  evidenceFile: hookValue('--evidence-file'), expectedSession: hookValue('--expected-session') });
+                child.stdout.emit('data', Buffer.from(serialize([init, assistant, final]))); child.emit('close', 0, null);
+              } catch (error) { child.emit('error', error); }
+            });
+          } };
+          return child;
+        } });
+    }
     return runtime;
   };
 }
@@ -515,6 +569,7 @@ test('arch-review launches through ADR-014 and seals only the matching PR judgme
 for (const scenario of ['seals a phase verdict and re-owes changed context', 'rejects roster removal during launch']) {
 test(`aggregate architecture ${scenario}`, async () => {
   const fixture = setupRepository('arch-review');
+  fixture.storageRoot = fs.realpathSync(fixture.storageRoot);
   try {
     const epic = `epic/${PHASE}`;
     git(fixture.root, ['branch', '-m', epic]);
@@ -544,6 +599,7 @@ test(`aggregate architecture ${scenario}`, async () => {
     write(fixture.root, '.shipyard-role-artifacts/foreign/evidence.md', 'Unadmitted foreign evidence.');
     let packet;
     const launched = createClaudeRoleHost(hostOptions(fixture, {
+      originalStream: true,
       onLaunch(prompt) {
         if (scenario === 'rejects roster removal during launch') fs.unlinkSync(roster.record_path);
         packet = packetFromPrompt(prompt);
