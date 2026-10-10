@@ -281,3 +281,204 @@ test('completed physical accounting refuses caller authority and extra selector 
   for (const selectors of [{}, { worktree: '/', progress: {}, receipt_store: '/', dispatch_id: 'x', successful_reads: 1 },
     { prepared: {}, native: {}, offsets: [0] }]) assert.throws(() => observeCompletedConsumption(selectors));
 });
+
+
+test('complete independently verified matrix has a functional decision path with fixture provenance retained', () => {
+  const runner = require('../smoke/phase49-final-review-acceptance.cjs');
+  assert.equal(typeof runner.aggregateMatrix, 'function');
+  assert.equal(typeof runner.verifyCapacityReference, 'function');
+  assert.equal(typeof runner.verifyFocusedObservations, 'function');
+  assert.equal(typeof runner.verifyOriginalReads, 'function');
+  const value = fixture();
+  const decision = runner.aggregateMatrix(value, 'fixture-only');
+  assert.equal(decision.status, 'fixture-pass');
+  assert.equal(decision.empirical_acceptance, false);
+  assert.throws(() => runner.aggregateMatrix(value, 'native'), /private verified matrix/);
+});
+
+
+function aggregationFixture() {
+  const source = fixture();
+  return { subject: source.subject, benchmark: { successful_reads: 830, material_bytes: 6530992 },
+    installed: { installed: true, selection_sha256: source.subject.candidate },
+    capacity: [clone(source.capacity), clone(source.capacity)],
+    observations: ['arch-review', 'integrator'].flatMap(role => [...source.checks, 'hidden-delta'].map(kind => ({ role, kind }))),
+    traces: source.traces.map(trace => ({ role: trace.role, native_trace_verified: true,
+      verdict: { authenticated: true, dispatch_id: trace.final.dispatch },
+      lineage: { mode: 'incremental', baseline: { role: trace.role, dispatch_id: trace.baseline.dispatch }, limitations: [] },
+      equivalent: { complete: true, original_digest: 'd'.repeat(64) }, contributors: [{ other_contributor: true }],
+      physical: { attempts: [
+        { status: 'interrupted', dispatch_id: trace.continuation.original_dispatch, session_id: trace.continuation.original_session, turn_id: 'old' },
+        { status: 'completed', dispatch_id: trace.final.dispatch, session_id: trace.continuation.resumed_session, turn_id: 'new' }],
+        coverage: { prefix: { successful_reads: 2 }, new: { successful_reads: 50 } } },
+      metrics: trace.metrics, baseline_setup: { metrics: trace.baseline_setup } })) };
+}
+test('complete aggregation uses the native decision checks under explicit fixture-only provenance', () => {
+  const { aggregateMatrix } = require('../smoke/phase49-final-review-acceptance.cjs');
+  assert.deepEqual(aggregateMatrix(aggregationFixture(), 'fixture-only'),
+    { status: 'fixture-pass', empirical_acceptance: false, holds: [] });
+  assert.throws(() => aggregateMatrix(aggregationFixture(), 'native'), /private verified matrix/);
+  const missing = aggregationFixture(); missing.traces[0].metrics.successful_reads = metric(null, 'original unavailable');
+  const result = aggregateMatrix(missing, 'fixture-only');
+  assert.equal(result.status, 'hold'); assert.equal(result.empirical_acceptance, false);
+});
+for (const [name, mutate] of Object.entries({
+  'installed selection substitution': v => v.installed.selection_sha256 = 'f'.repeat(64),
+  'missing physical original capacity': v => v.capacity.pop(),
+  'truncated first probe': v => v.capacity[0].complete = false,
+  'borrowed semantic session': v => v.traces[1].physical.attempts[0].session_id = v.traces[0].physical.attempts[0].session_id,
+  'missing hidden contributor observation': v => v.observations.pop(),
+  'missing independent baseline': v => v.traces[1].lineage.baseline.dispatch_id = v.traces[0].lineage.baseline.dispatch_id,
+  'missing eligible setup cost': v => v.traces[0].baseline_setup.metrics = null,
+  'non-equivalent original content': v => v.traces[1].equivalent.original_digest = 'f'.repeat(64),
+  'unverified original obligations': v => v.traces[0].equivalent.complete = false,
+  'copied verdict success label': v => v.traces[0].verdict.authenticated = false,
+  'missing authenticated contributor repair': v => v.traces[0].contributors = [],
+  'uncredited successful call hidden': v => v.traces[0].metrics.successful_reads.value = 2,
+  'target exceeded': v => v.traces[0].metrics.successful_reads.value = 84,
+  'replayed completed dispatch': v => v.traces[0].physical.attempts[1].dispatch_id = 'baseline',
+  'missing interruption': v => v.traces[0].physical.attempts[0].status = 'completed',
+})) test('aggregation refuses ' + name, () => {
+  const { aggregateMatrix } = require('../smoke/phase49-final-review-acceptance.cjs');
+  const value = aggregationFixture(); mutate(value);
+  assert.throws(() => aggregateMatrix(value, 'fixture-only'));
+});
+
+test('read-only original envelope observer derives complete costs and rejects tampering', t => {
+  const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
+  const { execFileSync } = require('node:child_process');
+  const acceptance = require('../smoke/phase49-final-review-acceptance.cjs');
+  const context = require('../../plugins/delivery-pipeline/scripts/codex-arch-review-context.cjs');
+  const runtime = require('../../plugins/delivery-pipeline/scripts/codex-runtime-host.cjs');
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'phase49-original-observer-')));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const worktree = path.join(root, 'worktree'); fs.mkdirSync(worktree);
+  const git = (...args) => execFileSync('git', ['-C', worktree, ...args], { stdio: 'pipe' });
+  git('init'); git('config', 'commit.gpgsign', 'false'); git('config', 'user.name', 'Fixture'); git('config', 'user.email', 'fixture@example.invalid');
+  fs.writeFileSync(path.join(worktree, 'source.txt'), 'fixture'); git('add', '.'); git('commit', '-m', 'isolated fixture');
+  const prepared = context.prepareFileInput({ worktree, ticket: 'T-49-11', phase: 49, run_id: 'isolated' },
+    JSON.stringify({ fixture_only: true, content: 'x'.repeat(131072) }), { role: 'research', dispatchId: 'fixture-original', storageRoot: path.join(root, 'inputs') });
+  const checked = context.verifyFileInput(prepared);
+  const nativeTemplate = fs.readFileSync(path.join(__dirname, '../fixtures/captured/codex-agent-stream-parent.jsonl'), 'utf8')
+    .split('\n').filter(Boolean).map(JSON.parse);
+  const cliTemplate = fs.readFileSync(path.join(__dirname, '../fixtures/captured/codex-agent-stream-exec.jsonl'), 'utf8')
+    .split('\n').filter(Boolean).map(JSON.parse).filter(row => row.type);
+  const pick = predicate => clone(nativeTemplate.find(predicate));
+  const session = 'isolated-fixture-session-00000001', result = '{"fixture_only":true}', turn = 'fixture-turn';
+  const meta = pick(row => row.type === 'session_meta'); meta.payload.id = session; meta.payload.session_id = session;
+  const selection = pick(row => row.type === 'turn_context'); selection.payload.model = 'fixture-model'; selection.payload.effort = 'low';
+  const start = pick(row => row.payload?.type === 'task_started'); start.payload.turn_id = turn;
+  const final = pick(row => row.payload?.role === 'assistant' && row.payload.phase === 'final_answer');
+  final.payload.content = [{ type: 'output_text', text: result }];
+  const end = pick(row => row.payload?.type === 'task_complete'); end.payload.turn_id = turn; end.payload.last_agent_message = result;
+  const call = pick(row => row.payload?.type === 'function_call'), output = pick(row => row.payload?.type === 'function_call_output');
+  const quote = value => "'" + value.replaceAll("'", "'\\''") + "'";
+  const rows = [meta, selection, start]; let ordinal = 0;
+  for (const asset of [{ path: prepared.input_bundle.manifest_path, bytes: checked.manifest_bytes },
+    ...checked.manifest.assets.map((asset, i) => ({ path: asset.path, bytes: checked.material[i] }))]) {
+    for (let offset = 0; offset < asset.bytes.length; offset += 8192) {
+      const input = clone(call), response = clone(output), id = 'fixture-call-' + ordinal++;
+      input.payload.name = 'exec_command'; input.payload.call_id = id;
+      input.payload.internal_chat_message_metadata_passthrough = { turn_id: turn };
+      input.payload.arguments = JSON.stringify({ cmd: 'dd if=' + quote(asset.path) + ' bs=8192 skip=' + (offset / 8192) + ' count=1 2>/dev/null | base64' });
+      response.payload.call_id = id;
+      response.payload.output = JSON.stringify({ exit_code: 0, output: asset.bytes.subarray(offset, offset + 8192).toString('base64') });
+      rows.push(input, response);
+    }
+  }
+  rows.push(final, end);
+  rows.forEach((row, i) => row.timestamp = new Date(1700000000000 + i).toISOString());
+  for (const row of cliTemplate) {
+    if (row.type === 'thread.started') row.thread_id = session;
+    if (row.item?.type === 'agent_message') row.item.text = result;
+  }
+  const write = (name, rows) => {
+    const file = path.join(root, name); const bytes = Buffer.from(rows.map(row => JSON.stringify(row)).join('\n') + '\n');
+    fs.writeFileSync(file, bytes, { mode: 0o600 });
+    return { path: file, bytes: bytes.length, sha256: crypto.createHash('sha256').update(bytes).digest('hex') };
+  };
+  const native = write('native.jsonl', rows), transcript = write('cli.jsonl', cliTemplate);
+  const record = { dispatch_id: 'fixture-original', receipt: { role: 'research', applied_model: 'fixture-model', applied_effort: 'low',
+    runtime_evidence: { input_bundle: prepared.input_bundle, transcript,
+      native_session_evidence: { session_id: session, sha256: native.sha256, bytes: native.bytes, file: path.basename(native.path) } } } };
+  const observed = acceptance.verifyOriginalReads(record, native);
+  assert.equal(observed.metrics.successful_reads.value, checked.chunk_reads);
+  assert.equal(observed.metrics.raw_bytes.value, checked.manifest_bytes.length + checked.material[0].length);
+  assert.equal(observed.metrics.failed_calls.value, 0); assert.equal(observed.metrics.retries.value, 0);
+  assert.equal(observed.metrics.tokens.value, null); assert.equal(observed.metrics.elapsed_ms.value, rows.length - 3);
+  assert.equal(observed.full_128k_ranges, 0);
+  assert.equal(acceptance.verifyFixture(authority(fixture())).empirical_acceptance, false);
+  // Preserve the registered native shapes; the observer sees the real nested object contract.
+  const wrapped = [clone(meta), clone(selection), clone(start)]; let wrappedOrdinal = 0;
+  for (const asset of [{ path: prepared.input_bundle.manifest_path, bytes: checked.manifest_bytes },
+    ...checked.manifest.assets.map((asset, i) => ({ path: asset.path, bytes: checked.material[i] }))]) {
+    for (let offset = 0; offset < asset.bytes.length; offset += 131072) {
+      const input = clone(call), response = clone(output), id = 'wrapped-fixture-' + wrappedOrdinal++;
+      input.payload.type = 'custom_tool_call'; input.payload.name = 'exec'; input.payload.call_id = id;
+      delete input.payload.arguments;
+      input.payload.input = 'text(await tools.exec_command(' + JSON.stringify({
+        cmd: 'dd if=' + quote(asset.path) + ' bs=131072 skip=' + (offset / 131072) + ' count=1 2>/dev/null | base64',
+        max_output_tokens: 10000 }) + '))';
+      input.payload.internal_chat_message_metadata_passthrough = { turn_id: turn };
+      response.payload.type = 'custom_tool_call_output'; response.payload.call_id = id;
+      const encoded = asset.bytes.subarray(offset, offset + 131072).toString('base64').match(/.{1,76}/g).join('\n') + '\n';
+      response.payload.output = [{ type: 'text', text: 'Script completed\nWall time 0.01 seconds\nOutput:\n' },
+        { type: 'text', text: JSON.stringify({ exit_code: 0, output: encoded }) }];
+      wrapped.push(input, response);
+    }
+  }
+  wrapped.push(clone(final), clone(end));
+  wrapped.forEach((row, i) => row.timestamp = new Date(1700000000000 + i).toISOString());
+  const wrappedNative = write('wrapped.jsonl', wrapped);
+  const wrappedRecord = clone(record); wrappedRecord.receipt.runtime_evidence.native_session_evidence = {
+    session_id: session, sha256: wrappedNative.sha256, bytes: wrappedNative.bytes, file: path.basename(wrappedNative.path) };
+  const capacity = acceptance.verifyOriginalReads(wrappedRecord, wrappedNative, 131072);
+  assert.equal(capacity.full_128k_ranges, 1);
+  assert.equal(capacity.metrics.successful_reads.value, wrappedOrdinal);
+  assert(capacity.largest_envelope_bytes > 131072 * 4 / 3);
+  assert.equal(capacity.metrics.encoded_bytes.value, wrapped.filter(row => row.payload?.type === 'custom_tool_call_output')
+    .reduce((sum, row) => sum + Buffer.byteLength(JSON.parse(row.payload.output[1].text).output), 0));
+  const retried = clone(wrapped), failedInput = clone(wrapped[3]), failedOutput = clone(wrapped[4]);
+  failedInput.payload.call_id = 'failed-fixture-call'; failedOutput.payload.call_id = 'failed-fixture-call';
+  failedOutput.payload.output[1].text = JSON.stringify({ exit_code: 1, output: 'original failure' });
+  retried.splice(3, 0, failedInput, failedOutput);
+  retried.forEach((row, i) => row.timestamp = new Date(1700000000000 + i).toISOString());
+  const retriedNative = write('retried.jsonl', retried);
+  wrappedRecord.receipt.runtime_evidence.native_session_evidence = { session_id: session,
+    sha256: retriedNative.sha256, bytes: retriedNative.bytes, file: path.basename(retriedNative.path) };
+  const retriedCosts = acceptance.verifyOriginalReads(wrappedRecord, retriedNative, 131072);
+  assert.equal(retriedCosts.metrics.successful_reads.value, wrappedOrdinal);
+  assert.equal(retriedCosts.metrics.failed_calls.value, 1); assert.equal(retriedCosts.metrics.retries.value, 1);
+  assert.equal(retriedCosts.metrics.raw_bytes.value, capacity.metrics.raw_bytes.value);
+  assert(retriedCosts.metrics.nested_output_bytes.value > capacity.metrics.nested_output_bytes.value);
+  assert(retriedCosts.metrics.outer_output_bytes.value > capacity.metrics.outer_output_bytes.value);
+  const unsupported = clone(wrapped); unsupported[4].payload.output[1].text = '[' + unsupported[4].payload.output[1].text + ']';
+  const unsupportedNative = write('unsupported.jsonl', unsupported);
+  wrappedRecord.receipt.runtime_evidence.native_session_evidence = { session_id: session,
+    sha256: unsupportedNative.sha256, bytes: unsupportedNative.bytes, file: path.basename(unsupportedNative.path) };
+  assert.throws(() => acceptance.verifyOriginalReads(wrappedRecord, unsupportedNative, 131072), /unsupported nested output/);
+  const changed = clone(rows); changed[4].payload.output = JSON.stringify({ exit_code: 0, output: 'truncated' });
+  const changedNative = write('native.jsonl', changed);
+  record.receipt.runtime_evidence.native_session_evidence.sha256 = changedNative.sha256;
+  record.receipt.runtime_evidence.native_session_evidence.bytes = changedNative.bytes;
+  assert.throws(() => acceptance.verifyOriginalReads(record, changedNative), /truncated or altered/);
+  assert.throws(() => runtime.verifyFileConsumption({ input_bundle: prepared.input_bundle }, '', 'fixture-original', result), /private producer authority/);
+});
+
+
+test('original logical inventory retains duplicate purposes and complete source provenance', () => {
+  const { logicalInventory } = require('../smoke/phase49-final-review-acceptance.cjs');
+  const packets = require('../../plugins/delivery-pipeline/scripts/context-packet.cjs');
+  const content = 'complete original source';
+  const row = { path: 'source/a.cjs', sha256: crypto.createHash('sha256').update(content).digest('hex'), bytes: Buffer.byteLength(content), content };
+  const packet = { source_revision: 'a'.repeat(40), refs: [row], required_refs: [row], retained_evidence: { content } };
+  const inventory = value => logicalInventory({ material: [Buffer.from(JSON.stringify(value))] });
+  const original = inventory(packet);
+  assert.equal(original.length, 3);
+  assert.deepEqual(inventory(packets.encodeUniqueContent(packet)), original);
+  assert.equal(new Set(original).size, original.length, 'one physical dictionary member retains all logical purposes');
+  const changed = clone(packet); changed.source_revision = 'b'.repeat(40);
+  assert.notDeepEqual(inventory(changed), original, 'source revision cannot be silently replaced');
+  const omitted = clone(packet); delete omitted.retained_evidence;
+  assert.equal(inventory(omitted).length, 2, 'retained original evidence is a separate required obligation');
+});
