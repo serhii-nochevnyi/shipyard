@@ -439,6 +439,12 @@ function buildContextPacket(options = {}) {
     immutable_scope: scope,
     acceptance,
     verification,
+    logical_source_obligations: requiredRefs.map((ref, index) => ({
+      path: ref.path, source_revision: sourceRevision, sha256: ref.sha256, bytes: ref.bytes,
+      mandatory: true, purpose: planPath !== undefined && index === 0 ? 'planPath' : 'required reference',
+      provenance: planPath !== undefined && index === 0 ? 'planPath' : 'requiredRefs',
+    })).concat(optionalRefs.map(ref => ({ path: ref.path, source_revision: sourceRevision,
+      sha256: ref.sha256, bytes: ref.bytes, mandatory: false, purpose: 'optional reference', provenance: 'optionalRefs' }))),
     required_refs: uniqueRequiredRefs,
     optional_refs: optionalRefs,
     role_requirements: roleRequirements,
@@ -489,7 +495,7 @@ function buildContextPacket(options = {}) {
     packet.accounting.estimated_bytes = Buffer.byteLength(JSON.stringify(packetWithoutAccounting(packet)), 'utf8');
   }
   recordPacketMeasurement(packet, options);
-  return packet;
+  return options.uniqueContent === true ? encodeUniqueContent(packet) : packet;
 }
 
 function assertDigestRef(root, ref, label, allowOmitted = false) {
@@ -512,6 +518,7 @@ function assertDigestRef(root, ref, label, allowOmitted = false) {
 }
 
 function validateContextPacket(packet, expected = {}) {
+  if (packet?.schema === UNIQUE_CONTENT_SCHEMA) packet = decodeUniqueContent(packet);
   if (!object(packet)) fail('INVALID_CONTEXT_PACKET', 'context packet must be an object');
   rejectAuthorityKeys(packet);
   if (packet.schema !== CONTEXT_PACKET_SCHEMA || packet.version !== CONTEXT_PACKET_VERSION) {
@@ -572,6 +579,20 @@ function validateContextPacket(packet, expected = {}) {
   if ([...omittedPaths].some((source) => !packet.optional_refs.some((ref) => ref && ref.path === source))) {
     fail('INVALID_CONTEXT_PACKET', 'packet omitted optional reference index names an unknown source');
   }
+  if (packet.logical_source_obligations !== undefined) {
+    if (!Array.isArray(packet.logical_source_obligations)) fail('INVALID_CONTEXT_PACKET', 'logical source inventory is missing');
+    const sources = [...packet.required_refs, ...packet.optional_refs];
+    for (const obligation of packet.logical_source_obligations) {
+      const source = sources.find(ref => ref.path === obligation?.path);
+      if (!source || obligation.source_revision !== packet.source_revision || obligation.sha256 !== source.sha256
+          || obligation.bytes !== source.bytes || typeof obligation.purpose !== 'string' || !obligation.purpose
+          || typeof obligation.provenance !== 'string' || !obligation.provenance
+          || obligation.mandatory !== packet.required_refs.some(ref => ref.path === source.path))
+        fail('INVALID_CONTEXT_PACKET', 'invalid logical source provenance');
+    }
+    if (sources.some(ref => !packet.logical_source_obligations.some(item => item.path === ref.path)))
+      fail('INVALID_CONTEXT_PACKET', 'missing logical source obligation');
+  }
   if (!object(packet.backlog) || !object(packet.backlog.inventory) || !Array.isArray(packet.backlog.inventory.items)
       || !Array.isArray(packet.backlog.selected_ids) || !Array.isArray(packet.backlog.selected)) {
     fail('INVALID_CONTEXT_PACKET', 'packet backlog selection is missing');
@@ -620,6 +641,101 @@ function validateContextPacket(packet, expected = {}) {
   return deepFreeze(packet);
 }
 
+const UNIQUE_CONTENT_SCHEMA = 'shipyard.semantic-content.v1';
+
+function semanticCanonical(value, field = '', depth = 0) {
+  if (depth > 96) fail('INVALID_CONTEXT_PACKET', 'semantic content nesting exceeds its bound');
+  if (Array.isArray(value)) {
+    const items = value.map(item => semanticCanonical(item, '', depth + 1));
+    if (['refs', 'required_refs', 'optional_refs', 'logical_source_obligations'].includes(field)
+        && items.length && items.every(item => object(item) && typeof item.path === 'string'))
+      items.sort((a, b) => { const left = JSON.stringify(a), right = JSON.stringify(b); return left < right ? -1 : left > right ? 1 : 0; });
+    return items;
+  }
+  if (!object(value)) return value;
+  return Object.fromEntries(Object.keys(value).sort().map(key => [key, semanticCanonical(value[key], key, depth + 1)]));
+}
+
+function encodeUniqueContent(packet) {
+  if (!object(packet) || Buffer.byteLength(JSON.stringify(packet)) > 16 * 1024 * 1024)
+    fail('INVALID_CONTEXT_PACKET', 'semantic packet exceeds its bound');
+  if (Array.isArray(packet.refs) && Array.isArray(packet.required_refs)) {
+    for (const required of packet.required_refs) {
+      if (!packet.refs.some(ref => ref.path === required.path && ref.sha256 === required.sha256
+          && ref.bytes === required.bytes && typeof ref.content === 'string'))
+        fail('INVALID_CONTEXT_PACKET', 'required governing source is not reachable');
+    }
+  }
+  const entries = new Map(), obligations = [];
+  const revision = packet.source_revision || packet.pr?.head;
+  if (!REVISION.test(revision || '')) fail('INVALID_CONTEXT_PACKET', 'semantic content requires an exact source revision');
+  let logicalBytes = 0;
+  function visit(value, location) {
+    if (Array.isArray(value)) return value.map((item, index) => visit(item, location + '/' + index));
+    if (!object(value)) return value;
+    if (Object.hasOwn(value, '$semantic_content')) fail('INVALID_CONTEXT_PACKET', 'reserved content alias');
+    const result = Object.create(null);
+    for (const key of Object.keys(value).sort()) {
+      const pointer = location + '/' + key.replace(/~/g, '~0').split('/').join('~1');
+      const jsonContent = key === 'retained_evidence' && (object(value[key]) || Array.isArray(value[key]));
+      if (!jsonContent && (key !== 'content' || typeof value[key] !== 'string')) {
+        result[key] = visit(value[key], pointer); continue;
+      }
+      const content = jsonContent ? JSON.stringify(value[key]) : value[key];
+      const sha256 = hash(content), bytes = Buffer.byteLength(content);
+      if (!jsonContent && value.path && value.sha256 && (value.sha256 !== sha256 || (value.bytes !== undefined && value.bytes !== bytes)))
+        fail('INVALID_CONTEXT_PACKET', 'source content conflicts with its immutable identity');
+      const previous = entries.get(sha256);
+      if (previous && previous.content !== content) fail('INVALID_CONTEXT_PACKET', 'conflicting content digest');
+      entries.set(sha256, { sha256, bytes, content }); logicalBytes += bytes;
+      obligations.push({ identity: pointer, content_sha256: sha256, source_path: value.path || value.source || pointer,
+        source_revision: revision, source_sha256: value.sha256 || value.source_hash || sha256,
+        source_bytes: value.bytes ?? bytes, mandatory: !location.startsWith('/optional_refs/'),
+        purpose: location, provenance: [pointer] });
+      result[key] = { $semantic_content: sha256, encoding: jsonContent ? 'json' : 'utf8' };
+    }
+    return result;
+  }
+  const body = visit(semanticCanonical(packet), '');
+  const dictionary = [...entries.values()].sort((a, b) => a.sha256 < b.sha256 ? -1 : a.sha256 > b.sha256 ? 1 : 0);
+  obligations.sort((a, b) => a.identity < b.identity ? -1 : a.identity > b.identity ? 1 : 0);
+  return { schema: UNIQUE_CONTENT_SCHEMA, body, dictionary, obligations,
+    dictionary_sha256: hash(JSON.stringify(dictionary)), obligations_sha256: hash(JSON.stringify(obligations)),
+    accounting: { unique_content_bytes: dictionary.reduce((total, entry) => total + entry.bytes, 0),
+      logical_content_bytes: logicalBytes, logical_obligations: obligations.length } };
+}
+
+function decodeUniqueContent(value) {
+  if (!object(value) || value.schema !== UNIQUE_CONTENT_SCHEMA || !Array.isArray(value.dictionary)
+      || !Array.isArray(value.obligations)) fail('INVALID_CONTEXT_PACKET', 'unsupported semantic content contract');
+  if (Buffer.byteLength(JSON.stringify(value)) > 32 * 1024 * 1024)
+    fail('INVALID_CONTEXT_PACKET', 'semantic content contract exceeds its bound');
+  const dictionary = new Map();
+  for (const entry of value.dictionary) {
+    if (!object(entry) || typeof entry.content !== 'string' || hash(entry.content) !== entry.sha256
+        || Buffer.byteLength(entry.content) !== entry.bytes || dictionary.has(entry.sha256))
+      fail('INVALID_CONTEXT_PACKET', 'invalid unique content entry');
+    dictionary.set(entry.sha256, entry.content);
+  }
+  function restore(item, depth = 0) {
+    if (depth > 96) fail('INVALID_CONTEXT_PACKET', 'semantic content nesting exceeds its bound');
+    if (Array.isArray(item)) return item.map(child => restore(child, depth + 1));
+    if (!object(item)) return item;
+    if (Object.hasOwn(item, '$semantic_content')) {
+      if (Object.keys(item).length !== 2 || !['json', 'utf8'].includes(item.encoding) || !dictionary.has(item.$semantic_content))
+        fail('INVALID_CONTEXT_PACKET', 'dangling or aliased semantic content');
+      const content = dictionary.get(item.$semantic_content);
+      if (item.encoding === 'utf8') return content;
+      try { return JSON.parse(content); } catch { fail('INVALID_CONTEXT_PACKET', 'invalid complete JSON evidence'); }
+    }
+    return Object.fromEntries(Object.keys(item).map(key => [key, restore(item[key], depth + 1)]));
+  }
+  const packet = restore(value.body);
+  if (JSON.stringify(semanticCanonical(encodeUniqueContent(packet))) !== JSON.stringify(semanticCanonical(value)))
+    fail('INVALID_CONTEXT_PACKET', 'incomplete logical obligations or provenance');
+  return packet;
+}
+
 function main(argv) {
   if (argv.length === 1 && argv[0] === '--help') {
     process.stdout.write('context-packet.cjs is a library; call buildContextPacket(options) and validateContextPacket(packet, expected)\n');
@@ -641,6 +757,8 @@ module.exports = Object.freeze({
   ContextPacketError,
   estimateTokens,
   buildContextPacket,
+  encodeUniqueContent,
+  decodeUniqueContent,
   recordPacketMeasurement,
   validateContextPacket,
 });

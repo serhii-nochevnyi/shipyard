@@ -86,6 +86,38 @@ test('Codex arch-review builds and binds a complete graph- and PR-authenticated 
 });
 
 
+test('architecture collector and authenticated reader retain every duplicate governing obligation', () => {
+  const f = fixture();
+  const storage = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'unique-reader-')));
+  const api = require('../../plugins/delivery-pipeline/scripts/context-packet.cjs');
+  try {
+    const originalPath = '.planning/architecture/ADR-014-host-bound-review.md';
+    const duplicatePath = '.planning/architecture/ADR-015-duplicate-governing.md';
+    write(f.root, duplicatePath, fs.readFileSync(path.join(f.root, originalPath), 'utf8'));
+    git(f.root, ['add', '.']); git(f.root, ['commit', '-m', 'fixture: duplicate governing source']);
+    f.pr.headRefOid = git(f.root, ['rev-parse', 'HEAD']);
+    const result = prepared(f);
+    const encoded = api.encodeUniqueContent(result.prepared.packet);
+    const original = result.prepared.packet.refs.find(ref => ref.path === originalPath);
+    const duplicate = result.prepared.packet.refs.find(ref => ref.path === duplicatePath);
+    assert.equal(original.content, duplicate.content);
+    assert.equal(encoded.dictionary.filter(entry => entry.sha256 === original.sha256).length, 1);
+    assert.equal(encoded.obligations.filter(ref => ref.content_sha256 === original.sha256).length, 2);
+    const input = contextBuilder.prepareFileInput({ worktree: f.root, ticket: TICKET, phase: 38 },
+      JSON.stringify(encoded), { role: 'arch-review', dispatchId: 'unique-content-reader', storageRoot: storage });
+    const checked = contextBuilder.verifyFileInput(input);
+    assert.deepEqual(api.decodeUniqueContent(JSON.parse(Buffer.concat(checked.material).toString())),
+      api.decodeUniqueContent(encoded));
+    assert(checked.chunk_reads > 0);
+    assert.equal(fs.readFileSync(path.join(f.root, originalPath), 'utf8'), original.content);
+    const broken = JSON.parse(JSON.stringify(encoded)); broken.obligations.pop();
+    assert.throws(() => contextBuilder.prepareFileInput({ worktree: f.root, ticket: TICKET, phase: 38 },
+      JSON.stringify(broken), { role: 'arch-review', dispatchId: 'missing-obligation', storageRoot: storage }));
+    write(f.root, duplicatePath, 'changed after collection');
+    assert.throws(() => contextBuilder.verifyFileInput(input));
+  } finally { cleanupJudgment(f); fs.rmSync(storage, { recursive: true, force: true }); }
+});
+
 test('Codex arch-review refuses caller prompts and caller-selected signals', () => {
   const f = fixture();
   try {
@@ -330,7 +362,7 @@ for (const scenario of [
     let value;
     assert.doesNotThrow(() => { value = contextBuilder.prepare(parsed.scope, parsed.launch, options); });
     const preparedInput = productBytes ? contextBuilder.admittedFileInput(value) : null;
-    if (preparedInput) assertFiniteFileSchedule(preparedInput, JSON.stringify(value.prepared.packet));
+    if (preparedInput) assertFiniteFileSchedule(preparedInput, JSON.stringify(require('../../plugins/delivery-pipeline/scripts/context-packet.cjs').encodeUniqueContent(value.prepared.packet)));
     const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
     const selected = policy.resolveDispatch({ runtime: 'codex', role: 'arch-review', signals: value.launch.signals });
     const agentDir = path.join(storage, 'agents'); fs.mkdirSync(agentDir);
@@ -352,7 +384,7 @@ for (const scenario of [
     if (productBytes) {
       const installation = contextBuilder.admitInstalledLaunch(value, { agentDir, agentFile: selected.agent_file, agentManifest, capabilities });
       const installedInput = contextBuilder.admittedFileInput(value);
-      assertFiniteFileSchedule(installedInput, JSON.stringify(value.prepared.packet));
+      assertFiniteFileSchedule(installedInput, JSON.stringify(require('../../plugins/delivery-pipeline/scripts/context-packet.cjs').encodeUniqueContent(value.prepared.packet)));
       assert.notStrictEqual(installedInput, preparedInput);
       assert.deepEqual(contextBuilder.verifyFileInput(installedInput).material, contextBuilder.verifyFileInput(preparedInput).material);
       assert.deepEqual(installation.capacity.accounting, installedInput.manifest.accounting);
@@ -383,12 +415,16 @@ for (const scenario of [
             transcript: { path: transcript, bytes: Buffer.byteLength(stream), sha256: digest(stream) } } };
       } };
     if (productBytes) host = aggregateRuntimeFixture({ host, parsed, storage, capabilities, recorder, selected, text,
-      inspect(packet) {
+      inspect(envelope) {
+        assert.equal(envelope.schema, 'shipyard.semantic-content.v1');
+        const content = require('../../plugins/delivery-pipeline/scripts/context-packet.cjs');
+        const packet = content.decodeUniqueContent(envelope);
+        const expectedPacket = content.decodeUniqueContent(content.encodeUniqueContent(value.prepared.packet));
         assert.ok(Buffer.byteLength(packet.diff.content) > 2553952);
         assert.deepEqual(packet.ticket_set, value.prepared.packet.ticket_set);
         assert.equal(packet.ticket_set.length, 2);
         assert.ok(packet.refs.some(ref => ref.path.endsWith('38-02-PLAN.md')));
-        assert.deepEqual(packet.refs, value.prepared.packet.refs);
+        assert.deepEqual(packet.refs, expectedPacket.refs);
         assert.deepEqual(packet.retained_evidence, value.prepared.packet.retained_evidence);
       } });
     let output = '';
@@ -1549,13 +1585,15 @@ function aggregateRuntimeFixture({ host: fixtureHost, parsed, storage, capabilit
   });
 }
 
-function assertFiniteFileSchedule(input, material) {
+function assertFiniteFileSchedule(input, material, { requireMultipleManifestChunks = true } = {}) {
   assert.equal(contextBuilder.isPreparedFileInput(input), true);
   assert.throws(() => contextBuilder.verifyFileInput({ ...input }), /private producer authority/);
   const checked = contextBuilder.verifyFileInput(input);
   const bytes = fs.readFileSync(input.input_bundle.manifest_path);
   const count = Math.ceil(bytes.length / input.input_bundle.chunk_bytes);
-  assert.ok(count > 1, 'real producer manifest must span multiple chunks');
+  assert.ok(count >= 1, 'real producer manifest must contain complete bytes');
+  if (requireMultipleManifestChunks)
+    assert.ok(count > 1, 'large producer manifest must span multiple chunks');
   assert.ok(bytes.subarray(0, input.input_bundle.chunk_bytes).includes(Buffer.from('"manifest_bytes":' + bytes.length)));
   assert.equal(checked.manifest.accounting.manifest_bytes, bytes.length);
   assert.equal(checked.manifest.accounting.relay_bytes, Buffer.byteLength(input.prompt));
@@ -1743,7 +1781,11 @@ test('selected instruction bytes upgrade a below-limit architecture prompt to au
     assert.ok(input.input_bytes > 1048576);
     assert.equal(installation.capacity.complete_upper_bound_bytes, input.input_bytes);
     assert.ok(input.manifest.accounting.generated_instruction_bytes >= 900000);
-    assert.deepEqual(JSON.parse(Buffer.concat(contextBuilder.verifyFileInput(input).material)), value.prepared.packet);
+    const content = require('../../plugins/delivery-pipeline/scripts/context-packet.cjs');
+    const encoded = content.encodeUniqueContent(value.prepared.packet);
+    assertFiniteFileSchedule(input, JSON.stringify(encoded), { requireMultipleManifestChunks: false });
+    assert.deepEqual(content.decodeUniqueContent(JSON.parse(Buffer.concat(contextBuilder.verifyFileInput(input).material))),
+      content.decodeUniqueContent(encoded));
     const directories = fs.readdirSync(storage).filter(name => name.startsWith('input-'));
     const rawManifest = fs.readFileSync(input.input_bundle.manifest_path);
     const admission = { agentDir: agents, agentFile: 'review.toml', agentManifest: path.join(agents, 'manifest.json'), capabilities: {} };
