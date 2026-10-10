@@ -132,8 +132,59 @@ function packetFromPrompt(prompt) {
   const start = prompt.indexOf(startTag);
   const end = prompt.indexOf(endTag, start + startTag.length);
   assert.ok(start >= 0 && end > start);
-  return JSON.parse(prompt.slice(start + startTag.length, end));
+  const packet = JSON.parse(prompt.slice(start + startTag.length, end));
+  return packet.schema === 'shipyard.semantic-content.v1'
+    ? require('../../plugins/delivery-pipeline/scripts/context-packet.cjs').decodeUniqueContent(packet) : packet;
 }
+
+test('native inline preparation preserves shared logical coverage and refuses incompatible schemas', () => {
+  const fixture = setupRepository('integrator');
+  const packets = require('../../plugins/delivery-pipeline/scripts/context-packet.cjs');
+  const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
+  const { prepareInlineReview } = require('../../plugins/delivery-pipeline/scripts/claude-role-host.cjs');
+  try {
+    const packet = packets.buildContextPacket({ root: fixture.root, role: 'integrator', subject: 'inline-fixture',
+      sourceRevision: fixture.head, policy: policy.POLICY, policyHash: policy.POLICY_HASH,
+      scope: { files_modified: [] }, requiredRefs: [],
+      roleContext: { phase_contracts: [], combined_diff: { content: 'complete diff' } } });
+    const encoded = packets.encodeUniqueContent(packet);
+    const prompt = prepareInlineReview('integrator', packet.subject, encoded, 'native inline reference');
+    assert.deepEqual(packetFromPrompt(prompt), packets.decodeUniqueContent(encoded));
+    assert.ok(prompt.includes('no semantic reading credit'));
+    assert.ok(!prompt.includes('INPUT_MANIFEST='));
+    assert.throws(() => prepareInlineReview('integrator', packet.subject, encoded, 'x'.repeat(1500000)),
+      error => error.code === 'CONTEXT_PACKET_OVER_BOUND'
+        && error.refusal.limiting_field === 'complete_inline_prompt_bytes'
+        && error.refusal.required > error.refusal.observed);
+    for (const mutation of ['version', 'obligation', 'dictionary']) {
+      const changed = structuredClone(encoded);
+      if (mutation === 'version') changed.schema = 'shipyard.semantic-content.v99';
+      if (mutation === 'obligation') changed.obligations.pop();
+      if (mutation === 'dictionary') changed.dictionary[0].content += 'tamper';
+      assert.throws(() => prepareInlineReview('integrator', packet.subject, changed, 'reference'),
+        error => error.code === 'INVALID_CONTEXT_PACKET');
+    }
+  } finally { cleanupFixture(fixture); }
+});
+
+test('native inline launch refuses governing source mutation after preparation', async () => {
+  const fixture = setupRepository('integrator');
+  let launched = false;
+  try {
+    const options = hostOptions(fixture, { onLaunch() { launched = true; } });
+    const factory = options.createRuntimeHost;
+    options.createRuntimeHost = input => {
+      const runtime = factory(input);
+      const plans = fs.readdirSync(path.join(fixture.root, '.planning/phases', PHASE));
+      const plan = plans.find(name => name.endsWith('-PLAN.md'));
+      fs.appendFileSync(path.join(fixture.root, '.planning/phases', PHASE, plan), '\nchanged governing source\n');
+      return runtime;
+    };
+    await assert.rejects(createClaudeRoleHost(options).run(request(fixture)), error =>
+      ['STALE_CONTEXT_PACKET', 'STALE_CONTEXT'].includes(error.code));
+    assert.equal(launched, false);
+  } finally { cleanupFixture(fixture); }
+});
 
 function fakeEvidence(model, effort, usage) {
   const sessionId = `session-${crypto.randomUUID()}`;
@@ -255,6 +306,39 @@ function fakeRuntimeFactory(fixture, options = {}) {
     return runtime;
   };
 }
+
+test('changed role instruction bytes refuse before native launch without modifying shared references', async (t) => {
+  const fixture = setupRepository('arch-review');
+  let launched = false;
+  let altered = false;
+  try {
+    const referencePath = require('../../plugins/delivery-pipeline/scripts/claude-reference-content.cjs').REFERENCE_PATHS['arch-review'];
+    const referenceStat = fs.statSync(referencePath);
+    const originalRead = fs.readSync;
+    const options = hostOptions(fixture, { onLaunch() { launched = true; } });
+    const originalFactory = options.createRuntimeHost;
+    options.createRuntimeHost = (...args) => {
+      const runtime = originalFactory(...args);
+      t.mock.method(fs, 'readSync', (fd, buffer, offset, length, position) => {
+        const count = originalRead(fd, buffer, offset, length, position);
+        const stat = fs.fstatSync(fd);
+        if (count > 0 && stat.dev === referenceStat.dev && stat.ino === referenceStat.ino) {
+          buffer[offset] = buffer[offset] === 35 ? 32 : 35;
+          altered = true;
+        }
+        return count;
+      });
+      return runtime;
+    };
+    await assert.rejects(createClaudeRoleHost(options).run(request(fixture)),
+      error => error.code === 'STALE_CONTEXT' && /role instructions changed before native launch/.test(error.message));
+    assert.equal(altered, true);
+    assert.equal(launched, false);
+  } finally {
+    t.mock.restoreAll();
+    cleanupFixture(fixture);
+  }
+});
 
 function hostOptions(fixture, extra = {}) {
   const pr = livePr(fixture);

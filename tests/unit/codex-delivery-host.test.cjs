@@ -104,12 +104,14 @@ function writeShipyardManifest(repo) {
 }
 
 function fixture(config = {}) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-codex-delivery-'));
-  const agentDir = fs.mkdtempSync(path.join(temporary, 'agents-'));
-  const project = fs.mkdtempSync(path.join(temporary, 'project-'));
+  const fixtureBase = config.physicalPaths ? fs.realpathSync(temporary) : temporary;
+  const createdRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'shipyard-codex-delivery-'));
+  const root = config.physicalPaths ? fs.realpathSync(createdRoot) : createdRoot;
+  const agentDir = fs.mkdtempSync(path.join(fixtureBase, 'agents-'));
+  const project = fs.mkdtempSync(path.join(fixtureBase, 'project-'));
   const graphDir = path.join(project, '.planning', 'graph');
   const plan = path.join(project, '.planning', 'PLAN.md');
-  const storageRoot = path.join(temporary, 'storage');
+  const storageRoot = path.join(fixtureBase, 'storage');
   fs.mkdirSync(path.join(root, '.planning'), { recursive: true });
   fs.mkdirSync(path.join(root, 'src'));
   fs.writeFileSync(path.join(root, '.planning', 'config.json'), '{}\n');
@@ -1871,6 +1873,78 @@ test('serialized file descriptors cannot impersonate private producer admission'
 test('request context refuses a caller-owned prepared authority field before admission', () => {
   assert.throws(() => requestValue({ role: 'integrator', context: { prompt: 'fixture', input_prepared: {} } }),
     error => error.code === 'INVALID_INPUT' && /host authority/.test(error.message));
+});
+
+test('integrator refuses unsupported logical coverage before dispatch', async () => {
+  const f = fixture();
+  try {
+    for (const schema of ['shipyard.semantic-content.v99', 'shipyard.semantic-content.v1']) {
+      await assert.rejects(delivery(f).run({ role: 'integrator', context: {
+        prompt: JSON.stringify({ schema, dictionary: [], obligations: [], body: {} }),
+      } }), error => error.code === 'INVALID_CONTEXT_PACKET');
+    }
+    assert.equal(f.calls.length, 0);
+  } finally { clean(f); }
+});
+
+test('current dictionary integrity retains logical obligations without semantic credit', () => {
+  const f = fixture({ physicalPaths: true });
+  const context = require('../../plugins/delivery-pipeline/scripts/codex-arch-review-context.cjs');
+  const packets = require('../../plugins/delivery-pipeline/scripts/context-packet.cjs');
+  try {
+    const packet = packets.buildContextPacket({ root: f.root, role: 'integrator', subject: f.scope.ticket,
+      sourceRevision: f.base, policy: policy.POLICY, policyHash: policy.POLICY_HASH,
+      scope: { files_modified: ['src/owned.txt'] }, requiredRefs: ['src/owned.txt'],
+      roleContext: { phase_contracts: [], combined_diff: { content: 'base\n' } } });
+    const encoded = packets.encodeUniqueContent(packet);
+    const expected = { root: f.root, role: 'integrator', subject: f.scope.ticket,
+      sourceRevision: f.base, policyHash: policy.POLICY_HASH };
+    const proof = context.preflightReviewMaterial(encoded, expected);
+    assert.equal(proof.semantic_credit, false);
+    assert.equal(proof.logical_obligations, encoded.obligations.length);
+    for (const key of ['role', 'sourceRevision', 'policyHash', 'subject'])
+      assert.throws(() => context.preflightReviewMaterial(encoded, { ...expected, [key]: 'foreign' }));
+    const incomplete = structuredClone(encoded);
+    incomplete.obligations.pop();
+    assert.throws(() => context.preflightReviewMaterial(incomplete, expected), /logical obligations|provenance/);
+    const input = context.prepareFileInput(f.scope, JSON.stringify(encoded), {
+      role: 'integrator', dispatchId: 'preflight-fixture', storageRoot: f.storageRoot, graphDir: f.graphDir });
+    assert.equal(context.verifyFileInput(input).semantic_credit, false);
+    fs.writeFileSync(path.join(f.root, 'src/owned.txt'), 'changed\n');
+    assert.throws(() => context.verifyFileInput(input), /changed|stale/i);
+  } finally { clean(f); }
+});
+
+test('unavailable measured capacity returns actionable refusal without native dispatch', () => {
+  const f = fixture({ physicalPaths: true });
+  const context = require('../../plugins/delivery-pipeline/scripts/codex-arch-review-context.cjs');
+  try {
+    assert.throws(() => context.prepareFileInput(f.scope, 'complete input', {
+      role: 'integrator', dispatchId: 'capacity-fixture', storageRoot: f.storageRoot,
+      readerCapacity: { contract: { schema: 'shipyard.native-reader-transport.v2' } },
+    }), error => error.code === 'READER_CAPACITY_UNSUPPORTED'
+      && error.refusal.limiting_field === 'original_matching_capacity_authority'
+      && error.refusal.observed === 'unavailable' && /legacy/.test(error.refusal.supported_next_action));
+    assert.equal(f.calls.length, 0);
+  } finally { clean(f); }
+});
+
+test('encoded schedule admission counts complete manifest, envelopes and launch instructions', () => {
+  const { preflightReaderSchedule } = require('../../plugins/delivery-pipeline/scripts/codex-arch-review-context.cjs');
+  const manifest = { chunk_bytes: 128 * 1024, assets: [{ ordinal: 0, bytes: 256 * 1024 }],
+    accounting: { relay_bytes: 1200, generated_instruction_bytes: 2400 },
+    transport: { schema: 'shipyard.native-reader-transport.v2', chunk_bytes: 128 * 1024,
+      encoding: 'base64', output_tokens: 10000, range_schedule: 'manifest-first/ordinal-offset/v1',
+      nested_envelope: 'exec-command.v1', outer_envelope: 'functions-exec.v1', output_budget_bytes: 252 * 1024 } };
+  const result = preflightReaderSchedule(manifest, 1024);
+  assert.equal(result.range_count, 3);
+  assert.equal(result.launch_input_bytes, 3600);
+  assert.ok(result.encoded_schedule_bytes > 4 * Math.ceil((256 * 1024 + 1024) / 3));
+  assert.equal(result.semantic_credit, false);
+  for (const transport of [{ ...manifest.transport, schema: 'shipyard.native-reader-transport.v99' },
+    { ...manifest.transport, output_budget_bytes: 128 * 1024 }])
+    assert.throws(() => preflightReaderSchedule({ ...manifest, transport }, 1024), error =>
+      error.code === 'READER_CAPACITY_UNSUPPORTED' && Boolean(error.refusal.supported_next_action));
 });
 
 for (const mutation of [null, 'dirty-source', 'dirty-intake', 'new-output', 'sibling-output']) {

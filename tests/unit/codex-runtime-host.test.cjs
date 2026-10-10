@@ -1255,7 +1255,7 @@ for (const tamper of [null, 'missing', 'missing-start', 'missing-final', 'duplic
   });
 }
 
-test('tracer: original measured 128 KiB output admits producer relay and ordered native verifier', async () => {
+test('fixture: original 128 KiB capacity refuses; independently wrapped output admits complete ordered reads', async () => {
   const runtime = require('../../plugins/delivery-pipeline/scripts/codex-runtime-host.cjs');
   const collector = require('../../plugins/delivery-pipeline/scripts/codex-arch-review-context.cjs');
   const { execFileSync } = require('node:child_process');
@@ -1280,7 +1280,7 @@ test('tracer: original measured 128 KiB output admits producer relay and ordered
     const original = fs.readFileSync(native, 'utf8').split('\n').filter(Boolean).map(JSON.parse);
     const response = original.find(record => record.type === 'response_item');
     const wrap = payload => ({ ...structuredClone(response), payload });
-    const transcript = (prepared, chunkBytes) => {
+    const transcript = (prepared, chunkBytes, wrapped = false) => {
       const checked = collector.verifyFileInput(prepared);
       const assets = [{ path: prepared.input_bundle.manifest_path, bytes: checked.manifest_bytes },
         ...checked.manifest.assets.map((asset, index) => ({ path: asset.path, bytes: checked.material[index] }))];
@@ -1288,7 +1288,8 @@ test('tracer: original measured 128 KiB output admits producer relay and ordered
       for (const asset of assets) for (let index = 0; index < Math.ceil(asset.bytes.length / chunkBytes); index++) {
         const id = 'read-' + reads.length;
         const cmd = "dd if='" + asset.path + "' bs=" + chunkBytes + ' skip=' + index + ' count=1 2>/dev/null | base64';
-        const encoded = asset.bytes.subarray(index * chunkBytes, (index + 1) * chunkBytes).toString('base64');
+        const base64 = asset.bytes.subarray(index * chunkBytes, (index + 1) * chunkBytes).toString('base64');
+        const encoded = wrapped ? base64.match(/.{1,76}/g).join('\n') + '\n' : base64;
         reads.push(wrap({ type: 'custom_tool_call', name: 'exec', call_id: id,
           input: 'text(await tools.exec_command(' + JSON.stringify({ cmd, max_output_tokens: 10000 }) + '));' }),
         wrap({ type: 'custom_tool_call_output', call_id: id, output: [
@@ -1317,15 +1318,39 @@ test('tracer: original measured 128 KiB output admits producer relay and ordered
     fs.writeFileSync(native, encode(transcript(legacy, 128 * 1024)));
     const verified = await runtime.verifyCompletedNativeLaunch({ session_id: session,
       selection: { model: 'gpt-6-luna', effort: 'max' }, env: { CODEX_HOME: home }, resultText: result });
-    const capacity = runtime.measureReaderCapacity(verified, legacy);
-    assert.equal(capacity.contract.chunk_bytes, 128 * 1024);
-    assert.ok(capacity.contract.output_budget_bytes > 128 * 1024 * 4 / 3);
+    const insufficientCapacity = runtime.measureReaderCapacity(verified, legacy);
+    assert.equal(insufficientCapacity.contract.chunk_bytes, 128 * 1024);
+    const observedBound = insufficientCapacity.contract.output_budget_bytes;
+    const encodedRangeBytes = 4 * Math.ceil(128 * 1024 / 3);
+    const requiredBound = encodedRangeBytes + 2 * Math.ceil(encodedRangeBytes / 76) + 4096;
+    assert.equal(observedBound, 179006);
+    assert.equal(requiredBound, 183460);
+    assert.equal(insufficientCapacity.contract.output_budget_bytes, observedBound);
+    assert.throws(() => collector.prepareFileInput(scope, material, { ...options, readerCapacity: insufficientCapacity }),
+      error => error.code === 'READER_CAPACITY_UNSUPPORTED'
+        && error.refusal.limiting_field === 'encoded_range_envelope_bytes'
+        && error.refusal.observed === observedBound && error.refusal.required === requiredBound);
+    const wrappedHome = path.join(store, 'wrapped-native');
+    const wrappedNative = writeSession(wrappedHome, session, 'gpt-6-luna', 'max');
+    const wrappedOriginal = encode(transcript(legacy, 128 * 1024, true));
+    fs.writeFileSync(wrappedNative, wrappedOriginal);
+    const wrappedVerified = await runtime.verifyCompletedNativeLaunch({ session_id: session,
+      selection: { model: 'gpt-6-luna', effort: 'max' }, env: { CODEX_HOME: wrappedHome }, resultText: result });
+    const capacity = runtime.measureReaderCapacity(wrappedVerified, legacy);
+    const prospectiveManifest = { ...legacy.manifest, chunk_bytes: 128 * 1024, transport: capacity.contract };
+    const schedule = collector.preflightReaderSchedule(prospectiveManifest, legacyChecked.manifest_bytes.length);
+    assert.ok(schedule.largest_envelope_bytes <= capacity.contract.output_budget_bytes);
+    assert.equal(fs.readFileSync(native, 'utf8'), encode(transcript(legacy, 128 * 1024)));
+    assert.equal(fs.readFileSync(wrappedNative, 'utf8'), wrappedOriginal);
     const admitted = collector.prepareFileInput(scope, material, { ...options, readerCapacity: capacity });
     assert.equal(admitted.manifest.schema, 'shipyard.host-file-input.v2');
     assert.ok(admitted.manifest.accounting.manifest_bytes > 128 * 1024);
     assert.ok(admitted.prompt.includes('bs=131072'));
     assert.ok(admitted.prompt.includes('READER_TRANSPORT='));
-    const complete = transcript(admitted, 128 * 1024);
+    const admittedSchedule = collector.preflightReaderSchedule(admitted.manifest,
+      collector.verifyFileInput(admitted).manifest_bytes.length);
+    assert.ok(admittedSchedule.largest_envelope_bytes <= capacity.contract.output_budget_bytes);
+    const complete = transcript(admitted, 128 * 1024, true);
     const checked = runtime.verifyFileConsumption(admitted, encode(complete), options.dispatchId, result);
     assert.deepEqual(checked.material, material.map(value => Buffer.from(value)));
     assert.ok(checked.chunk_reads < legacyChecked.chunk_reads);
@@ -1365,9 +1390,9 @@ test('tracer: original measured 128 KiB output admits producer relay and ordered
     const truncated = transcript(legacy, 128 * 1024);
     const output = truncated.find(record => record.payload?.type === 'custom_tool_call_output');
     output.payload.output[1].text = JSON.stringify({ exit_code: 0, output: 'truncated' });
-    fs.writeFileSync(native, encode(truncated));
+    fs.writeFileSync(wrappedNative, encode(truncated));
     const incomplete = await runtime.verifyCompletedNativeLaunch({ session_id: session,
-      selection: { model: 'gpt-6-luna', effort: 'max' }, env: { CODEX_HOME: home }, resultText: result });
+      selection: { model: 'gpt-6-luna', effort: 'max' }, env: { CODEX_HOME: wrappedHome }, resultText: result });
     assert.throws(() => runtime.measureReaderCapacity(incomplete, legacy),
       error => error.code === 'RUNTIME_EVIDENCE_MISMATCH');
     assert.throws(() => collector.prepareFileInput(scope, material, { ...options, readerCapacity: capacity }),

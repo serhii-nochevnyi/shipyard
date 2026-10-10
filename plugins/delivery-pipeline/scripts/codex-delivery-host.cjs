@@ -707,7 +707,8 @@ function installedAgentOptions(options, selection, capabilities) {
   const agentDir = options.agentDir || path.join(env.CODEX_HOME || path.join(os.homedir(), '.codex'), 'agents');
   return { agentDir, agentFile: selection.agent_file,
     agentManifest: options.agentManifest || path.join(agentDir, '.shipyard-manifest.json'),
-    capabilities, capabilitiesFile: options.capabilitiesFile || env.SHIPYARD_CODEX_CAPABILITIES_FILE };
+    capabilities, capabilitiesFile: options.capabilitiesFile || env.SHIPYARD_CODEX_CAPABILITIES_FILE,
+    readerCapacity: options.readerCapacity, selection: { model: selection.model, effort: selection.reasoning_effort } };
 }
 
 function admitArchitectureInput(prepared, request, options, capabilities) {
@@ -724,6 +725,21 @@ function admitArchitectureInput(prepared, request, options, capabilities) {
   fail('CONTEXT_OVER_BOUND', 'selected generated instruction accounting did not stabilize');
 }
 
+const inlineIntegratorInputs = new WeakMap();
+
+function recheckInlineIntegrator(scope, request) {
+  const pin = inlineIntegratorInputs.get(request);
+  if (!pin) return;
+  if (git(scope.worktree, ['rev-parse', 'HEAD']) !== pin.head
+      || JSON.stringify(archReviewContext.instructionEvidence(pin.agentDir, pin.agentFile, pin.agentManifest)) !== pin.instructions)
+    fail('STALE_CONTEXT', 'integration subject or installed instructions changed before launch');
+  for (const source of pin.graph)
+    if (crypto.createHash('sha256').update(fs.readFileSync(source.path)).digest('hex') !== source.sha256)
+      fail('STALE_CONTEXT', 'integration graph membership changed before launch');
+  archReviewContext.preflightReviewMaterial(pin.material, { root: scope.worktree, role: 'integrator',
+    sourceRevision: pin.head, policyHash: policy.POLICY_HASH });
+}
+
 function prepareIntegratorInput(scope, request, options) {
   if (request.context.input_transport !== undefined || request.context.input_bundle !== undefined) {
     const prepared = options.fileInputContext;
@@ -736,8 +752,10 @@ function prepareIntegratorInput(scope, request, options) {
     return prepared;
   }
   const material = request.context.prompt || request.context.task_prompt || request.context.input;
-  if (request.role !== 'integrator' || request.gsd_role !== undefined || typeof material !== 'string'
-      || Buffer.byteLength(material) <= 1024 * 1024) return null;
+  if (request.role === 'integrator' && typeof material === 'string')
+    archReviewContext.preflightReviewMaterial(material, { root: scope.worktree, role: request.role,
+      sourceRevision: git(scope.worktree, ['rev-parse', 'HEAD']), policyHash: policy.POLICY_HASH });
+  if (request.role !== 'integrator' || request.gsd_role !== undefined || typeof material !== 'string') return null;
   let signals = { ...request.signals, inputTokens: Math.ceil(Buffer.byteLength(material) / 4) };
   let input;
   for (let attempt = 0; attempt < 4; attempt++) {
@@ -746,7 +764,24 @@ function prepareIntegratorInput(scope, request, options) {
     const agentPath = path.join(installed.agentDir, installed.agentFile);
     const instructions = archReviewContext.instructionEvidence(installed.agentDir, installed.agentFile, installed.agentManifest);
     const instructionBytes = instructions.generated_instruction_bytes;
+    const inlineBytes = Buffer.byteLength(material) + instructionBytes;
+    if (inlineBytes <= 1024 * 1024 && !options.readerCapacity) {
+      const next = { ...signals, inputTokens: Math.ceil(inlineBytes / 4) };
+      if (policy.resolveDispatch({ runtime: 'codex', role: request.role, signals: next }).agent_file !== selected.agent_file) {
+        signals = next; continue;
+      }
+      const directory = options.graphDir || path.join(scope.worktree, '.planning/graph');
+      const graph = ['tickets.json', 'delivery-state.json'].map(name => path.join(directory, name))
+        .filter(source => fs.existsSync(source)).map(source => ({ path: source,
+          sha256: crypto.createHash('sha256').update(fs.readFileSync(source)).digest('hex') }));
+      inlineIntegratorInputs.set(request, { material, head: git(scope.worktree, ['rev-parse', 'HEAD']),
+        agentDir: installed.agentDir, agentFile: installed.agentFile, agentManifest: installed.agentManifest,
+        instructions: JSON.stringify(instructions), graph });
+      request.signals = next;
+      return null;
+    }
     input = archReviewContext.prepareFileInput(scope, material, { role: request.role, dispatchId: request.dispatch_id,
+      readerCapacity: options.readerCapacity,
       storageRoot: storageDirectory(options, scope), graphDir: options.graphDir, generatedInstructionBytes: instructionBytes,
       binding: { agent_file: selected.agent_file, agent_path: path.resolve(agentPath), agent_sha256: instructions.sha256, installed_files: instructions.installed_files, policy_hash: selected.policy_hash } });
     signals = { ...signals, inputTokens: input.inputTokens };
@@ -1544,6 +1579,19 @@ function createCodexDeliveryHost(options = {}) {
         const block = planDeliveryBlock(delivery, undefined);
         if (block) context.prompt = originalPrompt + block;
       }
+      const reviewHost = request.role === 'arch-review' || request.role === 'integrator'
+        ? { ...runtimeHost } : runtimeHost;
+      if (reviewHost !== runtimeHost) {
+        for (const method of ['launch', 'launchStatic']) {
+          if (typeof runtimeHost[method] !== 'function') continue;
+          reviewHost[method] = (...args) => {
+            if (request.role === 'arch-review') archReviewContext.recheckInstalledLaunch(options.archReviewContext);
+            if (fileInput) archReviewContext.verifyFileInput(fileInput);
+            else recheckInlineIntegrator(scope, request);
+            return runtimeHost[method](...args);
+          };
+        }
+      }
       const dispatchAgent = (dispatchId, taskContext) => launchAgent(request.role, {
         cwd: scope.worktree,
         flags: new Map(),
@@ -1551,7 +1599,7 @@ function createCodexDeliveryHost(options = {}) {
         dispatch_id: dispatchId,
         ...(request.gsd_role !== undefined ? { gsd_role: request.gsd_role, requireGsdRole: true } : {}),
         scope,
-        host: request.gsd_role === undefined || typeof runtimeHost.launchTypedGsd !== 'function' ? runtimeHost : {
+        host: request.gsd_role === undefined || typeof runtimeHost.launchTypedGsd !== 'function' ? reviewHost : {
           ...runtimeHost,
           launchTypedGsd(selection, launchContext) {
             return runtimeHost.launchTypedGsd(selection, {
@@ -1610,6 +1658,8 @@ function createCodexDeliveryHost(options = {}) {
         context: request.gsd_role !== undefined && preRecordValidation
           ? { ...taskContext, preRecordValidation } : taskContext,
       });
+      if (request.role === 'arch-review') archReviewContext.recheckInstalledLaunch(options.archReviewContext);
+      if (request.role === 'integrator') recheckInlineIntegrator(scope, request);
       if (fileInput) archReviewContext.verifyFileInput(fileInput);
       let result = await dispatchAgent(request.dispatch_id, context);
       if (fileInput) archReviewContext.verifyFileInput(fileInput);
