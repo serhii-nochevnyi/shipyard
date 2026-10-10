@@ -18,6 +18,12 @@ const TREE = '60dc53b466502e62a33d8e8d48233e8469e1c60c';
 const OWNED = ['codex-arch-review-context', 'codex-runtime-host', 'codex-delivery-host',
   'context-packet', 'role-artifact', 'claude-role-host', 'phase-integrator-preflight', 'base-merge']
   .map(name => 'host/plugins/delivery-pipeline/scripts/' + name + '.cjs');
+const CONSUMERS = ['gate-trailer', 'sentinel', 'state-sync']
+  .map(name => 'host/plugins/delivery-pipeline/scripts/' + name + '.cjs');
+const INSTRUCTIONS = ['host/plugins/delivery-pipeline/commands/deliver.md',
+  'host/plugins/delivery-pipeline/references/integrator.md'];
+const METADATA = ['.codex-plugin/plugin.json', 'package-build.json'];
+const COMPLETE_OWNED = [...OWNED, ...CONSUMERS, ...INSTRUCTIONS, ...METADATA];
 const sha = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 
 function temporaryDirectory(prefix) {
@@ -97,7 +103,7 @@ function inspect(selectionBytes, expected, repository, stage) {
     assert([0o644, 0o755].includes(selected.publication_mode), 'unsupported publication mode');
     assert.equal(row.mode, selected.publication_mode === 0o755 ? 0o500 : 0o400, 'immutable candidate mode drift');
   }
-  for (const relative of OWNED) {
+  for (const relative of [...OWNED, ...CONSUMERS, ...INSTRUCTIONS]) {
     const output = selection.outputs.find(row => row.path === relative);
     assert(output, 'missing assigned output');
     const sourcePath = relative.slice('host/'.length);
@@ -109,6 +115,11 @@ function inspect(selectionBytes, expected, repository, stage) {
     read(mirror, output.sha256);
     assert.equal(physical(mirror).mode & 0o7777, output.publication_mode, 'mirror mode drift');
   }
+  const published = inventory(path.join(repository, 'plugins/shipyard'));
+  assert.deepEqual(published, selection.outputs.map(row => ({ path: row.path, sha256: row.sha256,
+    bytes: row.bytes, mode: row.publication_mode })), 'complete publication inventory drift');
+  for (const relative of COMPLETE_OWNED)
+    assert(selection.outputs.some(row => row.path === relative), 'missing required consumer/instruction/metadata');
   const metadata = JSON.parse(read(path.join(stage, 'package-build.json')));
   assert.deepEqual(metadata, selection.package);
   const hash = crypto.createHash('sha256');
@@ -121,7 +132,7 @@ function inspect(selectionBytes, expected, repository, stage) {
   assert.equal(JSON.parse(manifest).version, metadata.version);
   assert(metadata.version.endsWith('+codex.' + contentDigest.slice(0, 16)));
   assert.equal(metadata.digest, sha(Buffer.concat([Buffer.from(contentDigest + '\0'), manifest])));
-  return { outputs: actual.length, scoped_outputs: OWNED.length, complete_publication: false, inspector_build_calls: 0 };
+  return { outputs: actual.length, scoped_outputs: COMPLETE_OWNED.length, complete_publication: true, inspector_build_calls: 0 };
 }
 function fixtureDirectoryModes(root, mode) {
   fs.chmodSync(root, mode);
@@ -157,7 +168,7 @@ function authenticatePublicSelection() {
   } finally { fs.rmSync(temporary, { recursive: true, force: true }); }
 }
 
-test('phase49 original signed host selection: read-only complete stage and eight scoped mirrors', t => {
+test('phase49 original signed host selection: read-only complete stage and entire published inventory', t => {
   try { fs.accessSync(path.join(STAGE_ROOT, 'selection.json')); }
   catch (error) {
     if (!['ENOENT', 'EACCES', 'EPERM'].includes(error.code)) throw error;
@@ -167,8 +178,8 @@ test('phase49 original signed host selection: read-only complete stage and eight
   const bytes = authenticatePublicSelection();
   const result = withoutWrites(() => inspect(bytes, { selection_sha256: SELECTION_SHA, head: HEAD, tree: TREE }, ROOT, path.join(STAGE_ROOT, 'candidate')));
   assert.equal(result.outputs, 161);
-  assert.equal(result.scoped_outputs, 8);
-  assert.equal(result.complete_publication, false);
+  assert.equal(result.scoped_outputs, 15);
+  assert.equal(result.complete_publication, true);
   assert.deepEqual(read(path.join(STAGE_ROOT, 'selection.json'), SELECTION_SHA), bytes, 'selection moved during inspection');
   const selection = JSON.parse(bytes);
   const git = (...args) => execFileSync('git', ['-C', ROOT, ...args], { encoding: 'utf8', timeout: 10000 }).trim();
@@ -207,7 +218,7 @@ test('isolated canonical candidate rejects tampering, stale binding and replacem
       inputs.push({ path: relative, sha256: sha(read(source)), mode: physical(source).mode & 0o777 });
     }
     const outputs = inventory(stage).map(row => ({ path: row.path, sha256: row.sha256, bytes: row.bytes, publication_mode: row.mode }));
-    for (const relative of OWNED) {
+    for (const { path: relative } of outputs) {
       const target = path.join(repository, 'plugins/shipyard', relative);
       fs.mkdirSync(path.dirname(target), { recursive: true }); fs.copyFileSync(path.join(stage, relative), target);
       fs.chmodSync(target, outputs.find(row => row.path === relative).publication_mode);
@@ -236,6 +247,12 @@ test('isolated canonical candidate rejects tampering, stale binding and replacem
       const altered = Buffer.from(JSON.stringify({ ...selection, ...patch }));
       assert(!crypto.verify(null, altered, publicKey, signature));
       assert.throws(() => inspect(altered, { ...expected, selection_sha256: sha(altered) }, repository, stage));
+    }
+    for (const relative of [...CONSUMERS, ...INSTRUCTIONS, ...METADATA]) {
+      const altered = Buffer.from(JSON.stringify({ ...selection,
+        outputs: outputs.filter(row => row.path !== relative) }));
+      assert.throws(() => inspect(altered, { ...expected, selection_sha256: sha(altered) }, repository, stage),
+        /candidate inventory drift/);
     }
     const member = path.join(stage, OWNED[7]), originalBytes = read(member), mode = physical(member).mode & 0o777;
     fs.chmodSync(member, 0o600); fs.writeFileSync(member, 'tampered'); fs.chmodSync(member, mode);
@@ -271,7 +288,50 @@ test('isolated canonical candidate rejects tampering, stale binding and replacem
     fixtureDirectoryModes(stage, 0o700);
     fs.unlinkSync(member); fs.renameSync(member + '.original', member);
     fixtureDirectoryModes(stage, 0o500);
-    assert.equal(consume().scoped_outputs, 8);
+    assert.equal(consume().scoped_outputs, 15);
+    assert.equal(consume().complete_publication, true);
+    const publicationRoot = path.join(repository, 'plugins/shipyard');
+    for (const relative of [...CONSUMERS, ...INSTRUCTIONS, ...METADATA, 'hooks/hooks.json']) {
+      const file = path.join(publicationRoot, relative), original = read(file);
+      const publicationMode = physical(file).mode & 0o7777;
+      fs.writeFileSync(file, Buffer.concat([original, Buffer.from('mixed generation')]));
+      assert.throws(consume, /drift|digest mismatch/);
+      fs.writeFileSync(file, original);
+      fs.chmodSync(file, publicationMode ^ 0o100);
+      assert.throws(consume, /drift/);
+      fs.chmodSync(file, publicationMode);
+      fs.renameSync(file, file + '.missing');
+      assert.throws(consume);
+      fs.renameSync(file + '.missing', file);
+    }
+    for (const relative of CONSUMERS) {
+      const source = path.join(repository, relative.slice('host/'.length)), original = read(source);
+      fs.writeFileSync(source, Buffer.concat([original, Buffer.from('stale canonical input')]));
+      assert.throws(consume, /digest mismatch/);
+      fs.writeFileSync(source, original);
+    }
+    const extra = path.join(publicationRoot, 'unselected-output');
+    fs.writeFileSync(extra, 'not part of the candidate');
+    assert.throws(consume, /complete publication inventory drift/);
+    fs.unlinkSync(extra);
+    const gate = require(path.join(publicationRoot, CONSUMERS[0]));
+    for (const consumer of [gate.verifyCurrentReviews,
+      require(path.join(publicationRoot, CONSUMERS[1])).currentReviewAdmission,
+      require(path.join(publicationRoot, CONSUMERS[2])).currentReviewAdmission]) {
+      assert.throws(() => consumer({ pr: 1, getPullRequest: () => ({ number: 1, state: 'OPEN' }) }),
+        /live current review PR identity is incomplete/);
+    }
+    const codex = require(path.join(publicationRoot, OWNED[2]));
+    assert.throws(() => codex.validateIntegrationCoverage({ input: {} }, {}),
+      error => error.code === 'INVALID_INPUT');
+    const claude = require(path.join(publicationRoot, OWNED[5]));
+    const request = { schema: claude.REQUEST_SCHEMA, role: 'integrator', worktree: repository, phase: '49' };
+    for (const review_contract of ['shipyard.integration-review.v1', 'shipyard.integration-review.v2'])
+      assert.equal(claude.parseRequest({ ...request, review_contract }).review_contract, review_contract);
+    assert.throws(() => claude.parseRequest({ ...request, review_contract: 'shipyard.integration-review.v999' }),
+      error => error.code === 'INVALID_INPUT');
+    assert.equal(claude.isPreparedIntegratorContext({}), false);
+    assert.equal(consume().complete_publication, true);
   } finally {
     if (fs.existsSync(stage)) fixtureDirectoryModes(stage, 0o700);
     fs.rmSync(temporary, { recursive: true, force: true });
