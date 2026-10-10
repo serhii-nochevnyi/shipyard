@@ -22,6 +22,12 @@ const CURRENT_ROOT = '/Users/serhii/.local/state/shipyard/phase49-selected-packa
 const CURRENT_SHA = '92270f73cc794f9e3d121767c186330e4d50f8fa44a91750da8f50a3a438be36';
 const CURRENT_HEAD = '6325fd1c268d82eb62c8a9c5749d4eb7a2ce50b6';
 const CURRENT_TREE = '0636ae50a23ae4e5d606b9429c8895c9206bd913';
+const ACCOUNTING_ROOT = '/Users/serhii/.local/state/shipyard/phase49-selected-package-22f0064d2123';
+const ACCOUNTING_SHA = '998663f1d220924f4ca57ed8407200baebac7f0d8ebd1b4c7e14244f73c3f265';
+const ACCOUNTING_HEAD = '22f0064d2123f7ab72362396bb9ea1800c5b3655';
+const ACCOUNTING_TREE = 'ad0dce6d886e608409d77ae9c735025ea3f0444b';
+const ACCOUNTING_OWNED = ['host/plugins/delivery-pipeline/scripts/codex-runtime-host.cjs',
+  'host/plugins/delivery-pipeline/scripts/role-artifact.cjs', '.codex-plugin/plugin.json', 'package-build.json'];
 const COMPLETE_OWNED = [...OWNED, ...['gate-trailer', 'sentinel', 'state-sync']
   .map(name => 'host/plugins/delivery-pipeline/scripts/' + name + '.cjs'),
   'host/plugins/delivery-pipeline/commands/deliver.md',
@@ -274,7 +280,7 @@ test('phase49 original signed host selection: historical immutable stage remains
   assert.deepEqual(read(path.join(STAGE_ROOT, 'selection.json'), SELECTION_SHA), bytes);
   const git = (...args) => execFileSync('git', ['-C', ROOT, ...args], { encoding: 'utf8', timeout: 10000 }).trim();
   assert.equal(git('rev-parse', HEAD + '^{tree}'), TREE);
-  git('merge-base', '--is-ancestor', HEAD, 'HEAD');
+  assert.equal(git('rev-parse', HEAD), HEAD);
   for (const input of selection.inputs) {
     const committed = execFileSync('git', ['-C', ROOT, 'show', HEAD + ':' + input.path], { timeout: 10000, maxBuffer: 32 * 1024 * 1024 });
     assert.equal(sha(committed), input.sha256, 'original producer source drift');
@@ -299,6 +305,37 @@ test('phase49 repaired signed selection: complete161 publication and supported p
   }
   const bytes = authenticatePublicSelection(CURRENT_ROOT, CURRENT_SHA, 'public-key.asc');
 
+  if (fs.existsSync(path.join(ACCOUNTING_ROOT, 'selection.json'))) {
+    const historical = JSON.parse(bytes);
+    const actual = withoutWrites(() => inventory(historical.stage, '', true));
+    assert.deepEqual(actual, historical.outputs.map(row => ({ path: row.path, sha256: row.sha256,
+      bytes: row.bytes, mode: row.publication_mode === 0o755 ? 0o500 : 0o400 })));
+    assert.equal(historical.source.head, CURRENT_HEAD);
+    assert.equal(historical.source.tree, CURRENT_TREE);
+    assert.equal(historical.build_calls, 1);
+    const git = (...args) => execFileSync('git', ['-C', ROOT, ...args],
+      { encoding: 'utf8', timeout: 10000 }).trim();
+    assert.equal(git('rev-parse', CURRENT_HEAD + '^{tree}'), CURRENT_TREE);
+    for (const input of historical.inputs) {
+      const committed = execFileSync('git', ['-C', ROOT, 'show', CURRENT_HEAD + ':' + input.path],
+        { timeout: 10000, maxBuffer: 32 * 1024 * 1024 });
+      assert.equal(sha(committed), input.sha256, 'historical canonical source drift');
+      assert.equal(git('ls-tree', CURRENT_HEAD, '--', input.path).split(' ')[0],
+        input.mode === 0o755 ? '100755' : '100644');
+    }
+    const coverage = require('../../plugins/delivery-pipeline/scripts/conveyor-coverage.cjs');
+    const verified = coverage.verify({ commit: CURRENT_HEAD, repo: coverage.repoSlug(ROOT), worktree: ROOT });
+    assert.equal(verified.covered, true, 'historical source authority: ' + verified.reason);
+    const original = JSON.parse(read(historical.source.original_result, historical.source.original_result_sha256));
+    assert.equal(original.ticket, 'T-49-08');
+    assert.equal(original.dispatch_id, historical.source.original_dispatch);
+    assert.deepEqual(coverage.validateFinalizationEvidence(verified.record).receipt, original.receipt);
+    const stream = original.receipt.runtime_evidence.transcript;
+    assert.equal(read(stream.path, stream.sha256).length, stream.bytes);
+    t.diagnostic('Original6325 remains immutable historical authority; changed-source distribution is checked separately.');
+    return;
+  }
+
   const coverage = require('../../plugins/delivery-pipeline/scripts/conveyor-coverage.cjs');
   const namespace = coverage.repoSlug(ROOT);
   const history = [CURRENT_HEAD, 'bd2d58b2e3f55d441d0ff3cbd26fba34849e7ea5',
@@ -314,7 +351,7 @@ test('phase49 repaired signed selection: complete161 publication and supported p
   assert.equal(records[1].tree, successorTree);
   assert.equal(records[2].tree, successorTree);
   assert.equal(gitCurrent('rev-parse', '91611a76d3ff5cb380775cbca4873fb848b7a874^{tree}'), successorTree);
-  gitCurrent('merge-base', '--is-ancestor', successorHead, 'HEAD');
+  assert.equal(gitCurrent('rev-parse', successorHead), successorHead);
   const changed = gitCurrent('diff', '--name-only', '--no-renames', CURRENT_HEAD, successorHead)
     .split('\n').filter(Boolean);
   assert.deepEqual(changed, ['tests/unit/role-artifact.test.cjs']);
@@ -372,7 +409,7 @@ test('phase49 repaired signed selection: complete161 publication and supported p
   assert.deepEqual(read(path.join(CURRENT_ROOT, 'selection.json'), CURRENT_SHA), bytes);
   const git = (...args) => execFileSync('git', ['-C', ROOT, ...args], { encoding: 'utf8', timeout: 10000 }).trim();
   assert.equal(git('rev-parse', CURRENT_HEAD + '^{tree}'), CURRENT_TREE);
-  git('merge-base', '--is-ancestor', CURRENT_HEAD, 'HEAD');
+  assert.equal(git('rev-parse', CURRENT_HEAD), CURRENT_HEAD);
   for (const input of selection.inputs) {
     const committed = execFileSync('git', ['-C', ROOT, 'show', CURRENT_HEAD + ':' + input.path], { timeout: 10000, maxBuffer: 32 * 1024 * 1024 });
     assert.equal(sha(committed), input.sha256, 'original producer source drift');
@@ -386,6 +423,111 @@ test('phase49 repaired signed selection: complete161 publication and supported p
   const transcript = original.receipt.runtime_evidence.transcript;
   assert.equal(read(transcript.path, transcript.sha256).length, transcript.bytes);
   t.diagnostic('Signed source attestation and original stream integrity inspected; private DurableRecorder/sealed-artifact authentication remains trusted-host custody. No semantic/native/installed/10x acceptance.');
+});
+
+
+function inspectAccountingSuccessor(bytes, expected, repository, stage, historical) {
+  const selected = JSON.parse(bytes);
+  assert.notEqual(selected.source.head, historical.source.head, 'old producer substituted');
+  assert.notEqual(stage, historical.stage, 'historical stage reused');
+  assert.notEqual(selected.package.digest, historical.package.digest, 'old package substituted');
+  assert.equal(selected.inputs.length, 162, 'incomplete canonical input inventory');
+  assert.equal(historical.outputs.length, 161);
+  assert.deepEqual(selected.inputs.map(row => row.path).sort(), historical.inputs.map(row => row.path).sort(),
+    'canonical input paths added or removed');
+  const changedInputs = selected.inputs.filter(row => {
+    const old = historical.inputs.find(previous => previous.path === row.path);
+    assert.equal(row.mode, old.mode, 'canonical input mode changed');
+    return row.sha256 !== old.sha256;
+  }).map(row => row.path).sort();
+  assert.deepEqual(changedInputs, ACCOUNTING_OWNED.slice(0, 2).map(relative => relative.slice('host/'.length)).sort(),
+    'unexpected canonical input change');
+  assert.equal(selected.builder_sha256, historical.builder_sha256, 'historical builder changed');
+  assert.deepEqual(selected.outputs.map(row => row.path), historical.outputs.map(row => row.path),
+    'output paths added or removed');
+  const changed = selected.outputs.filter(row => {
+    const old = historical.outputs.find(previous => previous.path === row.path);
+    return row.sha256 !== old.sha256 || row.bytes !== old.bytes || row.publication_mode !== old.publication_mode;
+  }).map(row => row.path).sort();
+  assert.deepEqual(changed, [...ACCOUNTING_OWNED].sort(), 'unexpected generated delta requires ownership amendment');
+  const result = inspect(bytes, expected, repository, stage);
+  inspectAccountingAPIs(path.join(repository, 'plugins/shipyard/host/plugins/delivery-pipeline'));
+  return { ...result, unchanged_outputs: 157, installed_acceptance: false, empirical_acceptance: false };
+}
+
+function inspectAccountingAPIs(hostRoot) {
+  const runtime = require(path.join(hostRoot, 'scripts/codex-runtime-host.cjs'));
+  const authority = require(path.join(hostRoot, 'scripts/role-artifact.cjs'));
+  assert.equal(typeof runtime.verifyCompletedReviewConsumption, 'function');
+  assert.equal(typeof authority.authenticateCompletedReviewReferences, 'function');
+  for (const serialized of [{}, { authenticated: true }, { progress: { state: { completed: true } } }]) {
+    assert.throws(() => runtime.verifyCompletedReviewConsumption(serialized),
+      error => error.code === 'REVIEW_PROGRESS_REQUIRED');
+    assert.throws(() => runtime.validateReviewRestoration(serialized, {}),
+      error => error.code === 'REVIEW_PROGRESS_INVALID');
+    assert.throws(() => runtime.verifyFileConsumption(serialized, '', 'forged'),
+      error => error.code === 'INVALID_ARCH_REVIEW_CONTEXT');
+  }
+}
+
+function inspectAccountingInstalled(identity, authenticated, selectionBytes) {
+  assert.equal(sha(selectionBytes), ACCOUNTING_SHA, 'foreign installed selection');
+  const selected = JSON.parse(selectionBytes);
+  assert.equal(selected.source.head, ACCOUNTING_HEAD);
+  assert.equal(selected.source.tree, ACCOUNTING_TREE);
+  assert.deepEqual(authenticated.binding.outputs, selected.outputs, 'installed binding inventory differs');
+  assert.equal(authenticated.binding.version, selected.package.version, 'installed version differs');
+  assert.equal(authenticated.binding.package_sha256, selected.package.digest, 'installed package digest differs');
+  equalInputs(selected.inputs, authenticated.binding.source.identities);
+  const acceptance = require('../smoke/phase47-runtime-acceptance.cjs');
+  const observed = acceptance.inspectInstalled(identity, authenticated);
+  inspectAccountingAPIs(identity.host_root);
+  return { ...observed, empirical_acceptance: false };
+}
+
+test('fresh completed-accounting selection independently inspects full162/all161 and unchanged157', t => {
+  try { fs.accessSync(path.join(ACCOUNTING_ROOT, 'selection.json')); }
+  catch (error) {
+    if (!['ENOENT', 'EACCES', 'EPERM'].includes(error.code)) throw error;
+    t.skip('HOLD: coordinator fresh selection pending; no build, installation or empirical acceptance');
+    return;
+  }
+  const digest = ACCOUNTING_SHA;
+  assert(![CURRENT_SHA, SELECTION_SHA].includes(digest));
+  const bytes = authenticatePublicSelection(ACCOUNTING_ROOT, digest, 'public-key.asc');
+  const historicalBytes = authenticatePublicSelection(CURRENT_ROOT, CURRENT_SHA, 'public-key.asc');
+  const historical = JSON.parse(historicalBytes), selected = JSON.parse(bytes);
+  const expected = { selection_sha256: digest, head: ACCOUNTING_HEAD, tree: ACCOUNTING_TREE };
+  const result = withoutWrites(() => inspectAccountingSuccessor(bytes, expected, ROOT,
+    path.join(ACCOUNTING_ROOT, 'candidate'), historical));
+  assert.equal(result.unchanged_outputs, 157);
+  assert.equal(result.inspector_build_calls, 0);
+  assert.equal(result.installed_acceptance, false);
+  const coverage = require('../../plugins/delivery-pipeline/scripts/conveyor-coverage.cjs');
+  const verified = coverage.verify({ commit: ACCOUNTING_HEAD, repo: coverage.repoSlug(ROOT), worktree: ROOT });
+  assert.equal(verified.covered, true, 'protected final12 source authority: ' + verified.reason);
+  assert.equal(verified.record.tree, ACCOUNTING_TREE);
+  const stored = coverage.validateFinalizationEvidence(verified.record);
+  const original = JSON.parse(read(selected.source.original_result, selected.source.original_result_sha256));
+  assert.equal(original.ticket, 'T-49-12');
+  assert.equal(original.dispatch_id, selected.source.original_dispatch);
+  assert.deepEqual(stored.receipt, original.receipt, 'original recorder equality');
+  const stream = original.receipt.runtime_evidence.transcript;
+  assert.equal(read(stream.path, stream.sha256).length, stream.bytes);
+  const ci = JSON.parse(read('/Users/serhii/.local/state/shipyard/phase49-T49-12-completed-accounting-ci-admission.json'));
+  assert.equal(ci.headSha, ACCOUNTING_HEAD);
+  assert.equal(ci.status, 'completed'); assert.equal(ci.conclusion, 'success');
+  const job = ci.jobs.find(row => row.name === 'test-fast');
+  assert(job && job.status === 'completed' && job.conclusion === 'success');
+  for (const name of ['publish gate', 'runtime digest trailer', 'make test-fast']) {
+    const step = job.steps.find(row => row.name === name);
+    assert(step && step.status === 'completed' && step.conclusion === 'success');
+  }
+  read('/Users/serhii/.local/state/shipyard/phase49-T49-12-completed-accounting-ci-success.log',
+    'cb89005421c2c770ac4acc2ee1a10fbce9d0d0493a88c6bd0ec85847fef23ca7');
+  assert.deepEqual(read(path.join(CURRENT_ROOT, 'selection.json'), CURRENT_SHA), historicalBytes);
+  inspectRuntimeConsumers(ROOT);
+  t.diagnostic('Fresh distribution inspected; actual supported installation and exact13-head full CI remain separate host gates. No empirical acceptance.');
 });
 
 test('isolated canonical candidate rejects tampering, stale binding and replacement without writes', () => {
@@ -423,6 +565,17 @@ test('isolated canonical candidate rejects tampering, stale binding and replacem
     fixtureDirectoryModes(stage, 0o500);
     const consume = () => withoutWrites(() => inspect(bytes, expected, repository, stage));
     assert.equal(consume().inspector_build_calls, 0);
+    const originalStat = fs.fstatSync;
+    let statCalls = 0;
+    try {
+      fs.fstatSync = function(...args) {
+        const stat = originalStat.apply(this, args);
+        if (++statCalls === 2) stat.mtimeMs += 1;
+        return stat;
+      };
+      assert.throws(consume, /input changed during inspection/);
+    } finally { fs.fstatSync = originalStat; }
+
 
     const originalSource = { ...selection.source, head: CURRENT_HEAD, tree: CURRENT_TREE };
     const reuseSelection = { ...selection, source: originalSource };
@@ -619,8 +772,8 @@ test('isolated canonical candidate rejects tampering, stale binding and replacem
     inspectRuntimeConsumers(repository);
 
     const originalStageInventory = inventory(stage, '', true);
-    const changedCanonical = path.join(repository, 'plugins/delivery-pipeline/commands/deliver.md');
-    fs.appendFileSync(changedCanonical, '\nfixture changed canonical input\n');
+    for (const relative of ACCOUNTING_OWNED.slice(0, 2))
+      fs.appendFileSync(path.join(repository, relative.slice('host/'.length)), '\n');
     assert.throws(consume);
     const distinct = path.join(temporary, 'distinct-changed-input-candidate');
     assert(!fs.existsSync(distinct));
@@ -651,8 +804,23 @@ test('isolated canonical candidate rejects tampering, stale binding and replacem
     }
     fixtureDirectoryModes(distinct, 0o500);
     try {
-      const admitted = withoutWrites(() => inspect(distinctBytes, { selection_sha256: sha(distinctBytes),
-        head: distinctSelection.source.head, tree: distinctSelection.source.tree }, repository, distinct));
+      const admitted = withoutWrites(() => inspectAccountingSuccessor(distinctBytes, { selection_sha256: sha(distinctBytes),
+        head: distinctSelection.source.head, tree: distinctSelection.source.tree }, repository, distinct, selection));
+      assert.equal(admitted.unchanged_outputs, 157);
+      for (const mutate of [
+        value => { value.source = selection.source; },
+        value => { value.stage = selection.stage; },
+        value => { value.inputs.pop(); },
+        value => { value.outputs.pop(); },
+        value => { value.outputs.find(row => !ACCOUNTING_OWNED.includes(row.path)).publication_mode ^= 0o100; },
+        value => { value.package.digest = selection.package.digest; },
+      ]) {
+        const altered = structuredClone(distinctSelection); mutate(altered);
+        const alteredBytes = Buffer.from(JSON.stringify(altered));
+        assert.throws(() => withoutWrites(() => inspectAccountingSuccessor(alteredBytes,
+          { selection_sha256: sha(alteredBytes), head: distinctSelection.source.head,
+            tree: distinctSelection.source.tree }, repository, distinct, selection)));
+      }
       assert.equal(admitted.complete_publication, true);
       assert.equal(admitted.inspector_build_calls, 0);
       assert.equal(distinctBuildCalls, 1);
@@ -714,4 +882,4 @@ test('packaged role APIs authenticate full and v2 current reviews with original 
   });
 });
 
-module.exports = { inspect, inventory, read, canonicalInputs, admitSuccessor, OWNED: COMPLETE_OWNED };
+module.exports = { inspect, inspectAccountingSuccessor, inspectAccountingInstalled, inventory, read, canonicalInputs, admitSuccessor, OWNED: COMPLETE_OWNED };
