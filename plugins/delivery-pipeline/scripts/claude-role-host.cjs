@@ -44,6 +44,7 @@ const DECISIONS_PATH_RE = /\.planning\/investigations\/[A-Za-z0-9._/-]+\/DECISIO
 const HEX64_RE = /^[a-f0-9]{64}$/i;
 const TRANSCRIPT_MAX_BYTES = 4 * 1024 * 1024;
 const USAGE_FIELDS = Object.freeze(['input_tokens', 'cache_read_input_tokens', 'cache_creation_input_tokens', 'output_tokens']);
+const integratorContexts = new WeakSet();
 
 function object(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -87,8 +88,10 @@ function parseRequest(value) {
   if (!ROLES.includes(role)) reject(`role must be ${ROLES.join(' or ')}`);
   const allowed = role === 'arch-review'
     ? new Set(['schema', 'role', 'worktree', 'ticket', 'phase', 'pr', 'signals', 'repo'])
-    : new Set(['schema', 'role', 'worktree', 'phase', 'signals']);
+    : new Set(['schema', 'role', 'worktree', 'phase', 'signals', ...(role === 'integrator' ? ['review_contract'] : [])]);
   for (const key of Object.keys(value)) if (!allowed.has(key)) reject(`request field ${key} is not permitted`);
+  if (value.review_contract !== undefined && !['shipyard.integration-review.v1', 'shipyard.integration-review.v2'].includes(value.review_contract))
+    reject('unsupported integration review contract', 'INVALID_INPUT');
   if (role === 'arch-review' && value.phase !== undefined && (value.ticket !== undefined || value.pr === undefined))
     reject('phase architecture review requires an explicit PR and no ticket selector');
   if (role !== 'arch-review' && (value.ticket !== undefined || value.pr !== undefined)) reject(`${role} subject is derived from the canonical phase ticket set`);
@@ -112,6 +115,7 @@ function parseRequest(value) {
     }
   }
   return Object.freeze({ schema: REQUEST_SCHEMA, role, worktree: realWorktree, ...selector,
+    ...(value.review_contract === undefined ? {} : { review_contract: value.review_contract }),
     ...(value.phase !== undefined && role === 'arch-review' ? { repo: value.repo ?? null } : {}),
     ...(value.pr === undefined ? {} : { pr: value.pr }),
     ...(value.signals === undefined ? {} : { signals: Object.freeze({ ...value.signals }) }),
@@ -641,10 +645,36 @@ function prepareIntegrator(options, request, canonical, graph) {
   const signals = observedSignals(request, selection.rows, livePullRequests,
     estimatePromptTokens('integrator', packet, plan, null, reference));
   const prompt = makePrompt('integrator', subject, packet, reference);
-  return Object.freeze({ role: 'integrator', ticket: subject, phase, phaseNumber,
+  const prepared = Object.freeze({ role: 'integrator', ticket: subject, phase, phaseNumber,
     base: defaultBase, baseCommit: defaultOid, defaultBaseTree, mergeBase, mergeBaseTree, ticketSet,
     ticketSetDigest, livePullRequests, canonical, graph, rows: selection.rows, sources, packet, prompt, signals,
     evidencePath: `.planning/phases/${phase}/INTEGRATION.md` });
+  integratorContexts.add(prepared);
+  if (request.review_contract !== 'shipyard.integration-review.v2') return prepared;
+  const scope = { worktree: canonical.worktree, phase: phaseNumber, ticket: subject, run_id: newDispatchId() };
+  const review = require('./codex-delivery-host.cjs').prepareIntegrationLineage(scope, prepared, {
+    ...options, nativeRuntime: 'claude', dispatchId: scope.run_id,
+    storageRoot: storageDirectory(options, scope.run_id, canonical.worktree),
+    instructionBinding: {}, generatedInstructionBytes: Buffer.byteLength(reference),
+  });
+  const currentPrompt = makePrompt('integrator', subject, review.packet, reference);
+  return Object.freeze({ ...prepared, packet: review.packet, prompt: currentPrompt, integrationReview: review,
+    signals: observedSignals(request, selection.rows, livePullRequests, Math.ceil(Buffer.byteLength(currentPrompt) / 4)) });
+}
+
+function prepareIntegratorContext(options, request) {
+  const canonical = canonicalWorktree(options, request.worktree, true);
+  const graph = graphData(options, canonical.projectRoot);
+  if (request.review_contract !== undefined && !['shipyard.integration-review.v1', 'shipyard.integration-review.v2'].includes(request.review_contract))
+    reject('unsupported integration review contract', 'INVALID_INPUT');
+  return prepareIntegrator(options, request, canonical, graph);
+}
+
+function isPreparedIntegratorContext(value) { return integratorContexts.has(value); }
+
+function integrationPacketWithCoverage(prepared, coverage) {
+  return buildPacket(prepared.canonical, 'integrator', prepared.ticket, prepared.sources,
+    { acceptance: [], verification: [] }, { ...prepared.packet.role_context, review_coverage: coverage });
 }
 
 function sentinelPreflightRound(options, canonical, graph, selection) {
@@ -870,7 +900,8 @@ function estimatePromptTokens(role, packet, plan, pr, reference, readOnlySmoke =
 }
 
 function prepareInvocation(options, request) {
-  const canonical = canonicalWorktree(options, request.worktree, request.role === 'arch-review' && !!request.phase);
+  const canonical = canonicalWorktree(options, request.worktree, (request.role === 'arch-review' && !!request.phase)
+    || (request.role === 'integrator' && request.review_contract === 'shipyard.integration-review.v2'));
   const graph = graphData(options, canonical.projectRoot);
   const rows = requestRows(request, graph, canonical);
   const prepared = request.role === 'arch-review'
@@ -969,6 +1000,7 @@ function roleOutputSchema(role) {
           ticket: FINDING_TICKET_SCHEMA, fix_ticket: FIX_TICKET_SCHEMA,
           question: { type: 'string' }, evidence: { type: 'string' },
         } } },
+      reviewed_identity: { type: 'object' }, coverage: { type: 'object' },
     });
     return { type: 'object', properties, required: ['outcome', 'phase', 'head', 'head_tree', 'base',
       'base_tree', 'ticket_set', 'ticket_set_digest', 'blocking_count', 'summary', 'findings'] };
@@ -1022,6 +1054,8 @@ function validateResult(prepared, result) {
         || result.ticket_set_digest !== prepared.ticketSetDigest) {
       reject('integrator result identity differs from the authenticated phase snapshot', 'ARTIFACT_IDENTITY_MISMATCH');
     }
+    if (prepared.integrationReview)
+      require('./codex-delivery-host.cjs').validateIntegrationCoverage(prepared.integrationReview, result);
   } else {
     if (result.outcome !== 'clear' && result.outcome !== 'blocked' && result.outcome !== 'awaiting-human') {
       reject('sentinel result has an unsupported outcome', 'INVALID_RESULT');
@@ -1157,6 +1191,10 @@ function assertEvidenceOnlyChanges(options, prepared, hostOwnedFiles = new Map()
     if (file === prepared.evidencePath) return false;
     if (prepared.binding && untracked.includes(file) && !changed.includes(file)
         && file.startsWith(roleArtifact.ARTIFACT_ARCHIVE_DIR + '/')) return false;
+    if (prepared.integrationReview && untracked.includes(file) && !changed.includes(file)) {
+      const pin = prepared.integrationReview.archivePins.find(pin => pin.path === file);
+      if (pin) { roleArtifact.assertArchivePin(prepared.canonical.worktree, pin); return false; }
+    }
     const scratchDigest = prepared.canonical.scratchDigests.get(file);
     if (scratchDigest !== undefined) {
       try {
@@ -1186,6 +1224,8 @@ function assertEvidenceOnlyChanges(options, prepared, hostOwnedFiles = new Map()
 
 function revalidateLiveInputs(options, prepared, currentDispatchId) {
   const worktree = prepared.canonical.worktree;
+  if (prepared.integrationReview)
+    require('./codex-delivery-host.cjs').recheckIntegrationReview(prepared.integrationReview);
   if (prepared.role === 'arch-review') {
     const live = getPullRequest(options, worktree, prepared.pr, prepared.rows[0].row.repo || null);
     if (!object(live) || live.state !== 'OPEN' || live.isDraft !== prepared.livePullRequests[0].isDraft
@@ -1511,6 +1551,9 @@ module.exports = Object.freeze({
   parseRequest,
   parseCli,
   prepareInlineReview: makePrompt,
+  prepareIntegratorContext,
+  isPreparedIntegratorContext,
+  integrationPacketWithCoverage,
   createClaudeRoleHost,
   runClaudeRoleCli,
 });
