@@ -2124,4 +2124,44 @@ for (const repo of [null, 'acme/selected']) test('mixed repository archive scope
   } finally {cleanPhaseScope(value);}
 });
 
+test('completed reference authentication rejects caller authority with no filesystem mutation', () => {
+  const authority = require('../../plugins/delivery-pipeline/scripts/role-artifact.cjs');
+  for (const selectors of [null, {}, { worktree: '/missing', progress: {}, receipt_store: '/missing', dispatch_id: 'missing',
+    evidence: {} }, { worktree: '/missing', progress: {}, receipt_store: '/missing', dispatch_id: 'missing',
+    completed: true }, ...['gsd_role', 'gsd_launch_mechanism', 'native_child_evidence', 'task_relay'].map(key => ({
+      worktree: '/missing', progress: {}, receipt_store: '/missing', dispatch_id: 'missing', [key]: {} }))]) {
+    assert.throws(() => authority.authenticateCompletedReviewReferences(selectors),
+      error => error.code === 'REVIEW_PROGRESS_REQUIRED');
+  }
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'completed-reference-refusal-'));
+  try {
+    git(root, ['init', '--quiet']);
+    const store = path.join(root, 'absent-original-store');
+    const source = `
+      const fs = require('node:fs');
+      const authority = require(process.env.REFERENCE_MODULE);
+      const selectors = JSON.parse(process.env.REFERENCE_SELECTORS);
+      for (const name of ['mkdirSync', 'writeFileSync', 'renameSync', 'unlinkSync', 'appendFileSync', 'fsyncSync'])
+        fs[name] = () => { throw new Error('unexpected authority mutation: ' + name); };
+      const original = fs.openSync;
+      fs.openSync = (file, flags, ...args) => {
+        if (typeof flags === 'string' ? flags !== 'r' : flags & (fs.constants.O_WRONLY | fs.constants.O_RDWR | fs.constants.O_CREAT))
+          throw new Error('unexpected authority write-open');
+        return original(file, flags, ...args);
+      };
+      try { authority.authenticateCompletedReviewReferences(selectors); process.exit(2); }
+      catch (error) {
+        if (error.message.includes('unexpected authority')) throw error;
+        process.stdout.write('REFUSED_WITHOUT_WRITES');
+      }
+    `;
+    const output = execFileSync(process.execPath, [...testAuthorityArgs, '-e', source], { encoding: 'utf8',
+      env: { ...process.env, REFERENCE_MODULE: require.resolve('../../plugins/delivery-pipeline/scripts/role-artifact.cjs'),
+        REFERENCE_SELECTORS: JSON.stringify({ worktree: root, receipt_store: store, dispatch_id: 'missing-original',
+          progress: { reference: 'review-progress-' + '0'.repeat(64) + '.json', sha256: '0'.repeat(64) } }) } });
+    assert.equal(output, 'REFUSED_WITHOUT_WRITES');
+    assert.equal(fs.existsSync(store), false);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
 done();
