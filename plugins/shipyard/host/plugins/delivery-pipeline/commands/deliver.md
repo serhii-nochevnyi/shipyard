@@ -2881,6 +2881,59 @@ driving PRs hands the user a half-truth.
      proven `contested` judgement and `critical`/`checkpoint` evidence, then
      cross the one boundary:
 
+     **Fresh final integration contract.** For supported epic final review, use
+     `shipyard.integration-review.v2`. The host derives the complete current
+     graph, plans, phase contracts, HEAD/tree, default base and merge-base,
+     merged ticket records and live ancestry. It prepares the complete
+     dictionary, calls `selectReviewBaseline({currentInput})` independently for
+     integration, and calls `buildReviewImpactPacket(currentInput, selection)`.
+     Architecture success does not authorize integration inheritance. Missing,
+     incompatible or unsupported original authority selects complete full review;
+     affected contracts or uncertain dependency closure also expand to full.
+     Preserve the baseline archive before clearing the current role scratch.
+     Never pass an old verdict, receipt, lineage, cursor or session as a new result.
+
+     The actual supported host entrypoints own preparation, native launch and
+     original evidence handoff to `sealJudgment` and `validateJudgmentManifest`:
+
+     ```javascript
+     const { prepareIntegratorContext, createClaudeRoleHost } = require(`${CLAUDE_PLUGIN_ROOT}/scripts/claude-role-host.cjs`);
+     const { createCodexDeliveryHost } = require(`${CLAUDE_PLUGIN_ROOT}/scripts/codex-delivery-host.cjs`);
+     const current = prepareIntegratorContext(options, { worktree, phase: String(phase) });
+     const phaseSubject = current.ticket;
+     const result = runtime === 'codex'
+       ? await createCodexDeliveryHost({ ...options, scope: {
+           run_id, worktree, repository: current.canonical.commonPath,
+           phase: current.phaseNumber, ticket: phaseSubject,
+         } }).run({ role: 'integrator', dispatch_id,
+           context: { review_contract: 'shipyard.integration-review.v2' } })
+       : await createClaudeRoleHost(options).run({ schema: 'shipyard.claude-role-request.v1',
+           role: 'integrator', worktree, phase: String(phase),
+           review_contract: 'shipyard.integration-review.v2' });
+     ```
+
+     `options` selects the canonical graph and supported installed runtime; it
+     supplies no model-authored authority. Consume only the returned original
+     receipt and sealed current artifact. Both producers retain complete live
+     preflight at launch and finish. The Codex path uses private prepared file
+     input with pinned installed instructions and the protected native progress
+     observer. Continuation uses only the existing authenticated exact-packet
+     host contract; a bare UUID or cursor supplies no coverage. Unsupported
+     baseline transport, including native-child/continuation authority, remains
+     role-specific full fallback. The second runtime preserves its complete
+     inline dictionary and native policy; it currently selects full review.
+     Unknown integration contract versions refuse before launch.
+
+     Read all newly required material and affected boundaries, evaluate inherited
+     assumptions and limitations, and retain every current membership/ancestry
+     check. Return a fresh `reviewed_identity` and explicit
+     `shipyard.integration-coverage-result.v1` inherited/new/impact/limitations
+     coverage. The complete current packet remains available; integrity checks
+     supply no semantic credit. Repaired finals always owe a fresh native verdict
+     and original application receipt. Premature or incomplete output stays
+     rejected and failed originals remain failed history. Current-consumer
+     lineage admission and generated publication are separate downstream gates.
+
      **Phase 41 prelaunch gate (both runtimes).** For phase 41, immediately
      before the integrator boundary on either runtime (`runtime: "claude"` or
      `runtime: "codex"`), run the merged-parent preflight in the integration
@@ -2916,7 +2969,9 @@ driving PRs hands the user a half-truth.
      `.planning/phases/<phase>/INTEGRATION.md`; the standard sealer below
      remains its only author. Other phases skip this gate.
 
-     Before constructing the integrator prompt, clear its role-owned
+     **Legacy full-input compatibility.** Existing v1 full-input callers and
+     direct-to-main phases retain the complete review path below. They grant no
+     inherited authority. Before constructing the legacy integrator prompt, clear its role-owned
      `.planning/phases/<phase>/INTEGRATION.md` scratch file in the integration
      worktree:
 
