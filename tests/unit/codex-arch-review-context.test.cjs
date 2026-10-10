@@ -1593,6 +1593,17 @@ for (const [role, changedPath] of [
   } finally { f.clean(); }
 });
 
+for (const options of [
+  { chunkBytes: 128 * 1024 }, { chunkBytes: 256 * 1024 },
+  { readerCapacity: { contract: { chunk_bytes: 128 * 1024, output_budget_bytes: 256 * 1024 } } },
+]) test('larger reader refuses unmeasured size and serialized capacity authority', () => {
+  const f = fileInputFixture('x'.repeat(128 * 1024), options);
+  try {
+    assert.throws(f.create, error => error.code === 'READER_CAPACITY_UNSUPPORTED');
+    assert.deepEqual(fs.readdirSync(f.storage), []);
+  } finally { f.clean(); }
+});
+
 test('bounded file input retains exact multibyte bytes, full accounting and private preparation authority', () => {
   const f = fileInputFixture();
   try {
