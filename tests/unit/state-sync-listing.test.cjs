@@ -614,7 +614,7 @@ test('foreign ticket and epic architecture consumers use planning root and refus
   const repo = 'acme/other';
   const ticketPr = {...pr(401,'OPEN',BRANCH,'main'),baseRefOid:'c'.repeat(40)};
   const epicPr = {...pr(399,'OPEN',EPIC,'main'),baseRefOid:'c'.repeat(40)};
-  const f = fixture({ticket:{repo},responses:{open:[ticketPr,epicPr],review:[ticketPr,epicPr],comparisons:{[`main...${EPIC}`]:1}}});
+  const f = fixture({ticket:{repo},responses:{open:[ticketPr,epicPr],review:[ticketPr,epicPr],view:{401:ticketPr,399:epicPr},comparisons:{[`main...${EPIC}`]:1}}});
   const foreign = fs.mkdtempSync(path.join(os.tmpdir(),'sync-foreign-'));
   const {execFileSync} = require('child_process');
   try {
@@ -631,29 +631,106 @@ test('foreign ticket and epic architecture consumers use planning root and refus
     graph.epics['43'].repos = [repo];
     fs.writeFileSync(graphPath,JSON.stringify(graph));
     const observed = path.join(f.root,'verdict-calls.jsonl');
+    const epicObserved = path.join(f.root,'epic-observations.json');
     const preload = path.join(f.root,'verdict-preload.cjs');
     const artifactModule = path.join(path.dirname(SCRIPT),'role-artifact.cjs');
-    fs.writeFileSync(preload, `const fs=require('fs'),target=${JSON.stringify(artifactModule)};const original=require(target);require.cache[require.resolve(target)].exports = {...original,currentArchitectureVerdict: input => { fs.appendFileSync(${JSON.stringify(observed)},JSON.stringify(input)+'\\n'); return {authenticated:true,verdict:'conform',pr:input.pr,head:input.head}; }};`);
-    const env = {NODE_OPTIONS:'--require='+preload};
+    const frontModule = path.join(path.dirname(SCRIPT),'front.cjs');
+    fs.writeFileSync(preload, `const fs=require('fs'),target=${JSON.stringify(artifactModule)};
+const original=require(target);
+const observe=(role,input)=>{fs.appendFileSync(${JSON.stringify(observed)},JSON.stringify({role,input})+'\\n');return role==='integration'&&input.pr===401&&process.env.STATE_SYNC_INTEGRATION_MISSING==='1'?null:{authenticated:true,verdict:'conform',pr:input.pr,head:input.head,fixture_role:role};};
+require.cache[require.resolve(target)].exports={...original,currentArchitectureVerdict:input=>observe('architecture',input),currentIntegrationVerdict:input=>observe('integration',input)};
+const frontTarget=${JSON.stringify(frontModule)},front=require(frontTarget);
+require.cache[require.resolve(frontTarget)].exports={...front,computeFront:(...args)=>{fs.writeFileSync(${JSON.stringify(epicObserved)},JSON.stringify(args[2].epics));return front.computeFront(...args);}};`);
+    const env = {NODE_OPTIONS:'--require='+preload,STATE_SYNC_INTEGRATION_MISSING:'0'};
     const result = run(f,[],env);
     assert.equal(result.status,0,result.stderr);
-    const inputs = fs.readFileSync(observed,'utf8').trim().split('\n').map(JSON.parse);
-    assert.deepEqual(inputs.map(input=>input.pr).sort(),[399,401]);
-    for (const input of inputs) {
+    const observations = () => fs.readFileSync(observed,'utf8').trim().split('\n').map(JSON.parse);
+    const inputs = observations();
+    for (const role of ['architecture','integration']) {
+      assert.deepEqual(inputs.filter(call=>call.role===role).map(({input})=>input.pr).sort(),[399,401]);
+    }
+    for (const {input} of inputs) {
       assert.equal(input.worktreePath,fs.realpathSync(f.root));
       assert.equal(input.graphDir,fs.realpathSync(f.graphDir));
       assert.equal(input.repo,repo);
       assert.equal(input.head,'b'.repeat(40));
       assert.equal(input.baseCommit,'c'.repeat(40));
+      assert.equal(input.headBranch,input.pr===401?BRANCH:EPIC);
+      assert.equal(input.baseName,'main');
+    }
+    const epicObservation = () => Object.values(JSON.parse(fs.readFileSync(epicObserved)))[0];
+    const assertRoles = (entry,number) => {
+      for (const role of ['architecture','integration']) {
+        assert.deepEqual(entry['authenticated_'+role],{authenticated:true,verdict:'conform',pr:number,head:'b'.repeat(40),fixture_role:role});
+      }
+      assert.deepEqual(entry.review_owed,{architecture:false,integration:false});
+    };
+    assertRoles(state(f)[TICKET],401);
+    assertRoles(epicObservation(),399);
+    assert.equal(epicObservation().repo,repo);
+    assert.equal(epicObservation().pr.headRefOid,'b'.repeat(40));
+    assert.equal(epicObservation().pr.baseRefOid,'c'.repeat(40));
+    const views = calls(f).filter(args=>args[0]==='pr'&&args[1]==='view');
+    for (const number of ['401','399']) {
+      assert.equal(views.filter(args=>args[2]===number).length,2);
+    }
+    fs.unlinkSync(observed);
+    const unavailableRole = run(f,[],{...env,STATE_SYNC_INTEGRATION_MISSING:'1'});
+    assert.equal(unavailableRole.status,0,unavailableRole.stderr);
+    for (const role of ['architecture','integration']) {
+      assert.deepEqual(observations().filter(call=>call.role===role).map(({input})=>input.pr).sort(),[399,401]);
     }
     assert.equal(state(f)[TICKET].authenticated_architecture.authenticated,true);
+    assert.equal(state(f)[TICKET].authenticated_integration,null);
+    assert.deepEqual(state(f)[TICKET].review_owed,{architecture:false,integration:true});
+    assertRoles(epicObservation(),399);
     fs.unlinkSync(observed);
-    config.pipeline.repos[repo] = path.join(foreign,'missing');
-    fs.writeFileSync(configPath,JSON.stringify(config));
+    const responses = JSON.parse(fs.readFileSync(f.responseFile));
+    responses.view['401'] = {...ticketPr,headRefOid:'d'.repeat(40)};
+    fs.writeFileSync(f.responseFile,JSON.stringify(responses));
+    const moved = run(f,[],env);
+    assert.equal(moved.status,0,moved.stderr);
+    const movedInputs = observations().filter(({input})=>input.pr===401);
+    assert.deepEqual(movedInputs.map(({role})=>role),['architecture','integration']);
+    for (const {input} of movedInputs) assert.equal(input.head,'d'.repeat(40));
+    assert.equal(state(f)[TICKET].authenticated_architecture,null);
+    assert.equal(state(f)[TICKET].authenticated_integration,null);
+    assert.deepEqual(state(f)[TICKET].review_owed,{architecture:true,integration:true});
+    assertRoles(epicObservation(),399);
+    responses.view['401'] = ticketPr;
+    fs.writeFileSync(f.responseFile,JSON.stringify(responses));
+    fs.unlinkSync(observed);
+    const persisted = JSON.parse(fs.readFileSync(configPath));
+    const absent = foreign + '-missing';
+    fs.rmSync(foreign,{recursive:true,force:true});
+    assert.equal(fs.existsSync(foreign),false);
+    assert.equal(fs.existsSync(absent),false);
+    const enclosing = spawnSync('git',['-C',path.dirname(absent),'rev-parse','--show-toplevel'],{encoding:'utf8'});
+    assert.equal(enclosing.status,128,enclosing.stderr);
+    assert.match(enclosing.stderr,/not a git repository/);
+    assert.equal(fs.existsSync(path.join(f.root,'.git')),true);
+    for (const namespace of ['pipeline','delivery_pipeline']) {
+      persisted[namespace] = {...persisted[namespace],repos:{...persisted[namespace]?.repos,[repo]:absent}};
+    }
+    fs.writeFileSync(configPath,JSON.stringify(persisted));
+    const effective = require(path.join(path.dirname(SCRIPT),'pipeline-config.cjs')).loadConfig(f.root);
+    assert.equal(effective.valid,true);
+    assert.equal(effective.config.repos[repo],absent);
+    const resolution = require(path.join(path.dirname(SCRIPT),'repo-resolve.cjs')).resolveRepository({
+      ticket:TICKET,repo,config:effective.config,configValid:effective.valid,projectRoot:f.root,
+    });
+    assert.equal(resolution.executable,false);
+    assert.equal(resolution.resolution,'track-only');
     const missing = run(f,[],env);
     assert.equal(missing.status,0,missing.stderr);
     assert.equal(fs.existsSync(observed),false);
     assert.equal(state(f)[TICKET].authenticated_architecture,null);
+    assert.equal(state(f)[TICKET].authenticated_integration,null);
+    assert.deepEqual(state(f)[TICKET].review_owed,{architecture:true,integration:true});
+    assert.equal(epicObservation().authenticated_architecture,null);
+    assert.equal(epicObservation().authenticated_integration,null);
+    assert.deepEqual(epicObservation().review_owed,{architecture:true,integration:true});
+    assert.match(missing.stdout,/track-only/);
   } finally {
     fs.rmSync(foreign,{recursive:true,force:true});
     fs.rmSync(f.root,{recursive:true,force:true});
