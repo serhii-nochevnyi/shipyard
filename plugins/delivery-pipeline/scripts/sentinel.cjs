@@ -67,6 +67,13 @@ const {
   limbRemedy: limbRemedyIn,
 } = require(path.join(__dirname, 'parent-moving.cjs'));
 
+function currentReviewAdmission(input) {
+  return require('./gate-trailer.cjs').verifyCurrentReviews(input);
+}
+
+module.exports = Object.freeze({ currentReviewAdmission });
+
+if (require.main === module) {
 const ROOT = process.cwd();
 const GH_TIMEOUT_MS = timeoutFromEnv('SHIPYARD_GH_TIMEOUT_MS', 60_000, 5 * 60_000);
 const REVIEWER_TIMEOUT_MS = timeoutFromEnv('SHIPYARD_REVIEWER_TIMEOUT_MS', 120_000, 10 * 60_000);
@@ -911,6 +918,9 @@ function dutyItems() {
       && s.authenticated_architecture.pr === s.pr && s.authenticated_architecture.head === s.head_sha
       && s.authenticated_architecture.base_commit === s.pr_base_sha && s.authenticated_architecture.base === base
       && s.authenticated_architecture.verdict === 'conform');
+    const integrationReady = !item.architecture.required || (s.authenticated_integration?.authenticated === true
+      && s.authenticated_integration.head === s.head_sha && s.authenticated_integration.base_commit === s.pr_base_sha
+      && s.authenticated_integration.base === base && s.authenticated_integration.outcome === 'passed');
     item.depth = stackDepth(id);
 
     if (PARKED.has(id)) {
@@ -1008,6 +1018,9 @@ function dutyItems() {
     } else if (item.architecture.required && !architectureReady && s.review_decision !== 'CHANGES_REQUESTED') {
       item.action = 'arch-review';
       item.why = 'integration target requires a fresh authenticated verdict on the exact live head and base';
+    } else if (item.architecture.required && !integrationReady && s.review_decision !== 'CHANGES_REQUESTED') {
+      item.action = 'integrator';
+      item.why = 'integration target requires a fresh authenticated integration verdict on the exact combined subject';
     } else if (t.checkpoint === 'review' && !reviewCheckpointReady(s)) {
       item.action = 'human';
       item.why = 'awaiting human review';
@@ -1270,11 +1283,12 @@ function mergeOne(id) {
   if (pr.baseRefName === integration) {
     res.architecture = architectureTarget({ base: pr.baseRefName, integrationBranch: integration });
     const checkout = localCheckout(repo, id);
-    let verdict;
-    try { verdict = checkout && require('./role-artifact.cjs').currentArchitectureVerdict({ worktreePath: ROOT, repo,
-      pr: s.pr, head: pr.headRefOid, headBranch: pr.headRefName, baseName: pr.baseRefName, baseCommit: pr.baseRefOid, graphDir: GRAPH_DIR }); }
-    catch (error) { return block('authenticated architecture review unavailable: ' + error.message); }
-    if (!verdict) return block('integration PR requires a fresh authenticated architecture verdict on its live head and base before human merge');
+    let admitted;
+    try { admitted = checkout && currentReviewAdmission({ worktreePath: ROOT, repo,
+      pr: s.pr, graphDir: GRAPH_DIR }); }
+    catch (error) { return block('authenticated current review unavailable: ' + error.message); }
+    if (!admitted?.architecture.ready) return block('integration PR requires a fresh authenticated architecture verdict on its live head and base before human merge');
+    if (!admitted?.integration) return block('integration PR requires a fresh authenticated integration verdict on its live combined subject before human merge');
     return block(`PR targets the integration branch ${integration} — landing a phase there is a human's decision, never the sentinel's`);
   }
   if (!allowed.has(pr.baseRefName)) {
@@ -1741,3 +1755,5 @@ if (epicsTouched.length) {
   console.log(`epic branch(es) receiving this work: ${epicsTouched.join(', ')} — the epic → integration PR stays a human merge`);
 }
 process.exit(0);
+
+}
