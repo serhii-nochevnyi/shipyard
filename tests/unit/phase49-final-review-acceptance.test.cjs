@@ -118,6 +118,23 @@ test('production pending ledger refuses invented counters, fixture admission and
     const value = clone(ledger); mutate(value); assert.throws(() => verifyEvidence(value));
   }
 });
+test('historical HOLD selection supplies no current publication or installed credit', t => {
+  const fs = require('node:fs'), path = require('node:path'), os = require('node:os');
+  const { verifyEvidence } = require('../smoke/phase49-final-review-acceptance.cjs');
+  const ledger = JSON.parse(fs.readFileSync(path.join(__dirname, '../../docs/audits/phase49-final-review-acceptance.json')));
+  if (!fs.existsSync(ledger.candidate.selection.path)) return t.skip('original historical selection unavailable');
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'phase49-historical-')));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  ledger.benchmark.authority.store = path.join(root, 'unavailable-receipts');
+  const report = verifyEvidence(ledger);
+  const publication = report.verified.find(row => row.name === 'immutable-publication').evidence;
+  assert.equal(publication.historical_only, true);
+  assert.equal(publication.complete_publication, false);
+  assert.equal(publication.installed, false);
+  assert.equal(publication.empirical_acceptance, false);
+  assert.equal(report.status, 'hold');
+  assert.equal(report.empirical_acceptance, false);
+});
 test('isolated unavailable originals validate an honest HOLD without writes or native launches', t => {
   const fs = require('node:fs'), path = require('node:path'), os = require('node:os');
   const { verifyEvidence } = require('../smoke/phase49-final-review-acceptance.cjs');
@@ -239,4 +256,28 @@ test('immutable source inventory includes added canonical inputs and excludes te
   fs.unlinkSync(path.join(root, 'plugins/delivery-pipeline/consumer.cjs'));
   git('add', '-u'); git('commit', '-m', 'removed canonical input');
   assert.throws(() => compareCanonicalInputs(baseline, sourceInputs(root, git('rev-parse', 'HEAD'))), /equivalence/);
+});
+
+
+test('complete canonical inventory includes scripts beyond the former fixed nine', t => {
+  const fs = require('node:fs'), path = require('node:path'), os = require('node:os');
+  const { execFileSync } = require('node:child_process');
+  const { sourceInputs } = require('../smoke/phase49-final-review-acceptance.cjs');
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'phase49-full-scripts-')));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const git = (...args) => execFileSync('git', ['-C', root, ...args], { encoding: 'utf8', stdio: 'pipe' }).trim();
+  git('init'); git('config', 'commit.gpgsign', 'false');
+  git('config', 'user.name', 'Isolated fixture'); git('config', 'user.email', 'fixture@example.invalid');
+  fs.mkdirSync(path.join(root, 'scripts'));
+  fs.writeFileSync(path.join(root, 'scripts/package-shipyard-codex.cjs'), 'builder');
+  fs.writeFileSync(path.join(root, 'scripts/additional-canonical.cjs'), 'required');
+  git('add', '.'); git('commit', '-m', 'isolated complete script inventory');
+  assert.deepEqual(sourceInputs(root, git('rev-parse', 'HEAD')).map(row => row.path),
+    ['scripts/additional-canonical.cjs', 'scripts/package-shipyard-codex.cjs']);
+});
+
+test('completed physical accounting refuses caller authority and extra selector fields', () => {
+  const { observeCompletedConsumption } = require('../smoke/phase49-final-review-acceptance.cjs');
+  for (const selectors of [{}, { worktree: '/', progress: {}, receipt_store: '/', dispatch_id: 'x', successful_reads: 1 },
+    { prepared: {}, native: {}, offsets: [0] }]) assert.throws(() => observeCompletedConsumption(selectors));
 });

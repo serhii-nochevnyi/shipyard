@@ -10,7 +10,8 @@ const ROOT = path.resolve(__dirname, '../..');
 const SCRIPTS = path.join(ROOT, 'plugins/delivery-pipeline/scripts');
 const SCHEMA = 'shipyard.phase49.final-review-acceptance.v1';
 const HISTORICAL_PLAN = '3328a4c25ae4f451a6f8dcbe01b0164260f31bf294ea33e70877795ae24380e1';
-const CURRENT_PLAN = 'a6e2b6805cbe54f62c065a0d471a94f8517244170f177ed452987e2d1b6d3034';
+const PREVIOUS_PLAN = 'a6e2b6805cbe54f62c065a0d471a94f8517244170f177ed452987e2d1b6d3034';
+const CURRENT_PLAN = '5801571880fe2236e9491eeb2a88e4ac952ea7620f4cdb155434004ff6eac2dc';
 const MAX_BYTES = 128 * 1024 * 1024;
 const CHECKS = ['full-fallback', 'changed-base-expansion', 'shared-contract-expansion', 'forged', 'stale', 'truncated', 'replay'];
 const sha = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
@@ -161,7 +162,10 @@ function inspectPublication(ref) {
   const selected = JSON.parse(bytes);
   assert.equal(selected.package.version, ref.package_version, 'candidate package version drift');
   assert.equal(selected.package.digest, ref.package_digest, 'candidate package digest drift');
-  const result = inspector.inspect(bytes, ref.expected, ROOT, ref.stage);
+  const result = ref.mode_predecessor
+    ? inspector.inspectModeSuccessor(bytes, ref.expected, ROOT, ref.stage,
+      original(ref.mode_predecessor.selection), ref.mode_predecessor.expected)
+    : inspector.inspect(bytes, ref.expected, ROOT, ref.stage);
   return { ...result, package: JSON.parse(bytes).package, installed: false };
 }
 function gitBytes(root, ...args) {
@@ -194,15 +198,12 @@ function sourceInputs(repository, commit) {
   assert(/^[a-f0-9]{40}$/.test(commit || ''), 'exact source commit required');
   const entries = gitBytes(repository, 'ls-tree', '-rz', '--full-tree', commit).toString('utf8').split('\0').filter(Boolean);
   assert(entries.length <= 20000, 'source tree inventory exceeds bound');
-  const scripts = new Set(['package-shipyard-codex.cjs', 'bootstrap-shipyard-plugin.cjs', 'ensure-gsd-plugin.cjs',
-    'ensure-gsd-core.sh', 'install-shipyard-codex.sh', 'install-shipyard-capability.sh', 'gen-codex-shipyard.cjs',
-    'merge-codex-config.cjs', 'configure-codex-notify.cjs'].map(name => 'scripts/' + name));
   const rows = [];
   let totalBytes = 0;
   for (const entry of entries) {
     const match = /^(\d{6}) (\w+) ([a-f0-9]{40})\t(.+)$/.exec(entry); assert(match, 'malformed source tree member');
     const [, mode, type, object, relative] = match;
-    if (!scripts.has(relative) && !/^(plugins|capabilities)\/delivery-pipeline\//.test(relative)) continue;
+    if (!/^scripts\//.test(relative) && !/^(plugins|capabilities)\/delivery-pipeline\//.test(relative)) continue;
     if (/\.(bak|orig|rej|swp)$|(?:^|\/)\.DS_Store$|~$/.test(relative)) continue;
     assert(type === 'blob' && ['100644', '100755'].includes(mode), 'canonical nonregular source');
     const size = Number(gitBytes(repository, 'cat-file', '-s', object).toString().trim());
@@ -213,7 +214,7 @@ function sourceInputs(repository, commit) {
     rows.push({ path: relative, sha256: sha(bytes), bytes: bytes.length, mode: mode === '100755' ? 0o755 : 0o644 });
     assert(rows.length <= 1000, 'canonical inventory exceeds bound');
   }
-  assert([...scripts].every(name => rows.some(row => row.path === name)), 'builder input inventory incomplete');
+  assert(rows.some(row => row.path === 'scripts/package-shipyard-codex.cjs'), 'builder input inventory incomplete');
   return rows;
 }
 function verifySourceHistory(ref) {
@@ -290,7 +291,7 @@ function verifyInstalledCandidate(candidate) {
 function verifyEvidence(ledger) {
   assert.equal(ledger.schema, SCHEMA);
   assert.equal(ledger.ticket, 'T-49-11');
-  assert([HISTORICAL_PLAN, CURRENT_PLAN].includes(ledger.plan_sha256), 'unsupported acceptance plan');
+  assert([HISTORICAL_PLAN, PREVIOUS_PLAN, CURRENT_PLAN].includes(ledger.plan_sha256), 'unsupported acceptance plan');
   const historical = ledger.plan_sha256 === HISTORICAL_PLAN;
   assert.equal(ledger.benchmark.material_bytes, 6530992);
   assert.equal(ledger.benchmark.observed_successful_reads, 830);
@@ -317,7 +318,16 @@ function verifyEvidence(ledger) {
   }
   const report = { schema: SCHEMA, status: 'hold', empirical_acceptance: false, historical_only: historical, verified: [], holds: historical ? [...ledger.holds] : [] };
   for (const [name, action] of [['original-benchmark', () => verifyBenchmark(ledger.benchmark.authority)],
-    ['immutable-publication', () => inspectPublication(ledger.candidate)]]) {
+    ['immutable-publication', () => {
+      if (!historical) return inspectPublication(ledger.candidate);
+      const selected = JSON.parse(original(ledger.candidate.selection));
+      assert.equal(selected.source.head, expected.head, 'historical source');
+      assert.equal(selected.source.tree, expected.tree, 'historical tree');
+      assert.equal(selected.package.version, ledger.candidate.package_version, 'historical package version drift');
+      assert.equal(selected.package.digest, ledger.candidate.package_digest, 'historical package digest drift');
+      return { historical_only: true, selection_sha256: expected.selection_sha256,
+        complete_publication: false, installed: false, empirical_acceptance: false };
+    }]]) {
     try { report.verified.push({ name, evidence: action() }); }
     catch (error) {
       if (!unavailable(error)) throw error;
@@ -351,7 +361,6 @@ function verifyEvidence(ledger) {
       if (!report.verified.some(row => row.name === name)) report.holds.push(name + ': independently authenticated native trace absent');
     if (!ledger.runtime.capacity) report.holds.push('capacity: original complete 128 KiB probe reference absent');
     else report.holds.push('capacity: serialized probe has not supplied private prepared-input authority to measureReaderCapacity');
-    if (ledger.native_traces.length) report.holds.push('native-counter-replay: completed progress cannot restore private input for verifyFileConsumption');
     report.holds.push('full-CI/fallback/refusal matrix: no independent original-observation verifier has admitted these obligations');
     report.status = report.holds.length ? 'hold' : 'acceptance';
     report.empirical_acceptance = report.status === 'acceptance';
@@ -400,12 +409,52 @@ function verifyNativeTrace({ receipt, current, role }) {
   assert(authors.length > 0, 'genuine baseline-to-repair commits required');
   assert(typeof current.coordinator_author === 'string' && current.coordinator_author.trim(), 'actual coordinator author identity required');
   assert(authors.some(author => author !== current.coordinator_author), 'another contributor repair required');
-  return { verdict, lineage, observed_contributor_authors: [...new Set(authors)], continuation: runtime.review_continuation, consumption: runtime.input_consumption,
-    accounting: runtime.input_accounting, native_trace_verified: true,
-    metrics: { successful_reads: metric(checked.chunk_reads),
-      retries: metric(null, 'Separate original attempt association has not been verified.'),
-      tokens: metric(null, 'Comparable native per-review token observations unavailable.') },
-    holds: ['Equivalent original obligations and physical attempt accounting are not yet independently admitted.'] };
+  const physical = observeCompletedConsumption({ worktree: current.worktreePath,
+    progress: runtime.review_continuation.progress, receipt_store: receipt.store, dispatch_id: receipt.dispatch });
+  assert.equal(physical.identity.role, role, 'physical accounting role differs');
+  assert.equal(physical.identity.head, current.head, 'physical accounting subject differs');
+  assert.equal(physical.identity.base, current.baseCommit, 'physical accounting base differs');
+  assert.equal(physical.identity.merge_base, progress.identity.merge_base, 'physical accounting merge base differs');
+  equalSet(physical.identity.ticket_set, progress.identity.ticket_set, 'physical accounting complete membership');
+  assert.equal(physical.identity.policy_hash, record.receipt.policy_hash, 'physical accounting policy differs');
+  assert.equal(physical.evidence_pins.dispatch_id, record.dispatch_id, 'physical accounting receipt differs');
+  assert.equal(physical.evidence_pins.manifest_sha256, runtime.input_bundle.manifest_sha256, 'physical accounting packet differs');
+  return { verdict, lineage, observed_contributor_authors: [...new Set(authors)],
+    continuation: runtime.review_continuation, physical, native_trace_verified: true,
+    metrics: physical.metrics,
+    holds: ['Equivalent original obligations and independent fallback/refusal observations remain unverified.'] };
+}
+
+function observeCompletedConsumption(selectors) {
+  assert(selectors && Object.keys(selectors).length === 4
+    && ['worktree', 'progress', 'receipt_store', 'dispatch_id'].every(key => Object.hasOwn(selectors, key)),
+  'only original protected completed-reference selectors allowed');
+  const physical = require(path.join(SCRIPTS, 'codex-runtime-host.cjs')).verifyCompletedReviewConsumption(selectors);
+  assert.equal(physical.schema, 'shipyard.completed-review-consumption.v1');
+  assert.equal(physical.semantic_credit, false);
+  assert.equal(physical.current_verdict_authority, false);
+  const total = physical.coverage.total;
+  assert.equal(physical.attempts.length, 2, 'independent interrupted and completed attempts required');
+  const [prefix, fresh] = physical.attempts;
+  assert.equal(prefix.status, 'interrupted'); assert.equal(fresh.status, 'completed');
+  assert.equal(fresh.dispatch_id, selectors.dispatch_id);
+  assert.notEqual(prefix.dispatch_id, fresh.dispatch_id);
+  assert.equal(prefix.session_id, fresh.session_id);
+  assert.notEqual(prefix.turn_id, fresh.turn_id);
+  assert.equal(physical.coverage.prefix.successful_reads + physical.coverage.new.successful_reads, total.successful_reads);
+  assert(physical.coverage.prefix.successful_reads > 0 && physical.coverage.new.successful_reads > 0);
+  const observed = (value, reason) => metric(value, value === null ? reason : null);
+  const sum = key => physical.attempts.reduce((value, attempt) => value + attempt[key], 0);
+  const elapsed = physical.attempts.every(attempt => attempt.elapsed_ms !== null) ? sum('elapsed_ms') : null;
+  const counters = {
+    successful_reads: metric(total.successful_reads), scheduled_reads: metric(physical.scheduled_reads),
+    raw_bytes: metric(total.raw_bytes), encoded_bytes: metric(total.encoded_bytes),
+    nested_output_bytes: metric(total.nested_bytes), outer_output_bytes: metric(total.outer_bytes),
+    failed_calls: metric(sum('failed_calls')), retries: metric(sum('retries')),
+    elapsed_ms: observed(elapsed, 'At least one original attempt lacks complete monotonic timestamps.'),
+    tokens: metric(null, 'Attempt usage is retained separately; no comparable per-review token total is asserted.') };
+  metrics(counters);
+  return { ...physical, metrics: counters };
 }
 
 async function verifyNativeCapacity(input, prepared) {
@@ -447,7 +496,7 @@ function main(argv) {
   const report = verifyEvidence(ledger);
   process.stdout.write(JSON.stringify(report, null, 2) + '\n');
 }
-module.exports = { SCHEMA, metric, validateTrace, verifyFixture, verifyEvidence, verifyNativeTrace, verifyNativeCapacity, observeNativeConsumption, verifiedRecord, original, compareCanonicalInputs, sourceInputs, verifySourceHistory, verifySourceEquivalence, verifyInstalledCandidate, main };
+module.exports = { SCHEMA, metric, validateTrace, verifyFixture, verifyEvidence, verifyNativeTrace, verifyNativeCapacity, observeNativeConsumption, observeCompletedConsumption, verifiedRecord, original, compareCanonicalInputs, sourceInputs, verifySourceHistory, verifySourceEquivalence, verifyInstalledCandidate, main };
 if (require.main === module) {
   try { main(process.argv.slice(2)); }
   catch (error) { process.stderr.write(JSON.stringify({ status: 'refused', code: error.code || 'EVIDENCE_INVALID', reason: error.message }) + '\n'); process.exitCode = 1; }
