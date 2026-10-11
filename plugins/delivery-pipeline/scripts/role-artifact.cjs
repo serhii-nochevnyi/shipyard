@@ -1509,13 +1509,48 @@ function completeCompletedReviewSource(observation) {
         || digest(live) !== completed.evidence.native_session_evidence.sha256
         || digest(live.subarray(0, source.snapshot.bytes)) !== source.snapshot.sha256)
       fail('REVIEW_SOURCE_INVALID', 'fresh final physical bytes changed before cost retention');
+    const cli = Buffer.from(completed.cli_raw || '');
+    if (!object(completed.application) || stable(completed.application.runtime_evidence) !== stable(completed.evidence)
+        || !cli.length || cli.length !== completed.evidence.transcript?.bytes || digest(cli) !== completed.evidence.transcript?.sha256
+        || !cli.equals(authorityFile(completed.evidence.transcript.path, 128 * 1024 * 1024)))
+      fail('REVIEW_SOURCE_INVALID', 'original completed final lacks durable exact application and CLI custody');
+    const cliFile = path.join(state.directory, 'completed-final-cli-' + digest(cli) + '.jsonl');
+    writeImmutableArtifactFile(fs, cliFile, cli, 'original completed final CLI snapshot', 128 * 1024 * 1024);
     const append = live.subarray(source.snapshot.bytes).toString('utf8');
     retainSourceFinalAttempt(state, source, { status: 'completed', native_status: 'completed', ended_at_ms: Date.now(),
       evidence_sha256: digest(stable(completed.evidence)), receipt_store: source.receipt_store,
       physical: { native_raw: append, native: { session_id: source.session_id, bytes: Buffer.byteLength(append), sha256: digest(append) },
         transcript: completed.evidence.transcript } });
     writeReviewEnvelope(state, completedSourceTip(resume.dispatch_id), { ...source.state,
-      resume: { ...resume, status: 'completed', turn_id: completed.turn_id, evidence_sha256: digest(stable(completed.evidence)) } });
+      resume: { ...resume, status: 'completed', turn_id: completed.turn_id, evidence_sha256: digest(stable(completed.evidence)),
+        completion: { schema: 'shipyard.completed-source-completion.v1', application: completed.application,
+          cli_snapshot: { path: cliFile, bytes: cli.length, sha256: digest(cli) } } } });
+  });
+}
+
+function claimCompletedSourceReconciliation(observation) {
+  const runtime = require('./codex-runtime-host.cjs'), observed = runtime.reviewObservationData(observation);
+  return withArchiveAuthorityLock(observed.worktree, () => {
+    const source = readCompletedReviewSource(observed), resume = source.state.resume;
+    if (resume?.status !== 'completed' || !resume.completion)
+      fail('REVIEW_SOURCE_INVALID', 'reconciliation requires original retained completed evidence');
+    if (resume.owner_pid === process.pid && !resume.completion_failures?.length)
+      fail('REVIEW_SOURCE_CLAIMED', 'live reconciliation requires its original recording failure');
+    const recorder = require('./dispatch-boundary.cjs').createDurableRecorder(source.receipt_store);
+    if (recorder.getVerifiedRecord(source.identity.dispatch_id))
+      fail('REVIEW_SOURCE_CLAIMED', 'original completed receipt already exists; no record is replayed');
+    const attempts = resume.reconciliations || [];
+    if (attempts.length >= 16) fail('REVIEW_SOURCE_CLAIMED', 'original reconciliation history reached its finite bound');
+    if (attempts.length) {
+      let dead = false;
+      try { process.kill(attempts.at(-1).owner_pid, 0); } catch (error) { dead = error.code === 'ESRCH'; }
+      if (!dead) fail('REVIEW_SOURCE_CLAIMED', 'original reconciliation is active or its custody is unknown');
+    }
+    runtime.reviewObservationData(observation);
+    const state = authorityState(observed.worktree, false, false, false);
+    writeReviewEnvelope(state, completedSourceTip(source.identity.dispatch_id), { ...source.state,
+      resume: { ...resume, reconciliations: [...attempts, { owner_pid: process.pid, claimed_at: new Date().toISOString(),
+        evidence_sha256: resume.evidence_sha256 }] } });
   });
 }
 
@@ -1537,16 +1572,33 @@ function retainCompletedSourceFailure(observation) {
   const runtime = require('./codex-runtime-host.cjs'), failed = runtime.reviewObservationData(observation);
   return withArchiveAuthorityLock(failed.worktree, () => {
     const source = readCompletedReviewSource(failed), resume = source.state.resume;
+    if (resume?.status === 'completed') {
+      runtime.reviewObservationData(observation);
+      const completion = resume.completion, raw = Buffer.from(failed.native_raw);
+      if (!completion || raw.length !== completion.application.runtime_evidence.native_session_evidence.bytes
+          || digest(raw) !== completion.application.runtime_evidence.native_session_evidence.sha256)
+        fail('REVIEW_SOURCE_INVALID', 'completed recording failure lost its original native custody');
+      const failures = resume.completion_failures || [];
+      if (failures.length >= 16) fail('REVIEW_SOURCE_INVALID', 'completed failure history reached its finite bound');
+      const state = authorityState(failed.worktree, false, false, false);
+      writeReviewEnvelope(state, completedSourceTip(resume.dispatch_id), { ...source.state,
+        resume: { ...resume, completion_failures: [...failures, { cause: failed.cause, original_exit: failed.exit }] } });
+      return;
+    }
     if (resume?.status !== 'claimed' || !resume.launch_started) return;
     runtime.reviewObservationData(observation);
     const state = authorityState(failed.worktree, false, false, false);
     const bytes = Buffer.from(failed.native_raw), hash = digest(bytes);
+    if (bytes.length < source.snapshot.bytes
+        || digest(bytes.subarray(0, source.snapshot.bytes)) !== source.snapshot.sha256)
+      fail('REVIEW_SOURCE_INVALID', 'failed final no longer begins with its sealed completed source');
     const file = path.join(state.directory, 'failed-source-final-' + hash + '.jsonl');
     writeImmutableArtifactFile(fs, file, bytes, 'original incomplete source final', 128 * 1024 * 1024);
     const append = bytes.subarray(source.snapshot.bytes).toString('utf8');
     retainSourceFinalAttempt(state, source, { status: 'failed', native_status: failed.native_status, ended_at_ms: Date.now(),
       failure: { cause: failed.cause, original_exit: failed.exit },
-      physical: { native_raw: append, native: { session_id: source.session_id, bytes: Buffer.byteLength(append), sha256: digest(append) },
+      physical: append ? { native_raw: append, native: { session_id: source.session_id, bytes: Buffer.byteLength(append), sha256: digest(append) },
+        transcript: failed.exit.transcript } : { reason: 'launch failed without an appended native turn; physical work and tokens are unknown',
         transcript: failed.exit.transcript } });
     writeReviewEnvelope(state, completedSourceTip(resume.dispatch_id), { ...source.state,
       resume: { ...resume, status: ['interrupted', 'incomplete'].includes(failed.native_status) ? 'incomplete' : 'failed',
@@ -5620,6 +5672,7 @@ module.exports = Object.freeze(Object.assign(Object.create(null), {
   readCompletedReviewSource,
   claimCompletedReviewSource,
   completeCompletedReviewSource,
+  claimCompletedSourceReconciliation,
   beginCompletedSourceLaunch,
   retainCompletedSourceFailure,
   validateCompletedSourceEvidence,
