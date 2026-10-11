@@ -1124,7 +1124,7 @@ function readReviewProgress({ worktree, reference } = {}) {
   let cursor = reference;
   for (let count = 0; cursor && count < 2064; count++) {
     const payload = reviewEnvelope(state, cursor.reference);
-    if (payload.schema !== 'shipyard.review-progress.v1' || payload.identity?.worktree !== root
+    if (!['shipyard.review-progress.v1', 'shipyard.review-progress.v3'].includes(payload.schema) || payload.identity?.worktree !== root
         || payload.original_authority !== digest(state.key) || digest(stable(payload)) !== cursor.sha256
         || cursor.reference !== 'review-progress-' + cursor.sha256 + '.json'
         || !Number.isSafeInteger(payload.completed_ranges) || payload.completed_ranges < 1
@@ -1144,17 +1144,48 @@ function readReviewProgress({ worktree, reference } = {}) {
   const original = chain[0];
   if (original.completed_ranges !== 1 || original.predecessor !== null)
     fail('REVIEW_PROGRESS_INVALID', 'progress lacks its original range');
+  const v3 = original.schema === 'shipyard.review-progress.v3';
+  const batchCalls = new Set();
   for (const [index, payload] of chain.entries()) {
-    if (payload.completed_ranges !== index + 1 || payload.stream !== original.stream
+    const prior = chain[index - 1];
+    const range = payload.range;
+    if (v3) {
+      const batches = original.input.input_bundle.transport;
+      if (batches?.schema !== 'shipyard.native-reader-transport.v3'
+          || !original.input.input_bundle.reader_capacity
+          || payload.schema !== original.schema || range.profile_sha256 !== batches.profile_sha256
+          || !Number.isSafeInteger(range.batch_index) || range.batch_index < 0
+          || range.batch_count !== original.input.input_bundle.physical_batch_count || range.batch_index >= range.batch_count
+          || !Number.isSafeInteger(range.frame_count) || range.frame_count < 1 || range.frame_count > batches.ranges_per_batch
+          || !Number.isSafeInteger(range.frame_index) || range.frame_index < 0 || range.frame_index >= range.frame_count
+          || range.ordinal !== range.batch_start + range.frame_index || typeof range.call_id !== 'string' || !range.call_id
+          || (!index && (range.batch_index !== 0 || range.frame_index !== 0))
+          || (prior && range.frame_index === 0 && (prior.range.frame_index !== prior.range.frame_count - 1
+            || range.batch_index !== prior.range.batch_index + 1 || range.native_bytes <= prior.range.native_bytes))
+          || (prior && range.frame_index > 0 && (range.batch_index !== prior.range.batch_index
+            || range.frame_index !== prior.range.frame_index + 1 || range.frame_count !== prior.range.frame_count
+            || range.batch_start !== prior.range.batch_start || range.call_id !== prior.range.call_id
+            || range.command !== prior.range.command || range.native_bytes !== prior.range.native_bytes
+            || range.native_sha256 !== prior.range.native_sha256)))
+        fail('REVIEW_PROGRESS_INVALID', 'protected batch boundary, call or native pins changed');
+      if (range.frame_index === 0) {
+        if (batchCalls.has(range.call_id)) fail('REVIEW_PROGRESS_INVALID', 'physical call repeats across batches');
+        batchCalls.add(range.call_id);
+      }
+    }
+
+    if (payload.schema !== original.schema || payload.completed_ranges !== index + 1 || payload.stream !== original.stream
         || stable(payload.identity) !== stable(original.identity)
         || stable(payload.input) !== stable(original.input)
         || stable(payload.original_launch) !== stable(original.original_launch)
         || payload.session_id !== original.session_id || payload.parent_session_id !== original.parent_session_id
         || payload.turn_id !== original.turn_id || payload.native_file !== original.native_file
-        || (index && (payload.range.native_bytes <= chain[index - 1].range.native_bytes
-          || payload.predecessor.sha256 !== digest(stable(chain[index - 1])))))
+        || (index > 0 && ((!v3 && payload.range.native_bytes <= prior.range.native_bytes)
+          || payload.predecessor.sha256 !== digest(stable(prior)))))
       fail('REVIEW_PROGRESS_INVALID', 'progress predecessor, session or ordered range changed');
   }
+  if (v3 && chain.at(-1).range.frame_index !== chain.at(-1).range.frame_count - 1)
+    fail('REVIEW_PROGRESS_INVALID', 'protected tip exposes a partial batch');
   const tip = reviewEnvelope(state, reviewTipName(original.stream));
   if (tip.schema !== 'shipyard.review-progress-tip.v1' || tip.original_authority !== digest(state.key)
       || stable(tip.reference) !== stable(reference))
@@ -1194,6 +1225,27 @@ function persistReviewProgress(observation) {
         || previous.native_file !== observed.native_file || previous.parent_session_id !== observed.parent_session_id))
       fail('REVIEW_PROGRESS_INVALID', 'observed prefix differs from its original launch or subject');
     require('./codex-runtime-host.cjs').reviewObservationData(observation);
+    const v3 = observed.input.input_bundle.transport?.schema === 'shipyard.native-reader-transport.v3';
+    if (v3) {
+      for (let index = 0; index < observed.ranges.length;) {
+        const first = observed.ranges[index];
+        if (first.frame_index !== 0 || first.batch_start !== first.ordinal
+            || first.profile_sha256 !== observed.input.input_bundle.transport.profile_sha256
+            || !Number.isSafeInteger(first.frame_count) || first.frame_count < 1
+            || index + first.frame_count > observed.ranges.length)
+          fail('REVIEW_PROGRESS_INVALID', 'observation lacks a complete atomic batch');
+        for (let frame = 0; frame < first.frame_count; frame++) {
+          const range = observed.ranges[index + frame];
+          if (range.ordinal !== first.ordinal + frame || range.frame_index !== frame
+              || range.frame_count !== first.frame_count || range.batch_index !== first.batch_index || range.batch_count !== first.batch_count
+              || range.batch_start !== first.batch_start || range.call_id !== first.call_id
+              || range.native_bytes !== first.native_bytes || range.native_sha256 !== first.native_sha256
+              || range.profile_sha256 !== first.profile_sha256 || range.command !== first.command)
+            fail('REVIEW_PROGRESS_INVALID', 'observation batch is incomplete or reordered');
+        }
+        index += first.frame_count;
+      }
+    }
     for (const range of observed.ranges) {
       if (range.ordinal < (previous?.completed_ranges || 0)) {
         const old = previous.chain[range.ordinal];
@@ -1202,7 +1254,7 @@ function persistReviewProgress(observation) {
       }
       if (range.ordinal !== (previous?.completed_ranges || 0))
         fail('REVIEW_PROGRESS_INVALID', 'range is overlapping, missing or out of order');
-      const payload = { schema: 'shipyard.review-progress.v1', original_authority: digest(state.key),
+      const payload = { schema: v3 ? 'shipyard.review-progress.v3' : 'shipyard.review-progress.v1', original_authority: digest(state.key),
         stream: observed.stream, identity: observed.identity, input: observed.input,
         original_launch: observed.launch, session_id: observed.session_id, parent_session_id: observed.parent_session_id,
         turn_id: observed.turn_id, native_file: observed.native_file, semantic_context: 'exact-native-session',
@@ -1211,7 +1263,10 @@ function persistReviewProgress(observation) {
       const reference = { reference: 'review-progress-' + hash + '.json', sha256: hash };
       writeReviewEnvelope(state, reference.reference, payload, true);
       tip = { schema: 'shipyard.review-progress-tip.v1', original_authority: digest(state.key), reference, resume: null, original_exit: tip?.original_exit || null };
-      writeReviewEnvelope(state, name, tip);
+      if (!v3 || range.frame_index === range.frame_count - 1) {
+        require('./codex-runtime-host.cjs').reviewObservationData(observation);
+        writeReviewEnvelope(state, name, tip);
+      }
       previous = { completed_ranges: payload.completed_ranges, chain: [...(previous?.chain || []), payload] };
     }
     return tip ? Object.freeze({ ...tip.reference }) : null;
@@ -1272,6 +1327,38 @@ function validateReviewContinuationEvidence(evidence) {
       || evidence.session_id !== progress.session_id || continuation.semantic_context !== progress.semantic_context)
     fail('REVIEW_PROGRESS_INVALID', 'fresh final differs from protected completed continuation');
   return progress;
+}
+
+function authenticateReaderCapacityReferences(selectors) {
+  const keys = ['worktree', 'receipt_store', 'dispatch_id'];
+  if (!object(selectors) || Object.keys(selectors).length !== keys.length
+      || Object.keys(selectors).some(key => !keys.includes(key))
+      || keys.some(key => typeof selectors[key] !== 'string' || !selectors[key]))
+    fail('READER_CAPACITY_UNSUPPORTED', 'capacity requires only original protected application reference selectors');
+  try {
+    const worktree = fs.realpathSync(selectors.worktree), store = path.resolve(selectors.receipt_store);
+    const files = [store, path.join(fs.realpathSync(path.dirname(store)), `.shipyard-dispatch-authority-${digest(store)}.key`),
+      path.join(store, `record-${digest(selectors.dispatch_id)}.json`)];
+    const pins = files.map(file => {
+      const stat = fs.lstatSync(file);
+      if (stat.isSymbolicLink() || fs.realpathSync(file) !== file || (stat.mode & 0o077)
+          || stat.uid !== process.getuid() || (!stat.isFile() && !stat.isDirectory()))
+        fail('READER_CAPACITY_UNSUPPORTED', 'capacity application requires original private physical authority');
+      return { file, stat };
+    });
+    const trusted = trustedRecord({ boundaryStore: store, dispatch_id: selectors.dispatch_id });
+    if (trusted.receipt.runtime !== 'codex' || !['arch-review', 'integrator'].includes(trusted.receipt.role)
+        || trusted.receipt.runtime_evidence?.worktree !== worktree)
+      fail('READER_CAPACITY_UNSUPPORTED', 'capacity application belongs to a different native review subject');
+    for (const pin of pins) {
+      const current = fs.lstatSync(pin.file);
+      if (!sameStat(pin.stat, current) || pin.stat.mode !== current.mode || pin.stat.uid !== current.uid)
+        fail('READER_CAPACITY_UNSUPPORTED', 'capacity application authority changed during authentication');
+    }
+    return require('./codex-runtime-host.cjs').freezeReviewProgress(JSON.parse(stable(trusted.record)));
+  } catch (error) {
+    fail('READER_CAPACITY_UNSUPPORTED', 'original capacity application cannot be authenticated', { cause: error.code });
+  }
 }
 
 function authenticateCompletedReviewReferences(selectors) {
@@ -1343,6 +1430,12 @@ function authenticateCompletedReviewReferences(selectors) {
       || (progress.parent_session_id && (evidence.native_child_evidence?.parent_thread_id !== progress.parent_session_id
         || evidence.native_child_evidence?.session_id !== progress.session_id)))
     fail('REVIEW_PROGRESS_INVALID', 'completed receipt differs from its original protected review association');
+  if (progress.schema === 'shipyard.review-progress.v3'
+      && (evidence.input_consumption?.schema !== 'shipyard.native-file-consumption.v3'
+        || evidence.input_consumption.physical_calls !== progress.input.input_bundle.physical_batch_count
+        || evidence.input_consumption.logical_ranges !== progress.input.input_bundle.logical_range_count
+        || evidence.input_consumption.profile_sha256 !== progress.input.input_bundle.transport.profile_sha256))
+    fail('REVIEW_PROGRESS_INVALID', 'completed physical accounting differs from protected batch identity');
   for (const pin of physical) {
     const current = fs.lstatSync(pin.file);
     if (!sameStat(pin.stat, current) || pin.stat.mode !== current.mode || pin.stat.uid !== current.uid)
@@ -5272,6 +5365,7 @@ module.exports = Object.freeze(Object.assign(Object.create(null), {
   isAuthenticatedReviewProgress,
   readReviewProgress,
   authenticateCompletedReviewReferences,
+  authenticateReaderCapacityReferences,
   persistReviewProgress,
   finishOriginalReviewObservation,
   claimReviewContinuation,

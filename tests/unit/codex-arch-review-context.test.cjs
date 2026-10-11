@@ -617,6 +617,73 @@ for (const scenario of [
   }
 });
 
+
+test('finite batch candidates reject serialized profiles and keep capacity separate from estimates', () => {
+  const reader = require('../../plugins/delivery-pipeline/scripts/codex-arch-review-context.cjs');
+  assert.equal(typeof reader.createReaderBatchProfile, 'function');
+  assert.throws(() => reader.createReaderBatchProfile({ chunk_bytes: 0, ranges_per_batch: 2 }),
+    error => error.code === 'READER_CAPACITY_UNSUPPORTED');
+  assert.throws(() => reader.readBatchCli(['--read-batch', '/tmp/absent', '01', 'a'.repeat(64)]));
+  assert.throws(() => reader.readBatchCli(['--read-batch', '/tmp/absent', '0', 'a'.repeat(64), '--eval']));
+});
+
+
+test('finite batch CLI returns only its exact scheduled frames and enforces private immutable files', () => {
+  const f = fixture();
+  const storage = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "finite batch ' custody-")));
+  const sha = bytes => require('node:crypto').createHash('sha256').update(bytes).digest('hex');
+  try {
+    const parameters = { chunk_bytes: 8192, ranges_per_batch: 2,
+      candidate: { source_sha256: sha(fs.readFileSync(require.resolve('../../plugins/delivery-pipeline/scripts/codex-arch-review-context.cjs'))),
+        instructions_sha256: sha('fixture instructions'), model: 'gpt-6.1-sol', effort: 'high', provider: 'openai' } };
+    const profile = contextBuilder.createReaderBatchProfile(parameters);
+    const scope = { worktree: f.root, ticket: TICKET, phase: 38 };
+    const options = { role: 'arch-review', dispatchId: 'finite-batch', storageRoot: storage, readerProfile: profile };
+    assert.throws(() => contextBuilder.prepareFileInput(scope, 'exact bytes', { ...options, readerProfile: {} }),
+      error => error.code === 'READER_CAPACITY_UNSUPPORTED');
+    const foreignSource = contextBuilder.createReaderBatchProfile({ ...parameters,
+      candidate: { ...parameters.candidate, source_sha256: '0'.repeat(64) } });
+    assert.throws(() => contextBuilder.prepareFileInput(scope, 'complete', { ...options, readerProfile: foreignSource }),
+      error => error.code === 'READER_CAPACITY_UNSUPPORTED');
+    assert.throws(() => contextBuilder.prepareFileInput(scope, Buffer.alloc(contextBuilder.FILE_LIMITS.material + 1), options),
+      error => error.code === 'CONTEXT_OVER_BOUND');
+    const tooManyRanges = contextBuilder.createReaderBatchProfile({ ...parameters, chunk_bytes: 1 });
+    assert.throws(() => contextBuilder.prepareFileInput(scope, 'x'.repeat(contextBuilder.FILE_LIMITS.reads + 1),
+      { ...options, readerProfile: tooManyRanges }), error => error.code === 'CONTEXT_OVER_BOUND');
+    const input = contextBuilder.prepareFileInput(scope, ['x'.repeat(8191) + '€' + 'é'.repeat(6000), 'short terminal €'], options);
+    const checked = contextBuilder.verifyFileInput(input);
+    assert.equal(input.manifest.schema, 'shipyard.host-file-input.v3');
+    assert.equal(input.input_bundle.transport.output_tokens, 10000);
+    assert.equal(checked.schedule.range_count, checked.chunk_reads);
+    assert.equal(checked.schedule.batch_count, input.manifest.batches.length);
+    assert.ok(checked.chunk_reads > checked.schedule.batch_count);
+    assert.throws(() => contextBuilder.requireReaderBatchCapacity(input), error => error.code === 'READER_CAPACITY_UNSUPPORTED');
+    const frames = [];
+    for (const batch of input.manifest.batches) {
+      const output = execFileSync('node', [input.manifest.transport.module_path, '--read-batch', input.input_bundle.manifest_path,
+        String(batch.index), input.manifest.transport.profile_sha256], { encoding: 'utf8' });
+      assert.equal(output, contextBuilder.batchOutput(input.manifest, checked.manifest_bytes, checked.material, batch.index));
+      const records = output.trim().split('\n').map(JSON.parse);
+      assert.equal(records[0].type, 'batch');
+      assert.equal(records.at(-1).type, 'terminal');
+      assert.equal(records[0].frame_count, batch.count);
+      assert.equal(records.length, batch.count + 2);
+      frames.push(...records.slice(1, -1));
+      assert.ok(contextBuilder.batchCommand(input.input_bundle, batch.index).includes("'\\''"));
+    }
+    assert.deepEqual(Buffer.concat(frames.map(frame => Buffer.from(frame.base64, 'base64'))),
+      Buffer.concat([checked.manifest_bytes, ...checked.material]));
+    for (const index of ['01', '-1', '1.0', String(Number.MAX_SAFE_INTEGER + 1), String(input.manifest.batches.length)])
+      assert.throws(() => contextBuilder.readBatchCli(['--read-batch', input.input_bundle.manifest_path, index, input.manifest.transport.profile_sha256]));
+    assert.throws(() => contextBuilder.readBatchCli(['--read-batch', input.input_bundle.manifest_path, '0', '0'.repeat(64)]));
+    const asset = input.manifest.assets[0];
+    fs.chmodSync(asset.path, 0o600);
+    assert.throws(() => contextBuilder.readBatchCli(['--read-batch', input.input_bundle.manifest_path,
+      String(input.manifest.batches.find(batch => input.manifest.ranges.slice(batch.start, batch.start + batch.count).some(range => range.ordinal === 0)).index),
+      input.manifest.transport.profile_sha256]));
+  } finally { fs.rmSync(f.root, { recursive: true, force: true }); fs.rmSync(storage, { recursive: true, force: true }); }
+});
+
 module.exports = { fixture, unitJudgment, cleanupJudgment, registerTests, registerCases, testAuthorityArgs };
 
 test('large complete architecture context is included once within final prompt capacity', () => {
@@ -1896,6 +1963,300 @@ test('file snapshot accepts canonical graph bytes above the input manifest limit
     write(f.f.root, '.planning/graph/tickets.json', JSON.stringify({ padding: 'x'.repeat(600000) }));
     assert.doesNotThrow(f.create);
   } finally { f.clean(); }
+});
+
+
+async function recordedBatchApplication(verified, input, root, cliRaw) {
+  const boundaryModule = require('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs');
+  const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
+  const sha = value => require('node:crypto').createHash('sha256').update(value).digest('hex');
+  const receiptStore = path.join(root, 'measurement-receipts');
+  const recorder = boundaryModule.createDurableRecorder(receiptStore);
+  const cliFile = path.join(root, 'measurement-cli.jsonl');
+  fs.writeFileSync(cliFile, cliRaw, { mode: 0o600 });
+  const candidate = input.manifest.transport.candidate;
+  const args = ['exec', '--json', '--model', candidate.model,
+    '--config', 'model_reasoning_effort="' + candidate.effort + '"'];
+  const content = "developer_instructions = '''\nReview all required material.\n'''";
+  const evidence = {
+    schema: 'shipyard.codex-runtime-evidence.v1', version: 1, runtime: 'codex', provider: 'openai',
+    run_id: input.manifest.run_id, ticket: input.manifest.ticket, phase: input.manifest.phase,
+    worktree: input.manifest.snapshot.worktree, dispatch_id: input.manifest.dispatch_id,
+    session_id: verified.native_session_evidence.session_id, process_id: process.pid,
+    selection_source: 'codex-native-session-transcript', command: { executable: 'codex', args },
+    command_digest: sha(JSON.stringify(args)), native_session_evidence: verified.native_session_evidence,
+    input_transport: 'host-files', input_bundle: input.input_bundle,
+    input_consumption: { manifest_sha256: input.input_bundle.manifest_sha256 },
+    transcript: { path: cliFile, bytes: Buffer.byteLength(cliRaw), sha256: sha(cliRaw) },
+  };
+  const adapter = {
+    validateGeneratedAgent(resolution) {
+      return { valid: true, exists: true, content_verified: true, policy_hash: resolution.policy_hash,
+        agent_file: resolution.agent_file, agent_file_digest: sha(content), agent_file_content: content };
+    },
+    launchStatic(resolution) {
+      return { receipt_type: 'adr-014.application', runtime: 'codex', role: resolution.role,
+        dispatch_id: resolution.dispatch_id, launch_id: 'codex-' + evidence.session_id,
+        requested_model: resolution.requested_model, requested_effort: resolution.requested_effort,
+        applied_model: candidate.model, applied_effort: candidate.effort,
+        observed_model: candidate.model, observed_effort: candidate.effort, policy_hash: policy.POLICY_HASH,
+        agent_file: resolution.agent_file, agent_file_digest: resolution.agent_file_digest,
+        runtime_evidence: evidence };
+    },
+  };
+  const result = await boundaryModule.createDispatchBoundary({ adapters: { codex: adapter }, recorder })
+    .dispatch({ runtime: 'codex', role: input.manifest.role, signals: {}, dispatch_id: input.manifest.dispatch_id },
+      { ticket: input.manifest.ticket });
+  assert.deepEqual(recorder.getVerifiedRecord(input.manifest.dispatch_id).receipt, result.receipt);
+  return { recorder, receipt: result.receipt };
+}
+
+test('installed v3 admission measures the finalized input and retains its private cached identity', async () => {
+  const f = fixture();
+  const storage = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'installed-batch-')));
+  const runtime = require('../../plugins/delivery-pipeline/scripts/codex-runtime-host.cjs');
+  const sha = bytes => require('node:crypto').createHash('sha256').update(bytes).digest('hex');
+  try {
+    canonicalReviewMember(f);
+    write(f.root, '.planning/architecture/ADR-014-host-bound-review.md', ADR + 'x'.repeat(1100000));
+    git(f.root, ['add', '-A']); git(f.root, ['commit', '-m', 'fixture: complete batch review material']);
+    f.head = git(f.root, ['rev-parse', 'HEAD']); f.pr.headRefOid = f.head;
+    const agents = path.join(storage, 'agents'); fs.mkdirSync(agents);
+    const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
+    const selected = policy.resolveDispatch({ runtime: 'codex', role: 'arch-review', signals: {}, dispatch_id: 'installed-batch' });
+    const selection = { model: selected.model, effort: selected.effort, sandbox_mode: 'read-only' };
+    const agentText = [
+      '# shipyard-policy-id = "' + policy.POLICY.id + '"', '# shipyard-policy-version = "' + policy.POLICY_VERSION + '"',
+      '# shipyard-policy-hash = "' + policy.POLICY_HASH + '"', '# shipyard-policy-runtime = "codex"',
+      '# shipyard-policy-role = "arch-review"', '# shipyard-policy-rung = "' + selected.rung + '"',
+      'name = "' + selected.agent_file.replace(/\.toml$/, '') + '"', 'model = "' + selected.model + '"',
+      'model_reasoning_effort = "' + selected.effort + '"', 'sandbox_mode = "read-only"',
+      "developer_instructions = '''", 'Review all required material.', "'''", '',
+    ].join('\n');
+    write(agents, selected.agent_file, agentText);
+    write(agents, 'manifest.json', JSON.stringify({ policy_id: policy.POLICY.id, policy_version: policy.POLICY_VERSION,
+      policy_hash: policy.POLICY_HASH, agent_files: [selected.agent_file], agent_digests: { [selected.agent_file]: sha(agentText) } }));
+    const instructions = runtime.generatedInstructions(agentText);
+    const profile = contextBuilder.createReaderBatchProfile({ chunk_bytes: 8192, ranges_per_batch: 2,
+      candidate: { source_sha256: sha(fs.readFileSync(require.resolve('../../plugins/delivery-pipeline/scripts/codex-arch-review-context.cjs'))),
+        instructions_sha256: sha(instructions), model: selection.model, effort: selection.effort, provider: 'openai' } });
+    const value = contextBuilder.prepare({ ticket: f.ticket, phase: 38, worktree: f.root, run_id: 'installed-batch-run' },
+      { role: 'arch-review', context: {}, signals: {} }, { refreshGit: false,
+        graphDir: path.join(f.root, '.planning/graph'), getPullRequest: () => f.pr,
+        storageRoot: storage, inflightDispatchId: 'installed-batch', readerProfile: profile,
+        generatedInstructionBytes: Buffer.byteLength(instructions) + 2 });
+    const original = contextBuilder.admittedFileInput(value);
+    assert.equal(original.manifest.schema, 'shipyard.host-file-input.v3');
+    const admission = { agentDir: agents, agentFile: selected.agent_file, agentManifest: path.join(agents, 'manifest.json'),
+      capabilities: { supportedModels: [selection.model], supportedEfforts: [selection.effort] }, selection };
+    contextBuilder.admitInstalledLaunch(value, admission);
+    const candidate = contextBuilder.admittedFileInput(value);
+    assert.notStrictEqual(candidate, original);
+    assertArchitectureIdentity(candidate, value);
+    assert.equal(candidate.manifest.binding.agent_sha256, sha(agentText));
+    assert.equal(candidate.manifest.binding.capabilities_sha256, sha(JSON.stringify(admission.capabilities)));
+    assert.equal(candidate.manifest.accounting.generated_instruction_bytes, Buffer.byteLength(instructions) + 2);
+    assert.ok(candidate.manifest.binding.installed_files.some(pin => pin.path === 'codex-runtime-host.cjs'));
+    assert.throws(() => contextBuilder.requireReaderBatchCapacity(candidate), { code: 'READER_CAPACITY_UNSUPPORTED' });
+    const directories = fs.readdirSync(storage).filter(name => name.startsWith('input-'));
+    const manifestBytes = fs.readFileSync(candidate.input_bundle.manifest_path);
+    contextBuilder.admitInstalledLaunch(value, admission);
+    assert.strictEqual(contextBuilder.admittedFileInput(value), candidate);
+    assert.deepEqual(fs.readdirSync(storage).filter(name => name.startsWith('input-')), directories);
+
+    const session = '77777777-7777-4777-8777-777777777777', turn = 'installed-capacity';
+    const fixtureRecords = name => fs.readFileSync(path.join(__dirname, '../fixtures/captured', name), 'utf8')
+      .split('\n').filter(line => line && !line.startsWith('{"shipyard_fixture"'))
+      .map(line => JSON.parse(line.replace(/<SESSION-\d+>|<TMP>/g, token => JSON.stringify(
+        token === '<TMP>' ? f.root : ['<SESSION-4>', '<SESSION-7>'].includes(token) ? turn : session).slice(1, -1))));
+    const parent = fixtureRecords('codex-agent-stream-parent.jsonl');
+    const child = fixtureRecords('codex-agent-stream-child.jsonl');
+    const template = (records, match) => {
+      const record = records.find(match); assert.ok(record, 'registered native record template is required');
+      return structuredClone(record);
+    };
+    const message = (role, text) => {
+      const record = template(child, record => record.type === 'response_item' && record.payload.type === 'message'
+        && record.payload.role === role && (role !== 'assistant' || record.payload.phase === 'final_answer'));
+      record.payload.internal_chat_message_metadata_passthrough.turn_id = turn;
+      record.payload.content = [{ ...record.payload.content[0], text }];
+      return record;
+    };
+    const event = (type, extra = {}) => {
+      const record = template(child, record => record.type === 'event_msg' && record.payload.type === type);
+      Object.assign(record.payload, { turn_id: turn, ...extra });
+      if (record.payload.root_turn_id) record.payload.root_turn_id = turn;
+      return record;
+    };
+    const response = (type, fields) => {
+      const record = template(child, record => record.type === 'response_item' && record.payload.type === type);
+      Object.assign(record.payload, fields); record.payload.internal_chat_message_metadata_passthrough.turn_id = turn;
+      return record;
+    };
+    const metadata = template(parent, record => record.type === 'session_meta');
+    Object.assign(metadata.payload, { id: session, session_id: session, cwd: f.root, runtime_workspace_roots: [f.root] });
+    const nativeContext = template(child, record => record.type === 'turn_context');
+    Object.assign(nativeContext.payload, { turn_id: turn, root_turn_id: turn, ...selection, cwd: f.root, workspace_roots: [f.root] });
+    nativeContext.payload.sandbox_policy.type = 'read-only';
+    Object.assign(nativeContext.payload.collaboration_mode.settings, { model: selection.model, reasoning_effort: selection.effort });
+    const reads = candidate.manifest.batches.flatMap(batch => {
+      const call_id = 'installed-batch-' + batch.index;
+      const output = execFileSync('node', [candidate.manifest.transport.module_path, '--read-batch',
+        candidate.input_bundle.manifest_path, String(batch.index), candidate.manifest.transport.profile_sha256],
+      { encoding: 'utf8', maxBuffer: 252 * 1024 });
+      return [response('custom_tool_call', { name: 'exec', call_id,
+        input: 'text(await tools.exec_command(' + JSON.stringify({ cmd: contextBuilder.batchCommand(candidate.input_bundle, batch.index),
+          max_output_tokens: 10000 }) + '));' }),
+      response('custom_tool_call_output', { call_id, output: [
+        { type: 'input_text', text: 'Script completed\nWall time 0.1 seconds\nOutput:\n' },
+        { type: 'input_text', text: JSON.stringify({ exit_code: 0, output }) }] })];
+    });
+    const resultText = JSON.stringify({ input_manifest_sha256: candidate.input_bundle.manifest_sha256,
+      input_material_bytes: candidate.input_bundle.total_bytes, input_asset_count: candidate.input_bundle.asset_count,
+      input_chunk_reads: contextBuilder.verifyFileInput(candidate).chunk_reads,
+      input_batch_reads: candidate.manifest.batches.length, input_profile_sha256: candidate.manifest.transport.profile_sha256 });
+    const nativeRaw = [metadata, nativeContext, message('developer', instructions), message('user', candidate.prompt),
+      event('task_started'), ...reads, message('assistant', resultText), event('task_complete', { last_agent_message: resultText })]
+      .map(record => JSON.stringify(record) + '\n').join('');
+    const home = path.join(storage, 'native'), date = new Date();
+    const nativeDir = path.join(home, 'sessions', String(date.getFullYear()), String(date.getMonth() + 1).padStart(2, '0'),
+      String(date.getDate()).padStart(2, '0'));
+    fs.mkdirSync(nativeDir, { recursive: true });
+    const nativeFile = path.join(nativeDir, session + '.jsonl'); fs.writeFileSync(nativeFile, nativeRaw, { mode: 0o600 });
+    const verified = await runtime.verifyCompletedNativeLaunch({ session_id: session, selection, env: { CODEX_HOME: home }, resultText });
+    assert.throws(() => runtime.measureReaderCapacity(verified, candidate), { code: 'READER_CAPACITY_UNSUPPORTED' });
+    const cli = fixtureRecords('codex-agent-stream-exec.jsonl').filter(record =>
+      ['thread.started', 'turn.started', 'item.completed', 'turn.completed'].includes(record.type));
+    for (const record of cli) if (record.item?.type === 'agent_message') record.item.text = resultText;
+    const boundaryModule = require('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs');
+    const recorder = boundaryModule.createDurableRecorder(path.join(storage, 'production-receipts'));
+    let launches = 0, completions = 0, finalResult, finalPrompt, finalRaw;
+    const host = runtime.createCodexRuntimeHost({ scope: { worktree: f.root, phase: 38, ticket: f.ticket,
+      run_id: candidate.manifest.run_id }, recorder, agentDir: agents, agentManifest: path.join(agents, 'manifest.json'),
+      env: { CODEX_HOME: home }, probe: { status: 'available', runtime_version: 'fixture', executable: 'codex', capabilities: admission.capabilities },
+      spawn() {
+        launches++;
+        const activeSession = launches === 1 ? session : '88888888-8888-4888-8888-888888888888';
+        const activeTurn = launches === 1 ? turn : 'installed-final';
+        const activeResult = finalResult || resultText;
+        const activePrompt = finalPrompt || candidate.prompt;
+        const records = JSON.parse(JSON.stringify([metadata, nativeContext, message('developer', instructions),
+          message('user', activePrompt), event('task_started'), ...reads, message('assistant', activeResult),
+          event('task_complete', { last_agent_message: activeResult })]));
+        for (const record of records) {
+          if (record.type === 'session_meta') Object.assign(record.payload, { id: activeSession, session_id: activeSession });
+          if (record.payload?.turn_id) record.payload.turn_id = activeTurn;
+          if (record.payload?.root_turn_id) record.payload.root_turn_id = activeTurn;
+          if (record.payload?.internal_chat_message_metadata_passthrough)
+            record.payload.internal_chat_message_metadata_passthrough.turn_id = activeTurn;
+          if (record.payload?.call_id) record.payload.call_id = activeTurn + '-' + record.payload.call_id;
+        }
+        const raw = records.map(record => JSON.stringify(record) + '\n').join('');
+        if (launches === 2) finalRaw = raw;
+        fs.writeFileSync(path.join(nativeDir, activeSession + '.jsonl'), raw, { mode: 0o600 });
+        const activeCli = structuredClone(cli);
+        activeCli.find(record => record.type === 'thread.started').thread_id = activeSession;
+        activeCli.find(record => record.item?.type === 'agent_message').item.text = activeResult;
+        const { EventEmitter } = require('node:events');
+        const processFixture = new EventEmitter(); processFixture.pid = process.pid;
+        processFixture.stdout = new EventEmitter(); processFixture.stderr = new EventEmitter(); processFixture.kill = () => {};
+        processFixture.stdin = { write() {}, end() { process.nextTick(() => {
+          if (launches === 2) write(f.root, '.shipyard-arch-review-evidence.md', JSON.parse(activeResult).evidence_markdown);
+          processFixture.stdout.emit('data', Buffer.from(activeCli.map(record => JSON.stringify(record) + '\n').join('')));
+          processFixture.emit('close', 0);
+        }); } };
+        return processFixture;
+      },
+    });
+    const capacity = await host.measureBatchReaderCapacity(selection, candidate, { onCompleted(completion) {
+      completions++;
+      assert.equal(recorder.getVerifiedRecord(completion.runtime_evidence.dispatch_id), null);
+      assert.equal(recorder.getVerifiedRecord(candidate.manifest.dispatch_id), null);
+    } });
+    const probeRecord = recorder.getVerifiedRecord(capacity.contract.application_dispatch_id);
+    assert.notEqual(probeRecord.dispatch_id, candidate.manifest.dispatch_id);
+    assert.equal(probeRecord.receipt.runtime_evidence.reader_capacity_probe.review_dispatch_id, candidate.manifest.dispatch_id);
+    assert.equal(fs.existsSync(path.join(f.root, '.shipyard-arch-review-evidence.md')), false);
+    const currentProbeVerified = await runtime.verifyCompletedNativeLaunch({ session_id: session, selection,
+      env: { CODEX_HOME: home }, resultText });
+    assert.throws(() => runtime.measureReaderCapacity(currentProbeVerified, candidate,
+      { recorder: {}, receipt: JSON.parse(JSON.stringify(probeRecord.receipt)) }),
+    { code: 'READER_CAPACITY_UNSUPPORTED' });
+    assert.equal(capacity.contract.semantic_credit, false);
+    assert.throws(() => contextBuilder.admitInstalledLaunch(value, { ...admission, readerCapacity: JSON.parse(JSON.stringify(capacity)) }),
+      { code: 'READER_CAPACITY_UNSUPPORTED' });
+    assert.throws(() => contextBuilder.admitInstalledLaunch(value, { ...admission, readerCapacity: capacity,
+      selection: { ...selection, effort: 'low' } }), { code: 'READER_CAPACITY_UNSUPPORTED' });
+    contextBuilder.admitInstalledLaunch(value, { ...admission, readerCapacity: capacity });
+    const admitted = contextBuilder.admittedFileInput(value);
+    assert.notStrictEqual(admitted, candidate);
+    assert.strictEqual(admitted.manifest, candidate.manifest);
+    assert.equal(admitted.prompt, candidate.prompt);
+    assert.deepEqual(admitted.input_bundle, { ...candidate.input_bundle, reader_capacity: capacity.contract });
+    contextBuilder.requireReaderBatchCapacity(admitted); contextBuilder.recheckInstalledLaunch(value);
+    const digest = /launch_digest=([a-f0-9]{64})/.exec(contextBuilder.admittedPrompt(value))[1];
+    assert.notEqual(digest, '0'.repeat(64));
+    finalPrompt = contextBuilder.admittedPrompt(value);
+    assert.ok(finalPrompt.includes('launch_digest=' + digest));
+    finalResult = JSON.stringify({ ...JSON.parse(resultText), id: f.ticket, pr: f.pr.number, head: f.head,
+      base_tree: value.prepared.mergeBaseTree, verdict: 'conform', summary: 'Fresh complete fixture judgment.',
+      findings: [], blocking_count: 0, context_digest: value.prepared.packet.digest,
+      launch_digest: digest, evidence_markdown: 'Complete installed batch fixture review.' });
+    const adapter = require('../../plugins/delivery-pipeline/scripts/codex-dispatch-adapter.cjs').createCodexDispatchAdapter({
+      agentsDir: agents, agentManifest: path.join(agents, 'manifest.json'), capabilities: admission.capabilities, host });
+    const finalBoundary = boundaryModule.createDispatchBoundary({ adapters: { codex: adapter }, recorder });
+    const final = await finalBoundary.dispatch({ runtime: 'codex', role: 'arch-review', signals: {}, dispatch_id: candidate.manifest.dispatch_id },
+      { ticket: f.ticket, phase: 38, worktree: f.root, run_id: candidate.manifest.run_id, prompt: finalPrompt,
+        input_transport: 'host-files', input_bundle: admitted.input_bundle, input_prepared: admitted,
+        onCompleted(completion) {
+          completions++;
+          assert.equal(recorder.getVerifiedRecord(candidate.manifest.dispatch_id), null);
+          assert.equal(completion.runtime_evidence.reader_capacity_probe, undefined);
+          assert.equal(fs.readFileSync(path.join(f.root, '.shipyard-arch-review-evidence.md'), 'utf8'),
+            JSON.parse(completion.last_agent_message).evidence_markdown);
+        } });
+    assert.equal(launches, 2); assert.equal(completions, 2);
+    assert.notEqual(final.receipt.runtime_evidence.session_id, capacity.contract.native_session_id);
+    assert.deepEqual(final.receipt.runtime_evidence.input_bundle, admitted.input_bundle);
+    const consumption = runtime.verifyFileConsumption(admitted, finalRaw, 'installed-batch', finalResult);
+    assert.equal(consumption.physical_calls, candidate.manifest.batches.length);
+    assert.equal(consumption.chunk_reads, candidate.manifest.ranges.length);
+    assert.throws(() => contextBuilder.finish(value, { ...final, receipt: probeRecord.receipt }, recorder), { code: 'MISSING_RECEIPT' });
+    assert.deepEqual(recorder.getVerifiedRecord(probeRecord.dispatch_id), probeRecord);
+    for (const repeat of [admission, { ...admission, readerCapacity: capacity }]) {
+      contextBuilder.admitInstalledLaunch(value, repeat);
+      assert.strictEqual(contextBuilder.admittedFileInput(value), admitted);
+    }
+    assert.deepEqual(fs.readFileSync(candidate.input_bundle.manifest_path), manifestBytes);
+    assert.deepEqual(fs.readdirSync(storage).filter(name => name.startsWith('input-')), directories);
+    assert.throws(() => runtime.readerCapacityContract(capacity, original.manifest), { code: 'READER_CAPACITY_UNSUPPORTED' });
+    assert.throws(() => contextBuilder.admitInstalledLaunch(value, { ...admission, capabilities: { changed: true } }),
+      { code: 'READER_CAPACITY_UNSUPPORTED' });
+    write(agents, 'other.toml', agentText);
+    assert.throws(() => contextBuilder.admitInstalledLaunch(value, { ...admission, agentFile: 'other.toml' }),
+      { code: 'READER_CAPACITY_UNSUPPORTED' });
+    assert.strictEqual(contextBuilder.admittedFileInput(value), admitted);
+    assert.deepEqual(fs.readdirSync(storage).filter(name => name.startsWith('input-')), directories);
+    fs.appendFileSync(path.join(agents, selected.agent_file), '\n# changed installed instructions');
+    assert.throws(() => contextBuilder.admitInstalledLaunch(value, { ...admission, readerCapacity: capacity }),
+      { code: 'STALE_CONTEXT' });
+    fs.writeFileSync(path.join(agents, selected.agent_file), agentText);
+    contextBuilder.recheckInstalledLaunch(value);
+    const originalProbeBytes = fs.readFileSync(nativeFile);
+    try {
+      fs.appendFileSync(nativeFile, '\n');
+      assert.throws(() => contextBuilder.admitInstalledLaunch(value, { ...admission, readerCapacity: capacity }));
+    } finally { fs.writeFileSync(nativeFile, originalProbeBytes); }
+    assert.strictEqual(contextBuilder.admittedFileInput(value), admitted);
+    contextBuilder.recheckInstalledLaunch(value);
+    const finished = contextBuilder.finish(value, final, recorder);
+    assert.equal(finished.result.launch_digest, digest);
+    assert.equal(finished.subject, f.ticket);
+    assert.equal(finished.result.verdict, 'conform');
+    assert.deepEqual(recorder.getVerifiedRecord(probeRecord.dispatch_id), probeRecord);
+    assert.throws(() => contextBuilder.admitInstalledLaunch(value, { ...admission, readerCapacity: capacity }),
+      { code: 'ARCHIVE_AUTHORITY_INVALID' });
+  } finally { cleanupJudgment(f); fs.rmSync(storage, { recursive: true, force: true }); }
 });
 
 test('selected instruction bytes upgrade a below-limit architecture prompt to authenticated file input', () => {
