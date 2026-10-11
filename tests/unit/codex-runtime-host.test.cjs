@@ -2293,4 +2293,19 @@ test('v3 capacity cannot be minted from a copied contract or a success label', (
   } }, {}), error => error.code === 'READER_CAPACITY_UNSUPPORTED');
 });
 
+test('completed source custody refuses copied observations before authority access', () => {
+  const authority = require('../../plugins/delivery-pipeline/scripts/role-artifact.cjs');
+  const copied = { schema: 'shipyard.completed-review-source.v1', worktree: '/tmp/copied-source',
+    identity: { dispatch_id: 'copied-final', role: 'arch-review' } };
+  assert.equal(authority.isAuthenticatedCompletedSource(copied), false);
+  for (const operation of ['sealCompletedReviewSource', 'claimCompletedReviewSource', 'completeCompletedReviewSource'])
+    assert.throws(() => authority[operation](copied), { code: 'REVIEW_PROGRESS_INVALID' });
+});
+test('completed source accounting rejects caller-created costs and attempts', () => {
+  const runtime = require('../../plugins/delivery-pipeline/scripts/codex-runtime-host.cjs');
+  assert.throws(() => runtime.verifyCompletedReviewConsumption({ worktree: '/tmp/copied-source',
+    source: { reference: 'copied' }, receipt_store: '/tmp/copied-store', dispatch_id: 'copied-final',
+    attempts: [{ status: 'completed', physical_calls: 0 }], setup_costs: 0 }), { code: 'REVIEW_SOURCE_REQUIRED' });
+});
+
 done();

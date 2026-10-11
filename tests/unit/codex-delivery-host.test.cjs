@@ -1698,7 +1698,7 @@ function agentManifestFor(agentDir, role) {
     'name = "' + file.replace(/\.toml$/, '') + '"',
     'model = "' + resolution.model + '"',
     'model_reasoning_effort = "' + resolution.effort + '"',
-    'sandbox_mode = "read-only"',
+    'sandbox_mode = "' + (role === 'review-fix' ? 'workspace-write' : 'read-only') + '"',
     "developer_instructions = '''",
     'Follow the scoped role.',
     "'''",
@@ -1771,25 +1771,12 @@ test('a Shipyard-shaped worktree (graph tracked at HEAD, no flag or env) leaves 
     } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
   }));
 
-test('a cross-repo review-fix prompt carries the delivered contract and files after the caller prompt', async () => {
+test('review-fix caller prompts cannot acquire canonical host repair authority', async () => {
   const f = fixture();
-  const agentDir = fs.mkdtempSync(path.join(temporary, 'agents-'));
-  const agentManifest = agentManifestFor(agentDir, 'review-fix');
   try {
-    fs.mkdirSync(path.dirname(path.join(f.project, '.planning', 'OTHER.md')), { recursive: true });
-    fs.writeFileSync(path.join(f.project, '.planning', 'OTHER.md'), 'other content\n');
-    const graph = JSON.parse(fs.readFileSync(path.join(f.graphDir, 'tickets.json'), 'utf8'));
-    graph.tickets['T-38-04'].plan = '.planning/PLAN-WITH-CONTEXT.md';
-    fs.writeFileSync(path.join(f.graphDir, 'tickets.json'), JSON.stringify(graph));
-    fs.writeFileSync(path.join(f.project, '.planning', 'PLAN-WITH-CONTEXT.md'),
-      '# plan\n\n## Context (Reads)\n\n- `.planning/OTHER.md`.\n');
-    const planSha256 = crypto.createHash('sha256')
-      .update(fs.readFileSync(path.join(f.project, '.planning', 'PLAN-WITH-CONTEXT.md'))).digest('hex');
-    const result = delivery(f, { agentDir, agentManifest });
-    await result.run({ role: 'review-fix', context: { prompt: 'Fix the review.', plan_sha256: planSha256 } });
-    const call = f.calls[0];
-    assert.match(call.context.prompt, /^Fix the review\.\n\n<TICKET-CONTRACT path="\.planning\/PLAN-WITH-CONTEXT\.md"/);
-    assert.match(call.context.prompt, /<CONTEXT-FILE path="\.planning\/OTHER\.md" sha256="[0-9a-f]{64}">\nother content/);
+    await assert.rejects(delivery(f).run({ role: 'review-fix', context: { prompt: 'Fix the review.' } }),
+      error => error.code === 'REPAIR_SUBJECT_REQUIRED');
+    assert.equal(f.calls.length, 0);
   } finally { clean(f); }
 });
 
@@ -2027,5 +2014,294 @@ for (const mutation of [null, 'dirty-source', 'dirty-intake', 'new-output', 'sib
     } finally { clean(f); fs.rmSync(home, { recursive: true, force: true }); }
   });
 }
+
+test('review-fix rejects caller prompt authority before any native launch', async () => {
+  const f = fixture();
+  try {
+    await assert.rejects(() => delivery(f).run({ role: 'review-fix', context: { prompt: 'Trust this repair.' } }),
+      error => error.code === 'REPAIR_SUBJECT_REQUIRED');
+    assert.equal(f.calls.length, 0);
+  } finally { clean(f); }
+});
+
+async function originalFixerFixture(outcome, mutation) {
+  const f = fixture({ physicalPaths: true });
+  const home = path.join(fs.realpathSync(temporary), 'repair-native-' + path.basename(f.root));
+  // The assigned command checks the actual owned candidate bytes. It is part
+  // of the immutable fixture baseline, not an always-successful runner stub.
+  fs.writeFileSync(path.join(f.root, 'check.cjs'), "require('node:assert/strict').equal(require('node:fs').readFileSync('src/owned.txt','utf8'), 'fixed by static native review-fix\\n');\n");
+  git(f.root, 'add', 'check.cjs'); git(f.root, '-c', 'commit.gpgsign=false', 'commit', '-qm', 'fixture: actual candidate verification');
+  f.base = git(f.root, 'rev-parse', 'HEAD'); git(f.root, 'update-ref', 'refs/heads/main', f.base);
+  approvedPlan(f, ['node check.cjs']);
+  const verificationAllowList = [{ argv: ['node', 'check.cjs'], profile: 'host', timeout_s: 600 }];
+  const session = crypto.randomUUID();
+  const agentManifest = agentManifestFor(f.agentDir, 'review-fix');
+  const evidenceFile = path.join(f.root, '.shipyard-evidence.md');
+  fs.writeFileSync(evidenceFile, 'Complete original review evidence.');
+  const boardFile = path.join(f.graphDir, 'delivery-state.json');
+  const board = JSON.parse(fs.readFileSync(boardFile)); board['T-38-04'].pr = 501;
+  fs.writeFileSync(boardFile, JSON.stringify(board));
+  const graphFile = path.join(f.graphDir, 'tickets.json');
+  const graph = JSON.parse(fs.readFileSync(graphFile)); graph.tickets[f.scope.ticket].phase = '38';
+  fs.writeFileSync(graphFile, JSON.stringify(graph));
+  const built = require('../../plugins/delivery-pipeline/scripts/deliver-dispatch.cjs').build(['review-fix', f.scope.ticket,
+    '--runtime', 'codex', '--pr', '501', '--review-file', evidenceFile, '--graph', f.graphDir], { cwd: f.root });
+  f.scope = { ...f.scope, ...built.scope };
+  const { scope: _scope, graph_dir: _graph, ...nativeRequest } = built;
+  const feedback = [{ id: 'thread-1', isResolved: false }];
+  const output = { schema: 'shipyard.repair-result.v1', id: f.scope.ticket, pr: 501,
+    status: outcome === 'source' ? 'fixed' : outcome, pushed: false, notes: 'Complete repair reasoning.',
+    hypothesis: 'The source condition explains the original finding.', review_dispositions: [
+      { id: 'thread-1', action: outcome === 'no-op' ? 'reply-and-resolve' : 'escalate', reply: 'Retain pending current review.', evidence: { command: 'inspect', result: 'complete source reviewed' } },
+      { id: 'comment-1', action: outcome === 'no-op' ? 'reply' : 'escalate', reply: 'Retain this obligation.', evidence: { command: 'inspect', result: 'complete comment reviewed' } },
+      { id: 'pr-body-501', action: outcome === 'no-op' ? 'reply' : 'escalate', reply: 'Complete PR body reasoning.', evidence: { command: 'inspect PR', result: 'complete original body evaluated' } },
+    ] };
+  const replies = [], prReplies = [];
+  let launches = 0, publishedHead = f.base, pushes = 0;
+  const live = () => ({ number: mutation === 'foreign-pr' ? 502 : 501, state: mutation === 'closed-pr' ? 'CLOSED' : 'OPEN',
+    headRefName: 'ticket/T-38-04', headRefOid: mutation === 'stale-head' ? '1'.repeat(40) : publishedHead,
+    baseRefName: 'main', baseRefOid: mutation === 'stale-base' ? '2'.repeat(40) : f.base });
+  const gh = (_program, args) => {
+    if (_program === 'git' && args[0] === 'push') {
+      pushes++; publishedHead = git(f.root, 'rev-parse', 'HEAD');
+      if (mutation === 'publication-response-loss') throw new Error('Original push response was lost after remote confirmation');
+      return 'confirmed host push';
+    }
+    if (args[0] === 'repo') return JSON.stringify({ nameWithOwner: 'fixture/repository' });
+    const query = args.find(arg => arg.startsWith('query='));
+    if (args[0] === 'pr') return JSON.stringify({ id: 'pr-body-501' });
+    const value = key => args.find(arg => arg.startsWith(key + '='))?.slice(key.length + 1);
+    if (query.includes('addPullRequestReviewThreadReply')) {
+      const comment = { id: 'reply-' + (replies.length + 1), body: value('body') }; replies.push(comment);
+      return JSON.stringify({ data: { addPullRequestReviewThreadReply: { comment } } });
+    }
+    if (query.includes('addComment(input:')) {
+      const comment = { id: 'pr-reply-' + (prReplies.length + 1), body: value('body') }; prReplies.push(comment);
+      return JSON.stringify({ data: { addComment: { commentEdge: { node: comment } } } });
+    }
+    if (query.includes('resolveReviewThread(input:')) { feedback[0].isResolved = true; return JSON.stringify({ data: { resolveReviewThread: { thread: feedback[0] } } }); }
+    if (query.includes('{id body title}')) return JSON.stringify({ data: { repository: { pullRequest: { id: 'pr-body-501', body: 'Original complete PR body', title: 'Original PR title' } } } });
+    const connection = nodes => ({ nodes, pageInfo: { hasNextPage: false, endCursor: null } });
+    if (query.includes('node(id:')) {
+      if (mutation === 'failed-page') throw new Error('original page unavailable');
+      if (mutation === 'disposition-budget') {
+        const offset = Number(value('cursor') || 0);
+        return JSON.stringify({ data: { node: { comments: {
+          nodes: Array.from({ length: 100 }, (_, index) => ({ id: 'bounded-obligation-' + (offset + index), body: 'x' })),
+          pageInfo: { hasNextPage: offset + 100 < 2000, endCursor: String(offset + 100) } } } } });
+      }
+      const comments = [{ id: 'comment-1', body: mutation === 'overflow' ? 'x'.repeat(600000) : 'Full original thread comment' }, ...replies];
+      if (mutation === 'duplicate-feedback') comments.push(comments[0]);
+      if (mutation === 'feedback-movement' && launches) comments.push({ id: 'new-obligation', body: 'New feedback after preparation.' });
+      const page = connection(comments);
+      if (mutation === 'stalled-pagination') page.pageInfo = { hasNextPage: true, endCursor: 'unchanged-cursor' };
+      return JSON.stringify({ data: { node: { comments: page } } });
+    }
+    const field = query.includes('reviewThreads(') ? 'reviewThreads' : query.includes('reviews(') ? 'reviews' : 'comments';
+    return JSON.stringify({ data: { repository: { pullRequest: { [field]: connection(field === 'reviewThreads' ? feedback : field === 'comments' ? prReplies : []) } } } });
+  };
+  const originalHome = os.homedir; os.homedir = () => fs.realpathSync(temporary);
+  try {
+    if (mutation === 'missing-disposition') output.review_dispositions.pop();
+    if (mutation === 'foreign-result') output.id = 'T-38-99';
+    if (mutation === 'producer-push') output.pushed = true;
+    if (mutation === 'evidence-symlink') { fs.unlinkSync(evidenceFile); fs.symlinkSync(f.plan, evidenceFile); }
+    if (mutation === 'evidence-bytes') fs.appendFileSync(evidenceFile, 'changed');
+    if (mutation === 'unknown-selector') nativeRequest.context.attempt = 99;
+    if (mutation === 'caller-rung') nativeRequest.signals = { signatureState: 'repeat_exhausted' };
+    if (mutation === 'caller-first') nativeRequest.signals = { signatureState: 'first' };
+    if (mutation === 'caller-new') nativeRequest.signals = { signatureState: 'new' };
+    const final = JSON.stringify(output);
+    const selected = policy.resolveDispatch({ runtime: 'codex', role: 'review-fix' });
+    const run = () => createCodexDeliveryHost({ ...cliOptions(f), host: undefined, scope: f.scope,
+      agentManifest, getPullRequest: live, execFileSync: gh, verification: undefined,
+      verificationAllowList, hostVerificationRunner: hostRunner(),
+      probe: { status: 'available', executable: 'codex', runtime_version: 'fixture',
+        capabilities: { supportedModels: [selected.model], supportedEfforts: [selected.effort] } },
+      env: { CODEX_HOME: home },
+      spawn(_executable, _args, options) {
+        launches++;
+        if (outcome === 'source') fs.writeFileSync(path.join(f.root, 'src/owned.txt'), 'fixed by static native review-fix\n');
+        if (mutation === 'foreign-dirty') fs.writeFileSync(path.join(f.root, 'outside.txt'), 'foreign mutation');
+        if (mutation === 'self-commit') { git(f.root, 'add', 'src/owned.txt'); git(f.root, '-c', 'commit.gpgsign=false', 'commit', '-qm', 'unauthorized producer commit'); }
+        if (mutation === 'plan-movement') fs.appendFileSync(f.plan, '\nChanged approved PLAN.');
+        if (mutation === 'evidence-completion') fs.appendFileSync(evidenceFile, '\nChanged during native turn.');
+        fs.writeFileSync(path.join(f.root, '.shipyard-repair-evidence.md'), 'Complete original producer evidence and dispositions.');
+        const capturedRows = captured('tests/fixtures/captured/codex-agent-stream-parent.jsonl', { '<SESSION-2>': session })
+          .trim().split('\n').map(JSON.parse);
+        const started = capturedRows.find(row => row.type === 'event_msg' && row.payload?.type === 'task_started');
+        const turnId = started.payload.turn_id;
+        const user = { type: 'response_item', payload: { type: 'message', role: 'user', content: [],
+          internal_chat_message_metadata_passthrough: { turn_id: turnId } } };
+        const instructions = require('../../plugins/delivery-pipeline/scripts/codex-runtime-host.cjs').generatedInstructions(
+          fs.readFileSync(path.join(f.agentDir, selected.agent_file), 'utf8'));
+        const rows = [capturedRows.find(row => row.type === 'session_meta'), capturedRows.find(row => row.type === 'turn_context'),
+          started, { type: 'response_item', payload: { type: 'message', role: 'developer', content: [{ type: 'input_text', text: instructions }],
+            internal_chat_message_metadata_passthrough: { turn_id: turnId } } }, user,
+          capturedRows.find(row => row.type === 'response_item' && row.payload?.phase === 'final_answer'),
+          capturedRows.find(row => row.type === 'event_msg' && row.payload?.type === 'task_complete')];
+        if (mutation === 'native-delegation') rows.splice(rows.length - 2, 0, { type: 'response_item', payload: {
+          type: 'function_call', name: 'spawn_agent', call_id: 'unauthorized-fixer-child', arguments: JSON.stringify({ agent_type: 'executor' }),
+          internal_chat_message_metadata_passthrough: { turn_id: turnId } } });
+        for (const row of rows) {
+          if (row.type === 'session_meta') Object.assign(row.payload, { id: session, session_id: session, cwd: f.root, runtime_workspace_roots: [f.root] });
+          if (row.type === 'turn_context') {
+            Object.assign(row.payload, { model: selected.model, effort: selected.effort, cwd: f.root });
+            row.payload.sandbox_policy = { type: 'workspace-write' };
+            if (row.payload.collaboration_mode?.settings) Object.assign(row.payload.collaboration_mode.settings, { model: selected.model, reasoning_effort: selected.effort });
+          }
+          if (row.payload?.type === 'task_complete') row.payload.last_agent_message = final;
+          if (row.payload?.phase === 'final_answer') row.payload.content.forEach(block => { block.text = final; });
+        }
+        const date = new Date();
+        const directory = path.join(options.env.CODEX_HOME, 'sessions', String(date.getFullYear()),
+          String(date.getMonth() + 1).padStart(2, '0'), String(date.getDate()).padStart(2, '0'));
+        fs.mkdirSync(directory, { recursive: true });
+        const cli = captured('tests/fixtures/captured/codex-agent-stream-exec.jsonl', { '<SESSION-1>': session })
+          .trim().split('\n').map(JSON.parse);
+        for (const row of cli) if (row.item?.type === 'agent_message') row.item.text = final;
+        if (mutation === 'duplicate-completion') cli.push(structuredClone(cli.find(row => row.type === 'turn.completed')));
+        if (mutation === 'missing-completion') cli.splice(cli.findIndex(row => row.type === 'turn.completed'), 1);
+        const child = new EventEmitter(); child.pid = 45678;
+        child.stdout = new EventEmitter(); child.stderr = new EventEmitter();
+        child.stdin = { write(prompt) {
+          assert.ok(String(prompt).includes('full feedback') || String(prompt).includes('complete feedback'));
+          user.payload.content = [{ type: 'input_text', text: mutation === 'native-context' ? 'Repair a foreign subject.' : String(prompt).trim() }];
+        }, end() {
+          process.nextTick(() => {
+            fs.writeFileSync(path.join(directory, session + '.jsonl'), rows.map(JSON.stringify).join('\n') + '\n', { mode: 0o600 });
+            child.stdout.emit('data', Buffer.from(cli.map(JSON.stringify).join('\n') + '\n')); child.emit('close', 0, null);
+          });
+        } };
+        return child;
+      },
+    }).run(nativeRequest);
+    if (mutation === 'publication-response-loss') {
+      await assert.rejects(run, { code: 'REPAIR_PUBLICATION_PENDING' });
+      const candidates = fs.readdirSync(path.join(stateRoot(f), 'candidates'));
+      assert.equal(candidates.length, 1);
+      const recovered = await createFinalizationRecoveryHost({ ...cliOptions(f), getPullRequest: live, execFileSync: gh,
+        verification: undefined, verificationAllowList, hostVerificationRunner: hostRunner() })
+        .resumeFinalization(candidates[0].replace(/\.json$/, ''), f.scope);
+      assert.equal(recovered.idempotent, true);
+      assert.equal(recovered.publication.status, 'confirmed');
+      assert.equal(recovered.artifact.commit, publishedHead);
+      assert.equal(recovered.actions.status, 'confirmed');
+      assert.equal(pushes, 1, 'an independently confirmed signed push is never replayed');
+      assert.equal(launches, 1);
+      return;
+    }
+    if (mutation) {
+      const expectedCode = {
+        'foreign-pr': 'REPAIR_SUBJECT_CHANGED', 'closed-pr': 'REPAIR_SUBJECT_CHANGED',
+        'stale-head': 'REPAIR_SUBJECT_CHANGED', 'stale-base': 'REPAIR_SUBJECT_CHANGED',
+        'failed-page': 'REPAIR_FEEDBACK_UNAVAILABLE', 'overflow': 'REPAIR_FEEDBACK_OVERFLOW',
+        'disposition-budget': 'REPAIR_FEEDBACK_OVERFLOW', 'duplicate-feedback': 'REPAIR_FEEDBACK_INVALID',
+        'stalled-pagination': 'REPAIR_FEEDBACK_INVALID', 'feedback-movement': 'REPAIR_SUBJECT_CHANGED',
+        'missing-disposition': 'REPAIR_COMPLETION_INVALID', 'foreign-result': 'REPAIR_COMPLETION_INVALID',
+        'producer-push': 'REPAIR_COMPLETION_INVALID', 'evidence-symlink': 'REPAIR_EVIDENCE_CHANGED',
+        'evidence-bytes': 'REPAIR_EVIDENCE_CHANGED', 'unknown-selector': 'INVALID_INPUT', 'caller-rung': 'INVALID_INPUT',
+        'caller-first': 'INVALID_INPUT', 'caller-new': 'INVALID_INPUT',
+        'foreign-dirty': 'SCOPED_TREE_UNAVAILABLE', 'self-commit': 'REPAIR_SUBJECT_CHANGED',
+        'plan-movement': 'REPAIR_SUBJECT_CHANGED', 'evidence-completion': 'REPAIR_EVIDENCE_CHANGED',
+        'missing-completion': 'RUNTIME_EVIDENCE_MISSING', 'duplicate-completion': 'RUNTIME_EVIDENCE_MISMATCH',
+        'native-context': 'REPAIR_COMPLETION_INVALID', 'native-delegation': 'REPAIR_COMPLETION_INVALID',
+      }[mutation];
+      assert.ok(expectedCode, 'every mutation must name its intended refusal');
+      await assert.rejects(run, { code: expectedCode });
+      const prelaunch = ['foreign-pr', 'closed-pr', 'stale-head', 'stale-base', 'failed-page', 'overflow',
+        'disposition-budget', 'duplicate-feedback', 'stalled-pagination', 'evidence-symlink', 'evidence-bytes',
+        'unknown-selector', 'caller-rung', 'caller-first', 'caller-new'];
+      assert.equal(launches, prelaunch.includes(mutation) ? 0 : 1);
+      if (mutation !== 'self-commit') assert.equal(git(f.root, 'rev-parse', 'HEAD'), f.base);
+      assert.equal(replies.length + prReplies.length, 0);
+      return;
+    }
+    const result = await run();
+    assert.equal(launches, 1);
+    assert.equal(result.receipt.role, 'review-fix');
+    assert.equal(result.receipt.compliance, 'verified');
+    // @contract: Selection signals retain the original boundary resolution identity.
+    assert.equal(result.resolution.dispatch_id, result.receipt.dispatch_id);
+    assert.equal(result.resolution.role, 'review-fix');
+    assert.equal(result.resolution.model, selected.model);
+    assert.equal(result.resolution.effort, selected.effort);
+    assert.deepEqual(result.resolution.signals, result.signals);
+    assert.equal(result.resolution.signals.signatureState, 'first');
+    assert.equal(Object.hasOwn(result.resolution.signals, 'priorApplied'), false);
+    assert.equal(result.receipt.applied_effort, selected.effort);
+    assert.equal(result.repair.role, 'review-fix');
+    assert.equal(result.repair.envelope.pushed, false);
+    // @contract: Artifact base identity uses the canonical graph/PR literal, including for equivalent Git aliases.
+    const roleArtifacts = require('../../plugins/delivery-pipeline/scripts/role-artifact.cjs');
+    const repairRead = { role: 'review-fix', ticket: f.scope.ticket, pr: 501,
+      worktreePath: f.root, base: graph.tickets[f.scope.ticket].pr_base,
+      branch: graph.tickets[f.scope.ticket].branch, planPath: graph.tickets[f.scope.ticket].plan,
+      boundaryStore: result.receipt_store || path.join(f.storageRoot, crypto.createHash('sha256').update(f.scope.run_id + '\0' + f.root).digest('hex'), 'receipts'),
+      dispatchId: result.receipt.dispatch_id, artifactPath: result.repair.artifact_ref, artifactDigest: result.repair.artifact_digest, historical: true };
+    assert.equal(repairRead.base, live().baseRefName);
+    assert.throws(() => roleArtifacts.read({ ...repairRead, base: 'refs/heads/main' }), { code: 'STALE_ARTIFACT' });
+    // @contract: PLAN identity retains the graph literal; filesystem aliases and foreign paths refuse.
+    assert.equal(path.resolve(f.graphDir, '..', '..', repairRead.planPath), f.plan);
+    for (const planPath of [f.plan, './' + repairRead.planPath, '.planning/phases/38-requests/38-99-PLAN.md']) {
+      assert.throws(() => roleArtifacts.read({ ...repairRead, planPath }),
+        error => error.code === 'ARTIFACT_IDENTITY_MISMATCH' && error.message.includes('plan_path'));
+    }
+    const protectedRepair = roleArtifacts.read(repairRead);
+    assert.equal(protectedRepair.base, repairRead.base);
+    assert.equal(protectedRepair.manifest.branch, repairRead.branch);
+    assert.equal(protectedRepair.manifest.plan_path, repairRead.planPath);
+    assert.equal(protectedRepair.manifest.producer_dispatch, result.receipt.dispatch_id);
+    assert.equal(protectedRepair.manifest.producer_launch, result.receipt.launch_id);
+    assert.equal(protectedRepair.pr, output.pr);
+    assert.equal(protectedRepair.ticket, output.id);
+    assert.equal(protectedRepair.integration_base.commit, f.base);
+    assert.equal(protectedRepair.producer_head, f.base);
+    assert.equal(protectedRepair.evidence, 'Complete original producer evidence and dispositions.');
+    assert.equal(protectedRepair.findings.hypothesis, output.hypothesis);
+    assert.deepEqual(result.repair_result.review_dispositions, output.review_dispositions);
+    if (outcome === 'source') {
+      assert.equal(result.artifact.status, 'committed');
+      assert.equal(git(f.root, 'rev-parse', 'HEAD^'), f.base);
+      assert.equal(result.actions.status, 'confirmed');
+      assert.equal(publishedHead, result.artifact.commit);
+      assert.ok(git(f.root, 'show', '-s', '--format=%B', 'HEAD').includes('Shipyard-Verification-Evidence:'));
+      const signedCoverage = require('../../plugins/delivery-pipeline/scripts/conveyor-coverage.cjs').verify({ worktree: f.root, repo: require('../../plugins/delivery-pipeline/scripts/conveyor-coverage.cjs').repoSlug(f.root), commit: result.artifact.commit });
+      assert.equal(signedCoverage.covered, true);
+      assert.equal(signedCoverage.record.kind, 'fixer');
+      const recoveryHost = createFinalizationRecoveryHost({ ...cliOptions(f), getPullRequest: live, execFileSync: gh,
+        verification: undefined, verificationAllowList, hostVerificationRunner: hostRunner() });
+      await assert.rejects(() => recoveryHost.resumeFinalization(result.artifact.candidate_id, { ...f.scope, role: 'executor' }),
+        error => error.code === 'IDENTITY_CHANGED' && error.invalidated.includes('role'));
+      const resumed = await recoveryHost.resumeFinalization(result.artifact.candidate_id, f.scope);
+      assert.equal(resumed.idempotent, true); assert.equal(resumed.artifact.commit, result.artifact.commit);
+      assert.equal(resumed.publication.status, 'confirmed'); assert.equal(launches, 1);
+    } else {
+      assert.equal(git(f.root, 'rev-parse', 'HEAD'), f.base);
+      assert.equal(result.artifact, undefined);
+      if (outcome === 'no-op') {
+        assert.equal(result.actions.confirmed.length, 3);
+        assert.equal(result.actions.confirmed.filter(action => action.resolved).length, 1);
+        assert.equal(feedback[0].isResolved, true);
+        assert.equal(replies.length + prReplies.length, 3);
+        const recovered = createFinalizationRecoveryHost({ ...cliOptions(f), getPullRequest: live, execFileSync: gh, verificationAllowList })
+          .resumeRepairActions(result.receipt.dispatch_id, f.scope);
+        assert.equal(recovered.resumed, true); assert.equal(recovered.actions.confirmed.length, 3);
+        assert.equal(replies.length + prReplies.length, 3, 'confirmed actions are independently checked without replay');
+        assert.equal(git(f.root, 'rev-parse', 'HEAD'), f.base);
+      } else { assert.equal(feedback[0].isResolved, false); assert.equal(result.actions.confirmed.length, 0); }
+    }
+  } finally { os.homedir = originalHome; clean(f); fs.rmSync(home, { recursive: true, force: true }); }
+}
+
+for (const outcome of ['source', 'no-op', 'escalate']) test('canonical builder through original static fixer seals ' + outcome + ' with host custody',
+  () => withGraphDirEnv(undefined, () => originalFixerFixture(outcome)));
+test('signed fixer publication recovers a lost response without replaying its confirmed push',
+  () => withGraphDirEnv(undefined, () => originalFixerFixture('source', 'publication-response-loss')));
+for (const mutation of ['foreign-pr', 'closed-pr', 'stale-head', 'stale-base', 'failed-page', 'overflow', 'disposition-budget', 'duplicate-feedback',
+  'stalled-pagination', 'feedback-movement', 'missing-disposition', 'foreign-result', 'producer-push', 'evidence-symlink', 'evidence-bytes',
+  'unknown-selector', 'caller-rung', 'caller-first', 'caller-new', 'foreign-dirty', 'self-commit', 'plan-movement', 'evidence-completion', 'missing-completion', 'duplicate-completion',
+  'native-context', 'native-delegation'])
+  test('original fixer custody refuses ' + mutation, () => withGraphDirEnv(undefined, () => originalFixerFixture('source', mutation)));
 
 done();
