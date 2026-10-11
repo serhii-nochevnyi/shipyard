@@ -123,6 +123,64 @@ function finish(turn, result) {
   event('task_complete', turn, { last_agent_message: result })];
 }
 
+
+async function recordedBatchApplication(verified, input, root, cliRaw, separateProbe = false, mutateAssociation) {
+  const boundaryModule = require('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs');
+  const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
+  const sha = value => require('node:crypto').createHash('sha256').update(value).digest('hex');
+  const receiptStore = path.join(root, 'measurement-receipts');
+  const recorder = boundaryModule.createDurableRecorder(receiptStore);
+  const cliFile = path.join(root, 'measurement-cli.jsonl');
+  fs.writeFileSync(cliFile, cliRaw, { mode: 0o600 });
+  const candidate = input.manifest.transport.candidate;
+  const dispatchId = separateProbe ? 'capacity-probe-' + crypto.randomUUID() : input.manifest.dispatch_id;
+  const manifest = input.manifest;
+  const association = separateProbe ? {
+    schema: 'shipyard.reader-capacity-association.v1', probe_dispatch_id: dispatchId,
+    review_dispatch_id: manifest.dispatch_id, manifest_sha256: input.input_bundle.manifest_sha256,
+    profile_sha256: manifest.transport.profile_sha256,
+    binding_sha256: sha(stable([manifest.snapshot, manifest.run_id, manifest.ticket, manifest.phase, manifest.role,
+      manifest.dispatch_id, manifest.binding, manifest.accounting.generated_instruction_bytes || 0,
+      manifest.assets.map(asset => [asset.ordinal, asset.bytes, asset.sha256])])),
+  } : null;
+  if (mutateAssociation) mutateAssociation(association);
+  const args = ['exec', '--json', '--model', candidate.model,
+    '--config', 'model_reasoning_effort="' + candidate.effort + '"'];
+  const content = "developer_instructions = '''\nReview all required material.\n'''";
+  const evidence = {
+    schema: 'shipyard.codex-runtime-evidence.v1', version: 1, runtime: 'codex', provider: 'openai',
+    run_id: input.manifest.run_id, ticket: input.manifest.ticket, phase: input.manifest.phase,
+    worktree: input.manifest.snapshot.worktree, dispatch_id: dispatchId,
+    ...(association ? { reader_capacity_probe: association } : {}),
+    session_id: verified.native_session_evidence.session_id, process_id: process.pid,
+    selection_source: 'codex-native-session-transcript', command: { executable: 'codex', args },
+    command_digest: sha(JSON.stringify(args)), native_session_evidence: verified.native_session_evidence,
+    input_transport: 'host-files', input_bundle: input.input_bundle,
+    input_consumption: { manifest_sha256: input.input_bundle.manifest_sha256 },
+    transcript: { path: cliFile, bytes: Buffer.byteLength(cliRaw), sha256: sha(cliRaw) },
+  };
+  const adapter = {
+    validateGeneratedAgent(resolution) {
+      return { valid: true, exists: true, content_verified: true, policy_hash: resolution.policy_hash,
+        agent_file: resolution.agent_file, agent_file_digest: sha(content), agent_file_content: content };
+    },
+    launchStatic(resolution) {
+      return { receipt_type: 'adr-014.application', runtime: 'codex', role: resolution.role,
+        dispatch_id: resolution.dispatch_id, launch_id: 'codex-' + evidence.session_id,
+        requested_model: resolution.requested_model, requested_effort: resolution.requested_effort,
+        applied_model: candidate.model, applied_effort: candidate.effort,
+        observed_model: candidate.model, observed_effort: candidate.effort, policy_hash: policy.POLICY_HASH,
+        agent_file: resolution.agent_file, agent_file_digest: resolution.agent_file_digest,
+        runtime_evidence: evidence };
+    },
+  };
+  const result = await boundaryModule.createDispatchBoundary({ adapters: { codex: adapter }, recorder })
+    .dispatch({ runtime: 'codex', role: input.manifest.role, signals: {}, dispatch_id: dispatchId },
+      { ticket: input.manifest.ticket });
+  assert.deepEqual(recorder.getVerifiedRecord(dispatchId).receipt, result.receipt);
+  return { recorder, receipt: result.receipt };
+}
+
 async function fixture(action, options = {}) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'review-continuation-')));
   const oldHome = os.homedir;
@@ -179,7 +237,13 @@ async function fixture(action, options = {}) {
       fs.chmodSync(probe, 0o600);
       const verified = await runtime.verifyCompletedNativeLaunch({ session_id: session, selection,
         env: { CODEX_HOME: probeHome }, resultText: result });
-      capacity = runtime.measureReaderCapacity(verified, input);
+      assert.throws(() => runtime.measureReaderCapacity(verified, input), error => error.code === 'READER_CAPACITY_UNSUPPORTED');
+      const application = await recordedBatchApplication(verified, input, root,
+        serialize([cliThread(session), ...cliCompletion(result)]), options.separateProbe, options.mutateProbeAssociation);
+      assert.throws(() => runtime.measureReaderCapacity(verified, input,
+        { recorder: {}, receipt: JSON.parse(JSON.stringify(application.receipt)) }),
+      error => error.code === 'READER_CAPACITY_UNSUPPORTED');
+      capacity = runtime.measureReaderCapacity(verified, input, application);
       assert.throws(() => collector.admitReaderBatchInput(input, JSON.parse(JSON.stringify(capacity))),
         error => error.code === 'READER_CAPACITY_UNSUPPORTED');
       input = collector.admitReaderBatchInput(input, capacity);
@@ -624,6 +688,29 @@ test('v3 uncredited truncated batch remains in original history and is retried w
   }, { batch: true, incompleteBatch: true });
 });
 
+for (const mutation of ['missing receipt', 'changed receipt', 'changed CLI transcript']) {
+  test('v3 protected resume refuses ' + mutation + ' before claiming or spawning', async () => {
+    await fixture(async f => {
+      const contract = f.capacity.contract;
+      const receiptFile = path.join(contract.application_receipt_store,
+        'record-' + sha(contract.application_dispatch_id) + '.json');
+      const record = JSON.parse(fs.readFileSync(receiptFile, 'utf8'));
+      const before = authority.readReviewProgress({ worktree: f.worktree, reference: f.progress });
+      const calls = f.calls.length;
+      if (mutation === 'missing receipt') fs.unlinkSync(receiptFile);
+      else if (mutation === 'changed receipt') {
+        record.payload.receipt.observed_model = 'gpt-6-luna';
+        fs.writeFileSync(receiptFile, JSON.stringify(record));
+      } else fs.appendFileSync(record.payload.receipt.runtime_evidence.transcript.path, '{}\n');
+      await assert.rejects(f.createHost().resumeReview(f.selection,
+        { progress: f.progress, dispatch_id: 'receipt-refusal' }));
+      assert.equal(f.calls.length, calls);
+      const after = authority.readReviewProgress({ worktree: f.worktree, reference: f.progress });
+      assert.deepEqual(after, before);
+    }, { batch: true });
+  });
+}
+
 const batchMutations = [
   ['nested truncation', output => { output[1].text = output[1].text.slice(0, -2); }],
   ['outer truncation', output => { output[0].text = 'Warning: truncated output\n'; }],
@@ -770,3 +857,663 @@ test('v3 typed reviewer resumes the original child UUID with its installed instr
     assert.equal(authority.validateReviewContinuationEvidence(completed.runtime_evidence).session_id, childSession);
   }, { batch: true, typed: true });
 });
+
+for (const role of ['arch-review', 'integrator']) test('v3 protected ' + role + ' continuation reauthenticates the separate probe association', async () => {
+  await fixture(async f => {
+    const capacity = f.input.input_bundle.reader_capacity;
+    assert.notEqual(capacity.application_dispatch_id, f.input.manifest.dispatch_id);
+    assert.equal(capacity.probe_association.review_dispatch_id, f.input.manifest.dispatch_id);
+    const progress = authority.readReviewProgress({ worktree: f.worktree, reference: f.progress });
+    const restored = collector.restoreReviewInput(progress);
+    assert.deepEqual(restored.input_bundle.reader_capacity, capacity);
+    const completed = await f.createHost().resumeReview(f.selection, { progress: f.progress, dispatch_id: 'separate-probe-final' });
+    assert.equal(completed.runtime_evidence.session_id, f.reviewerSession);
+    assert.equal(completed.runtime_evidence.review_continuation.inherited_ranges, 2);
+    assert.ok(!f.resumedCommands.includes(f.reads[0].command));
+    assert.equal(authority.validateReviewContinuationEvidence(completed.runtime_evidence).identity.role, role);
+  }, { batch: true, role, separateProbe: true });
+});
+
+for (const [name, mutate] of [
+  ['final dispatch', association => { association.review_dispatch_id = 'foreign-final'; }],
+  ['probe dispatch', association => { association.probe_dispatch_id = 'capacity-probe-00000000-0000-4000-8000-000000000000'; }],
+  ['same dispatch', association => { association.probe_dispatch_id = association.review_dispatch_id; }],
+  ['manifest', association => { association.manifest_sha256 = '0'.repeat(64); }],
+  ['profile', association => { association.profile_sha256 = '0'.repeat(64); }],
+  ['subject', association => { association.binding_sha256 = '0'.repeat(64); }],
+  ['surplus', association => { association.cached = true; }],
+]) test('v3 original protected probe refuses changed ' + name + ' association', async () => {
+  await assert.rejects(fixture(() => assert.fail('changed probe must not admit review'), {
+    batch: true, separateProbe: true, mutateProbeAssociation: mutate,
+  }), error => error.code === 'READER_CAPACITY_UNSUPPORTED');
+});
+
+async function completedSourceFixture(role, cold, mutation, action, failFirst = false, claimRace = false, failedEnvelope = false) {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'completed-review-source-')));
+  const previousHome = os.homedir;
+  os.homedir = () => root;
+  try {
+    const worktree = path.join(root, 'worktree'); fs.mkdirSync(worktree);
+    fs.writeFileSync(path.join(worktree, 'source.txt'), 'current original source\n');
+    for (const args of [['init', '-q'], ['add', '.'], ['commit', '-qm', 'original source']])
+      execFileSync('git', ['-C', worktree, '-c', 'commit.gpgsign=false', '-c', 'user.name=Fixture',
+        '-c', 'user.email=fixture@example.invalid', ...args]);
+    const head = execFileSync('git', ['-C', worktree, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+    execFileSync('git', ['-C', worktree, 'update-ref', 'refs/heads/review-base', head]);
+    const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
+    const boundaryModule = require('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs');
+    const adapterModule = require('../../plugins/delivery-pipeline/scripts/codex-dispatch-adapter.cjs');
+    const scope = { repository: 'fixture/repository', worktree, phase: 49, ticket: 'T-49-18', run_id: 'original-completed-source', runtime: 'codex', provider: 'openai' };
+    const dispatchId = 'fresh-final-' + crypto.randomUUID();
+    const selected = policy.resolveDispatch({ runtime: 'codex', role, signals: {}, dispatch_id: dispatchId });
+    const home = path.join(root, 'codex'), agents = path.join(home, 'agents'); fs.mkdirSync(agents, { recursive: true });
+    const content = ['# shipyard-policy-id = "' + policy.POLICY.id + '"',
+      '# shipyard-policy-version = "' + policy.POLICY_VERSION + '"', '# shipyard-policy-hash = "' + policy.POLICY_HASH + '"',
+      '# shipyard-policy-runtime = "codex"', '# shipyard-policy-role = "' + role + '"', '# shipyard-policy-rung = "' + selected.rung + '"',
+      'name = "' + selected.agent_file.replace(/\.toml$/, '') + '"', 'model = "' + selected.model + '"',
+      'model_reasoning_effort = "' + selected.effort + '"', 'sandbox_mode = "read-only"',
+      "developer_instructions = '''", 'Review all required material.', "'''", ''].join('\n');
+    fs.writeFileSync(path.join(agents, selected.agent_file), content);
+    const agentManifest = path.join(agents, '.shipyard-manifest.json');
+    fs.writeFileSync(agentManifest, JSON.stringify({ policy_id: policy.POLICY.id, policy_version: policy.POLICY_VERSION,
+      policy_hash: policy.POLICY_HASH, agent_files: [selected.agent_file], agent_digests: { [selected.agent_file]: sha(content) } }));
+    const instructions = runtime.generatedInstructions(content);
+    const profile = collector.createReaderBatchProfile({ chunk_bytes: 8192, ranges_per_batch: 8,
+      candidate: { source_sha256: sha(fs.readFileSync(require.resolve('../../plugins/delivery-pipeline/scripts/codex-arch-review-context.cjs'))),
+        instructions_sha256: sha(instructions), model: selected.model, effort: selected.effort, provider: 'openai' } });
+    let input = collector.prepareFileInput(scope, 'Complete current source, including multibyte € material.\n'.repeat(1500), {
+      role, dispatchId, readerProfile: profile, storageRoot: path.join(root, 'inputs'),
+      generatedInstructionBytes: Buffer.byteLength(instructions) + 2,
+      binding: { base: head, base_ref: 'refs/heads/review-base', merge_base: head, ticket_set: ['T-49-18'],
+        ticket_set_digest: sha(JSON.stringify(['T-49-18'])), agent_file: selected.agent_file,
+        agent_path: path.join(agents, selected.agent_file), agent_sha256: sha(content), policy_hash: policy.POLICY_HASH } });
+    const manifestBytes = fs.readFileSync(input.input_bundle.manifest_path);
+    const manifestIdentity = stable(input.manifest);
+    const recorder = boundaryModule.createDurableRecorder(path.join(root, 'receipts'));
+    const date = new Date(), directory = path.join(home, 'sessions', String(date.getFullYear()),
+      String(date.getMonth() + 1).padStart(2, '0'), String(date.getDate()).padStart(2, '0'));
+    fs.mkdirSync(directory, { recursive: true });
+    const native = path.join(directory, session + '.jsonl');
+    let launches = 0, probeCallbacks = 0, finalCallbacks = 0, finalPrompt;
+    const concurrentClaims = [];
+    const echo = () => ({ input_manifest_sha256: input.input_bundle.manifest_sha256,
+      input_material_bytes: input.input_bundle.total_bytes, input_asset_count: input.input_bundle.asset_count,
+      input_chunk_reads: input.manifest.ranges.length, input_batch_reads: input.manifest.batches.length,
+      input_profile_sha256: input.manifest.transport.profile_sha256 });
+    const spawn = (_program, args) => {
+      const launchIndex = ++launches, failure = failFirst && launchIndex === 1;
+      const index = args.includes('resume') ? 2 : 1, turn = failure ? 'failed-complete-probe' : index === 1 ? 'original-complete-probe' : 'new-current-final';
+      assert.equal(args[args.indexOf('--model') + 1], selected.model);
+      if (index === 2) { assert.ok(args.includes('resume')); assert.ok(args.includes(session)); }
+      const child = new EventEmitter(); child.pid = 45200 + index;
+      child.stdout = new EventEmitter(); child.stderr = new EventEmitter();
+      let stdin = '';
+      child.stdin = { write(bytes) { stdin += String(bytes); }, end() {
+        const prompt = index === 1 ? input.prompt : stdin.trim();
+        if (index === 2) finalPrompt = prompt;
+        const context = nativeContext(turn, worktree);
+        Object.assign(context.payload, { model: selected.model, effort: selected.effort });
+        Object.assign(context.payload.collaboration_mode.settings, { model: selected.model, reasoning_effort: selected.effort });
+        const result = JSON.stringify({ ...echo(), judgment: index === 1 ? 'obsolete probe conclusion' : 'independent current judgment' });
+        if (index === 2 && claimRace) concurrentClaims.push(assert.rejects(() => host.resumeCompletedSource({ ...selected,
+          sandbox_mode: 'read-only', agent_file_content: content, agent_file_digest: sha(content) }, {
+          source, dispatch_id: dispatchId, role }), { code: 'REVIEW_SOURCE_CLAIMED' }));
+        if (failure) {
+          const failedFile = path.join(directory, childSession + '.jsonl');
+          const failedReads = nativeReads(readRecords(input).slice(0, 1), turn);
+          if (failedEnvelope) {
+            const output = failedReads.find(row => row.payload.type === 'custom_tool_call_output');
+            const nested = JSON.parse(output.payload.output[1].text);
+            nested.output = nested.output.slice(0, -128); nested.truncated = true;
+            output.payload.output[1].text = JSON.stringify(nested);
+          }
+          const failed = [nativeMetadata(childSession, worktree), context, message('developer', turn, instructions),
+            message('user', turn, prompt), event('task_started', turn), ...failedReads,
+            event('task_aborted', turn)];
+          process.nextTick(() => {
+            fs.writeFileSync(failedFile, serialize(failed), { mode: 0o600 });
+            child.stdout.emit('data', Buffer.from(serialize([cliThread(childSession),
+              cliCompletion('')[0], { type: 'turn.failed', error: { message: 'Original actual interrupted probe' } }])));
+            child.emit('close', 1, null);
+          });
+          return;
+        }
+        const records = index === 1 ? [nativeMetadata(session, worktree), context,
+          message('developer', turn, instructions), message('user', turn, prompt), event('task_started', turn),
+          ...nativeReads(readRecords(input), turn), ...finish(turn, result)]
+          : [context, message('user', turn, prompt), event('task_started', turn), ...finish(turn, result)];
+        if (index === 2 && mutation === 'incomplete-final') {
+          records.splice(3, records.length - 3, event('task_aborted', turn));
+          process.nextTick(() => {
+            fs.appendFileSync(native, serialize(records));
+            child.stdout.emit('data', Buffer.from(serialize([cliThread(session), cliCompletion('')[0],
+              { type: 'turn.failed', error: { message: 'Actual fresh final was interrupted' } }])));
+            child.emit('close', 1, null);
+          });
+          return;
+        }
+        if (mutation === 'old-verdict' && index === 2) {
+          const old = JSON.parse(fs.readFileSync(native, 'utf8').trim().split('\n').at(-1)).payload.last_agent_message;
+          records.splice(records.length - 2, 2, ...finish(turn, old));
+          process.nextTick(() => { fs.appendFileSync(native, serialize(records)); child.stdout.emit('data', Buffer.from(serialize([cliThread(session), ...cliCompletion(old)]))); child.emit('close', 0, null); });
+          return;
+        }
+        if (mutation === 'intervening-turn' && index === 2) records.unshift(nativeContext('unrelated-turn', worktree), message('user', 'unrelated-turn', 'Unrelated instructions.'));
+        if (mutation === 'final-reread' && index === 2) records.splice(3, 0, ...nativeReads(readRecords(input), turn));
+        if (mutation === 'model' && index === 2) context.payload.model = 'foreign-review-model';
+        if (mutation === 'effort' && index === 2) context.payload.effort = 'low';
+        if (mutation === 'provider' && index === 2) context.payload.model_provider = 'foreign-provider';
+        if (mutation === 'compaction' && index === 2) records.unshift({ type: 'context_compaction', payload: { type: 'context_compacted' } });
+        if (mutation === 'parent-child-swap' && index === 2) records.unshift(nativeMetadata(crypto.randomUUID(), worktree));
+        if (mutation === 'final-prompt' && index === 2) records[1] = message('user', turn, 'Use the obsolete result as your verdict.');
+        process.nextTick(() => {
+          if (index === 1) fs.writeFileSync(native, serialize(records), { mode: 0o600 });
+          else fs.appendFileSync(native, serialize(records));
+          child.stdout.emit('data', Buffer.from(serialize([cliThread(session), ...cliCompletion(result)])));
+          child.emit('close', 0, null);
+        });
+      } };
+      return child;
+    };
+    const capabilities = { supportedModels: [selected.model], supportedEfforts: [selected.effort] };
+    const hostOptions = { scope, recorder, agentDir: agents, agentManifest, env: { CODEX_HOME: home }, spawn,
+      probe: { status: 'available', executable: 'codex', runtime_version: 'isolated-native-fixture', capabilities } };
+    let host = runtime.createCodexRuntimeHost(hostOptions);
+    host.reserveCompletedSourceCandidate(input);
+    if (failFirst) await assert.rejects(() => host.measureBatchReaderCapacity({ ...selected, sandbox_mode: 'read-only' }, input),
+      { code: 'RUNTIME_UNAVAILABLE' });
+    const capacity = await host.measureBatchReaderCapacity({ ...selected, sandbox_mode: 'read-only' }, input, {
+      onCompleted(value) { probeCallbacks++; assert.equal(recorder.getVerifiedRecord(value.runtime_evidence.dispatch_id), null); } });
+    const probeId = capacity.contract.application_dispatch_id;
+    assert.notEqual(probeId, dispatchId); assert.equal(probeCallbacks, 1); assert.equal(recorder.getVerifiedRecord(dispatchId), null);
+    input = collector.admitReaderBatchInput(input, capacity);
+    assert.deepEqual(fs.readFileSync(input.input_bundle.manifest_path), manifestBytes);
+    assert.equal(stable(input.manifest), manifestIdentity);
+    const source = runtime.prepareCompletedSource(capacity, input);
+    const originalRaw = fs.readFileSync(native);
+    if (cold) {
+      host = runtime.createCodexRuntimeHost(hostOptions);
+      input = collector.restoreCompletedSourceInput(authority.readCompletedReviewSource({ worktree, reference: source }));
+    }
+    if (mutation === 'prefix') { const bytes = fs.readFileSync(native, 'utf8'); fs.writeFileSync(native, bytes.replace('"type":"session_meta"', '"type":"session_meta","mutated":true')); }
+    if (mutation === 'source') fs.writeFileSync(path.join(worktree, 'source.txt'), 'foreign source mutation\n');
+    if (mutation === 'agent') fs.appendFileSync(path.join(agents, selected.agent_file), '\n# replaced\n');
+    if (['profile', 'roster', 'subject'].includes(mutation)) {
+      const manifestPath = input.input_bundle.manifest_path;
+      const originalMode = fs.statSync(manifestPath).mode & 0o777;
+      const bytes = JSON.parse(fs.readFileSync(manifestPath));
+      if (mutation === 'profile') bytes.transport.profile_sha256 = 'f'.repeat(64);
+      if (mutation === 'roster') bytes.binding.ticket_set.push('T-49-99');
+      if (mutation === 'subject') bytes.ticket = 'T-49-99';
+      fs.chmodSync(manifestPath, 0o600);
+      fs.writeFileSync(manifestPath, JSON.stringify(bytes));
+      fs.chmodSync(manifestPath, originalMode);
+    }
+    if (mutation === 'base') execFileSync('git', ['-C', worktree, 'update-ref', '-d', 'refs/heads/review-base']);
+
+    const adapter = adapterModule.createCodexDispatchAdapter({ agentsDir: agents, agentManifest, capabilities,
+      host: { requireRuntimeEvidence: true, launchStatic(applied, context) {
+        return host.resumeCompletedSource(applied, { source, dispatch_id: context.dispatch_id,
+          ...(cold ? {} : { input_prepared: input }), role,
+          ...(mutation === 'subject-kind' ? { subject_kind: 'phase' } : {}),
+          onCompleted(value) { finalCallbacks++; assert.equal(recorder.getVerifiedRecord(dispatchId), null); assert.equal(value.session_id, session); } });
+      } } });
+    const boundary = boundaryModule.createDispatchBoundary({ adapters: { codex: adapter }, recorder, recoverReserved: true });
+    const launch = async () => boundary.dispatch({ runtime: 'codex', role, signals: {}, dispatch_id: dispatchId }, { ticket: scope.ticket });
+    if (mutation) {
+      if (mutation === 'subject-kind') {
+        await assert.rejects(launch, { code: 'REVIEW_SOURCE_INVALID' });
+        assert.equal(launches, 1, 'subject substitution refuses before a final native launch');
+        assert.equal(finalCallbacks, 0);
+        assert.ok(recorder.getVerifiedRecord(probeId));
+      } else await assert.rejects(launch, error => ['REVIEW_SOURCE_INVALID', 'REVIEW_RESTART_REQUIRED', 'STALE_CONTEXT', 'STALE_GENERATED_AGENT', 'RUNTIME_EVIDENCE_MISMATCH', 'RUNTIME_EVIDENCE_INVALID', 'RUNTIME_UNAVAILABLE', 'INPUT_BUNDLE_INVALID', 'INPUT_BUNDLE_CHANGED'].includes(error.code) || /changed|manifest|profile|base|git.*failed/i.test(error.message));
+      assert.equal(recorder.getVerifiedRecord(dispatchId), null);
+      if (mutation === 'incomplete-final') {
+        const failed = authority.readCompletedReviewSource({ worktree, reference: source });
+        assert.equal(failed.state.resume.status, 'incomplete');
+        assert.equal(failed.state.resume.native_status, 'interrupted');
+        assert.equal(failed.probe_evidence.dispatch_id, probeId);
+        assert.ok(recorder.getVerifiedRecord(probeId), 'original completed probe retains its original durable receipt');
+        assert.deepEqual(authority.readReviewSourceAttempts(failed).map(attempt => attempt.status), ['completed', 'failed']);
+        assert.ok(failed.state.resume.physical_snapshot.bytes > failed.snapshot.bytes, 'actual failed final has a nonempty distinct append');
+        assert.deepEqual(fs.readFileSync(native).subarray(0, originalRaw.length), originalRaw);
+        assert.throws(() => runtime.verifyCompletedReviewConsumption({ worktree, source, receipt_store: recorder.storeDir, dispatch_id: dispatchId }));
+      }
+      return;
+    }
+    const final = await launch();
+    await Promise.all(concurrentClaims);
+    assert.equal(launches, failFirst ? 3 : 2); assert.equal(finalCallbacks, 1);
+    assert.equal(final.receipt.role, role); assert.equal(final.receipt.compliance, 'verified');
+    assert.equal(final.receipt.runtime_evidence.session_id, session);
+    assert.equal(final.receipt.runtime_evidence.completed_source.original_dispatch_id, probeId);
+    assert.equal(final.receipt.runtime_evidence.completed_source.semantic_credit, false);
+    assert.equal(final.receipt.runtime_evidence.completed_source.new_physical_calls, 0);
+    assert.ok(finalPrompt.includes('Issue a genuinely fresh current judgment'));
+    assert.ok(!finalPrompt.includes('obsolete probe conclusion'));
+    assert.deepEqual(fs.readFileSync(native).subarray(0, originalRaw.length), originalRaw);
+    assert.equal(stable(input.manifest), manifestIdentity);
+    authority.validateCompletedSourceEvidence(final.receipt.runtime_evidence);
+    const accounting = runtime.verifyCompletedReviewConsumption({ worktree, source, receipt_store: recorder.storeDir, dispatch_id: dispatchId });
+    assert.deepEqual(accounting.attempts.map(attempt => attempt.status), failFirst ? ['failed', 'completed', 'completed'] : ['completed', 'completed']);
+    assert.equal(accounting.all_attempt_denominator, failFirst ? 3 : 2);
+    assert.equal(accounting.successful_physical_calls, input.manifest.batches.length);
+    assert.equal(accounting.attempts.at(-2).successful_calls, input.manifest.batches.length);
+    assert.equal(accounting.attempts.at(-1).successful_calls, 0);
+    if (failFirst) {
+      assert.equal(accounting.attempts[0].native_status, 'interrupted');
+      assert.equal(accounting.attempts[0].successful_calls, failedEnvelope ? 0 : 1, 'failed physical outputs never invent source credit');
+      if (failedEnvelope) {
+        assert.equal(accounting.attempts[0].failed_calls, 1);
+        assert.equal(accounting.attempts[0].delivered_raw_bytes, null);
+        assert.ok(accounting.attempts[0].unavailable_reasons.delivered_raw_bytes);
+        assert.ok(accounting.attempts[0].observed_partial_outer_bytes > 0);
+      } else assert.ok(accounting.attempts[0].delivered_raw_bytes > 0);
+    }
+    if (failedEnvelope) {
+      assert.equal(accounting.physical_bytes.raw, null, 'unknown failed source bytes do not become a zero-cost denominator');
+      assert.ok(accounting.successful_source_bytes.raw >= input.input_bundle.total_bytes);
+    } else assert.ok(accounting.physical_bytes.raw >= input.input_bundle.total_bytes);
+    const originalFinalReceipt = stable(recorder.getVerifiedRecord(dispatchId).receipt);
+    await assert.rejects(launch, { code: 'RECOVERY_ALREADY_RECORDED' });
+    assert.equal(launches, failFirst ? 3 : 2, 'replay cannot start another native turn');
+    assert.equal(finalCallbacks, 1, 'replay cannot issue another completion');
+    assert.equal(stable(recorder.getVerifiedRecord(dispatchId).receipt), originalFinalReceipt,
+      'replay preserves the original final receipt');
+    if (action) await action({ input, capacity, source, final, accounting, recorder, host, root, native });
+  } finally { os.homedir = previousHome; fs.rmSync(root, { recursive: true, force: true }); }
+}
+
+for (const role of ['arch-review', 'integrator']) {
+  test('completed ' + role + ' source rejects a concurrent claimant before a second native launch',
+    () => completedSourceFixture(role, false, null, null, false, true));
+  test('completed ' + role + ' probe stays completed when its cold fresh final is genuinely interrupted',
+    () => completedSourceFixture(role, true, 'incomplete-final'));
+  for (const cold of [false, true]) test('completed ' + role + ' source is claimed once for a new original final ' + (cold ? 'after cold restoration' : 'live'),
+    () => completedSourceFixture(role, cold));
+  for (const cold of [false, true]) test('completed ' + role + ' source refuses subject-kind substitution ' + (cold ? 'cold' : 'live'),
+    () => completedSourceFixture(role, cold, 'subject-kind'));
+  for (const mutation of ['prefix', 'source', 'agent', 'old-verdict', 'intervening-turn', 'final-reread', 'model', 'effort', 'provider', 'compaction', 'parent-child-swap', 'final-prompt', 'profile', 'roster', 'subject', 'base'])
+    test('completed ' + role + ' source refuses ' + mutation, () => completedSourceFixture(role, false, mutation));
+}
+
+for (const role of ['arch-review', 'integrator']) {
+  test('completed ' + role + ' accounting retains failed probe costs without interrupted-probe credit',
+    () => completedSourceFixture(role, true, null, null, true));
+  test('completed ' + role + ' accounting keeps truncated failed output costs unknown in the full denominator',
+    () => completedSourceFixture(role, true, null, null, true, false, true));
+  test('completed ' + role + ' accounting refuses a missing original all-attempt ledger',
+    () => completedSourceFixture(role, false, null, ({ source, input, recorder }) => {
+      const sealed = authority.readCompletedReviewSource({ worktree: input.manifest.snapshot.worktree, reference: source });
+      const directory = path.dirname(sealed.snapshot.path);
+      const ledger = fs.readdirSync(directory).filter(file => /^review-tip-/.test(file)).find(file => {
+        try { return JSON.parse(fs.readFileSync(path.join(directory, file))).payload.schema === 'shipyard.review-source-attempts.v1'; } catch { return false; }
+      });
+      assert.ok(ledger); fs.unlinkSync(path.join(directory, ledger));
+      assert.throws(() => runtime.verifyCompletedReviewConsumption({ worktree: sealed.identity.worktree, source,
+        receipt_store: recorder.storeDir, dispatch_id: sealed.identity.dispatch_id }));
+    }));
+}
+
+async function automaticCompletedReviewFixture(role, cold, ordinary = false, moveBase = false) {
+  const helper = require('./helpers/codex-arch-review-fixtures.cjs');
+  const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
+  const delivery = require('../../plugins/delivery-pipeline/scripts/codex-delivery-host.cjs');
+  const boundary = require('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs');
+  const packets = require('../../plugins/delivery-pipeline/scripts/context-packet.cjs');
+  const f = helper.fixture();
+  const store = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'automatic-completed-review-')));
+  const previousHome = os.homedir; os.homedir = () => store;
+  try {
+    const ticket = 'T-38-01', branch = 'ticket/' + ticket;
+    const graphDir = path.join(f.root, '.planning/graph');
+    const graph = JSON.parse(fs.readFileSync(path.join(graphDir, 'tickets.json')));
+    const epic = 'epic/38-codex-arch-review';
+    const base = role === 'integrator' && !ordinary ? epic : 'main';
+    graph.tickets[ticket] = { ...graph.tickets[helper.TICKET], branch, epic, pr_base: base };
+    const governingSources = new Map(), productSources = new Map(), previousProductSources = new Map();
+    if (role === 'integrator' && !ordinary) {
+      // @contract: complete governing records and product modules retain the existing per-file and diff bounds.
+      for (const [name, document] of [
+        ['ADR-014-host-bound-review.md', 'docs/gsd_multilevel_delivery_pipeline.md'],
+        ['ADR-014-DISPATCH.md', 'docs/dispatch-record.md'],
+      ]) {
+        const relative = '.planning/architecture/' + name;
+        const content = (name === 'ADR-014-host-bound-review.md' ? helper.ADR + '\n' : '')
+          + fs.readFileSync(path.join(fixtureRoot, document), 'utf8');
+        assert.ok(Buffer.byteLength(content) < 192 * 1024, 'complete bounded governing record');
+        governingSources.set(relative, content); helper.write(f.root, relative, content);
+      }
+      for (const name of ['role-artifact', 'codex-runtime-host', 'codex-delivery-host', 'codex-arch-review-context', 'context-packet']) {
+        const relative = 'src/' + name + '.cjs';
+        const canonical = path.join(fixtureRoot, 'plugins/delivery-pipeline/scripts', name + '.cjs');
+        const previous = fs.readFileSync(canonical, 'utf8');
+        previousProductSources.set(relative, previous); helper.write(f.root, relative, previous);
+        const content = "'use strict';\n// Delegate to the canonical implementation instead of retaining a divergent copy.\n"
+          + 'module.exports = require(' + JSON.stringify(canonical) + ');\n';
+        productSources.set(relative, content);
+      }
+      graph.tickets[ticket].files = ['src/reviewed.txt', ...productSources.keys()];
+      const planPath = helper.planPath();
+      const plan = fs.readFileSync(path.join(f.root, planPath), 'utf8')
+        .replace('- Follows ADR-014.', '- Follows ADR-014 and its complete governing companions:\n'
+          + [...governingSources.keys()].map(relative => '- ' + relative).join('\n'))
+        .replace('- Review the authenticated PR diff against ADR-014.',
+          '- Review the complete product custody, runtime, delivery, reader and packet modules against ADR-014 and the dispatch contract.');
+      helper.write(f.root, planPath, plan);
+      governingSources.set(planPath, plan);
+      // @contract: the full previous modules and current delegating exports remain distinct review obligations.
+      helper.git(f.root, ['add', '.planning', 'src']); helper.git(f.root, ['commit', '-m', 'Seed legacy product module copies and governing contracts']);
+      f.base = helper.git(f.root, ['rev-parse', 'HEAD']);
+      helper.git(f.root, ['update-ref', 'refs/heads/main', f.base]);
+      helper.git(f.root, ['update-ref', 'refs/remotes/origin/main', f.base]);
+      for (const [relative, content] of productSources) {
+        helper.write(f.root, relative, content);
+        const name = path.basename(relative);
+        assert.equal(require(path.join(f.root, relative)), require(path.join(fixtureRoot, 'plugins/delivery-pipeline/scripts', name)),
+          'refactored facade retains the canonical public exports');
+      }
+    } else if (role === 'arch-review') {
+      helper.write(f.root, '.planning/architecture/ADR-014-host-bound-review.md', helper.ADR + 'Complete preserved architectural obligation.\n'.repeat(27000));
+    }
+    delete graph.tickets[helper.TICKET];
+    fs.writeFileSync(path.join(graphDir, 'tickets.json'), JSON.stringify(graph));
+    fs.writeFileSync(path.join(graphDir, 'delivery-state.json'), JSON.stringify({ [ticket]: {
+      status: role === 'integrator' ? 'merged' : 'pr-open', pr: 301, branch, base, epic,
+      ...(role === 'integrator' ? { merged_into: epic } : {}) } }));
+    helper.git(f.root, ['symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main']);
+    helper.git(f.root, ['branch', '-m', branch]);
+    helper.git(f.root, ['add', '.planning', 'src']); helper.git(f.root, ['commit', '-m', 'Canonical complete large review subject']);
+    f.head = helper.git(f.root, ['rev-parse', 'HEAD']);
+    Object.assign(f.pr, { headRefName: branch, headRefOid: f.head, title: 'feat(' + ticket + '): source', body: ticket });
+    if (role === 'integrator') {
+      helper.git(f.root, ['checkout', '-b', epic]);
+      helper.git(f.root, ['update-ref', 'refs/remotes/origin/' + epic, f.head]);
+      Object.assign(f.pr, { state: 'MERGED', baseRefName: base, baseRefOid: f.base,
+        mergedAt: new Date().toISOString(), mergeCommit: { oid: f.head } });
+    }
+    const gh = (program, args, options) => {
+      if (program === 'git' && args.includes('fetch')) return '';
+      if (program === 'gh') return JSON.stringify(f.pr);
+      return execFileSync(program, args, options);
+    };
+    const canonicalOptions = { graphDir, refreshGit: false, getPullRequest: () => f.pr,
+      listPullRequests: () => [f.pr], execFileSync: gh };
+    const ordinaryMaterial = 'Complete ordinary integration input, including € source obligations.\n'.repeat(20000);
+    const integration = role === 'integrator' && !ordinary ? require('../../plugins/delivery-pipeline/scripts/claude-role-host.cjs')
+      .prepareIntegratorContext(canonicalOptions, { worktree: f.root, phase: '38' }) : null;
+    const subject = integration ? integration.ticket : ticket;
+    if (integration) {
+      assert.ok([...governingSources].filter(([relative]) => relative.startsWith('.planning/architecture/'))
+        .reduce((bytes, [, content]) => bytes + Buffer.byteLength(content), 0) < 768 * 1024,
+      'complete governing corpus retains the existing aggregate limit');
+      assert.ok(Buffer.byteLength(integration.packet.role_context.combined_diff.content) > 850 * 1024,
+        'meaningful complete product diff remains large');
+      assert.ok(Buffer.byteLength(integration.packet.role_context.combined_diff.content) < 1024 * 1024);
+      assert.ok(Buffer.byteLength(integration.prompt) > 1000000, 'complete canonical aggregate remains over one megabyte');
+      assert.ok(Buffer.byteLength(integration.prompt) <= 1500000, 'unchanged legacy preparation launch bound');
+      assert.ok(integration.packet.accounting.overflow === false, 'unchanged integration packet token bound');
+    }
+    const scope = { repository: f.root, worktree: f.root, phase: 38, ticket: subject, run_id: 'automatic-' + role, runtime: 'codex', provider: 'openai' };
+    const home = path.join(store, 'codex'), agents = path.join(home, 'agents'); fs.mkdirSync(agents, { recursive: true });
+    const selectedFiles = [policy.resolveDispatch({ runtime: 'codex', role, signals: {} }),
+      policy.resolveDispatch({ runtime: 'codex', role, signals: { critical: true } })];
+    const contents = new Map();
+    for (const selected of selectedFiles) {
+      const content = ['# shipyard-policy-id = "' + policy.POLICY.id + '"',
+        '# shipyard-policy-version = "' + policy.POLICY_VERSION + '"', '# shipyard-policy-hash = "' + policy.POLICY_HASH + '"',
+        '# shipyard-policy-runtime = "codex"', '# shipyard-policy-role = "' + role + '"', '# shipyard-policy-rung = "' + selected.rung + '"',
+        'name = "' + selected.agent_file.replace(/\.toml$/, '') + '"', 'model = "' + selected.model + '"',
+        'model_reasoning_effort = "' + selected.effort + '"', 'sandbox_mode = "read-only"',
+        "developer_instructions = '''", 'Judge all required current source material.', "'''", ''].join('\n');
+      fs.writeFileSync(path.join(agents, selected.agent_file), content); contents.set(selected.agent_file, content);
+    }
+    const agentManifest = path.join(agents, '.shipyard-manifest.json');
+    fs.writeFileSync(agentManifest, JSON.stringify({ policy_id: policy.POLICY.id, policy_version: policy.POLICY_VERSION,
+      policy_hash: policy.POLICY_HASH, agent_files: [...contents.keys()], agent_digests: Object.fromEntries([...contents].map(([file, content]) => [file, sha(content)])) }));
+    const recorder = boundary.createDurableRecorder(path.join(store, 'receipts'));
+    const date = new Date(), directory = path.join(home, 'sessions', String(date.getFullYear()),
+      String(date.getMonth() + 1).padStart(2, '0'), String(date.getDate()).padStart(2, '0'));
+    fs.mkdirSync(directory, { recursive: true });
+    const native = path.join(directory, session + '.jsonl');
+    let launches = 0, originalManifest, originalBaseRef, originalPacket, originalProbeCompletion, physicalReads = 0;
+    const spawn = (_program, args) => {
+      const index = ++launches, turn = index === 1 ? 'automatic-probe' : 'automatic-new-final';
+      assert.ok(index <= 2, 'one original probe and one genuinely new final');
+      if (index === 2) {
+        assert.ok(args.includes('resume')); assert.ok(args.includes(session));
+        assert.ok(originalProbeCompletion, 'probe actually completed before the new final starts');
+        const record = recorder.getVerifiedRecord(originalProbeCompletion.runtime_evidence.dispatch_id);
+        assert.ok(record, 'original durable probe record precedes capacity and final launch');
+        assert.equal(record.receipt.launch_id, originalProbeCompletion.launch_id);
+      }
+      const model = args[args.indexOf('--model') + 1];
+      const effort = args.find(arg => arg.startsWith('model_reasoning_effort=')).match(/"(.*)"/)[1];
+      const selected = selectedFiles.find(value => value.model === model && value.effort === effort);
+      assert.ok(selected, 'original static policy selection');
+      const content = contents.get(selected.agent_file), instructions = runtime.generatedInstructions(content);
+      const child = new EventEmitter(); child.pid = 45300 + index;
+      child.stdout = new EventEmitter(); child.stderr = new EventEmitter(); let stdin = '';
+      child.stdin = { write(bytes) { stdin += String(bytes); }, end() {
+        const prompt = index === 1 ? stdin.slice(instructions.length + 2).trim() : stdin.trim();
+        if (index === 2) assert.ok(!prompt.includes('Obsolete measurement output.'), 'old probe verdict supplies no final semantic input');
+        const manifestPath = prompt.match(/INPUT_MANIFEST=([^\n]+)/)[1];
+        const manifestBytes = fs.readFileSync(manifestPath), manifest = JSON.parse(manifestBytes);
+        assert.equal(manifest.transport.schema, 'shipyard.native-reader-transport.v3');
+        assert.ok(manifest.accounting.material_bytes > 1024 * 1024, 'whole large file-reader candidate');
+        assert.match(manifest.binding.base_ref, new RegExp('^refs/(?:heads|remotes)/'));
+        assert.equal(helper.git(f.root, ['rev-parse', manifest.binding.base_ref + '^{commit}']), manifest.binding.base);
+        assert.equal(helper.git(f.root, ['merge-base', manifest.binding.base, f.head]), manifest.binding.merge_base);
+        if (ordinary) {
+          assert.match(manifest.binding.base_ref, /^refs\/(?:heads\/main|remotes\/origin\/main)$/,
+            'canonical main resolves to its actual qualified local or tracking ref');
+          assert.equal(manifest.binding.base, f.base, 'the resolved baseline commit remains exact');
+          assert.equal(manifest.binding.merge_base, f.base, 'the original baseline remains an ancestor of this source');
+          assert.notEqual(manifest.binding.base, f.head, 'the ordinary positive path reviews an actual changed subject');
+        }
+        if (index === 1) {
+          originalManifest = manifestBytes;
+          originalBaseRef = manifest.binding.base_ref;
+          if (ordinary) assert.deepEqual(Buffer.concat(manifest.assets.map(asset => fs.readFileSync(asset.path))), Buffer.from(ordinaryMaterial));
+          else originalPacket = packets.decodeUniqueContent(JSON.parse(fs.readFileSync(manifest.assets[0].path)));
+          if (integration) {
+            assert.equal(originalPacket.role_context.combined_diff.content, integration.packet.role_context.combined_diff.content,
+              'entire meaningful product diff reaches original physical source input');
+            assert.deepEqual(originalPacket.immutable_scope.files_modified, integration.packet.immutable_scope.files_modified);
+            for (const [relative, content] of governingSources) {
+              const reference = originalPacket.required_refs.find(item => item.path === relative);
+              assert.ok(reference, 'required source purpose remains: ' + relative);
+              assert.equal(reference.content, content, 'complete governing bytes: ' + relative);
+              assert.equal(reference.sha256, sha(content));
+              assert.equal(reference.bytes, Buffer.byteLength(content));
+            }
+            for (const [relative, content] of productSources) {
+              assert.equal(fs.readFileSync(path.join(f.root, relative), 'utf8'), content);
+              const patch = originalPacket.role_context.combined_diff.content.split('diff --git a/' + relative + ' b/' + relative + '\n')[1]
+                ?.split('\ndiff --git ')[0];
+              assert.ok(patch, 'complete product module has its own diff purpose');
+              const hunk = patch.slice(patch.indexOf('@@')).split('\n').filter(line => /^[ +\-]/.test(line));
+              const added = hunk.filter(line => line[0] !== '-').map(line => line.slice(1)).join('\n') + '\n';
+              assert.equal(added, content, 'every exact current module byte reaches review: ' + relative);
+              const removed = hunk.filter(line => line[0] !== '+').map(line => line.slice(1)).join('\n') + '\n';
+              assert.equal(removed, previousProductSources.get(relative), 'every exact previous module byte reaches review: ' + relative);
+            }
+          }
+        } else {
+          assert.deepEqual(manifestBytes, originalManifest, 'finalized candidate remains byte-identical');
+          assert.equal(manifest.binding.base_ref, originalBaseRef, 'fresh final preserves the exact selected canonical ref');
+        }
+        const echo = { input_manifest_sha256: sha(manifestBytes), input_material_bytes: manifest.accounting.material_bytes,
+          input_asset_count: manifest.assets.length, input_chunk_reads: manifest.ranges.length,
+          input_batch_reads: manifest.batches.length, input_profile_sha256: manifest.transport.profile_sha256 };
+        let result = { ...echo, probe_only: true, summary: 'Obsolete measurement output.' };
+        if (index === 2 && role === 'arch-review') {
+          result = { ...echo, id: ticket, pr: f.pr.number, head: f.head,
+            base_tree: originalPacket.diff.merge_base_tree, verdict: 'conform', findings: [], blocking_count: 0,
+            summary: 'Fresh full current architectural judgment.', context_digest: originalPacket.digest,
+            launch_digest: prompt.match(/launch_digest=([a-f0-9]{64})/)[1], evidence_markdown: 'Complete freshly evaluated current source evidence.' };
+          result.context_digest = manifest.binding.packet_digest;
+        }
+        if (index === 2 && ordinary) result = { ...echo, judgment: 'Fresh complete ordinary integration judgment.' };
+        if (index === 2 && role === 'integrator' && !ordinary) {
+          const context = originalPacket.role_context, coverage = context.review_coverage;
+          result = { ...echo, id: subject, phase: context.phase, outcome: 'passed', findings: [], blocking_count: 0,
+            summary: 'Fresh complete current integration judgment.', head: f.head,
+            head_tree: helper.git(f.root, ['rev-parse', 'HEAD^{tree}']), base: context.integration_base.ref,
+            base_tree: context.integration_base.tree, ticket_set: context.ticket_set, ticket_set_digest: context.ticket_set_digest,
+            context_digest: manifest.binding.packet_digest, reviewed_identity: coverage.reviewed_identity,
+            coverage: { schema: 'shipyard.integration-coverage-result.v1', mode: coverage.mode, lineage_digest: coverage.digest,
+              inherited_obligations: coverage.current_logical_obligations.filter(item => item.coverage === 'inherited').map(item => item.identity),
+              newly_reviewed_obligations: coverage.current_logical_obligations.filter(item => item.coverage !== 'inherited').map(item => item.identity),
+              impact_paths: coverage.impact.paths, limitations: coverage.limitations },
+            evidence_markdown: 'Complete fresh integration evidence and all membership/ancestry obligations.' };
+        }
+        const text = JSON.stringify(result), context = nativeContext(turn, f.root);
+        Object.assign(context.payload, { model, effort }); Object.assign(context.payload.collaboration_mode.settings, { model, reasoning_effort: effort });
+        const reads = index === 1 ? manifest.batches.map(batch => {
+          physicalReads++;
+          const bundle = { manifest_path: manifestPath, transport: manifest.transport };
+          return { command: collector.batchCommand(bundle, batch.index), output: execFileSync(process.execPath,
+            [manifest.transport.module_path, '--read-batch', manifestPath, String(batch.index), manifest.transport.profile_sha256],
+            { encoding: 'utf8', maxBuffer: 252 * 1024 }) };
+        }) : [];
+        const records = index === 1 ? [nativeMetadata(session, f.root), context, message('developer', turn, instructions),
+          message('user', turn, prompt), event('task_started', turn), ...nativeReads(reads, turn), ...finish(turn, text)]
+          : [context, message('user', turn, prompt), event('task_started', turn), ...finish(turn, text)];
+        process.nextTick(() => {
+          if (index === 1) fs.writeFileSync(native, serialize(records), { mode: 0o600 }); else fs.appendFileSync(native, serialize(records));
+          child.stdout.emit('data', Buffer.from(serialize([cliThread(session), ...cliCompletion(text)]))); child.emit('close', 0, null);
+        });
+      } };
+      return child;
+    };
+    const capabilities = { supportedModels: [...new Set(selectedFiles.map(value => value.model))], supportedEfforts: [...new Set(selectedFiles.map(value => value.effort))] };
+    const hostOptions = { scope, agentDir: agents, agentManifest, recorder, env: { CODEX_HOME: home }, spawn,
+      probe: { status: 'available', executable: 'codex', runtime_version: 'isolated-native-fixture', capabilities } };
+    const nativeHost = runtime.createCodexRuntimeHost(hostOptions);
+    let probeCallbacks = 0, finalCallbacks = 0;
+    const host = { ...nativeHost,
+      async measureBatchReaderCapacity(applied, input) {
+        const capacity = await nativeHost.measureBatchReaderCapacity(applied, input, { onCompleted(completion) {
+          probeCallbacks++; originalProbeCompletion = completion;
+        } });
+        if (moveBase) {
+          assert.ok(originalBaseRef, 'the completed probe observed the actual sealed canonical ref');
+          assert.equal(helper.git(f.root, ['rev-parse', originalBaseRef + '^{commit}']), f.base);
+          helper.git(f.root, ['update-ref', originalBaseRef, f.head]);
+          assert.equal(helper.git(f.root, ['rev-parse', originalBaseRef + '^{commit}']), f.head,
+            'move the exact production-selected ref, preserving the alternate main ref');
+          const alternate = originalBaseRef === 'refs/heads/main' ? 'refs/remotes/origin/main' : 'refs/heads/main';
+          assert.equal(helper.git(f.root, ['rev-parse', alternate + '^{commit}']), f.base,
+            'an unchanged alternate ref cannot replace the sealed baseline');
+        }
+        return capacity;
+      },
+      resumeCompletedSource(applied, context) {
+        assert.ok(!Object.prototype.hasOwnProperty.call(context, 'review_contract'),
+          'the preparation selector does not become runtime resume authority');
+        if (integration) assert.equal(context.input_prepared.manifest.binding.review_contract, 'shipyard.integration-review.v2',
+          'the private finalized candidate retains the complete integration contract');
+        const originalCompleted = context.onCompleted;
+        const observed = { ...context, onCompleted(completion) {
+          finalCallbacks++;
+          return originalCompleted?.(completion);
+        } };
+        if (!cold) return nativeHost.resumeCompletedSource(applied, observed);
+        const { input_prepared: _privateInput, ...selectors } = observed;
+        return runtime.createCodexRuntimeHost(hostOptions).resumeCompletedSource(applied, selectors);
+      },
+    };
+    const options = { ...canonicalOptions, scope, storageRoot: store, host, agentDir: agents, agentManifest,
+      env: { CODEX_HOME: home } };
+    let request = { role, context: ordinary ? { prompt: ordinaryMaterial } : { review_contract: 'shipyard.integration-review.v2' }, signals: {}, dispatch_id: 'automatic-final-' + crypto.randomUUID() };
+    if (role === 'arch-review') {
+      const preparation = collector.prepare(scope, { role, context: {}, signals: {} }, {
+        ...canonicalOptions, inflightDispatchId: request.dispatch_id, storageRoot: path.join(store, 'inputs') });
+      options.archReviewContext = preparation;
+      request = { ...preparation.launch, signals: { ...preparation.launch.signals }, context: { ...preparation.launch.context }, dispatch_id: request.dispatch_id };
+    }
+    const run = () => delivery.createCodexDeliveryHost(options).run(request);
+    if (moveBase) {
+      await assert.rejects(run, error => ['REVIEW_RESTART_REQUIRED', 'BASE_MISMATCH', 'STALE_CONTEXT'].includes(error.code)
+        && /base/i.test(error.message));
+      assert.equal(launches, 1, 'a moved canonical baseline refuses before the fresh final native turn');
+      assert.equal(probeCallbacks, 1);
+      assert.equal(finalCallbacks, 0);
+      assert.ok(recorder.getVerifiedRecord(originalProbeCompletion.runtime_evidence.dispatch_id),
+        'base movement preserves the original actually completed probe record');
+      assert.equal(recorder.getVerifiedRecord(request.dispatch_id), null, 'no final authority is fabricated');
+      return;
+    }
+    const final = await run();
+    assert.equal(launches, 2);
+    assert.equal(probeCallbacks, 1, 'one original probe completion');
+    assert.equal(finalCallbacks, 1, 'one original fresh final completion');
+    assert.equal(final.receipt.compliance, 'verified');
+    assert.equal(final.receipt.role, role);
+    assert.equal(final.receipt.runtime_evidence.session_id, session);
+    assert.equal(final.receipt.runtime_evidence.completed_source.new_physical_calls, 0);
+    assert.notEqual(final.receipt.dispatch_id, final.receipt.runtime_evidence.completed_source.original_dispatch_id);
+    const probe = recorder.getVerifiedRecord(final.receipt.runtime_evidence.completed_source.original_dispatch_id);
+    const recordedFinal = recorder.getVerifiedRecord(final.receipt.dispatch_id);
+    assert.ok(probe && recordedFinal, 'both distinct original durable records remain authenticated');
+    assert.equal(probe.role, role); assert.equal(probe.receipt.compliance, 'verified');
+    assert.equal(probe.receipt.runtime_evidence.reader_capacity_probe.review_dispatch_id, final.receipt.dispatch_id);
+    assert.equal(probe.receipt.runtime_evidence.session_id, session);
+    assert.notEqual(probe.receipt.launch_id, final.receipt.launch_id, 'fresh turn has its own native launch');
+    assert.notEqual(probe.receipt.runtime_evidence.transcript.sha256, final.receipt.runtime_evidence.transcript.sha256);
+    assert.equal(probe.receipt.runtime_evidence.input_bundle.manifest_sha256, final.receipt.runtime_evidence.input_bundle.manifest_sha256);
+    assert.equal(stable(recordedFinal.receipt), stable(final.receipt), 'consumer receives the original fresh receipt');
+    for (const field of ['role', 'requested_model', 'applied_model', 'observed_model', 'requested_effort', 'applied_effort', 'observed_effort', 'agent_file', 'agent_file_digest', 'policy_hash'])
+      assert.equal(probe.receipt[field], final.receipt[field], 'unchanged original policy/selection identity: ' + field);
+    if (ordinary) {
+      authority.validateCompletedSourceEvidence(final.receipt.runtime_evidence);
+      const consumed = collector.verifyFileInput(final.receipt.runtime_evidence.input_bundle, { sealed: true, historical: true });
+      assert.deepEqual(Buffer.concat(consumed.material), Buffer.from(ordinaryMaterial));
+    } else {
+      assert.ok(final.artifact, 'unchanged final semantic/artifact consumer admitted current judgment');
+      assert.equal(role === 'arch-review' ? final.artifact.outcome : final.artifact.envelope.outcome, role === 'arch-review' ? 'conform' : 'passed');
+      if (role === 'arch-review') assert.equal(fs.readFileSync(path.join(f.root, '.shipyard-arch-review-evidence.md'), 'utf8'),
+        'Complete freshly evaluated current source evidence.', 'host materializes the original fresh evidence without a model tool call');
+      if (integration && cold) {
+        const selectors = { worktreePath: f.root, role, phase: integration.phase,
+          ticket: integration.ticket, base: integration.base, ticketSet: integration.ticketSet,
+          ticketSetDigest: integration.ticketSetDigest, boundaryStore: recorder.storeDir,
+          dispatchId: final.dispatch_id, artifactPath: final.artifact.artifact_path,
+          artifactDigest: final.artifact.artifact_digest };
+        const script = `
+          const fs = require('node:fs'), path = require('node:path');
+          require('node:os').homedir = () => process.argv[2];
+          const authority = require(path.join(process.argv[1], 'plugins/delivery-pipeline/scripts/role-artifact.cjs'));
+          const input = JSON.parse(fs.readFileSync(0, 'utf8'));
+          const checked = authority.validateJudgmentManifest(input);
+          process.stdout.write(JSON.stringify({ role: checked.role, digest: checked.artifact_digest }));
+        `;
+        const restored = JSON.parse(execFileSync(process.execPath, ['-e', script, fixtureRoot, store],
+          { input: JSON.stringify(selectors), encoding: 'utf8' }));
+        assert.equal(restored.role, role);
+        assert.equal(restored.digest, final.artifact.artifact_digest,
+          'cold standalone consumer retains the exact sealed original current judgment');
+      }
+    }
+    const accounting = runtime.verifyCompletedReviewConsumption({ worktree: f.root, source: final.receipt.runtime_evidence.completed_source.source,
+      receipt_store: recorder.storeDir, dispatch_id: final.receipt.dispatch_id });
+    assert.equal(accounting.successful_physical_calls, physicalReads);
+    assert.equal(accounting.all_attempt_denominator, 2, 'both complete original launches stay in the cost denominator');
+    assert.deepEqual(accounting.attempts.map(attempt => attempt.status), ['completed', 'completed']);
+    assert.equal(accounting.attempts[0].successful_calls, physicalReads, 'every original manifest and source batch remains charged');
+    assert.equal(accounting.attempts[1].successful_calls, 0);
+    assert.ok(accounting.successful_source_bytes.raw >= final.receipt.runtime_evidence.input_bundle.total_bytes,
+      'zero fresh reads retain the full original material cost');
+  } finally { os.homedir = previousHome; fs.rmSync(f.root, { recursive: true, force: true }); fs.rmSync(store, { recursive: true, force: true }); }
+}
+
+for (const role of ['arch-review', 'integrator']) for (const cold of [false, true])
+  test('whole automatic ' + role + ' measurement and genuinely fresh ' + (cold ? 'cold' : 'live') + ' final reaches unchanged consumer',
+    () => automaticCompletedReviewFixture(role, cold));
+
+for (const cold of [false, true]) test('large ordinary canonical integration preserves whole input through automatic ' + (cold ? 'cold' : 'live') + ' final',
+  () => automaticCompletedReviewFixture('integrator', cold, true));
+
+for (const cold of [false, true]) test('automatic ordinary integration refuses canonical base movement after its original probe ' + (cold ? 'cold' : 'live'),
+  () => automaticCompletedReviewFixture('integrator', cold, true, true));

@@ -582,6 +582,21 @@ function restoreReviewInput(progress) {
   } catch (error) { preparedFileInputs.delete(result); restoredFileInputs.delete(result); fileInputOptions.delete(result); throw error; }
 }
 
+function restoreCompletedSourceInput(source) {
+  if (!roleArtifact.isAuthenticatedCompletedSource(source)) fail('completed source requires protected custody', 'REVIEW_SOURCE_REQUIRED');
+  source = roleArtifact.readCompletedReviewSource({ worktree: source.identity.worktree, reference: source.state.reference });
+  const checked = verifyFileInput(source.input.input_bundle, { sealed: true });
+  const result = deepFreeze({ ...source.input, manifest: checked.manifest });
+  preparedFileInputs.add(result); restoredFileInputs.add(result);
+  fileInputOptions.set(result, { scope: { worktree: checked.manifest.snapshot.worktree, phase: checked.manifest.phase,
+    ticket: checked.manifest.ticket, run_id: checked.manifest.run_id }, manifestIdentity: result.input_bundle.manifest_identity });
+  try {
+    verifyFileInput(result);
+    require('./codex-runtime-host.cjs').validateCompletedSourceRestoration(source, result);
+    return result;
+  } catch (error) { preparedFileInputs.delete(result); restoredFileInputs.delete(result); fileInputOptions.delete(result); throw error; }
+}
+
 function reviewProgressIdentity(prepared) {
   const checked = verifyFileInput(prepared);
   const manifest = checked.manifest;
@@ -1311,6 +1326,12 @@ function isPreparedContext(value) {
   return object(value) && preparedContexts.has(value);
 }
 
+function installedReaderProfile(options, instructions) {
+  return createReaderBatchProfile({ chunk_bytes: 8192, ranges_per_batch: 12,
+    candidate: { source_sha256: digest(fs.readFileSync(__filename)), instructions_sha256: digest(instructions),
+      model: options.selection.model, effort: options.selection.effort, provider: 'openai' } });
+}
+
 function admitInstalledLaunch(value, options) {
   if (!isPreparedContext(value)) fail('capacity requires private prepared authority');
   verifyLivePullRequest(value.prepared, preparedOptions.get(value));
@@ -1336,7 +1357,7 @@ function admitInstalledLaunch(value, options) {
   if (!privateOptions.fileInput && Buffer.byteLength(value.launch.context.prompt) + instructionBytes > INPUT_MAX_BYTES) {
     privateOptions.fileInput = prepareFileInput(privateOptions.scope, JSON.stringify(require('./context-packet.cjs').encodeUniqueContent(value.prepared.packet)), {
       architecturePacket: value.prepared.packet,
-      ...privateOptions, role: 'arch-review', dispatchId: privateOptions.inflightDispatchId,
+      ...privateOptions, ...(options.automaticReader ? { readerProfile: installedReaderProfile(options, instructions) } : {}), role: 'arch-review', dispatchId: privateOptions.inflightDispatchId,
       relayPrefix: value.launch.context.prompt.slice(0, value.launch.context.prompt.indexOf('<AUTHENTICATED_CONTEXT_PACKET>')),
       binding: { packet_digest: value.prepared.packet.digest,
         ticket_set: architectureMemberIds(value.prepared),
@@ -1359,15 +1380,24 @@ function admitInstalledLaunch(value, options) {
       capacityRefusal('measured_runtime_selection', JSON.stringify(transport.selection), JSON.stringify(options.selection),
         'Use the original matching runtime selection under the unchanged model policy.');
     const variants = installedFileInputs.get(value) || new Map();
-    const variantKey = digest(JSON.stringify(canonical({ binding, instructionBytes, transport })));
+    const batch = previous.manifest.transport?.schema === 'shipyard.native-reader-transport.v3' || options.automaticReader === true;
+    const batchProfile = options.automaticReader ? installedReaderProfile(options, instructions) : fileInputOptions.get(previous).readerProfile;
+    const variantTransport = options.automaticReader ? { candidate: { source_sha256: digest(fs.readFileSync(__filename)),
+      instructions_sha256: digest(instructions), model: options.selection.model, effort: options.selection.effort },
+      chunk_bytes: 8192, ranges_per_batch: 12 } : batch ? { ...previous.manifest.transport, profile_sha256: null } : transport;
+    const variantKey = digest(JSON.stringify(canonical({ binding, instructionBytes, transport: variantTransport })));
     const cached = variants.get(variantKey);
     if (cached) verifyFileInput(cached);
-    const next = cached || prepareFileInput(privateOptions.fileInput && { worktree: value.prepared.canonical.worktree,
+    let next = cached || prepareFileInput(privateOptions.fileInput && { worktree: value.prepared.canonical.worktree,
       ticket: value.prepared.ticket, phase: value.prepared.phaseNumber, run_id: previous.manifest.run_id },
       verifyFileInput(previous).material, { ...fileInputOptions.get(previous),
-        readerCapacity,
+        readerCapacity: batch ? undefined : readerCapacity,
+        ...(batchProfile ? { readerProfile: batchProfile } : {}),
         generatedInstructionBytes: instructionBytes,
         binding });
+    if (batch && readerCapacity
+        && JSON.stringify(canonical(next.input_bundle.reader_capacity)) !== JSON.stringify(canonical(transport)))
+      next = admitReaderBatchInput(next, readerCapacity);
     variants.set(variantKey, next);
     installedFileInputs.set(value, variants);
     preparedOptions.set(value, { ...privateOptions, fileInput: next });
@@ -1522,6 +1552,7 @@ function validateOriginalReviewContext(input) {
   const prepared = { input_bundle: recorded.input_bundle };
   preparedFileInputs.add(prepared); historicalReviewInputs.add(prepared);
   try {
+    if (recorded.completed_source) runtime.authenticateCompletedSourceInput(prepared, dispatchId);
     const consumed = runtime.verifyFileConsumption(prepared, raw, dispatchId, response.text);
     if (consumed.chunk_reads !== checked.chunk_reads) fail('original native coverage is incomplete', 'REVIEW_BASELINE_INVALID');
   } finally { preparedFileInputs.delete(prepared); historicalReviewInputs.delete(prepared); }
@@ -1849,4 +1880,4 @@ if (require.main === module) {
 }
 
 module.exports = Object.freeze({ createReaderBatchProfile, admitReaderBatchInput, requireReaderBatchCapacity,
-  batchCommand, batchFrames, batchOutput, readBatchCli, SCHEMA, FILE_LIMITS, freezeReviewBaseline: deepFreeze, validateOriginalReviewContext, buildReviewImpactPacket, preflightReviewMaterial, preflightReaderSchedule, capacityRefusal, recheckInstalledLaunch, restoreReviewInput, reviewProgressIdentity, prepareFileInput, isPreparedFileInput, verifyFileInput, instructionEvidence, prepare, finish, isPreparedContext, admitInstalledLaunch, admittedFileInput, admitBookkeeping, admittedPrompt, validateHistoricalContext, validateSealedContext });
+  batchCommand, batchFrames, batchOutput, readBatchCli, SCHEMA, FILE_LIMITS, freezeReviewBaseline: deepFreeze, validateOriginalReviewContext, buildReviewImpactPacket, preflightReviewMaterial, preflightReaderSchedule, capacityRefusal, recheckInstalledLaunch, restoreCompletedSourceInput, restoreReviewInput, reviewProgressIdentity, prepareFileInput, isPreparedFileInput, verifyFileInput, instructionEvidence, prepare, finish, isPreparedContext, admitInstalledLaunch, admittedFileInput, admitBookkeeping, admittedPrompt, validateHistoricalContext, validateSealedContext });

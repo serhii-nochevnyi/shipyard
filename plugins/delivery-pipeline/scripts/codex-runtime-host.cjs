@@ -954,6 +954,106 @@ function parseNativeChildTranscript(raw, childId, parentId, role, model, effort,
 const measuredLaunches = new WeakMap();
 const readerCapacities = new WeakMap();
 const readerCapacityProbes = new WeakMap();
+const recordedCapacityLaunches = new WeakMap();
+
+function recordCapacityApplication(verified, manifest, application) {
+  const boundary = require('./dispatch-boundary.cjs');
+  if (!object(application) || !boundary.isDurableRecorder(application.recorder))
+    fail('READER_CAPACITY_UNSUPPORTED', 'batch measurement requires original boundary receipt custody');
+  const { recorder, receipt } = application;
+  let record, authenticated;
+  try {
+    authenticated = boundary.createDispatchBoundary({ recorder }).reconcile(receipt.dispatch_id,
+      { ticket: manifest.ticket, subject_kind: readerSubjectKind(manifest) });
+    record = recorder.getVerifiedRecord(receipt.dispatch_id);
+  } catch (error) {
+    fail('READER_CAPACITY_UNSUPPORTED', 'batch application receipt authentication failed', { cause: error.code });
+  }
+  const stable = require('./model-policy-internal.cjs').stableStringify;
+  if (stable(authenticated.application_receipt) !== stable(receipt))
+    fail('READER_CAPACITY_UNSUPPORTED', 'batch measurement differs from its authenticated application receipt');
+  validateCapacityApplicationRecord(verified, manifest, record, receipt);
+  recordedCapacityLaunches.set(verified, { recorder, receipt, record_sha256: reviewHash(stable(record)),
+    subject: readerSubject(manifest) });
+}
+
+function capacityProbeAssociation(manifest, probeDispatchId) {
+  return freeze({ schema: 'shipyard.reader-capacity-association.v1', probe_dispatch_id: probeDispatchId,
+    review_dispatch_id: manifest.dispatch_id,
+    manifest_sha256: reviewHash(require('./model-policy-internal.cjs').stableStringify(manifest) + '\n'),
+    profile_sha256: manifest.transport.profile_sha256, binding_sha256: reviewHash(readerSubject(manifest)) });
+}
+
+function readerSubjectKind(manifest) {
+  return manifest.role === 'arch-review' && require('./architecture-target.cjs').PHASE_SUBJECT.test(manifest.ticket)
+    ? 'phase' : 'ticket';
+}
+
+function validateCapacityApplicationRecord(verified, manifest, record, receipt) {
+  const stable = require('./model-policy-internal.cjs').stableStringify;
+  const evidence = receipt?.runtime_evidence;
+  const candidate = manifest.transport.candidate;
+  const association = evidence?.reader_capacity_probe;
+  const dispatchId = association ? association.probe_dispatch_id : manifest.dispatch_id;
+  if (association && (typeof dispatchId !== 'string' || !/^capacity-probe-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(dispatchId)
+      || dispatchId === manifest.dispatch_id
+      || stable(association) !== stable(capacityProbeAssociation(manifest, dispatchId))))
+    fail('READER_CAPACITY_UNSUPPORTED', 'capacity probe changed its protected final candidate association');
+  if (!record || stable(record.receipt) !== stable(receipt)
+      || record.dispatch_id !== dispatchId || record.ticket !== manifest.ticket
+      || (record.subject_kind || 'ticket') !== readerSubjectKind(manifest)
+      || receipt.dispatch_id !== dispatchId || receipt.runtime !== 'codex' || receipt.role !== manifest.role
+      || receipt.policy_hash !== manifest.transport.policy_hash || receipt.compliance !== 'verified'
+      || receipt.requested_model !== record.resolution?.requested_model
+      || receipt.requested_effort !== record.resolution?.requested_effort
+      || receipt.applied_model !== candidate.model || receipt.observed_model !== candidate.model
+      || receipt.applied_effort !== candidate.effort || receipt.observed_effort !== candidate.effort
+      || evidence?.schema !== 'shipyard.codex-runtime-evidence.v1' || evidence.provider !== 'openai'
+      || evidence.selection_source !== 'codex-native-session-transcript'
+      || evidence?.run_id !== manifest.run_id || evidence.ticket !== manifest.ticket || evidence.phase !== manifest.phase
+      || evidence.worktree !== manifest.snapshot.worktree || evidence.dispatch_id !== dispatchId
+      || evidence.session_id !== verified.native_session_evidence.session_id
+      || stable(evidence.native_session_evidence) !== stable(verified.native_session_evidence)
+      || evidence.input_bundle?.manifest_sha256 !== reviewHash(stable(manifest) + '\n')
+      || evidence.input_consumption?.manifest_sha256 !== evidence.input_bundle.manifest_sha256)
+    fail('READER_CAPACITY_UNSUPPORTED', 'batch application receipt differs from its original measured launch or candidate');
+  const transcript = evidence.transcript;
+  if (!transcript || typeof transcript.path !== 'string')
+    fail('READER_CAPACITY_UNSUPPORTED', 'batch application receipt lacks its original CLI transcript');
+  const cliRaw = readReviewNativeFile(transcript.path, manifest.snapshot.worktree);
+  const cli = parseCodexStream(cliRaw);
+  const args = evidence.command?.args;
+  const starts = cli.records.flatMap((record, index) => record.type === 'turn.started' ? [index] : []);
+  const finals = cli.records.flatMap((record, index) => record.item?.type === 'agent_message' ? [index] : []);
+  const ends = cli.records.flatMap((record, index) => record.type === 'turn.completed' ? [index] : []);
+  if (Buffer.byteLength(cliRaw) !== transcript.bytes || reviewHash(cliRaw) !== transcript.sha256
+      || cli.session_id !== evidence.session_id || starts.length !== 1 || finals.length !== 1 || ends.length !== 1
+      || starts[0] >= finals[0] || finals[0] >= ends[0]
+      || cli.records[finals[0]].item.text !== verified.last_agent_message
+      || !Array.isArray(args) || evidence.command_digest !== reviewHash(JSON.stringify(args)))
+    fail('READER_CAPACITY_UNSUPPORTED', 'batch application receipt changed its original CLI completion or command');
+  observedSelection(cli, candidate.model, candidate.effort, {
+    model: args[args.indexOf('--model') + 1],
+    effort: (args.find(value => value.startsWith('model_reasoning_effort=')) || '').match(/^model_reasoning_effort="([^"]+)"$/)?.[1],
+  }, verified.native_session_evidence);
+}
+
+function capacityApplication(verified, manifest) {
+  const authorization = recordedCapacityLaunches.get(verified);
+  const boundary = require('./dispatch-boundary.cjs');
+  if (!authorization || !boundary.isDurableRecorder(authorization.recorder)
+      || authorization.subject !== readerSubject(manifest))
+    fail('READER_CAPACITY_UNSUPPORTED', 'batch capacity requires its original durably recorded application receipt');
+  let record;
+  try { record = authorization.recorder.getVerifiedRecord(authorization.receipt.dispatch_id); }
+  catch (error) { fail('READER_CAPACITY_UNSUPPORTED', 'batch application receipt authentication failed', { cause: error.code }); }
+  const stable = require('./model-policy-internal.cjs').stableStringify;
+  if (!record || reviewHash(stable(record)) !== authorization.record_sha256
+      || stable(record.receipt) !== stable(authorization.receipt))
+    fail('READER_CAPACITY_UNSUPPORTED', 'original batch application receipt is missing or changed');
+  recordCapacityApplication(verified, manifest, authorization);
+  return authorization;
+}
 
 function readerSubject(manifest) {
   const canonical = value => Array.isArray(value) ? value.map(canonical) : object(value)
@@ -970,17 +1070,22 @@ function readerCapacityContract(capacity, manifest) {
         && (measured.profile !== manifest.transport?.profile_sha256
           || measured.contract.manifest_sha256 !== reviewHash(require('./model-policy-internal.cjs').stableStringify(manifest) + '\n'))))
     fail('READER_CAPACITY_UNSUPPORTED', 'reader capacity lacks original measured current-subject authority');
-  readNativeParentRaw(measured.launch.session, measured.verified.native_session_evidence, measured.launch.env, measured.launch.now);
+  const source = measured.completedSource;
+  if (source) completedSourceSnapshot(source);
+  else readNativeParentRaw(measured.launch.session, measured.verified.native_session_evidence, measured.launch.env, measured.launch.now);
+  if (measured.contract.schema === 'shipyard.native-reader-transport.v3') capacityApplication(measured.verified, manifest);
   return measured.contract;
 }
 
-function measureReaderCapacity(verified, prepared) {
+function measureReaderCapacity(verified, prepared, application) {
   const launch = measuredLaunches.get(verified);
   if (!launch) fail('READER_CAPACITY_UNSUPPORTED', 'capacity requires original verified native launch');
-  if (readNativeParentRaw(launch.session, verified.native_session_evidence, launch.env, launch.now) !== launch.raw)
+  if (!recordedCapacityLaunches.get(verified)?.completedSource && readNativeParentRaw(launch.session, verified.native_session_evidence, launch.env, launch.now) !== launch.raw)
     fail('READER_CAPACITY_UNSUPPORTED', 'original measured output changed');
   const checked = require('./codex-arch-review-context.cjs').verifyFileInput(prepared);
   if (checked.manifest.transport?.schema === 'shipyard.native-reader-transport.v3') {
+    if (application !== undefined) recordCapacityApplication(verified, checked.manifest, application);
+    const recorded = capacityApplication(verified, checked.manifest);
     const candidate = checked.manifest.transport.candidate;
     const originalRecords = launch.raw.split('\n').filter(Boolean).map(line => JSON.parse(line));
     const instructions = originalRecords.flatMap(record => record.type === 'response_item' && record.payload?.role === 'developer'
@@ -1006,6 +1111,12 @@ function measureReaderCapacity(verified, prepared) {
       native_file: originalReviewFile(launch.session, launch.env, checked.manifest.snapshot.worktree),
       native_bytes: Buffer.byteLength(launch.raw),
       binding_sha256: reviewHash(readerSubject(checked.manifest)), selection: selections[0], sandbox_mode: 'read-only',
+      application_dispatch_id: recorded.receipt.dispatch_id,
+      ...(recorded.receipt.runtime_evidence.reader_capacity_probe ? {
+        probe_association: recorded.receipt.runtime_evidence.reader_capacity_probe } : {}),
+      application_receipt_store: recorded.recorder.storeDir,
+      application_record_sha256: recorded.record_sha256,
+      application_receipt_sha256: reviewHash(require('./model-policy-internal.cjs').stableStringify(recorded.receipt)),
       output_tokens: 10000, largest_envelope_bytes: observed.largest_envelope_bytes,
       largest_nested_bytes: observed.largest_nested_bytes, physical_calls: observed.physical_calls,
       logical_ranges: observed.chunk_reads, encoded_bytes: observed.encoded_bytes, semantic_credit: false });
@@ -1099,6 +1210,8 @@ function verifyFileConsumption(prepared, nativeRaw, dispatchId, resultText, meas
   const checked = require('./codex-arch-review-context.cjs').verifyFileInput(prepared, {
     association: { dispatch_id: dispatchId },
   });
+  const source = completedSourceInputs.get(prepared);
+  if (source && !measurement && !prefix) return verifyCompletedSourceTurn(source, prepared, nativeRaw, resultText, checked);
   return verifyCheckedFileConsumption(checked, prepared, nativeRaw, resultText, measurement, prefix);
 }
 
@@ -1206,7 +1319,8 @@ function verifyCheckedFileConsumption(checked, prepared, nativeRaw, resultText, 
       if (pending.size) fail('RUNTIME_EVIDENCE_MISMATCH', 'ordered file read did not finish before the next read');
       if (typeof item.call_id !== 'string' || !item.call_id || calls.has(item.call_id))
         fail('RUNTIME_EVIDENCE_MISMATCH', 'native file read repeats a call identity');
-      if ((v2 || prefix) && (!custom || args.max_output_tokens !== 10000))
+      if ((v2 || prefix) && ((!custom && !v3) || args.max_output_tokens !== 10000
+          || Object.keys(args).some(key => !['cmd', 'max_output_tokens'].includes(key))))
         fail('RUNTIME_EVIDENCE_MISMATCH', 'native reader changed its supported output policy');
       calls.add(item.call_id);
       pending.set(item.call_id, { ...reads[at], custom });
@@ -1255,6 +1369,10 @@ function verifyCheckedFileConsumption(checked, prepared, nativeRaw, resultText, 
             if (parsed.exit_code !== 0 || parsed.session_id !== undefined)
               fail('RUNTIME_EVIDENCE_MISMATCH', 'native file read did not complete successfully');
             nestedBytes += Buffer.byteLength(output);
+            largestNested = Math.max(largestNested, Buffer.byteLength(output));
+            if (v3 && (typeof output !== 'string' || typeof parsed.output !== 'string' || Buffer.byteLength(output) > 252 * 1024
+                || parsed.original_token_count !== undefined || parsed.truncated === true))
+              fail('RUNTIME_EVIDENCE_MISMATCH', 'batch direct envelope is incomplete');
             output = parsed.output ?? parsed.stdout;
           }
         }
@@ -1262,7 +1380,7 @@ function verifyCheckedFileConsumption(checked, prepared, nativeRaw, resultText, 
         if (v3) {
           if (output !== read.output) fail('RUNTIME_EVIDENCE_MISMATCH', 'batch header, ordered frames or terminal differs from complete source');
           if (!measurement && (envelopeBytes > prepared.input_bundle.reader_capacity.largest_envelope_bytes
-              || Buffer.byteLength(item.output[1].text) > prepared.input_bundle.reader_capacity.largest_nested_bytes))
+              || Buffer.byteLength(read.custom ? item.output[1].text : item.output) > prepared.input_bundle.reader_capacity.largest_nested_bytes))
             fail('READER_CAPACITY_UNSUPPORTED', 'batch exceeded original measured envelopes');
           encodedBytes += read.frames.reduce((sum, frame) => sum + Buffer.byteLength(frame.base64), 0);
           rawBytes += read.frames.reduce((sum, frame) => sum + frame.bytes, 0);
@@ -1393,18 +1511,217 @@ function verifyBatchCapacityReference(prepared, checked, raw) {
       || capacity.schedule_sha256 !== reviewHash(JSON.stringify(checked.manifest.batches))
       || !Number.isSafeInteger(capacity.native_bytes) || capacity.native_bytes < 1 || capacity.native_bytes > NATIVE_SESSION_MAX_BYTES)
     fail('READER_CAPACITY_UNSUPPORTED', 'protected capacity differs from this exact finite input');
-  const original = raw || readReviewNativeFile(capacity.native_file, checked.manifest.snapshot.worktree);
+  const source = completedSourceInputs.get(prepared);
+  const original = raw || (source ? completedSourceSnapshot(source).raw
+    : readReviewNativeFile(capacity.native_file, checked.manifest.snapshot.worktree));
   if (Buffer.byteLength(original) !== capacity.native_bytes || reviewHash(original) !== capacity.native_sha256)
     fail('READER_CAPACITY_UNSUPPORTED', 'original measured batch evidence changed');
   validateReviewNative(original, capacity.native_session_id, { ...capacity.selection, sandbox_mode: capacity.sandbox_mode, worktree: checked.manifest.snapshot.worktree });
   const records = original.split('\n').filter(Boolean).map(line => JSON.parse(line));
   const completions = records.filter(record => record.type === 'event_msg' && record.payload?.type === 'task_complete');
   if (completions.length !== 1) fail('READER_CAPACITY_UNSUPPORTED', 'capacity no longer has its original completed output');
+  const record = require('./role-artifact.cjs').authenticateReaderCapacityReferences({
+    worktree: checked.manifest.snapshot.worktree, receipt_store: capacity.application_receipt_store,
+    dispatch_id: capacity.application_dispatch_id,
+  });
+  const stable = require('./model-policy-internal.cjs').stableStringify;
+  const association = record.receipt.runtime_evidence?.reader_capacity_probe;
+  if ((association ? stable(capacity.probe_association) !== stable(association)
+        || association.review_dispatch_id !== checked.manifest.dispatch_id
+        || association.probe_dispatch_id !== capacity.application_dispatch_id
+      : capacity.application_dispatch_id !== checked.manifest.dispatch_id || capacity.probe_association !== undefined)
+      || reviewHash(stable(record)) !== capacity.application_record_sha256
+      || reviewHash(stable(record.receipt)) !== capacity.application_receipt_sha256
+      || record.receipt.runtime_evidence?.native_session_evidence?.sha256 !== capacity.native_sha256
+      || record.receipt.runtime_evidence?.native_session_evidence?.bytes !== capacity.native_bytes
+      || record.receipt.runtime_evidence?.session_id !== capacity.native_session_id)
+    fail('READER_CAPACITY_UNSUPPORTED', 'protected capacity differs from its original recorded application');
+  validateCapacityApplicationRecord({ native_session_evidence: record.receipt.runtime_evidence.native_session_evidence,
+    last_agent_message: completions[0].payload.last_agent_message }, checked.manifest, record, record.receipt);
   const measured = verifyCheckedFileConsumption(checked, prepared, original, completions[0].payload.last_agent_message,
     { chunk_bytes: checked.manifest.chunk_bytes, output_tokens: 10000 });
   if (measured.largest_envelope_bytes !== capacity.largest_envelope_bytes || measured.largest_nested_bytes !== capacity.largest_nested_bytes
       || measured.physical_calls !== capacity.physical_calls || measured.chunk_reads !== capacity.logical_ranges)
     fail('READER_CAPACITY_UNSUPPORTED', 'protected capacity output bounds changed');
+}
+
+const completedSourceInputs = new WeakMap();
+const completedSourceCapacities = new WeakMap();
+const completedSourceCandidates = new Map();
+function fileCapacityForSource(prepared) { return completedSourceCapacities.get(prepared); }
+function completedSourceSnapshot(source) {
+  const raw = readReviewNativeFile(source.snapshot.path, source.identity.worktree);
+  if (Buffer.byteLength(raw) !== source.snapshot.bytes || reviewHash(raw) !== source.snapshot.sha256)
+    fail('REVIEW_SOURCE_INVALID', 'immutable measured source snapshot changed');
+  const live = readReviewNativeFile(source.native_file, source.identity.worktree);
+  const bytes = Buffer.from(live);
+  if (bytes.length < source.snapshot.bytes || reviewHash(bytes.subarray(0, source.snapshot.bytes)) !== source.snapshot.sha256)
+    fail('REVIEW_SOURCE_INVALID', 'live original reviewer context lost its exact measured prefix');
+  validateReviewNative(live, source.session_id, { ...source.original_launch, worktree: source.identity.worktree });
+  return { raw, live };
+}
+
+function prepareCompletedSource(capacity, prepared, finalPrompt = prepared.prompt) {
+  const collector = require('./codex-arch-review-context.cjs'), authority = require('./role-artifact.cjs');
+  const measured = readerCapacities.get(capacity), checked = collector.verifyFileInput(prepared);
+  collector.reviewProgressIdentity(prepared);
+  if (!measured || measured.contract.schema !== 'shipyard.native-reader-transport.v3'
+      || !prepared.input_bundle.reader_capacity || readerSubject(checked.manifest) !== measured.subject)
+    fail('REVIEW_SOURCE_REQUIRED', 'completed source requires private exact candidate measurement and capacity admission');
+  readerCapacityContract(capacity, checked.manifest);
+  const original = capacityApplication(measured.verified, checked.manifest);
+  const evidence = original.receipt.runtime_evidence;
+  const raw = measured.launch.raw;
+  const turn = freshReviewTurn(raw, measured.verified.last_agent_message);
+  const consumed = verifyCheckedFileConsumption(checked, prepared, raw, measured.verified.last_agent_message,
+    { chunk_bytes: checked.manifest.chunk_bytes, output_tokens: 10000 });
+  if (evidence.native_child_evidence || evidence.reader_capacity_probe?.review_dispatch_id !== checked.manifest.dispatch_id
+      || evidence.dispatch_id === checked.manifest.dispatch_id || consumed.failed_deliveries)
+    fail('REVIEW_SOURCE_INVALID', 'original static complete probe lacks applicable reviewer attribution');
+  const candidate = completedSourceCandidates.get(checked.manifest.dispatch_id);
+  if (!candidate || candidate.recorder !== original.recorder.storeDir
+      || reviewHash(require('./model-policy-internal.cjs').stableStringify(completedReviewIdentity(checked, prepared.input_bundle))) !== candidate.identity_sha256)
+    fail('REVIEW_SOURCE_REQUIRED', 'completed source requires its private pre-measurement final reservation and all-attempt ledger');
+  const finalReservation = original.recorder.getReservation(checked.manifest.dispatch_id);
+  if (!finalReservation || finalReservation.recorded) fail('REVIEW_SOURCE_CLAIMED', 'final lacks its unused original reservation');
+  const source = { identity: completedReviewIdentity(checked, prepared.input_bundle), final_reservation: finalReservation,
+    final_prompt: finalPrompt,
+    input: { prompt: prepared.prompt, input_bundle: prepared.input_bundle, input_bytes: prepared.input_bytes,
+      inputTokens: prepared.inputTokens }, native_file: measured.contract.native_file, native_raw: raw,
+    session_id: measured.contract.native_session_id, turn_id: turn, completed_ranges: checked.chunk_reads,
+    probe_dispatch_id: evidence.dispatch_id, receipt_store: original.recorder.storeDir,
+    record_sha256: original.record_sha256, probe_evidence: evidence,
+    original_launch: { model: evidence.applied_model, effort: evidence.applied_effort, sandbox_mode: 'read-only',
+      agent_file: checked.manifest.binding.agent_file, agent_file_digest: original.receipt.agent_file_digest,
+      process_id: evidence.process_id, runtime_launch: evidence }, semantic_context: 'exact-native-session',
+    source_consumption: { chunk_reads: consumed.chunk_reads, physical_calls: consumed.physical_calls,
+      call_ids: consumed.successful_call_ids, range_ordinals: consumed.successful_range_ordinals } };
+  const observation = reviewObservation(source, () => {
+    collector.verifyFileInput(prepared);
+    if (readReviewNativeFile(source.native_file, source.identity.worktree) !== raw)
+      fail('REVIEW_SOURCE_INVALID', 'original completed reviewer changed before snapshot sealing');
+    capacityApplication(measured.verified, checked.manifest);
+  });
+  const reference = authority.sealCompletedReviewSource(observation);
+  measured.completedSource = authority.readCompletedReviewSource({ worktree: source.identity.worktree, reference });
+  completedSourceCapacities.set(prepared, measured);
+  return reference;
+}
+
+function verifyCompletedSourceTurn(source, prepared, nativeRaw, resultText, material) {
+  const authority = require('./role-artifact.cjs');
+  if (!authority.isAuthenticatedCompletedSource(source)) fail('REVIEW_SOURCE_REQUIRED', 'source consumption needs original protected capability');
+  const checked = material || require('./codex-arch-review-context.cjs').verifyFileInput(prepared);
+  if (require('./model-policy-internal.cjs').stableStringify(completedReviewIdentity(checked, prepared.input_bundle))
+      !== require('./model-policy-internal.cjs').stableStringify(source.identity))
+    fail('REVIEW_SOURCE_INVALID', 'final changed original subject, material or finalized profile');
+  const { raw } = completedSourceSnapshot(source);
+  verifyBatchCapacityReference(prepared, checked, raw);
+  const rows = raw.split('\n').filter(Boolean).map(JSON.parse);
+  const originalResult = rows.find(record => record.type === 'event_msg' && record.payload?.type === 'task_complete')?.payload.last_agent_message;
+  const prefix = verifyCheckedFileConsumption(checked, prepared, raw, originalResult,
+    { chunk_bytes: checked.manifest.chunk_bytes, output_tokens: 10000 });
+  const bytes = Buffer.from(nativeRaw), resume = source.state.resume;
+  if (!resume || resume.native_bytes !== source.snapshot.bytes || resume.native_sha256 !== source.snapshot.sha256
+      || bytes.length <= resume.native_bytes || reviewHash(bytes.subarray(0, resume.native_bytes)) !== resume.native_sha256)
+    fail('REVIEW_SOURCE_INVALID', 'final is not an immediate append to its immutable measured context');
+  const append = bytes.subarray(resume.native_bytes).toString('utf8');
+  const turn = freshReviewTurn(append, resultText);
+  if (turn === source.turn_id || resultText === originalResult)
+    fail('REVIEW_SOURCE_INVALID', 'old probe verdict cannot become a fresh final result');
+  const fresh = append.split('\n').filter(Boolean).map(JSON.parse);
+  if (fresh.some(record => record.type === 'turn_context'
+      && record.payload.model_provider !== undefined && record.payload.model_provider !== 'openai'))
+    fail('REVIEW_SOURCE_INVALID', 'fresh final changed its original provider');
+  const users = fresh.filter(record => record.type === 'response_item' && record.payload?.role === 'user');
+  if (users.length !== 1 || users[0].payload.content?.map(block => block.text).join('') !== completedSourcePrompt(source, prepared, checked)
+      || fresh.some(record => record.type === 'response_item'
+        && ['function_call', 'custom_tool_call'].includes(record.payload?.type)))
+    fail('REVIEW_SOURCE_INVALID', 'final added an intervening prompt, old conclusions or duplicate physical source reads');
+  const suffix = verifyCheckedFileConsumption(checked, prepared, append, resultText, null,
+    { turn_id: turn, start: source.completed_ranges });
+  if (suffix.pending_reads || suffix.physical_calls || suffix.chunk_reads !== checked.chunk_reads)
+    fail('REVIEW_SOURCE_INVALID', 'final source consumption differs from its authenticated complete original schedule');
+  return { ...prefix, turn_id: turn, newly_completed_ranges: 0, source_dispatch_id: source.probe_dispatch_id,
+    new_physical_calls: 0 };
+}
+
+function completedSourcePrompt(source, prepared, checked) {
+  // @invariant: only the reauthenticated manifest supplies the final schedule and profile after restoration.
+  const manifest = checked.manifest;
+  return 'Issue a genuinely fresh current judgment against this exact admitted final input. Re-evaluate the authenticated source frames already present in this native conversation. '
+    + 'The completed probe result and its conclusions are obsolete and supply no semantic authority. Do not copy that result or reread authenticated source. '
+    + 'Preserve the original final result contract and identity echoes. Return the complete final JSON with evidence_markdown directly; '
+    + 'the host writes the final evidence. This final turn uses the already authenticated frames and makes no tool calls.\n'
+    + 'INPUT_MANIFEST_SHA256=' + prepared.input_bundle.manifest_sha256
+    + '\ninput_chunk_reads=' + source.completed_ranges + '\ninput_batch_reads=' + manifest.batches.length
+    + '\ninput_profile_sha256=' + manifest.transport.profile_sha256
+    + '\nFINAL_ADMITTED_PROMPT:\n' + source.final_prompt;
+}
+
+function validateCompletedSourceRestoration(source, prepared) {
+  if (!require('./role-artifact.cjs').isAuthenticatedCompletedSource(source))
+    fail('REVIEW_SOURCE_CLAIMED', 'source restoration requires an original completed reservation');
+  if (source.state.resume) validateCompletedSourceClaimRecovery(source);
+  const checked = require('./codex-arch-review-context.cjs').verifyFileInput(prepared);
+  const { raw, live } = completedSourceSnapshot(source);
+  if (raw !== live) fail('REVIEW_SOURCE_INVALID', 'completed reviewer has intervening native turns');
+  if (require('./model-policy-internal.cjs').stableStringify(completedReviewIdentity(checked, prepared.input_bundle))
+      !== require('./model-policy-internal.cjs').stableStringify(source.identity)) fail('REVIEW_SOURCE_INVALID', 'cold source subject changed');
+  verifyBatchCapacityReference(prepared, checked, raw);
+  return source;
+}
+
+function validateCompletedSourceClaimRecovery(source) {
+  if (!require('./role-artifact.cjs').isAuthenticatedCompletedSource(source)
+      || source.state.resume?.status !== 'claimed' || source.state.resume.launch_started
+      || !Number.isSafeInteger(source.state.resume.owner_pid))
+    fail('REVIEW_SOURCE_CLAIMED', 'only a protected uncompleted claim can be restored');
+  let dead = false;
+  try { process.kill(source.state.resume.owner_pid, 0); } catch (error) { dead = error.code === 'ESRCH'; }
+  if (!dead) fail('REVIEW_SOURCE_CLAIMED', 'original source claimant is active or its inactivity is uncertain');
+  const { raw, live } = completedSourceSnapshot(source);
+  if (raw !== live || source.state.resume.native_bytes !== source.snapshot.bytes
+      || source.state.resume.native_sha256 !== source.snapshot.sha256)
+    fail('REVIEW_SOURCE_INVALID', 'claimed source already has native output or an intervening turn');
+  return source;
+}
+
+function authenticateCompletedSourceInput(prepared, dispatchId) {
+  const authority = require('./role-artifact.cjs');
+  const checked = require('./codex-arch-review-context.cjs').verifyFileInput(prepared);
+  const source = authority.readCompletedReviewSource({ worktree: checked.manifest.snapshot.worktree, dispatch_id: dispatchId });
+  const record = authority.authenticateReaderCapacityReferences({ worktree: source.identity.worktree,
+    receipt_store: source.receipt_store, dispatch_id: dispatchId });
+  if (record.receipt.runtime_evidence?.completed_source?.source?.sha256 !== source.state.reference.sha256)
+    fail('REVIEW_SOURCE_INVALID', 'original final receipt lacks the sealed completed source');
+  authority.validateCompletedSourceEvidence(record.receipt.runtime_evidence);
+  completedSourceInputs.set(prepared, source);
+  return source;
+}
+
+function validateCompletedSourceConsumption(source, evidence) {
+  const collector = require('./codex-arch-review-context.cjs');
+  const checked = collector.verifyFileInput(source.input.input_bundle, { sealed: true, historical: true });
+  const prepared = { ...source.input, manifest: checked.manifest };
+  const raw = readReviewNativeFile(source.native_file, source.identity.worktree);
+  const cli = readReviewNativeFile(evidence.transcript.path, source.identity.worktree);
+  if (Buffer.byteLength(cli) !== evidence.transcript.bytes || reviewHash(cli) !== evidence.transcript.sha256
+      || Buffer.byteLength(raw) !== evidence.native_session_evidence.bytes || reviewHash(raw) !== evidence.native_session_evidence.sha256)
+    fail('REVIEW_SOURCE_INVALID', 'fresh original final native or CLI transcript changed');
+  const parsed = parseCodexStream(cli);
+  const finals = parsed.records.filter(record => record.item?.type === 'agent_message');
+  if (parsed.session_id !== source.session_id || finals.length !== 1)
+    fail('REVIEW_SOURCE_INVALID', 'fresh final completion changed reviewer UUID');
+  const consumed = verifyCompletedSourceTurn(source, prepared, raw, finals[0].item.text, checked);
+  const canonical = require('./model-policy-internal.cjs').stableStringify;
+  const lineage = evidence.input_consumption;
+  if (lineage?.physical_call_provenance !== 'original-completed-source'
+      || lineage.source_dispatch_id !== source.probe_dispatch_id || lineage.current_turn_physical_calls !== 0
+      || canonical(lineage.original_call_ids) !== canonical(consumed.successful_call_ids)
+      || canonical(lineage.original_range_ordinals) !== canonical(consumed.successful_range_ordinals))
+    fail('REVIEW_SOURCE_INVALID', 'fresh final changed original physical source provenance');
+  return consumed;
 }
 
 function verifyProtectedReviewPrefix(progress, prepared, raw, material) {
@@ -1530,7 +1847,136 @@ function completedReviewIdentity(checked, bundle) {
     dispatch_id: manifest.dispatch_id, run_id: manifest.run_id, ticket: manifest.ticket, phase: manifest.phase };
 }
 
+function verifyCompletedSourceAccounting(selectors) {
+  const keys = ['worktree', 'source', 'receipt_store', 'dispatch_id'];
+  if (!object(selectors) || Object.keys(selectors).length !== keys.length || Object.keys(selectors).some(key => !keys.includes(key)))
+    fail('REVIEW_SOURCE_REQUIRED', 'completed source accounting requires only original reference selectors');
+  const authority = require('./role-artifact.cjs'), collector = require('./codex-arch-review-context.cjs');
+  const record = authority.authenticateReaderCapacityReferences({ worktree: selectors.worktree,
+    receipt_store: selectors.receipt_store, dispatch_id: selectors.dispatch_id });
+  const evidence = record.receipt.runtime_evidence;
+  const source = authority.validateCompletedSourceEvidence(evidence);
+  if (require('./model-policy-internal.cjs').stableStringify(selectors.source)
+      !== require('./model-policy-internal.cjs').stableStringify(source.state.reference)) fail('REVIEW_SOURCE_INVALID', 'final source selector changed');
+  const checked = collector.verifyFileInput(source.input.input_bundle, { sealed: true, historical: true });
+  const bundle = source.input.input_bundle, prepared = { ...source.input, manifest: checked.manifest };
+  const { raw, live } = completedSourceSnapshot(source);
+  const finalCli = readReviewNativeFile(evidence.transcript.path, source.identity.worktree);
+  const result = parseCodexStream(finalCli).records.find(row => row.item?.type === 'agent_message').item.text;
+  const consumed = verifyCompletedSourceTurn(source, prepared, live, result, checked);
+  const originalPin = source.probe_evidence.transcript;
+  const originalCli = readReviewNativeFile(originalPin.path, source.identity.worktree);
+  if (Buffer.byteLength(originalCli) !== originalPin.bytes || reviewHash(originalCli) !== originalPin.sha256)
+    fail('REVIEW_SOURCE_INVALID', 'original completed probe CLI changed');
+  const append = Buffer.from(live).subarray(source.snapshot.bytes).toString('utf8');
+  const attempts = [completedReviewAttempt(raw, originalCli, source.probe_dispatch_id, source.session_id,
+    source.turn_id, checked, bundle, 'completed'), completedReviewAttempt(append, finalCli, evidence.dispatch_id,
+    source.session_id, source.state.resume.turn_id, checked, bundle, 'completed')];
+  const ledger = authority.readReviewSourceAttempts(source);
+  const originalEntry = ledger.find(attempt => attempt.dispatch_id === source.probe_dispatch_id);
+  if (!originalEntry || originalEntry.status !== 'completed' || originalEntry.receipt_store !== source.receipt_store
+      || originalEntry.receipt_sha256 !== reviewHash(require('./model-policy-internal.cjs').stableStringify(
+        authority.authenticateReaderCapacityReferences({ worktree: source.identity.worktree,
+          receipt_store: source.receipt_store, dispatch_id: source.probe_dispatch_id }).receipt)))
+    fail('REVIEW_SOURCE_INVALID', 'original successful probe is missing from the all-attempt denominator');
+  const retained = [];
+  const finalEntry = ledger.find(attempt => attempt.dispatch_id === evidence.dispatch_id);
+  if (finalEntry?.kind !== 'final' || finalEntry.status !== 'completed'
+      || finalEntry.evidence_sha256 !== source.state.resume.evidence_sha256
+      || finalEntry.source?.sha256 !== source.state.reference.sha256)
+    fail('REVIEW_SOURCE_INVALID', 'fresh original final is missing from the complete attempt denominator');
+  const finalSnapshot = finalEntry.physical?.native_snapshot;
+  if (!finalSnapshot || finalSnapshot.bytes !== Buffer.byteLength(append) || finalSnapshot.sha256 !== reviewHash(append)
+      || readReviewNativeFile(finalSnapshot.path, source.identity.worktree) !== append)
+    fail('REVIEW_SOURCE_INVALID', 'fresh final immutable physical cost snapshot changed');
+  for (const entry of ledger.filter(attempt => ![source.probe_dispatch_id, evidence.dispatch_id].includes(attempt.dispatch_id))) {
+    const pin = entry.physical?.native_snapshot;
+    if (pin) {
+      const bytes = readReviewNativeFile(pin.path, source.identity.worktree);
+      if (Buffer.byteLength(bytes) !== pin.bytes || reviewHash(bytes) !== pin.sha256)
+        fail('REVIEW_SOURCE_INVALID', 'failed physical attempt snapshot changed');
+      const cliPin = entry.physical.transcript;
+      const cli = readReviewNativeFile(cliPin.path, source.identity.worktree);
+      if (Buffer.byteLength(cli) !== cliPin.bytes || reviewHash(cli) !== cliPin.sha256)
+        fail('REVIEW_SOURCE_INVALID', 'failed original CLI snapshot changed');
+      const turn = bytes.split('\n').filter(Boolean).map(JSON.parse).find(row => row.payload?.type === 'task_started')?.payload.turn_id;
+      if (!turn) fail('REVIEW_SOURCE_INVALID', 'failed physical attempt has no original turn identity');
+      const originalBundle = entry.input_bundle;
+      if (!originalBundle) fail('REVIEW_SOURCE_INVALID', 'failed original attempt lost its immutable input identity');
+      const originalChecked = collector.verifyFileInput(originalBundle, { sealed: true, historical: true });
+      if (require('./model-policy-internal.cjs').stableStringify(completedReviewIdentity(originalChecked, originalBundle))
+          !== require('./model-policy-internal.cjs').stableStringify(entry.identity))
+        fail('REVIEW_SOURCE_INVALID', 'failed physical attempt changed its original source or roster identity');
+      let status = entry.status;
+      if (entry.kind !== 'final' && entry.status === 'completed') {
+        const originalRecord = authority.authenticateReaderCapacityReferences({ worktree: source.identity.worktree,
+          receipt_store: entry.receipt_store, dispatch_id: entry.dispatch_id });
+        const originalEvidence = originalRecord.receipt.runtime_evidence;
+        if (reviewHash(require('./model-policy-internal.cjs').stableStringify(originalRecord.receipt)) !== entry.receipt_sha256
+            || originalEvidence.native_session_evidence.sha256 !== pin.sha256
+            || originalEvidence.reader_capacity_probe?.review_dispatch_id !== entry.identity.dispatch_id)
+          fail('REVIEW_SOURCE_INVALID', 'historical completed probe differs from its original receipt');
+        const originalResult = parseCodexStream(cli).records.find(row => row.item?.type === 'agent_message')?.item.text;
+        validateCapacityApplicationRecord({ native_session_evidence: originalEvidence.native_session_evidence,
+          last_agent_message: originalResult }, originalChecked.manifest, originalRecord, originalRecord.receipt);
+        verifyCheckedFileConsumption(originalChecked, { input_bundle: originalBundle }, bytes, originalResult,
+          { chunk_bytes: originalChecked.manifest.chunk_bytes, output_tokens: 10000 });
+      }
+      if (entry.kind === 'final') {
+        const originalSource = authority.readCompletedReviewSource({ worktree: source.identity.worktree, reference: entry.source });
+        if (originalSource.identity.dispatch_id !== entry.dispatch_id || originalSource.probe_dispatch_id !== entry.original_probe_dispatch_id)
+          fail('REVIEW_SOURCE_INVALID', 'historical final lost its original source and dispatch lineage');
+        if (entry.status === 'completed') {
+          const finalRecord = require('./dispatch-boundary.cjs').createDurableRecorder(entry.receipt_store).getVerifiedRecord(entry.dispatch_id);
+          if (!finalRecord) status = 'pending';
+          else if (reviewHash(require('./model-policy-internal.cjs').stableStringify(
+            authority.authenticateReaderCapacityReferences({ worktree: source.identity.worktree,
+              receipt_store: entry.receipt_store, dispatch_id: entry.dispatch_id }).receipt.runtime_evidence)) !== entry.evidence_sha256)
+            fail('REVIEW_SOURCE_INVALID', 'historical final durable receipt changed');
+        }
+      }
+      const attempt = completedReviewAttempt(bytes, cli, entry.dispatch_id, entry.physical.native.session_id,
+        turn, originalChecked, originalBundle, status, entry.physical.native.session_id,
+        entry.kind !== 'final' && entry.status === 'completed', true);
+      delete attempt.read_commands; delete attempt.call_ids;
+      retained.push({ ...attempt, native_status: entry.native_status || entry.status, setup_costs: entry.setup_costs });
+    } else retained.push({ dispatch_id: entry.dispatch_id, status: entry.status,
+      started_at_ms: entry.started_at_ms, ended_at_ms: entry.ended_at_ms ?? null,
+      physical_costs: null, unavailable_reasons: { physical_costs: entry.physical?.reason || 'pending original attempt has no completed physical observation' },
+      setup_costs: entry.setup_costs });
+  }
+  if (attempts[1].call_ids.some(id => attempts[0].call_ids.includes(id))) fail('REVIEW_SOURCE_INVALID', 'fresh final reuses original physical call IDs');
+  for (const attempt of attempts) { delete attempt.read_commands; delete attempt.call_ids; }
+  const stable = require('./model-policy-internal.cjs').stableStringify;
+  const current = completedSourceSnapshot(source);
+  if (current.raw !== raw || current.live !== live || readReviewNativeFile(evidence.transcript.path, source.identity.worktree) !== finalCli
+      || stable(authority.readReviewSourceAttempts(source)) !== stable(ledger)
+      || stable(authority.authenticateReaderCapacityReferences({ worktree: selectors.worktree,
+        receipt_store: selectors.receipt_store, dispatch_id: selectors.dispatch_id })) !== stable(record))
+    fail('REVIEW_SOURCE_INVALID', 'original physical costs or completed receipts changed during accounting');
+  const allAttempts = [...retained, ...attempts];
+  const total = field => allAttempts.every(attempt => Number.isFinite(attempt[field]))
+    ? allAttempts.reduce((sum, attempt) => sum + attempt[field], 0) : null;
+  const costFields = { raw: 'delivered_raw_bytes', encoded: 'delivered_base64_bytes',
+    nested: 'observed_nested_bytes', outer: 'observed_outer_bytes' };
+  const physicalBytes = Object.fromEntries(Object.entries(costFields).map(([name, field]) => [name, total(field)]));
+  const unavailable = Object.fromEntries(Object.entries(physicalBytes).filter(([, value]) => value === null)
+    .map(([name]) => [name, 'at least one original failed, pending or completed attempt lacks this full physical observation']));
+  return freeze({ schema: 'shipyard.completed-source-consumption.v1', identity: source.identity,
+    probe_dispatch_id: source.probe_dispatch_id, final_dispatch_id: evidence.dispatch_id,
+    source_snapshot: source.snapshot, attempts: allAttempts, all_attempt_denominator: ledger.length,
+    successful_physical_calls: consumed.physical_calls,
+    logical_ranges: consumed.chunk_reads, original_source_call_ids: consumed.successful_call_ids,
+    original_range_ordinals: consumed.successful_range_ordinals,
+    physical_bytes: physicalBytes, unavailable_reasons: unavailable,
+    successful_source_bytes: { raw: consumed.observed_raw_bytes, encoded: consumed.encoded_bytes,
+      nested: consumed.transport_accounting.nested_output_bytes, outer: consumed.output_bytes },
+    setup_costs: { value: null, reason: 'setup outside original runtime attempt transcripts is unavailable' },
+    semantic_credit: false, current_verdict_authority: false });
+}
+
 function verifyCompletedReviewConsumption(selectors) {
+  if (selectors?.source !== undefined) return verifyCompletedSourceAccounting(selectors);
   const authority = require('./role-artifact.cjs');
   const collector = require('./codex-arch-review-context.cjs');
   const canonical = require('./model-policy-internal.cjs').stableStringify;
@@ -1666,7 +2112,7 @@ function batchPhysicalArguments(item) {
   return argumentsList;
 }
 
-function completedReviewAttempt(raw, cli, dispatchId, sessionId, turnId, checked, bundle, status, cliSessionId = sessionId) {
+function completedReviewAttempt(raw, cli, dispatchId, sessionId, turnId, checked, bundle, status, cliSessionId = sessionId, originalMeasurementCosts = false, truthfulSourceCosts = false) {
   const v3 = checked.manifest.transport?.schema === 'shipyard.native-reader-transport.v3';
   const batchReads = v3 ? checked.manifest.batches.map(batch => ({
     command: require('./codex-arch-review-context.cjs').batchCommand(bundle, batch.index),
@@ -1674,6 +2120,7 @@ function completedReviewAttempt(raw, cli, dispatchId, sessionId, turnId, checked
     frames: require('./codex-arch-review-context.cjs').batchFrames(checked.manifest, checked.manifest_bytes, checked.material, batch.index),
   })) : [];
   let attemptRawBytes = 0, attemptEncodedBytes = 0, attemptNestedBytes = 0, attemptOuterBytes = 0, nestedUnavailable = false;
+  let sourceCostUnavailable = false;
   const records = raw.split('\n').filter(Boolean).map(line => JSON.parse(line));
   const assets = [bundle.manifest_path, ...checked.manifest.assets.map(asset => asset.path)];
   const calls = new Map(), outputs = new Set(), commands = new Map();
@@ -1696,9 +2143,9 @@ function completedReviewAttempt(raw, cli, dispatchId, sessionId, turnId, checked
       physicalOperations += operations.length;
       const single = /^\s*text\s*\(\s*await\s+tools\.exec_command\s*\(([^]+)\)\s*\)\s*;?\s*$/.exec(item.input || '');
       let singleArgs; try { singleArgs = single && JSON.parse(single[1]); } catch {}
-      const exact = item.type === 'custom_tool_call' && ['exec', 'functions.exec'].includes(item.name)
-        && object(singleArgs) && operations.length === 1 && singleArgs.cmd === operations[0].cmd;
-      calls.set(item.call_id, { operations, exact });
+      const exact = operations.length === 1 && (item.type === 'function_call'
+        || (['exec', 'functions.exec'].includes(item.name) && object(singleArgs) && singleArgs.cmd === operations[0].cmd));
+      calls.set(item.call_id, { operations, exact, custom: item.type === 'custom_tool_call' });
     } else if (!v3 && item.type === 'custom_tool_call') {
       const match = /^\s*text\s*\(\s*await\s+tools\.exec_command\s*\(([^]+)\)\s*\)\s*;?\s*$/.exec(item.input || '');
       let args; try { args = match && JSON.parse(match[1]); } catch {}
@@ -1720,7 +2167,8 @@ function completedReviewAttempt(raw, cli, dispatchId, sessionId, turnId, checked
         const textOuter = Array.isArray(item.output)
           && item.output.every(block => ['text', 'input_text'].includes(block?.type) && typeof block.text === 'string')
           && /^Script completed\nWall time [0-9.]+ seconds\nOutput:\s*$/.test(item.output[0]?.text || '');
-        const completeOuter = textOuter && item.output.length === 2;
+        const completeOuter = call.custom ? item.type === 'custom_tool_call_output' && textOuter && item.output.length === 2
+          : item.type === 'function_call_output' && typeof item.output === 'string';
         const associated = textOuter && item.output.length === call.operations.length + 1
           ? item.output.slice(1).map(block => block.text)
           : item.type === 'function_call_output' && call.operations.length === 1 && typeof item.output === 'string'
@@ -1734,8 +2182,9 @@ function completedReviewAttempt(raw, cli, dispatchId, sessionId, turnId, checked
         const expected = batchReads.find(read => read.command === call.operations[0].cmd);
         if (call.exact && completeOuter && nested?.exit_code === 0 && nested.session_id === undefined
             && nested.original_token_count === undefined && nested.truncated !== true
-            && outerBytes <= bundle.reader_capacity.largest_envelope_bytes
-            && Buffer.byteLength(item.output[1].text) <= Math.min(252 * 1024, bundle.reader_capacity.largest_nested_bytes)
+            && outerBytes <= (bundle.reader_capacity?.largest_envelope_bytes || (status !== 'completed' || originalMeasurementCosts ? 252 * 1024 : 0))
+            && Buffer.byteLength(associated[0]) <= Math.min(252 * 1024,
+              bundle.reader_capacity?.largest_nested_bytes || (status !== 'completed' || originalMeasurementCosts ? 252 * 1024 : 0))
             && nested.output === expected.output) {
           successful++;
           attemptRawBytes += expected.frames.reduce((sum, frame) => sum + frame.bytes, 0);
@@ -1743,6 +2192,17 @@ function completedReviewAttempt(raw, cli, dispatchId, sessionId, turnId, checked
         } else {
           // @invariant: Grouped outputs earn no credit; observed pending operations remain separate from failed delivery.
           failed += call.operations.length - nestedResults.filter(result => object(result) && result.session_id !== undefined).length;
+          if (truthfulSourceCosts) {
+            if (nestedResults.length !== call.operations.length) sourceCostUnavailable = true;
+            call.operations.forEach((operation, index) => {
+              const output = nestedResults[index], observed = batchReads.find(read => read.command === operation.cmd);
+              if (observed && output?.exit_code === 0 && output.session_id === undefined && output.original_token_count === undefined
+                  && output.truncated !== true && output.output === observed?.output) {
+                attemptRawBytes += observed.frames.reduce((sum, frame) => sum + frame.bytes, 0);
+                attemptEncodedBytes += observed.frames.reduce((sum, frame) => sum + Buffer.byteLength(frame.base64), 0);
+              } else sourceCostUnavailable = true;
+            });
+          }
         }
       } else {
         if (!Array.isArray(item.output) || item.output.length !== 2) fail('RUNTIME_EVIDENCE_MISMATCH', 'attempt output is incomplete');
@@ -1776,14 +2236,28 @@ function completedReviewAttempt(raw, cli, dispatchId, sessionId, turnId, checked
     ? timestamps.at(-1) - timestamps[0] : null;
   if (nestedUnavailable) unavailable.observed_nested_bytes = 'original outer response does not expose one complete nested envelope';
   if (elapsed === null) unavailable.elapsed_ms = 'matching native attempt lacks complete monotonic timestamps';
+  const pending = v3 ? physicalOperations - successful - failed : calls.size - outputs.size;
+  if (truthfulSourceCosts && (sourceCostUnavailable || pending)) {
+    unavailable.delivered_raw_bytes = 'at least one original failed or pending physical output lacks complete decoded source bytes';
+    unavailable.delivered_base64_bytes = 'at least one original failed or pending physical output lacks complete encoded source bytes';
+  }
+  if (truthfulSourceCosts && pending) {
+    unavailable.observed_nested_bytes = 'an original pending physical call has no complete nested output';
+    unavailable.observed_outer_bytes = 'an original pending physical call has no complete outer output';
+  }
   return { dispatch_id: dispatchId, session_id: sessionId, cli_session_id: cliSessionId, turn_id: turnId, status,
     successful_calls: successful, failed_calls: failed,
-    pending_calls: v3 ? physicalOperations - successful - failed : calls.size - outputs.size,
+    pending_calls: pending,
     retries: [...commands.values()].reduce((sum, count) => sum + count - 1, 0), elapsed_ms: elapsed,
     read_commands: [...commands.keys()],
     call_ids: [...calls.keys()],
-    ...(v3 ? { delivered_raw_bytes: attemptRawBytes, delivered_base64_bytes: attemptEncodedBytes,
-      observed_nested_bytes: nestedUnavailable ? null : attemptNestedBytes, observed_outer_bytes: attemptOuterBytes } : {}),
+    ...(v3 ? { delivered_raw_bytes: truthfulSourceCosts && (sourceCostUnavailable || pending) ? null : attemptRawBytes,
+      delivered_base64_bytes: truthfulSourceCosts && (sourceCostUnavailable || pending) ? null : attemptEncodedBytes,
+      observed_nested_bytes: nestedUnavailable || (truthfulSourceCosts && pending) ? null : attemptNestedBytes,
+      observed_outer_bytes: truthfulSourceCosts && pending ? null : attemptOuterBytes,
+      ...(truthfulSourceCosts && (sourceCostUnavailable || pending) ? { observed_partial_raw_bytes: attemptRawBytes,
+        observed_partial_base64_bytes: attemptEncodedBytes, observed_partial_nested_bytes: attemptNestedBytes,
+        observed_partial_outer_bytes: attemptOuterBytes } : {}) } : {}),
     tokens, unavailable_reasons: unavailable };
 }
 
@@ -2010,9 +2484,11 @@ function createCodexCliLauncher(options = {}) {
     const typedRole = launchOptions.gsd_role;
     const agent = typedRole ? installedGsdAgent(typedRole, environment) : null;
     const fileInput = launchOptions.input_prepared;
-    const capacityProbe = readerCapacityProbes.get(launchOptions.reader_capacity_probe);
+    const probeState = readerCapacityProbes.get(launchOptions.reader_capacity_probe);
+    const capacityProbe = probeState?.prepared;
     if (launchOptions.reader_capacity_probe && (!capacityProbe || capacityProbe !== fileInput || typedRole
-        || launchOptions.review_progress || launchOptions.resume_review))
+        || launchOptions.review_progress || launchOptions.resume_review
+        || probeState.association.probe_dispatch_id !== launchOptions.dispatch_id))
       fail('READER_CAPACITY_UNSUPPORTED', 'capacity probe lacks original host candidate custody');
     const resumeReview = launchOptions.resume_review ? reviewResumptions.get(launchOptions.resume_review) : null;
     if (launchOptions.resume_review && !resumeReview) fail('REVIEW_PROGRESS_INVALID', 'serialized continuation has no host claim');
@@ -2032,7 +2508,8 @@ function createCodexCliLauncher(options = {}) {
             ? installedGsdAgent(resumeReview.progress.original_launch.agent.role, environment).instructions : generatedInstructions(content))
             || fileInput.manifest.transport.candidate.model !== model || fileInput.manifest.transport.candidate.effort !== effort))
         fail('READER_CAPACITY_UNSUPPORTED', 'review changed its measured instructions or selection');
-      const checked = collector.verifyFileInput(fileInput, { association: { dispatch_id: resumeReview ? resumeReview.progress.identity.dispatch_id : launchOptions.dispatch_id,
+      const checked = collector.verifyFileInput(fileInput, { association: { dispatch_id: capacityProbe ? probeState.association.review_dispatch_id
+        : resumeReview ? resumeReview.progress.identity.dispatch_id : launchOptions.dispatch_id,
         run_id: scope.run_id, ticket: scope.ticket, phase: scope.phase } });
       if (checked.manifest.snapshot.worktree !== fs.realpathSync(scope.worktree))
         fail('SCOPE_MISMATCH', 'prepared review input belongs to a different physical worktree');
@@ -2126,6 +2603,14 @@ function createCodexCliLauncher(options = {}) {
         agent_file_digest: agent?.sha256 || launchOptions.agent_file_digest || null,
         ...(agent ? { agent, task } : {}), runtime_launch: runtimeLaunch }, env, launchOptions.onReviewProgress, () => child?.pid) : null;
     let child;
+    if (resumeReview?.completedSource) {
+      require('./role-artifact.cjs').beginCompletedSourceLaunch(reviewObservation({ worktree: scope.worktree,
+        reference: resumeReview.reference }, () => {
+        require('./codex-arch-review-context.cjs').verifyFileInput(fileInput);
+        if (completedSourceSnapshot(resumeReview.progress).live !== completedSourceSnapshot(resumeReview.progress).raw)
+          fail('REVIEW_SOURCE_INVALID', 'source changed immediately before original final launch');
+      }));
+    }
     try {
       child = spawnImpl(executable, args, {
         cwd: scope.worktree,
@@ -2179,7 +2664,7 @@ function createCodexCliLauncher(options = {}) {
       }
     };
     const inspectSessionRecords = (chunk, flush = false) => {
-      if (typeof launchOptions.onSessionStarted !== 'function' && !observeReview && !resumeReview) return;
+      if (typeof launchOptions.onSessionStarted !== 'function' && !observeReview && !resumeReview && !capacityProbe) return;
       sessionLineBuffer += chunk.toString('utf8');
       const lines = sessionLineBuffer.split(/\r?\n/);
       sessionLineBuffer = lines.pop() || '';
@@ -2227,7 +2712,8 @@ function createCodexCliLauncher(options = {}) {
       stderr.push(bytes);
     });
     try {
-      const input = agent ? taskRelayInput(agent.role, model, effort, task) : launchPrompt(prompt, content);
+      const input = agent ? taskRelayInput(agent.role, model, effort, task)
+        : launchPrompt(prompt, resumeReview?.completedSource ? undefined : content);
       child.stdin.write(input);
       child.stdin.end();
     } catch (error) {
@@ -2255,8 +2741,41 @@ function createCodexCliLauncher(options = {}) {
     if ((observeReview || resumeReview || capacityProbe) && announcedSessionId) {
       const historical = writeTranscript(transcriptDir, transcriptScope, announcedSessionId, rawStdout);
       if (observeReview) observeReview.finish(exit, historical);
+      if (capacityProbe) {
+        const physical = { exit_code: exit.code ?? null, signal: exit.signal ?? null, transcript: historical,
+          elapsed_ms: Date.now() - startedAt, native: null, unavailable_reasons: {} };
+        try {
+          const home = env.CODEX_HOME || path.join(os.homedir(), '.codex');
+          const candidates = nativeSessionCandidates(path.join(home, 'sessions'), announcedSessionId, new Date());
+          if (candidates.length !== 1) throw new Error('native session is missing or ambiguous');
+          const raw = readReviewNativeFile(fs.realpathSync(candidates[0]), scope.worktree);
+          physical.native_raw = raw;
+          physical.native = { session_id: announcedSessionId, bytes: Buffer.byteLength(raw), sha256: reviewHash(raw) };
+        } catch (error) { physical.unavailable_reasons.native = error.message; }
+        probeState.physicalAttempt = physical;
+      }
     }
     if (sessionCallbackError) throw sessionCallbackError;
+    if (resumeReview?.completedSource && (exit.error || exit.code !== 0)) {
+      const raw = readReviewNativeFile(resumeReview.progress.native_file, scope.worktree);
+      const append = Buffer.from(raw).subarray(resumeReview.progress.snapshot.bytes).toString('utf8');
+      let nativeStatus = 'unknown';
+      try {
+        const events = append.split('\n').filter(Boolean).map(JSON.parse)
+          .filter(row => row.type === 'event_msg').map(row => row.payload?.type);
+        if (events.includes('task_complete')) nativeStatus = 'completed';
+        else if (events.includes('task_aborted')) nativeStatus = 'interrupted';
+        else if (events.includes('task_started')) nativeStatus = 'incomplete';
+      } catch {}
+      require('./role-artifact.cjs').retainCompletedSourceFailure(reviewObservation({ worktree: scope.worktree,
+        reference: resumeReview.reference, native_raw: raw, native_status: nativeStatus,
+        exit: { code: exit.code ?? null, signal: exit.signal ?? null, error: exit.error?.message || null,
+          ended_at_ms: Date.now(), transcript: writeTranscript(transcriptDir, transcriptScope, announcedSessionId || resumeReview.progress.session_id, rawStdout) },
+        cause: 'original final native process did not complete successfully' }, () => {
+        if (readReviewNativeFile(resumeReview.progress.native_file, scope.worktree) !== raw)
+          fail('REVIEW_SOURCE_INVALID', 'failed original final changed during physical retention');
+      }));
+    }
     if (exit.error) fail('RUNTIME_UNAVAILABLE', 'Codex process failed: ' + exit.error.message);
     if (exit.code !== 0) {
       fail('RUNTIME_UNAVAILABLE', 'Codex process exited ' + (exit.code === null ? 'without a code' : exit.code), {
@@ -2288,7 +2807,9 @@ function createCodexCliLauncher(options = {}) {
         const nativeEvidence = freeze({ schema: 'shipyard.codex-native-session-evidence.v1', version: 1,
           ...native, bytes: Buffer.byteLength(raw), file: path.basename(resumeReview.progress.native_file) });
         validateReviewNative(raw, parsed.session_id, { model, effort, sandbox_mode: sandbox, worktree: scope.worktree });
-        resumedConsumption = verifyResumedReview(resumeReview.progress, fileInput, raw, parsed.records[cliFinal]?.item.text);
+        resumedConsumption = resumeReview.completedSource
+          ? verifyCompletedSourceTurn(resumeReview.progress, fileInput, raw, parsed.records[cliFinal]?.item.text)
+          : verifyResumedReview(resumeReview.progress, fileInput, raw, parsed.records[cliFinal]?.item.text);
         return { native_session_evidence: nativeEvidence, last_agent_message: parsed.records[cliFinal]?.item.text };
       })() : await verifyCompletedNativeLaunch({
         session_id: parsed.session_id, selection: { model, effort }, agent, env,
@@ -2306,7 +2827,7 @@ function createCodexCliLauncher(options = {}) {
           : agent && verified.native_child_evidence
           ? readReviewNativeFile(originalReviewFile(verified.native_child_evidence.session_id, env, scope.worktree), scope.worktree)
           : readNativeParentRaw(parsed.session_id, nativeEvidence, env);
-        const consumed = resumedConsumption || verifyFileConsumption(fileInput, semanticRaw, launchOptions.dispatch_id,
+        const consumed = resumedConsumption || verifyFileConsumption(fileInput, semanticRaw, capacityProbe ? probeState.association.review_dispatch_id : launchOptions.dispatch_id,
           agent ? verified.last_agent_message : resultText,
           capacityProbe ? { chunk_bytes: fileInput.manifest.chunk_bytes, output_tokens: 10000 } : null);
         let result;
@@ -2323,7 +2844,6 @@ function createCodexCliLauncher(options = {}) {
       }
 
 
-      if (capacityProbe) return measureReaderCapacity(verified, fileInput);
       const selection = observedSelection(parsed, model, effort, {
         model: args[args.indexOf('--model') + 1],
         effort: (args.find((value) => value.startsWith('model_reasoning_effort=')) || '').match(/^model_reasoning_effort="([^"]+)"$/)?.[1],
@@ -2348,6 +2868,7 @@ function createCodexCliLauncher(options = {}) {
         phase: scope.phase,
         worktree: scope.worktree,
         dispatch_id: launchOptions.dispatch_id,
+        ...(capacityProbe ? { reader_capacity_probe: probeState.association } : {}),
         session_id: parsed.session_id,
         process_id: Number.isInteger(child.pid) ? child.pid : undefined,
         command_digest: commandDigest,
@@ -2364,7 +2885,7 @@ function createCodexCliLauncher(options = {}) {
         observed_model: selection.model,
         observed_effort: selection.effort,
         native_session_evidence: nativeEvidence,
-        ...(resumeReview ? { review_continuation: { schema: 'shipyard.review-continuation.v1',
+        ...(resumeReview && !resumeReview.completedSource ? { review_continuation: { schema: 'shipyard.review-continuation.v1',
           progress: resumeReview.reference, original_dispatch_id: resumeReview.progress.identity.dispatch_id,
           original_launch: resumeReview.progress.original_launch.runtime_launch,
           original_exit: resumeReview.progress.state.original_exit,
@@ -2373,6 +2894,9 @@ function createCodexCliLauncher(options = {}) {
           fresh_turn_id: resumedConsumption.turn_id, semantic_context: 'exact-native-session',
           inherited_ranges: resumeReview.progress.completed_ranges,
           newly_completed_ranges: resumedConsumption.chunk_reads - resumeReview.progress.completed_ranges } } : {}),
+        ...(resumeReview?.completedSource ? { completed_source: { schema: 'shipyard.completed-source-final.v1',
+          source: resumeReview.reference, original_dispatch_id: resumeReview.progress.probe_dispatch_id,
+          fresh_turn_id: resumedConsumption.turn_id, semantic_credit: false, new_physical_calls: 0 } } : {}),
         ...(typedEvidence ? { native_child_evidence: typedEvidence } : {}),
         ...(fileTransport ? { input_transport: 'host-files', input_bundle: fileInput.input_bundle,
           input_accounting: fileInput.manifest.accounting,
@@ -2381,6 +2905,12 @@ function createCodexCliLauncher(options = {}) {
             ...(fileInput.manifest.transport?.schema === 'shipyard.native-reader-transport.v3' ? {
               schema: 'shipyard.native-file-consumption.v3', physical_calls: fileInput.manifest.batches.length,
               logical_ranges: fileInput.manifest.ranges.length, profile_sha256: fileInput.manifest.transport.profile_sha256 } : {}),
+            ...(resumeReview?.completedSource ? {
+              physical_call_provenance: 'original-completed-source',
+              source_dispatch_id: resumeReview.progress.probe_dispatch_id,
+              original_call_ids: resumedConsumption.successful_call_ids,
+              original_range_ordinals: resumedConsumption.successful_range_ordinals,
+              current_turn_physical_calls: 0 } : {}),
             chunk_reads: require('./codex-arch-review-context.cjs').verifyFileInput(fileInput).chunk_reads } } : {}),
         stream_evidence: {
           format: STREAM_FORMAT,
@@ -2419,7 +2949,9 @@ function createCodexCliLauncher(options = {}) {
           const raw = readReviewNativeFile(resumeReview.progress.native_file, scope.worktree);
           if (reviewHash(raw) !== nativeEvidence.sha256) fail('REVIEW_RESTART_REQUIRED', 'fresh final changed before protected admission');
         });
-        require('./role-artifact.cjs').completeReviewContinuation(token);
+        const authority = require('./role-artifact.cjs');
+        if (resumeReview.completedSource) authority.completeCompletedReviewSource(token);
+        else authority.completeReviewContinuation(token);
       }
       if (typeof launchOptions.onNativeCompleted === 'function') {
         launchOptions.onNativeCompleted(freeze({
@@ -2450,7 +2982,12 @@ function createCodexCliLauncher(options = {}) {
           spawn_evidence: verified.spawn_evidence,
         }));
       }
-      return freeze(evidence);
+      const completedEvidence = freeze(evidence);
+      if (capacityProbe) {
+        probeState.verified = verified;
+        probeState.evidence = completedEvidence;
+      }
+      return completedEvidence;
     } catch (error) {
       if (error && error.name === 'CodexRuntimeHostError') throw error;
       fail('RUNTIME_EVIDENCE_INVALID', error.message);
@@ -2500,7 +3037,8 @@ function createCodexRuntimeHost(options = {}) {
     spawn: options.spawn,
     env: options.env,
     capabilities,
-    transcriptDir: options.transcriptDir || path.join(scope.worktree, '.planning', 'graph', 'transcripts', 'codex'),
+    transcriptDir: options.transcriptDir || path.join(options.env?.CODEX_HOME || process.env.CODEX_HOME
+      || path.join(os.homedir(), '.codex'), 'shipyard', 'transcripts', reviewHash(scope.worktree)),
     ephemeral: options.ephemeral,
     approveForMe: options.approveForMe,
     additionalProtectedPaths: options.additionalProtectedPaths,
@@ -2621,8 +3159,76 @@ function createCodexRuntimeHost(options = {}) {
         input_prepared: prepared, input_bundle: prepared.input_bundle, prompt });
     } finally { reviewResumptions.delete(token); }
   };
-  const measureBatchReaderCapacity = async (selection, prepared) => {
+  const resumeCompletedSource = async (selection, context = {}) => {
     assertOwner();
+    validateContext(context);
+    const allowed = new Set(['source', 'dispatch_id', 'role', 'run_id', 'runtime', 'provider', 'ticket', 'phase', 'subject_kind', 'worktreePath',
+      'input_prepared', 'input_transport', 'input_bundle', 'prompt', 'onProcessSpawned', 'onSessionStarted', 'onNativeCompleted', 'onTranscriptWritten', 'onCompleted']);
+    if (Object.keys(context).some(key => !allowed.has(key))) fail('REVIEW_SOURCE_INVALID', 'completed source accepts original selectors and callbacks only');
+    const authority = require('./role-artifact.cjs'), collector = require('./codex-arch-review-context.cjs');
+    const source = authority.readCompletedReviewSource({ worktree: scope.worktree, reference: context.source });
+    if ((context.role !== undefined && context.role !== source.identity.role) || context.dispatch_id !== source.identity.dispatch_id
+        || ['run_id', 'ticket', 'phase', 'worktree'].some(key => source.identity[key] !== scope[key]))
+      fail('REVIEW_SOURCE_CLAIMED', 'final requires its unused exact original source reservation');
+    if (source.state.resume) validateCompletedSourceClaimRecovery(source);
+    const prepared = context.input_prepared || collector.restoreCompletedSourceInput(source);
+    const checked = collector.verifyFileInput(prepared);
+    if (context.subject_kind !== undefined && context.subject_kind !== readerSubjectKind(checked.manifest))
+      fail('REVIEW_SOURCE_INVALID', 'final changed its authenticated subject kind');
+    const original = source.original_launch;
+    if (selection.model !== original.model || (selection.effort || selection.reasoning_effort) !== original.effort
+        || selection.sandbox_mode !== 'read-only' || selection.agent_file !== original.agent_file
+        || selection.agent_file_digest !== original.agent_file_digest || reviewHash(selection.agent_file_content || '') !== original.agent_file_digest
+        || require('./model-policy-internal.cjs').stableStringify(completedReviewIdentity(checked, prepared.input_bundle))
+          !== require('./model-policy-internal.cjs').stableStringify(source.identity))
+      fail('REVIEW_SOURCE_INVALID', 'final changed role, instructions, model, profile or subject');
+    const { raw, live } = completedSourceSnapshot(source);
+    if (live !== raw || !raw.endsWith('\n')) fail('REVIEW_SOURCE_INVALID', 'original reviewer has intervening or unfinished turns');
+    verifyBatchCapacityReference(prepared, checked, raw);
+    const claim = reviewObservation({ worktree: scope.worktree, reference: context.source, dispatch_id: context.dispatch_id,
+      native_bytes: Buffer.byteLength(raw), native_sha256: reviewHash(raw) }, () => {
+      collector.verifyFileInput(prepared);
+      if (completedSourceSnapshot(source).live !== raw) fail('REVIEW_SOURCE_INVALID', 'source changed before atomic claim');
+    });
+    const claimed = authority.claimCompletedReviewSource(claim);
+    const token = Object.freeze({});
+    completedSourceInputs.set(prepared, claimed);
+    const measured = fileCapacityForSource(prepared);
+    if (measured) { measured.completedSource = claimed; }
+    const prompt = completedSourcePrompt(claimed, prepared, checked);
+    reviewResumptions.set(token, { progress: claimed, reference: context.source, prepared, prompt, completedSource: true });
+    try {
+      const { source: _source, ...launchContext } = context;
+      return await launch(selection, { ...launchContext, resume_review: token, input_prepared: prepared,
+        input_transport: 'host-files', input_bundle: prepared.input_bundle, prompt });
+    } finally { reviewResumptions.delete(token); }
+  };
+  const reserveCompletedSourceCandidate = (prepared) => {
+    assertOwner();
+    const collector = require('./codex-arch-review-context.cjs');
+    const identity = collector.reviewProgressIdentity(prepared);
+    if (!collector.isPreparedFileInput(prepared) || prepared.manifest.transport?.schema !== 'shipyard.native-reader-transport.v3'
+        || ['worktree', 'run_id', 'ticket', 'phase'].some(key => identity[key] !== scope[key])
+        || !require('./dispatch-boundary.cjs').isDurableRecorder(recorder))
+      fail('REVIEW_SOURCE_REQUIRED', 'source candidate requires original private preparation and recorder');
+    const hash = reviewHash(require('./model-policy-internal.cjs').stableStringify(identity));
+    const previous = completedSourceCandidates.get(identity.dispatch_id);
+    if (previous) {
+      if (previous.identity_sha256 !== hash || previous.recorder !== recorder.storeDir)
+        fail('REVIEW_SOURCE_INVALID', 'pre-measurement candidate reservation changed');
+      const reservation = recorder.getReservation(identity.dispatch_id);
+      if (!reservation || reservation.recorded || reservation.reserved_at !== previous.reserved_at || previous.measured)
+        fail('REVIEW_SOURCE_CLAIMED', 'original candidate reservation was consumed or already measured');
+      return;
+    }
+    if (recorder.reserve(identity.dispatch_id).reserved !== true)
+      fail('REVIEW_SOURCE_CLAIMED', 'final candidate dispatch was already reserved');
+    completedSourceCandidates.set(identity.dispatch_id, { identity_sha256: hash, recorder: recorder.storeDir,
+      reserved_at: recorder.getReservation(identity.dispatch_id).reserved_at, measured: false });
+  };
+  const measureBatchReaderCapacity = async (selection, prepared, callbacks = {}) => {
+    assertOwner();
+    if (!object(selection)) fail('READER_CAPACITY_UNSUPPORTED', 'probe requires an explicit original selection');
     const collector = require('./codex-arch-review-context.cjs');
     const checked = collector.verifyFileInput(prepared);
     if (!collector.isPreparedFileInput(prepared) || (selection.sandbox_mode !== undefined && selection.sandbox_mode !== 'read-only')
@@ -2630,14 +3236,84 @@ function createCodexRuntimeHost(options = {}) {
         || checked.manifest.snapshot.worktree !== scope.worktree || checked.manifest.run_id !== scope.run_id
         || checked.manifest.ticket !== scope.ticket || checked.manifest.phase !== scope.phase)
       fail('READER_CAPACITY_UNSUPPORTED', 'probe requires the exact private host candidate and scope');
+    if (!require('./dispatch-boundary.cjs').isDurableRecorder(recorder))
+      fail('READER_CAPACITY_UNSUPPORTED', 'probe requires the original durable dispatch recorder');
+    const callbackNames = ['onProcessSpawned', 'onSessionStarted', 'onNativeCompleted', 'onTranscriptWritten', 'onCompleted'];
+    if (!object(callbacks) || Object.keys(callbacks).some(key => !callbackNames.includes(key) || typeof callbacks[key] !== 'function'))
+      fail('INVALID_INPUT', 'capacity probe accepts only host completion callbacks');
     const token = Object.freeze({});
-    readerCapacityProbes.set(token, prepared);
+    const probeState = { prepared, association: capacityProbeAssociation(checked.manifest, 'capacity-probe-' + crypto.randomUUID()) };
+    const tracked = completedSourceCandidates.has(checked.manifest.dispatch_id);
+    if (tracked && completedSourceCandidates.get(checked.manifest.dispatch_id).measured)
+      fail('REVIEW_SOURCE_CLAIMED', 'one original successful probe already measured this final candidate');
+    const identity = tracked ? collector.reviewProgressIdentity(prepared) : null;
+    const attemptStart = Date.now();
+    let retainedCompletion = false;
+    const retain = (status, more = {}) => {
+      if (!tracked) return;
+      require('./role-artifact.cjs').recordReviewSourceAttempt(reviewObservation({ identity,
+        attempt: { dispatch_id: probeState.association.probe_dispatch_id, status, started_at_ms: attemptStart,
+          input_bundle: prepared.input_bundle,
+          setup_costs: { value: null, reason: 'external setup not present in original native transcript' }, ...more } },
+      () => { collector.verifyFileInput(prepared); }));
+    };
+    retain('pending', { native_status: 'pending', authority_status: 'pending' });
+    readerCapacityProbes.set(token, probeState);
     try {
-      const capacity = await launcher(prepared.prompt, { ...selection, reader_capacity_probe: token,
-        dispatch_id: checked.manifest.dispatch_id, input_transport: 'host-files', input_bundle: prepared.input_bundle,
-        input_prepared: prepared, sandbox_mode: selection.sandbox_mode || 'read-only' });
+      const boundaryModule = require('./dispatch-boundary.cjs');
+      const adapter = require('./codex-dispatch-adapter.cjs').createCodexDispatchAdapter({
+        agentsDir: options.agentDir || path.join(options.env?.CODEX_HOME || process.env.CODEX_HOME || path.join(os.homedir(), '.codex'), 'agents'),
+        agentManifest: options.agentManifest, capabilities,
+        host: { requireRuntimeEvidence: true, async launchStatic(applied, context) {
+          assertOwner();
+          return launcher(prepared.prompt, { ...applied, ...callbacks, reader_capacity_probe: token,
+            dispatch_id: context.dispatch_id, input_transport: 'host-files', input_bundle: prepared.input_bundle,
+            input_prepared: prepared });
+        } },
+      });
+      const boundary = boundaryModule.createDispatchBoundary({ adapters: { codex: adapter }, recorder,
+        handoff: options.handoff, cwd: scope.worktree });
+      const result = await boundary.dispatch({ runtime: 'codex', role: checked.manifest.role,
+        signals: selection.signals || {}, dispatch_id: probeState.association.probe_dispatch_id,
+        model: selection.model, effort: selection.effort || selection.reasoning_effort },
+      { ticket: scope.ticket, phase: scope.phase, subject_kind: readerSubjectKind(checked.manifest),
+        run_id: scope.run_id, worktree: scope.worktree });
       assertOwner();
-      return capacity;
+      const receipt = result.receipt;
+      const evidence = probeState.evidence;
+      const stable = require('./model-policy-internal.cjs').stableStringify;
+      if (!probeState.verified || !evidence
+          || receipt.launch_id !== evidence.launch_id
+          || stable(receipt.runtime_evidence) !== stable(evidence.runtime_evidence))
+        fail('READER_CAPACITY_UNSUPPORTED', 'probe lacks matching original completion and authenticated application receipt');
+      try {
+        const capacity = measureReaderCapacity(probeState.verified, prepared, { recorder, receipt });
+        retain('completed', { native_status: 'completed', authority_status: 'recorded', ended_at_ms: Date.now(), receipt_store: recorder.storeDir,
+          receipt_sha256: reviewHash(stable(receipt)), native: receipt.runtime_evidence.native_session_evidence,
+          transcript: receipt.runtime_evidence.transcript, physical: probeState.physicalAttempt });
+        retainedCompletion = true;
+        if (tracked) completedSourceCandidates.get(checked.manifest.dispatch_id).measured = true;
+        return capacity;
+      }
+      catch (error) { recordedCapacityLaunches.delete(probeState.verified); throw error; }
+    } catch (error) {
+      if (!retainedCompletion) {
+        let nativeStatus = 'unknown', originalRecord;
+        try {
+          const events = probeState.physicalAttempt?.native_raw?.split('\n').filter(Boolean).map(JSON.parse)
+            .filter(row => row.type === 'event_msg').map(row => row.payload?.type) || [];
+          if (events.includes('task_complete')) nativeStatus = 'completed';
+          else if (events.includes('task_aborted')) nativeStatus = 'interrupted';
+          else if (events.includes('task_started')) nativeStatus = 'incomplete';
+        } catch {}
+        try { originalRecord = recorder.getVerifiedRecord(probeState.association.probe_dispatch_id); } catch {}
+        retain('failed', { native_status: nativeStatus, authority_status: originalRecord ? 'recorded' : 'pending',
+          ...(originalRecord ? { receipt_store: recorder.storeDir,
+            receipt_sha256: reviewHash(require('./model-policy-internal.cjs').stableStringify(originalRecord.receipt)) } : {}),
+          ended_at_ms: Date.now(), failure: { code: error.code || 'UNKNOWN', message: error.message },
+          physical: probeState.physicalAttempt || { value: null, reason: 'native process did not provide complete physical evidence' } });
+      }
+      throw error;
     } finally { readerCapacityProbes.delete(token); }
   };
   const host = {
@@ -2654,6 +3330,8 @@ function createCodexRuntimeHost(options = {}) {
     launch: (selection, context) => launch(selection, context),
     launchStatic: (selection, context) => launch(selection, context),
     resumeReview,
+    resumeCompletedSource,
+    reserveCompletedSourceCandidate,
     measureBatchReaderCapacity,
     launchTypedGsd: (selection, context) => launch(selection, context),
   };
@@ -2728,6 +3406,11 @@ module.exports = Object.freeze({
     verifyFileConsumption(prepared, raw, progress.identity.dispatch_id, null, null, { turn_id: progress.turn_id });
     return verifyProtectedReviewPrefix(progress, prepared, raw);
   },
+  authenticateCompletedSourceInput,
+  validateCompletedSourceRestoration,
+  validateCompletedSourceClaimRecovery,
+  prepareCompletedSource,
+  validateCompletedSourceConsumption,
   reviewObservationData,
   freezeReviewProgress: freeze,
   verifyCompletedNativeLaunch,
