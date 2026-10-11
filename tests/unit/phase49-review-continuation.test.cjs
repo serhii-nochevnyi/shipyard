@@ -891,6 +891,7 @@ for (const [name, mutate] of [
 async function completedSourceFixture(role, cold, mutation, action, failFirst = false, claimRace = false, failedEnvelope = false) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'completed-review-source-')));
   const previousHome = os.homedir;
+  const originalRename = fs.renameSync;
   os.homedir = () => root;
   try {
     const worktree = path.join(root, 'worktree'); fs.mkdirSync(worktree);
@@ -935,6 +936,9 @@ async function completedSourceFixture(role, cold, mutation, action, failFirst = 
     fs.mkdirSync(directory, { recursive: true });
     const native = path.join(directory, session + '.jsonl');
     let launches = 0, probeCallbacks = 0, finalCallbacks = 0, finalPrompt;
+    let nativeCallbacks = 0, transcriptCallbacks = 0, recoveryStarted = false;
+    const recovery = mutation?.startsWith('recover-');
+    const blockedRecord = path.join(recorder.storeDir, 'record-' + sha(dispatchId) + '.json');
     const concurrentClaims = [];
     const echo = () => ({ input_manifest_sha256: input.input_bundle.manifest_sha256,
       input_material_bytes: input.input_bundle.total_bytes, input_asset_count: input.input_bundle.asset_count,
@@ -1065,15 +1069,115 @@ async function completedSourceFixture(role, cold, mutation, action, failFirst = 
     if (mutation === 'base') execFileSync('git', ['-C', worktree, 'update-ref', '-d', 'refs/heads/review-base']);
 
     const adapter = adapterModule.createCodexDispatchAdapter({ agentsDir: agents, agentManifest, capabilities,
-      host: { requireRuntimeEvidence: true, launchStatic(applied, context) {
-        return host.resumeCompletedSource(applied, { source, dispatch_id: context.dispatch_id,
+      host: { requireRuntimeEvidence: true, async launchStatic(applied, context) {
+        if (mutation === 'base-after-claim') fs.renameSync = (from, to) => {
+          originalRename(from, to);
+          if (path.basename(to).startsWith('review-tip-')) {
+            const tip = JSON.parse(fs.readFileSync(to)).payload;
+            if (tip.schema === 'shipyard.completed-review-source-tip.v1' && tip.resume?.status === 'claimed' && !tip.resume.launch_started) {
+              fs.renameSync = originalRename;
+              execFileSync('git', ['-C', worktree, 'update-ref', '-d', 'refs/heads/review-base']);
+            }
+          }
+        };
+        const application = await host.resumeCompletedSource(applied, { source, dispatch_id: context.dispatch_id,
           ...(cold ? {} : { input_prepared: input }), role,
           ...(mutation === 'subject-kind' ? { subject_kind: 'phase' } : {}),
           ...(mutation === 'process-hook-throw' ? { onProcessSpawned() { throw new Error('Original process hook failed'); } } : {}),
-          onCompleted(value) { finalCallbacks++; assert.equal(recorder.getVerifiedRecord(dispatchId), null); assert.equal(value.session_id, session); } });
+          onNativeCompleted() {
+            nativeCallbacks++;
+            if (mutation === 'recover-inflight') concurrentClaims.push(assert.rejects(() => host.resumeCompletedSource(applied, {
+              source, dispatch_id: dispatchId, role, input_prepared: input }), { code: 'REVIEW_SOURCE_CLAIMED' }));
+            if (mutation === 'recover-host-exit') {
+              fs.writeFileSync(1, JSON.stringify({ root, worktree, scope, home, agents, agentManifest, source, dispatchId, role, capabilities }));
+              process.exit(0);
+            }
+            if (recovery && !recoveryStarted && mutation === 'recover-native-callback') throw new Error('Original native completion callback failed');
+          },
+          onTranscriptWritten() {
+            transcriptCallbacks++;
+            if (recovery && !recoveryStarted && mutation === 'recover-transcript-callback') throw new Error('Original transcript callback failed');
+          },
+          onCompleted(value) {
+            finalCallbacks++; assert.equal(recorder.getVerifiedRecord(dispatchId), null); assert.equal(value.session_id, session);
+            if (recovery && !recoveryStarted && mutation !== 'recover-record-gap') throw new Error('Original final completion callback failed');
+          } });
+        if (mutation === 'recover-inflight' && recoveryStarted) concurrentClaims.push(assert.rejects(() => host.resumeCompletedSource(applied, {
+          source, dispatch_id: dispatchId, role, input_prepared: input }), { code: 'REVIEW_SOURCE_CLAIMED' }));
+        if (mutation === 'recover-record-gap' && !recoveryStarted) fs.mkdirSync(blockedRecord);
+        return application;
       } } });
-    const boundary = boundaryModule.createDispatchBoundary({ adapters: { codex: adapter }, recorder, recoverReserved: true });
+    let boundary = boundaryModule.createDispatchBoundary({ adapters: { codex: adapter }, recorder, recoverReserved: true });
     const launch = async () => boundary.dispatch({ runtime: 'codex', role, signals: {}, dispatch_id: dispatchId }, { ticket: scope.ticket });
+    if (recovery) {
+      await assert.rejects(launch, { code: mutation === 'recover-record-gap' ? 'RECORD_FAILED' : 'RUNTIME_EVIDENCE_INVALID' });
+      if (mutation === 'recover-record-gap') {
+        fs.rmdirSync(blockedRecord);
+        host.retainCompletedSourceRecordingFailure(source, { code: 'RECORD_FAILED', message: 'Original durable final receipt write failed' });
+      }
+      assert.equal(recorder.getVerifiedRecord(dispatchId), null);
+      const retained = authority.readCompletedReviewSource({ worktree, reference: source });
+      assert.equal(retained.state.resume.status, 'completed');
+      assert.equal(retained.state.resume.launch_started, true);
+      await Promise.all(concurrentClaims);
+      assert.deepEqual(authority.readReviewSourceAttempts(retained).map(attempt => attempt.status), ['completed', 'completed']);
+      const originalApplication = retained.state.resume.completion.application;
+      const originalCosts = stable(authority.readReviewSourceAttempts(retained));
+      const callbackCounts = [nativeCallbacks, transcriptCallbacks, finalCallbacks];
+      const completeNative = fs.readFileSync(native);
+      const cli = retained.state.resume.completion.application.runtime_evidence.transcript;
+      if (mutation === 'recover-prefix') fs.writeFileSync(native, '{}\n');
+      if (mutation === 'recover-truncated') {
+        const truncated = completeNative.subarray(0, completeNative.length - 10);
+        assert.ok(originalRaw.length > 0 && truncated.length > originalRaw.length);
+        assert.deepEqual(truncated.subarray(0, originalRaw.length), originalRaw,
+          'truncation preserves the complete genuine measured source prefix');
+        fs.writeFileSync(native, truncated);
+      }
+      if (mutation === 'recover-missing-cli') fs.unlinkSync(cli.path);
+      if (mutation === 'recover-foreign-cli') fs.writeFileSync(cli.path, '{}\n');
+      if (mutation === 'recover-base') execFileSync('git', ['-C', worktree, 'update-ref', '-d', 'refs/heads/review-base']);
+      if (mutation === 'recover-source') fs.writeFileSync(path.join(worktree, 'source.txt'), 'foreign recovery source\n');
+      if (mutation === 'recover-agent') fs.appendFileSync(path.join(agents, selected.agent_file), '\n# foreign recovery instructions\n');
+      if (mutation === 'recover-missing-custody') fs.unlinkSync(retained.state.resume.completion.cli_snapshot.path);
+      recoveryStarted = true;
+      if (cold) host = runtime.createCodexRuntimeHost(hostOptions);
+      boundary = boundaryModule.createDispatchBoundary({ adapters: { codex: adapter }, recorder, recoverReserved: true });
+      const negative = ['recover-prefix', 'recover-truncated', 'recover-missing-cli', 'recover-foreign-cli', 'recover-base', 'recover-source', 'recover-agent', 'recover-missing-custody'].includes(mutation);
+      if (negative) {
+        if (mutation === 'recover-truncated' && !cold) {
+          await assert.rejects(launch, { code: 'RUNTIME_EVIDENCE_INVALID',
+            message: /^codex-runtime-host: Codex native transcript contains invalid JSON: / });
+          assert.deepEqual(fs.readFileSync(native), completeNative.subarray(0, completeNative.length - 10));
+          const unchanged = authority.readCompletedReviewSource({ worktree, reference: source });
+          assert.equal(stable(unchanged.state), stable(retained.state), 'parser refusal preserves original completed source state');
+          assert.equal(stable(authority.readReviewSourceAttempts(unchanged)), originalCosts);
+        } else await assert.rejects(launch, error => ['REVIEW_SOURCE_INVALID', 'REVIEW_RESTART_REQUIRED', 'INPUT_BUNDLE_CHANGED', 'STALE_CONTEXT', 'STALE_GENERATED_AGENT', 'ENOENT'].includes(error.code)
+          || /changed|truncated|base|git.*failed/i.test(error.message));
+        assert.equal(recorder.getVerifiedRecord(dispatchId), null);
+        assert.equal(launches, 2);
+        assert.deepEqual([nativeCallbacks, transcriptCallbacks, finalCallbacks], callbackCounts);
+        return;
+      }
+      const recovered = await launch();
+      await Promise.all(concurrentClaims);
+      assert.equal(stable(recovered.receipt.runtime_evidence), stable(originalApplication.runtime_evidence));
+      assert.equal(recovered.receipt.launch_id, originalApplication.launch_id);
+      assert.equal(recovered.receipt.agent_file_digest, originalApplication.agent_file_digest);
+      assert.equal(stable(authority.readReviewSourceAttempts(authority.readCompletedReviewSource({ worktree, reference: source }))), originalCosts);
+      assert.deepEqual([nativeCallbacks, transcriptCallbacks, finalCallbacks], callbackCounts, 'reconciliation never replays native callbacks');
+      assert.deepEqual(fs.readFileSync(native), completeNative, 'reconciliation never creates another model turn');
+      assert.equal(launches, 2);
+      assert.equal(recovered.receipt.runtime_evidence.completed_source.fresh_turn_id, retained.state.resume.turn_id);
+      const accounting = runtime.verifyCompletedReviewConsumption({ worktree, source, receipt_store: recorder.storeDir, dispatch_id: dispatchId });
+      assert.equal(accounting.all_attempt_denominator, 2);
+      assert.equal(accounting.successful_physical_calls, input.manifest.batches.length);
+      assert.equal(accounting.attempts.at(-1).successful_calls, 0);
+      boundary = boundaryModule.createDispatchBoundary({ adapters: { codex: adapter }, recorder, recoverReserved: true });
+      await assert.rejects(launch, { code: 'RECOVERY_ALREADY_RECORDED' });
+      assert.equal(launches, 2);
+      return;
+    }
     if (mutation) {
       if (mutation === 'subject-kind') {
         await assert.rejects(launch, { code: 'REVIEW_SOURCE_INVALID' });
@@ -1082,6 +1186,20 @@ async function completedSourceFixture(role, cold, mutation, action, failFirst = 
         assert.ok(recorder.getVerifiedRecord(probeId));
       } else await assert.rejects(launch, error => ['REVIEW_SOURCE_INVALID', 'REVIEW_RESTART_REQUIRED', 'STALE_CONTEXT', 'STALE_GENERATED_AGENT', 'RUNTIME_EVIDENCE_MISMATCH', 'RUNTIME_EVIDENCE_INVALID', 'RUNTIME_UNAVAILABLE', 'INPUT_BUNDLE_INVALID', 'INPUT_BUNDLE_CHANGED'].includes(error.code) || /changed|manifest|profile|base|git.*failed|Original process hook failed/i.test(error.message));
       assert.equal(recorder.getVerifiedRecord(dispatchId), null);
+      if (mutation === 'base') {
+        assert.equal(launches, 1, 'moved base refuses before a final native launch');
+        assert.equal(finalCallbacks, 0);
+        assert.equal(authority.readCompletedReviewSource({ worktree, reference: source }).state.resume, null,
+          'moved base refuses before claiming the final source');
+      }
+      if (mutation === 'base-after-claim') {
+        assert.equal(launches, 1, 'base movement after claim refuses immediately before native launch');
+        assert.equal(finalCallbacks, 0);
+        const claimed = authority.readCompletedReviewSource({ worktree, reference: source });
+        assert.equal(claimed.state.resume.status, 'claimed', 'the genuine original claim is retained');
+        assert.equal(claimed.state.resume.launch_started, undefined);
+        assert.deepEqual(authority.readReviewSourceAttempts(claimed).map(attempt => attempt.status), ['completed']);
+      }
       if (['spawn-throw', 'invalid-child', 'stdin-throw', 'process-hook-throw'].includes(mutation)) {
         const failed = authority.readCompletedReviewSource({ worktree, reference: source });
         assert.equal(failed.state.resume.status, 'failed');
@@ -1152,10 +1270,72 @@ async function completedSourceFixture(role, cold, mutation, action, failFirst = 
     assert.equal(stable(recorder.getVerifiedRecord(dispatchId).receipt), originalFinalReceipt,
       'replay preserves the original final receipt');
     if (action) await action({ input, capacity, source, final, accounting, recorder, host, root, native });
-  } finally { os.homedir = previousHome; fs.rmSync(root, { recursive: true, force: true }); }
+  } finally { fs.renameSync = originalRename; os.homedir = previousHome; fs.rmSync(root, { recursive: true, force: true }); }
+}
+
+async function coldCompletedRecordingFixture(role) {
+  const header = fs.readFileSync(__filename, 'utf8').split('async function recordedBatchApplication')[0];
+  const script = header + '\n' + completedSourceFixture.toString()
+    + '\ncompletedSourceFixture(' + JSON.stringify(role) + ', false, "recover-host-exit").catch(error => { console.error(error); process.exitCode = 1; });';
+  const origin = JSON.parse(execFileSync(process.execPath, ['-e', script], {
+    cwd: path.dirname(__filename), encoding: 'utf8', maxBuffer: 1024 * 1024 }));
+  const previousHome = os.homedir; os.homedir = () => origin.root;
+  try {
+    const boundaryModule = require('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs');
+    const adapterModule = require('../../plugins/delivery-pipeline/scripts/codex-dispatch-adapter.cjs');
+    const recorder = boundaryModule.createDurableRecorder(path.join(origin.root, 'receipts'));
+    const source = authority.readCompletedReviewSource({ worktree: origin.worktree, reference: origin.source });
+    assert.notEqual(source.state.resume.owner_pid, process.pid);
+    assert.throws(() => process.kill(source.state.resume.owner_pid, 0), { code: 'ESRCH' });
+    assert.equal(source.state.resume.status, 'completed');
+    assert.equal(source.state.resume.completion_failures, undefined, 'host exited before any callback failure handler or durable recording');
+    assert.equal(recorder.getVerifiedRecord(origin.dispatchId), null);
+    const native = fs.readFileSync(source.native_file), costs = stable(authority.readReviewSourceAttempts(source));
+    const host = runtime.createCodexRuntimeHost({ scope: origin.scope, recorder, agentDir: origin.agents,
+      agentManifest: origin.agentManifest, env: { CODEX_HOME: origin.home },
+      spawn() { assert.fail('cold reconciliation must not launch another model turn'); },
+      probe: { status: 'available', executable: 'codex', runtime_version: 'isolated-native-fixture', capabilities: origin.capabilities } });
+    const adapter = adapterModule.createCodexDispatchAdapter({ agentsDir: origin.agents, agentManifest: origin.agentManifest,
+      capabilities: origin.capabilities, host: { requireRuntimeEvidence: true, launchStatic(applied, context) {
+        return host.resumeCompletedSource(applied, { source: origin.source, dispatch_id: context.dispatch_id, role,
+          onNativeCompleted() { assert.fail('cold reconciliation cannot replay the native callback'); },
+          onTranscriptWritten() { assert.fail('cold reconciliation cannot replay the transcript callback'); },
+          onCompleted() { assert.fail('cold reconciliation cannot replay completion'); } });
+      } } });
+    const dispatch = () => boundaryModule.createDispatchBoundary({ adapters: { codex: adapter }, recorder, recoverReserved: true })
+      .dispatch({ runtime: 'codex', role, signals: {}, dispatch_id: origin.dispatchId }, { ticket: origin.scope.ticket });
+    const result = await dispatch();
+    assert.equal(result.receipt.launch_id, source.state.resume.completion.application.launch_id);
+    assert.equal(stable(result.receipt.runtime_evidence), stable(source.state.resume.completion.application.runtime_evidence));
+    assert.deepEqual(fs.readFileSync(source.native_file), native);
+    const restored = authority.readCompletedReviewSource({ worktree: origin.worktree, reference: origin.source });
+    assert.equal(stable(authority.readReviewSourceAttempts(restored)), costs);
+    assert.equal(restored.state.resume.launch_started, true);
+    assert.equal(restored.state.resume.reconciliations.length, 1);
+    const accounting = runtime.verifyCompletedReviewConsumption({ worktree: origin.worktree, source: origin.source,
+      receipt_store: recorder.storeDir, dispatch_id: origin.dispatchId });
+    assert.equal(accounting.all_attempt_denominator, 2);
+    assert.equal(accounting.attempts.at(-1).successful_calls, 0);
+    const originalRecord = stable(recorder.getVerifiedRecord(origin.dispatchId));
+    assert.throws(dispatch, { code: 'RECOVERY_ALREADY_RECORDED', details: { dispatch_id: origin.dispatchId } });
+    assert.equal(stable(recorder.getVerifiedRecord(origin.dispatchId)), originalRecord, 'replay preserves the original durable record');
+    assert.deepEqual(fs.readFileSync(source.native_file), native, 'replay cannot append another native turn');
+    assert.equal(stable(authority.readCompletedReviewSource({ worktree: origin.worktree, reference: origin.source }).state),
+      stable(restored.state), 'replay preserves original completed source state');
+  } finally { os.homedir = previousHome; fs.rmSync(origin.root, { recursive: true, force: true }); }
 }
 
 for (const role of ['arch-review', 'integrator']) {
+  test('completed ' + role + ' records its exact original turn after the original host really exits before callbacks and receipt',
+    () => coldCompletedRecordingFixture(role));
+  for (const cold of [false, true]) {
+    for (const mutation of ['recover-native-callback', 'recover-transcript-callback', 'recover-completed-callback', 'recover-record-gap', 'recover-inflight'])
+      test('completed ' + role + ' reconciles the exact original turn after ' + mutation + (cold ? ' cold' : ' live'),
+        () => completedSourceFixture(role, cold, mutation));
+    for (const mutation of ['recover-prefix', 'recover-truncated', 'recover-missing-cli', 'recover-foreign-cli', 'recover-base', 'recover-source', 'recover-agent', 'recover-missing-custody'])
+      test('completed ' + role + ' reconciliation refuses ' + mutation + (cold ? ' cold' : ' live'),
+        () => completedSourceFixture(role, cold, mutation));
+  }
   test('completed ' + role + ' source rejects a concurrent claimant before a second native launch',
     () => completedSourceFixture(role, false, null, null, false, true));
   test('completed ' + role + ' probe stays completed when its cold fresh final is genuinely interrupted',
@@ -1164,6 +1344,10 @@ for (const role of ['arch-review', 'integrator']) {
     () => completedSourceFixture(role, cold));
   for (const cold of [false, true]) test('completed ' + role + ' source refuses subject-kind substitution ' + (cold ? 'cold' : 'live'),
     () => completedSourceFixture(role, cold, 'subject-kind'));
+  test('completed ' + role + ' source refuses a moved base before cold final launch',
+    () => completedSourceFixture(role, true, 'base'));
+  for (const cold of [false, true]) test('completed ' + role + ' source refuses base movement after its original claim ' + (cold ? 'cold' : 'live'),
+    () => completedSourceFixture(role, cold, 'base-after-claim'));
   for (const mutation of ['spawn-throw', 'invalid-child', 'stdin-throw', 'process-hook-throw', 'failed-prefix', 'failed-truncated', 'prefix', 'source', 'agent', 'old-verdict', 'intervening-turn', 'final-reread', 'model', 'effort', 'provider', 'compaction', 'parent-child-swap', 'final-prompt', 'profile', 'roster', 'subject', 'base'])
     test('completed ' + role + ' source refuses ' + mutation, () => completedSourceFixture(role, false, mutation));
 }
@@ -1186,7 +1370,7 @@ for (const role of ['arch-review', 'integrator']) {
     }));
 }
 
-async function automaticCompletedReviewFixture(role, cold, ordinary = false, moveBase = false) {
+async function automaticCompletedReviewFixture(role, cold, ordinary = false, moveBase = false, recordingFailure = null) {
   const helper = require('./helpers/codex-arch-review-fixtures.cjs');
   const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
   const delivery = require('../../plugins/delivery-pipeline/scripts/codex-delivery-host.cjs');
@@ -1195,6 +1379,7 @@ async function automaticCompletedReviewFixture(role, cold, ordinary = false, mov
   const f = helper.fixture();
   const store = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'automatic-completed-review-')));
   const previousHome = os.homedir; os.homedir = () => store;
+  const originalLink = fs.linkSync;
   try {
     const ticket = 'T-38-01', branch = 'ticket/' + ticket;
     const graphDir = path.join(f.root, '.planning/graph');
@@ -1419,7 +1604,9 @@ async function automaticCompletedReviewFixture(role, cold, ordinary = false, mov
       return child;
     };
     const capabilities = { supportedModels: [...new Set(selectedFiles.map(value => value.model))], supportedEfforts: [...new Set(selectedFiles.map(value => value.effort))] };
-    const hostOptions = { scope, agentDir: agents, agentManifest, recorder, env: { CODEX_HOME: home }, spawn,
+    const controller = { assertOwner(runId) { assert.equal(runId, scope.run_id); },
+      markUnavailable() { assert.fail('authenticated completed native recording failure cannot schedule another model dispatch'); } };
+    const hostOptions = { scope, agentDir: agents, agentManifest, recorder, controller, env: { CODEX_HOME: home }, spawn,
       probe: { status: 'available', executable: 'codex', runtime_version: 'isolated-native-fixture', capabilities } };
     const nativeHost = runtime.createCodexRuntimeHost(hostOptions);
     let probeCallbacks = 0, finalCallbacks = 0;
@@ -1448,6 +1635,7 @@ async function automaticCompletedReviewFixture(role, cold, ordinary = false, mov
         const originalCompleted = context.onCompleted;
         const observed = { ...context, onCompleted(completion) {
           finalCallbacks++;
+          if (recordingFailure === 'callback') throw new Error('Original automatic completed callback failed');
           return originalCompleted?.(completion);
         } };
         if (!cold) return nativeHost.resumeCompletedSource(applied, observed);
@@ -1465,6 +1653,14 @@ async function automaticCompletedReviewFixture(role, cold, ordinary = false, mov
       request = { ...preparation.launch, signals: { ...preparation.launch.signals }, context: { ...preparation.launch.context }, dispatch_id: request.dispatch_id };
     }
     const run = () => delivery.createCodexDeliveryHost(options).run(request);
+    let failedWrites = 0;
+    if (recordingFailure === 'record') fs.linkSync = (from, to) => {
+      if (!failedWrites && to === path.join(recorder.storeDir, 'record-' + sha(request.dispatch_id) + '.json')) {
+        failedWrites++;
+        const error = new Error('Original automatic durable receipt write failed'); error.code = 'EIO'; throw error;
+      }
+      return originalLink(from, to);
+    };
     if (moveBase) {
       await assert.rejects(run, error => ['REVIEW_RESTART_REQUIRED', 'BASE_MISMATCH', 'STALE_CONTEXT'].includes(error.code)
         && /base/i.test(error.message));
@@ -1477,6 +1673,7 @@ async function automaticCompletedReviewFixture(role, cold, ordinary = false, mov
       return;
     }
     const final = await run();
+    fs.linkSync = originalLink;
     assert.equal(launches, 2);
     assert.equal(probeCallbacks, 1, 'one original probe completion');
     assert.equal(finalCallbacks, 1, 'one original fresh final completion');
@@ -1536,12 +1733,26 @@ async function automaticCompletedReviewFixture(role, cold, ordinary = false, mov
     assert.equal(accounting.attempts[1].successful_calls, 0);
     assert.ok(accounting.successful_source_bytes.raw >= final.receipt.runtime_evidence.input_bundle.total_bytes,
       'zero fresh reads retain the full original material cost');
-  } finally { os.homedir = previousHome; fs.rmSync(f.root, { recursive: true, force: true }); fs.rmSync(store, { recursive: true, force: true }); }
+    if (recordingFailure) {
+      const source = authority.readCompletedReviewSource({ worktree: f.root, reference: final.receipt.runtime_evidence.completed_source.source });
+      assert.equal(source.state.resume.status, 'completed');
+      assert.equal(source.state.resume.launch_started, true);
+      assert.equal(source.state.resume.reconciliations.length, 1);
+      assert.ok(source.state.resume.completion_failures.some(failure => failure.original_exit.error.includes(
+        recordingFailure === 'callback' ? 'Original automatic completed callback failed' : 'Original automatic durable receipt write failed')));
+      assert.equal(failedWrites, recordingFailure === 'record' ? 1 : 0);
+      assert.equal(stable(source.state.resume.completion.application.runtime_evidence), stable(final.receipt.runtime_evidence));
+    }
+  } finally { fs.linkSync = originalLink; os.homedir = previousHome; fs.rmSync(f.root, { recursive: true, force: true }); fs.rmSync(store, { recursive: true, force: true }); }
 }
 
 for (const role of ['arch-review', 'integrator']) for (const cold of [false, true])
   test('whole automatic ' + role + ' measurement and genuinely fresh ' + (cold ? 'cold' : 'live') + ' final reaches unchanged consumer',
     () => automaticCompletedReviewFixture(role, cold));
+
+for (const role of ['arch-review', 'integrator']) for (const cold of [false, true]) for (const failure of ['callback', 'record'])
+  test('whole automatic ' + role + ' reconciles original ' + failure + ' failure through unchanged consumer ' + (cold ? 'cold' : 'live'),
+    () => automaticCompletedReviewFixture(role, cold, false, false, failure));
 
 for (const cold of [false, true]) test('large ordinary canonical integration preserves whole input through automatic ' + (cold ? 'cold' : 'live') + ' final',
   () => automaticCompletedReviewFixture('integrator', cold, true));

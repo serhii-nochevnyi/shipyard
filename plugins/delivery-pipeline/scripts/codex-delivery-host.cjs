@@ -1788,9 +1788,14 @@ function prepareRepair(options, scope, context) {
   const prompt = 'Repair the canonical ticket ' + scope.ticket + ' PR ' + pr + '. Evaluate the complete feedback inventory below. '
     + 'Leave all source uncommitted and pushed=false. Do not restart orchestration. Only declared PLAN paths may change. '
     + 'Write complete producer evidence to .shipyard-repair-evidence.md. Return only shipyard.repair-result.v1 JSON with '
-    + 'id, pr, status (fixed/no-op/escalate), pushed=false, notes, hypothesis and review_dispositions. '
+    + 'exactly these required fields: schema="shipyard.repair-result.v1", id (canonical ticket string), pr (integer PR number), '
+    + 'status (fixed/no-op/escalate), pushed=false (boolean), notes, hypothesis and review_dispositions. '
+    + 'notes and hypothesis must be nonempty strings of at most 4096 bytes each; no additional fields are allowed. '
+    + 'The complete final JSON must fit within 128 KiB without truncation. '
     + 'Every actionable feedback ID requires one disposition; full inventory and authenticated prior host dispositions remain bound. Each disposition is {id, action (reply/reply-and-resolve/escalate), reply, evidence:{command,result}}. '
-    + 'Only unresolved thread IDs can be resolved. Escalations remain unresolved.\n'
+    + 'Each reply, evidence.command and evidence.result must be a nonempty string of at most 4096 bytes; no additional disposition or evidence fields are allowed. '
+    + 'Only unresolved thread IDs can be resolved. If status="escalate", every disposition must use reply or escalate; '
+    + 'reply-and-resolve is forbidden for ALL findings in that result, including findings individually repaired. Escalations remain unresolved.\n'
     + canonical({ subject, files_modified: prepared.commit.files_modified })
     + planDeliveryBlock(prepared.delivery, prepared.plan.path) + verificationAssignmentBlock(prepared.verificationAssignment);
   if (Buffer.byteLength(prompt) > MAX_STATE_BYTES || Buffer.byteLength(canonical(subject)) > MAX_STATE_BYTES / 2)
@@ -2795,7 +2800,16 @@ function createCodexDeliveryHost(options = {}) {
       if (request.role === 'arch-review') archReviewContext.recheckInstalledLaunch(options.archReviewContext);
       if (request.role === 'integrator') recheckInlineIntegrator(scope, request);
       if (fileInput) archReviewContext.verifyFileInput(fileInput);
-      let result = await dispatchAgent(request.dispatch_id, context);
+      let result;
+      try { result = await dispatchAgent(request.dispatch_id, context); }
+      catch (error) {
+        if (!completedSourceReference || typeof runtimeHost.retainCompletedSourceRecordingFailure !== 'function') throw error;
+        const source = roleArtifact.readCompletedReviewSource({ worktree: scope.worktree, reference: completedSourceReference });
+        if (source.state.resume?.status !== 'completed' || !source.state.resume.completion
+            || runtimeHost.recorder.getVerifiedRecord(request.dispatch_id)) throw error;
+        runtimeHost.retainCompletedSourceRecordingFailure(completedSourceReference, error);
+        result = await dispatchAgent(request.dispatch_id, context);
+      }
       if (fileInput) archReviewContext.verifyFileInput(fileInput);
       options.controller?.assertOwner(scope.run_id);
       if (request.role === 'arch-review') {

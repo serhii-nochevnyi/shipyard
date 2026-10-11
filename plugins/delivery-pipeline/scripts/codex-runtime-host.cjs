@@ -1548,6 +1548,7 @@ function verifyBatchCapacityReference(prepared, checked, raw) {
 const completedSourceInputs = new WeakMap();
 const completedSourceCapacities = new WeakMap();
 const completedSourceCandidates = new Map();
+const completedSourceOperations = new Set();
 function fileCapacityForSource(prepared) { return completedSourceCapacities.get(prepared); }
 function completedSourceSnapshot(source) {
   const raw = readReviewNativeFile(source.snapshot.path, source.identity.worktree);
@@ -1662,6 +1663,10 @@ function completedSourcePrompt(source, prepared, checked) {
 function validateCompletedSourceRestoration(source, prepared) {
   if (!require('./role-artifact.cjs').isAuthenticatedCompletedSource(source))
     fail('REVIEW_SOURCE_CLAIMED', 'source restoration requires an original completed reservation');
+  if (source.state.resume?.status === 'completed') {
+    validateCompletedSourceReconciliation(source, prepared);
+    return source;
+  }
   if (source.state.resume) validateCompletedSourceClaimRecovery(source);
   const checked = require('./codex-arch-review-context.cjs').verifyFileInput(prepared);
   const { raw, live } = completedSourceSnapshot(source);
@@ -1670,6 +1675,42 @@ function validateCompletedSourceRestoration(source, prepared) {
       !== require('./model-policy-internal.cjs').stableStringify(source.identity)) fail('REVIEW_SOURCE_INVALID', 'cold source subject changed');
   verifyBatchCapacityReference(prepared, checked, raw);
   return source;
+}
+
+function validateCompletedSourceReconciliation(source, prepared) {
+  const authority = require('./role-artifact.cjs'), collector = require('./codex-arch-review-context.cjs');
+  if (!authority.isAuthenticatedCompletedSource(source) || source.state.resume?.status !== 'completed'
+      || !source.state.resume.launch_started || !Number.isSafeInteger(source.state.resume.owner_pid)
+      || source.state.resume.owner_pid < 1 || completedSourceOperations.has(source.identity.dispatch_id))
+    fail('REVIEW_SOURCE_CLAIMED', 'original completed final is missing or still active');
+  if (source.state.resume.owner_pid !== process.pid) {
+    let dead = false;
+    try { process.kill(source.state.resume.owner_pid, 0); } catch (error) { dead = error.code === 'ESRCH'; }
+    if (!dead) fail('REVIEW_SOURCE_CLAIMED', 'original final owner is active or its custody is unknown');
+  }
+  const identity = collector.reviewProgressIdentity(prepared);
+  if (Object.keys(identity).some(key => JSON.stringify(identity[key]) !== JSON.stringify(source.identity[key])))
+    fail('REVIEW_RESTART_REQUIRED', 'current subject changed before completed final reconciliation');
+  const completion = source.state.resume.completion;
+  if (completion?.schema !== 'shipyard.completed-source-completion.v1'
+      || !object(completion.application) || !object(completion.application.runtime_evidence) || !object(completion.cli_snapshot)
+      || reviewHash(require('./model-policy-internal.cjs').stableStringify(completion.application.runtime_evidence))
+      !== source.state.resume.evidence_sha256)
+    fail('REVIEW_SOURCE_INVALID', 'original completed application custody is missing');
+  const cli = readReviewNativeFile(completion.cli_snapshot.path, source.identity.worktree);
+  const evidence = completion.application.runtime_evidence;
+  if (Buffer.byteLength(cli) !== completion.cli_snapshot.bytes || reviewHash(cli) !== completion.cli_snapshot.sha256
+      || completion.cli_snapshot.bytes !== evidence.transcript?.bytes || completion.cli_snapshot.sha256 !== evidence.transcript?.sha256
+      || completion.application.launch_id !== 'codex-' + source.session_id + '-' + reviewHash(source.identity.dispatch_id).slice(0, 24)
+      || completion.application.session_id !== source.session_id
+      || completion.application.process_id !== evidence.process_id
+      || completion.application.agent_file !== source.original_launch.agent_file
+      || completion.application.agent_file_digest !== source.original_launch.agent_file_digest
+      || ['applied_model', 'observed_model'].some(key => completion.application[key] !== source.original_launch.model)
+      || ['applied_effort', 'observed_effort'].some(key => completion.application[key] !== source.original_launch.effort))
+    fail('REVIEW_SOURCE_INVALID', 'retained original application or CLI bytes changed');
+  authority.validateCompletedSourceEvidence(evidence);
+  return completion.application;
 }
 
 function validateCompletedSourceClaimRecovery(source) {
@@ -2623,7 +2664,7 @@ function createCodexCliLauncher(options = {}) {
         reference: resumeReview.reference, native_raw: raw, native_status: nativeStatus,
         exit: { code: originalExit?.code ?? null, signal: originalExit?.signal ?? null,
           error: error.message, stderr: bounded(Buffer.concat(stderr).toString('utf8')), ended_at_ms: Date.now(), transcript: failedTranscript },
-        cause: 'original final native attempt failed before admission' }, () => {
+        cause: nativeStatus === 'completed' ? 'original completed final callback or admission failed' : 'original final native attempt failed before admission' }, () => {
         if (readReviewNativeFile(resumeReview.progress.native_file, scope.worktree) !== raw)
           fail('REVIEW_SOURCE_INVALID', 'failed launch changed during physical retention');
       }));
@@ -2631,7 +2672,9 @@ function createCodexCliLauncher(options = {}) {
     if (resumeReview?.completedSource) {
       require('./role-artifact.cjs').beginCompletedSourceLaunch(reviewObservation({ worktree: scope.worktree,
         reference: resumeReview.reference }, () => {
-        require('./codex-arch-review-context.cjs').verifyFileInput(fileInput);
+        const identity = require('./codex-arch-review-context.cjs').reviewProgressIdentity(fileInput);
+        if (Object.keys(identity).some(key => JSON.stringify(identity[key]) !== JSON.stringify(resumeReview.progress.identity[key])))
+          fail('REVIEW_RESTART_REQUIRED', 'current subject changed immediately before original final launch');
         if (completedSourceSnapshot(resumeReview.progress).live !== completedSourceSnapshot(resumeReview.progress).raw)
           fail('REVIEW_SOURCE_INVALID', 'source changed immediately before original final launch');
       }));
@@ -2966,9 +3009,12 @@ function createCodexCliLauncher(options = {}) {
           agent_file_digest: agent.sha256,
         } : {}),
       };
+      const retainedTranscript = resumeReview?.completedSource
+        ? writeTranscript(transcriptDir, transcriptScope, parsed.session_id, rawStdout) : null;
       if (resumeReview) {
         const token = reviewObservation({ worktree: scope.worktree, reference: resumeReview.reference,
-          evidence: runtimeEvidence, turn_id: resumedConsumption.turn_id }, () => {
+          evidence: runtimeEvidence, turn_id: resumedConsumption.turn_id,
+          ...(resumeReview.completedSource ? { application: evidence, cli_raw: rawStdout } : {}) }, () => {
           const identity = require('./codex-arch-review-context.cjs').reviewProgressIdentity(fileInput);
           if (Object.keys(identity).some(key => JSON.stringify(identity[key]) !== JSON.stringify(resumeReview.progress.identity[key])))
             fail('REVIEW_RESTART_REQUIRED', 'current subject changed before protected final admission');
@@ -2989,7 +3035,7 @@ function createCodexCliLauncher(options = {}) {
           spawn_evidence: verified.spawn_evidence,
         }));
       }
-      const transcript = writeTranscript(transcriptDir, transcriptScope, parsed.session_id, rawStdout);
+      const transcript = retainedTranscript || writeTranscript(transcriptDir, transcriptScope, parsed.session_id, rawStdout);
       if ((transcript === null) !== (expectedTranscript === null)
           || (transcript && (transcript.path !== expectedTranscript.path
             || transcript.bytes !== expectedTranscript.bytes || transcript.sha256 !== expectedTranscript.sha256))) {
@@ -3120,7 +3166,19 @@ function createCodexRuntimeHost(options = {}) {
       assertOwner();
       return result;
     } catch (error) {
-      if (controller && UNAVAILABLE_CODES.has(error && error.code)
+      let completedNative = false;
+      const resumed = input.resume_review && reviewResumptions.get(input.resume_review);
+      if (resumed?.completedSource) {
+        try {
+          const authority = require('./role-artifact.cjs');
+          const source = authority.readCompletedReviewSource({ worktree: scope.worktree, reference: resumed.reference });
+          if (source.state.resume?.status === 'completed' && source.state.resume.completion) {
+            authority.validateCompletedSourceEvidence(source.state.resume.completion.application.runtime_evidence);
+            completedNative = true;
+          }
+        } catch {}
+      }
+      if (!completedNative && controller && UNAVAILABLE_CODES.has(error && error.code)
           && typeof controller.markUnavailable === 'function') {
         controller.markUnavailable(runId, { reason: error.message });
       }
@@ -3201,7 +3259,7 @@ function createCodexRuntimeHost(options = {}) {
     if ((context.role !== undefined && context.role !== source.identity.role) || context.dispatch_id !== source.identity.dispatch_id
         || ['run_id', 'ticket', 'phase', 'worktree'].some(key => source.identity[key] !== scope[key]))
       fail('REVIEW_SOURCE_CLAIMED', 'final requires its unused exact original source reservation');
-    if (source.state.resume) validateCompletedSourceClaimRecovery(source);
+    if (source.state.resume && source.state.resume.status !== 'completed') validateCompletedSourceClaimRecovery(source);
     const prepared = context.input_prepared || collector.restoreCompletedSourceInput(source);
     const checked = collector.verifyFileInput(prepared);
     if (context.subject_kind !== undefined && context.subject_kind !== readerSubjectKind(checked.manifest))
@@ -3213,26 +3271,42 @@ function createCodexRuntimeHost(options = {}) {
         || require('./model-policy-internal.cjs').stableStringify(completedReviewIdentity(checked, prepared.input_bundle))
           !== require('./model-policy-internal.cjs').stableStringify(source.identity))
       fail('REVIEW_SOURCE_INVALID', 'final changed role, instructions, model, profile or subject');
+    if (source.state.resume?.status === 'completed') {
+      const application = validateCompletedSourceReconciliation(source, prepared);
+      if (source.state.resume.owner_pid === process.pid && !source.state.resume.completion_failures?.length)
+        fail('REVIEW_SOURCE_CLAIMED', 'live completed recording has no retained original failure');
+      if (recorder.storeDir !== source.receipt_store || recorder.getVerifiedRecord(context.dispatch_id))
+        fail('REVIEW_SOURCE_CLAIMED', 'original final receipt already exists or belongs to another recorder');
+      const observation = reviewObservation({ worktree: scope.worktree, reference: context.source }, () => {
+        assertOwner();
+        validateCompletedSourceReconciliation(source, prepared);
+      });
+      authority.claimCompletedSourceReconciliation(observation);
+      return application;
+    }
     const { raw, live } = completedSourceSnapshot(source);
     if (live !== raw || !raw.endsWith('\n')) fail('REVIEW_SOURCE_INVALID', 'original reviewer has intervening or unfinished turns');
     verifyBatchCapacityReference(prepared, checked, raw);
     const claim = reviewObservation({ worktree: scope.worktree, reference: context.source, dispatch_id: context.dispatch_id,
       native_bytes: Buffer.byteLength(raw), native_sha256: reviewHash(raw) }, () => {
-      collector.verifyFileInput(prepared);
+      const identity = collector.reviewProgressIdentity(prepared);
+      if (Object.keys(identity).some(key => JSON.stringify(identity[key]) !== JSON.stringify(source.identity[key])))
+        fail('REVIEW_RESTART_REQUIRED', 'current subject changed before atomic source claim');
       if (completedSourceSnapshot(source).live !== raw) fail('REVIEW_SOURCE_INVALID', 'source changed before atomic claim');
     });
     const claimed = authority.claimCompletedReviewSource(claim);
+    completedSourceOperations.add(context.dispatch_id);
     const token = Object.freeze({});
     completedSourceInputs.set(prepared, claimed);
     const measured = fileCapacityForSource(prepared);
     if (measured) { measured.completedSource = claimed; }
-    const prompt = completedSourcePrompt(claimed, prepared, checked);
-    reviewResumptions.set(token, { progress: claimed, reference: context.source, prepared, prompt, completedSource: true });
     try {
+      const prompt = completedSourcePrompt(claimed, prepared, checked);
+      reviewResumptions.set(token, { progress: claimed, reference: context.source, prepared, prompt, completedSource: true });
       const { source: _source, ...launchContext } = context;
       return await launch(selection, { ...launchContext, resume_review: token, input_prepared: prepared,
         input_transport: 'host-files', input_bundle: prepared.input_bundle, prompt });
-    } finally { reviewResumptions.delete(token); }
+    } finally { reviewResumptions.delete(token); completedSourceOperations.delete(context.dispatch_id); }
   };
   const reserveCompletedSourceCandidate = (prepared) => {
     assertOwner();
@@ -3362,6 +3436,24 @@ function createCodexRuntimeHost(options = {}) {
     launchStatic: (selection, context) => launch(selection, context),
     resumeReview,
     resumeCompletedSource,
+    retainCompletedSourceRecordingFailure(reference, error) {
+      assertOwner();
+      const authority = require('./role-artifact.cjs'), collector = require('./codex-arch-review-context.cjs');
+      const source = authority.readCompletedReviewSource({ worktree: scope.worktree, reference });
+      if (['run_id', 'ticket', 'phase', 'worktree'].some(key => source.identity[key] !== scope[key]))
+        fail('REVIEW_SOURCE_INVALID', 'recording failure belongs to another original review scope');
+      const prepared = collector.restoreCompletedSourceInput(source);
+      validateCompletedSourceReconciliation(source, prepared);
+      if (source.receipt_store !== recorder.storeDir || recorder.getVerifiedRecord(source.identity.dispatch_id))
+        fail('REVIEW_SOURCE_CLAIMED', 'recording failure cannot replace an original final receipt');
+      const raw = readReviewNativeFile(source.native_file, scope.worktree);
+      authority.retainCompletedSourceFailure(reviewObservation({ worktree: scope.worktree, reference,
+        native_raw: raw, cause: 'original completed final durable recording failed',
+        exit: { code: null, signal: null, boundary_error_code: error.code || 'UNKNOWN', error: error.message,
+          reason: 'recording recovery has no additional native process exit', ended_at_ms: Date.now() } }, () => {
+        validateCompletedSourceReconciliation(source, prepared);
+      }));
+    },
     reserveCompletedSourceCandidate,
     measureBatchReaderCapacity,
     launchTypedGsd: (selection, context) => launch(selection, context),

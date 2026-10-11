@@ -2136,6 +2136,7 @@ async function originalFixerFixture(outcome, mutation) {
       { id: 'comment-1', action: outcome === 'no-op' ? 'reply' : 'escalate', reply: 'Retain this obligation.', evidence: { command: 'inspect', result: 'complete comment reviewed' } },
       { id: 'pr-body-501', action: outcome === 'no-op' ? 'reply' : 'escalate', reply: 'Complete PR body reasoning.', evidence: { command: 'inspect PR', result: 'complete original body evaluated' } },
     ] };
+  if (outcome === 'escalate') output.review_dispositions[1].action = 'reply';
   if (['normalized-source-repeat', 'normalized-cli-source-repeat'].includes(mutation)) {
     for (const disposition of output.review_dispositions) disposition.action = disposition.id === 'thread-1' ? 'reply-and-resolve' : 'reply';
   }
@@ -2207,6 +2208,11 @@ async function originalFixerFixture(outcome, mutation) {
   const originalHome = os.homedir; os.homedir = () => fs.realpathSync(temporary);
   try {
     if (mutation === 'missing-disposition') output.review_dispositions.pop();
+    if (mutation === 'missing-schema') delete output.schema;
+    if (mutation === 'foreign-schema') output.schema = 'shipyard.repair-result.v2';
+    if (mutation === 'extra-result-field') output.accepted = true;
+    if (mutation === 'extra-disposition-field') output.review_dispositions[0].resolved = true;
+    if (mutation === 'escalate-resolve') output.review_dispositions[0].action = 'reply-and-resolve';
     if (mutation === 'foreign-result') output.id = 'T-38-99';
     if (mutation === 'producer-push') output.pushed = true;
     if (mutation === 'evidence-symlink') { fs.unlinkSync(evidenceFile); fs.symlinkSync(f.plan, evidenceFile); }
@@ -2310,6 +2316,13 @@ async function originalFixerFixture(outcome, mutation) {
         child.stdout = new EventEmitter(); child.stderr = new EventEmitter();
         child.stdin = { write(prompt) {
           assert.ok(String(prompt).includes('full feedback') || String(prompt).includes('complete feedback'));
+          const required = String(prompt).split('exactly these required fields: ')[1]?.split('. ')[0];
+          assert.ok(required, 'the actual generated native prompt must enumerate the complete producer schema');
+          for (const field of ['schema', 'id', 'pr', 'status', 'pushed', 'notes', 'hypothesis', 'review_dispositions'])
+            assert.match(required, new RegExp('\\b' + field + '\\b'));
+          assert.ok(required.includes('schema="shipyard.repair-result.v1"'));
+          assert.ok(String(prompt).includes('If status="escalate", every disposition must use reply or escalate'));
+          assert.ok(String(prompt).includes('reply-and-resolve is forbidden for ALL findings in that result'));
           user.payload.content = [{ type: 'input_text', text: mutation === 'native-context' ? 'Repair a foreign subject.' : String(prompt).trim() }];
         }, end() {
           process.nextTick(() => {
@@ -2496,7 +2509,10 @@ async function originalFixerFixture(outcome, mutation) {
         'failed-page': 'REPAIR_FEEDBACK_UNAVAILABLE', 'overflow': 'REPAIR_FEEDBACK_OVERFLOW',
         'disposition-budget': 'REPAIR_FEEDBACK_OVERFLOW', 'duplicate-feedback': 'REPAIR_FEEDBACK_INVALID',
         'stalled-pagination': 'REPAIR_FEEDBACK_INVALID', 'feedback-movement': 'REPAIR_SUBJECT_CHANGED',
-        'missing-disposition': 'REPAIR_COMPLETION_INVALID', 'foreign-result': 'REPAIR_COMPLETION_INVALID',
+        'missing-disposition': 'REPAIR_COMPLETION_INVALID', 'missing-schema': 'REPAIR_COMPLETION_INVALID',
+        'foreign-schema': 'REPAIR_COMPLETION_INVALID', 'extra-result-field': 'REPAIR_COMPLETION_INVALID',
+        'extra-disposition-field': 'REPAIR_COMPLETION_INVALID',
+        'escalate-resolve': 'REPAIR_COMPLETION_INVALID', 'foreign-result': 'REPAIR_COMPLETION_INVALID',
         'producer-push': 'REPAIR_COMPLETION_INVALID', 'evidence-symlink': 'REPAIR_EVIDENCE_CHANGED',
         'evidence-bytes': 'REPAIR_EVIDENCE_CHANGED', 'unknown-selector': 'INVALID_INPUT', 'caller-rung': 'INVALID_INPUT',
         'caller-first': 'INVALID_INPUT', 'caller-new': 'INVALID_INPUT',
@@ -2606,6 +2622,9 @@ async function originalFixerFixture(outcome, mutation) {
 
 for (const outcome of ['source', 'no-op', 'escalate']) test('canonical builder through original static fixer seals ' + outcome + ' with host custody with four original native progress messages',
   () => withGraphDirEnv(undefined, () => originalFixerFixture(outcome)));
+for (const mutation of ['missing-schema', 'foreign-schema', 'extra-result-field', 'extra-disposition-field', 'escalate-resolve'])
+  test('complete multi-message escalated native fixer refuses ' + mutation + ' before any host action',
+    () => withGraphDirEnv(undefined, () => originalFixerFixture('escalate', mutation)));
 test('signed fixer publication recovers a lost response without replaying its confirmed push',
   () => withGraphDirEnv(undefined, () => originalFixerFixture('source', 'publication-response-loss')));
 for (const mutation of ['foreign-pr', 'closed-pr', 'stale-head', 'stale-base', 'failed-page', 'overflow', 'disposition-budget', 'duplicate-feedback',
