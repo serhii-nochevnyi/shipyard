@@ -1403,7 +1403,7 @@ const MAX_REPAIR_FEEDBACK_BYTES = 512 * 1024;
 const MAX_REPAIR_PAGES = 100;
 const MAX_REPAIR_ITEMS = 4096;
 
-function repairCommand(options, worktree, argv) {
+function repairCommand(options, worktree, argv, snapshot = false) {
   let raw;
   try { raw = (options.execFileSync || execFileSync)('gh', argv, {
     cwd: worktree, encoding: 'utf8', timeout: 30000, maxBuffer: MAX_REPAIR_FEEDBACK_BYTES + 1,
@@ -1413,7 +1413,7 @@ function repairCommand(options, worktree, argv) {
   let value;
   try { value = JSON.parse(raw); } catch { fail('REPAIR_FEEDBACK_UNAVAILABLE', 'original GitHub response is not complete JSON'); }
   if (!object(value) || value.errors?.length) fail('REPAIR_FEEDBACK_UNAVAILABLE', 'original GitHub response reports errors');
-  return value;
+  return snapshot ? { response: raw, sha256: sha256(raw), value } : value;
 }
 
 function repairEvidence(file, expectedDigest, worktree) {
@@ -1673,7 +1673,70 @@ function matchingRepairReply(reply, original, disposition, actor) {
       : reply.kind === 'comment' && !reply.thread_id);
 }
 
-function normalizedRepairFeedback(prepared, feedback, history) {
+function repairReplyReview(options, prepared, feedback, reply, original, actor, saved = null,
+  code = 'REPAIR_ACTION_PENDING') {
+  const query = 'query($id:ID!,$target:ID!){node(id:$id){... on PullRequestReviewComment{id body author{login ... on Node{id}} '
+    + 'replyTo{id} pullRequest{id number repository{nameWithOwner}} '
+    + 'pullRequestReview{id body state author{login ... on Node{id}} pullRequest{id number repository{nameWithOwner}}}}} '
+    + 'target:node(id:$target){... on PullRequestReviewComment{id body author{login ... on Node{id}} '
+    + 'replyTo{id} pullRequest{id number repository{nameWithOwner}}}}}';
+  const snapshot = repairCommand(options, prepared.commit.worktree,
+    ['api', 'graphql', '-f', 'query=' + query, '-f', 'id=' + reply.id, '-f', 'target=' + original.id], true);
+  const node = snapshot.value.data?.node, reviewNode = node?.pullRequestReview, targetNode = snapshot.value.data?.target;
+  const review = feedback.inventory.find(item => item.kind === 'review' && item.id === reviewNode?.id);
+  const pr = feedback.inventory.find(item => item.kind === 'pr-body');
+  const target = prepared.repair.feedback.inventory.find(item => item.id === node?.replyTo?.id);
+  const samePr = value => object(value) && value.id === pr?.id && value.number === prepared.repair.pr
+    && value.repository?.nameWithOwner === feedback.repo;
+  const sameTarget = original.kind === 'thread' ? original.id === target?.thread_id
+    : object(targetNode) && targetNode.id === original.id && targetNode.body === original.body
+      && sha256(targetNode.body) === original.body_sha256 && samePr(targetNode.pullRequest)
+      && (targetNode.author?.login || null) === original.author && (targetNode.author?.id || null) === original.author_id
+      && targetNode.truncated !== true && targetNode.body_truncated !== true
+      && node?.replyTo?.id === (targetNode.replyTo?.id || targetNode.id);
+  if (!object(node) || !object(reviewNode) || !review || !pr || reply.kind !== 'thread-comment'
+      || node.id !== reply.id || node.body !== reply.body || sha256(node.body) !== reply.body_sha256
+      || node.author?.login !== actor.login || node.author?.id !== actor.id
+      || node.truncated === true || node.body_truncated === true
+      || reviewNode.truncated === true || reviewNode.body_truncated === true
+      || reviewNode.body !== review.body || sha256(reviewNode.body) !== review.body_sha256
+      || reviewNode.state !== review.state || reviewNode.author?.login !== actor.login
+      || reviewNode.author?.id !== actor.id || review.author !== actor.login || review.author_id !== actor.id
+      || !samePr(node.pullRequest) || !samePr(reviewNode.pullRequest)
+      || !target || target.kind !== 'thread-comment' || target.thread_id !== reply.thread_id
+      || !sameTarget)
+    fail(code, 'reply companion review lacks its exact independent remote author, PR, target and relation');
+  if (saved) {
+    if (!object(saved) || typeof saved.response !== 'string' || !/^[a-f0-9]{64}$/.test(saved.sha256 || ''))
+      fail(code, 'protected reply review lacks its original bounded response and digest');
+    let value;
+    try { value = JSON.parse(saved.response); } catch { fail(code, 'protected reply review response is invalid'); }
+    if (sha256(saved.response) !== saved.sha256 || canonical(value) !== canonical(snapshot.value)
+        || canonical(saved.review) !== canonical(review) || typeof saved.created !== 'boolean'
+        || (saved.created && (review.body !== '' || review.state !== 'COMMENTED'
+          || prepared.repair.feedback.inventory.some(item => item.id === review.id))))
+      fail(code, 'protected reply review bytes, identity or relation changed');
+  }
+  return { response: snapshot.response, sha256: snapshot.sha256, review };
+}
+
+function confirmRepairReply(options, prepared, feedback, current, reply, original, disposition, actor) {
+  const additions = current.inventory.filter(item => !feedback.inventory.some(old => old.id === item.id));
+  const known = feedback.inventory.find(item => item.id === reply?.id);
+  if (current.repo !== feedback.repo || !matchingRepairReply(reply, original, disposition, actor)
+      || (known && canonical(known) !== canonical(reply)))
+    fail('REPAIR_ACTION_PENDING', 'reply differs from its original complete inventory and disposition');
+  const relation = reply.kind === 'thread-comment'
+    ? repairReplyReview(options, prepared, current, reply, original, actor) : null;
+  const created = relation && !feedback.inventory.some(item => item.id === relation.review.id);
+  const expected = new Set([...(known ? [] : [reply.id]), ...(created ? [relation.review.id] : [])]);
+  if (additions.length !== expected.size || additions.some(item => !expected.has(item.id))
+      || (created && (relation.review.body !== '' || relation.review.state !== 'COMMENTED')))
+    fail('REPAIR_ACTION_PENDING', 'reply added feedback beyond its exact independently linked companion review');
+  return relation ? { ...relation, created: !!created } : null;
+}
+
+function normalizedRepairFeedback(prepared, feedback, history, options) {
   const excluded = new Map(), resolutions = new Map(), coverage = [];
   for (const { attempt, receipt } of [...history.history].reverse()) {
     if (!receipt || !attempt.subject) continue;
@@ -1723,6 +1786,15 @@ function normalizedRepairFeedback(prepared, feedback, history) {
           || canonical(current) !== canonical(reply))
         fail('REPAIR_PREDECESSOR_INVALID', 'confirmed reply identity, author, target or complete live bytes changed');
       seen.add(action.feedback_id); excluded.set(action.reply_id, reply);
+      if (action.reply_review) {
+        repairReplyReview(options, { ...prepared, repair: subject }, feedback, reply, original, actions.actor,
+          action.reply_review, 'REPAIR_PREDECESSOR_INVALID');
+        if (action.reply_review.created) {
+          const review = action.reply_review.review;
+          if (excluded.has(review.id)) fail('REPAIR_PREDECESSOR_INVALID', 'companion review has duplicate creation custody');
+          excluded.set(review.id, review);
+        }
+      }
       if (action.resolved) {
         const threadId = original.kind === 'thread' ? original.id : original.thread_id;
         const thread = subject.feedback.inventory.find(item => item.id === threadId);
@@ -1737,7 +1809,8 @@ function normalizedRepairFeedback(prepared, feedback, history) {
       coverage.push({ dispatch_id: attempt.dispatch_id, receipt_sha256: attempt.receipt_sha256,
         artifact_ref: attempt.artifact_ref, artifact_digest: attempt.artifact_digest,
         actions_sha256: actionsSha256, feedback_id: action.feedback_id,
-        reply: current, disposition_sha256: sha256(canonical(disposition)), resolved: action.resolved });
+        reply: current, disposition_sha256: sha256(canonical(disposition)), resolved: action.resolved,
+        ...(action.reply_review ? { reply_review: action.reply_review } : {}) });
     }
     if (sha256(fs.readFileSync(file)) !== actionsSha256)
       fail('REPAIR_ACTION_PENDING', 'original host actions changed during complete feedback normalization');
@@ -1762,7 +1835,7 @@ function prepareRepair(options, scope, context) {
   const feedback = completeRepairFeedback(options, prepared, pr);
   if (prepared.repo && prepared.repo !== feedback.repo) fail('REPAIR_SUBJECT_CHANGED', 'feedback belongs to another repository');
   const history = repairHistory(prepared, pr);
-  const normalized = normalizedRepairFeedback({ ...prepared, repairPr: pr }, feedback, history);
+  const normalized = normalizedRepairFeedback({ ...prepared, repairPr: pr }, feedback, history, options);
   const minimumResult = { schema: 'shipyard.repair-result.v1', id: scope.ticket, pr, status: 'fixed', pushed: false,
     notes: 'x', hypothesis: 'x', review_dispositions: normalized.inventory.map(item => ({
       id: item.id, action: 'reply', reply: 'x', evidence: { command: 'x', result: 'x' } })) };
@@ -1853,6 +1926,14 @@ function recheckRepair(prepared, options, { clean = false, feedback = prepared.r
     if (!readSealed(file, prepared.key) || sha256(fs.readFileSync(file)) !== prior.actions_sha256
         || canonical(current.inventory.find(item => item.id === prior.reply.id)) !== canonical(prior.reply))
       fail('REPAIR_PREDECESSOR_INVALID', 'authenticated prior host disposition coverage changed');
+    if (prior.reply_review) {
+      const actions = readSealed(file, prepared.key);
+      const subject = actions.subject;
+      const original = subject?.feedback.inventory.find(item => item.id === prior.feedback_id);
+      if (!subject || !original) fail('REPAIR_PREDECESSOR_INVALID', 'prior reply review lacks its original subject');
+      repairReplyReview(options, { ...prepared, repair: subject }, current, prior.reply, original, actions.actor,
+        prior.reply_review, 'REPAIR_PREDECESSOR_INVALID');
+    }
   }
   if (current.repo !== feedback.repo || current.digest !== feedback.digest) fail('REPAIR_SUBJECT_CHANGED', 'full live feedback changed');
   const dirty = git(root, ['status', '--porcelain=v1', '--untracked-files=all']).split('\n').filter(Boolean)
@@ -2021,17 +2102,21 @@ function performRepairActions(prepared, output, options, dispatchId) {
     const matches = (state.pending.reply_id ? current.inventory.filter(item => item.id === state.pending.reply_id) : additions)
       .filter(item => matchingRepairReply(item, original, disposition, state.actor));
     const reply = matches.length === 1 ? matches[0] : null;
-    const known = reply && feedback.inventory.find(item => item.id === reply.id);
     const expected = feedback.inventory.map(item => state.pending.action === 'resolve' && item.id === threadId
       ? { ...item, resolved: current.inventory.find(now => now.id === threadId)?.resolved } : item);
     if (!['reply', 'resolve'].includes(state.pending.action) || current.repo !== feedback.repo
         || !disposition || !matchingRepairReply(reply, original, disposition, state.actor) || sha256(reply.body) !== state.pending.body_sha256
-        || (known ? additions.length !== 0 : additions.length !== 1 || additions[0].id !== reply.id)
         || expected.some(item => canonical(current.inventory.find(now => now.id === item.id)) !== canonical(item)))
       fail('REPAIR_ACTION_PENDING', 'uncertain action cannot be independently reconciled with its original ID and complete inventory');
+    let relation = confirmRepairReply(options, prepared, feedback, current, reply, original, disposition, state.actor);
+    if (state.pending.reply_review) {
+      repairReplyReview(options, prepared, current, reply, original, state.actor, state.pending.reply_review);
+      relation = state.pending.reply_review;
+    }
     feedback = current;
     const confirmation = { feedback_id: disposition.id, reply_id: reply.id,
-      resolved: disposition.action === 'reply-and-resolve' && current.inventory.find(item => item.id === threadId)?.resolved === true };
+      resolved: disposition.action === 'reply-and-resolve' && current.inventory.find(item => item.id === threadId)?.resolved === true,
+      ...(relation ? { reply_review: relation } : {}) };
     state = { ...state, feedback, pending: null,
       confirmed: [...state.confirmed.filter(item => item.feedback_id !== disposition.id), confirmation] };
     atomicWrite(file, JSON.stringify(seal(state, prepared.key)) + String.fromCharCode(10), { exclusive: false });
@@ -2043,6 +2128,7 @@ function performRepairActions(prepared, output, options, dispatchId) {
     const original = feedback.inventory.find(item => item.id === action.feedback_id);
     if (!matchingRepairReply(reply, original, disposition, state.actor) || (action.resolved && !original?.resolved))
       fail('REPAIR_ACTION_PENDING', 'retained confirmed action no longer matches its actual full live inventory');
+    if (action.reply_review) repairReplyReview(options, prepared, feedback, reply, original, state.actor, action.reply_review);
   }
   for (const disposition of output.review_dispositions) {
     if (disposition.action === 'escalate' || output.status === 'escalate') continue;
@@ -2053,6 +2139,7 @@ function performRepairActions(prepared, output, options, dispatchId) {
     const entry = feedback.inventory.find(item => item.id === disposition.id);
     const threadId = entry.kind === 'thread' ? entry.id : entry.thread_id;
     let posted = confirmed ? { id: confirmed.reply_id, body: disposition.reply } : null;
+    let relation = confirmed?.reply_review || null;
     if (!confirmed) {
       const query = threadId
         ? 'mutation($id:ID!,$body:String!){addPullRequestReviewThreadReply(input:{pullRequestReviewThreadId:$id,body:$body}){comment{id body}}}'
@@ -2070,17 +2157,16 @@ function performRepairActions(prepared, output, options, dispatchId) {
       state = { ...state, pending: { ...state.pending, reply_id: posted.id } };
       atomicWrite(file, JSON.stringify(seal(state, prepared.key)) + String.fromCharCode(10), { exclusive: false });
       const current = completeRepairFeedback(options, prepared, prepared.repair.pr);
-      const additions = current.inventory.filter(item => !feedback.inventory.some(old => old.id === item.id));
-      if (additions.length !== 1 || additions[0].id !== posted.id
-          || !matchingRepairReply(additions[0], entry, disposition, state.actor)
-          || feedback.inventory.some(old => canonical(current.inventory.find(item => item.id === old.id)) !== canonical(old)))
+      if (feedback.inventory.some(old => canonical(current.inventory.find(item => item.id === old.id)) !== canonical(old)))
         fail('REPAIR_ACTION_PENDING', 'reply was not independently confirmed in the complete live inventory');
+      relation = confirmRepairReply(options, prepared, feedback, current,
+        current.inventory.find(item => item.id === posted.id), entry, disposition, state.actor);
       feedback = current;
     }
     if (disposition.action === 'reply-and-resolve') {
       recheckRepair(prepared, options, { clean: true, feedback });
       state = { ...state, feedback, pending: { feedback_id: entry.id, action: 'resolve', reply_id: posted.id,
-        body_sha256: sha256(posted.body) } };
+        body_sha256: sha256(posted.body), ...(relation ? { reply_review: relation } : {}) } };
       atomicWrite(file, JSON.stringify(seal(state, prepared.key)) + String.fromCharCode(10), { exclusive: false });
       const resolution = repairCommand(options, prepared.commit.worktree, ['api', 'graphql',
         '-f', 'query=mutation($id:ID!){resolveReviewThread(input:{threadId:$id}){thread{id isResolved}}}', '-f', 'id=' + threadId]);
@@ -2092,7 +2178,7 @@ function performRepairActions(prepared, output, options, dispatchId) {
       feedback = resolved;
     }
     state = { ...state, feedback, confirmed: [...state.confirmed.filter(action => action.feedback_id !== entry.id), { feedback_id: entry.id, reply_id: posted.id,
-      resolved: disposition.action === 'reply-and-resolve' }], pending: null };
+      resolved: disposition.action === 'reply-and-resolve', ...(relation ? { reply_review: relation } : {}) }], pending: null };
     atomicWrite(file, JSON.stringify(seal(state, prepared.key)) + String.fromCharCode(10), { exclusive: false });
   }
   return Object.freeze({ status: output.status === 'escalate' ? 'escalated' : 'confirmed', confirmed: state.confirmed });
@@ -2911,6 +2997,14 @@ function parseResumeArguments(argv) {
   return { candidateId: argv[1], scopeFile: path.resolve(argv[3]) };
 }
 
+function parseRepairActionResumeArguments(argv) {
+  if (!Array.isArray(argv) || argv.length !== 4 || argv[0] !== '--resume-repair-actions' || argv[2] !== '--scope-file'
+      || typeof argv[1] !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/.test(argv[1])
+      || typeof argv[3] !== 'string' || !argv[3].trim())
+    fail('INVALID_INPUT', 'usage: codex-delivery-host.cjs --resume-repair-actions <dispatch-id> --scope-file <json>');
+  return { dispatchId: argv[1], scopeFile: path.resolve(argv[3]) };
+}
+
 function readResumeScope(file) {
   let stat;
   try { stat = fs.lstatSync(file); }
@@ -3010,6 +3104,12 @@ function finishDeliveryRun(controller, runId, failure) {
 async function runCli(argv = process.argv.slice(2), stdout = process.stdout, options = {}) {
   if (!object(options)) fail('INVALID_INPUT', 'host options must be an object');
   if (Array.isArray(argv) && argv[0] === '--resume-finalization') return runResumeCli(argv, stdout, options);
+  if (Array.isArray(argv) && argv[0] === '--resume-repair-actions') {
+    const parsed = parseRepairActionResumeArguments(argv);
+    const result = resumeRepairActions(options, parsed.dispatchId, readResumeScope(parsed.scopeFile));
+    stdout.write(JSON.stringify(result) + '\n');
+    return result;
+  }
   const parsed = readRequestFile(parseCliArguments(argv));
   const scope = canonicalCliScope(parsed.scope);
   if (parsed.graphDir) {
@@ -3200,6 +3300,7 @@ module.exports = Object.freeze({
   createFinalizationRecoveryHost,
   parseCliArguments,
   parseResumeArguments,
+  parseRepairActionResumeArguments,
   readResumeScope,
   readRequestFile,
   retryableVerificationFailure,
