@@ -1329,6 +1329,38 @@ function validateReviewContinuationEvidence(evidence) {
   return progress;
 }
 
+function authenticateReaderCapacityReferences(selectors) {
+  const keys = ['worktree', 'receipt_store', 'dispatch_id'];
+  if (!object(selectors) || Object.keys(selectors).length !== keys.length
+      || Object.keys(selectors).some(key => !keys.includes(key))
+      || keys.some(key => typeof selectors[key] !== 'string' || !selectors[key]))
+    fail('READER_CAPACITY_UNSUPPORTED', 'capacity requires only original protected application reference selectors');
+  try {
+    const worktree = fs.realpathSync(selectors.worktree), store = path.resolve(selectors.receipt_store);
+    const files = [store, path.join(fs.realpathSync(path.dirname(store)), `.shipyard-dispatch-authority-${digest(store)}.key`),
+      path.join(store, `record-${digest(selectors.dispatch_id)}.json`)];
+    const pins = files.map(file => {
+      const stat = fs.lstatSync(file);
+      if (stat.isSymbolicLink() || fs.realpathSync(file) !== file || (stat.mode & 0o077)
+          || stat.uid !== process.getuid() || (!stat.isFile() && !stat.isDirectory()))
+        fail('READER_CAPACITY_UNSUPPORTED', 'capacity application requires original private physical authority');
+      return { file, stat };
+    });
+    const trusted = trustedRecord({ boundaryStore: store, dispatch_id: selectors.dispatch_id });
+    if (trusted.receipt.runtime !== 'codex' || !['arch-review', 'integrator'].includes(trusted.receipt.role)
+        || trusted.receipt.runtime_evidence?.worktree !== worktree)
+      fail('READER_CAPACITY_UNSUPPORTED', 'capacity application belongs to a different native review subject');
+    for (const pin of pins) {
+      const current = fs.lstatSync(pin.file);
+      if (!sameStat(pin.stat, current) || pin.stat.mode !== current.mode || pin.stat.uid !== current.uid)
+        fail('READER_CAPACITY_UNSUPPORTED', 'capacity application authority changed during authentication');
+    }
+    return require('./codex-runtime-host.cjs').freezeReviewProgress(JSON.parse(stable(trusted.record)));
+  } catch (error) {
+    fail('READER_CAPACITY_UNSUPPORTED', 'original capacity application cannot be authenticated', { cause: error.code });
+  }
+}
+
 function authenticateCompletedReviewReferences(selectors) {
   const keys = ['worktree', 'progress', 'receipt_store', 'dispatch_id'];
   if (!object(selectors) || Object.keys(selectors).length !== keys.length
@@ -5333,6 +5365,7 @@ module.exports = Object.freeze(Object.assign(Object.create(null), {
   isAuthenticatedReviewProgress,
   readReviewProgress,
   authenticateCompletedReviewReferences,
+  authenticateReaderCapacityReferences,
   persistReviewProgress,
   finishOriginalReviewObservation,
   claimReviewContinuation,

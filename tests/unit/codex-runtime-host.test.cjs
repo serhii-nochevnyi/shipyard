@@ -1544,6 +1544,52 @@ function finish(turn, result) {
   event('task_complete', turn, { last_agent_message: result })];
 }
 
+
+async function recordedBatchApplication(verified, input, root, cliRaw) {
+  const boundaryModule = require('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs');
+  const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
+  const sha = value => require('node:crypto').createHash('sha256').update(value).digest('hex');
+  const receiptStore = path.join(root, 'measurement-receipts');
+  const recorder = boundaryModule.createDurableRecorder(receiptStore);
+  const cliFile = path.join(root, 'measurement-cli.jsonl');
+  fs.writeFileSync(cliFile, cliRaw, { mode: 0o600 });
+  const candidate = input.manifest.transport.candidate;
+  const args = ['exec', '--json', '--model', candidate.model,
+    '--config', 'model_reasoning_effort="' + candidate.effort + '"'];
+  const content = "developer_instructions = '''\nReview all required material.\n'''";
+  const evidence = {
+    schema: 'shipyard.codex-runtime-evidence.v1', version: 1, runtime: 'codex', provider: 'openai',
+    run_id: input.manifest.run_id, ticket: input.manifest.ticket, phase: input.manifest.phase,
+    worktree: input.manifest.snapshot.worktree, dispatch_id: input.manifest.dispatch_id,
+    session_id: verified.native_session_evidence.session_id, process_id: process.pid,
+    selection_source: 'codex-native-session-transcript', command: { executable: 'codex', args },
+    command_digest: sha(JSON.stringify(args)), native_session_evidence: verified.native_session_evidence,
+    input_transport: 'host-files', input_bundle: input.input_bundle,
+    input_consumption: { manifest_sha256: input.input_bundle.manifest_sha256 },
+    transcript: { path: cliFile, bytes: Buffer.byteLength(cliRaw), sha256: sha(cliRaw) },
+  };
+  const adapter = {
+    validateGeneratedAgent(resolution) {
+      return { valid: true, exists: true, content_verified: true, policy_hash: resolution.policy_hash,
+        agent_file: resolution.agent_file, agent_file_digest: sha(content), agent_file_content: content };
+    },
+    launchStatic(resolution) {
+      return { receipt_type: 'adr-014.application', runtime: 'codex', role: resolution.role,
+        dispatch_id: resolution.dispatch_id, launch_id: 'codex-' + evidence.session_id,
+        requested_model: resolution.requested_model, requested_effort: resolution.requested_effort,
+        applied_model: candidate.model, applied_effort: candidate.effort,
+        observed_model: candidate.model, observed_effort: candidate.effort, policy_hash: policy.POLICY_HASH,
+        agent_file: resolution.agent_file, agent_file_digest: resolution.agent_file_digest,
+        runtime_evidence: evidence };
+    },
+  };
+  const result = await boundaryModule.createDispatchBoundary({ adapters: { codex: adapter }, recorder })
+    .dispatch({ runtime: 'codex', role: input.manifest.role, signals: {}, dispatch_id: input.manifest.dispatch_id },
+      { ticket: input.manifest.ticket });
+  assert.deepEqual(recorder.getVerifiedRecord(input.manifest.dispatch_id).receipt, result.receipt);
+  return { recorder, receipt: result.receipt };
+}
+
 async function fixture(action, options = {}) {
   const typedRole = options.role === 'integrator' ? 'shipyard-integrator' : 'shipyard-arch-review';
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'review-continuation-')));
@@ -1600,7 +1646,13 @@ async function fixture(action, options = {}) {
       fs.chmodSync(probe, 0o600);
       const verified = await runtime.verifyCompletedNativeLaunch({ session_id: session, selection,
         env: { CODEX_HOME: probeHome }, resultText: result });
-      const capacity = runtime.measureReaderCapacity(verified, input);
+      assert.throws(() => runtime.measureReaderCapacity(verified, input), error => error.code === 'READER_CAPACITY_UNSUPPORTED');
+      const application = await recordedBatchApplication(verified, input, root,
+        serialize([cliThread(session), ...cliCompletion(result)]));
+      assert.throws(() => runtime.measureReaderCapacity(verified, input,
+        { recorder: {}, receipt: JSON.parse(JSON.stringify(application.receipt)) }),
+      error => error.code === 'READER_CAPACITY_UNSUPPORTED');
+      const capacity = runtime.measureReaderCapacity(verified, input, application);
       assert.throws(() => collector.admitReaderBatchInput(input, JSON.parse(JSON.stringify(capacity))),
         error => error.code === 'READER_CAPACITY_UNSUPPORTED');
       input = collector.admitReaderBatchInput(input, capacity);
@@ -1954,6 +2006,132 @@ for (const [kind, expectedFailed, expectedPending, expectedRetry] of [['groupedB
       assert.equal(result.coverage.total.logical_ranges, collector.verifyFileInput(f.input).chunk_reads);
       assert.equal(result.coverage.total.successful_physical_calls, f.reads.length);
     }, { batch: true, [kind]: true });
+  });
+}
+
+
+async function productionBatchProbeFixture(f, mutation) {
+  const boundaryModule = require('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs');
+  const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
+  const root = path.join(f.root, 'production-probe'), home = path.join(root, 'codex');
+  const agents = path.join(home, 'agents'); fs.mkdirSync(agents, { recursive: true });
+  const resolved = policy.resolveDispatch({ runtime: 'codex', role: 'arch-review', signals: {}, dispatch_id: 'production-capacity' });
+  const content = [
+    '# shipyard-policy-id = "' + policy.POLICY.id + '"', '# shipyard-policy-version = "' + policy.POLICY_VERSION + '"',
+    '# shipyard-policy-hash = "' + policy.POLICY_HASH + '"', '# shipyard-policy-runtime = "codex"',
+    '# shipyard-policy-role = "arch-review"', '# shipyard-policy-rung = "' + resolved.rung + '"',
+    'name = "' + resolved.agent_file.replace(/\.toml$/, '') + '"',
+    'model = "' + resolved.model + '"', 'model_reasoning_effort = "' + resolved.effort + '"',
+    'sandbox_mode = "read-only"', "developer_instructions = '''", 'Review all required material.', "'''", '',
+  ].join('\n');
+  fs.writeFileSync(path.join(agents, resolved.agent_file), content);
+  fs.writeFileSync(path.join(agents, '.shipyard-manifest.json'), JSON.stringify({
+    policy_id: policy.POLICY.id, policy_version: policy.POLICY_VERSION, policy_hash: policy.POLICY_HASH,
+    agent_files: [resolved.agent_file], agent_digests: { [resolved.agent_file]: sha(content) },
+  }));
+  const profile = collector.createReaderBatchProfile({ chunk_bytes: 8192, ranges_per_batch: 2,
+    candidate: f.input.manifest.transport.candidate });
+  const input = collector.prepareFileInput(f.scope, collector.verifyFileInput(f.input).material, {
+    readerProfile: profile, role: 'arch-review', dispatchId: resolved.dispatch_id, storageRoot: path.join(root, 'inputs'),
+    generatedInstructionBytes: f.input.manifest.accounting.generated_instruction_bytes, binding: f.input.manifest.binding,
+  });
+  const resultText = JSON.stringify({
+    input_manifest_sha256: input.input_bundle.manifest_sha256, input_material_bytes: input.input_bundle.total_bytes,
+    input_asset_count: input.input_bundle.asset_count, input_chunk_reads: input.manifest.ranges.length,
+    input_batch_reads: input.manifest.batches.length, input_profile_sha256: input.manifest.transport.profile_sha256,
+  });
+  const receiptStore = path.join(root, 'receipts'), recorder = boundaryModule.createDurableRecorder(receiptStore);
+  const date = new Date(), directory = path.join(home, 'sessions', String(date.getFullYear()),
+    String(date.getMonth() + 1).padStart(2, '0'), String(date.getDate()).padStart(2, '0'));
+  fs.mkdirSync(directory, { recursive: true });
+  const sessionId = '55555555-5555-4555-8555-555555555555', nativeFile = path.join(directory, sessionId + '.jsonl');
+  let spawned = 0, completed = 0, observedCompletion;
+  const probeOptions = { scope: f.scope, probe: { ...probe(), capabilities }, recorder,
+    env: { CODEX_HOME: home }, transcriptDir: path.join(root, 'transcripts'),
+    spawn(_executable, args) {
+      spawned++;
+      assert.equal(args[args.indexOf('--model') + 1], resolved.model);
+      assert.ok(args.includes('model_reasoning_effort="' + resolved.effort + '"'));
+      const turn = 'production-capacity-turn', context = nativeContext(turn, f.worktree);
+      if (mutation === 'native-model') {
+        context.payload.model = 'gpt-6-luna'; context.payload.collaboration_mode.settings.model = 'gpt-6-luna';
+      }
+      if (mutation === 'native-effort') {
+        context.payload.effort = 'low'; context.payload.collaboration_mode.settings.reasoning_effort = 'low';
+      }
+      fs.writeFileSync(nativeFile, serialize([nativeMetadata(sessionId, f.worktree), context,
+        message('developer', turn, runtime.generatedInstructions(content)), message('user', turn, input.prompt),
+        event('task_started', turn), ...nativeReads(readRecords(input), turn), ...finish(turn, resultText)]), { mode: 0o600 });
+      return childFor(serialize([cliThread(sessionId), ...cliCompletion(resultText)]));
+    },
+  };
+  if (mutation === 'missing-recorder') probeOptions.recorder = () => true;
+  if (mutation === 'stale-agent') fs.appendFileSync(path.join(agents, resolved.agent_file), '\n');
+  const host = runtime.createCodexRuntimeHost(probeOptions);
+  const requested = { ...selection,
+    ...(mutation === 'requested-model' ? { model: 'gpt-6-luna' } : {}),
+    ...(mutation === 'requested-effort' ? { effort: 'low' } : {}) };
+  const originalFsync = fs.fsyncSync;
+  let capacity;
+  try {
+    const run = () => host.measureBatchReaderCapacity(requested, input, {
+      onCompleted(value) {
+        completed++; observedCompletion = value;
+        assert.equal(recorder.getVerifiedRecord(resolved.dispatch_id), null);
+        assert.throws(() => collector.requireReaderBatchCapacity(input), error => error.code === 'READER_CAPACITY_UNSUPPORTED');
+        if (mutation === 'recorder-failure') fs.fsyncSync = () => { throw new Error('isolated recorder fsync failure'); };
+      },
+    });
+    if (mutation) {
+      await assert.rejects(run, error => mutation === 'native-model' || mutation === 'native-effort'
+        ? error.code === 'RUNTIME_EVIDENCE_MISMATCH'
+        : mutation === 'missing-recorder' ? error.code === 'READER_CAPACITY_UNSUPPORTED'
+        : mutation === 'stale-agent' ? error.code === 'STALE_GENERATED_AGENT'
+        : mutation === 'recorder-failure' ? /record|fsync/i.test(error.message)
+        : ['CONFLICTING_OVERRIDE', 'UNSUPPORTED_SELECTION', 'INVALID_RESOLUTION'].includes(error.code));
+      assert.equal(completed, mutation === 'recorder-failure' ? 1 : 0);
+      assert.equal(spawned, ['native-model', 'native-effort', 'recorder-failure'].includes(mutation) ? 1 : 0);
+      assert.throws(() => collector.requireReaderBatchCapacity(input), error => error.code === 'READER_CAPACITY_UNSUPPORTED');
+      return;
+    }
+    capacity = await run();
+  } finally { fs.fsyncSync = originalFsync; }
+  assert.equal(completed, 1); assert.equal(spawned, 1);
+  const record = recorder.getVerifiedRecord(resolved.dispatch_id);
+  assert.equal(record.receipt.role, 'arch-review');
+  for (const field of ['requested_model', 'requested_effort']) assert.equal(record.receipt[field], resolved[field]);
+  assert.equal(record.receipt.applied_model, resolved.model); assert.equal(record.receipt.applied_effort, resolved.effort);
+  assert.equal(record.receipt.compliance, 'verified');
+  assert.deepEqual(record.receipt.runtime_evidence, observedCompletion.runtime_evidence);
+  assert.equal(record.receipt.runtime_evidence.native_session_evidence.sha256, sha(fs.readFileSync(nativeFile)));
+  assert.equal(capacity.contract.application_dispatch_id, record.dispatch_id);
+  assert.equal(capacity.contract.application_receipt_sha256, sha(policy.stableStringify(record.receipt)));
+  assert.equal(capacity.contract.semantic_credit, false);
+  const admitted = collector.admitReaderBatchInput(input, capacity);
+  collector.requireReaderBatchCapacity(admitted);
+  const verified = await runtime.verifyCompletedNativeLaunch({ session_id: sessionId, selection,
+    env: { CODEX_HOME: home }, resultText });
+  assert.throws(() => runtime.measureReaderCapacity(verified, input), error => error.code === 'READER_CAPACITY_UNSUPPORTED');
+  const cliFile = record.receipt.runtime_evidence.transcript.path, cliRaw = fs.readFileSync(cliFile);
+  fs.writeFileSync(cliFile, cliRaw.subarray(0, cliRaw.length - 2));
+  assert.throws(() => runtime.readerCapacityContract(capacity, input.manifest));
+  fs.writeFileSync(cliFile, cliRaw);
+  const recordFile = path.join(receiptStore, 'record-' + sha(record.dispatch_id) + '.json'), saved = fs.readFileSync(recordFile);
+  fs.unlinkSync(recordFile);
+  assert.throws(() => runtime.readerCapacityContract(capacity, input.manifest), error => error.code === 'READER_CAPACITY_UNSUPPORTED');
+  fs.writeFileSync(recordFile, saved, { mode: 0o600 });
+  const changed = JSON.parse(saved); changed.payload.receipt.applied_effort = 'low';
+  fs.writeFileSync(recordFile, JSON.stringify(changed));
+  assert.throws(() => runtime.readerCapacityContract(capacity, input.manifest), error => error.code === 'READER_CAPACITY_UNSUPPORTED');
+}
+
+test('v3 production capacity records original native completion and application selection before admission', async () => {
+  await fixture(f => productionBatchProbeFixture(f), { batch: true });
+});
+for (const mutation of ['missing-recorder', 'stale-agent', 'requested-model', 'requested-effort',
+  'native-model', 'native-effort', 'recorder-failure']) {
+  test('v3 production capacity refuses ' + mutation + ' without authority', async () => {
+    await fixture(f => productionBatchProbeFixture(f, mutation), { batch: true });
   });
 }
 

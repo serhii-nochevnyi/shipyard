@@ -1965,6 +1965,52 @@ test('file snapshot accepts canonical graph bytes above the input manifest limit
   } finally { f.clean(); }
 });
 
+
+async function recordedBatchApplication(verified, input, root, cliRaw) {
+  const boundaryModule = require('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs');
+  const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
+  const sha = value => require('node:crypto').createHash('sha256').update(value).digest('hex');
+  const receiptStore = path.join(root, 'measurement-receipts');
+  const recorder = boundaryModule.createDurableRecorder(receiptStore);
+  const cliFile = path.join(root, 'measurement-cli.jsonl');
+  fs.writeFileSync(cliFile, cliRaw, { mode: 0o600 });
+  const candidate = input.manifest.transport.candidate;
+  const args = ['exec', '--json', '--model', candidate.model,
+    '--config', 'model_reasoning_effort="' + candidate.effort + '"'];
+  const content = "developer_instructions = '''\nReview all required material.\n'''";
+  const evidence = {
+    schema: 'shipyard.codex-runtime-evidence.v1', version: 1, runtime: 'codex', provider: 'openai',
+    run_id: input.manifest.run_id, ticket: input.manifest.ticket, phase: input.manifest.phase,
+    worktree: input.manifest.snapshot.worktree, dispatch_id: input.manifest.dispatch_id,
+    session_id: verified.native_session_evidence.session_id, process_id: process.pid,
+    selection_source: 'codex-native-session-transcript', command: { executable: 'codex', args },
+    command_digest: sha(JSON.stringify(args)), native_session_evidence: verified.native_session_evidence,
+    input_transport: 'host-files', input_bundle: input.input_bundle,
+    input_consumption: { manifest_sha256: input.input_bundle.manifest_sha256 },
+    transcript: { path: cliFile, bytes: Buffer.byteLength(cliRaw), sha256: sha(cliRaw) },
+  };
+  const adapter = {
+    validateGeneratedAgent(resolution) {
+      return { valid: true, exists: true, content_verified: true, policy_hash: resolution.policy_hash,
+        agent_file: resolution.agent_file, agent_file_digest: sha(content), agent_file_content: content };
+    },
+    launchStatic(resolution) {
+      return { receipt_type: 'adr-014.application', runtime: 'codex', role: resolution.role,
+        dispatch_id: resolution.dispatch_id, launch_id: 'codex-' + evidence.session_id,
+        requested_model: resolution.requested_model, requested_effort: resolution.requested_effort,
+        applied_model: candidate.model, applied_effort: candidate.effort,
+        observed_model: candidate.model, observed_effort: candidate.effort, policy_hash: policy.POLICY_HASH,
+        agent_file: resolution.agent_file, agent_file_digest: resolution.agent_file_digest,
+        runtime_evidence: evidence };
+    },
+  };
+  const result = await boundaryModule.createDispatchBoundary({ adapters: { codex: adapter }, recorder })
+    .dispatch({ runtime: 'codex', role: input.manifest.role, signals: {}, dispatch_id: input.manifest.dispatch_id },
+      { ticket: input.manifest.ticket });
+  assert.deepEqual(recorder.getVerifiedRecord(input.manifest.dispatch_id).receipt, result.receipt);
+  return { recorder, receipt: result.receipt };
+}
+
 test('installed v3 admission measures the finalized input and retains its private cached identity', async () => {
   const f = fixture();
   const storage = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'installed-batch-')));
@@ -2067,7 +2113,16 @@ test('installed v3 admission measures the finalized input and retains its privat
     fs.mkdirSync(nativeDir, { recursive: true });
     const nativeFile = path.join(nativeDir, session + '.jsonl'); fs.writeFileSync(nativeFile, nativeRaw, { mode: 0o600 });
     const verified = await runtime.verifyCompletedNativeLaunch({ session_id: session, selection, env: { CODEX_HOME: home }, resultText });
-    const capacity = runtime.measureReaderCapacity(verified, candidate);
+    assert.throws(() => runtime.measureReaderCapacity(verified, candidate), { code: 'READER_CAPACITY_UNSUPPORTED' });
+    const cli = fixtureRecords('codex-agent-stream-exec.jsonl').filter(record =>
+      ['thread.started', 'turn.started', 'item.completed', 'turn.completed'].includes(record.type));
+    for (const record of cli) if (record.item?.type === 'agent_message') record.item.text = resultText;
+    const application = await recordedBatchApplication(verified, candidate, storage,
+      cli.map(record => JSON.stringify(record) + '\n').join(''));
+    assert.throws(() => runtime.measureReaderCapacity(verified, candidate,
+      { recorder: {}, receipt: JSON.parse(JSON.stringify(application.receipt)) }),
+    { code: 'READER_CAPACITY_UNSUPPORTED' });
+    const capacity = runtime.measureReaderCapacity(verified, candidate, application);
     assert.equal(capacity.contract.semantic_credit, false);
     assert.throws(() => contextBuilder.admitInstalledLaunch(value, { ...admission, readerCapacity: JSON.parse(JSON.stringify(capacity)) }),
       { code: 'READER_CAPACITY_UNSUPPORTED' });

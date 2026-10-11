@@ -123,6 +123,52 @@ function finish(turn, result) {
   event('task_complete', turn, { last_agent_message: result })];
 }
 
+
+async function recordedBatchApplication(verified, input, root, cliRaw) {
+  const boundaryModule = require('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs');
+  const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
+  const sha = value => require('node:crypto').createHash('sha256').update(value).digest('hex');
+  const receiptStore = path.join(root, 'measurement-receipts');
+  const recorder = boundaryModule.createDurableRecorder(receiptStore);
+  const cliFile = path.join(root, 'measurement-cli.jsonl');
+  fs.writeFileSync(cliFile, cliRaw, { mode: 0o600 });
+  const candidate = input.manifest.transport.candidate;
+  const args = ['exec', '--json', '--model', candidate.model,
+    '--config', 'model_reasoning_effort="' + candidate.effort + '"'];
+  const content = "developer_instructions = '''\nReview all required material.\n'''";
+  const evidence = {
+    schema: 'shipyard.codex-runtime-evidence.v1', version: 1, runtime: 'codex', provider: 'openai',
+    run_id: input.manifest.run_id, ticket: input.manifest.ticket, phase: input.manifest.phase,
+    worktree: input.manifest.snapshot.worktree, dispatch_id: input.manifest.dispatch_id,
+    session_id: verified.native_session_evidence.session_id, process_id: process.pid,
+    selection_source: 'codex-native-session-transcript', command: { executable: 'codex', args },
+    command_digest: sha(JSON.stringify(args)), native_session_evidence: verified.native_session_evidence,
+    input_transport: 'host-files', input_bundle: input.input_bundle,
+    input_consumption: { manifest_sha256: input.input_bundle.manifest_sha256 },
+    transcript: { path: cliFile, bytes: Buffer.byteLength(cliRaw), sha256: sha(cliRaw) },
+  };
+  const adapter = {
+    validateGeneratedAgent(resolution) {
+      return { valid: true, exists: true, content_verified: true, policy_hash: resolution.policy_hash,
+        agent_file: resolution.agent_file, agent_file_digest: sha(content), agent_file_content: content };
+    },
+    launchStatic(resolution) {
+      return { receipt_type: 'adr-014.application', runtime: 'codex', role: resolution.role,
+        dispatch_id: resolution.dispatch_id, launch_id: 'codex-' + evidence.session_id,
+        requested_model: resolution.requested_model, requested_effort: resolution.requested_effort,
+        applied_model: candidate.model, applied_effort: candidate.effort,
+        observed_model: candidate.model, observed_effort: candidate.effort, policy_hash: policy.POLICY_HASH,
+        agent_file: resolution.agent_file, agent_file_digest: resolution.agent_file_digest,
+        runtime_evidence: evidence };
+    },
+  };
+  const result = await boundaryModule.createDispatchBoundary({ adapters: { codex: adapter }, recorder })
+    .dispatch({ runtime: 'codex', role: input.manifest.role, signals: {}, dispatch_id: input.manifest.dispatch_id },
+      { ticket: input.manifest.ticket });
+  assert.deepEqual(recorder.getVerifiedRecord(input.manifest.dispatch_id).receipt, result.receipt);
+  return { recorder, receipt: result.receipt };
+}
+
 async function fixture(action, options = {}) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'review-continuation-')));
   const oldHome = os.homedir;
@@ -179,7 +225,13 @@ async function fixture(action, options = {}) {
       fs.chmodSync(probe, 0o600);
       const verified = await runtime.verifyCompletedNativeLaunch({ session_id: session, selection,
         env: { CODEX_HOME: probeHome }, resultText: result });
-      capacity = runtime.measureReaderCapacity(verified, input);
+      assert.throws(() => runtime.measureReaderCapacity(verified, input), error => error.code === 'READER_CAPACITY_UNSUPPORTED');
+      const application = await recordedBatchApplication(verified, input, root,
+        serialize([cliThread(session), ...cliCompletion(result)]));
+      assert.throws(() => runtime.measureReaderCapacity(verified, input,
+        { recorder: {}, receipt: JSON.parse(JSON.stringify(application.receipt)) }),
+      error => error.code === 'READER_CAPACITY_UNSUPPORTED');
+      capacity = runtime.measureReaderCapacity(verified, input, application);
       assert.throws(() => collector.admitReaderBatchInput(input, JSON.parse(JSON.stringify(capacity))),
         error => error.code === 'READER_CAPACITY_UNSUPPORTED');
       input = collector.admitReaderBatchInput(input, capacity);
@@ -623,6 +675,29 @@ test('v3 uncredited truncated batch remains in original history and is retried w
     assert.equal(f.resumedCommands[0], f.reads[1].command);
   }, { batch: true, incompleteBatch: true });
 });
+
+for (const mutation of ['missing receipt', 'changed receipt', 'changed CLI transcript']) {
+  test('v3 protected resume refuses ' + mutation + ' before claiming or spawning', async () => {
+    await fixture(async f => {
+      const contract = f.capacity.contract;
+      const receiptFile = path.join(contract.application_receipt_store,
+        'record-' + sha(contract.application_dispatch_id) + '.json');
+      const record = JSON.parse(fs.readFileSync(receiptFile, 'utf8'));
+      const before = authority.readReviewProgress({ worktree: f.worktree, reference: f.progress });
+      const calls = f.calls.length;
+      if (mutation === 'missing receipt') fs.unlinkSync(receiptFile);
+      else if (mutation === 'changed receipt') {
+        record.payload.receipt.observed_model = 'gpt-6-luna';
+        fs.writeFileSync(receiptFile, JSON.stringify(record));
+      } else fs.appendFileSync(record.payload.receipt.runtime_evidence.transcript.path, '{}\n');
+      await assert.rejects(f.createHost().resumeReview(f.selection,
+        { progress: f.progress, dispatch_id: 'receipt-refusal' }));
+      assert.equal(f.calls.length, calls);
+      const after = authority.readReviewProgress({ worktree: f.worktree, reference: f.progress });
+      assert.deepEqual(after, before);
+    }, { batch: true });
+  });
+}
 
 const batchMutations = [
   ['nested truncation', output => { output[1].text = output[1].text.slice(0, -2); }],
