@@ -1488,7 +1488,7 @@ function completeRepairFeedback(options, prepared, pr) {
             fail('REPAIR_FEEDBACK_INVALID', 'review thread identity is incomplete');
           add('thread', { id: node.id, body: '' }, { resolved: node.isResolved, path: node.path || null,
             line: node.line || null, original_line: node.originalLine || null });
-          paginate('thread-comments', 'query($cursor:String,$id:ID!){node(id:$id){... on PullRequestReviewThread{comments(first:100,after:$cursor){nodes{id body author{id login}} pageInfo{hasNextPage endCursor}}}}}',
+          paginate('thread-comments', 'query($cursor:String,$id:ID!){node(id:$id){... on PullRequestReviewThread{comments(first:100,after:$cursor){nodes{id body author{login ... on Node{id}}} pageInfo{hasNextPage endCursor}}}}}',
             response => response.data?.node?.comments, { id: node.id });
         } else add(field === 'thread-comments' ? 'thread-comment' : field, node,
           field === 'thread-comments' ? { thread_id: extra.id } : field === 'review' ? { state: node.state } : {});
@@ -1507,7 +1507,7 @@ function completeRepairFeedback(options, prepared, pr) {
   if (!object(originalPr) || typeof originalPr.title !== 'string') fail('REPAIR_FEEDBACK_INVALID', 'complete original PR body/title is unavailable');
   add('pr-body', originalPr, { title: originalPr.title });
   for (const [field, nativeField, nodeFields] of [['threads', 'reviewThreads', 'id isResolved path line originalLine'],
-    ['comment', 'comments', 'id body author{id login}'], ['review', 'reviews', 'id body state author{id login}']]) {
+    ['comment', 'comments', 'id body author{login ... on Node{id}}'], ['review', 'reviews', 'id body state author{login ... on Node{id}}']]) {
     paginate(field, 'query($owner:String!,$name:String!,$number:Int!,$cursor:String){repository(owner:$owner,name:$name){pullRequest(number:$number){'
       + nativeField + '(first:100,after:$cursor){nodes{' + nodeFields + '} pageInfo{hasNextPage endCursor}}}}}',
       value => value.data?.repository?.pullRequest?.[nativeField]);

@@ -19,6 +19,7 @@ const {
   parseCliArguments,
   readRequestFile,
   requestValue,
+  completeRepairFeedback,
   runCli,
   validateArgs,
   verificationFailureContext,
@@ -2024,6 +2025,88 @@ test('review-fix rejects caller prompt authority before any native launch', asyn
   } finally { clean(f); }
 });
 
+function repairAuthorFromQuery(query, author) {
+  const tokens = query.match(/\.\.\.|[_A-Za-z][_0-9A-Za-z]*|[{}]/g);
+  let cursor = tokens.indexOf('author') + 1;
+  assert.ok(cursor > 0, 'serialized feedback query must select its author');
+  const schema = { Actor: ['avatarUrl', 'login', 'resourcePath', 'url'], Node: ['id'] };
+  const nodeActors = new Set(['User', 'Bot', 'Mannequin', 'Organization', 'EnterpriseUserAccount']);
+  const selection = type => {
+    assert.equal(tokens[cursor++], '{');
+    const fields = [];
+    while (tokens[cursor] !== '}') {
+      const field = tokens[cursor++];
+      if (field === '...') {
+        assert.equal(tokens[cursor++], 'on');
+        const fragment = tokens[cursor++];
+        assert.equal(fragment, 'Node', 'author ID must use the overlapping Node interface');
+        fields.push({ fragment, fields: selection(fragment) });
+      } else {
+        assert.ok(schema[type]?.includes(field), 'Field ' + field + ' does not exist on type ' + type);
+        fields.push({ field });
+      }
+    }
+    cursor++;
+    return fields;
+  };
+  const fields = selection('Actor');
+  assert.ok(fields.some(item => item.field === 'login'));
+  assert.ok(fields.some(item => item.fragment === 'Node' && item.fields.some(nested => nested.field === 'id')));
+  if (!author) return null;
+  const result = {};
+  for (const item of fields) {
+    if (item.field) result[item.field] = author[item.field];
+    else if (nodeActors.has(author.__typename)) {
+      for (const nested of item.fields) result[nested.field] = author[nested.field];
+    }
+  }
+  return result;
+}
+
+test('serialized full paged feedback selects global Node IDs across Actor variants without losing unknown authors', () => {
+  assert.throws(() => repairAuthorFromQuery('query{author{id login}}', null), /Field id does not exist on type Actor/);
+  const authors = ['User', 'Bot', 'Mannequin', 'Organization', 'EnterpriseUserAccount'].map(__typename =>
+    ({ __typename, id: 'global-' + __typename, login: 'login-' + __typename }));
+  authors.push(null, { __typename: 'UnknownActor', login: 'delivery-host' });
+  const requests = [];
+  const prepared = { repo: 'fixture/repository', commit: { worktree: '/unused-read-only-fixture' } };
+  const result = completeRepairFeedback({ execFileSync(program, args) {
+    assert.equal(program, 'gh');
+    const value = key => args.find(arg => arg.startsWith(key + '='))?.slice(key.length + 1);
+    const query = value('query');
+    requests.push({ query, cursor: value('cursor') });
+    if (query.includes('{id body title}')) return JSON.stringify({ data: { repository: { pullRequest:
+      { id: 'pr-501', title: 'Complete title', body: 'Complete PR body' } } } });
+    const connection = (nodes, more = false) => ({ nodes, pageInfo: { hasNextPage: more, endCursor: more ? 'next' : null } });
+    if (query.includes('reviewThreads(')) return JSON.stringify({ data: { repository: { pullRequest:
+      { reviewThreads: connection([{ id: 'thread-1', isResolved: false }]) } } } });
+    const field = query.includes('node(id:') ? 'thread-comments' : query.includes('reviews(') ? 'reviews' : 'comments';
+    const offset = value('cursor') ? 3 : 0;
+    const nodes = authors.slice(offset, offset ? undefined : 3).map((author, index) => ({
+      id: field + '-' + (offset + index), body: 'Complete original body ' + field + '-' + (offset + index),
+      author: repairAuthorFromQuery(query, author), ...(field === 'reviews' ? { state: 'COMMENTED' } : {}),
+    }));
+    const page = connection(nodes, offset === 0);
+    return JSON.stringify({ data: field === 'thread-comments' ? { node: { comments: page } }
+      : { repository: { pullRequest: { [field]: page } } } });
+  } }, prepared, 501);
+  assert.equal(result.inventory.length, 23);
+  assert.equal(result.pages.length, 7);
+  assert.equal(requests.filter(request => request.cursor === 'next').length, 3);
+  for (const field of ['thread-comments', 'comments', 'reviews']) {
+    authors.forEach((author, index) => {
+      const entry = result.inventory.find(item => item.id === field + '-' + index);
+      assert.equal(entry.body, 'Complete original body ' + field + '-' + index);
+      assert.equal(entry.body_sha256, crypto.createHash('sha256').update(entry.body).digest('hex'));
+      assert.equal(entry.author, author?.login || null);
+      assert.equal(entry.author_id, index < 5 ? author.id : null);
+    });
+  }
+  const canonicalInventory = JSON.stringify(result.inventory.map(entry =>
+    Object.fromEntries(Object.keys(entry).sort().map(key => [key, entry[key]]))));
+  assert.equal(result.digest, crypto.createHash('sha256').update(canonicalInventory).digest('hex'));
+});
+
 async function originalFixerFixture(outcome, mutation) {
   const f = fixture({ physicalPaths: true });
   const home = path.join(fs.realpathSync(temporary), 'repair-native-' + path.basename(f.root));
@@ -2057,7 +2140,7 @@ async function originalFixerFixture(outcome, mutation) {
     for (const disposition of output.review_dispositions) disposition.action = disposition.id === 'thread-1' ? 'reply-and-resolve' : 'reply';
   }
   const replies = [], prReplies = [], external = [];
-  const actor = { id: 'authenticated-host-user', login: 'delivery-host' };
+  const actor = { __typename: 'User', id: 'authenticated-host-user', login: 'delivery-host' };
   let swapReplyTarget = false;
   let launches = 0, publishedHead = f.base, pushes = 0;
   const live = () => ({ number: mutation === 'foreign-pr' ? 502 : 501, state: mutation === 'closed-pr' ? 'CLOSED' : 'OPEN',
@@ -2073,9 +2156,23 @@ async function originalFixerFixture(outcome, mutation) {
     const query = args.find(arg => arg.startsWith('query='));
     if (args[0] === 'pr') return JSON.stringify({ id: 'pr-body-501' });
     const value = key => args.find(arg => arg.startsWith(key + '='))?.slice(key.length + 1);
+    const project = comment => ({ ...comment, author: repairAuthorFromQuery(query, comment.author) });
     if (query.includes('viewer{id login}')) return JSON.stringify({ data: { viewer: actor } });
     if (query.includes('addPullRequestReviewThreadReply')) {
-      const comment = { id: 'reply-' + (replies.length + 1), body: value('body'), author: actor }; replies.push(comment);
+      const forgedAuthor = {
+        'reply-author-foreign': { ...actor, id: 'foreign-global-user' },
+        'reply-author-login': { ...actor, login: 'foreign-login' },
+        'reply-author-bot': { ...actor, __typename: 'Bot', id: 'foreign-global-bot' },
+        'reply-author-mannequin': { ...actor, __typename: 'Mannequin', id: 'foreign-global-mannequin' },
+        'reply-author-organization': { ...actor, __typename: 'Organization', id: 'foreign-global-organization' },
+        'reply-author-enterprise': { ...actor, __typename: 'EnterpriseUserAccount', id: 'foreign-global-enterprise' },
+        'reply-author-unknown': { ...actor, __typename: 'UnknownActor' },
+        'reply-author-null': null,
+        'reply-author-missing-id': { __typename: 'User', login: actor.login },
+        'reply-author-api-id': { ...actor, id: 12345 },
+      };
+      const comment = { id: 'reply-' + (replies.length + 1), body: value('body'),
+        author: replies.length === 0 && Object.hasOwn(forgedAuthor, mutation) ? forgedAuthor[mutation] : actor }; replies.push(comment);
       if ((mutation === 'thread-response-loss' || mutation?.startsWith('pending-')) && replies.length === 1) throw new Error('Original accepted thread reply response lost');
       return JSON.stringify({ data: { addPullRequestReviewThreadReply: { comment } } });
     }
@@ -2097,7 +2194,7 @@ async function originalFixerFixture(outcome, mutation) {
           nodes: Array.from({ length: 100 }, (_, index) => ({ id: 'bounded-obligation-' + (offset + index), body: 'x' })),
           pageInfo: { hasNextPage: offset + 100 < 2000, endCursor: String(offset + 100) } } } } });
       }
-      const comments = [{ id: 'comment-1', body: mutation === 'overflow' ? 'x'.repeat(600000) : 'Full original thread comment' }, ...external, ...(swapReplyTarget ? [] : replies)];
+      const comments = [{ id: 'comment-1', body: mutation === 'overflow' ? 'x'.repeat(600000) : 'Full original thread comment' }, ...external, ...(swapReplyTarget ? [] : replies)].map(project);
       if (mutation === 'duplicate-feedback') comments.push(comments[0]);
       if (mutation === 'feedback-movement' && launches) comments.push({ id: 'new-obligation', body: 'New feedback after preparation.' });
       const page = connection(comments);
@@ -2105,7 +2202,7 @@ async function originalFixerFixture(outcome, mutation) {
       return JSON.stringify({ data: { node: { comments: page } } });
     }
     const field = query.includes('reviewThreads(') ? 'reviewThreads' : query.includes('reviews(') ? 'reviews' : 'comments';
-    return JSON.stringify({ data: { repository: { pullRequest: { [field]: connection(field === 'reviewThreads' ? feedback : field === 'comments' ? [...prReplies, ...(swapReplyTarget ? replies : [])] : []) } } } });
+    return JSON.stringify({ data: { repository: { pullRequest: { [field]: connection(field === 'reviewThreads' ? feedback : field === 'comments' ? [...prReplies, ...(swapReplyTarget ? replies : [])].map(project) : []) } } } });
   };
   const originalHome = os.homedir; os.homedir = () => fs.realpathSync(temporary);
   try {
@@ -2255,7 +2352,7 @@ async function originalFixerFixture(outcome, mutation) {
       const recoveryHost = createFinalizationRecoveryHost({ ...cliOptions(f), getPullRequest: live, execFileSync: gh, verificationAllowList });
       if (mutation?.startsWith('pending-')) {
         if (mutation === 'pending-duplicate') replies.push({ ...replies[0], id: 'ambiguous-reply' });
-        if (mutation === 'pending-author') replies[0].author = { id: 'foreign-user', login: actor.login };
+        if (mutation === 'pending-author') replies[0].author = { ...actor, id: 'foreign-user' };
         if (mutation === 'pending-body') replies[0].body += ' changed';
         if (mutation === 'pending-target') swapReplyTarget = true;
         if (mutation === 'pending-external') external.push({ id: 'unexpected-external', body: 'complete unknown feedback' });
@@ -2270,6 +2367,25 @@ async function originalFixerFixture(outcome, mutation) {
       assert.equal(recovered.actions.confirmed.length, 3);
       assert.equal(replies.length + prReplies.length, 3, 'accepted replies with lost responses are not replayed');
       assert.equal(feedback[0].isResolved, true);
+      return;
+    }
+    if (mutation?.startsWith('reply-author-')) {
+      await assert.rejects(run, { code: 'REPAIR_ACTION_PENDING' });
+      assert.equal(launches, 1); assert.equal(replies.length, 1); assert.equal(prReplies.length, 0);
+      assert.equal(feedback[0].isResolved, false);
+      assert.equal(git(f.root, 'rev-parse', 'HEAD'), f.base);
+      const records = fs.readdirSync(path.join(stateRoot(f), 'repair-actions'));
+      assert.equal(records.length, 1);
+      const dispatchId = JSON.parse(fs.readFileSync(path.join(stateRoot(f), 'repair-actions', records[0]))).payload.dispatch_id;
+      const recoveryHost = createFinalizationRecoveryHost({ ...cliOptions(f), getPullRequest: live, execFileSync: gh, verificationAllowList });
+      assert.throws(() => recoveryHost.resumeRepairActions(dispatchId, f.scope), { code: 'REPAIR_ACTION_PENDING' });
+      assert.equal(replies.length, 1); assert.equal(feedback[0].isResolved, false);
+      replies[0].author = { ...actor };
+      const recovered = recoveryHost.resumeRepairActions(dispatchId, f.scope);
+      assert.equal(recovered.actions.confirmed.length, 3);
+      assert.equal(replies.length + prReplies.length, 3, 'authenticated recovery confirms the original reply without replay');
+      assert.equal(feedback[0].isResolved, true); assert.equal(launches, 1);
+      assert.equal(git(f.root, 'rev-parse', 'HEAD'), f.base);
       return;
     }
     if (mutation === 'publication-response-loss') {
@@ -2300,7 +2416,7 @@ async function originalFixerFixture(outcome, mutation) {
         fs.writeFileSync(actionFile, JSON.stringify(state));
       }
       if (mutation === 'normalized-reply-body') replies[0].body += ' mutated';
-      if (mutation === 'normalized-reply-author') replies[0].author = { id: 'foreign-user', login: actor.login };
+      if (mutation === 'normalized-reply-author') replies[0].author = { ...actor, id: 'foreign-user' };
       if (mutation === 'normalized-reply-id') replies[0].id = 'foreign-reply';
       if (mutation === 'normalized-reply-target') swapReplyTarget = true;
       if (mutation === 'normalized-missing-actions') fs.unlinkSync(actionFile);
@@ -2503,6 +2619,12 @@ for (const mutation of ['foreign-pr', 'closed-pr', 'stale-head', 'stale-base', '
 for (const mutation of ['thread-response-loss', 'comment-response-loss', 'resolve-response-loss',
   'pending-duplicate', 'pending-author', 'pending-body', 'pending-target', 'pending-external', 'pending-missing'])
   test('original feedback action recovers ' + mutation + ' without reply replay',
+    () => withGraphDirEnv(undefined, () => originalFixerFixture('no-op', mutation)));
+
+for (const mutation of ['reply-author-foreign', 'reply-author-login', 'reply-author-bot', 'reply-author-mannequin',
+  'reply-author-organization', 'reply-author-enterprise', 'reply-author-unknown', 'reply-author-null',
+  'reply-author-missing-id', 'reply-author-api-id'])
+  test('serialized native fixer action and recovery refuse unauthenticated identity ' + mutation,
     () => withGraphDirEnv(undefined, () => originalFixerFixture('no-op', mutation)));
 
 for (const mutation of ['normalized-repeat', 'normalized-cli-repeat', 'normalized-external', 'normalized-forged-actions', 'normalized-reply-body',
