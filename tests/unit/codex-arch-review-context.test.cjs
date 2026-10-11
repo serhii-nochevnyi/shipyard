@@ -2022,21 +2022,32 @@ test('installed v3 admission measures the finalized input and retains its privat
     git(f.root, ['add', '-A']); git(f.root, ['commit', '-m', 'fixture: complete batch review material']);
     f.head = git(f.root, ['rev-parse', 'HEAD']); f.pr.headRefOid = f.head;
     const agents = path.join(storage, 'agents'); fs.mkdirSync(agents);
-    const agentText = "developer_instructions = '''\nReview all required material.\n'''\n";
-    write(agents, 'review.toml', agentText); write(agents, 'manifest.json', '{}');
+    const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
+    const selected = policy.resolveDispatch({ runtime: 'codex', role: 'arch-review', signals: {}, dispatch_id: 'installed-batch' });
+    const selection = { model: selected.model, effort: selected.effort, sandbox_mode: 'read-only' };
+    const agentText = [
+      '# shipyard-policy-id = "' + policy.POLICY.id + '"', '# shipyard-policy-version = "' + policy.POLICY_VERSION + '"',
+      '# shipyard-policy-hash = "' + policy.POLICY_HASH + '"', '# shipyard-policy-runtime = "codex"',
+      '# shipyard-policy-role = "arch-review"', '# shipyard-policy-rung = "' + selected.rung + '"',
+      'name = "' + selected.agent_file.replace(/\.toml$/, '') + '"', 'model = "' + selected.model + '"',
+      'model_reasoning_effort = "' + selected.effort + '"', 'sandbox_mode = "read-only"',
+      "developer_instructions = '''", 'Review all required material.', "'''", '',
+    ].join('\n');
+    write(agents, selected.agent_file, agentText);
+    write(agents, 'manifest.json', JSON.stringify({ policy_id: policy.POLICY.id, policy_version: policy.POLICY_VERSION,
+      policy_hash: policy.POLICY_HASH, agent_files: [selected.agent_file], agent_digests: { [selected.agent_file]: sha(agentText) } }));
     const instructions = runtime.generatedInstructions(agentText);
-    const selection = { model: 'gpt-6.1-sol', effort: 'high' };
     const profile = contextBuilder.createReaderBatchProfile({ chunk_bytes: 8192, ranges_per_batch: 2,
       candidate: { source_sha256: sha(fs.readFileSync(require.resolve('../../plugins/delivery-pipeline/scripts/codex-arch-review-context.cjs'))),
-        instructions_sha256: sha(instructions), ...selection, provider: 'openai' } });
-    const value = contextBuilder.prepare({ ticket: f.ticket, phase: 38, worktree: f.root },
+        instructions_sha256: sha(instructions), model: selection.model, effort: selection.effort, provider: 'openai' } });
+    const value = contextBuilder.prepare({ ticket: f.ticket, phase: 38, worktree: f.root, run_id: 'installed-batch-run' },
       { role: 'arch-review', context: {}, signals: {} }, { refreshGit: false,
         graphDir: path.join(f.root, '.planning/graph'), getPullRequest: () => f.pr,
         storageRoot: storage, inflightDispatchId: 'installed-batch', readerProfile: profile,
         generatedInstructionBytes: Buffer.byteLength(instructions) + 2 });
     const original = contextBuilder.admittedFileInput(value);
     assert.equal(original.manifest.schema, 'shipyard.host-file-input.v3');
-    const admission = { agentDir: agents, agentFile: 'review.toml', agentManifest: path.join(agents, 'manifest.json'),
+    const admission = { agentDir: agents, agentFile: selected.agent_file, agentManifest: path.join(agents, 'manifest.json'),
       capabilities: { supportedModels: [selection.model], supportedEfforts: [selection.effort] }, selection };
     contextBuilder.admitInstalledLaunch(value, admission);
     const candidate = contextBuilder.admittedFileInput(value);
@@ -2117,12 +2128,60 @@ test('installed v3 admission measures the finalized input and retains its privat
     const cli = fixtureRecords('codex-agent-stream-exec.jsonl').filter(record =>
       ['thread.started', 'turn.started', 'item.completed', 'turn.completed'].includes(record.type));
     for (const record of cli) if (record.item?.type === 'agent_message') record.item.text = resultText;
-    const application = await recordedBatchApplication(verified, candidate, storage,
-      cli.map(record => JSON.stringify(record) + '\n').join(''));
-    assert.throws(() => runtime.measureReaderCapacity(verified, candidate,
-      { recorder: {}, receipt: JSON.parse(JSON.stringify(application.receipt)) }),
+    const boundaryModule = require('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs');
+    const recorder = boundaryModule.createDurableRecorder(path.join(storage, 'production-receipts'));
+    let launches = 0, completions = 0, finalResult, finalPrompt, finalRaw;
+    const host = runtime.createCodexRuntimeHost({ scope: { worktree: f.root, phase: 38, ticket: f.ticket,
+      run_id: candidate.manifest.run_id }, recorder, agentDir: agents, agentManifest: path.join(agents, 'manifest.json'),
+      env: { CODEX_HOME: home }, probe: { status: 'available', runtime_version: 'fixture', executable: 'codex', capabilities: admission.capabilities },
+      spawn() {
+        launches++;
+        const activeSession = launches === 1 ? session : '88888888-8888-4888-8888-888888888888';
+        const activeTurn = launches === 1 ? turn : 'installed-final';
+        const activeResult = finalResult || resultText;
+        const activePrompt = finalPrompt || candidate.prompt;
+        const records = JSON.parse(JSON.stringify([metadata, nativeContext, message('developer', instructions),
+          message('user', activePrompt), event('task_started'), ...reads, message('assistant', activeResult),
+          event('task_complete', { last_agent_message: activeResult })]));
+        for (const record of records) {
+          if (record.type === 'session_meta') Object.assign(record.payload, { id: activeSession, session_id: activeSession });
+          if (record.payload?.turn_id) record.payload.turn_id = activeTurn;
+          if (record.payload?.root_turn_id) record.payload.root_turn_id = activeTurn;
+          if (record.payload?.internal_chat_message_metadata_passthrough)
+            record.payload.internal_chat_message_metadata_passthrough.turn_id = activeTurn;
+          if (record.payload?.call_id) record.payload.call_id = activeTurn + '-' + record.payload.call_id;
+        }
+        const raw = records.map(record => JSON.stringify(record) + '\n').join('');
+        if (launches === 2) finalRaw = raw;
+        fs.writeFileSync(path.join(nativeDir, activeSession + '.jsonl'), raw, { mode: 0o600 });
+        const activeCli = structuredClone(cli);
+        activeCli.find(record => record.type === 'thread.started').thread_id = activeSession;
+        activeCli.find(record => record.item?.type === 'agent_message').item.text = activeResult;
+        const { EventEmitter } = require('node:events');
+        const processFixture = new EventEmitter(); processFixture.pid = process.pid;
+        processFixture.stdout = new EventEmitter(); processFixture.stderr = new EventEmitter(); processFixture.kill = () => {};
+        processFixture.stdin = { write() {}, end() { process.nextTick(() => {
+          if (launches === 2) write(f.root, '.shipyard-arch-review-evidence.md', JSON.parse(activeResult).evidence_markdown);
+          processFixture.stdout.emit('data', Buffer.from(activeCli.map(record => JSON.stringify(record) + '\n').join('')));
+          processFixture.emit('close', 0);
+        }); } };
+        return processFixture;
+      },
+    });
+    const capacity = await host.measureBatchReaderCapacity(selection, candidate, { onCompleted(completion) {
+      completions++;
+      assert.equal(recorder.getVerifiedRecord(completion.runtime_evidence.dispatch_id), null);
+      assert.equal(recorder.getVerifiedRecord(candidate.manifest.dispatch_id), null);
+    } });
+    const probeRecord = recorder.getVerifiedRecord(capacity.contract.application_dispatch_id);
+    assert.notEqual(probeRecord.dispatch_id, candidate.manifest.dispatch_id);
+    assert.equal(probeRecord.receipt.runtime_evidence.reader_capacity_probe.review_dispatch_id, candidate.manifest.dispatch_id);
+    assert.equal(fs.existsSync(path.join(f.root, '.shipyard-arch-review-evidence.md')), false);
+    const currentProbeVerified = await runtime.verifyCompletedNativeLaunch({ session_id: session, selection,
+      env: { CODEX_HOME: home }, resultText });
+    assert.throws(() => runtime.measureReaderCapacity(currentProbeVerified, candidate,
+      { recorder: {}, receipt: JSON.parse(JSON.stringify(probeRecord.receipt)) }),
     { code: 'READER_CAPACITY_UNSUPPORTED' });
-    const capacity = runtime.measureReaderCapacity(verified, candidate, application);
     assert.equal(capacity.contract.semantic_credit, false);
     assert.throws(() => contextBuilder.admitInstalledLaunch(value, { ...admission, readerCapacity: JSON.parse(JSON.stringify(capacity)) }),
       { code: 'READER_CAPACITY_UNSUPPORTED' });
@@ -2135,9 +2194,35 @@ test('installed v3 admission measures the finalized input and retains its privat
     assert.equal(admitted.prompt, candidate.prompt);
     assert.deepEqual(admitted.input_bundle, { ...candidate.input_bundle, reader_capacity: capacity.contract });
     contextBuilder.requireReaderBatchCapacity(admitted); contextBuilder.recheckInstalledLaunch(value);
-    const consumption = runtime.verifyFileConsumption(admitted, nativeRaw, 'installed-batch', resultText);
+    const digest = /launch_digest=([a-f0-9]{64})/.exec(contextBuilder.admittedPrompt(value))[1];
+    assert.notEqual(digest, '0'.repeat(64));
+    finalPrompt = contextBuilder.admittedPrompt(value);
+    assert.ok(finalPrompt.includes('launch_digest=' + digest));
+    finalResult = JSON.stringify({ ...JSON.parse(resultText), id: f.ticket, pr: f.pr.number, head: f.head,
+      base_tree: value.prepared.mergeBaseTree, verdict: 'conform', summary: 'Fresh complete fixture judgment.',
+      findings: [], blocking_count: 0, context_digest: value.prepared.packet.digest,
+      launch_digest: digest, evidence_markdown: 'Complete installed batch fixture review.' });
+    const adapter = require('../../plugins/delivery-pipeline/scripts/codex-dispatch-adapter.cjs').createCodexDispatchAdapter({
+      agentsDir: agents, agentManifest: path.join(agents, 'manifest.json'), capabilities: admission.capabilities, host });
+    const finalBoundary = boundaryModule.createDispatchBoundary({ adapters: { codex: adapter }, recorder });
+    const final = await finalBoundary.dispatch({ runtime: 'codex', role: 'arch-review', signals: {}, dispatch_id: candidate.manifest.dispatch_id },
+      { ticket: f.ticket, phase: 38, worktree: f.root, run_id: candidate.manifest.run_id, prompt: finalPrompt,
+        input_transport: 'host-files', input_bundle: admitted.input_bundle, input_prepared: admitted,
+        onCompleted(completion) {
+          completions++;
+          assert.equal(recorder.getVerifiedRecord(candidate.manifest.dispatch_id), null);
+          assert.equal(completion.runtime_evidence.reader_capacity_probe, undefined);
+          assert.equal(fs.readFileSync(path.join(f.root, '.shipyard-arch-review-evidence.md'), 'utf8'),
+            JSON.parse(completion.last_agent_message).evidence_markdown);
+        } });
+    assert.equal(launches, 2); assert.equal(completions, 2);
+    assert.notEqual(final.receipt.runtime_evidence.session_id, capacity.contract.native_session_id);
+    assert.deepEqual(final.receipt.runtime_evidence.input_bundle, admitted.input_bundle);
+    const consumption = runtime.verifyFileConsumption(admitted, finalRaw, 'installed-batch', finalResult);
     assert.equal(consumption.physical_calls, candidate.manifest.batches.length);
     assert.equal(consumption.chunk_reads, candidate.manifest.ranges.length);
+    assert.throws(() => contextBuilder.finish(value, { ...final, receipt: probeRecord.receipt }, recorder), { code: 'MISSING_RECEIPT' });
+    assert.deepEqual(recorder.getVerifiedRecord(probeRecord.dispatch_id), probeRecord);
     for (const repeat of [admission, { ...admission, readerCapacity: capacity }]) {
       contextBuilder.admitInstalledLaunch(value, repeat);
       assert.strictEqual(contextBuilder.admittedFileInput(value), admitted);
@@ -2152,14 +2237,25 @@ test('installed v3 admission measures the finalized input and retains its privat
       { code: 'READER_CAPACITY_UNSUPPORTED' });
     assert.strictEqual(contextBuilder.admittedFileInput(value), admitted);
     assert.deepEqual(fs.readdirSync(storage).filter(name => name.startsWith('input-')), directories);
-    fs.appendFileSync(path.join(agents, 'review.toml'), '\n# changed installed instructions');
+    fs.appendFileSync(path.join(agents, selected.agent_file), '\n# changed installed instructions');
     assert.throws(() => contextBuilder.admitInstalledLaunch(value, { ...admission, readerCapacity: capacity }),
       { code: 'STALE_CONTEXT' });
-    fs.writeFileSync(path.join(agents, 'review.toml'), agentText);
+    fs.writeFileSync(path.join(agents, selected.agent_file), agentText);
     contextBuilder.recheckInstalledLaunch(value);
-    fs.appendFileSync(nativeFile, '\n');
-    assert.throws(() => contextBuilder.admitInstalledLaunch(value, { ...admission, readerCapacity: capacity }));
+    const originalProbeBytes = fs.readFileSync(nativeFile);
+    try {
+      fs.appendFileSync(nativeFile, '\n');
+      assert.throws(() => contextBuilder.admitInstalledLaunch(value, { ...admission, readerCapacity: capacity }));
+    } finally { fs.writeFileSync(nativeFile, originalProbeBytes); }
     assert.strictEqual(contextBuilder.admittedFileInput(value), admitted);
+    contextBuilder.recheckInstalledLaunch(value);
+    const finished = contextBuilder.finish(value, final, recorder);
+    assert.equal(finished.result.launch_digest, digest);
+    assert.equal(finished.subject, f.ticket);
+    assert.equal(finished.result.verdict, 'conform');
+    assert.deepEqual(recorder.getVerifiedRecord(probeRecord.dispatch_id), probeRecord);
+    assert.throws(() => contextBuilder.admitInstalledLaunch(value, { ...admission, readerCapacity: capacity }),
+      { code: 'ARCHIVE_AUTHORITY_INVALID' });
   } finally { cleanupJudgment(f); fs.rmSync(storage, { recursive: true, force: true }); }
 });
 

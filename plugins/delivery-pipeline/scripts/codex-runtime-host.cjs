@@ -963,8 +963,8 @@ function recordCapacityApplication(verified, manifest, application) {
   const { recorder, receipt } = application;
   let record, authenticated;
   try {
-    authenticated = boundary.createDispatchBoundary({ recorder }).reconcile(manifest.dispatch_id, { ticket: manifest.ticket });
-    record = recorder.getVerifiedRecord(manifest.dispatch_id);
+    authenticated = boundary.createDispatchBoundary({ recorder }).reconcile(receipt.dispatch_id, { ticket: manifest.ticket });
+    record = recorder.getVerifiedRecord(receipt.dispatch_id);
   } catch (error) {
     fail('READER_CAPACITY_UNSUPPORTED', 'batch application receipt authentication failed', { cause: error.code });
   }
@@ -976,13 +976,26 @@ function recordCapacityApplication(verified, manifest, application) {
     subject: readerSubject(manifest) });
 }
 
+function capacityProbeAssociation(manifest, probeDispatchId) {
+  return freeze({ schema: 'shipyard.reader-capacity-association.v1', probe_dispatch_id: probeDispatchId,
+    review_dispatch_id: manifest.dispatch_id,
+    manifest_sha256: reviewHash(require('./model-policy-internal.cjs').stableStringify(manifest) + '\n'),
+    profile_sha256: manifest.transport.profile_sha256, binding_sha256: reviewHash(readerSubject(manifest)) });
+}
+
 function validateCapacityApplicationRecord(verified, manifest, record, receipt) {
   const stable = require('./model-policy-internal.cjs').stableStringify;
   const evidence = receipt?.runtime_evidence;
   const candidate = manifest.transport.candidate;
+  const association = evidence?.reader_capacity_probe;
+  const dispatchId = association ? association.probe_dispatch_id : manifest.dispatch_id;
+  if (association && (typeof dispatchId !== 'string' || !/^capacity-probe-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(dispatchId)
+      || dispatchId === manifest.dispatch_id
+      || stable(association) !== stable(capacityProbeAssociation(manifest, dispatchId))))
+    fail('READER_CAPACITY_UNSUPPORTED', 'capacity probe changed its protected final candidate association');
   if (!record || stable(record.receipt) !== stable(receipt)
-      || record.dispatch_id !== manifest.dispatch_id || record.ticket !== manifest.ticket
-      || receipt.dispatch_id !== manifest.dispatch_id || receipt.runtime !== 'codex' || receipt.role !== manifest.role
+      || record.dispatch_id !== dispatchId || record.ticket !== manifest.ticket
+      || receipt.dispatch_id !== dispatchId || receipt.runtime !== 'codex' || receipt.role !== manifest.role
       || receipt.policy_hash !== manifest.transport.policy_hash || receipt.compliance !== 'verified'
       || receipt.requested_model !== record.resolution?.requested_model
       || receipt.requested_effort !== record.resolution?.requested_effort
@@ -991,7 +1004,7 @@ function validateCapacityApplicationRecord(verified, manifest, record, receipt) 
       || evidence?.schema !== 'shipyard.codex-runtime-evidence.v1' || evidence.provider !== 'openai'
       || evidence.selection_source !== 'codex-native-session-transcript'
       || evidence?.run_id !== manifest.run_id || evidence.ticket !== manifest.ticket || evidence.phase !== manifest.phase
-      || evidence.worktree !== manifest.snapshot.worktree || evidence.dispatch_id !== manifest.dispatch_id
+      || evidence.worktree !== manifest.snapshot.worktree || evidence.dispatch_id !== dispatchId
       || evidence.session_id !== verified.native_session_evidence.session_id
       || stable(evidence.native_session_evidence) !== stable(verified.native_session_evidence)
       || evidence.input_bundle?.manifest_sha256 !== reviewHash(stable(manifest) + '\n')
@@ -1025,7 +1038,7 @@ function capacityApplication(verified, manifest) {
       || authorization.subject !== readerSubject(manifest))
     fail('READER_CAPACITY_UNSUPPORTED', 'batch capacity requires its original durably recorded application receipt');
   let record;
-  try { record = authorization.recorder.getVerifiedRecord(manifest.dispatch_id); }
+  try { record = authorization.recorder.getVerifiedRecord(authorization.receipt.dispatch_id); }
   catch (error) { fail('READER_CAPACITY_UNSUPPORTED', 'batch application receipt authentication failed', { cause: error.code }); }
   const stable = require('./model-policy-internal.cjs').stableStringify;
   if (!record || reviewHash(stable(record)) !== authorization.record_sha256
@@ -1090,6 +1103,8 @@ function measureReaderCapacity(verified, prepared, application) {
       native_bytes: Buffer.byteLength(launch.raw),
       binding_sha256: reviewHash(readerSubject(checked.manifest)), selection: selections[0], sandbox_mode: 'read-only',
       application_dispatch_id: recorded.receipt.dispatch_id,
+      ...(recorded.receipt.runtime_evidence.reader_capacity_probe ? {
+        probe_association: recorded.receipt.runtime_evidence.reader_capacity_probe } : {}),
       application_receipt_store: recorded.recorder.storeDir,
       application_record_sha256: recorded.record_sha256,
       application_receipt_sha256: reviewHash(require('./model-policy-internal.cjs').stableStringify(recorded.receipt)),
@@ -1293,7 +1308,8 @@ function verifyCheckedFileConsumption(checked, prepared, nativeRaw, resultText, 
       if (pending.size) fail('RUNTIME_EVIDENCE_MISMATCH', 'ordered file read did not finish before the next read');
       if (typeof item.call_id !== 'string' || !item.call_id || calls.has(item.call_id))
         fail('RUNTIME_EVIDENCE_MISMATCH', 'native file read repeats a call identity');
-      if ((v2 || prefix) && (!custom || args.max_output_tokens !== 10000))
+      if ((v2 || prefix) && ((!custom && !v3) || args.max_output_tokens !== 10000
+          || Object.keys(args).some(key => !['cmd', 'max_output_tokens'].includes(key))))
         fail('RUNTIME_EVIDENCE_MISMATCH', 'native reader changed its supported output policy');
       calls.add(item.call_id);
       pending.set(item.call_id, { ...reads[at], custom });
@@ -1342,6 +1358,10 @@ function verifyCheckedFileConsumption(checked, prepared, nativeRaw, resultText, 
             if (parsed.exit_code !== 0 || parsed.session_id !== undefined)
               fail('RUNTIME_EVIDENCE_MISMATCH', 'native file read did not complete successfully');
             nestedBytes += Buffer.byteLength(output);
+            largestNested = Math.max(largestNested, Buffer.byteLength(output));
+            if (v3 && (typeof output !== 'string' || typeof parsed.output !== 'string' || Buffer.byteLength(output) > 252 * 1024
+                || parsed.original_token_count !== undefined || parsed.truncated === true))
+              fail('RUNTIME_EVIDENCE_MISMATCH', 'batch direct envelope is incomplete');
             output = parsed.output ?? parsed.stdout;
           }
         }
@@ -1349,7 +1369,7 @@ function verifyCheckedFileConsumption(checked, prepared, nativeRaw, resultText, 
         if (v3) {
           if (output !== read.output) fail('RUNTIME_EVIDENCE_MISMATCH', 'batch header, ordered frames or terminal differs from complete source');
           if (!measurement && (envelopeBytes > prepared.input_bundle.reader_capacity.largest_envelope_bytes
-              || Buffer.byteLength(item.output[1].text) > prepared.input_bundle.reader_capacity.largest_nested_bytes))
+              || Buffer.byteLength(read.custom ? item.output[1].text : item.output) > prepared.input_bundle.reader_capacity.largest_nested_bytes))
             fail('READER_CAPACITY_UNSUPPORTED', 'batch exceeded original measured envelopes');
           encodedBytes += read.frames.reduce((sum, frame) => sum + Buffer.byteLength(frame.base64), 0);
           rawBytes += read.frames.reduce((sum, frame) => sum + frame.bytes, 0);
@@ -1492,7 +1512,11 @@ function verifyBatchCapacityReference(prepared, checked, raw) {
     dispatch_id: capacity.application_dispatch_id,
   });
   const stable = require('./model-policy-internal.cjs').stableStringify;
-  if (capacity.application_dispatch_id !== checked.manifest.dispatch_id
+  const association = record.receipt.runtime_evidence?.reader_capacity_probe;
+  if ((association ? stable(capacity.probe_association) !== stable(association)
+        || association.review_dispatch_id !== checked.manifest.dispatch_id
+        || association.probe_dispatch_id !== capacity.application_dispatch_id
+      : capacity.application_dispatch_id !== checked.manifest.dispatch_id || capacity.probe_association !== undefined)
       || reviewHash(stable(record)) !== capacity.application_record_sha256
       || reviewHash(stable(record.receipt)) !== capacity.application_receipt_sha256
       || record.receipt.runtime_evidence?.native_session_evidence?.sha256 !== capacity.native_sha256
@@ -1797,9 +1821,9 @@ function completedReviewAttempt(raw, cli, dispatchId, sessionId, turnId, checked
       physicalOperations += operations.length;
       const single = /^\s*text\s*\(\s*await\s+tools\.exec_command\s*\(([^]+)\)\s*\)\s*;?\s*$/.exec(item.input || '');
       let singleArgs; try { singleArgs = single && JSON.parse(single[1]); } catch {}
-      const exact = item.type === 'custom_tool_call' && ['exec', 'functions.exec'].includes(item.name)
-        && object(singleArgs) && operations.length === 1 && singleArgs.cmd === operations[0].cmd;
-      calls.set(item.call_id, { operations, exact });
+      const exact = operations.length === 1 && (item.type === 'function_call'
+        || (['exec', 'functions.exec'].includes(item.name) && object(singleArgs) && singleArgs.cmd === operations[0].cmd));
+      calls.set(item.call_id, { operations, exact, custom: item.type === 'custom_tool_call' });
     } else if (!v3 && item.type === 'custom_tool_call') {
       const match = /^\s*text\s*\(\s*await\s+tools\.exec_command\s*\(([^]+)\)\s*\)\s*;?\s*$/.exec(item.input || '');
       let args; try { args = match && JSON.parse(match[1]); } catch {}
@@ -1821,7 +1845,8 @@ function completedReviewAttempt(raw, cli, dispatchId, sessionId, turnId, checked
         const textOuter = Array.isArray(item.output)
           && item.output.every(block => ['text', 'input_text'].includes(block?.type) && typeof block.text === 'string')
           && /^Script completed\nWall time [0-9.]+ seconds\nOutput:\s*$/.test(item.output[0]?.text || '');
-        const completeOuter = textOuter && item.output.length === 2;
+        const completeOuter = call.custom ? item.type === 'custom_tool_call_output' && textOuter && item.output.length === 2
+          : item.type === 'function_call_output' && typeof item.output === 'string';
         const associated = textOuter && item.output.length === call.operations.length + 1
           ? item.output.slice(1).map(block => block.text)
           : item.type === 'function_call_output' && call.operations.length === 1 && typeof item.output === 'string'
@@ -1836,7 +1861,7 @@ function completedReviewAttempt(raw, cli, dispatchId, sessionId, turnId, checked
         if (call.exact && completeOuter && nested?.exit_code === 0 && nested.session_id === undefined
             && nested.original_token_count === undefined && nested.truncated !== true
             && outerBytes <= bundle.reader_capacity.largest_envelope_bytes
-            && Buffer.byteLength(item.output[1].text) <= Math.min(252 * 1024, bundle.reader_capacity.largest_nested_bytes)
+            && Buffer.byteLength(associated[0]) <= Math.min(252 * 1024, bundle.reader_capacity.largest_nested_bytes)
             && nested.output === expected.output) {
           successful++;
           attemptRawBytes += expected.frames.reduce((sum, frame) => sum + frame.bytes, 0);
@@ -2114,7 +2139,8 @@ function createCodexCliLauncher(options = {}) {
     const probeState = readerCapacityProbes.get(launchOptions.reader_capacity_probe);
     const capacityProbe = probeState?.prepared;
     if (launchOptions.reader_capacity_probe && (!capacityProbe || capacityProbe !== fileInput || typedRole
-        || launchOptions.review_progress || launchOptions.resume_review))
+        || launchOptions.review_progress || launchOptions.resume_review
+        || probeState.association.probe_dispatch_id !== launchOptions.dispatch_id))
       fail('READER_CAPACITY_UNSUPPORTED', 'capacity probe lacks original host candidate custody');
     const resumeReview = launchOptions.resume_review ? reviewResumptions.get(launchOptions.resume_review) : null;
     if (launchOptions.resume_review && !resumeReview) fail('REVIEW_PROGRESS_INVALID', 'serialized continuation has no host claim');
@@ -2134,7 +2160,8 @@ function createCodexCliLauncher(options = {}) {
             ? installedGsdAgent(resumeReview.progress.original_launch.agent.role, environment).instructions : generatedInstructions(content))
             || fileInput.manifest.transport.candidate.model !== model || fileInput.manifest.transport.candidate.effort !== effort))
         fail('READER_CAPACITY_UNSUPPORTED', 'review changed its measured instructions or selection');
-      const checked = collector.verifyFileInput(fileInput, { association: { dispatch_id: resumeReview ? resumeReview.progress.identity.dispatch_id : launchOptions.dispatch_id,
+      const checked = collector.verifyFileInput(fileInput, { association: { dispatch_id: capacityProbe ? probeState.association.review_dispatch_id
+        : resumeReview ? resumeReview.progress.identity.dispatch_id : launchOptions.dispatch_id,
         run_id: scope.run_id, ticket: scope.ticket, phase: scope.phase } });
       if (checked.manifest.snapshot.worktree !== fs.realpathSync(scope.worktree))
         fail('SCOPE_MISMATCH', 'prepared review input belongs to a different physical worktree');
@@ -2408,7 +2435,7 @@ function createCodexCliLauncher(options = {}) {
           : agent && verified.native_child_evidence
           ? readReviewNativeFile(originalReviewFile(verified.native_child_evidence.session_id, env, scope.worktree), scope.worktree)
           : readNativeParentRaw(parsed.session_id, nativeEvidence, env);
-        const consumed = resumedConsumption || verifyFileConsumption(fileInput, semanticRaw, launchOptions.dispatch_id,
+        const consumed = resumedConsumption || verifyFileConsumption(fileInput, semanticRaw, capacityProbe ? probeState.association.review_dispatch_id : launchOptions.dispatch_id,
           agent ? verified.last_agent_message : resultText,
           capacityProbe ? { chunk_bytes: fileInput.manifest.chunk_bytes, output_tokens: 10000 } : null);
         let result;
@@ -2449,6 +2476,7 @@ function createCodexCliLauncher(options = {}) {
         phase: scope.phase,
         worktree: scope.worktree,
         dispatch_id: launchOptions.dispatch_id,
+        ...(capacityProbe ? { reader_capacity_probe: probeState.association } : {}),
         session_id: parsed.session_id,
         process_id: Number.isInteger(child.pid) ? child.pid : undefined,
         command_digest: commandDigest,
@@ -2606,7 +2634,8 @@ function createCodexRuntimeHost(options = {}) {
     spawn: options.spawn,
     env: options.env,
     capabilities,
-    transcriptDir: options.transcriptDir || path.join(scope.worktree, '.planning', 'graph', 'transcripts', 'codex'),
+    transcriptDir: options.transcriptDir || path.join(options.env?.CODEX_HOME || process.env.CODEX_HOME
+      || path.join(os.homedir(), '.codex'), 'shipyard', 'transcripts', reviewHash(scope.worktree)),
     ephemeral: options.ephemeral,
     approveForMe: options.approveForMe,
     additionalProtectedPaths: options.additionalProtectedPaths,
@@ -2743,7 +2772,7 @@ function createCodexRuntimeHost(options = {}) {
     if (!object(callbacks) || Object.keys(callbacks).some(key => !callbackNames.includes(key) || typeof callbacks[key] !== 'function'))
       fail('INVALID_INPUT', 'capacity probe accepts only host completion callbacks');
     const token = Object.freeze({});
-    const probeState = { prepared };
+    const probeState = { prepared, association: capacityProbeAssociation(checked.manifest, 'capacity-probe-' + crypto.randomUUID()) };
     readerCapacityProbes.set(token, probeState);
     try {
       const boundaryModule = require('./dispatch-boundary.cjs');
@@ -2760,7 +2789,7 @@ function createCodexRuntimeHost(options = {}) {
       const boundary = boundaryModule.createDispatchBoundary({ adapters: { codex: adapter }, recorder,
         handoff: options.handoff, cwd: scope.worktree });
       const result = await boundary.dispatch({ runtime: 'codex', role: checked.manifest.role,
-        signals: selection.signals || {}, dispatch_id: checked.manifest.dispatch_id,
+        signals: selection.signals || {}, dispatch_id: probeState.association.probe_dispatch_id,
         model: selection.model, effort: selection.effort || selection.reasoning_effort },
       { ticket: scope.ticket, phase: scope.phase, run_id: scope.run_id, worktree: scope.worktree });
       assertOwner();

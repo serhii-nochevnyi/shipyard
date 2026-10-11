@@ -124,7 +124,7 @@ function finish(turn, result) {
 }
 
 
-async function recordedBatchApplication(verified, input, root, cliRaw) {
+async function recordedBatchApplication(verified, input, root, cliRaw, separateProbe = false, mutateAssociation) {
   const boundaryModule = require('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs');
   const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
   const sha = value => require('node:crypto').createHash('sha256').update(value).digest('hex');
@@ -133,13 +133,25 @@ async function recordedBatchApplication(verified, input, root, cliRaw) {
   const cliFile = path.join(root, 'measurement-cli.jsonl');
   fs.writeFileSync(cliFile, cliRaw, { mode: 0o600 });
   const candidate = input.manifest.transport.candidate;
+  const dispatchId = separateProbe ? 'capacity-probe-' + crypto.randomUUID() : input.manifest.dispatch_id;
+  const manifest = input.manifest;
+  const association = separateProbe ? {
+    schema: 'shipyard.reader-capacity-association.v1', probe_dispatch_id: dispatchId,
+    review_dispatch_id: manifest.dispatch_id, manifest_sha256: input.input_bundle.manifest_sha256,
+    profile_sha256: manifest.transport.profile_sha256,
+    binding_sha256: sha(stable([manifest.snapshot, manifest.run_id, manifest.ticket, manifest.phase, manifest.role,
+      manifest.dispatch_id, manifest.binding, manifest.accounting.generated_instruction_bytes || 0,
+      manifest.assets.map(asset => [asset.ordinal, asset.bytes, asset.sha256])])),
+  } : null;
+  if (mutateAssociation) mutateAssociation(association);
   const args = ['exec', '--json', '--model', candidate.model,
     '--config', 'model_reasoning_effort="' + candidate.effort + '"'];
   const content = "developer_instructions = '''\nReview all required material.\n'''";
   const evidence = {
     schema: 'shipyard.codex-runtime-evidence.v1', version: 1, runtime: 'codex', provider: 'openai',
     run_id: input.manifest.run_id, ticket: input.manifest.ticket, phase: input.manifest.phase,
-    worktree: input.manifest.snapshot.worktree, dispatch_id: input.manifest.dispatch_id,
+    worktree: input.manifest.snapshot.worktree, dispatch_id: dispatchId,
+    ...(association ? { reader_capacity_probe: association } : {}),
     session_id: verified.native_session_evidence.session_id, process_id: process.pid,
     selection_source: 'codex-native-session-transcript', command: { executable: 'codex', args },
     command_digest: sha(JSON.stringify(args)), native_session_evidence: verified.native_session_evidence,
@@ -163,9 +175,9 @@ async function recordedBatchApplication(verified, input, root, cliRaw) {
     },
   };
   const result = await boundaryModule.createDispatchBoundary({ adapters: { codex: adapter }, recorder })
-    .dispatch({ runtime: 'codex', role: input.manifest.role, signals: {}, dispatch_id: input.manifest.dispatch_id },
+    .dispatch({ runtime: 'codex', role: input.manifest.role, signals: {}, dispatch_id: dispatchId },
       { ticket: input.manifest.ticket });
-  assert.deepEqual(recorder.getVerifiedRecord(input.manifest.dispatch_id).receipt, result.receipt);
+  assert.deepEqual(recorder.getVerifiedRecord(dispatchId).receipt, result.receipt);
   return { recorder, receipt: result.receipt };
 }
 
@@ -227,7 +239,7 @@ async function fixture(action, options = {}) {
         env: { CODEX_HOME: probeHome }, resultText: result });
       assert.throws(() => runtime.measureReaderCapacity(verified, input), error => error.code === 'READER_CAPACITY_UNSUPPORTED');
       const application = await recordedBatchApplication(verified, input, root,
-        serialize([cliThread(session), ...cliCompletion(result)]));
+        serialize([cliThread(session), ...cliCompletion(result)]), options.separateProbe, options.mutateProbeAssociation);
       assert.throws(() => runtime.measureReaderCapacity(verified, input,
         { recorder: {}, receipt: JSON.parse(JSON.stringify(application.receipt)) }),
       error => error.code === 'READER_CAPACITY_UNSUPPORTED');
@@ -844,4 +856,34 @@ test('v3 typed reviewer resumes the original child UUID with its installed instr
     assert.equal(completed.runtime_evidence.native_child_evidence.parent_thread_id, session);
     assert.equal(authority.validateReviewContinuationEvidence(completed.runtime_evidence).session_id, childSession);
   }, { batch: true, typed: true });
+});
+
+for (const role of ['arch-review', 'integrator']) test('v3 protected ' + role + ' continuation reauthenticates the separate probe association', async () => {
+  await fixture(async f => {
+    const capacity = f.input.input_bundle.reader_capacity;
+    assert.notEqual(capacity.application_dispatch_id, f.input.manifest.dispatch_id);
+    assert.equal(capacity.probe_association.review_dispatch_id, f.input.manifest.dispatch_id);
+    const progress = authority.readReviewProgress({ worktree: f.worktree, reference: f.progress });
+    const restored = collector.restoreReviewInput(progress);
+    assert.deepEqual(restored.input_bundle.reader_capacity, capacity);
+    const completed = await f.createHost().resumeReview(f.selection, { progress: f.progress, dispatch_id: 'separate-probe-final' });
+    assert.equal(completed.runtime_evidence.session_id, f.reviewerSession);
+    assert.equal(completed.runtime_evidence.review_continuation.inherited_ranges, 2);
+    assert.ok(!f.resumedCommands.includes(f.reads[0].command));
+    assert.equal(authority.validateReviewContinuationEvidence(completed.runtime_evidence).identity.role, role);
+  }, { batch: true, role, separateProbe: true });
+});
+
+for (const [name, mutate] of [
+  ['final dispatch', association => { association.review_dispatch_id = 'foreign-final'; }],
+  ['probe dispatch', association => { association.probe_dispatch_id = 'capacity-probe-00000000-0000-4000-8000-000000000000'; }],
+  ['same dispatch', association => { association.probe_dispatch_id = association.review_dispatch_id; }],
+  ['manifest', association => { association.manifest_sha256 = '0'.repeat(64); }],
+  ['profile', association => { association.profile_sha256 = '0'.repeat(64); }],
+  ['subject', association => { association.binding_sha256 = '0'.repeat(64); }],
+  ['surplus', association => { association.cached = true; }],
+]) test('v3 original protected probe refuses changed ' + name + ' association', async () => {
+  await assert.rejects(fixture(() => assert.fail('changed probe must not admit review'), {
+    batch: true, separateProbe: true, mutateProbeAssociation: mutate,
+  }), error => error.code === 'READER_CAPACITY_UNSUPPORTED');
 });

@@ -1539,13 +1539,28 @@ function nativeReads(reads, turn, offset = 0) {
   });
 }
 
+function directBatchReads(records) {
+  return records.map(record => {
+    const item = record.payload;
+    if (item?.type === 'custom_tool_call' && item.input?.includes('--read-batch')) {
+      const args = JSON.parse(/^text\(await tools.exec_command\((.*)\)\);$/.exec(item.input)[1]);
+      return response('function_call', item.internal_chat_message_metadata_passthrough.turn_id,
+        { name: 'functions.exec_command', call_id: item.call_id, arguments: JSON.stringify(args) }, parentRecords);
+    }
+    if (item?.type === 'custom_tool_call_output')
+      return response('function_call_output', item.internal_chat_message_metadata_passthrough.turn_id,
+        { call_id: item.call_id, output: item.output[1].text }, parentRecords);
+    return record;
+  });
+}
+
 function finish(turn, result) {
   return [message('assistant', turn, result),
   event('task_complete', turn, { last_agent_message: result })];
 }
 
 
-async function recordedBatchApplication(verified, input, root, cliRaw) {
+async function recordedBatchApplication(verified, input, root, cliRaw, separateProbe = false, mutateAssociation) {
   const boundaryModule = require('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs');
   const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
   const sha = value => require('node:crypto').createHash('sha256').update(value).digest('hex');
@@ -1554,13 +1569,25 @@ async function recordedBatchApplication(verified, input, root, cliRaw) {
   const cliFile = path.join(root, 'measurement-cli.jsonl');
   fs.writeFileSync(cliFile, cliRaw, { mode: 0o600 });
   const candidate = input.manifest.transport.candidate;
+  const dispatchId = separateProbe ? 'capacity-probe-' + crypto.randomUUID() : input.manifest.dispatch_id;
+  const manifest = input.manifest;
+  const association = separateProbe ? {
+    schema: 'shipyard.reader-capacity-association.v1', probe_dispatch_id: dispatchId,
+    review_dispatch_id: manifest.dispatch_id, manifest_sha256: input.input_bundle.manifest_sha256,
+    profile_sha256: manifest.transport.profile_sha256,
+    binding_sha256: sha(stable([manifest.snapshot, manifest.run_id, manifest.ticket, manifest.phase, manifest.role,
+      manifest.dispatch_id, manifest.binding, manifest.accounting.generated_instruction_bytes || 0,
+      manifest.assets.map(asset => [asset.ordinal, asset.bytes, asset.sha256])])),
+  } : null;
+  if (mutateAssociation) mutateAssociation(association);
   const args = ['exec', '--json', '--model', candidate.model,
     '--config', 'model_reasoning_effort="' + candidate.effort + '"'];
   const content = "developer_instructions = '''\nReview all required material.\n'''";
   const evidence = {
     schema: 'shipyard.codex-runtime-evidence.v1', version: 1, runtime: 'codex', provider: 'openai',
     run_id: input.manifest.run_id, ticket: input.manifest.ticket, phase: input.manifest.phase,
-    worktree: input.manifest.snapshot.worktree, dispatch_id: input.manifest.dispatch_id,
+    worktree: input.manifest.snapshot.worktree, dispatch_id: dispatchId,
+    ...(association ? { reader_capacity_probe: association } : {}),
     session_id: verified.native_session_evidence.session_id, process_id: process.pid,
     selection_source: 'codex-native-session-transcript', command: { executable: 'codex', args },
     command_digest: sha(JSON.stringify(args)), native_session_evidence: verified.native_session_evidence,
@@ -1584,9 +1611,9 @@ async function recordedBatchApplication(verified, input, root, cliRaw) {
     },
   };
   const result = await boundaryModule.createDispatchBoundary({ adapters: { codex: adapter }, recorder })
-    .dispatch({ runtime: 'codex', role: input.manifest.role, signals: {}, dispatch_id: input.manifest.dispatch_id },
+    .dispatch({ runtime: 'codex', role: input.manifest.role, signals: {}, dispatch_id: dispatchId },
       { ticket: input.manifest.ticket });
-  assert.deepEqual(recorder.getVerifiedRecord(input.manifest.dispatch_id).receipt, result.receipt);
+  assert.deepEqual(recorder.getVerifiedRecord(dispatchId).receipt, result.receipt);
   return { recorder, receipt: result.receipt };
 }
 
@@ -1648,7 +1675,7 @@ async function fixture(action, options = {}) {
         env: { CODEX_HOME: probeHome }, resultText: result });
       assert.throws(() => runtime.measureReaderCapacity(verified, input), error => error.code === 'READER_CAPACITY_UNSUPPORTED');
       const application = await recordedBatchApplication(verified, input, root,
-        serialize([cliThread(session), ...cliCompletion(result)]));
+        serialize([cliThread(session), ...cliCompletion(result)]), options.separateProbe);
       assert.throws(() => runtime.measureReaderCapacity(verified, input,
         { recorder: {}, receipt: JSON.parse(JSON.stringify(application.receipt)) }),
       error => error.code === 'READER_CAPACITY_UNSUPPORTED');
@@ -1720,7 +1747,8 @@ async function fixture(action, options = {}) {
                 return interrupted;
               })() : []),
               ...(options.typed ? [event('task_aborted', 'original-turn')] : [])];
-            firstRaw = serialize(options.tamperOriginal ? options.tamperOriginal(prefix) : prefix);
+            const originalRecords = options.directBatch ? directBatchReads(prefix) : prefix;
+            firstRaw = serialize(options.tamperOriginal ? options.tamperOriginal(originalRecords) : originalRecords);
             fs.writeFileSync(native, options.live ? serialize(prefix.slice(0, 3)) : firstRaw);
             child.stdout.emit('data', Buffer.from(serialize([cliThread(session)])));
             if (options.premature) {
@@ -1734,6 +1762,7 @@ async function fixture(action, options = {}) {
           } else {
             resumedCommands = reads.slice(originalCount).map(read => read.command);
             let remaining = nativeReads(reads.slice(originalCount), 'resumed-turn', 1);
+            if (options.directBatch) remaining = directBatchReads(remaining);
             if (options.tamperResume) remaining = options.tamperResume(remaining, reads);
             fs.appendFileSync(native, serialize([nativeContext('resumed-turn', worktree), event('task_started', 'resumed-turn'), ...remaining,
               ...finish('resumed-turn', options.resumedResult || result)]));
@@ -2010,16 +2039,96 @@ for (const [kind, expectedFailed, expectedPending, expectedRetry] of [['groupedB
 }
 
 
-async function productionBatchProbeFixture(f, mutation) {
+test('v3 completed references reauthenticate distinct probe without charging it as final coverage', async () => {
+  await fixture(async f => {
+    const { selectors } = await completedFixture(f);
+    const result = accountingChild(f, selectors);
+    const contract = f.input.input_bundle.reader_capacity;
+    assert.notEqual(contract.application_dispatch_id, f.input.manifest.dispatch_id);
+    assert.equal(result.attempts.length, 2);
+    assert.equal(result.coverage.total.successful_physical_calls, f.reads.length);
+    const references = accountingChild(f, selectors, 'references');
+    assert.deepEqual(references.progress.input.input_bundle.reader_capacity, contract);
+    assert.deepEqual(accountingChild(f, selectors), result);
+    const receiptFile = path.join(contract.application_receipt_store, 'record-' + sha(contract.application_dispatch_id) + '.json');
+    const saved = fs.readFileSync(receiptFile);
+    fs.unlinkSync(receiptFile);
+    assert.throws(() => accountingChild(f, selectors));
+    fs.writeFileSync(receiptFile, saved, { mode: 0o600 });
+    const changed = JSON.parse(saved);
+    changed.payload.receipt.runtime_evidence.reader_capacity_probe.review_dispatch_id = 'foreign-final';
+    fs.writeFileSync(receiptFile, JSON.stringify(changed));
+    assert.throws(() => accountingChild(f, selectors));
+  }, { batch: true, separateProbe: true });
+});
+
+test('v3 direct function outputs retain successful physical accounting and exact range coverage', async () => {
+  await fixture(async f => {
+    const { selectors } = await completedFixture(f);
+    const result = accountingChild(f, selectors);
+    assert.equal(result.attempts[0].successful_calls, 1);
+    assert.equal(result.attempts[1].successful_calls, f.reads.length - 1);
+    assert.equal(result.coverage.total.successful_physical_calls, f.reads.length);
+    assert.equal(result.coverage.total.logical_ranges, collector.verifyFileInput(f.input).chunk_reads);
+    for (const attempt of result.attempts) {
+      assert.equal(attempt.failed_calls, 0); assert.equal(attempt.pending_calls, 0);
+      assert.ok(attempt.observed_nested_bytes > 0); assert.ok(attempt.observed_outer_bytes > 0);
+    }
+    assert.equal(result.attempts[0].tokens.input_tokens, null);
+    assert.ok(result.attempts[0].unavailable_reasons['tokens.input_tokens']);
+    assert.equal(result.attempts[1].tokens.input_tokens, 1);
+    assert.equal(result.attempts[1].tokens.output_tokens, 1);
+  }, { batch: true, directBatch: true });
+});
+
+for (const [name, mutate, pending] of [
+  ['malformed JSON', () => '{"exit_code":0', 0],
+  ['truncated nested', value => { value.truncated = true; }, 0],
+  ['original token count', value => { value.original_token_count = 10001; }, 0],
+  ['wrong bytes', value => { value.output += 'surplus\n'; }, 0],
+  ['missing terminal', value => { value.output = value.output.split('\n').slice(0, -2).join('\n') + '\n'; }, 0],
+  ['missing output', value => { delete value.output; }, 0],
+  ['nonzero exit', value => { value.exit_code = 1; }, 0],
+  ['pending session', value => { delete value.exit_code; value.session_id = 123; }, 1],
+]) test('v3 direct ' + name + ' retains an uncredited actual attempt', async () => {
+  await fixture(async f => {
+    const { selectors } = await completedFixture(f);
+    const result = accountingChild(f, selectors);
+    assert.equal(result.attempts[0].successful_calls, 1);
+    assert.equal(result.attempts[0].failed_calls, 1 - pending);
+    assert.equal(result.attempts[0].pending_calls, pending);
+    assert.equal(result.attempts[1].retries, 1);
+    assert.equal(result.coverage.total.successful_physical_calls, f.reads.length);
+  }, { batch: true, directBatch: true, incompleteBatch: true, tamperOriginal(records) {
+    const output = records.filter(record => record.payload?.type === 'function_call_output').at(-1);
+    const value = JSON.parse(output.payload.output); const replacement = mutate(value);
+    output.payload.output = typeof replacement === 'string' ? replacement : JSON.stringify(value);
+    return records;
+  } });
+});
+
+for (const [name, mutate] of [
+  ['foreign call id', records => { records[1].payload.call_id = 'foreign-call'; }],
+  ['foreign turn', records => { records[1].payload.internal_chat_message_metadata_passthrough.turn_id = 'foreign-turn'; }],
+  ['changed budget', records => { const args = JSON.parse(records[0].payload.arguments); args.max_output_tokens = 9999; records[0].payload.arguments = JSON.stringify(args); }],
+  ['extra command option', records => { const args = JSON.parse(records[0].payload.arguments); args.yield_time_ms = 1; records[0].payload.arguments = JSON.stringify(args); }],
+  ['surplus stdout representation', records => { const value = JSON.parse(records[1].payload.output); value.stdout = value.output; delete value.output; records[1].payload.output = JSON.stringify(value); }],
+]) test('v3 direct final refuses ' + name + ' before completed accounting authority', async () => {
+  await fixture(async f => {
+    await assert.rejects(completedFixture(f));
+  }, { batch: true, directBatch: true, tamperResume(records) { mutate(records); return records; } });
+});
+
+async function productionBatchProbeFixture(f, mutation, role = 'arch-review', configuredTranscript = false) {
   const boundaryModule = require('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs');
   const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
   const root = path.join(f.root, 'production-probe'), home = path.join(root, 'codex');
   const agents = path.join(home, 'agents'); fs.mkdirSync(agents, { recursive: true });
-  const resolved = policy.resolveDispatch({ runtime: 'codex', role: 'arch-review', signals: {}, dispatch_id: 'production-capacity' });
+  const resolved = policy.resolveDispatch({ runtime: 'codex', role, signals: {}, dispatch_id: 'production-capacity' });
   const content = [
     '# shipyard-policy-id = "' + policy.POLICY.id + '"', '# shipyard-policy-version = "' + policy.POLICY_VERSION + '"',
     '# shipyard-policy-hash = "' + policy.POLICY_HASH + '"', '# shipyard-policy-runtime = "codex"',
-    '# shipyard-policy-role = "arch-review"', '# shipyard-policy-rung = "' + resolved.rung + '"',
+    '# shipyard-policy-role = "' + role + '"', '# shipyard-policy-rung = "' + resolved.rung + '"',
     'name = "' + resolved.agent_file.replace(/\.toml$/, '') + '"',
     'model = "' + resolved.model + '"', 'model_reasoning_effort = "' + resolved.effort + '"',
     'sandbox_mode = "read-only"', "developer_instructions = '''", 'Review all required material.', "'''", '',
@@ -2032,7 +2141,7 @@ async function productionBatchProbeFixture(f, mutation) {
   const profile = collector.createReaderBatchProfile({ chunk_bytes: 8192, ranges_per_batch: 2,
     candidate: f.input.manifest.transport.candidate });
   const input = collector.prepareFileInput(f.scope, collector.verifyFileInput(f.input).material, {
-    readerProfile: profile, role: 'arch-review', dispatchId: resolved.dispatch_id, storageRoot: path.join(root, 'inputs'),
+    readerProfile: profile, role, dispatchId: resolved.dispatch_id, storageRoot: path.join(root, 'inputs'),
     generatedInstructionBytes: f.input.manifest.accounting.generated_instruction_bytes, binding: f.input.manifest.binding,
   });
   const resultText = JSON.stringify({
@@ -2045,24 +2154,27 @@ async function productionBatchProbeFixture(f, mutation) {
     String(date.getMonth() + 1).padStart(2, '0'), String(date.getDate()).padStart(2, '0'));
   fs.mkdirSync(directory, { recursive: true });
   const sessionId = '55555555-5555-4555-8555-555555555555', nativeFile = path.join(directory, sessionId + '.jsonl');
-  let spawned = 0, completed = 0, observedCompletion;
+  let spawned = 0, completed = 0, observedCompletion, finalInput;
   const probeOptions = { scope: f.scope, probe: { ...probe(), capabilities }, recorder,
-    env: { CODEX_HOME: home }, transcriptDir: path.join(root, 'transcripts'),
+    env: { CODEX_HOME: home },
+    ...(configuredTranscript ? { transcriptDir: path.join(root, 'transcripts') } : {}),
     spawn(_executable, args) {
       spawned++;
       assert.equal(args[args.indexOf('--model') + 1], resolved.model);
       assert.ok(args.includes('model_reasoning_effort="' + resolved.effort + '"'));
-      const turn = 'production-capacity-turn', context = nativeContext(turn, f.worktree);
+      const turn = spawned === 1 ? 'production-capacity-turn' : 'production-final-turn', context = nativeContext(turn, f.worktree);
+      const activeSession = spawned === 1 ? sessionId : '66666666-6666-4666-8666-666666666666';
+      const activeInput = finalInput || input;
       if (mutation === 'native-model') {
         context.payload.model = 'gpt-6-luna'; context.payload.collaboration_mode.settings.model = 'gpt-6-luna';
       }
       if (mutation === 'native-effort') {
         context.payload.effort = 'low'; context.payload.collaboration_mode.settings.reasoning_effort = 'low';
       }
-      fs.writeFileSync(nativeFile, serialize([nativeMetadata(sessionId, f.worktree), context,
-        message('developer', turn, runtime.generatedInstructions(content)), message('user', turn, input.prompt),
-        event('task_started', turn), ...nativeReads(readRecords(input), turn), ...finish(turn, resultText)]), { mode: 0o600 });
-      return childFor(serialize([cliThread(sessionId), ...cliCompletion(resultText)]));
+      fs.writeFileSync(path.join(directory, activeSession + '.jsonl'), serialize([nativeMetadata(activeSession, f.worktree), context,
+        message('developer', turn, runtime.generatedInstructions(content)), message('user', turn, activeInput.prompt),
+        event('task_started', turn), ...nativeReads(readRecords(activeInput), turn), ...finish(turn, resultText)]), { mode: 0o600 });
+      return childFor(serialize([cliThread(activeSession), ...cliCompletion(resultText)]));
     },
   };
   if (mutation === 'missing-recorder') probeOptions.recorder = () => true;
@@ -2078,6 +2190,9 @@ async function productionBatchProbeFixture(f, mutation) {
       onCompleted(value) {
         completed++; observedCompletion = value;
         assert.equal(recorder.getVerifiedRecord(resolved.dispatch_id), null);
+        assert.equal(recorder.getVerifiedRecord(value.runtime_evidence.dispatch_id), null);
+        assert.notEqual(value.runtime_evidence.dispatch_id, resolved.dispatch_id);
+        assert.equal(value.runtime_evidence.reader_capacity_probe.review_dispatch_id, resolved.dispatch_id);
         assert.throws(() => collector.requireReaderBatchCapacity(input), error => error.code === 'READER_CAPACITY_UNSUPPORTED');
         if (mutation === 'recorder-failure') fs.fsyncSync = () => { throw new Error('isolated recorder fsync failure'); };
       },
@@ -2097,8 +2212,10 @@ async function productionBatchProbeFixture(f, mutation) {
     capacity = await run();
   } finally { fs.fsyncSync = originalFsync; }
   assert.equal(completed, 1); assert.equal(spawned, 1);
-  const record = recorder.getVerifiedRecord(resolved.dispatch_id);
-  assert.equal(record.receipt.role, 'arch-review');
+  const record = recorder.getVerifiedRecord(capacity.contract.application_dispatch_id);
+  assert.notEqual(record.dispatch_id, resolved.dispatch_id);
+  assert.equal(recorder.getVerifiedRecord(resolved.dispatch_id), null);
+  assert.equal(record.receipt.role, role);
   for (const field of ['requested_model', 'requested_effort']) assert.equal(record.receipt[field], resolved[field]);
   assert.equal(record.receipt.applied_model, resolved.model); assert.equal(record.receipt.applied_effort, resolved.effort);
   assert.equal(record.receipt.compliance, 'verified');
@@ -2109,6 +2226,33 @@ async function productionBatchProbeFixture(f, mutation) {
   assert.equal(capacity.contract.semantic_credit, false);
   const admitted = collector.admitReaderBatchInput(input, capacity);
   collector.requireReaderBatchCapacity(admitted);
+  assert.equal(record.receipt.runtime_evidence.transcript.path, configuredTranscript
+    ? path.join(root, 'transcripts', f.scope.run_id + '-' + record.dispatch_id + '-' + sessionId + '.jsonl')
+    : path.join(home, 'shipyard', 'transcripts', sha(f.worktree), f.scope.run_id + '-' + record.dispatch_id + '-' + sessionId + '.jsonl'));
+  const manifestBefore = fs.readFileSync(input.input_bundle.manifest_path);
+  finalInput = admitted;
+  const adapter = require('../../plugins/delivery-pipeline/scripts/codex-dispatch-adapter.cjs').createCodexDispatchAdapter({
+    agentsDir: agents, capabilities, host });
+  const finalBoundary = boundaryModule.createDispatchBoundary({ adapters: { codex: adapter }, recorder });
+  const final = await finalBoundary.dispatch({ runtime: 'codex', role, signals: {}, dispatch_id: resolved.dispatch_id },
+    { ticket: f.scope.ticket, phase: f.scope.phase, run_id: f.scope.run_id, worktree: f.worktree,
+      prompt: admitted.prompt, input_transport: 'host-files', input_bundle: admitted.input_bundle, input_prepared: admitted,
+      onCompleted(value) {
+        completed++;
+        assert.equal(value.runtime_evidence.dispatch_id, resolved.dispatch_id);
+        assert.equal(value.runtime_evidence.reader_capacity_probe, undefined);
+        assert.equal(recorder.getVerifiedRecord(resolved.dispatch_id), null);
+      } });
+  assert.equal(spawned, 2); assert.equal(completed, 2);
+  assert.notEqual(final.receipt.runtime_evidence.session_id, record.receipt.runtime_evidence.session_id);
+  assert.deepEqual(final.receipt.runtime_evidence.input_bundle, admitted.input_bundle);
+  assert.equal(final.receipt.runtime_evidence.input_consumption.logical_ranges, input.manifest.ranges.length);
+  assert.deepEqual(recorder.getVerifiedRecord(resolved.dispatch_id).receipt, final.receipt);
+  assert.deepEqual(recorder.getVerifiedRecord(record.dispatch_id), record);
+  assert.deepEqual(fs.readFileSync(input.input_bundle.manifest_path), manifestBefore);
+  assert.throws(() => finalBoundary.dispatch({ runtime: 'codex', role, signals: {}, dispatch_id: resolved.dispatch_id }),
+    error => error.code === 'DUPLICATE_DISPATCH_ID');
+  assert.equal(spawned, 2);
   const verified = await runtime.verifyCompletedNativeLaunch({ session_id: sessionId, selection,
     env: { CODEX_HOME: home }, resultText });
   assert.throws(() => runtime.measureReaderCapacity(verified, input), error => error.code === 'READER_CAPACITY_UNSUPPORTED');
@@ -2125,9 +2269,11 @@ async function productionBatchProbeFixture(f, mutation) {
   assert.throws(() => runtime.readerCapacityContract(capacity, input.manifest), error => error.code === 'READER_CAPACITY_UNSUPPORTED');
 }
 
-test('v3 production capacity records original native completion and application selection before admission', async () => {
-  await fixture(f => productionBatchProbeFixture(f), { batch: true });
-});
+for (const role of ['arch-review', 'integrator']) for (const configured of [false, true]) {
+  test('v3 ' + role + ' distinct probe then fresh final preserves ' + (configured ? 'configured' : 'default') + ' transcript custody', async () => {
+    await fixture(f => productionBatchProbeFixture(f, null, role, configured), { batch: true });
+  });
+}
 for (const mutation of ['missing-recorder', 'stale-agent', 'requested-model', 'requested-effort',
   'native-model', 'native-effort', 'recorder-failure']) {
   test('v3 production capacity refuses ' + mutation + ' without authority', async () => {
