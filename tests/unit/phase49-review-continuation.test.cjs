@@ -31,6 +31,23 @@ function captured(name) {
 const cliRecords = captured('exec');
 const parentRecords = captured('parent');
 const childRecords = captured('child');
+let completedSourceBaseline;
+function copyCompletedSourceRepository(worktree) {
+  if (!completedSourceBaseline) {
+    const baseline = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'completed-source-baseline-')));
+    process.on('exit', () => fs.rmSync(baseline, { recursive: true, force: true }));
+    fs.writeFileSync(path.join(baseline, 'source.txt'), 'current original source\n');
+    for (const args of [['init', '-q'], ['add', '.'], ['commit', '-qm', 'original source']])
+      execFileSync('git', ['-C', baseline, '-c', 'commit.gpgsign=false', '-c', 'user.name=Fixture',
+        '-c', 'user.email=fixture@example.invalid', ...args]);
+    const head = execFileSync('git', ['-C', baseline, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+    execFileSync('git', ['-C', baseline, 'update-ref', 'refs/heads/review-base', head]);
+    completedSourceBaseline = baseline;
+  }
+  // The private baseline stays unchanged. Copy source and .git without shared
+  // files; every scenario still creates its own actor authority and native state.
+  fs.cpSync(completedSourceBaseline, worktree, { recursive: true });
+}
 function template(records, match) {
   const record = records.find(match);
   assert.ok(record, 'registered native record template is required');
@@ -895,12 +912,8 @@ async function completedSourceFixture(role, cold, mutation, action, failFirst = 
   os.homedir = () => root;
   try {
     const worktree = path.join(root, 'worktree'); fs.mkdirSync(worktree);
-    fs.writeFileSync(path.join(worktree, 'source.txt'), 'current original source\n');
-    for (const args of [['init', '-q'], ['add', '.'], ['commit', '-qm', 'original source']])
-      execFileSync('git', ['-C', worktree, '-c', 'commit.gpgsign=false', '-c', 'user.name=Fixture',
-        '-c', 'user.email=fixture@example.invalid', ...args]);
+    copyCompletedSourceRepository(worktree);
     const head = execFileSync('git', ['-C', worktree, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
-    execFileSync('git', ['-C', worktree, 'update-ref', 'refs/heads/review-base', head]);
     const policy = require('../../plugins/delivery-pipeline/scripts/model-policy.cjs');
     const boundaryModule = require('../../plugins/delivery-pipeline/scripts/dispatch-boundary.cjs');
     const adapterModule = require('../../plugins/delivery-pipeline/scripts/codex-dispatch-adapter.cjs');
