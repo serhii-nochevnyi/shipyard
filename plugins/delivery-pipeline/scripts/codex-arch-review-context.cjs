@@ -1359,15 +1359,20 @@ function admitInstalledLaunch(value, options) {
       capacityRefusal('measured_runtime_selection', JSON.stringify(transport.selection), JSON.stringify(options.selection),
         'Use the original matching runtime selection under the unchanged model policy.');
     const variants = installedFileInputs.get(value) || new Map();
-    const variantKey = digest(JSON.stringify(canonical({ binding, instructionBytes, transport })));
+    const batch = previous.manifest.transport?.schema === 'shipyard.native-reader-transport.v3';
+    const variantTransport = batch ? { ...previous.manifest.transport, profile_sha256: null } : transport;
+    const variantKey = digest(JSON.stringify(canonical({ binding, instructionBytes, transport: variantTransport })));
     const cached = variants.get(variantKey);
     if (cached) verifyFileInput(cached);
-    const next = cached || prepareFileInput(privateOptions.fileInput && { worktree: value.prepared.canonical.worktree,
+    let next = cached || prepareFileInput(privateOptions.fileInput && { worktree: value.prepared.canonical.worktree,
       ticket: value.prepared.ticket, phase: value.prepared.phaseNumber, run_id: previous.manifest.run_id },
       verifyFileInput(previous).material, { ...fileInputOptions.get(previous),
-        readerCapacity,
+        readerCapacity: batch ? undefined : readerCapacity,
         generatedInstructionBytes: instructionBytes,
         binding });
+    if (batch && readerCapacity
+        && JSON.stringify(canonical(next.input_bundle.reader_capacity)) !== JSON.stringify(canonical(transport)))
+      next = admitReaderBatchInput(next, readerCapacity);
     variants.set(variantKey, next);
     installedFileInputs.set(value, variants);
     preparedOptions.set(value, { ...privateOptions, fileInput: next });

@@ -1965,6 +1965,149 @@ test('file snapshot accepts canonical graph bytes above the input manifest limit
   } finally { f.clean(); }
 });
 
+test('installed v3 admission measures the finalized input and retains its private cached identity', async () => {
+  const f = fixture();
+  const storage = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'installed-batch-')));
+  const runtime = require('../../plugins/delivery-pipeline/scripts/codex-runtime-host.cjs');
+  const sha = bytes => require('node:crypto').createHash('sha256').update(bytes).digest('hex');
+  try {
+    canonicalReviewMember(f);
+    write(f.root, '.planning/architecture/ADR-014-host-bound-review.md', ADR + 'x'.repeat(1100000));
+    git(f.root, ['add', '-A']); git(f.root, ['commit', '-m', 'fixture: complete batch review material']);
+    f.head = git(f.root, ['rev-parse', 'HEAD']); f.pr.headRefOid = f.head;
+    const agents = path.join(storage, 'agents'); fs.mkdirSync(agents);
+    const agentText = "developer_instructions = '''\nReview all required material.\n'''\n";
+    write(agents, 'review.toml', agentText); write(agents, 'manifest.json', '{}');
+    const instructions = runtime.generatedInstructions(agentText);
+    const selection = { model: 'gpt-6.1-sol', effort: 'high' };
+    const profile = contextBuilder.createReaderBatchProfile({ chunk_bytes: 8192, ranges_per_batch: 2,
+      candidate: { source_sha256: sha(fs.readFileSync(require.resolve('../../plugins/delivery-pipeline/scripts/codex-arch-review-context.cjs'))),
+        instructions_sha256: sha(instructions), ...selection, provider: 'openai' } });
+    const value = contextBuilder.prepare({ ticket: f.ticket, phase: 38, worktree: f.root },
+      { role: 'arch-review', context: {}, signals: {} }, { refreshGit: false,
+        graphDir: path.join(f.root, '.planning/graph'), getPullRequest: () => f.pr,
+        storageRoot: storage, inflightDispatchId: 'installed-batch', readerProfile: profile,
+        generatedInstructionBytes: Buffer.byteLength(instructions) + 2 });
+    const original = contextBuilder.admittedFileInput(value);
+    assert.equal(original.manifest.schema, 'shipyard.host-file-input.v3');
+    const admission = { agentDir: agents, agentFile: 'review.toml', agentManifest: path.join(agents, 'manifest.json'),
+      capabilities: { supportedModels: [selection.model], supportedEfforts: [selection.effort] }, selection };
+    contextBuilder.admitInstalledLaunch(value, admission);
+    const candidate = contextBuilder.admittedFileInput(value);
+    assert.notStrictEqual(candidate, original);
+    assertArchitectureIdentity(candidate, value);
+    assert.equal(candidate.manifest.binding.agent_sha256, sha(agentText));
+    assert.equal(candidate.manifest.binding.capabilities_sha256, sha(JSON.stringify(admission.capabilities)));
+    assert.equal(candidate.manifest.accounting.generated_instruction_bytes, Buffer.byteLength(instructions) + 2);
+    assert.ok(candidate.manifest.binding.installed_files.some(pin => pin.path === 'codex-runtime-host.cjs'));
+    assert.throws(() => contextBuilder.requireReaderBatchCapacity(candidate), { code: 'READER_CAPACITY_UNSUPPORTED' });
+    const directories = fs.readdirSync(storage).filter(name => name.startsWith('input-'));
+    const manifestBytes = fs.readFileSync(candidate.input_bundle.manifest_path);
+    contextBuilder.admitInstalledLaunch(value, admission);
+    assert.strictEqual(contextBuilder.admittedFileInput(value), candidate);
+    assert.deepEqual(fs.readdirSync(storage).filter(name => name.startsWith('input-')), directories);
+
+    const session = '77777777-7777-4777-8777-777777777777', turn = 'installed-capacity';
+    const fixtureRecords = name => fs.readFileSync(path.join(__dirname, '../fixtures/captured', name), 'utf8')
+      .split('\n').filter(line => line && !line.startsWith('{"shipyard_fixture"'))
+      .map(line => JSON.parse(line.replace(/<SESSION-\d+>|<TMP>/g, token => JSON.stringify(
+        token === '<TMP>' ? f.root : ['<SESSION-4>', '<SESSION-7>'].includes(token) ? turn : session).slice(1, -1))));
+    const parent = fixtureRecords('codex-agent-stream-parent.jsonl');
+    const child = fixtureRecords('codex-agent-stream-child.jsonl');
+    const template = (records, match) => {
+      const record = records.find(match); assert.ok(record, 'registered native record template is required');
+      return structuredClone(record);
+    };
+    const message = (role, text) => {
+      const record = template(child, record => record.type === 'response_item' && record.payload.type === 'message'
+        && record.payload.role === role && (role !== 'assistant' || record.payload.phase === 'final_answer'));
+      record.payload.internal_chat_message_metadata_passthrough.turn_id = turn;
+      record.payload.content = [{ ...record.payload.content[0], text }];
+      return record;
+    };
+    const event = (type, extra = {}) => {
+      const record = template(child, record => record.type === 'event_msg' && record.payload.type === type);
+      Object.assign(record.payload, { turn_id: turn, ...extra });
+      if (record.payload.root_turn_id) record.payload.root_turn_id = turn;
+      return record;
+    };
+    const response = (type, fields) => {
+      const record = template(child, record => record.type === 'response_item' && record.payload.type === type);
+      Object.assign(record.payload, fields); record.payload.internal_chat_message_metadata_passthrough.turn_id = turn;
+      return record;
+    };
+    const metadata = template(parent, record => record.type === 'session_meta');
+    Object.assign(metadata.payload, { id: session, session_id: session, cwd: f.root, runtime_workspace_roots: [f.root] });
+    const nativeContext = template(child, record => record.type === 'turn_context');
+    Object.assign(nativeContext.payload, { turn_id: turn, root_turn_id: turn, ...selection, cwd: f.root, workspace_roots: [f.root] });
+    nativeContext.payload.sandbox_policy.type = 'read-only';
+    Object.assign(nativeContext.payload.collaboration_mode.settings, { model: selection.model, reasoning_effort: selection.effort });
+    const reads = candidate.manifest.batches.flatMap(batch => {
+      const call_id = 'installed-batch-' + batch.index;
+      const output = execFileSync('node', [candidate.manifest.transport.module_path, '--read-batch',
+        candidate.input_bundle.manifest_path, String(batch.index), candidate.manifest.transport.profile_sha256],
+      { encoding: 'utf8', maxBuffer: 252 * 1024 });
+      return [response('custom_tool_call', { name: 'exec', call_id,
+        input: 'text(await tools.exec_command(' + JSON.stringify({ cmd: contextBuilder.batchCommand(candidate.input_bundle, batch.index),
+          max_output_tokens: 10000 }) + '));' }),
+      response('custom_tool_call_output', { call_id, output: [
+        { type: 'input_text', text: 'Script completed\nWall time 0.1 seconds\nOutput:\n' },
+        { type: 'input_text', text: JSON.stringify({ exit_code: 0, output }) }] })];
+    });
+    const resultText = JSON.stringify({ input_manifest_sha256: candidate.input_bundle.manifest_sha256,
+      input_material_bytes: candidate.input_bundle.total_bytes, input_asset_count: candidate.input_bundle.asset_count,
+      input_chunk_reads: contextBuilder.verifyFileInput(candidate).chunk_reads,
+      input_batch_reads: candidate.manifest.batches.length, input_profile_sha256: candidate.manifest.transport.profile_sha256 });
+    const nativeRaw = [metadata, nativeContext, message('developer', instructions), message('user', candidate.prompt),
+      event('task_started'), ...reads, message('assistant', resultText), event('task_complete', { last_agent_message: resultText })]
+      .map(record => JSON.stringify(record) + '\n').join('');
+    const home = path.join(storage, 'native'), date = new Date();
+    const nativeDir = path.join(home, 'sessions', String(date.getFullYear()), String(date.getMonth() + 1).padStart(2, '0'),
+      String(date.getDate()).padStart(2, '0'));
+    fs.mkdirSync(nativeDir, { recursive: true });
+    const nativeFile = path.join(nativeDir, session + '.jsonl'); fs.writeFileSync(nativeFile, nativeRaw, { mode: 0o600 });
+    const verified = await runtime.verifyCompletedNativeLaunch({ session_id: session, selection, env: { CODEX_HOME: home }, resultText });
+    const capacity = runtime.measureReaderCapacity(verified, candidate);
+    assert.equal(capacity.contract.semantic_credit, false);
+    assert.throws(() => contextBuilder.admitInstalledLaunch(value, { ...admission, readerCapacity: JSON.parse(JSON.stringify(capacity)) }),
+      { code: 'READER_CAPACITY_UNSUPPORTED' });
+    assert.throws(() => contextBuilder.admitInstalledLaunch(value, { ...admission, readerCapacity: capacity,
+      selection: { ...selection, effort: 'low' } }), { code: 'READER_CAPACITY_UNSUPPORTED' });
+    contextBuilder.admitInstalledLaunch(value, { ...admission, readerCapacity: capacity });
+    const admitted = contextBuilder.admittedFileInput(value);
+    assert.notStrictEqual(admitted, candidate);
+    assert.strictEqual(admitted.manifest, candidate.manifest);
+    assert.equal(admitted.prompt, candidate.prompt);
+    assert.deepEqual(admitted.input_bundle, { ...candidate.input_bundle, reader_capacity: capacity.contract });
+    contextBuilder.requireReaderBatchCapacity(admitted); contextBuilder.recheckInstalledLaunch(value);
+    const consumption = runtime.verifyFileConsumption(admitted, nativeRaw, 'installed-batch', resultText);
+    assert.equal(consumption.physical_calls, candidate.manifest.batches.length);
+    assert.equal(consumption.chunk_reads, candidate.manifest.ranges.length);
+    for (const repeat of [admission, { ...admission, readerCapacity: capacity }]) {
+      contextBuilder.admitInstalledLaunch(value, repeat);
+      assert.strictEqual(contextBuilder.admittedFileInput(value), admitted);
+    }
+    assert.deepEqual(fs.readFileSync(candidate.input_bundle.manifest_path), manifestBytes);
+    assert.deepEqual(fs.readdirSync(storage).filter(name => name.startsWith('input-')), directories);
+    assert.throws(() => runtime.readerCapacityContract(capacity, original.manifest), { code: 'READER_CAPACITY_UNSUPPORTED' });
+    assert.throws(() => contextBuilder.admitInstalledLaunch(value, { ...admission, capabilities: { changed: true } }),
+      { code: 'READER_CAPACITY_UNSUPPORTED' });
+    write(agents, 'other.toml', agentText);
+    assert.throws(() => contextBuilder.admitInstalledLaunch(value, { ...admission, agentFile: 'other.toml' }),
+      { code: 'READER_CAPACITY_UNSUPPORTED' });
+    assert.strictEqual(contextBuilder.admittedFileInput(value), admitted);
+    assert.deepEqual(fs.readdirSync(storage).filter(name => name.startsWith('input-')), directories);
+    fs.appendFileSync(path.join(agents, 'review.toml'), '\n# changed installed instructions');
+    assert.throws(() => contextBuilder.admitInstalledLaunch(value, { ...admission, readerCapacity: capacity }),
+      { code: 'STALE_CONTEXT' });
+    fs.writeFileSync(path.join(agents, 'review.toml'), agentText);
+    contextBuilder.recheckInstalledLaunch(value);
+    fs.appendFileSync(nativeFile, '\n');
+    assert.throws(() => contextBuilder.admitInstalledLaunch(value, { ...admission, readerCapacity: capacity }));
+    assert.strictEqual(contextBuilder.admittedFileInput(value), admitted);
+  } finally { cleanupJudgment(f); fs.rmSync(storage, { recursive: true, force: true }); }
+});
+
 test('selected instruction bytes upgrade a below-limit architecture prompt to authenticated file input', () => {
   const f = fixture();
   const storage = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'instruction-fallback-')));
